@@ -1,0 +1,34 @@
+[project]
+name = "langchain-agent"
+version = "0.2.0"
+description = "Production-grade LangChain agent powered by DeepSeek"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain>=1.3.11",
+    "langchain-openai>=1.3.3",
+    "openai>=2.44.0",
+    "pydantic-settings>=2.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/langchain-agent"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent/", "chains/", "config/", "models/", "tools/", "utils/"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true
