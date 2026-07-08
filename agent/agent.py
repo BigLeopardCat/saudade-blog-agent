@@ -10,7 +10,7 @@ from models import get_llm
 from tools import get_all_tools
 from config import settings
 from .memory import get_checkpointer
-from .prompts import SYSTEM_PROMPT
+from .prompts import *
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def create_agent(**llm_kwargs):
     agent = create_langchain_agent(
         model=llm,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=BLOG_ASSISTANT_PROMPT,
         checkpointer=checkpointer,
         name="langchain_agent",
     )
