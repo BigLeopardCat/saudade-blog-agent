@@ -23,5 +23,9 @@ def setup_logging() -> None:
     # Avoid duplicate handlers on reload
     if not root.handlers:
         root.addHandler(handler)
+
+    # Silence noisy third-party loggers
+    for noisy in ("httpx", "httpcore", "urllib3", "openai"):
+        logging.getLogger(noisy).setLevel(max(level, logging.WARNING))
     else:
         root.handlers = [handler]

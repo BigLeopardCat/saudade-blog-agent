@@ -1,7 +1,7 @@
 """Production-grade LangChain Agent entry point (LangGraph-based).
 
 Run with:
-    python main.py                        # interactive chat loop
+    python main.py                        # interactive chat loop (streaming)
     python main.py --ask "your question"  # single-shot question
 """
 
@@ -10,7 +10,7 @@ import logging
 import sys
 import uuid
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessageChunk
 
 from agent import create_agent
 from utils import setup_logging
@@ -23,8 +23,24 @@ def _get_session_id() -> str:
     return str(uuid.uuid4())
 
 
+def _stream_agent(agent, user_input: str, config: dict) -> str:
+    """Run agent with streaming, print tokens in real time, return full text."""
+    print("Agent: ", end="", flush=True)
+    full_content = ""
+    for chunk, _metadata in agent.stream(
+        {"messages": [HumanMessage(content=user_input)]},
+        config,
+        stream_mode="messages",
+    ):
+        if isinstance(chunk, AIMessageChunk) and chunk.content:
+            print(chunk.content, end="", flush=True)
+            full_content += chunk.content
+    print("\n")
+    return full_content
+
+
 def interactive_loop(agent):
-    """Run an interactive REPL-style chat session with the agent."""
+    """Run an interactive REPL-style chat session with streaming output."""
     session_id = _get_session_id()
     config = {"configurable": {"thread_id": session_id}}
 
@@ -43,35 +59,17 @@ def interactive_loop(agent):
             break
 
         try:
-            response = agent.invoke(
-                {"messages": [HumanMessage(content=user_input)]},
-                config,
-            )
-            # Extract the last AI message from the response
-            messages = response.get("messages", [])
-            if messages:
-                ai_msg = messages[-1]
-                print(f"Agent: {ai_msg.content}\n")
-            else:
-                print("Agent: [no response]\n")
+            _stream_agent(agent, user_input, config)
         except Exception:
             logger.exception("Agent invocation failed")
             print("Agent: Sorry, something went wrong. Please try again.\n")
 
 
 def single_shot(agent, question: str):
-    """Ask the agent a single question and print the answer."""
+    """Ask a single question with streaming output."""
     config = {"configurable": {"thread_id": _get_session_id()}}
     try:
-        response = agent.invoke(
-            {"messages": [HumanMessage(content=question)]},
-            config,
-        )
-        messages = response.get("messages", [])
-        if messages:
-            print(messages[-1].content)
-        else:
-            print("[no response]")
+        _stream_agent(agent, question, config)
     except Exception:
         logger.exception("Agent invocation failed")
         sys.exit(1)

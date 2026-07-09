@@ -27,6 +27,7 @@ def get_llm(**kwargs) -> ChatOpenAI:
         "base_url": kwargs.pop("base_url", settings.active_llm_base_url),
         "temperature": kwargs.pop("temperature", settings.llm_temperature),
         "max_tokens": kwargs.pop("max_tokens", settings.llm_max_tokens),
+        "streaming": kwargs.pop("streaming", settings.llm_streaming),
         "verbose": kwargs.pop("verbose", settings.agent_verbose),
         **kwargs,
     }

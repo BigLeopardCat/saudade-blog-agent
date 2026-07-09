@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     # ── Shared LLM params ─────────────────────────────────────────
     llm_temperature: float = 0.7
     llm_max_tokens: int = 4096
+    llm_streaming: bool = False
 
     # ── Agent ───────────────────────────────────────────────────────
     agent_verbose: bool = True
