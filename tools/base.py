@@ -169,17 +169,46 @@ def get_site_map() -> str:
 
 
 # ---------------------------------------------------------------------------
+# 时间 / 天气工具
+# ---------------------------------------------------------------------------
+
+@tool
+def get_current_time() -> str:
+    """Get current date and time."""
+    from datetime import datetime
+    now = datetime.now()
+    weekdays = ['星期一','星期二','星期三','星期四','星期五','星期六','星期日']
+    return now.strftime(f"%Y年%m月%d日 {weekdays[now.weekday()]} %H:%M")
+
+
+@tool
+def get_weather(
+    location: Annotated[str, "City name, e.g. Beijing"] = "Beijing",
+) -> str:
+    """Query weather for a city using wttr.in."""
+    import httpx
+    try:
+        resp = httpx.get(f"https://wttr.in/{location}?format=%C+%t+%w+%h",
+timeout=10)
+        if resp.status_code == 200:
+            return f"{location}天气: {resp.text.strip()}"
+        return f"Cannot get weather"
+    except Exception as e:
+        return f"Weather query failed: {e}"
+
+
+# ---------------------------------------------------------------------------
 # 导航工具
 # ---------------------------------------------------------------------------
 
 @tool
 def navigate_to(
-    path: Annotated[str, "要跳转的页面路径，例如 / /times /category/技术 /article/3 /talk /friends /about"],
+    path: Annotated[str, "Page path to navigate to, e.g. / /times /category/tech /article/3 /talk /friends /about"],
+    confirm: Annotated[bool, "Whether user confirmation is needed. false=direct nav, true=ask user"] = True,
 ) -> str:
-    """导航到博客的指定页面。返回目标页面的完整 URL。"""
+    """Navigate to a blog page. Returns URL with NAVIGATE or AUTO_NAVIGATE prefix."""
     full_url = f"https://saudade.site{path}"
-    return f"NAVIGATE:{full_url}"
-
+    return f"{chr(78)+chr(65)+chr(86)+chr(73)+chr(71)+chr(65)+chr(84)+chr(69) if confirm else chr(65)+chr(85)+chr(84)+chr(79)+chr(95)+chr(78)+chr(65)+chr(86)+chr(73)+chr(71)+chr(65)+chr(84)+chr(69)}:{full_url}"
 
 # ---------------------------------------------------------------------------
 # Registry
@@ -198,6 +227,8 @@ _TOOL_REGISTRY = [
     get_blog_info,
     get_social_links,
     get_site_map,
+    get_current_time,
+    get_weather,
     navigate_to,
 ]
 
