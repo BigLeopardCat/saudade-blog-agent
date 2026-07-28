@@ -13,7 +13,7 @@ import uuid
 from langchain_core.messages import HumanMessage, AIMessageChunk
 
 from agent import create_agent
-from utils import setup_logging
+from utils import setup_logging, speak
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +33,10 @@ def _stream_agent(agent, user_input: str, config: dict) -> str:
         stream_mode="messages",
     ):
         if isinstance(chunk, AIMessageChunk) and chunk.content:
-            print(chunk.content, end="", flush=True)
-            full_content += chunk.content
+            # 强制转为 str 以通过 Pylance 类型检查
+            text = str(chunk.content)
+            print(text, end="", flush=True)
+            full_content += text
     print("\n")
     return full_content
 
@@ -59,7 +61,10 @@ def interactive_loop(agent):
             break
 
         try:
-            _stream_agent(agent, user_input, config)
+            reply = _stream_agent(agent, user_input, config)
+            audio = speak(reply)
+            if audio:
+                print(f"🔊 语音已保存: {audio}")
         except Exception:
             logger.exception("Agent invocation failed")
             print("Agent: Sorry, something went wrong. Please try again.\n")
@@ -69,7 +74,10 @@ def single_shot(agent, question: str):
     """Ask a single question with streaming output."""
     config = {"configurable": {"thread_id": _get_session_id()}}
     try:
-        _stream_agent(agent, question, config)
+        reply = _stream_agent(agent, question, config)
+        audio = speak(reply)
+        if audio:
+            print(f"🔊 语音已保存: {audio}")
     except Exception:
         logger.exception("Agent invocation failed")
         sys.exit(1)

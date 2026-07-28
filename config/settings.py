@@ -55,12 +55,16 @@ class Settings(BaseSettings):
     # ── Shared LLM params ─────────────────────────────────────────
     llm_temperature: float = 0.7
     llm_max_tokens: int = 4096
-    llm_streaming: bool = False
+    llm_streaming: bool = True
 
     # ── Agent ───────────────────────────────────────────────────────
     agent_verbose: bool = True
     agent_max_iterations: int = 10
     agent_early_stopping_method: str = "generate"
+
+    # ── TTS (Text-to-Speech) ───────────────────────────────────────
+    tts_enabled: bool = False
+    tts_voice: str = "zh-CN-XiaoyiNeural"
 
     # ── Memory ──────────────────────────────────────────────────────
     memory_session_key: str = "default"

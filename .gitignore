@@ -17,6 +17,9 @@ wheels/
 # Environment variables (contains secrets!)
 .env
 
+# Generated audio files
+output_audio/
+
 # OS files
 Thumbs.db
 .DS_Store
