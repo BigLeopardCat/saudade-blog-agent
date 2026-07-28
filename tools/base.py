@@ -169,6 +169,38 @@ def get_site_map() -> str:
 
 
 # ---------------------------------------------------------------------------
+# 知识库工具
+# ---------------------------------------------------------------------------
+
+@tool
+def search_knowledge_base(
+    query: Annotated[str, "Search keywords for knowledge base"],
+) -> str:
+    """Search knowledge base for documents matching the query."""
+    import httpx
+    try:
+        resp = httpx.get("https://saudade.site/api/knowledge", timeout=10)
+        if resp.status_code != 200:
+            return f"知识库查询失败: HTTP {resp.status_code}"
+        items = resp.json()
+        if not items:
+            return "知识库中暂无内容"
+        results = []
+        q = query.lower()
+        for item in items:
+            title = item.get("title", "")
+            content = item.get("content", "")
+            category = item.get("category", "")
+            if q in title.lower() or q in content.lower() or q in category.lower():
+                results.append(f"[{category}] {title}\n{content[:500]}")
+        if results:
+            return "\n---\n".join(results[:5])
+        return f"知识库中未找到与「{query}」相关的内容"
+    except Exception as e:
+        return f"知识库查询失败: {e}"
+
+
+# ---------------------------------------------------------------------------
 # 时间 / 天气工具
 # ---------------------------------------------------------------------------
 
@@ -183,7 +215,7 @@ def get_current_time() -> str:
 
 @tool
 def get_weather(
-    location: Annotated[str, "City name, e.g. Beijing"] = "Beijing",
+    location: Annotated[str, "City name"] = "Beijing",
 ) -> str:
     """Query weather for a city using wttr.in."""
     import httpx
@@ -227,6 +259,7 @@ _TOOL_REGISTRY = [
     get_blog_info,
     get_social_links,
     get_site_map,
+    search_knowledge_base,
     get_current_time,
     get_weather,
     navigate_to,
