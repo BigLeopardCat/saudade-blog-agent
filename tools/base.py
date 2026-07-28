@@ -169,6 +169,19 @@ def get_site_map() -> str:
 
 
 # ---------------------------------------------------------------------------
+# 导航工具
+# ---------------------------------------------------------------------------
+
+@tool
+def navigate_to(
+    path: Annotated[str, "要跳转的页面路径，例如 / /times /category/技术 /article/3 /talk /friends /about"],
+) -> str:
+    """导航到博客的指定页面。返回目标页面的完整 URL。"
+    full_url = f"https://saudade.site{path}"
+    return f"NAVIGATE:{full_url}"
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -185,6 +198,7 @@ _TOOL_REGISTRY = [
     get_blog_info,
     get_social_links,
     get_site_map,
+    navigate_to,
 ]
 
 

@@ -51,7 +51,7 @@ langchain/
 ### 1. 环境准备
 
 ```bash
-cd langchain
+cd saudade-blog-agent
 
 # uv 已安装 → 自动创建 .venv + 安装依赖
 uv sync
