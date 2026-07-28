@@ -169,6 +169,18 @@ def get_site_map() -> str:
 
 
 # ---------------------------------------------------------------------------
+# 聊天历史工具
+# ---------------------------------------------------------------------------
+
+@tool
+def get_chat_history(
+    limit: Annotated[int, "Number of recent messages to fetch"] = 10,
+) -> str:
+    """Get recent chat history for the current user to recall past conversations."""
+    return "历史记录功能需要通过后端API查询。请让用户直接查看聊天面板中的消息记录。"
+
+
+# ---------------------------------------------------------------------------
 # 知识库工具
 # ---------------------------------------------------------------------------
 
@@ -259,6 +271,7 @@ _TOOL_REGISTRY = [
     get_blog_info,
     get_social_links,
     get_site_map,
+    get_chat_history,
     search_knowledge_base,
     get_current_time,
     get_weather,
