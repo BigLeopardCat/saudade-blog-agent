@@ -16,7 +16,6 @@ API_BASE = "https://saudade.site/api/public"
 # httpx 客户端复用
 _client = httpx.Client(timeout=15, verify=False)
 
-
 def _get(path: str) -> dict | list:
     """Helper: call API and return data field."""
     try:
@@ -31,7 +30,6 @@ def _get(path: str) -> dict | list:
         logger.error("API call failed: %s", exc)
         return []
 
-
 # ---------------------------------------------------------------------------
 # 笔记 / 文章 工具
 # ---------------------------------------------------------------------------
@@ -45,14 +43,13 @@ def list_notes(
     data = _get(f"/notes?page={page}&page_size={page_size}")
     return str(data)
 
-
 @tool
 def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
     """搜索文章标题和内容，返回匹配的文章列表。"""
     try:
         resp = _client.post(
             f"{API_BASE}/notes/search",
-            json=keyword,
+            json={"keyword": keyword},
             timeout=15,
         )
         resp.raise_for_status()
@@ -62,7 +59,6 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
         logger.error("Search failed: %s", exc)
         return str(exc)
 
-
 @tool
 def get_article_detail(
     article_id: Annotated[int, "文章的唯一 ID（noteKey）"],
@@ -71,13 +67,11 @@ def get_article_detail(
     data = _get(f"/notes/{article_id}")
     return str(data)
 
-
 @tool
 def get_top_notes() -> str:
     """获取置顶文章列表。"""
     data = _get("/topnotes")
     return str(data)
-
 
 # ---------------------------------------------------------------------------
 # 分类 / 标签 工具
@@ -89,13 +83,11 @@ def list_categories() -> str:
     data = _get("/category")
     return str(data)
 
-
 @tool
 def list_tags() -> str:
     """获取全部一级标签列表。"""
     data = _get("/tagone")
     return str(data)
-
 
 # ---------------------------------------------------------------------------
 # 公告 工具
@@ -107,7 +99,6 @@ def get_announcements() -> str:
     data = _get("/announcements")
     return str(data)
 
-
 # ---------------------------------------------------------------------------
 # 友人链 工具
 # ---------------------------------------------------------------------------
@@ -117,7 +108,6 @@ def list_friends() -> str:
     """获取友人链（友情链接）列表。"""
     data = _get("/friends")
     return str(data)
-
 
 # ---------------------------------------------------------------------------
 # 说说 / 动态 工具
@@ -129,7 +119,6 @@ def list_talks() -> str:
     data = _get("/talk")
     return str(data)
 
-
 # ---------------------------------------------------------------------------
 # 站点信息 工具
 # ---------------------------------------------------------------------------
@@ -140,13 +129,11 @@ def get_blog_info() -> str:
     data = _get("/user")
     return str(data)
 
-
 @tool
 def get_social_links() -> str:
     """获取社交链接（QQ、GitHub、网易云等）。"""
     data = _get("/social")
     return str(data)
-
 
 # ---------------------------------------------------------------------------
 # 导航 / 引导工具
@@ -167,7 +154,6 @@ def get_site_map() -> str:
 - 后台管理 (/dashboard) — 登录后可管理文章、分类、标签、公告等
 """
 
-
 # ---------------------------------------------------------------------------
 # 聊天历史工具
 # ---------------------------------------------------------------------------
@@ -176,9 +162,8 @@ def get_site_map() -> str:
 def get_chat_history(
     limit: Annotated[int, "Number of recent messages to fetch"] = 10,
 ) -> str:
-    """Get recent chat history for the current user to recall past conversations."""
-    return "历史记录功能需要通过后端API查询。请让用户直接查看聊天面板中的消息记录。"
-
+    """Get recent chat history for the current user."""
+    return "对话历史已由系统自动注入到当前请求的上下文中（最近6条消息+压缩摘要），无需额外查询。请直接查看系统上下文中的 conversation_summary 和历史消息。"
 
 # ---------------------------------------------------------------------------
 # 知识库工具
@@ -189,9 +174,9 @@ def search_knowledge_base(
     query: Annotated[str, "Search keywords for knowledge base"],
 ) -> str:
     """Search knowledge base for documents matching the query."""
-    import httpx
+
     try:
-        resp = httpx.get("https://saudade.site/api/knowledge", timeout=10)
+        resp = _client.get(f"{API_BASE}/knowledge")
         if resp.status_code != 200:
             return f"知识库查询失败: HTTP {resp.status_code}"
         items = resp.json()
@@ -211,7 +196,6 @@ def search_knowledge_base(
     except Exception as e:
         return f"知识库查询失败: {e}"
 
-
 # ---------------------------------------------------------------------------
 # 时间 / 天气工具
 # ---------------------------------------------------------------------------
@@ -224,22 +208,20 @@ def get_current_time() -> str:
     weekdays = ['星期一','星期二','星期三','星期四','星期五','星期六','星期日']
     return now.strftime(f"%Y年%m月%d日 {weekdays[now.weekday()]} %H:%M")
 
-
 @tool
 def get_weather(
     location: Annotated[str, "City name"] = "Beijing",
 ) -> str:
     """Query weather for a city using wttr.in."""
-    import httpx
+
     try:
-        resp = httpx.get(f"https://wttr.in/{location}?format=%C+%t+%w+%h",
+        resp = _client.get(f"https://wttr.in/{location}?format=%C+%t+%w+%h",
 timeout=10)
         if resp.status_code == 200:
             return f"{location}天气: {resp.text.strip()}"
         return f"Cannot get weather"
     except Exception as e:
         return f"Weather query failed: {e}"
-
 
 # ---------------------------------------------------------------------------
 # 导航工具
@@ -253,6 +235,13 @@ def navigate_to(
     """Navigate to a blog page. Returns URL with NAVIGATE or AUTO_NAVIGATE prefix."""
     full_url = f"https://saudade.site{path}"
     return f"{chr(78)+chr(65)+chr(86)+chr(73)+chr(71)+chr(65)+chr(84)+chr(69) if confirm else chr(65)+chr(85)+chr(84)+chr(79)+chr(95)+chr(78)+chr(65)+chr(86)+chr(73)+chr(71)+chr(65)+chr(84)+chr(69)}:{full_url}"
+
+@tool
+def toggle_effect(
+    effect: Annotated[str, "Effect name: sakura(樱花), rain(大雨), snow(雪花), off(关闭全部)"],
+) -> str:
+    """Toggle visual effects on the blog page. Returns EFFECT: prefix for frontend."""
+    return f"EFFECT:{effect}"
 
 # ---------------------------------------------------------------------------
 # Registry
@@ -276,8 +265,8 @@ _TOOL_REGISTRY = [
     get_current_time,
     get_weather,
     navigate_to,
+    toggle_effect,
 ]
-
 
 def get_all_tools():
     """Return the list of all registered tools."""
