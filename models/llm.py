@@ -31,4 +31,10 @@ def get_llm(**kwargs) -> ChatOpenAI:
         "verbose": kwargs.pop("verbose", settings.agent_verbose),
         **kwargs,
     }
+    # Qwen3 系列默认开启思考模式（enable_thinking=true），思维链经 reasoning_content 返回；
+    # 在工具调用轮次存在间歇性混入正文的风险（表现为回复开头出现英文规划文本）。
+    # 对话型场景直接关闭思考模式，从根源消除思维链泄露。
+    # 注意：enable_thinking 是 Qwen 自有参数，须走 extra_body（model_kwargs 只接受标准 OpenAI 参数）
+    if settings.llm_provider.lower() == "qwen":
+        params["extra_body"] = {"enable_thinking": False}
     return ChatOpenAI(**params)

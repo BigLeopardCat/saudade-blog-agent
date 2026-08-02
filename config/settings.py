@@ -14,7 +14,7 @@ PROVIDER_DEFAULTS = {
         "base_url": "https://api.deepseek.com",
     },
     "qwen": {
-        "model": "qwen3.7-plus",
+        "model": "qwen3.6-flash",
         "base_url": "https://ws-98l2m94bvvnta30m.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
     },
     "openai": {
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
 
     # ── Shared LLM params ─────────────────────────────────────────
     llm_temperature: float = 0.7
-    llm_max_tokens: int = 4096
+    llm_max_tokens: int = 8192
     llm_streaming: bool = True
 
     # ── Agent ───────────────────────────────────────────────────────

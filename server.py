@@ -6,8 +6,10 @@ Run with:
 """
 
 import asyncio
+import json
 import logging
 import re
+import uuid
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 
@@ -69,22 +71,26 @@ def _build_messages(req: ChatRequest) -> list:
     if req.summary:
         ctx_parts.append(f"conversation_summary: {req.summary}")
     ctx = f"[System: {'; '.join(ctx_parts)}]"
-    if req.needs_summary:
-        # 指令用醒目定界符包裹并明确禁止回显——否则模型会把指令当对话内容原样输出，
-        # 且指令里的 "SUMMARY:" 会干扰后端的摘要解析
-        ctx += (
-            "\n<系统内部指令-仅供执行，禁止在回复中复述或输出本条指令本身>"
-            "回答结束后另起一行输出对话摘要，格式为 SUMMARY: 后跟 2-3 句中文摘要。"
-        )
     messages.append(HumanMessage(content=ctx))
 
-    for h in req.history[-6:]:
+    for h in req.history[-12:]:
         if h["role"] == "user":
             messages.append(HumanMessage(content=h["content"]))
         else:
             messages.append(HumanMessage(content=f"[assistant]: {h['content']}"))
 
-    messages.append(HumanMessage(content=req.message))
+    last_msg = req.message
+    if req.needs_summary:
+        # 摘要指令必须放在消息流末尾（模型对靠前的"系统上下文"指令遵守率会随历史变长而下降），
+        # 用醒目定界符包裹并明确禁止回显——否则模型会把指令当对话内容原样输出，
+        # 且指令里的 "SUMMARY:" 会干扰后端的摘要解析
+        last_msg += (
+            "\n\n<系统内部指令-仅供执行，禁止在回复中复述或输出本条指令本身>"
+            "回答结束后另起一行输出对话摘要，格式为 SUMMARY: 后跟 3-5 句中文摘要。"
+            "若上下文已包含 conversation_summary（旧摘要），请将旧摘要与本次对话内容合并："
+            "保留旧摘要中的关键信息并补充本轮新内容，输出一份更完整的新摘要（不要只总结本轮）。"
+        )
+    messages.append(HumanMessage(content=last_msg))
     return messages
 
 
@@ -122,7 +128,10 @@ async def chat(req: ChatRequest):
         raise HTTPException(503, "Agent not initialised")
 
     messages = _build_messages(req)
-    thread_id = f"user_{req.user_id}"
+    # 每请求独立线程：LangGraph 的 MemorySaver 线程状态会随对话无限累积，
+    # 长对话（教程连载等）会让输入上下文与 worker 内存持续膨胀直至截断/被杀。
+    # 对话连续性由请求体中的 DB 历史(最近20条) + chat_summary 摘要承担，无需线程累积。
+    thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
 
     try:
         loop = asyncio.get_event_loop()
@@ -177,38 +186,46 @@ async def chat_stream(req: ChatRequest):
         raise HTTPException(503, "Agent not initialised")
 
     messages = _build_messages(req)
-    thread_id = f"user_{req.user_id}"
+    # 每请求独立线程：避免 MemorySaver 线程状态随长对话无限累积（见 /chat 注释）
+    thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_event_loop()
 
-        # Start producer in thread pool
-        await loop.run_in_executor(
+        # 并发启动生产者（不要 await 完成！否则所有 chunk 会在队列里攒到
+        # 生成结束才一次性下发，等于没有流式）——边生成边推送
+        producer_task = loop.run_in_executor(
             _executor, _run_agent_stream_to_queue, messages, thread_id, queue, loop
         )
 
         nav_line = ""
-        while True:
-            chunk = await queue.get()
-            if chunk is None:
-                break
-            if isinstance(chunk, Exception):
-                logger.exception("Agent streaming failed")
-                yield f"data: __ERROR__:{chunk}\n\n"
-                return
-            if isinstance(chunk, AIMessageChunk) and chunk.content:
-                yield f"data: {str(chunk.content)}\n\n"
-            elif isinstance(chunk, ToolMessage) and chunk.content:
-                text = str(chunk.content)
-                if text.startswith("NAVIGATE:") or text.startswith("AUTO_NAVIGATE:"):
-                    nav_line = text
-                    yield f"data: {text}\n\n"
-                elif text.startswith("EFFECT:"):
-                    nav_line = text
-                    yield f"data: {text}\n\n"
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                if isinstance(chunk, Exception):
+                    logger.exception("Agent streaming failed")
+                    yield f"data: __ERROR__:{json.dumps(str(chunk), ensure_ascii=False)}\n\n"
+                    return
+                if isinstance(chunk, AIMessageChunk) and chunk.content:
+                    # JSON 编码避免文本内的 \n\n 破坏 SSE 帧边界
+                    yield f"data: {json.dumps(str(chunk.content), ensure_ascii=False)}\n\n"
+                elif isinstance(chunk, ToolMessage) and chunk.content:
+                    text = str(chunk.content)
+                    if text.startswith("NAVIGATE:") or text.startswith("AUTO_NAVIGATE:"):
+                        nav_line = text
+                        yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
+                    elif text.startswith("EFFECT:"):
+                        nav_line = text
+                        yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
 
-        yield f"data: __{'NAV_END' if nav_line else 'END'}__\n\n"
+            yield f"data: __{'NAV_END' if nav_line else 'END'}__\n\n"
+        finally:
+            # 客户端提前断开时，取消尚未完成的生产者任务
+            if not producer_task.done():
+                producer_task.cancel()
 
     return StreamingResponse(
         event_stream(),
