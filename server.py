@@ -104,11 +104,8 @@ def _run_agent_sync(messages: list, thread_id: str) -> tuple[str, str]:
             elif text.startswith("EFFECT:"):
                 nav_line = text
     reply = full_reply.strip()
-    if nav_line and not reply.startswith("NAVIGATE:") and not reply.startswith("AUTO_NAVIGATE:"):
-        if nav_line.startswith("EFFECT:"):
-            reply = reply + "\n" + nav_line
-        else:
-            reply = nav_line + "\n" + reply
+    # 不再在这里拼入 nav/effect 命令行——由调用方在摘要剥离之后追加，
+    # 避免回复末尾的 SUMMARY: 截断把 EFFECT:/NAVIGATE: 命令一起吞掉
     return reply, nav_line
 
 
@@ -126,7 +123,7 @@ async def chat(req: ChatRequest):
 
     try:
         loop = asyncio.get_event_loop()
-        reply, _ = await loop.run_in_executor(_executor, _run_agent_sync, messages, thread_id)
+        reply, nav_line = await loop.run_in_executor(_executor, _run_agent_sync, messages, thread_id)
 
         new_summary = None
         # 只认行首出现的 SUMMARY:，且取最后一次（真正的摘要在回复末尾）——
@@ -138,6 +135,13 @@ async def chat(req: ChatRequest):
             summary_text = last.group(1).strip()
             if summary_text:
                 new_summary = summary_text
+
+        # 摘要剥离之后再把导航/特效命令行追加回去，确保命令不被 SUMMARY 截断吞掉
+        if nav_line and not reply.startswith("NAVIGATE:") and not reply.startswith("AUTO_NAVIGATE:"):
+            if nav_line.startswith("EFFECT:"):
+                reply = reply + "\n" + nav_line
+            else:
+                reply = nav_line + "\n" + reply
 
         return ChatResponse(reply=reply, success=True, new_summary=new_summary)
     except Exception as e:

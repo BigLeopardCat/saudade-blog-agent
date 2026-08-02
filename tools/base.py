@@ -238,10 +238,12 @@ def navigate_to(
 
 @tool
 def toggle_effect(
-    effect: Annotated[str, "Effect name: sakura(樱花), rain(大雨), snow(雪花), off(关闭全部)"],
+    effect: Annotated[str, "Effect name: sakura(樱花), rain(大雨), snow(雪花)"],
+    action: Annotated[str, "开启还是关闭: on(开启), off(关闭)"] = "on",
 ) -> str:
-    """Toggle visual effects on the blog page. Returns EFFECT: prefix for frontend."""
-    return f"EFFECT:{effect}"
+    """开启或关闭博客页面的视觉效果（樱花/大雨/雪花）。
+    返回 EFFECT: 前缀命令供前端执行；前端按 action 显式开关，不会因重复命令翻转状态。"""
+    return f"EFFECT:{effect}:{action}"
 
 # ---------------------------------------------------------------------------
 # Registry
