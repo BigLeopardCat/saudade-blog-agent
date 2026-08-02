@@ -33,6 +33,8 @@ class ChatRequest(BaseModel):
     history: list[dict] = []
     summary: str = ""
     needs_summary: bool = False
+    # 前端上报的页面特效实时状态（如 "sakura,rain" 或 ""），供 agent 感知真实开关状态
+    current_effects: str = ""
 
 
 class ChatResponse(BaseModel):
@@ -63,6 +65,7 @@ def _build_messages(req: ChatRequest) -> list:
     """Build the message list from the request (sync, no blocking)."""
     messages = []
     ctx_parts = [f"user_id={req.user_id}, page={req.current_url}, title={req.page_title}"]
+    ctx_parts.append(f"current_effects={req.current_effects or 'none'}")
     if req.summary:
         ctx_parts.append(f"conversation_summary: {req.summary}")
     ctx = f"[System: {'; '.join(ctx_parts)}]"
