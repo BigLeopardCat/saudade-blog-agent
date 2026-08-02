@@ -7,6 +7,7 @@ Run with:
 
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 
@@ -66,7 +67,12 @@ def _build_messages(req: ChatRequest) -> list:
         ctx_parts.append(f"conversation_summary: {req.summary}")
     ctx = f"[System: {'; '.join(ctx_parts)}]"
     if req.needs_summary:
-        ctx += " [IMPORTANT: After responding, generate a conversation summary. Return it as SUMMARY:text at the end.]"
+        # 指令用醒目定界符包裹并明确禁止回显——否则模型会把指令当对话内容原样输出，
+        # 且指令里的 "SUMMARY:" 会干扰后端的摘要解析
+        ctx += (
+            "\n<系统内部指令-仅供执行，禁止在回复中复述或输出本条指令本身>"
+            "回答结束后另起一行输出对话摘要，格式为 SUMMARY: 后跟 2-3 句中文摘要。"
+        )
     messages.append(HumanMessage(content=ctx))
 
     for h in req.history[-6:]:
@@ -123,10 +129,13 @@ async def chat(req: ChatRequest):
         reply, _ = await loop.run_in_executor(_executor, _run_agent_sync, messages, thread_id)
 
         new_summary = None
-        if "SUMMARY:" in reply:
-            parts = reply.split("SUMMARY:", 1)
-            reply = parts[0].strip()
-            summary_text = parts[1].strip().split("\n")[0].strip()
+        # 只认行首出现的 SUMMARY:，且取最后一次（真正的摘要在回复末尾）——
+        # 避免模型在正文里提到 "SUMMARY:" 字样时被误截断
+        m = list(re.finditer(r"(?:^|\n)\s*SUMMARY:\s*(.+)", reply, re.M))
+        if m:
+            last = m[-1]
+            reply = reply[:last.start()].strip()
+            summary_text = last.group(1).strip()
             if summary_text:
                 new_summary = summary_text
 
