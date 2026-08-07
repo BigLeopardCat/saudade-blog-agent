@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.7
     llm_max_tokens: int = 8192
     llm_streaming: bool = True
+    # LLM 无数据超时（秒）：API 偶发无响应时结束生成，避免调用无限挂起占满线程池
+    llm_timeout: float = 120.0
 
     # ── Agent ───────────────────────────────────────────────────────
     agent_verbose: bool = True
@@ -68,6 +70,11 @@ class Settings(BaseSettings):
 
     # ── Memory ──────────────────────────────────────────────────────
     memory_session_key: str = "default"
+
+    # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
+    # 与博客共用 JWT_SECRET：agent 以对话用户身份签发 JWT 调用 device-service
+    jwt_secret: str = ""
+    device_service_url: str = "http://127.0.0.1:3100"
 
     # ── Logging ─────────────────────────────────────────────────────
     log_level: str = "INFO"

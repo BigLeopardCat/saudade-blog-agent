@@ -29,6 +29,9 @@ def get_llm(**kwargs) -> ChatOpenAI:
         "max_tokens": kwargs.pop("max_tokens", settings.llm_max_tokens),
         "streaming": kwargs.pop("streaming", settings.llm_streaming),
         "verbose": kwargs.pop("verbose", settings.agent_verbose),
+        # 无数据超时：OpenAI 兼容客户端默认 600s，API 偶发无响应会无限挂起
+        # （曾导致 8 个线程池全部占满、后续所有对话排队卡死）
+        "timeout": kwargs.pop("timeout", settings.llm_timeout),
         **kwargs,
     }
     # Qwen3 系列默认开启思考模式（enable_thinking=true），思维链经 reasoning_content 返回；

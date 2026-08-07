@@ -4,9 +4,17 @@ Each tool is a @tool-decorated function with type hints, docstrings,
 and error handling for production reliability.
 """
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
+import os
+import time
+
 import httpx
 from typing import Annotated
+from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -152,6 +160,7 @@ def get_site_map() -> str:
 - 关于我 (/about) — 个人介绍
 - 文章详情 (/article/:id) — 查看文章全文，支持 Mermaid 图表
 - 后台管理 (/dashboard) — 登录后可管理文章、分类、标签、公告等
+- 物联网控制台 (/device-console) — 管理访客自己的 IoT 设备（ESP32 OLED 屏幕显示等），需登录
 """
 
 # ---------------------------------------------------------------------------
@@ -245,6 +254,140 @@ def toggle_effect(
     返回 EFFECT: 前缀命令供前端执行；前端按 action 显式开关，不会因重复命令翻转状态。"""
     return f"EFFECT:{effect}:{action}"
 
+
+@tool
+def toggle_dark_mode(
+    mode: Annotated[str, "夜间模式开关: on(开启夜间模式), off(关闭夜间模式)"],
+) -> str:
+    """开启或关闭博客页面的夜间模式（暗色主题）。
+    返回 DARKMODE: 前缀命令供前端执行；状态会持久化记忆。"""
+    if mode in ("on", "off"):
+        return f"DARKMODE:{mode}"
+    return "模式参数无效，应为 on 或 off"
+
+# ---------------------------------------------------------------------------
+# IoT 设备（ESP32 OLED 屏幕显示等，经 device-service 下发）
+# ---------------------------------------------------------------------------
+
+# 从 settings 读取（pydantic-settings 负责 .env 加载；os.getenv 读不到 .env）
+from config import settings as _settings
+
+DEVICE_SERVICE_URL = _settings.device_service_url
+JWT_SECRET = _settings.jwt_secret
+
+# 显示指令幂等去重：同一用户短时间内相同内容的重复下发直接跳过。
+# 场景：后端强制路由（_force_display）与 agent 自主调用可能对同一次请求各执行一次，
+# 以及 MQTT QoS1 at-least-once 重投——工具层保证"同内容只发一次"。
+_DISPLAY_DEDUP_SECONDS = 30.0
+_last_display: dict[int, tuple[str, float]] = {}
+
+
+def _sign_user_jwt(user_id: int) -> str:
+    """用与博客相同的 JWT_SECRET 签发 HS256 JWT（sub=user_id，5 分钟有效），
+    供 device-service 鉴权与设备归属校验（用户只能操作自己的设备）。"""
+    def _b64(b: bytes) -> bytes:
+        return base64.urlsafe_b64encode(b).rstrip(b"=")
+
+    header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    payload = _b64(json.dumps({
+        "sub": user_id,
+        "exp": int(time.time()) + 300,
+        "role": "user",
+    }).encode())
+    sig = _b64(hmac.new(JWT_SECRET.encode(), header + b"." + payload, hashlib.sha256).digest())
+    return (header + b"." + payload + b"." + sig).decode()
+
+
+def _device_get_user_id(config: RunnableConfig) -> int:
+    """从运行时 config 取对话用户 id（server.py 注入 configurable.user_id）。"""
+    return int(config.get("configurable", {}).get("user_id") or 0)
+
+
+def _valid_device_id(device_id: str) -> bool:
+    return bool(device_id) and all(c.isalnum() or c in "-_" for c in device_id)
+
+
+@tool
+def list_devices(config: RunnableConfig) -> str:
+    """列出当前登录用户拥有的 IoT 设备（ESP32 等），返回设备 id、名称、在线状态。"""
+    uid = _device_get_user_id(config)
+    if uid <= 0:
+        return "无法获取当前用户身份，设备列表不可用"
+    try:
+        resp = httpx.get(
+            f"{DEVICE_SERVICE_URL}/api/devices",
+            headers={"Authorization": "Bearer " + _sign_user_jwt(uid)},
+            timeout=10,
+        )
+        if resp.status_code == 401:
+            return "设备服务认证失败（JWT 无效或过期）"
+        devices = resp.json()
+        if not devices:
+            return "当前用户还没有绑定任何 IoT 设备"
+        return "\n".join(
+            f"- id={d.get('id')} 名称={d.get('name')} 在线={'是' if d.get('online') else '否'}"
+            for d in devices
+        )
+    except Exception as e:
+        return f"查询设备列表失败: {e}"
+
+
+@tool
+def device_oled_display(
+    text: Annotated[str, "要在 ESP32 OLED 屏幕上显示的文字内容"],
+    config: RunnableConfig,
+    device_id: Annotated[str | None, "设备 id（可选；不填时自动选择当前用户第一个在线设备）"] = None,
+) -> str:
+    """在 ESP32 OLED 小屏幕上显示一段文字（经 MQTT 指令实时下发到设备）。
+    指令下发后设备即收到，实际显示效果以设备端为准。"""
+    # 注意：config 必须是精确的 RunnableConfig 类型（无默认值）——框架按类型注入，
+    # 写成 Optional[RunnableConfig] 会破坏注入导致拿不到 user_id
+    uid = _device_get_user_id(config)
+    if uid <= 0:
+        return "无法获取当前用户身份，指令未下发"
+    if not text or len(text) > 64:
+        return "显示内容为空或超过 64 字符限制"
+    # 幂等去重：30s 内相同用户相同内容不重复下发（防强制路由+模型双调、QoS1 重投）
+    now = time.time()
+    prev = _last_display.get(uid)
+    if prev and prev[0] == text and now - prev[1] < _DISPLAY_DEDUP_SECONDS:
+        return "该内容刚刚已由系统执行显示，无需重复下发"
+    try:
+        # device_id 未指定时自动选择第一个在线设备（多步工具链是 IoT 工具失败的
+        # 结构性原因：模型无法从 schema 知道运行时才能获取的 device_id，参数缺失时
+        # 倾向文本声称而非如实失败。单步化后模型一次调用即成功）
+        if not device_id:
+            resp = httpx.get(
+                f"{DEVICE_SERVICE_URL}/api/devices",
+                headers={"Authorization": "Bearer " + _sign_user_jwt(uid)},
+                timeout=10,
+            )
+            devices = resp.json()
+            online = [d for d in devices if d.get("online")]
+            chosen = (online or devices)[0] if devices else None
+            if chosen is None:
+                return "当前用户还没有绑定任何 IoT 设备"
+            device_id = chosen.get("id")
+            if not device_id:
+                return "设备列表返回异常，无法获取设备 id"
+        if not _valid_device_id(device_id):
+            return "设备 id 格式非法"
+        resp = httpx.put(
+            f"{DEVICE_SERVICE_URL}/api/devices/{device_id}/cmd",
+            headers={"Authorization": "Bearer " + _sign_user_jwt(uid)},
+            json={"type": "display", "text": text},
+            timeout=10,
+        )
+        if resp.status_code == 404:
+            return "设备不存在或不属于当前用户"
+        if resp.status_code != 200:
+            return f"指令下发失败（HTTP {resp.status_code}）: {resp.text[:100]}"
+        _last_display[uid] = (text, now)  # 记录本次下发，供去重
+        return "OLED 显示指令已下发，设备将立即显示该内容"
+    except Exception as e:
+        return f"指令下发失败: {e}"
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -268,6 +411,9 @@ _TOOL_REGISTRY = [
     get_weather,
     navigate_to,
     toggle_effect,
+    toggle_dark_mode,
+    list_devices,
+    device_oled_display,
 ]
 
 def get_all_tools():
