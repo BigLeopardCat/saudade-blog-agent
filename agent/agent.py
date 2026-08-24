@@ -1,46 +1,30 @@
 """Agent creation and orchestration.
 
-Builds a LangGraph-based agent (langchain 1.3+) equipped with custom
-tools and conversation memory via a checkpointer.
+Returns the hand-written LangGraph graph (agent.graph.build_graph) — the
+upgraded agent core（升级阶段 1）replacing the create_agent black box.
+
+图拓扑：planner → model ⇄ tools（ReAct 循环）→ reflector（质检闸门）。
+工程外壳（_build_messages / SSE 帧协议 / 超时体系 / force_display）留在
+server.py，本模块只负责"图长什么样"。
 """
 
 import logging
-from langchain.agents import create_agent as create_langchain_agent
-from models import get_llm
-from tools import get_all_tools
-from config import settings
-from .memory import get_checkpointer
-from .prompts import *
+
+from .graph import build_graph
 
 logger = logging.getLogger(__name__)
 
 
 def create_agent(**llm_kwargs):
-    """Create a fully configured LangChain agent (LangGraph-based).
+    """Build the hand-written planner/model/tools/reflector graph.
 
     Args:
-        **llm_kwargs: Optional overrides passed to ``get_llm()``.
+        **llm_kwargs: 保留以兼容旧签名——图内部按节点自行配置 LLM
+            （planner 快思考/廉价，model 全量对话），无需外部覆盖。
 
     Returns:
-        CompiledStateGraph: Ready-to-use agent graph.
+        CompiledStateGraph: Ready-to-use agent graph (LangGraph 1.x).
     """
-    # ── 1. LLM ──────────────────────────────────────────────────────
-    llm = get_llm(**llm_kwargs)
-
-    # ── 2. Tools ────────────────────────────────────────────────────
-    tools = get_all_tools()
-
-    # ── 3. Checkpointer (memory across turns) ──────────────────────
-    checkpointer = get_checkpointer()
-
-    # ── 4. Agent Graph ─────────────────────────────────────────────
-    agent = create_langchain_agent(
-        model=llm,
-        tools=tools,
-        system_prompt=BLOG_ASSISTANT_PROMPT,
-        checkpointer=checkpointer,
-        name="langchain_agent",
-    )
-
-    logger.info("Agent graph created with %d tool(s)", len(tools))
-    return agent
+    graph = build_graph()
+    logger.info("Hand-written agent graph ready (planner/model/tools/reflector)")
+    return graph

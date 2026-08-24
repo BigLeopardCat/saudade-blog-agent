@@ -8,6 +8,7 @@ Run with:
 import asyncio
 import json
 import logging
+import os
 import re
 import uuid
 from contextlib import asynccontextmanager
@@ -16,9 +17,10 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from langchain_core.messages import HumanMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessageChunk, SystemMessage, ToolMessage
 
 from agent import create_agent
+from agent.graph import graph_input
 from utils import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,21 @@ STREAM_IDLE_TIMEOUT = 120.0
 # 流式总时长硬上限（秒）：agent 工具调用循环/超长生成时每轮都有输出帧，
 # 空闲超时不会触发（帧流动会重置），需用总时长兜底保证流必会终止
 STREAM_TOTAL_TIMEOUT = 300.0
+
+# agent 图递归上界（防模型幻觉重试循环烧满 STREAM_TOTAL_TIMEOUT）：
+# langchain 1.3 create_agent 默认硬编码 recursion_limit=9999（等效无界），
+# 工具幻觉循环（同一意图反复"表演"调用而不真正调用）会打满总时长上限才断开，
+# 前端表现为 5 分钟"卡死"。压到 30（每轮循环约 2 图步 = 约 15 次模型-工具往返，
+# 正常流程 5 次以内），超限走既有 __ERROR__ 异常路径，卡死窗口缩到 60-90s。
+RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "30"))
+
+# 空回复恢复语：agent 流正常收尾但无任何输出（qwen 偶发空内容）时补发的人设内
+# 兜底文本——否则前端静默无感知（Rust 空回复不存历史、UI 无任何反馈，即"卡死"）
+_RECOVERY_SENTENCE = "喵呜……主人抱歉，泠月喵刚才脑袋卡壳了，没有生成出回复，请主人再问一遍喵～ 🐾"
+
+# Gate4 兜底句：REVISE 预算耗尽、最终轮仍违规（伪造命令/虚假声称）、且本对话
+# 没有可回放的诚实轮时，作为最终输出的人设内如实说明——宁可不做事，不能假装做到
+_QA_FALLBACK_SENTENCE = "呜……主人，泠月喵这次没能完成请求：因为无法调用工具，跳转并没有真正发生，泠月喵不能假装做到了呢……😿"
 
 
 class ChatRequest(BaseModel):
@@ -182,15 +199,19 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0) -> tuple[s
     """Run agent synchronously in a thread. Returns (reply, nav_line)."""
     # user_id 注入 configurable：设备类工具（list_devices/device_oled_display）
     # 经 RunnableConfig 读取并以用户身份签发 JWT 调用 device-service
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+    # recursion_limit 覆盖默认 9999（等效无界）：幻觉重试循环有界
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}, "recursion_limit": RECURSION_LIMIT}
     full_reply = ""
     nav_line = ""
-    for chunk, _metadata in _agent.stream(
-        {"messages": messages},
+    for chunk, meta in _agent.stream(
+        graph_input(messages),
         config,
         stream_mode="messages",
     ):
-        if isinstance(chunk, AIMessageChunk) and chunk.content:
+        # 手写图里有多个 LLM 节点（planner 产出计划文本/reflector 产出质检结论），
+        # 只有 model 节点的 AIMessageChunk 是给访客看的回复——其余按 node 过滤掉，
+        # 否则计划/反思会漏进对话（create_agent 时代只有一个 model 节点，无需过滤）
+        if isinstance(chunk, AIMessageChunk) and chunk.content and meta.get("langgraph_node") == "model":
             full_reply += str(chunk.content)
         elif isinstance(chunk, ToolMessage) and chunk.content:
             text = str(chunk.content)
@@ -261,7 +282,7 @@ async def chat(req: ChatRequest):
 
     try:
         loop = asyncio.get_event_loop()
-        # 强制显示路由（防幻觉）：有显示意图时后端直接执行，结果注入上下文
+        # 强制显示路由（防幻觉）：有显示意图时后端直接执行，结果注入上下文。
         display_note = await loop.run_in_executor(_executor, _force_display, req.message, req.user_id)
         if display_note:
             messages = _build_messages(req, display_note)
@@ -271,14 +292,20 @@ async def chat(req: ChatRequest):
         # （模型格式漂移不带前缀时，摘要会原样显示给访客，且无法入库记忆）
         reply, new_summary = _strip_summary_from_reply(reply, req.needs_summary)
 
-        # 摘要剥离之后再把导航/特效命令行追加回去，确保命令不被 SUMMARY 截断吞掉
-        if nav_line and not reply.startswith("NAVIGATE:") and not reply.startswith("AUTO_NAVIGATE:"):
-            if nav_line.startswith("EFFECT:"):
-                reply = reply + "\n" + nav_line
-            else:
-                reply = nav_line + "\n" + reply
+        # 空回复兜底：qwen 偶发空内容 → 下发人设内恢复语，避免前端静默无感知
+        if not reply.strip():
+            logger.warning("Agent returned empty reply for message=%r", req.message[:60])
+        final_reply = reply.strip() or _RECOVERY_SENTENCE
 
-        return ChatResponse(reply=reply, success=True, new_summary=new_summary)
+        # 摘要剥离之后再把导航/特效命令行追加回去，确保命令不被 SUMMARY 截断吞掉
+        final_nav = nav_line
+        if final_nav and not final_reply.startswith("NAVIGATE:") and not final_reply.startswith("AUTO_NAVIGATE:"):
+            if final_nav.startswith("EFFECT:"):
+                final_reply = final_reply + "\n" + final_nav
+            else:
+                final_reply = final_nav + "\n" + final_reply
+
+        return ChatResponse(reply=final_reply, success=True, new_summary=new_summary)
     except Exception as e:
         logger.exception("Agent invocation failed")
         return ChatResponse(reply="", success=False, error=str(e))
@@ -291,14 +318,90 @@ async def chat(req: ChatRequest):
 def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Queue, loop, user_id: int = 0):
     """Run agent in a thread, push each chunk into an asyncio.Queue."""
     # user_id 注入 configurable（设备类工具经 RunnableConfig 读取，见 _run_agent_sync 注释）
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+    # recursion_limit 覆盖默认 9999（等效无界，见 _run_agent_sync 注释）
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}, "recursion_limit": RECURSION_LIMIT}
     try:
-        for chunk, _metadata in _agent.stream(
-            {"messages": messages},
+        # 双 stream_mode：
+        #   "messages" —— token 级文本/工具结果帧（原逻辑不变）
+        #   "updates"  —— 节点级状态更新：用于捕捉 reflector 的 REVISE 判定，
+        #                 此时向前端发 __RESET__ 帧清空重绘（REVISE 轮的文本已作废，
+        #                 不重置会导致多轮全文累积显示 + 导航解析命中废轮次命令）
+        # Gate4 诚实兜底的轮次记账：
+        #   round_buf —— 当前轮已累积的回复正文（REVISE 作废时清空）
+        #   prev_good —— 最近一个通过质检轮的完整正文（预算耗尽仍违规时回放为最终输出，
+        #                 访客看到的是模型自己的诚实回复，而非被否定的谎言）
+        round_buf = ""
+        prev_good = ""
+        process_emitted = False  # 本次请求已发过过程步骤（决定收尾是否补"质检通过"）
+
+        def emit_process(text: str):
+            nonlocal process_emitted
+            process_emitted = True
+            asyncio.run_coroutine_threadsafe(queue.put(f"__PROCESS__:{text}"), loop).result()
+
+        def emit_reset(reason: str):
+            asyncio.run_coroutine_threadsafe(queue.put(f"__RESET__:{reason}"), loop).result()
+
+        for mode, data in _agent.stream(
+            graph_input(messages),
             config,
-            stream_mode="messages",
+            stream_mode=["messages", "updates"],
         ):
-            asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
+            if mode == "messages":
+                chunk, meta = data
+                # 入队前过滤（同 _run_agent_sync）：只有 model 节点的回复文本帧、
+                # 以及工具结果帧进队列；planner/reflector 的内部输出不发给前端
+                if isinstance(chunk, AIMessageChunk):
+                    if chunk.content and meta.get("langgraph_node") == "model":
+                        round_buf += str(chunk.content)
+                        asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
+                elif isinstance(chunk, ToolMessage) and chunk.content:
+                    asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
+                    # 过程展示：命令类工具真实执行了 → 步骤行（前端"调用工具"轨迹）
+                    t = str(chunk.content)
+                    if t.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")):
+                        emit_process("🛠 调用工具：页面跳转 navigate_to")
+                    elif t.startswith("EFFECT:"):
+                        emit_process("🛠 调用工具：页面特效 toggle_effect")
+                    elif t.startswith("DARKMODE:"):
+                        emit_process("🛠 调用工具：夜间模式 toggle_dark_mode")
+            elif mode == "updates":
+                # 计划（仅 tool/multi 意图，chat 快道不发——避免每条闲聊都有过程行）
+                planner_upd = data.get("planner")
+                if planner_upd:
+                    plan = str(planner_upd.get("plan", ""))
+                    if plan.startswith(("INTENT=tool", "INTENT=multi")):
+                        emit_process("🧭 计划：" + plan.replace("\n", " ").strip()[:60])
+                upd = data.get("reflector")
+                if not upd:
+                    continue
+                if upd.get("fallback"):
+                    # Gate4：预算耗尽且最终轮仍违规 —— 不接受谎言收尾。
+                    # 清空本轮显示，回放最近一个通过质检轮的诚实回复作为最终输出
+                    # （无诚实轮可回放时退化为一句如实说明）。
+                    reason = str(upd.get("reflection") or "质检预算耗尽且最终轮仍违规")[:60]
+                    emit_process("✗ 质检预算耗尽，回放最近通过质检的诚实回复")
+                    emit_reset(reason)
+                    asyncio.run_coroutine_threadsafe(
+                        queue.put(AIMessageChunk(content=prev_good or _QA_FALLBACK_SENTENCE)),
+                        loop,
+                    ).result()
+                    round_buf = ""
+                    continue
+                if upd.get("done") is False and any(
+                    isinstance(m, SystemMessage) for m in upd.get("messages", [])
+                ):
+                    # REVISE：当前轮作废，不累积为"最近诚实轮"
+                    reason = str(upd.get("reflection") or "质检未通过")[:60]
+                    emit_process("✗ 质检打回：" + reason)
+                    emit_reset(reason)
+                    round_buf = ""
+                else:
+                    # 质检通过（done=True）：本轮成为回放候选
+                    prev_good = round_buf or prev_good
+                    round_buf = ""
+                    if process_emitted:
+                        emit_process("✓ 质检通过")
         asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
     except Exception as e:
         asyncio.run_coroutine_threadsafe(queue.put(e), loop).result()
@@ -314,7 +417,7 @@ async def chat_stream(req: ChatRequest):
     thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
 
     # 强制显示路由（防幻觉）：命中显示意图时后端直接执行（阻塞调用放 executor），
-    # 结果注记随上下文下发，模型据此如实回复
+    # 结果注记随上下文下发，模型据此如实回复。
     display_note = await asyncio.get_event_loop().run_in_executor(
         _executor, _force_display, req.message, req.user_id
     )
@@ -332,6 +435,7 @@ async def chat_stream(req: ChatRequest):
         )
 
         nav_line = ""
+        had_output = False
         started = loop.time()
         try:
             while True:
@@ -358,17 +462,32 @@ async def chat_stream(req: ChatRequest):
                     logger.exception("Agent streaming failed")
                     yield f"data: __ERROR__:{json.dumps(str(chunk), ensure_ascii=False)}\n\n"
                     return
+                # 过程展示/质检重置控制帧（__PROCESS__:<步骤> / __RESET__:<原因>）：
+                # JSON 编码原样转发，前端归档到灰色可折叠过程行
+                if isinstance(chunk, str) and (chunk.startswith("__PROCESS__") or chunk.startswith("__RESET__")):
+                    had_output = True
+                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    continue
                 if isinstance(chunk, AIMessageChunk) and chunk.content:
+                    had_output = True
                     # JSON 编码避免文本内的 \n\n 破坏 SSE 帧边界
                     yield f"data: {json.dumps(str(chunk.content), ensure_ascii=False)}\n\n"
                 elif isinstance(chunk, ToolMessage) and chunk.content:
                     text = str(chunk.content)
                     if text.startswith("NAVIGATE:") or text.startswith("AUTO_NAVIGATE:"):
                         nav_line = text
+                        had_output = True
                         yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
                     elif text.startswith("EFFECT:") or text.startswith("DARKMODE:"):
                         nav_line = text
+                        had_output = True
                         yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
+
+            # 空输出兜底：整轮无任何帧（qwen 偶发空内容）→ 补发人设内恢复语，
+            # 前端不会静默无感知（Rust 空回复不存历史、UI 无任何反馈即"卡死"）
+            if not had_output:
+                logger.warning("Chat stream ended with no output (agent produced no text/no command)")
+                yield f"data: {json.dumps(_RECOVERY_SENTENCE, ensure_ascii=False)}\n\n"
 
             yield f"data: __{'NAV_END' if nav_line else 'END'}__\n\n"
         finally:

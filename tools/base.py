@@ -108,13 +108,13 @@ def get_announcements() -> str:
     return str(data)
 
 # ---------------------------------------------------------------------------
-# 友人链 工具
+# 留言板 工具
 # ---------------------------------------------------------------------------
 
 @tool
-def list_friends() -> str:
-    """获取友人链（友情链接）列表。"""
-    data = _get("/friends")
+def list_guestbook() -> str:
+    """获取留言板（河灯留言）列表。"""
+    data = _get("/board")
     return str(data)
 
 # ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ def get_blog_info() -> str:
 
 @tool
 def get_social_links() -> str:
-    """获取社交链接（QQ、GitHub、网易云等）。"""
+    """获取社交链接（QQ、GitHub、BILIBILI等）。"""
     data = _get("/social")
     return str(data)
 
@@ -156,7 +156,7 @@ def get_site_map() -> str:
 - 归档 (/times) — 按时间轴归档展示所有文章
 - 分类 (/category/:name) — 按分类查看文章
 - 说说 (/talk) — 动态/碎语
-- 友人链 (/friends) — 友情链接
+- 留言板 (/guestbook) — 河灯留言（访客放灯许愿/留言）
 - 关于我 (/about) — 个人介绍
 - 文章详情 (/article/:id) — 查看文章全文，支持 Mermaid 图表
 - 后台管理 (/dashboard) — 登录后可管理文章、分类、标签、公告等
@@ -236,13 +236,31 @@ timeout=10)
 # 导航工具
 # ---------------------------------------------------------------------------
 
+# 导航目标白名单（与 agent/prompts.py 的 navigate_to 约束保持一致）：
+# prompt 约束是第一道闸，工具层校验是第二道闸——模型不可信，工具必须自证。
+# 教训：模型曾把"友链板块"猜成 /links 直接发出去（真实页是 /guestbook）。
+_NAV_EXACT_PATHS = {"/", "/about", "/guestbook", "/talk", "/times", "/login", "/dashboard", "/device-console/"}
+_NAV_PREFIX_PATHS = ("/category/", "/article/")
+
+
 @tool
 def navigate_to(
-    path: Annotated[str, "Page path to navigate to, e.g. / /times /category/tech /article/3 /talk /friends /about"],
+    path: Annotated[str, "Page path to navigate to, e.g. / /times /category/tech /article/3 /talk /guestbook /about"],
     confirm: Annotated[bool, "Whether user confirmation is needed. false=direct nav, true=ask user"] = True,
 ) -> str:
-    """Navigate to a blog page. Returns URL with NAVIGATE or AUTO_NAVIGATE prefix."""
-    full_url = f"https://saudade.site{path}"
+    """导航到博客页面。页面跳转只能通过调用本工具生效：调用后返回 NAVIGATE:/AUTO_NAVIGATE: 前缀命令，由系统执行跳转。
+    严禁在回复正文中自行输出命令前缀文本——那不是工具调用，不会产生任何跳转，属于违规输出，质检会打回重做。"""
+    p = path.strip()
+    # /category/*、/article/* 要求至少带一个 id 段（/category/ 裸前缀不算有效页面）
+    valid = p in _NAV_EXACT_PATHS or (p.startswith(_NAV_PREFIX_PATHS) and p.count("/") >= 2)
+    if not valid:
+        # 拒绝时把真实约束回给模型，让它用有效路径重新调用（而不是返回错误命令让前端执行）
+        return (
+            f"导航路径无效: {p!r}。博客真实存在的页面: /（首页）、/about、/guestbook、/talk、"
+            f"/times、/login、/dashboard、/category/*、/article/*、/device-console/。"
+            f"请用有效路径重新调用 navigate_to。"
+        )
+    full_url = f"https://saudade.site{p}"
     return f"{chr(78)+chr(65)+chr(86)+chr(73)+chr(71)+chr(65)+chr(84)+chr(69) if confirm else chr(65)+chr(85)+chr(84)+chr(79)+chr(95)+chr(78)+chr(65)+chr(86)+chr(73)+chr(71)+chr(65)+chr(84)+chr(69)}:{full_url}"
 
 @tool
@@ -400,7 +418,7 @@ _TOOL_REGISTRY = [
     list_categories,
     list_tags,
     get_announcements,
-    list_friends,
+    list_guestbook,
     list_talks,
     get_blog_info,
     get_social_links,
