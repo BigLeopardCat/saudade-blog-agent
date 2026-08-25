@@ -48,11 +48,6 @@ RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "30"))
 # 兜底文本——否则前端静默无感知（Rust 空回复不存历史、UI 无任何反馈，即"卡死"）
 _RECOVERY_SENTENCE = "喵呜……主人抱歉，泠月喵刚才脑袋卡壳了，没有生成出回复，请主人再问一遍喵～ 🐾"
 
-# Gate4 兜底句：REVISE 预算耗尽、最终轮仍违规（伪造命令/虚假声称）、且本对话
-# 没有可回放的诚实轮时，作为最终输出的人设内如实说明——宁可不做事，不能假装做到
-_QA_FALLBACK_SENTENCE = "呜……主人，泠月喵这次没能完成请求：因为无法调用工具，跳转并没有真正发生，泠月喵不能假装做到了呢……😿"
-
-
 class ChatRequest(BaseModel):
     message: str
     current_url: str = ""
@@ -109,7 +104,8 @@ def _extract_display_intent(user_msg: str, user_id: int) -> str:
         return ""
     from models import get_llm
     try:
-        llm = get_llm(streaming=False, max_tokens=128)
+        # 内容提取必须禁用思考模式（fast 路径，思维链只增加延迟与泄露风险）
+        llm = get_llm(streaming=False, max_tokens=128, enable_thinking=False)
         prompt = (
             "你是博客 IoT 助手的内容提取器。判断用户消息是否要求把某段文字显示到 IoT 设备的屏幕"
             "（如'在屏幕上显示XXX'、'屏幕换成XXX'、'在设备屏幕上写XXX'、'让设备显示XXX'）。\n"
@@ -211,7 +207,13 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0) -> tuple[s
         # 手写图里有多个 LLM 节点（planner 产出计划文本/reflector 产出质检结论），
         # 只有 model 节点的 AIMessageChunk 是给访客看的回复——其余按 node 过滤掉，
         # 否则计划/反思会漏进对话（create_agent 时代只有一个 model 节点，无需过滤）
-        if isinstance(chunk, AIMessageChunk) and chunk.content and meta.get("langgraph_node") == "model":
+        if (isinstance(chunk, SystemMessage) and chunk.content
+                and str(chunk.content).startswith("[Reflection 检查未通过")):
+            # REVISE 轮作废标记（同流式路径 __RESET__ 语义）：reflector 打回的
+            # 轮次文本/命令不得展示，只保留最终轮，否则两轮文本会拼接重复
+            full_reply = ""
+            nav_line = ""
+        elif isinstance(chunk, AIMessageChunk) and chunk.content and meta.get("langgraph_node") == "model":
             full_reply += str(chunk.content)
         elif isinstance(chunk, ToolMessage) and chunk.content:
             text = str(chunk.content)
@@ -250,7 +252,9 @@ def _strip_summary_from_reply(reply: str, needs_summary: bool) -> tuple[str, str
 
     返回 (剥离后的回复, 新摘要或 None)。
     """
-    m = list(re.finditer(r"(?:^|\n)\s*SUMMARY:\s*(.+)", reply, re.M))
+    # 容忍行内 SUMMARY（模型偶发不另起一行，如 "...ゞ SUMMARY: ..."）；要求 SUMMARY
+    # 前有空白/行首，避免误匹配 "XXSUMMARY"；取最后一个匹配，截断其前为可见回复
+    m = list(re.finditer(r"(?:^|\s)SUMMARY\s*:\s*(.+)", reply, re.M))
     if m:
         last = m[-1]
         reply = reply[:last.start()].strip()
@@ -326,13 +330,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         #   "updates"  —— 节点级状态更新：用于捕捉 reflector 的 REVISE 判定，
         #                 此时向前端发 __RESET__ 帧清空重绘（REVISE 轮的文本已作废，
         #                 不重置会导致多轮全文累积显示 + 导航解析命中废轮次命令）
-        # Gate4 诚实兜底的轮次记账：
+        # 轮次记账：
         #   round_buf —— 当前轮已累积的回复正文（REVISE 作废时清空）
-        #   prev_good —— 最近一个通过质检轮的完整正文（预算耗尽仍违规时回放为最终输出，
-        #                 访客看到的是模型自己的诚实回复，而非被否定的谎言）
+        #   process_emitted —— 本次请求已发过过程步骤（决定收尾是否补"质检通过"）
         round_buf = ""
-        prev_good = ""
-        process_emitted = False  # 本次请求已发过过程步骤（决定收尾是否补"质检通过"）
+        process_emitted = False
 
         def emit_process(text: str):
             nonlocal process_emitted
@@ -366,39 +368,25 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     elif t.startswith("DARKMODE:"):
                         emit_process("🛠 调用工具：夜间模式 toggle_dark_mode")
             elif mode == "updates":
-                # 计划（仅 tool/multi 意图，chat 快道不发——避免每条闲聊都有过程行）
+                # 计划（仅非 chat 技能，chat 快道不发——避免每条闲聊都有过程行）
                 planner_upd = data.get("planner")
                 if planner_upd:
                     plan = str(planner_upd.get("plan", ""))
-                    if plan.startswith(("INTENT=tool", "INTENT=multi")):
+                    if plan.startswith("SKILL=") and not plan.startswith("SKILL=chat"):
                         emit_process("🧭 计划：" + plan.replace("\n", " ").strip()[:60])
                 upd = data.get("reflector")
                 if not upd:
                     continue
-                if upd.get("fallback"):
-                    # Gate4：预算耗尽且最终轮仍违规 —— 不接受谎言收尾。
-                    # 清空本轮显示，回放最近一个通过质检轮的诚实回复作为最终输出
-                    # （无诚实轮可回放时退化为一句如实说明）。
-                    reason = str(upd.get("reflection") or "质检预算耗尽且最终轮仍违规")[:60]
-                    emit_process("✗ 质检预算耗尽，回放最近通过质检的诚实回复")
-                    emit_reset(reason)
-                    asyncio.run_coroutine_threadsafe(
-                        queue.put(AIMessageChunk(content=prev_good or _QA_FALLBACK_SENTENCE)),
-                        loop,
-                    ).result()
-                    round_buf = ""
-                    continue
                 if upd.get("done") is False and any(
                     isinstance(m, SystemMessage) for m in upd.get("messages", [])
                 ):
-                    # REVISE：当前轮作废，不累积为"最近诚实轮"
+                    # REVISE：当前轮作废，清空已累积正文（前端 RESET 重绘）
                     reason = str(upd.get("reflection") or "质检未通过")[:60]
                     emit_process("✗ 质检打回：" + reason)
                     emit_reset(reason)
                     round_buf = ""
                 else:
-                    # 质检通过（done=True）：本轮成为回放候选
-                    prev_good = round_buf or prev_good
+                    # 质检通过（done=True）
                     round_buf = ""
                     if process_emitted:
                         emit_process("✓ 质检通过")

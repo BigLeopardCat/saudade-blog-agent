@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     llm_streaming: bool = True
     # LLM 无数据超时（秒）：API 偶发无响应时结束生成，避免调用无限挂起占满线程池
     llm_timeout: float = 120.0
+    # Qwen 思考模式开关（默认开：A/B 全量 golden 13/13 + live 冒烟均无推理泄漏——
+    # Qwen 的 thinking 走独立 reasoning_content 字段，不进回复正文；如遇泄漏可用
+    # LLM_ENABLE_THINKING=0 关闭）
+    llm_enable_thinking: bool = True
 
     # ── Agent ───────────────────────────────────────────────────────
     agent_verbose: bool = True

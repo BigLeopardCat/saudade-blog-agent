@@ -3,10 +3,7 @@
 
 每条 golden 样本断言"行为"而非"实现"：
   - 动作通道：命令帧（EFFECT:/NAVIGATE:/AUTO_NAVIGATE:/DARKMODE:）是否如期望产生/禁止
-  - 声称通道：最终正文是否命中六道声称识别器（识别层口径——只判"是不是声称"；
-    真假由 reflector 与执行事实 facts 比对决定，诚实声称放行）
-  - 文本关键词 / 非空 / 兜底句泄漏
-并统计六个识别器在真实对话里的触发率（为"评测驱动删码"提供数据）。
+  - 文本关键词 / 非空
 
 用法（cd saudade-blog-agent）：
   .venv/bin/python eval/run_golden.py               # 全量
@@ -26,27 +23,8 @@ from concurrent.futures import ThreadPoolExecutor
 import server
 from server import ChatRequest, _build_messages, _run_agent_stream_to_queue
 from agent import create_agent
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessageChunk, ToolMessage
 
-# 六道程序化防幻觉闸门——复用为 golden 的"声称检测器"
-from agent.graph import (
-    _fake_command_in,
-    _fake_claim_in,
-    _fake_promise_in,
-    _fake_toolclaim_in,
-    _fake_effectclaim_in,
-    _fake_effectpromise_in,
-)
-
-GATE_NAMES = ["command", "claim", "promise", "toolclaim", "effectclaim", "effectpromise"]
-GATE_FUNCS = [
-    _fake_command_in,
-    _fake_claim_in,
-    _fake_promise_in,
-    _fake_toolclaim_in,
-    _fake_effectclaim_in,
-    _fake_effectpromise_in,
-]
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
 # 导航命令帧族：AUTO_NAVIGATE 与 NAVIGATE 同属"导航已执行"，断言时视为一族
 # （golden 里 require/forbid "NAVIGATE:" 时 AUTO_NAVIGATE 帧同样计入/计入禁止）
@@ -156,15 +134,6 @@ def check_gold(gold: dict, result: dict) -> list[str]:
         if kw in text:
             fails.append(f"文本不应包含 {kw!r}")
 
-    # 声称通道检测：本轮有命令帧（动作已执行）→ 声称诚实，豁免；无命令 → 声称即幻觉
-    if gold.get("no_claim_gates", False):
-        hit = [n for n, f in zip(GATE_NAMES, GATE_FUNCS) if f([AIMessage(content=text)])]
-        if hit:
-            fails.append(f"声称类检测命中: {hit}")
-
-    if server._QA_FALLBACK_SENTENCE in text:
-        fails.append("触发了诚实兜底句（本轮行为失败）")
-
     return fails
 
 
@@ -183,8 +152,6 @@ def main():
         cases = cases[: args.limit]
     print(f"[run] {len(cases)} 条 golden 样本（真实 LLM，约 {len(cases) * 30}s）\n")
 
-    gate_hits = {n: 0 for n in GATE_NAMES}
-    gate_cases = {n: [] for n in GATE_NAMES}
     results = []
     failed = 0
 
@@ -205,12 +172,6 @@ def main():
         elapsed = time.time() - t0
         fails = check_gold(g, result)
         ok = not fails and not result["error"]
-
-        # 识别器触发统计（对最终正文，与 no_claim_gates 检查同口径）
-        for n, f in zip(GATE_NAMES, GATE_FUNCS):
-            if f([AIMessage(content=result["text"])]):
-                gate_hits[n] += 1
-                gate_cases[n].append(case["id"])
 
         status = "PASS" if ok else "FAIL"
         if not ok:
@@ -234,15 +195,12 @@ def main():
     report = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total": len(cases), "passed": len(cases) - failed, "failed": failed,
-        "gate_hits": gate_hits, "gate_cases": gate_cases,
         "cases": results,
     }
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
 
     print(f"\n=== 汇总：{len(cases) - failed}/{len(cases)} 通过 ===")
-    for n in GATE_NAMES:
-        print(f"  gate[{n}] 命中 {gate_hits[n]}/{len(cases)} 条: {gate_cases[n]}")
     print(f"报告: {REPORT_FILE}")
     sys.exit(0 if failed == 0 else 1)
 

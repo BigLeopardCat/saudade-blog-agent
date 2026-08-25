@@ -21,6 +21,9 @@ def get_llm(**kwargs) -> ChatOpenAI:
     Returns:
         ChatOpenAI: A LangChain LLM connected to the configured API.
     """
+    # Qwen 思考模式开关：默认取 settings.llm_enable_thinking，调用方可传
+    # enable_thinking=False 强制关闭（如 _extract_display_intent 的内容提取）
+    thinking = kwargs.pop("enable_thinking", settings.llm_enable_thinking)
     params = {
         "model": kwargs.pop("model", settings.active_llm_model),
         "api_key": kwargs.pop("api_key", settings.active_llm_api_key),
@@ -35,9 +38,9 @@ def get_llm(**kwargs) -> ChatOpenAI:
         **kwargs,
     }
     # Qwen3 系列默认开启思考模式（enable_thinking=true），思维链经 reasoning_content 返回；
-    # 在工具调用轮次存在间歇性混入正文的风险（表现为回复开头出现英文规划文本）。
-    # 对话型场景直接关闭思考模式，从根源消除思维链泄露。
+    # 历史上有间歇性混入正文的风险（回复开头出现英文规划文本），默认关，可用
+    # LLM_ENABLE_THINKING=1 打开（A/B 验证后决定默认值）。
     # 注意：enable_thinking 是 Qwen 自有参数，须走 extra_body（model_kwargs 只接受标准 OpenAI 参数）
     if settings.llm_provider.lower() == "qwen":
-        params["extra_body"] = {"enable_thinking": False}
+        params["extra_body"] = {"enable_thinking": bool(thinking)}
     return ChatOpenAI(**params)
