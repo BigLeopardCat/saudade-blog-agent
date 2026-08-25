@@ -490,7 +490,10 @@ def reflector_node(state: AgentState) -> dict:
     else:
         humans = [m for m in state["messages"] if isinstance(m, HumanMessage)]
         trace = _build_trace(humans[-2:] + cur)
-    llm = get_llm(temperature=0.0, max_tokens=200, timeout=30)
+    # 质检只要 VERDICT 判定，关闭思考：thinking 占满 max_tokens=200 时 content
+    # 会被截断成空串（Qwen 思考走 reasoning_content 不进 content），导致
+    # PASS 但 reflection 为空、单测错判
+    llm = get_llm(temperature=0.0, max_tokens=200, timeout=30, enable_thinking=False)
     resp = llm.invoke(_REFLECTOR_PROMPT.format(plan=state["plan"], trace=trace, idem_note=idem_note))
     raw = getattr(resp, "content", str(resp))
     if re.search(r"VERDICT\s*[:=]\s*REVISE", raw, re.IGNORECASE):
