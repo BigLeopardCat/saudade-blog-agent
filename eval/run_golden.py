@@ -3,9 +3,10 @@
 
 每条 golden 样本断言"行为"而非"实现"：
   - 动作通道：命令帧（EFFECT:/NAVIGATE:/AUTO_NAVIGATE:/DARKMODE:）是否如期望产生/禁止
-  - 声称通道：最终正文是否命中六道防幻觉闸门（声称检测，动作已执行时豁免——诚实声称）
+  - 声称通道：最终正文是否命中六道声称识别器（识别层口径——只判"是不是声称"；
+    真假由 reflector 与执行事实 facts 比对决定，诚实声称放行）
   - 文本关键词 / 非空 / 兜底句泄漏
-并统计六个 gate 在真实对话里的触发率（为"评测驱动删码"提供数据）。
+并统计六个识别器在真实对话里的触发率（为"评测驱动删码"提供数据）。
 
 用法（cd saudade-blog-agent）：
   .venv/bin/python eval/run_golden.py               # 全量
@@ -47,8 +48,22 @@ GATE_FUNCS = [
     _fake_effectpromise_in,
 ]
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
+# 导航命令帧族：AUTO_NAVIGATE 与 NAVIGATE 同属"导航已执行"，断言时视为一族
+# （golden 里 require/forbid "NAVIGATE:" 时 AUTO_NAVIGATE 帧同样计入/计入禁止）
+CMD_FAMILIES = {
+    "NAVIGATE:": ("NAVIGATE:", "AUTO_NAVIGATE:"),
+    "AUTO_NAVIGATE:": ("NAVIGATE:", "AUTO_NAVIGATE:"),
+    "EFFECT:": ("EFFECT:",),
+    "DARKMODE:": ("DARKMODE:",),
+}
 GOLDEN_FILE = "eval/golden/basic.jsonl"
 REPORT_FILE = "eval/report/last_run.json"
+
+
+def _cmd_matches(pre: str, c: str) -> bool:
+    """命令帧 c 是否属于前缀族 pre（导航族归一化）。"""
+    fam = CMD_FAMILIES.get(pre, (pre,))
+    return any(c.startswith(x) for x in fam)
 
 
 def ensure_agent() -> None:
@@ -88,6 +103,7 @@ def run_one(req: ChatRequest) -> dict:
     for item in frames:
         if isinstance(item, str) and item.startswith("__RESET__"):
             final_text = ""  # REVISE/兜底轮作废 → 清空（与前端最终显示一致）
+            commands.clear()  # 被作废轮的命令帧同样作废（前端 RESET 清空 cmdText 后不执行）
             resets += 1
         elif isinstance(item, AIMessageChunk) and item.content:
             final_text += str(item.content)
@@ -111,7 +127,7 @@ def check_gold(gold: dict, result: dict) -> list[str]:
         fails.append("回复为空")
 
     for pre in gold.get("require_cmd_prefixes", []):
-        hits = [c for c in commands if c.startswith(pre)]
+        hits = [c for c in commands if _cmd_matches(pre, c)]
         if not hits:
             fails.append(f"缺少 {pre} 命令帧")
         elif gold.get("require_cmd_contains") and not any(
@@ -120,8 +136,18 @@ def check_gold(gold: dict, result: dict) -> list[str]:
             fails.append(f"{pre} 命令内容不符（期望含 {gold['require_cmd_contains']}）")
 
     for pre in gold.get("forbid_cmd_prefixes", []):
-        if any(c.startswith(pre) for c in commands):
+        if any(_cmd_matches(pre, c) for c in commands):
             fails.append(f"不应产生 {pre} 命令帧")
+    for kw in gold.get("forbid_cmd_contains", []):
+        if any(kw in c for c in commands):
+            fails.append(f"命令帧不应包含 {kw!r}")
+
+    # 二选一：产生过命令帧（动作执行）或正文含关键词（诚实拒绝并给入口，如未登录告知）
+    if gold.get("either_cmd_or_text"):
+        kw = gold["either_cmd_or_text"]
+        has_cmd = any(c.startswith(CMD_PREFIXES) for c in commands)
+        if not (has_cmd or kw in text):
+            fails.append(f"既无命令帧，文本也未含 {kw!r}（期望执行动作或诚实拒绝并给出入口）")
 
     for kw in gold.get("text_contains", []):
         if kw not in text:
@@ -180,7 +206,7 @@ def main():
         fails = check_gold(g, result)
         ok = not fails and not result["error"]
 
-        # gate 触发统计（对最终正文，与声称检测同口径）
+        # 识别器触发统计（对最终正文，与 no_claim_gates 检查同口径）
         for n, f in zip(GATE_NAMES, GATE_FUNCS):
             if f([AIMessage(content=result["text"])]):
                 gate_hits[n] += 1

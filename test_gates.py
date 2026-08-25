@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
-"""三道闸门 + Gate4 诚实兜底的确定性单测（零 LLM 成本，直接跑断言）。
+"""声称通道结构化的确定性单测（零 LLM 成本，直接跑断言）。
+
+分层语义（2026-08-25 声称通道结构化后）：
+  - 识别层（_fake_*_in）：只判断"正文是不是声称/命令/承诺"，不判真假，
+    不再按工具调用豁免——正文有声称文本一律检出。
+  - 判定层（_facts_cover）：识别命中 → 与程序化执行事实（facts 注记，由
+    tools_node 从命令帧解析写入）做集合比对——确有命令帧确认执行则放行，
+    无事实支撑则打回。调了工具但返回失败（__ERROR__，无事实）≠ 动作发生。
 
 用法：cd saudade-blog-agent && .venv/bin/python test_gates.py
 """
@@ -14,6 +21,8 @@ from agent.graph import (
     _fake_toolclaim_in,
     _fake_effectclaim_in,
     _fake_effectpromise_in,
+    _facts_cover,
+    _facts_from_tool,
     reflector_node,
 )
 
@@ -33,9 +42,10 @@ check(
     "正文伪造 AUTO_NAVIGATE 且未调工具 → 检出",
     _fake_command_in([AIMessage(content="这就去！AUTO_NAVIGATE:https://saudade.site/talk")]) == "AUTO_NAVIGATE",
 )
-# 最新一轮调了工具，正文复述命令格式 → 豁免
+# 识别层不看工具调用：正文无命令文本（即使调了工具）→ 不检出；
+# 正文有命令文本（即使调了工具）→ 检出——真假判定移交 reflector 的 facts 比对
 check(
-    "调了 navigate_to 后复述命令格式 → 豁免",
+    "调了 navigate_to 但正文无命令文本 → 不检出",
     _fake_command_in([
         AIMessage(content="主人稍等~", tool_calls=[{"name": "navigate_to", "args": {"url": "https://saudade.site/talk"}, "id": "call_t1"}]),
     ]) is None,
@@ -87,31 +97,30 @@ check(
     "『亲亲』前缀的声称 → 检出",
     _fake_claim_in([AIMessage(content="亲亲！主人，我们已经到留言板啦~")]),
 )
-# 真调了工具后的确认复述 → 豁免
+# 识别层不再按工具调用豁免：正文确含到达声称 → 检出；是否放行由 reflector
+# 的 facts 比对决定（见 [6] "声称+facts 覆盖 → 放行"）
 check(
-    "调了 navigate_to 后的到达确认 → 豁免",
+    "调了 navigate_to 但正文无完成声称 → 不检出",
     not _fake_claim_in([
         AIMessage(content="好的喵！这就带主人去！", tool_calls=[{"name": "navigate_to", "args": {"url": "https://saudade.site/talk"}, "id": "call_t2"}], id="a1"),
     ]),
 )
-# 整轮级豁免（误判修复）：本轮先调了工具（ToolMessage 帧），最终正文确认到达
-# → 是"真执行"，不得误伤（此前只查最后一条 AIMessage 的 tool_calls，会误 REVISE）
 check(
-    "本轮先调工具、正文确认到达 → 整轮豁免",
-    not _fake_claim_in([
+    "本轮先调工具、正文确认到达 → 识别层检出（判定移交 facts）",
+    _fake_claim_in([
         AIMessage(content="好的喵！这就带主人去！", tool_calls=[{"name": "navigate_to", "args": {"url": "https://saudade.site/talk"}, "id": "call_t3"}], id="a2"),
         ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/talk", tool_call_id="call_t3"),
         AIMessage(content="喵呜～已经为您跳转到留言板啦！请点击链接前往：[留言板](https://saudade.site/talk)", id="a3"),
     ]),
 )
-# 同一场景下 Gate2 也不误伤（正文复述命令格式）
+# 同一场景下 Gate2：正文复述命令格式 → 识别层检出
 check(
-    "本轮先调工具、正文复述命令 → Gate2 整轮豁免",
+    "本轮先调工具、正文复述命令 → Gate2 识别层检出",
     _fake_command_in([
         AIMessage(content="好的喵！", tool_calls=[{"name": "navigate_to", "args": {"url": "https://saudade.site/talk"}, "id": "call_t4"}], id="a4"),
         ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/talk", tool_call_id="call_t4"),
         AIMessage(content="喵呜～好的呢！\n\nAUTO_NAVIGATE:https://saudade.site/talk\n\n已经为您跳转啦", id="a5"),
-    ]) is None,
+    ]) == "AUTO_NAVIGATE",
 )
 # 轮次边界：修正注记之后的新轮重新判定（旧轮调过工具不清洗新轮的违规）
 check(
@@ -179,16 +188,17 @@ check(
     "『这就去物联网平台看看』 → 检出",
     _fake_promise_in([AIMessage(content="好的喵！这就去物联网平台看看效果！")]),
 )
-# 整轮工具豁免：真调了 navigate_to 的正常承诺/确认不误伤
+# 识别层不再按工具调用豁免：正文含承诺词+目标页 → 检出（判定移交 reflector facts 比对）。
+# 无目标页的『这就带主人去！』识别层本就不命中（防误伤：未承诺具体目的地）
 check(
-    "调了 navigate_to 的『这就带主人去！』 → 豁免",
+    "调了 navigate_to 但正文无目标页『这就带主人去！』 → 不检出",
     not _fake_promise_in([
         AIMessage(content="这就带主人去！", tool_calls=[{"name": "navigate_to", "args": {"url": "https://saudade.site/talk"}, "id": "call_p1"}], id="p1"),
     ]),
 )
 check(
-    "本轮先调工具、正文承诺 → 整轮豁免",
-    not _fake_promise_in([
+    "本轮先调工具、正文承诺 → 识别层检出（判定移交 facts）",
+    _fake_promise_in([
         AIMessage(content="这就带主人去！", tool_calls=[{"name": "navigate_to", "args": {"url": "https://saudade.site/talk"}, "id": "call_p2"}], id="p2"),
         ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/talk", tool_call_id="call_p2"),
         AIMessage(content="主人稍等~ 马上就到留言板啦！", id="p3"),
@@ -269,8 +279,8 @@ check(
     not _fake_claim_in([AIMessage(content="主人稍等，页面应该已经加载好了")]),
 )
 check(
-    "本轮调了工具、正文现状确认 → 整轮豁免",
-    not _fake_claim_in([
+    "本轮调了工具、正文现状确认 → 识别层检出（判定移交 facts）",
+    _fake_claim_in([
         AIMessage(content="这就带主人去！", tool_calls=[{"name": "navigate_to", "args": {"url": "https://saudade.site/talk"}, "id": "call_c1"}], id="c1"),
         ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/talk", tool_call_id="call_c1"),
         AIMessage(content="现在主人在页面上看到的应该是留言板了喵~", id="c2"),
@@ -321,10 +331,10 @@ check(
     "『现在可以调用了』能力陈述 → 不检出",
     not _fake_toolclaim_in([AIMessage(content="主人，现在可以调用了哦，只要说一声就可以喵~")]),
 )
-# 整轮豁免：真调了工具后的确认性复述
+# 识别层不再按工具调用豁免：正文含工具调用声称 → 检出（判定移交 reflector facts 比对）
 check(
-    "本轮调了工具、正文『刚刚真的调用了』→ 整轮豁免",
-    not _fake_toolclaim_in([
+    "本轮调了工具、正文『刚刚真的调用了』→ 识别层检出（判定移交 facts）",
+    _fake_toolclaim_in([
         AIMessage(content="好的喵！这就带主人去！", tool_calls=[{"name": "navigate_to", "args": {"url": "https://saudade.site/talk"}, "id": "call_tc1"}], id="tc1"),
         ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/talk", tool_call_id="call_tc1"),
         AIMessage(content="喵呜～泠月喵刚刚真的调用了 `navigate_to` 这个魔法，带主人来到了留言板哦！", id="tc2"),
@@ -367,8 +377,8 @@ check(
     not _fake_effectclaim_in([AIMessage(content="主人放心，您的设备已经在线了喵")]),
 )
 check(
-    "本轮调了工具、正文确认效果 → 整轮豁免",
-    not _fake_effectclaim_in([
+    "本轮调了工具、正文确认效果 → 识别层检出（判定移交 facts）",
+    _fake_effectclaim_in([
         AIMessage(content="这就开启！", tool_calls=[{"name": "toggle_effect", "args": {"effect": "sakura", "action": "on"}, "id": "call_e1"}], id="e1"),
         ToolMessage(content="EFFECT:sakura:on", tool_call_id="call_e1"),
         AIMessage(content="喵呜～樱花特效已经打开啦！主人看，是不是有樱花花瓣飘落啦？", id="e2"),
@@ -419,23 +429,38 @@ check(
     not _fake_effectpromise_in([AIMessage(content="主人，下次来博客的时候记得看看樱花特效哦~")]),
 )
 check(
-    "本轮调了工具、正文承诺效果 → 整轮豁免",
-    not _fake_effectpromise_in([
+    "本轮调了工具、正文承诺效果 → 识别层检出（判定移交 facts）",
+    _fake_effectpromise_in([
         AIMessage(content="这就来！", tool_calls=[{"name": "toggle_effect", "args": {"effect": "sakura", "action": "on"}, "id": "call_ep1"}], id="ep1"),
         ToolMessage(content="EFFECT:sakura:on", tool_call_id="call_ep1"),
-        AIMessage(content="主人稍等，樱花这就飘起来啦！", id="ep2"),
+        AIMessage(content="主人稍等，这就让樱花特效飘起来啦！", id="ep2"),
     ]),
 )
 
-print("[3] reflector_node 分支（无 LLM 的确定性路径）")
+print("[3] reflector_node 分支（确定性路径，LLM 质检用假模型替换）")
 PLAN = "INTENT=tool\n- 调用 navigate_to 跳转到留言板"
+
+
+class _FakeLLM:
+    """确定性假 LLM：verdict 可切换（PASS/REVISE），预算耗尽裁决与普通质检不依赖真实 API。"""
+    verdict = "PASS"
+
+    @classmethod
+    def invoke(cls, *a, **k):
+        return type("R", (), {"content": f"VERDICT: {cls.verdict}\nNOTE: 测试用判定"})()
+
+
+import agent.graph as _G
+_G.get_llm = lambda **kw: _FakeLLM  # 替换模块级绑定（graph.py 内 from models import get_llm）
+
 
 # 预算 0 + 伪造命令 → REVISE（done=False + SystemMessage）
 r = reflector_node({"plan": PLAN, "messages": [AIMessage(content="AUTO_NAVIGATE:/talk")], "reflection_count": 0})
 check("预算0 + 伪造命令 → REVISE", r["done"] is False and any(isinstance(m, SystemMessage) for m in r["messages"]))
 check("预算0 + 伪造命令 → count+1", r["reflection_count"] == 1)
 
-# 预算耗尽 + 伪造命令 → Gate4 fallback（done=True + fallback=True，不再接受谎言）
+# 预算耗尽 + 伪造命令 → LLM 最终裁决 REVISE → Gate4 fallback（不再接受谎言）
+_FakeLLM.verdict = "REVISE"
 r = reflector_node({"plan": PLAN, "messages": [AIMessage(content="AUTO_NAVIGATE:/talk")], "reflection_count": MAX_REFLECTIONS})
 check("预算耗尽 + 伪造命令 → fallback 信号", r.get("done") is True and r.get("fallback") is True)
 
@@ -486,8 +511,90 @@ check("预算耗尽 + 特效承诺 → fallback 信号", r.get("done") is True a
 r = reflector_node({"plan": "INTENT=chat\n- 闲聊", "messages": [AIMessage(content="喵呜~")], "reflection_count": 0})
 check("chat 快道非空 → done", r["done"] is True)
 
-# 诚实拒绝（无命令、无声称）→ 不进程序化闸门（由 LLM 质检按检查点5判 PASS）
+# 诚实拒绝（无命令、无声称）→ 不进程序化闸门（LLM 质检按检查点5判 PASS）
+_FakeLLM.verdict = "PASS"
 r = reflector_node({"plan": PLAN, "messages": [AIMessage(content="主人，泠月喵无法调用工具，去留言板请点这里：[留言板](https://saudade.site/talk)")], "reflection_count": 0})
 check("诚实拒绝不进程序化闸门", "fallback" not in r and "messages" not in r)
+
+# 识别器漏报场景的兜底（词形盲区）：无声称模式命中 + 预算耗尽 → LLM 最终裁决——
+# REVISE → 诚实兜底；PASS → 接受。这堵住"识别器漏报 = 预算耗尽无条件放行"的洞
+_FakeLLM.verdict = "REVISE"
+r = reflector_node({"plan": PLAN, "messages": [AIMessage(content="主人，夜间模式已为您开启喵~")], "reflection_count": MAX_REFLECTIONS})
+check("识别器漏报 + 预算耗尽 + LLM REVISE → fallback", r.get("done") is True and r.get("fallback") is True)
+_FakeLLM.verdict = "PASS"
+r = reflector_node({"plan": PLAN, "messages": [AIMessage(content="主人，夜间模式已为您开启喵~")], "reflection_count": MAX_REFLECTIONS})
+check("识别器漏报 + 预算耗尽 + LLM PASS → 接受", r.get("done") is True and not r.get("fallback"))
+
+print("[4] _facts_cover 判定层（声称 × 执行事实 集合比对）")
+# facts 为空：任何声称都不被覆盖 → 打回（本轮无命令确认执行）
+check("facts 空 + EFFECT 声称 → 不覆盖", not _facts_cover(None, True, []))
+check("facts 空 + NAVIGATE 声称 → 不覆盖", not _facts_cover("NAVIGATE", False, []))
+# 域匹配：声称域须与事实域一致
+check("EFFECT 声称 + EFFECT| fact → 覆盖", _facts_cover(None, True, ["EFFECT|已执行 toggle_effect：sakura:on"]))
+check("EFFECT 声称 + 仅 NAVIGATE| fact → 不覆盖", not _facts_cover(None, True, ["NAVIGATE|已执行 navigate_to：AUTO_NAVIGATE:/talk"]))
+check("NAVIGATE 声称 + NAVIGATE| fact → 覆盖", _facts_cover("NAVIGATE", False, ["NAVIGATE|已执行 navigate_to：AUTO_NAVIGATE:/talk"]))
+check("AUTO_NAVIGATE 声称 → 归一化匹配 NAVIGATE| fact", _facts_cover("AUTO_NAVIGATE", False, ["NAVIGATE|已执行 navigate_to：AUTO_NAVIGATE:/talk"]))
+check("DARKMODE 声称 + DARKMODE| fact → 覆盖", _facts_cover("DARKMODE", False, ["DARKMODE|已执行 toggle_dark_mode：on"]))
+check("NAVIGATE 声称 + 仅 EFFECT| fact → 不覆盖", not _facts_cover("NAVIGATE", False, ["EFFECT|已执行 toggle_effect：sakura:on"]))
+# 无前缀声称（完成/承诺/工具调用声称）→ 任一执行事实即覆盖
+check("无前缀声称 + 任一 fact(NAVIGATE) → 覆盖", _facts_cover(None, False, ["NAVIGATE|已执行 navigate_to：AUTO_NAVIGATE:/talk"]))
+check("无前缀声称 + 任一 fact(EFFECT) → 覆盖", _facts_cover(None, False, ["EFFECT|已执行 toggle_effect：sakura:on"]))
+
+print("[5] _facts_from_tool（工具返回 → 程序化事实注记）")
+check("EFFECT 帧 → EFFECT| 事实", _facts_from_tool("EFFECT:sakura:on") == ["EFFECT|已执行 toggle_effect：sakura:on"])
+check("DARKMODE 帧 → DARKMODE| 事实", _facts_from_tool("DARKMODE:on") == ["DARKMODE|已执行 toggle_dark_mode：on"])
+check("AUTO_NAVIGATE 帧 → NAVIGATE| 事实", _facts_from_tool("AUTO_NAVIGATE:/talk") == ["NAVIGATE|已执行 navigate_to：AUTO_NAVIGATE:/talk"])
+check("NAVIGATE 帧 → NAVIGATE| 事实", _facts_from_tool("NAVIGATE:https://saudade.site/talk") == ["NAVIGATE|已执行 navigate_to：NAVIGATE:https://saudade.site/talk"])
+check("__ERROR__ 返回 → 无事实（执行未确认）", _facts_from_tool("__ERROR__: 未知工具 xyz") == [])
+check("数据工具返回（无命令帧）→ 无事实", _facts_from_tool("《首页》主人想了解哪些文章喵？") == [])
+check("多行混合 → 逐行解析", _facts_from_tool("EFFECT:sakura:on\n你好呀\nDARKMODE:off") == [
+    "EFFECT|已执行 toggle_effect：sakura:on",
+    "DARKMODE|已执行 toggle_dark_mode：off",
+])
+
+print("[6] reflector_node 判定层：诚实声称放行 / 无事实打回（确定性路径，LLM 裁决走假模型）")
+# 诚实声称：正文声称 + facts 覆盖 → 放行（预算耗尽分支直接接受，无 REVISE/fallback）
+r = reflector_node({
+    "plan": PLAN, "reflection_count": MAX_REFLECTIONS,
+    "facts": ["NAVIGATE|已执行 navigate_to：AUTO_NAVIGATE:/talk"],
+    "messages": [
+        AIMessage(content="好的喵！", tool_calls=[{"name": "navigate_to", "args": {"url": "https://saudade.site/talk"}, "id": "call_h1"}], id="h1"),
+        ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/talk", tool_call_id="call_h1"),
+        AIMessage(content="喵呜～已经为您跳转到留言板啦！", id="h2"),
+    ],
+})
+check("导航声称 + NAVIGATE 事实 → 放行（无 REVISE/fallback）", r.get("done") is True and not r.get("fallback"))
+# 特效域同理
+r = reflector_node({
+    "plan": "INTENT=tool\n- 调用 toggle_effect 开启樱花", "reflection_count": MAX_REFLECTIONS,
+    "facts": ["EFFECT|已执行 toggle_effect：sakura:on"],
+    "messages": [
+        AIMessage(content="这就来！", tool_calls=[{"name": "toggle_effect", "args": {"effect": "sakura", "action": "on"}, "id": "call_h2"}], id="h3"),
+        ToolMessage(content="EFFECT:sakura:on", tool_call_id="call_h2"),
+        AIMessage(content="主人，樱花特效已经打开啦！", id="h4"),
+    ],
+})
+check("特效声称 + EFFECT 事实 → 放行", r.get("done") is True and not r.get("fallback"))
+# 关键边界：调了工具但返回失败（__ERROR__，无事实）→ 声称仍打回——
+# "调了但没成"≠"动作发生了"，这正是旧"整轮豁免"判据的盲区（数据工具/失败返回都豁免）
+r = reflector_node({
+    "plan": PLAN, "reflection_count": 0,
+    "messages": [
+        AIMessage(content="这就去！", tool_calls=[{"name": "navigate_to", "args": {"url": "https://saudade.site/iot"}, "id": "call_h3"}], id="h5"),
+        ToolMessage(content="__ERROR__: 无效路径 /iot", tool_call_id="call_h3"),
+        AIMessage(content="已经为您跳转到物联网平台啦！", id="h6"),
+    ],
+})
+check("调了工具但 __ERROR__ 无事实 → 声称打回 REVISE", r["done"] is False and any(isinstance(m, SystemMessage) for m in r["messages"]))
+# 数据工具返回（无命令帧）后的完成声称 → 同样打回（无执行事实）
+r = reflector_node({
+    "plan": "INTENT=tool\n- 查询文章列表", "reflection_count": 0,
+    "messages": [
+        AIMessage(content="稍等~", tool_calls=[{"name": "list_articles", "args": {}, "id": "call_h4"}], id="h7"),
+        ToolMessage(content="《首页》……共 12 篇文章……", tool_call_id="call_h4"),
+        AIMessage(content="已经为您跳转到物联网平台啦！", id="h8"),
+    ],
+})
+check("数据工具调用（无命令帧）→ 完成声称仍打回 REVISE", r["done"] is False and any(isinstance(m, SystemMessage) for m in r["messages"]))
 
 print(f"\n全部通过：{passed} 项断言")

@@ -269,7 +269,16 @@ def toggle_effect(
     action: Annotated[str, "开启还是关闭: on(开启), off(关闭)"] = "on",
 ) -> str:
     """开启或关闭博客页面的视觉效果（樱花/大雨/雪花）。
-    返回 EFFECT: 前缀命令供前端执行；前端按 action 显式开关，不会因重复命令翻转状态。"""
+    返回 EFFECT: 前缀命令供前端执行；前端按 action 显式开关，不会因重复命令翻转状态。
+    参数校验：无效 effect/action 返回提示而非命令帧——命令帧只代表真实执行的切换，
+    否则会污染声称通道的执行事实（facts 注记据此判断"动作是否发生"）。"""
+    if effect not in ("sakura", "rain", "snow"):
+        return f"效果无效: {effect!r}。可选: sakura(樱花), rain(大雨), snow(雪花)"
+    if action not in ("on", "off"):
+        return (
+            f"action 无效: {action!r}。可选: on(开启), off(关闭)。"
+            f"查询效果当前状态请以对话上下文中的 current_effects 字段为准，无需调用工具。"
+        )
     return f"EFFECT:{effect}:{action}"
 
 

@@ -55,6 +55,11 @@ MAX_REFLECTIONS = 2
 # 1. State：节点间共享的"工作台"
 # ---------------------------------------------------------------------------
 
+def _add_facts(a: list, b: list) -> list:
+    """facts 追加 reducer：跨 REVISE 轮累积——命令一经执行即事实，文本作废不影响。"""
+    return a + b
+
+
 class AgentState(TypedDict):
     """图状态。planner 写计划，executor 执行并写结果，reflector 检查并写反思。
 
@@ -64,6 +69,10 @@ class AgentState(TypedDict):
     - reflection: reflector 最近的反思结论："上一步结果够了吗？需要修正什么？"
     - reflection_count: 已反思次数（预算 MAX_REFLECTIONS，防止死循环）。
     - done:       reflector 判定"全部完成"后置 True → 条件边路由到 END。
+    - facts:      本轮已执行动作的**程序化事实注记**（声称通道结构化的锚点）：
+                  tools_node 从工具返回的命令帧解析写入（系统声明，非模型声称），
+                  model 生成时注入 System 作为"声称只能引用的事实清单"，
+                  reflector 把声称识别命中与 facts 做集合比对判定真假。
     """
 
     messages: Annotated[list, add_messages]
@@ -71,6 +80,7 @@ class AgentState(TypedDict):
     reflection: str
     reflection_count: int
     done: bool
+    facts: Annotated[list, _add_facts]
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +177,9 @@ _EXECUTOR_PROMPT = """\
 [执行计划]
 {plan}
 
+[本轮已执行动作]
+{facts}
+
 执行规则：
 1. 按计划执行：需要调用工具就调用（工具结果以工具返回为准，不要编造）；
    不需要工具就直接回答。
@@ -175,20 +188,60 @@ _EXECUTOR_PROMPT = """\
    处理并在回复中说明——计划是参考，事实以工具返回为准。
 4. 工具调用失败时（返回以 __ERROR__ 或"无效"开头的错误）：立即按错误信息中
    给出的有效参数重试一次；不得以"页面不存在/没有这个功能"为由放弃——
-   先重试，重试仍失败才如实向用户说明。"""
+   先重试，重试仍失败才如实向用户说明。
+
+声称规则（重要）：回复中描述"已完成/已生效/已调用"的动作时，**只能引用上方
+[本轮已执行动作] 清单中的条目**；清单中不存在的动作，不得使用完成时声称——
+只能描述意图（"这就去/正在执行"）、或如实描述当前状态（以 [System] 上下文中的
+current_effects/current_darkmode 字段为准）。"""
+
+
+def _facts_block(facts: list) -> str:
+    """facts → System 注入块：模型生成时可见的"本轮已执行动作"清单。
+
+    条目带域前缀（EFFECT|/NAVIGATE|/DARKMODE|）供 reflector 比对，注入时剥掉——
+    模型只看中文事实描述。
+    """
+    if not facts:
+        return "（无）"
+    return "\n".join(f"- {f.split('|', 1)[1]}" for f in facts)
 
 
 def model_node(state: AgentState) -> dict:
     """ReAct 执行层的"思考"节点：带工具思考 → 产出 tool_calls 或最终回答。
 
     与 create_agent 的 model node 同源，但计划注入是显式的：
-    system prompt = 人设 + 当前执行计划，模型按计划驱动工具调用。
+    system prompt = 人设 + 当前执行计划 + 本轮已执行动作事实清单（声称契约），
+    模型按计划驱动工具调用，声称只能引用 facts 清单。
     """
     llm = get_llm()  # 主模型：对话生成用默认参数（温度 0.7、可流式）
-    system = SystemMessage(content=_EXECUTOR_PROMPT.format(persona=BLOG_ASSISTANT_PROMPT, plan=state["plan"]))
+    system = SystemMessage(content=_EXECUTOR_PROMPT.format(
+        persona=BLOG_ASSISTANT_PROMPT, plan=state["plan"],
+        facts=_facts_block(state.get("facts") or [])))
     resp = llm.bind_tools(_TOOLS).invoke([system] + state["messages"])
     logger.info("[model] tool_calls=%s", [c["name"] for c in resp.tool_calls])
     return {"messages": [resp]}
+
+
+def _facts_from_tool(out: str) -> list[str]:
+    """工具返回 → 程序化事实注记（声称通道的锚点：事实由系统声明，不由模型声称）。
+
+    只解析"动作型"工具的命令帧（EFFECT:/DARKMODE:/NAVIGATE:/AUTO_NAVIGATE:）；
+    数据型工具（查文章等）不产生动作事实。__ERROR__ 返回不产生事实——执行未确认，
+    模型无资格声称。这就是比"本轮调了工具"更严的判据：调了但失败 ≠ 动作发生。
+    """
+    if str(out).startswith("__ERROR__"):
+        return []
+    facts = []
+    for line in str(out).splitlines():
+        s = line.strip()
+        if s.startswith("EFFECT:"):
+            facts.append(f"EFFECT|已执行 toggle_effect：{s[7:]}")
+        elif s.startswith("DARKMODE:"):
+            facts.append(f"DARKMODE|已执行 toggle_dark_mode：{s[9:]}")
+        elif s.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")):
+            facts.append(f"NAVIGATE|已执行 navigate_to：{s}")
+    return facts
 
 
 def tools_node(state: AgentState) -> dict:
@@ -199,9 +252,10 @@ def tools_node(state: AgentState) -> dict:
       2. 按 (name, args) 去重——模型重试时可能重复发同一调用，
          副作用工具（切换特效/导航）执行两次是真 bug
       3. 异常不炸图：错误信息作为工具结果返回，让模型自行理解修正
+      4. 命令型工具的成功返回解析为 facts 注记（声称通道结构化的事实锚点）
     """
     last = state["messages"][-1]
-    results, seen = [], set()
+    results, seen, facts = [], set(), []
     for call in last.tool_calls:
         key = (call["name"], json.dumps(call.get("args", {}), sort_keys=True))
         if key in seen:
@@ -216,8 +270,9 @@ def tools_node(state: AgentState) -> dict:
             except Exception as e:
                 out = f"__ERROR__: {type(e).__name__}: {e}"
         results.append(ToolMessage(content=str(out), tool_call_id=call["id"], name=call["name"]))
+        facts += _facts_from_tool(str(out))
         logger.info("[tools] %s → %.100s", call["name"], str(out))
-    return {"messages": results}
+    return {"messages": results, "facts": facts}
 
 
 _REFLECTOR_PROMPT = """\
@@ -308,15 +363,15 @@ def _fake_command_in(messages: list) -> str | None:
 
     历史注入（HumanMessage）与工具结果（ToolMessage）天然不参与判定。
     """
-    final_ai, called = _current_round(messages)
+    final_ai, _ = _current_round(messages)
     if final_ai is None:
         return None
     content = getattr(final_ai, "content", "") or ""
     if not isinstance(content, str):
         return None
-    for prefix, tool_name in _CMD_PREFIX_TOOL.items():
-        if tool_name in called:
-            continue  # 本轮真调了对应工具，正文复述命令格式不算伪造
+    for prefix, _tool_name in _CMD_PREFIX_TOOL.items():
+        # 识别面：不判调用（豁免权移交 reflector 的 facts 比对——正文复述命令若
+        # 对应执行事实存在则放行，_facts_cover 负责）
         # 前导放宽：\b 在 "SNOW_EFFECT" 这类变形前缀（下划线粘连）处不成立，
         # 用 [\W_] 覆盖行首/标点/下划线粘连三种情况
         if re.search(rf"(?:^|[\W_])(?:{prefix})\s*:\s*\S", content, re.IGNORECASE):
@@ -350,8 +405,8 @@ def _fake_claim_in(messages: list) -> bool:
     看到的应该是设备控制台了"）。防误伤：必须是"应该是/已经是/变成"的到达断言，
     "现在的页面还是首页哦"（还是=否认到达）、"页面应该已经加载好了"（无目标页）不判。
     """
-    final_ai, called = _current_round(messages)
-    if final_ai is None or called:
+    final_ai, _ = _current_round(messages)
+    if final_ai is None:
         return False
     content = getattr(final_ai, "content", "") or ""
     if not isinstance(content, str):
@@ -399,8 +454,8 @@ def _fake_promise_in(messages: list) -> bool:
     工具——"这就带主人去物联网平台"却没有工具调用 = 口头承诺，跳转不会发生。整轮豁免、
     疑问/否定/主宾陈述等误伤情形见 _FAKE_PROMISE_RE 注释。
     """
-    final_ai, called = _current_round(messages)
-    if final_ai is None or called:
+    final_ai, _ = _current_round(messages)
+    if final_ai is None:
         return False
     content = getattr(final_ai, "content", "") or ""
     if not isinstance(content, str):
@@ -467,8 +522,8 @@ def _fake_toolclaim_in(messages: list) -> bool:
     能力词（"如果泠月喵调用了工具…"是假设、"并没有真的发出跳转指令"是否认、
     "主人问是不是真的调用了"是引述）不判。
     """
-    final_ai, called = _current_round(messages)
-    if final_ai is None or called:
+    final_ai, _ = _current_round(messages)
+    if final_ai is None:
         return False
     content = getattr(final_ai, "content", "") or ""
     if not isinstance(content, str):
@@ -530,8 +585,8 @@ def _fake_effectclaim_in(messages: list) -> bool:
     时间/天气闲聊（"已经到下午三点了""正在下雨"）、"设备已经在线了"（无发送/显示
     动词）不判。真调了工具整轮豁免。
     """
-    final_ai, called = _current_round(messages)
-    if final_ai is None or called:
+    final_ai, _ = _current_round(messages)
+    if final_ai is None:
         return False
     content = getattr(final_ai, "content", "") or ""
     if not isinstance(content, str):
@@ -581,8 +636,8 @@ def _fake_effectpromise_in(messages: list) -> bool:
     疑问（"好不好？"）、否定（"不打开"）、能力陈述（"可以用工具"）不判；
     真调了工具整轮豁免。
     """
-    final_ai, called = _current_round(messages)
-    if final_ai is None or called:
+    final_ai, _ = _current_round(messages)
+    if final_ai is None:
         return False
     content = getattr(final_ai, "content", "") or ""
     if not isinstance(content, str):
@@ -599,6 +654,27 @@ def _fake_effectpromise_in(messages: list) -> bool:
     return bool(_TOOL_PROMISE_RE.search(content))
 
 
+def _facts_cover(fake_prefix: str | None, effectclaim: bool, facts: list) -> bool:
+    """声称面 × 执行事实面比对（声称通道结构化的判定层）。
+
+    六道识别器只负责"识别这是声称"（文本面）；真假判定收敛到本函数做**集合比对**：
+      - 命令前缀声称（fake 返回前缀）：facts 中须存在同域命令确认
+        （EFFECT→EFFECT|、AUTO_NAVIGATE 归一化到 NAVIGATE|）
+      - 特效声称（effectclaim）：facts 中须存在 EFFECT 域事实
+      - 其余声称（完成/承诺/工具调用声称）：本轮任一执行事实即可
+    facts 为空（本轮无命令确认）→ 任何声称都不被覆盖 → 打回/诚实兜底。
+    词序/语气词/问号尾缀等文本边界在此层全部消失——比对对象是程序化事实，不是文本。
+    """
+    if not facts:
+        return False
+    if fake_prefix:
+        dom = "NAVIGATE" if fake_prefix == "AUTO_NAVIGATE" else fake_prefix
+        return any(f.startswith(dom + "|") for f in facts)
+    if effectclaim:
+        return any(f.startswith("EFFECT|") for f in facts)
+    return True
+
+
 def reflector_node(state: AgentState) -> dict:
     """反思层：对照计划质检执行结果。
 
@@ -608,95 +684,97 @@ def reflector_node(state: AgentState) -> dict:
           PASS   → done=True，收尾
           REVISE → 追加一条 [Reflection] 修正注记进 messages（紧贴当前轮，
                    遵守率最高），回 model 重来；预算 MAX_REFLECTIONS，耗尽即收
-    另有六道程序化检测（零成本、与 LLM 质检共用 MAX_REFLECTIONS 预算）：
-      - _fake_command_in：正文伪造命令前缀 → 直接 REVISE
-      - _fake_claim_in：纯文本声称"已跳转/已到达X"但未调工具 → 直接 REVISE
-      - _fake_promise_in：将来时承诺"现在/这就/马上…带主人去X"但未调工具 → 直接 REVISE
-      - _fake_toolclaim_in：声称"刚刚/真的调用了X工具"但未调工具 → 直接 REVISE
-      - _fake_effectclaim_in：声称特效/夜间模式/设备显示已完成但未调工具 → 直接 REVISE
-      - _fake_effectpromise_in：承诺"这就让樱花飘起来/会调用工具开启特效"但未调工具 → 直接 REVISE
+    程序化检测（零成本、与 LLM 质检共用 MAX_REFLECTIONS 预算）分两层：
+      **识别层**（六道，只识别"这是声称"，不判真假）：
+      - _fake_command_in：正文出现命令前缀文本
+      - _fake_claim_in / _fake_promise_in / _fake_toolclaim_in /
+        _fake_effectclaim_in / _fake_effectpromise_in：完成声称/将来承诺/工具调用声称…
+      **判定层**（_facts_cover 集合比对）：识别命中 → 与 facts 注记比对——
+      声称的动作确有命令帧确认执行 → 合法放行；无对应事实 → REVISE。
+      比对通过即放行，即使文本是"已经…啦"式完成声称（真执行后的确认性复述不误伤）；
+      比对失败说明动作并未真实发生（哪怕本轮调过工具但返回失败/数据工具无命令），打回。
     预算耗尽且最终轮仍违规 → Gate4 诚实兜底：不接受谎言收尾，标记 fallback，
     server 层回放本对话最近一个通过质检轮的诚实回复作为最终输出。
     """
     intent, _ = parse_plan(state["plan"])
     count = state.get("reflection_count", 0)
+    facts = state.get("facts") or []
 
-    # 第二道闸：正文出现命令前缀但未调用对应工具 = 假完成，直接打回
+    # 识别层：正文是否出现声称/命令/承诺（不判真假——真假由 facts 比对决定）
     fake = _fake_command_in(state["messages"])
-    # 第三道闸：纯文本声称"已跳转/已到达X"但未调用任何工具 = 假完成（无前缀可查）
     claim = _fake_claim_in(state["messages"])
-    # 第四道闸：将来时承诺"这就/马上…带主人去X"但未调用任何工具 = 假完成（两闸盲区）
     promise = _fake_promise_in(state["messages"])
-    # Gate3c：声称"刚刚/真的调用了 X 工具"但未调用 = 假完成（用户1实测盲区）
     toolclaim = _fake_toolclaim_in(state["messages"])
-    # Gate3d：声称特效/夜间模式/设备显示已完成但未调用 = 假完成（目标词表扩展）
     effectclaim = _fake_effectclaim_in(state["messages"])
-    # Gate3e：承诺"这就让樱花飘起来/会调用工具开启特效"但未调用 = 假完成
     effectpromise = _fake_effectpromise_in(state["messages"])
     if fake or claim or promise or toolclaim or effectclaim or effectpromise:
-        if count >= MAX_REFLECTIONS:
-            # Gate4 诚实兜底：预算耗尽且最终轮仍违规（伪造命令/虚假声称/空头承诺）——
-            # 不接受谎言收尾，标记 fallback 让 server 层回放本对话最近一个
-            # 通过质检轮的诚实回复作为最终输出（访客看到的是诚实内容而非假承诺）。
-            violation = fake or (
-                "工具调用声称但无实际调用" if toolclaim else (
-                    "特效/设备声称完成但无工具调用" if effectclaim else (
-                        "特效/设备承诺但无工具调用" if effectpromise else (
-                            "声称完成但无工具调用" if claim else "承诺跳转但无工具调用"))))
-            logger.info("[reflector] FALLBACK: 预算耗尽(%d/%d)且最终轮违规(%s)，诚实兜底",
-                        count, MAX_REFLECTIONS, violation)
-            return {"done": True, "fallback": True,
-                    "reflection": f"反思预算已用尽({count}/{MAX_REFLECTIONS})且最终轮仍违规（{violation}），触发诚实兜底",
-                    "reflection_count": count}
-        if fake:
+        if _facts_cover(fake, effectclaim, facts):
+            # 判定层：声称与执行事实比对通过——动作确有命令帧确认执行，合法放行
+            logger.info("[reflector] 声称匹配执行事实(facts=%d)，放行", len(facts))
+        else:
+            if count >= MAX_REFLECTIONS:
+                # Gate4 诚实兜底：预算耗尽且最终轮仍违规（伪造命令/虚假声称/空头承诺）——
+                # 不接受谎言收尾，标记 fallback 让 server 层回放本对话最近一个
+                # 通过质检轮的诚实回复作为最终输出（访客看到的是诚实内容而非假承诺）。
+                violation = fake or (
+                    "工具调用声称但无实际调用" if toolclaim else (
+                        "特效/设备声称完成但无工具调用" if effectclaim else (
+                            "特效/设备承诺但无工具调用" if effectpromise else (
+                                "声称完成但无工具调用" if claim else "承诺跳转但无工具调用"))))
+                logger.info("[reflector] FALLBACK: 预算耗尽(%d/%d)且最终轮违规(%s)，诚实兜底",
+                            count, MAX_REFLECTIONS, violation)
+                return {"done": True, "fallback": True,
+                        "reflection": f"反思预算已用尽({count}/{MAX_REFLECTIONS})且最终轮仍违规（{violation}），触发诚实兜底",
+                        "reflection_count": count}
+            if fake:
+                correction = SystemMessage(content=(
+                    f"[Reflection 检查未通过：回复正文中出现了未调用工具的伪造命令（{fake} 前缀）。] 修正要求："
+                    f"页面跳转/特效/夜间模式只能通过调用对应工具完成——立即调用对应工具执行"
+                    f"（navigate_to/toggle_effect/toggle_dark_mode），工具返回后再按结果回复；"
+                    f"严禁在正文中输出任何命令前缀文本，之前输出的命令已作废且不会执行；"
+                    f"若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得虚构已完成。"
+                ))
+                logger.info("[reflector] FAKE_COMMAND: %s", fake)
+                return {"messages": [correction], "done": False, "reflection": f"正文伪造命令 {fake}（未调用工具）", "reflection_count": count + 1}
+            if toolclaim:
+                correction = SystemMessage(content=(
+                    "[Reflection 检查未通过：正文声称'刚刚/已经调用了工具'，但本轮没有调用任何工具，动作并未真实发生。] 修正要求："
+                    "若确需执行，立即调用对应工具（navigate_to/toggle_effect/toggle_dark_mode/device_oled_display），工具返回后再按结果回复；"
+                    "若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得声称已调用并未发生的动作。"
+                ))
+                logger.info("[reflector] FAKE_TOOLCLAIM")
+                return {"messages": [correction], "done": False, "reflection": "声称调用了工具但实际未调用", "reflection_count": count + 1}
+            if effectclaim:
+                correction = SystemMessage(content=(
+                    "[Reflection 检查未通过：正文声称特效/夜间模式/设备显示已完成（如'樱花特效已经打开啦'），但本轮没有调用任何工具，效果并未真实生效。] 修正要求："
+                    "特效/夜间模式/设备显示只能通过调用对应工具（toggle_effect/toggle_dark_mode/device_oled_display）完成——立即调用工具执行，工具返回后再按结果回复；"
+                    "若因访客明确禁止等原因无法调用工具，如实说明即可，不得声称效果已生效。"
+                ))
+                logger.info("[reflector] FAKE_EFFECT_CLAIM")
+                return {"messages": [correction], "done": False, "reflection": "特效/设备声称完成但无工具调用", "reflection_count": count + 1}
+            if effectpromise:
+                correction = SystemMessage(content=(
+                    "[Reflection 检查未通过：正文承诺'这就/马上/一定…让樱花飘起来/开启夜间模式'式效果，但本轮没有调用任何工具，效果并不会真实发生。] 修正要求："
+                    "效果只能通过调用对应工具（toggle_effect/toggle_dark_mode/device_oled_display）完成——立即调用工具执行；"
+                    "若因访客明确禁止等原因无法调用工具，如实拒绝即可，不得口头承诺无法兑现的效果。"
+                ))
+                logger.info("[reflector] FAKE_EFFECT_PROMISE")
+                return {"messages": [correction], "done": False, "reflection": "特效/设备承诺但无工具调用", "reflection_count": count + 1}
+            if promise:
+                correction = SystemMessage(content=(
+                    "[Reflection 检查未通过：正文承诺'这就/马上/现在…带主人去X'式跳转，但本轮没有调用任何工具，跳转并不会真实发生。] 修正要求："
+                    "页面跳转只能通过调用 navigate_to 工具完成——立即调用该工具执行，工具返回后再按结果回复；"
+                    "若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得口头承诺无法兑现的跳转。"
+                ))
+                logger.info("[reflector] FAKE_PROMISE")
+                return {"messages": [correction], "done": False, "reflection": "承诺跳转但无工具调用", "reflection_count": count + 1}
             correction = SystemMessage(content=(
-                f"[Reflection 检查未通过：回复正文中出现了未调用工具的伪造命令（{fake} 前缀）。] 修正要求："
-                f"页面跳转/特效/夜间模式只能通过调用对应工具完成——立即调用对应工具执行"
-                f"（navigate_to/toggle_effect/toggle_dark_mode），工具返回后再按结果回复；"
-                f"严禁在正文中输出任何命令前缀文本，之前输出的命令已作废且不会执行；"
-                f"若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得虚构已完成。"
-            ))
-            logger.info("[reflector] FAKE_COMMAND: %s", fake)
-            return {"messages": [correction], "done": False, "reflection": f"正文伪造命令 {fake}（未调用工具）", "reflection_count": count + 1}
-        if toolclaim:
-            correction = SystemMessage(content=(
-                "[Reflection 检查未通过：正文声称'刚刚/已经调用了工具'，但本轮没有调用任何工具，动作并未真实发生。] 修正要求："
-                "若确需执行，立即调用对应工具（navigate_to/toggle_effect/toggle_dark_mode/device_oled_display），工具返回后再按结果回复；"
-                "若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得声称已调用并未发生的动作。"
-            ))
-            logger.info("[reflector] FAKE_TOOLCLAIM")
-            return {"messages": [correction], "done": False, "reflection": "声称调用了工具但实际未调用", "reflection_count": count + 1}
-        if effectclaim:
-            correction = SystemMessage(content=(
-                "[Reflection 检查未通过：正文声称特效/夜间模式/设备显示已完成（如'樱花特效已经打开啦'），但本轮没有调用任何工具，效果并未真实生效。] 修正要求："
-                "特效/夜间模式/设备显示只能通过调用对应工具（toggle_effect/toggle_dark_mode/device_oled_display）完成——立即调用工具执行，工具返回后再按结果回复；"
-                "若因访客明确禁止等原因无法调用工具，如实说明即可，不得声称效果已生效。"
-            ))
-            logger.info("[reflector] FAKE_EFFECT_CLAIM")
-            return {"messages": [correction], "done": False, "reflection": "特效/设备声称完成但无工具调用", "reflection_count": count + 1}
-        if effectpromise:
-            correction = SystemMessage(content=(
-                "[Reflection 检查未通过：正文承诺'这就/马上/一定…让樱花飘起来/开启夜间模式'式效果，但本轮没有调用任何工具，效果并不会真实发生。] 修正要求："
-                "效果只能通过调用对应工具（toggle_effect/toggle_dark_mode/device_oled_display）完成——立即调用工具执行；"
-                "若因访客明确禁止等原因无法调用工具，如实拒绝即可，不得口头承诺无法兑现的效果。"
-            ))
-            logger.info("[reflector] FAKE_EFFECT_PROMISE")
-            return {"messages": [correction], "done": False, "reflection": "特效/设备承诺但无工具调用", "reflection_count": count + 1}
-        if promise:
-            correction = SystemMessage(content=(
-                "[Reflection 检查未通过：正文承诺'这就/马上/现在…带主人去X'式跳转，但本轮没有调用任何工具，跳转并不会真实发生。] 修正要求："
+                "[Reflection 检查未通过：正文声称已完成跳转/到达，但本轮没有调用任何工具，跳转并未真实发生。] 修正要求："
                 "页面跳转只能通过调用 navigate_to 工具完成——立即调用该工具执行，工具返回后再按结果回复；"
-                "若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得口头承诺无法兑现的跳转。"
+                "若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得虚构已完成。"
             ))
-            logger.info("[reflector] FAKE_PROMISE")
-            return {"messages": [correction], "done": False, "reflection": "承诺跳转但无工具调用", "reflection_count": count + 1}
-        correction = SystemMessage(content=(
-            "[Reflection 检查未通过：正文声称已完成跳转/到达，但本轮没有调用任何工具，跳转并未真实发生。] 修正要求："
-            "页面跳转只能通过调用 navigate_to 工具完成——立即调用该工具执行，工具返回后再按结果回复；"
-            "若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得虚构已完成。"
-        ))
-        logger.info("[reflector] FAKE_CLAIM")
-        return {"messages": [correction], "done": False, "reflection": "声称完成但无工具调用", "reflection_count": count + 1}
+            logger.info("[reflector] FAKE_CLAIM")
+            return {"messages": [correction], "done": False, "reflection": "声称完成但无工具调用", "reflection_count": count + 1}
 
     last = state["messages"][-1]
     last_content = (getattr(last, "content", "") or "").strip()
@@ -705,7 +783,23 @@ def reflector_node(state: AgentState) -> dict:
         return {"done": bool(last_content), "reflection": "chat 快道路：非空检查通过" if last_content else "chat 回复为空", "reflection_count": count}
 
     if count >= MAX_REFLECTIONS:
-        return {"done": True, "reflection": f"反思预算已用尽({count}/{MAX_REFLECTIONS})，接受当前结果", "reflection_count": count}
+        # 预算耗尽 ≠ 无条件放行：识别器词形有盲区（如"已为您开启"变体漏过 effectclaim），
+        # 漏报的声称会走到这里。跑一次 LLM 质检做**最终裁决**（只此一次、不再循环）：
+        #   REVISE → 诚实兜底（宁可回放诚实轮/兜底句，不接受无执行声称收尾）
+        #   PASS   → 接受当前结果（诚实拒绝/闲聊式收尾等合理场景不误伤）
+        llm = get_llm(temperature=0.0, max_tokens=200, timeout=30)
+        resp = llm.invoke(_REFLECTOR_PROMPT.format(plan=state["plan"], trace=_build_trace(state["messages"])))
+        raw = getattr(resp, "content", str(resp))
+        if re.search(r"VERDICT\s*[:=]\s*REVISE", raw, re.IGNORECASE):
+            m = re.search(r"NOTE\s*[:=]\s*(.+)", raw, re.IGNORECASE)
+            note = m.group(1).strip() if m else "未按计划执行"
+            logger.info("[reflector] FALLBACK: 预算耗尽(%d/%d)且 LLM 质检 REVISE（%s），诚实兜底",
+                        count, MAX_REFLECTIONS, note)
+            return {"done": True, "fallback": True,
+                    "reflection": f"反思预算已用尽({count}/{MAX_REFLECTIONS})且最终轮仍违规（{note}），触发诚实兜底",
+                    "reflection_count": count}
+        logger.info("[reflector] 预算耗尽(%d/%d)但 LLM 质检 PASS，接受当前结果", count, MAX_REFLECTIONS)
+        return {"done": True, "reflection": f"反思预算已用尽({count}/{MAX_REFLECTIONS})，LLM 质检通过，接受当前结果", "reflection_count": count}
 
     llm = get_llm(temperature=0.0, max_tokens=200, timeout=30)
     resp = llm.invoke(_REFLECTOR_PROMPT.format(plan=state["plan"], trace=_build_trace(state["messages"])))
