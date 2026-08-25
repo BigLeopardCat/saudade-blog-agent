@@ -23,3 +23,5 @@ output_audio/
 # OS files
 Thumbs.db
 .DS_Store
+# Eval run artifacts
+eval/report/

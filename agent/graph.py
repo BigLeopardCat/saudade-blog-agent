@@ -345,6 +345,10 @@ def _fake_claim_in(messages: list) -> bool:
     命中条件：正文出现"已经(为?主人)?(跳转/来到/到达/进入/到)+<导航目标页>+了/啦"式
     声称，且本轮未调用任何工具。真调了工具（任一，含工具结果帧）→ 声称有执行依据，
     不判（模型先调 navigate_to、再在正文确认"已经为您跳转…"是"真执行"，不能误伤）。
+    另查现状声称："现在(页面上看到的)应该是<目标页>了"式当下状态断言——同样无前缀、
+    无"已经…到X"完成时，但把"已到达"当作既成事实陈述（实测案例"现在主人在页面上
+    看到的应该是设备控制台了"）。防误伤：必须是"应该是/已经是/变成"的到达断言，
+    "现在的页面还是首页哦"（还是=否认到达）、"页面应该已经加载好了"（无目标页）不判。
     """
     final_ai, called = _current_round(messages)
     if final_ai is None or called:
@@ -352,7 +356,20 @@ def _fake_claim_in(messages: list) -> bool:
     content = getattr(final_ai, "content", "") or ""
     if not isinstance(content, str):
         return False
-    return bool(_FAKE_CLAIM_RE.search(content))
+    return bool(_FAKE_CLAIM_RE.search(content)) or bool(_FAKE_PRESENTSTATE_RE.search(content))
+
+
+# 现状声称（Gate3 的延伸）：不说"已经…到X"，而是当下断言"现在页面上(看到的)应该是X了"。
+# 只有"应该是/已经是/变成"+ 导航页别名 + 完成标记才算到达断言；"还是"（否认到达）、
+# "应该没有变"（无断言）、"加载好了"（无目标页）等诚实/中性表述不判。
+_FAKE_PRESENTSTATE_RE = re.compile(
+    r"(?:现在|此刻|目前)(?:[^。！？\n，,；;]{0,14}?)"
+    r"(?:页面|屏幕|地址栏|网页)"
+    r"(?:[^。！？\n，,；;]{0,10}?)"
+    r"(?:应该是|应该已经是|已经变成|变成|应该(?:已经)?|已经是)(?:到|在|变)?"
+    + _NAV_TARGET_RE +
+    r"(?:[^。！？\n，,；;]{0,4}?)(?:了|啦|哦|喵)"
+)
 
 
 # 将来时承诺（Gate2/Gate3 的盲区）：既不写命令前缀、也不用完成时声称，而是"现在/这就/
@@ -411,6 +428,177 @@ def _fake_promise_in(messages: list) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Gate3c/3d/3e：用户1实测盲区补丁（2026-08-24）
+# 模型被 REVISE 逼急后的升级打法：不写命令前缀（Gate2 失效）、不用"已经…到X"完成时
+# （Gate3 失效）、不说"这就带主人去X"承诺（Gate3b 失效），而是——
+#   ① 声称"刚刚真的调用了 X 工具"（工具名直接点名，实测："刚刚真的调用了
+#      `device_oled_display` 这个魔法…发送到屏幕上了"）
+#   ② 声称特效/夜间模式/设备显示已完成（目标词表只有导航页别名，实测：
+#      "真的成功调用了樱花特效的魔法哦！…是不是有粉粉的樱花花瓣开始飘落啦？"、
+#      "夜间模式已经帮主人切换成夜间模式啦"）
+#   ③ 承诺"这就让樱花飘起来/会乖乖调用工具开启樱花特效"（实测："没变化啊"之后
+#      模型仍在画饼）
+# 三者与 Gate3/3b 同构：本轮调用过工具（含工具结果帧）整轮豁免——真调了工具的
+# 确认性复述/承诺是"真执行"，不能误伤。
+# ---------------------------------------------------------------------------
+
+# ── Gate3c：工具调用声称 ──
+# "刚刚/真的/成功…调用了 <工具名|魔法|工具>"——了=完成时标记；触发词限定"已完成"
+# 语义，且守卫跳过否定（没有/没调用）、条件（如果/要是）、引述（是不是/说/问）、
+# 能力（可以）四类误伤。整轮工具豁免复用 _current_round。
+_TOOLCLAIM_RE = re.compile(
+    r"(?:刚刚|刚才|已经|已|终于|总算是|真的|确实|亲手|亲自|成功)"
+    r"[^。！？\n，,；;]{0,8}?调用了"
+    r"(?:[^。！？\n，,；;]{0,12}?)(?:navigate_to|toggle_effect|toggle_dark_mode|"
+    r"device_oled_display|list_devices|魔法|工具|特效|夜间模式|跳转|导航)"
+)
+_TOOLCLAIM_GUARD_RE = re.compile(
+    r"(?:没有|没|并未|并没有|无法|不能|不会|别|如果|要是|假如|"
+    r"是不是|有没有|可以|说|问)"
+)
+
+
+def _fake_toolclaim_in(messages: list) -> bool:
+    """检查当前轮正文是否"声称已调用工具但实际未调用"（Gate3 的盲区）。
+
+    命中条件：正文出现"刚刚/真的/成功…调用了 <工具名|魔法|工具>"式完成声称，且
+    本轮未调用任何工具——动作并未真实发生。守卫：前 12 字符内出现否定/条件/引述/
+    能力词（"如果泠月喵调用了工具…"是假设、"并没有真的发出跳转指令"是否认、
+    "主人问是不是真的调用了"是引述）不判。
+    """
+    final_ai, called = _current_round(messages)
+    if final_ai is None or called:
+        return False
+    content = getattr(final_ai, "content", "") or ""
+    if not isinstance(content, str):
+        return False
+    m = _TOOLCLAIM_RE.search(content)
+    if not m:
+        return False
+    head = content[max(0, m.start() - 12):m.start()]
+    return not _TOOLCLAIM_GUARD_RE.search(head)
+
+
+# ── Gate3d：特效/夜间模式/设备显示完成声称 ──
+# 目标词表收窄到"效果类"，动词限定效果动作，与导航声称（Gate3）互不越界：
+#   已完成式："已经…(樱花特效)…(打开/飘落)…了/啦"（目标词在动词前后都覆盖）
+#   征询式："是不是/有没有…(樱花花瓣)…(飘落)…啦？"——断言效果已生效并邀证
+#   设备式："已经…(发送/显示)…(屏幕/设备)…了/啦"
+# 三种排列都要覆盖：①"已经把樱花特效打开了"（已经…目标…动词…了）
+#   ②"已经打开了樱花特效"（已经…动词…目标…了）③"樱花特效已经成功打开啦"
+#   （目标…已经…动词…了——目标词在"已经"前）。③必须出现"已经"才判，
+#   防止"秋天的樱花花瓣飘落下来了"这类自然景物描述误伤。
+_EFF_CLAIM_RE = re.compile(
+    r"(?:"
+    r"(?:已经|已|这就)(?:[^。！？\n，,；;]{0,12}?)"
+    r"(?:"
+    r"(?:樱花|花瓣|特效|雪花|大雪|大雨|雨|雪|夜间模式|深色模式|暗色模式)"
+    r"(?:[^。！？\n，,；;]{0,12}?)(?:飘(?:起|起来)?|落(?:下|下来)?|打开|开启|"
+    r"切换(?:成|为)?|生效|出现)(?:[^。！？\n，,；;]{0,6}?)(?:了|啦)"
+    r"|"
+    r"(?:开启|打开|切换(?:成|为)?|生效|出现|发送|下发|显示|展示)"
+    r"(?:[^。！？\n，,；;]{0,12}?)(?:樱花|花瓣|特效|雪花|大雨|雨|雪|夜间模式|"
+    r"深色模式|暗色模式)(?:[^。！？\n，,；;]{0,6}?)(?:了|啦)"
+    r")"
+    r"|"
+    r"(?:樱花|花瓣|特效|雪花|大雪|大雨|雨|雪|夜间模式|深色模式|暗色模式)"
+    r"(?:[^。！？\n，,；;]{0,12}?)已经(?:[^。！？\n，,；;]{0,8}?)"
+    r"(?:飘(?:起|起来)?|落(?:下|下来)?|打开|开启|切换(?:成|为)?|生效|出现)"
+    r"(?:[^。！？\n，,；;]{0,6}?)(?:了|啦)"
+    r")"
+)
+_EFF_ASSERT_RE = re.compile(
+    r"(?:是不是|有没有)(?:[^。！？\n，,；;]{0,10}?)"
+    r"(?:樱花|花瓣|雪花|雨|雪|特效|夜间模式|深色模式)"
+    r"(?:[^。！？\n，,；;]{0,10}?)(?:飘|落|打开|开启|切换|出现)(?:了|啦)"
+)
+_DEV_CLAIM_RE = re.compile(
+    r"(?:已经|已|刚刚|刚才|真的|终于)(?:[^。！？\n，,；;]{0,12}?)"
+    r"(?:发送|下发|显示|展示|写到|写在)(?:[^。！？\n，,；;]{0,12}?)(?:屏幕|OLED|设备)"
+    r"(?:[^。！？\n，,；;]{0,8}?)(?:了|啦|哦)"
+)
+
+
+def _fake_effectclaim_in(messages: list) -> bool:
+    """检查当前轮正文是否"声称特效/夜间模式/设备显示已完成但实际未执行"。
+
+    命中条件（任一并本轮无任何工具调用）：
+      - "已经…樱花特效…打开/飘落…了/啦"式效果完成声称
+      - "是不是…樱花花瓣…飘落啦？"式征询断言（把未生效的效果当既成事实邀证）
+      - "已经把…发送到…屏幕/设备…了/啦"式设备显示声称
+    时间/天气闲聊（"已经到下午三点了""正在下雨"）、"设备已经在线了"（无发送/显示
+    动词）不判。真调了工具整轮豁免。
+    """
+    final_ai, called = _current_round(messages)
+    if final_ai is None or called:
+        return False
+    content = getattr(final_ai, "content", "") or ""
+    if not isinstance(content, str):
+        return False
+    return bool(_EFF_CLAIM_RE.search(content)) or bool(_EFF_ASSERT_RE.search(content)) \
+        or bool(_DEV_CLAIM_RE.search(content))
+
+
+# ── Gate3e：特效/夜间模式/设备显示承诺 ──
+# Gate3b 只认导航目标词；效果类承诺（"这就让樱花特效飘起来"、"会乖乖调用真正的工具
+# 来开启樱花特效"）同样零工具执行却被放过（实测："没变化啊"）。两种形态：
+#   承诺词 + (让/帮/给/为/把)(主人)? + 效果动作 + 效果目标  或  效果目标 + 飘落动作
+#   "会/一定…调用…工具…来…开启…<效果或导航目标>"（1613 实测形态）
+# 防误伤三闸与 Gate3b 相同：疑问（好不好？）、否定（不/别/没）、能力陈述（可以）。
+_EFF_PROMISE_RE = re.compile(
+    r"(?:这就|马上|立刻|立即|现在|这就马上|一定|保证|肯定)"
+    r"(?:[^。！？\n，,；;]{0,12}?)?(?:让|帮|给|为|把)?(?:主人|您|访客)?"
+    r"(?:[^。！？\n，,；;]{0,6}?)?"
+    r"(?:"
+    r"(?:开启|打开|施展|调出|切换|显示)[^。！？\n，,；;]{0,8}?(?:樱花|花瓣|特效|"
+    r"雪花|大雨|雨|雪|夜间模式|深色模式|暗色模式)"
+    r"|"
+    r"(?:樱花|花瓣|特效|雪花|大雨|雨|雪|夜间模式|深色模式|暗色模式)"
+    r"[^。！？\n，,；;]{0,8}?(?:飘(?:起|起来)?|落(?:下|下来)?|打开|开启|切换|显示)"
+    r")"
+)
+_TOOL_PROMISE_RE = re.compile(
+    r"(?:会|一定|保证|肯定)(?:乖乖|认真|听话)?(?:的)?"
+    r"(?:调用|使用|用)(?:[^。！？\n，,；;]{0,8}?)?(?:工具|魔法)"
+    r"(?:[^。！？\n，,；;]{0,6}?)?(?:来)?"
+    r"(?:开启|打开|施展|切换|显示|飘|落|带|去|到|进入|转跳|跳转|导航|前往|出发)"
+    r"(?:[^。！？\n，,；;]{0,8}?)?"
+    r"(?:樱花|花瓣|特效|雪花|大雨|雨|雪|夜间模式|深色模式|暗色模式|OLED|屏幕|"
+    r"物联网|平台|设备控制台|控制台|留言板|说说|动态|首页|主页|归档|关于我|后台|"
+    r"/talk|/friends|/device-console|/times|/about|/dashboard)"
+)
+_EFFPROMISE_GUARD_RE = re.compile(r"(?:不|别|没|还没|可以|吗|好不好|行不行)")
+
+
+def _fake_effectpromise_in(messages: list) -> bool:
+    """检查当前轮正文是否"承诺即将生效效果但实际不会发生"（Gate3b 的盲区）。
+
+    命中条件（任一并本轮无任何工具调用）：
+      - 承诺词 + "让/帮…<效果目标>…飘/打开"（"这就让樱花特效飘起来"）
+      - "会/一定…调用…工具/魔法…来…开启…<效果或导航目标>"（"会乖乖调用真正的
+        工具来开启樱花特效"）
+    疑问（"好不好？"）、否定（"不打开"）、能力陈述（"可以用工具"）不判；
+    真调了工具整轮豁免。
+    """
+    final_ai, called = _current_round(messages)
+    if final_ai is None or called:
+        return False
+    content = getattr(final_ai, "content", "") or ""
+    if not isinstance(content, str):
+        return False
+    m = _EFF_PROMISE_RE.search(content)
+    if m:
+        span = m.group(0)
+        tail = content[m.end():m.end() + 6]
+        if "？" in span or "?" in span:
+            return False
+        if _EFFPROMISE_GUARD_RE.search(span + tail):
+            return False
+        return True
+    return bool(_TOOL_PROMISE_RE.search(content))
+
+
 def reflector_node(state: AgentState) -> dict:
     """反思层：对照计划质检执行结果。
 
@@ -420,10 +608,13 @@ def reflector_node(state: AgentState) -> dict:
           PASS   → done=True，收尾
           REVISE → 追加一条 [Reflection] 修正注记进 messages（紧贴当前轮，
                    遵守率最高），回 model 重来；预算 MAX_REFLECTIONS，耗尽即收
-    另有三道程序化检测（零成本、与 LLM 质检共用 MAX_REFLECTIONS 预算）：
+    另有六道程序化检测（零成本、与 LLM 质检共用 MAX_REFLECTIONS 预算）：
       - _fake_command_in：正文伪造命令前缀 → 直接 REVISE
       - _fake_claim_in：纯文本声称"已跳转/已到达X"但未调工具 → 直接 REVISE
       - _fake_promise_in：将来时承诺"现在/这就/马上…带主人去X"但未调工具 → 直接 REVISE
+      - _fake_toolclaim_in：声称"刚刚/真的调用了X工具"但未调工具 → 直接 REVISE
+      - _fake_effectclaim_in：声称特效/夜间模式/设备显示已完成但未调工具 → 直接 REVISE
+      - _fake_effectpromise_in：承诺"这就让樱花飘起来/会调用工具开启特效"但未调工具 → 直接 REVISE
     预算耗尽且最终轮仍违规 → Gate4 诚实兜底：不接受谎言收尾，标记 fallback，
     server 层回放本对话最近一个通过质检轮的诚实回复作为最终输出。
     """
@@ -436,12 +627,22 @@ def reflector_node(state: AgentState) -> dict:
     claim = _fake_claim_in(state["messages"])
     # 第四道闸：将来时承诺"这就/马上…带主人去X"但未调用任何工具 = 假完成（两闸盲区）
     promise = _fake_promise_in(state["messages"])
-    if fake or claim or promise:
+    # Gate3c：声称"刚刚/真的调用了 X 工具"但未调用 = 假完成（用户1实测盲区）
+    toolclaim = _fake_toolclaim_in(state["messages"])
+    # Gate3d：声称特效/夜间模式/设备显示已完成但未调用 = 假完成（目标词表扩展）
+    effectclaim = _fake_effectclaim_in(state["messages"])
+    # Gate3e：承诺"这就让樱花飘起来/会调用工具开启特效"但未调用 = 假完成
+    effectpromise = _fake_effectpromise_in(state["messages"])
+    if fake or claim or promise or toolclaim or effectclaim or effectpromise:
         if count >= MAX_REFLECTIONS:
             # Gate4 诚实兜底：预算耗尽且最终轮仍违规（伪造命令/虚假声称/空头承诺）——
             # 不接受谎言收尾，标记 fallback 让 server 层回放本对话最近一个
             # 通过质检轮的诚实回复作为最终输出（访客看到的是诚实内容而非假承诺）。
-            violation = fake or ("声称完成但无工具调用" if claim else "承诺跳转但无工具调用")
+            violation = fake or (
+                "工具调用声称但无实际调用" if toolclaim else (
+                    "特效/设备声称完成但无工具调用" if effectclaim else (
+                        "特效/设备承诺但无工具调用" if effectpromise else (
+                            "声称完成但无工具调用" if claim else "承诺跳转但无工具调用"))))
             logger.info("[reflector] FALLBACK: 预算耗尽(%d/%d)且最终轮违规(%s)，诚实兜底",
                         count, MAX_REFLECTIONS, violation)
             return {"done": True, "fallback": True,
@@ -457,6 +658,30 @@ def reflector_node(state: AgentState) -> dict:
             ))
             logger.info("[reflector] FAKE_COMMAND: %s", fake)
             return {"messages": [correction], "done": False, "reflection": f"正文伪造命令 {fake}（未调用工具）", "reflection_count": count + 1}
+        if toolclaim:
+            correction = SystemMessage(content=(
+                "[Reflection 检查未通过：正文声称'刚刚/已经调用了工具'，但本轮没有调用任何工具，动作并未真实发生。] 修正要求："
+                "若确需执行，立即调用对应工具（navigate_to/toggle_effect/toggle_dark_mode/device_oled_display），工具返回后再按结果回复；"
+                "若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得声称已调用并未发生的动作。"
+            ))
+            logger.info("[reflector] FAKE_TOOLCLAIM")
+            return {"messages": [correction], "done": False, "reflection": "声称调用了工具但实际未调用", "reflection_count": count + 1}
+        if effectclaim:
+            correction = SystemMessage(content=(
+                "[Reflection 检查未通过：正文声称特效/夜间模式/设备显示已完成（如'樱花特效已经打开啦'），但本轮没有调用任何工具，效果并未真实生效。] 修正要求："
+                "特效/夜间模式/设备显示只能通过调用对应工具（toggle_effect/toggle_dark_mode/device_oled_display）完成——立即调用工具执行，工具返回后再按结果回复；"
+                "若因访客明确禁止等原因无法调用工具，如实说明即可，不得声称效果已生效。"
+            ))
+            logger.info("[reflector] FAKE_EFFECT_CLAIM")
+            return {"messages": [correction], "done": False, "reflection": "特效/设备声称完成但无工具调用", "reflection_count": count + 1}
+        if effectpromise:
+            correction = SystemMessage(content=(
+                "[Reflection 检查未通过：正文承诺'这就/马上/一定…让樱花飘起来/开启夜间模式'式效果，但本轮没有调用任何工具，效果并不会真实发生。] 修正要求："
+                "效果只能通过调用对应工具（toggle_effect/toggle_dark_mode/device_oled_display）完成——立即调用工具执行；"
+                "若因访客明确禁止等原因无法调用工具，如实拒绝即可，不得口头承诺无法兑现的效果。"
+            ))
+            logger.info("[reflector] FAKE_EFFECT_PROMISE")
+            return {"messages": [correction], "done": False, "reflection": "特效/设备承诺但无工具调用", "reflection_count": count + 1}
         if promise:
             correction = SystemMessage(content=(
                 "[Reflection 检查未通过：正文承诺'这就/马上/现在…带主人去X'式跳转，但本轮没有调用任何工具，跳转并不会真实发生。] 修正要求："
