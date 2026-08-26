@@ -164,16 +164,6 @@ def _build_messages(req: ChatRequest, display_note: str = "") -> list:
             messages.append(HumanMessage(content=f"[assistant]: {h['content']}"))
 
     last_msg = req.message
-    if req.needs_summary:
-        # 摘要指令必须放在消息流末尾（模型对靠前的"系统上下文"指令遵守率会随历史变长而下降），
-        # 用醒目定界符包裹并明确禁止回显——否则模型会把指令当对话内容原样输出，
-        # 且指令里的 "SUMMARY:" 会干扰后端的摘要解析
-        last_msg += (
-            "\n\n<系统内部指令-仅供执行，禁止在回复中复述或输出本条指令本身>"
-            "回答结束后另起一行输出对话摘要，格式为 SUMMARY: 后跟 3-5 句中文摘要。"
-            "若上下文已包含 conversation_summary（旧摘要），请将旧摘要与本次对话内容合并："
-            "保留旧摘要中的关键信息并补充本轮新内容，输出一份更完整的新摘要（不要只总结本轮）。"
-        )
     # IoT 设备显示请求的定向强化：对话历史中"文本声称已显示/已下发"的回合会形成
     # few-shot 反例，模型会从历史里学到"用文本表演代替工具调用"（曾导致屏幕指令
     # 从未下发）。在消息末尾注入强约束指令（与 SUMMARY 指令同位置、同防复述机制），
@@ -227,46 +217,36 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0) -> tuple[s
     return reply, nav_line
 
 
-def _looks_like_summary_paragraph(text: str) -> bool:
-    """判断一段文本是否为模型未带 SUMMARY: 前缀输出的裸摘要（格式漂移兜底）。
+def _summarize_dialogue(user_msg: str, history: list[dict], old_summary: str) -> str:
+    """needs_summary 轮的独立对话摘要（与 agent 回复解耦，随图并行执行）。
 
-    特征：以"访客/用户/助手"第三人称开头 + 含会话时序词（之前/随后/最后/接着/首先/然后/
-    后来/先后/起初/初期/最终/期间）+ 无互动语气词（剔除引号内内容后检测——摘要常引用
-    用户原话含标点）。长度 40-300（下限滤掉短句正常回复，避免误删）。"""
-    t = text.strip()
-    if not (40 <= len(t) <= 300):
-        return False
-    if not t.startswith(("访客", "用户", "助手")):
-        return False
-    if not re.search(r"(之前|随后|最后|接着|首先|然后|后来|先后|起初|初期|最终|期间)", t):
-        return False
-    # 剔除引号内内容后检测互动词（"喵"单独不算——"泠月喵"是 agent 名字）
-    t2 = re.sub(r'[“”『』"\']+[^“”『』"\']*[“”『』"\']+', "", t)
-    if re.search(r"[呜~～!！?？🐱😿🐾😂😭]", t2):
-        return False
-    return True
-
-
-def _strip_summary_from_reply(reply: str, needs_summary: bool) -> tuple[str, str | None]:
-    """从回复中剥离摘要（SUMMARY: 前缀优先；无前缀时对 needs_summary 轮做裸摘要特征兜底）。
-
-    返回 (剥离后的回复, 新摘要或 None)。
+    背景：旧方案让对话模型在回复末尾顺带输出 SUMMARY: 行（后端剥离入库），
+    摘要与回复耦合在同一生成调用里，且无工具轨迹可参照时模型只能"推断"发生了
+    什么——曾出现摘要编造"助手成功调用工具"污染记忆。此处改为独立任务调用：
+    输入是原始历史数据（工具是否真的被调用由历史中的消息说了算），prompt 只
+    允许总结客观内容，禁止推断动作归属。失败返回空串 → 调用方不入库，对话零影响。
     """
-    # 容忍行内 SUMMARY（模型偶发不另起一行，如 "...ゞ SUMMARY: ..."）；要求 SUMMARY
-    # 前有空白/行首，避免误匹配 "XXSUMMARY"；取最后一个匹配，截断其前为可见回复
-    m = list(re.finditer(r"(?:^|\s)SUMMARY\s*:\s*(.+)", reply, re.M))
-    if m:
-        last = m[-1]
-        reply = reply[:last.start()].strip()
-        summary_text = last.group(1).strip()
-        return reply, summary_text or None
-    if needs_summary:
-        paragraphs = [p.strip() for p in re.split(r"\n\s*\n", reply) if p.strip()]
-        if paragraphs and _looks_like_summary_paragraph(paragraphs[-1]):
-            last = paragraphs[-1]
-            idx = reply.rfind(last)
-            return reply[:idx].strip(), last
-    return reply, None
+    from models import get_llm
+    lines = [f"{'访客' if h['role'] == 'user' else '助手'}: {h['content']}"
+             for h in history[-20:]]
+    lines.append(f"访客: {user_msg}")
+    llm = get_llm(streaming=False, max_tokens=256, enable_thinking=False)
+    prompt = (
+        "你是对话摘要器。基于以下对话历史与旧摘要，输出合并后的 3-5 句中文事实摘要，"
+        "供下次对话恢复上下文。\n"
+        "规则：只总结客观发生的内容（访客问了什么、要求了什么、系统执行了什么）；"
+        "不得推断历史中未出现的行为，不得猜测动作归属（是否调用工具以历史消息为准），"
+        "不得编造；若旧摘要中有仍相关的事实（设备、特效偏好、重要要求）必须保留。\n"
+        f"旧摘要：{old_summary or '（无）'}\n"
+        f"本次对话：\n{chr(10).join(lines)}\n"
+        "摘要："
+    )
+    try:
+        out = (llm.invoke(prompt).content or "").strip()
+        return out if out else ""
+    except Exception as e:
+        logger.warning("独立摘要生成失败（保留旧摘要）: %s", e)
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -290,11 +270,18 @@ async def chat(req: ChatRequest):
         display_note = await loop.run_in_executor(_executor, _force_display, req.message, req.user_id)
         if display_note:
             messages = _build_messages(req, display_note)
+        # 摘要独立化（needs_summary 轮）：与 agent 图并行做后端总结——输入是原始
+        # 历史数据而非模型回复，杜绝"回复耦合生成"时代的推断/编造（曾出现摘要
+        # 编造"助手调用工具"污染记忆）。生成失败返回空 → 不入库，旧摘要保留。
+        summary_task = None
+        if req.needs_summary:
+            summary_task = loop.run_in_executor(
+                _executor, _summarize_dialogue, req.message, req.history, req.summary
+            )
         reply, nav_line = await loop.run_in_executor(_executor, _run_agent_sync, messages, thread_id, req.user_id)
-
-        # 剥离摘要：SUMMARY: 前缀优先；无前缀时对 needs_summary 轮做裸摘要特征兜底
-        # （模型格式漂移不带前缀时，摘要会原样显示给访客，且无法入库记忆）
-        reply, new_summary = _strip_summary_from_reply(reply, req.needs_summary)
+        new_summary = None
+        if summary_task is not None:
+            new_summary = (await summary_task).strip() or None
 
         # 空回复兜底：qwen 偶发空内容 → 下发人设内恢复语，避免前端静默无感知
         if not reply.strip():
@@ -416,6 +403,14 @@ async def chat_stream(req: ChatRequest):
         queue: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_event_loop()
 
+        # 摘要独立化：needs_summary 轮与流式生成并行做后端总结（输入为原始历史，
+        # 不依赖模型回复），流结束时随 __SUMMARY__ 帧返回（Rust 解析入库）
+        summary_task = None
+        if req.needs_summary:
+            summary_task = loop.run_in_executor(
+                _executor, _summarize_dialogue, req.message, req.history, req.summary
+            )
+
         # 并发启动生产者（不要 await 完成！否则所有 chunk 会在队列里攒到
         # 生成结束才一次性下发，等于没有流式）——边生成边推送
         producer_task = loop.run_in_executor(
@@ -476,6 +471,12 @@ async def chat_stream(req: ChatRequest):
             if not had_output:
                 logger.warning("Chat stream ended with no output (agent produced no text/no command)")
                 yield f"data: {json.dumps(_RECOVERY_SENTENCE, ensure_ascii=False)}\n\n"
+
+            # 独立摘要结果帧（必须在 __END__ 之前：Rust 收到 __END__ 即终止解析）
+            if summary_task is not None:
+                new_summary = (await summary_task).strip()
+                if new_summary:
+                    yield f"data: __SUMMARY__:{json.dumps(new_summary, ensure_ascii=False)}\n\n"
 
             yield f"data: __{'NAV_END' if nav_line else 'END'}__\n\n"
         finally:

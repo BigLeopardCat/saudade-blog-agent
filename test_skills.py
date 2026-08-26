@@ -118,8 +118,8 @@ def test_parse_tolerance():
           str(_parse_params("PARAMS: {\"target\": \"物联网平台\"}")))
 
 
-def test_summary_protocol_check():
-    print("[reflector] 摘要协议确定性检查（无 LLM）")
+def test_summary_protocol_removed():
+    print("[reflector] 摘要协议已移除（摘要独立化：对话内 SUMMARY 不再被检查，防误判 REVISE）")
     ctx = ("这个博客都有什么功能呀\n\n"
            "<系统内部指令-仅供执行>回答结束后另起一行输出对话摘要，格式为 SUMMARY: 后跟 3-5 句中文摘要。")
     plan = plan_encode(instantiate_plan("chat", {}))
@@ -133,13 +133,11 @@ def test_summary_protocol_check():
         "done": False,
     }
     out = reflector_node(state)
-    check("缺 SUMMARY: 行 → 确定性 REVISE",
-          out["done"] is False
-          and any(isinstance(m, SystemMessage) and "SUMMARY" in m.content for m in out["messages"]),
-          str(out))
-    state["messages"][-1] = AIMessage(content="功能很多喵～\nSUMMARY: 访客询问博客功能，助手介绍了主要页面结构。")
-    out = reflector_node(state)
-    check("含 SUMMARY: 行 → 快道非空 PASS", out["done"] is True, str(out))
+    # 旧行为：缺 SUMMARY: 行 → 确定性 REVISE（曾误伤显示请求：显示强化指令共用
+    # <系统内部指令> 标记，导致每次显示请求多烧一轮 LLM）。新行为：检查已删除，
+    # 带任何系统指令标记的消息都走 chat 快道非空 PASS
+    check("带系统指令标记但无 SUMMARY 行 → 不再 REVISE，chat 快道 PASS",
+          out["done"] is True, str(out))
 
 
 def test_round_aware_checks():
@@ -198,7 +196,7 @@ def test_planner_output_re():
 
 
 def main():
-    for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_check,
+    for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_round_aware_checks, test_plan_roundtrip, test_parse_tolerance, test_planner_output_re):
         fn()
     if FAILS:

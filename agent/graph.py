@@ -375,26 +375,6 @@ def reflector_node(state: AgentState) -> dict:
     last = state["messages"][-1]
     last_content = (getattr(last, "content", "") or "").strip()
 
-    # 摘要协议检查（needs_summary 轮的确定性部分，放在快道之前——chat 技能同样
-    # 要遵守）：上下文含摘要指令标记时，最终回复必须以 SUMMARY: 行收尾（供后端
-    # 剥离后入库记忆）；模型偶发漏输出该行，纯文本回答不会丢，但记忆会丢。
-    # 与 server.py 的 _strip_summary_from_reply 用同一正则，判定口径一致。
-    _SUMMARY_MARK = "<系统内部指令-仅供执行"
-    needs_summary_ctx = any(
-        _SUMMARY_MARK in (getattr(m, "content", "") or "")
-        for m in state["messages"] if isinstance(m, HumanMessage)
-    )
-    # 与 server.py 的 _strip_summary_from_reply 同一判定口径（容忍行内 SUMMARY:）
-    if needs_summary_ctx and not re.search(r"(?:^|\s)SUMMARY\s*:", last_content, re.M):
-        correction = SystemMessage(content=(
-            "[Reflection 检查未通过：本条消息要求输出 SUMMARY: 摘要，但你的回复缺少该行。] 修正要求："
-            "在最终回复末尾另起一行输出 SUMMARY: 后跟 3-5 句中文摘要（第三视角，"
-            "若上下文含旧摘要则合并旧摘要与本轮内容），不要复述指令本身。"
-        ))
-        logger.info("[reflector] 摘要协议缺失：缺少 SUMMARY: 行")
-        return {"messages": [correction], "done": False,
-                "reflection": "缺少 SUMMARY: 摘要行", "reflection_count": count + 1}
-
     if plan["chat"]:
         return {"done": bool(last_content), "reflection": "chat 快道路：非空检查通过" if last_content else "chat 回复为空", "reflection_count": count}
 
