@@ -66,6 +66,25 @@ def test_navigate_instantiation():
     p = instantiate_plan("navigate", {"target": "/category/tech"})
     check("字面路径(前缀匹配)直用",
           'navigate_to({"path": "/category/tech", "confirm": true})' in p["tools"], str(p["tools"]))
+    # 口语模糊归一（映射表外变体 → 关键词规则确定性兜底，不依赖模型推断；
+    # 用例须是映射表里没有的表述，映射表内的别名走精确分支、无"模糊归一"注记）
+    for alias, path in [
+        ("IOT设备管理", "/device-console/"),
+        ("设备面板", "/device-console/"),
+        ("管理设备", "/device-console/"),
+        ("去留个言", "/guestbook"),
+        ("时间线", "/times"),
+        ("登陆", "/login"),
+        ("后台管理", "/dashboard"),
+        ("回主页", "/"),
+    ]:
+        p = instantiate_plan("navigate", {"target": alias, "mode": "direct"})
+        check(f"口语模糊归一「{alias}」→ {path}",
+              f'navigate_to({{\"path\": "{path}", "confirm": false}})' in p["tools"] and "模糊归一" in p["note"],
+              f"tools={p['tools']} note={p['note']}")
+    p = instantiate_plan("navigate", {"target": "火星基地", "mode": "direct"})
+    check("完全无关目标 → 仍无法识别（不误归）",
+          not p["tools"] and "无法识别" in p["note"], f"note={p['note']}")
 
 
 def test_other_skills():

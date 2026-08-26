@@ -62,6 +62,22 @@ from tools.base import _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS
 
 NAV_VALID_PATHS: set[str] = set(_NAV_EXACT_PATHS)
 
+# 口语模糊归一（NAV_MAP 精确命中的兜底）：枚举别名覆盖不了无穷口语变体
+# （"IOT设备管理"/"设备面板"/"管理设备"…），未命中映射表时按关键词规则归一，
+# 命中即等同映射命中——识别不依赖模型在 PARAMS 里自觉推断（曾见推断失败
+# 降级 chat 快道、裸输出路径文本还声称已打开）。顺序敏感：宽词（设备/管理）
+# 归设备域在前，避免被后续规则截胡。
+FUZZY_NAV_RULES: list[tuple[tuple[str, ...], str]] = [
+    (("物联网", "IOT", "iot", "IoT", "设备控制", "设备管理", "设备面板", "设备平台", "设备"), "/device-console/"),
+    (("留言", "留个言", "河灯"), "/guestbook"),
+    (("说说", "碎语", "动态"), "/talk"),
+    (("时间轴", "归档", "时间线"), "/times"),
+    (("关于",), "/about"),
+    (("登录", "登陆"), "/login"),
+    (("后台", "管理"), "/dashboard"),
+    (("首页", "主页"), "/"),
+]
+
 
 @dataclass
 class Skill:
@@ -200,11 +216,22 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
                     f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/后台/物联网平台）给出建议（文本链接即可）"
                 )
         else:
-            # 不在映射表：如实告知没有该页面，并给出真实页面建议
-            note = (
-                f"无法识别导航目标「{target}」：如实告知没有该页面，不调用任何工具，"
-                f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/后台/物联网平台）给出建议（文本链接即可）"
+            # 不在映射表：先试口语模糊归一（关键词规则，确定性），
+            # 命中即等同映射命中；仍不命中才"无法识别、如实告知"
+            fuzzy_hit = next(
+                (path for kws, path in FUZZY_NAV_RULES if any(kw in target for kw in kws)),
+                None,
             )
+            if fuzzy_hit:
+                confirm = params.get("mode") != "direct"
+                args = {"path": fuzzy_hit, "confirm": confirm}
+                tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
+                note = f"目标页: {target}（口语模糊归一）→ {fuzzy_hit}"
+            else:
+                note = (
+                    f"无法识别导航目标「{target}」：如实告知没有该页面，不调用任何工具，"
+                    f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/后台/物联网平台）给出建议（文本链接即可）"
+                )
     else:
         for tool_name, tmpl in skill.plan:
             args = {}
@@ -243,4 +270,8 @@ def build_planner_context() -> str:
         if s.complete_when:
             lines.append(f"  完成判定：{s.complete_when}")
     lines.append(f"\n导航映射表（navigate 的 target 参数从这里取值）：\n{_NAV_MAP_LINES}")
+    lines.append(
+        "口语变体（大小写 IOT/IoT/iot、'设备面板''管理设备'等同义说法）由系统自动归一，"
+        "PARAMS.target 直接填映射表中最接近的别名即可，无需自创目标名"
+    )
     return "\n".join(lines)
