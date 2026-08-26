@@ -166,6 +166,8 @@ def main():
             needs_summary=g.get("needs_summary", False),
             current_effects=ctx.get("current_effects", ""),
             current_darkmode=ctx.get("current_darkmode", ""),
+            history=ctx.get("history", []),
+            summary=ctx.get("summary", ""),
         )
         t0 = time.time()
         result = run_one(req)
