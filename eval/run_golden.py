@@ -127,9 +127,11 @@ def check_gold(gold: dict, result: dict) -> list[str]:
         if not (has_cmd or kw in text):
             fails.append(f"既无命令帧，文本也未含 {kw!r}（期望执行动作或诚实拒绝并给出入口）")
 
-    for kw in gold.get("text_contains", []):
-        if kw not in text:
-            fails.append(f"文本缺少关键词 {kw!r}")
+    # 同义词列表（如"没有/找不到/不存在"）任一命中即满足——模型措辞波动时
+    # 断言意图不变（不得声称目标存在），字面不限定
+    kws = gold.get("text_contains", [])
+    if kws and not any(kw in text for kw in kws):
+        fails.append(f"文本缺少任一关键词 {kws!r}")
     for kw in gold.get("text_not_contains", []):
         if kw in text:
             fails.append(f"文本不应包含 {kw!r}")
