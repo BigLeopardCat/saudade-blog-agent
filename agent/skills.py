@@ -76,8 +76,9 @@ SKILLS: list[Skill] = [
         plan=[("navigate_to", {"path": "$path", "confirm": "$confirm"})],
         complete_when="navigate_to 返回 NAVIGATE:/AUTO_NAVIGATE: 帧",
         reply_contract=(
-            "跳转由系统执行（navigate_to 工具返回的 NAVIGATE:/AUTO_NAVIGATE: 帧），"
-            "不得在正文输出任何命令前缀文本；跳转成功后简短确认即可——"
+            "跳转由系统执行（navigate_to 工具返回帧）：AUTO_NAVIGATE: 帧已发出 = 页面已跳转，"
+            "可以简短确认；NAVIGATE: 帧 = 已弹出跳转确认、等待访客确认——确认前不得声称"
+            "已到达/已跳转，只能请访客确认跳转；不得在正文输出任何命令前缀文本；"
             "正文是否再附 Markdown 链接属风格问题，不影响跳转，非必需"
         ),
     ),

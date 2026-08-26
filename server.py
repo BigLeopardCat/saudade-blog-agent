@@ -358,9 +358,12 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         #   round_buf —— 当前轮已累积的回复正文（REVISE 作废时清空）
         #   process_emitted —— 本次请求已发过过程步骤（决定收尾是否补"质检通过"）
         #   emitted —— 已发过程步骤的 key 集合（同一占位/完成帧同轮只发一次）
+        #   is_chat_skill —— SKILL=chat 快道：无执行可查（reflector 走非空快道），
+        #     收尾不发"✓ 质检通过"，避免对闲聊展示虚假的质检过程
         round_buf = ""
         process_emitted = False
         emitted: set = set()
+        is_chat_skill = False
 
         def emit_process(text: str, key: str = ""):
             nonlocal process_emitted
@@ -384,6 +387,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                 # 入队前过滤（同 _run_agent_sync）：只有 model 节点的回复文本帧、
                 # 以及工具结果帧进队列；planner/reflector 的内部输出不发给前端
                 if isinstance(chunk, AIMessageChunk):
+                    # 规划占位帧在 updates 分支发（planner 是 invoke 非流式，messages
+                    # 通道无其 chunk；若未来 planner 改流式，messages 分支不重复发——
+                    # emitted 的 key=planning 去重，updates 分支到时时自动跳过）
                     if meta.get("langgraph_node") == "model" and chunk.tool_calls:
                         # 工具执行占位帧：模型决定调工具时立即发（tool_calls 通常
                         # 首块即带）——工具执行期间（LLM 重入/工具 API 调用）有几秒
@@ -407,12 +413,18 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         # 让占位帧有闭环（数据本身已作为帧转发给前端展示）
                         emit_process("✅ 工具执行完成", key="tool_done_other")
             elif mode == "updates":
-                # 计划（仅非 chat 技能，chat 快道不发——避免每条闲聊都有过程行）
+                # 计划（planner 是 invoke 非流式——messages 通道不会有其 chunk，
+                # 规划占位帧在此发：所有技能都有"规划中"第一阶段反馈）
                 planner_upd = data.get("planner")
                 if planner_upd:
                     plan = str(planner_upd.get("plan", ""))
-                    if plan.startswith("SKILL=") and not plan.startswith("SKILL=chat"):
-                        emit_process("🧭 计划：" + plan.replace("\n", " ").strip()[:60])
+                    if plan.startswith("SKILL="):
+                        emit_process("🧭 规划中…", key="planning")
+                        if plan.startswith("SKILL=chat"):
+                            # chat 快道：只发占位帧，不发计划明细（避免每条闲聊都有过程行）
+                            is_chat_skill = True
+                        else:
+                            emit_process("🧭 计划：" + plan.replace("\n", " ").strip()[:60])
                 upd = data.get("reflector")
                 if not upd:
                     continue
@@ -428,9 +440,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     round_buf = ""
                     emitted.clear()
                 else:
-                    # 质检通过（done=True）
+                    # 质检通过（done=True）；chat 快道无执行可查，不发（见 is_chat_skill）
                     round_buf = ""
-                    if process_emitted:
+                    if process_emitted and not is_chat_skill:
                         emit_process("✓ 质检通过")
         asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
     except Exception as e:

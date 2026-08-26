@@ -182,6 +182,41 @@ def test_round_aware_checks():
           out["done"] is True and out["reflection"], str(out))
 
 
+def test_confirm_nav_claim_check():
+    """确认式导航声称检查（确定性，无 LLM）：NAVIGATE: 帧 + 完成式声称 → REVISE。
+
+    只测命中路径（确定性检查命中即 return，不花 LLM 钱）；放行路径（合法确认
+    口吻/AUTO_NAVIGATE 直跳声称）会走 LLM 质检，属 golden 场景，不在本文件。
+    """
+    print("[reflector] 确认式导航声称检查（无 LLM）")
+    plan = plan_encode(instantiate_plan("navigate", {"target": "留言板", "mode": "suggest"}))
+    assert '"confirm": true' in plan  # suggest 模式 → confirm=true（确认式，声称检查的前提）
+
+    def frame_state(reply: str, frame: str):
+        return {
+            "plan": plan, "reflection_count": 0, "done": False,
+            "messages": [HumanMessage(content="带我去留言板看看"),
+                         AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {"path": "/guestbook", "confirm": True}, "id": "t1"}]),
+                         ToolMessage(content=frame, tool_call_id="t1", name="navigate_to"),
+                         AIMessage(content=reply)],
+        }
+
+    # 只列确定性命中的主频模式（已经带/已经跳转/已经到）；"已经为您打开页面，
+    # 现在就在留言板啦"等夹字变体由 LLM 质检兜底（走 LLM，属 golden 端到端场景）
+    cases = [
+        # 用户实测案例：模型调用工具返回 NAVIGATE:（确认式），但回复"已经带您到"
+        ("已经带您到留言板页面了喵！", "NAVIGATE:https://saudade.site/guestbook"),
+        ("已跳转成功，请查看", "NAVIGATE:https://saudade.site/guestbook"),
+        ("好的，已经到留言板了", "NAVIGATE:https://saudade.site/guestbook"),
+    ]
+    for reply, frame in cases:
+        out = reflector_node(frame_state(reply, frame))
+        check(f"确认式声称 → REVISE：{reply[:14]}…",
+              out["done"] is False and any(
+                  isinstance(m, SystemMessage) and "确认式帧" in m.content for m in out["messages"]),
+              str(out.get("reflection", ""))[:60])
+
+
 def test_planner_output_re():
     print("[plan] planner 输出正则")
     for raw, want in [
@@ -197,7 +232,8 @@ def test_planner_output_re():
 
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
-               test_round_aware_checks, test_plan_roundtrip, test_parse_tolerance, test_planner_output_re):
+               test_round_aware_checks, test_confirm_nav_claim_check, test_plan_roundtrip, test_parse_tolerance,
+               test_planner_output_re):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")

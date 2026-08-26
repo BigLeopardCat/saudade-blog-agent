@@ -441,6 +441,32 @@ def reflector_node(state: AgentState) -> dict:
         return {"messages": [correction], "done": False,
                 "reflection": "navigate 计划要求工具但零工具调用", "reflection_count": count + 1}
 
+    # 确认式导航声称检查（确定性，LLM 质检前）：navigate 当前轮工具已调用，
+    # 但轨迹中只有 NAVIGATE:（待确认）帧、无 AUTO_NAVIGATE: 帧时，回复不得含
+    # 完成式声称词——NAVIGATE: 是"请求确认"，不是"已跳转"。曾见模型调用工具
+    # 返回 NAVIGATE: 后回复"已经带您到文章页"（前端确认框未确认、页面没动），
+    # 用户视角即幻觉。检查范围限定当前轮，仅文本比对不花 LLM 钱。
+    if plan["skill"] == "navigate" and plan["tools"]:
+        round_msgs = _current_round(state["messages"])
+        tool_text = "\n".join(
+            (getattr(m, "content", "") or "") for m in round_msgs if isinstance(m, ToolMessage)
+        )
+        if "NAVIGATE:" in tool_text and "AUTO_NAVIGATE:" not in tool_text:
+            last_ai = next(
+                (m for m in reversed(round_msgs) if isinstance(m, AIMessage)), None
+            )
+            reply = (getattr(last_ai, "content", "") or "") if last_ai else ""
+            if re.search(r"(已经?带|已经?到|已经?跳转|跳转成功|成功[^\n。，,]*?(跳|转)|过去了|已经?去)", reply):
+                correction = SystemMessage(content=(
+                    "[Reflection 检查未通过：navigate 工具返回的是 NAVIGATE: 确认式帧——"
+                    "页面正在等待访客确认，尚未跳转。] 修正要求：不得声称已到达/已跳转，"
+                    "改为如实说明'已为您打开跳转确认'并请访客确认；如需直接跳转，"
+                    "重新调用 navigate_to 且 confirm=false（返回 AUTO_NAVIGATE: 帧）后再确认到达。"
+                ))
+                logger.info("[reflector] 确认式导航声称：NAVIGATE 帧 + 完成式声称")
+                return {"messages": [correction], "done": False,
+                        "reflection": "确认式导航但声称已到达", "reflection_count": count + 1}
+
     # 反向结构性检查：计划 NOTE 行明示"不调用任何工具"（友链下线/页面不存在等，
     # 此时 TOOLS 为空），但模型仍越权调用了工具（如主动跳转留言板）→ 违反模板
     # 契约，REVISE。此检查只对带该标记的计划生效，不影响 content_query 等自由用
