@@ -96,6 +96,10 @@ _PLANNER_PROMPT = """\
 当前可调用的工具（技能执行步骤里的工具名必须与之一致）：
 {tools_desc}
 
+当前页面上下文（前端实时上报的事实，以此为准，不要凭对话历史推断访客位置——
+访客可能手动转跳页面，对话历史不会体现位置变化）：
+{page_ctx}
+
 规则：
 1. 只能从技能表中选择一个技能，不得自创步骤或自由编写执行计划。
 2. 闲聊、问候、纯文字问答 → chat 技能。
@@ -204,6 +208,24 @@ def parse_plan(raw: str) -> dict:
 # 3. Node：planner（课2）/ model（课3）/ tools（课3）/ reflector（课3）
 # ---------------------------------------------------------------------------
 
+def _page_ctx(messages: list) -> str:
+    """提取前端实时上报的页面上下文（page/title/特效/夜间），注入 planner/executor。
+
+    前端每轮请求都携带真实 current_url（window.location.href），_build_messages
+    写入首条 [System: ...] 消息。planner/executor 若只凭对话推断访客位置会脱节：
+    用户手动转跳后对话历史不体现页面变化（曾见用户说"已经离开物联网控制台了，
+    在首页"，模型仍延续上一轮的设备显示动作）。此处显式提取注入 prompt——
+    事实以系统上报为准，不依赖模型推断；零额外 LLM 调用（planner/executor
+    每轮本来就要调用）。
+    """
+    for m in messages:
+        content = getattr(m, "content", "") or ""
+        found = re.search(r"\[System:\s*(.*?)\]", content, re.DOTALL)
+        if found:
+            return found.group(1).strip()
+    return "（无）"
+
+
 def planner_node(state: AgentState) -> dict:
     """职责：技能选择器——从技能注册表选技能 + 填参数 → 实例化为计划 → 写入 state.plan。
 
@@ -222,7 +244,8 @@ def planner_node(state: AgentState) -> dict:
     # 快思考模块：低温度（分类不需要创造力）、小 max_tokens、短超时
     llm = get_llm(temperature=0.2, max_tokens=300, timeout=30)
     resp = llm.invoke(_PLANNER_PROMPT.format(
-        skills_context=build_planner_context(), tools_desc=_tools_desc(), user_msg=user_msg))
+        skills_context=build_planner_context(), tools_desc=_tools_desc(),
+        page_ctx=_page_ctx(state["messages"]), user_msg=user_msg))
     raw = getattr(resp, "content", str(resp))
     skill_name = re.search(r"SKILL\s*[:=]\s*(\w+)", raw, re.IGNORECASE)
     skill_name = skill_name.group(1) if skill_name else "chat"
@@ -236,6 +259,10 @@ def planner_node(state: AgentState) -> dict:
 
 _EXECUTOR_PROMPT = """\
 {persona}
+
+当前页面上下文（前端实时上报的事实，以此为准，不要凭对话历史推断访客位置；
+访客手动转跳后对话历史不会体现位置变化）：
+{page_ctx}
 
 [执行计划]
 {plan}
@@ -262,7 +289,8 @@ def model_node(state: AgentState) -> dict:
     """
     llm = get_llm()  # 主模型：对话生成用默认参数（温度 0.7、可流式）
     system = SystemMessage(content=_EXECUTOR_PROMPT.format(
-        persona=BLOG_ASSISTANT_PROMPT, plan=state["plan"]))
+        persona=BLOG_ASSISTANT_PROMPT, plan=state["plan"],
+        page_ctx=_page_ctx(state["messages"])))
     resp = llm.bind_tools(_TOOLS).invoke([system] + state["messages"])
     logger.info("[model] tool_calls=%s", [c["name"] for c in resp.tool_calls])
     return {"messages": [resp]}
