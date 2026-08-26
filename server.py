@@ -6,6 +6,8 @@ Run with:
 """
 
 import asyncio
+import contextvars
+import functools
 import json
 import logging
 import os
@@ -14,14 +16,15 @@ import uuid
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from langchain_core.messages import HumanMessage, AIMessageChunk, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 
 from agent import create_agent
 from agent.graph import graph_input
 from utils import setup_logging
+from utils.logging import set_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,18 @@ logger = logging.getLogger(__name__)
 # 8 → 16：LLM 挂起期间任务占用线程直至超时释放（120s），短时间多次对话会占满 8 线程
 # 导致后续对话排队卡死；扩容 16 显著降低并发窗口内的排队概率
 _executor = ThreadPoolExecutor(max_workers=16)
+
+
+def _submit_with_context(loop, func, *args):
+    """把阻塞调用提交到线程池，并显式传播调用方 context。
+
+    run_in_executor 不拷贝 contextvars（只有 asyncio.to_thread 自动做）——直接提交
+    的话，worker 线程里 _trace_id.get() 读回默认值 "-"，agent 图节点日志（planner/
+    model/tools/reflector）的 tid 全部丢失。提交前用 copy_context() 快照当前 context
+    （含 middleware 设置的 trace_id），线程内经 ctx.run 恢复后再执行目标函数。
+    """
+    ctx = contextvars.copy_context()
+    return loop.run_in_executor(_executor, ctx.run, functools.partial(func, *args))
 
 # 流式输出兜底超时（秒）：与前端 120s 空闲超时对齐。
 # LLM/线程池异常挂起时主动终止流，避免对话无限等待（见 event_stream 的 wait_for）
@@ -84,6 +99,25 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Saudade Blog Agent", version="1.0.0", lifespan=lifespan)
+
+
+# ── 链路追踪（可观测最小集）──
+# 全链路约定：X-Request-ID 由 Rust 透传（无则本中间件生成）；同一请求的所有日志
+# （含线程池内 agent 图节点日志，经 _submit_with_context 显式传播 context）带同一
+# tid。响应头回写 X-Request-ID，供调用方/Rust 把上下游日志关联起来。
+_TRACE_ID_HEADER = "X-Request-ID"
+
+
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    trace_id = request.headers.get(_TRACE_ID_HEADER) or uuid.uuid4().hex[:12]
+    set_trace_id(trace_id)
+    # 注意：不在 call_next 后 reset——流式响应（/chat/stream）的生成器在
+    # call_next 返回后才被消费，提前 reset 会让流式期间的日志 tid 变回 "-"。
+    # contextvar 按任务隔离，每请求必覆盖式 set，无跨请求泄漏。
+    response = await call_next(request)
+    response.headers[_TRACE_ID_HEADER] = trace_id
+    return response
 
 
 # ── 设备显示强制路由（防幻觉根治：显示动作由后端保障，不依赖模型自觉调工具）──
@@ -161,7 +195,10 @@ def _build_messages(req: ChatRequest, display_note: str = "") -> list:
         if h["role"] == "user":
             messages.append(HumanMessage(content=h["content"]))
         else:
-            messages.append(HumanMessage(content=f"[assistant]: {h['content']}"))
+            # 恢复 assistant 角色（曾全部包成 HumanMessage + [assistant]: 前缀——
+            # 模型会把历史当"用户说的"，多轮上下文质量打折；角色语义对齐后
+            # 模型对"谁说过什么"的区分不再依赖前缀文本）
+            messages.append(AIMessage(content=h["content"]))
 
     last_msg = req.message
     # IoT 设备显示请求的定向强化：对话历史中"文本声称已显示/已下发"的回合会形成
@@ -267,7 +304,7 @@ async def chat(req: ChatRequest):
     try:
         loop = asyncio.get_event_loop()
         # 强制显示路由（防幻觉）：有显示意图时后端直接执行，结果注入上下文。
-        display_note = await loop.run_in_executor(_executor, _force_display, req.message, req.user_id)
+        display_note = await _submit_with_context(loop, _force_display, req.message, req.user_id)
         if display_note:
             messages = _build_messages(req, display_note)
         # 摘要独立化（needs_summary 轮）：与 agent 图并行做后端总结——输入是原始
@@ -275,10 +312,10 @@ async def chat(req: ChatRequest):
         # 编造"助手调用工具"污染记忆）。生成失败返回空 → 不入库，旧摘要保留。
         summary_task = None
         if req.needs_summary:
-            summary_task = loop.run_in_executor(
-                _executor, _summarize_dialogue, req.message, req.history, req.summary
+            summary_task = _submit_with_context(
+                loop, _summarize_dialogue, req.message, req.history, req.summary
             )
-        reply, nav_line = await loop.run_in_executor(_executor, _run_agent_sync, messages, thread_id, req.user_id)
+        reply, nav_line = await _submit_with_context(loop, _run_agent_sync, messages, thread_id, req.user_id)
         new_summary = None
         if summary_task is not None:
             new_summary = (await summary_task).strip() or None
@@ -393,8 +430,8 @@ async def chat_stream(req: ChatRequest):
 
     # 强制显示路由（防幻觉）：命中显示意图时后端直接执行（阻塞调用放 executor），
     # 结果注记随上下文下发，模型据此如实回复。
-    display_note = await asyncio.get_event_loop().run_in_executor(
-        _executor, _force_display, req.message, req.user_id
+    display_note = await _submit_with_context(
+        asyncio.get_event_loop(), _force_display, req.message, req.user_id
     )
     if display_note:
         messages = _build_messages(req, display_note)
@@ -407,14 +444,14 @@ async def chat_stream(req: ChatRequest):
         # 不依赖模型回复），流结束时随 __SUMMARY__ 帧返回（Rust 解析入库）
         summary_task = None
         if req.needs_summary:
-            summary_task = loop.run_in_executor(
-                _executor, _summarize_dialogue, req.message, req.history, req.summary
+            summary_task = _submit_with_context(
+                loop, _summarize_dialogue, req.message, req.history, req.summary
             )
 
         # 并发启动生产者（不要 await 完成！否则所有 chunk 会在队列里攒到
         # 生成结束才一次性下发，等于没有流式）——边生成边推送
-        producer_task = loop.run_in_executor(
-            _executor, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id
+        producer_task = _submit_with_context(
+            loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id
         )
 
         nav_line = ""
