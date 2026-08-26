@@ -357,11 +357,17 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         # 轮次记账：
         #   round_buf —— 当前轮已累积的回复正文（REVISE 作废时清空）
         #   process_emitted —— 本次请求已发过过程步骤（决定收尾是否补"质检通过"）
+        #   emitted —— 已发过程步骤的 key 集合（同一占位/完成帧同轮只发一次）
         round_buf = ""
         process_emitted = False
+        emitted: set = set()
 
-        def emit_process(text: str):
+        def emit_process(text: str, key: str = ""):
             nonlocal process_emitted
+            if key:
+                if key in emitted:
+                    return
+                emitted.add(key)
             process_emitted = True
             asyncio.run_coroutine_threadsafe(queue.put(f"__PROCESS__:{text}"), loop).result()
 
@@ -378,6 +384,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                 # 入队前过滤（同 _run_agent_sync）：只有 model 节点的回复文本帧、
                 # 以及工具结果帧进队列；planner/reflector 的内部输出不发给前端
                 if isinstance(chunk, AIMessageChunk):
+                    if meta.get("langgraph_node") == "model" and chunk.tool_calls:
+                        # 工具执行占位帧：模型决定调工具时立即发（tool_calls 通常
+                        # 首块即带）——工具执行期间（LLM 重入/工具 API 调用）有几秒
+                        # 静默，没有此帧前端会像"卡死"（原有事后帧是返回后才发）
+                        emit_process("🛠 正在调用工具…", key="tool_running")
                     if chunk.content and meta.get("langgraph_node") == "model":
                         round_buf += str(chunk.content)
                         asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
@@ -386,11 +397,15 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     # 过程展示：命令类工具真实执行了 → 步骤行（前端"调用工具"轨迹）
                     t = str(chunk.content)
                     if t.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")):
-                        emit_process("🛠 调用工具：页面跳转 navigate_to")
+                        emit_process("🛠 调用工具：页面跳转 navigate_to", key="tool_done_nav")
                     elif t.startswith("EFFECT:"):
-                        emit_process("🛠 调用工具：页面特效 toggle_effect")
+                        emit_process("🛠 调用工具：页面特效 toggle_effect", key="tool_done_effect")
                     elif t.startswith("DARKMODE:"):
-                        emit_process("🛠 调用工具：夜间模式 toggle_dark_mode")
+                        emit_process("🛠 调用工具：夜间模式 toggle_dark_mode", key="tool_done_dark")
+                    else:
+                        # 非命令类工具（设备查询/内容检索）：补收尾帧，
+                        # 让占位帧有闭环（数据本身已作为帧转发给前端展示）
+                        emit_process("✅ 工具执行完成", key="tool_done_other")
             elif mode == "updates":
                 # 计划（仅非 chat 技能，chat 快道不发——避免每条闲聊都有过程行）
                 planner_upd = data.get("planner")
@@ -404,11 +419,14 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                 if upd.get("done") is False and any(
                     isinstance(m, SystemMessage) for m in upd.get("messages", [])
                 ):
-                    # REVISE：当前轮作废，清空已累积正文（前端 RESET 重绘）
+                    # REVISE：当前轮作废，清空已累积正文（前端 RESET 重绘）；
+                    # 同时清空已发过程帧去重表——重试轮重新发完整的
+                    # 占位/完成帧，避免新一轮工具执行期间静默
                     reason = str(upd.get("reflection") or "质检未通过")[:60]
                     emit_process("✗ 质检打回：" + reason)
                     emit_reset(reason)
                     round_buf = ""
+                    emitted.clear()
                 else:
                     # 质检通过（done=True）
                     round_buf = ""
