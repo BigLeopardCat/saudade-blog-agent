@@ -2,7 +2,8 @@
 
 > 升级路线（手写图 → eval → 记忆 → 可观测 → 多 agent）的**验证地基**：先立"怎么验证"，再动工升级。
 > 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、CLAUDE.md（运维）。
-> 最后更新：2026-08-25
+> 最后更新：2026-08-26（阶段 1 图重写与阶段 3 记忆已落地：技能注册表 2026-08-25、摘要独立化 2026-08-26；
+> L0 载体从 Rust 摘要单测迁移为 test_skills.py）
 
 ---
 
@@ -38,9 +39,9 @@ flowchart TB
 
 | 层 | 评测对象 | 手段 | 指标 | 对应升级组件 |
 |---|---|---|---|---|
-| **L0 单元级** | 图节点、工具、schema | 单测（现有 chat.rs 8 个摘要单测扩展） | 通过率 | 图重写、记忆剥离 |
+| **L0 单元级** | 图节点、工具、schema | 单测（`test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率 | 图重写、记忆剥离 |
 | **L1 基准级** | 检索器、生成层、端到端 RAG | BEIR / RGB / CRAG（§3） | nDCG@10、Recall@5、MRR；噪声准确率 / 拒答率 / 错误检测率；Truthfulness（幻觉=-1） | RAG、防幻觉 |
-| **L2 任务级** | 整个 agent 行为 | 自建 golden set + LLM-as-judge（§4） | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本 | 图重写、多 agent、防幻觉 |
+| **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 13 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本 | 图重写、多 agent、防幻觉 |
 | **L3 回放级** | 线上行为漂移 | 生产对话脱敏采样 → 离线重放 → 与 golden 指标对齐 | 漂移方向/幅度 | 全部（每次升级后跑） |
 
 **CI 门槛**：push 跑 L0 + L2（分钟级，硬门禁，回归即红）；nightly 跑 L1 全量 + L3 回放（小时级，出基准报告）。
@@ -63,7 +64,7 @@ flowchart TB
 
 ## 4. L2 任务级：golden set 设计（核心资产）
 
-**规模 30-50 条，按意图分层**：
+**规模 30-50 条，按意图分层（当前已落地 13 条：9 意图/防幻觉/摘要 + 2 注入攻击 + 2 闲聊）**：
 
 | 分层 | 条数 | 覆盖 | 断言方式 |
 |---|---|---|---|
@@ -143,10 +144,10 @@ Python 端每轮对话落一条结构化记录（`chat_trace` 表或 JSON 日志
 
 | 阶段 | 并行建设的评测/可观测 |
 |---|---|
-| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（13 条意图+防幻觉分层）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本，附 gate 触发率统计）。LLM-as-judge 与 trace_id 透传未做 |
-| 1 图重写 | golden set 补防幻觉/多轮分层（图重写完成后立刻有回归集） |
-| 2 Eval | L1 三基准接入（BEIR/RGB/CRAG）+ CI 流水线 + 硬门禁 |
-| 3 记忆 | 记忆专项评测（召回相关性、摘要合并质量、污染检测）+ 记忆写入 trace |
+| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（13 条意图+防幻觉+摘要分层）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本，附 gate 触发率统计）+ `test_skills.py`（L0 秒级）。LLM-as-judge 与 trace_id 透传未做 |
+| 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:） |
+| 2 Eval | L1 三基准接入（BEIR/RGB/CRAG）+ CI 流水线 + 硬门禁（当前只有 nightly crontab，无 push CI） |
+| 3 记忆 | 🟡 部分完成：摘要独立化（2026-08-26）结构性关闭污染面；**未做**：记忆专项评测（召回相关性、摘要合并质量、污染检测）+ 记忆写入 trace |
 | 4 可观测 | trace/metrics 落库 + 看板 + L3 回放 |
 | 5 多 agent | 路由正确性评测 + 子 agent 指标分解 |
 
@@ -155,7 +156,7 @@ Python 端每轮对话落一条结构化记录（`chat_trace` 表或 JSON 日志
 | 升级组件 | 评测手段 | 可观测指标 |
 |---|---|---|
 | Agent 核心重写（手写图） | L0 节点单测 + L2 golden（意图/防幻觉） | 图路径、递归深度、planner/reflector 计数 |
-| 记忆体系升级 | L0 剥离单测（已有 8 个）+ 记忆专项评测 | 摘要触发率、召回命中率、污染事件 |
+| 记忆体系升级 | L0（摘要协议已移除，test_skills.py 断言不再 REVISE）+ golden summary_round（不得输出 SUMMARY:）+ 记忆专项评测（未做） | 摘要触发率、召回命中率、污染事件 |
 | 多 agent | L2 路由正确性 + 子任务成功率 | 路由分布、子 agent 延迟/成本分解 |
 | 防幻觉 | L1 RGB 四 testbed + L2 攻击样本 | 空回复率、恢复语触发率、`__ERROR__` 率 |
 | RAG | L1 BEIR（检索）+ CRAG（Truthfulness）+ L2 RAG 问答 | 检索耗时、top-k 来源分布、拒绝回答率 |
