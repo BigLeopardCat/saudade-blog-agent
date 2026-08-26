@@ -2,7 +2,8 @@
 
 > 面向维护者的全链路技术文档。覆盖看板娘对话系统的每一个环节：组件拓扑、一次对话的完整时序、
 > 记忆机制（记录 / 压缩 / 存储 / 读取 / 回滚）、工具系统、防幻觉与可靠性加固、超时体系、配置与部署。
-> 最后更新：2026-08-25（文档迁入 agent 仓库，§2 目录树改为仓库视角 + 宿主仓库标注；对应 agent 代码现状与 BUG 修复历史）。
+> 最后更新：2026-08-26（摘要独立化改造同步：§3.1/§3.2/§4 记忆机制重写——对话内 SUMMARY 协议移除，
+> 摘要改由后端独立任务调用生成；§1 权衡表与 §10 维护注意事项同步更新）。
 
 ---
 
@@ -31,7 +32,7 @@ flowchart TB
         DEV[device-service :3100<br/>ESP32 OLED 指令下发]
     end
 
-    LLM[LLM API<br/>qwen3.6-flash<br/>enable_thinking=false]
+    LLM[LLM API<br/>qwen3.6-flash<br/>thinking 默认开<br/>低 token 调用强制关]
 
     UI -->|POST /api/chat/stream| NGX
     NGX --> RUST
@@ -57,7 +58,7 @@ flowchart TB
 |---|---|---|
 | 记忆权威在 DB，agent 无状态 | 每请求独立 thread_id + 请求体注入 20 条历史 + 滚动摘要 | MemorySaver 线程累积 → 上下文/worker 内存无限膨胀（§4.6） |
 | SSE 帧 JSON 编码 + `\n\n` 分隔 | 文本内换行不破坏帧边界；帧协议三端同步 | 曾按行分隔被文本换行破坏（§3.2⑤） |
-| 摘要剥离 Python/Rust 双端同构 | 两端各一份逐字符同构的特征代码，改一端必须改另一端 | 模型格式漂移（无前缀裸摘要）→ 摘要泄露给访客（§4.3） |
+| 摘要独立任务调用（模型对记忆无写权限） | 摘要由后端独立调用生成（与回复解耦），模型永不输出 SUMMARY 行 | 曾把摘要生成指令注入对话消息流 → 模型在回复里编造"成功调用工具"污染记忆（§4.3） |
 | 强制路由 vs 模型自主调用 | "显示"类后端强制执行（保真）；"导航"类恢复模型自主（保体验），仅前端白名单兜底 | 导航强制路由曾上线后因牺牲自主性被撤销；显示类强制保留（§6.3） |
 | 命令走"工具返回 → 独立帧 → 前端执行" | 模型只负责调工具，命令由前端按显式意图执行 | 模型"表演调用"把命令写进正文（§6.2） |
 | 分层超时体系 | LLM 120s + 空闲 120s + 总时长 300s + recursion_limit 30 + 16 线程 | LLM 挂起占满线程池 → 全体对话排队卡死（§6.4） |
@@ -73,12 +74,13 @@ flowchart TB
 ```
 本仓库（saudade-blog-agent）    # ★ Python Agent（独立 git 仓库，线上改动需本地重启 :8010 生效）
 ├── server.py                  # FastAPI 入口：/chat、/chat/stream、/health；强制显示路由；流式编排
-├── main.py                    # CLI 调试入口（交互式 / --ask 单问，同 create_agent 图）
+├── main.py                    # CLI 调试入口（交互式 / --ask 单问，同 create_agent 手写图）
 ├── agent/
-│   ├── graph.py               # ★ 手写 LangGraph 图：planner → model → tools → reflector（六道程序化防幻觉闸门）
-│   ├── agent.py               # create_agent：LLM + 工具 + checkpointer + 系统提示词组装 LangGraph 图
-│   ├── memory.py              # get_checkpointer：MemorySaver（进程内，实际不承担记忆，见 §4.6）
-│   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 工具约束 + SUMMARY 约定
+│   ├── graph.py               # ★ 手写 LangGraph 图：planner(选技能) → model(模板执行) → tools → reflector(模板质检)
+│   ├── agent.py               # create_agent：手写图入口（build_graph，planner → model ⇄ tools → reflector）
+│   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
+│   ├── skills.py              # ★ 技能注册表：7 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
+│   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 工具约束（无对话内 SUMMARY 协议）
 │   └── __init__.py
 ├── chains/                    # LCEL chain 组合预留（当前仅占位）
 ├── tools/
@@ -138,17 +140,17 @@ sequenceDiagram
     R->>DB: SELECT chat_summary（每用户一条）
     R->>DB: COUNT 总消息数 → 是否触发摘要
     R->>A: POST /chat/stream<br/>{message, history[20], summary, needs_summary,<br/>user_id, current_effects, current_darkmode}
-    Note over A: _build_messages 组装<br/>System 上下文 + 历史 + 指令注入
+    Note over A: _build_messages 组装<br/>System 上下文 + 历史 + 显示强化指令
     A->>A: 强制显示路由检查（可选，后端先执行设备显示）
+    Note over A: needs_summary 轮并行独立摘要调用<br/>（输入=原始历史，与回复解耦）
     A->>L: LangGraph 流式生成（工具循环）
     L-->>A: token 流 / 工具调用
-    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / 终结标记）
+    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / __SUMMARY__ / 终结标记）
     R-->>B: 逐帧转发（X-Accel-Buffering: no）
     B->>B: 文本帧上屏 + 口型驱动；命令帧进 cmdText
     Note over R: 流结束后
-    R->>R: 剥离 SUMMARY（双端同套特征兜底）
     R->>DB: INSERT chat_history(assistant 回复)
-    R->>DB: upsert chat_summary（摘要轮）
+    R->>DB: upsert chat_summary（__SUMMARY__ 帧，无则保留旧摘要）
     R-->>B: __NAV_END__ / __END__ 终结
     B->>B: 结束解析：导航/特效/夜间模式执行
     B->>B: localStorage 追加本轮完整文本（≤50 条）
@@ -176,9 +178,10 @@ JWT 走 **Authorization: Bearer** 头（`localStorage.tokenKey`），不在 body
 
 **非流式路径（/chat，内部与兼容用，看板娘走流式）**：Rust 调 agent `/chat`，传输层错误自动重试最多 3 次
 （间隔 800ms），**超时不重试**——超时说明生成确实很慢（长回答单次可达 180s，reqwest 超时即 180s），
-重试只会从头再生成一遍 [chat.rs:290-310](Saudade-Blog/src/routes/chat.rs#L290-L310)。agent 端返回后先剥离摘要，
-**再拼接命令行**：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 前置到回复开头
-（在摘要剥离之后拼，避免 SUMMARY 截断把命令一起吞掉 [server.py:292-298](../server.py#L292-L298)）。
+重试只会从头再生成一遍 [chat.rs:290-310](Saudade-Blog/src/routes/chat.rs#L290-L310)。agent 端在 needs_summary
+轮并行独立生成摘要，经 `ChatResponse.new_summary` 字段返回（与回复内容解耦，回复本身**不含** SUMMARY 行）；
+Rust 再拼接命令行：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 前置到回复开头 [server.py:292-298](../server.py#L292-L298)，
+命令拼接不受摘要影响。
 
 **③ Python _build_messages（server.py:143）——上下文组装**
 
@@ -187,12 +190,13 @@ JWT 走 **Authorization: Bearer** 头（`localStorage.tokenKey`），不在 body
    放在**第一条**，是纯状态注记，模型禁止复述。
 2. **历史**：`req.history[-12:]`（**只取最近 12 条**，与 Rust 取的 20 条之间留余量）逐条注入，
    assistant 消息加 `[assistant]: ` 前缀以便模型区分说话人。
-3. **当前用户消息**，末尾按需追加指令（摘要指令 / 设备显示强化指令 / 强制显示结果注记，见 §6.3）。
+3. **当前用户消息**，末尾按需追加指令（设备显示强化指令 / 强制显示结果注记，见 §6.3；对话内摘要指令已移除
+   ——摘要由后端独立任务调用生成，见 §4.3）。
 
 **④ LangGraph 执行（agent.py + server.py）**
 
-`create_langchain_agent`（langchain 1.3+）构建图：`system_prompt`（BLOG_ASSISTANT_PROMPT）+ 21 个工具 +
-MemorySaver checkpointer。执行用 `stream(stream_mode="messages")`：
+手写图（agent/graph.py `build_graph`，planner → model ⇄ tools → reflector 四节点，见 §6.5），
+无 checkpointer（线程 id 每请求 uuid，无状态累积）。执行用 `stream(stream_mode="messages")`：
 - `AIMessageChunk` → 文本 token，逐块推入 asyncio.Queue（生产者线程）。
 - `ToolMessage` → **命令帧**：`NAVIGATE:`/`AUTO_NAVIGATE:`（导航）、`EFFECT:`（特效）、`DARKMODE:`（夜间）——**这是工具结果**，由前端执行。
 - 工具循环：模型 → 调工具 → 工具结果 → 模型，受 `recursion_limit=30` 约束（§6.4）。
@@ -236,7 +240,7 @@ flowchart LR
 
 - 文本帧：`textContent` 直写（流式阶段 pre-line 换行）→ 300ms 口型翻转（`__mouthOverride`）。
 - 命令帧：按 `COMMAND_LINE_RE` 匹配进 `cmdText`（**不显示**），流结束统一解析执行（§6.2）。
-- 终结：完整文本（cmdText + 文本）→ `cleanAgentText` 剔除命令行与裸摘要 → markdown 渲染
+- 终结：完整文本（cmdText + 文本）→ `cleanAgentText` 剔除命令行与 SUMMARY 残留（防御性——正常已不会出现，防注入诱导）→ markdown 渲染
   （复用博客 `__chatRenderMarkdown`）→ localStorage 追加（≤50 条）。
 - 双计时器（120s 空闲 / 300s 总时长）与后端对齐，abort 时 UI 3s 内强制恢复。
 
@@ -259,13 +263,13 @@ flowchart TB
     subgraph Write[记忆如何记录]
         W1[用户消息] -->|prepare_chat 立即落库| T1[(chat_history role=user)]
         W2[assistant 回复] -->|流结束 save_assistant_reply| T1
-        W3[SUMMARY 摘要] -->|摘要轮剥离后| T2[(chat_summary<br/>每用户一条)]
+        W3[独立摘要调用] -->|__SUMMARY__ 帧 / new_summary| T2[(chat_summary<br/>每用户一条)]
     end
     subgraph Compress[记忆如何压缩]
-        C1[needs_summary 触发<br/>count>20 且 %10==0/1] --> C2[SUMMARY 指令注入消息末尾]
-        C2 --> C3[LLM 生成 SUMMARY: 行<br/>要求与旧摘要合并]
-        C3 --> C4[双端剥离：SUMMARY: 前缀<br/>+ 无前缀裸摘要特征兜底]
-        C4 --> T2
+        C1[needs_summary 触发<br/>count>20 且 %10==0/1] --> C2[_summarize_dialogue 独立任务调用<br/>输入=原始历史+旧摘要]
+        C2 --> C3[并行于 agent 图（run_in_executor）<br/>prompt 禁止推断动作归属]
+        C3 --> C4[失败返回空 → 保留旧摘要]
+        C4 --> W3
     end
     subgraph Read[记忆如何读取]
         R1[prepare_chat 取最近 20 条] --> R2["翻转正序 → history[]"]
@@ -282,32 +286,45 @@ flowchart TB
 
 - **用户消息**：Rust `prepare_chat` 在**转发 agent 之前**就落库（[chat.rs:77](Saudade-Blog/src/routes/chat.rs#L77)）——即使 agent 失败，用户消息也保留。
 - **assistant 回复**：流结束（收到终止标记或上游中断）后 `save_assistant_reply`（[chat.rs:235](Saudade-Blog/src/routes/chat.rs#L235)）：
-  - 先 `strip_summary_from_reply` 剥离摘要（见 4.3），**摘要指令行绝不入库**；
-  - 存 `(role="assistant", content=剥离后的回复)`；
+  - 流式路径从 `__SUMMARY__` 帧取独立摘要（见 4.3），**回复本身不含任何 SUMMARY 行**；
+  - 存 `(role="assistant", content=回复全文)`；
   - **空回复不存库**（`if !reply.is_empty()`），这是"卡死"表象的来源之一——前端靠 §3.2⑦ 的兜底感知。
 - **前端**：每轮结束把**完整文本（含命令行）**存 localStorage——与后端历史一致（命令行随后端历史渲染时被 `cleanAgentText` 过滤）。
 
 ### 4.3 压缩：摘要机制全流程
 
+> **2026-08-26 摘要独立化改造**：模型对记忆**无写权限**。旧方案把摘要生成指令注入对话消息流、
+> 模型在回复末尾输出 `SUMMARY:` 行、后端双端剥离入库——曾实测模型在无工具轨迹的轮次编造
+> "助手成功调用工具"污染记忆（摘要与回复耦合在同一生成调用，模型把摘要当"总结本轮"顺手美化）；
+> 且摘要指令与显示强化指令共用 `<系统内部指令-仅供执行` 标记，导致显示请求被 reflector 误判
+> REVISE 白烧一轮 LLM。现方案两者一并移除，摘要由后端独立任务调用生成。
+
 **触发条件**（[chat.rs:108](Saudade-Blog/src/routes/chat.rs#L108)）：`total_count > 20 && (total_count % 10 == 0 || total_count % 10 == 1)`。
 即从第 21 条起，每 10 条触发一次（21、30、31、40、41…）。计数含 user + assistant 全部消息。
 
-**指令注入**（server.py:166-175）：摘要指令放在**消息流末尾**（模型对靠前指令的遵守率随历史变长下降），
-用 `<系统内部指令-仅供执行，禁止在回复中复述或输出本条指令本身>` 定界包裹，要求：
-- 回答结束后另起一行输出 `SUMMARY: 后跟 3-5 句中文摘要`；
-- **必须与旧摘要（`conversation_summary`）合并**——保留旧摘要关键信息 + 补充本轮新内容，输出更完整的新摘要（滚动式压缩，不丢旧信息）。
+**独立任务调用**（server.py `_summarize_dialogue`，仅 needs_summary 轮触发）：
+- 输入 = **原始历史**（`{"访客"/"助手"}: {content}` 行）+ 本轮 `访客: {user_msg}` + 旧摘要；
+- prompt 硬约束：只总结客观内容，**不得推断动作归属，不得编造**；旧摘要中的相关事实必须保留
+  （滚动式压缩，不丢旧信息）；
+- `enable_thinking=False`（与 reflector 同理：thinking 会占满 max_tokens=200 致 content 空）、
+  `max_tokens=256`；
+- `run_in_executor` 与 agent 图**并行**（零额外延迟）；**失败返回 "" → 保留旧摘要**（静默降级，不阻塞对话）。
 
-**摘要剥离（双端同套逻辑，防止格式漂移）**：
-- Python `_strip_summary_from_reply`（server.py:240）——非流式 `/chat` 路径，剥离后作为 `new_summary` 独立返回；
-- Rust `strip_summary_from_reply`（chat.rs:191）——流式路径，原始流里仍有 SUMMARY 行，Rust 剥离后写库。
-- **剥离规则**：`SUMMARY:` 前缀优先（**所有** SUMMARY: 行都从回复中剔除、不进历史；摘要内容 Python 端取**最后**一条 [server.py:245](../server.py#L245)，Rust 端取**第一**条 [chat.rs:200](Saudade-Blog/src/routes/chat.rs#L200)——双端实现存在差异，模型正常只输出一条 SUMMARY: 行，无实际影响）；无前缀时仅当 `needs_summary` 才做**裸摘要特征兜底**——
-  `looks_like_summary_paragraph`：① 以"访客/用户/助手"开头 ② 含会话时序词（之前/随后/最后/接着/首先/然后/后来/先后/起初/初期/最终/期间）③ 剔除引号内内容后无互动语气词（呜~～!！?？🐱😿🐾😂😭）④ 长度 40-300 字符。
-  这条规则是双端（Python `_looks_like_summary_paragraph` + Rust `looks_like_summary_paragraph`）**逐字符同构**实现的——改一端必须改另一端。
+**结果传输（双路径，Rust 入库）**：
+- 非流式 `/chat`：`ChatResponse.new_summary` 字段随响应返回；
+- 流式 `/chat/stream`：agent 在 `__END__` 帧**之前**发 `data: __SUMMARY__:{"json字符串"}\n\n`
+  ——不终止流、不进回复；Rust 循环里解析该帧存入 `summary_override`，流收尾时传给
+  `save_assistant_reply`（[chat.rs](Saudade-Blog/src/routes/chat.rs)）。
+- **约定**：`__SUMMARY__` 帧必须出现在终结帧之前，否则视为无摘要。
 
 **存储**：`chat_summary` 每用户一条，`upsert`（存在则 update，否则 insert），`message_count` 记录触发时点，
-供诊断摘要新鲜度。
+供诊断摘要新鲜度。无 `__SUMMARY__` 帧/空摘要时**不覆盖**旧摘要。
 
 **读取**：prepare_chat 每次请求读摘要 → 注入请求体 → `_build_messages` 放进 System 上下文首条。
+
+**双端剥离代码已整体删除**（server.py `_strip_summary_from_reply` / `_looks_like_summary_paragraph`、
+chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_tests`）——不再需要
+任何"从回复里找摘要"的特征代码，结构上杜绝摘要泄露给访客。
 
 ### 4.4 回滚机制：有没有？
 
@@ -333,9 +350,10 @@ flowchart TB
 ### 4.6 MemorySaver 为什么不承担记忆
 
 `agent/memory.py` 返回 `MemorySaver`（进程内），但 **server.py 每请求生成全新 thread_id**
-（`user_{id}_{uuid4().hex[:8]}`）——跨请求永不命中同一线程，MemorySaver 实际上**从未积累过任何状态**。
+（`user_{id}_{uuid4().hex[:8]}`）——跨请求永不命中同一线程，MemorySaver 实际上**从未积累过任何状态**；
+手写图（graph.py）已完全不挂 checkpointer，memory.py 是无人引用的兼容死代码（保留以防旧代码误用）。
 历史教训：曾经复用线程累积，长对话（教程连载）导致输入上下文与 worker 内存无限膨胀直至截断/被杀，
-于是改为"每请求独立线程 + DB 注入"。现在 MemorySaver 保留只为满足 langchain 图结构的 checkpointer 形参。
+于是改为"每请求独立线程 + DB 注入"。**线程复用是禁区，恢复即重蹈覆辙。**
 
 ---
 
@@ -416,9 +434,9 @@ flowchart TB
 
 ### 6.4 生成有界性
 
-- `RECURSION_LIMIT=30`（env `AGENT_RECURSION_LIMIT` 可覆盖）：langchain 1.3 `create_agent` 默认硬编码 9999，
-  幻觉重试循环会烧满流式总时长 300s（前端表现 5 分钟卡死）。压到 30（正常流程 ≤5 次模型-工具往返），
-  超限走既有 `__ERROR__` 异常路径，卡死窗口缩到 60-90s。
+- `RECURSION_LIMIT=30`（env `AGENT_RECURSION_LIMIT` 可覆盖）：手写图显式设置；langchain 1.3 `create_agent`
+  时代默认硬编码 9999，幻觉重试循环会烧满流式总时长 300s（前端表现 5 分钟卡死）。压到 30（正常流程
+  ≤5 次模型-工具往返），超限走既有 `__ERROR__` 异常路径，卡死窗口缩到 60-90s。
 - **超时体系一览**：
 
 | 层 | 超时 | 说明 |
@@ -432,6 +450,38 @@ flowchart TB
 - **空回复兜底**：流正常收尾但零输出 → 补发 `_RECOVERY_SENTENCE`（"喵呜……主人抱歉，泠月喵刚才脑袋卡壳了…"）；
   非流式同样处理。Rust 空回复不存库。
 
+### 6.5 技能注册表 + 受限规划（2026-08-25 重构，planner 修复的根）
+
+固定流程任务（导航/特效/暗色/设备显示/设备查询）落地为**技能注册表**（agent/skills.py，业务唯一数据源）：
+每个技能是静态定义——触发条件、参数 schema、固定工具序列模板、完成判定、回复契约。planner 只从注册表
+**选技能 + 填参数**（结构化输出 `SKILL: <名>` + `PARAMS: <JSON>`），不再自由写执行步骤；`instantiate_plan`
+把参数实例化为计划文本（`SKILL=/PARAMS=/TOOLS: /NOTE: /REPLY:` 五行契约）写入 `state.plan`。
+
+- **导航映射表**（`NAV_MAP`）：页面别名 → 真实路径，"物联网平台→/device-console/"是系统数据而非模型猜测
+  （旧版 planner 跑题的根因：看不到工具语义/页面映射）；映射为 None = 页面已下线（友链 → 如实告知、不导航）；
+  未识别别名 → 如实说没有。改页面入口只改这一处。
+- **planner = 技能选择器**（graph.py `planner_node`）：注入完整技能表 + 工具完整描述（不再 80 字符截断）
+  + 低温度快思考（0.2 / 300 tokens / 30s）；输出解析容错（`_loads_tolerant`：单引号/尾逗号/注释/markdown
+  围栏逐项修正），解析失败按 chat 技能兜底。
+- **executor = 模板执行**（`model_node`）：system prompt = 人设 + 计划文本；TOOLS 行是固定工具序列
+  （"（无）"时不调工具直接答）、NOTE 行说明"不调用任何工具"时如实告知、REPLY 行是回复契约。
+- **reflector = 模板质检**（`reflector_node`）：LLM 对照技能模板 + 轨迹出 VERDICT（PASS/REVISE）；
+  chat 技能走**非空快道**（不花 LLM 钱）；REVISE 预算 `MAX_REFLECTIONS=2`，预算耗尽即接受当前结果收尾。
+  检查点 1"TOOLS 行要求的工具是否完成调用"天然覆盖旧版六道程序化闸门的"假装执行"场景（正文伪造命令/
+  纯声称到达/空头承诺——TOOLS 要求调用的工具在轨迹中缺失即 REVISE，文本表演过不了模板比对）。
+  **确定性检查与 LLM 轨迹均按轮次裁剪**（`_current_round`：最近一次修正注记之后的轨迹）：被 REVISE 的历史轮
+  既不能豁免当前轮的缺失，也不参与当前轮判罚。**风格不判 REVISE**：工具已成功调用（帧已产出）后，
+  正文链接有无/格式属风格问题。
+- **`__RESET__` 协议与历史洁净**：reflector REVISE → server 发 `__RESET__:<原因>` 帧（旧裸 `__RESET__`
+  兼容）→ 前端清空 cmdText/displayText 只显示最终轮；**Rust 收到 `__RESET__` 帧会清空已累积 reply**，
+  被否定轮次连同重置标记不入 chat_history（否则污染历史注入形成坏 few-shot）。
+- **执行过程行**（前端灰色可折叠轨迹）：server 发 `__PROCESS__:<步骤>` 帧（🧭 计划 / 🛠 调用工具 /
+  ✗ 质检打回 / ✓ 质检通过）→ 前端气泡内 `<details class="agent-process">` 灰色折叠区；质检打回时被打回
+  轮次的完整文本归档为可展开子项（`archiveRejected`）。**Rust 对 `__PROCESS__` 帧只转发、不累积进 reply**
+  （过程行不属于最终回复，否则污染 chat_history）。
+- **测试**：`test_skills.py`（映射表完整性、instantiate_plan 参数实例化含已下线/未识别区分、plan 编码/解析
+  往返与容错）+ golden set 端到端。改技能注册表/plan 契约后必须跑。
+
 ---
 
 ## 7. LLM 与配置
@@ -440,9 +490,11 @@ flowchart TB
   当前生产 `qwen` → `qwen3.6-flash`（阿里云 MaaS compatible-mode）。
 - **关键参数**：`temperature=0.7`、`max_tokens=8192`、`timeout=120s`。
 - ⚠️ `agent_max_iterations=10` / `agent_early_stopping_method` 在 settings.py 有定义但**从未被代码读取**
-  （create_agent 只接 model/tools/system_prompt/checkpointer）——死配置，实际生成有界性靠 `recursion_limit=30`（§6.4）。
-- **enable_thinking=False**（llm.py:41，走 `extra_body`）：Qwen3 默认思考模式在工具调用轮次会间歇性
-  把思维链混入正文（回复开头英文规划文本），对话场景直接关闭，从根源消除泄露。
+  （create_agent 时代遗留的 LangChain 参数，手写图不消费）——死配置，实际生成有界性靠 `recursion_limit=30`（§6.4）。
+- **enable_thinking 开关化**（settings `llm_enable_thinking=True` 默认开）：Qwen 思维链走独立
+  `reasoning_content` 字段返回，不进回复正文；planner（快思考 0.2/300t）与主 model 节点走思考（默认），
+  **三个低 token 调用强制关闭**（llm.py per-call 覆写，走 `extra_body`）：reflector 质检（max_tokens=200，
+  thinking 占满致 content 截断成空）、`_extract_display_intent`（128t）、`_summarize_dialogue`（256t）。
 - **TTS 关闭**（`tts_enabled=false`）：预留字段，未启用。
 
 ---
@@ -488,8 +540,10 @@ flowchart TB
    ——前端格式容忍解析 + cleanAgentText 双保险，非 100%。
 2. **导航幻觉回归风险**：强制路由撤销后，模型"去X板块"不调工具只写文本的幻觉回归——前端正文兜底解析
    （markdown 链接/裸 URL 确认式）+ 白名单 + 同源校验救一部分，**不保证全救**。
-3. **SUMMARY 剥离是双端同构代码**（Python + Rust 各一份），改特征判定必须同步改两边，否则摘要泄露给访客
-   或无法入库。
+3. **摘要独立化后的维护要点**（2026-08-26 起，双端剥离代码已删）：改摘要逻辑只看两处——server.py
+   `_summarize_dialogue`（独立任务调用，`enable_thinking=False` 是硬性要求）与 Rust `__SUMMARY__` 帧
+   解析（帧必须在 `__END__` 之前）；golden `summary_round` 断言"回复不得包含 SUMMARY:"，回归时必跑。
+   前端 `cleanAgentText` 的 SUMMARY 过滤是防御性残留（防注入诱导输出），勿删。
 4. **线程池挂起**：LLM API 无响应时任务占用线程 120s，16 线程下短时间 16 次对话即占满——超时参数是生命线。
 5. **MemorySaver 陷阱**：别恢复"线程复用"——DB 注入已承担全部连续性。
 6. **`enable_thinking` 只能走 extra_body**（Qwen 自有参数，model_kwargs 不收）。
