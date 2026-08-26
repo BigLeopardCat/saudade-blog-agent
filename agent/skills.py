@@ -42,6 +42,15 @@ NAV_MAP: dict[str, str | None] = {
     "物联网平台": "/device-console/",
     "物联网控制台": "/device-console/",
     "设备控制台": "/device-console/",
+    # IOT/IoT 大小写变体（用户口语常见；不依赖模型把 IOT 推断成"物联网"——
+    # 曾见推断失败导致 planner 选 chat 快道、模型裸输出路径文本还声称已打开）
+    "IOT控制台": "/device-console/",
+    "IoT控制台": "/device-console/",
+    "iot控制台": "/device-console/",
+    "IOT平台": "/device-console/",
+    "IoT平台": "/device-console/",
+    "iot平台": "/device-console/",
+    "物联网": "/device-console/",
     "友链": None,          # 已下线：如实告知，不导航
     "友情链接": None,
     "友链板块": None,
