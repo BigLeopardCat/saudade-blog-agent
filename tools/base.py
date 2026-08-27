@@ -17,6 +17,11 @@ from typing import Annotated
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
+# 端到端链路关联（图改进Ⅳ）：当前请求的 trace_id（utils.logging contextvar，
+# run_in_executor 由 _submit_with_context 的 copy_context 传播），随 X-Request-Id
+# 透传 device-service → cmd payload → ESP32 cmd/ack 回执，四端日志可对账
+from utils.logging import get_trace_id
+
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://saudade.site/api/public"
@@ -378,7 +383,7 @@ def device_oled_display(
     now = time.time()
     prev = _last_display.get(uid)
     if prev and prev[0] == text and now - prev[1] < _DISPLAY_DEDUP_SECONDS:
-        return "该内容刚刚已由系统执行显示，无需重复下发"
+        return "该内容刚刚已下发过，无需重复下发（执行结果以设备回执为准）"
     try:
         # device_id 未指定时自动选择第一个在线设备（多步工具链是 IoT 工具失败的
         # 结构性原因：模型无法从 schema 知道运行时才能获取的 device_id，参数缺失时
@@ -399,18 +404,49 @@ def device_oled_display(
                 return "设备列表返回异常，无法获取设备 id"
         if not _valid_device_id(device_id):
             return "设备 id 格式非法"
+        # 链路关联（图改进Ⅳ）：请求 trace_id 透传 device-service（其日志/回执带同一 id）
+        headers = {"Authorization": "Bearer " + _sign_user_jwt(uid)}
+        tid = get_trace_id()
+        if tid and tid != "-":
+            headers["X-Request-Id"] = tid
         resp = httpx.put(
             f"{DEVICE_SERVICE_URL}/api/devices/{device_id}/cmd",
-            headers={"Authorization": "Bearer " + _sign_user_jwt(uid)},
+            headers=headers,
             json={"type": "display", "text": text},
             timeout=10,
         )
         if resp.status_code == 404:
             return "设备不存在或不属于当前用户"
+        if resp.status_code == 409:
+            return "设备当前不在线，无法显示该内容（设备可能断电或 MQTT 连接断开）"
         if resp.status_code != 200:
             return f"指令下发失败（HTTP {resp.status_code}）: {resp.text[:100]}"
         _last_display[uid] = (text, now)  # 记录本次下发，供去重
-        return "OLED 显示指令已下发，设备将立即显示该内容"
+        # 回执确认（图改进Ⅴ）：幽灵在线窗口（断电→遗嘱到达前，曾达 ~2 分钟）内下发
+        # 会"假成功"——publish 入队即 200，设备实际收不到。轮询 device-service 的
+        # 回执状态接口，5s 内设备回执即确认执行，否则如实告知"未确认"，不再承诺已显示。
+        rid = None
+        try:
+            rid = resp.json().get("req_id") or None
+        except Exception:
+            rid = None
+        if rid:
+            for _ in range(5):
+                time.sleep(1)
+                try:
+                    st = httpx.get(
+                        f"{DEVICE_SERVICE_URL}/api/devices/{device_id}/cmd/{rid}",
+                        headers={"Authorization": "Bearer " + _sign_user_jwt(uid)},
+                        timeout=5,
+                    )
+                    if st.status_code == 200 and st.json().get("acked"):
+                        return "OLED 显示指令已下发，设备已确认执行（回执已记录）"
+                    if st.status_code == 401:
+                        break  # 查询鉴权失效，不再等待
+                except Exception:
+                    break  # 查询接口异常，不再等待
+            return "指令已入队下发，但设备未在 5 秒内回执确认——设备可能已断电或 MQTT 连接断开，请稍后到设备控制台确认"
+        return "OLED 显示指令已下发"
     except Exception as e:
         return f"指令下发失败: {e}"
 
