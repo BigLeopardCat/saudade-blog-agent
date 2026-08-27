@@ -15,8 +15,8 @@ import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from agent.graph import (_PLANNER_OUTPUT_RE, _current_round, _parse_params, plan_encode,
-                         parse_plan, reflector_node)
+from agent.graph import (_PLANNER_OUTPUT_RE, _current_round, _nav_fast_path, _parse_params,
+                         plan_encode, parse_plan, reflector_node)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, instantiate_plan
 
 FAILS = []
@@ -236,6 +236,167 @@ def test_confirm_nav_claim_check():
               str(out.get("reflection", ""))[:60])
 
 
+def test_nav_fast_path():
+    """导航确定性快道（零 LLM）：动词+页面别名强模式命中 → navigate 计划；不命中 → None。"""
+    print("[nav_fast_path] 导航快道")
+    # 命中：直接意图（direct）
+    for msg, path in [
+        ("去物联网平台", "/device-console/"),
+        ("带我去设备控制台", "/device-console/"),
+        ("小猫咪我们去设备控制台", "/device-console/"),   # 称呼前缀也命中（动词提取）
+        ("打开留言板", "/guestbook"),
+        ("到物联网平台", "/device-console/"),
+        ("返回首页", "/"),
+        ("回首页", "/"),
+        ("跳转到说说", "/talk"),
+        ("进入时间轴", "/times"),
+        ("访问关于我", "/about"),
+        ("去IOT控制台", "/device-console/"),               # 大小写变体走映射表
+        ("去管理后台", "/dashboard"),
+    ]:
+        p = _nav_fast_path(msg)
+        check(f"快道命中「{msg}」→ {path}",
+              p is not None and p["skill"] == "navigate"
+              and f'navigate_to({{"path": "{path}", "confirm": false}})' in p["tools"],
+              f"tools={p and p['tools']}")
+    # 已下线页面：命中但零工具 + 下线注记（如实告知）
+    p = _nav_fast_path("去友链")
+    check("快道命中「去友链」→ 下线注记零工具",
+          p is not None and not p["tools"] and "已下线" in p["note"], f"note={p and p['note']}")
+    # 字面路径白名单内 → 命中；白名单外 → 命中但零工具 + 不存在注记
+    p = _nav_fast_path("去/category/tech")
+    check("快道字面路径 /category/tech → 命中",
+          p is not None and 'navigate_to({"path": "/category/tech", "confirm": false})' in p["tools"],
+          f"tools={p and p['tools']}")
+    p = _nav_fast_path("去/iot")
+    check("快道字面路径 /iot（白名单外）→ 不存在注记零工具",
+          p is not None and not p["tools"] and "不存在" in p["note"], f"note={p and p['note']}")
+    # "回首页去"：动词"回"+目标"首页去"→ 模糊归一（首页）命中 → 导航首页（语义正确）
+    p = _nav_fast_path("回首页去")
+    check("快道「回首页去」→ 模糊归一命中首页",
+          p is not None and 'navigate_to({"path": "/", "confirm": false})' in p["tools"],
+          f"tools={p and p['tools']}")
+    # 不命中：模糊/无关表达落回 planner LLM（None）
+    for msg in ["我想去旅行", "帮我留言", "去火星基地", "今天去哪儿",
+                "我想去看看", "怎么去图书馆借书"]:
+        check(f"快道不命中「{msg}」→ None（落回 LLM）",
+              _nav_fast_path(msg) is None, str(_nav_fast_path(msg)))
+
+
+def test_tool_retry_state():
+    """图改进①：tools_node 工具失败 → tool_retries 计数 + __ERROR__ 返回；重试上下文注入。"""
+    print("[tools] 失败重试状态")
+    from agent.graph import tools_node, _retry_context
+    state = {
+        "plan": plan_encode(instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"})),
+        "reflection_count": 0, "done": False, "tool_retries": [],
+        "messages": [HumanMessage(content="带我去设备控制台"),
+                     AIMessage(content="", tool_calls=[{"name": "nonexistent_tool", "args": {"foo": 1}, "id": "t1"}])],
+    }
+    out = tools_node(state)
+    msgs = out["messages"]
+    check("失败 → __ERROR__ ToolMessage", msgs and msgs[-1].content.startswith("__ERROR__"), str(msgs[-1].content[:60]) if msgs else "no msg")
+    retries = out["tool_retries"]
+    check("失败计数写入 tool_retries（attempt=1）", len(retries) == 1 and retries[0]["attempt"] == 1,
+          str(retries))
+    # 同一调用第二次失败 → attempt 递增
+    state2 = {"messages": [HumanMessage(content="x"),
+                           AIMessage(content="", tool_calls=[{"name": "nonexistent_tool", "args": {"foo": 1}, "id": "t2"}])],
+              "tool_retries": retries}
+    out2 = tools_node(state2)
+    check("同参数再次失败 → attempt=2", len(out2["tool_retries"]) == 2 and out2["tool_retries"][-1]["attempt"] == 2,
+          str(out2["tool_retries"]))
+    # 重试上下文注入：未超限 → 修正重试；超限 → 停止重试
+    ctx1 = _retry_context([{"key": ("navigate_to", "{}"), "name": "navigate_to", "args": {"path": "/fake/"}, "error": "__ERROR__: 路径无效", "attempt": 1}])
+    check("attempt≤上限 → 上下文要求修正重试", "修正参数后重试" in ctx1, ctx1[:60])
+    ctx2 = _retry_context([{"key": ("navigate_to", "{}"), "name": "navigate_to", "args": {"path": "/fake/"}, "error": "__ERROR__: 路径无效", "attempt": 2}])
+    check("attempt>上限 → 上下文要求停止重试如实告知", "停止重试" in ctx2 and "不得编造成功" in ctx2, ctx2[:60])
+    check("空 retries → 空上下文", _retry_context([]) == "", repr(_retry_context([])))
+
+
+def test_correction_msg():
+    """图改进②：REVISE 注记结构化——统一构造器 + issue 类型（错误记忆切入点）。"""
+    print("[reflector] 修正注记结构化")
+    from agent.graph import _correction_msg
+    m = _correction_msg("navigate_tool_missing", "计划要求调用 navigate_to 但零工具调用")
+    check("前缀含 issue 类型", "[Reflection 检查未通过（navigate_tool_missing）" in m.content, m.content[:80])
+    check("含统一修正要求模板", "修正要求" in m.content and "工具返回后再回复" in m.content, m.content[:80])
+
+
+def test_reflector_tool_frame_gate():
+    """reflector 工具帧确定性闸放行：工具成功帧 + 回复非空 → PASS（不花 LLM 钱）。"""
+    print("[reflector] 工具帧闸放行")
+    plan = plan_encode(instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"}))
+    state = {
+        "plan": plan, "reflection_count": 0, "done": False,
+        "messages": [HumanMessage(content="带我去设备控制台"),
+                     AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {"path": "/device-console/", "confirm": False}, "id": "t1"}]),
+                     ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/device-console/", tool_call_id="t1", name="navigate_to"),
+                     AIMessage(content="到啦！这里是物联网设备控制台哟～")],
+    }
+    out = reflector_node(state)
+    check("AUTO_NAVIGATE 帧 + 回复 → 确定性 PASS（reflection 含标记，非 LLM 输出）",
+          out["done"] is True and "确定性 PASS" in out["reflection"], str(out["reflection"]))
+    # NAVIGATE:（确认式）+ 非完成式回复 → 闸放行（确认式声称检查只拦"完成式声称"）
+    plan2 = plan_encode(instantiate_plan("navigate", {"target": "留言板", "mode": "suggest"}))
+    state2 = {
+        "plan": plan2, "reflection_count": 0, "done": False,
+        "messages": [HumanMessage(content="带我去留言板看看"),
+                     AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {"path": "/guestbook", "confirm": True}, "id": "t1"}]),
+                     ToolMessage(content="NAVIGATE:https://saudade.site/guestbook", tool_call_id="t1", name="navigate_to"),
+                     AIMessage(content="已为您打开跳转确认，请点击确认即可前往留言板～")],
+    }
+    out2 = reflector_node(state2)
+    check("NAVIGATE 确认式帧 + 非完成式回复 → 闸放行 PASS",
+          out2["done"] is True and "确定性 PASS" in out2["reflection"], str(out2["reflection"]))
+    # 设备类失败返回 → 不闸放行（落回 LLM 质检）
+    plan3 = plan_encode(instantiate_plan("device_query", {}))
+    state3 = {
+        "plan": plan3, "reflection_count": 0, "done": False,
+        "messages": [HumanMessage(content="有哪些设备"),
+                     AIMessage(content="", tool_calls=[{"name": "list_devices", "args": {}, "id": "t1"}]),
+                     ToolMessage(content="设备列表查询失败: HTTP 500", tool_call_id="t1", name="list_devices"),
+                     AIMessage(content="抱歉，设备列表暂时查询不到")],
+    }
+    out3 = reflector_node(state3)
+    check("设备失败返回 → 不闸放行（reflection 非确定性标记）",
+          "确定性 PASS" not in out3["reflection"], str(out3["reflection"]))
+    # 零工具注记 PASS：下线/不存在计划 + 零工具 + 非空回复 → 确定性 PASS（不花 LLM 钱）
+    plan4 = plan_encode(instantiate_plan("navigate", {"target": "友链"}))
+    state4 = {
+        "plan": plan4, "reflection_count": 0, "done": False,
+        "messages": [HumanMessage(content="打开友链"),
+                     AIMessage(content="友链板块已下线啦，没法访问了喵～可以去留言板看看哦！")],
+    }
+    out4 = reflector_node(state4)
+    check("零工具注记 + 非空回复 → 确定性 PASS",
+          out4["done"] is True and "确定性 PASS" in out4["reflection"], str(out4["reflection"]))
+    # 零工具注记 + 空回复 → 不 PASS（落回 LLM 质检）
+    state5 = {**state4, "messages": [HumanMessage(content="打开友链"),
+                                     AIMessage(content="  ")]}
+    out5 = reflector_node(state5)
+    check("零工具注记 + 空回复 → 不闸放行",
+          "确定性 PASS" not in out5["reflection"], str(out5["reflection"]))
+    # 零工具注记 + 非如实措辞（声称跳转）→ REVISE（确定性，不花 LLM 钱）
+    state6 = {**state4, "messages": [HumanMessage(content="打开友链"),
+                                     AIMessage(content="好的，这就为您跳转到友链页面！")]}
+    out6 = reflector_node(state6)
+    check("零工具注记 + 声称跳转 → REVISE 要求如实告知",
+          out6["done"] is False and any(
+              isinstance(m, SystemMessage) and "如实" in m.content for m in out6["messages"]),
+          str(out6.get("reflection", "")))
+    # 不存在注记 + 如实措辞 → 确定性 PASS
+    plan7 = plan_encode(instantiate_plan("navigate", {"target": "/iot"}))
+    state7 = {
+        "plan": plan7, "reflection_count": 0, "done": False,
+        "messages": [HumanMessage(content="帮我去 /iot 这个页面"),
+                     AIMessage(content="抱歉喵，/iot 这个页面不存在哦，可以去物联网平台看看！")],
+    }
+    out7 = reflector_node(state7)
+    check("不存在注记 + 如实措辞 → 确定性 PASS",
+          out7["done"] is True and "确定性 PASS" in out7["reflection"], str(out7["reflection"]))
+
+
 def test_planner_output_re():
     print("[plan] planner 输出正则")
     for raw, want in [
@@ -252,7 +413,8 @@ def test_planner_output_re():
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_round_aware_checks, test_confirm_nav_claim_check, test_plan_roundtrip, test_parse_tolerance,
-               test_planner_output_re):
+               test_nav_fast_path, test_reflector_tool_frame_gate, test_planner_output_re,
+               test_tool_retry_state, test_correction_msg):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
