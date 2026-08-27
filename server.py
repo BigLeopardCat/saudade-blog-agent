@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
@@ -22,7 +23,7 @@ from pydantic import BaseModel
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 
 from agent import create_agent
-from agent.graph import graph_input
+from agent.graph import AgentCancelled, graph_input
 from utils import setup_logging
 from utils.logging import set_trace_id
 
@@ -343,11 +344,14 @@ async def chat(req: ChatRequest):
 # /chat/stream — SSE 流式（供前端 Live2D 调用）
 # ---------------------------------------------------------------------------
 
-def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Queue, loop, user_id: int = 0):
+def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Queue, loop, user_id: int = 0,
+                               stop_event: threading.Event | None = None):
     """Run agent in a thread, push each chunk into an asyncio.Queue."""
-    # user_id 注入 configurable（设备类工具经 RunnableConfig 读取，见 _run_agent_sync 注释）
+    # user_id 注入 configurable（设备类工具经 RunnableConfig 读取，见 _run_agent_sync 注释）；
+    # stop_event 一并注入——图内 model/tools 节点检查它实现断连中断（见 graph.AgentCancelled）
     # recursion_limit 覆盖默认 9999（等效无界，见 _run_agent_sync 注释）
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}, "recursion_limit": RECURSION_LIMIT}
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "stop_event": stop_event},
+              "recursion_limit": RECURSION_LIMIT}
     try:
         # 双 stream_mode：
         #   "messages" —— token 级文本/工具结果帧（原逻辑不变）
@@ -382,6 +386,12 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             config,
             stream_mode=["messages", "updates"],
         ):
+            # 客户端断开检查：停止驱动图（不再发起新的 LLM 调用/工具执行）。
+            # 节点级检查（model/tools raise AgentCancelled）兜住"正在节点内"的窗口；
+            # 此处兜住"节点间迭代"的窗口（断连→感知最多 2s，见 event_stream 轮询）
+            if stop_event is not None and stop_event.is_set():
+                logger.info("[stream] cancelled by client disconnect (loop check)")
+                break
             if mode == "messages":
                 chunk, meta = data
                 # 入队前过滤（同 _run_agent_sync）：只有 model 节点的回复文本帧、
@@ -424,7 +434,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                             # chat 快道：只发占位帧，不发计划明细（避免每条闲聊都有过程行）
                             is_chat_skill = True
                         else:
-                            emit_process("🧭 计划：" + plan.replace("\n", " ").strip()[:60])
+                            # 计划行[:60]截断无省略号会显示成"…} TO"式残缺（TOOLS 被砍到 TO）
+                            plan_line = plan.replace("\n", " ").strip()
+                            if len(plan_line) > 60:
+                                plan_line = plan_line[:60].rstrip() + "…"
+                            emit_process("🧭 计划：" + plan_line)
                 upd = data.get("reflector")
                 if not upd:
                     continue
@@ -434,7 +448,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     # REVISE：当前轮作废，清空已累积正文（前端 RESET 重绘）；
                     # 同时清空已发过程帧去重表——重试轮重新发完整的
                     # 占位/完成帧，避免新一轮工具执行期间静默
-                    reason = str(upd.get("reflection") or "质检未通过")[:60]
+                    reason = str(upd.get("reflection") or "质检未通过")
+                    if len(reason) > 60:
+                        reason = reason[:60].rstrip() + "…"
                     emit_process("✗ 质检打回：" + reason)
                     emit_reset(reason)
                     round_buf = ""
@@ -444,13 +460,25 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     round_buf = ""
                     if process_emitted and not is_chat_skill:
                         emit_process("✓ 质检通过")
+        else:
+            # for 自然耗尽（无 break）= graph 完整跑完，未被断连打断
+            logger.info("[stream] graph complete (uninterrupted)")
+        asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
+    except AgentCancelled:
+        # 图内节点检测到断连 → 静默收尾（客户端已断开，无帧可发；不放异常
+        # 避免 event_stream 误发 __ERROR__ 到已断开的连接）
+        logger.info("[stream] graph cancelled by client disconnect")
         asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
     except Exception as e:
         asyncio.run_coroutine_threadsafe(queue.put(e), loop).result()
 
 
 @app.post("/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, request: Request):
+    # request: FastAPI 注入的原始请求对象（req 是 body 模型）——断连感知用，
+    # 见 event_stream 的 receive 监听任务（20260827b 断连中断修复）
+    logger.info("POST /chat/stream user=%s msg=%r needs_summary=%s",
+                req.user_id, (req.message or "")[:40], req.needs_summary)
     if _agent is None:
         raise HTTPException(503, "Agent not initialised")
 
@@ -478,37 +506,72 @@ async def chat_stream(req: ChatRequest):
                 loop, _summarize_dialogue, req.message, req.history, req.summary
             )
 
+        # 断连中断机制（20260827c 终版）：stop_event 经 config 注入 agent 图，
+        # event_stream 感知客户端断开即置位——agent 线程（producer）下次迭代/
+        # 图内节点（model/tools）检查后立即停止，不再发起新的 LLM 调用或工具
+        # 执行。原实现只在 yield 时感知断连：卡在 queue.get() 期间断连完全无感知，
+        # agent 无察觉地继续执行 ReAct 循环——实测曾见断连后仍执行
+        # device_oled_display 写操作（用户只问了在线设备）。
+        #
+        # 断连感知实现（20260827c 结论，两次踩坑后确认）：
+        #   ✗ request.is_disconnected()：starlette 1.3.1 非阻塞检查（内部
+        #     anyio.CancelScope 在 await 前立即取消），仅在 http.disconnect 已躺在
+        #     receive 通道里时返回 True——uvicorn 通道被动读取，流式空闲期恒 False。
+        #   ✗ 自建 request.receive() 后台任务：与 starlette StreamingResponse 的
+        #     listen_for_disconnect 抢同一个 receive 通道（双消费者竞态）。
+        #   ✓ 真实机制（starlette 1.3.1 × uvicorn 0.51 spec_version 2.3 老路径）：
+        #     StreamingResponse.__call__ 的 task_group 里 listen_for_disconnect 挂起
+        #     在 receive() 上，TCP 断开（FIN/RST）→ uvicorn connection_lost 投递
+        #     http.disconnect → listen_for_disconnect 返回 → cancel_scope.cancel()
+        #     → 迭代本生成器的 stream_response 任务被取消 → 当前 await/yield 点抛
+        #     asyncio.CancelledError（毫秒级，比 2s 轮询快）。下方
+        #     except asyncio.CancelledError 将其标记为 client_disconnect 留痕，
+        #     finally 置位 stop_event——agent 停止。20260827 版正是靠这条链
+        #     （CancelledError → finally → stop_event）在工作，is_disconnected 轮询
+        #     实际从未触发。
+        stop_event = threading.Event()
+
         # 并发启动生产者（不要 await 完成！否则所有 chunk 会在队列里攒到
         # 生成结束才一次性下发，等于没有流式）——边生成边推送
         producer_task = _submit_with_context(
-            loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id
+            loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id, stop_event
         )
 
+        # 可观测性：请求生命周期账本（帧数/退出原因，finally 汇总）
+        frames = 0
+        end_reason = "unknown"
         nav_line = ""
         had_output = False
         started = loop.time()
+        last_frame = started
         try:
             while True:
-                # 兜底超时（双保险）：
-                # 1) 空闲超时：LLM/线程池异常挂起时超过 STREAM_IDLE_TIMEOUT 无输出帧即终止
-                #    （曾出现 API 无响应占满 8 线程池、后续对话全部排队卡死）
-                # 2) 总时长上限：agent 工具调用循环/超长生成时每轮都有帧会重置空闲计时，
-                #    用 STREAM_TOTAL_TIMEOUT 总时长硬上限保证流必会终止
-                elapsed = loop.time() - started
-                remain = STREAM_TOTAL_TIMEOUT - elapsed
-                if remain <= 0:
-                    logger.error("Chat stream total timeout (%.0fs) reached, aborting", elapsed)
-                    yield f"data: __ERROR__:{json.dumps('生成时间过长，请稍后重试', ensure_ascii=False)}\n\n"
-                    return
                 try:
-                    chunk = await asyncio.wait_for(queue.get(), timeout=min(STREAM_IDLE_TIMEOUT, remain))
+                    chunk = await asyncio.wait_for(queue.get(), timeout=2.0)
                 except asyncio.TimeoutError:
-                    logger.error("Chat stream timeout (idle/total, %.0fs), aborting", elapsed)
-                    yield f"data: __ERROR__:{json.dumps('服务响应超时，请稍后重试', ensure_ascii=False)}\n\n"
-                    return
+                    # 2s 轮询间隔顺带承担兜底超时（原长等待语义保留，双保险）：
+                    # 1) 空闲超时：LLM/线程池异常挂起时超过 STREAM_IDLE_TIMEOUT 无输出帧即终止
+                    #    （曾出现 API 无响应占满 8 线程池、后续对话全部排队卡死）
+                    # 2) 总时长上限：agent 工具调用循环/超长生成时每轮都有帧会重置空闲计时，
+                    #    用 STREAM_TOTAL_TIMEOUT 总时长硬上限保证流必会终止
+                    elapsed = loop.time() - started
+                    if elapsed >= STREAM_TOTAL_TIMEOUT:
+                        end_reason = "total_timeout"
+                        logger.error("Chat stream total timeout (%.0fs) reached, aborting", elapsed)
+                        yield f"data: __ERROR__:{json.dumps('生成时间过长，请稍后重试', ensure_ascii=False)}\n\n"
+                        return
+                    if loop.time() - last_frame >= STREAM_IDLE_TIMEOUT:
+                        end_reason = "idle_timeout"
+                        logger.error("Chat stream idle timeout (%.0fs), aborting", elapsed)
+                        yield f"data: __ERROR__:{json.dumps('服务响应超时，请稍后重试', ensure_ascii=False)}\n\n"
+                        return
+                    continue
+                last_frame = loop.time()
                 if chunk is None:
+                    end_reason = "producer_done"
                     break
                 if isinstance(chunk, Exception):
+                    end_reason = "producer_error"
                     logger.exception("Agent streaming failed")
                     yield f"data: __ERROR__:{json.dumps(str(chunk), ensure_ascii=False)}\n\n"
                     return
@@ -516,10 +579,12 @@ async def chat_stream(req: ChatRequest):
                 # JSON 编码原样转发，前端归档到灰色可折叠过程行
                 if isinstance(chunk, str) and (chunk.startswith("__PROCESS__") or chunk.startswith("__RESET__")):
                     had_output = True
+                    frames += 1
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                     continue
                 if isinstance(chunk, AIMessageChunk) and chunk.content:
                     had_output = True
+                    frames += 1
                     # JSON 编码避免文本内的 \n\n 破坏 SSE 帧边界
                     yield f"data: {json.dumps(str(chunk.content), ensure_ascii=False)}\n\n"
                 elif isinstance(chunk, ToolMessage) and chunk.content:
@@ -527,16 +592,19 @@ async def chat_stream(req: ChatRequest):
                     if text.startswith("NAVIGATE:") or text.startswith("AUTO_NAVIGATE:"):
                         nav_line = text
                         had_output = True
+                        frames += 1
                         yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
                     elif text.startswith("EFFECT:") or text.startswith("DARKMODE:"):
                         nav_line = text
                         had_output = True
+                        frames += 1
                         yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
 
             # 空输出兜底：整轮无任何帧（qwen 偶发空内容）→ 补发人设内恢复语，
             # 前端不会静默无感知（Rust 空回复不存历史、UI 无任何反馈即"卡死"）
             if not had_output:
                 logger.warning("Chat stream ended with no output (agent produced no text/no command)")
+                frames += 1
                 yield f"data: {json.dumps(_RECOVERY_SENTENCE, ensure_ascii=False)}\n\n"
 
             # 独立摘要结果帧（必须在 __END__ 之前：Rust 收到 __END__ 即终止解析）
@@ -546,8 +614,30 @@ async def chat_stream(req: ChatRequest):
                     yield f"data: __SUMMARY__:{json.dumps(new_summary, ensure_ascii=False)}\n\n"
 
             yield f"data: __{'NAV_END' if nav_line else 'END'}__\n\n"
+        except asyncio.CancelledError:
+            # 客户端断开 → starlette listen_for_disconnect → cancel_scope.cancel()
+            # → 本生成器抛 CancelledError（见上方机制注释）。标记断连并重抛——
+            # 必须 re-raise：task_group 依赖取消传播做干净收尾（不 re-raise 会被
+            # uvicorn 当作正常完成，连接可能不关闭）。
+            end_reason = "client_disconnect"
+            logger.info("[stream] client disconnected (starlette cancel), aborting")
+            raise
+        except Exception as e:
+            # yield 写失败（客户端断开后继续写帧 → uvicorn ClientDisconnected）：
+            # 留痕并静默收尾——不吞的话 uvicorn 对 ClientDisconnected 是静默的
+            # （无 ERROR 日志），断连事件就会像"从未发生"一样（20260827b 可观测性）
+            end_reason = "yield_failed"
+            logger.warning("[stream] yield 失败（客户端断开?）: %s", e)
         finally:
+            # 可观测性：请求生命周期汇总（所有退出路径——断连/超时/异常/正常收尾）
+            logger.info("[stream] end reason=%s duration=%.1fs frames=%d",
+                        end_reason, loop.time() - started, frames)
+            # 任何退出路径（断连/超时/正常收尾）都通知生产者停止：
+            # 图内节点检查 stop_event 后终止，避免 agent 在无人接收时继续消耗
+            stop_event.set()
             # 客户端提前断开时，取消尚未完成的生产者任务
+            # （线程池任务 cancel 无效，真正的中断由 stop_event 驱动，
+            #   见 _run_agent_stream_to_queue/图内节点）
             if not producer_task.done():
                 producer_task.cancel()
 

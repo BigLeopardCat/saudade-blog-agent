@@ -23,5 +23,7 @@ output_audio/
 # OS files
 Thumbs.db
 .DS_Store
-# Eval run artifacts
-eval/report/
+# Eval run artifacts（runs/ 留档与 last_run.json 不入 git；baseline_*.json 是受控存档，例外进 git）
+# 注：必须忽略内容（dir/*）而非目录本身（dir/），否则 negation 无法放行 baseline 文件
+eval/report/*
+!eval/report/baseline_*.json

@@ -33,15 +33,33 @@ import re
 from typing import Annotated, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
 from models import get_llm
 from tools import get_all_tools
 from agent.prompts import BLOG_ASSISTANT_PROMPT
-from agent.skills import SKILL_MAP, build_planner_context, instantiate_plan
+from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
+                          build_planner_context, instantiate_plan)
 
 logger = logging.getLogger(__name__)
+
+# 客户端断开（stop_event 置位）→ 图内节点主动终止执行。
+# 场景（20260827 实测）：浏览器连接中断后 event_stream 无法及时感知（卡在
+# queue.get），agent 线程无感知继续执行 ReAct 循环——曾见断连后仍执行
+# device_oled_display 写操作。server.py 侧 2s 轮询断连 → set stop_event →
+# 图内 model/tools 节点在"下一次执行前"检查并抛此异常终止，写操作绝不
+# 发生在用户已离开之后。由 server.py 捕获（静默收尾，客户端已断无帧可发）。
+class AgentCancelled(Exception):
+    pass
+
+
+def _stopped(config: RunnableConfig | None) -> bool:
+    """节点级中断检查：stop_event（threading.Event）由 server.py 经 config 注入。"""
+    ev = (config or {}).get("configurable", {}).get("stop_event")
+    return ev is not None and ev.is_set()
+
 
 # 工具一次构建全局复用（tools/base.py 的 @tool 都是纯函数，无状态）
 _TOOLS = get_all_tools()
@@ -49,6 +67,9 @@ _TOOL_MAP = {t.name: t for t in _TOOLS}
 
 # reflector 纠错预算：最多 REVISE 2 次，防止反思循环烧钱/烧时间
 MAX_REFLECTIONS = 2
+# 工具失败重试上限：同一 (工具, 参数) 调用失败最多允许模型修正重试 1 次
+# （与原 prompt 规则"按错误信息给出的有效参数重试一次"一致，只是显式化）
+MAX_TOOL_RETRIES = 1
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +92,13 @@ class AgentState(TypedDict):
     reflection: str
     reflection_count: int
     done: bool
+    # 20260828 图改进（RAG 前基线配套）：
+    # - tool_retries: 工具失败重试记录 [{key, name, args, error, attempt}]——失败路径
+    #   从"prompt 规则让模型自觉重试"升级为图状态显式跟踪（可观测、可注入上下文）
+    # - last_issue: 最近一次 REVISE 的结构化失败信息 {issue, detail}——错误记忆切入点，
+    #   将来摘要任务可据此记录"执行过哪些类型的错误"
+    tool_retries: list
+    last_issue: dict | None
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +144,47 @@ SKILL: <技能名>
 PARAMS: <JSON>
 
 用户消息：{user_msg}"""
+
+
+def _retry_context(retries: list) -> str:
+    """工具失败重试上下文（纯函数，注入 model_node 的 system prompt）。
+
+    未超限 → 按错误修正参数重试；已超限 → 如实告知、不再重试、不得编造成功。
+    """
+    if not retries:
+        return ""
+    r = retries[-1]
+    if r["attempt"] <= MAX_TOOL_RETRIES:
+        return (
+            f"\n[上一轮工具调用失败（第 {r['attempt']}/{MAX_TOOL_RETRIES} 次尝试）] "
+            f"工具 {r['name']} 参数={json.dumps(r['args'], ensure_ascii=False)}，"
+            f"错误：{r['error'][:200]}\n"
+            "处理规则：根据错误信息修正参数后重试一次；"
+            "修正后仍失败 → 如实告知用户失败原因，不得编造成功。\n"
+        )
+    return (
+        f"\n[工具调用失败已达上限（第 {r['attempt']} 次尝试，上限 {MAX_TOOL_RETRIES}）] "
+        f"工具 {r['name']} 错误：{r['error'][:200]}\n"
+        "处理规则：停止重试，如实告知用户该操作失败的原因，不得编造成功。\n"
+    )
+
+
+def _correction_msg(issue: str, detail: str) -> SystemMessage:
+    """结构化修正注记构造器：issue=失败类型，detail=具体描述。
+
+    20260828 图改进②：原 6 处手写 SystemMessage 语义散落（各自不同的修正要求
+    模板），收敛为统一构造。issue 类型写进 state.last_issue + 日志——
+    是跨会话错误记忆的切入点（将来摘要任务可按 issue 记录执行错误）。
+    """
+    return SystemMessage(content=(
+        f"[Reflection 检查未通过（{issue}）：{detail}] 修正要求："
+        f"1) 若本轮尚未调用任何工具，立即调用计划 TOOLS 行要求的工具，工具返回后再回复，"
+        f"不得直接声称已完成；"
+        f"2) 若上次工具调用失败，立即用错误信息中给出的有效参数重试一次；"
+        f"3) 不得向用户声称页面/数据不存在——先重试，重试仍失败才如实说明；"
+        f"4) 你之前的回复已作废且不会展示，直接输出修正后的最终回复"
+        f"（简短确认即可，不要重复之前的文字）。"
+    ))
 
 
 def _tools_desc() -> str:
@@ -226,6 +295,45 @@ def _page_ctx(messages: list) -> str:
     return "（无）"
 
 
+# 导航确定性快道（零 LLM）：动词 + 页面别名强模式 → 直接实例化 navigate 计划。
+# 用户实测"规划要7秒/10几秒"——planner LLM 对导航这类最常见的固定流程任务
+# 没必要调用（映射表白名单校验已确定性兜底，触发词也足够窄）。命中 → 秒级出
+# 计划；不命中任何映射 → None → 落回 planner LLM（模糊表达/未知页面交给模型）。
+_NAV_VERB_RE = re.compile(
+    r"(?:去|去一下|前往|转到|转跳|打开|进|进入|回|回到|到|返回|访问|跳转到)\s*([^\s，。！？!?～~、；;：:]{1,16})$"
+)
+
+
+def _nav_fast_path(user_msg: str) -> dict | None:
+    """导航快道：整句映射命中，或动词+目标强模式 + 映射/模糊归一命中 → navigate 计划。
+
+    返回带 params 的 plan dict（与 planner LLM 路径同构），或 None。
+    目标校验走与 instantiate_plan 完全相同的 NAV_MAP/FUZZY_NAV_RULES 白名单——
+    快道命中 = 确定性识别，不存在"模型猜错"通道；未知页面（"去火星基地"）不命中
+    映射 → None → planner LLM 按"如实告知没有该页面"处理。已下线页面（友链）同样
+    命中（NAV_MAP 值 None），实例化后 note 会要求如实告知、零工具。
+    """
+    msg = user_msg.strip().strip("，。！？!?～~、")
+    target = msg if msg in NAV_MAP else None
+    if target is None:
+        m = _NAV_VERB_RE.search(msg)
+        if m:
+            t = m.group(1)
+            if t in NAV_MAP or t.startswith("/"):
+                target = t
+            else:
+                fuzzy = next(
+                    (p for kws, p in FUZZY_NAV_RULES if any(kw in t for kw in kws)), None
+                )
+                if fuzzy:
+                    target = t
+    if target is None:
+        return None
+    plan_obj = instantiate_plan("navigate", {"target": target, "mode": "direct"})
+    plan_obj["params"] = {"target": target, "mode": "direct"}
+    return plan_obj
+
+
 def planner_node(state: AgentState) -> dict:
     """职责：技能选择器——从技能注册表选技能 + 填参数 → 实例化为计划 → 写入 state.plan。
 
@@ -241,6 +349,12 @@ def planner_node(state: AgentState) -> dict:
         content = str(content)
     user_msg = content[-500:]  # 只看最近一段，防止超长输入稀释分类
 
+    # 导航确定性快道（零 LLM）：命中即返回，不调用 planner LLM（耗时大头）。
+    nav = _nav_fast_path(user_msg)
+    if nav is not None:
+        logger.info("[planner] 导航快道命中（零 LLM）: %s", nav["tools"])
+        return {"plan": plan_encode(nav), "reflection": "", "reflection_count": 0, "done": False}
+
     # 快思考模块：低温度（分类不需要创造力）、小 max_tokens、短超时
     llm = get_llm(temperature=0.2, max_tokens=300, timeout=30)
     resp = llm.invoke(_PLANNER_PROMPT.format(
@@ -252,7 +366,21 @@ def planner_node(state: AgentState) -> dict:
     params = _parse_params(raw)
     plan_obj = instantiate_plan(skill_name, params)
     plan_obj["params"] = params
-    logger.info("[planner] skill=%s params=%s tools=%s", plan_obj["skill"], params, plan_obj["tools"])
+
+    # 字面路径防推断兜底（确定性修正）：用户消息里出现 / 开头的路径且 planner 选
+    # 了 navigate 时，target 必须原样用该路径——qwen 曾把 "/iot" 推断成"物联网平台"
+    # （语义替身）→ 计划变成跳转 /device-console/（golden nav_nonexistent 实证，
+    # 规则层约束不生效）。白名单外的路径经 instantiate_plan 预校验 → 零工具 +
+    # "不存在"注记 → 如实告知（与"路径是否有效由系统校验"的设计一致）。
+    lit = re.search(r"/[A-Za-z0-9_\-./]+", user_msg)
+    if (plan_obj["skill"] == "navigate" and lit
+            and plan_obj["params"].get("target") != lit.group(0)):
+        logger.info("[planner] 字面路径修正：用户消息含 %s，planner 目标 %r → 强制 %s",
+                    lit.group(0), plan_obj["params"].get("target"), lit.group(0))
+        plan_obj = instantiate_plan("navigate", {"target": lit.group(0), "mode": "direct"})
+        plan_obj["params"] = {"target": lit.group(0), "mode": "direct"}
+
+    logger.info("[planner] skill=%s params=%s tools=%s", plan_obj["skill"], plan_obj["params"], plan_obj["tools"])
 
     return {"plan": plan_encode(plan_obj), "reflection": "", "reflection_count": 0, "done": False}
 
@@ -281,22 +409,29 @@ _EXECUTOR_PROMPT = """\
    先重试，重试仍失败才如实向用户说明。"""
 
 
-def model_node(state: AgentState) -> dict:
+def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """ReAct 执行层的"思考"节点：带工具思考 → 产出 tool_calls 或最终回答。
 
     与 create_agent 的 model node 同源，但计划注入是显式的：
     system prompt = 人设 + 当前执行计划（技能模板实例），模型按模板驱动工具调用。
     """
+    # 客户端断开检查：不再发起新的 LLM 调用（省流费 + 不产出无人接收的回复）
+    if _stopped(config):
+        logger.info("[model] cancelled (client disconnected)")
+        raise AgentCancelled()
     llm = get_llm()  # 主模型：对话生成用默认参数（温度 0.7、可流式）
+    # 20260828 图改进①：工具失败重试上下文注入（取代 prompt 规则"自觉重试"）。
+    # 上一次工具调用失败时，显式告知失败详情 + 重试轮次语义（见 _retry_context）。
     system = SystemMessage(content=_EXECUTOR_PROMPT.format(
         persona=BLOG_ASSISTANT_PROMPT, plan=state["plan"],
-        page_ctx=_page_ctx(state["messages"])))
+        page_ctx=_page_ctx(state["messages"]))
+        + _retry_context(state.get("tool_retries") or []))
     resp = llm.bind_tools(_TOOLS).invoke([system] + state["messages"])
     logger.info("[model] tool_calls=%s", [c["name"] for c in resp.tool_calls])
     return {"messages": [resp]}
 
 
-def tools_node(state: AgentState) -> dict:
+def tools_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """ReAct 执行层的"行动"节点：执行上一条消息里的所有工具调用。
 
     手写版 ToolNode（面试点：create_agent 内部就是这个逻辑，我们显式写出来）：
@@ -305,8 +440,18 @@ def tools_node(state: AgentState) -> dict:
          副作用工具（切换特效/导航）执行两次是真 bug
       3. 异常不炸图：错误信息作为工具结果返回，让模型自行理解修正
     """
+    # 客户端断开检查：工具执行前拦截——写操作（设备指令下发/导航/特效切换）
+    # 绝不发生在用户已离开之后（20260827 实测：断连后仍执行了 OLED 显示指令）
+    if _stopped(config):
+        logger.info("[tools] cancelled (client disconnected) — 不执行任何工具（含写操作）")
+        raise AgentCancelled()
     last = state["messages"][-1]
     results, seen = [], set()
+    # 20260828 图改进①：工具失败显式跟踪。原实现失败只以 __ERROR__ ToolMessage
+    # 返回，重试靠 prompt 规则"让模型自觉"——失败次数、重试轮次不可观测。
+    # 现在按 (name, args) 计数失败次数写入 state.tool_retries，model_node 据此
+    # 注入显式重试上下文（含上限语义），失败路径成为图状态的一等公民。
+    retries = list(state.get("tool_retries") or [])
     for call in last.tool_calls:
         key = (call["name"], json.dumps(call.get("args", {}), sort_keys=True))
         if key in seen:
@@ -322,7 +467,15 @@ def tools_node(state: AgentState) -> dict:
                 out = f"__ERROR__: {type(e).__name__}: {e}"
         results.append(ToolMessage(content=str(out), tool_call_id=call["id"], name=call["name"]))
         logger.info("[tools] %s → %.100s", call["name"], str(out))
-    return {"messages": results}
+        if str(out).startswith("__ERROR__"):
+            attempt = sum(1 for r in retries if r["key"] == key) + 1
+            retries.append({
+                "key": key, "name": call["name"], "args": call.get("args", {}),
+                "error": str(out), "attempt": attempt,
+            })
+            logger.info("[tools] %s 失败（第 %d/%d 次尝试）: %.100s",
+                        call["name"], attempt, MAX_TOOL_RETRIES, str(out))
+    return {"messages": results, "tool_retries": retries}
 
 
 _REFLECTOR_PROMPT = """\
@@ -384,7 +537,11 @@ def _current_round(messages: list) -> list:
     return messages[start:]
 
 
-def reflector_node(state: AgentState) -> dict:
+def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
+    # 客户端断开检查：不再发起质检 LLM 调用（断连后停止一切 LLM 开销）
+    if _stopped(config):
+        logger.info("[reflector] cancelled (client disconnected)")
+        raise AgentCancelled()
     """反思层：对照技能模板质检执行结果。
 
     快慢两条道（面试点：反思也要算成本）：
@@ -460,14 +617,16 @@ def reflector_node(state: AgentState) -> dict:
     if (plan["tools"]
             and all("navigate_to" in t for t in plan["tools"])
             and not any(isinstance(m, ToolMessage) for m in _current_round(state["messages"]))):
-        correction = SystemMessage(content=(
-            "[Reflection 检查未通过：计划要求调用 navigate_to 工具，但本轮对话没有任何工具执行。] 修正要求："
-            "立即调用计划 TOOLS 行要求的 navigate_to 工具（工具返回后再按结果回复）；"
-            "若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得声称已跳转。"
-        ))
+        correction = _correction_msg(
+            "navigate_tool_missing",
+            "计划要求调用 navigate_to 工具，但本轮对话没有任何工具执行；"
+            "若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得声称已跳转",
+        )
         logger.info("[reflector] 模板执行缺失：navigate 计划零工具调用")
         return {"messages": [correction], "done": False,
-                "reflection": "navigate 计划要求工具但零工具调用", "reflection_count": count + 1}
+                "reflection": "navigate 计划要求工具但零工具调用",
+                "reflection_count": count + 1,
+                "last_issue": {"issue": "navigate_tool_missing", "detail": "navigate 计划要求工具但零工具调用"}}
 
     # 确认式导航声称检查（确定性，LLM 质检前）：navigate 当前轮工具已调用，
     # 但轨迹中只有 NAVIGATE:（待确认）帧、无 AUTO_NAVIGATE: 帧时，回复不得含
@@ -485,15 +644,35 @@ def reflector_node(state: AgentState) -> dict:
             )
             reply = (getattr(last_ai, "content", "") or "") if last_ai else ""
             if re.search(r"(已经?带|已经?到|已经?跳转|跳转成功|成功[^\n。，,]*?(跳|转)|过去了|已经?去)", reply):
-                correction = SystemMessage(content=(
-                    "[Reflection 检查未通过：navigate 工具返回的是 NAVIGATE: 确认式帧——"
-                    "页面正在等待访客确认，尚未跳转。] 修正要求：不得声称已到达/已跳转，"
-                    "改为如实说明'已为您打开跳转确认'并请访客确认；如需直接跳转，"
-                    "重新调用 navigate_to 且 confirm=false（返回 AUTO_NAVIGATE: 帧）后再确认到达。"
-                ))
+                correction = _correction_msg(
+                    "navigate_confirm_claim",
+                    "navigate 工具返回的是 NAVIGATE: 确认式帧——页面正在等待访客确认，尚未跳转；"
+                    "不得声称已到达/已跳转，改为如实说明'已为您打开跳转确认'并请访客确认；"
+                    "如需直接跳转，重新调用 navigate_to 且 confirm=false（返回 AUTO_NAVIGATE: 帧）后再确认到达",
+                )
                 logger.info("[reflector] 确认式导航声称：NAVIGATE 帧 + 完成式声称")
                 return {"messages": [correction], "done": False,
-                        "reflection": "确认式导航但声称已到达", "reflection_count": count + 1}
+                        "reflection": "确认式导航但声称已到达", "reflection_count": count + 1,
+                        "last_issue": {"issue": "navigate_confirm_claim", "detail": "NAVIGATE 帧 + 完成式声称"}}
+
+    # 设备显示结构性检查（确定性，LLM 质检前）：device_display 计划要求调用
+    # device_oled_display 但当前轮零工具执行 → 声称"已显示/已发送/已刷新"无依据，
+    # REVISE。曾见（20260827 实测）：模型不调工具、回复声称"正在向屏幕发送指令"
+    # ——文本表演过不了此检查。注记快道（force_display 后端已执行）在前面已返回，
+    # 此处只拦纯文本声称；检查范围限定当前轮（同 navigate 检查）。
+    if (plan["skill"] == "device_display"
+            and plan["tools"]
+            and not any(isinstance(m, ToolMessage) for m in _current_round(state["messages"]))):
+        correction = _correction_msg(
+            "device_tool_missing",
+            "计划要求调用 device_oled_display 工具，但本轮没有任何工具执行；"
+            "立即调用 device_oled_display 下发显示内容（text 为你要显示的文字，不能是访客指令原文），"
+            "工具返回后再按结果回复；设备离线/下发失败时如实告知，不得声称已显示/已发送/已刷新屏幕",
+        )
+        logger.info("[reflector] 设备显示缺失：device_display 计划零工具调用")
+        return {"messages": [correction], "done": False,
+                "reflection": "device_display 计划要求工具但零工具调用", "reflection_count": count + 1,
+                "last_issue": {"issue": "device_tool_missing", "detail": "device_display 计划要求工具但零工具调用"}}
 
     # 反向结构性检查：计划 NOTE 行明示"不调用任何工具"（友链下线/页面不存在等，
     # 此时 TOOLS 为空），但模型仍越权调用了工具（如主动跳转留言板）→ 违反模板
@@ -501,13 +680,76 @@ def reflector_node(state: AgentState) -> dict:
     # 工具的技能。同样限定当前轮（历史轮已作废，不构成越权）。
     if ("不调用任何工具" in plan["note"]
             and any(isinstance(m, ToolMessage) for m in _current_round(state["messages"]))):
-        correction = SystemMessage(content=(
-            "[Reflection 检查未通过：计划要求不调用任何工具（如实告知即可），但本轮调用了工具。] 修正要求："
-            "不要调用任何工具，直接在文本中如实告知（可给出其他页面的 Markdown 链接作为建议）。"
-        ))
+        correction = _correction_msg(
+            "note_violation",
+            "计划要求不调用任何工具（如实告知即可），但本轮调用了工具；"
+            "不要调用任何工具，直接在文本中如实告知（可给出其他页面的 Markdown 链接作为建议）",
+        )
         logger.info("[reflector] 模板越权：NOTE 要求零工具但调用了工具")
         return {"messages": [correction], "done": False,
-                "reflection": "NOTE 要求零工具但调用了工具", "reflection_count": count + 1}
+                "reflection": "NOTE 要求零工具但调用了工具", "reflection_count": count + 1,
+                "last_issue": {"issue": "note_violation", "detail": "NOTE 要求零工具但调用了工具"}}
+
+    # 零工具注记确定性闸（LLM 质检前）：计划 NOTE 明示"不调用任何工具"
+    # （友链下线/页面不存在/无法识别），当前轮零工具调用（反向检查已拦越权）——
+    # 模板契约 = 如实告知，把 LLM 质检的"是否如实告知"检查点确定性化：
+    # 回复含如实措辞（下线/不存在类关键词）→ PASS（golden 实测 LLM 质检此场景
+    # 每次白等约 30s 后兜底 PASS，与确定性判定等价但慢 6 倍）；措辞不实
+    # （如声称"已跳转"）→ REVISE 要求如实告知，不花 LLM 钱。
+    if ("不调用任何工具" in plan["note"]
+            and not any(isinstance(m, ToolMessage) for m in _current_round(state["messages"]))):
+        round_msgs = _current_round(state["messages"])
+        last_ai = next(
+            (m for m in reversed(round_msgs) if isinstance(m, AIMessage)), None
+        )
+        reply = (getattr(last_ai, "content", "") or "").strip() if last_ai else ""
+        if reply:
+            if "已下线" in plan["note"]:
+                honest = any(k in reply for k in ("下线", "下架", "无法访问", "没有了"))
+            else:
+                honest = any(k in reply for k in ("没有", "不存在", "找不到", "无法识别", "没有找到"))
+            if honest:
+                logger.info("[reflector] 零工具注记 + 如实措辞 → 确定性 PASS（跳过 LLM 质检）")
+                return {"done": True, "reflection": "确定性 PASS：NOTE 要求零工具且已如实告知", "reflection_count": count}
+            correction = _correction_msg(
+                "not_honest",
+                "计划要求如实告知目标页面不存在/已下线（不调用任何工具），但回复没有如实说明；"
+                "不要调用任何工具，在回复中如实说明该页面不存在或已下线"
+                "（例如'该页面不存在/已下线'），可附其他真实页面的文本链接作为建议",
+            )
+            logger.info("[reflector] 零工具注记但未如实告知 → REVISE")
+            return {"messages": [correction], "done": False,
+                    "reflection": "NOTE 零工具但未如实告知", "reflection_count": count + 1,
+                    "last_issue": {"issue": "not_honest", "detail": "NOTE 零工具但未如实告知"}}
+
+    # 工具帧确定性闸放行（LLM 质检前）：工具型技能当前轮已有成功工具帧产出
+    # （导航 AUTO_NAVIGATE/NAVIGATE、特效 EFFECT、暗色 DARKMODE、设备类非错误返回）
+    # 且最终回复非空 → 直接 PASS，不花 LLM 钱。实测 qwen 质检调用频繁挂起/超时
+    # （DB 实证：导航任务总耗时 39s/50s，其中约 30s 耗在质检超时兜底）——用户
+    # "规划10几秒/卡一会"的根因。质检是防幻觉增强，非流程必需：工具帧产出 =
+    # 动作真实发生（防幻觉核心不变量已满足），上方模板结构性检查与确认式声称
+    # 检查已确定性拦下"零工具声称/确认式帧+完成式声称"等违规形态；闸放行后
+    # 再被 REVISE 的只剩设备类失败与模型自由发挥的文案问题，交给 LLM 质检兜底。
+    if (plan["skill"] in ("navigate", "effect", "darkmode", "device_display", "device_query")
+            and plan["tools"]):
+        round_msgs = _current_round(state["messages"])
+        tool_text = "\n".join(
+            (getattr(m, "content", "") or "") for m in round_msgs if isinstance(m, ToolMessage)
+        )
+        last_ai = next(
+            (m for m in reversed(round_msgs) if isinstance(m, AIMessage)), None
+        )
+        reply = (getattr(last_ai, "content", "") or "").strip() if last_ai else ""
+        if tool_text and reply:
+            ok = any(f in tool_text for f in ("AUTO_NAVIGATE:", "NAVIGATE:", "EFFECT:", "DARKMODE:"))
+            if not ok and plan["skill"] in ("device_display", "device_query"):
+                # 设备类无帧前缀：非错误返回即成功（失败文本均含特征词）
+                ok = not any(bad in tool_text for bad in (
+                    "失败", "无效", "无法", "为空", "非法", "不存在", "异常",
+                    "离线", "未绑定", "未下发", "错误", "ERROR"))
+            if ok:
+                logger.info("[reflector] 工具帧已产出 + 回复非空 → 确定性 PASS（跳过 LLM 质检）")
+                return {"done": True, "reflection": f"确定性 PASS：{plan['skill']} 工具帧已产出", "reflection_count": count}
 
     idem_note = ""
     if state_matches is not None:
@@ -528,20 +770,23 @@ def reflector_node(state: AgentState) -> dict:
     # 会被截断成空串（Qwen 思考走 reasoning_content 不进 content），导致
     # PASS 但 reflection 为空、单测错判
     llm = get_llm(temperature=0.0, max_tokens=200, timeout=30, enable_thinking=False)
-    resp = llm.invoke(_REFLECTOR_PROMPT.format(plan=state["plan"], trace=trace, idem_note=idem_note))
+    # 质检异常兜底：LLM API 抖动/超时不应杀死整个对话（实测：反射调用挂起/抛错 →
+    # 流中断 → 前端 catch 不执行导航 → 用户"卡死"且命令帧白发）。质检是防幻觉增强，
+    # 非流程必需：工具帧已产出（导航命令已发出）时异常即放行，让流正常收尾。
+    try:
+        resp = llm.invoke(_REFLECTOR_PROMPT.format(plan=state["plan"], trace=trace, idem_note=idem_note))
+    except Exception as e:
+        logger.warning("[reflector] LLM 质检异常，兜底 PASS（流正常收尾，工具帧不受影响）: %s", e)
+        return {"done": True, "reflection": f"LLM 质检异常兜底 PASS: {e}", "reflection_count": count}
     raw = getattr(resp, "content", str(resp))
     if re.search(r"VERDICT\s*[:=]\s*REVISE", raw, re.IGNORECASE):
         m = re.search(r"NOTE\s*[:=]\s*(.+)", raw, re.IGNORECASE)
         note = m.group(1).strip() if m else "未按计划执行"
-        correction = SystemMessage(content=(
-            f"[Reflection 检查未通过：{note}] 修正要求："
-            f"1) 若本轮尚未调用任何工具，立即调用计划 TOOLS 行要求的工具，工具返回后再回复，不得直接声称已完成；"
-            f"2) 若上次工具调用失败（如路径无效），立即用错误信息中给出的有效参数重试；"
-            f"3) 不得向用户声称页面/数据不存在——先重试，重试仍失败才如实说明；"
-            f"4) 你之前的回复已作废且不会展示，直接输出修正后的最终回复（简短确认即可，不要重复之前的文字）。"
-        ))
+        correction = _correction_msg("llm_revise", note)
         logger.info("[reflector] REVISE: %s", note)
-        return {"messages": [correction], "done": False, "reflection": note, "reflection_count": count + 1}
+        return {"messages": [correction], "done": False, "reflection": note,
+                "reflection_count": count + 1,
+                "last_issue": {"issue": "llm_revise", "detail": note}}
 
     logger.info("[reflector] PASS")
     return {"done": True, "reflection": raw, "reflection_count": count}
@@ -601,4 +846,5 @@ def graph_input(messages: list) -> dict:
     planner 节点会立刻写入 plan/reflection/reflection_count/done，
     这里给空初值只为了让输入形状完整、可读。
     """
-    return {"messages": messages, "plan": "", "reflection": "", "reflection_count": 0, "done": False}
+    return {"messages": messages, "plan": "", "reflection": "", "reflection_count": 0,
+            "done": False, "tool_retries": [], "last_issue": None}

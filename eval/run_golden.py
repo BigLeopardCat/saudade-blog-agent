@@ -193,9 +193,12 @@ def main():
             "text": result["text"],
         })
 
-    # 报告
+    # 报告：last_run.json 供工具读取（每次覆盖）；runs/<ts>.json 全量留档（防覆盖丢历史，
+    # 基线对比查旧档用）。eval/report/ 整体 gitignore，baseline_*.json 例外进 git（见 .gitignore）。
     import os
+    ts_str = time.strftime("%Y%m%d_%H%M%S")
     os.makedirs("eval/report", exist_ok=True)
+    os.makedirs("eval/report/runs", exist_ok=True)
     report = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total": len(cases), "passed": len(cases) - failed, "failed": failed,
@@ -203,9 +206,12 @@ def main():
     }
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
+    with open(f"eval/report/runs/{ts_str}.json", "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=1)
 
     print(f"\n=== 汇总：{len(cases) - failed}/{len(cases)} 通过 ===")
     print(f"报告: {REPORT_FILE}")
+    print(f"留档: eval/report/runs/{ts_str}.json")
     sys.exit(0 if failed == 0 else 1)
 
 
