@@ -294,6 +294,19 @@ def parse_plan(raw: str) -> dict:
 # 3. Node：planner（课2）/ model（课3）/ tools（课3）/ reflector（课3）
 # ---------------------------------------------------------------------------
 
+def _msg_text(m) -> str:
+    """多模态 content 兼容：数组（image_url+text 块）只取 text 文本部分。
+
+    planner 分类/轨迹摘要只消费文本——base64 dataURL 不进分类器，否则
+    content[-500:] 截到图片垃圾、_build_trace 把数组切片当文本。
+    """
+    content = getattr(m, "content", "")
+    if isinstance(content, list):
+        return "".join(c.get("text", "") for c in content
+                       if isinstance(c, dict) and c.get("type") == "text")
+    return content if isinstance(content, str) else str(content)
+
+
 def _page_ctx(messages: list) -> str:
     """提取前端实时上报的页面上下文（page/title/特效/夜间），注入 planner/executor。
 
@@ -305,7 +318,7 @@ def _page_ctx(messages: list) -> str:
     每轮本来就要调用）。
     """
     for m in messages:
-        content = getattr(m, "content", "") or ""
+        content = _msg_text(m) or ""
         found = re.search(r"\[System:\s*(.*?)\]", content, re.DOTALL)
         if found:
             return found.group(1).strip()
@@ -414,10 +427,7 @@ def planner_node(state: AgentState) -> dict:
     代价：每次对话多一次 LLM 调用（约 0.3-0.8s），换来可解释且受限的执行路径。
     """
     last = state["messages"][-1]  # 最后一条是当前用户请求
-    content = getattr(last, "content", last)
-    if not isinstance(content, str):
-        content = str(content)
-    user_msg = content[-500:]  # 只看最近一段，防止超长输入稀释分类
+    user_msg = _msg_text(last)[-500:]  # 只看最近一段，防止超长输入稀释分类
 
     # 导航确定性快道（零 LLM）：命中即返回，不调用 planner LLM（耗时大头）。
     nav = _nav_fast_path(user_msg)
@@ -607,11 +617,11 @@ def _build_trace(messages: list) -> str:
         if isinstance(m, AIMessage) and m.tool_calls:
             parts.append(f"助手调用工具: {m.tool_calls[0]['name']}({json.dumps(m.tool_calls[0].get('args', {}), ensure_ascii=False)[:80]})")
         elif isinstance(m, ToolMessage):
-            parts.append(f"工具返回: {m.content[:100]}")
+            parts.append(f"工具返回: {_msg_text(m)[:100]}")
         elif isinstance(m, AIMessage) and m.content:
-            parts.append(f"助手回答: {m.content[:100]}")
-        elif hasattr(m, "content") and isinstance(m.content, str) and m.content:
-            parts.append(f"{m.__class__.__name__}: {m.content[:80]}")
+            parts.append(f"助手回答: {_msg_text(m)[:100]}")
+        elif hasattr(m, "content") and isinstance(m.content, (str, list)) and m.content:
+            parts.append(f"{m.__class__.__name__}: {_msg_text(m)[:80]}")
     return "\n".join(parts)[-800:]  # 只留最近 800 字符
 
 
