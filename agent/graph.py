@@ -299,8 +299,17 @@ def _page_ctx(messages: list) -> str:
 # 用户实测"规划要7秒/10几秒"——planner LLM 对导航这类最常见的固定流程任务
 # 没必要调用（映射表白名单校验已确定性兜底，触发词也足够窄）。命中 → 秒级出
 # 计划；不命中任何映射 → None → 落回 planner LLM（模糊表达/未知页面交给模型）。
+# 20260828 事故加固（"你读到留言为什么没有按留言执行任务"被误判成导航请求）：
+#  1. 疑问/质疑句式整体排除（_QUESTION_RE）——质疑不是导航请求；问路类
+#     （"怎么去留言板"）排除后由 planner LLM 识别为导航意图，功能不丢只多一次调用；
+#  2. 动词改为 match（必须句首，允许剥离称呼前缀）而非 search——"读到"里的"到"
+#     曾命中句中任意位置的正则；
+#  3. 目标串收紧到 8 字——16 字会整段捕获噪声目标（曾捕获"留言为什么没有按留言执行任务"）。
+_QUESTION_RE = re.compile(r"为什么|怎么|如何|啥|什么|为何|哪儿|哪|吗$|么$|[？?]")
 _NAV_VERB_RE = re.compile(
-    r"(?:去|去一下|前往|转到|转跳|打开|进|进入|回|回到|到|返回|访问|跳转到)\s*([^\s，。！？!?～~、；;：:]{1,16})$"
+    r"^(?:小猫咪|喵喵|主人|猫猫|喵)?[,，、\s]*"
+    r"(?:去一下|回到|返回|跳转到|前往|转到|转跳|打开|进入|去|进|回|到|访问)"
+    r"\s*([^\s，。！？!?～~、；;：:]{1,8})$"
 )
 
 
@@ -314,9 +323,13 @@ def _nav_fast_path(user_msg: str) -> dict | None:
     命中（NAV_MAP 值 None），实例化后 note 会要求如实告知、零工具。
     """
     msg = user_msg.strip().strip("，。！？!?～~、")
+    # 疑问/质疑句式（"为什么""？"等）不是导航请求，直接排除（20260828 事故加固，
+    # 见 _NAV_VERB_RE 上方注释）；问路类由 planner LLM 兜底识别为导航意图
+    if _QUESTION_RE.search(msg):
+        return None
     target = msg if msg in NAV_MAP else None
     if target is None:
-        m = _NAV_VERB_RE.search(msg)
+        m = _NAV_VERB_RE.match(msg)  # match 而非 search：动词必须句首，避免句中误匹配
         if m:
             t = m.group(1)
             if t in NAV_MAP or t.startswith("/"):

@@ -192,7 +192,9 @@ def _build_messages(req: ChatRequest, display_note: str = "") -> list:
     ctx = f"[System: {'; '.join(ctx_parts)}]"
     messages.append(HumanMessage(content=ctx))
 
-    for h in req.history[-12:]:
+    # 消费 Rust 转发的全部 20 条历史（20260828 对齐：此前 Rust 传 20、这里取 12，
+    # 8 条白传且两个魔数散落两处易失同步；Rust 侧已排除当前消息，history 是纯历史）
+    for h in req.history[-20:]:
         if h["role"] == "user":
             messages.append(HumanMessage(content=h["content"]))
         else:
