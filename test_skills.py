@@ -15,8 +15,8 @@ import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from agent.graph import (_PLANNER_OUTPUT_RE, _current_round, _nav_fast_path, _parse_params,
-                         plan_encode, parse_plan, reflector_node)
+from agent.graph import (_PLANNER_OUTPUT_RE, _current_round, _display_fast_path, _nav_fast_path,
+                         _parse_params, plan_encode, parse_plan, reflector_node)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, instantiate_plan
 
 FAILS = []
@@ -242,8 +242,6 @@ def test_nav_fast_path():
     # 命中：直接意图（direct）
     for msg, path in [
         ("去物联网平台", "/device-console/"),
-        ("带我去设备控制台", "/device-console/"),
-        ("小猫咪我们去设备控制台", "/device-console/"),   # 称呼前缀也命中（动词提取）
         ("打开留言板", "/guestbook"),
         ("到物联网平台", "/device-console/"),
         ("返回首页", "/"),
@@ -263,11 +261,7 @@ def test_nav_fast_path():
     p = _nav_fast_path("去友链")
     check("快道命中「去友链」→ 下线注记零工具",
           p is not None and not p["tools"] and "已下线" in p["note"], f"note={p and p['note']}")
-    # 字面路径白名单内 → 命中；白名单外 → 命中但零工具 + 不存在注记
-    p = _nav_fast_path("去/category/tech")
-    check("快道字面路径 /category/tech → 命中",
-          p is not None and 'navigate_to({"path": "/category/tech", "confirm": false})' in p["tools"],
-          f"tools={p and p['tools']}")
+    # 字面路径白名单外 → 命中但零工具 + 不存在注记
     p = _nav_fast_path("去/iot")
     check("快道字面路径 /iot（白名单外）→ 不存在注记零工具",
           p is not None and not p["tools"] and "不存在" in p["note"], f"note={p and p['note']}")
@@ -276,11 +270,69 @@ def test_nav_fast_path():
     check("快道「回首页去」→ 模糊归一命中首页",
           p is not None and 'navigate_to({"path": "/", "confirm": false})' in p["tools"],
           f"tools={p and p['tools']}")
-    # 不命中：模糊/无关表达落回 planner LLM（None）
+    # 不命中：模糊/无关表达落回 planner LLM（None）。请求语（带我/我们）非句首
+    # 动词、字面路径超 8 字（20260827 收紧：句首 match + target≤8 防误判事故）——
+    # 均落回 planner LLM（映射表/字面路径修正兜底，行为正确，仅不省那次 LLM 调用）
     for msg in ["我想去旅行", "帮我留言", "去火星基地", "今天去哪儿",
-                "我想去看看", "怎么去图书馆借书"]:
+                "我想去看看", "怎么去图书馆借书",
+                "带我去设备控制台", "小猫咪我们去设备控制台", "去/category/tech"]:
         check(f"快道不命中「{msg}」→ None（落回 LLM）",
               _nav_fast_path(msg) is None, str(_nav_fast_path(msg)))
+
+
+def test_display_fast_path():
+    """显示意图确定性快道（零 LLM，20260828 影子系统重构）：屏幕名词+写/显示动词
+    强模式 → device_display 计划。PARAMS 不含 text——显示内容由执行模型在工具调用时
+    创作（PLANNER/提取器都不猜内容，根治"点东西"残缺上屏事故）。"""
+    print("[display_fast_path] 显示意图快道")
+    for msg in [
+        "小猫咪，显示屏上写点东西",
+        "在屏幕上显示欢迎光临",
+        "帮我在 OLED 屏上显示天气",
+        "把「今天也要加油」显示到显示器上",
+        "屏幕换成生日快乐",
+        "在设备大屏上打上生日快乐",
+    ]:
+        p = _display_fast_path(msg)
+        check(f"快道命中「{msg[:16]}…」→ device_display（PARAMS 空、内容由模型创作）",
+              p is not None and p["skill"] == "device_display"
+              and p["params"] == {} and p["tools"],
+              f"tools={p and p['tools']}")
+    # 不命中：疑问（问路不是命令）/否定（"不用显示"不是命令）/无屏幕名词 → None
+    for msg in ["屏幕上显示什么了", "怎么在屏幕上显示文字", "不用在屏幕上显示了",
+                "别显示到屏幕上", "今天天气怎么样", "帮我在文档里写个总结"]:
+        check(f"快道不命中「{msg}」→ None（落回 planner LLM）",
+              _display_fast_path(msg) is None, str(_display_fast_path(msg)))
+
+
+def test_chat_claim_check():
+    """闲聊快道声称闸（20260828 影子系统重构）：chat 不再无条件非空豁免——
+    回复含执行声称（已显示/已发送/已执行…）且当前轮零工具 → REVISE
+    （声称无工具返回支撑即编造）；轨迹有工具执行 → 放行；无声称 → 快道 PASS。"""
+    print("[reflector] chat 声称闸")
+    plan = plan_encode(instantiate_plan("chat", {}))
+
+    def chat_state(reply: str, extra=None):
+        msgs = [HumanMessage(content="显示屏上写点东西"), AIMessage(content=reply)]
+        if extra:
+            msgs += extra
+        return {"plan": plan, "reflection_count": 0, "done": False, "messages": msgs}
+
+    # 声称 + 零工具 → REVISE（"点东西"事故同类：文本声称显示成功但无执行）
+    out = reflector_node(chat_state("已经显示到屏幕上了喵～"))
+    check("chat 声称已显示 + 零工具 → REVISE（issue=claim_without_tool）",
+          out["done"] is False and out.get("last_issue", {}).get("issue") == "claim_without_tool",
+          str(out.get("last_issue")))
+    # 声称 + 轨迹有工具执行（事实发生）→ 放行快道 PASS
+    out2 = reflector_node(chat_state("内容已经显示到屏幕上了喵！", extra=[
+        AIMessage(content="", tool_calls=[{"name": "device_oled_display", "args": {"text": "你好"}, "id": "t1"}]),
+        ToolMessage(content="OK: 已下发", tool_call_id="t1", name="device_oled_display")]))
+    check("chat 声称 + 有工具执行 → 放行（快道 PASS）",
+          out2["done"] is True and "chat 快道路" in out2["reflection"], str(out2["reflection"]))
+    # 无声称 → 快道 PASS（普通闲聊不受影响）
+    out3 = reflector_node(chat_state("今天的月色真美呢～"))
+    check("chat 无声称 → 快道 PASS",
+          out3["done"] is True and "chat 快道路" in out3["reflection"], str(out3["reflection"]))
 
 
 def test_tool_retry_state():
@@ -413,7 +465,8 @@ def test_planner_output_re():
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_round_aware_checks, test_confirm_nav_claim_check, test_plan_roundtrip, test_parse_tolerance,
-               test_nav_fast_path, test_reflector_tool_frame_gate, test_planner_output_re,
+               test_nav_fast_path, test_display_fast_path, test_chat_claim_check,
+               test_reflector_tool_frame_gate, test_planner_output_re,
                test_tool_retry_state, test_correction_msg):
         fn()
     if FAILS:

@@ -138,6 +138,10 @@ _PLANNER_PROMPT = """\
 6. 用户消息含常见导航动词（去/回/到/打开/跳转/访问/进入/返回/转到）且提到页面
    别名或路径时 → navigate；口语化措辞（如"回首页""去留言板"）同样是导航意图，
    不要退化成 chat。仅提及页面但不要求前往（如"首页的文章好看吗"）不选 navigate。
+7. 用户要求把某段文字显示/写到 IoT 设备屏幕（如"在屏幕上写XXX""显示屏上显示XXX"
+   "OLED 换成XXX"）时 → device_display（text 参数不用填，由执行模型创作内容）；
+   只是询问设备/屏幕状态或屏幕上有什么内容（如"屏幕上显示什么""设备显示什么"）
+   → device_query 或 chat，不要选 device_display。
 
 输出严格按以下格式，不要输出任何其他内容：
 SKILL: <技能名>
@@ -306,6 +310,13 @@ def _page_ctx(messages: list) -> str:
 #     曾命中句中任意位置的正则；
 #  3. 目标串收紧到 8 字——16 字会整段捕获噪声目标（曾捕获"留言为什么没有按留言执行任务"）。
 _QUESTION_RE = re.compile(r"为什么|怎么|如何|啥|什么|为何|哪儿|哪|吗$|么$|[？?]")
+# 执行声称词（20260828 影子系统重构）：回复含这些词即构成"已对设备/页面执行了
+# 操作"的声称。程序可查的事实：声称必须有工具返回支撑（轨迹里有 ToolMessage），
+# 否则就是编造——确定性检查用代码，判断才用 LLM。
+_EXECUTION_CLAIM_RE = re.compile(
+    r"已(?:经)?(显示|写入|写下|写好|写上去|上屏|发送|下发|执行|展示|打上|放上|刷新|设置)"
+    r"|成功(?:显示|写入|下发|发送|执行)"
+)
 _NAV_VERB_RE = re.compile(
     r"^(?:小猫咪|喵喵|主人|猫猫|喵)?[,，、\s]*"
     r"(?:去一下|回到|返回|跳转到|前往|转到|转跳|打开|进入|去|进|回|到|访问)"
@@ -347,6 +358,39 @@ def _nav_fast_path(user_msg: str) -> dict | None:
     return plan_obj
 
 
+# 显示意图确定性快道（零 LLM，20260828 影子系统重构）：屏幕类名词 + 写/显示类动词
+# 强模式 → 直接实例化 device_display 计划。不经过 planner LLM、更不经过提取器——
+# "显示内容由执行模型在工具调用时创作"（REPLY 契约驱动），彻底移除
+# _extract_display_intent 把"写点东西"提取成"点东西"这类残缺内容事故。
+# 与导航快道同构：命中 = 确定性识别（无模型猜测通道）；不命中 → 落回 planner LLM。
+# 排除项（防误伤）：
+#  - 疑问句式（为什么/怎么/吗/？）——问路不是命令；
+#  - 否定式（不用/不要/别）——"不用在屏幕上显示"不是显示命令；
+#  - 仅"设备"名词不触发（与 device_query 冲突："设备显示什么"是查询）。
+_NEGATION_RE = re.compile(r"不(用|要|想|必|需要)|别|不要")
+_DISPLAY_FAST_RE = re.compile(
+    r"(屏幕|OLED|显示屏|显示器|大屏)[^\n。！？!?]{0,12}(写|显示|展示|换上|换成|改成|放|打上)"
+    r"|(写|显示|展示|换上|换成|改成)[^\n。！？!?]{0,12}(屏幕|OLED|显示屏|显示器|大屏)"
+)
+
+
+def _display_fast_path(user_msg: str) -> dict | None:
+    """显示意图快道：屏幕类名词+写/显示动词强模式 → device_display 计划（零 LLM）。
+
+    返回带 params 的 plan dict（与 planner LLM 路径同构），或 None 落回 planner LLM。
+    内容由执行模型生成（PARAMS 不填 text）——工具调用参数在 model 节点按 REPLY
+    契约创作，杜绝"指令原文残缺片段上屏"。
+    """
+    if _QUESTION_RE.search(user_msg) or _NEGATION_RE.search(user_msg):
+        return None
+    if not _DISPLAY_FAST_RE.search(user_msg):
+        return None
+    plan_obj = instantiate_plan("device_display", {})
+    plan_obj["params"] = {}
+    logger.info("[planner] 显示意图快道命中（零 LLM，内容由执行模型创作）")
+    return plan_obj
+
+
 def planner_node(state: AgentState) -> dict:
     """职责：技能选择器——从技能注册表选技能 + 填参数 → 实例化为计划 → 写入 state.plan。
 
@@ -367,6 +411,12 @@ def planner_node(state: AgentState) -> dict:
     if nav is not None:
         logger.info("[planner] 导航快道命中（零 LLM）: %s", nav["tools"])
         return {"plan": plan_encode(nav), "reflection": "", "reflection_count": 0, "done": False}
+
+    # 显示意图确定性快道（零 LLM）：屏幕类名词+写/显示动词强模式 →
+    # device_display 计划（内容由执行模型创作，PARAMS 不填 text）。
+    display = _display_fast_path(user_msg)
+    if display is not None:
+        return {"plan": plan_encode(display), "reflection": "", "reflection_count": 0, "done": False}
 
     # 快思考模块：低温度（分类不需要创造力）、小 max_tokens、短超时
     llm = get_llm(temperature=0.2, max_tokens=300, timeout=30)
@@ -574,21 +624,24 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
     last_content = (getattr(last, "content", "") or "").strip()
 
     if plan["chat"]:
+        # 闲聊快道声称闸（20260828 影子系统重构）：chat 不再无条件非空豁免——
+        # 回复含执行声称（已显示/已发送/已执行…）且当前轮无任何工具执行时，
+        # 声称没有事实依据（chat 计划 TOOLS 为空，工具调用无合法性），REVISE。
+        # 纯文本比对 + 轨迹扫描，不花 LLM 钱；轨迹确有工具执行（越权调用但
+        # 事实发生）则放行——声称以工具返回为据。
+        if _EXECUTION_CLAIM_RE.search(last_content) and not any(
+                isinstance(m, ToolMessage) for m in _current_round(state["messages"])):
+            correction = _correction_msg(
+                "claim_without_tool",
+                "你的回复声称已执行设备/页面操作（已显示/已写入/已发送/已执行），"
+                "但本轮没有任何工具执行记录——执行声称必须以工具返回为依据；"
+                "未调用工具时不得声称已执行，只能如实说明无法执行或正在做什么",
+            )
+            logger.info("[reflector] 声称闸：chat 回复含执行声称但零工具调用")
+            return {"messages": [correction], "done": False,
+                    "reflection": "chat 回复含执行声称但零工具调用", "reflection_count": count + 1,
+                    "last_issue": {"issue": "claim_without_tool", "detail": "chat 回复含执行声称但零工具调用"}}
         return {"done": bool(last_content), "reflection": "chat 快道路：非空检查通过" if last_content else "chat 回复为空", "reflection_count": count}
-
-    # 设备显示注记快道：后端已按 force_display 强制执行（注记携带执行结果），
-    # reply_contract 授权"直接按注记如实回复、不重复调用工具"——零工具调用是合法
-    # 契约行为。LLM 质检看不到注记（trace 截断 HumanMessage），会把本轮误判为
-    # "TOOLS 未完成"而 REVISE（曾造成回复文本两轮拼接重复）；且执行已由后端保证，
-    # 无再查必要——确定性 PASS（同 chat 快道，只做非空检查）。
-    _DISPLAY_NOTE_MARK = "系统已按访客要求执行设备屏幕显示"
-    has_display_note = any(
-        _DISPLAY_NOTE_MARK in (getattr(m, "content", "") or "")
-        for m in state["messages"] if isinstance(m, HumanMessage)
-    )
-    if has_display_note:
-        logger.info("[reflector] 设备显示注记快道：后端已执行，PASS")
-        return {"done": bool(last_content), "reflection": "设备显示注记快道：后端已执行，无需重复调用工具", "reflection_count": count}
 
     if count >= MAX_REFLECTIONS:
         # 预算耗尽 → 接受当前结果收尾：纠错循环必须有上限，不无限烧钱/烧时间
@@ -671,8 +724,8 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
     # 设备显示结构性检查（确定性，LLM 质检前）：device_display 计划要求调用
     # device_oled_display 但当前轮零工具执行 → 声称"已显示/已发送/已刷新"无依据，
     # REVISE。曾见（20260827 实测）：模型不调工具、回复声称"正在向屏幕发送指令"
-    # ——文本表演过不了此检查。注记快道（force_display 后端已执行）在前面已返回，
-    # 此处只拦纯文本声称；检查范围限定当前轮（同 navigate 检查）。
+    # ——文本表演过不了此检查。影子系统（force_display 注记快道）已删除，此处是
+    # 显示声称的唯一确定性闸口；检查范围限定当前轮（同 navigate 检查）。
     if (plan["skill"] == "device_display"
             and plan["tools"]
             and not any(isinstance(m, ToolMessage) for m in _current_round(state["messages"]))):
