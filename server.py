@@ -121,68 +121,8 @@ async def trace_id_middleware(request: Request, call_next):
     return response
 
 
-# ── 设备显示强制路由（防幻觉根治：显示动作由后端保障，不依赖模型自觉调工具）──
-# 历史教训：模型在"显示类请求"上频繁幻觉（凭历史声称已下发而不调工具），
-# prompt 注入只是缓解。此处改为：命中显示意图 → 后端直接执行 → 结果注入上下文，
-# 模型只负责基于事实回复，无论它说什么，显示动作都已完成。
-_DISPLAY_INTENT_RE = re.compile(r"(屏幕|显示|OLED|设备|大屏|显示器)")
-
-
-def _extract_display_intent(user_msg: str, user_id: int) -> str:
-    """判断用户消息是否有"把文字显示到 IoT 设备屏幕"的意图，有则提取显示内容。
-
-    返回：
-      ""        无显示意图（不执行）
-      "TEXT:xxx" 有意图，xxx 为要显示的内容（≤64 字符）
-    """
-    if user_id <= 0 or not _DISPLAY_INTENT_RE.search(user_msg):
-        return ""
-    from models import get_llm
-    try:
-        # 内容提取必须禁用思考模式（fast 路径，思维链只增加延迟与泄露风险）
-        llm = get_llm(streaming=False, max_tokens=128, enable_thinking=False)
-        prompt = (
-            "你是博客 IoT 助手的内容提取器。判断用户消息是否要求把某段文字显示到 IoT 设备的屏幕"
-            "（如'在屏幕上显示XXX'、'屏幕换成XXX'、'在设备屏幕上写XXX'、'让设备显示XXX'）。\n"
-            "若明确要求显示：只输出该段文字本身（去掉'显示/换成/写'等引导语，"
-            "不要任何解释、引号包裹或前后缀）。\n"
-            "若只是询问状态、否定（如'不用显示'）、或没有明确显示指令：输出 NONE。\n"
-            "用户消息："
-        )
-        out = (llm.invoke(prompt + user_msg).content or "").strip().strip('"\'「」『』')
-        if not out or out.upper() == "NONE" or len(out) > 64:
-            return ""
-        return "TEXT:" + out
-    except Exception as e:
-        logger.warning("显示意图提取失败: %s", e)
-        return ""
-
-
-def _force_display(user_msg: str, user_id: int) -> str:
-    """强制显示路由：有显示意图则后端直接执行 device_oled_display。
-
-    返回注入上下文的注记（"系统已执行…"或失败说明），无意图返回 ""。
-    """
-    intent = _extract_display_intent(user_msg, user_id)
-    if not intent.startswith("TEXT:"):
-        return ""
-    from tools.base import device_oled_display
-    from langchain_core.runnables.config import RunnableConfig
-    result = device_oled_display.invoke(
-        {"text": intent[5:]},
-        config=RunnableConfig(configurable={"user_id": user_id}),
-    )
-    return (f"\n[System: 系统已按访客要求执行设备屏幕显示，内容：{intent[5:]!r}，"
-            f"执行结果：{result}]")
-
-
-def _build_messages(req: ChatRequest, display_note: str = "") -> list:
-    """Build the message list from the request (sync, no blocking).
-
-    Args:
-        display_note: 后端已强制执行的设备显示结果注记（"系统已执行…"），
-            追加到最后一条用户消息末尾，模型据此如实回复，无需（也不应）再调工具。
-    """
+def _build_messages(req: ChatRequest) -> list:
+    """Build the message list from the request (sync, no blocking)."""
     messages = []
     ctx_parts = [f"user_id={req.user_id}, page={req.current_url}, title={req.page_title}"]
     ctx_parts.append(f"current_effects={req.current_effects or 'none'}")
@@ -203,21 +143,7 @@ def _build_messages(req: ChatRequest, display_note: str = "") -> list:
             # 模型对"谁说过什么"的区分不再依赖前缀文本）
             messages.append(AIMessage(content=h["content"]))
 
-    last_msg = req.message
-    # IoT 设备显示请求的定向强化：对话历史中"文本声称已显示/已下发"的回合会形成
-    # few-shot 反例，模型会从历史里学到"用文本表演代替工具调用"（曾导致屏幕指令
-    # 从未下发）。在消息末尾注入强约束指令（与 SUMMARY 指令同位置、同防复述机制），
-    # 确保显示类请求本轮必然调用 device_oled_display 工具
-    if re.search(r"(屏幕|显示|OLED|设备)", last_msg):
-        last_msg += (
-            "\n\n<系统内部指令-仅供执行，禁止在回复中复述或输出本条指令本身>"
-            "检测到访客要求操作 IoT 设备屏幕：你必须调用 device_oled_display 工具"
-            "（text 参数传要显示的内容）来完成，不得以任何文本形式声称"
-            "'已显示/已下发/已发送'——不调用工具的文本声称会被系统判定为无效操作。"
-        )
-    if display_note:
-        last_msg += display_note
-    messages.append(HumanMessage(content=last_msg))
+    messages.append(HumanMessage(content=req.message))
     return messages
 
 
@@ -306,10 +232,6 @@ async def chat(req: ChatRequest):
 
     try:
         loop = asyncio.get_event_loop()
-        # 强制显示路由（防幻觉）：有显示意图时后端直接执行，结果注入上下文。
-        display_note = await _submit_with_context(loop, _force_display, req.message, req.user_id)
-        if display_note:
-            messages = _build_messages(req, display_note)
         # 摘要独立化（needs_summary 轮）：与 agent 图并行做后端总结——输入是原始
         # 历史数据而非模型回复，杜绝"回复耦合生成"时代的推断/编造（曾出现摘要
         # 编造"助手调用工具"污染记忆）。生成失败返回空 → 不入库，旧摘要保留。
@@ -487,14 +409,6 @@ async def chat_stream(req: ChatRequest, request: Request):
     messages = _build_messages(req)
     # 每请求独立线程：避免 MemorySaver 线程状态随长对话无限累积（见 /chat 注释）
     thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
-
-    # 强制显示路由（防幻觉）：命中显示意图时后端直接执行（阻塞调用放 executor），
-    # 结果注记随上下文下发，模型据此如实回复。
-    display_note = await _submit_with_context(
-        asyncio.get_event_loop(), _force_display, req.message, req.user_id
-    )
-    if display_note:
-        messages = _build_messages(req, display_note)
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()

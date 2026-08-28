@@ -135,12 +135,13 @@ SKILLS: list[Skill] = [
     Skill(
         name="device_display",
         description="用户要求在 IoT 设备（ESP32 OLED 屏幕）上显示某段文字时使用。",
-        inputs={"text": "要显示的文字内容"},
+        inputs={"text": "要显示的文字内容（planner 无需填写，由执行模型结合对话创作）"},
         plan=[("device_oled_display", {"text": "$text"})],
-        complete_when="device_oled_display 返回成功（或以系统注记形式已执行）",
+        complete_when="device_oled_display 返回成功",
         reply_contract=(
-            "若上下文已含'系统已按访客要求执行设备屏幕显示'注记，直接按注记回复，无需重复调用；"
-            "否则调用 device_oled_display；执行结果以工具返回为准，不编造设备状态"
+            "调用 device_oled_display 显示文字：text 参数由你结合当前对话/场景创作（温暖、"
+            "应景、一两句话以内），不得使用访客指令原文的残缺片段（如把'写点东西'当内容）；"
+            "执行结果以工具返回为准，回复必须描述实际显示的内容，不得编造显示内容或设备状态"
         ),
     ),
     Skill(
