@@ -76,8 +76,9 @@ class ChatRequest(BaseModel):
     current_effects: str = ""
     # 前端上报的夜间模式实时状态（"on"/"off"），供 agent 感知真实开关状态（与特效同理）
     current_darkmode: str = ""
-    # 多模态图片输入：前端压缩后的 dataURL（20260828，qwen3.8-flash 原生支持图像）
-    image: str = ""
+    # 多模态图片输入：前端压缩后的 dataURL 数组（20260828 单图 → 20260828s 多图，
+    # 最多 6 张、每张 ≤1MB；qwen3.8-flash 原生支持图像）。兼容旧版单串（golden 直连）
+    image: str | list[str] = ""
 
 
 class ChatResponse(BaseModel):
@@ -145,13 +146,20 @@ def _build_messages(req: ChatRequest) -> list:
             # 模型对"谁说过什么"的区分不再依赖前缀文本）
             messages.append(AIMessage(content=h["content"]))
 
+    # 多模态（20260828 单图 → 20260828s 多图）：图片 + 文字转 OpenAI content 数组
+    # （qwen 实测支持，100x100 红图识别正确）。多图循环拼 content 数组，每张一个
+    # image_url 块（视觉 token 注入消息序列尾部，前缀零污染，缓存命中不受影响）。
+    # 图片本体不进历史（Rust 侧落库加 "[图片]"/"[图片×N]" 标记）。
     if req.image:
-        # 多模态（20260828）：图片 + 文字转 OpenAI content 数组（qwen 实测支持，
-        # 100x100 红图识别正确）。图片本体不进历史（Rust 侧落库加 "[图片]" 标记）。
-        messages.append(HumanMessage(content=[
-            {"type": "image_url", "image_url": {"url": req.image}},
-            {"type": "text", "text": req.message or "请描述这张图片"},
-        ]))
+        content: list = []
+        if isinstance(req.image, str):
+            imgs = [req.image]
+        else:
+            imgs = req.image
+        for url in imgs:
+            content.append({"type": "image_url", "image_url": {"url": url}})
+        content.append({"type": "text", "text": req.message or "请描述这些图片"})
+        messages.append(HumanMessage(content=content))
     else:
         messages.append(HumanMessage(content=req.message))
     return messages

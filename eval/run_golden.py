@@ -162,7 +162,7 @@ def main():
         ctx = case.get("context", {})
         req = ChatRequest(
             message=case["user_input"],
-            image=case.get("image", ""),  # 多模态：dataURL 图片（image_color_red 等用例）
+            image=case.get("image", []),  # 多模态：dataURL 数组（image_color_red 等用例；服务端兼容单串）
             current_url=ctx.get("current_url", "/"),
             page_title=ctx.get("page_title", ""),
             user_id=ctx.get("user_id", 0),
