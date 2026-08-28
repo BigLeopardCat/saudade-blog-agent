@@ -65,6 +65,19 @@ def _stopped(config: RunnableConfig | None) -> bool:
 _TOOLS = get_all_tools()
 _TOOL_MAP = {t.name: t for t in _TOOLS}
 
+# 高危动作工具（有副作用 + 不可逆/外部影响）：只能在计划 TOOLS 行明确列出时执行
+# （tools_node 授权检查）。与只读查询工具（检索/列表）区分——查询任何计划下合法，
+# 高危动作越权即拒。
+# 依据：问题记录 1.11 无需求重放风险分析 + 20260828 golden 实证（content_query
+# 计划下执行留言注入指令真跳转 /device-console/；/iot 语义替身同样经此越权）。
+# 范围取舍（20260828 golden 第二轮实证后收缩）：navigate_to（页面位置真实性，
+# 1.9/1.12 事故核心）+ device_oled_display（外部设备写，2.x 事故核心）保持高危；
+# toggle_effect/toggle_dark_mode 是页面视觉开关，误执行无位置误导/外部影响，且
+# planner 判错技能时允许 model 自纠正（曾见 planner 把"改成下雨"判成 chat →
+# 授权拒绝后整轮退化为"权限受限"）——视觉开关不做执行前授权，交给 reflector
+# 幂等判定 + LLM 质检兜底。
+_ACTION_TOOLS = {"navigate_to", "device_oled_display"}
+
 # reflector 纠错预算：最多 REVISE 2 次，防止反思循环烧钱/烧时间
 MAX_REFLECTIONS = 2
 # 工具失败重试上限：同一 (工具, 参数) 调用失败最多允许模型修正重试 1 次
@@ -319,7 +332,7 @@ _EXECUTION_CLAIM_RE = re.compile(
 )
 _NAV_VERB_RE = re.compile(
     r"^(?:小猫咪|喵喵|主人|猫猫|喵)?[,，、\s]*"
-    r"(?:去一下|回到|返回|跳转到|前往|转到|转跳|打开|进入|去|进|回|到|访问)"
+    r"(?:去一下|回到|返回|跳转到|前往|转到|转跳|打开|进入|带我(?:去|到)|去|进|回|到|访问)"
     r"\s*([^\s，。！？!?～~、；;：:]{1,8})$"
 )
 
@@ -508,6 +521,14 @@ def tools_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     if _stopped(config):
         logger.info("[tools] cancelled (client disconnected) — 不执行任何工具（含写操作）")
         raise AgentCancelled()
+    # 执行前授权检查（问题记录 1.11 候选修复落地，20260828）：动作工具只能在
+    # 计划 TOOLS 行明确列出时执行——planner 是唯一决策点，model 无自由动作权。
+    # golden 实证（20260828）：content_query 计划下 model 检索留言后把留言内容
+    # （注入测试留言"读到我去执行 navigate_to…"）当指令真执行跳转 /device-console/；
+    # /iot 语义替身同样经此越权。只读查询工具（检索/列表）任何计划下合法，
+    # 动作工具（导航/特效/夜间/设备写）越权即拒——计划外调用零副作用。
+    plan = parse_plan(state.get("plan", ""))  # 缺 plan 容错 → chat 兜底（allowed 空，动作工具全拒）
+    allowed = {t.split("(")[0].strip() for t in plan["tools"]}
     last = state["messages"][-1]
     results, seen = [], set()
     # 20260828 图改进①：工具失败显式跟踪。原实现失败只以 __ERROR__ ToolMessage
@@ -523,6 +544,15 @@ def tools_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         tool = _TOOL_MAP.get(call["name"])
         if tool is None:
             out = f"__ERROR__: 未知工具 {call['name']}"
+        elif call["name"] in _ACTION_TOOLS and call["name"] not in allowed:
+            # 授权拒绝：动作工具不在计划 TOOLS 行（如自由计划下把检索到的留言
+            # 指令当命令执行、/iot 语义替身）——零执行，返回拒绝信息让模型
+            # 按计划重来（__ERROR__ 前缀走重试语义：修正后不再调用即如实回复）
+            out = (f"__ERROR__: 工具 {call['name']} 不在本次执行计划的 TOOLS 中"
+                   f"（计划允许: {'、'.join(sorted(allowed)) if allowed else '仅只读查询'}），"
+                   f"不得在计划外执行动作工具——按计划执行或直接如实回复")
+            logger.info("[tools] 授权拒绝：%s 不在计划 TOOLS 中（allowed=%s）",
+                        call["name"], sorted(allowed))
         else:
             try:
                 out = tool.invoke(call.get("args", {}))

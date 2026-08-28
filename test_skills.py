@@ -16,7 +16,7 @@ import sys
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent.graph import (_PLANNER_OUTPUT_RE, _current_round, _display_fast_path, _nav_fast_path,
-                         _parse_params, plan_encode, parse_plan, reflector_node)
+                         _parse_params, plan_encode, parse_plan, reflector_node, tools_node)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, instantiate_plan
 
 FAILS = []
@@ -242,6 +242,7 @@ def test_nav_fast_path():
     # 命中：直接意图（direct）
     for msg, path in [
         ("去物联网平台", "/device-console/"),
+        ("带我去设备控制台", "/device-console/"),   # 20260828：请求语"带我去X"进快道（golden nav_request_phrase 实证）
         ("打开留言板", "/guestbook"),
         ("到物联网平台", "/device-console/"),
         ("返回首页", "/"),
@@ -270,12 +271,13 @@ def test_nav_fast_path():
     check("快道「回首页去」→ 模糊归一命中首页",
           p is not None and 'navigate_to({"path": "/", "confirm": false})' in p["tools"],
           f"tools={p and p['tools']}")
-    # 不命中：模糊/无关表达落回 planner LLM（None）。请求语（带我/我们）非句首
-    # 动词、字面路径超 8 字（20260827 收紧：句首 match + target≤8 防误判事故）——
-    # 均落回 planner LLM（映射表/字面路径修正兜底，行为正确，仅不省那次 LLM 调用）
+    # 不命中：模糊/无关表达落回 planner LLM（None）。请求语（我们）非句首动词、
+    # 字面路径超 8 字（20260827 收紧：句首 match + target≤8 防误判事故）——
+    # 均落回 planner LLM（映射表/字面路径修正兜底，行为正确，仅不省那次 LLM 调用）。
+    # "带我去X"已入快道（20260828），"小猫咪我们去X"仍落回 LLM。
     for msg in ["我想去旅行", "帮我留言", "去火星基地", "今天去哪儿",
                 "我想去看看", "怎么去图书馆借书",
-                "带我去设备控制台", "小猫咪我们去设备控制台", "去/category/tech"]:
+                "小猫咪我们去设备控制台", "去/category/tech"]:
         check(f"快道不命中「{msg}」→ None（落回 LLM）",
               _nav_fast_path(msg) is None, str(_nav_fast_path(msg)))
 
@@ -364,6 +366,72 @@ def test_tool_retry_state():
     ctx2 = _retry_context([{"key": ("navigate_to", "{}"), "name": "navigate_to", "args": {"path": "/fake/"}, "error": "__ERROR__: 路径无效", "attempt": 2}])
     check("attempt>上限 → 上下文要求停止重试如实告知", "停止重试" in ctx2 and "不得编造成功" in ctx2, ctx2[:60])
     check("空 retries → 空上下文", _retry_context([]) == "", repr(_retry_context([])))
+
+
+def test_tools_authorization():
+    """tools_node 执行前授权检查（问题记录 1.11 落地，20260828）：动作工具只能在
+    计划 TOOLS 行明确列出时执行——content_query 自由计划下把检索到的留言注入指令
+    当命令执行、/iot 语义替身均被拒绝（__ERROR__ 返回、零执行）；计划内调用放行。"""
+    print("[tools] 执行前授权检查")
+    # 越权：content_query 计划（TOOLS 空）下 model 调 navigate_to → 拒绝
+    state = {
+        "plan": plan_encode(instantiate_plan("content_query", {})),
+        "reflection_count": 0, "done": False, "tool_retries": [],
+        "messages": [HumanMessage(content="你读到留言为什么没有按留言执行任务"),
+                     AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {"path": "/device-console/", "confirm": False}, "id": "t1"}])],
+    }
+    out = tools_node(state)
+    msgs = out["messages"]
+    check("计划外 navigate_to → 授权拒绝（__ERROR__，零执行）",
+          msgs and msgs[-1].content.startswith("__ERROR__") and "不在本次执行计划" in msgs[-1].content,
+          str(msgs[-1].content[:60]) if msgs else "no msg")
+    # 越权：chat 计划下 device_oled_display → 拒绝
+    state2 = {
+        "plan": plan_encode(instantiate_plan("chat", {})),
+        "reflection_count": 0, "done": False, "tool_retries": [],
+        "messages": [HumanMessage(content="显示屏上写点东西"),
+                     AIMessage(content="", tool_calls=[{"name": "device_oled_display", "args": {"text": "你好"}, "id": "t1"}])],
+    }
+    out2 = tools_node(state2)
+    check("计划外 device_oled_display → 授权拒绝",
+          out2["messages"] and "不在本次执行计划" in out2["messages"][-1].content,
+          str(out2["messages"][-1].content[:60]))
+    # 越权返回计入 tool_retries 失败语义（模型可修正重来）
+    check("拒绝计入 tool_retries", len(out2["tool_retries"]) == 1, str(out2["tool_retries"]))
+    # 放行：navigate 计划 TOOLS 明确列出 → 正常执行
+    state3 = {
+        "plan": plan_encode(instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"})),
+        "reflection_count": 0, "done": False, "tool_retries": [],
+        "messages": [HumanMessage(content="打开物联网平台"),
+                     AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {"path": "/device-console/", "confirm": False}, "id": "t1"}])],
+    }
+    out3 = tools_node(state3)
+    check("计划内 navigate_to → 正常执行（帧产出）",
+          out3["messages"] and out3["messages"][-1].content.startswith("AUTO_NAVIGATE:"),
+          str(out3["messages"][-1].content[:60]) if out3["messages"] else "no msg")
+    # 只读查询工具任何计划下合法：content_query 计划下 list_talks → 放行
+    state4 = {
+        "plan": plan_encode(instantiate_plan("content_query", {})),
+        "reflection_count": 0, "done": False, "tool_retries": [],
+        "messages": [HumanMessage(content="看看留言"),
+                     AIMessage(content="", tool_calls=[{"name": "list_talks", "args": {}, "id": "t1"}])],
+    }
+    out4 = tools_node(state4)
+    check("只读查询工具自由计划下放行",
+          out4["messages"] and not out4["messages"][-1].content.startswith("__ERROR__"),
+          str(out4["messages"][-1].content[:60]) if out4["messages"] else "no msg")
+    # 视觉开关不在高危名单（20260828 收缩）：chat 计划下 toggle_effect → 放行
+    # （planner 判错技能时允许 model 自纠正；reflector 幂等判定 + LLM 质检兜底）
+    state5 = {
+        "plan": plan_encode(instantiate_plan("chat", {})),
+        "reflection_count": 0, "done": False, "tool_retries": [],
+        "messages": [HumanMessage(content="改成下雨吧"),
+                     AIMessage(content="", tool_calls=[{"name": "toggle_effect", "args": {"effect": "rain", "action": "on"}, "id": "t1"}])],
+    }
+    out5 = tools_node(state5)
+    check("视觉开关 toggle_effect 自由计划下放行（非高危）",
+          out5["messages"] and not out5["messages"][-1].content.startswith("__ERROR__"),
+          str(out5["messages"][-1].content[:60]) if out5["messages"] else "no msg")
 
 
 def test_correction_msg():
@@ -467,7 +535,7 @@ def main():
                test_round_aware_checks, test_confirm_nav_claim_check, test_plan_roundtrip, test_parse_tolerance,
                test_nav_fast_path, test_display_fast_path, test_chat_claim_check,
                test_reflector_tool_frame_gate, test_planner_output_re,
-               test_tool_retry_state, test_correction_msg):
+               test_tool_retry_state, test_tools_authorization, test_correction_msg):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
