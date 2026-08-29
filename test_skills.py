@@ -19,6 +19,22 @@ from agent.graph import (_PLANNER_OUTPUT_RE, _current_round, _display_fast_path,
                          _parse_params, plan_encode, parse_plan, reflector_node, tools_node)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, instantiate_plan
 
+# 反射器 LLM 质检 stub：本文件是技能/plan 契约单元测试，质检路径不应依赖真实
+# LLM——CI 干净环境无 QWEN_API_KEY（openai 客户端构造即抛 Missing credentials），
+# 本机每次跑还会花真实 token。固定返回 VERDICT: PASS；断言"落回 LLM 质检"的
+# 用例只关心分支正确性（reflection 非确定性标记），不关心 LLM 输出内容。
+class _FakeLLM:
+    def __init__(self, **kwargs):
+        pass
+
+    def invoke(self, *args, **kwargs):
+        from types import SimpleNamespace
+        return SimpleNamespace(content="VERDICT: PASS")
+
+
+import agent.graph as _graph
+_graph.get_llm = lambda **kwargs: _FakeLLM(**kwargs)
+
 FAILS = []
 
 
