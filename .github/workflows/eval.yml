@@ -1,0 +1,34 @@
+# Eval Gate —— push 自动跑评测，失败阻断（roadmap 步骤 4）
+# 依赖仓库 Secrets 配置 QWEN_API_KEY（真实 LLM 调用）：
+#   Settings → Secrets and variables → Actions → New repository secret
+#   QWEN_API_KEY = 阿里云百炼 API key（与服务器 .env 的 QWEN_API_KEY 同值）
+name: Eval Gate
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: 技能注册表/plan 契约单元测试（秒级，纯函数）
+        run: uv run python test_skills.py
+
+      - name: Golden 评测集（真实 LLM，27 条约 5-15 分钟）
+        env:
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+          # trace 落盘到 CI 工作区（settings.trace_dir 默认本机路径，runner 上不可写）
+          TRACE_DIR: /tmp/saudade-traces
+        run: uv run python eval/run_golden.py
