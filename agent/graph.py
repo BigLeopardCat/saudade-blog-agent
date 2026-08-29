@@ -43,6 +43,7 @@ from tools import get_all_tools
 from agent.prompts import BLOG_ASSISTANT_PROMPT
 from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
                           build_planner_context, instantiate_plan)
+from utils.trace import record
 
 logger = logging.getLogger(__name__)
 
@@ -434,12 +435,14 @@ def planner_node(state: AgentState) -> dict:
     nav = _nav_fast_path(user_msg)
     if nav is not None:
         logger.info("[planner] 导航快道命中（零 LLM）: %s", nav["tools"])
+        record("planner", "fastpath", kind="nav", tools=nav["tools"])
         return {"plan": plan_encode(nav), "reflection": "", "reflection_count": 0, "done": False}
 
     # 显示意图确定性快道（零 LLM）：屏幕类名词+写/显示动词强模式 →
     # device_display 计划（内容由执行模型创作，PARAMS 不填 text）。
     display = _display_fast_path(user_msg)
     if display is not None:
+        record("planner", "fastpath", kind="display")
         return {"plan": plan_encode(display), "reflection": "", "reflection_count": 0, "done": False}
 
     # 快思考模块：低温度（分类不需要创造力）、小 max_tokens、短超时
@@ -451,6 +454,7 @@ def planner_node(state: AgentState) -> dict:
         skills_context=build_planner_context(), tools_desc=_tools_desc(),
         page_ctx=_page_ctx(state["messages"]), user_msg=user_msg))
     logger.info("[planner] LLM 完成 耗时=%.1fs", time.monotonic() - _t0)
+    record("planner", "llm_done", duration_s=round(time.monotonic() - _t0, 2))
     raw = getattr(resp, "content", str(resp))
     skill_name = re.search(r"SKILL\s*[:=]\s*(\w+)", raw, re.IGNORECASE)
     skill_name = skill_name.group(1) if skill_name else "chat"
@@ -472,6 +476,7 @@ def planner_node(state: AgentState) -> dict:
         plan_obj["params"] = {"target": lit.group(0), "mode": "direct"}
 
     logger.info("[planner] skill=%s params=%s tools=%s", plan_obj["skill"], plan_obj["params"], plan_obj["tools"])
+    record("planner", "decision", skill=plan_obj["skill"], params=plan_obj["params"], tools=plan_obj["tools"])
 
     return {"plan": plan_encode(plan_obj), "reflection": "", "reflection_count": 0, "done": False}
 
@@ -525,9 +530,12 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 前需另找数据源（API 侧账单或请求级 usage 透传）
     _t0 = time.monotonic()
     logger.info("[model] LLM 调用开始")
+    record("model", "llm_start")
     resp = llm.bind_tools(_TOOLS).invoke([system] + state["messages"])
     logger.info("[model] LLM 完成 tool_calls=%s 耗时=%.1fs",
                 [c["name"] for c in resp.tool_calls], time.monotonic() - _t0)
+    record("model", "llm_done", tool_calls=[c["name"] for c in resp.tool_calls],
+           duration_s=round(time.monotonic() - _t0, 2))
     return {"messages": [resp]}
 
 
@@ -565,6 +573,7 @@ def tools_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         if key in seen:
             continue
         seen.add(key)
+        _t_tool = time.monotonic()
         tool = _TOOL_MAP.get(call["name"])
         if tool is None:
             out = f"__ERROR__: 未知工具 {call['name']}"
@@ -584,6 +593,11 @@ def tools_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                 out = f"__ERROR__: {type(e).__name__}: {e}"
         results.append(ToolMessage(content=str(out), tool_call_id=call["id"], name=call["name"]))
         logger.info("[tools] %s → %.100s", call["name"], str(out))
+        # trace 落盘：工具调用（名称/参数/耗时/结果摘要）——RAG 评估里
+        # "检索工具拖慢"直接读 duration_s 判定
+        record("tools", "call", name=call["name"], args=call.get("args", {}),
+               duration_s=round(time.monotonic() - _t_tool, 3),
+               result=str(out)[:200])
         if str(out).startswith("__ERROR__"):
             attempt = sum(1 for r in retries if r["key"] == key) + 1
             retries.append({
@@ -655,6 +669,18 @@ def _current_round(messages: list) -> list:
 
 
 def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
+    """质检节点包装：统一 trace 打点——快慢道/确定性检查/LLM 质检各返回
+    路径都经过这里，一条 check 事件覆盖全部判定（done=False=REVISE）。"""
+    _t0 = time.monotonic()
+    out = _reflector_node_inner(state, config)
+    record("reflector", "check", done=out.get("done"),
+           count=out.get("reflection_count", 0),
+           reflection=(out.get("reflection") or "")[:200],
+           duration_s=round(time.monotonic() - _t0, 2))
+    return out
+
+
+def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 客户端断开检查：不再发起质检 LLM 调用（断连后停止一切 LLM 开销）
     if _stopped(config):
         logger.info("[reflector] cancelled (client disconnected)")

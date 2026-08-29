@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     # ── Logging ─────────────────────────────────────────────────────
     log_level: str = "INFO"
 
+    # ── Tracing（对话执行 trace 落盘，见 utils/trace.py）──────────────
+    # 每请求一份 JSON（输入/节点事件序列/分段耗时/回复/退出原因）；
+    # 与项目 logs/ 目录对齐（日志体系规范见 CLAUDE.md §2），logrotate 轮转
+    trace_dir: str = "/home/ubuntu/memory_blog_rust/logs/traces"
+
     # ── Active provider helpers ─────────────────────────────────────
 
     @property

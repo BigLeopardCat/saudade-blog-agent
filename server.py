@@ -25,7 +25,8 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 from agent import create_agent
 from agent.graph import AgentCancelled, graph_input
 from utils import setup_logging
-from utils.logging import set_trace_id
+from utils.logging import get_trace_id, set_trace_id
+from utils.trace import finish_trace, record, start_trace
 
 logger = logging.getLogger(__name__)
 
@@ -307,6 +308,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         #   is_chat_skill —— SKILL=chat 快道：无执行可查（reflector 走非空快道），
         #     收尾不发"✓ 质检通过"，避免对闲聊展示虚假的质检过程
         round_buf = ""
+        # 最终回复正文（trace 落盘用）：updates 的 model 帧里取最后一条
+        # 无 tool_calls 的 AIMessage——REVISE 轮自动覆盖为最新一轮
+        final_reply = ""
         process_emitted = False
         emitted: set = set()
         is_chat_skill = False
@@ -365,6 +369,13 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         # 让占位帧有闭环（数据本身已作为帧转发给前端展示）
                         emit_process("✅ 工具执行完成", key="tool_done_other")
             elif mode == "updates":
+                # 最终回复正文收集（trace 落盘）：model 节点的完整 AIMessage
+                # （REVISE 轮后续 model 再产出时覆盖——最终轮即最后一条）
+                model_upd = data.get("model")
+                if model_upd and model_upd.get("messages"):
+                    _m = model_upd["messages"][-1]
+                    if isinstance(_m, AIMessage) and not _m.tool_calls and _m.content:
+                        final_reply = str(_m.content)
                 # 计划（planner 是 invoke 非流式——messages 通道不会有其 chunk，
                 # 规划占位帧在此发：所有技能都有"规划中"第一阶段反馈）
                 planner_upd = data.get("planner")
@@ -405,6 +416,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         else:
             # for 自然耗尽（无 break）= graph 完整跑完，未被断连打断
             logger.info("[stream] graph complete (uninterrupted)")
+        # trace 落盘：最终回复随 producer 收尾记录（finish_trace 落盘时并入）
+        record("producer", "stream_end", reply=final_reply)
         asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
     except AgentCancelled:
         # 图内节点检测到断连 → 静默收尾（客户端已断开，无帧可发；不放异常
@@ -427,6 +440,13 @@ async def chat_stream(req: ChatRequest, request: Request):
     messages = _build_messages(req)
     # 每请求独立线程：避免 MemorySaver 线程状态随长对话无限累积（见 /chat 注释）
     thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
+    # trace 落盘（roadmap 步骤 2）：请求级 recorder 挂 contextvar——producer
+    # 经 _submit_with_context 的 copy_context 继承，图节点内 record 命中；
+    # 收尾由 event_stream finally 统一 finish_trace（见其注释，超时场景也要落盘）
+    start_trace(get_trace_id(), req.user_id, thread_id, {
+        "message": (req.message or "")[:200], "has_image": bool(req.image),
+        "needs_summary": bool(req.needs_summary), "history_len": len(req.history),
+    })
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
@@ -564,8 +584,17 @@ async def chat_stream(req: ChatRequest, request: Request):
             logger.warning("[stream] yield 失败（客户端断开?）: %s", e)
         finally:
             # 可观测性：请求生命周期汇总（所有退出路径——断连/超时/异常/正常收尾）
+            # unknown 归一：连接被外部关闭（如 head 截断管道）时生成器非异常
+            # 终止（GeneratorExit 类路径，不匹配任何 except），end_reason 保持
+            # 初值——归一为 client_closed，日志/trace 均可解释
+            if end_reason == "unknown":
+                end_reason = "client_closed"
             logger.info("[stream] end reason=%s duration=%.1fs frames=%d",
                         end_reason, loop.time() - started, frames)
+            # trace 落盘：所有退出路径统一收尾（超时场景 producer 还挂着，
+            # 落中途 trace——事件序列最后一条即挂点，如 model llm_start 后无
+            # llm_done 就是 LLM API 侧慢；dumped 后线程晚到的事件丢弃不补写）
+            finish_trace(get_trace_id(), end_reason, loop.time() - started, frames)
             # 任何退出路径（断连/超时/正常收尾）都通知生产者停止：
             # 图内节点检查 stop_event 后终止，避免 agent 在无人接收时继续消耗
             stop_event.set()
