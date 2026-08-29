@@ -29,19 +29,19 @@
 
 ```
 saudade-blog-agent/
-├── server.py               # FastAPI 入口：/chat、/chat/stream、/health；强制显示路由；流式编排
-├── main.py                 # CLI 调试入口（交互式 / --ask 单问）
+├── server.py               # FastAPI 入口：/chat、/chat/stream、/health；流式编排（生产唯一入口）
 ├── agent/
 │   ├── graph.py            # ★ 手写 LangGraph 图：planner(选技能) → model(模板执行) → tools → reflector(模板质检)
 │   ├── skills.py           # ★ 技能注册表：7 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
 │   ├── agent.py            # create_agent：手写图入口（build_graph）
 │   ├── memory.py           # MemorySaver 兼容存根（实际不承担记忆，见文档 §4.6）
 │   └── prompts.py          # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 工具约束
-├── chains/                 # [预留] LCEL 链组合（仅占位）
 ├── config/settings.py      # pydantic-settings 配置
 ├── models/llm.py           # LLM 工厂：provider 三选一（qwen/deepseek/openai）
 ├── tools/base.py           # 21 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重
+├── utils/                  # logging（trace_id/日志）+ trace（对话 trace 落盘）+ tts（未启用）+ helpers
 ├── eval/                   # 评测：golden set + run_golden.py（L2 任务级，真实 LLM）
+├── scripts/                # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
 ├── test_skills.py          # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
 └── docs/                   # 架构文档 + 评测可观测设计
 ```
@@ -54,12 +54,6 @@ saudade-blog-agent/
 cd saudade-blog-agent
 uv sync                       # 创建 .venv + 安装依赖
 cp .env.example .env         # 填入 LLM API Key（生产：qwen → qwen3.6-flash）
-```
-
-**本地调试（CLI）**：
-```bash
-uv run python main.py                    # 交互式聊天
-uv run python main.py --ask "打开物联网平台"
 ```
 
 **以服务方式运行（生产形态）**：

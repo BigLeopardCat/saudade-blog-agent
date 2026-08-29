@@ -74,7 +74,6 @@ flowchart TB
 ```
 本仓库（saudade-blog-agent）    # ★ Python Agent（独立 git 仓库，线上改动需本地重启 :8010 生效）
 ├── server.py                  # FastAPI 入口：/chat、/chat/stream、/health；强制显示路由；流式编排
-├── main.py                    # CLI 调试入口（交互式 / --ask 单问，同 create_agent 手写图）
 ├── agent/
 │   ├── graph.py               # ★ 手写 LangGraph 图：planner(选技能) → model(模板执行) → tools → reflector(模板质检)
 │   ├── agent.py               # create_agent：手写图入口（build_graph，planner → model ⇄ tools → reflector）
@@ -82,7 +81,6 @@ flowchart TB
 │   ├── skills.py              # ★ 技能注册表：7 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
 │   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 工具约束（无对话内 SUMMARY 协议）
 │   └── __init__.py
-├── chains/                    # LCEL chain 组合预留（当前仅占位）
 ├── tools/
 │   ├── base.py                # 21 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重
 │   └── __init__.py
