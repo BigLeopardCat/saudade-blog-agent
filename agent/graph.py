@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Annotated, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -442,10 +443,14 @@ def planner_node(state: AgentState) -> dict:
         return {"plan": plan_encode(display), "reflection": "", "reflection_count": 0, "done": False}
 
     # 快思考模块：低温度（分类不需要创造力）、小 max_tokens、短超时
+    # 20260829：耗时打点与 model 节点对称（planner 慢同样常见，统一可查）
     llm = get_llm(temperature=0.2, max_tokens=300, timeout=30)
+    _t0 = time.monotonic()
+    logger.info("[planner] LLM 调用开始")
     resp = llm.invoke(_PLANNER_PROMPT.format(
         skills_context=build_planner_context(), tools_desc=_tools_desc(),
         page_ctx=_page_ctx(state["messages"]), user_msg=user_msg))
+    logger.info("[planner] LLM 完成 耗时=%.1fs", time.monotonic() - _t0)
     raw = getattr(resp, "content", str(resp))
     skill_name = re.search(r"SKILL\s*[:=]\s*(\w+)", raw, re.IGNORECASE)
     skill_name = skill_name.group(1) if skill_name else "chat"
@@ -512,8 +517,17 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         persona=BLOG_ASSISTANT_PROMPT, plan=state["plan"],
         page_ctx=_page_ctx(state["messages"]))
         + _retry_context(state.get("tool_retries") or []))
+    # 20260829：LLM 调用耗时打点——单次调用异常慢（qwen API 拥堵时 ~50s，
+    # 15:21 事故：前端 idleTimeout 45s 先断、日志只有返回后一行，等待时长
+    # 完全不可见）。耗时定位 LLM API 侧 vs agent 侧。
+    # 注：百炼端点响应无 usage 字段（response_metadata 只有 finish_reason/
+    # model_name/model_provider），token 成本统计暂不可得——RAG 成本评估
+    # 前需另找数据源（API 侧账单或请求级 usage 透传）
+    _t0 = time.monotonic()
+    logger.info("[model] LLM 调用开始")
     resp = llm.bind_tools(_TOOLS).invoke([system] + state["messages"])
-    logger.info("[model] tool_calls=%s", [c["name"] for c in resp.tool_calls])
+    logger.info("[model] LLM 完成 tool_calls=%s 耗时=%.1fs",
+                [c["name"] for c in resp.tool_calls], time.monotonic() - _t0)
     return {"messages": [resp]}
 
 
