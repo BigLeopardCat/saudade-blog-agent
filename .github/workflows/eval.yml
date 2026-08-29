@@ -1,13 +1,26 @@
-# Eval Gate —— push 自动跑评测，失败阻断（roadmap 步骤 4）
-# 依赖仓库 Secrets 配置 QWEN_API_KEY（真实 LLM 调用）：
+# Eval Gate —— push 自动跑秒级单测，golden 评测手动触发（roadmap 步骤 4）
+#
+# 分工（重要，20260829 实测定论）：
+#   - push → 只跑 test_skills.py（纯函数秒级、无网络依赖，永远快）
+#   - golden 评测集 → workflow_dispatch 手动触发：GitHub runner 在欧美，百炼 API
+#     在 cn-beijing，跨网链路下 ① 单轮对话慢到可能吃光 LLM 超时（误判失败）
+#     ② 耗时基线失真（CI 耗时反映国际链路延迟，不是用户真实体验）。
+#     golden 在 CI 只作"行为正确性"门禁；性能基线（P50/P95）必须本机跑
+#     （本机即生产服务器，链路真实）：cd saudade-blog-agent && .venv/bin/python eval/run_golden.py
+#
+# 依赖仓库 Secrets 配置 QWEN_API_KEY（阿里云百炼 API key，与服务器 .env 同值）：
 #   Settings → Secrets and variables → Actions → New repository secret
-#   QWEN_API_KEY = 阿里云百炼 API key（与服务器 .env 的 QWEN_API_KEY 同值）
 name: Eval Gate
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_golden:
+        description: "跑 golden 评测集（真实 LLM，正确性门禁，跨网耗时失真）"
+        type: boolean
+        default: false
 
 jobs:
   eval:
@@ -26,7 +39,8 @@ jobs:
       - name: 技能注册表/plan 契约单元测试（秒级，纯函数）
         run: uv run python test_skills.py
 
-      - name: Golden 评测集（真实 LLM，27 条约 5-15 分钟）
+      - name: Golden 评测集（正确性门禁，仅手动触发）
+        if: github.event_name == 'workflow_dispatch' && inputs.run_golden
         env:
           QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
           # trace 落盘到 CI 工作区（settings.trace_dir 默认本机路径，runner 上不可写）
