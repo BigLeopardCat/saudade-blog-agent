@@ -200,9 +200,24 @@ def main():
     ts_str = time.strftime("%Y%m%d_%H%M%S")
     os.makedirs("eval/report", exist_ok=True)
     os.makedirs("eval/report/runs", exist_ok=True)
+    # 耗时基线（20260829，RAG 动工前置）：全量用例耗时分布 P50/P95——
+    # "RAG 拖慢"成为可检测回归的基准（对比 baseline_*.json 存档）。
+    # trace 落盘（logs/traces/）提供逐请求分段耗时，这里是评测集的整体基线。
+    latencies = sorted(r["elapsed"] for r in results)
+    def _pct(lats: list, p: float) -> float:
+        if not lats:
+            return 0.0
+        return lats[min(len(lats) - 1, int(p / 100 * len(lats)))]
     report = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total": len(cases), "passed": len(cases) - failed, "failed": failed,
+        "latency_s": {
+            "count": len(latencies),
+            "min": round(_pct(latencies, 0), 1),
+            "p50": round(_pct(latencies, 50), 1),
+            "p95": round(_pct(latencies, 95), 1),
+            "max": round(_pct(latencies, 100), 1),
+        },
         "cases": results,
     }
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
@@ -211,6 +226,8 @@ def main():
         json.dump(report, f, ensure_ascii=False, indent=1)
 
     print(f"\n=== 汇总：{len(cases) - failed}/{len(cases)} 通过 ===")
+    print(f"耗时基线: min={report['latency_s']['min']}s P50={report['latency_s']['p50']}s "
+          f"P95={report['latency_s']['p95']}s max={report['latency_s']['max']}s")
     print(f"报告: {REPORT_FILE}")
     print(f"留档: eval/report/runs/{ts_str}.json")
     sys.exit(0 if failed == 0 else 1)
