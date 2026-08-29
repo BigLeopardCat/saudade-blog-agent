@@ -1,9 +1,10 @@
 [project]
-name = "langchain-agent"
+name = "saudade-agent"
 version = "0.2.0"
-description = "Production-grade LangChain agent powered by DeepSeek"
+description = "泠月喵看板娘 AI 对话 Agent：LangGraph 技能注册表 + 模板质检 + 评测驱动的对话系统"
 readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
 dependencies = [
     "langchain>=1.3.11",
     "langchain-openai>=1.3.3",
@@ -16,7 +17,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/langchain-agent"
+Homepage = "https://github.com/BigLeopardCat/saudade-blog-agent"
 
 [build-system]
 requires = ["hatchling"]
