@@ -79,11 +79,15 @@ flowchart TB
 │   ├── graph.py               # ★ 手写 LangGraph 图：planner(选技能) → model(模板执行) → tools → reflector(模板质检)
 │   ├── agent.py               # create_agent：手写图入口（build_graph，planner → model ⇄ tools → reflector）
 │   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
-│   ├── skills.py              # ★ 技能注册表：7 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
+│   ├── skills.py              # ★ 技能注册表：8 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
 │   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 工具约束（显示/导航强化约束，无对话内 SUMMARY 协议）
 │   └── __init__.py
+├── rag/                       # ★ RAG 检索管线（20260830）：词法 2/3-gram BM25 内存倒排 + 10 分钟懒刷新，
+│   │                          #   语料=线上可见文章+说说/留言+公告（走 Rust 公开 API，agent 无 DB 依赖）；
+│   │                          #   检索只定位（候选 type/id/标题/分），解读走 get_article_detail 全文
+│   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
 ├── tools/
-│   ├── base.py                # 21 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重 + trace_id 透传 device-service
+│   ├── base.py                # 22 个 @tool 工具（含 rag_search / get_article_detail 泛化 doc_type）+ _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重 + trace_id 透传 device-service
 │   └── __init__.py
 ├── models/
 │   ├── llm.py                 # get_llm 工厂：provider 三选一（qwen/deepseek/openai）；enable_thinking 走 extra_body
@@ -95,7 +99,8 @@ flowchart TB
 │   ├── trace.py               # 对话 trace 落盘（logs/agent/traces/，节点事件 + 分段耗时 + 退出原因）
 │   ├── helpers.py             # 通用工具函数
 │   └── tts.py                 # edge-tts 语音合成（预留，TTS 未启用）
-├── eval/                      # 评测：eval/golden/basic.jsonl（27 条）+ run_golden.py（L2 真实 LLM 端到端）
+├── eval/                      # 评测：eval/golden/basic.jsonl（48 条）+ run_golden.py（L2 真实 LLM 端到端）
+│   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
 ├── test_skills.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
 ├── docs/                      # 本文档 + eval-observability.md + 问题记录.md（踩坑史）
@@ -458,10 +463,17 @@ flowchart TB
 
 ### 6.5 技能注册表 + 受限规划（2026-08-25 重构，planner 修复的根）
 
-固定流程任务（导航/特效/暗色/设备显示/设备查询）落地为**技能注册表**（agent/skills.py，业务唯一数据源）：
+固定流程任务（导航/特效/暗色/设备显示/设备查询/RAG 内容问答）落地为**技能注册表**（agent/skills.py，业务唯一数据源）：
 每个技能是静态定义——触发条件、参数 schema、固定工具序列模板、完成判定、回复契约。planner 只从注册表
 **选技能 + 填参数**（结构化输出 `SKILL: <名>` + `PARAMS: <JSON>`），不再自由写执行步骤；`instantiate_plan`
 把参数实例化为计划文本（`SKILL=/PARAMS=/TOOLS: /NOTE: /REPLY:` 五行契约）写入 `state.plan`。
+
+- **rag_query 两段式**（20260830 RAG 动工）：博客内容事实/知识问答（"Git 和 SVN 有什么区别""留言板里有没有人聊过
+  XXX"）→ `rag_search` 检索定位候选（候选 type/id/标题/小节/分，不含全文）+ `get_article_detail` 读全文后回答。
+  TOOLS 行固定两个工具，get_article_detail 参数实例化为占位说明、模型按检索结果填 id/type——reflector 检查点
+  强制两段都执行，堵"只检索不读全文"；候选不限于文章（talk/board/announcement），`get_article_detail` 20260830
+  泛化 doc_type 参数后四类均可读全文（talk/board/announcement 无单条端点，从列表接口按 key 过滤，列表已带全文）。
+  检索实现见 `rag/search.py`（词法 2/3-gram BM25，文档级聚合，语料=线上可见内容，10 分钟懒刷新，全量重建 <100ms）。
 
 - **导航映射表**（`NAV_MAP`）：页面别名 → 真实路径，"物联网平台→/device-console/"是系统数据而非模型猜测
   （旧版 planner 跑题的根因：看不到工具语义/页面映射）；映射为 None = 页面已下线（友链 → 如实告知、不导航）；
@@ -487,7 +499,8 @@ flowchart TB
   轮次的完整文本归档为可展开子项（`archiveRejected`）。**Rust 对 `__PROCESS__` 帧只转发、不累积进 reply**
   （过程行不属于最终回复，否则污染 chat_history）。
 - **测试**：`test_skills.py`（映射表完整性、instantiate_plan 参数实例化含已下线/未识别区分、plan 编码/解析
-  往返与容错）+ golden set 端到端。改技能注册表/plan 契约后必须跑。
+  往返与容错）+ golden set 端到端 + `eval/recall_eval.py`（检索基线，直接测线上 rag/search.py）。
+  改技能注册表/plan 契约后必须跑。
 
 ---
 
