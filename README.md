@@ -62,6 +62,10 @@ cp .env.example .env         # 填入 LLM API Key（生产：qwen → qwen3.6-fl
 curl http://127.0.0.1:8010/health        # agent_ready
 ```
 
+**日志**（20260830f 日志分组）：`logs/agent/agent.log`（systemd StandardOutput/Error append）
++ `logs/agent/traces/`（对话 trace JSON，路径由 `trace_dir` 配置）——排障直接读 trace 的分段
+耗时（planner/model/tools/reflector），不必翻日志。
+
 ---
 
 ## 🧠 关键机制
@@ -91,6 +95,7 @@ schema）。**若它服务于固定流程任务**（如新技能），应在 `ag
 | `QWEN_MODEL` | `qwen3.6-flash` | 模型名（按 provider 前缀：`QWEN_`/`DEEPSEEK_`/`OPENAI_`） |
 | `LLM_ENABLE_THINKING` | `true` | Qwen 思考模式总开关；reflector/显示提取/摘要三个低 token 调用强制关闭 |
 | `AGENT_RECURSION_LIMIT` | `30` | 工具循环上限（幻觉重试兜底，server.py 读取） |
+| `trace_dir` | `logs/agent/traces` | 对话 trace 落盘目录（20260830f 随日志分组迁移） |
 
 > `MAX_REFLECTIONS=2`（reflector REVISE 预算）是 graph.py 代码常量，非 env 配置。
 
