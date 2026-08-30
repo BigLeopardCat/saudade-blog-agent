@@ -447,7 +447,11 @@ def planner_node(state: AgentState) -> dict:
 
     # 快思考模块：低温度（分类不需要创造力）、小 max_tokens、短超时
     # 20260829：耗时打点与 model 节点对称（planner 慢同样常见，统一可查）
-    llm = get_llm(temperature=0.2, max_tokens=300, timeout=30)
+    # 20260830：enable_thinking=False——planner 是"选技能+填参数"的结构化分类
+    # 任务（300 token 输出），thinking 思考链纯浪费（实测 13.4s → 预计 2-4s，
+    # 且 3.7s/13.4s 的波动正来自 thinking 链长度）；与 reflector/显示提取/摘要
+    # 三个低 token 调用同一做法（此前漏关，本次补上）
+    llm = get_llm(temperature=0.2, max_tokens=300, timeout=30, enable_thinking=False)
     _t0 = time.monotonic()
     logger.info("[planner] LLM 调用开始")
     resp = llm.invoke(_PLANNER_PROMPT.format(
