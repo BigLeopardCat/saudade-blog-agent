@@ -96,7 +96,11 @@ class _TraceRecorder:
                 "reply": self.reply,
                 "events": self.events,
             }
-            path = os.path.join(TRACE_DIR, f"{self.trace_id}.json")
+            # 20260830：文件名可读化——时间戳 + user_id + trace_id 前 8 位，
+            # ls 目录即知哪次对话（纯 hash 命名要挨个点开才知道）；trace_id
+            # 完整保留在 JSON 内对账；logrotate 按 traces/*.json 通配轮转不受影响
+            stamp = self.started_at.replace("-", "").replace(":", "")
+            path = os.path.join(TRACE_DIR, f"{stamp}_{self.user_id}_{self.trace_id[:8]}.json")
             tmp = path + ".tmp"  # 原子替换：reader 不会读到半截文件
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(doc, f, ensure_ascii=False, indent=1)
