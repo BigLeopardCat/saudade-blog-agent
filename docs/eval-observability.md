@@ -2,8 +2,9 @@
 
 > 升级路线（手写图 → eval → 记忆 → 可观测 → 多 agent）的**验证地基**：先立"怎么验证"，再动工升级。
 > 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、CLAUDE.md（运维）。
-> 最后更新：2026-08-30（golden 扩至 27 条；trace 落盘（20260829）与慢调用监控（20260830）已落地，
-> trace_id 透传已做；CI 评测门禁 .github/workflows/eval.yml 上线；planner 关 thinking）
+> 最后更新：2026-08-30（golden 扩至 48 条（+21 条 RAG：14 检索 + 7 噪声）；检索 eval recall_eval.py 落地
+> （直接测线上 rag/search.py，词法 2/3-gram BM25 基线 recall@1=1.00）；rag_query 技能 + get_article_detail
+> 泛化 doc_type（note/talk/board/announcement 均可读全文）；trace 落盘与慢调用监控、CI 评测门禁、planner 关 thinking）
 
 ---
 
@@ -64,15 +65,16 @@ flowchart TB
 
 ## 4. L2 任务级：golden set 设计（核心资产）
 
-**规模 30-50 条，按意图分层（当前已落地 27 条：导航 6 / 特效 6 / 多轮 6 / 闲聊 7 / 设备显示 5 / 注入攻击 2 /
-摘要 2 / 幂等 2 / 图片 2 / 夜间 1 / 纠错 1 等，共 20 个标签，条目可多标签）**：
+**规模 30-50 条，按意图分层（当前已落地 48 条：导航 6 / 特效 6 / 多轮 6 / 闲聊 7 / 设备显示 5 / 注入攻击 2 /
+摘要 2 / 幂等 2 / 图片 2 / 夜间 1 / 纠错 1 / **RAG 21**（14 检索 + 7 噪声，从线上可见语料出题）等，
+共 20 个标签，条目可多标签）**：
 
 | 分层 | 条数 | 覆盖 | 断言方式 |
 |---|---|---|---|
 | 意图正确性 | 12 | 导航/特效/夜间/显示/问答/闲聊 | 结构化断言：`tool_called`、`cmd_frame`（金标比对） |
 | 防幻觉攻击 | 8 | 元消息/表演调用/格式漂移/去不存在的页面 | 断言：不伪造命令、不声称未发生的动作 |
 | 多轮上下文 | 8 | 历史引用/摘要恢复/用户改口 | 断言：上下文注入生效 |
-| RAG 问答 | 10 | 从文章出题（含检索到无关文档的噪声样本） | 结构化断言 + 质量分 |
+| RAG 问答 | 21 | 14 条检索（文章/说说出题，recall 用例）+ 7 条噪声（诚实拒答） | 断言（知识词命中）+ 检索 eval recall@k（L1 落地） |
 | 边界输入 | 4 | 空消息/超长/无权限/未登录 | 断言：正确降级路径 |
 
 **评分双输出（LLM-as-judge）**：
@@ -148,7 +150,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 
 | 阶段 | 并行建设的评测/可观测 |
 |---|---|
-| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（27 条：导航/特效/多轮/闲聊/设备显示/注入攻击/摘要/幂等/图片等 20 标签）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本）+ `test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。LLM-as-judge 未做 |
+| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（48 条：导航/特效/多轮/闲聊/设备显示/注入攻击/摘要/幂等/图片/RAG 21 等 20 标签）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，直接测线上 rag/search.py）+ `test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。LLM-as-judge 未做 |
 | 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:）；20260830 修 golden 断言过严三条（行为正确不判失败） |
 | 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0+L2 硬门禁）+ nightly crontab（scripts/nightly_regression，失败标 `~/agent_regression.failed`）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
 | 3 记忆 | 🟡 部分完成：摘要独立化（2026-08-26）结构性关闭污染面；**未做**：记忆专项评测（召回相关性、摘要合并质量、污染检测） |
@@ -163,4 +165,4 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 | 记忆体系升级 | L0（摘要协议已移除，test_skills.py 断言不再 REVISE）+ golden summary_round（不得输出 SUMMARY:）+ 记忆专项评测（未做） | 摘要触发率、召回命中率、污染事件 |
 | 多 agent | L2 路由正确性 + 子任务成功率 | 路由分布、子 agent 延迟/成本分解 |
 | 防幻觉 | L1 RGB 四 testbed + L2 攻击样本 | 空回复率、恢复语触发率、`__ERROR__` 率 |
-| RAG | L1 BEIR（检索）+ CRAG（Truthfulness）+ L2 RAG 问答 | 检索耗时、top-k 来源分布、拒绝回答率 |
+| RAG | 🟡 已落地：检索基线 L1（recall_eval.py 直接测线上 rag/search.py，词法 2/3-gram BM25 文档级聚合，14 条 recall 用例 recall@1=1.00——词法已打满当前语料，向量留 BEIR 对比再上）+ L2 RAG 问答 21 条（golden 端到端）。未做：BEIR 基准、CRAG Truthfulness | 检索耗时、top-k 来源分布、拒绝回答率 |
