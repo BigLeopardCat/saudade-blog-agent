@@ -153,8 +153,25 @@ SKILLS: list[Skill] = [
         reply_contract="按工具返回的设备列表如实回复",
     ),
     Skill(
+        name="rag_query",
+        description="用户询问博客内容的事实/知识型问题（文章/说说/留言/公告里写了什么、怎么做、是什么，如\"Git 和 SVN 有什么区别\"\"ESP32 的 OTA 怎么配置\"\"留言板/说说里有没有人聊过 XXX\"）时使用。",
+        inputs={"query": "检索关键词（用户问题的核心内容表述）"},
+        plan=[
+            ("rag_search", {"query": "$query"}),
+            # 第二段参数依赖检索结果，实例化时填占位说明文本，模型按检索结果自行填 id/type
+            # （候选可能为 talk/board 等非 note 类型，doc_type 必须取候选的 type）
+            ("get_article_detail", {"article_id": "$candidate_id", "doc_type": "$candidate_type"}),
+        ],
+        complete_when="rag_search 返回候选后，已调用 get_article_detail 读取相关文档全文",
+        reply_contract=(
+            "必须调用 get_article_detail 读取候选文档全文后才能回答，回答内容基于全文、不得编造；"
+            "候选不限于文章（可能是说说/留言/公告），doc_type 取 rag_search 返回候选的 type；"
+            "检索无结果、或候选文档与问题无关时，如实告知博客里没有相关内容"
+        ),
+    ),
+    Skill(
         name="content_query",
-        description="用户询问博客内容（文章/分类/标签/公告/留言/说说/天气/时间/知识库/站点信息）时使用。",
+        description="用户询问站点信息类内容（分类/标签/公告/天气/时间/知识库/站点信息/社交媒体链接）时使用。",
         inputs={},
         plan=[],  # 数据工具自由选择（ReAct 层自行决定）
         complete_when="回答基于工具返回的数据",
@@ -233,6 +250,27 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
                     f"无法识别导航目标「{target}」：如实告知没有该页面，不调用任何工具，"
                     f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/后台/物联网平台）给出建议（文本链接即可）"
                 )
+    elif skill.name == "rag_query":
+        # 检索 → 读全文两段式：TOOLS 行固定两个工具（get_article_detail 参数依赖检索
+        # 结果，实例化为占位说明文本，模型按 rag_search 返回的候选 id 自行填写——
+        # reflector 检查点 1 据此强制两段都执行，堵"只检索不读全文"）
+        for i, (tool_name, tmpl) in enumerate(skill.plan):
+            args = {}
+            for k, v in tmpl.items():
+                if isinstance(v, str) and v.startswith("$"):
+                    if v == "$candidate_id":
+                        args[k] = "候选文档 id（从 rag_search 返回结果中取最高分候选的 id）"
+                    elif v == "$candidate_type":
+                        args[k] = "候选文档类型（从 rag_search 返回结果中取最高分候选的 type，如 note/talk/board/announcement）"
+                    else:
+                        args[k] = params.get(v[1:])
+                else:
+                    args[k] = v
+            tools.append(f"{tool_name}({json.dumps(args, ensure_ascii=False)})")
+        note = (
+            "rag_search 定位候选后，用返回的候选 id 和 type 调用 get_article_detail 读取全文，"
+            "基于全文回答；候选可能为说说/留言等非文章类型；检索无结果时如实告知博客里没有相关内容"
+        )
     else:
         for tool_name, tmpl in skill.plan:
             args = {}

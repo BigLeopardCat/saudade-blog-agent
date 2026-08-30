@@ -27,3 +27,6 @@ Thumbs.db
 # 注：必须忽略内容（dir/*）而非目录本身（dir/），否则 negation 无法放行 baseline 文件
 eval/report/*
 !eval/report/baseline_*.json
+
+# RAG 调试中间快照（recall_eval 已走 live API，不再使用）
+eval/data/
