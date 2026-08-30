@@ -611,9 +611,14 @@ def tools_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         logger.info("[tools] %s → %.100s", call["name"], str(out))
         # trace 落盘：工具调用（名称/参数/耗时/结果摘要）——RAG 评估里
         # "检索工具拖慢"直接读 duration_s 判定
+        result_ = str(out)
+        # rag_search 完整落盘（行式候选已精简）——事后可分析完整候选与选择
+        # 对比，不必翻代码复现截断（20260831 事故复盘教训，问题记录 1.26）
+        if call["name"] != "rag_search":
+            result_ = result_[:200]
         record("tools", "call", name=call["name"], args=call.get("args", {}),
                duration_s=round(time.monotonic() - _t_tool, 3),
-               result=str(out)[:200])
+               result=result_)
         if str(out).startswith("__ERROR__"):
             attempt = sum(1 for r in retries if r["key"] == key) + 1
             retries.append({
@@ -661,7 +666,15 @@ def _build_trace(messages: list) -> str:
         if isinstance(m, AIMessage) and m.tool_calls:
             parts.append(f"助手调用工具: {m.tool_calls[0]['name']}({json.dumps(m.tool_calls[0].get('args', {}), ensure_ascii=False)[:80]})")
         elif isinstance(m, ToolMessage):
-            parts.append(f"工具返回: {_msg_text(m)[:100]}")
+            text = _msg_text(m)
+            # rag_search 候选摘要已行式精简，放行完整——反射器需完整候选视野
+            # 才能校验"选的候选对不对"（20260831 事故：100 字截断只见 top-1
+            # 候选，把模型选 rank5 语义相关文档的合理行为误判为"读了不存在的
+            # 文档"，REVISE 链把模型带偏，见问题记录 1.26）
+            if getattr(m, "name", "") == "rag_search":
+                parts.append(f"工具返回: {text}")
+            else:
+                parts.append(f"工具返回: {text[:100]}")
         elif isinstance(m, AIMessage) and m.content:
             parts.append(f"助手回答: {_msg_text(m)[:100]}")
         elif hasattr(m, "content") and isinstance(m.content, (str, list)) and m.content:

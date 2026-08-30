@@ -32,8 +32,9 @@ QUERIES: list[dict] = [
     {"id": "rag_git_snapshot",  "query": "Git 的核心特点有哪些？",          "expected": ["note:16"]},
     {"id": "rag_ota_partition", "query": "ESP32-S3 OTA 更新需要哪些分区？", "expected": ["note:12"]},
     {"id": "rag_ota_http",      "query": "ESP32-S3 做 OTA 时遇到过什么问题？", "expected": ["note:12"]},
-    {"id": "rag_fingerprint_pin", "query": "指纹模组有哪些引脚？",          "expected": ["note:14"]},
-    {"id": "rag_fingerprint_crc", "query": "指纹模组的通信校验用的是什么算法？", "expected": ["note:14"]},
+    # 20260831：指纹文章已改写为 ESP32-S3-OBC 文档，语料无指纹内容——转 noise（expected=[]）。
+    {"id": "rag_fingerprint_pin", "query": "指纹模组有哪些引脚？",          "expected": []},
+    {"id": "rag_fingerprint_crc", "query": "指纹模组的通信校验用的是什么算法？", "expected": []},
     {"id": "rag_arch_ports",    "query": "看板娘系统里 Python agent 跑在哪个端口？", "expected": ["note:19"]},
     {"id": "rag_arch_components", "query": "Python agent 用什么框架写的？", "expected": ["note:19"]},
     {"id": "rag_arch_memory",   "query": "agent 的对话记忆存在哪里？",      "expected": ["note:19"]},
