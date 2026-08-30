@@ -74,11 +74,47 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
 
 @tool
 def get_article_detail(
-    article_id: Annotated[int, "文章的唯一 ID（noteKey）"],
+    article_id: Annotated[int, "文档的唯一 ID（note 为 noteKey，talk/board 为 talkKey，announcement 为 id）"],
+    doc_type: Annotated[str, "文档类型：note（文章，默认）/ talk（说说）/ board（留言）/ announcement（公告）"] = "note",
 ) -> str:
-    """获取指定文章的完整内容，包括标题、正文、分类、标签、时间等。"""
-    data = _get(f"/notes/{article_id}")
-    return str(data)
+    """获取指定文档的完整内容（路线 B 契约的解读段：检索只定位、解读读全文）。
+    note 走 /notes/:id；talk/board/announcement 无单条详情端点，从列表接口按 key
+    过滤（列表已带全文，量小，全量扫描可接受）。"""
+    if doc_type == "note":
+        return str(_get(f"/notes/{article_id}"))
+    endpoint, key_field = {
+        "talk": ("/talk", "talkKey"),
+        "board": ("/board", "talkKey"),
+        "announcement": ("/announcements", "id"),
+    }[doc_type]
+    for it in _get(endpoint):
+        if str(it.get(key_field)) == str(article_id):
+            return str(it)
+    return "未找到该文档"
+
+
+@tool
+def rag_search(
+    query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
+    top_k: Annotated[int, "返回候选文档数量，默认 8"] = 8,
+) -> str:
+    """按相关性检索博客内容（文章/说说/留言/公告），返回候选文档列表（标题+类型+相关小节+分数），不返回全文。
+
+    用于定位候选：拿到候选后调用 get_article_detail 读取相关文档全文（doc_type 取候选的 type）再回答。
+    """
+    try:
+        from rag.search import search
+        hits = search(query, top_k=top_k)
+        if not hits:
+            return "检索无结果"
+        return json.dumps(
+            [{"type": h["type"], "id": h["id"], "title": h["title"],
+              "sections": h["sections"], "score": h["score"]} for h in hits],
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        logger.error("rag_search failed: %s", exc)
+        return str(exc)
 
 @tool
 def get_top_notes() -> str:
@@ -459,6 +495,7 @@ _TOOL_REGISTRY = [
     list_notes,
     search_notes,
     get_article_detail,
+    rag_search,
     get_top_notes,
     list_categories,
     list_tags,
