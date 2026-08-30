@@ -2,8 +2,9 @@
 
 > 面向维护者的全链路技术文档。覆盖看板娘对话系统的每一个环节：组件拓扑、一次对话的完整时序、
 > 记忆机制（记录 / 压缩 / 存储 / 读取 / 回滚）、工具系统、防幻觉与可靠性加固、超时体系、配置与部署。
-> 最后更新：2026-08-26（摘要独立化改造同步：§3.1/§3.2/§4 记忆机制重写——对话内 SUMMARY 协议移除，
-> 摘要改由后端独立任务调用生成；§1 权衡表与 §10 维护注意事项同步更新）。
+> 最后更新：2026-08-30（20260828 影子系统事故后 _force_display 移除同步：§6.3 重写为显示保障链、
+> §1 决策表/§3.2/§7 更新；planner 关 thinking（§6.5/§7）；部署改 systemd + CI（§9）；
+> 目录结构与版本号同步（§2/§8））。
 
 ---
 
@@ -59,7 +60,7 @@ flowchart TB
 | 记忆权威在 DB，agent 无状态 | 每请求独立 thread_id + 请求体注入 20 条历史 + 滚动摘要 | MemorySaver 线程累积 → 上下文/worker 内存无限膨胀（§4.6） |
 | SSE 帧 JSON 编码 + `\n\n` 分隔 | 文本内换行不破坏帧边界；帧协议三端同步 | 曾按行分隔被文本换行破坏（§3.2⑤） |
 | 摘要独立任务调用（模型对记忆无写权限） | 摘要由后端独立调用生成（与回复解耦），模型永不输出 SUMMARY 行 | 曾把摘要生成指令注入对话消息流 → 模型在回复里编造"成功调用工具"污染记忆（§4.3） |
-| 强制路由 vs 模型自主调用 | "显示"类后端强制执行（保真）；"导航"类恢复模型自主（保体验），仅前端白名单兜底 | 导航强制路由曾上线后因牺牲自主性被撤销；显示类强制保留（§6.3） |
+| 模型自主调用 + 保障链（曾用强制路由） | 显示/导航均回归模型自主调工具，靠 prompt 强化约束 + reflector 模板质检 + 前端白名单兜底 | 导航强制路由（_force_navigate）曾上线后因牺牲自主性被撤销；显示强制路由（_force_display）20260828 影子系统事故后移除（§6.3） |
 | 命令走"工具返回 → 独立帧 → 前端执行" | 模型只负责调工具，命令由前端按显式意图执行 | 模型"表演调用"把命令写进正文（§6.2） |
 | 分层超时体系 | LLM 120s + 空闲 120s + 总时长 300s + recursion_limit 30 + 16 线程 | LLM 挂起占满线程池 → 全体对话排队卡死（§6.4） |
 | 空回复/中断兜底 | 后端补发人设内恢复语 + Rust 空回复不存库 + 中断 Drop 清理 | qwen 偶发空内容 / 客户端中断 → 前端"卡死"表象（§3.2⑤⑦ §4.4） |
@@ -72,43 +73,46 @@ flowchart TB
 > 全链路还涉及**宿主仓库 Saudade-Blog**（博客），以下标注 `Saudade-Blog/` 前缀的路径均相对其根目录。
 
 ```
-本仓库（saudade-blog-agent）    # ★ Python Agent（独立 git 仓库，线上改动需本地重启 :8010 生效）
-├── server.py                  # FastAPI 入口：/chat、/chat/stream、/health；强制显示路由；流式编排
+本仓库（saudade-blog-agent）    # ★ Python Agent（独立 git 仓库，推送即 CI 评测门禁 + 部署；线上改动重启 systemd 服务生效）
+├── server.py                  # FastAPI 入口：/chat、/chat/stream、/health；trace_id 中间件；流式编排
 ├── agent/
 │   ├── graph.py               # ★ 手写 LangGraph 图：planner(选技能) → model(模板执行) → tools → reflector(模板质检)
 │   ├── agent.py               # create_agent：手写图入口（build_graph，planner → model ⇄ tools → reflector）
 │   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
 │   ├── skills.py              # ★ 技能注册表：7 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
-│   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 工具约束（无对话内 SUMMARY 协议）
+│   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 工具约束（显示/导航强化约束，无对话内 SUMMARY 协议）
 │   └── __init__.py
 ├── tools/
-│   ├── base.py                # 21 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重
+│   ├── base.py                # 21 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重 + trace_id 透传 device-service
 │   └── __init__.py
 ├── models/
-│   ├── llm.py                 # get_llm 工厂：provider 三选一（qwen/deepseek/openai）
+│   ├── llm.py                 # get_llm 工厂：provider 三选一（qwen/deepseek/openai）；enable_thinking 走 extra_body
 │   └── __init__.py
 ├── config/
-│   └── settings.py            # pydantic-settings：全部可配项（LLM/超时/JWT/device-service）
+│   └── settings.py            # pydantic-settings：全部可配项（LLM/超时/JWT/device-service/trace_dir）
 ├── utils/
-│   ├── logging.py             # 日志配置
+│   ├── logging.py             # trace_id contextvar + 日志（tid= 前缀，run_in_executor 靠 copy_context 传播）
+│   ├── trace.py               # 对话 trace 落盘（logs/agent/traces/，节点事件 + 分段耗时 + 退出原因）
 │   ├── helpers.py             # 通用工具函数
 │   └── tts.py                 # edge-tts 语音合成（预留，TTS 未启用）
-├── docs/                      # 本文档 + eval-observability.md（评测与可观测性，面试素材）
-├── test_gates.py              # 防幻觉闸门回归测试（92 断言）
-├── test_fallback_replay.py    # 诚实兜底（__RESET__ 回放）测试
-└── .env.example / pyproject.toml / uv.lock
+├── eval/                      # 评测：eval/golden/basic.jsonl（27 条）+ run_golden.py（L2 真实 LLM 端到端）
+├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
+├── test_skills.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
+├── docs/                      # 本文档 + eval-observability.md + 问题记录.md（踩坑史）
+└── .env.example / pyproject.toml / uv.lock / .github/workflows/eval.yml（CI 评测门禁）
 
 宿主仓库 Saudade-Blog（接口适配层，路径相对其根目录）：
 Saudade-Blog/frontend/public/live2d-widgets/
-├── autoload.js                # ★ 前端核心：脚本注入、SSE 消费、命令解析、导航白名单、特效/夜间同步
+├── autoload.js                # ★ 前端核心：脚本注入、SSE 消费、命令解析、导航白名单、特效/夜间同步、错误上报
 ├── waifu.css                  # 看板娘与对话框样式（#waifu 高度锁死等关键防御）
-├── waifu-tips.js              # 上游库（压缩）：initWidget、模型加载、quit/toggle 收起机制
+├── waifu-tips.20260830.js     # 上游库（压缩）：initWidget、模型加载、quit/toggle 收起机制
 ├── waifu-tips.json            # 提示语配置
-└── chunk/index2.js            # cubism5 运行时（hs.CompleteSetup=22 状态机）
+└── chunk/index.20260830.js + index2.20260830.js   # 模块图（级联重命名作 cache-bust，见 §8）
 
-Saudade-Blog/frontend/src/components/Live2dAgent/index.tsx   # 注入 autoload.js（含缓存版本号 ?v=20260824c）
+Saudade-Blog/frontend/src/components/Live2dAgent/index.tsx   # 注入 autoload.js（含缓存版本号 ?v=20260830g）
 
 Saudade-Blog/src/routes/chat.rs             # Rust 侧：prepare_chat（记忆读写）+ 流式转发 + 中断清理
+Saudade-Blog/src/routes/monitor.rs          # 前端错误上报端点（logs/frontend/monitor.log）
 Saudade-Blog/src/entity/chat_history.rs     # 消息表实体
 Saudade-Blog/src/entity/chat_summary.rs     # 摘要表实体
 ```
@@ -138,8 +142,7 @@ sequenceDiagram
     R->>DB: SELECT chat_summary（每用户一条）
     R->>DB: COUNT 总消息数 → 是否触发摘要
     R->>A: POST /chat/stream<br/>{message, history[20], summary, needs_summary,<br/>user_id, current_effects, current_darkmode}
-    Note over A: _build_messages 组装<br/>System 上下文 + 历史 + 显示强化指令
-    A->>A: 强制显示路由检查（可选，后端先执行设备显示）
+    Note over A: _build_messages 组装<br/>System 上下文 + 历史
     Note over A: needs_summary 轮并行独立摘要调用<br/>（输入=原始历史，与回复解耦）
     A->>L: LangGraph 流式生成（工具循环）
     L-->>A: token 流 / 工具调用
@@ -188,8 +191,8 @@ Rust 再拼接命令行：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 
    放在**第一条**，是纯状态注记，模型禁止复述。
 2. **历史**：`req.history[-12:]`（**只取最近 12 条**，与 Rust 取的 20 条之间留余量）逐条注入，
    assistant 消息加 `[assistant]: ` 前缀以便模型区分说话人。
-3. **当前用户消息**，末尾按需追加指令（设备显示强化指令 / 强制显示结果注记，见 §6.3；对话内摘要指令已移除
-   ——摘要由后端独立任务调用生成，见 §4.3）。
+3. **当前用户消息**（对话内摘要指令已移除——摘要由后端独立任务调用生成，见 §4.3；显示类约束在
+   prompts.py 系统提示词里，不注入消息尾部，见 §6.3）。
 
 **④ LangGraph 执行（agent.py + server.py）**
 
@@ -419,16 +422,21 @@ flowchart TB
 - **夜间**：`DARKMODE:on|off` + 正文 `toggle_dark_mode(mode="on")` 兜底；执行同时标 `darkModeUserChoice`
   （对话调节=访客意愿，23:00-6:00 自动切换让位）。
 
-### 6.3 后端强制路由（_force_display）——"显示"类请求的根治方案
+### 6.3 "显示"类请求的保障链（20260828 影子系统事故后重构）
 
-**问题**：qwen 在"把文字显示到设备屏幕"类请求上频繁幻觉——凭历史声称已下发而不调工具，prompt 注入只能缓解。
-**方案**（server.py:89-140，**/chat 与 /chat/stream 两个路径都生效**）：命中显示意图（正则 `(屏幕|显示|OLED|设备|大屏|显示器)` 且 user_id>0）→
-**后端直接执行** `device_oled_display`（用一个小 LLM 调用提取显示内容，≤64 字符，`NONE`/否定句不执行）→
-执行结果以 `[System: 系统已按访客要求执行设备屏幕显示…]` 注记追加到用户消息末尾 →
-模型只负责基于事实回复，**无论它说什么，显示动作都已完成**。
-辅助：消息末尾定向强化指令（"检测到访客要求操作 IoT 设备屏幕：你必须调用 device_oled_display…不得以文本声称已显示"）。
-**注意**：导航的强制路由（_force_navigate）曾短暂上线后**按用户要求整体撤销**——导航恢复 agent 自主调用
-（`navigate_to`），仅保留前端白名单兜底（见 CLAUDE.md §3）。
+**问题**：qwen 在"把文字显示到设备屏幕"类请求上曾频繁幻觉——凭历史声称已下发而不调工具。
+**曾经的根治方案**：后端强制路由（`_force_display`，server.py 命中显示意图正则 → 小 LLM 提取内容 →
+后端直接执行 `device_oled_display` → 注记追加），模型只能基于事实回复。
+**20260828 影子系统事故**：`_force_display` 与主链路（模型自主调用）**并存**导致决策漂移——两套显示
+执行路径互相覆盖、注记与工具轨迹冲突、模型行为不可预期。重构为**单一工具调用路径**：`_force_display`
+整体移除，显示执行回归模型自主调用，由三层保障兜底：
+1. **prompt 强化约束**（prompts.py）：显示类请求必须重新调用 `device_oled_display`（"已显示过"不算数）、
+   device_id 可省略、显示内容须为一句有意义的话（严禁把指令原文当内容）、回复引用的内容必须与调用传入的
+   text 完全一致。
+2. **reflector 模板质检**：device 技能 TOOLS 行要求工具调用，轨迹中缺失即 REVISE（§6.5）——"文本声称已显示"
+   过不了模板比对。
+3. **幂等去重**（tools/base.py）：同一用户 30s 内相同内容只下发一次，防模型重复调用。
+导航同理：`_force_navigate` 曾短暂上线后按用户要求整体撤销，恢复 agent 自主调用 + 前端白名单兜底。
 
 ### 6.4 生成有界性
 
@@ -459,8 +467,9 @@ flowchart TB
   （旧版 planner 跑题的根因：看不到工具语义/页面映射）；映射为 None = 页面已下线（友链 → 如实告知、不导航）；
   未识别别名 → 如实说没有。改页面入口只改这一处。
 - **planner = 技能选择器**（graph.py `planner_node`）：注入完整技能表 + 工具完整描述（不再 80 字符截断）
-  + 低温度快思考（0.2 / 300 tokens / 30s）；输出解析容错（`_loads_tolerant`：单引号/尾逗号/注释/markdown
-  围栏逐项修正），解析失败按 chat 技能兜底。
+  + 低温度快分类（0.2 / 300 tokens / 30s；20260830 起 `enable_thinking=False`——"选技能+填参数"是结构化
+  分类任务，思考链纯浪费，实测 13.4s → 2-4s）；输出解析容错（`_loads_tolerant`：单引号/尾逗号/注释/
+  markdown 围栏逐项修正），解析失败按 chat 技能兜底。
 - **executor = 模板执行**（`model_node`）：system prompt = 人设 + 计划文本；TOOLS 行是固定工具序列
   （"（无）"时不调工具直接答）、NOTE 行说明"不调用任何工具"时如实告知、REPLY 行是回复契约。
 - **reflector = 模板质检**（`reflector_node`）：LLM 对照技能模板 + 轨迹出 VERDICT（PASS/REVISE）；
@@ -490,9 +499,10 @@ flowchart TB
 - ⚠️ `agent_max_iterations=10` / `agent_early_stopping_method` 在 settings.py 有定义但**从未被代码读取**
   （create_agent 时代遗留的 LangChain 参数，手写图不消费）——死配置，实际生成有界性靠 `recursion_limit=30`（§6.4）。
 - **enable_thinking 开关化**（settings `llm_enable_thinking=True` 默认开）：Qwen 思维链走独立
-  `reasoning_content` 字段返回，不进回复正文；planner（快思考 0.2/300t）与主 model 节点走思考（默认），
-  **三个低 token 调用强制关闭**（llm.py per-call 覆写，走 `extra_body`）：reflector 质检（max_tokens=200，
-  thinking 占满致 content 截断成空）、`_extract_display_intent`（128t）、`_summarize_dialogue`（256t）。
+  `reasoning_content` 字段返回，不进回复正文；仅主 model 节点走思考（默认），
+  **三个低 token 调用强制关闭**（llm.py per-call 覆写，走 `extra_body`）：planner 分类（0.2/300t，
+  20260830 实测 13.4s → 2-4s）、reflector 质检（max_tokens=200，thinking 占满致 content 截断成空）、
+  `_summarize_dialogue`（256t）。`_extract_display_intent`（128t）已随 20260828 _force_display 移除而删除。
 - **TTS 关闭**（`tts_enabled=false`）：预留字段，未启用。
 
 ---
@@ -509,24 +519,30 @@ flowchart TB
 - **口型/动作**：`__setMouthOpen`/`__mouthOverride` + `model.update` 挂钩（loadParameters 之后注入 ParamSpeak/
   ParamMouthOpenY/Tail/耳朵/头发/眨眼），流式输出 300ms 口型翻转。
 - **缓存版本号**：改 autoload.js/waifu.css 必须同步 bump `index.tsx` 的 `?v=` 与 autoload.js 内 waifu.css 的 `?v=`
-  （当前 20260824c）；nginx 对 `/live2d-widgets/` 等目录 1 年 immutable 缓存，`?v=` 换 query 即换缓存条目。
+  （当前 20260830g，由 autoload.js 的 `VER` 常量统一拼接，index.tsx 需手工同步）；nginx 对 `/live2d-widgets/`
+  等目录 1 年 immutable 缓存，`?v=` 换 query 即换缓存条目。
+- **模块图级联重命名（waifu-tips）**：waifu-tips.js 无 `?v=`（autoload.js 裸名加载），改上游模块必须整体
+  重命名模块图——`waifu-tips.20260830.js` 动态导入 `chunk/index.20260830.js` + `chunk/index2.20260830.js`，
+  两 chunk 静态导入回 `waifu-tips.20260830.js`（ES module identity，改一处会把模块实例拆成两份）；
+  新名即 cache-bust（20260830 的 getHitAreasCount null 守卫修复即用此方式越过 immutable 缓存）。
 
 ---
 
 ## 9. 部署与运维
 
-- **Agent 仓库独立部署**：改动后**必须本地重启**才生效：
+- **Agent 仓库独立部署**：push 即触发 CI（`.github/workflows/eval.yml`：L0 + L2 评测门禁 + 部署），
+  线上改动后**重启 systemd 服务生效**：
   ```bash
-  cd /home/ubuntu/memory_blog_rust/saudade-blog-agent
-  .venv/bin/python -m py_compile server.py agent/prompts.py
-  kill $(ps aux|grep '[u]vicorn server:app'|awk 'NR==1{print $2}')   # 精确 PID，勿 pkill -f（会误杀自己）
-  nohup .venv/bin/uvicorn server:app --host 127.0.0.1 --port 8010 --workers 2 >> /home/ubuntu/memory_blog_rust/server_run.log 2>&1 &
-  curl -s http://127.0.0.1:8010/health   # agent_ready: true
+  .venv/bin/python -m py_compile server.py agent/prompts.py   # 本地轻量语法验证
+  sudo systemctl restart saudade-agent && sleep 8             # 勿再 nohup 裸跑（会与 systemd 抢 8010 端口）
+  curl -s http://127.0.0.1:8010/health                        # agent_ready: true
   ```
-- **前端**：改 autoload.js/waifu.css/index.tsx 后 `NODE_OPTIONS="--max-old-space-size=3072" npx vite build`
-  （内存受限必须限堆）→ commit → push `cn_sora_blog` → CI 构建部署。
-- **Rust**：改 `src/` 后 `cargo build --release`（CI 里 `RUSTFLAGS="-D warnings"` 严格模式，提交前必跑
-  `cargo check` 确保无警告）。
+  日志：`logs/agent/agent.log`（systemd StandardOutput/Error append）+ `logs/agent/traces/`（对话 trace，
+  路径由 settings.py `trace_dir` 配置）；logrotate 按日轮转（`/etc/logrotate.d/saudade`）。
+- **前端**：部署一律走 CI——本机不构建（20260830 OOM 事故：3.7GB 内存下本地 `vite build` 拖垮整机）。
+  改动 commit → push `cn_sora_blog` → GitHub Actions 云端构建 → R2 → 服务器脚本部署。
+- **Rust**：同上走 CI；本地只用轻量 `RUSTFLAGS="-D warnings" cargo check`（CI 严格模式，unused import
+  等任何 warning 都会挂构建）。
 - **2 workers**：4 workers 在 3.7GB 内存下周期性被杀；16 线程 executor 已调优。
 - **改 SSE 协议三端同步**：Python 帧格式、Rust 转发、前端解析（`\n\n` 分隔 + JSON 编码 + 终结标记约定）。
 
@@ -545,4 +561,4 @@ flowchart TB
 4. **线程池挂起**：LLM API 无响应时任务占用线程 120s，16 线程下短时间 16 次对话即占满——超时参数是生命线。
 5. **MemorySaver 陷阱**：别恢复"线程复用"——DB 注入已承担全部连续性。
 6. **`enable_thinking` 只能走 extra_body**（Qwen 自有参数，model_kwargs 不收）。
-7. **本仓库与宿主仓库独立维护**：agent 代码位于独立 git 仓库（remote: `BigLeopardCat/saudade-blog-agent`，原先物理上嵌套于博客项目中并被其 gitignore；本文档随 `docs/` 迁入本仓库后，博客仓库仅保留接口适配层）。注意：30bfba1 之后的落盘改动（prompts.py / server.py / tools/base.py）**尚未 commit**——服务器重建前务必 `git add -A && git commit`（或复制备份）保存，否则丢失。
+7. **本仓库与宿主仓库独立维护**：agent 代码位于独立 git 仓库（remote: `BigLeopardCat/saudade-blog-agent`，物理上嵌套于博客项目中并被其 gitignore）。两仓库各自 push 各自 CI：agent 改动只在 agent 仓库提交（宿主仓库 git status 不会显示 agent 目录改动，勿误提交）。改完代码记得 `git add -A && git commit && git push`——否则服务器重建会丢改动。

@@ -56,11 +56,9 @@ uv sync                       # 创建 .venv + 安装依赖
 cp .env.example .env         # 填入 LLM API Key（生产：qwen → qwen3.6-flash）
 ```
 
-**以服务方式运行（生产形态）**：
-```bash
-.venv/bin/uvicorn server:app --host 127.0.0.1 --port 8010 --workers 2
-curl http://127.0.0.1:8010/health        # agent_ready
-```
+**以服务方式运行（生产形态）**：systemd 服务 `saudade-agent`（2 workers，`Restart=always` 崩溃自愈，
+`TimeoutStopSec=120` 优雅停等在途对话），改动后 `sudo systemctl restart saudade-agent` 生效。
+健康检查：`curl http://127.0.0.1:8010/health`（agent_ready）。
 
 **日志**（20260830f 日志分组）：`logs/agent/agent.log`（systemd StandardOutput/Error append）
 + `logs/agent/traces/`（对话 trace JSON，路径由 `trace_dir` 配置）——排障直接读 trace 的分段
@@ -75,7 +73,7 @@ curl http://127.0.0.1:8010/health        # agent_ready
 | **技能注册表 + 受限规划** | 固定流程任务（导航/特效/夜间/设备显示/设备查询）落地为 `skills.py` 静态技能定义；planner 只**选技能 + 填参数**（`SKILL:/PARAMS:` 结构化输出），executor 按模板执行（`TOOLS:/NOTE:/REPLY:` 五行契约），不再自由写执行步骤 |
 | **模板质检（reflector）** | 对照技能模板 + 工具轨迹出 VERDICT：TOOLS 行要求的工具缺失即 REVISE（覆盖"假装执行"）；chat 技能非空快道；REVISE 预算 2 次，预算耗尽收尾；轨迹按轮次裁剪（被否定轮不入判罚） |
 | **记忆外置 MySQL** | 每请求独立线程（无 checkpointer），连续性靠 Rust 注入 20 条历史 + 滚动摘要；摘要由后端**独立任务调用**生成（`_summarize_dialogue`，与回复解耦，模型对记忆无写权限，防摘要幻觉污染）；流式经 `__SUMMARY__` 帧、非流式经 `new_summary` 字段入库 |
-| **强制显示路由（_force_display）** | "显示到 OLED"类请求后端**先执行**（小 LLM 提取内容 → `device_oled_display` → 注记注入），模型只能基于事实回复——无论模型说什么，动作已完成 |
+| **显示类请求保障链** | prompt 强化约束（必须调 `device_oled_display`、显示内容与调用一致）+ reflector 模板质检（device 技能 TOOLS 行要求工具调用，缺失即 REVISE）+ 30s 幂等去重；曾用后端强制路由（_force_display）先执行，20260828 影子系统事故（与主链路并存致决策漂移）后**移除**——回归单一工具调用路径 |
 | **SSE 帧协议** | JSON 编码 + `\n\n` 分隔；文本帧/命令帧/`__PROCESS__`（过程轨迹）/`__RESET__`（否定轮清屏）/`__SUMMARY__`/`__END__`；Rust 逐帧转发，`X-Accel-Buffering: no` |
 | **生成有界性** | `recursion_limit=30` + LLM 120s + 流式空闲 120s + 总时长 300s + 16 线程池；空回复后端补发恢复语 |
 
@@ -93,7 +91,7 @@ schema）。**若它服务于固定流程任务**（如新技能），应在 `ag
 |---|---|---|
 | `LLM_PROVIDER` | `qwen` | `qwen` / `deepseek` / `openai` 三选一 |
 | `QWEN_MODEL` | `qwen3.6-flash` | 模型名（按 provider 前缀：`QWEN_`/`DEEPSEEK_`/`OPENAI_`） |
-| `LLM_ENABLE_THINKING` | `true` | Qwen 思考模式总开关；reflector/显示提取/摘要三个低 token 调用强制关闭 |
+| `LLM_ENABLE_THINKING` | `true` | Qwen 思考模式总开关；planner/reflector/摘要三个低 token 调用强制关闭 |
 | `AGENT_RECURSION_LIMIT` | `30` | 工具循环上限（幻觉重试兜底，server.py 读取） |
 | `trace_dir` | `logs/agent/traces` | 对话 trace 落盘目录（20260830f 随日志分组迁移） |
 
@@ -103,7 +101,7 @@ schema）。**若它服务于固定流程任务**（如新技能），应在 `ag
 
 ```bash
 .venv/bin/python test_skills.py        # L0：秒级，无 LLM（映射表/计划实例化/解析容错/确定性闸）
-.venv/bin/python eval/run_golden.py    # L2：13 条真实 LLM 端到端（导航/特效/夜间/注入攻击/摘要/闲聊），约 6 分钟
+.venv/bin/python eval/run_golden.py    # L2：27 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊等）
 ```
 
 - nightly cron 自动跑上述两项，失败标记 `~/agent_regression.failed`。
