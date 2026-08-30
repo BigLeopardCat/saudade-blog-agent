@@ -2,8 +2,8 @@
 
 > 升级路线（手写图 → eval → 记忆 → 可观测 → 多 agent）的**验证地基**：先立"怎么验证"，再动工升级。
 > 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、CLAUDE.md（运维）。
-> 最后更新：2026-08-26（阶段 1 图重写与阶段 3 记忆已落地：技能注册表 2026-08-25、摘要独立化 2026-08-26；
-> L0 载体从 Rust 摘要单测迁移为 test_skills.py）
+> 最后更新：2026-08-30（golden 扩至 27 条；trace 落盘（20260829）与慢调用监控（20260830）已落地，
+> trace_id 透传已做；CI 评测门禁 .github/workflows/eval.yml 上线；planner 关 thinking）
 
 ---
 
@@ -41,7 +41,7 @@ flowchart TB
 |---|---|---|---|---|
 | **L0 单元级** | 图节点、工具、schema | 单测（`test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率 | 图重写、记忆剥离 |
 | **L1 基准级** | 检索器、生成层、端到端 RAG | BEIR / RGB / CRAG（§3） | nDCG@10、Recall@5、MRR；噪声准确率 / 拒答率 / 错误检测率；Truthfulness（幻觉=-1） | RAG、防幻觉 |
-| **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 13 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本 | 图重写、多 agent、防幻觉 |
+| **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 27 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本 | 图重写、多 agent、防幻觉 |
 | **L3 回放级** | 线上行为漂移 | 生产对话脱敏采样 → 离线重放 → 与 golden 指标对齐 | 漂移方向/幅度 | 全部（每次升级后跑） |
 
 **CI 门槛**：push 跑 L0 + L2（分钟级，硬门禁，回归即红）；nightly 跑 L1 全量 + L3 回放（小时级，出基准报告）。
@@ -64,7 +64,8 @@ flowchart TB
 
 ## 4. L2 任务级：golden set 设计（核心资产）
 
-**规模 30-50 条，按意图分层（当前已落地 13 条：9 意图/防幻觉/摘要 + 2 注入攻击 + 2 闲聊）**：
+**规模 30-50 条，按意图分层（当前已落地 27 条：导航 6 / 特效 6 / 多轮 6 / 闲聊 7 / 设备显示 5 / 注入攻击 2 /
+摘要 2 / 幂等 2 / 图片 2 / 夜间 1 / 纠错 1 等，共 20 个标签，条目可多标签）**：
 
 | 分层 | 条数 | 覆盖 | 断言方式 |
 |---|---|---|---|
@@ -102,12 +103,15 @@ flowchart LR
 ### 5.1 Trace（链路追踪）
 
 `X-Request-ID`（或 `X-Trace-ID`）从浏览器 → nginx → Rust → Python → LLM 全程透传。
-Python 端每轮对话落一条结构化记录（`chat_trace` 表或 JSON 日志）：
+**已落地（20260829-30）**：utils/logging.py 的 trace_id contextvar + server.py `trace_id_middleware` 注入
+（`tid=` 日志前缀，`_submit_with_context` 的 copy_context 保证跨线程传播；device 工具把 trace_id 透传
+device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/agent/traces/`，时间戳+user_id+trace_id
+文件名），记录：
 
 - **图路径**：执行了哪些节点、递归深度（图重写后直接回答"planner 拆了几步、reflector 修正了几次"）
 - **工具调用序列**：名称 / 入参摘要 / 出参摘要 / 耗时
-- **LLM 调用**：prompt 字节数、token 消耗、首字节延迟
-- **关键事件**：摘要触发、强制路由命中、空回复兜底触发、超时、命令帧产出
+- **LLM 调用**：prompt 字节数、token 消耗、首字节延迟（>30s 的慢调用打 WARN + trace `slow` 标记，20260830 上线）
+- **关键事件**：摘要触发、空回复兜底触发、超时、命令帧产出、退出原因（client_disconnect/producer_done/超时等）
 
 ### 5.2 Metrics（聚合指标）
 
@@ -144,11 +148,11 @@ Python 端每轮对话落一条结构化记录（`chat_trace` 表或 JSON 日志
 
 | 阶段 | 并行建设的评测/可观测 |
 |---|---|
-| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（13 条意图+防幻觉+摘要分层）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本，附 gate 触发率统计）+ `test_skills.py`（L0 秒级）。LLM-as-judge 与 trace_id 透传未做 |
-| 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:） |
-| 2 Eval | L1 三基准接入（BEIR/RGB/CRAG）+ CI 流水线 + 硬门禁（当前只有 nightly crontab，无 push CI） |
-| 3 记忆 | 🟡 部分完成：摘要独立化（2026-08-26）结构性关闭污染面；**未做**：记忆专项评测（召回相关性、摘要合并质量、污染检测）+ 记忆写入 trace |
-| 4 可观测 | trace/metrics 落库 + 看板 + L3 回放 |
+| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（27 条：导航/特效/多轮/闲聊/设备显示/注入攻击/摘要/幂等/图片等 20 标签）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本）+ `test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。LLM-as-judge 未做 |
+| 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:）；20260830 修 golden 断言过严三条（行为正确不判失败） |
+| 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0+L2 硬门禁）+ nightly crontab（scripts/nightly_regression，失败标 `~/agent_regression.failed`）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
+| 3 记忆 | 🟡 部分完成：摘要独立化（2026-08-26）结构性关闭污染面；**未做**：记忆专项评测（召回相关性、摘要合并质量、污染检测） |
+| 4 可观测 | 🟡 部分完成：对话 trace JSON 落盘（utils/trace.py → logs/agent/traces/，20260829）+ LLM 慢调用监控（>30s WARN + trace slow 标记，20260830）+ trace_id 中间件。**未做**：metrics 落库、看板、L3 回放 |
 | 5 多 agent | 路由正确性评测 + 子 agent 指标分解 |
 
 **组件映射速查**：
