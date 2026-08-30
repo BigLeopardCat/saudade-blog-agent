@@ -453,8 +453,14 @@ def planner_node(state: AgentState) -> dict:
     resp = llm.invoke(_PLANNER_PROMPT.format(
         skills_context=build_planner_context(), tools_desc=_tools_desc(),
         page_ctx=_page_ctx(state["messages"]), user_msg=user_msg))
-    logger.info("[planner] LLM 完成 耗时=%.1fs", time.monotonic() - _t0)
-    record("planner", "llm_done", duration_s=round(time.monotonic() - _t0, 2))
+    # 20260830：慢调用监控——>30s 打 WARN（正常 <5s，慢=服务端排队/长思考，
+    # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）
+    dur = time.monotonic() - _t0
+    slow = dur > 30
+    (logger.warning if slow else logger.info)(
+        "[planner] LLM %s 耗时=%.1fs", "慢调用" if slow else "完成", dur)
+    record("planner", "llm_done", duration_s=round(dur, 2),
+           **({"slow": True} if slow else {}))
     raw = getattr(resp, "content", str(resp))
     skill_name = re.search(r"SKILL\s*[:=]\s*(\w+)", raw, re.IGNORECASE)
     skill_name = skill_name.group(1) if skill_name else "chat"
@@ -532,10 +538,16 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     logger.info("[model] LLM 调用开始")
     record("model", "llm_start")
     resp = llm.bind_tools(_TOOLS).invoke([system] + state["messages"])
-    logger.info("[model] LLM 完成 tool_calls=%s 耗时=%.1fs",
-                [c["name"] for c in resp.tool_calls], time.monotonic() - _t0)
+    # 20260830：慢调用监控——>30s 打 WARN（正常 <20s，慢=服务端排队/长思考，
+    # 20260830 事故两次 118s/146.9s 就是这类；与前端 60s 空闲超时呼应）
+    dur = time.monotonic() - _t0
+    slow = dur > 30
+    (logger.warning if slow else logger.info)(
+        "[model] LLM %s tool_calls=%s 耗时=%.1fs",
+        "慢调用" if slow else "完成",
+        [c["name"] for c in resp.tool_calls], dur)
     record("model", "llm_done", tool_calls=[c["name"] for c in resp.tool_calls],
-           duration_s=round(time.monotonic() - _t0, 2))
+           duration_s=round(dur, 2), **({"slow": True} if slow else {}))
     return {"messages": [resp]}
 
 
