@@ -98,7 +98,7 @@ def rag_search(
     query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
     top_k: Annotated[int, "返回候选文档数量，默认 8"] = 8,
 ) -> str:
-    """按相关性检索博客内容（文章/说说/留言/公告），返回候选文档列表（标题+类型+相关小节+分数），不返回全文。
+    """按相关性检索博客内容（文章/说说/留言/公告），返回候选文档列表（标题+类型+分数+命中节），不返回全文。
 
     用于定位候选：拿到候选后调用 get_article_detail 读取相关文档全文（doc_type 取候选的 type）再回答。
     """
@@ -107,10 +107,14 @@ def rag_search(
         hits = search(query, top_k=top_k)
         if not hits:
             return "检索无结果"
-        return json.dumps(
-            [{"type": h["type"], "id": h["id"], "title": h["title"],
-              "sections": h["sections"], "score": h["score"]} for h in hits],
-            ensure_ascii=False,
+        # 行式结构化候选摘要（20260831）：精简为 type/id/score/title/首个命中节，
+        # 8 候选 ≈ 400-600 字——候选选择信息不丢失且体积可控，模型与反射器视野
+        # 一致（此前 JSON 全文被 _build_trace 截断 [:100]，反射器只见 top-1 候选，
+        # 误判"读了不存在的文档"，见问题记录 1.26）
+        return "\n".join(
+            f"{i + 1}. type={h['type']} id={h['id']} score={h['score']} "
+            f"title={h['title'][:24]}" + (f" 命中节={h['sections'][0][:12]}" if h["sections"] else "")
+            for i, h in enumerate(hits)
         )
     except Exception as exc:
         logger.error("rag_search failed: %s", exc)
