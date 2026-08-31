@@ -88,6 +88,15 @@ def main() -> None:
     ap.add_argument("--show", action="store_true")
     args = ap.parse_args()
 
+    # 语料在位性检查 + 基线快照（20260831）：期望命中文档不在语料 → WARN（期望过期
+    # ≠ 检索退化），报告带语料快照与期望集哈希（与 run_golden 同源，见 corpus_check.py）。
+    try:
+        from corpus_check import presence_check
+        corpus = presence_check()
+    except Exception as e:
+        print(f"[corpus] 在位性检查失败（{e}），跳过")
+        corpus = {}
+
     idx = get_index()
     idx.build()
     docs = idx._docs
@@ -102,7 +111,7 @@ def main() -> None:
 
     ts = time.strftime("%Y%m%d-%H%M%S")
     REPORT_RUNS.mkdir(parents=True, exist_ok=True)
-    payload = {"ts": ts, "corpus": "live-api", "queries": len(QUERIES), "runs": [rep]}
+    payload = {"ts": ts, "corpus": corpus, "queries": len(QUERIES), "runs": [rep]}
     (REPORT_RUNS / f"{ts}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=1))
     print(f"\n报告: eval/report/runs/{ts}.json")
 
