@@ -145,15 +145,20 @@ _PLANNER_PROMPT = """\
 
 规则：
 1. 只能从技能表中选择一个技能，不得自创步骤或自由编写执行计划。
-2. 闲聊、问候、纯文字问答 → chat 技能。
-3. 导航目标在映射表中标记为"已下线"（如友链）时：选 chat 技能如实告知，不要选 navigate。
-4. PARAMS 必须严格按技能定义的参数名输出。
-5. 访客给出以 / 开头的具体路径时，target 原样填该路径，不要推断它对应哪个页面
+2. 闲聊、问候、情感交流、明显不依赖博客内容的纯文字问答 → chat 技能。
+3. 用户询问博客内容的事实/知识型问题（文章/说说/留言/公告里写了什么、怎么做、
+   是什么；博客功能/系统机制如何工作，如"Git 和 SVN 有什么区别""ESP32 的 OTA
+   怎么配置""agent 怎么防止模型假装调用了工具""留言板/说说里有没有人聊过 XXX"）
+   → rag_query。即使问题表述得像概念问答也要选 rag_query——答案在博客内容里，
+   不在模型常识里；拿不准时优先 rag_query（检索不到再如实告知），不拿模型记忆冒险。
+4. 导航目标在映射表中标记为"已下线"（如友链）时：选 chat 技能如实告知，不要选 navigate。
+5. PARAMS 必须严格按技能定义的参数名输出。
+6. 访客给出以 / 开头的具体路径时，target 原样填该路径，不要推断它对应哪个页面
    （如 /iot 就是 /iot；路径是否有效由系统按白名单预校验，页面别名才走映射表）。
-6. 用户消息含常见导航动词（去/回/到/打开/跳转/访问/进入/返回/转到）且提到页面
+7. 用户消息含常见导航动词（去/回/到/打开/跳转/访问/进入/返回/转到）且提到页面
    别名或路径时 → navigate；口语化措辞（如"回首页""去留言板"）同样是导航意图，
    不要退化成 chat。仅提及页面但不要求前往（如"首页的文章好看吗"）不选 navigate。
-7. 用户要求把某段文字显示/写到 IoT 设备屏幕（如"在屏幕上写XXX""显示屏上显示XXX"
+8. 用户要求把某段文字显示/写到 IoT 设备屏幕（如"在屏幕上写XXX""显示屏上显示XXX"
    "OLED 换成XXX"）时 → device_display（text 参数不用填，由执行模型创作内容）；
    只是询问设备/屏幕状态或屏幕上有什么内容（如"屏幕上显示什么""设备显示什么"）
    → device_query 或 chat，不要选 device_display。
@@ -344,6 +349,15 @@ _QUESTION_RE = re.compile(r"为什么|怎么|如何|啥|什么|为何|哪儿|哪
 _EXECUTION_CLAIM_RE = re.compile(
     r"已(?:经)?(显示|写入|写下|写好|写上去|上屏|发送|下发|执行|展示|打上|放上|刷新|设置)"
     r"|成功(?:显示|写入|下发|发送|执行)"
+)
+# 读取声称族（20260831 补，21:19:40 事故实证：chat 轮声称"回去重读"文章但零工具
+# 调用，引用 6 处全文细节 5 处不存在）——声称"读了/查了博客内容"必须以工具返回
+# 为据。模式收敛（宁漏勿误伤：只看"读/查/看"+内容宾语与"重读"类，不抓裸"看了"）：
+_READ_CLAIM_RE = re.compile(
+    r"重读|重看|重新读|重新看|回去读"
+    r"|已(?:经)?读取|已?通读|读完了?(?:全文|文章|内容|这篇|那篇|文档|博客)"
+    r"|(?:我|咱|喵)?(?:刚|刚才|刚刚|已经?)?(?:读|看|查)(?:过|了|完)(?:全文|文章|内容|文档|留言|说说|这篇|那篇|博客)"
+    r"|(?:核对|核实|查验)(?:过)?(?:全文|文章|内容|文档)"
 )
 _NAV_VERB_RE = re.compile(
     r"^(?:小猫咪|喵喵|主人|猫猫|喵)?[,，、\s]*"
@@ -739,13 +753,27 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
     last_content = (getattr(last, "content", "") or "").strip()
 
     if plan["chat"]:
-        # 闲聊快道声称闸（20260828 影子系统重构）：chat 不再无条件非空豁免——
-        # 回复含执行声称（已显示/已发送/已执行…）且当前轮无任何工具执行时，
+        # 闲聊快道声称闸（20260828 影子系统重构，20260831 扩展读取声称）：
+        # chat 不再无条件非空豁免——回复含执行声称（已显示/已发送/已执行…）
+        # 或读取声称（重读/查过了/读完了全文…）且当前轮无任何工具执行时，
         # 声称没有事实依据（chat 计划 TOOLS 为空，工具调用无合法性），REVISE。
         # 纯文本比对 + 轨迹扫描，不花 LLM 钱；轨迹确有工具执行（越权调用但
         # 事实发生）则放行——声称以工具返回为据。
-        if _EXECUTION_CLAIM_RE.search(last_content) and not any(
-                isinstance(m, ToolMessage) for m in _current_round(state["messages"])):
+        has_tool_round = any(
+            isinstance(m, ToolMessage) for m in _current_round(state["messages"]))
+        if not has_tool_round and _READ_CLAIM_RE.search(last_content):
+            correction = _correction_msg(
+                "claim_without_tool",
+                "你的回复声称已阅读/查阅了博客内容（重读/读完了全文/查过了…），"
+                "但本轮没有任何工具执行记录——了解博客内容必须调用 rag_search 与 "
+                "get_article_detail 工具、以工具返回的全文为据；未调用工具时不得声称"
+                "读过/查过，只能如实说明尚未查看",
+            )
+            logger.info("[reflector] 声称闸：chat 回复含读取声称但零工具调用")
+            return {"messages": [correction], "done": False,
+                    "reflection": "chat 回复含读取声称但零工具调用", "reflection_count": count + 1,
+                    "last_issue": {"issue": "claim_without_tool", "detail": "chat 回复含读取声称但零工具调用"}}
+        if not has_tool_round and _EXECUTION_CLAIM_RE.search(last_content):
             correction = _correction_msg(
                 "claim_without_tool",
                 "你的回复声称已执行设备/页面操作（已显示/已写入/已发送/已执行），"
@@ -759,7 +787,36 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
         return {"done": bool(last_content), "reflection": "chat 快道路：非空检查通过" if last_content else "chat 回复为空", "reflection_count": count}
 
     if count >= MAX_REFLECTIONS:
-        # 预算耗尽 → 接受当前结果收尾：纠错循环必须有上限，不无限烧钱/烧时间
+        # 预算耗尽 → 接受当前结果收尾：纠错循环必须有上限，不无限烧钱/烧时间。
+        # 20260831 硬拦：工具执行缺失是硬约束，不受反思预算约束——预算耗尽仍零
+        # 工具调用时不得 accept（golden rag_talk_rag 实证：REVISE 两次后模型编
+        # "已读取全文确认"，预算耗尽 accept 放行、LLM 质检被声称型回复骗过）。
+        # 追加一次最后通牒轮（count 再 +1；下次进来 count == MAX_REFLECTIONS+1
+        # 不再进通牒分支 → accept，通牒恰好一轮不无限循环）。
+        missing = (plan["tools"]
+                   and plan["skill"] not in ("effect", "darkmode")
+                   and not any(isinstance(m, ToolMessage) for m in _current_round(state["messages"])))
+        if missing and count < MAX_REFLECTIONS + 1:
+            correction = _correction_msg(
+                "tool_missing_final",
+                "质检打回已达上限，但你仍然没有调用计划列出的工具（"
+                + "、".join(plan["tools"])
+                + "）；这是最后一次机会：先调用工具、基于工具返回的事实回答；"
+                "仍然直接作答将被视为编造",
+            )
+            logger.info("[reflector] 预算耗尽仍零工具调用，最后通牒")
+            return {"messages": [correction], "done": False,
+                    "reflection": "预算耗尽仍零工具调用（最后通牒）",
+                    "reflection_count": count + 1,
+                    "last_issue": {"issue": "tool_missing_final", "detail": "预算耗尽仍零工具调用"}}
+        if missing:
+            # 最后通牒轮仍零调用 → 接受收尾，但记录 issue（trace 可见，归因时
+            # 能区分"给过最后机会仍拒绝"与"闸门没拦"）
+            logger.warning("[reflector] 最后通牒后仍零工具调用，接受（accepted_missing_tools）")
+            return {"done": True,
+                    "reflection": "预算耗尽且零工具调用（已发最后通牒），接受当前结果",
+                    "reflection_count": count,
+                    "last_issue": {"issue": "accepted_missing_tools", "detail": "最后通牒后仍零工具调用"}}
         logger.info("[reflector] 反思预算耗尽(%d/%d)，接受当前结果", count, MAX_REFLECTIONS)
         return {"done": True, "reflection": f"反思预算已用尽({count}/{MAX_REFLECTIONS})，接受当前结果", "reflection_count": count}
 
@@ -815,6 +872,43 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
                 "reflection": f"{plan['skill']} 计划要求工具但零工具调用",
                 "reflection_count": count + 1,
                 "last_issue": {"issue": "tool_missing", "detail": "计划要求工具但零工具调用"}}
+
+    # 留言板/说说类查询的候选读取校验（确定性，LLM 质检前，20260831）：
+    # rag_query 且用户问"留言板/说说里有没有 X"（消息含留言/说说/河灯/talk/board），
+    # 检索候选含 talk/board 类型，但本轮从未 get_article_detail 任何 talk/board
+    # 候选（doc_type 取候选 type）→ REVISE。
+    # 事故：golden rag_talk_rag——候选 talk:23（rank2）被模型跳过，只读 rank1 的
+    # note:19 后翻留言板，答"留言板里没有人聊过 RAG"（实际 talk:23 就是）——
+    # 检索命中但候选选择错误，事实答错；文本无解（回复是"合格拒答"形态），
+    # 轨迹可查（读了 note 没读 talk/board）→ 确定性判定。
+    if plan["skill"] == "rag_query":
+        round_msgs = _current_round(state["messages"])
+        user_text = "\n".join(
+            (getattr(m, "content", "") or "") for m in state["messages"] if isinstance(m, HumanMessage))
+        if re.search(r"留言|说说|河灯|talk|board", user_text):
+            rag_out = "\n".join(
+                _msg_text(m) for m in round_msgs
+                if isinstance(m, ToolMessage) and getattr(m, "name", "") == "rag_search")
+            if re.search(r"type=(talk|board)\b", rag_out):
+                read_talk_board = any(
+                    tc.get("name") == "get_article_detail"
+                    and tc.get("args", {}).get("doc_type") in ("talk", "board")
+                    for m in round_msgs if isinstance(m, AIMessage)
+                    for tc in getattr(m, "tool_calls", []))
+                if not read_talk_board:
+                    correction = _correction_msg(
+                        "talk_candidate_unread",
+                        "用户询问的是留言板/说说里的内容，且检索候选包含 talk/board 类型"
+                        "（如留言/说说），但你只读了 note 类候选——必须调用 "
+                        "get_article_detail 读取 talk/board 候选（doc_type 取候选 type、"
+                        "id 取候选 id）后再回答，候选列表里每个类型都要检查是否与问题相关",
+                    )
+                    logger.info("[reflector] 候选读取缺失：留言类查询未读 talk/board 候选")
+                    return {"messages": [correction], "done": False,
+                            "reflection": "留言类查询未读 talk/board 候选",
+                            "reflection_count": count + 1,
+                            "last_issue": {"issue": "talk_candidate_unread",
+                                           "detail": "留言类查询未读 talk/board 候选"}}
 
     # 确认式导航声称检查（确定性，LLM 质检前）：navigate 当前轮工具已调用，
     # 但轨迹中只有 NAVIGATE:（待确认）帧、无 AUTO_NAVIGATE: 帧时，回复不得含
