@@ -1,0 +1,337 @@
+{
+ "ts": "20260831-133619",
+ "corpus": "live-api",
+ "queries": 22,
+ "runs": [
+  {
+   "baseline": "rag.search (lexical 2/3-gram BM25)",
+   "n": 22,
+   "recall@1": 0.9231,
+   "recall@3": 0.9231,
+   "recall@5": 1.0,
+   "MRR": 0.9423,
+   "noise_hit_rate": 1.0,
+   "results": [
+    {
+     "id": "rag_git_branch",
+     "expected": [
+      "note:16"
+     ],
+     "hits": [
+      "note:16",
+      "note:19",
+      "note:14"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_git_svn",
+     "expected": [
+      "note:16"
+     ],
+     "hits": [
+      "note:16",
+      "note:19"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_git_snapshot",
+     "expected": [
+      "note:16"
+     ],
+     "hits": [
+      "note:16",
+      "note:19"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_ota_partition",
+     "expected": [
+      "note:12"
+     ],
+     "hits": [
+      "note:12",
+      "note:14",
+      "note:13",
+      "talk:11",
+      "note:16"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_ota_http",
+     "expected": [
+      "note:12"
+     ],
+     "hits": [
+      "note:12",
+      "note:16",
+      "note:14",
+      "note:19"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_fingerprint_pin",
+     "expected": [],
+     "hits": [
+      "note:16"
+     ],
+     "rank": null,
+     "recall1": false,
+     "recall3": false,
+     "recall5": false
+    },
+    {
+     "id": "rag_fingerprint_crc",
+     "expected": [],
+     "hits": [
+      "note:16",
+      "note:19",
+      "note:14"
+     ],
+     "rank": null,
+     "recall1": false,
+     "recall3": false,
+     "recall5": false
+    },
+    {
+     "id": "rag_arch_ports",
+     "expected": [
+      "note:19"
+     ],
+     "hits": [
+      "note:19",
+      "note:16",
+      "note:12",
+      "note:14"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_arch_components",
+     "expected": [
+      "note:19"
+     ],
+     "hits": [
+      "note:19",
+      "note:16",
+      "note:12",
+      "note:14"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_arch_memory",
+     "expected": [
+      "note:19"
+     ],
+     "hits": [
+      "note:19",
+      "note:12",
+      "talk:23",
+      "note:14"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_arch_check",
+     "expected": [
+      "note:19"
+     ],
+     "hits": [
+      "note:19",
+      "note:16",
+      "board:41",
+      "note:14",
+      "note:12"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_deep_recursion",
+     "expected": [
+      "note:19"
+     ],
+     "hits": [
+      "note:19",
+      "note:16",
+      "note:12",
+      "note:14"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_deep_timeout",
+     "expected": [
+      "note:19"
+     ],
+     "hits": [
+      "note:19",
+      "note:14"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_eval_system",
+     "expected": [
+      "note:19"
+     ],
+     "hits": [
+      "note:16",
+      "note:14",
+      "talk:23",
+      "note:19"
+     ],
+     "rank": 4,
+     "recall1": false,
+     "recall3": false,
+     "recall5": true
+    },
+    {
+     "id": "rag_talk_rag",
+     "expected": [
+      "talk:23"
+     ],
+     "hits": [
+      "talk:23",
+      "note:19",
+      "note:16"
+     ],
+     "rank": 1,
+     "recall1": true,
+     "recall3": true,
+     "recall5": true
+    },
+    {
+     "id": "rag_noise_docker",
+     "expected": [],
+     "hits": [
+      "note:16",
+      "note:19",
+      "note:14"
+     ],
+     "rank": null,
+     "recall1": false,
+     "recall3": false,
+     "recall5": false
+    },
+    {
+     "id": "rag_noise_rust",
+     "expected": [],
+     "hits": [
+      "note:16",
+      "note:14",
+      "note:19"
+     ],
+     "rank": null,
+     "recall1": false,
+     "recall3": false,
+     "recall5": false
+    },
+    {
+     "id": "rag_noise_mysql",
+     "expected": [],
+     "hits": [
+      "note:12",
+      "note:16",
+      "note:14",
+      "note:19"
+     ],
+     "rank": null,
+     "recall1": false,
+     "recall3": false,
+     "recall5": false
+    },
+    {
+     "id": "rag_noise_cake",
+     "expected": [],
+     "hits": [
+      "note:16",
+      "note:19",
+      "note:14"
+     ],
+     "rank": null,
+     "recall1": false,
+     "recall3": false,
+     "recall5": false
+    },
+    {
+     "id": "rag_noise_project_files",
+     "expected": [],
+     "hits": [
+      "note:16",
+      "note:19",
+      "note:14",
+      "note:12"
+     ],
+     "rank": null,
+     "recall1": false,
+     "recall3": false,
+     "recall5": false
+    },
+    {
+     "id": "rag_noise_python_copy",
+     "expected": [],
+     "hits": [
+      "note:16",
+      "note:12",
+      "note:19"
+     ],
+     "rank": null,
+     "recall1": false,
+     "recall3": false,
+     "recall5": false
+    },
+    {
+     "id": "rag_noise_python_is",
+     "expected": [],
+     "hits": [
+      "note:16",
+      "note:12",
+      "note:19"
+     ],
+     "rank": null,
+     "recall1": false,
+     "recall3": false,
+     "recall5": false
+    }
+   ]
+  }
+ ]
+}
