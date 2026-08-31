@@ -159,10 +159,16 @@ def _build_messages(req: ChatRequest) -> list:
             imgs = req.image
         for url in imgs:
             content.append({"type": "image_url", "image_url": {"url": url}})
-        content.append({"type": "text", "text": req.message or "请描述这些图片"})
+        content.append({"type": "text", "text": f"[当前问题]: {req.message or '请描述这些图片'}"})
         messages.append(HumanMessage(content=content))
     else:
-        messages.append(HumanMessage(content=req.message))
+        # 20260901：当前消息加 [当前问题] 锚点——历史 user 消息与当前消息都是裸
+        # HumanMessage，多窗口并发时当前请求的历史可能含另一窗口的孤儿用户消息
+        # （该窗口回复未完成入库），两条 user 相邻无 assistant 回复隔离时模型把
+        # 旧问题当当前问题回答（trace 实证：输入"椎名真白"整篇回复穹妹）。
+        # 前端 sending/idle 跨窗同步只能缩小竞态窗口不能消除（收尾瞬间仍可发送），
+        # 锚点让模型明确最后一条才是当前问题，历史只是背景。
+        messages.append(HumanMessage(content=f"[当前问题]: {req.message}"))
     return messages
 
 
