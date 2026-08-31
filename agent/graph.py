@@ -525,7 +525,13 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     if _stopped(config):
         logger.info("[model] cancelled (client disconnected)")
         raise AgentCancelled()
-    llm = get_llm()  # 主模型：对话生成用默认参数（温度 0.7、可流式）
+    # 20260831：enable_thinking=False——executor 关思考（用户拍板）。
+    # 数据依据：慢调用监控 3 条 model WARN（46.8s/79.1s/105.8s）+ 20260830 超时事故
+    # （118s/146.9s）同源——thinking 模式在长上下文（工具结果全文 + 检索候选 + 历史）
+    # 下思考链爆炸，用户 60s 空闲超时等不到第一个 token 被迫中止（8-31 两次
+    # "分析文章21" client_disconnect 实证）。planner 已关（8-30），executor 生成质量
+    # 由 golden 48 条全量回归把关。
+    llm = get_llm(enable_thinking=False)  # 主模型：对话生成（温度 0.7、可流式）
     # 20260828 图改进①：工具失败重试上下文注入（取代 prompt 规则"自觉重试"）。
     # 上一次工具调用失败时，显式告知失败详情 + 重试轮次语义（见 _retry_context）。
     system = SystemMessage(content=_EXECUTOR_PROMPT.format(
@@ -783,25 +789,32 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
                 state_matches = (mode == "on" and cur == "on") or (mode == "off" and cur == "off")
 
     # 模板执行的结构性检查（检查点 1 的确定性部分，LLM 质检前的低成本闸）：
-    # 只对 navigate 生效——导航是"动作必须真发生"的契约（无幂等豁免），TOOLS 行
-    # 要求调用 navigate_to 但当前轮从未执行过任何工具 → 正文纯文本声称"已经
-    # 跳转"没有依据，直接 REVISE，不花 LLM 钱。检查范围限定当前轮（_current_round）
-    # 而非全历史：被 REVISE 的历史轮调用过工具不代表当前轮也调了。
-    # 豁免面（合法零调用，不误伤）：NOTE 行下线/未识别/不存在目标 → 计划 TOOLS
-    # 已为空且注记明示"不调用任何工具"（下方另有反向检查兜住越权调用）。
+    # 20260831 泛化：不再限于 navigate——凡 TOOLS 行要求工具但当前轮从未执行过
+    # 任何工具，正文直接回答没有事实依据，REVISE，不花 LLM 钱。
+    # 事故依据：关 thinking 后 executor 在 rag_query 技能下不调工具直接编造回复
+    # （"分析文章21"编出文章不存在的文献 Poldrack 2015/Farah 2004 与发布日期），
+    # LLM 质检被声称型回复骗过放行 PASS——确定性闸门先于 LLM 质检拦截。
+    # 检查范围限定当前轮（_current_round）而非全历史：被 REVISE 的历史轮调用过
+    # 工具不代表当前轮也调了。
+    # 豁免面（合法零调用，不误伤）：
+    #   - NOTE 行明示"不调用任何工具"（导航已下线/不存在/未识别）→ 计划 TOOLS
+    #     已为空，本闸门不触发（下方另有反向检查兜住越权调用）
+    #   - effect/darkmode 幂等场景（状态已与目标一致时合法零调用）→ 走上方
+    #     state_matches 注记 + LLM 检查点 5 判罚，确定性闸门不越权
     if (plan["tools"]
-            and all("navigate_to" in t for t in plan["tools"])
+            and plan["skill"] not in ("effect", "darkmode")
             and not any(isinstance(m, ToolMessage) for m in _current_round(state["messages"]))):
         correction = _correction_msg(
-            "navigate_tool_missing",
-            "计划要求调用 navigate_to 工具，但本轮对话没有任何工具执行；"
-            "若因访客明确禁止等原因无法调用工具，如实拒绝并给出页面链接即可，不得声称已跳转",
+            "tool_missing",
+            "计划要求调用工具（" + "、".join(plan["tools"]) + "），但本轮没有任何工具执行；"
+            "回答必须基于工具返回的事实——先调用计划列出的工具再作答，不得编造内容；"
+            "若因访客明确禁止等原因无法调用工具，如实告知无法执行",
         )
-        logger.info("[reflector] 模板执行缺失：navigate 计划零工具调用")
+        logger.info("[reflector] 模板执行缺失：%s 计划要求工具但零工具调用", plan["skill"])
         return {"messages": [correction], "done": False,
-                "reflection": "navigate 计划要求工具但零工具调用",
+                "reflection": f"{plan['skill']} 计划要求工具但零工具调用",
                 "reflection_count": count + 1,
-                "last_issue": {"issue": "navigate_tool_missing", "detail": "navigate 计划要求工具但零工具调用"}}
+                "last_issue": {"issue": "tool_missing", "detail": "计划要求工具但零工具调用"}}
 
     # 确认式导航声称检查（确定性，LLM 质检前）：navigate 当前轮工具已调用，
     # 但轨迹中只有 NAVIGATE:（待确认）帧、无 AUTO_NAVIGATE: 帧时，回复不得含
