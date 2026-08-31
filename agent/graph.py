@@ -27,6 +27,7 @@ LangGraph 四件套（对照第一课讲解）：
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -660,11 +661,16 @@ _REFLECTOR_PROMPT = """\
 {trace}
 
 检查要点：
-1. 计划中 TOOLS 行要求的工具调用是否完成（对应工具已调用且返回成功）？
-   轨迹已按轮次裁剪：只含最近一次修正注记之后的最新一轮执行（+用户消息），
-   历史被作废轮次不参与判罚。TOOLS 为（无）时，模型未调用工具直接回答即为符合模板。
-2. 工具结果是否有 __ERROR__？
-3. 最终回答是否基于工具返回的事实（有没有编造）？
+1. 工具调用缺失不在此处判断（20260901）：TOOLS 行工具是否调用由确定性闸门在
+   LLM 质检之前判罚（零调用已 REVISE），你只负责判断内容事实性。
+   工具已调用后，模型按检索实际情况调整候选顺序/补充额外检索工具/续接读取
+   （见要点 7）均为合法执行，不得据此判 REVISE。
+2. 工具结果有 __ERROR__/报错时（20260901）：模型如实转述错误、说明失败原因
+   → 判 PASS（工具失败是外部事实，如实报告不是编造，见要点 5）；掩盖错误、
+   把失败声称成成功 → 判 REVISE。工具报错本身不是判罚依据，回答与工具返回
+   是否一致才是。
+3. 最终回答是否基于工具返回的事实（有没有编造）？——判 REVISE 的唯一依据：
+   回答中的事实与工具返回矛盾、或工具返回中不存在依据。
 4. 是否回答了用户的问题？
 5. 若模型因合理原因（功能/页面已下线——见 NOTE 行、数据不存在、工具返回错误后
    重试仍失败、访客明确禁止调用工具/模型无法调用工具）如实告知访客而未能完成
@@ -674,6 +680,12 @@ _REFLECTOR_PROMPT = """\
 6. 风格问题不判 REVISE：TOOLS 行要求的工具已成功调用（帧已产出）后，
    正文是否附 Markdown 链接、链接格式、措辞风格均不影响判罚——跳转/执行
    由系统帧完成，正文只是确认。
+7. 允许合理绕道（20260901）：模型按检索实际情况调整候选选择顺序、补充
+   TOOLS 行之外的检索工具（如 search_notes 补充检索）、或在后续轮次直接读取
+   已定位到的文档——只要最终回答中的事实性内容（URL/字段值/正文引用）在工具
+   返回中能找到依据（判罚依据见要点 3），就不得仅因"未按模板字面顺序 / 未选
+   字面最高分候选 / 使用了额外工具"判 REVISE。
+{tools_note}
 {idem_note}输出严格按以下格式，不要输出其他内容：
 VERDICT: PASS 或 REVISE
 NOTE: 一句话说明（PASS 写通过理由；REVISE 写具体要修正什么）"""
@@ -691,15 +703,52 @@ def _build_trace(messages: list) -> str:
             # 才能校验"选的候选对不对"（20260831 事故：100 字截断只见 top-1
             # 候选，把模型选 rank5 语义相关文档的合理行为误判为"读了不存在的
             # 文档"，REVISE 链把模型带偏，见问题记录 1.26）
-            if getattr(m, "name", "") == "rag_search":
-                parts.append(f"工具返回: {text}")
+            # 工具名前缀（20260901）：返回行不带工具名时 LLM 质检无法区分候选
+            # 列表与详情读取（rag_search 候选里 talk id=11 与 get_article_detail
+            # 读的 note id=11 混淆，把正确结果误判为"声称与工具返回不符"）——
+            # 前缀让"哪个工具返回了什么"一眼可辨。id 跨表（talk/note/board 各自
+            # 编号）是数据固有事实，轨迹里必须能区分来源。
+            name = getattr(m, "name", "")
+            if name == "rag_search":
+                parts.append(f"工具返回[{name}]: {text}")
             else:
-                parts.append(f"工具返回: {text[:100]}")
+                # 20260901：dict/list 形态返回（get_article_detail/search_notes
+                # 等）改结构化逐键截断——纯 [:100] 会切掉字典中部的字段（"测试4
+                # 封面"事故实证：cover 字段被截断，反射器基于残缺轨迹把真实
+                # cover 误判为编造，REVISE 打回正确结果）。键名完整保留（声称
+                # 字段有无一眼可见），仅长值截断；非 JSON（纯文本/错误信息）[:100]
+                stripped = text.lstrip()
+                data = None
+                if stripped.startswith(("{", "[")):
+                    # 工具返回是 Python repr（单引号，tools/base.py str(dict)）而非
+                    # 合法 JSON——json.loads 直接失败会落入 [:100] 兜底把 dict 中部
+                    # 字段（cover）切掉（20260901"测试4封面"实证：结构化截断从未
+                    # 生效，LLM 质检只见"仅包含标题"）。ast.literal_eval 解析
+                    # Python 字面量（安全：不执行代码），失败再退回 JSON。
+                    try:
+                        data = ast.literal_eval(text)
+                    except Exception:
+                        try:
+                            data = json.loads(text)
+                        except Exception:
+                            data = None
+                if isinstance(data, dict):
+                    parts.append(f"工具返回[{name}]: " + " ".join(
+                        f"{k}={json.dumps(v, ensure_ascii=False)[:60]}" for k, v in data.items()))
+                elif isinstance(data, list) and data and isinstance(data[0], dict):
+                    compact = " ".join(
+                        f"{k}={json.dumps(v, ensure_ascii=False)[:60]}" for k, v in data[0].items())
+                    parts.append(f"工具返回[{name}]: [{len(data)} 条] 首条 " + compact)
+                else:
+                    parts.append(f"工具返回[{name}]: {text[:100]}")
         elif isinstance(m, AIMessage) and m.content:
             parts.append(f"助手回答: {_msg_text(m)[:100]}")
         elif hasattr(m, "content") and isinstance(m.content, (str, list)) and m.content:
             parts.append(f"{m.__class__.__name__}: {_msg_text(m)[:80]}")
-    return "\n".join(parts)[-800:]  # 只留最近 800 字符
+    # 只留最近 1200 字符（20260901：800 会在多工具轮把较早的工具返回切掉——
+    # "测试4封面"事故中 search_notes 的 cover 在返回前段；结构化后单工具返回
+    # ~300-400 字符，1200 覆盖最后 3 个调用，token 成本仍在反射预算内）
+    return "\n".join(parts)[-1200:]
 
 
 def _current_round(messages: list) -> list:
@@ -910,6 +959,52 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
                             "last_issue": {"issue": "talk_candidate_unread",
                                            "detail": "留言类查询未读 talk/board 候选"}}
 
+    # URL/资源路径声称校验（确定性，LLM 质检前，20260901）：回复中的资源 URL
+    # （/api/ 路径或图片后缀 URL）必须逐字出现在工具返回或用户消息中——URL 是
+    # 机器串，模型不会改写，逐字校验无假阴性。双向收益：① 拦截编造 URL（1.29
+    # "凭空造图"：模型编 /api/xxx.jpg 回复）② 放行真实 URL（20260901"测试4封面"
+    # 事故：search_notes/get_article_detail 返回真实 cover 被反射器误杀打回——
+    # 那是 _build_trace 截断导致的信息缺失，URL 逐字比对不受影响）。代码块内
+    # URL 不校验（教程/示例场景）；裸域名引用（saudade.site）不提取（非资源声称）。
+    round_msgs = _current_round(state["messages"])
+    last_ai = next((m for m in reversed(round_msgs) if isinstance(m, AIMessage)), None)
+    reply = (getattr(last_ai, "content", "") or "") if last_ai else ""
+    if reply:
+        code_stripped = re.sub(r"```.*?```", "", reply, flags=re.S)
+        # 排除集含 markdown 格式符（` 代码块/反引号、* 强调、|）与全角括号——
+        # 否则 `url` 反引号包裹时右反引号被吞进匹配串，逐字比对误杀真实 URL
+        # （20260901"测试4封面"验证实证：回复以 `代码块` 形式给 cover URL
+        # 被检查点 1.6 误判"不存在的 URL"）
+        urls = re.findall(
+            r"/api/[^\s)\]\"'<>，。、；：`*|）]+|https?://[^\s)\]\"'<>，。、；：`*|）]+\.(?:jpe?g|png|webp|gif|svg)",
+            code_stripped)
+        if urls:
+            trusted = "\n".join(_msg_text(m) for m in state["messages"]
+                                if isinstance(m, (HumanMessage, ToolMessage)))
+            # 绝对 URL 归一化（20260901）：模型可能把相对路径写成
+            # https://saudade.site/api/...jpg（带域名）——逐字比对会误杀真实 URL，
+            # 取 path 部分（https://host/x → /x）与工具返回的相对路径比对。
+            def _url_ok(u: str) -> bool:
+                if u in trusted:
+                    return True
+                m = re.match(r"https?://[^/]+(/.*)$", u)
+                return bool(m and m.group(1) in trusted)
+            missing = [u for u in urls if not _url_ok(u)]
+            if missing:
+                correction = _correction_msg(
+                    "fabricated_url",
+                    "回复中包含的资源 URL（" + "、".join(missing[:3]) + "）在工具返回与"
+                    "用户消息中都不存在——图片/资源链接必须来自工具返回的真实 URL"
+                    "（如 get_article_detail / search_notes 返回的 cover 字段），"
+                    "不得编造；需要图片链接时先检索再如实报告",
+                )
+                logger.info("[reflector] URL 声称无依据：%s", "、".join(missing[:3]))
+                return {"messages": [correction], "done": False,
+                        "reflection": "回复含工具返回与用户消息中不存在的 URL",
+                        "reflection_count": count + 1,
+                        "last_issue": {"issue": "fabricated_url",
+                                       "detail": "回复含工具返回中不存在的 URL"}}
+
     # 确认式导航声称检查（确定性，LLM 质检前）：navigate 当前轮工具已调用，
     # 但轨迹中只有 NAVIGATE:（待确认）帧、无 AUTO_NAVIGATE: 帧时，回复不得含
     # 完成式声称词——NAVIGATE: 是"请求确认"，不是"已跳转"。曾见模型调用工具
@@ -1052,11 +1147,21 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
     # 会被截断成空串（Qwen 思考走 reasoning_content 不进 content），导致
     # PASS 但 reflection 为空、单测错判
     llm = get_llm(temperature=0.0, max_tokens=200, timeout=30, enable_thinking=False)
+    # 历史轮已调用工具名清单（20260901）：轨迹按轮次裁剪后 LLM 质检看不到上一轮
+    # 已调过的工具——"第一轮已 rag_search、第二轮续接 get_article_detail 读取"
+    # 被误判为"未执行计划要求的 rag_search"。只列工具名、不展示历史轮内容：
+    # 防豁免（检查点 1 仍按当前轮判缺失）与防误判（续接读取可见）兼得。
+    past_tools = sorted({getattr(m, "name", "") for m in state["messages"]
+                         if isinstance(m, ToolMessage)})
+    tools_note = (
+        f"历史轮已调用工具（供判断续接读取是否合理，内容不参与判罚）: "
+        f"{'、'.join(past_tools)}\n" if past_tools else "")
     # 质检异常兜底：LLM API 抖动/超时不应杀死整个对话（实测：反射调用挂起/抛错 →
     # 流中断 → 前端 catch 不执行导航 → 用户"卡死"且命令帧白发）。质检是防幻觉增强，
     # 非流程必需：工具帧已产出（导航命令已发出）时异常即放行，让流正常收尾。
     try:
-        resp = llm.invoke(_REFLECTOR_PROMPT.format(plan=state["plan"], trace=trace, idem_note=idem_note))
+        resp = llm.invoke(_REFLECTOR_PROMPT.format(
+            plan=state["plan"], trace=trace, tools_note=tools_note, idem_note=idem_note))
     except Exception as e:
         logger.warning("[reflector] LLM 质检异常，兜底 PASS（流正常收尾，工具帧不受影响）: %s", e)
         return {"done": True, "reflection": f"LLM 质检异常兜底 PASS: {e}", "reflection_count": count}
