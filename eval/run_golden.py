@@ -147,6 +147,16 @@ def main():
 
     ensure_agent()
 
+    # 语料在位性检查 + 基线快照（20260831）：expected 命中文档不在语料 → WARN，
+    # 报告携带语料快照与期望集哈希——语料变化导致失败可归因（期望过期≠模型退化），
+    # 基线变更点之间可对账（见 eval/corpus_check.py 头注释）。
+    try:
+        from corpus_check import presence_check
+        corpus = presence_check()
+    except Exception as e:  # 语料拉取失败不阻断评测，仅提示
+        print(f"[corpus] 在位性检查失败（{e}），跳过")
+        corpus = {}
+
     cases = [json.loads(line) for line in open(GOLDEN_FILE, encoding="utf-8") if line.strip()]
     if args.only:
         cases = [c for c in cases if c["id"] == args.only]
@@ -210,6 +220,9 @@ def main():
         return lats[min(len(lats) - 1, int(p / 100 * len(lats)))]
     report = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
+        # 旧基线不可比是预期（变更即新基线），快照字段用于对账变更内容
+        "corpus": corpus,
         "total": len(cases), "passed": len(cases) - failed, "failed": failed,
         "latency_s": {
             "count": len(latencies),
