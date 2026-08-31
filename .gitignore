@@ -30,3 +30,4 @@ eval/report/*
 
 # RAG 调试中间快照（recall_eval 已走 live API，不再使用）
 eval/data/
+eval/cache/

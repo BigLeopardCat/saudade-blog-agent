@@ -41,6 +41,10 @@ QUERIES: list[dict] = [
     {"id": "rag_arch_check",    "query": "agent 怎么防止模型假装调用了工具？", "expected": ["note:19"]},
     {"id": "rag_deep_recursion", "query": "agent 的工具循环上限（recursion_limit）是多少？", "expected": ["note:19"]},
     {"id": "rag_deep_timeout",  "query": "agent 流式回复的总时长硬上限是多少秒？", "expected": ["note:19"]},
+    # 20260831：1.26 事故真实 query 回流（"RAG测评体系怎么建立"检索稀释案例——
+    # 通用词"建立/运行/使用"把架构文档稀释到 rank 5；进评测集后任何检索改动
+    # 都必须验证此用例不被拉低，P0 失败用例回流第一单）
+    {"id": "rag_eval_system",   "query": "RAG测评体系怎么建立？",          "expected": ["note:19"]},
     {"id": "rag_talk_rag",      "query": "留言板里有人聊过 RAG 的本质吗？", "expected": ["talk:23"]},
     {"id": "rag_noise_docker",  "query": "有没有 Docker 部署博客的教程？",  "expected": []},
     {"id": "rag_noise_rust",    "query": "Rust 的 async/await 是怎么工作的？", "expected": []},
