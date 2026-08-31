@@ -77,12 +77,16 @@ def run_one(req: ChatRequest) -> dict:
     final_text = ""
     commands: list[str] = []
     resets = 0
+    resets_reasons: list[str] = []
     error = None
     for item in frames:
         if isinstance(item, str) and item.startswith("__RESET__"):
             final_text = ""  # REVISE/兜底轮作废 → 清空（与前端最终显示一致）
             commands.clear()  # 被作废轮的命令帧同样作废（前端 RESET 清空 cmdText 后不执行）
             resets += 1
+            reason = item.removeprefix("__RESET__").lstrip(":")
+            if reason:
+                resets_reasons.append(reason)
         elif isinstance(item, AIMessageChunk) and item.content:
             final_text += str(item.content)
         elif isinstance(item, ToolMessage) and item.content:
@@ -92,7 +96,7 @@ def run_one(req: ChatRequest) -> dict:
                     commands.append(s)
         elif isinstance(item, BaseException):
             error = str(item)
-    return {"text": final_text, "commands": commands, "resets": resets, "error": error}
+    return {"text": final_text, "commands": commands, "resets": resets, "resets_reasons": resets_reasons, "error": error}
 
 
 def check_gold(gold: dict, result: dict) -> list[str]:
@@ -201,6 +205,7 @@ def main():
             "elapsed": round(elapsed, 1),
             "fails": fails, "error": result["error"],
             "commands": result["commands"], "resets": result["resets"],
+            "resets_reasons": result["resets_reasons"],
             "text": result["text"],
         })
 
