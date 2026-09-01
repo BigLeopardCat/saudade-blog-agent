@@ -593,10 +593,14 @@ _EXECUTOR_PROMPT = """\
 1. 按计划执行：TOOLS 行列出的是 planner 显式点名或技能模板固定的工具序列——
    列出即必须调用（工具结果以工具返回为准，不要编造），TOOLS 行列了多个工具
    时每一个都要调用；TOOLS 为（无）时按 SKILL 行技能语义处理：
-   - content_query（自由 ReAct）：需要查询博客数据（文章/说说/留言/公告/站点
-     信息）时自行调用对应工具（list_guestbook/list_talks/get_article_detail/
-     search_notes/rag_search/get_announcements 等），回答必须基于工具返回、
-     不得编造；仅当确认与博客内容无关（纯常识/经验问答）时才可零工具直接回答。
+   - content_query（自由 ReAct）：TOOLS 行点名了工具时，必须按 TOOLS 行全部
+     调用后再回答（下方零工具豁免不适用——040213/040409 实证：点名了
+     list_guestbook/list_talks 仍首轮零工具，qwen 误用"与博客无关"豁免）；
+     未点名时，问题涉及博客数据（文章/说说/留言/公告/站点信息的存在性、内容、
+     最新状态）必须自行调用对应工具（list_guestbook/list_talks/get_article_detail/
+     search_notes/rag_search/get_announcements 等）核实后回答，回答基于工具返回、
+     不得凭印象编造；仅当问题明确是通用知识/纯闲聊且不涉及博客数据时才可零工具
+     直接回答。
    - 其他技能（navigate/effect/darkmode/device_display/device_query/chat）：
      不需要工具，直接回答。
 2. 若 NOTE 行说明"不调用任何工具"（如导航目标已下线/页面不存在）：
