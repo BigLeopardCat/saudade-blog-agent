@@ -202,7 +202,9 @@ Rust 再拼接命令行：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 
 **④ LangGraph 执行（agent.py + server.py）**
 
 手写图（agent/graph.py `build_graph`，planner → model ⇄ tools → reflector 四节点，见 §6.5），
-无 checkpointer（线程 id 每请求 uuid，无状态累积）。执行用 `stream(stream_mode="messages")`：
+无 checkpointer（线程 id 每请求 uuid，无状态累积）。planner 前先过**确定性快道链**（零 LLM：
+导航 → 显示 → 当前文章，命中即跳过 planner 直接实例化计划，见 §6.5）。执行用
+`stream(stream_mode="messages")`：
 - `AIMessageChunk` → 文本 token，逐块推入 asyncio.Queue（生产者线程）。
 - `ToolMessage` → **命令帧**：`NAVIGATE:`/`AUTO_NAVIGATE:`（导航）、`EFFECT:`（特效）、`DARKMODE:`（夜间）——**这是工具结果**，由前端执行。
 - 工具循环：模型 → 调工具 → 工具结果 → 模型，受 `recursion_limit=30` 约束（§6.4）。
@@ -463,17 +465,32 @@ flowchart TB
 
 ### 6.5 技能注册表 + 受限规划（2026-08-25 重构，planner 修复的根）
 
-固定流程任务（导航/特效/暗色/设备显示/设备查询/RAG 内容问答）落地为**技能注册表**（agent/skills.py，业务唯一数据源）：
+固定流程任务（导航/特效/暗色/设备显示/设备查询/content_query 内容查询/read_article 当前文章）落地为**技能注册表**（agent/skills.py，业务唯一数据源）：
 每个技能是静态定义——触发条件、参数 schema、固定工具序列模板、完成判定、回复契约。planner 只从注册表
 **选技能 + 填参数**（结构化输出 `SKILL: <名>` + `PARAMS: <JSON>`），不再自由写执行步骤；`instantiate_plan`
 把参数实例化为计划文本（`SKILL=/PARAMS=/TOOLS: /NOTE: /REPLY:` 五行契约）写入 `state.plan`。
 
-- **rag_query 两段式**（20260830 RAG 动工）：博客内容事实/知识问答（"Git 和 SVN 有什么区别""留言板里有没有人聊过
-  XXX"）→ `rag_search` 检索定位候选（候选 type/id/标题/小节/分，不含全文）+ `get_article_detail` 读全文后回答。
-  TOOLS 行固定两个工具，get_article_detail 参数实例化为占位说明、模型按检索结果填 id/type——reflector 检查点
-  强制两段都执行，堵"只检索不读全文"；候选不限于文章（talk/board/announcement），`get_article_detail` 20260830
-  泛化 doc_type 参数后四类均可读全文（talk/board/announcement 无单条端点，从列表接口按 key 过滤，列表已带全文）。
-  检索实现见 `rag/search.py`（词法 2/3-gram BM25，文档级聚合，语料=线上可见内容，10 分钟懒刷新，全量重建 <100ms）。
+- **确定性快道链（planner 前置，零 LLM）**：① 导航快道（`_NAV_VERB_RE` + `NAV_MAP` 页面
+  映射表，疑问/质疑句式排除 + 目标 ≤8 字约束）→ ② 显示快道（屏幕类名词 + 写/显示动词强
+  模式）→ ③ 文章快道（20260902：page_ctx 的 current_url 正则解析文章 ID + 消息含当前文章
+  指称 → 零 LLM 实例化 `read_article` 技能，TOOLS 行强制 `get_article_detail(<id>)`）。
+  快道都是**正向识别**（命中才拦截），误判有兜底（计划 TOOLS 固定 → reflector 轨迹质检可
+  打回）；反向"闲聊快道"误判零兜底（技能请求被当闲聊 = 静默吞功能），因此不做。
+- **content_query 自由 ReAct**（20260901 RAG 定位重构）：rag_query 技能废除——把说说/留言
+  拉进检索语料是污染（碎碎念无参考价值），RAG 正确用法是**文章检索的前置任务**而非意图
+  类型。content_query 承接全部内容查询：知识型（"博客里写过 X 吗"）→ 执行层自由
+  ReAct 自选 rag_search/search_notes 定位 + get_article_detail 读全文（检索管发现、工具管
+  精读；rag_search 候选行式结构化摘要，语料只收文章）；数据/列表型（最新留言/说说/公告）
+  → 直接查数据工具。检索实现见 `rag/search.py`（词法 2/3-gram BM25，文档级聚合，语料=
+  线上可见内容，10 分钟懒刷新，全量重建 <100ms）。
+- **planner 显式点名工具**（20260902，根治"planner 对、model 零工具编造"类事故 233815）：
+  留言/说说/公告/时间查询是"一次简单工具调用、无流程"，不成技能——**planner 看得见工具**，
+  content_query 的 PARAMS.tools 显式点名无参只读工具（白名单 `_EXPLICIT_TOOLS` =
+  list_guestbook/list_talks/get_announcements/get_current_time），instantiate_plan 白名单
+  校验后展开进 TOOLS 行；**查"留言板/说说里有没有人聊过/写过 X"必须成对点名 list_guestbook
+  与 list_talks**（双源契约进计划文本）。知识检索类不点名、保持自由 ReAct。
+  **planner 三态**：只给 skill → 执行器按技能语义；skill+PARAMS.tools → TOOLS 行强制；
+  都不给 → chat 兜底快道保留。
 
 - **导航映射表**（`NAV_MAP`）：页面别名 → 真实路径，"物联网平台→/device-console/"是系统数据而非模型猜测
   （旧版 planner 跑题的根因：看不到工具语义/页面映射）；映射为 None = 页面已下线（友链 → 如实告知、不导航）；
@@ -482,15 +499,24 @@ flowchart TB
   + 低温度快分类（0.2 / 300 tokens / 30s；20260830 起 `enable_thinking=False`——"选技能+填参数"是结构化
   分类任务，思考链纯浪费，实测 13.4s → 2-4s）；输出解析容错（`_loads_tolerant`：单引号/尾逗号/注释/
   markdown 围栏逐项修正），解析失败按 chat 技能兜底。
-- **executor = 模板执行**（`model_node`）：system prompt = 人设 + 计划文本；TOOLS 行是固定工具序列
-  （"（无）"时不调工具直接答）、NOTE 行说明"不调用任何工具"时如实告知、REPLY 行是回复契约。
+- **executor = 模板执行**（`model_node`）：system prompt = 人设 + 计划文本；TOOLS 行列出即
+  **必须逐一调用**（多个工具每一个都要调，工具结果以工具返回为准）；TOOLS 为（无）时按
+  SKILL 行技能语义处理（20260902 规则 1 按技能分支）：content_query = 自由 ReAct（需查博客
+  数据就自行调工具、不得编造，确认与博客无关才可零工具）、其他技能 = 直接回答；NOTE 行
+  说明"不调用任何工具"时如实告知、REPLY 行是回复契约。
 - **reflector = 模板质检**（`reflector_node`）：LLM 对照技能模板 + 轨迹出 VERDICT（PASS/REVISE）；
-  chat 技能走**非空快道**（不花 LLM 钱）；REVISE 预算 `MAX_REFLECTIONS=2`，预算耗尽即接受当前结果收尾。
-  检查点 1"TOOLS 行要求的工具是否完成调用"天然覆盖旧版六道程序化闸门的"假装执行"场景（正文伪造命令/
-  纯声称到达/空头承诺——TOOLS 要求调用的工具在轨迹中缺失即 REVISE，文本表演过不了模板比对）。
-  **确定性检查与 LLM 轨迹均按轮次裁剪**（`_current_round`：最近一次修正注记之后的轨迹）：被 REVISE 的历史轮
-  既不能豁免当前轮的缺失，也不参与当前轮判罚。**风格不判 REVISE**：工具已成功调用（帧已产出）后，
-  正文链接有无/格式属风格问题。
+  chat 技能走**声称闸快道**（不花 LLM 钱：回复含读取/执行声称但当前轮零工具 → REVISE，正则
+  声称闸保留仅限 chat——用户认可正则不能被轨迹检查完全替代）；REVISE 预算
+  `MAX_REFLECTIONS=2`，预算耗尽即接受当前结果收尾（工具执行缺失是硬约束：预算耗尽仍零工具
+  时发一次最后通牒轮再 accept）。
+  检查点 1 是**确定性闸门**（LLM 质检前）：TOOLS 行要求的工具若在当前轮轨迹缺失即 REVISE，
+  20260902 升级**逐工具核验**（`_missing_tools`：每个工具名与 ToolMessage.name 集合比对，
+  双源缺一即 REVISE 并列出缺失清单，杜绝"planner 点名双源、模型只查一个"）。豁免面：effect/
+  darkmode 仅幂等场景（`state_matches is True`，状态已与目标一致 → 合法零调用；20260902 从
+  "整个技能豁免"收窄——非幂等零工具必须确定性兜底，不留 LLM 质检随机放行）。
+  **确定性检查与 LLM 轨迹均按轮次裁剪**（`_current_round`：最近一次修正注记之后的轨迹）：被 REVISE
+  的历史轮既不能豁免当前轮的缺失，也不参与当前轮判罚。**风格不判 REVISE**：工具已成功调用
+  （帧已产出）后，正文链接有无/格式属风格问题。
 - **`__RESET__` 协议与历史洁净**：reflector REVISE → server 发 `__RESET__:<原因>` 帧（旧裸 `__RESET__`
   兼容）→ 前端清空 cmdText/displayText 只显示最终轮；**Rust 收到 `__RESET__` 帧会清空已累积 reply**，
   被否定轮次连同重置标记不入 chat_history（否则污染历史注入形成坏 few-shot）。
