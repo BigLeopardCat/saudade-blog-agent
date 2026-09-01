@@ -45,7 +45,7 @@ saudade-blog-agent/
 ├── models/llm.py           # LLM 工厂：provider 三选一（qwen/deepseek/openai）
 ├── tools/base.py           # 22 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重
 ├── utils/                  # logging（trace_id/日志）+ trace（对话 trace 落盘）+ tts（未启用）+ helpers
-├── eval/                   # 评测：golden set（48 条）+ run_golden.py（L2 任务级，真实 LLM）
+├── eval/                   # 评测：golden set（53 条）+ run_golden.py（L2 任务级，真实 LLM）
 │   │                       #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
 ├── test_skills.py          # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
@@ -107,7 +107,7 @@ schema）。**若它服务于固定流程任务**（如新技能），应在 `ag
 
 ```bash
 .venv/bin/python test_skills.py        # L0：秒级，无 LLM（映射表/计划实例化/解析容错/确定性闸）
-.venv/bin/python eval/run_golden.py    # L2：48 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答）
+.venv/bin/python eval/run_golden.py    # L2：53 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答）
 .venv/bin/python eval/recall_eval.py   # L1 检索：recall@k/MRR（直接测线上 rag/search.py，不另写模拟实现）
 ```
 
