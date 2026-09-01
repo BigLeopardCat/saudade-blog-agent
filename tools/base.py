@@ -98,9 +98,12 @@ def rag_search(
     query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
     top_k: Annotated[int, "返回候选文档数量，默认 8"] = 8,
 ) -> str:
-    """按相关性检索博客内容（文章/说说/留言/公告），返回候选文档列表（标题+类型+分数+命中节），不返回全文。
+    """按相关性检索博客文章（语料仅限线上可见文章），返回候选文档列表（标题+类型+分数+命中节），不返回全文。
 
     用于定位候选：拿到候选后调用 get_article_detail 读取相关文档全文（doc_type 取候选的 type）再回答。
+    仅适用于"文章内容知识型问题"（想知道某篇文章写了什么、博客里是否写过某话题）。
+    注意：说说/留言/公告不在检索语料内——询问"最新留言/说说/公告内容"时直接用
+    list_guestbook / list_talks / get_announcements 数据工具，不要用本工具检索。
     """
     try:
         from rag.search import search
@@ -158,7 +161,11 @@ def get_announcements() -> str:
 
 @tool
 def list_guestbook() -> str:
-    """获取留言板（河灯留言）列表。"""
+    """获取留言板（河灯留言）列表。
+
+    注意：留言板与说说（碎语）是两个独立的数据源——查询"博客里有没有人聊过 X"
+    这类问题时，需同时调用 list_talks 检查说说内容，两个都查全后才能回答。
+    """
     data = _get("/board")
     return str(data)
 
@@ -168,7 +175,11 @@ def list_guestbook() -> str:
 
 @tool
 def list_talks() -> str:
-    """获取说说（动态/碎语）列表。"""
+    """获取说说（动态/碎语）列表。
+
+    注意：说说与留言板（河灯留言）是两个独立的数据源——查询"博客里有没有人聊过 X"
+    这类问题时，需同时调用 list_guestbook 检查留言板内容，两个都查全后才能回答。
+    """
     data = _get("/talk")
     return str(data)
 
