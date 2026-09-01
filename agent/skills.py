@@ -62,6 +62,18 @@ from tools.base import _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS
 
 NAV_VALID_PATHS: set[str] = set(_NAV_EXACT_PATHS)
 
+# planner 可显式点名的无参只读工具白名单（20260902 用户拍板）：留言/说说/公告/
+# 时间类查询是"一次简单工具调用、无流程"，不成技能——planner 看得到工具描述，
+# 直接 PARAMS.tools 点名，instantiate_plan 白名单校验后展开进 TOOLS 行 →
+# reflector 检查点 1 逐工具核验强制调用（根治自由 ReAct 下"零工具编造"：
+# 233815 模型零工具声称"两边都翻了"，planner 点名后 TOOLS 行非空、模型不调
+# 就被确定性闸门打回）。仅限无参只读工具（参数由执行层/模板决定的不在此列，
+# 如 rag_search 保持自由 ReAct）。
+_EXPLICIT_TOOLS: set[str] = {
+    "list_guestbook", "list_talks", "get_announcements", "get_current_time",
+}
+
+
 # 口语模糊归一（NAV_MAP 精确命中的兜底）：枚举别名覆盖不了无穷口语变体
 # （"IOT设备管理"/"设备面板"/"管理设备"…），未命中映射表时按关键词规则归一，
 # 命中即等同映射命中——识别不依赖模型在 PARAMS 里自觉推断（曾见推断失败
@@ -153,29 +165,62 @@ SKILLS: list[Skill] = [
         reply_contract="按工具返回的设备列表如实回复",
     ),
     Skill(
-        name="rag_query",
-        description="用户询问博客内容的事实/知识型问题（文章/说说/留言/公告里写了什么、怎么做、是什么，如\"Git 和 SVN 有什么区别\"\"ESP32 的 OTA 怎么配置\"\"留言板/说说里有没有人聊过 XXX\"）时使用。",
-        inputs={"query": "检索关键词（用户问题的核心内容表述）"},
-        plan=[
-            ("rag_search", {"query": "$query"}),
-            # 第二段参数依赖检索结果，实例化时填占位说明文本，模型按检索结果自行填 id/type
-            # （候选可能为 talk/board 等非 note 类型，doc_type 必须取候选的 type）
-            ("get_article_detail", {"article_id": "$candidate_id", "doc_type": "$candidate_type"}),
-        ],
-        complete_when="rag_search 返回候选后，已调用 get_article_detail 读取相关文档全文",
+        name="content_query",
+        # 20260901 扩容：原为站点信息窄查询（分类/标签/公告/天气/时间…），现承接
+        # 原 rag_query 的全部内容查询意图——工具自由选择（自由 ReAct，RAG 前架构
+        # 的成功模式）：数据型查询（最新留言/说说/封面图）直接走 list_guestbook/
+        # list_talks/get_article_detail 等数据工具，文章知识问答用 rag_search/
+        # search_notes 定位 + get_article_detail 读全文，由执行层按语料规模与
+        # 场景自选检索方式（小语料标题/分类查找即可，大语料才需要全文检索）。
+        description=(
+            "用户询问博客内容时使用（文章/说说/留言/公告/站点信息里的内容）——包括："
+            "知识型问题（文章里写了什么、怎么做、是什么，如\"Git 和 SVN 有什么区别\"\"ESP32 的 OTA 怎么配置\"）；"
+            "数据/列表型查询（最新留言/说说/公告、文章列表、封面图片、分类/标签/天气/时间/知识库/站点信息/社交链接）。"
+            "数据/列表型查询（工具无参、无流程）：PARAMS.tools 显式点名要调用的工具"
+            "（仅限 list_guestbook/list_talks/get_announcements/get_current_time）——"
+            "查询'留言板/说说里有没有人聊过/写过 X'必须成对点名 list_guestbook 与 list_talks"
+            "（两个数据源都要查全）；知识型问题（需检索定位）：PARAMS.tools 不填，"
+            "由执行层用 rag_search 或 search_notes 定位文章后 get_article_detail 读全文"
+        ),
+        inputs={
+            "tools": (
+                "（可选）显式点名的无参只读工具列表，仅限 list_guestbook/list_talks/"
+                "get_announcements/get_current_time；查询'留言板/说说里有没有人聊过/写过 X'"
+                "必须成对点名 list_guestbook 与 list_talks；知识检索类不填（执行层自由选择）"
+            ),
+        },
+        plan=[],  # 数据工具由 planner 显式点名进 TOOLS 行；检索工具自由选择（ReAct 层决定）
+        complete_when="回答基于工具返回的数据",
         reply_contract=(
-            "必须调用 get_article_detail 读取候选文档全文后才能回答，回答内容基于全文、不得编造；"
-            "候选不限于文章（可能是说说/留言/公告），doc_type 取 rag_search 返回候选的 type；"
-            "检索无结果、或候选文档与问题无关时，如实告知博客里没有相关内容"
+            "回答基于工具返回的数据，不得编造；检索无结果或无关时如实告知。"
+            "查询'博客/留言板/说说里有没有人聊过/写过 X'这类问题时，"
+            "必须同时调用 list_guestbook 与 list_talks 两个工具，两个数据源都检查后再下结论。"
+            "问题针对用户当前正在阅读的文章（页面上下文 current_url 为 /article/:id）时，"
+            "必须先调用 get_article_detail 读取该文章，基于真实全文回答"
         ),
     ),
     Skill(
-        name="content_query",
-        description="用户询问站点信息类内容（分类/标签/公告/天气/时间/知识库/站点信息/社交媒体链接）时使用。",
-        inputs={},
-        plan=[],  # 数据工具自由选择（ReAct 层自行决定）
-        complete_when="回答基于工具返回的数据",
-        reply_contract="回答基于工具返回的数据，不编造",
+        name="read_article",
+        # 20260901 系统性修复（用户评审定性："读当前文章"是固定流程任务）：
+        # 模型对"用户当前在读的文章"只有 page_ctx 文本提示（current_url=/article/21），
+        # 无结构化事实、无强制读取——于是零工具声称"这篇我读完了"编造全文
+        # （232107：600 字细节全部虚构；232302：模型自己承认没读过、但系统
+        # 没有机制强制去读）。本技能 = 固定流程：planner_node 的确定性快道
+        # _article_fast_path 从 current_url 解析文章 ID 后注入本技能实例化，
+        # TOOLS 行强制 get_article_detail → executor 必须调用 → reflector
+        # 检查点 1 兜底。文章 ID 是系统数据，不经 planner 决策。
+        description=(
+            "（系统确定性快道专用，planner 不得选择——由 planner_node 在用户当前页面为"
+            "文章详情页且消息引用当前文章时注入）读取用户当前正在阅读的文章全文后回答"
+        ),
+        inputs={"article_id": "当前文章 ID（系统从页面上下文 current_url 解析，planner 不决策）"},
+        plan=[("get_article_detail", {"article_id": "$article_id"})],
+        complete_when="get_article_detail 返回文章全文",
+        reply_contract=(
+            "必须调用 get_article_detail 读取用户当前阅读的文章全文后再回答；"
+            "对文章内容的所有引用（标题/观点/细节/写法评价）必须来自工具返回，不得编造；"
+            "工具返回读取失败（文章不存在）时如实告知"
+        ),
     ),
     Skill(
         name="chat",
@@ -250,27 +295,33 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
                     f"无法识别导航目标「{target}」：如实告知没有该页面，不调用任何工具，"
                     f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/后台/物联网平台）给出建议（文本链接即可）"
                 )
-    elif skill.name == "rag_query":
-        # 检索 → 读全文两段式：TOOLS 行固定两个工具（get_article_detail 参数依赖检索
-        # 结果，实例化为占位说明文本，模型按 rag_search 返回的候选 id 自行填写——
-        # reflector 检查点 1 据此强制两段都执行，堵"只检索不读全文"）
-        for i, (tool_name, tmpl) in enumerate(skill.plan):
-            args = {}
-            for k, v in tmpl.items():
-                if isinstance(v, str) and v.startswith("$"):
-                    if v == "$candidate_id":
-                        args[k] = "候选文档 id（从 rag_search 返回结果中取最高分候选的 id）"
-                    elif v == "$candidate_type":
-                        args[k] = "候选文档类型（从 rag_search 返回结果中取最高分候选的 type，如 note/talk/board/announcement）"
-                    else:
-                        args[k] = params.get(v[1:])
-                else:
-                    args[k] = v
-            tools.append(f"{tool_name}({json.dumps(args, ensure_ascii=False)})")
-        note = (
-            "rag_search 定位候选后，用返回的候选 id 和 type 调用 get_article_detail 读取全文，"
-            "基于全文回答；候选可能为说说/留言等非文章类型；检索无结果时如实告知博客里没有相关内容"
-        )
+    elif skill.name == "read_article":
+        # 系统快道专用：article_id 由 planner_node 从 current_url 解析注入。
+        # 缺失时按 chat 兜底（绝不生成 article_id=null 的非法工具调用——若
+        # 未来 planner LLM 误选本技能，这就是最后防线）。
+        aid = params.get("article_id")
+        if aid is None or str(aid).strip() == "":
+            tools = []
+            note = "read_article 缺少 article_id（当前页面非文章详情页？），按闲聊处理"
+        else:
+            args = {"article_id": int(aid) if str(aid).isdigit() else aid}
+            tools.append(f"get_article_detail({json.dumps(args, ensure_ascii=False)})")
+            note = f"读取当前文章全文（ID={aid}）"
+    elif skill.name == "content_query" and params.get("tools"):
+        # 20260902：planner 显式点名无参只读工具（留言/说说/公告/时间类查询）。
+        # 白名单校验：仅限 _EXPLICIT_TOOLS；非法/重复条目剔除（合法条目仍生效——
+        # 不因模型多写一个越权工具就整单作废）；全非法/未填 → tools 空 = 自由
+        # ReAct 现状（不恶化，检索类本来就不点名）。
+        explicit = params.get("tools")
+        picked: list[str] = []
+        if isinstance(explicit, list):
+            for t in explicit:
+                if isinstance(t, str) and t.strip() in _EXPLICIT_TOOLS and t.strip() not in picked:
+                    picked.append(t.strip())
+        for t in picked:
+            tools.append(f"{t}({{}})")
+        if tools:
+            note = f"按 planner 显式点名的工具执行：{'、'.join(picked)}"
     else:
         for tool_name, tmpl in skill.plan:
             args = {}
@@ -297,9 +348,15 @@ _NAV_MAP_LINES = "、".join(
 
 
 def build_planner_context() -> str:
-    """planner 注入：技能表（触发条件 + 参数 + 工具序列 + 完成判定）+ 导航映射表。"""
+    """planner 注入：技能表（触发条件 + 参数 + 工具序列 + 完成判定）+ 导航映射表。
+
+    read_article 不列出——系统快道专用（article_id 是 current_url 解析的系统数据，
+    planner 无参可填，误选只能产出 null 工具调用），planner 不可见即不可选。
+    """
     lines = ["可用技能（只能从以下技能中选择一个，不得自创步骤或自由编写执行计划）："]
     for s in SKILLS:
+        if s.name == "read_article":
+            continue
         lines.append(f"- {s.name}：{s.description}")
         if s.inputs:
             lines.append(f"  参数：{json.dumps(s.inputs, ensure_ascii=False)}")

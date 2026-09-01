@@ -30,8 +30,8 @@ QUERIES: list[dict] = [
     {"id": "rag_git_branch",    "query": "Git 的分支为什么很轻量？",       "expected": ["note:16"]},
     {"id": "rag_git_svn",       "query": "Git 和 SVN 有什么区别？",        "expected": ["note:16"]},
     {"id": "rag_git_snapshot",  "query": "Git 的核心特点有哪些？",          "expected": ["note:16"]},
-    {"id": "rag_ota_partition", "query": "ESP32-S3 OTA 更新需要哪些分区？", "expected": ["note:12"]},
-    {"id": "rag_ota_http",      "query": "ESP32-S3 做 OTA 时遇到过什么问题？", "expected": ["note:12"]},
+    {"id": "rag_ota_partition", "query": "ESP32-S3 OTA 更新需要哪些分区？", "expected": ["note:14"]},
+    {"id": "rag_ota_http",      "query": "ESP32-S3 的 OTA 升级是怎么实现的？", "expected": ["note:14"]},
     # 20260831：指纹文章已改写为 ESP32-S3-OBC 文档，语料无指纹内容——转 noise（expected=[]）。
     {"id": "rag_fingerprint_pin", "query": "指纹模组有哪些引脚？",          "expected": []},
     {"id": "rag_fingerprint_crc", "query": "指纹模组的通信校验用的是什么算法？", "expected": []},
@@ -45,7 +45,9 @@ QUERIES: list[dict] = [
     # 通用词"建立/运行/使用"把架构文档稀释到 rank 5；进评测集后任何检索改动
     # 都必须验证此用例不被拉低，P0 失败用例回流第一单）
     {"id": "rag_eval_system",   "query": "RAG测评体系怎么建立？",          "expected": ["note:19"]},
-    {"id": "rag_talk_rag",      "query": "留言板里有人聊过 RAG 的本质吗？", "expected": ["talk:23"]},
+    # 20260901：rag_talk_rag（留言板查询，期望 talk:23）随检索池净化移出评测——
+    # 检索语料只收文章后 talk 不再可检索；"留言板/说说里有没有人聊过 X"是数据查询
+    # 场景，走 list_guestbook/list_talks 数据工具（端到端行为仍由 golden rag_talk_rag 覆盖）。
     {"id": "rag_noise_docker",  "query": "有没有 Docker 部署博客的教程？",  "expected": []},
     {"id": "rag_noise_rust",    "query": "Rust 的 async/await 是怎么工作的？", "expected": []},
     {"id": "rag_noise_mysql",   "query": "MySQL 慢查询怎么优化？",          "expected": []},
@@ -100,9 +102,7 @@ def main() -> None:
     idx = get_index()
     idx.build()
     docs = idx._docs
-    print(f"语料：{len(docs)} 文档（{sum(1 for d in docs if d['type']=='note')} note / "
-          f"{sum(1 for d in docs if d['type']=='talk')} talk / "
-          f"{sum(1 for d in docs if d['type']=='board')} board / 其余 announcement）")
+    print(f"语料：{len(docs)} 文档（全部 note——20260901 检索池净化，talk/board/announcement 不再入池）")
 
     rep = evaluate(idx, args.show)
     print(f"\n== {rep['baseline']} ==")
