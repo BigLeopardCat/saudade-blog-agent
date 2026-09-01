@@ -5,6 +5,21 @@
 > 精读全文后作答。
 > 本文是面试展示材料：架构 → 选型 → 实现 → 工作流 → 问题与解决 → 评测 → 自评。
 
+> **⚠️ 定位变更（20260901/20260902，正文保留为历史设计记录）**：本文正文描述的是
+> 20260830 的 **rag_query 技能两段式**设计——20260901 定位重构后已废除（见
+> [问题记录 1.32](../agent-architecture.md) 前置部分与 `agent-architecture.md` §6.5）：
+> 1. **20260901 定位重构（RAG 定位错了）**：把说说/留言拉进检索语料是污染（碎碎念无参考
+>    价值），RAG 正确用法是**文章检索的前置任务**而非意图类型（"除了 chat 就是 rag_search"
+>    是错误路由）。rag_query 技能废除，检索池只收文章；content_query 扩容承接全部内容
+>    查询：知识型 → 执行层自由 ReAct 自选 rag_search/search_notes 定位 + get_article_detail
+>    精读全文（"检索管发现，工具管精读"不变，正文 §2 的架构原则仍成立）；数据/列表型 →
+>    list_guestbook/list_talks 等数据工具直查，不走检索。
+> 2. **20260902 planner 显式点名工具**：查"留言板/说说里有没有人聊过/写过 X"由 planner
+>    PARAMS.tools 显式点名（白名单 _EXPLICIT_TOOLS，双源必须成对），经 TOOLS 行强制 +
+>    reflector 逐工具核验——根治"planner 对、model 零工具编造"（233815）。
+> 3. **检索评测口径不变**：recall_eval（21 条 queries 与 golden 一一对应、直接测线上
+>    rag/search.py）与语料净化（仅文章）后基线仍成立（recall@1=1.00）。
+
 ---
 
 ## 1. 背景与目标
