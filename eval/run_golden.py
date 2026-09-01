@@ -76,6 +76,7 @@ def run_one(req: ChatRequest) -> dict:
 
     final_text = ""
     commands: list[str] = []
+    tool_calls: list[str] = []  # 20260902：已调用的工具名（require_tool_calls 断言用）
     resets = 0
     resets_reasons: list[str] = []
     error = None
@@ -83,6 +84,7 @@ def run_one(req: ChatRequest) -> dict:
         if isinstance(item, str) and item.startswith("__RESET__"):
             final_text = ""  # REVISE/兜底轮作废 → 清空（与前端最终显示一致）
             commands.clear()  # 被作废轮的命令帧同样作废（前端 RESET 清空 cmdText 后不执行）
+            tool_calls.clear()  # 被作废轮的工具调用不算数（断言的是最终采纳轮的执行）
             resets += 1
             reason = item.removeprefix("__RESET__").lstrip(":")
             if reason:
@@ -90,13 +92,17 @@ def run_one(req: ChatRequest) -> dict:
         elif isinstance(item, AIMessageChunk) and item.content:
             final_text += str(item.content)
         elif isinstance(item, ToolMessage) and item.content:
+            name = getattr(item, "name", "") or ""
+            if name:
+                tool_calls.append(name)
             for line in str(item.content).splitlines():
                 s = line.strip()
                 if s.startswith(CMD_PREFIXES):
                     commands.append(s)
         elif isinstance(item, BaseException):
             error = str(item)
-    return {"text": final_text, "commands": commands, "resets": resets, "resets_reasons": resets_reasons, "error": error}
+    return {"text": final_text, "commands": commands, "tool_calls": tool_calls,
+            "resets": resets, "resets_reasons": resets_reasons, "error": error}
 
 
 def check_gold(gold: dict, result: dict) -> list[str]:
@@ -139,6 +145,13 @@ def check_gold(gold: dict, result: dict) -> list[str]:
     for kw in gold.get("text_not_contains", []):
         if kw in text:
             fails.append(f"文本不应包含 {kw!r}")
+
+    # 20260902：工具调用断言（最终采纳轮必须调用过这些工具）——根治"planner 对、
+    # model 零工具编造"类回归（如 233815：模型零工具声称"两边都翻了"），
+    # 这类事故文本层面测不出，只有工具轨迹能暴露
+    for t in gold.get("require_tool_calls", []):
+        if t not in result["tool_calls"]:
+            fails.append(f"未调用工具 {t}（已调用：{result['tool_calls']}）")
 
     return fails
 

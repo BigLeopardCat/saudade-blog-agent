@@ -147,11 +147,14 @@ _PLANNER_PROMPT = """\
 规则：
 1. 只能从技能表中选择一个技能，不得自创步骤或自由编写执行计划。
 2. 闲聊、问候、情感交流、明显不依赖博客内容的纯文字问答 → chat 技能。
-3. 用户询问博客内容的事实/知识型问题（文章/说说/留言/公告里写了什么、怎么做、
-   是什么；博客功能/系统机制如何工作，如"Git 和 SVN 有什么区别""ESP32 的 OTA
-   怎么配置""agent 怎么防止模型假装调用了工具""留言板/说说里有没有人聊过 XXX"）
-   → rag_query。即使问题表述得像概念问答也要选 rag_query——答案在博客内容里，
-   不在模型常识里；拿不准时优先 rag_query（检索不到再如实告知），不拿模型记忆冒险。
+3. 用户询问博客内容（文章/说说/留言/公告/站点信息里写了什么、怎么做、是什么；
+   博客功能/系统机制如何工作，如"Git 和 SVN 有什么区别""ESP32 的 OTA 怎么配置"
+   "agent 怎么防止模型假装调用了工具""最新留言说什么"）→ content_query。
+   工具由执行层按场景自选：数据/列表型查询（最新留言/说说/封面图）直接走
+   list_guestbook/list_talks 等数据工具，知识型问题用 rag_search/search_notes
+   定位文章后 get_article_detail 读全文。即使问题表述得像概念问答也要选
+   content_query——答案在博客内容里，不在模型常识里；不拿模型记忆冒险。
+   检索工具选型（search_notes vs rag_search）是执行层的事，planner 不决策。
 4. 导航目标在映射表中标记为"已下线"（如友链）时：选 chat 技能如实告知，不要选 navigate。
 5. PARAMS 必须严格按技能定义的参数名输出。
 6. 访客给出以 / 开头的具体路径时，target 原样填该路径，不要推断它对应哪个页面
@@ -353,18 +356,70 @@ _EXECUTION_CLAIM_RE = re.compile(
 )
 # 读取声称族（20260831 补，21:19:40 事故实证：chat 轮声称"回去重读"文章但零工具
 # 调用，引用 6 处全文细节 5 处不存在）——声称"读了/查了博客内容"必须以工具返回
-# 为据。模式收敛（宁漏勿误伤：只看"读/查/看"+内容宾语与"重读"类，不抓裸"看了"）：
+# 为据。模式收敛（宁漏勿误伤：只看"读/查/看"+内容宾语与"重读"类，不抓裸"看了"）。
+# 20260901 事故补丁：模型声称"查的是[关于页]""把整个博客扫了一遍""找到几条…文章
+# 链接"（零工具调用，7 个 /article/61/59/57/62/64/68/71 全部 404）——"查的是X页"、
+# "扫了一遍"、"找到N条"类表述同样构成读取声称，纳入模式（宾语限页面/博客/内容域，
+# 不抓"找到工作/找到钥匙"类生活语）。
 _READ_CLAIM_RE = re.compile(
     r"重读|重看|重新读|重新看|回去读"
     r"|已(?:经)?读取|已?通读|读完了?(?:全文|文章|内容|这篇|那篇|文档|博客)"
-    r"|(?:我|咱|喵)?(?:刚|刚才|刚刚|已经?)?(?:读|看|查)(?:过|了|完)(?:全文|文章|内容|文档|留言|说说|这篇|那篇|博客)"
+    r"|(?:我|咱|喵)?(?:刚|刚才|刚刚|已经?)?(?:读|看|查|翻)(?:过|了|完|遍)(?:了)?(?:全文|文章|内容|文档|留言|说说|这篇|那篇|博客)"
     r"|(?:核对|核实|查验)(?:过)?(?:全文|文章|内容|文档)"
+    r"|查的(?:是|就是)(?:[^，。！？!?～~\n]*?)?(?:页|页面|博客|文章|内容|正文)"
+    r"|把?整个?(?:博客|网站|站点|文章库|站内)?扫了?(?:一遍|一遍|一圈|遍)"
+    r"|找(?:到|出|出了)(?:了)?(?:几|数)?[一二三四五六七八九十0-9]*(?:条|篇|个|些)(?:[^，。！？!?～~\n]{0,20}?)?(?:文章|链接|博客|内容|文档|东西)"
 )
 _NAV_VERB_RE = re.compile(
     r"^(?:小猫咪|喵喵|主人|猫猫|喵)?[,，、\s]*"
     r"(?:去一下|回到|返回|跳转到|前往|转到|转跳|打开|进入|带我(?:去|到)|去|进|回|到|访问)"
     r"\s*([^\s，。！？!?～~、；;：:]{1,8})$"
 )
+
+
+# 当前文章读取确定性快道（20260901 系统性修复，零 LLM）。
+# 根因（用户评审定性，声称闸补丁被拒）：模型对"用户当前在读的文章"只有
+# page_ctx 文本提示（current_url=/article/21），无结构化事实、无强制读取——
+# 于是模型凭 URL 文本知道在读哪篇、却永远不真的读，回答全靠想象。事故实证：
+# 232107「这篇文章你怎么看」→ planner 选 content_query 且 plan=[]（零工具），
+# 模型声称"这篇我读完了"编造 600 字全文细节（"流程节点图""route A/B 双通道"
+# "技能=Markdown 文件"全部虚构），reflector 给 PASS；232302「你知道我现在读
+# 什么吗」→ planner 选 chat（零工具），模型自己承认"我确实不知道那篇文章里写
+# 了什么"，但没有机制强制去读。
+# 修复与导航/显示快道同构：命中 = 确定性识别（无模型猜测通道）——current_url
+# 解析出文章 ID 是系统数据（非模型推断），计划 TOOLS 行强制 get_article_detail
+# → executor 必须调用 → reflector 检查点 1（TOOLS 行要求的工具必须调用）与
+# 预算耗尽最后通牒确定性兜底。模型对文章内容的声称从此有真实工具返回为据。
+# 触发语域限"这篇/正在读/读到这"等强指称，宁多勿漏（文章页上误触发成本 =
+# 一次毫秒级读取，漏触发 = 幻觉重演）；不命中 → 落回 planner LLM。
+_ARTICLE_URL_RE = re.compile(r"/article/(\d+)")
+_ARTICLE_REF_RE = re.compile(
+    r"这篇|这篇文章|这篇文"
+    r"|我(?:现在|正在|当前)?(?:在读|读的)|我现在读|正在读|现在在读|正在看|现在看"
+    r"|(?:读|看)到(?:这里|这篇)|看完这篇|读完了这篇"
+    r"|这篇文章(?:讲|写|说|聊|介绍|什么|怎么|如何|怎样|你)"
+)
+
+
+def _article_fast_path(user_msg: str, page_ctx: str) -> dict | None:
+    """当前文章读取快道：current_url 匹配 /article/<id> 且消息引用当前文章
+    （"这篇/我正在读/读到这"…）→ read_article 计划（TOOLS 强制 get_article_detail）。
+
+    返回带 params 的 plan dict（与 planner LLM 路径同构），或 None 落回 planner LLM。
+    文章 ID 从 page_ctx 的 current_url 正则解析——系统数据，不存在模型猜错通道；
+    read_article 技能对 planner LLM 不可见（build_planner_context 过滤），仅本
+    快道注入（instantiate_plan 缺 article_id 时按 chat 兜底，防误用）。
+    """
+    m = _ARTICLE_URL_RE.search(page_ctx)
+    if not m:
+        return None
+    if not _ARTICLE_REF_RE.search(user_msg):
+        return None
+    article_id = m.group(1)
+    plan_obj = instantiate_plan("read_article", {"article_id": article_id})
+    plan_obj["params"] = {"article_id": article_id}
+    logger.info("[planner] 当前文章读取快道命中（零 LLM）: %s", plan_obj["tools"])
+    return plan_obj
 
 
 def _nav_fast_path(user_msg: str) -> dict | None:
@@ -460,6 +515,17 @@ def planner_node(state: AgentState) -> dict:
         record("planner", "fastpath", kind="display")
         return {"plan": plan_encode(display), "reflection": "", "reflection_count": 0, "done": False}
 
+    # 当前文章读取确定性快道（零 LLM，20260901 系统性修复）：用户当前页面是
+    # 文章详情页且消息引用"这篇/我正在读"等 → read_article 计划，TOOLS 行强制
+    # get_article_detail(id)。根因与事故见 _article_fast_path 注释——模型零工具
+    # 声称读过/编造全文（232107/232302），正则声称闸打不住（歌词"找到几条"即
+    # 误伤），必须把"读当前文章"做成固定流程：ID 是系统从 current_url 解析的
+    # 数据，执行被计划模板强制，reflector 检查点 1 确定性兜底。
+    article = _article_fast_path(user_msg, _page_ctx(state["messages"]))
+    if article is not None:
+        record("planner", "fastpath", kind="article_read", tools=article["tools"])
+        return {"plan": plan_encode(article), "reflection": "", "reflection_count": 0, "done": False}
+
     # 快思考模块：低温度（分类不需要创造力）、小 max_tokens、短超时
     # 20260829：耗时打点与 model 节点对称（planner 慢同样常见，统一可查）
     # 20260830：enable_thinking=False——planner 是"选技能+填参数"的结构化分类
@@ -517,9 +583,15 @@ _EXECUTOR_PROMPT = """\
 {plan}
 
 执行规则：
-1. 按计划执行：TOOLS 行列出的是技能模板的固定工具序列——需要调用就调用
-   （工具结果以工具返回为准，不要编造）；TOOLS 为（无）时不需要工具，
-   直接回答。
+1. 按计划执行：TOOLS 行列出的是 planner 显式点名或技能模板固定的工具序列——
+   列出即必须调用（工具结果以工具返回为准，不要编造），TOOLS 行列了多个工具
+   时每一个都要调用；TOOLS 为（无）时按 SKILL 行技能语义处理：
+   - content_query（自由 ReAct）：需要查询博客数据（文章/说说/留言/公告/站点
+     信息）时自行调用对应工具（list_guestbook/list_talks/get_article_detail/
+     search_notes/rag_search/get_announcements 等），回答必须基于工具返回、
+     不得编造；仅当确认与博客内容无关（纯常识/经验问答）时才可零工具直接回答。
+   - 其他技能（navigate/effect/darkmode/device_display/device_query/chat）：
+     不需要工具，直接回答。
 2. 若 NOTE 行说明"不调用任何工具"（如导航目标已下线/页面不存在）：
    按 NOTE 如实告知访客即可，不要强行调用工具。
 3. 所有步骤完成后，给出最终回复（遵循 REPLY 行的回复契约）。
@@ -751,6 +823,27 @@ def _build_trace(messages: list) -> str:
     return "\n".join(parts)[-1200:]
 
 
+def _tool_name(tool_spec: str) -> str:
+    """TOOLS 行条目 → 工具名（'get_article_detail({"article_id": 21})' → get_article_detail）。"""
+    return tool_spec.split("(", 1)[0].strip()
+
+
+def _missing_tools(required: list[str], round_msgs: list) -> list[str]:
+    """TOOLS 行要求的工具中，当前轮轨迹缺失的工具名列表（20260902 逐工具核验）。
+
+    检查点 1 从"本轮有没有任何 ToolMessage"升级为"每个工具名都在轨迹中出现"——
+    双源强制落地（list_guestbook+list_talks 缺一个即 REVISE；233815 事故后
+    planner 显式点名工具进 TOOLS 行，只调一个数据源仍算执行不完整）；单工具
+    技能（navigate/effect 等）行为不变。
+    """
+    if not required:
+        return []
+    called = {
+        getattr(m, "name", "") or "" for m in round_msgs if isinstance(m, ToolMessage)
+    }
+    return [t for t in required if _tool_name(t) not in called]
+
+
 def _current_round(messages: list) -> list:
     """当前轮消息：最近一次修正注记（SystemMessage）之后的轨迹。
 
@@ -814,9 +907,10 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
             correction = _correction_msg(
                 "claim_without_tool",
                 "你的回复声称已阅读/查阅了博客内容（重读/读完了全文/查过了…），"
-                "但本轮没有任何工具执行记录——了解博客内容必须调用 rag_search 与 "
-                "get_article_detail 工具、以工具返回的全文为据；未调用工具时不得声称"
-                "读过/查过，只能如实说明尚未查看",
+                "但本轮没有任何工具执行记录——了解博客内容必须调用检索/读取工具"
+                "（如 rag_search/search_notes 定位、get_article_detail 读全文、"
+                "list_guestbook/list_talks 查列表）、以工具返回为据；未调用工具时"
+                "不得声称读过/查过，只能如实说明尚未查看",
             )
             logger.info("[reflector] 声称闸：chat 回复含读取声称但零工具调用")
             return {"messages": [correction], "done": False,
@@ -835,6 +929,38 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
                     "last_issue": {"issue": "claim_without_tool", "detail": "chat 回复含执行声称但零工具调用"}}
         return {"done": bool(last_content), "reflection": "chat 快道路：非空检查通过" if last_content else "chat 回复为空", "reflection_count": count}
 
+    # effect/darkmode 幂等判定（确定性计算，注入 LLM 质检上下文 + 检查点 1 豁免
+    # 依据；须在预算耗尽分支之前——最后通牒的"非幂等零工具"判定依赖它）：
+    # 按上下文 current_effects/current_darkmode 与计划参数计算"状态是否与目标一致"。
+    # 背景：LLM 质检会把回复契约的"与目标一致时不调用工具"条款理解反——曾把
+    # current=sakura、目标=off（不一致，必须调工具）误判为"一致、调用违规"，
+    # 把正确执行 REVISE 掉（帧随 __RESET__ 作废 → golden 缺帧失败）。程序先算好
+    # 事实注入质检上下文，两个方向的误判都消除。
+    # 注意：这里只注入事实、不做确定性 REVISE——零工具可能是合理拒绝（如注入攻击
+    # 轮），程序无法区分"拒绝"与"偷懒声称完成"，判罚交给 LLM（检查点 5 放行拒绝）。
+    state_matches: bool | None = None
+    if plan["skill"] in ("effect", "darkmode") and plan["params"]:
+        ctx_text = "\n".join((getattr(m, "content", "") or "")
+                             for m in state["messages"] if isinstance(m, HumanMessage))
+        if plan["skill"] == "effect":
+            eff, act = plan["params"].get("effect"), plan["params"].get("action")
+            if eff and act:
+                m = re.search(r"current_effects=([^\s,;]+)", ctx_text)
+                cur = m.group(1) if m else "none"
+                # current_effects 是多特效逗号拼接（sakura,rain…），字符串相等
+                # 会把"关 sakura（current=sakura,rain）"误判为"已关"（eff != cur 恒真）
+                # ——幂等注记放行零工具，模型偷懒声称完成被 LLM 质检双重放行
+                # （multi_turn_correction 20260902 FAIL 根因），必须按集合判断
+                cur_effects = {e.strip() for e in cur.split(",") if e.strip()}
+                state_matches = (act == "on" and eff in cur_effects) or (
+                    act == "off" and eff not in cur_effects)
+        else:
+            mode = plan["params"].get("mode")
+            if mode:
+                m = re.search(r"current_darkmode=([^\s,;]+)", ctx_text)
+                cur = m.group(1) if m else "off"
+                state_matches = (mode == "on" and cur == "on") or (mode == "off" and cur == "off")
+
     if count >= MAX_REFLECTIONS:
         # 预算耗尽 → 接受当前结果收尾：纠错循环必须有上限，不无限烧钱/烧时间。
         # 20260831 硬拦：工具执行缺失是硬约束，不受反思预算约束——预算耗尽仍零
@@ -842,15 +968,20 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
         # "已读取全文确认"，预算耗尽 accept 放行、LLM 质检被声称型回复骗过）。
         # 追加一次最后通牒轮（count 再 +1；下次进来 count == MAX_REFLECTIONS+1
         # 不再进通牒分支 → accept，通牒恰好一轮不无限循环）。
+        # 20260902 逐工具核验（与检查点 1 同语义）：预算耗尽仍缺失 TOOLS 行
+        # 任一工具 → 最后通牒（如双源只调了 list_guestbook 仍缺 list_talks）
         missing = (plan["tools"]
-                   and plan["skill"] not in ("effect", "darkmode")
-                   and not any(isinstance(m, ToolMessage) for m in _current_round(state["messages"])))
+                   and not (plan["skill"] in ("effect", "darkmode")
+                            and state_matches is True)
+                   and _missing_tools(plan["tools"], _current_round(state["messages"])))
         if missing and count < MAX_REFLECTIONS + 1:
             correction = _correction_msg(
                 "tool_missing_final",
                 "质检打回已达上限，但你仍然没有调用计划列出的工具（"
                 + "、".join(plan["tools"])
-                + "）；这是最后一次机会：先调用工具、基于工具返回的事实回答；"
+                + "），本轮缺失："
+                + "、".join(missing)
+                + "；这是最后一次机会：先调用工具、基于工具返回的事实回答；"
                 "仍然直接作答将被视为编造",
             )
             logger.info("[reflector] 预算耗尽仍零工具调用，最后通牒")
@@ -869,37 +1000,17 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
         logger.info("[reflector] 反思预算耗尽(%d/%d)，接受当前结果", count, MAX_REFLECTIONS)
         return {"done": True, "reflection": f"反思预算已用尽({count}/{MAX_REFLECTIONS})，接受当前结果", "reflection_count": count}
 
-    # effect/darkmode 幂等判定（确定性计算，注入 LLM 质检上下文）：
-    # 按上下文 current_effects/current_darkmode 与计划参数计算"状态是否与目标一致"。
-    # 背景：LLM 质检会把回复契约的"与目标一致时不调用工具"条款理解反——曾把
-    # current=sakura、目标=off（不一致，必须调工具）误判为"一致、调用违规"，
-    # 把正确执行 REVISE 掉（帧随 __RESET__ 作废 → golden 缺帧失败）。程序先算好
-    # 事实注入质检上下文，两个方向的误判都消除。
-    # 注意：这里只注入事实、不做确定性 REVISE——零工具可能是合理拒绝（如注入攻击
-    # 轮），程序无法区分"拒绝"与"偷懒声称完成"，判罚交给 LLM（检查点 5 放行拒绝）。
-    state_matches: bool | None = None
-    if plan["skill"] in ("effect", "darkmode") and plan["params"]:
-        ctx_text = "\n".join((getattr(m, "content", "") or "")
-                             for m in state["messages"] if isinstance(m, HumanMessage))
-        if plan["skill"] == "effect":
-            eff, act = plan["params"].get("effect"), plan["params"].get("action")
-            if eff and act:
-                m = re.search(r"current_effects=([^\s,;]+)", ctx_text)
-                cur = m.group(1) if m else "none"
-                state_matches = (act == "on" and eff == cur) or (act == "off" and eff != cur)
-        else:
-            mode = plan["params"].get("mode")
-            if mode:
-                m = re.search(r"current_darkmode=([^\s,;]+)", ctx_text)
-                cur = m.group(1) if m else "off"
-                state_matches = (mode == "on" and cur == "on") or (mode == "off" and cur == "off")
-
     # 模板执行的结构性检查（检查点 1 的确定性部分，LLM 质检前的低成本闸）：
     # 20260831 泛化：不再限于 navigate——凡 TOOLS 行要求工具但当前轮从未执行过
     # 任何工具，正文直接回答没有事实依据，REVISE，不花 LLM 钱。
+    # 20260902 升级逐工具核验：不只查"有没有任何 ToolMessage"，而是 TOOLS 行
+    # 每个工具名都要在轨迹中出现（_missing_tools）——planner 显式点名双源
+    # （list_guestbook+list_talks）后只调一个数据源仍算执行不完整。
     # 事故依据：关 thinking 后 executor 在 rag_query 技能下不调工具直接编造回复
     # （"分析文章21"编出文章不存在的文献 Poldrack 2015/Farah 2004 与发布日期），
-    # LLM 质检被声称型回复骗过放行 PASS——确定性闸门先于 LLM 质检拦截。
+    # LLM 质检被声称型回复骗过放行 PASS；20260902 233815 模型零工具声称"两边都
+    # 翻了"（planner 点名工具进 TOOLS 行后，本闸门直接拦截）——确定性闸门先于
+    # LLM 质检。
     # 检查范围限定当前轮（_current_round）而非全历史：被 REVISE 的历史轮调用过
     # 工具不代表当前轮也调了。
     # 豁免面（合法零调用，不误伤）：
@@ -907,57 +1018,33 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
     #     已为空，本闸门不触发（下方另有反向检查兜住越权调用）
     #   - effect/darkmode 幂等场景（状态已与目标一致时合法零调用）→ 走上方
     #     state_matches 注记 + LLM 检查点 5 判罚，确定性闸门不越权
-    if (plan["tools"]
-            and plan["skill"] not in ("effect", "darkmode")
-            and not any(isinstance(m, ToolMessage) for m in _current_round(state["messages"]))):
+    round_msgs = _current_round(state["messages"])
+    missing_tools = _missing_tools(plan["tools"], round_msgs)
+    # effect/darkmode 豁免收窄（20260902）：不再是"整个技能豁免"，只豁免
+    # 幂等场景（state_matches=True，状态已与目标一致 → 合法零调用）——非幂等
+    # 场景（目标与当前状态不一致）零工具 = 偷懒承诺/声称完成，必须确定性 REVISE。
+    # 依据：multi_turn_correction FAIL——current=sakura,rain 目标关 sakura，
+    # 模型零工具回复"帮你把樱花关掉"，LLM 质检要点 1 明确不判工具缺失、
+    # 要点 5 只拦完成式声称（"帮你关"是将来时），三层放行零工具缺帧。
+    exempt_idem = plan["skill"] in ("effect", "darkmode") and state_matches is True
+    if (plan["tools"] and not exempt_idem and missing_tools):
         correction = _correction_msg(
             "tool_missing",
-            "计划要求调用工具（" + "、".join(plan["tools"]) + "），但本轮没有任何工具执行；"
-            "回答必须基于工具返回的事实——先调用计划列出的工具再作答，不得编造内容；"
+            "计划要求调用工具（" + "、".join(plan["tools"]) + "），本轮缺失："
+            + "、".join(missing_tools)
+            + "；回答必须基于工具返回的事实——先调用缺失的工具再作答，不得编造内容；"
             "若因访客明确禁止等原因无法调用工具，如实告知无法执行",
         )
-        logger.info("[reflector] 模板执行缺失：%s 计划要求工具但零工具调用", plan["skill"])
+        logger.info("[reflector] 模板执行缺失：%s 计划要求工具，缺失 %s",
+                    plan["skill"], "、".join(missing_tools))
         return {"messages": [correction], "done": False,
-                "reflection": f"{plan['skill']} 计划要求工具但零工具调用",
+                "reflection": f"{plan['skill']} 计划要求工具，缺失 {'、'.join(missing_tools)}",
                 "reflection_count": count + 1,
-                "last_issue": {"issue": "tool_missing", "detail": "计划要求工具但零工具调用"}}
+                "last_issue": {"issue": "tool_missing", "detail": f"计划要求工具，缺失 {'、'.join(missing_tools)}"}}
 
-    # 留言板/说说类查询的候选读取校验（确定性，LLM 质检前，20260831）：
-    # rag_query 且用户问"留言板/说说里有没有 X"（消息含留言/说说/河灯/talk/board），
-    # 检索候选含 talk/board 类型，但本轮从未 get_article_detail 任何 talk/board
-    # 候选（doc_type 取候选 type）→ REVISE。
-    # 事故：golden rag_talk_rag——候选 talk:23（rank2）被模型跳过，只读 rank1 的
-    # note:19 后翻留言板，答"留言板里没有人聊过 RAG"（实际 talk:23 就是）——
-    # 检索命中但候选选择错误，事实答错；文本无解（回复是"合格拒答"形态），
-    # 轨迹可查（读了 note 没读 talk/board）→ 确定性判定。
-    if plan["skill"] == "rag_query":
-        round_msgs = _current_round(state["messages"])
-        user_text = "\n".join(
-            (getattr(m, "content", "") or "") for m in state["messages"] if isinstance(m, HumanMessage))
-        if re.search(r"留言|说说|河灯|talk|board", user_text):
-            rag_out = "\n".join(
-                _msg_text(m) for m in round_msgs
-                if isinstance(m, ToolMessage) and getattr(m, "name", "") == "rag_search")
-            if re.search(r"type=(talk|board)\b", rag_out):
-                read_talk_board = any(
-                    tc.get("name") == "get_article_detail"
-                    and tc.get("args", {}).get("doc_type") in ("talk", "board")
-                    for m in round_msgs if isinstance(m, AIMessage)
-                    for tc in getattr(m, "tool_calls", []))
-                if not read_talk_board:
-                    correction = _correction_msg(
-                        "talk_candidate_unread",
-                        "用户询问的是留言板/说说里的内容，且检索候选包含 talk/board 类型"
-                        "（如留言/说说），但你只读了 note 类候选——必须调用 "
-                        "get_article_detail 读取 talk/board 候选（doc_type 取候选 type、"
-                        "id 取候选 id）后再回答，候选列表里每个类型都要检查是否与问题相关",
-                    )
-                    logger.info("[reflector] 候选读取缺失：留言类查询未读 talk/board 候选")
-                    return {"messages": [correction], "done": False,
-                            "reflection": "留言类查询未读 talk/board 候选",
-                            "reflection_count": count + 1,
-                            "last_issue": {"issue": "talk_candidate_unread",
-                                           "detail": "留言类查询未读 talk/board 候选"}}
+    # 20260901：留言板/说说类查询的候选读取校验已删除——检索池只收文章后
+    # rag_search 不再返回 talk/board 候选，该检查触发条件消失；留言/说说查询
+    # 改走 list_guestbook/list_talks 数据工具（content_query 自由模式），无需检索。
 
     # URL/资源路径声称校验（确定性，LLM 质检前，20260901）：回复中的资源 URL
     # （/api/ 路径或图片后缀 URL）必须逐字出现在工具返回或用户消息中——URL 是

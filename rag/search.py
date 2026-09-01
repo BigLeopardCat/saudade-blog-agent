@@ -5,7 +5,9 @@ talk/board/announcement 无单条端点，从列表接口按 key 过滤（列表
 
 设计（2026-08-30 边界定论）：
 - 检索粒度 = 小段落 chunk（markdown 标题切分，>2000 字才切）；读取粒度 = 全文。
-- 语料 = 线上可见文章（is_public=1 AND status!='draft'）+ 说说/留言（approved=1）+ 公告，
+- 语料 = 线上可见文章（is_public=1 AND status!='draft'）——20260901 起检索池
+  只收文章（说说/留言/公告移除：碎碎念与混杂内容无语义判别力，混入放大幻觉，
+  见"最新留言"事故；它们走 list_talks/list_guestbook/get_announcements 数据工具）。
   与前台可见性严格一致——agent 不应答出访客看不到的内容。
 - 词法 2/3-gram 子串匹配（recall_eval 实证：14 条 recall 用例 recall@3=1.00，
   词法基线已打满当前语料；向量留作 L1 升级，接 BEIR 基准时对比再上）。
@@ -30,8 +32,10 @@ REFRESH_TTL = 600.0  # 10 分钟懒刷新
 
 # 语料源：Rust 公开接口（与前台可见性严格一致，agent 保持无 DB 依赖架构）
 #  - notes:    is_public=1 AND status!='draft'（前台可读的文章）
-#  - talk/board: approved=1（前台可见的说说/留言）
-#  - announcements: 公告
+# 20260901 语料净化：检索池只收文章——说说（碎碎念）语义判别力低、留言混杂，
+# 混入检索池只会放大无关候选 → 幻觉空间（"最新留言"事故实证：rag_search 返回
+# 混合候选，模型在 talk 候选上硬编 talkKey 31）。说说/留言/公告是"数据读取"
+# 场景，走各自数据工具（list_talks/list_guestbook/get_announcements），不进检索池。
 
 
 def tokenize(text: str) -> list[str]:
@@ -118,15 +122,7 @@ class RagIndex:
             docs.append({"type": "note", "id": it.get("noteKey"),
                          "title": it.get("noteTitle") or "",
                          "content": detail.get("noteContent") or ""})
-        for it in _get("/talk"):
-            docs.append({"type": "talk", "id": it.get("talkKey"),
-                         "title": it.get("talkTitle") or "", "content": it.get("content") or ""})
-        for it in _get("/board"):
-            docs.append({"type": "board", "id": it.get("talkKey"),
-                         "title": it.get("talkTitle") or "", "content": it.get("content") or ""})
-        for it in _get("/announcements"):
-            docs.append({"type": "announcement", "id": it.get("id"),
-                         "title": it.get("title") or "", "content": it.get("content") or ""})
+        # 20260901：语料只收文章（说说/留言/公告移除——检索池净化，见头部注释）
         return docs
 
     # ── 查询 ──────────────────────────────────────────────────────

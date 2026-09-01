@@ -138,8 +138,15 @@ def _build_messages(req: ChatRequest) -> list:
 
     # 消费 Rust 转发的全部 20 条历史（20260828 对齐：此前 Rust 传 20、这里取 12，
     # 8 条白传且两个魔数散落两处易失同步；Rust 侧已排除当前消息，history 是纯历史）
-    for h in req.history[-20:]:
+    # 孤儿 user 裁剪（20260901）：中断/并发窗口的轮次只入库 user 无 assistant 回复
+    # （该轮回复未完成即断流），注入后模型把孤儿当待答问题（trace 实证：历史遗留
+    # "谈谈你对穹妹的看法"未完成，模型整篇回复穹妹）。正常轮次严格成对
+    # （user→assistant），user 后非 assistant 即孤儿，整条跳过不注入。
+    hist = req.history[-20:]
+    for i, h in enumerate(hist):
         if h["role"] == "user":
+            if i + 1 >= len(hist) or hist[i + 1]["role"] != "assistant":
+                continue  # 孤儿 user（该轮回复未入库），不注入
             messages.append(HumanMessage(content=h["content"]))
         else:
             # 恢复 assistant 角色（曾全部包成 HumanMessage + [assistant]: 前缀——

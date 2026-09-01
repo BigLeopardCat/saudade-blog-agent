@@ -15,8 +15,9 @@ import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from agent.graph import (_PLANNER_OUTPUT_RE, _current_round, _display_fast_path, _nav_fast_path,
-                         _parse_params, plan_encode, parse_plan, reflector_node, tools_node)
+from agent.graph import (_PLANNER_OUTPUT_RE, _article_fast_path, _current_round,
+                         _display_fast_path, _nav_fast_path, _parse_params,
+                         plan_encode, parse_plan, reflector_node, tools_node)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, instantiate_plan
 
 # 反射器 LLM 质检 stub：本文件是技能/plan 契约单元测试，质检路径不应依赖真实
@@ -323,6 +324,133 @@ def test_display_fast_path():
               _display_fast_path(msg) is None, str(_display_fast_path(msg)))
 
 
+def test_article_fast_path():
+    """当前文章读取确定性快道（20260901 系统性修复）：current_url 是文章详情页
+    （/article/<id>）且消息含当前文章指称（"这篇/我正在读/读到这"…）→ read_article
+    计划，TOOLS 强制 get_article_detail(<id>)——文章 ID 是系统从 URL 解析的数据，
+    不经 planner 决策。回归基线：232107（"这篇文章你怎么看"零工具编造 600 字）
+    / 232302（"你知道我现在读什么吗"planner 选 chat 零工具）两事故消息必须命中。"""
+    print("[article_fast_path] 当前文章读取快道")
+    ctx = "user_id=5, page=https://saudade.site/article/21, title=关于欧洲AI产业落后中美以及AI相关立法、认知科学的探讨, current_effects=none, current_darkmode=off"
+    for msg in [
+        "小猫咪我现在读的这篇文章你怎么看",   # 232107 事故原话
+        "你知道我现在读什么吗",             # 232302 事故原话
+        "这篇文章写得怎么样",
+        "这篇文章讲的什么内容",
+        "我读到这里的这段怎么理解",
+        "这篇你读过吗",
+        "你觉得这篇文章如何",
+        "帮我看看这篇的结论部分",
+    ]:
+        p = _article_fast_path(msg, ctx)
+        check(f"快道命中「{msg[:20]}」→ read_article TOOLS 强制读取文章 21",
+              p is not None and p["skill"] == "read_article"
+              and p["tools"] == ['get_article_detail({"article_id": 21})']
+              and p["params"] == {"article_id": "21"},
+              f"p={p}")
+    # 不在文章页（/guestbook）→ 不命中（文章 ID 解析不到，系统不猜）
+    p = _article_fast_path("这篇文章你看过吗", "user_id=5, page=/guestbook, title=留言板, current_effects=none, current_darkmode=off")
+    check("非文章页 + 「这篇」→ None（不命中）", p is None, f"p={p}")
+    # 文章页但消息不指称当前文章 → 不命中（闲聊/数据查询/导航落回 planner LLM）
+    for msg in ["你好呀", "把樱花打开", "最新留言说什么", "今天天气怎么样",
+                "去留言板", "帮我看看有没有人聊过ESP32"]:
+        check(f"文章页 + 「{msg[:16]}」→ None（落回 planner LLM）",
+              _article_fast_path(msg, ctx) is None, str(_article_fast_path(msg, ctx)))
+    # page_ctx 缺失（无 System 消息）→ None
+    check("page_ctx=（无）→ None", _article_fast_path("这篇文章", "（无）") is None, "")
+    # instantiate_plan 缺 article_id 兜底：零工具 + 说明注记（防误用/null 工具调用）
+    p = instantiate_plan("read_article", {})
+    check("instantiate_plan(read_article, {}) → 零工具（chat 兜底）",
+          p is not None and p["tools"] == [] and "article_id" in p["note"], f"p={p}")
+    # plan 往返：快道计划编码 → 解析后 skill/tools 保持（reflector 检查点 1 依赖）
+    p = _article_fast_path("这篇文章你怎么看", ctx)
+    parsed = parse_plan(plan_encode(p))
+    check("read_article 计划往返：skill/tools/chat 正确",
+          parsed["skill"] == "read_article"
+          and parsed["tools"] == ['get_article_detail({"article_id": 21})']
+          and parsed["chat"] is False,
+          f"parsed={parsed}")
+    # build_planner_context 不含 read_article（系统快道专用，planner 不可见不可选）
+    from agent.skills import build_planner_context
+    check("planner 技能表不含 read_article（快道专用，对 planner 不可见）",
+          "read_article" not in build_planner_context(), "")
+
+
+def test_explicit_tools():
+    """planner 显式点名工具（20260902 用户拍板）：留言/说说/公告/时间类查询是
+    "一次简单工具调用、无流程"——planner 看得到工具描述，PARAMS.tools 显式点名，
+    instantiate_plan 白名单校验后展开进 TOOLS 行，reflector 检查点 1 逐工具核验
+    强制调用（根治自由 ReAct 下零工具编造：233815 模型零工具声称"两边都翻了"）。
+    planner 三态：只给 skill → 执行器按技能语义（content_query 自由 ReAct）；
+    skill+PARAMS.tools → TOOLS 行强制；都不给 → chat 兜底。"""
+    print("[explicit_tools] planner 显式点名工具")
+    # 双源点名 → TOOLS 行两个工具（与 plan_encode 的 '; ' 连接兼容）
+    p = instantiate_plan("content_query", {"tools": ["list_guestbook", "list_talks"]})
+    check("双源点名 → TOOLS 展开 list_guestbook+list_talks",
+          p["tools"] == ['list_guestbook({})', 'list_talks({})'],
+          f"tools={p['tools']} note={p['note']}")
+    # 白名单外工具 → 剔除（合法条目仍生效）
+    p = instantiate_plan("content_query", {"tools": ["list_guestbook", "rag_search"]})
+    check("混填（合法+越权）→ 只留白名单内工具",
+          p["tools"] == ['list_guestbook({})'],
+          f"tools={p['tools']}")
+    # 全非法 → 空（回退自由 ReAct 现状，不恶化）
+    p = instantiate_plan("content_query", {"tools": ["rag_search", "get_article_detail"]})
+    check("全非法点名 → tools 空（自由 ReAct 兜底）", p["tools"] == [], f"tools={p['tools']}")
+    # 未填/非列表 → 空（现状）
+    p = instantiate_plan("content_query", {})
+    check("未点名 → tools 空（自由 ReAct 现状）", p["tools"] == [], f"tools={p['tools']}")
+    # 去重
+    p = instantiate_plan("content_query", {"tools": ["list_guestbook", "list_guestbook"]})
+    check("重复点名 → 去重", p["tools"] == ['list_guestbook({})'], f"tools={p['tools']}")
+    # plan 往返：TOOLS 行解析后工具名保持（reflector 逐工具核验依赖）
+    obj = instantiate_plan("content_query", {"tools": ["list_guestbook", "list_talks"]})
+    obj["params"] = {"tools": ["list_guestbook", "list_talks"]}
+    parsed = parse_plan(plan_encode(obj))
+    check("双源计划往返 → skill/tools/chat 正确",
+          parsed["skill"] == "content_query"
+          and parsed["tools"] == ['list_guestbook({})', 'list_talks({})']
+          and parsed["chat"] is False,
+          f"parsed={parsed}")
+
+    # reflector 检查点 1 逐工具核验（20260902）：双源缺一个即 REVISE
+    plan_txt = plan_encode(instantiate_plan(
+        "content_query", {"tools": ["list_guestbook", "list_talks"]}))
+    # 零工具 → REVISE
+    out = reflector_node({
+        "plan": plan_txt, "reflection_count": 0, "done": False,
+        "messages": [HumanMessage(content="小猫咪有没有关于这方面的留言"),
+                     AIMessage(content="查完了喵，留言板和说说里都没有聊这个话题的～")],
+    })
+    check("双源计划 + 零工具 → REVISE（tool_missing）",
+          out["done"] is False and out["last_issue"]["issue"] == "tool_missing",
+          f"reflection={out.get('reflection')}")
+    # 只调一个源 → REVISE（缺 list_talks）——逐工具核验的新行为
+    out2 = reflector_node({
+        "plan": plan_txt, "reflection_count": 0, "done": False,
+        "messages": [HumanMessage(content="小猫咪有没有关于这方面的留言"),
+                     AIMessage(content="", tool_calls=[{"name": "list_guestbook", "args": {}, "id": "t1"}]),
+                     ToolMessage(content="[{...}]", tool_call_id="t1", name="list_guestbook"),
+                     AIMessage(content="留言板查过了，只有一个游客留的「1」～")],
+    })
+    check("双源计划 + 只调 list_guestbook → REVISE（缺失 list_talks）",
+          out2["done"] is False and out2["last_issue"]["issue"] == "tool_missing"
+          and "list_talks" in out2["reflection"],
+          f"reflection={out2.get('reflection')}")
+    # 双源都调 → 检查点 1 通过 → LLM 质检（stub PASS）
+    out3 = reflector_node({
+        "plan": plan_txt, "reflection_count": 0, "done": False,
+        "messages": [HumanMessage(content="小猫咪有没有关于这方面的留言"),
+                     AIMessage(content="", tool_calls=[{"name": "list_guestbook", "args": {}, "id": "t1"}]),
+                     ToolMessage(content="[{...}]", tool_call_id="t1", name="list_guestbook"),
+                     AIMessage(content="", tool_calls=[{"name": "list_talks", "args": {}, "id": "t2"}]),
+                     ToolMessage(content="[{...}]", tool_call_id="t2", name="list_talks"),
+                     AIMessage(content="查完了，两个数据源都看过了，没有聊这个话题的喵～")],
+    })
+    check("双源都调 → 检查点 1 通过 → PASS",
+          out3["done"] is True, f"reflection={out3.get('reflection')}")
+
+
 def test_chat_claim_check():
     """闲聊快道声称闸（20260828 影子系统重构）：chat 不再无条件非空豁免——
     回复含执行声称（已显示/已发送/已执行…）且当前轮零工具 → REVISE
@@ -351,6 +479,24 @@ def test_chat_claim_check():
     out3 = reflector_node(chat_state("今天的月色真美呢～"))
     check("chat 无声称 → 快道 PASS",
           out3["done"] is True and "chat 快道路" in out3["reflection"], str(out3["reflection"]))
+    # 读取声称变体（20260901 事故回归：模型声称"查的是关于页""扫了一遍博客"
+    # "找到几条文章链接"，零工具调用，7 个 /article/61… 全部 404）→ REVISE
+    for reply in (
+        "我查的是[关于页](https://saudade.site/about)的正文",
+        "不过我顺手把整个博客扫了一遍",
+        "找到几条主人自己写的、跟你这个问题真有关系的东西",
+        "我翻遍了留言板，确实没人聊过",
+    ):
+        out4 = reflector_node(chat_state(reply))
+        check(f"chat 读取声称变体 + 零工具 → REVISE：{reply[:16]}…",
+              out4["done"] is False and out4.get("last_issue", {}).get("issue") == "claim_without_tool",
+              str(out4.get("last_issue")))
+    # 读取声称 + 轨迹有工具执行 → 放行（"翻遍了留言板"以工具返回为据）
+    out5 = reflector_node(chat_state("我翻遍了留言板，确实没人聊过", extra=[
+        AIMessage(content="", tool_calls=[{"name": "list_guestbook", "args": {}, "id": "t2"}]),
+        ToolMessage(content="[]", tool_call_id="t2", name="list_guestbook")]))
+    check("chat 读取声称变体 + 有工具执行 → 放行（快道 PASS）",
+          out5["done"] is True and "chat 快道路" in out5["reflection"], str(out5["reflection"]))
 
 
 def test_tool_retry_state():
@@ -549,7 +695,8 @@ def test_planner_output_re():
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_round_aware_checks, test_confirm_nav_claim_check, test_plan_roundtrip, test_parse_tolerance,
-               test_nav_fast_path, test_display_fast_path, test_chat_claim_check,
+               test_nav_fast_path, test_display_fast_path, test_article_fast_path,
+               test_explicit_tools, test_chat_claim_check,
                test_reflector_tool_frame_gate, test_planner_output_re,
                test_tool_retry_state, test_tools_authorization, test_correction_msg):
         fn()
