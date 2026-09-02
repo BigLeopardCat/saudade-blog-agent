@@ -12,7 +12,7 @@
   * 执行层 ReAct：model 节点带工具思考 → 有 tool_calls 走 tools → 回到 model，
     直到不再调工具（循环在图上可见，trace 可数"第几步调了几次工具"）
   * 反思层 Reflexion：reflector 对 tool/multi 意图做 LLM 质检；
-    chat 意图走快道（非空检查，不花 LLM 钱）
+    chat 意图走零 LLM 快道（声称闸正则族 + 非空检查，20260828/31/0902 扩展）
 
 LangGraph 四件套（对照第一课讲解）：
   State  —— AgentState（节点间共享的字典，字段决定"工作台长什么样"）
@@ -21,8 +21,9 @@ LangGraph 四件套（对照第一课讲解）：
   Reducer—— Annotated[list, add_messages]：messages 字段"追加"而非覆盖
 
 与现有工程外壳的关系（全部保留不动，课4 接入 server.py）：
-  _build_messages（历史/摘要注入）、SSE 帧协议、超时体系、recursion_limit、
-  force_display 强制路由 —— 都在 server.py，本文件只负责"图长什么样"。
+  _build_messages（历史/摘要注入/时间锚）、SSE 帧协议、超时体系、recursion_limit
+  —— 都在 server.py，本文件只负责"图长什么样"。
+  注：_force_display 强制路由已随 20260828 影子系统重构移除（见问题记录）。
 """
 
 from __future__ import annotations
@@ -374,9 +375,53 @@ _READ_CLAIM_RE = re.compile(
     r"|(?:这|那)?[一二三四五六七八九十0-9]*(?:条|篇|个|本)(?:留言|说说|文章|消息|内容|链接)(?:我|咱|喵)?(?:都|全部)?(?:读|看|查|翻)(?:过|了|完|遍)(?:了)?"
     r"|(?:核对|核实|查验)(?:过)?(?:全文|文章|内容|文档)"
     r"|查的(?:是|就是)?(?:(?:这|那)?[一二三四五六七八九十0-9]*(?:条|篇|个)(?:留言|说说|文章|消息|内容|链接)?|[^，。！？!?～~\n]*?(?:页|页面|博客|文章|内容|正文))"
-    r"|(?:我|咱|喵)?把?(?:整个)?(?:博客|网站|站点|文章库|站内)?(?:扫|查|翻|搜)了?(?:个)?(?:一遍|一圈|遍)"
+    r"|(?:我|咱|喵)?把?(?:整个)?(?:博客|网站|站点|文章库|站内)?(?:扫|查|翻|搜)了(?:个)?(?:一遍|一圈|遍)"
+    r"|(?:两|双)(?:边|侧|个)(?:板块|数据源)?(?:都|也)?(?:真的)?(?:翻|查|看|搜)(?:了|过|完)(?:了)?"
     r"|找(?:到|出|出了)(?:了)?(?:几|数)?[一二三四五六七八九十0-9]*(?:条|篇|个|些)(?:[^，。！？!?～~\n]{0,20}?)?(?:文章|链接|博客|内容|文档|东西)"
 )
+# 工具调用声称族（20260902 补，133535 实证）：chat 零工具轮回复"刚才那两条我
+# 都调用了工具——就是那个查时间的(get_current_time)，所以才能报出 05:34 这个
+# 准数"——声称"调用了工具/基于工具返回"、或点名具体工具名，都必须有轨迹
+# ToolMessage 支撑。原 _READ_CLAIM_RE 只抓"读/查+内容宾语"、_EXECUTION_CLAIM_RE
+# 只抓"已执行"，"调用了工具"型措辞两者皆漏，零工具 PASS。零工具轮点名具体
+# 工具名（get_current_time/rag_search/…）= 声称调用过该工具（13:45 实证：
+# "用 rag_search 搜了一遍"零调用）；能力介绍句式极少点名具体工具名，宁可信其
+# 为声称——误伤由打回语引导澄清，成本低。
+_CALLED_TOOL_CLAIM_RE = re.compile(
+    r"调(?:用|过)(?:过)?(?:了)?(?:工具|get_current_time|rag_search|list_guestbook|list_talks|get_announcements|get_article_detail|search_notes)"
+    r"|调用了?(?:这个|那个|这些|两个|几个|三个)?工具"
+    r"|(?:get_current_time|rag_search|list_guestbook|list_talks|get_announcements|get_article_detail|search_notes)"
+)
+
+
+def _claim_guard_correction(last_content: str, round_msgs: list) -> tuple[str, str] | None:
+    """声称闸判定（chat 快道与 content_query 零工具轮共用，20260902）：
+    当前轮零工具执行时，回复含三类声称（已读取内容 / 已执行操作 / 已调用工具）
+    即无事实依据——声称必须有轨迹 ToolMessage 支撑。返回 (issue, 修正语) 或
+    None。effect/darkmode 幂等零调用与 NOTE 零工具场景不经过本闸（各自确定性
+    闸先返回），经此的零工具轮都是"可调用但没调"的自由回复场景。"""
+    if any(isinstance(m, ToolMessage) for m in round_msgs):
+        return None  # 有工具执行记录 → 声称有据，内容比对交给 LLM 质检
+    if _READ_CLAIM_RE.search(last_content):
+        return ("claim_without_tool",
+                "你的回复声称已阅读/查阅了博客内容（重读/读完了全文/查过了…），"
+                "但本轮没有任何工具执行记录——了解博客内容必须调用检索/读取工具"
+                "（如 rag_search/search_notes 定位、get_article_detail 读全文、"
+                "list_guestbook/list_talks 查列表）、以工具返回为据；未调用工具时"
+                "不得声称读过/查过，只能如实说明尚未查看")
+    if _EXECUTION_CLAIM_RE.search(last_content):
+        return ("claim_without_tool",
+                "你的回复声称已执行设备/页面操作（已显示/已写入/已发送/已执行），"
+                "但本轮没有任何工具执行记录——执行声称必须以工具返回为依据；"
+                "未调用工具时不得声称已执行，只能如实说明无法执行或正在做什么")
+    if _CALLED_TOOL_CLAIM_RE.search(last_content):
+        return ("claim_without_tool",
+                "你的回复声称调用了工具（「调用了X工具」「点名具体"
+                "工具名」），但本轮没有任何工具执行记录——声称调用过工具必须有真实"
+                "的工具调用与返回为据；未调用工具时不得声称调用过或引用工具返回，"
+                "如实说明即可")
+    return None
+
 _NAV_VERB_RE = re.compile(
     r"^(?:小猫咪|喵喵|主人|猫猫|喵)?[,，、\s]*"
     r"(?:去一下|回到|返回|跳转到|前往|转到|转跳|打开|进入|带我(?:去|到)|去|进|回|到|访问)"
@@ -610,7 +655,12 @@ _EXECUTOR_PROMPT = """\
    在回复中说明——计划是参考，事实以工具返回为准。
 5. 工具调用失败时（返回以 __ERROR__ 或"无效"开头的错误）：立即按错误信息中
    给出的有效参数重试一次；不得以"页面不存在/没有这个功能"为由放弃——
-   先重试，重试仍失败才如实向用户说明。"""
+   先重试，重试仍失败才如实向用户说明。
+6. 当前时刻/日期以 system context 的 current_time= 字段为准（[System: ...] 内的
+   系统事实，同 current_effects/current_darkmode 语义）——回复中需要提及当前
+   时刻时直接使用该字段值，不得凭对话历史或印象推算"现在几点"；若 context
+   未提供 current_time 而又必须向访客报告时间，先调用 get_current_time 工具
+   获取，未调用工具不得声称当前时刻。"""
 
 
 def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
@@ -628,7 +678,7 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # （118s/146.9s）同源——thinking 模式在长上下文（工具结果全文 + 检索候选 + 历史）
     # 下思考链爆炸，用户 60s 空闲超时等不到第一个 token 被迫中止（8-31 两次
     # "分析文章21" client_disconnect 实证）。planner 已关（8-30），executor 生成质量
-    # 由 golden 48 条全量回归把关。
+    # 由 golden 55 条全量回归把关。
     llm = get_llm(enable_thinking=False)  # 主模型：对话生成（温度 0.7、可流式）
     # 20260828 图改进①：工具失败重试上下文注入（取代 prompt 规则"自觉重试"）。
     # 上一次工具调用失败时，显式告知失败详情 + 重试轮次语义（见 _retry_context）。
@@ -744,8 +794,11 @@ _REFLECTOR_PROMPT = """\
 {trace}
 
 检查要点：
-1. 工具调用缺失不在此处判断（20260901）：TOOLS 行工具是否调用由确定性闸门在
-   LLM 质检之前判罚（零调用已 REVISE），你只负责判断内容事实性。
+1. 工具调用缺失不在此处判断（20260901）：TOOLS 行点名工具是否调用由确定性闸门在
+   LLM 质检之前判罚（零调用已 REVISE）。本条豁免只覆盖"TOOLS 行点名工具的缺失"；
+   模型声称调用了未点名工具、或声称"基于工具返回作答"时，仍须对照下方"本轮实际
+   执行工具记录"与执行轨迹核对——声称调用过工具而轨迹无对应记录的，属于"声称
+   已完成实际未执行的动作"（见要点 5），判 REVISE，不要采信回复中的自称。
    工具已调用后，模型按检索实际情况调整候选顺序/补充额外检索工具/续接读取
    （见要点 7）均为合法执行，不得据此判 REVISE。
 2. 工具结果有 __ERROR__/报错时（20260901）：模型如实转述错误、说明失败原因
@@ -883,14 +936,12 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
 
 
 def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = None) -> dict:
-    # 客户端断开检查：不再发起质检 LLM 调用（断连后停止一切 LLM 开销）
-    if _stopped(config):
-        logger.info("[reflector] cancelled (client disconnected)")
-        raise AgentCancelled()
     """反思层：对照技能模板质检执行结果。
 
     快慢两条道（面试点：反思也要算成本）：
-      - chat 技能：不花 LLM 钱，只做非空检查（闲聊无执行可查，反思是浪费）
+      - chat 技能：不花 LLM 钱——先过声称闸（正则族：回复含执行/读取/工具调用
+        声称且当前轮零工具 → REVISE，20260828/31 读取声称族、20260902 工具调用
+        声称族扩展），再过非空检查（闲聊无执行可查，反思是浪费）
       - 其余技能：LLM 对照技能模板（TOOLS/NOTE/REPLY）+ 轨迹出 VERDICT：
           PASS   → done=True，收尾
           REVISE → 追加一条 [Reflection] 修正注记进 messages（紧贴当前轮，
@@ -899,6 +950,10 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
     工具若在轨迹中缺失，检查点 1 即判 REVISE——执行必须真发生，文本表演过不了
     模板比对。
     """
+    # 客户端断开检查：不再发起质检 LLM 调用（断连后停止一切 LLM 开销）
+    if _stopped(config):
+        logger.info("[reflector] cancelled (client disconnected)")
+        raise AgentCancelled()
     plan = parse_plan(state["plan"])
     count = state.get("reflection_count", 0)
 
@@ -912,32 +967,16 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
         # 声称没有事实依据（chat 计划 TOOLS 为空，工具调用无合法性），REVISE。
         # 纯文本比对 + 轨迹扫描，不花 LLM 钱；轨迹确有工具执行（越权调用但
         # 事实发生）则放行——声称以工具返回为据。
-        has_tool_round = any(
-            isinstance(m, ToolMessage) for m in _current_round(state["messages"]))
-        if not has_tool_round and _READ_CLAIM_RE.search(last_content):
-            correction = _correction_msg(
-                "claim_without_tool",
-                "你的回复声称已阅读/查阅了博客内容（重读/读完了全文/查过了…），"
-                "但本轮没有任何工具执行记录——了解博客内容必须调用检索/读取工具"
-                "（如 rag_search/search_notes 定位、get_article_detail 读全文、"
-                "list_guestbook/list_talks 查列表）、以工具返回为据；未调用工具时"
-                "不得声称读过/查过，只能如实说明尚未查看",
-            )
-            logger.info("[reflector] 声称闸：chat 回复含读取声称但零工具调用")
+        # 20260902 工具调用声称族并入：调用了X工具/基于工具返回/点名具体工具名
+        guard = _claim_guard_correction(
+            last_content, _current_round(state["messages"]))
+        if guard:
+            issue, corr = guard
+            correction = _correction_msg(issue, corr)
+            logger.info("[reflector] 声称闸：chat 回复含声称但零工具调用")
             return {"messages": [correction], "done": False,
-                    "reflection": "chat 回复含读取声称但零工具调用", "reflection_count": count + 1,
-                    "last_issue": {"issue": "claim_without_tool", "detail": "chat 回复含读取声称但零工具调用"}}
-        if not has_tool_round and _EXECUTION_CLAIM_RE.search(last_content):
-            correction = _correction_msg(
-                "claim_without_tool",
-                "你的回复声称已执行设备/页面操作（已显示/已写入/已发送/已执行），"
-                "但本轮没有任何工具执行记录——执行声称必须以工具返回为依据；"
-                "未调用工具时不得声称已执行，只能如实说明无法执行或正在做什么",
-            )
-            logger.info("[reflector] 声称闸：chat 回复含执行声称但零工具调用")
-            return {"messages": [correction], "done": False,
-                    "reflection": "chat 回复含执行声称但零工具调用", "reflection_count": count + 1,
-                    "last_issue": {"issue": "claim_without_tool", "detail": "chat 回复含执行声称但零工具调用"}}
+                    "reflection": "chat 回复含声称但零工具调用", "reflection_count": count + 1,
+                    "last_issue": {"issue": issue, "detail": "chat 回复含声称但零工具调用"}}
         return {"done": bool(last_content), "reflection": "chat 快道路：非空检查通过" if last_content else "chat 回复为空", "reflection_count": count}
 
     # effect/darkmode 幂等判定（确定性计算，注入 LLM 质检上下文 + 检查点 1 豁免
@@ -947,8 +986,10 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
     # current=sakura、目标=off（不一致，必须调工具）误判为"一致、调用违规"，
     # 把正确执行 REVISE 掉（帧随 __RESET__ 作废 → golden 缺帧失败）。程序先算好
     # 事实注入质检上下文，两个方向的误判都消除。
-    # 注意：这里只注入事实、不做确定性 REVISE——零工具可能是合理拒绝（如注入攻击
-    # 轮），程序无法区分"拒绝"与"偷懒声称完成"，判罚交给 LLM（检查点 5 放行拒绝）。
+    # 注：幂等豁免与判罚（20260902 豁免收窄后）——state_matches=True（状态已与
+    # 目标一致）是检查点 1 的合法零调用豁免依据（exempt_idem）；非幂等场景零工具
+    # = 偷懒承诺，由检查点 1 确定性 REVISE（multi_turn_correction FAIL 后不再
+    # "判罚交给 LLM"；模型合理拒绝仍可经 REVISE→预算耗尽/最后通牒路径以文本收尾）。
     state_matches: bool | None = None
     if plan["skill"] in ("effect", "darkmode") and plan["params"]:
         ctx_text = "\n".join((getattr(m, "content", "") or "")
@@ -1226,6 +1267,24 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
                 logger.info("[reflector] 工具帧已产出 + 回复非空 → 确定性 PASS（跳过 LLM 质检）")
                 return {"done": True, "reflection": f"确定性 PASS：{plan['skill']} 工具帧已产出", "reflection_count": count}
 
+    # 声称闸 content_query 分支（20260902，134537 实证）：自由 ReAct 的 TOOLS 行
+    # 为空 → 检查点 1 空转，LLM 质检被"用 rag_search 搜了一遍"型声称骗过放行
+    # （13:45 零调用 PASS、质检自述"调用了 rag_search 和 list_talks 工具"——质检
+    # 采信了模型自己的声称）。零工具轮三类声称与 chat 同正则、同 helper 确定性
+    # 打回，不花 LLM 钱；executor 规则 1 已要求"涉及博客数据必须调工具核实"，
+    # 本闸补执行端兜底。
+    if plan["skill"] == "content_query":
+        guard = _claim_guard_correction(
+            last_content, _current_round(state["messages"]))
+        if guard:
+            issue, corr = guard
+            correction = _correction_msg(issue, corr)
+            logger.info("[reflector] 声称闸：content_query 回复含声称但零工具调用")
+            return {"messages": [correction], "done": False,
+                    "reflection": "content_query 回复含声称但零工具调用",
+                    "reflection_count": count + 1,
+                    "last_issue": {"issue": issue, "detail": "content_query 回复含声称但零工具调用"}}
+
     idem_note = ""
     if state_matches is not None:
         idem_note = (
@@ -1254,6 +1313,22 @@ def _reflector_node_inner(state: AgentState, config: RunnableConfig | None = Non
     tools_note = (
         f"历史轮已调用工具（供判断续接读取是否合理，内容不参与判罚）: "
         f"{'、'.join(past_tools)}\n" if past_tools else "")
+    # 本轮实际执行工具记录注记（20260902，134537 实证：content_query 零调用被
+    # 质检放行，质检自述"调用了 rag_search 和 list_talks 工具"——它采信了回复
+    # 里的自称而不是轨迹。程序先算好事实注入，声称与记录的比对不容模型自由发挥。
+    # 只列当前轮（_current_round 口径与轨迹同源），历史轮见上方 tools_note。
+    cur_tools = sorted({getattr(m, "name", "") for m in cur
+                        if isinstance(m, ToolMessage)})
+    if cur_tools:
+        tools_note += (
+            "本轮实际执行工具记录（回复声称调用的工具必须在此列表中有对应记录）: "
+            f"{'、'.join(cur_tools)}\n")
+    else:
+        tools_note += (
+            "本轮实际执行工具记录: 无。\n"
+            "回复若声称调用了工具（「我调用了X」「用X搜了一遍」「查了/翻了X」），"
+            "与本记录不符即编造，判 REVISE——未调用工具时如实说明尚未查看，"
+            "不要声称调用过。\n")
     # 质检异常兜底：LLM API 抖动/超时不应杀死整个对话（实测：反射调用挂起/抛错 →
     # 流中断 → 前端 catch 不执行导航 → 用户"卡死"且命令帧白发）。质检是防幻觉增强，
     # 非流程必需：工具帧已产出（导航命令已发出）时异常即放行，让流正常收尾。

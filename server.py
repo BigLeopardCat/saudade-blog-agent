@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import uuid
+from datetime import datetime
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 
@@ -131,6 +132,13 @@ def _build_messages(req: ChatRequest) -> list:
     ctx_parts = [f"user_id={req.user_id}, page={req.current_url}, title={req.page_title}"]
     ctx_parts.append(f"current_effects={req.current_effects or 'none'}")
     ctx_parts.append(f"current_darkmode={req.current_darkmode or 'off'}")
+    # 20260902 时间锚（幻觉事故 13:34 实证）：会话断点续接/问候语场景模型会锚定
+    # 历史里的旧时间戳编造"现在"（05:29 会话 13:34 续接 → 编"现在 05:34"）。
+    # 当前时刻必须作为系统事实注入（与 current_effects/darkmode 同语义，格式与
+    # get_current_time 工具一致），模型不得自行推算；executor 规则同源约束。
+    _now = datetime.now()
+    _weekdays = ('星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日')
+    ctx_parts.append(f"current_time={_now.strftime(f'%Y年%m月%d日 {_weekdays[_now.weekday()]} %H:%M')}")
     if req.summary:
         ctx_parts.append(f"conversation_summary: {req.summary}")
     ctx = f"[System: {'; '.join(ctx_parts)}]"

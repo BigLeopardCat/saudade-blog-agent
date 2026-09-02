@@ -1,22 +1,10 @@
-"""System-level prompt templates for the agent.
+"""人设与执行规则提示词模板。
 
-In langchain 1.3+, the agent uses a graph-based (LangGraph) architecture.
-The system prompt is passed directly to create_agent().
+产出 BLOG_ASSISTANT_PROMPT（BLOG_PERSONA_PROMPT + 各技能执行规则段拼接），
+由 graph.py 组装进 model 节点系统提示词；planner/reflector 的上下文提示另在
+graph.py（build_planner_context / QC 注入）组织。调整人设只改
+BLOG_PERSONA_PROMPT；执行规则段与 skills.py（注册表系统数据源）为互补关系。
 """
-
-# 英文提示词每行末尾或下一行开头必须加空格，否则会连词
-SYSTEM_PROMPT = (
-    "你是基于LangChain和LangGraph的智能AI助手，能够理解和回答各种问题。"
-    "你有访问工具的能力，可以帮助你回答问题。 "
-    "在需要时使用这些工具，并在你的回答中保持简洁和准确。"
-)
-
-# Additional system prompt variants can be defined here
-TECHNICAL_ASSISTANT_PROMPT = (
-    "你是基于LangChain和LangGraph的技术AI助手。 "
-    "你专长于编程、调试和技术问题解决。 "
-    "在需要时使用工具查找信息。"
-)
 
 # ════════════════════════════════════════════════════════════════════
 # 人设（对话身份与风格）
