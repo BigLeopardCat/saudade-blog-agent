@@ -228,7 +228,7 @@ def get_chat_history(
     limit: Annotated[int, "Number of recent messages to fetch"] = 10,
 ) -> str:
     """Get recent chat history for the current user."""
-    return "对话历史已由系统自动注入到当前请求的上下文中（最近6条消息+压缩摘要），无需额外查询。请直接查看系统上下文中的 conversation_summary 和历史消息。"
+    return "对话历史已由系统自动注入到当前请求的上下文中（最近 20 条消息 + 滚动摘要），无需额外查询，直接依据系统上下文作答即可。"
 
 # ---------------------------------------------------------------------------
 # 知识库工具
@@ -327,7 +327,7 @@ def toggle_effect(
     """开启或关闭博客页面的视觉效果（樱花/大雨/雪花）。
     返回 EFFECT: 前缀命令供前端执行；前端按 action 显式开关，不会因重复命令翻转状态。
     参数校验：无效 effect/action 返回提示而非命令帧——命令帧只代表真实执行的切换，
-    否则会污染声称通道的执行事实（facts 注记据此判断"动作是否发生"）。"""
+    未返回命令帧 = 动作未发生，回复不得声称已开/已关（reflector 声称闸/轨迹核对依据）。"""
     if effect not in ("sakura", "rain", "snow"):
         return f"效果无效: {effect!r}。可选: sakura(樱花), rain(大雨), snow(雪花)"
     if action not in ("on", "off"):
@@ -359,8 +359,9 @@ DEVICE_SERVICE_URL = _settings.device_service_url
 JWT_SECRET = _settings.jwt_secret
 
 # 显示指令幂等去重：同一用户短时间内相同内容的重复下发直接跳过。
-# 场景：后端强制路由（_force_display）与 agent 自主调用可能对同一次请求各执行一次，
-# 以及 MQTT QoS1 at-least-once 重投——工具层保证"同内容只发一次"。
+# 场景：REVISE 循环多轮重复调用 / 客户端重试 / MQTT QoS1 at-least-once 重投——
+# 工具层保证"同内容只发一次"。（曾防后端强制路由 _force_display 与自主调用双调，
+# 20260828 影子系统事故后强制路由已移除。）
 _DISPLAY_DEDUP_SECONDS = 30.0
 _last_display: dict[int, tuple[str, float]] = {}
 
@@ -430,7 +431,7 @@ def device_oled_display(
         return "无法获取当前用户身份，指令未下发"
     if not text or len(text) > 64:
         return "显示内容为空或超过 64 字符限制"
-    # 幂等去重：30s 内相同用户相同内容不重复下发（防强制路由+模型双调、QoS1 重投）
+    # 幂等去重：30s 内相同用户相同内容不重复下发（防 REVISE 多轮重复调用、QoS1 重投）
     now = time.time()
     prev = _last_display.get(uid)
     if prev and prev[0] == text and now - prev[1] < _DISPLAY_DEDUP_SECONDS:
