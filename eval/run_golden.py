@@ -152,6 +152,14 @@ def check_gold(gold: dict, result: dict) -> list[str]:
     for t in gold.get("require_tool_calls", []):
         if t not in result["tool_calls"]:
             fails.append(f"未调用工具 {t}（已调用：{result['tool_calls']}）")
+    # 20260902 下午：自选工具族断言（任一命中即过）——内容查询的自由 ReAct 下
+    # 检索工具选型（rag_search vs search_notes）是执行层的事，planner/断言不得
+    # 锁死具体工具（否则退化为 0901 前的固定两段式模板），但"必须真查过"要拦
+    for t in gold.get("require_tool_calls_any", []):
+        if not any(x in result["tool_calls"] for x in gold["require_tool_calls_any"]):
+            fails.append(
+                f"未调用任一检索工具 {gold['require_tool_calls_any']}（已调用：{result['tool_calls']}）"
+            )
 
     return fails
 
@@ -209,16 +217,19 @@ def main():
         if not ok:
             failed += 1
         tail = result["text"].replace("\n", " ")[:60]
-        print(f"[{i:>2}/{len(cases)}] {status} {case['id']:<22} {elapsed:>5.1f}s  {tail}")
+        rtag = f" ⚠打回x{result['resets']}" if result["resets"] else ""
+        print(f"[{i:>2}/{len(cases)}] {status} {case['id']:<22} {elapsed:>5.1f}s{rtag}  {tail}")
         if not ok:
             err = result.get("error") or ""
             print(f"          └ {fails or f'error: {err}'}")
+        requires = bool(g.get("require_tool_calls") or g.get("require_tool_calls_any"))
         results.append({
             "id": case["id"], "tags": case.get("tags", []), "ok": ok,
             "elapsed": round(elapsed, 1),
             "fails": fails, "error": result["error"],
             "commands": result["commands"], "resets": result["resets"],
             "resets_reasons": result["resets_reasons"],
+            "requires_tools": requires,  # 20260902 下午：效率指标归因（工具类 vs 非工具类）
             "text": result["text"],
         })
 
@@ -236,6 +247,24 @@ def main():
         if not lats:
             return 0.0
         return lats[min(len(lats) - 1, int(p / 100 * len(lats)))]
+    # 效率维度（20260902 下午：用户指出"重试次数成本是重要指标"——golden 只断言
+    # 最终文本，首轮零工具+REVISE 修正照样 PASS，能力退化不可见。resets 数即
+    # 打回成本代理：一次 REVISE = 一整轮 executor 重生成（2× token + 一轮延迟）。
+    # 工具类用例（requires_tools）的 resets 分布是"首轮就做对"的核心指标；
+    # 对比维度：受限规划（0901 前 rag_query 固定两段式）首轮 100% 即调但 REVISE
+    # 6/9=67%（策略性打回），自由 ReAct（现状）工具调用率低但 REVISE 多为
+    # "首轮零工具"类——两类打回的修复方向不同（前者修规划参数，后者修执行豁免）。
+    _wr = [r for r in results if r["resets"] > 0]
+    _tc = [r for r in results if r["requires_tools"]]
+    _first_ok = [r for r in _tc if r["resets"] == 0]
+    eff = {
+        "resets_total": sum(r["resets"] for r in results),
+        "cases_with_resets": len(_wr),
+        "cases_with_resets_ids": [r["id"] for r in _wr],
+        "tool_required_total": len(_tc),
+        "tool_required_first_try_ok": len(_first_ok),  # resets==0 即首轮就调对
+        "tool_required_first_try_pct": round(100 * len(_first_ok) / len(_tc), 1) if _tc else 100.0,
+    }
     report = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
@@ -249,6 +278,7 @@ def main():
             "p95": round(_pct(latencies, 95), 1),
             "max": round(_pct(latencies, 100), 1),
         },
+        "efficiency": eff,
         "cases": results,
     }
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
@@ -259,6 +289,10 @@ def main():
     print(f"\n=== 汇总：{len(cases) - failed}/{len(cases)} 通过 ===")
     print(f"耗时基线: min={report['latency_s']['min']}s P50={report['latency_s']['p50']}s "
           f"P95={report['latency_s']['p95']}s max={report['latency_s']['max']}s")
+    print(f"效率基线: resets 总={eff['resets_total']} 用例={eff['cases_with_resets']}"
+          f"（{eff['cases_with_resets_ids']}）")
+    print(f"首轮即调: 工具类 {eff['tool_required_first_try_ok']}/{eff['tool_required_total']}"
+          f" = {eff['tool_required_first_try_pct']}%（resets==0 即首轮调用成功）")
     print(f"报告: {REPORT_FILE}")
     print(f"留档: eval/report/runs/{ts_str}.json")
     sys.exit(0 if failed == 0 else 1)

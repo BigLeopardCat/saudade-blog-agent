@@ -2,9 +2,10 @@
 
 > 面向维护者的全链路技术文档。覆盖看板娘对话系统的每一个环节：组件拓扑、一次对话的完整时序、
 > 记忆机制（记录 / 压缩 / 存储 / 读取 / 回滚）、工具系统、防幻觉与可靠性加固、超时体系、配置与部署。
-> 最后更新：2026-08-30（20260828 影子系统事故后 _force_display 移除同步：§6.3 重写为显示保障链、
-> §1 决策表/§3.2/§7 更新；planner 关 thinking（§6.5/§7）；部署改 systemd + CI（§9）；
-> 目录结构与版本号同步（§2/§8））。
+> 最后更新：2026-09-02（0901-0902 防幻觉体系与 RAG 定位重构状态同步：§6.5 content_query 承接、
+> 声称闸三族 + 逐工具核验 + 时间锚 current_time、executor 亦关 thinking；§3.2 历史 20 条全量注入
+> + AIMessage 角色；§4.4 中断清理语义分化（discard 端点 vs Drop guard）；§5 工具表补 rag_search；
+> §2/§8 前端 chat-* 子模块拆分与缓存版本号 20260902a；§7 生产模型 qwen3.8-flash）。
 
 ---
 
@@ -14,7 +15,7 @@
 
 - **React 前端**（浏览器）：看板娘 Live2D 形象 + 对话框 UI + SSE 消费 + 命令执行器。
 - **Rust 后端**（axum，端口 3000）：鉴权、记忆落库、对话编排、SSE 转发、中断清理。**记忆的唯一权威来源**。
-- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行、LLM 调用、21 个工具。**无状态**，记忆全靠请求体注入。
+- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行、LLM 调用、22 个工具。**无状态**，记忆全靠请求体注入。
 - **MySQL**：`chat_history`（消息流水）、`chat_summary`（每用户压缩摘要）。
 - **device-service**（端口 3100，独立服务）：IoT 设备（ESP32 OLED）指令下发，agent 以对话用户身份代签 JWT 调用。
 
@@ -28,12 +29,12 @@ flowchart TB
     subgraph Server[生产服务器 3.7GB 内存]
         NGX[nginx :443/:80]
         RUST[Rust 后端 axum :3000<br/>鉴权·记忆·编排·SSE 转发]
-        AGT[Python Agent FastAPI :8010<br/>LangGraph 图 · 21 工具 · 2 workers]
+        AGT[Python Agent FastAPI :8010<br/>LangGraph 图 · 22 工具 · 2 workers]
         MYSQL[(MySQL<br/>chat_history / chat_summary)]
         DEV[device-service :3100<br/>ESP32 OLED 指令下发]
     end
 
-    LLM[LLM API<br/>qwen3.6-flash<br/>thinking 默认开<br/>低 token 调用强制关]
+    LLM[LLM API<br/>qwen3.8-flash（生产）<br/>thinking 默认开<br/>图内调用均显式关]
 
     UI -->|POST /api/chat/stream| NGX
     NGX --> RUST
@@ -83,7 +84,7 @@ flowchart TB
 │   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 工具约束（显示/导航强化约束，无对话内 SUMMARY 协议）
 │   └── __init__.py
 ├── rag/                       # ★ RAG 检索管线（20260830）：词法 2/3-gram BM25 内存倒排 + 10 分钟懒刷新，
-│   │                          #   语料=线上可见文章+说说/留言+公告（走 Rust 公开 API，agent 无 DB 依赖）；
+│   │                          #   语料=线上可见文章（20260901 净化：说说/留言/公告移出检索池，走数据工具直查）；
 │   │                          #   检索只定位（候选 type/id/标题/分），解读走 get_article_detail 全文
 │   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
 ├── tools/
@@ -99,7 +100,8 @@ flowchart TB
 │   ├── trace.py               # 对话 trace 落盘（logs/agent/traces/，节点事件 + 分段耗时 + 退出原因）
 │   ├── helpers.py             # 通用工具函数
 │   └── tts.py                 # edge-tts 语音合成（预留，TTS 未启用）
-├── eval/                      # 评测：eval/golden/basic.jsonl（48 条）+ run_golden.py（L2 真实 LLM 端到端）
+├── eval/                      # 评测：eval/golden/basic.jsonl（55 条）+ run_golden.py（L2 真实 LLM 端到端）
+│   │                          #       + golden_case_runner.py / golden_full_run.py（20260902 进程隔离跑法）
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
 ├── test_skills.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
@@ -108,13 +110,18 @@ flowchart TB
 
 宿主仓库 Saudade-Blog（接口适配层，路径相对其根目录）：
 Saudade-Blog/frontend/public/live2d-widgets/
-├── autoload.js                # ★ 前端核心：脚本注入、SSE 消费、命令解析、导航白名单、特效/夜间同步、错误上报
+├── autoload.js                # ★ 前端入口加载器（约 270 行）：脚本注入、initWidget 上游加载、错误上报——20260902 瘦身，对话核心已拆出
+├── chat-stream.js             # ★ 对话主战场（20260902 拆分，体积最大）：SSE 流式消费 + 命令解析与执行
+│                              #   （导航白名单 BLOG_ROUTES、cmdText、idleTimer 计时器、EFFECT、discardTurn/discard 实测集中于此）
+├── chat-engine.js             # 对话引擎子模块（sendMessage / discardTurn 等）
+├── chat-core.js               # 对话核心子模块（COMMAND_LINE_RE / cleanAgentText 等）
+├── chat-render.js             # 渲染清洗子模块（__chatRenderMarkdown / cleanAgentText 等）
 ├── waifu.css                  # 看板娘与对话框样式（#waifu 高度锁死等关键防御）
 ├── waifu-tips.20260830.js     # 上游库（压缩）：initWidget、模型加载、quit/toggle 收起机制
 ├── waifu-tips.json            # 提示语配置
 └── chunk/index.20260830.js + index2.20260830.js   # 模块图（级联重命名作 cache-bust，见 §8）
 
-Saudade-Blog/frontend/src/components/Live2dAgent/index.tsx   # 注入 autoload.js（含缓存版本号 ?v=20260830g）
+Saudade-Blog/frontend/src/components/Live2dAgent/index.tsx   # 注入 autoload.js（含缓存版本号 ?v=20260902a）
 
 Saudade-Blog/src/routes/chat.rs             # Rust 侧：prepare_chat（记忆读写）+ 流式转发 + 中断清理
 Saudade-Blog/src/routes/monitor.rs          # 前端错误上报端点（logs/frontend/monitor.log）
@@ -164,14 +171,14 @@ sequenceDiagram
 
 ### 3.2 分段详解
 
-**① 前端发起（autoload.js `sendMessage`）**
+**① 前端发起（前端脚本 `sendMessage`，20260902 起代码在 chat-* 子模块，autoload.js 只留加载）**
 
 请求体携带 5 个字段：`message`、`current_url`（当前页面，供 agent 判断语境）、`page_title`、
 `current_effects`（`window.__effectStateList` 实时特效状态，如 `sakura,rain`）、`current_darkmode`（`on|off`）；
 JWT 走 **Authorization: Bearer** 头（`localStorage.tokenKey`），不在 body 里。**特效与夜间状态实时上报**——agent 以 context 为准、不依赖自己的调用记忆
 （用户可能手动开关过）。无 token 时后端直接返回合规告知文案，不调 agent。
 
-**② Rust prepare_chat（[chat.rs:48](Saudade-Blog/src/routes/chat.rs#L48)）——记忆的读与写**
+**② Rust prepare_chat（[chat.rs:180](Saudade-Blog/src/routes/chat.rs#L180)）——记忆的读与写**
 
 按顺序做 5 件事：
 1. 鉴权：解析 `Bearer` JWT（HS256，`auth_jwt::verify_token`），取 `claims.sub` 为 user_id。
@@ -180,22 +187,25 @@ JWT 走 **Authorization: Bearer** 头（`localStorage.tokenKey`），不在 body
 4. **读摘要**：`chat_summary` 按 user_id 取一条 → `summary`。
 5. **统计与清理**：COUNT 总消息数决定 `needs_summary`；超 `CHAT_HISTORY_LIMIT`（默认 500）删最旧。
 
-组装请求体转发给 Agent（`user_id`、`history`、`summary`、`needs_summary` 都在这里产生）。请求体上限 1MB（[chat.rs:58](Saudade-Blog/src/routes/chat.rs#L58)）。
+组装请求体转发给 Agent（`user_id`、`history`、`summary`、`needs_summary` 都在这里产生）。请求体上限 1MB（chat.rs `prepare_chat` 内校验）。
 
 **非流式路径（/chat，内部与兼容用，看板娘走流式）**：Rust 调 agent `/chat`，传输层错误自动重试最多 3 次
 （间隔 800ms），**超时不重试**——超时说明生成确实很慢（长回答单次可达 180s，reqwest 超时即 180s），
-重试只会从头再生成一遍 [chat.rs:290-310](Saudade-Blog/src/routes/chat.rs#L290-L310)。agent 端在 needs_summary
+重试只会从头再生成一遍（chat.rs 非流式路径）。agent 端在 needs_summary
 轮并行独立生成摘要，经 `ChatResponse.new_summary` 字段返回（与回复内容解耦，回复本身**不含** SUMMARY 行）；
-Rust 再拼接命令行：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 前置到回复开头 [server.py:292-298](../server.py#L292-L298)，
+Rust 再拼接命令行：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 前置到回复开头（server.py 收尾统一拼接），
 命令拼接不受摘要影响。
 
-**③ Python _build_messages（server.py:143）——上下文组装**
+**③ Python _build_messages（server.py:129 `_build_messages`）——上下文组装**
 
-按顺序构造消息列表（全部为 `HumanMessage`）：
-1. **System 上下文**：`[System: user_id=…, page=…, title=…; current_effects=…; current_darkmode=…; conversation_summary: …]`
-   放在**第一条**，是纯状态注记，模型禁止复述。
-2. **历史**：`req.history[-12:]`（**只取最近 12 条**，与 Rust 取的 20 条之间留余量）逐条注入，
-   assistant 消息加 `[assistant]: ` 前缀以便模型区分说话人。
+按顺序构造消息列表（角色按 history 原始 role 注入）：
+1. **System 上下文**：`[System: user_id=…, page=…, title=…; current_time=…; current_effects=…; current_darkmode=…; conversation_summary: …]`
+   放在**第一条**，是纯状态注记，模型禁止复述。其中 `current_time` 是**时间锚**（20260902 注入，与
+   `get_current_time` 同格式 `%Y年%m月%d日 星期X %H:%M`）——模型对"现在几点/星期几"不再自行猜测，
+   配合 executor 规则 6（时刻以 context 为准，未提供则先调 get_current_time，未调用不得声称当前时刻；
+   见 §6.5）。
+2. **历史**：`req.history[-20:]`（Rust 传的 20 条**全量注入**——20260828 起与 Rust 对齐，旧的"只取 12 条
+   留余量"双魔数已废弃）逐条注入，assistant 消息以原生 AIMessage 角色注入、无 `[assistant]:` 文本前缀。
 3. **当前用户消息**（对话内摘要指令已移除——摘要由后端独立任务调用生成，见 §4.3；显示类约束在
    prompts.py 系统提示词里，不注入消息尾部，见 §6.3）。
 
@@ -209,7 +219,7 @@ Rust 再拼接命令行：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 
 - `ToolMessage` → **命令帧**：`NAVIGATE:`/`AUTO_NAVIGATE:`（导航）、`EFFECT:`（特效）、`DARKMODE:`（夜间）——**这是工具结果**，由前端执行。
 - 工具循环：模型 → 调工具 → 工具结果 → 模型，受 `recursion_limit=30` 约束（§6.4）。
 
-**⑤ 流式帧协议（server.py:344 event_stream）**
+**⑤ 流式帧协议（server.py:472 `event_stream`）**
 
 ```mermaid
 flowchart LR
@@ -234,9 +244,9 @@ flowchart LR
 - **空回复兜底**：整轮无任何输出帧（qwen 偶发空内容）→ 补发 `_RECOVERY_SENTENCE`（人设内恢复语），
   前端不会静默"卡死"。
 - **生产者取消**：客户端提前断开（abort/关页）时 `finally` 取消尚未完成的线程池生产者任务，
-  避免队列与线程空转 [server.py:404-407](../server.py#L404-L407)。
+  避免队列与线程空转 [server.py:622-626](../server.py#L622-L626)。
 
-**⑥ Rust 转发（chat.rs:409 body_stream）**
+**⑥ Rust 转发（chat.rs:471 `chat_stream_handler`，旧名 body_stream 已更名）**
 
 `find_frame_end` 逐帧切分 → 终端标记（`__END__`/`__NAV_END__`/`__ERROR__`）原样转发 → 文本帧 JSON 解码后
 **累积进 reply 变量**（供流结束存库）→ 原样转发。上游中断且未收到终结标记 → 补发
@@ -244,13 +254,14 @@ flowchart LR
 （客户端未断开时，残缺回答保留供上下文参考）。响应头带 `X-Accel-Buffering: no`
 （防 nginx 缓冲 SSE 到结束才下发）。
 
-**⑦ 前端消费（autoload.js）**
+**⑦ 前端消费（chat-stream.js/chat-engine.js，20260902 拆分后代码在 chat-* 子模块）**
 
 - 文本帧：`textContent` 直写（流式阶段 pre-line 换行）→ 300ms 口型翻转（`__mouthOverride`）。
 - 命令帧：按 `COMMAND_LINE_RE` 匹配进 `cmdText`（**不显示**），流结束统一解析执行（§6.2）。
 - 终结：完整文本（cmdText + 文本）→ `cleanAgentText` 剔除命令行与 SUMMARY 残留（防御性——正常已不会出现，防注入诱导）→ markdown 渲染
   （复用博客 `__chatRenderMarkdown`）→ localStorage 追加（≤50 条）。
-- 双计时器（120s 空闲 / 300s 总时长）与后端对齐，abort 时 UI 3s 内强制恢复。
+- 双计时器（idleTimer 60s 空闲 / 300s 总时长；20260830 从 45s 调到 60s——45s 曾误杀慢生成 118s/146.9s），
+  abort 时 UI 3s 内强制恢复。
 
 ---
 
@@ -263,7 +274,7 @@ flowchart LR
 | 层 | 载体 | 作用 | 上限 |
 |---|---|---|---|
 | 跨请求长期记忆 | MySQL `chat_history` + `chat_summary` | 对话连续性 | 500 条流水 + 1 条摘要/用户 |
-| 请求内短期记忆 | 请求体 `history[]` + `summary`（注入 System 上下文） | 模型可见窗口 | 20 条取出 → 12 条注入 |
+| 请求内短期记忆 | 请求体 `history[]` + `summary`（注入 System 上下文） | 模型可见窗口 | Rust 取 20 条 → 全量注入 |
 | 浏览器本地记忆 | `localStorage chat_history_{tokenKey}` | 前端展示完整记录 | 50 条 |
 
 ```mermaid
@@ -281,19 +292,20 @@ flowchart TB
     end
     subgraph Read[记忆如何读取]
         R1[prepare_chat 取最近 20 条] --> R2["翻转正序 → history[]"]
-        R2 --> R3[_build_messages 取后 12 条<br/>HumanMessage 注入]
+        R2 --> R3[_build_messages 全量注入 20 条<br/>按 role 注入 Human/AIMessage]
         R4[chat_summary 取摘要] --> R5[conversation_summary: 注入 System 上下文]
     end
     subgraph Rollback[回滚与清理]
-        D1[用户停止生成/断连] -->|DiscardAbortedExchange Drop guard| D2[删除最后一条 user 消息<br/>及其后的残缺回复]
-        D3[前端 discardTurn] -->|localStorage 移除本轮 user 消息| D4[前端历史同步]
+        D1[用户停止生成] -->|前端显式 POST /api/chat/discard| D2[删除该条 user 消息<br/>及其后的残缺回复]
+        D3[连接中断/关页] -->|DiscardAbortedExchange Drop guard| D5[仅删该条 user 消息之后的<br/>残缺 assistant 回复，user 消息保留]
+        D6[前端 discardTurn] -->|localStorage 移除本轮 user 消息| D7[前端历史同步]
     end
 ```
 
 ### 4.2 记录：什么时候写、写什么
 
-- **用户消息**：Rust `prepare_chat` 在**转发 agent 之前**就落库（[chat.rs:77](Saudade-Blog/src/routes/chat.rs#L77)）——即使 agent 失败，用户消息也保留。
-- **assistant 回复**：流结束（收到终止标记或上游中断）后 `save_assistant_reply`（[chat.rs:235](Saudade-Blog/src/routes/chat.rs#L235)）：
+- **用户消息**：Rust `prepare_chat` 在**转发 agent 之前**就落库（chat.rs `prepare_chat` 内）——即使 agent 失败，用户消息也保留。
+- **assistant 回复**：流结束（收到终止标记或上游中断）后 `save_assistant_reply`（[chat.rs:323](Saudade-Blog/src/routes/chat.rs#L323)）：
   - 流式路径从 `__SUMMARY__` 帧取独立摘要（见 4.3），**回复本身不含任何 SUMMARY 行**；
   - 存 `(role="assistant", content=回复全文)`；
   - **空回复不存库**（`if !reply.is_empty()`），这是"卡死"表象的来源之一——前端靠 §3.2⑦ 的兜底感知。
@@ -307,7 +319,7 @@ flowchart TB
 > 且摘要指令与显示强化指令共用 `<系统内部指令-仅供执行` 标记，导致显示请求被 reflector 误判
 > REVISE 白烧一轮 LLM。现方案两者一并移除，摘要由后端独立任务调用生成。
 
-**触发条件**（[chat.rs:108](Saudade-Blog/src/routes/chat.rs#L108)）：`total_count > 20 && (total_count % 10 == 0 || total_count % 10 == 1)`。
+**触发条件**（[chat.rs:255](Saudade-Blog/src/routes/chat.rs#L255)）：`total_count > 20 && (total_count % 10 == 0 || total_count % 10 == 1)`。
 即从第 21 条起，每 10 条触发一次（21、30、31、40、41…）。计数含 user + assistant 全部消息。
 
 **独立任务调用**（server.py `_summarize_dialogue`，仅 needs_summary 轮触发）：
@@ -338,15 +350,18 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 **没有对话级"撤销/回滚"功能**（不存在"撤回上一条回复"或时间旅行恢复）。系统层面只有两类清理：
 
-1. **中断清理（DiscardAbortedExchange，[chat.rs:345](Saudade-Blog/src/routes/chat.rs#L345)）**：
-   客户端在**流未正常收尾**时断开（用户点"停止生成"、关标签页、断网）→ SSE 生成器被取消 →
-   `Drop` 触发 → 异步删除该用户**最后一条 user 消息及其之后的所有记录**（id 单调递增，残缺回复必在其后）。
-   效果：**被终止的对话不进记忆**（不污染 history 窗口与摘要）。正常收尾由 `done` 原子标记关闭清理。
-2. **前端丢弃（discardTurn，autoload.js）**：用户停止生成后，localStorage 移除本轮 user 消息 + 重绘；
+1. **主动停止（POST /api/chat/discard，[chat.rs:115](Saudade-Blog/src/routes/chat.rs#L115)）**：前端停止按钮
+   （chat-stream.js）中断流后显式调 discard 端点——**全删语义**：删除该条 user 消息及其后的残缺回复
+   （20260828b 起支持带 `text` 原文校验防误删）。效果：**被终止的对话不进记忆**（不污染 history 窗口与摘要）。
+2. **中断清理（DiscardAbortedExchange Drop guard，[chat.rs:437](Saudade-Blog/src/routes/chat.rs#L437)）**：
+   客户端在**流未正常收尾**时被动断开（关标签页、断网——主动停止走上面的 discard 端点）→ SSE 生成器被
+   取消 → `Drop` 触发 → 异步删除该条 user 消息**之后产生的残缺 assistant 回复**（id 单调递增；
+   **user 消息本体保留**——20260829 起语义，"这次提问已发生"不被抹掉）。正常收尾由 `done` 原子标记关闭清理。
+3. **前端丢弃（discardTurn，chat-engine.js/chat-stream.js）**：用户停止生成后，localStorage 移除本轮 user 消息 + 重绘；
    3s 强制恢复保险（abort 未触发 catch 时兜底清理）。
 
 另外两个"防污染"机制：
-- **设备显示幂等去重**（tools/base.py）：同一用户 30s 内相同显示内容只下发一次——防强制路由与模型自主调用对同一次请求各执行一次，以及 MQTT QoS1 重投。
+- **设备显示幂等去重**（tools/base.py）：同一用户 30s 内相同显示内容只下发一次——防 MQTT QoS1 重投、模型失败重试与多轮重复调用的重复下发（20260828 后显示走单一工具路径，无强制路由双调场景）。
 - **保留策略**：`CHAT_HISTORY_LIMIT=500` 超出删最旧（§4.5）。
 
 ### 4.5 存储与清理
@@ -365,11 +380,12 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 ---
 
-## 5. 工具系统（21 个）
+## 5. 工具系统（22 个）
 
 | 分类 | 工具 | 行为 |
 |---|---|---|
 | 文章/笔记 | `list_notes`、`search_notes`、`get_article_detail`、`get_top_notes` | 调博客 `api/public` 接口 |
+| 检索 | `rag_search` | BM25 词法检索（行式候选 type/id/标题/分；20260901 语料净化仅收文章，说说/留言走数据工具） |
 | 分类/标签 | `list_categories`、`list_tags` | 同上 |
 | 公告 | `get_announcements` | 同上 |
 | 留言板 | `list_guestbook` | 读 `/api/public/board`（河灯留言） |
@@ -482,7 +498,7 @@ flowchart TB
   ReAct 自选 rag_search/search_notes 定位 + get_article_detail 读全文（检索管发现、工具管
   精读；rag_search 候选行式结构化摘要，语料只收文章）；数据/列表型（最新留言/说说/公告）
   → 直接查数据工具。检索实现见 `rag/search.py`（词法 2/3-gram BM25，文档级聚合，语料=
-  线上可见内容，10 分钟懒刷新，全量重建 <100ms）。
+  线上可见文章（20260901 净化），10 分钟懒刷新，全量重建 <100ms）。
 - **planner 显式点名工具**（20260902，根治"planner 对、model 零工具编造"类事故 233815）：
   留言/说说/公告/时间查询是"一次简单工具调用、无流程"，不成技能——**planner 看得见工具**，
   content_query 的 PARAMS.tools 显式点名无参只读工具（白名单 `_EXPLICIT_TOOLS` =
@@ -500,20 +516,30 @@ flowchart TB
   分类任务，思考链纯浪费，实测 13.4s → 2-4s）；输出解析容错（`_loads_tolerant`：单引号/尾逗号/注释/
   markdown 围栏逐项修正），解析失败按 chat 技能兜底。
 - **executor = 模板执行**（`model_node`）：system prompt = 人设 + 计划文本；TOOLS 行列出即
-  **必须逐一调用**（多个工具每一个都要调，工具结果以工具返回为准）；TOOLS 为（无）时按
-  SKILL 行技能语义处理（20260902 规则 1 按技能分支）：content_query = 自由 ReAct（需查博客
-  数据就自行调工具、不得编造，确认与博客无关才可零工具）、其他技能 = 直接回答；NOTE 行
-  说明"不调用任何工具"时如实告知、REPLY 行是回复契约。
+  **必须逐一调用**（多个工具每一个都要调，工具结果以工具返回为准）；**TOOLS 行点名后零工具
+  豁免不适用**（20260902 收紧——040213/040409 实证：点名了 list_guestbook/list_talks 仍首轮
+  零工具，点名场景必须确定性兜底）；TOOLS 为（无）时按 SKILL 行技能语义处理（20260902 规则 1
+  按技能分支）：content_query = 自由 ReAct（需查博客数据就自行调工具、不得编造，确认与博客
+  无关才可零工具）、其他技能 = 直接回答；NOTE 行说明"不调用任何工具"时如实告知、REPLY 行是
+  回复契约。另有**规则 6（20260902 时间锚配套）**：时刻以 System 上下文的 `current_time` 为准，
+  context 未提供则先调 get_current_time，**未调用工具不得声称当前时刻**（13:34 事故实证）。
 - **reflector = 模板质检**（`reflector_node`）：LLM 对照技能模板 + 轨迹出 VERDICT（PASS/REVISE）；
-  chat 技能走**声称闸快道**（不花 LLM 钱：回复含读取/执行声称但当前轮零工具 → REVISE，正则
-  声称闸保留仅限 chat——用户认可正则不能被轨迹检查完全替代）；REVISE 预算
+  chat/content_query 的零工具轮走**声称闸快道**（不花 LLM 钱，20260902 扩展共用）：回复含
+  **读取/执行/工具调用三类声称**（`_READ_CLAIM_RE` / `_EXECUTION_CLAIM_RE` / `_CALLED_TOOL_CLAIM_RE`，
+  后者捕获"调用了 X 工具 / 我查了 XX"式表述）但当前轮零工具 → 确定性 REVISE——正则声称闸与
+  轨迹检查互补，不能互相替代；REVISE 预算
   `MAX_REFLECTIONS=2`，预算耗尽即接受当前结果收尾（工具执行缺失是硬约束：预算耗尽仍零工具
   时发一次最后通牒轮再 accept）。
   检查点 1 是**确定性闸门**（LLM 质检前）：TOOLS 行要求的工具若在当前轮轨迹缺失即 REVISE，
   20260902 升级**逐工具核验**（`_missing_tools`：每个工具名与 ToolMessage.name 集合比对，
   双源缺一即 REVISE 并列出缺失清单，杜绝"planner 点名双源、模型只查一个"）。豁免面：effect/
   darkmode 仅幂等场景（`state_matches is True`，状态已与目标一致 → 合法零调用；20260902 从
-  "整个技能豁免"收窄——非幂等零工具必须确定性兜底，不留 LLM 质检随机放行）。
+  "整个技能豁免"收窄——非幂等零工具必须确定性兜底，不留 LLM 质检随机放行；幂等判定按**集合
+  语义**比较 current_effects——逗号切分去重后比较，state_matches 幂等化，multi_turn_correction
+  FAIL 的根因）。
+  **LLM 质检输入含 QC 工具记录注记**（20260902）：reflector prompt 注入"本轮实际执行工具记录:
+  无/…"，且豁免只覆盖 TOOLS 行点名工具的缺失——**声称调用了未点名工具仍须对照轨迹核对**
+  （13:45 事故实证：质检采信回复自称导致漏判）。
   **确定性检查与 LLM 轨迹均按轮次裁剪**（`_current_round`：最近一次修正注记之后的轨迹）：被 REVISE
   的历史轮既不能豁免当前轮的缺失，也不参与当前轮判罚。**风格不判 REVISE**：工具已成功调用
   （帧已产出）后，正文链接有无/格式属风格问题。
@@ -533,15 +559,17 @@ flowchart TB
 ## 7. LLM 与配置
 
 - **Provider 机制**（settings.py）：`LLM_PROVIDER=qwen|deepseek|openai` 三选一，各配独立 API key/base_url/model；
-  当前生产 `qwen` → `qwen3.6-flash`（阿里云 MaaS compatible-mode）。
+  当前生产 `qwen` → `qwen3.8-flash`（阿里云 MaaS compatible-mode；settings.py 代码默认仍是 qwen3.6-flash，
+  由生产 .env `QWEN_MODEL` 覆盖）。
 - **关键参数**：`temperature=0.7`、`max_tokens=8192`、`timeout=120s`。
 - ⚠️ `agent_max_iterations=10` / `agent_early_stopping_method` 在 settings.py 有定义但**从未被代码读取**
   （create_agent 时代遗留的 LangChain 参数，手写图不消费）——死配置，实际生成有界性靠 `recursion_limit=30`（§6.4）。
-- **enable_thinking 开关化**（settings `llm_enable_thinking=True` 默认开）：Qwen 思维链走独立
-  `reasoning_content` 字段返回，不进回复正文；仅主 model 节点走思考（默认），
-  **三个低 token 调用强制关闭**（llm.py per-call 覆写，走 `extra_body`）：planner 分类（0.2/300t，
-  20260830 实测 13.4s → 2-4s）、reflector 质检（max_tokens=200，thinking 占满致 content 截断成空）、
-  `_summarize_dialogue`（256t）。`_extract_display_intent`（128t）已随 20260828 _force_display 移除而删除。
+- **enable_thinking 全关**（settings `llm_enable_thinking=True` 默认开，但图内四个 LLM 调用均 per-call
+  显式关闭，走 `extra_body`，与总开关无关）：planner 分类（0.2/300t，20260830 实测 13.4s → 2-4s）、
+  **executor（20260831 关——46.8s/79.1s/105.8s 慢调用实证，golden 全量回归把关）**、reflector 质检
+  （max_tokens=200，thinking 占满致 content 截断成空）、`_summarize_dialogue`（256t）。Qwen 思维链
+  走独立 `reasoning_content` 字段返回，不进回复正文。（`_extract_display_intent` 已随 20260828
+  _force_display 移除而删除。）
 - **TTS 关闭**（`tts_enabled=false`）：预留字段，未启用。
 
 ---
@@ -557,9 +585,10 @@ flowchart TB
   `min-height` 兜不住 `bottom:calc(100%+12px)` 的对话面板与悬浮按钮错位（2026-08-19 修复不彻底 → 08-22 改固定高度）。
 - **口型/动作**：`__setMouthOpen`/`__mouthOverride` + `model.update` 挂钩（loadParameters 之后注入 ParamSpeak/
   ParamMouthOpenY/Tail/耳朵/头发/眨眼），流式输出 300ms 口型翻转。
-- **缓存版本号**：改 autoload.js/waifu.css 必须同步 bump `index.tsx` 的 `?v=` 与 autoload.js 内 waifu.css 的 `?v=`
-  （当前 20260830g，由 autoload.js 的 `VER` 常量统一拼接，index.tsx 需手工同步）；nginx 对 `/live2d-widgets/`
-  等目录 1 年 immutable 缓存，`?v=` 换 query 即换缓存条目。
+- **缓存版本号**：改前端脚本必须 bump 三处手工点：`index.tsx` 注入 autoload.js 的 `?v=`、
+  autoload.js 内 `VER` 常量、`/home/ubuntu/mqtt-demo/device-console/index.html` 直引的 `?v=`
+  （当前 20260902a；waifu.css 的 `?v=` 由 `VER` 常量自动拼接，不算手动点）；nginx 对
+  `/live2d-widgets/` 等目录 1 年 immutable 缓存，`?v=` 换 query 即换缓存条目。
 - **模块图级联重命名（waifu-tips）**：waifu-tips.js 无 `?v=`（autoload.js 裸名加载），改上游模块必须整体
   重命名模块图——`waifu-tips.20260830.js` 动态导入 `chunk/index.20260830.js` + `chunk/index2.20260830.js`，
   两 chunk 静态导入回 `waifu-tips.20260830.js`（ES module identity，改一处会把模块实例拆成两份）；
@@ -580,8 +609,8 @@ flowchart TB
   路径由 settings.py `trace_dir` 配置）；logrotate 按日轮转（`/etc/logrotate.d/saudade`）。
 - **前端**：部署一律走 CI——本机不构建（20260830 OOM 事故：3.7GB 内存下本地 `vite build` 拖垮整机）。
   改动 commit → push `cn_sora_blog` → GitHub Actions 云端构建 → R2 → 服务器脚本部署。
-- **Rust**：同上走 CI；本地只用轻量 `RUSTFLAGS="-D warnings" cargo check`（CI 严格模式，unused import
-  等任何 warning 都会挂构建）。
+- **Rust**：同上走 CI；本地自检 `RUSTFLAGS="-D warnings" cargo check`（⚠️ CI 目前**未**启用 -D warnings——
+  deploy.yml 无 RUSTFLAGS，warning 不挂 CI，属本机纪律）。
 - **2 workers**：4 workers 在 3.7GB 内存下周期性被杀；16 线程 executor 已调优。
 - **改 SSE 协议三端同步**：Python 帧格式、Rust 转发、前端解析（`\n\n` 分隔 + JSON 编码 + 终结标记约定）。
 

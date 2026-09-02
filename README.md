@@ -38,14 +38,15 @@ saudade-blog-agent/
 │   ├── memory.py           # MemorySaver 兼容存根（实际不承担记忆，见文档 §4.6）
 │   └── prompts.py          # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 工具约束
 ├── rag/                    # ★ RAG 检索管线（20260830）：词法 2/3-gram BM25 内存倒排索引，
-│   │                       #   语料=线上可见文章+说说/留言+公告（走 Rust 公开 API，agent 无 DB 依赖），
+│   │                       #   语料=线上可见文章（20260901 净化：说说/留言/公告移出检索池），
 │   │                       #   10 分钟懒刷新；检索只定位（候选 ID+标题+分），解读走 get_article_detail 全文
 │   └── search.py           # RagIndex + search()：检索 eval 直接测本实现（评测即线上行为）
 ├── config/settings.py      # pydantic-settings 配置
 ├── models/llm.py           # LLM 工厂：provider 三选一（qwen/deepseek/openai）
 ├── tools/base.py           # 22 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重
 ├── utils/                  # logging（trace_id/日志）+ trace（对话 trace 落盘）+ tts（未启用）+ helpers
-├── eval/                   # 评测：golden set（53 条）+ run_golden.py（L2 任务级，真实 LLM）
+├── eval/                   # 评测：golden set（55 条）+ run_golden.py（L2 任务级，真实 LLM）
+│   │                       #       + golden_case_runner.py/golden_full_run.py（20260902 进程隔离跑法）
 │   │                       #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
 ├── test_skills.py          # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
@@ -59,7 +60,7 @@ saudade-blog-agent/
 ```bash
 cd saudade-blog-agent
 uv sync                       # 创建 .venv + 安装依赖
-cp .env.example .env         # 填入 LLM API Key（生产：qwen → qwen3.6-flash）
+cp .env.example .env         # 填入 LLM API Key（生产：qwen → qwen3.8-flash；代码默认值见下方配置表）
 ```
 
 **以服务方式运行（生产形态）**：systemd 服务 `saudade-agent`（2 workers，`Restart=always` 崩溃自愈，
@@ -76,7 +77,7 @@ cp .env.example .env         # 填入 LLM API Key（生产：qwen → qwen3.6-fl
 
 | 机制 | 说明 |
 |---|---|
-| **技能注册表 + 受限规划** | 固定流程任务（导航/特效/夜间/设备显示/设备查询/RAG 内容问答）落地为 `skills.py` 静态技能定义；planner 只**选技能 + 填参数**（`SKILL:/PARAMS:` 结构化输出），executor 按模板执行（`TOOLS:/NOTE:/REPLY:` 五行契约），不再自由写执行步骤。**rag_query 两段式**：TOOLS 行固定 `rag_search` + `get_article_detail`（后者参数实例化为占位说明、模型按检索结果填 id）——reflector 检查点强制两段都执行，堵"只检索不读全文" |
+| **技能注册表 + 受限规划** | 固定流程任务（导航/特效/夜间/设备显示/设备查询）落地为 `skills.py` 静态技能定义；planner 只**选技能 + 填参数**（`SKILL:/PARAMS:` 结构化输出），executor 按模板执行（`TOOLS:/NOTE:/REPLY:` 五行契约），不再自由写执行步骤。**内容问答（content_query，20260901 承接原 rag_query）**：知识型 → 执行层自由 ReAct 自选 rag_search/数据工具定位 + get_article_detail 精读全文；planner 可 PARAMS.tools 显式点名（`_EXPLICIT_TOOLS` 白名单）→ TOOLS 行强制 + reflector 逐工具核验，堵"planner 点名了却不执行" |
 | **模板质检（reflector）** | 对照技能模板 + 工具轨迹出 VERDICT：TOOLS 行要求的工具缺失即 REVISE（覆盖"假装执行"）；chat 技能非空快道；REVISE 预算 2 次，预算耗尽收尾；轨迹按轮次裁剪（被否定轮不入判罚） |
 | **记忆外置 MySQL** | 每请求独立线程（无 checkpointer），连续性靠 Rust 注入 20 条历史 + 滚动摘要；摘要由后端**独立任务调用**生成（`_summarize_dialogue`，与回复解耦，模型对记忆无写权限，防摘要幻觉污染）；流式经 `__SUMMARY__` 帧、非流式经 `new_summary` 字段入库 |
 | **显示类请求保障链** | prompt 强化约束（必须调 `device_oled_display`、显示内容与调用一致）+ reflector 模板质检（device 技能 TOOLS 行要求工具调用，缺失即 REVISE）+ 30s 幂等去重；曾用后端强制路由（_force_display）先执行，20260828 影子系统事故（与主链路并存致决策漂移）后**移除**——回归单一工具调用路径 |
@@ -97,7 +98,7 @@ schema）。**若它服务于固定流程任务**（如新技能），应在 `ag
 |---|---|---|
 | `LLM_PROVIDER` | `qwen` | `qwen` / `deepseek` / `openai` 三选一 |
 | `QWEN_MODEL` | `qwen3.6-flash` | 模型名（按 provider 前缀：`QWEN_`/`DEEPSEEK_`/`OPENAI_`） |
-| `LLM_ENABLE_THINKING` | `true` | Qwen 思考模式总开关；planner/reflector/摘要三个低 token 调用强制关闭 |
+| `LLM_ENABLE_THINKING` | `true` | Qwen 思考模式总开关；图内四个 LLM 调用均显式关闭思考（20260830 planner/reflector/摘要；20260831 executor——46~106s 慢调用实证），关闭是 per-call 覆写、与总开关无关 |
 | `AGENT_RECURSION_LIMIT` | `30` | 工具循环上限（幻觉重试兜底，server.py 读取） |
 | `trace_dir` | `logs/agent/traces` | 对话 trace 落盘目录（20260830f 随日志分组迁移） |
 
@@ -106,9 +107,10 @@ schema）。**若它服务于固定流程任务**（如新技能），应在 `ag
 ## ✅ 测试与评测
 
 ```bash
-.venv/bin/python test_skills.py        # L0：秒级，无 LLM（映射表/计划实例化/解析容错/确定性闸）
-.venv/bin/python eval/run_golden.py    # L2：53 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答）
-.venv/bin/python eval/recall_eval.py   # L1 检索：recall@k/MRR（直接测线上 rag/search.py，不另写模拟实现）
+.venv/bin/python test_skills.py               # L0：秒级，无 LLM（映射表/计划实例化/解析容错/确定性闸）
+.venv/bin/python eval/run_golden.py           # L2：55 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答）；--limit N / --only <id> 单跑
+.venv/bin/python eval/golden_full_run.py      # L2 进程隔离全量跑（逐条独立进程 + 180s 超时，防悬挂污染）
+.venv/bin/python eval/recall_eval.py          # L1 检索：recall@k/MRR（21 条 queries = 12 正例 + 9 噪声）
 ```
 
 - nightly cron 自动跑上述两项，失败标记 `~/agent_regression.failed`。
