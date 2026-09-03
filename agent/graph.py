@@ -193,7 +193,13 @@ _PLANNER_PROMPT = """\
 4. 动作技能参数纪律：
    - navigate：target 只能填导航映射表里的别名，或用户消息里以 / 开头的字面
      路径（原样照抄，不改写、不推断成别的页面）；路径是否有效由系统白名单
-     校验，无效时系统会给注记，你收尾如实告知即可
+     校验，无效时系统会给注记，你收尾如实告知即可。
+     用户要"去/打开/带我去 XX 文章"：上一轮工具帧/页面上下文里有该文章真实
+     id（get_article_detail/search_notes/list_notes 返回的 noteKey）→ target
+     填字面路径 /article/<真实id>（如 /article/19，navigate 白名单放行 /article/*）；
+     id 只取帧内真实存在值，绝不编造。id 不在可见帧 → 先 content_query 定位
+     （规则 3），拿到真实 id 后下一轮再 navigate。⚠ 用户明确要去某篇文章时，
+     禁止拿首页或其他页面兜底执行——决议不出目标就如实说明或先给文章链接
    - effect/darkmode：先看页面上下文 current_effects/current_darkmode——状态
      已与用户要求一致时【不要调用工具】，选 chat 直接把现状告诉访客
      （幂等：零调用是正确行为）；不一致才规划 toggle_effect/toggle_dark_mode

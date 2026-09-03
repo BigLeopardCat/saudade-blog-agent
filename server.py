@@ -517,6 +517,12 @@ async def chat_stream(req: ChatRequest, request: Request):
         frames = 0
         end_reason = "unknown"
         nav_line = ""
+        # 命令帧独占一行契约（20260903 实证）：execute 的命令帧先于 narrator
+        # 叙述帧到达，Rust 存库（strip_command_lines）与前端（cleanAgentText）
+        # 都是行级过滤——命令与正文无换行拼接成单行时整行被剥空（chat_history
+        # 3465 空行 → 转跳后回复丢失）。yield 出命令帧后置位；下一个文本帧
+        # （叙述首帧或连发的命令帧）前插换行，保证命令各自独占一行
+        pending_nl = False
         had_output = False
         started = loop.time()
         last_frame = started
@@ -561,19 +567,34 @@ async def chat_stream(req: ChatRequest, request: Request):
                 if isinstance(chunk, AIMessageChunk) and chunk.content:
                     had_output = True
                     frames += 1
+                    text = str(chunk.content)
+                    # 命令帧独占一行契约：命令帧后第一个叙述帧前插换行（若 LLM
+                    # 没自带头部换行）——叙述 delta 任意切分，只在此处加一次，
+                    # 后续 delta 内联，绝不能逐帧加换行
+                    if pending_nl:
+                        if not text.startswith("\n"):
+                            text = "\n" + text
+                        pending_nl = False
                     # JSON 编码避免文本内的 \n\n 破坏 SSE 帧边界
-                    yield f"data: {json.dumps(str(chunk.content), ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
                 elif isinstance(chunk, ToolMessage) and chunk.content:
                     text = str(chunk.content)
                     if text.startswith("NAVIGATE:") or text.startswith("AUTO_NAVIGATE:"):
                         nav_line = text
                         had_output = True
                         frames += 1
+                        # 连发命令帧也要各自独占一行（无叙述间隔时前插换行）
+                        if pending_nl and not text.startswith("\n"):
+                            text = "\n" + text
+                        pending_nl = True
                         yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
                     elif text.startswith("EFFECT:") or text.startswith("DARKMODE:"):
                         nav_line = text
                         had_output = True
                         frames += 1
+                        if pending_nl and not text.startswith("\n"):
+                            text = "\n" + text
+                        pending_nl = True
                         yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
 
             # 空输出兜底：整轮无任何帧（qwen 偶发空内容）→ 补发人设内恢复语，
