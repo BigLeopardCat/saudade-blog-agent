@@ -200,15 +200,16 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0) -> tuple[s
         config,
         stream_mode="messages",
     ):
-        # 手写图里有多个 LLM 节点（planner 产出计划文本/reflector 产出质检结论），
+        # 手写图里有多个 LLM 节点（planner 产出计划文本、model 产出回复），
         # 只有 model 节点的 AIMessageChunk 是给访客看的回复——其余按 node 过滤掉，
-        # 否则计划/反思会漏进对话（create_agent 时代只有一个 model 节点，无需过滤）
+        # 否则计划会漏进对话（create_agent 时代只有一个 model 节点，无需过滤）
         if (isinstance(chunk, SystemMessage) and chunk.content
-                and str(chunk.content).startswith("[Reflection 检查未通过")):
-            # REVISE 轮作废标记（同流式路径 __RESET__ 语义）：reflector 打回的
-            # 轮次文本/命令不得展示，只保留最终轮，否则两轮文本会拼接重复
-            full_reply = ""
-            nav_line = ""
+                and str(chunk.content).startswith("[Fallback 决定]")):
+            # gate fallback（20260903，validate→fallback 无重考轮）：gate 是终节点，
+            # 其后无新一轮 model 文本——最终回复直接替换为 fallback 正文（去前缀）。
+            # nav_line 不清：工具帧是系统真实执行的命令（与叙述文本解耦），照常下发。
+            _fb = str(chunk.content).split(":", 1)
+            full_reply = _fb[1].strip() if len(_fb) > 1 else ""
         elif isinstance(chunk, AIMessageChunk) and chunk.content and meta.get("langgraph_node") == "model":
             full_reply += str(chunk.content)
         elif isinstance(chunk, ToolMessage) and chunk.content:
@@ -319,18 +320,17 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
     try:
         # 双 stream_mode：
         #   "messages" —— token 级文本/工具结果帧（原逻辑不变）
-        #   "updates"  —— 节点级状态更新：用于捕捉 reflector 的 REVISE 判定，
-        #                 此时向前端发 __RESET__ 帧清空重绘（REVISE 轮的文本已作废，
-        #                 不重置会导致多轮全文累积显示 + 导航解析命中废轮次命令）
-        # 轮次记账：
-        #   round_buf —— 当前轮已累积的回复正文（REVISE 作废时清空）
+        #   "updates"  —— 节点级状态更新：planner 的规划占位帧 / model 的最终回复
+        #                 收集 / gate 的检查判定。gate fallback 时向前端发
+        #                 __RESET__ 清空重绘 + 注入 fallback 文本作为最终回复
+        #                 （叙述校验不过的轮次文本已作废，不重置会累积显示错误内容）
+        # 过程帧记账：
         #   process_emitted —— 本次请求已发过过程步骤（决定收尾是否补"质检通过"）
         #   emitted —— 已发过程步骤的 key 集合（同一占位/完成帧同轮只发一次）
-        #   is_chat_skill —— SKILL=chat 快道：无执行可查（reflector 走非空快道），
-        #     收尾不发"✓ 质检通过"，避免对闲聊展示虚假的质检过程
-        round_buf = ""
+        #   is_chat_skill —— SKILL=chat：无执行可查，收尾不发"✓ 质检通过"，
+        #     避免对闲聊展示虚假的质检过程
         # 最终回复正文（trace 落盘用）：updates 的 model 帧里取最后一条
-        # 无 tool_calls 的 AIMessage——REVISE 轮自动覆盖为最新一轮
+        # AIMessage；gate fallback 时覆盖为 fallback 文本
         final_reply = ""
         process_emitted = False
         emitted: set = set()
@@ -362,22 +362,19 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             if mode == "messages":
                 chunk, meta = data
                 # 入队前过滤（同 _run_agent_sync）：只有 model 节点的回复文本帧、
-                # 以及工具结果帧进队列；planner/reflector 的内部输出不发给前端
+                # 以及工具结果帧进队列；planner 的内部输出不发给前端（gate 无文本）
                 if isinstance(chunk, AIMessageChunk):
-                    # 规划占位帧在 updates 分支发（planner 是 invoke 非流式，messages
-                    # 通道无其 chunk；若未来 planner 改流式，messages 分支不重复发——
-                    # emitted 的 key=planning 去重，updates 分支到时时自动跳过）
-                    if meta.get("langgraph_node") == "model" and chunk.tool_calls:
-                        # 工具执行占位帧：模型决定调工具时立即发（tool_calls 通常
-                        # 首块即带）——工具执行期间（LLM 重入/工具 API 调用）有几秒
-                        # 静默，没有此帧前端会像"卡死"（原有事后帧是返回后才发）
-                        emit_process("🛠 正在调用工具…", key="tool_running")
                     if chunk.content and meta.get("langgraph_node") == "model":
-                        round_buf += str(chunk.content)
+                        # 20260903：model 零工具（不 bind_tools），不再有 tool_calls
+                        # 占位帧；"🛠 正在调用工具…"占位改由 planner updates 分支
+                        # 在计划含执行清单时发（execute 执行期间几秒静默，防"卡死"）
                         asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
                 elif isinstance(chunk, ToolMessage) and chunk.content:
                     asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
-                    # 过程展示：命令类工具真实执行了 → 步骤行（前端"调用工具"轨迹）
+                    # 过程展示：工具真实执行了 → 步骤行（前端"调用工具"轨迹）。
+                    # 20260903：多轮检索（planner⇄execute）每轮一批工具，完成帧
+                    # 按工具名去重（同轮同名工具不重发），别把后续轮的完成帧吞掉
+                    _name = getattr(chunk, "name", "") or ""
                     t = str(chunk.content)
                     if t.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")):
                         emit_process("🛠 调用工具：页面跳转 navigate_to", key="tool_done_nav")
@@ -388,10 +385,10 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     else:
                         # 非命令类工具（设备查询/内容检索）：补收尾帧，
                         # 让占位帧有闭环（数据本身已作为帧转发给前端展示）
-                        emit_process("✅ 工具执行完成", key="tool_done_other")
+                        emit_process("✅ 工具执行完成", key=f"tool_done_{_name}")
             elif mode == "updates":
                 # 最终回复正文收集（trace 落盘）：model 节点的完整 AIMessage
-                # （REVISE 轮后续 model 再产出时覆盖——最终轮即最后一条）
+                # （20260903 拓扑：model 只走一次收尾叙述轮，天然是最终轮）
                 model_upd = data.get("model")
                 if model_upd and model_upd.get("messages"):
                     _m = model_upd["messages"][-1]
@@ -413,25 +410,29 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                             if len(plan_line) > 60:
                                 plan_line = plan_line[:60].rstrip() + "…"
                             emit_process("🧭 计划：" + plan_line)
-                upd = data.get("reflector")
+                        # 计划含执行清单 → execute 将确定性执行（期间几秒静默，
+                        # 无此占位帧前端会像"卡死"）；完成帧由 ToolMessage 分支发
+                        if "\nTOOLS: " in plan and "TOOLS: （无）" not in plan:
+                            emit_process("🛠 正在调用工具…", key="tool_running")
+                # gate 检查判定（20260903：reflector/REVISE/LLM-QC 已废除——gate
+                # 是终节点只收尾不重考：pass → done 收尾；fail → fallback 文本
+                # 直接替换最终回复，见 graph.gate_node 注释）
+                upd = data.get("gate")
                 if not upd:
                     continue
-                if upd.get("done") is False and any(
-                    isinstance(m, SystemMessage) for m in upd.get("messages", [])
-                ):
-                    # REVISE：当前轮作废，清空已累积正文（前端 RESET 重绘）；
-                    # 同时清空已发过程帧去重表——重试轮重新发完整的
-                    # 占位/完成帧，避免新一轮工具执行期间静默
-                    reason = str(upd.get("reflection") or "质检未通过")
-                    if len(reason) > 60:
-                        reason = reason[:60].rstrip() + "…"
-                    emit_process("✗ 质检打回：" + reason)
+                if upd.get("fallback_text"):
+                    # fallback：叙述校验不过 → 前端 RESET 清空已展示文本重绘，
+                    # 注入 fallback 文本（人设内如实回复）作为最终回复
+                    reason = "叙述校验未通过，已替换为如实回复"
+                    emit_process("✗ 质检打回：" + reason, key="gate_fallback")
                     emit_reset(reason)
-                    round_buf = ""
+                    final_reply = upd["fallback_text"]
                     emitted.clear()
+                    asyncio.run_coroutine_threadsafe(
+                        queue.put(AIMessageChunk(content=upd["fallback_text"])), loop).result()
                 else:
-                    # 质检通过（done=True）；chat 快道无执行可查，不发（见 is_chat_skill）
-                    round_buf = ""
+                    # 检查通过收尾（gate 恒 done=True）；chat 快道无执行可查，
+                    # 不发（见 is_chat_skill）
                     if process_emitted and not is_chat_skill:
                         emit_process("✓ 质检通过")
         else:
