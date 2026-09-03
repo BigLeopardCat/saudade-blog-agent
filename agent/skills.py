@@ -63,14 +63,20 @@ from tools.base import _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS
 NAV_VALID_PATHS: set[str] = set(_NAV_EXACT_PATHS)
 
 # planner 可显式点名的无参只读工具白名单（20260902 用户拍板）：留言/说说/公告/
-# 时间类查询是"一次简单工具调用、无流程"，不成技能——planner 看得到工具描述，
-# 直接 PARAMS.tools 点名，instantiate_plan 白名单校验后展开进 TOOLS 行 →
-# reflector 检查点 1 逐工具核验强制调用（根治自由 ReAct 下"零工具编造"：
-# 233815 模型零工具声称"两边都翻了"，planner 点名后 TOOLS 行非空、模型不调
-# 就被确定性闸门打回）。仅限无参只读工具（参数由执行层/模板决定的不在此列，
-# 如 rag_search 保持自由 ReAct）。
+# 时间类查询是"一次简单工具调用、无流程"，不成技能——planner 直接 PARAMS.tools
+# 点名，instantiate_plan 白名单校验后展开进 TOOLS 行由 execute 确定性执行。
+# 仅限无参只读工具（带参检索走下方 _CALLABLE_QUERY_TOOLS 的 PARAMS.calls 通道）。
 _EXPLICIT_TOOLS: set[str] = {
     "list_guestbook", "list_talks", "get_announcements", "get_current_time",
+}
+
+# planner 可带参点名的查询工具白名单（20260903 planner 全权裁决）：知识型/验证型
+# 问题的调用清单（PARAMS.calls）仅限这些只读工具——检索定位（search_notes 关键词 /
+# rag_search 相关度）、读全文（get_article_detail）与数据直取。动作工具（navigate_to/
+# device_oled_display 等）不在任何 planner 白名单内，只能由技能模板展开——planner
+# 无法通过 calls 通道越权动作。
+_CALLABLE_QUERY_TOOLS: set[str] = _EXPLICIT_TOOLS | {
+    "search_notes", "rag_search", "get_article_detail", "list_notes",
 }
 
 
@@ -166,37 +172,46 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="content_query",
-        # 20260901 扩容：原为站点信息窄查询（分类/标签/公告/天气/时间…），现承接
-        # 原 rag_query 的全部内容查询意图——工具自由选择（自由 ReAct，RAG 前架构
-        # 的成功模式）：数据型查询（最新留言/说说/封面图）直接走 list_guestbook/
-        # list_talks/get_article_detail 等数据工具，文章知识问答用 rag_search/
-        # search_notes 定位 + get_article_detail 读全文，由执行层按语料规模与
-        # 场景自选检索方式（小语料标题/分类查找即可，大语料才需要全文检索）。
+        # 20260903 架构裁决（planner 全权，自由 ReAct 废除）：内容查询不再有
+        # "执行层自由选择"——planner 每轮直接产出调用清单（PARAMS.calls，带参
+        # 白名单校验），execute 节点确定性执行，多轮规划由 planner 驱动：
+        # 先检索定位 → 看工具帧 → 决定 get_article_detail 读哪篇 / 换词再搜 /
+        # 收尾如实答复。检索器选型（search_notes 关键词 vs rag_search 相关度）
+        # 与关键词抽取都是 planner 决策，模型/执行层零自由——"跳过检索直接答"
+        # 在结构上不可能（调用清单是计划的组成部分）。
         description=(
             "用户询问博客内容时使用（文章/说说/留言/公告/站点信息里的内容）——包括："
             "知识型问题（文章里写了什么、怎么做、是什么，如\"Git 和 SVN 有什么区别\"\"ESP32 的 OTA 怎么配置\"）；"
-            "数据/列表型查询（最新留言/说说/公告、文章列表、封面图片、分类/标签/天气/时间/知识库/站点信息/社交链接）。"
-            "数据/列表型查询（工具无参、无流程）：PARAMS.tools 显式点名要调用的工具"
-            "（仅限 list_guestbook/list_talks/get_announcements/get_current_time）——"
-            "查询'留言板/说说里有没有人聊过/写过 X'必须成对点名 list_guestbook 与 list_talks"
-            "（两个数据源都要查全）；知识型问题（需检索定位）：PARAMS.tools 不填，"
-            "由执行层用 rag_search 或 search_notes 定位文章后 get_article_detail 读全文"
+            "数据/列表型查询（最新留言/说说/公告、文章列表、封面图片、分类/标签/天气/时间/知识库/站点信息/社交链接）；"
+            "质疑/确认上轮执行是否属实的验证请求（如\"你确定？真有这个页面？\"——需要查证，"
+            "不得空口圆场）。"
+            "规划方式：数据/列表型 → PARAMS.tools 点名无参只读工具"
+            "（list_guestbook/list_talks/get_announcements/get_current_time，"
+            "'有没有人聊过/写过 X'必须成对点名两个数据源）；知识型/验证型 → PARAMS.calls"
+            " 给出带参检索调用清单（search_notes/rag_search 定位、get_article_detail 读全文），"
+            "一次决策只给当前步，后续步骤在下一轮规划中按工具返回决定"
         ),
         inputs={
             "tools": (
-                "（可选）显式点名的无参只读工具列表，仅限 list_guestbook/list_talks/"
-                "get_announcements/get_current_time；查询'留言板/说说里有没有人聊过/写过 X'"
-                "必须成对点名 list_guestbook 与 list_talks；知识检索类不填（执行层自由选择）"
+                "（可选）无参只读工具点名列表，仅限 list_guestbook/list_talks/"
+                "get_announcements/get_current_time；'有没有人聊过/写过 X'必须成对点名"
+                "list_guestbook 与 list_talks"
+            ),
+            "calls": (
+                "（可选）带参调用清单：[{\"tool\": \"search_notes\", \"args\": {\"keyword\": "
+                "\"用户原词\"}}]；工具仅限 search_notes/rag_search/get_article_detail/"
+                "list_notes 与无参数据工具；get_article_detail 的 id 只能取自上一轮工具返回"
             ),
         },
-        plan=[],  # 数据工具由 planner 显式点名进 TOOLS 行；检索工具自由选择（ReAct 层决定）
+        plan=[],  # 调用清单由 planner 经 PARAMS.tools/calls 注入（本技能实例化白名单校验展开）
         complete_when="回答基于工具返回的数据",
         reply_contract=(
-            "回答基于工具返回的数据，不得编造；检索无结果或无关时如实告知。"
+            "回答基于工具返回的数据，不得编造；检索无结果或无关时如实告知"
+            "（'站内没有找到相关资料'是正当结论，不得改用模型记忆硬答）。"
             "查询'博客/留言板/说说里有没有人聊过/写过 X'这类问题时，"
-            "必须同时调用 list_guestbook 与 list_talks 两个工具，两个数据源都检查后再下结论。"
+            "以工具返回为准如实告知两个数据源都查过了什么；"
             "问题针对用户当前正在阅读的文章（页面上下文 current_url 为 /article/:id）时，"
-            "必须先调用 get_article_detail 读取该文章，基于真实全文回答"
+            "必须先经 get_article_detail 读取该文章，基于真实全文回答"
         ),
     ),
     Skill(
@@ -307,21 +322,34 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
             args = {"article_id": int(aid) if str(aid).isdigit() else aid}
             tools.append(f"get_article_detail({json.dumps(args, ensure_ascii=False)})")
             note = f"读取当前文章全文（ID={aid}）"
-    elif skill.name == "content_query" and params.get("tools"):
-        # 20260902：planner 显式点名无参只读工具（留言/说说/公告/时间类查询）。
-        # 白名单校验：仅限 _EXPLICIT_TOOLS；非法/重复条目剔除（合法条目仍生效——
-        # 不因模型多写一个越权工具就整单作废）；全非法/未填 → tools 空 = 自由
-        # ReAct 现状（不恶化，检索类本来就不点名）。
-        explicit = params.get("tools")
+    elif skill.name == "content_query" and (params.get("tools") or params.get("calls")):
+        # 20260903 架构裁决（planner 全权）：内容查询的调用清单由 planner 产出——
+        # params.tools（无参只读点名，白名单 _EXPLICIT_TOOLS）或 params.calls
+        # （带参检索调用，白名单 _CALLABLE_QUERY_TOOLS）。两层白名单校验，非法/
+        # 重复条目剔除（合法条目仍生效——不因模型多写一个越权工具就整单作废）；
+        # 调用清单为空 = planner 决策无需工具（收尾轮）——不再是"自由 ReAct"。
         picked: list[str] = []
+        explicit = params.get("tools")
         if isinstance(explicit, list):
             for t in explicit:
                 if isinstance(t, str) and t.strip() in _EXPLICIT_TOOLS and t.strip() not in picked:
                     picked.append(t.strip())
+        calls = params.get("calls")
+        if isinstance(calls, list):
+            for c in calls:
+                if (isinstance(c, dict) and isinstance(c.get("tool"), str)
+                        and c["tool"].strip() in _CALLABLE_QUERY_TOOLS
+                        and isinstance(c.get("args"), dict)):
+                    spec = f"{c['tool'].strip()}({json.dumps(c['args'], ensure_ascii=False)})"
+                    if spec not in picked:
+                        picked.append(spec)
         for t in picked:
-            tools.append(f"{t}({{}})")
+            if "(" in t:
+                tools.append(t)
+            else:
+                tools.append(f"{t}({{}})")
         if tools:
-            note = f"按 planner 显式点名的工具执行：{'、'.join(picked)}"
+            note = f"按 planner 决策执行：{'、'.join(tools)}"
     else:
         for tool_name, tmpl in skill.plan:
             args = {}

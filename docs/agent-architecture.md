@@ -2,10 +2,10 @@
 
 > 面向维护者的全链路技术文档。覆盖看板娘对话系统的每一个环节：组件拓扑、一次对话的完整时序、
 > 记忆机制（记录 / 压缩 / 存储 / 读取 / 回滚）、工具系统、防幻觉与可靠性加固、超时体系、配置与部署。
-> 最后更新：2026-09-02（0901-0902 防幻觉体系与 RAG 定位重构状态同步：§6.5 content_query 承接、
-> 声称闸三族 + 逐工具核验 + 时间锚 current_time、executor 亦关 thinking；§3.2 历史 20 条全量注入
-> + AIMessage 角色；§4.4 中断清理语义分化（discard 端点 vs Drop guard）；§5 工具表补 rag_search；
-> §2/§8 前端 chat-* 子模块拆分与缓存版本号 20260902a；§7 生产模型 qwen3.8-flash）。
+> 最后更新：2026-09-03（**20260903 架构裁决同步——planner 全权**：§1/§3/§6.5 改为现行拓扑
+> planner ⇄ execute → model → gate；reflector（LLM 质检 + REVISE）/ 自由 ReAct / tools_node 授权
+> 执行已废除；历史机制描述均就地标注"20260903 前形态"保留为踩坑记录；§2 目录注释、§7 LLM 调用
+> 清单同步；先前 0901-0902 状态（声称闸三族/时间锚/chat-* 拆分/生产模型）内容不变）。
 
 ---
 
@@ -15,7 +15,7 @@
 
 - **React 前端**（浏览器）：看板娘 Live2D 形象 + 对话框 UI + SSE 消费 + 命令执行器。
 - **Rust 后端**（axum，端口 3000）：鉴权、记忆落库、对话编排、SSE 转发、中断清理。**记忆的唯一权威来源**。
-- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行、LLM 调用、22 个工具。**无状态**，记忆全靠请求体注入。
+- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、22 个工具。**无状态**，记忆全靠请求体注入。
 - **MySQL**：`chat_history`（消息流水）、`chat_summary`（每用户压缩摘要）。
 - **device-service**（端口 3100，独立服务）：IoT 设备（ESP32 OLED）指令下发，agent 以对话用户身份代签 JWT 调用。
 
@@ -29,7 +29,7 @@ flowchart TB
     subgraph Server[生产服务器 3.7GB 内存]
         NGX[nginx :443/:80]
         RUST[Rust 后端 axum :3000<br/>鉴权·记忆·编排·SSE 转发]
-        AGT[Python Agent FastAPI :8010<br/>LangGraph 图 · 22 工具 · 2 workers]
+        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 22 工具 · 2 workers]
         MYSQL[(MySQL<br/>chat_history / chat_summary)]
         DEV[device-service :3100<br/>ESP32 OLED 指令下发]
     end
@@ -61,7 +61,7 @@ flowchart TB
 | 记忆权威在 DB，agent 无状态 | 每请求独立 thread_id + 请求体注入 20 条历史 + 滚动摘要 | MemorySaver 线程累积 → 上下文/worker 内存无限膨胀（§4.6） |
 | SSE 帧 JSON 编码 + `\n\n` 分隔 | 文本内换行不破坏帧边界；帧协议三端同步 | 曾按行分隔被文本换行破坏（§3.2⑤） |
 | 摘要独立任务调用（模型对记忆无写权限） | 摘要由后端独立调用生成（与回复解耦），模型永不输出 SUMMARY 行 | 曾把摘要生成指令注入对话消息流 → 模型在回复里编造"成功调用工具"污染记忆（§4.3） |
-| 模型自主调用 + 保障链（曾用强制路由） | 显示/导航均回归模型自主调工具，靠 prompt 强化约束 + reflector 模板质检 + 前端白名单兜底 | 导航强制路由（_force_navigate）曾上线后因牺牲自主性被撤销；显示强制路由（_force_display）20260828 影子系统事故后移除（§6.3） |
+| 决策-执行分离（20260903 planner 全权；曾用强制路由/模型自主调用） | planner 唯一决策（选技能/填参/给调用清单）→ execute 确定性执行 → model 零工具叙述 → gate 确定性检查收尾；前端命令白名单兜底保留 | 执行器自由度（自选工具/自拟参数/跳过检索直接答）是幻觉事故族根因——补检查无效，直接收走自由度（§6.5）；导航/显示强制路由历史见 §6.3 |
 | 命令走"工具返回 → 独立帧 → 前端执行" | 模型只负责调工具，命令由前端按显式意图执行 | 模型"表演调用"把命令写进正文（§6.2） |
 | 分层超时体系 | LLM 120s + 空闲 120s + 总时长 300s + recursion_limit 30 + 16 线程 | LLM 挂起占满线程池 → 全体对话排队卡死（§6.4） |
 | 空回复/中断兜底 | 后端补发人设内恢复语 + Rust 空回复不存库 + 中断 Drop 清理 | qwen 偶发空内容 / 客户端中断 → 前端"卡死"表象（§3.2⑤⑦ §4.4） |
@@ -77,11 +77,11 @@ flowchart TB
 本仓库（saudade-blog-agent）    # ★ Python Agent（独立 git 仓库，推送即 CI 评测门禁 + 部署；线上改动重启 systemd 服务生效）
 ├── server.py                  # FastAPI 入口：/chat、/chat/stream、/health；trace_id 中间件；流式编排
 ├── agent/
-│   ├── graph.py               # ★ 手写 LangGraph 图：planner(选技能) → model(模板执行) → tools → reflector(模板质检)
-│   ├── agent.py               # create_agent：手写图入口（build_graph，planner → model ⇄ tools → reflector）
+│   ├── graph.py               # ★ 手写 LangGraph 图：planner(唯一决策) ⇄ execute(确定性执行) → model(零工具叙述) → gate(确定性检查)
+│   ├── agent.py               # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
 │   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
 │   ├── skills.py              # ★ 技能注册表：8 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
-│   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 工具约束（显示/导航强化约束，无对话内 SUMMARY 协议）
+│   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 叙述规则（model 零工具 narrator 用；工具调用规则在 planner/技能注册表侧）
 │   └── __init__.py
 ├── rag/                       # ★ RAG 检索管线（20260830）：词法 2/3-gram BM25 内存倒排 + 10 分钟懒刷新，
 │   │                          #   语料=线上可见文章（20260901 净化：说说/留言/公告移出检索池，走数据工具直查）；
@@ -156,9 +156,9 @@ sequenceDiagram
     R->>A: POST /chat/stream<br/>{message, history[20], summary, needs_summary,<br/>user_id, current_effects, current_darkmode}
     Note over A: _build_messages 组装<br/>System 上下文 + 历史
     Note over A: needs_summary 轮并行独立摘要调用<br/>（输入=原始历史，与回复解耦）
-    A->>L: LangGraph 流式生成（工具循环）
-    L-->>A: token 流 / 工具调用
-    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / __SUMMARY__ / 终结标记）
+    A->>L: LangGraph 图执行：planner ⇄ execute（≤4 轮）→ model → gate
+    L-->>A: planner 决策文本 / execute 工具帧<br/>model 叙述 token（零工具）
+    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / 过程帧 __PROCESS__ / __RESET__（gate fallback）/<br/>__SUMMARY__ / 终结标记）
     R-->>B: 逐帧转发（X-Accel-Buffering: no）
     B->>B: 文本帧上屏 + 口型驱动；命令帧进 cmdText
     Note over R: 流结束后
@@ -201,9 +201,10 @@ Rust 再拼接命令行：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 
 按顺序构造消息列表（角色按 history 原始 role 注入）：
 1. **System 上下文**：`[System: user_id=…, page=…, title=…; current_time=…; current_effects=…; current_darkmode=…; conversation_summary: …]`
    放在**第一条**，是纯状态注记，模型禁止复述。其中 `current_time` 是**时间锚**（20260902 注入，与
-   `get_current_time` 同格式 `%Y年%m月%d日 星期X %H:%M`）——模型对"现在几点/星期几"不再自行猜测，
-   配合 executor 规则 6（时刻以 context 为准，未提供则先调 get_current_time，未调用不得声称当前时刻；
-   见 §6.5）。
+   `get_current_time` 同格式 `%Y年%m月%d日 星期X %H:%M`）——模型对"现在几点/星期几"不再自行猜测；
+   时间类询问由 planner 规划 content_query 点名 `get_current_time`（无参只读白名单 `_EXPLICIT_TOOLS`，
+   见 §6.5）经 execute 执行，narrator 叙述纪律要求时刻/站内事实以工具帧或页面上下文为据、无帧不得
+   自行声称（见 §6.5 model/gate）。
 2. **历史**：`req.history[-20:]`（Rust 传的 20 条**全量注入**——20260828 起与 Rust 对齐，旧的"只取 12 条
    留余量"双魔数已废弃）逐条注入，assistant 消息以原生 AIMessage 角色注入、无 `[assistant]:` 文本前缀。
 3. **当前用户消息**（对话内摘要指令已移除——摘要由后端独立任务调用生成，见 §4.3；显示类约束在
@@ -211,20 +212,28 @@ Rust 再拼接命令行：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 
 
 **④ LangGraph 执行（agent.py + server.py）**
 
-手写图（agent/graph.py `build_graph`，planner → model ⇄ tools → reflector 四节点，见 §6.5），
-无 checkpointer（线程 id 每请求 uuid，无状态累积）。planner 前先过**确定性快道链**（零 LLM：
-导航 → 显示 → 当前文章，命中即跳过 planner 直接实例化计划，见 §6.5）。执行用
-`stream(stream_mode="messages")`：
-- `AIMessageChunk` → 文本 token，逐块推入 asyncio.Queue（生产者线程）。
-- `ToolMessage` → **命令帧**：`NAVIGATE:`/`AUTO_NAVIGATE:`（导航）、`EFFECT:`（特效）、`DARKMODE:`（夜间）——**这是工具结果**，由前端执行。
-- 工具循环：模型 → 调工具 → 工具结果 → 模型，受 `recursion_limit=30` 约束（§6.4）。
+手写图（agent/graph.py `build_graph`，**planner ⇄ execute → model → gate 四节点**，见 §6.5），
+无 checkpointer（线程 id 每请求 uuid，无状态累积）。planner_node 首轮先判定**确定性快道链**
+（零 LLM：导航 → 显示 → 当前文章读取，命中即直接实例化计划、不调用 planner LLM，见 §6.5）。
+执行用 `stream(stream_mode=["messages", "updates"])` 双通道：
+- "messages" 通道：**model 节点的** `AIMessageChunk` → 文本 token 逐块推入 asyncio.Queue
+  （planner/model 之外的输出不会进对话；planner 是 invoke 非流式，其产物只有 plan 文本）；
+  `ToolMessage` 工具帧 → **命令帧**：`NAVIGATE:`/`AUTO_NAVIGATE:`（导航）、`EFFECT:`（特效）、
+  `DARKMODE:`（夜间）——**这是工具结果**，由前端执行。
+- "updates" 通道：planner 节点更新 → **规划过程帧**（🧭 规划中/计划，计划含执行清单时追加
+  🛠 正在调用工具…）；gate 节点更新 → 判定收尾（通过 → done=True + ✓ 质检通过；fallback →
+  发 `__RESET__` + ✗ 质检打回帧，并以 fallback 如实文本作最终回复，见 §6.5 gate/__RESET__）。
+- **决策-执行循环**：planner 决策（给调用清单）→ execute 确定性执行 → planner 看工具帧再决策
+  （读全文/换词再搜/收尾）→ … → 收尾轮（调用清单空）→ model 叙述 → gate 检查 → END；
+  planner ⇄ execute 循环 ≤ `MAX_PLAN_ROUNDS=4`，超限 `_wrap_up_plan` 确定性强制收尾；
+  外层 `recursion_limit=30` 仍作兜底（§6.4）。trace 分段耗时按 planner/execute/model/gate 落盘。
 
 **⑤ 流式帧协议（server.py:472 `event_stream`）**
 
 ```mermaid
 flowchart LR
     subgraph Producer[生产者线程 _run_agent_stream_to_queue]
-        G[LangGraph stream<br/>stream_mode=messages] -->|AIMessageChunk| Q[(asyncio.Queue)]
+        G[LangGraph stream<br/>stream_mode=messages+updates] -->|AIMessageChunk<br/>（仅 model 节点）/ 过程与重置帧| Q[(asyncio.Queue)]
         G -->|ToolMessage 命令帧| Q
         G -->|None / Exception| Q
     end
@@ -326,7 +335,7 @@ flowchart TB
 - 输入 = **原始历史**（`{"访客"/"助手"}: {content}` 行）+ 本轮 `访客: {user_msg}` + 旧摘要；
 - prompt 硬约束：只总结客观内容，**不得推断动作归属，不得编造**；旧摘要中的相关事实必须保留
   （滚动式压缩，不丢旧信息）；
-- `enable_thinking=False`（与 reflector 同理：thinking 会占满 max_tokens=200 致 content 空）、
+- `enable_thinking=False`（与图内其他 LLM 调用同理：thinking 会占满 max_tokens 致 content 空）、
   `max_tokens=256`；
 - `run_in_executor` 与 agent 图**并行**（零额外延迟）；**失败返回 "" → 保留旧摘要**（静默降级，不阻塞对话）。
 
@@ -445,21 +454,30 @@ flowchart TB
 - **夜间**：`DARKMODE:on|off` + 正文 `toggle_dark_mode(mode="on")` 兜底；执行同时标 `darkModeUserChoice`
   （对话调节=访客意愿，23:00-6:00 自动切换让位）。
 
-### 6.3 "显示"类请求的保障链（20260828 影子系统事故后重构）
+### 6.3 "显示"类请求的保障链（20260828 影子系统事故后重构；20260903 起并入 planner 全权）
 
 **问题**：qwen 在"把文字显示到设备屏幕"类请求上曾频繁幻觉——凭历史声称已下发而不调工具。
 **曾经的根治方案**：后端强制路由（`_force_display`，server.py 命中显示意图正则 → 小 LLM 提取内容 →
 后端直接执行 `device_oled_display` → 注记追加），模型只能基于事实回复。
 **20260828 影子系统事故**：`_force_display` 与主链路（模型自主调用）**并存**导致决策漂移——两套显示
-执行路径互相覆盖、注记与工具轨迹冲突、模型行为不可预期。重构为**单一工具调用路径**：`_force_display`
-整体移除，显示执行回归模型自主调用，由三层保障兜底：
-1. **prompt 强化约束**（prompts.py）：显示类请求必须重新调用 `device_oled_display`（"已显示过"不算数）、
-   device_id 可省略、显示内容须为一句有意义的话（严禁把指令原文当内容）、回复引用的内容必须与调用传入的
-   text 完全一致。
-2. **reflector 模板质检**：device 技能 TOOLS 行要求工具调用，轨迹中缺失即 REVISE（§6.5）——"文本声称已显示"
-   过不了模板比对。
-3. **幂等去重**（tools/base.py）：同一用户 30s 内相同内容只下发一次，防模型重复调用。
-导航同理：`_force_navigate` 曾短暂上线后按用户要求整体撤销，恢复 agent 自主调用 + 前端白名单兜底。
+执行路径互相覆盖、注记与工具轨迹冲突、模型行为不可预期。`_force_display` 整体移除，回归**单一工具
+调用路径**——20260903 架构裁决后该路径并入 planner 全权（reflector/REVISE 废除，见 §6.5），
+现行保障链为：
+1. **意图识别确定性**：显示快道（`_display_fast_path`：屏幕名词 + 写/显示动词强模式，排除疑问/
+   否定句式）命中即实例化 `device_display` 计划；未命中由 planner LLM 决策——"调不调、调什么"
+   由 planner/系统数据决定，执行层无自由。
+2. **执行确定性**：技能模板固定展开 `device_oled_display`，屏幕文案由 execute 内小 LLM
+   （`_create_display_text`）结合对话创作（不进 planner 文本通道，杜绝"指令原文残缺片段上屏"）；
+   execute 照 spec 逐条执行 → **有执行必有工具帧**。
+3. **叙述零工具**：model 不 bind_tools，"文本声称已显示/已下发"而无帧在结构上不可能发生——
+   err 帧 + 完成式声称等叙述失真由 gate 确定性兜底（fallback 收尾，§6.5）。
+4. **幂等去重**（tools/base.py）：同一用户 30s 内相同内容只下发一次，防重复调用（保留）。
+
+（20260828-0902 曾以"prompt 强化约束 + reflector 模板质检（TOOLS 行缺失即 REVISE）+ 幂等去重"
+三层保障兜底**模型自主调用**——该层 20260903 已废除，历史见问题记录。）
+导航同理：`_force_navigate` 曾短暂上线后按用户要求整体撤销；20260903 起导航 = 导航快道/NAV_MAP
+（别名映射/字面路径/模糊归一均为系统数据，§6.5）或 planner 决策 → execute 执行 → 前端命令帧 +
+白名单执行（§6.2）——"只写文本不跳转"由快道与 planner 全权结构性覆盖。
 
 ### 6.4 生成有界性
 
@@ -479,80 +497,143 @@ flowchart TB
 - **空回复兜底**：流正常收尾但零输出 → 补发 `_RECOVERY_SENTENCE`（"喵呜……主人抱歉，泠月喵刚才脑袋卡壳了…"）；
   非流式同样处理。Rust 空回复不存库。
 
-### 6.5 技能注册表 + 受限规划（2026-08-25 重构，planner 修复的根）
+### 6.5 技能注册表 + 受限规划（20260903 裁决后形态：planner 全权）
 
-固定流程任务（导航/特效/暗色/设备显示/设备查询/content_query 内容查询/read_article 当前文章）落地为**技能注册表**（agent/skills.py，业务唯一数据源）：
-每个技能是静态定义——触发条件、参数 schema、固定工具序列模板、完成判定、回复契约。planner 只从注册表
-**选技能 + 填参数**（结构化输出 `SKILL: <名>` + `PARAMS: <JSON>`），不再自由写执行步骤；`instantiate_plan`
-把参数实例化为计划文本（`SKILL=/PARAMS=/TOOLS: /NOTE: /REPLY:` 五行契约）写入 `state.plan`。
+> ⚠️ **20260903 架构裁决（用户拍板，planner 全权）**：本节为现行形态。裁决原因（问题记录
+> 20260903）：三次事故（声称闸词表被绕、LLM-QC 采信模型自称、预算耗尽 accept）共同指向一个根因
+> ——**执行器自由度太高**（参数自拟：planner 说 /about 执行器篡成 /article/15；调用与否自决：TOOLS
+> 行点名仍可零调用；输出权自握：REVISE 打回可忽略、预算耗尽仍收）。修复不是再补一层检查（事后
+> 找补），而是把自由度从执行层全部收走——执行层变确定性执行器后，"不听话"在结构上不可能，检查层
+> 随之大幅简化（gate 只兜模型叙述层失真）。**自由 ReAct / executor 自由执行 / reflector（LLM 质检 +
+> REVISE 重考轮）/ tools_node 授权执行已整体废除**；当前拓扑 planner ⇄ execute（≤`MAX_PLAN_ROUNDS`
+> =4）→ model → gate 见 §3/§3.2④，状态字段只留 messages/plan/plan_rounds/done。本节末尾保留
+> 20260902 及更早的重构记录（历史形态中的"reflector 检查点/REVISE 打回/LLM 质检/自由 ReAct"表述
+> 均指当时，勿当现行机制）。
 
-- **确定性快道链（planner 前置，零 LLM）**：① 导航快道（`_NAV_VERB_RE` + `NAV_MAP` 页面
-  映射表，疑问/质疑句式排除 + 目标 ≤8 字约束）→ ② 显示快道（屏幕类名词 + 写/显示动词强
-  模式）→ ③ 文章快道（20260902：page_ctx 的 current_url 正则解析文章 ID + 消息含当前文章
-  指称 → 零 LLM 实例化 `read_article` 技能，TOOLS 行强制 `get_article_detail(<id>)`）。
-  快道都是**正向识别**（命中才拦截），误判有兜底（计划 TOOLS 固定 → reflector 轨迹质检可
-  打回）；反向"闲聊快道"误判零兜底（技能请求被当闲聊 = 静默吞功能），因此不做。
-- **content_query 自由 ReAct**（20260901 RAG 定位重构）：rag_query 技能废除——把说说/留言
-  拉进检索语料是污染（碎碎念无参考价值），RAG 正确用法是**文章检索的前置任务**而非意图
-  类型。content_query 承接全部内容查询：知识型（"博客里写过 X 吗"）→ 执行层自由
-  ReAct 自选 rag_search/search_notes 定位 + get_article_detail 读全文（检索管发现、工具管
-  精读；rag_search 候选行式结构化摘要，语料只收文章）；数据/列表型（最新留言/说说/公告）
-  → 直接查数据工具。检索实现见 `rag/search.py`（词法 2/3-gram BM25，文档级聚合，语料=
-  线上可见文章（20260901 净化），10 分钟懒刷新，全量重建 <100ms）。
-- **planner 显式点名工具**（20260902，根治"planner 对、model 零工具编造"类事故 233815）：
-  留言/说说/公告/时间查询是"一次简单工具调用、无流程"，不成技能——**planner 看得见工具**，
-  content_query 的 PARAMS.tools 显式点名无参只读工具（白名单 `_EXPLICIT_TOOLS` =
-  list_guestbook/list_talks/get_announcements/get_current_time），instantiate_plan 白名单
-  校验后展开进 TOOLS 行；**查"留言板/说说里有没有人聊过/写过 X"必须成对点名 list_guestbook
-  与 list_talks**（双源契约进计划文本）。知识检索类不点名、保持自由 ReAct。
-  **planner 三态**：只给 skill → 执行器按技能语义；skill+PARAMS.tools → TOOLS 行强制；
-  都不给 → chat 兜底快道保留。
+固定流程任务（导航/特效/暗色/设备显示/设备查询/content_query 内容查询/read_article 当前文章）落地为
+**技能注册表**（agent/skills.py，业务唯一数据源）：每个技能是静态定义——触发条件、参数 schema、
+固定工具序列模板、回复契约。planner 只从注册表**选技能 + 填参数**（结构化输出 `SKILL: <名>` +
+`PARAMS: <JSON>`），不再自由写执行步骤；`instantiate_plan` 把参数实例化为计划文本
+（`SKILL=/PARAMS=/TOOLS: /NOTE: /REPLY:` 五行契约）写入 `state.plan`。**TOOLS 行 = "执行清单"
+而非旧"允许名单"**——execute 把它当命令逐条执行，"点名了却不调用"的自由 20260903 已从执行层移除。
+
+- **确定性快道链（planner_node 首轮、零 LLM；命中即实例化计划、不调用 planner LLM）**：
+  ① 导航快道（`_NAV_VERB_RE` 句首动词 + `NAV_MAP` 映射/口语模糊归一，疑问/质疑句式排除、
+  目标 ≤8 字约束）→ ② 显示快道（屏幕类名词 + 写/显示动词强模式，排除疑问/否定句式）→
+  ③ 当前文章读取快道（20260901 系统性修复：page_ctx 的 current_url 正则解析文章 ID + 消息含
+  当前文章指称 → 零 LLM 实例化 `read_article` 技能，TOOLS 行强制 `get_article_detail(<id>)`）。
+  快道只判定**用户首条消息**（rounds==0 且本轮无工具帧——execute 完成后回 planner 再命中快道
+  会重复规划同一动作，20260903 设计陷阱实证）；快道都是**正向确定性识别**（命中才拦截，识别
+  依据 NAV_MAP/正则/current_url 等系统数据，不存在模型猜测通道），未命中落回 planner LLM
+  （模糊表达/未知页面交给模型）；误命中由白名单/计划注记与 gate 兜底，无害化。
+- **content_query = planner 规划通道**（20260903 新通道；承接 20260901 RAG 定位重构——rag_query
+  技能早已废除、检索语料只收文章，检索实现与评测见 rag-design.md）：一切与博客内容有关的询问与
+  核实（知识型"博客里写过 X 吗"、数据/列表型"最新留言/说说/公告/时间"、质疑/确认上轮执行是否
+  属实）都归 content_query。**planner 每轮产出调用清单**：
+  - `PARAMS.tools`：点名**无参只读**数据工具（白名单 `_EXPLICIT_TOOLS` = list_guestbook/
+    list_talks/get_announcements/get_current_time）；**查"留言板/说说里有没有人聊过/写过 X"
+    必须成对点名 list_guestbook 与 list_talks**（双源契约进计划，233815 事故教训）；
+  - `PARAMS.calls`：带参检索调用（白名单 `_CALLABLE_QUERY_TOOLS` = 上述 + search_notes/
+    rag_search/get_article_detail/list_notes）——search_notes 关键词定位 → 零结果或不相关换
+    rag_search 语义检索 → 候选命中后下一轮 get_article_detail 读全文（**article_id 只能取上一轮
+    工具返回里的真实 id，绝不自己编**）；一轮只给当前步，planner 下一轮看到"上一轮工具执行结果"
+    区块再决定 读全文/换词再搜/收尾。
+  instantiate_plan 对 tools/calls 白名单校验后展开进 TOOLS 行（非法/重复条目剔除、合法条目仍
+  生效——不因多写一个越权工具整单作废），execute 必执行。**动作工具不在任何 planner 白名单内**
+  （只能由技能模板展开）——planner 无法经 calls 通道越权动作。清单为空 = planner 决策无需工具
+  （收尾轮：信息已足够或明确查无结果），不再是"自由 ReAct"。
 
 - **导航映射表**（`NAV_MAP`）：页面别名 → 真实路径，"物联网平台→/device-console/"是系统数据而非模型猜测
   （旧版 planner 跑题的根因：看不到工具语义/页面映射）；映射为 None = 页面已下线（友链 → 如实告知、不导航）；
   未识别别名 → 如实说没有。改页面入口只改这一处。
-- **planner = 技能选择器**（graph.py `planner_node`）：注入完整技能表 + 工具完整描述（不再 80 字符截断）
-  + 低温度快分类（0.2 / 300 tokens / 30s；20260830 起 `enable_thinking=False`——"选技能+填参数"是结构化
-  分类任务，思考链纯浪费，实测 13.4s → 2-4s）；输出解析容错（`_loads_tolerant`：单引号/尾逗号/注释/
-  markdown 围栏逐项修正），解析失败按 chat 技能兜底。
-- **executor = 模板执行**（`model_node`）：system prompt = 人设 + 计划文本；TOOLS 行列出即
-  **必须逐一调用**（多个工具每一个都要调，工具结果以工具返回为准）；**TOOLS 行点名后零工具
-  豁免不适用**（20260902 收紧——040213/040409 实证：点名了 list_guestbook/list_talks 仍首轮
-  零工具，点名场景必须确定性兜底）；TOOLS 为（无）时按 SKILL 行技能语义处理（20260902 规则 1
-  按技能分支）：content_query = 自由 ReAct（需查博客数据就自行调工具、不得编造，确认与博客
-  无关才可零工具）、其他技能 = 直接回答；NOTE 行说明"不调用任何工具"时如实告知、REPLY 行是
-  回复契约。另有**规则 6（20260902 时间锚配套）**：时刻以 System 上下文的 `current_time` 为准，
-  context 未提供则先调 get_current_time，**未调用工具不得声称当前时刻**（13:34 事故实证）。
-- **reflector = 模板质检**（`reflector_node`）：LLM 对照技能模板 + 轨迹出 VERDICT（PASS/REVISE）；
-  chat/content_query 的零工具轮走**声称闸快道**（不花 LLM 钱，20260902 扩展共用）：回复含
-  **读取/执行/工具调用三类声称**（`_READ_CLAIM_RE` / `_EXECUTION_CLAIM_RE` / `_CALLED_TOOL_CLAIM_RE`，
-  后者捕获"调用了 X 工具 / 我查了 XX"式表述）但当前轮零工具 → 确定性 REVISE——正则声称闸与
-  轨迹检查互补，不能互相替代；REVISE 预算
-  `MAX_REFLECTIONS=2`，预算耗尽即接受当前结果收尾（工具执行缺失是硬约束：预算耗尽仍零工具
-  时发一次最后通牒轮再 accept）。
-  检查点 1 是**确定性闸门**（LLM 质检前）：TOOLS 行要求的工具若在当前轮轨迹缺失即 REVISE，
-  20260902 升级**逐工具核验**（`_missing_tools`：每个工具名与 ToolMessage.name 集合比对，
-  双源缺一即 REVISE 并列出缺失清单，杜绝"planner 点名双源、模型只查一个"）。豁免面：effect/
-  darkmode 仅幂等场景（`state_matches is True`，状态已与目标一致 → 合法零调用；20260902 从
-  "整个技能豁免"收窄——非幂等零工具必须确定性兜底，不留 LLM 质检随机放行；幂等判定按**集合
-  语义**比较 current_effects——逗号切分去重后比较，state_matches 幂等化，multi_turn_correction
-  FAIL 的根因）。
-  **LLM 质检输入含 QC 工具记录注记**（20260902）：reflector prompt 注入"本轮实际执行工具记录:
-  无/…"，且豁免只覆盖 TOOLS 行点名工具的缺失——**声称调用了未点名工具仍须对照轨迹核对**
-  （13:45 事故实证：质检采信回复自称导致漏判）。
-  **确定性检查与 LLM 轨迹均按轮次裁剪**（`_current_round`：最近一次修正注记之后的轨迹）：被 REVISE
-  的历史轮既不能豁免当前轮的缺失，也不参与当前轮判罚。**风格不判 REVISE**：工具已成功调用
-  （帧已产出）后，正文链接有无/格式属风格问题。
-- **`__RESET__` 协议与历史洁净**：reflector REVISE → server 发 `__RESET__:<原因>` 帧（旧裸 `__RESET__`
-  兼容）→ 前端清空 cmdText/displayText 只显示最终轮；**Rust 收到 `__RESET__` 帧会清空已累积 reply**，
-  被否定轮次连同重置标记不入 chat_history（否则污染历史注入形成坏 few-shot）。
-- **执行过程行**（前端灰色可折叠轨迹）：server 发 `__PROCESS__:<步骤>` 帧（🧭 计划 / 🛠 调用工具 /
-  ✗ 质检打回 / ✓ 质检通过）→ 前端气泡内 `<details class="agent-process">` 灰色折叠区；质检打回时被打回
-  轮次的完整文本归档为可展开子项（`archiveRejected`）。**Rust 对 `__PROCESS__` 帧只转发、不累积进 reply**
-  （过程行不属于最终回复，否则污染 chat_history）。
-- **测试**：`test_skills.py`（映射表完整性、instantiate_plan 参数实例化含已下线/未识别区分、plan 编码/解析
-  往返与容错）+ golden set 端到端 + `eval/recall_eval.py`（检索基线，直接测线上 rag/search.py）。
-  改技能注册表/plan 契约后必须跑。
+- **planner = 唯一决策者**（graph.py `planner_node`）：注入完整技能表（build_planner_context，
+  read_article 不可见——系统快道专用，planner 无参可填）+ 可规划查询工具描述 + 页面上下文 +
+  历史工具帧摘要 + 轮次信息；低温度快决策（0.2 / max_tokens=400 / 30s；`enable_thinking=False`
+  ——"选技能+填参数"是结构化分类任务，思考链纯浪费，20260830 实测 13.4s → 2-4s）；输出解析
+  容错（`_loads_tolerant`：单引号/尾逗号/注释/markdown 围栏逐项修正），解析失败按 chat 技能
+  兜底。每轮读 execute 返回的工具帧决定下一轮：质疑轮 → content_query 验证；err 帧 → 修正参数
+  重试一次或如实收尾；动作技能已执行 → 去重强制收尾（非首轮再规划动作且工具名都已出现在帧中时，
+  动作一次决策即完成，多轮只发生在 content_query 检索链路）。字面路径防推断确定性修正：planner
+  选 navigate 且用户消息含 / 开头路径时，target 强制用字面路径（qwen 曾把 /iot 推断成"物联网平台"
+  做替身跳转，golden nav_nonexistent 实证）。轮次上限 `MAX_PLAN_ROUNDS=4`，超限 `_wrap_up_plan`
+  强制收尾（基于已有帧如实作答，不存在无限追问）；planner LLM 异常（API 抖动/超时）→ 收尾兜底
+  不炸对话；LLM 调用 >30s 打 WARN（20260830 慢调用监控约定）。
+- **execute = 确定性执行节点**（graph.py `execute_node`，取代旧 tools_node）：TOOLS 行 spec
+  （`<工具名>(<json 参数>)`，参数由 instantiate_plan 以 json.dumps 落盘在 spec 里）**逐条照单
+  执行**——参数解析先 json.loads 再 ast.literal_eval（JSON 的 true/false/null 不是 Python
+  字面量，20260903 单测抓出），产出 ToolMessage 帧（tool_call_id=execute_N）回 planner；未知
+  工具/参数解析失败 → `__ERROR__` 帧（planner 据错误修正参数或如实收尾，不炸图）。**无自由
+  意志、无授权检查分支**：清单经 instantiate_plan 白名单校验生成，越权工具在 skills 白名单即被
+  剥，到不了 execute。执行前做断连检查（写操作绝不发生在用户已离开之后，20260827 实测教训
+  保留）。唯一保留的"创作"自由 = device_oled_display 缺 text 时由小 LLM 结合对话创作屏幕文案
+  （`_create_display_text`）——技能模板固有设计（屏幕文案在展示时创作，不进 planner 文本通道），
+  非执行层越权。
+- **model = 零工具 narrator**（graph.py `model_node`，取代旧 ReAct executor）：**不 bind_tools**
+  ——LLM 结构上不可能发出 tool_calls，"执行器不听 planner"的旧根因（模型自选工具/自拟参数/跳过
+  检索直接答）从模型侧连通道都没有。system prompt = 人设（prompts.py；旧"执行规则"段已整体移除
+  ——教 narrator 如何调工具只会诱导它在回复里表演调用）+ 计划文本 + 本轮工具帧摘要 + 页面上下文
+  + 叙述纪律（_EXECUTOR_PROMPT：站内事实只来自工具帧/页面上下文、无帧不得声称查过/读过/执行过、
+  被质疑时如实承认无执行记录、err 帧如实转述失败、正文禁命令前缀与伪工具调用表演、站内链接只能
+  给真实出现的地址）。`enable_thinking=False`（20260831 起：长上下文思考链爆炸——46.8s/79.1s/
+  105.8s 慢调用实证，golden 全量回归把关）。
+- **gate = 唯一确定性检查**（graph.py `gate_node`，取代旧 reflector 的 9 确定性闸 + LLM 质检 +
+  REVISE）：20260903 起执行正确性不需要检查（execute 是确定性执行器，"工具没按计划调"结构上
+  不存在），gate 只兜**叙述失真**（narrator 文本声称 ≠ 帧事实：声称有执行但无帧/帧失败却说成功/
+  确认式导航却说已到达/编造资源 URL/空回复）与**计划注记不遵守**（NOTE 明示页面不存在/已下线时
+  回复未如实说明）。声称检查**作用域收窄**——fallback 会吞掉整轮叙述、误伤成本高，宁可漏拦不可
+  误伤（设计见 graph.py `_claim_issue` 注释）：
+  - 任何轮：回复正文的命令前缀文本（`_CMD_PREFIX_RE`，命中即确凿违规）；编造资源 URL
+    （`/api` 或图片地址须逐字出现在工具返回/用户消息，代码块内豁免——机器串逐字校验无假阴性）；
+  - chat 零工具轮：仅第一人称工具调用声称（`_CHAT_TOOL_CLAIM_RE`，窄声称：第一人称 + 工具相关
+    动词才算）——第三人称/概念性提及（"防止模型假装调用了工具"这类知识讨论、引用访客的话）不误伤；
+  - content_query 零工具轮（**异常收尾**——计划本应有调用清单却留空）：读取/执行/调用三族声称
+    宽查（`_READ_CLAIM_RE`/`_EXECUTION_CLAIM_RE`/`_CALLED_TOOL_CLAIM_RE`）——该场景"本该查证"，
+    声称误伤成本低；
+  - 有帧轮：声称天然有据，不做文本对照；只兜 err 帧 + 完成式声称（回复无失败类实词时查
+    `_COMPLETION_CLAIM_RE`：工具失败还称"已跳转/已开启/已完成"= 把失败说成成功）、NAVIGATE
+    确认帧 + 到达声称（`_NAV_ARRIVAL_RE`，navigate 技能轮——确认式导航在访客确认前不得声称已到达）；
+  - navigate 零工具注记轮：核验回复如实措辞（已下线/不存在词表 `_HONEST_DOWN`/`_HONEST_GONE`）。
+  判定结果只有两种：通过 → done=True 收尾；不通过 → **validate→fallback 直接收尾（无 REVISE
+  重考轮）**：done=True + `[Fallback 决定]` SystemMessage + fallback_text（人设内如实回复，不再
+  是"修正要求"）——server 据此发 `__RESET__` 并以 fallback 文本替换最终回复（见下）。语义：检查
+  不通过说明 narrator 不可信，重考一轮只是再给它一次编的机会，确定性文本收尾更诚实也更省。
+- **`__RESET__` 协议与历史洁净（20260903 起由 gate fallback 触发）**：gate fallback → server 发
+  `__RESET__:<原因>` 帧（旧裸 `__RESET__` 兼容）→ 前端清空已展示文本只显示最终轮；**Rust 收到
+  `__RESET__` 帧会清空已累积 reply**（chat.rs）——被 fallback 否定的 narrator 全文连同重置标记
+  不入 chat_history（否则污染历史注入形成坏 few-shot），fallback 如实文本作为最终回复入库。
+  20260903 起 `__RESET__` 只由 gate fallback 发出（无 REVISE 重考轮）。
+- **执行过程行**（前端灰色可折叠轨迹）：server 发 `__PROCESS__:<步骤>` 帧（🧭 规划中/🧭 计划 /
+  🛠 正在调用工具…（planner 决策含执行清单时发，execute 执行期几秒静默防"卡死"）/ 工具帧完成
+  注记（导航/特效/夜间为"🛠 调用工具：…"，其余非命令类为"✅ 工具执行完成"）/ ✗ 质检打回
+  （gate fallback）/ ✓ 质检通过（非 chat 技能收尾））→ 前端气泡内 `<details class="agent-process">`
+  灰色折叠区；gate 打回时被否定叙述的完整文本归档为可展开子项（`archiveRejected`）——用户既只看
+  到最终输出，又能展开查看中间过程。**Rust 对 `__PROCESS__` 帧只转发、不累积进 reply**（过程行
+  不属于最终回复，否则污染 chat_history）。
+- **测试**：`test_skills.py`（映射表完整性、instantiate_plan 参数实例化含已下线/未识别区分、
+  content_query calls/tools 白名单展开、plan 编码/解析往返与容错、execute 确定性执行、gate 收窄
+  作用域 + fallback 终局语义）+ golden set 端到端 + `eval/recall_eval.py`（检索基线，直接测线上
+  rag/search.py）。改技能注册表/plan 契约后必须跑。
+
+> **历史沿革（20260902 及更早，保留作踩坑记录）**：本节机制由 20260825 受限规划 → 20260902 显式
+> 点名 + 反射层逐工具核验演进而来，20260903 已重构为上方形态。关键教训（细节见 docs/问题记录.md）：
+> - **233815「有没有关于这方面的留言」**：planner 选对 content_query 但执行层零工具编造"两边都翻了/
+>   留言板 1 条「1」"——TOOLS 行空 + 执行器自由的双重真空；当时修复 = reflector 检查点 1 升级
+>   **逐工具核验**（`_missing_tools`：TOOLS 行每个工具名必须出现在当前轮轨迹 ToolMessage.name，
+>   双源缺一即 REVISE 并列出缺失清单）——20260903 由 execute"清单必执行"结构性根除，核验反射层
+>   随之可删；golden 用例 guestboard_talk_double_source 锁双源。
+> - **幂等判定集合化 + 豁免收窄**（20260902，multi_turn_correction「我说错了…我要把樱花关掉」模型
+>   回"已经关掉啦"零 EFFECT 帧）：effect/darkmode"状态与目标是否一致"按**集合语义**比较
+>   current_effects（逗号切分），幂等场景合法零调用——现行由 planner 判断（状态已达成 → 不规划
+>   工具、chat 告知现状），非幂等必产出调用清单交 execute。
+> - **13:45 QC verbatim 采信模型自称**：reflector LLM 质检把"本轮实际执行工具记录"之外的未点名
+>   声称当事实放行——LLM 质检会采信模型谎言，是 20260903 废除 LLM 质检、gate 全部确定性化的
+>   直接动因之一。
+> - **声称闸正则族**（20260828-0902 事故族逐案补丁：执行/读取/调用声称三族、双侧源分支、13:34
+>   时间锚事故配套、0901/0902 零工具编造补丁）——词表式事后打地鼠（歌词"找到几条"即误伤）也证明：
+>   执行层无自由后，声称检查只保留零帧异常轮窄作用域即可（宁漏勿误）。
+> - **时间锚（20260902 注入，现行）**：`current_time=`（含星期）进 System 上下文首条；旧 executor
+>   规则 6（时刻以 context 为准、未调用工具不得声称当前时刻）随 executor 废除，时间纪律由
+>   planner 规划 get_current_time + narrator 叙述纪律承接（见 §3.2③）。
 
 ---
 
@@ -564,12 +645,12 @@ flowchart TB
 - **关键参数**：`temperature=0.7`、`max_tokens=8192`、`timeout=120s`。
 - ⚠️ `agent_max_iterations=10` / `agent_early_stopping_method` 在 settings.py 有定义但**从未被代码读取**
   （create_agent 时代遗留的 LangChain 参数，手写图不消费）——死配置，实际生成有界性靠 `recursion_limit=30`（§6.4）。
-- **enable_thinking 全关**（settings `llm_enable_thinking=True` 默认开，但图内四个 LLM 调用均 per-call
-  显式关闭，走 `extra_body`，与总开关无关）：planner 分类（0.2/300t，20260830 实测 13.4s → 2-4s）、
-  **executor（20260831 关——46.8s/79.1s/105.8s 慢调用实证，golden 全量回归把关）**、reflector 质检
-  （max_tokens=200，thinking 占满致 content 截断成空）、`_summarize_dialogue`（256t）。Qwen 思维链
-  走独立 `reasoning_content` 字段返回，不进回复正文。（`_extract_display_intent` 已随 20260828
-  _force_display 移除而删除。）
+- **enable_thinking 全关**（settings `llm_enable_thinking=True` 默认开，但图内 LLM 调用均 per-call
+  显式关闭，走 `extra_body`，与总开关无关）：planner 决策（0.2/400t/30s，20260830 实测 13.4s →
+  2-4s）、**model 叙述（narrator，20260831 关——46.8s/79.1s/105.8s 慢调用实证，golden 全量回归
+  把关）**、execute 屏幕文案创作（`_create_display_text`，0.7/80t/20s）、`_summarize_dialogue`
+  （256t）。Qwen 思维链走独立 `reasoning_content` 字段返回，不进回复正文。（`_extract_display_intent`
+  已随 20260828 _force_display 移除而删除。）
 - **TTS 关闭**（`tts_enabled=false`）：预留字段，未启用。
 
 ---
@@ -618,10 +699,16 @@ flowchart TB
 
 ## 10. 已知边界与坑（维护必读）
 
-1. **qwen 幻觉面**：元消息（"确保按系统提示词调用"）下可能"表演"调用；正文输出变形命令（`SNOW_EFFECT:` 等）
-   ——前端格式容忍解析 + cleanAgentText 双保险，非 100%。
-2. **导航幻觉回归风险**：强制路由撤销后，模型"去X板块"不调工具只写文本的幻觉回归——前端正文兜底解析
-   （markdown 链接/裸 URL 确认式）+ 白名单 + 同源校验救一部分，**不保证全救**。
+1. **qwen 幻觉面（20260903 后形态）**：执行层无自由后，幻觉不再是"假装调用了工具"（有执行必有帧），
+   而是 narrator **叙述失真**（正文伪命令/变形命令如 `SNOW_EFFECT:`、无据声称、编造链接）与 planner
+   **决策漂移**（选错技能/参数/目标）——前者由 gate 兜底（命令前缀/声称/URL 检查 → fallback 如实替换），
+   后者由技能注册表 + 工具白名单 + NAV_MAP/确定性快道结构性收敛；前端格式容忍解析 + cleanAgentText
+   仍作双保险，非 100%。
+2. **导航幻觉回归风险（20260903 已结构性收敛）**：导航由确定性快道（`NAV_MAP` 别名/字面路径/口语
+   模糊归一，系统数据）或 planner 决策发起 → execute 执行；narrator 无工具通道，正文"假装跳转"
+   表演由 gate/叙述纪律兜底（fallback 如实替换）。残余风险在 planner 对模糊目标的映射误判——NAV_MAP
+   白名单 + "不存在/已下线"注记 + 前端白名单 + 同源校验（markdown 链接/裸 URL 确认式兜底）收敛，
+   **不保证全救**。
 3. **摘要独立化后的维护要点**（2026-08-26 起，双端剥离代码已删）：改摘要逻辑只看两处——server.py
    `_summarize_dialogue`（独立任务调用，`enable_thinking=False` 是硬性要求）与 Rust `__SUMMARY__` 帧
    解析（帧必须在 `__END__` 之前）；golden `summary_round` 断言"回复不得包含 SUMMARY:"，回归时必跑。

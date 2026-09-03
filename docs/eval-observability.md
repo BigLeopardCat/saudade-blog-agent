@@ -2,11 +2,25 @@
 
 > 升级路线（手写图 → eval → 记忆 → 可观测 → 多 agent）的**验证地基**：先立"怎么验证"，再动工升级。
 > 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、CLAUDE.md（运维）。
-> 最后更新：2026-09-02（golden 扩至 55 条、33 标签：rag_* 22（12 条 recall 正例同源出题 + noise/拒答组）、
+> 最后更新：2026-09-03（planner 全权重构：gate fallback 替代 reflector/REVISE，见文首变更注）；上版 2026-09-02（golden 扩至 55 条、33 标签：rag_* 22（12 条 recall 正例同源出题 + noise/拒答组）、
 > chat 7、multi-turn 7、nav 6、effect 6、hallucination/noise/knowledge/content_query/device/tool_call/
 > article_read/efficiency 等；recall_eval 21 条 queries（12 正例 + 9 噪声）直接测线上 rag/search.py，
 > 词法 2/3-gram BM25 基线 recall@1=1.00；20260901 定位重构 rag_query 技能废除、content_query 承接、
 > 语料净化仅文章；20260902 声称闸三族 + 进程隔离 runner + efficiency 断言、executor 亦关 thinking）
+
+> **20260903 架构变更注（planner 全权，正文保留为历史设计记录）**：执行链已重构为
+> planner ⇄ execute → model → gate（决策-执行分离，轮次上限 `MAX_PLAN_ROUNDS=4`）——
+> 自由 ReAct、reflector、REVISE 已废除（见 [agent-architecture.md](agent-architecture.md)
+> §3/§6.5）。本文各节的旧执行路径/检查手段按历史记录理解；指标口径按 20260903 变化如下：
+> - trace 图路径分段已由 planner/model/tools/reflector 变为 **planner/execute/model/gate**
+>   ——"reflector 修正了几次"无对应物（gate 不 REVISE 重考、直接 fallback 收尾）；
+> - §4/§7「REVISE 打回成本」效率代理指标（efficiency 字段 resets 总数/打回轮）现指
+>   **gate fallback 次数**：gate fallback 时 server 仍发 `__RESET__` 并以 fallback 如实
+>   文本替换最终回复——runner 按 `__RESET__` 帧计数 resets（run_golden.py），口径不变；
+> - L0"反射器确定性闸" → **gate 确定性声称闸**（无 LLM 质检、无重考轮；声称检查作用域
+>   收窄——宁可漏拦不可误伤）；
+> - 零工具即 FAIL 类断言（require_tool_calls/require_tool_calls_any）继续适用：工具轨迹
+>   由 planner 调用清单 → execute 产生，断言只查最终轨迹、不要求特定路径。
 
 ---
 

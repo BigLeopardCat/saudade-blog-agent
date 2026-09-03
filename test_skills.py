@@ -1,13 +1,23 @@
 # -*- coding: utf-8 -*-
-"""技能注册表 + plan 契约单元测试（纯函数，无 LLM，秒级）。
+"""技能注册表 + plan 契约 + gate/execute 语义单元测试（纯函数/确定性，无 LLM，秒级）。
+
+20260903 架构裁决后同步：reflector（LLM 质检 + REVISE）与 tools_node（授权执行）
+已废除——graph 改为 planner ⇄ execute（确定性执行调用清单）→ model（零工具
+narrator）→ gate（确定性检查 + fallback 收尾）。原"落回 LLM 质检"类用例不再
+存在（无 LLM 质检路径）；声称闸测试改测 gate 的收窄后作用域（validate→fallback
+终局语义，fallback_text 替换最终回复，无重考轮）。
 
 覆盖：
   - 导航映射表完整性（值集 ⊆ 白名单）
   - instantiate_plan 参数实例化：navigate（direct/suggest/已下线/未识别——NAV_MAP.get
     对"已下线"与"未识别"都返回 None，必须用 target in NAV_MAP 区分，防止未识别页面
     被误报成"已下线"）、effect/darkmode/device_display 参数填充、未知技能 → chat 兜底
+  - content_query calls/tools 白名单展开（20260903 planner 全权通道）
   - plan_encode/parse_plan 往返一致
   - planner 输出解析容错（单引号/尾逗号/markdown 围栏/坏 JSON → 优雅降级）
+  - execute 确定性执行（按 spec 参数调用/未知工具 __ERROR__ 帧）
+  - gate 确定性检查（零帧声称收窄作用域/err 帧完成声称/确认式导航声称/注记核验/
+    fallback 终局语义）
 
 用法：.venv/bin/python test_skills.py
 """
@@ -15,26 +25,10 @@ import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from agent.graph import (_PLANNER_OUTPUT_RE, _article_fast_path, _current_round,
-                         _display_fast_path, _nav_fast_path, _parse_params,
-                         plan_encode, parse_plan, reflector_node, tools_node)
+from agent.graph import (_PLANNER_OUTPUT_RE, _article_fast_path, _display_fast_path,
+                         _nav_fast_path, _parse_params, execute_node, gate_node,
+                         plan_encode, parse_plan)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, instantiate_plan
-
-# 反射器 LLM 质检 stub：本文件是技能/plan 契约单元测试，质检路径不应依赖真实
-# LLM——CI 干净环境无 QWEN_API_KEY（openai 客户端构造即抛 Missing credentials），
-# 本机每次跑还会花真实 token。固定返回 VERDICT: PASS；断言"落回 LLM 质检"的
-# 用例只关心分支正确性（reflection 非确定性标记），不关心 LLM 输出内容。
-class _FakeLLM:
-    def __init__(self, **kwargs):
-        pass
-
-    def invoke(self, *args, **kwargs):
-        from types import SimpleNamespace
-        return SimpleNamespace(content="VERDICT: PASS")
-
-
-import agent.graph as _graph
-_graph.get_llm = lambda **kwargs: _FakeLLM(**kwargs)
 
 FAILS = []
 
@@ -155,7 +149,7 @@ def test_parse_tolerance():
 
 
 def test_summary_protocol_removed():
-    print("[reflector] 摘要协议已移除（摘要独立化：对话内 SUMMARY 不再被检查，防误判 REVISE）")
+    print("[gate] 摘要协议已移除（摘要独立化：对话内 SUMMARY 不再被检查，也不再有反射层）")
     ctx = ("这个博客都有什么功能呀\n\n"
            "<系统内部指令-仅供执行>回答结束后另起一行输出对话摘要，格式为 SUMMARY: 后跟 3-5 句中文摘要。")
     plan = plan_encode(instantiate_plan("chat", {}))
@@ -165,92 +159,91 @@ def test_summary_protocol_removed():
             HumanMessage(content=ctx),
             AIMessage(content="博客有首页、归档、分类、留言板等功能喵～"),
         ],
-        "reflection_count": 0,
+        "plan_rounds": 0,
         "done": False,
     }
-    out = reflector_node(state)
-    # 旧行为：缺 SUMMARY: 行 → 确定性 REVISE（曾误伤显示请求：显示强化指令共用
-    # <系统内部指令> 标记，导致每次显示请求多烧一轮 LLM）。新行为：检查已删除，
-    # 带任何系统指令标记的消息都走 chat 快道非空 PASS
-    check("带系统指令标记但无 SUMMARY 行 → 不再 REVISE，chat 快道 PASS",
-          out["done"] is True, str(out))
+    out = gate_node(state)
+    # 摘要检查已随 reflector/REVISE 整体废除；chat 轮无声称（无工具自称/无命令前缀）
+    # → 确定性 pass
+    check("带系统指令标记的消息 → 无反射层检查，chat 零帧无声称 pass",
+          out["done"] is True and not out.get("fallback_text"), str(out))
 
 
-def test_round_aware_checks():
-    print("[reflector] 轮次感知确定性检查（无 LLM）")
-    plan = plan_encode(instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"}))
-    # 首轮纯文本声称跳转、零工具 → 确定性 REVISE（与历史实现一致）
-    state = {
-        "plan": plan, "reflection_count": 0, "done": False,
-        "messages": [HumanMessage(content="打开物联网平台"),
-                     AIMessage(content="已为您跳转到物联网平台：[物联网平台](https://saudade.site/device-console/)")],
-    }
-    out = reflector_node(state)
-    check("首轮零工具文本声称 → REVISE",
-          out["done"] is False and any(
-              isinstance(m, SystemMessage) and "navigate_to" in m.content for m in out["messages"]),
-          str(out))
-    # 首轮调工具成功（帧产出）→ 当前轮有 ToolMessage，确定性闸放行
-    msgs = [HumanMessage(content="打开物联网平台"),
-            AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {"path": "/device-console/", "confirm": False}, "id": "t1"}]),
-            ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/device-console/", tool_call_id="t1", name="navigate_to")]
-    check("_current_round 无修正注记 → 全量",
-          _current_round(msgs) == msgs, str(_current_round(msgs)))
-    # 首轮调用后被 REVISE，次轮仅文本链接未再调工具：历史 ToolMessage 不得豁免
-    # （曾导致 golden 无帧收尾——全局扫描看到历史调用就放行）
-    msgs2 = msgs + [SystemMessage(content="[Reflection 检查未通过：风格]"),
-                    AIMessage(content="已为您跳转到物联网平台：[物联网平台](https://saudade.site/device-console/)")]
-    check("_current_round 只取最近修正注记之后",
-          _current_round(msgs2) == msgs2[-1:], str(_current_round(msgs2)))
-    state = {"plan": plan, "reflection_count": 0, "done": False, "messages": msgs2}
-    out = reflector_node(state)
-    check("次轮零工具（历史有调用）→ 确定性 REVISE",
-          out["done"] is False and any(
-              isinstance(m, SystemMessage) and "navigate_to" in m.content for m in out["messages"]),
-          str(out))
-    # 反向检查同理：NOTE 要求零工具的轮次，历史轮已调过工具不算越权
-    plan2 = plan_encode(instantiate_plan("navigate", {"target": "友链"}))
-    msgs3 = msgs + [SystemMessage(content="[Reflection 检查未通过：旧轮]"),
-                    AIMessage(content="友链板块已下线，无法访问。可以去留言板看看哦！")]
-    state = {"plan": plan2, "reflection_count": 0, "done": False, "messages": msgs3}
-    out = reflector_node(state)
-    check("下线计划：历史调用不计入当前轮 → 快道 PASS",
-          out["done"] is True and out["reflection"], str(out))
+def test_gate_note_honesty():
+    """gate 注记核验（零帧轮，无 LLM）：navigate 计划 NOTE 明示页面不存在/已下线
+    （instantiate_plan 注记路径，计划 TOOLS 为空 → 无执行帧）时，回复必须如实——
+    如实措辞 → pass；声称跳转/打开等（把"不存在"说得像真的一样）→ fallback
+    （validate→fallback 终局：fallback_text 是替换最终回复的人设内文本，无 REVISE
+    重考轮——20260903 架构：执行正确性由 execute 确定性保证，gate 只兜叙述失真）。
 
-
-def test_confirm_nav_claim_check():
-    """确认式导航声称检查（确定性，无 LLM）：NAVIGATE: 帧 + 完成式声称 → REVISE。
-
-    只测命中路径（确定性检查命中即 return，不花 LLM 钱）；放行路径（合法确认
-    口吻/AUTO_NAVIGATE 直跳声称）会走 LLM 质检，属 golden 场景，不在本文件。
+    20260903 结构性说明：带工具帧的 navigate 计划（正常导航）在本架构中 execute
+    必产出帧、叙述轮必有据——"首轮零工具文本声称跳转"的状态不可能出现（零帧 +
+    带工具计划 = 图拓扑不可达），因此旧轮次感知检查（_current_round/历史调用
+    豁免）整体删除；只保留"计划本就零工具"的注记核验路径。
     """
-    print("[reflector] 确认式导航声称检查（无 LLM）")
+    print("[gate] 零帧注记核验（navigate 下线/不存在）")
+
+    def _st(plan, reply):
+        return {"plan": plan_encode(instantiate_plan("navigate", plan)), "done": False,
+                "plan_rounds": 0,
+                "messages": [HumanMessage(content="打开它"), AIMessage(content=reply)]}
+
+    # 已下线注记（友链）：如实 → pass；声称跳转/说得像能去 → fallback(not_honest)
+    out = gate_node(_st({"target": "友链"}, "友链板块已经下线啦，没法访问了喵～可以去留言板看看哦！"))
+    check("下线注记 + 如实措辞 → pass",
+          out["done"] is True and not out.get("fallback_text"), str(out))
+    out2 = gate_node(_st({"target": "友链"}, "好的，这就为您跳转到友链页面！"))
+    check("下线注记 + 声称跳转 → fallback(not_honest)",
+          out2["done"] is True and bool(out2.get("fallback_text"))
+          and "下线" in out2["fallback_text"], str(out2.get("fallback_text", ""))[:80])
+    # 不存在注记（字面路径白名单外）：如实 → pass；说得像真的一样 → fallback
+    out3 = gate_node(_st({"target": "/iot"}, "抱歉喵，/iot 这个页面不存在哦，可以去物联网平台看看！"))
+    check("不存在注记 + 如实措辞 → pass",
+          out3["done"] is True and not out3.get("fallback_text"), str(out3))
+    out4 = gate_node(_st({"target": "/iot"}, "已经帮你打开 /iot 啦，页面正在加载～"))
+    check("不存在注记 + 声称已打开 → fallback(not_honest)",
+          out4["done"] is True and bool(out4.get("fallback_text")), str(out4.get("fallback_text", ""))[:80])
+
+
+def test_gate_nav_pending_claim():
+    """gate 确认式导航声称检查（确定性，无 LLM）：navigate 帧只有 NAVIGATE:
+    （待确认）无 AUTO_NAVIGATE:（已直跳）时，回复含到达声称（已经带/已经到/
+    已经跳转…）→ fallback——NAVIGATE: 帧 = 前端弹窗等访客确认，页面未动，
+    回复"已经带您到"即叙述失真（用户视角幻觉）。
+
+    20260903 语义变化：旧实现命中即 REVISE 打回重考（LLM 有第二轮机会）；
+    新实现 validate→fallback 终局——不重考，fallback 文本（请访客确认跳转）
+    直接替换回复。放行口吻（"已为您打开跳转确认"）不触发，pass。
+    """
+    print("[gate] 确认式导航声称（NAVIGATE 帧 + 到达声称 → fallback）")
     plan = plan_encode(instantiate_plan("navigate", {"target": "留言板", "mode": "suggest"}))
     assert '"confirm": true' in plan  # suggest 模式 → confirm=true（确认式，声称检查的前提）
 
     def frame_state(reply: str, frame: str):
+        # 20260903：帧由 execute 直接产出，messages 无需旧的 tool_calls AIMessage
         return {
-            "plan": plan, "reflection_count": 0, "done": False,
+            "plan": plan, "done": False, "plan_rounds": 0,
             "messages": [HumanMessage(content="带我去留言板看看"),
-                         AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {"path": "/guestbook", "confirm": True}, "id": "t1"}]),
-                         ToolMessage(content=frame, tool_call_id="t1", name="navigate_to"),
+                         ToolMessage(content=frame, tool_call_id="execute_0", name="navigate_to"),
                          AIMessage(content=reply)],
         }
 
-    # 只列确定性命中的主频模式（已经带/已经跳转/已经到）；"已经为您打开页面，
-    # 现在就在留言板啦"等夹字变体由 LLM 质检兜底（走 LLM，属 golden 端到端场景）
     cases = [
-        # 用户实测案例：模型调用工具返回 NAVIGATE:（确认式），但回复"已经带您到"
+        # 用户实测案例：navigate 返回 NAVIGATE:（确认式），但回复"已经带您到"
         ("已经带您到留言板页面了喵！", "NAVIGATE:https://saudade.site/guestbook"),
         ("已跳转成功，请查看", "NAVIGATE:https://saudade.site/guestbook"),
         ("好的，已经到留言板了", "NAVIGATE:https://saudade.site/guestbook"),
     ]
     for reply, frame in cases:
-        out = reflector_node(frame_state(reply, frame))
-        check(f"确认式声称 → REVISE：{reply[:14]}…",
-              out["done"] is False and any(
-                  isinstance(m, SystemMessage) and "确认式帧" in m.content for m in out["messages"]),
-              str(out.get("reflection", ""))[:60])
+        out = gate_node(frame_state(reply, frame))
+        check(f"确认式声称 → fallback(nav_pending)：{reply[:14]}…",
+              out["done"] is True and bool(out.get("fallback_text"))
+              and "确认" in out["fallback_text"],
+              str(out.get("fallback_text", ""))[:60])
+    # 放行口吻（请访客确认，未声称到达）→ pass
+    out_ok = gate_node(frame_state("已为您打开跳转确认，请点击确认即可前往留言板～", "NAVIGATE:https://saudade.site/guestbook"))
+    check("确认口吻（未声称到达）→ pass",
+          out_ok["done"] is True and not out_ok.get("fallback_text"), str(out_ok))
 
 
 def test_nav_fast_path():
@@ -377,33 +370,48 @@ def test_article_fast_path():
 
 
 def test_explicit_tools():
-    """planner 显式点名工具（20260902 用户拍板）：留言/说说/公告/时间类查询是
-    "一次简单工具调用、无流程"——planner 看得到工具描述，PARAMS.tools 显式点名，
-    instantiate_plan 白名单校验后展开进 TOOLS 行，reflector 检查点 1 逐工具核验
-    强制调用（根治自由 ReAct 下零工具编造：233815 模型零工具声称"两边都翻了"）。
-    planner 三态：只给 skill → 执行器按技能语义（content_query 自由 ReAct）；
-    skill+PARAMS.tools → TOOLS 行强制；都不给 → chat 兜底。"""
-    print("[explicit_tools] planner 显式点名工具")
-    # 双源点名 → TOOLS 行两个工具（与 plan_encode 的 '; ' 连接兼容）
+    """content_query 调用清单白名单展开（20260903 planner 全权通道）：planner 经
+    PARAMS.tools（无参只读点名）或 PARAMS.calls（带参检索调用）产出调用清单，
+    instantiate_plan 白名单校验后展开进 TOOLS 行 → execute 确定性执行。
+    20260902 起 TOOLS 行从"执行器自决的允许名单"变为"执行器必执行的命令清单"；
+    20260903 execute 无自由意志——清单里的工具全部执行，不存在"点名了仍不调"，
+    旧"逐工具核验（缺一 REVISE）"反射层随之删除。"""
+    print("[explicit_tools] content_query 调用清单白名单展开")
+    # 双源点名（PARAMS.tools）→ TOOLS 行两个工具（与 plan_encode 的 '; ' 连接兼容）
     p = instantiate_plan("content_query", {"tools": ["list_guestbook", "list_talks"]})
     check("双源点名 → TOOLS 展开 list_guestbook+list_talks",
           p["tools"] == ['list_guestbook({})', 'list_talks({})'],
           f"tools={p['tools']} note={p['note']}")
-    # 白名单外工具 → 剔除（合法条目仍生效）
+    # 白名单外工具（tools 通道）→ 剔除（合法条目仍生效）
     p = instantiate_plan("content_query", {"tools": ["list_guestbook", "rag_search"]})
-    check("混填（合法+越权）→ 只留白名单内工具",
+    check("tools 混填（合法+越权）→ 只留白名单内无参工具",
           p["tools"] == ['list_guestbook({})'],
           f"tools={p['tools']}")
-    # 全非法 → 空（回退自由 ReAct 现状，不恶化）
-    p = instantiate_plan("content_query", {"tools": ["rag_search", "get_article_detail"]})
-    check("全非法点名 → tools 空（自由 ReAct 兜底）", p["tools"] == [], f"tools={p['tools']}")
-    # 未填/非列表 → 空（现状）
+    # 带参检索走 calls 通道（白名单 _CALLABLE_QUERY_TOOLS）
+    p = instantiate_plan("content_query", {"calls": [
+        {"tool": "search_notes", "args": {"keyword": "ESP32"}},
+        {"tool": "navigate_to", "args": {"path": "/about", "confirm": False}},  # 动作工具不在白名单
+    ]})
+    check("calls 混填（合法+动作工具）→ 只留白名单内调用",
+          p["tools"] == ['search_notes({"keyword": "ESP32"})'],
+          f"tools={p['tools']}")
+    # 全非法 → 空（调用清单为空 = 收尾轮——planner 决策无需工具，不再有"自由 ReAct"）
+    p = instantiate_plan("content_query", {"tools": ["navigate_to"], "calls": [
+        {"tool": "toggle_effect", "args": {}}]})
+    check("全非法点名 → tools 空（=收尾轮语义）", p["tools"] == [], f"tools={p['tools']}")
+    # 未填/非列表 → 空（收尾轮）
     p = instantiate_plan("content_query", {})
-    check("未点名 → tools 空（自由 ReAct 现状）", p["tools"] == [], f"tools={p['tools']}")
+    check("未点名 → tools 空（收尾轮）", p["tools"] == [], f"tools={p['tools']}")
     # 去重
     p = instantiate_plan("content_query", {"tools": ["list_guestbook", "list_guestbook"]})
     check("重复点名 → 去重", p["tools"] == ['list_guestbook({})'], f"tools={p['tools']}")
-    # plan 往返：TOOLS 行解析后工具名保持（reflector 逐工具核验依赖）
+    # calls 参数逐字保留（execute literal_eval 还原，白名单校验不吞参数）
+    p = instantiate_plan("content_query", {"calls": [
+        {"tool": "get_article_detail", "args": {"article_id": 21, "doc_type": "note"}}]})
+    check("calls 带参调用 → spec 逐字展开",
+          p["tools"] == ['get_article_detail({"article_id": 21, "doc_type": "note"})'],
+          f"tools={p['tools']}")
+    # plan 往返：TOOLS 行解析后工具名保持（execute 依赖）
     obj = instantiate_plan("content_query", {"tools": ["list_guestbook", "list_talks"]})
     obj["params"] = {"tools": ["list_guestbook", "list_talks"]}
     parsed = parse_plan(plan_encode(obj))
@@ -413,270 +421,191 @@ def test_explicit_tools():
           and parsed["chat"] is False,
           f"parsed={parsed}")
 
-    # reflector 检查点 1 逐工具核验（20260902）：双源缺一个即 REVISE
-    plan_txt = plan_encode(instantiate_plan(
-        "content_query", {"tools": ["list_guestbook", "list_talks"]}))
-    # 零工具 → REVISE
-    out = reflector_node({
-        "plan": plan_txt, "reflection_count": 0, "done": False,
-        "messages": [HumanMessage(content="小猫咪有没有关于这方面的留言"),
-                     AIMessage(content="查完了喵，留言板和说说里都没有聊这个话题的～")],
-    })
-    check("双源计划 + 零工具 → REVISE（tool_missing）",
-          out["done"] is False and out["last_issue"]["issue"] == "tool_missing",
-          f"reflection={out.get('reflection')}")
-    # 只调一个源 → REVISE（缺 list_talks）——逐工具核验的新行为
-    out2 = reflector_node({
-        "plan": plan_txt, "reflection_count": 0, "done": False,
-        "messages": [HumanMessage(content="小猫咪有没有关于这方面的留言"),
-                     AIMessage(content="", tool_calls=[{"name": "list_guestbook", "args": {}, "id": "t1"}]),
-                     ToolMessage(content="[{...}]", tool_call_id="t1", name="list_guestbook"),
-                     AIMessage(content="留言板查过了，只有一个游客留的「1」～")],
-    })
-    check("双源计划 + 只调 list_guestbook → REVISE（缺失 list_talks）",
-          out2["done"] is False and out2["last_issue"]["issue"] == "tool_missing"
-          and "list_talks" in out2["reflection"],
-          f"reflection={out2.get('reflection')}")
-    # 双源都调 → 检查点 1 通过 → LLM 质检（stub PASS）
-    out3 = reflector_node({
-        "plan": plan_txt, "reflection_count": 0, "done": False,
-        "messages": [HumanMessage(content="小猫咪有没有关于这方面的留言"),
-                     AIMessage(content="", tool_calls=[{"name": "list_guestbook", "args": {}, "id": "t1"}]),
-                     ToolMessage(content="[{...}]", tool_call_id="t1", name="list_guestbook"),
-                     AIMessage(content="", tool_calls=[{"name": "list_talks", "args": {}, "id": "t2"}]),
-                     ToolMessage(content="[{...}]", tool_call_id="t2", name="list_talks"),
-                     AIMessage(content="查完了，两个数据源都看过了，没有聊这个话题的喵～")],
-    })
-    check("双源都调 → 检查点 1 通过 → PASS",
-          out3["done"] is True, f"reflection={out3.get('reflection')}")
 
+def test_gate_claim_scope():
+    """gate 零帧声称检查作用域（20260903 收窄设计）：fallback 吞掉整轮叙述、
+    误伤成本高——宁可漏拦（叙述纪律 + trace 抽检兜底），不可误伤。
+    收窄后的分工（对照旧"三层声称闸全查"）：
+      - 任何轮：命令前缀文本（_CMD_PREFIX_RE）——正文出现命令帧前缀即确凿违规
+      - chat 零帧轮：只查第一人称工具调用声称（_CHAT_TOOL_CLAIM_RE 高精确模式，
+        概念性/第三人称提及、"翻遍了留言板"类读取声称不拦——chat 计划 TOOLS
+        恒空、站内内容查询归 content_query 调用清单通道，gate 在这里留白）
+      - content_query 零帧轮（异常路径：本应有调用清单却留空收尾）：读取/执行/
+        调用三族宽查——该场景"本该查证"，误伤成本低（025744「我读完了」实证）"""
+    print("[gate] 零帧声称检查作用域（chat 窄 / content_query 宽）")
 
-def test_chat_claim_check():
-    """闲聊快道声称闸（20260828 影子系统重构）：chat 不再无条件非空豁免——
-    回复含执行声称（已显示/已发送/已执行…）且当前轮零工具 → REVISE
-    （声称无工具返回支撑即编造）；轨迹有工具执行 → 放行；无声称 → 快道 PASS。"""
-    print("[reflector] chat 声称闸")
-    plan = plan_encode(instantiate_plan("chat", {}))
+    def _st(skill, reply):
+        return {"plan": plan_encode(instantiate_plan(skill, {})), "done": False,
+                "plan_rounds": 0,
+                "messages": [HumanMessage(content="显示屏上写点东西"), AIMessage(content=reply)]}
 
-    def chat_state(reply: str, extra=None):
-        msgs = [HumanMessage(content="显示屏上写点东西"), AIMessage(content=reply)]
-        if extra:
-            msgs += extra
-        return {"plan": plan, "reflection_count": 0, "done": False, "messages": msgs}
-
-    # 声称 + 零工具 → REVISE（"点东西"事故同类：文本声称显示成功但无执行）
-    out = reflector_node(chat_state("已经显示到屏幕上了喵～"))
-    check("chat 声称已显示 + 零工具 → REVISE（issue=claim_without_tool）",
-          out["done"] is False and out.get("last_issue", {}).get("issue") == "claim_without_tool",
-          str(out.get("last_issue")))
-    # 声称 + 轨迹有工具执行（事实发生）→ 放行快道 PASS
-    out2 = reflector_node(chat_state("内容已经显示到屏幕上了喵！", extra=[
-        AIMessage(content="", tool_calls=[{"name": "device_oled_display", "args": {"text": "你好"}, "id": "t1"}]),
-        ToolMessage(content="OK: 已下发", tool_call_id="t1", name="device_oled_display")]))
-    check("chat 声称 + 有工具执行 → 放行（快道 PASS）",
-          out2["done"] is True and "chat 快道路" in out2["reflection"], str(out2["reflection"]))
-    # 无声称 → 快道 PASS（普通闲聊不受影响）
-    out3 = reflector_node(chat_state("今天的月色真美呢～"))
-    check("chat 无声称 → 快道 PASS",
-          out3["done"] is True and "chat 快道路" in out3["reflection"], str(out3["reflection"]))
-    # 读取声称变体（20260901 事故回归：模型声称"查的是关于页""扫了一遍博客"
-    # "找到几条文章链接"，零工具调用，7 个 /article/61… 全部 404）→ REVISE
-    for reply in (
-        "我查的是[关于页](https://saudade.site/about)的正文",
-        "不过我顺手把整个博客扫了一遍",
-        "找到几条主人自己写的、跟你这个问题真有关系的东西",
-        "我翻遍了留言板，确实没人聊过",
+    # chat + 第一人称工具声称（133535 事故族：自称调用了 get_current_time）→ fallback
+    for claim_reply in (
+        "我用get_current_time查过时间，现在正好 05:34 喵～",   # 动词(用)+点名工具
+        "我刚才调用了工具，时间应该对得上喵～",                  # 动词(调用了)+笼统工具
     ):
-        out4 = reflector_node(chat_state(reply))
-        check(f"chat 读取声称变体 + 零工具 → REVISE：{reply[:16]}…",
-              out4["done"] is False and out4.get("last_issue", {}).get("issue") == "claim_without_tool",
-              str(out4.get("last_issue")))
-    # 读取声称 + 轨迹有工具执行 → 放行（"翻遍了留言板"以工具返回为据）
-    out5 = reflector_node(chat_state("我翻遍了留言板，确实没人聊过", extra=[
-        AIMessage(content="", tool_calls=[{"name": "list_guestbook", "args": {}, "id": "t2"}]),
-        ToolMessage(content="[]", tool_call_id="t2", name="list_guestbook")]))
-    check("chat 读取声称变体 + 有工具执行 → 放行（快道 PASS）",
-          out5["done"] is True and "chat 快道路" in out5["reflection"], str(out5["reflection"]))
+        out = gate_node(_st("chat", claim_reply))
+        check(f"chat 第一人称工具声称 + 零帧 → fallback：{claim_reply[:14]}…",
+              out["done"] is True and bool(out.get("fallback_text"))
+              and "没有任何工具执行" in out["fallback_text"],
+              str(out.get("fallback_text", ""))[:60])
+    # chat + 概念性/第三人称提及（知识讨论、转述，非自称）→ pass（不误伤）
+    out2 = gate_node(_st("chat", "听说质检会查模型有没有假装调用了工具，防止这种幻觉喵"))
+    check("chat 概念性提及（非自称）→ pass",
+          out2["done"] is True and not out2.get("fallback_text"), str(out2))
+    # chat + 读取声称措辞 → pass（收窄留白：chat 不查读取声称族）
+    out3 = gate_node(_st("chat", "我翻遍了留言板，确实没人聊过喵"))
+    check("chat 读取声称措辞 → pass（收窄留白，非误伤）",
+          out3["done"] is True and not out3.get("fallback_text"), str(out3))
+    # 命令前缀文本（任何轮）→ fallback(cmd_prefix)
+    out4 = gate_node(_st("chat", "好的，AUTO_NAVIGATE:https://saudade.site/talk 这就带你去！"))
+    check("正文命令前缀 → fallback(cmd_prefix)",
+          out4["done"] is True and bool(out4.get("fallback_text"))
+          and "系统命令文本" in out4["fallback_text"],
+          str(out4.get("fallback_text", ""))[:60])
+    # content_query 零帧 + 读取声称（025744「我读完了」实证）→ fallback
+    out5 = gate_node(_st("content_query", "您让我查的这两条，我读完了喵"))
+    check("content_query 零帧 + 读取声称 → fallback(claim_without_tool)",
+          out5["done"] is True and bool(out5.get("fallback_text"))
+          and "没有任何工具执行" in out5["fallback_text"],
+          str(out5.get("fallback_text", ""))[:60])
+    # content_query 零帧 + 调用声称（点名裸工具名）→ fallback
+    out6 = gate_node(_st("content_query", "我刚才调用了get_current_time查时间，留言板我用的list_guestbook"))
+    check("content_query 零帧 + 工具调用声称 → fallback",
+          out6["done"] is True and bool(out6.get("fallback_text")),
+          str(out6.get("fallback_text", ""))[:60])
+    # content_query 零帧 + 无声称 → pass（正常收尾轮：查无结果如实告知）
+    out7 = gate_node(_st("content_query", "这个内容我这边暂时没有查到，建议您晚点再来问喵～"))
+    check("content_query 零帧 + 如实收尾 → pass",
+          out7["done"] is True and not out7.get("fallback_text"), str(out7))
 
 
-def test_tool_retry_state():
-    """图改进①：tools_node 工具失败 → tool_retries 计数 + __ERROR__ 返回；重试上下文注入。"""
-    print("[tools] 失败重试状态")
-    from agent.graph import tools_node, _retry_context
-    state = {
-        "plan": plan_encode(instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"})),
-        "reflection_count": 0, "done": False, "tool_retries": [],
-        "messages": [HumanMessage(content="带我去设备控制台"),
-                     AIMessage(content="", tool_calls=[{"name": "nonexistent_tool", "args": {"foo": 1}, "id": "t1"}])],
-    }
-    out = tools_node(state)
+def test_gate_frame_checks():
+    """gate 有帧轮一致性兜底（narrator 叙述 vs 帧内容，20260903）：
+      - 有帧 = 声称天然有据 → 直接放行（含 chat 自称：轨迹有工具返回支撑）
+      - err 帧（__ERROR__）+ 回复完成式声称且无失败实词 → fallback(err_frame_claim)
+        ——把失败说成成功；回复含失败实词（如实报告失败）→ pass
+      - 空回复 → fallback(empty_reply)
+    （确认式导航 NAVIGATE: 帧 + 到达声称 → test_gate_nav_pending_claim 覆盖；
+    零帧注记核验 → test_gate_note_honesty 覆盖。）
+    """
+    print("[gate] 有帧轮一致性检查")
+
+    def _st(skill, msgs_after_plan, **plan_kw):
+        plan = plan_encode(instantiate_plan(skill, plan_kw))
+        return {"plan": plan, "done": False, "plan_rounds": 1,
+                "messages": [HumanMessage(content="x")] + msgs_after_plan}
+
+    # 工具帧 + 到达回复 → 放行（声称有据；无旧"落 LLM 质检"环节）
+    out = gate_node(_st("navigate", [ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/device-console/",
+                                                 tool_call_id="execute_0", name="navigate_to"),
+                                     AIMessage(content="到啦！这里是物联网设备控制台哟～")],
+                        target="物联网平台", mode="direct"))
+    check("AUTO 直跳帧 + 到达回复 → pass",
+          out["done"] is True and not out.get("fallback_text"), str(out))
+    # chat 自称 + 真实工具帧 → 放行（轨迹支撑声称）
+    out2 = gate_node(_st("chat", [ToolMessage(content='["OK"]', tool_call_id="execute_0",
+                                              name="list_guestbook"),
+                                  AIMessage(content="我刚调用了工具查了留言板，确实没人聊过喵～")]))
+    check("chat 自称 + 有帧 → pass（声称有据）",
+          out2["done"] is True and not out2.get("fallback_text"), str(out2))
+    # err 帧 + 如实报告失败 → pass
+    errf = ToolMessage(content="__ERROR__: 路径无效", tool_call_id="execute_0", name="navigate_to")
+    out3 = gate_node(_st("navigate", [errf, AIMessage(content="呜，跳转失败了喵，路径好像无效")],
+                         target="物联网平台", mode="direct"))
+    check("err 帧 + 如实失败措辞 → pass",
+          out3["done"] is True and not out3.get("fallback_text"), str(out3))
+    # err 帧 + 完成式声称且无失败实词 → fallback（把失败说成成功）
+    out4 = gate_node(_st("navigate", [errf, AIMessage(content="已经跳转成功了，页面马上就好！")],
+                         target="物联网平台", mode="direct"))
+    check("err 帧 + 完成式声称 → fallback(err_frame_claim)",
+          out4["done"] is True and bool(out4.get("fallback_text"))
+          and "失败" in out4["fallback_text"],
+          str(out4.get("fallback_text", ""))[:60])
+    # 空回复（narrator 没说出话）→ fallback(empty_reply)
+    out5 = gate_node(_st("chat", [AIMessage(content="   ")]))
+    check("空回复 → fallback(empty_reply)",
+          out5["done"] is True and bool(out5.get("fallback_text"))
+          and "卡住" in out5["fallback_text"],
+          str(out5.get("fallback_text", ""))[:60])
+
+
+def test_execute_node():
+    """execute 确定性执行（20260903 planner 全权）：执行器无自由意志、无授权分支
+    ——planner 决策经 instantiate_plan/白名单（_EXPLICIT_TOOLS/_CALLABLE_QUERY_TOOLS/
+    技能模板）生成调用清单，execute 逐条照 spec 字面执行。旧 tools_node 的
+    "计划外调用授权拒绝/重试计数/tool_retries"整层删除：model 已零工具、不存在
+    自拟参数调用；越权工具在 skills 白名单就被剥掉，到不了 execute。
+    spec 契约：<name>(<json>) → 帧 = ToolMessage(content=工具返回, name=name,
+    tool_call_id=f"execute_{idx}")。失败不需要重试状态机——execute 产 __ERROR__
+    帧，planner 下一轮读帧自己决定修正参数还是如实收尾。"""
+    print("[execute] 调用清单确定性执行")
+
+    def _run(tools_list):
+        obj = instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"})
+        obj["tools"] = tools_list  # 手工覆盖清单（模拟 planner 决策产物）
+        return execute_node({"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+                             "messages": [HumanMessage(content="带我去设备控制台")]})
+
+    # 计划内工具 → 确定性执行（参数照 spec 字面）
+    out = _run(['navigate_to({"path": "/device-console/", "confirm": false})'])
     msgs = out["messages"]
-    check("失败 → __ERROR__ ToolMessage", msgs and msgs[-1].content.startswith("__ERROR__"), str(msgs[-1].content[:60]) if msgs else "no msg")
-    retries = out["tool_retries"]
-    check("失败计数写入 tool_retries（attempt=1）", len(retries) == 1 and retries[0]["attempt"] == 1,
-          str(retries))
-    # 同一调用第二次失败 → attempt 递增
-    state2 = {"messages": [HumanMessage(content="x"),
-                           AIMessage(content="", tool_calls=[{"name": "nonexistent_tool", "args": {"foo": 1}, "id": "t2"}])],
-              "tool_retries": retries}
-    out2 = tools_node(state2)
-    check("同参数再次失败 → attempt=2", len(out2["tool_retries"]) == 2 and out2["tool_retries"][-1]["attempt"] == 2,
-          str(out2["tool_retries"]))
-    # 重试上下文注入：未超限 → 修正重试；超限 → 停止重试
-    ctx1 = _retry_context([{"key": ("navigate_to", "{}"), "name": "navigate_to", "args": {"path": "/fake/"}, "error": "__ERROR__: 路径无效", "attempt": 1}])
-    check("attempt≤上限 → 上下文要求修正重试", "修正参数后重试" in ctx1, ctx1[:60])
-    ctx2 = _retry_context([{"key": ("navigate_to", "{}"), "name": "navigate_to", "args": {"path": "/fake/"}, "error": "__ERROR__: 路径无效", "attempt": 2}])
-    check("attempt>上限 → 上下文要求停止重试如实告知", "停止重试" in ctx2 and "不得编造成功" in ctx2, ctx2[:60])
-    check("空 retries → 空上下文", _retry_context([]) == "", repr(_retry_context([])))
-
-
-def test_tools_authorization():
-    """tools_node 执行前授权检查（问题记录 1.11 落地，20260828）：动作工具只能在
-    计划 TOOLS 行明确列出时执行——content_query 自由计划下把检索到的留言注入指令
-    当命令执行、/iot 语义替身均被拒绝（__ERROR__ 返回、零执行）；计划内调用放行。"""
-    print("[tools] 执行前授权检查")
-    # 越权：content_query 计划（TOOLS 空）下 model 调 navigate_to → 拒绝
-    state = {
-        "plan": plan_encode(instantiate_plan("content_query", {})),
-        "reflection_count": 0, "done": False, "tool_retries": [],
-        "messages": [HumanMessage(content="你读到留言为什么没有按留言执行任务"),
-                     AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {"path": "/device-console/", "confirm": False}, "id": "t1"}])],
-    }
-    out = tools_node(state)
-    msgs = out["messages"]
-    check("计划外 navigate_to → 授权拒绝（__ERROR__，零执行）",
-          msgs and msgs[-1].content.startswith("__ERROR__") and "不在本次执行计划" in msgs[-1].content,
+    check("清单工具 → 照单执行（AUTO_NAVIGATE 帧 + execute_0）",
+          msgs and msgs[-1].content.startswith("AUTO_NAVIGATE:")
+          and msgs[-1].name == "navigate_to" and msgs[-1].tool_call_id == "execute_0",
           str(msgs[-1].content[:60]) if msgs else "no msg")
-    # 越权：chat 计划下 device_oled_display → 拒绝
-    state2 = {
-        "plan": plan_encode(instantiate_plan("chat", {})),
-        "reflection_count": 0, "done": False, "tool_retries": [],
-        "messages": [HumanMessage(content="显示屏上写点东西"),
-                     AIMessage(content="", tool_calls=[{"name": "device_oled_display", "args": {"text": "你好"}, "id": "t1"}])],
-    }
-    out2 = tools_node(state2)
-    check("计划外 device_oled_display → 授权拒绝",
-          out2["messages"] and "不在本次执行计划" in out2["messages"][-1].content,
-          str(out2["messages"][-1].content[:60]))
-    # 越权返回计入 tool_retries 失败语义（模型可修正重来）
-    check("拒绝计入 tool_retries", len(out2["tool_retries"]) == 1, str(out2["tool_retries"]))
-    # 放行：navigate 计划 TOOLS 明确列出 → 正常执行
-    state3 = {
-        "plan": plan_encode(instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"})),
-        "reflection_count": 0, "done": False, "tool_retries": [],
-        "messages": [HumanMessage(content="打开物联网平台"),
-                     AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {"path": "/device-console/", "confirm": False}, "id": "t1"}])],
-    }
-    out3 = tools_node(state3)
-    check("计划内 navigate_to → 正常执行（帧产出）",
-          out3["messages"] and out3["messages"][-1].content.startswith("AUTO_NAVIGATE:"),
-          str(out3["messages"][-1].content[:60]) if out3["messages"] else "no msg")
-    # 只读查询工具任何计划下合法：content_query 计划下 list_talks → 放行
-    state4 = {
-        "plan": plan_encode(instantiate_plan("content_query", {})),
-        "reflection_count": 0, "done": False, "tool_retries": [],
-        "messages": [HumanMessage(content="看看留言"),
-                     AIMessage(content="", tool_calls=[{"name": "list_talks", "args": {}, "id": "t1"}])],
-    }
-    out4 = tools_node(state4)
-    check("只读查询工具自由计划下放行",
-          out4["messages"] and not out4["messages"][-1].content.startswith("__ERROR__"),
-          str(out4["messages"][-1].content[:60]) if out4["messages"] else "no msg")
-    # 视觉开关不在高危名单（20260828 收缩）：chat 计划下 toggle_effect → 放行
-    # （planner 判错技能时允许 model 自纠正；reflector 幂等判定 + LLM 质检兜底）
-    state5 = {
-        "plan": plan_encode(instantiate_plan("chat", {})),
-        "reflection_count": 0, "done": False, "tool_retries": [],
-        "messages": [HumanMessage(content="改成下雨吧"),
-                     AIMessage(content="", tool_calls=[{"name": "toggle_effect", "args": {"effect": "rain", "action": "on"}, "id": "t1"}])],
-    }
-    out5 = tools_node(state5)
-    check("视觉开关 toggle_effect 自由计划下放行（非高危）",
-          out5["messages"] and not out5["messages"][-1].content.startswith("__ERROR__"),
-          str(out5["messages"][-1].content[:60]) if out5["messages"] else "no msg")
+    # 未知工具 → __ERROR__ 拒绝帧（execute 侧越界防御；正常清单到不了这）
+    out2 = _run(['nonsense_tool({"x": 1})'])
+    m2 = out2["messages"][-1]
+    check("未知工具 → __ERROR__ 拒绝帧",
+          m2.content.startswith("__ERROR__") and "未知工具 nonsense_tool" in m2.content
+          and m2.name == "nonsense_tool",
+          str(m2.content[:80]))
+    # 空清单 → 零调用（收尾轮 execute 幂等空操作，路由直接走 model）
+    out3 = _run([])
+    check("空清单 → 零帧零调用", out3["messages"] == [], str(out3))
+    # 双工具清单按序执行 → 两帧 idx 递增、参数分别生效（AUTO 直跳 + NAVIGATE 确认式）
+    out4 = _run(['navigate_to({"path": "/device-console/", "confirm": false})',
+                 'navigate_to({"path": "/guestbook", "confirm": true})'])
+    ids = [m.tool_call_id for m in out4["messages"]]
+    check("双工具按序 → execute_0/execute_1 + 直跳/确认两态",
+          len(out4["messages"]) == 2 and ids == ["execute_0", "execute_1"]
+          and out4["messages"][0].content.startswith("AUTO_NAVIGATE:")
+          and out4["messages"][1].content.startswith("NAVIGATE:")
+          and "AUTO_NAVIGATE:" not in out4["messages"][1].content,
+          str(ids) + " / " + str(out4["messages"][1].content[:60]))
 
 
-def test_correction_msg():
-    """图改进②：REVISE 注记结构化——统一构造器 + issue 类型（错误记忆切入点）。"""
-    print("[reflector] 修正注记结构化")
-    from agent.graph import _correction_msg
-    m = _correction_msg("navigate_tool_missing", "计划要求调用 navigate_to 但零工具调用")
-    check("前缀含 issue 类型", "[Reflection 检查未通过（navigate_tool_missing）" in m.content, m.content[:80])
-    check("含统一修正要求模板", "修正要求" in m.content and "工具返回后再回复" in m.content, m.content[:80])
+def test_gate_fallback_message():
+    """gate fallback 终局语义（20260903 取代 REVISE 修正注记）：检查不过 = 收尾，
+    不再有"修正要求/重考轮"（plan_rounds 不因检查而 +1）。返回体约定：
+    done:True + [Fallback 决定] SystemMessage + fallback_text——server.py 据此
+    __RESET__ 并把最终回复替换为 fallback_text（fallback 是给访客的如实回复，
+    不是"要求模型再试一次"的注记）。"""
+    print("[gate] fallback 收尾消息结构")
+    plan = plan_encode(instantiate_plan("chat", {}))
+    state = {"plan": plan, "done": False, "plan_rounds": 0,
+             "messages": [HumanMessage(content="显示屏上写点东西"),
+                          AIMessage(content="我用get_current_time查过时间了喵")]}
+    out = gate_node(state)
+    fb = [m for m in out.get("messages", []) if isinstance(m, SystemMessage)]
+    check("fallback → done=True + [Fallback 决定] SystemMessage",
+          out["done"] is True and len(fb) == 1
+          and str(fb[0].content).startswith("[Fallback 决定]: "),
+          str(out))
+    check("fallback_text = 前缀后正文（server 直接替换最终回复）",
+          out.get("fallback_text") == str(fb[0].content).split(":", 1)[1].strip()
+          and bool(out.get("fallback_text")),
+          f"msg={str(fb[0].content)[:60]} fb={str(out.get('fallback_text', ''))[:60]}")
+    # pass 侧无 [Fallback 决定] 消息、无 fallback_text
+    ok = gate_node({"plan": plan, "done": False, "plan_rounds": 0,
+                    "messages": [HumanMessage(content="今天天气不错"),
+                                 AIMessage(content="是呀，适合晒晒太阳喵～")]})
+    check("pass → 无 fallback_text、无 [Fallback 决定] 消息",
+          ok["done"] is True and not ok.get("fallback_text")
+          and not any(isinstance(m, SystemMessage) for m in ok.get("messages", [])), str(ok))
 
 
-def test_reflector_tool_frame_gate():
-    """reflector 工具帧确定性闸放行：工具成功帧 + 回复非空 → PASS（不花 LLM 钱）。"""
-    print("[reflector] 工具帧闸放行")
-    plan = plan_encode(instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"}))
-    state = {
-        "plan": plan, "reflection_count": 0, "done": False,
-        "messages": [HumanMessage(content="带我去设备控制台"),
-                     AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {"path": "/device-console/", "confirm": False}, "id": "t1"}]),
-                     ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/device-console/", tool_call_id="t1", name="navigate_to"),
-                     AIMessage(content="到啦！这里是物联网设备控制台哟～")],
-    }
-    out = reflector_node(state)
-    check("AUTO_NAVIGATE 帧 + 回复 → 确定性 PASS（reflection 含标记，非 LLM 输出）",
-          out["done"] is True and "确定性 PASS" in out["reflection"], str(out["reflection"]))
-    # NAVIGATE:（确认式）+ 非完成式回复 → 闸放行（确认式声称检查只拦"完成式声称"）
-    plan2 = plan_encode(instantiate_plan("navigate", {"target": "留言板", "mode": "suggest"}))
-    state2 = {
-        "plan": plan2, "reflection_count": 0, "done": False,
-        "messages": [HumanMessage(content="带我去留言板看看"),
-                     AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {"path": "/guestbook", "confirm": True}, "id": "t1"}]),
-                     ToolMessage(content="NAVIGATE:https://saudade.site/guestbook", tool_call_id="t1", name="navigate_to"),
-                     AIMessage(content="已为您打开跳转确认，请点击确认即可前往留言板～")],
-    }
-    out2 = reflector_node(state2)
-    check("NAVIGATE 确认式帧 + 非完成式回复 → 闸放行 PASS",
-          out2["done"] is True and "确定性 PASS" in out2["reflection"], str(out2["reflection"]))
-    # 设备类失败返回 → 不闸放行（落回 LLM 质检）
-    plan3 = plan_encode(instantiate_plan("device_query", {}))
-    state3 = {
-        "plan": plan3, "reflection_count": 0, "done": False,
-        "messages": [HumanMessage(content="有哪些设备"),
-                     AIMessage(content="", tool_calls=[{"name": "list_devices", "args": {}, "id": "t1"}]),
-                     ToolMessage(content="设备列表查询失败: HTTP 500", tool_call_id="t1", name="list_devices"),
-                     AIMessage(content="抱歉，设备列表暂时查询不到")],
-    }
-    out3 = reflector_node(state3)
-    check("设备失败返回 → 不闸放行（reflection 非确定性标记）",
-          "确定性 PASS" not in out3["reflection"], str(out3["reflection"]))
-    # 零工具注记 PASS：下线/不存在计划 + 零工具 + 非空回复 → 确定性 PASS（不花 LLM 钱）
-    plan4 = plan_encode(instantiate_plan("navigate", {"target": "友链"}))
-    state4 = {
-        "plan": plan4, "reflection_count": 0, "done": False,
-        "messages": [HumanMessage(content="打开友链"),
-                     AIMessage(content="友链板块已下线啦，没法访问了喵～可以去留言板看看哦！")],
-    }
-    out4 = reflector_node(state4)
-    check("零工具注记 + 非空回复 → 确定性 PASS",
-          out4["done"] is True and "确定性 PASS" in out4["reflection"], str(out4["reflection"]))
-    # 零工具注记 + 空回复 → 不 PASS（落回 LLM 质检）
-    state5 = {**state4, "messages": [HumanMessage(content="打开友链"),
-                                     AIMessage(content="  ")]}
-    out5 = reflector_node(state5)
-    check("零工具注记 + 空回复 → 不闸放行",
-          "确定性 PASS" not in out5["reflection"], str(out5["reflection"]))
-    # 零工具注记 + 非如实措辞（声称跳转）→ REVISE（确定性，不花 LLM 钱）
-    state6 = {**state4, "messages": [HumanMessage(content="打开友链"),
-                                     AIMessage(content="好的，这就为您跳转到友链页面！")]}
-    out6 = reflector_node(state6)
-    check("零工具注记 + 声称跳转 → REVISE 要求如实告知",
-          out6["done"] is False and any(
-              isinstance(m, SystemMessage) and "如实" in m.content for m in out6["messages"]),
-          str(out6.get("reflection", "")))
-    # 不存在注记 + 如实措辞 → 确定性 PASS
-    plan7 = plan_encode(instantiate_plan("navigate", {"target": "/iot"}))
-    state7 = {
-        "plan": plan7, "reflection_count": 0, "done": False,
-        "messages": [HumanMessage(content="帮我去 /iot 这个页面"),
-                     AIMessage(content="抱歉喵，/iot 这个页面不存在哦，可以去物联网平台看看！")],
-    }
-    out7 = reflector_node(state7)
-    check("不存在注记 + 如实措辞 → 确定性 PASS",
-          out7["done"] is True and "确定性 PASS" in out7["reflection"], str(out7["reflection"]))
 
 
 def test_planner_output_re():
@@ -694,11 +623,10 @@ def test_planner_output_re():
 
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
-               test_round_aware_checks, test_confirm_nav_claim_check, test_plan_roundtrip, test_parse_tolerance,
+               test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
                test_nav_fast_path, test_display_fast_path, test_article_fast_path,
-               test_explicit_tools, test_chat_claim_check,
-               test_reflector_tool_frame_gate, test_planner_output_re,
-               test_tool_retry_state, test_tools_authorization, test_correction_msg):
+               test_explicit_tools, test_gate_claim_scope, test_gate_frame_checks,
+               test_execute_node, test_gate_fallback_message, test_planner_output_re):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
