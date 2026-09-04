@@ -601,10 +601,13 @@ async def chat_stream(req: ChatRequest, request: Request):
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                     continue
                 if isinstance(chunk, str) and chunk.startswith("__EXEC__:"):
-                    # 跨轮执行记忆帧（20260904 C3）：裸转发（仿 __SUMMARY__ 先例，
-                    # 值侧已 json.dumps 转义不破坏 SSE 帧界）——Rust 收帧解析落库
-                    # execution_log，不转发前端（前端无此帧兜底，Rust 吞掉不 yield）
-                    yield chunk + "\n\n"
+                    # 跨轮执行记忆帧（20260904 C3）：Rust 收帧解析落库 execution_log，
+                    # 不转发前端（前端无此帧兜底，Rust 吞掉不 yield）。
+                    # ★ 必须带 "data: " 前缀（20260904 上线首轮 E2E 抓出）：Rust 的
+                    # SSE 帧解析 strip_prefix(b"data: ") 无前缀即空 payload 丢弃——
+                    # 裸 yield 的 __EXEC__ 从未到达 Rust 落库分支。golden 内部链路
+                    # 不经 SSE 文本协议（queue 直收 str）故测不到，只有线上 E2E 能暴露
+                    yield f"data: {chunk}\n\n"
                     continue
                 if isinstance(chunk, AIMessageChunk) and chunk.content:
                     had_output = True
