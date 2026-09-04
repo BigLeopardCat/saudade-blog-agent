@@ -81,6 +81,10 @@ class ChatRequest(BaseModel):
     # 多模态图片输入：前端压缩后的 dataURL 数组（20260828 单图 → 20260828s 多图，
     # 最多 6 张、每张 ≤1MB；qwen3.8-flash 原生支持图像）。兼容旧版单串（golden 直连）
     image: str | list[str] = ""
+    # 跨轮执行记忆（20260904 C3）：本会话最近执行的 checker 验收回执渲染文本
+    # （Rust 侧从 execution_log 读最近 8 条渲染成 "· 屏幕显示「…」" 式行）——
+    # 下轮质疑"你刚才屏上写了什么"时据实回答，不重发不编造
+    executions: str = ""
 
 
 class ChatResponse(BaseModel):
@@ -88,6 +92,9 @@ class ChatResponse(BaseModel):
     success: bool
     error: str | None = None
     new_summary: str | None = None
+    # 跨轮执行记忆（20260904 C3，同步路径）：本次请求 checker 验收回执原始行
+    # （{skill,tool,args,result,ts}）——Rust 同步响应手读 data["executions"] 落库
+    executions: list = []
 
 
 _agent = None
@@ -141,6 +148,11 @@ def _build_messages(req: ChatRequest) -> list:
     ctx_parts.append(f"current_time={_now.strftime(f'%Y年%m月%d日 {_weekdays[_now.weekday()]} %H:%M')}")
     if req.summary:
         ctx_parts.append(f"conversation_summary: {req.summary}")
+    if req.executions:
+        # 跨轮执行记忆（20260904 C3）：checker 验收过的本会话最近执行（Rust 渲染，
+        # "· 屏幕显示「…」"式行）——质疑"你刚才真显示了/屏上写了什么"的如实依据。
+        # 与 conversation_summary 同语义：系统确认事实注入，模型不得扩展/编造
+        ctx_parts.append(f"recent_executions: {req.executions[:1500]}")
     ctx = f"[System: {'; '.join(ctx_parts)}]"
     messages.append(HumanMessage(content=ctx))
 
@@ -187,22 +199,29 @@ def _build_messages(req: ChatRequest) -> list:
     return messages
 
 
-def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0) -> tuple[str, str]:
-    """Run agent synchronously in a thread. Returns (reply, nav_line)."""
+def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0) -> tuple[str, str, list]:
+    """Run agent synchronously in a thread. Returns (reply, nav_line, exec_rows)."""
     # user_id 注入 configurable：设备类工具（list_devices/device_oled_display）
     # 经 RunnableConfig 读取并以用户身份签发 JWT 调用 device-service
     # recursion_limit 覆盖默认 9999（等效无界）：幻觉重试循环有界
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id}, "recursion_limit": RECURSION_LIMIT}
     full_reply = ""
     nav_line = ""
-    for chunk, meta in _agent.stream(
+    exec_rows: list = []  # 跨轮执行记忆（20260904 C3）：checker 验收回执，累计语义末批即全量
+    for mode, data in _agent.stream(
         graph_input(messages),
         config,
-        stream_mode="messages",
+        stream_mode=["messages", "updates"],
     ):
         # 手写图里有多个 LLM 节点（planner 产出计划文本、model 产出回复），
         # 只有 model 节点的 AIMessageChunk 是给访客看的回复——其余按 node 过滤掉，
         # 否则计划会漏进对话（create_agent 时代只有一个 model 节点，无需过滤）
+        if mode == "updates":
+            ex_upd = data.get("execute")
+            if ex_upd and ex_upd.get("receipts"):
+                exec_rows = ex_upd["receipts"]
+            continue
+        chunk, meta = data
         if (isinstance(chunk, SystemMessage) and chunk.content
                 and str(chunk.content).startswith("[Fallback 决定]")):
             # gate fallback（20260903，validate→fallback 无重考轮）：gate 是终节点，
@@ -221,7 +240,7 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0) -> tuple[s
     reply = full_reply.strip()
     # 不再在这里拼入 nav/effect 命令行——由调用方在摘要剥离之后追加，
     # 避免回复末尾的 SUMMARY: 截断把 EFFECT:/NAVIGATE: 命令一起吞掉
-    return reply, nav_line
+    return reply, nav_line, exec_rows
 
 
 def _summarize_dialogue(user_msg: str, history: list[dict], old_summary: str) -> str:
@@ -281,7 +300,8 @@ async def chat(req: ChatRequest):
             summary_task = _submit_with_context(
                 loop, _summarize_dialogue, req.message, req.history, req.summary
             )
-        reply, nav_line = await _submit_with_context(loop, _run_agent_sync, messages, thread_id, req.user_id)
+        reply, nav_line, exec_rows = await _submit_with_context(
+            loop, _run_agent_sync, messages, thread_id, req.user_id)
         new_summary = None
         if summary_task is not None:
             new_summary = (await summary_task).strip() or None
@@ -299,7 +319,8 @@ async def chat(req: ChatRequest):
             else:
                 final_reply = final_nav + "\n" + final_reply
 
-        return ChatResponse(reply=final_reply, success=True, new_summary=new_summary)
+        return ChatResponse(reply=final_reply, success=True, new_summary=new_summary,
+                            executions=exec_rows)
     except Exception as e:
         logger.exception("Agent invocation failed")
         return ChatResponse(reply="", success=False, error=str(e))
@@ -335,6 +356,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         process_emitted = False
         emitted: set = set()
         is_chat_skill = False
+        # 跨轮执行记忆（20260904 C3）：checker 验收回执累计（execute update 是
+        # 累计语义——末批即本次请求全量），流收尾时 __EXEC__ 帧发 Rust 落库
+        exec_rows: list = []
 
         def emit_process(text: str, key: str = ""):
             nonlocal process_emitted
@@ -414,6 +438,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         # 无此占位帧前端会像"卡死"）；完成帧由 ToolMessage 分支发
                         if "\nTOOLS: " in plan and "TOOLS: （无）" not in plan:
                             emit_process("🛠 正在调用工具…", key="tool_running")
+                # execute 的 checker 验收回执（20260904 C3）：累计语义——每次
+                # execute update 的 receipts 都是请求内全部 PASS 行，末批即全量
+                ex_upd = data.get("execute")
+                if ex_upd and ex_upd.get("receipts"):
+                    exec_rows = ex_upd["receipts"]
                 # gate 检查判定（20260903：reflector/REVISE/LLM-QC 已废除——gate
                 # 是终节点只收尾不重考：pass → done 收尾；fail → fallback 文本
                 # 直接替换最终回复，见 graph.gate_node 注释）
@@ -440,6 +469,13 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             logger.info("[stream] graph complete (uninterrupted)")
         # trace 落盘：最终回复随 producer 收尾记录（finish_trace 落盘时并入）
         record("producer", "stream_end", reply=final_reply)
+        # 跨轮执行记忆帧（20260904 C3）：checker 验收回执（本次请求全部行）随流
+        # 尾发出，Rust 收帧落库 execution_log（读取侧限最近 8 条）。放 None 之前
+        # ——event_stream 收到即裸转发，Rust 在 __END__ 前解析完即可
+        if exec_rows:
+            asyncio.run_coroutine_threadsafe(
+                queue.put("__EXEC__:" + json.dumps(exec_rows, ensure_ascii=False)),
+                loop).result()
         asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
     except AgentCancelled:
         # 图内节点检测到断连 → 静默收尾（客户端已断开，无帧可发；不放异常
@@ -563,6 +599,12 @@ async def chat_stream(req: ChatRequest, request: Request):
                     had_output = True
                     frames += 1
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    continue
+                if isinstance(chunk, str) and chunk.startswith("__EXEC__:"):
+                    # 跨轮执行记忆帧（20260904 C3）：裸转发（仿 __SUMMARY__ 先例，
+                    # 值侧已 json.dumps 转义不破坏 SSE 帧界）——Rust 收帧解析落库
+                    # execution_log，不转发前端（前端无此帧兜底，Rust 吞掉不 yield）
+                    yield chunk + "\n\n"
                     continue
                 if isinstance(chunk, AIMessageChunk) and chunk.content:
                     had_output = True
