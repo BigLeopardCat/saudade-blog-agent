@@ -25,9 +25,10 @@ import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from agent.graph import (_PLANNER_OUTPUT_RE, _article_fast_path, _display_fast_path,
-                         _nav_fast_path, _parse_params, execute_node, gate_node,
-                         plan_encode, parse_plan)
+from agent.graph import (_PLANNER_OUTPUT_RE, _article_fast_path, _check_spec,
+                         _display_fast_path, _nav_fast_path, _parse_params,
+                         execute_node, gate_node, plan_encode, parse_plan,
+                         route_after_execute)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, instantiate_plan
 
 FAILS = []
@@ -576,6 +577,128 @@ def test_execute_node():
           str(ids) + " / " + str(out4["messages"][1].content[:60]))
 
 
+def test_todo_contract():
+    """TODO 行契约（20260904 最小契约）：可选第 6 行、插在 REPLY 前（REPLY 的
+    DOTALL 解析假设它是末行，追加在后会被吞）；TODO 是"声明"不是"执行指令"——
+    不进 tools 解析、parse 失败不影响计划，只给后续轮次/reflector 看链依赖。"""
+    print("[todo] TODO 行编码/解析契约")
+    obj = instantiate_plan("chat", {})
+    obj["params"] = {}
+    obj["todo"] = ["定位文章 id", "navigate 跳转过去"]
+    encoded = plan_encode(obj)
+    check("带 todo → TODO 行在 REPLY 之前", "TODO: 定位文章 id → navigate 跳转过去" in encoded
+          and encoded.index("TODO:") < encoded.index("REPLY:"),
+          encoded)
+    parsed = parse_plan(encoded)
+    check("往返 todo 一致", parsed["todo"] == ["定位文章 id", "navigate 跳转过去"], str(parsed["todo"]))
+    check("todo 不进 tools（声明非指令）", parsed["tools"] == [], str(parsed["tools"]))
+    check("REPLY 未被 TODO 行污染", parsed["reply"] == obj["reply"] and "TODO" not in parsed["reply"],
+          repr(parsed["reply"])[:80])
+    # 无 todo → 不写 TODO 行、解析为空
+    obj2 = instantiate_plan("chat", {})
+    obj2["params"] = {}
+    check("无 todo → 无 TODO 行", "TODO:" not in plan_encode(obj2), plan_encode(obj2))
+    parsed2 = parse_plan(plan_encode(obj2))
+    check("缺 todo 行 → 空列表", parsed2["todo"] == [], str(parsed2["todo"]))
+    # 解析容错：行首序号剥除、空占位不计
+    p3 = parse_plan("SKILL: content_query\nTODO: 1. 读候选全文 → 2. 跳转那篇\nREPLY: r")
+    check("序号前缀剥除", p3["todo"] == ["读候选全文", "跳转那篇"], str(p3["todo"]))
+    p4 = parse_plan("SKILL: chat\nTODO: （无）\nREPLY: r")
+    check("（无）占位 → 空列表", p4["todo"] == [], str(p4["todo"]))
+    p5 = parse_plan("SKILL: chat\nTODO: 只搜留言板 → 再搜说说\nREPLY: r")
+    check("planner 口吻步骤 → 原样保留", p5["todo"] == ["只搜留言板", "再搜说说"], str(p5["todo"]))
+
+
+def test_checker():
+    """checker 确定性验收（20260904 纯函数，无 LLM）：PASS → 回执（系统确认事实）、
+    BLOCK → 受阻项（错误结果不是事实）。原因码覆盖：unknown_tool/args_parse/
+    empty_result/error_frame/cmd_shape。device_oled_display 软失败（指令已下发）
+    不升受阻链——cmd_shape 只约束三个命令契约工具。"""
+    print("[checker] 验收原因码（_check_spec 纯函数）")
+    P, B = "PASS", "BLOCK"
+    # BLOCK 族
+    v, r = _check_spec("nonsense_tool", {}, True, "ok", "chat")
+    check("unknown_tool → BLOCK", v == B and r == "unknown_tool", (v, r))
+    v, r = _check_spec("list_notes", {}, False, "ok", "chat")
+    check("args_parse → BLOCK", v == B and r == "args_parse", (v, r))
+    v, r = _check_spec("list_notes", {"page": 1}, True, "   ", "chat")
+    check("empty_result → BLOCK", v == B and r == "empty_result", (v, r))
+    v, r = _check_spec("list_notes", {"page": 1}, True, "__ERROR__: 炸了", "chat")
+    check("error_frame → BLOCK", v == B and r == "error_frame", (v, r))
+    v, r = _check_spec("navigate_to", {"path": "/guestbook"}, True, "跳转成功！", "navigate")
+    check("navigate cmd_shape 漂移 → BLOCK", v == B and r == "cmd_shape", (v, r))
+    v, r = _check_spec("toggle_effect", {"effect": "sakura", "action": "on"}, True, "好嘞～", "effect")
+    check("effect cmd_shape 漂移 → BLOCK", v == B and r == "cmd_shape", (v, r))
+    v, r = _check_spec("toggle_dark_mode", {"on": True}, True, "on", "darkmode")
+    check("darkmode cmd_shape 漂移 → BLOCK", v == B and r == "cmd_shape", (v, r))
+    # PASS 族
+    v, r = _check_spec("navigate_to", {"path": "/guestbook"}, True, "NAVIGATE:/guestbook", "navigate")
+    check("NAVIGATE: 确认帧 → PASS", v == P and r == "ok", (v, r))
+    v, r = _check_spec("navigate_to", {"path": "/guestbook"}, True, "AUTO_NAVIGATE:/guestbook", "navigate")
+    check("AUTO_NAVIGATE: 直跳帧 → PASS", v == P, (v, r))
+    v, r = _check_spec("toggle_effect", {"effect": "sakura", "action": "on"}, True, "EFFECT:sakura:on", "effect")
+    check("EFFECT: 帧 → PASS", v == P, (v, r))
+    v, r = _check_spec("toggle_dark_mode", {"on": True}, True, "DARKMODE:on", "darkmode")
+    check("DARKMODE: 帧 → PASS", v == P, (v, r))
+    v, r = _check_spec("device_oled_display", {"text": "晚上好"}, True, "未在 5s 内收到回执确认", "device_display")
+    check("device 软失败（指令已下发）→ PASS 不升受阻链", v == P, (v, r))
+    v, r = _check_spec("list_notes", {"page": 1, "page_size": 50}, True, "1. 标题\n2. 标题2", "content_query")
+    check("数据工具正常返回 → PASS", v == P, (v, r))
+
+
+def test_execute_receipts_and_route():
+    """execute checker 集成（20260904）：PASS → 累计 receipts（skill/tool/args/result/ts）、
+    BLOCK → blocked（只含本轮）+ blocked_seen 累计 + blocked_repeat（spec 二次受阻 =
+    首轮改参重试已败/链断）；route_after_execute 据此路由 reflector。"""
+    print("[execute/route] 回执 + 受阻 + 路由")
+    def _st(tools_list, **extra):
+        obj = instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"})
+        obj["tools"] = tools_list
+        base = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+                "messages": [HumanMessage(content="带我去设备控制台")]}
+        base.update(extra)
+        return execute_node(base)
+
+    # PASS → receipts 累计（PASS 的工具名在 _check_spec 白名单里）
+    out = _st(['navigate_to({"path": "/device-console/", "confirm": false})'])
+    check("PASS → receipts 含验收行", len(out["receipts"]) == 1
+          and out["receipts"][0]["tool"] == "navigate_to"
+          and out["receipts"][0]["skill"] == "navigate"
+          and out["receipts"][0]["result"].startswith("AUTO_NAVIGATE:")
+          and "ts" in out["receipts"][0] and "args" in out["receipts"][0],
+          str(out["receipts"]))
+    check("PASS → blocked 空、blocked_repeat False",
+          out["blocked"] == [] and out["blocked_repeat"] is False
+          and out["blocked_seen"] == [], str(out))
+    # BLOCK（未知工具防御）→ blocked 只含本轮 + repeat 判定
+    out2 = _st(['nonsense_tool({"x": 1})'])
+    check("BLOCK → blocked 含受阻项（spec/tool/reason/result）",
+          len(out2["blocked"]) == 1
+          and out2["blocked"][0]["spec"] == 'nonsense_tool({"x": 1})'
+          and out2["blocked"][0]["reason"] == "unknown_tool"
+          and out2["receipts"] == [],
+          str(out2["blocked"]))
+    check("首现受阻 → blocked_repeat False（rule5 改参重试空间）",
+          out2["blocked_repeat"] is False
+          and out2["blocked_seen"] == ['nonsense_tool({"x": 1})'], str(out2))
+    # 同 spec 二次受阻（把首轮 blocked_seen 带进 state）→ blocked_repeat True
+    out3 = _st(['nonsense_tool({"x": 1})'],
+               receipts=out2["receipts"], blocked_seen=out2["blocked_seen"])
+    check("同 spec 二次受阻 → blocked_repeat True",
+          out3["blocked_repeat"] is True and len(out3["blocked"]) == 1, str(out3))
+    # 首次受阻但此前 blocked 的是别的 spec → repeat False（planner 改参重试合法）
+    out4 = _st(['nonsense_tool({"x": 1})'], blocked_seen=['another_bad({"y": 2})'])
+    check("受阻 spec 不同 → blocked_repeat False", out4["blocked_repeat"] is False, str(out4))
+    # 路由纯函数
+    print("  [route] route_after_execute")
+    base_state = {"messages": [], "plan": "", "blocked": [], "blocked_repeat": False}
+    check("无受阻 → planner（正常多轮循环）", route_after_execute(dict(base_state)) == "planner")
+    check("首现受阻 → planner（rule5 改参重试，零新增 LLM）",
+          route_after_execute({**base_state, "blocked": [{"spec": "a"}]}) == "planner")
+    check("重复受阻 → reflector（复盘 ≤2 轮，不再盲试第三遍）",
+          route_after_execute({**base_state, "blocked": [{"spec": "a"}], "blocked_repeat": True}) == "reflector")
+
+
 def test_gate_fallback_message():
     """gate fallback 终局语义（20260903 取代 REVISE 修正注记）：检查不过 = 收尾，
     不再有"修正要求/重考轮"（plan_rounds 不因检查而 +1）。返回体约定：
@@ -626,7 +749,9 @@ def main():
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
                test_nav_fast_path, test_display_fast_path, test_article_fast_path,
                test_explicit_tools, test_gate_claim_scope, test_gate_frame_checks,
-               test_execute_node, test_gate_fallback_message, test_planner_output_re):
+               test_execute_node, test_todo_contract, test_checker,
+               test_execute_receipts_and_route,
+               test_gate_fallback_message, test_planner_output_re):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")

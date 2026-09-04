@@ -19,6 +19,16 @@
     （fallback 是给访客看的如实回复，不再是"修正要求"）。
   * 不存在 REVISE / LLM-QC / 反思预算 / 最后通牒 / 工具重试状态机。
 
+20260904 裁决（回执驱动，架构重反思后加回"受阻复盘"而非"叙述质检"）：
+  * execute 循环内逐 spec 做 checker 确定性验收（_check_spec：错误帧/空结果/
+    命令形态），PASS → receipts 回执（系统确认的事实，跨轮执行记忆的原料），
+    BLOCK → blocked 受阻清单。
+  * 受阻首现 → 回 planner 改参重试（rule5，零新增 LLM）；同 spec 二次受阻
+    （blocked_repeat）→ reflector 复盘节点（≤2 次，输入=计划+受阻+回执+帧，
+    结构性无叙述文本），产出 ISSUE 交 planner 重规划或 wrap_up 确定性终局。
+  * 老 reflector 死于"LLM 读散文做质检"（1.26/1.30/1.32 事故）；本 reflector
+    只分析确定性受阻数据——叙述质检、REVISE 打回 model 不复活。
+
 改动背景（用户裁决，见问题记录 20260903）：三次事故（声称闸词表被绕、
 LLM-QC 采信模型自称、预算耗尽 accept）共同指向一个根因——执行器自由度
 太高：参数自拟（planner 说 /about 执行器篡成 /article/15）、调用与否自决
@@ -103,6 +113,17 @@ class AgentState(TypedDict):
     - done:        gate 检查完置 True → 边路由到 END。
     - executed:    execute 已执行的调用清单 spec（原文去重）——planner 拦
                    "检索原句重复发"的轮次浪费用（20260903 golden 实证）。
+    - receipts:    checker 验收 PASS 的累计回执（请求内累计，与 executed 同
+                   模式）——系统确认过的执行事实 [{skill,tool,args,result,ts}]，
+                   是 reflector 输入与跨轮执行记忆（__EXEC__ 帧）的原料。
+    - blocked:     本轮 execute 的 BLOCK 受阻项（[{spec,tool,reason,result}]，
+                   只含本轮——路由判断与 reflector 输入用）。
+    - blocked_seen: 请求内累计受阻 spec 原文（blocked 的累计集，repeat 判定用）。
+    - blocked_repeat: 本轮受阻项里是否有此前已受阻过的 spec（= 首轮改参重试
+                   已失败/链断）→ 路由去 reflector。
+    - reflect_rounds: reflector 复盘次数（≤ REFLECT_MAX_ROUNDS，到顶确定性终局）。
+    - issues:       reflector 上次输出的 ISSUE 文本（注入下一轮 planner 提示词）。
+    - reflect_end:  reflector 判定终局（wrap_up/预算耗尽）→ 路由去 model 叙述。
     """
 
     messages: Annotated[list, add_messages]
@@ -110,6 +131,13 @@ class AgentState(TypedDict):
     plan_rounds: int
     done: bool
     executed: list[str]
+    receipts: list[dict]
+    blocked: list[dict]
+    blocked_seen: list[str]
+    blocked_repeat: bool
+    reflect_rounds: int
+    issues: str
+    reflect_end: bool
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +151,10 @@ class AgentState(TypedDict):
 #   第 3 行: TOOLS: <实例化后的工具调用序列>（chat/收尾轮为"（无）"）
 #   第 4 行: NOTE: <业务注记>（导航目标下线/不存在/已按决策执行等）
 #   第 5 行: REPLY: <技能回复契约>（model 叙述时遵守、gate 不做文本级对照）
+#   第 6 行: TODO: <剩余步骤列表>（可选，多步链中间轮声明：后续依赖步骤用 →
+#            分隔。20260904 起：TODO 是"声明"不是"执行指令"——execute 只执行
+#            TOOLS 行，TODO 供 reflector 判链依赖/checker 语境/trace 留痕，
+#            不进执行路径；依赖步骤的参数只能等上轮工具返回后填，不预编）
 # 导航映射表在 skills.py（页面别名→路径，"物联网平台→/device-console/"是系统数据，
 # 不是模型猜测）——planner 跑题的结构性根因（不知道工具语义）由此消除。
 # 20260903：TOOLS 行不再是"允许名单"而是"执行清单"——execute 节点把它当命令
@@ -188,8 +220,12 @@ _PLANNER_PROMPT = """\
      a) 换 rag_search 语义检索一次；仍无 → b) 关键词换用户原词的变体再
      search_notes 一次（中文词零结果时保留数字/字母试原文，如"测试4"→"test4"；
      去掉口语缀词）；仍无 → c) 收尾如实告知"站内没有找到"，不得用记忆硬答
-   - 一轮只给当前步。多轮规划：你会在下一轮看到"上一轮工具执行结果"区块，
-     据此决定 读全文 / 换词再搜 / 收尾
+   - 一轮只给当前步，execute 只执行 TOOLS 行。若本计划是多步链的中间一步
+     （后续步骤依赖本轮结果：先检索定位 → 下一轮读候选全文；先 content_query
+     找到文章 → 下一轮 navigate 跳转），在计划里追加一行 TODO: <剩余步骤列表，
+     用 → 分隔>——只描述后续依赖链，不重复本轮已给的步骤；后续步骤的参数
+     （article_id 等）只能等上一轮工具返回后填写，绝不预先编造。单步/收尾轮
+     不写 TODO 行。
 4. 动作技能参数纪律：
    - navigate：target 只能填导航映射表里的别名，或用户消息里以 / 开头的字面
      路径（原样照抄，不改写、不推断成别的页面）；路径是否有效由系统白名单
@@ -222,6 +258,8 @@ _PLANNER_PROMPT = """\
 7. 输出严格按以下格式（JSON 双引号），不要任何其他文字：
 SKILL: <技能名>
 PARAMS: <JSON>
+（多步链中间轮可另加一行：TODO: <步骤1> → <步骤2>，只描述本轮之后的
+后续依赖步骤，单步/收尾轮不写）
 
 用户消息：{user_msg}"""
 
@@ -283,19 +321,41 @@ def _parse_params(raw: str) -> dict:
 def plan_encode(plan_obj: dict) -> str:
     """结构化计划（instantiate_plan 产物）→ plan 字段（契约的写端）。"""
     tools = "（无）" if not plan_obj.get("tools") else "; ".join(plan_obj["tools"])
-    return (
-        f"SKILL={plan_obj['skill']}\n"
-        f"PARAMS={json.dumps(plan_obj.get('params', {}), ensure_ascii=False)}\n"
-        f"TOOLS: {tools}\n"
-        f"NOTE: {plan_obj.get('note') or '（无）'}\n"
-        f"REPLY: {plan_obj['reply']}"
-    )
+    lines = [
+        f"SKILL={plan_obj['skill']}",
+        f"PARAMS={json.dumps(plan_obj.get('params', {}), ensure_ascii=False)}",
+        f"TOOLS: {tools}",
+        f"NOTE: {plan_obj.get('note') or '（无）'}",
+    ]
+    # TODO 行是可选第 6 行：插在 REPLY 之前（REPLY 的 DOTALL 解析假设它是末行）
+    todo = plan_obj.get("todo") or []
+    if todo:
+        lines.append(f"TODO: {' → '.join(todo)}")
+    lines.append(f"REPLY: {plan_obj['reply']}")
+    return "\n".join(lines)
+
+
+def _parse_todo(raw: str) -> list:
+    """提取 TODO 行剩余步骤列表（可选第 6 行契约；planner_node 与 parse_plan 共用）。
+
+    容错：按 [→>] 拆段、去行首序号、剥空白与句末标点，空段/“（无）/无/暂无”
+    不计。多步链的中间轮才有内容；单步/收尾轮返回空列表。
+    """
+    tm = re.search(r"TODO\s*[:=]\s*(.+)", raw or "", re.IGNORECASE)
+    if not tm:
+        return []
+    out = []
+    for s in re.split(r"[→>]", tm.group(1)):
+        s = re.sub(r"^\s*\d+[.)、]\s*", "", s).strip().strip("；;，,。")
+        if s and s not in ("（无）", "无", "暂无"):
+            out.append(s)
+    return out
 
 
 def parse_plan(raw: str) -> dict:
     """解析 plan 字段（契约的读端）。容错：解析失败 → 按 chat 兜底（宁可少干活，不硬猜）。
 
-    返回 {"skill", "params", "tools", "note", "reply", "chat"}。
+    返回 {"skill", "params", "tools", "note", "reply", "todo", "chat"}。
     面试点：所有"LLM 输出 → 程序消费"的边界都要容错解析——LLM 不是 JSON 解析器，
     输出格式漂移是常态，解析器必须能优雅降级。
     """
@@ -315,12 +375,14 @@ def parse_plan(raw: str) -> dict:
     note = nm.group(1).strip() if nm else ""
     rm = re.search(r"REPLY\s*[:=]\s*(.+)", raw or "", re.IGNORECASE | re.DOTALL)
     reply = rm.group(1).strip() if rm else ""
+    todo = _parse_todo(raw)
     return {
         "skill": skill if skill in SKILL_MAP else "chat",
         "params": params,
         "tools": tools,
         "note": note,
         "reply": reply,
+        "todo": todo,
         "chat": (skill in SKILL_MAP and SKILL_MAP[skill].chat) or skill == "chat",
     }
 
@@ -446,6 +508,22 @@ def _frame_texts(messages: list, limit: int = 5, per: int = 300) -> str:
         else:
             parts.append(f"工具 {name} 返回: {text[:per]}")
     return "\n".join(parts)
+
+
+def _receipts_text(receipts: list) -> str:
+    """checker 验收回执摘要（narrator 同轮如实转述依据，20260904）。
+
+    工具帧是"执行了什么"的原始返回，回执是"系统验收确认执行成功"的收据——
+    narrator 描述"实际显示了什么/跳转到哪"以回执为准（帧可能只含 ack 不含
+    参数，回执的 args 是文案注入后值，含实际屏文）。空 → 本轮无已验收执行。
+    """
+    if not receipts:
+        return "（本轮没有已验收的执行）"
+    lines = []
+    for r in receipts[-5:]:  # 同轮多 spec 时只取最近 5 条，防稀释
+        args_txt = json.dumps(r.get("args") or {}, ensure_ascii=False)[:160]
+        lines.append(f"- {r['tool']} args={args_txt} → {str(r.get('result', ''))[:160]}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -802,30 +880,33 @@ def _any_error_frame(messages: list) -> bool:
                for m in messages if isinstance(m, ToolMessage))
 
 
-def _wrap_up_plan(has_frames: bool) -> dict:
-    """规划轮次上限强制收尾计划（确定性，不经 LLM）。
-
-    有工具帧 → content_query 收尾（narrator 基于帧如实作答；查无结果就如实说
-    "站内没有找到"）；无工具帧（不可能的首轮超限兜底）→ chat 如实说明无法确认。
-    """
+def _terminal_plan(has_frames: bool, reason: str) -> dict:
+    """确定性收尾计划（不经 LLM）：有工具帧 → content_query 如实收尾；无帧
+    → chat 如实说明无法确认。reason 注入 note 说明收尾原因（轮次上限/受阻
+    复盘终局共用——reflector wrap_up 与规划超限同性质，不静默 accept）。"""
     if has_frames:
         return {
             "skill": "content_query",
             "tools": [],
-            "note": (f"已达规划轮次上限（{MAX_PLAN_ROUNDS}）：基于以上已有工具返回"
-                     "如实收尾作答；工具返回不足以回答时如实告知'站内没有找到/暂时"
-                     "无法确认'，不得再用模型记忆硬答"),
+            "note": (f"{reason}：基于以上已有工具返回如实收尾作答；工具返回不足"
+                     "以回答时如实告知'站内没有找到/暂时无法确认'，不得再用模型"
+                     "记忆硬答"),
             "reply": SKILL_MAP["content_query"].reply_contract,
             "chat": False,
         }
     return {
         "skill": "chat",
         "tools": [],
-        "note": (f"已达规划轮次上限（{MAX_PLAN_ROUNDS}）且无任何工具执行记录："
-                 "如实告知暂时无法确认/无法回答，不得编造"),
+        "note": (f"{reason}且无任何工具执行记录：如实告知暂时无法确认/无法回答，"
+                 "不得编造"),
         "reply": "直接回答",
         "chat": True,
     }
+
+
+def _wrap_up_plan(has_frames: bool) -> dict:
+    """规划轮次上限强制收尾计划（确定性，不经 LLM，20260903 语义不变）。"""
+    return _terminal_plan(has_frames, f"已达规划轮次上限（{MAX_PLAN_ROUNDS}）")
 
 
 def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
@@ -938,6 +1019,15 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         plan_obj = instantiate_plan("navigate", {"target": lit.group(0), "mode": "direct"})
         plan_obj["params"] = {"target": lit.group(0), "mode": "direct"}
 
+    # TODO 剩余步骤声明提取（20260904 最小契约）：planner LLM 可选输出行，多步
+    # 依赖链的中间轮用它声明"本轮之后还要做什么"——给后续轮次/reflector 看，
+    # 不是执行指令（execute 只执行 TOOLS 行）。仅 LLM 决策轮有 raw；快道/拦截
+    # 路径的计划是确定性 dict，不带 todo → plan_encode 不写 TODO 行。
+    todo = _parse_todo(raw)
+    if todo:
+        plan_obj["todo"] = todo
+        record("planner", "todo", todo=todo, round=rounds)
+
     # 动作重复执行防护（确定性）：非首轮（已有帧）planner 若仍规划了动作技能
     # （navigate/effect/darkmode/device_display/device_query/read_article）且其
     # 全部工具名都已在帧中出现 → 上一轮已执行，本轮强制收尾不重复执行
@@ -1005,25 +1095,26 @@ def _tool_name(tool_spec: str) -> str:
     return tool_spec.split("(", 1)[0].strip()
 
 
-def _tool_args(tool_spec: str) -> dict:
-    """TOOLS 行条目 → 参数字典。spec 参数由 instantiate_plan 以 json.dumps 落盘
-    （JSON 的 true/false/null 不是 Python 字面量，ast.literal_eval 会拒），故先
-    json.loads（规范格式）再 ast.literal_eval（容手写 Python 风格），都失败兜底
-    空参——调用方按错误帧处理；工具签名必填参数缺失时工具层自会报 __ERROR__，
-    不炸图。"""
+def _tool_args(tool_spec: str) -> tuple[dict, bool]:
+    """TOOLS 行条目 → (参数字典, 解析是否成功)。spec 参数由 instantiate_plan 以
+    json.dumps 落盘（JSON 的 true/false/null 不是 Python 字面量，ast.literal_eval
+    会拒），故先 json.loads（规范格式）再 ast.literal_eval（容手写 Python 风格），
+    都失败兜底空参 + ok=False——checker 据此判 args_parse（调用方按错误帧处理；
+    工具签名必填参数缺失时工具层自会报 __ERROR__，不炸图）。
+    """
     m = re.match(r"^(\w+)\((.*)\)$", tool_spec.strip(), re.DOTALL)
     if not m or not m.group(2).strip():
-        return {}
+        return {}, True
     raw = m.group(2).strip()
     for loader in (json.loads, ast.literal_eval):
         try:
             obj = loader(raw)
             if isinstance(obj, dict):
-                return obj
+                return obj, True
         except Exception:
             continue
     logger.warning("[execute] 工具参数解析失败，按空参调用: %s", tool_spec)
-    return {}
+    return {}, False
 
 
 _DISPLAY_CREATE_PROMPT = """\
@@ -1056,16 +1147,53 @@ def _create_display_text(user_msg: str, page_ctx: str) -> str:
         return fallback
 
 
+_VERDICT_PASS, _VERDICT_BLOCK = "PASS", "BLOCK"
+
+
+def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str) -> tuple[str, str]:
+    """checker 确定性验收（20260904，execute 循环内逐 spec 调用，无 LLM）。
+
+    输入 = spec 实际调用值（args 是文案注入后值）+ 工具原始返回。只做回执形态
+    校验（错误帧/空结果/命令帧形状），不做文本语义判断——语义由 planner 从帧
+    里自己读（错误修正重试是 planner rule5 的活）。
+    PASS → 该执行成为系统确认事实（receipts，跨轮执行记忆原料）；
+    BLOCK → 该执行不进回执（错误结果不是事实），进 blocked 交 planner/reflector。
+    """
+    if name not in _TOOL_MAP:
+        # 白名单结构上到不了 execute，防御保留（执行器不静默吞越权）
+        return _VERDICT_BLOCK, "unknown_tool"
+    if not args_ok:
+        return _VERDICT_BLOCK, "args_parse"
+    text = raw or ""
+    if not text.strip():
+        return _VERDICT_BLOCK, "empty_result"
+    if text.lstrip().startswith("__ERROR__"):
+        return _VERDICT_BLOCK, "error_frame"
+    # 命令工具契约层校验：动作工具必须返回命令帧（工具返回形态漂移 = 执行未
+    # 按契约发生，如 navigate 返回了纯文本而非 NAVIGATE:/AUTO_NAVIGATE:）。
+    # device_oled_display 的"未在 5s 内回执确认"属软失败（指令确已下发），判
+    # PASS——如实告知场景，不把软失败升成受阻链。
+    if name == "navigate_to" and not text.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")):
+        return _VERDICT_BLOCK, "cmd_shape"
+    if name == "toggle_effect" and not text.startswith("EFFECT:"):
+        return _VERDICT_BLOCK, "cmd_shape"
+    if name == "toggle_dark_mode" and not text.startswith("DARKMODE:"):
+        return _VERDICT_BLOCK, "cmd_shape"
+    return _VERDICT_PASS, "ok"
+
+
 def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """确定性执行 planner 调用清单：逐条 literal_eval 参数 → _TOOL_MAP 调用 →
-    ToolMessage 帧（含 __ERROR__ 错误帧）→ 回 planner。
+    ToolMessage 帧（含 __ERROR__ 错误帧）→ 逐 spec checker 验收（PASS 回执 /
+    BLOCK 受阻）→ 回 planner（受阻首现）或 reflector（同 spec 二次受阻）。
 
     20260827 实测教训保留：工具执行前做断连检查——写操作（设备指令下发/导航/
     特效切换）绝不发生在用户已离开之后。
     执行器无自由意志因此也无越权通道：planner 决策经 instantiate_plan 白名单
     （_EXPLICIT_TOOLS/_CALLABLE_QUERY_TOOLS/技能模板）生成，execute 照单全收；
     与旧 tools_node 的差异 = 没有"model 自拟参数""计划外调用授权拒绝"分支——
-    那些自由在 20260903 已从执行层移除（用户裁决）。
+    那些自由在 20260903 已从执行层移除（用户裁决）。20260904：checker 是
+    确定性验收函数（读回执形态），不新增决策权——执行层仍零自由。
     """
     if _stopped(config):
         logger.info("[execute] cancelled (client disconnected) — 不执行任何工具（含写操作）")
@@ -1078,9 +1206,12 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     user_msg = _last_user_msg(state["messages"])
     page_ctx = _page_ctx(state["messages"])
     results: list = []
+    receipts = list(state.get("receipts") or [])  # 请求内累计（与 executed 同模式）
+    blocked: list = []                            # 只含本轮受阻项（路由/reflector 用）
+    prev_seen = set(state.get("blocked_seen") or [])  # 本轮之前的受阻 spec 集
     for idx, spec in enumerate(specs):
         name = _tool_name(spec)
-        args = _tool_args(spec)
+        args, args_ok = _tool_args(spec)
         tool = _TOOL_MAP.get(name)
         # 屏幕文案创作：text 参数缺失/为空 → execute 结合对话创作（技能固有设计）
         if name == "device_oled_display" and not args.get("text"):
@@ -1106,8 +1237,25 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             result_ = result_[:200]
         record("execute", "call", name=name, args=args,
                duration_s=round(time.monotonic() - _t_tool, 3), result=result_)
+        # checker 确定性验收（20260904）：PASS → 回执（系统确认事实，跨轮执行
+        # 记忆与 reflector 的原料）；BLOCK → 受阻项（不进回执——错误结果不是
+        # 事实）。args 是文案注入后值（device_oled_display 回执须能呈现实际屏文）。
+        verdict, reason = _check_spec(name, args, args_ok, str(out), plan["skill"])
+        if verdict == _VERDICT_PASS:
+            receipts.append({"skill": plan["skill"], "tool": name,
+                             "args": {k: str(v)[:200] for k, v in args.items()},
+                             "result": str(out)[:200], "ts": time.time()})
+        else:
+            blocked.append({"spec": spec, "tool": name, "reason": reason,
+                            "result": str(out)[:300]})
+        record("execute", "check", tool=name, verdict=verdict, reason=reason,
+               skill=plan["skill"])
+    repeat = any(b["spec"] in prev_seen for b in blocked)  # 同 spec 二次受阻 = 重试已败/链断
     return {"messages": results,
-            "executed": executed + [s for s in specs if s not in executed]}
+            "executed": executed + [s for s in specs if s not in executed],
+            "receipts": receipts, "blocked": blocked,
+            "blocked_seen": sorted(prev_seen | {b["spec"] for b in blocked}),
+            "blocked_repeat": repeat}
 
 
 # ---------------------------------------------------------------------------
@@ -1127,6 +1275,10 @@ _EXECUTOR_PROMPT = """\
 [本轮工具执行记录]（站内事实的唯一来源，逐字依据，不要扩展）：
 {tool_frames}
 
+[本轮执行回执]（系统确定性验收通过的实际执行事实——含工具参数与返回，
+如实转述的依据；为空 = 本轮没有已验收的执行）：
+{exec_receipts}
+
 当前页面上下文（前端实时上报的访客位置/特效/夜间模式，以此为准）：
 {page_ctx}
 
@@ -1145,7 +1297,8 @@ _EXECUTOR_PROMPT = """\
 5. 工具返回以 __ERROR__ 开头 → 如实转述失败原因，不把失败说成成功、不声称
    已完成。执行计划 NOTE 要求如实告知的（页面不存在/已下线）照做。
 6. 回复正文绝不输出 NAVIGATE:/AUTO_NAVIGATE:/EFFECT:/DARKMODE: 等命令前缀文本，
-   也不要用伪工具调用格式表演执行过程。
+   也不要用伪工具调用格式表演执行过程。执行计划里的 TODO/过程注记是系统内部
+   规划信息，不要复述。
 7. 需要给出站内链接时，只能用"工具执行记录"或页面上下文里真实出现的地址，
    不确定就不要给。
 8. 纯闲聊与博客内容无关的问题自由回答，但纪律 2/3/6 仍然适用。
@@ -1170,6 +1323,7 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     system = SystemMessage(content=_EXECUTOR_PROMPT.format(
         persona=BLOG_ASSISTANT_PROMPT, plan=state["plan"],
         tool_frames=_frame_texts(state["messages"]),
+        exec_receipts=_receipts_text(state.get("receipts") or []),
         page_ctx=_page_ctx(state["messages"])))
     _t0 = time.monotonic()
     logger.info("[model] LLM 调用开始（narrator）")
@@ -1306,6 +1460,21 @@ def route_after_planner(state: AgentState) -> Literal["execute", "model"]:
     return "execute" if plan["tools"] else "model"
 
 
+def route_after_execute(state: AgentState) -> Literal["planner", "reflector"]:
+    """execute 执行完的下一站（20260904 checker 驱动路由）：
+      - 本轮无受阻项 → planner（正常多轮循环：看工具返回再决策，现状不变）
+      - 有受阻项但都是首现（planner rule5 的合法改参重试空间，零新增 LLM）→
+        planner 按错误修正重试
+      - blocked_repeat（受阻 spec 此前已受阻过 = 首轮重试已败/依赖链断）→
+        reflector 复盘（≤2 次 LLM），不再让 planner 盲试第三遍
+    """
+    if not state.get("blocked"):
+        return "planner"
+    if state.get("blocked_repeat"):
+        return "reflector"
+    return "planner"
+
+
 # ---------------------------------------------------------------------------
 # 5. 组装与编译
 # ---------------------------------------------------------------------------
@@ -1344,4 +1513,6 @@ def graph_input(messages: list) -> dict:
     形状完整、可读。
     """
     return {"messages": messages, "plan": "", "plan_rounds": 0, "done": False,
-            "executed": []}
+            "executed": [], "receipts": [], "blocked": [], "blocked_seen": [],
+            "blocked_repeat": False, "reflect_rounds": 0, "issues": "",
+            "reflect_end": False}
