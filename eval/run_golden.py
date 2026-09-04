@@ -77,6 +77,7 @@ def run_one(req: ChatRequest) -> dict:
     final_text = ""
     commands: list[str] = []
     tool_calls: list[str] = []  # 20260902：已调用的工具名（require_tool_calls 断言用）
+    exec_rows: list = []  # 20260904：checker 验收回执（__EXEC__ 帧，系统确认事实）
     resets = 0
     resets_reasons: list[str] = []
     error = None
@@ -89,6 +90,15 @@ def run_one(req: ChatRequest) -> dict:
             reason = item.removeprefix("__RESET__").lstrip(":")
             if reason:
                 resets_reasons.append(reason)
+        elif isinstance(item, str) and item.startswith("__EXEC__:"):
+            # 20260904 C3：跨轮执行记忆帧（__RESET__ 不清——回执是已发生事实，
+            # gate fallback 只否定叙述文本不否定执行）
+            try:
+                rows = json.loads(item[len("__EXEC__:"):])
+                if isinstance(rows, list):
+                    exec_rows.extend(r for r in rows if isinstance(r, dict))
+            except Exception:
+                pass
         elif isinstance(item, AIMessageChunk) and item.content:
             final_text += str(item.content)
         elif isinstance(item, ToolMessage) and item.content:
@@ -102,6 +112,8 @@ def run_one(req: ChatRequest) -> dict:
         elif isinstance(item, BaseException):
             error = str(item)
     return {"text": final_text, "commands": commands, "tool_calls": tool_calls,
+            "exec_rows": exec_rows,
+            "exec_tools": [r.get("tool", "") for r in exec_rows],
             "resets": resets, "resets_reasons": resets_reasons, "error": error}
 
 
@@ -161,6 +173,19 @@ def check_gold(gold: dict, result: dict) -> list[str]:
                 f"未调用任一检索工具 {gold['require_tool_calls_any']}（已调用：{result['tool_calls']}）"
             )
 
+    # 20260904 C3：跨轮执行记忆断言
+    #   forbid_tool_calls —— 真实性质疑轮应零工具据回执回答（重发/补做 = 越权）
+    #   require_exec_tools —— checker 验收回执里必须有这些工具（比 tool_calls
+    #   更强：失败执行/未知工具帧不算系统确认事实）
+    if gold.get("no_tool_calls") and result["tool_calls"]:
+        fails.append(f"不应调用任何工具（已调用：{result['tool_calls']}）")
+    for t in gold.get("forbid_tool_calls", []):
+        if t in result["tool_calls"]:
+            fails.append(f"不应调用工具 {t}（已调用：{result['tool_calls']}）")
+    for t in gold.get("require_exec_tools", []):
+        if t not in result["exec_tools"]:
+            fails.append(f"checker 验收回执缺少工具 {t}（exec：{result['exec_tools']}）")
+
     return fails
 
 
@@ -206,6 +231,9 @@ def main():
             current_darkmode=ctx.get("current_darkmode", ""),
             history=ctx.get("history", []),
             summary=ctx.get("summary", ""),
+            # 20260904 C3：跨轮执行记忆（模拟 Rust 侧 execution_log 渲染注入——
+            # 二轮用例把首轮回执作为 executions 传进来，锁"据记忆如实回答"路径）
+            executions=ctx.get("executions", ""),
         )
         t0 = time.time()
         result = run_one(req)
