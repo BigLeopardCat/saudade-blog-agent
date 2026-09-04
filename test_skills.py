@@ -854,6 +854,38 @@ def test_planner_output_re():
         check(f"regex {raw[:20]!r} → {want}", got == want, f"got={got}")
 
 
+def test_search_retry_kind():
+    """检索重复清单拦截判定（20260905 工具级计数扩展，_search_retry_kind 纯函数）。
+
+    spec 级判据防"原句连发"（retry_loop）；工具级计数判据防换词变体打转
+    （rag_loop）：rag_search 已执行 ≥2 次仍规划 rag_search → 拦，但第 2 次
+    变体（已执行 1 次）放行——rule5"换词语义重试"给足首搜 + 一次换词。
+    只拦 rag_search 变体：detail 读取/search_notes 点名/非 content_query 不误伤。
+    """
+    from agent.graph import _search_retry_kind
+
+    rag_a = 'rag_search({"query": "esp32 接入平台"})'
+    rag_b = 'rag_search({"query": "接入指南"})'
+    rag_c = 'rag_search({"query": "怎么做"})'
+    detail = 'get_article_detail({"article_id": 19})'
+    cq = {"skill": "content_query", "tools": []}
+    check("首轮 rag 放行", _search_retry_kind(dict(cq, tools=[rag_a]), []) is None)
+    check("第 2 次换词放行（已执行 1 次）",
+          _search_retry_kind(dict(cq, tools=[rag_b]), [rag_a]) is None)
+    check("同款 spec 连发 → retry_loop（spec 级优先）",
+          _search_retry_kind(dict(cq, tools=[rag_a]), [rag_a]) == "retry_loop")
+    check("第 3 次变体 → rag_loop",
+          _search_retry_kind(dict(cq, tools=[rag_c]), [rag_a, rag_b]) == "rag_loop")
+    check("已执行 ≥2 但转读全文不拦",
+          _search_retry_kind(dict(cq, tools=[detail]), [rag_a, rag_b]) is None)
+    check("已执行 ≥2 但点名列不拦",
+          _search_retry_kind(dict(cq, tools=['search_notes({"keyword": "x"})']),
+                             [rag_a, rag_b]) is None)
+    check("非 content_query 不拦",
+          _search_retry_kind({"skill": "chat", "tools": [rag_a]}, [rag_a, rag_b]) is None)
+    check("tools 空不拦", _search_retry_kind(dict(cq, tools=[]), [rag_a, rag_b]) is None)
+
+
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
@@ -861,7 +893,8 @@ def main():
                test_explicit_tools, test_gate_claim_scope, test_gate_frame_checks,
                test_execute_node, test_todo_contract, test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
-               test_gate_fallback_message, test_planner_output_re):
+               test_gate_fallback_message, test_planner_output_re,
+               test_search_retry_kind):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
