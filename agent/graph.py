@@ -65,7 +65,7 @@ from langgraph.graph.message import add_messages
 
 from models import get_llm
 from tools import get_all_tools
-from agent.prompts import BLOG_ASSISTANT_PROMPT
+from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE
 from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
                           build_planner_context, instantiate_plan)
 from utils.trace import record
@@ -249,7 +249,10 @@ _PLANNER_PROMPT = """\
      禁止拿首页或其他页面兜底执行——决议不出目标就如实说明或先给文章链接
    - effect/darkmode：先看页面上下文 current_effects/current_darkmode——状态
      已与用户要求一致时【不要调用工具】，选 chat 直接把现状告诉访客
-     （幂等：零调用是正确行为）；不一致才规划 toggle_effect/toggle_dark_mode
+     （幂等：零调用是正确行为）；不一致才规划 toggle_effect/toggle_dark_mode。
+     "把X换成/改成/不要X要Y"（X 当前开着、Y 是目标特效）＝**两个状态变更**：
+     同一 TOOLS 行给两条 spec（X off + Y on），execute 逐条执行——只关 X 不
+     开 Y 等于没完成"换成 Y"，目标效果必须真的开启
    - device_display：不填 text 参数（屏幕文案由系统在展示时结合对话创作）
 5. 多轮收敛：
    - 已执行动作技能（navigate/effect/darkmode/device_display/device_query/
@@ -764,6 +767,75 @@ def _article_fast_path(user_msg: str, page_ctx: str) -> dict | None:
     return plan_obj
 
 
+# 特效切换快道（20260904）：把 X 换成/改成 Y → 关当前效果 + 开目标效果双 spec。
+# 事故实证：planner LLM 对"不要樱花了，改成下雨吧"反复只解出"关樱花"半边——
+# 10 轮采样 8 轮丢 rain:on（4 轮收尾"只关了樱花"、4 轮明言"雨没法帮你切换"），
+# 目标效果半边的规划在模型侧不稳定。切换是固定流程任务：旧效果来自 current_effects
+# 系统状态、目标效果是消息动词后的字面量，无模型推断空间 → 与 read_article 快道
+# 同理（宁多勿漏：误触发成本 = 一次幂等检查，漏触发 = 用户要求只做一半）。
+_EFFECT_ALIASES = {  # 别名 → 规范化 effect id（匹配按别名长度降序，长名优先）
+    "樱花": "sakura", "sakura": "sakura",
+    "下雨": "rain", "大雨": "rain", "rain": "rain", "雨": "rain",
+    "雪花": "snow", "下雪": "snow", "snow": "snow", "雪": "snow",
+}
+_SWITCH_VERB_RE = re.compile(r"换成|改成|改为|切换|调成|变为|换")
+# 内容改写语境排除（"把文章里的雨字改成雪字"不是特效请求）——不用"文章/留言"
+# 这类词（会误杀"换特效顺便查文章"的混合意图），只排改写对象的强标记词
+_EFFECT_TALK_GUARD = re.compile(r"内容|文字|标题|代码|字|词|称呼|名字")
+
+
+def _effect_switch_fast_path(user_msg: str, current_effects: str) -> dict | None:
+    """特效切换快道：切换动词 + 目标效果名（消息动词后）→ effect 双 spec 计划。
+
+    返回 plan dict（与 instantiate_plan 产物同构，tools 可含两条 toggle_effect），
+    或 None 落回 planner LLM。旧效果取值顺序：消息点名（动词前）→ 当前开着且
+    非目标的其它效果（"改成下雨"不点名时以 current_effects 实况补旧）；
+    目标已开着时只关旧（幂等，不重复开）。
+    """
+    if _EFFECT_TALK_GUARD.search(user_msg):
+        return None
+    m = _SWITCH_VERB_RE.search(user_msg)
+    if not m:
+        return None
+    after = user_msg[m.end():]
+    before = user_msg[:m.start()]
+    # 目标效果 = 动词后第一个别名命中（长名优先：先试"下雨"再试"雨"）
+    target = None
+    for alias in sorted(_EFFECT_ALIASES, key=len, reverse=True):
+        if alias in after:
+            target = _EFFECT_ALIASES[alias]
+            break
+    if target is None:
+        return None
+    old = None
+    for alias in sorted(_EFFECT_ALIASES, key=len, reverse=True):
+        if alias in before:
+            old = _EFFECT_ALIASES[alias]
+            break
+    cur = {e for e in (current_effects or "").split(",") if e and e != "none"}
+    if old is None:
+        on_others = [e for e in cur if e != target]
+        old = on_others[0] if on_others else None
+    if old == target:
+        return None  # 换到当前已开效果 = 幂等，落回 planner 叙述
+    tools = []
+    if old is not None and old in cur:
+        tools.append(f"toggle_effect({json.dumps({'effect': old, 'action': 'off'}, ensure_ascii=False)})")
+    if target not in cur:
+        tools.append(f"toggle_effect({json.dumps({'effect': target, 'action': 'on'}, ensure_ascii=False)})")
+    if not tools:
+        return None
+    note = f"特效切换快道（确定性，非模型决策）：{'、'.join(tools)}"
+    return {
+        "skill": "effect",
+        "tools": tools,
+        "note": note,
+        "reply": SKILL_MAP["effect"].reply_contract,
+        "chat": False,
+        "params": {"effect_switch": f"{old or '（无）'}→{target}"},
+    }
+
+
 def _nav_fast_path(user_msg: str) -> dict | None:
     """导航快道：整句映射命中，或动词+目标强模式 + 映射/模糊归一命中 → navigate 计划。
 
@@ -986,6 +1058,14 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if article is not None:
             record("planner", "fastpath", kind="article_read", tools=article["tools"], round=rounds)
             return {"plan": plan_encode(article), "plan_rounds": rounds + 1, "done": False}
+
+        # 特效切换确定性快道（零 LLM，20260904）：把 X 换成/改成 Y → 关旧开新
+        # 双 spec 同轮（planner LLM 反复丢目标效果半边，见 _effect_switch_fast_path）。
+        eff_cur = re.search(r"current_effects=([^;\]]+)", page_ctx)
+        switch = _effect_switch_fast_path(user_msg, eff_cur.group(1) if eff_cur else "")
+        if switch is not None:
+            record("planner", "fastpath", kind="effect_switch", tools=switch["tools"], round=rounds)
+            return {"plan": plan_encode(switch), "plan_rounds": rounds + 1, "done": False}
 
     # LLM 决策轮。低温度（分类不需要创造力）、小 max_tokens、短超时。
     # enable_thinking=False：planner 是"选技能+填参数"的结构化分类任务（300 token
@@ -1419,6 +1499,9 @@ _EXECUTOR_PROMPT = """\
 当前页面上下文（前端实时上报的访客位置/特效/夜间模式，以此为准）：
 {page_ctx}
 
+情绪表达素材（20260904：真正的情绪表达时才引用，不堆砌不机械）：
+{sticker_guide}
+
 叙述纪律（你是回复者，不是执行者）：
 1. 你没有任何可以直接调用的工具。站内查询、跳转、特效/夜间切换、设备操作都
    由系统在上面的执行计划中完成——你只负责把"工具执行记录"里的返回组织成回复。
@@ -1464,7 +1547,8 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         persona=BLOG_ASSISTANT_PROMPT, plan=state["plan"],
         tool_frames=_frame_texts(state["messages"]),
         exec_receipts=_receipts_text(state.get("receipts") or []),
-        page_ctx=_page_ctx(state["messages"])))
+        page_ctx=_page_ctx(state["messages"]),
+        sticker_guide=STICKER_GUIDE))
     _t0 = time.monotonic()
     logger.info("[model] LLM 调用开始（narrator）")
     record("model", "llm_start")

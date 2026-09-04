@@ -557,6 +557,11 @@ flowchart TB
   目标 ≤8 字约束）→ ② 显示快道（屏幕类名词 + 写/显示动词强模式，排除疑问/否定句式）→
   ③ 当前文章读取快道（20260901 系统性修复：page_ctx 的 current_url 正则解析文章 ID + 消息含
   当前文章指称 → 零 LLM 实例化 `read_article` 技能，TOOLS 行强制 `get_article_detail(<id>)`）。
+  ④ 特效切换快道（20260904：planner LLM 对"把 X 换成/改成 Y"反复只解出"关 X"半边——10 轮
+  采样 8 轮丢目标效果的 on（golden multi_turn_redirect 暴露）；切换是固定流程任务，旧效果 =
+  current_effects 系统状态、目标 = 消息切换动词后字面量，无模型推断空间 → `_effect_switch_fast_path`
+  同轮产两条 toggle_effect spec（旧 off + 目标 on，幂等检查：目标已开只关旧）；内容改写语境
+  （"把文章里的雨字改成雪字"，guard 词 字/词/标题/内容等）不命中落回 LLM）。
   快道只判定**用户首条消息**（rounds==0 且本轮无工具帧——execute 完成后回 planner 再命中快道
   会重复规划同一动作，20260903 设计陷阱实证）；快道都是**正向确定性识别**（命中才拦截，识别
   依据 NAV_MAP/正则/current_url 等系统数据，不存在模型猜测通道），未命中落回 planner LLM
@@ -633,8 +638,13 @@ flowchart TB
   ——教 narrator 如何调工具只会诱导它在回复里表演调用）+ 计划文本 + 本轮工具帧摘要 + 页面上下文
   + 叙述纪律（_EXECUTOR_PROMPT：站内事实只来自工具帧/页面上下文、无帧不得声称查过/读过/执行过、
   被质疑时如实承认无执行记录、err 帧如实转述失败、正文禁命令前缀与伪工具调用表演、站内链接只能
-  给真实出现的地址）。`enable_thinking=False`（20260831 起：长上下文思考链爆炸——46.8s/79.1s/
-  105.8s 慢调用实证，golden 全量回归把关）。
+  给真实出现的地址）。20260904 起追加**情绪表达素材**（{sticker_guide}，prompts.py STICKER_GUIDE）：
+  正文写 `:名字:`（8 个内置贴纸名，名字清单 = 前端渲染契约 frontend/src/utils/stickers.ts +
+  live2d-widgets/chat-render.js，**增删必须三处同步**）由前端渲染成贴纸图；纪律 = 只在氛围性
+  情绪（被夸害羞/安慰/祝贺分享成功等）出现时引用、每轮最多一个、完成任务/查到结果等中性服务
+  确认不带表情（装饰例行回复即机械堆砌）、绝不编造表外名字（未命中渲染为原样文本）。
+  `enable_thinking=False`（20260831 起：长上下文思考链爆炸——46.8s/79.1s/105.8s 慢调用实证，
+  golden 全量回归把关）。
 - **gate = 唯一确定性检查**（graph.py `gate_node`，取代旧 reflector 的 9 确定性闸 + LLM 质检 +
   REVISE）：20260903 起执行正确性不需要检查（execute 是确定性执行器，"工具没按计划调"结构上
   不存在），gate 只兜**叙述失真**（narrator 文本声称 ≠ 帧事实：声称有执行但无帧/帧失败却说成功/

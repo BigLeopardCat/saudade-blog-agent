@@ -26,10 +26,10 @@ import sys
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent.graph import (_PLANNER_OUTPUT_RE, REFLECT_MAX_ROUNDS, _article_fast_path,
-                         _check_spec, _display_fast_path, _nav_fast_path,
-                         _parse_params, execute_node, gate_node, plan_encode,
-                         parse_plan, reflector_node, route_after_execute,
-                         route_after_reflector)
+                         _check_spec, _display_fast_path, _effect_switch_fast_path,
+                         _nav_fast_path, _parse_params, execute_node, gate_node,
+                         plan_encode, parse_plan, reflector_node,
+                         route_after_execute, route_after_reflector)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, instantiate_plan
 
 FAILS = []
@@ -376,6 +376,56 @@ def test_article_fast_path():
     from agent.skills import build_planner_context
     check("planner 技能表不含 read_article（快道专用，对 planner 不可见）",
           "read_article" not in build_planner_context(), "")
+
+
+def test_effect_switch_fast_path():
+    """特效切换确定性快道（20260904）：把 X 换成/改成 Y → 同轮两条 toggle_effect
+    spec（旧 off + 目标 on）。回归基线：multi_turn_redirect（"不要樱花了，改成
+    下雨吧"）planner LLM 10 轮采样 8 轮只规划 sakura off、丢目标效果 rain on——
+    切换是固定流程任务（旧效果 = current_effects 系统状态、目标 = 动词后字面量），
+    快道确定性接管；此测试锁纯函数，E2E 由 golden multi_turn_redirect 锁。"""
+    print("[effect_switch_fast_path] 特效切换快道")
+    OFF = 'toggle_effect({"effect": "sakura", "action": "off"})'
+    ON = 'toggle_effect({"effect": "rain", "action": "on"})'
+    # 命中：消息点名旧 + 语境一致 → 双 spec（sakura off + rain on）
+    p = _effect_switch_fast_path("等等，还是不要樱花了，改成下雨吧", "sakura")
+    check("点名旧效果 → 双 spec（off+on 同轮）",
+          p is not None and p["skill"] == "effect" and p["tools"] == [OFF, ON], f"p={p}")
+    # 单字动词"换"命中
+    p = _effect_switch_fast_path("不要樱花特效了，换雪", "sakura")
+    check("单字'换'命中 → snow 目标双 spec",
+          p is not None and p["tools"][0] == OFF
+          and p["tools"][1] == 'toggle_effect({"effect": "snow", "action": "on"})', f"p={p}")
+    # 不点名旧：以 current_effects 实况补旧（"改成下雨"）
+    p = _effect_switch_fast_path("改成下雨吧", "sakura")
+    check("语境补旧（sakura on + 改成下雨）→ 双 spec", p is not None and p["tools"] == [OFF, ON], f"p={p}")
+    # 幂等分支：目标已开 → 只关旧；无旧可关 → 只开目标
+    p = _effect_switch_fast_path("改成下雨吧", "sakura,rain")
+    check("目标已开 → 只关 sakura", p is not None and p["tools"] == [OFF], f"p={p}")
+    p = _effect_switch_fast_path("改成下雨吧", "none")
+    check("无旧可关 → 只开 rain", p is not None and p["tools"] == [ON], f"p={p}")
+    # 目标已开 + 点名旧 → 只关旧（rain 已开无需重复 on）
+    p = _effect_switch_fast_path("把樱花换成雨", "sakura,rain")
+    check("目标已开 + 点名旧 → 只关 sakura", p is not None and p["tools"] == [OFF], f"p={p}")
+    # old==target（cur=rain 且消息"换成雨"）→ 换到当前效果 = 幂等 → None
+    check("目标==当前唯一效果 → None（幂等）",
+          _effect_switch_fast_path("把雨换成雨", "rain") is None, "")
+    # 不命中：内容改写语境（guard）、无切换动词、目标非特效名
+    for msg, cur in [("帮我把文章里的雨字改成雪字", "none"),
+                     ("这雨下得真大，帮我看看有没有讲雪的文章", "none"),
+                     ("关掉雨吧", "rain"),
+                     ("晚上换个模式用暗色吧", "none"),
+                     ("不要樱花特效了", "sakura")]:
+        check(f"不命中 → None「{msg[:18]}」", _effect_switch_fast_path(msg, cur) is None,
+              str(_effect_switch_fast_path(msg, cur)))
+    # current_effects 为 none/空串不带入 spec（不产生 off none 垃圾调用）
+    p = _effect_switch_fast_path("改成下雨吧", "")
+    check("空 current_effects → 无垃圾 off", p is not None and p["tools"] == [ON], f"p={p}")
+    # plan 往返：快道双 spec 计划编码 → 解析后 tools 保持两条（execute 逐条执行）
+    p = _effect_switch_fast_path("把樱花换成雨", "sakura")
+    parsed = parse_plan(plan_encode(p))
+    check("双 spec 计划往返：tools 两条原样保留",
+          parsed["tools"] == [OFF, ON] and parsed["skill"] == "effect", f"parsed={parsed}")
 
 
 def test_explicit_tools():
@@ -807,7 +857,7 @@ def test_planner_output_re():
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
-               test_nav_fast_path, test_display_fast_path, test_article_fast_path,
+               test_nav_fast_path, test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
                test_explicit_tools, test_gate_claim_scope, test_gate_frame_checks,
                test_execute_node, test_todo_contract, test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
