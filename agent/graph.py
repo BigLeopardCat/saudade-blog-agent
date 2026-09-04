@@ -97,6 +97,12 @@ _TOOL_MAP = {t.name: t for t in _TOOLS}
 # 每轮 = planner 一次决策；收尾轮（计划 TOOLS 为空）直接走 model，不占用。
 MAX_PLAN_ROUNDS = 4
 
+# 复盘轮次上限（20260904）：同 spec 二次受阻（rule5 首轮改参重试已败/链断）才
+# 进 reflector——罕见异常路径，LLM 复盘 ≤ REFLECT_MAX_ROUNDS 次，到顶确定性
+# 终局收尾（无静默 accept）。老 reflector 的教训：复盘必须小预算，LLM 循环是
+# 死亡螺旋的燃料（1.26/1.30/1.33 事故均在长复盘链上）。
+REFLECT_MAX_ROUNDS = 2
+
 
 # ---------------------------------------------------------------------------
 # 1. State：节点间共享的"工作台"
@@ -182,6 +188,10 @@ _PLANNER_PROMPT = """\
 
 {tool_results}
 
+复盘建议（reflector 对重复受阻项的 ISSUE 修正指引——仅当上一轮复盘判 replan
+后才有内容；没有则为缺省语，按常规规则决策）：
+{reflector_feedback}
+
 判定规则：
 1. 决策类型（SKILL）：
    - chat：纯闲聊/问候/情感/通用知识——与博客任何内容（文章/说说/留言/公告/
@@ -246,6 +256,9 @@ _PLANNER_PROMPT = """\
      绝不重复规划同款调用——动作已由工具帧完成，回复层会基于帧确认
    - 上一轮工具返回以 __ERROR__ 开头 → 按错误修正参数重试一次；已重试过或
      无法修正 → 收尾如实告知失败，不得声称成功
+   - 上方复盘建议存在（reflector ISSUE，指明受阻项缺什么/怎么改）→ 按建议
+     重试该修正；按建议执行后仍受阻 → 不再第三次自试，收尾如实结束——复盘
+     建议是对已受阻项的修正指引，不是无限重试授权
    - 不再需要更多信息就立即收尾。规划轮数上限 {max_rounds} 轮，超限后系统
      会强制收尾（基于已有工具返回如实作答），不存在无限追问
 6. 用户催促/质疑执行（"你不直接转跳过去？""到底跳了没？""别光说，带我去啊"）：
@@ -983,6 +996,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             page_ctx=page_ctx, round_info=round_info,
             recent_context=_recent_tail(state["messages"]),
             tool_results=_frame_texts(state["messages"]),
+            reflector_feedback=state.get("issues") or "（本决策轮无复盘建议）",
             max_rounds=MAX_PLAN_ROUNDS, user_msg=user_msg))
     except Exception as e:
         # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
@@ -1251,11 +1265,126 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         record("execute", "check", tool=name, verdict=verdict, reason=reason,
                skill=plan["skill"])
     repeat = any(b["spec"] in prev_seen for b in blocked)  # 同 spec 二次受阻 = 重试已败/链断
-    return {"messages": results,
-            "executed": executed + [s for s in specs if s not in executed],
-            "receipts": receipts, "blocked": blocked,
-            "blocked_seen": sorted(prev_seen | {b["spec"] for b in blocked}),
-            "blocked_repeat": repeat}
+    updates = {"messages": results,
+               "executed": executed + [s for s in specs if s not in executed],
+               "receipts": receipts, "blocked": blocked,
+               "blocked_seen": sorted(prev_seen | {b["spec"] for b in blocked}),
+               "blocked_repeat": repeat}
+    if not blocked:
+        updates["issues"] = ""  # 全 PASS → 复盘建议清空（不残留误导下一轮 planner）
+    return updates
+
+
+# ---------------------------------------------------------------------------
+# reflector 节点：受阻执行复盘（20260904 新增；取代旧 reflector 的仅存职责）
+# ---------------------------------------------------------------------------
+# 旧 reflector（20260824-20260903）死于 LLM 读叙述文本质检：1.26 截断误杀、
+# 1.30 误杀正确链、1.32 采信模型自称、REVISE 被无视、预算耗尽静默 accept——
+# 用户裁决把自由度从执行层收走（planner-authority），reflector 整体废除。
+# 20260904 重构让 checker 确定性验收回执，reflector 以极小预算回归唯一合理
+# 职责：execute 同 spec 二次受阻（rule5 首轮改参重试已败/依赖链断）后的复盘。
+# 与老 reflector 的三个结构性差异：
+#   1. 输入无散文——图序 execute→reflector 先于 model，叙述尚未生成、结构上
+#      看不到（检查对象是受阻项/回执/帧，不是叙述文本）；
+#   2. 输出两行契约（ISSUE:/DECIDE:），replan 只把 ISSUE 给 planner 当修正
+#      指引（planner 仍是唯一决策点），wrap_up/预算耗尽 → 确定性收尾计划；
+#   3. 预算 REFLECT_MAX_ROUNDS=2 硬顶 + 解析失败一律 wrap_up 兜底——LLM 复盘
+#      循环不失控，到顶即终局（无静默 accept，gate 照常检查终局轮叙述）。
+
+_REFLECTOR_PROMPT = """\
+你是执行受阻复盘器——纯诊断角色：不执行任何工具、不改写计划、不评价叙述。
+输入：上一轮执行计划（含 TODO 后续依赖链声明）、checker 受阻项（验收未通过 =
+执行没按契约发生）、工具帧与已验收回执（修正参数的唯一真实来源）。
+
+判定规则：
+1. 逐项诊断受阻项（spec=工具+参数 / reason=受阻原因 / result=工具返回）：
+   - 缺的值（article_id/路径/设备名/关键词等）能在"工具帧与已验收回执"里找到
+     → ISSUE 指出该受阻项缺什么、用哪个真实值怎么改（只能引用输入中出现的
+     真实值，不新造）；
+   - 受阻原因是工具不可用/参数无法修正/缺的值任何输入都没有 → 如实说明差
+     什么，判 wrap_up——系统没有额外取证通道，编造修正方案 = 二次幻觉。
+2. 输出严格两行，不要任何其他文字（ISSUE 单行 ≤150 字，多项用分号分隔）：
+ISSUE: <受阻项 → 缺什么 → 怎么改>
+DECIDE: replan|wrap_up
+3. 禁区：不评价叙述质量（本轮叙述尚未生成、你也看不到）；不引用记忆印象中
+   的 id/路径/设备名/页面；不虚构工具或修正方案。
+
+[执行计划]
+{plan}
+
+[本轮受阻项]
+{blocked}
+
+[工具帧与已验收回执]（≤900 字）
+{frames}"""
+
+
+def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
+    """复盘受阻执行（20260904）：同 spec 二次受阻后路由至此（route_after_execute），
+    由复盘 LLM 判 ISSUE+DECIDE，输出只驱动两种去向——replan 把修正指引给
+    planner（唯一决策点不变），wrap_up/预算耗尽走确定性收尾计划 + reflect_end
+    → model 叙述、gate 照常检查。复盘不计入 plan_rounds（planner 轮次上限语义
+    不变），只占 REFLECT_MAX_ROUNDS 次复盘预算。
+    """
+    if _stopped(config):
+        logger.info("[reflector] cancelled (client disconnected)")
+        raise AgentCancelled()
+    rounds = state.get("reflect_rounds", 0)
+    blocked = state.get("blocked") or []
+    has_frames = _has_frames(state["messages"])
+
+    def _terminal(reason: str, new_rounds: int) -> dict:
+        """确定性收尾计划 + reflect_end → model。记录后无 LLM，绝不静默 accept。"""
+        plan_obj = _terminal_plan(has_frames, reason)
+        logger.info("[reflector] 终局收尾（%s）", reason)
+        return {"plan": plan_encode(plan_obj), "issues": "",
+                "reflect_rounds": new_rounds, "reflect_end": True}
+
+    if rounds >= REFLECT_MAX_ROUNDS or not blocked:
+        reason = ("复盘轮次已达上限" if rounds >= REFLECT_MAX_ROUNDS
+                  else "没有可复盘的受阻项")
+        record("reflector", "terminal", reason=reason, round=rounds)
+        return _terminal(f"受阻项复盘已达上限（{REFLECT_MAX_ROUNDS} 次）仍无解",
+                         rounds)
+
+    plan_txt = (state.get("plan") or "")[:400]
+    blocked_txt = "\n".join(
+        f"- {b.get('spec', '')} | reason={b.get('reason', '')}"
+        f" | result={str(b.get('result', ''))[:150]}"
+        for b in blocked[:6])[:600] or "（空）"
+    facts = (_frame_texts(state["messages"]) + "\n"
+             + _receipts_text(state.get("receipts") or []))[:900]
+    record("reflector", "round_start", blocked=[b.get("spec") for b in blocked],
+           round=rounds + 1)
+    _t0 = time.monotonic()
+    try:
+        # 复盘是确定性诊断（判 replan/wrap_up 两值）——最低温 + 短输出 + 无思考
+        llm = get_llm(temperature=0.0, max_tokens=300, timeout=30,
+                      enable_thinking=False)
+        resp = llm.invoke(_REFLECTOR_PROMPT.format(
+            plan=plan_txt, blocked=blocked_txt, frames=facts))
+    except Exception as e:
+        logger.warning("[reflector] LLM 异常，按收尾终局: %s", e)
+        record("reflector", "terminal", reason="llm_error", round=rounds + 1)
+        return _terminal("受阻复盘 LLM 异常，按已验收执行如实收尾", rounds + 1)
+    dur = time.monotonic() - _t0
+    logger.info("[reflector] LLM 复盘耗时=%.1fs（round %d/%d）",
+                dur, rounds + 1, REFLECT_MAX_ROUNDS)
+    raw = (getattr(resp, "content", str(resp)) or "").strip()
+    dm = re.search(r"DECIDE\s*[:=]\s*(\w+)", raw, re.IGNORECASE)
+    decide = dm.group(1).lower() if dm else "wrap_up"  # 解析失败 → wrap_up 兜底
+    im = re.search(r"ISSUE\s*[:=]\s*(.+)", raw, re.IGNORECASE | re.DOTALL)
+    issue = ""
+    if im:
+        issue = im.group(1).strip().split("\n")[0].strip()[:300]  # 契约单行
+    record("reflector", "verdict", blocked=[b.get("spec") for b in blocked],
+           decide=decide, issue=issue[:120], round=rounds + 1)
+    if decide == "replan" and issue:
+        # ISSUE 注入 state.issues → 下一轮 planner 提示词复盘建议区；路由回 planner
+        logger.info("[reflector] replan → planner 按 ISSUE 重规划: %s", issue[:120])
+        return {"issues": issue, "reflect_rounds": rounds + 1, "reflect_end": False}
+    logger.info("[reflector] wrap_up → 确定性收尾: %s", issue[:120] or "无可用修正")
+    return _terminal(f"受阻复盘判定收尾（{issue[:100] or '无可用修正'}）", rounds + 1)
 
 
 # ---------------------------------------------------------------------------
@@ -1475,6 +1604,16 @@ def route_after_execute(state: AgentState) -> Literal["planner", "reflector"]:
     return "planner"
 
 
+def route_after_reflector(state: AgentState) -> Literal["planner", "model"]:
+    """reflector 复盘完：
+      - DECIDE=replan → planner（state.issues = ISSUE 修正指引，planner 仍是
+        唯一决策点，按建议重试不越权）
+      - reflect_end（wrap_up/复盘预算耗尽/LLM 异常/无受阻项防御）→ model 叙述
+        （plan 已被确定性收尾计划替换，narrator 据已验收回执如实叙述）
+    """
+    return "model" if state.get("reflect_end") else "planner"
+
+
 # ---------------------------------------------------------------------------
 # 5. 组装与编译
 # ---------------------------------------------------------------------------
@@ -1482,24 +1621,35 @@ def route_after_execute(state: AgentState) -> Literal["planner", "reflector"]:
 def build_graph():
     """构建手写图：节点 + 边 + 编译。返回 CompiledStateGraph。
 
-    拓扑（20260903 定稿，planner 全权）：
-      START → planner ─┬─ 有调用清单 → execute → planner（多轮循环，上限 4）
+    拓扑（20260904 定稿：planner 全权 + checker 确定性验收 + 受阻分流）：
+      START → planner ─┬─ 有调用清单 → execute（逐 spec：执行 + checker 验收）
+                       │                 └─ route_after_execute
+                       │                    ├─ 无受阻/受阻首现 → planner
+                       │                    │   （多轮循环，上限 4；首现受阻 =
+                       │                    │    rule5 改参重试，零新增 LLM）
+                       │                    └─ 重复受阻 → reflector（复盘 ≤2 次）
+                       │                         ├─ replan → planner（ISSUE 指引）
+                       │                         └─ 终局 → model（确定性收尾计划）
                        └─ 收尾轮 → model（narrator）→ gate → END
 
-    planner ⇄ execute 是唯一循环（决策-执行交替）；model 只走一次（收尾叙述）；
-    gate 只走一次（确定性检查 + fallback 收尾，无 REVISE 重考轮）。
+    planner ⇄ execute 是主循环（决策-执行交替）；reflector 只在重复受阻的罕见
+    异常路径介入（小预算复盘，不复活老 LLM 质检）；model/gate 各走一次收尾。
     """
     g = StateGraph(AgentState)
 
     g.add_node("planner", planner_node)
     g.add_node("execute", execute_node)
+    g.add_node("reflector", reflector_node)
     g.add_node("model", model_node)
     g.add_node("gate", gate_node)
 
     g.add_edge(START, "planner")
     g.add_conditional_edges("planner", route_after_planner,
                             {"execute": "execute", "model": "model"})
-    g.add_edge("execute", "planner")  # 执行完必然回 planner 看结果决策（普通边）
+    g.add_conditional_edges("execute", route_after_execute,
+                            {"planner": "planner", "reflector": "reflector"})
+    g.add_conditional_edges("reflector", route_after_reflector,
+                            {"planner": "planner", "model": "model"})
     g.add_edge("model", "gate")
     g.add_edge("gate", END)
 

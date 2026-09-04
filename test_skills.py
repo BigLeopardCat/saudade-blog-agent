@@ -25,13 +25,21 @@ import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from agent.graph import (_PLANNER_OUTPUT_RE, _article_fast_path, _check_spec,
-                         _display_fast_path, _nav_fast_path, _parse_params,
-                         execute_node, gate_node, plan_encode, parse_plan,
-                         route_after_execute)
+from agent.graph import (_PLANNER_OUTPUT_RE, REFLECT_MAX_ROUNDS, _article_fast_path,
+                         _check_spec, _display_fast_path, _nav_fast_path,
+                         _parse_params, execute_node, gate_node, plan_encode,
+                         parse_plan, reflector_node, route_after_execute,
+                         route_after_reflector)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, instantiate_plan
 
 FAILS = []
+
+
+class _LLMBoom:
+    """monkeypatch 用：模拟 LLM 调用抛异常（reflector 异常兜底路径测试）。"""
+
+    def invoke(self, *a, **kw):
+        raise RuntimeError("boom: llm unavailable")
 
 
 def check(name, cond, detail=""):
@@ -699,6 +707,58 @@ def test_execute_receipts_and_route():
           route_after_execute({**base_state, "blocked": [{"spec": "a"}], "blocked_repeat": True}) == "reflector")
 
 
+def test_reflector_routes_and_budget():
+    """reflector 节点预算/终局（20260904，LLM 复盘路径不进单测——只测确定性
+    守卫）：复盘预算 REFLECT_MAX_ROUNDS 到顶 / 无可复盘受阻项 → 确定性终局
+    （reflect_end=True + 收尾计划 + issues 清空，无静默 accept）；DECIDE 语义
+    由 route_after_reflector 纯函数覆盖（replan → planner / reflect_end → model）。
+    老 reflector 教训：LLM 循环必须小预算 + 解析失败兜底——这里验证的是预算
+    硬顶与兜底形状。"""
+    print("[reflector] 预算终局 + 路由")
+
+    def _st(**extra):
+        base = {"plan": plan_encode({"skill": "navigate", "params": {},
+                                     "tools": ['nonsense({"x": 1})'], "note": "n",
+                                     "reply": "r"}),
+                "plan_rounds": 1, "done": False, "messages": [],
+                "reflect_rounds": 0, "issues": "", "reflect_end": False}
+        base.update(extra)
+        return base
+
+    # 预算到顶（reflect_rounds == REFLECT_MAX_ROUNDS）→ 终局，不再调 LLM
+    out = reflector_node(_st(reflect_rounds=REFLECT_MAX_ROUNDS, blocked=[{"spec": "x"}]))
+    plan = parse_plan(out["plan"])
+    check("复盘预算到顶 → reflect_end=True + 收尾计划（零 LLM）",
+          out["reflect_end"] is True and out["reflect_rounds"] == REFLECT_MAX_ROUNDS
+          and plan["tools"] == [] and out["issues"] == "",
+          f"rounds={out['reflect_rounds']} tools={plan['tools']} end={out['reflect_end']}")
+    # 无可复盘受阻项（防御）→ 同样确定性终局
+    out2 = reflector_node(_st(blocked=[]))
+    check("无受阻项 → 防御终局（reflect_end=True）",
+          out2["reflect_end"] is True and parse_plan(out2["plan"])["tools"] == [],
+          str(out2))
+    # 有受阻项 + 预算内 → 走 LLM 复盘路径（单测不实调：monkeypatch 抛异常 →
+    # 节点异常兜底转终局，验证"调用失败一律 wrap_up 兜底"不炸图、不出 replan）
+    from agent import graph as graph_mod
+    orig_get_llm = graph_mod.get_llm
+    graph_mod.get_llm = lambda **kw: _LLMBoom()
+    try:
+        out3 = reflector_node(_st(blocked=[{"spec": "a", "reason": "empty_result",
+                                            "result": ""}]))
+    finally:
+        graph_mod.get_llm = orig_get_llm
+    check("复盘 LLM 异常 → 兜底终局（reflect_end=True 收尾计划）",
+          out3["reflect_end"] is True and parse_plan(out3["plan"])["tools"] == []
+          and out3["reflect_rounds"] == 1,
+          str(out3)[:200])
+    # 路由纯函数
+    print("  [route] route_after_reflector")
+    check("DECIDE=replan（reflect_end False）→ planner",
+          route_after_reflector({"reflect_end": False}) == "planner")
+    check("终局（reflect_end True）→ model（narrator 收尾叙述）",
+          route_after_reflector({"reflect_end": True}) == "model")
+
+
 def test_gate_fallback_message():
     """gate fallback 终局语义（20260903 取代 REVISE 修正注记）：检查不过 = 收尾，
     不再有"修正要求/重考轮"（plan_rounds 不因检查而 +1）。返回体约定：
@@ -750,7 +810,7 @@ def main():
                test_nav_fast_path, test_display_fast_path, test_article_fast_path,
                test_explicit_tools, test_gate_claim_scope, test_gate_frame_checks,
                test_execute_node, test_todo_contract, test_checker,
-               test_execute_receipts_and_route,
+               test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re):
         fn()
     if FAILS:
