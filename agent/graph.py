@@ -1153,21 +1153,28 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 未读文档全文（经验记录类标题延后，机制文档优先，见 _candidate_detail_plan）；
     # 无未读候选 → 直接收尾，不浪费剩余轮次。__ERROR__ 帧存在时跳过
     # （错误修正重试合法）。
+    # 20260905 变体打转拦截：spec 级判据防"原句连发"，防不住换词变体（231301/
+    # 231934 实证 planner 连 4 轮 rag_search 变体，BM25 变体 query 秒回同批文档）。
+    # 放宽到工具级计数——判定抽成纯函数 _search_retry_kind（retry_loop/rag_loop），
+    # 命中同样确定性转读未读候选全文（planner 已实证靠搜索收敛不了，读全文才有
+    # 据收尾）或直接收尾。__ERROR__ 帧存在时整块跳过（错误修正重试合法）。
     if (plan_obj["skill"] == "content_query" and plan_obj["tools"]
             and not _any_error_frame(state["messages"])):
         executed = state.get("executed") or []
-        dups = [s for s in plan_obj["tools"] if s in executed]
-        if dups:
+        kind = _search_retry_kind(plan_obj, executed)
+        if kind:
+            dups = [s for s in plan_obj["tools"] if s in executed]
             cand = _candidate_detail_plan(state["messages"], executed)
             if cand is None:
                 logger.info("[planner] 检索重复拦截（%s），无未读候选 → 直接收尾",
-                            "、".join(dups))
+                            "、".join(dups) if dups else "rag_search 变体 ≥2 次")
                 plan_obj = _wrap_up_plan(True)
             else:
                 logger.info("[planner] 检索重复拦截（%s）→ 改读候选 %s",
-                            "、".join(dups), cand["tools"])
+                            "、".join(dups) if dups else "rag_search 变体 ≥2 次",
+                            cand["tools"])
                 plan_obj = cand
-            record("planner", "intercept", reason="retry_loop",
+            record("planner", "intercept", reason=kind,
                    dups=dups, redirected=cand is not None)
             return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
@@ -1195,6 +1202,29 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
 def _tool_name(tool_spec: str) -> str:
     """TOOLS 行条目 → 工具名（'get_article_detail({"article_id": 21})' → get_article_detail）。"""
     return tool_spec.split("(", 1)[0].strip()
+
+
+def _search_retry_kind(plan_obj: dict, executed: list) -> str | None:
+    """检索重复清单拦截判定（纯函数，20260905 工具级计数扩展）。
+
+    content_query 轮 planner 计划中仍含 executed 里的同款 spec → "retry_loop"
+    （原句连发，20260903 判据）；无同款 spec 但本轮仍规划 rag_search 且已执行
+    rag_search ≥2 → "rag_loop"（换词变体打转——rule5"换词语义重试"已给足 2 次
+    自由检索：首搜 + 一次换词，第三次变体在 BM25 下大概率仍回同批文档，判定
+    打转）。都不中 → None（放行）。
+
+    只统计 rag_search：search_notes/list_notes 是确定性点名列（成对点名/多关键
+    词链合法），无打转实证；__ERROR__ 帧的修正重试由调用方整块跳过（本函数不
+    看 messages）。
+    """
+    if plan_obj.get("skill") != "content_query" or not plan_obj.get("tools"):
+        return None
+    if any(s in executed for s in plan_obj["tools"]):
+        return "retry_loop"
+    if (any(_tool_name(s) == "rag_search" for s in plan_obj["tools"])
+            and sum(1 for s in executed if _tool_name(s) == "rag_search") >= 2):
+        return "rag_loop"
+    return None
 
 
 def _tool_args(tool_spec: str) -> tuple[dict, bool]:
