@@ -152,18 +152,20 @@ sequenceDiagram
     R->>DB: INSERT chat_history(user 消息)
     R->>DB: SELECT 最近 20 条 history
     R->>DB: SELECT chat_summary（每用户一条）
+    R->>DB: SELECT execution_log 最近 8 条（20260904：跨轮执行记忆）
     R->>DB: COUNT 总消息数 → 是否触发摘要
-    R->>A: POST /chat/stream<br/>{message, history[20], summary, needs_summary,<br/>user_id, current_effects, current_darkmode}
-    Note over A: _build_messages 组装<br/>System 上下文 + 历史
+    R->>A: POST /chat/stream<br/>{message, history[20], summary, executions, needs_summary,<br/>user_id, current_effects, current_darkmode}
+    Note over A: _build_messages 组装<br/>System 上下文 + 历史 + recent_executions=
     Note over A: needs_summary 轮并行独立摘要调用<br/>（输入=原始历史，与回复解耦）
-    A->>L: LangGraph 图执行：planner ⇄ execute（≤4 轮）→ model → gate
-    L-->>A: planner 决策文本 / execute 工具帧<br/>model 叙述 token（零工具）
-    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / 过程帧 __PROCESS__ / __RESET__（gate fallback）/<br/>__SUMMARY__ / 终结标记）
-    R-->>B: 逐帧转发（X-Accel-Buffering: no）
+    A->>L: LangGraph 图执行：planner ⇄ execute（≤4 轮，execute 内 checker 逐 spec 验收）<br/>→ reflector（重复受阻 ≤2 轮复盘）→ model → gate
+    L-->>A: planner 决策文本 / execute 工具帧 + checker 回执<br/>model 叙述 token（零工具）
+    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / 过程帧 __PROCESS__ / __RESET__（gate fallback）/<br/>__SUMMARY__ / __EXEC__（checker 回执，流收尾 __END__ 前） / 终结标记）
+    R-->>B: 逐帧转发（X-Accel-Buffering: no；__EXEC__ 只收不转）
     B->>B: 文本帧上屏 + 口型驱动；命令帧进 cmdText
     Note over R: 流结束后
     R->>DB: INSERT chat_history(assistant 回复)
     R->>DB: upsert chat_summary（__SUMMARY__ 帧，无则保留旧摘要）
+    R->>DB: INSERT execution_log（__EXEC__ 帧渲染定稿，断连也不清）
     R-->>B: __NAV_END__ / __END__ 终结
     B->>B: 结束解析：导航/特效/夜间模式执行
     B->>B: localStorage 追加本轮完整文本（≤50 条）
@@ -180,14 +182,16 @@ JWT 走 **Authorization: Bearer** 头（`localStorage.tokenKey`），不在 body
 
 **② Rust prepare_chat（[chat.rs:180](Saudade-Blog/src/routes/chat.rs#L180)）——记忆的读与写**
 
-按顺序做 5 件事：
+按顺序做 6 件事：
 1. 鉴权：解析 `Bearer` JWT（HS256，`auth_jwt::verify_token`），取 `claims.sub` 为 user_id。
 2. **存用户消息**：`chat_history` 插入 `(user_id, role="user", content)`。
-3. **读历史**：该用户按 `created_at` 倒序取最近 20 条，再 `rev()` 翻转回正序 → `history[]`。
-4. **读摘要**：`chat_summary` 按 user_id 取一条 → `summary`。
-5. **统计与清理**：COUNT 总消息数决定 `needs_summary`；超 `CHAT_HISTORY_LIMIT`（默认 500）删最旧。
+3. **读历史**：该会话按 `id` 倒序取最近 21 条（排除刚插入的当前条）再翻转正序取 20 → `history[]`。
+4. **读摘要**：`chat_summary` 按会话取一条 → `summary`。
+5. **读执行记忆**（20260904）：`execution_log` 按会话倒序取最近 8 条（detail 写时已渲染定稿，
+   直取零映射）→ "· " 拼串 → `executions`。
+6. **统计与清理**：COUNT 总消息数决定 `needs_summary`；超 `CHAT_HISTORY_LIMIT`（默认 500）删最旧。
 
-组装请求体转发给 Agent（`user_id`、`history`、`summary`、`needs_summary` 都在这里产生）。请求体上限 1MB（chat.rs `prepare_chat` 内校验）。
+组装请求体转发给 Agent（`user_id`、`history`、`summary`、`executions`、`needs_summary` 都在这里产生）。请求体上限 1MB（chat.rs `prepare_chat` 内校验）。
 
 **非流式路径（/chat，内部与兼容用，看板娘走流式）**：Rust 调 agent `/chat`，传输层错误自动重试最多 3 次
 （间隔 800ms），**超时不重试**——超时说明生成确实很慢（长回答单次可达 180s，reqwest 超时即 180s），
@@ -199,12 +203,14 @@ Rust 再拼接命令行：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 
 **③ Python _build_messages（server.py:129 `_build_messages`）——上下文组装**
 
 按顺序构造消息列表（角色按 history 原始 role 注入）：
-1. **System 上下文**：`[System: user_id=…, page=…, title=…; current_time=…; current_effects=…; current_darkmode=…; conversation_summary: …]`
+1. **System 上下文**：`[System: user_id=…, page=…, title=…; current_time=…; current_effects=…; current_darkmode=…; conversation_summary: …; recent_executions: …]`
    放在**第一条**，是纯状态注记，模型禁止复述。其中 `current_time` 是**时间锚**（20260902 注入，与
    `get_current_time` 同格式 `%Y年%m月%d日 星期X %H:%M`）——模型对"现在几点/星期几"不再自行猜测；
    时间类询问由 planner 规划 content_query 点名 `get_current_time`（无参只读白名单 `_EXPLICIT_TOOLS`，
    见 §6.5）经 execute 执行，narrator 叙述纪律要求时刻/站内事实以工具帧或页面上下文为据、无帧不得
-   自行声称（见 §6.5 model/gate）。
+   自行声称（见 §6.5 model/gate）。`recent_executions=`（20260904，来自 body executions，截 1500
+   字）是**本会话最近 8 条 checker 验收回执**——"质疑上轮执行是否属实"的唯一权威事实源（rule 6
+   三分：真实性询问据回执零工具转述 / 无记录如实说 / 明确再次要求才重新执行），见 §6.5 跨轮执行记忆。
 2. **历史**：`req.history[-20:]`（Rust 传的 20 条**全量注入**——20260828 起与 Rust 对齐，旧的"只取 12 条
    留余量"双魔数已废弃）逐条注入，assistant 消息以原生 AIMessage 角色注入、无 `[assistant]:` 文本前缀。
 3. **当前用户消息**（对话内摘要指令已移除——摘要由后端独立任务调用生成，见 §4.3；显示类约束在
@@ -212,21 +218,26 @@ Rust 再拼接命令行：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 
 
 **④ LangGraph 执行（agent.py + server.py）**
 
-手写图（agent/graph.py `build_graph`，**planner ⇄ execute → model → gate 四节点**，见 §6.5），
-无 checkpointer（线程 id 每请求 uuid，无状态累积）。planner_node 首轮先判定**确定性快道链**
-（零 LLM：导航 → 显示 → 当前文章读取，命中即直接实例化计划、不调用 planner LLM，见 §6.5）。
-执行用 `stream(stream_mode=["messages", "updates"])` 双通道：
+手写图（agent/graph.py `build_graph`，**planner ⇄ execute →（reflector）→ model → gate**，见 §6.5），
+无 checkpointer（线程 id 每请求 uuid，无状态累积；跨轮记忆在 DB execution_log，见 §4）。planner_node
+首轮先判定**确定性快道链**（零 LLM：导航 → 显示 → 当前文章读取，命中即直接实例化计划、不调用
+planner LLM，见 §6.5）。执行用 `stream(stream_mode=["messages", "updates"])` 双通道：
 - "messages" 通道：**model 节点的** `AIMessageChunk` → 文本 token 逐块推入 asyncio.Queue
   （planner/model 之外的输出不会进对话；planner 是 invoke 非流式，其产物只有 plan 文本）；
   `ToolMessage` 工具帧 → **命令帧**：`NAVIGATE:`/`AUTO_NAVIGATE:`（导航）、`EFFECT:`（特效）、
   `DARKMODE:`（夜间）——**这是工具结果**，由前端执行。
 - "updates" 通道：planner 节点更新 → **规划过程帧**（🧭 规划中/计划，计划含执行清单时追加
-  🛠 正在调用工具…）；gate 节点更新 → 判定收尾（通过 → done=True + ✓ 质检通过；fallback →
-  发 `__RESET__` + ✗ 质检打回帧，并以 fallback 如实文本作最终回复，见 §6.5 gate/__RESET__）。
-- **决策-执行循环**：planner 决策（给调用清单）→ execute 确定性执行 → planner 看工具帧再决策
-  （读全文/换词再搜/收尾）→ … → 收尾轮（调用清单空）→ model 叙述 → gate 检查 → END；
-  planner ⇄ execute 循环 ≤ `MAX_PLAN_ROUNDS=4`，超限 `_wrap_up_plan` 确定性强制收尾；
-  外层 `recursion_limit=30` 仍作兜底（§6.4）。trace 分段耗时按 planner/execute/model/gate 落盘。
+  🛠 正在调用工具…）；**execute 节点更新 → checker 验收回执**（`receipts` 累计语义，末批即本
+  请求全量——producer 在流收尾、`None` 哨兵前发 `__EXEC__:` 帧给 Rust 落库，见 §4.1/§3.2⑤）；
+  gate 节点更新 → 判定收尾（通过 → done=True + ✓ 质检通过；fallback → 发 `__RESET__` + ✗ 质检
+  打回帧，并以 fallback 如实文本作最终回复，见 §6.5 gate/__RESET__）。
+- **决策-执行-复盘循环**：planner 决策（给调用清单）→ execute 逐 spec 执行 + checker 验收 →
+  `route_after_execute` 路由（本轮无受阻 → planner 看帧再决策 读全文/换词再搜/收尾；受阻首现 →
+  planner rule5 改参重试；同一 spec 重复受阻 → reflector ≤2 轮 LLM 复盘 → ISSUE 回 planner 或
+  确定性终局）→ … → 收尾轮（调用清单空）→ model 叙述 → gate 检查 → END；planner ⇄ execute
+  循环 ≤ `MAX_PLAN_ROUNDS=4`，超限 `_terminal_plan` 确定性强制收尾（reflector 预算耗尽同）；
+  外层 `recursion_limit=30` 仍作兜底（§6.4）。trace 分段耗时按 planner/execute/reflector/model/
+  gate 五段落盘（reflector 未触发时该段无记录）。
 
 **⑤ 流式帧协议（server.py:472 `event_stream`）**
 
@@ -278,12 +289,13 @@ flowchart LR
 
 ### 4.1 概述
 
-**记忆分三层，各司其职**：
+**记忆分四层，各司其职**：
 
 | 层 | 载体 | 作用 | 上限 |
 |---|---|---|---|
-| 跨请求长期记忆 | MySQL `chat_history` + `chat_summary` | 对话连续性 | 500 条流水 + 1 条摘要/用户 |
-| 请求内短期记忆 | 请求体 `history[]` + `summary`（注入 System 上下文） | 模型可见窗口 | Rust 取 20 条 → 全量注入 |
+| 跨请求长期记忆 | MySQL `chat_history` + `chat_summary` | 对话连续性 | 500 条流水 + 1 条摘要/会话 |
+| **动作执行记忆（20260904）** | MySQL `execution_log` | **已执行动作的系统确认事实**（checker 验收回执） | 不设上限（随会话删除级联清理） |
+| 请求内短期记忆 | 请求体 `history[]` + `summary` + `executions`（注入 System 上下文） | 模型可见窗口 | Rust 取 20 条历史 + 最近 8 条执行回执 → 全量注入 |
 | 浏览器本地记忆 | `localStorage chat_history_{tokenKey}` | 前端展示完整记录 | 50 条 |
 
 ```mermaid
@@ -291,7 +303,8 @@ flowchart TB
     subgraph Write[记忆如何记录]
         W1[用户消息] -->|prepare_chat 立即落库| T1[(chat_history role=user)]
         W2[assistant 回复] -->|流结束 save_assistant_reply| T1
-        W3[独立摘要调用] -->|__SUMMARY__ 帧 / new_summary| T2[(chat_summary<br/>每用户一条)]
+        W3[独立摘要调用] -->|__SUMMARY__ 帧 / new_summary| T2[(chat_summary<br/>每会话一条)]
+        W4[checker 验收 PASS 回执] -->|__EXEC__ 帧<br/>流收尾 __END__ 前| T3[(execution_log<br/>渲染定稿 detail)]
     end
     subgraph Compress[记忆如何压缩]
         C1[needs_summary 触发<br/>count>20 且 %10==0/1] --> C2[_summarize_dialogue 独立任务调用<br/>输入=原始历史+旧摘要]
@@ -303,6 +316,7 @@ flowchart TB
         R1[prepare_chat 取最近 20 条] --> R2["翻转正序 → history[]"]
         R2 --> R3[_build_messages 全量注入 20 条<br/>按 role 注入 Human/AIMessage]
         R4[chat_summary 取摘要] --> R5[conversation_summary: 注入 System 上下文]
+        R6[execution_log 取最近 8 条] -->|"· " 拼串| R7[recent_executions: 注入 System 上下文<br/>截 1500 字]
     end
     subgraph Rollback[回滚与清理]
         D1[用户停止生成] -->|前端显式 POST /api/chat/discard| D2[删除该条 user 消息<br/>及其后的残缺回复]
@@ -318,6 +332,13 @@ flowchart TB
   - 流式路径从 `__SUMMARY__` 帧取独立摘要（见 4.3），**回复本身不含任何 SUMMARY 行**；
   - 存 `(role="assistant", content=回复全文)`；
   - **空回复不存库**（`if !reply.is_empty()`），这是"卡死"表象的来源之一——前端靠 §3.2⑦ 的兜底感知。
+- **动作执行回执**（20260904）：execute 内 checker 判 PASS 的 spec 累计为 receipts → producer 流
+  收尾发 `__EXEC__:` 帧（`__END__` 之前）→ Rust 渲染定稿（动作词 + 「」内容，写时一次、读时零
+  映射）插入 `execution_log`。**独立于回复文本与 __RESET__**：被 gate fallback 否定叙述的那轮，
+  其已验收执行照样落库（回执是已发生事实）；断连/中断（DiscardAbortedExchange）也只弃残缺叙述，
+  不删 execution_log 行。执行记忆与 chat_history 的语义分界：历史回答"聊了什么"，execution_log
+  回答"做了什么"——后者经 `recent_executions=` 注入后让"质疑上轮执行"有系统确认事实可依，不再
+  依赖 narrator 的自述（模型叙述不可信，20260902 双向失真实证）。
 - **前端**：每轮结束把**完整文本（含命令行）**存 localStorage——与后端历史一致（命令行随后端历史渲染时被 `cleanAgentText` 过滤）。
 
 ### 4.3 压缩：摘要机制全流程
@@ -376,7 +397,12 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 ### 4.5 存储与清理
 
 - `chat_history`：`(id, user_id, role, content, created_at)`，按 user_id 分片；500 条上限，超限按 id 升序删最旧。
-- `chat_summary`：`(id, user_id, summary, message_count)`，每用户最多一条。
+- `chat_summary`：`(id, user_id, summary, message_count)`，每会话最多一条。
+- `execution_log`（20260904）：`(id, user_id, conversation_id, skill, detail, created_at)`，
+  `detail` 为渲染定稿（动作词 + 「」内容，≤300 字），`KEY idx_conv_id(conversation_id, id)`。
+  **读取**：prepare_chat 每请求按会话倒序取 8 条（索引走 idx_conv_id）。**清理**：无条数上限，
+  随会话删除在 delete_conversation 事务内级联（会话没了 execution_log 无读取路径，不留孤儿）；
+  断连/discard 刻意不清（执行是已发生事实）。
 - **为什么不删摘要**：摘要滚动合并（4.3），永远保留最新压缩态；500 条流水删掉的不影响连续性（窗口只看最近 20 条）。
 
 ### 4.6 MemorySaver 为什么不承担记忆
@@ -497,7 +523,7 @@ flowchart TB
 - **空回复兜底**：流正常收尾但零输出 → 补发 `_RECOVERY_SENTENCE`（"喵呜……主人抱歉，泠月喵刚才脑袋卡壳了…"）；
   非流式同样处理。Rust 空回复不存库。
 
-### 6.5 技能注册表 + 受限规划（20260903 裁决后形态：planner 全权）
+### 6.5 技能注册表 + 受限规划（20260903 裁决后形态：planner 全权；20260904 加回执驱动复盘 + 跨轮执行记忆）
 
 > ⚠️ **20260903 架构裁决（用户拍板，planner 全权）**：本节为现行形态。裁决原因（问题记录
 > 20260903）：三次事故（声称闸词表被绕、LLM-QC 采信模型自称、预算耗尽 accept）共同指向一个根因
@@ -506,9 +532,18 @@ flowchart TB
 > 找补），而是把自由度从执行层全部收走——执行层变确定性执行器后，"不听话"在结构上不可能，检查层
 > 随之大幅简化（gate 只兜模型叙述层失真）。**自由 ReAct / executor 自由执行 / reflector（LLM 质检 +
 > REVISE 重考轮）/ tools_node 授权执行已整体废除**；当前拓扑 planner ⇄ execute（≤`MAX_PLAN_ROUNDS`
-> =4）→ model → gate 见 §3/§3.2④，状态字段只留 messages/plan/plan_rounds/done。本节末尾保留
+> =4）→ model → gate 见 §3/§3.2④，状态字段只留 messages/plan/plan_rounds/done（20260904 起另加
+> receipts/blocked/blocked_repeat/reflect_rounds/issues 等执行回执字段，见下节）。本节末尾保留
 > 20260902 及更早的重构记录（历史形态中的"reflector 检查点/REVISE 打回/LLM 质检/自由 ReAct"表述
 > 均指当时，勿当现行机制）。
+>
+> ⚠️ **20260904 追加（用户拍板，回执驱动复盘 + 跨轮执行记忆）**：不推翻 20260903——planner 唯一
+> 决策、execute 确定性执行、model 零工具 narrator、gate 确定性终检全部不变，只在 execute 内加
+> **checker 确定性验收**（每 spec 执行后纯函数判 PASS/BLOCK，见下）+ 跨轮执行记忆（checker PASS
+> 回执落 execution_log，下轮注入）。老 reflector 死于 LLM 读叙述文本质检（1.26 截断误杀 / 1.32
+> 采信自称 / 预算耗尽 accept），本次复活的 reflector 检查对象是**结构性 blocked 项**（spec/原因码/
+> 截断结果，无散文），图序 execute→reflector 先于 model（复盘时叙述尚未生成，结构性无散文），
+> 预算耗尽走确定性终局 `_terminal_plan`（无静默 accept）。gate 保持 20260903 语义 unchanged。
 
 固定流程任务（导航/特效/暗色/设备显示/设备查询/content_query 内容查询/read_article 当前文章）落地为
 **技能注册表**（agent/skills.py，业务唯一数据源）：每个技能是静态定义——触发条件、参数 schema、
@@ -555,9 +590,13 @@ flowchart TB
   重试一次或如实收尾；动作技能已执行 → 去重强制收尾（非首轮再规划动作且工具名都已出现在帧中时，
   动作一次决策即完成，多轮只发生在 content_query 检索链路）。字面路径防推断确定性修正：planner
   选 navigate 且用户消息含 / 开头路径时，target 强制用字面路径（qwen 曾把 /iot 推断成"物联网平台"
-  做替身跳转，golden nav_nonexistent 实证）。轮次上限 `MAX_PLAN_ROUNDS=4`，超限 `_wrap_up_plan`
+  做替身跳转，golden nav_nonexistent 实证）。轮次上限 `MAX_PLAN_ROUNDS=4`，超限 `_terminal_plan`
   强制收尾（基于已有帧如实作答，不存在无限追问）；planner LLM 异常（API 抖动/超时）→ 收尾兜底
-  不炸对话；LLM 调用 >30s 打 WARN（20260830 慢调用监控约定）。
+  不炸对话；LLM 调用 >30s 打 WARN（20260830 慢调用监控约定）。**20260904 追加**：多步依赖链轮次
+  在 REPLY 行前追加 `TODO: <剩余步骤>` 声明行（如"读当前文章 → 跳留言板"）——只描述后续依赖链、
+  不重复本轮步骤、依赖参数（article_id 等）只能等上轮工具返回后填绝不预先编造；planner 提示词注入
+  `{reflector_feedback}` 复盘建议占位（受阻重复打回时由 reflector 给出，见下），有复盘区块仍失败 →
+  按建议收尾或换路径，不再第三次自试。
 - **execute = 确定性执行节点**（graph.py `execute_node`，取代旧 tools_node）：TOOLS 行 spec
   （`<工具名>(<json 参数>)`，参数由 instantiate_plan 以 json.dumps 落盘在 spec 里）**逐条照单
   执行**——参数解析先 json.loads 再 ast.literal_eval（JSON 的 true/false/null 不是 Python
@@ -568,6 +607,26 @@ flowchart TB
   保留）。唯一保留的"创作"自由 = device_oled_display 缺 text 时由小 LLM 结合对话创作屏幕文案
   （`_create_display_text`）——技能模板固有设计（屏幕文案在展示时创作，不进 planner 文本通道），
   非执行层越权。
+- **checker = 确定性验收（20260904，execute_node 循环内纯函数，不新增图节点）**：每个 spec 执行
+  后立即判 `PASS/BLOCK`——PASS → 回执 `{skill,tool,args 截 200,result 截 200,ts}` 累计进
+  `state.receipts`（执行过且验收过才称系统确认事实）；BLOCK → 受阻项 `{spec,reason,result 截
+  300}` 进 `state.blocked`。原因码：unknown_tool/args_parse/empty_result/error_frame/cmd_shape
+  （命令工具返回形态校验：navigate_to→NAVIGATE:/AUTO_NAVIGATE:、toggle_effect→EFFECT:、
+  toggle_dark_mode→DARKMODE:）。device_oled_display「5s 内未回执确认」显式判 PASS（指令确已下发
+  ——如实告知场景，软失败不升受阻链）。**回执是后续一切事实链的源头**：narrator 转述、跨轮记忆
+  落库、gate 完成声称对照都只认 PASS 回执。
+- **reflector = 受阻复盘（20260904，≤`REFLECT_MAX_ROUNDS=2`）**：路由 `route_after_execute`——
+  本轮无受阻 → planner（正常循环）；受阻**首现**（spec 不在 blocked_seen）→ planner（现有 rule5
+  改参重试，零新增 LLM）；同一 spec **重复受阻**（blocked_seen 命中，重试已败/链断）→ reflector。
+  输入**结构性无散文**（计划文本 + blocked 项 spec/原因码/截断结果 + 回执 + 工具帧截断，≤900
+  字），LLM 输出两行契约 `ISSUE: <每项|缺什么|怎么改>` + `DECIDE: replan|wrap_up`（temp 0.0/300
+  tokens/30s/无 thinking）；解析失败/预算耗尽 → `_terminal_plan` 确定性终局（无静默 accept）。
+  replan → ISSUE 单行注入 planner 提示词；wrap_up → 确定性收尾计划 → model 叙述 → gate 照常检查。
+  复盘不评价叙述质量（图序 execute→reflector 先于 model，叙述根本还没生成——老 reflector 的
+  死因 1.26/1.30/1.32 全部绕开）。
+- **跨轮执行记忆（20260904）**：见 §4.1/§4.5。checker PASS 回执 = execution_log 的唯一数据源
+  （失败执行/未知工具帧不算系统确认事实）；质疑真实性（"你真显示了？"）据回执零工具转述、无记录
+  如实说"系统记录里没有"、明确再次要求才重新执行（rule 6 三分，不误伤真实重发）。
 - **model = 零工具 narrator**（graph.py `model_node`，取代旧 ReAct executor）：**不 bind_tools**
   ——LLM 结构上不可能发出 tool_calls，"执行器不听 planner"的旧根因（模型自选工具/自拟参数/跳过
   检索直接答）从模型侧连通道都没有。system prompt = 人设（prompts.py；旧"执行规则"段已整体移除
