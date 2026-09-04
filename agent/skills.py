@@ -127,7 +127,10 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="effect",
-        description="开启或关闭博客页面的视觉效果（樱花/大雨/雪花）时使用。",
+        description=(
+            "开启或关闭博客页面的视觉效果（樱花/大雨/雪花）时使用；"
+            "'把X换成Y/改成Y'（X 开着、Y 目标）＝两条 spec 同轮（X off + Y on）"
+        ),
         inputs={
             "effect": "sakura（樱花）/ rain（大雨）/ snow（雪花）",
             "action": "on（开启）/ off（关闭）",
