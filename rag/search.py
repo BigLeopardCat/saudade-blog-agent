@@ -37,6 +37,35 @@ REFRESH_TTL = 600.0  # 10 分钟懒刷新
 # 混合候选，模型在 talk 候选上硬编 talkKey 31）。说说/留言/公告是"数据读取"
 # 场景，走各自数据工具（list_talks/list_guestbook/get_announcements），不进检索池。
 
+# ── 查询侧处理（只动查询串，索引零影响；加词纪律：每加一词须全量 recall_eval
+#    21 query 复验无回归才可留）──
+
+# 疑问/句法功能词剔除（20260905 处置 rag_eval_system）：中文疑问句的信息在
+# 实词上，「怎么/什么/哪些」等纯句法词 df 常极小（实测「怎么」df=2 → idf 4.633，
+# 一个无关短 chunk 单命中 2.18 就能压过真答案 1.49——Git 教程/固件文档双双登顶）。
+# 串级剔除（按长到短，防「怎么样/为什么」先被短词拆残）后实词照常打分；
+# 只在查询侧做，索引与语料词频统计不受影响。
+_QUERY_STOPWORDS = ("有没有", "怎么样", "为什么", "怎样", "怎么", "什么", "如何",
+                    "哪些", "哪个", "哪里", "哪儿", "多少", "为何", "干啥", "干嘛",
+                    "是否", "咋", "啥")
+
+
+def _clean_query(query: str) -> str:
+    for w in _QUERY_STOPWORDS:
+        query = query.replace(w, "")
+    return query
+
+
+# 同义扩展（20260905，同日同案）：词法 2/3-gram 下 2 字同义/惯用变体零共享 gram
+# ——访客问「测评体系」与文档用词「评测」互不可见（实测 query gram 只剩体系/怎么
+# 命中）。替换出同义变体的新 gram 并入 query token 集（与原文 gram 去重后各自
+# 权重 1）。只收「替换后语义不变」的词对。
+_QUERY_SYNONYMS = {
+    "测评": "评测",  # 1.26 P0 回流用例「RAG测评体系怎么建立」期望 note:19（架构文档
+                     # 「# 评测：eval/golden…」小节措辞为「评测」）——1.27 事故族：
+                     # 语料改写措辞漂移使期望失配，检索侧用等价词对补上而不是改期望
+}
+
 
 def tokenize(text: str) -> list[str]:
     """中文连续段拆 2-gram/3-gram（子串匹配近似）+ 英文/数字按词。与 eval 一致。"""
@@ -136,7 +165,13 @@ class RagIndex:
         with self._lock:
             chunks, doc_tf, postings, idf, avgdl = (
                 self._chunks, self._doc_tf, self._postings, self._idf, self._avgdl)
-        q_toks = [t for t in tokenize(query) if t in postings]
+        # 疑问词先剔除（句法功能词非内容；不做会稀释实词权重，实证见 _QUERY_STOPWORDS），
+        # 同义扩展后仍经同一剔除路径（否则 怎么 会经替换串溜回，见 20260905 模拟）
+        q_toks = [t for t in tokenize(_clean_query(query)) if t in postings]
+        for key, val in _QUERY_SYNONYMS.items():
+            if key in query:
+                q_toks += [t for t in tokenize(_clean_query(query.replace(key, val)))
+                           if t not in q_toks and t in postings]
         if not q_toks:
             return []
         # chunk 级 BM25 打分

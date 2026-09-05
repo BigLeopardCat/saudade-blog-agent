@@ -33,7 +33,12 @@ QUERIES: list[dict] = [
     # 20260905：note:12（OTA 问题与解决记录）现完整作答分区问题（分区表冲突/
     # partitions.csv/ota_0·ota_1），理当排第一——期望补 12（期望=全部正确答案文档）
     {"id": "rag_ota_partition", "query": "ESP32-S3 OTA 更新需要哪些分区？", "expected": ["note:12", "note:14"]},
-    {"id": "rag_ota_http",      "query": "ESP32-S3 的 OTA 升级是怎么实现的？", "expected": ["note:14"]},
+    # 20260905 晚：note:12 回归语料后三篇答此泛问——12=本地 HTTP 上传式 OTA 实现记录
+    # （整篇即实现），14=固件侧平台 OTA（§3 轮询/esp_https_ota/A·B），22=平台侧 OTA 规范
+    # （OTA 固件管理小节含 esp_https_ota/A/B/轮询）。平台词只 lock 在 E2E golden
+    # （模型读候选列表会挑平台篇，note:12 居首时 E2E 实证仍 PASS）——文档级期望
+    # 如实收三篇，防单篇语义被检索判死。
+    {"id": "rag_ota_http",      "query": "ESP32-S3 的 OTA 升级是怎么实现的？", "expected": ["note:12", "note:14", "note:22"]},
     # 20260831：指纹文章已改写为 ESP32-S3-OBC 文档，语料无指纹内容——转 noise（expected=[]）。
     {"id": "rag_fingerprint_pin", "query": "指纹模组有哪些引脚？",          "expected": []},
     {"id": "rag_fingerprint_crc", "query": "指纹模组的通信校验用的是什么算法？", "expected": []},
