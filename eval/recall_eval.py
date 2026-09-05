@@ -30,7 +30,9 @@ QUERIES: list[dict] = [
     {"id": "rag_git_branch",    "query": "Git 的分支为什么很轻量？",       "expected": ["note:16"]},
     {"id": "rag_git_svn",       "query": "Git 和 SVN 有什么区别？",        "expected": ["note:16"]},
     {"id": "rag_git_snapshot",  "query": "Git 的核心特点有哪些？",          "expected": ["note:16"]},
-    {"id": "rag_ota_partition", "query": "ESP32-S3 OTA 更新需要哪些分区？", "expected": ["note:14"]},
+    # 20260905：note:12（OTA 问题与解决记录）现完整作答分区问题（分区表冲突/
+    # partitions.csv/ota_0·ota_1），理当排第一——期望补 12（期望=全部正确答案文档）
+    {"id": "rag_ota_partition", "query": "ESP32-S3 OTA 更新需要哪些分区？", "expected": ["note:12", "note:14"]},
     {"id": "rag_ota_http",      "query": "ESP32-S3 的 OTA 升级是怎么实现的？", "expected": ["note:14"]},
     # 20260831：指纹文章已改写为 ESP32-S3-OBC 文档，语料无指纹内容——转 noise（expected=[]）。
     {"id": "rag_fingerprint_pin", "query": "指纹模组有哪些引脚？",          "expected": []},
