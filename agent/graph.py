@@ -428,6 +428,36 @@ def _msg_text(m) -> str:
     return content if isinstance(content, str) else str(content)
 
 
+# ── 页面操作指南（20260905：留言引导幻觉修复的确定性知识源）──
+# 背景：3660 事故（用户问"怎么留言"，narrator 编出"昵称/邮箱输入框+右上角登录"
+# 全套幻觉流程）——RAG 语料只有文章，没有留言板操作说明；模型没有真凭实据时
+# 用"一般论坛经验"脑补填坑，叙述纪律 2 只禁"站内内容编造"、没盖住操作流程类。
+# 解法：current_url 命中留言板时把真实 UI 流程以页面事实注入 page_ctx（planner
+# 与 model 均可见），模型只转述；任何页面都适用的第 10 条纪律禁止无据脑补 UI。
+# 文案与 RiverBoard/index.tsx 实际 UI 对齐（输入框/留名/匿名/我的河灯页签）。
+GUESTBOOK_GUIDE = (
+    "【河灯集留言板操作指南】（系统注入的页面事实，教访客如何操作时以此为准）"
+    "页面下方有留言输入框（提示语「此刻想说的话…」），在框里写好内容即可放灯；"
+    "留名框在输入框旁，默认预填当前登录账号昵称，清空留名或点「匿名」则以无名/"
+    "匿名身份放灯；不需要注册或邮箱，输入框一直可见。"
+    "放灯后页面顶部「我的河灯」页签可查看自己放过的灯。"
+    "注意：本页面没有「昵称+邮箱+提交」式表单，也不需要先登录才能留言。"
+)
+
+# 留言板路径（/guestbook 与旧隐藏地址 /he 同页）
+_GUESTBOOK_URL_RE = re.compile(r"/(?:guestbook|he)\b")
+
+
+def _attach_page_guide(page_ctx: str) -> str:
+    """页面上下文命中留言板时附操作指南（当前 URL 是系统上报事实，非模型推断）。"""
+    try:
+        if _GUESTBOOK_URL_RE.search(page_ctx or ""):
+            return (page_ctx or "") + "\n" + GUESTBOOK_GUIDE
+    except Exception:
+        pass
+    return page_ctx or ""
+
+
 def _page_ctx(messages: list) -> str:
     """提取前端实时上报的页面上下文（page/title/特效/夜间），注入 planner/model。
 
@@ -441,7 +471,7 @@ def _page_ctx(messages: list) -> str:
         content = _msg_text(m) or ""
         found = re.search(r"\[System:\s*(.*?)\]", content, re.DOTALL)
         if found:
-            return found.group(1).strip()
+            return _attach_page_guide(found.group(1).strip())
     return "（无）"
 
 
@@ -1555,7 +1585,12 @@ _EXECUTOR_PROMPT = """\
 7. 需要给出站内链接时，只能用"工具执行记录"或页面上下文里真实出现的地址，
    不确定就不要给。
 8. 纯闲聊与博客内容无关的问题自由回答，但纪律 2/3/6 仍然适用。
-9. 回复遵循计划 REPLY 行的契约组织。"""
+9. 回复遵循计划 REPLY 行的契约组织。
+10. 教访客操作本站页面/功能（怎么留言/放河灯/发说说/找什么按钮）时：只能讲
+    "页面上下文"里注入的操作指南或工具返回里的真实内容；没有指南且没查到 → 如实
+    说"站内没有使用说明，具体入口我也不确定"，禁止用一般网站/论坛经验脑补具体
+    UI（输入框长什么样、填写项、提交/登录入口等）——脑补的 UI 细节即使"常识上
+    合理"也是编造。"""
 
 
 def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
