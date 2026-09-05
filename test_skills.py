@@ -919,3 +919,17 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_site_guide_covers_nav_map():
+    """SITE_GUIDE 常驻板块清单必须覆盖 NAV_MAP 全部存活路径（skills.py 单一事实
+    来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
+    trace 190827 实证：能做啥只列 4 项漏 IoT/河灯，注入后靠此锁防漂移。"""
+    import agent.graph as g
+    from agent.skills import NAV_MAP
+    alive = {p for p in NAV_MAP.values() if p is not None}
+    missing = [p for p in sorted(alive) if p not in g.SITE_GUIDE]
+    assert not missing, f"SITE_GUIDE 缺板块路径: {missing}"
+    # 技能关键词抽查（介绍能力引导语）
+    for kw in ["OLED", "跳转", "夜间模式", "河灯"]:
+        assert kw in g.SITE_GUIDE, f"SITE_GUIDE 缺技能关键词: {kw}"

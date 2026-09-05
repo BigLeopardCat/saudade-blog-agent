@@ -618,6 +618,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
     except Exception as e:
         asyncio.run_coroutine_threadsafe(queue.put(e), loop).result()
+        # 20260905 哨兵补发：异常入队后仍须收尾 None——event_stream 遇异常对象
+        # 即发 __ERROR__ 返回（不会读到 None），但 run_one/golden 等进程内消费者
+        # 的 drain 线程只认 None 终止，缺哨兵会让调用方 t.join() 永久挂起
+        # （实测：LLM client 未初始化时整进程挂到被 timeout 杀，exit 124/144）
+        asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
 
 
 @app.post("/chat/stream")
