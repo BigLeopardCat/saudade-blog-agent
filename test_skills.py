@@ -488,7 +488,10 @@ def test_gate_claim_scope():
       - 任何轮：命令前缀文本（_CMD_PREFIX_RE）——正文出现命令帧前缀即确凿违规
       - chat 零帧轮：只查第一人称工具调用声称（_CHAT_TOOL_CLAIM_RE 高精确模式，
         概念性/第三人称提及、"翻遍了留言板"类读取声称不拦——chat 计划 TOOLS
-        恒空、站内内容查询归 content_query 调用清单通道，gate 在这里留白）
+        恒空、站内内容查询归 content_query 调用清单通道，gate 在这里留白；
+        20260905 18:19 实证补窄例外：含站内空间词（站内/博客/网站/文章库/
+        系统）+ 完成式扫描动量词（"翻找了一圈/扫了一遍"）的声称=系统性检索
+        声称，_CHAT_SCAN_CLAIM_RE 拦）
       - content_query 零帧轮（异常路径：本应有调用清单却留空收尾）：读取/执行/
         调用三族宽查——该场景"本该查证"，误伤成本低（025744「我读完了」实证）"""
     print("[gate] 零帧声称检查作用域（chat 窄 / content_query 宽）")
@@ -508,6 +511,18 @@ def test_gate_claim_scope():
               out["done"] is True and bool(out.get("fallback_text"))
               and "没有任何工具执行" in out["fallback_text"],
               str(out.get("fallback_text", ""))[:60])
+    # chat + 站内扫描声称（20260905 18:19 实证原句："去站内翻找了一圈"——
+    # 无工具名、无"调用"动词、主语是名字自称 → _CHAT_TOOL_CLAIM_RE 漏）→ fallback
+    for scan_reply in (
+        "泠月喵去站内翻找了一圈，没有找到关于蛋糕的文章呢喵",   # 事故原句
+        "刚才我把整个博客都翻了一遍，没找到喵",                  # 把+整个+都 词序
+        "喵把站内查了一圈，确实没有喵",                          # 喵+查了一圈
+    ):
+        out8 = gate_node(_st("chat", scan_reply))
+        check(f"chat 站内扫描声称 + 零帧 → fallback：{scan_reply[:14]}…",
+              out8["done"] is True and bool(out8.get("fallback_text"))
+              and "没有任何工具执行" in out8["fallback_text"],
+              str(out8.get("fallback_text", ""))[:60])
     # chat + 概念性/第三人称提及（知识讨论、转述，非自称）→ pass（不误伤）
     out2 = gate_node(_st("chat", "听说质检会查模型有没有假装调用了工具，防止这种幻觉喵"))
     check("chat 概念性提及（非自称）→ pass",
