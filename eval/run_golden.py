@@ -63,6 +63,11 @@ def run_one(req: ChatRequest) -> dict:
             if item is None:
                 break
             frames.append(item)
+            if isinstance(item, BaseException):
+                # producer 异常入队后（server 侧已补 None 哨兵）仍尽早终止——
+                # 错误帧不参与正常帧处理，run_one 后处理会把 BaseException
+                # 落进 result["error"]（20260905：缺此 break 曾整进程挂死）
+                break
 
     t = threading.Thread(target=drain)
     t.start()
