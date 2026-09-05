@@ -703,6 +703,61 @@ async def chat_stream(req: ChatRequest, request: Request):
     )
 
 
+# ---------------------------------------------------------------------------
+# /review — 留言 AI 审核（20260905：博客留言板「河灯集」入库前同步调用）
+# ---------------------------------------------------------------------------
+
+
+class ReviewRequest(BaseModel):
+    """AI 审核请求。content = 待审留言文本。"""
+    content: str
+    author: str = ""
+
+
+@app.post("/review")
+def review_message(req: ReviewRequest):
+    """对一条留言做 pass/flag 一次裁决（qwen 低随机、无思考链、同步、25s 上限）。
+
+    语义：pass = 内容可公开展示；flag = 拦下进待审（是否还需人工放行由 Rust 按
+    manualReviewEnabled 开关决定——本端点只给裁决，不知道站点开关组合）。模型/
+    网络异常直接抛 500（调用方 Rust 侧超时/非 200 一律降级放行，兑底不拦正常
+    留言——降级决策在调用方，此处不吞异常，保证 Rust 日志可见性）。
+    """
+    from models import get_llm
+    text = (req.content or "").strip()
+    if not text:
+        return {"verdict": "pass", "reason": "空内容"}
+    llm = get_llm(streaming=False, max_tokens=80, enable_thinking=False,
+                  timeout=25.0, temperature=0.1)
+    prompt = (
+        "你是博客留言板审核员。留言板叫「河灯集」，访客在这里放河灯留言（内容是"
+        "写给他人/自己的话，通常带祝福、倾诉、提问或日常分享）。\n"
+        "判定该留言能否公开显示：仅当含垃圾广告、引流买卖、色情低俗、辱骂攻击、"
+        "违法敏感内容、恶意外链等明显不宜内容才判 flag；其余（祝福、倾诉、提问、"
+        "日常、夸赞、读后感等正常留言）一律 pass。拿不准时倾向 pass。\n"
+        f"留言内容：{text[:500]}\n"
+        "只输出 JSON：{\"verdict\": \"pass\" 或 \"flag\", \"reason\": \"简短中文原因\"}"
+    )
+    try:
+        out = (llm.invoke(prompt).content or "").strip()
+    except Exception:
+        logger.exception("[review] LLM 调用失败（Rust 侧将降级放行）")
+        raise
+    verdict, reason = "pass", "（未解析出裁决，默认放行）"
+    m = re.search(r"\{.*\}", out, re.S)
+    if m:
+        try:
+            data = json.loads(m.group(0))
+            v = str(data.get("verdict", "")).strip().lower()
+            if v in ("pass", "flag"):
+                verdict = v
+                reason = str(data.get("reason", "")).strip()[:80] or "（无原因）"
+        except Exception:
+            logger.warning("[review] 裁决 JSON 解析失败: %.120s", out)
+    logger.info("[review] verdict=%s reason=%.60s content=%.60s", verdict, reason, text)
+    return {"verdict": verdict, "reason": reason}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "agent_ready": _agent is not None}
