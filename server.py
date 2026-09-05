@@ -25,6 +25,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 
 from agent import create_agent
 from agent.graph import AgentCancelled, graph_input
+from agent.skills import NAV_MAP  # 过程行路径反查中文别名用（展示层，非执行依据）
 from utils import setup_logging
 from utils.logging import get_trace_id, set_trace_id
 from utils.trace import finish_trace, record, start_trace
@@ -329,6 +330,101 @@ async def chat(req: ChatRequest):
 # ---------------------------------------------------------------------------
 # /chat/stream — SSE 流式（供前端 Live2D 调用）
 # ---------------------------------------------------------------------------
+# ── 过程行文本人话化（20260905 issue5：执行过程显示与真实执行对齐）──
+# 旧实现病灶：
+#   ① 计划行直接贴 plan 机器契约原文（SKILL=/PARAMS= JSON），[:60] 截断成残句，
+#     用户看到的是半截内部格式而非动作描述；
+#   ② 「✅ 工具执行完成」由 ToolMessage 分支固定模板发出，不查 checker 验收——
+#     受阻执行（空结果/错误帧，verdict BLOCK）同样显示"完成"；且任何完成帧都
+#     不带实际内容（跳去哪/显示什么/检索什么全无），与用户可见的事实对不上；
+#   ③ 命令类完成帧（"🛠 调用工具：页面跳转 navigate_to"）没有目标细节。
+# 修复：计划行解析 TOOLS spec 成中文动作预告；完成/受阻行改由 execute update
+#   的 receipts（checker PASS 回执）与 blocked（受阻清单）驱动——验收通过才发
+#   ✅，受阻发 ✗；预告与完成共用 _tool_action_text 渲染，展示前后一致。
+#   注：gate 打回/通过的「✗ 质检打回」「✓ 质检通过」行不受影响（见 gate 分支）。
+
+_EFFECT_CN = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}
+
+# 无参只读点名工具 → 中文动作（planner 直接点名展开，见 skills._EXPLICIT_TOOLS）
+_NOARG_VERB = {
+    "list_guestbook": "查看留言板",
+    "list_talks": "查看说说",
+    "list_notes": "查看说说",
+    "list_devices": "查看设备列表",
+    "get_announcements": "查看公告",
+    "get_current_time": "查看当前时间",
+}
+
+_REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",
+              "empty_result": "结果为空", "error_frame": "执行出错",
+              "cmd_shape": "返回格式异常"}
+
+
+def _tool_action_text(name: str, args: dict | None) -> str:
+    """TOOLS spec 参数 → 中文动作正文（预告/回执完成帧共用，前后一致）。
+
+    参数值截断防长文本撑爆过程行；navigate 路径经 NAV_MAP 反查中文别名
+    （反查失败展示路径本身——路径是 execute 实际下发的真实值，不硬凑）。
+    """
+    a = args or {}
+    if name == "navigate_to":
+        path = str(a.get("path") or "").strip()
+        if path:
+            label = next((k for k, v in NAV_MAP.items() if v == path), path)
+            return f"页面跳转「{label[:20]}」"
+        return "页面跳转"
+    if name == "toggle_dark_mode":
+        on = str(a.get("mode") or a.get("action") or "").lower() in ("on", "开", "true")
+        return "开启夜间模式" if on else "关闭夜间模式"
+    if name == "toggle_effect":
+        eff_raw = str(a.get("effect") or "")
+        eff = _EFFECT_CN.get(eff_raw, eff_raw or "页面")
+        on = str(a.get("action") or "").lower() in ("on", "开", "true")
+        return f"{'开启' if on else '关闭'}{eff}特效"
+    if name == "device_oled_display":
+        text = str(a.get("text") or "").strip()
+        return f"屏幕显示「{text[:24]}」" if text else "屏幕显示"
+    if name == "rag_search":
+        q = str(a.get("query") or "").strip()
+        return f"站内检索「{q[:24]}」" if q else "站内检索"
+    if name == "search_notes":
+        k = str(a.get("keyword") or "").strip()
+        return f"检索说说「{k[:24]}」" if k else "检索说说"
+    if name == "get_article_detail":
+        aid = str(a.get("article_id") or "").strip()
+        return f"读取文章 {aid[:12]}" if aid else "读取文章"
+    if name in _NOARG_VERB:
+        return _NOARG_VERB[name]
+    return f"执行 {name}"
+
+
+def _specs_from_plan(plan: str) -> list:
+    """plan 契约文本 → TOOLS spec 的 (工具名, 参数 dict|None) 列表。
+
+    切分规则与 graph.parse_plan 一致（`;` 分隔；「（无）」= 空清单）；参数
+    解析失败/空参给 None——预览只出动作词，不硬猜参数。
+    """
+    out = []
+    m = re.search(r"TOOLS\s*[:=]\s*(.+)", plan or "", re.IGNORECASE)
+    if not m:
+        return out
+    for spec in m.group(1).split(";"):
+        spec = spec.strip()
+        if not spec or spec in ("（无）",):
+            continue
+        nm = spec.split("(", 1)[0].strip()
+        am = re.match(r"^[^(]+\((.+)\)\s*$", spec, re.DOTALL)
+        args = None
+        if am:
+            try:
+                obj = json.loads(am.group(1))
+                if isinstance(obj, dict):
+                    args = obj
+            except Exception:
+                pass
+        out.append((nm, args))
+    return out
+
 
 def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Queue, loop, user_id: int = 0,
                                stop_event: threading.Event | None = None):
@@ -359,6 +455,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         # 跨轮执行记忆（20260904 C3）：checker 验收回执累计（execute update 是
         # 累计语义——末批即本次请求全量），流收尾时 __EXEC__ 帧发 Rust 落库
         exec_rows: list = []
+        # 完成帧 diff 起点（20260905 issue5）：receipts 全量累计，已发条数起点
+        # 之后为新增回执（同一 update 内顺序与执行顺序一致）
+        receipt_sent = 0
 
         def emit_process(text: str, key: str = ""):
             nonlocal process_emitted
@@ -394,22 +493,12 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         # 在计划含执行清单时发（execute 执行期间几秒静默，防"卡死"）
                         asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
                 elif isinstance(chunk, ToolMessage) and chunk.content:
+                    # 工具结果帧转发前端展示（命令帧解析/正文展示）。过程行不在
+                    # 此发——旧"✅ 工具执行完成"固定模板不查 checker 验收：受阻
+                    # 执行（空结果/错误帧）同样显示"完成"，且完成帧不带实际内容。
+                    # 20260905 issue5 起完成/受阻行由 execute update 的
+                    # receipts/blocked 驱动（见下方 execute 分支），此处只转发
                     asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
-                    # 过程展示：工具真实执行了 → 步骤行（前端"调用工具"轨迹）。
-                    # 20260903：多轮检索（planner⇄execute）每轮一批工具，完成帧
-                    # 按工具名去重（同轮同名工具不重发），别把后续轮的完成帧吞掉
-                    _name = getattr(chunk, "name", "") or ""
-                    t = str(chunk.content)
-                    if t.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")):
-                        emit_process("🛠 调用工具：页面跳转 navigate_to", key="tool_done_nav")
-                    elif t.startswith("EFFECT:"):
-                        emit_process("🛠 调用工具：页面特效 toggle_effect", key="tool_done_effect")
-                    elif t.startswith("DARKMODE:"):
-                        emit_process("🛠 调用工具：夜间模式 toggle_dark_mode", key="tool_done_dark")
-                    else:
-                        # 非命令类工具（设备查询/内容检索）：补收尾帧，
-                        # 让占位帧有闭环（数据本身已作为帧转发给前端展示）
-                        emit_process("✅ 工具执行完成", key=f"tool_done_{_name}")
             elif mode == "updates":
                 # 最终回复正文收集（trace 落盘）：model 节点的完整 AIMessage
                 # （20260903 拓扑：model 只走一次收尾叙述轮，天然是最终轮）
@@ -429,20 +518,51 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                             # chat 快道：只发占位帧，不发计划明细（避免每条闲聊都有过程行）
                             is_chat_skill = True
                         else:
-                            # 计划行[:60]截断无省略号会显示成"…} TO"式残缺（TOOLS 被砍到 TO）
-                            plan_line = plan.replace("\n", " ").strip()
-                            if len(plan_line) > 60:
-                                plan_line = plan_line[:60].rstrip() + "…"
-                            emit_process("🧭 计划：" + plan_line)
+                            # 计划行人话化（20260905 issue5）：不再贴 plan 机器
+                            # 契约原文（SKILL=/PARAMS= 截断成残句），改发 TOOLS
+                            # spec 的中文动作摘要——与回执完成帧共用渲染、前后一致。
+                            # 收尾轮（TOOLS 空/（无），execute 后叙事轮）不发——
+                            # 无动作可预告，避免"计划:执行规划动作"式空行
+                            acts = [_tool_action_text(nm, ar)
+                                    for nm, ar in _specs_from_plan(plan)]
+                            if acts:
+                                hint = "、".join(acts)
+                                if len(hint) > 100:
+                                    hint = hint[:100].rstrip() + "…"
+                                emit_process("🧭 计划：" + hint)
                         # 计划含执行清单 → execute 将确定性执行（期间几秒静默，
-                        # 无此占位帧前端会像"卡死"）；完成帧由 ToolMessage 分支发
+                        # 无此占位帧前端会像"卡死"）；完成/受阻帧由 execute
+                        # update 的 receipts/blocked 驱动（见下方 execute 分支）
                         if "\nTOOLS: " in plan and "TOOLS: （无）" not in plan:
                             emit_process("🛠 正在调用工具…", key="tool_running")
                 # execute 的 checker 验收回执（20260904 C3）：累计语义——每次
                 # execute update 的 receipts 都是请求内全部 PASS 行，末批即全量
                 ex_upd = data.get("execute")
-                if ex_upd and ex_upd.get("receipts"):
-                    exec_rows = ex_upd["receipts"]
+                if ex_upd:
+                    # 过程行以 checker 验收为准（20260905 issue5）：✅ 完成帧只对
+                    # 新增 PASS 回执发（receipts 累计，diff 起点后为新增，带实际
+                    # 内容）；BLOCK 受阻项发 ✗ 行——真实执行失败不再显示"完成"
+                    if ex_upd.get("receipts"):
+                        rows = ex_upd["receipts"]
+                        exec_rows = rows  # 全量（流收尾 __EXEC__ 用）
+                        for i in range(receipt_sent, len(rows)):
+                            r = rows[i]
+                            emit_process("✅ " + _tool_action_text(
+                                str(r.get("tool") or ""), r.get("args")),
+                                key=f"receipt_{i}")
+                        receipt_sent = len(rows)
+                    for b in ex_upd.get("blocked") or []:
+                        # ✗ 行在前、✅ 行在后（本轮两列表分开到达，不混排）；
+                        # 同 spec 跨轮重复受阻只提示首次（key 按 spec 去重）
+                        spec = str(b.get("spec") or "")
+                        reason = _REASON_CN.get(str(b.get("reason") or ""),
+                                                str(b.get("reason") or "执行受阻"))
+                        bnm, bargs = "", None
+                        for _nm, _ar in _specs_from_plan("TOOLS: " + spec):
+                            bnm, bargs = _nm, _ar
+                        emit_process("✗ " + _tool_action_text(bnm or str(b.get("tool") or ""),
+                                                              bargs) + f"未成功（{reason}）",
+                                     key=f"blocked_{spec}")
                 # gate 检查判定（20260903：reflector/REVISE/LLM-QC 已废除——gate
                 # 是终节点只收尾不重考：pass → done 收尾；fail → fallback 文本
                 # 直接替换最终回复，见 graph.gate_node 注释）
