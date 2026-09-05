@@ -154,6 +154,20 @@ def _build_messages(req: ChatRequest) -> list:
         # "· 屏幕显示「…」"式行）——质疑"你刚才真显示了/屏上写了什么"的如实依据。
         # 与 conversation_summary 同语义：系统确认事实注入，模型不得扩展/编造
         ctx_parts.append(f"recent_executions: {req.executions[:1500]}")
+    # 20260905 重复提问注入（18:17:36/18:18:52 实证：同句重发时 narrator 逐字
+    # 复读上轮回复，两条一字不差的回复并排出现在会话里——qwen 对同句重问的
+    # 最优策略判断是原样复读，prompt 软约束压不住，需确定性旁路）。
+    # 检测：当前消息与历史最近一条 user 消息字面相同（去首尾空白）。宁精确勿
+    # 误伤——仅原句重发才点破，近似新问法不触发（不打断正常追问）。
+    if req.message.strip():
+        prev_user = next((h["content"] for h in reversed(req.history)
+                          if h["role"] == "user"), None)
+        if isinstance(prev_user, str) and req.message.strip() == prev_user.strip():
+            ctx_parts.append(
+                "repeat_ask_note: 访客原句重发了刚才的问题——若上轮已答过：先点破"
+                "（'这个问题你刚才问过啦'），再压缩成两三句要点重述（不复读原文全文、"
+                "不重复举例/收尾句），并追问一句新意图；本轮工具查证带回新事实才按新"
+                "事实完整叙述")
     ctx = f"[System: {'; '.join(ctx_parts)}]"
     messages.append(HumanMessage(content=ctx))
 
@@ -349,7 +363,7 @@ _EFFECT_CN = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}
 _NOARG_VERB = {
     "list_guestbook": "查看留言板",
     "list_talks": "查看说说",
-    "list_notes": "查看说说",
+    "list_notes": "查看文章列表",
     "list_devices": "查看设备列表",
     "get_announcements": "查看公告",
     "get_current_time": "查看当前时间",
@@ -389,7 +403,7 @@ def _tool_action_text(name: str, args: dict | None) -> str:
         return f"站内检索「{q[:24]}」" if q else "站内检索"
     if name == "search_notes":
         k = str(a.get("keyword") or "").strip()
-        return f"检索说说「{k[:24]}」" if k else "检索说说"
+        return f"检索文章「{k[:24]}」" if k else "检索文章"
     if name == "get_article_detail":
         aid = str(a.get("article_id") or "").strip()
         return f"读取文章 {aid[:12]}" if aid else "读取文章"
