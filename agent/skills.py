@@ -28,6 +28,7 @@ NAV_MAP: dict[str, str | None] = {
     "首页": "/",
     "主页": "/",
     "留言板": "/guestbook",
+    "河灯集": "/guestbook",  # 页面真名：/guestbook 即留言簿「河灯集」
     "河灯": "/guestbook",
     "说说": "/talk",
     "动态": "/talk",
@@ -87,7 +88,7 @@ _CALLABLE_QUERY_TOOLS: set[str] = _EXPLICIT_TOOLS | {
 # 归设备域在前，避免被后续规则截胡。
 FUZZY_NAV_RULES: list[tuple[tuple[str, ...], str]] = [
     (("物联网", "IOT", "iot", "IoT", "设备控制", "设备管理", "设备面板", "设备平台", "设备"), "/device-console/"),
-    (("留言", "留个言", "河灯"), "/guestbook"),
+    (("留言", "留个言", "河灯", "河灯集"), "/guestbook"),
     (("说说", "碎语", "动态"), "/talk"),
     (("时间轴", "归档", "时间线"), "/times"),
     (("关于",), "/about"),
