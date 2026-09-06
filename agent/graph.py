@@ -1,10 +1,6 @@
 """手写 LangGraph 图 —— Agent 核心重写（20260903 架构裁决：planner 全权）
 
 替代 create_agent 黑盒：显式声明 planner / execute / model / gate 节点与状态流转。
-面试核心：能讲清楚"你的 agent 循环怎么设计"——
-  1. 状态 schema 为什么这么设计（工作台上放什么数据）
-  2. 节点分工（每个工人干什么）
-  3. 条件边（什么情况下循环、终止、纠错）
 
 架构（20260903 定稿，废除自由 ReAct）——确定性骨架 + 单一决策点：
   * 决策点只有一个：planner（fast paths 是确定性快道，不是第二决策者）。
@@ -37,7 +33,7 @@ LLM-QC 采信模型自称、预算耗尽 accept）共同指向一个根因——
 变成确定性执行器后，"不听话"在结构上不可能发生——检查层随之可以大幅
 简化（gate 只兜模型叙述层的文本失真）。
 
-LangGraph 四件套（对照第一课讲解）：
+LangGraph 四件套：
   State  —— AgentState（节点间共享的字典，字段决定"工作台长什么样"）
   Node   —— planner/execute/model/gate（每个是普通函数：state 进、更新字段出）
   Edge   —— 普通边（顺序传送带）+ 条件边（按返回值路由，循环/终止所在）
@@ -380,8 +376,8 @@ def parse_plan(raw: str) -> dict:
     """解析 plan 字段（契约的读端）。容错：解析失败 → 按 chat 兜底（宁可少干活，不硬猜）。
 
     返回 {"skill", "params", "tools", "note", "reply", "todo", "chat"}。
-    面试点：所有"LLM 输出 → 程序消费"的边界都要容错解析——LLM 不是 JSON 解析器，
-    输出格式漂移是常态，解析器必须能优雅降级。
+    容错原则：所有"LLM 输出 → 程序消费"的边界都要能优雅降级——LLM 不是
+    JSON 解析器，输出格式漂移是常态（解析失败 → 按 chat 兜底，宁可少干活）。
     """
     m = re.search(r"SKILL\s*[:=]\s*(\w+)", raw or "", re.IGNORECASE)
     skill = m.group(1) if m else "chat"
@@ -1079,8 +1075,6 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
       - 每轮执行什么由 planner 文本输出决定，白名单/模板双校验（skills.py）；
       - 动作技能一次决策后（工具帧已可见）planner 必须收尾——绝不重复执行；
       - 循环上限 MAX_PLAN_ROUNDS，超限强制收尾（_wrap_up_plan）。
-    与旧版的本质区别（面试点）：执行层的自由度（参数自拟/是否调用/输出权）
-    全部收走，规划空间仍受限（技能注册表 + 工具白名单 + 映射表都是系统数据）。
     """
     if _stopped(config):
         logger.info("[planner] cancelled (client disconnected)")

@@ -54,7 +54,7 @@ flowchart TB
 一切连续性由 Rust 从 MySQL 读取后注入请求体实现。这是刻意的架构取舍——曾经 MemorySaver 线程累积导致
 长对话上下文与 worker 内存无限膨胀，最终被整体抛弃（详见 §4.6）。
 
-**关键设计决策速览**（每一条都是线上踩坑后的取舍，面试讲述"为什么"的素材）：
+**关键设计决策速览**（每一条都是线上踩坑后的取舍，事故细节见 docs/问题记录.md）：
 
 | 决策 | 取舍 | 踩过的坑（详见对应章节） |
 |---|---|---|
@@ -100,8 +100,8 @@ flowchart TB
 │   ├── trace.py               # 对话 trace 落盘（logs/agent/traces/，节点事件 + 分段耗时 + 退出原因）
 │   ├── helpers.py             # 通用工具函数
 │   └── tts.py                 # edge-tts 语音合成（预留，TTS 未启用）
-├── eval/                      # 评测：eval/golden/basic.jsonl（55 条）+ run_golden.py（L2 真实 LLM 端到端）
-│   │                          #       + golden_case_runner.py / golden_full_run.py（20260902 进程隔离跑法）
+├── eval/                      # 评测：eval/golden/basic.jsonl（66 条）+ run_golden.py（L2 真实 LLM 端到端）
+│   │                          #       + golden_case_runner.py / golden_full_run.py（进程隔离跑法）
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
 ├── test_skills.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）

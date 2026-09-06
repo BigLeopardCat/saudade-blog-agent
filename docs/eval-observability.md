@@ -2,7 +2,11 @@
 
 > 升级路线（手写图 → eval → 记忆 → 可观测 → 多 agent）的**验证地基**：先立"怎么验证"，再动工升级。
 > 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、CLAUDE.md（运维）。
-> 最后更新：2026-09-03（planner 全权重构：gate fallback 替代 reflector/REVISE，见文首变更注）；上版 2026-09-02（golden 扩至 55 条、33 标签：rag_* 22（12 条 recall 正例同源出题 + noise/拒答组）、
+> 最后更新：2026-09-06（golden 扩至 66 条、52 标签：20260905 判据改写后全量 66/66、0 resets，
+> 留档 eval/report/runs/20260905_195300.json；recall_eval 21 条 queries recall@1=1.00/MRR=1.00，
+> 留档 20260905-201043.json——本版起正文按纯技术文档维护，自评/叙事类内容不再收录）；
+> 上版 2026-09-03（planner 全权重构：gate fallback 替代 reflector/REVISE，见文首变更注）；
+> 上上版 2026-09-02（golden 扩至 55 条、33 标签：rag_* 22（12 条 recall 正例同源出题 + noise/拒答组）、
 > chat 7、multi-turn 7、nav 6、effect 6、hallucination/noise/knowledge/content_query/device/tool_call/
 > article_read/efficiency 等；recall_eval 21 条 queries（12 正例 + 9 噪声）直接测线上 rag/search.py，
 > 词法 2/3-gram BM25 基线 recall@1=1.00；20260901 定位重构 rag_query 技能废除、content_query 承接、
@@ -13,7 +17,9 @@
 > 自由 ReAct、reflector、REVISE 已废除（见 [agent-architecture.md](agent-architecture.md)
 > §3/§6.5）。本文各节的旧执行路径/检查手段按历史记录理解；指标口径按 20260903 变化如下：
 > - trace 图路径分段已由 planner/model/tools/reflector 变为 **planner/execute/model/gate**
->   ——"reflector 修正了几次"无对应物（gate 不 REVISE 重考、直接 fallback 收尾）；
+>   （20260904 回执驱动加回受阻复盘后为五段 planner/execute/reflector/model/gate，reflector
+>   未触发时无该段）——"reflector 修正了几次"现指受阻复盘轮次（≤2，输入结构性无散文）；
+>   gate 不 REVISE 重考、直接 fallback 收尾；
 > - §4/§7「REVISE 打回成本」效率代理指标（efficiency 字段 resets 总数/打回轮）现指
 >   **gate fallback 次数**：gate fallback 时 server 仍发 `__RESET__` 并以 fallback 如实
 >   文本替换最终回复——runner 按 `__RESET__` 帧计数 resets（run_golden.py），口径不变；
@@ -58,7 +64,7 @@ flowchart TB
 |---|---|---|---|---|
 | **L0 单元级** | 图节点、工具、schema | 单测（`test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率 | 图重写、记忆剥离 |
 | **L1 基准级** | 检索器、生成层、端到端 RAG | BEIR / RGB / CRAG（§3） | nDCG@10、Recall@5、MRR；噪声准确率 / 拒答率 / 错误检测率；Truthfulness（幻觉=-1） | RAG、防幻觉 |
-| **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 55 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
+| **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 66 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
 | **L3 回放级** | 线上行为漂移 | 生产对话脱敏采样 → 离线重放 → 与 golden 指标对齐 | 漂移方向/幅度 | 全部（每次升级后跑） |
 
 **CI 门槛**：push 跑 L0 + L2（分钟级，硬门禁，回归即红）；nightly 跑 L1 全量 + L3 回放（小时级，出基准报告）。
@@ -81,11 +87,14 @@ flowchart TB
 
 ## 4. L2 任务级：golden set 设计（核心资产）
 
-**规模 30-50 条，按意图分层（当前已落地 55 条、33 个标签，条目可多标签；主要标签分布：rag_* 22
-（含 recall 正例 12 + noise/拒答组）/ chat 7 / multi-turn 7 / nav 6 / effect 6 / hallucination 5 /
-noise 5 / knowledge 4 / content_query 3 / device 3 / tool_call 3 / article_read 2 / efficiency 2 /
-idempotency 2 / summary 2 / image 2 等——20260901 起新增 article_read/content_query 分层，
-20260902 起新增 efficiency/claim/thinking-leak/cover/concurrent/boundary 标签）**：
+**规模 30-50 条，按意图分层（当前已落地 66 条、52 个标签，条目可多标签；主要标签分布：rag_* 22
+（含 recall 正例 10 + noise/拒答组）/ chat 8 / multi-turn 7 / nav 6 / effect 6 / hallucination 8 /
+noise 5 / content_query 5 / knowledge 4 / tool_call 4 / device 3 / regression 7 / exec_memory 2 /
+truth_query 2 / idempotency 2 / summary 2 / display 2 / image 2 / deep 2 / article_read 2 /
+efficiency 2 等——20260901 起新增 article_read/content_query 分层，20260902 起新增
+efficiency/claim/thinking-leak/cover/concurrent/boundary 标签，20260904 起新增
+exec_memory/truth_query/todo 等回执驱动用例，20260905 起新增 repeat-ask/anti-verbatim/
+sticker/planner 等判据改写用例）**：
 
 | 分层 | 条数 | 覆盖 | 断言方式 |
 |---|---|---|---|
@@ -96,7 +105,7 @@ idempotency 2 / summary 2 / image 2 等——20260901 起新增 article_read/con
 | 边界输入 | 4 | 空消息/超长/无权限/未登录 | 断言：正确降级路径 |
 
 > 注：上表条数是分层设计目标，实际以 `eval/golden/basic.jsonl` 为准——多标签重叠、持续演进，
-> 现状盘点见上文分布（55 条/33 标签）。
+> 现状盘点见上文分布（66 条/52 标签）。
 
 **评分双输出（LLM-as-judge）**：
 
@@ -134,7 +143,7 @@ flowchart LR
 device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/agent/traces/`，时间戳+user_id+trace_id
 文件名），记录：
 
-- **图路径**：执行了哪些节点、递归深度（图重写后直接回答"planner 拆了几步、reflector 修正了几次"）
+- **图路径**：执行了哪些节点、递归深度（planner 决策轮数、reflector 受阻复盘轮数——20260904 起 ≤2 轮）
 - **工具调用序列**：名称 / 入参摘要 / 出参摘要 / 耗时
 - **LLM 调用**：prompt 字节数、token 消耗、首字节延迟（>30s 的慢调用打 WARN + trace `slow` 标记，20260830 上线）
 - **关键事件**：摘要触发、空回复兜底触发、超时、命令帧产出、退出原因（client_disconnect/producer_done/超时等）
@@ -166,15 +175,15 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
   → 修复后跑 L1 + L3 验证无漂移
 ```
 
-面试叙事："我做的每个组件都有离线可量化的指标、线上可监控的信号、回归可拦截的门禁"——不是"我做了 RAG/多 agent"，而是完整闭环。
-
 ---
+
+
 
 ## 7. 与升级路线的落地顺序（评测先行）
 
 | 阶段 | 并行建设的评测/可观测 |
 |---|---|
-| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（55 条、33 标签：nav/effect/multi-turn/chat/device/hallucination/noise/rag_* 22/content_query/article_read/efficiency 等）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>` 单跑定位；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。LLM-as-judge 未做 |
+| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（66 条、52 标签：rag_* 22/chat 8/hallucination 8/multi-turn 7/nav 6/effect 6/noise 5/content_query 5/device 3/exec_memory 2 等）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>` 单跑定位；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。LLM-as-judge 未做 |
 | 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:）；20260830 修 golden 断言过严三条（行为正确不判失败） |
 | 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0+L2 硬门禁）+ nightly crontab（scripts/nightly_regression，失败标 `~/agent_regression.failed`）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
 | 3 记忆 | 🟡 部分完成：摘要独立化（2026-08-26）结构性关闭污染面；**未做**：记忆专项评测（召回相关性、摘要合并质量、污染检测） |

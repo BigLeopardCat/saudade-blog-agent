@@ -3,14 +3,15 @@
 
 产品级"plan 写进 skill"的落地：执行步骤是模板化数据，不是模型编的自由文本。
 planner 只从本注册表选技能 + 填参数（受限规划，不再自由写 STEPS），
-model 按技能模板执行，reflector 对照技能模板检查。
+instantiate_plan 把模板实例化为计划文本（含 TOOLS 行执行清单），execute 确定性逐条执行。
 
 导航映射表是本模块的单一事实来源（页面别名→路径，替代散落在 prompt 里的白名单）：
 planner 选 navigate 技能时能看到映射表，"去物联网平台"→ /device-console/ 的
 业务知识从此属于系统数据而非模型猜测（修复 planner 跑题的根因）。
 
 架构位置：
-  planner（技能选择）→ plan 字段（技能模板实例化）→ model（执行）→ reflector（模板检查）
+  planner（选技能 + 填参数）→ instantiate_plan（技能模板实例化 plan 文本，
+  TOOLS 行 = 执行清单）→ execute（确定性逐条执行）→ model（零工具叙述）→ gate（确定性检查）
 """
 
 from __future__ import annotations
@@ -23,7 +24,8 @@ from typing import Any
 # 导航映射表（业务唯一数据源）
 # ---------------------------------------------------------------------------
 # 页面别名（用户口语）→ 真实路径；None 表示该别名对应页面已下线，不得导航。
-# 与 tools/base.py 的 navigate_to 白名单保持一致（本表是单一事实来源）。
+# 别名映射的唯一事实来源（路径白名单 = base.py 同源导入的 NAV_VALID_PATHS，
+# 见下方"白名单路径"注释）。
 NAV_MAP: dict[str, str | None] = {
     "首页": "/",
     "主页": "/",
@@ -104,9 +106,9 @@ class Skill:
     description: str                   # 触发条件（planner 选技能用）
     inputs: dict[str, str]             # 参数名 → 提取要求（planner 填 PARAMS 用）
     plan: list[tuple[str, dict]] = field(default_factory=list)  # 固定工具序列：(工具名, 参数模板)
-    complete_when: str = ""            # 完成判定（reflector 对照）
+    complete_when: str = ""            # 完成判定（注入 planner 提示词，辅助收尾决策）
     reply_contract: str = ""           # 回复契约（model 遵守）
-    chat: bool = False                 # 闲聊快道（reflector 不花 LLM 钱）
+    chat: bool = False                 # 闲聊（chat 轮零工具叙述，gate 声称检查按窄作用域）
 
 
 SKILLS: list[Skill] = [
@@ -227,8 +229,8 @@ SKILLS: list[Skill] = [
         # （232107：600 字细节全部虚构；232302：模型自己承认没读过、但系统
         # 没有机制强制去读）。本技能 = 固定流程：planner_node 的确定性快道
         # _article_fast_path 从 current_url 解析文章 ID 后注入本技能实例化，
-        # TOOLS 行强制 get_article_detail → executor 必须调用 → reflector
-        # 检查点 1 兜底。文章 ID 是系统数据，不经 planner 决策。
+        # TOOLS 行强制 get_article_detail → execute 必执行（有执行必有帧）。
+        # 文章 ID 是系统数据，不经 planner 决策。
         description=(
             "（系统确定性快道专用，planner 不得选择——由 planner_node 在用户当前页面为"
             "文章详情页且消息引用当前文章时注入）读取用户当前正在阅读的文章全文后回答"
@@ -371,7 +373,7 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# prompt 注入块构建（planner / executor / reflector 三处共用本模块）
+# prompt 注入块构建（planner 提示词注入用）
 # ---------------------------------------------------------------------------
 
 _NAV_MAP_LINES = "、".join(
