@@ -163,9 +163,12 @@ def get_announcements() -> str:
 def list_guestbook() -> str:
     """获取留言板（河灯留言）列表。
 
-    留言板页面 /guestbook 叫「河灯集」（留言簿）：页面上「此心为灯」按钮是留言
-    入口，留言流程 = 先挑一盏喜欢的河灯 → 选「印章」（即留言分类）→ 填留言内容
-    与署名。访客问"怎么留言/留言板怎么用/哪里能放河灯"时按此流程引导。
+    留言板页面 /guestbook 叫「河灯集」（留言簿）：页面下方有留言输入框（提示语
+    「此刻想说的话…」），在框里写好内容即可放灯；留名框在输入框旁，默认预填
+    当前登录账号昵称，清空留名或点「匿名」则以无名/匿名身份放灯——无需注册或
+    邮箱，输入框一直可见；放灯后可在「我的河灯」页签查看自己放过的灯（与
+    graph.py GUESTBOOK_GUIDE 同源，改动须两端同步）。访客问"怎么留言/留言板
+    怎么用/哪里能放河灯"时按此流程引导。
     注意：留言板与说说（碎语）是两个独立的数据源——查询"博客里有没有人聊过 X"
     这类问题时，需同时调用 list_talks 检查说说内容，两个都查全后才能回答。
     """
@@ -215,8 +218,8 @@ def get_site_map() -> str:
 - 归档 (/times) — 按时间轴归档展示所有文章
 - 分类 (/category/:name) — 按分类查看文章
 - 说说 (/talk) — 动态/碎语
-- 留言板 (/guestbook) — 「河灯集」留言簿：页面按钮「此心为灯」是留言入口，
-  流程 = 先挑一盏喜欢的河灯 → 选「印章」（留言分类）→ 填留言内容与署名
+- 留言板 (/guestbook) — 「河灯集」留言簿：页面下方输入框（提示语「此刻想说的话…」）
+  写内容即可放灯；留名框默认预填昵称、可匿名，无需注册邮箱
 - 关于我 (/about) — 个人介绍
 - 文章详情 (/article/:id) — 查看文章全文，支持 Mermaid 图表
 - 后台管理 (/dashboard) — 登录后可管理文章、分类、标签、公告等
@@ -296,8 +299,9 @@ timeout=10)
 # 导航工具
 # ---------------------------------------------------------------------------
 
-# 导航目标白名单（与 agent/prompts.py 的 navigate_to 约束保持一致）：
-# prompt 约束是第一道闸，工具层校验是第二道闸——模型不可信，工具必须自证。
+# 导航目标白名单（工具层硬校验——本常量是单一事实来源，skills.py 的
+# NAV_VALID_PATHS 从这里同源导入，规划侧约束 = NAV_MAP 别名映射 + instantiate_plan
+# 校验 + planner 提示词规则）：模型不可信，工具必须自证。
 # 教训：模型曾把"友链板块"猜成 /links 直接发出去（真实页是 /guestbook）。
 _NAV_EXACT_PATHS = {"/", "/about", "/guestbook", "/talk", "/times", "/login", "/dashboard", "/device-console/"}
 _NAV_PREFIX_PATHS = ("/category/", "/article/")
@@ -309,7 +313,7 @@ def navigate_to(
     confirm: Annotated[bool, "Whether user confirmation is needed. false=direct nav, true=ask user"] = True,
 ) -> str:
     """导航到博客页面。页面跳转只能通过调用本工具生效：调用后返回 NAVIGATE:/AUTO_NAVIGATE: 前缀命令，由系统执行跳转。
-    严禁在回复正文中自行输出命令前缀文本——那不是工具调用，不会产生任何跳转，属于违规输出，质检会打回重做。"""
+    严禁在回复正文中自行输出命令前缀文本——那不是工具调用，不会产生任何跳转，属于违规输出，会触发 gate 声称检查（fallback 如实文本收尾）。"""
     p = path.strip()
     # /category/*、/article/* 要求至少带一个 id 段（/category/ 裸前缀不算有效页面）
     valid = p in _NAV_EXACT_PATHS or (p.startswith(_NAV_PREFIX_PATHS) and p.count("/") >= 2)
@@ -331,7 +335,7 @@ def toggle_effect(
     """开启或关闭博客页面的视觉效果（樱花/大雨/雪花）。
     返回 EFFECT: 前缀命令供前端执行；前端按 action 显式开关，不会因重复命令翻转状态。
     参数校验：无效 effect/action 返回提示而非命令帧——命令帧只代表真实执行的切换，
-    未返回命令帧 = 动作未发生，回复不得声称已开/已关（reflector 声称闸/轨迹核对依据）。"""
+    未返回命令帧 = 动作未发生，回复不得声称已开/已关（gate 声称检查依据）。"""
     if effect not in ("sakura", "rain", "snow"):
         return f"效果无效: {effect!r}。可选: sakura(樱花), rain(大雨), snow(雪花)"
     if action not in ("on", "off"):
@@ -363,9 +367,9 @@ DEVICE_SERVICE_URL = _settings.device_service_url
 JWT_SECRET = _settings.jwt_secret
 
 # 显示指令幂等去重：同一用户短时间内相同内容的重复下发直接跳过。
-# 场景：REVISE 循环多轮重复调用 / 客户端重试 / MQTT QoS1 at-least-once 重投——
-# 工具层保证"同内容只发一次"。（曾防后端强制路由 _force_display 与自主调用双调，
-# 20260828 影子系统事故后强制路由已移除。）
+# 场景：多轮重复调用（planner 重试/多轮规划） / 客户端重试 / MQTT QoS1
+# at-least-once 重投——工具层保证"同内容只发一次"。（曾防后端强制路由
+# _force_display 与自主调用双调，20260828 影子系统事故后强制路由已移除。）
 _DISPLAY_DEDUP_SECONDS = 30.0
 _last_display: dict[int, tuple[str, float]] = {}
 
@@ -435,7 +439,7 @@ def device_oled_display(
         return "无法获取当前用户身份，指令未下发"
     if not text or len(text) > 64:
         return "显示内容为空或超过 64 字符限制"
-    # 幂等去重：30s 内相同用户相同内容不重复下发（防 REVISE 多轮重复调用、QoS1 重投）
+    # 幂等去重：30s 内相同用户相同内容不重复下发（防多轮重复调用、QoS1 重投）
     now = time.time()
     prev = _last_display.get(uid)
     if prev and prev[0] == text and now - prev[1] < _DISPLAY_DEDUP_SECONDS:

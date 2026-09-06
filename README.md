@@ -22,7 +22,7 @@
 
 详细架构：[docs/agent-architecture.md](docs/agent-architecture.md)（全链路：时序、记忆、工具、防幻觉、超时、部署）。
 评测与可观测设计：[docs/eval-observability.md](docs/eval-observability.md)。
-RAG 设计总结（面试材料）：[docs/rag-design.md](docs/rag-design.md)。
+RAG 检索设计总结：[docs/rag-design.md](docs/rag-design.md)（历史设计记录，检索现状见 [rag/search.py](rag/search.py) 头注释）。
 
 ---
 
@@ -45,8 +45,8 @@ saudade-blog-agent/
 ├── models/llm.py           # LLM 工厂：provider 三选一（qwen/deepseek/openai）
 ├── tools/base.py           # 22 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重
 ├── utils/                  # logging（trace_id/日志）+ trace（对话 trace 落盘）+ tts（未启用）+ helpers
-├── eval/                   # 评测：golden set（55 条）+ run_golden.py（L2 任务级，真实 LLM）
-│   │                       #       + golden_case_runner.py/golden_full_run.py（20260902 进程隔离跑法）
+├── eval/                   # 评测：golden set（66 条）+ run_golden.py（L2 任务级，真实 LLM）
+│   │                       #       + golden_case_runner.py/golden_full_run.py（进程隔离跑法）
 │   │                       #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
 ├── test_skills.py          # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
@@ -69,7 +69,7 @@ cp .env.example .env         # 填入 LLM API Key（生产：qwen → qwen3.8-fl
 
 **日志**（20260830f 日志分组）：`logs/agent/agent.log`（systemd StandardOutput/Error append）
 + `logs/agent/traces/`（对话 trace JSON，路径由 `trace_dir` 配置）——排障直接读 trace 的分段
-耗时（planner/execute/model/gate，20260903 起四段），不必翻日志。
+耗时（planner/execute/reflector/model/gate 五段，reflector 未触发时无该段），不必翻日志。
 
 ---
 
@@ -109,7 +109,7 @@ planner 注入时自动带描述）。**可规划性由白名单决定（2026090
 
 ```bash
 .venv/bin/python test_skills.py               # L0：秒级，无 LLM（映射表/计划实例化/解析容错/execute 确定性执行/gate 声称闸与 fallback）
-.venv/bin/python eval/run_golden.py           # L2：55 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答）；--limit N / --only <id> 单跑
+.venv/bin/python eval/run_golden.py           # L2：66 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答/执行记忆）；--limit N / --only <id> 单跑
 .venv/bin/python eval/golden_full_run.py      # L2 进程隔离全量跑（逐条独立进程 + 180s 超时，防悬挂污染）
 .venv/bin/python eval/recall_eval.py          # L1 检索：recall@k/MRR（21 条 queries = 12 正例 + 9 噪声）
 ```
