@@ -32,7 +32,9 @@ RAG 检索设计总结：[docs/rag-design.md](docs/rag-design.md)（历史设计
 saudade-blog-agent/
 ├── server.py               # FastAPI 入口：/chat、/chat/stream、/health；流式编排（生产唯一入口）
 ├── agent/
-│   ├── graph.py            # ★ 手写 LangGraph 图：planner(唯一决策) ⇄ execute(确定性执行) → model(零工具叙述) → gate(确定性检查)
+│   ├── graph.py            # ★ 手写 LangGraph 图（1427 行）：planner(唯一决策) ⇄ execute(确定性执行) → model(零工具叙述) → gate(确定性检查)
+│   ├── decisions.py        # ★ 确定性决策层（522 行，零 LLM）：快道/动作意图扫描/检索候选裁决/终局计划
+│   ├── context.py          # 上下文组装（209 行，纯函数叶子层）：消息文本/页面上下文/工具帧摘要/回执摘要
 │   ├── skills.py           # ★ 技能注册表：8 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
 │   ├── agent.py            # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
 │   ├── memory.py           # MemorySaver 兼容存根（实际不承担记忆，见文档 §4.6）
@@ -48,7 +50,8 @@ saudade-blog-agent/
 ├── eval/                   # 评测：golden set（66 条）+ run_golden.py（L2 任务级，真实 LLM）
 │   │                       #       + golden_case_runner.py/golden_full_run.py（进程隔离跑法）
 │   │                       #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
-├── scripts/                # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
+│   │                       #       + judge_offline_test.py（判据离线自测）+ trace_metrics.py/trace_alert.py（trace 指标与语义巡检）
+├── scripts/                # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）+ sticker_smoke（贴纸冒烟）
 ├── test_skills.py          # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
 └── docs/                   # 架构文档 + 评测可观测设计
 ```
@@ -120,5 +123,5 @@ planner 注入时自动带描述）。**可规划性由白名单决定（2026090
 ---
 
 ## 📄 许可
+Apache-2.0
 
-MIT
