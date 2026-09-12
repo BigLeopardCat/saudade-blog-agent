@@ -31,3 +31,7 @@ eval/report/*
 # RAG 调试中间快照（recall_eval 已走 live API，不再使用）
 eval/data/
 eval/cache/
+
+# 改代码前的本地备份（如 graph.py 拆分前的全量副本；内容等价于 git 历史，不进库）
+agent/*.bak_*
+*.bak_*
