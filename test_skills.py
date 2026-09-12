@@ -901,6 +901,99 @@ def test_search_retry_kind():
     check("tools 空不拦", _search_retry_kind(dict(cq, tools=[]), [rag_a, rag_b]) is None)
 
 
+def test_candidate_relevance_pick():
+    """检索重复拦截的候选选择（20260912 位置规则加固，9/8 跑题现场可复现）。
+
+    9/8 事故链路：用户要"讲你架构的技术文档文章" → search_notes("架构") 候选按
+    后端主键序返回 [16 Git从入门到入土, 19 架构文档, 22 IoT 指南] → 旧代码取
+    候选[0] 读 Git 教程全文 → 整轮跑题、连错三轮。新规则：关键词候选必须标题与
+    检索实词有词元重叠才可自动读；无一匹配 → None（如实收尾，不硬读）。
+    rag_search 候选保留相关度序兜底（语义检索的价值正在于标题不含查询词也能命中）。
+    """
+    from agent.graph import _candidate_detail_plan, _search_terms, _title_relevant
+
+    cands = [
+        {"noteKey": 16, "noteTitle": "Git从入门到入土"},
+        {"noteKey": 19, "noteTitle": "Saudade Blog AI Agent（泠月喵）架构文档"},
+        {"noteKey": 22, "noteTitle": "IoT 设备接入物联网平台指南"},
+    ]
+    kw_spec = 'search_notes({"keyword": "架构"})'
+    kw_frame = ToolMessage(content=str(cands), name="search_notes", tool_call_id="t1")
+    msgs = [HumanMessage(content="带我去看那篇讲你架构的技术文档文章"), kw_frame]
+    plan_obj = {"skill": "content_query", "tools": [kw_spec]}
+
+    terms = _search_terms(plan_obj, [kw_spec], "带我去看那篇讲你架构的技术文档文章")
+    check("检索实词取 spec 关键词（架构）", "架构" in terms)
+    check("泛词（文章/文档）不进实词集", "文章" not in terms and "文档" not in terms)
+    check("Git 标题与「架构」不相关", not _title_relevant("Git从入门到入土", terms))
+    check("架构文档标题相关",
+          _title_relevant("Saudade Blog AI Agent（泠月喵）架构文档", terms))
+    pick = _candidate_detail_plan(msgs, [kw_spec], terms)
+    check("9/8 现场：不再读候选[0] Git，改读 19",
+          pick is not None and 'article_id": 19' in pick["tools"][0])
+
+    # 无一候选标题对得上检索词 → None（调用方如实收尾，不硬读无关文章）
+    terms2 = _search_terms({"tools": []}, ['search_notes({"keyword": "Docker"})'], "Docker")
+    check("候选全不对号 → 不硬读", _candidate_detail_plan(msgs, [], terms2) is None)
+
+    # rag_search 候选：标题不含查询词也保留相关度序兜底（BM25 序有意义）
+    rag_frame = ToolMessage(content="1. type=note id=14 score=9.2 title=ESP32-S3-OBC 固件接入参考\n"
+                                    "2. type=note id=16 score=3.1 title=Git从入门到入土",
+                            name="rag_search", tool_call_id="t2")
+    pick2 = _candidate_detail_plan([HumanMessage(content="OTA 怎么实现"), rag_frame],
+                                   [], _search_terms({"tools": []},
+                                                     ['rag_search({"query": "OTA 怎么实现"})'],
+                                                     "OTA 怎么实现"))
+    check("rag 兜底：取相关度第一（14）",
+          pick2 is not None and 'article_id": 14' in pick2["tools"][0])
+
+    # 已读过的候选不重复读
+    check("候选已读 → None",
+          _candidate_detail_plan(msgs, [kw_spec, 'get_article_detail({"article_id": 19})'],
+                                 terms) is None)
+
+
+def test_scan_action_intents():
+    """动作意图扫描（20260912 多意图丢失修复）——只收明确指令形态。
+
+    golden multi_intent_two_effects 21 次留档 3 次 FAIL：一句两个动作时 planner
+    第 2 轮常按 rule5 收尾丢掉第二个意图。系统侧扫描出意图清单（标注完成状态）
+    注入 planner，它不再"看不见"第二个动作。误报会被 planner 否掉；漏报退回现状。
+    """
+    from agent.graph import _intent_done, _intent_hints, _scan_action_intents
+
+    def keys(msg):
+        return [i["key"] for i in _scan_action_intents(msg)]
+
+    k = keys("帮我把樱花特效打开，顺便切一下夜间模式")
+    check("双意图：樱花开 + 夜间模式开", "effect:sakura=on" in k and "darkmode=on" in k)
+    k = keys("小猫咪开启夜间模式和樱花特效")
+    check("双意图（动词共享）：都扫到", "darkmode=on" in k and "effect:sakura=on" in k)
+    check("疑问句不是命令", keys("怎么开启夜间模式？") == [])
+    check("否定式不报意图", keys("别开夜间模式") == [])
+    check("只提名字无动词不报", keys("樱花真好看呀") == [])
+    k = keys("把樱花换成下雨吧")
+    check("切换句式：旧的 off + 新的 on",
+          "effect:sakura=off" in k and "effect:rain=on" in k)
+    k = keys("关掉樱花")
+    check("关闭句式 → off", k == ["effect:sakura=off"])
+    check("显示意图", "display" in keys("帮我在屏幕上显示欢迎回来"))
+    check("导航意图", "navigate" in keys("带我去留言板"))
+
+    # 完成状态标注（按 executed spec 判定）
+    it = next(i for i in _scan_action_intents("打开樱花，顺便切一下夜间模式")
+              if i["key"] == "effect:sakura=on")
+    check("未执行 → 未完成", not _intent_done(it, []))
+    check("已执行 → 完成",
+          _intent_done(it, ['toggle_effect({"effect": "sakura", "action": "on"})']))
+    check("动作相反不算完成（要关却执行了开）",
+          not _intent_done(it, ['toggle_effect({"effect": "sakura", "action": "off"})']))
+    hints = _intent_hints(['toggle_effect({"effect": "sakura", "action": "on"})'],
+                          "打开樱花，顺便切一下夜间模式")
+    check("提示块标注未完成项", "未完成" in hints and "夜间模式" in hints)
+    check("无意图 → 缺省语", "未扫描到" in _intent_hints([], "你好呀"))
+
+
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
@@ -909,7 +1002,8 @@ def main():
                test_execute_node, test_todo_contract, test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
-               test_search_retry_kind):
+               test_search_retry_kind, test_candidate_relevance_pick,
+               test_scan_action_intents):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")

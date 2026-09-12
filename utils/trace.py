@@ -98,7 +98,8 @@ class _TraceRecorder:
             }
             # 20260830：文件名可读化——时间戳 + user_id + trace_id 前 8 位，
             # ls 目录即知哪次对话（纯 hash 命名要挨个点开才知道）；trace_id
-            # 完整保留在 JSON 内对账；logrotate 按 traces/*.json 通配轮转不受影响
+            # 完整保留在 JSON 内对账。logrotate 按 traces/*.json 通配轮转（20260911
+            # 起 rename+compress：源文件归档为 .1.gz 不复存在，读取端需支持 gz）
             stamp = self.started_at.replace("-", "").replace(":", "")
             path = os.path.join(TRACE_DIR, f"{stamp}_{self.user_id}_{self.trace_id[:8]}.json")
             tmp = path + ".tmp"  # 原子替换：reader 不会读到半截文件

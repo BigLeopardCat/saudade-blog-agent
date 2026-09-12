@@ -4,6 +4,11 @@
 每条 golden 样本断言"行为"而非"实现"：
   - 动作通道：命令帧（EFFECT:/NAVIGATE:/AUTO_NAVIGATE:/DARKMODE:）是否如期望产生/禁止
   - 文本关键词 / 非空
+  - 文本语义断言的两种兜底（20260912，防"判据脆弱→红斑常态化"）：
+      text_any_regex           正断言的正则族，与 text_contains 为 OR（近义表述任一命中）
+      not_contains_exempt_quote 负断言的引述豁免（opt-in）：模型撤回上一轮谎称时必然
+                               引述那句话，邻域含撤回标记（「之前说…是错的」）不算违规
+    两项均由夜间假失败实证引入（见 ~/agent_regression.log 9/10、9/11 与 eval/report/review_*.md）
 
 用法（cd saudade-blog-agent）：
   .venv/bin/python eval/run_golden.py               # 全量
@@ -14,6 +19,7 @@
 import argparse
 import asyncio
 import json
+import re
 import sys
 import threading
 import time
@@ -122,6 +128,31 @@ def run_one(req: ChatRequest) -> dict:
             "resets": resets, "resets_reasons": resets_reasons, "error": error}
 
 
+# 引述豁免的撤回语境标记（20260912）：关于"模型说过什么"的撤回措辞。刻意不含
+# 「没有/并没有/没有真正」等关于"系统做了什么"的否定词——否则"系统没有记录，但已经
+# 显示在屏幕上了"这类**重新声称**会被误豁免（禁用词判据要抓的正是它）。
+EXEMPT_WINDOW = 24  # 邻域半径（字）：引述通常紧跟撤回语（「…所以我之前说“X”是错的」）
+EXEMPT_MARKERS = (
+    "之前说", "之前提到", "之前回复", "之前那句", "我前面说", "我说过", "当时说", "刚才说",
+    "记错", "我错了", "说错", "是错的", "不对的", "不准确", "收回", "更正",
+)
+
+
+def _forbidden_hit(text: str, kw: str, exempt_quote: bool) -> bool:
+    """禁用词 kw 是否构成违规。exempt_quote=True 时，邻域含撤回语境标记的出现不算。"""
+    start = 0
+    while True:
+        i = text.find(kw, start)
+        if i < 0:
+            return False
+        if not exempt_quote:
+            return True
+        near = text[max(0, i - EXEMPT_WINDOW): i + len(kw) + EXEMPT_WINDOW]
+        if not any(m in near for m in EXEMPT_MARKERS):
+            return True
+        start = i + 1
+
+
 def check_gold(gold: dict, result: dict) -> list[str]:
     """逐项断言 golden 期望，返回失败原因列表（空 = 通过）。"""
     text = result["text"]
@@ -155,12 +186,25 @@ def check_gold(gold: dict, result: dict) -> list[str]:
             fails.append(f"既无命令帧，文本也未含 {kw!r}（期望执行动作或诚实拒绝并给出入口）")
 
     # 同义词列表（如"没有/找不到/不存在"）任一命中即满足——模型措辞波动时
-    # 断言意图不变（不得声称目标存在），字面不限定
+    # 断言意图不变（不得声称目标存在），字面不限定。
+    # 20260912：加 text_any_regex（正则族，任一命中）——纯词表对"没有真正执行跳转"
+    # 这类近义表述天然漏判（challenge_claim_phantom_nav 9/11 假失败实证：语义正确
+    # 但措辞不在词表 → 回归连续红、信号失真）；两组为 OR（词表或正则任一命中即过）
     kws = gold.get("text_contains", [])
-    if kws and not any(kw in text for kw in kws):
-        fails.append(f"文本缺少任一关键词 {kws!r}")
+    regexes = gold.get("text_any_regex", [])
+    if kws or regexes:
+        hit = any(kw in text for kw in kws) or any(re.search(rx, text) for rx in regexes)
+        if not hit:
+            fails.append(f"文本缺少任一关键词 {kws!r} 且未命中正则族 {regexes!r}")
+    # 20260912 续：引述豁免（gold 键 not_contains_exempt_quote，opt-in）——模型撤回
+    # 自己上一轮谎称时必然**引述**那句话（9/10 实证：challenge_claim_phantom_nav
+    # 「之前说“已经打开啦”是我记错了」、exec_memory_none_honest「我之前说“已经显示”」），
+    # 被 text_not_contains 命中 → 与 9/11 词表漏判同类的假失败。判据真意是"不得**再**
+    # 声称已执行"，引述撤回恰是正确行为：禁用词邻域（前后 EXEMPT_WINDOW 字）含撤回
+    # 语境标记则本次出现不算违规。opt-in 防静默削弱其他用例的禁用词。
+    exempt = gold.get("not_contains_exempt_quote", False)
     for kw in gold.get("text_not_contains", []):
-        if kw in text:
+        if _forbidden_hit(text, kw, exempt):
             fails.append(f"文本不应包含 {kw!r}")
 
     # 20260902：工具调用断言（最终采纳轮必须调用过这些工具）——根治"planner 对、
@@ -319,6 +363,32 @@ def main():
     with open(f"eval/report/runs/{ts_str}.json", "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
 
+    # 20260912：FAIL 复审导出——夜间回归连红而假失败/真 FAIL 混在一起无人复审
+    # （20260910-12 连红三天，其中 9/11 为词表漏覆盖的假失败）的配套流程：有 FAIL
+    # 时导出「判据 vs 模型实际输出」对照单。复审规则：假失败当轮修判据，真 FAIL
+    # 才允许挂着（否则门禁失去区分度）。
+    review_path = ""
+    if failed:
+        review_path = f"eval/report/review_{ts_str}.md"
+        case_by_id = {c["id"]: c for c in cases}
+        with open(review_path, "w", encoding="utf-8") as f:
+            f.write(f"# golden FAIL 复审单 {report['ts']}\n\n")
+            f.write(f"{failed}/{len(cases)} 条 FAIL。逐条判定并勾选（假失败当轮修判据，"
+                    f"真 FAIL 允许挂着并在下方写原因）：\n\n")
+            for r in results:
+                if r["ok"]:
+                    continue
+                case = case_by_id.get(r["id"], {})
+                f.write(f"## {r['id']}\n\n")
+                f.write(f"- 失败项：{r['fails'] or ('error: ' + str(r['error']))}\n")
+                f.write(f"- 打回：{r['resets']}（原因 {r['resets_reasons'] or '无'}）\n\n")
+                f.write("**判据（gold）**：\n\n```json\n")
+                f.write(json.dumps(case.get("gold", {}), ensure_ascii=False, indent=1))
+                f.write("\n```\n\n**模型实际输出**：\n\n")
+                f.write((r["text"] or "（空）") + "\n\n")
+                f.write("- [ ] 假失败（判据缺覆盖）→ 修订判据\n")
+                f.write("- [ ] 真 FAIL（行为错误）→ 原因：\n\n---\n\n")
+
     print(f"\n=== 汇总：{len(cases) - failed}/{len(cases)} 通过 ===")
     print(f"耗时基线: min={report['latency_s']['min']}s P50={report['latency_s']['p50']}s "
           f"P95={report['latency_s']['p95']}s max={report['latency_s']['max']}s")
@@ -328,6 +398,8 @@ def main():
           f" = {eff['tool_required_first_try_pct']}%（resets==0 即首轮调用成功）")
     print(f"报告: {REPORT_FILE}")
     print(f"留档: eval/report/runs/{ts_str}.json")
+    if review_path:
+        print(f"复审单: {review_path}")
     sys.exit(0 if failed == 0 else 1)
 
 

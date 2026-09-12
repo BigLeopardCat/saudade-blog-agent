@@ -64,6 +64,8 @@ from tools import get_all_tools
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE
 from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
                           build_planner_context, instantiate_plan)
+# 与检索侧同一分词（2/3-gram）——候选标题相关性判定复用，避免两套词法
+from rag.search import tokenize as _rag_tokenize
 from utils.trace import record
 
 logger = logging.getLogger(__name__)
@@ -178,6 +180,10 @@ _PLANNER_PROMPT = """\
 不要凭对话历史推断位置）：
 {page_ctx}
 
+用户消息里的动作意图清单（系统确定性扫描 + 按执行事实标注，每轮重算；扫描只是
+提醒，该意图是否真实存在、是否该执行，以你的判断为准）：
+{intent_hints}
+
 {round_info}
 
 {recent_context}
@@ -250,10 +256,23 @@ _PLANNER_PROMPT = """\
      同一 TOOLS 行给两条 spec（X off + Y on），execute 逐条执行——只关 X 不
      开 Y 等于没完成"换成 Y"，目标效果必须真的开启
    - device_display：不填 text 参数（屏幕文案由系统在展示时结合对话创作）
+   - 文章指代（"那篇/这篇/它"＋内容限定，如"带我去看那篇讲你架构的技术文档
+     文章"）解析顺序：① 当前页面就是文章页（current_url 是 /article/<id>）→
+     以它为准；② 否则看页面上下文 recent_executions 里最近读取的文章行（形如
+     "读取文章 19《标题》"）——限定词与标题对得上 → 用该 id（重读或据此作答）；
+     ③ 限定词与已知文章对不上、或记录里没有 → **不得套用旧 id**：先按限定词
+     content_query 定位（search_notes 关键词取限定词的实词，如"架构"），拿到帧
+     内真实 id 再读/再跳。**候选标题与限定词对不上号时不许拿 top 候选硬读顶上**
+     （读错一篇会把后续几轮全部带偏）——如实说候选里没有对得上的那篇
 5. 多轮收敛：
+   - **收尾前先核对上方动作意图清单**：一句话里有多个动作（"帮我把樱花打开，
+     顺便切一下夜间模式"）时，跨技能动作一轮只能做一个——逐个做完是正常的多轮
+     路径，不是异常；清单里还有【未完成】项就**不得收尾**（只做一半＝用户的
+     要求被丢掉），下一轮继续规划该动作，全部【已执行】才允许收尾
    - 已执行动作技能（navigate/effect/darkmode/device_display/device_query/
-     read_article）且工具返回已可见 → 本轮收尾（chat 或 content_query 留空），
-     绝不重复规划同款调用——动作已由工具帧完成，回复层会基于帧确认
+     read_article）、工具返回已可见、**且意图清单已无未完成项** → 本轮收尾
+     （chat 或 content_query 留空），绝不重复规划同款调用——动作已由工具帧完成，
+     回复层会基于帧确认
    - 上一轮工具返回以 __ERROR__ 开头 → 按错误修正参数重试一次；已重试过或
      无法修正 → 收尾如实告知失败，不得声称成功
    - 上方复盘建议存在（reflector ISSUE，指明受阻项缺什么/怎么改）→ 按建议
@@ -963,6 +982,122 @@ def _display_fast_path(user_msg: str) -> dict | None:
     return plan_obj
 
 
+# 动作意图清单（20260912，多意图丢失修复）
+# 事故实证：golden multi_intent_two_effects 21 次留档 3 次 FAIL（≈14%），失败回执
+# 恒为 exec：['toggle_effect']——"帮我把樱花特效打开，顺便切一下夜间模式"这类**跨
+# 技能并列意图**：一轮只能选一个技能（SKILL= 单值），必须靠 planner⇄execute 多轮
+# 完成；但 planner 第 2 轮按 rule5"动作已执行 → 本轮收尾"直接收尾，第二个动作永久
+# 丢失（narrator 只好如实承认"没切换成功"）。与 effect 切换快道同源的历史证据：
+# "不要樱花了，改成下雨吧"10 轮采样 8 轮丢 rain:on——**"一句话多个动作"是本模型已
+# 知的稳定弱点**，靠提示词相信它"记得住"是打地鼠。
+# 系统侧补齐事实（不夺决策权）：确定性扫描消息里的动作意图 + 用已执行 spec 标注
+# 完成状态，作为 intent_hints 每轮注入——planner 仍是唯一决策者，它不再"看不见"
+# 第二个意图；是否执行、怎么执行仍由它决定（误扫命中由它否掉即可）。
+_ACTION_VERB_ON = r"打开|开启|开一下|开|切到|切成|切换|切|换成|改成|调成|启动|来一个|下起来"
+_ACTION_VERB_OFF = r"关掉|关闭|关一下|关|停掉|停|去掉|撤掉|取消"
+_ACTION_VERB_RE = re.compile(f"(?:{_ACTION_VERB_ON}|{_ACTION_VERB_OFF})")
+_ACTION_VERB_OFF_RE = re.compile(f"(?:{_ACTION_VERB_OFF})")
+_DARKMODE_ALIASES = ("夜间模式", "夜晚模式", "暗色模式", "深色模式", "夜间", "暗色", "深色")
+
+
+def _scan_action_intents(user_msg: str) -> list[dict]:
+    """确定性扫描用户消息里的动作意图 → [{"key","family","label","tool","args"}]。
+
+    只收"明确下指令"的形态（动作动词 + 宾语，同一窗口内）；两种情况整体不收
+    （判错方向的代价大于收益——多报会让 planner 白跑一轮，报错方向会多执行动作）：
+      * 疑问句（"怎么开夜间模式？"）——是问法不是命令；
+      * 否定式（"别开樱花"）——不做极性推理，直接跳过该意图。
+    结果只作提示注入（intent_hints），最终决策仍在 planner。
+    """
+    if _QUESTION_RE.search(user_msg):
+        return []
+    intents: list[dict] = []
+    spans: list[tuple[int, int]] = []
+
+    def _hit_span(i: int, n: int) -> bool:
+        return any(s <= i < e for s, e in spans)
+
+    def _verb_action(i: int, n: int) -> str | None:
+        """别名邻域（前 8 字 / 后 8 字）里的动作动词 → "on"/"off"/None。
+
+        切换句式（"把樱花换成下雨"）里，切换动词**之前**的别名是被换掉的旧效果
+        （→ off），之后的才是目标（→ on）——与特效切换快道同语义。
+        """
+        lo = max(0, i - 8)
+        win = user_msg[lo: i + n + 8]
+        sw = _SWITCH_VERB_RE.search(win)
+        if sw and (lo + sw.start()) > i:
+            return "off"
+        m = _ACTION_VERB_RE.search(win)
+        if not m:
+            return None
+        return "off" if _ACTION_VERB_OFF_RE.fullmatch(m.group(0)) else "on"
+
+    # 特效（复用快道别名表；长名优先，命中即占位防"下雨"里的"雨"重复计）
+    for alias in sorted(_EFFECT_ALIASES, key=len, reverse=True):
+        i = user_msg.find(alias)
+        while i >= 0:
+            j = i + len(alias)
+            if not _hit_span(i, len(alias)):
+                spans.append((i, j))
+                act = (None if _NEGATION_RE.search(user_msg[max(0, i - 4):i])
+                       else _verb_action(i, len(alias)))
+                if act:  # 只有动作动词在场才算指令（"樱花真好看"不是请求）
+                    eff = _EFFECT_ALIASES[alias]
+                    intents.append({
+                        "key": f"effect:{eff}={act}", "family": "effect",
+                        "label": f"{alias}特效{'关' if act == 'off' else '开'}",
+                        "tool": "toggle_effect", "args": {"effect": eff, "action": act}})
+            i = user_msg.find(alias, j)
+    # 夜间模式
+    for alias in _DARKMODE_ALIASES:
+        i = user_msg.find(alias)
+        while i >= 0:
+            j = i + len(alias)
+            if not _hit_span(i, len(alias)):
+                spans.append((i, j))
+                act = (None if _NEGATION_RE.search(user_msg[max(0, i - 4):i])
+                       else _verb_action(i, len(alias)))
+                if act:
+                    intents.append({
+                        "key": f"darkmode={act}", "family": "darkmode",
+                        "label": f"夜间模式{'关' if act == 'off' else '开'}",
+                        "tool": "toggle_dark_mode", "args": {"mode": act}})
+            i = user_msg.find(alias, j)
+    # 屏幕显示
+    if _DISPLAY_FAST_RE.search(user_msg) and not _NEGATION_RE.search(user_msg):
+        intents.append({"key": "display", "family": "device_display",
+                        "label": "屏幕显示文字", "tool": "device_oled_display", "args": {}})
+    # 导航（动词必须在句首，与导航快道同判据）
+    if _NAV_VERB_RE.match(user_msg.strip().strip("，。！？!?～~、")):
+        intents.append({"key": "navigate", "family": "navigate",
+                        "label": "页面跳转", "tool": "navigate_to", "args": {}})
+    return intents
+
+
+def _intent_done(intent: dict, executed: list) -> bool:
+    """该意图是否已有执行事实（executed spec 的工具名 + 参数片段齐备）。"""
+    for s in executed:
+        if _tool_name(s) != intent["tool"]:
+            continue
+        if all(f'"{k}"' in s and f'"{v}"' in s for k, v in intent["args"].items()):
+            return True
+    return False
+
+
+def _intent_hints(executed: list, user_msg: str) -> str:
+    """planner 提示词的动作意图区块（每轮重算，完成状态随执行事实变化）。"""
+    intents = _scan_action_intents(user_msg)
+    if not intents:
+        return "（系统未扫描到明确的动作指令——按常规规则决策）"
+    out = []
+    for it in intents:
+        done = _intent_done(it, executed)
+        out.append(f"- {it['label']}（{it['key']}）："
+                   + ("已执行" if done else "**未完成**"))
+    return "\n".join(out)
+
+
 # 检索候选行解析（确定性拦截用，见 planner_node"检索重复清单拦截"）
 # 经验记录类标题：机制型问题的答案在「参考/指南」类文档，这类标题延后读。
 _EXPERIENCE_TITLE_RE = re.compile(
@@ -972,18 +1107,67 @@ _RAG_ROW_RE = re.compile(
     r"^\s*\d+\.\s*type=(\w+)\s+id=(\d+)\s+score=[\d.]+\s+title=(.*)$", re.M)
 _DETAIL_SPEC_RE = re.compile(r'article_id["\']?\s*[:=]\s*(\d+)')
 
+# 候选相关性判定（20260912，检索重复拦截的位置规则加固）
+# 关键词检索（search_notes）的候选行序 = 后端主键序——Rust notes.rs 的 LIKE 查询
+# **无 ORDER BY**（对比同文件 list_public_notes 显式 order_by_desc(created_at)），
+# 返回顺序纯属存储顺序，无相关度含义。9/8 事故链条：用户要"讲你架构的技术文档
+# 文章" → planner 误规划了 search_notes("架构") → 候选[0] 是《Git从入门到入土》
+# （正文表格里出现过"架构"一词、noteKey 更小）→ 拦截器按位置规则把候选[0] 当
+# 目标读全文 → 整轮跑题、连错三轮。位置规则必须换成"标题与检索实词对得上"才读。
+_CANDIDATE_STOPWORDS = {
+    "文章", "文档", "内容", "东西", "一篇", "这篇", "那篇", "哪些", "什么", "怎么",
+    "如何", "站内", "博客", "相关", "有没有", "关于", "一个", "这个", "那个", "一下",
+}
 
-def _candidate_detail_plan(messages: list, executed: list) -> dict | None:
-    """重复拦截的确定性出路：从最近检索帧候选行里挑第一个未读文档读全文。
 
-    候选顺序 = 帧内行序（检索相关性序）；经验记录类标题在存在机制文档时延后
-    （20260903 rag_ota_http 实证：关键词只命中《问题与解决记录》踩坑史）。
-    候选全已读 / 无候选 → None（调用方直接收尾，不浪费轮次）。
+def _spec_arg(spec: str, key: str) -> str:
+    """取 TOOLS 行 spec 的字符串参数（'search_notes({"keyword": "架构"})' → 架构）。"""
+    m = re.search(key + r'["\']?\s*[:=]\s*["\']([^"\']+)["\']', spec)
+    return m.group(1) if m else ""
+
+
+def _search_terms(plan_obj: dict, executed: list, user_msg: str) -> set[str]:
+    """本轮检索的实词集合：优先取检索 spec 里的关键词原文（planner 抽的词），
+    没有可用 spec 时退回用户消息。用于判定候选标题是否"对得上"检索意图。
+
+    取 spec 而非用户整句，是因为判断对象是"这次检索查的是什么"——planner 抽的
+    关键词才是候选集的成因；用户整句里还混着称呼/语气词，会稀释判断。
+    """
+    terms: list[str] = []
+    specs = [s for s in executed if _tool_name(s) in ("search_notes", "rag_search")]
+    specs += [s for s in (plan_obj.get("tools") or [])
+              if _tool_name(s) in ("search_notes", "rag_search")]
+    for s in specs:
+        for key in ("keyword", "query"):
+            v = _spec_arg(s, key)
+            if v:
+                terms.append(v)
+    text = " ".join(terms) if terms else user_msg
+    return {t for t in _rag_tokenize(text)
+            if len(t) >= 2 and t not in _CANDIDATE_STOPWORDS}
+
+
+def _title_relevant(title: str, terms: set[str]) -> bool:
+    """标题与检索实词有词元重叠（同一 2/3-gram 分词）→ 该候选"对得上号"。"""
+    return bool(terms & set(_rag_tokenize(title)))
+
+
+def _candidate_detail_plan(messages: list, executed: list, terms: set[str]) -> dict | None:
+    """重复拦截的确定性出路：从最近检索帧候选行里挑"能对上号"的未读文档读全文。
+
+    20260912 位置规则加固——候选行按来源分流处置（两者顺序语义完全不同）：
+      * search_notes（关键词 LIKE）：行序 = 后端主键序，**无相关度含义** → 必须
+        标题与检索实词有词元重叠才可自动读（9/8 事故根因）；
+      * rag_search（本地 BM25）：行序 = 相关度序 → 关键词候选全不匹配时兜底
+        （语义检索的价值正是"标题不含查询词也能命中"，不该被标题过滤否定）。
+    经验记录类标题在存在机制文档时延后（20260903 rag_ota_http 实证：只命中
+    《问题与解决记录》踩坑史）。候选全已读 / 无一能对上号 → None：调用方如实
+    收尾并列出候选——**诚实优于硬读**（读错一篇的代价是整轮跑题 + 跨轮锚点污染）。
     """
     done_ids = {m.group(1) for s in executed for m in [_DETAIL_SPEC_RE.search(s)]
                 if m is not None}
     frames = [m for m in messages if isinstance(m, ToolMessage)]
-    rows: list[tuple[str, str, str]] = []  # (id, doc_type, title)
+    rows: list[tuple[str, str, str, str]] = []  # (id, doc_type, title, src)
     for m in reversed(frames):
         name = getattr(m, "name", "") or ""
         text = _msg_text(m)
@@ -994,19 +1178,16 @@ def _candidate_detail_plan(messages: list, executed: list) -> dict | None:
                     for r in obj:
                         if isinstance(r, dict) and r.get("noteKey") is not None:
                             rows.append((str(r["noteKey"]), "note",
-                                         str(r.get("noteTitle") or "")))
+                                         str(r.get("noteTitle") or ""), "kw"))
             elif name == "rag_search":
                 for typ, rid, title in _RAG_ROW_RE.findall(text):
                     dt = ("talk" if typ == "talk" else "board" if typ == "board"
                           else "note")
-                    rows.append((rid, dt, title.split(" 命中节=")[0]))
+                    rows.append((rid, dt, title.split(" 命中节=")[0], "rag"))
         except Exception:
             continue
-    # search_notes 候选优先于 rag_search（关键词命中行带标题，语义命中可能是
-    # 噪声——20260903 cq_query_embedded_articles 实证：问候词进 rag 后 Git
-    # 排第一）。同帧行序即帧内序（相关性序），旧帧行只在没有新候选时兜底。
     seen: set[str] = set()
-    ordered: list[tuple[str, str, str]] = []
+    ordered: list[tuple[str, str, str, str]] = []
     for r in rows:
         if r[0] in seen:
             continue
@@ -1015,8 +1196,14 @@ def _candidate_detail_plan(messages: list, executed: list) -> dict | None:
     unread = [r for r in ordered if r[0] not in done_ids]
     if not unread:
         return None
-    mech = [r for r in unread if not _EXPERIENCE_TITLE_RE.search(r[2])]
-    pick = (mech or unread)[0]
+    kw_hit = [r for r in unread if r[3] == "kw" and _title_relevant(r[2], terms)]
+    pick_pool = kw_hit or [r for r in unread if r[3] == "rag"]
+    if not pick_pool:
+        logger.info("[planner] 候选无一与检索实词（%s）对得上号 → 不硬读，如实收尾",
+                    "、".join(sorted(terms)) or "（无实词）")
+        return None
+    mech = [r for r in pick_pool if not _EXPERIENCE_TITLE_RE.search(r[2])]
+    pick = (mech or pick_pool)[0]
     plan_obj = instantiate_plan("content_query", {"calls": [
         {"tool": "get_article_detail",
          "args": {"article_id": int(pick[0]), "doc_type": pick[1]}}]})
@@ -1026,6 +1213,17 @@ def _candidate_detail_plan(messages: list, executed: list) -> dict | None:
     plan_obj["note"] = ((plan_obj.get("note") or "")
                         + f"（确定性改读候选《{pick[2][:24]}》全文）")
     return plan_obj
+
+
+def _doc_title(raw: str) -> str:
+    """从详情工具返回（Python repr 的 dict）里取标题——跨轮执行记忆的指代锚点。
+
+    20260912：execution_log 行此前只记"读取文章 19"，下轮用户说"那篇讲架构的"
+    无从核对（id 无语义）；回执带标题后 render 侧可展示《标题》，跨轮指代与
+    核对才有依据。
+    """
+    m = re.search(r"['\"]noteTitle['\"]\s*:\s*['\"]([^'\"]{1,80})", raw)
+    return m.group(1) if m else ""
 
 
 def _any_error_frame(messages: list) -> bool:
@@ -1058,9 +1256,14 @@ def _terminal_plan(has_frames: bool, reason: str) -> dict:
     }
 
 
-def _wrap_up_plan(has_frames: bool) -> dict:
-    """规划轮次上限强制收尾计划（确定性，不经 LLM，20260903 语义不变）。"""
-    return _terminal_plan(has_frames, f"已达规划轮次上限（{MAX_PLAN_ROUNDS}）")
+def _wrap_up_plan(has_frames: bool, reason: str = "") -> dict:
+    """规划轮次上限强制收尾计划（确定性，不经 LLM，20260903 语义不变）。
+
+    reason 可覆盖默认文案（20260912：检索重复拦截改判收尾时若仍写"已达轮次上限"
+    会误导 narrator 与事后复盘——收尾原因要如实）。
+    """
+    return _terminal_plan(has_frames,
+                          reason or f"已达规划轮次上限（{MAX_PLAN_ROUNDS}）")
 
 
 def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
@@ -1141,6 +1344,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         resp = llm.invoke(_PLANNER_PROMPT.format(
             skills_context=build_planner_context(), tools_desc=_QUERY_TOOLS_DESC,
             page_ctx=page_ctx, round_info=round_info,
+            intent_hints=_intent_hints(state.get("executed") or [], user_msg),
             recent_context=_recent_tail(state["messages"]),
             tool_results=_frame_texts(state["messages"]),
             reflector_feedback=state.get("issues") or "（本决策轮无复盘建议）",
@@ -1201,9 +1405,21 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                        if isinstance(m, ToolMessage)}
         planned_names = {_tool_name(s) for s in plan_obj["tools"]}
         if planned_names and planned_names <= frame_names:
-            logger.info("[planner] 动作已执行（%s），去重收尾", "、".join(sorted(planned_names)))
-            plan_obj = _wrap_up_plan(True)
-            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
+            # 20260912：去重收尾前看意图清单——还有未完成动作时不得收尾（否则
+            # 第二个意图就此丢失，正是 multi_intent 14% FAIL 的成因）。此时放行
+            # 本轮计划让 planner 下一轮据清单继续（动作工具是显式 on/off 语义，
+            # 重复执行幂等无害；宁可多跑一轮，不可丢用户要求）。
+            pending = [i for i in _scan_action_intents(user_msg)
+                       if not _intent_done(i, state.get("executed") or [])]
+            if not pending:
+                logger.info("[planner] 动作已执行（%s），去重收尾",
+                            "、".join(sorted(planned_names)))
+                plan_obj = _wrap_up_plan(True)
+                return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                        "done": False}
+            logger.info("[planner] 动作重复（%s）但意图清单仍有未完成项（%s）→ 不收尾",
+                        "、".join(sorted(planned_names)),
+                        "、".join(i["key"] for i in pending))
 
     # 检索重复清单拦截（20260903 golden 实证：rag_arch_ports planner 把同一
     # rag_search 原句连发 3 轮直到轮次上限——候选 id=19 已命中却从不读全文。
@@ -1223,18 +1439,20 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         kind = _search_retry_kind(plan_obj, executed)
         if kind:
             dups = [s for s in plan_obj["tools"] if s in executed]
-            cand = _candidate_detail_plan(state["messages"], executed)
+            terms = _search_terms(plan_obj, executed, user_msg)
+            cand = _candidate_detail_plan(state["messages"], executed, terms)
             if cand is None:
-                logger.info("[planner] 检索重复拦截（%s），无未读候选 → 直接收尾",
+                logger.info("[planner] 检索重复拦截（%s），无可读候选 → 如实收尾列候选",
                             "、".join(dups) if dups else "rag_search 变体 ≥2 次")
-                plan_obj = _wrap_up_plan(True)
+                plan_obj = _wrap_up_plan(
+                    True, "检索重复且候选无法确定目标（不得读无关文章顶替）")
             else:
                 logger.info("[planner] 检索重复拦截（%s）→ 改读候选 %s",
                             "、".join(dups) if dups else "rag_search 变体 ≥2 次",
                             cand["tools"])
                 plan_obj = cand
-            record("planner", "intercept", reason=kind,
-                   dups=dups, redirected=cand is not None)
+            record("planner", "intercept", reason=kind, dups=dups,
+                   terms=sorted(terms), redirected=cand is not None)
             return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
 
@@ -1433,9 +1651,13 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 事实）。args 是文案注入后值（device_oled_display 回执须能呈现实际屏文）。
         verdict, reason = _check_spec(name, args, args_ok, str(out), plan["skill"])
         if verdict == _VERDICT_PASS:
-            receipts.append({"skill": plan["skill"], "tool": name,
-                             "args": {k: str(v)[:200] for k, v in args.items()},
-                             "result": str(out)[:200], "ts": time.time()})
+            rcpt = {"skill": plan["skill"], "tool": name,
+                    "args": {k: str(v)[:200] for k, v in args.items()},
+                    "result": str(out)[:200], "ts": time.time()}
+            if name == "get_article_detail":
+                # 跨轮执行记忆带标题（20260912）：下轮"那篇讲架构的"要靠它核对指代
+                rcpt["title"] = _doc_title(str(out))
+            receipts.append(rcpt)
         else:
             blocked.append({"spec": spec, "tool": name, "reason": reason,
                             "result": str(out)[:300]})
