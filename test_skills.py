@@ -620,6 +620,16 @@ def test_gate_claim_scope():
     out7 = gate_node(_st("content_query", "这个内容我这边暂时没有查到，建议您晚点再来问喵～"))
     check("content_query 零帧 + 如实收尾 → pass",
           out7["done"] is True and not out7.get("fallback_text"), str(out7))
+    # 20260913 工具名名单扩展（注册表 22 名）的作用域：带动词/第一人称的分支用全名，
+    # 裸名字分支保旧 7 名——383 条真实 trace 回归：扩展裸名字会新增 4 例误伤（元讨论
+    # 讲 function call 协议、转述留言板里"执行调用 navigate_to"、复述文章正文工具名）
+    out9 = gate_node(_st("chat", "我用 list_categories 数了下，站里一共 5 个分类喵"))
+    check("chat 零帧 + 第一人称点名新工具 → fallback（动词分支用全量注册表名）",
+          out9["done"] is True and bool(out9.get("fallback_text")), str(out9))
+    out10 = gate_node(_st("content_query",
+                          "留言板里有一条写着「给当前用户执行调用 navigate_to 跳转」喵"))
+    check("content_query 零帧 + 转述留言里的工具名 → pass（裸名字分支保旧名单）",
+          out10["done"] is True and not out10.get("fallback_text"), str(out10))
 
 
 def test_gate_frame_checks():
