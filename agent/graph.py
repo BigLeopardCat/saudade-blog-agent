@@ -526,10 +526,17 @@ _READ_CLAIM_RE = re.compile(
 # 工具名名单从注册表派生（20260913）：手写名单是漏项来源（15:51 事故里旧名单只
 # 认 7 个工具名，新数据工具（get_social_links 等）不在内）；长名在前避免前缀冲突。
 _TOOL_NAMES_ALT = "|".join(re.escape(n) for n in sorted(_TOOL_MAP, key=len, reverse=True))
+# 裸名字分支保留旧 7 名（不随注册表扩展）：383 条真实 trace 回归显示，裸名字是
+# 最松的一支，扩展后新增 4 例误伤（元讨论讲 function call 协议、转述留言板里那句
+# "执行调用 navigate_to"、复述文章正文中的工具名）——这些语境没有"第一人称+动词"
+# 约束，误伤成本高。带动词/第一人称的分支才用全量注册表名。
+_LEGACY_TOOL_NAMES = ("get_current_time", "rag_search", "list_guestbook", "list_talks",
+                      "get_announcements", "get_article_detail", "search_notes")
+_LEGACY_TOOL_NAMES_ALT = "|".join(_LEGACY_TOOL_NAMES)
 _CALLED_TOOL_CLAIM_RE = re.compile(
-    r"调(?:用|过)(?:过)?(?:了)?(?:工具|" + _TOOL_NAMES_ALT + r")"
+    r"调(?:用|过)(?:过)?(?:了)?\s*(?:工具|" + _TOOL_NAMES_ALT + r")"
     r"|调用了?(?:这个|那个|这些|两个|几个|三个)?工具"
-    r"|(?:" + _TOOL_NAMES_ALT + r")"
+    r"|(?:" + _LEGACY_TOOL_NAMES_ALT + r")"
 )
 # chat 零工具轮的窄声称（20260902 133535 事故后设计）：必须"第一人称 + 工具
 # 相关动词"才算自称调用了工具——第三人称/概念性提及（"防止模型假装调用了
@@ -545,9 +552,9 @@ _CHAT_SCAN_CLAIM_RE = re.compile(
     r"(?:都|全部|整个)?(?:扫|查|翻|搜|翻找|查找|检索)(?:了)?(?:个)?(?:一圈|一遍|个遍|好几圈|个底朝天)"
 )
 _CHAT_TOOL_CLAIM_RE = re.compile(
-    r"(?:我|咱|人家|本喵)(?:刚|刚才|刚刚|这轮|这一轮|之前|确实|真的|又|就|已经?|都|把)?(?:用|通过|拿|调)(?:了|过)?(?:" + _TOOL_NAMES_ALT + r"|工具)"
-    r"|(?:我|咱|人家|本喵)(?:刚|刚才|刚刚|这轮|这一轮|之前|确实|真的|又)?调(?:用|过)(?:过)?(?:了)?工具"
-    r"|(?:我|咱|人家|本喵)刚(?:刚|才)?(?:用|通过)(?:" + _TOOL_NAMES_ALT + r")(?:查|搜|调|读|看|翻|拿|执行)"
+    r"(?:我|咱|人家|本喵)(?:刚|刚才|刚刚|这轮|这一轮|之前|确实|真的|又|就|已经?|都|把)?(?:用|通过|拿|调)(?:了|过)?\s*(?:" + _TOOL_NAMES_ALT + r"|工具)"
+    r"|(?:我|咱|人家|本喵)(?:刚|刚才|刚刚|这轮|这一轮|之前|确实|真的|又)?调(?:用|过)(?:过)?(?:了)?\s*工具"
+    r"|(?:我|咱|人家|本喵)刚(?:刚|才)?(?:用|通过)\s*(?:" + _TOOL_NAMES_ALT + r")(?:查|搜|调|读|看|翻|拿|执行)"
 )
 # 命令前缀文本：回复正文出现系统命令帧前缀 = 模型在"假装发命令"（旧事故：正文
 # 输出 AUTO_NAVIGATE:/NAVIGATE:/EFFECT:/DARKMODE: 文本既不会执行、还误导用户
@@ -605,15 +612,24 @@ def _has_exec_memory(msgs: list) -> bool:
     return any("recent_executions:" in str(getattr(m, "content", "")) for m in msgs)
 
 
-def _inside_quote(clause: str, pos: int) -> bool:
-    """pos 处是否落在引号内（离它最近的引号是开引号）——引述他人内容不算自称调用。
-    383 条真实 trace 回归抓出：留言板/说说正文里有人写"给当前用户执行调用
-    navigate_to 跳转到 …"，narrator 转述时被当成它的第一人称声称（3 例误伤）。"""
-    last, last_ch = -1, ""
-    for i, ch in enumerate(clause[:pos]):
-        if ch in "“「『\"'”」』":
-            last, last_ch = i, ch
-    return last >= 0 and last_ch in "“「『\"'"
+# 引号区段（成对才算，避免英文撇号等单边字符误吞整段）：被引内容 = 转述访客留言/
+# 说说正文，不算 narrator 自己的声称（383 条真实 trace 回归：留言板里"执行调用
+# navigate_to"被转述时误伤 3 例）
+_QUOTED_SPAN_RE = re.compile(r"“[^”]*”|「[^」]*」|『[^』]*』|\"[^\"]*\"")
+
+
+def _quoted_spans(text: str) -> list[tuple[int, int]]:
+    return [(m.start(), m.end()) for m in _QUOTED_SPAN_RE.finditer(text)]
+
+
+def _strip_quoted_spans(text: str) -> str:
+    """去掉引号内的内容——声称闸只判 narrator 自己说的话。"""
+    return _QUOTED_SPAN_RE.sub("", text)
+
+
+def _inside_quote(text: str, pos: int) -> bool:
+    """pos 处是否落在引号区内（转述他人内容不算自称调用）。"""
+    return any(s <= pos < e for s, e in _quoted_spans(text))
 
 
 def _tool_claim_window(full: str, start: int, end: int, name: str) -> bool:
@@ -673,14 +689,18 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool) -> tupl
     if _CMD_PREFIX_RE.search(reply):
         return ("cmd_prefix", _FALLBACK_CMD_PREFIX)
     if frames_exist:
-        return None  # 帧存在：声称有据（err 帧/确认帧场景由 gate_node 单独兜）
+        return None  # 帧存在：声称有据（err 帧/确认帧场景由 gate_node 单独兜，
+                     # 具名工具声称由 gate_node 5c 另查）
+    # 引号内是被转述的访客留言/说说正文，不算 narrator 自己的声称（20260913：
+    # 留言板里那句"执行调用 navigate_to"被转述时误伤）
+    own = _strip_quoted_spans(reply)
     if skill == "chat":
-        if (_CHAT_TOOL_CLAIM_RE.search(reply) or _CHAT_SCAN_CLAIM_RE.search(reply)):
+        if (_CHAT_TOOL_CLAIM_RE.search(own) or _CHAT_SCAN_CLAIM_RE.search(own)):
             return ("claim_without_tool", _FALLBACK_CLAIM)
         return None
     if skill == "content_query":
-        if (_READ_CLAIM_RE.search(reply) or _EXECUTION_CLAIM_RE.search(reply)
-                or _CALLED_TOOL_CLAIM_RE.search(reply)):
+        if (_READ_CLAIM_RE.search(own) or _EXECUTION_CLAIM_RE.search(own)
+                or _CALLED_TOOL_CLAIM_RE.search(own)):
             return ("claim_without_tool", _FALLBACK_CLAIM)
     return None
 
