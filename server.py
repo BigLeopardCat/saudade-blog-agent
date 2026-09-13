@@ -367,6 +367,14 @@ _NOARG_VERB = {
     "list_devices": "查看设备列表",
     "get_announcements": "查看公告",
     "get_current_time": "查看当前时间",
+    # 20260913 新入白名单的站点信息类（此前 planner 点不到，无中文动作词；
+    # 缺省会落到"执行 get_social_links"的内部格式）
+    "get_blog_info": "查看博客信息",
+    "get_social_links": "查看社交链接",
+    "get_site_map": "查看站点结构",
+    "get_top_notes": "查看置顶文章",
+    "list_categories": "查看分类",
+    "list_tags": "查看标签",
 }
 
 _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",

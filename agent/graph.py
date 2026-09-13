@@ -75,7 +75,8 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_pa
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE
 from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
-                          build_planner_context, instantiate_plan)
+                          _CALLABLE_QUERY_TOOLS_ORDER, build_planner_context,
+                          instantiate_plan)
 from utils.trace import record
 
 logger = logging.getLogger(__name__)
@@ -214,8 +215,13 @@ _PLANNER_PROMPT = """\
    退化成 chat 凭印象答——答案在博客内容里，不在你的记忆里。
 3. content_query 每轮都必须给调用清单（calls 或 tools），只允许两种情况留空
    （收尾轮）：①已有工具返回、信息足够；②工具返回明确查无结果。规划方式：
-   - 列表/数据型（最新留言/说说/公告、时间等）→ PARAMS.tools 点名无参只读工具；
-     问"有没有人聊过/写过 X"必须成对点名 list_guestbook 与 list_talks 两个数据源
+   - 列表/数据型（最新留言/说说/公告、时间、站点信息/作者/备案号/社交链接、
+     置顶文章、分类/标签等）→ PARAMS.tools 点名上方菜单里的无参数据工具；
+     **禁止拿 search_notes/rag_search 去"绕"站点信息类问题**——检索索引只含
+     文章正文，对站点元数据零命中，绕一圈只会得到空/无关结果并误答"站内没有"
+     （20260913 实证：问社交链接，连读两篇无关文章后答"站内没有"，而链接一直
+     在数据接口里）；问"有没有人聊过/写过 X"必须成对点名 list_guestbook 与
+     list_talks 两个数据源；天气 → PARAMS.calls 给 get_weather(location)
    - "有没有/有哪些 X 相关文章"（主题列举）→ PARAMS.calls 必须成对点名两条：
      search_notes(核心词) + list_notes（page=1、page_size=50）——关键词搜
      正文 + 全量标题比对互补，缺一不可（正文措辞常与主题词不一致：问"嵌入式
@@ -309,25 +315,56 @@ PARAMS: <JSON>
 用户消息：{user_msg}"""
 
 
-# planner 可规划执行的查询工具清单（与 skills.py _CALLABLE_QUERY_TOOLS 同步；
-# 动作工具不在此列——planner 无法经 calls 通道越权动作，只能由技能模板展开）
-_QUERY_TOOLS_DESC = """\
-- search_notes(keyword)：按关键词搜文章（标题+内容），返回候选列表（含 id/标题/描述/封面）
-- rag_search(query)：语义相关度检索，返回行式候选（type/id/score/标题/命中节，用于定位，
-  不给全文）
-- get_article_detail(article_id, doc_type=note|talk|board|announcement)：读指定文档全文
-  （article_id 只能取上一轮工具返回中的真实 id）
-- list_notes(page, page_size)：分页列文章
-- list_guestbook() / list_talks() / get_announcements() / get_current_time()：
-  无参数据直取（留言/说说/公告/当前时间）"""
+# planner 菜单（可规划执行的查询工具清单）——20260913 起由 skills.py 白名单
+# （_CALLABLE_QUERY_TOOLS_ORDER = 唯一事实来源）+ 工具注册表**生成**，不再手抄：
+# 手写菜单曾只列 8 个工具，漏掉了站点信息/社交链接/分类/标签/置顶/天气这批数据
+# 工具，于是"作者有哪些社交链接/备案号是多少"这类问题没有可点名的数据工具，
+# planner 只能拿 rag_search/search_notes 去绕（检索索引只有文章正文，对站点元数据
+# 零命中）→ 绕一圈如实答"站内没有"，而数据一直在 /social、/user（20260913 trace 实证）。
+# 生成式菜单的契约：白名单里每个工具必在菜单中出现（test_skills 锁），新增工具
+# 只需改 skills.py 一处。参数签名从 tool.args 派生。
+# 动作工具不在白名单 → 结构性进不了菜单：planner 无法经 calls 通道越权动作，
+# 只能由技能模板展开（skills.py 已论证）。
+_TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 docstring）
+    "search_notes": "按关键词搜文章（标题+内容），返回候选列表（含 id/标题/描述/封面）",
+    "rag_search": "语义相关度检索（BM25），返回行式候选（type/id/score/标题/命中节，"
+                  "用于定位，不给全文）",
+    "get_article_detail": "读指定文档全文（doc_type=note|talk|board|announcement；"
+                          "article_id 只能取上一轮工具返回中的真实 id）",
+    "list_notes": "分页列文章",
+    "get_weather": "查天气（location：城市名，缺省北京）",
+    "list_guestbook": "无参直取：留言板（河灯集）列表",
+    "list_talks": "无参直取：说说（动态/碎语）列表",
+    "get_announcements": "无参直取：博客公告列表",
+    "get_current_time": "无参直取：当前日期时间",
+    "get_blog_info": "无参直取：博客基本信息（作者/头像/签名/ICP备案号）",
+    "get_social_links": "无参直取：社交链接（QQ/GitHub/BILIBILI/邮箱）",
+    "get_site_map": "无参直取：博客功能结构图（有哪些页面/板块）",
+    "get_top_notes": "无参直取：置顶文章列表",
+    "list_categories": "无参直取：全部分类（名称/颜色/图标/文章数量）",
+    "list_tags": "无参直取：全部一级标签",
+}
 
 
 def _tools_desc() -> str:
-    """完整工具清单注入（execute 会执行到的工具都在 _TOOL_MAP 里）。"""
-    return "\n".join(
-        f"- {t.name}: {t.description}" if t.description else f"- {t.name}"
-        for t in _TOOLS
-    )
+    """planner 菜单：白名单顺序 × 注册表（工具名 + 派生参数签名 + 中文说明）。
+
+    白名单里有、注册表里没有的工具（配置错误）跳过并告警——它进不了 execute
+    （_TOOL_MAP 查不到 → __ERROR__ 帧），列进菜单只会诱导 planner 点它。
+    """
+    lines = []
+    for name in _CALLABLE_QUERY_TOOLS_ORDER:
+        tool = _TOOL_MAP.get(name)
+        if tool is None:
+            logger.warning("[planner] 白名单工具 %s 不在注册表，菜单已剔除", name)
+            continue
+        args = ", ".join((getattr(tool, "args", None) or {}).keys())
+        desc = _TOOL_MENU_LINES.get(name) or (tool.description or "").strip().replace("\n", " ")
+        lines.append(f"- {name}({args})：{desc}")
+    return "\n".join(lines)
+
+
+_QUERY_TOOLS_DESC = _tools_desc()
 
 
 # ---------------------------------------------------------------------------
@@ -708,6 +745,18 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     plan_obj = instantiate_plan(skill_name, params)
     plan_obj["params"] = params
 
+    # 白名单剔除可见化（20260913 B 项）：planner 点名了白名单外的工具时，条目被
+    # instantiate_plan 剔除——此前无任何记录，planner 以为计划已执行、narrator
+    # 照计划声称"我调用了 X"，agent.log 却查无此事（15:51 trace 实证：planner
+    # 点名 get_social_links，被静默剔除后回复谎称"这次我用专门的社交链接查询工具
+    # 调了一次"）。现在剔除即 WARNING + trace 事件，排障不再靠猜。
+    if plan_obj.get("dropped"):
+        logger.warning("[planner] 点名工具被白名单剔除（不会执行、无帧）：%s（round %d/%d）"
+                       "——若属应支持的数据工具，检查 skills.py 白名单与菜单",
+                       "、".join(plan_obj["dropped"]), rounds + 1, MAX_PLAN_ROUNDS)
+        record("planner", "rejected_call", dropped=plan_obj["dropped"],
+               skill=plan_obj["skill"], round=rounds)
+
     # 字面路径防推断兜底（确定性修正，保留自旧架构）：用户消息里出现 / 开头的
     # 路径且 planner 选了 navigate 时，target 必须原样用该路径——qwen 曾把
     # "/iot" 推断成"物联网平台"（语义替身）→ 计划变成跳转 /device-console/
@@ -776,6 +825,20 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         kind = _search_retry_kind(plan_obj, executed)
         if kind:
             dups = [s for s in plan_obj["tools"] if s in executed]
+            if kind == "data_repeat":
+                # 数据直取工具（无参数据工具/不带检索语义的调用）重复点名：同一份
+                # 数据再取一遍零新信息，且没有"改读候选"这回事——直接收尾，让
+                # narrator 基于上一轮帧如实作答（20260913 白名单补齐后实测：问社交
+                # 链接，round 2 planner 重复 get_social_links，旧逻辑按"检索重复"
+                # 拦下并给出与检索无关的"不得读无关文章顶替"注记）。
+                logger.info("[planner] 数据工具重复拦截（%s）→ 直接收尾",
+                            "、".join(dups))
+                plan_obj = _wrap_up_plan(
+                    True, "该数据工具本轮已执行过（数据已在上方工具返回里），"
+                          "基于已有返回如实作答，不重复调用")
+                record("planner", "intercept", reason=kind, dups=dups, redirected=False)
+                return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                        "done": False}
             terms = _search_terms(plan_obj, executed, user_msg)
             cand = _candidate_detail_plan(state["messages"], executed, terms)
             if cand is None:
@@ -816,22 +879,31 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
 
 
 def _search_retry_kind(plan_obj: dict, executed: list) -> str | None:
-    """检索重复清单拦截判定（纯函数，20260905 工具级计数扩展）。
+    """重复调用拦截判定（纯函数，20260905 工具级计数扩展，20260913 分出数据工具族）。
 
-    content_query 轮 planner 计划中仍含 executed 里的同款 spec → "retry_loop"
-    （原句连发，20260903 判据）；无同款 spec 但本轮仍规划 rag_search 且已执行
-    rag_search ≥2 → "rag_loop"（换词变体打转——rule5"换词语义重试"已给足 2 次
-    自由检索：首搜 + 一次换词，第三次变体在 BM25 下大概率仍回同批文档，判定
-    打转）。都不中 → None（放行）。
+    content_query 轮 planner 计划中仍含 executed 里的同款 spec：
+      - 重复项里有检索族工具（search_notes/rag_search）→ "retry_loop"（原句连发，
+        20260903 判据）——调用方按"改读未读候选全文/如实收尾列候选"处理；
+      - 重复项只有数据直取工具（无参站点信息类等）→ "data_repeat"：同一份数据再
+        取一遍零新信息，但**没有候选可读**，调用方直接收尾如实作答（20260913
+        白名单补齐后实测命中：round 2 重复 get_social_links）。
+    无同款 spec 但本轮仍规划 rag_search 且已执行 rag_search ≥2 → "rag_loop"
+    （换词变体打转——rule5"换词语义重试"已给足 2 次自由检索：首搜 + 一次换词，
+    第三次变体在 BM25 下大概率仍回同批文档，判定打转）。都不中 → None（放行）。
 
-    只统计 rag_search：search_notes/list_notes 是确定性点名列（成对点名/多关键
-    词链合法），无打转实证；__ERROR__ 帧的修正重试由调用方整块跳过（本函数不
-    看 messages）。
+    rag_loop 只统计 rag_search：search_notes/list_notes 是确定性点名列（成对点名/
+    多关键词链合法），无打转实证；__ERROR__ 帧的修正重试由调用方整块跳过
+    （本函数不看 messages）。
     """
     if plan_obj.get("skill") != "content_query" or not plan_obj.get("tools"):
         return None
-    if any(s in executed for s in plan_obj["tools"]):
-        return "retry_loop"
+    dups = [s for s in plan_obj["tools"] if s in executed]
+    if dups:
+        # search_notes 计检索族（与 rag_search 同属"换词再搜"语义，重复即打转）；
+        # get_article_detail/list_notes 等不算——重复读同一篇/列同一页由
+        # data_repeat 兜底收尾（不误判成检索打转、不触发候选改读）
+        return ("retry_loop" if any(_tool_name(s) in ("search_notes", "rag_search")
+                                    for s in dups) else "data_repeat")
     if (any(_tool_name(s) == "rag_search" for s in plan_obj["tools"])
             and sum(1 for s in executed if _tool_name(s) == "rag_search") >= 2):
         return "rag_loop"

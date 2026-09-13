@@ -66,21 +66,41 @@ from tools.base import _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS
 NAV_VALID_PATHS: set[str] = set(_NAV_EXACT_PATHS)
 
 # planner 可显式点名的无参只读工具白名单（20260902 用户拍板）：留言/说说/公告/
-# 时间类查询是"一次简单工具调用、无流程"，不成技能——planner 直接 PARAMS.tools
-# 点名，instantiate_plan 白名单校验后展开进 TOOLS 行由 execute 确定性执行。
-# 仅限无参只读工具（带参检索走下方 _CALLABLE_QUERY_TOOLS 的 PARAMS.calls 通道）。
-_EXPLICIT_TOOLS: set[str] = {
+# 时间/站点信息类查询是"一次简单工具调用、无流程"，不成技能——planner 直接
+# PARAMS.tools 点名，instantiate_plan 白名单校验后展开进 TOOLS 行由 execute
+# 确定性执行。仅限无参只读工具（带参检索走下方 _CALLABLE_QUERY_TOOLS 的
+# PARAMS.calls 通道）。
+# 20260913 补齐站点信息/列表类（get_blog_info/get_social_links/get_site_map/
+# get_top_notes/list_categories/list_tags）：此前 22 个注册工具里 9 个 planner
+# 结构上够不到，"作者社交链接/ICP 备案号"这类问题没有数据工具可点名——planner
+# 只能拿 rag_search/search_notes 去绕，而检索索引只有文章正文、对站点元数据零
+# 命中，绕完如实答"站内没有"（20260913 15:51 trace 实证：数据一直在 /social、
+# /user）。刻意不收：search_knowledge_base（/knowledge 端点返回空）、
+# get_chat_history（占位实现，历史由系统注入）——工具本身不可用，进白名单只会
+# 把"查不到"变成默认结局。
+# 顺序 = planner 菜单展示顺序（graph._tools_desc 与下方技能描述枚举同源生成）。
+_EXPLICIT_TOOLS_ORDER: list[str] = [
     "list_guestbook", "list_talks", "get_announcements", "get_current_time",
-}
+    "get_blog_info", "get_social_links", "get_site_map",
+    "get_top_notes", "list_categories", "list_tags",
+]
+_EXPLICIT_TOOLS: set[str] = set(_EXPLICIT_TOOLS_ORDER)
 
 # planner 可带参点名的查询工具白名单（20260903 planner 全权裁决）：知识型/验证型
 # 问题的调用清单（PARAMS.calls）仅限这些只读工具——检索定位（search_notes 关键词 /
 # rag_search 相关度）、读全文（get_article_detail）与数据直取。动作工具（navigate_to/
 # device_oled_display 等）不在任何 planner 白名单内，只能由技能模板展开——planner
-# 无法通过 calls 通道越权动作。
-_CALLABLE_QUERY_TOOLS: set[str] = _EXPLICIT_TOOLS | {
-    "search_notes", "rag_search", "get_article_detail", "list_notes",
-}
+# 无法通过 calls 通道越权动作。顺序 = 菜单展示顺序（同上）。
+_CALLABLE_QUERY_TOOLS_ORDER: list[str] = _EXPLICIT_TOOLS_ORDER + [
+    "search_notes", "rag_search", "get_article_detail", "list_notes", "get_weather",
+]
+_CALLABLE_QUERY_TOOLS: set[str] = set(_CALLABLE_QUERY_TOOLS_ORDER)
+
+# 工具枚举文本（技能描述/参数说明注入用）：从上面两份清单派生——白名单增删时
+# 描述文本自动跟随，杜绝"清单加了工具、描述还写着旧枚举"的手抄漂移。
+_EXPLICIT_TOOLS_TEXT = "/".join(_EXPLICIT_TOOLS_ORDER)
+_PARAM_TOOLS_TEXT = "/".join(
+    t for t in _CALLABLE_QUERY_TOOLS_ORDER if t not in _EXPLICIT_TOOLS)
 
 
 # 口语模糊归一（NAV_MAP 精确命中的兜底）：枚举别名覆盖不了无穷口语变体
@@ -188,26 +208,27 @@ SKILLS: list[Skill] = [
         description=(
             "用户询问博客内容时使用（文章/说说/留言/公告/站点信息里的内容）——包括："
             "知识型问题（文章里写了什么、怎么做、是什么，如\"Git 和 SVN 有什么区别\"\"ESP32 的 OTA 怎么配置\"）；"
-            "数据/列表型查询（最新留言/说说/公告、文章列表、封面图片、分类/标签/天气/时间/知识库/站点信息/社交链接）；"
+            "数据/列表型查询（最新留言/说说/公告、文章列表、封面图片、分类/标签/天气/时间/"
+            "站点信息/社交链接/置顶文章）；"
             "页面/内容存在性质疑（如\"真有这个页面？确定有这篇？\"——查证页面或"
             "内容是否存在；执行是否属实的问题归跨轮执行记忆 recent_executions=，"
             "见规划规则 6，不在本技能范围）。"
-            "规划方式：数据/列表型 → PARAMS.tools 点名无参只读工具"
-            "（list_guestbook/list_talks/get_announcements/get_current_time，"
-            "'有没有人聊过/写过 X'必须成对点名两个数据源）；知识型/验证型 → PARAMS.calls"
-            " 给出带参检索调用清单（search_notes/rag_search 定位、get_article_detail 读全文），"
+            "规划方式：数据/列表型 → PARAMS.tools 点名无参只读数据工具"
+            f"（{_EXPLICIT_TOOLS_TEXT}，"
+            "'有没有人聊过/写过 X'必须成对点名两个数据源；天气用 PARAMS.calls 给 "
+            "get_weather(location)）；知识型/验证型 → PARAMS.calls"
+            " 给出带参调用清单（search_notes/rag_search 定位、get_article_detail 读全文），"
             "一次决策只给当前步，后续步骤在下一轮规划中按工具返回决定"
         ),
         inputs={
             "tools": (
-                "（可选）无参只读工具点名列表，仅限 list_guestbook/list_talks/"
-                "get_announcements/get_current_time；'有没有人聊过/写过 X'必须成对点名"
-                "list_guestbook 与 list_talks"
+                f"（可选）无参只读数据工具点名列表，仅限 {_EXPLICIT_TOOLS_TEXT}；"
+                "'有没有人聊过/写过 X'必须成对点名 list_guestbook 与 list_talks"
             ),
             "calls": (
                 "（可选）带参调用清单：[{\"tool\": \"search_notes\", \"args\": {\"keyword\": "
-                "\"用户原词\"}}]；工具仅限 search_notes/rag_search/get_article_detail/"
-                "list_notes 与无参数据工具；get_article_detail 的 id 只能取自上一轮工具返回"
+                f"\"用户原词\"}}]；工具仅限 {_PARAM_TOOLS_TEXT} 与无参数据工具；"
+                "get_article_detail 的 id 只能取自上一轮工具返回"
             ),
         },
         plan=[],  # 调用清单由 planner 经 PARAMS.tools/calls 注入（本技能实例化白名单校验展开）
@@ -273,6 +294,7 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
     """
     skill = SKILL_MAP.get(skill_name) or SKILL_MAP["chat"]
     tools: list[str] = []
+    dropped: list[str] = []  # 白名单剔除的 planner 点名项（planner_node 记账，见下）
     note = ""
     if skill.name == "navigate":
         target = (params.get("target") or "").strip()
@@ -335,19 +357,32 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
         # （带参检索调用，白名单 _CALLABLE_QUERY_TOOLS）。两层白名单校验，非法/
         # 重复条目剔除（合法条目仍生效——不因模型多写一个越权工具就整单作废）；
         # 调用清单为空 = planner 决策无需工具（收尾轮）——不再是"自由 ReAct"。
+        # 20260913：剔除项记入 dropped 返回给 planner_node（WARNING + trace 事件）
+        # ——此前静默丢弃，planner 以为计划已执行、narrator 照计划声称"我调用了 X"，
+        # 而 agent.log 里毫无痕迹（15:51 trace 实证）。
         picked: list[str] = []
         explicit = params.get("tools")
         if isinstance(explicit, list):
             for t in explicit:
-                if isinstance(t, str) and t.strip() in _EXPLICIT_TOOLS and t.strip() not in picked:
+                if not isinstance(t, str):
+                    dropped.append(str(t))
+                elif t.strip() not in _EXPLICIT_TOOLS:
+                    dropped.append(t.strip())
+                elif t.strip() not in picked:
                     picked.append(t.strip())
         calls = params.get("calls")
         if isinstance(calls, list):
             for c in calls:
-                if (isinstance(c, dict) and isinstance(c.get("tool"), str)
-                        and c["tool"].strip() in _CALLABLE_QUERY_TOOLS
-                        and isinstance(c.get("args"), dict)):
-                    spec = f"{c['tool'].strip()}({json.dumps(c['args'], ensure_ascii=False)})"
+                if not isinstance(c, dict) or not isinstance(c.get("tool"), str):
+                    dropped.append(str(c))
+                    continue
+                cname = c["tool"].strip()
+                if cname not in _CALLABLE_QUERY_TOOLS:
+                    dropped.append(cname)
+                elif not isinstance(c.get("args"), dict):
+                    dropped.append(f"{cname}（args 非对象）")
+                else:
+                    spec = f"{cname}({json.dumps(c['args'], ensure_ascii=False)})"
                     if spec not in picked:
                         picked.append(spec)
         for t in picked:
@@ -369,6 +404,9 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
         "note": note,
         "reply": skill.reply_contract,
         "chat": skill.chat,
+        # 白名单剔除项（只读、不进 plan 文本）：planner_node 据此打 WARNING +
+        # trace 事件，让"点名的工具没执行"在日志里可见（20260913 B 项）
+        "dropped": dropped,
     }
 
 
