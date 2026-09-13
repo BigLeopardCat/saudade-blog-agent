@@ -480,6 +480,74 @@ def test_explicit_tools():
           and parsed["chat"] is False,
           f"parsed={parsed}")
 
+    # 20260913 补齐站点信息类数据工具（此前 22 个注册工具里 9 个 planner 够不到：
+    # 问社交链接/备案号只能拿 rag_search 绕，绕完误答"站内没有"）
+    p = instantiate_plan("content_query", {"tools": [
+        "get_social_links", "get_blog_info", "get_site_map",
+        "get_top_notes", "list_categories", "list_tags"]})
+    check("站点信息类点名 → 全部展开（不再被剔除）",
+          p["tools"] == [f"{t}({{}})" for t in (
+              "get_social_links", "get_blog_info", "get_site_map",
+              "get_top_notes", "list_categories", "list_tags")],
+          f"tools={p['tools']}")
+    # 带参数据工具（天气）走 calls 通道
+    p = instantiate_plan("content_query", {"calls": [
+        {"tool": "get_weather", "args": {"location": "上海"}}]})
+    check("get_weather 经 calls 展开",
+          p["tools"] == ['get_weather({"location": "上海"})'], f"tools={p['tools']}")
+    # 不可用工具（知识库端点空 / 聊天历史占位）刻意不在白名单 → 剔除
+    p = instantiate_plan("content_query", {"tools": ["search_knowledge_base"]})
+    check("不可用工具（search_knowledge_base）→ 剔除",
+          p["tools"] == [] and p["dropped"] == ["search_knowledge_base"],
+          f"tools={p['tools']} dropped={p['dropped']}")
+
+    # 剔除可见化（20260913 B 项）：dropped 记录被剔除的点名项——planner_node 据此
+    # 打 WARNING + trace 事件，杜绝"点名了工具、静默没执行、回复照计划声称调用过"
+    p = instantiate_plan("content_query", {"tools": ["navigate_to"], "calls": [
+        {"tool": "toggle_effect", "args": {}},
+        {"tool": "search_notes", "args": "ESP32"},     # args 非对象
+        "裸字符串",                                      # 条目形态非法
+    ]})
+    check("剔除项进 dropped（越权动作/非法 args/非法条目）",
+          p["tools"] == []
+          and p["dropped"] == ["navigate_to", "toggle_effect", "search_notes（args 非对象）", "裸字符串"],
+          f"dropped={p['dropped']}")
+    p = instantiate_plan("content_query", {"tools": ["list_talks"]})
+    check("合法点名 → dropped 为空（无误报）",
+          p["tools"] == ['list_talks({})'] and p["dropped"] == [], f"p={p}")
+
+
+def test_planner_tool_menu():
+    """planner 菜单由白名单 + 注册表生成（20260913）：手写菜单曾漏列 6 个数据工具，
+    planner 对站点信息类问题无工具可点名。生成式菜单的契约 = 白名单 ⊆ 菜单，
+    且动作工具结构性不入菜单（越权通道不可存在）。"""
+    print("[planner_menu] 菜单 = 白名单 × 注册表")
+    import agent.graph as g
+    from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
+    menu = g._QUERY_TOOLS_DESC
+    missing = [t for t in sorted(_CALLABLE_QUERY_TOOLS) if f"- {t}(" not in menu]
+    check("白名单每个工具都在菜单里（无漏列）", not missing, f"missing={missing}")
+    check("白名单工具都能进 execute（注册表齐全）",
+          all(t in g._TOOL_MAP for t in _CALLABLE_QUERY_TOOLS),
+          f"missing={[t for t in sorted(_CALLABLE_QUERY_TOOLS) if t not in g._TOOL_MAP]}")
+    # 动作工具绝不出现在菜单（planner 只能经技能模板触发动作）
+    action_tools = ["navigate_to", "toggle_effect", "toggle_dark_mode",
+                    "device_oled_display", "list_devices"]
+    check("动作工具不在菜单（无越权通道）",
+          not any(f"- {t}(" in menu for t in action_tools),
+          f"menu={menu}")
+    # 站点信息类数据工具必须在菜单（本次修复的验收点）
+    for t in ("get_social_links", "get_blog_info", "get_site_map"):
+        check(f"菜单含 {t} 且带数据说明", f"- {t}()：" in menu, f"menu={menu}")
+    # 参数签名从注册表派生（planner 看得到要填什么参数）
+    check("菜单派生参数签名（search_notes(keyword)）", "- search_notes(keyword)：" in menu, f"menu={menu}")
+    check("菜单派生参数签名（get_weather(location)）", "- get_weather(location)：" in menu, f"menu={menu}")
+    # 无参工具枚举文本与白名单同源（技能描述/参数说明注入）
+    from agent.skills import _EXPLICIT_TOOLS_TEXT
+    check("描述枚举与白名单同源",
+          all(t in _EXPLICIT_TOOLS_TEXT for t in sorted(_EXPLICIT_TOOLS)),
+          f"text={_EXPLICIT_TOOLS_TEXT}")
+
 
 def test_gate_claim_scope():
     """gate 零帧声称检查作用域（20260903 收窄设计）：fallback 吞掉整轮叙述、
@@ -899,6 +967,15 @@ def test_search_retry_kind():
     check("非 content_query 不拦",
           _search_retry_kind({"skill": "chat", "tools": [rag_a]}, [rag_a, rag_b]) is None)
     check("tools 空不拦", _search_retry_kind(dict(cq, tools=[]), [rag_a, rag_b]) is None)
+    # 20260913：数据直取工具重复 → data_repeat（无候选可读，收尾如实作答；
+    # 不再套用检索族措辞）——白名单补齐站点信息类后实测命中
+    soc = 'get_social_links({\"})'
+    check("数据工具重复 → data_repeat（非检索族措辞）",
+          _search_retry_kind(dict(cq, tools=[soc]), [soc]) == "data_repeat")
+    check("重复读同一篇 → data_repeat",
+          _search_retry_kind(dict(cq, tools=[detail]), [detail]) == "data_repeat")
+    check("检索族 + 数据工具混合重复 → retry_loop（检索族优先）",
+          _search_retry_kind(dict(cq, tools=[soc, rag_a]), [soc, rag_a]) == "retry_loop")
 
 
 def test_candidate_relevance_pick():
@@ -998,7 +1075,7 @@ def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
                test_nav_fast_path, test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
-               test_explicit_tools, test_gate_claim_scope, test_gate_frame_checks,
+               test_explicit_tools, test_planner_tool_menu, test_gate_claim_scope, test_gate_frame_checks,
                test_execute_node, test_todo_contract, test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
