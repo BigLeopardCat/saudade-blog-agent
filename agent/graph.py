@@ -594,7 +594,8 @@ _PHANTOM_EXEMPT_RE = re.compile(
     r"|系统|机制|白名单|注册表|工具描述|参数|字段|接口|代码|文档|工具名|清单|这类|那种|比如|例如|举例"
     r"|你说|你说的|你问|你提到|你让我|引用|原话"
 )
-_PHANTOM_PRIOR_RE = re.compile(r"刚|之前|先前|上次|上一轮|上轮|前几轮|那次|早先")
+_PHANTOM_PRIOR_RE = re.compile(
+    r"刚|之前|先前|上次|上一轮|上轮|前几轮|那次|早先|上回|前面|早前|记录|历史")
 _TOOL_NAME_RE = re.compile(_TOOL_NAMES_ALT)
 
 
