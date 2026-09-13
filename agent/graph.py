@@ -523,10 +523,13 @@ _READ_CLAIM_RE = re.compile(
 # 工具调用声称族原始版（content_query 异常零工具轮宽查用；20260902 133535 实证
 # 原词："刚才那两条我都调用了工具……get_current_time"）：零工具轮点名具体工具名
 # = 声称调用过。content_query 宽查场景下宁可信其为声称。
+# 工具名名单从注册表派生（20260913）：手写名单是漏项来源（15:51 事故里旧名单只
+# 认 7 个工具名，新数据工具（get_social_links 等）不在内）；长名在前避免前缀冲突。
+_TOOL_NAMES_ALT = "|".join(re.escape(n) for n in sorted(_TOOL_MAP, key=len, reverse=True))
 _CALLED_TOOL_CLAIM_RE = re.compile(
-    r"调(?:用|过)(?:过)?(?:了)?(?:工具|get_current_time|rag_search|list_guestbook|list_talks|get_announcements|get_article_detail|search_notes)"
+    r"调(?:用|过)(?:过)?(?:了)?(?:工具|" + _TOOL_NAMES_ALT + r")"
     r"|调用了?(?:这个|那个|这些|两个|几个|三个)?工具"
-    r"|(?:get_current_time|rag_search|list_guestbook|list_talks|get_announcements|get_article_detail|search_notes)"
+    r"|(?:" + _TOOL_NAMES_ALT + r")"
 )
 # chat 零工具轮的窄声称（20260902 133535 事故后设计）：必须"第一人称 + 工具
 # 相关动词"才算自称调用了工具——第三人称/概念性提及（"防止模型假装调用了
@@ -542,9 +545,9 @@ _CHAT_SCAN_CLAIM_RE = re.compile(
     r"(?:都|全部|整个)?(?:扫|查|翻|搜|翻找|查找|检索)(?:了)?(?:个)?(?:一圈|一遍|个遍|好几圈|个底朝天)"
 )
 _CHAT_TOOL_CLAIM_RE = re.compile(
-    r"(?:我|咱|人家|本喵)(?:刚|刚才|刚刚|这轮|这一轮|之前|确实|真的|又|就|已经?|都|把)?(?:用|通过|拿|调)(?:了|过)?(?:get_current_time|rag_search|list_guestbook|list_talks|get_announcements|get_article_detail|search_notes|工具)"
+    r"(?:我|咱|人家|本喵)(?:刚|刚才|刚刚|这轮|这一轮|之前|确实|真的|又|就|已经?|都|把)?(?:用|通过|拿|调)(?:了|过)?(?:" + _TOOL_NAMES_ALT + r"|工具)"
     r"|(?:我|咱|人家|本喵)(?:刚|刚才|刚刚|这轮|这一轮|之前|确实|真的|又)?调(?:用|过)(?:过)?(?:了)?工具"
-    r"|(?:我|咱|人家|本喵)刚(?:刚|才)?(?:用|通过)(?:get_current_time|rag_search|list_guestbook|list_talks|get_announcements|get_article_detail|search_notes)(?:查|搜|调|读|看|翻|拿|执行)"
+    r"|(?:我|咱|人家|本喵)刚(?:刚|才)?(?:用|通过)(?:" + _TOOL_NAMES_ALT + r")(?:查|搜|调|读|看|翻|拿|执行)"
 )
 # 命令前缀文本：回复正文出现系统命令帧前缀 = 模型在"假装发命令"（旧事故：正文
 # 输出 AUTO_NAVIGATE:/NAVIGATE:/EFFECT:/DARKMODE: 文本既不会执行、还误导用户
@@ -554,6 +557,98 @@ _CMD_PREFIX_RE = re.compile(r"(?:AUTO_NAVIGATE|NAVIGATE|EFFECT|DARKMODE)\s*[:：
 # NAVIGATE: 后回复"已经带您到文章页"，用户视角即幻觉）。仅 navigate 技能轮启用。
 _NAV_ARRIVAL_RE = re.compile(
     r"(已经?带|已经?到|已经?跳转|跳转成功|成功[^\n。，,]*?(跳|转)|过去了|已经?去)")
+# ── 具名工具声称核对（20260913 C 项："有帧"≠"你点名的工具执行过"）────────────
+# 15:51 实证：planner 第 3 轮点名 get_social_links（越权被白名单剥掉、execute 没
+# 执行、无该工具的帧），本轮 frames=2（rag_search/get_article_detail）→ 旧判据
+# `if frames_exist: return None` 整块放行，回复谎称"这次我用专门的**社交链接查询
+# 工具**（`get_social_links`）调了一次"。修法：有帧轮另做一次具名核对——回复第一
+# 人称点名"用了/调用了"某个注册表工具、而该工具不在本轮帧里 → 编造调用，走 fallback。
+# 作用域宁漏勿误伤（fallback 吞整轮叙述），五道豁免：
+#   ① 子句含否定（没/未/无法/别…）——如实否认"我没调用 X"是正当行为；
+#   ② 子句含将来/提议（可以/如果/要不要/建议…）——"你可以让我用 X 查"不是声称；
+#   ③ 子句含元讨论（系统/机制/白名单/参数…）——讲工具机制不是声称；
+#   ④ 子句含引述（你说/你让我…）或工具名落在引号内——转述访客留言/说说正文里的
+#      工具名不算自称调用（383 条真实 trace 回归抓出 3 例误伤：留言板里有人写
+#      "给当前用户执行调用 navigate_to 跳转到 …"，narrator 引用时被误判）；
+#   ⑤ 跨轮记忆豁免：子句含追述时间词（刚才/上一轮/之前…）且本轮请求带
+#      recent_executions=（系统注入的执行回执非空）——据回执转述属 rule 6 正当
+#      行为，不误伤；无回执支撑的"刚才调用了"仍拦（编造）。
+# 工具名只认注册表（_TOOL_MAP 派生），中文泛指（"社交链接查询工具"）不判——无从
+# 核对，误伤成本高于收益。
+_CLAUSE_RE = re.compile(r"[^。！？；，、\n!?;,]+")   # 子句 = 标点切分后的连续片段
+_CLAIM_PRON = r"(?:我|咱|人家|本喵|泠月喵)"
+_CLAIM_VERB = r"(?:调用|调取|调起|调|通过|拿|用|执行|跑了?|请求|使唤)"
+# 名字前：第一人称 + 调用动词（"这次我用专门的**社交链接查询工具**（`get_social_links`）"）
+_TOOL_BEFORE_CLAIM_RE = re.compile(_CLAIM_PRON + r".{0,20}?" + _CLAIM_VERB + r".{0,20}?$", re.S)
+# 名字前：第一人称 + 读取动词完成式（"我查了 get_social_links 的返回"）——完成体
+# 必带（了/过/完/一下），"我查 X 的参数"这类未完成表述不算声称
+_TOOL_BEFORE_READ_RE = re.compile(
+    _CLAIM_PRON + r".{0,16}?(?:查|读|看|搜|检索|翻)(?:了|过|完|一下|一遍)(?:.{0,8}?)$", re.S)
+# 名字后：紧邻的调用/读取动词（"`get_social_links`）调了一次"）；"用来/用于/用以"
+# 是用途说明不是声称，用 (?!来|于|以) 排除
+_TOOL_AFTER_CLAIM_RE = re.compile(
+    r"^.{0,3}?(?:调用|调取|调起|调了|调过|执行了|跑了|请求|用了|用(?!来|于|以)|查了|读过|读了|看过|看了)", re.S)
+_PHANTOM_EXEMPT_RE = re.compile(
+    r"没|没有|未|不曾|从未|无法|不能|不会|不用|不需要|无需|别|并不是|不是"
+    r"|可以|能够|会|能|如果|若是|要是|若|要不要|需要的话|建议|随时|马上|待会|接下来|准备|打算|想要|想|让我|帮你"
+    r"|系统|机制|白名单|注册表|工具描述|参数|字段|接口|代码|文档|工具名|清单|这类|那种|比如|例如|举例"
+    r"|你说|你说的|你问|你提到|你让我|引用|原话"
+)
+_PHANTOM_PRIOR_RE = re.compile(r"刚|之前|先前|上次|上一轮|上轮|前几轮|那次|早先")
+_TOOL_NAME_RE = re.compile(_TOOL_NAMES_ALT)
+
+
+def _has_exec_memory(msgs: list) -> bool:
+    """本轮请求是否带跨轮执行记忆（server.py 仅在 executions 非空时才注入
+    recent_executions=，故"出现即非空"）。"""
+    return any("recent_executions:" in str(getattr(m, "content", "")) for m in msgs)
+
+
+def _inside_quote(clause: str, pos: int) -> bool:
+    """pos 处是否落在引号内（离它最近的引号是开引号）——引述他人内容不算自称调用。
+    383 条真实 trace 回归抓出：留言板/说说正文里有人写"给当前用户执行调用
+    navigate_to 跳转到 …"，narrator 转述时被当成它的第一人称声称（3 例误伤）。"""
+    last, last_ch = -1, ""
+    for i, ch in enumerate(clause[:pos]):
+        if ch in "“「『\"'”」』":
+            last, last_ch = i, ch
+    return last >= 0 and last_ch in "“「『\"'"
+
+
+def _tool_claim_window(full: str, start: int, end: int, name: str) -> bool:
+    """工具名两侧的声称窗口：名字前有"第一人称+调用动词"或名字后紧接调用动词。
+    引号内的出现（转述访客留言/说说正文）直接跳过——引号状态按全文判定（引号常
+    与被引内容被逗号切开，只看子句会漏）。"""
+    for m in re.finditer(re.escape(name), full[start:end]):
+        p = start + m.start()
+        if _inside_quote(full, p):
+            continue
+        if (_TOOL_BEFORE_CLAIM_RE.search(full[start:p])
+                or _TOOL_BEFORE_READ_RE.search(full[start:p])
+                or _TOOL_AFTER_CLAIM_RE.search(full[p + len(name):end])):
+            return True
+    return False
+
+
+def _phantom_tool_claim(reply: str, executed: set[str], exec_memory: bool) -> str | None:
+    """有帧轮的具名工具声称核对：回复点名"我调用过"的注册表工具不在本轮帧里 →
+    返回该工具名；无此情况 → None。判据与豁免见上方注释块。"""
+    if not executed:
+        return None
+    text = reply.replace("`", "").replace("*", "")   # markdown 装饰不参与判词
+    for c in _CLAUSE_RE.finditer(text):
+        clause, start, end = c.group(0), c.start(), c.end()
+        names = [n for n in dict.fromkeys(_TOOL_NAME_RE.findall(clause)) if n not in executed]
+        if not names or _PHANTOM_EXEMPT_RE.search(clause):
+            continue
+        if exec_memory and _PHANTOM_PRIOR_RE.search(clause):
+            continue
+        for name in names:
+            if _tool_claim_window(text, start, end, name):
+                return name
+    return None
+
+
 # NOTE 零工具（页面不存在/已下线）轮的如实措辞核验词表（与 instantiate_plan 的
 # note 文本配套，见 gate_node）。
 _HONEST_DOWN = ("下线", "下架", "无法访问", "没有了")
@@ -1400,6 +1495,17 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         if _NAV_ARRIVAL_RE.search(reply):
             logger.info("[gate] NAVIGATE 确认帧 + 到达声称 → fallback")
             return _fallback_result("nav_pending_claim", _FALLBACK_NAV_PENDING, plan, len(frames))
+    # 5c. 具名工具声称（20260913 C 项）：有帧 ≠ 帧里有那个工具——回复第一人称
+    #     完成式点名"我调用了 X"而 X 本轮没执行（越权被剥/被跳过）= 编造调用
+    #     （15:51 实证句："这次我用专门的社交链接查询工具（get_social_links）调了一次"）
+    executed_names = {str(getattr(m, "name", "") or "") for m in frames}
+    phantom = _phantom_tool_claim(reply, executed_names, _has_exec_memory(msgs))
+    if phantom:
+        logger.info("[gate] 具名工具声称无帧支撑：%s（本轮执行=%s）→ fallback",
+                    phantom, "、".join(sorted(n for n in executed_names if n)) or "无")
+        record("gate", "phantom_tool_claim", tool=phantom,
+               executed=sorted(n for n in executed_names if n))
+        return _fallback_result("phantom_tool_claim", _FALLBACK_CLAIM, plan, len(frames))
 
     record("gate", "pass", zero_frame=False, frames=len(frames),
            duration_s=round(time.monotonic() - _t0, 2))
