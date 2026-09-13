@@ -573,17 +573,25 @@ flowchart TB
   核实（知识型"博客里写过 X 吗"、数据/列表型"最新留言/说说/公告/时间"、质疑/确认上轮执行是否
   属实）都归 content_query。**planner 每轮产出调用清单**：
   - `PARAMS.tools`：点名**无参只读**数据工具（白名单 `_EXPLICIT_TOOLS` = list_guestbook/
-    list_talks/get_announcements/get_current_time）；**查"留言板/说说里有没有人聊过/写过 X"
-    必须成对点名 list_guestbook 与 list_talks**（双源契约进计划，233815 事故教训）；
+    list_talks/get_announcements/get_current_time + 20260913 补齐的站点信息/列表类
+    get_blog_info/get_social_links/get_site_map/get_top_notes/list_categories/list_tags）；
+    **查"留言板/说说里有没有人聊过/写过 X"必须成对点名 list_guestbook 与 list_talks**
+    （双源契约进计划，233815 事故教训）；
   - `PARAMS.calls`：带参检索调用（白名单 `_CALLABLE_QUERY_TOOLS` = 上述 + search_notes/
-    rag_search/get_article_detail/list_notes）——search_notes 关键词定位 → 零结果或不相关换
-    rag_search 语义检索 → 候选命中后下一轮 get_article_detail 读全文（**article_id 只能取上一轮
-    工具返回里的真实 id，绝不自己编**）；一轮只给当前步，planner 下一轮看到"上一轮工具执行结果"
-    区块再决定 读全文/换词再搜/收尾。
+    rag_search/get_article_detail/list_notes/get_weather）——search_notes 关键词定位 → 零结果
+    或不相关换 rag_search 语义检索 → 候选命中后下一轮 get_article_detail 读全文（**article_id
+    只能取上一轮工具返回里的真实 id，绝不自己编**）；一轮只给当前步，planner 下一轮看到"上一轮
+    工具执行结果"区块再决定 读全文/换词再搜/收尾。**站点信息类问题（作者/备案号/社交链接/分类/
+    标签/置顶/天气）直接点名对应数据工具**，不得拿检索工具绕——检索索引只含文章正文，对站点
+    元数据零命中（20260913 实证：问社交链接，绕一圈后答"站内没有"）。
   instantiate_plan 对 tools/calls 白名单校验后展开进 TOOLS 行（非法/重复条目剔除、合法条目仍
-  生效——不因多写一个越权工具整单作废），execute 必执行。**动作工具不在任何 planner 白名单内**
+  生效——不因多写一个越权工具整单作废），execute 必执行；**剔除项记入 `dropped` 交 planner_node
+  打 WARNING + trace 事件 `planner.rejected_call`**（剔除不再静默：被剔除=没执行=无帧，narrator
+  若照计划声称"调用了 X"就是编造，20260913 事故教训）。**动作工具不在任何 planner 白名单内**
   （只能由技能模板展开）——planner 无法经 calls 通道越权动作。清单为空 = planner 决策无需工具
-  （收尾轮：信息已足够或明确查无结果），不再是"自由 ReAct"。
+  （收尾轮：信息已足够或明确查无结果），不再是"自由 ReAct"。**planner 菜单（`_QUERY_TOOLS_DESC`）
+  由白名单 × 工具注册表生成**（参数签名从 `tool.args` 派生），手写菜单是漏工具的来源（20260913
+  前手抄 8 条，漏掉全部站点信息类数据工具）；test_skills 锁"白名单 ⊆ 菜单"且动作工具不入菜单。
 
 - **导航映射表**（`NAV_MAP`）：页面别名 → 真实路径，"物联网平台→/device-console/"是系统数据而非模型猜测
   （旧版 planner 跑题的根因：看不到工具语义/页面映射）；映射为 None = 页面已下线（友链 → 如实告知、不导航）；
