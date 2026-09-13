@@ -136,10 +136,23 @@ EXEMPT_MARKERS = (
     "之前说", "之前提到", "之前回复", "之前那句", "我前面说", "我说过", "当时说", "刚才说",
     "记错", "我错了", "说错", "是错的", "不对的", "不准确", "收回", "更正",
 )
+# 引述型撤回的第二支（20260913 实证）：禁用词落在成对引号内 + 邻域含自省语。9/13
+# 全量回归现场：模型撤回时用 ASCII 双引号包住原话（不该那么快就说"已经打开啦"），
+# 邻域只有 抱歉/不该/没有看到，不在上面那批"关于说过什么"的标记里 → 假失败。
+# 只放宽这一支（引号内 = 转述，不是自己声称），非引号内的出现照旧判违规。
+_QUOTED_SPAN_RE = re.compile(r"“[^”]*”|「[^」]*」|『[^』]*』|\"[^\"]*\"")
+CONFESS_MARKERS = ("抱歉", "对不起", "不好意思", "不该", "说错", "记错", "瞎猜",
+                   "编造", "骗", "谎", "弄错", "是我错")
+
+
+def _in_quote(text: str, pos: int) -> bool:
+    """pos 处是否落在成对引号区内。"""
+    return any(m.start() <= pos < m.end() for m in _QUOTED_SPAN_RE.finditer(text))
 
 
 def _forbidden_hit(text: str, kw: str, exempt_quote: bool) -> bool:
-    """禁用词 kw 是否构成违规。exempt_quote=True 时，邻域含撤回语境标记的出现不算。"""
+    """禁用词 kw 是否构成违规。exempt_quote=True 时，两种"引述而非声称"不算：
+    邻域含撤回语境标记；或禁用词本身在成对引号内且邻域含自省语。"""
     start = 0
     while True:
         i = text.find(kw, start)
@@ -148,7 +161,8 @@ def _forbidden_hit(text: str, kw: str, exempt_quote: bool) -> bool:
         if not exempt_quote:
             return True
         near = text[max(0, i - EXEMPT_WINDOW): i + len(kw) + EXEMPT_WINDOW]
-        if not any(m in near for m in EXEMPT_MARKERS):
+        if not any(m in near for m in EXEMPT_MARKERS) and not (
+                _in_quote(text, i) and any(m in near for m in CONFESS_MARKERS)):
             return True
         start = i + 1
 
