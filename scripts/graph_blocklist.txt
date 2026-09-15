@@ -1,0 +1,37 @@
+# build_word_graph.py 词黑名单（人工维护）
+#
+# 每行一个词，`#` 开头是注释，空行忽略。中文按原样匹配，ASCII 不区分大小写。
+# 加词的门槛：这个词既**泛化**（在任何技术文里都会高频出现）又**不值得点**（双击跳过去
+# 对访客没有信息增量）。只泛化但确有领域含义的词（如 执行/回执/摘要/配置）不要加。
+#
+# 改完重跑：PYTHONPATH=/home/ubuntu/graph-lib python3 scripts/build_word_graph.py --dry-run
+# 看 eval/report/wordgraph/<ts>_vocab.txt 的词表报告，确认没有误伤再正式出图。
+# （选词是纯 CPU 的，重跑零 API 成本；只有新词才需要 embedding。）
+
+# ── 中文：泛化动词 / 无信息名词 ──────────────────────────────
+修改 创建 添加 查看 返回 保留 记录 问题 解决方案 场景 功能 项目 工作 开发 生成
+清理 触发 完成 开始 存在 包括 使用 采用 支持 提供 具备 涉及 属于 位于 处于
+情况 部分 事情 内容 方式 方法 地方 时候 结果 要求 说明 表示 认为 知道 得到
+大小 更新 增加 减少 学习 正确 描述 特定 环境 应用 自动 新增 判定 解决 兼容性
+不要 本质 耗时 负责 推进 进入 取出 所在 交给 排进 打印 单位 顺序 外层 可变
+程序 注册 开启 目前 默认 如下 上述 下节 上一 本节 例子 示例 补充 后续 前置
+
+# ── 中文：功能词 / 程度副词（jieba 词性闸漏网的） ──────────────
+通常 真正 仍然 任意 推荐 开始运行 继续执行 必须 例如 一般 直接 具体 简单 复杂
+主要 相关 一定 可能 应该 能够 需要 注意 特别 尤其 甚至 以及 还有 另外 此外
+
+# ── 中文：全站级 hub 词（会把所有簇粘成一团，且点了没有信息增量） ──
+用户 系统 消息 请求 命令 文本 数据 文件 目录 版本 名称 地址 参数
+
+# ── ASCII：泛化编程词（保留 python/rust/git/node/linux/windows 等真技术词） ──
+work main create run mode count size custom add login list index value type
+text user result current status record item items save load update delete
+get set need make ok err error msg message name path file line
+headers body result data table query response request
+
+# ── ASCII：Markdown / 前端样板词 ────────────────────────────
+src alt div span class style width height color url uri href link image img
+
+# ── ASCII：构建/脚本碎片（从代码块里 jieba 切出来的） ──────────
+echo dist pick flow alias gradle infile httpd flashsize esptoolpy contenttype
+webrequest sdkconfig app csv octet invoke allow post put
