@@ -26,6 +26,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 from agent import create_agent
 from agent.graph import AgentCancelled, graph_input
 from agent.skills import NAV_MAP  # 过程行路径反查中文别名用（展示层，非执行依据）
+from rag import wordgraph
 from utils import setup_logging
 from utils.logging import get_trace_id, set_trace_id
 from utils.trace import finish_trace, record, start_trace
@@ -108,6 +109,9 @@ async def lifespan(app: FastAPI):
     logger.info("Initialising LangChain agent ...")
     _agent = create_agent()
     logger.info("Agent ready")
+    # 后台预热图谱查询的 embedding 客户端（首次 TLS 建连 ~3s，不预热的话
+    # 重启后第一个查询会被上游超时掐掉→静默降级）。不阻塞启动，失败也不影响
+    threading.Thread(target=wordgraph.warm, name="wordgraph-warm", daemon=True).start()
     yield
     logger.info("Agent shutting down")
 
@@ -903,6 +907,30 @@ def review_message(req: ReviewRequest):
             logger.warning("[review] 裁决 JSON 解析失败: %.120s", out)
     logger.info("[review] verdict=%s reason=%.60s content=%.60s", verdict, reason, text)
     return {"verdict": verdict, "reason": reason}
+
+
+class GraphQueryRequest(BaseModel):
+    """图谱向量检索请求。q = 访客在展示柜里输入的查询串。"""
+    q: str = ""
+
+
+@app.post("/graph/query")
+async def graph_query(req: GraphQueryRequest):
+    """首页展示柜「文章向量空间」的向量检索：查询串 → 图谱里最近的若干词。
+
+    **可降级端点**：任何失败都返回 HTTP 200 + ok=false（前端据此退回本地关键词
+    匹配），绝不抛 4xx/5xx——这不是 CRUD 资源，404 之类的语义在这里只会让调用方
+    的降级分支更难写。
+
+    鉴权不在这里：本服务只监听 127.0.0.1，走 nginx 的那一层在 Rust
+    （`/api/public/graph/query` 要求登录，防匿名刷 embedding 费用）。
+
+    跑在线程池里（纯 Python 点积 + 一次阻塞的 HTTP embedding 调用），并显式传播
+    context 以便日志带上 tid。
+    """
+    loop = asyncio.get_running_loop()
+    return await _submit_with_context(loop, wordgraph.query_words,
+                                      req.q, wordgraph.TOP_K_DEFAULT)
 
 
 @app.get("/health")
