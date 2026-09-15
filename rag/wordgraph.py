@@ -7,7 +7,13 @@ index.json       词表 + build_id + 模型名 + 维度 + strip_top
 vectors.f32      L2 归一化后的节点向量（count × dim，小端 float32 行主序）
 mean.f32         训练集均值（dim）
 dirs.f32         被剔除的主方向（strip_top × dim）——**可能是 0 字节**
+bm25.json        BM25 弃权闸索引（文章级 postings/dl）——缺失则闸停用
 ===============  ==========================================================
+
+**弃权闸**（20260916d，见模块下半部分）：向量检索对任何输入都会返回 top-8，
+实测域内/域外的 top1 分数**重叠**（0.363 / 0.364），没有可用的绝对阈值；词法
+BM25 对"图里没有这句话"天然给 0 分，用它当闸。闸在 embedding 之前跑，
+域外查询零 API 成本。
 
 为什么不用 numpy：**生产 venv 里没有它**（当初刻意没装，见 CLAUDE.md §2）。
 这里要做的只是「一个查询向量 × 333 个节点向量」的点积，用 ``array('f')`` 读裸
@@ -24,6 +30,7 @@ from __future__ import annotations
 import array
 import json
 import logging
+import math
 import os
 import sys
 import threading
@@ -47,6 +54,7 @@ _client = None
 _cache: dict = {
     "build_id": None, "dim": 0, "count": 0,
     "words": [], "vecs": None, "mean": None, "dirs": [],
+    "gate": None,          # BM25 弃权闸索引；None = 停用（fail-open，见 _load_gate）
 }
 
 
@@ -101,10 +109,125 @@ def _load() -> bool:
 
     with _lock:
         _cache.update(build_id=idx.get("build_id"), dim=dim, count=len(words),
-                      words=list(words), vecs=vecs, mean=mean, dirs=dirs)
-    logger.info("[wordgraph] 载入产物 %s：%d 词 × %d 维（剔除主方向 %d 个）",
-                idx.get("build_id"), len(words), dim, len(dirs))
+                      words=list(words), vecs=vecs, mean=mean, dirs=dirs,
+                      gate=_load_gate(idx.get("build_id"), words))
+    logger.info("[wordgraph] 载入产物 %s：%d 词 × %d 维（剔除主方向 %d 个；弃权闸 %s）",
+                idx.get("build_id"), len(words), dim, len(dirs),
+                "开" if _cache.get("gate") else "**关（fail-open）**")
     return True
+
+
+def _load_gate(build_id, words: list) -> dict | None:
+    """读 BM25 弃权闸索引。**任何一处不对就返回 None = 闸停用**（fail-open）：
+    这是个"宁可不拦也别拦错"的部件——闸误伤真查询（把有结果的查询判成没结果）
+    比闸缺席严重得多，所以它只在自己完全自洽时才生效。"""
+    try:
+        g = json.loads((GRAPH_DIR / "bm25.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("[wordgraph] 没有 bm25.json，弃权闸停用（查询行为与加闸前一致）")
+        return None
+    if g.get("build_id") != build_id:
+        logger.warning("[wordgraph] bm25.json 的 build_id %s ≠ index.json 的 %s，弃权闸停用",
+                       g.get("build_id"), build_id)
+        return None
+    post = g.get("postings") or {}
+    if set(words) - set(post):
+        logger.warning("[wordgraph] 闸索引缺 %d 个词表词，弃权闸停用",
+                       len(set(words) - set(post)))
+        return None
+    n_doc = int(g.get("n_doc") or 0)
+    if n_doc <= 0 or len(g.get("docs") or []) != n_doc:
+        logger.warning("[wordgraph] 闸索引的文档集不完整，弃权闸停用")
+        return None
+    # idf 现场还原：与 rag/search.py 同一条公式（那边 chunk 级，这边文章级）。
+    # 只存 df 不存 idf —— 调公式时两个模块改一处。
+    idf = {w: math.log(1.0 + (n_doc - len(v) + 0.5) / (len(v) + 0.5))
+           for w, v in post.items()}
+    return {"k1": float(g.get("k1") or 1.2), "b": float(g.get("b") or 0.75),
+            "n_doc": n_doc, "avgdl": float(g.get("avgdl") or 1.0),
+            "dl": [d["dl"] for d in g["docs"]], "postings": post, "idf": idf}
+
+
+# ---------------------------------------------------------------- 弃权闸（词法）
+# 为什么需要它：向量侧对**任何**输入都返回 top-8。实测（341 词产物，18 条探针）
+# 域内查询 top1 落在 [0.363, 0.805]、域外（图里根本没有这些词）落在 [0.228, 0.364]
+# —— 两带**重叠**，没有可用的绝对阈值。词法侧天然能给 0 分，于是用 BM25 判零当闸。
+# 副作用是好的：闸在 embedding **之前**跑，域外查询一次 API 调用都不花。
+
+def match_terms(q: str, vocab: dict[str, str]) -> list[str]:
+    """查询串 → 图谱词表里的词（按出现顺序去重）。
+
+    **不引分词器**（生产 venv 没有 jieba），改用"词表即词典"的最长匹配：
+    中文段从**词表里最长的中文词**往下试到 2 字、ASCII 段整词 + 前缀容忍
+    （短的那个 ≥3 字，防 "in" 命中一片）。规则与前端本地兜底路的 `locate.ts`
+    **逐条对齐**——两条路对"认不认得这句话"必须给同一个答案，否则会出现
+    "服务挂了反而找得到"的老毛病（20260916 大小写那次就是两条路判定不一致）。
+
+    ⚠ 上界必须**从词表算**（`max_cjk`），不能写死 4。写死 4 的那版实测漏掉
+    `兼容性问题`（5 字）——连它自己当查询都认不出自己。词表每次重建都会变长，
+    这个洞会自己长回来。"""
+    s = (q or "").lower()
+    out: list[str] = []
+    seen: set[str] = set()
+    max_cjk = max((len(w) for w in vocab if w and not w.isascii()), default=2)
+
+    def push(w: str) -> None:
+        if w not in seen:
+            seen.add(w)
+            out.append(w)
+
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c.isascii() and (c.isalnum() or c == "_"):
+            j = i
+            while j < n and s[j].isascii() and (s[j].isalnum() or s[j] == "_"):
+                j += 1
+            tok = s[i:j]
+            i = j
+            if len(tok) < 2:
+                continue
+            if tok in vocab:
+                push(vocab[tok])
+                continue
+            for k, w in vocab.items():
+                if len(k) < 3 or len(tok) < 3:
+                    continue
+                if k.startswith(tok) or tok.startswith(k):
+                    push(w)
+            continue
+        # 中文段：最长匹配（max_cjk → 2），命中即跳过命中长度，避免重叠命中
+        matched = 0
+        for length in range(max_cjk, 1, -1):
+            if i + length > n:
+                continue
+            sub = s[i:i + length]
+            if not all("一" <= ch <= "鿿" for ch in sub):
+                continue
+            if sub in vocab:
+                push(vocab[sub])
+                matched = length
+                break
+        i += matched or 1
+    return out
+
+
+def _bm25(terms: list[str], gate: dict) -> float:
+    """文章级 BM25，取**最高分**那篇。terms 非空 ⇒ 分数必然 >0（闸索引只收
+    存在于某篇文章的词），所以判零判的是"有没有词命中"，不是"分高分低"。"""
+    n_doc = gate["n_doc"]
+    avgdl = max(gate["avgdl"], 1e-9)
+    k1, b = gate["k1"], gate["b"]
+    scores = [0.0] * n_doc
+    for t in terms:
+        w = gate["idf"].get(t, 0.0)
+        # .get 而非 []：_load_gate 已保证 postings ⊇ 词表 ⊇ terms，正常路径下不会缺；
+        # 但 idf 那边用的是 .get，两处形状一致，免得以后换个调用方就 KeyError。
+        for di, tf in gate["postings"].get(t, ()):
+            dl = max(gate["dl"][di], 1)
+            scores[di] += w * (tf * (k1 + 1.0)) / (tf + k1 * (1.0 - b + b * dl / avgdl))
+    return max(scores) if scores else 0.0
 
 
 def status() -> dict:
@@ -199,6 +322,14 @@ def query_words(q: str, top_k: int = TOP_K_DEFAULT) -> dict:
     调用方（Rust）拿到的 ok=false 就是「前端退回本地关键词匹配」的信号。
 
     返回 {ok, reason?, build_id, words:[{w,s}], ms}
+
+    reason 有两种截然不同的语义，**调用方必须分开处理**（20260916d 加闸时定的）：
+      · `no_match` —— 弃权闸判定"图里没有这句话的任何词"。这是**结论**不是故障：
+        前端应当如实显示"没找到相关的词"，**不要**退回本地兜底（本地兜底对零命中
+        的输入还有一层字符 bigram 兜底，它保证"任何输入都有落点"——而那个落点
+        正是这条闸要消灭的"一本正经的胡话"）。
+      · 其他（empty_query / artifact_missing / embed_failed / dim_mismatch）
+        —— 服务侧问题，前端照旧降级到本地关键词匹配。
     """
     t0 = time.perf_counter()
     text = (q or "").strip()[:QUERY_MAX]
@@ -212,6 +343,19 @@ def query_words(q: str, top_k: int = TOP_K_DEFAULT) -> dict:
     words = _cache["words"]
     vecs = _cache["vecs"]
 
+    # 弃权闸在最前面：图里根本不认这句话就直接如实说没有，既不给访客看
+    # 一本正经的胡话（向量侧对任何输入都会返回 8 个近邻），也省掉一次 embedding。
+    gate = _cache.get("gate")
+    terms: list[str] = []
+    if gate:
+        vocab = {w.lower(): w for w in words}
+        terms = match_terms(text, vocab)
+        if not terms:
+            ms = int((time.perf_counter() - t0) * 1000)
+            logger.info("[wordgraph] q=%.40s → 弃权（词表里没有任何一个词出现在查询里）%dms",
+                        text, ms)
+            return {"ok": False, "reason": "no_match", "words": [], "ms": ms}
+
     raw = _embed_one(text)
     if raw is None:
         return {"ok": False, "reason": "embed_failed", "words": []}
@@ -224,6 +368,10 @@ def query_words(q: str, top_k: int = TOP_K_DEFAULT) -> dict:
     order = sorted(range(count), key=lambda i: sims[i], reverse=True)[:k]
     hits = [{"w": words[i], "s": round(sims[i], 4)} for i in order]
     ms = int((time.perf_counter() - t0) * 1000)
-    logger.info("[wordgraph] q=%.40s → %d 词（top=%.40s）%dms",
-                text, len(hits), hits[0]["w"] if hits else "-", ms)
+    # 闸的分数只进日志、不进判据（判据是"terms 非空"，见模块顶部说明）。
+    # 留着是为了以后要调阈值时有实测分布可依，而不是拍一个数。
+    gate_txt = (f" 闸 {_bm25(terms, gate):.2f}/{','.join(terms[:4])}"
+                if gate and terms else " 闸 关")
+    logger.info("[wordgraph] q=%.40s → %d 词（top=%.40s）%s %dms",
+                text, len(hits), hits[0]["w"] if hits else "-", gate_txt, ms)
     return {"ok": True, "build_id": _cache["build_id"], "words": hits, "ms": ms}

@@ -39,6 +39,9 @@ jobs:
       - name: 技能注册表/plan 契约单元测试（秒级，纯函数）
         run: uv run python test_skills.py
 
+      - name: 词图弃权闸单元测试（秒级，纯函数；无产物时产物类用例自动跳过）
+        run: uv run python test_wordgraph_gate.py
+
       - name: Golden 评测集（正确性门禁，仅手动触发）
         if: github.event_name == 'workflow_dispatch' && inputs.run_golden
         env:
