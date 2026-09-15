@@ -18,6 +18,7 @@ eval/recall_eval.py 直接 import 本模块的 search()——评测即线上实�
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
 import threading
@@ -25,10 +26,16 @@ import time
 
 from tools.base import _client
 
+logger = logging.getLogger(__name__)
+
 CJK = re.compile(r"[一-鿿]")
 GRAM = re.compile(r"[一-鿿]+|[a-zA-Z0-9_\.]+")
 
 REFRESH_TTL = 600.0  # 10 分钟懒刷新
+
+# 语料拉取的翻页参数。见 _fetch_corpus 的说明：不传 page_size 会吃服务端默认 6 篇。
+CORPUS_PAGE_SIZE = 50
+CORPUS_PAGE_MAX = 40  # 兜底上限（50×40 = 2000 篇），防服务端异常时无限翻页
 
 # 语料源：Rust 公开接口（与前台可见性严格一致，agent 保持无 DB 依赖架构）
 #  - notes:    is_public=1 AND status!='draft'（前台可读的文章）
@@ -145,12 +152,34 @@ class RagIndex:
         from tools.base import _get  # _get 已含 API_BASE 前缀 + code==200 校验
 
         docs: list[dict] = []
-        # 列表接口不返回正文（noteContent 为空），须逐篇拉全文
-        for it in _get("/notes"):
-            detail = _get(f"/notes/{it.get('noteKey')}") or {}
-            docs.append({"type": "note", "id": it.get("noteKey"),
-                         "title": it.get("noteTitle") or "",
-                         "content": detail.get("noteContent") or ""})
+        # 列表接口不返回正文（noteContent 为空），须逐篇拉全文。
+        # ⚠️ 必须显式翻页：`/notes` 不传 page_size 时吃服务端默认 6
+        # （src/routes/notes.rs `page_size.unwrap_or(6)`，page 默认 1）。20260830 起语料
+        # 实际只覆盖 6 篇——收了垃圾文 `13 TEST8`，却漏掉真文章
+        # `12 ESP32-S3 OTA 问题与解决记录`（同为公开文章，建图脚本走 pageSize=1000 不受影响）。
+        # 不硬编一个大 page_size：服务端 clamp(1,1000)，文章数早晚会越过它；
+        # 翻到"不足一页"为止，顺带用 seen 去重（防服务端排序抖动导致跨页重复）。
+        page = 1
+        seen: set = set()
+        while page <= CORPUS_PAGE_MAX:
+            batch = _get(f"/notes?page={page}&page_size={CORPUS_PAGE_SIZE}")
+            if not isinstance(batch, list) or not batch:
+                break
+            for it in batch:
+                key = it.get("noteKey")
+                if key is None or key in seen:
+                    continue
+                seen.add(key)
+                detail = _get(f"/notes/{key}") or {}
+                docs.append({"type": "note", "id": key,
+                             "title": it.get("noteTitle") or "",
+                             "content": detail.get("noteContent") or ""})
+            if len(batch) < CORPUS_PAGE_SIZE:
+                break
+            page += 1
+        if len(seen) >= CORPUS_PAGE_SIZE * CORPUS_PAGE_MAX:
+            logger.warning("语料翻页到达上限 %d 页，可能仍有未收录文章", CORPUS_PAGE_MAX)
+        logger.info("语料构建：%d 篇（翻页 %d 页）", len(docs), page)
         # 20260901：语料只收文章（说说/留言/公告移除——检索池净化，见头部注释）
         return docs
 
