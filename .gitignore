@@ -32,6 +32,9 @@ eval/report/*
 eval/data/
 eval/cache/
 
+# 图谱查询产物（vectors.f32 1.4MB，由 scripts/build_word_graph.py 可重生成）
+data/word_graph/
+
 # 改代码前的本地备份（如 graph.py 拆分前的全量副本；内容等价于 git 历史，不进库）
 agent/*.bak_*
 *.bak_*
