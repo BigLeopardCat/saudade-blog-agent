@@ -19,8 +19,8 @@ from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field, field_validator
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 
 from agent import create_agent
@@ -68,25 +68,78 @@ RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "30"))
 # 兜底文本——否则前端静默无感知（Rust 空回复不存历史、UI 无任何反馈，即"卡死"）
 _RECOVERY_SENTENCE = "喵呜……主人抱歉，泠月喵刚才脑袋卡壳了，没有生成出回复，请主人再问一遍喵～ 🐾"
 
+# ── 输入限额与并发闸（20260916 加固）──
+# 输入全部来自 Rust 转发（只绑回环，见 docs/security-boundary.md），所以限额防的不是
+# 陌生人，而是"前端出 bug / 被塞畸形请求 / 本机进程乱调"把 agent 拖垮：
+#   · starlette **默认不限制 body 大小**，直接读进内存——畸形大包先吃满 3.7GB 机器；
+#   · 超长字段会灌进 prompt，白烧 token，还可能撑爆 LLM 侧上下文；
+#   · LLM 调用是最贵的资源（单次最长 180s），无闸时并发涌进来只会一起排队到超时。
+MAX_BODY_BYTES = int(os.environ.get("AGENT_MAX_BODY_BYTES", str(12 * 1024 * 1024)))
+MAX_MESSAGE_CHARS = 4000
+MAX_HISTORY_ITEMS = 60
+MAX_IMAGES = 6
+MAX_IMAGE_CHARS = 1_600_000     # ≈1.17MB 二进制（前端压缩后单图 ≤1MB，留余量）
+MAX_TEXT_FIELD_CHARS = 8000     # summary / executions
+MAX_SHORT_FIELD_CHARS = 500     # current_url / page_title
+MAX_CONCURRENT_STREAMS = int(os.environ.get("AGENT_MAX_CONCURRENT", "8"))
+STREAM_QUEUE_WAIT = 3.0         # 秒；排队超过这个时间就如实 503，不让请求无声堆着
+
+# 并发闸（每 worker 一个；uvicorn --workers 2 ⇒ 全局 2×MAX_CONCURRENT_STREAMS）。
+# Python 3.10+ 起 asyncio.Semaphore() 不在构造时绑事件循环，模块级创建是安全的。
+_stream_slots = asyncio.Semaphore(MAX_CONCURRENT_STREAMS)
+
+
+async def _try_acquire_slot() -> bool:
+    """拿并发槽位；排队超过 STREAM_QUEUE_WAIT 秒返回 False（调用方回 503，别无声排队）。"""
+    try:
+        await asyncio.wait_for(_stream_slots.acquire(), timeout=STREAM_QUEUE_WAIT)
+        return True
+    except asyncio.TimeoutError:
+        logger.warning("并发闸已满（%d 槽），排队 %.1fs 未拿到 → 503",
+                       MAX_CONCURRENT_STREAMS, STREAM_QUEUE_WAIT)
+        return False
+
+
+def _release_slot() -> None:
+    try:
+        _stream_slots.release()
+    except ValueError:      # 多还一次（理论上不会）：记日志别把收尾炸掉
+        logger.warning("并发槽位重复释放（计数错乱）")
+
 class ChatRequest(BaseModel):
-    message: str
-    current_url: str = ""
-    page_title: str = ""
+    message: str = Field(max_length=MAX_MESSAGE_CHARS)
+    current_url: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
+    page_title: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     user_id: int = 0
-    history: list[dict] = []
-    summary: str = ""
+    history: list[dict] = Field(default_factory=list, max_length=MAX_HISTORY_ITEMS)
+    summary: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     needs_summary: bool = False
     # 前端上报的页面特效实时状态（如 "sakura,rain" 或 ""），供 agent 感知真实开关状态
-    current_effects: str = ""
+    current_effects: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     # 前端上报的夜间模式实时状态（"on"/"off"），供 agent 感知真实开关状态（与特效同理）
-    current_darkmode: str = ""
+    current_darkmode: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     # 多模态图片输入：前端压缩后的 dataURL 数组（20260828 单图 → 20260828s 多图，
     # 最多 6 张、每张 ≤1MB；qwen3.8-flash 原生支持图像）。兼容旧版单串（golden 直连）
     image: str | list[str] = ""
     # 跨轮执行记忆（20260904 C3）：本会话最近执行的 checker 验收回执渲染文本
     # （Rust 侧从 execution_log 读最近 8 条渲染成 "· 屏幕显示「…」" 式行）——
     # 下轮质疑"你刚才屏上写了什么"时据实回答，不重发不编造
-    executions: str = ""
+    executions: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
+
+    @field_validator("image")
+    @classmethod
+    def _check_images(cls, v):
+        """图片限额：**条数**与**单张体积**。dataURL 是 base64，直接进 prompt，
+        没有上限时一张几十 MB 的图能把请求体和上下文一起撑爆（20260916 加固）。
+        形状（单串 / 数组）保持原样不动——兼容 golden 直连的旧单串写法。"""
+        items = [v] if isinstance(v, str) else list(v)
+        items = [x for x in items if x]
+        if len(items) > MAX_IMAGES:
+            raise ValueError(f"最多 {MAX_IMAGES} 张图片")
+        for x in items:
+            if len(x) > MAX_IMAGE_CHARS:
+                raise ValueError(f"单张图片过大（{len(x)} > {MAX_IMAGE_CHARS} 字符）")
+        return v
 
 
 class ChatResponse(BaseModel):
@@ -136,6 +189,19 @@ async def trace_id_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers[_TRACE_ID_HEADER] = trace_id
     return response
+
+
+# 请求体积上限：Content-Length 直接拦（在解析 body 之前，见上面常量区的注释）。
+# ⚠️ 分块传输（无 Content-Length）不走这条——那条路只能靠字段级限额兜
+# （见 ChatRequest 的 Field / _check_images），这一点如实写在这里不假装全覆盖。
+@app.middleware("http")
+async def body_limit_middleware(request: Request, call_next):
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > MAX_BODY_BYTES:
+        logger.warning("请求体过大：%s bytes > %d bytes", cl, MAX_BODY_BYTES)
+        return JSONResponse({"error": "payload_too_large", "limit": MAX_BODY_BYTES},
+                            status_code=413)
+    return await call_next(request)
 
 
 def _build_messages(req: ChatRequest) -> list:
@@ -645,17 +711,27 @@ async def chat_stream(req: ChatRequest, request: Request):
                 req.user_id, (req.message or "")[:40], req.needs_summary)
     if _agent is None:
         raise HTTPException(503, "Agent not initialised")
-
-    messages = _build_messages(req)
-    # 每请求独立线程：避免 MemorySaver 线程状态随长对话无限累积（见 /chat 注释）
-    thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
-    # trace 落盘（roadmap 步骤 2）：请求级 recorder 挂 contextvar——producer
-    # 经 _submit_with_context 的 copy_context 继承，图节点内 record 命中；
-    # 收尾由 event_stream finally 统一 finish_trace（见其注释，超时场景也要落盘）
-    start_trace(get_trace_id(), req.user_id, thread_id, {
-        "message": (req.message or "")[:200], "has_image": bool(req.image),
-        "needs_summary": bool(req.needs_summary), "history_len": len(req.history),
-    })
+    # 并发闸（20260916 加固）：LLM 流是最贵的资源（单次最长 180s），无闸时并发涌进来
+    # 只会一起排队到超时。**只加在生产路径 /chat/stream 上**——`/chat` 是非流式直连
+    # 入口（评测脚本/golden 用，线上 rust.log 实测零访问），不占这条预算。
+    # 释放一律由 event_stream 的 finally 负责（正常收尾/断连取消/超时/异常都走到）；
+    # 下面这段 try 只兜"响应还没交出去就抛了"这种极小窗口，免得漏一个槽位把闸卡死。
+    if not await _try_acquire_slot():
+        raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
+    try:
+        messages = _build_messages(req)
+        # 每请求独立线程：避免 MemorySaver 线程状态随长对话无限累积（见 /chat 注释）
+        thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
+        # trace 落盘（roadmap 步骤 2）：请求级 recorder 挂 contextvar——producer
+        # 经 _submit_with_context 的 copy_context 继承，图节点内 record 命中；
+        # 收尾由 event_stream finally 统一 finish_trace（见其注释，超时场景也要落盘）
+        start_trace(get_trace_id(), req.user_id, thread_id, {
+            "message": (req.message or "")[:200], "has_image": bool(req.image),
+            "needs_summary": bool(req.needs_summary), "history_len": len(req.history),
+        })
+    except Exception:
+        _release_slot()
+        raise
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
@@ -830,6 +906,9 @@ async def chat_stream(req: ChatRequest, request: Request):
                 end_reason = "client_closed"
             logger.info("[stream] end reason=%s duration=%.1fs frames=%d",
                         end_reason, loop.time() - started, frames)
+            # 并发槽位归还：**所有退出路径都经过这里**（正常收尾/断连取消/空闲与总超时/
+            # 异常/客户端提前关闭），与 chat_stream 开头的 _try_acquire_slot 成对。
+            _release_slot()
             # trace 落盘：所有退出路径统一收尾（超时场景 producer 还挂着，
             # 落中途 trace——事件序列最后一条即挂点，如 model llm_start 后无
             # llm_done 就是 LLM API 侧慢；dumped 后线程晚到的事件丢弃不补写）
@@ -911,7 +990,9 @@ def review_message(req: ReviewRequest):
 
 class GraphQueryRequest(BaseModel):
     """图谱向量检索请求。q = 访客在展示柜里输入的查询串。"""
-    q: str = ""
+    # 前端本来就截到 64 字符（locate.ts QUERY_MAX），这里留一倍余量做上限——
+    # 超长串会白烧一次 embedding 调用（20260916 加固）。
+    q: str = Field(default="", max_length=128)
 
 
 @app.post("/graph/query")
