@@ -39,6 +39,9 @@ jobs:
       - name: 技能注册表/plan 契约单元测试（秒级，纯函数）
         run: uv run python test_skills.py
 
+      - name: 服务加固单元测试（TLS 校验/输入限额/请求体积/并发闸，秒级，无网络）
+        run: uv run python test_hardening.py
+
       - name: Golden 评测集（正确性门禁，仅手动触发）
         if: github.event_name == 'workflow_dispatch' && inputs.run_golden
         env:
