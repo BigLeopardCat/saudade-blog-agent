@@ -1081,20 +1081,28 @@ def _create_display_text(user_msg: str, page_ctx: str) -> str:
 _VERDICT_PASS, _VERDICT_BLOCK = "PASS", "BLOCK"
 
 
-def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str) -> tuple[str, str]:
+def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
+                kind: str = "ok") -> tuple[str, str]:
     """checker 确定性验收（20260904，execute 循环内逐 spec 调用，无 LLM）。
 
-    输入 = spec 实际调用值（args 是文案注入后值）+ 工具原始返回。只做回执形态
-    校验（错误帧/空结果/命令帧形状），不做文本语义判断——语义由 planner 从帧
-    里自己读（错误修正重试是 planner rule5 的活）。
+    输入 = spec 实际调用值（args 是文案注入后值）+ 工具原始返回 + 返回值的 kind
+    （20260916 起：ok / empty / unavailable，见 tools/base.py 的 ToolResult）。
+    只做回执形态校验（错误帧/空结果/服务不可用/命令帧形状），不做文本语义判断——
+    语义由 planner 从帧里自己读（错误修正重试是 planner rule5 的活）。
     PASS → 该执行成为系统确认事实（receipts，跨轮执行记忆原料）；
     BLOCK → 该执行不进回执（错误结果不是事实），进 blocked 交 planner/reflector。
+
+    kind=unavailable 单独判 BLOCK：**"服务挂了"不是事实**，不能进跨轮执行记忆
+    （否则下轮质疑"你刚才查到了什么"时，agent 会照着一条故障回执编）。kind=empty
+    仍走 PASS——"查到了，就是空的"本身是事实。
     """
     if name not in _TOOL_MAP:
         # 白名单结构上到不了 execute，防御保留（执行器不静默吞越权）
         return _VERDICT_BLOCK, "unknown_tool"
     if not args_ok:
         return _VERDICT_BLOCK, "args_parse"
+    if kind == "unavailable":
+        return _VERDICT_BLOCK, "unavailable"
     text = raw or ""
     if not text.strip():
         return _VERDICT_BLOCK, "empty_result"
@@ -1141,6 +1149,16 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     blocked: list = []                            # 只含本轮受阻项（路由/reflector 用）
     prev_seen = set(state.get("blocked_seen") or [])  # 本轮之前的受阻 spec 集
     for idx, spec in enumerate(specs):
+        if _stopped(config):
+            # 逐 spec 检查（20260916 补）：入口那一次只能拦住"整份清单还没开始执行"。
+            # 多写操作清单（如 [navigate_to, device_oled_display]）在中途断连时，剩下的
+            # 写操作会照单执行完——与本模块承诺的"写操作绝不发生在用户已离开之后"不符。
+            # 这里 break 而不是 raise：**已经执行完的 spec 的回执必须留下**（那是真发生
+            # 过的事实，raise 会把 receipts 一起丢掉，回执正是跨轮执行记忆的原料）。
+            # 未执行的 spec 也不进 blocked——planner 下一轮在入口就被取消检查拦下。
+            logger.info("[execute] cancelled mid-plan — 剩余 %d 个 spec 不执行（已处理 %d 个）",
+                        len(specs) - idx, idx)
+            break
         name = _tool_name(spec)
         args, args_ok = _tool_args(spec)
         tool = _TOOL_MAP.get(name)
@@ -1171,7 +1189,10 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # checker 确定性验收（20260904）：PASS → 回执（系统确认事实，跨轮执行
         # 记忆与 reflector 的原料）；BLOCK → 受阻项（不进回执——错误结果不是
         # 事实）。args 是文案注入后值（device_oled_display 回执须能呈现实际屏文）。
-        verdict, reason = _check_spec(name, args, args_ok, str(out), plan["skill"])
+        # kind：工具自己声明的"两类"（ok/empty/unavailable，见 tools/base.py 的
+        # ToolResult）。命令帧与 __ERROR__ 帧是纯字符串 → 默认 ok，由形态校验兜。
+        verdict, reason = _check_spec(name, args, args_ok, str(out), plan["skill"],
+                                      getattr(out, "kind", "ok"))
         if verdict == _VERDICT_PASS:
             rcpt = {"skill": plan["skill"], "tool": name,
                     "args": {k: str(v)[:200] for k, v in args.items()},
