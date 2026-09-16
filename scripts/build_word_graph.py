@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """文章向量空间知识图谱 · 离线建图脚本（20260915）
 
-做什么：公开文章 → jieba 抽词 → text-embedding-v4 向量化 → PCA 投影到三维球
+做什么：公开文章 → jieba 抽词 → text-embedding-v4 向量化 → **UMAP 三维布局**
         → 1024 维 kNN 连边 → 产出前端展示数据 + agent 查询用向量。
+        （20260917 起默认布局是 UMAP；`--layout semantic` 保留旧的 PCA+弹簧，
+          `--layout pca` 是纯 PCA。三者的离线 A/B 见 layout_umap 的注释。）
 
 产物（三份，见 docs/word-graph.md）：
   1. frontend/public/graph/graph-<sha1前12>.js    展示数据（export default {...}）
@@ -488,6 +490,71 @@ def project_3d(vecs: np.ndarray, importance: np.ndarray, alpha: float, gamma: fl
 
 # ---------------------------------------------------------------- 布局
 
+def _finalize_layout(pos: np.ndarray, clip: float) -> np.ndarray:
+    """三维布局的统一收尾：居中 → 98 分位归一 → 夹取。
+
+    **两种布局必须共用这一段**：相机（`cameraFor`/`HOME_CAM`/`DIST_MIN`）与视锥的
+    既有假设都建立在"坐标落在这个尺度内"。比例尺一变，看的是布局差异还是尺度差异
+    就分不清了（离线 A/B 也是靠共用它才比得准）。
+    """
+    pos = np.asarray(pos, dtype=np.float64)
+    pos = pos - pos.mean(axis=0)
+    scale = float(np.percentile(np.linalg.norm(pos, axis=1), 98)) or 1.0
+    return np.clip(pos / scale, -clip, clip)
+
+
+def layout_umap(sim: np.ndarray, clip: float, n_neighbors: int = 15,
+                min_dist: float = 0.2, seed: int = 42) -> np.ndarray:
+    """UMAP 三维（McInnes 2018）——**默认布局**（20260917 换的）。
+
+    为什么换（离线 A/B，同语料/同 embedding/同 693 条边，只换布局；测法见
+    `scripts/layout_ab.py`，指标口径与质量门完全一致）：
+
+        布局                     保真度 10-NN   rho(线长~相似度)
+        PCA-3D + 语义弹簧（旧默认）    0.255        −0.383
+        **UMAP-3D（本函数）**         **0.433**    −0.278
+        Isomap（kNN k=10/15/30）     0.21/0.21/0.18  −0.26/−0.24/−0.21
+        Isomap（跑在稀疏边集上）       0.064        −0.375
+        SMACOF（只在边集上做应力）     0.027 ≈ 随机   **−1.000**
+        （随机基线 0.025）
+
+    三条结论，别丢：
+    ① **保真度**（"点一个词、它周围的词是否真的相关"，也就是访客实际感受到的东西）
+       只有 UMAP 显著更好（+70%）；谱方法一支（PCA/Isomap/经典 MDS）都在 0.03~0.26
+       ——它们优化全局方差/距离，而 UMAP 优化局部邻域。
+    ② **旧默认之上再叠弹簧会吃掉大部分收益**（0.433 → 0.25~0.28）：弹簧只用 693 条边
+       （占全部点对 0.87%）去拽 400 个点，覆盖掉 UMAP 学到的结构。所以这里**不叠弹簧**。
+    ③ **rho 不再是门**（见 main 的 gate 注释）：SMACOF 只优化那 693 条边就能做到
+       rho = −1.000 而保真度塌到随机 ⇒ 它可被"游戏"，且优化方向与访客感受相反。
+
+    min_dist 扫描（同一份语料；"重叠点" = 最近邻距离 < 0.02，也就是会视觉叠在一起）：
+
+        min_dist   保真度 k=5/10/20      最近邻距离中位   重叠点   全局点距中位
+        0.05       0.435/0.433/0.426    0.033          88      0.618
+        **0.2**    0.423/0.426/0.432    0.061           8      0.777
+        0.4        0.382/0.412/0.420    0.075           2      0.790
+
+    ⇒ 默认取 **0.2**：保真度与 0.05 基本无差（0.426 vs 0.433），重叠点从 88 降到 8、
+    整体铺得更开。0.05 那种"点为邻域牺牲"的取向在这张图上会挤成一坨（22% 的点与邻居
+    距离 <0.02），观感就是"糊"；0.4 更开但保真度开始掉（0.412）。要更开可以
+    `--umap-min-dist 0.4`，代价是约 3% 保真度。
+
+    依赖：umap-learn（连带 numba/llvmlite/scipy/sklearn ≈ 470MB）。**只在建图侧**——
+    查询侧只用 1024 维余弦 + 节点坐标，永远不需要它。
+    随机性：固定 `random_state=seed` ⇒ 同输入同产物（与 layout_semantic 同样可复现）。
+    """
+    try:
+        import umap
+    except ImportError as e:            # 依赖缺失要给出可执行的下一步，别只抛 ImportError
+        raise SystemExit(
+            "✗ 需要 umap-learn（仅建图侧依赖，查询侧不用）：\n"
+            "    python3 -m pip install --user umap-learn\n"
+            "  或改用 --layout semantic（PCA 初值 + 语义弹簧，无需额外依赖）") from e
+    emb = umap.UMAP(n_components=3, n_neighbors=n_neighbors, min_dist=min_dist,
+                    metric="cosine", random_state=seed).fit_transform(sim)
+    return _finalize_layout(emb, clip)
+
+
 def layout_semantic(pca_p: np.ndarray, edges: list[list], iters: int = 400,
                     l_min: float = 0.05, l_max: float = 0.25, k_spring: float = 0.35,
                     k_rep: float = 0.02, r_rep: float = 0.36,
@@ -538,9 +605,7 @@ def layout_semantic(pca_p: np.ndarray, edges: list[list], iters: int = 400,
         disp += k_rep * np.einsum("ij,ijk->ik", w, dr)
         disp += anchor * (np.asarray(pca_p) - pos)          # 弱锚定：别漂离向量空间初值
         pos += np.clip(disp, -0.05, 0.05)
-    pos -= pos.mean(axis=0)
-    scale = float(np.percentile(np.linalg.norm(pos, axis=1), 98)) or 1.0
-    return np.clip(pos / scale, -clip, clip)
+    return _finalize_layout(pos, clip)
 
 
 # ---------------------------------------------------------------- 连边
@@ -735,7 +800,11 @@ def main() -> None:
     # 卡 0.45 会让半数节点一条语义边都没有、只能靠补边撑门面。0.30 处孤立率 6%。
     ap.add_argument("--knn-tau", type=float, default=0.30, help="语义边的余弦下限")
     ap.add_argument("--edge-max-len", type=float, default=1.0, help="PCA 布局下剔除跨屏长线（语义布局不用）")
-    ap.add_argument("--layout", choices=("semantic", "pca"), default="semantic",
+    ap.add_argument("--umap-neighbors", type=int, default=15, help="UMAP n_neighbors（A/B 实测 15 优于 30）")
+    ap.add_argument("--umap-min-dist", type=float, default=0.2,
+                    help="UMAP min_dist：越小邻域越紧、点越容易叠在一起（见 layout_umap 的扫描表）")
+    ap.add_argument("--umap-seed", type=int, default=42, help="UMAP 随机种子（固定 ⇒ 同输入同产物）")
+    ap.add_argument("--layout", choices=("umap", "semantic", "pca"), default="umap",
                     help="semantic=PCA 初值 + 语义弹簧松弛（默认，线长才携带语义）；pca=纯线性投影")
     ap.add_argument("--layout-iters", type=int, default=400)
     ap.add_argument("--out-frontend", default=str(REPO_PARENT / "frontend" / "public"))
@@ -790,7 +859,7 @@ def main() -> None:
     vecs = embed_words(words, key, base, args.refresh)
     log(f"  向量就绪 {vecs.shape}，耗时 {time.time() - t:.1f}s")
 
-    log("④ PCA 投影到三维")
+    log("④ PCA 投影（UMAP 布局下只用于连边/查询变换；三维坐标由 UMAP 出）")
     importance = np.asarray([meta["importance"].get(w, 0.0) for w in words])
     p, pmeta, transform = project_3d(vecs, importance, args.alpha, args.gamma,
                                      args.clip, args.strip_top)
@@ -811,7 +880,14 @@ def main() -> None:
         f" / 孤立 {len(words) - len(deg)}")
 
     lmeta = {"layout": args.layout}
-    if args.layout == "semantic":
+    if args.layout == "umap":
+        log(f"⑥ UMAP 三维（n_neighbors={args.umap_neighbors} / min_dist={args.umap_min_dist}"
+            f" / seed={args.umap_seed}）")
+        p = layout_umap(sim_vecs, args.clip, args.umap_neighbors, args.umap_min_dist,
+                        args.umap_seed)
+        lmeta.update({"umap_neighbors": args.umap_neighbors,
+                      "umap_min_dist": args.umap_min_dist, "umap_seed": args.umap_seed})
+    elif args.layout == "semantic":
         log(f"⑥ 语义弹簧松弛（PCA 初值 + {args.layout_iters} 次迭代）")
         p = layout_semantic(p, edges, iters=args.layout_iters, clip=args.clip)
         lmeta["layout_iters"] = args.layout_iters
@@ -823,17 +899,20 @@ def main() -> None:
     # 方向不能搞反：这里算的是 spearman(线长, 相似度)，「越相似线越短」⇒ **负值才正确**。
     # （20260915 踩过：写成 spearman(-len, sim) 再按「应为负」读，会把结论整个读反。）
     rho = spearman(elen, sims)
-    log(f"  近邻保真度(视图 10-NN vs 处理空间 10-NN) = {fid:.3f}"
+    fid_k = {k: fidelity(sim_vecs, p, kk=k) for k in (5, 10, 20)}
+    log(f"  近邻保真度 k=5/10/20 = {fid_k[5]:.3f} / {fid_k[10]:.3f} / {fid_k[20]:.3f}"
         f"（随机基线 {10 / max(len(words) - 1, 1):.3f}）")
     log(f"  参考口径：vs 原始 embedding 10-NN = {fid_raw:.3f}")
-    log(f"  线长-相似度秩相关 = {rho:.3f}（负=正确：越相似线越短；纯 PCA 布局在本语料只有 −0.07 上下）")
+    n_pair = len(words) * (len(words) - 1)
+    log(f"  线长-相似度秩相关 = {rho:.3f}（**仅供展示参考、不是门**：它只覆盖 {len(edges)} 条边"
+        f"（占全部点对 {2 * len(edges) / max(n_pair, 1):.1%}），而 SMACOF 只优化这{len(edges)}条边"
+        f"就能把它做到 −1.000、保真度塌到随机 ⇒ 可被游戏，且优化方向与「附近是否相关」相反）")
     if not args.force:
         bad = []
-        if fid < 0.15:
-            bad.append(f"近邻保真度 {fid:.3f} 低于 0.15（视图的近邻结构已失真；"
-                       f"纯 PCA 基线 ≈0.19，跑 --layout pca 可复核）")
-        if args.layout == "semantic" and rho > -0.40:
-            bad.append(f"线长-相似度秩相关 {rho:.3f} 未达 −0.40（弹簧没收敛，线长不反映语义）")
+        if fid < 0.30:
+            bad.append(f"近邻保真度 {fid:.3f} 低于 0.30（视图的近邻结构已失真；"
+                       f"当前默认 UMAP 在本语料实测 0.433，旧的 PCA+弹簧是 0.255 —— "
+                       f"低于 0.30 说明布局或语料出了问题，别急着 --force）")
         if not 150 <= len(words) <= 600:
             bad.append(f"节点数 {len(words)} 不在 150~600")
         if bad:
@@ -860,6 +939,7 @@ def main() -> None:
         } for d in docs],
         "nodes": nodes, "edges": edges, "stats": {**pmeta, **emeta, **lmeta,
             "fidelity": round(fid, 4), "fidelity_raw": round(fid_raw, 4),
+            "fidelity_k": {f"k{k}": round(v, 4) for k, v in fid_k.items()},
             "len_sim_rho": round(rho, 4), "n_nodes": len(nodes)},
     }
     info = write_artifacts(payload, sim_vecs, words, transform, Path(args.out_frontend),
