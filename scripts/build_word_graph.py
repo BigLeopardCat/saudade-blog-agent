@@ -8,8 +8,6 @@
   1. frontend/public/graph/graph-<sha1前12>.js    展示数据（export default {...}）
   2. frontend/public/graph/manifest.json          指针（前端靠它发现带 hash 的文件名）
   3. data/word_graph/{index.json,vectors.f32,...} agent 查询用（裸 float32，不进 git）
-     另加 bm25.json = 查询侧**弃权闸**索引（见 build_gate_index），由 `--gate-only`
-     单独补写：加闸/换闸不该逼着重跑建图换 build_id。
 
 为什么产物是 .js 而不是 .json：nginx 的「带 hash 长缓存」location 扩展名白名单是
 (js|css|woff2?|mp4|webm|jpe?g|png|webp)，**没有 json**——带 hash 的 .json 一样会落进
@@ -50,14 +48,6 @@ ALLOW_FILE = Path(__file__).resolve().parent / "graph_allow.txt"         # 绕�
 EMBED_MODEL = "text-embedding-v4"
 EMBED_DIM = 1024
 BATCH = 10                      # 百炼 text-embedding 单请求 input 上限 10 条
-
-# BM25 弃权闸（20260916d）。查询侧用它判断"图里到底认不认得这句话"：
-# 向量检索对任何输入都会返回 top-8（实测域外查询 top1 0.23~0.36，与域内下限
-# 0.363 **重叠** ⇒ 没有可用的绝对阈值），而词法 BM25 对同一个查询天然给 0 分。
-# 参数取教科书默认（k1=1.2 / b=0.75），与 rag/search.py 的 idf 同形不同用：
-# 那边是 chunk 级 2/3-gram 检索，这边是文章级、词粒度、只用来判零。
-GATE_K1 = 1.2
-GATE_B = 0.75
 
 # 垃圾文章（近乎空的测试文，20260915 实测正文 0/8/122 字）
 EXCLUDE_IDS_DEFAULT = {9, 10, 11}
@@ -170,6 +160,22 @@ def fetch_articles(api_base: str) -> list[dict]:
     return arts
 
 
+# 公式段：块级 $$…$$ 与行内 $…$（行内不跨行，防止正文里一个孤立的 $ 一路吞到下一个 $）
+MATH_SPAN_RE = re.compile(r"\$\$.*?\$\$|\$[^$\n]{1,600}?\$", re.S)
+
+
+def _strip_math_macros(m: re.Match) -> str:
+    """把公式里的 LaTeX 控制序列（``\\mathbf``/``\\qquad``/``\\text``…）替换成空格。
+
+    它们是**排版记号不是词**，但 jieba 不认：`\\mathbf` 在文章向量空间图谱那篇里
+    出现 66 次，词频高到足以霸占该篇配额（那一篇 75 个词里约 1/3 是这种记号），
+    出图后 `mathbf`/`qquad` 就会变成节点。**只动 `$…$` 内部**：正文讲正则时的
+    `\\n`（文章 19 有 14 次）与代码里的路径反斜杠不受影响。公式里的中文
+    （``\\text{选词侧}``）与标识符（``strip\\_top`` → `strip`/`top`）保留。
+    """
+    return re.sub(r"\\[A-Za-z]+", " ", m.group(0))
+
+
 def clean_markdown(md: str) -> str:
     """去 markdown 噪声但**保留代码块正文**——代码里的 rust/axum/tokio 正是好词。"""
     s = re.sub(r"^---\n.*?\n---\n", "", md, flags=re.S)          # front-matter
@@ -178,6 +184,7 @@ def clean_markdown(md: str) -> str:
     s = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", s)                   # 图片
     s = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", s)                # 链接留文字
     s = re.sub(r"https?://\S+", " ", s)                           # 裸 URL
+    s = MATH_SPAN_RE.sub(_strip_math_macros, s)                   # 公式里的 LaTeX 记号（见下）
     s = re.sub(r"^\s{0,3}#{1,6}\s*", "", s, flags=re.M)           # 标题号
     s = re.sub(r"^\s{0,3}>\s?", "", s, flags=re.M)                # 引用号
     s = re.sub(r"^\s{0,3}[-*+]\s+", "", s, flags=re.M)            # 列表号
@@ -664,72 +671,6 @@ def _artifact_body(payload: dict) -> str:
     return "export default " + blob + "\n"
 
 
-# ---------------------------------------------------------------- BM25 弃权闸索引
-
-def build_gate_index(words: list[str], docs: list[dict], meta: dict) -> dict:
-    """查询侧 BM25 弃权闸的索引（`data/word_graph/bm25.json`）。
-
-    文档 = 文章（`docs` 的顺序与产物 `articles` 一致），词 = **图谱词表里的词**。
-    只收图谱词表是这条闸的**全部要点**：它回答的是"图里有没有这个节点"，
-    放进来一个语料里有、图里没有的词，闸就通过了而图谱仍然答不出——等于没闸。
-
-    df / tf / dl 全部取自建图时已经算好的 `per_doc_tf`（jieba 抽词结果），
-    所以生成它**不需要重跑 embedding、不花一分钱**。
-
-    idf 不在这里算：只存 df（= len(postings)），查询侧用与 `rag/search.py`
-    同形的 `ln(1 + (n−df+0.5)/(df+0.5))` 现场还原——两个模块共用一条公式，
-    以后调 idf 只改一处。
-    """
-    tf_list = meta["per_doc_tf"]
-    dl = [int(sum(tf.values())) for tf in tf_list]
-    wset = set(words)
-    postings: dict[str, list] = {}
-    for di, tf in enumerate(tf_list):
-        for w, c in tf.items():
-            if w in wset:
-                postings.setdefault(w, []).append([di, int(c)])
-    missing = [w for w in words if w not in postings]
-    if missing:
-        # 词表里的词必然在某篇 tf>0（选词走的就是 tf·idf 排名）——真出现只能是
-        # fold/display 环节出了岔子。如实报出来，别让闸带着缺口上线。
-        log(f"  ⚠️ {len(missing)} 个词表词没有任何文章 tf，闸对它们会一律弃权："
-            f"{' '.join(missing[:12])}")
-    return {
-        "build_id": "",                    # 由 write_gate_index 填（见其 docstring）
-        "k1": GATE_K1, "b": GATE_B,
-        "n_doc": len(docs),
-        "avgdl": round(sum(dl) / max(len(dl), 1), 3),
-        "docs": [{"id": d["id"], "dl": dl[di]} for di, d in enumerate(docs)],
-        "postings": {w: postings[w] for w in sorted(postings)},
-    }
-
-
-def write_gate_index(gate: dict, build_id: str, out_agent: Path) -> None:
-    """落盘 bm25.json。**build_id 必须与同目录 index.json 一致**——查询侧拿它做
-    一致性校验，不一致就整条闸停用（fail-open）。这条校验是防"换了图、闸还停在
-    上一代词表上"：那种情况下闸会开始误伤真查询，比没有闸更糟。"""
-    gate["build_id"] = build_id
-    out_agent.mkdir(parents=True, exist_ok=True)
-    (out_agent / "bm25.json").write_text(
-        json.dumps(gate, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    log(f"  弃权闸索引：{len(gate['postings'])} 词 / {gate['n_doc']} 文档 / "
-        f"avgdl {gate['avgdl']:.0f} → {out_agent / 'bm25.json'}")
-
-
-def read_shipped(out_frontend: Path, out_agent: Path) -> tuple[str, list[str], list[int]]:
-    """读**已经在线上的那代产物**：agent 侧 index.json + 前端 manifest 指向的 graph-*.js。
-    返回 (build_id, words, article_ids)。`--gate-only` 靠它验证"我现在这份语料
-    与线上那代产物同源"，验证过了才敢把新算的 df 挂到那个 build_id 上。"""
-    idx = json.loads((out_agent / "index.json").read_text(encoding="utf-8"))
-    man = json.loads((out_frontend / "graph" / "manifest.json").read_text(encoding="utf-8"))
-    body = (out_frontend / "graph" / man["file"]).read_text(encoding="utf-8")
-    payload = json.loads(body[len("export default "):])
-    if payload.get("v") != idx.get("build_id") or man.get("v") != idx.get("build_id"):
-        sys.exit(f"✗ 产物三处 build_id 不一致（manifest {man.get('v')} / graph {payload.get('v')}"
-                 f" / index {idx.get('build_id')}）——先让线上产物自洽再来")
-    return idx["build_id"], idx["words"], [a["id"] for a in payload["articles"]]
-
-
 def write_artifacts(payload: dict, nodes: np.ndarray, words: list[str], transform: dict,
                     out_frontend: Path, out_agent: Path, dry: bool) -> dict:
     blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -802,9 +743,6 @@ def main() -> None:
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--force", action="store_true", help="质量门不过也照出产物")
     ap.add_argument("--dry-run", action="store_true", help="不算 embedding、不写产物，只看词表")
-    ap.add_argument("--gate-only", action="store_true",
-                    help="只重算 BM25 弃权闸索引（不 embedding、不换 build_id；"
-                         "要求当前语料与线上产物逐字同源，否则报错退出）")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -837,30 +775,6 @@ def main() -> None:
     (REPORT_DIR / f"{ts}_vocab.txt").write_text("\n".join(vocab_txt), encoding="utf-8")
     log(f"  词表报告 → eval/report/wordgraph/{ts}_vocab.txt")
     log("  全局 top40：" + " ".join(w for w, _ in meta["importance"].most_common(40)))
-
-    # 弃权闸索引在**词表定稿之后**就能算（只用到 per_doc_tf），不需要 embedding。
-    gate = build_gate_index(words, docs, meta)
-
-    # --gate-only：给**已经在线上的那一代产物**补一份 bm25.json。
-    # 存在的理由：加闸不该逼着重跑一次建图（重跑会换 build_id、换产物文件名、
-    # 顺带动前端的 manifest 与时间角标，风险与收益完全不成比例）。
-    # 代价是这份 df 来自"现在的语料"，所以必须**先证明语料没变**：词表逐字相同
-    # 且文章 id 集合相同，才把 df 挂到线上那个 build_id 上；对不上就如实报错退出。
-    if args.gate_only:
-        build_id, shipped_words, shipped_arts = read_shipped(Path(args.out_frontend),
-                                                            Path(args.out_agent))
-        if words != shipped_words:
-            only_new = sorted(set(words) - set(shipped_words))
-            only_old = sorted(set(shipped_words) - set(words))
-            sys.exit(f"✗ 语料已变，词表对不上线上产物（新增 {len(only_new)} 删去 {len(only_old)}；"
-                     f"例：+{only_new[:8]} −{only_old[:8]}）——请正常重跑建图，别给旧产物挂新统计")
-        if [d["id"] for d in docs] != shipped_arts:
-            sys.exit(f"✗ 文章集合/顺序与线上产物不同（现在 {len(docs)} 篇 vs 线上 "
-                     f"{len(shipped_arts)} 篇）——请正常重跑建图")
-        write_gate_index(gate, build_id, Path(args.out_agent))
-        log(f"✓ 闸索引已挂到线上 build_id {build_id}（词表 {len(words)} 词逐字一致、"
-            f"文章 {len(docs)} 篇同序）")
-        return
 
     if args.dry_run:
         log("--dry-run：不调 embedding、不写产物")
@@ -950,9 +864,6 @@ def main() -> None:
     }
     info = write_artifacts(payload, sim_vecs, words, transform, Path(args.out_frontend),
                            Path(args.out_agent), args.dry_run)
-    if not args.dry_run:
-        # 闸索引跟着这代产物的 build_id 走（见 write_gate_index 的一致性校验）
-        write_gate_index(gate, info["build_id"], Path(args.out_agent))
     report = {
         "ts": ts, "build_id": info["build_id"], "bytes": info["bytes"],
         "articles": [d["id"] for d in docs], "n_nodes": len(nodes), "n_edges": len(edges),
