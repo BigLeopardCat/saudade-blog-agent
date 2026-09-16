@@ -886,6 +886,15 @@ def test_checker():
     check("device 软失败（指令已下发）→ PASS 不升受阻链", v == P, (v, r))
     v, r = _check_spec("list_notes", {"page": 1, "page_size": 50}, True, "1. 标题\n2. 标题2", "content_query")
     check("数据工具正常返回 → PASS", v == P, (v, r))
+    # 结构性两类（20260916，tools/base.py 的 ToolResult.kind）：
+    # "服务挂了"不是事实 → BLOCK（不进跨轮执行记忆）；"查到了、就是空的"是事实 → PASS
+    v, r = _check_spec("list_devices", {}, True, "查询设备列表失败: Connection refused", "content_query",
+                       "unavailable")
+    check("kind=unavailable → BLOCK(unavailable)（故障不当事实）", v == B and r == "unavailable", (v, r))
+    v, r = _check_spec("list_devices", {}, True, "当前用户还没有绑定任何 IoT 设备", "content_query", "empty")
+    check("kind=empty → PASS（空结果本身是事实）", v == P and r == "ok", (v, r))
+    v, r = _check_spec("list_notes", {"page": 1}, True, "1. 标题", "content_query")
+    check("kind 缺省视为 ok（老调用点不受影响）", v == P, (v, r))
 
 
 def test_execute_receipts_and_route():

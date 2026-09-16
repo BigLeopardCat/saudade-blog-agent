@@ -26,6 +26,54 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://saudade.site/api/public"
 
+# ── 工具返回值的结构化"两类"（20260916 加固）──
+# 背景：工具失败时返回的是**人话字符串**，与正常内容同型；`_get` 更是把所有上游故障
+# 吞成 `[]`。"当前用户还没有绑定任何 IoT 设备"（空结果）与"查询设备列表失败:
+# Connection refused"（服务不可用）在 checker 眼里都是"非空文本" ⇒ 双双 PASS 并被记成
+# **系统确认事实**（receipt）——于是"服务挂了"被当成"查到了、就是空的"进了跨轮执行
+# 记忆，narrator 也可能照着念。
+#
+# 最小解：返回值**仍然是字符串**（人话，给 narrator 与用户看，下游所有 `str()`/
+# 切片/拼接照旧），只是多带一个机器可读的 kind：
+#   ok          正常数据
+#   empty       服务正常、结果就是空（"你还没绑定设备"是**事实**，照常 PASS 进回执）
+#   unavailable 服务不可用 / 鉴权失败 / 超时（**不是事实**：checker 判 BLOCK，
+#               planner 据 reason=unavailable 决定重试还是如实告知）
+# 只覆盖"能碰外部服务或可能查空"的工具；命令类工具（导航/特效/暗色/屏显）本来就是
+# 命令帧契约（cmd_shape 校验），不动。
+class ToolResult(str):
+    kind: str = "ok"
+
+    def __new__(cls, text: str, kind: str = "ok") -> "ToolResult":
+        obj = str.__new__(cls, text)
+        obj.kind = kind
+        return obj
+
+
+def ok(text: str) -> ToolResult:
+    return ToolResult(text, "ok")
+
+
+def empty(text: str) -> ToolResult:
+    return ToolResult(text, "empty")
+
+
+def unavailable(text: str) -> ToolResult:
+    return ToolResult(text, "unavailable")
+
+
+# 上游故障哨兵：`_get` 失败时返回它而不是 `[]`（"故障伪装成空"的源头就在那）。
+# 工具的出口要用 `_shape(data)` 而不是 `str(data)`——理由见 _shape 的注释。
+UPSTREAM_DOWN = unavailable("服务暂时不可用，请稍后再试")
+
+
+def _shape(data) -> str:
+    """`_get` 结果的统一出口。**别写 `str(data)`**：`str()` 作用在 str 子类上会退化成
+    普通 str（CPython 行为），kind 标记就丢了——20260916 加 kind 时踩过这个坑，
+    单测里有一条专门盯"经 .invoke() 透传后标记仍在"。"""
+    return data if isinstance(data, ToolResult) else str(data)
+
+
 # httpx 客户端复用。
 # ⚠️ **不要加 `verify=False`**（20260916 加固）：这里不只打自家站点的公开 API，还打
 # **第三方** `https://wttr.in`（天气工具）——关掉校验等于把 TLS 降级成"加密但不可
@@ -34,8 +82,14 @@ API_BASE = "https://saudade.site/api/public"
 # 早期图省事。test_hardening.py 里有一条盯着校验开关的断言。
 _client = httpx.Client(timeout=15)
 
-def _get(path: str) -> dict | list:
-    """Helper: call API and return data field."""
+def _get(path: str) -> dict | list | ToolResult:
+    """Helper: call API and return data field.
+
+    ⚠️ 失败返回 `UPSTREAM_DOWN`（kind=unavailable）而**不是** `[]`——见上面 ToolResult
+    的注释：把故障吞成空列表，会让"服务挂了"伪装成"查到了、就是空的"进入执行回执。
+    绝大多数调用方 `return _shape(data)`，不改也能拿到人话（只是这时带 unavailable 标记）；
+    要迭代结果的（如 get_article_detail）必须自己先判 `isinstance(data, list)`。
+    """
     try:
         resp = _client.get(f"{API_BASE}{path}")
         resp.raise_for_status()
@@ -43,10 +97,10 @@ def _get(path: str) -> dict | list:
         if body.get("code") == 200:
             return body["data"]
         logger.warning("API error: %s", body.get("message"))
-        return []
+        return UPSTREAM_DOWN
     except Exception as exc:
         logger.error("API call failed: %s", exc)
-        return []
+        return UPSTREAM_DOWN
 
 # ---------------------------------------------------------------------------
 # 笔记 / 文章 工具
@@ -59,7 +113,7 @@ def list_notes(
 ) -> str:
     """获取文章列表，按页返回。返回文章标题、描述、分类、标签等信息。"""
     data = _get(f"/notes?page={page}&page_size={page_size}")
-    return str(data)
+    return _shape(data)
 
 @tool
 def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
@@ -75,7 +129,7 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
         return str(body.get("data", []))
     except Exception as exc:
         logger.error("Search failed: %s", exc)
-        return str(exc)
+        return unavailable(f"搜索服务暂时不可用（{type(exc).__name__}），请稍后再试")
 
 @tool
 def get_article_detail(
@@ -86,16 +140,19 @@ def get_article_detail(
     note 走 /notes/:id；talk/board/announcement 无单条详情端点，从列表接口按 key
     过滤（列表已带全文，量小，全量扫描可接受）。"""
     if doc_type == "note":
-        return str(_get(f"/notes/{article_id}"))
+        return _shape(_get(f"/notes/{article_id}"))
     endpoint, key_field = {
         "talk": ("/talk", "talkKey"),
         "board": ("/board", "talkKey"),
         "announcement": ("/announcements", "id"),
     }[doc_type]
-    for it in _get(endpoint):
+    rows = _get(endpoint)
+    if not isinstance(rows, list):          # 上游故障：如实说服务不可用，别说"没找到"
+        return rows
+    for it in rows:
         if str(it.get(key_field)) == str(article_id):
             return str(it)
-    return "未找到该文档"
+    return empty("未找到该文档")
 
 
 @tool
@@ -114,7 +171,7 @@ def rag_search(
         from rag.search import search
         hits = search(query, top_k=top_k)
         if not hits:
-            return "检索无结果"
+            return empty("检索无结果")
         # 行式结构化候选摘要（20260831）：精简为 type/id/score/title/首个命中节，
         # 8 候选 ≈ 400-600 字——候选选择信息不丢失且体积可控，模型与反射器视野
         # 一致（此前 JSON 全文被 _build_trace 截断 [:100]，反射器只见 top-1 候选，
@@ -126,13 +183,13 @@ def rag_search(
         )
     except Exception as exc:
         logger.error("rag_search failed: %s", exc)
-        return str(exc)
+        return unavailable(f"检索服务不可用（{type(exc).__name__}）")
 
 @tool
 def get_top_notes() -> str:
     """获取置顶文章列表。"""
     data = _get("/topnotes")
-    return str(data)
+    return _shape(data)
 
 # ---------------------------------------------------------------------------
 # 分类 / 标签 工具
@@ -142,13 +199,13 @@ def get_top_notes() -> str:
 def list_categories() -> str:
     """获取全部分类列表，包含分类名称、颜色、图标、文章数量。"""
     data = _get("/category")
-    return str(data)
+    return _shape(data)
 
 @tool
 def list_tags() -> str:
     """获取全部一级标签列表。"""
     data = _get("/tagone")
-    return str(data)
+    return _shape(data)
 
 # ---------------------------------------------------------------------------
 # 公告 工具
@@ -158,7 +215,7 @@ def list_tags() -> str:
 def get_announcements() -> str:
     """获取博客公告列表。"""
     data = _get("/announcements")
-    return str(data)
+    return _shape(data)
 
 # ---------------------------------------------------------------------------
 # 留言板 工具
@@ -178,7 +235,7 @@ def list_guestbook() -> str:
     这类问题时，需同时调用 list_talks 检查说说内容，两个都查全后才能回答。
     """
     data = _get("/board")
-    return str(data)
+    return _shape(data)
 
 # ---------------------------------------------------------------------------
 # 说说 / 动态 工具
@@ -192,7 +249,7 @@ def list_talks() -> str:
     这类问题时，需同时调用 list_guestbook 检查留言板内容，两个都查全后才能回答。
     """
     data = _get("/talk")
-    return str(data)
+    return _shape(data)
 
 # ---------------------------------------------------------------------------
 # 站点信息 工具
@@ -202,13 +259,13 @@ def list_talks() -> str:
 def get_blog_info() -> str:
     """获取博客基本信息：作者、头像、签名、ICP备案号等。"""
     data = _get("/user")
-    return str(data)
+    return _shape(data)
 
 @tool
 def get_social_links() -> str:
     """获取社交链接（QQ、GitHub、BILIBILI等）。"""
     data = _get("/social")
-    return str(data)
+    return _shape(data)
 
 # ---------------------------------------------------------------------------
 # 导航 / 引导工具
@@ -255,10 +312,10 @@ def search_knowledge_base(
     try:
         resp = _client.get(f"{API_BASE}/knowledge")
         if resp.status_code != 200:
-            return f"知识库查询失败: HTTP {resp.status_code}"
+            return unavailable(f"知识库查询失败: HTTP {resp.status_code}")
         items = resp.json()
         if not items:
-            return "知识库中暂无内容"
+            return empty("知识库中暂无内容")
         results = []
         q = query.lower()
         for item in items:
@@ -269,9 +326,9 @@ def search_knowledge_base(
                 results.append(f"[{category}] {title}\n{content[:500]}")
         if results:
             return "\n---\n".join(results[:5])
-        return f"知识库中未找到与「{query}」相关的内容"
+        return empty(f"知识库中未找到与「{query}」相关的内容")
     except Exception as e:
-        return f"知识库查询失败: {e}"
+        return unavailable(f"知识库查询失败: {e}")
 
 # ---------------------------------------------------------------------------
 # 时间 / 天气工具
@@ -296,7 +353,7 @@ def get_weather(
 timeout=10)
         if resp.status_code == 200:
             return f"{location}天气: {resp.text.strip()}"
-        return f"Cannot get weather"
+        return unavailable(f"天气服务返回 HTTP {resp.status_code}")
     except Exception as e:
         return f"Weather query failed: {e}"
 
@@ -409,7 +466,7 @@ def list_devices(config: RunnableConfig) -> str:
     """列出当前登录用户拥有的 IoT 设备（ESP32 等），返回设备 id、名称、在线状态。"""
     uid = _device_get_user_id(config)
     if uid <= 0:
-        return "无法获取当前用户身份，设备列表不可用"
+        return unavailable("无法获取当前用户身份，设备列表不可用")
     try:
         resp = httpx.get(
             f"{DEVICE_SERVICE_URL}/api/devices",
@@ -417,16 +474,16 @@ def list_devices(config: RunnableConfig) -> str:
             timeout=10,
         )
         if resp.status_code == 401:
-            return "设备服务认证失败（JWT 无效或过期）"
+            return unavailable("设备服务认证失败（JWT 无效或过期）")
         devices = resp.json()
         if not devices:
-            return "当前用户还没有绑定任何 IoT 设备"
+            return empty("当前用户还没有绑定任何 IoT 设备")
         return "\n".join(
             f"- id={d.get('id')} 名称={d.get('name')} 在线={'是' if d.get('online') else '否'}"
             for d in devices
         )
     except Exception as e:
-        return f"查询设备列表失败: {e}"
+        return unavailable(f"查询设备列表失败: {e}")
 
 
 @tool
@@ -463,7 +520,7 @@ def device_oled_display(
             online = [d for d in devices if d.get("online")]
             chosen = (online or devices)[0] if devices else None
             if chosen is None:
-                return "当前用户还没有绑定任何 IoT 设备"
+                return empty("当前用户还没有绑定任何 IoT 设备")
             device_id = chosen.get("id")
             if not device_id:
                 return "设备列表返回异常，无法获取设备 id"

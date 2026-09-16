@@ -156,9 +156,51 @@ def test_stream_slots():
     check("归还后可以再拿到", again is True, again)
 
 
+def test_tool_result_kinds():
+    """工具返回值的"两类"（`tools/base.py` 的 ToolResult）：**故障不再伪装成空结果**。
+
+    盯两件事：① 三类构造出来的仍是 str（下游 `str()`/切片/拼接/命令帧校验全部不受
+    影响）；② `_get` 失败时给出 kind=unavailable 而不是 `[]`——后者正是"服务挂了"
+    被当成"查到了、就是空的"进入执行回执的源头；③ 经 LangChain `.invoke()` 透传后
+    标记仍在（不在的话整套标记会静默失效，只在真出事时才被发现）。"""
+    import tools.base as base
+
+    for maker, kind in ((base.ok, "ok"), (base.empty, "empty"), (base.unavailable, "unavailable")):
+        r = maker("人话")
+        check(f"{kind} 仍是 str 且带 kind",
+              isinstance(r, str) and getattr(r, "kind", None) == kind and str(r) == "人话",
+              (type(r).__name__, getattr(r, "kind", None)))
+    check("缺省 kind=ok（老调用点不受影响）", base.ToolResult("x").kind == "ok")
+
+    orig_get = base._client.get
+
+    def _boom(*a, **kw):
+        raise RuntimeError("connection refused")
+
+    base._client.get = _boom
+    try:
+        out = base._get("/notes")
+        via_tool = base.list_notes.invoke({"page": 1, "page_size": 1})
+        via_kb = base.search_knowledge_base.invoke({"query": "x"})
+    finally:
+        base._client.get = orig_get
+
+    check("_get 失败 → kind=unavailable（不是 []）",
+          getattr(out, "kind", None) == "unavailable", getattr(out, "kind", None))
+    check("_get 失败 → 人话可直接给用户看", "不可用" in str(out), str(out))
+    check("工具 .invoke() 透传 kind（LangChain 不吞标记）",
+          getattr(via_tool, "kind", None) == "unavailable", getattr(via_tool, "kind", None))
+    check("知识库工具失败也走 unavailable", getattr(via_kb, "kind", None) == "unavailable",
+          getattr(via_kb, "kind", None))
+    # 命令类工具不受影响：仍是普通字符串（命令帧契约由 cmd_shape 校验，不掺 kind）
+    nav = base.navigate_to.invoke({"path": "/talk", "confirm": False})
+    check("命令工具仍返回命令帧字符串", nav.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")), str(nav)[:40])
+
+
 def main():
     for fn in (test_tls_verification_on, test_request_limits,
-               test_body_limit_middleware, test_stream_slots):
+               test_body_limit_middleware, test_stream_slots,
+               test_tool_result_kinds):
         print(f"\n── {fn.__name__} ──")
         fn()
     if FAILS:
