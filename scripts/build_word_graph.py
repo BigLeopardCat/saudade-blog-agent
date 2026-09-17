@@ -794,11 +794,19 @@ def main() -> None:
     ap.add_argument("--alpha", type=float, default=0.3, help="软白化指数（实测噪声级，见 project_3d）")
     ap.add_argument("--gamma", type=float, default=1.0, help="尾部压缩指数（<1 才压缩）")
     ap.add_argument("--clip", type=float, default=1.6)
-    ap.add_argument("--strip-top", type=int, default=0, help="all-but-the-top 减掉的主方向数（本语料实测有害）")
+    # ⚠️ 默认值 1（20260917 改，原来是 0）：**第一主方向 = 语言/脚本轴**（实测 PC1 的组间方差
+    #    占比 0.93，随机方向只有 0.08）。它给"同语言"虚高、给"跨语言"压分——剥掉之后
+    #    跨语言相似度保留率 35%→77%（设备↔device 0.414→0.731）、三维里两团交融
+    #    （间距/半径和 1.84→0.12）、近邻保真度反而从 0.426 升到 0.446。
+    #    当年设成 0 是因为在**纯 PCA** 布局下剥它有害（0.191→0.154）；换 UMAP 后结论反转。
+    ap.add_argument("--strip-top", type=int, default=1,
+                    help="all-but-the-top 减掉的主方向数（默认 1 = 剥掉语言轴，见 §2.3）")
     ap.add_argument("--knn-k", type=int, default=6, help="每词取几个候选近邻")
     # τ=0.45 曾是拍的，实测全库两两余弦 p99 才 0.332（随机对均值 −0.003），
     # 卡 0.45 会让半数节点一条语义边都没有、只能靠补边撑门面。0.30 处孤立率 6%。
-    ap.add_argument("--knn-tau", type=float, default=0.30, help="语义边的余弦下限")
+    # τ 随 strip_top 一起调（20260917）：剥掉语言轴后相似度分布整体下移（同语言虚高没了），
+    # 仍用 0.30 会让边从 693 掉到 475。0.20 下边 778 / 平均度 3.89，比原来还密一点。
+    ap.add_argument("--knn-tau", type=float, default=0.20, help="语义边的余弦下限")
     ap.add_argument("--edge-max-len", type=float, default=1.0, help="PCA 布局下剔除跨屏长线（语义布局不用）")
     ap.add_argument("--umap-neighbors", type=int, default=15, help="UMAP n_neighbors（A/B 实测 15 优于 30）")
     ap.add_argument("--umap-min-dist", type=float, default=0.2,
