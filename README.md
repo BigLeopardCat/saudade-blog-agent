@@ -1,8 +1,9 @@
 # Saudade Blog AI Agent（泠月喵）🐱
 
-博客看板娘"泠月喵"的对话 Agent 后端（FastAPI，:8010）。真实生产部署在
-[Saudade-Blog](https://github.com/BigLeopardCat/Saudade-Blog)（Rust 后端 :3000 + React 前端）中，
-负责：对话生成、博客内容查询、导航/特效/夜间模式命令、IoT 设备（ESP32 OLED）屏幕显示。
+博客看板娘"泠月喵"的对话 Agent 后端（FastAPI，:8010）。它真实跑在生产环境里——宿主博客是
+一套 Rust 后端（:3000，鉴权/DB/SSE 编排）+ React 前端（含 Live2D 看板娘对话面板），
+**那部分是私有仓库**（另一个仓库、不在本仓库范围内）。
+本仓库负责：对话生成、博客内容查询、导航/特效/夜间模式命令、IoT 设备（ESP32 OLED）屏幕显示。
 
 **核心定位：手写 LangGraph 图（planner ⇄ execute 决策-执行循环 → model → gate）+ 技能注册表受限规划，
 20260903 起 planner 全权（自由 ReAct / reflector / REVISE 已废除）；对话记忆全部外置 MySQL（agent 无状态，每请求独立线程）。**
@@ -30,19 +31,24 @@ RAG 检索设计总结：[docs/rag-design.md](docs/rag-design.md)（历史设计
 
 ```
 saudade-blog-agent/
-├── server.py               # FastAPI 入口：/chat、/chat/stream、/health；流式编排（生产唯一入口）
+├── server.py               # FastAPI 入口：/chat、/chat/stream、/review（留言 AI 审核）、/graph/query（图谱检索）、/health
+│                           #   流式编排 + 身份断言验签 + 输入限额/体积闸/并发闸
 ├── agent/
-│   ├── graph.py            # ★ 手写 LangGraph 图（1427 行）：planner(唯一决策) ⇄ execute(确定性执行) → model(零工具叙述) → gate(确定性检查)
-│   ├── decisions.py        # ★ 确定性决策层（522 行，零 LLM）：快道/动作意图扫描/检索候选裁决/终局计划
-│   ├── context.py          # 上下文组装（209 行，纯函数叶子层）：消息文本/页面上下文/工具帧摘要/回执摘要
+│   ├── graph.py            # ★ 手写 LangGraph 图（1648 行）：planner(唯一决策) ⇄ execute(确定性执行) → model(零工具叙述) → gate(确定性检查)
+│   ├── decisions.py        # ★ 确定性决策层（523 行，零 LLM）：快道/动作意图扫描/检索候选裁决/终局计划
+│   ├── context.py          # 上下文组装（210 行，纯函数叶子层）：消息文本/页面上下文/工具帧摘要/回执摘要
 │   ├── skills.py           # ★ 技能注册表：8 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
 │   ├── agent.py            # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
 │   ├── memory.py           # MemorySaver 兼容存根（实际不承担记忆，见文档 §4.6）
 │   └── prompts.py          # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 叙述规则（model 零工具 narrator 用）
 ├── rag/                    # ★ RAG 检索管线（20260830）：词法 2/3-gram BM25 内存倒排索引，
-│   │                       #   语料=线上可见文章（20260901 净化：说说/留言/公告移出检索池），
+│   │                       #   语料=线上可见文章（20260901 净化：说说/留言/公告移出检索池；
+│   │                       #   20260912 修：翻页累加，不再吃接口默认 pageSize=6 只索引 6 篇），
 │   │                       #   10 分钟懒刷新；检索只定位（候选 ID+标题+分），解读走 get_article_detail 全文
-│   └── search.py           # RagIndex + search()：检索 eval 直接测本实现（评测即线上行为）
+│   ├── search.py           # RagIndex + search()：检索 eval 直接测本实现（评测即线上行为）；
+│   │                       #   **索引不可用时返回 None**（区别于"没命中"的 []，工具层据此标 unavailable）
+│   └── wordgraph.py        # 另一条独立检索线：词向量图谱的查询侧（1024 维余弦，纯 stdlib array+map，
+│                           #   无 numpy；建图是离线脚本 scripts/build_word_graph.py）
 ├── config/settings.py      # pydantic-settings 配置
 ├── models/llm.py           # LLM 工厂：provider 三选一（qwen/deepseek/openai）
 ├── tools/base.py           # 22 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重
@@ -86,6 +92,10 @@ cp .env.example .env         # 填入 LLM API Key（生产：qwen → qwen3.8-fl
 | **显示类请求保障链** | 意图识别确定性（显示快道 `_DISPLAY_FAST_RE` 强模式或 planner 决策）→ 计划模板固定展开 `device_oled_display`（屏幕文案由 execute 内小 LLM 结合对话创作，不进 planner 文本通道）→ execute 确定性执行（有执行必有帧）→ model 零工具叙述（无帧声称"已显示"结构上不可能，叙述失真由 gate 兜底）+ 30s 幂等去重；曾用后端强制路由（_force_display）先执行，20260828 影子系统事故（与主链路并存致决策漂移）后**移除**——20260903 起并入 planner 全权的单一确定性执行路径 |
 | **SSE 帧协议** | JSON 编码 + `\n\n` 分隔；文本帧/命令帧/`__PROCESS__`（过程轨迹）/`__RESET__`（20260903 起仅 gate fallback 发：清屏重绘 + fallback 文本替换最终回复）/`__SUMMARY__`/`__END__`；Rust 逐帧转发，`X-Accel-Buffering: no` |
 | **生成有界性** | planner ⇄ execute 轮次上限 `MAX_PLAN_ROUNDS=4`（超限确定性强制收尾）+ `recursion_limit=30` + LLM 120s + 流式空闲 120s + 总时长 300s + 16 线程池；空回复后端补发恢复语 |
+| **服务间身份断言（20260917）** | agent 的 `user_id` 直接进 config 并被 IoT 工具用来签用户 JWT ⇒ 身份边界不能只靠"只听回环"。Rust 用同一 `JWT_SECRET` 签 60s 短时效断言（`X-Agent-Assertion`，`aud=agent` 防被当登录 token 复用），agent 验签后**用断言里的 uid 覆盖请求体**。滚动上线：`AGENT_REQUIRE_ASSERTION=0`（默认，缺头只 WARNING）→ Rust 部署 → 打开严格模式（缺头/验签失败 → 401） |
+| **工具返回三类（20260917）** | `ToolResult`（str 子类 + `kind`）：`ok` / `empty`（结果就是空，**是事实**，照常进执行回执）/ `unavailable`（服务不可用，**不是事实**，checker 判 BLOCK、不进跨轮执行记忆）。此前 `_get` 把上游故障吞成 `[]`，"服务挂了"伪装成"查到了、就是空的"。⚠️ 工具出口必须走 `_shape()`——`str(ToolResult)` 会退化成普通 str 丢掉 kind |
+| **输入限额与并发闸（20260916）** | 字段级 Pydantic 限额（message 4000 / history 60 / 图片 6 张且单张 ≤1.6M 字符 …）+ Content-Length > 12MB → 413（starlette 默认**不限制** body 大小）+ 流式并发闸（每 worker 8 槽，排队 3s 拿不到 → 503，槽位在 `event_stream` 的 finally 归还） |
+| **协作取消的颗粒度（20260917）** | 断连 → `stop_event` → 循环级 + 节点级 + **逐 spec** 三层检查（一份 `[导航, 屏显]` 清单在中途断连时，后面的写操作不执行）。**边界如实**：in-flight 的 HTTP（LLM/设备/回执轮询）拦不住，最坏等它自己超时——所以承诺是"**写操作绝不发生在用户离开之后**"，不是"立刻停止一切副作用" |
 
 ---
 
@@ -106,18 +116,25 @@ planner 注入时自动带描述）。**可规划性由白名单决定（2026090
 | `QWEN_MODEL` | `qwen3.6-flash` | 模型名（按 provider 前缀：`QWEN_`/`DEEPSEEK_`/`OPENAI_`） |
 | `LLM_ENABLE_THINKING` | `true` | Qwen 思考模式总开关；图内 LLM 调用均显式关闭思考（20260903：planner 决策 / model 叙述——narrator，20260831 46~106s 慢调用实证 / execute 屏幕文案创作 / 摘要），关闭是 per-call 覆写、与总开关无关 |
 | `AGENT_RECURSION_LIMIT` | `30` | 工具循环上限（幻觉重试兜底，server.py 读取） |
+| `AGENT_REQUIRE_ASSERTION` | `0` | 是否**强制**要求服务间身份断言（见「关键机制」表）；生产已开 `1`，本机调试可关 |
+| `AGENT_MAX_CONCURRENT` | `8` | 每 worker 并发流上限（超了排队 3s 后 503） |
+| `AGENT_MAX_BODY_BYTES` | `12582912` | 请求体上限（12MB → 413） |
 | `trace_dir` | `logs/agent/traces` | 对话 trace 落盘目录（20260830f 随日志分组迁移） |
 
 ## ✅ 测试与评测
 
 ```bash
 .venv/bin/python test_skills.py               # L0：秒级，无 LLM（映射表/计划实例化/解析容错/execute 确定性执行/gate 声称闸与 fallback）
+.venv/bin/python test_hardening.py            # L0：秒级（TLS 校验/输入限额/体积闸/并发闸/工具返回三类/身份断言/幂等并发/RAG 两态）
+.venv/bin/python test_cancel.py               # L0：秒级（协作取消：五节点入口/写操作零调用/中途取消/LLM 阻塞期间的能力边界）
 .venv/bin/python eval/run_golden.py           # L2：66 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答/执行记忆）；--limit N / --only <id> 单跑
 .venv/bin/python eval/golden_full_run.py      # L2 进程隔离全量跑（逐条独立进程 + 180s 超时，防悬挂污染）
 .venv/bin/python eval/recall_eval.py          # L1 检索：recall@k/MRR（21 条 queries = 12 正例 + 9 噪声）
 ```
 
-- nightly cron 自动跑上述两项，失败标记 `~/agent_regression.failed`。
+- **CI（`.github/workflows/eval.yml`）**：push 跑上面三个秒级套件（L0）；golden（L2）手动触发——
+  runner 在海外、跨网链路下耗时失真，性能基线必须本机跑。
+- nightly cron 自动跑 L1/L2 两项，失败标记 `~/agent_regression.failed`。
 - **改技能注册表 / plan 契约 / 摘要逻辑 / prompt 后必跑**（golden 断言含"回复不得包含 SUMMARY:"）。
 
 ---
