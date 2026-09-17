@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     # ── Memory ──────────────────────────────────────────────────────
     memory_session_key: str = "default"
 
+    # ── 服务间身份断言（20260917）────────────────────────────────────
+    # Rust 用 jwt_secret 签 `X-Agent-Assertion: {sub: uid, aud: "agent", exp:+60s}`，
+    # agent 验签后据此覆盖请求体里的 user_id（见 server._resolve_user_id）。
+    # 默认 False 是**滚动上线**需要的：Rust 还没发这个头时打开它会把在途请求打成 401。
+    agent_require_assertion: bool = False
+
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
     # 与博客共用 JWT_SECRET：agent 以对话用户身份签发 JWT 调用 device-service
     jwt_secret: str = ""

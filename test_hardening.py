@@ -28,6 +28,13 @@ def check(name, cond, detail=""):
         print(f"  ✓ {name}")
 
 
+def eq(got, exp, name):
+    """⚠️ 参数顺序容易写反：本文件的 check 是 (name, cond, detail)，不是 (cond, name)。
+    第一版写成 check(got == exp, name) 就变成了"拿名字当条件"——name 是非空字符串恒真，
+    六条断言全是空转的绿（自己踩过，留个记号）。"""
+    check(name, got == exp, {"got": got, "exp": exp})
+
+
 # ────────────────────────────────── ① TLS 校验
 
 def test_tls_verification_on():
@@ -197,10 +204,152 @@ def test_tool_result_kinds():
     check("命令工具仍返回命令帧字符串", nav.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")), str(nav)[:40])
 
 
+
+def test_history_model_and_review_limits():
+    """请求模型的两条加固（20260917 外部审计）：
+    ① history 从 `list[dict]` 换成结构化 HistoryItem —— 畸形项以前会在
+       `_build_messages` 里 KeyError → 500；
+    ② /review 的 content 加长度上限（此前可以顶着 12MB body 上限灌进来）。"""
+    from pydantic import ValidationError
+    import server
+
+    ok_req = server.ChatRequest(message="hi", history=[
+        {"role": "user", "content": "上一句"}, {"role": "assistant", "content": "上一条回复"}])
+    check("正常 history 通过（且被结构化）", ok_req.history[0].role == "user"
+          and ok_req.history[0].content == "上一句")
+
+    for bad, why in (
+        ([{"role": "system", "content": "x"}], "role 不在 user/assistant"),
+        ([{"role": "user"}], "缺 content"),
+        ([{"content": "只有内容"}], "缺 role"),
+        (["不是对象"], "条目不是对象"),
+        ([{"role": "user", "content": 123}], "content 不是字符串"),
+    ):
+        try:
+            server.ChatRequest(message="hi", history=bad)
+            check(f"畸形 history 被拒（{why}）", False, "未被拒绝")
+        except ValidationError:
+            check(f"畸形 history 被拒（{why}）", True)
+
+    server.ReviewRequest(content="x" * 4000, author="a" * 100)
+    check("ReviewRequest 边界值（4000/100）通过", True)
+    for bad in ({"content": "x" * 4001}, {"content": "x", "author": "a" * 101}):
+        try:
+            server.ReviewRequest(**bad)
+            check(f"/review 超限被拒（{list(bad)}）", False, "未被拒绝")
+        except ValidationError:
+            check(f"/review 超限被拒（{list(bad)}）", True)
+
+
+def test_user_assertion():
+    """服务间身份断言（20260917）：Rust 签名 → agent 验签并覆盖 body 里的 user_id。
+    这条是外部审计里唯一"改了就把根拔掉"的项：身份不再依赖"只听回环"这个部署假设。"""
+    import base64 as b64
+    import hashlib as hl
+    import hmac as hm
+    import json as js
+    import time as tm
+
+    import server
+    from config.settings import settings
+
+    secret = (settings.jwt_secret or "").encode()
+    check("jwt_secret 已配置（断言可验签）", bool(secret))
+
+    def sign(sub, aud="agent", ttl=60):
+        b = lambda x: b64.urlsafe_b64encode(x).rstrip(b"=")
+        h = b(js.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+        p = b(js.dumps({"sub": str(sub), "aud": aud, "exp": int(tm.time()) + ttl}).encode())
+        return (h + b"." + p + b"." + b(hm.new(secret, h + b"." + p, hl.sha256).digest())).decode()
+
+    eq(server._verify_user_assertion(sign(7)), 7, "合法断言 → 返回 sub")
+    eq(server._verify_user_assertion(sign(7, ttl=-10)), None, "过期断言 → None")
+    eq(server._verify_user_assertion(sign(7, aud="other")), None, "aud 不对（防当登录 token 复用）→ None")
+    good = sign(9)
+    eq(server._verify_user_assertion(good[:-4] + "AAAA"), None, "篡改签名 → None")
+    eq(server._verify_user_assertion("not.a.jwt"), None, "垃圾串 → None")
+    eq(server._verify_user_assertion(""), None, "空串 → None")
+    check("默认不强制断言（滚动上线：Rust 未发头时不能把在途请求打成 401）",
+          settings.agent_require_assertion is False, settings.agent_require_assertion)
+
+
+def test_display_idempotency_race():
+    """屏显幂等（20260917）：原来是裸 dict 的 check-then-act，两个并发请求能同时通过
+    ⇒ 同一条指令下发两次。加锁 + 下发前占位；失败要把占位撤掉，否则一次失败会挡掉
+    30s 内的正常重试（加锁最容易引入的行为回归）。"""
+    import threading
+
+    import tools.base as base
+
+    class _Resp:
+        status_code = 200
+        text = ""
+        def json(self): return {"req_id": None}
+
+    class _HttpxStub:
+        get = staticmethod(lambda *a, **k: _Resp())
+        put = staticmethod(lambda *a, **k: _Resp())
+
+    orig_httpx, orig_valid, orig_sign = base.httpx, base._valid_device_id, base._sign_user_jwt
+    base.httpx, base._valid_device_id, base._sign_user_jwt = _HttpxStub(), (lambda x: True), (lambda uid: "t")
+    try:
+        base._last_display.clear()
+        res: list = []
+        lock = threading.Lock()
+
+        def call():
+            r = base.device_oled_display.invoke(
+                {"device_id": "dev-1", "text": "并发同内容"},
+                config={"configurable": {"user_id": 1}})
+            with lock:
+                res.append(str(r))
+
+        ts = [threading.Thread(target=call) for _ in range(8)]
+        for t in ts: t.start()
+        for t in ts: t.join()
+        dedup = sum(1 for r in res if "刚刚已下发过" in r)
+        eq(dedup, 7, "并发 8 次同内容只放行 1 次（其余 7 次被去重）")
+
+        class _Bad(_Resp):
+            status_code = 409
+        base.httpx.put = staticmethod(lambda *a, **k: _Bad())
+        base._last_display.clear()
+        out = base.device_oled_display.invoke(
+            {"device_id": "dev-1", "text": "失败重试"},
+            config={"configurable": {"user_id": 2}})
+        check("下发失败如实返回（设备离线）", "不在线" in str(out), str(out)[:40])
+        check("失败不留占位（30s 内的重试不被误挡）", base._last_display.get(2) is None)
+    finally:
+        base.httpx, base._valid_device_id, base._sign_user_jwt = orig_httpx, orig_valid, orig_sign
+        base._last_display.clear()
+
+
+def test_rag_unavailable_vs_empty():
+    """RAG：索引不可用 ≠ 没命中（20260917 审计指出）。search() 现在用 None 表达
+    "索引建不起来"，[] 仍然只表示"确实没命中"。"""
+    import unittest.mock as mock
+
+    import rag.search as rs
+    import tools.base as base
+
+    idx = rs.RagIndex()
+    with mock.patch.object(rs.RagIndex, "build", side_effect=RuntimeError("语料拉取失败")):
+        eq(idx.search("物联网"), None, "语料建不起来 → search() 返回 None（不是 []）")
+
+    with mock.patch.object(rs, "search", return_value=None):
+        out = base.rag_search.invoke({"query": "物联网"})
+        eq(getattr(out, "kind", None), "unavailable", "工具层把它标成 unavailable（不是 empty）")
+    with mock.patch.object(rs, "search", return_value=[]):
+        out2 = base.rag_search.invoke({"query": "物联网"})
+        eq(getattr(out2, "kind", None), "empty", "真没命中仍是 empty（照常进回执）")
+
+
 def main():
     for fn in (test_tls_verification_on, test_request_limits,
                test_body_limit_middleware, test_stream_slots,
-               test_tool_result_kinds):
+               test_tool_result_kinds, test_history_model_and_review_limits,
+               test_user_assertion, test_display_idempotency_race,
+               test_rag_unavailable_vs_empty):
         print(f"\n── {fn.__name__} ──")
         fn()
     if FAILS:

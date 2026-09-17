@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import os
+import threading
 import time
 
 import httpx
@@ -169,7 +170,12 @@ def rag_search(
     """
     try:
         from rag.search import search
+        # 「索引不可用」与「没命中」必须分开（20260917 审计指出）：`search()` 两种情况
+        # 都返回 []，此前一律包成 empty("检索无结果") —— 语料拉取失败时会被 checker
+        # 记成"检索过、确实没有"的**事实**，正是我上轮给 HTTP 工具修掉的那类问题。
         hits = search(query, top_k=top_k)
+        if hits is None:
+            return unavailable("检索索引未就绪（语料为空或重建失败），暂时无法检索")
         if not hits:
             return empty("检索无结果")
         # 行式结构化候选摘要（20260831）：精简为 type/id/score/title/首个命中节，
@@ -433,7 +439,11 @@ JWT_SECRET = _settings.jwt_secret
 # at-least-once 重投——工具层保证"同内容只发一次"。（曾防后端强制路由
 # _force_display 与自主调用双调，20260828 影子系统事故后强制路由已移除。）
 _DISPLAY_DEDUP_SECONDS = 30.0
+# ⚠️ 20260917 加锁：此前是裸 dict 的 check-then-act——两个并发请求可以同时通过
+# "30s 内没发过"的检查，同一条屏显下发两次（外部审计指出；影响面只在这条幂等优化
+# 本身，不是越权）。execute 跑在线程池里、工具会被并发调用，所以这个锁是必需的。
 _last_display: dict[int, tuple[str, float]] = {}
+_last_display_lock = threading.Lock()
 
 
 def _sign_user_jwt(user_id: int) -> str:
@@ -503,9 +513,14 @@ def device_oled_display(
         return "显示内容为空或超过 64 字符限制"
     # 幂等去重：30s 内相同用户相同内容不重复下发（防多轮重复调用、QoS1 重投）
     now = time.time()
-    prev = _last_display.get(uid)
-    if prev and prev[0] == text and now - prev[1] < _DISPLAY_DEDUP_SECONDS:
-        return "该内容刚刚已下发过，无需重复下发（执行结果以设备回执为准）"
+    with _last_display_lock:
+        prev = _last_display.get(uid)
+        if prev and prev[0] == text and now - prev[1] < _DISPLAY_DEDUP_SECONDS:
+            return "该内容刚刚已下发过，无需重复下发（执行结果以设备回执为准）"
+        # **下发前就占位**（不是发完再记）：占位与检查在同一把锁里，两个并发请求
+        # 只有一个能过——这正是原来那版缺的一步。失败路径会在下面把它撤掉。
+        _last_display[uid] = (text, now)
+    sent = False
     try:
         # device_id 未指定时自动选择第一个在线设备（多步工具链是 IoT 工具失败的
         # 结构性原因：模型无法从 schema 知道运行时才能获取的 device_id，参数缺失时
@@ -543,7 +558,7 @@ def device_oled_display(
             return "设备当前不在线，无法显示该内容（设备可能断电或 MQTT 连接断开）"
         if resp.status_code != 200:
             return f"指令下发失败（HTTP {resp.status_code}）: {resp.text[:100]}"
-        _last_display[uid] = (text, now)  # 记录本次下发，供去重
+        sent = True          # 已真正下发 ⇒ 占位保留，30s 内的重复调用会被去重
         # 回执确认（图改进Ⅴ）：幽灵在线窗口（断电→遗嘱到达前，曾达 ~2 分钟）内下发
         # 会"假成功"——publish 入队即 200，设备实际收不到。轮询 device-service 的
         # 回执状态接口，5s 内设备回执即确认执行，否则如实告知"未确认"，不再承诺已显示。
@@ -571,6 +586,14 @@ def device_oled_display(
         return "OLED 显示指令已下发"
     except Exception as e:
         return f"指令下发失败: {e}"
+    finally:
+        # **没真正下发就把占位撤掉**：否则一次失败（设备离线/HTTP 错/身份缺失）会把
+        # 30s 内的正常重试也一并挡掉——那是加锁时最容易引入的行为回归。
+        # 撤之前核对占位还是自己那一条，别误撤别人后来占的。
+        if not sent:
+            with _last_display_lock:
+                if _last_display.get(uid) == (text, now):
+                    _last_display.pop(uid, None)
 
 
 # ---------------------------------------------------------------------------
