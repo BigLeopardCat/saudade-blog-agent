@@ -253,24 +253,40 @@ def test_user_assertion():
     import server
     from config.settings import settings
 
-    secret = (settings.jwt_secret or "").encode()
-    check("jwt_secret 已配置（断言可验签）", bool(secret))
+    # ⚠️ **不依赖环境里的 JWT_SECRET**：CI 没有 .env（这一版第一次就是因此在 CI 红的——
+    # 我断言了"密钥已配置"，那是在测环境不是测代码）。测试自己钉一个密钥、验完还原。
+    TEST_SECRET = "ci-test-secret-不参与生产"
+    orig_secret = settings.jwt_secret
 
-    def sign(sub, aud="agent", ttl=60):
+    def sign(sub, aud="agent", ttl=60, secret=TEST_SECRET):
         b = lambda x: b64.urlsafe_b64encode(x).rstrip(b"=")
         h = b(js.dumps({"alg": "HS256", "typ": "JWT"}).encode())
         p = b(js.dumps({"sub": str(sub), "aud": aud, "exp": int(tm.time()) + ttl}).encode())
-        return (h + b"." + p + b"." + b(hm.new(secret, h + b"." + p, hl.sha256).digest())).decode()
+        return (h + b"." + p + b"." + b(hm.new(secret.encode(), h + b"." + p, hl.sha256).digest())).decode()
 
-    eq(server._verify_user_assertion(sign(7)), 7, "合法断言 → 返回 sub")
-    eq(server._verify_user_assertion(sign(7, ttl=-10)), None, "过期断言 → None")
-    eq(server._verify_user_assertion(sign(7, aud="other")), None, "aud 不对（防当登录 token 复用）→ None")
-    good = sign(9)
-    eq(server._verify_user_assertion(good[:-4] + "AAAA"), None, "篡改签名 → None")
-    eq(server._verify_user_assertion("not.a.jwt"), None, "垃圾串 → None")
-    eq(server._verify_user_assertion(""), None, "空串 → None")
-    check("默认不强制断言（滚动上线：Rust 未发头时不能把在途请求打成 401）",
-          settings.agent_require_assertion is False, settings.agent_require_assertion)
+    try:
+        # fail-closed：密钥为空时一律不通过（没密钥就不该信任何断言）
+        settings.jwt_secret = ""
+        eq(server._verify_user_assertion(sign(7)), None, "密钥为空 → 一律不通过（fail-closed）")
+
+        settings.jwt_secret = TEST_SECRET
+        eq(server._verify_user_assertion(sign(7)), 7, "合法断言 → 返回 sub")
+        eq(server._verify_user_assertion(sign(7, ttl=-10)), None, "过期断言 → None")
+        eq(server._verify_user_assertion(sign(7, aud="other")), None,
+           "aud 不对（防当登录 token 复用）→ None")
+        eq(server._verify_user_assertion(sign(7, secret="别的密钥")), None, "别的密钥签的 → None")
+        good = sign(9)
+        eq(server._verify_user_assertion(good[:-4] + "AAAA"), None, "篡改签名 → None")
+        eq(server._verify_user_assertion("not.a.jwt"), None, "垃圾串 → None")
+        eq(server._verify_user_assertion(""), None, "空串 → None")
+        # ⚠️ 断言**代码默认值**而不是运行时配置：生产 .env 已经把它开成 1（那是对的），
+        # 拿 settings 的当前值当期望会让"本机绿、CI 红"或反过来——同一条测试的第二次踩坑。
+        from config.settings import Settings
+        dflt = Settings.model_fields["agent_require_assertion"].default
+        check("代码默认不强制断言（滚动上线的前提：Rust 未发头时不能把在途请求打成 401）",
+              dflt is False, dflt)
+    finally:
+        settings.jwt_secret = orig_secret
 
 
 def test_display_idempotency_race():
