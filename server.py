@@ -6,16 +6,21 @@ Run with:
 """
 
 import asyncio
+import base64
 import contextvars
 import functools
+import hashlib
+import hmac
 import json
 import logging
 import os
 import re
 import threading
+import time
 import uuid
 from datetime import datetime
 from contextlib import asynccontextmanager
+from typing import Literal
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException, Request
@@ -106,12 +111,24 @@ def _release_slot() -> None:
     except ValueError:      # 多还一次（理论上不会）：记日志别把收尾炸掉
         logger.warning("并发槽位重复释放（计数错乱）")
 
+class HistoryItem(BaseModel):
+    """一条历史消息。**结构化而不是 dict**（20260917 外部审计指出）：此前是
+    `list[dict]`，`_build_messages` 直接 `h["role"]`/`h["content"]` 取键——畸形项
+    会 KeyError → 500（`/chat/stream` 那条路还只是在释放并发槽后才炸）。
+    role 限定 user/assistant（DB 里只有这两种，实测 `SELECT DISTINCT role`）。
+    content **不设长度上限**：历史里的助手长回复（实测最长 3773 字符，公式推导类
+    还会更长）截断会改变注入语义，且 12MB 的整体 body 上限已经兜住了总量。
+    Rust 侧的 history 只发 role/content 两个字段，与此一一对应。"""
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatRequest(BaseModel):
     message: str = Field(max_length=MAX_MESSAGE_CHARS)
     current_url: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     page_title: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     user_id: int = 0
-    history: list[dict] = Field(default_factory=list, max_length=MAX_HISTORY_ITEMS)
+    history: list[HistoryItem] = Field(default_factory=list, max_length=MAX_HISTORY_ITEMS)
     summary: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     needs_summary: bool = False
     # 前端上报的页面特效实时状态（如 "sakura,rain" 或 ""），供 agent 感知真实开关状态
@@ -204,6 +221,63 @@ async def body_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+# ── 服务间身份断言（20260917，外部审计的"高"项）──
+# 问题：agent 的 user_id 直接来自请求体，而 IoT 工具用它签用户 JWT（能操作那个人的
+# 设备）。当前靠"只听回环"兜着——一旦 systemd 改 0.0.0.0 / nginx 误反代 / 本机进程
+# 被攻破，就能伪造任意 user_id。
+# 修法：Rust 用同一个 JWT_SECRET 签一条**短时效的身份断言**（aud=agent，60s）放在
+# `X-Agent-Assertion` 头里，agent 验签通过后**用它覆盖请求体里的 user_id**。
+# 这样边界从"回环"升级成"签名"——直连 agent 的人也伪造不出别人的身份。
+# 滚动上线：`AGENT_REQUIRE_ASSERTION=0`（默认）时缺头只记 WARNING、行为不变；
+# Rust 部署完再在 .env 打开它，避免"先重启 agent"把在途请求打成 401。
+_ASSERTION_HEADER = "X-Agent-Assertion"
+_ASSERTION_AUD = "agent"
+
+
+def _verify_user_assertion(token: str) -> int | None:
+    """验 Rust 签的身份断言，返回其中的用户 id；任何一步不成立返回 None。
+
+    手写 HS256 校验（与 tools/base.py 的 `_sign_user_jwt` 同源）：只为一条内部断言
+    引一个 JWT 依赖不值得，而 python 标准库就够（hmac + base64 + json）。"""
+    try:
+        from config.settings import settings
+        secret = (settings.jwt_secret or "").encode()
+        if not secret:
+            return None
+        h_b64, p_b64, sig_b64 = token.split(".")
+        signing_input = f"{h_b64}.{p_b64}".encode()
+        expected = hmac.new(secret, signing_input, hashlib.sha256).digest()
+        got = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
+        if not hmac.compare_digest(expected, got):
+            return None
+        payload = json.loads(base64.urlsafe_b64decode(p_b64 + "=" * (-len(p_b64) % 4)))
+        if payload.get("aud") != _ASSERTION_AUD:
+            return None
+        if float(payload.get("exp") or 0) < time.time():
+            return None
+        uid = int(payload.get("sub") or 0)
+        return uid if uid > 0 else None
+    except Exception:
+        return None
+
+
+def _resolve_user_id(request: Request, body_uid: int) -> int:
+    """以签名为准解析调用者身份（见上面注释）。"""
+    from config.settings import settings
+    token = request.headers.get(_ASSERTION_HEADER) or ""
+    uid = _verify_user_assertion(token) if token else None
+    if uid is not None:
+        if uid != body_uid:
+            logger.warning("[auth] 断言覆盖 body.user_id：%s → %s（body 不可信）", body_uid, uid)
+        return uid
+    if settings.agent_require_assertion:
+        logger.warning("[auth] 缺少/无效身份断言（%s）→ 401", "无头" if not token else "验签失败")
+        raise HTTPException(401, "缺少有效的服务间身份断言")
+    if token:
+        logger.warning("[auth] 身份断言验签失败，回退信任 body.user_id=%s", body_uid)
+    return body_uid
+
+
 def _build_messages(req: ChatRequest) -> list:
     """Build the message list from the request (sync, no blocking)."""
     messages = []
@@ -230,8 +304,8 @@ def _build_messages(req: ChatRequest) -> list:
     # 检测：当前消息与历史最近一条 user 消息字面相同（去首尾空白）。宁精确勿
     # 误伤——仅原句重发才点破，近似新问法不触发（不打断正常追问）。
     if req.message.strip():
-        prev_user = next((h["content"] for h in reversed(req.history)
-                          if h["role"] == "user"), None)
+        prev_user = next((h.content for h in reversed(req.history)
+                          if h.role == "user"), None)
         if isinstance(prev_user, str) and req.message.strip() == prev_user.strip():
             ctx_parts.append(
                 "repeat_ask_note: 访客原句重发了刚才的问题——若上轮已答过：先点破"
@@ -249,15 +323,15 @@ def _build_messages(req: ChatRequest) -> list:
     # （user→assistant），user 后非 assistant 即孤儿，整条跳过不注入。
     hist = req.history[-20:]
     for i, h in enumerate(hist):
-        if h["role"] == "user":
-            if i + 1 >= len(hist) or hist[i + 1]["role"] != "assistant":
+        if h.role == "user":
+            if i + 1 >= len(hist) or hist[i + 1].role != "assistant":
                 continue  # 孤儿 user（该轮回复未入库），不注入
-            messages.append(HumanMessage(content=h["content"]))
+            messages.append(HumanMessage(content=h.content))
         else:
             # 恢复 assistant 角色（曾全部包成 HumanMessage + [assistant]: 前缀——
             # 模型会把历史当"用户说的"，多轮上下文质量打折；角色语义对齐后
             # 模型对"谁说过什么"的区分不再依赖前缀文本）
-            messages.append(AIMessage(content=h["content"]))
+            messages.append(AIMessage(content=h.content))
 
     # 多模态（20260828 单图 → 20260828s 多图）：图片 + 文字转 OpenAI content 数组
     # （qwen 实测支持，100x100 红图识别正确）。多图循环拼 content 数组，每张一个
@@ -328,7 +402,7 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0) -> tuple[s
     return reply, nav_line, exec_rows
 
 
-def _summarize_dialogue(user_msg: str, history: list[dict], old_summary: str) -> str:
+def _summarize_dialogue(user_msg: str, history: list[HistoryItem], old_summary: str) -> str:
     """needs_summary 轮的独立对话摘要（与 agent 回复解耦，随图并行执行）。
 
     背景：旧方案让对话模型在回复末尾顺带输出 SUMMARY: 行（后端剥离入库），
@@ -338,7 +412,7 @@ def _summarize_dialogue(user_msg: str, history: list[dict], old_summary: str) ->
     允许总结客观内容，禁止推断动作归属。失败返回空串 → 调用方不入库，对话零影响。
     """
     from models import get_llm
-    lines = [f"{'访客' if h['role'] == 'user' else '助手'}: {h['content']}"
+    lines = [f"{'访客' if h.role == 'user' else '助手'}: {h.content}"
              for h in history[-20:]]
     lines.append(f"访客: {user_msg}")
     llm = get_llm(streaming=False, max_tokens=256, enable_thinking=False)
@@ -365,9 +439,10 @@ def _summarize_dialogue(user_msg: str, history: list[dict], old_summary: str) ->
 # ---------------------------------------------------------------------------
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, request: Request):
     if _agent is None:
         raise HTTPException(503, "Agent not initialised")
+    req.user_id = _resolve_user_id(request, req.user_id)
 
     messages = _build_messages(req)
     # 每请求独立线程：LangGraph 的 MemorySaver 线程状态会随对话无限累积，
@@ -711,6 +786,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                 req.user_id, (req.message or "")[:40], req.needs_summary)
     if _agent is None:
         raise HTTPException(503, "Agent not initialised")
+    req.user_id = _resolve_user_id(request, req.user_id)   # 身份以签名为准（见 _resolve_user_id）
     # 并发闸（20260916 加固）：LLM 流是最贵的资源（单次最长 180s），无闸时并发涌进来
     # 只会一起排队到超时。**只加在生产路径 /chat/stream 上**——`/chat` 是非流式直连
     # 入口（评测脚本/golden 用，线上 rust.log 实测零访问），不占这条预算。
@@ -939,9 +1015,15 @@ async def chat_stream(req: ChatRequest, request: Request):
 
 
 class ReviewRequest(BaseModel):
-    """AI 审核请求。content = 待审留言文本。"""
-    content: str
-    author: str = ""
+    """AI 审核请求。content = 待审留言文本。
+
+    20260917 加限额（外部审计指出）：此前 `content: str` 无上限——/review 由 Rust
+    的 AI 审核同步调用，一次请求可以顶着 12MB 的整体 body 上限灌进来（模型只取前
+    500 字符，但解析/strip/日志前都要先在内存里过一遍）。留言本身有 2000 字上限，
+    这里给 4000 留一倍余量。（审计说"日志会记录完整 text"不准确：实际是
+    `content=%.60s`，只打 60 字符。）"""
+    content: str = Field(max_length=4000)
+    author: str = Field(default="", max_length=100)
 
 
 @app.post("/review")

@@ -185,13 +185,23 @@ class RagIndex:
 
     # ── 查询 ──────────────────────────────────────────────────────
 
-    def search(self, query: str, top_k: int = 8) -> list[dict]:
+    def search(self, query: str, top_k: int = 8) -> list[dict] | None:
+        """返回候选列表；**索引不可用时返回 None**（区别于「没命中」的 []）。
+
+        20260917：此前两种失败都返回 []，工具层只能一律包成 empty(「检索无结果」)——
+        语料拉取失败会被 checker 记成「检索过、确实没有」的**事实**（外部审计指出）。
+        注意**不能**用「事先问一句 ready()」来判：索引是懒建的，冷启动时 chunks 为空
+        但完全可用，那样会误伤第一次检索。所以判据放在这里：建完之后还是空的才算不可用。
+        """
         if time.time() - self._last_build > REFRESH_TTL:
             try:
                 self.build()
             except Exception:
                 pass  # 重建失败用旧索引（语料拉取失败不该让检索崩溃）
         with self._lock:
+            if not self._chunks:
+                # 建过（或刚试过）但语料仍为空 ⇒ 索引不可用，不是「没命中」
+                return None
             chunks, doc_tf, postings, idf, avgdl = (
                 self._chunks, self._doc_tf, self._postings, self._idf, self._avgdl)
         # 疑问词先剔除（句法功能词非内容；不做会稀释实词权重，实证见 _QUERY_STOPWORDS），
@@ -246,6 +256,7 @@ def get_index() -> RagIndex:
 def search(query: str, top_k: int = 8) -> list[dict]:
     """检索入口：返回候选列表 [{type, id, title, section, score}]，不含全文。"""
     return get_index().search(query, top_k=top_k)
+
 
 
 if __name__ == "__main__":
