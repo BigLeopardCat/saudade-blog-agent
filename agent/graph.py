@@ -606,11 +606,18 @@ _CHAT_TOOL_CLAIM_RE = re.compile(
 # narrator 却回"那泠月喵就帮你把夜间模式关掉，回到明亮的日间页面啦！"——页面其实没变
 # （零帧 = 本轮什么都没发生），gate 判 PASS（_EXECUTION_CLAIM_RE 词表刻意不含
 # 开启/关闭/切换，为的是不误伤幂等轮的合法状态陈述"樱花已经开着"），访客被误导。
-# 判据（只在零帧轮启用，见 _claim_issue）：**施事前缀 + 及物状态动作动词**——
-# "帮你把 X 关掉"/"已经帮你打开了"/"已经切到夜间模式了"。与陈述态的区分靠三点：
+# 判据（只在零帧轮启用，见 _claim_issue）：**施事前缀 + 及物状态动作动词**
+# **+ 同句完成态**——"帮你把 X 关掉…啦"/"已经帮你打开了"/"已经切到夜间模式了"。
+# 与陈述态的区分靠四点：
 #   ① 陈述态用"着/是…状态"（开着、是开启状态），不在动词表里；
 #   ② 提议/能力/假设（能/可以/会/要不要/如果/随时/吧/？）走豁免表；
-#   ③ 否定如实（没有/不用/别）走豁免表。
+#   ③ 否定如实（没有/不用/别）走豁免表；
+#   ④ **完成态标记**（已经/刚刚/啦/了…）——**句子级**，不是子句级：事故句的完成
+#      标记落在同句后半"回到明亮的日间页面**啦**"。这一条是 20260919 真实 trace
+#      全量复扫抓出来的误伤补丁：20260907 22:01「小猫咪你都有哪些工具」的回答是
+#      **能力清单**——"帮你开启或关闭樱花""给你可点击的链接跳转过去"——旧判据把
+#      前者当成了操作声称（清单体的动词没有完成态，也没有"已经"）。零帧轮误伤
+#      代价是整轮回复被 fallback 吞掉，故按能力罗列/条件句收窄（宁漏勿误伤）。
 _STATE_ACTION_CLAIM_RE = re.compile(
     r"(?:我|咱|人家|本喵|泠月喵|系统|喵)?(?:已经?|刚刚|方才)?"
     r"(?:帮你|给你|为你|替你|帮主人|帮你把|给你把)"
@@ -625,6 +632,10 @@ _STATE_ACTION_EXEMPT_RE = re.compile(
     r"|可以|能够|会|能|如果|若是|要是|若|要不要|需要的话|建议|随时|待会|等下|马上|这就|接下来|准备|打算|想要|想"
     r"|你说|你问|你提到|引用|原话|么|吗|呢|吧|[?？]"
 )
+# 句子切分（完成态标记的作用域）与"已完成"标记本身（见 _state_action_claim）。
+# 只认完成态虚词与时间副词：裸"已"会撞"而已"、裸"好"会撞"好呀"，故不收。
+_SENT_RE = re.compile(r"[。！？!?\n]+")
+_STATE_DONE_RE = re.compile(r"已经|刚刚|方才|啦|咯|喽|了|好了|成功|完成|搞定")
 # ── gate 洞②：站内检索声称 vs 本轮帧族（20260919）──────────────────────────
 # 事故形态：回复说"我检索了一圈 / 把站内翻了一遍 / 用 rag_search 搜了一遍"，而本轮
 # 根本没跑任何内容类工具（零帧，或只跑了导航/特效这类动作工具）。旧判据两处缺口：
@@ -765,12 +776,19 @@ def _phantom_tool_claim(reply: str, executed: set[str], exec_memory: bool) -> st
     return None
 
 
-def _clause_hits(text: str, rx, exempt) -> bool:
+def _clause_hits(text: str, rx, exempt, need_done: bool = False) -> bool:
     """子句级判定：任一无豁免词的子句命中 rx → True。
 
     子句切分沿用 _CLAUSE_RE（标点切分）——豁免必须**同子句内**才算数：
     "那泠月喵就帮你把夜间模式关掉，要是之后想换回来随时说" 里前句是声称、
-    后句的"要是/随时"不该豁免前句。"""
+    后句的"要是/随时"不该豁免前句。
+
+    need_done=True（两个声称判据都用）：还要求**同句**（_SENT_RE 切分）带完成态
+    标记——声称"已做过"就得有完成态。作用域放句子级而非子句级，是因为事故句的
+    完成标记落在同句后半（"…就帮你把夜间模式关掉，回到明亮的日间页面啦"）。"""
+    if need_done:
+        text = "".join(s + "。" for s in _SENT_RE.split(text)
+                       if _STATE_DONE_RE.search(s))
     for c in _CLAUSE_RE.finditer(text):
         clause = c.group(0)
         if rx.search(clause) and not exempt.search(clause):
@@ -779,8 +797,9 @@ def _clause_hits(text: str, rx, exempt) -> bool:
 
 
 def _state_action_claim(text: str) -> bool:
-    """零工具轮的"操作完成"声称（gate 洞①）：施事前缀 + 及物状态动作动词。"""
-    return _clause_hits(text, _STATE_ACTION_CLAIM_RE, _STATE_ACTION_EXEMPT_RE)
+    """零工具轮的"操作完成"声称（gate 洞①）：施事前缀 + 及物状态动作动词 + 完成态。"""
+    return _clause_hits(text, _STATE_ACTION_CLAIM_RE, _STATE_ACTION_EXEMPT_RE,
+                        need_done=True)
 
 
 def _site_search_claim(text: str, exec_memory: bool) -> bool:
@@ -788,7 +807,9 @@ def _site_search_claim(text: str, exec_memory: bool) -> bool:
 
     _CHAT_SCAN_CLAIM_RE 一并纳入（它的词表是 20260905 事故现场调过的，
     只是词序漏了"站内我查了一圈"形态）。exec_memory=True（本轮带跨轮回执）
-    且子句含追述时间词 → 属 rule 6 的据实转述，不判。"""
+    且子句含追述时间词 → 属 rule 6 的据实转述，不判。同 _state_action_claim
+    一样要求**同句完成态**（整段话与洞①共用一条判据纪律：完成态才算声称）。"""
+    text = "".join(s + "。" for s in _SENT_RE.split(text) if _STATE_DONE_RE.search(s))
     for c in _CLAUSE_RE.finditer(text):
         clause = c.group(0)
         if not (_SITE_SEARCH_CLAIM_RE.search(clause) or _CHAT_SCAN_CLAIM_RE.search(clause)):
