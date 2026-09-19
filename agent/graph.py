@@ -601,6 +601,60 @@ _CHAT_TOOL_CLAIM_RE = re.compile(
     r"|(?:我|咱|人家|本喵)(?:刚|刚才|刚刚|这轮|这一轮|之前|确实|真的|又)?调(?:用|过)(?:过)?(?:了)?\s*工具"
     r"|(?:我|咱|人家|本喵)刚(?:刚|才)?(?:用|通过)\s*(?:" + _TOOL_NAMES_ALT + r")(?:查|搜|调|读|看|翻|拿|执行)"
 )
+# ── gate 洞①：零工具轮的"操作完成"声称（20260919）────────────────────────────
+# 事故实证（真实 trace 20260907 12:47:53）：用户只说"嗯"，planner 判 chat（零工具），
+# narrator 却回"那泠月喵就帮你把夜间模式关掉，回到明亮的日间页面啦！"——页面其实没变
+# （零帧 = 本轮什么都没发生），gate 判 PASS（_EXECUTION_CLAIM_RE 词表刻意不含
+# 开启/关闭/切换，为的是不误伤幂等轮的合法状态陈述"樱花已经开着"），访客被误导。
+# 判据（只在零帧轮启用，见 _claim_issue）：**施事前缀 + 及物状态动作动词**——
+# "帮你把 X 关掉"/"已经帮你打开了"/"已经切到夜间模式了"。与陈述态的区分靠三点：
+#   ① 陈述态用"着/是…状态"（开着、是开启状态），不在动词表里；
+#   ② 提议/能力/假设（能/可以/会/要不要/如果/随时/吧/？）走豁免表；
+#   ③ 否定如实（没有/不用/别）走豁免表。
+_STATE_ACTION_CLAIM_RE = re.compile(
+    r"(?:我|咱|人家|本喵|泠月喵|系统|喵)?(?:已经?|刚刚|方才)?"
+    r"(?:帮你|给你|为你|替你|帮主人|帮你把|给你把)"
+    r"[^\n。！？!?；;，,]{0,16}?"
+    r"(?:打开|开启|开好|关掉|关闭|关上|切换|切到|切成|切回来|调到|改成|换成|显示|上屏|跳转|跳过去)"
+    r"|(?:已经?|刚刚|方才)[^\n。！？!?；;，,]{0,10}?"
+    r"(?:打开|开启|开好|关掉|关闭|关上|切换|切到|切成|切回来|调到|改成|换成|显示|上屏|跳转过去)"
+    r"(?:了|啦|好了|成功)"
+)
+_STATE_ACTION_EXEMPT_RE = re.compile(
+    r"没|没有|未|不曾|从未|无法|不能|不会|不用|不需要|无需|别|并不是|不是"
+    r"|可以|能够|会|能|如果|若是|要是|若|要不要|需要的话|建议|随时|待会|等下|马上|这就|接下来|准备|打算|想要|想"
+    r"|你说|你问|你提到|引用|原话|么|吗|呢|吧|[?？]"
+)
+# ── gate 洞②：站内检索声称 vs 本轮帧族（20260919）──────────────────────────
+# 事故形态：回复说"我检索了一圈 / 把站内翻了一遍 / 用 rag_search 搜了一遍"，而本轮
+# 根本没跑任何内容类工具（零帧，或只跑了导航/特效这类动作工具）。旧判据两处缺口：
+#   ① _CHAT_SCAN_CLAIM_RE 只在 chat 零工具轮跑，且要求人称在空间词**之前**——
+#      真实 trace 20260906 23:49「站内我查了一圈，没有找到专门讨论…的文章或说说」
+#      （零工具）因此漏网；
+#   ② 有帧轮（混合轮）只做具名工具核对（5c），泛指"检索了一圈"不点名工具 → 漏网。
+# 现判据 = 站内内容域检索声称 + 本轮内容类工具一个都没跑（_CONTENT_TOOLS）。豁免
+# 与 5c 同源：否定/提议/假设、引述（调用方先去引号）、跨轮回执支撑的追述。
+_SITE_SEARCH_CLAIM_RE = re.compile(
+    r"(?:站内|全站|博客|网站|站点|文章库|你写的|博主写的|所有文章|全部文章|全部说说)"
+    r"[^\n。！？!?；;，,]{0,24}?"
+    r"(?:扫|查|翻|搜|检索|翻找|查找)(?:了|过)?(?:个)?(?:一圈|一遍|个遍|好几圈|个底朝天|遍)"
+    r"|(?:搜|检索|翻|查)(?:了|过)?(?:个)?(?:一圈|一遍|个遍|好几圈)(?:站内|博客|文章|说说|留言|全站)?"
+    r"|用\s*`?\w{3,}`?\s*(?:搜|查|检索|翻)(?:了|过)?(?:一圈|一遍|个遍|一遍)"
+    r"|(?:两|双)(?:边|侧|个)(?:板块|数据源)?(?:都|也)?(?:真的)?(?:翻|查|看|搜)(?:了|过|完)"
+)
+_SEARCH_CLAIM_EXEMPT_RE = re.compile(
+    r"没|没有|未|不曾|从未|无法|不能|不会|不用|不需要|无需|别|并不是|不是"
+    r"|可以|能够|会|能|如果|若是|要是|若|要不要|需要的话|建议|随时|待会|等下|接下来|准备|打算|想要|想"
+    r"|网上|网络|互联网|通用|常识|知识库|训练|资料里"
+    r"|你说|你问|你提到|引用|原话|吗|呢|[?？]"
+)
+# 本轮"内容类"工具（跑过任何一个 ⇒ 检索/读取声称有据，5d 不判）。名字取自
+# tools/base.py 注册表（test_skills 有断言锁定全部 ∈ _TOOL_MAP，防改名漂移）。
+_CONTENT_TOOLS = frozenset({
+    "search_notes", "rag_search", "list_notes", "get_top_notes", "list_talks",
+    "list_guestbook", "list_categories", "list_tags", "get_announcements",
+    "get_article_detail", "get_site_map", "get_blog_info",
+})
 # 命令前缀文本：回复正文出现系统命令帧前缀 = 模型在"假装发命令"（旧事故：正文
 # 输出 AUTO_NAVIGATE:/NAVIGATE:/EFFECT:/DARKMODE: 文本既不会执行、还误导用户
 # 以为已执行）。任何轮次命中一律兜底——叙述纪律已禁止，命中即确凿违规。
@@ -711,36 +765,79 @@ def _phantom_tool_claim(reply: str, executed: set[str], exec_memory: bool) -> st
     return None
 
 
+def _clause_hits(text: str, rx, exempt) -> bool:
+    """子句级判定：任一无豁免词的子句命中 rx → True。
+
+    子句切分沿用 _CLAUSE_RE（标点切分）——豁免必须**同子句内**才算数：
+    "那泠月喵就帮你把夜间模式关掉，要是之后想换回来随时说" 里前句是声称、
+    后句的"要是/随时"不该豁免前句。"""
+    for c in _CLAUSE_RE.finditer(text):
+        clause = c.group(0)
+        if rx.search(clause) and not exempt.search(clause):
+            return True
+    return False
+
+
+def _state_action_claim(text: str) -> bool:
+    """零工具轮的"操作完成"声称（gate 洞①）：施事前缀 + 及物状态动作动词。"""
+    return _clause_hits(text, _STATE_ACTION_CLAIM_RE, _STATE_ACTION_EXEMPT_RE)
+
+
+def _site_search_claim(text: str, exec_memory: bool) -> bool:
+    """站内检索声称（gate 洞②）：站内内容域检索完成式表述。
+
+    _CHAT_SCAN_CLAIM_RE 一并纳入（它的词表是 20260905 事故现场调过的，
+    只是词序漏了"站内我查了一圈"形态）。exec_memory=True（本轮带跨轮回执）
+    且子句含追述时间词 → 属 rule 6 的据实转述，不判。"""
+    for c in _CLAUSE_RE.finditer(text):
+        clause = c.group(0)
+        if not (_SITE_SEARCH_CLAIM_RE.search(clause) or _CHAT_SCAN_CLAIM_RE.search(clause)):
+            continue
+        if _SEARCH_CLAIM_EXEMPT_RE.search(clause):
+            continue
+        if exec_memory and _PHANTOM_PRIOR_RE.search(clause):
+            continue
+        return True
+    return False
+
+
 # NOTE 零工具（页面不存在/已下线）轮的如实措辞核验词表（与 instantiate_plan 的
 # note 文本配套，见 gate_node）。
 _HONEST_DOWN = ("下线", "下架", "无法访问", "没有了")
 _HONEST_GONE = ("没有", "不存在", "找不到", "无法识别", "没有找到")
 
 
-def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool) -> tuple[str, str] | None:
+def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
+                 exec_memory: bool = False) -> tuple[str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本)；有据/无声称 → None。
 
-    作用域（20260903 收窄后的设计）：
+    作用域（20260903 收窄后的设计 + 20260919 两洞）：
       - 任何轮：命令前缀文本（_CMD_PREFIX_RE）
-      - chat 零工具轮：仅第一人称工具调用声称（_CHAT_TOOL_CLAIM_RE）——高精确
-        模式；"重读/查过"读取声称不在此拦（chat 轮多为口语，误伤成本高，
-        且 chat 计划 TOOLS 恒空、站内内容声称本就不该出现——留给叙述纪律）
+      - 零工具轮（不分技能）：操作完成声称（_STATE_ACTION_CLAIM_RE，洞①）与
+        站内检索声称（_site_search_claim，洞②）——零帧 = 本轮什么都没发生，
+        这两族声称必为编造
+      - chat 零工具轮：另查第一人称工具调用声称（_CHAT_TOOL_CLAIM_RE）——
+        高精确模式；"重读/查过"读取声称不在此拦（chat 轮多为口语，误伤成本高）
       - content_query 零工具轮（异常路径：计划本应有调用清单却留空收尾）：
         三族全查（读取/执行/调用声称）——该场景"本该查证"，声称误伤成本低
       - 有帧轮：读取/调用声称天然有据，不做文本对照；只兜 err 帧 + 完成式
-        声称、NAVIGATE: 确认帧 + 到达声称（见 gate_node）
+        声称、NAVIGATE: 确认帧 + 到达声称、具名工具声称（5c）、**站内检索声称
+        与内容类帧族不符**（5d，洞②的混合轮形态）——见 gate_node
     """
     if _CMD_PREFIX_RE.search(reply):
         return ("cmd_prefix", _FALLBACK_CMD_PREFIX)
     if frames_exist:
-        return None  # 帧存在：声称有据（err 帧/确认帧场景由 gate_node 单独兜，
-                     # 具名工具声称由 gate_node 5c 另查）
+        return None  # 帧存在：声称有据（err 帧/确认帧/具名/检索族场景由 gate_node 兜）
     # 引号内是被转述的访客留言/说说正文，不算 narrator 自己的声称（20260913：
     # 留言板里那句"执行调用 navigate_to"被转述时误伤）
     own = _strip_quoted_spans(reply)
+    if _state_action_claim(own):
+        return ("state_claim_without_tool", _FALLBACK_STATE_CLAIM)
+    if _site_search_claim(own, exec_memory):
+        return ("search_claim_without_tool", _FALLBACK_SEARCH_CLAIM)
     if skill == "chat":
-        if (_CHAT_TOOL_CLAIM_RE.search(own) or _CHAT_SCAN_CLAIM_RE.search(own)):
+        if _CHAT_TOOL_CLAIM_RE.search(own):
             return ("claim_without_tool", _FALLBACK_CLAIM)
         return None
     if skill == "content_query":
@@ -759,6 +856,15 @@ _FALLBACK_CLAIM = (
     "喵呜……被主人抓包啦。这一轮系统记录里其实没有任何工具执行，我刚才说自己"
     "查过/读过/调用过是不对的——没核实过的事不能装成核实过的样子。你愿意的话"
     "再问我一次，我让系统认认真真查一遍再回答你，好嘛？")
+_FALLBACK_STATE_CLAIM = (
+    "喵呜……主人，这一轮系统没有任何工具执行，页面和设置并没有真的改变——我刚才说"
+    "『已经帮你打开了/关掉了』是不对的，只是嘴上说说。要我现在真的去执行吗？说一声"
+    "我马上让系统动手喵。")
+_FALLBACK_SEARCH_CLAIM = (
+    "喵呜……主人，我得说实话：这一轮系统没有任何工具执行，我说的『翻了一遍/检索了"
+    "一圈』是嘴上跑火车，没有依据。要不要我现在认认真真查一遍再回答你？这次每一条"
+    "都带真实来源喵。")
+
 _FALLBACK_EMPTY = (
     "喵呜……主人，我刚才好像卡住了，没能说出话来。可以再问我一次嘛？这次我让"
     "系统查清楚了再好好回答～")
@@ -798,7 +904,6 @@ def _fallback_result(issue: str, text: str, plan: dict, frames: int) -> dict:
 # ---------------------------------------------------------------------------
 # 3. Node：planner（唯一决策）/ execute（确定性执行）/ model（narrator）/ gate
 # ---------------------------------------------------------------------------
-
 
 
 def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
@@ -1568,7 +1673,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
 
     # ── 2. 命令前缀文本（任何轮次，正文出现命令帧前缀 = 假装发命令）─────────
     # ── 3. 编造资源 URL（任何轮次，工具返回/用户消息中不存在的 /api 或图片）──
-    issue = _claim_issue(reply, plan["skill"], plan, bool(frames))
+    issue = _claim_issue(reply, plan["skill"], plan, bool(frames), _has_exec_memory(msgs))
     if issue:
         return _fallback_result(*issue, plan, len(frames))
     code_stripped = re.sub(r"```.*?```", "", reply, flags=re.S)
@@ -1625,6 +1730,20 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         record("gate", "phantom_tool_claim", tool=phantom,
                executed=sorted(n for n in executed_names if n))
         return _fallback_result("phantom_tool_claim", _FALLBACK_CLAIM, plan, len(frames))
+
+    # 5d. 站内检索声称 vs 本轮内容类帧（20260919 gate 洞②的混合轮形态）：回复说
+    #     "我检索了一圈/把站内翻了一遍/用 rag_search 搜了一遍"，而本轮**一个内容类
+    #     工具都没跑**（只跑了导航/特效/设备这类动作工具）→ 检索声称无据。5c 只管
+    #     点名工具，泛指检索声称归这里。
+    if not (executed_names & _CONTENT_TOOLS):
+        own5d = _strip_quoted_spans(reply)
+        if _site_search_claim(own5d, _has_exec_memory(msgs)):
+            logger.info("[gate] 站内检索声称但本轮无内容类工具帧（执行=%s）→ fallback",
+                        "、".join(sorted(n for n in executed_names if n)) or "无")
+            record("gate", "phantom_search_claim",
+                   executed=sorted(n for n in executed_names if n))
+            return _fallback_result("phantom_search_claim", _FALLBACK_SEARCH_CLAIM,
+                                    plan, len(frames))
 
     record("gate", "pass", zero_frame=False, frames=len(frames),
            duration_s=round(time.monotonic() - _t0, 2))
