@@ -322,7 +322,13 @@ def _frame_texts(messages: list, limit: int = 5, per: int = 300) -> str:
     for m in frames[-limit:]:
         name = getattr(m, "name", "") or ""
         text = _msg_text(m)
-        if text.startswith("__ERROR__"):
+        if text.strip() in ("", "[]", "{}"):
+            # 20260920：空结果必须与"没执行"在措辞上分开——真实事故里 narrator 把
+            # `返回: []` 读成了"本轮没有执行任何工具（回执为空）"（graph.py 的
+            # _NO_EXEC_CLAIM_RE 是兜底，这里是治本：把"执行了，只是空"写明白）。
+            parts.append(f"工具 {name} 返回（**已执行，结果为空**）: "
+                         f"{text.strip() or '[]'}")
+        elif text.startswith("__ERROR__"):
             parts.append(f"工具 {name} 返回错误: {text}")
         elif name == "get_article_detail" and len(text) > _DETAIL_FRAME_PER:
             parts.append(
@@ -347,5 +353,9 @@ def _receipts_text(receipts: list) -> str:
     lines = []
     for r in receipts[-5:]:  # 同轮多 spec 时只取最近 5 条，防稀释
         args_txt = json.dumps(r.get("args") or {}, ensure_ascii=False)[:160]
-        lines.append(f"- {r['tool']} args={args_txt} → {str(r.get('result', ''))[:160]}")
+        res = str(r.get("result", ""))[:160]
+        if res.strip() in ("", "[]", "{}"):
+            # 同 _frame_texts：空结果标注"已执行"，否则 `→ []` 会被读成"没执行"
+            res = "（已执行，结果为空）"
+        lines.append(f"- {r['tool']} args={args_txt} → {res}")
     return "\n".join(lines)

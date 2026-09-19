@@ -601,6 +601,11 @@ _CHAT_TOOL_CLAIM_RE = re.compile(
     r"|(?:我|咱|人家|本喵)(?:刚|刚才|刚刚|这轮|这一轮|之前|确实|真的|又)?调(?:用|过)(?:过)?(?:了)?\s*工具"
     r"|(?:我|咱|人家|本喵)刚(?:刚|才)?(?:用|通过)\s*(?:" + _TOOL_NAMES_ALT + r")(?:查|搜|调|读|看|翻|拿|执行)"
 )
+# 匹配点**前**的否定/使役标记（20260920 误伤修复，见 _chat_tool_claim）。
+_NEG_BEFORE_RE = re.compile(r"不是|并非|没有|不用|别|让|请|叫|要是|如果")
+# 工具声称的完成态标记：比 _STATE_DONE_RE 多认"过"——"我用 X 查过时间"是完成式声称
+# （真实用例），而 _STATE_DONE_RE 是给状态动作判据调的，那边裸"过"会撞"通过/经过"，不能收。
+_CLAIM_DONE_RE = re.compile(r"了|过|已经|刚刚|方才|啦|咯|喽|成功|完成|搞定")
 # ── gate 洞①：零工具轮的"操作完成"声称（20260919）────────────────────────────
 # 事故实证（真实 trace 20260907 12:47:53）：用户只说"嗯"，planner 判 chat（零工具），
 # narrator 却回"那泠月喵就帮你把夜间模式关掉，回到明亮的日间页面啦！"——页面其实没变
@@ -802,6 +807,66 @@ def _state_action_claim(text: str) -> bool:
                         need_done=True)
 
 
+def _chat_tool_claim(text: str) -> bool:
+    """零帧 chat 轮的第一人称工具调用声称（_CHAT_TOOL_CLAIM_RE）。
+
+    20260920 收窄（真实 trace 00:26:35 误伤）：`我调工具` 命中的是**否定+使役**句——
+    "那次跳转**不是你让我调工具**做的，更像是导航正则快道直接接管了…"——narrator 说的
+    正是"我没调"，却被判成调用声称，整轮 fallback（用户拿截图来质问，narrator 的诚实
+    认错被吞掉，访客拿到"被主人抓包啦"，为一件它根本没做的事道歉）。两条与洞①②同源
+    的纪律（零帧误伤代价 = 整轮回复被吞，宁漏勿误伤）：
+      ① 匹配点前 6 字内有否定/使役标记（不是/并非/没有/让/请/叫/要是/如果…）→ 跳过；
+      ② **同句完成态**要求（_STATE_DONE_RE）——裸"我调工具"是描述/假设性片段，不是
+         "已做过"的声称；真声称（"我用了 X 工具查的""这次我调用工具查了一遍"）自带完成态。
+    全库复扫（453 条带事件 trace，零帧轮 127 条）：该判据真声称命中 0、误伤 1（即上述
+    事故句）——收窄后误伤清零，且不影响洞①②自己的命中性。
+    """
+    for s in _SENT_RE.split(text):
+        if not _CLAIM_DONE_RE.search(s):
+            continue
+        for c in _CLAUSE_RE.finditer(s):
+            clause = c.group(0)
+            for m in _CHAT_TOOL_CLAIM_RE.finditer(clause):
+                if _NEG_BEFORE_RE.search(clause[max(0, m.start() - 6):m.start()]):
+                    continue
+                return True
+    return False
+
+
+# ── gate 洞③：有帧轮里谎称"本轮没有执行任何工具"（20260920）──────────────────
+# 与 5c/5d 方向相反的**假阴性**声称。事故实证（真实 trace 20260920 00:56:23）：本轮
+# search_notes 真执行（返回空 `[]`、checker PASS、frames=1），叙述却写"**本轮没有执行
+# 任何检索工具**（回执为空）"——访客的肯定应答（"要"，承接上一轮"要不要我正经跑一次
+# 检索"）被吞掉，又被反问"要不要我查一遍" ⇒ 确认死循环（用户看着像"我说要它也没查"）。
+# 根因在提示词侧："空结果"与"没执行"同形（帧渲染 `返回: []`、回执模板"为空 = 本轮没有
+# 已验收的执行"、纪律 3 的"（本轮尚无工具执行）"现成句式），模型套错了句式——渲染侧
+# 已同步标注"（已执行，结果为空）"（context.py）并在纪律 3 加了反向说明，本判据是兜底。
+# 判据只在**有已验证回执**时启用（receipts 非空）：零帧轮该表述是**真话**（全库 3 条
+# 真实 trace 实证）、帧全被 BLOCK（__ERROR__/空文本）时"没有执行"也算属实，都不能拦。
+_NO_EXEC_CLAIM_RE = re.compile(
+    r"(?:本轮|这轮|这一轮|本次|这次|刚才|刚刚)[^。！？\n]{0,16}(?:没有|没|未)(?:有)?"
+    r"(?:执行|调用|跑|做|触发)[^。！？\n]{0,12}(?:任何|一个)[^。！？\n]{0,4}工具"
+    r"|(?:本轮|这轮|这一轮)[^。！？\n]{0,20}回执(?:是|为)?空的?"
+)
+# 洞③专用豁免（**不能复用 _STATE_ACTION_EXEMPT_RE**：那张表收"没/没有/未"，而本判据
+# 的命中本身就含否定词，复用等于全豁免）。只豁免条件/假设/疑问框架——"要是本轮没有
+# 执行任何工具，我就…"是假设不是声称。
+_NO_EXEC_EXEMPT_RE = re.compile(
+    r"要是|如果|假如|假设|除非|若|为什么|是不是|难道|吗|呢|[?？]|引用|原话")
+
+
+def _false_negative_claim(reply: str, receipts_exist: bool) -> bool:
+    """有帧轮的"本轮什么都没执行"假阴性声称（见 _NO_EXEC_CLAIM_RE）。
+
+    豁免：引号内是转述（_strip_quoted_spans，调用方已做）；否定+条件句（"要是本轮没有
+    执行任何工具…"）走 _CLAUSE_RE 同子句豁免表。只认"工具/回执"笼统表述——"本轮没有
+    执行任何跳转操作"这类**具体某类动作**的如实说明不在此列（只跑检索时它是真话）。
+    """
+    if not receipts_exist:
+        return False
+    return _clause_hits(reply, _NO_EXEC_CLAIM_RE, _NO_EXEC_EXEMPT_RE)
+
+
 def _site_search_claim(text: str, exec_memory: bool) -> bool:
     """站内检索声称（gate 洞②）：站内内容域检索完成式表述。
 
@@ -858,7 +923,7 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     if _site_search_claim(own, exec_memory):
         return ("search_claim_without_tool", _FALLBACK_SEARCH_CLAIM)
     if skill == "chat":
-        if _CHAT_TOOL_CLAIM_RE.search(own):
+        if _chat_tool_claim(own):
             return ("claim_without_tool", _FALLBACK_CLAIM)
         return None
     if skill == "content_query":
@@ -885,6 +950,11 @@ _FALLBACK_SEARCH_CLAIM = (
     "喵呜……主人，我得说实话：这一轮系统没有任何工具执行，我说的『翻了一遍/检索了"
     "一圈』是嘴上跑火车，没有依据。要不要我现在认认真真查一遍再回答你？这次每一条"
     "都带真实来源喵。")
+_FALLBACK_NO_EXEC = (
+    "喵呜……主人，我得纠正自己一句：这一轮系统**其实执行过工具**（只是返回是空的，"
+    "没有查到东西），我刚才却说成『本轮没有执行任何工具』——把『查了但没有』讲成"
+    "『压根没查』，这是我的错 :委屈: 要我再换一组关键词查一遍嘛？这次查到什么、"
+    "没查到什么都如实告诉你喵。")
 
 _FALLBACK_EMPTY = (
     "喵呜……主人，我刚才好像卡住了，没能说出话来。可以再问我一次嘛？这次我让"
@@ -1567,7 +1637,10 @@ _EXECUTOR_PROMPT = """\
 3. "工具执行记录"为"（本轮尚无工具执行）"时：本轮没有执行过任何查询/动作——
    不得声称查过、读过、搜过、翻找过、打开过、跳转过、显示过（口语换说法也算
    声称：如"去站内翻找了一圈""把博客扫了一遍"）；站内问题如实说明无法确认，
-   或建议用户稍后再问。
+   或建议用户稍后再问。**反向同样要如实**：记录里出现"返回（已执行，结果为空）"
+   或"本轮执行回执"里有该次调用 = **执行过了**，只是没查到结果——不得说成"本轮
+   没有执行工具/没有检索/回执为空"（20260920 真实事故：把空结果讲成没执行，
+   访客的肯定应答被吞掉，还被反问"要不要我查一遍"）。空结果就如实说"查了，没有"。
 4. 被访客质疑某操作是否真的执行过（"你确定？""真有这个页面吗？"）：
    - 记录里有对应工具返回 → 如实转述该返回（含失败/错误信息），不扩大不粉饰；
    - 记录里没有对应执行 → 如实承认"我这边没有看到这次操作的执行记录，刚才
@@ -1765,6 +1838,17 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                    executed=sorted(n for n in executed_names if n))
             return _fallback_result("phantom_search_claim", _FALLBACK_SEARCH_CLAIM,
                                     plan, len(frames))
+
+    # 5e. 假阴性声称（20260920 洞③）：本轮**真执行过**（有已验证回执）却宣称"本轮
+    #     没有执行任何工具/回执为空"——与 5c/5d 反向，把"查了但没有结果"讲成"没查"，
+    #     访客的肯定应答被吞掉（真实 trace 20260920 00:56:23 的确认死循环）。
+    if _false_negative_claim(_strip_quoted_spans(reply), bool(state.get("receipts"))):
+        logger.info("[gate] 回复谎称本轮未执行但回执在场（receipts=%d）→ fallback",
+                    len(state.get("receipts") or []))
+        record("gate", "false_negative_claim",
+               receipts=len(state.get("receipts") or []))
+        return _fallback_result("false_negative_claim", _FALLBACK_NO_EXEC,
+                                plan, len(frames))
 
     record("gate", "pass", zero_frame=False, frames=len(frames),
            duration_s=round(time.monotonic() - _t0, 2))

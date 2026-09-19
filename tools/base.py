@@ -127,7 +127,12 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
         )
         resp.raise_for_status()
         body = resp.json()
-        return str(body.get("data", []))
+        data = body.get("data", [])
+        # 空列表 = "查到了，就是空的"（事实，checker PASS、进回执）——用 empty() 标 kind，
+        # 别写 str(data)（20260916 契约：str() 会退化成普通 str 丢 kind）。
+        # 20260920 之所以要这个标记：真实事故里 narrator 把 `返回: []` 读成了"本轮没有
+        # 执行任何工具"（_NO_EXEC_CLAIM_RE 是兜底，渲染侧已同步标注"已执行，结果为空"）。
+        return empty("[]") if not data else _shape(data)
     except Exception as exc:
         logger.error("Search failed: %s", exc)
         return unavailable(f"搜索服务暂时不可用（{type(exc).__name__}），请稍后再试")
