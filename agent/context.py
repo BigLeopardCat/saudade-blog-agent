@@ -40,11 +40,11 @@ def _msg_text(m) -> str:
 # 文案与 RiverBoard/index.tsx 实际 UI 对齐（输入框/留名/匿名/我的河灯页签）。
 GUESTBOOK_GUIDE = (
     "【河灯集留言板操作指南】（系统注入的页面事实，教访客如何操作时以此为准）"
-    "页面下方有留言输入框（提示语「此刻想说的话…」），在框里写好内容即可放灯；"
+    "页面左下方有「此心为灯」留言入口，按流程选完河灯和印章后出现输入框（提示语「此刻想说的话…」），在框里写好内容即可放灯；"
     "留名框在输入框旁，默认预填当前登录账号昵称，清空留名或点「匿名」则以无名/"
     "匿名身份放灯；不需要注册或邮箱，输入框一直可见。"
     "放灯后页面顶部「我的河灯」页签可查看自己放过的灯。"
-    "注意：本页面没有「昵称+邮箱+提交」式表单，也不需要先登录才能留言。"
+    "注意：本页面没有「昵称+邮箱+提交」式表单，需要先登录才能留言。"
 )
 
 # 留言板路径（/guestbook 与旧隐藏地址 /he 同页）
@@ -116,6 +116,24 @@ def _last_user_msg(messages: list) -> str:
     return ""
 
 
+# 节选截断（20260919）：旧版只留**末尾** per 字，长回复中段的指代锚点会被整段
+# 截掉——实证（会话 144，1257 字回复）里点名的《架构文档》在正文中段，planner
+# 眼里就成了"这轮从没提过这篇"，于是从零检索去找（还找错了另一篇）。改成头尾
+# 各取一段，中段被截时先把其中的指代锚点（《标题》/id=/article 链接）捞回来附上。
+_TAIL_MID_ANCHOR_RE = re.compile(r"《[^》\n]{2,40}》|id\s*[=:：]\s*\d+|/article/\d+")
+_TAIL_HEAD = 80
+
+
+def _clip_mid(text: str, head: int = _TAIL_HEAD, tail: int = 160) -> str:
+    """头 80 + 中段锚点 + 尾 160（见上方注释；中段无锚点时退化为纯头尾取样）。"""
+    if len(text) <= head + tail + 8:
+        return text
+    mid = text[head:len(text) - tail]
+    uniq = list(dict.fromkeys(_TAIL_MID_ANCHOR_RE.findall(mid)))[:4]
+    keep = ("（中段提到： " + " ".join(uniq) + " ）") if uniq else ""
+    return text[:head] + " …" + keep + "… " + text[-tail:]
+
+
 def _recent_tail(messages: list, max_turns: int = 4, per: int = 160) -> str:
     """最近几轮对话节选（planner 语境补丁，20260903 nav_param_anchor_about 事故）。
 
@@ -123,7 +141,8 @@ def _recent_tail(messages: list, max_turns: int = 4, per: int = 160) -> str:
     所指的目标只存在于更早轮次里——不给节选就无法还原该跳哪页。取状态消息里
     最近几轮人机对话行（跳过工具帧——结果有专门区块）。跳过两样：注入的页面
     上文（[System:…] 开头的人类消息，planner 已有 page_ctx）与当前这条用户消息
-    （它是决策对象，不是上下文）。逐条截断防超长输入稀释决策。
+    （它是决策对象，不是上下文）。逐条截断防超长输入稀释决策——截断走 _clip_mid
+    （头尾取样 + 中段锚点打捞，20260919 起；纯尾部截断会丢文档名）。
     """
     out: list[str] = []
     seen_current = False
@@ -142,7 +161,7 @@ def _recent_tail(messages: list, max_turns: int = 4, per: int = 160) -> str:
             speaker = "用户"
         else:
             speaker = "泠月"
-        text = text.replace("\n", " ")[-per:]
+        text = _clip_mid(text.replace("\n", " "), tail=per)
         out.append(f"{speaker}：{text}")
         if len(out) >= max_turns:
             break
@@ -155,6 +174,129 @@ def _recent_tail(messages: list, max_turns: int = 4, per: int = 160) -> str:
 def _has_frames(messages: list) -> bool:
     """当前请求是否有工具执行帧（ToolMessage）。"""
     return any(isinstance(m, ToolMessage) for m in messages)
+
+
+# ── 本会话已点名文档（20260919）──
+# 动机（实证事故，会话 144 / 20260919 17:18:45）：planner 是单消息决策且历史只以
+# _recent_tail（最近 4 条 × 头尾取样）出现；规则 4 的文章指代解析又要求消息里带
+# 指代词（"那篇/这篇/它"）——用户只问"你看了吗就说没写"（对上文的追问，无指代词）
+# 时整条规则不启动，落规则 3"机制型 → rag_search 发用户原句"。而事实上 page_ctx 的
+# recent_executions 里当时就有「读取文章 19《Saudade Blog AI Agent（泠月喵）架构
+# 文档》」两行、上一轮回复也点了名：文档是**明确的**，planner 却从零检索，BM25 命中
+# 了同主题的另一篇（46《文章向量空间图谱项目文档》），确定性拦截再把它读全文 →
+# 整轮跑偏（用户原话"明明上下文都明确文档是什么，结果还要走一遍 rag 去找文章"）。
+# 解法与 intent_hints 同构：系统把锚点确定性抽出来注入（给事实、不夺决策——用户
+# 到底指哪篇仍由 planner 判断），planner 不必为了"知道是哪篇"再跑检索。
+_DOC_TITLE_RE = re.compile(r"《([^》\n]{2,60})》")
+_DOC_ID_NEAR_RE = re.compile(r"id\s*[=:：]\s*(\d+)")
+# 跨轮执行记忆的动作行（Rust render_exec_row 的产物，"读取文章 19《标题》"）
+_DOC_READ_ROW_RE = re.compile(r"读取文章\s*(\d+)\s*《([^》\n]{1,60})》")
+_ARTICLE_PATH_RE = re.compile(r"/article/(\d+)")
+_DOC_ID_WINDOW = 48   # 《标题》前后多少字符内出现的 id=/article/ 链接算这篇的 id
+
+# 简称判定阈值（见 _doc_anchors 内注释：宁可漏并、绝不错并——错并会把 A 篇的 id
+# 挂到 B 篇名下，正是本次要修的故障形态）
+_DOC_BRIEF_MIN = 7      # 共享连续子串最短字符数
+_DOC_BRIEF_RATIO = 0.7  # 且须占较短标题的这么多个比例
+
+
+def _lcs_contig(a: str, b: str) -> int:
+    """最长**连续**公共子串长度（标题都很短，朴素 DP 足够）。"""
+    if not a or not b:
+        return 0
+    prev = [0] * (len(b) + 1)
+    best = 0
+    for ca in a:
+        cur = [0] * (len(b) + 1)
+        for j, cb in enumerate(b, 1):
+            if ca == cb:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > best:
+                    best = cur[j]
+        prev = cur
+    return best
+
+
+def _brief_same(a: str, b: str) -> bool:
+    """两条标题是否同篇的简/全称（同一篇被正文简称与执行记忆全称各提一次）。"""
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    if len(short) < _DOC_BRIEF_MIN:
+        return False
+    return _lcs_contig(short, long_) >= max(_DOC_BRIEF_MIN,
+                                            int(len(short) * _DOC_BRIEF_RATIO))
+
+
+def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
+    """本会话已点名文档清单（《标题》+ id + 是否已读全文）——跨轮指代的确定性锚点。
+
+    来源 = 全部窗口消息（[System:…] 的 recent_executions 行 + 20 条人机历史，
+    含工具帧之外的正文），**由近及远**扫描：最近被点到的排前面（越近越可能是
+    用户在说的那篇）。id 只认同一句里 《标题》 邻域的 id=/article 链接或
+    "读取文章 N《标题》" 行——不猜、不给没有依据的 id。同一篇被正文简称与执行
+    记忆全称各提一次时并成一行（简称留作别名），免得 planner 把一篇数成两篇。
+    """
+    rows: list[tuple[str, str, bool, str]] = []   # (标题, id 或 "", 是否已读全文, 简称)
+
+    def _add(title: str, doc_id: str, read: bool) -> None:
+        title = title.strip()
+        if not title:
+            return
+        key = title.replace(" ", "").lower()
+        for i, (t, d, r, alias) in enumerate(rows):  # 同篇合并：已读优先、id 补齐、长标题优先
+            tn = t.replace(" ", "").lower()
+            same = tn == key or bool(doc_id and d == doc_id)
+            # 简称 ↔ 全称同篇（实测：正文口语简称《AI Agent 架构文档》，而跨轮执行记忆里
+            # 是全称《Saudade Blog AI Agent（泠月喵）架构文档》——两者不是简单包含关系，
+            # 中间夹着"（泠月喵）"，且**各自出现的那条消息里都还没有 id**，id 在更早的
+            # 执行记忆行上）。判据 = 共享连续子串够长（≥_DOC_BRIEF_MIN 且占短标题
+            # ≥_DOC_BRIEF_RATIO）；短于 _DOC_BRIEF_MIN 的标题一律不参与，防"物联网平台"
+            # 并进"物联网平台接入指南"这类**不同**文章；两条都带 id 且不同则绝不并
+            # （错并会把 A 篇 id 挂到 B 篇名下 —— 正是本次要修的故障形态，宁可漏并不错并）。
+            brief = (not same and not (doc_id and d and doc_id != d)
+                     and _brief_same(key, tn))
+            if not (same or brief):
+                continue
+            long_t = title if len(title) > len(t) else t
+            short_t = t if long_t == title else title
+            alias = (alias if not brief else
+                     min([x for x in (alias, short_t) if x and x != long_t],
+                         key=len, default=""))
+            rows[i] = (long_t, d or doc_id, r or read, alias)
+            return
+        rows.append((title, doc_id, read, ""))
+
+    for m in reversed(messages):                 # 由近及远
+        text = _msg_text(m) or ""
+        if not text:
+            continue
+        for dm in _DOC_READ_ROW_RE.finditer(text):        # 跨轮执行记忆的读取行
+            _add(dm.group(2), dm.group(1), True)
+        for tm in _DOC_TITLE_RE.finditer(text):
+            # id 只在**标题之后**的邻域里认（"《X》**（id=19）"、"[《X》](/article/13)"；
+            # 先查后邻域再查前邻域，且前邻域仅作兜底——否则会认成上一条目的 id）
+            after = text[tm.end():tm.end() + _DOC_ID_WINDOW]
+            nid = (_DOC_ID_NEAR_RE.search(after) or _ARTICLE_PATH_RE.search(after))
+            if not nid:
+                before = text[max(0, tm.start() - _DOC_ID_WINDOW):tm.start()]
+                nid = (_DOC_ID_NEAR_RE.search(before) or _ARTICLE_PATH_RE.search(before))
+            _add(tm.group(1), nid.group(1) if nid else "", False)
+
+    if not rows:
+        return "（本会话还没有点名的文档）"
+    lines: list[str] = []
+    used = 0
+    for title, doc_id, read, alias in rows[:limit]:
+        line = f"· 《{title}》" + (f" id={doc_id}" if doc_id else "（未见过 id）")
+        marks = (["本会话已读过全文"] if read else [])
+        if alias:
+            marks.append(f"上文亦称《{alias}》")
+        if marks:
+            line += "（" + "；".join(marks) + "）"
+        if used + len(line) > budget:
+            break
+        used += len(line)
+        lines.append(line)
+    return "\n".join(lines)
 
 
 # get_article_detail 全文帧的节选上限：该帧是 narrator 引用文章细节的唯一依据，

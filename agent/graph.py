@@ -66,8 +66,8 @@ from langgraph.graph.message import add_messages
 from models import get_llm
 from tools import get_all_tools
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
-                           _frame_texts, _has_frames, _last_user_msg, _msg_text,
-                           _page_ctx, _receipts_text, _recent_tail)
+                           _doc_anchors, _frame_texts, _has_frames, _last_user_msg,
+                           _msg_text, _page_ctx, _receipts_text, _recent_tail)
 from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
                              _effect_switch_fast_path, _intent_done, _intent_hints,
@@ -191,6 +191,10 @@ _PLANNER_PROMPT = """\
 提醒，该意图是否真实存在、是否该执行，以你的判断为准）：
 {intent_hints}
 
+本会话已点名文档（系统从对话历史与跨轮执行记忆里确定性提取的指代锚点——判断
+"用户说的是哪一篇"时**先在这里对号入座**；已经在列的不必再检索去找）：
+{doc_anchors}
+
 {round_info}
 
 {recent_context}
@@ -229,7 +233,10 @@ _PLANNER_PROMPT = """\
      固件接入参考》《IoT 设备接入物联网平台指南》，标题含专名而关键词不含；
      只 search_notes 命中不足就收尾、或只 list_notes 不真检索，都不对）；
      两份返回交叉比对后再下"有/没有"的结论
-   - 知识型/验证型 → PARAMS.calls 给定位调用。定位工具选型：
+   - 知识型/验证型 → PARAMS.calls 给定位调用。**定位之前先问一句：用户问的
+     是不是"本会话已点名文档"里已经列出的那一篇？**是 → 直接按规则 4 ⓪ 用它
+     的 id 读全文，本轮不需要任何检索（检索是给"上下文里没有的新主题"用的）。
+     定位工具选型：
      机制/原理/做法型问题（"怎么实现/怎么工作/原理/机制/怎么做到/区别"）先
      rag_search 发用户原句语义定位——关键词 LIKE 会只命中标题含目标词的
      "问题记录"类文章（问"OTA 升级怎么实现"，语义检索第一是《ESP32-S3-OBC
@@ -268,14 +275,23 @@ _PLANNER_PROMPT = """\
      同一 TOOLS 行给两条 spec（X off + Y on），execute 逐条执行——只关 X 不
      开 Y 等于没完成"换成 Y"，目标效果必须真的开启
    - device_display：不填 text 参数（屏幕文案由系统在展示时结合对话创作）
-   - 文章指代（"那篇/这篇/它"＋内容限定，如"带我去看那篇讲你架构的技术文档
-     文章"）解析顺序：① 当前页面就是文章页（current_url 是 /article/<id>）→
-     以它为准；② 否则看页面上下文 recent_executions 里最近读取的文章行（形如
-     "读取文章 19《标题》"）——限定词与标题对得上 → 用该 id（重读或据此作答）；
-     ③ 限定词与已知文章对不上、或记录里没有 → **不得套用旧 id**：先按限定词
-     content_query 定位（search_notes 关键词取限定词的实词，如"架构"），拿到帧
-     内真实 id 再读/再跳。**候选标题与限定词对不上号时不许拿 top 候选硬读顶上**
-     （读错一篇会把后续几轮全部带偏）——如实说候选里没有对得上的那篇
+   - 文章指代（**不限于显式指代词**：用户那句话只是对上文的追问/催读/深化也算
+     指代——"你看了吗就说没写""你倒是看完给结论啊""继续讲那篇""那个快道呢"——
+     此时目标文档由上文决定，不是新主题）解析顺序：
+     ⓪ 先看上方"本会话已点名文档"：用户说的那篇在列 → **直接采用它的 id**
+     （标了"已读过全文"就据它作答或重读；没标就 get_article_detail(该 id)）。
+     这一步**不需要任何检索**——别为了"确认是哪一篇"再跑 search_notes/rag_search
+     （20260919 实证：为找《架构文档》(19) 跑 rag_search，BM25 命中同主题的
+     《文章向量空间图谱项目文档》(46)，被拦截器读全文，整轮跑偏）；
+     ① 否则看当前页面是否就是文章页（current_url 是 /article/<id>）→ 以它为准；
+     ② 否则看页面上下文 recent_executions 里最近读取的文章行（形如"读取文章
+     19《标题》"）——限定词与标题对得上 → 用该 id（重读或据此作答）；
+     ③ 只有标题没有 id（列表里未见过 id）→ **list_notes(page=1, page_size=50)
+     用标题实词做字面匹配**——**禁止拿用户原句的主题词去 rag_search**：语义检索
+     按内容相似度排序，找"某一篇"必错成"同主题的另一篇"；限定词与已知文章对
+     不上、或记录里没有 → 先按限定词的实词 content_query 定位，拿到帧内真实 id
+     再读/再跳。**候选标题与限定词对不上号时不许拿 top 候选硬读顶上**（读错一篇
+     会把后续几轮全部带偏）——如实说候选里没有对得上的那篇
 5. 多轮收敛：
    - **收尾前先核对上方动作意图清单**：一句话里有多个动作（"帮我把樱花打开，
      顺便切一下夜间模式"）时，跨技能动作一轮只能做一个——逐个做完是正常的多轮
@@ -777,6 +793,15 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     page_ctx = _page_ctx(state["messages"])
     rounds = state.get("plan_rounds", 0)
     has_frames = _has_frames(state["messages"])
+    doc_anchors = _doc_anchors(state["messages"])
+    if rounds == 0:
+        # 注入上下文留痕（20260919 D）：本轮 planner 实际看到的 page_ctx /
+        # 节选 / 锚点清单落 trace——此前 trace 里没有这些，复盘"agent 到底看到
+        # 了什么"只能靠日志反推（20260919 17:18 那轮就是靠 execution_log +
+        # 逐条回复反推出来的）。只记首轮（三者不随轮次变），控体积。
+        record("planner", "context", page_ctx=page_ctx[:1500],
+               recent_tail=_recent_tail(state["messages"])[:900],
+               doc_anchors=doc_anchors[:600])
 
     # 轮次上限 → 强制收尾（不再规划新调用；帧内容足够就让 narrator 如实作答）
     if rounds >= MAX_PLAN_ROUNDS:
@@ -835,6 +860,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             skills_context=build_planner_context(), tools_desc=_QUERY_TOOLS_DESC,
             page_ctx=page_ctx, round_info=round_info,
             intent_hints=_intent_hints(state.get("executed") or [], user_msg),
+            doc_anchors=doc_anchors,
             recent_context=_recent_tail(state["messages"]),
             tool_results=_frame_texts(state["messages"]),
             reflector_feedback=state.get("issues") or "（本决策轮无复盘建议）",
