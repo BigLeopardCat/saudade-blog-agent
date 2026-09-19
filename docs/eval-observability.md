@@ -1,7 +1,8 @@
 # Agent 评测与可观测性设计（升级路线第 0 步）
 
 > 升级路线（手写图 → eval → 记忆 → 可观测 → 多 agent）的**验证地基**：先立"怎么验证"，再动工升级。
-> 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、CLAUDE.md（运维）。
+> 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、[问题记录.md](问题记录.md)（事故与根因）。
+> 部署与运维细节（服务名、路径、可复制命令）属私有运行簿，不进仓库。
 > 最后更新：2026-09-12（判据双侧加固 + 门禁可用性：正断言加正则族 `text_any_regex`、
 > 负断言加 opt-in `not_contains_exempt_quote` 引述豁免——9/8-9/12 四次夜间红对账后确认 3 条为判据
 > 误判；FAIL 时导出复审单 `eval/report/review_<ts>.md`（假失败当轮修判据、真 FAIL 才允许挂着）；
