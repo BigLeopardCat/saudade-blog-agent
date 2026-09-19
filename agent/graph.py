@@ -74,6 +74,7 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_pa
                              _nav_fast_path, _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE
+from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
                           _CALLABLE_QUERY_TOOLS_ORDER, build_planner_context,
                           instantiate_plan)
@@ -135,6 +136,10 @@ class AgentState(TypedDict):
     - reflect_rounds: reflector 复盘次数（≤ REFLECT_MAX_ROUNDS，到顶确定性终局）。
     - issues:       reflector 上次输出的 ISSUE 文本（注入下一轮 planner 提示词）。
     - reflect_end:  reflector 判定终局（wrap_up/预算耗尽）→ 路由去 model 叙述。
+    - tool_data:    请求内已执行工具返回的**结构化**值（[{tool,data}]，按执行顺序
+                   累计）——参数引用（$tool[0].field，见 agent/refs.py）的取值
+                   来源。与 receipts 的分工：receipts 是"系统验收过的事实"（给
+                   narrator/跨轮记忆看），tool_data 是"下一步填参要用的数据"。
     """
 
     messages: Annotated[list, add_messages]
@@ -149,6 +154,7 @@ class AgentState(TypedDict):
     reflect_rounds: int
     issues: str
     reflect_end: bool
+    tool_data: list[dict]
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +207,10 @@ _PLANNER_PROMPT = """\
 
 {tool_results}
 
+本轮已执行工具的**可引用字段**（参数引用的取值来源，见规则 3b——字段名照抄，
+路径只能从这里列出的键名前缀往下写，不许臆造）：
+{ref_hints}
+
 复盘建议（reflector 对重复受阻项的 ISSUE 修正指引——仅当上一轮复盘判 replan
 后才有内容；没有则为缺省语，按常规规则决策）：
 {reflector_feedback}
@@ -246,7 +256,9 @@ _PLANNER_PROMPT = """\
      ——关键词=消息的信息核心词：剥掉称呼/问候/助词（例："小猫咪有没有嵌入式
      相关文章" → 关键词"嵌入式"，绝不是"小猫咪"），宁短勿长
      候选命中后下一轮 get_article_detail 读全文——article_id 只能取上一轮工具
-     返回里的真实 id，绝不自己编 id。机制型候选多篇时优先读「参考/接入/指南/
+     返回里的真实 id，绝不自己编 id。取 id 有两种写法，**优先用引用**（见 3b）：
+     ① 你从工具返回帧里读出 id 后把它写成字面值；② 直接写参数引用让系统去取。
+     机制型候选多篇时优先读「参考/接入/指南/
      实现」类文档；「问题与解决记录/踩坑/FAQ」类是经验记录，仅当确实记载所问
      事实时引用。检索零结果应变（至多补一轮）：
      a) 换 rag_search 语义检索一次；仍无 → b) 关键词换用户原词的变体再
@@ -258,6 +270,22 @@ _PLANNER_PROMPT = """\
      用 → 分隔>——只描述后续依赖链，不重复本轮已给的步骤；后续步骤的参数
      （article_id 等）只能等上一轮工具返回后填写，绝不预先编造。单步/收尾轮
      不写 TODO 行。
+3b. **参数引用**（下一步的参数取值来自上一步工具返回时，一律优先用引用）：
+   只要某个参数的**值来自本轮已执行工具的返回**，就把该参数写成引用字面量
+   `$<工具名>[<序号>].<字段名>`，由系统在调用前取值填入——不要把值从返回帧里
+   "读出来再抄一遍"，更不要凭印象编。例：
+   [{{"tool": "get_article_detail", "args": {{"article_id": "$search_notes[0].noteKey"}}}}]
+   规则：
+   - 序号 = 该工具返回**列表的下标**（0 = 第一条候选）；工具返回单个对象时
+     只能写 [0]。
+   - 字段名只能取上方"可引用字段"里列出的键（照抄原样，含大小写）。
+   - 引用的目标必须是**本轮已经执行过**的工具；同名单工具多轮执行以最近一次
+     返回为准。
+   - 写完引用后**不要**在回复里展示这段语法，也不要解释它——按正常计划输出
+     即可。
+   - 引用解析失败（工具没执行过、序号越界、字段不存在、返回不是结构化数据）
+     时系统**不执行**该调用并回一条带原因的错误帧；按规则 5 改参数重试一次
+     （改写成字面值或换正确字段），仍失败就如实收尾，不得声称成功。
 4. 动作技能参数纪律：
    - navigate：target 只能填导航映射表里的别名，或用户消息里以 / 开头的字面
      路径（原样照抄，不改写、不推断成别的页面）；路径是否有效由系统白名单
@@ -346,7 +374,8 @@ _TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 doc
     "rag_search": "语义相关度检索（BM25），返回行式候选（type/id/score/标题/命中节，"
                   "用于定位，不给全文）",
     "get_article_detail": "读指定文档全文（doc_type=note|talk|board|announcement；"
-                          "article_id 只能取上一轮工具返回中的真实 id）",
+                          "article_id 只能取上一轮工具返回中的真实 id，或直接写引用 "
+                          "$<工具名>[<序号>].<字段>，见规则 3b）",
     "list_notes": "分页列文章",
     "get_weather": "查天气（location：城市名，缺省北京）",
     "list_guestbook": "无参直取：留言板（河灯集）列表",
@@ -856,15 +885,19 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     _t0 = time.monotonic()
     logger.info("[planner] LLM 调用开始（round %d/%d）", rounds + 1, MAX_PLAN_ROUNDS)
     try:
-        resp = llm.invoke(_PLANNER_PROMPT.format(
+        _prompt = _PLANNER_PROMPT.format(
             skills_context=build_planner_context(), tools_desc=_QUERY_TOOLS_DESC,
             page_ctx=page_ctx, round_info=round_info,
             intent_hints=_intent_hints(state.get("executed") or [], user_msg),
             doc_anchors=doc_anchors,
             recent_context=_recent_tail(state["messages"]),
             tool_results=_frame_texts(state["messages"]),
+            # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
+            # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
+            ref_hints=ref_hints(state.get("tool_data") or []),
             reflector_feedback=state.get("issues") or "（本决策轮无复盘建议）",
-            max_rounds=MAX_PLAN_ROUNDS, user_msg=user_msg))
+            max_rounds=MAX_PLAN_ROUNDS, user_msg=user_msg)
+        resp = llm.invoke(_prompt)
     except Exception as e:
         # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
         # 有帧就基于帧收尾（narrator 仍能正常叙述），无帧走 chat 诚实答复。
@@ -1133,7 +1166,9 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
     if not text.strip():
         return _VERDICT_BLOCK, "empty_result"
     if text.lstrip().startswith("__ERROR__"):
-        return _VERDICT_BLOCK, "error_frame"
+        # 参数引用失败单独给原因码（20260919）：planner 要按"是路径错还是没执行过"
+        # 分别改参/换路，笼统的 error_frame 给不出这个信息。
+        return _VERDICT_BLOCK, (ref_error_reason(text) or "error_frame")
     # 命令工具契约层校验：动作工具必须返回命令帧（工具返回形态漂移 = 执行未
     # 按契约发生，如 navigate 返回了纯文本而非 NAVIGATE:/AUTO_NAVIGATE:）。
     # device_oled_display 的"未在 5s 内回执确认"属软失败（指令确已下发），判
@@ -1174,6 +1209,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     receipts = list(state.get("receipts") or [])  # 请求内累计（与 executed 同模式）
     blocked: list = []                            # 只含本轮受阻项（路由/reflector 用）
     prev_seen = set(state.get("blocked_seen") or [])  # 本轮之前的受阻 spec 集
+    tool_data = list(state.get("tool_data") or [])    # 参数引用的取值源（请求内累计）
     for idx, spec in enumerate(specs):
         if _stopped(config):
             # 逐 spec 检查（20260916 补）：入口那一次只能拦住"整份清单还没开始执行"。
@@ -1187,13 +1223,24 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             break
         name = _tool_name(spec)
         args, args_ok = _tool_args(spec)
+        # 参数引用（20260919，agent/refs.py）：把上一步的真实返回值绑进参数。
+        # 解析失败 → 该 spec **不执行**（拿 `$x[0].y` 当参数去调用是更坏的结果），
+        # 产带原因码的 __ERROR__ 帧走既有 blocked 链路（planner 改参 → reflector）。
+        ref_err = None
+        if args_ok:
+            args, ref_err = resolve_args(args, tool_data)
+            if ref_err:
+                args = {}  # 参数清单本身解析没问题（args_ok 保持 True）——失败的是取值
         tool = _TOOL_MAP.get(name)
         # 屏幕文案创作：text 参数缺失/为空 → execute 结合对话创作（技能固有设计）
-        if name == "device_oled_display" and not args.get("text"):
+        if ref_err is None and name == "device_oled_display" and not args.get("text"):
             args = dict(args)
             args["text"] = _create_display_text(user_msg, page_ctx)
         _t_tool = time.monotonic()
-        if tool is None:
+        if ref_err:
+            out = f"__ERROR__: 参数引用无法解析[{ref_err}]（上一步返回里没有这个值——改参数或换个工具）"
+            logger.warning("[execute] 参数引用解析失败，不执行: %s → %s", spec, ref_err)
+        elif tool is None:
             out = f"__ERROR__: 未知工具 {name}（planner 调用清单越界，被 execute 拒绝执行）"
             logger.warning("[execute] 未知工具 %s，拒绝执行", name)
         else:
@@ -1205,6 +1252,10 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             content=str(out), tool_call_id=f"execute_{idx}", name=name))
         logger.info("[execute] %s(%s) → %.100s", name, json.dumps(args, ensure_ascii=False),
                     str(out))
+        # 结构化返回值入 tool_data（引用取值源）：帧文本是给人看的（还截断），
+        # 引用要走结构。解析不出 → data=None（引用它时报 ref_unparsed，不猜）。
+        tool_data.append({"tool": name, "data": parse_data(str(out)),
+                          "round": state.get("plan_rounds", 0)})
         result_ = str(out)
         # rag_search 完整落盘（行式候选已精简）——事后可分析完整候选与选择
         # 对比，不必翻代码复现截断（20260831 事故复盘教训）
@@ -1237,7 +1288,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                "executed": executed + [s for s in specs if s not in executed],
                "receipts": receipts, "blocked": blocked,
                "blocked_seen": sorted(prev_seen | {b["spec"] for b in blocked}),
-               "blocked_repeat": repeat}
+               "blocked_repeat": repeat, "tool_data": tool_data}
     if not blocked:
         updates["issues"] = ""  # 全 PASS → 复盘建议清空（不残留误导下一轮 planner）
     return updates
@@ -1670,4 +1721,4 @@ def graph_input(messages: list) -> dict:
     return {"messages": messages, "plan": "", "plan_rounds": 0, "done": False,
             "executed": [], "receipts": [], "blocked": [], "blocked_seen": [],
             "blocked_repeat": False, "reflect_rounds": 0, "issues": "",
-            "reflect_end": False}
+            "reflect_end": False, "tool_data": []}

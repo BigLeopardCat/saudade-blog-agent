@@ -819,6 +819,204 @@ def test_execute_node():
           str(ids) + " / " + str(out4["messages"][1].content[:60]))
 
 
+def test_refs():
+    """参数引用（20260919，agent/refs.py）：planner 在参数里写 `$<工具>[<序号>].<字段>`，
+    execute 从**结构化**的已执行结果取值填参——不是让模型从 300 字截断帧里"读"出 id
+    再抄一遍。覆盖：字面量识别（不误伤 /article/$x 这类非引用）/ 取值范围与错误码五族 /
+    提示词字段提示（防臆造路径）/ 原因码回取 / execute 集成（同轮与跨轮依赖、失败不执行）
+    / 过程行不泄露内部语法。"""
+    import agent.graph as g
+    from agent import refs as R
+    print("[refs] 引用字面量解析")
+    check("识别：$tool[0] 与 $tool[2].a.b 都是引用",
+          R.is_ref("$search_notes[0]") and R.is_ref("$list_notes[12].noteKey"))
+    check("非引用不误伤（路径内嵌/无序号/大写工具名/坏形态）",
+          not any(R.is_ref(v) for v in
+                  ["/article/$search_notes[0].noteKey", "$search_notes",
+                   "$Search[0]", "$x[-1]", "$x[0].", "", "  ", None, 3]),
+          str([v for v in ["$search_notes", "$Search[0]", "$x[-1]", "$x[0]."] if R.is_ref(v)]))
+    check("parse_ref 三段解构",
+          R.parse_ref("$list_notes[3].noteKey") == ("list_notes", 3, "noteKey"))
+    check("无字段路径 → 整条取值", R.parse_ref("$search_notes[0]") == ("search_notes", 0, ""))
+
+    print("[refs] 结构化解析（JSON 优先，Python repr 兜底）")
+    check("JSON 列表解析", R.parse_data('[{"noteKey": 12}]') == [{"noteKey": 12}])
+    check("Python repr 解析（工具出口 _shape→str：单引号/None/True）",
+          R.parse_data("[{'noteKey': 12, 'cover': None, 'ok': True}]")
+          == [{"noteKey": 12, "cover": None, "ok": True}])
+    check("已是结构 → 直通", R.parse_data({"a": 1}) == {"a": 1})
+    check("纯文本 → None（不猜，报 ref_unparsed）",
+          R.parse_data("博客功能结构：\n- 首页 (/)") is None and R.parse_data("") is None)
+    _rag = ("1. type=note id=12 score=0.83 title=ESP32-S3 OTA 问题与解决记录 命中节=分区表冲突\n"
+            "2. type=note id=14 score=0.71 title=ESP32-S3-OBC固件接入参考")
+    _rows = R.parse_data(_rag)
+    check("rag_search 行式候选 → 结构化（检索是机制型问题的首选来源）",
+          _rows == [{"id": 12, "type": "note", "score": "0.83",
+                     "title": "ESP32-S3 OTA 问题与解决记录", "section": "分区表冲突"},
+                    {"id": 14, "type": "note", "score": "0.71",
+                     "title": "ESP32-S3-OBC固件接入参考", "section": ""}],
+          str(_rows))
+    check("rag 行：$rag_search[1].id / .type / .title 都可取",
+          R.resolve_one("$rag_search[1].id", [{"tool": "rag_search", "data": _rows}]) == (14, None)
+          and R.resolve_one("$rag_search[0].type",
+                            [{"tool": "rag_search", "data": _rows}]) == ("note", None)
+          and R.resolve_one("$rag_search[0].title",
+                            [{"tool": "rag_search", "data": _rows}])[0]
+          == "ESP32-S3 OTA 问题与解决记录")
+
+    print("[refs] 取值与错误码")
+    td = [{"tool": "search_notes",
+           "data": [{"noteKey": 12, "noteTitle": "OTA"}, {"noteKey": 14, "noteTitle": "固件"}]}]
+    check("列表下标 + 字段 → 取值", R.resolve_one("$search_notes[0].noteKey", td) == (12, None))
+    check("末条也可取（序号是列表下标）",
+          R.resolve_one("$search_notes[1].noteKey", td) == (14, None))
+    check("越界 → ref_index_range",
+          R.resolve_one("$search_notes[9].noteKey", td)[1] == "ref_index_range")
+    check("未执行过该工具 → ref_unknown_tool",
+          R.resolve_one("$list_notes[0].noteKey", td)[1] == "ref_unknown_tool")
+    check("字段不存在 → ref_path_missing",
+          R.resolve_one("$search_notes[0].nope", td)[1] == "ref_path_missing")
+    check("非引用原样返回（零开销、行为不变）",
+          R.resolve_one("/article/12", td) == ("/article/12", None))
+    td_obj = [{"tool": "x", "data": {"a": {"b": 1}}}]
+    check("取到对象/列表 → ref_not_scalar（参数只能是标量）",
+          R.resolve_one("$x[0].a", td_obj)[1] == "ref_not_scalar")
+    check("返回单个对象时序号只能是 0",
+          R.resolve_one("$x[1].b", td_obj)[1] == "ref_index_range")
+    check("返回非结构化数据 → ref_unparsed",
+          R.resolve_one("$get_site_map[0].x",
+                        [{"tool": "get_site_map", "data": None}])[1] == "ref_unparsed")
+    check("同名工具多轮执行 → 取最近一次返回",
+          R.resolve_one("$search_notes[0].noteKey", td + [
+              {"tool": "search_notes", "data": [{"noteKey": 99}]}]) == (99, None))
+    check("点分嵌套路径（列表中段按第 0 个元素取）",
+          R.resolve_one("$y[0].hit.items.id",
+                        [{"tool": "y", "data": {"hit": {"items": [{"id": 7}]}}}]) == (7, None))
+    got, err = R.resolve_args({"article_id": "$search_notes[0].noteKey", "doc_type": "note"}, td)
+    check("整份参数：引用取值 + 字面值保留",
+          err is None and got == {"article_id": 12, "doc_type": "note"}, str((got, err)))
+    check("整份参数：任一引用失败 → 整体失败（不半份参数去调用）",
+          R.resolve_args({"article_id": "$list_notes[0].id"}, td)[0] is None
+          and R.resolve_args({"article_id": "$list_notes[0].id"}, td)[1]
+          .startswith("ref_unknown_tool:"))
+    check("无引用参数 dict → 原样返回",
+          R.resolve_args({"page": 1}, td) == ({"page": 1}, None))
+
+    print("[refs] 与既有 `$参数` 语法的分工（skills.instantiate_plan）")
+    check("技能模板 `$param` 照旧取 PARAMS（行为不变）",
+          'get_article_detail({"article_id": 19})' in
+          instantiate_plan("read_article", {"article_id": 19})["tools"],
+          str(instantiate_plan("read_article", {"article_id": 19})["tools"]))
+    check("PARAMS 里是引用 → 原样透传进 TOOLS 行（不被当成 $参数 查成 None）",
+          instantiate_plan("read_article",
+                           {"article_id": "$search_notes[0].noteKey"})["tools"]
+          == ['get_article_detail({"article_id": "$search_notes[0].noteKey"})'],
+          str(instantiate_plan("read_article",
+                               {"article_id": "$search_notes[0].noteKey"})["tools"]))
+
+    print("[refs] 提示词字段提示（ref_hints）")
+    check("无可引用 → 明确缺省语", R.ref_hints([]) == "（本轮还没有可引用的工具返回）")
+    h = R.ref_hints([{"tool": "search_notes",
+                      "data": [{"noteKey": 12, "noteTitle": "t"}]}])
+    check("列出工具/条数/字段名",
+          "$search_notes[0]" in h and "共 1 条" in h and "noteKey" in h, h)
+    check("结构解析不出/元素非字典 → 不列（不诱导臆造路径）",
+          R.ref_hints([{"tool": "get_site_map", "data": None},
+                       {"tool": "z", "data": ["a"]}]) == "（本轮还没有可引用的工具返回）")
+    check("字段数上限 6",
+          R.ref_hints([{"tool": "t", "data": [{chr(97 + i): i for i in range(9)}]}])
+          .count(" / ") == 5)
+    check("工具数上限 3（防长结构撑爆提示词）",
+          R.ref_hints([{"tool": f"t{i}", "data": [{"a": 1}]} for i in range(5)])
+          .count("· $") == 3)
+    check("原因码回取（__ERROR__ 帧 → checker reason）",
+          R.ref_error_reason("__ERROR__: 参数引用无法解析[ref_path_missing:$a[0].b]（改参数）")
+          == "ref_path_missing"
+          and R.ref_error_reason("__ERROR__: 未知工具 x") is None)
+
+    print("[refs/execute] 集成：同轮与跨轮依赖、失败不执行")
+    calls: list = []
+
+    class _Fake:
+        def __init__(self, out): self.out = out
+
+        def invoke(self, args):
+            calls.append(args)
+            return self.out
+
+    _saved = {k: g._TOOL_MAP.get(k) for k in ("fake_search", "fake_read")}
+    g._TOOL_MAP["fake_search"] = _Fake("[{'noteKey': 12, 'noteTitle': 'OTA'}, "
+                                       "{'noteKey': 14, 'noteTitle': '固件'}]")
+    g._TOOL_MAP["fake_read"] = _Fake("{'noteKey': 12, 'noteContent': '正文'}")
+
+    def _plan(tools_list):
+        obj = instantiate_plan("navigate", {"target": "物联网平台"})
+        obj["skill"] = "content_query"
+        obj["tools"] = tools_list
+        return plan_encode(obj)
+
+    try:
+        # 跨轮：第 1 轮检索 → 第 2 轮用引用读全文（生产主路径）
+        r1 = execute_node({"plan": _plan(['fake_search({"keyword": "ota"})']),
+                           "plan_rounds": 1, "done": False,
+                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        check("轮1：结构化返回入 tool_data（引用取值源）",
+              len(r1["tool_data"]) == 1 and r1["tool_data"][0]["tool"] == "fake_search"
+              and isinstance(r1["tool_data"][0]["data"], list),
+              str(r1["tool_data"])[:120])
+        calls.clear()
+        r2 = execute_node({"plan": _plan(['fake_read({"article_id": "$fake_search[0].noteKey"})']),
+                           "plan_rounds": 2, "done": False, "tool_data": r1["tool_data"],
+                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        check("轮2：引用被解析成真实 id 再调用（不是把 $x[0].y 当参数发出去）",
+              calls == [{"article_id": 12}], str(calls))
+        check("轮2：回执 args 是解析后值（✅ 过程行可读）",
+              r2["receipts"] and r2["receipts"][0]["args"] == {"article_id": "12"},
+              str(r2["receipts"]))
+        # 同轮：一条 TOOLS 行里后续 spec 引用前面 spec 的返回（轮内依赖）
+        calls.clear()
+        r3 = execute_node({"plan": _plan(['fake_search({"keyword": "ota"})',
+                                          'fake_read({"article_id": "$fake_search[1].noteKey"})']),
+                           "plan_rounds": 1, "done": False,
+                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        check("同轮：后一条 spec 能引前一条 spec 的返回（轮内依赖打通）",
+              calls == [{"keyword": "ota"}, {"article_id": 14}], str(calls))
+        # 失败：引用不可解析 → 该 spec 不执行 + 带原因码错误帧 + blocked 走改参重试
+        calls.clear()
+        r4 = execute_node({"plan": _plan(['fake_read({"article_id": "$fake_search[0].noteKey"})']),
+                           "plan_rounds": 1, "done": False,
+                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        frm = str(r4["messages"][-1].content)
+        check("失败：不执行工具（拿 $x[0].y 当参数去查是更坏的结果）", calls == [], str(calls))
+        check("失败：__ERROR__ 帧带原因码",
+              frm.startswith("__ERROR__") and "ref_unknown_tool" in frm, frm[:80])
+        check("失败：blocked reason 是引用原因码（planner/reflector 按码修正）",
+              r4["blocked"] and r4["blocked"][0]["reason"] == "ref_unknown_tool"
+              and r4["receipts"] == [], str(r4["blocked"]))
+        check("失败：帧文本仍被规则视为错误（ref_error_reason 可回取）",
+              R.ref_error_reason(frm) == "ref_unknown_tool")
+    finally:
+        for k, v in _saved.items():
+            if v is None:
+                g._TOOL_MAP.pop(k, None)
+            else:
+                g._TOOL_MAP[k] = v
+
+    # 过程行渲染：预告帧在 execute 之前发，此刻引用尚未解析——不能把内部语法
+    # 打印给访客（`读取文章 $search_notes[0].noteKe`）
+    import server
+    label = server._tool_action_text("get_article_detail",
+                                     {"article_id": "$search_notes[0].noteKey"})
+    check("过程行把引用译成来源短语、不泄露 $x[0].y 语法",
+          "$" not in label and "检索结果" in label and "第 1 条" in label, label)
+    check("过程行：字面 id 照旧（行为不变）",
+          server._tool_action_text("get_article_detail", {"article_id": 19}) == "读取文章 19")
+    check("受阻行原因码有中文（✗ 行不裸露英文码）",
+          all(c in server._REASON_CN for c in
+              ("ref_unknown_tool", "ref_unparsed", "ref_index_range",
+               "ref_path_missing", "ref_not_scalar")))
+
+
 def test_todo_contract():
     """TODO 行契约（20260904 最小契约）：可选第 6 行、插在 REPLY 前（REPLY 的
     DOTALL 解析假设它是末行，追加在后会被吞）；TODO 是"声明"不是"执行指令"——
@@ -1256,7 +1454,7 @@ def main():
                test_nav_fast_path, test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
                test_explicit_tools, test_planner_tool_menu, test_gate_claim_scope, test_gate_frame_checks,
                test_phantom_tool_claim,
-               test_execute_node, test_todo_contract, test_checker,
+               test_execute_node, test_refs, test_todo_contract, test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
                test_search_retry_kind, test_candidate_relevance_pick,

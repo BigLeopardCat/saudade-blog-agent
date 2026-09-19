@@ -62,6 +62,7 @@ NAV_MAP: dict[str, str | None] = {
 # 白名单路径（单一事实来源 = 工具层 navigate_to 的校验常量，避免双源漂移；
 # /category/*、/article/* 为前缀匹配，需至少带一个 id 段）
 from tools.base import _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS
+from agent.refs import is_ref  # 参数引用 $tool[0].field（20260919，见 instantiate_plan）
 
 NAV_VALID_PATHS: set[str] = set(_NAV_EXACT_PATHS)
 
@@ -396,7 +397,13 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
         for tool_name, tmpl in skill.plan:
             args = {}
             for k, v in tmpl.items():
-                args[k] = params.get(v[1:]) if isinstance(v, str) and v.startswith("$") else v
+                # `$param` = 取 PARAMS 里的同名参数（技能模板自有语法）；但**参数
+                # 引用**（$tool[0].field，agent/refs.py）是另一层语义，必须原样透传
+                # 给 execute 解析——否则这里会去 PARAMS 里查 "tool[0].field" 拿到
+                # None，把引用悄悄变成空参数（20260919 两套 $ 语法共存的口子）。
+                args[k] = (params.get(v[1:])
+                           if isinstance(v, str) and v.startswith("$") and not is_ref(v)
+                           else v)
             tools.append(f"{tool_name}({json.dumps(args, ensure_ascii=False)})")
     return {
         "skill": skill.name,
