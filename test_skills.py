@@ -773,6 +773,116 @@ def test_phantom_tool_claim():
           f"names={len(_TOOL_MAP)}")
 
 
+def test_gate_claim_holes():
+    """gate 两洞修复（20260919），语料全部取自真实 trace 原句：
+
+    ① 零工具轮的"操作完成"声称。实证 20260907 12:47:53：用户只回一个"嗯"，
+       planner 判 chat（零工具），narrator 却答"那泠月喵就帮你把夜间模式关掉，
+       回到明亮的日间页面啦！"——页面其实没变，旧 gate 判 PASS（_EXECUTION_CLAIM_RE
+       词表刻意不含 开启/关闭/切换，为的是不误伤幂等轮的状态陈述）。
+    ② 站内检索声称 vs 本轮帧族。实证 20260906 23:49："站内我查了一圈，没有找到
+       专门讨论…的文章或说说"（零工具）漏网——旧 _CHAT_SCAN_CLAIM_RE 要求人称在
+       空间词**之前**；另 20260902 两例"翻了一遍功能结构图"是**有据的**（get_site_map
+       帧），必须放行——这正是内容类工具名单要含 get_site_map 的原因。
+    """
+    print("[gate] 两洞判据（状态动作声称 / 站内检索声称）")
+    from agent.graph import (_state_action_claim, _site_search_claim,
+                             _CONTENT_TOOLS, _TOOL_MAP)
+
+    # ── ① 状态动作声称（施事前缀 + 及物状态动作动词）──────────────────────
+    for text, why in (
+        ("喵～那泠月喵就帮你把夜间模式关掉，回到明亮的日间页面啦！(=^･ω･^=)", "20260907 实证原句"),
+        ("已经帮你打开啦～", "短式"),
+        ("已经帮你把樱花特效关掉了喵", "特效关闭"),
+        ("夜间模式已经帮你切换成白天啦", "切换"),
+        ("我已经帮你把页面跳转过去了", "跳转"),
+        ("那泠月喵就帮你把夜间模式关掉，要是之后想换回来随时说", "后句条件不豁免前句"),
+    ):
+        check(f"状态动作声称[{why}] → 拦", _state_action_claim(text) is True, text[:30])
+    for text, why in (
+        ("樱花特效现在开着呢，不用再打开啦", "幂等陈述态 + 否定"),
+        ("你看，夜间模式现在是开启状态哦", "是…状态（无动作动词）"),
+        ("我可以帮你打开夜间模式，要试试吗？", "能力描述 + 疑问"),
+        ("如果我帮你关掉特效，页面会亮一些", "假设"),
+        ("要是之后晚上又想切换回来，随时喊我就好喵", "条件"),
+        ("我帮你打开吧", "提议语气（吧）"),
+        ("刚才没有帮你打开，抱歉喵", "否定如实"),
+        ("系统只会在调用工具之后真的打开夜间模式", "元讨论"),
+    ):
+        check(f"状态动作声称[{why}] → 放", _state_action_claim(text) is False, text[:30])
+
+    # ── ② 站内检索声称 ─────────────────────────────────────────────────
+    for text, why, mem in (
+        ("📌 诚实提醒：站内我查了一圈，没有找到专门讨论『去中心化效率』的文章或说说",
+         "20260906 实证原句（旧词序漏网）", False),
+        ("喵～泠月喵去站内翻找了一圈，没有找到关于蛋糕或美食的文章呢",
+         "20260905 实证原句", False),
+        ("这次是真查了🐾 用 `rag_search` 搜了一遍", "20260902 实证原句（点名工具）", False),
+        ("我把站内文章都翻了一遍，确实没有讲过这个", "空间词+动量词", False),
+    ):
+        check(f"检索声称[{why}] → 拦", _site_search_claim(text, mem) is True, text[:30])
+    for text, why in (
+        ("站内我没搜到相关内容喵", "如实否定（无动量词）"),
+        ("要不要我现在去站内检索一圈？", "提议豁免"),
+        ("你可以让我去站内翻一遍说说", "能力/提议豁免"),
+        ("我在网上搜了一圈，没找到这个说法", "网上（非站内）豁免"),
+        ("我刚才调用了 rag_search 查了留言板", "无动量词（归工具调用声称族）"),
+    ):
+        check(f"检索声称[{why}] → 放", _site_search_claim(text, False) is False, text[:30])
+    check("检索声称[回执在场 + 追述] → 放（rule 6 据回执转述）",
+          _site_search_claim("刚才我把整个博客都翻了一遍", True) is False)
+    check("检索声称[无回执的追述] → 拦", _site_search_claim("刚才我把整个博客都翻了一遍", False) is True)
+    # 内容类工具名单必须取自注册表（改名/新增工具时这条会红）
+    check("内容类工具名单全部 ∈ 注册表",
+          _CONTENT_TOOLS <= set(_TOOL_MAP), str(sorted(_CONTENT_TOOLS - set(_TOOL_MAP))))
+
+    # ── ③ gate 集成：零帧轮 + 有帧轮（混合轮）────────────────────────────
+    def _st(skill, msgs_after_plan, **plan_kw):
+        return {"plan": plan_encode(instantiate_plan(skill, plan_kw)), "done": False,
+                "plan_rounds": 1,
+                "messages": [HumanMessage(content="x")] + msgs_after_plan}
+
+    nav = ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/talk",
+                      tool_call_id="execute_0", name="navigate_to")
+    site = ToolMessage(content="留言板 (/guestbook) — 河灯留言", tool_call_id="execute_0",
+                       name="get_site_map")
+    # 零帧 + 状态动作声称（20260907 实证句）→ fallback
+    o1 = gate_node(_st("chat", [AIMessage(content="喵～那泠月喵就帮你把夜间模式关掉，"
+                                                 "回到明亮的日间页面啦！")]))
+    check("零帧 + 状态动作声称 → fallback(state_claim_without_tool)",
+          o1["done"] is True and bool(o1.get("fallback_text"))
+          and "没有任何工具执行" in o1["fallback_text"], str(o1.get("fallback_text"))[:60])
+    # 零帧 + 幂等陈述态 → pass（不得误伤）
+    o2 = gate_node(_st("effect", [AIMessage(content="樱花特效现在开着呢，不用我再打开啦～")],
+                       effect="sakura", action="on"))
+    check("零帧 + 幂等陈述态 → pass（不误伤）",
+          o2["done"] is True and not o2.get("fallback_text"), str(o2))
+    # 零帧 + 站内检索声称（20260906 实证句）→ fallback
+    o3 = gate_node(_st("chat", [AIMessage(content="站内我查了一圈，没有找到专门讨论"
+                                                 "『去中心化效率』的文章或说说")]))
+    check("零帧 + 站内检索声称 → fallback(search_claim_without_tool)",
+          o3["done"] is True and bool(o3.get("fallback_text"))
+          and "没有任何工具执行" in o3["fallback_text"], str(o3.get("fallback_text"))[:60])
+    # 混合轮（只有动作工具帧）+ 检索声称 → fallback（洞②的另一形态）
+    o4 = gate_node(_st("chat", [nav, AIMessage(content="我把站内文章都翻了一遍，"
+                                                       "确实没有讲过这个")],
+                       target="说说", mode="direct"))
+    check("有帧[仅动作工具] + 检索声称 → fallback(phantom_search_claim)",
+          o4["done"] is True and bool(o4.get("fallback_text"))
+          and "没有任何工具执行" in o4["fallback_text"], str(o4.get("fallback_text"))[:60])
+    # 有帧 + 内容类工具（get_site_map）+"翻了一遍功能结构图" → pass（20260902 实证：
+    # 该处的"翻"指读结构图，帧就是 get_site_map 给的，属有据叙述）
+    o5 = gate_node(_st("chat", [site, AIMessage(content="刚又翻了一遍功能结构图，"
+                                                       "能确认的只有一句官方描述喵")]))
+    check("有帧[get_site_map] + 翻结构图 → pass（有据，不误伤）",
+          o5["done"] is True and not o5.get("fallback_text"), str(o5))
+    # 有帧 + 内容类工具 + 检索声称 → pass
+    o6 = gate_node(_st("chat", [site, AIMessage(content="我把站内文章都翻了一遍，"
+                                                       "确实没讲过这个")]))
+    check("有帧[内容类工具] + 检索声称 → pass", o6["done"] is True
+          and not o6.get("fallback_text"), str(o6))
+
+
 def test_execute_node():
     """execute 确定性执行（20260903 planner 全权）：执行器无自由意志、无授权分支
     ——planner 决策经 instantiate_plan/白名单（_EXPLICIT_TOOLS/_CALLABLE_QUERY_TOOLS/
@@ -1453,7 +1563,7 @@ def main():
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
                test_nav_fast_path, test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
                test_explicit_tools, test_planner_tool_menu, test_gate_claim_scope, test_gate_frame_checks,
-               test_phantom_tool_claim,
+               test_phantom_tool_claim, test_gate_claim_holes,
                test_execute_node, test_refs, test_todo_contract, test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
