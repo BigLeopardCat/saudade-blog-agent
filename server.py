@@ -524,7 +524,33 @@ _NOARG_VERB = {
 
 _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",
               "empty_result": "结果为空", "error_frame": "执行出错",
-              "cmd_shape": "返回格式异常"}
+              "cmd_shape": "返回格式异常",
+              # 参数引用失败（agent/refs.py 的原因码，20260919）
+              "ref_unknown_tool": "引用的工具尚未执行",
+              "ref_unparsed": "引用的返回不是结构化数据",
+              "ref_index_range": "引用的序号越界",
+              "ref_path_missing": "引用的字段不存在",
+              "ref_not_scalar": "引用取到的不是单个值"}
+
+
+# 参数引用（agent/refs.py 的 $<工具>[<序号>].<字段>）在过程行里的可读来源名。
+# 预告帧在 execute **之前**发，此刻引用还没解析，参数里就是 `$search_notes[0].noteKey`
+# 这种内部语法——直接拼进去访客会看到 `读取文章 $search_notes[0].noteKe`。故按来源
+# 工具译成"上一步<来源>的第 N 条"，与解析后的完成帧（读的是回执里的实际值）
+# 语义一致：预告说"要读上一步检索的第 1 条"，完成说"读取文章 12"。
+_REF_SOURCE_CN = {
+    "search_notes": "检索结果", "rag_search": "检索结果", "list_notes": "文章列表",
+    "list_talks": "说说列表", "list_guestbook": "留言列表",
+}
+
+
+def _ref_phrase(value: str) -> str:
+    """引用字面量 → 过程行可读短语（非引用或形态不认识 → 泛称，绝不打印原语法）。"""
+    m = re.match(r"^\$([a-z_][a-z0-9_]*)\[(\d+)\]", str(value or "").strip())
+    if not m:
+        return "上一步返回"
+    src = _REF_SOURCE_CN.get(m.group(1), f"{m.group(1)} 的返回")
+    return f"上一步{src}的第 {int(m.group(2)) + 1} 条"
 
 
 def _tool_action_text(name: str, args: dict | None) -> str:
@@ -532,6 +558,7 @@ def _tool_action_text(name: str, args: dict | None) -> str:
 
     参数值截断防长文本撑爆过程行；navigate 路径经 NAV_MAP 反查中文别名
     （反查失败展示路径本身——路径是 execute 实际下发的真实值，不硬凑）。
+    引用形态的参数（$tool[0].field）译成来源短语，不打印内部语法。
     """
     a = args or {}
     if name == "navigate_to":
@@ -559,6 +586,8 @@ def _tool_action_text(name: str, args: dict | None) -> str:
         return f"检索文章「{k[:24]}」" if k else "检索文章"
     if name == "get_article_detail":
         aid = str(a.get("article_id") or "").strip()
+        if aid.startswith("$"):
+            return f"读取文章（{_ref_phrase(aid)}）"
         return f"读取文章 {aid[:12]}" if aid else "读取文章"
     if name in _NOARG_VERB:
         return _NOARG_VERB[name]
