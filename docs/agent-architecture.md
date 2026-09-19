@@ -745,10 +745,11 @@ flowchart TB
   `min-height` 兜不住 `bottom:calc(100%+12px)` 的对话面板与悬浮按钮错位（2026-08-19 修复不彻底 → 08-22 改固定高度）。
 - **口型/动作**：`__setMouthOpen`/`__mouthOverride` + `model.update` 挂钩（loadParameters 之后注入 ParamSpeak/
   ParamMouthOpenY/Tail/耳朵/头发/眨眼），流式输出 300ms 口型翻转。
-- **缓存版本号**：改前端脚本必须 bump 三处手工点：`index.tsx` 注入 autoload.js 的 `?v=`、
-  autoload.js 内 `VER` 常量、`/home/ubuntu/mqtt-demo/device-console/index.html` 直引的 `?v=`
-  （当前 20260902a；waifu.css 的 `?v=` 由 `VER` 常量自动拼接，不算手动点）；nginx 对
-  `/live2d-widgets/` 等目录 1 年 immutable 缓存，`?v=` 换 query 即换缓存条目。
+- **缓存版本号**：改前端脚本必须同步 bump 手工点：`index.tsx` 注入 autoload.js 的 `?v=`、
+  autoload.js 内 `VER` 常量、以及**仓库外 IoT 控制台页**直引的 `?v=`（三处同值，当前值以
+  autoload.js 的 `VER` 为准，不在此文档写死）；waifu.css 的 `?v=` 由 `VER` 常量自动拼接，
+  不算手动点。nginx 对 `/live2d-widgets/` 等目录 1 年 immutable 缓存，`?v=` 换 query
+  即换缓存条目——不 bump 访客会一直跑旧脚本。
 - **模块图级联重命名（waifu-tips）**：waifu-tips.js 无 `?v=`（autoload.js 裸名加载），改上游模块必须整体
   重命名模块图——`waifu-tips.20260830.js` 动态导入 `chunk/index.20260830.js` + `chunk/index2.20260830.js`，
   两 chunk 静态导入回 `waifu-tips.20260830.js`（ES module identity，改一处会把模块实例拆成两份）；
@@ -758,15 +759,15 @@ flowchart TB
 
 ## 9. 部署与运维
 
-- **Agent 仓库独立部署**：push 即触发 CI（`.github/workflows/eval.yml`：L0 + L2 评测门禁 + 部署），
-  线上改动后**重启 systemd 服务生效**：
-  ```bash
-  .venv/bin/python -m py_compile server.py agent/prompts.py   # 本地轻量语法验证
-  sudo systemctl restart saudade-agent && sleep 8             # 勿再 nohup 裸跑（会与 systemd 抢 8010 端口）
-  curl -s http://127.0.0.1:8010/health                        # agent_ready: true
-  ```
-  日志：`logs/agent/agent.log`（systemd StandardOutput/Error append）+ `logs/agent/traces/`（对话 trace，
-  路径由 settings.py `trace_dir` 配置）；logrotate 按日轮转（`/etc/logrotate.d/saudade`）。
+- **Agent 仓库独立部署**：push 即触发 CI（`.github/workflows/eval.yml`：L0 + L2 评测门禁），
+  但 **push ≠ 上线**——运行时加载的是常驻进程里的代码，改动要**重启该服务**才生效。
+  本地轻量验证：`.venv/bin/python -m py_compile server.py agent/prompts.py`（仅语法，秒级）；
+  重启后用健康检查确认真起来了（看 `agent_ready: true`）。**不要再手动 nohup 裸跑**——
+  会与 systemd 抢同一端口，抢到之后没人管它，崩溃也不会自愈。
+  具体服务名、重启命令与探活地址属私有运行簿，不进仓库。
+  日志：`logs/agent/agent.log`（服务标准输出/错误 append）+ `logs/agent/traces/`（对话 trace，
+  路径由 settings.py `trace_dir` 配置）；按日轮转、保留两周、压缩归档（轮转规则由系统级配置
+  下发，本仓不含）。
 - **前端**：部署一律走 CI——本机不构建（20260830 OOM 事故：3.7GB 内存下本地 `vite build` 拖垮整机）。
   改动 commit → push `cn_sora_blog` → GitHub Actions 云端构建 → R2 → 服务器脚本部署。
 - **Rust**：同上走 CI；本地自检 `RUSTFLAGS="-D warnings" cargo check`（⚠️ CI 目前**未**启用 -D warnings——

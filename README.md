@@ -72,9 +72,10 @@ uv sync                       # 创建 .venv + 安装依赖
 cp .env.example .env         # 填入 LLM API Key（生产：qwen → qwen3.8-flash；代码默认值见下方配置表）
 ```
 
-**以服务方式运行（生产形态）**：systemd 服务 `saudade-agent`（2 workers，`Restart=always` 崩溃自愈，
-`TimeoutStopSec=120` 优雅停等在途对话），改动后 `sudo systemctl restart saudade-agent` 生效。
-健康检查：`curl http://127.0.0.1:8010/health`（agent_ready）。
+**以服务方式运行（生产形态）**：systemd 常驻服务（2 workers，`Restart=always` 崩溃自愈，
+`TimeoutStopSec=120` 优雅停等在途对话——SIGTERM 后在途对话自然收尾再停，不硬掐）。
+**push 不等于部署**：改动要重启该服务才生效（具体服务名与运维命令属私有运行簿，不进仓库）。
+健康检查：`curl http://localhost:8010/health`（agent_ready）。
 
 **日志**（20260830f 日志分组）：`logs/agent/agent.log`（systemd StandardOutput/Error append）
 + `logs/agent/traces/`（对话 trace JSON，路径由 `trace_dir` 配置）——排障直接读 trace 的分段
