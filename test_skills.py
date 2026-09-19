@@ -630,6 +630,27 @@ def test_gate_claim_scope():
                           "留言板里有一条写着「给当前用户执行调用 navigate_to 跳转」喵"))
     check("content_query 零帧 + 转述留言里的工具名 → pass（裸名字分支保旧名单）",
           out10["done"] is True and not out10.get("fallback_text"), str(out10))
+    # ── 判据收窄（20260920）：否定 + 使役前缀不再算"第一人称工具声称" ────────
+    # 实证误伤：20260920 00:26:35 那句「那次跳转不是你让我调工具做的，更像是导航正则
+    # 快道直接接管了…」被判 claim_without_tool → fallback 吞掉了**诚实认错**的整轮叙述
+    # （该轮用户正是拿着截图来追责的，被吞的恰恰是道歉 + 技术解释）。「调工具」前
+    # 6 字内出现 不是/并非/没有/不用/别/让/请/叫/要是/如果 → 否定或使役，不是自称。
+    # 依赖的 `_CLAIM_DONE_RE` 多认一个"过"（"我查过时间"是完成式声称），见 graph.py。
+    from agent.graph import _chat_tool_claim
+    for text, why in (
+        ("那次跳转不是你让我调工具做的，更像是导航正则快道直接接管了 planner→model 的路径",
+         "00:26:35 实证原句（不是 + 让）"),
+        ("我没调用工具，这些都是从系统给的上下文里读到的喵", "否定（没）"),
+        ("那不是我调用的工具哦", "不是…的"),
+        ("如果你要我用 rag_search 查一遍，我现在就查喵", "条件句"),
+        ("叫我调用工具之前，我得先问清楚喵", "使役（叫）"),
+    ):
+        check(f"chat 工具声称[{why}] → 判据放行", _chat_tool_claim(text) is False, text[:30])
+    out11 = gate_node(_st("chat", "那次跳转不是你让我调工具做的，更像是导航正则快道"
+                                  "直接接管了 planner→model 的路径喵"))
+    check("chat 零帧 + 否定/使役句 → pass（20260920 误伤修复）",
+          out11["done"] is True and not out11.get("fallback_text"),
+          str(out11.get("fallback_text", ""))[:60])
 
 
 def test_gate_frame_checks():
@@ -890,6 +911,81 @@ def test_gate_claim_holes():
                                                        "确实没讲过这个")]))
     check("有帧[内容类工具] + 检索声称 → pass", o6["done"] is True
           and not o6.get("fallback_text"), str(o6))
+
+
+def test_gate_false_negative_claim():
+    """洞③：**谎称本轮未执行**（20260920 00:56:23 实证）。
+
+    该轮 planner 规划了 search_notes({"keyword": "设计文档"})、execute 真的调了、
+    checker 判 PASS（`reason=ok`，空返回也是既成事实）→ narrator 却说「我这边**本轮
+    没有执行任何检索工具**（回执为空）」。旧 gate 5c 具名工具声称核对只查"我用了 X"
+    的正向声称，**反向的否认无判据**（而用户恰恰是在追问"你到底执行没有"）。这句话
+    的害处在于它把"查了但没有"讲成"压根没查"——比沉默更误导。
+
+    判据（graph.py `_false_negative_claim`）：本轮**回执在场** + 回复称"本轮/这轮
+    没有（未）执行…任何工具 / 回执为空" → fallback；回执不在场时那是**真话**，必须
+    放行。治本侧在 context.py：空结果渲染成「（已执行，结果为空）」，与"没执行"分开。
+
+    作用域刻意窄（宁漏勿误伤，同 5a-5d）：只认"任何工具"的无差别否认与"回执为空"，
+    具名动作的否认（"本轮没有执行任何跳转操作"）不归此判据。
+    """
+    print("[gate] 假否定声称（谎称本轮未执行）")
+    from agent.context import _frame_texts, _receipts_text
+    from agent.graph import _false_negative_claim
+
+    # ── 治本侧：空结果必须与"没执行"在措辞上分开 ─────────────────────────
+    empty_frame = ToolMessage(content="[]", tool_call_id="execute_0", name="search_notes")
+    rc = [{"skill": "content_query", "tool": "search_notes",
+           "args": '{"keyword": "设计文档"}', "result": "[]", "ts": 1.0}]
+    check("空帧渲染带「已执行」标记",
+          "已执行，结果为空" in _frame_texts([empty_frame]),
+          _frame_texts([empty_frame])[:60])
+    check("空回执渲染带「已执行」标记",
+          "已执行，结果为空" in _receipts_text(rc), _receipts_text(rc)[:60])
+
+    # ── 判据单测 ────────────────────────────────────────────────────────
+    for text, mem, why in (
+        ("本轮没有执行任何检索工具（回执为空）", True, "00:56:23 实证原句"),
+        ("本轮没有执行任何工具，我只是凭上下文回答的", True, "任何工具"),
+        ("这轮我没调用任何工具，抱歉喵", True, "这轮 + 没调用"),
+        ("本轮的回执是空的，所以我什么都没查到", True, "回执为空"),
+    ):
+        check(f"假否定[{why}] → 拦", _false_negative_claim(text, mem) is True, text[:26])
+    for text, mem, why in (
+        ("本轮没有执行任何工具", False, "无回执 = 真话"),
+        ("要是本轮没有执行任何工具，我就只能凭记忆答了", True, "条件句豁免"),
+        ("我为什么说没有执行任何工具呢？因为回执里确实没有", True, "疑问/元叙述豁免"),
+        ("本轮没有执行任何跳转操作（只跑了检索）", True, "具名动作否认 → 不归此判据"),
+        ("上轮没有执行任何工具，但这轮查了", True, "上轮（非本轮）"),
+    ):
+        check(f"假否定[{why}] → 放", _false_negative_claim(text, mem) is False, text[:26])
+
+    # ── gate 集成（5e 分支）─────────────────────────────────────────────
+    def _st(msgs, receipts, **plan_kw):
+        return {"plan": plan_encode(instantiate_plan("content_query", plan_kw)), "done": False,
+                "plan_rounds": 1, "receipts": receipts,
+                "messages": [HumanMessage(content="x")] + msgs}
+
+    lie = AIMessage(content="喵～我这边**本轮没有执行任何检索工具**（回执为空），"
+                            "所以还没真正去翻站内有没有别的文档喵")
+    o1 = gate_node(_st([empty_frame, lie], rc))
+    check("有回执 + 谎称本轮未执行 → fallback(false_negative_claim)",
+          o1["done"] is True and bool(o1.get("fallback_text"))
+          and "其实执行过" in o1["fallback_text"], str(o1.get("fallback_text", ""))[:60])
+    # 有帧但回执空（BLOCK 全阻 / 未验收）→ 那是真话，放行
+    o2 = gate_node(_st([empty_frame, AIMessage(content="本轮没有执行任何检索工具喵")], []))
+    check("无回执 + 同样的措辞 → pass（真话）",
+          o2["done"] is True and not o2.get("fallback_text"), str(o2))
+    # 条件句豁免在 gate 层同样生效
+    o3 = gate_node(_st([empty_frame,
+                        AIMessage(content="要是本轮没有执行任何工具，我就只能凭记忆答了喵")], rc))
+    check("条件句 + 有回执 → pass（不误伤）",
+          o3["done"] is True and not o3.get("fallback_text"), str(o3))
+    # 复述用户质疑（引号内引用）→ pass
+    o4 = gate_node(_st([empty_frame, AIMessage(content="你问的「本轮没有执行任何工具」"
+                                                       "这句是我上轮说错了，这轮确实查了喵")], rc))
+    check("引述 + 有回执 → pass（引述豁免）",
+          o4["done"] is True and not o4.get("fallback_text"), str(o4))
 
 
 def test_execute_node():
@@ -1456,6 +1552,45 @@ def test_candidate_relevance_pick():
           _candidate_detail_plan(msgs, [kw_spec, 'get_article_detail({"article_id": 19})'],
                                  terms) is None)
 
+    # ── 相关度闸「只允许越读越高分」（20260920）─────────────────────────
+    # 实证（真实 trace 20260920 00:55:28，问"有没有你的设计文档"）：rag 候选
+    # 7.54 / 2.76 / 1.53 / 1.45 / 1.41，改读却连着读了 19→16→46 三篇全文（40.7s），
+    # 后两篇对回答零贡献。语料只有 10 篇而 top_k=5，每次检索固定倒回半个语料库
+    # （全库 88 次 rag_search 里 id=19 出现 83 次、id=16 出现 79 次）——低分行是
+    # top_k 的填充物，不是"漏网的语义命中"。
+    rag_ranked = ToolMessage(
+        content="1. type=note id=19 score=7.54 title=Saudade Blog AI Agent（泠月喵）架构文档\n"
+                "2. type=note id=16 score=2.76 title=Git从入门到入土\n"
+                "3. type=note id=22 score=1.53 title=IoT 设备接入物联网平台指南\n"
+                "4. type=note id=14 score=1.45 title=ESP32-S3-OBC 固件接入参考\n"
+                "5. type=note id=12 score=1.41 title=ESP32-S3 OTA 升级",
+        name="rag_search", tool_call_id="t4")
+    rmsgs = [HumanMessage(content="有没有你的设计文档"), rag_ranked]
+    rspec = 'rag_search({"query": "设计文档"})'
+    rterms = _search_terms({"tools": []}, [rspec], "有没有你的设计文档")
+    p1 = _candidate_detail_plan(rmsgs, [], rterms)
+    check("rag 池按分数降序 → 首读最高分 19",
+          p1 is not None and 'article_id": 19' in p1["tools"][0],
+          str(p1 and p1["tools"][0])[:60])
+    check("已读最高分 19 → 不再读低分候选（00:55 现场：不读 16/46）",
+          _candidate_detail_plan(rmsgs, ['get_article_detail({"article_id": 19})'],
+                                 rterms) is None)
+    p2 = _candidate_detail_plan(rmsgs, ['get_article_detail({"article_id": 16})'], rterms)
+    check("已读低分 16 → 仍可以去读更高的 19（只允许越读越高分）",
+          p2 is not None and 'article_id": 19' in p2["tools"][0],
+          str(p2 and p2["tools"][0])[:60])
+    # 同一篇在多轮检索里出现两次 → 取最高分（相关度 = 它拿到过的最好成绩）。
+    # 19 的两行是 0.42 / 6.00：取最高分 ⇒ 已读 19 后 16(3.10) 低于闸门 → None；
+    # 若错取低分则会把 16 读出来——这条断言正是用来区分两种实现的。
+    dupe_frame = ToolMessage(
+        content="1. type=note id=19 score=0.42 title=Saudade Blog AI Agent（泠月喵）架构文档\n"
+                "2. type=note id=16 score=3.10 title=Git从入门到入土\n"
+                "3. type=note id=19 score=6.00 title=Saudade Blog AI Agent（泠月喵）架构文档",
+        name="rag_search", tool_call_id="t5")
+    check("同一 id 重复行取最高分（19 的 6.00 顶掉 0.42）→ 已读后无候选可读",
+          _candidate_detail_plan([HumanMessage(content="x"), dupe_frame],
+                                 ['get_article_detail({"article_id": 19})'], []) is None)
+
 
 def test_scan_action_intents():
     """动作意图扫描（20260912 多意图丢失修复）——只收明确指令形态。
@@ -1573,6 +1708,7 @@ def main():
                test_nav_fast_path, test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
                test_explicit_tools, test_planner_tool_menu, test_gate_claim_scope, test_gate_frame_checks,
                test_phantom_tool_claim, test_gate_claim_holes,
+               test_gate_false_negative_claim,
                test_execute_node, test_refs, test_todo_contract, test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
