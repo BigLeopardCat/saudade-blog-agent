@@ -354,8 +354,9 @@ def _intent_hints(executed: list, user_msg: str) -> str:
 _EXPERIENCE_TITLE_RE = re.compile(
     r"问题与解决记录|问题记录|踩坑|复盘|FAQ|排错|故障|心得|备忘")
 # rag_search 行式候选（例：`1. type=note id=19 score=5.82 title=… 命中节=…`）
+# score 要捕获（20260920 候选改读闸用，见 _candidate_detail_plan）。
 _RAG_ROW_RE = re.compile(
-    r"^\s*\d+\.\s*type=(\w+)\s+id=(\d+)\s+score=[\d.]+\s+title=(.*)$", re.M)
+    r"^\s*\d+\.\s*type=(\w+)\s+id=(\d+)\s+score=([\d.]+)\s+title=(.*)$", re.M)
 _DETAIL_SPEC_RE = re.compile(r'article_id["\']?\s*[:=]\s*(\d+)')
 
 # 候选相关性判定（20260912，检索重复拦截的位置规则加固）
@@ -414,11 +415,16 @@ def _candidate_detail_plan(messages: list, executed: list, terms: set[str]) -> d
     经验记录类标题在存在机制文档时延后（20260903 rag_ota_http 实证：只命中
     《问题与解决记录》踩坑史）。候选全已读 / 无一能对上号 → None：调用方如实
     收尾并列出候选——**诚实优于硬读**（读错一篇的代价是整轮跑题 + 跨轮锚点污染）。
+
+    20260920 加**相关度闸**（"只允许越读越高分"）：rag 候选按分数取最高分去重、
+    池内按分降序，且分数不高于"已读候选最高分"的一律不读——读全文的收益只来自
+    最好的那份证据，低分候选是小语料 top_k 的填充物（见函数内注释的实证数据）。
     """
     done_ids = {m.group(1) for s in executed for m in [_DETAIL_SPEC_RE.search(s)]
                 if m is not None}
     frames = [m for m in messages if isinstance(m, ToolMessage)]
-    rows: list[tuple[str, str, str, str]] = []  # (id, doc_type, title, src)
+    # (id, doc_type, title, src, score)——score 只有 rag 行有（BM25 分），kw 行 None
+    rows: list[tuple[str, str, str, str, float | None]] = []
     for m in reversed(frames):
         name = getattr(m, "name", "") or ""
         text = _msg_text(m)
@@ -429,26 +435,50 @@ def _candidate_detail_plan(messages: list, executed: list, terms: set[str]) -> d
                     for r in obj:
                         if isinstance(r, dict) and r.get("noteKey") is not None:
                             rows.append((str(r["noteKey"]), "note",
-                                         str(r.get("noteTitle") or ""), "kw"))
+                                         str(r.get("noteTitle") or ""), "kw", None))
             elif name == "rag_search":
-                for typ, rid, title in _RAG_ROW_RE.findall(text):
+                for typ, rid, score, title in _RAG_ROW_RE.findall(text):
                     dt = ("talk" if typ == "talk" else "board" if typ == "board"
                           else "note")
-                    rows.append((rid, dt, title.split(" 命中节=")[0], "rag"))
+                    rows.append((rid, dt, title.split(" 命中节=")[0], "rag",
+                                 float(score)))
         except Exception:
             continue
-    seen: set[str] = set()
-    ordered: list[tuple[str, str, str, str]] = []
+    # 同一篇在多轮检索里出现 → 取**最高分**（相关度 = 它拿到过的最好成绩）；行序按首次
+    # 出现（_EXPERIENCE_TITLE_RE 的经验记录延后仍按原始序生效）。
+    best: dict[str, tuple] = {}
+    order: list[str] = []
     for r in rows:
-        if r[0] in seen:
-            continue
-        seen.add(r[0])
-        ordered.append(r)
+        if r[0] not in best:
+            best[r[0]] = r
+            order.append(r[0])
+        elif r[4] is not None and (best[r[0]][4] is None or r[4] > best[r[0]][4]):
+            best[r[0]] = r
+    ordered = [best[i] for i in order]
     unread = [r for r in ordered if r[0] not in done_ids]
     if not unread:
         return None
+    # 相关度闸（20260920）：**只允许越读越高分**——已读候选里的最高分即"手头最好的
+    # 证据"，再读不高分候选是纯噪声。事故（真实 trace 20260920 00:55:28）：问"有没有
+    # 你的设计文档"，rag 候选 7.54 / 2.76(Git 教程) / 1.53 / 1.45 / 1.41，改读却连着
+    # 读了 19→16→46 三篇全文（40.7s），后两篇对回答零贡献。语料只有 10 篇而 top_k=5，
+    # 每次检索固定倒回半个语料库，低分行不是"漏网的语义命中"而是 top_k 的填充物——
+    # 全库 88 次 rag_search 里 id=19 出现 83 次、id=16 出现 79 次即是证据。kw 行不受
+    # 此闸约束（无分数，相关性由 _title_relevant 的标题词元重叠保证）。
+    read_scores = [r[4] for r in ordered if r[0] in done_ids and r[4] is not None]
+    if read_scores:
+        read_max = max(read_scores)
+        kept = [r for r in unread if r[3] == "kw" or (r[4] or 0) > read_max]
+        if len(kept) < len(unread):
+            logger.info("[planner] 候选改读闸：已读最高分 %.4f，跳过 %d 条不高分候选",
+                        read_max, len(unread) - len(kept))
+        unread = kept
+    if not unread:
+        return None
     kw_hit = [r for r in unread if r[3] == "kw" and _title_relevant(r[2], terms)]
-    pick_pool = kw_hit or [r for r in unread if r[3] == "rag"]
+    rag_pool = sorted((r for r in unread if r[3] == "rag"),
+                      key=lambda r: r[4] or 0.0, reverse=True)
+    pick_pool = kw_hit or rag_pool
     if not pick_pool:
         logger.info("[planner] 候选无一与检索实词（%s）对得上号 → 不硬读，如实收尾",
                     "、".join(sorted(terms)) or "（无实词）")
