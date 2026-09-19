@@ -92,6 +92,7 @@ def run_one(req: ChatRequest) -> dict:
     exec_rows: list = []  # 20260904：checker 验收回执（__EXEC__ 帧，系统确认事实）
     resets = 0
     resets_reasons: list[str] = []
+    tool_rounds = 0   # 效率基线：planner 发出 TOOLS 清单的轮数（🛠 过程帧计数）
     error = None
     for item in frames:
         if isinstance(item, str) and item.startswith("__RESET__"):
@@ -123,9 +124,18 @@ def run_one(req: ChatRequest) -> dict:
                     commands.append(s)
         elif isinstance(item, BaseException):
             error = str(item)
+        elif isinstance(item, str) and item.startswith("__PROCESS__"):
+            # 效率基线（20260919 / 口径修正 20260919b）：planner 每发一次带 TOOLS
+            # 清单的决策就有一条"🧭 计划：<动作>"过程帧 → 其计数即"planner 规划
+            # 了几轮工具"。**不能用 "🛠 正在调用工具…"**：那条帧在 server.py 带
+            # key=tool_running 去重，每请求最多一条，计数器结构上不可能 >1（首版
+            # 口径错误，据此报的"多轮绕圈例 0"作废）。
+            if "🧭 计划：" in item:
+                tool_rounds += 1
     return {"text": final_text, "commands": commands, "tool_calls": tool_calls,
             "exec_rows": exec_rows,
             "exec_tools": [r.get("tool", "") for r in exec_rows],
+            "tool_rounds": tool_rounds,
             "resets": resets, "resets_reasons": resets_reasons, "error": error}
 
 
@@ -272,6 +282,37 @@ def check_gold(gold: dict, result: dict) -> list[str]:
         if t not in result["exec_tools"]:
             fails.append(f"checker 验收回执缺少工具 {t}（exec：{result['exec_tools']}）")
 
+    # 20260919：参数引用（agent/refs.py）不得以未解析形态进入成功执行。这条在
+    # 拓扑上不可能违反（resolve_args 失败即不执行），但断言的是**不变量**：
+    # 回执 args 只该是真实调用值——一旦有人把失败降级成"当字面量调用"，这条先红。
+    for r in result["exec_rows"]:
+        for k, v in (r.get("args") or {}).items():
+            if re.match(r"^\$[a-z_]+\[\d+\]", str(v)):
+                fails.append(f"执行回执里出现未解析的引用参数 {r.get('tool')}.{k}={v!r}")
+
+    # 20260919：依赖链断言——consumer 的某参数必须**取自** producer 回执里的
+    # 结构化字段（"先读数据再决定"真的成立，而不是模型凭记忆把 id 写对）。
+    # 回执 result 只留前 200 字，故只看这段；命中的是首条候选即可。
+    for spec in gold.get("require_arg_from_result", []):
+        producers = spec.get("producers") or [spec["producer"]]
+        prods = [r for r in result["exec_rows"] if r.get("tool") in producers]
+        cons = [r for r in result["exec_rows"] if r.get("tool") == spec["consumer"]]
+        if not prods or not cons:
+            fails.append(f"依赖链断言缺回执：{'/'.join(producers)}×{len(prods)} / "
+                         f"{spec['consumer']}×{len(cons)}")
+            continue
+        fields = spec.get("fields") or [spec.get("field") or "id"]
+        pool: set = set()
+        for p in prods:
+            txt = str(p.get("result") or "")
+            for f in fields:
+                pool |= set(re.findall(rf"{f}\D{{0,4}}(\d+)", txt))
+        got = str((cons[-1].get("args") or {}).get(spec["arg"]) or "")
+        if got not in pool:
+            fails.append(f"{spec['consumer']}.{spec['arg']}={got!r} 不来自 "
+                         f"{'/'.join(producers)} 的 {'/'.join(fields)}"
+                         f"（回执里只有 {sorted(pool)}）—— 取的 id 不是检索结果给的")
+
     return fails
 
 
@@ -344,6 +385,10 @@ def main():
             "commands": result["commands"], "resets": result["resets"],
             "resets_reasons": result["resets_reasons"],
             "requires_tools": requires,  # 20260902 下午：效率指标归因（工具类 vs 非工具类）
+            # 效率基线（20260919）：逐例工具调用序列与规划轮数，
+            # 用来对比"给/不给上下文情境"两组的绕圈与越权倾向
+            "tool_calls": result["tool_calls"],
+            "tool_rounds": result["tool_rounds"],
             "text": result["text"],
         })
 
@@ -379,6 +424,27 @@ def main():
         "tool_required_first_try_ok": len(_first_ok),  # resets==0 即首轮就调对
         "tool_required_first_try_pct": round(100 * len(_first_ok) / len(_tc), 1) if _tc else 100.0,
     }
+    # 效率基线段（20260919，源自 planner 上下文对照实验）：自由 ReAct 漂移的代理量 =
+    # 工具调用总数 / 规划轮数 / 多轮绕圈例数 / 重复检索例数——每轮全量跑都记，跨版本
+    # 对比这几列就能看出"规划变啰嗦了"（实验开关本体已删，指标长期留用）。
+    _hist: dict = {}
+    for r in results:
+        for t in r.get("tool_calls", []):
+            _hist[t] = _hist.get(t, 0) + 1
+    _multi = [r["id"] for r in results if r.get("tool_rounds", 0) >= 2]
+    _dup = [r["id"] for r in results
+            if sum(1 for t in r.get("tool_calls", []) if t in ("rag_search", "search_notes")) >= 2]
+    _tcalls = [len(r.get("tool_calls", [])) for r in results]
+    efficiency = {
+        "tool_calls_total": sum(_tcalls),
+        "tool_calls_avg": round(sum(_tcalls) / len(_tcalls), 2) if _tcalls else 0.0,
+        "tool_calls_by_name": dict(sorted(_hist.items(), key=lambda kv: -kv[1])),
+        "tool_rounds_total": sum(r.get("tool_rounds", 0) for r in results),
+        "cases_multi_tool_rounds": len(_multi),
+        "cases_multi_tool_rounds_ids": _multi,
+        "cases_repeat_search": len(_dup),
+        "cases_repeat_search_ids": _dup,
+    }
     report = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
@@ -393,6 +459,7 @@ def main():
             "max": round(_pct(latencies, 100), 1),
         },
         "efficiency": eff,
+        "efficiency": efficiency,
         "cases": results,
     }
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
@@ -433,6 +500,11 @@ def main():
           f"（{eff['cases_with_resets_ids']}）")
     print(f"首轮即调: 工具类 {eff['tool_required_first_try_ok']}/{eff['tool_required_total']}"
           f" = {eff['tool_required_first_try_pct']}%（resets==0 即首轮调用成功）")
+    # 效率基线（20260919）：跨版本可比，数字变大 = planner 更啰嗦（多轮绕圈/重复检索）
+    print(f"效率基线: 工具调用 {efficiency['tool_calls_total']}"
+          f"（均 {efficiency['tool_calls_avg']}/例）规划轮 {efficiency['tool_rounds_total']}"
+          f" 多轮绕圈例 {efficiency['cases_multi_tool_rounds']}{efficiency['cases_multi_tool_rounds_ids']}"
+          f" 重复检索例 {efficiency['cases_repeat_search']}{efficiency['cases_repeat_search_ids']}")
     print(f"报告: {REPORT_FILE}")
     print(f"留档: eval/report/runs/{ts_str}.json")
     if review_path:
