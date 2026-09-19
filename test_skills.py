@@ -1181,6 +1181,75 @@ def test_scan_action_intents():
     check("无意图 → 缺省语", "未扫描到" in _intent_hints([], "你好呀"))
 
 
+def test_doc_anchors_and_clip():
+    """本会话已点名文档锚点 + 节选头尾取样（20260919 A 档）。
+
+    实证事故（会话 144 / 20260919 17:18:45）：planner 的 page_ctx 里明明有
+    「读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》」、上一轮回复也点了名，
+    用户只问"你看了吗就说没写"（无指代词）→ 规则 4 不启动 → 落规则 3 主题检索 →
+    rag_search 命中 46《文章向量空间图谱项目文档》→ 被拦截器读全文 → 整轮跑偏。
+    锚点注入让"是哪一篇"不再需要检索；_clip_mid 让长回复中段的文档名不再被截掉。
+    """
+    from agent.context import _clip_mid, _doc_anchors, _recent_tail
+
+    sys_msg = HumanMessage(content=(
+        "[System: user_id=1, page=https://saudade.site/device-console/; current_effects=none; "
+        "recent_executions: · 跳转「/device-console/」"
+        "· 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》"
+        "· 站内检索「AI Agent 架构文档 narrator 节点定义 planner-authority 流程」"
+        "· 搜索「架构」]"))
+    hist = [
+        HumanMessage(content="去看你的项目文档，而不是TEST8这种测试文档"),
+        AIMessage(content="### 📚 站内正式的项目介绍文档  - **《文章向量空间图谱项目文档》**（id=46）："
+                          "首页展示柜的技术记录…  - **《Saudade Blog AI Agent（泠月喵）架构文档》**（id=19）："
+                          "讲我自己大脑的那篇…  - **《IoT 设备接入物联网平台指南》**（id=22）…"),
+        HumanMessage(content="TEST8？"),
+        AIMessage(content="想看原图的话直接点这个链接：[《TEST8》](https://saudade.site/article/13)"),
+        HumanMessage(content="你看了吗就说没写"),
+    ]
+    out = _doc_anchors([sys_msg] + hist)
+    check("锚点：跨轮执行记忆的读取行 → 标题 + id + 已读标记",
+          "《Saudade Blog AI Agent（泠月喵）架构文档》 id=19（本会话已读过全文）" in out)
+    check("锚点：markdown 文章链接 → id", "《TEST8》 id=13" in out)
+    check("锚点：列表里的 （id=46） 邻域配对", "《文章向量空间图谱项目文档》 id=46" in out)
+    check("锚点：无 id 的标题也列出并标注", "《IoT 设备接入物联网平台指南》 id=22" in out)
+    check("锚点顺序：最近点名/读过的排前（TEST8 最近）",
+          out.index("《TEST8》") < out.index("《文章向量空间图谱项目文档》"))
+    check("锚点：无文档的会话给缺省语",
+          _doc_anchors([HumanMessage(content="你好呀")]) == "（本会话还没有点名的文档）")
+    # 相邻条目 id 不串台：后一条目的 id 不能被前一条目认领
+    out2 = _doc_anchors([AIMessage(content="- **《甲文档》**（id=1） - **《乙文档》**（id=2）")])
+    check("锚点：id 归属不前移", "《甲文档》 id=1" in out2 and "《乙文档》 id=2" in out2)
+    # 简称 ↔ 全称同篇：同一篇不列成两篇（实测正文口语简称《AI Agent 架构文档》 vs
+    # 跨轮执行记忆的全称带 id）——并入一行，简称保留为别名
+    out3 = _doc_anchors([AIMessage(content="这个「导航关键词正则快道」我这篇《AI Agent 架构文档》里没写到"),
+                         AIMessage(content="· 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》")])
+    check("锚点：简称并入全称行且不重复计数",
+          out3.count("·") == 1 and "id=19" in out3 and "上文亦称《AI Agent 架构文档》" in out3)
+    # 反向（简称在先、全称在后）同样并入，且留长标题
+    out4 = _doc_anchors([AIMessage(content="· 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》"),
+                         AIMessage(content="这篇《AI Agent 架构文档》里没写到")])
+    check("锚点：反序并入同篇", out4.count("·") == 1 and "《Saudade Blog AI Agent（泠月喵）架构文档》 id=19" in out4)
+    # 短标题不参与简/全称合并——防"物联网平台"并进"物联网平台接入指南"这类**不同**篇
+    # （错并 = 把 A 篇 id 挂到 B 篇名下，正是本次要修的故障形态，宁可漏并不错并）
+    out5 = _doc_anchors([AIMessage(content="《物联网平台》 id=22 和 《物联网平台接入指南》 id=9 都写过")])
+    check("锚点：短标题不误并（同名前缀的两篇不同文章）",
+          out5.count("·") == 2 and "《物联网平台》 id=22" in out5 and "《物联网平台接入指南》 id=9" in out5)
+    check("锚点：无关联标题不并", _doc_anchors([AIMessage(content="《甲文档》 id=1 和 《乙文档》 id=2")]).count("·") == 2)
+
+    # _clip_mid：中段锚点打捞
+    long_reply = "喵" * 300 + "我读了《Saudade Blog AI Agent（泠月喵）架构文档》(id=19) 的正文" + "尾" * 300
+    clipped = _clip_mid(long_reply, head=80, tail=160)
+    check("节选：中段的文档锚点被捞回", "《Saudade Blog AI Agent（泠月喵）架构文档》" in clipped
+          and "id=19" in clipped)
+    check("节选：短文本原样不动", _clip_mid("短句", head=80, tail=160) == "短句")
+    check("节选：头尾取样都在", clipped.startswith("喵" * 80) and clipped.endswith("尾" * 40))
+    # _recent_tail 端到端：长回复中段点名的文档仍出现在节选里
+    tail = _recent_tail([HumanMessage(content="上一句"), AIMessage(content=long_reply),
+                         HumanMessage(content="你看了吗就说没写")])
+    check("节选：长回复中段点名的文档不丢", "架构文档" in tail)
+
+
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
@@ -1191,7 +1260,7 @@ def main():
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
                test_search_retry_kind, test_candidate_relevance_pick,
-               test_scan_action_intents):
+               test_scan_action_intents, test_doc_anchors_and_clip):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
