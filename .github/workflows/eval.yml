@@ -1,45 +1,30 @@
-# Eval Gate —— push 跑秒级单测；golden 评测集按通过率门禁（每日定时 + 手动触发）
+# Eval Gate —— push 跑秒级单测（L0）。
 #
-# 分工（重要）：
-#   - push → 只跑四个秒级套件（纯函数/无 LLM，永远快）
-#   - golden 评测集（真实 LLM）→ 独立 job，每日定时 + workflow_dispatch 手动触发。
-#     它在 GitHub runner（北美）上跨网调用 LLM 与生产站点：
-#     ① **通过率可信**：逐条断言的是 agent 行为（读了哪篇、有没有编造、命令帧对不对），
-#        与链路快慢无关——环形红绿灯就靠它（`--min-pass-rate` 判门禁）；
-#     ② **响应时间不可比**：CI 耗时反映国际链路延迟，不是用户真实体验。性能基线
-#        （P50/P95、效率四指标）必须本机跑（本机即生产服务器，链路真实）：
-#        cd saudade-blog-agent && .venv/bin/python eval/run_golden.py
-#     ③ 少数用例依赖**本机服务**（device-service 在 127.0.0.1:3100，CI 不可达）：
-#        用 --skip-ids 排除，别让"环境不可达"污染通过率。真机用例的覆盖仍靠本机全量跑。
+# **golden 全量评测集不进 CI（20260920 撤下）**，改为本机按需手动跑。
+# 撤下的实测依据（run 35499800723 / 35506176321）：
+#   - 北美 runner 调北美阿里云端点这条 LLM 腿**每次调用先吊住 ~120 秒**再走重试
+#     （ChatOpenAI timeout=120s × langchain max_retries=2 ⇒ 单次调用最坏 6 分钟）；
+#   - 3 条本机合计 39 秒的用例，在 CI 里跑 21 分钟仍未结束；期间生产机 access log
+#     显示：18:50:37 语料热身（12 个请求）之后再无一个工具请求 ⇒ 卡在 LLM 腿，
+#     与"回国调站点"那一腿无关（那一段实测健康，服务端 0-3ms）；
+#   - 一次 120 分钟上限的全量跑被杀，且**零产出**（报告只在结尾写 + 非 TTY 块缓冲，
+#     日志与 artifact 双双为空）。
 #
-# 依赖仓库 Secrets（Settings → Secrets and variables → Actions）：
-#   QUALITY_GATE_API_KEY  质量门禁专用 LLM key（北美可达，与服务器 .env 的 key 可不同）
-#   QUALITY_GATE_BASE_URL 对应的 OpenAI 兼容 base url
-# 可选 Variables：GOLDEN_MIN_PASS_RATE（默认 0.9）、QWEN_MODEL（默认 qwen3.8-flash）
+# 全量 golden 在本机跑（本机即生产服务器，链路真实，73 条约 19 分钟）：
+#   cd saudade-blog-agent
+#   .venv/bin/python eval/run_golden.py                     # 全量；--limit N / --only a,b / --min-pass-rate
+#   .venv/bin/python eval/golden_full_run.py                # 进程隔离版：逐条独立进程 + 180s 超时，防悬挂
+#   夜间 04:00 已有 scripts/nightly_regression.sh（crontab）跑 test_skills + 全量 golden + trace 巡检。
 #
-# 手动触发：
-#   gh workflow run eval.yml                                     # 全量 golden + 秒级套件
-#   gh workflow run eval.yml -f run_golden=false                 # 只跑秒级套件
-#   gh workflow run eval.yml -f golden_args="--only a,b"         # 指定用例（链路诊断）
-#   gh workflow run eval.yml -f golden_args="--limit 3"          # 前 3 条
+# 仓库 Secrets QUALITY_GATE_API_KEY / QUALITY_GATE_BASE_URL 与 Variables
+# GOLDEN_MIN_PASS_RATE / QWEN_MODEL 已无引用，可留可删（留下不影响任何运行）。
 name: Eval Gate
 
 on:
   push:
     branches: [main]
-  # 每日 18:07 UTC = 次日 02:07 (UTC+8)：避开整点排队，且与生产夜的其它任务错开
-  schedule:
-    - cron: "7 18 * * *"
+  # 手动重跑秒级套件（无入参）；全量 golden 请按上面注释在本机跑
   workflow_dispatch:
-    inputs:
-      run_golden:
-        description: "跑 golden 评测集（真实 LLM；通过率可信，耗时不可比）"
-        type: boolean
-        default: true
-      golden_args:
-        description: "追加给 run_golden.py 的参数（如 --only a,b 或 --limit 3 做链路诊断）；留空=全量"
-        type: string
-        default: ""
 
 jobs:
   eval:
@@ -66,51 +51,3 @@ jobs:
 
       - name: golden 判据离线自测（词表/正则族/引述豁免，秒级，纯文本函数，无网络）
         run: uv run python eval/judge_offline_test.py
-
-  golden:
-    # 定时 + 手动触发时跑（push 不跑：跨网全量约 30-60 分钟，push 门禁要保持秒级）
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_golden)
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.10"
-
-      - name: Install dependencies
-        run: uv sync --frozen
-
-      - name: Golden 评测集（通过率门禁）
-        env:
-          # 质量门禁专用端点（北美可达）；provider 仍是 qwen（settings.py 的注册表名）
-          QWEN_API_KEY: ${{ secrets.QUALITY_GATE_API_KEY }}
-          QWEN_BASE_URL: ${{ secrets.QUALITY_GATE_BASE_URL }}
-          QWEN_MODEL: ${{ vars.QWEN_MODEL || 'qwen3.8-flash' }}
-          LLM_PROVIDER: qwen
-          # trace 落盘到 CI 工作区（settings.trace_dir 默认指向本机 logs/，runner 上不可写）
-          TRACE_DIR: /tmp/saudade-traces
-          # 本机依赖用例：device-service 只在 127.0.0.1:3100，CI 不可达
-          # （device_* 三条断言的仍是"回复不许谎称已显示"，本机全量跑覆盖真机路径）
-          SKIP_IDS: device_display_request,device_display_negative,device_query
-          MIN_PASS_RATE: ${{ vars.GOLDEN_MIN_PASS_RATE || '0.9' }}
-          # 20260920：非 TTY 下 Python 是块缓冲——上次 120 分钟超时被杀时，
-          # 整轮用例输出（约 7KB，正好卡在 8KB 缓冲之下）一条都没留下。
-          PYTHONUNBUFFERED: "1"
-        run: |
-          uv run python -u eval/run_golden.py \
-            --skip-ids "$SKIP_IDS" --min-pass-rate "$MIN_PASS_RATE" ${{ inputs.golden_args }}
-
-      - name: 上传评测报告（含 FAIL 复审单；失败也要看到失败细节）
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: golden-report
-          path: |
-            eval/report/last_run.json
-            eval/report/runs/*.json
-            eval/report/review_*.md
-          if-no-files-found: warn
-          retention-days: 30

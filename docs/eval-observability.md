@@ -42,7 +42,7 @@
 
 ## 1. 定位与原则
 
-- **评测 = 离线质量门禁**（"做得好不好"）：CI 里跑，指标回归即拦截合并。
+- **评测 = 离线质量门禁**（"做得好不好"）：L0 秒级套件在 CI 里跑（push 即拦截）；L2 全量 golden 在**本机**跑（20260920 起，CI 侧跨网链路不可用，见 §4 末注）。
 - **可观测性 = 线上实时监控**（"现在跑得怎么样"）：trace/metrics/logs 三支柱。
 - **回放打通两者**：线上日志采样 → 离线评测 → 行为漂移检测。
 - **原则一：评测与语料解耦**。检索器质量、生成鲁棒性用开源数据集评测（与博客文章无关）；
@@ -60,9 +60,12 @@
 flowchart TB
     subgraph CI[CI 流水线]
         P0[push 触发] --> L0[L0 单元/组件级<br/>秒级 · 每次必跑]
-        L0 --> L2[L2 任务级 golden set<br/>分钟级 · 每次必跑 · 硬门禁]
         N[nightly 定时] --> L1[L1 基准级开源数据集<br/>小时级 · 离线]
         N --> L3[L3 线上回放<br/>采样生产日志脱敏重放]
+    end
+    subgraph LOCAL[本机（生产服务器）]
+        P1[按需手动] --> L2[L2 任务级 golden set<br/>74 条 · 约 19 分钟 · 硬门禁]
+        N2[04:00 nightly] --> L2
     end
     L0 -->|失败| BLOCK[阻塞合并]
     L2 -->|指标回归| BLOCK
@@ -77,7 +80,7 @@ flowchart TB
 | **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 70 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
 | **L3 回放级** | 线上行为漂移 | 生产对话脱敏采样 → 离线重放 → 与 golden 指标对齐 | 漂移方向/幅度 | 全部（每次升级后跑） |
 
-**CI 门槛**：push 跑 L0 + L2（分钟级，硬门禁，回归即红）；nightly 跑 L1 全量 + L3 回放（小时级，出基准报告）。
+**门槛分工**（20260920 起）：**CI** 只跑 L0（push 触发，秒级，硬门禁）；**L2 全量 golden 在本机跑**（按需手动 `eval/run_golden.py` / `eval/golden_full_run.py`，nightly 04:00 由 `scripts/nightly_regression.sh` 自动跑一轮，失败标 `~/agent_regression.failed`）；nightly 另跑 L1 全量 + L3 回放（小时级，出基准报告）。
 
 ---
 
@@ -137,8 +140,16 @@ sticker/planner 等判据改写用例，20260919 起新增 dep/refs 标签（依
      （换主题防单例运气 + 走检索键字段路径）。
 
 **数据集版本管理**：`eval/golden/` 下 JSONL，每条含 `id / user_input / context / gold_assert / gold_score_floor / tags`。
-线上发现新故障模式 → 构造新样本 → 进 golden set → CI 从此拦截同类回归。golden set 是持续演进资产，
+线上发现新故障模式 → 构造新样本 → 进 golden set → 全量回归（本机按需 / nightly）从此拦截同类回归。golden set 是持续演进资产，
 **改 prompt/图/记忆前必跑，防止"修一个幻觉、引入三个回归"**。
+
+**L2 为什么撤出 CI（20260920）**：北美 runner 调北美阿里云端点那条 LLM 腿每次调用先吊住
+（最坏一次 planner 调用 20+ 分钟才返回），3 条本机合计 39 秒的用例在 CI 里跑 21 分钟未完；
+一次 120 分钟上限的全量跑被杀且零产出（报告只在结尾写 + 非 TTY 块缓冲，日志与 artifact 双双为空）；
+诊断跑还抓出 CI 侧凭据 `401 Invalid API-key`——**CI 一轮都没跑出过真实通过率**。
+结论：L2 **本机跑**（本机即生产服务器，链路真实，74 条约 19 分钟，device 真机用例天然覆盖）；
+`eval/golden_full_run.py` 已提供进程隔离 + 单条 180s 超时（防悬挂污染），是本机的看门狗。
+CI 只留 L0 秒级套件。
 
 ---
 
@@ -192,7 +203,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 线上指标异常（恢复语触发率↑ / 工具失败率↑）
   → 按 trace_id 采样定位故障模式
   → 构造新 golden 样本进 L2（数据集版本管理）
-  → CI 回归从此拦截同类
+  → 全量回归（本机）从此拦截同类
   → 修复后跑 L1 + L3 验证无漂移
 ```
 
@@ -206,7 +217,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 |---|---|
 | **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（70 条、54 标签：rag_* 22/chat 8/hallucination 8/multi-turn 7/nav 6/effect 6/noise 5/content_query 5/device 3/exec_memory 2 等）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>` 单跑定位；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`eval/judge_offline_test.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。LLM-as-judge 未做 |
 | 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:）；20260830 修 golden 断言过严三条（行为正确不判失败） |
-| 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0+L2 硬门禁）+ nightly crontab（scripts/nightly_regression，失败标 `~/agent_regression.failed`）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
+| 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0 秒级套件硬门禁）；L2 全量 golden 本机跑（20260920 起撤出 CI）+ nightly crontab（scripts/nightly_regression，失败标 `~/agent_regression.failed`）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
 | 3 记忆 | 🟡 部分完成：摘要独立化（2026-08-26）结构性关闭污染面；**未做**：记忆专项评测（召回相关性、摘要合并质量、污染检测） |
 | 4 可观测 | 🟡 部分完成：对话 trace JSON 落盘（utils/trace.py → logs/agent/traces/，20260829）+ LLM 慢调用监控（>30s WARN + trace slow 标记，20260830）+ trace_id 中间件。**未做**：metrics 落库、看板、L3 回放 |
 | 5 多 agent | 路由正确性评测 + 子 agent 指标分解 |
