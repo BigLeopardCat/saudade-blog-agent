@@ -55,9 +55,16 @@ ARCH = {
 
 
 def judge(case_id, text, cmds=()):
-    res = {"text": text, "commands": list(cmds), "tool_calls": [], "exec_rows": [],
-           "exec_tools": [], "resets": [], "resets_reasons": [], "error": None}
-    return rg.check_gold(GOLD[case_id], res)
+    # 文本断言离线重放：**把用例声明的工具帧视为已满足**——本文件只验文本侧判据，
+    # 帧/命令侧由真实跑法（golden_case_runner）验证。20260921 起多条用例补了
+    # require_tool_calls_any 帧级正断言，若这里仍喂空 tool_calls，全部历史文本重放会
+    # 因帧断言假失败（判据没变、离线跑法没跟上 = 又一类 harness 漂移）。
+    g = GOLD[case_id]
+    res = {"text": text, "commands": list(cmds),
+           "tool_calls": list(g.get("require_tool_calls") or []) + list(g.get("require_tool_calls_any") or []),
+           "exec_rows": [], "exec_tools": list(g.get("require_exec_tools") or []),
+           "resets": [], "resets_reasons": [], "error": None}
+    return rg.check_gold(g, res)
 
 
 CASES = [
