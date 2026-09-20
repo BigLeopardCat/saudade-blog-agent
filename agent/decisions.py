@@ -181,6 +181,12 @@ def _nav_fast_path(user_msg: str) -> dict | None:
     # 见 _NAV_VERB_RE 上方注释）；问路类由 planner LLM 兜底识别为导航意图
     if _QUESTION_RE.search(msg):
         return None
+    # 否定式排除（20260920b）：与显示快道对齐（_NEGATION_RE，见其上方注释）。动词**之后**
+    # 的否定词原先穿不过去——"带我去留言板不用了"被 `_NAV_VERB_RE` 的 $ 锚捕获成目标
+    # "留言板不用了"，再被模糊归一规则命中（"留言板" ∈ t）⇒ 拿一句否定语当导航目标。
+    # 命中即回落 planner LLM（多一次调用，行为正确）——快道只是提速，误判才是真代价。
+    if _NEGATION_RE.search(msg):
+        return None
     target = msg if msg in NAV_MAP else None
     if target is None:
         m = _NAV_VERB_RE.match(msg)  # match 而非 search：动词必须句首，避免句中误匹配
