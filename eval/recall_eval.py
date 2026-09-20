@@ -43,6 +43,17 @@ QUERIES: list[dict] = [
     {"id": "rag_fingerprint_pin", "query": "指纹模组有哪些引脚？",          "expected": []},
     {"id": "rag_fingerprint_crc", "query": "指纹模组的通信校验用的是什么算法？", "expected": []},
     {"id": "rag_arch_ports",    "query": "看板娘系统里 Python agent 跑在哪个端口？", "expected": ["note:19"]},
+    # 20260920：用户现场真实 query 回流（失败用例回流惯例）。现场症状=planner 读 top-1
+    # 后答"我暂时没法准确回答"——top-1 是《Git从入门到入土》，答案在《架构文档》。
+    # 根因=词法检索的短语巧合 × 长度归一：《Git》的 .gitignore 小节标题「主流技术栈」给出
+    # 技术栈/技术/术栈 三个 n-gram，而这几个在 10 篇语料里 df=1 ⇒ idf 最高；《架构文档》在
+    # 架构/后端/端口 上 tf 全面占优却被 BM25 长度归一压住。**本条是已知 FAIL（rank=2），
+    # 不是达标项**：20260920 实测三类改法（文档级 BM25 主分 / 覆盖率加权 / 查询 span 归一）
+    # 榜首均不动，故供给端本批只做候选截断（相对断崖，见 rag/search.py 头注），
+    # 修它要动检索表征（语义检索或结构感知索引：代码块/标题行不计入证据）。
+    # 留在此处的价值=防止任何排序改动把《架构文档》进一步挤出候选（@3 仍须为真）。
+    {"id": "rag_arch_ports_real", "query": "博客架构 前后端端口 技术栈", "expected": ["note:19"],
+     "known_fail": True},
     {"id": "rag_arch_components", "query": "Python agent 用什么框架写的？", "expected": ["note:19"]},
     {"id": "rag_arch_memory",   "query": "agent 的对话记忆存在哪里？",      "expected": ["note:19"]},
     {"id": "rag_arch_check",    "query": "agent 怎么防止模型假装调用了工具？", "expected": ["note:19"]},
@@ -76,6 +87,7 @@ def evaluate(idx, show: bool) -> dict:
             "hits": hit_keys, "rank": rank,
             "recall1": rank == 1, "recall3": rank is not None and rank <= 3,
             "recall5": rank is not None,
+            "known_fail": bool(q.get("known_fail")),
         })
         if show:
             print(f"  {q['id']:<24} exp={q['expected']} rank={rank} hits={hit_keys}")
@@ -87,9 +99,16 @@ def evaluate(idx, show: bool) -> dict:
     r5 = sum(r["recall5"] for r in positive) / len(positive) if positive else 0
     noise = [r for r in results if not r["expected"]]
     noise_hit = sum(1 for r in noise if r["hits"]) / len(noise) if noise else 0
-    return {"baseline": "rag.search (lexical 2/3-gram BM25)", "n": len(results),
+    # 供给端指标（20260920 批次 d）：平均候选数=planner 视野宽度，也是"候选驱动读"
+    # 浪费的上游（十篇语料 × top_k=8 曾几乎倒回整个语料库）
+    mean_n = sum(len(r["hits"]) for r in results) / len(results) if results else 0
+    mean_n_pos = sum(len(r["hits"]) for r in positive) / len(positive) if positive else 0
+    return {"baseline": "rag.search (lexical 2/3-gram BM25, chunk 级文档聚合 + 相对断崖)", "n": len(results),
             "recall@1": round(r1, 4), "recall@3": round(r3, 4), "recall@5": round(r5, 4),
-            "MRR": round(mrr, 4), "noise_hit_rate": round(noise_hit, 4), "results": results}
+            "MRR": round(mrr, 4), "noise_hit_rate": round(noise_hit, 4),
+            "mean_candidates": round(mean_n, 2), "mean_candidates_positive": round(mean_n_pos, 2),
+            "known_fail": [r["id"] for r in results if r.get("known_fail")],
+            "results": results}
 
 
 def main() -> None:
@@ -115,6 +134,12 @@ def main() -> None:
     print(f"\n== {rep['baseline']} ==")
     print(f"  recall@1={rep['recall@1']:.2f} recall@3={rep['recall@3']:.2f} "
           f"recall@5={rep['recall@5']:.2f} MRR={rep['MRR']:.2f} noise_hit={rep['noise_hit_rate']:.2f}")
+    print(f"  平均候选={rep['mean_candidates']:.2f}（正例 {rep['mean_candidates_positive']:.2f}）")
+    # 已知 FAIL 单列：它们进 recall@1 分子分母（数字不美化），但要在报告里点名，
+    # 免得好好的 0.92 被读成"改动引入的退化"（见 QUERIES 里 known_fail 条目的注释）
+    kf = [(r["id"], r["rank"]) for r in rep["results"] if r.get("known_fail")]
+    if kf:
+        print("  已知 FAIL（词法表征局限，非回归）：" + "、".join(f"{i} rank={k}" for i, k in kf))
 
     ts = time.strftime("%Y%m%d-%H%M%S")
     REPORT_RUNS.mkdir(parents=True, exist_ok=True)

@@ -2,10 +2,22 @@
 
 > 面向维护者的全链路技术文档。覆盖看板娘对话系统的每一个环节：组件拓扑、一次对话的完整时序、
 > 记忆机制（记录 / 压缩 / 存储 / 读取 / 回滚）、工具系统、防幻觉与可靠性加固、超时体系、配置与部署。
-> 最后更新：2026-09-19（**20260919 参数引用**：§6.5 新增 `$<工具>[<序号>].<字段>` 参数绑定——
+> 最后更新：2026-09-20（**20260920 四项**：①调用者身份与权限模型——新增 `agent/principal.py`
+> （身份的唯一构造点）+ `agent/authz.py`（scope 词汇表 / 工具→scope 声明表 / 角色→授予表 /
+> 唯一判据 `check()`），execute 在调用工具**之前**过判据，默认 shadow 只记不拦；角色只来自
+> Rust 侧 60 秒身份断言的 `role` 声明，**role=None 即身份不明、零权限**（不默认放行）。
+> 这是"秘书类功能"的地基，设计与前置需求见 `docs/secretary.md`。
+> ②gate 命令前缀判据补**元讨论豁免**（提及 ≠ 发命令，前后端两侧配套：`_cmd_prefix_directive`
+> ↔ `stripMentionSpans`）。③golden 补 `forbid_fallback` 正断言，堵住"走了兜底却判 PASS"的盲区。
+> ④RAG 供给端候选**相对断崖**截断（`rag/search.py` 的 `_CLIFF_RATIO=0.25`，只截断不改排序）。
+> ⚠️ 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
+> annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
+> **静默失效**（无报错，只有一条没人看的 UserWarning）；详见 `docs/问题记录.md` §1.3，
+> 回归锁 = `test_authz.py` 第 ⑧ 节）。
+> 上版：2026-09-19（**20260919 参数引用**：§6.5 新增 `$<工具>[<序号>].<字段>` 参数绑定——
 > 下一步的参数取值由 execute 从结构化返回里绑，不再靠模型从 300 字截断帧里"读出来再抄"；
 > 见 `agent/refs.py`、`AgentState.tool_data`、planner 规则 3b）。
-> 上版：2026-09-03（**20260903 架构裁决同步——planner 全权**：§1/§3/§6.5 改为现行拓扑
+> 上上版：2026-09-03（**20260903 架构裁决同步——planner 全权**：§1/§3/§6.5 改为现行拓扑
 > planner ⇄ execute → model → gate；reflector（LLM 质检 + REVISE）/ 自由 ReAct / tools_node 授权
 > 执行已废除；历史机制描述均就地标注"20260903 前形态"保留为踩坑记录；§2 目录注释、§7 LLM 调用
 > 清单同步；先前 0901-0902 状态（声称闸三族/时间锚/chat-* 拆分/生产模型）内容不变）。
@@ -85,6 +97,8 @@ flowchart TB
 │   ├── context.py             # 上下文组装（209 行，纯函数叶子层）：消息文本提取（多模态兼容）/page_ctx/页面操作指南（GUESTBOOK_GUIDE、SITE_GUIDE）/工具帧摘要/checker 回执摘要
 │   ├── agent.py               # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
 │   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
+│   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，秘书类功能地基（docs/secretary.md）
+│   ├── authz.py               # ★ 权限模型（20260920）：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
 │   ├── skills.py              # ★ 技能注册表：8 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
 │   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 叙述规则（model 零工具 narrator 用；工具调用规则在 planner/技能注册表侧）
 │   └── __init__.py
@@ -110,7 +124,8 @@ flowchart TB
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
 ├── test_skills.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
-├── docs/                      # 本文档 + eval-observability.md + 问题记录.md（踩坑史）
+├── test_authz.py              # L0 单元级（权限模型：scope 声明完备性 + 角色授予表 + 失败取向 + config 接线回归锁，秒级）
+├── docs/                      # 本文档 + eval-observability.md + secretary.md（秘书框架与前置需求）+ 问题记录.md（踩坑史）
 └── .env.example / pyproject.toml / uv.lock / .github/workflows/eval.yml（CI 评测门禁）
 
 宿主仓库 Saudade-Blog（接口适配层，路径相对其根目录）：
