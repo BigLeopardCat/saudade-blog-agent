@@ -53,7 +53,7 @@ saudade-blog-agent/
 ├── models/llm.py           # LLM 工厂：provider 三选一（qwen/deepseek/openai）
 ├── tools/base.py           # 22 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重
 ├── utils/                  # logging（trace_id/日志）+ trace（对话 trace 落盘）+ tts（未启用）+ helpers
-├── eval/                   # 评测：golden set（66 条）+ run_golden.py（L2 任务级，真实 LLM）
+├── eval/                   # 评测：golden set（74 条）+ run_golden.py（L2 任务级，真实 LLM）
 │   │                       #       + golden_case_runner.py/golden_full_run.py（进程隔离跑法）
 │   │                       #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 │   │                       #       + judge_offline_test.py（判据离线自测）+ trace_metrics.py/trace_alert.py（trace 指标与语义巡检）
@@ -128,13 +128,17 @@ planner 注入时自动带描述）。**可规划性由白名单决定（2026090
 .venv/bin/python test_skills.py               # L0：秒级，无 LLM（映射表/计划实例化/解析容错/execute 确定性执行/gate 声称闸与 fallback）
 .venv/bin/python test_hardening.py            # L0：秒级（TLS 校验/输入限额/体积闸/并发闸/工具返回三类/身份断言/幂等并发/RAG 两态）
 .venv/bin/python test_cancel.py               # L0：秒级（协作取消：五节点入口/写操作零调用/中途取消/LLM 阻塞期间的能力边界）
-.venv/bin/python eval/run_golden.py           # L2：66 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答/执行记忆）；--limit N / --only <id> 单跑
+.venv/bin/python eval/run_golden.py           # L2：74 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答/执行记忆）；--limit N / --only <id1,id2> 单跑
 .venv/bin/python eval/golden_full_run.py      # L2 进程隔离全量跑（逐条独立进程 + 180s 超时，防悬挂污染）
 .venv/bin/python eval/recall_eval.py          # L1 检索：recall@k/MRR（21 条 queries = 12 正例 + 9 噪声）
 ```
 
-- **CI（`.github/workflows/eval.yml`）**：push 跑上面三个秒级套件（L0）；golden（L2）手动触发——
-  runner 在海外、跨网链路下耗时失真，性能基线必须本机跑。
+- **CI（`.github/workflows/eval.yml`）**：push 跑上面四个秒级套件（L0）。
+- **golden 全量（L2）不进 CI（20260920 撤下）**：CI 侧那条 LLM 腿每次调用先吊住（3 条本机
+  39 秒的用例在 CI 跑 21 分钟未完）、一次 120 分钟的全量跑被杀且零产出、且诊断出 CI 凭据
+  `401 invalid_api_key`。全量改为**本机按需手动跑**（本机即生产服务器，链路真实，73 条约 19 分钟）：
+  `.venv/bin/python eval/run_golden.py`（`--limit N` / `--only a,b`）或
+  `.venv/bin/python eval/golden_full_run.py`（进程隔离 + 单条 180s 超时）。
 - nightly cron 自动跑 L1/L2 两项，失败标记 `~/agent_regression.failed`。
 - **改技能注册表 / plan 契约 / 摘要逻辑 / prompt 后必跑**（golden 断言含"回复不得包含 SUMMARY:"）。
 

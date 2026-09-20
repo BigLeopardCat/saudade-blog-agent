@@ -787,7 +787,8 @@ flowchart TB
 
 ## 9. 部署与运维
 
-- **Agent 仓库独立部署**：push 即触发 CI（`.github/workflows/eval.yml`：L0 + L2 评测门禁），
+- **Agent 仓库独立部署**：push 即触发 CI（`.github/workflows/eval.yml`：L0 秒级套件门禁；
+  L2 全量 golden 20260920 起撤出 CI，改本机按需跑，见 [eval-observability.md](eval-observability.md) §4 末注），
   但 **push ≠ 上线**——运行时加载的是常驻进程里的代码，改动要**重启该服务**才生效。
   本地轻量验证：`.venv/bin/python -m py_compile server.py agent/prompts.py`（仅语法，秒级）；
   重启后用健康检查确认真起来了（看 `agent_ready: true`）。**不要再手动 nohup 裸跑**——
