@@ -97,6 +97,13 @@ src = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encodin
 check("planner 提示词含规则 6b", "6b. 指代取值优先于重查" in src)
 check("规则 6b 点了 recent_executions 实体摘要", "实体摘要" in src)
 check("回执写入 digest 字段（Rust render_exec_row 读同名键）", 'rcpt["digest"] = digest' in src)
+# 双侧契约（20260921）：规则 6b 末条在 planner 侧只决定"这轮不重查"，而**句子是 narrator
+# 写的**——纪律 15 缺失时同一条输入会时对时错（真实 trace：19:59 追问对 / 20:08 直接
+# 答「编程 8 篇」）。两处必须同时在位，缺一条就等于没有这条行为。
+check("planner 规则 6b 点名「不唯一 → 追问澄清」", "指代对象在摘要里本身就**不唯一**" in src)
+check("narrator 叙述纪律 15（指代不唯一先追问）在位", "15. 指代不唯一时先追问" in src)
+check("纪律 15 要求点名候选（不是笼统反问）", "追问要**点名候选**" in src)
+check("纪律 15 含反面（带序号/已点名 → 直接答，不反问）", "就是多此一举" in src)
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
