@@ -135,40 +135,121 @@ def _clip_mid(text: str, head: int = _TAIL_HEAD, tail: int = 160) -> str:
 
 
 def _recent_tail(messages: list, max_turns: int = 4, per: int = 160) -> str:
-    """最近几轮对话节选（planner 语境补丁，20260903 nav_param_anchor_about 事故）。
+    """最近几轮对话节选——**一问一答成对**渲染（planner 语境补丁，20260903 起）。
 
-    planner 是单消息决策（history-blind），用户催促/质疑（"你不直接转跳过去？"）
-    所指的目标只存在于更早轮次里——不给节选就无法还原该跳哪页。取状态消息里
-    最近几轮人机对话行（跳过工具帧——结果有专门区块）。跳过两样：注入的页面
-    上文（[System:…] 开头的人类消息，planner 已有 page_ctx）与当前这条用户消息
-    （它是决策对象，不是上下文）。逐条截断防超长输入稀释决策——截断走 _clip_mid
+    planner 是单消息决策（history-blind），用户催促/质疑/短应答（"你不直接转跳
+    过去？""要"）所指的对象只存在于更早轮次里——不给节选就无法还原该跳哪页。
+    旧版把消息平铺成独立的"用户：…"/"泠月：…"行，谁接谁要靠数行位推断；邻接
+    成对（20260920 批次 b）直接把"用户说了什么 → 泠月当时怎么回的"摆在眼前，
+    并给最近一轮标记出它正是当前消息的应答对象。跳过两样：注入的页面上文
+    （[System:…] 开头的人类消息，planner 已有 page_ctx）与当前这条用户消息
+    （它是决策对象，不是上下文）。逐条 _clip_mid 截断防超长输入稀释决策
     （头尾取样 + 中段锚点打捞，20260919 起；纯尾部截断会丢文档名）。
     """
-    out: list[str] = []
+    turns: list[dict] = []
+    for m in messages:
+        if isinstance(m, (HumanMessage, AIMessage)):
+            text = (_msg_text(m) or "").strip()
+            if not text or (isinstance(m, HumanMessage) and text.startswith("[System:")):
+                continue
+            if isinstance(m, HumanMessage):
+                turns.append({"u": text, "a": ""})
+            elif turns and not turns[-1]["a"]:
+                turns[-1]["a"] = text
+            else:  # 没有前置用户消息的泠月发言（兜底补发轮）——单独占一轮
+                turns.append({"u": "", "a": text})
+    # 最后一条用户消息 = 当前请求（它后面没有泠月回复），不算上下文
+    if turns and not turns[-1]["a"]:
+        turns.pop()
+    turns = turns[-max_turns:]
+    if not turns:
+        return "最近对话节选：（无更早轮次）"
+    lines = []
+    for i, t in enumerate(turns):
+        ago = len(turns) - i  # 1 = 最近一轮
+        user = _clip_mid(t["u"].replace("\n", " "), tail=per) if t["u"] else "（无）"
+        ai = _clip_mid(t["a"].replace("\n", " "), tail=per) if t["a"] else "（未及回复）"
+        mark = "　← 当前这条消息就是对这句的回应" if ago == 1 else ""
+        lines.append(f"[上{ago}轮] 用户：{user}\n　　　　 泠月：{ai}{mark}")
+    return ("最近对话节选（**一问一答成对**，最近一轮在最后——判断'催促/质疑/"
+            "短应答'所指：目标通常就在紧邻的那条泠月发言里）：\n"
+            + "\n".join(lines))
+
+
+def _last_assistant_utterance(messages: list) -> str:
+    """当前用户消息之前的**最近一条泠月发言**（短应答/催促/质疑的直接应答对象）。"""
     seen_current = False
     for m in reversed(messages):
-        if not isinstance(m, (HumanMessage, AIMessage)):
-            continue
-        text = (_msg_text(m) or "").strip()
-        if not text:
-            continue
         if isinstance(m, HumanMessage):
+            text = (_msg_text(m) or "").strip()
             if text.startswith("[System:"):
                 continue
-            if not seen_current:  # 最近的用户消息 = 当前请求，不算上下文
+            if not seen_current:  # 跳过当前请求本身，往前找
                 seen_current = True
-                continue
-            speaker = "用户"
-        else:
-            speaker = "泠月"
-        text = _clip_mid(text.replace("\n", " "), tail=per)
-        out.append(f"{speaker}：{text}")
-        if len(out) >= max_turns:
-            break
-    if not out:
-        return "最近对话节选：（无更早轮次）"
-    return ("最近对话节选（判断'催促/质疑'所指——目标通常在这些轮次里）：\n"
-            + "\n".join(reversed(out)))
+            continue
+        if isinstance(m, AIMessage):
+            text = (_msg_text(m) or "").strip()
+            if text:
+                return text
+    return ""
+
+
+# ── 短应答解析（20260920 批次 b）──
+# 动机："要"/"好"/"不用了"/"算了"这类消息**本身不含任何意图**，含义完全由上一轮
+# 泠月的提议决定（提议里往往就写着"要我把 X 读一遍吗"）。planner 是单消息决策，
+# 平铺节选下这类消息极易被当成新话题（从零检索/答非所问）。这里把"上一轮泠月
+# 到底提议了什么"确定性提取成一句直接指引，并把同意/拒绝两类分开给相反的动作
+# 指令（同意 = 把提议那件事真的规划出来；拒绝 = 零调用收尾、绝不执行）。
+# 只是一句提示（不改决策权）：判断仍归 planner，但它不再需要猜"要"指什么。
+_SHORT_MAX = 12  # 去标点空白后的长度上限——超过就不是"短应答"
+_PUNCT_ONLY_RE = re.compile(r"[\s，。！？~～、；：,.!?…·\-—_/\\|]+")
+_SHORT_LEAD_RE = re.compile(r"^(那|那就|就|我|咱|我们|你|小猫咪|泠月|喵|，|,|、)+")
+_SHORT_POS = frozenset({
+    "要", "要的", "要啊", "好", "好的", "好啊", "好呀", "好吧", "嗯", "嗯嗯", "嗯好",
+    "行", "行吧", "可以", "可以呀", "对", "对的", "对呀", "是", "是的",
+    "查", "查吧", "查一下", "查查看", "看", "看一下", "看一眼", "看下", "读", "读吧",
+    "读一下", "继续", "继续吧", "来", "来吧", "试", "试试", "搞", "搞吧",
+    "需要", "麻烦你", "麻烦你了", "辛苦啦", "谢谢", "谢谢啦", "OK", "ok", "Ok", "okay",
+})
+_SHORT_NEG = frozenset({
+    "不", "不用", "不用了", "不用啦", "不用了谢谢", "不要", "不必", "别", "别了",
+    "算了", "算了不用", "不了", "先不", "先不用", "不查了", "不看了", "不用麻烦",
+    "没事", "没事了", "取消", "免了", "回头再说", "下次吧", "晚点再说",
+})
+
+
+def _short_reply_kind(text: str) -> str:
+    """短应答分类：'pos'（同意/要求继续）/ 'neg'（拒绝/收回）/ ''（不是短应答）。"""
+    core = _SHORT_LEAD_RE.sub("", _PUNCT_ONLY_RE.sub("", text or "")).strip()
+    if not core or len(core) > _SHORT_MAX:
+        return ""
+    if core in _SHORT_NEG:  # 先否定：两集合无交集，顺序只为可读
+        return "neg"
+    if core in _SHORT_POS:
+        return "pos"
+    return ""
+
+
+def _short_reply_hint(messages: list) -> str:
+    """短应答提示块（planner 模板 {short_reply_hint}）；非短应答给缺省语。"""
+    user_msg = _last_user_msg(messages)
+    kind = _short_reply_kind(user_msg)
+    if not kind:
+        return "（当前消息不是短应答）"
+    last = _last_assistant_utterance(messages)
+    if not last:
+        return (f"当前消息「{user_msg}」是短应答，但本会话此前没有泠月的发言可承接"
+                "——按字面做最保守的解读，不要凭空补出一个动作。")
+    ai = _clip_mid(last.replace("\n", " "), tail=200)
+    if kind == "pos":
+        act = ("判定：这是对上一轮提议的**同意/要求继续** → 把泠月提议的那件事真的规划"
+               "出来执行（该点名的工具照常点名、参数填全），不得只口头答应，也不得另开"
+               "新话题或换一件事做。")
+    else:
+        act = ("判定：这是对上一轮提议的**拒绝/收回** → 本轮不规划任何工具，零调用收尾，"
+               "简短确认「好，那就不做了」；不得再执行那个动作，也不得声称已经做了什么。")
+    return (f"当前消息是**短应答**（「{user_msg}」）——它本身不含意图，含义由上一轮泠月"
+            f"的发言决定：\n　　泠月：{ai}\n{act}")
 
 
 def _has_frames(messages: list) -> bool:
