@@ -988,6 +988,134 @@ def test_gate_false_negative_claim():
           o4["done"] is True and not o4.get("fallback_text"), str(o4))
 
 
+def test_gate_repeat_reply():
+    """gate 4b：逐字复读上一轮回复（20260920 实证）+ fallback_text channel 回归锁。
+
+    事故（真实 trace）：09-20 00:23:52（用户「要」）与 11:15:44（用户「小猫咪，
+    我不想去物联网平台」）两条回复**逐字节相同**（781 字，difflib diff 为空），
+    相隔 11 小时、用户消息完全不同。narrator 温度 0.7，自由生成撞出 781 字全同
+    概率可忽略 ⇒ 是从注入历史（最近 20 条纯历史，那条回复正好在窗口里）抄的：
+    任务模糊（「要」不是真问题）+ 上下文里摆着一份完整答案 = 复制引力压过生成。
+    而它能被抄进历史的**前提**是被 gate 否定的叙述仍入库——`fallback_text` 未在
+    AgentState 声明，LangGraph 把未声明 key 丢出 updates 流，`__RESET__` 从未发出
+    （20260903 起 2.5 周全程失效）。本测试锁两件事：channel 声明、复读判据。
+
+    判据门槛刻意高（宁漏勿误伤）：最长逐字片段 ≥ max(200 字, 60% × 本轮长度)，
+    且用户消息带**点名重做语**（_REDO_REQUEST_RE）时直接放行——那是照办不是复读。
+    门槛由全量 trace 回放定：426 对相邻轮里 floor=200/cover=0.6 恰好只命中 1 对
+    （09-05T19:10:07，489 字整段照抄，真复读）；floor=80 时多出的两对是"两次都答
+    我不会做饭"这类同义寒暄撞同一句模板（90 字级，拦下来是误伤）⇒ 下限抬到 200，
+    代价是**≤200 字的回复不判复读**（短回复的整段重合几乎都是模板复用，宁漏勿误伤）。
+    """
+    print("[gate] 逐字复读判据 + fallback_text channel")
+    import agent.graph as g
+    from agent.graph import (_REPEAT_MIN_RUN, _prev_ai_reply, _repeat_of_prev_reply,
+                             _FALLBACK_REPEAT)
+
+    # ── channel 回归锁（缺了它 gate 的一切 fallback 都是白改）────────────────
+    check("AgentState 声明 fallback_text",
+          "fallback_text" in g.AgentState.__annotations__,
+          str(sorted(g.AgentState.__annotations__))[:120])
+    check("graph_input 给 fallback_text 初值",
+          "fallback_text" in g.graph_input([]), str(g.graph_input([]))[:80])
+    check("编译图 channels 含 fallback_text",
+          "fallback_text" in g.build_graph().channels,
+          "未声明 channel ⇒ updates 流丢 key ⇒ server.py 的 __RESET__ 分支永不触发")
+
+    # ── _prev_ai_reply：只认"当前用户消息之前"的那条 AI ───────────────────────
+    hist = [HumanMessage(content="[System: user_id=1]"),
+            HumanMessage(content="要"), AIMessage(content="上一轮的回复正文"),
+            HumanMessage(content="小猫咪，我不想去物联网平台"), AIMessage(content="本轮回复")]
+    check("_prev_ai_reply 取上轮回复（不取本轮）",
+          _prev_ai_reply(hist) == "上一轮的回复正文", repr(_prev_ai_reply(hist))[:40])
+    check("_prev_ai_reply 首轮无对比对象 → 空",
+          _prev_ai_reply([HumanMessage(content="[System: x]"), HumanMessage(content="你好"),
+                          AIMessage(content="本轮")]) == "",
+          "无更早 AI 消息时应放行")
+
+    # ── 判据单测 ────────────────────────────────────────────────────────────
+    # 事故原文形态（09-20 那条 781 字；此处 ~300 字，同一形态：自称"真的去查了" +
+    # 逐条摆文档章节 + 给结论 ⇒ 正是从历史里抄现成答案时最容易被复制的那种回复）
+    old = ("喵～这次我**真的去查了**，而且把整篇文档从头到尾扫了一遍 :贴贴: 给你确定的结论："
+           "我把这篇文档的 §2、§3.2、§6.5、§8 等所有涉及节点和导航的章节都读完了，"
+           "里面明确写的导航机制是 NAV_MAP——页面别名到真实路径的映射表由 skills.py 单点维护，"
+           "planner 只负责选技能与填参数，执行由 execute 节点确定性完成，"
+           "所以不存在模型自己拼路径这回事。文档通篇没有出现正则或快速通道这类描述，"
+           "也就是说你问的那个东西在现有资料里没有任何文字记录。")
+    check("整段照抄（实测病例形态）→ 判复读",
+          _repeat_of_prev_reply(old, old) is True, f"{len(old)} 字")
+    check("逐字节相同 781 字 → 判复读",
+          _repeat_of_prev_reply("喵" + old * 3, "喵" + old * 3) is True, "")
+    check("199 字相同（低于 200 下限）→ 不判（短回复整段重合按模板复用处理）",
+          _repeat_of_prev_reply("甲" * 199, "甲" * 199) is False, "")
+
+    # ── 重做豁免：用户点名"换回去/重画" ⇒ 高重合是被要求的行为，必须放行 ────────
+    # 真实病例（09-16T09:25:34，回放命中 run=1405/本轮 1489/上轮 1470）：用户说
+    # "flowchart 换回 graph 试试"，回复把 1400 字 mermaid 图原样重画、只换栅栏语言
+    # 与开头一句；拦下来等于把用户点名要的东西吞掉。
+    mermaid = ("```mermaid\nflowchart TD\n  A[访客消息] --> B{planner 决策}\n"
+               "  B -->|工具清单| C[execute 确定性执行]\n  C --> D[narrator 叙述]\n"
+               "  D --> E{gate 质检}\n  E -->|pass| F[END]\n"
+               "  E -->|fallback| G[__RESET__ 替换最终回复]\n```\n") * 8
+    check("用户点名换回（flowchart 换回 graph 试试）→ 不判（照办不是复读）",
+          _repeat_of_prev_reply(mermaid, mermaid, "小猫咪可能渲染器版本没那么新，flowchart 换回 graph试试") is False,
+          f"重合 {len(mermaid)} 字")
+    check("同一对回复、用户只说「要」→ 判复读",
+          _repeat_of_prev_reply(mermaid, mermaid, "要") is True, "")
+
+    # 合理复用：新答案里引用了一段工具返回（150 字），本轮 2000 字 → 门槛 1200
+    quote = "MQTT 协议定义：设备通过 mqtts://saudade.site:8883 建立长连接，上报遥测并接收指令下发。" * 2
+    fresh = "喵～主人，这轮的结论是这样的：" + quote + "以上就是新的查证结果，另外我还核对了别的部分。" * 20
+    check("长答案里引用上轮同段工具返回 → 不误伤",
+          _repeat_of_prev_reply(fresh, quote + "上轮别的内容") is False,
+          f"本轮 {len(fresh)} 字，重合 {len(quote)} 字")
+    # 真实病例（09-16T10:04:00，run=231/本轮 759）：用户报 mermaid 渲染语法错，
+    # 本轮重画同一张图并补充解释——重合 231 字但远不到 60% × 759 ⇒ 不判
+    check("用户报渲染失败后复用同一张图 + 补新解释 → 不误伤",
+          _repeat_of_prev_reply(mermaid[:231] + "喵，问题出在栅栏那行，我这次补上 td 声明与转义。" * 12,
+                                mermaid[:1489],
+                                "渲染失败了小猫咪，Syntax error in text") is False,
+          "重合 231/本轮 759，门槛 max(200, 455)=455")
+    check("150 字以下重合（低于 200 下限）→ 不判",
+          _repeat_of_prev_reply("甲" * 79, "乙" * 10 + "甲" * 79) is False, "")
+    check("无上轮回复 → 不判", _repeat_of_prev_reply(old, "") is False, "")
+    check("空回复不判（空回复归 _FALLBACK_EMPTY）",
+          _repeat_of_prev_reply("", old) is False, "")
+
+    # ── gate 集成 ───────────────────────────────────────────────────────────
+    def _st(reply, skill="chat", user="小猫咪，我不想去物联网平台", prev=old):
+        return {"plan": plan_encode(instantiate_plan(skill, {})), "done": False,
+                "plan_rounds": 1, "receipts": [],
+                "messages": [HumanMessage(content="[System: user_id=1]"),
+                             HumanMessage(content="要"), AIMessage(content=prev),
+                             HumanMessage(content=user),
+                             AIMessage(content=reply)]}
+
+    o1 = gate_node(_st(old))
+    check("零帧轮复读上轮 → fallback(repeat_prev_reply)",
+          o1["done"] is True and o1.get("fallback_text") == _FALLBACK_REPEAT,
+          str(o1.get("fallback_text", ""))[:40])
+    o2 = gate_node(_st("喵～主人，这轮换个话题：图谱文档里那个弃权闸讲的是首页搜索，"
+                       "跟快道完全两码事，我不拿它顶替回答你的问题喵"))
+    check("新内容 → pass（不复读）",
+          o2["done"] is True and not o2.get("fallback_text"), str(o2)[:80])
+    o3 = gate_node(_st(old, skill="content_query"))
+    check("有帧技能同样拦（判据与技能无关）",
+          o3["done"] is True and o3.get("fallback_text") == _FALLBACK_REPEAT, str(o3)[:60])
+    # 首轮（上下文里没有更早的 AI 消息）→ 无对比对象，放行
+    o4 = gate_node({"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+                    "plan_rounds": 1, "receipts": [],
+                    "messages": [HumanMessage(content="[System: x]"),
+                                 HumanMessage(content="你好"), AIMessage(content=old)]})
+    check("首轮 → pass（无上轮可比）",
+          o4["done"] is True and not o4.get("fallback_text"), str(o4)[:60])
+    # 重做豁免在 gate 里同样生效（gate 必须把本轮用户消息喂给判据）
+    o5 = gate_node(_st(mermaid, user="小猫咪可能渲染器版本没那么新，flowchart 换回 graph试试",
+                       prev=mermaid))
+    check("用户点名换回 → pass（gate 传了本轮用户消息）",
+          o5["done"] is True and not o5.get("fallback_text"), str(o5)[:60])
+
+
 def test_execute_node():
     """execute 确定性执行（20260903 planner 全权）：执行器无自由意志、无授权分支
     ——planner 决策经 instantiate_plan/白名单（_EXPLICIT_TOOLS/_CALLABLE_QUERY_TOOLS/
@@ -1708,7 +1836,7 @@ def main():
                test_nav_fast_path, test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
                test_explicit_tools, test_planner_tool_menu, test_gate_claim_scope, test_gate_frame_checks,
                test_phantom_tool_claim, test_gate_claim_holes,
-               test_gate_false_negative_claim,
+               test_gate_false_negative_claim, test_gate_repeat_reply,
                test_execute_node, test_refs, test_todo_contract, test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
