@@ -140,7 +140,7 @@ grep -l authz_shadow /home/ubuntu/memory_blog_rust/logs/agent/traces/*.json | wc
 
 | # | 需求 | 为什么是前置 | 建议 |
 |---|---|---|---|
-| ① | **秘书账号与角色落库** | `user.role` 无 ENUM/CHECK，新建一个 `secretary` 角色就是一行 UPDATE/INSERT——**生产库写入，须用户点名「库名+迁移文件」** | **20260920 已执行**（用户点名「memory_blog 库 + `scripts/migration/secretary_role_20260920.sql`，Lingyuemiao」）：`Lingyuemiao`(id 17) `role: user → secretary`，幂等 UPDATE、`must_be_1 = 1`、迁移标记 `secretary_role_20260920` 已写。**迁移文件在父仓只留 `REPLACE_ME` 模板**（父仓是公开仓库，真实账号名不入库）。角色生效仍需 agent 侧收 shadow 证据后再开 `AGENT_AUTHZ_ENFORCE` |
+| ① | **秘书账号与角色落库** | `user.role` 无 ENUM/CHECK，新建一个 `secretary` 角色就是一行 UPDATE/INSERT——**生产库写入，须用户点名「库名+迁移文件」** | **20260920 已执行**（用户点名「memory_blog 库 + `scripts/migration/secretary_role_20260920.sql`」+ 账号名）：该账号(id 17) `role: user → secretary`，幂等 UPDATE、`must_be_1 = 1`、迁移标记 `secretary_role_20260920` 已写。**真实账号名只在本机私有记录里，本文件（公开仓库）一律不写**——同 §7 的占位符纪律。**迁移文件在父仓只留 `REPLACE_ME` 模板**（父仓是公开仓库，真实账号名不入库）。角色生效仍需 agent 侧收 shadow 证据后再开 `AGENT_AUTHZ_ENFORCE` |
 | ② | **`AGENT_REQUIRE_ASSERTION` 收口** | ~~断言已落地快照但默认关着~~ **20260920 复核：生产 `.env` 里已是 `1`，实测已生效**——不带 `X-Agent-Assertion` 直连 `/chat` 探针得 **401**（不是静默回退），`/review`、`/graph/query` 不经 `_resolve_principal`，不受影响。代码默认值仍留 `False`（本机/测试环境不必带头） | **无需动作**。回归锁=一条不带头的请求必须 401；将来任何"给 agent 加公网入口"的改动都要先过这条 |
 | ③ | **写操作的"人在回路"** | 秘书的价值在写，而今天唯一的防护是"调用前查断连"——没有确认、没有"谁同意了"的记录 | **agent 侧已落地（20260920，见 §3.4）**：需确认的 scope 未获用户本轮明确确认 → 产 `__ERROR__` 帧、**不执行**、叙述侧也说不成"已完成"。**剩下的是 ①（真实秘书账号）与第一个写工具**——写通道（④）与审计（⑥）仍缺 |
 | ④ | **agent → Rust 的写通道凭据** | agent 现在一个 admin 接口都不调，"代用户发文章"没有可用的通道：既没有写接口的调用约定，也没有"agent 持用户授权"的凭证语义 | 建议：不要复用用户 JWT 长期有效，而是同一套断言思路——Rust 签发**带 scope 的短时效授权**，写接口按 scope 校验（与 agent 侧的 manifest 同名同义） |
@@ -153,38 +153,119 @@ grep -l authz_shadow /home/ubuntu/memory_blog_rust/logs/agent/traces/*.json | wc
 ## 6. 分阶段建议
 
 - **P0（已完成）**：身份与范围的地基 + shadow 观测 + 两侧单测与文档（本文件）。
-- **P1（进行中，20260920 起）**：① 已执行（`Lingyuemiao` = secretary）+ ② 已在生产生效。
+- **P1（进行中，20260920 起）**：① 已执行（一个真实账号 = `secretary`，账号名见本机私有记录；建号/配套助手账号的步骤与默认值见 §7）+ ② 已在生产生效。
   剩下的是**收 shadow 证据**（该账号带角色跑一段真实对话，看 `authz.shadow` 记录里
   "如果打开会拦下什么"）→ 校准授予表 → 打开 `AGENT_AUTHZ_ENFORCE`。此时"秘书能做什么、
   不能做什么"第一次成为**可执行的事实**。
-  > 待拍板的一项：**新建管理员账号时是否自动配一个同名助手账号**（用户 20260920 提议）。
-  > 需要先定的是"助手账号的归属与口令怎么交付"（自动生成口令就要有交付通道；不生成口令
-  > 就等于一个登不进去的空壳），以及它是**每个管理员一个**还是**全站一个**——见 §7。
+  > **20260921 已决（用户拍板）**：不新增任何建号代码路径。管理员与配套助手账号一律
+  > **命令行 + 一条 SQL** 建，"默认是什么"写死在 §7 —— 那份文档就是这条路径的唯一说明。
+  > 之所以不写代码：今天根本没有"产生管理员账号"的路径可挂（见 §7.5），为它新开一个
+  > 高危接口，得先有审计（⑥），顺序反了。
 - **P2（按需）**：③ 人在回路（agent 侧已落地）+ ④ 写通道凭据 + ⑥ 审计，一起做（写操作要
   同时有授权、确认与记录，缺一条就等于没做）。
 
-## 7. 待拍板：管理员账号自带助手账号？
+## 7. 怎么建账号：管理员 + 配套助手账号（命令行 + 一条 SQL，20260921 定稿）
 
-用户提议："项目产生管理员账号时自带对应的助手账号"。**未动手**，先摆清事实（20260920 核过代码）：
+**结论先说**：**不新增任何建号代码**——`create_temp_user` 的 `role` 保持写死 `"user"`、
+不上注册接口、也不做"自动配助手"的路径（理由见 §7.5）。管理员账号与配套助手账号一律
+**命令行直接写库**；本文档就是这条路径的**唯一说明**，"默认是什么"就是 §7.1 那张表。
 
-- **今天没有"产生管理员账号"这条代码路径**。全库唯一的建号接口是 `src/routes/temp_user.rs`
-  的 `create_temp_user`（`POST /api/temp-users`），它 **`role` 是写死的 `"user"`**，不是请求参数；
-  `auth.rs` 只有 `login`/`profile`（无注册）。也就是说**管理员账号一直是直接在库里产生的**
-  （本次 `Lingyuemiao` 的 role UPDATE 就是这类操作）。提议要落地，先得决定"管理员从哪来"：
-  要么补一条建号路径（等于新增一个高危接口，得先有审计），要么继续手工建库、则"自带"无从自动。
-- **两个现成的副作用**（今天的角色改动已触发，需知悉）：
-  - `list_temp_users` 过滤 `role = 'user'` ⇒ `Lingyuemiao` 现在**不再出现在后台"临时用户"列表**里
-    （不该出现在那里，符合预期，但要知道"列表里看不到他"是正常现象，不是被删了）；
-  - `delete_temp_user` 按 id 删除、**不校验 role**（级联删会话/历史/摘要）⇒ 秘书账号若被按 id
-    删除，不会被"列表看不到"挡住。
-- **若要做，最小形态**（推荐 A，明确不推荐 B）：
-  - **A**：`create_temp_user` 加一个**白名单** `role ∈ {user, secretary}`（拒绝 `admin`——管理员
-    账号不该由这个接口产生），再在"建管理员"的那条路径里顺带建 `{name}-assistant`、
-    口令由创建者当场设定并一次性回显。不需要新表、不需要口令投递通道、归属靠命名可追溯。
-  - **B**：给每个管理员配一份"可登录的秘书"——口令投递/首次登录改密/邮箱绑定，这是账号体系
-    的工程，不是 agent 的工程。不建议现在做。
-- **与 agent 侧的关系**：agent 的 principal 来自 Rust 身份断言里的 `role` 声明，**一个**
-  `secretary` 账号就能跑完 P1 的 shadow 校准，不依赖"每个管理员配一个"。所以这件事的优先级
-  低于 P1。
-- **不要做的事**：不要让 agent 自己去建账号——那是写操作，且"谁授权"的问题（④/⑥）都还没做。
+> 本文件在公开仓库里，**一律用占位符**：真账号名、真口令、真哈希都不入库。
+
+### 7.1 默认值（唯一一份声明）
+
+| | 管理员（博主本人） | 助手（配套账号） |
+|---|---|---|
+| 谁 | 一个 | **每个管理员一个**，命名 `<管理员名>-assistant`（归属靠命名可追溯，不建关联表） |
+| `role` | `admin` | **`secretary`** |
+| `nickname` | 留空字符串 | 留空字符串 |
+| 口令 | 建号者当场定的**强随机**口令（≥20 字符） | 同样强随机，**必须与管理员不同** |
+
+- `nickname` 留空是**有意的**：`auth.rs:112` 的 profile 逻辑是 `if nickname.is_empty() { username }`
+  ⇒ 空串自动回落到账号名，不会显示成空白。
+- 两个角色名都是**跨语言契约**：Rust 侧 `src/authz.rs` 的 `KNOWN_ROLES`（`admin`/`secretary`/`user`，
+  大小写敏感、无旧别名）与 agent 侧 `agent/authz.py` 的授予表必须一致，改一侧须同步另一侧 + 两侧单测。
+- **助手为什么是 `secretary` 而不是 `admin`**：`secretary` 在 agent 侧拿到
+  `read.public/own/any` + `write.page/device/content`，**唯独没有 `admin.console`**；Rust 侧
+  `auth_guard` 也只认 `admin`（`authz::can_access_console`，`authz.rs` 尾部的单测锁着
+  "秘书不得进后台管理面"）。也就是说"助手能读会写、但进不了后台"不是一份配置，是**两侧各有一处判据**。
+- **口令必须不同**：Rust 会**查库**取 `role` 并随身份断言下发给 agent（§4 布线图），
+  两账号同口令等于把管理员那一档的权限面抄一份到低权账号上。
+
+### 7.2 口令在 DB 里只认两种格式（命令行建号只能用第二种）
+
+| 格式 | 说明 |
+|---|---|
+| `$argon2id$v=19$...`（PHC，含算法/参数/随机盐） | 现行格式（20260917 起）。`utils::hash_password` 产出 |
+| 无盐单轮 SHA-256 十六进制 | **旧格式，但 `verify_password` 仍认**，且**登录成功那一刻自动升级成 Argon2id**（`auth.rs:69` 的 `needs_rehash` 分支） |
+
+- 命令行建号用第二种：MySQL 的 `SHA2('<口令>', 256)` 正好等于 `utils::encrypt_password`
+  （`hex::encode`，小写十六进制）。**不要去找"生成 PHC 的一行命令"**——本机没有 argon2 CLI、
+  agent venv 也没有 argon2 模块（20260921 实测），走 SHA-256 路径即可，首次登录就完成升级。
+- 这条路真的在跑：`user` 表现存**所有行**的 `password` 前缀都已是 `$arg`（惰性升级的实证）。
+- 代价与纪律：SHA-256 口令在 SQL 文本、终端历史、`mysql` 客户端日志里都是**可离线爆破**的 ⇒
+  强随机口令 + 建号 SQL 放父仓 `scripts/migration/`（父仓是公开仓库，迁移文件只留 `REPLACE_ME`
+  模板，**真口令/真哈希绝不入库**）+ 建完第一次登录即升级，此后行里不再有弱哈希。
+
+### 7.3 步骤（可复制；建号是**生产库写入**，仍按既有约定说清「库名 + 迁移文件」再动）
+
+```bash
+# 1) 写迁移文件（模板见下），口令从环境变量代入，别写进命令行（argv 会进 ps/history）
+#    scripts/migration/admin_and_assistant_<日期>.sql
+```
+
+```sql
+-- 幂等取向：**只新增，不自动改已有账号**（见下）
+SELECT id, username, role FROM user
+ WHERE username IN ('REPLACE_ME_ADMIN', 'REPLACE_ME_ADMIN-assistant');
+-- ↑ 先跑这一句。两行都必须为空才继续；已有行时**不要**用 ON DUPLICATE KEY 自动提权，
+--   要改角色就单独写一条带 WHERE 的 UPDATE，并先看清它命中了谁。
+
+INSERT INTO user (username, nickname, password, role) VALUES
+  ('REPLACE_ME_ADMIN',            '', SHA2('REPLACE_ME_ADMIN_PW', 256),     'admin'),
+  ('REPLACE_ME_ADMIN-assistant',  '', SHA2('REPLACE_ME_ASSISTANT_PW', 256), 'secretary');
+```
+
+```bash
+# 2) 落库 → 3) 核对（只查角色，不查口令）
+#    SELECT id, username, role FROM user WHERE username = 'REPLACE_ME_ADMIN'
+#       OR username LIKE '%-assistant';
+#    记下两行 id（删除接口按 id 操作，见 §7.4）
+
+# 4) 登录冒烟——口令走 stdin，不进 argv / history
+read -r -s -p "口令: " ADMIN_PW; echo
+curl -s -X POST http://127.0.0.1:3000/api/login \
+  -H 'Content-Type: application/json' --data-binary @- <<JSON | head -c 200
+{"username":"REPLACE_ME_ADMIN","password":"$ADMIN_PW"}
+JSON
+unset ADMIN_PW
+# 期望：{"code":..,"data":"<JWT>"}；这一登录的同时该行 password 已变成 $argon2id$...
+```
+
+- 登录有 **IP+用户名限流**（`rate_limiter`）：口令打错几次会被挡（"账号或密码错误"或限流提示），
+  别把它当建号失败——先核对口令再等限流窗口。
+- 助手账号同样冒烟一次（用助手的账号名与口令），确认能登录后它的哈希也就升到了 Argon2id。
+
+### 7.4 建完之后要知悉的副作用（都不是 bug）
+
+- `list_temp_users` 过滤 `role = 'user'` ⇒ 管理员与助手**都不出现在后台"临时用户"列表**里。
+  后台看不到 ≠ 被删了；这是预期。
+- `delete_temp_user` 按 id 删除、**不校验 role**（级联删会话/历史/摘要）⇒ 助手账号若被按 id
+  删除，不会被"列表里看不到"挡住。**建号时把 id 记下来**，删除前核对。
+- 断言里的 `role` 是 Rust **每请求查库**得到的（不是读 token）⇒ 改了 `role` 立即生效、不必重新登录；
+  反过来把 `admin` 降成 `user`，已登录的后台会话**下一次请求**就会被 `auth_guard` 挡下。
+- **助手账号的对话侧今天看不出区别**：`AGENT_AUTHZ_ENFORCE` 仍**未设**（20260921 复核，shadow 期
+  只记不拦），而 `AGENT_REQUIRE_ASSERTION=1` 已在生产生效（不带断言头直连得 401）。要让它真的
+  "多出 / 少掉"能力，得先收 shadow 证据再打开 enforce（P1）。
+
+### 7.5 为什么不做代码（20260921 拍板记录）
+
+- **没有"产生管理员账号"的代码路径可挂**：全库唯一的建号接口是 `src/routes/temp_user.rs` 的
+  `create_temp_user`（`POST /api/temp-users`），`role` **写死 `"user"`**、不是请求参数；
+  `auth.rs` 只有 `login`/`profile`（**无注册**）。管理员账号一直是直接写库产生的
+  （本次角色变更操作就是这一类）。要"自动配助手"就得先补一条建号路径 = 新增一个高危接口，
+  而它该有的审计（⑥）还没做——顺序反了。
+- **注册账号保持不开放**：`create_temp_user` 的 `role` 写死就是这条的后端一半，前端入口
+  由页面侧处理（登录页只给提示、不给注册流程）。
+- **不要做的事**：不要让 agent 自己去建账号——那是写操作，且"谁授权"（④/⑥）都还没做。
 
