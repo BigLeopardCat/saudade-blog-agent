@@ -13,6 +13,24 @@ talk/board/announcement 无单条端点，从列表接口按 key 过滤（列表
   词法基线已打满当前语料；向量留作 L1 升级，接 BEIR 基准时对比再上）。
 - 存储 = 内存倒排（语料 34 文档，全量重建 <100ms，不做增量）；懒刷新（10 分钟 TTL）。
 - 返回候选 (type, id, title, section, score) 列表，不返回全文（路线 B 契约）。
+- **候选截断 = 相对断崖（20260920 批次 d 供给端）**：文档分口径不变（仍取「该文档最高
+  chunk 分」，见下），排名后丢弃 score < top1×α 的候选（α=`_CLIFF_RATIO`）。动机：
+  语料 10 篇而工具默认 top_k=8 ⇒ 每次检索几乎倒回整个语料库，planner 实测很少读第 3 条
+  以后（62 次候选驱动读里 28 次是浪费）。**尺度无关是硬要求**：绝对噪声下限已实证无可用
+  阈值（20260916d/e 弃权闸三组探针分布重叠，任何绝对阈值都会误杀），故只做相对截断。
+  标定（22 query：13 正 + 9 噪声，20260920 实跑 recall_eval）：α≤0.25 时 recall@1/@3
+  与截断前**完全一致**（0.92/1.00，噪声 top-1 也一条不动），平均候选 5.45→3.50（top_k=8）、
+  4.50→3.36（top_k=5）；**α=0.35 起开始丢多答文档**（rag_ota_* 的 note:12/14/22 被裁掉
+  ⇒ recall@3 掉到 0.92）。取 0.25。
+- **已知局限：短语巧合 × 长度归一（本批未修，勿重复尝试同方向）**：上述 α 调不动榜首——
+  query「博客架构 前后端端口 技术栈」的 top-1 仍是《Git从入门到入土》。真因是词法检索
+  本身：`.gitignore` 小节标题「主流技术栈」贡献 技术栈/技术/术栈 三个 n-gram，而这三个
+  在 10 篇语料里 df=1 ⇒ idf 最高；《架构文档》在 架构/后端/端口 上 tf 全面占优，却被
+  BM25 的长度归一压住。**20260920 实测三类改法均无效**（文档级 BM25 主分、覆盖率加权、
+  查询 span 归一——各自跑完 recall_eval 榜首不变，文档级还把噪声 top-1 整体改了位），
+  故本批**只做截断不改排序**，把这条作为已知 FAIL 留在 eval（`rag_arch_ports_real`）：
+  修它要动的是检索表征（语义检索 L1 或结构感知索引：代码块/标题行不计入证据），
+  不是打分参数。
 
 eval/recall_eval.py 直接 import 本模块的 search()——评测即线上实现。
 """
@@ -32,6 +50,9 @@ CJK = re.compile(r"[一-鿿]")
 GRAM = re.compile(r"[一-鿿]+|[a-zA-Z0-9_\.]+")
 
 REFRESH_TTL = 600.0  # 10 分钟懒刷新
+
+# ── 候选截断（20260920 批次 d 供给端，标定见模块头注释）──
+_CLIFF_RATIO = 0.25   # 相对断崖：低于 top1×0.25 的候选丢弃（α=0.35 起会丢多答文档）
 
 # 语料拉取的翻页参数。见 _fetch_corpus 的说明：不传 page_size 会吃服务端默认 6 篇。
 CORPUS_PAGE_SIZE = 50
@@ -246,9 +267,16 @@ class RagIndex:
                 agg["score"], agg["sections"] = score, [c["section"]]
             elif c["section"] not in agg["sections"]:
                 agg["sections"].append(c["section"])
-        ranked = sorted(by_doc.values(), key=lambda x: -x["score"])[:top_k]
+        ranked = sorted(by_doc.values(), key=lambda x: -x["score"])
+        # 相对断崖（20260920 批次 d，标定见模块头注释）：低于 top1×α 的候选丢弃。
+        # 尺度无关是硬要求——绝对噪声下限已实证无可用阈值（20260916d/e 弃权闸），勿复引入。
+        if ranked:
+            floor = ranked[0]["score"] * _CLIFF_RATIO
+            ranked = [r for r in ranked if r["score"] >= floor]
+        ranked = ranked[:max(1, top_k)]
         for r in ranked:
             r["score"] = round(r["score"], 4)
+            r["sections"] = r["sections"][:2]
         return ranked
 
 

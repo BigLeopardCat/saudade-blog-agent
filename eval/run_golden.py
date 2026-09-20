@@ -329,6 +329,16 @@ def check_gold(gold: dict, result: dict) -> list[str]:
                          f"{'/'.join(producers)} 的 {'/'.join(fields)}"
                          f"（回执里只有 {sorted(pool)}）—— 取的 id 不是检索结果给的")
 
+    # 20260920：**fallback 盲区断言**（opt-in）。gate 打回（__RESET__）会把整轮
+    # 叙述换成一句人设内兜底道歉——而道歉文本**照样能命中 text_contains 正断言**
+    # （实测 followup_named_doc_reread：resets=1、用户收到的是兜底文本，却判 PASS），
+    # 于是"用户根本没看到那段回答"这件事在 golden 里结构性不可见（76/77 那次唯一
+    # FAIL 的根因就是这么被发现的）。gold 里写了本键 ⇒ 本轮必须零 fallback。
+    if gold.get("forbid_fallback") and result["resets"]:
+        fails.append(f"本轮走了 gate fallback（__RESET__×{result['resets']}："
+                     f"{result['resets_reasons']}）——用户收到的是兜底道歉，"
+                     f"正断言命中的是道歉文本，不算通过")
+
     # 20260920：确定性文档锚点（方案①）——"只有标题、没有 id"的用例里，系统按站内
     # 语料把《标题》解析成真实 id 注入锚点，planner 应直接读那一篇。这条没有
     # producer 可挂（不是"取自检索结果"，而是"取自系统解析"），故不能复用
