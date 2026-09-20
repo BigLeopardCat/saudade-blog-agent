@@ -556,7 +556,7 @@ def test_gate_claim_scope():
     误伤成本高——宁可漏拦（叙述纪律 + trace 抽检兜底），不可误伤。
     收窄后的分工（对照旧"三层声称闸全查"）：
       - 任何轮：命令前缀文本（_cmd_prefix_directive）——正文出现命令帧前缀即确凿
-        违规；20260920 洞③收窄：引号/内联代码区 **且** 同句含机制词 = 元讨论里的
+        违规；20260920 元讨论豁免：引号/内联代码区 **且** 同句含机制词 = 元讨论里的
         提及，放行（见 test_gate_cmd_prefix_meta）
       - chat 零帧轮：只查第一人称工具调用声称（_CHAT_TOOL_CLAIM_RE 高精确模式，
         概念性/第三人称提及、"翻遍了留言板"类读取声称不拦——chat 计划 TOOLS
@@ -658,7 +658,7 @@ def test_gate_claim_scope():
 
 
 def test_gate_cmd_prefix_meta():
-    """gate 命令前缀判据的**元讨论豁免**（20260920 洞③）：提及 ≠ 发命令。
+    """gate 命令前缀判据的**元讨论豁免**（20260920）：提及 ≠ 发命令。
 
     实证（golden rag_arch_check 全量 FAIL + followup_named_doc_reread 假 PASS）：
     用户问"怎么防止模型假装调用工具"，模型答"……就算在正文里写 `NAVIGATE:/xxx`
@@ -666,7 +666,7 @@ def test_gate_cmd_prefix_meta():
     cmd_prefix，整轮换成兜底道歉（且道歉文本恰好命中正断言 ⇒ 缺陷在 golden 里
     不可见）。判据现在要求：出现处落在引号/内联代码区 **且** 所在句子含机制词。
     两种仍要拦的形态各有用例锁（裸写正文 / 代码区内讲要做的事）。"""
-    print("[gate] 命令前缀元讨论豁免（洞③）")
+    print("[gate] 命令前缀元讨论豁免")
     from agent.graph import _cmd_prefix_directive
 
     ok_cases = (
