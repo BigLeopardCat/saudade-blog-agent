@@ -18,7 +18,6 @@ sys.path.insert(0, "/home/ubuntu/memory_blog_rust/saudade-blog-agent")
 sys.path.insert(0, "/home/ubuntu/memory_blog_rust/saudade-blog-agent/eval")
 
 import run_golden
-from server import ChatRequest
 
 
 def main():
@@ -26,19 +25,8 @@ def main():
     report_dir = sys.argv[2] if len(sys.argv) > 2 else "eval/report/runs"
     run_golden.ensure_agent()
     g = case["gold"]
-    ctx = case.get("context", {})
-    req = ChatRequest(
-        message=case["user_input"],
-        image=case.get("image", []),
-        current_url=ctx.get("current_url", "/"),
-        page_title=ctx.get("page_title", ""),
-        user_id=ctx.get("user_id", 0),
-        needs_summary=g.get("needs_summary", False),
-        current_effects=ctx.get("current_effects", ""),
-        current_darkmode=ctx.get("current_darkmode", ""),
-        history=ctx.get("history", []),
-        summary=ctx.get("summary", ""),
-    )
+    # 请求构造只走 run_golden.build_request（20260920 前本文件手写了一份、漏了 executions）
+    req = run_golden.build_request(case)
     t0 = time.time()
     result = run_golden.run_one(req)
     elapsed = time.time() - t0
