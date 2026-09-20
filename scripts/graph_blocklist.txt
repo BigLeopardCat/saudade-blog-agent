@@ -4,7 +4,9 @@
 # 加词的门槛：这个词既**泛化**（在任何技术文里都会高频出现）又**不值得点**（双击跳过去
 # 对访客没有信息增量）。只泛化但确有领域含义的词（如 执行/回执/摘要/配置）不要加。
 #
-# 改完重跑：PYTHONPATH=/home/ubuntu/graph-lib python3 scripts/build_word_graph.py --dry-run
+# 改完重跑（装建图依赖的临时环境由 uv 按需建，见 requirements-graph.txt）：
+#   uv run --no-project --python 3.12 --with-requirements scripts/requirements-graph.txt \
+#       python3 scripts/build_word_graph.py --dry-run
 # 看 eval/report/wordgraph/<ts>_vocab.txt 的词表报告，确认没有误伤再正式出图。
 # （选词是纯 CPU 的，重跑零 API 成本；只有新词才需要 embedding。）
 
