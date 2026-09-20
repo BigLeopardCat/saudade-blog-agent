@@ -66,6 +66,34 @@ def ensure_agent() -> None:
         print(f"[init] 编译图构建完成：{time.time() - t0:.1f}s")
 
 
+def build_request(case: dict) -> ChatRequest:
+    """用例 dict → ChatRequest。**两个跑法（本脚本 / golden_case_runner.py）共用的唯一构造点**。
+
+    20260920：进程隔离跑法（golden_full_run.py → golden_case_runner.py）此前自己手写了一份
+    ChatRequest，漏了 `executions`（20260904 才加进用例 context 的字段）⇒ 那 3 条
+    「执行记忆 / 实体摘要」用例在隔离跑法下**必然假失败**（模型看不到 recent_executions，
+    如实答"没有执行记录"/重跑工具）。同一份用例两个跑法结论不同的根因就是这份复制粘贴——
+    字段表只留这一处，再不许各自维护。
+    """
+    g = case["gold"]
+    ctx = case.get("context", {})
+    return ChatRequest(
+        message=case["user_input"],
+        image=case.get("image", []),  # 多模态：dataURL 数组（image_color_red 等用例；服务端兼容单串）
+        current_url=ctx.get("current_url", "/"),
+        page_title=ctx.get("page_title", ""),
+        user_id=ctx.get("user_id", 0),
+        needs_summary=g.get("needs_summary", False),
+        current_effects=ctx.get("current_effects", ""),
+        current_darkmode=ctx.get("current_darkmode", ""),
+        history=ctx.get("history", []),
+        summary=ctx.get("summary", ""),
+        # 20260904 C3：跨轮执行记忆（模拟 Rust 侧 execution_log 渲染注入——
+        # 二轮用例把首轮回执作为 executions 传进来，锁"据记忆如实回答"路径）
+        executions=ctx.get("executions", ""),
+    )
+
+
 def run_one(req: ChatRequest) -> dict:
     """跑一轮真实对话（内部链路），从帧流提取最终文本 / 命令帧 / 事件。"""
     loop = asyncio.new_event_loop()
@@ -401,22 +429,7 @@ def main():
 
     for i, case in enumerate(cases, 1):
         g = case["gold"]
-        ctx = case.get("context", {})
-        req = ChatRequest(
-            message=case["user_input"],
-            image=case.get("image", []),  # 多模态：dataURL 数组（image_color_red 等用例；服务端兼容单串）
-            current_url=ctx.get("current_url", "/"),
-            page_title=ctx.get("page_title", ""),
-            user_id=ctx.get("user_id", 0),
-            needs_summary=g.get("needs_summary", False),
-            current_effects=ctx.get("current_effects", ""),
-            current_darkmode=ctx.get("current_darkmode", ""),
-            history=ctx.get("history", []),
-            summary=ctx.get("summary", ""),
-            # 20260904 C3：跨轮执行记忆（模拟 Rust 侧 execution_log 渲染注入——
-            # 二轮用例把首轮回执作为 executions 传进来，锁"据记忆如实回答"路径）
-            executions=ctx.get("executions", ""),
-        )
+        req = build_request(case)
         t0 = time.time()
         result = run_one(req)
         elapsed = time.time() - t0
