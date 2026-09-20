@@ -751,7 +751,7 @@ _CONTENT_TOOLS = frozenset({
 # 命令前缀文本：回复正文出现系统命令帧前缀 = 模型在"假装发命令"（旧事故：正文
 # 输出 AUTO_NAVIGATE:/NAVIGATE:/EFFECT:/DARKMODE: 文本既不会执行、还误导用户
 # 以为已执行）。任何轮次命中一律兜底——叙述纪律已禁止，命中即确凿违规。
-# 20260920 洞③收窄：**元讨论里的提及**不是发命令（见 _cmd_prefix_directive）。
+# 20260920 收窄（元讨论豁免）：**提及**不是发命令（见 _cmd_prefix_directive）。
 _CMD_PREFIX_RE = re.compile(r"(?:AUTO_NAVIGATE|NAVIGATE|EFFECT|DARKMODE)\s*[:：]")
 # 机制/元讨论语境标记（同句出现 ⇒ 那句话在**讲命令机制**，不是在发命令）
 _CMD_META_RE = re.compile(
@@ -762,7 +762,7 @@ _CMD_META_RE = re.compile(
 def _cmd_prefix_directive(text: str) -> bool:
     """回复是否**指令式**地写了命令前缀（返回 True = 违规，走 fallback）。
 
-    20260920 洞③：旧判据对全文裸搜 `_CMD_PREFIX_RE`，把"讲命令机制时举的例子"
+    20260920 元讨论豁免：旧判据对全文裸搜 `_CMD_PREFIX_RE`，把"讲命令机制时举的例子"
     也判成发命令。现场（golden rag_arch_check，用户问"怎么防止假装调用工具"，模型
     答"……就算在正文里写 `NAVIGATE:/xxx` 也会被前端的 `cleanAgentText` 剔除……"）
     → 用户收到的是兜底道歉，而这条回复本身完全正确。同一根因在 9/20 全量里 2 例
@@ -849,7 +849,7 @@ def _strip_quoted_spans(text: str) -> str:
     return _QUOTED_SPAN_RE.sub("", text)
 
 
-# 内联代码区（含 ``` 围栏；先配对短跨度即天然吃掉围栏内容，见 20260920 洞③）
+# 内联代码区（含 ``` 围栏；先配对短跨度即天然吃掉围栏内容，见 20260920 元讨论豁免）
 _CODE_SPAN_RE = re.compile(r"`[^`]*`", re.S)
 
 
