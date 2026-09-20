@@ -31,6 +31,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 from agent import create_agent
 from agent.graph import AgentCancelled, graph_input
 from agent.principal import Principal
+from agent.summarizer import summarize
 from agent.skills import NAV_MAP  # 过程行路径反查中文别名用（展示层，非执行依据）
 from rag import search as rag_search, wordgraph
 from utils import setup_logging
@@ -448,33 +449,11 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
 def _summarize_dialogue(user_msg: str, history: list[HistoryItem], old_summary: str) -> str:
     """needs_summary 轮的独立对话摘要（与 agent 回复解耦，随图并行执行）。
 
-    背景：旧方案让对话模型在回复末尾顺带输出 SUMMARY: 行（后端剥离入库），
-    摘要与回复耦合在同一生成调用里，且无工具轨迹可参照时模型只能"推断"发生了
-    什么——曾出现摘要编造"助手成功调用工具"污染记忆。此处改为独立任务调用：
-    输入是原始历史数据（工具是否真的被调用由历史中的消息说了算），prompt 只
-    允许总结客观内容，禁止推断动作归属。失败返回空串 → 调用方不入库，对话零影响。
+    实现已收进 `agent/summarizer.py`（20260920）：那里有不信任输入的围栏、输出清洗
+    与 fail-empty 取向，以及 test_side_tasks.py 的回归锁。这里只留一句转发——
+    历史背景（为什么不用"回复末尾顺带输出 SUMMARY"）见该模块头注。
     """
-    from models import get_llm
-    lines = [f"{'访客' if h.role == 'user' else '助手'}: {h.content}"
-             for h in history[-20:]]
-    lines.append(f"访客: {user_msg}")
-    llm = get_llm(streaming=False, max_tokens=256, enable_thinking=False)
-    prompt = (
-        "你是对话摘要器。基于以下对话历史与旧摘要，输出合并后的 3-5 句中文事实摘要，"
-        "供下次对话恢复上下文。\n"
-        "规则：只总结客观发生的内容（访客问了什么、要求了什么、系统执行了什么）；"
-        "不得推断历史中未出现的行为，不得猜测动作归属（是否调用工具以历史消息为准），"
-        "不得编造；若旧摘要中有仍相关的事实（设备、特效偏好、重要要求）必须保留。\n"
-        f"旧摘要：{old_summary or '（无）'}\n"
-        f"本次对话：\n{chr(10).join(lines)}\n"
-        "摘要："
-    )
-    try:
-        out = (llm.invoke(prompt).content or "").strip()
-        return out if out else ""
-    except Exception as e:
-        logger.warning("独立摘要生成失败（保留旧摘要）: %s", e)
-        return ""
+    return summarize(user_msg, history, old_summary)
 
 
 # ---------------------------------------------------------------------------
@@ -1113,39 +1092,18 @@ def review_message(req: ReviewRequest):
     网络异常直接抛 500（调用方 Rust 侧超时/非 200 一律降级放行，兑底不拦正常
     留言——降级决策在调用方，此处不吞异常，保证 Rust 日志可见性）。
     """
-    from models import get_llm
+    from agent import moderator
     text = (req.content or "").strip()
-    if not text:
-        return {"verdict": "pass", "reason": "空内容"}
-    llm = get_llm(streaming=False, max_tokens=80, enable_thinking=False,
-                  timeout=25.0, temperature=0.1)
-    prompt = (
-        "你是博客留言板审核员。留言板叫「河灯集」，访客在这里放河灯留言（内容是"
-        "写给他人/自己的话，通常带祝福、倾诉、提问或日常分享）。\n"
-        "判定该留言能否公开显示：仅当含垃圾广告、引流买卖、色情低俗、辱骂攻击、"
-        "违法敏感内容、恶意外链等明显不宜内容才判 flag；其余（祝福、倾诉、提问、"
-        "日常、夸赞、读后感等正常留言）一律 pass。拿不准时倾向 pass。\n"
-        f"留言内容：{text[:500]}\n"
-        "只输出 JSON：{\"verdict\": \"pass\" 或 \"flag\", \"reason\": \"简短中文原因\"}"
-    )
+    # 实现收进 agent/moderator.py（20260920）：不信任输入（访客正文进围栏）、
+    # 输出白名单、fail-open 取向，以及 test_side_tasks.py 的回归锁。
     try:
-        out = (llm.invoke(prompt).content or "").strip()
+        result = moderator.review(text)
     except Exception:
         logger.exception("[review] LLM 调用失败（Rust 侧将降级放行）")
         raise
-    verdict, reason = "pass", "（未解析出裁决，默认放行）"
-    m = re.search(r"\{.*\}", out, re.S)
-    if m:
-        try:
-            data = json.loads(m.group(0))
-            v = str(data.get("verdict", "")).strip().lower()
-            if v in ("pass", "flag"):
-                verdict = v
-                reason = str(data.get("reason", "")).strip()[:80] or "（无原因）"
-        except Exception:
-            logger.warning("[review] 裁决 JSON 解析失败: %.120s", out)
-    logger.info("[review] verdict=%s reason=%.60s content=%.60s", verdict, reason, text)
-    return {"verdict": verdict, "reason": reason}
+    logger.info("[review] verdict=%s reason=%.60s content=%.60s",
+                result["verdict"], result["reason"], text)
+    return result
 
 
 class GraphQueryRequest(BaseModel):
