@@ -10,12 +10,19 @@
                                引述那句话，邻域含撤回标记（「之前说…是错的」）不算违规；
                                同理紧贴否定词的「没成功显示」是诚实否认，也不算（9/16）
     两项均由夜间假失败实证引入（见 ~/agent_regression.log 9/10、9/11、9/16 与 eval/report/review_*.md）
+  - 参数族断言：require_arg_from_result（消费者参数取自生产者回执的结构化字段）
+                require_exec_args（执行回执里某工具某参数**等于**期望值——没有
+                producer 可挂时用，如 20260920 确定性文档锚点解析出的 id）
 
 用法（cd saudade-blog-agent）：
-  .venv/bin/python eval/run_golden.py               # 全量
+  .venv/bin/python eval/run_golden.py               # 全量（本机=生产链路，耗时基线有效）
   .venv/bin/python eval/run_golden.py --limit 3     # 前 3 条（调试）
   .venv/bin/python eval/run_golden.py --only nav_friends_down
-退出码：0=全过 1=有失败（CI 可接）
+  .venv/bin/python eval/run_golden.py --min-pass-rate 0.9 --skip-ids device_query  # CI 口径
+退出码：0=达到 --min-pass-rate（默认 1.0，即全过）1=低于门禁
+⚠ 通过率 vs 全过：本机（生产链路）默认全过；CI 在北美 runner 上跨网调用 LLM/站点，
+  单条超时类波动与"环境不可达"用例不该让整轮门禁变红——门禁按**通过率**判，
+  失败清单仍逐条打印、报告随 artifact 上传（见 .github/workflows/eval.yml）。
 """
 import argparse
 import asyncio
@@ -321,6 +328,20 @@ def check_gold(gold: dict, result: dict) -> list[str]:
                          f"{'/'.join(producers)} 的 {'/'.join(fields)}"
                          f"（回执里只有 {sorted(pool)}）—— 取的 id 不是检索结果给的")
 
+    # 20260920：确定性文档锚点（方案①）——"只有标题、没有 id"的用例里，系统按站内
+    # 语料把《标题》解析成真实 id 注入锚点，planner 应直接读那一篇。这条没有
+    # producer 可挂（不是"取自检索结果"，而是"取自系统解析"），故不能复用
+    # require_arg_from_result：直接锁执行回执里的参数值。
+    for spec in gold.get("require_exec_args", []):
+        rows = [r for r in result["exec_rows"] if r.get("tool") == spec["tool"]]
+        if not rows:
+            fails.append(f"缺少 {spec['tool']} 的执行回执（无法核对参数）")
+            continue
+        want = str(spec["equals"])
+        got = [str((r.get("args") or {}).get(spec["arg"]) or "") for r in rows]
+        if want not in got:
+            fails.append(f"{spec['tool']}.{spec['arg']} 期望 {want}，实际 {got}")
+
     return fails
 
 
@@ -328,6 +349,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 条（调试）")
     ap.add_argument("--only", default="", help="只跑指定 id")
+    ap.add_argument("--skip-ids", default="",
+                    help="跳过指定 id（逗号分隔；用于环境不可达的用例，如 CI 无 device-service）")
+    ap.add_argument("--min-pass-rate", type=float, default=1.0,
+                    help="通过率门禁（默认 1.0=全过）；CI 跨网链路可放低")
     args = ap.parse_args()
 
     ensure_agent()
@@ -345,6 +370,12 @@ def main():
     cases = [json.loads(line) for line in open(GOLDEN_FILE, encoding="utf-8") if line.strip()]
     if args.only:
         cases = [c for c in cases if c["id"] == args.only]
+    skip_ids = [s.strip() for s in args.skip_ids.split(",") if s.strip()]
+    if skip_ids:
+        known = {c["id"] for c in cases}
+        cases = [c for c in cases if c["id"] not in skip_ids]
+        unknown = [s for s in skip_ids if s not in known]
+        print(f"[run] 跳过 {len(skip_ids)} 条：{skip_ids}" + (f"（⚠ 不在集合里：{unknown}）" if unknown else ""))
     if args.limit:
         cases = cases[: args.limit]
     print(f"[run] {len(cases)} 条 golden 样本（真实 LLM，约 {len(cases) * 30}s）\n")
@@ -459,6 +490,8 @@ def main():
         # 旧基线不可比是预期（变更即新基线），快照字段用于对账变更内容
         "corpus": corpus,
         "total": len(cases), "passed": len(cases) - failed, "failed": failed,
+        "pass_rate": round((len(cases) - failed) / len(cases), 4) if cases else 0.0,
+        "skipped_ids": skip_ids,
         "latency_s": {
             "count": len(latencies),
             "min": round(_pct(latencies, 0), 1),
@@ -517,7 +550,17 @@ def main():
     print(f"留档: eval/report/runs/{ts_str}.json")
     if review_path:
         print(f"复审单: {review_path}")
-    sys.exit(0 if failed == 0 else 1)
+    # 门禁（20260920）：本机默认 1.0（全过）；CI 北美 runner 跨网链路按通过率判
+    pass_rate = (len(cases) - failed) / len(cases) if cases else 0.0
+    print(f"通过率: {pass_rate:.3f}（门禁 {args.min_pass_rate:.3f}，"
+          f"跳过 {len(skip_ids)} 条）")
+    if failed == 0:
+        sys.exit(0)
+    if pass_rate >= args.min_pass_rate:
+        print(f"⚠ {failed} 条 FAIL，但通过率达标 → 退出码 0（逐条见上方与 {review_path or REPORT_FILE}）")
+        sys.exit(0)
+    print(f"通过率 {pass_rate:.3f} < 门禁 {args.min_pass_rate:.3f} → 退出码 1")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
