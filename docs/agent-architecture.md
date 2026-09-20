@@ -164,7 +164,7 @@ sequenceDiagram
     Note over A: needs_summary 轮并行独立摘要调用<br/>（输入=原始历史，与回复解耦）
     A->>L: LangGraph 图执行：planner ⇄ execute（≤4 轮，execute 内 checker 逐 spec 验收）<br/>→ reflector（重复受阻 ≤2 轮复盘）→ model → gate
     L-->>A: planner 决策文本 / execute 工具帧 + checker 回执<br/>model 叙述 token（零工具）
-    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / 过程帧 __PROCESS__ / __RESET__（gate fallback）/<br/>__SUMMARY__ / __EXEC__（checker 回执，流收尾 __END__ 前） / 终结标记）
+    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / 过程帧 __PROCESS__ / __RESET__（gate fallback）/<br/>__SUMMARY__ / __EXEC__（checker 回执，\_\_END\_\_ 前到达；Rust 收到即落库） / 终结标记）
     R-->>B: 逐帧转发（X-Accel-Buffering: no；__EXEC__ 只收不转）
     B->>B: 文本帧上屏 + 口型驱动；命令帧进 cmdText
     Note over R: 流结束后
@@ -307,9 +307,9 @@ flowchart LR
 flowchart TB
     subgraph Write[记忆如何记录]
         W1[用户消息] -->|prepare_chat 立即落库| T1[(chat_history role=user)]
-        W2[assistant 回复] -->|流结束 save_assistant_reply| T1
+        W2[assistant 回复] -->|转发终结帧之前 save_assistant_reply<br/>（tokio::spawn 分离写入）| T1
         W3[独立摘要调用] -->|__SUMMARY__ 帧 / new_summary| T2[(chat_summary<br/>每会话一条)]
-        W4[checker 验收 PASS 回执] -->|__EXEC__ 帧<br/>流收尾 __END__ 前| T3[(execution_log<br/>渲染定稿 detail)]
+        W4[checker 验收 PASS 回执] -->|__EXEC__ 帧<br/>__END__ 前到达即落库| T3[(execution_log<br/>渲染定稿 detail)]
     end
     subgraph Compress[记忆如何压缩]
         C1[needs_summary 触发<br/>count>20 且 %10==0/1] --> C2[_summarize_dialogue 独立任务调用<br/>输入=原始历史+旧摘要]
@@ -368,8 +368,14 @@ flowchart TB
 **结果传输（双路径，Rust 入库）**：
 - 非流式 `/chat`：`ChatResponse.new_summary` 字段随响应返回；
 - 流式 `/chat/stream`：agent 在 `__END__` 帧**之前**发 `data: __SUMMARY__:{"json字符串"}\n\n`
-  ——不终止流、不进回复；Rust 循环里解析该帧存入 `summary_override`，流收尾时传给
-  `save_assistant_reply`（[chat.rs](Saudade-Blog/src/routes/chat.rs)）。
+  ——不终止流、不进回复；Rust 循环里解析该帧存入 `summary_override`，**转发终结帧之前**
+  连同回复一起交给 `save_assistant_reply`（`tokio::spawn` 分离写入——客户端见到 `__END__`
+  就断开也不丢，落库顺序契约见下）（[chat.rs](Saudade-Blog/src/routes/chat.rs)）。
+- **落库顺序契约（20260920）**：流式路径的收尾写入一律在转发终结帧（`__END__`/`__NAV_END__`/
+  `__ERROR__`）**之前**发起，且用 `tokio::spawn` 从生成器生命周期里摘出来；`__EXEC__` 回执
+  帧收到即写（不再攒到收尾）。此前顺序相反：客户端一见 `__END__` 就断开 ⇒ 响应体 future
+  被丢弃 ⇒ 尾部 await 跑不完 ⇒ 回复与执行回执双双丢失（流式探针实证；真实浏览器读连接
+  关闭不受影响）。
 - **约定**：`__SUMMARY__` 帧必须出现在终结帧之前，否则视为无摘要。
 
 **存储**：`chat_summary` 每用户一条，`upsert`（存在则 update，否则 insert），`message_count` 记录触发时点，
