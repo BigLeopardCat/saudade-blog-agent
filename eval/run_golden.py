@@ -407,6 +407,8 @@ def main():
         corpus = {}
 
     cases = [json.loads(line) for line in open(GOLDEN_FILE, encoding="utf-8") if line.strip()]
+    # 全量标签表（过滤前）：回归组的"被跳过"清点要用它（见报告 regression 块与门禁）
+    _ALL_TAGS = {c["id"]: (c.get("tags") or []) for c in cases}
     if args.only:
         only_ids = [s.strip() for s in args.only.split(",") if s.strip()]
         all_ids = {c["id"] for c in cases}
@@ -513,6 +515,13 @@ def main():
         "cases_repeat_search": len(_dup),
         "cases_repeat_search_ids": _dup,
     }
+    # 回归组（20260921 拍板）：tags 含 `regression` 的用例是**锁行为**的（防幻觉/契约/
+    # 撤回话术），不是"能力题"——能力题允许单条波动，回归题不许。混跑时两类红被同等对待
+    # （通过率门禁会把回归红一起吸收掉），故单独成组并在门禁中独立硬判（见文件末尾）。
+    _reg = [r for r in results if "regression" in (r.get("tags") or [])]
+    _reg_bad = [r["id"] for r in _reg if not r["ok"]]
+    # 被 --skip-ids/--only 摘掉的回归用例：组内分母随之变小，如实报出来（不许静默豁免）
+    _reg_skipped = [s for s in skip_ids if "regression" in _ALL_TAGS.get(s, [])]
     report = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
@@ -528,8 +537,21 @@ def main():
             "p95": round(_pct(latencies, 95), 1),
             "max": round(_pct(latencies, 100), 1),
         },
+        # ⚠ 20260921 修：此处原来写成 `"efficiency": eff, "efficiency": efficiency`
+        # ——同一字面量里重复键，后者静默覆盖前者，`eff`（resets 总数/打回例/首轮即调率，
+        # 即 eval-observability.md §4/§7 与 baseline_20260902_efficiency.json 记录的
+        # `efficiency` 语义）自 20260919 起从未落进报告。两个块语义不同，各归其名：
+        #   efficiency      = 打回成本代理（resets 维度，文档与历史基线口径）
+        #   plan_efficiency = 规划质量基线（工具调用/规划轮/绕圈/重复检索，20260919 起）
         "efficiency": eff,
-        "efficiency": efficiency,
+        "plan_efficiency": efficiency,
+        "regression": {
+            "total": len(_reg),
+            "passed": len(_reg) - len(_reg_bad),
+            "failed_ids": _reg_bad,
+            "all_passed": not _reg_bad,
+            "skipped_ids": _reg_skipped,
+        },
         "cases": results,
     }
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
@@ -549,6 +571,12 @@ def main():
             f.write(f"# golden FAIL 复审单 {report['ts']}\n\n")
             f.write(f"{failed}/{len(cases)} 条 FAIL。逐条判定并勾选（假失败当轮修判据，"
                     f"真 FAIL 允许挂着并在下方写原因）：\n\n")
+            # 回归组红单列在最前：这些不是"允许波动"的能力题，门禁已按硬判退出码 1
+            if _reg_bad:
+                f.write("> ⚠ **回归组（regression）FAIL，本轮不得放行**："
+                        + "、".join(f"`{i}`" for i in _reg_bad)
+                        + f"\n> 回归组要求 100% 通过（{len(_reg) - len(_reg_bad)}/{len(_reg)}），"
+                          "不受 `--min-pass-rate` 放宽；假失败当轮修判据，真 FAIL 当轮修行为。\n\n")
             for r in results:
                 if r["ok"]:
                     continue
@@ -575,16 +603,25 @@ def main():
           f"（均 {efficiency['tool_calls_avg']}/例）规划轮 {efficiency['tool_rounds_total']}"
           f" 多轮绕圈例 {efficiency['cases_multi_tool_rounds']}{efficiency['cases_multi_tool_rounds_ids']}"
           f" 重复检索例 {efficiency['cases_repeat_search']}{efficiency['cases_repeat_search_ids']}")
+    # 回归组单列（20260921）：能力题允许波动，回归题不许——组内一条红即整轮红
+    print(f"回归组: {len(_reg) - len(_reg_bad)}/{len(_reg)}"
+          + (f"  ⚠ 红：{_reg_bad}（回归组要求 100%，不受 --min-pass-rate 放宽）" if _reg_bad else "")
+          + (f"  ⚠ 被跳过：{_reg_skipped}（组内分母随之变小）" if _reg_skipped else ""))
     print(f"报告: {REPORT_FILE}")
     print(f"留档: eval/report/runs/{ts_str}.json")
     if review_path:
         print(f"复审单: {review_path}")
     # 门禁（20260920）：本机默认 1.0（全过）；CI 北美 runner 跨网链路按通过率判
+    # （20260921 起分两层：回归组硬判 100%，其余按 --min-pass-rate）
     pass_rate = (len(cases) - failed) / len(cases) if cases else 0.0
     print(f"通过率: {pass_rate:.3f}（门禁 {args.min_pass_rate:.3f}，"
           f"跳过 {len(skip_ids)} 条）")
     if failed == 0:
         sys.exit(0)
+    if _reg_bad:
+        print(f"回归组 FAIL（{len(_reg) - len(_reg_bad)}/{len(_reg)}）：{_reg_bad}"
+              f" → 退出码 1（回归组要求 100%，不按通过率放行）")
+        sys.exit(1)
     if pass_rate >= args.min_pass_rate:
         print(f"⚠ {failed} 条 FAIL，但通过率达标 → 退出码 0（逐条见上方与 {review_path or REPORT_FILE}）")
         sys.exit(0)

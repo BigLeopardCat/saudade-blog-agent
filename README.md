@@ -57,6 +57,7 @@ saudade-blog-agent/
 │   │                       #       + golden_case_runner.py/golden_full_run.py（进程隔离跑法）
 │   │                       #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 │   │                       #       + judge_offline_test.py（判据离线自测）+ trace_metrics.py/trace_alert.py（trace 指标与语义巡检）
+│   │                       #       + golden_draft.py（真实 trace 现场 → golden 用例草稿，供人审后入库）
 ├── scripts/                # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）+ sticker_smoke（贴纸冒烟）
 ├── test_skills.py          # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
 └── docs/                   # 架构文档 + 评测可观测设计
@@ -140,7 +141,12 @@ planner 注入时自动带描述）。**可规划性由白名单决定（2026090
   `401 invalid_api_key`。全量改为**本机按需手动跑**（本机即生产服务器，链路真实，77 条约 19 分钟）：
   `.venv/bin/python eval/run_golden.py`（`--limit N` / `--only a,b`）或
   `.venv/bin/python eval/golden_full_run.py`（进程隔离 + 单条 180s 超时）。
-- nightly cron 自动跑 L1/L2 两项，失败标记 `~/agent_regression.failed`。
+- **门禁分两层判（20260921）**：`tags` 含 `regression` 的用例（16 条：防幻觉/契约/撤回话术/
+  执行记忆）**硬判 100%**，不受 `--min-pass-rate` 放宽（回归题不许波动）；其余是能力题，按通过率判。
+  报告里 `regression` 块单列，复审单把回归组红写在最前（当天必修）。
+- nightly cron 自动跑 L1/L2 两项 + `eval/golden_draft.py`（把 trace_alert 命中的真实现场整理成
+  用例草稿到 `eval/report/golden_drafts_*.md`，**只产草稿、人审后手抄入库**，含真实用户文本故不进 git），
+  失败标记 `~/agent_regression.failed`。
 - **改技能注册表 / plan 契约 / 摘要逻辑 / prompt 后必跑**（golden 断言含"回复不得包含 SUMMARY:"）。
 
 ---
