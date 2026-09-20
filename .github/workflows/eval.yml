@@ -45,6 +45,9 @@ jobs:
       - name: 协作取消能力边界测试（stop_event 检查点/写操作不被执行，秒级，无网络）
         run: uv run python test_cancel.py
 
+      - name: golden 判据离线自测（词表/正则族/引述豁免，秒级，纯文本函数，无网络）
+        run: uv run python eval/judge_offline_test.py
+
       - name: Golden 评测集（正确性门禁，仅手动触发）
         if: github.event_name == 'workflow_dispatch' && inputs.run_golden
         env:
