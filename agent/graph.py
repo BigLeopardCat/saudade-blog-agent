@@ -74,6 +74,7 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_pa
                              _effect_switch_fast_path, _intent_done, _intent_hints,
                              _nav_fast_path, _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
+from agent.entities import receipt_digest
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
@@ -356,7 +357,8 @@ _PLANNER_PROMPT = """\
 6. 用户质疑/催促执行（"你真显示了？""到底跳了没？""别光说，带我去啊"）：
    - 真实性询问（质疑某操作是否真执行过/执行细节，如"屏幕上写了什么"）→
      看页面上下文 recent_executions=（跨轮执行记忆：**你自己**在本会话里执行过、
-     系统验收过的动作记录，格式"· MM-DD HH:MM 动作行"；行首时间=**该次执行的发生
+     系统验收过的动作记录，格式"· MM-DD HH:MM 动作行（行尾可能有「— …」实体摘要，
+     见规则 6b）"；行首时间=**该次执行的发生
      时刻**（本机 +08:00 钟面，无需换算），行尾"（×N）"=同一动作在本会话内重复
      执行过 N 次（只列最近一次的时间）——时间与次数都是系统事实，可据实转述，
      不要自行推算或改写时间。它记的是你的执行，**不是访客的浏览痕迹/前端上报
@@ -371,6 +373,16 @@ _PLANNER_PROMPT = """\
      "再显示一次刚才那句"）→ 属新请求：重新规划该动作技能并真实执行；
      navigate 填 mode=direct（免确认框直达）；不得零工具口头承诺
      "马上带你去/这就去"——上次正是口头说"已经在 X 页"才被质疑
+6b. 指代取值优先于重查（20260920）：recent_executions 行尾的「— …」是那次执行取回的
+   **实体摘要**（留言条目原文/分类文章数/文章候选标题等，系统按工具返回压成的事实）。
+   用户指代"上文已经取回来过的东西"（"第二条写了什么""那个分类下面有几篇文章""刚才
+   那个端口是多少"）：
+   - 摘要里有该值（含序号对得上的条目）→ **选 chat 直接作答**，值照抄（数字、条目
+     原文、「」内的字句不得改写或凑整），**不要为了取值把同一个工具再跑一遍**；
+   - 摘要里没有该字段、或本会话没有对应执行行 → 才调用**同一个数据工具**取一次
+     （禁止换 rag_search/search_notes 去绕：语义检索会命中同主题的另一篇）；
+   - 指代对象在摘要里本身就**不唯一**（如"那个分类"，而摘要列了 5 个分类）→ 追问
+     澄清是哪一项，不要默认挑第一个。
 7. 输出严格按以下格式（JSON 双引号），不要任何其他文字：
 SKILL: <技能名>
 PARAMS: <JSON>
@@ -1615,6 +1627,12 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             rcpt = {"skill": plan["skill"], "tool": name,
                     "args": {k: str(v)[:200] for k, v in args.items()},
                     "result": str(out)[:200], "ts": time.time()}
+            # 实体摘要（20260920，见 agent/entities.py）：数据工具取回的条目/计数
+            # 压成一行随回执落 execution_log —— 工具帧只活当轮，不落这一行的话
+            # 下轮「第二条写了什么」只能把工具再跑一遍（探针实测）。
+            digest = receipt_digest(name, str(out))
+            if digest:
+                rcpt["digest"] = digest
             if name == "get_article_detail":
                 # 跨轮执行记忆带标题（20260912）：下轮"那篇讲架构的"要靠它核对指代
                 rcpt["title"] = _doc_title(str(out))
