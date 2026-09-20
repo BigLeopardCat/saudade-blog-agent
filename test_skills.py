@@ -1851,6 +1851,18 @@ def test_doc_anchors_and_clip():
     tail = _recent_tail([HumanMessage(content="上一句"), AIMessage(content=long_reply),
                          HumanMessage(content="你看了吗就说没写")])
     check("节选：长回复中段点名的文档不丢", "架构文档" in tail)
+    # 跨轮执行记忆行的**格式契约**（Rust render_exec_row；20260920 批次 c 起行首补
+    # 时间、行尾可带（×N））：agent 侧消费方是 _doc_anchors 的读取行正则与 planner
+    # 规则 6 的据实转述——格式漂移会让锚点静默失效，这里拿两种真实形态锁住。
+    from agent.context import _DOC_READ_ROW_RE
+    row = "09-20 21:03 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》"
+    m = _DOC_READ_ROW_RE.search(row)
+    check("执行记忆行：行首时间不破坏读取行解析", bool(m) and m.group(1) == "19")
+    out_ts = _doc_anchors([HumanMessage(content=f"[System: page=/; recent_executions: · {row}")])
+    check("执行记忆行：带时间戳的读取行仍产出文档锚点",
+          "《Saudade Blog AI Agent（泠月喵）架构文档》 id=19" in out_ts)
+    check("执行记忆行：重复标记（×N）不影响读取行解析",
+          bool(_DOC_READ_ROW_RE.search("09-20 21:05 读取文章 22《IoT 设备接入物联网平台指南》（×3）")))
 
 
 def test_short_reply_and_adjacent_pairs():
