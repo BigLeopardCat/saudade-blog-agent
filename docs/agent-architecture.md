@@ -2,7 +2,7 @@
 
 > 面向维护者的全链路技术文档。覆盖看板娘对话系统的每一个环节：组件拓扑、一次对话的完整时序、
 > 记忆机制（记录 / 压缩 / 存储 / 读取 / 回滚）、工具系统、防幻觉与可靠性加固、超时体系、配置与部署。
-> 最后更新：2026-09-20（**20260920 四项**：①调用者身份与权限模型——新增 `agent/principal.py`
+> 最后更新：2026-09-20（**20260920 七项**：①调用者身份与权限模型——新增 `agent/principal.py`
 > （身份的唯一构造点）+ `agent/authz.py`（scope 词汇表 / 工具→scope 声明表 / 角色→授予表 /
 > 唯一判据 `check()`），execute 在调用工具**之前**过判据，默认 shadow 只记不拦；角色只来自
 > Rust 侧 60 秒身份断言的 `role` 声明，**role=None 即身份不明、零权限**（不默认放行）。
@@ -19,6 +19,12 @@
 > annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
 > **静默失效**（无报错，只有一条没人看的 UserWarning）；详见 `docs/问题记录.md` §1.3，
 > 回归锁 = `test_authz.py` 第 ⑧ 节）。
+> ⑥**两条侧任务收成模块**（`agent/moderator.py` / `agent/summarizer.py`，此前是 `server.py`
+> 里的内联适配层、零测试、不可信文本裸插值）：各自带不可信输入围栏 + 输出白名单 + 明确
+> 失败取向（审核 fail-open、摘要 fail-empty），`test_side_tasks.py`（48 项）进 CI 门禁。
+> ⑦**超长文章分节渲染与按节取回**（新增 `agent/sections.py`，见 §5.2）——全文帧不再逐字
+> 无声硬截断；`get_article_detail(section=…)` 提供取回手段；索引/渲染/取回三处共用同一套
+> 节边界。回归锁 = `test_sections.py`（61 项）。
 > 上版：2026-09-19（**20260919 参数引用**：§6.5 新增 `$<工具>[<序号>].<字段>` 参数绑定——
 > 下一步的参数取值由 execute 从结构化返回里绑，不再靠模型从 300 字截断帧里"读出来再抄"；
 > 见 `agent/refs.py`、`AgentState.tool_data`、planner 规则 3b）。
@@ -451,7 +457,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 | 分类 | 工具 | 行为 |
 |---|---|---|
-| 文章/笔记 | `list_notes`、`search_notes`、`get_article_detail`、`get_top_notes` | 调博客 `api/public` 接口 |
+| 文章/笔记 | `list_notes`、`search_notes`、`get_article_detail`、`get_top_notes` | 调博客 `api/public` 接口（`get_article_detail` 可按 `section` 取单节，见 §5.2） |
 | 检索 | `rag_search` | BM25 词法检索（行式候选 type/id/标题/分；20260901 语料净化仅收文章，说说/留言走数据工具） |
 | 分类/标签 | `list_categories`、`list_tags` | 同上 |
 | 公告 | `get_announcements` | 同上 |
@@ -477,6 +483,43 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 - **device_id 可省略**：自动选该用户第一个在线设备——多步工具链（先 list 再操作）是 IoT 工具失败的
   结构性原因（模型无法从 schema 知道运行时才有的 device_id，参数缺失时倾向文本声称），单步化后一次调用即成功。
 - **约束**：text ≤ 64 字符；30s 同内容去重；404 = 设备不存在或不属于当前用户。
+
+### 5.2 超长文章：分节渲染与按节取回（20260920）
+
+**问题不是"截断"，是"无声"**：`get_article_detail` 的全文帧超上限时按字符硬截，正文在一句话
+中间断掉，模型看不到"后面还有内容"、更看不到"缺的是哪几节"。实测站内最长文章 note 19
+= 25,445 字（详情 dict 的 repr 52,834 字——同一篇正文在 `noteContent` 与 `content` 两个键里
+各存一份），上限 20,000 ⇒ **§7-§10 四个整节从未进过任何一轮上下文**，而模型唯一的表述是
+"文档里没写"。旧实现还有两个更隐蔽的坑：repr 里换行是**字面 `\n`**（52834 字里真换行 0 个），
+按 `^#{1,3}` 切节会切出 0 节——"按小节告诉模型缺了什么"这件事在 repr 上根本做不出来。
+
+`agent/sections.py`（纯函数，无 IO 无 LLM）一条实现、三处共用：
+
+| 消费方 | 用途 |
+|---|---|
+| `rag/search.py::chunk_note` | BM25 索引切片（**只是转发**，只认 1-3 级、短文 <2000 不切都保持原样） |
+| `agent/context.py::_frame_texts` | 超限帧按**整节**取舍：装得下的整节保留，装不下的整节列在文末 |
+| `tools/base.get_article_detail(section=…)` | 按节取回被略去的那一节（三级指称：标题全称 / 编号"9" / 唯一子串；不唯一 → 返回候选清单而不是赌一个） |
+
+数据不变式：**"读到的一节"必须与"索引里的那一节"完全同边界**——三处各写一份切分逻辑，
+下场就是同一篇文章在检索里叫 §9、在取回时找不到 §9（本文件 §5.2 与 `test_sections.py` ① 锁住）。
+
+渲染侧帧长这样（实测 note 19，19,702 字 ≤ 20,000 上限）：
+
+```
+工具 get_article_detail 返回（原文 52834 字，超单帧上限，已按小节节选；未展开的小节见文末清单，可按需再读）: {'noteKey': 19, 'key': 19, 'noteTitle': '…', …}
+正文：
+## 1. 系统总览
+…（§1-§6.3 整节在）
+**以下小节尚未展开**：§6.4 生成有界性 / §6.5 技能注册表 + 受限规划 / §7. LLM 与配置 / §8. 前端看板娘 / §9. 部署与运维 / §10. 已知边界与坑
+（要读其中某一节：再调用一次 get_article_detail，带上本帧开头的 noteKey 与 section="<上面的小节名或编号>"，即可取回该节全文。）
+```
+
+配套：planner 规则加一条「超长文章按节补读」（**"只带回前几节"不等于"文章里没有"**）、
+narrator 加纪律 14（未展开的小节**没有读过**，不得引用、不得声称"全文都看了"，被问到就
+如实说可以再取一次）、trace 的 `planner.llm_done` 落 `frames_chars`（单帧上限 20000 是经验值，
+没有真实体量就无从判断该收该放）。退化路径都**有声**：无小节结构或单节自己就超上限 → 退回
+头截断并带上原文总长与成因。
 
 ---
 

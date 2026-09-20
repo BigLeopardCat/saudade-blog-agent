@@ -137,16 +137,54 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
         logger.error("Search failed: %s", exc)
         return unavailable(f"搜索服务暂时不可用（{type(exc).__name__}），请稍后再试")
 
+def _read_section(data: dict, article_id, want: str) -> ToolResult:
+    """按小节取回文章片段（get_article_detail 的 section 分支，20260920）。
+
+    返回仍是 **Python repr 的 dict**（与全文分支同形），两个键不能少：
+      - `noteTitle`：`agent/decisions.py::_doc_title` 从 repr 里正则抠它做跨轮
+        指代锚点（"读取文章 19《架构文档》"），换掉键名会让执行记忆只剩 id；
+      - `noteKey`/`sectionText`：planner 的"未展开小节"清单要照抄这个 id 再读一次。
+    取不到小节时**不返回空**：把候选小节名列出来才是可行动的（模型改一次指称即可），
+    说"没找到"而不给候选，等于让它再赌一次。
+    """
+    from agent.sections import candidates, pick     # 惰性：别让 tools 层启动即拉 agent 包
+    content = data.get("noteContent") or data.get("content") or ""
+    title = data.get("noteTitle") or data.get("title") or ""
+    hit = pick(content, want, title)
+    if hit is None:
+        return ok(str({
+            "noteKey": article_id, "noteTitle": title, "readSection": str(want),
+            "sectionText": "",
+            "availableSections": candidates(content, want, title)[:40],
+            "note": "该文章没有标题匹配此指称的小节（本节未读到任何内容）；"
+                    "可用小节见 availableSections，请照其中的名字或编号重试。",
+        }))
+    return ok(str({
+        "noteKey": article_id, "noteTitle": title, "readSection": hit["section"],
+        "sectionText": hit["text"],
+        "note": f"本节为节选读取（只含《{hit['section']}》这一小节，不含文章其他部分）。",
+    }))
+
+
 @tool
 def get_article_detail(
     article_id: Annotated[int, "文档的唯一 ID（note 为 noteKey，talk/board 为 talkKey，announcement 为 id）"],
     doc_type: Annotated[str, "文档类型：note（文章，默认）/ talk（说说）/ board（留言）/ announcement（公告）"] = "note",
+    section: Annotated[str, "只读该文章的某一小节（标题全称/编号/唯一子串，如 \"9\" 或 \"9. 部署与运维\"）；留空读全文"] = "",
 ) -> str:
-    """获取指定文档的完整内容（路线 B 契约的解读段：检索只定位、解读读全文）。
+    """获取指定文档的内容（路线 B 契约的解读段：检索只定位、解读读全文）。
     note 走 /notes/:id；talk/board/announcement 无单条详情端点，从列表接口按 key
-    过滤（列表已带全文，量小，全量扫描可接受）。"""
+    过滤（列表已带全文，量小，全量扫描可接受）。
+
+    `section`：文章过长时全文帧只带得回部分小节（帧尾会列出未展开的小节名），
+    用本参数按小节名取回被略去的那一节（20260920 超长文章修复的读取侧）。只对
+    note 生效——说说/留言/公告本来就是短文本。
+    """
     if doc_type == "note":
-        return _shape(_get(f"/notes/{article_id}"))
+        data = _get(f"/notes/{article_id}")
+        if not section or not isinstance(data, dict):
+            return _shape(data)          # 故障（unavailable）原样透出，不伪装成空
+        return _read_section(data, article_id, section)
     endpoint, key_field = {
         "talk": ("/talk", "talkKey"),
         "board": ("/board", "talkKey"),

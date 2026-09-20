@@ -60,3 +60,6 @@ jobs:
 
       - name: 侧任务单测（留言审核/对话摘要：不可信输入围栏 + 输出白名单 + 失败取向，秒级，假模型不联网）
         run: uv run python test_side_tasks.py
+
+      - name: 超长文章单测（分节/按节取回/帧节选：索引与渲染同一套节边界、不无声截断，秒级，纯函数不联网）
+        run: uv run python test_sections.py
