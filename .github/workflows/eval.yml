@@ -57,3 +57,6 @@ jobs:
 
       - name: 权限模型单测（scope 声明完备性/角色授予表/失败取向，秒级，纯函数）
         run: uv run python test_authz.py
+
+      - name: 侧任务单测（留言审核/对话摘要：不可信输入围栏 + 输出白名单 + 失败取向，秒级，假模型不联网）
+        run: uv run python test_side_tasks.py
