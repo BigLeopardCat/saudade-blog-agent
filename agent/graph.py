@@ -140,6 +140,11 @@ class AgentState(TypedDict):
                    累计）——参数引用（$tool[0].field，见 agent/refs.py）的取值
                    来源。与 receipts 的分工：receipts 是"系统验收过的事实"（给
                    narrator/跨轮记忆看），tool_data 是"下一步填参要用的数据"。
+    - fallback_text: gate fallback 的如实用语（20260920 补声明）。**必须显式声明**：
+                   LangGraph 只把 state schema 里声明过的 key 透出 updates 流，
+                   未声明的 key 会被静默丢弃 ⇒ server.py 的 `upd.get("fallback_text")`
+                   恒为假、`__RESET__` 永不发出、被 gate 否定的叙述照常展示并入库
+                   （20260903 起 2.5 周实际失效，见 _fallback_result 注释）。
     """
 
     messages: Annotated[list, add_messages]
@@ -155,6 +160,7 @@ class AgentState(TypedDict):
     issues: str
     reflect_end: bool
     tool_data: list[dict]
+    fallback_text: str
 
 
 # ---------------------------------------------------------------------------
@@ -867,6 +873,78 @@ def _false_negative_claim(reply: str, receipts_exist: bool) -> bool:
     return _clause_hits(reply, _NO_EXEC_CLAIM_RE, _NO_EXEC_EXEMPT_RE)
 
 
+# ── gate 1b：逐字复读上一轮回复（20260920）──────────────────────────────────
+# 纪律 11（"绝不把历史里自己的回复原文再输出一遍"）只是**软约束**，压不住：
+# 20260920 实证 narrator（温度 0.7）在"本轮用户消息模糊 + 上下文里摆着上轮一份
+# 完整答案"时会把上轮回复整段抄出来——11:15:44 那条与 11 小时前 00:23:52 那条
+# **逐字节相同**（781 字，difflib diff 为空）。0.7 采样自由生成撞出 781 字全同的
+# 概率可忽略 ⇒ 它是从注入历史（最近 20 条纯历史，那条回复正好落在窗口里）里抄的。
+# 抄写有机会是因为被 gate 否定的叙述仍进了历史（fallback_text channel 缺失，见
+# _fallback_result）；修好 channel 后本判据是第二道闸：**不许把复读当成回答**。
+# 判据（确定性、纯字面）：本轮回复与上一轮 assistant 回复的最长逐字连续片段
+# ≥ max(200 字, 60% × 本轮长度) ⇒ 复读。门槛刻意高（宁漏勿误伤）：**只抓"整段
+# 照抄"**。门槛由全量 trace 回放定（426 对相邻轮，见 eval 之外的一次性脚本能力）：
+# floor=80 命中 4 对，其中两对是 90 字级的"两次都回答我不会做饭/烤蛋糕"——同义
+# 寒暄撞同一句模板，应答本身合理，拦下来才是误伤；一对是用户点名重做（走
+# _REDO_REQUEST_RE 放行）；抬到 200 后只剩 1 对真复读（09-05T19:10:07，489 字
+# 逐字照抄）。合理复用（引用同一段工具返回、复述要点的两三句）远达不到门槛。
+# 代价：≤200 字的回复不判复读——短回复的整段重合几乎都是模板复用，宁漏勿误伤。
+# 与 _repeat_ask_note（server.py：用户**原句重发**时注入提示）分工不同——那个管
+# 输入端（让模型别复读），本判据管输出端（真复读了就拦），触发条件也无关。
+_REPEAT_MIN_RUN = 200
+_REPEAT_COVER = 0.6
+
+# 用户点名要求重做/重发 → 本轮高重合是**被要求的**，不得判复读（20260916 09:25:34
+# 实证：用户说"flowchart 换回 graph 试试"，回复把 1400 字 mermaid 图原样重画、
+# 只换了栅栏语言与开头一句——那是正确行为，拦下来等于把用户点名要的东西吞掉）。
+# 只用于**放行**（宁漏勿误伤）：用户没这么说而复读 = 真复读。
+_REDO_REQUEST_RE = re.compile(
+    r"再(?:画|说|写|发|来|贴|试)|重新|重来|重发|重画|换个|换成|换回|换用|换一版|"
+    r"改成|改一下|改一版|另一(?:个|种|版)|同一(?:个|张)图")
+
+
+def _prev_ai_reply(msgs: list) -> str:
+    """上一轮 assistant 回复原文：当前用户消息之前的最近一条 AI 消息。
+
+    注入历史形状 = [System 上下文 Human] + 历史(Human/AI 交替) + 当前 Human +
+    本轮工具帧 + 本轮 AI 回复——从末尾往前先定位"当前用户消息"（最后一条非
+    `[System:` 的 HumanMessage），再往前找最近的 AIMessage：它就是"用户这句话
+    在回答的那一轮"，也才是"复读"该对比的对象（更早的轮次不比对，避免长会话里
+    翻旧账误伤）。无则返回空串（首轮无对比对象，判据自动放行）。
+    """
+    cur = None
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
+        if isinstance(m, HumanMessage) and not (_msg_text(m) or "").lstrip().startswith("[System:"):
+            cur = i
+            break
+    if cur is None:
+        return ""
+    for m in reversed(msgs[:cur]):
+        if isinstance(m, AIMessage):
+            return (_msg_text(m) or "").strip()
+    return ""
+
+
+def _repeat_of_prev_reply(reply: str, prev: str, user_msg: str = "") -> bool:
+    """本轮回复是否逐字复读上一轮回复（门槛见 _REPEAT_MIN_RUN 注释）。
+
+    实现是最朴素的滑窗：取较短文本为窗口源、较长者为被查串，窗口长度 = 门槛，
+    首个命中即判真（只需"是否达到门槛"，不求真正的最长值）。回复量级千字、
+    str 查找是 C 级，无需后缀自动机。`user_msg` 带重做语（_REDO_REQUEST_RE）时
+    直接放行——那是照办，不是复读。
+    """
+    if not reply or not prev:
+        return False
+    if user_msg and _REDO_REQUEST_RE.search(user_msg):
+        return False
+    short, long_ = (reply, prev) if len(reply) <= len(prev) else (prev, reply)
+    thr = max(_REPEAT_MIN_RUN, int(len(reply) * _REPEAT_COVER))
+    if len(short) < thr:
+        return False
+    return any(short[i:i + thr] in long_ for i in range(len(short) - thr + 1))
+
+
 def _site_search_claim(text: str, exec_memory: bool) -> bool:
     """站内检索声称（gate 洞②）：站内内容域检索完成式表述。
 
@@ -956,6 +1034,11 @@ _FALLBACK_NO_EXEC = (
     "『压根没查』，这是我的错 :委屈: 要我再换一组关键词查一遍嘛？这次查到什么、"
     "没查到什么都如实告诉你喵。")
 
+_FALLBACK_REPEAT = (
+    "喵呜……主人，我刚刚差点把上一轮的回复原样再贴一遍——那样等于没回答你。这一轮"
+    "我没有新东西可补充，就不复读了 :委屈: 你要我**重新查一遍**，还是想问我哪一点？"
+    "说一声我马上照做喵。")
+
 _FALLBACK_EMPTY = (
     "喵呜……主人，我刚才好像卡住了，没能说出话来。可以再问我一次嘛？这次我让"
     "系统查清楚了再好好回答～")
@@ -984,6 +1067,15 @@ def _fallback_result(issue: str, text: str, plan: dict, frames: int) -> dict:
     返回带 done=True + [Fallback 决定] SystemMessage + fallback_text 的 state
     更新——server.py 据此执行 __RESET__ + 以 fallback 文本作为最终回复
     （fallback 是给访客的如实回复，不是"修正要求"——与旧 REVISE 语义不同）。
+
+    20260920 修复：`fallback_text` 此前**未在 AgentState 声明**，LangGraph 只透出
+    schema 里声明过的 key ⇒ 该字段被静默丢出 updates 流、server.py 的
+    `upd.get("fallback_text")` 恒为假——`__RESET__` 从未发出、fallback 文本从未替换
+    最终回复（20260903 起 2.5 周内所有 gate fallback 在 /chat/stream 与 golden 上
+    全程失效）。后果不止"少一次替换"：被否定的叙述照常展示**并作为最终回复存入
+    chat_history**，下一轮随历史注入又成为 narrator 自己的范文——20260920 实证四代
+    克隆链，末两代一条 781 字回复与 11 小时前那条**逐字节相同**（见
+    _REPEAT_MIN_RUN 注释）。声明见 AgentState 的 fallback_text 字段。
     """
     record("gate", "fallback", issue=issue, skill=plan["skill"], frames=frames)
     logger.info("[gate] fallback（%s）: skill=%s frames=%d", issue, plan["skill"], frames)
@@ -1765,6 +1857,18 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     if not reply:
         return _fallback_result("empty_reply", _FALLBACK_EMPTY, plan, len(frames))
 
+    # ── 1b. 逐字复读上一轮回复（任何轮次，20260920，见 _REPEAT_MIN_RUN 注释）──
+    # 排在 2/3（声称/URL）之前：复读是**整段照抄**，比它夹带的单句声称更该先报——
+    # 否则一条复读里的旧声称会按**本轮**帧去判，issue 名报成编造而非复读，把
+    # "抄了自己"这个真信号淹掉（00:23:52 那条就是被记成 phantom_search_claim）。
+    # 用户点名要求重做/重发（_REDO_REQUEST_RE）时判据自行放行——重合是被要求的。
+    prev_reply = _prev_ai_reply(msgs)
+    if _repeat_of_prev_reply(reply, prev_reply, _last_user_msg(msgs)):
+        logger.info("[gate] 回复逐字复读上一轮（本轮 %d 字 / 上轮 %d 字，门槛 %d）→ fallback",
+                    len(reply), len(prev_reply),
+                    max(_REPEAT_MIN_RUN, int(len(reply) * _REPEAT_COVER)))
+        return _fallback_result("repeat_prev_reply", _FALLBACK_REPEAT, plan, len(frames))
+
     # ── 2. 命令前缀文本（任何轮次，正文出现命令帧前缀 = 假装发命令）─────────
     # ── 3. 编造资源 URL（任何轮次，工具返回/用户消息中不存在的 /api 或图片）──
     issue = _claim_issue(reply, plan["skill"], plan, bool(frames), _has_exec_memory(msgs))
@@ -1945,4 +2049,4 @@ def graph_input(messages: list) -> dict:
     return {"messages": messages, "plan": "", "plan_rounds": 0, "done": False,
             "executed": [], "receipts": [], "blocked": [], "blocked_seen": [],
             "blocked_repeat": False, "reflect_rounds": 0, "issues": "",
-            "reflect_end": False, "tool_data": []}
+            "reflect_end": False, "tool_data": [], "fallback_text": ""}
