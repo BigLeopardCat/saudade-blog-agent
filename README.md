@@ -53,7 +53,7 @@ saudade-blog-agent/
 ├── models/llm.py           # LLM 工厂：provider 三选一（qwen/deepseek/openai）
 ├── tools/base.py           # 22 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重
 ├── utils/                  # logging（trace_id/日志）+ trace（对话 trace 落盘）+ tts（未启用）+ helpers
-├── eval/                   # 评测：golden set（77 条）+ run_golden.py（L2 任务级，真实 LLM）
+├── eval/                   # 评测：golden set（78 条）+ run_golden.py（L2 任务级，真实 LLM）
 │   │                       #       + golden_case_runner.py/golden_full_run.py（进程隔离跑法）
 │   │                       #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 │   │                       #       + judge_offline_test.py（判据离线自测）+ trace_metrics.py/trace_alert.py（trace 指标与语义巡检）
@@ -130,7 +130,7 @@ planner 注入时自动带描述）。**可规划性由白名单决定（2026090
 .venv/bin/python test_hardening.py            # L0：秒级（TLS 校验/输入限额/体积闸/并发闸/工具返回三类/身份断言/幂等并发/RAG 两态）
 .venv/bin/python test_cancel.py               # L0：秒级（协作取消：五节点入口/写操作零调用/中途取消/LLM 阻塞期间的能力边界）
 .venv/bin/python test_entities.py             # L0：秒级（数据工具回执的实体摘要：序号/计数/候选照抄，解析失败给空摘要，planner 规则 6b 契约在位）
-.venv/bin/python eval/run_golden.py           # L2：77 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答/执行记忆）；--limit N / --only <id1,id2> 单跑
+.venv/bin/python eval/run_golden.py           # L2：78 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答/执行记忆）；--limit N / --only <id1,id2> 单跑
 .venv/bin/python eval/golden_full_run.py      # L2 进程隔离全量跑（逐条独立进程 + 180s 超时，防悬挂污染）
 .venv/bin/python eval/recall_eval.py          # L1 检索：recall@k/MRR（21 条 queries = 12 正例 + 9 噪声）
 ```
@@ -138,7 +138,7 @@ planner 注入时自动带描述）。**可规划性由白名单决定（2026090
 - **CI（`.github/workflows/eval.yml`）**：push 跑上面五个秒级套件（L0）。
 - **golden 全量（L2）不进 CI（20260920 撤下）**：CI 侧那条 LLM 腿每次调用先吊住（3 条本机
   39 秒的用例在 CI 跑 21 分钟未完）、一次 120 分钟的全量跑被杀且零产出、且诊断出 CI 凭据
-  `401 invalid_api_key`。全量改为**本机按需手动跑**（本机即生产服务器，链路真实，77 条约 19 分钟）：
+  `401 invalid_api_key`。全量改为**本机按需手动跑**（本机即生产服务器，链路真实，78 条约 19 分钟）：
   `.venv/bin/python eval/run_golden.py`（`--limit N` / `--only a,b`）或
   `.venv/bin/python eval/golden_full_run.py`（进程隔离 + 单条 180s 超时）。
 - **门禁分两层判（20260921）**：`tags` 含 `regression` 的用例（16 条：防幻觉/契约/撤回话术/
