@@ -16,6 +16,12 @@
 #   QUALITY_GATE_API_KEY  质量门禁专用 LLM key（北美可达，与服务器 .env 的 key 可不同）
 #   QUALITY_GATE_BASE_URL 对应的 OpenAI 兼容 base url
 # 可选 Variables：GOLDEN_MIN_PASS_RATE（默认 0.9）、QWEN_MODEL（默认 qwen3.8-flash）
+#
+# 手动触发：
+#   gh workflow run eval.yml                                     # 全量 golden + 秒级套件
+#   gh workflow run eval.yml -f run_golden=false                 # 只跑秒级套件
+#   gh workflow run eval.yml -f golden_args="--only a,b"         # 指定用例（链路诊断）
+#   gh workflow run eval.yml -f golden_args="--limit 3"          # 前 3 条
 name: Eval Gate
 
 on:
@@ -30,6 +36,10 @@ on:
         description: "跑 golden 评测集（真实 LLM；通过率可信，耗时不可比）"
         type: boolean
         default: true
+      golden_args:
+        description: "追加给 run_golden.py 的参数（如 --only a,b 或 --limit 3 做链路诊断）；留空=全量"
+        type: string
+        default: ""
 
 jobs:
   eval:
@@ -86,9 +96,12 @@ jobs:
           # （device_* 三条断言的仍是"回复不许谎称已显示"，本机全量跑覆盖真机路径）
           SKIP_IDS: device_display_request,device_display_negative,device_query
           MIN_PASS_RATE: ${{ vars.GOLDEN_MIN_PASS_RATE || '0.9' }}
+          # 20260920：非 TTY 下 Python 是块缓冲——上次 120 分钟超时被杀时，
+          # 整轮用例输出（约 7KB，正好卡在 8KB 缓冲之下）一条都没留下。
+          PYTHONUNBUFFERED: "1"
         run: |
-          uv run python eval/run_golden.py \
-            --skip-ids "$SKIP_IDS" --min-pass-rate "$MIN_PASS_RATE"
+          uv run python -u eval/run_golden.py \
+            --skip-ids "$SKIP_IDS" --min-pass-rate "$MIN_PASS_RATE" ${{ inputs.golden_args }}
 
       - name: 上传评测报告（含 FAIL 复审单；失败也要看到失败细节）
         if: always()
