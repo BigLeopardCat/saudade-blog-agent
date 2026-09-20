@@ -30,6 +30,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 
 from agent import create_agent
 from agent.graph import AgentCancelled, graph_input
+from agent.principal import Principal
 from agent.skills import NAV_MAP  # 过程行路径反查中文别名用（展示层，非执行依据）
 from rag import search as rag_search, wordgraph
 from utils import setup_logging
@@ -241,7 +242,19 @@ def _verify_user_assertion(token: str) -> int | None:
     """验 Rust 签的身份断言，返回其中的用户 id；任何一步不成立返回 None。
 
     手写 HS256 校验（与 tools/base.py 的 `_sign_user_jwt` 同源）：只为一条内部断言
-    引一个 JWT 依赖不值得，而 python 标准库就够（hmac + base64 + json）。"""
+    引一个 JWT 依赖不值得，而 python 标准库就够（hmac + base64 + json）。
+    """
+    claims = _verify_assertion_claims(token)
+    return claims["uid"] if claims else None
+
+
+def _verify_assertion_claims(token: str) -> dict | None:
+    """验签并返回断言的声明（uid + role）；任何一步不成立返回 None。
+
+    role 是 20260920 加的（秘书类功能地基：agent 侧要知道"我代表的是谁、他能
+    让我做什么"）。**Rust 还没部署带 role 的断言时这里是 None**，由调用方按
+    "身份不明"处理（agent/authz.py：零权限 + shadow 只记不拦），不做任何默认授予。
+    """
     try:
         from config.settings import settings
         secret = (settings.jwt_secret or "").encode()
@@ -259,26 +272,42 @@ def _verify_user_assertion(token: str) -> int | None:
         if float(payload.get("exp") or 0) < time.time():
             return None
         uid = int(payload.get("sub") or 0)
-        return uid if uid > 0 else None
+        if uid <= 0:
+            return None
+        role = payload.get("role")
+        return {"uid": uid, "role": str(role) if role else None}
     except Exception:
         return None
 
 
-def _resolve_user_id(request: Request, body_uid: int) -> int:
-    """以签名为准解析调用者身份（见上面注释）。"""
+def _resolve_principal(request: Request, body_uid: int) -> Principal:
+    """以签名为准解析调用者身份（uid + role），返回显式 principal（见上面注释）。
+
+    秘书类功能的地基：把"谁在说话、他能让我做什么"从到达图之前就固定下来。
+    role 只认签名里的（Rust 从 DB 查、不信登录 token 里的旧角色，与
+    middleware.rs 同一条纪律）——**回退信任 body 的分支里 role 恒为 None**，
+    绝不因为"读不到角色"就默认授予任何权限。
+    """
+    from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
     from config.settings import settings
     token = request.headers.get(_ASSERTION_HEADER) or ""
-    uid = _verify_user_assertion(token) if token else None
-    if uid is not None:
-        if uid != body_uid:
-            logger.warning("[auth] 断言覆盖 body.user_id：%s → %s（body 不可信）", body_uid, uid)
-        return uid
+    claims = _verify_assertion_claims(token) if token else None
+    if claims:
+        if claims["uid"] != body_uid:
+            logger.warning("[auth] 断言覆盖 body.user_id：%s → %s（body 不可信）",
+                           body_uid, claims["uid"])
+        return Principal(uid=claims["uid"], role=claims["role"], source=SOURCE_ASSERTION)
     if settings.agent_require_assertion:
         logger.warning("[auth] 缺少/无效身份断言（%s）→ 401", "无头" if not token else "验签失败")
         raise HTTPException(401, "缺少有效的服务间身份断言")
     if token:
         logger.warning("[auth] 身份断言验签失败，回退信任 body.user_id=%s", body_uid)
-    return body_uid
+    return Principal(uid=body_uid, role=None, source=SOURCE_BODY)
+
+
+def _resolve_user_id(request: Request, body_uid: int) -> int:
+    """uid 版（保留给只关心 uid 的调用方/测试）；语义与 _resolve_principal 一致。"""
+    return _resolve_principal(request, body_uid).uid
 
 
 def _build_messages(req: ChatRequest) -> list:
@@ -368,12 +397,16 @@ def _build_messages(req: ChatRequest) -> list:
     return messages
 
 
-def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0) -> tuple[str, str, list]:
+def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
+                    principal: Principal | None = None) -> tuple[str, str, list]:
     """Run agent synchronously in a thread. Returns (reply, nav_line, exec_rows)."""
     # user_id 注入 configurable：设备类工具（list_devices/device_oled_display）
     # 经 RunnableConfig 读取并以用户身份签发 JWT 调用 device-service
+    # principal 一并注入：execute 的权限判据读它（agent/authz.py；缺省 = 身份不明）
     # recursion_limit 覆盖默认 9999（等效无界）：幻觉重试循环有界
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}, "recursion_limit": RECURSION_LIMIT}
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id,
+                               "principal": principal or Principal(uid=user_id)},
+              "recursion_limit": RECURSION_LIMIT}
     full_reply = ""
     nav_line = ""
     exec_rows: list = []  # 跨轮执行记忆（20260904 C3）：checker 验收回执，累计语义末批即全量
@@ -452,7 +485,8 @@ def _summarize_dialogue(user_msg: str, history: list[HistoryItem], old_summary: 
 async def chat(req: ChatRequest, request: Request):
     if _agent is None:
         raise HTTPException(503, "Agent not initialised")
-    req.user_id = _resolve_user_id(request, req.user_id)
+    principal = _resolve_principal(request, req.user_id)   # 身份以签名为准（见 _resolve_principal）
+    req.user_id = principal.uid
 
     messages = _build_messages(req)
     # 每请求独立线程：LangGraph 的 MemorySaver 线程状态会随对话无限累积，
@@ -471,7 +505,7 @@ async def chat(req: ChatRequest, request: Request):
                 loop, _summarize_dialogue, req.message, req.history, req.summary
             )
         reply, nav_line, exec_rows = await _submit_with_context(
-            loop, _run_agent_sync, messages, thread_id, req.user_id)
+            loop, _run_agent_sync, messages, thread_id, req.user_id, principal)
         new_summary = None
         if summary_task is not None:
             new_summary = (await summary_task).strip() or None
@@ -633,12 +667,15 @@ def _specs_from_plan(plan: str) -> list:
 
 
 def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Queue, loop, user_id: int = 0,
-                               stop_event: threading.Event | None = None):
+                               stop_event: threading.Event | None = None,
+                               principal: Principal | None = None):
     """Run agent in a thread, push each chunk into an asyncio.Queue."""
     # user_id 注入 configurable（设备类工具经 RunnableConfig 读取，见 _run_agent_sync 注释）；
     # stop_event 一并注入——图内 model/tools 节点检查它实现断连中断（见 graph.AgentCancelled）
+    # principal 一并注入（权限判据的输入，见 _run_agent_sync 注释）
     # recursion_limit 覆盖默认 9999（等效无界，见 _run_agent_sync 注释）
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "stop_event": stop_event},
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "stop_event": stop_event,
+                               "principal": principal or Principal(uid=user_id)},
               "recursion_limit": RECURSION_LIMIT}
     try:
         # 双 stream_mode：
@@ -825,7 +862,8 @@ async def chat_stream(req: ChatRequest, request: Request):
                 req.user_id, (req.message or "")[:40], req.needs_summary)
     if _agent is None:
         raise HTTPException(503, "Agent not initialised")
-    req.user_id = _resolve_user_id(request, req.user_id)   # 身份以签名为准（见 _resolve_user_id）
+    principal = _resolve_principal(request, req.user_id)   # 身份以签名为准（见 _resolve_principal）
+    req.user_id = principal.uid
     # 并发闸（20260916 加固）：LLM 流是最贵的资源（单次最长 180s），无闸时并发涌进来
     # 只会一起排队到超时。**只加在生产路径 /chat/stream 上**——`/chat` 是非流式直连
     # 入口（评测脚本/golden 用，线上 rust.log 实测零访问），不占这条预算。
@@ -888,7 +926,8 @@ async def chat_stream(req: ChatRequest, request: Request):
         # 并发启动生产者（不要 await 完成！否则所有 chunk 会在队列里攒到
         # 生成结束才一次性下发，等于没有流式）——边生成边推送
         producer_task = _submit_with_context(
-            loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id, stop_event
+            loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id, stop_event,
+            principal
         )
 
         # 可观测性：请求生命周期账本（帧数/退出原因，finally 汇总）
