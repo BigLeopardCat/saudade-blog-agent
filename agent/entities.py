@@ -50,10 +50,28 @@ def _parse(result: str):
             return None
 
 
+_BRACKET_PAIRS = (("《", "》"), ("「", "」"), ("（", "）"), ("【", "】"), ("(", ")"), ("[", "]"))
+
+
 def _clip(text, n: int) -> str:
-    """单行化 + 去引号（「」由摘要自己加）+ 截断。"""
+    """单行化 + 去引号（「」由摘要自己加）+ 截断。
+
+    截断点落在**成对括号内**时退回括号前（20260921 线上实测：《Saudade Blog AI Agent
+    （泠月喵）架构文档》按 22 字截成 `Saudade Blog AI Agent（`，回执里出现
+    `19《Saudade Blog AI Agent（》`——书名号里挂着半个圆括号，读起来像数据坏了）。
+    宁可少几个字，也不要留半个括号。
+    """
     s = re.sub(r"\s+", " ", str(text or "")).strip()
-    return s[:n]
+    if len(s) <= n:
+        return s
+    cut = s[:n]
+    for op, cl in _BRACKET_PAIRS:
+        while cut.count(op) > cut.count(cl):
+            i = cut.rfind(op)
+            if i <= 0:
+                break
+            cut = cut[:i]
+    return cut.rstrip(" \t·、,，-—")
 
 
 def _rows(data, key: str = "") -> list:

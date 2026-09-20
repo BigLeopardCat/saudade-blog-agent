@@ -63,6 +63,17 @@ check("候选类同样支持 list_notes/get_top_notes", receipt_digest("list_not
 a = receipt_digest("get_announcements", ANNOUNCE)
 check("公告摘要含标题与日期", "公告" in a and "2026-08-07" in a, a)
 
+print("③b 标题截断不留半个括号（20260921 线上回执实测）")
+_LONG_TITLE = """[{'noteKey': 19, 'key': 19, 'noteTitle': 'Saudade Blog AI Agent（泠月喵）架构文档', 'description': 'x'}]"""
+lt = receipt_digest("search_notes", _LONG_TITLE)
+check("长标题截断后不留悬空的「（」", "（》" not in lt and "（" not in lt, lt)
+check("截断处仍是完整词（退回括号前）", "19《Saudade Blog AI Agent》" in lt, lt)
+check("短标题原样（不受影响）", "14《ESP32-S3-OBC固件接入参考》" in receipt_digest("search_notes", NOTES),
+      receipt_digest("search_notes", NOTES))
+_BAL = """[{'noteKey': 30, 'key': 30, 'noteTitle': '一个括号（带说明）完整闭合的超长标题示例文本', 'description': 'x'}]"""
+_bl = receipt_digest("search_notes", _BAL)
+check("括号已闭合的标题照常按字数截断", "30《" in _bl and "（》" not in _bl, _bl)
+
 print("④ 不该有摘要的一律空串（退化为改动前行为，绝不猜）")
 for tool, payload in [("navigate_to", "NAVIGATE:/talk"), ("list_devices", "设备1（在线）\n设备2（离线）"),
                       ("get_current_time", "2026年09月20日 星期日 19:30"),

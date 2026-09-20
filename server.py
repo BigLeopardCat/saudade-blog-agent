@@ -860,6 +860,9 @@ async def chat_stream(req: ChatRequest, request: Request):
         start_trace(get_trace_id(), req.user_id, thread_id, {
             "message": (req.message or "")[:200], "has_image": bool(req.image),
             "needs_summary": bool(req.needs_summary), "history_len": len(req.history),
+            # 本轮是否带跨轮执行回执（gate 的"回执豁免"就靠这个事实，判据复扫时
+            # 没有它就只能反推——20260921 补记，见 _state_action_claim 注释）
+            "has_exec": bool(req.executions),
         })
     except Exception:
         _release_slot()
