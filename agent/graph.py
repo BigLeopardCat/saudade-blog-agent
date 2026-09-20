@@ -67,7 +67,8 @@ from models import get_llm
 from tools import get_all_tools
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _doc_anchors, _frame_texts, _has_frames, _last_user_msg,
-                           _msg_text, _page_ctx, _receipts_text, _recent_tail)
+                           _msg_text, _page_ctx, _receipts_text, _recent_tail,
+                           _short_reply_hint)
 from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
                              _effect_switch_fast_path, _intent_done, _intent_hints,
@@ -211,6 +212,10 @@ _PLANNER_PROMPT = """\
 
 {recent_context}
 
+短应答提示（当前消息只是"要/好/不用了/算了"这类短应答时，这里给出它所承接的
+上一轮泠月发言与判定方向；不是短应答则为缺省语）：
+{short_reply_hint}
+
 {tool_results}
 
 本轮已执行工具的**可引用字段**（参数引用的取值来源，见规则 3b——字段名照抄，
@@ -223,6 +228,11 @@ _PLANNER_PROMPT = """\
 
 判定规则：
 1. 决策类型（SKILL）：
+   - **短应答先还原语义**：消息只是"要/好/可以/不用了/算了"这类短应答时（上方
+     短应答提示会点明），它**不是新话题**——含义由上一轮泠月的发言决定：同意/
+     要求继续 → 把泠月提议的那件事真的规划出来执行（该点名的工具照常点名），
+     不得只口头答应；拒绝/收回 → 本轮零调用收尾，简短确认不做，不得再执行那个
+     动作也不得声称做了什么。禁止拿短应答去检索或答别的内容。
    - chat：纯闲聊/问候/情感/通用知识——与博客任何内容（文章/说说/留言/公告/
      站点信息/功能页面）无关时才用。
    - content_query：一切与博客内容有关的询问与核实（文章/说说/留言/公告/站点
@@ -1150,6 +1160,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 逐条回复反推出来的）。只记首轮（三者不随轮次变），控体积。
         record("planner", "context", page_ctx=page_ctx[:1500],
                recent_tail=_recent_tail(state["messages"])[:900],
+               short_reply=_short_reply_hint(state["messages"])[:400],
                doc_anchors=doc_anchors[:600])
 
     # 轮次上限 → 强制收尾（不再规划新调用；帧内容足够就让 narrator 如实作答）
@@ -1211,6 +1222,11 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             intent_hints=_intent_hints(state.get("executed") or [], user_msg),
             doc_anchors=doc_anchors,
             recent_context=_recent_tail(state["messages"]),
+            # 短应答提示只在首轮（rounds==0）给：第二轮起本轮已有工具帧，短应答
+            # 的语义已由第一轮的规划兑现，再念一遍"把提议那件事规划出来"只会
+            # 诱导重复规划（同一件事已经执行过一次了）。
+            short_reply_hint=(_short_reply_hint(state["messages"]) if rounds == 0
+                              else "（非首轮决策：短应答语义已在上轮兑现）"),
             tool_results=_frame_texts(state["messages"]),
             # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
             # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）

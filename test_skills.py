@@ -1853,6 +1853,85 @@ def test_doc_anchors_and_clip():
     check("节选：长回复中段点名的文档不丢", "架构文档" in tail)
 
 
+def test_short_reply_and_adjacent_pairs():
+    """邻接对节选 + 短应答解析（20260920 批次 b）。
+
+    动机：planner 是单消息决策，历史原先以平铺人机行出现——"要"/"不用了"这类
+    **本身不含意图**的短消息，要靠数行位去推断它接的是哪句提议，实测常被当成
+    新话题（从零检索/答非所问）。现在 ① 节选按一问一答成对渲染并标出最近一轮，
+    ② 新增确定性短应答判定（同意 → 把泠月提议的那件事真的规划出来执行；
+    拒绝 → 零调用收尾、绝不执行），提示里直接给出被承接的那句泠月发言。
+    """
+    from agent.context import (_last_assistant_utterance, _recent_tail,
+                               _short_reply_hint, _short_reply_kind)
+
+    # —— 短应答分类 ——
+    for t in ("要", "好", "好的", "那好的", "查", "查一下", "嗯嗯", "继续吧", "麻烦你了"):
+        check(f"短应答·同意「{t}」", _short_reply_kind(t) == "pos", _short_reply_kind(t))
+    for t in ("不用了", "不用", "那算了", "算了，不用", "别了", "先不用", "没事了"):
+        check(f"短应答·拒绝「{t}」", _short_reply_kind(t) == "neg", _short_reply_kind(t))
+    # 非短应答：长句 / 别的话题 / 近似但不同的句子都不许误判成应答
+    for t in ("帮我看看《架构文档》里快道怎么写的", "你好呀小猫咪", "要的是哪一篇来着",
+              "把樱花打开", "不用麻烦了，我自己去看那篇文章就好"):
+        check(f"非短应答「{t[:12]}」", _short_reply_kind(t) == "", _short_reply_kind(t))
+
+    # —— 邻接对节选 ——
+    hist = [
+        HumanMessage(content="[System: page=https://saudade.site/; current_effects=none]"),
+        HumanMessage(content="去看你的项目文档"),
+        AIMessage(content="我读了《AI Agent 架构文档》(id=19)：快道是零 LLM 的确定性决策"),
+        HumanMessage(content="你看了吗就说没写"),
+    ]
+    tail = _recent_tail(hist)
+    check("邻接对：一问一答同行成对",
+          "[上1轮] 用户：去看你的项目文档" in tail and "泠月：我读了《AI Agent 架构文档》" in tail)
+    check("邻接对：当前消息不入节选", "你看了吗就说没写" not in tail)
+    check("邻接对：注入的页面上文不占轮次", "[System:" not in tail)
+    check("邻接对：最近一轮标出应答关系", "← 当前这条消息就是对这句的回应" in tail)
+    check("邻接对：无更早轮次给缺省语",
+          _recent_tail([HumanMessage(content="你好")]).startswith("最近对话节选：（无更早轮次）"))
+
+    hist2 = [HumanMessage(content="第一句"), AIMessage(content="第一答"),
+             HumanMessage(content="第二句"), AIMessage(content="第二答"),
+             HumanMessage(content="当前")]
+    t2 = _recent_tail(hist2)
+    check("邻接对：多轮按时间正序、上N编号正确",
+          "[上2轮]" in t2 and "[上1轮]" in t2 and t2.index("第一句") < t2.index("第二句"))
+    check("邻接对：标记落在最近一轮（不是更早轮）",
+          t2.index("第二答") < t2.index("← 当前这条消息"))
+    check("最近泠月发言：取当前消息之前的那条", _last_assistant_utterance(hist2) == "第二答")
+    check("最近泠月发言：无历史给空", _last_assistant_utterance([HumanMessage(content="你好")]) == "")
+
+    # —— 短应答提示（同意 / 拒绝 两条相反指令）——
+    proposal = [HumanMessage(content="有没有关于 OTA 的文章"),
+                AIMessage(content="站内有《ESP32-S3 OBC 固件接入参考》。"
+                                  "要我把它的 OTA 章节读一遍给你讲讲吗？")]
+    pos = _short_reply_hint(proposal + [HumanMessage(content="要")])
+    check("短应答提示·同意：给出被承接的泠月发言", "要我把它的 OTA 章节读一遍" in pos)
+    check("短应答提示·同意：要求真的规划执行（不得只口头答应）",
+          "同意" in pos and "规划" in pos and "不得只口头答应" in pos)
+    neg = _short_reply_hint(proposal + [HumanMessage(content="不用了")])
+    check("短应答提示·拒绝：零调用收尾", "拒绝" in neg and "不规划任何工具" in neg)
+    check("短应答提示：非短应答给缺省语",
+          _short_reply_hint(proposal + [HumanMessage(content="那《架构文档》里怎么写的？")])
+          == "（当前消息不是短应答）")
+    # 模板占位符即契约：多一个少一个都在这里红（漏传 → 运行时 KeyError）
+    from string import Formatter
+    import agent.graph as g
+    fields = {f for _, f, _, _ in Formatter().parse(g._PLANNER_PROMPT) if f}
+    check("planner 模板占位符集合与注入点一致（短应答块已接入）",
+          fields == {"skills_context", "tools_desc", "page_ctx", "intent_hints", "doc_anchors",
+                     "round_info", "recent_context", "short_reply_hint", "tool_results",
+                     "ref_hints", "reflector_feedback", "max_rounds", "user_msg"},
+          f"fields={sorted(fields)}")
+    check("planner 模板：短应答块在节选之后、工具结果之前",
+          g._PLANNER_PROMPT.index("{recent_context}")
+          < g._PLANNER_PROMPT.index("{short_reply_hint}")
+          < g._PLANNER_PROMPT.index("{tool_results}"))
+    check("planner 规则 1 含短应答纪律",
+          "短应答先还原语义" in g._PLANNER_PROMPT and "不是新话题" in g._PLANNER_PROMPT)
+
+
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
@@ -1864,7 +1943,8 @@ def main():
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
                test_search_retry_kind, test_candidate_relevance_pick,
-               test_scan_action_intents, test_doc_anchors_and_clip):
+               test_scan_action_intents, test_doc_anchors_and_clip,
+               test_short_reply_and_adjacent_pairs):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
