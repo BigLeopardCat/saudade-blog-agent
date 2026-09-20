@@ -296,7 +296,15 @@ _PLANNER_PROMPT = """\
      ① 你从工具返回帧里读出 id 后把它写成字面值；② 直接写参数引用让系统去取。
      机制型候选多篇时优先读「参考/接入/指南/
      实现」类文档；「问题与解决记录/踩坑/FAQ」类是经验记录，仅当确实记载所问
-     事实时引用。检索零结果应变（至多补一轮）：
+     事实时引用。
+   - **超长文章按节补读**（20260920）：工具返回帧若标注"超单帧上限，已按小节节选"、
+     文末还列了「以下小节尚未展开」，说明这一篇**只带回了前几节**。要回答的问题
+     若落在未展开的小节里（或没展开的节标题正是用户所问），下一轮补一次 PARAMS.calls：
+     `get_article_detail`，article_id 取该帧里的 noteKey（可写参数引用），
+     section 写清单里的小节名或编号（如 "9" 或 "9. 部署与运维"）——一次读一节，
+     读到能作答就收尾。**"只带回前几节"不等于"文章里没有"**：不得据此说"文档里
+     没写"（这正是旧版无声截断留下的坑）；反过来，帧里已经展开的小节不要再读一遍。
+   - 检索零结果应变（至多补一轮）：
      a) 换 rag_search 语义检索一次；仍无 → b) 关键词换用户原词的变体再
      search_notes 一次（中文词零结果时保留数字/字母试原文，如"测试4"→"test4"；
      去掉口语缀词）；仍无 → c) 收尾如实告知"站内没有找到"，不得用记忆硬答
@@ -425,7 +433,8 @@ _TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 doc
     "search_notes": "按关键词搜文章（标题+内容），返回候选列表（含 id/标题/描述/封面）",
     "rag_search": "语义相关度检索（BM25），返回行式候选（type/id/score/标题/命中节，"
                   "用于定位，不给全文）",
-    "get_article_detail": "读指定文档全文（doc_type=note|talk|board|announcement；"
+    "get_article_detail": "读指定文档（doc_type=note|talk|board|announcement；超长文章"
+                          "只带回部分小节时用 section 补读被略去的某一节；"
                           "article_id 只能取上一轮工具返回中的真实 id，或直接写引用 "
                           "$<工具名>[<序号>].<字段>，见规则 3b）",
     "list_notes": "分页列文章",
@@ -1336,6 +1345,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
            else "本轮尚无工具执行，是首轮决策。"))
     _t0 = time.monotonic()
     logger.info("[planner] LLM 调用开始（round %d/%d）", rounds + 1, MAX_PLAN_ROUNDS)
+    # 工具帧文本先算一次（下面 format 里要用，trace 里也要记长度）——20260920 起
+    # 落 `frames_chars`：单帧上限 20000 是拍出来的经验值，没有真实体量数据就无法
+    # 判断"该收该放"（超长文章改造后尤其要能看见节选是否生效）。
+    frames_txt = _frame_texts(state["messages"])
     try:
         _prompt = _PLANNER_PROMPT.format(
             skills_context=build_planner_context(), tools_desc=_QUERY_TOOLS_DESC,
@@ -1348,7 +1361,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 诱导重复规划（同一件事已经执行过一次了）。
             short_reply_hint=(_short_reply_hint(state["messages"]) if rounds == 0
                               else "（非首轮决策：短应答语义已在上轮兑现）"),
-            tool_results=_frame_texts(state["messages"]),
+            tool_results=frames_txt,
             # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
             # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
             ref_hints=ref_hints(state.get("tool_data") or []),
@@ -1368,6 +1381,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     (logger.warning if slow else logger.info)(
         "[planner] LLM %s 耗时=%.1fs", "慢调用" if slow else "完成", dur)
     record("planner", "llm_done", duration_s=round(dur, 2),
+           frames_chars=len(frames_txt),
            **({"slow": True} if slow else {}))
 
     raw = getattr(resp, "content", str(resp))
@@ -1973,7 +1987,12 @@ _EXECUTOR_PROMPT = """\
 13. 关键项标重点（20260905 访客反馈"不标重点"）：回复并列列举站内板块/功能/
     能力/技能（≥3 项）时，每项名称用 **加粗** 标出（如 **搜索文章**、**河灯
     留言**、**夜间模式**），可按项分行排列，让访客扫读即抓住要点；单句问答
-    与连续正文段落不强行加粗。"""
+    与连续正文段落不强行加粗。
+14. 工具返回帧标注"超单帧上限，已按小节节选"（20260920）：这一篇**只有帧里
+    展开的那几节**在记录里；文末「以下小节尚未展开」列出的节**没有读到**——
+    不得引用其中的内容，也不得声称"全文都看过了"。被问到的正是未展开的小节时
+    如实说那一节我这轮没读到、可以按小节名再取一次（系统下一轮会读回），
+    绝不拿相近小节的内容顶替作答。"""
 
 
 def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
