@@ -3,7 +3,21 @@
 > 升级路线（手写图 → eval → 记忆 → 可观测 → 多 agent）的**验证地基**：先立"怎么验证"，再动工升级。
 > 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、[问题记录.md](问题记录.md)（事故与根因）。
 > 部署与运维细节（服务名、路径、可复制命令）属私有运行簿，不进仓库。
-> 最后更新：2026-09-20（**golden 全量撤出 CI**，L0 秒级套件增至 5 个（新增 `test_entities.py`
+> 最后更新：2026-09-20 晚（**声称闸洞③「元讨论里的提及」**：命令前缀判据由全文裸搜改为
+> `_cmd_prefix_directive`（引号/内联代码区 **且** 同句含机制词 = 举例说明，放行），配前端
+> `chat-core.js` 的 `stripMentionSpans`（正文兜底命令解析跳过同类跨度）——两侧口径必须
+> 一致，否则"放行的提及"会在页面上真的生效；**golden 新增 `forbid_fallback` opt-in 断言**
+> 堵住"用户收到兜底道歉、正断言却恰好命中道歉文本"的盲区（`followup_named_doc_reread`
+> 曾以 resets=1 判 PASS），已挂 `rag_arch_check` / `followup_named_doc_reread` 两条；
+> 单元锁 `test_gate_cmd_prefix_meta`（4 放行 + 4 仍拦 + 2 端到端））。**本轮读数**：全量
+> **77/77 PASS、0 FAIL、resets 总=0**（首轮即调 10/10；工具调用 114 = 1.48/例、规划轮 105、
+> 多轮绕圈 28、重复检索 7；留档 `eval/report/runs/20260920_214146.json`——该进程启动早于④
+> 代码，故它验证的是①②，不含④）；④落地后复跑受影响子集 **5/5**（留档
+> `20260920_214519.json`）。**检索供给端**：候选
+> 截断改**相对断崖**（`_CLIFF_RATIO=0.25`，平均候选 5.45→3.50、recall@1/@3 与噪声 top-1
+> 一条不动；α≥0.35 起丢多答文档），`rag_arch_ports_real` 作为**已知 FAIL**（rank=2，词法
+> 表征局限、三类排序改法实测均无效）单列在 recall_eval 报告里。
+> 上版 2026-09-20（**golden 全量撤出 CI**，L0 秒级套件增至 5 个（新增 `test_entities.py`
 > 实体摘要单测）、golden 扩至 77 条/63 标签——新增三条跨轮实体取值用例 `followup_entity_slot_*`；
 > 撤下依据与长任务三护栏见 §4 与 `.github/workflows/eval.yml` 头部注释）。
 > 上版 2026-09-19（golden 扩至 70 条、54 标签：§4 新增**依赖链断言**

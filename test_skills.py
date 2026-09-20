@@ -555,7 +555,9 @@ def test_gate_claim_scope():
     """gate 零帧声称检查作用域（20260903 收窄设计）：fallback 吞掉整轮叙述、
     误伤成本高——宁可漏拦（叙述纪律 + trace 抽检兜底），不可误伤。
     收窄后的分工（对照旧"三层声称闸全查"）：
-      - 任何轮：命令前缀文本（_CMD_PREFIX_RE）——正文出现命令帧前缀即确凿违规
+      - 任何轮：命令前缀文本（_cmd_prefix_directive）——正文出现命令帧前缀即确凿
+        违规；20260920 洞③收窄：引号/内联代码区 **且** 同句含机制词 = 元讨论里的
+        提及，放行（见 test_gate_cmd_prefix_meta）
       - chat 零帧轮：只查第一人称工具调用声称（_CHAT_TOOL_CLAIM_RE 高精确模式，
         概念性/第三人称提及、"翻遍了留言板"类读取声称不拦——chat 计划 TOOLS
         恒空、站内内容查询归 content_query 调用清单通道，gate 在这里留白；
@@ -653,6 +655,58 @@ def test_gate_claim_scope():
     check("chat 零帧 + 否定/使役句 → pass（20260920 误伤修复）",
           out11["done"] is True and not out11.get("fallback_text"),
           str(out11.get("fallback_text", ""))[:60])
+
+
+def test_gate_cmd_prefix_meta():
+    """gate 命令前缀判据的**元讨论豁免**（20260920 洞③）：提及 ≠ 发命令。
+
+    实证（golden rag_arch_check 全量 FAIL + followup_named_doc_reread 假 PASS）：
+    用户问"怎么防止模型假装调用工具"，模型答"……就算在正文里写 `NAVIGATE:/xxx`
+    也会被前端的 `cleanAgentText` 剔除……"——完全正确的回答，却因裸搜命令前缀被判
+    cmd_prefix，整轮换成兜底道歉（且道歉文本恰好命中正断言 ⇒ 缺陷在 golden 里
+    不可见）。判据现在要求：出现处落在引号/内联代码区 **且** 所在句子含机制词。
+    两种仍要拦的形态各有用例锁（裸写正文 / 代码区内讲要做的事）。"""
+    print("[gate] 命令前缀元讨论豁免（洞③）")
+    from agent.graph import _cmd_prefix_directive
+
+    ok_cases = (
+        ("……就算在正文里写 `NAVIGATE:/xxx`，也会被前端的 `cleanAgentText` 当幻觉文本剔除喵",
+         "实证原句：内联代码 + 机制词"),
+        ("系统只认行首的 `EFFECT:sakura:on` 这种命令帧，正文里的同名字符串不会执行喵",
+         "内联代码 + 句内机制词"),
+        ("我记得“DARKMODE:on”是系统内部的帧格式，不是给人看的喵",
+         "引号内 + 机制词"),
+        ("命令帧有这几种：`EFFECT:sakura:on`、`DARKMODE:on`、`NAVIGATE:/talk`",
+         "同一句里的举例清单（前两个例子靠句首机制词放行）"),
+    )
+    for text, why in ok_cases:
+        check(f"元讨论提及[{why}] → 放行",
+              _cmd_prefix_directive(text) is False, text[:36])
+
+    bad_cases = (
+        ("好的，AUTO_NAVIGATE:https://saudade.site/talk 这就带你去！", "裸写正文（施事句）"),
+        ("稍等喵～ `EFFECT:sakura:on`", "代码区内但在讲要做的事（无机制词）"),
+        ("我帮你打开「EFFECT:sakura:on」就好啦", "引号内但无机制词"),
+        ("这就为你 `DARKMODE:on` 一下", "代码区内但无机制词"),
+    )
+    for text, why in bad_cases:
+        check(f"指令式命令[{why}] → 仍判违规",
+              _cmd_prefix_directive(text) is True, text[:36])
+
+    # 端到端：gate 走完整路径（skill/plan 状态齐备）不漏判也不误伤
+    def _st(reply):
+        return {"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+                "plan_rounds": 0,
+                "messages": [HumanMessage(content="agent 怎么防止模型假装调用工具？"),
+                             AIMessage(content=reply)]}
+    out = gate_node(_st("系统的命令帧（比如 `NAVIGATE:/xxx`）不会被前端当命令执行喵"))
+    check("gate 端到端：元讨论提及 → 不 fallback",
+          out["done"] is True and not out.get("fallback_text"),
+          str(out.get("fallback_text", ""))[:60])
+    out = gate_node(_st("好的，AUTO_NAVIGATE:https://saudade.site/talk 这就带你去！"))
+    check("gate 端到端：裸命令 → fallback(cmd_prefix)",
+          bool(out.get("fallback_text")) and "系统命令文本" in out["fallback_text"],
+          str(out.get("fallback_text", ""))[:60])
 
 
 def test_gate_frame_checks():
@@ -2004,6 +2058,7 @@ def main():
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
                test_nav_fast_path, test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
                test_explicit_tools, test_planner_tool_menu, test_gate_claim_scope, test_gate_frame_checks,
+               test_gate_cmd_prefix_meta,
                test_phantom_tool_claim, test_gate_claim_holes,
                test_gate_false_negative_claim, test_gate_repeat_reply,
                test_execute_node, test_refs, test_todo_contract, test_checker,
