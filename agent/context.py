@@ -14,6 +14,8 @@ import re
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from agent import sections
+
 # ---------------------------------------------------------------------------
 # 消息/上下文工具
 # ---------------------------------------------------------------------------
@@ -440,12 +442,24 @@ def _frame_texts(messages: list, limit: int = 5, per: int = 300) -> str:
                          f"{text.strip() or '[]'}")
         elif text.startswith("__ERROR__"):
             parts.append(f"工具 {name} 返回错误: {text}")
-        elif name == "get_article_detail" and len(text) > _DETAIL_FRAME_PER:
-            parts.append(
-                f"工具 {name} 返回（节选，原文过长仅示前 {_DETAIL_FRAME_PER} 字）: "
-                f"{text[:_DETAIL_FRAME_PER]}")
-        elif name == "get_article_detail":
+        elif name == "get_article_detail" and len(text) <= _DETAIL_FRAME_PER:
             parts.append(f"工具 {name} 返回: {text}")
+        elif name == "get_article_detail":
+            # 20260920：超长文章改**按小节**取舍（sections.frame_excerpt），不再逐字硬截。
+            # 旧实现（`text[:20000]`）的问题是**无声**——正文在一句话中间断掉，模型
+            # 连"后面还有内容、缺的是哪几节"都不知道（实测 note 19 = 25,445 字，
+            # §7-§10 从未进过任何一轮上下文）。现在超限时整节取舍 + 文末列未展开
+            # 小节名 + 给出取回方式（get_article_detail(section=…)）。
+            # 未超限的帧原样透出（上面那支）：既有行为不动，边界只影响超长文章。
+            cut = sections.frame_excerpt(text, _DETAIL_FRAME_PER)
+            if sections.UNEXPANDED_MARK in cut:
+                parts.append(
+                    f"工具 {name} 返回（原文 {len(text)} 字，超单帧上限，已按小节节选；"
+                    f"未展开的小节见文末清单，可按需再读）: {cut}")
+            else:
+                parts.append(
+                    f"工具 {name} 返回（节选，原文 {len(text)} 字，仅示前 {len(cut)} 字）: "
+                    f"{cut}")
         else:
             parts.append(f"工具 {name} 返回: {text[:per]}")
     return "\n".join(parts)
