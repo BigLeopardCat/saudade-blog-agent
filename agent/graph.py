@@ -633,6 +633,11 @@ _CLAIM_DONE_RE = re.compile(r"了|过|已经|刚刚|方才|啦|咯|喽|成功|�
 #      动词与"状态陈述"同形——"樱花特效已经开启啦"就是**幂等轮的正确答案**（planner
 #      零调用 + 状态本就匹配 ⇒ 这正是该说的话）。要抓动作声称得有显式施事标记：
 #      "帮你/给你"（①支）或把字结构"已经把…打开了"（③支）。
+#   ⑥ **完成态不早于匹配起点**（20260920 加，见 _clause_hits 的 need_done）：
+#      标记不可能出现在动作之前。两处实证误伤（exec_memory_none_honest 的高频措辞，
+#      探针复现）——"**为了**确认清楚，我现在重新帮你把…显示一下，稍等哦～"（"了"
+#      落在前一个子句的「为了」里）、"抱歉让你白等**啦**～我现在就帮你把…显示到
+#      屏幕上"（"啦"挂在道歉语上，不是在说显示动作已完成）。
 _STATE_ACTION_CLAIM_RE = re.compile(
     r"(?:我|咱|人家|本喵|泠月喵|系统|喵)?(?:已经?|刚刚|方才)?"
     r"(?:帮你|给你|为你|替你|帮主人|帮你把|给你把)"
@@ -661,9 +666,12 @@ _STATE_ACTION_EXEMPT_RE = re.compile(
     r"|你说|你问|你提到|引用|原话|么|吗|呢|吧|[?？]"
 )
 # 句子切分（完成态标记的作用域）与"已完成"标记本身（见 _state_action_claim）。
-# 只认完成态虚词与时间副词：裸"已"会撞"而已"、裸"好"会撞"好呀"，故不收。
+# 只认完成态虚词与时间副词：裸"已"会撞"而已"、裸"好"会撞"好呀"，故不收；
+# 裸"了"要排除功能词「为了/除了/罢了/算了」里的那个（不是完成态）——20260920 实证：
+# exec_memory_none_honest 的高频措辞「**为了**确认清楚，我现在重新帮你把…显示一下，
+# 稍等哦～」被「为了」的"了"当成了完成态 → 洞①误伤（探针 40 跑 1 中，属真实复现）。
 _SENT_RE = re.compile(r"[。！？!?\n]+")
-_STATE_DONE_RE = re.compile(r"已经|刚刚|方才|啦|咯|喽|了|好了|成功|完成|搞定")
+_STATE_DONE_RE = re.compile(r"已经|刚刚|方才|啦|咯|喽|好了|(?<![为除罢算])了|成功|完成|搞定")
 # ── gate 洞②：站内检索声称 vs 本轮帧族（20260919）──────────────────────────
 # 事故形态：回复说"我检索了一圈 / 把站内翻了一遍 / 用 rag_search 搜了一遍"，而本轮
 # 根本没跑任何内容类工具（零帧，或只跑了导航/特效这类动作工具）。旧判据两处缺口：
@@ -811,15 +819,22 @@ def _clause_hits(text: str, rx, exempt, need_done: bool = False) -> bool:
     "那泠月喵就帮你把夜间模式关掉，要是之后想换回来随时说" 里前句是声称、
     后句的"要是/随时"不该豁免前句。
 
-    need_done=True（两个声称判据都用）：还要求**同句**（_SENT_RE 切分）带完成态
-    标记——声称"已做过"就得有完成态。作用域放句子级而非子句级，是因为事故句的
-    完成标记落在同句后半（"…就帮你把夜间模式关掉，回到明亮的日间页面啦"）。"""
-    if need_done:
-        text = "".join(s + "。" for s in _SENT_RE.split(text)
-                       if _STATE_DONE_RE.search(s))
-    for c in _CLAUSE_RE.finditer(text):
-        clause = c.group(0)
-        if rx.search(clause) and not exempt.search(clause):
+    need_done=True：完成态标记必须落在**中间位置之前**——即同句内、且**不早于匹配
+    起点**（见 _STATE_DONE_RE 注释）——完成标记不可能出现在动作之前。起点取匹配起点
+    而非子句起点：实证误伤 "抱歉让你白等**啦**～我现在就帮你把「欢迎回来」显示到
+    屏幕上"——"啦"挂在道歉语上（"让你白等啦"），不是在声称显示动作已完成。
+    但作用域不能收到子句级：事故句的完成标记落在同句**后半**（"…就帮你把夜间模式
+    关掉，回到明亮的日间页面**啦**"），那仍是"已关掉"的完成态。"""
+    for s in _SENT_RE.split(text):
+        for c in _CLAUSE_RE.finditer(s):
+            clause = c.group(0)
+            if exempt.search(clause):
+                continue
+            m = rx.search(clause)
+            if not m:
+                continue
+            if need_done and not _STATE_DONE_RE.search(s, c.start() + m.start()):
+                continue
             return True
     return False
 
