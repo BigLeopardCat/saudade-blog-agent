@@ -951,7 +951,7 @@ def _phantom_tool_claim(reply: str, executed: set[str], exec_memory: bool) -> st
     return None
 
 
-def _clause_hits(text: str, rx, exempt, need_done: bool = False) -> bool:
+def _clause_hits(text: str, rx, exempt, need_done: bool = False, veto=None) -> bool:
     """子句级判定：任一无豁免词的子句命中 rx → True。
 
     子句切分沿用 _CLAUSE_RE（标点切分）——豁免必须**同子句内**才算数：
@@ -963,11 +963,17 @@ def _clause_hits(text: str, rx, exempt, need_done: bool = False) -> bool:
     而非子句起点：实证误伤 "抱歉让你白等**啦**～我现在就帮你把「欢迎回来」显示到
     屏幕上"——"啦"挂在道歉语上（"让你白等啦"），不是在声称显示动作已完成。
     但作用域不能收到子句级：事故句的完成标记落在同句**后半**（"…就帮你把夜间模式
-    关掉，回到明亮的日间页面**啦**"），那仍是"已关掉"的完成态。"""
+    关掉，回到明亮的日间页面**啦**"），那仍是"已关掉"的完成态。
+
+    veto(clause)：额外的逐子句放行判据（返回 True = 该子句不算声称），在 exempt 之后、
+    正则之前生效——给"回执在场 + 追述时间词"这类**由调用方状态决定**的豁免用
+    （见 `_state_action_claim`）。"""
     for s in _SENT_RE.split(text):
         for c in _CLAUSE_RE.finditer(s):
             clause = c.group(0)
             if exempt.search(clause):
+                continue
+            if veto and veto(clause):
                 continue
             m = rx.search(clause)
             if not m:
@@ -978,10 +984,31 @@ def _clause_hits(text: str, rx, exempt, need_done: bool = False) -> bool:
     return False
 
 
-def _state_action_claim(text: str) -> bool:
-    """零工具轮的"操作完成"声称（gate 洞①）：施事前缀 + 及物状态动作动词 + 完成态。"""
+def _prior_time_veto(exec_memory: bool):
+    """回执在场时，"追述时间词"子句 = 据实转述（rule 6），不判声称。"""
+    if not exec_memory:
+        return None
+    return _PHANTOM_PRIOR_RE.search
+
+
+def _state_action_claim(text: str, exec_memory: bool = False) -> bool:
+    """零工具轮的"操作完成"声称（gate 洞①）：施事前缀 + 及物状态动作动词 + 完成态。
+
+    exec_memory=True（本轮带跨轮执行回执）且子句含**追述时间词** → 属 rule 6 的据实
+    转述，不判（20260921 补，与洞② 的 `_site_search_claim` 同款规则——两个洞共用同一族
+    误伤：回执在场时"刚才/之前"指向的是**已记录的执行**，不是本轮的空手套）。
+
+    实证（`/tmp/rescan_state_claim.py` 全库复扫 498 条真实 trace，uid≠0）：
+      现行判据命中 18 轮；其中会被本豁免放行的 **2 轮**，两轮都发生在 2026-09-03
+      （execution_log 20260904 才上线 ⇒ 那两轮 `_has_exec_memory` 本就为 False，
+      豁免**不会**生效）⇒ 在"回执在场"这个真实触发条件下，历史放行数 = 0。
+      修的是 golden `exec_memory_display_quote` 实测的另一种误伤：访客问"你刚才说显示
+      上去了，真的假的？"，narrator 据回执答"刚帮你显示上去了"，被判成零帧编造，
+      整轮换成兜底道歉——而那段兜底还反过来说"这一轮系统没有任何工具执行…我刚才说
+      已经帮你打开了是不对的"，**与执行回执直接矛盾**（同例单跑 3/3 PASS，属低概率触发）。
+    """
     return _clause_hits(text, _STATE_ACTION_CLAIM_RE, _STATE_ACTION_EXEMPT_RE,
-                        need_done=True)
+                        need_done=True, veto=_prior_time_veto(exec_memory))
 
 
 def _chat_tool_claim(text: str) -> bool:
@@ -1152,7 +1179,10 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         = 元讨论里的提及，放行；见该函数注释与 golden `forbid_fallback`）
       - 零工具轮（不分技能）：操作完成声称（_STATE_ACTION_CLAIM_RE，洞①）与
         站内检索声称（_site_search_claim，洞②）——零帧 = 本轮什么都没发生，
-        这两族声称必为编造
+        这两族声称必为编造。**两族共用同一条回执豁免**（20260921 补齐）：本轮带跨轮
+        执行回执（executions 注入）且子句含追述时间词 → 说的是**已记录的那次执行**，
+        属 rule 6 据实转述；此前只有洞② 接了 exec_memory，洞① 漏了，导致
+        "刚才已经帮你显示上去了"这类**引回执**的回合被整轮换成兜底道歉
       - chat 零工具轮：另查第一人称工具调用声称（_CHAT_TOOL_CLAIM_RE）——
         高精确模式；"重读/查过"读取声称不在此拦（chat 轮多为口语，误伤成本高）
       - content_query 零工具轮（异常路径：计划本应有调用清单却留空收尾）：
@@ -1168,7 +1198,7 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     # 引号内是被转述的访客留言/说说正文，不算 narrator 自己的声称（20260913：
     # 留言板里那句"执行调用 navigate_to"被转述时误伤）
     own = _strip_quoted_spans(reply)
-    if _state_action_claim(own):
+    if _state_action_claim(own, exec_memory):
         return ("state_claim_without_tool", _FALLBACK_STATE_CLAIM)
     if _site_search_claim(own, exec_memory):
         return ("search_claim_without_tool", _FALLBACK_SEARCH_CLAIM)
