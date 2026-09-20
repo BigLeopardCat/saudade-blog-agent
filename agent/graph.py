@@ -593,6 +593,30 @@ _COMPLETION_CLAIM_RE = re.compile(
     + r"|已(?:经)?(跳转|到达|切换|开启|关闭|打开|完成|成功)"
     + r"|成功(?:跳转|切换|开启|关闭|到达)"
 )
+# 写站点内容的完成式声称（20260920，配 authz 的"人在回路确认"闸）：**只在错误帧
+# 场景用**（gate 5a）——那一刻本轮必有 __ERROR__ 帧，而未获确认的写操作正是以错误帧
+# 形态落地的，所以"未经确认 + 回复说已经发布"必须能被拦住。刻意不并进
+# _EXECUTION_CLAIM_RE：那条还会用在零工具轮的宽查上，把 发布/提交 放进去会撞上
+# "你已经提交过河灯啦" 这类转述用户过往动作的句子。
+# 三支的取舍（都要求**动词后带完成标记**，这一条是误报的主闸）：
+#   ① 带施事前缀（帮你/给你/为你/替你）——"已经帮你发布好啦"这种口吻隔着"帮你"两个字，
+#      只写 `已(?:经)?发布` 会漏；前缀也把"你已经提交过河灯啦"这类**转述用户过往动作**
+#      的句子挡在外面（那句没有施事前缀）。
+#   ② 裸式 `已经发布/已经发表`——只认这两个动词；放开 `已(?:经)?提交` 就会撞上①里那句
+#      被挡住的转述。
+#   ③ `成功…` 自带完成语义。
+# 完成标记（了/啦/好/完成/成功/完毕）距动词 ≤4 字：把"我能帮你把留言发出去吗"这类
+# **提议/征询**与"已经帮你把留言发出去了"这类**声称**分开——5a 的误伤会吞掉整轮叙述，
+# 而提问是未获确认时最正确的收尾（见 test_authz.py ⑨b 的两条端到端用例）。
+_WRITE_CONTENT_CLAIM_RE = re.compile(
+    r"(?:"
+    r"(?:帮你|给你|为你|替你|帮主人)(?:把)?[^\n。！？!?；;，,]{0,12}?"
+    r"(?:发布|发表|投稿|提交|上传|发出|发送)"
+    r"|(?:已经?)(?:发布|发表)"                    # 裸式只认 发布/发表（见上）
+    r"|成功(?:发布|发表|投稿|提交|上传|发出|发送)"
+    r")"
+    r"[^\n。！？!?；;，,]{0,4}?(?:了|啦|好|完成|成功|完毕)"   # 完成标记：区分声称与提议
+)
 # 读取声称族（20260831 补，21:19:40 事故实证：chat 轮声称"回去重读"文章但零工具
 # 调用，引用 6 处全文细节 5 处不存在）——声称"读了/查了博客内容"必须以工具返回
 # 为据。仅 content_query 异常零工具轮启用（宽查）：该轮"本该有帧"，声称误伤
@@ -688,7 +712,13 @@ _STATE_ACTION_CLAIM_RE = re.compile(
     r"(?:我|咱|人家|本喵|泠月喵|系统|喵)?(?:已经?|刚刚|方才)?"
     r"(?:帮你|给你|为你|替你|帮主人|帮你把|给你把)"
     r"[^\n。！？!?；;，,]{0,16}?"
-    r"(?:打开|开启|开好|关掉|关闭|关上|切换|切到|切成|切回来|调到|改成|换成|显示|上屏|跳转|跳过去)"
+    r"(?:打开|开启|开好|关掉|关闭|关上|切换|切到|切成|切回来|调到|改成|换成|显示|上屏|跳转|跳过去"
+    # 20260920：写站点内容的动词（发布/发表/投稿/提交）**只进这一支**——它要求
+    # 施事前缀（帮你/给你/为你/替你），所以"你已经提交过河灯啦"这类**转述用户自己
+    # 的过往动作**不会被误判；而把动词放进②支就会撞上它。写工具的"人在回路"确认
+    # 闸（agent/authz.py）落地后，这条同时封住"零工具轮声称帮你发布了"的编造。
+    r"|发布|发表|投稿|提交)"
+
     # ② 无施事标记的完成式：只认清**自带施事语义**的动词（切换/显示/跳转…）。
     #    开合类（打开/开启/关掉/关闭）**不进这一支**——汉语里"樱花特效已经开启啦"
     #    是**状态陈述**（幂等轮 planner 零调用时的正确答案），与"我把它打开了"同形。
@@ -1597,8 +1627,10 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
         # 分别改参/换路，笼统的 error_frame 给不出这个信息。
         # 权限拒绝同办（20260920）：scope_denied 是"你的身份不允许"，与"工具报错"
         # 要分开——planner 的应对是如实告知，不是换个工具再试。
-        return _VERDICT_BLOCK, (ref_error_reason(text)
-                                or authz.scope_error_reason(text) or "error_frame")
+        # 未获确认的写操作同办（20260920）：consent_required 是"还没问过用户"，
+        # planner 的应对是去问，而不是当成"做不到"。
+        return _VERDICT_BLOCK, (ref_error_reason(text) or authz.scope_error_reason(text)
+                                or authz.consent_error_reason(text) or "error_frame")
     # 命令工具契约层校验：动作工具必须返回命令帧（工具返回形态漂移 = 执行未
     # 按契约发生，如 navigate 返回了纯文本而非 NAVIGATE:/AUTO_NAVIGATE:）。
     # device_oled_display 的"未在 5s 内回执确认"属软失败（指令确已下发），判
@@ -1670,6 +1702,19 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if not decision.allowed and not authz.enforcing():
             record("execute", "authz_shadow", tool=name, principal=str(principal),
                    decision=str(decision))
+        # 写操作的「人在回路」确认（20260920，秘书类前置需求 ③）：**权限判"能不能做"，
+        # 这里判"这一次用户到底要不要做"**。只对有 CONSENT_SCOPES 声明（写站点内容、
+        # 对外可见收不回）的工具生效——今天没有这类工具，所以对现有行为零影响；
+        # 一旦新增，它**自动**落在闸下（声明驱动，不靠人记得来改）。与权限判据同层：
+        # 确定性、无 LLM、调用之前、fail-closed。今天不设 shadow：这一层是纯新增的
+        # 保护，不存在"真流量会被它改行为"的观测需求（没有工具会命中它）。
+        consent_missing = (authz.requires_consent(principal, name)
+                           and not authz.consent_granted(principal, name, user_msg))
+        if consent_missing:
+            record("execute", "consent_required", tool=name, principal=str(principal),
+                   scope=authz.required_scope(name))
+            logger.info("[execute] 写操作未经确认，不执行: %s（principal=%s）",
+                        spec, principal)
         # 屏幕文案创作：text 参数缺失/为空 → execute 结合对话创作（技能固有设计）
         if ref_err is None and name == "device_oled_display" and not args.get("text"):
             args = dict(args)
@@ -1681,6 +1726,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         elif not decision.allowed and authz.enforcing():
             out = authz.denial_frame(decision, principal)
             logger.warning("[execute] 权限拒绝，不执行: %s → %s", spec, decision)
+        elif consent_missing:
+            # 与权限拒绝同族（__ERROR__ + 原因码 → blocked 链路），语义是"去问用户"
+            out = authz.consent_frame(name, principal)
         elif tool is None:
             out = f"__ERROR__: 未知工具 {name}（planner 调用清单越界，被 execute 拒绝执行）"
             logger.warning("[execute] 未知工具 %s，拒绝执行", name)
@@ -2067,7 +2115,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     #     （回复含失败类实词则不触发——如实报告失败是正当行为）
     if err_frames and not any(k in reply for k in
                               ("失败", "错误", "出错", "未成功", "不成功", "没成功", "还是不行")):
-        if _COMPLETION_CLAIM_RE.search(reply):
+        if _COMPLETION_CLAIM_RE.search(reply) or _WRITE_CONTENT_CLAIM_RE.search(reply):
             logger.info("[gate] 工具帧 __ERROR__ 但回复含完成式声称 → fallback")
             return _fallback_result("err_frame_claim", _FALLBACK_ERR_CLAIM, plan, len(frames))
     # 5b. 确认式导航（NAVIGATE: 帧、无 AUTO_NAVIGATE:）却回复到达声称 →
