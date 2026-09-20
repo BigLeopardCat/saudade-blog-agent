@@ -101,6 +101,23 @@ TOOL_SCOPE: dict[str, str] = {
 }
 
 
+# ── 写操作的「人在回路」确认（20260920，秘书类功能前置需求 ③）────────────
+# 分工：**权限**回答"这个人能不能做"，**确认**回答"这一次他到底要不要做"。
+# 只有**离开用户自己眼前**的写入才需要确认：写站点内容（留言/说说/文章）发出去
+# 就收不回、且以用户名义对他人可见，而页面/设备写操作的效果就发生在用户眼前
+# （他立刻看得见、也立刻能改回来），既有行为不动它。
+CONSENT_SCOPES = frozenset({SCOPE_WRITE_CONTENT})
+
+# 每个需确认的 scope 配一张**确认语表**：用户的**本轮消息**命中才算确认。
+# 刻意收窄（"确认发布"这种明确说法）——fail-open 的代价是未经同意把内容发出去，
+# 宁可多问一轮。扩表时先问一句：这句话会不会被误读成确认？
+_CONSENT_PATTERNS: dict[str, re.Pattern] = {
+    SCOPE_WRITE_CONTENT: re.compile(
+        r"(确认|同意|批准|就这么)(发布|发送|提交|发出去|发|写)"
+        r"|确认(就)?这样(发|写)|授权(发布|发送|提交)"),
+}
+
+
 def scopes_for(role: str | None) -> frozenset[str]:
     """角色 → 授予的 scope 集。未知角色（含 None）→ 空集。"""
     return _ROLE_SCOPES.get(role or "", frozenset())
@@ -114,6 +131,27 @@ def required_scope(tool: str) -> str | None:
 def is_write(tool: str) -> bool:
     """是否写操作（留给"人在回路确认"的挂钩，现在只用于观测/标注）。"""
     return TOOL_SCOPE.get(tool) in WRITE_SCOPES
+
+
+def requires_consent(principal: Principal | None, tool: str) -> bool:
+    """这个工具这一次要不要"人在回路"确认（与 principal 无关：确认是用户的事）。
+
+    只看 scope 是否在 CONSENT_SCOPES ——**声明驱动**，所以将来新增一个
+    write.content 工具会自动落在闸下，不需要有人记得来改这个函数。
+    """
+    return required_scope(tool) in CONSENT_SCOPES
+
+
+def consent_granted(principal: Principal | None, tool: str, user_msg: str) -> bool:
+    """用户本轮消息里有没有对该 scope 的明确确认（确定性、无 LLM）。
+
+    fail-closed：需确认的 scope 若没配确认语表 → **False**（绝不默认放行）；
+    消息为空 → False。
+    """
+    pat = _CONSENT_PATTERNS.get(required_scope(tool) or "")
+    if pat is None:
+        return False
+    return bool(pat.search(user_msg or ""))
 
 
 def manifest_gaps(tool_names) -> list[str]:
@@ -132,6 +170,7 @@ REASON_OK = "ok"
 REASON_UNKNOWN_ROLE = "unknown_role"   # 身份不明 → 零权限
 REASON_NO_MANIFEST = "no_manifest"     # 工具未声明 scope（fail-closed）
 REASON_DENIED = "denied"               # 角色已认，但这个 scope 没授予
+REASON_CONSENT = "consent_required"    # 有权做，但用户本轮没有明确确认（写操作）
 
 
 @dataclass(frozen=True)
@@ -188,4 +227,28 @@ def scope_error_reason(text: str) -> str | None:
     让拒绝在受阻链路里带上可判读的原因，而不是笼统的 error_frame。
     """
     m = _SCOPE_ERR_RE.search(text or "")
+    return m.group(1) if m else None
+
+
+def consent_frame(tool: str, principal: Principal | None) -> str:
+    """未获确认时的 __ERROR__ 帧文本。
+
+    形态与权限拒绝同族（同为**确定性拒绝**、同走 blocked 链路），但语义不同：
+    这不是"身份不允许"，而是"这事还没得到用户同意"——所以文案要求它**去问**，
+    而不是宣称做不到。用 __ERROR__ 而不是普通文本是有意的：gate 的分支 5a
+    （错误帧 + 完成式声称 → fallback）因此自动生效，**叙述侧无法把它说成"已发布"**。
+    """
+    who = f"uid={principal.uid} role={(principal.role if principal else None) or '未知'}"
+    return (f"__ERROR__: 待确认[{REASON_CONSENT}] —— {who} 请求的写操作 {tool} "
+            f"会把内容发布到站点上（对外可见、收不回），而**用户本轮消息里没有明确确认**。"
+            f"本轮未执行、也不得声称已完成：请把要发布的内容原样告诉用户，"
+            f"并请他明确回复确认（例如「确认发布」）。")
+
+
+_CONSENT_ERR_RE = re.compile(r"待确认\[([a-z_]+)\]")
+
+
+def consent_error_reason(text: str) -> str | None:
+    """从 __ERROR__ 帧文本里取回确认拒绝的原因码（checker 判 reason 用）。"""
+    m = _CONSENT_ERR_RE.search(text or "")
     return m.group(1) if m else None

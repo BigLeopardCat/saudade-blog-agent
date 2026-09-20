@@ -79,7 +79,31 @@ scope 词汇表（`<动作>.<对象>`）：`read.public` / `read.own` / `read.an
   受限复盘）。**不新增决策分支**，也不静默吞掉。
 - 失败取向：未知角色、未声明工具一律**拒绝**（fail-closed）。从不默认放行、从不默认管理员。
 
-### 3.4 观测：怎么读 shadow 的结果
+### 3.4 人在回路：权限之后还有一次"同意"（前置需求 ③ 的 agent 侧）
+
+**权限回答"这个人能不能做"，确认回答"这一次他到底要不要做"**。两者都在同一个确定性点上，
+但判的是不同的事——`authz.check()` 通过之后，`execute_node` 还会问一次：
+
+```
+requires_consent(principal, tool)         # 只看 scope 是否在 CONSENT_SCOPES —— 声明驱动
+  └─ 命中 → consent_granted(principal, tool, 用户本轮消息)   # 确定性正则，无 LLM
+        └─ 未获确认 → 产 __ERROR__: 待确认[consent_required] 帧，**不调用工具**
+```
+
+- **只对"离开用户眼前"的写入要确认**：今天是 `CONSENT_SCOPES = {write.content}`（代用户
+  发留言/说说/文章——对外可见、收不回）。`write.page` / `write.device` 的效果就发生在用户
+  眼前（看得见、也改得回来），既有行为一条不动。
+- **确认 = 用户本轮消息里说了才算**（`_CONSENT_PATTERNS`，刻意收窄到"确认发布"这类明确
+  说法）。fail-closed：一个需确认的 scope 若没配确认语表 → **一律不放行**（不默认同意）。
+- **拒绝形态复用既有 blocked 链路**：`__ERROR__` 帧 + `consent_required` 原因码 → checker
+  判 BLOCK → planner 去问用户。用 `__ERROR__` 而不是普通文本是有意的：gate 分支 5a
+  （错误帧 + 完成式声称 → fallback）因此自动生效，**叙述侧无法把"没执行"说成"已发布"**
+  （需要"已经帮你发布好啦"这类句子被判据认出来，见 `_WRITE_CONTENT_CLAIM_RE` 三支的取舍）。
+- **今天是空转的**：现有 22 个工具里**没有一个是 `write.content`**，所以这条闸现在一次也
+  不会触发（`test_authz.py` ⑨ 的用例就是这条事实的锁）。它等的是第一个写工具——**新增
+  写工具时不需要改这段代码**，声明表里给它 `write.content` 就自动落在闸下。
+
+### 3.5 观测：怎么读 shadow 的结果
 
 ```bash
 # trace 里的 shadow 拒绝事件（一轮一文件，见 docs/eval-observability.md）
@@ -117,8 +141,8 @@ grep -l authz_shadow /home/ubuntu/memory_blog_rust/logs/agent/traces/*.json | wc
 | # | 需求 | 为什么是前置 | 建议 |
 |---|---|---|---|
 | ① | **秘书账号与角色落库** | `user.role` 无 ENUM/CHECK，新建一个 `secretary` 角色就是一行 UPDATE/INSERT——**生产库写入，须用户点名「库名+迁移文件」** | 先只建一个体验账号，角色用 `secretary`；不批量改任何现有行 |
-| ② | **`AGENT_REQUIRE_ASSERTION` 收口** | 断言已落地快照但默认关着：缺头时**静默回退信任请求体 uid**（"签名边界"在生产上尚未真正生效） | 已经可以打开（Rust 侧早已发头）；开之前先确认没有其它调用方直连 agent |
-| ③ | **写操作的"人在回路"** | 秘书的价值在写，而今天唯一的防护是"调用前查断连"——没有确认、没有"谁同意了"的记录 | 建议：`WRITE_SCOPES` 的调用先产一条**待确认**帧，前端确认后才执行；先只对 `write.content` 这类不可逆的做，设备屏显维持现状 |
+| ② | **`AGENT_REQUIRE_ASSERTION` 收口** | ~~断言已落地快照但默认关着~~ **20260920 复核：生产 `.env` 里已是 `1`，实测已生效**——不带 `X-Agent-Assertion` 直连 `/chat` 探针得 **401**（不是静默回退），`/review`、`/graph/query` 不经 `_resolve_principal`，不受影响。代码默认值仍留 `False`（本机/测试环境不必带头） | **无需动作**。回归锁=一条不带头的请求必须 401；将来任何"给 agent 加公网入口"的改动都要先过这条 |
+| ③ | **写操作的"人在回路"** | 秘书的价值在写，而今天唯一的防护是"调用前查断连"——没有确认、没有"谁同意了"的记录 | **agent 侧已落地（20260920，见 §3.4）**：需确认的 scope 未获用户本轮明确确认 → 产 `__ERROR__` 帧、**不执行**、叙述侧也说不成"已完成"。**剩下的是 ①（真实秘书账号）与第一个写工具**——写通道（④）与审计（⑥）仍缺 |
 | ④ | **agent → Rust 的写通道凭据** | agent 现在一个 admin 接口都不调，"代用户发文章"没有可用的通道：既没有写接口的调用约定，也没有"agent 持用户授权"的凭证语义 | 建议：不要复用用户 JWT 长期有效，而是同一套断言思路——Rust 签发**带 scope 的短时效授权**，写接口按 scope 校验（与 agent 侧的 manifest 同名同义） |
 | ⑤ | **前端角色模型** | `AuthRouter.tsx` 客户端解 JWT 硬编码 `'admin'`；Dashboard 侧栏是静态全量列表——"比 admin 窄、比 user 宽"的界面无处安放 | 建议：等 ① 之后再做；先把硬编码换成与后端同名的常量，避免第三处字面量 |
 | ⑥ | **审计** | 秘书代表用户做了写操作，事后要能回答"谁、以谁的名义、什么时候、改了什么" | `execution_log` 已有 `skill/detail/created_at`，缺"以谁的名义"（principal）与授权来源；建议在回执顶层加 principal 字段（跨语言契约，同 `digest` 的处理方式） |
