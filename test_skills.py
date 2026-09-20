@@ -296,7 +296,9 @@ def test_nav_fast_path():
     # "带我去X"已入快道（20260828），"小猫咪我们去X"仍落回 LLM。
     for msg in ["我想去旅行", "帮我留言", "去火星基地", "今天去哪儿",
                 "我想去看看", "怎么去图书馆借书",
-                "小猫咪我们去设备控制台", "去/category/tech"]:
+                "小猫咪我们去设备控制台", "去/category/tech",
+                # 20260920b：动词**之后**的否定词（与显示快道对齐，见 decisions.py）
+                "带我去留言板不用了", "去说说算了别去了", "带我去设备控制台，不用麻烦了"]:
         check(f"快道不命中「{msg}」→ None（落回 LLM）",
               _nav_fast_path(msg) is None, str(_nav_fast_path(msg)))
 
