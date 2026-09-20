@@ -18,7 +18,7 @@
 > 一条不动；α≥0.35 起丢多答文档），`rag_arch_ports_real` 作为**已知 FAIL**（rank=2，词法
 > 表征局限、三类排序改法实测均无效）单列在 recall_eval 报告里。
 > 上版 2026-09-20（**golden 全量撤出 CI**，L0 秒级套件增至 5 个（新增 `test_entities.py`
-> 实体摘要单测）、golden 扩至 77 条/63 标签——新增三条跨轮实体取值用例 `followup_entity_slot_*`；
+> 实体摘要单测）、golden 扩至 78 条/63 标签——新增三条跨轮实体取值用例 `followup_entity_slot_*`；
 > 撤下依据与长任务三护栏见 §4 与 `.github/workflows/eval.yml` 头部注释）。
 > 上版 2026-09-19（golden 扩至 70 条、54 标签：§4 新增**依赖链断言**
 > `require_arg_from_result` + "回执里不得出现未解析引用"全局不变量 + 两条 `dep_*` 用例，
@@ -81,7 +81,7 @@ flowchart TB
         N --> L3[L3 线上回放<br/>采样生产日志脱敏重放]
     end
     subgraph LOCAL[本机（生产服务器）]
-        P1[按需手动] --> L2[L2 任务级 golden set<br/>77 条 · 约 19 分钟 · 硬门禁]
+        P1[按需手动] --> L2[L2 任务级 golden set<br/>78 条 · 约 19 分钟 · 硬门禁]
         N2[04:00 nightly] --> L2
     end
     L0 -->|失败| BLOCK[阻塞合并]
@@ -94,7 +94,7 @@ flowchart TB
 |---|---|---|---|---|
 | **L0 单元级** | 图节点、工具、schema | 单测（`test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率 | 图重写、记忆剥离 |
 | **L1 基准级** | 检索器、生成层、端到端 RAG | BEIR / RGB / CRAG（§3） | nDCG@10、Recall@5、MRR；噪声准确率 / 拒答率 / 错误检测率；Truthfulness（幻觉=-1） | RAG、防幻觉 |
-| **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 77 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
+| **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 78 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
 | **L3 回放级** | 线上行为漂移 | 生产对话脱敏采样 → 离线重放 → 与 golden 指标对齐 | 漂移方向/幅度 | 全部（每次升级后跑） |
 
 **门槛分工**（20260920 起）：**CI** 只跑 L0（push 触发，秒级，硬门禁）；**L2 全量 golden 在本机跑**（按需手动 `eval/run_golden.py` / `eval/golden_full_run.py`，nightly 04:00 由 `scripts/nightly_regression.sh` 自动跑一轮，失败标 `~/agent_regression.failed`）；nightly 另跑 L1 全量 + L3 回放（小时级，出基准报告）。
@@ -123,7 +123,7 @@ FAIL 复审单把回归组红置顶（当天必修）。混跑的坏处正是这
 
 ## 4. L2 任务级：golden set 设计（核心资产）
 
-**规模 30-50 条，按意图分层（当前已落地 77 条、63 个标签，条目可多标签；主要标签分布：rag_* 22
+**规模 30-50 条，按意图分层（当前已落地 78 条、63 个标签，条目可多标签；主要标签分布：rag_* 22
 （含 recall 正例 10 + noise/拒答组）/ chat 8 / multi-turn 7 / nav 6 / effect 6 / hallucination 8 /
 noise 5 / content_query 5 / knowledge 4 / tool_call 4 / device 3 / regression 7 / exec_memory 2 /
 truth_query 2 / idempotency 2 / summary 2 / display 2 / image 2 / deep 2 / article_read 2 /
@@ -141,7 +141,7 @@ sticker/planner 等判据改写用例，20260919 起新增 dep/refs 标签（依
 | 边界输入 | 4 | 空消息/超长/无权限/未登录 | 断言：正确降级路径 |
 
 > 注：上表条数是分层设计目标，实际以 `eval/golden/basic.jsonl` 为准——多标签重叠、持续演进，
-> 现状盘点见上文分布（77 条/63 标签）。
+> 现状盘点见上文分布（78 条/63 标签）。
 
 **评分双输出（LLM-as-judge）**：
 
@@ -170,7 +170,7 @@ sticker/planner 等判据改写用例，20260919 起新增 dep/refs 标签（依
 （最坏一次 planner 调用 20+ 分钟才返回），3 条本机合计 39 秒的用例在 CI 里跑 21 分钟未完；
 一次 120 分钟上限的全量跑被杀且零产出（报告只在结尾写 + 非 TTY 块缓冲，日志与 artifact 双双为空）；
 诊断跑还抓出 CI 侧凭据 `401 Invalid API-key`——**CI 一轮都没跑出过真实通过率**。
-结论：L2 **本机跑**（本机即生产服务器，链路真实，77 条约 19 分钟，device 真机用例天然覆盖）；
+结论：L2 **本机跑**（本机即生产服务器，链路真实，78 条约 19 分钟，device 真机用例天然覆盖）；
 `eval/golden_full_run.py` 已提供进程隔离 + 单条 180s 超时（防悬挂污染），是本机的看门狗。
 CI 只留 L0 秒级套件。
 
@@ -238,7 +238,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 
 | 阶段 | 并行建设的评测/可观测 |
 |---|---|
-| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（77 条、63 标签：rag 24/chat 8/hallucination 8/multi-turn 9/nav 8/effect 6/noise 5/content_query 5/device 3/exec_memory 2 等）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>`、`--only <id1,id2>` 逗号多选定位、`--skip-ids`、`--min-pass-rate`；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`eval/judge_offline_test.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。**20260921 补**：`eval/golden_draft.py`
+| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（78 条、63 标签：rag 24/chat 8/hallucination 8/multi-turn 9/nav 8/effect 6/noise 5/content_query 5/device 3/exec_memory 2 等）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>`、`--only <id1,id2>` 逗号多选定位、`--skip-ids`、`--min-pass-rate`；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`eval/judge_offline_test.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。**20260921 补**：`eval/golden_draft.py`
 （trace_alert 命中的真实现场 → 用例草稿 + 人审对照单，落 `eval/report/golden_drafts_*.{jsonl,md}`；
 **只产草稿不自动入库**，含真实用户文本故不进 git）+ L2 门禁分两层（回归组硬判 100%，见 §2 门槛分工）。
 LLM-as-judge 未做 |
