@@ -18,6 +18,7 @@
   .venv/bin/python eval/run_golden.py               # 全量（本机=生产链路，耗时基线有效）
   .venv/bin/python eval/run_golden.py --limit 3     # 前 3 条（调试）
   .venv/bin/python eval/run_golden.py --only nav_friends_down
+  .venv/bin/python eval/run_golden.py --only rag_python_is,rag_arch_components  # 多选（链路诊断）
   .venv/bin/python eval/run_golden.py --min-pass-rate 0.9 --skip-ids device_query  # CI 口径
 退出码：0=达到 --min-pass-rate（默认 1.0，即全过）1=低于门禁
 ⚠ 通过率 vs 全过：本机（生产链路）默认全过；CI 在北美 runner 上跨网调用 LLM/站点，
@@ -348,7 +349,7 @@ def check_gold(gold: dict, result: dict) -> list[str]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 条（调试）")
-    ap.add_argument("--only", default="", help="只跑指定 id")
+    ap.add_argument("--only", default="", help="只跑指定 id（逗号分隔可多选；诊断链路时按'用例形状'挑几条）")
     ap.add_argument("--skip-ids", default="",
                     help="跳过指定 id（逗号分隔；用于环境不可达的用例，如 CI 无 device-service）")
     ap.add_argument("--min-pass-rate", type=float, default=1.0,
@@ -369,7 +370,12 @@ def main():
 
     cases = [json.loads(line) for line in open(GOLDEN_FILE, encoding="utf-8") if line.strip()]
     if args.only:
-        cases = [c for c in cases if c["id"] == args.only]
+        only_ids = [s.strip() for s in args.only.split(",") if s.strip()]
+        all_ids = {c["id"] for c in cases}
+        cases = [c for c in cases if c["id"] in only_ids]
+        unknown = [s for s in only_ids if s not in all_ids]
+        print(f"[run] --only {len(only_ids)} 条：{only_ids}"
+              + (f"（⚠ 不在集合里：{unknown}）" if unknown else ""))
     skip_ids = [s.strip() for s in args.skip_ids.split(",") if s.strip()]
     if skip_ids:
         known = {c["id"] for c in cases}
