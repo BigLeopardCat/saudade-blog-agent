@@ -307,14 +307,32 @@ def _brief_same(a: str, b: str) -> bool:
                                             int(len(short) * _DOC_BRIEF_RATIO))
 
 
+def _doc_id_lookup(title: str) -> str:
+    """标题 → 站内文章 id（确定性解析；不确定/索引未就绪 ⇒ ""）。
+
+    20260920 方案①：只有标题、历史里从没见过 id 的锚点，planner 只能去
+    list_notes 里猜下标——线上实测把分页列表第一条（最新那篇）当成"用户点名的
+    这篇"，读了错文章、还谎称站内没有该文（真文 note 14 存在）。语料索引里本来
+    就有全部可见文章的标题与 id（rag/search.py，与前台可见性一致），直接解析：
+    **唯一命中才给 id**，有歧义就留"（未见过 id）"让 planner 按规则 4③ 去查。
+    """
+    try:
+        from rag.search import resolve_title
+        rid = resolve_title(title)
+    except Exception:            # 解析降级绝不能拖垮上下文组装
+        return ""
+    return str(rid) if rid is not None else ""
+
+
 def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
     """本会话已点名文档清单（《标题》+ id + 是否已读全文）——跨轮指代的确定性锚点。
 
     来源 = 全部窗口消息（[System:…] 的 recent_executions 行 + 20 条人机历史，
     含工具帧之外的正文），**由近及远**扫描：最近被点到的排前面（越近越可能是
     用户在说的那篇）。id 只认同一句里 《标题》 邻域的 id=/article 链接或
-    "读取文章 N《标题》" 行——不猜、不给没有依据的 id。同一篇被正文简称与执行
-    记忆全称各提一次时并成一行（简称留作别名），免得 planner 把一篇数成两篇。
+    "读取文章 N《标题》" 行；都没有时再按标题查站内语料（_doc_id_lookup，唯一
+    命中才认）——不猜、不给没有依据的 id。同一篇被正文简称与执行记忆全称各提
+    一次时并成一行（简称留作别名），免得 planner 把一篇数成两篇。
     """
     rows: list[tuple[str, str, bool, str]] = []   # (标题, id 或 "", 是否已读全文, 简称)
 
@@ -366,9 +384,20 @@ def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
         return "（本会话还没有点名的文档）"
     lines: list[str] = []
     used = 0
+    seen_ids: set[str] = set()
     for title, doc_id, read, alias in rows[:limit]:
+        resolved = False
+        if not doc_id:
+            doc_id = _doc_id_lookup(title)
+            resolved = bool(doc_id)
+        if doc_id and doc_id in seen_ids:
+            continue             # 两种写法解析到同一篇 ⇒ 只留最近那条（同 id 必同篇）
+        if doc_id:
+            seen_ids.add(doc_id)
         line = f"· 《{title}》" + (f" id={doc_id}" if doc_id else "（未见过 id）")
         marks = (["本会话已读过全文"] if read else [])
+        if resolved:
+            marks.append("站内标题匹配")
         if alias:
             marks.append(f"上文亦称《{alias}》")
         if marks:

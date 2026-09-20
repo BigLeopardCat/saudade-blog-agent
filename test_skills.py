@@ -1865,6 +1865,61 @@ def test_doc_anchors_and_clip():
           bool(_DOC_READ_ROW_RE.search("09-20 21:05 读取文章 22《IoT 设备接入物联网平台指南》（×3）")))
 
 
+def test_doc_title_resolution():
+    """方案①（20260920）：只有标题、没有 id 的文档锚点改由系统按站内语料解析 id。
+
+    现场（会话 148/149）：用户点名《ESP32-S3-OBC固件接入参考》而历史里从没有它的
+    id → 锚点只写"（未见过 id）"→ planner 去 list_notes 猜下标，把分页列表第一条
+    （最新那篇 note 46）当成"用户点名的这篇"，读错文章还谎称站内没有该文（真文
+    note 14 存在）。语料索引里本来就有全部可见文章的标题 → id，解析出来即可，模型
+    不必猜。纪律：**唯一命中才给 id**——锚点是确定性事实，宁可留"未见过 id"。
+    """
+    import agent.context as ctx
+    from rag.search import match_doc_title
+    docs = [
+        {"type": "note", "id": 14, "title": "ESP32-S3-OBC固件接入参考"},
+        {"type": "note", "id": 19, "title": "Saudade Blog AI Agent（泠月喵）架构文档"},
+        {"type": "note", "id": 46, "title": "文章向量空间图谱项目文档"},
+        {"type": "note", "id": 9, "title": "IoT 设备接入物联网平台指南"},
+    ]
+    check("标题解析：归一化后完全一致唯一命中",
+          match_doc_title("ESP32-S3-OBC固件接入参考", docs) == 14)
+    check("标题解析：空白与 ASCII 大小写归一",
+          match_doc_title("esp32-s3-obc 固件接入参考", docs) == 14)
+    check("标题解析：唯一子串（简称）命中",
+          match_doc_title("（泠月喵）架构文档", docs) == 19)
+    check("标题解析：语料里没有 → None", match_doc_title("站内不存在的文章", docs) is None)
+    check("标题解析：候选打平视为歧义 → None", match_doc_title("架构文档", [
+        {"type": "note", "id": 1, "title": "甲架构文档"},
+        {"type": "note", "id": 2, "title": "乙架构文档"}]) is None)
+    check("标题解析：过短标题不参与子串匹配",
+          match_doc_title("架构", docs) is None)
+    check("标题解析：同名文章（站内允许）不当唯一命中", match_doc_title("同名标题", [
+        {"type": "note", "id": 3, "title": "同名标题"},
+        {"type": "note", "id": 4, "title": "同名标题"}]) is None)
+    check("标题解析：空语料/空标题不炸",
+          match_doc_title("任意标题", []) is None and match_doc_title("", docs) is None)
+
+    # 锚点集成（解析器 monkeypatch 掉：这条测的是锚点侧接线，不走网络）
+    orig = ctx._doc_id_lookup
+    ctx._doc_id_lookup = lambda t: "14" if t == "ESP32-S3-OBC固件接入参考" else ""
+    try:
+        out = ctx._doc_anchors([HumanMessage(content="把《ESP32-S3-OBC固件接入参考》读一遍")])
+        check("锚点：标题解析出的 id 注入且标明来源",
+              "· 《ESP32-S3-OBC固件接入参考》 id=14（站内标题匹配）" in out)
+        check("锚点：解析不到时仍如实写未见过 id",
+              "（未见过 id）" in ctx._doc_anchors([HumanMessage(content="把《查无此篇》读一遍")]))
+        dup = ctx._doc_anchors([
+            HumanMessage(content="[System: page=/; recent_executions: "
+                                 "· 09-20 21:03 读取文章 14《ESP32-S3-OBC固件接入参考》"),
+            HumanMessage(content="再读一遍《ESP32-S3-OBC固件接入参考》"),
+        ])
+        check("锚点：解析出的 id 与已读行同篇只留一行",
+              dup.count("·") == 1 and "id=14" in dup and "本会话已读过全文" in dup)
+    finally:
+        ctx._doc_id_lookup = orig
+
+
 def test_short_reply_and_adjacent_pairs():
     """邻接对节选 + 短应答解析（20260920 批次 b）。
 
@@ -1956,7 +2011,7 @@ def main():
                test_gate_fallback_message, test_planner_output_re,
                test_search_retry_kind, test_candidate_relevance_pick,
                test_scan_action_intents, test_doc_anchors_and_clip,
-               test_short_reply_and_adjacent_pairs):
+               test_doc_title_resolution, test_short_reply_and_adjacent_pairs):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")

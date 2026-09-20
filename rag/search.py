@@ -183,6 +183,15 @@ class RagIndex:
         # 20260901：语料只收文章（说说/留言/公告移除——检索池净化，见头部注释）
         return docs
 
+    def docs_snapshot(self) -> list[dict]:
+        """语料快照（[{type,id,title,content}]，浅拷贝列表）。索引没建好时为空列表。"""
+        with self._lock:
+            return list(self._docs)
+
+    def is_stale(self) -> bool:
+        """没建过、或超过 REFRESH_TTL 未重建。"""
+        return not self._docs or time.time() - self._last_build > REFRESH_TTL
+
     # ── 查询 ──────────────────────────────────────────────────────
 
     def search(self, query: str, top_k: int = 8) -> list[dict] | None:
@@ -256,6 +265,89 @@ def get_index() -> RagIndex:
 def search(query: str, top_k: int = 8) -> list[dict]:
     """检索入口：返回候选列表 [{type, id, title, section, score}]，不含全文。"""
     return get_index().search(query, top_k=top_k)
+
+
+# ── 标题 → id 确定性解析（20260920 方案①）────────────────────────────
+# 动机：用户在会话里用《标题》点名一篇文档、而历史里从没出现过它的 id 时，planner
+# 拿到的锚点只有"（未见过 id）"，只能去 list_notes 里猜下标——线上实测它把分页
+# 列表的第一条（最新那篇）当成"用户点名的这篇"，读错文章、还谎称站内没有该文
+# （真文存在）。语料索引里本来就有全部可见文章的标题与 id，直接解析即可，模型
+# 不必猜。锚点是**确定性事实**：解析只认唯一命中，只要有一丝歧义就返回 None，
+# 让上游继续显示"未见过 id"（宁可让模型按规则去查，绝不给错 id）。
+
+_WS_RE = re.compile(r"\s+")
+_TITLE_PART_MIN = 4  # 简称子串匹配的最短长度（《架构文档》可以，两字标题不行）
+
+# 文章 id 形态由接口给定（noteKey 现为整数，类型不写死——回执/锚点都按字符串用）
+DocId = int | str
+
+
+def _norm_title(s: str) -> str:
+    """标题归一化：去空白 + ASCII 折小写（中文不受影响）。"""
+    return _WS_RE.sub("", s or "").lower()
+
+
+def match_doc_title(title: str, docs: list[dict]) -> DocId | None:
+    """标题 → 文章 id（纯函数，便于单测）。唯一命中才返回 id，否则 None。
+
+    ① 归一化后完全相等；
+    ② 唯一子串包含（口语简称《架构文档》对全称《…架构文档》），两侧任一方向且
+       锚点标题 ≥_TITLE_PART_MIN 字。两条都要求**候选唯一**——两条候选打平就是
+       歧义，返回 None。
+    """
+    n = _norm_title(title)
+    if not n or not docs:
+        return None
+    titles = [(d, _norm_title(d.get("title", ""))) for d in docs]
+    exact = [d for d, t in titles if t == n]
+    if len(exact) == 1:
+        return exact[0]["id"]
+    if len(exact) > 1:          # 同名文章（站内允许）：歧义，不猜
+        return None
+    if len(n) < _TITLE_PART_MIN:
+        return None
+    part = [d for d, t in titles if n in t or t in n]
+    if len(part) == 1:
+        return part[0]["id"]
+    return None
+
+
+def resolve_title(title: str) -> DocId | None:
+    """按标题查文章 id；索引没建好返回 None。**不阻塞**调用方（只读快照）。
+
+    冷/过期时踢一次后台重建（不在本调用里等）——下一次解析就能拿到新文章。
+    """
+    idx = get_index()
+    docs = idx.docs_snapshot()
+    if idx.is_stale():
+        warm_async()
+    return match_doc_title(title, docs)
+
+
+def warm() -> bool:
+    """同步建好语料索引（启动预热、评测夹具、单测用）。失败返回 False 不抛。"""
+    try:
+        get_index().build()
+        return True
+    except Exception:
+        logger.warning("语料预热失败：检索与锚点标题解析都会降级到旧/空索引",
+                       exc_info=True)
+        return False
+
+
+_warm_lock = threading.Lock()   # 只防同刻重复起线程，不阻塞调用方
+
+
+def warm_async() -> None:
+    """后台预热一次（不等待）。并发调用只会起一个线程，重建幂等。"""
+    if not _warm_lock.acquire(blocking=False):
+        return
+    def _run() -> None:
+        try:
+            warm()
+        finally:
+            _warm_lock.release()
+    threading.Thread(target=_run, name="rag-warm", daemon=True).start()
 
 
 
