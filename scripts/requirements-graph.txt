@@ -1,0 +1,24 @@
+# 离线建图 / 布局 A/B 专用依赖（scripts/build_word_graph.py、scripts/layout_ab.py）
+#
+# 为什么单独一份而不是进 [project.dependencies]：这三样（UMAP + numba/llvmlite + scipy/sklearn）
+# 是**建图侧**才需要的重依赖（解压后 ≈470MB），生产 agent 一行不 import —— 隔离是为了让
+# 生产 venv 保持小且稳，不是为了省盘（uv 的缓存 + 硬链接让多环境不重复占盘）。
+#
+# 版本**刻意钉死并与 20260917 那次 UMAP 建图的环境逐一对齐**：UMAP 的布局对 numba/llvmlite/
+# numpy 版本敏感，换版本 = 重出图的产物不可与已提交的 graph-*.js 直接对比（保真度门会动）。
+# 要升就整组一起升，并在同一次重出图里重测 docs/word-graph.md 的质量门。
+#
+# 用法：uv run --no-project --with-requirements scripts/requirements-graph.txt \
+#           python3 scripts/build_word_graph.py --dry-run
+umap-learn==0.5.12
+pynndescent==0.6.0
+numba==0.67.0
+llvmlite==0.49.0
+numpy==2.5.3
+scipy==1.18.1
+scikit-learn==1.9.1
+joblib==1.6.0
+threadpoolctl==3.7.0
+cloudpickle==3.1.2
+jieba==0.42.1
+tqdm==4.70.1

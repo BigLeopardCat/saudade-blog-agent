@@ -11,7 +11,8 @@
            build_word_graph.py 里那段注释：只在边集上优化即可做到 −1.000 而保真度随机）
 
 用法：
-    PYTHONPATH=/home/ubuntu/graph-lib python3 scripts/layout_ab.py --variant umap
+    uv run --no-project --python 3.12 --with-requirements scripts/requirements-graph.txt \
+        python3 scripts/layout_ab.py --variant umap
     ... --variant baseline|umap|umap_spring|isomap_knn|isomap_edges|smacof_edges
     （umap/umap_spring 需要 umap-learn；其余纯 numpy）
 """
