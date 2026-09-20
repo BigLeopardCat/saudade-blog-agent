@@ -1077,6 +1077,114 @@ def test_gate_false_negative_claim():
           o4["done"] is True and not o4.get("fallback_text"), str(o4))
 
 
+def test_gate_site_absence_claim():
+    """洞④：站内"没有"结论无依据（20260921，`_site_absence_claim`）。
+
+    事故形态来自 golden `rag_noise_rust` 7 跑 2 红里的形态②：planner 判"通用问题、
+    无需检索"（零帧），narrator 答完通用知识又顺手替站里下结论——"站内没有讲这个
+    的文章"。通用知识那半未必错，**站内结论那半没有依据**：本轮一个内容类工具都
+    没跑过。与 5d（"我查了一圈"= 声称**做过动作**）互补，这一支抓的是声称**知道
+    结论**；两者共享同一事实前提（本轮没跑过 `_CONTENT_TOOLS`）。
+
+    作用域刻意窄（gate fallback 吞整轮回答，宁漏勿误伤）：① 只认内容域名词——
+    "站内没有下载板块/友链页面"这类页面/入口结论由 NAV_MAP + SITE_GUIDE 给定，
+    是确定性知识（导航零工具注记轮正靠它如实作答）；② 疑问/条件/提议/转述语境
+    不是结论（注意词表**不含「呢」**——人设句尾常用，收进来会把真结论漏掉）；
+    ③ 依据豁免比洞①/② 宽：跨轮回执里有检索痕迹（`站内检索「…」`/`搜索「…」`）
+    即放行——说的是结论而非追述动作，不必再要追述时间词。
+    """
+    print("[gate] 站内『没有』结论无依据（洞④）")
+    from agent.graph import (_site_absence_claim, _exec_memory_has_search,
+                             _FALLBACK_SITE_ABSENCE)
+
+    # ── 判据单测：拦 ────────────────────────────────────────────────────
+    for text, why in (
+        ("这个站里没有写过讲 Rust async/await 的文章呢", "20260921 用例现场形态（句尾「呢」不豁免）"),
+        ("站内那些文章，没有写过 async/await 的教程", "跨子句桥（逗号断句）"),
+        ("全站我读过的笔记，没提过这个算法", "跨子句桥（否定领起）"),
+        ("全站没有讲过这个技术喵", "全站 + 讲过"),
+        ("博客里没有提过这个，你可以去别处看看", "博客里 + 提过"),
+        ("站内暂无相关的文档呢", "暂无 + 文档"),
+        ("文章库里没有涉及指纹模组的资料", "文章库 + 资料"),
+        ("站内没找到相关文章哦", "短式"),
+        ("你写的那些文章里没有介绍过这个算法", "你写的 + 介绍"),
+    ):
+        check(f"站内没结论[{why}] → 拦", _site_absence_claim(text) is True, text[:30])
+    # ── 判据单测：放 ────────────────────────────────────────────────────
+    for text, why in (
+        ("站内没有下载板块喵，你可以去网盘看看", "页面/入口结论（由 NAV_MAP 给定）"),
+        ("友链板块已经下线啦，没法访问了", "无站内空间词"),
+        ("要不要我去站内查查有没有讲 async 的文章？", "提议 + 疑问"),
+        ("要是站内没有相关文章，我就用通用知识给你讲", "条件句"),
+        ("你说站内没有写过相关的介绍，我记下了", "转述访客"),
+        ("我在网上没有找到相关资料喵", "网上（非站内）"),
+        ("这篇文章里没有涉及指纹模组的底层校验细节", "只否认某篇，不给站内结论"),
+        # 跨子句桥的两道闸（缺一即放）：桥前缀子句没有内容域名词 = 页面/入口结论；
+        # 桥后子句自身豁免（提议/疑问）时不算结论
+        ("站内那个板块，没有权限看", "桥前子句无内容域名词（页面类结论）"),
+        ("站内这些文章，要不要我再查查有没有更合适的？", "桥后子句豁免（提议 + 疑问）"),
+        ("站内文章我读完了，X 也没有报错", "否定词不在子句开头（不是结论领起）"),
+    ):
+        check(f"站内没结论[{why}] → 放", _site_absence_claim(text) is False, text[:30])
+    # ── 依据豁免（本轮内容类帧 / 跨轮回执检索痕迹）────────────────────────
+    check("站内没结论[依据在场] → 放（说结论不必追述时间词）",
+          _site_absence_claim("站内没有讲过这个", True) is False)
+    check("站内没结论[默认实参 = 不豁免，旧调用点行为不变]",
+          _site_absence_claim("站内没有讲过这个") is True)
+    check("回执检索痕迹识别（Rust render_exec_row 定稿措辞）",
+          _exec_memory_has_search([SystemMessage(content="recent_executions: 09-21 10:00 "
+                                                        "站内检索「Rust async」 — 3 篇")]) is True)
+    check("无检索行（只有读取行）→ 不算依据",
+          _exec_memory_has_search([SystemMessage(content="recent_executions: 09-21 10:00 "
+                                                        "读取文章 12《ESP32-S3 OTA》")]) is False)
+
+    # ── gate 集成 ───────────────────────────────────────────────────────
+    def _st(skill, msgs_after_plan, **plan_kw):
+        return {"plan": plan_encode(instantiate_plan(skill, plan_kw)), "done": False,
+                "plan_rounds": 1,
+                "messages": [HumanMessage(content="x")] + msgs_after_plan}
+
+    absence = "这个站里没有写过讲 async/await 的文章呢，不过原理本身我可以给你讲讲喵"
+    # 零帧 + 站内"没有"结论 → fallback（本轮没查过就不能替站里下结论）
+    o1 = gate_node(_st("chat", [AIMessage(content=absence)]))
+    check("零帧 + 站内『没有』结论 → fallback(site_absence_claim_without_tool)",
+          o1["done"] is True and o1.get("fallback_text") == _FALLBACK_SITE_ABSENCE,
+          str(o1.get("fallback_text"))[:60])
+    # 零帧 + 只有页面/入口结论 → pass（确定性知识，不是凭空结论）
+    o2 = gate_node(_st("chat", [AIMessage(content="站内没有下载板块喵，你可以去网盘看看")]))
+    check("零帧 + 页面/入口结论 → pass（不误伤）",
+          o2["done"] is True and not o2.get("fallback_text"), str(o2))
+    # 零帧 + 跨轮回执里有检索痕迹 → pass（rule 6 据回执转述）
+    o3 = gate_node(_st("chat", [SystemMessage(content="recent_executions: 09-21 10:00 "
+                                                     "站内检索「Rust async」 — 2 篇"),
+                                AIMessage(content=absence)]))
+    check("零帧 + 回执含检索痕迹 → pass（说结论有据）",
+          o3["done"] is True and not o3.get("fallback_text"), str(o3))
+    # 零帧 + navigate 已下线注记轮 → pass（"站内没有这个页面"是 NAV_MAP 的事实）：
+    # 判据本身会拦这句，靠注记轮豁免放行——两条断言合起来才是这条豁免的锁
+    nav_plan = instantiate_plan("navigate", {"target": "友链"})
+    assert "不调用任何工具" in nav_plan["note"]
+    nav_reply = "博客里没有写过友链相关的内容啦，这个板块已经下线了喵～"
+    check("注记轮回复文本本身会被判据拦（豁免的前提）",
+          _site_absence_claim(nav_reply) is True)
+    o4 = gate_node({"plan": plan_encode(nav_plan), "done": False, "plan_rounds": 0,
+                    "messages": [HumanMessage(content="去友链看看"), AIMessage(content=nav_reply)]})
+    check("零帧 + navigate 已下线注记轮 → pass（NAV_MAP 事实，豁免生效）",
+          o4["done"] is True and not o4.get("fallback_text"), str(o4))
+    # 混合轮（只跑了动作类工具）+ 站内"没有"结论 → fallback（5f）
+    nav = ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/talk",
+                      tool_call_id="execute_0", name="navigate_to")
+    o5 = gate_node(_st("chat", [nav, AIMessage(content=absence)]))
+    check("有帧[仅动作工具] + 站内『没有』结论 → fallback(site_absence_claim)",
+          o5["done"] is True and o5.get("fallback_text") == _FALLBACK_SITE_ABSENCE,
+          str(o5.get("fallback_text"))[:60])
+    # 有帧 + 内容类工具（本轮真查过）→ pass
+    srch = ToolMessage(content="[]", tool_call_id="execute_0", name="search_notes")
+    o6 = gate_node(_st("chat", [srch, AIMessage(content=absence)]))
+    check("有帧[内容类工具] + 站内『没有』结论 → pass（有据）",
+          o6["done"] is True and not o6.get("fallback_text"), str(o6))
+
+
 def test_gate_repeat_reply():
     """gate 4b：逐字复读上一轮回复（20260920 实证）+ fallback_text channel 回归锁。
 
@@ -2072,7 +2180,8 @@ def main():
                test_explicit_tools, test_planner_tool_menu, test_gate_claim_scope, test_gate_frame_checks,
                test_gate_cmd_prefix_meta,
                test_phantom_tool_claim, test_gate_claim_holes,
-               test_gate_false_negative_claim, test_gate_repeat_reply,
+               test_gate_false_negative_claim, test_gate_site_absence_claim,
+               test_gate_repeat_reply,
                test_execute_node, test_refs, test_todo_contract, test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,

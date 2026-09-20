@@ -1163,6 +1163,90 @@ def _site_search_claim(text: str, exec_memory: bool) -> bool:
     return False
 
 
+# ── gate 洞④：站内"没有"结论无依据（20260921）────────────────────────────
+# 事故形态：访客问一个**通用问题**（"Rust 的 async/await 是怎么工作的？"），planner
+# 判"无需检索"（零帧），narrator 答完通用知识又顺手对站内下结论——"站内没有讲这个的
+# 文章"。通用知识那半未必错，**站内结论那半没有依据**：本轮没有任何内容类工具跑过。
+# 依据 = golden `rag_noise_rust` 7 跑 2 红：形态①零工具答通用知识（连正断言也缺）、
+# 形态②零工具却断言「站内没有」（正断言命中、只有帧断言红）——后者是真缺口，故在
+# 判据侧补这一洞（用例侧同步把问题改成站点锚定，见该用例 `_note`）。
+# 与 5d 互补：5d 抓"我查了一圈"（声称**做过动作**），本判据抓"站内没有"（声称**知道
+# 结论**）；两者共用同一事实前提——本轮没跑过内容类工具（_CONTENT_TOOLS）。
+# 作用域刻意收窄（宁漏勿误伤，gate fallback 会吞掉整轮回答）：
+#   ① 只认**内容域**（文章/内容/教程/说说/留言…）："站内没有下载板块/友链页面"这类
+#      **页面/入口**结论由 NAV_MAP 与 SITE_GUIDE 给定，是确定性知识（导航零工具注记轮
+#      正靠它如实作答），不判；
+#   ② 疑问/条件/提议/转述语境（"要不要我去查查有没有"/"要是站内没有"/"你说站内没有"）
+#      不是结论；
+#   ③ 依据豁免（比洞①/② 的"回执在场 + 追述时间词"更宽，因为这里说的是**结论**而非
+#      追述动作）：跨轮回执里**有检索类动作**（`站内检索「X」`/`搜索「X」`）时，
+#      "站内没有"就有系统记录可依（rule 6 据回执转述），放行——只有 8 行窗口里的
+#      检索回执才算，更早的检索对模型同样不可见。
+#   ④ 跨子句桥（_ABSENCE_LEAD_RE）：同子句形态之外，还认"站内那些文章，没有写过
+#      X"这种**逗号断句**——中文里这比同子句形态更常见，漏掉它判据只覆盖一小半
+#      真实措辞。桥的两端各设一道闸：本子句必须有站内词 + 内容域名词（页面类结论
+#      没有内容域名词，照旧豁免），下一子句必须**以否定存在领起**（≤4 字语气词）
+#      且自身不豁免——不做"同句内任意位置搜否定词"，否则"站内文章我读完了，X 也
+#      没有报错"会被误判成站内结论。
+_SITE_DOMAIN_RE = re.compile(
+    r"站内|全站|站里|博客里|博客中|这个站|本站|文章库|你写的|博主写的|所有文章|全部文章")
+_ABSENCE_RE = re.compile(
+    r"没有|没找到|没写|没讲过|没提|没介绍|未收录|暂无|查不到|找不到|未见|无相关|不涉及")
+# 内容域名词（"页面/板块/入口/功能"刻意不收——见 ①）
+_CONTENT_NOUN_RE = re.compile(
+    r"文章|内容|教程|笔记|资料|文档|博文|写过|讲过|提过|介绍|收录|涉及|说说|留言|帖子")
+# 疑问/条件/提议/转述语境。注意**不收「呢」**：人设句尾常用它（"这个站里没有写过
+# 相关内容呢"），收进来会把整片真结论漏掉；「吗」保留（明确的疑问语气词）。
+_ABSENCE_EXEMPT_RE = re.compile(
+    r"要是|如果|假如|假设|除非|若|为什么|是不是|有没有|难道|吗|[?？]"
+    r"|要不要|需不需要|可以|能否|能帮|帮你|让我|我来|去查|去搜|查查|搜搜|翻翻|找找"
+    r"|你说|你问|你提到|你让我|引用|原话"
+    r"|网上|网络|互联网|通用|常识|训练|资料里")
+# 跨子句桥用的"否定领起"（中文把结论写成"站内那些文章，没有写过 async 的"这种
+# 逗号断句是很常见的形态；只在本子句**开头**出现否定存在时才算，前缀白名单只收
+# 副词/语气词——不用"任意 ≤N 字"的窗口，否则"站内文章我读完了，X 也没有报错"
+# 会因"X 也"占位而被读成站内结论）
+_ABSENCE_LEAD_RE = re.compile(
+    r"^(?:(?:确实|真的|其实|目前|现在|暂时|根本|压根)|[也确实都并]){0,2}"
+    r"(?:没有|没找到|没写|没讲过|没提|没介绍|未收录|暂无|查不到|找不到|未见"
+    r"|无相关|不涉及)")
+# 跨轮回执行记忆里的"检索类动作"痕迹（Rust render_exec_row 定稿措辞：rag_search →
+# "站内检索「…」"、search_notes → "搜索「…」"）——有它即视为站内结论有据
+_EXEC_SEARCH_TRACE_RE = re.compile(r"站内检索「|搜索「")
+
+
+def _exec_memory_has_search(msgs: list) -> bool:
+    """跨轮回执行记忆里是否留下过检索类动作（见 _EXEC_SEARCH_TRACE_RE）。"""
+    return any(_EXEC_SEARCH_TRACE_RE.search(str(getattr(m, "content", "")))
+               for m in msgs)
+
+
+def _site_absence_claim(text: str, search_evidence: bool = False) -> bool:
+    """站内"没有"结论无依据（gate 洞④，见上方注释）。
+
+    两种形态都认（子句级豁免照样生效）：
+      ① 同子句三条件：站内空间词 + 否定存在 + 内容域名词（"站内没有讲过这个文章"）；
+      ② 跨子句桥：本子句有站内词 + 内容域名词，**下一子句以否定存在领起**
+         （"站内那些文章，没有写过 async 的""全站翻过的笔记，没讲过这个"）——
+         中文逗号断句的常见形态，缺了它真结论会整片漏掉。
+    search_evidence=True（本轮有内容类工具帧，或跨轮回执里有检索痕迹）→ 结论有据，放行。"""
+    if search_evidence:
+        return False
+    clauses = [c.group(0) for c in _CLAUSE_RE.finditer(text)]
+    for i, clause in enumerate(clauses):
+        if _ABSENCE_EXEMPT_RE.search(clause):
+            continue
+        if (_SITE_DOMAIN_RE.search(clause) and _ABSENCE_RE.search(clause)
+                and _CONTENT_NOUN_RE.search(clause)):
+            return True
+        if (i + 1 < len(clauses) and _SITE_DOMAIN_RE.search(clause)
+                and _CONTENT_NOUN_RE.search(clause)
+                and _ABSENCE_LEAD_RE.search(clauses[i + 1])
+                and not _ABSENCE_EXEMPT_RE.search(clauses[i + 1])):
+            return True
+    return False
+
+
 # NOTE 零工具（页面不存在/已下线）轮的如实措辞核验词表（与 instantiate_plan 的
 # note 文本配套，见 gate_node）。
 _HONEST_DOWN = ("下线", "下架", "无法访问", "没有了")
@@ -1170,7 +1254,8 @@ _HONEST_GONE = ("没有", "不存在", "找不到", "无法识别", "没有找�
 
 
 def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
-                 exec_memory: bool = False) -> tuple[str, str] | None:
+                 exec_memory: bool = False,
+                 exec_search_evidence: bool = False) -> tuple[str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本)；有据/无声称 → None。
 
@@ -1183,6 +1268,9 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         执行回执（executions 注入）且子句含追述时间词 → 说的是**已记录的那次执行**，
         属 rule 6 据实转述；此前只有洞② 接了 exec_memory，洞① 漏了，导致
         "刚才已经帮你显示上去了"这类**引回执**的回合被整轮换成兜底道歉
+      - 零工具轮（除 navigate 注记轮）：站内"没有"结论无依据（_site_absence_claim，
+        洞④，20260921）——"站内没有讲这个的文章"这类**结论**同样要本轮查过才有资格说；
+        依据豁免比洞①/② 宽（跨轮回执里有检索痕迹即放行），因为这里说的是结论不是动作
       - chat 零工具轮：另查第一人称工具调用声称（_CHAT_TOOL_CLAIM_RE）——
         高精确模式；"重读/查过"读取声称不在此拦（chat 轮多为口语，误伤成本高）
       - content_query 零工具轮（异常路径：计划本应有调用清单却留空收尾）：
@@ -1202,6 +1290,12 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         return ("state_claim_without_tool", _FALLBACK_STATE_CLAIM)
     if _site_search_claim(own, exec_memory):
         return ("search_claim_without_tool", _FALLBACK_SEARCH_CLAIM)
+    # 洞④（20260921）：站内"没有"结论无依据。navigate 的零工具注记轮豁免——那一轮
+    # 的"页面不存在/已下线"是 NAV_MAP 给的确定性事实（gate_node 第 4 节另有如实措辞
+    # 核验），不属凭空结论。
+    if not (skill == "navigate" and "不调用任何工具" in (plan.get("note") or "")):
+        if _site_absence_claim(own, exec_search_evidence):
+            return ("site_absence_claim_without_tool", _FALLBACK_SITE_ABSENCE)
     if skill == "chat":
         if _chat_tool_claim(own):
             return ("claim_without_tool", _FALLBACK_CLAIM)
@@ -1230,6 +1324,10 @@ _FALLBACK_SEARCH_CLAIM = (
     "喵呜……主人，我得说实话：这一轮系统没有任何工具执行，我说的『翻了一遍/检索了"
     "一圈』是嘴上跑火车，没有依据。要不要我现在认认真真查一遍再回答你？这次每一条"
     "都带真实来源喵。")
+_FALLBACK_SITE_ABSENCE = (
+    "喵呜……主人，我得收回一句：这一轮我其实**没有去站里查过**，却说成了『站内没有"
+    "…』——站里到底有没有，我没核实过就不能下结论 :犯错: 要我现在认认真真检索一遍"
+    "再回答你嘛？这次查到什么、没查到什么都如实告诉你喵。")
 _FALLBACK_NO_EXEC = (
     "喵呜……主人，我得纠正自己一句：这一轮系统**其实执行过工具**（只是返回是空的，"
     "没有查到东西），我刚才却说成『本轮没有执行任何工具』——把『查了但没有』讲成"
@@ -2030,7 +2128,13 @@ _EXECUTOR_PROMPT = """\
     追问要**点名候选**（"测试、本项目介绍、摄影、编程、Web3 里的哪一个？"）。
     反面同样要守住：摘要里**带序号**的条目（"最近3条: 1.…/2.…/3.…"）"第二条"是
     唯一的，直接照抄取值；访客已点名（"编程那个分类"）也直接答——这两种情况**反问
-    就是多此一举**。"""
+    就是多此一举**。
+16. 不得凭空对"站内有没有"下结论（20260921）：说"站内没有讲这个的文章""没收录
+    ""全站查不到相关内容"这类**结论**，前提是依据里看得到检索——本轮的工具帧里有
+    检索/读取动作，或"工具执行记录"里有往轮的**检索行**（形如 `站内检索「…」`/
+    `搜索「…」`）。本轮没查过就别替站里下结论：要么只用通用知识把问题答清楚
+    （**不提**站内），要么如实说"站里我还没查过，要不要我去查一遍"。零工具轮
+    凭空说"站内没有"是被系统拦下的（会整轮换成道歉），别让自己撞上去。"""
 
 
 def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
@@ -2135,7 +2239,8 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
 
     # ── 2. 命令前缀文本（任何轮次，正文出现命令帧前缀 = 假装发命令）─────────
     # ── 3. 编造资源 URL（任何轮次，工具返回/用户消息中不存在的 /api 或图片）──
-    issue = _claim_issue(reply, plan["skill"], plan, bool(frames), _has_exec_memory(msgs))
+    issue = _claim_issue(reply, plan["skill"], plan, bool(frames),
+                         _has_exec_memory(msgs), _exec_memory_has_search(msgs))
     if issue:
         return _fallback_result(*issue, plan, len(frames))
     code_stripped = re.sub(r"```.*?```", "", reply, flags=re.S)
@@ -2205,6 +2310,15 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             record("gate", "phantom_search_claim",
                    executed=sorted(n for n in executed_names if n))
             return _fallback_result("phantom_search_claim", _FALLBACK_SEARCH_CLAIM,
+                                    plan, len(frames))
+        # 5f. 站内"没有"结论 vs 本轮内容类帧（洞④的混合轮形态，20260921）：本轮只跑了
+        #     动作类工具（导航/特效/设备），回复却对站内内容下"没有"的结论 → 无依据。
+        if _site_absence_claim(own5d, _exec_memory_has_search(msgs)):
+            logger.info("[gate] 站内『没有』结论但本轮无内容类工具帧（执行=%s）→ fallback",
+                        "、".join(sorted(n for n in executed_names if n)) or "无")
+            record("gate", "site_absence_claim",
+                   executed=sorted(n for n in executed_names if n))
+            return _fallback_result("site_absence_claim", _FALLBACK_SITE_ABSENCE,
                                     plan, len(frames))
 
     # 5e. 假阴性声称（20260920 洞③）：本轮**真执行过**（有已验证回执）却宣称"本轮
