@@ -163,5 +163,113 @@ check("节点 config 注解是真实类型（不是字符串）",
       not isinstance(inspect.signature(execute_node).parameters["config"].annotation, str),
       repr(inspect.signature(execute_node).parameters["config"].annotation))
 
+print("⑨ 写操作的「人在回路」确认（前置需求 ③：权限之后还有一次同意）")
+# 权限判"这个人能不能做"，确认判"这一次他到底要不要做"。只有**离开用户眼前**的
+# 写入（写站点内容：对外可见、收不回）要确认；页面/设备写的效果用户立刻看得见。
+check("现有工具没有一个是需确认的 scope（今天行为零变化）",
+      not any(authz.requires_consent(p(ROLE_ADMIN), n) for n in TOOL_NAMES),
+      str([n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), n)]))
+check("写站点内容属于需确认 scope", authz.SCOPE_WRITE_CONTENT in authz.CONSENT_SCOPES)
+check("页面/设备写不需要确认（效果就在用户眼前）",
+      authz.SCOPE_WRITE_PAGE not in authz.CONSENT_SCOPES
+      and authz.SCOPE_WRITE_DEVICE not in authz.CONSENT_SCOPES)
+check("server 侧写工具（若将来有）只由声明驱动，不需改函数",
+      "CONSENT_SCOPES" in inspect.getsource(authz.requires_consent))
+
+# 用临时探针工具把真实分支跑一遍（现在没有 write.content 工具）
+authz.TOOL_SCOPE["_probe_post"] = authz.SCOPE_WRITE_CONTENT
+try:
+    sec = p(ROLE_SECRETARY)
+    check("需确认工具：无确认语 → 未获同意",
+          authz.requires_consent(sec, "_probe_post")
+          and not authz.consent_granted(sec, "_probe_post", "帮我在留言板发一条：你好呀"))
+    check("需确认工具：明确确认语 → 获准",
+          authz.consent_granted(sec, "_probe_post", "确认发布"))
+    check("确认语看的是**本轮消息**，空消息/None 一律不认",
+          not authz.consent_granted(sec, "_probe_post", "")
+          and not authz.consent_granted(sec, "_probe_post", None))
+    check("普通聊到『发布』不算确认（须是明确的确认说法）",
+          not authz.consent_granted(sec, "_probe_post", "发布功能是怎么做的？")
+          and not authz.consent_granted(sec, "_probe_post", "你上次发布的那篇写得不错"))
+    check("确认是用户的事，与 principal 无关（无声明 scope 的工具不受影响）",
+          not authz.requires_consent(sec, "list_notes")
+          and authz.consent_granted(sec, "list_notes", "确认发布") is False)
+    frame = authz.consent_frame("_probe_post", sec)
+    check("未确认帧是 __ERROR__ 形态（checker 判 BLOCK、gate 5a 生效）",
+          frame.startswith(f"__ERROR__: 待确认[{authz.REASON_CONSENT}]"))
+    check("原因码可被取回且与权限拒绝可分辨",
+          authz.consent_error_reason(frame) == authz.REASON_CONSENT
+          and authz.scope_error_reason(frame) is None)
+    check("权限拒绝帧不会被误读成确认拒绝",
+          authz.consent_error_reason(authz.denial_frame(authz.check(UNKNOWN, "list_notes"), UNKNOWN)) is None)
+    check("帧文案要求去问用户、不得声称完成",
+          "未执行" in frame and "确认" in frame)
+    # fail-closed：需要确认的 scope 若没配确认语表，绝不默认放行
+    authz.CONSENT_SCOPES  # frozenset，只读
+    fake_scope = "write.probe"
+    authz.TOOL_SCOPE["_probe_noconsent"] = fake_scope
+    orig_patterns = authz._CONSENT_PATTERNS
+    authz.CONSENT_SCOPES = frozenset({fake_scope})     # 临时换一组"需确认但没配语表"
+    try:
+        check("需确认却没配确认语表 → fail-closed（不默认放行）",
+              authz.requires_consent(sec, "_probe_noconsent")
+              and not authz.consent_granted(sec, "_probe_noconsent", "确认发布"))
+    finally:
+        authz.CONSENT_SCOPES = frozenset({authz.SCOPE_WRITE_CONTENT})
+        authz._CONSENT_PATTERNS = orig_patterns
+        del authz.TOOL_SCOPE["_probe_noconsent"]
+finally:
+    del authz.TOOL_SCOPE["_probe_post"]
+check("探针条目清理干净", "_probe_post" not in authz.TOOL_SCOPE
+      and "_probe_noconsent" not in authz.TOOL_SCOPE
+      and authz.CONSENT_SCOPES == frozenset({authz.SCOPE_WRITE_CONTENT}))
+
+print("⑨b 接线：闸在调用之前，拒绝说得出原因，叙述侧封得住")
+check("execute 在调用前算确认", "consent_missing = (authz.requires_consent" in graph_src)
+check("未确认时不执行（产帧而非 invoke）", "out = authz.consent_frame(name, principal)" in graph_src)
+check("未确认记 trace（consent_required 事件）", '"consent_required"' in graph_src)
+check("checker 认得确认原因码", "authz.consent_error_reason(text)" in graph_src)
+check("gate 5a 扩了写内容的完成式声称词表（未确认却说已发布 → fallback）",
+      "_WRITE_CONTENT_CLAIM_RE.search(reply)" in graph_src)
+check("洞①的施事支认写内容动词（零工具轮编造『帮你发布了』）",
+      "|发布|发表|投稿|提交)" in graph_src)
+
+# 写内容声称词表的正负例（隔着"帮你"两个字也要认；转述用户过往动作不许误伤）
+from agent.graph import _WRITE_CONTENT_CLAIM_RE as W  # noqa: E402
+
+for _p in ("已经帮你发布好啦～", "帮你把留言发出去了", "已经发布了", "留言成功提交啦"):
+    check(f"写内容完成式声称：认得「{_p}」", bool(W.search(_p)))
+for _n in ("你已经提交过河灯啦", "要我现在发布吗？你回复「确认发布」就好啦",
+           "发布功能是怎么做的？", "这条还没发出去喵",
+           "要我帮你把留言发出去吗？", "我已经帮你发布的那篇文章里有错别字"):
+    check(f"写内容完成式声称：不误伤「{_n}」", not W.search(_n))
+
+# 端到端：未获确认的写操作 + 叙述说"已发布" → gate 必须兜住
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
+
+from agent.graph import gate_node, plan_encode  # noqa: E402
+from agent.skills import instantiate_plan  # noqa: E402
+
+
+def _write_state(reply: str):
+    return {"plan": plan_encode(instantiate_plan("content_query", {"calls": []})),
+            "done": False, "plan_rounds": 0,
+            "messages": [
+                HumanMessage(content="帮我在留言板发一条：今天天气真好"),
+                ToolMessage(content=authz.consent_frame("_probe_post", p(ROLE_SECRETARY)),
+                            tool_call_id="execute_0", name="_probe_post"),
+                AIMessage(content=reply),
+            ]}
+
+
+out = gate_node(_write_state("已经帮你发布好啦～"))
+
+check("未确认 + 声称已发布 → fallback（用户收到的不是这句谎话）",
+      bool(out.get("fallback_text")), str(out.get("fallback_text", ""))[:50])
+out = gate_node(_write_state("这条还没发出去喵，要我现在发布吗？你回复「确认发布」就好啦"))
+check("未确认 + 如实说『还没发、要确认』 → 放行（不许误伤诚实收尾）",
+      out.get("done") is True and not out.get("fallback_text"),
+      str(out.get("fallback_text", ""))[:50])
+
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
