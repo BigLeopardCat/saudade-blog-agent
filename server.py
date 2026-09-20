@@ -294,10 +294,17 @@ def _build_messages(req: ChatRequest) -> list:
     if req.summary:
         ctx_parts.append(f"conversation_summary: {req.summary}")
     if req.executions:
-        # 跨轮执行记忆（20260904 C3）：checker 验收过的本会话最近执行（Rust 渲染，
-        # "· 屏幕显示「…」"式行）——质疑"你刚才真显示了/屏上写了什么"的如实依据。
-        # 与 conversation_summary 同语义：系统确认事实注入，模型不得扩展/编造
-        ctx_parts.append(f"recent_executions: {req.executions[:1500]}")
+        # 跨轮执行记忆（20260904 C3；20260920 批次 c 补行首时间与（×N）次数）：
+        # checker 验收过的本会话最近执行（Rust 渲染，"· MM-DD HH:MM 动作行（×N）"）
+        # ——质疑"你刚才真显示了/屏上写了什么/什么时候"的如实依据。
+        # 与 conversation_summary 同语义：系统确认事实注入，模型不得扩展/编造。
+        # 括号里的定性不是装饰（20260920 实证）：行首是时间戳、又与 page=/title=/
+        # current_time= 同处一个 page_ctx 串，模型会把它读成"访客浏览痕迹"并据此
+        # 否认自己刚执行过（原话"那个时间戳是系统上报的访客浏览行为记录"）——
+        # 必须点明这是**泠月自己**已执行、系统验收过的动作。
+        ctx_parts.append(
+            "recent_executions（泠月自己已执行、系统验收过的动作记录，不是访客的浏览痕迹）: "
+            f"{req.executions[:1500]}")
     # 20260905 重复提问注入（18:17:36/18:18:52 实证：同句重发时 narrator 逐字
     # 复读上轮回复，两条一字不差的回复并排出现在会话里——qwen 对同句重问的
     # 最优策略判断是原样复读，prompt 软约束压不住，需确定性旁路）。
