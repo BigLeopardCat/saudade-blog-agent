@@ -49,8 +49,15 @@ LangGraph 四件套：
   注：_force_display 强制路由已随 20260828 影子系统重构移除（见问题记录）。
 """
 
-from __future__ import annotations
 
+# ⚠️ 本文件**不要**加 `from __future__ import annotations`（20260920 实测踩过）：
+# 它把注解变成字符串，而 langgraph 是靠 `p.annotation in (RunnableConfig, RunnableConfig | None)`
+# **对象比较**来判断"第二个参数是不是 config"的（langgraph/_internal/_runnable.py）。
+# 字符串注解比对不上 ⇒ 节点被当成只收 state 调用 ⇒ `config` 静默取默认值 None，
+# 于是 `_stopped(config)` 恒为 False（断连中断在节点内失效）、principal 恒为 UNKNOWN。
+# 没有报错、没有异常，只有一条 UserWarning（生产日志里根本不会被看见）。
+# test_authz.py 用 `warnings.simplefilter("error")` 构建图来锁这一条：注解一旦退回
+# 字符串，套件立刻红。
 import ast
 import json
 import logging
@@ -65,6 +72,7 @@ from langgraph.graph.message import add_messages
 
 from models import get_llm
 from tools import get_all_tools
+from agent import authz
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _doc_anchors, _frame_texts, _has_frames, _last_user_msg,
                            _msg_text, _page_ctx, _receipts_text, _recent_tail,
@@ -75,6 +83,7 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_pa
                              _nav_fast_path, _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.entities import receipt_digest
+from agent.principal import UNKNOWN as UNKNOWN_PRINCIPAL
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
@@ -98,6 +107,16 @@ def _stopped(config: RunnableConfig | None) -> bool:
     """节点级中断检查：stop_event（threading.Event）由 server.py 经 config 注入。"""
     ev = (config or {}).get("configurable", {}).get("stop_event")
     return ev is not None and ev.is_set()
+
+
+def _principal_of(config: RunnableConfig | None) -> "Principal":
+    """本轮调用者身份（server.py 经 config 注入，见 agent/principal.py）。
+
+    取不到 → UNKNOWN（零权限的占位，不是"管理员"）。单元的/dev 直调图、老路径
+    请求都会走这一支；**是否据此拦截由 authz.enforcing() 决定**（默认 shadow）。
+    """
+    p = (config or {}).get("configurable", {}).get("principal")
+    return p if p is not None and hasattr(p, "uid") else UNKNOWN_PRINCIPAL
 
 
 # 工具一次构建全局复用（tools/base.py 的 @tool 都是纯函数，无状态）
@@ -732,7 +751,37 @@ _CONTENT_TOOLS = frozenset({
 # 命令前缀文本：回复正文出现系统命令帧前缀 = 模型在"假装发命令"（旧事故：正文
 # 输出 AUTO_NAVIGATE:/NAVIGATE:/EFFECT:/DARKMODE: 文本既不会执行、还误导用户
 # 以为已执行）。任何轮次命中一律兜底——叙述纪律已禁止，命中即确凿违规。
+# 20260920 洞③收窄：**元讨论里的提及**不是发命令（见 _cmd_prefix_directive）。
 _CMD_PREFIX_RE = re.compile(r"(?:AUTO_NAVIGATE|NAVIGATE|EFFECT|DARKMODE)\s*[:：]")
+# 机制/元讨论语境标记（同句出现 ⇒ 那句话在**讲命令机制**，不是在发命令）
+_CMD_META_RE = re.compile(
+    r"系统|命令|前缀|正则|协议|帧|机制|实现|代码|文档|校验|核对|拦截|拦下|剔除|过滤"
+    r"|白名单|提示词|cleanAgentText")
+
+
+def _cmd_prefix_directive(text: str) -> bool:
+    """回复是否**指令式**地写了命令前缀（返回 True = 违规，走 fallback）。
+
+    20260920 洞③：旧判据对全文裸搜 `_CMD_PREFIX_RE`，把"讲命令机制时举的例子"
+    也判成发命令。现场（golden rag_arch_check，用户问"怎么防止假装调用工具"，模型
+    答"……就算在正文里写 `NAVIGATE:/xxx` 也会被前端的 `cleanAgentText` 剔除……"）
+    → 用户收到的是兜底道歉，而这条回复本身完全正确。同一根因在 9/20 全量里 2 例
+    （rag_arch_check / followup_named_doc_reread，后者还被判 PASS——正断言恰好
+    能被道歉文本命中，见 golden `forbid_fallback` 断言）。
+
+    判定：出现处**必须同时**满足 ①落在引号或内联代码区内 ②所在句子含机制词，
+    才算"提及"放行；任一不满足即仍判违规——两种需要继续拦的形态：裸写在正文里
+    （"我这就打开 `EFFECT:x`"的裸形式）、代码区内但在讲**要做的事**而不是机制
+    （"稍等～ `EFFECT:sakura:on`"）。副作用是这类字符串不再被前端当命令执行：
+    前端 `execAgentCommands` 的正文兜底同步跳过引号/代码区（chat-core.js
+    stripMentionSpans），两侧口径必须一致，否则放行的提及会在页面上真的生效。"""
+    for m in _CMD_PREFIX_RE.finditer(text):
+        i = m.start()
+        if not (_inside_quote(text, i) or _inside_code_span(text, i)):
+            return True
+        if not _CMD_META_RE.search(_sentence_of(text, i)):
+            return True
+    return False
 # 确认式导航 + 完成式到达声称（NAVIGATE: 帧 = 等待确认，非已跳转；曾见模型返回
 # NAVIGATE: 后回复"已经带您到文章页"，用户视角即幻觉）。仅 navigate 技能轮启用。
 _NAV_ARRIVAL_RE = re.compile(
@@ -800,9 +849,33 @@ def _strip_quoted_spans(text: str) -> str:
     return _QUOTED_SPAN_RE.sub("", text)
 
 
+# 内联代码区（含 ``` 围栏；先配对短跨度即天然吃掉围栏内容，见 20260920 洞③）
+_CODE_SPAN_RE = re.compile(r"`[^`]*`", re.S)
+
+
+def _inside_code_span(text: str, pos: int) -> bool:
+    """pos 处是否落在内联代码/围栏区内（举例说明 ≠ 发命令）。"""
+    return any(m.start() <= pos < m.end() for m in _CODE_SPAN_RE.finditer(text))
+
+
 def _inside_quote(text: str, pos: int) -> bool:
     """pos 处是否落在引号区内（转述他人内容不算自称调用）。"""
     return any(s <= pos < e for s, e in _quoted_spans(text))
+
+
+_SENT_BREAK = "。！？；\n!?;"
+
+
+def _sentence_of(text: str, pos: int) -> str:
+    """pos 所在的句子（按句末标点/分号/换行切，逗号留在句内）。
+
+    判据作用域单位取**句子级**（不是子句级）：元讨论常把"命令帧有这几种："
+    与被举的例子隔一个逗号放在同一句里，而"好的～我这就打开"这种施事句整句
+    不含机制词——子句级会漏掉前者、句子级不会放大后者。"""
+    start = max((text.rfind(c, 0, pos) for c in _SENT_BREAK), default=-1) + 1
+    end = min((i for i in (text.find(c, pos) for c in _SENT_BREAK) if i >= 0),
+              default=len(text))
+    return text[start:end]
 
 
 def _tool_claim_window(full: str, start: int, end: int, name: str) -> bool:
@@ -1035,8 +1108,9 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本)；有据/无声称 → None。
 
-    作用域（20260903 收窄后的设计 + 20260919 两洞）：
-      - 任何轮：命令前缀文本（_CMD_PREFIX_RE）
+    作用域（20260903 收窄后的设计 + 20260919 两洞 + 20260920 洞③）：
+      - 任何轮：命令前缀文本（_cmd_prefix_directive——引号/内联代码区 + 同句机制词
+        = 元讨论里的提及，放行；见该函数注释与 golden `forbid_fallback`）
       - 零工具轮（不分技能）：操作完成声称（_STATE_ACTION_CLAIM_RE，洞①）与
         站内检索声称（_site_search_claim，洞②）——零帧 = 本轮什么都没发生，
         这两族声称必为编造
@@ -1048,7 +1122,7 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         声称、NAVIGATE: 确认帧 + 到达声称、具名工具声称（5c）、**站内检索声称
         与内容类帧族不符**（5d，洞②的混合轮形态）——见 gate_node
     """
-    if _CMD_PREFIX_RE.search(reply):
+    if _cmd_prefix_directive(reply):
         return ("cmd_prefix", _FALLBACK_CMD_PREFIX)
     if frames_exist:
         return None  # 帧存在：声称有据（err 帧/确认帧/具名/检索族场景由 gate_node 兜）
@@ -1521,7 +1595,10 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
     if text.lstrip().startswith("__ERROR__"):
         # 参数引用失败单独给原因码（20260919）：planner 要按"是路径错还是没执行过"
         # 分别改参/换路，笼统的 error_frame 给不出这个信息。
-        return _VERDICT_BLOCK, (ref_error_reason(text) or "error_frame")
+        # 权限拒绝同办（20260920）：scope_denied 是"你的身份不允许"，与"工具报错"
+        # 要分开——planner 的应对是如实告知，不是换个工具再试。
+        return _VERDICT_BLOCK, (ref_error_reason(text)
+                                or authz.scope_error_reason(text) or "error_frame")
     # 命令工具契约层校验：动作工具必须返回命令帧（工具返回形态漂移 = 执行未
     # 按契约发生，如 navigate 返回了纯文本而非 NAVIGATE:/AUTO_NAVIGATE:）。
     # device_oled_display 的"未在 5s 内回执确认"属软失败（指令确已下发），判
@@ -1556,6 +1633,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     if not specs:
         return {"messages": []}
     executed = state.get("executed") or []
+    principal = _principal_of(config)  # 本轮调用者（权限判据的输入，见 agent/authz.py）
     user_msg = _last_user_msg(state["messages"])
     page_ctx = _page_ctx(state["messages"])
     results: list = []
@@ -1585,6 +1663,13 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             if ref_err:
                 args = {}  # 参数清单本身解析没问题（args_ok 保持 True）——失败的是取值
         tool = _TOOL_MAP.get(name)
+        # 权限判据（20260920，秘书类功能地基）：唯一判据点 = 调用之前，与断连检查、
+        # 参数引用解析同一层（确定性、无 LLM、无一例外）。默认 shadow——
+        # 只算决策、只把**拒绝**记进 trace，行为不变（先观测、后收口，见 agent/authz.py）。
+        decision = authz.check(principal, name)
+        if not decision.allowed and not authz.enforcing():
+            record("execute", "authz_shadow", tool=name, principal=str(principal),
+                   decision=str(decision))
         # 屏幕文案创作：text 参数缺失/为空 → execute 结合对话创作（技能固有设计）
         if ref_err is None and name == "device_oled_display" and not args.get("text"):
             args = dict(args)
@@ -1593,6 +1678,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if ref_err:
             out = f"__ERROR__: 参数引用无法解析[{ref_err}]（上一步返回里没有这个值——改参数或换个工具）"
             logger.warning("[execute] 参数引用解析失败，不执行: %s → %s", spec, ref_err)
+        elif not decision.allowed and authz.enforcing():
+            out = authz.denial_frame(decision, principal)
+            logger.warning("[execute] 权限拒绝，不执行: %s → %s", spec, decision)
         elif tool is None:
             out = f"__ERROR__: 未知工具 {name}（planner 调用清单越界，被 execute 拒绝执行）"
             logger.warning("[execute] 未知工具 %s，拒绝执行", name)
