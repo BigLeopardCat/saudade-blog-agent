@@ -10,6 +10,11 @@
 > ②gate 命令前缀判据补**元讨论豁免**（提及 ≠ 发命令，前后端两侧配套：`_cmd_prefix_directive`
 > ↔ `stripMentionSpans`）。③golden 补 `forbid_fallback` 正断言，堵住"走了兜底却判 PASS"的盲区。
 > ④RAG 供给端候选**相对断崖**截断（`rag/search.py` 的 `_CLIFF_RATIO=0.25`，只截断不改排序）。
+> ⑤**写操作的事前同意**（秘书前置需求 ③ 的 agent 侧）——权限之后再加一道确定性判据：
+> 需确认的 scope（`CONSENT_SCOPES = {write.content}`）未获**用户本轮消息**明确确认 →
+> 产 `__ERROR__: 待确认[consent_required]` 帧、**不调用工具**；用错误帧形态是为了让 gate
+> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 22 个工具里
+> 没有一个是 `write.content`，所以这条闸**空转**（等第一个写工具，声明表驱动、不用改代码）。
 > ⚠️ 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
 > annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
 > **静默失效**（无报错，只有一条没人看的 UserWarning）；详见 `docs/问题记录.md` §1.3，
@@ -124,7 +129,8 @@ flowchart TB
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
 ├── test_skills.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
-├── test_authz.py              # L0 单元级（权限模型：scope 声明完备性 + 角色授予表 + 失败取向 + config 接线回归锁，秒级）
+├── test_authz.py              # L0 单元级（权限模型：scope 声明完备性 + 角色授予表 + 失败取向
+│                              #   + 写操作的"人在回路"确认闸 + config 接线回归锁，秒级）
 ├── docs/                      # 本文档 + eval-observability.md + secretary.md（秘书框架与前置需求）+ 问题记录.md（踩坑史）
 └── .env.example / pyproject.toml / uv.lock / .github/workflows/eval.yml（CI 评测门禁）
 
