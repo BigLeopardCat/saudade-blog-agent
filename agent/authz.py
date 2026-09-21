@@ -152,6 +152,12 @@ TOOL_SCOPE: dict[str, str] = {
     "create_category": SCOPE_WRITE_CONSOLE,
     "update_category": SCOPE_WRITE_CONSOLE,
     "delete_category": SCOPE_WRITE_CONSOLE,
+    # 第五轮（20260922）：站内公告代发/改/删。同门——公告是**对全体访客可见**的
+    # 文字，发错了收不回（删除也没有回收站），正是"离开用户眼前、以他名义对其他
+    # 人可见"的典型，所以既要 write.console 也要每次命令式确认。
+    "create_announcement": SCOPE_WRITE_CONSOLE,
+    "update_announcement": SCOPE_WRITE_CONSOLE,
+    "delete_announcement": SCOPE_WRITE_CONSOLE,
 }
 
 
@@ -164,6 +170,22 @@ TOOL_SCOPE: dict[str, str] = {
 # 20260921 第二轮把 `write.console` 加进来：后台写改的是**对外可见状态**
 # （一篇文章从公开变私密，读者立刻打不开），且改完不会自动复原。
 CONSENT_SCOPES = frozenset({SCOPE_WRITE_CONTENT, SCOPE_WRITE_CONSOLE})
+
+# **一律弹窗**的那几个工具（20260922 第五轮，用户点名要求）：
+# 「可以代发公告，但是内容也需要**弹窗等待管理员确认**」。
+#
+# 为什么不是"通常那样"就够：别的后台写有第二条路——用户这句要是写成了明确命令
+# （句首"把/新建…"+ 明确目标），同意闸判命令成立、**当轮直接执行、不弹窗**。这条路
+# 对文章/标签/分类是合理的（他确实在下命令），但公告不同：它是**对全体访客说的话**，
+# 而且是 agent 替主人起草的内容——错一个字就是主人对外说过那句话。所以公告三件把
+# 那条捷径**在结构上关掉**：`consent_granted` 对它们恒 False ⇒ 永远走弹窗，
+# 主人在弹窗里看见标题与正文预览再点确定。多问一次的成本远低于一次说错的公告。
+#
+# 注意这**不是**权限判据（`check` 不看这张表）：非管理员来问，走的仍是 scope 拒绝，
+# 弹窗都到不了（见 graph._confirm_popup 的顺序）。
+_ALWAYS_CONFIRM_TOOLS = frozenset({
+    "create_announcement", "update_announcement", "delete_announcement",
+})
 
 # 每个需确认的 scope 配一张**确认语表**：用户的**本轮消息**命中才算确认。
 # 刻意收窄（"确认发布"这种明确说法）——fail-open 的代价是未经同意把内容发出去，
@@ -380,7 +402,11 @@ def consent_granted(principal: Principal | None, tool: str, user_msg: str) -> bo
     fail-closed：需确认的 scope 若没配确认语表 → **False**（绝不默认放行）；
     消息为空 → False。表值可以是正则（`.search`）或谓词（直接调用），见
     `_CONSENT_PATTERNS` 的注释。
+
+    `_ALWAYS_CONFIRM_TOOLS` 里的工具**永不走"同轮命令即确认"**（见那张表的注释）。
     """
+    if tool in _ALWAYS_CONFIRM_TOOLS:
+        return False
     spec = _CONSENT_PATTERNS.get(required_scope(tool) or "")
     if spec is None:
         return False

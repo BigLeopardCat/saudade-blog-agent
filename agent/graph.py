@@ -160,7 +160,8 @@ _ARTICLE_WRITE_TOOLS = frozenset({"set_article_status", "set_article_tags"})
 # 同理是分类名（分类没有会漂的 id 语义，名字就是用户认得的那个）。
 _RCPT_META_KEYS = ("op", "article_id", "before", "after",
                    "tag_id", "tag_name", "level",
-                   "category_id", "category_name", "change")
+                   "category_id", "category_name", "change",
+                   "announcement_id", "announcement_title")
 
 # 目标证据的来源工具：本轮帧里**真带 note id** 的那几个（公开列表/检索/详情、
 # 后台列表、置顶列表）。刻意不含写工具自身的回显（"刚刚写过 id=12"不能成为
@@ -2344,6 +2345,10 @@ _WRITE_NAME_FIELDS = {
     "delete_tag": ("name", None),
     "update_category": ("name", None),
     "delete_category": ("name", None),
+    # 公告（20260922 第五轮）：按标题指认。新建不在此列——那是**新**标题，
+    # 字典里当然没有（同 create_tag 的新名字不进这里）。
+    "update_announcement": ("title", None),
+    "delete_announcement": ("title", None),
 }
 
 
@@ -2365,16 +2370,22 @@ def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
     args, args_ok = _tool_args(tools[0])
     if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
         return None
-    from tools.base import (_category_index, _find_named_category,
+    from tools.base import (_announcement_index, _category_index,
+                            _find_named_announcement, _find_named_category,
                             _find_named_tag, _tag_index)
     tkey, pkey = _WRITE_NAME_FIELDS[name]
     is_cat = name.endswith("_category")
-    tag_index = None if is_cat else _tag_index(config)
-    cat_index = None
+    is_ann = name.endswith("_announcement")
+    tag_index = None if (is_cat or is_ann) else _tag_index(config)
+    cat_index = ann_index = None
     if is_cat:
         cat_index = _category_index(config)
         if cat_index is None:
             return None  # 读不到字典 ≠ 没有：不拦（见上方边界）
+    elif is_ann:
+        ann_index = _announcement_index(config)
+        if ann_index is None:
+            return None  # 同上
     elif tag_index is None:
         return None
     if tkey:
@@ -2382,6 +2393,8 @@ def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
         if want:
             if is_cat:
                 hit, err = _find_named_category(want, config, index=cat_index)
+            elif is_ann:
+                hit, err = _find_named_announcement(want, config, index=ann_index)
             else:
                 hit, err = _find_named_tag(want, config, args.get("level"),
                                            index=tag_index)

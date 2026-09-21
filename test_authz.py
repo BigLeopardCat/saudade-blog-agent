@@ -184,11 +184,30 @@ print("⑨ 写操作的「人在回路」确认（前置需求 ③：权限之�
 # ——写工具落地那天这条必须有人看见它变了）。20260921 晚第三轮从三个变八个：标签
 # 增/改/删 + 分类增/改/删五件新写工具都是"离开用户眼前、写站点内容"的写。
 CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), n)}
-check("需确认的工具恰好是八个后台写（改宽/改窄都要有人看见）",
+check("需确认的工具恰好是十一个后台写（改宽/改窄都要有人看见）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
+                        "create_announcement", "update_announcement",
+                        "delete_announcement",
                         "set_article_status", "set_article_tags"},
       str(sorted(CONSENT_TOOLS)))
+# 公告三件**永不走"同轮命令即确认"**（用户点名要求：内容必须弹窗等管理员确认）。
+# 这条锁的形态是"恒 False"而不是"某句话判不出来"：只要有人把捷径重新打开，
+# 无论用户那句话写得多像命令，这里都会红。
+_ANN_CMDS = ["发个公告说今晚 23 点维护", "把《维护通知》删了",
+             "新建一个公告叫维护通知，内容今晚维护", "确认发布公告"]
+check("公告三件即使写成明确命令也判不出确认（捷径结构性关闭）",
+      all(not authz.consent_granted(p(ROLE_ADMIN), t, m)
+          for t in ("create_announcement", "update_announcement", "delete_announcement")
+          for m in _ANN_CMDS),
+      str([m for m in _ANN_CMDS
+           if authz.consent_granted(p(ROLE_ADMIN), "create_announcement", m)]))
+# 同一句「新建一个…叫 X」对标签/分类仍判成命令——收窄只落在公告三件上。
+# （删除类命令本来就不在 `_CONSOLE_VERBS` 里（"删了"这种词形没进表），那是既有
+# 收窄方向：判不出来就弹窗问一次，不放开。）
+check("同一句话对**别的**后台写仍算命令（收窄只落在公告三件上）",
+      authz.consent_granted(p(ROLE_ADMIN), "create_tag", "新建一个标签叫 探针标签")
+      and authz.consent_granted(p(ROLE_ADMIN), "create_category", "新建一个分类叫 随笔"))
 check("写站点内容属于需确认 scope", authz.SCOPE_WRITE_CONTENT in authz.CONSENT_SCOPES)
 check("后台写属于需确认 scope", authz.SCOPE_WRITE_CONSOLE in authz.CONSENT_SCOPES)
 check("页面/设备写不需要确认（效果就在用户眼前）",

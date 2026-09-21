@@ -75,11 +75,13 @@ WRITE_SKILL_NAMES = frozenset({
     "tag_create", "article_status", "article_tags",
     "tag_update", "tag_delete",
     "category_create", "category_update", "category_delete",
+    "announcement_create", "announcement_update", "announcement_delete",
 })
 
-# 其中"目标是一个**名字**"的那批（标签 / 分类），共用 `_expand_write_skill`：
+# 其中"目标是一个**名字**"的那批（标签 / 分类 / 公告），共用 `_expand_write_skill`：
 # 它们与文章两件的差别不在写法而在**目标通道**——文章写认 article_id（有"用户
-# 点名即据"的判据），标签/分类写认名字，解析在工具侧对着实时字典做。
+# 点名即据"的判据），标签/分类/公告写认名字（公告认标题），解析在工具侧对着实时
+# 字典做。
 _WRITE_NAME_TARGET_SKILLS = WRITE_SKILL_NAMES - {"article_status", "article_tags"}
 
 
@@ -632,6 +634,74 @@ SKILLS: list[Skill] = [
         ),
         roles=frozenset({ROLE_ADMIN}),
     ),
+    # ── 站内公告三件（20260922 第五轮）───────────────────────────────
+    # 公告**没有 id 稳定指称**（用户从来只说标题），也没有层级，所以这一组比
+    # 标签/分类那批还简单：一律按标题指认，正文原样落库、不润色。
+    Skill(
+        name="announcement_create",
+        capability="代发站内公告（全站访客在首页都能看到）",
+        description=(
+            "博主（管理员）要求**发一条站内公告**时使用（如「发个公告说今晚维护」）。"
+            "参数 title=公告标题，content=公告正文。"
+            "**正文只写用户说过的内容**——公告是对全体访客说的话，"
+            "不许替他润色、补细节或编造（他给几个字就写几个字）。"
+            "正文缺失时不要自己编一句凑上：缺参数就直接问主人。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真发出去由系统弹确认框问主人（公告内容会显示在确认框里），你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+        ),
+        inputs={"title": "公告标题（用户说的那句）",
+                "content": "公告正文（用户说的内容，原样，不要改写）"},
+        plan=[("create_announcement", {"title": "$title", "content": "$content"})],
+        complete_when="create_announcement 返回了已发布",
+        reply_contract=(
+            "只能按 create_announcement 的实际返回作答，说清发出去的公告标题；"
+            "返回失败/未确认时如实说没发出去，**绝不得用完成式声称已发布**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    Skill(
+        name="announcement_update",
+        capability="修改一条已发出去的公告（改标题 / 改正文）",
+        description=(
+            "博主（管理员）要求**改动一条已经发出去的公告**时使用。"
+            "参数 title=要改的那条公告**现在的标题**（用它指认是哪一条）；"
+            "new_title=改成什么标题；content=正文改成什么。"
+            "只填用户点名要改的那几项——没点名的系统会原样保留，不会被清空。"
+            "标题对不上工具会如实说站内没有这条公告——照实转述，"
+            "不要改用 announcement_create 蒙一条。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+        ),
+        inputs={"title": "要改的那条公告现在的标题",
+                "new_title": "（可选）改成什么标题",
+                "content": "（可选）正文改成什么"},
+        plan=[("update_announcement", {"title": "$title", "new_title": "$new_title",
+                                       "content": "$content"})],
+        complete_when="update_announcement 返回了改动结果",
+        reply_contract=(
+            "只能按 update_announcement 的实际返回作答，说清改的是哪条公告、改了什么；"
+            "返回「站内没有标题是 X 的公告」时如实说没有这条公告、什么都没改；"
+            "返回失败/未确认时如实说没改成，**绝不得用完成式声称已改好**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    Skill(
+        name="announcement_delete",
+        capability="删除一条站内公告（删掉取不回来）",
+        description=(
+            "博主（管理员）要求**删掉一条公告**时使用。参数 title=要删的那条公告的标题。"
+            "**删除没有回收站，删掉就取不回来**，所以只有用户**明确说要删**时才选本技能"
+            "（「把那条公告删了」「撤掉维护通知」）；只是说「改一下」时选 announcement_update。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+        ),
+        inputs={"title": "要删掉的那条公告的标题"},
+        plan=[("delete_announcement", {"title": "$title"})],
+        complete_when="delete_announcement 返回了删除结果",
+        reply_contract=(
+            "只能按 delete_announcement 的实际返回作答，说清删掉的是哪条公告；"
+            "返回「站内没有标题是 X 的公告」时如实说没有这条公告、什么都没删；"
+            "返回失败/未确认时如实说没删掉，**绝不得用完成式声称已删除**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
     Skill(
         name="chat",
         capability="闲聊、陪你说话",
@@ -817,6 +887,39 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
         # 整轮 FAIL、零弹窗）。锁：test_tag_admin 的工具名 ∈ 注册表 那条。
         tool_name = "create_category" if name == "category_create" else "update_category"
         return [_spec(tool_name, args)], "、".join(bits)
+
+    if name.startswith("announcement_"):
+        # 公告（20260922 第五轮）：目标按**标题**指认。正文**原样透传、一个字都不改**
+        # ——它是对全体访客说的话，替主人润色等于替他发言。这里只做"空/非空"的判断。
+        title = _write_arg(params.get("title"))
+        if not title:
+            return [], (f"{name} 缺少公告标题（title）：不调用任何工具，"
+                        "如实向主人问清是哪一条公告（新建时问清标题叫什么）")
+        if name == "announcement_delete":
+            return [_spec("delete_announcement", {"title": title})], (
+                f"删除公告「{title}」（删掉后首页立刻看不到，取不回来）")
+        if name == "announcement_create":
+            content = _write_arg(params.get("content"))
+            if not content:
+                # **绝不替用户补正文**：公告是主人的原话，编一句就是替他发声。
+                return [], ("announcement_create 缺少公告正文（content）：不调用任何工具，"
+                            "如实向主人问清公告要写什么（原文照录，不要自己编）")
+            return [_spec("create_announcement", {"title": title, "content": content})], (
+                f"发布公告「{title}」（正文照录主人的原话）")
+        new_title = _write_arg(params.get("new_title"))
+        content = _write_arg(params.get("content"))
+        if not new_title and not content:
+            return [], ("announcement_update 没有指出要改什么（new_title / content）："
+                        "不调用任何工具，如实向主人问清要改标题还是正文")
+        args: dict = {"title": title}
+        bits = []
+        if new_title:
+            args["new_title"] = new_title
+            bits.append(f"改名为「{new_title}」")
+        if content:
+            args["content"] = content
+            bits.append("正文改成主人给的那段")
+        return [_spec("update_announcement", args)], f"修改公告「{title}」：{'、'.join(bits)}"
 
     return [], f"{name}：未知的写技能（不调用任何工具）"
 

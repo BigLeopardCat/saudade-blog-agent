@@ -671,6 +671,42 @@ def render_category_deleted(name: str, note_count=None) -> str:
     return f"已删除分类「{name}」{tail}（后台已复核：分类列表里已经没有它）"
 
 
+# ── 站内公告（20260922）────────────────────────────────────────────────
+# 公告**没有 id 稳定指称**（用户从来只说标题），也没有层级/父级，所以这里的渲染
+# 比标签/分类那批简单得多：一律按标题指认，篇数之类的"影响面"也不存在。
+# 但有一条独有纪律：**公告正文是对全体访客说的话**，回执行里绝不摘要正文
+# （只报"标题改成了什么"），免得把主人的原话改了样子念出去。
+def announcement_title(row) -> str:
+    return str((row or {}).get("title") or "").strip() or "（无标题）"
+
+
+def render_announcement_created(row) -> str:
+    """发布成功。**不带工具名**（同 render_tag_created 的血案）。"""
+    return (f"已发布公告「{announcement_title(row)}」（id={(row or {}).get('id')}）。"
+            f"首页现在就能看到它。")
+
+
+def render_announcement_updated(before, after) -> str:
+    """修改成功。**不复述正文**：只报标题怎么变的，正文变更只说"已更新"——
+    正文可能有几百字，回执行只留列宽（300），塞进去会把摘要挤掉。"""
+    b, a = announcement_title(before), announcement_title(after)
+    what = f"标题「{b}」→「{a}」" if b != a else "正文已更新"
+    return f"已修改公告「{a}」（{what}）（后台已复核读到新值）"
+
+
+def render_announcement_noop(row) -> str:
+    """要改的内容与现状一致 ⇒ 什么都不用做。**也走 ok**：这不是失败，
+    "现状就是这样"是事实本身（narrator 照它答即可）。"""
+    return f"公告「{announcement_title(row)}」现在就是这个样子，无需改动"
+
+
+def render_announcement_deleted(row) -> str:
+    """删除成功。公告是真删（没有外键、没有回收站）——回执行必须说清"取不回来"，
+    否则用户以为还能撤销。"""
+    return (f"已删除公告「{announcement_title(row)}」（删除后取不回来）"
+            f"（后台已复核：公告列表里已经没有它）")
+
+
 # ── 写操作确认框（20260921）：问句与回复文本都是**确定性中文**────────────
 # 与 agent/reports.py 同一条纪律：能算的都不交给 LLM。这两段文本会直接进
 # ①确认框的问题行 ②那一轮的对话气泡，都是用户一眼看到的东西——让模型写它，
@@ -783,6 +819,25 @@ def _confirm_one(spec: dict, index=None, cats=None) -> str:
         tail = (f"，它有 {cnt} 篇文章，删掉后这些文章会变成没有分类"
                 if cnt is not None else "，删掉后原本属于它的文章会变成没有分类")
         return f"删除分类「{label}」{tail}"
+    if tool in ("create_announcement", "update_announcement", "delete_announcement"):
+        # 公告按**标题**指认（用户从来只说标题；公告没有 id 稳定指称）。
+        # 弹窗里必须带上正文预览：主人是一眼扫过就点确定的，只写「发布公告「维护通知」」
+        # 等于让他签一份没看过的公告——而这段文字会直接对全体访客说出去。
+        title = str(a.get("title") or "").strip() or "（未命名）"
+        if tool == "create_announcement":
+            body = clip(str(a.get("content") or ""), 60)
+            return f"发布公告「{title}」，正文：{body}"
+        if tool == "update_announcement":
+            bits = []
+            new_title = str(a.get("new_title") or "").strip()
+            if new_title:
+                bits.append(f"标题改为「{new_title}」")
+            if str(a.get("content") or "").strip():
+                bits.append(f"正文改为：{clip(str(a.get('content')), 60)}")
+            body = "、".join(bits) if bits else "（没说要改什么）"
+            return f"修改公告「{title}」：{body}"
+        # 删公告：真删、没有回收站，且访客首页立刻看不到。
+        return f"删除公告「{title}」（删掉后首页立刻看不到，且取不回来）"
     if tool == "set_article_status":
         head = f"修改文章 {a.get('article_id')}"
         bits = []
