@@ -13,9 +13,15 @@
     不打印、不进仓库（仓库是公开的，用例里不写真实账号）。
 
 **默认只跑安全三步**（零真写、零库变更）：非管理员写指令 / 管理员疑问句 / 管理员打不存在的 id。
-真写（草稿文章置顶来回、标签加减、经生产入口真写一轮）需显式 `--allow-write`；
-建临时标签后**删除**（会触发全表 `prune_note_tags`，不可回滚）须再显式 `--allow-tag-delete`
-——没给就不跑，且**打印出来说明没跑**（不静默豁免）。
+真写（草稿文章置顶来回、标签加减、经生产入口真写一轮、**⑧ 弹窗全链路**、**⑩ 颜色**）需显式
+`--allow-write`；建临时标签后**删除**（会触发全表 `prune_note_tags`，不可回滚）须再显式
+`--allow-tag-delete`——没给就不跑，且**打印出来说明没跑**（不静默豁免）。
+
+⑧⑨⑩ 是 20260921 第三轮加的（写操作确认弹窗）：**必须走 `/api/chat/stream` 真帧流**
+（令牌只在 `__CONFIRM__:` 帧里，非流式 `/chat` 看不到），读端规则与 chat-stream.js 一致。
+  * ⑧ 非命令措辞 → 确认帧（零执行）→ 带令牌的隐藏确认请求 → 库真值变了 → 明确命令复原；
+  * ⑨ 篡改签名 / 已过期 → 必拒且**零写**（库真值不变，回复里也不许出现完成式声称）；
+  * ⑩ 经弹窗确认建带颜色的标签 → 库真值颜色 = 用户点名的色值（丢了就回落哈希色，界面上看不出）。
 
 所有断言读**后端真值**：探针自己以同一 uid 现签 JWT 直查 Rust `/api/protected/*` 与
 `/api/tagone|tagtwo`，**不看工具返回值**——工具说"改好了"不算数，库里那一行才算。
@@ -168,6 +174,90 @@ def ask_rust(msg: str, uid: int, role: str, conversation_id: int) -> dict:
 
 def tools_of(resp: dict) -> list:
     return [r.get("tool") for r in (resp.get("executions") or [])]
+
+
+# ── SSE 读端（⑧⑨⑩ 用）─────────────────────────────────────────────────────
+# 确认弹窗是**帧级**行为：令牌只在 `__CONFIRM__:` 帧里，非流式 `/chat` 看不到它。
+# 所以这一族走**真前端同款**的 `/api/chat/stream`，逐帧读，规则与 chat-stream.js
+# 的帧循环一致（帧可能是裸字符串，也可能是 JSON 编码过的字符串）。顺带验 Rust 那
+# 三个分支：__CONFIRM__ 只转发不累积、文本帧才累积、__EXEC__ 不下发（前端无此协议）。
+
+def stream_rust(msg: str, uid: int, role: str, conv_id: int,
+                confirm_token: str | None = None, timeout: int = 240) -> dict:
+    body = {"message": msg, "current_url": "/dashboard", "page_title": "后台",
+            "conversation_id": conv_id}
+    if confirm_token:
+        body["confirm_token"] = confirm_token
+    req = urllib.request.Request(
+        f"{BASE}/api/chat/stream", data=json.dumps(body).encode(), method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": "Bearer " + login_jwt(uid, role)})
+    t0 = time.time()
+    frames: list[str] = []
+    text = ""
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        for raw in r:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line.startswith("data: "):
+                continue
+            payload = line[6:]
+            if not payload:
+                continue
+            if payload in ("__END__", "__NAV_END__"):
+                continue
+            if payload.startswith("__ERROR__:"):
+                frames.append(payload)
+                continue
+            try:
+                payload = json.loads(payload)
+            except Exception:  # noqa: BLE001
+                pass
+            if not isinstance(payload, str):
+                continue
+            if payload.startswith("__"):
+                frames.append(payload)   # 控制帧：只登记，不进文本
+                continue
+            text += payload
+    return {"reply": text, "frames": frames, "_secs": round(time.time() - t0, 1)}
+
+
+def confirm_frames(frames: list) -> list:
+    """帧流里的确认帧 → `[(payload dict|None, 原文)]`。"""
+    out = []
+    for f in frames:
+        if f.startswith("__CONFIRM__:"):
+            try:
+                out.append((json.loads(f[len("__CONFIRM__:"):]), f))
+            except Exception:  # noqa: BLE001
+                out.append((None, f))
+    return out
+
+
+def history_items(uid: int, role: str, conv_id: int) -> list:
+    """会话历史（真值）：`/api/chat/history` 不套 ApiResponse，单独读一次。"""
+    body = _http("GET", f"{BASE}/api/chat/history?conversation_id={conv_id}", None,
+                 {"Authorization": "Bearer " + login_jwt(uid, role)}, 20)
+    return body.get("items") or []
+
+
+def _stale_token(uid: int, conv_id: int, skill: str, specs: list) -> str:
+    """签一个**已过期**的同形令牌（探针自己持密钥；只为验"过期必拒"）。"""
+    from agent import confirm
+    from config.settings import settings
+    payload = {"v": confirm._VERSION, "uid": uid, "conv": conv_id,
+               "exp": int(time.time()) - 1, "skill": skill, "specs": specs}
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    sig = hmac.new((settings.jwt_secret or "").encode(),
+                   confirm._DOMAIN + body, hashlib.sha256).digest()
+    return confirm._b64e(body) + "." + confirm._b64e(sig)
+
+
+def _tampered(token: str) -> str:
+    """改掉签名最后一位（保持形状，验签必过不去）。"""
+    head, sep, sig = token.rpartition(".")
+    if not sep or not sig:
+        return token + "A"
+    return head + "." + sig[:-1] + ("A" if sig[-1] != "A" else "B")
 
 
 class Report:
@@ -444,6 +534,200 @@ def step7_cross_turn(rep: Report, uid: int, role: str, art_id: int, title: str) 
             print(f"  [FAIL] 删除探针会话失败：{e}")
 
 
+def _probe_conv(rep: Report, uid: int, role: str, tag: str) -> int | None:
+    """建一个探针会话（跑完删除，级联清 chat_history 与 execution_log）。"""
+    try:
+        conv = backend_send("POST", "/api/chat/conversations", {}, uid, role)
+        cid = int(conv["id"])
+    except Exception as e:  # noqa: BLE001
+        rep.fails.append(f"{tag} 建探针会话失败: {e}")
+        print(f"  [FAIL] 建探针会话失败：{e}")
+        return None
+    print(f"  探针会话 id={cid}（跑完删除）")
+    return cid
+
+
+def _drop_conv(rep: Report, uid: int, role: str, cid: int, tag: str) -> None:
+    try:
+        backend_send("DELETE", f"/api/chat/conversations/{cid}", {}, uid, role)
+        print(f"  已删除探针会话 {cid}")
+    except Exception as e:  # noqa: BLE001
+        rep.fails.append(f"{tag} 删除探针会话失败: {e}（请手工删会话 {cid}）")
+
+
+def _popup_token(rep: Report, uid: int, role: str, conv_id: int, intent: str,
+                 tag: str, want_skill: str) -> dict | None:
+    """发一句**非命令措辞的意图**，取回确认帧里的待办令牌（零执行）。
+
+    断言三件：帧在、本轮**零执行**（库真值稍后由调用方复核）、令牌没被写进回复正文
+    （Rust 对 __CONFIRM__ 只转发不累积——漏了这条分支，令牌会进历史与下一轮上下文）。
+    """
+    d = stream_rust(intent, uid, role, conv_id)
+    got = confirm_frames(d["frames"])
+    print(f"  [{'PASS' if got else 'FAIL'}] 非命令措辞 → 确认帧"
+          f"（帧数 {len(d['frames'])}，确认帧 {len(got)}）")
+    print(f"        回复：{(d.get('reply') or '')[:160]}")
+    if not got:
+        rep.fails.append(f"{tag} 无确认帧：意图句没触发弹窗（帧：{[f[:24] for f in d['frames']]}）")
+        return None
+    payload, raw = got[0]
+    if not payload:
+        rep.fails.append(f"{tag} 确认帧不是合法 JSON：{raw[:80]}")
+        return None
+    tok = payload.get("token") or ""
+    opts = [o.get("value") for o in (payload.get("opts") or [])]
+    print(f"        问句：{payload.get('q')}")
+    print(f"        选项：{opts}｜令牌：{len(tok)} 字符（{tok[:6] or '—'}…）")
+    rep.check(bool(payload.get("q")), f"{tag} 确认帧缺 q")
+    rep.check(opts == ["yes", "no"], f"{tag} 选项不是 确定/取消：{opts}")
+    rep.check(len(tok) > 20, f"{tag} 令牌为空/过短")
+    rep.check(want_skill in raw, f"{tag} 帧里没有技能名 {want_skill}（执行轮无从拼计划）")
+    if tok and tok in (d.get("reply") or ""):
+        rep.fails.append(f"{tag} 令牌出现在回复正文里 = Rust 把 __CONFIRM__ 累积进历史了")
+    return payload
+
+
+def step8_popup_write(rep: Report, uid: int, role: str, art_id: int, title: str) -> None:
+    """⑧ 弹窗全链路真写（--allow-write）：非命令措辞 → 确认帧 → 点确定 → 真写 → 复原。
+
+    这是**唯一**能验"帧 → 令牌 → 真写"整条链的地方（golden 点不了按钮，离线用例
+    走的是进程内桩）。靶子仍是草稿/私密文章：`draft ↔ private` 两态都在公开面不可见。
+    """
+    print(f"\n⑧ 弹窗全链路真写（--allow-write）：文章 {art_id}《{title}》draft ↔ private")
+    cur = notes_by_id(uid, role).get(art_id, {}).get("status")
+    if cur not in _SAFE_TARGET_STATUS:
+        rep.fails.append(f"⑧ 靶子状态 {cur!r} 不在安全集 {_SAFE_TARGET_STATUS}")
+        print(f"  [FAIL] 靶子状态 {cur!r} 不安全，跳过")
+        return
+    want = "private" if cur == "draft" else "draft"
+    cn = {"private": "私密", "draft": "草稿"}[want]
+    conv_id = _probe_conv(rep, uid, role, "⑧")
+    if conv_id is None:
+        return
+    try:
+        # 非命令措辞（"文章 N 的状态我想改成…"）：无命令骨架、非提问 → 该弹窗
+        payload = _popup_token(rep, uid, role, conv_id,
+                               f"文章 {art_id} 的状态我想改成{cn}",
+                               "⑧", "article_status")
+        unchanged = notes_by_id(uid, role).get(art_id, {}).get("status") == cur
+        if not unchanged:
+            rep.fails.append(f"⑧ 弹窗轮就动了数据（status {cur} → "
+                             f"{notes_by_id(uid, role).get(art_id, {}).get('status')}）= 零执行被破坏")
+        print(f"  [{'PASS' if unchanged else 'FAIL'}] 弹窗轮零执行（库真值 status 仍是 {cur}）")
+        if payload is None:
+            return
+        tok = payload["token"]
+
+        # ⑨ 令牌边界：篡改 / 过期 → 必拒且零写（都在真写之前做，靶子还没动）
+        for label, bad in (("篡改签名", _tampered(tok)),
+                           ("已过期", _stale_token(uid, conv_id,
+                                                   payload.get("skill") or "article_status",
+                                                   payload.get("specs") or []))):
+            b = stream_rust(f"确认执行：{payload.get('q') or ''}", uid, role, conv_id,
+                            confirm_token=bad)
+            now = notes_by_id(uid, role).get(art_id, {}).get("status")
+            ok = now == cur
+            print(f"  [{'PASS' if ok else 'FAIL'}] ⑨ {label} → 库真值 status={now}（期望仍 {cur}，零写）")
+            print(f"        回复：{(b.get('reply') or '')[:160]}")
+            if not ok:
+                rep.fails.append(f"⑨ {label}: 库真值变成 {now} = 无效令牌竟然写成功了")
+            if _CLAIM_RE.search(b.get("reply") or ""):
+                rep.fails.append(f"⑨ {label}: 回复里出现了完成式声称 {_CLAIM_RE.search(b.get('reply')).group(0)!r}")
+
+        # 真写：带上原始令牌的隐藏确认请求（前端点「确定」走的就是这一条）
+        d2 = stream_rust(f"确认执行：{payload.get('q') or ''}", uid, role, conv_id,
+                         confirm_token=tok)
+        after = notes_by_id(uid, role).get(art_id, {}).get("status")
+        ok2 = after == want
+        print(f"  [{'PASS' if ok2 else 'FAIL'}] 点确定 → 真写  库真值 status={after}（期望 {want}）")
+        print(f"        回复：{(d2.get('reply') or '')[:200]}")
+        if not ok2:
+            rep.fails.append(f"⑧ 确认后库真值 status={after} ≠ {want}（回执不可信，以库为准）")
+
+        # 隐藏确认请求**不落用户消息**：历史里不该多出一条空 user 行，回复行要在
+        rows = history_items(uid, role, conv_id)
+        empties = [r for r in rows if r.get("role") == "user" and not (r.get("content") or "").strip()]
+        users = [r for r in rows if r.get("role") == "user"]
+        assistants = [r for r in rows if r.get("role") == "assistant"]
+        print(f"        历史：user {len(users)} 行（空 {len(empties)}）／assistant {len(assistants)} 行")
+        if empties:
+            rep.fails.append(f"⑧ 历史里有 {len(empties)} 条空 user 行 = 隐藏确认请求落库了")
+        if len(users) != 1:
+            rep.fails.append(f"⑧ 历史里 user 行 {len(users)} 条（期望 1：只有那句非命令措辞）")
+
+        # 复原：**明确命令**走快道（同轮命令即确认）→ 不该再弹窗
+        back = f"把文章 {art_id} 改成{'私密' if cur == 'private' else '草稿'}"
+        d3 = stream_rust(back, uid, role, conv_id)
+        rest = notes_by_id(uid, role).get(art_id, {}).get("status")
+        ok3 = rest == cur and not confirm_frames(d3["frames"])
+        print(f"  [{'PASS' if ok3 else 'FAIL'}] 复原（明确命令：{back}）  库真值 status={rest}"
+              f"（期望 {cur}）｜确认帧 {len(confirm_frames(d3['frames']))} 条（期望 0）")
+        print(f"        回复：{(d3.get('reply') or '')[:160]}")
+        if rest != cur:
+            rep.fails.append(f"⑧ 复原失败：库真值 status={rest} ≠ {cur}（请手工改回后台）")
+        if confirm_frames(d3["frames"]):
+            rep.fails.append("⑧ 明确命令却又弹了确认框 = 快道没走通（同轮命令即确认被破坏）")
+    finally:
+        _drop_conv(rep, uid, role, conv_id, "⑧")
+
+
+def step10_color(rep: Report, uid: int, role: str, allow_delete: bool) -> None:
+    """⑩ 颜色（--allow-write）：经弹窗确认建一个一次性标签，库真值颜色 = 请求的色名对应值。
+
+    走**弹窗 → 点确定**这条路（而非常用命令快道）：颜色参数正是在"用户说了色名、
+    但这句话没判成命令"的场景里最容易丢——丢了就静默回落到哈希色，界面上看不出来。
+    """
+    name = "_探针色_" + time.strftime("%m%d%H%M%S")
+    print(f"\n⑩ 真写：经弹窗确认建一个带颜色的标签「{name}」（粉色 → #eb2f96）")
+    conv_id = _probe_conv(rep, uid, role, "⑩")
+    if conv_id is None:
+        return
+    try:
+        payload = _popup_token(rep, uid, role, conv_id,
+                               f"一级标签，名字叫{name}，使用粉色颜色", "⑩", "tag_create")
+        if payload is None:
+            return
+        if "粉色" not in (payload.get("q") or "") or "#eb2f96" not in (payload.get("q") or ""):
+            rep.fails.append(f"⑩ 确认问句没把颜色说全（问句：{payload.get('q')!r}）——"
+                             f"用户点确定前看不出自己要同意什么颜色")
+        else:
+            print(f"  [PASS] 确认问句里色名与色值齐全：{payload.get('q')}")
+        stream_rust(f"确认执行：{payload.get('q') or ''}", uid, role, conv_id,
+                    confirm_token=payload["token"])
+        hit = [(k, t) for k, t in _tags_with_color(uid, role).items() if t[0] == name]
+        print(f"  [{'PASS' if hit else 'FAIL'}] 库真值：字典里{'有' if hit else '没有'}「{name}」（{hit or '—'}）")
+        if not hit:
+            rep.fails.append(f"⑩ 库真值里找不到「{name}」= 没建成")
+            return
+        key, (title, color) = hit[0]
+        okc = (color or "").lower() == "#eb2f96"
+        print(f"  [{'PASS' if okc else 'FAIL'}] 库真值颜色 = {color!r}（期望 #eb2f96）")
+        if not okc:
+            rep.fails.append(f"⑩ 库真值颜色是 {color!r} ≠ #eb2f96 = 用户点名的颜色被换了")
+        tid = key.split(":", 1)[1]
+        if not allow_delete:
+            print(f"  [skip] 删除未跑（未给 --allow-tag-delete）：孤儿标签 id={tid} 留在字典里")
+            rep.warn(f"⑩ 临时标签 id={tid} 未删除（未授权删标签），已如实标注")
+            return
+        print("  ⚠ 披露：删除会触发全表 prune_note_tags（清理 note.tags 里的悬空引用），不可回滚")
+        backend_send("DELETE", "/api/protected/tag", {"level": "one", "ids": [int(tid)]}, uid, role)
+        left = [k for k, t in _tags_with_color(uid, role).items() if t[0] == name]
+        print(f"  [{'PASS' if not left else 'FAIL'}] 删除后库真值：{'已消失' if not left else f'仍在 {left}'}")
+        if left:
+            rep.fails.append(f"⑩ 删标签: 「{name}」仍在字典里 {left}")
+    finally:
+        _drop_conv(rep, uid, role, conv_id, "⑩")
+
+
+def _tags_with_color(uid: int, role: str) -> dict:
+    """`{"1:<id>": (title, color)}`——⑩ 要读颜色（探针直读后端，不看工具回执）。"""
+    out = {}
+    for lv, path in (("1", "/api/tagone"), ("2", "/api/tagtwo")):
+        for t in (backend_get(path, uid, role) or []):
+            out[f"{lv}:{t['tagKey']}"] = (t.get("title"), t.get("color") or "")
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="管理助手写操作线上活体探针（见模块头注）")
     ap.add_argument("--uid", type=int, default=int(os.environ.get("APP_ADMIN_UID") or 0),
@@ -456,6 +740,8 @@ def main() -> int:
                     help="允许删除临时标签（会触发全表 prune_note_tags，不可回滚；不加则只建不删）")
     ap.add_argument("--draft-id", type=int, default=0,
                     help="指定靶子文章 id（必须是草稿；默认自动挑第一篇草稿）")
+    ap.add_argument("--skip-popup", action="store_true",
+                    help="跳过 ⑧⑨⑩（弹窗链路/令牌边界/颜色）——它们要经 SSE 真链路，最慢")
     args = ap.parse_args()
 
     global BASE
@@ -470,8 +756,8 @@ def main() -> int:
     step1_visitor(rep, args.visitor_uid, "user")
 
     if args.uid <= 0:
-        print("\n[skip] ②③④⑤⑥⑦：未提供 --uid / APP_ADMIN_UID（管理员的真身份没法编，"
-              "不猜、也不静默豁免——这六条**本轮没验**）")
+        print("\n[skip] ②③④⑤⑥⑦⑧⑨⑩：未提供 --uid / APP_ADMIN_UID（管理员的真身份没法编，"
+              "不猜、也不静默豁免——这几条**本轮没验**）")
         rep.warn("管理员四条未跑：缺 --uid")
     else:
         # 先确认这个 uid 在库里确实是 admin（否则后面全是"未验到"，不是"验过了"）
@@ -511,8 +797,18 @@ def main() -> int:
                     else:
                         print("\n[skip] ⑦：④/⑤ 未还原到原状，先修好再跑跨轮（不叠加副作用）")
                         rep.warn("⑦ 跨轮未跑：④/⑤ 未复原")
+                    if not args.skip_popup and ok4 and ok5:
+                        step8_popup_write(rep, args.uid, "admin", aid, title)
+                    elif args.skip_popup:
+                        rep.warn("⑧⑨ 未跑：--skip-popup")
+                    else:
+                        rep.warn("⑧⑨ 未跑：④/⑤ 未复原")
             if args.allow_write:
                 step6_temp_tag(rep, args.uid, "admin", args.allow_tag_delete)
+                if not args.skip_popup:
+                    step10_color(rep, args.uid, "admin", args.allow_tag_delete)
+                else:
+                    rep.warn("⑩ 未跑：--skip-popup")
 
     print(f"\n=== {'全部符合预期' if not rep.fails else f'{len(rep.fails)} 项不符'}"
           f"｜警告 {len(rep.warns)} 条｜{round(time.time() - t0, 1)}s ===")

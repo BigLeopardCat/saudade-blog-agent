@@ -377,15 +377,21 @@ SKILLS: list[Skill] = [
         description=(
             "博主（管理员）要求**新建一个文章标签**时使用（如「建一个叫 Python 的标签」"
             "「在架构下面加一个二级标签叫 分布式」）。参数 title=标签名，parent_id=父标签 id"
-            "（要建二级标签才给；父标签 id 要从标签清单或本轮工具帧里拿到）。"
+            "（要建二级标签才给；父标签 id 要从标签清单或本轮工具帧里拿到），"
+            "color=用户**点了名**的颜色（中文色名如「粉色」，或站内色板色值；用户没说就不填）。"
             "写操作：**必须用户本轮明确下令才会执行**。**仅管理员可用**"
         ),
-        inputs={"title": "新标签的名字", "parent_id": "（可选）父标签 id，建二级标签时给"},
-        plan=[("create_tag", {"title": "$title", "parent_id": "$parent_id"})],
+        inputs={"title": "新标签的名字",
+                "parent_id": "（可选）父标签 id，建二级标签时给",
+                "color": "（可选）用户点了名的颜色：中文色名或站内色板色值；没说就不填"},
+        plan=[("create_tag", {"title": "$title", "parent_id": "$parent_id", "color": "$color"})],
         complete_when="create_tag 返回了新建或复用的标签 id",
         reply_contract=(
-            "只能按 create_tag 的实际返回作答：返回「已新建…（id=N）」就说新建好了并给出 id 与层级；"
-            "返回「已经存在…复用」就如实说本来就有、没有重复创建；"
+            "只能按 create_tag 的实际返回作答：返回「已新建…（id=N）」就说新建好了并给出 id、层级"
+            "与**颜色**（返回里给了「颜色：粉色（#eb2f96）」就把中文色名与色值都写进回复——"
+            "前端据此画色块，色块本身不用你画）；"
+            "返回「已经存在…复用」就如实说本来就有、没有重复创建（返回里带现有颜色就一并说清，"
+            "与用户点名的颜色不一致时要点明这一差别）；"
             "返回失败/未确认时如实说没建成，**不得用完成式声称已创建**。"
             "本工具只建标签、不会挂到任何文章上——要挂标签得再用 article_tags"
         ),
@@ -581,14 +587,27 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
                 note = ("tag_create 缺少标签名（title）：不调用任何工具，"
                         "如实向主人问清要建的标签叫什么名字")
             else:
-                args = {"title": title}
-                pid = _norm_pos_int(params.get("parent_id"))
-                if pid is not None:
-                    args["parent_id"] = pid
-                tools.append(f"create_tag({json.dumps(args, ensure_ascii=False)})")
-                note = (f"新建标签「{title}」"
-                        + (f"（挂在父标签 id={pid} 下）" if pid else "（一级标签）")
-                        + "；同名已存在时工具会复用而不是重复建")
+                # 颜色（20260921）：用户点名了就**在这里解析成站内色板 hex**——
+                # 确定性、且只有这一处知道色板；执行轮（含确认轮）拿到的就是色值，
+                # 弹窗问句与工具参数都从同一个值渲染。点名的色认不出 → 零工具 +
+                # 注记（**绝不回落到哈希**：那等于把"天蓝"悄悄换成另一个颜色）。
+                color_spec = str(params.get("color") or "").strip()
+                hexval = A.match_tag_color(color_spec) if color_spec else None
+                if color_spec and hexval is None:
+                    note = (f"color「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}）："
+                            "不调用任何工具，如实向主人说明只有这几种颜色，请他挑一个")
+                else:
+                    args = {"title": title}
+                    pid = _norm_pos_int(params.get("parent_id"))
+                    if pid is not None:
+                        args["parent_id"] = pid
+                    if hexval:
+                        args["color"] = hexval
+                    tools.append(f"create_tag({json.dumps(args, ensure_ascii=False)})")
+                    note = (f"新建标签「{title}」"
+                            + (f"（挂在父标签 id={pid} 下）" if pid else "（一级标签）")
+                            + (f"，颜色 {A.describe_color(hexval)}" if hexval else "")
+                            + "；同名已存在时工具会复用而不是重复建")
         else:
             aid = _norm_pos_int(params.get("article_id"))
             if aid is None:

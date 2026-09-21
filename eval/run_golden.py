@@ -148,6 +148,11 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None) -> dict:
     resets_reasons: list[str] = []
     tool_rounds = 0   # 效率基线：planner 发出 TOOLS 清单的轮数（🛠 过程帧计数）
     error = None
+    # 控制帧原文（20260921）：__PROCESS__ / __RESET__ / __EXEC__ / __CONFIRM__ …
+    # ——写操作确认弹窗是**帧级**行为（golden 点不了按钮），只能在帧上断言：
+    # "该弹窗时弹了窗、且什么都没写"。刻意收原文而不是布尔：断言侧自己取前缀，
+    # 判据与 server/Rust/前端三端的帧契约对得上。
+    control_frames: list[str] = []
     for item in frames:
         if isinstance(item, str) and item.startswith("__RESET__"):
             final_text = ""  # REVISE/兜底轮作废 → 清空（与前端最终显示一致）
@@ -186,7 +191,12 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None) -> dict:
             # 口径错误，据此报的"多轮绕圈例 0"作废）。
             if "🧭 计划：" in item:
                 tool_rounds += 1
+        elif isinstance(item, str) and item.startswith("__"):
+            # 其余控制帧（今天只有 __CONFIRM__:）——没有专门分支的走这里收原文，
+            # 否则新帧类型在 golden 里静默不可见（"断言写不出来"= 回归测不到）。
+            control_frames.append(item)
     return {"text": final_text, "commands": commands, "tool_calls": tool_calls,
+            "frames": control_frames,
             "exec_rows": exec_rows,
             "exec_tools": [r.get("tool", "") for r in exec_rows],
             "tool_rounds": tool_rounds,
@@ -389,6 +399,18 @@ def check_gold(gold: dict, result: dict) -> list[str]:
     # （实测 followup_named_doc_reread：resets=1、用户收到的是兜底文本，却判 PASS），
     # 于是"用户根本没看到那段回答"这件事在 golden 里结构性不可见（76/77 那次唯一
     # FAIL 的根因就是这么被发现的）。gold 里写了本键 ⇒ 本轮必须零 fallback。
+    # 20260921：**帧级**断言（写操作确认弹窗是帧行为，golden 点不了按钮）。
+    #   require_frame_prefix —— 本轮必须发出该前缀的控制帧（该弹窗时弹了窗）
+    #   forbid_frame_prefix  —— 本轮不得发出（不该弹窗的轮次被锁住）
+    # 帧原文进 FAIL 信息（排障要能看出"发的是哪条控制帧"，不然只能重新跑一遍）。
+    for p in gold.get("require_frame_prefix", []):
+        if not any(f.startswith(p) for f in result["frames"]):
+            fails.append(f"本轮没有发出 {p} 帧（控制帧：{[f[:24] for f in result['frames']]}）")
+    for p in gold.get("forbid_frame_prefix", []):
+        hits = [f for f in result["frames"] if f.startswith(p)]
+        if hits:
+            fails.append(f"本轮不应发出 {p} 帧（实际发了一条：{hits[0][:60]}）")
+
     if gold.get("forbid_fallback") and result["resets"]:
         fails.append(f"本轮走了 gate fallback（__RESET__×{result['resets']}："
                      f"{result['resets_reasons']}）——用户收到的是兜底道歉，"

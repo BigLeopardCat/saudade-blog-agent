@@ -134,8 +134,14 @@ check("拒绝只发生在调用之前（denial_frame 产帧而非 invoke）",
       "out = authz.denial_frame(decision, principal)" in graph_src)
 check("shadow 只记拒绝不改行为（authz_shadow 事件）",
       '"authz_shadow"' in graph_src and "not authz.enforcing(decision.scope)" in graph_src)
-check("拦截判据按 scope 取（admin.console 不吃 shadow，见 ⑩）",
-      graph_src.count("authz.enforcing(decision.scope)") == 2)
+# 拦截判据点**逐个点名**（20260921 起 3 处）：① execute 的 shadow 记录
+# ② execute 的硬拦 ③ _confirm_popup 的"能不能做"前置筛（无权做的写操作**不弹窗**
+#    ——弹了就是承诺一件做不到的事，用户点完只会拿到一句拒绝）。
+# 这个数字是**有意的**：每加一处都得先回答"它会不会放宽权限"。③ 只会减少
+# 弹窗，不会让任何东西被允许（它用的是同一个 decision 与同一个 enforcing）。
+check("拦截判据按 scope 取（admin.console 不吃 shadow，见 ⑩）——3 处：shadow/硬拦/弹窗前置筛",
+      graph_src.count("authz.enforcing(decision.scope)") == 3,
+      str(graph_src.count("authz.enforcing(decision.scope)")))
 check("checker 认得 scope_denied 原因码", "authz.scope_error_reason(text)" in graph_src)
 check("principal 经 config 注入图", "def _principal_of" in graph_src)
 check("server 构造 principal（含角色来源标注）", "_resolve_principal" in server_src
@@ -280,6 +286,113 @@ check("命令式判据三种工具共用（同一句对三个工具结论一致�
           for t in ("create_tag", "set_article_status", "set_article_tags")))
 check("同意看的是本轮消息，与 principal 无关（user 说命令也不放行——权限在更前面拦）",
       not authz.check(p(ROLE_USER), "set_article_status").allowed)
+
+# ⑨d「确认…」短回声（20260921 生产实测）：agent 自己建议的说法、用户照抄一遍，
+# 此前一律判 False ⇒ 同意闸不放行 ⇒ planner 追问 ⇒ 用户再打一遍 ⇒ 又 False
+# （**没有出口**）。这一支只认句首的「确认 + 写动词」骨架，并排除打听尾。
+print("⑨d 「确认…」短回声（agent 建议、用户照抄的那句话必须放行）")
+CONFIRM_ECHO = [
+    "确认创建标签 测试",
+    "确认创建标签 agent标签功能测试",
+    "确认一下新建二级标签 测试",
+    "确认把文章 12 设为私密",     # 「确认 + 写动词」→ 短回声骨架
+    "确认发布文章 12",
+    "确认置顶文章 12",
+]
+_bad_echo = [t for t in CONFIRM_ECHO
+             if not authz.consent_granted(p(ROLE_ADMIN), "create_tag", t)]
+check(f"短回声判成命令（{len(CONFIRM_ECHO)} 条）", not _bad_echo, f"漏判: {_bad_echo}")
+CONFIRM_ECHO_NEG = [
+    "确认一下文章 12 是不是私密",     # 打听（是不是）——回声骨架不许把它救活
+    "确认一下这个标签能不能删",       # 能不能
+    "确认创建标签需要多久",           # 打听尾（多久）
+    "我想确认一下文章的状态",         # 无写动词
+    "确认收到",                       # 无写动词
+]
+_bad_echo_neg = [t for t in CONFIRM_ECHO_NEG
+                 if authz.consent_granted(p(ROLE_ADMIN), "set_article_status", t)]
+check(f"打听不是命令（{len(CONFIRM_ECHO_NEG)} 条）", not _bad_echo_neg, f"误判: {_bad_echo_neg}")
+
+# 生产事故原句：**不是**命令（走弹窗，不走快道）——放宽谓词时最容易顺手连带
+# 放宽的一句，单独钉住。
+check("生产实测的意图原句仍不是命令（它该走弹窗，不是直接执行）",
+      not authz.consent_granted(p(ROLE_ADMIN), "create_tag",
+                                "一级标签，名字叫X，使用粉色颜色"))
+
+print("⑨e 弹窗分叉：提问/假设绝不能被读成意图（is_question_like）")
+# 这一支的判据比同意闸**更宽**（多一张打听类名词表）：同意闸判错只是"多问一句"，
+# 而弹窗分叉判错是**弹出一个确定/取消框**——用户只是问"步骤是什么"，屏幕上却
+# 出现一个写操作的确认框，那正是用户拍板不许的"把提问读成意图"。
+Q_POS = [
+    "文章 12 设为私密的步骤是什么",   # 生产实测漏判（上一版判 False → 弹窗）
+    "把文章 12 设为私密会有什么影响？",
+    "如果我把文章 12 设为私密的话",
+    "文章 12 现在是私密吗",
+    "改文章状态有什么风险",
+    "这个标签用粉色好看吗",
+    "建标签要走什么流程",
+]
+_bad_q = [t for t in Q_POS if not authz.is_question_like(t)]
+check(f"提问/假设认得（{len(Q_POS)} 条）", not _bad_q, f"漏判: {_bad_q}")
+Q_NEG = [
+    "一级标签，名字叫X，使用粉色颜色",
+    "新建一个标签叫 Python，用粉色",
+    "确认创建标签 测试",
+    "把文章 12 设为私密",
+    "标签名字叫 测试",
+    "帮我把文章 12 置顶",
+]
+_bad_q_neg = [t for t in Q_NEG if authz.is_question_like(t)]
+check(f"意图陈述不误判成提问（{len(Q_NEG)} 条）", not _bad_q_neg, f"误判: {_bad_q_neg}")
+check("空消息保守按提问走（无从判断时不弹窗）", authz.is_question_like("")
+      and authz.is_question_like("   ") and authz.is_question_like(None))
+
+print("⑨f 系统消息壳对判据透明（生产消息带 `[当前问题]: ` 前缀）")
+# 生产实测（20260921）：server.py:413 给本轮用户消息加锚点 `[当前问题]: `，
+# 而这一族的判据全是**锚定**的（句首把/将、句首动词、句首假设词）——带着壳一条
+# 都命不中。后果两条都实测到了：**教科书式的明确命令**判 False（弹窗照弹），
+# 假设句也判不出提问（弹窗把假设读成了意图）。修法是判据入口先剥壳，这一支锁
+# 两件事：① 壳透明（带壳与不带壳判定一致）；② 剥完仍是**对**的判定（只测透明
+# 度的话，"两边都判 False"也能过）。
+_WRAP = "[当前问题]: "
+WRAP_SAMPLES = [
+    ("create_tag", "一级标签，名字叫X，使用粉色颜色"),
+    ("create_tag", "新建一个标签叫 Python，用粉色"),
+    ("create_tag", "确认创建标签 agent标签功能测试"),
+    ("set_article_status", "把文章 12 设为私密"),
+    ("set_article_status", "帮我把文章 12 置顶"),
+    ("set_article_status", "把文章 12 设为私密会有什么影响？"),
+    ("set_article_status", "如果我把文章 12 设为私密的话"),
+    ("set_article_status", "文章 12 设为私密的步骤是什么"),
+    ("set_article_status", "确认一下文章 12 是不是私密"),
+]
+_diff = []
+for _tool, _t in WRAP_SAMPLES:
+    _w = _WRAP + _t
+    if authz.consent_granted(p(ROLE_ADMIN), _tool, _w) != \
+            authz.consent_granted(p(ROLE_ADMIN), _tool, _t):
+        _diff.append(f"consent:{_t}")
+    if authz.is_question_like(_w) != authz.is_question_like(_t):
+        _diff.append(f"question:{_t}")
+check(f"带壳与不带壳判定一致（{len(WRAP_SAMPLES)} 条）", not _diff, f"不一致: {_diff}")
+check("带壳的明确命令**确实**判成命令（不是两边都 False 的假透明）",
+      authz.consent_granted(p(ROLE_ADMIN), "set_article_status",
+                            _WRAP + "把文章 12 设为私密")
+      and authz.consent_granted(p(ROLE_ADMIN), "set_article_status",
+                                _WRAP + "把文章 999999 设为私密")
+      and authz.consent_granted(p(ROLE_ADMIN), "create_tag",
+                                _WRAP + "确认创建标签 agent标签功能测试"))
+check("带壳的提问/假设**确实**判成提问（弹窗不许对着假设弹）",
+      authz.is_question_like(_WRAP + "如果我把文章 12 设为私密")
+      and authz.is_question_like(_WRAP + "把文章 12 设为私密会有什么影响？")
+      and not authz.consent_granted(p(ROLE_ADMIN), "set_article_status",
+                                    _WRAP + "如果我把文章 12 设为私密"))
+check("剥壳只剥**开头**的方括号注记（句中的括号不动）",
+      authz._strip_system_tags("[当前问题]: [系统] 把文章 12 设为私密")
+      == "把文章 12 设为私密"
+      and authz._strip_system_tags("把文章 12 [注]: 设为私密")
+      == "把文章 12 [注]: 设为私密"
+      and authz._strip_system_tags("[求助] 把文章 12 设为私密") == "把文章 12 设为私密")
 
 print("⑨b 接线：闸在调用之前，拒绝说得出原因，叙述侧封得住")
 check("execute 在调用前算确认", "consent_missing = (authz.requires_consent" in graph_src)
