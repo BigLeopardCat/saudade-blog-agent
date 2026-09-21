@@ -757,6 +757,40 @@ def test_gate_frame_checks():
           out5["done"] is True and bool(out5.get("fallback_text"))
           and "卡住" in out5["fallback_text"],
           str(out5.get("fallback_text", ""))[:60])
+
+    # 被否掉的那句话要进 trace（20260921，Fix 2 收尾）：5a/5b 此前只记 issue 与
+    # 帧数，误杀复盘只能凭手感——同一轮里哪一句被判成声称，事后无从确认。
+    import agent.graph as g
+    import utils.trace as _trace
+    seen: list = []
+
+    def _fake(node, event, **data):
+        seen.append((node, event, data))
+
+    real_record = _trace.record
+    g.record = _fake
+    try:
+        gate_node(_st("navigate", [errf, AIMessage(content="已经跳转成功了，页面马上就好！")],
+                      target="物联网平台", mode="direct"))
+        hits = [d for n, e, d in seen if e == "fallback" and d.get("issue") == "err_frame_claim"]
+        check("err 帧 fallback 的 trace 带 clause（被否掉的那一句）",
+              bool(hits) and "跳转成功" in hits[0].get("clause", ""), str(seen))
+        seen.clear()
+        navf = ToolMessage(content="NAVIGATE:https://saudade.site/guestbook",
+                           tool_call_id="execute_0", name="navigate_to")
+        gate_node(_st("navigate", [navf, AIMessage(content="好的，已经到留言板了")],
+                      target="留言板"))
+        hits = [d for n, e, d in seen
+                if e == "fallback" and d.get("issue") == "nav_pending_claim"]
+        check("NAVIGATE 确认帧 fallback 的 trace 也带 clause",
+              bool(hits) and "留言板" in hits[0].get("clause", ""), str(seen))
+        seen.clear()
+        # 没有子句可记时不写空字段（trace 体积：空串字段会出现在每个 fallback 上）
+        gate_node(_st("chat", [AIMessage(content="   ")]))
+        check("无子句的 fallback 不写 clause 字段（不塞噪声键）",
+              all("clause" not in d for n, e, d in seen if e == "fallback"), str(seen))
+    finally:
+        g.record = real_record
     # 有帧轮具名工具声称（20260913 C 项）："有帧"≠"你点名的工具执行过"——15:51
     # 实证：planner 点名 get_social_links 被白名单剥（无该工具帧），frames=2
     # （rag_search/get_article_detail）让旧"有帧即免检"整块放行，回复谎称调用了它
@@ -767,7 +801,12 @@ def test_gate_frame_checks():
                                                  "（`get_social_links`）调了一次，返回是空的")]))
     check("有帧 + 点名未执行工具 → fallback(phantom_tool_claim)",
           out6["done"] is True and bool(out6.get("fallback_text"))
-          and "没有任何工具执行" in out6["fallback_text"],
+          and "没有那次调用" in out6["fallback_text"]
+          # 反向锁（20260921）：本判据只在**真有执行的轮**才可能命中（无帧轮
+          # `_phantom_tool_claim_span` 在 `not executed` 时直接返回 None）⇒ 兜底文案
+          # **不许**断言"本轮没有任何工具执行"——那与执行回执当面矛盾。165645 生产
+          # 实证：create_tag 真建成（id=15）却被这句话否成"什么都没执行"。
+          and "没有任何工具执行" not in out6["fallback_text"],
           str(out6.get("fallback_text", ""))[:60])
     out7 = gate_node(_st("content_query",
                          [rags, AIMessage(content="我用 rag_search 搜了一圈，"
@@ -850,6 +889,46 @@ def test_phantom_tool_claim():
     check("工具名名单覆盖注册表全量",
           len(_TOOL_MAP) == 30 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
+
+
+def test_phantom_claim_clause_and_echo_exempt():
+    """5c 两处补强（20260921）：① trace 要记下**被否定的那个子句**；② 本轮工具返回
+    文本里出现过的工具名 = narrator 复述工具自己的话，不算声称。
+
+    ② 的语料 = 165645 生产误杀原句（管理员建「大笨狗」标签真建成 id=15，
+    `create_tag` 返回文本尾句带兄弟工具名，narrator 照抄 ⇒ 判编造 ⇒ 回复被换成
+    "这一轮什么都没执行"）。同族返回文本已在本轮清掉（render_tag_created），
+    这条豁免是**第二道**防线：只要还有一处漏网，就不至于把真执行否成假执行。"""
+    print("[gate] 5c 子句记录 + 工具返回回声豁免")
+    from agent.graph import _phantom_tool_claim_span as S, _clip_clause
+    EXEC = {"create_tag"}
+    # 165645 现场：工具返回文本里出现过 set_article_tags
+    frame_text = ("已新建一级标签「大笨狗」（id=15，颜色：粉色（#eb2f96））。"
+                  "它目前还挂在标签字典里、没有挂到任何文章上——要挂到文章上用 set_article_tags。")
+    # narrator 把工具返回文本里的那句话复述成**第一人称声称**（这正是现场形态）
+    echoed = "我调用过 set_article_tags，标签已经挂好了。"
+    hit = S(echoed, EXEC, False, frame_text)
+    check("回声豁免：复述本轮工具返回文本里的工具名 → 不判", hit is None, f"got={hit}")
+    # 同一句话、关掉豁免（frame_text 空）→ 判。证明放行是那条豁免做的，而不是这句话
+    # 本身判不出来（否则这条豁免就是在掩盖真声称）。
+    hit0 = S(echoed, EXEC, False)
+    check("同一句话 frame_text 为空时仍判（豁免是唯一放行原因）",
+          hit0 is not None and hit0[0] == "set_article_tags", f"got={hit0}")
+    # 豁免只看"名字在不在本轮工具返回文本里"，不扩及其它工具：别的帧文本不豁免它
+    hit2 = S(echoed, EXEC, False, "已新建一级标签「大笨狗」（id=15）。")
+    check("豁免不外溢：名字不在本轮工具返回文本里 → 仍判",
+          hit2 is not None and hit2[0] == "set_article_tags", f"got={hit2}")
+    # 现场那句的另一种形态（提议口吻）本就不判——豁免不背这个锅，单独锁一次
+    check("提议口吻的复述（非声称）本来就不判",
+          S("要挂到文章上的话，用 set_article_tags 就行。", EXEC, False) is None)
+    # 子句带出：trace 里要能读出被否的是哪句话
+    hit3 = S("我用 get_top_notes 查过了，置顶的是那篇架构文档。", {"list_notes"}, False)
+    check("命中时返回 (工具名, 子句)",
+          hit3 is not None and hit3[0] == "get_top_notes" and "get_top_notes" in hit3[1],
+          f"got={hit3}")
+    check("子句截断到 80 字且单行",
+          _clip_clause("甲" * 100) == "甲" * 80
+          and "\n" not in _clip_clause("第一行\n第二行"))
 
 
 def test_gate_claim_holes():
@@ -990,7 +1069,11 @@ def test_gate_claim_holes():
                        target="说说", mode="direct"))
     check("有帧[仅动作工具] + 检索声称 → fallback(phantom_search_claim)",
           o4["done"] is True and bool(o4.get("fallback_text"))
-          and "没有任何工具执行" in o4["fallback_text"], str(o4.get("fallback_text"))[:60])
+          and "站内的内容我一条都没查过" in o4["fallback_text"]
+          # 反向锁（20260921）：本分支位于 gate_node 的"有帧轮"段（`if not frames: return`
+          # 之后）⇒ 文案不许断言"没有任何工具执行"（同 5c 的矛盾族，见 o3 那条的对照）
+          and "没有任何工具执行" not in o4["fallback_text"],
+          str(o4.get("fallback_text"))[:60])
     # 有帧 + 内容类工具（get_site_map）+"翻了一遍功能结构图" → pass（20260902 实证：
     # 该处的"翻"指读结构图，帧就是 get_site_map 给的，属有据叙述）
     o5 = gate_node(_st("chat", [site, AIMessage(content="刚又翻了一遍功能结构图，"
@@ -2175,13 +2258,134 @@ def test_short_reply_and_adjacent_pairs():
           "短应答先还原语义" in g._PLANNER_PROMPT and "不是新话题" in g._PLANNER_PROMPT)
 
 
+def test_no_sibling_tool_name_in_user_text():
+    """工具名泄漏 lint（20260921 生产事故的同源锁）。
+
+    **规则**（精确到"能造成 5c 误杀"的结构条件，不是"见名就报"）：
+      ① `agent/adminops.py` 的字符串字面量里**不许出现任何注册表工具名**——该模块是
+         回执/弹窗问句的渲染层，它的输出会被 narrator 当"工具返回"照抄进访客回复；
+      ② 每个技能的 `reply_contract` 里不许出现**该技能计划里不执行的**工具名
+         （兄弟工具名）——本技能自己要跑的工具名是契约的锚点，出现是正当的。
+
+    为什么这条规则值得单独锁：两处泄漏合起来正好造出 165645 那次误杀——
+    `render_tag_created` 尾句写着兄弟工具名 → narrator 照抄 → 回复里点名了一个
+    本轮没执行的工具 → 5c 判"编造调用" → **真建成的那次执行**被整条换成
+    "这一轮什么都没执行"。同类事故只要还有一处泄漏就会再来一次。
+
+    实现是 AST 扫描（不是 grep）：注释与 docstring 不算（它们不进任何提示词/回复），
+    整串恰好等于工具名的字面量也不算（那是 `tool == "create_tag"` 这类比较常量）。
+    """
+    import ast, pathlib
+    from agent.graph import _TOOL_MAP
+    from agent.skills import SKILLS, _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
+    names = set(_TOOL_MAP)
+    # 计划不是固定工具序列的技能（chat/content_query 的 TOOLS 行由 PARAMS 动态展开），
+    # "本技能计划里会执行哪些工具"在静态上不可判定 ⇒ 用它们自己的可调用白名单当上界
+    # （planner 只能从那两个白名单里点名）；白名单之外的工具名依旧算泄漏。
+    DYNAMIC = {"chat", "content_query"}
+    root = pathlib.Path(__file__).parent
+
+    # ① adminops.py：全部字符串字面量（去 docstring、去"整串就是工具名"的比较常量）
+    src = (root / "agent/adminops.py").read_text()
+    tree = ast.parse(src)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            doc = ast.get_docstring(node, clean=False)
+            if doc is not None:
+                docstrings.add(doc)
+    leaks = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            continue
+        s = node.value
+        if s in docstrings or s.strip() in names:
+            continue
+        for n in sorted(names):
+            if n in s:
+                leaks.append(f"adminops.py:{node.lineno} [{n}] {s.strip()[:60]}")
+    check("adminops.py 渲染层无工具名泄漏", not leaks, "；".join(leaks))
+
+    # ② 技能 reply_contract：不许出现兄弟工具名
+    bad = []
+    for sk in SKILLS:
+        own = {spec[0] for spec in sk.plan}
+        if sk.name in DYNAMIC:
+            own |= set(_CALLABLE_QUERY_TOOLS) | set(_EXPLICIT_TOOLS)
+        for n in sorted(names - own):
+            if n in (sk.reply_contract or ""):
+                bad.append(f"{sk.name}.reply_contract [{n}]")
+    check("技能 reply_contract 无兄弟工具名", not bad, "；".join(bad))
+
+    # ③ 反向探针：这条 lint 真的会报（否则上两条可能是恒真）
+    probe = 'code = "要挂到文章上用 set_article_tags。"'
+    probe_hit = any(n in probe for n in names)
+    check("lint 反向探针：事故原句能被检出", probe_hit)
+
+
+def test_site_guide_is_role_rendered():
+    """能力清单按角色渲染（20260921）。
+
+    事故形态（20260921 生产 trace 165525/165544 vs 165645/165937）：清单是手写死
+    文本、且**不含**管理能力 ⇒ 管理员问"你能做什么"时 narrator 照单答"我不能改
+    后台/我读不到标签"——而它讲的是系统注入的"事实"。同一能力三轮两种答案，两句
+    都"有据"，据的是那份不会动的清单。判据：清单里的能力行必须由技能注册表推导，
+    角色是唯一开关。
+    """
+    from agent.context import site_guide
+    from agent.skills import SKILLS, visible_skills
+    guest, admin = site_guide(None), site_guide("admin")
+    # ① 每个"有 capability 且对某角色可见"的技能，其能力行必须出现在该角色的清单里
+    for s in SKILLS:
+        if not s.capability:
+            continue
+        for role, text in ((None, guest), ("admin", admin)):
+            if s in visible_skills(role):
+                assert s.capability in text, f"清单缺 {s.name} 的能力行（role={role}）"
+            else:
+                assert s.capability not in text, f"清单混入 {s.name}（role={role}）"
+    # ② 管理能力行的**有无**是两条清单的唯一实质差别：管理员必须有、访客必须没有
+    admin_only = [s.capability for s in visible_skills("admin") if s.roles and s.capability]
+    assert admin_only, "注册表里没有只对 admin 可见的技能——分组判据失效"
+    for cap in admin_only:
+        assert cap in admin, f"管理员清单缺管理能力: {cap[:16]}"
+        assert cap not in guest, f"访客清单泄漏管理能力: {cap[:16]}"
+    # ③ 访客口径不得出现"管理/后台写"类字眼（防将来有人把管理能力塞进公共段）
+    for word in ["新建文章标签", "发布状态", "服务器运行状况"]:
+        assert word not in guest, f"访客清单出现管理能力字眼: {word}"
+    # ④ 两份清单都必须保住"介绍能力时按此完整列出"这句（转述契约的落点）
+    for text in (guest, admin):
+        assert "介绍能力时按此完整列出，不要遗漏。" in text
+    # ⑤ 反向探针：删掉注册表里的能力行，清单必然跟着缺（证明它真是渲染出来的）
+    class _Bare:
+        name, roles, capability = "probe", None, ""
+    assert _Bare.capability == ""          # 空 capability 不产生空能力行（占位契约）
+    assert "；；" not in guest and "：；" not in guest[:400], "空能力行会留下空分隔符"
+
+
+def test_site_guide_covers_nav_map():
+    """SITE_GUIDE（访客变体 site_guide(None)）必须覆盖 NAV_MAP 全部存活路径（skills.py 单一事实
+    来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
+    trace 190827 实证：能做啥只列 4 项漏 IoT/河灯。20260921 能力清单改按角色渲染后
+    此锁仍指向访客变体（管理能力行不得进访客清单，由 test_site_guide_is_role_rendered 锁）。"""
+    import agent.graph as g
+    from agent.skills import NAV_MAP
+    alive = {p for p in NAV_MAP.values() if p is not None}
+    missing = [p for p in sorted(alive) if p not in g.SITE_GUIDE]
+    assert not missing, f"SITE_GUIDE 缺板块路径: {missing}"
+    # 技能关键词抽查（介绍能力引导语）
+    for kw in ["OLED", "跳转", "夜间模式", "河灯"]:
+        assert kw in g.SITE_GUIDE, f"SITE_GUIDE 缺技能关键词: {kw}"
+
+
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
                test_nav_fast_path, test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
                test_explicit_tools, test_planner_tool_menu, test_gate_claim_scope, test_gate_frame_checks,
                test_gate_cmd_prefix_meta,
-               test_phantom_tool_claim, test_gate_claim_holes,
+               test_phantom_tool_claim, test_phantom_claim_clause_and_echo_exempt,
+               test_gate_claim_holes,
                test_gate_false_negative_claim, test_gate_site_absence_claim,
                test_gate_repeat_reply,
                test_execute_node, test_refs, test_todo_contract, test_checker,
@@ -2189,7 +2393,9 @@ def main():
                test_gate_fallback_message, test_planner_output_re,
                test_search_retry_kind, test_candidate_relevance_pick,
                test_scan_action_intents, test_doc_anchors_and_clip,
-               test_doc_title_resolution, test_short_reply_and_adjacent_pairs):
+               test_doc_title_resolution, test_short_reply_and_adjacent_pairs,
+               test_no_sibling_tool_name_in_user_text, test_site_guide_is_role_rendered,
+               test_site_guide_covers_nav_map):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
@@ -2200,16 +2406,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-
-def test_site_guide_covers_nav_map():
-    """SITE_GUIDE 常驻板块清单必须覆盖 NAV_MAP 全部存活路径（skills.py 单一事实
-    来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
-    trace 190827 实证：能做啥只列 4 项漏 IoT/河灯，注入后靠此锁防漂移。"""
-    import agent.graph as g
-    from agent.skills import NAV_MAP
-    alive = {p for p in NAV_MAP.values() if p is not None}
-    missing = [p for p in sorted(alive) if p not in g.SITE_GUIDE]
-    assert not missing, f"SITE_GUIDE 缺板块路径: {missing}"
-    # 技能关键词抽查（介绍能力引导语）
-    for kw in ["OLED", "跳转", "夜间模式", "河灯"]:
-        assert kw in g.SITE_GUIDE, f"SITE_GUIDE 缺技能关键词: {kw}"

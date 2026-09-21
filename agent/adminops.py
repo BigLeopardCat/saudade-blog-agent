@@ -277,6 +277,34 @@ def build_tag_index(tags_one, tags_two) -> dict[int, TagInfo]:
     return index
 
 
+def merge_tag_rows(tags_one, tags_two) -> list[dict]:
+    """两个公开标签接口 → **一份扁平的两级清单**（20260921）。
+
+    为什么：`list_tags` 此前只读 `/tagone` ⇒ 结构上就看不见二级标签
+    （164641 实测答"站内没有二级标签"——数据一直在 `/tagtwo`，缺的只是把它读出来）。
+
+    形态：一级行原样 + 紧随其后的子行（`/tagtwo` 的行自带 `level:2/fatherTag/fatherKey`，
+    字段名一个不改），父 id 对不上任何一级标签的**悬空二级**行排在最后——静默吞掉
+    它们正是"标签莫名不见了"的来源（同 render_tag_list 对悬空 id 的处置）。
+    两级混在一张表里靠 `level` 区分，narrator 照读即可。
+
+    返回值保持**纯字面量**（ToolsResult 出口用 `_shape` = `str()`、跨轮实体摘要用
+    `ast.literal_eval` 回读）——渲染成人话会让实体摘要静默失效。
+    """
+    one = [t for t in (tags_one or []) if isinstance(t, dict)]
+    two = [t for t in (tags_two or []) if isinstance(t, dict)]
+    kids: dict = {}
+    for t in two:
+        kids.setdefault(t.get("fatherKey"), []).append(t)
+    rows: list[dict] = []
+    for t in one:
+        rows.append(t)
+        rows.extend(kids.pop(t.get("tagKey"), []))
+    for rest in kids.values():        # 悬空二级（父已删/读不到）不丢
+        rows.extend(rest)
+    return rows
+
+
 def _api_color(tag: dict) -> str:
     """接口返回里的色值（`color` 字段，Rust 侧存 String 不校验）→ 规整的 `#rrggbb`。
 
@@ -380,11 +408,18 @@ def render_tag_reuse(info: TagInfo) -> str:
 def render_tag_created(info: TagInfo) -> str:
     """新建成功的人话。**颜色名 + 色值一起给**（20260921）：narrator 只有拿到
     这一对，才能在回复里同时写出"粉色"和 `#eb2f96`——前端据此画色块（色块由
-    前端按 hex 画，模型不画符号）。色值缺失时只说名字，不补一个。"""
+    前端按 hex 画，模型不画符号）。色值缺失时只说名字，不补一个。
+
+    **这段文本里不许出现任何工具名**（20260921 生产事故）：原尾句是
+    「要挂到文章上用 set_article_tags」——narrator 照抄了它，而 5c 具名声称闸
+    判定"点名了本轮没执行的工具" ⇒ 整条回复被换成"这一轮什么都没执行"，
+    与该标签**真的建成了**这件事当面矛盾（165645）。工具名是系统内部词汇，
+    一句给访客看的人话里出现它，就等着被复述成"我调用了它"。同源 lint 见
+    test_skills.py::test_no_tool_name_in_user_facing_text。"""
     color = f"，颜色：{describe_color(info.color)}" if info.color else ""
     return (f"已新建{level_cn(info)}标签「{info.label}」（id={info.id}{color}）。"
             f"它目前还挂在标签字典里、没有挂到任何文章上——"
-            f"要挂到文章上用 set_article_tags。")
+            f"要挂到某篇文章上，告诉我挂哪一篇就行。")
 
 
 def render_status_ok(aid: int, title: str, before: str, after: str) -> str:
@@ -425,16 +460,32 @@ def clip(text: str, limit: int = 60) -> str:
 # 与 agent/reports.py 同一条纪律：能算的都不交给 LLM。这两段文本会直接进
 # ①确认框的问题行 ②那一轮的对话气泡，都是用户一眼看到的东西——让模型写它，
 # 就又多了一处"它可能把没执行的说成已执行"的地方（而这一轮恰好什么都没执行）。
-def _confirm_one(spec: dict) -> str:
-    """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。"""
+def _confirm_one(spec: dict, index=None) -> str:
+    """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
+
+    `index` = 可选的标签字典（`{id: TagInfo}`，见 build_tag_index）：给得起就
+    **把父标签的名字写进问句**，给不起退回 id。写二级标签时只写「新建二级标签
+    「Rust」」等于让用户盲签——他看不到这个 Rust 会挂到哪个爸爸底下，而"挂错
+    父标签"正是本轮要修的参数对调事故（20260921）。名字比 id 可靠：id 是系统
+    内部编号，用户点确定时没法核对。
+    """
     tool = str(spec.get("tool") or "")
     a = spec.get("args") or {}
     if tool == "create_tag":
         title = str(a.get("title") or "").strip() or "（未命名）"
-        level = "二级" if str(a.get("parent_id") or "").strip() else "一级"
+        pid = str(a.get("parent_id") or "").strip()
+        level = "二级" if pid else "一级"
+        where = ""
+        if pid:
+            parent = None
+            try:
+                parent = (index or {}).get(int(pid))
+            except Exception:
+                parent = None
+            where = f"（挂在「{parent.name}」下）" if parent is not None else f"（挂在标签 id={pid} 下）"
         hexval = match_tag_color(a.get("color")) if a.get("color") else None
         color = f"，颜色 {describe_color(hexval)}" if hexval else "（按名字自动配色）"
-        return f"新建{level}标签「{title}」{color}"
+        return f"新建{level}标签「{title}」{where}{color}"
     if tool == "set_article_status":
         head = f"修改文章 {a.get('article_id')}"
         bits = []
@@ -450,23 +501,24 @@ def _confirm_one(spec: dict) -> str:
     return f"执行 {tool}"
 
 
-def render_confirm_question(specs) -> str:
+def render_confirm_question(specs, index=None) -> str:
     """确认框的问题行：**把要发生的事说全**（含颜色名与色值），再问一句。
 
     用户点的是"确定"，他有权在点之前从这句话里看出自己将同意什么——
-    说漏了颜色、说漏了是哪一篇，这个按钮就变成了盲签。
+    说漏了颜色、说漏了是哪一篇、**说漏了挂在哪个父标签下**，这个按钮就变成了盲签。
+    （`index` 见 _confirm_one；读不到标签字典时退化成 id，不因此不弹窗。）
     """
-    acts = "；".join(_confirm_one(s) for s in (specs or []))
+    acts = "；".join(_confirm_one(s, index) for s in (specs or []))
     return f"要{acts}吗？点「确定」我就去办。"
 
 
-def render_confirm_text(specs) -> str:
+def render_confirm_text(specs, index=None) -> str:
     """弹窗那一轮的**对话气泡正文**（系统给的，不经 narrator）。
 
     刻意写得像"在等你的意思"而不是"已经在办了"：这一轮零执行。给一个明确
     的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
     """
-    acts = "；".join(_confirm_one(s) for s in (specs or []))
+    acts = "；".join(_confirm_one(s, index) for s in (specs or []))
     return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
             f"**{acts}**\n\n"
             f"点上面的「确定」我就去办；不想改了就把这个框关掉，"

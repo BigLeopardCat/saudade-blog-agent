@@ -54,6 +54,14 @@ check("名称与数字之间有分隔（防 Web3+0 读成 Web30）", "Web3 0 篇
 check("分类总数 = 5（不是条目数拼凑）", "5 个分类" in c, c)
 tg = receipt_digest("list_tags", TAGS)
 check("标签摘要含 4 个与名称", "4 个标签" in tg and "嵌入式" in tg, tg)
+# 两级标签（20260921）：list_tags 已改为 /tagone + /tagtwo 合并成一张表（此前只读
+# /tagone ⇒ 结构上看不见二级标签，线上实测答"站内没有二级标签"）。计数必须分开报，
+# 二级以 `父/子` 出现——"编程下面有几个二级标签"全靠这一行。
+TAGS2 = """[{'tagKey': 10, 'title': '摄影', 'color': '#3255c6', 'level': 1}, {'tagKey': 14, 'title': '编程', 'color': '#e798d7b5', 'level': 1}, {'tagKey': 5, 'title': 'Python', 'color': '#49ba54b5', 'level': 2, 'fatherTag': '编程', 'fatherKey': 14}, {'tagKey': 6, 'title': 'Rust', 'color': '#ed6040bf', 'level': 2, 'fatherTag': '编程', 'fatherKey': 14}]"""
+tg2 = receipt_digest("list_tags", TAGS2)
+check("两级标签：总数与分级计数分开报", "4 个标签（一级 2/二级 2）" in tg2, tg2)
+check("二级写成 父/子（下轮指代对得上号）", "编程/Rust" in tg2 and "编程/Python" in tg2, tg2)
+check("一级不带父前缀", "摄影" in tg2 and "/摄影" not in tg2, tg2)
 
 print("③ 候选类（检索/列表/置顶）：id《标题》")
 n = receipt_digest("search_notes", NOTES)
