@@ -22,6 +22,7 @@ narrator）→ gate（确定性检查 + fallback 收尾）。原"落回 LLM 质�
 用法：.venv/bin/python test_skills.py
 """
 import json
+import pathlib
 import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -2640,6 +2641,372 @@ def test_write_target_refusal_round():
         G.get_llm, TB._tag_index = _orig_llm, _orig_index
 
 
+def test_write_grounding_round():
+    """②防线（20260922）：写操作的**身份必须落在主人这句话里**，整轮跑通。
+
+    事故现场（同日首跑 golden 八条新用例，一条用例两次跑出两个不同的错）：
+      · 「把那条写着「泠月喵好笨啊」的留言删掉吧」→ 片段填「好笨」（截短）；
+      · 「帮我把那条写着「泠月喵真棒！」的留言驳回吧，看着有点乱」→ 片段填「有点乱」
+        （主人给的**理由**，不是那条留言的正文）；
+      · 另一跑填「河灯留言正文里的一段原话（原样抄）」——**技能描述被抄成了参数值**。
+    留言没有标题/名字，正文片段就是它唯一的身份，所以这一族不能靠 LLM 转写。
+
+    三条锁：
+      ① 片段通道**确定性校正**：主人原话里引号中的那段就是身份（含"值落在引号里"
+         与"值跟引号无关"两种，前者顺带治好截短），且校正后注记要**重新生成**
+         （只改 spec 字符串的话，narrator 读到的注记还写着那个错片段）。
+      ② 校正发生在**目标预检之前**：预检拿到的必须是校正后的片段（否则判的是错靶）。
+      ③ 连引号都没有、值也不在原话里 → **确定性如实收尾**（零工具、零写、带原因）。
+    """
+    print("[write_grounding] 身份落在主人原话里（片段校正 + 地基）")
+    import agent.graph as G
+    import tools.base as TB
+    from agent.graph import parse_plan, planner_node
+    from agent.principal import Principal
+
+    class _ScriptedLLM:
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    class _Row(dict):
+        pass
+
+    BOARD = {45: _Row({"talkKey": 45, "content": "泠月喵真棒！", "author": "访客",
+                       "approved": 1}),
+             46: _Row({"talkKey": 46, "content": "今天天气真好呀", "author": "访客",
+                       "approved": 0})}
+    _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
+                             "user_id": 7, "conversation_id": 42, "stop_event": None}}
+    _orig_llm, _orig_board = G.get_llm, TB._board_index
+    try:
+        TB._board_index = lambda config: dict(BOARD)
+
+        # ① 片段被填成主人给的**理由** → 校正成引号里那段原话
+        _msg = "帮我把那条写着「泠月喵真棒！」的留言驳回吧，看着有点乱"
+        llm = _ScriptedLLM(['SKILL=board_audit\n'
+                            'PARAMS={"quote": "有点乱", "verdict": "reject"}\n'
+                            "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: llm
+        out = planner_node({"messages": [HumanMessage(content=_msg)],
+                            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        plan = parse_plan(out["plan"])
+        _spec = " ".join(plan["tools"])
+        check("片段通道：填了主人给的『理由』→ 校正成引号里那段原话",
+              "泠月喵真棒！" in _spec and "有点乱" not in _spec, _spec[:120])
+        check("  注记同步**重新生成**（不能只改 spec，留个错片段给 narrator 念）",
+              "泠月喵真棒！" in (plan["note"] or "")
+              and "有点乱" not in (plan["note"] or ""), (plan["note"] or "")[:120])
+        check("  只问 planner 一次（确定性校正，不重决策）", len(llm.prompts) == 1)
+        check("  校正**先于**目标预检（预检判的是校正后的片段，不是错靶）",
+              plan["tools"] != [] and "未改动" not in (plan["note"] or ""))
+
+        # ①b 截短形态（实测填「好笨」/「泠月」）→ 校正回完整那一段
+        TB._board_index = lambda config: {45: _Row(
+            {"talkKey": 45, "content": "泠月喵好笨啊", "author": "访客", "approved": 1})}
+        llm2 = _ScriptedLLM(['SKILL=board_delete\n'
+                             'PARAMS={"quote": "泠月"}\nREPLY: 如实回答'])
+        G.get_llm = lambda **kw: llm2
+        out2 = planner_node({"messages": [HumanMessage(
+            content="把那条写着「泠月喵好笨啊」的留言删掉吧")],
+            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _spec2 = " ".join(parse_plan(out2["plan"])["tools"])
+        check("片段通道：截短（「泠月」）→ 校正回主人原话里那一段完整的话",
+              "泠月喵好笨啊" in _spec2, _spec2[:120])
+
+        # ①c planner 把片段**整丢了**、零工具追问（实测 2/10：主人引号里明明有原话）
+        TB._board_index = lambda config: dict(BOARD)  # ①b 换成了「好笨」那条，这里换回来
+        for _sk, _rep, _want in (
+            ("board_delete", 'SKILL=board_delete\nPARAMS={}\n'
+                             "NOTE: 缺少指认用的正文片段（quote）：不调用任何工具，"
+                             "如实向主人问清说的是哪一条留言\nREPLY: 问清哪一条", "delete_board_comment"),
+            ("board_audit", 'SKILL=board_audit\nPARAMS={}\n'
+                            "NOTE: 缺少指认用的正文片段（quote）：不调用任何工具\n"
+                            "REPLY: 问清哪一条", "audit_board_comment"),
+        ):
+            llm_c = _ScriptedLLM([_rep])
+            G.get_llm = lambda **kw: llm_c
+            out_c = planner_node({"messages": [HumanMessage(content=_msg)],
+                                  "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+            plan_c = parse_plan(out_c["plan"])
+            _spec_c = " ".join(plan_c["tools"])
+            check(f"零工具追问 + 主人引号里有唯一一段原话 → 补上片段照常办事（{_sk}）",
+                  "泠月喵真棒！" in _spec_c and _want in _spec_c, _spec_c[:120])
+            if _sk == "board_audit":
+                check("  复核取向按主人话里的单向词补（「驳回」→ reject）",
+                      '"verdict": "reject"' in _spec_c, _spec_c[:140])
+
+        # ①d 补参只在首轮：看到工具帧之后 planner 决定"问一句"是对的不该被覆盖
+        llm_d = _ScriptedLLM(['SKILL=board_delete\nPARAMS={}\n'
+                              "NOTE: 站内有两条都含这段，问清是哪一条\nREPLY: 问清哪一条"])
+        G.get_llm = lambda **kw: llm_d
+        out_d = planner_node({"messages": [HumanMessage(content=_msg)],
+                              "plan_rounds": 1, "executed": [], "tool_data": []}, _cfg)
+        check("  第 2 轮起不再补参（不覆盖 planner 的追问决定）",
+              parse_plan(out_d["plan"])["tools"] == [],
+              str(parse_plan(out_d["plan"])["tools"]))
+
+        # ② 连引号都没有、值也不在原话里（描述被抄成参数值）→ 零写 + 如实收尾
+        llm3 = _ScriptedLLM(['SKILL=board_delete\n'
+                             'PARAMS={"quote": "河灯留言正文里的一段原话（原样抄）"}\n'
+                             "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: llm3
+        out3 = planner_node({"messages": [HumanMessage(
+            content="帮我把那条留言删掉吧")],
+            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        plan3 = parse_plan(out3["plan"])
+        check("无引号 + 值不在原话里 → 零工具（不弹窗、不写）",
+              plan3["tools"] == [], str(plan3["tools"]))
+        _n3 = plan3["note"] or ""
+        check("  注记如实说明「没有能指认那条留言的正文片段」并要原话",
+              "没有能指认" in _n3 and "原话" in _n3, _n3[:160])
+        check("  零执行 + 禁止句齐备",
+              "一个字节都没有改动" in _n3 and "不许" in _n3)
+    finally:
+        G.get_llm, TB._board_index = _orig_llm, _orig_board
+
+
+def test_announcement_text_round():
+    """公告的 title/content 校正到主人标出来的原话（20260922 ②防线续）。
+
+    事故现场（golden `admin_announcement_create_popup` 连跑两跑全红，两种错法）：
+      · 「帮我发一条公告，标题叫「今晚维护」，正文写：今晚 23 点开始维护」
+        → planner 填 `title=公告 / content=公告`（把话里的**名词**当成参数值）；
+      · 再跑一跑它自己写了一篇（`维护通知` / `系统将于今晚进行例行维护…敬请谅解`）
+        ——主人给的原话被换成了 LLM 的文案。
+    技能描述里"正文只写用户说过的内容、不许润色"两句都在，它照旧这么干；公告是
+    一律弹窗族，主人签字前看得见内容 ⇒ 校正（而非拒绝）是安全的，于是这条取校正。
+
+    锁四件事：① 标了标记时**主人的原话赢**（名词/自撰文案两种错法都治好）
+    ② 注记同步重新生成（只改 spec 的话，narrator 念的还是 planner 那个错值）
+    ③ 没有标记时**不动手**（"发个公告说今晚维护"这类由 planner 组织措辞是合理的）
+    ④ update 的 `title` 不碰（那是**要改的那条**的身份，不是新标题）
+    """
+    print("[announcement_text] 公告的标题/正文按主人标出来的原话校正")
+    import agent.graph as G
+    from agent.graph import parse_plan, planner_node
+    from agent.principal import Principal
+
+    class _ScriptedLLM:
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
+                             "user_id": 7, "conversation_id": 42, "stop_event": None}}
+    _orig_llm = G.get_llm
+    _MSG = "帮我发一条公告，标题叫「今晚维护」，正文写：今晚 23 点开始维护"
+    try:
+        # ①a 名词被当成参数值（实测形态）
+        llm = _ScriptedLLM(['SKILL=announcement_create\n'
+                            'PARAMS={"title": "公告", "content": "公告"}\n'
+                            "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: llm
+        out = planner_node({"messages": [HumanMessage(content=_MSG)],
+                            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        plan = parse_plan(out["plan"])
+        _spec = " ".join(plan["tools"])
+        check("公告：planner 把话里的名词当参数值 → 校正成主人标出来的标题与正文",
+              "今晚维护" in _spec and "今晚 23 点开始维护" in _spec
+              and '"title": "公告"' not in _spec, _spec[:160])
+        check("  注记同步重新生成（只改 spec 会留个错标题给 narrator 念）",
+              "今晚维护" in (plan["note"] or ""), (plan["note"] or "")[:120])
+        check("  只问 planner 一次（确定性校正，不重决策）", len(llm.prompts) == 1)
+
+        # ①b 自撰文案（实测另一跑）→ 同样让位给主人的原话
+        llm2 = _ScriptedLLM(['SKILL=announcement_create\n'
+                             'PARAMS={"title": "维护通知", '
+                             '"content": "系统将于今晚进行例行维护，敬请谅解。"}\n'
+                             "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: llm2
+        out2 = planner_node({"messages": [HumanMessage(content=_MSG)],
+                             "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _spec2 = " ".join(parse_plan(out2["plan"])["tools"])
+        check("公告：planner 自己写了一篇 → 主人的原话赢（不许替换成 LLM 文案）",
+              "今晚维护" in _spec2 and "敬请谅解" not in _spec2, _spec2[:160])
+
+        # ② 没有标记 → 不动手（措辞由 planner 组织是合理的，弹窗照旧让主人过目）
+        llm3 = _ScriptedLLM(['SKILL=announcement_create\n'
+                             'PARAMS={"title": "维护通知", "content": "今晚维护一下"}\n'
+                             "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: llm3
+        out3 = planner_node({"messages": [HumanMessage(content="帮我发个公告说今晚维护")],
+                             "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _spec3 = " ".join(parse_plan(out3["plan"])["tools"])
+        check("公告：主人没标标记 → 一个字都不改（这条不是「禁止 LLM 措辞」）",
+              "维护通知" in _spec3 and "今晚维护一下" in _spec3, _spec3[:160])
+
+        # ①c 改/删公告的 title 是**要动的那条**的身份：唯一一段引号就是它
+        #     （实测：「要删掉的那条公告的标题」——描述里的占位符被原样填进参数）
+        llm_d = _ScriptedLLM(['SKILL=announcement_delete\n'
+                              'PARAMS={"title": "要删掉的那条公告的标题"}\n'
+                              "REPLY: 如实说"])
+        G.get_llm = lambda **kw: llm_d
+        out_d = planner_node({"messages": [HumanMessage(
+            content="把标题是「绝对不存在的公告标题zzz」的那条公告删掉")],
+            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _n_d = parse_plan(out_d["plan"])["note"] or ""
+        check("公告：删公告时身份填了描述里的占位符 → 校正回主人引号里那个标题",
+              "绝对不存在的公告标题zzz" in _n_d and "要删掉的那条公告的标题" not in _n_d,
+              _n_d[:120])
+
+        # ③ update 的 title 是要改的那条的身份，不许被「标题叫 X」带走
+        llm4 = _ScriptedLLM(['SKILL=announcement_update\n'
+                             'PARAMS={"title": "公告", "new_title": "维护通知", '
+                             '"content": "今晚 23 点开始维护"}\nREPLY: 如实回答'])
+        G.get_llm = lambda **kw: llm4
+        out4 = planner_node({"messages": [HumanMessage(
+            content="把「公告」那条的标题改成「维护通知」，标题叫这个就行")],
+            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _spec4 = " ".join(parse_plan(out4["plan"])["tools"])
+        check("公告：改公告时 title 是**目标身份**，不被「标题叫 X」改写",
+              '"title": "公告"' in _spec4, _spec4[:160])
+    finally:
+        G.get_llm = _orig_llm
+
+
+def test_name_target_round():
+    """名字通道的**目标名** = 主人引号里那一段（20260922 ②防线续二）。
+
+    事故现场（golden `admin_tag_move_unresolved_target_honest` 八跑）：主人说
+    「把标签「绝对不存在的标签名xyz」挪到「编程」下面」，planner 把名字**抄短**成
+    「绝对」/「标签名」——而这个名字要写进如实答复（"站内没有叫「X」的标签"）：
+    主人问的是「绝对不存在的标签名xyz」，系统回"没有叫「绝对」的"，答的是**另一个
+    名字**（这句话本身就不实）。另一跑它干脆零工具反问"您想挪哪个标签"。
+
+    锁四件事：
+      ① 抄短 → 校正回主人引号里那一段（spec 与注记同步重新生成，预检判的是新名字）
+      ② **只有一段引号、而目标值跟它无关时一个字都不动**——「帮我把标签 Asyncio
+         挪到「编程」下面」里那段引号是**父标签**，改错就是把要挪的标签改成父标签
+         本身（这条正是 golden `admin_tag_move_popup` 的形态）
+      ③ 两段引号时靠 planner 填的父标签名归位，另一段才是目标
+      ④ 写形态却零工具 → 一次确定性纠偏（重决策），**提问句/闲聊结构上不纠偏**
+    """
+    print("[name_target] 目标名按主人引号校正 + 写形态零工具纠偏")
+    import agent.graph as G
+    import tools.base as TB
+    from agent.graph import parse_plan, planner_node
+    from agent.principal import Principal
+
+    class _ScriptedLLM:
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
+                             "user_id": 7, "conversation_id": 42, "stop_event": None}}
+    _orig_llm, _orig_tags = G.get_llm, TB._tag_index
+    _MSG = "把标签「绝对不存在的标签名xyz」挪到「编程」下面"
+    try:
+        # 空字典 = 站内一个标签都没有（预检据此如实回话；"读不到"是 None，另一种说法）
+        TB._tag_index = lambda config: {}
+
+        # ① 抄短（实测两跑分别填「绝对」「标签名」）→ 校正回完整那一段
+        llm = _ScriptedLLM(['SKILL=tag_update\n'
+                            'PARAMS={"name": "绝对", "parent_tag": "编程"}\n'
+                            "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: llm
+        out = planner_node({"messages": [HumanMessage(content=_MSG)],
+                            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _note = parse_plan(out["plan"])["note"] or ""
+        check("目标名抄短 → 预检按主人引号里的完整名字如实回话",
+              "绝对不存在的标签名xyz" in _note
+              and "没有叫「绝对」" not in _note, _note[:140])
+        check("  只问 planner 一次（确定性校正，不重决策）", len(llm.prompts) == 1)
+        check("  零工具零写（名字落不到站内一行 ⇒ 不弹窗不执行）",
+              parse_plan(out["plan"])["tools"] == [])
+
+        # ② 唯一一段引号是**父标签**、目标值跟它无关 → 一个字都不许动
+        #    （改错 = 把要挪的标签改成父标签本身；golden `admin_tag_move_popup` 同形）
+        class _Tag:
+            def __init__(self, tid, name, level, father=None):
+                self.id, self.name, self.level = tid, name, level
+                self.label, self.note_count, self.color = name, 0, ""
+                self.father_id, self.father_name = father, ""
+
+        TB._tag_index = lambda config: {1: _Tag(1, "编程", 1),
+                                        2: _Tag(2, "Asyncio", 2, 1)}
+        llm2 = _ScriptedLLM(['SKILL=tag_update\n'
+                             'PARAMS={"name": "Asyncio", "parent_tag": "编程"}\n'
+                             "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: llm2
+        out2 = planner_node({"messages": [HumanMessage(
+            content="帮我把标签 Asyncio 挪到「编程」下面")],
+            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _spec2 = " ".join(parse_plan(out2["plan"])["tools"])
+        check("目标值不在引号里（那段引号是父标签）→ 一个字都不改",
+              '"name": "Asyncio"' in _spec2 and '"parent_tag": "编程"' in _spec2,
+              _spec2[:160])
+
+        # ③ 两段引号：靠 planner 填的父标签名归位，另一段是目标
+        TB._tag_index = lambda config: {1: _Tag(1, "编程", 1),
+                                        2: _Tag(2, "随手记", 2, 1)}
+        llm3 = _ScriptedLLM(['SKILL=tag_update\n'
+                             'PARAMS={"name": "测试", "parent_tag": "编程"}\n'
+                             "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: llm3
+        out3 = planner_node({"messages": [HumanMessage(
+            content="把标签「随手记」挪到「编程」下面")],
+            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _spec3 = " ".join(parse_plan(out3["plan"])["tools"])
+        check("两段引号：父标签那段先归位，目标取另一段（planner 填了别的名字也纠正）",
+              '"name": "随手记"' in _spec3 and '"name": "测试"' not in _spec3,
+              _spec3[:160])
+
+        # ③b 连 parent_tag 都没填、名字是它自己编的（实测另一跑填「未命名标签」）：
+        #     这时 planner 的参数已经认不出目标，只有**语序**还认得出
+        #     （"挪到「编程」下面"里的「编程」是父，另一段才是目标）
+        llm3b = _ScriptedLLM(['SKILL=tag_update\n'
+                              'PARAMS={"name": "未命名标签", "to_level": "two"}\n'
+                              "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: llm3b
+        out3b = planner_node({"messages": [HumanMessage(
+            content="把标签「随手记」挪到「编程」下面")],
+            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _spec3b = " ".join(parse_plan(out3b["plan"])["tools"])
+        check("  连 parent_tag 都没填：靠「挪到…」的语序定父标签，目标取另一段",
+              '"name": "随手记"' in _spec3b and "未命名标签" not in _spec3b,
+              _spec3b[:160])
+
+        # ④a 写形态却零工具（实测 2/8：planner 写下"先问主人"，这一轮什么都不发生）
+        llm4 = _ScriptedLLM([
+            'SKILL=chat\nPARAMS={}\nREPLY: 您想挪哪个标签呀？',
+            'SKILL=tag_update\n'
+            'PARAMS={"name": "绝对不存在的标签名xyz", "parent_tag": "编程"}\n'
+            "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: llm4
+        out4 = planner_node({"messages": [HumanMessage(content=_MSG)],
+                             "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _note4 = parse_plan(out4["plan"])["note"] or ""
+        check("写形态零工具 → 纠偏一次（重决策），第二次拿到工具规格",
+              len(llm4.prompts) == 2, str(len(llm4.prompts)))
+        check("  纠偏文本写进第二次提示（讲清'这不是你该预判的'）",
+              "引号点名了目标" in llm4.prompts[1], "纠偏文本未进提示")
+        check("  重决策后照常走目标预检（如实回话，零写）",
+              "绝对不存在的标签名xyz" in _note4
+              and parse_plan(out4["plan"])["tools"] == [], _note4[:140])
+
+        # ④b 提问句 / 闲聊结构上不纠偏（多问一次就是白烧一轮 + 诱导乱写）
+        for _label, _q in (("疑问句（问影响）", "把标签 Rust 挪到「嵌入式」下面会有什么影响？"),
+                           ("闲聊带引号", "「李白」写过什么诗？")):
+            llm5 = _ScriptedLLM(['SKILL=chat\nPARAMS={}\nREPLY: 如实说明'])
+            G.get_llm = lambda **kw: llm5
+            planner_node({"messages": [HumanMessage(content=_q)],
+                          "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+            check(f"不纠偏：{_label}", len(llm5.prompts) == 1, str(len(llm5.prompts)))
+    finally:
+        G.get_llm, TB._tag_index = _orig_llm, _orig_tags
+
+
 def test_write_desc_no_example_names():
     """写技能描述里**不许出现具体名字**，占位符统一写 〈…〉（20260922 实测的缺陷）。
 
@@ -2702,7 +3069,9 @@ def main():
                test_doc_title_resolution, test_short_reply_and_adjacent_pairs,
                test_no_sibling_tool_name_in_user_text, test_site_guide_is_role_rendered,
                test_site_guide_covers_nav_map, test_drop_correction,
-               test_write_target_refusal_round, test_write_desc_no_example_names):
+               test_write_target_refusal_round, test_write_grounding_round,
+               test_announcement_text_round, test_name_target_round,
+               test_write_desc_no_example_names):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
