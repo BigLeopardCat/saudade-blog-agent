@@ -142,7 +142,11 @@ def _tag_digest(data) -> str:
         if not name:
             continue
         father = _clip(r.get("fatherTag") or "", 6) if _lvl(r) == "2" else ""
-        items.append(f"{father}/{name}" if father else name)
+        label = f"{father}/{name}" if father else name
+        # 每标签文章数（20260921，Rust 侧 `noteCount`）：口径 = 公开可见文章。
+        # 只认 int——认不出就只写名字，不写"0 篇"（0 是结论，缺字段不是）。
+        cnt = r.get("noteCount")
+        items.append(f"{label} {cnt} 篇" if isinstance(cnt, int) else label)
     if not items:
         return ""
     head = f"{len(rows)} 个标签"

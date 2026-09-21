@@ -62,6 +62,14 @@ tg2 = receipt_digest("list_tags", TAGS2)
 check("两级标签：总数与分级计数分开报", "4 个标签（一级 2/二级 2）" in tg2, tg2)
 check("二级写成 父/子（下轮指代对得上号）", "编程/Rust" in tg2 and "编程/Python" in tg2, tg2)
 check("一级不带父前缀", "摄影" in tg2 and "/摄影" not in tg2, tg2)
+# 每标签文章数（20260921，Rust 侧 `noteCount`）：口径 = 公开可见文章，与 /categories 的
+# noteCount 同形（见上面的 "Web3 0 篇"）。**只认 int**——字段缺失时只写名字、不写"0 篇"，
+# 因为"0"是一个结论而"缺字段"不是（错答成 0 会被下轮指代当事实照抄）。
+TAGS3 = """[{'tagKey': 10, 'title': '摄影', 'level': 1, 'noteCount': 0}, {'tagKey': 14, 'title': '编程', 'level': 1, 'noteCount': 8}, {'tagKey': 5, 'title': 'Python', 'level': 2, 'fatherTag': '编程', 'fatherKey': 14, 'noteCount': 3}]"""
+tg3 = receipt_digest("list_tags", TAGS3)
+check("标签带文章数（0 也要写出来）", "摄影 0 篇" in tg3 and "编程 8 篇" in tg3, tg3)
+check("二级标签 = 父/子 + 篇数", "编程/Python 3 篇" in tg3, tg3)
+check("缺 noteCount 字段时**不编造** 0 篇", "篇" not in tg2, tg2)
 
 print("③ 候选类（检索/列表/置顶）：id《标题》")
 n = receipt_digest("search_notes", NOTES)

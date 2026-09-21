@@ -15,7 +15,10 @@
   ④ `frame_excerpt` 对付 repr 层的两个坑（换行是字面 `\\n`、详情 dict 正文存两份）；
   ⑤ 渲染链路 `_frame_texts` 真的走到节选（帧文本带标记、长度受控）；
   ⑥ 跨模块契约不破：`noteTitle` 键在（`decisions._doc_title` 靠它做跨轮指代锚点）、
-     返回仍是可 `literal_eval` 的 dict（`agent/refs.py` 的 `$tool[N].field` 靠它取值）。
+     返回仍是可 `literal_eval` 的 dict（`agent/refs.py` 的 `$tool[N].field` 靠它取值）；
+  ⑧ 列表帧的紧凑渲染（20260921）：超预算的列表帧**一行一条**、按**整行**取舍、
+     末尾如实标注「共 N 条」——旧路径是 `text[:300]` 裸切，会在一条记录中间断掉，
+     planner 既读不出后半条的 id、也看不出后面还有多少条。
 """
 import ast
 import re
@@ -195,6 +198,37 @@ check("trace 记录帧体量 frames_chars", "frames_chars=len(frames_txt)" in g_
 rag_src = (Path(__file__).resolve().parent / "rag" / "search.py").read_text(encoding="utf-8")
 check("索引切分只是转发（不再各写一份）",
       "from agent.sections import split" in rag_src and "def chunk_note" in rag_src)
+
+print("⑧ 列表帧的紧凑渲染（20260921：一行一条 + 整行取舍 + 共几条）")
+# 被锁住的问题：普通帧此前是 `text[:300]` **裸切**——列表帧（dict repr）在**一行中间**
+# 断掉，planner 既读不出后半条的 id，也看不出后面还有多少条（与"空结果 vs 没执行"同源）。
+_rows10 = "[" + ", ".join(
+    "{'noteKey': %d, 'noteTitle': '第%d篇', 'noteContent': '%s', 'status': 'public',"
+    " 'isTop': 0, 'cover': 'http://cdn/x.png', 'coverZoom': 1.2}" % (i, i, "正" * 80)
+    for i in range(1, 11)) + "]"
+c10 = _frame_texts([ToolMessage(content=_rows10, name="list_notes", tool_call_id="c1")])
+check("超预算的列表帧标注「节选：显示前 K 条，共 10 条」",
+      "节选：显示前" in c10 and "共 10 条" in c10, c10[-60:])
+check("显示出来的每一行都是**整条**（没有半截行）",
+      all(re.match(r"^\d+\. noteKey=", ln) for ln in c10.splitlines()[1:-1] if ln.strip()), c10[:120])
+check("首条的 id 与标题都在（planner 要照着抄 id）",
+      "noteKey=1 " in c10 and "第1篇" in c10, c10[:120])
+check("纯展示字段不进帧（封面/缩放）", "cover" not in c10 and "Zoom" not in c10)
+check("正文长值截断带 …（不静默吃掉）", "…" in c10)
+# 单条就超预算（字段多到一行放不下）：不静默、也不整条消失
+_big_row = "{" + ", ".join("'f%d': '%s'" % (i, "z" * 60) for i in range(1, 21)) + "}"
+c1 = _frame_texts([ToolMessage(content="[" + _big_row + "]", name="list_notes", tool_call_id="c2")])
+check("单条过长 → 截断 + 「单条过长已截断，共 1 条」", "单条过长已截断" in c1, c1[:80])
+# 信封形态（{"data": [...]}）与裸数组都要认
+cenv = _frame_texts([ToolMessage(content=str({"code": 0, "data": [{"tagKey": 7, "title": "摄影"}]}),
+                                 name="list_tags", tool_call_id="c3")])
+check("信封 dict 里的 data 数组同样紧凑渲染", "tagKey=7" in cenv and "摄影" in cenv, cenv)
+# 认不出的（非列表）走普通文本路径：短文原样、长文带既有（节选，原文 N 字）标注
+cshort = _frame_texts([ToolMessage(content="EFFECT:sakura:on", name="toggle_effect", tool_call_id="c4")])
+check("非列表短文本原样透出（不套列表标注）",
+      cshort.endswith("EFFECT:sakura:on") and "节选" not in cshort, cshort)
+clong = _frame_texts([ToolMessage(content="命令帧" * 200, name="x", tool_call_id="c5")])
+check("非列表长文本仍走「节选，原文 N 字」老路径", "节选，原文" in clong, clong[:60])
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
