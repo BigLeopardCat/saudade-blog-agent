@@ -533,6 +533,47 @@ check("白名单里已有 change / category_name / category_id（新写工具的
       str(_RCPT_META_KEYS))
 
 
+# ── ⑧ 技能名 → 工具名：**展开出来的名字必须真的存在** ────────────────────
+# 为什么单开一节：技能名与工具名是两套命名，且**只有分类那两件不同名**
+# （技能 `category_create` / 工具 `create_category`；标签那两件恰好同名）。
+# 于是"顺手写 name"会让标签侧全绿、分类侧整条坏掉——20260922 全量 golden 实测：
+# admin_category_create_popup 整轮 FAIL、零弹窗、用户收到一句"未知工具"的系统报错。
+# 这类错误的形态是**参数、模板、注册表都各看一遍都看不出问题**（三处都自洽），
+# 只有把展开结果与注册表对一遍才照得出来——所以锁在这一层。
+from agent.skills import WRITE_SKILL_NAMES, instantiate_plan  # noqa: E402
+
+_REGISTERED = {t.name for t in base.get_all_tools()}
+# 每个写技能的最小合法参数（只为把模板填满，不涉及真调用）
+_MIN_PARAMS = {
+    "tag_create": {"title": "新标签"},
+    "tag_update": {"name": "旧标签", "new_title": "新标签"},
+    "tag_delete": {"name": "旧标签"},
+    "category_create": {"title": "新分类"},
+    "category_update": {"name": "旧分类", "new_title": "新分类"},
+    "category_delete": {"name": "旧分类"},
+    "article_status": {"article_id": 12, "status": "private"},
+    "article_tags": {"article_id": 12, "add": ["摄影"]},
+}
+_EXPECT_TOOL = {
+    "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
+    "category_create": "create_category", "category_update": "update_category",
+    "category_delete": "delete_category",
+    "article_status": "set_article_status", "article_tags": "set_article_tags",
+}
+check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",
+      set(_EXPECT_TOOL) == set(WRITE_SKILL_NAMES) and set(_MIN_PARAMS) == set(WRITE_SKILL_NAMES),
+      f"{sorted(WRITE_SKILL_NAMES)}")
+for skill_name, params in _MIN_PARAMS.items():
+    out = instantiate_plan(skill_name, params)
+    specs = out["tools"]
+    names = [s.split("(", 1)[0] for s in specs]
+    check(f"{skill_name} 展开出的工具名 = {_EXPECT_TOOL[skill_name]}",
+          names == [_EXPECT_TOOL[skill_name]], f"{names}（注记：{out['note'][:40]}）")
+    check(f"{skill_name} 展开出的工具名都在 _TOOL_REGISTRY 里（否则 execute 只能回"
+          f"「未知工具」错误帧）",
+          all(n in _REGISTERED for n in names), f"{[n for n in names if n not in _REGISTERED]}")
+
+
 print("\n" + ("=== 全部通过 ===" if not FAILS else f"=== {len(FAILS)} 项失败 ==="))
 for f in FAILS:
     print("  · " + f)

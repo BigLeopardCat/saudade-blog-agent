@@ -23,6 +23,19 @@
   * ⑨ 篡改签名 / 已过期 → 必拒且**零写**（库真值不变，回复里也不许出现完成式声称）；
   * ⑩ 经弹窗确认建带颜色的标签 → 库真值颜色 = 用户点名的色值（丢了就回落哈希色，界面上看不出）。
 
+⑪⑫⑬⑭⑮ 是 20260922 第四轮加的（标签改/删 + 分类增删改 + 目标响亮）：
+  * ⑪ 名字通道建二级标签（问句里必须写出父标签名）→ 点确定 → 库真值 fatherKey 对得上；
+  * ⑫ 改名 + 改色（命令式 ⇒ 快道，不弹窗）→ 库真值名字与颜色都对；
+  * ⑬ 换父级往返 + 一级↔二级互转 + **真标签换父级往返**（只有带文章的标签能证明
+    "同层移动沿用旧 id ⇒ 文章引用一个字节都不动"）；靶子是一次性标签，跑完删掉；
+  * ⑭ 分类增 → 改 → 删（一次性分类，零文章，不碰真实数据）；
+  * ⑮ 解不出的目标（查无此名 / 解不出的引用）→ **零回执 + 零确认帧 + 绝不完成式声称**。
+
+**所有写轮都必须干净收尾**（`clean_end`）：发过终止帧且流里没有错误帧。20260921 22:37
+的线上故障形态就是"数据真改了、回执也落了库，前端只看到一行报错"（路由表缺一个去向，
+langgraph 在节点执行完之后才抛 KeyError）——腿⑧ 当时只核库真值，所以写了就判 PASS，
+把这个盲区漏了过去。
+
 所有断言读**后端真值**：探针自己以同一 uid 现签 JWT 直查 Rust `/api/protected/*` 与
 `/api/tagone|tagtwo`，**不看工具返回值**——工具说"改好了"不算数，库里那一行才算。
 
@@ -194,8 +207,13 @@ def stream_rust(msg: str, uid: int, role: str, conv_id: int,
                  "Authorization": "Bearer " + login_jwt(uid, role)})
     t0 = time.time()
     frames: list[str] = []
+    errors: list[str] = []
     text = ""
+    ended = False            # 见过终止帧（__END__/__NAV_END__）
     with urllib.request.urlopen(req, timeout=timeout) as r:
+        # 逐行读到**连接关闭**（不是读到 __END__ 就收手）：20260921 实测，收到
+        # __END__ 即断开会让 Rust 流尾部的落库步骤不执行（真浏览器读到连接关闭，
+        # 不受影响；探针照抄"早断"就会漏掉尾部的执行记录）。
         for raw in r:
             line = raw.decode("utf-8", "replace").strip()
             if not line.startswith("data: "):
@@ -204,9 +222,11 @@ def stream_rust(msg: str, uid: int, role: str, conv_id: int,
             if not payload:
                 continue
             if payload in ("__END__", "__NAV_END__"):
+                ended = True
                 continue
             if payload.startswith("__ERROR__:"):
                 frames.append(payload)
+                errors.append(payload)
                 continue
             try:
                 payload = json.loads(payload)
@@ -218,7 +238,29 @@ def stream_rust(msg: str, uid: int, role: str, conv_id: int,
                 frames.append(payload)   # 控制帧：只登记，不进文本
                 continue
             text += payload
-    return {"reply": text, "frames": frames, "_secs": round(time.time() - t0, 1)}
+    return {"reply": text, "frames": frames, "errors": errors, "ended": ended,
+            "_secs": round(time.time() - t0, 1)}
+
+
+def clean_end(rep: "Report", tag: str, resp: dict) -> bool:  # Report 定义在本函数之后（模块顺序）
+    """**这一轮干净收尾**：发过终止帧、且流里没有错误帧。
+
+    为什么必须单独锁（20260921 22:37 实测的探针盲区）：腿⑧ 只看库真值变没变，
+    于是"写生效了、但整轮以报错收场"照样判 PASS——而那正是当时的线上故障形态
+    （`route_after_execute` 返回 `"model"` 而路由映射表里没有它 ⇒ langgraph
+    在节点执行完之后抛 KeyError ⇒ 数据真改了、回执也落了库，前端只看到一行报错）。
+    对用户来说"报错"和"没做成"是同一件事，所以"写成了"必须同时是"这一轮正常结束"。
+    """
+    errs = resp.get("errors") or []
+    ok = bool(resp.get("ended")) and not errs
+    print(f"  [{'PASS' if ok else 'FAIL'}] {tag} 流干净收尾"
+          f"（终止帧={bool(resp.get('ended'))}，错误帧 {len(errs)}）")
+    if not resp.get("ended"):
+        rep.fails.append(f"{tag}: 流里没有终止帧（客户端看到的是断流）——"
+                         f"写可能已生效，但用户那边只会看到失败")
+    if errs:
+        rep.fails.append(f"{tag}: 流里有错误帧 {errs[0][:160]}")
+    return ok
 
 
 def confirm_frames(frames: list) -> list:
@@ -597,6 +639,7 @@ def _popup_token(rep: Report, uid: int, role: str, conv_id: int, intent: str,
     """
     d = stream_rust(intent, uid, role, conv_id)
     got = confirm_frames(d["frames"])
+    clean_end(rep, f"{tag} 弹窗轮", d)
     print(f"  [{'PASS' if got else 'FAIL'}] 非命令措辞 → 确认帧"
           f"（帧数 {len(d['frames'])}，确认帧 {len(got)}）")
     print(f"        回复：{(d.get('reply') or '')[:160]}")
@@ -669,6 +712,7 @@ def step8_popup_write(rep: Report, uid: int, role: str, art_id: int, title: str)
                                                    payload.get("specs") or []))):
             b = stream_rust(f"确认执行：{payload.get('q') or ''}", uid, role, conv_id,
                             confirm_token=bad)
+            clean_end(rep, f"⑨ {label}", b)
             now = notes_by_id(uid, role).get(art_id, {}).get("status")
             ok = now == cur
             print(f"  [{'PASS' if ok else 'FAIL'}] ⑨ {label} → 库真值 status={now}（期望仍 {cur}，零写）")
@@ -681,6 +725,7 @@ def step8_popup_write(rep: Report, uid: int, role: str, art_id: int, title: str)
         # 真写：带上原始令牌的隐藏确认请求（前端点「确定」走的就是这一条）
         d2 = stream_rust(f"确认执行：{payload.get('q') or ''}", uid, role, conv_id,
                          confirm_token=tok)
+        clean_end(rep, "⑧ 点确定（真写轮）", d2)
         after = notes_by_id(uid, role).get(art_id, {}).get("status")
         ok2 = after == want
         print(f"  [{'PASS' if ok2 else 'FAIL'}] 点确定 → 真写  库真值 status={after}（期望 {want}）")
@@ -702,6 +747,7 @@ def step8_popup_write(rep: Report, uid: int, role: str, art_id: int, title: str)
         # 复原：**明确命令**走快道（同轮命令即确认）→ 不该再弹窗
         back = f"把文章 {art_id} 改成{'私密' if cur == 'private' else '草稿'}"
         d3 = stream_rust(back, uid, role, conv_id)
+        clean_end(rep, "⑧ 复原轮", d3)
         rest = notes_by_id(uid, role).get(art_id, {}).get("status")
         ok3 = rest == cur and not confirm_frames(d3["frames"])
         print(f"  [{'PASS' if ok3 else 'FAIL'}] 复原（明确命令：{back}）  库真值 status={rest}"
@@ -736,8 +782,9 @@ def step10_color(rep: Report, uid: int, role: str, allow_delete: bool) -> None:
                              f"用户点确定前看不出自己要同意什么颜色")
         else:
             print(f"  [PASS] 确认问句里色名与色值齐全：{payload.get('q')}")
-        stream_rust(f"确认执行：{payload.get('q') or ''}", uid, role, conv_id,
-                    confirm_token=payload["token"])
+        d10 = stream_rust(f"确认执行：{payload.get('q') or ''}", uid, role, conv_id,
+                          confirm_token=payload["token"])
+        clean_end(rep, "⑩ 点确定（真写轮）", d10)
         hit = [(k, t) for k, t in _tags_with_color(uid, role).items() if t[0] == name]
         print(f"  [{'PASS' if hit else 'FAIL'}] 库真值：字典里{'有' if hit else '没有'}「{name}」（{hit or '—'}）")
         if not hit:
@@ -761,6 +808,338 @@ def step10_color(rep: Report, uid: int, role: str, allow_delete: bool) -> None:
             rep.fails.append(f"⑩ 删标签: 「{name}」仍在字典里 {left}")
     finally:
         _drop_conv(rep, uid, role, conv_id, "⑩")
+
+
+def _tags_full(uid: int, role: str) -> dict:
+    """两级标签的**原始行**（键带层级：`1:<id>` / `2:<id>`）。
+
+    键必须带层级：tag_one 与 tag_two 是两条独立自增序列，id 可能重号
+    （`tags_all` 的注释已记）。⑪⑫⑬ 要读 fatherKey/color/noteCount，故不再只要名字。
+    """
+    out = {}
+    for lv, path in (("1", "/api/tagone"), ("2", "/api/tagtwo")):
+        for t in (backend_get(path, uid, role) or []):
+            out[f"{lv}:{t['tagKey']}"] = t
+    return out
+
+
+def _one_tag(uid: int, role: str, level: str, title: str) -> tuple[str, dict] | None:
+    """按「层级 + 名字」取**唯一**一行；0 条或 >1 条都返回 None（不猜）。"""
+    hits = [(k, r) for k, r in _tags_full(uid, role).items()
+            if k.startswith(level + ":") and r.get("title") == title]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _tags_carrying(uid: int, role: str, tag_id: int) -> dict:
+    """挂着某个标签 id 的文章（`{noteKey: noteTitle}`）——⑬c 的"引用一字未变"要看它。"""
+    out = {}
+    for nid, row in notes_by_id(uid, role).items():
+        raw = str(row.get("noteTags") or "").replace("[", "").replace("]", "")
+        ids = {int(x) for x in re.findall(r"\d+", raw)}
+        if tag_id in ids:
+            out[nid] = row.get("noteTitle")
+    return out
+
+
+def step11_tag_admin(rep: Report, uid: int, role: str, allow_delete: bool) -> None:
+    """⑪⑫⑬ 标签写能力：名字通道建二级 / 改名改色 / 换父级换层级（--allow-write）。
+
+    靶子 = **一次性标签**（跑完删掉）：移动与换层级会改后台层级，公开面上看得见，
+    所以只让一次性标签承担这些动作。唯一例外是 ⑬c——换父级 + 移回用的是**真标签**
+    （只有它带文章，"keepId 路径下文章引用一个字节都不动"才验得出来），那一段自带复原，
+    中途失败最坏只是层级挂错父、后台点一下就能改回。
+    """
+    name = "_探针L2_" + time.strftime("%m%d%H%M%S")
+    print(f"\n⑪ 名字通道建二级标签（--allow-write）：在「编程」下建「{name}」")
+    conv_id = _probe_conv(rep, uid, role, "⑪")
+    if conv_id is None:
+        return
+    tid = None
+    try:
+        payload = _popup_token(rep, uid, role, conv_id,
+                               f"我想在「编程」下面加一个二级标签，名字叫{name}",
+                               "⑪", "tag_create")
+        if payload is None:
+            return
+        q = payload.get("q") or ""
+        rep.check("挂在「编程」下" in q,
+                  f"⑪ 问句没把父标签名字写出来（问句：{q!r}）——用户点确定前看不出它挂在哪")
+        d = stream_rust(f"确认执行：{q}", uid, role, conv_id, confirm_token=payload["token"])
+        clean_end(rep, "⑪ 点确定（真写轮）", d)
+        got = _one_tag(uid, role, "2", name)
+        print(f"  [{'PASS' if got else 'FAIL'}] 库真值：二级标签里"
+              f"{'有' if got else '没有'}「{name}」（{got[0] if got else '—'}）")
+        if not got:
+            rep.fails.append(f"⑪ 库真值里找不到二级标签「{name}」= 没建成")
+            return
+        key, row = got
+        tid = key.split(":", 1)[1]
+        parent = _one_tag(uid, role, "1", "编程")
+        want_pid = parent[1]["tagKey"] if parent else None
+        ok = row.get("fatherKey") == want_pid
+        print(f"  [{'PASS' if ok else 'FAIL'}] 库里 fatherKey={row.get('fatherKey')}"
+              f"（期望 {want_pid} = 「编程」）fatherTag={row.get('fatherTag')!r}")
+        if not ok:
+            rep.fails.append(f"⑪ 建出来的二级标签父是 {row.get('fatherKey')!r} ≠ {want_pid}"
+                             f"（名字通道挂错了父）")
+
+        # ⑫ 改名 + 改色（**命令式措辞** ⇒ 走"同轮命令即确认"快道，不弹窗）
+        name2 = name + "R"
+        print(f"\n⑫ 改名 + 改色（--allow-write）：{name} → {name2}，颜色→粉色")
+        d2 = stream_rust(f"把二级标签「{name}」改名叫「{name2}」，颜色改成粉色",
+                         uid, role, conv_id)
+        clean_end(rep, "⑫ 改名改色轮", d2)
+        rep.check(not confirm_frames(d2["frames"]),
+                  "⑫ 明确命令却又弹了确认框 = 快道没走通（同轮命令即确认被破坏）")
+        after = _one_tag(uid, role, "2", name2)
+        if not after:
+            rep.fails.append(f"⑫ 库里找不到改名后的「{name2}」= 没改成")
+            print("  [FAIL] 库里没有新名字")
+        else:
+            row2 = after[1]
+            okc = str(row2.get("color") or "").lower() == "#eb2f96"
+            print(f"  [{'PASS' if okc else 'FAIL'}] 库真值 名字={row2.get('title')!r} "
+                  f"颜色={row2.get('color')!r}（期望 #eb2f96）")
+            if not okc:
+                rep.fails.append(f"⑫ 颜色是 {row2.get('color')!r} ≠ #eb2f96"
+                                 f"（PUT 要求两个字段都必填：改名必须把当前色原样回传，"
+                                 f"回传丢了就回落成别的色）")
+            tid = after[0].split(":", 1)[1]
+
+        # ⑬a 换父级：一次性标签 编程 → 嵌入式 → 移回
+        print(f"\n⑬a 换父级（--allow-write）：「{name2}」编程 ↔ 嵌入式")
+        for target in ("嵌入式", "编程"):
+            d3 = stream_rust(f"把二级标签「{name2}」改成挂在「{target}」下面",
+                             uid, role, conv_id)
+            clean_end(rep, f"⑬a 移向{target}", d3)
+            cur = _one_tag(uid, role, "2", name2)
+            par = _one_tag(uid, role, "1", target)
+            want_pid = par[1]["tagKey"] if par else None
+            okm = bool(cur) and cur[1].get("fatherKey") == want_pid
+            print(f"  [{'PASS' if okm else 'FAIL'}] 库真值 fatherKey="
+                  f"{cur[1].get('fatherKey') if cur else '—'}（期望 {want_pid} = 「{target}」）")
+            if not okm:
+                rep.fails.append(f"⑬a 移到「{target}」失败：库真值 "
+                                 f"{cur[1].get('fatherKey') if cur else '（标签不见了）'!r}")
+                break
+
+        # ⑬b 一级 ↔ 二级互转：一次性标签 id ≥ 10000 ⇒ 走**新分配 id** 那条路
+        print(f"\n⑬b 二级 → 一级（--allow-write）：一次性标签 id ≥ 10000，验新 id 路径")
+        old_id = tid
+        d4 = stream_rust(f"把二级标签「{name2}」改成一级标签", uid, role, conv_id)
+        clean_end(rep, "⑬b 升级轮", d4)
+        up = _one_tag(uid, role, "1", name2)
+        left2 = _one_tag(uid, role, "2", name2)
+        okb = bool(up) and not left2
+        print(f"  [{'PASS' if okb else 'FAIL'}] 库真值：一级里{'有' if up else '没有'}、"
+              f"二级里{'还有' if left2 else '已没有'}（新 id={up[1]['tagKey'] if up else '—'}，"
+              f"旧 id={old_id}）")
+        if not okb:
+            rep.fails.append("⑬b 升级后两级字典状态不对（一级里没有 / 二级里还在）")
+        elif int(old_id) >= 10000 and str(up[1]["tagKey"]) == str(old_id):
+            rep.warns.append(f"⑬b 预期走新分配 id（旧 id {old_id} ≥ 10000），"
+                             f"实际沿用了旧 id——口径可能已变，值得看一眼")
+        tid = up[1]["tagKey"] if up else old_id
+
+        # ⑬c 真标签换父级往返：只有它能证明"文章引用一个字节都不动"
+        print("\n⑬c 真标签换父级往返（--allow-write）：带文章的那个二级标签 → 换父 → 移回")
+        real = None
+        for k, r in _tags_full(uid, role).items():
+            if k.startswith("2:") and (r.get("noteCount") or 0) > 0:
+                real = (k, r)
+                break
+        if real is None:
+            rep.warn("⑬c 未跑：二级标签里没有一个带文章的靶子")
+        else:
+            rkey, rrow = real
+            rid, rtitle = rrow["tagKey"], rrow["title"]
+            home = rrow.get("fatherTag") or ""
+            others = [t["title"] for k, t in _tags_full(uid, role).items()
+                      if k.startswith("1:") and t["title"] != home]
+            before_notes = _tags_carrying(uid, role, rid)
+            print(f"        靶子：二级标签「{rtitle}」id={rid} 现挂 {home!r}"
+                  f"，带着 {len(before_notes)} 篇文章 {sorted(before_notes)}")
+            if not others:
+                rep.warn("⑬c 未跑：站内没有第二个一级标签可当目标父")
+            else:
+                dest = others[0]
+                for target in (dest, home):
+                    d5 = stream_rust(f"把二级标签「{rtitle}」改成挂在「{target}」下面",
+                                     uid, role, conv_id)
+                    clean_end(rep, f"⑬c 移向{target}", d5)
+                    cur = _one_tag(uid, role, "2", rtitle)
+                    par = _one_tag(uid, role, "1", target)
+                    want_pid = par[1]["tagKey"] if par else None
+                    now_notes = _tags_carrying(uid, role, rid)
+                    oki = bool(cur) and str(cur[1]["tagKey"]) == str(rid)
+                    okp = bool(cur) and cur[1].get("fatherKey") == want_pid
+                    okn = now_notes == before_notes
+                    print(f"  [{'PASS' if (oki and okp and okn) else 'FAIL'}] 移向「{target}」："
+                          f"id={cur[1]['tagKey'] if cur else '—'}（期望 {rid}）、"
+                          f"fatherKey={cur[1].get('fatherKey') if cur else '—'}（期望 {want_pid}）、"
+                          f"带文章 {sorted(now_notes)}（期望 {sorted(before_notes)}）")
+                    if not oki:
+                        rep.fails.append(f"⑬c 移向「{target}」后 id 变了"
+                                         f"（{cur[1]['tagKey'] if cur else '—'} ≠ {rid}）"
+                                         f"——同层移动应当沿用旧 id，文章引用才不用重写")
+                    if not okp:
+                        rep.fails.append(f"⑬c 移向「{target}」后父不对")
+                    if not okn:
+                        rep.fails.append(f"⑬c 移向「{target}」后文章引用变了："
+                                         f"{sorted(before_notes)} → {sorted(now_notes)}")
+                    if not (oki and okp):
+                        break
+    finally:
+        _drop_conv(rep, uid, role, conv_id, "⑪⑫⑬")
+        # 复原：删掉一次性标签（⑪⑫⑬ 的靶子）。删标签会触发全表 prune_note_tags，
+        # 故需 --allow-tag-delete（与 ⑥⑩ 同一道授权）。
+        if tid is None:
+            return
+        if not allow_delete:
+            print(f"  [skip] 一次性标签 id={tid} 未删除（未给 --allow-tag-delete）")
+            rep.warn(f"⑪⑫⑬ 一次性标签 id={tid} 未删除（未授权删标签），已如实标注")
+            return
+        print("  ⚠ 披露：删除会触发全表 prune_note_tags（清理 note.tags 里的悬空引用），不可回滚")
+        try:
+            # 层级现查（⑬b 可能已经把它升到一级）：先看二级、再看一级，都不在就按二级试
+            lv = "two" if _one_tag(uid, role, "2", name2) else "one"
+            backend_send("DELETE", "/api/protected/tag",
+                         {"level": lv, "ids": [int(tid)]}, uid, role)
+            gone = not _one_tag(uid, role, "2", name2) and not _one_tag(uid, role, "1", name2)
+            print(f"  [{'PASS' if gone else 'FAIL'}] 一次性标签删除后库真值："
+                  f"{'两级字典里都没有了' if gone else '仍在'}")
+            if not gone:
+                rep.fails.append(f"⑪⑫⑬ 一次性标签「{name2}」未删干净（请手工清理）")
+        except ProbeError as e:
+            rep.fails.append(f"⑪⑫⑬ 删除一次性标签失败：{e}")
+            print(f"  [FAIL] 删除失败：{e}")
+
+
+def _cat_by_token(uid: int, role: str, token: str) -> list:
+    """按**时间戳 token** 认自己建的那个分类（不按整名匹配）。
+
+    20260922 实测教训：探针用 `_探针分类_<ts>` 这种带首尾下划线的名字时，planner 把
+    首尾下划线当成 markdown 强调剥掉了（trace `20260922T003716`：用户说
+    「叫_探针分类_0922003716」、planner 传 `title="探针分类_0922003716"`）⇒ 库真值
+    与探针期望的名字不再字面相等、按整名匹配恒 0 条，腿⑭ 假 FAIL，且 finally 的
+    兜底清理也认不出来、把分类留在了生产库里。故：① 名字不带首尾下划线；② 一律按
+    token 认人（token 是探针自己生成的时间戳，一定落在名字里）。
+    """
+    return [c for c in (backend_get("/api/category", uid, role) or [])
+            if token in str(c.get("categoryTitle") or "")]
+
+
+def step14_category(rep: Report, uid: int, role: str) -> None:
+    """⑭ 分类增 → 改 → 删（--allow-write）。建的是**一次性分类**，跑完删掉。
+
+    分类是平铺表、没有层级；删除是 `ON DELETE SET NULL`（文章会变成没有分类），
+    所以靶子只用自己的新分类（此刻零文章），动不到任何真实数据。
+    名字走「」引号给出（裸名字里的下划线会被 planner 当 markdown 强调吃掉）。
+    """
+    token = time.strftime("%m%d%H%M%S")
+    name = f"探针分类{token}"
+    name2 = name + "R"
+    print(f"\n⑭ 分类增改删（--allow-write）：{name} → {name2} → 删除")
+    conv_id = _probe_conv(rep, uid, role, "⑭")
+    if conv_id is None:
+        return
+    cur = name  # 库真值里的**实际**名字（改名腿拿它当靶子）
+    try:
+        d1 = stream_rust(f"新建一个分类，叫「{name}」", uid, role, conv_id)
+        clean_end(rep, "⑭ 建分类轮", d1)
+        hit = _cat_by_token(uid, role, token)
+        print(f"  [{'PASS' if len(hit) == 1 else 'FAIL'}] 库真值：分类表里"
+              f"{'有' if hit else '没有'}本次建的分类（{len(hit)} 条）")
+        if len(hit) != 1:
+            rep.fails.append(f"⑭ 建分类：按 token {token} 在分类表里命中 {len(hit)} 条（期望 1）")
+            return
+        cur = str(hit[0].get("categoryTitle") or name)
+        if cur != name:
+            # planner 转写名字时掉字（不是"建没建"的问题）——如实标注，不当 FAIL
+            print(f"  [WARN] 建出来的名字与说的不一致：说「{name}」，库里是「{cur}」")
+            rep.warn(f"⑭ 建分类：说「{name}」、库里是「{cur}」（planner 转写名字掉字，功能本身正常）")
+        d2 = stream_rust(f"把分类「{cur}」改名叫「{name2}」", uid, role, conv_id)
+        clean_end(rep, "⑭ 改分类轮", d2)
+        rows2 = backend_get("/api/category", uid, role) or []
+        ok2 = any(c.get("categoryTitle") == name2 for c in rows2) and \
+            not any(c.get("categoryTitle") == cur for c in rows2)
+        print(f"  [{'PASS' if ok2 else 'FAIL'}] 库真值：改名后"
+              f"{'只剩' if ok2 else '对不上'}「{name2}」")
+        if not ok2:
+            rep.fails.append(f"⑭ 改分类：库真值里新名字「{name2}」缺席或旧名字「{cur}」还在")
+        d3 = stream_rust(f"删掉分类「{name2}」", uid, role, conv_id)
+        clean_end(rep, "⑭ 删分类轮", d3)
+        rows3 = _cat_by_token(uid, role, token)
+        ok3 = not any(c.get("categoryTitle") == name2 for c in rows3)
+        print(f"  [{'PASS' if ok3 else 'FAIL'}] 库真值：删除后分类表里"
+              f"{'已没有' if ok3 else '仍有'}「{name2}」")
+        if not ok3:
+            rep.fails.append(f"⑭ 删分类：库真值里「{name2}」还在")
+    finally:
+        _drop_conv(rep, uid, role, conv_id, "⑭")
+        # 中途炸在最坏的位置时兜一手：按 token 认人直接删掉（token 是本轮生成的，认不错）
+        try:
+            for c in _cat_by_token(uid, role, token):
+                k = c.get("categoryKey") or c.get("id")
+                backend_send("DELETE", "/api/protected/category", [int(k)], uid, role)
+                print(f"        兜底：已删掉残留分类 id={k}")
+        except Exception as e:  # noqa: BLE001
+            rep.warns.append(f"⑭ 兜底清理分类失败（请手工清理 token={token} 的分类）：{e}")
+
+
+def step15_loud_target(rep: Report, uid: int, role: str) -> None:
+    """⑮ 解不出的目标必须**响亮**：零回执 + 如实说没有 + 绝不完成式声称。零真写。
+
+    两条输入，形态不同、要求相同：
+      a. 站内不存在的标签名（名字通道的"查无此名"）；
+      b. 一条**解不出的引用**字面量（`$list_tags[0].tagKey`）——planner 若原样写进
+         参数，execute 的 resolve_args 会给带原因码的错误帧；若它被当名字去查，
+         则落在 (a) 那条路上。**两条路都必须是零回执 + 说实话**：这正是 20260921
+         事故最硬的一面（"解不出来"与"没填"长得一样，于是注记里写下了错误事实）。
+         机制本身由 test_skills.test_write_ref_loud 离线锁死，这里只验**对外形态**。
+    """
+    print("\n⑮ 解不出的目标 → 响亮（零真写，零回执）")
+    before = _tags_full(uid, role)
+    conv_id = _probe_conv(rep, uid, role, "⑮")
+    if conv_id is None:
+        return
+    try:
+        for label, msg in (
+            ("查无此名", "把标签「绝对不存在的标签名xyz」挪到「编程」下面"),
+            ("解不出的引用", "把标签 $list_tags[0].tagKey 改名叫「探针改名」"),
+        ):
+            d = stream_rust(msg, uid, role, conv_id)
+            clean_end(rep, f"⑮ {label}", d)
+            text = d.get("reply") or ""
+            claim = _CLAIM_RE.search(text)
+            print(f"  [{'PASS' if not claim else 'FAIL'}] {label}："
+                  f"{'没有完成式声称' if not claim else f'出现了 {claim.group(0)!r}'}")
+            print(f"        回复：{text[:200]}")
+            if claim:
+                rep.fails.append(f"⑮ {label}: 没做成却用了完成式声称 {claim.group(0)!r}")
+            # 弹窗只记**警告**，不判 FAIL：已批准的口径是"零真写 + 如实说出具体原因"，
+            # 而卡片确实把"字典里没有这个名字"写在问句里（诚实），点确定也只会得到
+            # 一句"站内没有这个标签、本次未改动"（零写）。缺口是 UX 层面的：系统明知道
+            # 这件事做不成，却还是请用户点一次确定——用户点了也只会得到拒绝，等于把
+            # 一次"信息性回答"包装成了一次"待确认的操作"。改它要动弹窗触发判据
+            # （本轮已批准的方案没含这条），故先如实标注、交用户拍板，不静默放过。
+            cf = confirm_frames(d["frames"])
+            print(f"  [{'PASS' if not cf else 'WARN'}] {label}："
+                  f"{'没有发确认帧' if not cf else '发了确认帧（卡片自陈字典里没有这个名字；点确定只会得到拒绝）'}")
+            if cf:
+                rep.warns.append(f"⑮ {label}: 目标解不出来仍弹了确认框——"
+                                 f"卡片诚实、零写安全，但用户点确定只会拿到一句拒绝"
+                                 f"（建议：字典可读且名字解析不出时，不弹窗、直接确定性如实收尾）")
+        after = _tags_full(uid, role)
+        same = set(before) == set(after) and all(
+            before[k].get("title") == after[k].get("title")
+            and before[k].get("fatherKey") == after[k].get("fatherKey") for k in before)
+        print(f"  [{'PASS' if same else 'FAIL'}] 标签字典一字未变"
+              f"（{len(before)} 行 → {len(after)} 行）")
+        if not same:
+            rep.fails.append("⑮ 两条不确定的输入竟然改动了标签字典（应零写）")
+    finally:
+        _drop_conv(rep, uid, role, conv_id, "⑮")
 
 
 def _tags_with_color(uid: int, role: str) -> dict:
@@ -816,6 +1195,8 @@ def main() -> int:
         if notes:
             step2_admin_question(rep, args.uid)
             step3_unknown_id(rep, args.uid, "admin")
+            # ⑮ 零真写（只是"必须说不"），所以放在安全段：没给 --allow-write 也跑
+            step15_loud_target(rep, args.uid, "admin")
             draft = pick_target(notes, args.draft_id)
             if not args.allow_write:
                 print("\n[skip] ④⑤⑥⑦ 真写：未给 --allow-write（写操作要显式授权；"
@@ -853,6 +1234,10 @@ def main() -> int:
                     step10_color(rep, args.uid, "admin", args.allow_tag_delete)
                 else:
                     rep.warn("⑩ 未跑：--skip-popup")
+                # ⑪⑫⑬⑭ 是 20260922 第四轮加的（标签改/删 + 分类增删改）：走真帧流，
+                # 与 ⑧⑩ 同一套"读到连接关闭 + 干净收尾"断言；⑮ 不写真数据。
+                step11_tag_admin(rep, args.uid, "admin", args.allow_tag_delete)
+                step14_category(rep, args.uid, "admin")
 
     print(f"\n=== {'全部符合预期' if not rep.fails else f'{len(rep.fails)} 项不符'}"
           f"｜警告 {len(rep.warns)} 条｜{round(time.time() - t0, 1)}s ===")
