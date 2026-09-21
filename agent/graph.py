@@ -90,8 +90,8 @@ from agent.principal import UNKNOWN as UNKNOWN_PRINCIPAL
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
-                          _CALLABLE_QUERY_TOOLS_ORDER, build_planner_context,
-                          instantiate_plan, visible_skills)
+                          _CALLABLE_QUERY_TOOLS_ORDER, _WRITE_NAME_TARGET_SKILLS,
+                          build_planner_context, instantiate_plan, visible_skills)
 from utils.trace import record
 
 logger = logging.getLogger(__name__)
@@ -310,9 +310,9 @@ _PLANNER_PROMPT = """\
 后才有内容；没有则为缺省语，按常规规则决策）：
 {reflector_feedback}
 
-系统纠偏（确定性事实——只在你上一版决策点名的工具**全被剔除、本轮一个工具都没
-执行**时才有内容；正常决策轮是缺省语。有内容时按它重新决策：里面的工具归属是系统
-从技能注册表读出来的，不是猜测）：
+系统纠偏（确定性事实——只在你上一版决策**不可用**时才有内容（点名的工具全被剔除，
+或主人在原话里点名了目标、你却没写出任何工具规格）；正常决策轮是缺省语。有内容时按
+它重新决策：里面的工具归属是系统从技能注册表读出来的，不是猜测）：
 {correction}
 
 判定规则：
@@ -602,6 +602,54 @@ def _drop_correction(dropped: list[str], role: str | None) -> str:
                  " SKILL=chat 如实说明查不到。**不许**说「查过/看过/读过/调用过」——"
                  "本轮确实什么都没执行。")
     return "\n".join(lines)
+
+
+# ── "主人点名了目标，你却没写工具规格"：确定性纠偏一次（②防线续二）──────────
+# 实测（20260922 golden `admin_tag_move_unresolved_target_honest` 八跑）：同一条
+# 「把标签「绝对不存在的标签名xyz」挪到「编程」下面」有 2/8 跑出**零工具**——
+# planner 写下"不确定站内有没有这个名字，先问主人"，于是这一轮什么都不发生：主人
+# 原地重述自己刚说过的话，而系统那套"站内到底有没有这个名字"的台账核对**压根没跑**
+# （`_write_target_refusal` 只在有工具规格时才判，见其头注）。
+# 技能描述里那句「命令式措辞即便你觉得该先问一句，也照常选本技能——要不要真动手由
+# 系统弹确认框问主人」**早已写在那儿**，它照样这么干 ⇒ 一句话劝不动，得给一次确定性
+# 纠偏（做法同 `_drop_correction`：只写机器能保证的事实 + 讲清"这不是你该预判的"，
+# 重选仍由 planner 自己做）。
+# 触发刻意收窄：首轮、零工具、无剔除、主人原话里有引号指认、不是提问/假设、且带
+# 写域动作词——闲聊与问答（「「李白」写过什么诗」）结构上命不中。
+_NAME_WRITE_VERBS = ("挪", "移到", "移动到", "挪到", "挂到", "换到", "放到",
+                     "改名叫", "改名为", "改名", "改成", "换成",
+                     "删掉", "删除", "去掉", "移除", "取消",
+                     "新建", "创建", "建立", "新增")
+
+
+def _name_write_nudge(plan_obj: dict, user_msg, rounds: int,
+                      role: str | None) -> str | None:
+    """写形态的请求上 planner 一条工具规格都没写 → 纠偏提示文本（见上方长注）。"""
+    if rounds or (plan_obj.get("tools") or []) or plan_obj.get("dropped"):
+        return None
+    text = str(user_msg or "")
+    spans = _msg_quote_spans(text)
+    if not spans or authz.is_question_like(text):
+        return None
+    if not any(v in text for v in _NAME_WRITE_VERBS):
+        return None
+    # 角色判据只走 visible_skills 这一处（同 _drop_correction）：当前身份连一个
+    # 名字通道写技能都看不到时（非管理员），纠偏只会把它往够不到的方向推。
+    if not any(s.name in _WRITE_NAME_TARGET_SKILLS for s in visible_skills(role)):
+        return None
+    return (
+        "**主人在原话里已经用引号点名了目标**："
+        + "、".join(f"「{s}」" for s in spans[:3])
+        + "。你这一版没有产出任何工具规格。\n"
+        "如果你是因为『不确定站内有没有这个名字 / 这件事做不做得成』而打算先问主人"
+        "——**那不是你该预判的事**：名字落不到唯一一行、或者站里本来就没有这个名字，"
+        "系统会照着站内台账**如实回话**（并写明本轮零执行、站内数据一个字节都没改）。"
+        "你要做的是**照主人的原话把工具规格写出来**（SKILL 选对、目标名字就抄主人引号里"
+        "那一段，一个字都不要改写或截短），要不要真动手、影响面多大，由系统弹确认框"
+        "问主人。\n"
+        "（反过来：如果主人这句话本来就不是要改动站内数据的请求——只是提问、闲聊，"
+        "或是要你解释/整理某段内容——那保持你现在的决定即可，不必强行凑一个写操作。）"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1496,7 +1544,6 @@ _ABSENCE_LEAD_RE = re.compile(
 # "站内检索「…」"、search_notes → "搜索「…」"）——有它即视为站内结论有据
 _EXEC_SEARCH_TRACE_RE = re.compile(r"站内检索「|搜索「")
 
-
 def _exec_memory_has_search(msgs: list) -> bool:
     """跨轮回执行记忆里是否留下过检索类动作（见 _EXEC_SEARCH_TRACE_RE）。"""
     return any(_EXEC_SEARCH_TRACE_RE.search(str(getattr(m, "content", "")))
@@ -1920,7 +1967,20 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 写操作的目标按名字解不出来 → 不弹窗、不执行，直接确定性如实收尾
         # （见 _write_target_refusal 上方长注：名字通道下"解不出来"必须响亮，
         # 而"响亮"的最省事形态就是**根本不问那一句**）。
-        refusal = _write_target_refusal(plan_obj, config)
+        # 先过片段地基（20260922 ②防线）：留言的 quote 校正到主人引号里那段原话
+        # （或在没有可指认的片段时确定性拒绝）——**必须在目标预检之前**，否则预检
+        # 判的是 planner 那个被截短/被概括错的片段。
+        quote_refuse = _board_quote_fix(plan_obj, user_msg, rounds)
+        # 公告的 title/content 同样有"主人自己标出来的原话"通道（20260922 ②防线续）：
+        # 没有可拒绝的形态（公告一律弹窗、主人签字前看得见），只做校正。
+        _announcement_text_fix(plan_obj, user_msg)
+        # 标签/分类/公告的**目标名**同理（②防线续二）：引号里那一段就是主人点名的
+        # 那一个，planner 抄短了就校正回来——**必须在目标预检之前**，否则预检报的是
+        # 另一个名字（"站内没有叫「绝对」的标签"）。
+        _name_target_fix(plan_obj, user_msg)
+        refusal = None if quote_refuse else _write_target_refusal(plan_obj, config)
+        if quote_refuse:
+            refusal = (_tool_name((plan_obj.get("tools") or ["?"])[0]), quote_refuse)
         if refusal:
             wtool, why = refusal
             logger.warning("[planner] 写操作目标按名字解不出来（%s）：%s → 确定性如实收尾",
@@ -1930,8 +1990,8 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             plan_obj = _wrap_up_plan(False, note=(
                 "**这件事这次没有做：站内数据一个字节都没有改动**"
                 "（本轮一个工具都没有执行）。"
-                f"系统按目标查过站内的台账（标签/分类字典、公告清单、留言列表），"
-                f"结果是：{why}。"
+                f"系统按目标查过站内的台账（标签/分类字典、公告清单、留言列表）"
+                f"与主人这句话本身，结果是：{why}。"
                 "请把这条原因**如实**转告主人（连同里面的候选名单或该补的信息），"
                 "并问他接下来想怎么办（换个说法、或先把那个目标建出来）。"
                 "**不许**出现「看过/读过/查过/检索过/调用过工具」这类说法；"
@@ -1944,6 +2004,17 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 收尾路径没走通"，故 test_skills 里也补了假 LLM 整轮锁）。
             return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
+
+        # 写形态的请求上一条工具规格都没写（见 _name_write_nudge 上方长注）：与
+        # 剔空纠偏共用同一条重决策通道（同一轮内只纠一次，纠完仍零工具就照原样走）。
+        nudge = None if correction else _name_write_nudge(plan_obj, user_msg, rounds, role)
+        if nudge:
+            logger.warning("[planner] 主人点名了目标却零工具 → 写形态纠偏重决策：%s",
+                           "、".join(_msg_quote_spans(user_msg)[:3]))
+            record("planner", "name_nudge", round=rounds,
+                   spans=_msg_quote_spans(user_msg)[:3])
+            correction = nudge
+            continue
 
         # 剔空纠偏（见上方长注）：只有"点名的全被剔除、本轮一个工具都不剩"才重决策；
         # 已经纠偏过一次、或清单非空、或根本没点名 → 到此为止。
@@ -2364,6 +2435,352 @@ _WRITE_NAME_FIELDS = {
 }
 
 
+# ── ② 防线：写操作的身份必须落在主人**这句话**里（20260922）───────────────
+# 事故现场（20260922 首跑 golden 六条新用例，同一条用例两次跑出两个不同的错）：
+#   · 「把那条写着「泠月喵好笨啊」的留言删掉吧」→ planner 填的片段是「好笨」（截短，
+#     丢了首尾）；
+#   · 「帮我把那条写着「泠月喵真棒！」的留言驳回吧，看着有点乱」→ 填的是「有点乱」
+#     （那是主人给的理由，不是那条留言的正文）；
+#   · 同一条删除用例另一次跑出的是「河灯留言正文里的一段原话」——**技能描述里的措辞
+#     被抄成了参数值**（同 20260921 "举例里不许出现具体取值" 那条教训的镜像）。
+# 三次里两次，planner 对"要指认哪一条"这件事的取值不可用；而留言没有标题、名字，
+# **正文片段就是它唯一的身份**，填错等于换了个靶子。所以身份不能靠 LLM 转写：
+#
+# ① `_board_quote_fix`：主人原话里**引号中的那一段**就是身份（"那条写着「X」的留言"
+#    ——中文里点一段原文时几乎一定带引号）。planner 的值只要落在某段引号里，就把它
+#    校正成**那段引号本身**（顺带治好截短）；一段都没对上、而原话里有引号 → 校正成
+#    那唯一一段（同"字面路径修正"的取向：系统数据优先于模型改写）；连引号都没有、
+#    值也不在原话里 → **确定性拒绝**（零写 + 如实问他要哪一条，绝不猜"最新的那条"）。
+# ② `_ident_grounded`：其余按名字指认的写工具（标签/分类/公告标题/父标签），
+#    **免弹窗（同轮命令即确认）的前提**多一条——名字必须在主人这句话里找得到。
+#    找不到就不许"一句话直接写"，退回**弹窗**：问句里会把系统解析到的目标写清楚，
+#    由主人点一下确定（别名/简称这类合法跳步也在这一步被人类确认，见 _confirm_popup）。
+# 边界（如实说明）：地基判据是**子串**级，挡得住"主人从没说过这个名字"，挡不住
+# "说过但指的未必是它"（同 20260922 探针报告里那句"亚串免疫"）；真正的身份裁决仍在
+# 工具侧的确定性解析（唯一命中才动手，歧义零写）。
+_QUOTE_SPAN_RE = re.compile(r"「([^」]{1,80})」|『([^』]{1,80})』|“([^”]{1,80})”"
+                            r"|\"([^\"]{1,80})\"")
+
+
+def _squash_spaces(text) -> str:
+    """去掉全部空白——模型转写常把换行/空格抹平（与 tools.base 的片段匹配同一口径）。"""
+    return re.sub(r"\s+", "", str(text or ""))
+
+
+def _msg_quote_spans(user_msg) -> list[str]:
+    """主人原话里带引号的片段（按出现顺序，去空白后非空）。"""
+    out = []
+    for m in _QUOTE_SPAN_RE.finditer(str(user_msg or "")):
+        frag = next((g for g in m.groups() if g), "")
+        if frag.strip():
+            out.append(frag.strip())
+    return out
+
+
+_BOARD_REJECT_WORDS = ("驳回", "隐藏", "不放行", "别显示", "撤下", "下架", "不通过")
+_BOARD_PASS_WORDS = ("通过", "放行", "批准", "恢复显示", "放出来", "同意显示")
+
+
+def _msg_verdict(user_msg) -> str | None:
+    """主人这句话里的复核取向（只认**单向**：两边词都出现 = 说不清，返回 None）。
+
+    只给 `_board_quote_fix` 的补参分支用——补出来的 verdict 会**写在弹窗问句里**
+    （"人工复核为 驳回（隐藏…）"）由主人确认，所以"认错方向"的代价是一次点取消，
+    不是一次错写。
+    """
+    text = str(user_msg or "")
+    rej = any(w in text for w in _BOARD_REJECT_WORDS)
+    pas = any(w in text for w in _BOARD_PASS_WORDS)
+    if rej == pas:
+        return None
+    return "reject" if rej else "pass"
+
+
+def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0) -> str | None:
+    """留言类写工具的 `quote` 校正到主人引号里那段原话。返回拒绝原因或 None（就地改）。
+
+    单 spec 时校正/拒绝；**零工具**时补参（见下）。两者与 `_write_target_refusal`
+    共用同一条边界。
+    """
+    tools = plan_obj.get("tools") or []
+    skill = plan_obj.get("skill") or "chat"
+    if not tools:
+        # planner 把片段**整丢了**（20260922 实测 2/10：主人引号里明明抄着原话，它却
+        # 写下"缺少指认用的正文片段（quote）：不调用任何工具，如实向主人问清" ⇒ 这一轮
+        # 什么都不发生，用户看到一句"请说是哪一条"）。主人自己引出来的那一段就是身份，
+        # 于是按主人原话补上（弹窗照旧让主人确认，没有静默写）。
+        # 只在**首轮**补：后续轮次 planner 看到工具帧之后决定"问一句"可能是对的，
+        # 不该被覆盖。
+        if rounds or skill not in ("board_audit", "board_delete"):
+            return None
+        spans = _msg_quote_spans(user_msg)
+        if len(spans) != 1:
+            return None  # 没引号 / 多段引号：真说不清是哪一条，让 planner 的追问成立
+        params = {"quote": spans[0]}
+        if skill == "board_audit":
+            verdict = _msg_verdict(user_msg)
+            if not verdict:
+                return None  # 取向也说不清（或两边都说了）→ 不猜
+            params["verdict"] = verdict
+        logger.info("[planner] 片段通道：planner 零工具追问，但主人引号里有唯一一段原话"
+                    "（%r）→ 按主人原话补参", spans[0][:40])
+        record("planner", "quote_fill_from_span", skill=skill, quote=spans[0][:60],
+               verdict=params.get("verdict"))
+        fresh = instantiate_plan(skill, params)
+        fresh["params"] = params
+        plan_obj.clear()
+        plan_obj.update(fresh)
+        return None
+    if len(tools) != 1:
+        return None
+    name = _tool_name(tools[0])
+    if not name.endswith("_board_comment"):
+        return None
+    args, args_ok = _tool_args(tools[0])
+    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+        return None
+    quote = str(args.get("quote") or "").strip()
+    spans = _msg_quote_spans(user_msg)
+    sq_quote = _squash_spaces(quote)
+    msg = _squash_spaces(user_msg)
+    if spans:
+        # ① 值落在某段引号里（含截短/加字两种）→ 校正成**那段引号**；多段都含 → 取最长
+        #    （最长的那段最能指认；截短版总在长版里）。
+        hit = [s for s in spans if sq_quote and sq_quote in _squash_spaces(s)]
+        if hit:
+            want = max(hit, key=len)
+        elif len(spans) == 1:
+            # ② 值不在引号里（主人给的理由/planner 的概括）→ 引号那一段才是身份
+            want = spans[0]
+        else:
+            return (f"主人的原话里有 {len(spans)} 段引号（"
+                    + "、".join(f"「{s}」" for s in spans[:3])
+                    + f"），但都不含系统记下的片段「{quote}」——无法确定要动哪一条留言，"
+                      "本次未改动。请说明是哪一段（或把那条留言的原话抄一段给我）")
+        if _squash_spaces(want) != sq_quote:
+            logger.info("[planner] 留言片段校正：planner 填 %r → 主人引号里的 %r",
+                        quote, want)
+            record("planner", "quote_correct", tool=name, got=quote[:60], used=want[:60])
+            # 重走 instantiate_plan（同"字面路径修正"的做法）：TOOLS 行与**注记**
+            # 都从校正后的参数重新生成——只改 spec 字符串的话，narrator 读到的注记
+            # 还写着 planner 那个错片段（实测："删除含「泠月」的那条…"）。
+            params = dict(plan_obj.get("params") or {})
+            params["quote"] = want
+            fresh = instantiate_plan(plan_obj.get("skill") or "chat", params)
+            fresh["params"] = params
+            plan_obj.clear()
+            plan_obj.update(fresh)
+        return None
+    if sq_quote and sq_quote in msg:
+        return None  # 没引号但原话里确实有这段 → 保持既有行为（不再加码）
+    why = (f"主人这句话里没有能指认那条留言的**正文片段**"
+           f"（系统记下的片段是「{quote}」，在主人原话里找不到）"
+           if quote else "主人这句话里没有给出那条留言的正文片段")
+    return (why + "——本次未改动。留言没有标题，只能按正文里的一段原话指认，"
+                  "请把那条留言的原话抄一小段给我（要跟站里一字不差）")
+
+
+# ── 公告的 title/content：主人标出来的那几句原话才是参数值（②防线续）────────
+# 实测（golden `admin_announcement_create_popup` 连跑两跑全红，两种错法）：
+#   · 主人说「标题叫「今晚维护」，正文写：今晚 23 点开始维护」→ planner 填
+#     `title=公告 / content=公告`（把话里的**名词**当成了参数值）；
+#   · 另一跑它自己撰写了一篇像样的公告（「维护通知」/「系统将于今晚进行例行维护…
+#     敬请谅解」）——主人给的原话被换成了 LLM 的文案。
+# 技能描述里"正文只写用户说过的内容、不许润色、不许自己编一句凑上"两句都在，
+# 但它照旧这么干：公告是**一律弹窗**族（authz._ALWAYS_CONFIRM_TOOLS），主人签字前
+# 看得见内容——可"签一份自己没写过的东西"正是最该被确定性挡掉的错。故取
+# **确定性校正**（而非拒绝）：主人自己标了「标题叫…」「正文写：…」时，那两段话
+# 就是参数值，planner 的转写一律让位。
+# 边界（如实说明）：只认**带标记**的那两段，没有标记就不动手——"帮我发个公告说
+# 今晚维护"这类由 planner 组织措辞是合理的（弹窗照旧让主人过目）；标记之后若还跟着
+# 别的指示（"正文写：今晚维护，标题你看着办"），那截尾巴会被一并当成正文（弹窗里
+# 看得到，主人可以点取消）——这是标记式抽取的固有代价，选它是因为它从不**编造**。
+_ANN_TITLE_RE = re.compile(
+    r"(?:标题|题目|名字|名称)\s*(?:叫|叫做|是|为|：|:)\s*[「『“\"]([^」』”\"]{1,60})[」』”\"]")
+_ANN_BODY_RE = re.compile(r"(?:正文|内容)\s*(?:写|是|为|说|：|:)\s*[:：]?\s*(.+)", re.S)
+
+
+def _msg_marked_field(user_msg, kind: str) -> str | None:
+    """主人原话里**自己标出来的**标题 / 正文（`标题叫「X」` / `正文写：…`）；没有标 → None。"""
+    text = str(user_msg or "")
+    if kind == "title":
+        m = _ANN_TITLE_RE.search(text)
+        return m.group(1).strip() if m else None
+    m = _ANN_BODY_RE.search(text)
+    if not m:
+        return None
+    return m.group(1).strip().strip("「」『』“”\"") or None
+
+
+def _announcement_text_fix(plan_obj: dict, user_msg) -> None:
+    """公告的 `title`/`content` 校正到主人写下的原话（就地改；无标记/多 spec 不动）。
+
+    · create：`title` 认「标题叫「X」」标记，`content` 认「正文写：…」标记；
+    · update/delete：`title` 是**要动的那条**的身份，只认**唯一一段引号**
+      （改公告那句话里常有两段引号——旧标题与新标题，指向谁并不唯一）。
+    """
+    tools = plan_obj.get("tools") or []
+    if len(tools) != 1:
+        return
+    name = _tool_name(tools[0])
+    if name not in ("create_announcement", "update_announcement",
+                    "delete_announcement"):
+        return
+    args, args_ok = _tool_args(tools[0])
+    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+        return
+    fixed: dict[str, str] = {}
+    if name == "create_announcement":
+        want = _msg_marked_field(user_msg, "title")
+        got = str(args.get("title") or "").strip()
+        if want and _squash_spaces(got) != _squash_spaces(want):
+            fixed["title"] = want
+    else:
+        # 改/删公告的 `title` 是**要动的那条**的身份。主人指认它时几乎一定带着引号
+        # （「把标题是「X」的那条公告删掉」），而 planner 会把身份填成描述里的字面量
+        # ——20260922 实测：「要删掉的那条公告的标题」被原样填进参数，预检据此报
+        # "站内没有这个标题"，主人拿到一句**引着系统自己占位符**的答复。
+        # 只认**唯一一段引号**：改公告那句话里常有两段（旧标题 + 新标题），
+        # "标题叫「Y」"指向谁并不唯一，宁可不动（交给既有链路如实说"没有这个标题"）。
+        spans = _msg_quote_spans(user_msg)
+        got = str(args.get("title") or "").strip()
+        if len(spans) == 1 and _squash_spaces(got) != _squash_spaces(spans[0]) \
+                and _squash_spaces(got) not in _squash_spaces(spans[0]):
+            fixed["title"] = spans[0]
+    want_body = _msg_marked_field(user_msg, "body")
+    got_body = str(args.get("content") or "").strip()
+    if want_body and _squash_spaces(got_body) != _squash_spaces(want_body):
+        fixed["content"] = want_body
+    if not fixed:
+        return
+    logger.info("[planner] 公告字段校正（%s）：%s → %s", name,
+                {k: str(args.get(k))[:30] for k in fixed},
+                {k: v[:30] for k, v in fixed.items()})
+    record("planner", "announcement_text_correct", tool=name,
+           got={k: str(args.get(k))[:60] for k in fixed},
+           used={k: v[:60] for k, v in fixed.items()})
+    # 重走 instantiate_plan：TOOLS 行与**注记**都从校正后的参数重新生成（同
+    # `_board_quote_fix`：只改 spec 字符串的话，注记里还是 planner 那个错值）。
+    params = dict(plan_obj.get("params") or {})
+    params.update(fixed)
+    fresh = instantiate_plan(plan_obj.get("skill") or "chat", params)
+    fresh["params"] = params
+    plan_obj.clear()
+    plan_obj.update(fresh)
+
+
+# ── 名字通道的目标名：主人引号里的那一段才是它（②防线续二）──────────────────
+# 实测（20260922 golden `admin_tag_move_unresolved_target_honest` 八跑）：主人说
+# 「把标签「绝对不存在的标签名xyz」挪到「编程」下面」，planner 把这个名字**抄短了**
+# ——两跑分别填成「绝对」和「标签名」。这个名字**要写进如实答复里**（"站内没有叫
+# 「X」的标签"），于是答复答的是**另一个名字**：主人问的是「绝对不存在的标签名xyz」，
+# 系统回"没有叫「绝对」的"——这句话本身是错的（它没说清自己查的是什么）。
+# 边界与留言的 `quote` 同源：引号是主人自己下的指认标记，标记内的字**原样**是他说的，
+# planner 的转写一律让位。**证据不唯一就不动**（宁可让预检照 planner 的值如实回话，
+# 也不猜一个名字去查）。
+_NAME_TARGET_TOOLS = ("update_tag", "delete_tag", "update_category",
+                      "delete_category", "update_announcement",
+                      "delete_announcement")
+
+# "另一个操作数"的标记词：紧跟在它后面的那段引号**不是**目标，而是父标签
+# （挪到…下面）或新名字（改名叫…）。语序本身就是主人给的标记——20260922 实测另一跑
+# planner 直接把目标名写成「未命名标签」（站内没有这个标签，纯粹是它自己编的占位
+# 名字），连 parent_tag 都没填：光靠 planner 的参数已经认不出目标，只有这句话的
+# 语序还认得出（"挪到「编程」下面"里的「编程」是父，「绝对不存在的标签名xyz」是目标）。
+_OPERAND_MARK_RE = re.compile(
+    r"(?:挪到|移到|移动到|放到|挂到|换到|改到|调到|调整到|"
+    r"改名叫|改名为|改名成|改成|换成|改为)\s*$")
+
+
+def _marked_other_operand(user_msg, spans: list[str]) -> str:
+    """主人原话里被"另一个操作数"标记词领着的那一段引号（没有则空串）。"""
+    text = str(user_msg or "")
+    for m in _QUOTE_SPAN_RE.finditer(text):
+        frag = next((g for g in m.groups() if g), "").strip()
+        if frag and any(_squash_spaces(frag) == _squash_spaces(s) for s in spans) \
+                and _OPERAND_MARK_RE.search(text[:m.start()]):
+            return frag
+    return ""
+
+
+def _owner_target_span(got: str, spans: list[str], parent: str,
+                       other_marked: str = "") -> str | None:
+    """主人引号里哪一段是**目标名**？证据不唯一 → None（见上方长注）。
+
+    ① planner 写的名字落在**唯一一段**引号里（抄短了/概括了）→ 那一段就是它；
+    ② 引号里有一段被"另一个操作数"的标记词领着（`挪到「B」下面` / `改名叫「B」`
+       ——见 `_marked_other_operand`）→ 剩下的那**唯一一段**就是目标；
+    ③ 两段引号、其中一段正是 planner 填的父标签名 → 另一段是目标。
+    刻意**不做**"只有一段引号就把目标改成它"——「帮我把标签 Asyncio 挪到「编程」
+    下面」只有一段引号（是父标签），那样改会把要挪的标签改成父标签本身。
+    """
+    sq = _squash_spaces(got)
+    hits = [s for s in spans if sq and sq in _squash_spaces(s)]
+    if len(hits) == 1:
+        return hits[0]
+    if other_marked:
+        rest = [s for s in spans if _squash_spaces(s) != _squash_spaces(other_marked)]
+        if len(rest) == 1:
+            return rest[0]
+    if len(spans) == 2:
+        sqp = _squash_spaces(parent)
+        if sqp:
+            ph = [s for s in spans if sqp in _squash_spaces(s)]
+            if len(ph) == 1:
+                other = next(s for s in spans if s is not ph[0])
+                return other
+    return None
+
+
+def _name_target_fix(plan_obj: dict, user_msg) -> None:
+    """按名字指认的写工具：目标名校正到主人引号里那一段（就地改；不动别的参数）。"""
+    tools = plan_obj.get("tools") or []
+    if len(tools) != 1:
+        return
+    name = _tool_name(tools[0])
+    if name not in _NAME_TARGET_TOOLS:
+        return
+    tkey, pkey = _WRITE_NAME_FIELDS.get(name) or (None, None)
+    if not tkey:
+        return
+    args, args_ok = _tool_args(tools[0])
+    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+        return
+    got = str(args.get(tkey) or "").strip()
+    if not got:
+        return
+    spans = _msg_quote_spans(user_msg)
+    want = _owner_target_span(got, spans, args.get(pkey) if pkey else "",
+                              _marked_other_operand(user_msg, spans))
+    if not want or _squash_spaces(want) == _squash_spaces(got):
+        return
+    logger.info("[planner] 目标名校正（%s）：%r → %r", name, got, want)
+    record("planner", "name_target_correct", tool=name, got=got[:60], used=want[:60])
+    # 重走 instantiate_plan：TOOLS 行与**注记**都从校正后的参数重新生成（同
+    # `_board_quote_fix`：只改 spec 字符串的话，注记里还是 planner 那个错值）。
+    params = dict(plan_obj.get("params") or {})
+    params[tkey] = want
+    fresh = instantiate_plan(plan_obj.get("skill") or "chat", params)
+    fresh["params"] = params
+    plan_obj.clear()
+    plan_obj.update(fresh)
+
+
+def _ident_grounded(name: str, args: dict, user_msg) -> bool:
+    """写操作的身份参数是否落在主人这句话里（见本小节头注 ②）。"""
+    fields = _WRITE_NAME_FIELDS.get(name)
+    if not fields:
+        return True  # 不是按名字指认的写工具（文章族走 target_* 三条判据）
+    msg = _squash_spaces(user_msg)
+    if not msg:
+        return False
+    for key in (k for k in fields if k):
+        val = _squash_spaces(args.get(key))
+        if val and val not in msg:
+            return False
+    return True
+
+
 def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
     """本轮写操作的目标名字能否唯一落到站内一行？返回 `(工具名, 拒绝说明)` 或 None。
 
@@ -2454,12 +2871,18 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         name = _tool_name(spec)
         if not authz.requires_consent(principal, name):
             continue
-        if authz.consent_granted(principal, name, user_msg):
-            continue  # 已是明确命令：走"同轮命令即确认"，直接执行，不弹窗
+        args, args_ok = _tool_args(spec)
+        # 免弹窗（"同轮命令即确认"）多一条前提（20260922 ②防线）：**主人自己把目标
+        # 说出口了**。判成命令但目标名字不在主人这句话里（别名跳步、从执行记忆里
+        # 拣的名字、模型自己概括的片段）→ 不许一句话直接写，退回弹窗：问句里会把
+        # 系统解析到的目标写清楚（标签名/分类名/公告标题/留言原文），由主人点一下确定。
+        # 这是**加一次点击**，不是砍能力——名字原样说出口的常见路径一行没变。
+        if args_ok and authz.consent_granted(principal, name, user_msg) \
+                and _ident_grounded(name, args, user_msg):
+            continue  # 明确命令 + 目标地基都在：直接执行，不弹窗
         decision = authz.check(principal, name)
         if not decision.allowed and authz.enforcing(decision.scope):
             continue  # 权限硬拦：弹窗也改不了"这个人不能做"，走既有拒绝链路
-        args, args_ok = _tool_args(spec)
         if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
             # 参数没解析出来 / 还挂着 $ref（引用依赖的是签发那一轮的工具帧，执行轮
             # 早已不在）→ 不签发，退回既有错误帧链路让 planner 自己收拾

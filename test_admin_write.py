@@ -976,6 +976,93 @@ finally:
     else:
         g._TOOL_MAP["set_article_status"] = _saved2
 
+print("\n⑰ ②防线：身份必须落在主人这句话里（免弹窗的第三个前提）")
+
+# 判据本身（纯函数）
+check("名字原样在主人话里 → 地基成立",
+      g._ident_grounded("delete_tag", {"name": "Asyncio"},
+                        "把标签 Asyncio 删掉") is True)
+check("主人说的是**别的说法**（异步）而参数是 Asyncio → 地基不成立（要人类确认一次）",
+      g._ident_grounded("delete_tag", {"name": "Asyncio"},
+                        "把那个异步标签删掉吧") is False)
+check("空白/换行差异不算不成立（与片段匹配同一口径）",
+      g._ident_grounded("delete_tag", {"name": "Rust 异步"},
+                        "把标签 Rust\n异步 删掉") is True)
+check("父标签名同样要落地基（建标签时挂错爸爸是最贵的一种错）",
+      g._ident_grounded("create_tag", {"title": "X", "parent_tag": "编程"},
+                        "在「编程」下面建个标签 X") is True
+      and g._ident_grounded("create_tag", {"title": "X", "parent_tag": "编程"},
+                            "在「异步」下面建个标签 X") is False)
+check("留言族同样落地基（quote 就是这个工具的身份）",
+      g._ident_grounded("delete_board_comment", {"quote": "泠月喵好笨啊"},
+                        "把那条写着「泠月喵好笨啊」的留言删掉吧") is True)
+check("不在名字表里的写工具不受这一条约束（文章族走 target_* 三条判据）",
+      g._ident_grounded("set_article_status", {"article_id": 12},
+                        "把这篇设为私密") is True)
+
+
+def _popup(spec, msg, uid=7, role=ROLE_ADMIN):
+    """跑一次 `_confirm_popup`（真判据 + 真签发，假的是标签字典与后端）。"""
+    return g._confirm_popup(
+        {"plan": "SKILL=tag_delete\nPARAMS={}\nTOOLS: \nNOTE: \nREPLY: 直接回答"},
+        [spec], Principal(uid=uid, role=role), msg,
+        {"configurable": {"user_id": uid, "conversation_id": 42}})
+
+
+with patch(_tag_index=lambda config: A.build_tag_index(
+        [{"tagKey": 2, "title": "编程", "level": 1}],
+        [{"tagKey": 10000, "title": "Asyncio", "level": 2,
+          "fatherTag": "编程", "fatherKey": 2}])):
+    SPEC_DEL = 'delete_tag({"name": "Asyncio"})'
+    r2 = _popup(SPEC_DEL, "把那个异步标签删掉吧")
+    check("命令式但名字不在主人话里（别名/模型自己拣的名字）→ 退回弹窗",
+          isinstance(r2, dict) and "pending_confirm" in r2, str(r2)[:80])
+    _q = (r2 or {}).get("pending_confirm", {}).get("q", "")
+    check("  问句把系统解析到的目标写清楚（主人点的是「Asyncio」这个名字）",
+          "Asyncio" in _q, _q[:90])
+
+    r3 = _popup(SPEC_DEL, "把标签 Asyncio 删掉的话，文章上会有什么变化？")
+    check("疑问句照旧不弹窗（提问不是下令——这条判据在同意闸里早就有）",
+          r3 is None, str(r3)[:60])
+
+    r4 = _popup(SPEC_DEL, "把标签 Asyncio 挪到别的爸爸下面吧")
+    check("有意向、名字也在话里，但措辞不是命令 → 照旧弹窗（原行为）",
+          isinstance(r4, dict), str(r4)[:60])
+
+    # 快道**真能命中**哪些话：实测过 `authz.consent_granted` 后如实分两栏（这道防线的
+    # 咬合面取决于同意闸的动作词表长什么样，不是"所有名字通道写都走弹窗"）。
+    # 词表里有 创建/新建/设成/改名… 那一族，**没有** 「删掉标签/移除标签」这一族。
+    _p = Principal(uid=7, role=ROLE_ADMIN)
+    _reachable = [("update_tag", "把标签 Asyncio 改名叫协程"),
+                  ("create_tag", "确认创建标签 Asyncio")]
+    _unreachable = [("delete_tag", "把标签 Asyncio 删掉"),
+                    ("delete_tag", "删了 Asyncio 那个标签"),
+                    ("delete_board_comment", "把那条写着「泠月喵好笨啊」的留言删掉")]
+    check("快道**够得着**的名字通道写（动作词表里有「改名/创建」）⇒ 这道防线真会咬人",
+          all(authz.consent_granted(_p, _t, _m) is True for _t, _m in _reachable),
+          str([(_t, authz.consent_granted(_p, _t, _m)) for _t, _m in _reachable]))
+    check("而「删掉标签/删留言」这一族判不成命令 ⇒ 它们一律走弹窗（防线在这里是兜底）",
+          all(authz.consent_granted(_p, _t, _m) is False for _t, _m in _unreachable),
+          str([(_t, authz.consent_granted(_p, _t, _m)) for _t, _m in _unreachable]))
+
+    SPEC_NEW = 'create_tag({"title": "Asyncio", "parent_tag": "编程"})'
+    _MSG_NEW = "确认创建标签 Asyncio，挂在编程下面"
+    check("  对照：同一套闸对「确认创建标签 X」是放行的（所以下面两条测得到）",
+          authz.consent_granted(Principal(uid=7, role=ROLE_ADMIN), "create_tag", _MSG_NEW) is True)
+
+    r5 = _popup(SPEC_NEW, _MSG_NEW)
+    check("快道可达的话 + 身份落地基 → 不弹窗（不是把写一律变成问）",
+          r5 is None, str(r5)[:80])
+
+    r6 = _popup('create_tag({"title": "Asyncio", "parent_tag": "编程"})',
+                "确认创建标签 Asyncio，挂在异步下面")
+    check("同一条命令，planner 把父标签填成主人**没说过**的名字 → 退回弹窗",
+          isinstance(r6, dict), str(r6)[:80])
+    _q6 = (r6 or {}).get("pending_confirm", {}).get("q", "")
+    check("  问句把**它要挂的那个爸爸**写出来（主人说的是「异步」，问句问的是「编程」——"
+          "对不上就能当场取消，而不是被静默挂错）",
+          "编程" in _q6 and "Asyncio" in _q6, _q6[:90])
+
 print("\n⑯ 写技能的描述必须写明「不要自己揽下要不要执行」")
 
 from agent.skills import SKILLS  # noqa: E402
