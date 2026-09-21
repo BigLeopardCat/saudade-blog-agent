@@ -543,6 +543,13 @@ _NOARG_VERB = {
     "get_top_notes": "查看置顶文章",
     "list_categories": "查看分类",
     "list_tags": "查看标签",
+    # 管理助手报表（20260921）：**不在** _EXPLICIT_TOOLS 里（planner 点不到名，
+    # 只由 ops_report / moderation_report / user_report 三个技能模板展开），
+    # 但过程行渲染走的是同一张表——缺了就显示"执行 get_server_status"。
+    "get_server_status": "查看服务器状态",
+    "get_service_health": "查看服务健康",
+    "get_moderation_status": "查看审核状况",
+    "get_user_stats": "查看用户统计",
 }
 
 _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",
