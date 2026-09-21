@@ -44,7 +44,12 @@ def check(name: str, ok: bool, extra: str = "") -> None:
 from config.settings import settings  # noqa: E402
 
 _SAVED_SECRET = settings.jwt_secret
-settings.jwt_secret = "test-secret-for-confirm-tokens"
+# 桩值（不是 _SAVED_SECRET）：CI 里没有 .env，settings.jwt_secret 默认是空串，
+# 而"密钥空缺不签也不验"是本套件的一条断言 —— 中间把密钥清空后必须**恢复成桩值**，
+# 否则后面所有"该弹窗"的正例全部静默变成"签不出令牌 → 不弹"（20260921 CI 实测：
+# 三条正例红、全部反例照样绿，正是这种"反例恒真"的假绿形态）。
+_STUB_SECRET = "test-secret-for-confirm-tokens"
+settings.jwt_secret = _STUB_SECRET
 
 SPECS = [{"tool": "create_tag", "args": {"title": "测试标签", "parent_id": None, "color": "#eb2f96"}}]
 
@@ -102,9 +107,13 @@ check("不可序列化的参数 → 不签发（不抛）",
 settings.jwt_secret = ""
 check("密钥空缺 → **既不签也不验**（绝不降级成无签名令牌）",
       confirm.sign(7, 42, "tag_create", SPECS) == "" and confirm.verify(tok, 7, 42) is None)
-settings.jwt_secret = _SAVED_SECRET
+settings.jwt_secret = _STUB_SECRET   # 恢复桩值（见上方 _STUB_SECRET 处的说明）
 
 print("\n③ 弹窗从哪来（_confirm_popup）")
+# 探针：下面整节的"反例"都是 `is None`——密钥若为空，签不出令牌会让**正例也**变 None，
+# 于是看起来"全都符合预期"。先证一次"此刻签得出来"，再往下判。
+check("前置探针：此刻密钥在位、签得出令牌（下面正例才有意义）",
+      len(confirm.sign(7, 42, "tag_create", SPECS)) > 20)
 SPEC_STATUS = 'set_article_status({"article_id": 12, "status": "private"})'
 PLAN_STATUS = ('SKILL=article_status\nPARAMS={}\nTOOLS: ' + SPEC_STATUS
                + '\nNOTE: x\nREPLY: y')
@@ -281,6 +290,8 @@ check("create_tag 有 color 参数且透传（Rust 侧存 String 不校验，零
       "color" in src and "match_tag_color" in src)
 check("认不出的颜色 → unavailable（不静默回落成哈希色）",
       "不在站内色板里" in src and "unavailable" in src)
+
+settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print()
 if FAILED:
