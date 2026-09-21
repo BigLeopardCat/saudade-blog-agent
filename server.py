@@ -705,6 +705,12 @@ def _tool_action_text(name: str, args: dict | None) -> str:
     if name == "search_notes":
         k = str(a.get("keyword") or "").strip()
         return f"检索文章「{k[:24]}」" if k else "检索文章"
+    if name == "get_moderation_status":
+        # 聚焦某一类时把"看的是哪一类"写进过程行（20260922）：只写「查看审核状况」
+        # 会让"主人问被驳回的、agent 却在看全部"这种偏差在过程行里看不出来。
+        focus = {"ai_passed": "AI 直接通过的", "ai_rejected": "被 AI 驳回的",
+                 "pending": "等人复批的"}.get(str(a.get("status") or "").strip())
+        return f"查看审核状况（只看{focus}）" if focus else "查看审核状况"
     if name == "get_article_detail":
         aid = str(a.get("article_id") or "").strip()
         if aid.startswith("$"):
