@@ -49,8 +49,11 @@ check("角色授予表只引用词汇表内的 scope",
       all(s <= authz.ALL_SCOPES for s in (authz.scopes_for(r) for r in KNOWN_ROLES)))
 
 print("② 授予表覆盖现状（shadow 期的拒绝必须是真越权，不是配错）")
-# 今天 user 用得到的：公开只读 + 自己的会话/设备 + 自己的页面
-USER_TOOLS = [n for n in TOOL_NAMES if authz.required_scope(n) != authz.SCOPE_READ_ANY]
+# 今天 user 用得到的：公开只读 + 自己的会话/设备 + 自己的页面。
+# 排除 admin.console（20260921）：那四个是**纯新增能力**，user 从来没有过——它被拒
+# 是设计本身，不是"配错"；本检查要抓的是"把 user 今天在用的工具误拒了"。
+USER_TOOLS = [n for n in TOOL_NAMES
+              if authz.required_scope(n) not in (authz.SCOPE_READ_ANY, authz.SCOPE_ADMIN_CONSOLE)]
 denied = [n for n in USER_TOOLS if not authz.check(p(ROLE_USER), n).allowed]
 check(f"user 未被拒任何现有工具（{len(USER_TOOLS)} 个）", not denied, f"误拒: {denied}")
 denied = [n for n in TOOL_NAMES if not authz.check(p(ROLE_ADMIN), n).allowed]
@@ -127,7 +130,9 @@ check("execute_node 调用 authz.check", "decision = authz.check(principal, name
 check("拒绝只发生在调用之前（denial_frame 产帧而非 invoke）",
       "out = authz.denial_frame(decision, principal)" in graph_src)
 check("shadow 只记拒绝不改行为（authz_shadow 事件）",
-      '"authz_shadow"' in graph_src and "not authz.enforcing()" in graph_src)
+      '"authz_shadow"' in graph_src and "not authz.enforcing(decision.scope)" in graph_src)
+check("拦截判据按 scope 取（admin.console 不吃 shadow，见 ⑩）",
+      graph_src.count("authz.enforcing(decision.scope)") == 2)
 check("checker 认得 scope_denied 原因码", "authz.scope_error_reason(text)" in graph_src)
 check("principal 经 config 注入图", "def _principal_of" in graph_src)
 check("server 构造 principal（含角色来源标注）", "_resolve_principal" in server_src
@@ -270,6 +275,55 @@ out = gate_node(_write_state("这条还没发出去喵，要我现在发布吗�
 check("未确认 + 如实说『还没发、要确认』 → 放行（不许误伤诚实收尾）",
       out.get("done") is True and not out.get("fallback_text"),
       str(out.get("fallback_text", ""))[:50])
+
+print("⑩ 管理助手 admin.console（20260921）：硬拦 + 身份过滤双层")
+# 这一批是"纯新增能力"：历史流量里一条都没有 ⇒ 没有 shadow 观测期可谈，硬拦。
+# 三层结构，本节点验后两层（第一层"结构性不可达"在 test_reports.py ⑪）：
+#   ② 身份：非 admin 的 planner 上下文里看不到这三个技能 ⇒ 选不出来；
+#   ③ 判据：execute 前的 authz.check + enforcing(scope) 硬拦。
+ADMIN_TOOLS = ["get_server_status", "get_service_health", "get_moderation_status", "get_user_stats"]
+ADMIN_SKILLS = ["ops_report", "moderation_report", "user_report"]
+
+check("admin.console 是硬拦（不随 authz_enforce 走）",
+      authz.enforcing(authz.SCOPE_ADMIN_CONSOLE) is True and settings.authz_enforce is False,
+      f"scope={authz.enforcing(authz.SCOPE_ADMIN_CONSOLE)} switch={settings.authz_enforce}")
+check("别的 scope 仍跟随全局开关（没顺手把整表改成硬拦）",
+      all(authz.enforcing(s) == bool(settings.authz_enforce)
+          for s in authz.ALL_SCOPES - authz._HARD_SCOPES))
+check("无参调用 = 旧语义（不知道 scope 的调用点行为不变）",
+      authz.enforcing() == bool(settings.authz_enforce))
+check("_HARD_SCOPES 只含 admin.console（改宽了要有人看见）",
+      authz._HARD_SCOPES == frozenset({authz.SCOPE_ADMIN_CONSOLE}), str(authz._HARD_SCOPES))
+check("admin.console 在 ALL_SCOPES 里（否则 admin 也会被拒）",
+      authz.SCOPE_ADMIN_CONSOLE in authz.ALL_SCOPES)
+
+for tool in ADMIN_TOOLS:
+    check(f"{tool} 未声明 → deny", not authz.check(None, tool).allowed)
+    check(f"{tool} 身份不明（role=None）→ deny", not authz.check(UNKNOWN, tool).allowed)
+    check(f"{tool} 普通用户 → deny", not authz.check(p(ROLE_USER), tool).allowed)
+    check(f"{tool} 秘书 → deny（秘书拿不到运维面，这是刻意的）",
+          not authz.check(p(ROLE_SECRETARY), tool).allowed)
+    check(f"{tool} 管理员 → allow", authz.check(p(ROLE_ADMIN), tool).allowed)
+    check(f"{tool} 拒绝原因码是 scope_denied（走既有 blocked 链路）",
+          authz.check(p(ROLE_USER), tool).reason == authz.REASON_DENIED)
+check("秘书一档**没有**被顺手放开（_ROLE_SCOPES 未动）",
+      not any(authz.check(p(ROLE_SECRETARY), t).allowed for t in ADMIN_TOOLS))
+
+from agent.skills import SKILL_MAP, build_planner_context  # noqa: E402
+
+for name in ADMIN_SKILLS:
+    sk = SKILL_MAP.get(name)
+    check(f"技能 {name} 声明了 roles={{admin}}", sk is not None and sk.roles == frozenset({ROLE_ADMIN}),
+          str(sk and sk.roles))
+for role in (None, ROLE_USER, ROLE_SECRETARY):
+    ctx = build_planner_context(role)
+    check(f"planner 上下文（role={role}）不含管理助手技能",
+          all(n not in ctx for n in ADMIN_SKILLS))
+check("planner 上下文（admin）含全部三个管理助手技能",
+      all(n in build_planner_context(ROLE_ADMIN) for n in ADMIN_SKILLS))
+check("公开技能对任何角色都还在（过滤没写宽）",
+      all(n in build_planner_context(None) for n in ("chat", "content_query", "navigate"))
+      and all(n in build_planner_context(ROLE_USER) for n in ("chat", "content_query", "navigate")))
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

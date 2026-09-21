@@ -63,3 +63,6 @@ jobs:
 
       - name: 超长文章单测（分节/按节取回/帧节选：索引与渲染同一套节边界、不无声截断，秒级，纯函数不联网）
         run: uv run python test_sections.py
+
+      - name: 管理助手报表单测（/proc 解析与渲染/读不到≠空/命令前缀消毒/后台代调失败取向，秒级，假 httpx 不联网）
+        run: uv run python test_reports.py

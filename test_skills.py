@@ -846,7 +846,7 @@ def test_phantom_tool_claim():
         check(f"phantom[{why}] → {want or 'pass'}", got == want, f"got={got}")
     # 工具名名单派生自注册表（不手写——手写名单正是 15:51 事故的漏项来源）
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 22 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 26 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 

@@ -174,13 +174,101 @@ _DIGESTERS = {
 }
 
 
+# ── 文本型摘要器（20260921，管理助手报表）────────────────────────────
+# 报表类工具刻意返回**渲染好的中文报表**而不是 `_shape(data)`（WHY 见
+# agent/reports.py 头注），所以它们进不了上面那族结构化摘要器（`_parse` 对纯文本
+# 返回 None）。这里退一步按**文本正则**抽几个关键数字——目的只有一个：跨轮
+# 「刚才磁盘占用多少」能零调用取值（rule 6b），**不是**复述整张报表。
+# 抽不到就返回空串（退化成"没有摘要"，与改动前一致），绝不猜。
+
+def _find(text: str, pattern: str) -> str | None:
+    m = re.search(pattern, text or "")
+    return m.group(1) if m else None
+
+
+def _server_status_digest(text: str) -> str:
+    parts = []
+    cpu = _find(text, r"- CPU：.*?使用率 ([\d.]+%)")
+    if cpu:
+        parts.append(f"CPU {cpu}")
+    load = _find(text, r"- 负载：1 分钟 ([\d.]+)")
+    if load:
+        parts.append(f"负载 {load}")
+    mem = _find(text, r"- 内存：.*?（(\d+%)）")
+    if mem:
+        parts.append(f"内存 {mem}")
+    disks = re.findall(r"- 磁盘 (\S+)：.*?（(\d+%)）", text or "")
+    if disks:
+        parts.append("磁盘 " + "、".join(f"{p} {v}" for p, v in disks[:2]))
+    return "服务器状态: " + "／".join(parts) if parts else ""
+
+
+def _service_health_digest(text: str) -> str:
+    parts = []
+    # 两个分支都要抽：读不到的服务若不进摘要，就变成"摘要里没有这个服务"，
+    # 下轮问"agent 服务怎么样"时 narrator 只能重跑工具（或者更糟——照摘要答，
+    # 把一个没读到的服务说成没事）。抽成 `agent=读不到` 至少是如实的一条。
+    states = re.findall(r"- (saudade-\w+)：(?:(\S+?)/|(读不到))", text or "")
+    if states:
+        parts.append("服务 " + " ".join(
+            f"{u.removeprefix('saudade-')}={r or unread}" for u, r, unread in states))
+    warn, fail = _find(text, r"WARN (\d+) 条"), _find(text, r"FAIL (\d+) 条")
+    if warn is not None or fail is not None:
+        parts.append(f"心跳 WARN {warn or 0}/FAIL {fail or 0}")
+    rounds = _find(text, r"- 今日对话：(\d+) 轮")
+    if rounds is not None:
+        abnormal = _find(text, r"异常收尾 (\d+) 轮")
+        parts.append(f"今日 {rounds} 轮" + (f"（异常 {abnormal}）" if abnormal else ""))
+    return "服务健康: " + "；".join(parts) if parts else ""
+
+
+def _moderation_digest(text: str) -> str:
+    total = _find(text, r"- 总计 (\d+) 条")
+    if total is None:
+        return ""
+    parts = [f"留言 {total} 条"]
+    detail = _find(text, r"- 总计 \d+ 条：待审 (\d+)、已通过 (\d+)、已驳回 (\d+)")
+    if detail:
+        m = re.search(r"待审 (\d+)、已通过 (\d+)、已驳回 (\d+)", text or "")
+        parts.append("待审 {}、通过 {}、驳回 {}".format(*m.groups()))
+    need = _find(text, r"仍待审 (\d+) 条")
+    if need:
+        parts.append(f"AI 拦下待审 {need}")
+    return "审核: " + "；".join(parts)
+
+
+def _user_stats_digest(text: str) -> str:
+    total = _find(text, r"- 用户总数 (\d+)")
+    if total is None:
+        return ""
+    parts = [f"用户 {total} 人"]
+    conv, msg = _find(text, r"- 会话 (\d+) 个"), _find(text, r"消息 (\d+) 条")
+    if conv is not None and msg is not None:
+        parts.append(f"会话 {conv}、消息 {msg}")
+    active = _find(text, r"近 7 天 (\d+) 人")
+    if active is not None:
+        parts.append(f"近 7 天活跃 {active} 人")
+    return "用户数据: " + "；".join(parts)
+
+
+_TEXT_DIGESTERS = {
+    "get_server_status": _server_status_digest,
+    "get_service_health": _service_health_digest,
+    "get_moderation_status": _moderation_digest,
+    "get_user_stats": _user_stats_digest,
+}
+
+
 def receipt_digest(tool: str, result: str) -> str:
     """数据工具返回 → 一行实体摘要（无摘要能力/解析失败 → ""）。"""
-    digester = _DIGESTERS.get(tool or "")
-    if digester is None:
-        return ""
+    name = tool or ""
     try:
-        out = digester(_parse(result))
+        if name in _DIGESTERS:
+            out = _DIGESTERS[name](_parse(result))
+        elif name in _TEXT_DIGESTERS:
+            out = _TEXT_DIGESTERS[name](result or "")
+        else:
+            return ""
     except Exception:                    # 摘要绝不能影响主链路（回执落库）
         return ""
     return (out or "")[:_DIGEST_MAX]
