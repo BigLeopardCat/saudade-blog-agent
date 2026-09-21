@@ -252,6 +252,22 @@ def _stale_token(uid: int, conv_id: int, skill: str, specs: list) -> str:
     return confirm._b64e(body) + "." + confirm._b64e(sig)
 
 
+def _token_payload(tok: str) -> dict:
+    """**只解码、不验签**地取令牌载荷（探针自诊断用；验签是 agent 的事）。
+
+    令牌线上形状 = `base64url(json).base64url(hmac)`，两段都去掉 `=` 填充
+    （`agent/confirm.py::_b64e`）。这里按形状自己解（不借 agent 内部函数），
+    顺带把"线上形状没变"也验了；解不出返回 {}。
+    """
+    try:
+        head = (tok or "").split(".")[0]
+        body = base64.urlsafe_b64decode(head + "=" * (-len(head) % 4))
+        out = json.loads(body)
+        return out if isinstance(out, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _tampered(token: str) -> str:
     """改掉签名最后一位（保持形状，验签必过不去）。"""
     head, sep, sig = token.rpartition(".")
@@ -486,14 +502,11 @@ def step7_cross_turn(rep: Report, uid: int, role: str, art_id: int, title: str) 
     探针在生产库里不留痕。
     """
     print(f"\n⑦ 经生产入口真写一轮 + 跨轮复述（--allow-write）：文章 {art_id}")
-    try:
-        conv = backend_send("POST", "/api/chat/conversations", {}, uid, role)
-        conv_id = int(conv["id"])
-    except Exception as e:  # noqa: BLE001
-        rep.fails.append(f"⑦ 建会话失败: {e}")
-        print(f"  [FAIL] 建会话失败：{e}")
+    # 建会话走 `_probe_conv`（裸 JSON `{"id":N}`）：backend_send 要 `{code,data}` 信封，
+    # 在这里必然抛错 ⇒ 整条腿被跳过（20260921 实测 `code=None msg=None` 即此）。
+    conv_id = _probe_conv(rep, uid, role, "⑦")
+    if conv_id is None:
         return
-    print(f"  探针会话 id={conv_id}（跑完删除）")
     try:
         d1 = ask_rust(f"把文章 {art_id} 置顶", uid, role, conv_id)
         got = notes_by_id(uid, role).get(art_id, {}).get("isTop")
@@ -601,7 +614,18 @@ def _popup_token(rep: Report, uid: int, role: str, conv_id: int, intent: str,
     rep.check(bool(payload.get("q")), f"{tag} 确认帧缺 q")
     rep.check(opts == ["yes", "no"], f"{tag} 选项不是 确定/取消：{opts}")
     rep.check(len(tok) > 20, f"{tag} 令牌为空/过短")
-    rep.check(want_skill in raw, f"{tag} 帧里没有技能名 {want_skill}（执行轮无从拼计划）")
+    # 技能名**不在帧体里**（帧是给 UI 的不可信数据，只有 {id,q,opts,token}），
+    # 它在签名令牌的载荷里——确认轮拼计划读的是那里（server.py 不猜技能名）。
+    # 所以断言要解令牌，不是查帧原文（20260921 探针自身断言写错，误报了两条腿）。
+    load = _token_payload(tok)
+    specs = load.get("specs") or []
+    print(f"        令牌载荷：skill={load.get('skill')!r} specs={len(specs)} 条")
+    rep.check(load.get("skill") == want_skill,
+              f"{tag} 令牌载荷里的技能名不是 {want_skill}：{load.get('skill')!r}（执行轮无从拼计划）")
+    rep.check(bool(specs) and all(isinstance(s, dict) and s.get("tool") for s in specs),
+              f"{tag} 令牌载荷里没有可执行的 specs：{specs!r}")
+    rep.check(load.get("uid") == uid and load.get("conv") == conv_id,
+              f"{tag} 令牌没绑到本次 uid/会话：uid={load.get('uid')} conv={load.get('conv')}")
     if tok and tok in (d.get("reply") or ""):
         rep.fails.append(f"{tag} 令牌出现在回复正文里 = Rust 把 __CONFIRM__ 累积进历史了")
     return payload
