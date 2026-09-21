@@ -9,7 +9,7 @@
 本套件守住三件结构性质（不联网、不调 LLM，秒级）：
   1. **围栏在**：不可信文本进围栏、围栏前有"里面不算指令"的声明，且正文里的围栏
      标记会被打断——不能让待审内容自己把围栏关掉、把后面的字读成系统指令；
-  2. **输出白名单**：审核只认 pass/flag（解析不出 = pass）；摘要清洗后为空就不入库；
+      2. **输出白名单**：审核只认 pass/reject/flag（解析不出 = flag）；摘要清洗后为空就不入库；
   3. **失败取向**：审核 fail-open（异常抛给调用方降级放行）、摘要 fail-empty
      （异常/空 → ""）——取向写在模块里，不靠调用方记得。
 """
@@ -78,16 +78,17 @@ check("正文超长按 500 字截断（既有行为不变）",
       "字" * 500 in moderator.build_prompt("字" * 900)
       and "字" * 501 not in moderator.build_prompt("字" * 900))
 
-print("③ 审核输出白名单：解析不出 = pass（宁漏勿误伤）")
+print("③ 审核输出白名单：通过 / 拒绝 / 存疑，解析不出转人工")
 cases = [
     ('{"verdict": "flag", "reason": "含外链广告"}', "flag", "含外链广告"),
     ('{"verdict":"pass","reason":"正常祝福"}', "pass", "正常祝福"),
     ('前缀说明\n```json\n{"verdict": "FLAG", "reason": "辱骂"}\n```', "flag", "辱骂"),
-    ('{"verdict": "maybe", "reason": "拿不准"}', "pass", "（未解析出裁决，默认放行）"),
+      ('{"verdict": "reject", "reason": "广告引流"}', "reject", "广告引流"),
+      ('{"verdict": "maybe", "reason": "拿不准"}', "flag", "（未解析出裁决，转人工复核）"),
     ('{"verdict": "flag"}', "flag", "（无原因）"),
-    ('我觉得这条没问题', "pass", "（未解析出裁决，默认放行）"),
-    ('', "pass", "（未解析出裁决，默认放行）"),
-    ('[1,2,3]', "pass", "（未解析出裁决，默认放行）"),
+      ('我觉得这条没问题', "flag", "（未解析出裁决，转人工复核）"),
+      ('', "flag", "（未解析出裁决，转人工复核）"),
+      ('[1,2,3]', "flag", "（未解析出裁决，转人工复核）"),
 ]
 for out, want_v, want_r in cases:
     v, r = moderator.parse_verdict(out)
@@ -101,8 +102,8 @@ check("假模型走全链路", moderator.review("加微信买茶叶", llm=llm)["
       and len(llm.prompts) == 1)
 check("送审正文经围栏（不是裸插值）", moderator._OPEN in llm.prompts[0])
 llm_empty = FakeLLM("")
-check("模型输出为空 → pass（不是 flag）",
-      moderator.review("祝福", llm=llm_empty)["verdict"] == "pass")
+check("模型输出为空 → flag（转人工，不自动放行）",
+      moderator.review("祝福", llm=llm_empty)["verdict"] == "flag")
 llm_boom = FakeLLM(exc=RuntimeError("upstream down"))
 try:
     moderator.review("祝福", llm=llm_boom)

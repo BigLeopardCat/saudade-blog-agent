@@ -32,14 +32,14 @@ _TEXT_MAX = 500          # 送审正文上限（既有行为，保持不变）
 _REASON_MAX = 80         # 原因串上限（既有行为）
 
 # 裁决词表：白名单，小写比较。故意不做"近义词映射"——拿不准的一律 pass。
-_VERDICTS = ("pass", "flag")
+_VERDICTS = ("pass", "reject", "flag")
 
 _PROMPT_HEAD = (
     "你是博客留言板审核员。留言板叫「河灯集」，访客在这里放河灯留言（内容是"
     "写给他人/自己的话，通常带祝福、倾诉、提问或日常分享）。\n"
     "判定该留言能否公开显示：仅当含垃圾广告、引流买卖、色情低俗、辱骂攻击、"
-    "违法敏感内容、恶意外链等明显不宜内容才判 flag；其余（祝福、倾诉、提问、"
-    "日常、夸赞、读后感等正常留言）一律 pass。拿不准时倾向 pass。\n"
+    "违法敏感内容、恶意外链等明显不宜内容才判 reject；明显正常的留言判 pass；"
+    "无法确认时判 flag，交给人工复核。\n"
 )
 
 
@@ -75,7 +75,7 @@ def parse_verdict(out: str) -> tuple[str, str]:
     只取第一个 JSON 对象；verdict 必须命中白名单（大小写不敏感）；reason 截断。
     任何异常都落到 fail-open 的默认值，绝不因为"解析失败"而 flag 一条正常留言。
     """
-    verdict, reason = "pass", "（未解析出裁决，默认放行）"
+    verdict, reason = "flag", "（未解析出裁决，转人工复核）"
     m = re.search(r"\{.*\}", out or "", re.S)
     if not m:
         return verdict, reason
