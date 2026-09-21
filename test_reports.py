@@ -273,7 +273,7 @@ check("零告警写『无异常』（这才是可以放心说的那句）", "心
 
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⑥ 报表③审核状况：三态 / AI 交叉表 / 待审明细")
+print("\n⑥ 报表③审核状况：三态 / AI 四态 / 三份名单（AI通过·AI驳回·待人工复批）")
 
 
 def _row(i, approved, ai, body="内容", who="访客"):
@@ -282,30 +282,76 @@ def _row(i, approved, ai, body="内容", who="访客"):
 
 
 rows = [
-    _row(30, 0, "flag", "求个学习资料", "小明"),      # AI 拦下 + 待审 ←最该看的一批
+    _row(30, 0, "flag", "求个学习资料", "小明"),      # AI 存疑 + 待审 ←最该看的一批
     _row(29, 0, "flag", "第二条待审留言"),
     _row(28, 0, None, "AI 没审过的存量行"),
     _row(27, 1, "pass", "已通过的正常留言"),
     _row(26, 2, "pass", "AI 放过但被人驳回的"),
     _row(25, 2, "flag", "AI 拦下且已驳回"),
+    _row(24, 2, "reject", "AI 驳回且人工维持的"),
+    _row(23, 0, "reject", "AI 驳回但人工闸开着还在等"),
+    _row(22, 1, "reject", "AI 驳回但被人改判放行的"),
 ]
 mr = R.render_moderation_status(rows, now=NOW)
 check("报表头带时间", mr.startswith("河灯留言审核状况（2026-09-21 13:05）"))
-check("三态分布计数正确", "- 总计 6 条：待审 3、已通过 1、已驳回 2" in mr, mr.splitlines()[1])
-check("AI 侧分布（pass/flag/未审）", "AI 侧判定：通过 2、拦下转人工 3、未审 1" in mr, mr.splitlines()[2])
-check("交叉表：AI 拦下且仍待审 = 2", "AI 拦下且仍待审 2 条" in mr)
-check("交叉表：AI 放过但被驳回 = 1", "AI 放过但被人驳回 1 条" in mr)
-check("待审明细只列待审（不含已通过/已驳回）", "#30" in mr and "#29" in mr and "#28" in mr
-      and "#27" not in mr and "#25" not in mr, mr)
-check("明细带 AI 是否拦下的标注", "#30 09-21 12:30 小明（AI已拦）" in mr and "#28 09-21 12:28 访客（AI未拦）" in mr)
-check("明细含 ID 与作者（可溯源）", "#30" in mr and "小明" in mr)
+check("三态分布计数正确", "- 总计 9 条：待审 4、已通过 2、已驳回 3" in mr, mr.splitlines()[1])
+# 20260922 修：旧版把 reject 混进"未审"桶（只认 pass/flag），AI 驳回的那批在报表里
+# 看不见——而"哪些被 AI 驳回"正是最常被问的一句。四态必须各归各位。
+check("AI 侧分布含**驳回**（不再混进未审）",
+      "AI 侧判定：通过 2、驳回 3、存疑转人工 3、未走 AI 1" in mr, mr.splitlines()[2])
+check("口径重叠写明了（不许把三个数相加）", "可以重叠" in mr and "不要把三个数相加" in mr)
+
+def _sec(text, start, end=None):
+    """按行首标记切一段（"②" 在正文里被引用过，不能用 split）。"""
+    i = text.find("\n" + start)
+    j = text.find("\n" + end) if end else len(text)
+    return text[i:j]
+
+
+check("① 只收 AI 通过且已展示的（1 条：另一条 AI 判过但被人驳回，不算「直接通过」）",
+      "① AI 直接通过（AI 判通过且已展示，没经过人工）1 条:" in mr)
+check("① 明细是那条 AI 通过的", "#27 09-21 12:27 访客（AI通过）" in _sec(mr, "①", "②"))
+check("① 不含 AI 驳回行", "#24" not in _sec(mr, "①", "②"), _sec(mr, "①", "②"))
+# AI 判 pass 但人工闸开着（approved=0）的**没有直接露出** ⇒ 不许算进①
+# （否则主人会以为"AI 放过了"就等于"没人看过"，而那条恰恰还在等人）
+_gated = R.render_moderation_status([_row(1, 0, "pass"), _row(2, 1, "pass")], now=NOW)
+check("① 排除「AI 通过但人工闸还开着」的",
+      "① AI 直接通过（AI 判通过且已展示，没经过人工）1 条:" in _gated
+      and "③ 需要人工复批 1 条：AI 存疑 0、AI 通过但人工闸 1" in _gated, _gated)
+
+check("② 计数拆出人工后处置（维持/改判/还等）",
+      "② AI 驳回 3 条：人工维持驳回 1、人工改判放行 1、还等着人工复批 1" in mr)
+check("② 明细列出被驳回的三条并标注人工处置",
+      "#24 09-21 12:24 访客（人工已驳回）" in mr
+      and "#23 09-21 12:23 访客（仍待人工）" in mr
+      and "#22 09-21 12:22 访客（人工已改判放行）" in mr)
+
+check("③ 计数按 AI 侧拆分", "③ 需要人工复批 4 条：AI 存疑 2、AI 通过但人工闸 0、"
+      "AI 驳回但人工闸 1、未走 AI 1" in mr)
+check("③ 明细含 AI 存疑 / 未走 AI / AI 驳回待人工三种标注",
+      "（AI存疑）" in mr and "（AI未审）" in mr and "（AI驳回待人工）" in mr)
+check("明细带 ID 与作者（可溯源）", "#30" in mr and "小明" in mr)
 check("空列表：不报错，如实说没有待审", "当前没有待审留言" in R.render_moderation_status([], now=NOW))
 check("None 输入不炸", "总计 0 条" in R.render_moderation_status(None, now=NOW))
 
+# status 聚焦：主人追问"把被驳回的都列出来"——这一类放开到 20 条，另两类只留计数
+foc = R.render_moderation_status(rows, status="ai_rejected", now=NOW)
+check("聚焦 ai_rejected：② 明细照列", "#24" in foc and "#23" in foc and "#22" in foc)
+check("聚焦 ai_rejected：① ③ 只留计数（不展开）",
+      "#27" not in _sec(foc, "①", "②") and "另有 1 条未列出" in foc
+      and "#30" not in _sec(foc, "③"), foc)
+check("认不出的 status 不炸（按不聚焦处理）",
+      R.render_moderation_status(rows, status="???", now=NOW) == mr)
+many_rej = [_row(i, 2, "reject") for i in range(40, 70)]
+check("聚焦时明细上限 20 条", R.render_moderation_status(many_rej, status="ai_rejected", now=NOW)
+      .count("  · #") == 20)
+check("聚焦时其余 10 条如实说未列出",
+      "另有 10 条未列出" in R.render_moderation_status(many_rej, status="ai_rejected", now=NOW))
+
 many = [_row(i, 0, "flag") for i in range(40, 60)]
 mm = R.render_moderation_status(many, now=NOW)
-check("待审明细最多 10 条", mm.count("  · #") == 10, str(mm.count("  · #")))
-check("其余只计数（不静默丢弃）", "另有 10 条待审未列出" in mm)
+check("不聚焦时每类明细最多 5 条", mm.count("  · #") == 5, str(mm.count("  · #")))
+check("其余只计数（不静默丢弃）", "另有 15 条未列出" in mm)
 check("摘要有 total 可被跨轮取值", receipt_digest("get_moderation_status", mm).startswith("审核: 留言 20 条"), receipt_digest("get_moderation_status", mm)[:60])
 check("长内容截断到 30 字 + 省略号", "「" + "长" * 30 + "…" in R.render_moderation_status(
     [_row(1, 0, "flag", "长" * 80)], now=NOW))

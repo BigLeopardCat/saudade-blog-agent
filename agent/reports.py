@@ -169,22 +169,71 @@ def _short_health_line(line: str) -> str:
 
 
 # ── 报表 ③：评论（河灯留言）审核状况 ────────────────────────────────
+#
+# 口径来自**生产代码**而不是这张报表的想象（20260922 逐条对齐 src/routes/talks.rs
+# 的 board_approved）：河灯留言入库时算出一对 (approved, ai_result)——
+#   · ai_result=pass   ：AI 判通过 → approved=1（无人工闸）或 0（人工闸开着 ⇒ 仍要人看）
+#   · ai_result=reject ：AI 判驳回 → approved=2（直接驳回）或 0（人工闸开着）
+#   · ai_result=flag   ：AI 存疑 → 一律 approved=0
+#   · ai_result=NULL   ：没走 AI（AI 闸关 / agent 不可用降级）→ 1 或 0
+# 人工后续裁决**只写 approved、不改写 ai_result**（`audit_board`），所以
+# `ai_result=reject 且 approved=1` 是"AI 驳回但被人改判放行"的实证，不是脏数据。
+#
+# 上一版把 `reject` 混进了"未审"桶（只认 pass/flag），于是**AI 驳回的那批在报表里
+# 看不见**——而"哪些被 AI 驳回"正是主人最常问的一句（20260922 用户点名要读）。
+# 现在按 AI 侧四态 × 人工侧三态切分，三份名单各回答一个问题。
 
 APPROVED_PENDING, APPROVED_OK, APPROVED_REJECT = 0, 1, 2
 
-# 待审明细列出多少条（其余只计数）
-MAX_PENDING_DETAIL = 10
+# 明细每条列出多少行：默认报表三类各列几条（其余只计数），
+# `status` 聚焦某一类时把这一类放开（见 render_moderation_status）
+MAX_LIST_DETAIL = 5
+MAX_FOCUS_DETAIL = 20
+
+# 聚焦参数 → (键, 报表里的名字)。键与工具参数同源（tools.base.get_moderation_status）
+FOCUS_NAMES = {
+    "ai_passed": "AI 直接通过",
+    "ai_rejected": "AI 驳回",
+    "pending": "需要人工复批",
+}
 
 
-def render_moderation_status(rows: list[dict], now: datetime | None = None) -> str:
+def _detail_line(r: dict, extra: str = "") -> str:
+    """一条留言的明细行：`#id 时间 作者（标注）「正文」`。
+
+    `sanitize_untrusted` 是必须的（见模块头注）：这是全链路唯一"访客可控文本进
+    prompt"的地方，命令前缀必须在这里拆掉——作者名同样是访客可控的（留言时可填）。
+    """
+    who = sanitize_untrusted(r.get("author") or r.get("nickname") or "", 16)
+    if not who:
+        who = f"用户#{r.get('userId')}"
+    body = sanitize_untrusted(r.get("content") or "", 30)
+    at = _short_time(r.get("createTime"))
+    return f"  · #{r.get('talkKey')} {at} {who}（{extra}）「{body}」"
+
+
+def _ai_bucket(v) -> str:
+    """ai_result → 四态之一（认不出的值按"未审"——与上一版同取向，不新造桶）。"""
+    return v if v in ("pass", "reject", "flag") else "none"
+
+
+def render_moderation_status(rows: list[dict], status: str | None = None,
+                             now: datetime | None = None) -> str:
     """`GET /api/protect/board` 的返回 → 审核状况报表。
 
-    三段式：总数与三态分布 → **交叉表**（AI 侧 vs 人工侧的分歧，这是"哪些异常"
-    的答案）→ 待审明细。交叉表是这张报表存在的理由：
-      · `AI flag + 待审`  = AI 拦下、等人工裁决（最该看的一批）
-      · `AI pass + 待人工` = AI 放过、人工有异议（少数但值得复盘 AI 判定）
+    先给两张计数（人工侧三态 / AI 侧四态），再列**三份名单**——它们按主人问问题
+    的方式切分，因此**口径不同、可以重叠**（一条"AI 驳回且还等人复批"的留言会
+    同时出现在②③），报表里把这件事写明，免得被读成加法：
+
+      ① AI 直接通过：`ai_result=pass` 且 `approved=1`（没经过人）
+      ② AI 驳回    ：`ai_result=reject`（不论人工后续维持 / 改判 / 还等着）
+      ③ 需要人工复批：`approved=0`（不论 AI 判了什么）
+
+    `status` 给其中之一（`FOCUS_NAMES` 的键）时，只有这一类展开明细（放宽到
+    `MAX_FOCUS_DETAIL` 条），另两类只留计数——"把被驳回的都列出来"这类追问靠它。
     """
     rows = rows or []
+    focus = status if status in FOCUS_NAMES else None
     lines = [f"河灯留言审核状况（{_ts(now)}）"]
     total = len(rows)
     pending = [r for r in rows if r.get("approved") == APPROVED_PENDING]
@@ -192,33 +241,62 @@ def render_moderation_status(rows: list[dict], now: datetime | None = None) -> s
     rejected = [r for r in rows if r.get("approved") == APPROVED_REJECT]
     lines.append(f"- 总计 {total} 条：待审 {len(pending)}、已通过 {len(passed)}、已驳回 {len(rejected)}")
 
-    ai = {"pass": 0, "flag": 0, "none": 0}
+    ai = {"pass": 0, "reject": 0, "flag": 0, "none": 0}
     for r in rows:
-        v = r.get("ai_result")
-        ai["pass" if v == "pass" else "flag" if v == "flag" else "none"] += 1
-    lines.append(f"- AI 侧判定：通过 {ai['pass']}、拦下转人工 {ai['flag']}、未审 {ai['none']}")
+        ai[_ai_bucket(r.get("ai_result"))] += 1
+    lines.append(f"- AI 侧判定：通过 {ai['pass']}、驳回 {ai['reject']}、"
+                 f"存疑转人工 {ai['flag']}、未走 AI {ai['none']}")
 
-    both = [r for r in pending if r.get("ai_result") == "flag"]
+    # 三份名单（口径见 docstring）。`ai_passed` 刻意要求 approved=1：AI 判 pass 但
+    # 人工闸开着时那条**并没有直接露出**，它在③里等人工，混进①会让主人以为没人看过。
+    ai_passed = [r for r in rows if r.get("ai_result") == "pass" and r.get("approved") == APPROVED_OK]
+    ai_rejected = [r for r in rows if r.get("ai_result") == "reject"]
+    keep_rej = [r for r in ai_rejected if r.get("approved") == APPROVED_REJECT]
+    open_rej = [r for r in ai_rejected if r.get("approved") == APPROVED_OK]
+    wait_rej = [r for r in ai_rejected if r.get("approved") == APPROVED_PENDING]
+    pend_flag = [r for r in pending if r.get("ai_result") == "flag"]
+    pend_pass = [r for r in pending if r.get("ai_result") == "pass"]
+    pend_none = [r for r in pending if _ai_bucket(r.get("ai_result")) == "none"]
+
+    lines.append("- 三份名单口径不同、**可以重叠**（一条 AI 驳回又还等人复批的留言会同时"
+                 "出现在②③）——不要把三个数相加当总数")
+
+    def _detail(group: list[dict], key: str, extra_of):
+        """一类名单的明细行（空名单不写"明细"二字，免得列出个空标题）。"""
+        if not group:
+            return
+        limit = MAX_FOCUS_DETAIL if focus == key else (0 if focus else MAX_LIST_DETAIL)
+        if not limit:
+            lines.append(f"  · 另有 {len(group)} 条未列出")
+            return
+        lines.append("  明细:")
+        for r in group[:limit]:
+            lines.append(_detail_line(r, extra_of(r)))
+        rest = len(group) - limit
+        if rest > 0:
+            lines.append(f"  · 另有 {rest} 条未列出")
+
+    lines.append(f"① AI 直接通过（AI 判通过且已展示，没经过人工）{len(ai_passed)} 条:")
+    _detail(ai_passed, "ai_passed", lambda r: "AI通过")
+    lines.append(f"② AI 驳回 {len(ai_rejected)} 条：人工维持驳回 {len(keep_rej)}、"
+                 f"人工改判放行 {len(open_rej)}、还等着人工复批 {len(wait_rej)}")
+    _detail(ai_rejected, "ai_rejected",
+            lambda r: {APPROVED_REJECT: "人工已驳回", APPROVED_OK: "人工已改判放行",
+                       APPROVED_PENDING: "仍待人工"}.get(r.get("approved"), "人工侧未知"))
+    lines.append(f"③ 需要人工复批 {len(pending)} 条：AI 存疑 {len(pend_flag)}、"
+                 f"AI 通过但人工闸 {len(pend_pass)}、AI 驳回但人工闸 {len(wait_rej)}、"
+                 f"未走 AI {len(pend_none)}")
+    _detail(pending, "pending",
+            lambda r: {"flag": "AI存疑", "pass": "AI已过待人工", "reject": "AI驳回待人工"}
+            .get(r.get("ai_result"), "AI未审"))
+
+    # 分歧实证：AI 判过但被人驳回（漏放）、AI 判驳但被人放行（误伤）——两条都是
+    # 复盘 AI 判定质量的**证据**（只有人工侧真裁过才会有，不含仍待审的）。
     missed = [r for r in rejected if r.get("ai_result") == "pass"]
-    lines.append(f"- 需要人工介入：**AI 拦下且仍待审 {len(both)} 条**；"
-                 f"AI 放过但被人驳回 {len(missed)} 条")
+    lines.append(f"- 分歧实证（人工已经裁过的）：AI 放过但被人驳回 {len(missed)} 条；"
+                 f"AI 驳回但被人放行 {len(open_rej)} 条")
     if not pending:
         lines.append("- 当前没有待审留言")
-    else:
-        lines.append(f"- 最近待审明细（最多 {MAX_PENDING_DETAIL} 条，按时间倒序）:")
-        # rows 已是服务端倒序（created_at desc, id desc）；这里不再排序，避免
-        # "服务端排一次、agent 再排一次"两处口径——明细顺序与后台列表一致才有用
-        for r in pending[:MAX_PENDING_DETAIL]:
-            who = sanitize_untrusted(r.get("author") or r.get("nickname") or "", 16)
-            if not who:
-                who = f"用户#{r.get('userId')}"
-            body = sanitize_untrusted(r.get("content") or "", 30)
-            at = _short_time(r.get("createTime"))
-            tag = "AI已拦" if r.get("ai_result") == "flag" else "AI未拦"
-            lines.append(f"  · #{r.get('talkKey')} {at} {who}（{tag}）「{body}」")
-        rest = len(pending) - MAX_PENDING_DETAIL
-        if rest > 0:
-            lines.append(f"  · 另有 {rest} 条待审未列出")
     return _cap("\n".join(lines))
 
 

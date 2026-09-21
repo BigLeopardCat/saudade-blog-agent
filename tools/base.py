@@ -880,9 +880,17 @@ def get_service_health() -> str:
 
 
 @tool
-def get_moderation_status(config: RunnableConfig) -> str:
-    """查看河灯留言的审核状况：总数与待审/已通过/已驳回的分布、AI 侧判定分布、
-    需要人工介入的交叉统计（AI 拦下但仍待审、AI 放过但被人驳回）、以及最近待审明细。
+def get_moderation_status(
+    config: RunnableConfig,
+    status: Annotated[str | None,
+                      "只列某一类明细：ai_passed=AI 直接通过的 / ai_rejected=AI 驳回的 / "
+                      "pending=需要人工复批的；不填则三类各列最近几条（其余只计数）"] = None,
+) -> str:
+    """查看河灯留言的审核状况：总数与待审/已通过/已驳回的分布、AI 侧判定分布
+    （AI 通过 / AI 驳回 / AI 存疑转人工 / 未走 AI），以及三份可读名单——
+    ① AI 直接通过的 ② AI 驳回的（并说明人工是维持驳回、改判放行还是仍在等）
+    ③ 需要人工复批的（并说明是 AI 存疑还是 AI 通过后才等人看）。
+    追问"把被驳回的/等人复批的都列出来"时用 status 参数聚焦某一类（列得更多）。
     需要管理员身份（读的是后台留言管理视图）。"""
     from agent import reports as R
     data = _admin_get("/api/protect/board", config)
@@ -891,7 +899,7 @@ def get_moderation_status(config: RunnableConfig) -> str:
     if not data:
         return empty("河灯留言板目前还没有任何留言，没有可审核的内容")
     try:
-        return ok(R.render_moderation_status(data))
+        return ok(R.render_moderation_status(data, status=status))
     except Exception as exc:
         logger.exception("render_moderation_status failed")
         return unavailable(f"整理审核状况失败: {exc}")
