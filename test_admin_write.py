@@ -450,6 +450,25 @@ check("一级标签的问句不带父标签字样", "挂在" not in _q3, _q3)
 _t = A.render_confirm_text([{"tool": "create_tag",
                              "args": {"title": "分布式", "parent_id": 2}}], IDX)
 check("气泡正文与问句同源（都点名父标签）", "「架构」" in _t, _t)
+# 探针 ⑤ 的现场：主人说摘「摄影」，问句只写「修改文章 1 的标签」——他无从核对
+# "要去掉的到底是不是我说的那个"。摘标签这一类的盲签风险比改状态更高（改状态的
+# 目标值是枚举，标签名是自由文本）。
+_t2 = A.render_confirm_question([{"tool": "set_article_tags",
+                                  "args": {"article_id": 1, "remove": ["摄影"]}}])
+check("摘标签的问句点名**哪个标签**（不是只说「修改文章 1 的标签」）",
+      "摄影" in _t2 and "去掉" in _t2, _t2)
+_t3 = A.render_confirm_question([{"tool": "set_article_tags",
+                                  "args": {"article_id": 1, "add": ["音乐"],
+                                           "remove": ["摄影"]}}])
+check("加与摘分别写清（一次动两个标签时不糊成一句）",
+      "加上 音乐" in _t3 and "去掉 摄影" in _t3, _t3)
+_t4 = A.render_confirm_question([{"tool": "set_article_tags",
+                                  "args": {"article_id": 1, "replace": []}}])
+check("replace 空列表 = 清空，问句必须直说「清空」（最不可逆的一档）",
+      "清空" in _t4, _t4)
+check("字段缺失不炸（渲染层对畸形 spec 只退化不加戏）",
+      "修改文章 None 的标签" in A.render_confirm_question(
+          [{"tool": "set_article_tags", "args": {}}]))
 
 
 print("\n⑨ set_article_status：只发点名的字段 + 写后复核")
@@ -827,6 +846,104 @@ check("字符串塞进 int 参数（planner 抄错类型）→ __ERROR__ 帧而�
 check("  该帧不进回执、进 blocked（planner 按规则 5 改参重试）",
       _typed["blocked"] and _typed["blocked"][0]["reason"] == "error_frame",
       str(_typed["blocked"]))
+
+print("\n⑮ 写目标以「用户本轮点名」为权威（误靶写：点名 1 却取了清单首行 46）")
+
+# 活体探针实证（20260921）：管理员说「把文章 1 置顶」，planner 读了一遍后台列表，
+# 把**第一行**（id=46）填进了 article_id。旧判据（本轮读到过 46 ⇒ 有据）放行了它。
+# 下面这组是**纯函数 + execute 两级**的回归锁：函数级锁"认出点名"，集成级锁"不一致
+# 就零调用"，并且三条互补情形（空集不启用 / 命中即放行 / 计数不算点名）都在。
+
+for msg, want, why in (
+        ("把文章 1 的「摄影」标签去掉", {1}, "文章 N"),
+        ("帮我把文章#46 置顶", {46}, "文章#N"),
+        ("第 3 篇设为私密", {3}, "第 N 篇"),
+        ("id=7 那篇隐藏一下", {7}, "id=N"),
+        ("把文章 12 和文章 14 都设为私密", {12, 14}, "多点名 → 命中任一即算对上"),
+        ("把文章 12 和 14 都设为私密", {12, 14}, "枚举延伸（省了第二个「文章」也算）"),
+        ("文章 12、13 置顶", {12, 13}, "顿号枚举"),
+        ("文章 12 和 14 还有 15 都要", {12, 14, 15}, "三级枚举"),
+        ("文章 12 和 3 个要点", {12}, "枚举里的量词项仍不算 id（3 个要点 ≠ 文章 3）"),
+        ("把文章 12 的标签改成 1 和 2", {12}, "连接词不紧跟在 id 后面 → 不延伸"),
+        ("站内一共 12 篇文章", set(), "计数形态（数字在名词前）不是点名"),
+        ("这篇文章 3 个要点总结一下", set(), "「文章 3 个」后面跟量词 = 计数，不是目标"),
+        ("文章 12 篇我都看过了", set(), "「文章 N 篇」显式排除"),
+        ("把这篇置顶", set(), "纯指代（没有数字）= 没点名 → 判据不启用"),
+):
+    got = A.user_named_article_ids(msg)
+    check(f"点名识别：{why}（{msg}）→ {sorted(want) or '空集'}",
+          got == want, f"{sorted(got)}")
+
+check("空集 = 判据不启用（恒放行）——写操作不能因为「用户没说数字」被全禁",
+      A.target_named(999, A.user_named_article_ids("把这篇置顶")) is True
+      and A.target_named(1, set()) is True)
+check("点名了就不许写成别的 id",
+      A.target_named(1, {1}) and not A.target_named(46, {1}))
+check("article_id 缺失/非法 → 不放行（fail-closed，有非空点名时）",
+      not A.target_named(None, {1}) and not A.target_named("四十六", {1}))
+check("原因码取回：两条目标族帧分得开，非本族帧 → None",
+      A.target_error_reason(A.target_conflict_frame("set_article_status", {1}, 46))
+      == A.REASON_TARGET_MISMATCH
+      and A.target_error_reason(A.unknown_target_frame("set_article_status"))
+      == A.REASON_UNKNOWN_TARGET
+      and A.target_error_reason("__ERROR__: 参数引用无法解析[ref_unresolved]") is None)
+_CF = A.target_conflict_frame("set_article_status", {1}, 46)
+check("不一致帧把「以主人点名的为准」讲清楚（planner 照它改参，系统不改写参数）",
+      "文章 1" in _CF and "46" in _CF and _CF.startswith("__ERROR__"))
+
+# 集成：本轮确实读到过 46（后台列表帧在场，旧判据会放行），但用户点名 1
+# （假工具只活在本段——§⑫ 的补丁已还原，这里再挂一次，用完必还原）
+LIST_FRAME = ToolMessage(content="后台文章列表：\n1. 私密 46《架构文档》\n2. 公开 12《随笔》",
+                         tool_call_id="t0", name="list_admin_notes")
+SPEC_46 = 'set_article_status({"article_id": 46, "status": "private"})'
+_CALLS2: list = []
+_saved2 = g._TOOL_MAP.get("set_article_status")
+
+
+class _FakeTool2(_FakeTool):
+    def invoke(self, args):
+        _CALLS2.append(args)
+        return self.out
+
+
+try:
+    g._TOOL_MAP["set_article_status"] = _FakeTool2(
+        base.ok("已修改文章 46：公开 → 私密（后台已复核读到新值）",
+                meta={"op": "set_status", "article_id": 46,
+                      "before": "公开", "after": "私密"}))
+    r = _run([SPEC_46], "把文章 1 设为私密", cfg(), extra_msgs=[LIST_FRAME])
+    _frm = str(r["messages"][-1].content)
+    check("点名 1、planner 填 46（46 在本轮帧里）→ 零调用 + target_mismatch",
+          _CALLS2 == [] and r["receipts"] == []
+          and r["blocked"][0]["reason"] == "target_mismatch"
+          and _frm.startswith("__ERROR__"), f"{_frm[:80]}")
+
+    r = _run([SPEC_46], "把文章 46 设为私密", cfg(), extra_msgs=[LIST_FRAME])
+    check("点名与填充一致 → 照常执行（判据不是「禁止写」）",
+          _CALLS2 == [{"article_id": 46, "status": "private"}], str(_CALLS2))
+
+    _CALLS2.clear()
+    r = _run([SPEC_46], "把这篇设为私密", cfg(), extra_msgs=[LIST_FRAME])
+    check("没点名（纯指代）→ 判据不启用，行为与改动前完全一致",
+          _CALLS2 == [{"article_id": 46, "status": "private"}], str(_CALLS2))
+finally:
+    if _saved2 is None:
+        g._TOOL_MAP.pop("set_article_status", None)
+    else:
+        g._TOOL_MAP["set_article_status"] = _saved2
+
+print("\n⑯ 写技能的描述必须写明「不要自己揽下要不要执行」")
+
+from agent.skills import SKILLS  # noqa: E402
+
+_BY_NAME = {s.name: s for s in SKILLS}
+for _n in ("tag_create", "article_status", "article_tags"):
+    _d = _BY_NAME[_n].description
+    check(f"{_n} 描述含「照常选本技能 + 系统弹确认框」纪律",
+          "照常选本技能" in _d and "索要确认" in _d, _d[-60:])
+gsrc2 = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encoding="utf-8")
+check("planner 规则里也有同一条（4b 写操作纪律：要不要执行不由你判断）",
+      "要不要执行" in gsrc2 and "4b." in gsrc2)
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

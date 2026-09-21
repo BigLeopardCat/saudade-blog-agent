@@ -418,6 +418,19 @@ _PLANNER_PROMPT = """\
      不上、或记录里没有 → 先按限定词的实词 content_query 定位，拿到帧内真实 id
      再读/再跳。**候选标题与限定词对不上号时不许拿 top 候选硬读顶上**（读错一篇
      会把后续几轮全部带偏）——如实说候选里没有对得上的那篇
+4b. 写操作纪律（新建标签 / 改文章状态 / 加去标签三类，**仅管理员**）：
+   - **"要不要执行"不由你判断**：主人点名了对象与动作（"把文章 12 设为私密"
+     "去掉「摄影」标签"），哪怕措辞不标准、哪怕你觉得是破坏性操作，都**照常
+     输出该技能的 TOOLS**——"要不要真动手"由系统在**确认框**上问主人（执行器
+     里的同意闸），不是你在这里替他决定。你替它决定＝那一轮什么都不会发生。
+   - **禁止**用 chat 收尾去索要"再确认一句/回复『执行：…』我就去做"：这既多烧
+     一轮对话，又**不会弹确认框**（确认框由系统在"计划里真有写操作"时才弹）。
+     上一轮工具帧里已经有 id / 标签名、主人这句又是命令式 → 直接规划写操作。
+   - 只有两种情形**不**产出写 spec：①主人在**提问或假设**（"如果设为私密会怎样"）；
+     ②写目标与站内数据对不上（清单里根本没有那一篇/那个标签）——此时先读清单
+     定位，而不是硬写。
+   - 帧里返回 `[target_mismatch]`（改的篇与主人点名的不一致）→ 按帧里给出的 id
+     改回来，下一轮用主人点名的那个 id 重新规划；不得反驳、也不得将错就错。
 5. 多轮收敛：
    - **收尾前先核对上方动作意图清单**：一句话里有多个动作（"帮我把樱花打开，
      顺便切一下夜间模式"）时，跨技能动作一轮只能做一个——逐个做完是正常的多轮
@@ -2215,10 +2228,17 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             # 参数没解析出来 / 还挂着 $ref（引用依赖的是签发那一轮的工具帧，执行轮
             # 早已不在）→ 不签发，退回既有错误帧链路让 planner 自己收拾
             continue
-        if name in _ARTICLE_WRITE_TOOLS and not A.target_mentioned(
-                args.get("article_id"),
-                _target_evidence(state, user_msg,
-                                 _page_ctx(state["messages"], principal.known_role))):
+        if name in _ARTICLE_WRITE_TOOLS and (
+                not A.target_mentioned(
+                    args.get("article_id"),
+                    _target_evidence(state, user_msg,
+                                     _page_ctx(state["messages"], principal.known_role)))
+                # 与用户点名不一致 → 同样不弹（20260921 第三轮）：确认框会把目标
+                # 明明白白写出来，但问的必须是**主人点的那一篇**——问错一篇再让主人
+                # 点确定，等于把误靶洗成一条已授权的写。跳过 → 由下面的循环产
+                # target_mismatch 帧，planner 按帧改回来（那条链路本就在等着）。
+                or not A.target_named(args.get("article_id"),
+                                      A.user_named_article_ids(user_msg))):
             continue
         picks.append({"tool": name, "args": args})
     if not picks:
@@ -2285,6 +2305,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 到这篇文章/给设备写什么文案"），能力清单不参与——但传 role 与另两个节点同构，
     # 免得下次有人复制这行时把角色漏掉。
     page_ctx = _page_ctx(state["messages"], principal.known_role)
+    # 用户本轮**原话点名**的文章 id（写侧目标的权威，见下方 target_conflict）：
+    # 逐 spec 只读不改，循环外算一次。
+    named_ids = A.user_named_article_ids(user_msg)
     # 写操作确认弹窗（20260921）：**执行之前**判，命中就一个工具都不执行、直接回
     # pending_confirm（路由据此去 END，见 route_after_execute）。之所以提前到这里
     # 而不是在下方逐 spec 里：弹窗是一份**整批**的确认（计划里的写操作各自成单，
@@ -2373,6 +2396,22 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             record("execute", "unknown_target", tool=name,
                    article_id=str(args.get("article_id")))
             logger.warning("[execute] 写操作目标无据，不执行: %s（本轮没读到过这个 id）", spec)
+        # 目标与用户点名不一致（20260921 第三轮，活体探针实证）：管理员说「把文章 1
+        # 置顶」，planner 填的却是 `list_admin_notes` 返回的**第一行**（id=46）——
+        # 上一条判据放行了它（46 确实出现在本轮帧里），但那不是用户点的那一篇。
+        # 用户原话点名的 id 是权威：不一致一律不执行（fail-closed），回一条带
+        # reason 的帧把"该改哪一篇"讲清楚，让 planner 自己改回来；系统**不改写**
+        # planner 填的参数（目标只能由用户决定，系统只否决）。空集=用户没点名
+        # （"把这篇置顶"这类指代）→ 判据不启用，行为与之前完全一致。
+        target_conflict = (ref_err is None and args_ok and not target_missing
+                           and not consent_missing and not state.get("confirm_grant")
+                           and name in _ARTICLE_WRITE_TOOLS
+                           and not A.target_named(args.get("article_id"), named_ids))
+        if target_conflict:
+            record("execute", "target_mismatch", tool=name,
+                   article_id=str(args.get("article_id")), named=sorted(named_ids))
+            logger.warning("[execute] 写目标与用户点名不一致，不执行: %s（点名 %s）",
+                           spec, sorted(named_ids))
         # 屏幕文案创作：text 参数缺失/为空 → execute 结合对话创作（技能固有设计）
         if ref_err is None and name == "device_oled_display" and not args.get("text"):
             args = dict(args)
@@ -2390,6 +2429,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         elif target_missing:
             # 同族（__ERROR__ + 原因码），语义是"先去读、或先问哪一篇"
             out = A.unknown_target_frame(name)
+        elif target_conflict:
+            # 同族，语义是"你改错了篇，按主人点名的改回来"
+            out = A.target_conflict_frame(name, named_ids, args.get("article_id"))
         elif tool is None:
             out = f"__ERROR__: 未知工具 {name}（planner 调用清单越界，被 execute 拒绝执行）"
             logger.warning("[execute] 未知工具 %s，拒绝执行", name)
