@@ -2639,6 +2639,49 @@ def test_write_target_refusal_round():
         G.get_llm, TB._tag_index = _orig_llm, _orig_index
 
 
+def test_write_desc_no_example_names():
+    """写技能描述里**不许出现具体名字**，占位符统一写 〈…〉（20260922 实测的缺陷）。
+
+    缺陷形态（离线复现，生产同款 prompt 组装）：主人说「加个二级标签，名字叫
+    Rust 异步」时，planner 有约两成概率把**技能描述里的示例名**抄进参数——
+    实测到 `title="Python"`（描述里的示例）与 `title="Rust", parent_tag="异步"`
+    （把名字的后半个词当成了父标签）。判据换成占位符后 42/42 命中（改前
+    21/24，其中 1 条会把「Rust 异步」建成「Rust」而**看起来像成功了**）。
+
+    为什么要这条锁：描述是**写给模型看的取值来源**，举例用的真名字会被它当成
+    默认值（同族教训见"机制描述会变成 narrator 的词汇"）。以后往写技能描述里
+    加举例，请用 〈…〉占位；要加真名字必须是想清楚了的决定，那时这条锁会红，
+    红的时候请回来读这段注释。
+    """
+    print("[write_desc_no_example_names] 写技能描述里不许出现具体名字（只能用 〈…〉 占位符）")
+    from agent import skills as S
+    # 站内真实存在的标签/分类名 + 已实证被抄过的示例名（20260922）
+    banned = ("Python", "架构", "分布式", "Asyncio", "编程", "随笔", "摄影",
+              "大笨狗", "嵌入式", "音乐")
+    for sk in S.SKILLS:
+        if sk.name not in S.WRITE_SKILL_NAMES:
+            continue
+        hits = [w for w in banned if w in (sk.description or "")]
+        check(f"  {sk.name} 描述里没有具体名字（示例一律 〈…〉）", not hits, f"命中 {hits}")
+    # 占位符写法本身要还在（把示例改成占位符 ≠ 把示例删光——触发语还得教）
+    for name, must in (("tag_create", "〈名字〉"), ("tag_create", "〈父标签名〉"),
+                       ("category_create", "〈名字〉"), ("announcement_create", "〈")):
+        sk = next(s for s in S.SKILLS if s.name == name)
+        check(f"  {name} 描述里保留了占位符 {must}", must in sk.description)
+    # 规则 4b 的取值纪律在 planner prompt 里（描述之外的第二道）
+    import agent.graph as G
+    check("  planner 规则 4b 写了「取值一律从主人这句话里原样抄」",
+          "原样抄" in G._PLANNER_PROMPT and "占位符" in G._PLANNER_PROMPT)
+    # 规则 4b 整段（写操作纪律）也不许出现具体名字：20260922 亲测——把失败样例
+    # 连同真名字（"主人说_X_，弹窗问_Python_"）写进这条规则后，命中率从 12/12 掉到
+    # 4/12，那些名字**当场被抄进参数**（同一族机制，位置越靠近写规则越凶）。
+    block = G._PLANNER_PROMPT.split("4b. 写操作纪律", 1)[-1].split("5. 多轮收敛", 1)[0]
+    hits = [w for w in banned if w in block]
+    check("  规则 4b 整段里没有具体名字（连失败样例也不许带真名字）", not hits, f"命中 {hits}")
+    check("  规则 4b 明说了「完整照抄」（不许截断/去下划线/拆两截）",
+          "完整照抄" in block)
+
+
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
@@ -2658,7 +2701,7 @@ def main():
                test_doc_title_resolution, test_short_reply_and_adjacent_pairs,
                test_no_sibling_tool_name_in_user_text, test_site_guide_is_role_rendered,
                test_site_guide_covers_nav_map, test_drop_correction,
-               test_write_target_refusal_round):
+               test_write_target_refusal_round, test_write_desc_no_example_names):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
