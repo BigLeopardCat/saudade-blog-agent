@@ -260,15 +260,25 @@ def step3_unknown_id(rep: Report, uid: int, role: str) -> None:
     print(f"        真实执行的工具：{tools or '（无）'}")
 
 
-def pick_draft(notes: dict, want: int) -> tuple[int, dict] | None:
+# 可回滚靶子的状态：**公开面完全看不到**的那种。
+#   draft：`is_public=false` 且 status=draft，两个公开列表端点都滤掉；
+#   private：`is_public=false`，同样滤掉（`get_top_notes` 也要求 IsPublic=1，
+#            所以"临时置顶一篇私密文章"不会在首页露面）。
+# 公开（public）**不可**当靶子：中途崩溃就是线上可见的改动。
+_SAFE_TARGET_STATUS = ("draft", "private")
+
+
+def pick_target(notes: dict, want: int) -> tuple[int, dict] | None:
     if want:
         n = notes.get(want)
         if n is None:
             return None
         return (want, n)
-    for nid, n in sorted(notes.items()):
-        if n.get("status") == "draft":
-            return (nid, n)
+    # 优先草稿（公开面最彻底不可见），没有再退到私密
+    for status in _SAFE_TARGET_STATUS:
+        for nid, n in sorted(notes.items()):
+            if n.get("status") == status:
+                return (nid, n)
     return None
 
 
@@ -476,23 +486,23 @@ def main() -> int:
         if notes:
             step2_admin_question(rep, args.uid)
             step3_unknown_id(rep, args.uid, "admin")
-            draft = pick_draft(notes, args.draft_id)
+            draft = pick_target(notes, args.draft_id)
             if not args.allow_write:
                 print("\n[skip] ④⑤⑥⑦ 真写：未给 --allow-write（写操作要显式授权；"
                       "这一轮**没写任何东西**）")
                 rep.warn("真写四条未跑：缺 --allow-write")
             elif draft is None:
-                print("\n[skip] ④⑤⑦：后台没有草稿文章可当靶子（也不许现建一篇）")
-                rep.warn("真写四条未跑：后台没有草稿文章")
+                print("\n[skip] ④⑤⑦：后台没有草稿/私密文章可当靶子（也不许现建一篇）")
+                rep.warn("真写四条未跑：后台没有草稿/私密文章")
             else:
                 aid, row = draft
                 title = str(row.get("noteTitle") or "")
                 print(f"\n靶子文章：id={aid}《{title}》status={row.get('status')} "
                       f"isTop={row.get('isTop')} tags={row.get('noteTags')!r}")
-                if row.get("status") != "draft":
-                    print(f"  ⚠ 指定的靶子不是草稿（status={row.get('status')}）——"
-                          f"置顶/标签改动会落在公开面上；已停下，请换 --draft-id")
-                    rep.fails.append(f"靶子 {aid} 不是草稿（--draft-id 指错了）")
+                if row.get("status") not in _SAFE_TARGET_STATUS:
+                    print(f"  ⚠ 指定的靶子状态是 {row.get('status')}——`public` 文章的改动"
+                          f"在公开面上立刻可见；已停下，请换 --draft-id")
+                    rep.fails.append(f"靶子 {aid} 不是草稿/私密（--draft-id 指错了）")
                 else:
                     ok4 = step4_status(rep, args.uid, "admin", aid, title)
                     ok5 = step5_tags(rep, args.uid, "admin", aid, title)
