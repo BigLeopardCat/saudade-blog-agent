@@ -1063,6 +1063,14 @@ with patch(_tag_index=lambda config: A.build_tag_index(
           "对不上就能当场取消，而不是被静默挂错）",
           "编程" in _q6 and "Asyncio" in _q6, _q6[:90])
 
+print("\n⑱ 确定性收尾的洞④ 豁免锚（gate 侧接线）")
+
+check("锚常量是**系统**写进注记的那句前缀（不是随意字符串）",
+      g._LEDGER_NOTE_PREFIX == "【系统台账核对】", g._LEDGER_NOTE_PREFIX)
+_src = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encoding="utf-8")
+check("gate 的洞④ 分支真的读了它（锚写了但判据不认 = 白写）",
+      "_LEDGER_NOTE_PREFIX not in _note" in _src)
+
 print("\n⑯ 写技能的描述必须写明「不要自己揽下要不要执行」")
 
 from agent.skills import SKILLS  # noqa: E402
