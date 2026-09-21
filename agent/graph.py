@@ -1544,6 +1544,21 @@ _ABSENCE_LEAD_RE = re.compile(
 # "站内检索「…」"、search_notes → "搜索「…」"）——有它即视为站内结论有据
 _EXEC_SEARCH_TRACE_RE = re.compile(r"站内检索「|搜索「")
 
+# ── 确定性收尾轮的洞④ 豁免锚（20260922）─────────────────────────────
+# 洞④ 抓的是 narrator **凭空**对站内下"没有"结论。但有两类收尾轮里那句话是**系统自己
+# 核对出来的事实**：`_write_target_refusal`（目标预检：站内台账里查无此名/此片段）与
+# `_drop_terminal`（点名工具全被剔除 ⇒ 这项数据查不到）。这两轮的注记写明了"请把这条原因
+# 如实转告主人"，narrator 复述它就是履职，不是编造——可它偏偏长得跟凭空结论一模一样，
+# 于是被整轮换成兜底道歉，而道歉说的还是假话（"我其实没有去站里查过"，可系统确实查过）。
+# 实证：20260922 golden `admin_board_unresolved_target_honest` 首跑 resets=1，用户拿到的
+# 是道歉而不是"站内没有含「…」的留言"这条真结论。
+# 豁免判据 = **计划注记里带这个前缀**（注记是系统产物，narrator 写不进去）。两条收尾路径
+# 共用同一份字面量，改一处必须改另一处（test_skills 有锁）。
+# 边界（如实说明）：豁免是**整轮**的——收尾轮里 narrator 若另起一个与台账无关的"站内没有"
+# 也会被放过（换的是"真结论不再被吞"）；注记里已用禁止句约束它，洞①/②/5c/5d 照旧生效。
+_LEDGER_NOTE_PREFIX = "【系统台账核对】"
+
+
 def _exec_memory_has_search(msgs: list) -> bool:
     """跨轮回执行记忆里是否留下过检索类动作（见 _EXEC_SEARCH_TRACE_RE）。"""
     return any(_EXEC_SEARCH_TRACE_RE.search(str(getattr(m, "content", "")))
@@ -1607,9 +1622,11 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         执行回执（executions 注入）且子句含追述时间词 → 说的是**已记录的那次执行**，
         属 rule 6 据实转述；此前只有洞② 接了 exec_memory，洞① 漏了，导致
         "刚才已经帮你显示上去了"这类**引回执**的回合被整轮换成兜底道歉
-      - 零工具轮（除 navigate 注记轮）：站内"没有"结论无依据（_site_absence_claim，
+      - 零工具轮（除两类收尾轮）：站内"没有"结论无依据（_site_absence_claim，
         洞④，20260921）——"站内没有讲这个的文章"这类**结论**同样要本轮查过才有资格说；
-        依据豁免比洞①/② 宽（跨轮回执里有检索痕迹即放行），因为这里说的是结论不是动作
+        依据豁免比洞①/② 宽（跨轮回执里有检索痕迹即放行），因为这里说的是结论不是动作。
+        收尾轮豁免两类（20260922 补第二类）：navigate 注记轮（NAV_MAP 的确定性事实）与
+        带 `_LEDGER_NOTE_PREFIX` 的确定性收尾轮（站内台账的核对结果，见该常量长注）
       - chat 零工具轮：另查第一人称工具调用声称（_CHAT_TOOL_CLAIM_RE）——
         高精确模式；"重读/查过"读取声称不在此拦（chat 轮多为口语，误伤成本高）
       - content_query 零工具轮（异常路径：计划本应有调用清单却留空收尾）：
@@ -1632,10 +1649,15 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     if _site_search_claim(own, exec_memory):
         return ("search_claim_without_tool", _FALLBACK_SEARCH_CLAIM,
                 _site_search_claim_clause(own, exec_memory) or "")
-    # 洞④（20260921）：站内"没有"结论无依据。navigate 的零工具注记轮豁免——那一轮
-    # 的"页面不存在/已下线"是 NAV_MAP 给的确定性事实（gate_node 第 4 节另有如实措辞
-    # 核验），不属凭空结论。
-    if not (skill == "navigate" and "不调用任何工具" in (plan.get("note") or "")):
+    # 洞④（20260921）：站内"没有"结论无依据。两类收尾轮豁免——它们注记里的那句话是
+    # **系统给的确定性事实**，narrator 的职责就是如实转告，不属凭空结论：
+    #   ① navigate 的零工具注记轮："页面不存在/已下线"来自 NAV_MAP
+    #      （gate_node 第 4 节另有如实措辞核验）；
+    #   ② 确定性收尾轮（`_LEDGER_NOTE_PREFIX`，20260922）：目标预检/剔空收尾给的是
+    #      站内台账的核对结果（"站内没有含「…」的留言"）——见该常量的长注。
+    _note = plan.get("note") or ""
+    if not (skill == "navigate" and "不调用任何工具" in _note) \
+            and _LEDGER_NOTE_PREFIX not in _note:
         if _site_absence_claim(own, exec_search_evidence):
             return ("site_absence_claim_without_tool", _FALLBACK_SITE_ABSENCE,
                     _site_absence_claim_clause(own, exec_search_evidence) or "")
@@ -1988,6 +2010,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             record("planner", "write_target_unresolved", tool=wtool,
                    reason=why[:160], round=rounds)
             plan_obj = _wrap_up_plan(False, note=(
+                _LEDGER_NOTE_PREFIX +
                 "**这件事这次没有做：站内数据一个字节都没有改动**"
                 "（本轮一个工具都没有执行）。"
                 f"系统按目标查过站内的台账（标签/分类字典、公告清单、留言列表）"
@@ -2035,6 +2058,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                        "、".join(plan_obj["dropped"]))
         record("planner", "drop_terminal", dropped=plan_obj["dropped"], round=rounds)
         plan_obj = _wrap_up_plan(False, note=(
+            _LEDGER_NOTE_PREFIX +
             "**本轮一个工具都没有执行**（你点名的那几个工具都在可调用清单之外），"
             "所以你现在**没有任何工具返回可用**。只许如实说明你查不到这项数据："
             "说清缺的是什么（需要用户指明是哪一篇/需要博主身份/站内没有这项数据），"

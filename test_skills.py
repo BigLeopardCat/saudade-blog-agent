@@ -2769,6 +2769,40 @@ def test_write_grounding_round():
         G.get_llm, TB._board_index = _orig_llm, _orig_board
 
 
+def test_write_ledger_note_round():
+    """确定性收尾轮的洞④ 豁免锚（20260922）：系统给的台账结论不许被当成零帧编造。
+
+    事故现场：golden `admin_board_unresolved_target_honest` 首跑 resets=1——目标预检
+    如实回了"站内没有含「…」的留言"（系统确实查过站内台账），却被 gate 洞④ 当成凭空
+    结论整轮换成兜底道歉，而道歉说的还是假话（"我其实没有去站里查过"）。
+
+    三条锁：① 锚是系统写进注记的那句前缀（narrator 写不进去）；② gate 侧读到锚即放行、
+    没有锚照旧判（豁免不是把判据关掉）；③ 两条确定性收尾路径共用**同一个常量**——
+    各写一遍字面量的话，改一处漏另一处 = 那一族的真结论又会被吞掉。
+    """
+    print("[write_ledger] 确定性收尾的洞④ 豁免锚（gate 侧接线）")
+    from agent.graph import _LEDGER_NOTE_PREFIX, _claim_issue
+
+    check("锚常量是**系统**写进注记的那句前缀（不是随意字符串）",
+          _LEDGER_NOTE_PREFIX == "【系统台账核对】", _LEDGER_NOTE_PREFIX)
+    _sys_reply = "站内没有含「绝对不存在的留言片段zzz」的河灯留言，本次未改动"
+    check("gate 洞④：注记带系统台账锚 → 放行（修前这里 resets=1、用户收到道歉）",
+          _claim_issue(_sys_reply, "chat", {"note": _LEDGER_NOTE_PREFIX + "…",
+                                            "tools": []}, False) is None)
+    _hit = _claim_issue(_sys_reply, "chat", {"note": "（无台账锚）", "tools": []},
+                        False)
+    check("gate 洞④：没有锚时照旧判（豁免不是把判据关掉）",
+          _hit is not None and _hit[0] == "site_absence_claim_without_tool",
+          str(_hit)[:90])
+    _src = (pathlib.Path(__file__).resolve().parent / "agent"
+            / "graph.py").read_text(encoding="utf-8")
+    check("两条确定性收尾路径都用了同一个锚常量（不是各写一遍字面量）",
+          _src.count("_LEDGER_NOTE_PREFIX +") == 2,
+          str(_src.count("_LEDGER_NOTE_PREFIX +")))
+    check("gate 的洞④ 分支真的读了它（锚写了但判据不认 = 白写）",
+          "_LEDGER_NOTE_PREFIX not in _note" in _src)
+
+
 def test_announcement_text_round():
     """公告的 title/content 校正到主人标出来的原话（20260922 ②防线续）。
 
@@ -3070,6 +3104,7 @@ def main():
                test_no_sibling_tool_name_in_user_text, test_site_guide_is_role_rendered,
                test_site_guide_covers_nav_map, test_drop_correction,
                test_write_target_refusal_round, test_write_grounding_round,
+               test_write_ledger_note_round,
                test_announcement_text_round, test_name_target_round,
                test_write_desc_no_example_names):
         fn()
