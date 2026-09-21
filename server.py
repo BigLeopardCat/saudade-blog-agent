@@ -1110,7 +1110,14 @@ async def chat_stream(req: ChatRequest, request: Request):
                     break
                 if isinstance(chunk, Exception):
                     end_reason = "producer_error"
-                    logger.exception("Agent streaming failed")
+                    # 这里**不能**用 logger.exception：异常是在生产者线程里捕获后
+                    # 经队列送过来的，本协程没有"正在处理中"的异常，exc_info 取到
+                    # (None,None,None)，日志只剩一行 "NoneType: None" ——真正的
+                    # traceback 全丢了（20260921 22:37 排障就是被这个坑住的：只
+                    # 知道流炸了、不知道炸在哪）。把异常对象本身交给 exc_info，
+                    # logging 会用它自带的 __traceback__ 渲染。
+                    logger.error("Agent streaming failed: %s: %s",
+                                 type(chunk).__name__, chunk, exc_info=chunk)
                     yield f"data: __ERROR__:{json.dumps(str(chunk), ensure_ascii=False)}\n\n"
                     return
                 # 过程展示/质检重置控制帧（__PROCESS__:<步骤> / __RESET__:<原因>）：

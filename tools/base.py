@@ -233,6 +233,26 @@ def _read_section(data: dict, article_id, want: str) -> ToolResult:
     }))
 
 
+def _note_row_with_tag_names(row):
+    """note 行 → 补一个 `tags`（中文标签名）。**认不出形态原样返回**。
+
+    详情接口给的 `noteTags` 是**标签 id 串**（`'5'` / `'5,10000'`）——那是内部
+    id，不是标签名，narrator 只能照帧念 id（20260921 22:34 实证：反问"这篇都有什么
+    标签呀"，回了「标签是 noteTags: '5'」，用户只好说"查查吧"，白烧两轮才拿到
+    「Python（挂在 编程 下）」）。这里把名字算好放进 `tags`，`noteTags` 原样保留
+    （写操作与 `$tool[N].noteTags` 这类参数引用仍按原字段取值）。
+    名字读不到时 render_tag_list 如实渲染成 `id=5`——"这次读不到字典"与"标签不存在"
+    不混为一谈。
+    """
+    if not isinstance(row, dict) or not isinstance(row.get("noteTags"), str):
+        return row
+    from agent import adminops as A      # 局部导入：tools → agent 的反向依赖
+    index = _public_tag_index() if row.get("noteTags") else None
+    out = dict(row)
+    out["tags"] = A.render_tag_list(row["noteTags"], index)
+    return out
+
+
 @tool
 def get_article_detail(
     article_id: Annotated[int, "文档的唯一 ID（note 为 noteKey，talk/board 为 talkKey，announcement 为 id）"],
@@ -246,9 +266,14 @@ def get_article_detail(
     `section`：文章过长时全文帧只带得回部分小节（帧尾会列出未展开的小节名），
     用本参数按小节名取回被略去的那一节（20260920 超长文章修复的读取侧）。只对
     note 生效——说说/留言/公告本来就是短文本。
+
+    标签：返回里的 `tags` 是**中文标签名**（如「编程 / Python」，含层级）；`noteTags`
+    是内部 id 串，**回答"这篇有什么标签"要用 `tags`**，别把 id 念给访客。
     """
     if doc_type == "note":
         data = _get(f"/notes/{article_id}")
+        if isinstance(data, dict):
+            data = _note_row_with_tag_names(data)
         if not section or not isinstance(data, dict):
             return _shape(data)          # 故障（unavailable）原样透出，不伪装成空
         return _read_section(data, article_id, section)

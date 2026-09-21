@@ -220,6 +220,34 @@ check("超上限折叠是后缀不是并列项（不是真有个叫「等 4 个�
       A.render_tag_list("1,2,10000,10001", IDX, limit=2))
 check("无标签渲染成（无标签）", A.render_tag_list("", IDX) == "（无标签）")
 
+print("\n④b 纯函数：文章详情补标签名（问「这篇有什么标签」不必再烧一轮）")
+# 现场（20260921 22:34）：访客问「那篇都有什么标签呀」→ planner 读 get_article_detail
+# → 帧里只有 `noteTags: '5'`（内部 id）→ narrator 只能念 id，用户只好说「查查吧」，
+# 再调一次 list_tags 才拿到名字。详情帧补一个 `tags`（中文名）就是这个洞的补丁。
+import tools.base as _B  # noqa: E402
+
+_saved_index = _B._public_tag_index
+try:
+    _B._public_tag_index = lambda: IDX
+    _row = _B._note_row_with_tag_names({"noteKey": 23, "noteTitle": "x", "noteTags": "1,10000"})
+    check("noteTags（id 串）→ tags 给中文名（含层级路径）",
+          _row["tags"] == "Python、Python / 爬虫", _row.get("tags"))
+    check("  id 原样保留（$tool[N].noteTags 这类参数引用不受影响）",
+          _row["noteTags"] == "1,10000")
+    check("  不就地改调用方的行（返回新 dict）",
+          _B._note_row_with_tag_names({"noteTags": "1"}).get("tags") is not None)
+    _B._public_tag_index = lambda: None
+    check("  字典读不到 ≠ 标签不存在：只给 id，不编名字也不说（无标签）",
+          _B._note_row_with_tag_names({"noteTags": "1"})["tags"] == "id=1")
+    _B._public_tag_index = lambda: (_ for _ in ()).throw(AssertionError("本就没标签，不该拉标签字典"))
+    check("  本来就没有标签 → （无标签），且**不去拉字典**（白花两个请求）",
+          _B._note_row_with_tag_names({"noteTags": ""})["tags"] == "（无标签）")
+    check("  非 note 行（说说/留言/设备）原样返回，别套同一把刀",
+          _B._note_row_with_tag_names({"talkKey": 1, "talkContent": "x"})
+          == {"talkKey": 1, "talkContent": "x"})
+finally:
+    _B._public_tag_index = _saved_index
+
 
 print("\n⑤ 纯函数：渲染（清单喂 id、变更只讲真动了的字段）")
 
