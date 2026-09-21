@@ -99,9 +99,34 @@ requires_consent(principal, tool)         # 只看 scope 是否在 CONSENT_SCOPE
   判 BLOCK → planner 去问用户。用 `__ERROR__` 而不是普通文本是有意的：gate 分支 5a
   （错误帧 + 完成式声称 → fallback）因此自动生效，**叙述侧无法把"没执行"说成"已发布"**
   （需要"已经帮你发布好啦"这类句子被判据认出来，见 `_WRITE_CONTENT_CLAIM_RE` 三支的取舍）。
-- **今天是空转的**：现有 22 个工具里**没有一个是 `write.content`**，所以这条闸现在一次也
-  不会触发（`test_authz.py` ⑨ 的用例就是这条事实的锁）。它等的是第一个写工具——**新增
-  写工具时不需要改这段代码**，声明表里给它 `write.content` 就自动落在闸下。
+- **`write.content` 至今空转**：现有工具里**没有一个是 `write.content`**（`test_authz.py` ⑨
+  锁着这条事实）。它等的是第一个"代用户发文"的工具——**新增时不需要改这段代码**，
+  声明表里给它 `write.content` 就自动落在闸下。
+
+**20260921 第二个消费者：`write.console`（管理助手写三件，见 §5.2）**。同一个闸门、同一个
+判据函数，差分只在**判据表**：`_CONSENT_PATTERNS[write.console]` 与 `write.content` 的
+"确认发布"族**分开写**。
+
+- **同意语义（用户 20260921 拍板）= 同轮命令即确认**：管理员说「把《架构文档》设为私密」
+  就是命令、也是确认，**不再要第二句"确认"**。所以这个判据回答的是"**本轮有没有明确命令**"，
+  **不是**"有没有第二次确认"——措辞与文档都要说准，否则下一个人会以为漏了一层。
+- **判据必须是命令式的**（动作词 + 目标词），并**排除疑问/假设/转述**。成对断言锁在
+  `test_authz.py` 与 `test_admin_write.py`：`"把文章 12 设为私密"` → 放行；
+  `"把文章 12 设为私密会有什么影响？"` / `"如果我把文章 12 设为私密的话"` → **不放行**。
+- **fail-closed 的方向 = 判不出来就先追问**（多问一次，不误写）。这一条与 §3.4 顶部那句
+  同源：确认闸宁可挡下一次合法写，也不能放行一次没被要求的写。
+- **`write.console` 同样进 `_HARD_SCOPES`**（不吃 shadow）：写能力纯新增、没有观测期。
+  ⚠️ 只进 `CONSENT_SCOPES` 而**不进** `_HARD_SCOPES` 是本轮最危险的一处——`authz_enforce=False`
+  时 `decision.allowed=False` 会直接落到 invoke。两个集合都进，`test_admin_write.py` 用
+  `authz_enforce=False` 下的非 admin 断言把这条锁死。
+- **叙述侧的第二道网**：同意闸挡的是执行，narrator 还有可能把"没执行"讲成"已经置顶啦"。
+  因此新写动词进了 gate 的两族判据（err 帧轮走 5a 的 `_WRITE_CONTENT_CLAIM_RE`，
+  零帧轮走 洞① 的 `_STATE_ACTION_CLAIM_RE` ④支），**且两处都必须带疑问豁免**——
+  未获确认那轮的正确回复恰好就是一句追问（"需要我现在帮你执行吗？"），少了豁免会把
+  设计好的正确答案判成"声称已执行"。教训写进了 `graph.py` 的注释（这两支是**独立备选**、
+  各自带完成标记，豁免必须两处都挂）。`_EXECUTION_CLAIM_RE` 刻意**不收**这批动词：
+  它只在零帧 `content_query` 宽查，加进去会把合法的疑问句打成声称（实测：三个动词
+  在 516 条历史 trace 上的命中差异为 0，这条改动零历史影响）。
 
 ### 3.5 观测：怎么读 shadow 的结果
 
@@ -143,9 +168,9 @@ grep -l authz_shadow /home/ubuntu/memory_blog_rust/logs/agent/traces/*.json | wc
 | ① | **秘书账号与角色落库** | `user.role` 无 ENUM/CHECK，新建一个 `secretary` 角色就是一行 UPDATE/INSERT——**生产库写入，须用户点名「库名+迁移文件」** | **20260920 已执行**（用户点名「memory_blog 库 + `scripts/migration/secretary_role_20260920.sql`」+ 账号名）：该账号(id 17) `role: user → secretary`，幂等 UPDATE、`must_be_1 = 1`、迁移标记 `secretary_role_20260920` 已写。**真实账号名只在本机私有记录里，本文件（公开仓库）一律不写**——同 §7 的占位符纪律。**迁移文件在父仓只留 `REPLACE_ME` 模板**（父仓是公开仓库，真实账号名不入库）。角色生效仍需 agent 侧收 shadow 证据后再开 `AGENT_AUTHZ_ENFORCE` |
 | ② | **`AGENT_REQUIRE_ASSERTION` 收口** | ~~断言已落地快照但默认关着~~ **20260920 复核：生产 `.env` 里已是 `1`，实测已生效**——不带 `X-Agent-Assertion` 直连 `/chat` 探针得 **401**（不是静默回退），`/review`、`/graph/query` 不经 `_resolve_principal`，不受影响。代码默认值仍留 `False`（本机/测试环境不必带头） | **无需动作**。回归锁=一条不带头的请求必须 401；将来任何"给 agent 加公网入口"的改动都要先过这条 |
 | ③ | **写操作的"人在回路"** | 秘书的价值在写，而今天唯一的防护是"调用前查断连"——没有确认、没有"谁同意了"的记录 | **agent 侧已落地（20260920，见 §3.4）**：需确认的 scope 未获用户本轮明确确认 → 产 `__ERROR__` 帧、**不执行**、叙述侧也说不成"已完成"。**剩下的是 ①（真实秘书账号）与第一个写工具**——写通道（④）与审计（⑥）仍缺 |
-| ④ | **agent → Rust 的写通道凭据** | agent 现在一个 admin 接口都不调，"代用户发文章"没有可用的通道：既没有写接口的调用约定，也没有"agent 持用户授权"的凭证语义 | 建议：不要复用用户 JWT 长期有效，而是同一套断言思路——Rust 签发**带 scope 的短时效授权**，写接口按 scope 校验（与 agent 侧的 manifest 同名同义）。**20260921：读的那一半已落地**（管理助手只读三件，见 §5.1）——通道选定为「以发起人身份代调」：agent 用**本轮发起人的 uid** 现签一条 **60 秒** JWT 直连 `127.0.0.1:3000`，Rust **授权侧零改动**（`auth_guard` 本来就按 `claims.sub` 查库判角色，token 里的 role 无权威）。**写的那一半没做**，理由与风险见 §5.1 末段 |
+| ④ | **agent → Rust 的写通道凭据** | agent 现在一个 admin 接口都不调，"代用户发文章"没有可用的通道：既没有写接口的调用约定，也没有"agent 持用户授权"的凭证语义 | 建议：不要复用用户 JWT 长期有效，而是同一套断言思路——Rust 签发**带 scope 的短时效授权**，写接口按 scope 校验（与 agent 侧的 manifest 同名同义）。**20260921：读的那一半已落地**（管理助手只读三件，见 §5.1）——通道选定为「以发起人身份代调」：agent 用**本轮发起人的 uid** 现签一条 **60 秒** JWT 直连 `127.0.0.1:3000`，Rust **授权侧零改动**（`auth_guard` 本来就按 `claims.sub` 查库判角色，token 里的 role 无权威）。**写的那一半也落地了**（同日第二轮，管理助手写三件，见 §5.2）：同一个 `_admin_post` 通道，写工具另受 scope `write.console` + 同意闸 + 目标校验三道门 |
 | ⑤ | **前端角色模型** | `AuthRouter.tsx` 客户端解 JWT 硬编码 `'admin'`；Dashboard 侧栏是静态全量列表——"比 admin 窄、比 user 宽"的界面无处安放 | 建议：等 ① 之后再做；先把硬编码换成与后端同名的常量，避免第三处字面量 |
-| ⑥ | **审计** | 秘书代表用户做了写操作，事后要能回答"谁、以谁的名义、什么时候、改了什么" | `execution_log` 已有 `skill/detail/created_at`，缺"以谁的名义"（principal）与授权来源；建议在回执顶层加 principal 字段（跨语言契约，同 `digest` 的处理方式） |
+| ⑥ | **审计** | 秘书代表用户做了写操作，事后要能回答"谁、以谁的名义、什么时候、改了什么" | `execution_log` 已有 `skill/detail/created_at`，缺"以谁的名义"（principal）与授权来源。**20260921 已落地（用户拍板「零迁移：写进 detail」）**：写回执顶层带 `principal_role`/`op`/`before`/`after`，Rust `render_exec_row` 渲染成 `以管理员身份 · 修改文章 12：私密 → 公开` 整行进既有 `detail` 列——**不加列、不做迁移**。⚠️ 只落**角色不落 uid**：`detail` 会进生产库、还会被 `recent_executions` 注入上下文并被 narrator 念出来 |
 
 **明确不在本轮范围**（防蔓延）：不做秘书的具体功能（日程/发文/审批流）、不动后台路由、
 不引入权限表/多角色表、不做前端的秘书界面。
@@ -183,6 +208,82 @@ LLM 计数是幻觉源。这是对既有 `_shape(data)` 惯例的有意偏离（
 **写操作两件为什么留下**（用户 20260921 拍板「先只读三件」）：写要同时有 ① 授权（谁让我做的）、
 ② 确认（这一轮他确认了吗）、③ 记录（审计 ⑥），今天只齐了 ①；缺 ②③ 的写通道等于没有防护。
 
+### 5.2 管理助手：写三件（20260921 第二轮，④ 的写侧 + ⑥ 审计）
+
+第一轮把"写"留下的公开理由是"写要同时有 ① 授权 ② 确认 ③ 记录，当时只齐了 ①"。这一轮把三件
+补齐——写操作**第一次真的走通了那条同意闸**（§3.4 从"空转"变成"承重"）。
+
+| 能力 | 工具 | scope | 通道 | 关键约束 |
+|---|---|---|---|---|
+| 读后台文章清单（**含草稿/私密**） | `list_admin_notes` | `admin.console` | `GET /api/protected/notes/list` | 这是草稿/私密文章**唯一的可达读口**——公开 `list_notes`/`search_notes`/详情都硬过滤 `is_public && status!='draft'`，没有它，"把草稿发布出来"这半个能力在 planner 侧永远拿不到 id |
+| 建标签（一级/二级） | `create_tag` | `write.console` | `POST /api/protected/tagone` / `tagtwo` | **先查后建**（同名同层 → 复用不写库）+ **建后复核**（按返回 id 读回，名字一致才算成）；颜色按名字哈希，与前端 `NoteTagSelect` 的 `colorForName` 同算法 |
+| 改文章状态/置顶 | `set_article_status` | `write.console` | `POST /api/protected/notes/:id` | **只发点名的字段**；绝不发 title/content（会触发 `from_editor` 分支：重定向 + 级联删修改稿）、不发 isPublic（由 status 联动）；已是目标值时**不发请求**（`update_note` 会无条件刷新 `updated_at`，空改动把文章顶到列表最前） |
+| 加/去/替换文章标签 | `set_article_tags` | `write.console` | 同上 | `noteTags` 是"传了就写"、`""` = 清空 ⇒ **只有 `replace=[]` 才可能清空**；未点名的标签**永不被顺手摘掉**；标签按名字精确匹配，找不到就如实说（不自动新建） |
+
+**三道门，都在确定性点上**（无一道依赖 LLM 自觉）：
+
+1. **授权**：`authz.required_scope(tool)` = `write.console`，进 `_HARD_SCOPES`（不吃 shadow，
+   理由同 §5.1）+ 进 `CONSENT_SCOPES`。`_ROLE_SCOPES` 一行没改：admin 自动含全部 scope，
+   **secretary 刻意拿不到**（后台写与 `admin.console` 同域，Rust 那道门也只认 admin）。
+2. **确认**：同轮命令即确认（判据见 §3.4）。
+3. **目标有据**：写工具的 `article_id` 必须来自 ①本轮某个读类工具帧 ②页面上下文 `/article/<id>`
+   ③用户本轮消息里显式点到的数字；否则产 `__ERROR__: 目标未经确认[unknown_target]` 帧 →
+   planner 先读再写。**如实定位**：它拦的是"整轮没读过任何东西却写一个凭记忆的 id"，
+   **不保证 id 一定对**（后者靠回执回显 + 管理员复核）。
+
+**读写都走 `/api/protected/notes/list`（一条口径，不是随手选的）**：`/api/protected/draft/editor/:id`
+对**修改稿**行会解引用成原文章，而 `update_note` 只发 `{status,isTop}` 时 `from_editor=False`、
+**写的是被点的那行本身**——读的行与写的行不是同一行，前值/回显全假；更坏的是把修改稿行写成
+`status=public` 后，公开列表（只滤 `is_public`/`draft`，**不滤 `draft_of`**）会多出一篇同标题文章。
+`/notes/list` 过滤 `draft_of is null` ⇒ 修改稿在这里**读不到** ⇒ 写工具**如实拒绝**
+（"这不是一篇文章本体"），而不是猜。
+
+**一条硬纪律：一切"没做成"都必须 `unavailable()`**。checker 对**非空文本**一律判 PASS，而 PASS
+会被记成**系统确认事实**落进回执 → `execution_log` → 下轮注入 narrator——`ok("创建失败…")` 会被
+下一轮的自己念成"已创建"。反过来 `empty("")` 会被判 `empty_result` 而 BLOCK ⇒ **"零写成功"的返回
+也不能是空串**（如"标签已存在，复用 id=13"走的是 `ok`）。另：Rust 的 `ApiResponse::error` 是
+**HTTP 200 + code 500**，所以 `_admin_post` 必须看业务码，只判状态码会把"创建失败"读成成功。
+
+**执行去重是 args-aware 的**：既有收尾判据只比工具名，对写不够——planner 第二轮补做"另一篇"
+（同一工具名）会被静默收尾，而 narrator 手握第一条真回执必然说成"都改好了"。新增
+`_EXECUTED_ONCE_SKILLS`（不改 `SNAPSHOT_SKILLS` 的语义与断言），判据改成 **`(tool, args)` 整体**，
+并给写技能一条**独立收尾文案**（不能复用"快照型只读、重复调用拿回同一份数据"）。
+`_CONTENT_TOOLS` **只加 `list_admin_notes`**：那个集合的语义是"跑过 ⇒ 检索/读取声称有据"，
+塞写工具会让"建了个标签"变成"我检索过"的证据。
+
+**记录（⑥，零迁移）**：写回执顶层带 `principal_role`/`op`/`before`/`after`（跨语言契约键，
+Python 写 / Rust 读，`src/routes/chat.rs::render_exec_row` 四个新臂），渲染成
+`以管理员身份 · 修改文章 12：私密 → 公开` 整行进既有 `detail` 列——**不加列、不做迁移**。
+写行**刻意不带《标题》**（回执会经 `recent_executions` 注入下一轮，带《标题》会被读成
+"我读过这篇"的指代证据）。`actor_prefix` 取不到角色时返回**空串**而不是"访客"：
+写操作从不由访客发起，把管理员的操作标成访客是伪造审计记录。
+
+**验证（三件套，口径不同）**：
+- `test_admin_write.py`（秒级、零网络、**进 CI**）= 本轮回归主力：假 httpx 验 `_admin_post`
+  的 `uid<=0` 不发请求 / 401 / 403 / HTTP 200+code 500 一律 unavailable；假工具 + 假 principal
+  直接驱动 `execute_node`，验三道门（疑问句/假设句 → 零调用 + `consent_required`；
+  非 admin → `denied`；**`authz_enforce=False` 下非 admin 也必须被硬拦**；目标无据 →
+  `unknown_target`；非法参数不发请求）；checker 三态；去重 args-aware；`color_for_name` 与
+  前端对拍。
+- **golden 只加"不写"的三条**（真写用例会改生产库，一律不进 golden）：`admin_write_question_no_exec`
+  （问影响 → 零写 + 无完成式声称 + 真有影响说明）、`admin_write_denied_user`（访客下写命令 →
+  零写 + 如实无权）、`admin_write_no_identity_honest`（uid=0 打不存在的 id → 不许声称成功）。
+  三条都带 `forbid_fallback` + 负向正则族——**正向一律用形态正则族而不是词表**（实测：
+  "没有权限"这种连续串命中不了"没有修改文章权限"，词表追不上措辞）。
+- `eval/probe_admin_write.py`（**不进 CI**，需要真实管理员 uid）：默认只跑零真写的三步
+  （非管理员写指令 / 管理员疑问句 / 打不存在的 id），真写（草稿置顶来回、标签加减、
+  经生产入口真写一轮 + 跨轮复述）需显式 `--allow-write`，删临时标签还需 `--allow-tag-delete`；
+  **断言读后端真值**（探针自己现签 JWT 直查 `/api/protected/*`），不看工具返回值。
+
+**诚实备注（缺口）**：① 上面那三条 golden 与探针的安全步在 `uid=0` 下结构上安全
+（`uid<=0` 守卫 ⇒ 请求走不出进程），但**"管理员 200 路径"要等真实管理员 uid 才算验过**
+（同 §5.1）。② 探针的 `--allow-tag-delete` 会触发 `DELETE /api/protected/tag` 里**全表**
+`prune_note_tags`（清理 `note.tags` 悬空引用），**不可回滚、与探针本身无关**——默认不跑，
+跑前披露。③ 访客下写命令的**拒答不总是干净**（实测约六到七成给出明确"只有管理员"，
+其余被 planner 当 `content_query`、narrator 转而编造"站内没有"→ 被 gate 兜成 fallback）：
+安全性质（零写、不声称已改）始终成立，**措辞质量不稳**。收口方向 = 给 `write.console` 加一条
+确定性拒绝（非 admin 收到写命令直接回"需要管理员"，不进 planner），**待拍板，本轮未做**。
+
 ## 6. 分阶段建议
 
 - **P0（已完成）**：身份与范围的地基 + shadow 观测 + 两侧单测与文档（本文件）。
@@ -197,8 +298,13 @@ LLM 计数是幻觉源。这是对既有 `_shape(data)` 惯例的有意偏离（
 - **P1.5（20260921 已落地，用户点名「先只读三件」）**：④ 的**读侧**——管理助手（运维报表 /
   审核状况 / 用户报表）。通道、三道判据与注入面见 §5.1；Rust 只加了一个只读端点
   （`src/routes/stats.rs`），授权逻辑一行没动。
-- **P2（按需）**：③ 人在回路（agent 侧已落地）+ ④ **写侧**凭据 + ⑥ 审计，一起做（写操作要
-  同时有授权、确认与记录，缺一条就等于没做）。
+- **P1.6（20260921 第二轮，已落地）**：③ 人在回路 + ④ **写侧**凭据 + ⑥ 审计，三件一起做
+  （写操作要同时有授权、确认与记录，缺一条就等于没做）——管理助手写三件，见 §5.2。
+  同意闸由此**第一次真正承重**。
+- **P2（按需，剩下的都是"下一次"）**：⑤ 前端角色模型（`AuthRouter.tsx` 硬编码 `'admin'`，
+  等秘书界面真要做时一起改）；收 shadow 证据 → 打开 `AGENT_AUTHZ_ENFORCE`；访客写命令的
+  确定性拒绝（§5.2 缺口③，待拍板）；删除类写操作（删标签/删文章/删留言）与发文/改正文
+  （`from_editor` 那条路）**本轮明确不做**。
 
 ## 7. 怎么建账号：管理员 + 配套助手账号（命令行 + 一条 SQL，20260921 定稿）
 

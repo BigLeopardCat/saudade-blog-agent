@@ -548,5 +548,48 @@ check("防护判据取 receipts（PASS 回执）——用帧名会把失败重�
       and 'passed = {r.get("tool") for r in (state.get("receipts") or [])}' in gsrc)
 
 
+print("\n⑫ 第二轮（写）接线在位：四个后台工具 + 四个技能")
+from agent.skills import WRITE_SKILL_NAMES  # noqa: E402
+
+W2 = ["list_admin_notes", "create_tag", "set_article_status", "set_article_tags"]
+WRITES = ["create_tag", "set_article_status", "set_article_tags"]
+check("四个后台工具都不在 planner 点名白名单（planner 结构上点不到）",
+      all(n not in _EXPLICIT_TOOLS and n not in _CALLABLE_QUERY_TOOLS for n in W2))
+check("也不在 planner 可调用清单顺序表里", all(n not in _CALLABLE_QUERY_TOOLS_ORDER for n in W2))
+check("_tools_desc() 里不出现（菜单不可见）", all(n not in _tools_desc() for n in W2))
+check("都进了注册表", all(n in {t.name for t in base._TOOL_REGISTRY} for n in W2))
+check("scope：读走 admin.console、三个写走 write.console（写是**另一个** scope，"
+      "不是把读的权限放大）",
+      authz.TOOL_SCOPE.get("list_admin_notes") == authz.SCOPE_ADMIN_CONSOLE
+      and all(authz.TOOL_SCOPE.get(n) == authz.SCOPE_WRITE_CONSOLE for n in WRITES),
+      str({n: authz.TOOL_SCOPE.get(n) for n in W2}))
+check("三个写工具都要人在回路确认（声明驱动，不靠人记得来改）",
+      all(authz.requires_consent(None, n) for n in WRITES))
+
+for name, tool, args in [("admin_notes", "list_admin_notes", {}),
+                         ("tag_create", "create_tag", "$title"),
+                         ("article_status", "set_article_status", "$article_id"),
+                         ("article_tags", "set_article_tags", "$article_id")]:
+    sk = SKILL_MAP.get(name)
+    check(f"技能 {name} 在位、只对 admin 可见、计划首项是 {tool}",
+          sk is not None and sk.roles == frozenset({"admin"})
+          and [t for t, _ in sk.plan] == [tool], str(sk and (sk.roles, sk.plan)))
+check("写技能名单 = 三个**技能**名（instantiate_plan 缺参守卫按它分支；"
+      "注意它与工具名不是一套字面量，混用会让守卫静默不生效）",
+      WRITE_SKILL_NAMES == frozenset({"tag_create", "article_status", "article_tags"})
+      and WRITE_SKILL_NAMES <= set(SKILL_MAP), str(sorted(WRITE_SKILL_NAMES)))
+check("非 admin 的 planner 上下文里看不到这四个技能",
+      all(n not in build_planner_context("user") and n not in build_planner_context(None)
+          and n not in build_planner_context("secretary")
+          for n in ("admin_notes", "tag_create", "article_status", "article_tags")))
+check("admin 的 planner 上下文里能看到",
+      all(n in build_planner_context("admin")
+          for n in ("admin_notes", "tag_create", "article_status", "article_tags")))
+check("过程行有中文动作词（否则显示『执行 create_tag』）",
+      all(f'"{n}":' in src for n in W2))
+check("reason 中文表里有 unknown_target（错误帧原因码要翻译给用户看）",
+      '"unknown_target"' in src and "目标未经确认" in src)
+
+
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
