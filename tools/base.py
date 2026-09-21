@@ -176,7 +176,13 @@ def list_notes(
 
 @tool
 def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
-    """搜索文章标题和内容，返回匹配的文章列表（每篇给出 id、标题、状态、是否置顶、标签名）。"""
+    """站内关键词搜索：匹配**标题、正文、标签名**，返回文章列表（每篇给出 id、标题、
+    状态、是否置顶、标签名），按相关度排序（标题命中权重最高）。
+
+    与 rag_search 的分工：本工具是"关键词命中"，**按标签或标题定位一批文章**时最有效
+    （标签名只有这里有）；想知道"某篇文章里写了什么、站内有没有写过某话题"用 rag_search
+    （它按词法给分节命中片段，能读到正文里的表述）。本工具只回元数据，要答案还得按 id
+    调 get_article_detail 读全文。两三个字的词、或中英混排都能搜（分词在服务端做）。"""
     try:
         resp = _client.post(
             f"{API_BASE}/notes/search",
@@ -1097,7 +1103,9 @@ def create_tag(
 
 @tool
 def set_article_status(
-    article_id: Annotated[int, "文章 id（必须是本轮读到的，例如 list_admin_notes 返回的 id）"],
+    article_id: Annotated[int, "文章 id：用户本轮点名了（如「文章 12」）就**直接用点名的那个**，"
+                               "不必先读；没说 id 只说特征（「那篇讲 OTA 的」）时必须先用 "
+                               "list_admin_notes 读回确切 id，不许凭记忆猜"],
     config: RunnableConfig,
     status: Annotated[str | None, "改成什么状态：public=公开 / private=私密 / draft=草稿"] = None,
     is_top: Annotated[int | None, "置顶开关：1=置顶 / 0=取消置顶"] = None,
@@ -1173,7 +1181,9 @@ def set_article_status(
 
 @tool
 def set_article_tags(
-    article_id: Annotated[int, "文章 id（必须是本轮读到的，例如 list_admin_notes 返回的 id）"],
+    article_id: Annotated[int, "文章 id：用户本轮点名了（如「文章 12」）就**直接用点名的那个**，"
+                               "不必先读；没说 id 只说特征（「那篇讲 OTA 的」）时必须先用 "
+                               "list_admin_notes 读回确切 id，不许凭记忆猜"],
     config: RunnableConfig,
     add: Annotated[list[str] | None, "要**加上**的标签名（如 [\"Python\"]；必须是站内已存在的标签）"] = None,
     remove: Annotated[list[str] | None, "要**去掉**的标签名"] = None,
