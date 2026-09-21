@@ -773,8 +773,11 @@ gsrc = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encodi
 check("写工具**不进** _CONTENT_TOOLS（否则「建了个标签」会变成「我检索过」的证据）",
       not ({"set_article_status", "set_article_tags", "create_tag"} & _CONTENT_TOOLS)
       and "list_admin_notes" in _CONTENT_TOOLS, str(sorted(_CONTENT_TOOLS)))
-check("authz.enforcing(decision.scope) 仍恰好两处（本轮不许在 execute 里加第三处判据点）",
-      gsrc.count("authz.enforcing(decision.scope)") == 2,
+# 判据点从 2 → 3（20260921）：新增的第三处在 _confirm_popup——**无权做的写操作
+# 不弹窗**（弹了就是承诺一件做不到的事）。同一 decision、同一 enforcing，只减少
+# 弹窗、不放宽任何权限。数字仍是硬断言：下一个人加第四处时先回答"会不会放宽"。
+check("authz.enforcing(decision.scope) 三处（shadow/硬拦/弹窗前置筛），无新增放宽点",
+      gsrc.count("authz.enforcing(decision.scope)") == 3,
       str(gsrc.count("authz.enforcing(decision.scope)")))
 
 

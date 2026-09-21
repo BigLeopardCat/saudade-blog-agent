@@ -74,6 +74,8 @@ from models import get_llm
 from tools import get_all_tools
 from agent import adminops as A
 from agent import authz
+from agent import confirm
+from agent import refs
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _doc_anchors, _frame_texts, _has_frames, _last_user_msg,
                            _msg_text, _page_ctx, _receipts_text, _recent_tail,
@@ -221,6 +223,18 @@ class AgentState(TypedDict):
     reflect_end: bool
     tool_data: list[dict]
     fallback_text: str
+    # ── 写操作确认弹窗（20260921，同样**必须显式声明**，理由同 fallback_text）──
+    # pending_confirm: 本轮要弹的确认框（{q, opts, token, specs, skill}）——
+    #                 execute 判定"有意向但没判成命令"时写入，随后路由直接 END
+    #                 （不跑 narrator：这一轮什么都没执行，跑叙述只会让它有机会
+    #                 说"已经建好啦"，而这正是 gate 一直在打的地鼠）。
+    # confirm_text:   弹窗那一轮的**回复正文**（确定性中文问句，不经 LLM）。
+    # confirm_grant:  隐藏确认请求带进来的已验签 payload（server.py 验签后注入）——
+    #                 planner 见它走确定性短路径（不再花一次 LLM 决策），
+    #                 execute 见它放行同意闸与目标有据两门。
+    pending_confirm: dict
+    confirm_text: str
+    confirm_grant: dict
 
 
 # ---------------------------------------------------------------------------
@@ -1459,6 +1473,18 @@ _FALLBACK_NAV_PENDING = (
 _FALLBACK_URL = (
     "喵呜……主人，我刚才给的资源链接其实没有系统依据——站内真实资源我没查到，"
     "不能拿编造的地址给你。先别急着点，等我让系统查到真实地址再给你，好不好？")
+# 写操作被同意闸拦下（20260921 §5.2 缺口③）：这条**不是"系统失败"**——系统好好的，
+# 只是还没得到主人的点头。此前一律套 _FALLBACK_ERR_CLAIM（"操作系统返回的是失败
+# （执行出错了）"），与事实不符且把用户引向"再试一次"这种无效路径。
+_FALLBACK_CONSENT = (
+    "喵呜……主人，这件事我**还没有动手**——它会改动站上的数据，我在等你的明确"
+    "同意。你说一句「确认」、或者直接说「把…（具体怎么做）」我就照办；不想改的话"
+    "忽略这句就好，站上什么都没变 :害羞:")
+# 目标无据（20260921 第二轮）：不知道改哪一篇，同样不是"失败"。
+_FALLBACK_UNKNOWN_TARGET = (
+    "喵呜……主人，我**还没有动那篇文章**——我不确定你说的是哪一篇，不敢凭印象"
+    "填一个编号（改错了是要紧事）。你告诉我文章名字或编号，或者让我先把后台文章"
+    "列表读出来给你看，我再动手喵。")
 _FALLBACK_DOWN = (
     "喵呜……那个板块确实已经下线了，刚才说得好像还能去一样，是我不好。现在站里"
     "能逛的真实页面是：首页、留言板、说说、时间轴、关于我～要去哪边嘛？")
@@ -1513,9 +1539,29 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         logger.info("[planner] cancelled (client disconnected)")
         raise AgentCancelled()
 
+    # 确认轮（20260921）：用户在确认框上点了确定——**零 LLM 直接照令牌拼计划**。
+    # 这是"隐藏确认请求"这条通道的全部意义：不花一次 planner 决策，也不给模型
+    # "重新理解一遍用户想要什么"的机会（它只该执行签名里那件事，一个字都不许改）。
+    #
+    # **只在首轮（rounds==0）走这条**：确认轮的执行若受阻，控制权会回到这里
+    # （route_after_execute 只在"无受阻"时直去 model）。那时若再照令牌拼一次
+    # 同一份清单，就是把同一件写操作**做第二遍**——所以第二轮一律转确定性收尾，
+    # 由 narrator 拿着真实回执如实说结果（这与"宁可少做也不做错"的写侧纪律一致：
+    # 令牌只授权一次执行，不是一张可反复使用的通行证）。
+    grant = state.get("confirm_grant")
+    rounds = state.get("plan_rounds", 0)
+    if grant:
+        if rounds == 0:
+            plan_obj = _confirm_grant_plan(grant)
+            record("planner", "confirm_grant", skill=plan_obj["skill"], tools=plan_obj["tools"])
+        else:
+            plan_obj = _wrap_up_plan(_has_frames(state["messages"]))
+            record("planner", "confirm_wrap", rounds=rounds,
+                   reason="确认轮执行受阻，不重发清单")
+        return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
+
     user_msg = _last_user_msg(state["messages"])
     page_ctx = _page_ctx(state["messages"])
-    rounds = state.get("plan_rounds", 0)
     has_frames = _has_frames(state["messages"])
     doc_anchors = _doc_anchors(state["messages"])
     if rounds == 0:
@@ -1965,6 +2011,102 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
     return _VERDICT_PASS, "ok"
 
 
+def _confirm_grant_plan(grant: dict) -> dict:
+    """已验签的令牌 → 计划对象（**确定性拼装，零 LLM**）。
+
+    技能名与工具名都取自签名体：`SKILL=` 用令牌里的技能名（**不猜**）、TOOLS 行
+    逐条落签名参数、NOTE 写明"用户已确认，不得增改参数"。技能与工具对不上一律
+    拒绝（空清单 + 注记）——令牌被换成别的工具（哪怕签名有效也不该发生）是最后
+    一道形状检查：execute 拿空清单就什么都不执行，planner 下一轮会看到"没做事"。
+    """
+    skill_name = str(grant.get("skill") or "")
+    specs = [s for s in (grant.get("specs") or []) if isinstance(s, dict)]
+    skill = SKILL_MAP.get(skill_name)
+    tools = [f"{s.get('tool')}({json.dumps(s.get('args') or {}, ensure_ascii=False)})"
+             for s in specs if s.get("tool")]
+    # 技能与工具必须**对得上**：令牌里点名了技能 X，清单里的工具就必须是 X 的
+    # 固定序列里的（`Skill.plan` 就是那份清单）。这不是防伪造（令牌是我们自己签的），
+    # 是防**内部不一致**——签的时候用技能 A、执行的时候却被塞进工具 B，只会是
+    # 某处逻辑写错了；而"写操作跑在一份没有人预期它会跑的技能名下"正是最难查的
+    # 那类事故。对不上就一个工具都不执行（空清单 + 如实告知）。
+    allowed = {t for t, _ in (skill.plan if skill else [])}
+    bad = [str(s.get("tool")) for s in specs if str(s.get("tool")) not in allowed]
+    if not tools or skill is None or bad:
+        note = ("确认令牌里的技能/工具对不上（未执行任何操作）：如实告知主人这次确认无效，"
+                "请他说一遍要做什么")
+        tools = []
+    else:
+        note = "用户已在确认框上点过「确定」，照签名参数执行；不得增删改任何参数、不得换工具"
+    skill = skill or SKILL_MAP["chat"]
+    return {"skill": skill.name, "tools": tools, "note": note,
+            "reply": skill.reply_contract, "chat": skill.chat, "dropped": []}
+
+
+def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
+                   config) -> dict | None:
+    """本轮要不要弹"写操作确认框"？要就返回 `pending_confirm` 的 state 增量。
+
+    触发条件（**全部确定性、无 LLM**）：本轮计划里有写操作卡在同意闸上（用户有
+    意向、但这句没被判成明确命令），且这句**不是提问/假设**。生产实测（20260921）
+    的死路正是这里：「一级标签，名字叫X，使用粉色颜色」判不成命令 ⇒ 闸不放行 ⇒
+    execute 产 consent_required ⇒ planner 追问 ⇒ 用户再打一遍 ⇒ 又判不成 ⇒
+    **没有出口**。现在同一个判据的 False 换来的是一次点击，而不是一次往返。
+
+    与"提问/假设"的分界见 authz.is_question_like：用户只是在问（"把文章 12 设为
+    私密会有什么影响？"）时绝不能弹窗——那等于把提问读成了意图。
+
+    收集的 spec 同时要过**目标有据**（id 必须本轮读到过/页面上下文/用户点名），
+    否则弹出来的是"要不要把文章 12 设为私密"而 12 是编的：确认框会把一个幻觉
+    洗成一条已授权的写。没据的走既有 unknown_target 链路（先去读、再回来）。
+    """
+    grant = state.get("confirm_grant")
+    if grant or authz.is_question_like(user_msg):
+        return None
+    picks: list = []
+    for spec in specs:
+        name = _tool_name(spec)
+        if not authz.requires_consent(principal, name):
+            continue
+        if authz.consent_granted(principal, name, user_msg):
+            continue  # 已是明确命令：走"同轮命令即确认"，直接执行，不弹窗
+        decision = authz.check(principal, name)
+        if not decision.allowed and authz.enforcing(decision.scope):
+            continue  # 权限硬拦：弹窗也改不了"这个人不能做"，走既有拒绝链路
+        args, args_ok = _tool_args(spec)
+        if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+            # 参数没解析出来 / 还挂着 $ref（引用依赖的是签发那一轮的工具帧，执行轮
+            # 早已不在）→ 不签发，退回既有错误帧链路让 planner 自己收拾
+            continue
+        if name in _ARTICLE_WRITE_TOOLS and not A.target_mentioned(
+                args.get("article_id"), _target_evidence(state, user_msg, _page_ctx(state["messages"]))):
+            continue
+        picks.append({"tool": name, "args": args})
+    if not picks:
+        return None
+    conv_id = (config or {}).get("configurable", {}).get("conversation_id")
+    token = confirm.sign(principal.uid, conv_id, _plan_skill(state), picks)
+    if not token:
+        return None  # 密钥没读到 → 不弹窗（宁可走追问，也不发一个验不过的令牌）
+    return {
+        "pending_confirm": {
+            "q": A.render_confirm_question(picks),
+            "opts": [{"label": "确定", "value": "yes", "kind": "primary"},
+                     {"label": "取消", "value": "no", "kind": "default"}],
+            "token": token,
+            "specs": picks,
+            "skill": _plan_skill(state),
+        },
+        "confirm_text": A.render_confirm_text(picks),
+    }
+
+
+def _plan_skill(state: AgentState) -> str:
+    """当前计划的技能名（plan 文本第 1 行 SKILL=…）——令牌里带着它，执行轮据此
+    拼计划，**不靠模型回忆**。取不到给空串（sign 会拒绝签发）。"""
+    m = re.search(r"SKILL\s*=\s*(\S+)", state.get("plan", "") or "")
+    return m.group(1) if m else ""
+
+
 def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """确定性执行 planner 调用清单：逐条 literal_eval 参数 → _TOOL_MAP 调用 →
     ToolMessage 帧（含 __ERROR__ 错误帧）→ 逐 spec checker 验收（PASS 回执 /
@@ -1977,6 +2119,8 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     与旧 tools_node 的差异 = 没有"model 自拟参数""计划外调用授权拒绝"分支——
     那些自由在 20260903 已从执行层移除（用户裁决）。20260904：checker 是
     确定性验收函数（读回执形态），不新增决策权——执行层仍零自由。
+    20260921：写操作确认弹窗——见 _confirm_popup（它只在"有意向但没判成命令"
+    时提前 return，判成命令的一律照旧直接执行）。
     """
     if _stopped(config):
         logger.info("[execute] cancelled (client disconnected) — 不执行任何工具（含写操作）")
@@ -1989,6 +2133,20 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     principal = _principal_of(config)  # 本轮调用者（权限判据的输入，见 agent/authz.py）
     user_msg = _last_user_msg(state["messages"])
     page_ctx = _page_ctx(state["messages"])
+    # 写操作确认弹窗（20260921）：**执行之前**判，命中就一个工具都不执行、直接回
+    # pending_confirm（路由据此去 END，见 route_after_execute）。之所以提前到这里
+    # 而不是在下方逐 spec 里：弹窗是一份**整批**的确认（计划里的写操作各自成单，
+    # 混排只可能是将来），而"问一句"这件事本身不该以执行一半为代价。
+    popup = _confirm_popup(state, specs, principal, user_msg, config)
+    if popup is not None:
+        record("execute", "consent_popup", principal=str(principal),
+               specs=",".join(s["tool"] for s in popup["pending_confirm"]["specs"]))
+        logger.info("[execute] 写操作未判成命令 → 弹确认框（零执行）: %s",
+                    ",".join(s["tool"] for s in popup["pending_confirm"]["specs"]))
+        # receipts 原样带回（本轮零执行，累计值不变）：execute 的 updates 里
+        # 这个键是**形状契约**的一部分（多数轮次都带它），缺一次就让"回执累计"
+        # 的消费方少一次更新——测试与 server 都按"每轮都有"读它。
+        return dict(popup, messages=[], receipts=list(state.get("receipts") or []))
     results: list = []
     receipts = list(state.get("receipts") or [])  # 请求内累计（与 executed 同模式）
     blocked: list = []                            # 只含本轮受阻项（路由/reflector 用）
@@ -2031,7 +2189,12 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 一旦新增，它**自动**落在闸下（声明驱动，不靠人记得来改）。与权限判据同层：
         # 确定性、无 LLM、调用之前、fail-closed。今天不设 shadow：这一层是纯新增的
         # 保护，不存在"真流量会被它改行为"的观测需求（没有工具会命中它）。
+        # 确认轮（20260921）：`confirm_grant` 在场 = 用户刚在确认框上点了确定，
+        # **这一下点击就是同意本身**——不再要求"本轮消息里有一句确认语"（那条
+        # 判据是给"用户打字确认"用的）。注意这里放行的只有同意闸：权限（scope）
+        # 一行不动，非管理员拿着令牌照样被 _HARD_SCOPES 拦下。
         consent_missing = (authz.requires_consent(principal, name)
+                           and not state.get("confirm_grant")
                            and not authz.consent_granted(principal, name, user_msg))
         if consent_missing:
             record("execute", "consent_required", tool=name, principal=str(principal),
@@ -2046,7 +2209,12 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 与写错状态不同，它是**不可回滚的对外可见改动**（把别人的文章设成私密）。
         # 之所以放在这里而不是工具内部：工具看不到"本轮读到过什么"（跨轮记忆与
         # 页面上下文都只活在 graph 状态里）。
+        # **确认轮放行**（20260921，与上面同意闸同源）：确认轮里没有本轮工具帧
+        # （那一轮是用户点的按钮，不是一次检索），"有据"已由**签发令牌时**的解析
+        # 保证（见 _confirm_popup：无据的 spec 根本不进令牌）。不放行的话每一次
+        # 确认执行都会栽在 unknown_target 上，整个弹窗机制形同虚设。
         target_missing = (ref_err is None and args_ok and name in _ARTICLE_WRITE_TOOLS
+                          and not state.get("confirm_grant")
                           and not A.target_mentioned(args.get("article_id"),
                                                      _target_evidence(state, user_msg, page_ctx)))
         if target_missing:
@@ -2351,7 +2519,16 @@ _EXECUTOR_PROMPT = """\
     检索/读取动作，或"工具执行记录"里有往轮的**检索行**（形如 `站内检索「…」`/
     `搜索「…」`）。本轮没查过就别替站里下结论：要么只用通用知识把问题答清楚
     （**不提**站内），要么如实说"站里我还没查过，要不要我去查一遍"。零工具轮
-    凭空说"站内没有"是被系统拦下的（会整轮换成道歉），别让自己撞上去。"""
+    凭空说"站内没有"是被系统拦下的（会整轮换成道歉），别让自己撞上去。
+17. 颜色一律"中文色名 + 色值"（20260921）：说到站内颜色（标签配色这类）时，
+    写成「粉色 #eb2f96」这种**名 + 值**并列的形式——色块由前端按色值渲染，
+    **不要自己画方块/符号**（你画的不可能显示成颜色）。只报站内色板里的 8 种：
+    蓝 #1677ff、绿 #52c41a、橙 #fa8c16、粉 #eb2f96、紫 #722ed1、青 #13c2c2、
+    红 #f5222d、黄绿 #a0d911——色板外的十六进制别说（前端不认，说了主人也看不见）。
+18. 要动站内数据的操作（新建标签、改文章状态），系统会**先弹一个确认框**问主人
+    ——那一下点击由系统负责，你不必复述"我正在等你确认"。确认之后的那一轮，
+    只按工具回执说结果（成功说成功、失败说失败），绝不把"还没动手"讲成
+    "已经办好了"。"""
 
 
 def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
@@ -2500,6 +2677,18 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     if err_frames and not any(k in reply for k in
                               ("失败", "错误", "出错", "未成功", "不成功", "没成功", "还是不行")):
         if _COMPLETION_CLAIM_RE.search(reply) or _WRITE_CONTENT_CLAIM_RE.search(reply):
+            # 兜底文案按**原因码**分（20260921）：同意闸/目标有据这两族错误帧说的
+            # 是"还没动手"（等确认 / 不知道改哪一篇），套通用"执行出错了"既与事实
+            # 不符、又把用户引向"再试一次"（20260920 §5.2 缺口③ 的同一个根因）。
+            err_text = "\n".join(str(getattr(f, "content", "")) for f in err_frames)
+            if authz.consent_error_reason(err_text):
+                logger.info("[gate] 写操作未获同意却声称已完成 → fallback(consent)")
+                return _fallback_result("err_frame_claim_consent", _FALLBACK_CONSENT,
+                                        plan, len(frames))
+            if A.target_error_reason(err_text):
+                logger.info("[gate] 写操作目标无据却声称已完成 → fallback(unknown_target)")
+                return _fallback_result("err_frame_claim_target", _FALLBACK_UNKNOWN_TARGET,
+                                        plan, len(frames))
             logger.info("[gate] 工具帧 __ERROR__ 但回复含完成式声称 → fallback")
             return _fallback_result("err_frame_claim", _FALLBACK_ERR_CLAIM, plan, len(frames))
     # 5b. 确认式导航（NAVIGATE: 帧、无 AUTO_NAVIGATE:）却回复到达声称 →
@@ -2573,14 +2762,26 @@ def route_after_planner(state: AgentState) -> Literal["execute", "model"]:
     return "execute" if plan["tools"] else "model"
 
 
-def route_after_execute(state: AgentState) -> Literal["planner", "reflector"]:
+def route_after_execute(state: AgentState) -> Literal["planner", "reflector", "end"]:
     """execute 执行完的下一站（20260904 checker 驱动路由）：
+      - pending_confirm（20260921）→ **end**：本轮只弹了个确认框，什么都没执行。
+        绝不能去 model——narrator 面对"零工具帧 + 一条待确认的写"最可能的输出
+        就是"我已经帮您建好啦"（那正是 gate 一直在打的地鼠）。图到此为止，
+        弹窗那一轮的回复文本由 execute 侧确定性给出（confirm_text）。
       - 本轮无受阻项 → planner（正常多轮循环：看工具返回再决策，现状不变）
       - 有受阻项但都是首现（planner rule5 的合法改参重试空间，零新增 LLM）→
         planner 按错误修正重试
       - blocked_repeat（受阻 spec 此前已受阻过 = 首轮重试已败/依赖链断）→
         reflector 复盘（≤2 次 LLM），不再让 planner 盲试第三遍
     """
+    if state.get("pending_confirm"):
+        return "end"
+    # 确认轮执行成功 → **直去 narrator**（20260921）：这一轮不存在"再规划一次"
+    # 的任何理由（清单是签过名的），多回一趟 planner 只是多烧一次 LLM 决策、
+    # 多一次让模型"重新理解"的机会。受阻则照常回 planner（上面的 rounds 分支
+    # 会把第二次进入转成收尾，不重发清单）。
+    if state.get("confirm_grant") and not state.get("blocked"):
+        return "model"
     if not state.get("blocked"):
         return "planner"
     if state.get("blocked_repeat"):
@@ -2631,7 +2832,8 @@ def build_graph():
     g.add_conditional_edges("planner", route_after_planner,
                             {"execute": "execute", "model": "model"})
     g.add_conditional_edges("execute", route_after_execute,
-                            {"planner": "planner", "reflector": "reflector"})
+                            {"planner": "planner", "reflector": "reflector",
+                             "end": END})
     g.add_conditional_edges("reflector", route_after_reflector,
                             {"planner": "planner", "model": "model"})
     g.add_edge("model", "gate")
@@ -2640,13 +2842,19 @@ def build_graph():
     return g.compile()
 
 
-def graph_input(messages: list) -> dict:
+def graph_input(messages: list, confirm_grant: dict | None = None) -> dict:
     """图输入构造：state 形状归本模块管，调用方（server.py）不手写字段。
 
     planner 节点会立刻写入 plan/plan_rounds/done，这里给空初值只为了让输入
     形状完整、可读。
+
+    `confirm_grant`（20260921）：隐藏确认请求的**已验签 payload**（server.py 侧
+    验签，验不过根本不会走到这里）。它由 planner 的确定性短路径消费，并在
+    execute 里放行"同意闸"与"目标有据"两门——用户点的那一下确定就是这两门的凭据。
     """
     return {"messages": messages, "plan": "", "plan_rounds": 0, "done": False,
             "executed": [], "receipts": [], "blocked": [], "blocked_seen": [],
             "blocked_repeat": False, "reflect_rounds": 0, "issues": "",
-            "reflect_end": False, "tool_data": [], "fallback_text": ""}
+            "reflect_end": False, "tool_data": [], "fallback_text": "",
+            "pending_confirm": None, "confirm_text": "",
+            "confirm_grant": confirm_grant}
