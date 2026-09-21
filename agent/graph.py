@@ -3020,7 +3020,15 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     conv_id = (config or {}).get("configurable", {}).get("conversation_id")
     token = confirm.sign(principal.uid, conv_id, _plan_skill(state), picks)
     if not token:
-        return None  # 密钥没读到 → 不弹窗（宁可走追问，也不发一个验不过的令牌）
+        # 密钥没读到 → 不弹窗（宁可走追问，也不发一个验不过的令牌）。这个兜底**必须
+        # 留痕**：它一旦生效，**所有**写确认弹窗会静默消失、退回"判不成命令就追问"
+        # 的死路形态，而链路上没有任何别的信号。20260922 CI 实测：无 .env 的环境里
+        # `settings.jwt_secret` 是空串 ⇒ 本分支吃掉三条"该弹窗"的正例，本地因有
+        # .env 全绿。fail-closed 不变，只是不再无声。
+        logger.warning("[confirm] 签发密钥空缺（settings.jwt_secret 为空）→ 本轮不弹确认框：%s",
+                       [p.get("tool") for p in picks])
+        record("confirm", "token_sign_failed", tools=[p.get("tool") for p in picks])
+        return None
     # 问句要把父标签**名字**写出来（20260921）：只写「新建二级标签「Rust」」时
     # 用户无从核对它要挂到哪个爸爸底下，而"挂错父标签"正是本轮修的参数对调事故。
     # 读字典失败 → index=None，问句退回名字原文（宁可只给名字，也不能因为一次

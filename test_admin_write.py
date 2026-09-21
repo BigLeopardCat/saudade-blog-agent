@@ -45,6 +45,17 @@ from agent.principal import ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, Principal  # 
 from agent.skills import instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
 
+# ── 密钥桩：settings.jwt_secret 是全局单例，测试里直接改它 ────────────────
+from config.settings import settings  # noqa: E402
+
+_SAVED_SECRET = settings.jwt_secret
+# 桩值（不是 _SAVED_SECRET）：CI 里没有 .env，settings.jwt_secret 默认是空串，而
+# `confirm.sign` 密钥空缺时返回空串、`_confirm_popup` 据此**不弹窗** ⇒ §⑰ 那三条
+# "该弹窗"的正例在本机会绿、在 CI 会静默变成"没弹"（20260922 CI 实测：本套件 5 项
+# 红全落在这一族，反例照样绿——正是"反例恒真"的假绿形态）。桩完才是可复现的。
+_STUB_SECRET = "test-secret-for-confirm-tokens"
+settings.jwt_secret = _STUB_SECRET
+
 FAILS: list[str] = []
 
 
@@ -1063,6 +1074,24 @@ with patch(_tag_index=lambda config: A.build_tag_index(
           "对不上就能当场取消，而不是被静默挂错）",
           "编程" in _q6 and "Asyncio" in _q6, _q6[:90])
 
+    # 密钥空缺这一支：**fail-closed 但必须留痕**。它一旦生效，所有写确认弹窗静默消失
+    # （退回"判不成命令就追问"的死路形态），链路上没有别的信号——20260922 CI 实测就是
+    # 这一支在无 .env 的环境里吃掉三条正例、而反例照样绿。
+    _seen_rec: list = []
+    _saved_record = g.record
+    settings.jwt_secret = ""
+    try:
+        g.record = lambda *a, **k: _seen_rec.append(a)   # trace 钩子：只记调用
+        r7 = _popup(SPEC_DEL, "把那个异步标签删掉吧")
+    finally:
+        g.record = _saved_record
+        settings.jwt_secret = _STUB_SECRET
+    check("签发密钥空缺 → 不弹窗（宁可走追问，也不发一个验不过的令牌）",
+          r7 is None, str(r7)[:60])
+    check("  且这一支被记了痕（静默消失是它最危险的形态）",
+          any(a[:2] == ("confirm", "token_sign_failed") for a in _seen_rec),
+          str(_seen_rec)[:90])
+
 print("\n⑱ 确定性收尾的洞④ 豁免锚（gate 侧接线）")
 
 check("锚常量是**系统**写进注记的那句前缀（不是随意字符串）",
@@ -1169,6 +1198,8 @@ _ren = _name_plan({"name": "Asyncio", "parent_tag": ""},
 g._name_target_fix(_ren, "把标签「Asyncio」改名叫「协程」")
 check("改名形态：新名字**不会**被当成父标签填进去（族别搞混就是参数对调）",
       not _ren["params"].get("parent_tag"), str(_ren["params"]))
+
+settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
