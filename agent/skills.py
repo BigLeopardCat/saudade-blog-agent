@@ -803,7 +803,13 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
         if name == "category_update" and len(bits) == 1:
             return [], ("category_update 没有指出要改什么（new_title / path_name / "
                         "introduce / icon / color）：不调用任何工具，如实向主人问清")
-        return [_spec(name, args)], "、".join(bits)
+        # **技能名 ≠ 工具名**：分类三件的技能名是 `category_*`、工具名是 `*_category`
+        # （建标签那两件恰好同名，所以这里一旦顺手写 name 就会只有分类两件坏掉）。
+        # 写错的代价不是"少做一件事"而是 execute 的"未知工具"错误帧——用户看到的
+        # 是一句"创建失败"的系统报错（20260922 全量 golden 实测：admin_category_create_popup
+        # 整轮 FAIL、零弹窗）。锁：test_tag_admin 的工具名 ∈ 注册表 那条。
+        tool_name = "create_category" if name == "category_create" else "update_category"
+        return [_spec(tool_name, args)], "、".join(bits)
 
     return [], f"{name}：未知的写技能（不调用任何工具）"
 

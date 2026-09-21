@@ -2,7 +2,25 @@
 
 > 面向维护者的全链路技术文档。覆盖看板娘对话系统的每一个环节：组件拓扑、一次对话的完整时序、
 > 记忆机制（记录 / 压缩 / 存储 / 读取 / 回滚）、工具系统、防幻觉与可靠性加固、超时体系、配置与部署。
-> 最后更新：2026-09-20（**20260920 七项**：①调用者身份与权限模型——新增 `agent/principal.py`
+> 最后更新：2026-09-22（**20260922 标签/分类写能力补全**：①**写工具面从"三件"扩到"九件"**
+> ——新增 `update_tag` / `delete_tag` / `create_category` / `update_category` / `delete_category`，
+> 加上既有的 `create_tag` / `set_article_status` / `set_article_tags`（+ `list_admin_notes` 读侧），
+> 工具总数 22 → **35**（含后台只读与侧任务工具），见 §5 / §5.3。
+> ②**父标签 id 的真通道 = 名字通道**：planner 在写技能里写**名字**，工具在 execute 阶段用
+> `agent/adminops.py` 的 `find_tag` 对着**实时标签字典**确定性解析成 id；解不出（查无此名/
+> 歧义/层级不符）一律**响亮零写**，绝不猜、绝不新建。技能描述里 `$list_tags[N].tagKey` 形态的
+> 示例已删（写轮永远满足不了它），`$ref` 机制本身保留。
+> ③**解不出的引用必须响亮**：`agent/refs.py::resolve_args` 改**递归**（此前嵌套引用既解析不出、
+> 又会让 `_confirm_popup` 拒绝签发令牌）；写技能分支引用一律**原样透传**（旧行为是把
+> `"$list_tags[3].tagKey"` 静默变成 `None`、注记还肯定地写下「（一级标签）」）。
+> ④父仓新增 `POST /api/protected/tag/move`（换父级 / 一级↔二级互转，原子、可逆）——
+> **这是唯一能批量改写文章数据的在线接口**，边界见父仓 `docs/security-boundary.md`；
+> id 策略 keepId 优先、不可证明安全时回落 newId（后者要重写 `note.tags`）。
+> ⑤**技能名 ≠ 工具名**（分类三件：技能 `category_*` / 工具 `*_category`）——混用会产生
+> "未知工具"错误帧、整轮零弹窗；已在 `test_tag_admin.py` ⑧ 用"工具名 ∈ 注册表"锁死。
+> 验证：`test_tag_admin.py`（离线）+ golden 92 条（新增 4 条写类用例，**不做真写**）+
+> 活体探针腿 ⑪–⑮（`eval/probe_admin_write.py`，统一"读到连接关闭才算干净收尾"）。
+> 上版：2026-09-20（**20260920 七项**：①调用者身份与权限模型——新增 `agent/principal.py`
 > （身份的唯一构造点）+ `agent/authz.py`（scope 词汇表 / 工具→scope 声明表 / 角色→授予表 /
 > 唯一判据 `check()`），execute 在调用工具**之前**过判据，默认 shadow 只记不拦；角色只来自
 > Rust 侧 60 秒身份断言的 `role` 声明，**role=None 即身份不明、零权限**（不默认放行）。
@@ -13,7 +31,7 @@
 > ⑤**写操作的事前同意**（秘书前置需求 ③ 的 agent 侧）——权限之后再加一道确定性判据：
 > 需确认的 scope（`CONSENT_SCOPES = {write.content}`）未获**用户本轮消息**明确确认 →
 > 产 `__ERROR__: 待确认[consent_required]` 帧、**不调用工具**；用错误帧形态是为了让 gate
-> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 22 个工具里
+> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 35 个工具里
 > 没有一个是 `write.content`，所以这条闸**空转**（等第一个写工具，声明表驱动、不用改代码）。
 > ⚠️ 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
 > annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
@@ -25,10 +43,10 @@
 > ⑦**超长文章分节渲染与按节取回**（新增 `agent/sections.py`，见 §5.2）——全文帧不再逐字
 > 无声硬截断；`get_article_detail(section=…)` 提供取回手段；索引/渲染/取回三处共用同一套
 > 节边界。回归锁 = `test_sections.py`（68 项）。
-> 上版：2026-09-19（**20260919 参数引用**：§6.5 新增 `$<工具>[<序号>].<字段>` 参数绑定——
+> 上上版：2026-09-19（**20260919 参数引用**：§6.5 新增 `$<工具>[<序号>].<字段>` 参数绑定——
 > 下一步的参数取值由 execute 从结构化返回里绑，不再靠模型从 300 字截断帧里"读出来再抄"；
 > 见 `agent/refs.py`、`AgentState.tool_data`、planner 规则 3b）。
-> 上上版：2026-09-03（**20260903 架构裁决同步——planner 全权**：§1/§3/§6.5 改为现行拓扑
+> 更早：2026-09-03（**20260903 架构裁决同步——planner 全权**：§1/§3/§6.5 改为现行拓扑
 > planner ⇄ execute → model → gate；reflector（LLM 质检 + REVISE）/ 自由 ReAct / tools_node 授权
 > 执行已废除；历史机制描述均就地标注"20260903 前形态"保留为踩坑记录；§2 目录注释、§7 LLM 调用
 > 清单同步；先前 0901-0902 状态（声称闸三族/时间锚/chat-* 拆分/生产模型）内容不变）。
@@ -41,7 +59,7 @@
 
 - **React 前端**（浏览器）：看板娘 Live2D 形象 + 对话框 UI + SSE 消费 + 命令执行器。
 - **Rust 后端**（axum，端口 3000）：鉴权、记忆落库、对话编排、SSE 转发、中断清理。**记忆的唯一权威来源**。
-- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、22 个工具。**无状态**，记忆全靠请求体注入。
+- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、35 个工具。**无状态**，记忆全靠请求体注入。
 - **MySQL**：`chat_history`（消息流水）、`chat_summary`（每用户压缩摘要）。
 - **device-service**（端口 3100，独立服务）：IoT 设备（ESP32 OLED）指令下发，agent 以对话用户身份代签 JWT 调用。
 
@@ -55,7 +73,7 @@ flowchart TB
     subgraph Server[生产服务器 3.7GB 内存]
         NGX[nginx :443/:80]
         RUST[Rust 后端 axum :3000<br/>鉴权·记忆·编排·SSE 转发]
-        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 22 工具 · 2 workers]
+        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 35 工具 · 2 workers]
         MYSQL[(MySQL<br/>chat_history / chat_summary)]
         DEV[device-service :3100<br/>ESP32 OLED 指令下发]
     end
@@ -110,7 +128,16 @@ flowchart TB
 │   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
 │   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，秘书类功能地基（docs/secretary.md）
 │   ├── authz.py               # ★ 权限模型（20260920）：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
-│   ├── skills.py              # ★ 技能注册表：8 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
+│   ├── skills.py              # ★ 技能注册表：20 技能静态定义（12 只读/动作 + 8 写技能，写技能带 roles=admin）+ NAV_MAP 导航映射（业务唯一数据源）
+│   ├── adminops.py            # ★ 后台写操作域（20260921-22）：标签/分类索引与**名字→id 解析**（find_tag/find_category）+ 移动/降级校验（move_verdict）+ 确认卡文本 + 色名映射；能算的不交给 LLM
+│   ├── refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用（20260919）：递归遍历 + 五个错误码——解不出的引用必须响亮（20260922 改递归）
+│   ├── confirm.py             # ★ 待确认令牌（20260921）：无状态 HMAC（TTL 600s，2 worker 安全）；不落库、不落用户消息
+│   ├── entities.py            # ★ 执行回执实体摘要（20260920）：压成一行供跨轮取值；digest 是 Python 写 / Rust 读的跨语言契约
+│   ├── sections.py            # ★ 超长文章分节（20260920）：索引切片 / 帧按整节取舍 / `section=` 按节取回，三处共用一套节边界
+│   ├── moderator.py           # 侧任务·审核：不可信输入围栏 + 输出白名单 + fail-open
+│   ├── summarizer.py          # 侧任务·摘要：fail-empty
+│   ├── hostinfo.py            # 本机运维读数（只读 /proc、systemctl、日志）——get_server_status / get_service_health 的数据源
+│   ├── reports.py             # 四张后台报表的纯函数出口（数字在工具侧算好，不让 LLM 数数）
 │   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 叙述规则（model 零工具 narrator 用；工具调用规则在 planner/技能注册表侧）
 │   └── __init__.py
 ├── rag/                       # ★ RAG 检索管线（20260830）：词法 2/3-gram BM25 内存倒排 + 10 分钟懒刷新，
@@ -118,7 +145,7 @@ flowchart TB
 │   │                          #   检索只定位（候选 type/id/标题/分），解读走 get_article_detail 全文
 │   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
 ├── tools/
-│   ├── base.py                # 22 个 @tool 工具（含 rag_search / get_article_detail 泛化 doc_type）+ _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重 + trace_id 透传 device-service
+│   ├── base.py                # 35 个 @tool 工具（含 rag_search / get_article_detail 泛化 doc_type）+ _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重 + trace_id 透传 device-service
 │   └── __init__.py
 ├── models/
 │   ├── llm.py                 # get_llm 工厂：provider 三选一（qwen/deepseek/openai）；enable_thinking 走 extra_body
@@ -486,7 +513,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 ---
 
-## 5. 工具系统（22 个）
+## 5. 工具系统（35 个）
 
 | 分类 | 工具 | 行为 |
 |---|---|---|
@@ -504,6 +531,8 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 | 特效 | `toggle_effect(effect, action)` | 返回 `EFFECT:{effect}:{action}`，前端按显式意图执行 |
 | 夜间模式 | `toggle_dark_mode(mode)` | 返回 `DARKMODE:{mode}` |
 | IoT 设备 | `list_devices`、`device_oled_display` | 代签 JWT 调 device-service；支持自动选在线设备、幂等去重 |
+| 后台只读（admin） | `list_admin_notes`、`get_server_status`、`get_service_health`、`get_moderation_status`、`get_user_stats` | **以发起人身份代调** `127.0.0.1:3000` 的受保护接口（现签 60 秒 JWT）；scope `admin.console`，进 `_HARD_SCOPES`（非 admin 结构上够不到）；`list_admin_notes` 是草稿/私密文章的**唯一可达读口** |
+| 后台写（admin） | `create_tag`、`update_tag`、`delete_tag`、`create_category`、`update_category`、`delete_category`、`set_article_status`、`set_article_tags` | scope `write.console`（`_HARD_SCOPES` + `CONSENT_SCOPES`）；**只能由写技能模板展开**——`PARAMS.calls` 名单里没有它们，越权清单在技能白名单那一步就被剥掉；三道门见 §5.3 |
 
 **工具 → 命令 → 前端执行**是核心交互模式：工具返回带前缀的**命令字符串**，Python 识别后作为独立 SSE 帧
 转发，前端解析执行。**不是**让模型把命令写进正文——正文里的命令会被 `cleanAgentText` 当幻觉剔除
@@ -553,6 +582,53 @@ narrator 加纪律 14（未展开的小节**没有读过**，不得引用、不�
 如实说可以再取一次）、trace 的 `planner.llm_done` 落 `frames_chars`（单帧上限 20000 是经验值，
 没有真实体量就无从判断该收该放）。退化路径都**有声**：无小节结构或单节自己就超上限 → 退回
 头截断并带上原文总长与成因。
+
+### 5.3 标签/分类写（20260922）：名字通道 + 响亮 + 一个原子移动端点
+
+**起点是一次线上事故**：用户说「把已有标签 Asyncio 改成编程的子标签」，六轮全错。归因四层里
+**三层是能力缺口**：① 写技能的可选参数把解不出的 `$ref` 静默当成"没填"，注记还肯定地写下错误
+事实「（一级标签）」；②「建二级标签」结构性不可达——写轮只能展开自己的模板（点不了 `list_tags`），
+而跨轮执行记忆的标签摘要只有名字与篇数、**没有 id**；③ **根本没有改标签/删标签/碰分类的写工具**
+⇒「改成某标签的子标签」被 `create_tag` 的"已存在就复用"吸收成 no-op，用户以为改完了。
+
+| 能力 | 工具 | 端点 | 要点 |
+|---|---|---|---|
+| 建标签（一级/二级） | `create_tag(title, parent_tag?, color?)` | `POST /api/protected/tagone` / `tagtwo` | 先查后建 + 建后复核；`parent_tag` 是**名字** |
+| 改标签（改名/改色/换父级/换层级） | `update_tag(name, level?, new_title?, color?, parent_tag?, to_level?)` | 有 `parent_tag`/`to_level` → `POST /api/protected/tag/move`；否则 `PUT /tagone|tagtwo/:id` | PUT 的 title/color **都是必填**：只改名时必须把**当前色**从索引原样回传（不猜） |
+| 删标签 | `delete_tag(name, level?)` | `DELETE /api/protected/tag` | 删除触发**全表** `prune_note_tags`（把引用从所有文章上摘掉），**不可回滚** |
+| 建/改/删分类 | `create_category` / `update_category` / `delete_category` | `POST /api/protected/category`、`POST …/category/:id`、`DELETE …/category` | 建分类**不回 id**（复核靠重拉列表按名找）；改分类**空串 = 不改**，只传点名字段；删分类是 `ON DELETE SET NULL`（文章失去分类） |
+
+**② 父标签 id 的真通道 = 名字通道**（用户拍板"给条真通道，否则把技能描述里的引用写法先删掉"）。
+planner 在写技能里写**名字**——人嘴里说的就是名字，跨轮执行记忆里也只有名字；工具在 execute 阶段
+用 `agent/adminops.py::find_tag` 对着**实时标签字典**（`_tag_index`，admin 鉴权、`uid<=0` fail-closed）
+确定性解析成 id。解不出就**响亮零写**：唯一命中才动手；命中多个（不同父下的同名二级）→ 追问并列出
+候选；一个都没有 → 如实说"站内没有这个标签"——**绝不猜、绝不顺手新建**（"新建一个"正是事故形态）。
+目标/父标签/子标签名单取自**同一次索引快照**（`index=` 参数一路透传），避免中途字典变化导致
+"目标存在但父不存在"。技能描述里 `$list_tags[N].tagKey` 形态的示例**已删**，并写明边界：写轮看不到
+标签 id、名字对不上系统会如实告诉你，**别改用 `create_tag` 蒙一个**。
+
+**① 解不出的引用必须响亮**（三处）：`refs.resolve_args` 改**递归**（`has_refs` 本来就是递归的，
+嵌套引用此前既解析不出、又会让 `_confirm_popup` 拒绝签发令牌）；写技能分支引用**原样透传**给
+execute 去报错误码，不再静默变 `None`；注记只写已知事实（层级未知时不许写「（一级标签）」）。
+回归锁 = `test_skills.test_write_ref_loud` + `test_refs` 嵌套用例 + 探针腿⑮。
+
+**Rust 侧新增 `POST /api/protected/tag/move`**（父仓，20260921 上线）：换父级与一级↔二级互转是
+一次原子移动，而不是"删了重建"（删除会触发全表 `prune_note_tags`）。id 策略**keepId 优先**
+（目标表 PK 不撞 + 可证明安全），**不可证明时回落 newId**——`note.tags` 的重写按数值解析重拼
+（**绝不 `String::replace`**、绝不 `LIKE '%1%'`），并**显式保留 `updated_at`**（否则被重写的文章会
+集体跳到列表最前）。两条硬拒：**自环**（`fatherTag == id` 会让 `ON DELETE CASCADE` 把刚插入的行
+一起删掉——事务成功提交、标签彻底消失）、**降级但还有子标签**（拒并如实报数）。
+探针实测：真实标签「Python」id=5 带文章 [19,23]，编程 → 摄影 → 编程往返后 **id 与 `note.tags`
+一字未变**；id ≥ 10000 的新二级标签升级走 newId 路径（旧 10000 → 新 22）。
+
+**验证（三件套，口径不同）**：`test_tag_admin.py`（离线、秒级、进 CI：名字解析四态 / 六工具 args
+组装与成功判据 / `_admin_request` 的 PUT-DELETE 形态 / **工具名 ∈ 注册表**——技能名 `category_*`
+与工具名 `*_category` 不同名，混用会产"未知工具"错误帧、整轮零弹窗）；golden 新增 4 条
+（`admin_tag_move_popup` / `admin_tag_delete_popup` / `admin_category_create_popup` /
+`admin_tag_move_question_no_popup`，**一律零真写**）；探针腿 ⑪–⑮（`--allow-write`，断言读**后端
+真值**，不读工具回执）。**探针通用纪律**：所有腿统一**读到连接关闭**才判定——
+`__END__` 即断会丢尾部执行记录，20260921 实测的 `route_after_execute` 缺映射表那次，就是
+"库真值改了 + 回执落了库 + 前端只看到一行报错"却仍被判 PASS（腿⑧ 的旧盲区）。
 
 ---
 
