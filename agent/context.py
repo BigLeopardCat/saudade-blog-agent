@@ -64,24 +64,61 @@ _GUESTBOOK_URL_RE = re.compile(r"/(?:guestbook|he)\b")
 # 页面上下文（planner 与 model 均可见，模型只转述），与 GUESTBOOK_GUIDE 同构。
 # 板块路径与 NAV_MAP（skills.py 单一事实来源）保持一致，新增板块须同步此处与
 # test_skills 断言。
-SITE_GUIDE = (
+_SITE_GUIDE_HEAD = (
     "【站内板块与技能清单】（系统注入的事实——介绍「博客有哪些板块/功能」或"
     "「你能做什么」时以此为准完整转述）站内板块：首页；文章（/article/<id> 单篇）；"
     "留言板=「河灯集」（/guestbook）；说说（/talk）；归档/时间轴（/times）；"
     "关于我（/about）；物联网平台控制台（/device-console/）；登录（/login）与"
     "后台管理（/dashboard）仅博主使用。"
-    "你能做的：陪聊与回答站内问题；搜索/找文章并给链接，讲解访客正在读的文章；"
-    "查说说、河灯留言、公告；跳转到上述任意板块；开关特效（樱花/雨/雪等）与"
-    "夜间模式；让接入的 ESP32 OLED 屏幕显示文字、查询设备在线状态；看访客发来"
-    "的图片并描述内容/颜色。介绍能力时按此完整列出，不要遗漏。"
 )
+# 非技能类的能力（多模态看图等）：注册表里没有对应技能，只能手写；保持极短，
+# 真正会漂移的是"哪些技能可用"，那部分由注册表渲染（见 site_guide）。
+_SITE_GUIDE_TAIL = "看访客发来的图片并描述内容/颜色。"
+# 管理能力的引导语（能力**内容**仍来自注册表的 capability 字段，这里只有抬头）
+_ADMIN_GUIDE_HEAD = "🔑 以管理员身份（本轮对话者是博主本人）你还额外能做："
 
 
-def _attach_page_guide(page_ctx: str) -> str:
+def site_guide(role: str | None = None) -> str:
+    """站内板块 + 能力清单（**由技能注册表按角色渲染**，20260921）。
+
+    此前这份清单是手写死文本：注册表加了管理助手三件写、清单里一个字没变 ⇒
+    narrator 一会儿说"我可以建标签"、一会儿说"我不能改后台"（165525/165544 vs
+    165645/165937，同一能力三轮两种答案），而它**说的每一句都"有据"**——据的是
+    那份不会动的清单。现在能力行 = 注册表的 capability 字段 × 同一套角色可见性
+    判据（skills.visible_skills），加技能/改角色只动注册表一处。
+
+    可见性是**分流不是隐藏**：访客看不到管理能力行（他不该被告知"我能改后台"），
+    管理员看到的清单里明确列出他能改什么（他不该被告知"我不能改"）。
+    """
+    from agent.skills import visible_skills        # 局部导入：context 是叶子层，
+    base, admin = [], []                           # skills 反过来不依赖 context，但
+    for s in visible_skills(role):                 # 保持此处零模块级耦合更稳
+        if not s.capability:
+            continue
+        (admin if s.roles else base).append(s.capability)
+    caps = "；".join(base + [_SITE_GUIDE_TAIL])
+    out = _SITE_GUIDE_HEAD + f"你能做的：{caps}"
+    if admin:
+        out += _ADMIN_GUIDE_HEAD + "；".join(admin) + "。"
+    return out + "介绍能力时按此完整列出，不要遗漏。"
+
+
+# 无角色渲染（模块级常量）：既有导入点与 test_skills 的板块覆盖断言仍以此为准。
+# **不要**在运行时用它——运行时要按角色取 site_guide(role)，否则管理员能力行
+# 又会漏掉（这正是本轮修的那个洞）。
+SITE_GUIDE = site_guide(None)
+
+
+def _attach_page_guide(page_ctx: str, role: str | None = None) -> str:
     """页面上下文常驻附板块/技能清单；命中留言板时再附操作指南（URL 是系统
-    上报事实，非模型推断；两份指南同为"只转述"系统数据）。"""
+    上报事实，非模型推断；两份指南同为"只转述"系统数据）。
+
+    `role` 决定能力清单里**列不列管理能力**（site_guide 按角色渲染）——这是
+    20260921 的洞：模板固定 ⇒ 管理员轮里清单不含写能力 ⇒ narrator 照单说
+    "我不能改后台"（165525/165544），而它讲的是系统注入的事实。
+    """
     try:
-        out = (page_ctx or "") + "\n" + SITE_GUIDE
+        out = (page_ctx or "") + "\n" + site_guide(role)
         if _GUESTBOOK_URL_RE.search(page_ctx or ""):
             out += "\n" + GUESTBOOK_GUIDE
         return out
@@ -89,7 +126,7 @@ def _attach_page_guide(page_ctx: str) -> str:
         return page_ctx or ""
 
 
-def _page_ctx(messages: list) -> str:
+def _page_ctx(messages: list, role: str | None = None) -> str:
     """提取前端实时上报的页面上下文（page/title/特效/夜间），注入 planner/model。
 
     前端每轮请求都携带真实 current_url（window.location.href），_build_messages
@@ -97,12 +134,16 @@ def _page_ctx(messages: list) -> str:
     用户手动转跳后对话历史不体现页面变化（曾见用户说"已经离开物联网控制台了，
     在首页"，模型仍延续上一轮的设备显示动作）。此处显式提取注入 prompt——
     事实以系统上报为准，不依赖模型推断。
+
+    `role` 透传给 _attach_page_guide（决定能力清单是否含管理能力）。缺省 None =
+    访客口径：**调用方默认应当把角色传进来**，漏传只会少列管理能力而不会多列
+    （fail-closed 方向正确）。
     """
     for m in messages:
         content = _msg_text(m) or ""
         found = re.search(r"\[System:\s*(.*?)\]", content, re.DOTALL)
         if found:
-            return _attach_page_guide(found.group(1).strip())
+            return _attach_page_guide(found.group(1).strip(), role)
     return "（无）"
 
 

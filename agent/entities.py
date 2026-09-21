@@ -129,9 +129,26 @@ def _tag_digest(data) -> str:
     rows = _rows(data)
     if not rows:
         return ""
-    names = [_clip(r.get("title") or r.get("tagTitle") or "", 8) for r in rows[:_ITEM_MAX * 2]]
-    names = [n for n in names if n]
-    return f"{len(rows)} 个标签: " + _join(names) if names else ""
+    # 两级标签（20260921）：list_tags 现在把 /tagone 与 /tagtwo 合在一张表里，
+    # 计数必须分开——"9 个标签"里混着 5 个一级 4 个二级，用户问"编程下面有几个
+    # 二级标签"时这行是唯一依据。二级写成 `父/子`（与前端 flattenTagOptions 的
+    # 展示名一致），下轮"那个 Rust 标签"才指认得回来。
+    def _lvl(r) -> str:
+        return str(r.get("level") or "").strip()
+    lv2 = [r for r in rows if _lvl(r) == "2"]
+    items = []
+    for r in rows[:_ITEM_MAX * 2]:
+        name = _clip(r.get("title") or r.get("tagTitle") or "", 8)
+        if not name:
+            continue
+        father = _clip(r.get("fatherTag") or "", 6) if _lvl(r) == "2" else ""
+        items.append(f"{father}/{name}" if father else name)
+    if not items:
+        return ""
+    head = f"{len(rows)} 个标签"
+    if lv2:
+        head += f"（一级 {len(rows) - len(lv2)}/二级 {len(lv2)}）"
+    return f"{head}: " + _join(items)
 
 
 def _note_digest(data, label: str) -> str:

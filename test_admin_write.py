@@ -418,6 +418,39 @@ with patch(_tag_index=_Seq(IDX, IDX),
     check("POST 失败（ToolResult）→ 原样透传 unavailable（绝不包装成 ok）",
           r.kind == "unavailable" and "标签名重复" in r, f"{r.kind}: {r}")
 
+# ── 参数对调守卫（20260921 生产事故）──────────────────────────────────
+# planner 把「在 Python 标签下新建 X」填成 title=Python、parent_id=Python 的 id。
+# 若放行，库里就会出现「Python」下挂一个也叫「Python」的二级标签——父子同名，
+# 此后任何按名字找标签的操作都变歧义，而回复还会说"建好了"。
+post = _Post("10002")
+with patch(_tag_index=_Seq(IDX, IDX), _admin_post=post):
+    r = base.create_tag.invoke({"title": "Python", "parent_id": 1}, config=cfg())
+    check("父标签名 == 新标签名 → unavailable，零 POST（参数多半填反了）",
+          r.kind == "unavailable" and post.calls == [], f"{r.kind}: {r}")
+    check("  拒因说清是「把父标签名当成了新标签名」（planner 据此改参）",
+          "父标签名" in r and "本次未创建" in r, str(r))
+    # 对照组：**不同名**的二级标签照常放行，守卫只认"父子同名"这个自身矛盾
+    r2 = base.create_tag.invoke({"title": "Pytho", "parent_id": 1}, config=cfg())
+    check("  · 对照组：父子不同名照常创建（守卫不误伤正常二级标签）",
+          len(post.calls) == 1 and post.calls[0][0].endswith("/tagtwo"),
+          str(post.calls))
+
+# ── 弹窗问句要点名父标签（20260921）────────────────────────────────────
+_q = A.render_confirm_question([{"tool": "create_tag",
+                                 "args": {"title": "分布式", "parent_id": 2}}], IDX)
+check("弹窗问句写父标签**名字**（用户才能核对挂在哪）",
+      "「架构」" in _q and "二级" in _q and "「分布式」" in _q, _q)
+check("  问句不再只给 id（id 是系统内部编号，用户没法核对）", "id=2" not in _q, _q)
+_q2 = A.render_confirm_question([{"tool": "create_tag",
+                                  "args": {"title": "分布式", "parent_id": 2}}])
+check("读不到标签字典 → 退回 id 但仍然弹窗（不因一次读不到就退回死路）",
+      "id=2" in _q2 and "「分布式」" in _q2, _q2)
+_q3 = A.render_confirm_question([{"tool": "create_tag", "args": {"title": "新的一级"}}], IDX)
+check("一级标签的问句不带父标签字样", "挂在" not in _q3, _q3)
+_t = A.render_confirm_text([{"tool": "create_tag",
+                             "args": {"title": "分布式", "parent_id": 2}}], IDX)
+check("气泡正文与问句同源（都点名父标签）", "「架构」" in _t, _t)
+
 
 print("\n⑨ set_article_status：只发点名的字段 + 写后复核")
 

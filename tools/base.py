@@ -260,9 +260,19 @@ def list_categories() -> str:
 
 @tool
 def list_tags() -> str:
-    """获取全部一级标签列表。"""
-    data = _get("/tagone")
-    return _shape(data)
+    """获取站内**全部标签**：一级标签 + 它下面的二级标签（二级互不重名，但不同
+    一级标签下可以有同名二级标签，靠 fatherKey/fatherTag 区分）。"""
+    # 两级都要读（20260921 修）：只读 /tagone 时结构上就看不见二级标签，
+    # 线上实测答出"站内没有二级标签"。两个端点都是公开只读、无需鉴权。
+    one = _get("/tagone")
+    two = _get("/tagtwo")
+    if isinstance(one, ToolResult) or isinstance(two, ToolResult):
+        # 任一路读不到 → **不合并半份**：半份清单会把"这次没读到二级标签"伪装成
+        # "站内没有二级标签"，正是上面那个结论的来源。如实报不可用。
+        return UPSTREAM_DOWN
+    # 局部导入：agent.graph → tools 的反向依赖会构成循环导入（同 _tag_index）
+    from agent import adminops as A
+    return _shape(A.merge_tag_rows(one, two))
 
 # ---------------------------------------------------------------------------
 # 公告 工具
@@ -945,7 +955,7 @@ def create_tag(
 ) -> str:
     """新建一个文章标签：不填 parent_id 建**一级**标签，填了则在该一级标签下建**二级**标签。
     同名标签已存在时**不重复创建**，直接复用并告知它的 id。
-    **本工具只往标签字典里加一项，不会把它挂到任何文章上**（挂标签用 set_article_tags）。
+    **本工具只往标签字典里加一项，不会把它挂到任何文章上**（挂标签是另一件事）。
     需要管理员身份。"""
     from agent import adminops as A
     name = str(title or "").strip()
@@ -976,6 +986,16 @@ def create_tag(
         parent = index.get(pid)
         if parent is None or parent.level != 1:
             return unavailable(f"父标签 id={pid} 不存在或不是一级标签，本次未创建")
+        # 参数对调守卫（20260921）：父标签 id 指向的标签**名字与新标签名相同**时拒绝。
+        # 生产实证：planner 把「在编程标签下新建 Rust」填成 title=编程、parent_id=编程的
+        # id（父名当成了新标签名），若放行就会在「编程」下建出一个也叫「编程」的二级
+        # 标签——库里多一条永远不该有的同名父子，而回复还会说"建好了"。这一判据不需要
+        # 理解用户意图，只认"父子同名"这个自身矛盾的结构，误伤面 0（正常的二级标签
+        # 不会与父同名：同名父子在做任何按名字找标签的操作时都是歧义）。
+        if parent.name == name:
+            return unavailable(
+                f"要新建的标签名「{name}」与父标签（id={pid}）同名，这多半是把父标签名"
+                f"当成了新标签名（「在{name}下面新建 X」里的 X 才是新标签的名字），本次未创建")
     elif cands or hit is not None:
         cands = cands or [hit]
         # 有同名标签、但都在二级（同一个或不同父下）——这不是"已存在"，是"你可能是
@@ -1158,15 +1178,18 @@ def set_article_tags(
     if replace is not None:
         add_ids, bad = _resolve(rep_l)
         if bad:
+            # 返回文本里**不许出现工具名**（20260921）：narrator 被要求"按工具返回作答"，
+            # 照抄到回复里就会变成"我调用了 X"（而 X 若不在本轮执行集里，5c 具名声称闸
+            # 直接判编造 → 整条回复被换成兜底道歉）。同族事故见 adminops.render_tag_created。
             return unavailable(f"站内没有这些标签：{'、'.join(bad)}——"
-                               f"先确认名字（或先用 create_tag 建好），本次未改动")
+                               f"先确认名字（或先把标签建出来），本次未改动")
         new = add_ids
     else:
         add_ids, bad_add = _resolve(add_l)
         rm_ids, bad_rm = _resolve(rm_l)
         if bad_add:
             return unavailable(f"站内没有这些标签：{'、'.join(bad_add)}——"
-                               f"标签按名字精确匹配，不会自动新建（要建用 create_tag），本次未改动")
+                               f"标签按名字精确匹配，不会自动新建，本次未改动")
         if bad_rm:
             return unavailable(f"站内没有这些标签：{'、'.join(bad_rm)}——无法确定要去掉的是哪一个，本次未改动")
         new = [i for i in cur if i not in rm_ids]
