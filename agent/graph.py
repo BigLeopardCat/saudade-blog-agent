@@ -130,6 +130,13 @@ _TOOL_MAP = {t.name: t for t in _TOOLS}
 # 死亡螺旋的燃料（1.26/1.30/1.33 事故均在长复盘链上）。
 REFLECT_MAX_ROUNDS = 2
 
+# 快照型只读技能（20260921 管理助手）：一次取回、零依赖、返回的是**当时**的读数。
+# 与 content_query 的多轮检索不同（换关键词再搜是新信息），这类技能第二轮起
+# 再规划拿的是同一份数据（CPU 会重采，但那是噪声不是新信息）。实测
+# ops_report_admin 连规划 4 轮 = 同两个工具各跑 4 遍（22s，工具 8 次），
+# 病灶与"数据工具重复拦截"（content_query 族）相同，只是报表技能不经那条通道。
+SNAPSHOT_SKILLS = frozenset({"ops_report", "moderation_report", "user_report"})
+
 
 # ---------------------------------------------------------------------------
 # 1. State：节点间共享的"工作台"
@@ -786,6 +793,12 @@ _CONTENT_TOOLS = frozenset({
     "search_notes", "rag_search", "list_notes", "get_top_notes", "list_talks",
     "list_guestbook", "list_categories", "list_tags", "get_announcements",
     "get_article_detail", "get_site_map", "get_blog_info",
+    # 管理助手报表（20260921）：这四族返回的也是**站内/本机事实**（服务器读数、
+    # 服务状态、留言审核、用户聚合），跑过任何一个同样意味着"我有据可依"。
+    # 少了它们，报表轮会落进 5d/5f 的"有帧但无内容工具"分支——那分支下回复里
+    # 任何「暂无待审」「没有异常」都会被读成洞④（站内结论无帧）而整轮 fallback。
+    "get_server_status", "get_service_health",
+    "get_moderation_status", "get_user_stats",
 })
 # 命令前缀文本：回复正文出现系统命令帧前缀 = 模型在"假装发命令"（旧事故：正文
 # 输出 AUTO_NAVIGATE:/NAVIGATE:/EFFECT:/DARKMODE: 文本既不会执行、还误导用户
@@ -1479,7 +1492,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     frames_txt = _frame_texts(state["messages"])
     try:
         _prompt = _PLANNER_PROMPT.format(
-            skills_context=build_planner_context(), tools_desc=_QUERY_TOOLS_DESC,
+            # 技能表按本轮角色过滤（20260921）：管理助手那三个技能只对 admin 列出，
+            # 其余角色看不到 ⇒ 选不出来。用 known_role（未知角色 → None → 只列公开技能）
+            skills_context=build_planner_context(_principal_of(config).known_role),
+            tools_desc=_QUERY_TOOLS_DESC,
             page_ctx=page_ctx, round_info=round_info,
             intent_hints=_intent_hints(state.get("executed") or [], user_msg),
             doc_anchors=doc_anchors,
@@ -1580,6 +1596,22 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             logger.info("[planner] 动作重复（%s）但意图清单仍有未完成项（%s）→ 不收尾",
                         "、".join(sorted(planned_names)),
                         "、".join(i["key"] for i in pending))
+
+    # 快照型报表技能重复规划防护（20260921，与上一条同源、判据不同）：本轮
+    # 已 **checker PASS** 过的报表工具再规划一遍，拿回的是同一份快照 —— 直接收尾。
+    # 判据取 receipts（系统验收过的事实）而非"帧里出现过工具名"：失败/unavailable
+    # 的帧不进回执，planner 按规则 5 改参重试的路径不受影响（重试合法，重取不算）。
+    if has_frames and plan_obj["tools"] and plan_obj["skill"] in SNAPSHOT_SKILLS:
+        passed = {r.get("tool") for r in (state.get("receipts") or [])}
+        planned = {_tool_name(s) for s in plan_obj["tools"]}
+        if planned and planned <= passed:
+            logger.info("[planner] 报表已取回（%s），去重收尾",
+                        "、".join(sorted(planned)))
+            plan_obj = _wrap_up_plan(
+                True, "本轮已取回的报表数据就在上方工具返回里（快照型只读，"
+                      "重复调用拿回同一份数据），基于已有返回如实作答")
+            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                    "done": False}
 
     # 检索重复清单拦截（20260903 golden 实证：rag_arch_ports planner 把同一
     # rag_search 原句连发 3 轮直到轮次上限——候选 id=19 已命中却从不读全文。
@@ -1841,7 +1873,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 参数引用解析同一层（确定性、无 LLM、无一例外）。默认 shadow——
         # 只算决策、只把**拒绝**记进 trace，行为不变（先观测、后收口，见 agent/authz.py）。
         decision = authz.check(principal, name)
-        if not decision.allowed and not authz.enforcing():
+        # 传 decision.scope 而不是无参调用：`admin.console` 是不吃 shadow 的硬拦
+        # （20260921，见 authz._HARD_SCOPES），其余 scope 仍走全局开关。
+        if not decision.allowed and not authz.enforcing(decision.scope):
             record("execute", "authz_shadow", tool=name, principal=str(principal),
                    decision=str(decision))
         # 写操作的「人在回路」确认（20260920，秘书类前置需求 ③）：**权限判"能不能做"，
@@ -1865,7 +1899,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if ref_err:
             out = f"__ERROR__: 参数引用无法解析[{ref_err}]（上一步返回里没有这个值——改参数或换个工具）"
             logger.warning("[execute] 参数引用解析失败，不执行: %s → %s", spec, ref_err)
-        elif not decision.allowed and authz.enforcing():
+        elif not decision.allowed and authz.enforcing(decision.scope):
             out = authz.denial_frame(decision, principal)
             logger.warning("[execute] 权限拒绝，不执行: %s → %s", spec, decision)
         elif consent_missing:

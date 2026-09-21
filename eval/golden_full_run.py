@@ -9,6 +9,19 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_bufferin
 sys.path.insert(0, "eval")
 
 CASES = [json.loads(l) for l in open("eval/golden/basic.jsonl", encoding="utf-8") if l.strip()]
+# 管理助手「读后台」用例需要真实 admin uid（20260921）：口径与 run_golden.py 一致
+# ——未设 GOLDEN_ADMIN_UID 就明确跳过并打印（如实计入分母变化，不静默豁免）。
+# 子进程继承环境变量，但**用例文件是父进程写的**，所以 uid 注入必须在这里做。
+_ADMIN_UID = os.environ.get("GOLDEN_ADMIN_UID", "").strip()
+_NEED_UID = [c["id"] for c in CASES if c.get("needs_admin_uid")]
+if _NEED_UID and not _ADMIN_UID:
+    CASES = [c for c in CASES if not c.get("needs_admin_uid")]
+    for _cid in _NEED_UID:
+        print(f"[skip] {_cid}: SKIP (needs GOLDEN_ADMIN_UID)", flush=True)
+elif _ADMIN_UID:
+    for _c in CASES:
+        if _c.get("needs_admin_uid"):
+            _c.setdefault("context", {})["user_id"] = int(_ADMIN_UID)
 RUNNER = "eval/golden_case_runner.py"
 TMPDIR = "/tmp/golden_cases"
 TIMEOUT = 180

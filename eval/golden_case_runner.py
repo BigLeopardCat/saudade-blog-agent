@@ -25,10 +25,12 @@ def main():
     report_dir = sys.argv[2] if len(sys.argv) > 2 else "eval/report/runs"
     run_golden.ensure_agent()
     g = case["gold"]
-    # 请求构造只走 run_golden.build_request（20260920 前本文件手写了一份、漏了 executions）
+    # 请求构造只走 run_golden.build_request（20260920 前本文件手写了一份、漏了 executions）；
+    # 调用者身份同理只走 run_golden.build_principal（20260921 管理助手用例需要 role，
+    # 隔离跑法若各自维护一份，就会重演"两个跑法结论不同"那次）
     req = run_golden.build_request(case)
     t0 = time.time()
-    result = run_golden.run_one(req)
+    result = run_golden.run_one(req, run_golden.build_principal(case))
     elapsed = time.time() - t0
     fails = run_golden.check_gold(g, result)
     ok = not fails and not result["error"]

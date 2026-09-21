@@ -640,6 +640,179 @@ def device_oled_display(
 
 
 # ---------------------------------------------------------------------------
+# 管理助手报表工具（20260921）
+# ---------------------------------------------------------------------------
+# 四个只读工具，scope 全声明为 `admin.console`（agent/authz.py）⇒ **只有 admin 用得动**。
+# 三道闸由粗到细：
+#   ① 结构性：不进 planner 的两个点名白名单（skills._EXPLICIT_TOOLS /
+#      _CALLABLE_QUERY_TOOLS）⇒ planner 无法经 PARAMS.calls/tools 点到它们，
+#      只能由 ops_report / moderation_report / user_report 三个技能模板展开；
+#   ② 身份：会话角色不是 admin 时 planner 上下文里**根本看不到**这三个技能
+#      （skills.build_planner_context(role)）；
+#   ③ 判据：execute 调用前的 authz.check()。`admin.console` **不吃 shadow 开关**
+#      （authz._HARD_SCOPES）——它是本轮纯新增的能力，没有"观测既有流量"可谈，
+#      shadow 期也硬拦。
+# 通道分两类：
+#   · 本机读数（服务器状态/服务健康）：agent 与生产服务同机，直接读 /proc、systemctl、
+#     日志即可，不经后台门、不消耗发起人的身份；
+#   · 后台读（审核状况/用户统计）：走「以发起人身份代调」——现签 60 秒 JWT 打本机
+#     Rust，`auth_guard` 照旧按 claims.sub 查库判角色。**Rust 侧零改动**，agent 自己
+#     不持有任何后台凭据。
+#
+# 为什么这几个工具返回"渲染好的中文报表"而不是 `_shape(data)`（绕过既有惯例）：
+# 见 agent/reports.py 的模块头注——LLM 数数是幻觉高发区，报表的价值全在数字可信。
+
+ADMIN_BASE = _settings.agent_admin_base
+
+
+def _sign_local_jwt(uid: int, role: str | None) -> str:
+    """以**发起人**身份签一个 60 秒的 HS256 JWT，供本机后台接口鉴权。
+
+    payload 与 `_sign_user_jwt`（device-service 那条路径）刻意一致：
+    `{sub, exp, role}` 且**不带 aud**——Rust `auth_jwt::verify_token` 用
+    `Validation::default()`，多一个 aud 会被判 audience 无效直接验签失败。
+
+    ⚠️ token 里的 `role` **只为日志可读，没有任何权威**：Rust `auth_guard` 一律按
+    `claims.sub` 现查库里的角色（middleware.rs 的注释写了同一件事）。密钥是共用的
+    JWT_SECRET，所以这里确实是能签出"看起来像 admin"的 token——但签了也没用，
+    这正是"以发起人身份代调"成立的原因：**准入结果由库里的 role 决定，不由 token 决定**。
+
+    有效期 60 秒（设备那条是 300）：这是一个当场用掉的请求，没有"持有一段时间"的
+    场景，短一点少一分被复用的余地。
+    """
+    def _b64(b: bytes) -> bytes:
+        return base64.urlsafe_b64encode(b).rstrip(b"=")
+
+    header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    payload = _b64(json.dumps({
+        "sub": uid,
+        "exp": int(time.time()) + 60,
+        "role": role or "user",
+    }).encode())
+    sig = _b64(hmac.new(JWT_SECRET.encode(), header + b"." + payload, hashlib.sha256).digest())
+    return (header + b"." + payload + b"." + sig).decode()
+
+
+def _admin_get(path: str, config: RunnableConfig) -> dict | list | ToolResult:
+    """以发起人身份 GET 一个后台接口（`/api/protected/*`），返回其 data 字段。
+
+    fail-closed 与 `_get` 同族：异常 / 非 200 / 业务码非 200 一律 unavailable，
+    **绝不返回空**——"读不到"被当成"就是空的"是这批工具最坏的失败形态
+    （报表会言之凿凿地说"没有待审留言"，而实际是一条都没读到）。
+    401/403 单独给一句如实的话：那是**身份**问题不是故障，agent 要能据此说出
+    "只有管理员能看"，而不是"系统出错了"。
+    """
+    uid = _device_get_user_id(config)
+    if uid <= 0:
+        return unavailable("无法获取当前用户身份，后台数据不可用")
+    principal = (config.get("configurable", {}) or {}).get("principal")
+    headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
+    try:
+        resp = _client.get(f"{ADMIN_BASE}{path}", headers=headers, timeout=15)
+    except Exception as exc:
+        logger.error("admin API call failed: %s", exc)
+        return unavailable(f"后台接口请求失败: {exc}")
+    if resp.status_code in (401, 403):
+        return unavailable("当前身份无权访问后台数据（该功能仅管理员可用）")
+    if resp.status_code != 200:
+        return unavailable(f"后台接口返回 HTTP {resp.status_code}")
+    try:
+        body = resp.json()
+    except Exception:
+        return unavailable("后台接口返回的不是 JSON")
+    if body.get("code") != 200:
+        logger.warning("admin API error: %s", body.get("message"))
+        return unavailable(f"后台接口报错: {body.get('message')}")
+    return body.get("data")
+
+
+@tool
+def get_server_status() -> str:
+    """查看服务器运行状态：CPU 核数与使用率、1/5/15 分钟负载、内存与 Swap 用量、
+    各磁盘用量与可用空间、开机时长。数据由 agent 直接读本机 /proc 得到，不经后台接口。"""
+    # 延迟导入：tools.base 在 `agent` 包的导入链**上游**（agent/__init__ → agent.agent
+    # → agent.graph → tools），模块级 `from agent import …` 会构成循环导入。
+    # 同先例见 rag/search.py 的 `from tools.base import _get`。
+    from agent import hostinfo as H
+    from agent import reports as R
+    try:
+        cpu = H.cpu_percent_over()
+        mem = H.mem_summary(H.parse_meminfo(H.read_meminfo()))
+        if cpu is None and not mem:
+            # 两样都读不到 = 这根本不是一台正常机器，如实说"读不到"而不是给一张空报表
+            return unavailable("读取服务器状态失败：本机 /proc 不可读")
+        return ok(R.render_server_status(
+            cpu_pct=cpu,
+            cores=os.cpu_count() or 0,
+            load=H.parse_loadavg(H.read_loadavg()),
+            mem=mem,
+            disks=H.disk_rows(),
+            uptime_s=H.read_uptime(),
+        ))
+    except Exception as exc:
+        logger.exception("get_server_status failed")
+        return unavailable(f"读取服务器状态失败: {exc}")
+
+
+@tool
+def get_service_health() -> str:
+    """查看服务健康：三个 systemd 服务（saudade-rust / saudade-agent / saudade-device）
+    的状态、重启次数与启动时刻，心跳探针近 24 小时的 WARN/FAIL，今日对话的轮数、
+    异常收尾与质检拦截，以及存活日志的体积。读的是本机的 systemctl 与 logs/ 目录。"""
+    from agent import hostinfo as H
+    from agent import reports as R
+    try:
+        services = [(unit, H.service_show(unit)) for unit in H.SERVICES]
+        health = H.parse_health_log(H.read_text_tail(H.HEALTH_LOG),
+                                    H.health_window(24))
+        return ok(R.render_service_health(
+            services=services,
+            health=health,
+            traces=H.trace_stats(),
+            sizes=H.log_sizes(),
+        ))
+    except Exception as exc:
+        logger.exception("get_service_health failed")
+        return unavailable(f"读取服务健康失败: {exc}")
+
+
+@tool
+def get_moderation_status(config: RunnableConfig) -> str:
+    """查看河灯留言的审核状况：总数与待审/已通过/已驳回的分布、AI 侧判定分布、
+    需要人工介入的交叉统计（AI 拦下但仍待审、AI 放过但被人驳回）、以及最近待审明细。
+    需要管理员身份（读的是后台留言管理视图）。"""
+    from agent import reports as R
+    data = _admin_get("/api/protect/board", config)
+    if isinstance(data, ToolResult):
+        return data
+    if not data:
+        return empty("河灯留言板目前还没有任何留言，没有可审核的内容")
+    try:
+        return ok(R.render_moderation_status(data))
+    except Exception as exc:
+        logger.exception("render_moderation_status failed")
+        return unavailable(f"整理审核状况失败: {exc}")
+
+
+@tool
+def get_user_stats(config: RunnableConfig) -> str:
+    """查看全站用户数据报表：用户总数与角色分布、会话/消息/执行回执的总量、
+    近 7 天与近 30 天的活跃人数、以及按消息数倒序的用户明细（最多 50 行）。
+    需要管理员身份。口径是"活动"不是"注册"（系统没存注册时间）。"""
+    from agent import reports as R
+    data = _admin_get("/api/protected/stats/users", config)
+    if isinstance(data, ToolResult):
+        return data
+    if not data:
+        return empty("后台没有返回用户统计数据")
+    try:
+        return ok(R.render_user_stats(data))
+    except Exception as exc:
+        logger.exception("render_user_stats failed")
+        return unavailable(f"整理用户报表失败: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -666,6 +839,11 @@ _TOOL_REGISTRY = [
     toggle_dark_mode,
     list_devices,
     device_oled_display,
+    # 管理助手报表（20260921）：scope = admin.console，见本节头注
+    get_server_status,
+    get_service_health,
+    get_moderation_status,
+    get_user_stats,
 ]
 
 def get_all_tools():
