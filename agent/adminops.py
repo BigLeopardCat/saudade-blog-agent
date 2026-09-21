@@ -218,6 +218,35 @@ def top_cn(value) -> str:
     return "置顶" if t == 1 else ("未置顶" if t == 0 else f"未知置顶值「{value}」")
 
 
+# ── 河灯留言的人工复核（20260922 第六轮）────────────────────────────
+# 三个词表的分工必须分清（数字方向传反 = 该驳回的给放行了，是这套写面里
+# 后果最重的一类错）：
+#   · `normalize_verdict`：模型说的话 → "pass" / "reject"（认不出 → None，调用方拒绝）
+#   · `BOARD_VERDICT_APPROVED`：DB 里 approved 的目标值（1 通过 / 2 未通过；0 是**待审**）
+#   · `BOARD_VERDICT_BODY`：审核端点的**请求体**值（1 通过 / **0 驳回**）——端点内部
+#     把 0 落成 approved=2。两个数字表刻意分开写：合并成一张表就等着有人把
+#     "reject → 2" 直接发进请求体（那会让端点把 2 当"通过"放行）。
+_VERDICT_ALIASES = {
+    "pass": "pass", "approve": "pass", "approved": "pass", "ok": "pass", "yes": "pass",
+    "通过": "pass", "放行": "pass", "显示": "pass", "过": "pass", "1": "pass",
+    "reject": "reject", "rejected": "reject", "deny": "reject", "no": "reject",
+    "驳回": "reject", "不通过": "reject", "未通过": "reject", "拒绝": "reject",
+    "隐藏": "reject", "0": "reject",
+}
+BOARD_VERDICT_APPROVED = {"pass": 1, "reject": 2}
+BOARD_VERDICT_BODY = {"pass": 1, "reject": 0}
+BOARD_VERDICT_CN = {"pass": "通过", "reject": "驳回"}
+BOARD_VERDICT_FULL = {"pass": "通过（放行，所有访客都能看到）",
+                      "reject": "驳回（隐藏，只有作者自己在「我的河灯」看到未通过）"}
+
+
+def normalize_verdict(value) -> str | None:
+    """任意写法 → 'pass' | 'reject'；认不出来 → None（调用方拒绝执行）。"""
+    if value is None or isinstance(value, bool):
+        return None
+    return _VERDICT_ALIASES.get(str(value).strip().lower())
+
+
 # ── note.tags 编解码（与前端 utils/noteTags.ts 逐条同源）───────────────
 
 def parse_tag_ids(raw) -> list[int]:
@@ -707,6 +736,43 @@ def render_announcement_deleted(row) -> str:
             f"（后台已复核：公告列表里已经没有它）")
 
 
+# ── 河灯留言的人工复核：回执行措辞（20260922 第六轮）────────────────
+# 与写工具同一条纪律：**措辞里不带工具名**（带了会让 narrator 复述内部名字），
+# 且必须把"这一动作可逆/不可逆"说清——审核可以改判（驳回的能再放行），删除不行。
+def _board_ref(row) -> str:
+    """回执行里的留言指称：`#id 「正文片段」（作者）`。
+
+    正文片段是**这条留言在跨轮记忆里唯一的可认物**（下轮主人说"把刚才那条删了"
+    要能对上号），作者名字同理；时间不进回执行（列宽 300，读侧只留最近 8 行）。
+    两段都经消毒（访客可控文本）。
+    """
+    from agent.reports import sanitize_untrusted
+    body = clip(sanitize_untrusted((row or {}).get("content") or "", 30), 30)
+    who = clip(sanitize_untrusted((row or {}).get("author") or "", 16), 16)
+    tail = f"（{who} 的留言）" if who else ""
+    return f"#{row.get('talkKey')} 「{body}」{tail}"
+
+
+def render_board_audited(row, verdict: str) -> str:
+    """人工复核成功。**说清这是可改判的**（不是删除）——否则主人会以为留言没了。"""
+    cn = BOARD_VERDICT_CN.get(verdict, verdict)
+    tail = ("留言现在对所有访客可见" if verdict == "pass"
+            else "留言已隐藏，作者在「我的河灯」里看到的是未通过")
+    return f"已把留言 {_board_ref(row)} 人工复核为**{cn}**——{tail}（后台已复核读到新状态）"
+
+
+def render_board_audit_noop(row, verdict: str) -> str:
+    """现状与目标一致 ⇒ 什么都不用做。**也走 ok**："现在就是这样"是事实本身。"""
+    cn = BOARD_VERDICT_CN.get(verdict, verdict)
+    return f"留言 {_board_ref(row)} 现在就是「{cn}」状态，无需改动"
+
+
+def render_board_deleted(row) -> str:
+    """删除成功。留言是真删（没有回收站）——回执行必须说清"取不回来"。"""
+    return (f"已删除留言 {_board_ref(row)}（删除后取不回来）"
+            f"（后台已复核：留言列表里已经没有它）")
+
+
 # ── 写操作确认框（20260921）：问句与回复文本都是**确定性中文**────────────
 # 与 agent/reports.py 同一条纪律：能算的都不交给 LLM。这两段文本会直接进
 # ①确认框的问题行 ②那一轮的对话气泡，都是用户一眼看到的东西——让模型写它，
@@ -720,7 +786,30 @@ def _name_list(value) -> list[str]:
     return [str(x).strip() for x in value if str(x or "").strip()]
 
 
-def _confirm_one(spec: dict, index=None, cats=None) -> str:
+def _match_board(boards, quote) -> dict | None:
+    """在留言清单快照里按正文片段找**唯一**一条（问句渲染用）。
+
+    与 `tools.base._find_board_comment` 同一判据（原文子串 → 去空白子串兜底），
+    但**只用于渲染**：这里返回 None 只是"问句里写不出具体是哪一条"，表示"没核对上"
+    （读不到清单 / 命中 0 条 / 命中多条都算），渲染方据此如实标注、不装作核对过。
+    真正的"能不能动"由规划轮的目标预检与工具侧的复核各自独立判一次。
+    """
+    if not boards:
+        return None
+    want = str(quote or "").strip()
+    if not want:
+        return None
+    rows = list(boards.values()) if isinstance(boards, dict) else list(boards)
+    hits = [r for r in rows if want in str(r.get("content") or "")]
+    if not hits:
+        squashed = re.sub(r"\s+", "", want)
+        if squashed:
+            hits = [r for r in rows
+                    if squashed in re.sub(r"\s+", "", str(r.get("content") or ""))]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _confirm_one(spec: dict, index=None, cats=None, boards=None) -> str:
     """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
 
     `index` = 可选的标签字典（`{id: TagInfo}`，见 build_tag_index）：给得起就
@@ -838,6 +927,32 @@ def _confirm_one(spec: dict, index=None, cats=None) -> str:
             return f"修改公告「{title}」：{body}"
         # 删公告：真删、没有回收站，且访客首页立刻看不到。
         return f"删除公告「{title}」（删掉后首页立刻看不到，且取不回来）"
+    if tool in ("audit_board_comment", "delete_board_comment"):
+        # 留言按**正文片段**指认（见 tools.base._find_board_comment）。问句里必须
+        # 把**匹配到的那一条**写出来（#id + 作者 + 原文），否则主人签的是"一段话"
+        # ——而这段话在站内可能出现在好几条留言里，他无从核对要动的到底是哪一条。
+        # `boards` 给不起（读不到清单）时退回片段原文 + 明说"没核对上"，不装作核对过。
+        quote = str(a.get("quote") or "").strip()
+        shown = clip(quote, 40) or "（没有给出片段）"
+        # 状态词表只有一份，在 tools/base.py（它描述的是 DB 里 approved 那三个取值，
+        # 与工具的读回复核同源）——这里只借来渲染，不另抄一张。
+        from tools.base import BOARD_APPROVED_CN
+        hit = _match_board(boards, quote)
+        if hit is None:
+            where = "（没能核对上站内具体是哪一条：留言列表没读到，或含这段话的不止一条）"
+            head = f"「{shown}」"
+        else:
+            where = ""
+            head = f"#{hit.get('talkKey')}「{clip(str(hit.get('content') or ''), 40)}」"
+            who = clip(str(hit.get("author") or hit.get("nickname") or ""), 16)
+            if who:
+                head += f"（{who} 的留言）"
+            head += f"（现在：{BOARD_APPROVED_CN.get(hit.get('approved'), '状态未知')}）"
+        if tool == "delete_board_comment":
+            return f"删除留言 {head}{where}（删掉取不回来）"
+        v = normalize_verdict(a.get("verdict"))
+        what = BOARD_VERDICT_FULL.get(v, f"复核为「{a.get('verdict')}」")
+        return f"把留言 {head}{where} 人工复核为 {what}"
     if tool == "set_article_status":
         head = f"修改文章 {a.get('article_id')}"
         bits = []
@@ -868,7 +983,7 @@ def _confirm_one(spec: dict, index=None, cats=None) -> str:
     return f"执行 {tool}"
 
 
-def render_confirm_question(specs, index=None, cats=None) -> str:
+def render_confirm_question(specs, index=None, cats=None, boards=None) -> str:
     """确认框的问题行：**把要发生的事说全**（含颜色名与色值），再问一句。
 
     用户点的是"确定"，他有权在点之前从这句话里看出自己将同意什么——
@@ -876,17 +991,17 @@ def render_confirm_question(specs, index=None, cats=None) -> str:
     几个子标签**，这个按钮就变成了盲签。
     （`index`/`cats` 见 _confirm_one；读不到字典时退化成名字原文，不因此不弹窗。）
     """
-    acts = "；".join(_confirm_one(s, index, cats) for s in (specs or []))
+    acts = "；".join(_confirm_one(s, index, cats, boards) for s in (specs or []))
     return f"要{acts}吗？点「确定」我就去办。"
 
 
-def render_confirm_text(specs, index=None, cats=None) -> str:
+def render_confirm_text(specs, index=None, cats=None, boards=None) -> str:
     """弹窗那一轮的**对话气泡正文**（系统给的，不经 narrator）。
 
     刻意写得像"在等你的意思"而不是"已经在办了"：这一轮零执行。给一个明确
     的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
     """
-    acts = "；".join(_confirm_one(s, index, cats) for s in (specs or []))
+    acts = "；".join(_confirm_one(s, index, cats, boards) for s in (specs or []))
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
     return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"

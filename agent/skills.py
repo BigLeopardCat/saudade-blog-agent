@@ -76,6 +76,7 @@ WRITE_SKILL_NAMES = frozenset({
     "tag_update", "tag_delete",
     "category_create", "category_update", "category_delete",
     "announcement_create", "announcement_update", "announcement_delete",
+    "board_audit", "board_delete",
 })
 
 # 其中"目标是一个**名字**"的那批（标签 / 分类 / 公告），共用 `_expand_write_skill`：
@@ -707,6 +708,54 @@ SKILLS: list[Skill] = [
         ),
         roles=frozenset({ROLE_ADMIN}),
     ),
+    # ── 河灯留言的人工复核两件（20260922 第六轮）─────────────────────
+    # 留言**没有名字、没有标题**（talk 表只有正文/作者/时间），用户嘴里说的就是
+    # **那句话本身** ⇒ 目标参数 quote = 从那句留言正文里**原样抄一段**。这是
+    # "名字通道"的留言版：解析（唯一子串命中）在工具侧确定性完成，抄错/抄得不全
+    # 就零写 + 如实说明候选。**不许改写、概括、只抄半个词**——片段越碎越容易撞车。
+    Skill(
+        name="board_audit",
+        capability="人工复核一条河灯留言（通过放行 / 驳回隐藏）",
+        description=(
+            "博主（管理员）要求**人工复核（通过 / 驳回 / 放行 / 隐藏）某一条河灯留言**时使用。"
+            "参数 quote=那条留言正文里的**一段原话**（原样抄，不许改写或概括）；"
+            "verdict=pass（通过，放行给所有人看）或 reject（驳回，隐藏）。"
+            "**这是可改判的**：驳回的能再放行，所以只说「隐藏这条」时选本技能、不要用删除。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统弹确认框问主人（确认框里会写出匹配到的那条留言原文），你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+        ),
+        inputs={"quote": "那条留言正文里的一段原话（原样抄）",
+                "verdict": "pass=通过放行 / reject=驳回隐藏"},
+        plan=[("audit_board_comment", {"quote": "$quote", "verdict": "$verdict"})],
+        complete_when="audit_board_comment 返回了复核结果",
+        reply_contract=(
+            "只能按 audit_board_comment 的实际返回作答，说清复核的是哪条留言、改成了什么；"
+            "返回「站内没有含…的河灯留言」或「有 N 条都含…」时如实转述那个原因与候选、"
+            "并说明什么都没改；返回失败/未确认时如实说没复核成，"
+            "**绝不得用完成式声称已通过/已驳回**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    Skill(
+        name="board_delete",
+        capability="删除一条河灯留言（删掉取不回来）",
+        description=(
+            "博主（管理员）要求**删掉某一条河灯留言**时使用。参数 quote=那条留言正文里的"
+            "**一段原话**（原样抄，不许改写或概括）。"
+            "**删除没有回收站、删掉就取不回来**，所以只有用户**明确说要删**时才选本技能"
+            "（「把那条删了」「删掉这条留言」）；只是想让它别显示时选 board_audit（驳回可改判）。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+        ),
+        inputs={"quote": "那条留言正文里的一段原话（原样抄）"},
+        plan=[("delete_board_comment", {"quote": "$quote"})],
+        complete_when="delete_board_comment 返回了删除结果",
+        reply_contract=(
+            "只能按 delete_board_comment 的实际返回作答，说清删掉的是哪条留言；"
+            "返回「站内没有含…的河灯留言」或「有 N 条都含…」时如实转述那个原因与候选、"
+            "并说明什么都没删；返回失败/未确认时如实说没删掉，"
+            "**绝不得用完成式声称已删除**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
     Skill(
         name="chat",
         capability="闲聊、陪你说话",
@@ -925,6 +974,26 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
             args["content"] = content
             bits.append("正文改成主人给的那段")
         return [_spec("update_announcement", args)], f"修改公告「{title}」：{'、'.join(bits)}"
+
+    if name.startswith("board_"):
+        # 河灯留言（20260922 第六轮）：目标按**正文片段**指认（留言没有名字/标题）。
+        # quote 原样透传——它是模型从留言原文里抄的一段，**不许在这里改写/截断**：
+        # 片段越碎越容易撞到别的留言（工具侧命中多条会零写，不会选错）。
+        quote = _write_arg(params.get("quote"))
+        if not quote:
+            return [], (f"{name} 缺少指认用的正文片段（quote）：不调用任何工具，"
+                        "如实向主人问清说的是哪一条留言（或先去后台审核状况里把"
+                        "那几条列出来让他指认）")
+        if name == "board_delete":
+            return [_spec("delete_board_comment", {"quote": quote})], (
+                f"删除含「{A.clip(quote, 20)}」的那条河灯留言（删掉取不回来）")
+        verdict = A.normalize_verdict(params.get("verdict"))
+        if verdict is None:
+            return [], (f"verdict「{params.get('verdict')}」认不出来（只能是通过/pass "
+                        "或驳回/reject）：不调用任何工具，如实向主人问清要放行还是驳回")
+        return [_spec("audit_board_comment", {"quote": quote, "verdict": verdict})], (
+            f"把含「{A.clip(quote, 20)}」的那条河灯留言人工复核为"
+            f"{A.BOARD_VERDICT_CN[verdict]}")
 
     return [], f"{name}：未知的写技能（不调用任何工具）"
 

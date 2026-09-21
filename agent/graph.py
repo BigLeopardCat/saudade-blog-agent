@@ -161,7 +161,8 @@ _ARTICLE_WRITE_TOOLS = frozenset({"set_article_status", "set_article_tags"})
 _RCPT_META_KEYS = ("op", "article_id", "before", "after",
                    "tag_id", "tag_name", "level",
                    "category_id", "category_name", "change",
-                   "announcement_id", "announcement_title")
+                   "announcement_id", "announcement_title",
+                   "board_id", "board_author")
 
 # 目标证据的来源工具：本轮帧里**真带 note id** 的那几个（公开列表/检索/详情、
 # 后台列表、置顶列表）。刻意不含写工具自身的回显（"刚刚写过 id=12"不能成为
@@ -1929,11 +1930,12 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             plan_obj = _wrap_up_plan(False, note=(
                 "**这件事这次没有做：站内数据一个字节都没有改动**"
                 "（本轮一个工具都没有执行）。"
-                f"系统按名字查过站内的标签/分类字典，结果是：{why}。"
+                f"系统按目标查过站内的台账（标签/分类字典、公告清单、留言列表），"
+                f"结果是：{why}。"
                 "请把这条原因**如实**转告主人（连同里面的候选名单或该补的信息），"
-                "并问他接下来想怎么办（换个说法、或先把那个标签建出来）。"
+                "并问他接下来想怎么办（换个说法、或先把那个目标建出来）。"
                 "**不许**出现「看过/读过/查过/检索过/调用过工具」这类说法；"
-                "也**不许**把它讲成一篇内容层面的结论——这件事只跟标签/分类字典有关。"))
+                "也**不许**把它讲成一篇内容层面的结论——这件事只跟站内那份台账有关。"))
             # ⚠️ 这里必须是 **return**，不是 break：决策循环之后的收尾路径会读
             # `plan_obj["params"]`（只有 instantiate_plan 的产物才有这个键），
             # 而 `_wrap_up_plan` 不带它 ⇒ break 到那里必抛 KeyError('params')
@@ -2355,6 +2357,10 @@ _WRITE_NAME_FIELDS = {
     # 字典里当然没有（同 create_tag 的新名字不进这里）。
     "update_announcement": ("title", None),
     "delete_announcement": ("title", None),
+    # 河灯留言（20260922 第六轮）：按**正文片段**指认（留言没有名字/标题，
+    # 用户嘴里说的就是那句话本身）。字段名统一叫 quote，解析器同一套口径。
+    "audit_board_comment": ("quote", None),
+    "delete_board_comment": ("quote", None),
 }
 
 
@@ -2376,14 +2382,15 @@ def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
     args, args_ok = _tool_args(tools[0])
     if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
         return None
-    from tools.base import (_announcement_index, _category_index,
-                            _find_named_announcement, _find_named_category,
-                            _find_named_tag, _tag_index)
+    from tools.base import (_announcement_index, _board_index, _category_index,
+                            _find_board_comment, _find_named_announcement,
+                            _find_named_category, _find_named_tag, _tag_index)
     tkey, pkey = _WRITE_NAME_FIELDS[name]
     is_cat = name.endswith("_category")
     is_ann = name.endswith("_announcement")
-    tag_index = None if (is_cat or is_ann) else _tag_index(config)
-    cat_index = ann_index = None
+    is_board = name.endswith("_board_comment")
+    tag_index = None if (is_cat or is_ann or is_board) else _tag_index(config)
+    cat_index = ann_index = board_index = None
     if is_cat:
         cat_index = _category_index(config)
         if cat_index is None:
@@ -2392,6 +2399,10 @@ def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
         ann_index = _announcement_index(config)
         if ann_index is None:
             return None  # 同上
+    elif is_board:
+        board_index = _board_index(config)
+        if board_index is None:
+            return None  # 同上（读不到清单不是"没有这条留言"）
     elif tag_index is None:
         return None
     if tkey:
@@ -2401,6 +2412,8 @@ def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
                 hit, err = _find_named_category(want, config, index=cat_index)
             elif is_ann:
                 hit, err = _find_named_announcement(want, config, index=ann_index)
+            elif is_board:
+                hit, err = _find_board_comment(want, config, index=board_index)
             else:
                 hit, err = _find_named_tag(want, config, args.get("level"),
                                            index=tag_index)
@@ -2488,16 +2501,26 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             cat_index = _category_index(config)
         except Exception:
             cat_index = None
+    # 留言清单同理（20260922 第六轮）：留言按正文片段指认，问句要把**匹配到的
+    # 那一条**（#id + 作者 + 原文）写出来，否则主人签的是一段"可能出现在好几条
+    # 留言里"的话。
+    board_index = None
+    if any(str(s.get("tool") or "").endswith("_board_comment") for s in picks):
+        try:
+            from tools.base import _board_index
+            board_index = _board_index(config)
+        except Exception:
+            board_index = None
     return {
         "pending_confirm": {
-            "q": A.render_confirm_question(picks, tag_index, cat_index),
+            "q": A.render_confirm_question(picks, tag_index, cat_index, board_index),
             "opts": [{"label": "确定", "value": "yes", "kind": "primary"},
                      {"label": "取消", "value": "no", "kind": "default"}],
             "token": token,
             "specs": picks,
             "skill": _plan_skill(state),
         },
-        "confirm_text": A.render_confirm_text(picks, tag_index, cat_index),
+        "confirm_text": A.render_confirm_text(picks, tag_index, cat_index, board_index),
     }
 
 
