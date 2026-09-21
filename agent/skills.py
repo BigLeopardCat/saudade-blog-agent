@@ -153,11 +153,18 @@ class Skill:
     # 比 execute 里的 authz.check 更早——看不到的技能 planner 选不出来，
     # 于是连"被拒一次"都不会发生。两层互不依赖：即便这里漏了，authz 仍然拦。
     roles: frozenset[str] = frozenset()
+    # 能力清单里的一句话（20260921）：**给访客看的那份"你能做什么"由注册表渲染**，
+    # 不再手写在 agent/context.py 的 SITE_GUIDE 里——手写清单与注册表必然漂移
+    # （165525/165544 答"我不能新建标签"、165645 又真建了、165937 答"我可以"：
+    # 同一能力三轮两种答案，因为清单是静态文本、注册表是活的）。
+    # 空串 = 不列（read_article 这类系统快道专用技能不对外说）。
+    capability: str = ""
 
 
 SKILLS: list[Skill] = [
     Skill(
         name="navigate",
+        capability="跳转到站内任意板块（首页/留言板/说说/时间轴/关于我/物联网控制台…）",
         description="用户要求前往/去/回/回到/返回/打开/跳转/访问/进入/转到某个页面时使用；主动向用户推荐某个页面时也可使用。",
         inputs={
             "target": "页面别名（从导航映射表取值）：首页/留言板/说说/时间轴/关于我/登录/后台/物联网平台等",
@@ -174,6 +181,7 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="effect",
+        capability="开关页面特效（樱花/大雨/雪花）",
         description=(
             "开启或关闭博客页面的视觉效果（樱花/大雨/雪花）时使用；"
             "'把X换成Y/改成Y'（X 开着、Y 目标）＝两条 spec 同轮（X off + Y on）"
@@ -191,6 +199,7 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="darkmode",
+        capability="开关夜间模式",
         description="开启或关闭博客页面的夜间模式（暗色主题）时使用。",
         inputs={"mode": "on（开启夜间模式）/ off（关闭）"},
         plan=[("toggle_dark_mode", {"mode": "$mode"})],
@@ -202,6 +211,7 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="device_display",
+        capability="让接入的 ESP32 OLED 屏幕显示你指定的文字",
         description="用户要求在 IoT 设备（ESP32 OLED 屏幕）上显示某段文字时使用。",
         inputs={"text": "要显示的文字内容（planner 无需填写，由执行模型结合对话创作）"},
         plan=[("device_oled_display", {"text": "$text"})],
@@ -214,6 +224,7 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="device_query",
+        capability="查询有哪些 IoT 设备、哪些在线",
         description="用户询问有哪些 IoT 设备/设备在线状态时使用。",
         inputs={},
         plan=[("list_devices", {})],
@@ -222,6 +233,7 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="content_query",
+        capability="查站内内容并给真实来源：文章/说说/河灯留言/公告/站点信息",
         # 20260903 架构裁决（planner 全权，自由 ReAct 废除）：内容查询不再有
         # "执行层自由选择"——planner 每轮直接产出调用清单（PARAMS.calls，带参
         # 白名单校验），execute 节点确定性执行，多轮规划由 planner 驱动：
@@ -301,6 +313,7 @@ SKILLS: list[Skill] = [
     #   ② 审核明细里带**访客写的原文**（攻击者可控），必须只当引述、不当指令。
     Skill(
         name="ops_report",
+        capability="看服务器运行状况（CPU/内存/磁盘/负载/服务健康/告警/日志）",
         description=(
             "博主（管理员）询问服务器或机器的运行状况时使用：服务器健康度、"
             "CPU/内存/磁盘/负载、服务是否正常、有没有异常告警、日志与心跳情况。"
@@ -318,6 +331,7 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="moderation_report",
+        capability="看河灯留言的审核状况（待审、被拦下的、有没有积压）",
         description=(
             "博主（管理员）询问河灯留言/评论的审核情况时使用：有多少待审、"
             "哪些被 AI 拦下、哪些异常、有没有积压。**仅管理员可用**"
@@ -335,6 +349,7 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="user_report",
+        capability="看用户数据统计（用户数、活跃度、会话与消息量）",
         description=(
             "博主（管理员）询问用户数据/用户统计时使用：有多少用户、活跃度如何、"
             "谁在用、会话与消息量有多少。**仅管理员可用**"
@@ -357,6 +372,7 @@ SKILLS: list[Skill] = [
     # 而是因为写轮的 narrator 一旦说错，用户会以为站点真的被改了。
     Skill(
         name="admin_notes",
+        capability="看后台文章清单（草稿/私密/置顶/各自什么标签）",
         description=(
             "博主（管理员）要看**后台**文章清单时使用：有哪些文章、哪些是草稿或私密、"
             "哪篇置顶了、各自什么标签。**要把某篇文章改成公开/私密/草稿、或要给它打标签之前，"
@@ -374,11 +390,19 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="tag_create",
+        capability="新建文章标签（一级或二级，可选颜色）",
         description=(
             "博主（管理员）要求**新建一个文章标签**时使用（如「建一个叫 Python 的标签」"
             "「在架构下面加一个二级标签叫 分布式」）。参数 title=标签名，parent_id=父标签 id"
             "（要建二级标签才给；父标签 id 要从标签清单或本轮工具帧里拿到），"
             "color=用户**点了名**的颜色（中文色名如「粉色」，或站内色板色值；用户没说就不填）。"
+            "**参数别填反**（20260921 生产事故）：用户说「在 X 标签下新建 Y」时，"
+            "title 填 **Y（新标签的名字）**、parent_id 填 **X 自己的 id**——"
+            "把 X 填进 title 会在 X 下面建出一个也叫 X 的子标签（工具侧会拒，"
+            "但你更该一次填对）；父标签 id 只认标签清单里的真实数字（写引用见规则 3b，"
+            "形如 $list_tags[<该标签在返回列表里的下标>].tagKey），"
+            "**手边没有清单就先点 list_tags 取一次**，"
+            "本轮不要建（建标签要等清单到手，猜 id 会张三挂到李四名下）。"
             "写操作：**必须用户本轮明确下令才会执行**。**仅管理员可用**"
         ),
         inputs={"title": "新标签的名字",
@@ -393,12 +417,13 @@ SKILLS: list[Skill] = [
             "返回「已经存在…复用」就如实说本来就有、没有重复创建（返回里带现有颜色就一并说清，"
             "与用户点名的颜色不一致时要点明这一差别）；"
             "返回失败/未确认时如实说没建成，**不得用完成式声称已创建**。"
-            "本工具只建标签、不会挂到任何文章上——要挂标签得再用 article_tags"
+            "本工具只建标签、不会挂到任何文章上（挂标签是另一件事，用户要求时再说）"
         ),
         roles=frozenset({ROLE_ADMIN}),
     ),
     Skill(
         name="article_status",
+        capability="改某篇文章的发布状态与置顶（发布/隐藏/转草稿/置顶/取消置顶）",
         description=(
             "博主（管理员）要求**改动某篇文章的发布状态或置顶**时使用（发布/公开、隐藏/私密、"
             "转草稿、置顶、取消置顶）。参数 article_id=文章 id（**必须是本轮读到的，"
@@ -422,6 +447,7 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="article_tags",
+        capability="给某篇文章加标签或去掉标签",
         description=(
             "博主（管理员）要求**给某篇文章加标签或去掉标签**时使用。参数 article_id=文章 id"
             "（**必须是本轮读到的**），add=要加的标签名列表，remove=要去掉的标签名列表，"
@@ -444,6 +470,7 @@ SKILLS: list[Skill] = [
     ),
     Skill(
         name="chat",
+        capability="闲聊、陪你说话",
         description="闲聊、问候、情感交流、纯文字问答（不需要任何工具）时使用。",
         inputs={},
         plan=[],
@@ -699,6 +726,27 @@ _NAV_MAP_LINES = "、".join(
 )
 
 
+def visible_skills(role: str | None, include_system: bool = False) -> list[Skill]:
+    """按角色过滤的技能列表——**角色可见性判据只有这一处**（20260921）。
+
+    为什么收成一条：planner 注入（build_planner_context）与 narrator 的能力清单
+    （context.site_guide）此前各写各的可见性——两张表必然漂移，而它们回答的是
+    同一个问题（"这个人能用什么"）。165525-165937 同一能力三轮两种答案就是这么来的。
+
+    `include_system=True` 才带上 read_article（系统快道专用技能：article_id 是
+    current_url 解析出来的系统数据，planner 无参可填、narrator 也不该对外介绍）。
+    `role=None`（身份不明/单测）→ 只剩公开技能，失败取向往保守一侧倒（同 authz）。
+    """
+    out = []
+    for s in SKILLS:
+        if s.name == "read_article" and not include_system:
+            continue
+        if s.roles and role not in s.roles:
+            continue
+        out.append(s)
+    return out
+
+
 def build_planner_context(role: str | None = None) -> str:
     """planner 注入：技能表（触发条件 + 参数 + 工具序列 + 完成判定）+ 导航映射表。
 
@@ -711,11 +759,7 @@ def build_planner_context(role: str | None = None) -> str:
     失败取向往保守一侧倒，与本仓 authz 的取向一致。
     """
     lines = ["可用技能（只能从以下技能中选择一个，不得自创步骤或自由编写执行计划）："]
-    for s in SKILLS:
-        if s.name == "read_article":
-            continue
-        if s.roles and role not in s.roles:
-            continue
+    for s in visible_skills(role):
         lines.append(f"- {s.name}：{s.description}")
         if s.inputs:
             lines.append(f"  参数：{json.dumps(s.inputs, ensure_ascii=False)}")
