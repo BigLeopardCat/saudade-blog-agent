@@ -22,6 +22,13 @@
   .venv/bin/python eval/probe_admin_report.py --uid <管理员的 uid> [--visitor-uid N]
   APP_ADMIN_UID=<uid> .venv/bin/python eval/probe_admin_report.py
 退出码 = 不符预期的检查项数（0 = 全绿）。agent 必须已在跑（127.0.0.1:8010）。
+
+⚠️ admin 那半必须给**库里真实是 admin 的 uid**：给个不存在的 uid，断言里的 role 仍是 admin
+（agent 不查库），但工具签的 JWT 到了 Rust 会被 `auth_guard` 按库里的角色挡回 403 —— 那条
+路径是预期行为，只是探针从外部区分不了它与"planner 压根没规划"，所以会照常报 FAIL（"未验到"
+不等于"验过"）。这一轮本身也是一次有价值的取证：403 时 agent 必须**如实说无权**，不许把
+"没权限"叙述成"没有待审留言"（20260921 实测：三个问题都收了「只有博主（管理员）登录之后
+才能查看」，回执为空、零编造——真正的断言在 golden 的 ops_report_denied_visitor 上）。
 """
 import argparse
 import base64
@@ -125,13 +132,21 @@ def main() -> int:
             tools = {r.get("tool") for r in (d.get("executions") or [])}
             text = d.get("reply") or ""
             got = tools & want_tools
-            ok = got == want_tools and (_METRIC_RE.search(text) or _UNIT_RE.search(text))
+            printed = bool(_METRIC_RE.search(text) or _UNIT_RE.search(text))
+            ok = got == want_tools and printed
             print(f"[{'PASS' if ok else 'FAIL'}] 管理员 · {tag}  {d['_secs']}s")
             print(f"        工具回执：{sorted(tools) or '（无）'}（期望含 {sorted(want_tools)}）")
             print(f"        回复：{text[:160]}")
             if got != want_tools:
-                fails.append(f"{tag}: 回执缺 {sorted(want_tools - got)}（拿到 {sorted(tools)}）")
-            if not (_METRIC_RE.search(text) or _UNIT_RE.search(text)):
+                # 回执为空有两种可能，探针**从外部区分不了**（narrator 不会照抄工具帧文案）：
+                #   a) 这个 uid 在库里不是 admin → Rust 403 → unavailable → 预期内的正确行为；
+                #   b) planner 压根没规划该技能 → 真异常。
+                # 所以一律记 FAIL（"未验到"不等于"验过"），只在提示里说清怎么区分：
+                # 换真 admin uid 重跑仍 FAIL = (b)；那时再去翻 agent.log 的 [execute] 行。
+                fails.append(f"{tag}: 回执缺 {sorted(want_tools - got)}（拿到 {sorted(tools)}）"
+                             f"——若该 uid 在库里不是 admin，403 属预期（换真 admin uid 重跑；"
+                             f"仍缺则查 agent.log 的 [execute] 行，可能是 planner 未规划）")
+            if not printed:
                 fails.append(f"{tag}: 回复里没有任何报表数字（可能未转述工具返回）")
 
     # ② 访客（role=user 的合法断言）：同样三问，必须零工具 + 不编数字
