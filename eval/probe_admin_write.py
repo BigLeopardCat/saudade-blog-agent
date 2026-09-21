@@ -28,7 +28,8 @@
   * ⑫ 改名 + 改色（命令式 ⇒ 快道，不弹窗）→ 库真值名字与颜色都对；
   * ⑬ 换父级往返 + 一级↔二级互转 + **真标签换父级往返**（只有带文章的标签能证明
     "同层移动沿用旧 id ⇒ 文章引用一个字节都不动"）；靶子是一次性标签，跑完删掉；
-  * ⑭ 分类增 → 改 → 删（一次性分类，零文章，不碰真实数据）；
+  * ⑭ 分类增 → 改 → 删（一次性分类，零文章，不碰真实数据；措辞没命中命令快道时
+    **点确定把弹窗那条路走完**——快道词表是 fail-closed 的，弹窗不是缺陷）；
   * ⑮ 解不出的目标（查无此名 / 解不出的引用）→ **零回执 + 零确认帧 + 绝不完成式声称**。
 
 **所有写轮都必须干净收尾**（`clean_end`）：发过终止帧且流里没有错误帧。20260921 22:37
@@ -1015,6 +1016,36 @@ def step11_tag_admin(rep: Report, uid: int, role: str, allow_delete: bool) -> No
             print(f"  [FAIL] 删除失败：{e}")
 
 
+def _drive_or_click(rep: Report, uid: int, role: str, conv_id: int,
+                    msg: str, tag: str) -> dict:
+    """发一句写指令；**快道没命中就点确定**（走弹窗那条路），返回最终那一轮。
+
+    为什么要容忍两条路（20260922 实测）：同意闸的快道判据是**命令词表 + 命令骨架 +
+    目标**三关，而词表是按事故一条条补的——「改名叫」不在表里（「改名**为**」「改成」
+    在），于是「把分类「X」改名叫「Y」」落到弹窗，探针却按"应当直接执行"判 FAIL。
+    弹窗那条路是**更安全**的取向（fail-closed），不是缺陷；腿⑫/⑬ 是**刻意**要验快道
+    （docstring 写明"命令式 ⇒ 快道，不弹窗"），所以只有本腿改成"两条路都算过"：
+    真弹了就点确定把它走完，同时记一条 WARN 把措辞差异摊开（是否给快道补词由人拍板）。
+    """
+    d = stream_rust(msg, uid, role, conv_id)
+    got = confirm_frames(d["frames"])
+    if not got:
+        clean_end(rep, tag, d)
+        return d
+    payload, _raw = got[0]
+    q = (payload or {}).get("q") or ""
+    tok = (payload or {}).get("token") or ""
+    print(f"  [WARN] 快道没命中、走了弹窗：{(d.get('reply') or '')[:80]}")
+    rep.warn(f"{tag}：这句措辞没走命令快道（弹了确认框），已点确定走完——"
+             f"若认为该直接执行，是同意闸词表缺词（不改判据，只记差异）")
+    if not (q and tok):
+        rep.fails.append(f"{tag}: 确认帧缺 q/token，点不了确定")
+        return d
+    d2 = stream_rust(f"确认执行：{q}", uid, role, conv_id, confirm_token=tok)
+    clean_end(rep, f"{tag}（点确定）", d2)
+    return d2
+
+
 def _cat_by_token(uid: int, role: str, token: str) -> list:
     """按**时间戳 token** 认自己建的那个分类（不按整名匹配）。
 
@@ -1058,8 +1089,8 @@ def step14_category(rep: Report, uid: int, role: str) -> None:
             # planner 转写名字时掉字（不是"建没建"的问题）——如实标注，不当 FAIL
             print(f"  [WARN] 建出来的名字与说的不一致：说「{name}」，库里是「{cur}」")
             rep.warn(f"⑭ 建分类：说「{name}」、库里是「{cur}」（planner 转写名字掉字，功能本身正常）")
-        d2 = stream_rust(f"把分类「{cur}」改名叫「{name2}」", uid, role, conv_id)
-        clean_end(rep, "⑭ 改分类轮", d2)
+        d2 = _drive_or_click(rep, uid, role, conv_id,
+                             f"把分类「{cur}」改名叫「{name2}」", "⑭ 改分类轮")
         rows2 = backend_get("/api/category", uid, role) or []
         ok2 = any(c.get("categoryTitle") == name2 for c in rows2) and \
             not any(c.get("categoryTitle") == cur for c in rows2)
@@ -1067,14 +1098,17 @@ def step14_category(rep: Report, uid: int, role: str) -> None:
               f"{'只剩' if ok2 else '对不上'}「{name2}」")
         if not ok2:
             rep.fails.append(f"⑭ 改分类：库真值里新名字「{name2}」缺席或旧名字「{cur}」还在")
-        d3 = stream_rust(f"删掉分类「{name2}」", uid, role, conv_id)
-        clean_end(rep, "⑭ 删分类轮", d3)
-        rows3 = _cat_by_token(uid, role, token)
-        ok3 = not any(c.get("categoryTitle") == name2 for c in rows3)
+        d3 = _drive_or_click(rep, uid, role, conv_id, f"删掉分类「{name2}」", "⑭ 删分类轮")
+        left = _cat_by_token(uid, role, token)
+        # 判据按 token 认人（不按 name2 匹配）：20260922 实测过一次**假 PASS**——
+        # 改名那轮弹了窗没执行 ⇒ name2 从未存在 ⇒ "name2 不在表里"自然成立，
+        # 而真行还挂在表里（靠 finally 的兜底清理才没留下残留）。
+        ok3 = not left
         print(f"  [{'PASS' if ok3 else 'FAIL'}] 库真值：删除后分类表里"
-              f"{'已没有' if ok3 else '仍有'}「{name2}」")
+              f"{'已没有本次建的分类' if ok3 else '仍有 ' + str([c.get('categoryTitle') for c in left])}")
         if not ok3:
-            rep.fails.append(f"⑭ 删分类：库真值里「{name2}」还在")
+            rep.fails.append(f"⑭ 删分类：按 token {token} 仍能查到 "
+                             f"{[c.get('categoryTitle') for c in left]}")
     finally:
         _drop_conv(rep, uid, role, conv_id, "⑭")
         # 中途炸在最坏的位置时兜一手：按 token 认人直接删掉（token 是本轮生成的，认不错）
