@@ -32,6 +32,13 @@
     **点确定把弹窗那条路走完**——快道词表是 fail-closed 的，弹窗不是缺陷）；
   * ⑮ 解不出的目标（查无此名 / 解不出的引用）→ **零回执 + 零确认帧 + 绝不完成式声称**。
 
+⑯ 是 20260922 第五轮加的（站内公告代发/改/删）：靶子是一次性公告，跑完必删
+（公告对全体访客可见，是所有腿里残留最贵的一条，`finally` 按 token 兜底清理并复读确认）。
+  * 命令式措辞（"发一条公告…"）**也必须弹确认框**——公告三件在 `authz._ALWAYS_CONFIRM_TOOLS`
+    里被结构性地关掉了"同轮命令即确认"的捷径（用户点名要求：内容要弹窗等管理员确认）；
+  * 问句里必须有**正文预览**（只写标题等于让主人盲签一条对全体访客说的话）；
+  * 改**只改正文**：PUT 的 title/content 都必填，标题没原样带上就会把公告改成没有标题。
+
 **所有写轮都必须干净收尾**（`clean_end`）：发过终止帧且流里没有错误帧。20260921 22:37
 的线上故障形态就是"数据真改了、回执也落了库，前端只看到一行报错"（路由表缺一个去向，
 langgraph 在节点执行完之后才抛 KeyError）——腿⑧ 当时只核库真值，所以写了就判 PASS，
@@ -870,8 +877,21 @@ def step11_tag_admin(rep: Report, uid: int, role: str, allow_delete: bool) -> No
         if payload is None:
             return
         q = payload.get("q") or ""
-        rep.check("挂在「编程」下" in q,
+        ok_name = name in q
+        ok_parent = "挂在「编程」下" in q
+        rep.check(ok_parent,
                   f"⑪ 问句没把父标签名字写出来（问句：{q!r}）——用户点确定前看不出它挂在哪")
+        rep.check(ok_name,
+                  f"⑪ 问句里的标签名不是主人说的那个（问句：{q!r}，主人说的是 {name!r}）")
+        if not (ok_name and ok_parent):
+            # **误靶就不点确定**（20260922 实证）：planner 偶尔把技能描述里的示例名
+            # 当成取值填进来（弹窗问"要建「Python」吗"）——此时令牌要执行的是一件
+            # 主人从没说过的事。探针照点下去只会白造一次靶外写入（那一轮靠工具侧
+            # 拒重复名拦住了，但拦不拦得住取决于站内恰好有没有同名标签）。判据记
+            # FAIL 并停在这里，写入留给主人点。
+            print("  [SKIP] 问句与主人要的不是一回事 → 不点确定（避免靶外写入）")
+            rep.warn("⑪ 误靶：本轮没有点确定，库真值未验（planner 取值不实）")
+            return
         d = stream_rust(f"确认执行：{q}", uid, role, conv_id, confirm_token=payload["token"])
         clean_end(rep, "⑪ 点确定（真写轮）", d)
         got = _one_tag(uid, role, "2", name)
@@ -1051,6 +1071,129 @@ def _drive_or_click(rep: Report, uid: int, role: str, conv_id: int,
     d2 = stream_rust(f"确认执行：{q}", uid, role, conv_id, confirm_token=tok)
     clean_end(rep, f"{tag}（点确定）", d2)
     return d2
+
+
+def _ann_by_token(uid: int, role: str, token: str) -> list:
+    """按**时间戳 token** 认本次发的那条公告（不按整名匹配，同 _cat_by_token）。
+
+    公告是对**全体访客可见**的东西，所以这一腿的清理比标签/分类更要紧：认人必须
+    只靠探针自己生成的 token（planner 转写标题掉字/剥下划线时，按整名匹配会认不出，
+    残留就留在首页上了）。
+    """
+    return [a for a in (backend_get("/api/public/announcements", uid, role) or [])
+            if token in str(a.get("title") or "")]
+
+
+def _ann_confirm(rep: Report, uid: int, role: str, conv_id: int, msg: str,
+                 tag: str, want_skill: str) -> tuple[dict, dict] | None:
+    """发一句公告写指令 → 断言**无论措辞多像命令都弹确认框** → 点确定 → 返回两轮。
+
+    这条断言是用户 20260922 点名要求的落点：「可以代发公告，但是内容也需要**弹窗
+    等待管理员确认**」。别的后台写有"同轮命令即确认"的捷径，公告三件被
+    `authz._ALWAYS_CONFIRM_TOOLS` 结构性地关掉了——离线锁在 test_authz，
+    这里验**对外形态**（真帧流里确实每次都出现确认帧，命令式措辞也不例外）。
+    """
+    d1 = stream_rust(msg, uid, role, conv_id)
+    got = confirm_frames(d1["frames"])
+    clean_end(rep, f"{tag} 指令轮", d1)
+    print(f"  [{'PASS' if got else 'FAIL'}] {tag}：命令式措辞也弹确认框"
+          f"（确认帧 {len(got)} 个）")
+    print(f"        回复：{(d1.get('reply') or '')[:160]}")
+    if not got:
+        rep.fails.append(f"{tag}: 没弹确认框（公告内容必须经主人确认；"
+                         f"帧：{[f[:24] for f in d1['frames']]}）")
+        return None
+    payload, raw = got[0]
+    if not payload:
+        rep.fails.append(f"{tag} 确认帧不是合法 JSON：{raw[:80]}")
+        return None
+    load = _token_payload(payload.get("token") or "")
+    rep.check(load.get("skill") == want_skill,
+              f"{tag} 令牌载荷里的技能名不是 {want_skill}：{load.get('skill')!r}")
+    d2 = stream_rust(f"确认执行：{payload.get('q') or ''}", uid, role, conv_id,
+                     confirm_token=payload.get("token") or "")
+    clean_end(rep, f"{tag} 点确定（真写轮）", d2)
+    return payload, d2
+
+
+def step16_announcement(rep: Report, uid: int, role: str) -> None:
+    """⑯ 站内公告代发/改/删（--allow-write）：建 → 改正文 → 删，全程读库真值。
+
+    靶子 = **一次性公告**（标题里带探针 token，跑完必删）：公告在首页对全体访客可见，
+    所以它是所有探针腿里"残留最贵"的一个——`finally` 里按 token 兜底删除，且删除后
+    再读一次确认真的没了（DELETE 对不存在的 id 会静默 no-op，只看 HTTP 会假 PASS）。
+    """
+    token = time.strftime("%m%d%H%M%S")
+    name = f"探针公告{token}"
+    body1 = "探针内容：今晚 23 点维护（本条由探针自动发出，稍后自动删除）"
+    body2 = "探针内容：维护改到明晚 23 点（探针自动更新）"
+    print(f"\n⑯ 公告代发/改/删（--allow-write）：{name} → 改正文 → 删除")
+    conv_id = _probe_conv(rep, uid, role, "⑯")
+    if conv_id is None:
+        return
+    try:
+        # ① 代发：**命令式措辞**（"发一条公告…"）也必须弹窗（用户点名要求）
+        first = _ann_confirm(rep, uid, role, conv_id,
+                             f"发一条公告，标题是「{name}」，内容写：{body1}",
+                             "⑯ 代发", "announcement_create")
+        if first is None:
+            return
+        q = (first[0].get("q") or "")
+        rep.check("正文" in q and "维护" in q,
+                  f"⑯ 问句里没有正文预览（主人等于盲签一条对全体访客可见的公告）：{q!r}")
+        hit = _ann_by_token(uid, role, token)
+        print(f"  [{'PASS' if len(hit) == 1 else 'FAIL'}] 库真值：公告表里"
+              f"{'有' if hit else '没有'}本次发的公告（{len(hit)} 条）")
+        if len(hit) != 1:
+            rep.fails.append(f"⑯ 代发：按 token {token} 在公告表里命中 {len(hit)} 条（期望 1）")
+            return
+        aid = int(hit[0].get("id"))
+        if body1 not in str(hit[0].get("content") or ""):
+            rep.fails.append(f"⑯ 代发：库里的正文与主人给的原文不一致"
+                             f"（{str(hit[0].get('content'))[:60]!r}）")
+
+        # ② 改正文（**不改标题**）：改端点 title/content 都必填，只改正文时若标题
+        #    没带过去，这条公告就会变成没有标题——这是本腿最该盯的一处
+        second = _ann_confirm(rep, uid, role, conv_id,
+                              f"把公告「{name}」的内容改成：{body2}",
+                              "⑯ 改正文", "announcement_update")
+        if second is None:
+            return
+        row = next((a for a in (backend_get("/api/public/announcements", uid, role) or [])
+                    if int(a.get("id") or 0) == aid), None)
+        ok2 = (row is not None and body2 in str(row.get("content") or "")
+               and str(row.get("title") or "").strip() == name)
+        print(f"  [{'PASS' if ok2 else 'FAIL'}] 库真值：正文已更新、标题"
+              f"{'原样保留' if ok2 else '丢了或对不上'}（id={aid}，"
+              f"title={str((row or {}).get('title'))!r}）")
+        if not ok2:
+            rep.fails.append(f"⑯ 改正文：库里 id={aid} 的标题/正文不符（PUT 两字段必填那条）")
+
+        # ③ 删除：读回确认真的没了（DELETE 对不存在的 id 静默 no-op）
+        third = _ann_confirm(rep, uid, role, conv_id, f"把公告「{name}」删掉",
+                             "⑯ 删除", "announcement_delete")
+        left = _ann_by_token(uid, role, token)
+        print(f"  [{'PASS' if not left else 'FAIL'}] 库真值：删除后公告表里"
+              f"{'已没有本次发的公告' if not left else '仍有 ' + str([a.get('title') for a in left])}")
+        if left:
+            rep.fails.append(f"⑯ 删除：按 token {token} 仍能查到 "
+                             f"{[a.get('title') for a in left]}")
+        if third is None:
+            return
+    finally:
+        _drop_conv(rep, uid, role, conv_id, "⑯")
+        # 兜底：公告对全体访客可见，任何中途失败都必须在这里清干净
+        try:
+            for a in _ann_by_token(uid, role, token):
+                k = int(a.get("id"))
+                backend_send("DELETE", "/api/protected/announcements", [k], uid, role)
+                print(f"        兜底：已删掉残留公告 id={k}")
+            left = _ann_by_token(uid, role, token)
+            if left:
+                rep.warns.append(f"⑯ 兜底清理后仍有残留公告："
+                                 f"{[a.get('title') for a in left]}——请手工清理")
+        except Exception as e:  # noqa: BLE001
+            rep.warns.append(f"⑯ 兜底清理公告失败（请手工清理 token={token} 的公告）：{e}")
 
 
 def _cat_by_token(uid: int, role: str, token: str) -> list:
@@ -1296,6 +1439,8 @@ def main() -> int:
                 # 与 ⑧⑩ 同一套"读到连接关闭 + 干净收尾"断言；⑮ 不写真数据。
                 step11_tag_admin(rep, args.uid, "admin", args.allow_tag_delete)
                 step14_category(rep, args.uid, "admin")
+                # ⑯ 公告三件（20260922 第五轮）：靶子是一次性公告，跑完必删
+                step16_announcement(rep, args.uid, "admin")
 
     print(f"\n=== {'全部符合预期' if not rep.fails else f'{len(rep.fails)} 项不符'}"
           f"｜警告 {len(rep.warns)} 条｜{round(time.time() - t0, 1)}s ===")
