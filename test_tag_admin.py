@@ -531,6 +531,9 @@ from agent.graph import _RCPT_META_KEYS  # noqa: E402
 check("白名单里已有 change / category_name / category_id（新写工具的键不许被静默过滤）",
       {"change", "category_name", "category_id"} <= set(_RCPT_META_KEYS),
       str(_RCPT_META_KEYS))
+check("白名单里已有 announcement_title / announcement_id（20260922 第五轮公告三件）",
+      {"announcement_title", "announcement_id"} <= set(_RCPT_META_KEYS),
+      str(_RCPT_META_KEYS))
 
 
 # ── ⑧ 技能名 → 工具名：**展开出来的名字必须真的存在** ────────────────────
@@ -551,6 +554,9 @@ _MIN_PARAMS = {
     "category_create": {"title": "新分类"},
     "category_update": {"name": "旧分类", "new_title": "新分类"},
     "category_delete": {"name": "旧分类"},
+    "announcement_create": {"title": "维护通知", "content": "今晚 23 点维护"},
+    "announcement_update": {"title": "维护通知", "new_title": "维护改期"},
+    "announcement_delete": {"title": "维护通知"},
     "article_status": {"article_id": 12, "status": "private"},
     "article_tags": {"article_id": 12, "add": ["摄影"]},
 }
@@ -558,6 +564,9 @@ _EXPECT_TOOL = {
     "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
     "category_create": "create_category", "category_update": "update_category",
     "category_delete": "delete_category",
+    "announcement_create": "create_announcement",
+    "announcement_update": "update_announcement",
+    "announcement_delete": "delete_announcement",
     "article_status": "set_article_status", "article_tags": "set_article_tags",
 }
 check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",
@@ -639,6 +648,170 @@ with patch(_tag_index=lambda c: IDX):
                          'delete_tag({"name": "编程"})']}, cfg()) is None)
     check("零工具计划 → 不碰",
           _write_target_refusal({"tools": []}, cfg()) is None)
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑩ 站内公告三件（20260922 第五轮）：代发 / 改 / 删
+#    公告与标签/分类的差别不在写法，在**三件公告独有的事实**——
+#      ① 没有唯一约束、没有草稿态 ⇒ 目标只能按标题认，重名一律拒绝；
+#      ② 新建端点**不回 id**（返回字符串 "Created"）⇒ 复核只能靠"id 差集 + 标题正文对上"；
+#      ③ 改端点 title/content **都必填** ⇒ 只改正文时必须把现有标题原样带上。
+#    这三条各自都有一条"看起来成功、其实没做成"的错法，故逐条锁住。
+print("\n⑩ 公告：标题即身份、创建按 id 差集复核、PUT 两字段必填（三件独有的坑）")
+
+ANN = [{"id": 4, "title": "维护通知", "content": "今晚 23 点维护",
+        "createdAt": "2026-09-20 10:00:00"},
+       {"id": 5, "title": "欢迎", "content": "欢迎来到本站",
+        "createdAt": "2026-09-01 09:00:00"},
+       # 同名公告：站内**真会**出现（公告标题没有唯一约束）⇒ 必须追问，不许挑一条
+       {"id": 6, "title": "维护通知", "content": "上一次的维护通知",
+        "createdAt": "2026-08-01 09:00:00"}]
+
+
+def aidx(*extra):
+    return {r["id"]: dict(r) for r in ANN + list(extra)}
+
+
+with patch(_announcement_index=lambda c: aidx(), _admin_request=_Req("Created")):
+    r = base.create_announcement.invoke({"title": "新公告", "content": "正文"},
+                                        config=None)
+    check("创建后读回清单里没有这条新公告 → unavailable（端点不回 id，认不出就不能说发成功）",
+          r.kind == "unavailable" and "未确认生效" in r, f"{r.kind}: {r}")
+
+post = _Req("Created")
+with patch(_announcement_index=_Seq(aidx(), aidx({"id": 7, "title": "新公告",
+                                                  "content": "正文"})),
+           _admin_request=post):
+    r = base.create_announcement.invoke({"title": "新公告", "content": "正文"}, config=None)
+    check("创建成功：POST /api/protected/announcements，载荷只有 title+content",
+          post.calls == [("POST", "/api/protected/announcements",
+                          {"title": "新公告", "content": "正文"})], str(post.calls))
+    check("  复核认出新增那条（id 差集 + 标题正文都对上）→ ok，且带回执键",
+          r.kind == "ok" and r.meta.get("op") == "announcement_create"
+          and r.meta.get("announcement_id") == 7
+          and r.meta.get("announcement_title") == "新公告", f"{r.kind}: {r.meta}")
+
+# 差集里认出的那条**标题对不上**（别人刚发的同名公告）⇒ 不能拿它充当自己的成果
+post = _Req("Created")
+with patch(_announcement_index=_Seq(aidx(), aidx({"id": 8, "title": "别人的公告",
+                                                  "content": "正文"})),
+           _admin_request=post):
+    r = base.create_announcement.invoke({"title": "新公告", "content": "正文"}, config=None)
+    check("差集里只有标题对不上的一条 → unavailable（不许把别人的公告认成自己发的）",
+          r.kind == "unavailable" and "未确认生效" in r, f"{r.kind}: {r}")
+
+with patch(_announcement_index=lambda c: aidx(), _admin_request=_Req("Created")):
+    for kw, why in (({"title": "  ", "content": "正文"}, "标题空"),
+                    ({"title": "新公告", "content": "   "}, "正文空"),
+                    ({"title": "新公告", "content": "正" * 2001}, "正文超长")):
+        r = base.create_announcement.invoke(kw, config=None)
+        check(f"创建前拦下（{why}）→ unavailable 且零请求",
+              r.kind == "unavailable", f"{r.kind}: {r}")
+
+print("  · 改：目标按标题解析（四态与标签同源），两字段必填那条走「原样带上」")
+put = _Req("Updated")
+# 只改正文：现有标题必须原样发过去（Rust 的 UpsertAnnouncement 两个字段都必填，
+# 发空标题 = 把公告改成没名字）。用标题唯一的那条（维护通知在样本里是重名形态，
+# 它专门留给下面那条歧义判据）。
+with patch(_announcement_index=_Seq(aidx(), aidx({"id": 5, "title": "欢迎",
+                                                  "content": "改过的欢迎词"})),
+           _admin_request=put):
+    r = base.update_announcement.invoke({"title": "欢迎", "content": "改过的欢迎词"},
+                                        config=None)
+    check("只改正文 → PUT /api/protected/announcements/5，**标题原样带上**",
+          put.calls == [("PUT", "/api/protected/announcements/5",
+                         {"title": "欢迎", "content": "改过的欢迎词"})], str(put.calls))
+    check("  复核读到新值 → ok，回执只说标题怎么变、不复述正文",
+          r.kind == "ok" and "正文已更新" in r and "改过的欢迎词" not in r, f"{r.kind}: {r}")
+    check("  meta 带 announcement_id/title/change（Rust render_exec_row 读的键）",
+          r.meta.get("op") == "announcement_update"
+          and r.meta.get("announcement_id") == 5 and r.meta.get("change") == "正文已更新",
+          str(r.meta))
+
+put = _Req("Updated")
+with patch(_announcement_index=_Seq(aidx(), aidx({"id": 5, "title": "欢迎词",
+                                                  "content": "欢迎来到本站"})),
+           _admin_request=put):
+    r = base.update_announcement.invoke({"title": "欢迎", "new_title": "欢迎词"}, config=None)
+    check("改名：change 写「原名」而不是重复新名（回执行的主语已经是新名了）",
+          r.kind == "ok" and r.meta.get("change") == "改名（原「欢迎」）"
+          and r.meta.get("announcement_title") == "欢迎词"
+          and "标题「欢迎」→「欢迎词」" in r, f"{r.kind}: {r.meta} / {r}")
+
+put = _Req("Updated")
+with patch(_announcement_index=lambda c: aidx(), _admin_request=put):
+    r = base.update_announcement.invoke({"title": "欢迎"}, config=None)
+    check("没说要改什么（既无 new_title 也无 content）→ unavailable 且零请求",
+          r.kind == "unavailable" and put.calls == [], f"{r.kind}: {r}")
+    r = base.update_announcement.invoke({"title": "不存在的公告", "content": "x"}, config=None)
+    check("标题查无此公告 → unavailable、零请求，且措辞与标签/分类同一套",
+          r.kind == "unavailable" and put.calls == []
+          and "站内没有标题是「不存在的公告」的公告" in r, f"{r.kind}: {r}")
+    r = base.update_announcement.invoke({"title": "欢迎", "content": "欢迎来到本站"},
+                                        config=None)
+    check("要改的内容与现状一字不差 → ok + 无需改动（这不是失败，是事实）",
+          r.kind == "ok" and "无需改动" in r and put.calls == [], f"{r.kind}: {r}")
+    r = base.update_announcement.invoke({"title": "维护通知", "content": "x"}, config=None)
+    check("同名两条 → 追问、零请求（改错一条就是改了别人的公告）",
+          r.kind == "unavailable" and put.calls == []
+          and "站内有 2 条标题都叫「维护通知」" in r, f"{r.kind}: {r}")
+
+with patch(_announcement_index=lambda c: None, _admin_request=_Req("Updated")):
+    r = base.update_announcement.invoke({"title": "欢迎", "content": "x"}, config=None)
+    check("读不到公告清单 → unavailable、**零请求**（读不到 ≠ 没有，绝不动手）",
+          r.kind == "unavailable" and "读不到现有" in r, f"{r.kind}: {r}")
+
+print("  · 删：真删、删不回，复核必须确认那条真的没了")
+dl = _Req("1")
+with patch(_announcement_index=_Seq(aidx(), {k: v for k, v in aidx().items() if k != 5}),
+           _admin_request=dl):
+    r = base.delete_announcement.invoke({"title": "欢迎"}, config=None)
+    check("删成功：DELETE 载荷是**裸 id 列表**（与删分类同形态）",
+          dl.calls == [("DELETE", "/api/protected/announcements", [5])], str(dl.calls))
+    check("  复核确认 id 已不在清单里 → ok，回执写清「取不回来」",
+          r.kind == "ok" and "取不回来" in r
+          and r.meta.get("op") == "announcement_delete"
+          and r.meta.get("announcement_id") == 5, f"{r.kind}: {r}")
+
+dl = _Req("1")
+with patch(_announcement_index=_Seq(aidx(), aidx()), _admin_request=dl):
+    r = base.delete_announcement.invoke({"title": "欢迎"}, config=None)
+    check("删完读回还在 → unavailable（DELETE 对不存在的 id 会**静默 no-op**，不能只看 HTTP）",
+          r.kind == "unavailable" and "还在" in r, f"{r.kind}: {r}")
+
+dl = _Req("1")
+with patch(_announcement_index=lambda c: aidx(), _admin_request=dl):
+    r = base.delete_announcement.invoke({"title": "维护通知"}, config=None)
+    check("同名公告两条 → 追问、零请求（挑错一条就是删了别人的公告）",
+          r.kind == "unavailable" and dl.calls == []
+          and "站内有 2 条标题都叫「维护通知」" in r, f"{r.kind}: {r}")
+
+print("  · 弹窗问句：正文预览必须在里面（主人是扫一眼就点确定的）")
+_q = A.render_confirm_question([{"tool": "create_announcement",
+                                "args": {"title": "维护通知",
+                                         "content": "今晚 23 点开始维护，预计一小时"}}])
+check("新建公告的问句含标题**和正文预览**（只写标题 = 让主人盲签一份没看过的公告）",
+      "发布公告「维护通知」" in _q and "今晚 23 点开始维护" in _q, _q)
+_q = A.render_confirm_question([{"tool": "update_announcement",
+                                "args": {"title": "维护通知", "new_title": "维护改期"}}])
+check("改公告的问句写清改的是哪条、改成什么",
+      "修改公告「维护通知」" in _q and "标题改为「维护改期」" in _q, _q)
+_q = A.render_confirm_question([{"tool": "delete_announcement",
+                                "args": {"title": "维护通知"}}])
+check("删公告的问句写清「取不回来」", "删除公告「维护通知」" in _q and "取不回来" in _q, _q)
+
+print("  · 过程行（server._tool_action_text）有中文动作词，且**不打印正文**")
+import server as _srv  # noqa: E402
+_p = _srv._tool_action_text("create_announcement",
+                            {"title": "维护通知", "content": "今晚 23 点维护"})
+check("新建公告的过程行 = 发布公告「维护通知」，正文不进过程行",
+      _p == "发布公告「维护通知」", _p)
+check("改/删的过程行也只报标题",
+      _srv._tool_action_text("update_announcement",
+                             {"title": "维护通知", "new_title": "维护改期"})
+      == "修改公告「维护通知」：改名为「维护改期」"
+      and _srv._tool_action_text("delete_announcement", {"title": "维护通知"})
+      == "删除公告「维护通知」")
 
 
 print("\n" + ("=== 全部通过 ===" if not FAILS else f"=== {len(FAILS)} 项失败 ==="))

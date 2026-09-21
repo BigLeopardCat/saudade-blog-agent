@@ -716,6 +716,60 @@ def _tool_action_text(name: str, args: dict | None) -> str:
         if aid.startswith("$"):
             return f"读取文章（{_ref_phrase(aid)}）"
         return f"读取文章 {aid[:12]}" if aid else "读取文章"
+    if name in ("update_tag", "delete_tag"):
+        # 第四轮（20260921）漏了这一处：四个写工具的过程行原样打出 `执行 update_tag`
+        # 这种内部工具名（主人看到的是英文工具名，而不是"要做什么"）。20260922 补上。
+        title = _leaf(a.get("name"))
+        if not title:
+            return "修改标签" if name == "update_tag" else "删除标签"
+        if name == "delete_tag":
+            return f"删除标签「{title}」"
+        acts = []
+        if str(a.get("new_title") or "").strip():
+            acts.append(f"改名为「{_leaf(a.get('new_title'))}」")
+        hexval = A.match_tag_color(a.get("color")) if a.get("color") else None
+        if hexval:
+            acts.append(f"颜色→{A.describe_color(hexval)}")
+        if str(a.get("parent_tag") or "").strip():
+            acts.append(f"移到「{_leaf(a.get('parent_tag'))}」下面")
+        elif str(a.get("to_level") or "").strip() == "one":
+            acts.append("改成一级标签")
+        elif str(a.get("to_level") or "").strip() == "two":
+            acts.append("改成二级标签")
+        head = f"修改标签「{title}」"
+        return f"{head}：{'、'.join(acts)}" if acts else head
+    if name in ("create_category", "update_category", "delete_category"):
+        title = _leaf(a.get("new_title") or a.get("title") or a.get("name"))
+        if name == "create_category":
+            return f"新建分类「{title}」" if title else "新建分类"
+        if name == "delete_category":
+            return f"删除分类「{title}」" if title else "删除分类"
+        if not title:
+            return "修改分类"
+        acts = []
+        if str(a.get("new_title") or "").strip():
+            acts.append(f"改名为「{_leaf(a.get('new_title'))}」")
+        for key, cn in (("path_name", "路径"), ("introduce", "简介"),
+                        ("icon", "图标"), ("color", "颜色")):
+            if str(a.get(key) or "").strip():
+                acts.append(f"{cn}→{_leaf(a.get(key))}")
+        head = f"修改分类「{title}」"
+        return f"{head}：{'、'.join(acts)}" if acts else head
+    if name in ("create_announcement", "update_announcement", "delete_announcement"):
+        # 公告（20260922 第五轮）：过程行**只报标题，不打印正文**——正文是主人要
+        # 对全体访客说的话，过程行只是一行"在做什么"的预告，预览在确认框里。
+        title = _leaf(a.get("title"))
+        if name == "create_announcement":
+            return f"发布公告「{title}」" if title else "发布公告"
+        if name == "delete_announcement":
+            return f"删除公告「{title}」" if title else "删除公告"
+        acts = []
+        if str(a.get("new_title") or "").strip():
+            acts.append(f"改名为「{_leaf(a.get('new_title'))}」")
+        if str(a.get("content") or "").strip():
+            acts.append("正文更新")
+        head = f"修改公告「{title}」" if title else "修改公告"
+        return f"{head}：{'、'.join(acts)}" if acts else head
     if name in _NOARG_VERB:
         return _NOARG_VERB[name]
     return f"执行 {name}"
