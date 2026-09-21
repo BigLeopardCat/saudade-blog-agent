@@ -2711,20 +2711,85 @@ _NAME_TARGET_TOOLS = ("update_tag", "delete_tag", "update_category",
 # planner 直接把目标名写成「未命名标签」（站内没有这个标签，纯粹是它自己编的占位
 # 名字），连 parent_tag 都没填：光靠 planner 的参数已经认不出目标，只有这句话的
 # 语序还认得出（"挪到「编程」下面"里的「编程」是父，「绝对不存在的标签名xyz」是目标）。
+# 标记词分两族（20260922 ②防线续三）：它们领着的那段引号落在**哪个参数**上取决于族别——
+# move（挪到/移到…下面是父标签）与 rename（改名叫/改成…是新名字）。搞混族别就会把新名字
+# 填进父标签，所以下面按族别校正、不按"引号里剩下哪段"猜。
+_MOVE_MARKS = ("挪到", "移到", "移动到", "放到", "挂到", "换到", "改到", "调到", "调整到")
+_RENAME_MARKS = ("改名叫", "改名为", "改名成", "改成", "换成", "改为")
+_MOVE_MARK_RE = re.compile(r"(?:" + "|".join(_MOVE_MARKS) + r")\s*$")
+_RENAME_MARK_RE = re.compile(r"(?:" + "|".join(_RENAME_MARKS) + r")\s*$")
 _OPERAND_MARK_RE = re.compile(
-    r"(?:挪到|移到|移动到|放到|挂到|换到|改到|调到|调整到|"
-    r"改名叫|改名为|改名成|改成|换成|改为)\s*$")
+    r"(?:" + "|".join(_MOVE_MARKS + _RENAME_MARKS) + r")\s*$")
+
+# 名词标记：主人点一个"已有名字"的事物时用的词（标签/分类）。免引号形态下，目标名就在
+# 名词与动作词之间（见 `_bare_target_name`）。
+_TARGET_NOUNS = ("一级标签", "二级标签", "标签", "分类")
+# 认"名字"的动作词比认"另一个操作数"的宽：删除也算（"把标签 Asyncio 删掉"同一条语序）。
+# 它只用于**取名字**，不进 `_marked_operand`（删掉后面没有"另一个操作数"）。
+_DELETE_MARKS = ("删掉", "删除", "移除", "去掉", "撤下", "下架")
+_TARGET_ACTION_MARKS = _MOVE_MARKS + _RENAME_MARKS + _DELETE_MARKS
+_TARGET_NOUN_RE = re.compile(
+    r"(?:" + "|".join(_TARGET_NOUNS) + r")\s*(.+?)\s*(?:"
+    + "|".join(_TARGET_ACTION_MARKS) + r")")
+# planner 从技能/参数描述里抄下来的**泛称**（20260922 全量回归实测取值：name="标签"、
+# parent_tag="父标签名"）——它们不是主人的名字，即便恰好是这句话的子串也不算"有据"。
+# 同 20260921「对模型的举例里不许出现具体取值」那条教训的镜像：描述里的措辞会被抄成参数值。
+_GENERIC_NAME_WORDS = ("标签", "分类", "一级标签", "二级标签", "标签名", "分类名",
+                       "名称", "名字", "目标标签", "目标分类", "这个标签", "这个分类")
+
+
+def _marked_operand(user_msg, spans: list[str]) -> tuple[str, str]:
+    """主人原话里被"另一个操作数"标记词领着的那段引号，以及标记词的族别。
+
+    返回 `(那一段引号, "move"|"rename")`；没有则 `("", "")`。两个族的标记词**同时**
+    贴在同一段引号前（"改成 X 再挪到「Y」下面"这类绕法）→ 说不清族别，不动。
+    """
+    text = str(user_msg or "")
+    for m in _QUOTE_SPAN_RE.finditer(text):
+        frag = next((g for g in m.groups() if g), "").strip()
+        if not frag or not any(_squash_spaces(frag) == _squash_spaces(s) for s in spans):
+            continue
+        head = text[:m.start()]
+        mv, rn = bool(_MOVE_MARK_RE.search(head)), bool(_RENAME_MARK_RE.search(head))
+        if mv != rn:
+            return frag, ("move" if mv else "rename")
+    return "", ""
 
 
 def _marked_other_operand(user_msg, spans: list[str]) -> str:
     """主人原话里被"另一个操作数"标记词领着的那一段引号（没有则空串）。"""
+    return _marked_operand(user_msg, spans)[0]
+
+
+def _bare_target_name(user_msg) -> str:
+    """主人原话里**没加引号**的目标名：名词标记与动作标记之间的那一段。
+
+    20260922 全量回归现场（`admin_tag_move_popup` 五跑一红）：主人说「帮我把标签
+    Asyncio 挪到「编程」下面」——要挪的那个名字 **没加引号**，唯一一段引号是父标签，
+    而 planner 把目标名抄成了描述里的泛称（`name="标签"`，它甚至是这句话的子串，
+    子串级地基放它过去）。语序在这里是主人给的标记：名词与动作词之间那一段就是目标名。
+
+    只认**唯一且干净**的候选：跨小句（有标点）、含别的名词/动作标记、超长、就是泛称
+    → 一律返回空串（说不清就不动，与 `_owner_target_span` 同一条边界）。
+    """
     text = str(user_msg or "")
-    for m in _QUOTE_SPAN_RE.finditer(text):
-        frag = next((g for g in m.groups() if g), "").strip()
-        if frag and any(_squash_spaces(frag) == _squash_spaces(s) for s in spans) \
-                and _OPERAND_MARK_RE.search(text[:m.start()]):
-            return frag
-    return ""
+    if len(_TARGET_NOUN_RE.findall(text)) != 1:
+        return ""  # 一句话里点了不止一个名字（"把标签 A 删掉，再把标签 B 挪到…"）→ 说不清
+    m = _TARGET_NOUN_RE.search(text)
+    if not m:
+        return ""
+    raw = m.group(1).strip().strip("「」『』“”\"'").strip()
+    if not raw or len(raw) > 60 or raw in _GENERIC_NAME_WORDS:
+        return ""
+    if any(ch in raw for ch in "，,。；;、！？!?～~"):
+        return ""
+    if any(w in raw for w in _TARGET_NOUNS + _TARGET_ACTION_MARKS):
+        return ""
+    # "Asyncio 这个名字" 这类补语：多出来的是主人的解释，不是名字的一部分——一出现就
+    # 说不清边界（"抄短了"的对照判据会把整段当成名字，那还不如不动）。
+    if any(w in raw for w in ("这个", "那个", "名字", "名称")):
+        return ""
+    return raw
 
 
 def _owner_target_span(got: str, spans: list[str], parent: str,
@@ -2774,16 +2839,42 @@ def _name_target_fix(plan_obj: dict, user_msg) -> None:
     if not got:
         return
     spans = _msg_quote_spans(user_msg)
-    want = _owner_target_span(got, spans, args.get(pkey) if pkey else "",
-                              _marked_other_operand(user_msg, spans))
-    if not want or _squash_spaces(want) == _squash_spaces(got):
+    other, kind = _marked_operand(user_msg, spans)
+    want = _owner_target_span(got, spans, args.get(pkey) if pkey else "", other)
+    if not want:
+        # 免引号形态（"帮我把标签 Asyncio 挪到「编程」下面"）：目标名在名词与动作词之间。
+        # planner 的值**在主人这句话里有据**（逐字说过、且不是泛称、也不是这段的截断）
+        # 就不动——防线不是重写器。
+        cand = _bare_target_name(user_msg)
+        _gq, _cq = _squash_spaces(got), _squash_spaces(cand)
+        # 第三种让位的形态：planner 把名字**抄短了**（实测 name="Async"——它是原话的
+        # 子串，子串级地基照样放它过去）。取向与引号那条一致：主人原话里那一段是系统
+        # 数据，模型的截断让位。只在"捕获段确实更长"时用，且捕获段里不许混补语。
+        _frag = bool(_cq and _cq != _gq and _gq in _cq)
+        if cand and _cq != _gq and (_gq not in _squash_spaces(user_msg)
+                                    or got in _GENERIC_NAME_WORDS or _frag):
+            want = cand
+    # 父标签走同一条地基：planner 填的父标签不在主人这句话里，而主人用"挪到/移到「X」
+    # 下面"给了**唯一**一个候选 → 用它（实测它填的是描述里的「父标签名」「分类」，
+    # 弹窗问句于是问的是"移到「父标签名」下面"——主人核对不出来，点了确定就是挂错爸爸）。
+    pv = str(args.get(pkey) or "").strip() if pkey else ""
+    fix_parent = bool(pkey == "parent_tag" and other and kind == "move" and pv
+                      and _squash_spaces(pv) != _squash_spaces(other)
+                      and _squash_spaces(pv) not in _squash_spaces(user_msg))
+    if (not want or _squash_spaces(want) == _squash_spaces(got)) and not fix_parent:
         return
-    logger.info("[planner] 目标名校正（%s）：%r → %r", name, got, want)
-    record("planner", "name_target_correct", tool=name, got=got[:60], used=want[:60])
     # 重走 instantiate_plan：TOOLS 行与**注记**都从校正后的参数重新生成（同
     # `_board_quote_fix`：只改 spec 字符串的话，注记里还是 planner 那个错值）。
     params = dict(plan_obj.get("params") or {})
-    params[tkey] = want
+    if want and _squash_spaces(want) != _squash_spaces(got):
+        logger.info("[planner] 目标名校正（%s）：%r → %r", name, got, want)
+        record("planner", "name_target_correct", tool=name, got=got[:60], used=want[:60])
+        params[tkey] = want
+    if fix_parent:
+        logger.info("[planner] 父标签校正（%s）：%r → %r", name, pv, other)
+        record("planner", "name_target_correct", tool=name, field=pkey,
+               got=pv[:60], used=other[:60])
+        params[pkey] = other
     fresh = instantiate_plan(plan_obj.get("skill") or "chat", params)
     fresh["params"] = params
     plan_obj.clear()

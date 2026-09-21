@@ -1084,5 +1084,91 @@ gsrc2 = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encod
 check("planner 规则里也有同一条（4b 写操作纪律：要不要执行不由你判断）",
       "要不要执行" in gsrc2 and "4b." in gsrc2)
 
+print("\n⑲ 免引号形态的目标名与父标签（②防线续三：描述里的泛称被抄成参数值）")
+# 20260922 全量回归现场（`admin_tag_move_popup` 五跑一红）：主人说「帮我把标签 Asyncio
+# 挪到「编程」下面」——要挪的名字**没加引号**（唯一一段引号是父标签），planner 抄了技能
+# 描述里的泛称：name="标签"（它甚至是这句话的子串，子串级地基放它过去）、
+# parent_tag="父标签名"。问句于是变成「要修改标签「标签」：移到「父标签名」下面吗？」——
+# 主人核对不出来，点确定就是挂错爸爸。语序在这里是主人给的标记。
+
+check("免引号：名词与动作词之间那一段就是目标名（挪到）",
+      g._bare_target_name("帮我把标签 Asyncio 挪到「编程」下面") == "Asyncio",
+      repr(g._bare_target_name("帮我把标签 Asyncio 挪到「编程」下面")))
+check("免引号：改名叫… 同一条语序也认（名字在动作词之前）",
+      g._bare_target_name("把标签 Asyncio 改名叫协程") == "Asyncio",
+      repr(g._bare_target_name("把标签 Asyncio 改名叫协程")))
+check("免引号：删除语序也认（「把标签 X 删掉」是同一个名字通道）",
+      g._bare_target_name("把标签 Asyncio 删掉吧") == "Asyncio",
+      repr(g._bare_target_name("把标签 Asyncio 删掉吧")))
+check("免引号：没有动作词 → 不认（说不清要干什么就不动参数）",
+      g._bare_target_name("站内那个标签 Asyncio 挺好看的") == "")
+check("免引号：跨小句 → 不认（多件事的句子分不清哪个名字配哪个动作）",
+      g._bare_target_name("把标签 A 删掉，另外把标签 B 挪到「C」下面") == "",
+      repr(g._bare_target_name("把标签 A 删掉，另外把标签 B 挪到「C」下面")))
+check("免引号：捕获到的就是泛称本身 → 不认",
+      g._bare_target_name("把标签 分类 挪到「编程」下面") == "")
+check("免引号：引号包着的那段去壳照认（`_owner_target_span` 那条路本就处理，这里只是不误伤）",
+      g._bare_target_name("把标签「Asyncio」挪到「编程」下面") == "Asyncio",
+      repr(g._bare_target_name("把标签「Asyncio」挪到「编程」下面")))
+
+check("标记词族别：挪到… → move（那段引号是父标签）",
+      g._marked_operand("帮我把标签 Asyncio 挪到「编程」下面", ["编程"]) == ("编程", "move"),
+      str(g._marked_operand("帮我把标签 Asyncio 挪到「编程」下面", ["编程"])))
+check("标记词族别：改名叫… → rename（那段引号是新名字）",
+      g._marked_operand("把标签「Asyncio」改名叫「协程」", ["Asyncio", "协程"])
+      == ("协程", "rename"))
+check("族别跟着**贴着引号的那个**标记词走（前面还有别的动作词也不混）",
+      g._marked_operand("把标签 A 挪到 B 改成「C」", ["C"]) == ("C", "rename"))
+
+
+def _name_plan(params, spec):
+    """就一个 spec 的假计划（`_name_target_fix` 只读 skill/params/tools）。"""
+    return {"skill": "tag_update", "params": dict(params), "tools": [spec],
+            "note": "注记原文", "reply": "直接回答"}
+
+
+_BAD_SPEC = 'update_tag({"name": "标签", "parent_tag": "父标签名"})'
+_bad = _name_plan({"name": "标签", "parent_tag": "父标签名"}, _BAD_SPEC)
+g._name_target_fix(_bad, "帮我把标签 Asyncio 挪到「编程」下面")
+_s1 = " ".join(_bad["tools"])
+check("planner 抄了描述里的泛称（name=「标签」）→ 校正成主人说的那个名字",
+      "Asyncio" in _s1 and '"标签"' not in _s1, _s1[:140])
+check("  父标签同样校正（它填的「父标签名」不在主人话里，主人只给了「编程」）",
+      '"编程"' in _s1 and "父标签名" not in _s1, _s1[:140])
+check("  参数表与 TOOLS 行同步（不能各说各的：弹窗问句读的是参数表）",
+      _bad["params"].get("name") == "Asyncio"
+      and _bad["params"].get("parent_tag") == "编程", str(_bad["params"]))
+
+_ok = _name_plan({"name": "Asyncio", "parent_tag": "编程"},
+                 'update_tag({"name": "Asyncio", "parent_tag": "编程"})')
+_before = json.dumps(_ok, ensure_ascii=False, sort_keys=True)
+g._name_target_fix(_ok, "帮我把标签 Asyncio 挪到「编程」下面")
+check("本来就是主人说的名字 → 一个字节都不改（有据的值不动，防线不是重写器）",
+      json.dumps(_ok, ensure_ascii=False, sort_keys=True) == _before)
+
+_keep = _name_plan({"name": "标签"}, 'delete_tag({"name": "标签"})')
+g._name_target_fix(_keep, "站内那个标签 Asyncio 挺好看的")
+check("说不清是哪件事（没有动作词）→ 不猜，参数原样留给弹窗/预检那两条路",
+      _keep["params"].get("name") == "标签", str(_keep["params"]))
+
+_cut = _name_plan({"name": "Async"}, 'update_tag({"name": "Async"})')
+g._name_target_fix(_cut, "帮我把标签 Asyncio 挪到「编程」下面")
+check("planner 把名字**抄短了**（实测 name=「Async」）→ 校正成主人原话里那一段",
+      _cut["params"].get("name") == "Asyncio", str(_cut["params"]))
+
+_filler = _name_plan({"name": "Asyncio"}, 'update_tag({"name": "Asyncio"})')
+_before_f = json.dumps(_filler, ensure_ascii=False, sort_keys=True)
+g._name_target_fix(_filler, "帮我把标签 Asyncio 这个名字挪到「编程」下面")
+check("原话里带补语（「Asyncio 这个名字」）→ 捕获段作废，不把补语当名字",
+      json.dumps(_filler, ensure_ascii=False, sort_keys=True) == _before_f,
+      str(_filler["params"]))
+
+
+_ren = _name_plan({"name": "Asyncio", "parent_tag": ""},
+                  'update_tag({"name": "Asyncio", "new_title": "协程"})')
+g._name_target_fix(_ren, "把标签「Asyncio」改名叫「协程」")
+check("改名形态：新名字**不会**被当成父标签填进去（族别搞混就是参数对调）",
+      not _ren["params"].get("parent_tag"), str(_ren["params"]))
+
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
