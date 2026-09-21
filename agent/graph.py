@@ -501,7 +501,9 @@ _TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 doc
     "get_site_map": "无参直取：博客功能结构图（有哪些页面/板块）",
     "get_top_notes": "无参直取：置顶文章列表",
     "list_categories": "无参直取：全部分类（名称/颜色/图标/文章数量）",
-    "list_tags": "无参直取：全部一级标签",
+    # 两级一起给（20260921 修）：只写"一级标签"时 planner 会照菜单作答"站内没有
+    # 二级标签"——工具早就读得到两级了，缺的只是菜单没说
+    "list_tags": "无参直取：全部标签（一级 + 其下的二级，靠 level/fatherTag 区分）",
 }
 
 
@@ -942,6 +944,20 @@ def _cmd_prefix_directive(text: str) -> bool:
         if not _CMD_META_RE.search(_sentence_of(text, i)):
             return True
     return False
+
+
+def _cmd_prefix_hit(text: str) -> str:
+    """`_cmd_prefix_directive` 的子句版：返回**指令式**写了命令前缀的那一句。
+
+    与判据同源（同一次遍历、同一对判据），返回的是 `_sentence_of` 切出的整句——
+    含前缀的那一句本身就是给人看的证据，比子句更完整（"我这就打开 EFFECT:x"）。"""
+    for m in _CMD_PREFIX_RE.finditer(text):
+        i = m.start()
+        if not (_inside_quote(text, i) or _inside_code_span(text, i)):
+            return _sentence_of(text, i)
+        if not _CMD_META_RE.search(_sentence_of(text, i)):
+            return _sentence_of(text, i)
+    return ""
 # 确认式导航 + 完成式到达声称（NAVIGATE: 帧 = 等待确认，非已跳转；曾见模型返回
 # NAVIGATE: 后回复"已经带您到文章页"，用户视角即幻觉）。仅 navigate 技能轮启用。
 _NAV_ARRIVAL_RE = re.compile(
@@ -1038,6 +1054,16 @@ def _sentence_of(text: str, pos: int) -> str:
     return text[start:end]
 
 
+def _clip_clause(clause: str, limit: int = 80) -> str:
+    """被声称闸否定的那个子句 → trace 事件里的短字段（20260921）。
+
+    为什么必须记（配合 [[gate 声称判据三洞]] 的复盘纪律）：此前 5c/5d/5f 只记
+    "本轮执行了哪些工具"，被否掉的那句话没留下——每次调判据都只能凭手感，误杀
+    与漏判都无法从 trace 里复盘。截 80 字足够定位（子句本身不长），换行归一防
+    单条事件把 trace 撑成多行。"""
+    return " ".join(clause.split())[:limit]
+
+
 def _tool_claim_window(full: str, start: int, end: int, name: str) -> bool:
     """工具名两侧的声称窗口：名字前有"第一人称+调用动词"或名字后紧接调用动词。
     引号内的出现（转述访客留言/说说正文）直接跳过——引号状态按全文判定（引号常
@@ -1053,9 +1079,19 @@ def _tool_claim_window(full: str, start: int, end: int, name: str) -> bool:
     return False
 
 
-def _phantom_tool_claim(reply: str, executed: set[str], exec_memory: bool) -> str | None:
-    """有帧轮的具名工具声称核对：回复点名"我调用过"的注册表工具不在本轮帧里 →
-    返回该工具名；无此情况 → None。判据与豁免见上方注释块。"""
+def _phantom_tool_claim_span(reply: str, executed: set[str], exec_memory: bool,
+                             frame_text: str = "") -> tuple[str, str] | None:
+    """命中即返回 (工具名, 那个子句)，无命中 → None（判据见上方注释块 + 下方豁免）。
+
+    `frame_text`（本轮所有工具帧的正文拼接）非空时启用**回声豁免**（20260921）：
+    该工具名**出现在本轮工具自己的返回文本里** ⇒ narrator 是在复述工具说的话，
+    不是在声称自己调用过它。这不是理论上的洞，是生产事故的根：
+    165645 管理员建「大笨狗」标签**真的建成了**（id=15），`create_tag` 的返回文本
+    尾句自带另一个工具名（「要挂到文章上用 set_article_tags」），narrator 照抄 ⇒
+    被判 5c ⇒ 整条回复被换成"这一轮什么都没执行"，与刚发生的执行**当面矛盾**。
+    配套硬约束：工具的返回文本**不许再出现任何工具名**（见 adminops.render_tag_created
+    与 test_skills.py 的同源 lint）——把这条豁免的适用面压到零。
+    """
     if not executed:
         return None
     text = reply.replace("`", "").replace("*", "")   # markdown 装饰不参与判词
@@ -1067,13 +1103,27 @@ def _phantom_tool_claim(reply: str, executed: set[str], exec_memory: bool) -> st
         if exec_memory and _PHANTOM_PRIOR_RE.search(clause):
             continue
         for name in names:
+            if frame_text and name in frame_text:
+                continue          # 复述本轮工具自己说过的话
             if _tool_claim_window(text, start, end, name):
-                return name
+                return (name, clause)
     return None
 
 
-def _clause_hits(text: str, rx, exempt, need_done: bool = False, veto=None) -> bool:
-    """子句级判定：任一无豁免词的子句命中 rx → True。
+def _phantom_tool_claim(reply: str, executed: set[str], exec_memory: bool,
+                        frame_text: str = "") -> str | None:
+    """薄封装：只要工具名（既有语料/调用点用）。"""
+    hit = _phantom_tool_claim_span(reply, executed, exec_memory, frame_text)
+    return hit[0] if hit else None
+
+
+def _clause_hit(text: str, rx, exempt, need_done: bool = False,
+                veto=None) -> str | None:
+    """子句级判定：返回**第一个**无豁免却命中 rx 的子句；没有则 None。
+
+    返回子句而不是 bool（20260921）：被否掉的那句话要落 trace（见 `_clip_clause`），
+    而"判据到底看到的是哪句"只有判据自己知道——让调用方拿正则再跑一遍去猜，猜出来
+    的子句未必是同一条（need_done/veto 的口径不同）。判定语义见下，与旧实现一字不差。
 
     子句切分沿用 _CLAUSE_RE（标点切分）——豁免必须**同子句内**才算数：
     "那泠月喵就帮你把夜间模式关掉，要是之后想换回来随时说" 里前句是声称、
@@ -1101,8 +1151,13 @@ def _clause_hits(text: str, rx, exempt, need_done: bool = False, veto=None) -> b
                 continue
             if need_done and not _STATE_DONE_RE.search(s, c.start() + m.start()):
                 continue
-            return True
-    return False
+            return clause
+    return None
+
+
+def _clause_hits(text: str, rx, exempt, need_done: bool = False, veto=None) -> bool:
+    """`_clause_hit` 的布尔壳（既有调用方与断言按 bool 写的，语义不变）。"""
+    return _clause_hit(text, rx, exempt, need_done, veto) is not None
 
 
 def _prior_time_veto(exec_memory: bool):
@@ -1132,6 +1187,12 @@ def _state_action_claim(text: str, exec_memory: bool = False) -> bool:
                         need_done=True, veto=_prior_time_veto(exec_memory))
 
 
+def _state_action_claim_clause(text: str, exec_memory: bool = False) -> str:
+    """`_state_action_claim` 的子句版（trace 用，见 `_clause_hit`）。"""
+    return _clause_hit(text, _STATE_ACTION_CLAIM_RE, _STATE_ACTION_EXEMPT_RE,
+                       need_done=True, veto=_prior_time_veto(exec_memory)) or ""
+
+
 def _chat_tool_claim(text: str) -> bool:
     """零帧 chat 轮的第一人称工具调用声称（_CHAT_TOOL_CLAIM_RE）。
 
@@ -1156,6 +1217,20 @@ def _chat_tool_claim(text: str) -> bool:
                     continue
                 return True
     return False
+
+
+def _chat_tool_claim_clause(text: str) -> str:
+    """`_chat_tool_claim` 的子句版（trace 用）。判据同源，只是把命中的那句带回。"""
+    for s in _SENT_RE.split(text):
+        if not _CLAIM_DONE_RE.search(s):
+            continue
+        for c in _CLAUSE_RE.finditer(s):
+            clause = c.group(0)
+            for m in _CHAT_TOOL_CLAIM_RE.finditer(clause):
+                if _NEG_BEFORE_RE.search(clause[max(0, m.start() - 6):m.start()]):
+                    continue
+                return clause
+    return ""
 
 
 # ── gate 洞③：有帧轮里谎称"本轮没有执行任何工具"（20260920）──────────────────
@@ -1264,13 +1339,13 @@ def _repeat_of_prev_reply(reply: str, prev: str, user_msg: str = "") -> bool:
     return any(short[i:i + thr] in long_ for i in range(len(short) - thr + 1))
 
 
-def _site_search_claim(text: str, exec_memory: bool) -> bool:
-    """站内检索声称（gate 洞②）：站内内容域检索完成式表述。
+def _site_search_claim_clause(text: str, exec_memory: bool) -> str | None:
+    """命中即返回**那个子句**（trace 用），无命中 → None。
 
-    _CHAT_SCAN_CLAIM_RE 一并纳入（它的词表是 20260905 事故现场调过的，
-    只是词序漏了"站内我查了一圈"形态）。exec_memory=True（本轮带跨轮回执）
-    且子句含追述时间词 → 属 rule 6 的据实转述，不判。同 _state_action_claim
-    一样要求**同句完成态**（整段话与洞①共用一条判据纪律：完成态才算声称）。"""
+    为什么要把子句带出来（20260921）：`record("gate","phantom_search_claim")` 此前只记
+    执行工具集，被否定的那句话没留下——判据调优只能靠"再跑一遍看运气"，误杀复盘无从
+    下手（同族问题见 `_phantom_tool_claim_span`）。判据逻辑与 `_site_search_claim`
+    逐字相同，后者是它的薄封装。"""
     text = "".join(s + "。" for s in _SENT_RE.split(text) if _STATE_DONE_RE.search(s))
     for c in _CLAUSE_RE.finditer(text):
         clause = c.group(0)
@@ -1280,8 +1355,18 @@ def _site_search_claim(text: str, exec_memory: bool) -> bool:
             continue
         if exec_memory and _PHANTOM_PRIOR_RE.search(clause):
             continue
-        return True
-    return False
+        return clause
+    return None
+
+
+def _site_search_claim(text: str, exec_memory: bool) -> bool:
+    """站内检索声称（gate 洞②）：站内内容域检索完成式表述。
+
+    _CHAT_SCAN_CLAIM_RE 一并纳入（它的词表是 20260905 事故现场调过的，
+    只是词序漏了"站内我查了一圈"形态）。exec_memory=True（本轮带跨轮回执）
+    且子句含追述时间词 → 属 rule 6 的据实转述，不判。同 _state_action_claim
+    一样要求**同句完成态**（整段话与洞①共用一条判据纪律：完成态才算声称）。"""
+    return _site_search_claim_clause(text, exec_memory) is not None
 
 
 # ── gate 洞④：站内"没有"结论无依据（20260921）────────────────────────────
@@ -1342,6 +1427,26 @@ def _exec_memory_has_search(msgs: list) -> bool:
                for m in msgs)
 
 
+def _site_absence_claim_clause(text: str, search_evidence: bool = False) -> str | None:
+    """命中即返回**那个子句**（trace 用），无命中 → None（判据见 `_site_absence_claim`）。"""
+    if search_evidence:
+        return None
+    clauses = [c.group(0) for c in _CLAUSE_RE.finditer(text)]
+    for i, clause in enumerate(clauses):
+        if _ABSENCE_EXEMPT_RE.search(clause):
+            continue
+        if (_SITE_DOMAIN_RE.search(clause) and _ABSENCE_RE.search(clause)
+                and _CONTENT_NOUN_RE.search(clause)):
+            return clause
+        if (i + 1 < len(clauses) and _SITE_DOMAIN_RE.search(clause)
+                and _CONTENT_NOUN_RE.search(clause)
+                and _ABSENCE_LEAD_RE.search(clauses[i + 1])
+                and not _ABSENCE_EXEMPT_RE.search(clauses[i + 1])):
+            # 跨子句桥形态：把**结论那两句**一起交出去（前子句给对象、后子句给否定）
+            return clause + clauses[i + 1]
+    return None
+
+
 def _site_absence_claim(text: str, search_evidence: bool = False) -> bool:
     """站内"没有"结论无依据（gate 洞④，见上方注释）。
 
@@ -1351,21 +1456,7 @@ def _site_absence_claim(text: str, search_evidence: bool = False) -> bool:
          （"站内那些文章，没有写过 async 的""全站翻过的笔记，没讲过这个"）——
          中文逗号断句的常见形态，缺了它真结论会整片漏掉。
     search_evidence=True（本轮有内容类工具帧，或跨轮回执里有检索痕迹）→ 结论有据，放行。"""
-    if search_evidence:
-        return False
-    clauses = [c.group(0) for c in _CLAUSE_RE.finditer(text)]
-    for i, clause in enumerate(clauses):
-        if _ABSENCE_EXEMPT_RE.search(clause):
-            continue
-        if (_SITE_DOMAIN_RE.search(clause) and _ABSENCE_RE.search(clause)
-                and _CONTENT_NOUN_RE.search(clause)):
-            return True
-        if (i + 1 < len(clauses) and _SITE_DOMAIN_RE.search(clause)
-                and _CONTENT_NOUN_RE.search(clause)
-                and _ABSENCE_LEAD_RE.search(clauses[i + 1])
-                and not _ABSENCE_EXEMPT_RE.search(clauses[i + 1])):
-            return True
-    return False
+    return _site_absence_claim_clause(text, search_evidence) is not None
 
 
 # NOTE 零工具（页面不存在/已下线）轮的如实措辞核验词表（与 instantiate_plan 的
@@ -1376,9 +1467,13 @@ _HONEST_GONE = ("没有", "不存在", "找不到", "无法识别", "没有找�
 
 def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                  exec_memory: bool = False,
-                 exec_search_evidence: bool = False) -> tuple[str, str] | None:
+                 exec_search_evidence: bool = False) -> tuple[str, str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
-    支撑 → 返回 (issue, 人设内 fallback 文本)；有据/无声称 → None。
+    支撑 → 返回 (issue, 人设内 fallback 文本, **被否掉的那一句**)；有据/无声称 → None。
+
+    第三项是给 trace 的（20260921）：误杀复盘此前只能看到"判了哪一族"，看不到
+    "判的是哪句话"——而每一次调判据争论的恰恰是那句原话。空串 = 判据没有具体
+    句子可指（如帧存在直接放行，本来也没进这里）。
 
     作用域（20260903 收窄后的设计 + 20260919 两洞 + 20260920 洞③）：
       - 任何轮：命令前缀文本（_cmd_prefix_directive——引号/内联代码区 + 同句机制词
@@ -1400,31 +1495,37 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         声称、NAVIGATE: 确认帧 + 到达声称、具名工具声称（5c）、**站内检索声称
         与内容类帧族不符**（5d，洞②的混合轮形态）——见 gate_node
     """
-    if _cmd_prefix_directive(reply):
-        return ("cmd_prefix", _FALLBACK_CMD_PREFIX)
+    hit = _cmd_prefix_hit(reply)
+    if hit:
+        return ("cmd_prefix", _FALLBACK_CMD_PREFIX, hit)
     if frames_exist:
         return None  # 帧存在：声称有据（err 帧/确认帧/具名/检索族场景由 gate_node 兜）
     # 引号内是被转述的访客留言/说说正文，不算 narrator 自己的声称（20260913：
     # 留言板里那句"执行调用 navigate_to"被转述时误伤）
     own = _strip_quoted_spans(reply)
     if _state_action_claim(own, exec_memory):
-        return ("state_claim_without_tool", _FALLBACK_STATE_CLAIM)
+        return ("state_claim_without_tool", _FALLBACK_STATE_CLAIM,
+                _state_action_claim_clause(own, exec_memory))
     if _site_search_claim(own, exec_memory):
-        return ("search_claim_without_tool", _FALLBACK_SEARCH_CLAIM)
+        return ("search_claim_without_tool", _FALLBACK_SEARCH_CLAIM,
+                _site_search_claim_clause(own, exec_memory) or "")
     # 洞④（20260921）：站内"没有"结论无依据。navigate 的零工具注记轮豁免——那一轮
     # 的"页面不存在/已下线"是 NAV_MAP 给的确定性事实（gate_node 第 4 节另有如实措辞
     # 核验），不属凭空结论。
     if not (skill == "navigate" and "不调用任何工具" in (plan.get("note") or "")):
         if _site_absence_claim(own, exec_search_evidence):
-            return ("site_absence_claim_without_tool", _FALLBACK_SITE_ABSENCE)
+            return ("site_absence_claim_without_tool", _FALLBACK_SITE_ABSENCE,
+                    _site_absence_claim_clause(own, exec_search_evidence) or "")
     if skill == "chat":
         if _chat_tool_claim(own):
-            return ("claim_without_tool", _FALLBACK_CLAIM)
+            return ("claim_without_tool", _FALLBACK_CLAIM, _chat_tool_claim_clause(own))
         return None
     if skill == "content_query":
-        if (_READ_CLAIM_RE.search(own) or _EXECUTION_CLAIM_RE.search(own)
-                or _CALLED_TOOL_CLAIM_RE.search(own)):
-            return ("claim_without_tool", _FALLBACK_CLAIM)
+        for rx in (_READ_CLAIM_RE, _EXECUTION_CLAIM_RE, _CALLED_TOOL_CLAIM_RE):
+            m = rx.search(own)
+            if m:
+                return ("claim_without_tool", _FALLBACK_CLAIM,
+                        _claim_clause(own, rx) or m.group(0))
     return None
 
 
@@ -1445,6 +1546,21 @@ _FALLBACK_SEARCH_CLAIM = (
     "喵呜……主人，我得说实话：这一轮系统没有任何工具执行，我说的『翻了一遍/检索了"
     "一圈』是嘴上跑火车，没有依据。要不要我现在认认真真查一遍再回答你？这次每一条"
     "都带真实来源喵。")
+# 有帧轮的两个变体（20260921）。上面两条文案都断言行"系统没有任何工具执行"，
+# 而它们在 5c/5d 上**每一次命中都与回执矛盾**：5c 的 `_phantom_tool_claim` 在
+# `not executed` 时直接返回 None（只在真有执行的轮才可能命中）、5d/5f 整段位于
+# gate_node 的"有帧轮"分支（`if not frames: return` 之后）——两处都必然有帧。
+# 生产实证 165645：`create_tag` PASS（「大笨狗」id=15 真建成了），narrator 照抄
+# 工具返回文本里的另一个工具名被判 5c，回复被替换成"这一轮什么都没执行"——
+# 与执行回执、与用户刚看到的结果**当面矛盾**。文案只许否认**被点名的那件事**。
+_FALLBACK_PHANTOM_CLAIM = (
+    "喵呜……主人，我得纠正自己一句：我刚才说某个工具是我调用的，可这一轮系统记录里"
+    "**没有那次调用**——我嘴上多说了。这一轮真正执行过的是别的事，我说了什么、系统"
+    "做了什么，一律以系统记录为准。你要的那件事，要我现在真的去做一遍嘛？")
+_FALLBACK_SEARCH_CLAIM_FRAMED = (
+    "喵呜……主人，我得说实话：这一轮我确实动手做了些事，但**站内的内容我一条都没"
+    "查过**——我说的『翻了一遍/检索了一圈』是嘴上跑火车。要不要我现在认认真真查"
+    "一遍再回答你？这次每一条都带真实来源喵。")
 _FALLBACK_SITE_ABSENCE = (
     "喵呜……主人，我得收回一句：这一轮我其实**没有去站里查过**，却说成了『站内没有"
     "…』——站里到底有没有，我没核实过就不能下结论 :犯错: 要我现在认认真真检索一遍"
@@ -1494,7 +1610,24 @@ _FALLBACK_GONE = (
     "物联网平台。要不要我带你逛逛？")
 
 
-def _fallback_result(issue: str, text: str, plan: dict, frames: int) -> dict:
+def _claim_clause(text: str, *rxs) -> str:
+    """第一个命中任一 rx 的**子句**（trace 里"被否掉的那句话"，20260921）。
+
+    与 `_clause_hits` 用同一套切分（`_SENT_RE` / `_CLAUSE_RE`）：trace 里的子句
+    必须与判据看到的子句同粒度，否则复盘时"判据到底看到的是哪句"又得靠猜。
+    找不到 → ""（调用方据此决定要不要写这个字段）。
+    """
+    for s in _SENT_RE.split(text or ""):
+        for c in _CLAUSE_RE.finditer(s):
+            clause = c.group(0)
+            for rx in rxs:
+                if rx.search(clause):
+                    return clause
+    return ""
+
+
+def _fallback_result(issue: str, text: str, plan: dict, frames: int,
+                     clause: str = "") -> dict:
     """gate fallback 收尾（validate→fallback：检查不通过即收尾，无重考轮）。
 
     返回带 done=True + [Fallback 决定] SystemMessage + fallback_text 的 state
@@ -1510,8 +1643,10 @@ def _fallback_result(issue: str, text: str, plan: dict, frames: int) -> dict:
     克隆链，末两代一条 781 字回复与 11 小时前那条**逐字节相同**（见
     _REPEAT_MIN_RUN 注释）。声明见 AgentState 的 fallback_text 字段。
     """
-    record("gate", "fallback", issue=issue, skill=plan["skill"], frames=frames)
-    logger.info("[gate] fallback（%s）: skill=%s frames=%d", issue, plan["skill"], frames)
+    record("gate", "fallback", issue=issue, skill=plan["skill"], frames=frames,
+           **({"clause": _clip_clause(clause)} if clause else {}))
+    logger.info("[gate] fallback（%s）: skill=%s frames=%d%s", issue, plan["skill"], frames,
+                f" clause={_clip_clause(clause)}" if clause else "")
     return {"done": True,
             "messages": [SystemMessage(content=f"[Fallback 决定]: {text}")],
             "fallback_text": text}
@@ -1561,7 +1696,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
 
     user_msg = _last_user_msg(state["messages"])
-    page_ctx = _page_ctx(state["messages"])
+    # 角色要在**取 page_ctx 之前**定：能力清单按角色渲染（20260921——清单里不含
+    # 管理能力是 narrator 讲"我不能改后台"的"依据"，见 context.site_guide）。
+    role = _principal_of(config).known_role
+    page_ctx = _page_ctx(state["messages"], role)
     has_frames = _has_frames(state["messages"])
     doc_anchors = _doc_anchors(state["messages"])
     if rounds == 0:
@@ -1634,7 +1772,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         _prompt = _PLANNER_PROMPT.format(
             # 技能表按本轮角色过滤（20260921）：管理助手那三个技能只对 admin 列出，
             # 其余角色看不到 ⇒ 选不出来。用 known_role（未知角色 → None → 只列公开技能）
-            skills_context=build_planner_context(_principal_of(config).known_role),
+            skills_context=build_planner_context(role),
             tools_desc=_QUERY_TOOLS_DESC,
             page_ctx=page_ctx, round_info=round_info,
             intent_hints=_intent_hints(state.get("executed") or [], user_msg),
@@ -2078,7 +2216,9 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             # 早已不在）→ 不签发，退回既有错误帧链路让 planner 自己收拾
             continue
         if name in _ARTICLE_WRITE_TOOLS and not A.target_mentioned(
-                args.get("article_id"), _target_evidence(state, user_msg, _page_ctx(state["messages"]))):
+                args.get("article_id"),
+                _target_evidence(state, user_msg,
+                                 _page_ctx(state["messages"], principal.known_role))):
             continue
         picks.append({"tool": name, "args": args})
     if not picks:
@@ -2087,16 +2227,25 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     token = confirm.sign(principal.uid, conv_id, _plan_skill(state), picks)
     if not token:
         return None  # 密钥没读到 → 不弹窗（宁可走追问，也不发一个验不过的令牌）
+    # 问句要把父标签**名字**写出来（20260921）：只写「新建二级标签「Rust」」时
+    # 用户无从核对它要挂到哪个爸爸底下，而"挂错父标签"正是本轮修的参数对调事故。
+    # 读字典失败 → index=None，问句退回 id（宁可只给编号，也不能因为一次读不到
+    # 就不弹窗——那会退回"死路"形态）。
+    try:
+        from tools.base import _tag_index
+        tag_index = _tag_index(config)
+    except Exception:
+        tag_index = None
     return {
         "pending_confirm": {
-            "q": A.render_confirm_question(picks),
+            "q": A.render_confirm_question(picks, tag_index),
             "opts": [{"label": "确定", "value": "yes", "kind": "primary"},
                      {"label": "取消", "value": "no", "kind": "default"}],
             "token": token,
             "specs": picks,
             "skill": _plan_skill(state),
         },
-        "confirm_text": A.render_confirm_text(picks),
+        "confirm_text": A.render_confirm_text(picks, tag_index),
     }
 
 
@@ -2132,7 +2281,10 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     executed = state.get("executed") or []
     principal = _principal_of(config)  # 本轮调用者（权限判据的输入，见 agent/authz.py）
     user_msg = _last_user_msg(state["messages"])
-    page_ctx = _page_ctx(state["messages"])
+    # 这里的 page_ctx 只喂 _target_evidence/_create_display_text（都是"用户提没提
+    # 到这篇文章/给设备写什么文案"），能力清单不参与——但传 role 与另两个节点同构，
+    # 免得下次有人复制这行时把角色漏掉。
+    page_ctx = _page_ctx(state["messages"], principal.known_role)
     # 写操作确认弹窗（20260921）：**执行之前**判，命中就一个工具都不执行、直接回
     # pending_confirm（路由据此去 END，见 route_after_execute）。之所以提前到这里
     # 而不是在下方逐 spec 里：弹窗是一份**整批**的确认（计划里的写操作各自成单，
@@ -2549,13 +2701,16 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 本轮对话者是访客还是主人本人（20260921）：纪律文本只有一份，只有"对话者是谁"
     # 与称呼/口径按角色变。未知角色 → 访客那段（fail-closed：宁可把主人当访客，
     # 也不把访客当主人——后者会用主人的口径去答权限相关的事）。
+    role = _principal_of(config).known_role
     system = SystemMessage(content=_EXECUTOR_PROMPT.format(
         persona=BLOG_ASSISTANT_PROMPT,
-        audience=audience_block(_principal_of(config).known_role),
+        audience=audience_block(role),
         plan=state["plan"],
         tool_frames=_frame_texts(state["messages"]),
         exec_receipts=_receipts_text(state.get("receipts") or []),
-        page_ctx=_page_ctx(state["messages"]),
+        # 能力清单与 audience 同一角色源（20260921）：两处口径不同会出现
+        # "管理员身份 + 清单里没有管理能力"的自相矛盾 prompt
+        page_ctx=_page_ctx(state["messages"], role),
         sticker_guide=STICKER_GUIDE))
     _t0 = time.monotonic()
     logger.info("[model] LLM 调用开始（narrator）")
@@ -2641,7 +2796,8 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     issue = _claim_issue(reply, plan["skill"], plan, bool(frames),
                          _has_exec_memory(msgs), _exec_memory_has_search(msgs))
     if issue:
-        return _fallback_result(*issue, plan, len(frames))
+        i_name, i_text, i_clause = issue
+        return _fallback_result(i_name, i_text, plan, len(frames), i_clause)
     code_stripped = re.sub(r"```.*?```", "", reply, flags=re.S)
     fabricated = [u for u in _RESOURCE_URL_RE.findall(code_stripped) if not _url_trusted(u, msgs)]
     if fabricated:
@@ -2680,34 +2836,44 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             # 兜底文案按**原因码**分（20260921）：同意闸/目标有据这两族错误帧说的
             # 是"还没动手"（等确认 / 不知道改哪一篇），套通用"执行出错了"既与事实
             # 不符、又把用户引向"再试一次"（20260920 §5.2 缺口③ 的同一个根因）。
+            clause5a = _claim_clause(reply, _COMPLETION_CLAIM_RE, _WRITE_CONTENT_CLAIM_RE)
             err_text = "\n".join(str(getattr(f, "content", "")) for f in err_frames)
             if authz.consent_error_reason(err_text):
                 logger.info("[gate] 写操作未获同意却声称已完成 → fallback(consent)")
                 return _fallback_result("err_frame_claim_consent", _FALLBACK_CONSENT,
-                                        plan, len(frames))
+                                        plan, len(frames), clause5a)
             if A.target_error_reason(err_text):
                 logger.info("[gate] 写操作目标无据却声称已完成 → fallback(unknown_target)")
                 return _fallback_result("err_frame_claim_target", _FALLBACK_UNKNOWN_TARGET,
-                                        plan, len(frames))
+                                        plan, len(frames), clause5a)
             logger.info("[gate] 工具帧 __ERROR__ 但回复含完成式声称 → fallback")
-            return _fallback_result("err_frame_claim", _FALLBACK_ERR_CLAIM, plan, len(frames))
+            return _fallback_result("err_frame_claim", _FALLBACK_ERR_CLAIM, plan, len(frames),
+                                    clause5a)
     # 5b. 确认式导航（NAVIGATE: 帧、无 AUTO_NAVIGATE:）却回复到达声称 →
     #     页面实际未跳转（前端等确认）
     if plan["skill"] == "navigate" and "NAVIGATE:" in tool_text and "AUTO_NAVIGATE:" not in tool_text:
         if _NAV_ARRIVAL_RE.search(reply):
             logger.info("[gate] NAVIGATE 确认帧 + 到达声称 → fallback")
-            return _fallback_result("nav_pending_claim", _FALLBACK_NAV_PENDING, plan, len(frames))
+            return _fallback_result("nav_pending_claim", _FALLBACK_NAV_PENDING, plan,
+                                    len(frames), _claim_clause(reply, _NAV_ARRIVAL_RE))
     # 5c. 具名工具声称（20260913 C 项）：有帧 ≠ 帧里有那个工具——回复第一人称
     #     完成式点名"我调用了 X"而 X 本轮没执行（越权被剥/被跳过）= 编造调用
     #     （15:51 实证句："这次我用专门的社交链接查询工具（get_social_links）调了一次"）
     executed_names = {str(getattr(m, "name", "") or "") for m in frames}
-    phantom = _phantom_tool_claim(reply, executed_names, _has_exec_memory(msgs))
+    # frame_text 传入 = 开启"复述工具自己说的话"豁免（20260921，见 _phantom_tool_claim_span）
+    phantom = _phantom_tool_claim_span(reply, executed_names, _has_exec_memory(msgs),
+                                       tool_text)
     if phantom:
-        logger.info("[gate] 具名工具声称无帧支撑：%s（本轮执行=%s）→ fallback",
-                    phantom, "、".join(sorted(n for n in executed_names if n)) or "无")
-        record("gate", "phantom_tool_claim", tool=phantom,
+        logger.info("[gate] 具名工具声称无帧支撑：%s（本轮执行=%s）｜子句=%s → fallback",
+                    phantom[0], "、".join(sorted(n for n in executed_names if n)) or "无",
+                    _clip_clause(phantom[1]))
+        record("gate", "phantom_tool_claim", tool=phantom[0],
+               clause=_clip_clause(phantom[1]),
                executed=sorted(n for n in executed_names if n))
-        return _fallback_result("phantom_tool_claim", _FALLBACK_CLAIM, plan, len(frames))
+        # 文案用**有帧轮**那个变体：这条判据只在真有执行的轮才可能命中（_phantom_tool_claim_span
+        # 在 `not executed` 时直接返回 None），_FALLBACK_CLAIM 的"没有任何工具执行"必然为假。
+        return _fallback_result("phantom_tool_claim", _FALLBACK_PHANTOM_CLAIM,
+                                plan, len(frames))
 
     # 5d. 站内检索声称 vs 本轮内容类帧（20260919 gate 洞②的混合轮形态）：回复说
     #     "我检索了一圈/把站内翻了一遍/用 rag_search 搜了一遍"，而本轮**一个内容类
@@ -2715,19 +2881,24 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     #     点名工具，泛指检索声称归这里。
     if not (executed_names & _CONTENT_TOOLS):
         own5d = _strip_quoted_spans(reply)
-        if _site_search_claim(own5d, _has_exec_memory(msgs)):
-            logger.info("[gate] 站内检索声称但本轮无内容类工具帧（执行=%s）→ fallback",
-                        "、".join(sorted(n for n in executed_names if n)) or "无")
-            record("gate", "phantom_search_claim",
+        clause5d = _site_search_claim_clause(own5d, _has_exec_memory(msgs))
+        if clause5d:
+            logger.info("[gate] 站内检索声称但本轮无内容类工具帧（执行=%s）｜子句=%s → fallback",
+                        "、".join(sorted(n for n in executed_names if n)) or "无",
+                        _clip_clause(clause5d))
+            record("gate", "phantom_search_claim", clause=_clip_clause(clause5d),
                    executed=sorted(n for n in executed_names if n))
-            return _fallback_result("phantom_search_claim", _FALLBACK_SEARCH_CLAIM,
+            # 有帧轮变体（同 5c 的理由：本分支位于 `if not frames: return` 之后）
+            return _fallback_result("phantom_search_claim", _FALLBACK_SEARCH_CLAIM_FRAMED,
                                     plan, len(frames))
         # 5f. 站内"没有"结论 vs 本轮内容类帧（洞④的混合轮形态，20260921）：本轮只跑了
         #     动作类工具（导航/特效/设备），回复却对站内内容下"没有"的结论 → 无依据。
-        if _site_absence_claim(own5d, _exec_memory_has_search(msgs)):
-            logger.info("[gate] 站内『没有』结论但本轮无内容类工具帧（执行=%s）→ fallback",
-                        "、".join(sorted(n for n in executed_names if n)) or "无")
-            record("gate", "site_absence_claim",
+        clause5f = _site_absence_claim_clause(own5d, _exec_memory_has_search(msgs))
+        if clause5f:
+            logger.info("[gate] 站内『没有』结论但本轮无内容类工具帧（执行=%s）｜子句=%s → fallback",
+                        "、".join(sorted(n for n in executed_names if n)) or "无",
+                        _clip_clause(clause5f))
+            record("gate", "site_absence_claim", clause=_clip_clause(clause5f),
                    executed=sorted(n for n in executed_names if n))
             return _fallback_result("site_absence_claim", _FALLBACK_SITE_ABSENCE,
                                     plan, len(frames))
