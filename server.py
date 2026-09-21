@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 
+from agent import adminops as A  # 过程行中文取值（写工具的预告/完成帧共用）
 from agent import create_agent
 from agent.graph import AgentCancelled, graph_input
 from agent.principal import Principal
@@ -550,6 +551,9 @@ _NOARG_VERB = {
     "get_service_health": "查看服务健康",
     "get_moderation_status": "查看审核状况",
     "get_user_stats": "查看用户统计",
+    # 后台文章列表（20260921 第二轮，**读**）：无参，同上面四个报表工具——
+    # planner 点不到名（不在 _EXPLICIT_TOOLS），由 admin_notes 技能模板展开。
+    "list_admin_notes": "查看后台文章列表",
 }
 
 _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",
@@ -560,7 +564,9 @@ _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败"
               "ref_unparsed": "引用的返回不是结构化数据",
               "ref_index_range": "引用的序号越界",
               "ref_path_missing": "引用的字段不存在",
-              "ref_not_scalar": "引用取到的不是单个值"}
+              "ref_not_scalar": "引用取到的不是单个值",
+              # 写操作目标无据（graph.execute 的目标校验，20260921 第二轮）
+              "unknown_target": "目标未经确认"}
 
 
 # 参数引用（agent/refs.py 的 $<工具>[<序号>].<字段>）在过程行里的可读来源名。
@@ -571,6 +577,10 @@ _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败"
 _REF_SOURCE_CN = {
     "search_notes": "检索结果", "rag_search": "检索结果", "list_notes": "文章列表",
     "list_talks": "说说列表", "list_guestbook": "留言列表",
+    # 后台写轮最常见的引用源（20260921 第二轮）：`$list_admin_notes[0].noteKey`
+    # 是"把《X》设为私密"的标准走法（先读列表拿 id 再写），缺了它就往过程行里
+    # 打内部工具名。
+    "list_admin_notes": "后台文章列表",
 }
 
 
@@ -583,6 +593,36 @@ def _ref_phrase(value: str) -> str:
     return f"上一步{src}的第 {int(m.group(2)) + 1} 条"
 
 
+def _leaf(value, normalize=None, word=None) -> str:
+    """写工具的参数值 → 过程行可读短语（20260921 第二轮）。
+
+    三个来源各自成序，缺一不可：引用走 `_ref_phrase`（**绝不能打印 `$…` 原语法**）、
+    认识的取值走中文词、其余按原值截断——写工具的预告帧与完成帧都经这里，
+    两帧必须给主人看到**同一句话**（预告说"设为私密"、完成说"设为 private"会让人
+    以为改了两次）。
+    """
+    s = str(value if value is not None else "").strip()
+    if not s:
+        return ""
+    if s.startswith("$"):
+        return _ref_phrase(s)
+    if normalize is not None:
+        got = normalize(s)
+        if got is not None:
+            return word[got] if word else str(got)
+    return s[:12]
+
+
+def _names_phrase(value) -> str:
+    """标签名/ id 列表 → 「A、B、C」。"""
+    items = list(value) if isinstance(value, (list, tuple)) else [value]
+    out = [_leaf(v) for v in items[:3]]
+    out = [x for x in out if x]
+    if len(items) > 3:
+        out.append(f"等 {len(items)} 个")
+    return "「" + "、".join(out) + "」" if out else "（空）"
+
+
 def _tool_action_text(name: str, args: dict | None) -> str:
     """TOOLS spec 参数 → 中文动作正文（预告/回执完成帧共用，前后一致）。
 
@@ -591,6 +631,35 @@ def _tool_action_text(name: str, args: dict | None) -> str:
     引用形态的参数（$tool[0].field）译成来源短语，不打印内部语法。
     """
     a = args or {}
+    if name == "create_tag":
+        # 一级/二级只差一个父 id；标题为空（planner 漏参）时也要给出一行像样的中文
+        title = _leaf(a.get("title"))
+        pid = _leaf(a.get("parent_id"))
+        if not title:
+            return "新建标签"
+        return (f"新建二级标签「{title}」（父标签 id {pid}）" if pid
+                else f"新建一级标签「{title}」")
+    if name == "set_article_status":
+        aid = _leaf(a.get("article_id"))
+        bits = [_leaf(a.get("status"), A.normalize_status, A.STATUS_CN),
+                _leaf(a.get("is_top"), A.normalize_top,
+                      {1: "置顶", 0: "取消置顶"})]
+        head = f"修改文章 {aid}" if aid else "修改文章状态"
+        bits = [b for b in bits if b]
+        return f"{head}：{'、'.join(bits)}" if bits else head
+    if name == "set_article_tags":
+        aid = _leaf(a.get("article_id"))
+        head = f"修改文章 {aid} 的标签" if aid else "修改文章标签"
+        acts = []
+        if a.get("replace") is not None:
+            # replace=[] 是有语义的（清空标签），"改成（空）"读起来像出错，直说清空
+            acts.append("清空全部标签" if not a.get("replace")
+                        else "改成 " + _names_phrase(a.get("replace")))
+        if a.get("add"):
+            acts.append("加上 " + _names_phrase(a.get("add")))
+        if a.get("remove"):
+            acts.append("去掉 " + _names_phrase(a.get("remove")))
+        return f"{head}：{'、'.join(acts)}" if acts else head
     if name == "navigate_to":
         path = str(a.get("path") or "").strip()
         if path:

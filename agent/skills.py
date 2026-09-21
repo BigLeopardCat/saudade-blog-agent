@@ -64,6 +64,23 @@ NAV_MAP: dict[str, str | None] = {
 from tools.base import _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS
 from agent.refs import is_ref  # 参数引用 $tool[0].field（20260919，见 instantiate_plan）
 from agent.principal import ROLE_ADMIN  # 技能可见性按角色过滤（20260921 管理助手）
+import agent.adminops as A  # 写操作的纯函数层（归一/渲染，见 instantiate_plan 写分支）
+
+
+# 管理助手三件写（20260921 第二轮）。刻意**不进**上面两份 planner 点名白名单：
+# 写操作只能由技能模板展开（planner 选技能 + 填参数），不能经 PARAMS.calls 直接
+# 点名工具——白名单是"只读"这一条纪律的载体，写工具混进去等于放弃它。
+WRITE_SKILL_NAMES = frozenset({"tag_create", "article_status", "article_tags"})
+
+
+def _norm_pos_int(value) -> int | None:
+    """实参 → 正整数；否则 None（缺参守卫用，与 tools.base._as_article_id 同判据）。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    s = str(value).strip()
+    return int(s) if s.isdigit() and int(s) > 0 else None
 
 NAV_VALID_PATHS: set[str] = set(_NAV_EXACT_PATHS)
 
@@ -332,6 +349,93 @@ SKILLS: list[Skill] = [
         ),
         roles=frozenset({ROLE_ADMIN}),
     ),
+    # ── 管理助手·后台写（20260921 第二轮，仅 admin 可见）────────────────
+    # 四件：读后台文章清单（admin_notes）+ 三件写（建标签 / 改文章状态 / 打标签）。
+    # 与上面三张报表同构，但写技能多一层：**每次执行都要用户本轮明确下令**
+    # （write.console 在 CONSENT_SCOPES 里，见 agent/authz.py 的 _console_command）。
+    # 所以 reply_contract 里反复强调"未执行不得声称完成"——那不是在补 gate 的漏，
+    # 而是因为写轮的 narrator 一旦说错，用户会以为站点真的被改了。
+    Skill(
+        name="admin_notes",
+        description=(
+            "博主（管理员）要看**后台**文章清单时使用：有哪些文章、哪些是草稿或私密、"
+            "哪篇置顶了、各自什么标签。**要把某篇文章改成公开/私密/草稿、或要给它打标签之前，"
+            "先用本技能拿到那篇文章的确切 id**（公开接口看不到草稿与私密文章）。"
+            "**仅管理员可用**"
+        ),
+        inputs={},
+        plan=[("list_admin_notes", {})],
+        complete_when="list_admin_notes 返回了文章清单",
+        reply_contract=(
+            "如实转述清单里的 id 与标题、状态、标签；不得改动数字，也不得凭记忆补充清单里"
+            "没有的文章；工具返回失败或读不到时如实说读不到"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    Skill(
+        name="tag_create",
+        description=(
+            "博主（管理员）要求**新建一个文章标签**时使用（如「建一个叫 Python 的标签」"
+            "「在架构下面加一个二级标签叫 分布式」）。参数 title=标签名，parent_id=父标签 id"
+            "（要建二级标签才给；父标签 id 要从标签清单或本轮工具帧里拿到）。"
+            "写操作：**必须用户本轮明确下令才会执行**。**仅管理员可用**"
+        ),
+        inputs={"title": "新标签的名字", "parent_id": "（可选）父标签 id，建二级标签时给"},
+        plan=[("create_tag", {"title": "$title", "parent_id": "$parent_id"})],
+        complete_when="create_tag 返回了新建或复用的标签 id",
+        reply_contract=(
+            "只能按 create_tag 的实际返回作答：返回「已新建…（id=N）」就说新建好了并给出 id 与层级；"
+            "返回「已经存在…复用」就如实说本来就有、没有重复创建；"
+            "返回失败/未确认时如实说没建成，**不得用完成式声称已创建**。"
+            "本工具只建标签、不会挂到任何文章上——要挂标签得再用 article_tags"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    Skill(
+        name="article_status",
+        description=(
+            "博主（管理员）要求**改动某篇文章的发布状态或置顶**时使用（发布/公开、隐藏/私密、"
+            "转草稿、置顶、取消置顶）。参数 article_id=文章 id（**必须是本轮读到的，"
+            "通常是 admin_notes 返回的 id**，不许凭记忆写），status=public/private/draft，"
+            "is_top=1/0（只填用户点名的那一项）。"
+            "写操作：**必须用户本轮明确下令才会执行**；用户只是在提问或假设时不要选本技能。"
+            "**仅管理员可用**"
+        ),
+        inputs={"article_id": "文章 id", "status": "（可选）public/private/draft",
+                "is_top": "（可选）1 置顶 / 0 取消置顶"},
+        plan=[("set_article_status", {"article_id": "$article_id", "status": "$status",
+                                      "is_top": "$is_top"})],
+        complete_when="set_article_status 返回了改动前后的值",
+        reply_contract=(
+            "只能按 set_article_status 的实际返回作答，并**说清改了哪一篇、从什么变成什么**"
+            "（工具返回里就有「私密 → 公开」这样的前后值，照它说）；"
+            "返回「本来就是…无需改动」就说本来就是这个状态；"
+            "返回失败/未确认/待确认时如实说没改，**绝不得用完成式声称已改好**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    Skill(
+        name="article_tags",
+        description=(
+            "博主（管理员）要求**给某篇文章加标签或去掉标签**时使用。参数 article_id=文章 id"
+            "（**必须是本轮读到的**），add=要加的标签名列表，remove=要去掉的标签名列表，"
+            "replace=整体替换成哪些标签名（**只有用户明确说要清空/整体换掉标签时才用 replace，"
+            "传 [] 就是清空**）。标签按名字精确匹配站内已有的标签，**不会自动新建**"
+            "（要新建先选 tag_create）。写操作：**必须用户本轮明确下令才会执行**。**仅管理员可用**"
+        ),
+        inputs={"article_id": "文章 id", "add": "（可选）要加的标签名列表",
+                "remove": "（可选）要去掉的标签名列表",
+                "replace": "（可选）整体替换成这些标签名；[] 表示清空"},
+        plan=[("set_article_tags", {"article_id": "$article_id", "add": "$add",
+                                    "remove": "$remove", "replace": "$replace"})],
+        complete_when="set_article_tags 返回了改动前后的标签",
+        reply_contract=(
+            "只能按 set_article_tags 的实际返回作答，并说清改的是哪一篇、标签从什么变成什么；"
+            "返回「站内没有这些标签」时如实转述并说明需要先建标签或改名字；"
+            "返回失败/未确认时如实说没改，**绝不得用完成式声称已改好，也不得说已经建了新标签**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
     Skill(
         name="chat",
         description="闲聊、问候、情感交流、纯文字问答（不需要任何工具）时使用。",
@@ -459,6 +563,89 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
                 tools.append(f"{t}({{}})")
         if tools:
             note = f"按 planner 决策执行：{'、'.join(tools)}"
+    elif skill.name in WRITE_SKILL_NAMES:
+        # 管理助手三件写（20260921 第二轮）：**缺参守卫 + 空参剔除**，不复用下方
+        # 通用分支。通用分支对缺失参数会实例化出 `{"article_id": null}` 这样的
+        # 非法实参（那一路进 JSON 就变成 null，工具侧还得再拦一遍），而写操作最
+        # 不该做的事就是"参数不全时猜一个"——
+        #   · 目标不明（没有 article_id / 没有标签名）→ **零工具** + 注记，让
+        #     planner 去追问，而不是拿 null 去撞 URL；
+        #   · 没点名的可选参数一律**不落进 args**（article_status 只发用户点名的
+        #     那一项，绝不把 is_top=null 也塞进去——写操作的参数表就是它的语义）；
+        #   · status / is_top 在这里做**确定性归一**（adminops），归不出来就零工具
+        #     交回 planner；工具侧还有第二道同样的判据（纵深，不互替）。
+        note = ""
+        if skill.name == "tag_create":
+            title = str(params.get("title") or "").strip()
+            if not title:
+                note = ("tag_create 缺少标签名（title）：不调用任何工具，"
+                        "如实向主人问清要建的标签叫什么名字")
+            else:
+                args = {"title": title}
+                pid = _norm_pos_int(params.get("parent_id"))
+                if pid is not None:
+                    args["parent_id"] = pid
+                tools.append(f"create_tag({json.dumps(args, ensure_ascii=False)})")
+                note = (f"新建标签「{title}」"
+                        + (f"（挂在父标签 id={pid} 下）" if pid else "（一级标签）")
+                        + "；同名已存在时工具会复用而不是重复建")
+        else:
+            aid = _norm_pos_int(params.get("article_id"))
+            if aid is None:
+                note = (f"{skill.name} 缺少文章 id（article_id）：不调用任何工具，"
+                        "如实向主人问清是哪一篇文章；若不知道 id，"
+                        "先选 admin_notes 技能读出后台文章清单再回来")
+            elif skill.name == "article_status":
+                status = A.normalize_status(params.get("status"))
+                top = A.normalize_top(params.get("is_top"))
+                if params.get("status") not in (None, "") and status is None:
+                    note = (f"status「{params.get('status')}」认不出来（只支持 "
+                            "public/private/draft）：不调用任何工具，如实向主人问清")
+                elif params.get("is_top") not in (None, "") and top is None:
+                    note = (f"is_top「{params.get('is_top')}」认不出来（只支持 1/0）："
+                            "不调用任何工具，如实向主人问清")
+                elif status is None and top is None:
+                    note = ("article_status 没有指出要改什么（status / is_top）："
+                            "不调用任何工具，如实向主人问清要改成什么")
+                else:
+                    args = {"article_id": aid}
+                    if status is not None:
+                        args["status"] = status
+                    if top is not None:
+                        args["is_top"] = top
+                    tools.append(f"set_article_status({json.dumps(args, ensure_ascii=False)})")
+                    note = (f"修改文章 {aid}："
+                            + "、".join(filter(None, [
+                                f"状态→{A.status_cn(status)}" if status is not None else "",
+                                f"置顶→{A.top_cn(top)}" if top is not None else ""]))
+                            + "（只改点名的字段）")
+            else:  # article_tags
+                add, rm, rep = params.get("add"), params.get("remove"), params.get("replace")
+                if rep is not None and (add or rm):
+                    note = ("article_tags 的 replace 与 add/remove 同时出现（一个说\"整体替换\"、"
+                            "一个说\"增减\"）：不调用任何工具，如实向主人问清意图")
+                elif not add and not rm and rep is None:
+                    note = ("article_tags 没有指出要加/去/替换哪些标签：不调用任何工具，"
+                            "如实向主人问清")
+                else:
+                    args = {"article_id": aid}
+                    for key, val in (("add", add), ("remove", rm), ("replace", rep)):
+                        if val is None:
+                            continue
+                        items = [str(x).strip() for x in val] if isinstance(val, list) else [str(val).strip()]
+                        items = [x for x in items if x]
+                        if items or key == "replace":
+                            # replace=[] 是有语义的（清空标签），必须原样传下去；
+                            # add/remove 的空列表没有语义，剔掉。
+                            args[key] = items
+                    if not any(k in args for k in ("add", "remove", "replace")):
+                        note = ("article_tags 的标签列表都是空的：不调用任何工具，"
+                                "如实向主人问清要改哪些标签")
+                    else:
+                        tools.append(f"set_article_tags({json.dumps(args, ensure_ascii=False)})")
+                        note = f"修改文章 {aid} 的标签（只动点名的标签，其余保持不动）"
+        if not note:
+            note = f"{skill.name}：参数齐备"
     else:
         for tool_name, tmpl in skill.plan:
             args = {}

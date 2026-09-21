@@ -44,23 +44,31 @@ API_BASE = "https://saudade.site/api/public"
 # 命令帧契约（cmd_shape 校验），不动。
 class ToolResult(str):
     kind: str = "ok"
+    # 机器可读的副产物（20260921）：给**写操作**用——文本是给人/narrator 看的人话，
+    # `meta` 是给回执（execution_log.detail）看的**结构**：谁执行的、改了什么字段、
+    # 从什么变成什么。为什么不让 narrator/Rust 去解析人话：那是在拿正则啃中文，
+    # 改一次措辞就静默失配（回执是落库的审计，不能靠"读起来差不多"）。
+    # 与 kind 同一条生命线，经 `.invoke()` 透传（test_reports/test_admin_write 有锁）。
+    meta: dict = {}
 
-    def __new__(cls, text: str, kind: str = "ok") -> "ToolResult":
+    def __new__(cls, text: str, kind: str = "ok",
+                meta: dict | None = None) -> "ToolResult":
         obj = str.__new__(cls, text)
         obj.kind = kind
+        obj.meta = dict(meta) if meta else {}
         return obj
 
 
-def ok(text: str) -> ToolResult:
-    return ToolResult(text, "ok")
+def ok(text: str, meta: dict | None = None) -> ToolResult:
+    return ToolResult(text, "ok", meta)
 
 
-def empty(text: str) -> ToolResult:
-    return ToolResult(text, "empty")
+def empty(text: str, meta: dict | None = None) -> ToolResult:
+    return ToolResult(text, "empty", meta)
 
 
-def unavailable(text: str) -> ToolResult:
-    return ToolResult(text, "unavailable")
+def unavailable(text: str, meta: dict | None = None) -> ToolResult:
+    return ToolResult(text, "unavailable", meta)
 
 
 # 上游故障哨兵：`_get` 失败时返回它而不是 `[]`（"故障伪装成空"的源头就在那）。
@@ -813,6 +821,379 @@ def get_user_stats(config: RunnableConfig) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 管理助手写工具（20260921 第二轮：标签创建 / 文章状态 / 打标签）
+# ---------------------------------------------------------------------------
+# 与上一节同一条通道（以发起人身份代调），但方向是**写**：scope 全声明为
+# `write.console`（agent/authz.py）⇒ 只有 admin 用得动，且**每次都要当轮命令**。
+# 四道闸：① 结构性（不进 planner 的点名白名单，只能由 tag_create/article_status/
+# article_tags 三个技能模板展开）② 身份（非 admin 在 planner 上下文里看不到技能）
+# ③ authz.check() 硬拦（write.console 进 _HARD_SCOPES，不吃 shadow 开关）
+# ④ 同意（write.console 进 CONSENT_SCOPES：用户本轮消息必须是**命令句**）。
+#
+# ★ 这一节最重要的一条纪律：**一切"没做成"都必须 unavailable()**。
+# checker（graph._check_spec）对**非空文本**一律判 PASS，而 PASS 会被记成
+# **系统确认事实**落进 receipts → execution_log → 下一轮注入 narrator 的上下文。
+# 所以"创建失败，请到后台重试"这种 `ok(...)` 会被下一轮的自己念成"已创建"。
+# 反过来，`empty("")` 会被判 empty_result 而 BLOCK ⇒ "零写成功"的返回**也不能是空串**。
+#
+# 另一个坑：Rust 的 `ApiResponse::error` 是 **HTTP 200 + code 500**（src/utils.rs），
+# 所以 `_admin_post` 必须看业务码，只判状态码会把"创建失败"读成成功。
+
+def _admin_post(path: str, payload: dict, config: RunnableConfig) -> dict | str | ToolResult:
+    """以发起人身份 POST 一个后台接口（`/api/protected/*`），返回其 data 字段。
+
+    fail-closed 与 `_admin_get` 同族，且**更严**：任何一条不确定路径都返回
+    unavailable（= 不是事实、checker BLOCK、不进跨轮执行记忆），措辞里明确说
+    "本次改动未确认生效"，因为下游 narrator 要靠这句话如实告知用户。
+    """
+    uid = _device_get_user_id(config)
+    if uid <= 0:
+        # **身份不明时一个请求都不发**（写操作最不该做的就是在没身份时猜）。
+        # 这条同时是 golden 负向用例的安全底座：role=admin 但 uid=0 时，即便
+        # planner 误规划了写，请求也走不出这个进程（线上生产库零真写）。
+        return unavailable("无法获取当前用户身份，本次改动未执行")
+    principal = (config.get("configurable", {}) or {}).get("principal")
+    headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
+    try:
+        resp = _client.post(f"{ADMIN_BASE}{path}", headers=headers, json=payload, timeout=15)
+    except Exception as exc:
+        logger.error("admin POST %s failed: %s", path, exc)
+        return unavailable(f"后台接口请求失败: {exc}（本次改动未确认生效，不要声称已改好）")
+    if resp.status_code in (401, 403):
+        return unavailable("当前身份无权改动后台数据（该功能仅管理员可用），本次未改动任何内容")
+    if resp.status_code != 200:
+        return unavailable(f"后台接口返回 HTTP {resp.status_code}（本次改动未确认生效，不要声称已改好）")
+    try:
+        body = resp.json()
+    except Exception:
+        return unavailable("后台接口返回的不是 JSON（本次改动未确认生效，不要声称已改好）")
+    if body.get("code") != 200:
+        # ⚠️ 见本节头注：只看 HTTP 状态码会把 Rust 的 ApiResponse::error 当成功。
+        logger.warning("admin POST %s error: %s", path, body.get("message"))
+        return unavailable(f"后台接口报错: {body.get('message')}"
+                           f"（本次改动未确认生效，不要声称已改好）")
+    return body.get("data")
+
+
+def _tag_index(config: RunnableConfig):
+    """读两级标签字典 → `{id: TagInfo}`；任一读不到 → **None**。
+
+    None 不是"没有标签"，是"这次读不到字典"——调用方必须分开处理（见
+    adminops.render_tag_list 的同名区分）。返回 None 而不是抛，是因为"字典读不到"
+    在只读场景（渲染清单）不该让整次查询失败，而在写场景由调用方直接拒绝。
+    """
+    from agent import adminops as A
+    one = _admin_get("/api/tagone", config)
+    two = _admin_get("/api/tagtwo", config)
+    if isinstance(one, ToolResult) or isinstance(two, ToolResult):
+        return None
+    return A.build_tag_index(one, two)
+
+
+def _read_note(article_id: int, config: RunnableConfig) -> dict | None | ToolResult:
+    """读一篇文章的后台现状（**写操作的唯一读写口径**）。
+
+    为什么不用 `/api/protected/draft/editor/:id`：那一条对「编辑修改稿」行会**解引用
+    成原文章**，而 `update_note` 只发 `{status,isTop}` 时写的是**被点的那一行本身**
+    ——读的行和写的行不是同一行，前值全假；更坏的是把修改稿行写成 status=public 后，
+    公开列表（只滤 is_public/draft，不滤 draft_of）会多出一篇同标题文章。
+    `/api/protected/notes/list` 过滤 `draft_of is null`，于是修改稿 id 在这里**读不到**
+    → 调用方如实拒绝（"这不是一篇文章本体"），而不是猜。
+    """
+    data = _admin_get("/api/protected/notes/list", config)
+    if isinstance(data, ToolResult):
+        return data
+    for n in (data or []):
+        if isinstance(n, dict) and n.get("noteKey") == article_id:
+            return n
+    return None
+
+
+def _as_article_id(value) -> int | None:
+    """实参 → 正整数 id；不合法 → None（调用方拒绝，不猜、不默认）。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    s = str(value).strip()
+    return int(s) if s.isdigit() and int(s) > 0 else None
+
+
+@tool
+def list_admin_notes(config: RunnableConfig) -> str:
+    """查看后台文章清单：**包含未公开的草稿与私密文章**（公开接口一律看不到它们），
+    每行给出 id、状态（公开/私密/草稿）、是否置顶、标签。要改某篇文章的状态或标签，
+    先用它拿到**确切的 id**。需要管理员身份。"""
+    from agent import adminops as A
+    data = _admin_get("/api/protected/notes/list", config)
+    if isinstance(data, ToolResult):
+        return data
+    notes = data if isinstance(data, list) else []
+    if not notes:
+        return empty("后台文章列表是空的（一篇文章都没有）")
+    return ok(A.render_admin_notes(notes, _tag_index(config)), meta={"count": len(notes)})
+
+
+@tool
+def create_tag(
+    title: Annotated[str, "新标签的名字（如「Python」「分布式」）"],
+    config: RunnableConfig,
+    parent_id: Annotated[int | None, "父标签的 id（建二级标签时给；建一级标签不填）"] = None,
+) -> str:
+    """新建一个文章标签：不填 parent_id 建**一级**标签，填了则在该一级标签下建**二级**标签。
+    同名标签已存在时**不重复创建**，直接复用并告知它的 id。
+    **本工具只往标签字典里加一项，不会把它挂到任何文章上**（挂标签用 set_article_tags）。
+    需要管理员身份。"""
+    from agent import adminops as A
+    name = str(title or "").strip()
+    if not name:
+        return unavailable("标签名为空，未创建")
+    if len(name) > 40:
+        return unavailable(f"标签名过长（{len(name)} 字，上限 40），未创建")
+    pid = None
+    if parent_id is not None and str(parent_id).strip() != "":
+        pid = _as_article_id(parent_id)  # 同一套"必须是正整数"的判据
+        if pid is None:
+            return unavailable(f"父标签 id「{parent_id}」不合法，未创建")
+
+    index = _tag_index(config)
+    if index is None:
+        return unavailable("读不到现有的标签字典，无法确认是否重名，本次未创建")
+
+    # 先查后建（幂等）：同名同层 → 直接复用，不写库。
+    hit, cands = A.find_tag(index, name, pid)
+    # 复用只认**同一层**的同名标签：建一级时命中的若是二级同名标签，那不是"已存在"
+    # （管理员要的是一个一级标签），而是"你可能想要那个子标签"——走下面的拒绝路径。
+    # 给 pid 时 find_tag 已按 (level==2 且 father_id==pid) 过滤，故命中即同层。
+    if hit is not None and (pid is not None or hit.level == 1):
+        return ok(A.render_tag_reuse(hit), meta={
+            "op": "tag_reuse", "tag_id": hit.id, "tag_name": hit.name, "level": hit.level})
+
+    if pid is not None:
+        parent = index.get(pid)
+        if parent is None or parent.level != 1:
+            return unavailable(f"父标签 id={pid} 不存在或不是一级标签，本次未创建")
+    elif cands or hit is not None:
+        cands = cands or [hit]
+        # 有同名标签、但都在二级（同一个或不同父下）——这不是"已存在"，是"你可能是
+        # 想要那个"。直接建一个同名一级标签会让以后所有按名字找标签的操作都变歧义。
+        return unavailable(
+            f"站内已有同名**二级**标签「{name}」（{'、'.join(c.label + ' id=' + str(c.id) for c in cands)}）；"
+            f"如果你要的是它，直接用它；如果确实要新建一个同名一级标签，请说明后再来。本次未创建")
+
+    color = A.color_for_name(name)
+    if pid is not None:
+        path, payload = "/api/protected/tagtwo", {"title": name, "color": color, "fatherTag": pid}
+    else:
+        path, payload = "/api/protected/tagone", {"title": name, "color": color}
+    data = _admin_post(path, payload, config)
+    if isinstance(data, ToolResult):
+        return data
+    try:
+        new_id = int(str(data).strip())
+    except Exception:
+        new_id = 0
+    if new_id <= 0:
+        return unavailable(f"后台没有返回新标签 id（返回 {data!r}），无法确认创建结果")
+
+    # 建后复核：**读回来证明它真的在**，而不是相信返回值。理由：id 由库分配、
+    # 创建与读取之间还可能撞上并发/约束问题；只有"字典里真有一行 id=新id 且名字一致"
+    # 才算数（tag 列表接口 `unwrap_or(vec![])` 会把 DB 故障伪装成空表，读回是唯一的证）。
+    after = _tag_index(config)
+    if after is None:
+        return unavailable(f"标签可能已创建（后台返回 id={new_id}），但读不回标签字典、无法确认——"
+                           f"请到后台标签页核对后再决定是否重试")
+    got = after.get(new_id)
+    if got is None or got.name != name:
+        return unavailable(f"创建后复核失败：标签字典里找不到 id={new_id} 且名字为「{name}」的行，"
+                           f"本次改动未确认生效")
+    return ok(A.render_tag_created(got), meta={
+        "op": "tag_create", "tag_id": got.id, "tag_name": got.name, "level": got.level})
+
+
+@tool
+def set_article_status(
+    article_id: Annotated[int, "文章 id（必须是本轮读到的，例如 list_admin_notes 返回的 id）"],
+    config: RunnableConfig,
+    status: Annotated[str | None, "改成什么状态：public=公开 / private=私密 / draft=草稿"] = None,
+    is_top: Annotated[int | None, "置顶开关：1=置顶 / 0=取消置顶"] = None,
+) -> str:
+    """修改一篇文章的状态（发布/隐藏/转草稿）或置顶开关。**只改你点名的字段**，
+    没点名的保持不动（不会顺手改标题、正文或可见性）。需要管理员身份。"""
+    from agent import adminops as A
+    aid = _as_article_id(article_id)
+    if aid is None:
+        return unavailable(f"文章 id「{article_id}」不合法，未改动")
+    has_status = status is not None and str(status).strip() != ""
+    has_top = is_top is not None and str(is_top).strip() != ""
+    if not has_status and not has_top:
+        return unavailable("没有指出要改什么（状态 / 置顶），未改动")
+    want_status = A.normalize_status(status) if has_status else None
+    if has_status and want_status is None:
+        return unavailable(f"认不出状态「{status}」（只支持 public 公开 / private 私密 / draft 草稿），未改动")
+    want_top = A.normalize_top(is_top) if has_top else None
+    if has_top and want_top is None:
+        return unavailable(f"认不出置顶值「{is_top}」（只支持 1 置顶 / 0 取消置顶），未改动")
+
+    before = _read_note(aid, config)
+    if isinstance(before, ToolResult):
+        return before
+    if before is None:
+        return unavailable(f"后台文章列表里没有 id={aid} 这一篇"
+                           f"（它可能是某篇文章的「编辑修改稿」影子行，不能这样直接改），本次未改动")
+    title = str(before.get("noteTitle") or "").strip()
+
+    payload: dict = {}
+    if want_status is not None:
+        payload["status"] = want_status
+    if want_top is not None:
+        payload["isTop"] = want_top
+    # ★ 刻意**不发** title/content（会触发 from_editor 分支：重定向 + 级联删修改稿）、
+    #   不发 isPublic（由 status 联动）、不发 updateTime（Rust 自己写 updated_at）。
+
+    # 已经就是目标值 → **不发这个请求**。`update_note` 无条件刷新 updated_at，
+    # 一次空改动会把文章顶到列表最前（纯副作用、无收益）。
+    same = ((want_status is None or A.normalize_status(before.get("status")) == want_status)
+            and (want_top is None or A.normalize_top(before.get("isTop")) == want_top))
+    if same:
+        now_cn = "、".join(filter(None, [
+            A.status_cn(before.get("status")) if want_status is not None else "",
+            A.top_cn(before.get("isTop")) if want_top is not None else ""]))
+        return ok(f"文章 {aid}《{title}》本来就是{now_cn}，无需改动（没有发出写请求）。",
+                  meta={"op": "set_status", "article_id": aid, "before": now_cn, "after": now_cn,
+                        "noop": True})
+
+    data = _admin_post(f"/api/protected/notes/{aid}", payload, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    after = _read_note(aid, config)
+    if isinstance(after, ToolResult):
+        return after
+    if after is None:
+        return unavailable(f"改动请求已发出，但读回时文章 {aid} 已不在后台列表里，本次改动未确认生效")
+
+    pairs = []
+    if want_status is not None:
+        pairs.append((A.status_cn(before.get("status")), A.status_cn(after.get("status"))))
+    if want_top is not None:
+        pairs.append((A.top_cn(before.get("isTop")), A.top_cn(after.get("isTop"))))
+    if all(b == a for b, a in pairs):
+        # 请求发出去了、读回来却原封不动 —— 这不是"改好了"，是"没确认生效"。
+        return unavailable(f"改动请求已发出，但读回文章 {aid} 仍是原值"
+                           f"（{(' / '.join(b for b, _ in pairs))}），本次改动未确认生效")
+    before_s, after_s = A.render_change(pairs)
+    return ok(A.render_status_ok(aid, title, before_s, after_s),
+              meta={"op": "set_status", "article_id": aid, "before": before_s, "after": after_s})
+
+
+@tool
+def set_article_tags(
+    article_id: Annotated[int, "文章 id（必须是本轮读到的，例如 list_admin_notes 返回的 id）"],
+    config: RunnableConfig,
+    add: Annotated[list[str] | None, "要**加上**的标签名（如 [\"Python\"]；必须是站内已存在的标签）"] = None,
+    remove: Annotated[list[str] | None, "要**去掉**的标签名"] = None,
+    replace: Annotated[list[str] | None, "整体**替换**成这些标签名；**只有明确要求「清空标签」时才传 []**"] = None,
+) -> str:
+    """给一篇文章加标签 / 去掉标签。**只动你点名的标签，没点名的原样保留**（绝不顺手清空）。
+    标签按**名字**精确匹配站内已有的标签——找不到就如实说，**不会自动新建**
+    （要新建标签用 create_tag）。传 replace 才是整体替换。需要管理员身份。"""
+    from agent import adminops as A
+    aid = _as_article_id(article_id)
+    if aid is None:
+        return unavailable(f"文章 id「{article_id}」不合法，未改动")
+
+    def _names(v) -> list:
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return [x for x in v if str(x).strip() != ""]
+        s = str(v).strip()
+        return [s] if s else []
+
+    add_l, rm_l, rep_l = _names(add), _names(remove), _names(replace)
+    if replace is not None and (add_l or rm_l):
+        return unavailable("replace 不能与 add/remove 同时使用（一个说\"整体替换\"、一个说\"增减\"），未改动")
+    if not add_l and not rm_l and replace is None:
+        return unavailable("没有指出要加/去/替换哪些标签，未改动")
+
+    index = _tag_index(config)
+    if index is None:
+        return unavailable("读不到现有的标签字典，无法把标签名对应到 id，本次未改动")
+
+    def _resolve(items) -> tuple[list[int], list[str]]:
+        """名字/数字混合列表 → (id 列表, 认不出来的原样列表)。"""
+        ids, bad = [], []
+        for it in items:
+            tid = _as_article_id(it)
+            if tid is not None:
+                ids.append(tid)
+                continue
+            hit, cands = A.find_tag(index, str(it))
+            if hit is not None:
+                ids.append(hit.id)
+            else:
+                bad.append(str(it))
+        return ids, bad
+
+    before_note = _read_note(aid, config)
+    if isinstance(before_note, ToolResult):
+        return before_note
+    if before_note is None:
+        return unavailable(f"后台文章列表里没有 id={aid} 这一篇"
+                           f"（它可能是某篇文章的「编辑修改稿」影子行，不能这样直接改），本次未改动")
+    title = str(before_note.get("noteTitle") or "").strip()
+    cur = A.parse_tag_ids(before_note.get("noteTags"))
+
+    if replace is not None:
+        add_ids, bad = _resolve(rep_l)
+        if bad:
+            return unavailable(f"站内没有这些标签：{'、'.join(bad)}——"
+                               f"先确认名字（或先用 create_tag 建好），本次未改动")
+        new = add_ids
+    else:
+        add_ids, bad_add = _resolve(add_l)
+        rm_ids, bad_rm = _resolve(rm_l)
+        if bad_add:
+            return unavailable(f"站内没有这些标签：{'、'.join(bad_add)}——"
+                               f"标签按名字精确匹配，不会自动新建（要建用 create_tag），本次未改动")
+        if bad_rm:
+            return unavailable(f"站内没有这些标签：{'、'.join(bad_rm)}——无法确定要去掉的是哪一个，本次未改动")
+        new = [i for i in cur if i not in rm_ids]
+        for i in add_ids:
+            if i not in new:
+                new.append(i)
+
+    if new == cur:
+        return ok(f"文章 {aid}《{title}》的标签本来就是"
+                  f"{A.render_tag_list(cur, index)}，无需改动（没有发出写请求）。",
+                  meta={"op": "set_tags", "article_id": aid,
+                        "before": A.render_tag_list(cur, index),
+                        "after": A.render_tag_list(cur, index), "noop": True})
+
+    # `noteTags` 是"传了就写"，`""` = 清空 ⇒ 只有 replace（含 replace=[]）才可能产出空串；
+    # add/remove 路径下 new 至少含一个元素或被上面的 new==cur 拦下。
+    data = _admin_post(f"/api/protected/notes/{aid}", {"noteTags": A.join_tag_ids(new)}, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    after_note = _read_note(aid, config)
+    if isinstance(after_note, ToolResult):
+        return after_note
+    if after_note is None:
+        return unavailable(f"改动请求已发出，但读回时文章 {aid} 已不在后台列表里，本次改动未确认生效")
+    got = A.parse_tag_ids(after_note.get("noteTags"))
+    if got != new:
+        return unavailable(f"改动请求已发出，但读回文章 {aid} 的标签是"
+                           f"{A.render_tag_list(got, index)}、与预期的"
+                           f"{A.render_tag_list(new, index)}不一致，本次改动未确认生效")
+    before_s = A.render_tag_list(cur, index)
+    after_s = A.render_tag_list(got, index)
+    return ok(A.render_tags_ok(aid, title, before_s, after_s),
+              meta={"op": "set_tags", "article_id": aid, "before": before_s, "after": after_s})
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -844,6 +1225,12 @@ _TOOL_REGISTRY = [
     get_service_health,
     get_moderation_status,
     get_user_stats,
+    # 管理助手后台写（20260921 第二轮）：list_admin_notes=admin.console，
+    # 三个写工具=write.console，见"管理助手写工具"节头注
+    list_admin_notes,
+    create_tag,
+    set_article_status,
+    set_article_tags,
 ]
 
 def get_all_tools():

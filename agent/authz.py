@@ -40,16 +40,18 @@ SCOPE_READ_ANY = "read.any"            # 他人的私有数据（秘书的核心
 SCOPE_WRITE_PAGE = "write.page"        # 作用于访客自己看到的页面：导航/特效/夜间模式
 SCOPE_WRITE_DEVICE = "write.device"    # 物理世界写操作：IoT 设备（当前唯一：屏幕刷字）
 SCOPE_WRITE_CONTENT = "write.content"  # 代用户写站点内容（留言/说说/文章）——尚未有工具
-SCOPE_ADMIN_CONSOLE = "admin.console"  # 后台管理面（Rust auth_guard 的那道门）
+SCOPE_ADMIN_CONSOLE = "admin.console"  # 后台管理面**读**（Rust auth_guard 后面的东西）
+SCOPE_WRITE_CONSOLE = "write.console"  # 后台管理面**写**（标签/文章状态——20260921 第二轮新增）
 
 ALL_SCOPES = frozenset({
     SCOPE_READ_PUBLIC, SCOPE_READ_OWN, SCOPE_READ_ANY,
     SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE, SCOPE_WRITE_CONTENT,
-    SCOPE_ADMIN_CONSOLE,
+    SCOPE_ADMIN_CONSOLE, SCOPE_WRITE_CONSOLE,
 })
 
 # 写操作：留给后续"人在回路确认"挂钩（见 docs/secretary.md 的前置需求 ③）
-WRITE_SCOPES = frozenset({SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE, SCOPE_WRITE_CONTENT})
+WRITE_SCOPES = frozenset({SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE, SCOPE_WRITE_CONTENT,
+                          SCOPE_WRITE_CONSOLE})
 
 # ── 不吃 shadow 开关的 scope（20260921）────────────────────────────────
 # shadow 模式（`enforcing()` 默认 False）的存在理由只有一个：**观测既有流量**，
@@ -59,7 +61,21 @@ WRITE_SCOPES = frozenset({SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE, SCOPE_WRITE_CONT
 # 恰恰是这套模型要防的事。所以它硬拦——判据本身不打折，只是不参与灰度。
 # （同源先例：写操作的 consent 闸也不吃 shadow，见 graph.execute_node。
 #   区别在于 consent 回答"这一次要不要做"，这里回答"这个人能不能做"。）
-_HARD_SCOPES = frozenset({SCOPE_ADMIN_CONSOLE})
+#
+# 20260921 第二轮把 `write.console` 一并加进来，理由是**同一个门的两面**：后台
+# 写入与后台读取在 Rust 侧走的是同一道 `auth_guard`，没有"观测期"这回事。这里
+# 尤其危险的是：若只加 CONSENT_SCOPES 不加 _HARD_SCOPES，生产环境
+# `authz_enforce=False` 会让 `decision.allowed=False` 的非 admin **直接落到 invoke**
+# （graph.execute_node 的 `not allowed and not enforcing` 分支只记录不拦）——即
+# "有确认语的非管理员能把文章设成私密"。test_admin_write.py 有专门一条断言锁它。
+_HARD_SCOPES = frozenset({SCOPE_ADMIN_CONSOLE, SCOPE_WRITE_CONSOLE})
+
+# ── 要不要把"谁执行的"写进回执（20260921）─────────────────────────────
+# 回执会经 execution_log.detail 落生产库、并被下一轮的 recent_executions 注入
+# narrator 的上下文。只对**后台写**标注执行身份：访客问一句"帮我跳转到首页"，
+# 回执上写"以访客身份"既无信息量又是把 uid/角色往库里塞。写操作不同——它是
+# 审计的一部分（用户拍板：零迁移，审计走 detail）。
+AUDIT_SCOPES = frozenset({SCOPE_WRITE_CONSOLE})
 
 # ── 角色 → 授予 ──────────────────────────────────────────────────────
 # 纪律：**授予表必须覆盖该角色当前用得到的全部工具**，否则 shadow 期给出的拒
@@ -116,6 +132,18 @@ TOOL_SCOPE: dict[str, str] = {
     "get_service_health": SCOPE_ADMIN_CONSOLE,
     "get_moderation_status": SCOPE_ADMIN_CONSOLE,
     "get_user_stats": SCOPE_ADMIN_CONSOLE,
+    # 管理助手（20260921 第二轮）：后台**写**。<动作>.<对象> 与 admin.console
+    # 成对：一个是这道门的读方向，一个是写方向。
+    #   `list_admin_notes` 取 admin.console 而不是 read.any——它读的是**后台**
+    #   文章列表（含草稿/私密），与上面四个报表工具同一个门；没有它，"把草稿
+    #   发布出来"这条指令在 planner 侧拿不到 id（公开接口一律滤 is_public）。
+    #   三个写工具取 write.console：进 _HARD_SCOPES（不吃 shadow）+ 进
+    #   CONSENT_SCOPES（每次要命令式确认）。secretary 刻意不给——后台写与
+    #   admin.console 同域，Rust 那道门也只认 admin。
+    "list_admin_notes": SCOPE_ADMIN_CONSOLE,
+    "create_tag": SCOPE_WRITE_CONSOLE,
+    "set_article_status": SCOPE_WRITE_CONSOLE,
+    "set_article_tags": SCOPE_WRITE_CONSOLE,
 }
 
 
@@ -124,16 +152,111 @@ TOOL_SCOPE: dict[str, str] = {
 # 只有**离开用户自己眼前**的写入才需要确认：写站点内容（留言/说说/文章）发出去
 # 就收不回、且以用户名义对他人可见，而页面/设备写操作的效果就发生在用户眼前
 # （他立刻看得见、也立刻能改回来），既有行为不动它。
-CONSENT_SCOPES = frozenset({SCOPE_WRITE_CONTENT})
+#
+# 20260921 第二轮把 `write.console` 加进来：后台写改的是**对外可见状态**
+# （一篇文章从公开变私密，读者立刻打不开），且改完不会自动复原。
+CONSENT_SCOPES = frozenset({SCOPE_WRITE_CONTENT, SCOPE_WRITE_CONSOLE})
 
 # 每个需确认的 scope 配一张**确认语表**：用户的**本轮消息**命中才算确认。
 # 刻意收窄（"确认发布"这种明确说法）——fail-open 的代价是未经同意把内容发出去，
 # 宁可多问一轮。扩表时先问一句：这句话会不会被误读成确认？
-_CONSENT_PATTERNS: dict[str, re.Pattern] = {
+#
+# 表值可以是 `re.Pattern`（`.search`）或**谓词 `(msg) -> bool`**（20260921 加）：
+# write.console 的判据要同时管"有没有命令骨架"和"是不是在提问/假设"，写成一条
+# 正则既读不懂也测不动——拆成几个具名小判据，在 `_console_command` 里组合。
+_CONSENT_PATTERNS: dict[str, object] = {
     SCOPE_WRITE_CONTENT: re.compile(
         r"(确认|同意|批准|就这么)(发布|发送|提交|发出去|发|写)"
         r"|确认(就)?这样(发|写)|授权(发布|发送|提交)"),
+    SCOPE_WRITE_CONSOLE: None,  # 占位，见下方 _console_command 注册
 }
+
+
+# ── write.console 的「命令式判据」（20260921）─────────────────────────
+# **它判的是"本轮有没有明确命令"，不是"第二次确认"**（用户拍板：同轮命令即确认
+# ——管理员说「把《架构文档》设为私密」本身就是命令，再要一句"确认"是把确认闸
+# 做成复读机）。三个小判据按 AND 组合，每一条都能单独写正反用例：
+#
+#   ① 有明确目标（id / 《书名号》/ 指代词 / 标签名）
+#   ② 有后台写动作词
+#   ③ 是命令句：有命令骨架（把/将/给，或动词起首），且**不是**疑问/假设/反问
+#
+# 提问与假设是这里最要命的误判来源：「把文章 12 设为私密会有什么影响？」若被判成
+# 命令，闸就白设了。fail-closed 方向 = 判不出来就返回 False（planner 去追问），
+# 代价是多问一轮，收益是绝不误写。
+#
+# **已知的刻意收窄**：「文章 12 设为私密」（无"把"的电报体）**不**判为命令——
+# 它与陈述句「12 是私密的」在文本上无法可靠区分，而后者被误判成命令 = 用户只是
+# 陈述现状、agent 却去写了。要放宽这条，先解决"陈述 vs 命令"的判别，别只删判据。
+_CONSOLE_QUESTION_RE = re.compile(
+    r"[？?]|吗|呢|怎么|为什么|为啥|是否|能否|能不能|可不可以|会不会|要不要|"
+    r"有什么影响|有何影响|有没有|是不是|该不该|应不应该|好不好|行不行|对不对|"
+    r"对吧|是吧|对吗|不是吗|怎么办|咋办|什么后果|风险")
+_CONSOLE_HYPOTHESIS_RE = re.compile(
+    r"^\s*(?:如果|假如|假设|要是|若是|万一|倘若|我想问|我想知道|想问|请问|问一下)")
+# 命令骨架：句首的「把/将/给」，或句首的动词，或「请/帮我…」起首。
+_CONSOLE_ORDER_RE = re.compile(
+    r"(?:^|[。！!；;\n，,])\s*(?:请|帮我|帮忙|麻烦|记得|快去)?\s*(?:把|将|给)"
+    r"|^\s*(?:请|帮我|帮忙|麻烦|记得)\s*\S"
+    r"|^\s*(?:新建|创建|建立|添加|发布|置顶|取消置顶|取消顶置|隐藏|公开|私密|下架)"
+    # 「取消…置顶」把动词拆开了（宾语插在中间）："取消文章 12 的置顶"是**最常见的
+    # 撤顶说法**，上面第三支的"取消置顶"连写认不到。只放 置顶/顶置 两个宾语——
+    # 「取消…标签」那类不放：`功能/排序` 之类的抽象宾语会与闲聊撞车，而"取消标签"
+    # 另有"把文章 12 的标签去掉/去掉标签"等**动词连写**的说法可走（fail-closed 的
+    # 方向是多问一句，不是多写一次生产数据）。
+    r"|^\s*(?:取消|解除)[^\n。！？!?；;，,]{0,12}?(?:置顶|顶置)")
+# 动作词（后台写域；"公开/私密/草稿/发布"这些裸词靠"命令骨架 + 目标"两项兜住，
+# 单看它们会与陈述句撞车）。
+_CONSOLE_VERBS = (
+    "设为私密", "设为公开", "设为草稿", "设成私密", "设成公开", "设成草稿",
+    "改成私密", "改成公开", "改成草稿", "转成私密", "转成公开", "转为私密", "转为公开",
+    "置顶", "取消置顶", "取消顶置", "顶置", "隐藏", "公开", "私密", "草稿",
+    "发布", "下架", "撤下",
+    "新建", "创建", "建立", "新增", "建一个", "建个", "添加", "打上", "加上", "打个",
+    "改成", "改为", "换成", "改名为", "取消标签", "去掉标签", "移除标签", "删掉标签",
+    "去掉", "移除",
+)
+# 「标签 / 叫 <名字>」形态的目标：名字取到空白或标点为止。
+_CONSOLE_TAG_NAME_RE = re.compile(
+    r"(?:叫|名为|叫做|名字是|名称是|标签)\s*[：:]?\s*[\"'“”‘’]?"
+    r"([^\s，。！？!?；;\"'“”]{1,30})")
+
+
+def _console_target(text: str) -> bool:
+    """消息里有没有**明确的目标**（数字 id / 《书名号》/ 指代词 / 一个标签名）。
+
+    标签名那一支要做一次反查：「把**标签去掉**」里"标签"后面跟的是**动作词**，
+    不是名字——只看正则的话它和「新建标签 Python」长得一模一样，会把一
+    「把标签去掉」判成有目标的命令。所以命中后要求那个"名字"不落在动作词表里。
+    """
+    if re.search(r"\d+", text):
+        return True
+    if "《" in text and "》" in text:
+        return True
+    if re.search(r"这篇|这篇文章|当前文章|此文|该文", text):
+        return True
+    m = _CONSOLE_TAG_NAME_RE.search(text)
+    if not m:
+        return False
+    name = m.group(1)
+    return not any(v.startswith(name) or name.startswith(v) for v in _CONSOLE_VERBS)
+
+
+def _console_command(msg: str) -> bool:
+    """本轮消息是不是一条明确的后台写命令（确定性、无 LLM）。"""
+    text = (msg or "").strip()
+    if not text:
+        return False
+    if _CONSOLE_QUESTION_RE.search(text) or _CONSOLE_HYPOTHESIS_RE.search(text):
+        return False
+    if not _console_target(text):
+        return False
+    if not any(v in text for v in _CONSOLE_VERBS):
+        return False
+    return bool(_CONSOLE_ORDER_RE.search(text))
+
+
+_CONSENT_PATTERNS[SCOPE_WRITE_CONSOLE] = _console_command
 
 
 def scopes_for(role: str | None) -> frozenset[str]:
@@ -164,12 +287,16 @@ def consent_granted(principal: Principal | None, tool: str, user_msg: str) -> bo
     """用户本轮消息里有没有对该 scope 的明确确认（确定性、无 LLM）。
 
     fail-closed：需确认的 scope 若没配确认语表 → **False**（绝不默认放行）；
-    消息为空 → False。
+    消息为空 → False。表值可以是正则（`.search`）或谓词（直接调用），见
+    `_CONSENT_PATTERNS` 的注释。
     """
-    pat = _CONSENT_PATTERNS.get(required_scope(tool) or "")
-    if pat is None:
+    spec = _CONSENT_PATTERNS.get(required_scope(tool) or "")
+    if spec is None:
         return False
-    return bool(pat.search(user_msg or ""))
+    msg = user_msg or ""
+    if callable(spec):
+        return bool(spec(msg))
+    return bool(spec.search(msg))
 
 
 def manifest_gaps(tool_names) -> list[str]:
@@ -254,6 +381,21 @@ def scope_error_reason(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+# 每个需确认的 scope 的"未获确认"说明——**这段文字会被 planner 读进去、并照着
+# 向用户复述**，所以必须说准这次到底要确认什么：把"隐藏一篇文章"说成"把内容发布
+# 出去"，用户会以为 agent 理解错了指令（20260921 加 write.console 时拆出来）。
+_CONSENT_WHY = {
+    SCOPE_WRITE_CONTENT: (
+        "会把内容发布到站点上（对外可见、收不回）",
+        "请把要发布的内容原样告诉用户，并请他明确回复确认（例如「确认发布」）"),
+    SCOPE_WRITE_CONSOLE: (
+        "会改动站点上的文章状态/标签（对外可见，且不会自动复原）",
+        "请把**你打算改什么、改成什么**原样告诉用户（哪一篇、从什么变成什么），"
+        "并请他明确说一句命令（例如「把文章 12 设为私密」）；"
+        "若他只是在提问或假设，先回答他的问题，不要执行"),
+}
+
+
 def consent_frame(tool: str, principal: Principal | None) -> str:
     """未获确认时的 __ERROR__ 帧文本。
 
@@ -263,10 +405,12 @@ def consent_frame(tool: str, principal: Principal | None) -> str:
     （错误帧 + 完成式声称 → fallback）因此自动生效，**叙述侧无法把它说成"已发布"**。
     """
     who = f"uid={principal.uid} role={(principal.role if principal else None) or '未知'}"
+    scope = required_scope(tool) or ""
+    why, ask = _CONSENT_WHY.get(
+        scope, ("会改动站点上的数据", "请先向用户确认这一次要不要做"))
     return (f"__ERROR__: 待确认[{REASON_CONSENT}] —— {who} 请求的写操作 {tool} "
-            f"会把内容发布到站点上（对外可见、收不回），而**用户本轮消息里没有明确确认**。"
-            f"本轮未执行、也不得声称已完成：请把要发布的内容原样告诉用户，"
-            f"并请他明确回复确认（例如「确认发布」）。")
+            f"{why}，而**用户本轮消息里没有明确确认**。"
+            f"本轮未执行、也不得声称已完成：{ask}。")
 
 
 _CONSENT_ERR_RE = re.compile(r"待确认\[([a-z_]+)\]")

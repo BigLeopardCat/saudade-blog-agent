@@ -50,10 +50,13 @@ check("角色授予表只引用词汇表内的 scope",
 
 print("② 授予表覆盖现状（shadow 期的拒绝必须是真越权，不是配错）")
 # 今天 user 用得到的：公开只读 + 自己的会话/设备 + 自己的页面。
-# 排除 admin.console（20260921）：那四个是**纯新增能力**，user 从来没有过——它被拒
-# 是设计本身，不是"配错"；本检查要抓的是"把 user 今天在用的工具误拒了"。
+# 排除 admin.console（20260921）与 write.console（同日第二轮）：两者都是**纯新增
+# 能力**，user 从来没有过——被拒是设计本身，不是"配错"；本检查要抓的是"把 user
+# 今天在用的工具误拒了"。（这条排除清单只服务于本检查，不改变授予表：`_ROLE_SCOPES`
+# 里 user 一档一行没动，见 ② 后面的 secretary ⊂ admin 断言。）
 USER_TOOLS = [n for n in TOOL_NAMES
-              if authz.required_scope(n) not in (authz.SCOPE_READ_ANY, authz.SCOPE_ADMIN_CONSOLE)]
+              if authz.required_scope(n) not in (authz.SCOPE_READ_ANY, authz.SCOPE_ADMIN_CONSOLE,
+                                                 authz.SCOPE_WRITE_CONSOLE)]
 denied = [n for n in USER_TOOLS if not authz.check(p(ROLE_USER), n).allowed]
 check(f"user 未被拒任何现有工具（{len(USER_TOOLS)} 个）", not denied, f"误拒: {denied}")
 denied = [n for n in TOOL_NAMES if not authz.check(p(ROLE_ADMIN), n).allowed]
@@ -171,10 +174,14 @@ check("节点 config 注解是真实类型（不是字符串）",
 print("⑨ 写操作的「人在回路」确认（前置需求 ③：权限之后还有一次同意）")
 # 权限判"这个人能不能做"，确认判"这一次他到底要不要做"。只有**离开用户眼前**的
 # 写入（写站点内容：对外可见、收不回）要确认；页面/设备写的效果用户立刻看得见。
-check("现有工具没有一个是需确认的 scope（今天行为零变化）",
-      not any(authz.requires_consent(p(ROLE_ADMIN), n) for n in TOOL_NAMES),
-      str([n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), n)]))
+# 20260921 第二轮起**精确集合**：需确认的工具恰好是三个后台写（此前是"一个都没有"
+# ——写工具落地那天这条必须有人看见它变了）。
+CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), n)}
+check("需确认的工具恰好是三个后台写（改宽/改窄都要有人看见）",
+      CONSENT_TOOLS == {"create_tag", "set_article_status", "set_article_tags"},
+      str(sorted(CONSENT_TOOLS)))
 check("写站点内容属于需确认 scope", authz.SCOPE_WRITE_CONTENT in authz.CONSENT_SCOPES)
+check("后台写属于需确认 scope", authz.SCOPE_WRITE_CONSOLE in authz.CONSENT_SCOPES)
 check("页面/设备写不需要确认（效果就在用户眼前）",
       authz.SCOPE_WRITE_PAGE not in authz.CONSENT_SCOPES
       and authz.SCOPE_WRITE_DEVICE not in authz.CONSENT_SCOPES)
@@ -220,14 +227,59 @@ try:
               authz.requires_consent(sec, "_probe_noconsent")
               and not authz.consent_granted(sec, "_probe_noconsent", "确认发布"))
     finally:
-        authz.CONSENT_SCOPES = frozenset({authz.SCOPE_WRITE_CONTENT})
+        authz.CONSENT_SCOPES = frozenset({authz.SCOPE_WRITE_CONTENT, authz.SCOPE_WRITE_CONSOLE})
         authz._CONSENT_PATTERNS = orig_patterns
         del authz.TOOL_SCOPE["_probe_noconsent"]
 finally:
     del authz.TOOL_SCOPE["_probe_post"]
 check("探针条目清理干净", "_probe_post" not in authz.TOOL_SCOPE
       and "_probe_noconsent" not in authz.TOOL_SCOPE
-      and authz.CONSENT_SCOPES == frozenset({authz.SCOPE_WRITE_CONTENT}))
+      and authz.CONSENT_SCOPES == frozenset({authz.SCOPE_WRITE_CONTENT, authz.SCOPE_WRITE_CONSOLE}))
+
+print("⑨c 后台写确认语（命令式判据：判『本轮有没有明确命令』，不是第二次确认）")
+# 与 write.content 的差异：那里的判据是一个**词表式**正则（"确认发布"族），这里
+# 是一条**判据函数**（_console_command）——因为后台写的命令有无数种说法，但
+# "什么算命令"是可判的：必须有动作词 + 目标 + 命令句式，且排除疑问/假设。
+# 误判方向不对称：判成"命令"= 直接动生产数据；判成"不是命令"= 多问一句。故 fail-closed。
+CONSOLE_POS = [
+    "把文章 12 设为私密",
+    "把文章 12 设为私密。",
+    "帮我把《架构文档》隐藏起来",
+    "把文章 12 置顶",
+    "取消文章 12 的置顶",
+    "请把文章 12 的标签改成 Python 和 架构",
+    "帮我建一个标签：Python",
+    "新建一级标签「测试」",
+    "给文章 12 打上标签 Python",
+    "把文章 12 的标签去掉",
+    "发布文章 12",
+    "把这篇设为草稿",
+]
+CONSOLE_NEG = [
+    "把文章 12 设为私密会有什么影响？",
+    "如果我把文章 12 设为私密的话会怎样",
+    "把文章 12 设为私密了吗？",
+    "怎么把文章置顶呢？",
+    "为什么要隐藏文章？",
+    "文章 12 是什么状态？",
+    "帮我看看文章 12 的标签",
+    "隐藏和私密有什么区别",
+    "我想要一个标签系统",
+    "发布功能是怎么做的？",
+    "这些标签是做什么用的",
+    "你能置顶文章吗",
+]
+_bad_pos = [t for t in CONSOLE_POS
+            if not authz.consent_granted(p(ROLE_ADMIN), "set_article_status", t)]
+_bad_neg = [t for t in CONSOLE_NEG
+            if authz.consent_granted(p(ROLE_ADMIN), "set_article_status", t)]
+check(f"后台写命令语认得（{len(CONSOLE_POS)} 条）", not _bad_pos, f"漏判: {_bad_pos}")
+check(f"疑问/假设/闲聊不是命令（{len(CONSOLE_NEG)} 条）", not _bad_neg, f"误判: {_bad_neg}")
+check("命令式判据三种工具共用（同一句对三个工具结论一致）",
+      all(authz.consent_granted(p(ROLE_ADMIN), t, "把文章 12 设为私密")
+          for t in ("create_tag", "set_article_status", "set_article_tags")))
+check("同意看的是本轮消息，与 principal 无关（user 说命令也不放行——权限在更前面拦）",
+      not authz.check(p(ROLE_USER), "set_article_status").allowed)
 
 print("⑨b 接线：闸在调用之前，拒绝说得出原因，叙述侧封得住")
 check("execute 在调用前算确认", "consent_missing = (authz.requires_consent" in graph_src)
@@ -237,7 +289,9 @@ check("checker 认得确认原因码", "authz.consent_error_reason(text)" in gra
 check("gate 5a 扩了写内容的完成式声称词表（未确认却说已发布 → fallback）",
       "_WRITE_CONTENT_CLAIM_RE.search(reply)" in graph_src)
 check("洞①的施事支认写内容动词（零工具轮编造『帮你发布了』）",
-      "|发布|发表|投稿|提交)" in graph_src)
+      "|发布|发表|投稿|提交" in graph_src)
+check("洞①的施事支认清后台写动词（零工具轮编造『帮你置顶了』）",
+      "|置顶|取消置顶|隐藏|下架|设为私密|设为公开|设为草稿" in graph_src)
 
 # 写内容声称词表的正负例（隔着"帮你"两个字也要认；转述用户过往动作不许误伤）
 from agent.graph import _WRITE_CONTENT_CLAIM_RE as W  # noqa: E402
@@ -276,6 +330,100 @@ check("未确认 + 如实说『还没发、要确认』 → 放行（不许误�
       out.get("done") is True and not out.get("fallback_text"),
       str(out.get("fallback_text", ""))[:50])
 
+print("⑨d 后台写动词的叙述侧声称表（三族成对：5a 词表 / 洞① / 哪一族不挂）")
+# 新写动词（置顶/隐藏/下架/设为私密|公开|草稿/建标签/打标签）在**两个场景**各有
+# 一张网，两张网都有完成标记与疑问豁免；第三族（_EXECUTION_CLAIM_RE，只在
+# content_query 零帧异常轮宽查）**刻意不挂**——它没有这两条纪律，挂上会把合法反问
+# 判成谎称，而那两个场景已被前两张网覆盖。下表是这三条的成对锁。
+#
+# 判据改动依据（20260921）：516 条真实 trace（含归档 .gz）按各自真实 gating 条件
+# 复扫，改前改后命中差异 **0**（历史里没有后台写轮，故这一族没有历史实证可依，
+# 靠的是"每句都成对写出来"）。
+from agent.graph import (_COMPLETION_CLAIM_RE as C5,  # noqa: E402
+                         _EXECUTION_CLAIM_RE as E5,
+                         _STATE_ACTION_CLAIM_RE as _SAR,
+                         _state_action_claim as _state_claim)
+
+_WRITE_CONTENT_CLAIM_PATTERN = W.pattern
+_STATE_ACTION_PATTERN = _SAR.pattern
+
+# ① 完成式主张：两个场景**至少**有一张网抓得住（漏拦 = 管理员被"已经改好了"骗过）
+CONSOLE_CLAIM_POS = [
+    "已经帮你把文章 12 设为私密啦～", "标签已经建好啦", "已经帮你置顶了",
+    "帮你把那篇隐藏了", "已经把它设为私密了", "刚刚把标签加上了",
+    "成功创建了标签", "文章已经下架了", "已经取消置顶啦", "已经设为草稿了",
+    "已经把它改成了公开", "已经帮主人把标签去掉了", "刚刚把它置顶好了",
+    "已经把它隐藏了，这样可以吗？",   # 完成态主张 + 征询尾巴：完成在前，仍算主张
+]
+_bad = [t for t in CONSOLE_CLAIM_POS
+        if not (W.search(t) or _state_claim(t))]
+check(f"后台写完成式主张都抓得住（{len(CONSOLE_CLAIM_POS)} 条，5a 或 洞①）",
+      not _bad, f"漏: {_bad}")
+
+# ② 疑问式：consent 未过时 narrator 的**正解就是反问**，三族都不许判成声称
+#    （判成声称 = 整轮换成兜底道歉，管理员拿到的不是问题而是"被主人抓包啦"）
+CONSOLE_CLAIM_QUESTION = [
+    "您是已经把文章 12 设为私密了吗？", "你是已经把它发布了吗？",
+    "文章 12 是已经置顶了吗？", "刚才那个标签是已经建好了吗？",
+    "请问文章 12 是不是已经设为私密了？", "标签已经建好了吗？",
+    "您是已经帮我把标签建好了吗？", "文章 12 是不是已经下架了呢",
+    "标签加上了吧？",
+]
+_bad_q = [t for t in CONSOLE_CLAIM_QUESTION
+          if W.search(t) or _state_claim(t) or C5.search(t) or E5.search(t)]
+check(f"反问句三族都不判（{len(CONSOLE_CLAIM_QUESTION)} 条）", not _bad_q, f"误伤: {_bad_q}")
+
+# ③ 非声称：提议/假设/状态陈述/能力清单
+CONSOLE_CLAIM_NEG = [
+    "把文章 12 设为私密会有什么影响？", "要我帮你把文章 12 置顶吗？",
+    "如果我把文章 12 设为私密的话", "我现在就帮你把文章 12 设为私密，请确认",
+    "标签功能是怎么做的？", "你上次建的那个标签还在吗", "需要我把标签打上吗？",
+    "文章 12 现在是私密状态哦", "设置好了样式，你看这样行不行",
+    "草稿箱里那篇我读过啦", "明天下架也可以，先这样吧", "要我现在把标签加上吗？",
+    "这篇文章已经置顶了很久没动过",   # 持续时长 = 状态陈述（①支的既有动词不成句）
+]
+_bad_n = [t for t in CONSOLE_CLAIM_NEG if W.search(t) or _state_claim(t)]
+check(f"提议/假设/状态陈述不误伤（{len(CONSOLE_CLAIM_NEG)} 条）", not _bad_n, f"误伤: {_bad_n}")
+
+# ④ 疑问豁免必须挂在**两处**（外层管 ①②③、④支自带一份）：漏一处就会在那一支
+#    漏网——这正是改动过程中实际踩到的坑（只挂外层时"文章 12 是已经置顶了吗？"
+#    仍被 ④支 判成声称）。
+check("疑问豁免在外层（①②③ 支）",
+      _WRITE_CONTENT_CLAIM_PATTERN.count("(?![吗呢吧]|[?？])") == 2,
+      f"出现 {_WRITE_CONTENT_CLAIM_PATTERN.count('(?![吗呢吧]|[?？])')} 次")
+
+# ⑤ 第三族刻意不挂新写动词（挂了 = 合法反问在 content_query 零帧轮被吞）
+check("_EXECUTION_CLAIM_RE 不含后台写动词（宽查族不碰写域）",
+      not any(v in E5.pattern for v in ("置顶", "隐藏", "下架", "设为私密", "新建", "创建")),
+      E5.pattern)
+check("_COMPLETION_CLAIM_RE 由它派生 ⇒ 同样不含",
+      not any(v in C5.pattern for v in ("置顶", "隐藏", "下架", "设为私密")))
+check("洞① 的 ④支 认后台写动词（零帧轮的另一张网）",
+      all(v in _STATE_ACTION_PATTERN for v in ("置顶", "隐藏", "下架", "设为私密", "打上")))
+
+
+def _console_state(reply: str):
+    """后台写轮的最小状态：一个 consent 错误帧 + narrator 的回复。"""
+    return {"plan": plan_encode(instantiate_plan("article_status",
+                                                 {"article_id": 12, "status": "private"})),
+            "done": False, "plan_rounds": 0,
+            "messages": [
+                HumanMessage(content="把文章 12 设为私密"),
+                ToolMessage(content=authz.consent_frame("set_article_status", p(ROLE_ADMIN)),
+                            tool_call_id="execute_0", name="set_article_status"),
+                AIMessage(content=reply),
+            ]}
+
+
+out = gate_node(_console_state("已经帮你把文章 12 设为私密啦～"))
+check("未确认 + 声称已改状态 → fallback（管理员收到的不是这句谎话）",
+      bool(out.get("fallback_text")), str(out.get("fallback_text", ""))[:60])
+out = gate_node(_console_state("这个操作我需要先跟你确认一下喵～"
+                              "您是已经把文章 12 设为私密了吗？"))
+check("未确认 + 反问确认 → 放行（正解不许被吞）",
+      out.get("done") is True and not out.get("fallback_text"),
+      str(out.get("fallback_text", ""))[:60])
+
 print("⑩ 管理助手 admin.console（20260921）：硬拦 + 身份过滤双层")
 # 这一批是"纯新增能力"：历史流量里一条都没有 ⇒ 没有 shadow 观测期可谈，硬拦。
 # 三层结构，本节点验后两层（第一层"结构性不可达"在 test_reports.py ⑪）：
@@ -292,10 +440,36 @@ check("别的 scope 仍跟随全局开关（没顺手把整表改成硬拦）",
           for s in authz.ALL_SCOPES - authz._HARD_SCOPES))
 check("无参调用 = 旧语义（不知道 scope 的调用点行为不变）",
       authz.enforcing() == bool(settings.authz_enforce))
-check("_HARD_SCOPES 只含 admin.console（改宽了要有人看见）",
-      authz._HARD_SCOPES == frozenset({authz.SCOPE_ADMIN_CONSOLE}), str(authz._HARD_SCOPES))
+check("_HARD_SCOPES = 两个后台 scope（改宽了要有人看见）",
+      authz._HARD_SCOPES == frozenset({authz.SCOPE_ADMIN_CONSOLE, authz.SCOPE_WRITE_CONSOLE}),
+      str(authz._HARD_SCOPES))
 check("admin.console 在 ALL_SCOPES 里（否则 admin 也会被拒）",
       authz.SCOPE_ADMIN_CONSOLE in authz.ALL_SCOPES)
+check("write.console 在 ALL_SCOPES 里（否则 admin 自己也写不了）",
+      authz.SCOPE_WRITE_CONSOLE in authz.ALL_SCOPES)
+check("write.console 是写 scope（审计与 is_write 都靠它）",
+      authz.is_write("set_article_status") and authz.is_write("create_tag")
+      and authz.is_write("set_article_tags"))
+check("list_admin_notes 是读 scope（读后台列表不是写）",
+      not authz.is_write("list_admin_notes")
+      and authz.required_scope("list_admin_notes") == authz.SCOPE_ADMIN_CONSOLE)
+check("审计名单只含 write.console（回执带执行身份的那一族）",
+      authz.AUDIT_SCOPES == frozenset({authz.SCOPE_WRITE_CONSOLE}), str(authz.AUDIT_SCOPES))
+
+# write.console 的三层（第一层"planner 结构性不可达"在 test_reports.py ⑪；第二层
+# 身份过滤在 ⑩ 末段；这里验第三层 = execute 前的硬拦 —— **与 authz_enforce 无关**，
+# 因为它是纯新增能力、没有 shadow 观测期可谈）
+for tool in ("create_tag", "set_article_status", "set_article_tags"):
+    check(f"{tool} 未声明身份 → deny", not authz.check(None, tool).allowed)
+    check(f"{tool} 身份不明（role=None）→ deny", not authz.check(UNKNOWN, tool).allowed)
+    check(f"{tool} 普通用户 → deny（write.console 是纯新增能力）",
+          not authz.check(p(ROLE_USER), tool).allowed)
+    check(f"{tool} 秘书 → deny（秘书刻意拿不到后台写）",
+          not authz.check(p(ROLE_SECRETARY), tool).allowed)
+    check(f"{tool} 管理员 → allow", authz.check(p(ROLE_ADMIN), tool).allowed)
+    check(f"{tool} 不吃 shadow（authz_enforce=False 也硬拦）",
+          authz.enforcing(authz.required_scope(tool)) is True
+          and settings.authz_enforce is False)
 
 for tool in ADMIN_TOOLS:
     check(f"{tool} 未声明 → deny", not authz.check(None, tool).allowed)
