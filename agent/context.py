@@ -9,6 +9,7 @@
 图（decisions.py 也用它），是天然的叶子层。
 """
 
+import ast
 import json
 import re
 
@@ -460,13 +461,84 @@ def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
 _DETAIL_FRAME_PER = 20000
 
 
+# ── 列表帧的紧凑渲染（20260921）────────────────────────────────────────
+# 背景：普通帧此前是 `text[:300]` **裸切**——列表帧（JSON/`repr` 数组）会在**一行
+# 中间**断掉，planner 拿到的是半截 JSON，既读不出后半条的 id，也**看不出后面还有
+# 多少条**（与"空结果 vs 没执行"同源的无声失真）。现在分两步：先压成"一行一条"
+# （只留标量字段、长值截断、封面/焦点缩放这类纯展示字段丢掉），再**按整行**取舍，
+# 并在文末如实写明「节选：显示前 K 条，共 N 条」。
+#
+# 为什么敢丢字段：narrator 手上还有**完整的 ToolMessage**（model 节点把
+# state["messages"] 一起喂给 LLM），这里的文本只进 planner 的提示词与 narrator 的
+# 系统摘要——是"给决策者的缩略视图"，不是唯一证据。
+_FRAME_NOISE_KEYS = {"cover", "coverFocusX", "coverFocusY", "coverZoom",
+                     "carouselFocusX", "carouselFocusY", "carouselZoom"}
+_FRAME_FIELD_CAP = 60      # 单字段值的字符上限（超出带 … 标记）
+
+
+def _compact_row(row: dict) -> str:
+    """一行记录 → `k=v k=v`（丢空值/纯展示字段/嵌套结构，长值截断带 …）。"""
+    parts = []
+    for k, v in row.items():
+        if k in _FRAME_NOISE_KEYS or v is None or v == "" or isinstance(v, (dict, list)):
+            continue
+        s = str(v)
+        if len(s) > _FRAME_FIELD_CAP:
+            s = s[:_FRAME_FIELD_CAP] + "…"
+        parts.append(f"{k}={s}")
+    return " ".join(parts)
+
+
+def _compact_list_frame(text: str, budget: int) -> str | None:
+    """数组帧 → "一行一条"紧凑文本（超预算按**整行**取舍并标注共几条）。
+
+    认不出（不是数组/元素不是 dict）返回 None，调用方按普通文本处理。
+    两种字面量都要认：`str(data)` 出来的是 **Python repr**（单引号，tools 层
+    绝大多数工具的出口），少数工具是 `json.dumps`（双引号）。
+    """
+    obj = None
+    for loader in (ast.literal_eval, json.loads):
+        try:
+            obj = loader(text)
+            break
+        except Exception:      # noqa: BLE001 —— 不是字面量就走普通文本分支
+            continue
+    rows = None
+    if isinstance(obj, list):
+        rows = obj
+    elif isinstance(obj, dict):
+        for k in ("data", "records", "list", "items"):
+            if isinstance(obj.get(k), list):
+                rows = obj[k]
+                break
+    if not rows or not all(isinstance(r, dict) for r in rows):
+        return None
+    lines: list[str] = []
+    used = 0
+    for i, r in enumerate(rows, 1):
+        body = _compact_row(r)
+        if not body:
+            continue
+        line = f"{i}. {body}"
+        if used + len(line) + 1 > budget:
+            if lines:
+                return ("\n".join(lines)
+                        + f"\n（节选：显示前 {len(lines)} 条，共 {len(rows)} 条）")
+            # 第一条就超预算：单条过长，截断并说明（不静默）
+            return f"1. {body[:budget]}…（单条过长已截断，共 {len(rows)} 条）"
+        lines.append(line)
+        used += len(line) + 1
+    return "\n".join(lines) if lines else None
+
+
 def _frame_texts(messages: list, limit: int = 5, per: int = 300) -> str:
     """最近的工具返回摘要（planner 下一轮决策依据 / narrator 叙述依据）。
 
     只取最近 limit 条。截断策略按帧型：普通帧（检索候选/列表）截 per 字符
     （行式精简，够看）；get_article_detail 是全文读取帧，按 _DETAIL_FRAME_PER
     大幅放宽并标注"节选"；__ERROR__ 信息完整保留（planner 需要据错误修正参数
-    重试）。
+    重试）；**列表帧走 _compact_list_frame**（一行一条 + 整行取舍 + 共几条），
+    不再裸切半行。
     """
     frames = [m for m in messages if isinstance(m, ToolMessage)]
     if not frames:
@@ -502,7 +574,15 @@ def _frame_texts(messages: list, limit: int = 5, per: int = 300) -> str:
                     f"工具 {name} 返回（节选，原文 {len(text)} 字，仅示前 {len(cut)} 字）: "
                     f"{cut}")
         else:
-            parts.append(f"工具 {name} 返回: {text[:per]}")
+            compact = _compact_list_frame(text, per)
+            if compact is not None:
+                parts.append(f"工具 {name} 返回: {compact}")
+            elif len(text) > per:
+                # 非列表帧也可能超预算（长文本/大对象）：同样如实标注，不裸切
+                parts.append(f"工具 {name} 返回（节选，原文 {len(text)} 字）: "
+                             f"{text[:per]}…")
+            else:
+                parts.append(f"工具 {name} 返回: {text}")
     return "\n".join(parts)
 
 
