@@ -513,7 +513,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 ---
 
-## 5. 工具系统（38 个）
+## 5. 工具系统（40 个）
 
 | 分类 | 工具 | 行为 |
 |---|---|---|
@@ -521,7 +521,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 | 检索 | `rag_search` | BM25 词法检索（行式候选 type/id/标题/分；20260901 语料净化仅收文章，说说/留言走数据工具） |
 | 分类/标签 | `list_categories`、`list_tags` | 同上 |
 | 公告 | `get_announcements` | 同上（写侧见 §5.4） |
-| 留言板 | `list_guestbook` | 读 `/api/public/board`（河灯留言） |
+| 留言板 | `list_guestbook` | 读 `/api/public/board`（河灯留言；写侧见 §5.5） |
 | 说说 | `list_talks` | 读 `/api/public/talk` |
 | 站点信息 | `get_blog_info`、`get_social_links`、`get_site_map` | 作者信息/社交链/功能地图（静态） |
 | 知识库 | `search_knowledge_base` | 读 `/api/public/knowledge` 本地过滤 |
@@ -532,7 +532,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 | 夜间模式 | `toggle_dark_mode(mode)` | 返回 `DARKMODE:{mode}` |
 | IoT 设备 | `list_devices`、`device_oled_display` | 代签 JWT 调 device-service；支持自动选在线设备、幂等去重 |
 | 后台只读（admin） | `list_admin_notes`、`get_server_status`、`get_service_health`、`get_moderation_status`、`get_user_stats` | **以发起人身份代调** `127.0.0.1:3000` 的受保护接口（现签 60 秒 JWT）；scope `admin.console`，进 `_HARD_SCOPES`（非 admin 结构上够不到）；`list_admin_notes` 是草稿/私密文章的**唯一可达读口** |
-| 后台写（admin） | `create_tag`、`update_tag`、`delete_tag`、`create_category`、`update_category`、`delete_category`、`create_announcement`、`update_announcement`、`delete_announcement`、`set_article_status`、`set_article_tags` | scope `write.console`（`_HARD_SCOPES` + `CONSENT_SCOPES`）；**只能由写技能模板展开**——`PARAMS.calls` 名单里没有它们，越权清单在技能白名单那一步就被剥掉；三道门见 §5.3 |
+| 后台写（admin） | `create_tag`、`update_tag`、`delete_tag`、`create_category`、`update_category`、`delete_category`、`create_announcement`、`update_announcement`、`delete_announcement`、`audit_board_comment`、`delete_board_comment`、`set_article_status`、`set_article_tags` | scope `write.console`（`_HARD_SCOPES` + `CONSENT_SCOPES`）；**只能由写技能模板展开**——`PARAMS.calls` 名单里没有它们，越权清单在技能白名单那一步就被剥掉；三道门见 §5.3；身份/目标的地基见 §6.6 |
 
 **工具 → 命令 → 前端执行**是核心交互模式：工具返回带前缀的**命令字符串**，Python 识别后作为独立 SSE 帧
 转发，前端解析执行。**不是**让模型把命令写进正文——正文里的命令会被 `cleanAgentText` 当幻觉剔除
@@ -649,6 +649,25 @@ scope `write.console`）。公告是**对全体访客说的话**，因此比其�
 | `PUT` 的 `title`/`content` **都是必填** | 只改一项时，另一项从**同一次索引快照**原样回传（同 `update_tag` 的"当前色原样回传"） |
 | `DELETE` body 是**裸 `Vec<i32>`**，且**删不存在的 id 静默成功** | 删后重拉，要求 id **确实消失**才算成功——静默 no-op 不许说成"已删除" |
 | 没有唯一约束、没有草稿态 ⇒ **目标身份只有标题** | 按标题解析（`_find_named_announcement`）：唯一命中才动、多条同名→零写并列出候选（带 id 与时间）、查无此名→零写如实说 |
+
+### 5.5 留言复核与删除（20260922）：靶子是**访客**写下的东西，身份只有正文
+
+人工复核（驳回/隐藏、通过/放行）与删除河灯留言（`audit_board_comment` / `delete_board_comment`，
+scope `write.console`，技能 `board_audit` / `board_delete`）。与标签/公告族最大的差别：
+**留言没有标题也没有名字，正文片段就是它唯一的身份**——而片段是主人嘴里转述出来的。
+
+| 端点事实（都踩过） | 处置 |
+|---|---|
+| 审核请求体是 **0/1**，DB 落库值是 **1/2** | 两张表**分开**（发 `2` 会被端点读成「通过」——方向正好相反） |
+| 删除对**不存在的 id 静默 no-op** | 删后读不回就等于没删掉：不作成功（`unavailable`），绝不说"已删除" |
+| 清单读不到（无身份/端点失败） | 单独一种说法——「**未能核对上**站内具体是哪一条」，不许说成"站内没有这条" |
+| 目标 = 正文片段的**唯一子串**命中 | 撞车（两条都含这段）→ 零写并列出候选；查无此句 → 零写如实说没有 |
+| 弹窗问句 | 写明 **#id + 原文 + 作者 + 当前状态**；核对不上时如实标注（回执行渲染只认 `#id` 与作者，**绝不把留言正文写进 `detail`**——300 列宽 + 跨轮记忆窗口） |
+
+- **删留言进 `_ALWAYS_CONFIRM_TOOLS`**（第六轮补）：动的不是主人的东西——那是**访客写下的
+  内容**，而且删了没有回收站；**审核不进**：它可改判（驳回的能再放行）、改的只是可见性，与
+  `set_article_status` 同类 ⇒ 走既有的"命令式措辞才免问"，判不出来照旧弹窗（fail-closed 不变）。
+- 主体身份仍由 §6.6 的片段地基兜底：planner 填错/填短片段时**先校正再看预检**。
 
 ---
 
@@ -934,6 +953,38 @@ flowchart TB
 > - **时间锚（20260902 注入，现行）**：`current_time=`（含星期）进 System 上下文首条；旧 executor
 >   规则 6（时刻以 context 为准、未调用工具不得声称当前时刻）随 executor 废除，时间纪律由
 >   planner 规划 get_current_time + narrator 叙述纪律承接（见 §3.2③）。
+
+### 6.6 写操作的身份防线（20260922，②防线）：身份不能是 LLM 的一次转写
+
+**一句话**：写操作**动谁**这件事，结构上不许由 LLM 转写——**主人自己说出口的那段字才是身份**。
+证据来自同一天同一条 golden 用例的三种错法：「把那条写着「泠月喵好笨啊」的留言删掉吧」⇒ 片段
+被填成截短的「好笨」；另一跑填成主人给**理由**的「有点乱」；再一跑把技能描述里的
+「河灯留言正文里的一段原话」**原样抄成了参数值**（同 20260921"举例里不许出现具体取值"那条教训）。
+
+| 装置 | 管什么 | 判据要点 |
+|---|---|---|
+| `_board_quote_fix` | 留言写工具的 `quote` | 值落在某段引号里 → 取**最长**那段（顺带治好截短）；值不在任何引号里 → 引号那段才是身份；**一段都对不上 → 确定性拒绝**（零工具零写 + 如实问是哪一条，绝不猜"最新那条"）。planner 整丢片段时在**首轮**按主人原话补参（复核取向只认单向词，两边都出现 = 不猜） |
+| `_announcement_text_fix` | 公告 `title`/`content` | 认主人**标出来的**两段（`标题叫「X」`／`正文写：…`），planner 的转写与自撰一律让位；改/删公告的 `title` 是**要动的那条**的身份，只认唯一一段引号 |
+| `_name_target_fix` + `_owner_target_span` + `_marked_other_operand` | 标签/分类/公告的目标**名** | 实测 2/8 跑把「绝对不存在的标签名xyz」抄成「绝对」——这个名字**要写进如实答复**，答错名字等于答的是另一件事。语序本身就是主人的标记：`挪到/改名叫` 后面那段引号是**另一个操作数**（父标签或新名，族别决定它落在哪个参数上），剩下的才是目标；证据不唯一就不动 |
+| `_bare_target_name`（续三，同一函数内） | **免引号**的目标名与被抄成泛称的父标签 | `帮我把标签 Asyncio 挪到「编程」下面`：要挪的名字**没加引号**，唯一一段引号是父标签。全量回归实测 1/5 跑 planner 抄了描述里的泛称（`name="标签"`——它甚至是这句话的子串，子串级地基放它过去；`parent_tag="父标签名"`），问句于是问的是「要修改标签「标签」：移到「父标签名」下面吗？」。现在：名词标记与动作标记之间那一段就是目标名；`挪到/移到…` 后面那段引号在父标签不在主人话里时补上它。**三种让位形态**——原话里找不到 / 是泛称 / 是原话那一段的**截断**（实测 `name="Async"`）；原话里逐字有据且不是这三种 → 一个字节都不动 |
+| `_ident_grounded` | **免弹窗**（同轮命令即确认）多一条前提 | 名字得在主人这句话里找得到；找不到（别名跳步、从执行记忆拣的名字、模型概括的片段）→ 退回**弹窗**，问句里写明系统解析到的目标。**加一次点击，不砍能力**——名字原样说出口的常见路径一行没变 |
+| `_name_write_nudge` | 主人引号点名了目标而 planner 零工具 | 与剔空纠偏**共用同一条重决策通道**（同轮只纠一次）：只写机器能保证的事实 + 讲清"这不是你该预判的事"，重选仍由 planner 自己做 |
+
+- **校正一律就地改 + 重走 `instantiate_plan`**：只改 spec 字符串的话，narrator 读到的**注记**还写着
+  那个错值（实测："删除含「泠月」的那条…"）。
+- **洞④ 豁免锚 `_LEDGER_NOTE_PREFIX`（`【系统台账核对】`）**：目标预检与剔空收尾两条确定性路径的
+  注记里那句话是**系统核过的台账事实**，narrator 复述它是履职——却长得跟凭空结论一样，曾被
+  [gate 洞④] 整轮换成兜底道歉（而道歉说的是假话"我其实没有去站里查过"，实测 resets=1）。豁免判据 =
+  计划注记带这个前缀（注记是系统产物，narrator 写不进去）；两条路径共用同一份字面量。
+- **刻意不动**：`authz._CONSOLE_VERBS` 一个字没加——加「挪」会让标签移动**直接写不弹窗**，翻掉
+  正在通过的 `admin_tag_move_popup`。
+- **边界（如实）**：地基是**子串级**——挡得住"主人从没说过这个名字"，挡不住"说过但指的未必是它"
+  （亚串免疫）；真正的身份裁决仍在工具侧的确定性解析（唯一命中才动手，歧义零写）。
+  免引号那一条另有三处**刻意不认**（说不清就不动，交给弹窗与预检那两条路）：一句话里点了不止一个
+  名字、捕获段里混了补语（"Asyncio 这个名字"）、改名形态里的**新**名字（`改名叫「协程」` 那段引号
+  是 `new_title`，不当父标签填）。真写错名字的兜底仍是工具侧的确定性解析 + 弹窗里那个名字要主人点。
+- **锁**：`test_skills` 四个函数（`test_write_grounding_round` / `test_write_ledger_note_round` /
+  `test_announcement_text_round` / `test_name_target_round`）+ `test_admin_write` ⑰⑱⑲。
 
 ---
 
