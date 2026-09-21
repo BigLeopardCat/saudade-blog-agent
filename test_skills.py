@@ -21,6 +21,7 @@ narrator）→ gate（确定性检查 + fallback 收尾）。原"落回 LLM 质�
 
 用法：.venv/bin/python test_skills.py
 """
+import json
 import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -30,7 +31,7 @@ from agent.graph import (_PLANNER_OUTPUT_RE, REFLECT_MAX_ROUNDS, _article_fast_p
                          _nav_fast_path, _parse_params, execute_node, gate_node,
                          plan_encode, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
-from agent.skills import NAV_MAP, NAV_VALID_PATHS, instantiate_plan
+from agent.skills import NAV_MAP, NAV_VALID_PATHS, SKILL_MAP, instantiate_plan
 
 FAILS = []
 
@@ -885,9 +886,10 @@ def test_phantom_tool_claim():
         check(f"phantom[{why}] → {want or 'pass'}", got == want, f"got={got}")
     # 工具名名单派生自注册表（不手写——手写名单正是 15:51 事故的漏项来源）。
     # 数字写死是**故意的**：工具增减时必须有人来看一眼这条判据（26 → 30 是
-    # 20260921 第二轮加的四个后台工具：list_admin_notes + 三个写）。
+    # 20260921 第二轮加的四个后台工具：list_admin_notes + 三个写；30 → 35 是
+    # 20260921 晚第三轮加的后台写五件：update_tag/delete_tag + category 三件）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 30 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 35 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 
@@ -1559,6 +1561,28 @@ def test_refs():
           == "ref_path_missing"
           and R.ref_error_reason("__ERROR__: 未知工具 x") is None)
 
+    print("[refs] 嵌套引用：能查到就查、查不到就报错码（绝不静默当字面量）")
+    # 20260921：`has_refs` 一直是递归的（确认弹窗据此拒签），而 resolve_args 此前只走
+    # 顶层 ⇒ **嵌套引用既解析不出来、又让整张令牌签不出去**（写技能的标签名列表正是
+    # 嵌套形态：`{"add": ["$list_tags[0].title"]}`）。两处口径现在同源。
+    td = [{"tool": "list_tags",
+           "data": [{"tagKey": 5, "title": "架构"}, {"tagKey": 9, "title": "算法"}]}]
+    got, err = R.resolve_args({"add": ["$list_tags[0].title"], "article_id": 12}, td)
+    check("list 里的引用被解析出来（不是整份参数原样透传）",
+          err is None and got == {"add": ["架构"], "article_id": 12}, f"{got} / {err}")
+    got, err = R.resolve_args({"a": {"b": ["$list_tags[1].tagKey"]}}, td)
+    check("dict 套 list 的两层嵌套也解析", err is None and got == {"a": {"b": [9]}}, f"{got} / {err}")
+    got, err = R.resolve_args({"add": ["$list_tags[7].title"]}, td)
+    check("嵌套里越界 → 整体失败并把**出错的那一条引用**报出来",
+          got is None and err.startswith("ref_index_range:") and "$list_tags[7].title" in err,
+          str(err))
+    got, err = R.resolve_args({"add": ["架构"]}, td)
+    check("无引用的嵌套结构原样返回（零开销、行为不变）",
+          err is None and got == {"add": ["架构"]}, str(got))
+    check("判据同源：has_refs 为真的那批，正是 resolve_args 会去解析的那批",
+          R.has_refs([{"tool": "x", "args": {"add": ["$list_tags[0].title"]}}])
+          and R.has_refs([{"tool": "x", "args": {"a": {"b": "$t[0].c"}}}]))
+
     print("[refs/execute] 集成：同轮与跨轮依赖、失败不执行")
     calls: list = []
 
@@ -1640,6 +1664,83 @@ def test_refs():
           all(c in server._REASON_CN for c in
               ("ref_unknown_tool", "ref_unparsed", "ref_index_range",
                "ref_path_missing", "ref_not_scalar")))
+
+
+def test_write_ref_loud():
+    """写技能：解不出的引用必须**响亮**（20260921 事故的核心，用户指令 ①）。
+
+    事故形态：写技能的旧代码用 `_norm_pos_int(params.get("parent_id"))` 把
+    `"$list_tags[3].tagKey"` 变成 `None` ⇒ 参数**静默消失** ⇒ 注记还肯定地写下
+    「（一级标签）」⇒ planner 与 narrator 都以为一切正常，用户以为改完了。
+
+    现在三条口径（缺一条就会退回旧形态）：
+      1. 引用**原样透传**进 TOOLS 行——由 execute 的 resolve_args 判，判不出来就零执行
+         + 带原因码的错误帧（而不是当"没填"）；
+      2. 非空、非引用、又不合法（认不出的层级/颜色）→ 零工具 + 明说哪里不对；
+      3. 注记**只写已知事实**：父标签是不是存在、是几级，由工具去活字典里核，
+         技能展开层不许替它断言。
+    """
+    import agent.graph as g
+    print("[write_ref_loud] 写技能：引用与非法值一律响亮（绝不静默丢弃）")
+    obj = instantiate_plan("tag_create", {"title": "Rust",
+                                          "parent_tag": "$list_tags[0].tagKey"})
+    check("引用**原样**进 TOOLS 行（不解析成 None、不当成没填）",
+          obj["tools"] == ['create_tag({"title": "Rust", '
+                           '"parent_tag": "$list_tags[0].tagKey"})'], str(obj["tools"]))
+    check("注记不替它断言层级（只复述 planner 给的名字，存在与否由工具核）",
+          "挂在父标签「$list_tags[0].tagKey」下" in obj["note"]
+          and "一级标签" not in obj["note"], str(obj["note"]))
+
+    # 端到端：这条计划跑到 execute 上 → 引用解不出（本轮没有 list_tags 帧）
+    # → **零工具调用** + 带原因码的错误帧（响亮），而不是"照字面调用 create_tag"
+    calls: list = []
+
+    class _Fake:
+        def invoke(self, args):
+            calls.append(args)
+            return "已新建一级标签「$list_tags[0].tagKey」"
+
+    saved = g._TOOL_MAP.get("create_tag")
+    g._TOOL_MAP["create_tag"] = _Fake()
+    try:
+        out = execute_node({"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+                            "messages": [HumanMessage(content="在标签下面建一个 Rust")]},
+                           {"configurable": {"user_id": 0}})
+        frm = str(out["messages"][-1].content)
+        check("引用解不出 → 零工具（绝不拿引用字面量当参数去建标签）", calls == [], str(calls))
+        check("  产 __ERROR__ 帧且带原因码（planner 据此改参，不是收到一句「已建好」）",
+              frm.startswith("__ERROR__") and "ref_unknown_tool" in frm, frm[:70])
+    finally:
+        if saved is None:
+            g._TOOL_MAP.pop("create_tag", None)
+        else:
+            g._TOOL_MAP["create_tag"] = saved
+
+    for skill, params, why in [
+            ("tag_create", {"title": "  "}, "缺标签名"),
+            ("tag_create", {"title": "X", "color": "天蓝"}, "认不出的颜色（绝不回落哈希）"),
+            ("tag_update", {"name": "X"}, "没说要改什么"),
+            ("tag_update", {"name": "X", "color": "天蓝"}, "认不出的颜色"),
+            ("tag_update", {"name": "X", "level": "三级"}, "认不出的层级"),
+            ("tag_update", {"name": "X", "parent_tag": "编程", "to_level": "one"}, "自相矛盾"),
+            ("tag_delete", {"name": "  "}, "缺标签名"),
+            ("category_create", {"title": ""}, "缺分类名"),
+            ("category_delete", {"name": ""}, "缺分类名")]:
+        obj = instantiate_plan(skill, params)
+        check(f"{skill} / {why} → 零工具 + 注记（交给 planner 去追问，不自作主张）",
+              obj["tools"] == [] and obj["note"], f"{obj['tools']} / {obj['note']}")
+
+    obj = instantiate_plan("tag_delete", {"name": "Asyncio", "level": "二级"})
+    check("删二级的注记写明**不可撤销**（narrator 照抄这句，用户才知道自己在同意什么）",
+          obj["tools"] == ['delete_tag({"name": "Asyncio", "level": "two"})']
+          and "不可撤销" in obj["note"], f"{obj['tools']} / {obj['note']}")
+
+    obj = instantiate_plan("tag_update", {"name": "Asyncio", "parent_tag": "编程"})
+    check("写技能里没有任何 $list_tags[N].tagKey 形态的示例可照抄（写轮看不到标签 id）",
+          "list_tags[" not in json.dumps(
+              {s.name: [d for d in (s.description or "",) + tuple(
+                  str(x) for x in (s.inputs or ()))] for s in SKILL_MAP.values()},
+              ensure_ascii=False))
 
 
 def test_todo_contract():
@@ -2477,7 +2578,8 @@ def main():
                test_gate_claim_holes,
                test_gate_false_negative_claim, test_gate_site_absence_claim,
                test_gate_repeat_reply,
-               test_execute_node, test_refs, test_todo_contract, test_checker,
+               test_execute_node, test_refs, test_write_ref_loud, test_todo_contract,
+               test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
                test_search_retry_kind, test_candidate_relevance_pick,

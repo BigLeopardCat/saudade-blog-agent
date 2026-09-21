@@ -141,6 +141,12 @@ REFLECT_MAX_ROUNDS = 2
 SNAPSHOT_SKILLS = frozenset({"ops_report", "moderation_report", "user_report"})
 
 # 后台写技能（20260921 第二轮）：**不是**快照型——见 planner 里的重复规划防护。
+# 20260921 第三轮评估（新写技能 tag_update/tag_delete/category_* 要不要进来）→ **不进**。
+# 判据是"同一件事已经做过"的正确性而不是省一轮：这三族里"再做一次"是**正常请求**
+# （改回原名、换个颜色、再删一个），而进来的效果是 planner 见到逐字相同的计划就收尾；
+# 收尾话术再诚实也挡不住一种情形——用户在后台把那件事改回去了、再让 agent 做，agent
+# 只会说"刚做过"。宁可多规划一轮让工具去活字典里核一遍（核不到会响亮地报出来），
+# 也不要把"没做"说成"做过"。tag_create 留在里面是因为它**幂等**（同名复用是真的同一件事）。
 EXECUTED_ONCE_SKILLS = frozenset({"tag_create", "article_status", "article_tags"})
 
 # 需要"本轮读过这个 id 才准写"的工具（见 execute 的目标校验）。
@@ -150,8 +156,11 @@ _ARTICLE_WRITE_TOOLS = frozenset({"set_article_status", "set_article_tags"})
 # 消费端 Rust 只认这几个，多出来的键是无声的兼容性债）。
 # `tag_name` 是**标签名**不是文章标题——写行刻意不带《文章标题》（它会被下一轮读成
 # "我读过这篇"的指代证据），标签名没有这个歧义，且"新建了哪个标签"必须记下来。
+# `change` 是写操作的**变更摘要**（"改名为 X、颜色改为 粉色"），`category_name`
+# 同理是分类名（分类没有会漂的 id 语义，名字就是用户认得的那个）。
 _RCPT_META_KEYS = ("op", "article_id", "before", "after",
-                   "tag_id", "tag_name", "level")
+                   "tag_id", "tag_name", "level",
+                   "category_id", "category_name", "change")
 
 # 目标证据的来源工具：本轮帧里**真带 note id** 的那几个（公开列表/检索/详情、
 # 后台列表、置顶列表）。刻意不含写工具自身的回显（"刚刚写过 id=12"不能成为
@@ -2337,23 +2346,32 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         return None  # 密钥没读到 → 不弹窗（宁可走追问，也不发一个验不过的令牌）
     # 问句要把父标签**名字**写出来（20260921）：只写「新建二级标签「Rust」」时
     # 用户无从核对它要挂到哪个爸爸底下，而"挂错父标签"正是本轮修的参数对调事故。
-    # 读字典失败 → index=None，问句退回 id（宁可只给编号，也不能因为一次读不到
-    # 就不弹窗——那会退回"死路"形态）。
+    # 读字典失败 → index=None，问句退回名字原文（宁可只给名字，也不能因为一次
+    # 读不到就不弹窗——那会退回"死路"形态）。
     try:
         from tools.base import _tag_index
         tag_index = _tag_index(config)
     except Exception:
         tag_index = None
+    # 分类字典只为分类写操作而读（删分类要报"有几篇文章会失去分类"）：一张平表、
+    # 一次请求，且**只在真要点到分类时才读**——标签写操作不该为此多一次网络往返。
+    cat_index = None
+    if any(str(s.get("tool") or "").endswith("_category") for s in picks):
+        try:
+            from tools.base import _category_index
+            cat_index = _category_index(config)
+        except Exception:
+            cat_index = None
     return {
         "pending_confirm": {
-            "q": A.render_confirm_question(picks, tag_index),
+            "q": A.render_confirm_question(picks, tag_index, cat_index),
             "opts": [{"label": "确定", "value": "yes", "kind": "primary"},
                      {"label": "取消", "value": "no", "kind": "default"}],
             "token": token,
             "specs": picks,
             "skill": _plan_skill(state),
         },
-        "confirm_text": A.render_confirm_text(picks, tag_index),
+        "confirm_text": A.render_confirm_text(picks, tag_index, cat_index),
     }
 
 

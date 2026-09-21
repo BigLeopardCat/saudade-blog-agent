@@ -934,12 +934,16 @@ def get_user_stats(config: RunnableConfig) -> str:
 # 另一个坑：Rust 的 `ApiResponse::error` 是 **HTTP 200 + code 500**（src/utils.rs），
 # 所以 `_admin_post` 必须看业务码，只判状态码会把"创建失败"读成成功。
 
-def _admin_post(path: str, payload: dict, config: RunnableConfig) -> dict | str | ToolResult:
-    """以发起人身份 POST 一个后台接口（`/api/protected/*`），返回其 data 字段。
+def _admin_request(method: str, path: str, payload, config: RunnableConfig):
+    """以发起人身份请求一个后台接口（`/api/protected/*`），返回其 data 字段。
 
     fail-closed 与 `_admin_get` 同族，且**更严**：任何一条不确定路径都返回
     unavailable（= 不是事实、checker BLOCK、不进跨轮执行记忆），措辞里明确说
     "本次改动未确认生效"，因为下游 narrator 要靠这句话如实告知用户。
+
+    20260921 从 `_admin_post` 泛化而来（标签移动走 POST、改名走 PUT、分类删除走
+    DELETE）：写通道此后只有这一个出口，减掉一份 fail-closed 就少一处能被写漏的
+    地方。`payload` 允许是 list（`DELETE /api/protected/category` 的请求体是裸数组）。
     """
     uid = _device_get_user_id(config)
     if uid <= 0:
@@ -950,9 +954,10 @@ def _admin_post(path: str, payload: dict, config: RunnableConfig) -> dict | str 
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
     try:
-        resp = _client.post(f"{ADMIN_BASE}{path}", headers=headers, json=payload, timeout=15)
+        resp = _client.request(method, f"{ADMIN_BASE}{path}",
+                               headers=headers, json=payload, timeout=15)
     except Exception as exc:
-        logger.error("admin POST %s failed: %s", path, exc)
+        logger.error("admin %s %s failed: %s", method, path, exc)
         return unavailable(f"后台接口请求失败: {exc}（本次改动未确认生效，不要声称已改好）")
     if resp.status_code in (401, 403):
         return unavailable("当前身份无权改动后台数据（该功能仅管理员可用），本次未改动任何内容")
@@ -964,10 +969,15 @@ def _admin_post(path: str, payload: dict, config: RunnableConfig) -> dict | str 
         return unavailable("后台接口返回的不是 JSON（本次改动未确认生效，不要声称已改好）")
     if body.get("code") != 200:
         # ⚠️ 见本节头注：只看 HTTP 状态码会把 Rust 的 ApiResponse::error 当成功。
-        logger.warning("admin POST %s error: %s", path, body.get("message"))
+        logger.warning("admin %s %s error: %s", method, path, body.get("message"))
         return unavailable(f"后台接口报错: {body.get('message')}"
                            f"（本次改动未确认生效，不要声称已改好）")
     return body.get("data")
+
+
+def _admin_post(path: str, payload: dict, config: RunnableConfig):
+    """POST 的薄封装（既有调用点保持原样）。"""
+    return _admin_request("POST", path, payload, config)
 
 
 def _tag_index(config: RunnableConfig):
@@ -1033,12 +1043,14 @@ def list_admin_notes(config: RunnableConfig) -> str:
 def create_tag(
     title: Annotated[str, "新标签的名字（如「Python」「分布式」）"],
     config: RunnableConfig,
-    parent_id: Annotated[int | None, "父标签的 id（建二级标签时给；建一级标签不填）"] = None,
+    parent_tag: Annotated[str | None,
+                          "父标签的**名字**（建二级标签时给，如「编程」；建一级标签不填）；"
+                          "**不是 id**"] = None,
     color: Annotated[str | None,
                      "用户点了名的颜色（中文色名如「粉色」，或站内色板色值如 #eb2f96）；"
                      "用户没说就不填——不填按标签名哈希取色，同名永远同色"] = None,
 ) -> str:
-    """新建一个文章标签：不填 parent_id 建**一级**标签，填了则在该一级标签下建**二级**标签。
+    """新建一个文章标签：不填 parent_tag 建**一级**标签，填了则在该一级标签下建**二级**标签。
     同名标签已存在时**不重复创建**，直接复用并告知它的 id。
     **本工具只往标签字典里加一项，不会把它挂到任何文章上**（挂标签是另一件事）。
     需要管理员身份。"""
@@ -1048,15 +1060,26 @@ def create_tag(
         return unavailable("标签名为空，未创建")
     if len(name) > 40:
         return unavailable(f"标签名过长（{len(name)} 字，上限 40），未创建")
-    pid = None
-    if parent_id is not None and str(parent_id).strip() != "":
-        pid = _as_article_id(parent_id)  # 同一套"必须是正整数"的判据
-        if pid is None:
-            return unavailable(f"父标签 id「{parent_id}」不合法，未创建")
 
     index = _tag_index(config)
     if index is None:
         return unavailable("读不到现有的标签字典，无法确认是否重名，本次未创建")
+
+    # 父标签：**按名字**解析成 id（20260921 第四轮）。为什么不收 id：用户嘴里说的
+    # 就是名字，跨轮执行记忆里也只有名字没有 id（`list_tags` 的摘要不带编号），
+    # 而"父标签 id 从哪来"曾是这条链上唯一解不开的环——planner 只可能猜一个数字。
+    # 名字对不上就**拒绝**（零写），不新建、不做模糊匹配。
+    pid = None
+    pname = str(parent_tag or "").strip()
+    if pname:
+        parent, cands = A.find_tag(index, pname, level=1)
+        if parent is None:
+            if cands:
+                return unavailable(
+                    f"站内有两个同名的一级标签「{pname}」，无法确定是哪一个，本次未创建")
+            return unavailable(f"站内没有叫「{pname}」的一级标签，本次未创建"
+                               f"（要建的话先把它建出来，或者换个爸爸）")
+        pid = parent.id
 
     # 先查后建（幂等）：同名同层 → 直接复用，不写库。
     hit, cands = A.find_tag(index, name, pid)
@@ -1069,17 +1092,16 @@ def create_tag(
 
     if pid is not None:
         parent = index.get(pid)
-        if parent is None or parent.level != 1:
-            return unavailable(f"父标签 id={pid} 不存在或不是一级标签，本次未创建")
-        # 参数对调守卫（20260921）：父标签 id 指向的标签**名字与新标签名相同**时拒绝。
-        # 生产实证：planner 把「在编程标签下新建 Rust」填成 title=编程、parent_id=编程的
-        # id（父名当成了新标签名），若放行就会在「编程」下建出一个也叫「编程」的二级
+        # 参数对调守卫（20260921）：父标签的**名字与新标签名相同**时拒绝。
+        # 生产实证：planner 把「在编程标签下新建 Rust」填成 title=编程、父也填编程
+        # （父名当成了新标签名），若放行就会在「编程」下建出一个也叫「编程」的二级
         # 标签——库里多一条永远不该有的同名父子，而回复还会说"建好了"。这一判据不需要
         # 理解用户意图，只认"父子同名"这个自身矛盾的结构，误伤面 0（正常的二级标签
         # 不会与父同名：同名父子在做任何按名字找标签的操作时都是歧义）。
-        if parent.name == name:
+        # 名字通道下这条更容易撞上（两边都是名字，写串了就直接同名），所以留着。
+        if parent is not None and parent.name == name:
             return unavailable(
-                f"要新建的标签名「{name}」与父标签（id={pid}）同名，这多半是把父标签名"
+                f"要新建的标签名「{name}」与父标签「{parent.name}」同名，这多半是把父标签名"
                 f"当成了新标签名（「在{name}下面新建 X」里的 X 才是新标签的名字），本次未创建")
     elif cands or hit is not None:
         cands = cands or [hit]
@@ -1124,6 +1146,442 @@ def create_tag(
                            f"本次改动未确认生效")
     return ok(A.render_tag_created(got), meta={
         "op": "tag_create", "tag_id": got.id, "tag_name": got.name, "level": got.level})
+
+
+def _find_named_tag(name, config, level=None, role="标签", index=None):
+    """按名字在标签字典里找一个标签 → `(TagInfo, None)` 或 `(None, 拒绝文本)`。
+
+    这是**所有按名字改标签的工具共用的解析入口**（改 / 删 / 移动），也是"名字通道"
+    落地的地方：planner 写名字，这里确定性换成 id 与层级。四种结局都响亮：
+      · 唯一命中 → 交给调用方；
+      · 命中多个（不同父下的同名二级）→ 请调用方追问，**不替用户选一个**
+        （选错就是改错/删错数据）；
+      · 一个都没有 → 如实说站内没这个标签，**绝不新建、绝不模糊匹配**；
+      · 字典读不到 → 单独一种说法（"读不到" ≠ "没有"）。
+    `role` 只影响措辞（找父标签时说「一级标签」）；**给了 level 就自动说清是
+    "一级里没有"还是"二级里没有"**——否则 planner 会以为这个名字站内根本不存在，
+    去新建一个，而不是回来把 level 去掉。
+    `index` 是**可选的外部快照**：一个工具要连着查两个名字（目标 + 父）时，
+    用同一份快照查才有意义（两次读之间标签可能被挪走），也省一次网络往返。
+    """
+    from agent import adminops as A
+    if index is None:
+        index = _tag_index(config)
+    if index is None:
+        return None, "读不到现有的标签字典，无法把名字对应到标签，本次未改动"
+    want = str(name or "").strip()
+    if not want:
+        return None, "标签名为空，本次未改动"
+    lv = None
+    if str(level or "").strip():
+        lv = A.normalize_level(level)
+        if lv is None:
+            return None, f"层级「{level}」认不出来（只支持一级 / 二级），本次未改动"
+        if role == "标签":
+            role = "一级标签" if lv == "one" else "二级标签"
+    hit, cands = A.find_tag(index, want, level=(1 if lv == "one" else 2) if lv else None)
+    if hit is None:
+        # 同名都在同一层（两个二级挂在不同父下）时，"说明是一级还是二级"帮不上忙
+        # ——所以再给一条**能落下的**指认方式：用展示名（`父 / 子`）。这正是下面
+        # 候选名单写出来的形态，用户照着念、planner 照着填都能对上。
+        want_lv = (1 if lv == "one" else 2) if lv else None
+        by_label = [t for t in index.values()
+                    if t.label == want and (want_lv is None or t.level == want_lv)]
+        if len(by_label) == 1:
+            return by_label[0], None
+    if hit is not None:
+        return hit, None
+    if cands:
+        return None, (f"站内有 {len(cands)} 个叫「{want}」的{role}（"
+                      + "、".join(c.label + f"（id={c.id}）" for c in cands)
+                      + "）：无法确定要动的是哪一个，本次未改动——"
+                        "请用「父 / 子」这样的全名指认它（或说明是一级还是二级）")
+    return None, f"站内没有叫「{want}」的{role}，本次未改动"
+
+
+@tool
+def update_tag(
+    name: Annotated[str, "要改的那个标签的**名字**（站内已有的标签，如「Asyncio」）"],
+    config: RunnableConfig,
+    new_title: Annotated[str | None, "改成什么名字；不改名就不填"] = None,
+    color: Annotated[str | None,
+                     "改成什么颜色（中文色名如「粉色」，或站内色板色值）；不改颜色就不填"] = None,
+    parent_tag: Annotated[str | None,
+                          "把这个标签挪到哪个**一级标签**下面（写它的名字，如「编程」）；"
+                          "不动位置就不填"] = None,
+    to_level: Annotated[str | None,
+                        "要把这个标签改成一级还是二级（one/two）；不改层级就不填。"
+                        "改成二级（two）时必须同时给出 parent_tag"] = None,
+    level: Annotated[str | None,
+                     "这个标签现在是几级（one/two）；站内同名标签不止一个时用它指认"] = None,
+) -> str:
+    """修改一个已有标签：改名 / 改颜色 / 换父级 / 一级↔二级互转（可同时改几样）。
+    **只动你点名的那几样**，没点名的保持不动。需要管理员身份。
+
+    换父级与换层级走一条原子接口：**换父级时标签 id 与文章引用都不变**（可逆）；
+    只有跨表（一级↔二级）且旧 id 在新表里已被占用时才会换 id，那种情况下所有引用
+    过它的文章会被同步改写（返回里会说清楚）。"""
+    from agent import adminops as A
+    # 目标与父标签用**同一份**字典快照解析：两次读之间标签可能被挪走/改名，
+    # 拿两个时刻的数据拼一个请求是自找的错；顺带少一次网络往返。
+    index = _tag_index(config)
+    hit, err = _find_named_tag(name, config, level, index=index)
+    if err:
+        return unavailable(err)
+
+    new_title = str(new_title or "").strip()
+    if new_title and len(new_title) > 40:
+        return unavailable(f"新标签名过长（{len(new_title)} 字，上限 40），本次未改动")
+    color_spec = str(color or "").strip()
+    picked = A.match_tag_color(color_spec) if color_spec else None
+    if color_spec and picked is None:
+        return unavailable(f"颜色「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}），"
+                           f"本次未改动")
+
+    cur = A.level_of(hit)
+    tl = None
+    if str(to_level or "").strip():
+        tl = A.normalize_level(to_level)
+        if tl is None:
+            return unavailable(f"层级「{to_level}」认不出来（只支持一级 / 二级），本次未改动")
+    pname = str(parent_tag or "").strip()
+    father = hit.father_id
+    target = cur
+    if pname:
+        if tl == "one":
+            return unavailable(f"既说了挪到「{pname}」下面、又说了改成一级标签——"
+                               f"一级标签没有父标签，这两个说法互相矛盾，本次未改动")
+        parent, perr = _find_named_tag(pname, config, "one", role="一级标签", index=index)
+        if perr:
+            return unavailable(perr)
+        if parent.id == hit.id:
+            # 自环：后端会硬拒（CASCADE 会把刚插入的行一起删掉，标签彻底消失），
+            # 这里先拦一道，报错更直白。
+            return unavailable("不能把标签挂到它自己下面，本次未改动")
+        father, target = parent.id, "two"
+    elif tl:
+        target = tl
+        if tl == "two" and cur == "one":
+            return unavailable("要改成二级标签就必须给出它挂在哪个一级标签下"
+                               "（parent_tag 填那个一级标签的名字），本次未改动")
+        if tl == "one":
+            father = None
+    moves = (target != cur) or (target == "two" and father != hit.father_id)
+    if not new_title and not picked and not moves:
+        return unavailable("没有指出要改什么（名字 / 颜色 / 父标签 / 层级），本次未改动")
+
+    if moves:
+        payload = {"level": cur, "id": hit.id}
+        if target != cur:
+            payload["toLevel"] = target
+        if target == "two" and father is not None:
+            payload["fatherTag"] = father
+        if new_title:
+            payload["title"] = new_title
+        if picked:
+            payload["color"] = picked
+        data = _admin_request("POST", "/api/protected/tag/move", payload, config)
+        if isinstance(data, ToolResult):
+            return data
+        res = data if isinstance(data, dict) else {}
+        new_id = res.get("toId")
+        if not isinstance(new_id, int) or new_id <= 0:
+            return unavailable(f"后台没有返回标签移动后的 id（返回 {data!r}），"
+                               f"本次改动未确认生效——请到后台标签页核对后再决定是否重试")
+        after = _tag_index(config)
+        if after is None:
+            return unavailable(f"标签可能已经改好（后台返回 id={new_id}），但读不回标签字典、"
+                               f"无法确认——请到后台标签页核对后再决定是否重试")
+        got = after.get(new_id)
+        if got is None:
+            return unavailable(f"改动请求已发出，但读回标签字典里找不到 id={new_id} 的行，"
+                               f"本次改动未确认生效")
+        mismatch = []
+        if target == "two" and got.father_id != father:
+            mismatch.append("父标签")
+        if got.level != (2 if target == "two" else 1):
+            mismatch.append("层级")
+        if new_title and got.name != new_title:
+            mismatch.append("名字")
+        before_label = hit.label
+        if mismatch:
+            return unavailable(f"改动请求已发出，但读回标签「{got.label}」的"
+                               f"{'、'.join(mismatch)}与预期不一致，本次改动未确认生效")
+        return ok(A.render_tag_moved(before_label, got.label, A.move_impact(res)),
+                  meta={"op": "tag_update", "tag_id": got.id, "tag_name": got.name,
+                        "level": got.level, "before": before_label, "after": got.label})
+
+    # 同层改名 / 改色：PUT /tagone|tagtwo/:id。**两个字段都是必填**，所以必须把
+    # 当前颜色原样回传（不猜、也不许传空——传空等于把这个标签的颜色抹掉）。
+    if not picked and not hit.color:
+        return unavailable("读不到这个标签现在的颜色，而改名接口要求同时提交颜色；"
+                           "为避免把它的颜色抹掉，本次未改动")
+    payload = {"title": new_title or hit.name, "color": picked or hit.color}
+    path = ("/api/protected/tagone/" if cur == "one" else "/api/protected/tagtwo/")
+    data = _admin_request("PUT", f"{path}{hit.id}", payload, config)
+    if isinstance(data, ToolResult):
+        return data
+    after = _tag_index(config)
+    if after is None:
+        return unavailable("改动请求已发出，但读不回标签字典、无法确认，请到后台标签页核对")
+    got = after.get(hit.id)
+    if got is None:
+        return unavailable(f"改动请求已发出，但读回标签字典里找不到 id={hit.id} 的行，"
+                           f"本次改动未确认生效")
+    want_color = picked or hit.color
+    if got.name != payload["title"] or got.color != want_color:
+        return unavailable(f"改动请求已发出，但读回标签「{got.label}」的值与预期不一致"
+                           f"（名字或颜色没落库），本次改动未确认生效")
+    pairs = []
+    if new_title:
+        pairs.append((hit.name, got.name))
+    if picked:
+        pairs.append((A.describe_color(hit.color) if hit.color else "（未知）",
+                      A.describe_color(got.color) if got.color else "（未知）"))
+    before_s, after_s = A.render_change(pairs) if pairs else (hit.label, got.label)
+    return ok(A.render_tag_updated(got.label, before_s, after_s),
+              meta={"op": "tag_update", "tag_id": got.id, "tag_name": got.name,
+                    "level": got.level, "before": before_s, "after": after_s})
+
+
+@tool
+def delete_tag(
+    name: Annotated[str, "要删掉的那个标签的**名字**（站内已有的标签）"],
+    config: RunnableConfig,
+    level: Annotated[str | None,
+                     "这个标签是几级（one/two）；站内同名标签不止一个时用它指认"] = None,
+) -> str:
+    """删除一个文章标签（一级或二级都可以）。需要管理员身份。
+
+    ⚠️ **删除不可撤销**：删一级标签会连带删掉它下面的所有二级标签，并把这些标签
+    从**所有文章**上摘掉（文章本身不会被删）。要动的标签名对不上就什么都不做。"""
+    from agent import adminops as A
+    # 子标签名单取自**解析目标的那一份快照**（同一次读）：删一级时会连坐子标签，
+    # 名单要是从第二次读里取，两次读之间新建的子标签就会在回执里凭空消失
+    # ——而它已经被 CASCADE 删掉了。
+    index = _tag_index(config)
+    hit, err = _find_named_tag(name, config, level, index=index)
+    if err:
+        return unavailable(err)
+    hits_before = {hit.id}
+    kids = A.children_of(index or {}, hit.id) if hit.level == 1 else []
+    hits_before |= {k.id for k in kids}
+
+    payload = {"level": A.level_of(hit), "ids": [hit.id]}
+    data = _admin_request("DELETE", "/api/protected/tag", payload, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    after = _tag_index(config)
+    if after is None:
+        return unavailable(f"删除请求已发出，但读不回标签字典、无法确认它是否真的删掉了"
+                           f"——请到后台标签页核对")
+    left = [i for i in sorted(hits_before) if i in after]
+    if left:
+        return unavailable(f"删除请求已发出，但读回标签字典里 id={left[0]} 还在"
+                           f"（共 {len(left)} 个没删掉），本次改动未确认生效")
+    if hit.level == 1 and kids:
+        extra = f"它下面的 {len(kids)} 个二级标签（{'、'.join(k.name for k in kids)}）已一并删除"
+    elif hit.note_count is not None:
+        extra = f"它原本挂在 {hit.note_count} 篇文章上，这些引用已一并摘掉（文章本身没删）"
+    else:
+        extra = ""
+    return ok(A.render_tag_deleted(hit.label, extra),
+              meta={"op": "tag_delete", "tag_id": hit.id, "tag_name": hit.name,
+                    "level": hit.level, "change": extra or "已删除"})
+
+
+def _category_index(config: RunnableConfig):
+    """分类字典 → `{id: CategoryInfo}`；读不到返回 None（≠"没有分类"）。"""
+    from agent import adminops as A
+    data = _admin_get("/api/category", config)
+    if isinstance(data, ToolResult):
+        return None
+    return A.build_category_index(data)
+
+
+def _find_named_category(name, config):
+    """按名字找一个分类 → `(CategoryInfo, None)` 或 `(None, 拒绝文本)`（同上）。"""
+    from agent import adminops as A
+    index = _category_index(config)
+    if index is None:
+        return None, "读不到现有的分类列表，无法把名字对应到分类，本次未改动"
+    want = str(name or "").strip()
+    if not want:
+        return None, "分类名为空，本次未改动"
+    hit, cands = A.find_category(index, want)
+    if hit is not None:
+        return hit, None
+    if cands:
+        return None, (f"站内有 {len(cands)} 个叫「{want}」的分类（"
+                      + "、".join(f"id={c.id}" for c in cands)
+                      + "）：无法确定要动的是哪一个，本次未改动")
+    return None, f"站内没有叫「{want}」的分类，本次未改动"
+
+
+@tool
+def create_category(
+    title: Annotated[str, "新分类的名字"],
+    config: RunnableConfig,
+    path_name: Annotated[str | None,
+                         "分类的路径名（分类页 URL 里那一段，如 pythonfy）；用户没说就不填"] = None,
+    introduce: Annotated[str | None, "分类简介；用户没说就不填"] = None,
+    icon: Annotated[str | None, "分类图标；用户没说就不填"] = None,
+    color: Annotated[str | None,
+                     "用户点了名的颜色（中文色名，或任意 6 位色值如 #eb2f96）；没说就不填"] = None,
+) -> str:
+    """新建一个文章分类。分类是**平铺**的、没有层级。
+    站内已有同名分类时**拒绝**（既不重复建、也不当成"已存在"复用——分类没有唯一
+    约束，重名会让以后每一次按名字找分类都变成歧义）。需要管理员身份。"""
+    from agent import adminops as A
+    name = str(title or "").strip()
+    if not name:
+        return unavailable("分类名为空，未创建")
+    if len(name) > 40:
+        return unavailable(f"分类名过长（{len(name)} 字，上限 40），未创建")
+
+    index = _category_index(config)
+    if index is None:
+        return unavailable("读不到现有的分类列表，无法确认是否重名，本次未创建")
+    hit, cands = A.find_category(index, name)
+    if hit is not None or cands:
+        ids = "、".join(f"id={c.id}" for c in (cands or [hit]))
+        return unavailable(f"站内已经有叫「{name}」的分类（{ids}），本次未创建")
+
+    payload: dict = {"categoryTitle": name}
+    color_spec = str(color or "").strip()
+    if color_spec:
+        picked = A.match_any_color(color_spec)
+        if picked is None:
+            return unavailable(f"颜色「{color_spec}」认不出来（可用中文色名，"
+                               f"或 6 位色值如 #eb2f96），本次未创建")
+        payload["color"] = picked
+    for key, val in (("pathName", path_name), ("introduce", introduce), ("icon", icon)):
+        s = str(val or "").strip()
+        if s:
+            payload[key] = s
+
+    data = _admin_post("/api/protected/category", payload, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    # 建后复核：这个端点**不回 id**（返回死字符串 "Category created"），所以要靠
+    # "分类列表里多出来一行、且那行的名字就是我建的那个"来证明它真的在。多出两行
+    # （并发下别人也建了一个）就说不清哪行是我的——如实报不确定，不当成成功。
+    after = _category_index(config)
+    if after is None:
+        return unavailable("分类可能已经建好，但读不回分类列表、无法确认"
+                           "——请到后台分类页核对后再决定是否重试")
+    new_ids = [i for i in after if i not in index]
+    got = after.get(new_ids[0]) if len(new_ids) == 1 else None
+    if got is None or got.name != name:
+        return unavailable(f"新建请求已发出，但读回分类列表里找不到名字为「{name}」的新行，"
+                           f"本次改动未确认生效")
+    return ok(A.render_category_created(got),
+              meta={"op": "category_create", "category_name": got.name})
+
+
+@tool
+def update_category(
+    name: Annotated[str, "要改的那个分类的**名字**（站内已有的分类）"],
+    config: RunnableConfig,
+    new_title: Annotated[str | None, "改成什么名字；不改名就不填"] = None,
+    path_name: Annotated[str | None, "改成什么路径名；不改就不填"] = None,
+    introduce: Annotated[str | None, "改成什么简介；不改就不填"] = None,
+    icon: Annotated[str | None, "换成什么图标；不改就不填"] = None,
+    color: Annotated[str | None, "换成什么颜色；不改就不填"] = None,
+) -> str:
+    """修改一个已有分类（改名 / 路径名 / 简介 / 图标 / 颜色）。**只动你点名的字段**，
+    没点名的保持不动。需要管理员身份。
+
+    注：这些字段都**只能改不能清空**（清空请求会被后端当成"不改"忽略），
+    所以本工具不接受"把简介清空"这类要求。"""
+    from agent import adminops as A
+    hit, err = _find_named_category(name, config)
+    if err:
+        return unavailable(err)
+
+    payload: dict = {}
+    new_title = str(new_title or "").strip()
+    if new_title:
+        if len(new_title) > 40:
+            return unavailable(f"新分类名过长（{len(new_title)} 字，上限 40），本次未改动")
+        payload["categoryTitle"] = new_title
+    color_spec = str(color or "").strip()
+    if color_spec:
+        picked = A.match_any_color(color_spec)
+        if picked is None:
+            return unavailable(f"颜色「{color_spec}」认不出来（可用中文色名，"
+                               f"或 6 位色值如 #eb2f96），本次未改动")
+        payload["color"] = picked
+    for key, val in (("pathName", path_name), ("introduce", introduce), ("icon", icon)):
+        s = str(val or "").strip()
+        if s:
+            payload[key] = s
+    if not payload:
+        return unavailable("没有指出要改什么（名字 / 路径名 / 简介 / 图标 / 颜色），本次未改动")
+
+    data = _admin_post(f"/api/protected/category/{hit.id}", payload, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    after = _category_index(config)
+    if after is None:
+        return unavailable("改动请求已发出，但读不回分类列表、无法确认，请到后台分类页核对")
+    got = after.get(hit.id)
+    if got is None:
+        return unavailable(f"改动请求已发出，但读回分类列表里已经没有 id={hit.id} 这一行，"
+                           f"本次改动未确认生效")
+    # 逐字段复核"我要的它变成了"——**不是**相信那个 "Updated" 字符串
+    # （update_category 对不存在的 id 也返回 Not found 之外的正常路径，
+    #  且 0 行更新不会报错）。
+    fields = {"categoryTitle": "name", "pathName": "path_name",
+              "introduce": "introduce", "icon": "icon", "color": "color"}
+    pairs = []
+    for key, attr in fields.items():
+        if key not in payload:
+            continue
+        want = str(payload[key])
+        if str(getattr(got, attr)) != want:
+            return unavailable(f"改动请求已发出，但读回分类「{got.name}」的这一项仍是旧值，"
+                               f"本次改动未确认生效")
+        pairs.append((str(getattr(hit, attr)) or "（空）", want))
+    before_s, after_s = A.render_change(pairs)
+    return ok(A.render_category_updated(got.name, before_s, after_s),
+              meta={"op": "category_update", "category_name": got.name,
+                    "change": after_s})
+
+
+@tool
+def delete_category(
+    name: Annotated[str, "要删掉的那个分类的**名字**（站内已有的分类）"],
+    config: RunnableConfig,
+) -> str:
+    """删除一个文章分类。需要管理员身份。
+
+    ⚠️ **文章不会被删**：分类删掉后，原本属于它的文章会变成"没有分类"（后端外键是
+    ON DELETE SET NULL）。分类名对不上就什么都不做。"""
+    from agent import adminops as A
+    hit, err = _find_named_category(name, config)
+    if err:
+        return unavailable(err)
+
+    data = _admin_request("DELETE", "/api/protected/category", [hit.id], config)
+    if isinstance(data, ToolResult):
+        return data
+
+    after = _category_index(config)
+    if after is None:
+        return unavailable("删除请求已发出，但读不回分类列表、无法确认它是否真的删掉了"
+                           "——请到后台分类页核对")
+    if hit.id in after:
+        return unavailable(f"删除请求已发出，但读回分类列表里 id={hit.id}（{hit.name}）还在，"
+                           f"本次改动未确认生效")
+    change = (f"{hit.note_count} 篇文章变成没有分类"
+              if hit.note_count is not None else "")
+    return ok(A.render_category_deleted(hit.name, hit.note_count),
+              meta={"op": "category_delete", "category_name": hit.name,
+                    "change": change})
 
 
 @tool
@@ -1348,11 +1806,18 @@ _TOOL_REGISTRY = [
     get_moderation_status,
     get_user_stats,
     # 管理助手后台写（20260921 第二轮）：list_admin_notes=admin.console，
-    # 三个写工具=write.console，见"管理助手写工具"节头注
+    # 写工具=write.console，见"管理助手写工具"节头注
     list_admin_notes,
     create_tag,
     set_article_status,
     set_article_tags,
+    # 标签改/删 + 分类增删改（20260921 第四轮）：同样是 write.console，
+    # 目标是**名字**（planner 写名字，工具确定性解析成 id，见 _find_named_tag）
+    update_tag,
+    delete_tag,
+    create_category,
+    update_category,
+    delete_category,
 ]
 
 def get_all_tools():

@@ -17,8 +17,10 @@ execute 在调用工具前解析引用，从**本请求内已成功执行**的�
 走既有 blocker 链路（planner 改参重试 → 同 spec 二次受阻 → reflector）。
 
 设计边界（刻意窄）：
-  - 只认**顶层参数值**是引用的形态（`{"article_id": "$x[0].y"}`）；不做嵌套/
-    表达式/函数——引用语法一旦能算，就变回了"让模型写代码"。
+  - 引用只能是**完整的一个值**（`"$x[0].y"`），可以出现在顶层参数里，也可以
+    出现在 list/dict 的元素位置（`{"add": ["$list_tags[0].title"]}`）；但不做
+    拼接/表达式/函数——引用语法一旦能算，就变回了"让模型写代码"。同一个值里
+    混着字面量与引用的字符串（`"前缀$x[0].y"`）**不算引用**，当字面量原样传下去。
   - 只认**本请求内已经执行过**的工具（tool_data 按执行顺序累积）；跨请求的
     "上次会话读到 19"另有通道（execution_log / doc_anchors），不走这里。
   - 取值失败给**原因码**（ref_unknown_tool / ref_unparsed / ref_index_range /
@@ -185,22 +187,74 @@ def resolve_one(value: str, tool_data: list) -> tuple[object, str | None]:
     return got, None
 
 
+def _first_ref(value) -> str | None:
+    """结构里第一个引用字面量（报错信息用）。
+
+    为什么要它：报错要报出**真正失败的那一条**（`$list_tags[3].tagKey`），而不是
+    整个数组的 repr——planner 与 reflector 都按这条信息改参数，给一个大列表
+    等于让它自己去找哪一项错了。
+    """
+    if is_ref(value):
+        return value
+    if isinstance(value, dict):
+        for v in value.values():
+            got = _first_ref(v)
+            if got:
+                return got
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            got = _first_ref(v)
+            if got:
+                return got
+    return None
+
+
+def _resolve_value(value, tool_data: list) -> tuple[object, str | None]:
+    """递归解析值里的引用 → (新值, 错误码)。非引用结构原样逐层重建。
+
+    递归是必须的（20260921）：`has_refs` 一直是递归的（确认弹窗据此拒签），而
+    这里此前只走顶层 ⇒ **嵌套引用既解析不出来、又会让整张令牌签不出去**，
+    两头都堵死且都没有明确报错（写技能的标签名列表正是嵌套形态：
+    `{"add": ["$list_tags[0].title"]}`）。现在两处口径一致：能查到就查，
+    查不到就报错码，绝不静默把引用当字面量传下去。
+    """
+    if is_ref(value):
+        got, err = resolve_one(value, tool_data)
+        return (None, err) if err else (got, None)
+    if isinstance(value, dict):
+        out = dict(value)
+        for k, v in value.items():
+            got, err = _resolve_value(v, tool_data)
+            if err:
+                return None, f"{err}:{_first_ref(v) or v}"
+            out[k] = got
+        return out, None
+    if isinstance(value, (list, tuple)):
+        out = []
+        for v in value:
+            got, err = _resolve_value(v, tool_data)
+            if err:
+                return None, f"{err}:{_first_ref(v) or v}"
+            out.append(got)
+        return out, None
+    return value, None
+
+
 def resolve_args(args: dict, tool_data: list) -> tuple[dict, str | None]:
     """参数 dict 里的引用全部解析 → (新参数, 错误码)。
 
-    只处理顶层值；任一引用解析失败即整体失败（该 spec 不执行——半个参数清单
-    去调用工具是更坏的结果）。无引用时原样返回（零开销、行为不变）。
+    顶层与嵌套（list/dict 里）一视同仁；任一引用解析失败即整体失败（该 spec
+    不执行——半个参数清单去调用工具是更坏的结果）。无引用时原样返回（零开销、
+    行为不变）。判据与 `has_refs` **同源**（都用 `_walk_refs`）：确认弹窗拒签的
+    那批 spec，正是这里能解析的那批。
     """
     if not isinstance(args, dict):
         return args, None
-    if not any(is_ref(v) for v in args.values()):
+    if not _walk_refs(args):
         return args, None
-    out = dict(args)
-    for k, v in args.items():
-        got, err = resolve_one(v, tool_data)
-        if err:
-            return None, f"{err}:{v}"
-        out[k] = got
+    out, err = _resolve_value(args, tool_data)
+    if err:
+        return None, err
     return out, None
 
 

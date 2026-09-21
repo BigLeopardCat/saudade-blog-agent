@@ -180,11 +180,14 @@ check("节点 config 注解是真实类型（不是字符串）",
 print("⑨ 写操作的「人在回路」确认（前置需求 ③：权限之后还有一次同意）")
 # 权限判"这个人能不能做"，确认判"这一次他到底要不要做"。只有**离开用户眼前**的
 # 写入（写站点内容：对外可见、收不回）要确认；页面/设备写的效果用户立刻看得见。
-# 20260921 第二轮起**精确集合**：需确认的工具恰好是三个后台写（此前是"一个都没有"
-# ——写工具落地那天这条必须有人看见它变了）。
+# 20260921 第二轮起**精确集合**：需确认的工具恰好是后台写（此前是"一个都没有"
+# ——写工具落地那天这条必须有人看见它变了）。20260921 晚第三轮从三个变八个：标签
+# 增/改/删 + 分类增/改/删五件新写工具都是"离开用户眼前、写站点内容"的写。
 CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), n)}
-check("需确认的工具恰好是三个后台写（改宽/改窄都要有人看见）",
-      CONSENT_TOOLS == {"create_tag", "set_article_status", "set_article_tags"},
+check("需确认的工具恰好是八个后台写（改宽/改窄都要有人看见）",
+      CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
+                        "create_category", "update_category", "delete_category",
+                        "set_article_status", "set_article_tags"},
       str(sorted(CONSENT_TOOLS)))
 check("写站点内容属于需确认 scope", authz.SCOPE_WRITE_CONTENT in authz.CONSENT_SCOPES)
 check("后台写属于需确认 scope", authz.SCOPE_WRITE_CONSOLE in authz.CONSENT_SCOPES)
