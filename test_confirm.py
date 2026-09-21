@@ -177,6 +177,17 @@ check("目标无据的文章写 → 不弹（弹出来的是「要不要改文�
       _popup("《架构文档》我想改成私密", PLAN_STATUS) is None)
 check("目标有据（本轮读到过 id=12）→ 弹（确认轮没有帧，凭据是签发时校验的）",
       _popup("《架构文档》我想改成私密", PLAN_STATUS, extra=(EVID,)) is not None)
+# 误靶写（20260921 第三轮活体探针）：帧里读到过 12，但主人**点名的是 14**——
+# 弹出来的确认框会把 12 明明白白写出来，可那不是我点的那一篇。不弹 → 由 execute
+# 主循环产 target_mismatch 帧，planner 按帧改回来。
+EVID2 = ToolMessage(content="后台文章共 3 篇：\n- id=12 [私密]《架构文档》\n- id=14 [草稿]《随笔》",
+                    tool_call_id="t2", name="list_admin_notes")
+check("点名 14 而计划写 12 → **不弹**（否则等于把误靶洗成一条已授权的写）",
+      _popup("文章 14 那篇我想改成私密", PLAN_STATUS, extra=(EVID2,)) is None)
+check("点名 12 而计划写 12 → 弹（判据只否决不一致）",
+      _popup("文章 12 那篇我想改成私密", PLAN_STATUS, extra=(EVID2,)) is not None)
+check("主人没点名（纯指代）→ 弹（判据不启用，行为与改动前一致）",
+      _popup("《架构文档》我想改成私密", PLAN_STATUS, extra=(EVID2,)) is not None)
 check("参数含 $ref → 不弹（令牌签不出来，退回追问）",
       _popup("改一下文章标签", 'SKILL=article_tags\nPARAMS={}\nTOOLS: '
              'set_article_tags({"article_id": 12, "add": ["$list_tags[0].name"]})'
