@@ -72,6 +72,7 @@ from langgraph.graph.message import add_messages
 
 from models import get_llm
 from tools import get_all_tools
+from agent import adminops as A
 from agent import authz
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _doc_anchors, _frame_texts, _has_frames, _last_user_msg,
@@ -84,7 +85,7 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_pa
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.entities import receipt_digest
 from agent.principal import UNKNOWN as UNKNOWN_PRINCIPAL
-from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE
+from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
                           _CALLABLE_QUERY_TOOLS_ORDER, build_planner_context,
@@ -136,6 +137,37 @@ REFLECT_MAX_ROUNDS = 2
 # ops_report_admin 连规划 4 轮 = 同两个工具各跑 4 遍（22s，工具 8 次），
 # 病灶与"数据工具重复拦截"（content_query 族）相同，只是报表技能不经那条通道。
 SNAPSHOT_SKILLS = frozenset({"ops_report", "moderation_report", "user_report"})
+
+# 后台写技能（20260921 第二轮）：**不是**快照型——见 planner 里的重复规划防护。
+EXECUTED_ONCE_SKILLS = frozenset({"tag_create", "article_status", "article_tags"})
+
+# 需要"本轮读过这个 id 才准写"的工具（见 execute 的目标校验）。
+_ARTICLE_WRITE_TOOLS = frozenset({"set_article_status", "set_article_tags"})
+
+# 写工具回执里允许进 meta 的键（白名单，防止工具侧随手加的键悄悄进生产库 detail；
+# 消费端 Rust 只认这几个，多出来的键是无声的兼容性债）。
+# `tag_name` 是**标签名**不是文章标题——写行刻意不带《文章标题》（它会被下一轮读成
+# "我读过这篇"的指代证据），标签名没有这个歧义，且"新建了哪个标签"必须记下来。
+_RCPT_META_KEYS = ("op", "article_id", "before", "after",
+                   "tag_id", "tag_name", "level")
+
+# 目标证据的来源工具：本轮帧里**真带 note id** 的那几个（公开列表/检索/详情、
+# 后台列表、置顶列表）。刻意不含写工具自身的回显（"刚刚写过 id=12"不能成为
+# "可以再写一次 id=12"的依据——那会把整个校验自我豁免掉）。
+_TARGET_EVIDENCE_TOOLS = frozenset({
+    "get_article_detail", "list_admin_notes", "list_notes", "search_notes",
+    "rag_search", "get_top_notes",
+})
+
+
+def _target_evidence(state, user_msg: str, page_ctx: str) -> list[str]:
+    """本轮可见的、可能承载文章 id 的材料（目标校验的输入，纯拼装无判断）。"""
+    texts = [user_msg or "", page_ctx or ""]
+    for m in state.get("messages") or []:
+        if (isinstance(m, ToolMessage)
+                and (getattr(m, "name", "") or "") in _TARGET_EVIDENCE_TOOLS):
+            texts.append(str(getattr(m, "content", "")))
+    return texts
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +632,13 @@ def parse_plan(raw: str) -> dict:
 # _COMPLETION_CLAIM_RE 兜。
 _EXECUTION_CLAIM_RE = re.compile(
     r"已(?:经)?(显示|写入|写下|写好|写上去|上屏|发送|下发|执行|展示|打上|放上|刷新|设置)"
+    # 20260921 后台写（管理助手第二轮）：**刻意不把新写动词放进这一族**。这一族
+    # 不看完成标记、也不看疑问语气（历史设计，只在 content_query 零帧的异常轮宽查
+    # 用）；放进来实测会把"文章 12 是已经置顶了吗？""请问是不是已经设为私密了？"
+    # 这类**合法反问**判成声称（`已(?:经)?置顶` 后面跟的"了吗"它不管），而这两个
+    # 场景里后台写域已有更准的两张网：**err 帧轮**走 5a 的 _WRITE_CONTENT_CLAIM_RE
+    # （带完成标记 + 疑问豁免）、**零帧轮**走洞① 的 _STATE_ACTION_CLAIM_RE ④支
+    # （子句级豁免表含 吗/呢/吧/？）——各场景一张网，重复挂只会多一处误伤面。
     r"|成功(?:显示|写入|下发|发送|执行)"
 )
 # err 帧场景的完成式声称（gate 仅在工具帧含 __ERROR__ 时使用）：工具失败了
@@ -626,12 +665,48 @@ _COMPLETION_CLAIM_RE = re.compile(
 # 而提问是未获确认时最正确的收尾（见 test_authz.py ⑨b 的两条端到端用例）。
 _WRITE_CONTENT_CLAIM_RE = re.compile(
     r"(?:"
+    # ①②③ 共用末尾那一个完成标记（原有语义逐字不变）。
+    r"(?:"
     r"(?:帮你|给你|为你|替你|帮主人)(?:把)?[^\n。！？!?；;，,]{0,12}?"
-    r"(?:发布|发表|投稿|提交|上传|发出|发送)"
-    r"|(?:已经?)(?:发布|发表)"                    # 裸式只认 发布/发表（见上）
-    r"|成功(?:发布|发表|投稿|提交|上传|发出|发送)"
+    r"(?:发布|发表|投稿|提交|上传|发出|发送"
+    # 20260921 后台写动词（管理助手第二轮）：未获确认时 narrator 最可能的说法是
+    # "已经帮你建好标签啦/帮你把它置顶了"，动词表里没有就全漏。
+    r"|置顶|取消置顶|隐藏|下架|设为私密|设为公开|设为草稿|设成私密|设成公开|设成草稿"
+    r"|新建|创建|建好|打上|加上|去掉)"
+    # 裸式只认 发布/发表 + 本轮的**后台写动词**：仍不含 提交（见上方注释里那句
+    # "你已经提交过河灯啦"）。"标签已经建好啦"走的正是这一支。
+    r"|(?:已经?|刚刚)(?:发布|发表|置顶|取消置顶|隐藏|下架|设为私密|设为公开|设为草稿"
+    r"|设成私密|设成公开|设成草稿|新建|创建|建好|打上|加上|去掉)"
+    r"|成功(?:发布|发表|投稿|提交|上传|发出|发送|置顶|隐藏|创建|新建)"
     r")"
-    r"[^\n。！？!?；;，,]{0,4}?(?:了|啦|好|完成|成功|完毕)"   # 完成标记：区分声称与提议
+    # 完成标记：区分声称与提议。裸"了"要排除**时长用法**——"这篇文章已经置顶了很久
+    # 没动过"里的"了"是持续时长（不是完成态），实测被 ② 支配上这个标记判成声称；
+    # 真完成式仍有后一个"了"可落（"已经置顶了很久了"照样命中）。
+    # 疑问豁免提到**外层**（20260921，原只挂在 ④ 支）：实测 ② 支命中的
+    # "文章 12 是已经置顶了吗？""标签已经建好了吗？""请问文章 12 是不是已经设为私密了？"
+    # 都是**疑问语气**（完成标记后紧跟 吗/呢/吧/？），却因 ② 支没有豁免被判成声称。
+    # 这一支在本轮尤其要紧——consent 未过时 narrator 的**正解就是反问**（问主人
+    # "是不是已经…了"），而门恰好在"有 __ERROR__ 帧 + 完成式声称"时触发；把正解
+    # 判成谎称 = 整轮换成兜底道歉（本仓一贯的取向：这一步的误伤成本 > 漏拦）。
+    # 历史影响为零：516 条真实 trace 复扫，W/C 既有命中集合里没有"标记后紧跟
+    # 吗/呢/吧/？"的句子（见 test_authz.py ⑨b 的成对表）。
+    r"[^\n。！？!?；;，,]{0,4}?(?:了(?![多久很])|啦|好|完成|成功|完毕)(?![吗呢吧]|[?？])"
+    # ④ 远距离式（20260921 补）：**没有**施事前缀的"已经把它设为私密了"是未获确认时
+    #    最自然的编造口吻，①②③ 都抓不到（① 要"帮你"，② 要动词紧跟"已/刚刚"）。
+    #    动词**只放后台写域**（不碰 发布/提交）——"你已经把它提交过啦"那种转述主人
+    #    过往动作的句子正是 ② 刻意挡开的坑，把通用动词放进这一支等于把坑挖回来。
+    #    ④ **自带**完成标记 + 疑问豁免：本轮的写轮里 narrator 问主人"您是已经把
+    #    文章 12 设为私密了吗？"是**合法追问**（consent 未过时最正确的收尾就是问），
+    #    不该被当成声称。这一支是**独立备选**、自带标记，故豁免必须两处都挂
+    #    （外层那份管 ①②③，这份管 ④；改动时漏掉任一处，疑问式就在那一支漏网——
+    #    实测教训）。
+    #    唯二不走 ② 的形态各有一条实测依据：`已经把它设为私密了`（有"它"无"把"）、
+    #    `刚刚把标签加上了`（动词离"刚刚"三个字，且 加上 只在 ① 里）。
+    r"|(?:已经?|刚刚)[^\n。！？!?；;，,]{0,12}?"
+    r"(?:置顶|取消置顶|隐藏|下架|设为私密|设为公开|设为草稿|设成私密|设成公开|设成草稿"
+    r"|改成私密|改成公开|改成草稿|新建|创建|建好|打上|加上|去掉)"
+    r"[^\n。！？!?；;，,]{0,4}?(?:了(?![多久很])|啦|好|完成|成功|完毕)(?![吗呢吧]|[?？])"
+    r")"
 )
 # 读取声称族（20260831 补，21:19:40 事故实证：chat 轮声称"回去重读"文章但零工具
 # 调用，引用 6 处全文细节 5 处不存在）——声称"读了/查了博客内容"必须以工具返回
@@ -733,7 +808,12 @@ _STATE_ACTION_CLAIM_RE = re.compile(
     # 施事前缀（帮你/给你/为你/替你），所以"你已经提交过河灯啦"这类**转述用户自己
     # 的过往动作**不会被误判；而把动词放进②支就会撞上它。写工具的"人在回路"确认
     # 闸（agent/authz.py）落地后，这条同时封住"零工具轮声称帮你发布了"的编造。
-    r"|发布|发表|投稿|提交)"
+    # 20260921 后台写（管理助手第二轮）：置顶/隐藏/建标签同样只进这一支，理由相同。
+    # 零工具写轮（缺参守卫回退、planner 只追问）里 narrator 说"已经帮你置顶啦"
+    # 必须有网可拦——那是本轮的洞① 分支①。
+    r"|发布|发表|投稿|提交"
+    r"|置顶|取消置顶|隐藏|下架|设为私密|设为公开|设为草稿|设成私密|设成公开|设成草稿"
+    r"|新建|创建|建好|打上|加上|去掉)"
 
     # ② 无施事标记的完成式：只认清**自带施事语义**的动词（切换/显示/跳转…）。
     #    开合类（打开/开启/关掉/关闭）**不进这一支**——汉语里"樱花特效已经开启啦"
@@ -750,6 +830,15 @@ _STATE_ACTION_CLAIM_RE = re.compile(
     #    "已经把夜间模式打开了"照抓；"樱花特效已经开启啦"没有"把"，落到②之外 → 放。
     r"|(?:已经?|刚刚|方才)[^\n。！？!?；;，,]{0,10}?(?:把|将)[^\n。！？!?；;，,]{0,10}?"
     r"(?:打开|开启|开好|关掉|关闭|关上|切换|切到|切成|切回来|调到|改成|换成|显示|上屏|跳转过去)"
+    r"(?:了|啦|好了|成功)"
+    # ④ 后台写动词（20260921，管理助手第二轮）：写工具的洞① —— "已经把它设为私密了"
+    #    /"刚刚把标签加上了"这两种最自然的编造口吻，①（要"帮你"）、②（动词表是
+    #    开合/显示族）、③（要"把/将"紧跟动作词）三支都抓不到。形态沿用②（时间副词
+    #    + 距离容忍 + 自带完成态），动词**只放后台写域**：不碰 发布/提交（②支注释里
+    #    的老坑——"你已经提交过河灯啦"是转述用户自己的过往动作）。
+    r"|(?:已经?|刚刚|方才)[^\n。！？!?；;，,]{0,12}?"
+    r"(?:置顶|取消置顶|隐藏|下架|设为私密|设为公开|设为草稿|设成私密|设成公开|设成草稿"
+    r"|改成私密|改成公开|改成草稿|新建|创建|建好|打上|加上|去掉)"
     r"(?:了|啦|好了|成功)"
 )
 _STATE_ACTION_EXEMPT_RE = re.compile(
@@ -799,6 +888,11 @@ _CONTENT_TOOLS = frozenset({
     # 任何「暂无待审」「没有异常」都会被读成洞④（站内结论无帧）而整轮 fallback。
     "get_server_status", "get_service_health",
     "get_moderation_status", "get_user_stats",
+    # 后台文章列表（20260921 第二轮）：读它 = 拿到全站文章 id/标题/状态，是
+    # "把《X》设为私密"这类**指代**的唯一数据来源（公开列表读不到草稿/私密）。
+    # **三个写工具刻意不进这个集合**：本集合的语义是"跑过 ⇒ 检索/读取声称有据"，
+    # 塞写工具会让"建了个标签"变成"我检索过"的证据（5d/5f 的判据是内容域帧）。
+    "list_admin_notes",
 })
 # 命令前缀文本：回复正文出现系统命令帧前缀 = 模型在"假装发命令"（旧事故：正文
 # 输出 AUTO_NAVIGATE:/NAVIGATE:/EFFECT:/DARKMODE: 文本既不会执行、还误导用户
@@ -1613,6 +1707,25 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
 
+    # 后台写技能重复规划防护（20260921 第二轮，与上一条同源、判据**更严**）：
+    # 报表是快照型只读——同工具重复 ⇒ 拿回同一份数据；**写不是**。同一工具名第二次
+    # 调用完全可能是"另一篇"或"改成另一个值"（"再帮我把那篇也置顶"/来回切换），
+    # 只比工具名的判据会把第二件事静默收尾，而 narrator 手里握着第一条真回执，
+    # 必然说成"都改好了"。⇒ 判据 = **(工具名, 参数) 整体**：一模一样的写才收尾
+    # （同一件事重复规划），换了参数就是新的事情，放行。
+    # 判据同样取 receipts（checker PASS 过的事实）：失败/未确认/目标无据的写不进
+    # 回执 ⇒ planner 按规则 5 改参重试、以及"先读再写"的第二次尝试都不受影响。
+    if has_frames and _already_done_writes(plan_obj, state.get("receipts")):
+            logger.info("[planner] 写操作已执行（%s），去重收尾",
+                        "、".join(sorted(_tool_name(s) for s in plan_obj["tools"])))
+            plan_obj = _wrap_up_plan(
+                True, "这一批后台写操作**已经执行并复核过**，回执就在上方工具返回里："
+                      "照它如实报告改的是哪一篇、从什么变成什么。"
+                      "**不要**再说「正在改」，被问到时也不许否认；"
+                      "若还有没改的，说清楚哪一件没做。")
+            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                    "done": False}
+
     # 检索重复清单拦截（20260903 golden 实证：rag_arch_ports planner 把同一
     # rag_search 原句连发 3 轮直到轮次上限——候选 id=19 已命中却从不读全文。
     # content_query 允许"换词再搜"，但原句重发无新信息；候选命中不读全文 =
@@ -1716,6 +1829,39 @@ def _search_retry_kind(plan_obj: dict, executed: list) -> str | None:
     return None
 
 
+def _spec_signature(name: str, args: dict) -> tuple[str, str]:
+    """(工具名, 参数指纹)——写操作的重复规划判据（比"只比工具名"严一档）。
+
+    指纹按**回执侧的形态**归一：回执构造时把每个值 `str(v)[:200]`（见 execute 的
+    rcpt），所以计划侧必须走同一归一化，否则 `{"isTop": 1}` 与回执里的
+    `{"isTop": "1"}` 永不相等——判据失效成"从不收尾"（比误收尾更难发现：表现为
+    多跑一轮，看不出是判据坏了）。键序用 sort_keys 抹平（取决于 spec 的书写顺序）。
+    """
+    key = json.dumps({str(k): str(v)[:200] for k, v in (args or {}).items()},
+                     sort_keys=True, ensure_ascii=False)
+    return (name, key)
+
+
+def _already_done_writes(plan_obj: dict, receipts) -> bool:
+    """这批写计划是否**与已 PASS 的回执逐字相同**（planner 收尾判据，纯函数）。
+
+    收尾的正当性只来自"同一件事已经做过"：`(工具名, 参数)` 整体出现在回执里
+    （回执 = checker 验收过的事实），计划里每一件都已如此 ⇒ 这次规划是重复规划。
+    换一个参数（"再帮我把那篇也置顶"）就是另一件事，**不由这里收尾**——
+    这正是本轮把判据从"比工具名"改成"比 (工具名, 参数)"的原因：同名不同参会被
+    只比名字的旧判据静默吞掉，而 narrator 手里握着第一条真回执，必然说成"都改好了"。
+
+    空计划返回 False（没有要执行的，收尾与否不归这条判据管）。
+    """
+    if not (plan_obj.get("tools") and plan_obj.get("skill") in EXECUTED_ONCE_SKILLS):
+        return False
+    passed = {_spec_signature(r.get("tool"), r.get("args") or {})
+              for r in (receipts or [])}
+    planned = {_spec_signature(_tool_name(s), _tool_args(s)[0] or {})
+               for s in plan_obj["tools"]}
+    return bool(planned) and planned <= passed
+
+
 def _tool_args(tool_spec: str) -> tuple[dict, bool]:
     """TOOLS 行条目 → (参数字典, 解析是否成功)。spec 参数由 instantiate_plan 以
     json.dumps 落盘（JSON 的 true/false/null 不是 Python 字面量，ast.literal_eval
@@ -1804,7 +1950,8 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
         # 未获确认的写操作同办（20260920）：consent_required 是"还没问过用户"，
         # planner 的应对是去问，而不是当成"做不到"。
         return _VERDICT_BLOCK, (ref_error_reason(text) or authz.scope_error_reason(text)
-                                or authz.consent_error_reason(text) or "error_frame")
+                                or authz.consent_error_reason(text)
+                                or A.target_error_reason(text) or "error_frame")
     # 命令工具契约层校验：动作工具必须返回命令帧（工具返回形态漂移 = 执行未
     # 按契约发生，如 navigate 返回了纯文本而非 NAVIGATE:/AUTO_NAVIGATE:）。
     # device_oled_display 的"未在 5s 内回执确认"属软失败（指令确已下发），判
@@ -1891,6 +2038,21 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                    scope=authz.required_scope(name))
             logger.info("[execute] 写操作未经确认，不执行: %s（principal=%s）",
                         spec, principal)
+        # 写操作的目标校验（20260921 第二轮，与上一条同层同风格：确定性、无 LLM、
+        # 调用之前、fail-closed）：**"该不该做"之后再判"做哪一篇"**。后台写工具的
+        # article_id 必须本轮有据（本轮读过的帧里出现过、页面上下文里是当前文章、
+        # 或用户这条消息里点名了这个数字），否则产 unknown_target 帧让 planner
+        # 先读再写。挡的是"整轮什么都没读、凭上下文记忆/印象写一个 id"——写错文章
+        # 与写错状态不同，它是**不可回滚的对外可见改动**（把别人的文章设成私密）。
+        # 之所以放在这里而不是工具内部：工具看不到"本轮读到过什么"（跨轮记忆与
+        # 页面上下文都只活在 graph 状态里）。
+        target_missing = (ref_err is None and args_ok and name in _ARTICLE_WRITE_TOOLS
+                          and not A.target_mentioned(args.get("article_id"),
+                                                     _target_evidence(state, user_msg, page_ctx)))
+        if target_missing:
+            record("execute", "unknown_target", tool=name,
+                   article_id=str(args.get("article_id")))
+            logger.warning("[execute] 写操作目标无据，不执行: %s（本轮没读到过这个 id）", spec)
         # 屏幕文案创作：text 参数缺失/为空 → execute 结合对话创作（技能固有设计）
         if ref_err is None and name == "device_oled_display" and not args.get("text"):
             args = dict(args)
@@ -1905,6 +2067,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         elif consent_missing:
             # 与权限拒绝同族（__ERROR__ + 原因码 → blocked 链路），语义是"去问用户"
             out = authz.consent_frame(name, principal)
+        elif target_missing:
+            # 同族（__ERROR__ + 原因码），语义是"先去读、或先问哪一篇"
+            out = A.unknown_target_frame(name)
         elif tool is None:
             out = f"__ERROR__: 未知工具 {name}（planner 调用清单越界，被 execute 拒绝执行）"
             logger.warning("[execute] 未知工具 %s，拒绝执行", name)
@@ -1948,6 +2113,22 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             if name == "get_article_detail":
                 # 跨轮执行记忆带标题（20260912）：下轮"那篇讲架构的"要靠它核对指代
                 rcpt["title"] = _doc_title(str(out))
+            # 后台写回执（20260921 第二轮，用户拍板"零迁移：写进 detail"）：执行身份
+            # 与变更前→后随回执落 execution_log —— 写操作是**不可回滚的对外改动**，
+            # 库里必须留得下"谁在什么时候把哪一篇从什么改成什么"。
+            # 键名是 Python 写 / Rust 读的跨语言契约（src/routes/chat.rs::render_exec_row），
+            # 改一侧必须同步另一侧（与 digest/title 同一处理：两侧测试各锁一遍）。
+            # **只落角色，绝不落 uid**：detail 会进生产库、还会被 narrator 念出来。
+            if authz.required_scope(name) in authz.AUDIT_SCOPES:
+                rcpt["principal_role"] = _principal_of(config).known_role or ""
+                for k in _RCPT_META_KEYS:
+                    v = (getattr(out, "meta", None) or {}).get(k)
+                    if v is not None:
+                        # 一律**字符串化**再落回执：跨语言契约里只留一种类型
+                        # （Rust 侧统一 as_str() 取）。int/str 混装是"渲染器对着
+                        # 一半回执取到空串"的经典来源——args 侧早已按同样理由
+                        # 全部 str()（见上面 rcpt 的 args 构造）。
+                        rcpt[k] = str(v)[:120]
             receipts.append(rcpt)
         else:
             blocked.append({"spec": spec, "tool": name, "reason": reason,
@@ -2088,6 +2269,8 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
 _EXECUTOR_PROMPT = """\
 {persona}
 
+{audience}
+
 [执行计划]（系统决策结果——本轮执行了什么、按什么契约回复）：
 {plan}
 
@@ -2186,8 +2369,13 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # （46.8s/79.1s/105.8s）+ 20260830 超时事故（118s/146.9s）同源。生成质量
     # 由 golden 全量回归把关。
     llm = get_llm(enable_thinking=False)  # 主模型：对话生成（温度 0.7、可流式）
+    # 本轮对话者是访客还是主人本人（20260921）：纪律文本只有一份，只有"对话者是谁"
+    # 与称呼/口径按角色变。未知角色 → 访客那段（fail-closed：宁可把主人当访客，
+    # 也不把访客当主人——后者会用主人的口径去答权限相关的事）。
     system = SystemMessage(content=_EXECUTOR_PROMPT.format(
-        persona=BLOG_ASSISTANT_PROMPT, plan=state["plan"],
+        persona=BLOG_ASSISTANT_PROMPT,
+        audience=audience_block(_principal_of(config).known_role),
+        plan=state["plan"],
         tool_frames=_frame_texts(state["messages"]),
         exec_receipts=_receipts_text(state.get("receipts") or []),
         page_ctx=_page_ctx(state["messages"]),

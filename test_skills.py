@@ -844,9 +844,11 @@ def test_phantom_tool_claim():
     for want, why, text, executed, mem in cases:
         got = P(text, executed, mem)
         check(f"phantom[{why}] → {want or 'pass'}", got == want, f"got={got}")
-    # 工具名名单派生自注册表（不手写——手写名单正是 15:51 事故的漏项来源）
+    # 工具名名单派生自注册表（不手写——手写名单正是 15:51 事故的漏项来源）。
+    # 数字写死是**故意的**：工具增减时必须有人来看一眼这条判据（26 → 30 是
+    # 20260921 第二轮加的四个后台工具：list_admin_notes + 三个写）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 26 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 30 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 
