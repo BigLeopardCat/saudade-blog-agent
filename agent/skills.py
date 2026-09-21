@@ -67,10 +67,20 @@ from agent.principal import ROLE_ADMIN  # 技能可见性按角色过滤（20260
 import agent.adminops as A  # 写操作的纯函数层（归一/渲染，见 instantiate_plan 写分支）
 
 
-# 管理助手三件写（20260921 第二轮）。刻意**不进**上面两份 planner 点名白名单：
-# 写操作只能由技能模板展开（planner 选技能 + 填参数），不能经 PARAMS.calls 直接
-# 点名工具——白名单是"只读"这一条纪律的载体，写工具混进去等于放弃它。
-WRITE_SKILL_NAMES = frozenset({"tag_create", "article_status", "article_tags"})
+# 管理助手写技能（20260921 第二轮，第四轮补齐标签改删与分类三件）。刻意**不进**
+# 上面两份 planner 点名白名单：写操作只能由技能模板展开（planner 选技能 + 填参数），
+# 不能经 PARAMS.calls 直接点名工具——白名单是"只读"这一条纪律的载体，写工具混进去
+# 等于放弃它。
+WRITE_SKILL_NAMES = frozenset({
+    "tag_create", "article_status", "article_tags",
+    "tag_update", "tag_delete",
+    "category_create", "category_update", "category_delete",
+})
+
+# 其中"目标是一个**名字**"的那批（标签 / 分类），共用 `_expand_write_skill`：
+# 它们与文章两件的差别不在写法而在**目标通道**——文章写认 article_id（有"用户
+# 点名即据"的判据），标签/分类写认名字，解析在工具侧对着实时字典做。
+_WRITE_NAME_TARGET_SKILLS = WRITE_SKILL_NAMES - {"article_status", "article_tags"}
 
 
 def _norm_pos_int(value) -> int | None:
@@ -393,22 +403,24 @@ SKILLS: list[Skill] = [
         capability="新建文章标签（一级或二级，可选颜色）",
         description=(
             "博主（管理员）要求**新建一个文章标签**时使用（如「建一个叫 Python 的标签」"
-            "「在架构下面加一个二级标签叫 分布式」）。参数 title=标签名，parent_id=父标签 id"
-            "（要建二级标签才给；父标签 id 要从标签清单或本轮工具帧里拿到），"
+            "「在架构下面加一个二级标签叫 分布式」）。参数 title=标签名，"
+            "parent_tag=父标签的**名字**（要建二级标签才给，如「架构」），"
             "color=用户**点了名**的颜色（中文色名如「粉色」，或站内色板色值；用户没说就不填）。"
             "**参数别填反**（20260921 生产事故）：用户说「在 X 标签下新建 Y」时，"
-            "title 填 **Y（新标签的名字）**、parent_id 填 **X 自己的 id**——"
+            "title 填 **Y（新标签的名字）**、parent_tag 填 **X 这个名字本身**——"
             "把 X 填进 title 会在 X 下面建出一个也叫 X 的子标签（工具侧会拒，"
-            "但你更该一次填对）；父标签 id 只认标签清单里的真实数字（写引用见规则 3b，"
-            "形如 $list_tags[<该标签在返回列表里的下标>].tagKey），"
-            "**手边没有清单就先点 list_tags 取一次**，"
-            "本轮不要建（建标签要等清单到手，猜 id 会张三挂到李四名下）。"
+            "但你更该一次填对）。"
+            "**父标签一律写名字，不要写编号、也不要写任何 $ 开头的引用**"
+            "（20260921 第四轮）：名字对不上工具会如实回一句「站内没有叫 X 的标签」，"
+            "你看得到、也改得动；编号你手边根本没有——"
+            "**要新建的标签如果站内已经存在，工具会复用而不是重复建**，"
+            "别为了'先看看有什么'去绕检索工具。"
             "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
         ),
         inputs={"title": "新标签的名字",
-                "parent_id": "（可选）父标签 id，建二级标签时给",
+                "parent_tag": "（可选）父标签的名字，建二级标签时给（不是 id）",
                 "color": "（可选）用户点了名的颜色：中文色名或站内色板色值；没说就不填"},
-        plan=[("create_tag", {"title": "$title", "parent_id": "$parent_id", "color": "$color"})],
+        plan=[("create_tag", {"title": "$title", "parent_tag": "$parent_tag", "color": "$color"})],
         complete_when="create_tag 返回了新建或复用的标签 id",
         reply_contract=(
             "只能按 create_tag 的实际返回作答：返回「已新建…（id=N）」就说新建好了并给出 id、层级"
@@ -470,6 +482,149 @@ SKILLS: list[Skill] = [
         ),
         roles=frozenset({ROLE_ADMIN}),
     ),
+    # ── 标签改 / 删（20260921 第四轮）────────────────────────────────
+    # 事故背景：用户说「把标签 Asyncio 改成编程的子标签」，系统里**没有这个动作**
+    # ——create_tag 的"已存在就复用"把整句话吸收成 no-op（回复还说改好了）。
+    # 这两个技能把"改"与"删"补成真动作。目标一律按**名字**。
+    Skill(
+        name="tag_update",
+        capability="修改已有标签：改名 / 改颜色 / 换父标签 / 一级↔二级互转",
+        description=(
+            "博主（管理员）要求**改动一个已经存在的标签**时使用（改名、换颜色、"
+            "挪到另一个标签下面、一级改成二级或二级改成一级）。"
+            "参数 name=**要改的那个标签的名字**（现有的那个，如「Asyncio」）；"
+            "new_title=改成什么名字；color=改成什么颜色；"
+            "parent_tag=挪到这个**一级标签的名字**下面（如「编程」）；"
+            "to_level=改成一级还是二级（one/two，**改成二级时必须同时给 parent_tag**）；"
+            "level=这个标签**现在是**几级（one/two，站内同名标签不止一个时用它指认）。"
+            "**只填用户点名要改的那几项**，没点名的不要填（填了就等于要改它）。"
+            "**名字对不上工具会如实告诉你站内没有这个标签**——那时照实说，"
+            "不要改用 tag_create 蒙一个（那是另一个动作，会把'没改成'说成'改好了'）。"
+            "要改的只是颜色或名字、位置不动时也选本技能（不选 tag_create）。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生；用户只是在提问或假设时不要选本技能。"
+            "**仅管理员可用**"
+        ),
+        inputs={"name": "要改的那个标签的名字",
+                "new_title": "（可选）改成什么名字",
+                "color": "（可选）改成什么颜色：中文色名或站内色板色值",
+                "parent_tag": "（可选）挪到这个一级标签的名字下面",
+                "to_level": "（可选）one=改成一级 / two=改成二级（需配 parent_tag）",
+                "level": "（可选）这个标签现在是几级：one/two"},
+        plan=[("update_tag", {"name": "$name", "new_title": "$new_title",
+                              "color": "$color", "parent_tag": "$parent_tag",
+                              "to_level": "$to_level", "level": "$level"})],
+        complete_when="update_tag 返回了改动前后的值",
+        reply_contract=(
+            "只能按 update_tag 的实际返回作答，并说清**改的是哪个标签、从什么变成什么**"
+            "（返回里就有「已修改标签「…」：… → …」这样的前后值，照它说）；"
+            "换父标签/换层级时如果返回里提到 id 变了、文章引用被改写，一并如实说；"
+            "返回「站内没有叫 X 的标签」「站内有两个同名标签」时如实转述，"
+            "**绝不说已经改好了**，也不要改口说新建了一个标签；"
+            "返回失败/未确认时如实说没改成"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    Skill(
+        name="tag_delete",
+        capability="删除一个标签（一级标签会连带删掉它的二级标签）",
+        description=(
+            "博主（管理员）要求**删掉一个标签**时使用。参数 name=要删的标签的名字，"
+            "level=它现在是几级（one/two，站内同名标签不止一个时用它指认）。"
+            "**删除不可撤销**：删一级标签会连带删掉它下面的所有二级标签，"
+            "并把这些标签从所有文章上摘掉（文章本身不会被删）——"
+            "所以只有用户**明确说要删**时才选本技能（「删掉标签 X」「这个标签不要了」）；"
+            "只是说「改名/挪位置/换颜色」时选 tag_update。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手（含连带影响面）由系统弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生；用户只是在提问或假设时不要选本技能。"
+            "**仅管理员可用**"
+        ),
+        inputs={"name": "要删掉的标签的名字",
+                "level": "（可选）它现在是几级：one/two"},
+        plan=[("delete_tag", {"name": "$name", "level": "$level"})],
+        complete_when="delete_tag 返回了删除结果",
+        reply_contract=(
+            "只能按 delete_tag 的实际返回作答，说清**删掉的是哪个标签**、"
+            "以及（若返回里写明了）它原本挂在几篇文章上、有没有连带的二级标签被一起删掉；"
+            "返回「站内没有叫 X 的标签」时如实说没有这个标签、什么都没删；"
+            "返回失败/未确认时如实说没删掉，**绝不得用完成式声称已删除**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    # ── 分类三件（20260921 第四轮）───────────────────────────────────
+    Skill(
+        name="category_create",
+        capability="新建文章分类",
+        description=(
+            "博主（管理员）要求**新建一个文章分类**时使用（如「新建一个分类叫 随笔」）。"
+            "参数 title=分类名，path_name=路径名（用户点名了才填），"
+            "introduce=简介，icon=图标，color=用户点了名的颜色（中文色名或 6 位色值）。"
+            "**分类是平铺的、没有层级**；站内已经有同名分类时工具会拒绝（不会重复建）。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+        ),
+        inputs={"title": "新分类的名字",
+                "path_name": "（可选）分类页路径名",
+                "introduce": "（可选）分类简介",
+                "icon": "（可选）分类图标",
+                "color": "（可选）颜色：中文色名或 6 位色值"},
+        plan=[("create_category", {"title": "$title", "path_name": "$path_name",
+                                   "introduce": "$introduce", "icon": "$icon",
+                                   "color": "$color"})],
+        complete_when="create_category 返回了新建的分类 id",
+        reply_contract=(
+            "只能按 create_category 的实际返回作答，说清新建了哪个分类、它的 id；"
+            "返回「站内已经有叫 X 的分类」时如实说已有同名分类、没有重复创建；"
+            "返回失败/未确认时如实说没建成，**绝不得用完成式声称已创建**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    Skill(
+        name="category_update",
+        capability="修改已有分类（改名 / 路径名 / 简介 / 图标 / 颜色）",
+        description=(
+            "博主（管理员）要求**改动一个已经存在的分类**时使用。参数 name=要改的那个分类的"
+            "**名字**（现有的那个）；new_title=改成什么名字；其余 path_name / introduce / "
+            "icon / color 同理，只填用户点名要改的那几项。"
+            "**分类字段只能改不能清空**（清空请求后端会当「不改」忽略）。"
+            "名字对不上工具会如实说站内没有这个分类——照实转述，"
+            "不要改用 category_create 蒙一个。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+        ),
+        inputs={"name": "要改的那个分类的名字",
+                "new_title": "（可选）改成什么名字",
+                "path_name": "（可选）改成什么路径名",
+                "introduce": "（可选）改成什么简介",
+                "icon": "（可选）换成什么图标",
+                "color": "（可选）换成什么颜色"},
+        plan=[("update_category", {"name": "$name", "new_title": "$new_title",
+                                   "path_name": "$path_name", "introduce": "$introduce",
+                                   "icon": "$icon", "color": "$color"})],
+        complete_when="update_category 返回了改动前后的值",
+        reply_contract=(
+            "只能按 update_category 的实际返回作答，说清改的是哪个分类、从什么变成什么；"
+            "返回「站内没有叫 X 的分类」时如实说没有这个分类、什么都没改；"
+            "返回失败/未确认时如实说没改，**绝不得用完成式声称已改好**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    Skill(
+        name="category_delete",
+        capability="删除一个文章分类（文章不会被删，会变成没有分类）",
+        description=(
+            "博主（管理员）要求**删掉一个分类**时使用。参数 name=要删的那个分类的名字。"
+            "**文章不会被删**——原本属于它的文章会变成「没有分类」，"
+            "所以只有用户**明确说要删这个分类**时才选本技能。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手（含影响面）由系统弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+        ),
+        inputs={"name": "要删掉的分类的名字"},
+        plan=[("delete_category", {"name": "$name"})],
+        complete_when="delete_category 返回了删除结果",
+        reply_contract=(
+            "只能按 delete_category 的实际返回作答，说清删掉的是哪个分类；"
+            "若返回里写明了有多少篇文章变成没有分类，一并如实说；"
+            "返回「站内没有叫 X 的分类」时如实说没有这个分类、什么都没删；"
+            "返回失败/未确认时如实说没删掉，**绝不得用完成式声称已删除**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
     Skill(
         name="chat",
         capability="闲聊、陪你说话",
@@ -488,6 +643,170 @@ SKILL_MAP: dict[str, Skill] = {s.name: s for s in SKILLS}
 # ---------------------------------------------------------------------------
 # 技能模板实例化：planner 选技能 + 参数 → plan 字段（契约的写端）
 # ---------------------------------------------------------------------------
+
+def _write_arg(value) -> str:
+    """写技能参数值 → 字符串（**不做类型强转、不吞引用**）。
+
+    20260921 事故的核心就在这一步：旧代码用 `_norm_pos_int(params.get("parent_id"))`
+    把 `$list_tags[3].tagKey` 变成 `None` ⇒ 参数**静默消失** ⇒ 注记还肯定地写下
+    「（一级标签）」。现在：空 → 空串（调用方剔掉）；其余**原样字符串化**——
+    引用字面量照原样进 TOOLS 行，交给 execute 的 `resolve_args` 解析；解析不出来
+    会产带原因码的 `__ERROR__` 帧（响亮、零执行），解析得出来就是真取到了值。
+    两条路都比"悄悄当你没填"好。
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        # 这几个写技能的参数没有布尔语义（"有没有填"由键是否存在表达，不由值表达）。
+        # 落成 "True" 会让工具收到一个名叫「True」的标签名——当没填更接近实情。
+        return ""
+    return str(value).strip()
+
+
+def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
+    """写技能（WRITE_SKILL_NAMES）模板 + 参数 → (TOOLS 行清单, 注记)。
+
+    注记非空**且 tools 为空** = "参数不齐/认不出"的零工具路径（由 planner 去追问）；
+    注记非空且有 tools = 正常路径的说明。写成函数是因为这条分支已经装不下：
+    八个写技能共用同一套纪律（缺参零工具 / 只落点名的参数 / 归一在确定性层做）。
+
+    **目标一律按名字**（20260921 第四轮）：planner 写「编程」而不是 id——用户嘴里
+    说的就是名字，跨轮执行记忆里也只有名字没有编号；名字→id 的解析在工具侧
+    确定性完成（`tools.base._find_named_tag`），对不上就零写 + 如实说明。
+    """
+    name = skill.name
+    tools: list[str] = []
+    note = ""
+
+    def _spec(tool_name: str, args: dict) -> str:
+        return f"{tool_name}({json.dumps(args, ensure_ascii=False)})"
+
+    if name == "tag_create":
+        title = _write_arg(params.get("title"))
+        if not title:
+            return [], ("tag_create 缺少标签名（title）：不调用任何工具，"
+                        "如实向主人问清要建的标签叫什么名字")
+        args = {"title": title}
+        # 颜色（20260921）：点名了就**在这里解析成站内色板 hex**——确定性、且只有
+        # 这一处知道色板；执行轮（含确认轮）拿到的就是色值，弹窗问句与工具参数都
+        # 从同一个值渲染。点名的色认不出 → 零工具 + 注记（**绝不回落到哈希**）。
+        color_spec = _write_arg(params.get("color"))
+        hexval = A.match_tag_color(color_spec) if color_spec else None
+        if color_spec and hexval is None:
+            return [], (f"color「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}）："
+                        "不调用任何工具，如实向主人说明只有这几种颜色，请他挑一个")
+        if hexval:
+            args["color"] = hexval
+        pname = _write_arg(params.get("parent_tag"))
+        if pname:
+            args["parent_tag"] = pname
+        # 注记只写**已知事实**：父标签名是 planner 给的，它是不是真存在由工具去核，
+        # 这里**不许**替它断言层级（旧注记无条件写「（一级标签）」——参数被吞掉时
+        # 那句就成了一个肯定的错误事实，落进执行记忆被下一轮照念）。
+        said = f"挂在父标签「{pname}」下" if pname else "一级标签（未给父标签）"
+        return [_spec("create_tag", args)], (
+            f"新建标签「{title}」（{said}）"
+            + (f"，颜色 {A.describe_color(hexval)}" if hexval else "")
+            + "；同名已存在时工具会复用而不是重复建")
+
+    if name in ("tag_update", "tag_delete"):
+        target = _write_arg(params.get("name"))
+        if not target:
+            return [], (f"{name} 缺少标签名（name）：不调用任何工具，"
+                        "如实向主人问清说的是哪一个标签")
+        lv = _write_arg(params.get("level"))
+        args: dict = {"name": target}
+        if lv:
+            code = A.normalize_level(lv)
+            if code is None:
+                return [], (f"level「{lv}」认不出来（只支持一级 / 二级）："
+                            "不调用任何工具，如实向主人问清")
+            args["level"] = code
+        if name == "tag_delete":
+            what = "一级" if args.get("level") == "one" else ("二级" if args.get("level") == "two" else "")
+            return [_spec("delete_tag", args)], (
+                f"删除{what}标签「{target}」"
+                + ("。**这是不可撤销的**：一级标签会连带删掉它下面的二级标签，"
+                   "并把这些标签从所有文章上摘掉" if what != "二级" else "。**不可撤销**"))
+        bits = []
+        new_title = _write_arg(params.get("new_title"))
+        if new_title:
+            args["new_title"] = new_title
+            bits.append(f"改名→{new_title}")
+        color_spec = _write_arg(params.get("color"))
+        if color_spec:
+            hexval = A.match_tag_color(color_spec)
+            if hexval is None:
+                return [], (f"color「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}）："
+                            "不调用任何工具，如实向主人说明只有这几种颜色，请他挑一个")
+            args["color"] = hexval
+            bits.append(f"颜色→{A.describe_color(hexval)}")
+        pname = _write_arg(params.get("parent_tag"))
+        tl = _write_arg(params.get("to_level"))
+        if tl:
+            code = A.normalize_level(tl)
+            if code is None:
+                return [], (f"to_level「{tl}」认不出来（只支持一级 / 二级）："
+                            "不调用任何工具，如实向主人问清")
+            args["to_level"] = code
+        if pname:
+            if args.get("to_level") == "one":
+                return [], ("既说要挪到某个父标签下、又说要改成一级标签——两者矛盾："
+                            "不调用任何工具，如实向主人问清到底要哪一种")
+            args["parent_tag"] = pname
+            bits.append(f"移到「{pname}」下面")
+        if args.get("to_level") == "one":
+            bits.append("改成一级标签")
+        elif args.get("to_level") == "two":
+            bits.append("改成二级标签（需同时给父标签名）")
+        if not bits:
+            return [], ("tag_update 没有指出要改什么（new_title / color / parent_tag / "
+                        "to_level）：不调用任何工具，如实向主人问清要改成什么")
+        return [_spec("update_tag", args)], f"修改标签「{target}」：{'、'.join(bits)}"
+
+    if name in ("category_create", "category_update", "category_delete"):
+        if name == "category_delete":
+            cname = _write_arg(params.get("name"))
+            if not cname:
+                return [], ("category_delete 缺少分类名（name）：不调用任何工具，"
+                            "如实向主人问清说的是哪一个分类")
+            return [_spec("delete_category", {"name": cname})], (
+                f"删除分类「{cname}」（文章不会被删，它们会变成没有分类）")
+        if name == "category_create":
+            title = _write_arg(params.get("title"))
+            if not title:
+                return [], ("category_create 缺少分类名（title）：不调用任何工具，"
+                            "如实向主人问清要建的分类叫什么")
+            args = {"title": title}
+            bits = [f"新建分类「{title}」"]
+        else:
+            cname = _write_arg(params.get("name"))
+            if not cname:
+                return [], ("category_update 缺少分类名（name）：不调用任何工具，"
+                            "如实向主人问清说的是哪一个分类")
+            args = {"name": cname}
+            bits = [f"修改分类「{cname}」"]
+        color_spec = _write_arg(params.get("color"))
+        if color_spec:
+            # 分类用宽一档的色表（任意 6 位 hex 也收——前端色块白名单已放宽）
+            picked = A.match_any_color(color_spec)
+            if picked is None:
+                return [], (f"color「{color_spec}」认不出来（中文色名或 6 位色值如 #eb2f96）："
+                            "不调用任何工具，如实向主人问清")
+            args["color"] = picked
+            bits.append(f"颜色→{A.describe_color(picked) if picked in A.NEW_TAG_COLORS else picked}")
+        for key in ("new_title", "path_name", "introduce", "icon"):
+            val = _write_arg(params.get(key))
+            if val:
+                args[key] = val
+                bits.append(f"{key}→{val}")
+        if name == "category_update" and len(bits) == 1:
+            return [], ("category_update 没有指出要改什么（new_title / path_name / "
+                        "introduce / icon / color）：不调用任何工具，如实向主人问清")
+        return [_spec(name, args)], "、".join(bits)
+
+    return [], f"{name}：未知的写技能（不调用任何工具）"
+
 
 def instantiate_plan(skill_name: str, params: dict) -> dict:
     """技能模板 + 参数 → 结构化计划。
@@ -599,7 +918,7 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
         if tools:
             note = f"按 planner 决策执行：{'、'.join(tools)}"
     elif skill.name in WRITE_SKILL_NAMES:
-        # 管理助手三件写（20260921 第二轮）：**缺参守卫 + 空参剔除**，不复用下方
+        # 管理助手写技能（20260921 第二轮起）：**缺参守卫 + 空参剔除**，不复用下方
         # 通用分支。通用分支对缺失参数会实例化出 `{"article_id": null}` 这样的
         # 非法实参（那一路进 JSON 就变成 null，工具侧还得再拦一遍），而写操作最
         # 不该做的事就是"参数不全时猜一个"——
@@ -607,36 +926,14 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
         #     planner 去追问，而不是拿 null 去撞 URL；
         #   · 没点名的可选参数一律**不落进 args**（article_status 只发用户点名的
         #     那一项，绝不把 is_top=null 也塞进去——写操作的参数表就是它的语义）；
-        #   · status / is_top 在这里做**确定性归一**（adminops），归不出来就零工具
-        #     交回 planner；工具侧还有第二道同样的判据（纵深，不互替）。
+        #   · 归一（状态/置顶/层级/颜色）都在**这一层**做（adminops 的纯函数），
+        #     归不出来就零工具交回 planner；工具侧还有第二道同样的判据（纵深，不互替）。
+        #   · 标签 / 分类类写技能全部走 `_expand_write_skill`（目标按名字，见其头注）；
+        #     文章类两件留在下面（它们的目标是 article_id，另有"点名即据"的判据）。
         note = ""
-        if skill.name == "tag_create":
-            title = str(params.get("title") or "").strip()
-            if not title:
-                note = ("tag_create 缺少标签名（title）：不调用任何工具，"
-                        "如实向主人问清要建的标签叫什么名字")
-            else:
-                # 颜色（20260921）：用户点名了就**在这里解析成站内色板 hex**——
-                # 确定性、且只有这一处知道色板；执行轮（含确认轮）拿到的就是色值，
-                # 弹窗问句与工具参数都从同一个值渲染。点名的色认不出 → 零工具 +
-                # 注记（**绝不回落到哈希**：那等于把"天蓝"悄悄换成另一个颜色）。
-                color_spec = str(params.get("color") or "").strip()
-                hexval = A.match_tag_color(color_spec) if color_spec else None
-                if color_spec and hexval is None:
-                    note = (f"color「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}）："
-                            "不调用任何工具，如实向主人说明只有这几种颜色，请他挑一个")
-                else:
-                    args = {"title": title}
-                    pid = _norm_pos_int(params.get("parent_id"))
-                    if pid is not None:
-                        args["parent_id"] = pid
-                    if hexval:
-                        args["color"] = hexval
-                    tools.append(f"create_tag({json.dumps(args, ensure_ascii=False)})")
-                    note = (f"新建标签「{title}」"
-                            + (f"（挂在父标签 id={pid} 下）" if pid else "（一级标签）")
-                            + (f"，颜色 {A.describe_color(hexval)}" if hexval else "")
-                            + "；同名已存在时工具会复用而不是重复建")
+        if skill.name in _WRITE_NAME_TARGET_SKILLS:
+            wtools, note = _expand_write_skill(skill, params)
+            tools.extend(wtools)
         else:
             aid = _norm_pos_int(params.get("article_id"))
             if aid is None:

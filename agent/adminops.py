@@ -115,6 +115,25 @@ def resolve_tag_color(spec, name: str) -> str:
     return match_tag_color(spec) or color_for_name(name)
 
 
+def match_any_color(spec) -> str | None:
+    """颜色实参 → 规整的 `#rrggbb`；认不出 → None（分类用，比标签宽一档）。
+
+    与 `match_tag_color` 的差别：**任意 6 位 hex 都收**。理由是前端色块白名单
+    已经放宽成"任意 6 位 hex 都画色块"（20260921 父仓 ec6b090），所以"agent 说得
+    出、前端画不出"这一档不一致在分类上不存在；标签侧仍走 8 色板（那张表同时是
+    中文色名的映射源，用户点名的"粉色"必须落到同一个色值上）。
+    """
+    picked = match_tag_color(spec)
+    if picked:
+        return picked
+    s = str(spec or "").strip().lower()
+    if not s:
+        return None
+    if not s.startswith("#"):
+        s = "#" + s
+    return s if re.fullmatch(r"#[0-9a-f]{6}", s) else None
+
+
 def color_cn(hexval: str) -> str:
     """色板 hex → 规范中文名；色板之外 → 空串（**不编名字**）。"""
     return _COLOR_CANON.get(str(hexval or "").strip().lower(), "")
@@ -153,6 +172,28 @@ def normalize_status(value) -> str | None:
         return None
     key = str(value).strip().lower()
     return _STATUS_ALIASES.get(key)
+
+
+def normalize_level(value) -> str | None:
+    """层级实参 → `"one"` / `"two"`；认不出返回 None。
+
+    词表与后端同源（`tags.rs::DeleteTagsRequest.level` / `parse_level` 用的就是
+    这两个词）。顺带收口语说法（「一级」「1」）：planner 从用户话里摘出来的往往是
+    中文词，让它卡在"必须拼对 one/two"上没有意义——认不出的**才**拒绝。
+    """
+    s = str(value or "").strip().lower()
+    if s in ("one", "1", "一", "一级"):
+        return "one"
+    if s in ("two", "2", "二", "二级"):
+        return "two"
+    return None
+
+
+def level_of(info: TagInfo | None) -> str | None:
+    """TagInfo → `"one"` / `"two"`（None 进 None 出）。"""
+    if info is None:
+        return None
+    return "one" if info.level == 1 else "two"
 
 
 def normalize_top(value) -> int | None:
@@ -222,9 +263,10 @@ def join_tag_ids(ids) -> str:
 class TagInfo:
     """一个标签的渲染/解析所需全部信息（两级共用同一 id 空间）。"""
 
-    __slots__ = ("id", "name", "level", "father_id", "father_name", "color")
+    __slots__ = ("id", "name", "level", "father_id", "father_name", "color", "note_count")
 
-    def __init__(self, id, name, level, father_id=None, father_name="", color=""):
+    def __init__(self, id, name, level, father_id=None, father_name="", color="",
+                 note_count=None):
         self.id = id
         self.name = name
         self.level = level
@@ -233,6 +275,10 @@ class TagInfo:
         # 站内色板色值（20260921）；接口没给色时为空串——渲染时只说名字，
         # **不拿哈希补一个**（那是"编一个它其实没有的颜色"）
         self.color = color
+        # 挂在这个标签上的**公开可见**文章数（20260921，接口 `noteCount`）。
+        # **None ≠ 0**：接口没给这个字段时是 None（"这次读不到"，删除/移动的影响面
+        # 就不报数字——把读不到渲染成"0 篇文章"，用户会以为删掉它无损失）。
+        self.note_count = note_count
 
     @property
     def label(self) -> str:
@@ -261,7 +307,8 @@ def build_tag_index(tags_one, tags_two) -> dict[int, TagInfo]:
         tid = t.get("tagKey")
         if isinstance(tid, int) and tid > 0:
             name = str(t.get("title") or "").strip()
-            index[tid] = TagInfo(tid, name, 1, color=_api_color(t))
+            index[tid] = TagInfo(tid, name, 1, color=_api_color(t),
+                                 note_count=_api_count(t))
             one_by_id[tid] = name
     for t in (tags_two or []):
         if not isinstance(t, dict):
@@ -273,8 +320,24 @@ def build_tag_index(tags_one, tags_two) -> dict[int, TagInfo]:
         fid = fid if isinstance(fid, int) and fid > 0 else None
         index[tid] = TagInfo(tid, str(t.get("title") or "").strip(), 2,
                              fid, one_by_id.get(fid, "") if fid else "",
-                             color=_api_color(t))
+                             color=_api_color(t), note_count=_api_count(t))
     return index
+
+
+def children_of(index: dict[int, TagInfo], father_id: int) -> list[TagInfo]:
+    """某个一级标签下的二级标签（按 id 排序，名单稳定）。"""
+    return sorted((t for t in index.values()
+                   if t.level == 2 and t.father_id == father_id),
+                  key=lambda t: t.id)
+
+
+def count_phrase(n) -> str:
+    """篇数 → 人话；**None（这次读不到）就一个字都不说**，绝不写成 0。
+
+    这个区别在删除场景是要命的：「它挂在 0 篇文章上」与「没读到它挂在几篇上」
+    给管理员的是两个完全相反的判断（前者让他放心点确定）。
+    """
+    return "" if n is None else f"{n} 篇"
 
 
 def merge_tag_rows(tags_one, tags_two) -> list[dict]:
@@ -319,14 +382,32 @@ def _api_color(tag: dict) -> str:
     return raw if re.fullmatch(r"#[0-9a-f]{6}", raw) else ""
 
 
-def find_tag(index: dict[int, TagInfo], name: str,
-             parent_id: int | None = None) -> tuple[TagInfo | None, list[TagInfo]]:
+def _api_count(tag: dict):
+    """接口返回里的 `noteCount` → 非负整数；字段缺失/形态不对 → **None**。
+
+    None 的语义是"这次读不到这个数"，不是 0（见 TagInfo.note_count）。只认整数
+    与纯数字字符串：`12abc` 这种脏值当读不到，不学 `parseInt` 的截断语义。
+    """
+    if "noteCount" not in tag:
+        return None
+    raw = tag.get("noteCount")
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, int):
+        return raw if raw >= 0 else None
+    s = str(raw).strip()
+    return int(s) if re.fullmatch(r"\d+", s) else None
+
+
+def find_tag(index: dict[int, TagInfo], name: str, parent_id: int | None = None,
+             level: int | None = None) -> tuple[TagInfo | None, list[TagInfo]]:
     """按名字找标签 → (唯一命中 | None, 同名候选列表)。
 
     判定 = 去空白后**完全相等**（不做包含/模糊匹配：给文章挂错标签是写错数据，
     而"没找到"只是多问一句）。`parent_id` 给了就只在那个父标签下找二级标签；
-    没给则两级都找——此时若命中多个（不同父下同名二级标签），返回 (None, 候选)
-    让调用方去追问，**不替用户选一个**。
+    `level`（1/2）给了就只在该层找（planner 能说清"改的是一级还是二级"时，
+    用它消歧比追问一轮便宜）；都没给则两级都找——此时若命中多个（不同父下同名
+    二级标签），返回 (None, 候选) 让调用方去追问，**不替用户选一个**。
     """
     want = (name or "").strip()
     if not want:
@@ -334,6 +415,8 @@ def find_tag(index: dict[int, TagInfo], name: str,
     if parent_id:
         hits = [t for t in index.values()
                 if t.level == 2 and t.father_id == parent_id and t.name == want]
+    elif level in (1, 2):
+        hits = [t for t in index.values() if t.level == level and t.name == want]
     else:
         hits = [t for t in index.values() if t.name == want]
     if len(hits) == 1:
@@ -456,6 +539,138 @@ def clip(text: str, limit: int = 60) -> str:
     return s if len(s) <= limit else s[:limit] + "…"
 
 
+# ── 渲染：改标签 / 删标签（20260921 第四轮）──────────────────────────
+# 这批写操作的共同点：**影响面是"数据"而不只是"这一行"**。删一个一级标签会连带
+# CASCADE 掉它的子标签、并把所有文章上的引用摘掉（`prune_note_tags`，**不可回滚**）；
+# 所以这几段文本的第一职责是把影响面**说全**：管理员点「确定」之前有权知道会动到
+# 多少篇文章、会不会连带删掉别的标签。数字全部来自标签/分类字典，**读不到就一个字
+# 都不说**（绝不写 0——那是"删了没损失"的错误结论，见 count_phrase）。
+
+def tag_note_phrase(info: TagInfo | None) -> str:
+    """「它挂在 N 篇文章上」；读不到篇数 → 空串（不说）。"""
+    if info is None or info.note_count is None:
+        return ""
+    return f"它目前挂在 {info.note_count} 篇文章上"
+
+
+def render_tag_updated(label: str, before: str, after: str) -> str:
+    return f"已修改标签「{label}」：{before} → {after}（后台已复核读到新值）"
+
+
+def render_tag_deleted(label: str, extra: str = "") -> str:
+    tail = f"：{extra}" if extra else ""
+    return f"已删除标签「{label}」{tail}（后台已复核：标签字典里已经没有它）"
+
+
+def render_tag_moved(label_before: str, label_after: str, extras=()) -> str:
+    """换层级 / 换父级成功。**前后两个展示名都写出来**——「已移动」而不说移到
+    哪里，等于让用户自己回去核对。`extras` 是影响面（引用被改写多少篇等）。"""
+    head = (f"已把标签「{label_before}」调整为「{label_after}」"
+            if label_after != label_before else f"标签「{label_before}」已在目标位置")
+    tail = "；".join(x for x in (extras or []) if x)
+    return f"{head}（后台已复核读到新值）" + (f"。{tail}" if tail else "")
+
+
+def move_impact(res: dict) -> list[str]:
+    """移动端点的返回 → 影响面的人话（只说不为空的那几条）。
+
+    `idChanged` 是**这个操作最需要交代的事**：id 变了意味着所有引用它的文章都被
+    改写过（`rewrittenNotes` 行），而文章列表、sitemap 的排序不受影响（`updated_at`
+    被显式保留）。`warnings` 由 Rust 侧生成（同名父标签/同名兄弟/提交后仍有残留），
+    原样透出——它们是"做成了，但有话要说"。
+    """
+    out: list[str] = []
+    if res.get("idChanged"):
+        n = res.get("rewrittenNotes")
+        out.append(f"标签 id 由 {res.get('fromId')} 变成 {res.get('toId')}"
+                   + (f"，{n} 篇文章上的引用已同步改写" if isinstance(n, int) else ""))
+    warn = res.get("warnings")
+    if isinstance(warn, list):
+        out.extend(str(w) for w in warn if str(w or "").strip())
+    return out
+
+
+# ── 分类（20260921 第四轮）：与标签同一条"名字↔id"的解析纪律 ──────────
+
+class CategoryInfo:
+    """一个分类的渲染/解析所需信息（`GET /api/category` 的行）。"""
+
+    __slots__ = ("id", "name", "path_name", "introduce", "icon", "color", "note_count")
+
+    def __init__(self, id, name, path_name="", introduce="", icon="", color="",
+                 note_count=None):
+        self.id = id
+        self.name = name
+        self.path_name = path_name
+        self.introduce = introduce
+        self.icon = icon
+        self.color = color
+        self.note_count = note_count      # None = 这次读不到（≠ 0），同上
+
+    def __repr__(self) -> str:  # 测试/日志可读
+        return f"CategoryInfo(id={self.id}, name={self.name!r})"
+
+
+def build_category_index(rows) -> dict[int, CategoryInfo]:
+    """`GET /api/category` 的返回 → {id: CategoryInfo}。
+
+    分类**没有层级**（一张平表），所以这里不需要 build_tag_index 那种父子建树，
+    只要 id → 名字 + 篇数。`noteCount` 口径 = 该分类下**非修改稿**的文章数
+    （Rust 侧已滤 `draft_of is null`，见 categories.rs）。
+    """
+    index: dict[int, CategoryInfo] = {}
+    for c in (rows or []):
+        if not isinstance(c, dict):
+            continue
+        cid = c.get("categoryKey")
+        if not (isinstance(cid, int) and cid > 0):
+            continue
+        index[cid] = CategoryInfo(
+            cid, str(c.get("categoryTitle") or "").strip(),
+            path_name=str(c.get("pathName") or "").strip(),
+            introduce=str(c.get("introduce") or "").strip(),
+            icon=str(c.get("icon") or "").strip(),
+            color=_api_color(c), note_count=_api_count(c))
+    return index
+
+
+def find_category(index: dict[int, CategoryInfo], name: str):
+    """按名字找分类 → (唯一命中 | None, 同名候选列表)。
+
+    判据与 `find_tag` 同源：去空白后**完全相等**，不做模糊。分类名没有唯一约束
+    （`category.name` 无 UNIQUE），所以"重名"是真会出现的形态——命中多个时返回
+    (None, 候选) 让调用方追问，**不替用户挑一个**（删错分类会连带让一批文章失去
+    分类）。"""
+    want = (name or "").strip()
+    if not want:
+        return None, []
+    hits = [c for c in index.values() if c.name == want]
+    if len(hits) == 1:
+        return hits[0], hits
+    return None, sorted(hits, key=lambda c: c.id)
+
+
+def render_category_created(info: CategoryInfo) -> str:
+    """新建分类成功。**不带任何工具名**（同 render_tag_created 的血案：工具名会被
+    narrator 照抄成"我调用了它"，而它不在本轮执行集里 ⇒ 具名声称闸判编造）。
+    也不报篇数：刚建的分类必然 0 篇，报出来是废话（更糟的是把"0"念成了影响面）。"""
+    extra = f"，路径 {info.path_name}" if info.path_name else ""
+    return (f"已新建分类「{info.name}」（id={info.id}{extra}）。"
+            f"要往这个分类里放文章，告诉我放哪几篇就行。")
+
+
+def render_category_updated(name: str, before: str, after: str) -> str:
+    return f"已修改分类「{name}」：{before} → {after}（后台已复核读到新值）"
+
+
+def render_category_deleted(name: str, note_count=None) -> str:
+    """删除分类成功。篇数**只有读到了才说**：`note_count` 是删之前统计的公开文章数，
+    删完之后那些文章的 category_id 被置 NULL（FK ON DELETE SET NULL，文章还在，
+    只是没有分类了）。"""
+    tail = f"，{note_count} 篇文章已变成没有分类" if note_count is not None else ""
+    return f"已删除分类「{name}」{tail}（后台已复核：分类列表里已经没有它）"
+
+
 # ── 写操作确认框（20260921）：问句与回复文本都是**确定性中文**────────────
 # 与 agent/reports.py 同一条纪律：能算的都不交给 LLM。这两段文本会直接进
 # ①确认框的问题行 ②那一轮的对话气泡，都是用户一眼看到的东西——让模型写它，
@@ -469,7 +684,7 @@ def _name_list(value) -> list[str]:
     return [str(x).strip() for x in value if str(x or "").strip()]
 
 
-def _confirm_one(spec: dict, index=None) -> str:
+def _confirm_one(spec: dict, index=None, cats=None) -> str:
     """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
 
     `index` = 可选的标签字典（`{id: TagInfo}`，见 build_tag_index）：给得起就
@@ -477,24 +692,97 @@ def _confirm_one(spec: dict, index=None) -> str:
     「Rust」」等于让用户盲签——他看不到这个 Rust 会挂到哪个爸爸底下，而"挂错
     父标签"正是本轮要修的参数对调事故（20260921）。名字比 id 可靠：id 是系统
     内部编号，用户点确定时没法核对。
+
+    `cats` = 可选的分类字典（`{id: CategoryInfo}`）：删分类要报"有多少篇文章会
+    变成没有分类"，只有它能给。**给不起就不说篇数**（不写 0）。
+
+    20260921 第四轮起，**标签/分类一律按名字**（planner 写名字、工具确定性解析
+    成 id）：问句里出现的名字就是用户说的那个名字，不再有"id 对不上名字"的
+    中间层。
     """
     tool = str(spec.get("tool") or "")
     a = spec.get("args") or {}
+    index = index or {}
     if tool == "create_tag":
         title = str(a.get("title") or "").strip() or "（未命名）"
-        pid = str(a.get("parent_id") or "").strip()
-        level = "二级" if pid else "一级"
+        pname = str(a.get("parent_tag") or "").strip()
+        level = "二级" if pname else "一级"
         where = ""
-        if pid:
-            parent = None
-            try:
-                parent = (index or {}).get(int(pid))
-            except Exception:
-                parent = None
-            where = f"（挂在「{parent.name}」下）" if parent is not None else f"（挂在标签 id={pid} 下）"
+        if pname:
+            hit, cands = find_tag(index, pname)
+            if index and hit is None:
+                # 父标签名对不上：如实写在问句里。用户点确定之前就该看到
+                # "这个爸爸不存在"，而不是点完再被告知没建成。
+                where = f"（标签字典里没有叫「{pname}」的一级标签）"
+            else:
+                where = f"（挂在「{pname}」下）"
         hexval = match_tag_color(a.get("color")) if a.get("color") else None
         color = f"，颜色 {describe_color(hexval)}" if hexval else "（按名字自动配色）"
         return f"新建{level}标签「{title}」{where}{color}"
+    if tool in ("update_tag", "delete_tag"):
+        name = str(a.get("name") or "").strip() or "（未命名）"
+        hit, _ = find_tag(index, name)
+        label = hit.label if hit is not None else name
+        miss = "（标签字典里没有这个名字）" if (index and hit is None) else ""
+        if tool == "update_tag":
+            bits = []
+            new_title = str(a.get("new_title") or "").strip()
+            if new_title:
+                bits.append(f"改名为「{new_title}」")
+            hexval = match_tag_color(a.get("color")) if a.get("color") else None
+            if hexval:
+                bits.append(f"颜色改为 {describe_color(hexval)}")
+            to_level = str(a.get("to_level") or "").strip()
+            pname = str(a.get("parent_tag") or "").strip()
+            if pname:
+                bits.append(f"移到「{pname}」下面")
+            elif to_level == "one":
+                bits.append("改成一级标签")
+            elif to_level == "two":
+                bits.append("改成二级标签")
+            body = "、".join(bits) if bits else "（没说要改什么）"
+            note = tag_note_phrase(hit)
+            return f"修改标签「{label}」{miss}：{body}" + (f"；{note}" if note else "")
+        # delete_tag：一级标签会**连带 CASCADE 掉它的子标签**，这是不可回滚的
+        # （prune_note_tags 会把所有文章上的引用摘掉）。问句必须把这件事说全。
+        if hit is not None and hit.level == 1:
+            kids = children_of(index, hit.id)
+            if kids:
+                names = "、".join(k.name for k in kids)
+                head = (f"删除一级标签「{label}」，它下面还有 {len(kids)} 个二级标签"
+                        f"（{names}）**会一起删除**")
+                tail = tag_note_phrase(hit)
+                return head + (f"，删除后这些标签在文章上的引用都会被摘掉（它自己挂在 "
+                               f"{hit.note_count} 篇文章上）" if tail else "")
+            return f"删除一级标签「{label}」" + (f"，{tag_note_phrase(hit)}" if tag_note_phrase(hit) else "")
+        level = "二级" if (hit is not None and hit.level == 2) else ""
+        note = tag_note_phrase(hit)
+        return (f"删除{level}标签「{label}」" + (f"，并把它从 {hit.note_count} 篇文章上摘掉" if note else "")
+                + miss)
+    if tool in ("create_category", "update_category", "delete_category"):
+        title = str(a.get("new_title") or a.get("title") or a.get("name") or "").strip() or "（未命名）"
+        if tool == "create_category":
+            extra = f"，路径 {a.get('path_name')}" if str(a.get("path_name") or "").strip() else ""
+            return f"新建分类「{title}」{extra}"
+        hit, _ = find_category(cats or {}, str(a.get("name") or "").strip())
+        label = hit.name if hit is not None else title
+        if tool == "update_category":
+            bits = []
+            if str(a.get("new_title") or "").strip():
+                bits.append(f"改名为「{a['new_title']}」")
+            for key, cn in (("path_name", "路径"), ("introduce", "简介"),
+                            ("icon", "图标"), ("color", "颜色")):
+                if str(a.get(key) or "").strip():
+                    bits.append(f"{cn}改为「{a[key]}」")
+            body = "、".join(bits) if bits else "（没说要改什么）"
+            miss = "（分类列表里没有这个名字）" if (cats and hit is None) else ""
+            return f"修改分类「{label}」{miss}：{body}"
+        # 删除分类：FK 是 ON DELETE SET NULL ⇒ **文章不会被删**，但会变成没有分类。
+        # 这一句必须写出来——"删分类"听起来像"删掉分类里的文章"，而事实相反。
+        cnt = hit.note_count if hit is not None else None
+        tail = (f"，它有 {cnt} 篇文章，删掉后这些文章会变成没有分类"
+                if cnt is not None else "，删掉后原本属于它的文章会变成没有分类")
+        return f"删除分类「{label}」{tail}"
     if tool == "set_article_status":
         head = f"修改文章 {a.get('article_id')}"
         bits = []
@@ -525,24 +813,25 @@ def _confirm_one(spec: dict, index=None) -> str:
     return f"执行 {tool}"
 
 
-def render_confirm_question(specs, index=None) -> str:
+def render_confirm_question(specs, index=None, cats=None) -> str:
     """确认框的问题行：**把要发生的事说全**（含颜色名与色值），再问一句。
 
     用户点的是"确定"，他有权在点之前从这句话里看出自己将同意什么——
-    说漏了颜色、说漏了是哪一篇、**说漏了挂在哪个父标签下**，这个按钮就变成了盲签。
-    （`index` 见 _confirm_one；读不到标签字典时退化成 id，不因此不弹窗。）
+    说漏了颜色、说漏了是哪一篇、**说漏了挂在哪个父标签下**、**说漏了会连带删掉
+    几个子标签**，这个按钮就变成了盲签。
+    （`index`/`cats` 见 _confirm_one；读不到字典时退化成名字原文，不因此不弹窗。）
     """
-    acts = "；".join(_confirm_one(s, index) for s in (specs or []))
+    acts = "；".join(_confirm_one(s, index, cats) for s in (specs or []))
     return f"要{acts}吗？点「确定」我就去办。"
 
 
-def render_confirm_text(specs, index=None) -> str:
+def render_confirm_text(specs, index=None, cats=None) -> str:
     """弹窗那一轮的**对话气泡正文**（系统给的，不经 narrator）。
 
     刻意写得像"在等你的意思"而不是"已经在办了"：这一轮零执行。给一个明确
     的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
     """
-    acts = "；".join(_confirm_one(s, index) for s in (specs or []))
+    acts = "；".join(_confirm_one(s, index, cats) for s in (specs or []))
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
     return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"

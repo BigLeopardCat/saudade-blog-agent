@@ -298,15 +298,22 @@ class _Resp:
 
 
 class _Client:
+    """桩 httpx 客户端：记录 (method, url, headers, payload)。只桩边界——写通道
+    20260921 从 post 泛化成 request（PUT/DELETE 都走它），桩也得跟着记 method，
+    否则"改名走 PUT、删除走 DELETE"这类形态断言无从写起。"""
+
     def __init__(self, resp=None, exc=None):
         self.calls = []
         self.resp, self.exc = resp, exc
 
-    def post(self, url, headers=None, json=None, timeout=None):
-        self.calls.append((url, headers or {}, json))
+    def request(self, method, url, headers=None, json=None, timeout=None):
+        self.calls.append((method, url, headers or {}, json))
         if self.exc:
             raise self.exc
         return self.resp
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        return self.request("POST", url, headers=headers, json=json, timeout=timeout)
 
 
 real_client = base._client
@@ -315,7 +322,8 @@ try:
     base._client = c
     out = base._admin_post("/api/protected/tagone", {"title": "X"}, cfg(7))
     check("成功 → 返回 data 字段", out == "10002", str(out))
-    url, hdrs, payload = c.calls[0]
+    method, url, hdrs, payload = c.calls[0]
+    check("走的是 _admin_request 的 POST 形态", method == "POST", method)
     check("打的是本机回环后台地址", url == base.ADMIN_BASE + "/api/protected/tagone", url)
     tok = hdrs.get("Authorization", "")
     check("带 Bearer 局部 JWT（三段）", tok.startswith("Bearer ") and tok.count(".") == 2)
@@ -367,11 +375,12 @@ with patch(_tag_index=lambda c: IDX, _admin_post=post):
     r = base.create_tag.invoke({"title": "长" * 41}, config=cfg())
     check("名字超 40 字 → unavailable", r.kind == "unavailable" and post.calls == [],
           str(r))
-    # 字符串型非法值到不了这一层（pydantic 先按 int|None 校验，见 §⑭）——这里测的是
-    # 类型合法但取值非法的 0/负数。
-    r = base.create_tag.invoke({"title": "X", "parent_id": 0}, config=cfg())
-    check("父 id 为 0 → unavailable（同一套「必须是正整数」判据）",
-          r.kind == "unavailable" and "不合法" in r and post.calls == [], str(r))
+    # 父标签走**名字**通道（20260921 第三轮）：名字对不上就零写拒绝，不猜、不新建。
+    r = base.create_tag.invoke({"title": "X", "parent_tag": "没有这个标签"}, config=cfg())
+    check("父标签名对不上 → unavailable，零 POST（名字通道下这是唯一的爸爸来源）",
+          r.kind == "unavailable" and "没有叫" in r and post.calls == [], str(r))
+    check("  拒因带上「本次未创建」（narator 照抄这句才知道该如实说没建成）",
+          "本次未创建" in r, str(r))
 
     r = base.create_tag.invoke({"title": "Python"}, config=cfg())
     check("同名一级标签已存在 → 复用（幂等，**不写库**）",
@@ -402,17 +411,19 @@ post = _Post("10002")
 seq = _Seq(IDX, A.build_tag_index(ONE + [{"tagKey": 10002, "title": "Pytho", "level": 2,
                                           "fatherKey": 1}], TWO))
 with patch(_tag_index=seq, _admin_post=post):
-    r = base.create_tag.invoke({"title": "Pytho", "parent_id": 1}, config=cfg())
-    check("新建二级：走 tagtwo、fatherTag 是父 id（不是父名）",
+    r = base.create_tag.invoke({"title": "Pytho", "parent_tag": "Python"}, config=cfg())
+    check("新建二级：planner 只给父**名字**，fatherTag 由工具解析成父 id（不是父名）",
           post.calls == [("/api/protected/tagtwo",
                           {"title": "Pytho", "color": A.color_for_name("Pytho"),
                            "fatherTag": 1})], str(post.calls))
 
 post = _Post("10002")
 with patch(_tag_index=_Seq(IDX, IDX), _admin_post=post):
-    r = base.create_tag.invoke({"title": "Pytho", "parent_id": 10000}, config=cfg())
-    check("父 id 不是一级标签 → unavailable，零 POST",
-          r.kind == "unavailable" and post.calls == [] and "不是一级标签" in r, str(r))
+    # 二级标签的名字不能当父（父必须是一级）：拒因要写清「一级标签」，
+    # 否则 planner 会以为是名字写错了、去改一个本来就对的名字。
+    r = base.create_tag.invoke({"title": "Pytho", "parent_tag": "爬虫"}, config=cfg())
+    check("父名指向的是**二级**标签 → unavailable，零 POST，拒因点明「一级标签」",
+          r.kind == "unavailable" and post.calls == [] and "一级标签" in r, str(r))
 
 post = _Post("10002")
 with patch(_tag_index=_Seq(IDX, IDX), _admin_post=post):
@@ -447,36 +458,41 @@ with patch(_tag_index=_Seq(IDX, IDX),
           r.kind == "unavailable" and "标签名重复" in r, f"{r.kind}: {r}")
 
 # ── 参数对调守卫（20260921 生产事故）──────────────────────────────────
-# planner 把「在 Python 标签下新建 X」填成 title=Python、parent_id=Python 的 id。
+# planner 把「在 Python 标签下新建 X」填成 title=Python、父也填 Python（父名当成了新标签名）。
 # 若放行，库里就会出现「Python」下挂一个也叫「Python」的二级标签——父子同名，
-# 此后任何按名字找标签的操作都变歧义，而回复还会说"建好了"。
+# 此后任何按名字找标签的操作都变歧义，而回复还会说"建好了"。名字通道下两边都是
+# 名字，写串了就直接同名，所以这条守卫比 id 通道时更容易撞上、更该留。
 post = _Post("10002")
 with patch(_tag_index=_Seq(IDX, IDX), _admin_post=post):
-    r = base.create_tag.invoke({"title": "Python", "parent_id": 1}, config=cfg())
+    r = base.create_tag.invoke({"title": "Python", "parent_tag": "Python"}, config=cfg())
     check("父标签名 == 新标签名 → unavailable，零 POST（参数多半填反了）",
           r.kind == "unavailable" and post.calls == [], f"{r.kind}: {r}")
     check("  拒因说清是「把父标签名当成了新标签名」（planner 据此改参）",
           "父标签名" in r and "本次未创建" in r, str(r))
     # 对照组：**不同名**的二级标签照常放行，守卫只认"父子同名"这个自身矛盾
-    r2 = base.create_tag.invoke({"title": "Pytho", "parent_id": 1}, config=cfg())
+    r2 = base.create_tag.invoke({"title": "Pytho", "parent_tag": "Python"}, config=cfg())
     check("  · 对照组：父子不同名照常创建（守卫不误伤正常二级标签）",
           len(post.calls) == 1 and post.calls[0][0].endswith("/tagtwo"),
           str(post.calls))
 
 # ── 弹窗问句要点名父标签（20260921）────────────────────────────────────
 _q = A.render_confirm_question([{"tool": "create_tag",
-                                 "args": {"title": "分布式", "parent_id": 2}}], IDX)
+                                 "args": {"title": "分布式", "parent_tag": "架构"}}], IDX)
 check("弹窗问句写父标签**名字**（用户才能核对挂在哪）",
       "「架构」" in _q and "二级" in _q and "「分布式」" in _q, _q)
-check("  问句不再只给 id（id 是系统内部编号，用户没法核对）", "id=2" not in _q, _q)
+check("  问句里没有 id 这种系统内部编号（用户没法核对）", "id=" not in _q, _q)
 _q2 = A.render_confirm_question([{"tool": "create_tag",
-                                  "args": {"title": "分布式", "parent_id": 2}}])
-check("读不到标签字典 → 退回 id 但仍然弹窗（不因一次读不到就退回死路）",
-      "id=2" in _q2 and "「分布式」" in _q2, _q2)
+                                  "args": {"title": "分布式", "parent_tag": "架构"}}])
+check("读不到标签字典 → 仍然弹窗（不因一次读不到就退回死路）",
+      "「架构」" in _q2 and "「分布式」" in _q2, _q2)
+_q2b = A.render_confirm_question([{"tool": "create_tag",
+                                   "args": {"title": "分布式", "parent_tag": "没有这个"}}], IDX)
+check("父标签名对不上 → 问句当场写出来（点确定之前用户就该看见爸爸不存在）",
+      "没有叫「没有这个」的一级标签" in _q2b, _q2b)
 _q3 = A.render_confirm_question([{"tool": "create_tag", "args": {"title": "新的一级"}}], IDX)
 check("一级标签的问句不带父标签字样", "挂在" not in _q3, _q3)
 _t = A.render_confirm_text([{"tool": "create_tag",
-                             "args": {"title": "分布式", "parent_id": 2}}], IDX)
+                             "args": {"title": "分布式", "parent_tag": "架构"}}], IDX)
 check("气泡正文与问句同源（都点名父标签）", "「架构」" in _t, _t)
 # 探针 ⑤ 的现场：主人说摘「摄影」，问句只写「修改文章 1 的标签」——他无从核对
 # "要去掉的到底是不是我说的那个"。摘标签这一类的盲签风险比改状态更高（改状态的

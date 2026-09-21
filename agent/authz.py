@@ -144,6 +144,14 @@ TOOL_SCOPE: dict[str, str] = {
     "create_tag": SCOPE_WRITE_CONSOLE,
     "set_article_status": SCOPE_WRITE_CONSOLE,
     "set_article_tags": SCOPE_WRITE_CONSOLE,
+    # 第四轮（20260921）：标签改/删 + 分类增删改。与上面三个写工具同门——
+    # 后台数据、对外可见状态、改完不自动复原（删标签还会连带摘掉文章上的引用）。
+    # 同样不进 planner 的任何点名白名单，只能由技能模板展开。
+    "update_tag": SCOPE_WRITE_CONSOLE,
+    "delete_tag": SCOPE_WRITE_CONSOLE,
+    "create_category": SCOPE_WRITE_CONSOLE,
+    "update_category": SCOPE_WRITE_CONSOLE,
+    "delete_category": SCOPE_WRITE_CONSOLE,
 }
 
 
