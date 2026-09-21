@@ -574,6 +574,73 @@ for skill_name, params in _MIN_PARAMS.items():
           all(n in _REGISTERED for n in names), f"{[n for n in names if n not in _REGISTERED]}")
 
 
+# ══════════════════════════════════════════════════════════════════
+# ⑨ 规划轮的"先看能不能做"（20260922，探针腿⑮）：
+#    _write_target_refusal 是**弹窗之前**那道判断——字典读得到、而名字落不到唯一
+#    一行时，不弹窗也不执行，直接确定性如实收尾。锁的重点是它**不许越界**：
+#    读不到字典（None）与"名字不存在"必须分开，挂 $ref 的 spec 不许被它拦，
+#    不是按名字的写工具（多 spec / 文章写）一律不碰。
+print("\n⑨ 写目标预检 _write_target_refusal：只拦「名字落不到唯一一行」，其余一律不碰")
+from agent.graph import _write_target_refusal  # noqa: E402
+
+
+def _plan(skill, params):
+    """真实的技能展开（字段名与计划文本同源，避免测试自己拼一个假计划）。"""
+    return instantiate_plan(skill, params)
+
+
+with patch(_tag_index=lambda c: IDX, _category_index=lambda c: CIDX):
+    check("唯一命中的标签 → 不拦（放行给弹窗/执行）",
+          _write_target_refusal(_plan("tag_update", {"name": "Python", "new_title": "蟒"}), cfg())
+          is None)
+    got = _write_target_refusal(_plan("tag_update", {"name": "没有这个标签", "new_title": "x"}), cfg())
+    check("查无此名 → 拦下，理由与工具同一套措辞（含名字）",
+          got is not None and got[0] == "update_tag" and "站内没有叫「没有这个标签」的标签" in got[1],
+          f"{got}")
+    got = _write_target_refusal(_plan("tag_delete", {"name": "Asyncio"}), cfg())
+    check("同名二级挂在不同父下（歧义）→ 拦下并把候选交出来",
+          got is not None and "无法确定要动的是哪一个" in got[1] and "编程" in got[1],
+          f"{got}")
+    got = _write_target_refusal(_plan("tag_create", {"title": "新标签", "parent_tag": "没这个爸爸"}), cfg())
+    check("父标签查无此名 → 拦下（建不出来，别弹窗问'要不要建'）",
+          got is not None and got[0] == "create_tag" and "一级标签" in got[1], f"{got}")
+    check("父标签唯一命中 → 不拦",
+          _write_target_refusal(_plan("tag_create", {"title": "新标签", "parent_tag": "编程"}), cfg())
+          is None)
+    check("新建标签自己的名字不在字典里 → **不拦**（新建的名字当然查不到）",
+          _write_target_refusal(_plan("tag_create", {"title": "从没有过的名字"}), cfg()) is None)
+    got = _write_target_refusal(_plan("category_update", {"name": "没这个分类", "new_title": "x"}), cfg())
+    check("分类查无此名 → 拦下（分类走另一张字典）",
+          got is not None and got[0] == "update_category" and "站内没有叫「没这个分类」的分类" in got[1],
+          f"{got}")
+    check("分类唯一命中 → 不拦",
+          _write_target_refusal(_plan("category_delete", {"name": "随笔"}), cfg()) is None)
+
+# 字典读不到 ≠ 没有：一律不拦（保持既有行为——弹窗与工具侧各自的"读不到"说法都还在）
+with patch(_tag_index=lambda c: None):
+    check("读不到标签字典 → **不拦**（把网络故障说成'站内没有'是最坏的错法）",
+          _write_target_refusal(_plan("tag_delete", {"name": "随便什么"}), cfg()) is None)
+with patch(_category_index=lambda c: None):
+    check("读不到分类字典 → **不拦**",
+          _write_target_refusal(_plan("category_delete", {"name": "随便什么"}), cfg()) is None)
+
+# `$ref` 是"取值没解析出来"，不是"名字不存在"——交给 execute 的 resolve_args 报原因码
+with patch(_tag_index=lambda c: IDX):
+    _refplan = {"tools": ['update_tag({"name": "$list_tags[0].tagKey", "new_title": "x"})']}
+    check("参数挂着 $ref → **不拦**（那是 execute 的错误码链路，planner 还能改参数）",
+          _write_target_refusal(_refplan, cfg()) is None)
+    check("不是按名字的写工具（文章写）→ 不碰",
+          _write_target_refusal(
+              {"tools": ['set_article_status({"article_id": 12, "status": "private"})']}, cfg())
+          is None)
+    check("多 spec 混排 → 不在这一层判（交工具自己如实拒绝）",
+          _write_target_refusal(
+              {"tools": ['delete_tag({"name": "没有这个标签"})',
+                         'delete_tag({"name": "编程"})']}, cfg()) is None)
+    check("零工具计划 → 不碰",
+          _write_target_refusal({"tools": []}, cfg()) is None)
+
+
 print("\n" + ("=== 全部通过 ===" if not FAILS else f"=== {len(FAILS)} 项失败 ==="))
 for f in FAILS:
     print("  · " + f)
