@@ -31,7 +31,7 @@
 > ⑤**写操作的事前同意**（秘书前置需求 ③ 的 agent 侧）——权限之后再加一道确定性判据：
 > 需确认的 scope（`CONSENT_SCOPES = {write.content}`）未获**用户本轮消息**明确确认 →
 > 产 `__ERROR__: 待确认[consent_required]` 帧、**不调用工具**；用错误帧形态是为了让 gate
-> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 35 个工具里
+> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 38 个工具里
 > 没有一个是 `write.content`，所以这条闸**空转**（等第一个写工具，声明表驱动、不用改代码）。
 > ⚠️ 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
 > annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
@@ -59,7 +59,7 @@
 
 - **React 前端**（浏览器）：看板娘 Live2D 形象 + 对话框 UI + SSE 消费 + 命令执行器。
 - **Rust 后端**（axum，端口 3000）：鉴权、记忆落库、对话编排、SSE 转发、中断清理。**记忆的唯一权威来源**。
-- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、35 个工具。**无状态**，记忆全靠请求体注入。
+- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、38 个工具。**无状态**，记忆全靠请求体注入。
 - **MySQL**：`chat_history`（消息流水）、`chat_summary`（每用户压缩摘要）。
 - **device-service**（端口 3100，独立服务）：IoT 设备（ESP32 OLED）指令下发，agent 以对话用户身份代签 JWT 调用。
 
@@ -513,14 +513,14 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 ---
 
-## 5. 工具系统（35 个）
+## 5. 工具系统（38 个）
 
 | 分类 | 工具 | 行为 |
 |---|---|---|
 | 文章/笔记 | `list_notes`、`search_notes`、`get_article_detail`、`get_top_notes` | 调博客 `api/public` 接口（`get_article_detail` 可按 `section` 取单节，见 §5.2） |
 | 检索 | `rag_search` | BM25 词法检索（行式候选 type/id/标题/分；20260901 语料净化仅收文章，说说/留言走数据工具） |
 | 分类/标签 | `list_categories`、`list_tags` | 同上 |
-| 公告 | `get_announcements` | 同上 |
+| 公告 | `get_announcements` | 同上（写侧见 §5.4） |
 | 留言板 | `list_guestbook` | 读 `/api/public/board`（河灯留言） |
 | 说说 | `list_talks` | 读 `/api/public/talk` |
 | 站点信息 | `get_blog_info`、`get_social_links`、`get_site_map` | 作者信息/社交链/功能地图（静态） |
@@ -532,7 +532,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 | 夜间模式 | `toggle_dark_mode(mode)` | 返回 `DARKMODE:{mode}` |
 | IoT 设备 | `list_devices`、`device_oled_display` | 代签 JWT 调 device-service；支持自动选在线设备、幂等去重 |
 | 后台只读（admin） | `list_admin_notes`、`get_server_status`、`get_service_health`、`get_moderation_status`、`get_user_stats` | **以发起人身份代调** `127.0.0.1:3000` 的受保护接口（现签 60 秒 JWT）；scope `admin.console`，进 `_HARD_SCOPES`（非 admin 结构上够不到）；`list_admin_notes` 是草稿/私密文章的**唯一可达读口** |
-| 后台写（admin） | `create_tag`、`update_tag`、`delete_tag`、`create_category`、`update_category`、`delete_category`、`set_article_status`、`set_article_tags` | scope `write.console`（`_HARD_SCOPES` + `CONSENT_SCOPES`）；**只能由写技能模板展开**——`PARAMS.calls` 名单里没有它们，越权清单在技能白名单那一步就被剥掉；三道门见 §5.3 |
+| 后台写（admin） | `create_tag`、`update_tag`、`delete_tag`、`create_category`、`update_category`、`delete_category`、`create_announcement`、`update_announcement`、`delete_announcement`、`set_article_status`、`set_article_tags` | scope `write.console`（`_HARD_SCOPES` + `CONSENT_SCOPES`）；**只能由写技能模板展开**——`PARAMS.calls` 名单里没有它们，越权清单在技能白名单那一步就被剥掉；三道门见 §5.3 |
 
 **工具 → 命令 → 前端执行**是核心交互模式：工具返回带前缀的**命令字符串**，Python 识别后作为独立 SSE 帧
 转发，前端解析执行。**不是**让模型把命令写进正文——正文里的命令会被 `cleanAgentText` 当幻觉剔除
@@ -629,6 +629,26 @@ execute 去报错误码，不再静默变 `None`；注记只写已知事实（�
 真值**，不读工具回执）。**探针通用纪律**：所有腿统一**读到连接关闭**才判定——
 `__END__` 即断会丢尾部执行记录，20260921 实测的 `route_after_execute` 缺映射表那次，就是
 "库真值改了 + 回执落了库 + 前端只看到一行报错"却仍被判 PASS（腿⑧ 的旧盲区）。
+
+### 5.4 公告写（20260922）：全站可见的写面，同意快道**结构性关闭**
+
+代发/修改/删除站内公告（`create_announcement` / `update_announcement` / `delete_announcement`，
+scope `write.console`）。公告是**对全体访客说的话**，因此比其它后台写多两道限制：
+
+- **快道关掉**：其它控制台写有"用户把话说成命令 ⇒ 同轮即视为确认、直接执行"的捷径
+  （`_CONSOLE_VERBS` + 命令骨架）；`_ALWAYS_CONFIRM_TOOLS` 把这三件**结构性**排除在外——哪怕
+  「发个公告说今晚维护」是教科书式命令，也**照弹确认框**（内容会显示在框里等主人过目）。
+  离线锁 `test_authz`（同一句话对别的后台写仍判命令 ⇒ 收窄只落在公告三件上），探针腿⑯ 实测
+  三种措辞都弹框。
+- **正文不许代笔**：正文只写主人说过的内容，缺正文就追问，**绝不替他补一句**（`_expand_write_skill`
+  的公告分支零工具收尾）。
+
+| 端点事实（三条，都踩过） | 处置 |
+|---|---|
+| `POST /api/protected/announcements` **只返回字符串 `"Created"`，不回 id** | 建完重拉列表，按 **id 差集 + 标题与正文都对上** 认领新行；认不出就 `unavailable`（"未确认生效"，checker BLOCK、不进跨轮执行记忆） |
+| `PUT` 的 `title`/`content` **都是必填** | 只改一项时，另一项从**同一次索引快照**原样回传（同 `update_tag` 的"当前色原样回传"） |
+| `DELETE` body 是**裸 `Vec<i32>`**，且**删不存在的 id 静默成功** | 删后重拉，要求 id **确实消失**才算成功——静默 no-op 不许说成"已删除" |
+| 没有唯一约束、没有草稿态 ⇒ **目标身份只有标题** | 按标题解析（`_find_named_announcement`）：唯一命中才动、多条同名→零写并列出候选（带 id 与时间）、查无此名→零写如实说 |
 
 ---
 
@@ -999,3 +1019,11 @@ flowchart TB
 5. **MemorySaver 陷阱**：别恢复"线程复用"——DB 注入已承担全部连续性。
 6. **`enable_thinking` 只能走 extra_body**（Qwen 自有参数，model_kwargs 不收）。
 7. **本仓库与宿主仓库独立维护**：agent 代码位于独立 git 仓库（remote: `BigLeopardCat/saudade-blog-agent`，物理上嵌套于博客项目中并被其 gitignore）。两仓库各自 push 各自 CI：agent 改动只在 agent 仓库提交（宿主仓库 git status 不会显示 agent 目录改动，勿误提交）。改完代码记得 `git add -A && git commit && git push`——否则服务器重建会丢改动。
+8. **写给模型的举例里**不许出现**具体取值**（20260922 实测，写面）：技能描述/规则里的举例名会被 planner
+   当成**默认值抄进参数**——主人说「加个二级标签，名字叫 Rust 异步」时它填 `title="Rust",
+   parent_tag="异步"`（把名字后半个词当父标签），或直接抄描述里的示例名（`title="Python"`）⇒ **弹窗问的是
+   主人从没提过的名字**。离线实测（生产同款 prompt 组装）：「写死示例名」21/24 命中 → 「示例改
+   〈…〉占位符」42/42；更凶的是**把失败样例连真名字写进规则 4b 之后掉到 12/24**（那些名字当场被抄进
+   参数）⇒ 占位符化后回到 36/36。**纪律：写技能描述与写规则里只写 〈名字〉/〈父标签名〉 这类占位符，
+   连"反例"也不许带真名字**；判据的"取值一律从主人这句话里原样抄、完整照抄"写在 planner 规则 4b。
+   回归锁 = `test_skills.test_write_desc_no_example_names`（扫写技能描述 + 规则 4b 整段）。
