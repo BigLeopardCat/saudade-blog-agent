@@ -115,18 +115,68 @@ def _get(path: str) -> dict | list | ToolResult:
 # 笔记 / 文章 工具
 # ---------------------------------------------------------------------------
 
+# ── note 行瘦身（20260921）──────────────────────────────────────────────
+# 为什么必须瘦：`/notes` 一行 477 字符（描述/封面/6 个焦点缩放字段/两个时间戳/重复的
+# `key` 与空 `content` 全在里面），10 行 ≈ 4.8KB —— 而 `_frame_texts` 给 planner 的
+# 单帧预算只有 300 字符，planner 看到的是**第一行的前 300 字符**（半截 JSON）：既拿不到
+# "全部标题 ↔ id"的对应，也看不出后面还有 9 条（无声截断，20260920 那类"看不见的洞"）。
+# 瘦身只留决策要用的五个：id / 标题 / 状态 / 置顶 / 标签名。
+# **两条下游契约不许动**：`agent/entities.py::_note_digest`（跨轮实体摘要）与
+# `agent/decisions.py::_candidate_detail_plan`（候选改读闸的 `literal_eval`）都只读
+# `noteKey`/`noteTitle`——瘦身保留这两个键，两处照常工作。
+_NOTE_SLIM_KEYS = ("noteKey", "noteTitle", "status", "isTop")
+
+
+def _public_tag_index():
+    """公开标签字典 → `{id: TagInfo}`；读不到返回 **None**（≠"没有标签"）。"""
+    one = _get("/tagone")
+    two = _get("/tagtwo")
+    if isinstance(one, ToolResult) or isinstance(two, ToolResult):
+        return None
+    from agent import adminops as A      # 局部导入：tools → agent 的反向依赖
+    return A.build_tag_index(one, two)
+
+
+def _slim_note_rows(rows):
+    """note 行数组 → 精简行数组（**认不出形态返回 None**，调用方原样透出）。
+
+    只对"看得出是 note 行"的数组动手（行里有 `noteKey`）：其它工具的列表
+    （留言/说说/设备…）字段完全不同，套同一把刀会砍掉它们的正文。
+    """
+    if not isinstance(rows, list) or not rows or not all(isinstance(r, dict) for r in rows):
+        return None
+    if not any("noteKey" in r for r in rows):
+        return None
+    from agent import adminops as A      # 局部导入：同上
+    index = None
+    if any(r.get("noteTags") for r in rows):
+        index = _public_tag_index()
+    out = []
+    for r in rows:
+        tag_txt = A.render_tag_list(r.get("noteTags"), index)
+        out.append({
+            "noteKey": r.get("noteKey"),
+            "noteTitle": r.get("noteTitle") or "",
+            "status": r.get("status") or "",
+            "isTop": r.get("isTop") or 0,
+            "tags": "" if tag_txt == "（无标签）" else tag_txt,
+        })
+    return out
+
+
 @tool
 def list_notes(
     page: Annotated[int, "Page number, default 1"] = 1,
     page_size: Annotated[int, "Items per page, default 10"] = 10,
 ) -> str:
-    """获取文章列表，按页返回。返回文章标题、描述、分类、标签等信息。"""
+    """获取文章列表，按页返回。每篇给出：id（noteKey）、标题、状态、是否置顶、标签名。"""
     data = _get(f"/notes?page={page}&page_size={page_size}")
-    return _shape(data)
+    slim = _slim_note_rows(data)
+    return _shape(slim if slim is not None else data)
 
 @tool
 def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
-    """搜索文章标题和内容，返回匹配的文章列表。"""
+    """搜索文章标题和内容，返回匹配的文章列表（每篇给出 id、标题、状态、是否置顶、标签名）。"""
     try:
         resp = _client.post(
             f"{API_BASE}/notes/search",
@@ -140,7 +190,10 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
         # 别写 str(data)（20260916 契约：str() 会退化成普通 str 丢 kind）。
         # 20260920 之所以要这个标记：真实事故里 narrator 把 `返回: []` 读成了"本轮没有
         # 执行任何工具"（_NO_EXEC_CLAIM_RE 是兜底，渲染侧已同步标注"已执行，结果为空"）。
-        return empty("[]") if not data else _shape(data)
+        if not data:
+            return empty("[]")
+        slim = _slim_note_rows(data)
+        return _shape(slim if slim is not None else data)
     except Exception as exc:
         logger.error("Search failed: %s", exc)
         return unavailable(f"搜索服务暂时不可用（{type(exc).__name__}），请稍后再试")
@@ -244,9 +297,10 @@ def rag_search(
 
 @tool
 def get_top_notes() -> str:
-    """获取置顶文章列表。"""
+    """获取置顶文章列表（每篇给出 id、标题、状态、是否置顶、标签名）。"""
     data = _get("/topnotes")
-    return _shape(data)
+    slim = _slim_note_rows(data)
+    return _shape(slim if slim is not None else data)
 
 # ---------------------------------------------------------------------------
 # 分类 / 标签 工具
