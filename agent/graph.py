@@ -1909,6 +1909,33 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             record("planner", "rejected_call", dropped=plan_obj["dropped"],
                    skill=plan_obj["skill"], round=rounds)
 
+        # 写操作的目标按名字解不出来 → 不弹窗、不执行，直接确定性如实收尾
+        # （见 _write_target_refusal 上方长注：名字通道下"解不出来"必须响亮，
+        # 而"响亮"的最省事形态就是**根本不问那一句**）。
+        refusal = _write_target_refusal(plan_obj, config)
+        if refusal:
+            wtool, why = refusal
+            logger.warning("[planner] 写操作目标按名字解不出来（%s）：%s → 确定性如实收尾",
+                           wtool, why)
+            record("planner", "write_target_unresolved", tool=wtool,
+                   reason=why[:160], round=rounds)
+            plan_obj = _wrap_up_plan(False, note=(
+                "**这件事这次没有做：站内数据一个字节都没有改动**"
+                "（本轮一个工具都没有执行）。"
+                f"系统按名字查过站内的标签/分类字典，结果是：{why}。"
+                "请把这条原因**如实**转告主人（连同里面的候选名单或该补的信息），"
+                "并问他接下来想怎么办（换个说法、或先把那个标签建出来）。"
+                "**不许**出现「看过/读过/查过/检索过/调用过工具」这类说法；"
+                "也**不许**把它讲成一篇内容层面的结论——这件事只跟标签/分类字典有关。"))
+            # ⚠️ 这里必须是 **return**，不是 break：决策循环之后的收尾路径会读
+            # `plan_obj["params"]`（只有 instantiate_plan 的产物才有这个键），
+            # 而 `_wrap_up_plan` 不带它 ⇒ break 到那里必抛 KeyError('params')
+            # （20260922 实测：正是本函数要修的那条用例把整轮打成 __ERROR__，
+            # 与 20260921 22:37 的 KeyError('model') 同一类错——"分支走通了、
+            # 收尾路径没走通"，故 test_skills 里也补了假 LLM 整轮锁）。
+            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                    "done": False}
+
         # 剔空纠偏（见上方长注）：只有"点名的全被剔除、本轮一个工具都不剩"才重决策；
         # 已经纠偏过一次、或清单非空、或根本没点名 → 到此为止。
         if correction or plan_obj["tools"] or not plan_obj.get("dropped"):
@@ -2288,6 +2315,86 @@ def _confirm_grant_plan(grant: dict) -> dict:
     skill = skill or SKILL_MAP["chat"]
     return {"skill": skill.name, "tools": tools, "note": note,
             "reply": skill.reply_contract, "chat": skill.chat, "dropped": []}
+
+
+# ── 写操作的目标按名字解不出来（20260922，探针腿⑮）─────────────────────────
+# 名字通道把"目标"交给工具在 execute 阶段解析，而**弹确认框发生在执行之前**——
+# 于是出现这种形态：系统明知道这个名字在字典里根本没有（或者有歧义），还是问了
+# 一句"要不要做"；用户点确定，只能拿到一句"站内没有这个标签、本次未改动"。
+# 那等于把一次**信息性回答**包装成了一次**待确认的操作**（探针腿⑮ 实测：
+# 「把标签「绝对不存在的标签名xyz」挪到「编程」下面」→ 卡片诚实、零写安全，
+# 但用户白点一次）。
+#
+# 这一层在**规划轮**就把判断做掉：字典读得到、而名字落不到唯一一行时，不弹窗、
+# 不调用工具，直接确定性如实收尾（`_wrap_up_plan`：零工具、带注记 → 路由直奔
+# narrator 叙述，见 route_after_planner）。
+#
+# 三条边界（都朝"宁可多问一次，也不误拦一次"的方向）：
+#   · **字典读不到（None）不是"没有"**——一律不拦，保持既有行为（弹窗与工具侧
+#     各自的"读不到"说法都还在；把一次网络故障变成一句"站内没有"是最坏的错法）。
+#   · 参数里还挂着 `$ref` 的 spec 一律不拦：那是"取值没解析出来"，execute 的
+#     `resolve_args` 会给带原因码的错误帧，planner 还有机会改参数——与"名字不
+#     存在"是两回事。
+#   · 只认**写工具的目标字段**；`new_title`/`color` 这些"要改成什么"不参与判断
+#     （新建的名字当然不在字典里，那不是错误）。
+_WRITE_NAME_FIELDS = {
+    # 工具名 -> (目标名字字段, 父标签名字字段)
+    "create_tag": (None, "parent_tag"),
+    "update_tag": ("name", "parent_tag"),
+    "delete_tag": ("name", None),
+    "update_category": ("name", None),
+    "delete_category": ("name", None),
+}
+
+
+def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
+    """本轮写操作的目标名字能否唯一落到站内一行？返回 `(工具名, 拒绝说明)` 或 None。
+
+    与工具**同一套解析**（`tools.base._find_named_tag` / `_find_named_category`），
+    并且目标与父标签用**同一份字典快照**查。这一层只回答"这件事现在做得成吗"，
+    真做的时候工具仍会自己再读一次字典——两次判断互不背书，谁都不替对方下结论。
+    """
+    tools = plan_obj.get("tools") or []
+    if not tools:
+        return None
+    name = _tool_name(tools[0]) if len(tools) == 1 else None
+    if name not in _WRITE_NAME_FIELDS:
+        # 多 spec 混排 / 不是按名字的写工具：不在这里判（今天写轮一次只展开一条，
+        # 真出现混排也该由工具自己如实拒绝，而不是被这层拦成一个"做不了"）。
+        return None
+    args, args_ok = _tool_args(tools[0])
+    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+        return None
+    from tools.base import (_category_index, _find_named_category,
+                            _find_named_tag, _tag_index)
+    tkey, pkey = _WRITE_NAME_FIELDS[name]
+    is_cat = name.endswith("_category")
+    tag_index = None if is_cat else _tag_index(config)
+    cat_index = None
+    if is_cat:
+        cat_index = _category_index(config)
+        if cat_index is None:
+            return None  # 读不到字典 ≠ 没有：不拦（见上方边界）
+    elif tag_index is None:
+        return None
+    if tkey:
+        want = str(args.get(tkey) or "").strip()
+        if want:
+            if is_cat:
+                hit, err = _find_named_category(want, config, index=cat_index)
+            else:
+                hit, err = _find_named_tag(want, config, args.get("level"),
+                                           index=tag_index)
+            if err:
+                return name, err
+    if pkey:
+        pname = str(args.get(pkey) or "").strip()
+        if pname:
+            hit, err = _find_named_tag(pname, config, "one", role="一级标签",
+                                       index=tag_index)
+            if err:
+                return name, err
+    return None
 
 
 def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,

@@ -263,6 +263,13 @@ CONSOLE_POS = [
     "把文章 12 的标签去掉",
     "发布文章 12",
     "把这篇设为草稿",
+    # 20260922：后台标签/分类写域的两个说法。活体探针腿⑭ 实测「把分类「X」改名叫
+    # 「Y」」**命不中快道**（表里只有「改名为」，没有「改名/改名叫」）⇒ 用户明明下的是
+    # 命令却落进弹窗那条路。命令快道是 fail-closed 的（判错只是多问一次），但"常用
+    # 说法不在表里"不是保守，是缺口——这两条钉住它。
+    "把分类「随笔」改名叫「碎笔」",
+    "把标签「Asyncio」改名成「异步」",
+    "给标签「Python」改名叫「蟒蛇」",
 ]
 CONSOLE_NEG = [
     "把文章 12 设为私密会有什么影响？",
@@ -614,6 +621,31 @@ check("planner 上下文（admin）含全部三个管理助手技能",
 check("公开技能对任何角色都还在（过滤没写宽）",
       all(n in build_planner_context(None) for n in ("chat", "content_query", "navigate"))
       and all(n in build_planner_context(ROLE_USER) for n in ("chat", "content_query", "navigate")))
+
+# ⑨f 改名系说法（20260922 补词）：锁在**真正用的那两个工具**上（同意闸的判据虽然
+# 与工具无关，但"这句话对 update_tag 放行"才是产品要的事实）。反向三条是这次补词
+# 最容易连带放宽的形态：只是**提到**改名、或在打听改名，都不是命令。
+print("⑨f 改名/改名叫 = 命令（标签与分类写共用同一句判据）")
+_RENAME_POS = [
+    "把分类「随笔」改名叫「碎笔」",
+    "把标签「Asyncio」改名叫「异步」",
+    "把标签「Asyncio」改名成「异步」",
+    "给标签「Python」改名为「蟒蛇」",
+]
+_bad_rename = [t for t in _RENAME_POS
+               if not (authz.consent_granted(p(ROLE_ADMIN), "update_tag", t)
+                       and authz.consent_granted(p(ROLE_ADMIN), "update_category", t))]
+check(f"改名系命令判成命令（{len(_RENAME_POS)} 条）", not _bad_rename, f"漏判: {_bad_rename}")
+_RENAME_NEG = [
+    "改名有什么影响",            # 无目标
+    "怎么给标签改名呢",          # 打听尾（怎么/呢）
+    "改名的步骤是什么",          # 无目标 + 打听
+    "标签改名会不会影响文章的链接",  # 会不会（打听）
+]
+_bad_rename_neg = [t for t in _RENAME_NEG
+                   if authz.consent_granted(p(ROLE_ADMIN), "update_tag", t)]
+check(f"提到改名/打听改名不是命令（{len(_RENAME_NEG)} 条）", not _bad_rename_neg,
+      f"误判: {_bad_rename_neg}")
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

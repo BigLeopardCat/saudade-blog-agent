@@ -1400,10 +1400,15 @@ def _category_index(config: RunnableConfig):
     return A.build_category_index(data)
 
 
-def _find_named_category(name, config):
-    """按名字找一个分类 → `(CategoryInfo, None)` 或 `(None, 拒绝文本)`（同上）。"""
+def _find_named_category(name, config, index=None):
+    """按名字找一个分类 → `(CategoryInfo, None)` 或 `(None, 拒绝文本)`（同上）。
+
+    `index` 与 `_find_named_tag` 同义：可选的**外部快照**。调用方一次要查多个名字
+    （或只是"先看看能不能做"，见 graph._write_target_refusal）时传进来，省一次往返、
+    也让两次判断看到同一份字典。"""
     from agent import adminops as A
-    index = _category_index(config)
+    if index is None:
+        index = _category_index(config)
     if index is None:
         return None, "读不到现有的分类列表，无法把名字对应到分类，本次未改动"
     want = str(name or "").strip()

@@ -2568,6 +2568,76 @@ def test_drop_correction():
         G.get_llm = _orig_llm
 
 
+def test_write_target_refusal_round():
+    """写目标解不出来 → **整轮**跑通（假 LLM + 假字典），且零工具、注记带原因。
+
+    为什么要跑整轮而不是只测 `_write_target_refusal` 的返回值（test_tag_admin ⑨
+    已经测了它）：20260922 实测的缺陷**不在那个函数里**——判据判对了、也如实收尾了，
+    但收尾用的是 `break`，落到决策循环之后的收尾路径去读 `plan_obj["params"]`
+    （只有 `instantiate_plan` 的产物才有这个键）⇒ KeyError('params') ⇒ 整轮
+    __ERROR__。与 20260921 22:37 的 KeyError('model') 是同一类错：**分支走通了、
+    收尾路径没走通**，而单测只覆盖分支 ⇒ 假绿。所以这条锁两件事：
+      ① 整轮不抛异常（走完 planner→model 收尾，拿到可编码的计划）；
+      ② 计划里零工具、注记带上具体原因（"站内没有叫「X」的标签"）。
+    字典用假的（monkeypatch `tools.base._tag_index`）：这条判据的形状与真实字典
+    无关，不该为它去连后端。
+    """
+    print("[write_target_refusal] 写目标解不出来 → 整轮跑通（零工具 + 带原因的注记）")
+    import agent.graph as G
+    import tools.base as TB
+    from agent.graph import parse_plan, planner_node
+    from agent.principal import Principal
+
+    class _ScriptedLLM:
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    _WRITE = ('SKILL=tag_update\n'
+              'PARAMS={"name": "绝对不存在的标签名xyz", "parent_tag": "编程"}\n'
+              "REPLY: 如实回答")
+    _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
+                             "user_id": 7, "conversation_id": 42, "stop_event": None}}
+    _state = {"messages": [HumanMessage(content="把标签「绝对不存在的标签名xyz」挪到「编程」下面")],
+              "plan_rounds": 0, "executed": [], "tool_data": []}
+
+    _orig_llm, _orig_index = G.get_llm, TB._tag_index
+    try:
+        # 假字典：只有「编程」这个一级标签，目标名字不在里面
+        class _Tag:
+            def __init__(self, tid, name, level):
+                self.id, self.name, self.level = tid, name, level
+                self.label, self.note_count, self.color = name, 0, ""
+                self.father_id, self.father_name = None, ""
+        TB._tag_index = lambda config: {1: _Tag(1, "编程", 1)}
+        llm = _ScriptedLLM([_WRITE])
+        G.get_llm = lambda **kw: llm
+        out = planner_node(dict(_state), _cfg)      # ← 这里曾抛 KeyError('params')
+        plan = parse_plan(out["plan"])
+        check("判据命中后整轮不抛异常（修前是 KeyError('params')）", True)
+        check("  零工具（不弹窗、不执行）", plan["tools"] == [], f"tools={plan['tools']}")
+        note = plan["note"] or ""
+        check("  注记带上具体原因（名字 + 查无此名）",
+              "绝对不存在的标签名xyz" in note and "站内没有叫" in note, note[:120])
+        check("  注记写明本轮零执行 + 禁止句（不许说看过/读过/查过）",
+              "一个字节都没有改动" in note and "不许" in note)
+        check("  只问 planner 一次（确定性收尾，不重决策）", len(llm.prompts) == 1)
+
+        # 反向：字典**读不到**（None）时不拦（"读不到"≠"没有"）——弹窗那条路照旧
+        TB._tag_index = lambda config: None
+        llm2 = _ScriptedLLM([_WRITE])
+        G.get_llm = lambda **kw: llm2
+        out2 = planner_node(dict(_state), _cfg)
+        plan2 = parse_plan(out2["plan"])
+        check("  字典读不到时**不拦**（照旧弹窗那条路，不把故障说成没有）",
+              plan2["tools"] != [], f"tools={plan2['tools']}")
+    finally:
+        G.get_llm, TB._tag_index = _orig_llm, _orig_index
+
+
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
@@ -2586,7 +2656,8 @@ def main():
                test_scan_action_intents, test_doc_anchors_and_clip,
                test_doc_title_resolution, test_short_reply_and_adjacent_pairs,
                test_no_sibling_tool_name_in_user_text, test_site_guide_is_role_rendered,
-               test_site_guide_covers_nav_map, test_drop_correction):
+               test_site_guide_covers_nav_map, test_drop_correction,
+               test_write_target_refusal_round):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
