@@ -205,6 +205,27 @@ _CONSOLE_ORDER_RE = re.compile(
     # 另有"把文章 12 的标签去掉/去掉标签"等**动词连写**的说法可走（fail-closed 的
     # 方向是多问一句，不是多写一次生产数据）。
     r"|^\s*(?:取消|解除)[^\n。！？!?；;，,]{0,12}?(?:置顶|顶置)")
+# 「确认…」命令骨架（20260921）：**agent 自己建议、用户照抄**的那种短回声
+# （"确认创建标签 X"）。生产实测里这句被判 False ⇒ 同意闸不放行 ⇒ 死路一条
+# （详见 20260921 事故：用户照着建议打了一遍，系统还说不算命令）。
+#
+# 为什么单独成条正则而不是并进上面那张表：这条**只认句首**（回声必然是整句），
+# 且要配下面的疑问尾排除——两条判据的组合语义（"像回声" ∧ "不是在打听"）
+# 用一条正则写不出来，分开写能各自测。
+_CONSOLE_CONFIRM_ORDER_RE = re.compile(
+    # ① 把字结构：「确认把文章 12 设为私密」——动词在宾语之后，中间要允许宾语
+    r"^\s*确认(?:一下)?\s*(?:把|将|给)[^\n。！？!?；;，,]{1,20}?"
+    r"(?:设为|设成|改成|置顶|取消置顶|隐藏|发布|下架|打上|加上|去掉|移除)"
+    # ② 动词直接跟在确认之后：「确认创建标签 X」「确认置顶文章 12」
+    r"|^\s*确认(?:一下)?\s*"
+    r"(?:创建|新建|建立|新增|建|加|打上|加上|设为|设成|改成|置顶|取消置顶|隐藏|发布|下架)")
+# 疑问尾：出现即说明这是**在打听**（多久/多少钱/怎么弄），不是在下命令。
+# 收窄的理由和上面一样——一个误判的代价是一次真写，而多问一次的代价只是弹个窗。
+_CONSOLE_INQUIRY_TAIL_RE = re.compile(
+    r"多少|多久|几天|费用|价格|流程|步骤|怎么|怎样|如何|什么样|能不能|可不可以|"
+    r"需要|要不要|吗|呢")
+
+
 # 动作词（后台写域；"公开/私密/草稿/发布"这些裸词靠"命令骨架 + 目标"两项兜住，
 # 单看它们会与陈述句撞车）。
 _CONSOLE_VERBS = (
@@ -242,9 +263,36 @@ def _console_target(text: str) -> bool:
     return not any(v.startswith(name) or name.startswith(v) for v in _CONSOLE_VERBS)
 
 
+def _console_confirm_order(text: str) -> bool:
+    """「确认 + 写动词」的**短回声**骨架（见 _CONSOLE_CONFIRM_ORDER_RE 注释）。"""
+    if not _CONSOLE_CONFIRM_ORDER_RE.search(text):
+        return False
+    return not _CONSOLE_INQUIRY_TAIL_RE.search(text)
+
+
+# 系统注入的消息壳（server.py:413 给本轮用户消息加的 `[当前问题]: ` 锚点）。
+#
+# 这是**系统加的外壳，不是用户的话**，而底下所有判据都是锚定的（句首把/将、句首
+# 动词、句首假设词）：带着壳一条都命不中。生产实测（20260921）——
+# 「[当前问题]: 把文章 999999 设为私密」这种**教科书式的明确命令**在同意闸里
+# 判的是 False（弹窗照弹），而「[当前问题]: 如果我把文章 12 设为私密」这种假设
+# 也判不出提问（弹窗照弹，把假设读成了意图）。两处根因同一个：判据看到的是
+# 包装过的文本。所以判据入口统一先剥壳。
+#
+# 剥掉的只是方括号注记（`[…]`，最多两层语义、32 字以内），剥完仍要过目标/动作/
+# 骨架三关——用户自己写「[求助] 把文章 12 设为私密」剥完照样是命令，他本来也
+# 就是在下命令，不构成放宽。
+_SYS_TAG_RE = re.compile(r"^(?:\s*\[[^\[\]\n]{0,32}\]\s*[:：]?\s*)+")
+
+
+def _strip_system_tags(text: str) -> str:
+    """剥掉消息开头的系统方括号注记（见 _SYS_TAG_RE）。"""
+    return _SYS_TAG_RE.sub("", text or "", count=1)
+
+
 def _console_command(msg: str) -> bool:
     """本轮消息是不是一条明确的后台写命令（确定性、无 LLM）。"""
-    text = (msg or "").strip()
+    text = _strip_system_tags((msg or "").strip())
     if not text:
         return False
     if _CONSOLE_QUESTION_RE.search(text) or _CONSOLE_HYPOTHESIS_RE.search(text):
@@ -253,7 +301,35 @@ def _console_command(msg: str) -> bool:
         return False
     if not any(v in text for v in _CONSOLE_VERBS):
         return False
-    return bool(_CONSOLE_ORDER_RE.search(text))
+    return bool(_CONSOLE_ORDER_RE.search(text)) or _console_confirm_order(text)
+
+
+def is_question_like(msg: str) -> bool:
+    """这句是**提问/假设**（而不是一个意图陈述）吗？
+
+    弹窗分叉用它（graph.py::execute_node）：判不出来是"用户有意向但没判成命令"
+    → 弹窗问一次；判出来是提问/假设 → 绝不能弹（用户只是在问，弹一个"确定/取消"
+    等于把提问读成了意图）。空消息保守按提问走（无从判断时不弹）。
+    """
+    text = _strip_system_tags((msg or "").strip())
+    if not text:
+        return True
+    return bool(_CONSOLE_QUESTION_RE.search(text) or _CONSOLE_HYPOTHESIS_RE.search(text)
+                or _CONSOLE_INQUIRY_RE.search(text))
+
+
+# 打听类名词/句式（**只给弹窗分叉用**，见 is_question_like）
+#
+# 上一张疑问词表是给**同意闸**用的（"这句是不是一条命令"），它漏掉了一类很常见的
+# 问法：「文章 12 设为私密的**步骤是什么**」——没有 吗/呢/怎么，也没有假设前缀，
+# 在同意闸那边的后果只是"不算命令"（去追问，无妨）；但在弹窗分叉那边，这句话会
+# **弹出一个"确定/取消"框**，把纯提问读成了意图（用户拍板明确不许）。
+#
+# 措辞刻意贴着实词走（是什么/步骤/流程/…），不用"什么"这种宽词——宽词会把
+# 「新建个标签，名字叫什么好」这类**真意图**也判成提问，那又回到死路。
+_CONSOLE_INQUIRY_RE = re.compile(
+    r"是什么|是啥|有什么|有多少|多少|多久|几天|步骤|流程|条件|要求|"
+    r"影响|后果|风险|注意|区别|好处|坏处|可以吗|行吗")
 
 
 _CONSENT_PATTERNS[SCOPE_WRITE_CONSOLE] = _console_command

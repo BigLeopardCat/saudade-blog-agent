@@ -49,6 +49,33 @@ def is_ref(value) -> bool:
     return isinstance(value, str) and REF_RE.match(value.strip()) is not None
 
 
+def has_refs(specs) -> bool:
+    """specs 里是否还有**未解析的引用**（`$tool[N].field`）。
+
+    用途（20260921 确认弹窗）：签进令牌的参数必须是**具体值**——引用依赖的是
+    "签发那一轮已执行过的工具帧"，而执行轮是另一轮对话，那些帧早就不在了。
+    把带引用的 spec 签进令牌 = 发一张到期必然兑现不了的支票，所以检出即
+    **不签发**（退回既有追问链路，让 planner 先把值取到手再说）。
+    递归进 list/dict：参数可以是标签名数组（`{"add": ["$list_tags[0].name"]}`），
+    只看顶层会漏。
+    """
+    for s in specs or []:
+        if isinstance(s, dict) and _walk_refs(s.get("args")):
+            return True
+    return False
+
+
+def _walk_refs(value) -> bool:
+    """递归找引用字面量（list/dict 里的也算）。"""
+    if is_ref(value):
+        return True
+    if isinstance(value, dict):
+        return any(_walk_refs(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_walk_refs(v) for v in value)
+    return False
+
+
 def parse_ref(value: str) -> tuple[str, int, str] | None:
     """引用字面量 → (工具名, 序号, 字段路径)。不是引用返回 None。"""
     m = REF_RE.match((value or "").strip())

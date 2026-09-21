@@ -50,6 +50,82 @@ def color_for_name(name: str) -> str:
     return NEW_TAG_COLORS[h % len(NEW_TAG_COLORS)]
 
 
+# ── 中文色名 ↔ 站内 8 色板（20260921 颜色预览）────────────────────────
+# 用户拍板：「站内 8 色板 + 中文色名映射」——**不开放任意色值**。理由是这张表
+# 同时是前端色块装饰器的白名单（`chatMarkdown.ts::chatColorPalette`）：色板外的
+# 色值不画色块，所以"agent 说得出"的色必须就是"前端画得出"的色，两边同源。
+#
+# 规范名（`_COLOR_CANON` 的值）是**回程渲染用**的名字，与别名分开：
+# `黄` 落在 `#a0d911`（站内没有正黄），回程必须说「黄绿」——用户说"黄"可以，
+# 但系统回一句"颜色：黄（#a0d911）"就是在骗他（屏幕上明明是黄绿）。
+_TAG_COLOR_ALIASES: dict[str, str] = {
+    "蓝": "#1677ff", "蓝色": "#1677ff",
+    "绿": "#52c41a", "绿色": "#52c41a",
+    "橙": "#fa8c16", "橙色": "#fa8c16", "橘": "#fa8c16", "橘色": "#fa8c16",
+    "粉": "#eb2f96", "粉色": "#eb2f96", "粉红": "#eb2f96", "粉红色": "#eb2f96",
+    "洋红": "#eb2f96", "品红": "#eb2f96", "桃红": "#eb2f96",
+    "紫": "#722ed1", "紫色": "#722ed1",
+    "青": "#13c2c2", "青色": "#13c2c2",
+    "红": "#f5222d", "红色": "#f5222d", "大红": "#f5222d",
+    "黄绿": "#a0d911", "黄绿色": "#a0d911",
+    "黄": "#a0d911", "黄色": "#a0d911",   # 站内没有正黄：落到黄绿，回程如实称「黄绿」
+}
+# hex → 规范中文名（与上面同源；NEW_TAG_COLORS 的顺序即展示顺序）
+# 带「色」字：这张表是**回程渲染**用的（「颜色 粉色（#eb2f96）」），
+# 单字「粉」在正文里会被读成半个词——匹配侧的别名表（_TAG_COLOR_ALIASES）
+# 才是收口语说法的地方，两张表各管一头。
+_COLOR_CANON: dict[str, str] = {
+    "#1677ff": "蓝色", "#52c41a": "绿色", "#fa8c16": "橙色", "#eb2f96": "粉色",
+    "#722ed1": "紫色", "#13c2c2": "青色", "#f5222d": "红色", "#a0d911": "黄绿色",
+}
+# 色板上第一处出现的"更适合当标签名"的别名（认色失败时颜色照给，名字宁可弱描述）
+# —— 刻意不写"认不出来就不给颜色"：色值是确定的，名字只是表述。
+
+
+# 给提示词/追问用的色板清单（顺序 = 展示顺序 = NEW_TAG_COLORS）
+TAG_COLOR_SPEC = "、".join(
+    f"{_COLOR_CANON[h]}（{h}）" for h in NEW_TAG_COLORS)
+
+
+def match_tag_color(spec) -> str | None:
+    """颜色说法 → 站内色板 hex；**认不出返回 None**（不猜、不回落）。
+
+    刻意**不做子串/模糊匹配**：「天蓝」「浅蓝」含「蓝」，按子串会命中 `#1677ff`
+    ——用户点名要的颜色被换成一个他没说的颜色，而这种错在界面上看不出来（色块
+    画的是那个被换过的色）。认不出就不认，让调用方去说清可选的 8 种。
+    """
+    want = str(spec or "").strip()
+    if not want:
+        return None
+    key = want.lstrip("#").lower()
+    if want in _TAG_COLOR_ALIASES:
+        return _TAG_COLOR_ALIASES[want]
+    if key in _TAG_COLOR_ALIASES:
+        return _TAG_COLOR_ALIASES[key]
+    hexval = "#" + key
+    return hexval if hexval in _COLOR_CANON else None
+
+
+def resolve_tag_color(spec, name: str) -> str:
+    """颜色说法 → 站内色板 hex；认不出（或压根没说）→ 按名字哈希取色。
+
+    `color_for_name` 的既有契约（同名同色）在"没说颜色"时一字不变：这条路径
+    就是它的兜底，前端手建标签走的是同一个哈希。
+    """
+    return match_tag_color(spec) or color_for_name(name)
+
+
+def color_cn(hexval: str) -> str:
+    """色板 hex → 规范中文名；色板之外 → 空串（**不编名字**）。"""
+    return _COLOR_CANON.get(str(hexval or "").strip().lower(), "")
+
+
+def describe_color(hexval: str) -> str:
+    """hex → 人话（`粉色（#eb2f96）`）；色板外只有色值可给。"""
+    name = color_cn(hexval)
+    return f"{name}（{hexval}）" if name else str(hexval or "")
+
+
 # ── 文章状态 ─────────────────────────────────────────────────────────
 # 后台那三个单选值（frontend AllNotes 的 Radio：公开/私密/草稿）→ 存储值。
 STATUS_CN = {"public": "公开", "private": "私密", "draft": "草稿"}
@@ -146,14 +222,17 @@ def join_tag_ids(ids) -> str:
 class TagInfo:
     """一个标签的渲染/解析所需全部信息（两级共用同一 id 空间）。"""
 
-    __slots__ = ("id", "name", "level", "father_id", "father_name")
+    __slots__ = ("id", "name", "level", "father_id", "father_name", "color")
 
-    def __init__(self, id, name, level, father_id=None, father_name=""):
+    def __init__(self, id, name, level, father_id=None, father_name="", color=""):
         self.id = id
         self.name = name
         self.level = level
         self.father_id = father_id
         self.father_name = father_name
+        # 站内色板色值（20260921）；接口没给色时为空串——渲染时只说名字，
+        # **不拿哈希补一个**（那是"编一个它其实没有的颜色"）
+        self.color = color
 
     @property
     def label(self) -> str:
@@ -182,7 +261,7 @@ def build_tag_index(tags_one, tags_two) -> dict[int, TagInfo]:
         tid = t.get("tagKey")
         if isinstance(tid, int) and tid > 0:
             name = str(t.get("title") or "").strip()
-            index[tid] = TagInfo(tid, name, 1)
+            index[tid] = TagInfo(tid, name, 1, color=_api_color(t))
             one_by_id[tid] = name
     for t in (tags_two or []):
         if not isinstance(t, dict):
@@ -193,8 +272,23 @@ def build_tag_index(tags_one, tags_two) -> dict[int, TagInfo]:
         fid = t.get("fatherKey")
         fid = fid if isinstance(fid, int) and fid > 0 else None
         index[tid] = TagInfo(tid, str(t.get("title") or "").strip(), 2,
-                             fid, one_by_id.get(fid, "") if fid else "")
+                             fid, one_by_id.get(fid, "") if fid else "",
+                             color=_api_color(t))
     return index
+
+
+def _api_color(tag: dict) -> str:
+    """接口返回里的色值（`color` 字段，Rust 侧存 String 不校验）→ 规整的 `#rrggbb`。
+
+    认不出形态就返回空串（渲染时只说名字）——**不猜**：把 `red` 说成 `#f5222d`
+    是替后端编一个它没给的值。
+    """
+    raw = str(tag.get("color") or "").strip().lower()
+    if not raw:
+        return ""
+    if not raw.startswith("#"):
+        raw = "#" + raw
+    return raw if re.fullmatch(r"#[0-9a-f]{6}", raw) else ""
 
 
 def find_tag(index: dict[int, TagInfo], name: str,
@@ -275,12 +369,20 @@ def level_cn(info: TagInfo) -> str:
 
 
 def render_tag_reuse(info: TagInfo) -> str:
-    return (f"标签「{info.label}」已经存在（id={info.id}，{level_cn(info)}），"
+    """已存在 → 复用。带上它**现有的**颜色（20260921）：用户说"建个粉色的 X"而
+    X 已存在且是蓝色时，narrator 得说得出这个差别（否则回复里给个"粉色"、屏幕上
+    却是个蓝标签）。颜色由接口给，没给就只说名字。"""
+    color = f"，现有颜色：{describe_color(info.color)}" if info.color else ""
+    return (f"标签「{info.label}」已经存在（id={info.id}，{level_cn(info)}{color}），"
             f"直接复用它，没有新建。")
 
 
 def render_tag_created(info: TagInfo) -> str:
-    return (f"已新建{level_cn(info)}标签「{info.label}」（id={info.id}）。"
+    """新建成功的人话。**颜色名 + 色值一起给**（20260921）：narrator 只有拿到
+    这一对，才能在回复里同时写出"粉色"和 `#eb2f96`——前端据此画色块（色块由
+    前端按 hex 画，模型不画符号）。色值缺失时只说名字，不补一个。"""
+    color = f"，颜色：{describe_color(info.color)}" if info.color else ""
+    return (f"已新建{level_cn(info)}标签「{info.label}」（id={info.id}{color}）。"
             f"它目前还挂在标签字典里、没有挂到任何文章上——"
             f"要挂到文章上用 set_article_tags。")
 
@@ -317,6 +419,58 @@ def clip(text: str, limit: int = 60) -> str:
     """回执字段截断（Rust 侧 detail 列宽有限，先在这边收口，避免被截在半截字符上）。"""
     s = str(text)
     return s if len(s) <= limit else s[:limit] + "…"
+
+
+# ── 写操作确认框（20260921）：问句与回复文本都是**确定性中文**────────────
+# 与 agent/reports.py 同一条纪律：能算的都不交给 LLM。这两段文本会直接进
+# ①确认框的问题行 ②那一轮的对话气泡，都是用户一眼看到的东西——让模型写它，
+# 就又多了一处"它可能把没执行的说成已执行"的地方（而这一轮恰好什么都没执行）。
+def _confirm_one(spec: dict) -> str:
+    """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。"""
+    tool = str(spec.get("tool") or "")
+    a = spec.get("args") or {}
+    if tool == "create_tag":
+        title = str(a.get("title") or "").strip() or "（未命名）"
+        level = "二级" if str(a.get("parent_id") or "").strip() else "一级"
+        hexval = match_tag_color(a.get("color")) if a.get("color") else None
+        color = f"，颜色 {describe_color(hexval)}" if hexval else "（按名字自动配色）"
+        return f"新建{level}标签「{title}」{color}"
+    if tool == "set_article_status":
+        head = f"修改文章 {a.get('article_id')}"
+        bits = []
+        st = normalize_status(a.get("status"))
+        if st:
+            bits.append(f"状态改为 {STATUS_CN.get(st, st)}")
+        top = normalize_top(a.get("is_top"))
+        if top is not None:
+            bits.append("置顶" if top == 1 else "取消置顶")
+        return f"{head}：{'、'.join(bits)}" if bits else head
+    if tool == "set_article_tags":
+        return f"修改文章 {a.get('article_id')} 的标签"
+    return f"执行 {tool}"
+
+
+def render_confirm_question(specs) -> str:
+    """确认框的问题行：**把要发生的事说全**（含颜色名与色值），再问一句。
+
+    用户点的是"确定"，他有权在点之前从这句话里看出自己将同意什么——
+    说漏了颜色、说漏了是哪一篇，这个按钮就变成了盲签。
+    """
+    acts = "；".join(_confirm_one(s) for s in (specs or []))
+    return f"要{acts}吗？点「确定」我就去办。"
+
+
+def render_confirm_text(specs) -> str:
+    """弹窗那一轮的**对话气泡正文**（系统给的，不经 narrator）。
+
+    刻意写得像"在等你的意思"而不是"已经在办了"：这一轮零执行。给一个明确
+    的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
+    """
+    acts = "；".join(_confirm_one(s) for s in (specs or []))
+    return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
+            f"**{acts}**\n\n"
+            f"点上面的「确定」我就去办；不想改了就把这个框关掉，"
+            f"或者直接告诉我改成别的。")
 
 
 # ── 后台写：目标校验（"没读到过就不许写"）────────────────────────────

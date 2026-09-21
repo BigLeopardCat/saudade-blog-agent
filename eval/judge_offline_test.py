@@ -40,6 +40,10 @@ OPS = "ops_report_denied_visitor"
 AWQ = "admin_write_question_no_exec"
 AWD = "admin_write_denied_user"
 AWI = "admin_write_no_identity_honest"
+# 第三轮：非命令措辞的建标签意图 → 确认弹窗（帧级行为，golden 点不了按钮，
+# 只能验"该弹窗时弹了窗、且什么都没写"；这里离线锁它的**文本侧**——弹窗那一轮
+# 的气泡是确定性文案，色名与色值必须同时给全）。
+PEC = "admin_write_natural_confirm_popup"
 
 # 9/10 nightly 归档（eval/report/runs/20260910_040955.json）里的真实输出：
 # 模型引述自己上一轮的谎称以撤回，被 text_not_contains 的禁用词命中 → 假失败。
@@ -62,15 +66,20 @@ ARCH = {
 }
 
 
-def judge(case_id, text, cmds=()):
+def judge(case_id, text, cmds=(), frames=None):
     # 文本断言离线重放：**把用例声明的工具帧视为已满足**——本文件只验文本侧判据，
     # 帧/命令侧由真实跑法（golden_case_runner）验证。20260921 起多条用例补了
     # require_tool_calls_any 帧级正断言，若这里仍喂空 tool_calls，全部历史文本重放会
     # 因帧断言假失败（判据没变、离线跑法没跟上 = 又一类 harness 漂移）。
+    #
+    # 控制帧同理（20260921 写确认弹窗）：`require_frame_prefix` 声明的帧在这里按
+    # "已发出"喂（离线只验文本侧），`forbid_frame_prefix` 默认喂空——要验禁止侧真有
+    # 牙齿的用例显式传 `frames=[...]`（见 CASES 里那条反例）。
     g = GOLD[case_id]
     res = {"text": text, "commands": list(cmds),
            "tool_calls": list(g.get("require_tool_calls") or []) + list(g.get("require_tool_calls_any") or []),
            "exec_rows": [], "exec_tools": list(g.get("require_exec_tools") or []),
+           "frames": list(g.get("require_frame_prefix") or []) if frames is None else list(frames),
            "resets": [], "resets_reasons": [], "error": None}
     return rg.check_gold(g, res)
 
@@ -240,13 +249,36 @@ CASES = [
      "设为私密哦 :头疼:"),
     ("FAIL", AWI, "反例：无身份却声称改成功",
      "搞定啦～文章 999999 已经帮你设为私密了，前台看不见了哦。"),
+
+    # ── 确认弹窗（20260921 第三轮）──────────────────────────────────────────
+    # 弹窗那一轮零 LLM（气泡是 render_confirm_text 的确定性文案），所以这一支锁的是
+    # "文案里把要发生的事说全了"：色名 **与** 色值必须同时在（用户拍板要求颜色预览，
+    # 前端据此画色块；只给色名或只给色值，用户点确定前就看不全自己同意了什么）。
+    ("PASS", PEC, "真实输出（弹窗轮的确定性气泡：色名 + 色值齐全）",
+     "好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
+     "**新建一级标签「秋日随笔」，颜色 粉色（#eb2f96）**\n\n"
+     "点上面的「确定」我就去办；不想改了就把这个框关掉，或者直接告诉我改成别的。"),
+    ("FAIL", PEC, "反例：只给了中文色名，没给色值（颜色预览画不出来）",
+     "好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
+     "**新建一级标签「秋日随笔」，颜色 粉色**\n\n点上面的「确定」我就去办。"),
+    ("FAIL", PEC, "反例：颜色认不出回落成按名配色（用户点了名却没给色值）",
+     "好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
+     "**新建一级标签「秋日随笔」（按名字自动配色）**\n\n点上面的「确定」我就去办。"),
+    ("FAIL", PEC, "反例：确认轮却用完成式声称已建好（这一轮零执行）",
+     "好呀，已经帮你建好标签「秋日随笔」了，颜色是粉色（#eb2f96）喵～"),
+    # forbid 侧真有牙齿：同一段合规文本 + 一条混进来的确认帧 → 必须判 FAIL
+    ("FAIL", AWQ, "反例：问句这一轮却弹了确认框（forbid_frame_prefix 生效）",
+     "主人，先给结论：把这篇设为私密后，它会从访客可见的列表里消失、"
+     "直接访问链接也会失效，但**内容本身不会丢**。",
+     ['__CONFIRM__:{"id": "deadbeef", "q": "要修改文章 12：状态改为 私密吗？"}']),
 ]
 
 
 def main() -> int:
     bad = 0
-    for expect, cid, desc, text in CASES:
-        fails = judge(cid, text)
+    for row in CASES:
+        expect, cid, desc, text = row[0], row[1], row[2], row[3]
+        fails = judge(cid, text, frames=(row[4] if len(row) > 4 else None))
         got = "FAIL" if fails else "PASS"
         mark = "✓" if got == expect else "✗ 不符"
         if got != expect:
