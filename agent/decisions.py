@@ -523,11 +523,19 @@ def _any_error_frame(messages: list) -> bool:
                for m in messages if isinstance(m, ToolMessage))
 
 
-def _terminal_plan(has_frames: bool, reason: str) -> dict:
+def _terminal_plan(has_frames: bool, reason: str, note: str = "") -> dict:
     """确定性收尾计划（不经 LLM）：有工具帧 → content_query 如实收尾；无帧
     → chat 如实说明无法确认。reason 注入 note 说明收尾原因（轮次上限/受阻
-    复盘终局共用——reflector wrap_up 与规划超限同性质，不静默 accept）。"""
+    复盘终局共用——reflector wrap_up 与规划超限同性质，不静默 accept）。
+
+    `note` 可直接覆盖整段 note（20260921 剔空纠偏失败时用）：拼出来的句子会变成
+    "……且无任何工具执行记录：如实告知……"这种叠句，而 narrator 对叠句的处置是
+    抓一个它记得住的——纪律文案要一句话说清。传了 note 就不再拼 reason。
+    """
     if has_frames:
+        if note:
+            return {"skill": "content_query", "tools": [], "note": note,
+                    "reply": SKILL_MAP["content_query"].reply_contract, "chat": False}
         return {
             "skill": "content_query",
             "tools": [],
@@ -537,6 +545,9 @@ def _terminal_plan(has_frames: bool, reason: str) -> dict:
             "reply": SKILL_MAP["content_query"].reply_contract,
             "chat": False,
         }
+    if note:
+        return {"skill": "chat", "tools": [], "note": note,
+                "reply": "直接回答", "chat": True}
     return {
         "skill": "chat",
         "tools": [],
@@ -547,14 +558,15 @@ def _terminal_plan(has_frames: bool, reason: str) -> dict:
     }
 
 
-def _wrap_up_plan(has_frames: bool, reason: str = "") -> dict:
+def _wrap_up_plan(has_frames: bool, reason: str = "", note: str = "") -> dict:
     """规划轮次上限强制收尾计划（确定性，不经 LLM，20260903 语义不变）。
 
     reason 可覆盖默认文案（20260912：检索重复拦截改判收尾时若仍写"已达轮次上限"
-    会误导 narrator 与事后复盘——收尾原因要如实）。
+    会误导 narrator 与事后复盘——收尾原因要如实）；note 直接覆盖整段注记。
     """
     return _terminal_plan(has_frames,
-                          reason or f"已达规划轮次上限（{MAX_PLAN_ROUNDS}）")
+                          reason or f"已达规划轮次上限（{MAX_PLAN_ROUNDS}）",
+                          note=note)
 
 
 def _tool_name(tool_spec: str) -> str:

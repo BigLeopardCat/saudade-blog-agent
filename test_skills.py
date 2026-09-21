@@ -2245,10 +2245,10 @@ def test_short_reply_and_adjacent_pairs():
     from string import Formatter
     import agent.graph as g
     fields = {f for _, f, _, _ in Formatter().parse(g._PLANNER_PROMPT) if f}
-    check("planner 模板占位符集合与注入点一致（短应答块已接入）",
+    check("planner 模板占位符集合与注入点一致（短应答块、剔空纠偏块已接入）",
           fields == {"skills_context", "tools_desc", "page_ctx", "intent_hints", "doc_anchors",
                      "round_info", "recent_context", "short_reply_hint", "tool_results",
-                     "ref_hints", "reflector_feedback", "max_rounds", "user_msg"},
+                     "ref_hints", "reflector_feedback", "correction", "max_rounds", "user_msg"},
           f"fields={sorted(fields)}")
     check("planner 模板：短应答块在节选之后、工具结果之前",
           g._PLANNER_PROMPT.index("{recent_context}")
@@ -2378,6 +2378,95 @@ def test_site_guide_covers_nav_map():
         assert kw in g.SITE_GUIDE, f"SITE_GUIDE 缺技能关键词: {kw}"
 
 
+def test_drop_correction():
+    """剔空纠偏（20260921 22:34 生产事故的回归锁）。
+
+    用户报：「小猫咪那篇文章都有什么标签呀」这句的回答被降级了，但是居然就直接
+    结束而不是重新规划执行。现场（trace 20260921T223419）：那篇是草稿，planner
+    点名 `list_admin_notes`——意图对路（公开接口看不见草稿，只有后台工具读得到），
+    但该工具属于 `admin_notes` **技能**、不在 content_query 的 calls 白名单里 ⇒
+    清单被剔空 ⇒ 旧行为把"剔空"当"无需工具的收尾轮"（route_after_planner 见 TOOLS
+    空即去 model）⇒ narrator 对着零工具零帧编出「我刚才查看了文章列表和读取了文章
+    详情」⇒ gate 打回 ⇒ 用户看到一句"被抓包"的降级回复，本轮就此结束。
+
+    现在的契约：剔空 → 确定性纠偏一次（把"零执行"与工具归属写回给它重决策），
+    再剔空 → 确定性如实收尾（零帧轮绝不交给 narrator 自由发挥）。
+    三条锁：① 纠偏文本只写机器能保证的事实（工具归属来自注册表、可见性走
+    visible_skills 那唯一一处角色判据）；② 纠偏真的发生且模型看得见（提示词里）；
+    ③ 两次都剔空 → 收尾注记带"零执行 + 不许声称"。
+    """
+    print("[drop_correction] 点名工具被全量剔除后的纠偏重决策")
+    import agent.graph as G
+    from agent.graph import _drop_correction, parse_plan, planner_node
+    from agent.principal import Principal
+
+    hint = _drop_correction(["list_admin_notes"], "admin")
+    check("纠偏文本点明工具归属的技能（机器从注册表读，不是猜）",
+          "admin_notes" in hint and "PARAMS.calls" in hint, hint[:90])
+    check("纠偏文本写明本轮零执行、并给禁止句",
+          "一个都没有执行" in hint and "不许" in hint)
+    check("非管理员身份**不点名**管理技能（角色可见性仍只有一处判据）",
+          "属于技能" not in _drop_correction(["list_admin_notes"], None))
+    check("臆造的工具名被明确指认为不存在",
+          "没有**这个工具" in _drop_correction(["phantom_tool"], "admin"))
+    check("args 不合法的条目不被说成「够不到这个工具」（那会把 planner 推错方向）",
+          "工具本身你可以调用" in _drop_correction(
+              ["get_article_detail（args 非对象）"], "admin"))
+
+    class _ScriptedLLM:
+        """按剧本作答的假 planner LLM：**记下每次收到的提示词**（纠偏要看得见）。"""
+
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    _DROPPED = ('SKILL=content_query\n'
+                'PARAMS={"calls": [{"tool": "list_admin_notes", "args": {}}]}\n'
+                "REPLY: 如实回答")
+    _FIXED = "SKILL=admin_notes\nPARAMS={}\nREPLY: 如实转述清单"
+    _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
+                             "user_id": 7, "conversation_id": 42, "stop_event": None}}
+    _STATE = {"messages": [HumanMessage(content="小猫咪那篇文章都有什么标签呀")],
+              "plan_rounds": 0, "executed": [], "tool_data": []}
+
+    _orig_llm = G.get_llm
+    try:
+        llm = _ScriptedLLM([_DROPPED, _FIXED])
+        G.get_llm = lambda **kw: llm
+        out = planner_node(dict(_STATE), _CFG)
+        plan = parse_plan(out["plan"])
+        check("剔空后重决策一次（不是就此收尾）", len(llm.prompts) == 2,
+              f"llm_calls={len(llm.prompts)}")
+        check("  第二版决策真的变成了可执行计划（换成技能通道）",
+              plan["tools"] == ["list_admin_notes({})"], f"tools={plan['tools']}")
+        check("  纠偏文本确实进了第二次提示词（模型看得见）",
+              "一个都没有执行" in llm.prompts[1] and "admin_notes" in llm.prompts[1])
+        check("  首决策那次不带纠偏（缺省语，不无谓干扰）",
+              "无纠偏提示" in llm.prompts[0]
+              and "无纠偏提示" not in llm.prompts[1])
+
+        llm2 = _ScriptedLLM([_DROPPED, _DROPPED])
+        G.get_llm = lambda **kw: llm2
+        out2 = planner_node(dict(_STATE), _CFG)
+        plan2 = parse_plan(out2["plan"])
+        check("两次都剔空 → 确定性收尾（零工具，且只问两次不无限重试）",
+              plan2["tools"] == [] and len(llm2.prompts) == 2, f"tools={plan2['tools']}")
+        check("  收尾注记写明本轮零执行 + 禁止句（不许说看过/读过/查过）",
+              "一个工具都没有执行" in (plan2["note"] or "")
+              and "不许" in (plan2["note"] or ""), (plan2["note"] or "")[:120])
+
+        llm3 = _ScriptedLLM([_FIXED])
+        G.get_llm = lambda **kw: llm3
+        planner_node(dict(_STATE), _CFG)
+        check("清单没被剔除时不多问一次（零额外 token）", len(llm3.prompts) == 1,
+              f"llm_calls={len(llm3.prompts)}")
+    finally:
+        G.get_llm = _orig_llm
+
+
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
@@ -2395,7 +2484,7 @@ def main():
                test_scan_action_intents, test_doc_anchors_and_clip,
                test_doc_title_resolution, test_short_reply_and_adjacent_pairs,
                test_no_sibling_tool_name_in_user_text, test_site_guide_is_role_rendered,
-               test_site_guide_covers_nav_map):
+               test_site_guide_covers_nav_map, test_drop_correction):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")

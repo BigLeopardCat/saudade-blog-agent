@@ -91,7 +91,7 @@ from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
                           _CALLABLE_QUERY_TOOLS_ORDER, build_planner_context,
-                          instantiate_plan)
+                          instantiate_plan, visible_skills)
 from utils.trace import record
 
 logger = logging.getLogger(__name__)
@@ -298,6 +298,11 @@ _PLANNER_PROMPT = """\
 复盘建议（reflector 对重复受阻项的 ISSUE 修正指引——仅当上一轮复盘判 replan
 后才有内容；没有则为缺省语，按常规规则决策）：
 {reflector_feedback}
+
+系统纠偏（确定性事实——只在你上一版决策点名的工具**全被剔除、本轮一个工具都没
+执行**时才有内容；正常决策轮是缺省语。有内容时按它重新决策：里面的工具归属是系统
+从技能注册表读出来的，不是猜测）：
+{correction}
 
 判定规则：
 1. 决策类型（SKILL）：
@@ -539,6 +544,47 @@ def _tools_desc() -> str:
 
 
 _QUERY_TOOLS_DESC = _tools_desc()
+
+
+def _drop_correction(dropped: list[str], role: str | None) -> str:
+    """剔空纠偏提示（确定性文本，零 LLM）：planner 点名的工具一个都没执行时，
+    把"这些工具在哪条通道上"写给它看，由它重新决策。
+
+    **为什么要有这一条**（20260921 22:34 生产实证）：管理员问「小猫咪那篇文章都有
+    什么标签呀」——那篇是草稿，公开接口看不见，planner 点名 `list_admin_notes`
+    **是对路的意图**，但该工具属于 `admin_notes` **技能**、不在 content_query 的
+    calls 白名单里 ⇒ 清单被剔空 ⇒ 旧行为当收尾轮处理 ⇒ narrator 零帧编话 ⇒ gate
+    打回 ⇒ 用户看到降级回复且本轮直接结束（用户原话："居然就直接结束而不是重新
+    规划执行"）。纠偏文本只写机器能保证的事实（工具归属从注册表读、可见性走
+    `visible_skills(role)` 这唯一一处角色判据），**不替 planner 选技能、不猜用户意图**。
+    """
+    lines = ["**你上一版决策点名的工具一个都没有执行**（不在你这个身份可点名的调用"
+             "清单里，本轮零工具、零结果）。逐个说明："]
+    for raw_name in dropped:
+        name = str(raw_name).split("（", 1)[0].strip()   # 去掉"（args 非对象）"后缀
+        suffix = str(raw_name)[len(name):]
+        if suffix:
+            # 带后缀 = 工具没问题、是**这条例目**不合法（args 不是对象）——不能
+            # 说成"你够不到这个工具"（那是假的，会把 planner 往错方向推）
+            lines.append(f"- {name}：工具本身你可以调用，但这条例目不合法{suffix}"
+                         f"——args 要写成 JSON 对象（键值对），别写成字符串")
+            continue
+        if name not in _TOOL_MAP:
+            lines.append(f"- {name}：站内**没有**这个工具（工具名必须来自上方清单，不许臆造）")
+            continue
+        owners = [s.name for s in visible_skills(role)
+                  if any(t == name for t, _ in (s.plan or ()))]
+        if owners:
+            lines.append(f"- {name}：它属于技能 {'、'.join(owners)} —— 要用它请把 SKILL "
+                         f"选成那个技能（技能模板会自动带上它），**不要**写进 PARAMS.calls")
+        else:
+            lines.append(f"- {name}：你够不到这个工具——本轮你的身份没有任何可用技能"
+                         f"会用到它，它也不在可点名的查询清单里（需要管理员身份的通道"
+                         f"不会列给当前身份）")
+    lines.append("请重新决策：改用清单里合适的工具或上面点明的技能；确实查不了就"
+                 " SKILL=chat 如实说明查不到。**不许**说「查过/看过/读过/调用过」——"
+                 "本轮确实什么都没执行。")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1775,68 +1821,110 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         f"当前决策：第 {rounds + 1}/{MAX_PLAN_ROUNDS} 轮。"
         + ("本轮已有工具执行帧（见下方结果），决策据此收敛。" if has_frames
            else "本轮尚无工具执行，是首轮决策。"))
-    _t0 = time.monotonic()
-    logger.info("[planner] LLM 调用开始（round %d/%d）", rounds + 1, MAX_PLAN_ROUNDS)
     # 工具帧文本先算一次（下面 format 里要用，trace 里也要记长度）——20260920 起
     # 落 `frames_chars`：单帧上限 20000 是拍出来的经验值，没有真实体量数据就无法
     # 判断"该收该放"（超长文章改造后尤其要能看见节选是否生效）。
     frames_txt = _frame_texts(state["messages"])
-    try:
-        _prompt = _PLANNER_PROMPT.format(
-            # 技能表按本轮角色过滤（20260921）：管理助手那三个技能只对 admin 列出，
-            # 其余角色看不到 ⇒ 选不出来。用 known_role（未知角色 → None → 只列公开技能）
-            skills_context=build_planner_context(role),
-            tools_desc=_QUERY_TOOLS_DESC,
-            page_ctx=page_ctx, round_info=round_info,
-            intent_hints=_intent_hints(state.get("executed") or [], user_msg),
-            doc_anchors=doc_anchors,
-            recent_context=_recent_tail(state["messages"]),
-            # 短应答提示只在首轮（rounds==0）给：第二轮起本轮已有工具帧，短应答
-            # 的语义已由第一轮的规划兑现，再念一遍"把提议那件事规划出来"只会
-            # 诱导重复规划（同一件事已经执行过一次了）。
-            short_reply_hint=(_short_reply_hint(state["messages"]) if rounds == 0
-                              else "（非首轮决策：短应答语义已在上轮兑现）"),
-            tool_results=frames_txt,
-            # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
-            # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
-            ref_hints=ref_hints(state.get("tool_data") or []),
-            reflector_feedback=state.get("issues") or "（本决策轮无复盘建议）",
-            max_rounds=MAX_PLAN_ROUNDS, user_msg=user_msg)
-        resp = llm.invoke(_prompt)
-    except Exception as e:
-        # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
-        # 有帧就基于帧收尾（narrator 仍能正常叙述），无帧走 chat 诚实答复。
-        logger.warning("[planner] LLM 异常，兜底收尾计划: %s", e)
-        plan_obj = _wrap_up_plan(has_frames)
+
+    # ── 决策（最多两次：正常一次 + 剔空纠偏一次）─────────────────────────
+    # 20260921 22:34 生产实证（用户报："被降级了但是居然就直接结束而不是重新规划
+    # 执行"）：管理员问「小猫咪那篇文章都有什么标签呀」，planner 点名
+    # list_admin_notes——**意图是对的**（那篇是草稿，公开接口看不见，只有后台工具
+    # 读得到），但 content_query 的 calls 白名单里没有它（它属于 admin_notes **技能**）
+    # ⇒ 清单被剔空 ⇒ 旧行为把"剔空"当成"无需工具的收尾轮"（route_after_planner 见
+    # TOOLS 空即去 model）⇒ narrator 对着零工具零帧编出「我刚才查看了文章列表和读取了
+    # 文章详情」⇒ gate 打回 ⇒ 用户只看到一句"被抓包"的降级回复，**本轮就此结束**。
+    # 剔空不是"不用查"，是"点错了通道"：确定性纠偏一次——把"你点名的工具一个都没执行"
+    # 与"它属于哪个技能/为什么够不到"（机器从注册表读的）写给它看，让它重新决策
+    # （planner 仍是唯一决策者，这里不替它选技能）。两次都剔空 → 确定性如实收尾。
+    correction = ""
+    for _attempt in (0, 1):
+        _t0 = time.monotonic()
+        logger.info("[planner] LLM 调用开始（round %d/%d%s）", rounds + 1, MAX_PLAN_ROUNDS,
+                    "，剔空纠偏" if correction else "")
+        try:
+            _prompt = _PLANNER_PROMPT.format(
+                # 技能表按本轮角色过滤（20260921）：管理助手那三个技能只对 admin 列出，
+                # 其余角色看不到 ⇒ 选不出来。用 known_role（未知角色 → None → 只列公开技能）
+                skills_context=build_planner_context(role),
+                tools_desc=_QUERY_TOOLS_DESC,
+                page_ctx=page_ctx, round_info=round_info,
+                intent_hints=_intent_hints(state.get("executed") or [], user_msg),
+                doc_anchors=doc_anchors,
+                recent_context=_recent_tail(state["messages"]),
+                # 短应答提示只在首轮（rounds==0）给：第二轮起本轮已有工具帧，短应答
+                # 的语义已由第一轮的规划兑现，再念一遍"把提议那件事规划出来"只会
+                # 诱导重复规划（同一件事已经执行过一次了）。
+                short_reply_hint=(_short_reply_hint(state["messages"]) if rounds == 0
+                                  else "（非首轮决策：短应答语义已在上轮兑现）"),
+                tool_results=frames_txt,
+                # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
+                # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
+                ref_hints=ref_hints(state.get("tool_data") or []),
+                reflector_feedback=state.get("issues") or "（本决策轮无复盘建议）",
+                correction=correction or "（本决策轮无纠偏提示）",
+                max_rounds=MAX_PLAN_ROUNDS, user_msg=user_msg)
+            resp = llm.invoke(_prompt)
+        except Exception as e:
+            # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
+            # 有帧就基于帧收尾（narrator 仍能正常叙述），无帧走 chat 诚实答复。
+            logger.warning("[planner] LLM 异常，兜底收尾计划: %s", e)
+            plan_obj = _wrap_up_plan(has_frames)
+            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
+        # 20260830：慢调用监控——>30s 打 WARN（正常 <5s，慢=服务端排队/长思考，
+        # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）
+        dur = time.monotonic() - _t0
+        slow = dur > 30
+        (logger.warning if slow else logger.info)(
+            "[planner] LLM %s 耗时=%.1fs", "慢调用" if slow else "完成", dur)
+        record("planner", "llm_done", duration_s=round(dur, 2),
+               frames_chars=len(frames_txt), corrected=bool(correction),
+               **({"slow": True} if slow else {}))
+
+        raw = getattr(resp, "content", str(resp))
+        skill_name = re.search(r"SKILL\s*[:=]\s*(\w+)", raw, re.IGNORECASE)
+        skill_name = skill_name.group(1) if skill_name else "chat"
+        params = _parse_params(raw)
+        plan_obj = instantiate_plan(skill_name, params)
+        plan_obj["params"] = params
+
+        # 白名单剔除可见化（20260913 B 项）：planner 点名了白名单外的工具时，条目被
+        # instantiate_plan 剔除——此前无任何记录，planner 以为计划已执行、narrator
+        # 照计划声称"我调用了 X"，agent.log 却查无此事（15:51 trace 实证：planner
+        # 点名 get_social_links，被静默剔除后回复谎称"这次我用专门的社交链接查询工具
+        # 调了一次"）。现在剔除即 WARNING + trace 事件，排障不再靠猜。
+        if plan_obj.get("dropped"):
+            logger.warning("[planner] 点名工具被白名单剔除（不会执行、无帧）：%s（round %d/%d）"
+                           "——若属应支持的数据工具，检查 skills.py 白名单与菜单",
+                           "、".join(plan_obj["dropped"]), rounds + 1, MAX_PLAN_ROUNDS)
+            record("planner", "rejected_call", dropped=plan_obj["dropped"],
+                   skill=plan_obj["skill"], round=rounds)
+
+        # 剔空纠偏（见上方长注）：只有"点名的全被剔除、本轮一个工具都不剩"才重决策；
+        # 已经纠偏过一次、或清单非空、或根本没点名 → 到此为止。
+        if correction or plan_obj["tools"] or not plan_obj.get("dropped"):
+            break
+        correction = _drop_correction(plan_obj["dropped"], role)
+        record("planner", "drop_correct", dropped=plan_obj["dropped"], round=rounds)
+        logger.warning("[planner] 点名工具全被剔除（本轮零工具）→ 剔空纠偏重决策：%s",
+                       "、".join(plan_obj["dropped"]))
+
+    if plan_obj.get("dropped") and not plan_obj["tools"]:
+        # 纠偏之后仍然剔空：这一轮**确实什么都查不了**。确定性如实收尾——绝不把
+        # "零工具零帧"直接交给 narrator（那正是 22:34 那一轮的形态：它只能编）。
+        # 注记里既要写"本轮零执行"这个事实，也要写"你不许说什么"——20260921 的
+        # 教训：写给 narrator 的机制描述会变成它的词汇（写"系统会先弹确认框"，
+        # 它就照抄成"请留意确认弹窗"），所以纪律要写成禁止句。
+        logger.warning("[planner] 剔空纠偏后仍零工具（%s）→ 确定性如实收尾",
+                       "、".join(plan_obj["dropped"]))
+        record("planner", "drop_terminal", dropped=plan_obj["dropped"], round=rounds)
+        plan_obj = _wrap_up_plan(False, note=(
+            "**本轮一个工具都没有执行**（你点名的那几个工具都在可调用清单之外），"
+            "所以你现在**没有任何工具返回可用**。只许如实说明你查不到这项数据："
+            "说清缺的是什么（需要用户指明是哪一篇/需要博主身份/站内没有这项数据），"
+            "并请用户补充信息。**不许**出现「看过/读过/查过/检索过/调用过工具」"
+            "这类说法，也不许描述你做了哪些步骤。"))
         return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
-    # 20260830：慢调用监控——>30s 打 WARN（正常 <5s，慢=服务端排队/长思考，
-    # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）
-    dur = time.monotonic() - _t0
-    slow = dur > 30
-    (logger.warning if slow else logger.info)(
-        "[planner] LLM %s 耗时=%.1fs", "慢调用" if slow else "完成", dur)
-    record("planner", "llm_done", duration_s=round(dur, 2),
-           frames_chars=len(frames_txt),
-           **({"slow": True} if slow else {}))
-
-    raw = getattr(resp, "content", str(resp))
-    skill_name = re.search(r"SKILL\s*[:=]\s*(\w+)", raw, re.IGNORECASE)
-    skill_name = skill_name.group(1) if skill_name else "chat"
-    params = _parse_params(raw)
-    plan_obj = instantiate_plan(skill_name, params)
-    plan_obj["params"] = params
-
-    # 白名单剔除可见化（20260913 B 项）：planner 点名了白名单外的工具时，条目被
-    # instantiate_plan 剔除——此前无任何记录，planner 以为计划已执行、narrator
-    # 照计划声称"我调用了 X"，agent.log 却查无此事（15:51 trace 实证：planner
-    # 点名 get_social_links，被静默剔除后回复谎称"这次我用专门的社交链接查询工具
-    # 调了一次"）。现在剔除即 WARNING + trace 事件，排障不再靠猜。
-    if plan_obj.get("dropped"):
-        logger.warning("[planner] 点名工具被白名单剔除（不会执行、无帧）：%s（round %d/%d）"
-                       "——若属应支持的数据工具，检查 skills.py 白名单与菜单",
-                       "、".join(plan_obj["dropped"]), rounds + 1, MAX_PLAN_ROUNDS)
-        record("planner", "rejected_call", dropped=plan_obj["dropped"],
-               skill=plan_obj["skill"], round=rounds)
 
     # 字面路径防推断兜底（确定性修正，保留自旧架构）：用户消息里出现 / 开头的
     # 路径且 planner 选了 navigate 时，target 必须原样用该路径——qwen 曾把
