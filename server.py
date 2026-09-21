@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field, field_validator
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 
 from agent import adminops as A  # 过程行中文取值（写工具的预告/完成帧共用）
+from agent import confirm  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
 from agent import create_agent
 from agent.graph import AgentCancelled, graph_input
 from agent.principal import Principal
@@ -89,6 +90,10 @@ MAX_IMAGES = 6
 MAX_IMAGE_CHARS = 1_600_000     # ≈1.17MB 二进制（前端压缩后单图 ≤1MB，留余量）
 MAX_TEXT_FIELD_CHARS = 8000     # summary / executions
 MAX_SHORT_FIELD_CHARS = 500     # current_url / page_title
+# 确认令牌：base64url(json) + 签名，签名体里带**已实例化的全部参数**（标签名/标签
+# 数组都在里面）——500 字在"建二级标签 + 长名字"时会被顶到。给足额度（令牌本身
+# 只是 HMAC 材料，不进 prompt、不落库），形状校验交给 confirm.verify（fail-closed）。
+MAX_CONFIRM_TOKEN_CHARS = 4000
 MAX_CONCURRENT_STREAMS = int(os.environ.get("AGENT_MAX_CONCURRENT", "8"))
 STREAM_QUEUE_WAIT = 3.0         # 秒；排队超过这个时间就如实 503，不让请求无声堆着
 
@@ -145,6 +150,16 @@ class ChatRequest(BaseModel):
     # （Rust 侧从 execution_log 读最近 8 条渲染成 "· 屏幕显示「…」" 式行）——
     # 下轮质疑"你刚才屏上写了什么"时据实回答，不重发不编造
     executions: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
+
+    # ── 写操作确认（20260921）────────────────────────────────────────
+    # conversation_id：确认令牌的绑定维度之一（令牌只在这个会话里有效）。
+    # Rust 侧显式转发 body 白名单里的字段，缺了它 conv 恒为 None ⇒ 令牌验不过。
+    conversation_id: int | None = None
+    # confirm_token：**隐藏确认请求**的凭据（前端点了确认框上的「确定」）。
+    # 这是唯一凭据，绑定 uid + 会话 + 10 分钟，服务端零状态（uvicorn 2 workers
+    # ⇒ 内存 pending 表在另一个 worker 上不存在）。Rust 侧对带此字段的请求
+    # **跳过用户消息入库**——所以它不会在历史里留下一条空用户消息。
+    confirm_token: str = Field(default="", max_length=MAX_CONFIRM_TOKEN_CHARS)
 
     @field_validator("image")
     @classmethod
@@ -566,7 +581,10 @@ _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败"
               "ref_path_missing": "引用的字段不存在",
               "ref_not_scalar": "引用取到的不是单个值",
               # 写操作目标无据（graph.execute 的目标校验，20260921 第二轮）
-              "unknown_target": "目标未经确认"}
+              "unknown_target": "目标未经确认",
+              # 上游服务不可用（_check_spec 的 kind=unavailable 分支，20260916 就有；
+              # 20260921 补中文——此前会原样打出英文原因码，用户看到 "unavailable"）
+              "unavailable": "服务不可用"}
 
 
 # 参数引用（agent/refs.py 的 $<工具>[<序号>].<字段>）在过程行里的可读来源名。
@@ -635,10 +653,14 @@ def _tool_action_text(name: str, args: dict | None) -> str:
         # 一级/二级只差一个父 id；标题为空（planner 漏参）时也要给出一行像样的中文
         title = _leaf(a.get("title"))
         pid = _leaf(a.get("parent_id"))
+        # 颜色（20260921）：点名了才显示——过程行是"这件事长什么样"的预告，
+        # 参数里带色就说明用户点了色（没点名时 color 根本不进 args）
+        hexval = A.match_tag_color(a.get("color")) if a.get("color") else None
+        color = f"，颜色 {A.describe_color(hexval)}" if hexval else ""
         if not title:
             return "新建标签"
-        return (f"新建二级标签「{title}」（父标签 id {pid}）" if pid
-                else f"新建一级标签「{title}」")
+        return (f"新建二级标签「{title}」（父标签 id {pid}）{color}" if pid
+                else f"新建一级标签「{title}」{color}")
     if name == "set_article_status":
         aid = _leaf(a.get("article_id"))
         bits = [_leaf(a.get("status"), A.normalize_status, A.STATUS_CN),
@@ -723,14 +745,21 @@ def _specs_from_plan(plan: str) -> list:
 
 def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Queue, loop, user_id: int = 0,
                                stop_event: threading.Event | None = None,
-                               principal: Principal | None = None):
+                               principal: Principal | None = None,
+                               confirm_grant: dict | None = None,
+                               conversation_id: int | None = None):
     """Run agent in a thread, push each chunk into an asyncio.Queue."""
     # user_id 注入 configurable（设备类工具经 RunnableConfig 读取，见 _run_agent_sync 注释）；
     # stop_event 一并注入——图内 model/tools 节点检查它实现断连中断（见 graph.AgentCancelled）
     # principal 一并注入（权限判据的输入，见 _run_agent_sync 注释）
+    # conversation_id 一并注入（20260921）：**确认令牌的签发维度**——弹窗侧
+    #   confirm.sign 把它签进令牌，验签侧要求一致（令牌换个会话就作废）
     # recursion_limit 覆盖默认 9999（等效无界，见 _run_agent_sync 注释）
+    # confirm_grant：已验签的确认令牌 payload（**验签在 /chat/stream，不在图内**）
+    #   ——非空即"用户在确认框上点了确定"这一轮，见 graph.graph_input
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "stop_event": stop_event,
-                               "principal": principal or Principal(uid=user_id)},
+                               "principal": principal or Principal(uid=user_id),
+                               "conversation_id": conversation_id},
               "recursion_limit": RECURSION_LIMIT}
     try:
         # 双 stream_mode：
@@ -770,7 +799,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             asyncio.run_coroutine_threadsafe(queue.put(f"__RESET__:{reason}"), loop).result()
 
         for mode, data in _agent.stream(
-            graph_input(messages),
+            graph_input(messages, confirm_grant=confirm_grant),
             config,
             stream_mode=["messages", "updates"],
         ):
@@ -837,6 +866,26 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                 # execute update 的 receipts 都是请求内全部 PASS 行，末批即全量
                 ex_upd = data.get("execute")
                 if ex_upd:
+                    # 写操作确认弹窗（20260921）：execute 在同意闸上把"有意向但没判成
+                    # 命令"的写 spec 收成一次确认（见 graph._confirm_popup），本轮
+                    # **零执行、零 LLM**——图直接路由到 END（route_after_execute），
+                    # narrator 结构上不会跑，也就不可能出现"已经建好啦"这类叙述。
+                    # 回复正文由 adminops 确定性给出（confirm_text），走 AI 帧是为了
+                    # 让 Rust 照常落库（前端切会话回头还能看见这段问句）。
+                    if ex_upd.get("pending_confirm"):
+                        popup = ex_upd["pending_confirm"]
+                        emit_process("✋ 等待主人确认…", key="confirm_popup")
+                        asyncio.run_coroutine_threadsafe(
+                            queue.put("__CONFIRM__:" + json.dumps(
+                                {"id": uuid.uuid4().hex[:8], "q": popup.get("q", ""),
+                                 "opts": popup.get("opts") or [], "token": popup.get("token", "")},
+                                ensure_ascii=False)),
+                            loop).result()
+                        text = str(ex_upd.get("confirm_text") or "")
+                        if text:
+                            final_reply = text
+                            asyncio.run_coroutine_threadsafe(
+                                queue.put(AIMessageChunk(content=text)), loop).result()
                     # 过程行以 checker 验收为准（20260905 issue5）：✅ 完成帧只对
                     # 新增 PASS 回执发（receipts 累计，diff 起点后为新增，带实际
                     # 内容）；BLOCK 受阻项发 ✗ 行——真实执行失败不再显示"完成"
@@ -909,6 +958,20 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
 
 
+async def _invalid_confirm_stream():
+    """确认令牌验不过时的最小 SSE 流：**一句话 + 结束帧，零执行零 LLM**。
+
+    刻意复用正常帧协议（AI 文本帧 + `__END__`）而不是直接抛 4xx：前端这条隐藏
+    请求走的是同一个 `sendMessage` 流循环，返 HTTP 错误会落进"发送失败"兜底、
+    弹一条重试按钮（隐藏轮不该出现任何用户可见的重试控件）。走正常帧则：
+    Rust 照常落库（主人回头能看见"确认已失效，没有执行任何改动"这句），
+    前端照常渲染成一条 assistant 消息。
+    """
+    text = "这次确认已经失效了（超过 10 分钟、或者不是在同一个会话里点的），我没有执行任何改动。需要的话跟我说一遍要做什么，我再问一次。"
+    yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
+    yield "data: __END__\n\n"
+
+
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest, request: Request):
     # request: FastAPI 注入的原始请求对象（req 是 body 模型）——断连感知用，
@@ -919,6 +982,21 @@ async def chat_stream(req: ChatRequest, request: Request):
         raise HTTPException(503, "Agent not initialised")
     principal = _resolve_principal(request, req.user_id)   # 身份以签名为准（见 _resolve_principal）
     req.user_id = principal.uid
+    # 隐藏确认请求（20260921）：带 confirm_token 的这轮，**令牌就是唯一凭据**
+    # ——Rust 侧已经因为它是隐藏请求而跳过了用户消息入库（历史里没有"用户说要写"
+    # 这条记录）；授权（scope）之后仍照常判，但"用户同意过"这件事只由这张令牌
+    # 证明（签名 / 10 分钟 / uid / 会话四重绑定，见 agent/confirm.py）。
+    # 验不过 = **零执行**：连图都不进——进图会照着 message 文本重新规划，那正是
+    # 要避免的"再走一轮对话"。只如实回一句，不调 planner、不调工具。
+    grant = None
+    if req.confirm_token.strip():
+        grant = confirm.verify(req.confirm_token, principal.uid, req.conversation_id)
+        if grant is None:
+            logger.warning("[confirm] 令牌验签失败（uid=%s conv=%s 长度=%d）→ 零执行",
+                           principal.uid, req.conversation_id, len(req.confirm_token))
+            return StreamingResponse(
+                _invalid_confirm_stream(), media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     # 并发闸（20260916 加固）：LLM 流是最贵的资源（单次最长 180s），无闸时并发涌进来
     # 只会一起排队到超时。**只加在生产路径 /chat/stream 上**——`/chat` 是非流式直连
     # 入口（评测脚本/golden 用，线上 rust.log 实测零访问），不占这条预算。
@@ -939,6 +1017,9 @@ async def chat_stream(req: ChatRequest, request: Request):
             # 本轮是否带跨轮执行回执（gate 的"回执豁免"就靠这个事实，判据复扫时
             # 没有它就只能反推——20260921 补记，见 _state_action_claim 注释）
             "has_exec": bool(req.executions),
+            # 本轮是不是"确认框点确定"的隐藏请求（20260921）。**只记布尔**——
+            # 令牌本身是唯一凭据，绝不进 trace/日志（见 agent/confirm.py 头注）。
+            "has_confirm": bool(req.confirm_token),
         })
     except Exception:
         _release_slot()
@@ -985,7 +1066,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         # 生成结束才一次性下发，等于没有流式）——边生成边推送
         producer_task = _submit_with_context(
             loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id, stop_event,
-            principal
+            principal, grant, req.conversation_id
         )
 
         # 可观测性：请求生命周期账本（帧数/退出原因，finally 汇总）
@@ -1034,7 +1115,13 @@ async def chat_stream(req: ChatRequest, request: Request):
                     return
                 # 过程展示/质检重置控制帧（__PROCESS__:<步骤> / __RESET__:<原因>）：
                 # JSON 编码原样转发，前端归档到灰色可折叠过程行
-                if isinstance(chunk, str) and (chunk.startswith("__PROCESS__") or chunk.startswith("__RESET__")):
+                # __CONFIRM__（20260921）走同一族：**必须 JSON 编码**（帧体是
+                # `__CONFIRM__:<json>`，裸帧在 Rust 的 JSON 解析分支之前拦才行，
+                # 那种做法漏一次就把整坨 JSON 累积进回复并落库）。Rust 侧同族处理
+                # ——只转发、不累积、不落库。
+                if isinstance(chunk, str) and (chunk.startswith("__PROCESS__")
+                                               or chunk.startswith("__RESET__")
+                                               or chunk.startswith("__CONFIRM__")):
                     had_output = True
                     frames += 1
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"

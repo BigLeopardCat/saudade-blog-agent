@@ -69,3 +69,6 @@ jobs:
 
       - name: 管理助手写操作单测（失败取向/三道门·权限·确认·目标/写去重 args-aware/回执契约，秒级，假 httpx 不联网）
         run: uv run python test_admin_write.py
+
+      - name: 写操作确认弹窗单测（确认令牌签发/验签·fail-closed/弹窗触发矩阵/点确定后的执行轮，秒级，纯函数不联网）
+        run: uv run python test_confirm.py

@@ -939,6 +939,9 @@ def create_tag(
     title: Annotated[str, "新标签的名字（如「Python」「分布式」）"],
     config: RunnableConfig,
     parent_id: Annotated[int | None, "父标签的 id（建二级标签时给；建一级标签不填）"] = None,
+    color: Annotated[str | None,
+                     "用户点了名的颜色（中文色名如「粉色」，或站内色板色值如 #eb2f96）；"
+                     "用户没说就不填——不填按标签名哈希取色，同名永远同色"] = None,
 ) -> str:
     """新建一个文章标签：不填 parent_id 建**一级**标签，填了则在该一级标签下建**二级**标签。
     同名标签已存在时**不重复创建**，直接复用并告知它的 id。
@@ -981,7 +984,14 @@ def create_tag(
             f"站内已有同名**二级**标签「{name}」（{'、'.join(c.label + ' id=' + str(c.id) for c in cands)}）；"
             f"如果你要的是它，直接用它；如果确实要新建一个同名一级标签，请说明后再来。本次未创建")
 
-    color = A.color_for_name(name)
+    # 颜色（20260921）：点名了就用它，没点名按名字哈希（同名同色，前端手建同源）。
+    # **点名的色认不出 → 拒绝**，不回落哈希——那会让用户拿到一个他没要的颜色，
+    # 且屏幕上看着"确实建成了"。这是写操作 fail-closed 纪律的一部分。
+    color_spec = str(color or "").strip()
+    picked = A.match_tag_color(color_spec) if color_spec else None
+    if color_spec and picked is None:
+        return unavailable(f"颜色「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}），未创建")
+    color = picked or A.color_for_name(name)
     if pid is not None:
         path, payload = "/api/protected/tagtwo", {"title": name, "color": color, "fatherTag": pid}
     else:
