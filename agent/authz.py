@@ -51,6 +51,16 @@ ALL_SCOPES = frozenset({
 # 写操作：留给后续"人在回路确认"挂钩（见 docs/secretary.md 的前置需求 ③）
 WRITE_SCOPES = frozenset({SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE, SCOPE_WRITE_CONTENT})
 
+# ── 不吃 shadow 开关的 scope（20260921）────────────────────────────────
+# shadow 模式（`enforcing()` 默认 False）的存在理由只有一个：**观测既有流量**，
+# 用真实拒绝率校准授予表，再决定收口——它假定被观测的能力**本来就在跑**。
+# `admin.console` 不满足这个前提：它是 20260921 才第一次有工具声明的**纯新增能力**，
+# 历史流量里一条都没有，没有"观测期"可谈；而在 shadow 期放行等于"谁问都给"，
+# 恰恰是这套模型要防的事。所以它硬拦——判据本身不打折，只是不参与灰度。
+# （同源先例：写操作的 consent 闸也不吃 shadow，见 graph.execute_node。
+#   区别在于 consent 回答"这一次要不要做"，这里回答"这个人能不能做"。）
+_HARD_SCOPES = frozenset({SCOPE_ADMIN_CONSOLE})
+
 # ── 角色 → 授予 ──────────────────────────────────────────────────────
 # 纪律：**授予表必须覆盖该角色当前用得到的全部工具**，否则 shadow 期给出的拒
 # 绝会是我们自己配错，而不是真实越权。user 一档刻意保留 write.device——
@@ -98,6 +108,14 @@ TOOL_SCOPE: dict[str, str] = {
     "toggle_dark_mode": SCOPE_WRITE_PAGE,
     # 物理世界写操作
     "device_oled_display": SCOPE_WRITE_DEVICE,
+    # 管理助手（20260921）：报表类只读工具，但**数据来自后台管理面**——
+    # 它们读的是 Rust `auth_guard` 后面的东西（留言审核视图、全站用户统计），
+    # 以及本机的服务/磁盘/日志。scope 取 admin.console 而不是 read.any：
+    # 秘书可以读"他人数据"，但读**运维面**是博主本人的事（见 docs/secretary.md）。
+    "get_server_status": SCOPE_ADMIN_CONSOLE,
+    "get_service_health": SCOPE_ADMIN_CONSOLE,
+    "get_moderation_status": SCOPE_ADMIN_CONSOLE,
+    "get_user_stats": SCOPE_ADMIN_CONSOLE,
 }
 
 
@@ -203,8 +221,14 @@ def check(principal: Principal | None, tool: str) -> Decision:
     return Decision(False, REASON_DENIED, scope, tool)
 
 
-def enforcing() -> bool:
-    """是否真的拦（默认 False = shadow：只算不拦）。"""
+def enforcing(scope: str | None = None) -> bool:
+    """这个 scope 是否真的拦（默认 False = shadow：只算不拦）。
+
+    `scope=None` = 沿用旧的"全局开关"语义（不知道 scope 的调用点用它）。
+    传了 scope 且它在 `_HARD_SCOPES` 里 → 恒 True（见该常量的注释）。
+    """
+    if scope in _HARD_SCOPES:
+        return True
     from config.settings import settings
     return bool(getattr(settings, "authz_enforce", False))
 

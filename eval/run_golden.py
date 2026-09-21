@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 import server
 from server import ChatRequest, _build_messages, _run_agent_stream_to_queue
 from agent import create_agent
+from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
@@ -94,7 +95,23 @@ def build_request(case: dict) -> ChatRequest:
     )
 
 
-def run_one(req: ChatRequest) -> dict:
+def build_principal(case: dict) -> "Principal":
+    """用例 dict → 本轮调用者身份（20260921 管理助手用例）。
+
+    **身份不走请求体**（与生产一致）：生产上 role 只来自 Rust 签的
+    `X-Agent-Assertion` 头，body 里的角色一律不信；golden 直调内部链路，
+    没有那层 HTTP，所以在这里显式构造——形状与 server 解析断言后的
+    `Principal` 完全一致（uid 取自 `context.user_id`）。
+
+    缺省（用例不写 `context.role`）= `role=None` = 零权限，**既有 78 条用例
+    行为不变**（它们的 context 里本来就没有 role 字段）。
+    """
+    ctx = case.get("context", {})
+    return Principal(uid=ctx.get("user_id", 0), role=ctx.get("role"),
+                     source="golden")
+
+
+def run_one(req: ChatRequest, principal: "Principal | None" = None) -> dict:
     """跑一轮真实对话（内部链路），从帧流提取最终文本 / 命令帧 / 事件。"""
     loop = asyncio.new_event_loop()
     queue = asyncio.Queue()
@@ -118,6 +135,7 @@ def run_one(req: ChatRequest) -> dict:
         ex.submit(
             _run_agent_stream_to_queue,
             _build_messages(req), "golden_thread", queue, loop, req.user_id,
+            None, principal,
         ).result()
     t.join()
     loop.close()
@@ -297,6 +315,15 @@ def check_gold(gold: dict, result: dict) -> list[str]:
     for kw in gold.get("text_not_contains", []):
         if _forbidden_hit(text, kw, exempt):
             fails.append(f"文本不应包含 {kw!r}")
+    # 20260921：负断言的正则族（text_any_regex 的镜像）。动机与 20260912 加
+    # text_any_regex 同源，方向相反：**该"没有"的东西骂不出口就写成形态**——
+    # ops_report_denied_visitor 三跑三种拒答措辞（没法访问/帮不上忙/并没有接入），
+    # 正面词表永远追不上；而"编出一份报表"必然带指标形态（`CPU：3%`、`1.6 GB`），
+    # 那是措辞无关的确定性判据。命中任一即 FAIL。
+    for rx in gold.get("text_not_match_regex", []):
+        m = re.search(rx, text)
+        if m:
+            fails.append(f"文本不应命中正则 {rx!r}（命中片段 {m.group(0)!r}）")
 
     # 20260902：工具调用断言（最终采纳轮必须调用过这些工具）——根治"planner 对、
     # model 零工具编造"类回归（如 233815：模型零工具声称"两边都翻了"），
@@ -424,6 +451,26 @@ def main():
         print(f"[run] 跳过 {len(skip_ids)} 条：{skip_ids}" + (f"（⚠ 不在集合里：{unknown}）" if unknown else ""))
     if args.limit:
         cases = cases[: args.limit]
+
+    # 管理助手「读后台」用例需要**真实 admin uid**（20260921）：用例里刻意不写 uid
+    # （仓库是公开的），改由环境变量给：`GOLDEN_ADMIN_UID=<管理员的 uid>`。
+    # 未设置 → 明确打印 SKIP 并记进 skipped_ids —— **不做静默豁免**：跳过会改变
+    # 通过率分母，必须出现在报告里（同 --skip-ids 的口径）。
+    # 注意这两个用例走的是「以发起人身份代调」，uid 就是准入门槛本身：拿一个
+    # 非 admin 的 uid 跑，它们会如实失败（而不是假通过）。
+    import os as _os
+    admin_uid = _os.environ.get("GOLDEN_ADMIN_UID", "").strip()
+    need_uid = [c["id"] for c in cases if c.get("needs_admin_uid")]
+    if need_uid:
+        if not admin_uid:
+            skip_ids += need_uid
+            cases = [c for c in cases if not c.get("needs_admin_uid")]
+            for cid in need_uid:
+                print(f"[skip] {cid}: SKIP (needs GOLDEN_ADMIN_UID)")
+        else:
+            for c in cases:
+                if c.get("needs_admin_uid"):
+                    c.setdefault("context", {})["user_id"] = int(admin_uid)
     print(f"[run] {len(cases)} 条 golden 样本（真实 LLM，约 {len(cases) * 30}s）\n")
 
     results = []
@@ -433,7 +480,7 @@ def main():
         g = case["gold"]
         req = build_request(case)
         t0 = time.time()
-        result = run_one(req)
+        result = run_one(req, build_principal(case))
         elapsed = time.time() - t0
         fails = check_gold(g, result)
         ok = not fails and not result["error"]

@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     device_service_url: str = "http://127.0.0.1:3100"
 
+    # ── 管理助手：以发起人身份代调后台（20260921）─────────────────────
+    # agent 管理助手要读后台数据（留言审核视图、全站用户统计），而 /api/protected/*
+    # 那道门只认 admin。**通道是"以发起人身份代调"**：agent 用本轮的 uid 现签一个
+    # 60 秒 JWT 打本机 Rust，Rust 的 auth_guard 照旧按 claims.sub 查库判角色
+    # ——所以"谁问的"就是准入结果，agent 自己不持有任何后台凭据，也不新增一处
+    # 授权判据（Rust 侧零改动）。
+    # 只走回环：走公网域名会绕 nginx 一整圈，且这里没有任何需要跨机的理由。
+    agent_admin_base: str = "http://127.0.0.1:3000"
+
     # ── Logging ─────────────────────────────────────────────────────
     log_level: str = "INFO"
 
