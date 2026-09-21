@@ -184,11 +184,12 @@ print("⑨ 写操作的「人在回路」确认（前置需求 ③：权限之�
 # ——写工具落地那天这条必须有人看见它变了）。20260921 晚第三轮从三个变八个：标签
 # 增/改/删 + 分类增/改/删五件新写工具都是"离开用户眼前、写站点内容"的写。
 CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), n)}
-check("需确认的工具恰好是十一个后台写（改宽/改窄都要有人看见）",
+check("需确认的工具恰好是十三个后台写（改宽/改窄都要有人看见）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
                         "create_announcement", "update_announcement",
                         "delete_announcement",
+                        "audit_board_comment", "delete_board_comment",
                         "set_article_status", "set_article_tags"},
       str(sorted(CONSENT_TOOLS)))
 # 公告三件**永不走"同轮命令即确认"**（用户点名要求：内容必须弹窗等管理员确认）。
@@ -208,6 +209,20 @@ check("公告三件即使写成明确命令也判不出确认（捷径结构性�
 check("同一句话对**别的**后台写仍算命令（收窄只落在公告三件上）",
       authz.consent_granted(p(ROLE_ADMIN), "create_tag", "新建一个标签叫 探针标签")
       and authz.consent_granted(p(ROLE_ADMIN), "create_category", "新建一个分类叫 随笔"))
+# 删留言（20260922 第六轮）进"一律弹窗"：动的是**访客写下的内容**、且没有回收站。
+# 与公告三件同一取向，只是理由不同（那三件是"以主人名义对全体访客说话"）。
+_BOARD_DEL_CMDS = ["把 12 号那条留言删了", "删掉那条留言",
+                   "确认删除留言 12", "驳回并删除 id=12 的留言"]
+check("删留言即使写成明确命令也判不出确认（捷径结构性关闭）",
+      all(not authz.consent_granted(p(ROLE_ADMIN), "delete_board_comment", m)
+          for m in _BOARD_DEL_CMDS),
+      str([m for m in _BOARD_DEL_CMDS
+           if authz.consent_granted(p(ROLE_ADMIN), "delete_board_comment", m)]))
+# 审核（通过/驳回）**不在**"一律弹窗"表里：它可改判，与 set_article_status 同类，
+# 走既有的"命令式措辞才免问"。这条锁的是**别把它顺手加进去**（加进去也能工作，
+# 但会让每次复核都多问一遍，且掩盖了"这张表的语义 = 不可逆"）。
+check("留言审核不在「一律弹窗」表里（可改判，与改文章状态同类）",
+      "audit_board_comment" not in authz._ALWAYS_CONFIRM_TOOLS)
 check("写站点内容属于需确认 scope", authz.SCOPE_WRITE_CONTENT in authz.CONSENT_SCOPES)
 check("后台写属于需确认 scope", authz.SCOPE_WRITE_CONSOLE in authz.CONSENT_SCOPES)
 check("页面/设备写不需要确认（效果就在用户眼前）",

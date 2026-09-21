@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import threading
 import time
 
@@ -1818,6 +1819,198 @@ def delete_announcement(
                     "change": "已删除"})
 
 
+# ---------------------------------------------------------------------------
+# 管理助手写工具：河灯留言的人工复核（20260922 第六轮：审核 / 删除）
+# ---------------------------------------------------------------------------
+# 与上一节的公告三件同一套纪律（名字通道 + fail-closed + 读回复核），三处**留言
+# 独有**的事实决定了实现的形状：
+#   ① 留言**没有标题、没有名字**（`talk` 表只有 content/cat/author/时间）：用户嘴里
+#      说的就是**那句话本身** ⇒ 目标通道 = **正文片段**（唯一子串匹配）。这是名字
+#      通道的留言版：目标仍是"用户说过的东西"，解析仍是确定性的，解不出仍然零写。
+#      命中的那条**由工具认、不由模型认**——模型只负责把用户描述的那句原话抄进来。
+#   ② 审核端点的请求体是 `{approved: i8}`，且 **0 = 驳回**（Rust 侧写 approved=2
+#      "未通过"，与"待审 0"区分）——方向传反的后果是"该驳回的给放行了"。所以
+#      **数字由工具内部产生**，上层只说 pass/reject，绝不让模型碰 1/0。
+#   ③ 删除端点对不存在的 id **静默无操作**（`delete_by_id` 不报错，照样返回
+#      "Deleted"）⇒ 同公告取向：**读不回就等于没删掉**，不猜。
+#
+# 与"名字通道"的唯一差别在**歧义的概率**：标签名撞车很罕见，而正文片段
+# （"好"/"谢谢"）一撞就是好几条。所以这里的取向更严——**命中多条一律不替主人挑**
+# （把候选连同作者/时间/原文列出来让他指认），绝不按"最新的那条"猜。
+BOARD_APPROVED_CN = {0: "待审", 1: "已通过", 2: "未通过"}
+
+
+def _board_index(config: RunnableConfig) -> dict[int, dict] | None:
+    """读后台留言清单 → `{talkKey: 行}`；读不到返回 None（≠"没有留言"，同 _tag_index）。
+
+    读的是 `GET /api/protect/board`（后台管理视图，含 approved 与 ai_result 两列，
+    也是 `get_moderation_status` 的同一份数据源）——**写操作的读写必须同一口径**，
+    否则"读的是台账、写的是另一行"这类错会一直藏到线上。
+    """
+    data = _admin_get("/api/protect/board", config)
+    if isinstance(data, ToolResult):
+        return None
+    out: dict[int, dict] = {}
+    for row in data or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            tid = int(row.get("talkKey"))
+        except (TypeError, ValueError):
+            continue
+        row["talkKey"] = tid               # 就地归一成 int：下游 hit["talkKey"] 直接可用
+        out[tid] = row
+    return out
+
+
+def _board_label(row: dict) -> str:
+    """一条留言的指称（问句/回执行共用）：`#id 作者（时间）`。
+
+    **不带正文**：正文由调用方按需 clip 后拼上（问句要预览、回执行只留列宽），
+    而"作者"是访客可控文本（留言时可填），故经 `sanitize_untrusted` 拆命令前缀。
+    """
+    from agent.reports import sanitize_untrusted
+    from agent.adminops import clip as _clip
+    who = sanitize_untrusted(row.get("author") or row.get("nickname") or "", 16)
+    if not who:
+        who = f"用户#{row.get('userId')}"
+    at = str(row.get("createTime") or "")[:16]
+    return f"#{row.get('talkKey')} {_clip(who, 16)}（{at}）"
+
+
+def _board_excerpt(row: dict) -> str:
+    """留言正文的一小段（问句预览用；访客可控 ⇒ 同样消毒）。"""
+    from agent.reports import sanitize_untrusted
+    from agent.adminops import clip as _clip
+    return _clip(sanitize_untrusted(row.get("content") or "", 40), 40)
+
+
+def _find_board_comment(quote, config: RunnableConfig, index=None):
+    """按**正文片段**在留言清单里找一条 → `(行, None)` 或 `(None, 拒绝文本)`。
+
+    与 `_find_named_tag` 同取向（名字通道的留言版）：唯一命中才动手；命中多条
+    **不替用户选**（列出候选让他指认——「好」这种片段一撞就是好几条）；一条都不
+    匹配就如实说没有匹配的留言，**绝不模糊匹配、绝不猜"最新的那条"**；清单读不到
+    则单独一种说法（"读不到" ≠ "没有"）。
+
+    匹配口径：先按**原文子串**（最严）；不中再按**去掉所有空白后**的子串——模型
+    转写用户原话时常把换行/空格抹平（`reports._detail_line` 给 planner 看的明细行
+    也是压成一行的），这一步只为救回这种转写差，不引入任何模糊匹配。
+    `index` 是可选快照（一次操作要读同一份清单两回时用）。
+    """
+    if index is None:
+        index = _board_index(config)
+    if index is None:
+        return None, "读不到后台的留言列表，无法把这段话对应到某条留言，本次未改动"
+    want = str(quote or "").strip()
+    if not want:
+        return None, "没有给出能指认那一条留言的原话片段，本次未改动"
+    hits = [r for r in index.values() if want in str(r.get("content") or "")]
+    if not hits:
+        squashed = re.sub(r"\s+", "", want)
+        if squashed:
+            hits = [r for r in index.values()
+                    if squashed in re.sub(r"\s+", "", str(r.get("content") or ""))]
+    if len(hits) == 1:
+        return hits[0], None
+    if len(hits) > 1:
+        cands = "；".join(f"{_board_label(r)}「{_board_excerpt(r)}」" for r in hits[:5])
+        more = f"（还有 {len(hits) - 5} 条未列出）" if len(hits) > 5 else ""
+        return None, (f"站内有 {len(hits)} 条留言都含「{want}」：{cands}{more}。"
+                      f"无法确定是哪一条，本次未改动——请给一段更完整的原话"
+                      f"（或说明作者/大致时间），我再动手")
+    return None, (f"站内没有含「{want}」的河灯留言，本次未改动"
+                  f"（可能记错了字，或那条已经被删了）")
+
+
+def _board_state_cn(row: dict) -> str:
+    return BOARD_APPROVED_CN.get(row.get("approved"), "状态未知")
+
+
+@tool
+def audit_board_comment(
+    quote: Annotated[str, "用来指认是哪一条留言的**原话片段**（从那条留言正文里原样抄一段，"
+                          "用户说的就是这句；别改写、别概括）"],
+    verdict: Annotated[str, "复核结论：pass=通过（放行展示）/ reject=驳回（隐藏）"],
+    config: RunnableConfig,
+) -> str:
+    """人工复核一条河灯留言：**通过**（放行给所有人看）或**驳回**（隐藏起来）。
+    留言按正文片段指认：片段对不上、或站内有好几条都含这段时什么都不做，并如实
+    说明原因与候选。这一动作**可以改判**（驳回的能再放行），不是删除。
+    需要管理员身份，且要经主人确认才会真正生效。"""
+    from agent import adminops as A
+    v = A.normalize_verdict(verdict)
+    if v is None:
+        return unavailable(f"认不出复核结论「{verdict}」（只能是 通过/pass 或 驳回/reject），未改动")
+    hit, err = _find_board_comment(quote, config)
+    if err:
+        return unavailable(err)
+
+    tid = int(hit.get("talkKey"))
+    want = A.BOARD_VERDICT_APPROVED[v]           # 1=通过 / 2=未通过（见节头注 ②）
+    if hit.get("approved") == want:
+        # 现状即目标：**也走 ok**（这不是失败，"现在就是这样"是事实本身）。
+        return ok(A.render_board_audit_noop(hit, v),
+                  meta={"op": "board_audit", "board_id": tid,
+                        "board_author": str(hit.get("author") or ""),
+                        "change": f"与现在一致（{_board_state_cn(hit)}），无需改动"})
+
+    # 请求体按 Rust 侧口径发：1=通过 / 0=驳回（端点内部把 0 写成 approved=2）。
+    data = _admin_request("PUT", f"/api/protect/board/{tid}/audit",
+                          {"approved": A.BOARD_VERDICT_BODY[v]}, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    after = _board_index(config)
+    if after is None:
+        return unavailable("复核请求已发出，但读不回留言列表、无法确认是否真的改上了"
+                           "——请到后台留言管理页核对")
+    got = after.get(tid)
+    if got is None:
+        return unavailable(f"复核请求已发出，但读回留言列表里找不到 #{tid} 这条留言，"
+                           f"本次改动未确认生效")
+    if got.get("approved") != want:
+        return unavailable(f"复核请求已发出，但读回 #{tid} 的状态是"
+                           f"「{_board_state_cn(got)}」、与预期的「{A.BOARD_VERDICT_CN[v]}」"
+                           f"不一致，本次改动未确认生效")
+    return ok(A.render_board_audited(hit, v),
+              meta={"op": "board_audit", "board_id": tid,
+                    "board_author": str(hit.get("author") or ""),
+                    "change": f"{_board_state_cn(hit)} → {A.BOARD_VERDICT_CN[v]}"})
+
+
+@tool
+def delete_board_comment(
+    quote: Annotated[str, "用来指认是哪一条留言的**原话片段**（从那条留言正文里原样抄一段）"],
+    config: RunnableConfig,
+) -> str:
+    """删除一条河灯留言（**删掉取不回来**，也没有回收站）。
+    留言按正文片段指认：片段对不上、或站内有好几条都含这段时什么都不做，并如实
+    说明原因与候选。**只是要隐藏一条留言时改用审核（驳回），不要删。**
+    需要管理员身份，且要经主人确认才会真正删。"""
+    from agent import adminops as A
+    hit, err = _find_board_comment(quote, config)
+    if err:
+        return unavailable(err)
+
+    tid = int(hit.get("talkKey"))
+    data = _admin_request("DELETE", f"/api/protect/board/{tid}", None, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    after = _board_index(config)
+    if after is None:
+        return unavailable("删除请求已发出，但读不回留言列表、无法确认是否真的删掉了"
+                           "——请到后台留言管理页核对")
+    if tid in after:
+        return unavailable(f"删除请求已发出，但读回留言列表里 {_board_label(hit)} 还在，"
+                           f"本次改动未确认生效")
+    return ok(A.render_board_deleted(hit),
+              meta={"op": "board_delete", "board_id": tid,
+                    "board_author": str(hit.get("author") or ""),
+                    "change": "已删除"})
+
+
 @tool
 def set_article_status(
     article_id: Annotated[int, "文章 id：用户本轮点名了（如「文章 12」）就**直接用点名的那个**，"
@@ -2056,6 +2249,10 @@ _TOOL_REGISTRY = [
     create_announcement,
     update_announcement,
     delete_announcement,
+    # 河灯留言的人工复核（20260922 第六轮）：同样是 write.console，目标=正文片段
+    # （留言没有名字/标题，见 _find_board_comment）
+    audit_board_comment,
+    delete_board_comment,
 ]
 
 def get_all_tools():

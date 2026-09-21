@@ -770,6 +770,17 @@ def _tool_action_text(name: str, args: dict | None) -> str:
             acts.append("正文更新")
         head = f"修改公告「{title}」" if title else "修改公告"
         return f"{head}：{'、'.join(acts)}" if acts else head
+    if name in ("audit_board_comment", "delete_board_comment"):
+        # 河灯留言（20260922 第六轮）：留言没有标题，**正文片段就是它唯一的身份**
+        # ⇒ 过程行报片段（与"报标题不报正文"的公告同一条取向：只报认得出是哪一条的
+        # 那一小截，完整正文留给确认框）。12 字截断沿用 _leaf 的统一口径。
+        quote = _leaf(a.get("quote"))
+        if name == "delete_board_comment":
+            return f"删除留言（含「{quote}」的那条）" if quote else "删除留言"
+        v = A.normalize_verdict(a.get("verdict"))
+        cn = A.BOARD_VERDICT_CN.get(v or "", "")
+        head = f"人工复核留言（含「{quote}」的那条）" if quote else "人工复核留言"
+        return f"{head}：{cn}" if cn else head
     if name in _NOARG_VERB:
         return _NOARG_VERB[name]
     return f"执行 {name}"

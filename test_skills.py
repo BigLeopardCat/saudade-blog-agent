@@ -888,9 +888,10 @@ def test_phantom_tool_claim():
     # 数字写死是**故意的**：工具增减时必须有人来看一眼这条判据（26 → 30 是
     # 20260921 第二轮加的四个后台工具：list_admin_notes + 三个写；30 → 35 是
     # 20260921 晚第三轮加的后台写五件：update_tag/delete_tag + category 三件；
-    # 35 → 38 是 20260922 第五轮加的站内公告三件）。
+    # 35 → 38 是 20260922 第五轮加的站内公告三件；38 → 40 是 20260922 第六轮加的
+    # 河灯留言人工复核两件：audit_board_comment / delete_board_comment）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 38 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 40 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 

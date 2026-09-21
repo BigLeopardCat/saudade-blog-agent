@@ -158,6 +158,11 @@ TOOL_SCOPE: dict[str, str] = {
     "create_announcement": SCOPE_WRITE_CONSOLE,
     "update_announcement": SCOPE_WRITE_CONSOLE,
     "delete_announcement": SCOPE_WRITE_CONSOLE,
+    # 第六轮（20260922）：河灯留言的人工复核（通过/驳回）与删除。同门——改的是
+    # **别人的**留言在站内的可见性，且主人不在那个页面上（后台管理视图里看不到
+    # 那条留言，除非他去翻）。驳回是可改判的，删除不是。
+    "audit_board_comment": SCOPE_WRITE_CONSOLE,
+    "delete_board_comment": SCOPE_WRITE_CONSOLE,
 }
 
 
@@ -185,6 +190,11 @@ CONSENT_SCOPES = frozenset({SCOPE_WRITE_CONTENT, SCOPE_WRITE_CONSOLE})
 # 弹窗都到不了（见 graph._confirm_popup 的顺序）。
 _ALWAYS_CONFIRM_TOOLS = frozenset({
     "create_announcement", "update_announcement", "delete_announcement",
+    # 20260922 第六轮补**删留言**：动的不是主人的东西——那是**访客写下的内容**，
+    # 而且删了没有回收站（`delete_board_comment`）。审核（通过/驳回）**不在这张
+    # 表**：它可改判（驳回的能再放行），且改的只是可见性——与 `set_article_status`
+    # 同类，走既有的"命令式措辞才免问"那条路（判不出来就弹窗，fail-closed 方向不变）。
+    "delete_board_comment",
 })
 
 # 每个需确认的 scope 配一张**确认语表**：用户的**本轮消息**命中才算确认。
