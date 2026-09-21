@@ -3020,6 +3020,20 @@ def route_after_reflector(state: AgentState) -> Literal["planner", "model"]:
 # 5. 组装与编译
 # ---------------------------------------------------------------------------
 
+# 路由表（**路由函数返回的每个标签都必须在这里出现**）：langgraph 的
+# add_conditional_edges 拿到映射表里没有的返回值时抛 KeyError，而这一步发生在
+# **节点已经执行完**之后——写操作已经生效、回执已经落库，流却在收尾前炸掉，
+# 前端只看到一行 `'model'` 这样的报错。
+# 20260921 22:37 生产实证：确认轮（confirm_grant → 写成功 → 直去 narrator）加进来
+# 时漏了 execute 这一侧的 "model" 映射，于是**每一次"点确定"都以报错收场**
+# （标签/状态其实改成了，用户看到的是错误）。test_confirm.py ⑦ 用假工具 + 假 LLM
+# 把整条确认轮跑一遍当回归锁（含"路由标签 ⊆ 映射表"的全扫）。
+PLANNER_ROUTES = {"execute": "execute", "model": "model"}
+EXECUTE_ROUTES = {"planner": "planner", "reflector": "reflector",
+                  "end": END, "model": "model"}
+REFLECTOR_ROUTES = {"planner": "planner", "model": "model"}
+
+
 def build_graph():
     """构建手写图：节点 + 边 + 编译。返回 CompiledStateGraph。
 
@@ -3046,13 +3060,9 @@ def build_graph():
     g.add_node("gate", gate_node)
 
     g.add_edge(START, "planner")
-    g.add_conditional_edges("planner", route_after_planner,
-                            {"execute": "execute", "model": "model"})
-    g.add_conditional_edges("execute", route_after_execute,
-                            {"planner": "planner", "reflector": "reflector",
-                             "end": END})
-    g.add_conditional_edges("reflector", route_after_reflector,
-                            {"planner": "planner", "model": "model"})
+    g.add_conditional_edges("planner", route_after_planner, PLANNER_ROUTES)
+    g.add_conditional_edges("execute", route_after_execute, EXECUTE_ROUTES)
+    g.add_conditional_edges("reflector", route_after_reflector, REFLECTOR_ROUTES)
     g.add_edge("model", "gate")
     g.add_edge("gate", END)
 

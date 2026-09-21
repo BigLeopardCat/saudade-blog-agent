@@ -21,7 +21,7 @@ import json
 import sys
 import time
 
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from tools import base as _base  # 工具的返回值契约（ToolResult：str 子类 + kind）
 
 import agent.graph as g
@@ -29,6 +29,7 @@ from agent import adminops as A
 from agent import authz
 from agent import confirm
 from agent.graph import _confirm_grant_plan, _confirm_popup, execute_node, parse_plan, plan_encode
+from agent.skills import instantiate_plan  # noqa: E402
 from agent.principal import Principal
 
 FAILED: list[str] = []
@@ -303,6 +304,81 @@ check("认不出的颜色 → unavailable（不静默回落成哈希色）",
       "不在站内色板里" in src and "unavailable" in src)
 
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
+
+print("\n⑦ 图接线：确认轮必须能走完（20260921 22:37 生产事故的回归锁）")
+# 事故：`route_after_execute` 对确认轮返回 "model"（写成功 → 直去 narrator），
+# 而 execute 的 `add_conditional_edges` 映射表里**没有 model** —— langgraph 在
+# **节点执行完之后**才抛 KeyError('model')，于是"点确定"的每一次都是：
+# 站内数据真的改了 + 回执落库了 + 前端收到一行报错 `'model'`。
+# 两层锁：① 路由标签必须都在映射表里（结构性，谁漏谁红）；② 用假工具 + 假 LLM
+# 把整条确认轮在图里跑一遍（端到端，零网络零真写）。
+from agent.graph import (EXECUTE_ROUTES, PLANNER_ROUTES,  # noqa: E402
+                         REFLECTOR_ROUTES, build_graph, graph_input,
+                         route_after_execute, route_after_planner,
+                         route_after_reflector)
+
+_GRANT = {"skill": "article_status", "specs": [
+    {"tool": "set_article_status", "args": {"article_id": 12, "status": "private"}}]}
+_ROUTE_CASES = [
+    ("planner", route_after_planner, PLANNER_ROUTES, [
+        {"plan": PLAN_STATUS},
+        {"plan": plan_encode(instantiate_plan("chat", {}))}]),
+    ("execute", route_after_execute, EXECUTE_ROUTES, [
+        {"blocked": []}, {"blocked": [], "confirm_grant": _GRANT},
+        {"blocked": [], "pending_confirm": {"q": "?", "token": "t"}},
+        {"blocked": [{"reason": "error_frame"}], "blocked_seen": ["x"]},
+        {"blocked": [{"reason": "error_frame"}], "blocked_repeat": True}]),
+    ("reflector", route_after_reflector, REFLECTOR_ROUTES, [
+        {"reflect_end": True}, {"reflect_end": False}]),
+]
+for _node, _fn, _routes, _states in _ROUTE_CASES:
+    _seen = {_fn(s) for s in _states}
+    check(f"{_node} 的每个路由去向都有条件边映射（漏了 = 节点跑完才炸）",
+          _seen <= set(_routes), f"{_seen} ⊄ {set(_routes)}")
+check("确认轮执行成功 → 去 narrator（不再回 planner 重规划）",
+      route_after_execute({"blocked": [], "confirm_grant": _GRANT}) == "model")
+check("execute 的条件边**真有** model 这一支（事故点）", "model" in EXECUTE_ROUTES)
+
+
+class _FakeNarrator:
+    """假 narrator：零网络。只被调用一次（确认轮跳过 planner）。
+
+    必须回 **AIMessage**：model_node 是 `return {"messages": [resp]}`，langgraph
+    会拿这个对象当消息用（回自定义对象会在写消息时抛 MESSAGE_COERCION_FAILURE）。
+    """
+
+    def __init__(self):
+        self.calls = 0
+
+    def invoke(self, *a, **kw):
+        self.calls += 1
+        return AIMessage(content="文章 12 已经设为私密啦喵～")
+
+
+_orig_tool = g._TOOL_MAP.get("set_article_status")
+_orig_llm = g.get_llm
+_narr = _FakeNarrator()
+try:
+    g._TOOL_MAP["set_article_status"] = _FakeTool(B.ok("已修改文章 12：公开 → 私密（后台复核读到新值）"))
+    g.get_llm = lambda **kw: _narr
+    _out = build_graph().invoke(
+        graph_input([HumanMessage(content="确认执行：修改文章 12")], confirm_grant=_GRANT),
+        {"configurable": {"principal": Principal(uid=7, role="admin"), "user_id": 7,
+                          "conversation_id": 42, "stop_event": None}})
+    check("确认轮在真图里跑得完（写已生效之后不再炸）",
+          _out.get("done") is True and _narr.calls == 1, f"done={_out.get('done')} calls={_narr.calls}")
+    check("  最终回复来自 narrator（不是报错、不是弹窗文案）",
+          "私密" in str(_out["messages"][-1].content), str(_out["messages"][-1].content)[:60])
+    check("  回执在场（写操作的真回执，跨轮记忆靠它）",
+          [r.get("tool") for r in _out.get("receipts") or []] == ["set_article_status"])
+except Exception as e:  # noqa: BLE001 —— 旧版这里就是 KeyError('model')
+    check("确认轮在真图里跑得完（写已生效之后不再炸）", False, f"{type(e).__name__}: {e}")
+finally:
+    if _orig_tool is None:
+        g._TOOL_MAP.pop("set_article_status", None)
+    else:
+        g._TOOL_MAP["set_article_status"] = _orig_tool
+    g.get_llm = _orig_llm
 
 print()
 if FAILED:
