@@ -322,3 +322,14 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 | ⑥ | 回执顶层 meta 的 `tag_name` 不再被当工具实参读 | `src/routes/chat.rs`（+ 3 条单测） |
 | ⑦ | planner 侧参数语义写进技能描述 + 工具侧"父子同名"确定性拒绝 | `agent/skills.py` / `tools/base.py` |
 | ⑧ | 确认弹窗问句点名父标签（读不到字典则退回 id，不因此不弹窗） | `agent/adminops.py` `_confirm_one/render_confirm_question` + `graph.py` `_confirm_popup` |
+
+### 附二：活体探针补出的两个洞（同一天晚上，**都是判据/纪律缺位，不是执行失败**）
+
+| # | 现场 | 根因（归属五性质） | 落点 |
+|---|------|--------------------|------|
+| ⑨ | 管理员说「把文章 1 置顶」，planner 把后台列表**第一行**（id=46）填进了 `article_id`——它确实读到过 46，于是"目标有据"放行了 | **P3 参数不带来源约束**：id 参数的"有据"只证明**读到过**，不证明**是用户点的那一篇** | `adminops.user_named_article_ids/target_named/target_conflict_frame` + `graph.execute_node`（`target_mismatch`，零写）+ `_confirm_popup`（不一致连窗都不弹） |
+| ⑩ | 「把文章 1 的「摄影」标签去掉」——planner 没产出写 spec，用 chat 回了一句"请再确认一下"，于是**弹窗链路根本没被触发**，用户看到的是又一轮往返 | **叙述权/决定权错位**：planner 把"要不要执行"判成了自己的事（那本是同意闸 + 确认框的事） | `graph.py` planner 规则 4b + `skills.py` 三个写技能描述同句；`adminops._confirm_one` 顺带补"摘哪个标签"（同族盲签） |
+
+两条都在**判据/措辞层**收口（P3/P4 方向的最小动作），并各补了 golden 用例
+（`admin_write_intent_tag_remove_popup` 锁⑩；⑨ 的判据在 `test_admin_write.py` §⑮ +
+`test_confirm.py` 弹窗一节两级锁死，golden 不做真写故不覆盖）。

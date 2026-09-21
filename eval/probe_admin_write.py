@@ -527,7 +527,7 @@ def step7_cross_turn(rep: Report, uid: int, role: str, art_id: int, title: str) 
             rep.fails.append(f"⑦ 复原失败: 库真值 isTop={back} ≠ 0（请手工取消置顶）")
     finally:
         try:
-            backend_send("DELETE", f"/api/chat/conversations/{conv_id}", {}, uid, role)
+            drop_conv(uid, role, conv_id)
             print(f"  已删除探针会话 {conv_id}（级联清 chat_history 与 execution_log）")
         except Exception as e:  # noqa: BLE001
             rep.fails.append(f"⑦ 删除探针会话失败: {e}（请手工删会话 {conv_id}）")
@@ -535,10 +535,19 @@ def step7_cross_turn(rep: Report, uid: int, role: str, art_id: int, title: str) 
 
 
 def _probe_conv(rep: Report, uid: int, role: str, tag: str) -> int | None:
-    """建一个探针会话（跑完删除，级联清 chat_history 与 execution_log）。"""
+    """建一个探针会话（跑完删除，级联清 chat_history 与 execution_log）。
+
+    **不走 backend_send**（20260921 探针自身 BUG 实证）：那个 helper 要 `{code,data}`
+    信封，而 `POST /api/chat/conversations` 是裸的 **201 + `{"id": N}`**（见
+    `src/routes/conversation.rs` 的新建分支）——要求信封会在**建会话这一步**就抛
+    ProbeError，把本条腿整个跳过（且异常在建会话之后抛出 ⇒ 留一条空会话没清）。
+    """
     try:
-        conv = backend_send("POST", "/api/chat/conversations", {}, uid, role)
-        cid = int(conv["id"])
+        body = _http("POST", f"{BASE}/api/chat/conversations", {},
+                     {"Authorization": "Bearer " + login_jwt(uid, role)}, 20)
+        cid = int(body["id"])
+        if cid <= 0:
+            raise ProbeError(f"会话 id 非法: {body!r}")
     except Exception as e:  # noqa: BLE001
         rep.fails.append(f"{tag} 建探针会话失败: {e}")
         print(f"  [FAIL] 建探针会话失败：{e}")
@@ -547,9 +556,20 @@ def _probe_conv(rep: Report, uid: int, role: str, tag: str) -> int | None:
     return cid
 
 
+def drop_conv(uid: int, role: str, cid: int) -> None:
+    """删会话。**不走 backend_send**：会话系列接口是裸 JSON（`{"success":true}` /
+    `{"id":N}`），没有 `{code,data}` 信封——用带信封的 helper 会在**请求已经发出去之后**
+    抛错，于是"删除其实成功了、探针却报 FAIL"，真出错时反而分不清（20260921 实证）。
+    """
+    body = _http("DELETE", f"{BASE}/api/chat/conversations/{cid}", {},
+                 {"Authorization": "Bearer " + login_jwt(uid, role)}, 20)
+    if not body.get("success"):
+        raise ProbeError(f"删会话 {cid}: {body!r}")
+
+
 def _drop_conv(rep: Report, uid: int, role: str, cid: int, tag: str) -> None:
     try:
-        backend_send("DELETE", f"/api/chat/conversations/{cid}", {}, uid, role)
+        drop_conv(uid, role, cid)
         print(f"  已删除探针会话 {cid}")
     except Exception as e:  # noqa: BLE001
         rep.fails.append(f"{tag} 删除探针会话失败: {e}（请手工删会话 {cid}）")

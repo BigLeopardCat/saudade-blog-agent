@@ -460,6 +460,15 @@ def clip(text: str, limit: int = 60) -> str:
 # 与 agent/reports.py 同一条纪律：能算的都不交给 LLM。这两段文本会直接进
 # ①确认框的问题行 ②那一轮的对话气泡，都是用户一眼看到的东西——让模型写它，
 # 就又多了一处"它可能把没执行的说成已执行"的地方（而这一轮恰好什么都没执行）。
+def _name_list(value) -> list[str]:
+    """spec 里的标签名列表 → 干净字符串列表（渲染用；非列表/空值一律当空）。"""
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [str(x).strip() for x in value if str(x or "").strip()]
+
+
 def _confirm_one(spec: dict, index=None) -> str:
     """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
 
@@ -497,7 +506,22 @@ def _confirm_one(spec: dict, index=None) -> str:
             bits.append("置顶" if top == 1 else "取消置顶")
         return f"{head}：{'、'.join(bits)}" if bits else head
     if tool == "set_article_tags":
-        return f"修改文章 {a.get('article_id')} 的标签"
+        # 把**动的是哪几个标签**写进问句（20260921 第三轮）：只说「修改文章 12 的
+        # 标签」，用户没法核对"去掉的到底是不是我说那个"——同族于本函数上面那句
+        # 「说漏了颜色/哪一篇就是盲签」（探针 ⑤ 的现场：主人说摘「摄影」，若 planner
+        # 填了别的标签，问句里看不出来）。
+        bits = []
+        add = _name_list(a.get("add"))
+        rem = _name_list(a.get("remove"))
+        if add:
+            bits.append("加上 " + "、".join(add))
+        if rem:
+            bits.append("去掉 " + "、".join(rem))
+        if "replace" in a:
+            rep = _name_list(a.get("replace"))
+            bits.append(f"整体换成 {'、'.join(rep)}" if rep else "清空全部标签")
+        tail = "：" + "、".join(bits) if bits else ""
+        return f"修改文章 {a.get('article_id')} 的标签{tail}"
     return f"执行 {tool}"
 
 
@@ -530,6 +554,80 @@ def render_confirm_text(specs, index=None) -> str:
 # 原因码是 planner 的输入（rule5 按原因码决定改参还是去问），帧是给 planner 读的，
 # 取回函数给 checker 用（判 BLOCK 并把原因码带进 blocked 链路）。
 REASON_UNKNOWN_TARGET = "unknown_target"
+# 目标与用户点名不一致（20260921 第三轮）：与 unknown_target 分开——那条是"根本没读到过"，
+# 这条是"读到了、但读的是别的"（planner 把清单第一行当成了用户点的那一篇）。
+REASON_TARGET_MISMATCH = "target_mismatch"
+
+
+_NAMED_ARTICLE_RES = re.compile(r"(?:文章|笔记|帖子|文档)\s*[#＃No.、]?\s*(\d{1,7})")
+_NAMED_ORDINAL_RES = re.compile(r"第\s*(\d{1,7})\s*(?:篇|章|条|个)")
+_NAMED_ID_RES = re.compile(r"\bid\s*[=:：]?\s*(\d{1,7})", re.I)
+# 枚举延伸（"文章 12 和 14"/"文章 12、13"）：第一个点名之后紧跟连接词的数字
+# 也算点名——**漏认的代价是不对称的**：少认一个，合法命令里那第二篇会被
+# target_mismatch 判成"改错篇"而拒执行（用户点了三篇只改一篇）；多认一个只是
+# 放宽（命中任一即算对上）。故宁可延伸，但**量词守卫照旧**（"文章 12 和 3 个要点"
+# 里的 3 仍是计数，不是 id）。
+_NAMED_LIST_ITEM_RE = re.compile(r"\s*(?:和|与|跟|及|以及|还有|、|,|，)\s*[#＃]?\s*(\d{1,7})")
+_COUNT_TAIL_RE = re.compile(r"^\s*(?:篇|个|条|次|字|行|块|张|页)")
+
+
+def user_named_article_ids(user_msg: str) -> set[int]:
+    """用户**本轮原话里点名**的文章 id 集合——写侧目标的唯一权威（空集 = 没点名）。
+
+    只认明确指称，不猜：`文章 12` / `文章#12` / `第 12 篇` / `id=12`；同义名词
+    （笔记/帖子/文档）一并认；**枚举也认**（"文章 12 和 14"、"文章 12、13"，
+    见 `_named_list_tail`）——但必须有**第一个带标记的点名**打头，裸数字不猜。
+    宽松的方向是有意的：多认一个只是放宽（命中任一即算对上），少认一个却会让
+    合法命令里那第二篇被判成"改错篇"而拒执行。**计数形态不算**：数字在名词之前
+    （"读了 12 篇文章"）结构上不匹配，"文章 12 篇"/"文章 12 和 3 个要点"这种后面
+    跟量词的显式排除（见 `_COUNT_TAIL_RE`），否则"这篇文章 3 个要点"会被读成
+    点了 id=3。
+    """
+    text = str(user_msg or "")
+    out: set[int] = set()
+    for rx in (_NAMED_ARTICLE_RES, _NAMED_ORDINAL_RES, _NAMED_ID_RES):
+        for m in rx.finditer(text):
+            try:
+                n = int(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            if n <= 0 or n > 9_999_999:
+                continue
+            if rx is _NAMED_ARTICLE_RES and _COUNT_TAIL_RE.match(text[m.end():m.end() + 2]):
+                continue  # 「文章 12 篇」= 计数，不是目标
+            out.add(n)
+            if rx is _NAMED_ARTICLE_RES:
+                out |= _named_list_tail(text, m.end())
+    return out
+
+
+def _named_list_tail(text: str, pos: int) -> set[int]:
+    """点名之后的枚举延伸（"文章 12 **和 14**"）——从 pos 起逐个吃，断了就停。
+
+    只在第一个点名**成立**之后调用（量词守卫已过），逐项仍要过量词守卫，否则
+    "文章 12 和 3 个要点里的那篇"会把 3 认成文章 id。
+    """
+    out: set[int] = set()
+    while True:
+        m = _NAMED_LIST_ITEM_RE.match(text, pos)
+        if not m:
+            return out
+        if _COUNT_TAIL_RE.match(text[m.end():m.end() + 2]):
+            return out
+        n = int(m.group(1))
+        if 0 < n <= 9_999_999:
+            out.add(n)
+        pos = m.end()
+
+
+def target_named(article_id, named: set[int]) -> bool:
+    """id 是否落在用户点名的集合里。**空集 = 判据不启用**（恒 True）。"""
+    if not named:
+        return True
+    try:
+        return int(article_id) in named
+    except (TypeError, ValueError):
+        return False
 
 
 def target_mentioned(article_id, texts) -> bool:
@@ -558,7 +656,26 @@ def unknown_target_frame(name: str) -> str:
             f"或让主人点名是哪一篇，再改；不要凭记忆写一个 id）")
 
 
+def target_conflict_frame(name: str, named: set[int], got) -> str:
+    """写目标与用户点名不一致时的错误帧（checker 判 BLOCK）。
+
+    20260921 第三轮活体探针实证：管理员说「把文章 1 置顶」，planner 把
+    `list_admin_notes` 返回的**第一行**（id=46）填进了 article_id——它读到了 46，
+    所以"目标有据"那条判据放行（46 确实在本轮帧里），但那不是用户点的那一篇。
+    用户原话点名的 id 是权威：不一致就不执行，把"应该改哪一篇"明确写回帧里，
+    让 planner 下一轮自己改回来（禁止由系统替它改写参数——目标必须由用户/planner
+    决定，系统只做否决）。
+    """
+    want = "、".join(str(x) for x in sorted(named))
+    return (f"__ERROR__: 目标与主人点名的不是同一篇[{REASON_TARGET_MISMATCH}]"
+            f"（{name} 这一轮填的是文章 {got}，而主人点名的是文章 {want}——"
+            f"以主人点名的为准，下一轮把 article_id 改成 {want} 再改；"
+            f"若主人确实要动文章 {got}，先把这一点问清楚）")
+
+
 def target_error_reason(text: str) -> str | None:
     """从错误帧取回原因码（非本族帧 → None），供 _check_spec 用。"""
-    return (REASON_UNKNOWN_TARGET
-            if f"[{REASON_UNKNOWN_TARGET}]" in str(text or "") else None)
+    s = str(text or "")
+    if f"[{REASON_TARGET_MISMATCH}]" in s:
+        return REASON_TARGET_MISMATCH
+    return REASON_UNKNOWN_TARGET if f"[{REASON_UNKNOWN_TARGET}]" in s else None
