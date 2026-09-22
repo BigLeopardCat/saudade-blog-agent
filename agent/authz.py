@@ -379,6 +379,12 @@ def _strip_system_tags(text: str) -> str:
     return _SYS_TAG_RE.sub("", text or "", count=1)
 
 
+# 公开别名（20260923）：**确定性快道**的判定入口同样要先剥壳（`decisions._bare`）——
+# 导航快道的两条入口是句首锚定，被同一个壳挡住，自 20260901 起在生产里从未命中过。
+# 共用同一个"用户实际说了什么"的定义，避免两处各写一套剥法再各自漂移。
+strip_system_tags = _strip_system_tags
+
+
 def _console_command(msg: str, tool: str | None = None) -> bool:
     """本轮消息是不是一条明确的后台写命令（确定性、无 LLM）。
 

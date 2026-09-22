@@ -29,7 +29,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from agent.graph import (_PLANNER_OUTPUT_RE, REFLECT_MAX_ROUNDS, _article_fast_path,
                          _check_spec, _display_fast_path, _effect_switch_fast_path,
-                         _nav_fast_path, _parse_params, execute_node, gate_node,
+                         _nav_fast_path, _parse_params, _scan_action_intents,
+                         execute_node, gate_node,
                          plan_encode, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, SKILL_MAP, instantiate_plan
@@ -303,6 +304,50 @@ def test_nav_fast_path():
                 "带我去留言板不用了", "去说说算了别去了", "带我去设备控制台，不用麻烦了"]:
         check(f"快道不命中「{msg}」→ None（落回 LLM）",
               _nav_fast_path(msg) is None, str(_nav_fast_path(msg)))
+
+
+def test_fast_path_shell_transparency():
+    """四条确定性快道对系统消息壳 `[当前问题]: ` 透明（20260923）。
+
+    事故：`server.py` 给本轮用户消息加壳，而导航快道的两条入口都是**句首锚定**
+    （`msg in NAV_MAP` 整串相等 + `_NAV_VERB_RE.match` 的 `^`）⇒ 壳一在就恒不命中。
+    实证：导航快道自 20260901 壳上线起，生产 trace 里 `fastpath(kind=nav)` **一次都
+    没有**；同一次全量 golden 里 article_read/display/effect_switch 都命中、nav 是 0
+    ——因为那三条用 `.search`。判据读的必须是**用户实际说的那句话**，所以四条快道
+    统一经 `decisions._bare` 剥壳（←→ `authz.strip_system_tags`，与同意闸同一口径）。
+
+    ⚠️ 这条测试**必须用带壳形态断言**：20260920 那轮探针直接喂裸句，测的正是那个
+    恒不命中的形态，于是"快道边界安全"的结论对生产毫无意义（当时就是这么栽的）。
+    """
+    print("[fast_path_shell] 快道对 `[当前问题]: ` 壳透明")
+    W = "[当前问题]: "
+    p = _nav_fast_path(W + "带我去设备控制台")
+    check("带壳「带我去设备控制台」命中导航快道（句首锚定的两条入口都要穿得过壳）",
+          p is not None
+          and 'navigate_to({"path": "/device-console/", "confirm": false})' in p["tools"],
+          f"tools={p and p['tools']}")
+    p = _nav_fast_path(W + "回首页")
+    check("带壳「回首页」命中导航快道（整串映射 `msg in NAV_MAP` 也要穿透）",
+          p is not None
+          and 'navigate_to({"path": "/", "confirm": false})' in p["tools"],
+          f"tools={p and p['tools']}")
+    # 剥壳是为了"看到用户的话"，不是放宽判据：排除项在剥壳后照旧生效
+    check("带壳的疑问句仍被排除（不是靠壳挡住，是真的判出疑问）",
+          _nav_fast_path(W + "为什么不能回首页") is None
+          and _nav_fast_path(W + "带我去留言板不用了") is None)
+    # 另外三条快道用 .search，本来就穿得过壳——一并锁住，防以后有人改成 ^ 锚定
+    check("带壳「在屏幕上显示你好」仍命中显示快道", _display_fast_path(W + "在屏幕上显示你好") is not None)
+    check("带壳「把樱花换成下雨」仍命中特效切换快道",
+          _effect_switch_fast_path(W + "把樱花换成下雨", "sakura") is not None)
+    check("带壳「我正在读这篇」仍命中当前文章读取快道",
+          _article_fast_path(W + "我正在读这篇", "current_url=https://saudade.site/article/12")
+          is not None)
+    # 动作意图扫描末段的导航判据同 `_NAV_VERB_RE.match`（句首锚定），同样要剥壳
+    keys = [i["key"] for i in _scan_action_intents(W + "去留言板")]
+    check("带壳的消息也能扫出导航意图（intent_hints 的提示注入不再恒空）",
+          "navigate" in keys, f"keys={keys}")
+    # 用户自己写的方括号注记同样剥掉——他本来就是在下命令（与同意闸同一取证）
+    check("用户自写注记「[求助] 去留言板」同样进快道", _nav_fast_path("[求助] 去留言板") is not None)
 
 
 def test_display_fast_path():
@@ -3090,7 +3135,8 @@ def test_write_desc_no_example_names():
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
-               test_nav_fast_path, test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
+               test_nav_fast_path, test_fast_path_shell_transparency,
+               test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
                test_explicit_tools, test_planner_tool_menu, test_gate_claim_scope, test_gate_frame_checks,
                test_gate_cmd_prefix_meta,
                test_phantom_tool_claim, test_phantom_claim_clause_and_echo_exempt,

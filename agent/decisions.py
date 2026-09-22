@@ -26,6 +26,7 @@ import re
 
 from langchain_core.messages import ToolMessage
 
+from agent.authz import strip_system_tags
 from agent.context import _msg_text
 from agent.skills import FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP, instantiate_plan
 # 与检索侧同一分词（2/3-gram）——候选标题相关性判定复用，避免两套词法
@@ -37,6 +38,22 @@ logger = logging.getLogger(__name__)
 # 收尾（基于已有工具返回如实作答）。防止 planner LLM 无限追问/重复调用烧钱。
 # 每轮 = planner 一次决策；收尾轮（计划 TOOLS 为空）直接走 model，不占用。
 MAX_PLAN_ROUNDS = 4
+
+
+def _bare(user_msg: str) -> str:
+    """快道判定的输入 = **用户实际说的那句话**（剥掉系统消息壳）。
+
+    20260923 实证（这条快道此前是死的）：`server.py` 给本轮用户消息加锚点壳
+    `[当前问题]: `，而导航快道的两条入口都是**句首锚定**——`msg in NAV_MAP`（整串
+    相等）与 `_NAV_VERB_RE.match`（`^`）——壳一在就恒不命中。同一份全量 golden 里
+    `article_read`/`display`/`effect_switch` 三条快道都命中、`nav` 是 **0 次**，
+    正因为那三条用 `.search`：**只有导航这一条被壳架空**（自 20260901 壳上线起，
+    生产 trace 里 `fastpath(kind=nav)` 一次都没有）。剥壳口径与同意闸共用
+    （`authz.strip_system_tags`，同一句注释里记着同款事故）。
+
+    只用于**快道判定**：给模型的 prompt 仍带壳（壳是给模型看的锚点，不是缺陷）。
+    """
+    return strip_system_tags((user_msg or "").strip())
 
 
 # 导航确定性快道（零 LLM）：动词 + 页面别名强模式 → 直接实例化 navigate 计划。
@@ -89,7 +106,7 @@ def _article_fast_path(user_msg: str, page_ctx: str) -> dict | None:
     m = _ARTICLE_URL_RE.search(page_ctx)
     if not m:
         return None
-    if not _ARTICLE_REF_RE.search(user_msg):
+    if not _ARTICLE_REF_RE.search(_bare(user_msg)):
         return None
     article_id = m.group(1)
     plan_obj = instantiate_plan("read_article", {"article_id": article_id})
@@ -123,6 +140,7 @@ def _effect_switch_fast_path(user_msg: str, current_effects: str) -> dict | None
     非目标的其它效果（"改成下雨"不点名时以 current_effects 实况补旧）；
     目标已开着时只关旧（幂等，不重复开）。
     """
+    user_msg = _bare(user_msg)
     if _EFFECT_TALK_GUARD.search(user_msg):
         return None
     m = _SWITCH_VERB_RE.search(user_msg)
@@ -176,7 +194,7 @@ def _nav_fast_path(user_msg: str) -> dict | None:
     映射 → None → planner LLM 按"如实告知没有该页面"处理。已下线页面（友链）同样
     命中（NAV_MAP 值 None），实例化后 note 会要求如实告知、零工具。
     """
-    msg = user_msg.strip().strip("，。！？!?～~、")
+    msg = _bare(user_msg).strip("，。！？!?～~、")
     # 疑问/质疑句式（"为什么""？"等）不是导航请求，直接排除（20260828 事故加固，
     # 见 _NAV_VERB_RE 上方注释）；问路类由 planner LLM 兜底识别为导航意图
     if _QUESTION_RE.search(msg):
@@ -229,9 +247,10 @@ def _display_fast_path(user_msg: str) -> dict | None:
     内容由 execute 节点创作（PARAMS 不填 text，见 _create_display_text）——屏幕
     文案不进 planner 文本通道，杜绝"指令原文残缺片段上屏"。
     """
-    if _QUESTION_RE.search(user_msg) or _NEGATION_RE.search(user_msg):
+    msg = _bare(user_msg)
+    if _QUESTION_RE.search(msg) or _NEGATION_RE.search(msg):
         return None
-    if not _DISPLAY_FAST_RE.search(user_msg):
+    if not _DISPLAY_FAST_RE.search(msg):
         return None
     plan_obj = instantiate_plan("device_display", {})
     plan_obj["params"] = {}
@@ -266,6 +285,10 @@ def _scan_action_intents(user_msg: str) -> list[dict]:
       * 否定式（"别开樱花"）——不做极性推理，直接跳过该意图。
     结果只作提示注入（intent_hints），最终决策仍在 planner。
     """
+    # 与四条快道同一口径：判据读的是**用户实际说的那句话**（剥掉 `[当前问题]: `
+    # 系统壳，见 _bare）。末段的导航判据同 `_NAV_VERB_RE.match` 是句首锚定，
+    # 不剥壳这一支就恒不命中。
+    user_msg = _bare(user_msg)
     if _QUESTION_RE.search(user_msg):
         return []
     intents: list[dict] = []
