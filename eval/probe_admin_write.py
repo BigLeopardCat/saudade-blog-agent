@@ -471,11 +471,68 @@ def step4_status(rep: Report, uid: int, role: str, art_id: int, title: str) -> b
     return restored
 
 
+# ── 快照 → 差分 → 按 id 清理（20260922 修两个真盲区）───────────────────
+# 探针旧口径是"按名字认自己刚建的那一行"，它有两个盲区，且都是**静默**的：
+#   ① 写进去的名字被 planner 转写坏了（掉字 / 剥下划线 / 干脆编一个别的）→ 按整名
+#      匹配恒 0 条，于是既报假 FAIL、`finally` 的兜底也认不出它，残留就留在生产库；
+#   ② 一次请求建了**多于一个**对象（⑥ 实测：planner 一转轮建了两个标签，探针只认
+#      名字对上的那个，另一个成了孤儿）。
+# 改为一律**请求前快照、请求后差分**：新出现的行就是这一腿造的——无论它叫什么名字；
+# 清理同样按 id（**不按名字**），名字对不上不再等于"没造出来"。
+def _tag_snapshot(uid: int, role: str) -> set:
+    """两级标签的全部键（`1:<id>` / `2:<id>`）。"""
+    return set(_tags_full(uid, role))
+
+
+def _tag_created(before: set, uid: int, role: str) -> list:
+    """本次新出现的标签行 `[(键, 原始行), …]`（键带层级，删的时候要用它）。"""
+    return sorted((k, r) for k, r in _tags_full(uid, role).items() if k not in before)
+
+
+def _tag_delete(uid: int, role: str, keys) -> None:
+    """按 id 直删（`{"level","ids"}` 形态，一次一层）。"""
+    by_lv: dict[str, list[int]] = {}
+    for k in keys:
+        lv, tid = str(k).split(":", 1)
+        by_lv.setdefault(lv, []).append(int(tid))
+    for lv, ids in by_lv.items():
+        backend_send("DELETE", "/api/protected/tag",
+                     {"level": "one" if lv == "1" else "two", "ids": ids}, uid, role)
+
+
+def _cat_key(row: dict) -> int:
+    return int(row.get("categoryKey") or row.get("id") or 0)
+
+
+def _cat_snapshot(uid: int, role: str) -> set:
+    return {_cat_key(c) for c in (backend_get("/api/category", uid, role) or [])}
+
+
+def _cat_created(before: set, uid: int, role: str) -> list:
+    return [c for c in (backend_get("/api/category", uid, role) or [])
+            if _cat_key(c) not in before]
+
+
+def _ann_snapshot(uid: int, role: str) -> set:
+    return {int(a.get("id") or 0)
+            for a in (backend_get("/api/public/announcements", uid, role) or [])}
+
+
+def _ann_created(before: set, uid: int, role: str) -> list:
+    return [a for a in (backend_get("/api/public/announcements", uid, role) or [])
+            if int(a.get("id") or 0) not in before]
+
+
+def _note_tag_ids(uid: int, role: str, art_id: int) -> list:
+    """一篇文章的标签 id 列表（库真值；`[]` 表示干净的无标签状态）。"""
+    raw = str(notes_by_id(uid, role).get(art_id, {}).get("noteTags") or "")
+    return [x.strip() for x in raw.replace("[", "").replace("]", "").split(",") if x.strip()]
+
+
 def step5_tags(rep: Report, uid: int, role: str, art_id: int, title: str) -> bool:
     """⑤ 标签加→摘（真写）。标签按名字解析成 id 后仍以**库真值**断言。返回是否已复原。"""
     print(f"\n⑤ 真写：文章 {art_id} 标签加一个再摘掉（--allow-write）")
-    before_note = notes_by_id(uid, role).get(art_id, {})
-    cur_ids = [x for x in str(before_note.get("noteTags") or "").split(",") if x.strip()]
+    cur_ids = _note_tag_ids(uid, role, art_id)
     tmap = tags_all(uid, role)
     cand = sorted(k for k in tmap if k.split(":", 1)[1] not in cur_ids)
     if not cand:
@@ -487,7 +544,6 @@ def step5_tags(rep: Report, uid: int, role: str, art_id: int, title: str) -> boo
     # 库里挂的是 id；两级 id 序列独立，加的时候只需这个名字对应的 id
     print(f"  靶子标签：「{name}」（{lv} 级 id={tid}）")
 
-    restored = False
     for verb, want_in, cmd in (("加", True, f"给文章 {art_id} 加上「{name}」标签"),
                                ("摘", False, f"把文章 {art_id} 的「{name}」标签去掉")):
         try:
@@ -496,8 +552,7 @@ def step5_tags(rep: Report, uid: int, role: str, art_id: int, title: str) -> boo
             rep.fails.append(f"⑤ {cmd}: 请求失败 {e}")
             print(f"  [FAIL] {cmd}：请求失败 {e}")
             break
-        after_ids = [x for x in str(notes_by_id(uid, role).get(art_id, {}).get("noteTags") or "")
-                     .split(",") if x.strip()]
+        after_ids = _note_tag_ids(uid, role, art_id)
         has = tid in after_ids
         kept = all(x in after_ids for x in cur_ids)
         ok = (has == want_in) and kept
@@ -507,15 +562,26 @@ def step5_tags(rep: Report, uid: int, role: str, art_id: int, title: str) -> boo
             rep.fails.append(f"⑤ {verb}标签: 库真值 tags={after_ids}，期望 {name} {'在' if want_in else '不在'}"
                              f"且原有 {cur_ids} 全保留")
             break
-        if verb == "摘":
-            restored = after_ids == cur_ids
-    if not restored:
+    # 复原判据 = **库真值**（20260922 修）：旧口径把"循环跑没跑完"当成"复原了"——
+    # 加标签那一腿失败时（零写，文章一字未动、其实**本来就是原状**）也会打「未复原」，
+    # 于是 ⑦⑧⑨⑩ 被连坐跳过。历次探针里 ⑧⑨⑩（弹窗链路）从没真跑过，根子就在这
+    # 一句；实跑留档里那句「⚠ 未复原：请手工把文章 1 的标签改回 ['10']」是**假警报**：
+    # 那一刻文章就是 ['10']。现在只问一件事：文章标签此刻是不是原状。
+    restored = _note_tag_ids(uid, role, art_id) == cur_ids
+    if restored:
+        print("  ✓ 复原核对：库真值 tags 与原状一致（⑦⑧⑨ 可以接着跑）")
+    else:
         print(f"  ⚠ 未复原：请手工把文章 {art_id} 的标签改回 {cur_ids}（后台 /dashboard）")
     return restored
 
 
 def step6_temp_tag(rep: Report, uid: int, role: str, allow_delete: bool) -> None:
     """⑥ 建临时一级标签（真写）；`--allow-tag-delete` 才删。
+
+    判据与清理一律**按差分**（20260922 修，理由见 `_tag_snapshot` 头注）：旧口径按
+    整名匹配，planner 一转轮建两个标签时（实测：`20260922T1345`，说话的名字建对了、
+    另一个 `20260922_1345_test_tag` 是编的）只认得出名字对上的那个 ⇒ 既判 PASS，
+    又把孤儿留在了生产库里。现在判"本轮新建了几个、都叫什么"。
 
     ⚠ 披露（不做静默处理）：`DELETE /api/protected/tag` 删完会无条件调
     `prune_note_tags`（tags.rs）——那是**全表**清理 `note.tags` 里的悬空引用，
@@ -524,6 +590,7 @@ def step6_temp_tag(rep: Report, uid: int, role: str, allow_delete: bool) -> None
     """
     name = "_探针_" + time.strftime("%m%d%H%M%S")
     print(f"\n⑥ 真写：建一个一次性一级标签「{name}」（--allow-write）")
+    before = _tag_snapshot(uid, role)
     try:
         d = ask_agent(f"新建一个一级标签，名字叫「{name}」", assertion(uid, "admin"))
     except Exception as e:  # noqa: BLE001
@@ -531,25 +598,28 @@ def step6_temp_tag(rep: Report, uid: int, role: str, allow_delete: bool) -> None
         print(f"  [FAIL] 建标签：请求失败 {e}")
         return
     rep.show("建标签", d)
-    tmap = tags_all(uid, role)
-    hit = [k for k, v in tmap.items() if v == name]
-    ok = len(hit) == 1
-    print(f"  [{'PASS' if ok else 'FAIL'}] 库真值：字典里{'有' if hit else '没有'}「{name}」（{hit or '—'}）")
+    made = _tag_created(before, uid, role)
+    got = [str(r.get("title")) for _, r in made]
+    ok = len(made) == 1 and got == [name]
+    print(f"  [{'PASS' if ok else 'FAIL'}] 库真值：本轮新建 {len(made)} 个标签 {got}"
+          f"（期望恰好 1 个、名字是「{name}」）")
     if not ok:
-        rep.fails.append(f"⑥ 建标签: 库真值里找不到「{name}」或找到 {len(hit)} 条（回执不可信）")
-        return
-    tid = hit[0].split(":", 1)[1]
+        rep.fails.append(f"⑥ 建标签：本轮新建 {len(made)} 个 {got}（期望恰好一个「{name}」）"
+                         f"——多出来的每一个都是留在字典里的孤儿")
     if not allow_delete:
-        print(f"  [skip] 删除未跑（未给 --allow-tag-delete）：孤儿标签 id={tid} 留在字典里，"
+        keys = [k for k, _ in made]
+        print(f"  [skip] 删除未跑（未给 --allow-tag-delete）：孤儿标签 {keys} 留在字典里，"
               f"请按需手工删或带 --allow-tag-delete 重跑")
-        rep.warn(f"⑥ 临时标签 id={tid} 未删除（未授权删标签），已如实标注")
+        rep.warn(f"⑥ 临时标签 {keys} 未删除（未授权删标签），已如实标注")
         return
     print("  ⚠ 披露：删除会触发全表 prune_note_tags（清理 note.tags 里的悬空引用），不可回滚")
-    backend_send("DELETE", "/api/protected/tag", {"level": "one", "ids": [int(tid)]}, uid, role)
-    left = [k for k, v in tags_all(uid, role).items() if v == name]
+    # 清理**按 id**、且清本次新建的**全部**行（名字对不对、多没多建，一并清干净）
+    keys = [k for k, _ in made]
+    _tag_delete(uid, role, keys)
+    left = [k for k, _ in _tag_created(before, uid, role)]
     print(f"  [{'PASS' if not left else 'FAIL'}] 删除后库真值：{'已消失' if not left else f'仍在 {left}'}")
     if left:
-        rep.fails.append(f"⑥ 删标签: 删除后「{name}」仍在字典里 {left}")
+        rep.fails.append(f"⑥ 删标签: 删除后本轮新建的行仍在字典里 {left}")
 
 
 def step7_cross_turn(rep: Report, uid: int, role: str, art_id: int, title: str) -> None:
@@ -781,8 +851,10 @@ def step10_color(rep: Report, uid: int, role: str, allow_delete: bool) -> None:
 
     走**弹窗 → 点确定**这条路（而非常用命令快道）：颜色参数正是在"用户说了色名、
     但这句话没判成命令"的场景里最容易丢——丢了就静默回落到哈希色，界面上看不出来。
+    判据与清理按**差分**（20260922 修，同 ⑥）：名字被转写坏了也照样认得出、清得掉。
     """
     name = "_探针色_" + time.strftime("%m%d%H%M%S")
+    before = _tag_snapshot(uid, role)
     print(f"\n⑩ 真写：经弹窗确认建一个带颜色的标签「{name}」（粉色 → #eb2f96）")
     conv_id = _probe_conv(rep, uid, role, "⑩")
     if conv_id is None:
@@ -800,27 +872,31 @@ def step10_color(rep: Report, uid: int, role: str, allow_delete: bool) -> None:
         d10 = stream_rust(f"确认执行：{payload.get('q') or ''}", uid, role, conv_id,
                           confirm_token=payload["token"])
         clean_end(rep, "⑩ 点确定（真写轮）", d10)
-        hit = [(k, t) for k, t in _tags_with_color(uid, role).items() if t[0] == name]
-        print(f"  [{'PASS' if hit else 'FAIL'}] 库真值：字典里{'有' if hit else '没有'}「{name}」（{hit or '—'}）")
-        if not hit:
-            rep.fails.append(f"⑩ 库真值里找不到「{name}」= 没建成")
+        made = _tag_created(before, uid, role)
+        got = [str(r.get("title")) for _, r in made]
+        ok = len(made) == 1 and got == [name]
+        print(f"  [{'PASS' if ok else 'FAIL'}] 库真值：本轮新建 {len(made)} 个标签 {got}"
+              f"（期望恰好 1 个、名字是「{name}」）")
+        if not ok:
+            rep.fails.append(f"⑩ 库真值：本轮新建 {len(made)} 个 {got}（期望恰好一个「{name}」）")
+        keys = [k for k, _ in made]
+        if not keys:
             return
-        key, (title, color) = hit[0]
-        okc = (color or "").lower() == "#eb2f96"
+        color = str(made[0][1].get("color") or "")
+        okc = color.lower() == "#eb2f96"
         print(f"  [{'PASS' if okc else 'FAIL'}] 库真值颜色 = {color!r}（期望 #eb2f96）")
         if not okc:
             rep.fails.append(f"⑩ 库真值颜色是 {color!r} ≠ #eb2f96 = 用户点名的颜色被换了")
-        tid = key.split(":", 1)[1]
         if not allow_delete:
-            print(f"  [skip] 删除未跑（未给 --allow-tag-delete）：孤儿标签 id={tid} 留在字典里")
-            rep.warn(f"⑩ 临时标签 id={tid} 未删除（未授权删标签），已如实标注")
+            print(f"  [skip] 删除未跑（未给 --allow-tag-delete）：孤儿标签 {keys} 留在字典里")
+            rep.warn(f"⑩ 临时标签 {keys} 未删除（未授权删标签），已如实标注")
             return
         print("  ⚠ 披露：删除会触发全表 prune_note_tags（清理 note.tags 里的悬空引用），不可回滚")
-        backend_send("DELETE", "/api/protected/tag", {"level": "one", "ids": [int(tid)]}, uid, role)
-        left = [k for k, t in _tags_with_color(uid, role).items() if t[0] == name]
+        _tag_delete(uid, role, keys)
+        left = [k for k, _ in _tag_created(before, uid, role)]
         print(f"  [{'PASS' if not left else 'FAIL'}] 删除后库真值：{'已消失' if not left else f'仍在 {left}'}")
         if left:
-            rep.fails.append(f"⑩ 删标签: 「{name}」仍在字典里 {left}")
+            rep.fails.append(f"⑩ 删标签: 本轮新建的行仍在字典里 {left}")
     finally:
         _drop_conv(rep, uid, role, conv_id, "⑩")
 
@@ -1073,15 +1149,10 @@ def _drive_or_click(rep: Report, uid: int, role: str, conv_id: int,
     return d2
 
 
-def _ann_by_token(uid: int, role: str, token: str) -> list:
-    """按**时间戳 token** 认本次发的那条公告（不按整名匹配，同 _cat_by_token）。
-
-    公告是对**全体访客可见**的东西，所以这一腿的清理比标签/分类更要紧：认人必须
-    只靠探针自己生成的 token（planner 转写标题掉字/剥下划线时，按整名匹配会认不出，
-    残留就留在首页上了）。
-    """
-    return [a for a in (backend_get("/api/public/announcements", uid, role) or [])
-            if token in str(a.get("title") or "")]
+# 公告这一腿的认人方式同 ⑭：**请求前快照、请求后差分**（`_ann_snapshot` / `_ann_created`）。
+# 公告是对**全体访客可见**的东西，所以这里的清理最要紧——旧口径按标题里的时间戳 token
+# 认人，标题被 planner 转写坏了（掉字/剥下划线）时既报假 FAIL、兜底也认不出，残留就留在
+# 首页上了。差分把这条盲区整个拿掉：本轮新出现的行一律按 id 清。
 
 
 def _ann_confirm(rep: Report, uid: int, role: str, conv_id: int, msg: str,
@@ -1131,6 +1202,7 @@ def step16_announcement(rep: Report, uid: int, role: str) -> None:
     conv_id = _probe_conv(rep, uid, role, "⑯")
     if conv_id is None:
         return
+    before = _ann_snapshot(uid, role)
     try:
         # ① 代发：**命令式措辞**（"发一条公告…"）也必须弹窗（用户点名要求）
         first = _ann_confirm(rep, uid, role, conv_id,
@@ -1141,13 +1213,18 @@ def step16_announcement(rep: Report, uid: int, role: str) -> None:
         q = (first[0].get("q") or "")
         rep.check("正文" in q and "维护" in q,
                   f"⑯ 问句里没有正文预览（主人等于盲签一条对全体访客可见的公告）：{q!r}")
-        hit = _ann_by_token(uid, role, token)
-        print(f"  [{'PASS' if len(hit) == 1 else 'FAIL'}] 库真值：公告表里"
-              f"{'有' if hit else '没有'}本次发的公告（{len(hit)} 条）")
+        # 差分（20260922 修）：新出现的公告行就是本轮发的——标题被转写坏了也认得出、
+        # 清得掉（旧口径按 token 认人，标题丢了时残留就留在首页上了，那是最贵的残留）。
+        hit = _ann_created(before, uid, role)
+        print(f"  [{'PASS' if len(hit) == 1 else 'FAIL'}] 库真值：本轮新建 {len(hit)} 条公告"
+              f"（{[(a.get('id'), a.get('title')) for a in hit]}，期望 1 条）")
         if len(hit) != 1:
-            rep.fails.append(f"⑯ 代发：按 token {token} 在公告表里命中 {len(hit)} 条（期望 1）")
+            rep.fails.append(f"⑯ 代发：本轮新建 {len(hit)} 条公告（期望 1）")
             return
         aid = int(hit[0].get("id"))
+        if str(hit[0].get("title") or "") != name:
+            rep.warns.append(f"⑯ 代发：说「{name}」、库里标题是 "
+                             f"{str(hit[0].get('title'))!r}（转写掉字，功能本身正常）")
         if body1 not in str(hit[0].get("content") or ""):
             rep.fails.append(f"⑯ 代发：库里的正文与主人给的原文不一致"
                              f"（{str(hit[0].get('content'))[:60]!r}）")
@@ -1172,42 +1249,40 @@ def step16_announcement(rep: Report, uid: int, role: str) -> None:
         # ③ 删除：读回确认真的没了（DELETE 对不存在的 id 静默 no-op）
         third = _ann_confirm(rep, uid, role, conv_id, f"把公告「{name}」删掉",
                              "⑯ 删除", "announcement_delete")
-        left = _ann_by_token(uid, role, token)
+        left = _ann_created(before, uid, role)
         print(f"  [{'PASS' if not left else 'FAIL'}] 库真值：删除后公告表里"
               f"{'已没有本次发的公告' if not left else '仍有 ' + str([a.get('title') for a in left])}")
         if left:
-            rep.fails.append(f"⑯ 删除：按 token {token} 仍能查到 "
+            rep.fails.append(f"⑯ 删除：本轮发的公告仍在表里 "
                              f"{[a.get('title') for a in left]}")
         if third is None:
             return
     finally:
         _drop_conv(rep, uid, role, conv_id, "⑯")
-        # 兜底：公告对全体访客可见，任何中途失败都必须在这里清干净
+        # 兜底：公告对全体访客可见，任何中途失败都必须在这里清干净——按**差分**删
+        # （本轮新出现的每一条，无论标题对不对），删完再读一次确认真的没了。
         try:
-            for a in _ann_by_token(uid, role, token):
+            for a in _ann_created(before, uid, role):
                 k = int(a.get("id"))
                 backend_send("DELETE", "/api/protected/announcements", [k], uid, role)
                 print(f"        兜底：已删掉残留公告 id={k}")
-            left = _ann_by_token(uid, role, token)
+            left = _ann_created(before, uid, role)
             if left:
                 rep.warns.append(f"⑯ 兜底清理后仍有残留公告："
-                                 f"{[a.get('title') for a in left]}——请手工清理")
+                                 f"{[(a.get('id'), a.get('title')) for a in left]}——请手工清理")
         except Exception as e:  # noqa: BLE001
             rep.warns.append(f"⑯ 兜底清理公告失败（请手工清理 token={token} 的公告）：{e}")
 
 
-def _cat_by_token(uid: int, role: str, token: str) -> list:
-    """按**时间戳 token** 认自己建的那个分类（不按整名匹配）。
-
-    20260922 实测教训：探针用 `_探针分类_<ts>` 这种带首尾下划线的名字时，planner 把
-    首尾下划线当成 markdown 强调剥掉了（trace `20260922T003716`：用户说
-    「叫_探针分类_0922003716」、planner 传 `title="探针分类_0922003716"`）⇒ 库真值
-    与探针期望的名字不再字面相等、按整名匹配恒 0 条，腿⑭ 假 FAIL，且 finally 的
-    兜底清理也认不出来、把分类留在了生产库里。故：① 名字不带首尾下划线；② 一律按
-    token 认人（token 是探针自己生成的时间戳，一定落在名字里）。
-    """
-    return [c for c in (backend_get("/api/category", uid, role) or [])
-            if token in str(c.get("categoryTitle") or "")]
+# 认人方式的三代教训（⑭ 曾经用过的两种都栽过，现行是差分，见 `_cat_snapshot`）：
+#   ① 按**整名**匹配：planner 转写名字时掉字/剥下划线就恒 0 条（trace `20260922T003716`：
+#      用户说「叫_探针分类_0922003716」、planner 传 `title="探针分类_0922003716"`——首尾
+#      下划线被当成 markdown 强调剥掉了）⇒ 腿⑭ 假 FAIL，且 finally 的兜底清理也认不出，
+#      把分类留在了生产库里。
+#   ② 按**token 子串**匹配：只要名字里还留着时间戳就认得出，但 token 被吃掉时就同样
+#      失效，且认不出"多建的那一个"（token 只在一个名字里）。
+#   ③ 现行 = **请求前快照、请求后差分**（⑭⑥⑩⑯ 统一）：新出现的行就是这一腿造的，
+#      叫什么名字都跑不掉，清理一律按 id。
 
 
 def step14_category(rep: Report, uid: int, role: str) -> None:
@@ -1225,14 +1300,17 @@ def step14_category(rep: Report, uid: int, role: str) -> None:
     if conv_id is None:
         return
     cur = name  # 库真值里的**实际**名字（改名腿拿它当靶子）
+    before = _cat_snapshot(uid, role)
     try:
         d1 = stream_rust(f"新建一个分类，叫「{name}」", uid, role, conv_id)
         clean_end(rep, "⑭ 建分类轮", d1)
-        hit = _cat_by_token(uid, role, token)
-        print(f"  [{'PASS' if len(hit) == 1 else 'FAIL'}] 库真值：分类表里"
-              f"{'有' if hit else '没有'}本次建的分类（{len(hit)} 条）")
+        # 差分（20260922 修）：新出现的分类行就是这一轮建的——名字被转写坏了也认得出
+        # （旧口径按 token 认人，名字里 token 被吃掉时既报假 FAIL、兜底也漏清理）。
+        hit = _cat_created(before, uid, role)
+        print(f"  [{'PASS' if len(hit) == 1 else 'FAIL'}] 库真值：本轮新建 {len(hit)} 个分类"
+              f"（{[(c.get('categoryKey'), c.get('categoryTitle')) for c in hit]}，期望 1 条）")
         if len(hit) != 1:
-            rep.fails.append(f"⑭ 建分类：按 token {token} 在分类表里命中 {len(hit)} 条（期望 1）")
+            rep.fails.append(f"⑭ 建分类：本轮新建 {len(hit)} 个分类（期望 1）")
             return
         cur = str(hit[0].get("categoryTitle") or name)
         if cur != name:
@@ -1249,23 +1327,24 @@ def step14_category(rep: Report, uid: int, role: str) -> None:
         if not ok2:
             rep.fails.append(f"⑭ 改分类：库真值里新名字「{name2}」缺席或旧名字「{cur}」还在")
         d3 = _drive_or_click(rep, uid, role, conv_id, f"删掉分类「{name2}」", "⑭ 删分类轮")
-        left = _cat_by_token(uid, role, token)
-        # 判据按 token 认人（不按 name2 匹配）：20260922 实测过一次**假 PASS**——
-        # 改名那轮弹了窗没执行 ⇒ name2 从未存在 ⇒ "name2 不在表里"自然成立，
-        # 而真行还挂在表里（靠 finally 的兜底清理才没留下残留）。
+        left = _cat_created(before, uid, role)
+        # 判据按**差分**认人（不按 name2 也不按 token）：20260922 实测过一次**假 PASS**——
+        # 改名那轮弹了窗没执行 ⇒ name2 从未存在 ⇒ "name2 不在表里"自然成立，而真行还挂
+        # 在表里（靠 finally 的兜底清理才没留下残留）；按 token 认人又栽在"名字里的
+        # token 被 planner 吃掉"上（20260922T003716，下划线被当 markdown 强调剥掉）。
         ok3 = not left
         print(f"  [{'PASS' if ok3 else 'FAIL'}] 库真值：删除后分类表里"
               f"{'已没有本次建的分类' if ok3 else '仍有 ' + str([c.get('categoryTitle') for c in left])}")
         if not ok3:
-            rep.fails.append(f"⑭ 删分类：按 token {token} 仍能查到 "
+            rep.fails.append(f"⑭ 删分类：本轮新建的行仍在表里 "
                              f"{[c.get('categoryTitle') for c in left]}")
     finally:
         _drop_conv(rep, uid, role, conv_id, "⑭")
-        # 中途炸在最坏的位置时兜一手：按 token 认人直接删掉（token 是本轮生成的，认不错）
+        # 中途炸在最坏的位置时兜一手：把**本轮新出现的**分类行按 id 全删掉
         try:
-            for c in _cat_by_token(uid, role, token):
-                k = c.get("categoryKey") or c.get("id")
-                backend_send("DELETE", "/api/protected/category", [int(k)], uid, role)
+            for c in _cat_created(before, uid, role):
+                k = _cat_key(c)
+                backend_send("DELETE", "/api/protected/category", [k], uid, role)
                 print(f"        兜底：已删掉残留分类 id={k}")
         except Exception as e:  # noqa: BLE001
             rep.warns.append(f"⑭ 兜底清理分类失败（请手工清理 token={token} 的分类）：{e}")
@@ -1343,13 +1422,8 @@ def step15_loud_target(rep: Report, uid: int, role: str) -> None:
         _drop_conv(rep, uid, role, conv_id, "⑮")
 
 
-def _tags_with_color(uid: int, role: str) -> dict:
-    """`{"1:<id>": (title, color)}`——⑩ 要读颜色（探针直读后端，不看工具回执）。"""
-    out = {}
-    for lv, path in (("1", "/api/tagone"), ("2", "/api/tagtwo")):
-        for t in (backend_get(path, uid, role) or []):
-            out[f"{lv}:{t['tagKey']}"] = (t.get("title"), t.get("color") or "")
-    return out
+# （原 `_tags_with_color` 已并入 `_tag_created`：⑩ 现在读的是差分出来的**原始行**
+#  ，颜色直接取 `row["color"]`，与"这一轮到底建了什么"同一份数据，不再绕一层。）
 
 
 def main() -> int:
