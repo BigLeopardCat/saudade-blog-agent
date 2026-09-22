@@ -569,6 +569,10 @@ _NOARG_VERB = {
     # 后台文章列表（20260921 第二轮，**读**）：无参，同上面四个报表工具——
     # planner 点不到名（不在 _EXPLICIT_TOOLS），由 admin_notes 技能模板展开。
     "list_admin_notes": "查看后台文章列表",
+    # 用户自己的数据（20260923）：planner 直接点名（在 _EXPLICIT_TOOLS 里）
+    "list_my_favorites": "查看我的收藏",
+    "get_unread_summary": "查看未读汇总",
+    "list_notifications": "查看站内通知",
 }
 
 _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",

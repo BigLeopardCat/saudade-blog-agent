@@ -138,6 +138,12 @@ TOOL_SCOPE: dict[str, str] = {
     # 自己的私有数据（服务端按 uid 过滤，见 tools/base.py）
     "get_chat_history": SCOPE_READ_OWN,
     "list_devices": SCOPE_READ_OWN,
+    # 收藏 / 未读汇总 / 站内通知（20260923）：同样只读自己那一份
+    # （Rust `/api/protected/favorites|notifications*` 全走 auth_uid）。
+    # 三档角色都有这一档，匿名没有——匿名时工具层直接不发请求并如实说未登录。
+    "list_my_favorites": SCOPE_READ_OWN,
+    "get_unread_summary": SCOPE_READ_OWN,
+    "list_notifications": SCOPE_READ_OWN,
     # 作用于访客自己的页面
     "navigate_to": SCOPE_WRITE_PAGE,
     "toggle_effect": SCOPE_WRITE_PAGE,

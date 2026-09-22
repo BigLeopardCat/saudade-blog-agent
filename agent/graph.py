@@ -1033,6 +1033,9 @@ _CONTENT_TOOLS = frozenset({
     # **三个写工具刻意不进这个集合**：本集合的语义是"跑过 ⇒ 检索/读取声称有据"，
     # 塞写工具会让"建了个标签"变成"我检索过"的证据（5d/5f 的判据是内容域帧）。
     "list_admin_notes",
+    # 用户自己的数据（20260923）：跑过 = "我手上就是你自己那份收藏/通知"，
+    # 与上面四族同一条道理——缺了它们，"你还没有未读通知"这句站内结论就没有帧。
+    "list_my_favorites", "get_unread_summary", "list_notifications",
 })
 # 命令前缀文本：回复正文出现系统命令帧前缀 = 模型在"假装发命令"（旧事故：正文
 # 输出 AUTO_NAVIGATE:/NAVIGATE:/EFFECT:/DARKMODE: 文本既不会执行、还误导用户
