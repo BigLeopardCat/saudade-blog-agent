@@ -890,9 +890,11 @@ def test_phantom_tool_claim():
     # 20260921 第二轮加的四个后台工具：list_admin_notes + 三个写；30 → 35 是
     # 20260921 晚第三轮加的后台写五件：update_tag/delete_tag + category 三件；
     # 35 → 38 是 20260922 第五轮加的站内公告三件；38 → 40 是 20260922 第六轮加的
-    # 河灯留言人工复核两件：audit_board_comment / delete_board_comment）。
+    # 河灯留言人工复核两件：audit_board_comment / delete_board_comment；
+    # 40 → 43 是 20260923 加的用户自己的数据三件：list_my_favorites /
+    # get_unread_summary / list_notifications）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 40 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 43 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 

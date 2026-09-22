@@ -161,11 +161,52 @@ def _note_digest(data, label: str) -> str:
         return ""
     items = []
     for r in rows[:_TITLE_MAX]:
-        nid = r.get("noteKey") or r.get("key") or r.get("id")
+        # `noteId` 是 `/api/protected/favorites` 的字段名（20260923 收藏列表复用
+        # 本摘要器时补上）——与 noteKey/key 同一个东西，三个名字都认。
+        nid = r.get("noteKey") or r.get("key") or r.get("noteId") or r.get("id")
         title = _clip(r.get("noteTitle") or r.get("title") or "", 22)
         if nid is not None and title:
             items.append(f"{nid}《{title}》")
     return f"{label}: " + _join(items) if items else ""
+
+
+def _notification_digest(data) -> str:
+    """站内通知/公告（20260923）：总条数 + 未读条数 + 标题（未读的标出来）。
+
+    **正文刻意不进摘要**：通知正文是一段话（公告正文、驳回理由），挤进这 150 字
+    只会把标题挤掉，而"第几条的标题是什么"才是跨轮指代的锚点；要正文就再调一次
+    工具（摘要是"有哪些、哪条没看"，不是全文副本）。
+    """
+    rows = _rows(data)
+    if not rows:
+        return ""
+    unread = sum(1 for r in rows if not r.get("isRead"))
+    items = []
+    for r in rows[:_TITLE_MAX]:
+        title = _clip(r.get("title") or "", 18)
+        if not title:
+            continue
+        items.append(f"{title}（未读）" if not r.get("isRead") else title)
+    head = f"通知 {len(rows)} 条（未读 {unread}）"
+    return f"{head}: " + _join(items) if items else head
+
+
+def _unread_digest(data) -> str:
+    """未读汇总（20260923）：两个数 + 总数。
+
+    只认 int（缺字段/形态不符返回空串，不写成 0——"0 条未读"是结论，
+    "没读到字段"不是，两者必须分开）。key 名与 Rust `UnreadDto` 同源。
+    """
+    if not isinstance(data, dict):
+        return ""
+    vals = []
+    for key in ("notifications", "messages", "total"):
+        v = data.get(key)
+        if not isinstance(v, int) or isinstance(v, bool):
+            return ""
+        vals.append(v)
+    n, m, t = vals
+    return f"未读: 通知 {n} 条 / 私信 {m} 条（合计 {t}）"
 
 
 def _announcement_digest(data) -> str:
@@ -192,6 +233,10 @@ _DIGESTERS = {
     "search_notes": lambda d: _note_digest(d, "搜索结果"),
     "get_top_notes": lambda d: _note_digest(d, "置顶文章"),
     "get_announcements": _announcement_digest,
+    # 用户自己的数据（20260923）
+    "list_my_favorites": lambda d: _note_digest(d, "我的收藏"),
+    "list_notifications": _notification_digest,
+    "get_unread_summary": _unread_digest,
 }
 
 

@@ -115,6 +115,13 @@ _EXPLICIT_TOOLS_ORDER: list[str] = [
     "list_guestbook", "list_talks", "get_announcements", "get_current_time",
     "get_blog_info", "get_social_links", "get_site_map",
     "get_top_notes", "list_categories", "list_tags",
+    # 用户自己的数据（20260923）：无参只读、以发起人身份读他自己的那一份
+    # （scope=read.own，见 agent/authz.py）。进菜单是刻意的——"我收藏了哪些文章/
+    # 有没有未读公告"是访客最常见的自指提问，没有这条路时 planner 只能拿
+    # search_notes/rag_search 去绕，而检索索引里**没有**"谁收藏了什么"
+    # （收藏是用户私有关系，不在文章正文里），绕完只会如实答"站内没有"。
+    # 匿名用户同样看得到这三项（菜单是角色无关常量），命中时由工具层如实说未登录。
+    "list_my_favorites", "get_unread_summary", "list_notifications",
 ]
 _EXPLICIT_TOOLS: set[str] = set(_EXPLICIT_TOOLS_ORDER)
 

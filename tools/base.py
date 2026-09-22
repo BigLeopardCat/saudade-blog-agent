@@ -797,37 +797,71 @@ def _sign_local_jwt(uid: int, role: str | None) -> str:
     return (header + b"." + payload + b"." + sig).decode()
 
 
-def _admin_get(path: str, config: RunnableConfig) -> dict | list | ToolResult:
-    """以发起人身份 GET 一个后台接口（`/api/protected/*`），返回其 data 字段。
+def _principal_get(path: str, config: RunnableConfig,
+                   *, uid_msg: str, deny_msg: str) -> dict | list | ToolResult:
+    """以发起人身份 GET 一个"需要身份"的接口（`/api/protected/*`），返回其 data 字段。
 
     fail-closed 与 `_get` 同族：异常 / 非 200 / 业务码非 200 一律 unavailable，
     **绝不返回空**——"读不到"被当成"就是空的"是这批工具最坏的失败形态
     （报表会言之凿凿地说"没有待审留言"，而实际是一条都没读到）。
     401/403 单独给一句如实的话：那是**身份**问题不是故障，agent 要能据此说出
     "只有管理员能看"，而不是"系统出错了"。
+
+    20260923 从 `_admin_get` 抽出本体：请求形状完全一样（同一把 JWT_SECRET 代签、
+    同一条 `/api/protected` 前缀、同一套判据），差别只在**读不到时该说的话**——
+    所以两句话由调用方给（`uid_msg` = 拿不到身份，`deny_msg` = 401/403）。措辞必须
+    分开：收藏/通知读不到时对访客说"仅管理员可用"是错的（那是**他自己**的数据），
+    反过来把后台报表说成"你未登录"更糟。
     """
     uid = _device_get_user_id(config)
     if uid <= 0:
-        return unavailable("无法获取当前用户身份，后台数据不可用")
+        return unavailable(uid_msg)
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
     try:
         resp = _client.get(f"{ADMIN_BASE}{path}", headers=headers, timeout=15)
     except Exception as exc:
-        logger.error("admin API call failed: %s", exc)
-        return unavailable(f"后台接口请求失败: {exc}")
+        logger.error("principal API call failed: %s", exc)
+        return unavailable(f"接口请求失败: {exc}")
     if resp.status_code in (401, 403):
-        return unavailable("当前身份无权访问后台数据（该功能仅管理员可用）")
+        return unavailable(deny_msg)
     if resp.status_code != 200:
-        return unavailable(f"后台接口返回 HTTP {resp.status_code}")
+        return unavailable(f"接口返回 HTTP {resp.status_code}")
     try:
         body = resp.json()
     except Exception:
-        return unavailable("后台接口返回的不是 JSON")
+        return unavailable("接口返回的不是 JSON")
     if body.get("code") != 200:
-        logger.warning("admin API error: %s", body.get("message"))
-        return unavailable(f"后台接口报错: {body.get('message')}")
+        logger.warning("principal API error: %s", body.get("message"))
+        return unavailable(f"接口报错: {body.get('message')}")
     return body.get("data")
+
+
+def _admin_get(path: str, config: RunnableConfig) -> dict | list | ToolResult:
+    """后台接口（管理员读）。scope = admin.console。"""
+    return _principal_get(
+        path, config,
+        uid_msg="无法获取当前用户身份，后台数据不可用",
+        deny_msg="当前身份无权访问后台数据（该功能仅管理员可用）")
+
+
+def _own_get(path: str, config: RunnableConfig) -> dict | list | ToolResult:
+    """用户**自己**的数据（收藏 / 通知 / 未读汇总）。scope = read.own（全角色）。
+
+    uid<=0 = 访客没登录。这里刻意不返回 empty()（"你的收藏是空的"是编造——我们
+    根本没读到）也不返回 ok()（读不到不是事实），而是 unavailable + 如实措辞；
+    与既有的 `list_devices`（"无法获取当前用户身份，设备列表不可用"）同一取向。
+
+    已知的粗糙处（记下来，别当成没想到）：这条走 kind=unavailable ⇒ checker 判
+    BLOCK ⇒ 过程行按 `_REASON_CN["unavailable"]` 显示「服务不可用」。对"你没登录"
+    来说这个词不准确（访客看的是过程行，最终回复由 narrator 按帧里的实话写）。
+    改它要动原因码族（`_check_spec` + `_REASON_CN`），留给"未登录"这条 golden
+    用例跑出实际观感后再定。
+    """
+    return _principal_get(
+        path, config,
+        uid_msg="未登录：读不到你自己的数据（需要先登录博客账号）",
+        deny_msg="当前身份无权读取该数据")
 
 
 @tool
@@ -2227,6 +2261,60 @@ def set_article_tags(
 
 
 # ---------------------------------------------------------------------------
+# 用户自己的数据工具（20260923：收藏 / 未读汇总 / 站内通知）
+# ---------------------------------------------------------------------------
+# 这一节是"用户侧感知能力"的**读**那一半（写那一半是同一批里的 add_favorite /
+# remove_favorite / read_notifications，scope 为 `write.own`）：
+# 访客问"我收藏了哪些文章""有没有未读的公告"，planner 点名这三个工具，execute
+# 以**本轮发起人身份**读他自己的数据后如实作答。
+#
+# 三条纪律：
+#   ① scope 全声明为 `read.own`（agent/authz.py）——三档角色都有，匿名没有。
+#      **不是** admin.console：收藏/通知是"我的"，与管理员身份无关，判据是
+#      "以谁的 uid 去读"，由工具层落地。
+#   ② 通道是 `_own_get`（与 `_admin_get` 同一个 `_principal_get` 本体，只有措辞
+#      不同）：fail-closed 同族，"读不到"绝不返回空——否则 narrator 会对着一次
+#      读失败说"你还没有收藏任何文章"。
+#   ③ 返回值走 `_shape(data)`（结构化），**不做中文报表**——它们是"用户要的值"
+#      （标题、日期、已读态），narrator 手上还有完整 ToolMessage 可转述；报表那套
+#      渲染（agent/reports.py）是给"数字必须可信、模型数不了"的管理报表用的。
+#      planner 那一侧由 `_compact_list_frame` 压成一行一条（见 agent/context.py）。
+#
+# 端点（Rust 侧，src/routes/profile.rs）：`/favorites`、`/notifications`、
+# `/notifications/summary` 都只认 auth_uid，**自己读自己**——没有"读别人的"接口。
+
+@tool
+def list_my_favorites(config: RunnableConfig) -> str:
+    """列出**当前登录用户自己**收藏的文章（返回 noteId / title / status / createdAt）。
+    访客问"我收藏了哪些文章""我的收藏夹里有什么"时用。未登录时如实告知读不到。
+    注意：这条读的是**用户自己的**收藏夹，不是全站文章列表（那是 list_notes）。"""
+    data = _own_get("/api/protected/favorites", config)
+    return _shape(data)
+
+
+@tool
+def get_unread_summary(config: RunnableConfig) -> str:
+    """查看**当前登录用户自己**的未读数汇总（返回 notifications / messages / total）。
+    红点数 = 站内通知未读 + 私信未读；**公告在发布时按用户展开成通知行**，所以
+    公告的未读也计在 notifications 里，不需要另一套计数。
+    访客问"我有未读吗""红点上有几条""有多少没看的消息"时用。未登录时如实告知读不到。"""
+    data = _own_get("/api/protected/notifications/summary", config)
+    return _shape(data)
+
+
+@tool
+def list_notifications(config: RunnableConfig) -> str:
+    """列出**当前登录用户自己**的站内通知（返回 unread 与 items：id / type / title /
+    content / link / isRead / createdAt，按时间倒序，最多 100 条）。
+    type=announcement 的是站内公告（发布时按用户展开），其余是系统通知（如留言审核
+    结果）。访客问"有什么未读的公告/通知""最新的一条通知说了什么"时用。
+    未登录时如实告知读不到；**这条不含私信**（私信未读只在 get_unread_summary 的
+    messages 里计数，本站没有"读自己的私信列表"的 agent 工具）。"""
+    data = _own_get("/api/protected/notifications", config)
+    return _shape(data)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -2279,6 +2367,10 @@ _TOOL_REGISTRY = [
     # （留言没有名字/标题，见 _find_board_comment）
     audit_board_comment,
     delete_board_comment,
+    # 用户自己的数据（20260923）：scope = read.own（三档角色都有），见本节头注
+    list_my_favorites,
+    get_unread_summary,
+    list_notifications,
 ]
 
 def get_all_tools():
