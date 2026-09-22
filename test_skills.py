@@ -2352,6 +2352,15 @@ def test_short_reply_and_adjacent_pairs():
     for t in ("帮我看看《架构文档》里快道怎么写的", "你好呀小猫咪", "要的是哪一篇来着",
               "把樱花打开", "不用麻烦了，我自己去看那篇文章就好"):
         check(f"非短应答「{t[:12]}」", _short_reply_kind(t) == "", _short_reply_kind(t))
+    # 带壳形态（20260923 修）：生产链路里用户消息自带 `[当前问题]: ` 锚点（server.py），
+    # 而本判据是**整串相等**型 ⇒ 壳一在就恒返回 ''（实证：followup_short_yes_executes 的
+    # trace 里 planner 收到的 short_reply 写着「当前消息不是短应答」）。这里**必须用带壳
+    # 输入断言**——喂裸句测的是那个恒不命中的形态，结论对生产无意义（快道那轮同样的教训）。
+    for t, want in (("[当前问题]: 要", "pos"), ("[当前问题]: 好", "pos"),
+                    ("[当前问题]: 不用了", "neg"), ("[当前问题]: 算了", "neg")):
+        check(f"带壳短应答「{t}」判 {want}", _short_reply_kind(t) == want, _short_reply_kind(t))
+    check("带壳非短应答不误判",
+          _short_reply_kind("[当前问题]: 帮我把樱花打开") == "")
 
     # —— 邻接对节选 ——
     hist = [
@@ -2390,6 +2399,11 @@ def test_short_reply_and_adjacent_pairs():
           "同意" in pos and "规划" in pos and "不得只口头答应" in pos)
     neg = _short_reply_hint(proposal + [HumanMessage(content="不用了")])
     check("短应答提示·拒绝：零调用收尾", "拒绝" in neg and "不规划任何工具" in neg)
+    # 提示块本身也要在**带壳**形态下生效（用户消息进 hint 前同样带壳）
+    check("带壳短应答提示·同意：真的给出「同意」指令",
+          "同意" in _short_reply_hint(proposal + [HumanMessage(content="[当前问题]: 要")]))
+    check("带壳短应答提示·拒绝：真的给出「拒绝」指令",
+          "拒绝" in _short_reply_hint(proposal + [HumanMessage(content="[当前问题]: 不用了")]))
     check("短应答提示：非短应答给缺省语",
           _short_reply_hint(proposal + [HumanMessage(content="那《架构文档》里怎么写的？")])
           == "（当前消息不是短应答）")
