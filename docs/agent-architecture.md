@@ -513,7 +513,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 ---
 
-## 5. 工具系统（40 个）
+## 5. 工具系统（46 个）
 
 | 分类 | 工具 | 行为 |
 |---|---|---|
@@ -533,6 +533,8 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 | IoT 设备 | `list_devices`、`device_oled_display` | 代签 JWT 调 device-service；支持自动选在线设备、幂等去重 |
 | 后台只读（admin） | `list_admin_notes`、`get_server_status`、`get_service_health`、`get_moderation_status`、`get_user_stats` | **以发起人身份代调** `127.0.0.1:3000` 的受保护接口（现签 60 秒 JWT）；scope `admin.console`，进 `_HARD_SCOPES`（非 admin 结构上够不到）；`list_admin_notes` 是草稿/私密文章的**唯一可达读口** |
 | 后台写（admin） | `create_tag`、`update_tag`、`delete_tag`、`create_category`、`update_category`、`delete_category`、`create_announcement`、`update_announcement`、`delete_announcement`、`audit_board_comment`、`delete_board_comment`、`set_article_status`、`set_article_tags` | scope `write.console`（`_HARD_SCOPES` + `CONSENT_SCOPES`）；**只能由写技能模板展开**——`PARAMS.calls` 名单里没有它们，越权清单在技能白名单那一步就被剥掉；三道门见 §5.3；身份/目标的地基见 §6.6 |
+| 用户自己的读（own） | `list_my_favorites`、`get_unread_summary`、`list_notifications` | scope `read.own`（三档角色都有、匿名没有）；**以本轮发起人身份读他自己的数据**（代签 60 秒 JWT 调 `/api/protected/*`，"自己读自己"由 uid 落地）；见 §5.6 |
+| 用户自己的写（own） | `add_favorite`、`remove_favorite`、`read_notifications` | scope `write.own`（**不进** `_HARD_SCOPES`、**不进** `_ALWAYS_CONFIRM_TOOLS`）；五条契约见 §5.6 |
 
 **工具 → 命令 → 前端执行**是核心交互模式：工具返回带前缀的**命令字符串**，Python 识别后作为独立 SSE 帧
 转发，前端解析执行。**不是**让模型把命令写进正文——正文里的命令会被 `cleanAgentText` 当幻觉剔除
@@ -668,6 +670,42 @@ scope `write.console`，技能 `board_audit` / `board_delete`）。与标签/公
   内容**，而且删了没有回收站；**审核不进**：它可改判（驳回的能再放行）、改的只是可见性，与
   `set_article_status` 同类 ⇒ 走既有的"命令式措辞才免问"，判不出来照旧弹窗（fail-closed 不变）。
 - 主体身份仍由 §6.6 的片段地基兜底：planner 填错/填短片段时**先校正再看预检**。
+
+### 5.6 用户自己的收藏与通知（20260923：批 6 读 / 批 7 写）：一个 scope 分层，两半
+
+起点是主人那句「感知用户未读的公告和站内通知」+「读取增加删除收藏文章」。能力面分两半，
+**scope 是分界线**：
+
+| 半 | 工具 | scope | 为什么是这个 scope |
+|---|---|---|---|
+| 读 | `list_my_favorites`、`get_unread_summary`、`list_notifications` | `read.own` | 三档角色都有、匿名没有。它是"**我想看我自己**的东西"，与管理员身份无关——判据是"以谁的 uid 去读"，由工具层落地（没有"读别人的"接口，Rust 侧 `/api/protected/favorites|notifications*` 只认 `auth_uid`） |
+| 写 | `add_favorite`、`remove_favorite`、`read_notifications` | `write.own` | 同上，写方向。**刻意不进** `_HARD_SCOPES`（不是"只有管理员能做"）、**刻意不进** `_ALWAYS_CONFIRM_TOOLS`（主人拍板：改自己的数据不吃强制弹窗） |
+
+**同意闸按工具名分族**（`_CONSENT_PATTERNS[SCOPE_WRITE_OWN] = _own_command`）：一个 scope 挂着
+三个工具，"这句话里有没有写动作"太粗（填错工具的那一轮会被放行），所以 `_OWN_TOOL_FAMILY` 是
+**完备映射**——没登记的工具一律 False（fail-closed，绝不"反正都是 own 就放行"，`test_authz` ⑨d/⑨g
+两个方向都锁）。三种结局：命令式措辞（「收藏这篇文章」）→ 免弹窗直执行；只是有意向
+（「我想收藏这篇」）→ 通用确认弹窗问一次；提问（「收藏文章有什么用」）→ 不弹（`is_question_like`，
+把提问读成意图是不许的）。
+
+**写的五条契约**（`tools/base.py`，逐条都有离线锁）：
+
+| # | 契约 | 为什么 |
+|---|---|---|
+| ① | 入口哨兵 `_own_write_guard`：uid ≤ 0 → 直接返回、**一个请求都不发**（早于写前读） | 写操作最不该做的就是在没身份时猜"写给谁" |
+| ② | **写前先读**，读不到就不写 | 连"是不是已经收藏了"都判不出来时写下去等于蒙 |
+| ③ | 幂等 noop **不发请求**（已收藏/本来没收藏/本来全是已读） | 空写会刷新那一行的时间戳：纯副作用、无收益 |
+| ④ | **写后读回复核**：读不回 → `unavailable`（"本次改动未确认生效（不要声称已…）"） | Rust 的 `ApiResponse` 成功文案是给人看的，**不是给 agent 当判据的** |
+| ⑤ | 标记已读的复核判据 = 服务端重新数出来的未读数**真的下降** | "接口说成功了"不是事实，独立读数才是 |
+
+跨语言契约（改一侧必须同步另一侧）：回执 `args` 一律 `str(v)` ⇒ 列表是 **Python repr 字符串**、
+bool 是 **`"True"`**；Rust `render_exec_row` 侧新增 `py_int_list` 解析（`test_userdata` 跨仓断言
+锁着，agent 仓单独 checkout 时**明说跳过**、不假装通过）。写行**刻意不带《标题》**：那会被下一轮
+读成"我读过这篇"的指代证据。
+
+**golden 只锁"未登录"形态**（三条：收藏 / 问未读 / 标记已读）：本机即生产库，带真 uid 的写用例
+会真改主人的收藏夹 ⇒ 写侧靠离线单测（`test_userdata`）+ 活体探针覆盖，golden 只验"未登录时如实
+说、绝不声称已改"。配套 narrator 纪律 20（读不到 ≠ 空；只认回执）。
 
 ---
 
