@@ -1383,8 +1383,18 @@ check("标签写操作不受 notes 影响（同一份快照只服务文章那两
 # 接线（渲染层收到 notes 是一回事，graph 真的去读是另一回事）：只在要点到文章时读，
 # 标签/分类写操作不该为此多一次后台往返。
 _gsrc = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encoding="utf-8")
-check("接线：只在 picks 里有文章写工具时才读文章清单",
-      "in _ARTICLE_WRITE_TOOLS for s in picks" in _gsrc and "_note_index(config)" in _gsrc)
+check("接线：只在 picks 里有**要报标题的**文章写工具时才读文章清单"
+      "（收藏两件不动标题——它们是普通访客也能用的，读后台清单只会白拿 403）",
+      "in _POPUP_TITLE_TOOLS for s in picks" in _gsrc
+      and 'authz.check(principal, "list_admin_notes").allowed' in _gsrc
+      and "_note_index(config)" in _gsrc
+      # 判据必须比 _ARTICLE_WRITE_TOOLS 窄，否则收藏也会去读一次后台清单
+      and "_POPUP_TITLE_TOOLS = _ARTICLE_WRITE_TOOLS" not in _gsrc)
+from agent.graph import _ARTICLE_WRITE_TOOLS, _POPUP_TITLE_TOOLS  # noqa: E402
+check("  收藏两件确实不在标题名单里（名单是**真子集**，不是照抄整份）",
+      _POPUP_TITLE_TOOLS < _ARTICLE_WRITE_TOOLS
+      and not ({"add_favorite", "remove_favorite"} & _POPUP_TITLE_TOOLS),
+      f"{sorted(_POPUP_TITLE_TOOLS)} vs {sorted(_ARTICLE_WRITE_TOOLS)}")
 check("  读失败不拦弹窗（note_index 为空时问句退化成 id，不是 return None）",
       'note_index = None' in _gsrc and "_note_index(config)" in _gsrc)
 # 跨模块口径：弹窗里的「现在」必须描述**写操作真正会改的那一行**——`_note_index`

@@ -35,6 +35,9 @@ from agent.graph import AgentCancelled, graph_input
 from agent.principal import Principal
 from agent.summarizer import summarize
 from agent.skills import NAV_MAP  # 过程行路径反查中文别名用（展示层，非执行依据）
+# 写工具参数的归一（20260923 批 7）：与 instantiate_plan 展开时**同一组纯函数**，
+# 保证"预告帧"与"计划文本"对同一个参数值的理解一致（两处各写一份必然漂移）。
+from agent.skills import _norm_id_list, _norm_true
 from rag import search as rag_search, wordgraph
 from utils import setup_logging
 from utils.logging import get_trace_id, set_trace_id
@@ -603,6 +606,11 @@ _REF_SOURCE_CN = {
     # 是"把《X》设为私密"的标准走法（先读列表拿 id 再写），缺了它就往过程行里
     # 打内部工具名。
     "list_admin_notes": "后台文章列表",
+    # 用户自己的数据（20260923 批 6/7）：`$list_my_favorites[0].noteId` 是"取消收藏
+    # 那一篇"的标准走法（先读自己的收藏夹拿 id 再撤），`$list_notifications[0].id`
+    # 是"把那条公告标记已读"的走法。缺了这两个来源名，过程行会打出内部工具名。
+    "list_my_favorites": "收藏列表",
+    "list_notifications": "通知列表",
 }
 
 
@@ -785,6 +793,24 @@ def _tool_action_text(name: str, args: dict | None) -> str:
         cn = A.BOARD_VERDICT_CN.get(v or "", "")
         head = f"人工复核留言（含「{quote}」的那条）" if quote else "人工复核留言"
         return f"{head}：{cn}" if cn else head
+    if name in ("add_favorite", "remove_favorite"):
+        # 用户自己的收藏（20260923 批 7）：过程行只报 id，**不报《标题》**——写行
+        # 带标题会被下一轮读成"我读过这篇"的指代证据（同 execution_log 那条纪律）。
+        # 措辞与 Rust `render_exec_row` 的同名臂**逐字一致**：预告帧与落库回执行
+        # 是同一件事的两处渲染，两处不一样会让主人以为发生了两件事。
+        aid = _leaf(a.get("article_id"))
+        what = "收藏文章" if name == "add_favorite" else "取消收藏文章"
+        return f"{what} {aid}" if aid else what
+    if name == "read_notifications":
+        # 标记已读（20260923 批 7）：说清**标的是哪几条**（全标 / 具体 id 列表）。
+        if _norm_true(a.get("all")):
+            return "标记站内通知已读（全部未读）"
+        ids = _norm_id_list(a.get("ids"))
+        if ids:
+            shown = "、".join(_leaf(i) for i in ids[:3])
+            more = f" 等 {len(ids)} 条" if len(ids) > 3 else ""
+            return f"标记站内通知已读（{shown}{more}）"
+        return "标记站内通知已读"
     if name in _NOARG_VERB:
         return _NOARG_VERB[name]
     return f"执行 {name}"

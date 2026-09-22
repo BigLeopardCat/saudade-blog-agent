@@ -317,11 +317,33 @@ def _user_stats_digest(text: str) -> str:
     return "用户数据: " + "；".join(parts)
 
 
+def _notice_read_digest(text: str) -> str:
+    """标记已读的回执摘要（20260923 批 7）。
+
+    这一条**不是**给"跨轮取值"用的（写操作的取值是文章 id / 条数，动作行里已经有了），
+    而是给**下一轮的真实性追问**用的：主人问「你真给我标了吗」，执行记忆里那一行必须
+    带着"标了几条、现在还剩几条未读"——否则 planner 只能看到"标记站内通知已读"，
+    回答"标好了"与"没标"在记录里长得一样。
+
+    抽不到数字（工具的 noop 路径："本来就是已读"）→ 空串（退化为只有动作行）。
+    """
+    marked = _find(text, r"已把 (\d+) 条通知标记为已读")
+    if marked is None:
+        return ""
+    parts = [f"标记已读 {marked} 条"]
+    n = _find(text, r"现在未读：通知 (\d+) 条")
+    m = _find(text, r"现在未读：通知 \d+ 条 / 私信 (\d+)")
+    if n is not None:
+        parts.append(f"未读 通知 {n} 条" + (f"/私信 {m}" if m is not None else ""))
+    return "；".join(parts)
+
+
 _TEXT_DIGESTERS = {
     "get_server_status": _server_status_digest,
     "get_service_health": _service_health_digest,
     "get_moderation_status": _moderation_digest,
     "get_user_stats": _user_stats_digest,
+    "read_notifications": _notice_read_digest,
 }
 
 

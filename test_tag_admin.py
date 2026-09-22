@@ -561,6 +561,11 @@ _MIN_PARAMS = {
     "board_delete": {"quote": "今天天气真好呀"},
     "article_status": {"article_id": 12, "status": "private"},
     "article_tags": {"article_id": 12, "add": ["摄影"]},
+    # 用户**自己**的数据（20260923 批 7）：scope=write.own，与上面几件的差别只在
+    # "动谁的"——展开器的判据一样要锁（漏一个就少锁一条通道）。
+    "favorite_add": {"article_id": 12},
+    "favorite_remove": {"article_id": 12},
+    "notice_read": {"all": True},
 }
 _EXPECT_TOOL = {
     "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
@@ -572,6 +577,8 @@ _EXPECT_TOOL = {
     "board_audit": "audit_board_comment",
     "board_delete": "delete_board_comment",
     "article_status": "set_article_status", "article_tags": "set_article_tags",
+    "favorite_add": "add_favorite", "favorite_remove": "remove_favorite",
+    "notice_read": "read_notifications",
 }
 check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",
       set(_EXPECT_TOOL) == set(WRITE_SKILL_NAMES) and set(_MIN_PARAMS) == set(WRITE_SKILL_NAMES),

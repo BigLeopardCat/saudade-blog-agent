@@ -892,9 +892,10 @@ def test_phantom_tool_claim():
     # 35 → 38 是 20260922 第五轮加的站内公告三件；38 → 40 是 20260922 第六轮加的
     # 河灯留言人工复核两件：audit_board_comment / delete_board_comment；
     # 40 → 43 是 20260923 加的用户自己的数据三件：list_my_favorites /
-    # get_unread_summary / list_notifications）。
+    # get_unread_summary / list_notifications；43 → 46 是同一批的写三件：
+    # add_favorite / remove_favorite / read_notifications）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 43 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 46 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 

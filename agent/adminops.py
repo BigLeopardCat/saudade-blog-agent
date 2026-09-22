@@ -1017,6 +1017,26 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None) -> 
         # 像两个并列短语。读不到清单时（where_article 为空）一个字符都不变。
         sep = " 的标签" if not where_article else "的标签"
         return f"修改文章 {a.get('article_id')}{where_article}{sep}{tail}"
+    if tool in ("add_favorite", "remove_favorite"):
+        # 收藏两件（20260923 批 7）：动的是**主人自己账号里的**一份清单，不外显、
+        # 可逆（再点一次就回去了），所以问句短、只说清楚"哪一篇、加还是撤"。
+        # 《标题》能给就给（`notes` 读得到时——那是后台清单，只有管理员读得动，
+        # 普通访客这里退回 id；读不到**不因此不弹窗**，同全表取向）。
+        # 为什么这一族也需要弹窗：见 agent/authz.py 的 CONSENT_SCOPES 上方那段
+        # ——"agent 自己判断这篇值得收藏"就是替你往账号里写状态。
+        what = "收藏" if tool == "add_favorite" else "取消收藏"
+        return f"{what}文章 {a.get('article_id')}{where_article}"
+    if tool == "read_notifications":
+        # 标记已读**不可撤销**（is_read 撤不回，红点变小就回不去），问句必须把
+        # 这一句写出来——它是全写面里唯一"点了确定就再也回不到原状"的操作。
+        ids = a.get("ids")
+        if isinstance(ids, (list, tuple)) and ids:
+            head = "把通知 " + "、".join(str(x) for x in ids) + " 标记为已读"
+        elif str(a.get("all")).lower() in ("true", "1", "yes"):
+            head = "把**全部**未读通知标记为已读"
+        else:
+            head = "把通知标记为已读（没说清是哪几条）"
+        return f"{head}（不可撤销：标的就不再是未读，红点会变小）"
     return f"执行 {tool}"
 
 
@@ -1148,11 +1168,26 @@ def target_mentioned(article_id, texts) -> bool:
     return any(rx.search(str(t)) for t in texts if t)
 
 
+# 目标校验帧里的**动作词**（20260923 批 7）：帧文本会进 planner 上下文、也会被
+# narrator 念给用户，"改"字用在收藏上读起来像系统认错了事（"你要**改**的那篇文章"）。
+# 缺省仍是"改"（文章写那两件的措辞一个字节都没变）。
+_TARGET_VERB = {
+    "add_favorite": "收藏",
+    "remove_favorite": "取消收藏",
+}
+
+
+def target_verb(name: str) -> str:
+    """目标校验帧里该用的动作词（未登记的工具 = 文章写，"改"）。"""
+    return _TARGET_VERB.get(name or "", "改")
+
+
 def unknown_target_frame(name: str) -> str:
     """目标无据时的错误帧（checker 判 BLOCK，planner 先读再写）。"""
+    verb = target_verb(name)
     return (f"__ERROR__: 目标未经确认[{REASON_UNKNOWN_TARGET}]"
-            f"（{name} 要改的那篇文章这一轮没有读到过——先读后台文章列表或正文拿到 id，"
-            f"或让主人点名是哪一篇，再改；不要凭记忆写一个 id）")
+            f"（{name} 要{verb}的那篇文章这一轮没有读到过——先读后台文章列表或正文拿到 id，"
+            f"或让主人点名是哪一篇，再{verb}；不要凭记忆写一个 id）")
 
 
 def target_conflict_frame(name: str, named: set[int], got) -> str:
@@ -1165,10 +1200,11 @@ def target_conflict_frame(name: str, named: set[int], got) -> str:
     让 planner 下一轮自己改回来（禁止由系统替它改写参数——目标必须由用户/planner
     决定，系统只做否决）。
     """
+    verb = target_verb(name)
     want = "、".join(str(x) for x in sorted(named))
     return (f"__ERROR__: 目标与主人点名的不是同一篇[{REASON_TARGET_MISMATCH}]"
             f"（{name} 这一轮填的是文章 {got}，而主人点名的是文章 {want}——"
-            f"以主人点名的为准，下一轮把 article_id 改成 {want} 再改；"
+            f"以主人点名的为准，下一轮把 article_id 改成 {want} 再{verb}；"
             f"若主人确实要动文章 {got}，先把这一点问清楚）")
 
 
