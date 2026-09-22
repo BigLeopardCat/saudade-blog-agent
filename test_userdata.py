@@ -617,5 +617,58 @@ check("收藏两件**不在**弹窗标题工具名单里（普通访客没有读
       not ({"add_favorite", "remove_favorite"} & set(_G._POPUP_TITLE_TOOLS)))
 check("收藏列表进了『有据』的帧来源（收藏过的文章 id 也算有据）",
       "list_my_favorites" in _G._TARGET_EVIDENCE_TOOLS)
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑦ 语料与判据（20260923 批 8：这套能力「读不到时会说什么」是判据的一部分）")
+
+_g_src = _src("agent/graph.py")
+check("narrator 纪律 20 在位（未登录/读不到 ≠ 空）",
+      "（帧里原话「未登录：…」）" in _g_src
+      or "**一个字都不许说成" in _g_src)
+check("纪律 20 把三种结局分开说（读到了是空 / 未登录 / 读不到）",
+      "读到了确实是空" in _g_src and "需要先登录博客" in _g_src
+      and "这次没读到，不敢下结论" in _g_src)
+check("纪律 20 管到「改没改成功」（只认执行回执，不把未确认生效说成好了）",
+      "未确认生效" in _g_src and "只认本轮执行回执" in _g_src)
+check("纪律 18 的括注已扩到收藏 / 标记已读（原先只有新建标签、改文章状态）",
+      "新建标签、改文章状态、收藏/取消收藏、标记通知已读" in _g_src)
+check("纪律 18 收尾写明：这三件写自己的数据**不弹框**、只能按回执说",
+      "只能按回执说" in _g_src and "系统**不弹框**" in _g_src)
+
+# golden 三条：写面的 golden 只有"未登录"这一种形态（本机即生产库，带真 uid 的写用例
+# 会真改主人的收藏夹 —— 见 test_userdata 头注）。这里锁的是"用例还在 + 它依赖的
+# 输入形态判据没变"：authz 的判据一改，用例的**性质**会悄悄从"免弹窗直执行"变成
+# "走确认弹窗"，而用例本身不会报错。
+_gold = [json.loads(line) for line in
+         (_src("eval/golden/basic.jsonl")).splitlines() if line.strip()]
+_by_id = {c["id"]: c for c in _gold}
+NEW_CASES = {
+    "own_favorite_add_not_logged_in": {"require_tool_calls": ["add_favorite"]},
+    "own_unread_not_logged_in": {"require_tool_calls_any": ["list_notifications",
+                                                            "get_unread_summary"]},
+    "own_mark_read_not_logged_in": {"require_tool_calls": ["read_notifications"]},
+}
+for _cid, _want in NEW_CASES.items():
+    _c = _by_id.get(_cid)
+    check(f"golden 用例在位：{_cid}", _c is not None)
+    if not _c:
+        continue
+    _g = _c["gold"]
+    check(f"  {_cid}：断言了真调过工具（否则「需要登录」这句可以是零帧编的）",
+          all(_g.get(k) == v for k, v in _want.items()))
+    check(f"  {_cid}：禁 fallback（兜底道歉不算如实说）", _g.get("forbid_fallback") is True)
+    check(f"  {_cid}：正文必须指向登录", _g.get("text_any_regex") == ["登录"])
+    check(f"  {_cid}：有负断言（不得声称已改/不得说成空）",
+          bool(_g.get("text_not_match_regex")))
+    check(f"  {_cid}：匿名（无 user_id / 无 role）",
+          "user_id" not in _c.get("context", {}) and "role" not in _c.get("context", {}))
+
+check("输入形态判据仍是「命令式 ⇒ 免弹窗直执行」（改了 authz 判据这条先红）",
+      authz.consent_granted(Principal(uid=7, role="user"), "add_favorite", "收藏这篇文章")
+      and authz.consent_granted(Principal(uid=7, role="user"),
+                                "read_notifications", "把通知都标记成已读"))
+check("两条提问形态仍是「提问 ⇒ 不弹窗」（否则用例会落进确认弹窗、测的不是同一条链路）",
+      authz.is_question_like("我有哪些未读通知？"))
+
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
