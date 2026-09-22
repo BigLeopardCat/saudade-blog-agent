@@ -159,14 +159,27 @@ check("已判成明确命令 → 不弹（同轮命令即确认，直接执行�
       _popup("确认创建标签 测试标签") is None
       and _popup("新建一个标签叫 测试标签，用粉色") is None)
 check("生产消息壳（`[当前问题]: `，server.py:413）不影响弹窗判据——"
-      "带壳的提问/假设照样不弹、带壳的命令照样不弹",
+      "带壳的提问/假设照样不弹、带壳的命令照样不弹（与裸句同判）",
       _popup("[当前问题]: 把文章 12 设为私密会有什么影响？") is None
       and _popup("[当前问题]: 如果我把文章 12 设为私密") is None
       and _popup("[当前问题]: 文章 12 设为私密的步骤是什么") is None
       and _popup("[当前问题]: 确认创建标签 测试标签") is None
-      and _popup("[当前问题]: 把文章 12 设为私密") is None)
+      # 这两条**必须配 PLAN_STATUS**（20260922 假红复盘）：原先用的是默认的
+      # PLAN_TAG（create_tag，title=测试标签），而这句话跟那个计划不搭——旧断言
+      # 之所以绿，靠的正是"新建类写操作没有**值**的地基"这个洞（`_ident_grounded`
+      # 对 create_tag 只查父标签，于是任何 title 都算有据）。洞补上后这条必然红，
+      # 而红的是**判据自己**：壳与裸句的对照实验要变量唯一。
+      and _popup("[当前问题]: 把文章 12 设为私密", PLAN_STATUS) is None
+      and _popup("把文章 12 设为私密", PLAN_STATUS) is None)
 check("带壳的意图原句照样弹窗（壳不许把弹窗也一起弄哑）",
       _popup("[当前问题]: 一级标签，名字叫X，使用粉色颜色") is not None)
+check("免弹窗的第二个前提扩到**值**：计划要写进去的字面也得在主人这句话里"
+      "（20260922 ②防线；新建类写操作过去只查父标签，title 写什么都不算没据）",
+      # 计划写 title=测试标签，主人这句里没有 —— 带壳不带壳一个待遇（不弹＝直接写）
+      _popup("把文章 12 设为私密") is not None
+      and _popup("[当前问题]: 把文章 12 设为私密") is not None
+      # 值原样说出口 → 照旧直接执行，不多一次点击
+      and _popup("新建一个标签叫 测试标签，用粉色") is None)
 check("非 admin → 不弹（弹了就是承诺一件做不到的事）",
       _popup("一级标签，名字叫X，使用粉色颜色",
              principal=Principal(uid=9, role="user")) is None
