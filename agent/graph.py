@@ -3342,16 +3342,31 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             board_index = _board_index(config)
         except Exception:
             board_index = None
+    # 文章清单同理（20260922 第七轮）：文章写操作的问句此前**只有内部 id**
+    # （「修改文章 46」），是整套写面里唯一的盲签——主人看不出那是不是他说的那篇，
+    # 而弹窗点确定正是文章这类写操作唯一的人类兜底（"目标有据 ≠ 目标唯一"）。
+    # 读的是与写工具读前值同一份后台清单（含草稿/私密、不含修改稿）：弹窗里的
+    # 「现在：草稿」必须是真的会被改的那一行的现状。读不到 → 退回只写 id，
+    # **绝不因此不弹窗**（那会退回"判成歧义就追问"的死路形态）。
+    note_index = None
+    if any(str(s.get("tool") or "") in _ARTICLE_WRITE_TOOLS for s in picks):
+        try:
+            from tools.base import _note_index
+            note_index = _note_index(config)
+        except Exception:
+            note_index = None
     return {
         "pending_confirm": {
-            "q": A.render_confirm_question(picks, tag_index, cat_index, board_index),
+            "q": A.render_confirm_question(picks, tag_index, cat_index, board_index,
+                                           note_index),
             "opts": [{"label": "确定", "value": "yes", "kind": "primary"},
                      {"label": "取消", "value": "no", "kind": "default"}],
             "token": token,
             "specs": picks,
             "skill": _plan_skill(state),
         },
-        "confirm_text": A.render_confirm_text(picks, tag_index, cat_index, board_index),
+        "confirm_text": A.render_confirm_text(picks, tag_index, cat_index, board_index,
+                                               note_index),
     }
 
 

@@ -1023,6 +1023,32 @@ def _read_note(article_id: int, config: RunnableConfig) -> dict | None | ToolRes
     return None
 
 
+def _note_index(config: RunnableConfig) -> dict[int, dict] | None:
+    """后台文章清单 → `{noteKey: 行}`；读不到返回 None（**≠"一篇文章都没有"**，同 _tag_index）。
+
+    与 `_read_note` 同一份数据源、同一口径（`/api/protected/notes/list`，含草稿/私密、
+    不含「编辑修改稿」行）——确认弹窗要写的「现在是公开还是草稿」必须和写操作自己读
+    前值的口径一致，否则弹窗里那句现状可能和真正被改的那一行不是同一行。
+
+    None 与 `{}` 的区分是刻意的：`{}` = 后台确实一篇文章都没有（"后台清单里没有这一篇"
+    是**事实**），None = 这次读不到（只能说"没核对上"，不许说成"站内没有"）。
+    """
+    data = _admin_get("/api/protected/notes/list", config)
+    if isinstance(data, ToolResult):
+        return None
+    out: dict[int, dict] = {}
+    for row in data or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            nid = int(row.get("noteKey"))
+        except (TypeError, ValueError):
+            continue
+        row["noteKey"] = nid          # 就地归一成 int：下游 notes.get(id) 直接可用
+        out[nid] = row
+    return out
+
+
 def _as_article_id(value) -> int | None:
     """实参 → 正整数 id；不合法 → None（调用方拒绝，不猜、不默认）。"""
     if isinstance(value, bool) or value is None:

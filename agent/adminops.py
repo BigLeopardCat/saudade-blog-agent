@@ -575,6 +575,35 @@ def clip(text: str, limit: int = 60) -> str:
 # 多少篇文章、会不会连带删掉别的标签。数字全部来自标签/分类字典，**读不到就一个字
 # 都不说**（绝不写 0——那是"删了没损失"的错误结论，见 count_phrase）。
 
+def article_where(notes: dict[int, dict] | None, article_id) -> str:
+    """文章在问句里的**可核对指称**：`《标题》（现在：草稿、未置顶）`。
+
+    20260922 第七轮：这之前文章写操作的问句**只有内部编号**（「修改文章 46」），是
+    整套写面里唯一的盲签——标签/分类/公告/留言都写了名字，只有文章让主人在看不到
+    标题、看不到现状的情况下点「确定」。而"确认框点一下"正是文章这类写操作**唯一**
+    的人类兜底（评估意见："有证据 ≠ 目标唯一"），所以这一句必须能让主人自己认出来
+    "是不是我说的那篇"。
+
+    `notes is None`（这次没读到清单）→ **空串**：退回原来的「修改文章 46」，
+    **绝不因此不弹窗**（那会退回"判成分歧就追问"的死路形态）。id 不在清单里
+    （编辑修改稿行/已删除）→ 如实写出来，主人一眼能看出系统没对上一篇真实的文章。
+    """
+    if notes is None:
+        return ""
+    try:
+        rid = int(article_id)
+    except (TypeError, ValueError):
+        return ""
+    row = notes.get(rid)
+    if row is None:
+        return "（后台清单里没有这一篇）"
+    title = clip(str(row.get("noteTitle") or "").strip() or "（无标题）", 36)
+    marks = [status_cn(row.get("status"))]
+    if normalize_top(row.get("isTop")) is not None:
+        marks.append(top_cn(row.get("isTop")))
+    return f"《{title}》（现在：{'、'.join(marks)}）"
+
+
 def tag_note_phrase(info: TagInfo | None) -> str:
     """「它挂在 N 篇文章上」；读不到篇数 → 空串（不说）。"""
     if info is None or info.note_count is None:
@@ -809,7 +838,7 @@ def _match_board(boards, quote) -> dict | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def _confirm_one(spec: dict, index=None, cats=None, boards=None) -> str:
+def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None) -> str:
     """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
 
     `index` = 可选的标签字典（`{id: TagInfo}`，见 build_tag_index）：给得起就
@@ -824,10 +853,15 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None) -> str:
     20260921 第四轮起，**标签/分类一律按名字**（planner 写名字、工具确定性解析
     成 id）：问句里出现的名字就是用户说的那个名字，不再有"id 对不上名字"的
     中间层。
+
+    `notes` = 可选的后台文章清单快照（`{id: 行}`，见 tools.base._note_index）：
+    文章写操作的问句**此前只有内部 id**（全写面唯一的盲签），给得起快照就把
+    `《标题》（现在：状态、置顶）` 写进去。给不起（读到 None）→ 退回只写 id。
     """
     tool = str(spec.get("tool") or "")
     a = spec.get("args") or {}
     index = index or {}
+    where_article = article_where(notes, a.get("article_id"))
     if tool == "create_tag":
         title = str(a.get("title") or "").strip() or "（未命名）"
         pname = str(a.get("parent_tag") or "").strip()
@@ -954,7 +988,7 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None) -> str:
         what = BOARD_VERDICT_FULL.get(v, f"复核为「{a.get('verdict')}」")
         return f"把留言 {head}{where} 人工复核为 {what}"
     if tool == "set_article_status":
-        head = f"修改文章 {a.get('article_id')}"
+        head = f"修改文章 {a.get('article_id')}{where_article}"
         bits = []
         st = normalize_status(a.get("status"))
         if st:
@@ -979,29 +1013,33 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None) -> str:
             rep = _name_list(a.get("replace"))
             bits.append(f"整体换成 {'、'.join(rep)}" if rep else "清空全部标签")
         tail = "：" + "、".join(bits) if bits else ""
-        return f"修改文章 {a.get('article_id')} 的标签{tail}"
+        # 带上《标题》之后不再补那个分隔空格：`…（现在：草稿、未置顶） 的标签` 读起来
+        # 像两个并列短语。读不到清单时（where_article 为空）一个字符都不变。
+        sep = " 的标签" if not where_article else "的标签"
+        return f"修改文章 {a.get('article_id')}{where_article}{sep}{tail}"
     return f"执行 {tool}"
 
 
-def render_confirm_question(specs, index=None, cats=None, boards=None) -> str:
+def render_confirm_question(specs, index=None, cats=None, boards=None, notes=None) -> str:
     """确认框的问题行：**把要发生的事说全**（含颜色名与色值），再问一句。
 
     用户点的是"确定"，他有权在点之前从这句话里看出自己将同意什么——
     说漏了颜色、说漏了是哪一篇、**说漏了挂在哪个父标签下**、**说漏了会连带删掉
     几个子标签**，这个按钮就变成了盲签。
-    （`index`/`cats` 见 _confirm_one；读不到字典时退化成名字原文，不因此不弹窗。）
+    （`index`/`cats`/`notes` 见 _confirm_one；读不到字典时退化成名字原文或 id，
+    不因此不弹窗——这一轮的价值就是让主人确认，读不到就少说，不是不弹。）
     """
-    acts = "；".join(_confirm_one(s, index, cats, boards) for s in (specs or []))
+    acts = "；".join(_confirm_one(s, index, cats, boards, notes) for s in (specs or []))
     return f"要{acts}吗？点「确定」我就去办。"
 
 
-def render_confirm_text(specs, index=None, cats=None, boards=None) -> str:
+def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None) -> str:
     """弹窗那一轮的**对话气泡正文**（系统给的，不经 narrator）。
 
     刻意写得像"在等你的意思"而不是"已经在办了"：这一轮零执行。给一个明确
     的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
     """
-    acts = "；".join(_confirm_one(s, index, cats, boards) for s in (specs or []))
+    acts = "；".join(_confirm_one(s, index, cats, boards, notes) for s in (specs or []))
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
     return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"

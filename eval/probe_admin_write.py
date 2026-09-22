@@ -795,6 +795,18 @@ def step8_popup_write(rep: Report, uid: int, role: str, art_id: int, title: str)
         print(f"  [{'PASS' if unchanged else 'FAIL'}] 弹窗轮零执行（库真值 status 仍是 {cur}）")
         if payload is None:
             return
+        # 问句必须写出**人类可核对的指称**（20260922 第七轮 P0）：文章这一类此前只有内部
+        # 编号（「修改文章 46」），而点确定正是它唯一的人类兜底 ⇒ 标题与现状都得在问句里。
+        # 与离线 §㉒ 同判据、不同层：这里验的是**真链路**——真 admin uid ⇒ 后台清单读得到；
+        # golden 的写用例一律 uid=0（写安全底座），那份快照结构性为 None，验不到这一层。
+        # 标题按前 20 字断言：渲染端 clip 会截断长标题，短标题不受影响。
+        q = payload.get("q") or ""
+        st_cn = {"public": "公开", "private": "私密", "draft": "草稿"}.get(cur, cur)
+        for want_s in (f"《{title[:20]}", f"现在：{st_cn}"):
+            ok_q = want_s in q
+            print(f"  [{'PASS' if ok_q else 'FAIL'}] ⑧ 问句含 {want_s!r}")
+            if not ok_q:
+                rep.fails.append(f"⑧ 问句里没有 {want_s!r}（问句：{q!r}）= 文章写操作退回盲签")
         tok = payload["token"]
 
         # ⑨ 令牌边界：篡改 / 过期 → 必拒且零写（都在真写之前做，靶子还没动）
