@@ -1261,6 +1261,33 @@ _value_case("⑪ 「在「编程」下面」是父标签、不是新名字（两
 _value_case("改名形态：new_title 认「改名叫「X」」那段",
             "tag_update", {"name": "Asyncio", "new_title": "新名字"},
             "把标签「Asyncio」改名叫「协程」", {"new_title": "协程"})
+# 续六（20260922 探针腿⑭ 现场）：改名句里**新名字含目标名词**（`探针分类0922193132R` 里含
+# 「分类」）曾被整段判脏 ⇒ 值空缺、`cand_spans[0]` 回落到**目标那段**、planner 写对的值被
+# 覆写成目标名 ⇒ 工具照写、回执"X → X"、库一个字节没动（回执读起来像改成功了）。
+_value_case("⑭c 新名字里含目标名词（…分类…R）→ 不判脏，planner 写对的值原样保留",
+            "category_update",
+            {"name": "探针分类0922193132", "new_title": "探针分类0922193132R"},
+            "把分类「探针分类0922193132」改名叫「探针分类0922193132R」", None)
+_value_case("⑭d 腿⑭ 现场那一跑：planner 把 new_title 写成了**目标自己** → 校正回主人那段",
+            "category_update",
+            {"name": "探针分类0922193132", "new_title": "探针分类0922193132"},
+            "把分类「探针分类0922193132」改名叫「探针分类0922193132R」",
+            {"new_title": "探针分类0922193132R"})
+_value_case("⑭e 不带「名」的改名词（改成/改为/换成）同样认",
+            "tag_update", {"name": "Asyncio", "new_title": "Asyncio"},
+            "把标签「Asyncio」改成「协程」", {"new_title": "协程"})
+_value_case("⑭f 主人只说了「改名」没说新名字 → 零写 + 响亮（绝不留一次空转的「X → X」）",
+            "tag_update", {"name": "摄影", "new_title": "名字"},
+            "把标签「摄影」改名", "REFUSE")
+_value_case("⑭g 同上但 planner 直接把目标名填成 new_title → 同样零写（空转改名不许放行）",
+            "tag_update", {"name": "摄影", "new_title": "摄影"},
+            "把标签「摄影」改个名字", "REFUSE")
+_value_case("⑭h 移动命令里 planner 顺手带同名 new_title → 一个字节都不动"
+            "（「改名意图」是这条判据的闸，不能把一次真移动拦下来）",
+            "tag_update",
+            {"name": "Asyncio", "parent_tag": "编程", "new_title": "Asyncio",
+             "level": "two", "to_level": "two"},
+            "把标签「Asyncio」挪到「编程」下面", None)
 _value_case("值逐字在主人原话里 → 一个字节都不动（防线不是重写器）",
             "tag_create", {"title": "Redis"}, "帮我建一个 Redis 标签", None)
 _value_case("列表值本来就对 → 不动（多段引号各有其主）",
