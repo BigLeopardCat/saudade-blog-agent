@@ -326,11 +326,18 @@ def _token_payload(tok: str) -> dict:
 
 
 def _tampered(token: str) -> str:
-    """改掉签名最后一位（保持形状，验签必过不去）。"""
+    """改掉签名**第一位**（保持形状，验签必过不去）。
+
+    为什么不是末位（20260922 现场）：HMAC-SHA256 = 32 字节 = 43 个 base64url 字符，
+    末位字符只承载 4 个有效 bit（另 2 bit 解码时被丢弃）——把它改成 'A'/'B' 有 1/16
+    的概率解出**一模一样的签名字节**，于是"篡改"其实是原令牌、验签照过、真写照做，
+    探针反而报"无效令牌竟然写成功了"（并连带把下一条"已过期"腿的真值基线污染成
+    假 FAIL）。首字符的 6 个 bit 全部有效 ⇒ 改一个字符必改字节。**改的是探针自己**。
+    """
     head, sep, sig = token.rpartition(".")
     if not sep or not sig:
         return token + "A"
-    return head + "." + sig[:-1] + ("A" if sig[-1] != "A" else "B")
+    return head + "." + ("A" if sig[0] != "A" else "B") + sig[1:]
 
 
 class Report:
@@ -795,12 +802,16 @@ def step8_popup_write(rep: Report, uid: int, role: str, art_id: int, title: str)
                            ("已过期", _stale_token(uid, conv_id,
                                                    payload.get("skill") or "article_status",
                                                    payload.get("specs") or []))):
+            # 每条子腿的基线在**发请求之前**现读（20260922）：共用循环外那个 `cur` 时，
+            # 前一条腿一旦真的写成功（哪怕根因是探针自己的 bug），后一条腿会拿旧基线比 ⇒
+            # 报出的是上一条腿的错（级联假 FAIL），掩掉本条令牌真正的行为。
+            base = notes_by_id(uid, role).get(art_id, {}).get("status")
             b = stream_rust(f"确认执行：{payload.get('q') or ''}", uid, role, conv_id,
                             confirm_token=bad)
             clean_end(rep, f"⑨ {label}", b)
             now = notes_by_id(uid, role).get(art_id, {}).get("status")
-            ok = now == cur
-            print(f"  [{'PASS' if ok else 'FAIL'}] ⑨ {label} → 库真值 status={now}（期望仍 {cur}，零写）")
+            ok = now == base
+            print(f"  [{'PASS' if ok else 'FAIL'}] ⑨ {label} → 库真值 status={now}（期望仍 {base}，零写）")
             print(f"        回复：{(b.get('reply') or '')[:160]}")
             if not ok:
                 rep.fails.append(f"⑨ {label}: 库真值变成 {now} = 无效令牌竟然写成功了")
@@ -1358,8 +1369,11 @@ _REASON_RES = {
         r"(?:没有|不存在|查不到|找不到|没有找到)[^。\n]{0,24}绝对不存在的标签名xyz"
         r"|绝对不存在的标签名xyz[^。\n]{0,24}(?:没有|不存在|查不到|找不到|没有找到)"),
     "解不出的引用": re.compile(
-        r"(?:引用|取值|解析|参数)[^。\n]{0,30}(?:不了|不到|失败|无效|没有|拿不到)"
-        r"|(?:拿不到|解析不了|找不到|查不到|不认识)[^。\n]{0,30}(?:引用|取值|参数|标签)"),
+        # 「无法」也是明说原因（20260922 实测线上原话是「参数引用**无法**解析
+        # [ref_unknown_tool:$list_tags[0].tagKey]（上一步返回里没有这个值）」——
+        # 词表里只有"不了/不到/失败/无效/没有"，把这条真实原因判成了"没说原因"）。
+        r"(?:引用|取值|解析|参数)[^。\n]{0,30}(?:不了|不到|失败|无效|无法|没有|拿不到)"
+        r"|(?:拿不到|解析不了|找不到|查不到|不认识|无法解析)[^。\n]{0,30}(?:引用|取值|参数|标签)"),
 }
 
 
