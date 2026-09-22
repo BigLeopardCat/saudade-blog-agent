@@ -50,7 +50,7 @@ LangGraph 四件套：
 """
 
 
-# ⚠️ 本文件**不要**加 `from __future__ import annotations`（20260920 实测踩过）：
+# 本文件**不要**加 `from __future__ import annotations`（20260920 实测踩过）：
 # 它把注解变成字符串，而 langgraph 是靠 `p.annotation in (RunnableConfig, RunnableConfig | None)`
 # **对象比较**来判断"第二个参数是不是 config"的（langgraph/_internal/_runnable.py）。
 # 字符串注解比对不上 ⇒ 节点被当成只收 state 调用 ⇒ `config` 静默取默认值 None，
@@ -2000,25 +2000,41 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 那一个，planner 抄短了就校正回来——**必须在目标预检之前**，否则预检报的是
         # 另一个名字（"站内没有叫「绝对」的标签"）。
         _name_target_fix(plan_obj, user_msg)
-        refusal = None if quote_refuse else _write_target_refusal(plan_obj, config)
+        # 写参数里的**名字值**（新名字 / 标签名列表 / 父标签）同理（②防线续五，见
+        # `_name_arg_fix` 上方长注）：新建的名字天然不在字典里，只能来自主人这句话。
+        value_refuse = _name_arg_fix(plan_obj, user_msg)
+        subject = "站内的台账（标签/分类字典、公告清单、留言列表）与主人这句话本身"
+        refusal = None
         if quote_refuse:
             refusal = (_tool_name((plan_obj.get("tools") or ["?"])[0]), quote_refuse)
+        elif value_refuse:
+            refusal = value_refuse
+            subject = "主人这句话本身（要写进站内的名字只能来自这里）"
+        else:
+            refusal = _write_target_refusal(plan_obj, config)
         if refusal:
             wtool, why = refusal
-            logger.warning("[planner] 写操作目标按名字解不出来（%s）：%s → 确定性如实收尾",
-                           wtool, why)
+            # 值被拒时补一句：那个字面是**系统自己的参数值**，不是主人点名的名字
+            # （20260922 探针 ⑤ 实测：如实答复里出现了"站内并没有叫「音乐」的现成
+            # 标签"——系统查的是占位文字「标签名」，叙述把两者画了等号 = 假话）。
+            value_tail = ("" if not value_refuse else
+                          "系统要填进参数的那个字面是**系统自己的参数值**，"
+                          "不是主人点名的名字——转述它时**原样引述**，"
+                          "绝不许把它说成主人说的那个名字。")
+            logger.warning("[planner] 写操作参数解不出「主人这句话」里的来源（%s）：%s"
+                           " → 确定性如实收尾", wtool, why)
             record("planner", "write_target_unresolved", tool=wtool,
                    reason=why[:160], round=rounds)
             plan_obj = _wrap_up_plan(False, note=(
                 _LEDGER_NOTE_PREFIX +
                 "**这件事这次没有做：站内数据一个字节都没有改动**"
                 "（本轮一个工具都没有执行）。"
-                f"系统按目标查过站内的台账（标签/分类字典、公告清单、留言列表）"
-                f"与主人这句话本身，结果是：{why}。"
+                f"系统核对过{subject}，结果是：{why}。"
                 "请把这条原因**如实**转告主人（连同里面的候选名单或该补的信息），"
                 "并问他接下来想怎么办（换个说法、或先把那个目标建出来）。"
                 "**不许**出现「看过/读过/查过/检索过/调用过工具」这类说法；"
-                "也**不许**把它讲成一篇内容层面的结论——这件事只跟站内那份台账有关。"))
+                "也**不许**把它讲成一篇内容层面的结论。"
+                + value_tail))
             # ⚠️ 这里必须是 **return**，不是 break：决策循环之后的收尾路径会读
             # `plan_obj["params"]`（只有 instantiate_plan 的产物才有这个键），
             # 而 `_wrap_up_plan` 不带它 ⇒ break 到那里必抛 KeyError('params')
@@ -2621,7 +2637,9 @@ def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0) -> str | None:
 # 看得到，主人可以点取消）——这是标记式抽取的固有代价，选它是因为它从不**编造**。
 _ANN_TITLE_RE = re.compile(
     r"(?:标题|题目|名字|名称)\s*(?:叫|叫做|是|为|：|:)\s*[「『“\"]([^」』”\"]{1,60})[」』”\"]")
-_ANN_BODY_RE = re.compile(r"(?:正文|内容)\s*(?:写|是|为|说|：|:)\s*[:：]?\s*(.+)", re.S)
+_ANN_BODY_RE = re.compile(
+    r"(?:正文|内容)\s*(?:改成|改为|换成|变成|更新为|更新成|写|是|为|说|：|:)"
+    r"\s*[:：]?\s*(.+)", re.S)
 
 
 def _msg_marked_field(user_msg, kind: str) -> str | None:
@@ -2881,16 +2899,244 @@ def _name_target_fix(plan_obj: dict, user_msg) -> None:
     plan_obj.update(fresh)
 
 
+# ── ② 防线续五：写参数里的**名字值**（新名字 / 标签名列表 / 父标签）────────────
+# 事故现场（20260922 活体写探针，四条腿同时命中，且**每一条的技能都选对了**）：
+#   · 「新建一个一级标签，名字叫「_探针_0922134554」」→ planner 第一轮写
+#     `title="20260922_1345_test_tag"`——拿注入的 current_time 拼出来的假名字，
+#     **真的建进了生产**（tag id=34），第二轮才建对的那个；
+#   · 「一级标签，名字叫_探针色_…，使用粉色颜色」→ `title="名字"`（抄自参数描述
+#     `{"title": "新标签的名字"}`）⇒ 弹窗问「新建一级标签「名字」」，主人点确定即落库；
+#   · 「新建一个分类，叫「探针分类0922134609」」→ 先 `title="名字"` 建了一个分类、
+#     再 `title="探针分类0922"`（把主人的名字截成月日）又建了一个；
+#   · 「给文章 1 加上「音乐」标签」→ `add=["标签名"]`（工具侧拒了，但如实答复里出现了
+#     "站内并没有叫「音乐」的现成标签"这句**假话**——音乐 id=11 明明在站里）。
+# 结构性根因：目标名有两道地基（`_write_target_refusal` 查字典证明它存在 +
+# `_ident_grounded` 卡免弹窗），而**新名字**天然不在字典里——`_WRITE_NAME_FIELDS`
+# 里 create_tag 的注释写着"新建不在此列"，于是 `title` 这类字段**没有任何判据看它
+# 一眼**，而"新建一个标签"正是命令式措辞、走的还是免弹窗快道。⇒ planner 编一个名字，
+# 系统就写一个名字（"写操作的目标/身份不许是 LLM 发明"这条不变量在新建面上漏了一格）。
+#
+# 判据 = **抽取优先于校验**。"值必须在主人这句话里找得到"是子串级，挡不住截断
+# （实测 `探针分类0922` 恰恰是主人那句的子串）、也挡不住泛称（`名字` 同样是子串）：
+#   ① 主人标出来的那一段（命名标记 `名字叫…` 后面那段 / 引号段，排除父标签等
+#      "另一个操作数"）**就是**值——planner 的转写一律让位（造名/截断/泛称一并治好）；
+#   ② 抽不出唯一证据时：planner 的值在主人原话里逐字有据、且不是泛称 → 不动
+#      （防线不是重写器）；
+#   ③ 否则 → **确定性拒绝**（零工具零写 + 如实说"系统填的这个值在主人这句话里
+#      找不到来源"），并交代那个字面是**系统自己的参数值**、不许讲成主人说的名字。
+# 边界与既有防线同源：子串/标记级，挡不住"说过但未必是它"（亚串免疫）；真正的裁决
+# 仍在工具侧（同名不给建、名字对不上拒绝写）与弹窗（主人签字前看得见）。
+_WRITE_VALUE_FIELDS = {
+    # 工具名 -> 值字段（主人这句话里必须能找到来源的**值**：新名字 / 标签名列表）。
+    # 与 `_WRITE_NAME_FIELDS` 分开：那个是"目标身份"（工具要查字典证明它存在），
+    # 这个含**新建**的名字——它天然不在字典里，只可能来自主人的原话。
+    "create_tag": ("title",),
+    "create_category": ("title",),
+    "update_tag": ("new_title",),
+    "update_category": ("new_title",),
+    "set_article_tags": ("add", "remove", "replace"),
+}
+# 命名标记：主人给"新名字"时用的词。长的在前（同一位置优先匹配更具体的那个）。
+# `叫` 单字放最后：它出现在别处的机会最多，靠捕获段的干净度判据兜底。
+_NAME_MARKS = ("名字叫", "名字叫做", "名字是", "名字为", "名叫", "名为", "叫做",
+               "称为", "标题叫", "标题是", "标题为", "叫")
+_NAME_MARK_RE = re.compile(r"(?:" + "|".join(_NAME_MARKS) + r")\s*[:：]?\s*")
+_NAME_VALUE_STOP = "，,。；;、！？!?～~\n"
+# 捕获段的干净度判据（与 `_bare_target_name` 同源，另加"父标签"这一族泛称）
+_GENERIC_VALUE_WORDS = _GENERIC_NAME_WORDS + (
+    "父标签", "父标签名", "父级标签", "上级标签", "新名字", "新标签", "标题", "题目")
+# 父标签的语序标记：`在「编程」下面/里` 与 `挪到「编程」下面` 两种领法
+_PARENT_TAIL_RE = re.compile(r"\s*(?:下面|底下|之下|下|里|内|中)")
+
+
+def _value_clean(raw: str) -> str:
+    """捕获段过一遍干净度判据：脏（带标点/超长/是泛称/混着名词或动作词）→ 空串。"""
+    raw = str(raw or "").strip().strip("「」『』“”\"'").strip()
+    if not raw or len(raw) > 60 or raw in _GENERIC_VALUE_WORDS:
+        return ""
+    if any(ch in raw for ch in _NAME_VALUE_STOP):
+        return ""
+    if any(w in raw for w in _TARGET_NOUNS + _TARGET_ACTION_MARKS):
+        return ""
+    if any(w in raw for w in ("这个", "那个", "名字", "名称")):
+        return ""
+    return raw
+
+
+def _msg_named_value(user_msg) -> str:
+    """主人原话里"给新名字"的那一段（`名字叫 X` / `叫「X」`…）；没有则空串。
+
+    捕获段在**第一个停顿符**处截断（"名字叫Redis，颜色粉色" → Redis），两端引号剥掉。
+    """
+    text = str(user_msg or "")
+    m = _NAME_MARK_RE.search(text)
+    if not m:
+        return ""
+    raw = text[m.end():]
+    for stop in _NAME_VALUE_STOP:
+        i = raw.find(stop)
+        if i >= 0:
+            raw = raw[:i]
+    return _value_clean(raw)
+
+
+def _value_candidate_spans(user_msg) -> list[str]:
+    """主人这句话里可以当"名字值"的那几段引号（排除父标签/另一个操作数那几段）。
+
+    排除两种领法：前面贴着 `挪到/改名叫` 的（那是"另一个操作数"）、后面跟着
+    `下面/里` 的（那是父标签）。`在「编程」下面加一个二级标签，名字叫 X` 里的
+    「编程」正是靠这条被排除，否则新标签会被起名叫「编程」。
+    """
+    text = str(user_msg or "")
+    out: list[str] = []
+    for m in _QUOTE_SPAN_RE.finditer(text):
+        frag = next((g for g in m.groups() if g), "").strip()
+        if not frag:
+            continue
+        if _OPERAND_MARK_RE.search(text[:m.start()]):
+            continue
+        if _PARENT_TAIL_RE.match(text[m.end():]):
+            continue
+        out.append(frag)
+    return out
+
+
+def _parent_marked_span(user_msg) -> str:
+    """主人这句话里被"父标签"语序标出来的那**唯一**一段引号；说不清则空串。"""
+    text = str(user_msg or "")
+    hits: list[str] = []
+    for m in _QUOTE_SPAN_RE.finditer(text):
+        frag = next((g for g in m.groups() if g), "").strip()
+        if not frag:
+            continue
+        if _MOVE_MARK_RE.search(text[:m.start()]) or _PARENT_TAIL_RE.match(text[m.end():]):
+            hits.append(frag)
+    return hits[0] if len(hits) == 1 else ""
+
+
+def _grounded_value(val, sq_msg: str) -> bool:
+    """这个值在主人原话里逐字有据吗？泛称/描述里的措辞**不算**有据。"""
+    v = _squash_spaces(val)
+    if not v or v in _GENERIC_VALUE_WORDS:
+        return False
+    return v in sq_msg
+
+
+def _name_arg_fix(plan_obj: dict, user_msg) -> tuple[str, str] | None:
+    """写参数里的名字值校正到主人的原话（就地改）；校正不了则返回 `(工具名, 原因)`。
+
+    只管**值**字段（`_WRITE_VALUE_FIELDS`）与 `parent_tag`——目标字段是
+    `_name_target_fix` 的地盘，两者分工不重叠。
+    """
+    tools = plan_obj.get("tools") or []
+    if len(tools) != 1:
+        return None
+    tool = _tool_name(tools[0])
+    vfields = _WRITE_VALUE_FIELDS.get(tool) or ()
+    pkey = (_WRITE_NAME_FIELDS.get(tool) or (None, None))[1]
+    if not vfields and not pkey:
+        return None
+    args, args_ok = _tool_args(tools[0])
+    if not args_ok or refs.has_refs([{"tool": tool, "args": args}]):
+        return None
+    msg = str(user_msg or "")
+    sq = _squash_spaces(msg)
+    named = _msg_named_value(msg)
+    # 这句话里标出了**父标签**（`在「编程」下面`）→ 引号段是父，不是新名字的候选：
+    # 一旦把它当值，新标签就会被起名叫「编程」（实测 `在「编程」和「摄影」下面都建一个`
+    # 这类句子正落在这里）。没有命名标记时宁可拒绝，也不拿父名当新名。
+    parent_hint = _parent_marked_span(msg)
+    cand_spans = [] if parent_hint else _value_candidate_spans(msg)
+    fixed: dict[str, object] = {}
+    unresolved: list[str] = []
+
+    for key in vfields:
+        cur = args.get(key)
+        if cur in (None, "", [], {}):
+            continue
+        if isinstance(cur, (list, tuple)):
+            vals = [str(v) for v in cur]
+            bad = [v for v in vals if not _grounded_value(v, sq)]
+            if not bad:
+                continue
+            pool = [s for s in cand_spans
+                    if _squash_spaces(s) not in {_squash_spaces(v) for v in vals}]
+            if not pool:
+                unresolved.extend(bad)
+            elif len(bad) == 1:
+                fixed[key] = [pool[0] if _squash_spaces(v) == _squash_spaces(bad[0])
+                              else v for v in vals]
+            elif len(bad) == len(pool):
+                it = iter(pool)
+                fixed[key] = [next(it) if v in bad else v for v in vals]
+            else:  # 说不清哪个对上哪个 → 不猜
+                unresolved.extend(bad)
+            continue
+        got = str(cur).strip()
+        want = named or (cand_spans[0] if len(cand_spans) == 1 else "")
+        if want and _squash_spaces(want) != _squash_spaces(got):
+            fixed[key] = want
+        elif not _grounded_value(got, sq):
+            unresolved.append(got)
+
+    pv = str(args.get(pkey) or "").strip() if pkey else ""
+    if pkey == "parent_tag" and pv and not _grounded_value(pv, sq):
+        pcand = _parent_marked_span(msg)
+        if pcand and _squash_spaces(pcand) != _squash_spaces(pv):
+            fixed[pkey] = pcand
+        elif not fixed:
+            unresolved.append(pv)
+
+    if unresolved:
+        got_txt = "」「".join(dict.fromkeys(unresolved))
+        why = (f"主人这句话里没有能对上「{got_txt}」这个参数值的名字"
+               f"（它既不是主人逐字说过的名字，也不是主人标出来的任何一段"
+               f"——命名标记后面那段、引号里那几段，都对不上）")
+        logger.warning("[planner] 写参数值在主人原话里找不到来源（%s）：%s → 确定性如实收尾",
+                       tool, why)
+        record("planner", "write_value_unresolved", tool=tool,
+               values=list(dict.fromkeys(unresolved))[:3], round=None)
+        return tool, why
+    if not fixed:
+        return None
+    params = dict(plan_obj.get("params") or {})
+    logger.info("[planner] 写参数名字值校正（%s）：%s", tool,
+                {k: str(params.get(k))[:30] for k in fixed})
+    record("planner", "write_value_correct", tool=tool,
+           got={k: str(params.get(k))[:60] for k in fixed},
+           used={k: str(v)[:60] for k, v in fixed.items()})
+    params.update(fixed)
+    fresh = instantiate_plan(plan_obj.get("skill") or "chat", params)
+    fresh["params"] = params
+    plan_obj.clear()
+    plan_obj.update(fresh)
+    return None
+
+
 def _ident_grounded(name: str, args: dict, user_msg) -> bool:
-    """写操作的身份参数是否落在主人这句话里（见本小节头注 ②）。"""
-    fields = _WRITE_NAME_FIELDS.get(name)
-    if not fields:
+    """写操作的身份参数是否落在主人这句话里（见本小节头注 ②）。
+
+    20260922 续五：`_WRITE_VALUE_FIELDS` 的**值**字段（新名字 / 标签名列表）一并
+    纳入——免弹窗（同轮命令即确认）的前提从"目标说过"扩到"要写进去的值也说过"。
+    校正（`_name_arg_fix`）在这之前跑过，所以这里判的是校正后的参数。
+    """
+    tkey, pkey = _WRITE_NAME_FIELDS.get(name) or (None, None)
+    extra = tuple(_WRITE_VALUE_FIELDS.get(name) or ())
+    if not tkey and not pkey and not extra:
         return True  # 不是按名字指认的写工具（文章族走 target_* 三条判据）
     msg = _squash_spaces(user_msg)
     if not msg:
         return False
-    for key in (k for k in fields if k):
-        val = _squash_spaces(args.get(key))
+    for key in (tkey, pkey) + extra:
+        if not key:
+            continue
+        val = args.get(key)
+        if isinstance(val, (list, tuple)):
+            vals = [str(v) for v in val if str(v).strip()]
+            if any(_squash_spaces(v) not in msg for v in vals):
+                return False
+            continue
+        val = _squash_spaces(val)
         if val and val not in msg:
             return False
     return True
@@ -3527,7 +3773,14 @@ _EXECUTOR_PROMPT = """\
     回了"系统这边已经发起啦…请留意屏幕上的确认弹窗"，而那一轮连帧都没有）。
     你的正文里只允许出现两种东西：工具回执里的事实（成功说成功、失败说失败），
     或者"这件事我做不到／需要主人自己做"。确认之后的那一轮同理，只按回执说结果，
-    绝不把"还没动手"讲成"已经办好了"。"""
+    绝不把"还没动手"讲成"已经办好了"。
+19. 系统说"某个名字没找到"时，**照抄它给的那个字面，别把两个名字画等号**
+    （20260922）：系统查的是它**自己填进参数的那个值**，未必是主人嘴上说的那个名字。
+    实测：主人说"给文章 1 加上「音乐」标签"，系统用的值是占位文字「标签名」，
+    如实答复里于是出现了"站内并没有叫「音乐」的现成标签"这句**假话**（音乐在站里，
+    id=11）。凡是"没有叫「X」的"这类结论，X 必须是系统原话里那个字面；分不清就
+    原样引述（"系统返回的是「站内没有这个标签：标签名」"），**不许**替系统把
+    主人点名的名字和系统查的值说成同一个。"""
 
 
 def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
