@@ -1199,6 +1199,114 @@ g._name_target_fix(_ren, "把标签「Asyncio」改名叫「协程」")
 check("改名形态：新名字**不会**被当成父标签填进去（族别搞混就是参数对调）",
       not _ren["params"].get("parent_tag"), str(_ren["params"]))
 
+print("\n⑳ 写参数的值也要来自主人这句话（②防线续五：新建编名 / 抄短 / 抄泛称）")
+
+
+def _value_case(desc: str, skill: str, params: dict, msg: str, want):
+    """跑一次 `_name_arg_fix` 并按形态断言。
+
+    `want` 三态：dict = 要校正成这几项（顺带断言参数表与 TOOLS 行同步）；None =
+    一个字节都不动（主人原话里逐字有据）；"REFUSE" = 零写 + 响亮（解不出就绝不猜）。
+    """
+    pl = instantiate_plan(skill, params)
+    pl["params"] = dict(params)
+    before = " ".join(pl.get("tools") or [])
+    refuse = g._name_arg_fix(pl, msg)
+    if want == "REFUSE":
+        check(desc, refuse is not None and pl["params"] == params
+              and " ".join(pl.get("tools") or []) == before,
+              str(refuse)[:90])
+        return
+    if want is None:
+        check(desc, refuse is None and pl["params"] == params,
+              json.dumps(pl["params"], ensure_ascii=False)[:90])
+        return
+    got = {k: pl["params"].get(k) for k in want}
+    tools_line = " ".join(pl.get("tools") or [])
+    flat = [str(x) for v in want.values() for x in (v if isinstance(v, list) else [v])]
+    check(desc, refuse is None and got == want and all(x in tools_line for x in flat),
+          json.dumps(got, ensure_ascii=False)[:90])
+
+
+# 事故现场（20260922 活体探针⑥⑩⑭）：这三条写操作的**新名字**过去没有任何地基——
+# `_ident_grounded` 对 create_tag 只查父标签，于是 title 填什么都有据、免弹窗快道
+# 又开着 ⇒ planner 编的名字（⑥ 20260922_1345_test_tag）或抄的泛称（⑩⑭ title=「名字」）
+# 直接落库，命令式措辞一个确认框都不弹。
+_value_case("⑩ 抄了泛称「名字」→ 认免引号的命名标记（主人原话那一段）",
+            "tag_create", {"title": "名字", "color": "粉色"},
+            "一级标签，名字叫_探针色_0922134601，使用粉色颜色",
+            {"title": "_探针色_0922134601"})
+_value_case("⑥ 编了个名字 → 认「名字叫「X」」（引号段就是身份）",
+            "tag_create", {"title": "20260922_1345_test_tag"},
+            "新建一个一级标签，名字叫「_探针_0922134554」",
+            {"title": "_探针_0922134554"})
+_value_case("⑭ 抄短了名字 → 补回主人原话里那一段（分类同理）",
+            "category_create", {"title": "探针分类0922"},
+            "新建一个分类，叫「探针分类0922134609」",
+            {"title": "探针分类0922134609"})
+_value_case("⑭b 泛称同样按标记段校正（名字标记优先于校验）",
+            "category_create", {"title": "名字"},
+            "新建一个分类，叫「探针分类0922134609」",
+            {"title": "探针分类0922134609"})
+_value_case("⑤ 列表值也是值：抄了泛称「标签名」→ 认主人引号里那一段",
+            "article_tags", {"article_id": 1, "add": ["标签名"]},
+            "给文章 1 加上「音乐」标签", {"add": ["音乐"]})
+_value_case("  摘标签同理（remove 与 add 同一族，别只修一半）",
+            "article_tags", {"article_id": 1, "remove": ["标签名"]},
+            "把文章 1 的「音乐」标签去掉", {"remove": ["音乐"]})
+_value_case("⑪ 「在「编程」下面」是父标签、不是新名字（两个操作数不许对调）",
+            "tag_create", {"title": "父标签名", "parent_tag": "父标签名"},
+            "我想在「编程」下面加一个二级标签，名字叫_探针L2_0922134605",
+            {"title": "_探针L2_0922134605", "parent_tag": "编程"})
+_value_case("改名形态：new_title 认「改名叫「X」」那段",
+            "tag_update", {"name": "Asyncio", "new_title": "新名字"},
+            "把标签「Asyncio」改名叫「协程」", {"new_title": "协程"})
+_value_case("值逐字在主人原话里 → 一个字节都不动（防线不是重写器）",
+            "tag_create", {"title": "Redis"}, "帮我建一个 Redis 标签", None)
+_value_case("列表值本来就对 → 不动（多段引号各有其主）",
+            "article_tags", {"article_id": 1, "add": ["音乐", "摄影"]},
+            "给文章 1 加上「音乐」「摄影」标签", None)
+_value_case("解不出值（主人没说名字）→ **零写 + 响亮**，绝不拿 planner 的转写凑一个",
+            "tag_create", {"title": "临时标签"}, "帮我建一个标签", "REFUSE")
+_value_case("引号说不清哪一个才是值（在「编程」和「摄影」下面都建一个）→ 同样拒绝",
+            "tag_create", {"title": "标签名"},
+            "在「编程」和「摄影」下面都建一个", "REFUSE")
+
+_seen_v: list = []
+_saved_v = g.record
+try:
+    g.record = lambda *a, **k: _seen_v.append(a)
+    g._name_arg_fix(instantiate_plan("tag_create", {"title": "临时标签"}) | {"params": {"title": "临时标签"}},
+                    "帮我建一个标签")
+finally:
+    g.record = _saved_v
+check("  拒绝这一支要留痕（零写的决定必须能在 trace 里复盘）",
+      any(a[:2] == ("planner", "write_value_unresolved") for a in _seen_v),
+      str(_seen_v)[:80])
+
+print("\n㉑ 公告正文标记认「改成/改为/换成/变成/更新为」（⑯ 探针：正文被写错的根因）")
+for _verb in ("改成", "改为", "换成", "变成", "更新为", "写", "是", "为", "说", "："):
+    _b = g._msg_marked_field(f"把公告「X」的内容{_verb}：新的正文", "body")
+    check(f"  「内容{_verb}：」认得出标记", _b == "新的正文", str(_b))
+_BODY = "维护改到明晚 23 点（探针自动更新）"
+_pl_ann = instantiate_plan("announcement_update",
+                           {"title": "探针公告", "new_title": "", "content": "维护改到明晚"})
+_pl_ann["params"] = {"title": "探针公告", "new_title": "", "content": "维护改到明晚"}
+g._announcement_text_fix(_pl_ann, f"把公告「探针公告」的内容改成：{_BODY}")
+check("「内容改成：X」→ 正文校正成主人写下的那段"
+      "（不认「改成」时标记整条落空，planner 的转写就顶上去落地了）",
+      _pl_ann["params"].get("content") == _BODY, str(_pl_ann["params"].get("content"))[:80])
+check("  标题不动（这句没给新标题；改公告的 title 是**身份**，不许被正文标记带跑）",
+      _pl_ann["params"].get("title") == "探针公告", str(_pl_ann["params"].get("title")))
+_pl_new = instantiate_plan("announcement_create",
+                           {"title": "探针公告", "content": "探针内容：今晚 23 点维护"})
+_pl_new["params"] = {"title": "探针公告", "content": "探针内容：今晚 23 点维护"}
+g._announcement_text_fix(_pl_new, "发一条公告，标题叫「探针公告」，"
+                                  "正文写：探针内容：今晚 23 点维护（本条由探针自动发出）")
+check("  最左匹配落在**主人标的那个**标记上（正文本里再出现「探针内容：」也不许被它抢走）",
+      _pl_new["params"].get("content") == "探针内容：今晚 23 点维护（本条由探针自动发出）",
+      str(_pl_new["params"].get("content"))[:90])
+
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
