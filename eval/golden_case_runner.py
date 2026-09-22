@@ -18,6 +18,7 @@ sys.path.insert(0, "/home/ubuntu/memory_blog_rust/saudade-blog-agent")
 sys.path.insert(0, "/home/ubuntu/memory_blog_rust/saudade-blog-agent/eval")
 
 import run_golden
+import golden_trace
 
 
 def main():
@@ -29,8 +30,13 @@ def main():
     # 调用者身份同理只走 run_golden.build_principal（20260921 管理助手用例需要 role，
     # 隔离跑法若各自维护一份，就会重演"两个跑法结论不同"那次）
     req = run_golden.build_request(case)
+    # golden trace（20260922）：run_id 由父进程经 GOLDEN_TRACE_RUN 传进来（隔离跑法下
+    # 一个 run 一个目录，子进程各自 resolve 会散成 N 个目录）。父进程没设时退回当前
+    # 时刻——单条手跑也照样有 trace，只是那条独占一个目录。
+    run_id = golden_trace.resolve_run_id()
     t0 = time.time()
-    result = run_golden.run_one(req, run_golden.build_principal(case))
+    result = run_golden.run_one(req, run_golden.build_principal(case),
+                                trace_ctx={"run": run_id, "case": case["id"]})
     elapsed = time.time() - t0
     fails = run_golden.check_gold(g, result)
     ok = not fails and not result["error"]
@@ -45,6 +51,8 @@ def main():
         "commands": result["commands"],
         "tool_calls": result["tool_calls"],
         "text": result["text"][:300],
+        # 这一条的 trace 路径（20260922）：父进程报告里带出去，红条能直接指着读
+        "trace": result.get("trace"),
     }
     print("RESULT " + json.dumps(out, ensure_ascii=False))
     sys.exit(0 if ok else 1)

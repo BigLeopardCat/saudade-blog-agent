@@ -174,6 +174,24 @@ sticker/planner 等判据改写用例，20260919 起新增 dep/refs 标签（依
 `eval/golden_full_run.py` 已提供进程隔离 + 单条 180s 超时（防悬挂污染），是本机的看门狗。
 CI 只留 L0 秒级套件。
 
+**golden 也落 trace（20260922）**：跑 golden 时每条用例落一份 trace——
+`logs/agent/golden_traces/<run_id>/<case_id>.json`（`eval/golden_trace.py`）。此前一条都没有：
+golden 是**进程内**直调链路，而 `start_trace` 只在 `server.py` 的 `chat_stream` 里调，于是判红的用例
+只能靠"复采样几次看是不是方差"裁决（实测一条写操作用例 5 跑 3 绿才敢下结论），而 trace 里本来就有
+planner 原始决策、被剔清单、gate 打回原因与四段耗时。三条纪律：
+
+- **绝不合流生产语料**：目录是生产 trace 目录的**兄弟**（`trace_alert.py`/`trace_metrics.py`/
+  效率基线扫的是生产那个目录，评测流量混进去等于污染判据）；`case_dir()` 带越界与生产目录守卫。
+- **`user_id` 恒 0**：那几条 `needs_admin_uid` 用例带真管理员 uid，而身份是测试夹具不是真人。
+- **一个 run 一个目录**：文件名 = 用例 id，报告里带路径（红条直接指着读）；`--keep-traces N`
+  （默认 5）只删时间戳形状的目录，`--no-trace` 整体关；隔离跑法的 run_id 由父进程经
+  `GOLDEN_TRACE_RUN` 下发（子进程各自 resolve 会把一次全量散成上百个目录）。
+
+**坑（实测踩到）**：`ThreadPoolExecutor.submit` **不拷贝 contextvars**（只有 `asyncio.to_thread`
+自动做）——照 `server._submit_with_context` 的办法 `copy_context()` + `ctx.run` 提交，否则 recorder
+进不了 producer 线程，落下来的是一份**只有元数据的空壳 trace**，而"评测有 trace 了"看起来完全正常。
+空事件会打 ⚠（`test_golden_trace.py` 进 CI 锁守卫/接线/prune 三组，秒级不联网）。
+
 ---
 
 ## 5. 可观测性：三支柱
