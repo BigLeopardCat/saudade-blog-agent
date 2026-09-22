@@ -823,6 +823,17 @@ flowchart TB
   current_effects 系统状态、目标 = 消息切换动词后字面量，无模型推断空间 → `_effect_switch_fast_path`
   同轮产两条 toggle_effect spec（旧 off + 目标 on，幂等检查：目标已开只关旧）；内容改写语境
   （"把文章里的雨字改成雪字"，guard 词 字/词/标题/内容等）不命中落回 LLM）。
+
+  ⚠️ **判定前必须先剥系统消息壳（20260923 修）**：`server.py` 给本轮用户消息加锚点壳
+  `[当前问题]: `，而导航快道的两条入口都是**句首锚定**（`msg in NAV_MAP` 整串相等 +
+  `_NAV_VERB_RE.match` 的 `^`）——壳一在就恒不命中，**该快道自 20260901 壳上线起在生产里一次
+  都没命中过**（生产 trace 里 `fastpath(kind=nav)` 为 0；同一次全量 golden 里
+  article_read/display/effect_switch 都命中、nav 是 0，因为那三条用 `.search`）。现四条快道与
+  动作意图扫描统一经 `decisions._bare` 剥壳（←→ `authz.strip_system_tags`，与同意闸同一口径，
+  只用于判定、**不碰给模型的 prompt**）。这个函数（`_SYS_TAG_RE`，剥句首 `[xx]:` 形态）当年就是
+  为**同意闸**加的——同一个壳把写操作的身份判据也架空过一次，属于同款坑的第二例。教训：
+  **凡把用户消息当判据输入的锚定判据，都要问一句"它看到的是不是包装过的文本"**。
+
   快道只判定**用户首条消息**（rounds==0 且本轮无工具帧——execute 完成后回 planner 再命中快道
   会重复规划同一动作，20260903 设计陷阱实证）；快道都是**正向确定性识别**（命中才拦截，识别
   依据 NAV_MAP/正则/current_url 等系统数据，不存在模型猜测通道），未命中落回 planner LLM
