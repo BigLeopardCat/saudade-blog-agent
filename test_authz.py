@@ -264,20 +264,26 @@ try:
     fake_scope = "write.probe"
     authz.TOOL_SCOPE["_probe_noconsent"] = fake_scope
     orig_patterns = authz._CONSENT_PATTERNS
+    # **存原值再还原**，别写死一张集合（20260923 踩到）：这段探针此前在 finally 里
+    # 硬编码 `frozenset({write.content, write.console})` 还原，于是后面新增一个需确认
+    # 的 scope 时，这段代码会**把新成员悄悄抹掉**——而它自己的"清理干净"断言比对的
+    # 也是那张写死的集合，所以抹掉这件事在测试里完全看不出来（表现是本文件下面所有
+    # 用 consent_granted 的段落突然全红）。还原就该还原成"进来时的样子"。
+    orig_consent = authz.CONSENT_SCOPES
     authz.CONSENT_SCOPES = frozenset({fake_scope})     # 临时换一组"需确认但没配语表"
     try:
         check("需确认却没配确认语表 → fail-closed（不默认放行）",
               authz.requires_consent(sec, "_probe_noconsent")
               and not authz.consent_granted(sec, "_probe_noconsent", "确认发布"))
     finally:
-        authz.CONSENT_SCOPES = frozenset({authz.SCOPE_WRITE_CONTENT, authz.SCOPE_WRITE_CONSOLE})
+        authz.CONSENT_SCOPES = orig_consent
         authz._CONSENT_PATTERNS = orig_patterns
         del authz.TOOL_SCOPE["_probe_noconsent"]
 finally:
     del authz.TOOL_SCOPE["_probe_post"]
 check("探针条目清理干净", "_probe_post" not in authz.TOOL_SCOPE
       and "_probe_noconsent" not in authz.TOOL_SCOPE
-      and authz.CONSENT_SCOPES == frozenset({authz.SCOPE_WRITE_CONTENT, authz.SCOPE_WRITE_CONSOLE}))
+      and authz.CONSENT_SCOPES == orig_consent)
 
 print("⑨c 后台写确认语（命令式判据：判『本轮有没有明确命令』，不是第二次确认）")
 # 与 write.content 的差异：那里的判据是一个**词表式**正则（"确认发布"族），这里
@@ -437,6 +443,124 @@ check("剥壳只剥**开头**的方括号注记（句中的括号不动）",
       and authz._strip_system_tags("把文章 12 [注]: 设为私密")
       == "把文章 12 [注]: 设为私密"
       and authz._strip_system_tags("[求助] 把文章 12 设为私密") == "把文章 12 设为私密")
+
+print("⑨g write.own（20260923）：写自己的私有数据（收藏/通知已读）")
+# 与其它写 scope 的取向差异（见 authz.py 的三处注释）：三档角色都授予、不进
+# _HARD_SCOPES（它写的是调用者自己的东西，且本来就能在页面上做 ⇒ 满足 shadow 的
+# "观测既有流量"前提）、不进 _ALWAYS_CONFIRM_TOOLS（弹窗一律问会挡掉日常的"收藏这篇"）。
+check("write.own 是词汇表成员", authz.SCOPE_WRITE_OWN in authz.ALL_SCOPES
+      and authz.SCOPE_WRITE_OWN in authz.WRITE_SCOPES)
+check("write.own 属于需确认 scope（写要有一句明确的命令）",
+      authz.SCOPE_WRITE_OWN in authz.CONSENT_SCOPES)
+check("write.own **不**进 _HARD_SCOPES（自己账号里的写，真流量里本来就有）",
+      authz.SCOPE_WRITE_OWN not in authz._HARD_SCOPES)
+check("write.own 的能力三档角色都有（角色轴在这件事上没有信息量）",
+      all(authz.SCOPE_WRITE_OWN in authz.scopes_for(r) for r in KNOWN_ROLES))
+check("write.own 的确认语是**函数**（与 write.console 同族），不是词表",
+      callable(authz._CONSENT_PATTERNS[authz.SCOPE_WRITE_OWN]))
+check("未获确认的说明写清了『写的是用户自己账号里的状态』",
+      "自己" in authz._CONSENT_WHY[authz.SCOPE_WRITE_OWN][0])
+# 家族映射的**完备性**：TOOL_SCOPE 里声明 write.own 的工具必须登记家族名，
+# 否则 `_own_command` 一律判 False（fail-closed）——那是"能力静默不可用"，
+# 属于工程疏漏，必须在 CI 层被看见（此刻三个工具还没落地，这条是空的；见 ⑨h）。
+_OWN_TOOLS = sorted(n for n, s in authz.TOOL_SCOPE.items() if s == authz.SCOPE_WRITE_OWN)
+_unmapped = [n for n in _OWN_TOOLS if n not in authz._OWN_TOOL_FAMILY]
+check(f"write.own 工具都登记了动作家族（当前 {len(_OWN_TOOLS)} 个）", not _unmapped,
+      f"未登记: {_unmapped}")
+check("未登记家族的工具 → 判不出命令（fail-closed，绝不『反正都是 own』就放行）",
+      not authz._own_command("收藏这篇文章", "_probe_own_notmapped")
+      and not authz._own_command("收藏这篇文章", None))
+
+# 判据矩阵：正例（命令）/ 反例（提问、假设、陈述、名词用法、跨工具误靶）。
+_OWN_ADD, _OWN_RM, _OWN_RD = "add_favorite", "remove_favorite", "read_notifications"
+OWN_POS = [
+    (_OWN_ADD, "收藏这篇文章"),
+    (_OWN_ADD, "收藏一下这篇"),
+    (_OWN_ADD, "帮我收藏《架构文档》"),
+    (_OWN_ADD, "把文章 12 收藏一下"),
+    (_OWN_ADD, "把这篇文章加入收藏"),
+    (_OWN_ADD, "收藏 12"),
+    (_OWN_ADD, "麻烦把这篇收藏起来"),
+    (_OWN_RM, "取消收藏文章 12"),
+    (_OWN_RM, "把文章 12 取消收藏"),
+    (_OWN_RM, "把这篇文章从收藏里去掉"),
+    (_OWN_RM, "把这篇从收藏里移出去"),
+    (_OWN_RM, "把收藏里的文章 12 删掉"),
+    (_OWN_RM, "移除收藏《架构文档》"),
+    (_OWN_RD, "把通知都标记为已读"),
+    (_OWN_RD, "标记已读"),
+    (_OWN_RD, "全部标记为已读"),
+    (_OWN_RD, "帮我标记为已读"),
+    (_OWN_RD, "把未读的都标为已读"),
+    (_OWN_RD, "未读的都标记为已读"),
+]
+OWN_NEG = [
+    # 提问/打听（**"我收藏了哪些文章" 是最容易误判的一条**：有动作词、没有问号、
+    # 也没有 吗/呢——量词表与结构判据各拦一半，单列出来）
+    (_OWN_ADD, "我收藏了哪些文章"),
+    (_OWN_ADD, "我的收藏在哪"),
+    (_OWN_ADD, "收藏文章有什么用"),
+    (_OWN_ADD, "收藏功能怎么用"),
+    (_OWN_ADD, "收藏夹是干嘛的"),
+    (_OWN_RM, "怎么取消收藏"),
+    (_OWN_RD, "有未读通知吗"),
+    (_OWN_RD, "我有几条未读"),
+    (_OWN_RD, "未读通知在哪看"),
+    (_OWN_RD, "通知怎么标记已读"),
+    # 假设 / 陈述
+    (_OWN_ADD, "如果我把文章 12 收藏了会怎样"),
+    (_OWN_ADD, "我已经把这篇收藏了"),
+    (_OWN_ADD, "这篇文章我收藏了"),
+    # 名词用法（"收藏"是页面名，不是动词）
+    (_OWN_ADD, "帮我看看收藏"),
+    (_OWN_ADD, "收藏夹里有哪些"),
+    (_OWN_RD, "给我看看未读通知"),
+    (_OWN_RD, "把通知标记一下"),
+    # 跨工具误靶：命令的是**另一个** own 动作 ⇒ 这一个不许判成命令
+    (_OWN_ADD, "把通知都标记为已读"),
+    (_OWN_RM, "标记已读"),
+    (_OWN_RD, "收藏这篇文章"),
+    (_OWN_RD, ""),
+]
+_bad_own_pos = [f"{t}:{m}" for t, m in OWN_POS if not authz._own_command(m, t)]
+_bad_own_neg = [f"{t}:{m}" for t, m in OWN_NEG if authz._own_command(m, t)]
+check(f"own 写命令认得（{len(OWN_POS)} 条）", not _bad_own_pos, f"漏判: {_bad_own_pos}")
+check(f"提问/假设/陈述/名词/误靶不是命令（{len(OWN_NEG)} 条）", not _bad_own_neg,
+      f"误判: {_bad_own_neg}")
+# 这几条走 `consent_granted`（判据的**入口**），需要工具在 TOOL_SCOPE 里查得到 scope
+# ——而这三个工具与它们的技能/注册表接线是下一批（20260923 批次 7）的事。这里用临时
+# 探针条目先把入口跑通：声明表加一条 = 三个名字挂上 write.own，跑完删掉（并断言没残留）。
+# 下一批工具真落地后，同样这几条断言会走真实声明，一字不用改。
+_OWN_TOOL_NAMES = (_OWN_ADD, _OWN_RM, _OWN_RD)
+for _n in _OWN_TOOL_NAMES:
+    authz.TOOL_SCOPE[_n] = authz.SCOPE_WRITE_OWN
+try:
+    check("三个 own 工具挂上声明后：都判得出『这句要不要确认』",
+          all(authz.requires_consent(p(ROLE_USER), n) for n in _OWN_TOOL_NAMES))
+    # 这一条是本轮**新加的那道判据**（一个 scope 挂多个工具时才有意义）：同一句话，
+    # 对"它命令的那个工具"放行、对"它没命令的工具"拦住——否则 planner 填错工具时，
+    # scope 级同意会照样放行（误靶写）。
+    check("同一句话对不同 own 工具结论**相反**（同意闸看得到工具名）",
+          authz.consent_granted(p(ROLE_USER), _OWN_RD, "把通知都标记为已读")
+          and not authz.consent_granted(p(ROLE_USER), _OWN_ADD, "把通知都标记为已读")
+          and authz.consent_granted(p(ROLE_USER), _OWN_ADD, "收藏这篇文章")
+          and not authz.consent_granted(p(ROLE_USER), _OWN_RD, "收藏这篇文章"))
+    check("write.own 的确认与角色无关（三个角色看到同一结论）",
+          all(authz.consent_granted(p(r), _OWN_ADD, "收藏这篇文章") for r in KNOWN_ROLES)
+          and all(not authz.consent_granted(p(r), _OWN_ADD, "我收藏了哪些文章")
+                  for r in KNOWN_ROLES))
+    check("系统消息壳对 own 判据同样透明",
+          authz.consent_granted(p(ROLE_USER), _OWN_ADD, _WRAP + "收藏这篇文章")
+          and not authz.consent_granted(p(ROLE_USER), _OWN_ADD,
+                                        _WRAP + "我收藏了哪些文章"))
+    check("未确认帧写得出这次要确认的是什么（own 版本）",
+          "自己" in authz.consent_frame(_OWN_ADD, p(ROLE_USER))
+          and authz.consent_error_reason(authz.consent_frame(_OWN_ADD, p(ROLE_USER)))
+          == authz.REASON_CONSENT)
+finally:
+    for _n in _OWN_TOOL_NAMES:
+        del authz.TOOL_SCOPE[_n]
+check("⑨g 探针条目清理干净", all(_n not in authz.TOOL_SCOPE for _n in _OWN_TOOL_NAMES))
 
 print("⑨b 接线：闸在调用之前，拒绝说得出原因，叙述侧封得住")
 check("execute 在调用前算确认", "consent_missing = (authz.requires_consent" in graph_src)
