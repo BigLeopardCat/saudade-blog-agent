@@ -1334,6 +1334,70 @@ check("  最左匹配落在**主人标的那个**标记上（正文本里再出�
       _pl_new["params"].get("content") == "探针内容：今晚 23 点维护（本条由探针自动发出）",
       str(_pl_new["params"].get("content"))[:90])
 
+print("\n㉒ 文章确认框写《标题》与当前状态（20260922 第七轮：全写面唯一的盲签）")
+# 事故形态：标签/分类/公告/留言的问句都写了**名字**，只有文章这一类一直只有内部
+# 编号（「修改文章 46」）——主人没法从这句话里认出"是不是我说的那篇"，而点确定
+# 正是文章写操作唯一的人类兜底。评估意见"有证据 ≠ 目标唯一"落在这里。
+_NOTES = {1: {"noteKey": 1, "noteTitle": "Memory Blog 项目文件结构说明",
+              "status": "draft", "isTop": 0},
+          46: {"noteKey": 46, "noteTitle": "文章向量空间图谱项目文档",
+               "status": "public", "isTop": 1}}
+_STATUS_SPEC = {"tool": "set_article_status",
+                "args": {"article_id": 1, "status": "private"}}
+_TAGS_SPEC = {"tool": "set_article_tags",
+              "args": {"article_id": 46, "remove": ["摄影"]}}
+_q = A.render_confirm_question([_STATUS_SPEC], None, None, None, _NOTES)
+check("改状态的问句带上《标题》（此前只有内部编号「修改文章 1」）",
+      "《Memory Blog 项目文件结构说明》" in _q and "修改文章 1" in _q, _q)
+check("  并写出**现状**（主人点确定前才知道自己改的是不是这件事）",
+      "现在：草稿、未置顶" in _q, _q)
+_q2 = A.render_confirm_question([_TAGS_SPEC], None, None, None, _NOTES)
+check("摘标签的问句同样带标题与现状",
+      "《文章向量空间图谱项目文档》（现在：公开、置顶）的标签：去掉 摄影" in _q2, _q2)
+check("  带上标题后不补那个分隔空格（「…（现在：…） 的标签」像两个并列短语）",
+      "） 的标签" not in _q2, _q2)
+check("气泡正文与问句同源（都带标题与现状）",
+      "《Memory Blog 项目文件结构说明》" in A.render_confirm_text(
+          [_STATUS_SPEC], None, None, None, _NOTES))
+check("读不到文章清单（None）→ 退回只写 id，**照样弹窗**"
+      "（少说一句 ≠ 不弹：不弹就退回「判成歧义就追问」的死路形态）",
+      "修改文章 1：" in A.render_confirm_question([_STATUS_SPEC]) and
+      "修改文章 1：" in A.render_confirm_question(
+          [_STATUS_SPEC], None, None, None, None))
+check("空清单（真的没有这一篇）→ 如实写出来，不装作核对过",
+      "（后台清单里没有这一篇）" in A.render_confirm_question(
+          [_STATUS_SPEC], None, None, None, {}))
+# 现状是**读来的事实**，读不到就该少说：认不出的状态吐回原值、置顶值缺失就不提置顶
+# （编一个"公开"出来，主人会以为自己那篇早就是公开的）。
+_qbad = A.render_confirm_question(
+    [_STATUS_SPEC], None, None, None,
+    {1: {"noteKey": 1, "noteTitle": "X", "status": "weird", "isTop": None}})
+check("状态值认不出 → 如实吐回「未知状态「weird」」，不编一个已知状态",
+      "未知状态「weird」" in _qbad, _qbad)
+check("置顶值读不到 → 完全不提置顶（不知道就不说）",
+      "置顶" not in _qbad, _qbad)
+check("标签写操作不受 notes 影响（同一份快照只服务文章那两类）",
+      "《" not in A.render_confirm_question(
+          [{"tool": "create_tag", "args": {"title": "新标签"}}],
+          {}, None, None, _NOTES))
+# 接线（渲染层收到 notes 是一回事，graph 真的去读是另一回事）：只在要点到文章时读，
+# 标签/分类写操作不该为此多一次后台往返。
+_gsrc = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encoding="utf-8")
+check("接线：只在 picks 里有文章写工具时才读文章清单",
+      "in _ARTICLE_WRITE_TOOLS for s in picks" in _gsrc and "_note_index(config)" in _gsrc)
+check("  读失败不拦弹窗（note_index 为空时问句退化成 id，不是 return None）",
+      'note_index = None' in _gsrc and "_note_index(config)" in _gsrc)
+# 跨模块口径：弹窗里的「现在」必须描述**写操作真正会改的那一行**——`_note_index`
+# 与写工具的读前值 `_read_note` 必须走同一个端点（谁改成 draft/editor 那条，
+# 弹窗描述的就会是另一行：那条对修改稿行会解引用成原文章）。
+import inspect  # noqa: E402
+from tools import base as _B  # noqa: E402
+_rn = inspect.getsource(_B._read_note)
+_ni = inspect.getsource(_B._note_index)
+check("文章清单与写工具的读前值走同一端点（弹窗里的「现在」= 真正被改的那一行）",
+      '"/api/protected/notes/list"' in _rn and '"/api/protected/notes/list"' in _ni
+      and "draft/editor" not in _ni, _ni[:60])
+
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
