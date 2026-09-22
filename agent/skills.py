@@ -77,13 +77,33 @@ WRITE_SKILL_NAMES = frozenset({
     "category_create", "category_update", "category_delete",
     "announcement_create", "announcement_update", "announcement_delete",
     "board_audit", "board_delete",
+    # 用户**自己**的数据（20260923 批 7）：动的是发起人自己账号里的私有数据
+    # （收藏夹 / 已读状态），scope=write.own 而不是 write.console，roles 不设限。
+    "favorite_add", "favorite_remove", "notice_read",
 })
 
-# 其中"目标是一个**名字**"的那批（标签 / 分类 / 公告），共用 `_expand_write_skill`：
-# 它们与文章两件的差别不在写法而在**目标通道**——文章写认 article_id（有"用户
-# 点名即据"的判据），标签/分类/公告写认名字（公告认标题），解析在工具侧对着实时
-# 字典做。
-_WRITE_NAME_TARGET_SKILLS = WRITE_SKILL_NAMES - {"article_status", "article_tags"}
+# 其中"目标是一个**名字**"的那批（标签 / 分类 / 公告 / 留言片段），共用
+# `_expand_write_skill`：它们与其余几件的差别不在写法而在**目标通道**——文章两件
+# 与收藏两件认 article_id（有"用户点名即据"的判据），标签/分类/公告写认名字
+# （公告认标题），解析在工具侧对着实时字典做。
+#
+# ⚠️ 这份名单从 20260923 起是**显式白名单**，不再是 `WRITE_SKILL_NAMES - {…}` 的
+# 减法：减法定义下，任何"目标不是名字"的新写技能都会**悄悄落进** `_expand_write_skill`，
+# 被它尾部的兜底当成「未知的写技能」⇒ 零工具零写、还不报错（`instantiate_plan` 里
+# 那条 `if not note` 会把它填成"参数齐备"，看起来一切正常）。加写技能时**两个地方
+# 都要补**：这里的名单（或者下面 `_OWN_WRITE_SKILLS`），以及 `instantiate_plan` 的
+# 分支。test_skills.py 有锁：注册表里每个写技能都必须落进三者之一。
+_WRITE_NAME_TARGET_SKILLS = frozenset({
+    "tag_create", "tag_update", "tag_delete",
+    "category_create", "category_update", "category_delete",
+    "announcement_create", "announcement_update", "announcement_delete",
+    "board_audit", "board_delete",
+})
+
+# 用户自己数据的写技能（20260923 批 7），共用 `_expand_own_skill`：目标是 article_id
+# （收藏两件）或通知 id 列表 / "全部"（标记已读），**且有"无范围就零工具"这条硬判据**
+# ——见该函数头注。
+_OWN_WRITE_SKILLS = frozenset({"favorite_add", "favorite_remove", "notice_read"})
 
 
 def _norm_pos_int(value) -> int | None:
@@ -763,6 +783,81 @@ SKILLS: list[Skill] = [
         ),
         roles=frozenset({ROLE_ADMIN}),
     ),
+    # ── 用户**自己**的数据三件（20260923 批 7）───────────────────────────
+    # 与上面那批管理助手写技能的分界不是"要不要确认"，而是**动谁的东西**：
+    # 这里写的是发起人**自己账号里**的私有数据（收藏夹 / 已读状态），不外显、
+    # 只有他自己看得见，所以 scope 是 write.own 而不是 write.console，也**不给
+    # roles 限制**（访客、秘书、管理员都有这一档）。除此之外纪律完全一致：
+    # 缺参零工具 + 注记、目标要有据、确认判不出来就弹窗（见 agent/authz.py 的
+    # `_own_command`：判据是按**工具名**分开的，判不出来交给弹窗，不是硬拒）。
+    Skill(
+        name="favorite_add",
+        capability="把一篇文章收进**你自己**的收藏夹",
+        description=(
+            "用户要求**收藏一篇文章**时使用（「收藏这篇」「把文章 12 加到收藏」）。"
+            "参数 article_id=文章 id（**用户本轮点名了就直接用点名的那个，不必先读**"
+            "——系统会核对是否与点名一致；没点名只说特征/指代时必须先用 search_notes 或 "
+            "list_notes 读回确切 id，不许凭记忆写）。"
+            "收藏只进**他自己**的收藏夹，只有他看得见，也不改变文章的公开状态；"
+            "已经收藏过的会如实说本来就有，不会重复收藏。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，"
+            "也**照常选本技能**——要不要真动手由系统弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生；"
+            "用户只是在提问或假设（「这篇文章值得收藏吗」）时不要选本技能。"
+        ),
+        inputs={"article_id": "文章 id"},
+        plan=[("add_favorite", {"article_id": "$article_id"})],
+        complete_when="add_favorite 返回了收藏结果（含「本来已收藏」）",
+        reply_contract=(
+            "只能按 add_favorite 的实际返回作答，说清收的是哪一篇；"
+            "返回「本来就在你的收藏夹里」就说本来就有、没有重复收藏；"
+            "返回失败/未确认时如实说没收藏成，**绝不得用完成式声称已收藏**"
+        ),
+    ),
+    Skill(
+        name="favorite_remove",
+        capability="把一篇文章从**你自己**的收藏夹里去掉",
+        description=(
+            "用户要求**取消收藏一篇文章**时使用（「取消收藏这篇」「从收藏里去掉文章 12」）。"
+            "参数 article_id=文章 id（点名了直接用的那个；没点名时先用 list_my_favorites "
+            "读回他自己收藏夹里有哪些、或 search_notes 拿确切 id，不许凭记忆写）。"
+            "只是把他自己的收藏夹里那一条去掉，**不会删文章、也不影响别人**；"
+            "本来就没收藏过的会如实说本来就没有，不当成出错。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，"
+            "也**照常选本技能**——要不要真动手由系统弹确认框问主人。"
+        ),
+        inputs={"article_id": "文章 id"},
+        plan=[("remove_favorite", {"article_id": "$article_id"})],
+        complete_when="remove_favorite 返回了取消结果（含「本来就没收藏」）",
+        reply_contract=(
+            "只能按 remove_favorite 的实际返回作答，说清撤的是哪一篇；"
+            "返回「本来就不在你的收藏夹里」就说本来就没有、什么都没改；"
+            "返回失败/未确认时如实说没撤成，**绝不得用完成式声称已取消**"
+        ),
+    ),
+    Skill(
+        name="notice_read",
+        capability="把**你自己**的站内通知标记为已读（可指定几条或全部未读）",
+        description=(
+            "用户要求**把站内通知标记为已读 / 消掉红点**时使用"
+            "（「把通知都标记已读」「把那两条公告标记已读」）。"
+            "参数 ids=要标记的那几条通知的 id 列表（用户点名了具体哪几条时给，"
+            "id 要从 list_notifications 的返回里取，**不许自己编编号**）；"
+            "all=true 表示把**全部未读**通知标记已读（**只有用户明确说了「全部/都/所有」才给**）。"
+            "**既没给 ids 也没说全部时不要选本技能**——先去问清楚要标哪几条。"
+            "**已读不可撤销**：标的就不再是未读、红点会变小，所以只有用户明确说要标时才选。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，"
+            "也**照常选本技能**——要不要真动手由系统弹确认框问主人。"
+        ),
+        inputs={"ids": "（可选）要标记已读的那几条通知的 id 列表",
+                "all": "（可选）true=把全部未读通知标记已读（用户说了「全部」才给）"},
+        plan=[("read_notifications", {"ids": "$ids", "all": "$all"})],
+        complete_when="read_notifications 返回了标记结果（含「本来就没有未读」）",
+        reply_contract=(
+            "只能按 read_notifications 的实际返回作答，说清标了几条；"
+            "返回「本来就是已读」「本来就没有未读的」就说没有可标的、什么都没改；"
+            "返回失败/未确认时如实说没标成，**绝不得用完成式声称已标记**"
+        ),
+    ),
     Skill(
         name="chat",
         capability="闲聊、陪你说话",
@@ -1005,6 +1100,108 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
     return [], f"{name}：未知的写技能（不调用任何工具）"
 
 
+def _norm_id_or_ref(value):
+    """实参 → 正整数 **或** 参数引用字面量（`$list_notes[0].noteKey`）；都认不出 → None。
+
+    为什么 id 位置也要认引用（20260923 批 7）：planner 提示词规则 3b 说得很死——
+    "只要某个参数的值来自本轮已执行工具的返回，就**一律优先用引用**"。它照办时写
+    `{"article_id": "$search_notes[0].noteKey"}`，而 `_norm_pos_int` 只认数字 ⇒ 一条
+    合法的计划被当成"缺参"退回追问（步骤白跑一轮）。取值由 `agent/refs.py` 在
+    execute 调用前完成（解析失败给原因码，走既有 blocker 链路），这一层只负责
+    **认得出那是个引用**、原样透传。
+
+    反面教训（20260921 复盘）：写技能把"解不出的引用"当"没填"是**静默降级**——
+    能力看似在、实际永远走不到。这里的态度是"认得就放行，认不得就响亮地问"。
+    """
+    if is_ref(value):
+        return str(value).strip()
+    return _norm_pos_int(value)
+
+
+def _norm_id_list(value) -> list[int]:
+    """实参 → 正整数 id 列表（去重保序；认不出的项丢掉——**绝不猜编号**）。
+
+    与 `tools.base._as_ids` 同判据（那一层还要再收一遍）：plan 是模型产出的文本，
+    `ids` 可能是 `[7, "8"]`、`"7"`、`None`，甚至一句自然语言（丢掉 → 空列表 →
+    零工具追问，方向与全表一致）。
+    """
+    if value is None or isinstance(value, bool):
+        return []
+    items = value if isinstance(value, (list, tuple, set)) else [value]
+    out: list[int] = []
+    for it in items:
+        n = _norm_pos_int(it)
+        if n is not None and n not in out:
+            out.append(n)
+    return out
+
+
+def _norm_true(value) -> bool:
+    """实参 → 是不是"全部"（只认明确的肯定；**认不出 = 不是**——绝不默认 True）。"""
+    if isinstance(value, bool):
+        return value
+    s = str(value if value is not None else "").strip().lower()
+    return s in ("true", "1", "yes", "y", "on", "all", "全部", "全都", "所有")
+
+
+def _expand_own_skill(skill, params: dict) -> tuple[list[str], str]:
+    """用户**自己**的数据写技能（20260923 批 7）→ (TOOLS 行清单, 注记)。
+
+    与 `_expand_write_skill` 分开写而不是塞进去：这几件的差别不在措辞而在**参数
+    形状**——收藏两件是"一个 id"，标记已读是"一串 id 或者'全部'"这个**二选一**，
+    且二选一里"都没给"必须**零工具**（不能默认 all=true：那是替主人把全部未读
+    一次清掉，而这一步**不可逆**）。塞进那个函数只会让"名字通道"那套判据在这里
+    变成恒假的噪声。
+
+    注记非空 + tools 为空 = "参数不齐"的零工具路径（planner 据此去追问）；
+    两头都非空 = 正常路径的说明。
+    """
+    name = skill.name
+
+    def _spec(tool_name: str, args: dict) -> str:
+        return f"{tool_name}({json.dumps(args, ensure_ascii=False)})"
+
+    if name in ("favorite_add", "favorite_remove"):
+        aid = _norm_id_or_ref(params.get("article_id"))
+        if aid is None:
+            return [], (f"{name} 缺少文章 id（article_id）：不调用任何工具，"
+                        "如实向主人问清是哪一篇文章；若不知道 id，"
+                        "先用 search_notes / list_notes 读回确切 id，"
+                        "或用参数引用（$<工具名>[<序号>].<字段名>）让系统去取"
+                        "（取消收藏还可以先用 list_my_favorites 看他收藏夹里有哪几篇）")
+        # 注记里不回显引用语法（plan 文本会进 narrator 的系统提示——规则 3b 明确要求
+        # 别把这段语法展示出来；取值由 refs 层完成，叙述层只需要知道"是上一步那篇"）。
+        shown = "上一步读到的文章" if is_ref(aid) else f"文章 {aid}"
+        if name == "favorite_add":
+            return [_spec("add_favorite", {"article_id": aid})], (
+                f"把{shown}收进**他自己**的收藏夹（已经收藏过时工具会如实说明，"
+                "不会重复收藏；不改文章的公开状态）")
+        return [_spec("remove_favorite", {"article_id": aid})], (
+            f"把{shown}从**他自己**的收藏夹里去掉（本来就没收藏时工具会如实说明）")
+
+    if name == "notice_read":
+        ids = _norm_id_list(params.get("ids"))
+        want_all = _norm_true(params.get("all"))
+        if want_all and ids:
+            return [], ("notice_read 同时给了 all 和具体 id（一个说\"全部都标\"、"
+                        "一个说\"就这几条\"）：不调用任何工具，如实向主人问清要标哪一些")
+        if want_all:
+            return [_spec("read_notifications", {"all": True})], (
+                "把**全部**未读通知标记为已读（不可逆：标的就不再是未读）")
+        if ids:
+            shown = "、".join(str(i) for i in ids)
+            return [_spec("read_notifications", {"ids": ids})], (
+                f"把通知 {shown} 标记为已读（不可逆：标的就不再是未读）；"
+                "id 没对上的（本来就不是他的通知 / 不存在）会如实说明")
+        # 既没给 id 也没说"全部"：**零工具**，问清楚再来（见函数头注：默认全部
+        # 等于替主人做一次不可逆的操作）。
+        return [], ("notice_read 没有指出要标记哪些通知（ids 与 all 都没给）："
+                    "不调用任何工具，如实向主人问清是把**全部**未读标掉、还是只标某几条"
+                    "（若是某几条，先用 list_notifications 读出它们的 id 再回来）")
+
+    return [], f"{name}：未知的写技能（不调用任何工具）"
+
+
 def instantiate_plan(skill_name: str, params: dict) -> dict:
     """技能模板 + 参数 → 结构化计划。
 
@@ -1131,6 +1328,20 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
         if skill.name in _WRITE_NAME_TARGET_SKILLS:
             wtools, note = _expand_write_skill(skill, params)
             tools.extend(wtools)
+        elif skill.name in _OWN_WRITE_SKILLS:
+            # 用户自己的数据（20260923 批 7）：收藏两件（article_id）+ 标记已读
+            # （ids 或 all，二选一，都没给就零工具追问）。
+            wtools, note = _expand_own_skill(skill, params)
+            tools.extend(wtools)
+        elif skill.name not in ("article_status", "article_tags"):
+            # fail-closed（20260923）：落到这里的只可能是"加了新写技能、没在
+            # instantiate_plan 里接分支"——旧写法的减法是**静默**的（下面那段
+            # 会把它当 article_status 处理，产出一个看不懂的注记或一个凭空的
+            # article_id 校验）。响亮地说出来，并保持零工具零写。
+            return {"skill": skill.name, "tools": [], "dropped": [],
+                    "note": (f"{skill.name}：新加的写技能没有接入参数展开（系统内部"
+                             "配置缺项）：不调用任何工具，如实告知这次没能执行"),
+                    "reply": skill.reply_contract, "chat": False}
         else:
             aid = _norm_pos_int(params.get("article_id"))
             if aid is None:

@@ -977,45 +977,107 @@ def get_user_stats(config: RunnableConfig) -> str:
 # 另一个坑：Rust 的 `ApiResponse::error` 是 **HTTP 200 + code 500**（src/utils.rs），
 # 所以 `_admin_post` 必须看业务码，只判状态码会把"创建失败"读成成功。
 
-def _admin_request(method: str, path: str, payload, config: RunnableConfig):
-    """以发起人身份请求一个后台接口（`/api/protected/*`），返回其 data 字段。
+def _principal_request(method: str, path: str, payload, config: RunnableConfig,
+                       *, label: str, uid_msg: str, deny_msg: str, tail: str):
+    """以发起人身份请求一个"需要身份"的接口（`/api/protected/*`），返回其 data 字段。
 
     fail-closed 与 `_admin_get` 同族，且**更严**：任何一条不确定路径都返回
     unavailable（= 不是事实、checker BLOCK、不进跨轮执行记忆），措辞里明确说
     "本次改动未确认生效"，因为下游 narrator 要靠这句话如实告知用户。
 
-    20260921 从 `_admin_post` 泛化而来（标签移动走 POST、改名走 PUT、分类删除走
-    DELETE）：写通道此后只有这一个出口，减掉一份 fail-closed 就少一处能被写漏的
-    地方。`payload` 允许是 list（`DELETE /api/protected/category` 的请求体是裸数组）。
+    `label`/`uid_msg`/`deny_msg`/`tail` 由调用方给，与 `_principal_get` 抽出本体
+    是同一条理由：**请求形状一样、读不到时该说的话不一样**。后台写说"仅管理员
+    可用"是对的；用户改自己的收藏这么说就是错的。
+
+    20260923 从 `_admin_request` 抽出本体（后者原样保留为薄封装，四条消息逐字节
+    不变——它们是既有测试与线上回执的措辞）。
     """
     uid = _device_get_user_id(config)
     if uid <= 0:
         # **身份不明时一个请求都不发**（写操作最不该做的就是在没身份时猜）。
         # 这条同时是 golden 负向用例的安全底座：role=admin 但 uid=0 时，即便
         # planner 误规划了写，请求也走不出这个进程（线上生产库零真写）。
-        return unavailable("无法获取当前用户身份，本次改动未执行")
+        return unavailable(uid_msg)
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
     try:
         resp = _client.request(method, f"{ADMIN_BASE}{path}",
                                headers=headers, json=payload, timeout=15)
     except Exception as exc:
-        logger.error("admin %s %s failed: %s", method, path, exc)
-        return unavailable(f"后台接口请求失败: {exc}（本次改动未确认生效，不要声称已改好）")
+        logger.error("principal %s %s failed: %s", method, path, exc)
+        return unavailable(f"{label}接口请求失败: {exc}{tail}")
     if resp.status_code in (401, 403):
-        return unavailable("当前身份无权改动后台数据（该功能仅管理员可用），本次未改动任何内容")
+        return unavailable(deny_msg)
     if resp.status_code != 200:
-        return unavailable(f"后台接口返回 HTTP {resp.status_code}（本次改动未确认生效，不要声称已改好）")
+        return unavailable(f"{label}接口返回 HTTP {resp.status_code}{tail}")
     try:
         body = resp.json()
     except Exception:
-        return unavailable("后台接口返回的不是 JSON（本次改动未确认生效，不要声称已改好）")
+        return unavailable(f"{label}接口返回的不是 JSON{tail}")
     if body.get("code") != 200:
         # ⚠️ 见本节头注：只看 HTTP 状态码会把 Rust 的 ApiResponse::error 当成功。
-        logger.warning("admin %s %s error: %s", method, path, body.get("message"))
-        return unavailable(f"后台接口报错: {body.get('message')}"
-                           f"（本次改动未确认生效，不要声称已改好）")
+        logger.warning("principal %s %s error: %s", method, path, body.get("message"))
+        return unavailable(f"{label}接口报错: {body.get('message')}{tail}")
     return body.get("data")
+
+
+# 写操作失败路径的固定尾句：下游 narrator 靠它如实告知"别声称已改好"。
+_NO_SUCCESS_TAIL = "（本次改动未确认生效，不要声称已改好）"
+
+# 没登录时写通道的固定措辞（**只此一处**：`_own_request` 的 uid_msg 与写工具入口
+# 的哨兵共用它——写工具的第一件事是"写前读"，那一步走的是读通道，读不到时说的是
+# "读不到你自己的数据"，对一次写命令来说那句话不完整：用户要知道的是"没给你改"）。
+_NO_LOGIN_WRITE = "未登录：本次未改动任何内容（需要先登录博客账号）"
+
+
+def _own_write_guard(config: RunnableConfig) -> ToolResult | None:
+    """写工具入口的统一哨兵：没身份 → 直接返回，调它之前**一个请求都不发**。
+
+    写操作最不该做的就是在没身份时猜"写给谁"（"我以为给谁写了"比"没写成"坏得多）。
+    """
+    if _device_get_user_id(config) <= 0:
+        return unavailable(_NO_LOGIN_WRITE)
+    return None
+
+
+def _pre_read_fail(result: ToolResult, what: str) -> ToolResult:
+    """写**前**读失败 → 明说"本次未改动"（读侧那句原话保留在括号里，便于排查）。"""
+    return unavailable(f"读不到{what}（{result}），本次未改动")
+
+
+def _admin_request(method: str, path: str, payload, config: RunnableConfig):
+    """以发起人身份请求一个**后台**写接口（scope = write.console）。"""
+    return _principal_request(
+        method, path, payload, config,
+        label="后台",
+        uid_msg="无法获取当前用户身份，本次改动未执行",
+        deny_msg="当前身份无权改动后台数据（该功能仅管理员可用），本次未改动任何内容",
+        tail=_NO_SUCCESS_TAIL)
+
+
+def _own_request(method: str, path: str, payload, config: RunnableConfig):
+    """以发起人身份写**用户自己**的数据（scope = write.own：收藏 / 标记已读）。
+
+    与 `_admin_request` 是同一条通道的两种措辞，判据一样严（任何不确定路径都
+    unavailable）。uid<=0 时一个字节都不发：写操作最不该做的就是在没身份时猜——
+    对访客来说，"我以为给谁写了"比"没写成"坏得多。
+    """
+    return _principal_request(
+        method, path, payload, config,
+        label="",
+        uid_msg=_NO_LOGIN_WRITE,
+        deny_msg="当前身份无权改动该数据，本次未改动任何内容",
+        tail=_NO_SUCCESS_TAIL)
+
+
+def _own_post(path: str, payload, config: RunnableConfig):
+    """POST 的薄封装（用户自己的数据）。"""
+    return _own_request("POST", path, payload, config)
+
+
+def _own_delete(path: str, config: RunnableConfig):
+    """DELETE 的薄封装（用户自己的数据）。`payload` 传 None（端点从路径取参数）。"""
+    return _own_request("DELETE", path, None, config)
 
 
 def _admin_post(path: str, payload: dict, config: RunnableConfig):
@@ -2314,6 +2376,256 @@ def list_notifications(config: RunnableConfig) -> str:
     return _shape(data)
 
 
+# ── 写那一半（20260923 批 7）：收藏 / 取消收藏 / 标记已读 ────────────────────
+# scope = `write.own`（三档角色都有、匿名没有）。三条纪律，第三条是写操作独有的：
+#   ① 同意闸判"本轮有没有一条**明确命令**"，判据按**工具名**分开（agent/authz.py
+#      的 `_own_command`：一个 scope 挂多个工具，只看"有没有写动作"会让填错工具
+#      的那一轮照样放行）。判不出来走确认弹窗，既不硬拒也不静默写。
+#   ② 通道是 `_own_request`（与后台写共用 `_principal_request` 本体）：uid ≤ 0 时
+#      **一个字节都不发**——写操作最不该做的就是在没身份时猜"写给谁"。
+#   ③ **写前先读、写后再读**：写前读不到就不写（连"是不是已经收藏了"都判不出来时
+#      写下去等于蒙）；写后读不回目标状态就报"未确认生效"，**绝不拿接口的成功文案
+#      当事实**——Rust 的 `ApiResponse` 成功文案是给人看的，不是给 agent 当判据的。
+#
+# 幂等（写前读的副产品）：已经收藏 / 本来就没收藏 / 这些通知本来就是已读
+# → **不发请求**、如实说"本来就是这样"。收藏端点自己也是幂等的，但一次空写会刷新
+# 那一行的时间戳（纯副作用、无收益），与 set_article_status 的同值 noop 同一条理由。
+
+
+def _fav_row(data, note_id: int) -> dict | None:
+    """收藏列表 → 目标那一行（不是列表/没这一行 → None，不猜）。"""
+    if not isinstance(data, list):
+        return None
+    for r in data:
+        if isinstance(r, dict) and _as_article_id(r.get("noteId")) == note_id:
+            return r
+    return None
+
+
+def _fav_count(data) -> str:
+    """收藏条数的括注；读不出条数就**什么都不写**（不写 0）。"""
+    n = len(data) if isinstance(data, list) else None
+    return f"（你的收藏夹现在有 {n} 篇）" if n is not None else ""
+
+
+def _fav_title(row: dict) -> str:
+    t = str(row.get("title") or "").strip()
+    return f"《{t}》" if t else ""
+
+
+def _note_items(data) -> dict[int, dict] | None:
+    """通知列表（`{unread, items}`）→ `{id: 行}`；形态不对 → None（不猜）。"""
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        return None
+    out: dict[int, dict] = {}
+    for r in data["items"]:
+        if not isinstance(r, dict):
+            continue
+        nid = _as_article_id(r.get("id"))
+        if nid is not None:
+            out[nid] = r
+    return out
+
+
+def _as_ids(value) -> list[int]:
+    """实参 → 正整数 id 列表（去重、保序；认不出的项丢掉——不猜）。"""
+    if value is None:
+        return []
+    items = value if isinstance(value, (list, tuple)) else [value]
+    out: list[int] = []
+    for it in items:
+        i = _as_article_id(it)
+        if i is not None and i not in out:
+            out.append(i)
+    return out
+
+
+def _as_bool(value) -> bool | None:
+    """实参 → 布尔；认不出 → None（调用方按"没说"处理，**绝不默认 True**）。"""
+    if isinstance(value, bool):
+        return value
+    s = str(value if value is not None else "").strip().lower()
+    if s in ("true", "1", "yes", "y", "on", "all", "全部", "全都", "所有"):
+        return True
+    if s in ("false", "0", "no", "n", "off", ""):
+        return False
+    return None
+
+
+@tool
+def add_favorite(
+    article_id: Annotated[int, "文章 id：用户本轮点名了（如「收藏文章 12」）就直接用点名的那个；"
+                               "只说特征（「收藏那篇讲架构的」）或指代（「收藏这篇」）时"
+                               "必须先用检索/列表工具或 get_article_detail 拿到确切 id，"
+                               "不许凭记忆猜"],
+    config: RunnableConfig,
+) -> str:
+    """把一篇文章收藏进**当前登录用户自己**的收藏夹（幂等：已收藏过就如实说本来就有，
+    不会重复收藏）。收藏只有他自己看得见，**不改变文章的公开状态**。
+    未登录时如实告知，一个请求都不发。"""
+    aid = _as_article_id(article_id)
+    if aid is None:
+        return unavailable(f"文章 id「{article_id}」不合法，未改动")
+    guard = _own_write_guard(config)
+    if guard is not None:
+        return guard
+
+    before = _own_get("/api/protected/favorites", config)
+    if isinstance(before, ToolResult):
+        return _pre_read_fail(before, "你的收藏列表（拿不准是不是已经收藏过）")
+    if not isinstance(before, list):
+        return unavailable("读不到你的收藏列表（拿不准是不是已经收藏过），本次未改动")
+    hit = _fav_row(before, aid)
+    if hit is not None:
+        return ok(f"文章 {aid}{_fav_title(hit)}本来就在你的收藏夹里，无需改动（没有发出写请求）。",
+                  meta={"op": "favorite_add", "article_id": aid,
+                        "change": "本来已收藏", "noop": True})
+
+    data = _own_post("/api/protected/favorites", {"noteId": aid}, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    after = _own_get("/api/protected/favorites", config)
+    if isinstance(after, ToolResult):
+        # ⚠️ 写**已经发出去了**，此后读不回来不能再把原样的话交出去：读侧的
+        # unavailable 措辞只说"读不到"（那是写前读该说的话），而下游 narrator 需要
+        # 知道"写请求已发出、但没确认生效"。两种情形混用会让它把一次读失败讲成
+        # 收藏失败，或者更糟——照接口回的话说"已收藏"。
+        return unavailable(f"收藏请求已发出，但读不回你的收藏列表（{after}），"
+                           f"本次改动未确认生效（不要声称已收藏）")
+    got = _fav_row(after, aid)
+    if got is None:
+        return unavailable(f"收藏请求已发出，但读回收藏列表里没有文章 {aid}，"
+                           f"本次改动未确认生效（不要声称已收藏）")
+    return ok(f"已收藏文章 {aid}{_fav_title(got)}{_fav_count(after)}。",
+              meta={"op": "favorite_add", "article_id": aid, "change": "已收藏"})
+
+
+@tool
+def remove_favorite(
+    article_id: Annotated[int, "文章 id：同 add_favorite（点名了就直接用，"
+                               "只说特征/指代时先用检索或收藏列表拿到确切 id）"],
+    config: RunnableConfig,
+) -> str:
+    """把一篇文章从**当前登录用户自己**的收藏夹里去掉（本来就没收藏过就如实说，
+    不当成出错——同一个按钮点两次不该报错）。只动他自己的收藏夹，不改文章本身。
+    未登录时如实告知，一个请求都不发。"""
+    aid = _as_article_id(article_id)
+    if aid is None:
+        return unavailable(f"文章 id「{article_id}」不合法，未改动")
+    guard = _own_write_guard(config)
+    if guard is not None:
+        return guard
+
+    before = _own_get("/api/protected/favorites", config)
+    if isinstance(before, ToolResult):
+        return _pre_read_fail(before, "你的收藏列表（拿不准是不是本来就没收藏）")
+    if not isinstance(before, list):
+        return unavailable("读不到你的收藏列表（拿不准是不是本来就没收藏），本次未改动")
+    hit = _fav_row(before, aid)
+    if hit is None:
+        return ok(f"文章 {aid} 本来就不在你的收藏夹里，无需改动（没有发出写请求）。",
+                  meta={"op": "favorite_remove", "article_id": aid,
+                        "change": "本来就没收藏", "noop": True})
+
+    data = _own_delete(f"/api/protected/favorites/{aid}", config)
+    if isinstance(data, ToolResult):
+        return data
+
+    after = _own_get("/api/protected/favorites", config)
+    if isinstance(after, ToolResult):
+        return unavailable(f"取消收藏请求已发出，但读不回你的收藏列表（{after}），"
+                           f"本次改动未确认生效（不要声称已取消）")
+    if _fav_row(after, aid) is not None:
+        return unavailable(f"取消收藏请求已发出，但读回收藏列表里文章 {aid} 还在，"
+                           f"本次改动未确认生效（不要声称已取消）")
+    return ok(f"已取消收藏文章 {aid}{_fav_title(hit)}{_fav_count(after)}。",
+              meta={"op": "favorite_remove", "article_id": aid, "change": "已取消收藏"})
+
+
+@tool
+def read_notifications(
+    config: RunnableConfig,
+    ids: Annotated[list[int] | None, "要标记已读的通知 id 列表（用户点名了具体哪几条时给）"] = None,
+    all: Annotated[bool | None, "true = 把**全部**未读通知标记已读（用户说了「全部/都/所有」"
+                                "才给；只是「把通知标记为已读」这种没限定范围的**不要自己填 True**）"] = None,
+) -> str:
+    """把**当前登录用户自己**的站内通知标记为已读（按 id 或全部）。**已读不可撤销**：
+    标记之后那几条就不再是未读（红点会变小），所以只有用户明确说了要标记才用。
+    既要不了 id 也没说"全部"时**什么都不动**，如实问清是哪几条。
+    未登录时如实告知，一个请求都不发。
+
+    ⚠️ 形参名 `all` 是对外（planner / 技能参数）的 JSON 键，**本函数体内不得再调用
+    内置 `all()`** —— 它已被同名形参遮蔽（20260923 实测：`all(...)` 直接
+    `TypeError: 'NoneType' object is not callable`）。要判"全都没读"用显式循环。
+    """
+    want_all = _as_bool(all) is True
+    want_ids = _as_ids(ids)
+    guard = _own_write_guard(config)
+    if guard is not None:
+        return guard
+    if not want_all and not want_ids:
+        return unavailable("没有指出要标记哪些通知（是全部未读、还是某几条的 id），未改动")
+
+    before = _own_get("/api/protected/notifications", config)
+    if isinstance(before, ToolResult):
+        return _pre_read_fail(before, "通知列表（无法确认哪几条是未读）")
+    rows = _note_items(before)
+    if rows is None:
+        return unavailable("读不到通知列表，无法确认哪几条是未读，本次未改动")
+
+    if want_all:
+        targets = [i for i, r in rows.items() if not r.get("isRead")]
+    else:
+        # 点名的 id 原样交出去（列表只回最近 100 条，更早的可能不在里面——
+        # 按 id 交出去由服务端在**它自己的**全量里改，比按"我看得见的"改更对）。
+        targets = want_ids
+        # 已经全是已读 → 不发请求（写前读的副产品，见本节头注的幂等段）。
+        # 显式循环而非 all(...)：见本函数 docstring 的形参遮蔽警告。
+        all_read = True
+        for i in targets:
+            if rows.get(i, {}).get("isRead") is not True:
+                all_read = False
+                break
+        if all_read:
+            return ok(f"通知 {('、'.join(str(i) for i in targets))} 本来就是已读，"
+                      f"无需改动（没有发出写请求）。",
+                      meta={"op": "notice_read", "change": "本来就读过", "noop": True})
+    if want_all and not targets:
+        return ok("你的通知本来就没有未读的，无需改动（没有发出写请求）。",
+                  meta={"op": "notice_read", "change": "本来就没未读", "noop": True})
+
+    before_sum = _own_get("/api/protected/notifications/summary", config)
+    if isinstance(before_sum, ToolResult):
+        return _pre_read_fail(before_sum, "未读通知的条数（无法确认改动是否生效）")
+    n_before = (before_sum or {}).get("notifications")
+    if not isinstance(n_before, int) or isinstance(n_before, bool):
+        return unavailable("读不回未读通知的条数，无法确认改动是否生效，本次未改动")
+
+    payload = {"ids": [], "all": True} if want_all else {"ids": sorted(targets), "all": False}
+    data = _own_post("/api/protected/notifications/read", payload, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    # 复核只认**服务端重新数出来的**未读数（写入响应里那个数是更新后当场查的，
+    # 但"接口说成功了"仍然不是判据——读侧的判据必须是一次独立读数）。
+    after_sum = _own_get("/api/protected/notifications/summary", config)
+    if isinstance(after_sum, ToolResult):
+        return unavailable(f"标记已读请求已发出，但读不回未读条数（{after_sum}），"
+                           f"本次改动未确认生效（不要声称已标记）")
+    n_after = (after_sum or {}).get("notifications")
+    if not isinstance(n_after, int) or isinstance(n_after, bool):
+        return unavailable("标记已读请求已发出，但读不回未读条数，本次改动未确认生效")
+    if n_after >= n_before:
+        return unavailable(f"标记已读请求已发出，但读回未读通知仍是 {n_after} 条"
+                           f"（可能这几条本来就是已读）——本次改动未确认生效，不要声称已标记")
+    marked = n_before - n_after
+    m_after = (after_sum or {}).get("messages")
+    tail = f" / 私信 {m_after}" if isinstance(m_after, int) and not isinstance(m_after, bool) else ""
+    return ok(f"已把 {marked} 条通知标记为已读（现在未读：通知 {n_after} 条{tail}）。",
+              meta={"op": "notice_read", "change": f"标记已读 {marked} 条"})
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -2371,6 +2683,11 @@ _TOOL_REGISTRY = [
     list_my_favorites,
     get_unread_summary,
     list_notifications,
+    # 用户自己的数据·写那一半（20260923 批 7）：scope = write.own，写前先读、写后再读，
+    # 见"写那一半"节头注
+    add_favorite,
+    remove_favorite,
+    read_notifications,
 ]
 
 def get_all_tools():

@@ -144,6 +144,17 @@ TOOL_SCOPE: dict[str, str] = {
     "list_my_favorites": SCOPE_READ_OWN,
     "get_unread_summary": SCOPE_READ_OWN,
     "list_notifications": SCOPE_READ_OWN,
+    # 用户自己的数据·**写**那一半（20260923 批 7）：收藏 / 取消收藏 / 标记已读。
+    # 写的是同一个人的同一份数据，所以 scope 是 read.own 的写方向 `write.own`：
+    # 三档角色都有、匿名没有、**不进 `_HARD_SCOPES`**（秘书代博主收藏是正当的
+    # ——它写的是发起人自己的账号，不是第三方的数据）。
+    # 但进 `CONSENT_SCOPES`：判据见本文件 CONSENT_SCOPES 上方那段（agent 不能
+    # 自己判断"这篇值得收藏"就替用户收藏）。
+    # 与后台写同一个区别：不改对外可见状态。收藏不外显；"标记已读"更不可逆
+    # （`is_read` 撤不回，见 tools/base.py 的 read_notifications 与 batch 记录）。
+    "add_favorite": SCOPE_WRITE_OWN,
+    "remove_favorite": SCOPE_WRITE_OWN,
+    "read_notifications": SCOPE_WRITE_OWN,
     # 作用于访客自己的页面
     "navigate_to": SCOPE_WRITE_PAGE,
     "toggle_effect": SCOPE_WRITE_PAGE,

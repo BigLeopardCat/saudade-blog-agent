@@ -150,7 +150,18 @@ SNAPSHOT_SKILLS = frozenset({"ops_report", "moderation_report", "user_report"})
 EXECUTED_ONCE_SKILLS = frozenset({"tag_create", "article_status", "article_tags"})
 
 # 需要"本轮读过这个 id 才准写"的工具（见 execute 的目标校验）。
-_ARTICLE_WRITE_TOOLS = frozenset({"set_article_status", "set_article_tags"})
+# 20260923 批 7 加入收藏两件：它们的目标同样是 article_id，同样会**写错篇**
+# （收藏/取消收藏到用户没说的那一篇），而误靶的来源一模一样（planner 拿列表首行
+# 当用户点名的那一篇）。差别只在影响面小（可逆、不外显）——不影响判据要不要。
+_ARTICLE_WRITE_TOOLS = frozenset({"set_article_status", "set_article_tags",
+                                  "add_favorite", "remove_favorite"})
+
+# 弹窗问句里要写《标题》的工具（同 _ARTICLE_WRITE_TOOLS 减去收藏两件）：
+# 标题来自后台文章清单（`_note_index` → `/api/protected/notes/list`，**管理员面**），
+# 而收藏是普通访客也能用的（scope=write.own 三档角色都有）——对访客读这一份清单
+# 只会拿到一次 403。判据放在"这个人能不能读后台清单"上（authz.check），
+# **不是**"这个工具要不要弹窗"：读不到就退回只写 id（同全表取向，绝不因此不弹窗）。
+_POPUP_TITLE_TOOLS = frozenset({"set_article_status", "set_article_tags"})
 
 # 写工具回执里允许进 meta 的键（白名单，防止工具侧随手加的键悄悄进生产库 detail；
 # 消费端 Rust 只认这几个，多出来的键是无声的兼容性债）。
@@ -170,6 +181,10 @@ _RCPT_META_KEYS = ("op", "article_id", "before", "after",
 _TARGET_EVIDENCE_TOOLS = frozenset({
     "get_article_detail", "list_admin_notes", "list_notes", "search_notes",
     "rag_search", "get_top_notes",
+    # 自己的收藏列表（20260923 批 7）：它的行里带 noteId，是"取消收藏那一篇"
+    # 唯一可能的来源帧（用户说「把收藏里的《X》取消掉」时 planner 必须先读它）。
+    # 与上面几个一样只是**材料**来源，不代表 id 一定对（那是 target_named 的事）。
+    "list_my_favorites",
 })
 
 
@@ -3351,8 +3366,12 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     # 读的是与写工具读前值同一份后台清单（含草稿/私密、不含修改稿）：弹窗里的
     # 「现在：草稿」必须是真的会被改的那一行的现状。读不到 → 退回只写 id，
     # **绝不因此不弹窗**（那会退回"判成歧义就追问"的死路形态）。
+    # 20260923 批 7 补一道前置判据：这份清单挂在**管理员面**，而写面从这一批起
+    # 含普通访客也能用的收藏两件——对访客读它只会白拿一次 403。判据用 authz 那张
+    # 表现成的（他读不读得动 list_admin_notes），不另立规则。
     note_index = None
-    if any(str(s.get("tool") or "") in _ARTICLE_WRITE_TOOLS for s in picks):
+    if any(str(s.get("tool") or "") in _POPUP_TITLE_TOOLS for s in picks) \
+            and authz.check(principal, "list_admin_notes").allowed:
         try:
             from tools.base import _note_index
             note_index = _note_index(config)
