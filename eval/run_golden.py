@@ -27,7 +27,9 @@
 """
 import argparse
 import asyncio
+import contextvars
 import json
+import os
 import re
 import sys
 import threading
@@ -40,6 +42,8 @@ from server import ChatRequest, _build_messages, _run_agent_stream_to_queue
 from agent import create_agent
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 from langchain_core.messages import AIMessageChunk, ToolMessage
+
+import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
 
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
 # 导航命令帧族：AUTO_NAVIGATE 与 NAVIGATE 同属"导航已执行"，断言时视为一族
@@ -111,8 +115,21 @@ def build_principal(case: dict) -> "Principal":
                      source="golden")
 
 
-def run_one(req: ChatRequest, principal: "Principal | None" = None) -> dict:
-    """跑一轮真实对话（内部链路），从帧流提取最终文本 / 命令帧 / 事件。"""
+def run_one(req: ChatRequest, principal: "Principal | None" = None,
+            trace_ctx: dict | None = None) -> dict:
+    """跑一轮真实对话（内部链路），从帧流提取最终文本 / 命令帧 / 事件。
+
+    `trace_ctx`（20260922）：`{"run": <run_id>}` 时给这一轮落一份 trace（见
+    eval/golden_trace.py，落 golden_traces/<run_id>/<case_id>.json）。**start 必须在
+    这里、在把活儿提交给线程池之前**——recorder 靠 contextvar + copy_context 传进
+    producer 线程，晚一步落下来的就是空壳。
+    """
+    trace_id = None
+    t_trace0 = time.monotonic()
+    if trace_ctx:
+        trace_id = golden_trace.start_case(
+            trace_ctx["run"], trace_ctx.get("case", ""), req.message or "",
+            (principal.role if principal is not None else None))
     loop = asyncio.new_event_loop()
     queue = asyncio.Queue()
     frames = []
@@ -131,14 +148,23 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None) -> dict:
 
     t = threading.Thread(target=drain)
     t.start()
+    # **contextvar 要显式传给线程池**（20260922）：`ThreadPoolExecutor.submit` 不拷贝
+    # contextvars（只有 asyncio.to_thread 自动做）——照生产 `server._submit_with_context`
+    # 的办法，提交前 `copy_context()` 快照、线程内 `ctx.run` 恢复。不这么做的话
+    # trace recorder 进不了 producer 线程：落下来的是一份只有元数据的**空壳 trace**，
+    # 而"评测有 trace 了"看起来完全正常（实测踩到，靠 golden_trace 的空事件警告抓出）。
+    ctx = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=1) as ex:
         ex.submit(
-            _run_agent_stream_to_queue,
+            ctx.run, _run_agent_stream_to_queue,
             _build_messages(req), "golden_thread", queue, loop, req.user_id,
             None, principal,
         ).result()
     t.join()
     loop.close()
+    # trace 收尾（生产侧这一步在 event_stream 的 finally 里；golden 没有那层壳）
+    trace_path = golden_trace.finish_case(trace_id, time.monotonic() - t_trace0,
+                                          len(frames))
 
     final_text = ""
     commands: list[str] = []
@@ -200,6 +226,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None) -> dict:
             "exec_rows": exec_rows,
             "exec_tools": [r.get("tool", "") for r in exec_rows],
             "tool_rounds": tool_rounds,
+            "trace": trace_path,
             "resets": resets, "resets_reasons": resets_reasons, "error": error}
 
 
@@ -445,7 +472,22 @@ def main():
                     help="跳过指定 id（逗号分隔；用于环境不可达的用例，如 CI 无 device-service）")
     ap.add_argument("--min-pass-rate", type=float, default=1.0,
                     help="通过率门禁（默认 1.0=全过）；CI 跨网链路可放低")
+    ap.add_argument("--no-trace", action="store_true",
+                    help="不落 golden trace（默认落 logs/agent/golden_traces/<run>/；"
+                         "显式关掉只用于省盘/极速冒烟）")
+    ap.add_argument("--keep-traces", type=int, default=5,
+                    help="保留最近 N 次 golden run 的 trace 目录（默认 5；0=不清理）")
+    ap.add_argument("--trace-run-id", default="",
+                    help="指定 trace run_id（进程隔离跑法由父进程给，让所有子进程落同一目录）")
     args = ap.parse_args()
+
+    if args.no_trace:
+        os.environ[golden_trace.ENV_OFF] = "1"
+    # trace run_id 在**开跑时**定（报告文件名仍是收尾时刻，两者语义不同：trace 目录要能
+    # 被进程隔离跑法的父子进程共享，只能在开跑前定下来）
+    run_id = golden_trace.resolve_run_id(args.trace_run_id or None)
+    if golden_trace.enabled():
+        os.environ[golden_trace.ENV_RUN] = run_id
 
     ensure_agent()
 
@@ -506,7 +548,8 @@ def main():
         g = case["gold"]
         req = build_request(case)
         t0 = time.time()
-        result = run_one(req, build_principal(case))
+        result = run_one(req, build_principal(case),
+                         trace_ctx={"run": run_id, "case": case["id"]})
         elapsed = time.time() - t0
         fails = check_gold(g, result)
         ok = not fails and not result["error"]
@@ -520,6 +563,9 @@ def main():
         if not ok:
             err = result.get("error") or ""
             print(f"          └ {fails or f'error: {err}'}")
+            if result.get("trace"):
+                # 红条直接指着那份 trace（planner 原始决策/被剔清单/gate 打回原因/四段耗时）
+                print(f"          └ trace: {result['trace']}")
         requires = bool(g.get("require_tool_calls") or g.get("require_tool_calls_any"))
         results.append({
             "id": case["id"], "tags": case.get("tags", []), "ok": ok,
@@ -533,11 +579,12 @@ def main():
             "tool_calls": result["tool_calls"],
             "tool_rounds": result["tool_rounds"],
             "text": result["text"],
+            # 这一轮的 trace 路径（20260922）：红了照着读，别再靠复采样猜方差
+            "trace": result.get("trace"),
         })
 
     # 报告：last_run.json 供工具读取（每次覆盖）；runs/<ts>.json 全量留档（防覆盖丢历史，
     # 基线对比查旧档用）。eval/report/ 整体 gitignore，baseline_*.json 例外进 git（见 .gitignore）。
-    import os
     ts_str = time.strftime("%Y%m%d_%H%M%S")
     os.makedirs("eval/report", exist_ok=True)
     os.makedirs("eval/report/runs", exist_ok=True)
@@ -595,6 +642,9 @@ def main():
     _reg_bad = [r["id"] for r in _reg if not r["ok"]]
     # 被 --skip-ids/--only 摘掉的回归用例：组内分母随之变小，如实报出来（不许静默豁免）
     _reg_skipped = [s for s in skip_ids if "regression" in _ALL_TAGS.get(s, [])]
+    # 第一条真正落盘的 trace（用例顺序 = 跑的顺序，取第一条即为目录的实证）：
+    # 没开 trace、或全程一条都没写成功 ⇒ None（报告里如实写 None，不假装有目录）。
+    _first_trace = next((r.get("trace") for r in results if r.get("trace")), None)
     report = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
@@ -625,6 +675,11 @@ def main():
             "all_passed": not _reg_bad,
             "skipped_ids": _reg_skipped,
         },
+        # golden trace（20260922）：这一轮跑落下的目录（None=没开或一条都没写成功）。
+        # 报告里带它 = 红条能直接指着 trace 读（planner 决策/被剔清单/gate 打回原因）。
+        # 从**实际落盘的路径**反推目录，不在这里再拼一次路径（少一处能拼错的地方）。
+        "trace_run": run_id if _first_trace else None,
+        "trace_dir": os.path.dirname(_first_trace) if _first_trace else None,
         "cases": results,
     }
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
@@ -682,6 +737,17 @@ def main():
           + (f"  ⚠ 被跳过：{_reg_skipped}（组内分母随之变小）" if _reg_skipped else ""))
     print(f"报告: {REPORT_FILE}")
     print(f"留档: eval/report/runs/{ts_str}.json")
+    # golden trace 目录（20260922）：跑完收一个口——目录名是时间戳，只留最近 N 次
+    # （一次全量上百份 × 每次一跑，不清理就是又一个只会长胖的目录）。**只删
+    # `%Y%m%d_%H%M%S` 形状的目录**，根目录下别的东西一概不碰（见 golden_trace.prune）。
+    if golden_trace.enabled():
+        if _first_trace:
+            print(f"trace: {os.path.dirname(_first_trace)}（{len(results)} 条用例）")
+        else:
+            print("trace: ⚠ 一条都没写成功（看上面有没有 start/finish 的报错）")
+        _pruned = golden_trace.prune(args.keep_traces)
+        if _pruned:
+            print(f"trace 清理: 删掉 {len(_pruned)} 个旧目录（{_pruned[0]} … {_pruned[-1]}）")
     if review_path:
         print(f"复审单: {review_path}")
     # 门禁（20260920）：本机默认 1.0（全过）；CI 北美 runner 跨网链路按通过率判

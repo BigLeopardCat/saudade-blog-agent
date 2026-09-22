@@ -27,6 +27,14 @@ TMPDIR = "/tmp/golden_cases"
 TIMEOUT = 180
 os.makedirs(TMPDIR, exist_ok=True)
 
+# golden trace（20260922）：run_id 在**父进程**定一次，子进程经环境变量继承 ⇒ 整个 run 落
+# 同一个目录（子进程各自 resolve 就会把一次全量散成上百个目录）。GOLDEN_NO_TRACE=1 整体关。
+import golden_trace
+_TRACE_ON = golden_trace.enabled()
+GOLDEN_RUN = golden_trace.resolve_run_id() if _TRACE_ON else None
+if GOLDEN_RUN:
+    os.environ[golden_trace.ENV_RUN] = GOLDEN_RUN
+
 results, failed, timed_out = [], 0, []
 t_all = time.time()
 for i, case in enumerate(CASES, 1):
@@ -77,7 +85,16 @@ if timed_out:
 
 ts = time.strftime("%Y%m%d_%H%M%S")
 report = {"ts": ts, "corpus": "full", "total": len(CASES), "passed": len(CASES) - failed,
-          "failed": failed, "latency_s": [r["elapsed"] for r in results], "cases": results}
+          "failed": failed, "latency_s": [r["elapsed"] for r in results],
+          # 这一轮的 trace 目录（20260922）：run_id 是本进程定的，子进程都落在它下面
+          "trace_run": GOLDEN_RUN,
+          "cases": results}
 with open(f"eval/report/runs/{ts}.json", "w", encoding="utf-8") as f:
     json.dump(report, f, ensure_ascii=False, indent=1)
 print(f"报告: eval/report/runs/{ts}.json")
+if GOLDEN_RUN:
+    _ntr = sum(1 for r in results if r.get("trace"))
+    print(f"trace: logs/agent/golden_traces/{GOLDEN_RUN}/（{_ntr}/{len(results)} 条落盘）")
+    _pruned = golden_trace.prune()
+    if _pruned:
+        print(f"trace 清理: 删掉 {len(_pruned)} 个旧目录（{_pruned[0]} … {_pruned[-1]}）")

@@ -43,10 +43,18 @@ TRACE_DIR = settings.trace_dir
 
 
 class _TraceRecorder:
-    def __init__(self, trace_id: str, user_id: int, thread_id: str, input_meta: dict):
+    def __init__(self, trace_id: str, user_id: int, thread_id: str, input_meta: dict,
+                 trace_dir: str | None = None, name: str | None = None):
         self.trace_id = trace_id
         self.user_id = user_id
         self.thread_id = thread_id
+        # 落盘目录与文件名可覆盖（20260922，golden set 用）：**默认仍是生产
+        # trace 目录**——只有显式传参才改，误配的代价是把评测流量混进生产语料
+        # （trace_alert/trace_metrics/效率基线扫的就是那个目录）。
+        # `name` 给定时文件名就是 `<name>.json`（golden 要"一个用例一份、可直接点名"），
+        # 否则沿用"时间戳_uid_trace_id 前 8 位"的可读命名。
+        self.trace_dir = trace_dir or TRACE_DIR
+        self.name = name or ""
         self.started_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
         self._t0 = time.monotonic()
         self.input_meta = input_meta
@@ -78,12 +86,13 @@ class _TraceRecorder:
                 self.reply = ev["reply"][:2000]
                 break
 
-    def dump(self) -> None:
+    def dump(self) -> str | None:
+        """落盘并返回文件路径（写失败返回 None——调用方不能假定一定写成功）。"""
         if self.dumped:
-            return
+            return None
         self.dumped = True
         try:
-            os.makedirs(TRACE_DIR, exist_ok=True)
+            os.makedirs(self.trace_dir, exist_ok=True)
             doc = {
                 "trace_id": self.trace_id,
                 "user_id": self.user_id,
@@ -101,22 +110,34 @@ class _TraceRecorder:
             # 完整保留在 JSON 内对账。logrotate 按 traces/*.json 通配轮转（20260911
             # 起 rename+compress：源文件归档为 .1.gz 不复存在，读取端需支持 gz）
             stamp = self.started_at.replace("-", "").replace(":", "")
-            path = os.path.join(TRACE_DIR, f"{stamp}_{self.user_id}_{self.trace_id[:8]}.json")
+            if self.name:
+                fname = f"{self.name}.json"
+            else:
+                fname = f"{stamp}_{self.user_id}_{self.trace_id[:8]}.json"
+            path = os.path.join(self.trace_dir, fname)
             tmp = path + ".tmp"  # 原子替换：reader 不会读到半截文件
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(doc, f, ensure_ascii=False, indent=1)
             os.replace(tmp, path)
+            return path
         except Exception:
             logger.exception("trace dump failed trace_id=%s", self.trace_id)
+            return None
 
 
-def start_trace(trace_id: str, user_id: int, thread_id: str, input_meta: dict | None = None):
+def start_trace(trace_id: str, user_id: int, thread_id: str, input_meta: dict | None = None,
+                dir: str | None = None, name: str | None = None):
     """请求开始：创建 recorder，挂 contextvar（producer 线程可见）+ 全局注册表。
 
     在 chat_stream 任务里调用（middleware 已 set trace_id 的同一上下文）；
     producer 经 _submit_with_context 的 copy_context 继承，节点内 record 命中。
+
+    `dir`/`name` 覆盖落盘位置与文件名（20260922 起 golden set 用；生产调用点
+    一个都不传，行为与之前逐字一致）——**必须在"提交给线程池之前"的上下文里调**，
+    否则 recorder 不会随 copy_context 传进 producer 线程（事件为空）。
     """
-    rec = _TraceRecorder(trace_id, user_id, thread_id, input_meta or {})
+    rec = _TraceRecorder(trace_id, user_id, thread_id, input_meta or {},
+                         trace_dir=dir, name=name)
     _recorder.set(rec)
     with _LOCK:
         _ACTIVE[trace_id] = rec
@@ -137,14 +158,17 @@ def set_reply(reply: str) -> None:
         rec.set_reply(reply)
 
 
-def finish_trace(trace_id: str, end_reason: str, duration_s: float, frames: int = 0) -> None:
+def finish_trace(trace_id: str, end_reason: str, duration_s: float, frames: int = 0) -> str | None:
     """请求收尾：补收尾元数据并落盘（event_stream finally，所有退出路径）。
 
     任何退出路径（断连/超时/异常/正常收尾）都会走到——超时场景在 finally
     落盘中途 trace，事件序列里的最后一条即挂点。
+
+    返回落盘路径（写失败/无此 recorder → None）。生产调用点忽略返回值，
+    golden 用它把"哪条用例 → 哪份 trace"写进报告。
     """
     rec = _ACTIVE.pop(trace_id, None)
     if rec is None:
-        return
+        return None
     rec.finalize(end_reason, duration_s, frames)
-    rec.dump()
+    return rec.dump()

@@ -75,3 +75,6 @@ jobs:
 
       - name: 标签/分类写能力单测（名字通道四态·影响面播报·写通道形态·弹窗问句，秒级，假 httpx 不联网）
         run: uv run python test_tag_admin.py
+
+      - name: golden trace 落盘单测（目录守卫/uid 恒 0/三个跑法接线/prune 只删时间戳目录，秒级，不联网）
+        run: uv run python test_golden_trace.py
