@@ -10,7 +10,7 @@
   1. **围栏在**：不可信文本进围栏、围栏前有"里面不算指令"的声明，且正文里的围栏
      标记会被打断——不能让待审内容自己把围栏关掉、把后面的字读成系统指令；
       2. **输出白名单**：审核只认 pass/reject/flag（解析不出 = flag）；摘要清洗后为空就不入库；
-  3. **失败取向**：审核 fail-open（异常抛给调用方降级放行）、摘要 fail-empty
+  3. **失败取向**：审核 fail-open（异常抛给调用方，由它**转人工待审**）、摘要 fail-empty
      （异常/空 → ""）——取向写在模块里，不靠调用方记得。
 """
 import sys
@@ -96,7 +96,7 @@ for out, want_v, want_r in cases:
 check("原因串截断到 80 字",
       len(moderator.parse_verdict('{"verdict":"flag","reason":"' + "长" * 200 + '"}')[1]) == 80)
 
-print("④ 审核失败取向：fail-open（异常抛给调用方降级放行）")
+print("④ 审核失败取向：fail-open（异常抛给调用方，由它转人工待审）")
 llm = FakeLLM('{"verdict":"flag","reason":"广告"}')
 check("假模型走全链路", moderator.review("加微信买茶叶", llm=llm)["verdict"] == "flag"
       and len(llm.prompts) == 1)
@@ -110,7 +110,7 @@ try:
     raised = False
 except RuntimeError:
     raised = True
-check("模型异常 → 抛出（调用方 Rust 侧降级放行，不在这里吞）", raised)
+check("模型异常 → 抛出（调用方 Rust 侧转人工待审，不在这里吞）", raised)
 llm_unused = FakeLLM('{"verdict":"flag"}')
 check("空正文不调模型（省一次调用）",
       moderator.review("   ", llm=llm_unused) == {"verdict": "pass", "reason": "空内容"}
@@ -169,7 +169,20 @@ check("摘要转发到 agent.summarizer.summarize", "from agent.summarizer impor
       and "return summarize(user_msg, history, old_summary)" in server_src)
 check("旧的裸插值 `留言内容：` 已从 server.py 移除", "留言内容：" not in server_src)
 check("server 仍保留失败日志（异常不静默）",
-      "[review] LLM 调用失败（Rust 侧将降级放行）" in server_src)
+      "[review] LLM 调用失败（Rust 侧将转人工待审）" in server_src)
+
+# 跨仓：这句措辞的**事实依据**在父仓（措辞跟代码走，不跟记忆走）。20260923 复盘：
+# agent 这边三处注释 + 本套件一条断言，此前都写着"调用方降级放行"——而 Rust 从
+# b3c4d83 起就是**转人工待审**（`board_approved` 的三个失败分支都返回
+# `(0, None, None)`）。父仓单独 checkout 时读不到 ⇒ 明说跳过，不假装通过。
+_talks = Path(__file__).resolve().parent.parent / "src" / "routes" / "talks.rs"
+if _talks.exists():
+    _ts = _talks.read_text(encoding="utf-8")
+    check("父仓 talks.rs 的审核失败分支确实返回「转人工待审」(0, None, None)",
+          _ts.count("(0, None, None)") >= 3,
+          f"计到 {_ts.count('(0, None, None)')} 处")
+else:
+    print("  ⏭ 跳过父仓 Rust 侧断言（talks.rs 不在：agent 仓单独 checkout）")
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

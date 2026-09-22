@@ -1363,8 +1363,10 @@ def review_message(req: ReviewRequest):
 
     语义：pass = 内容可公开展示；flag = 拦下进待审（是否还需人工放行由 Rust 按
     manualReviewEnabled 开关决定——本端点只给裁决，不知道站点开关组合）。模型/
-    网络异常直接抛 500（调用方 Rust 侧超时/非 200 一律降级放行，兑底不拦正常
-    留言——降级决策在调用方，此处不吞异常，保证 Rust 日志可见性）。
+    网络异常直接抛 500（调用方 Rust 侧超时 / 非 200 / 解析失败一律**转人工待审**，
+    不是放行——`talks.rs::board_approved` 的三个失败分支都返回 `(0, None, None)`，
+    即"宁可多一次人工，绝不放行未经审核的内容"。兜底决策在调用方，此处不吞异常，
+    保证 Rust 日志可见性）。
     """
     from agent import moderator
     text = (req.content or "").strip()
@@ -1373,7 +1375,7 @@ def review_message(req: ReviewRequest):
     try:
         result = moderator.review(text)
     except Exception:
-        logger.exception("[review] LLM 调用失败（Rust 侧将降级放行）")
+        logger.exception("[review] LLM 调用失败（Rust 侧将转人工待审）")
         raise
     logger.info("[review] verdict=%s reason=%.60s content=%.60s",
                 result["verdict"], result["reason"], text)
