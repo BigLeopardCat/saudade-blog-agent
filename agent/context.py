@@ -16,6 +16,7 @@ import re
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from agent import sections
+from agent.authz import strip_system_tags  # 消息壳剥除（见下方 _short_reply_kind 注释）
 
 # ---------------------------------------------------------------------------
 # 消息/上下文工具
@@ -263,8 +264,19 @@ _SHORT_NEG = frozenset({
 
 
 def _short_reply_kind(text: str) -> str:
-    """短应答分类：'pos'（同意/要求继续）/ 'neg'（拒绝/收回）/ ''（不是短应答）。"""
-    core = _SHORT_LEAD_RE.sub("", _PUNCT_ONLY_RE.sub("", text or "")).strip()
+    """短应答分类：'pos'（同意/要求继续）/ 'neg'（拒绝/收回）/ ''（不是短应答）。
+
+    ⚠️ **入口先剥系统消息壳（20260923 修）**：`server.py` 给本轮用户消息加锚点壳
+    `[当前问题]: `，而本判据是**整串相等**型（剥标点/称呼后与 `_SHORT_POS`/`_SHORT_NEG`
+    对表）——壳里的 `[` `]` `:` 既不在 `_PUNCT_ONLY_RE` 的剔字表里、也不在 `_SHORT_LEAD_RE`
+    的称呼表里，于是 core 恒为 `[当前问题]: 好` 这种形态 ⇒ 永远返回 ''。
+    实证：golden 用例 followup_short_yes_executes（用户只回一个「要」）的 trace 里
+    planner 收到的 `short_reply` 字段写的是「（当前消息不是短应答）」，即该确定性提示
+    自 20260920 批次 b 上线起在各处恒不触发（那两条用例仍 PASS = LLM 自己读懂了，
+    属"少一层助力"而非观测到的故障）。同款坑第二例，第一例见 decisions.py 的导航快道。
+    **只影响判定，不碰给模型的 prompt**（壳是给模型看的锚点，不是缺陷）。
+    """
+    core = _SHORT_LEAD_RE.sub("", _PUNCT_ONLY_RE.sub("", strip_system_tags(text or ""))).strip()
     if not core or len(core) > _SHORT_MAX:
         return ""
     if core in _SHORT_NEG:  # 先否定：两集合无交集，顺序只为可读
