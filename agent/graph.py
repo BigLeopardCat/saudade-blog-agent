@@ -2736,8 +2736,10 @@ _MOVE_MARKS = ("挪到", "移到", "移动到", "放到", "挂到", "换到", "�
 _RENAME_MARKS = ("改名叫", "改名为", "改名成", "改成", "换成", "改为")
 _MOVE_MARK_RE = re.compile(r"(?:" + "|".join(_MOVE_MARKS) + r")\s*$")
 _RENAME_MARK_RE = re.compile(r"(?:" + "|".join(_RENAME_MARKS) + r")\s*$")
-_OPERAND_MARK_RE = re.compile(
-    r"(?:" + "|".join(_MOVE_MARKS + _RENAME_MARKS) + r")\s*$")
+# `把「X」改名叫「Y」`：改名标记**跟在**某段引号后面 ⇒ 那段引号是**目标**不是值。
+_RENAME_AHEAD_RE = re.compile(r"\s*(?:" + "|".join(_RENAME_MARKS) + r")")
+# 这句话有没有"改名"意图（比 `_RENAME_MARKS` 宽一点：口语的"改个名"也算）。
+_RENAME_INTENT_RE = re.compile(r"(?:" + "|".join(_RENAME_MARKS) + r"|改(?:个)?名)")
 
 # 名词标记：主人点一个"已有名字"的事物时用的词（标签/分类）。免引号形态下，目标名就在
 # 名词与动作词之间（见 `_bare_target_name`）。
@@ -2939,7 +2941,12 @@ _WRITE_VALUE_FIELDS = {
 # 命名标记：主人给"新名字"时用的词。长的在前（同一位置优先匹配更具体的那个）。
 # `叫` 单字放最后：它出现在别处的机会最多，靠捕获段的干净度判据兜底。
 _NAME_MARKS = ("名字叫", "名字叫做", "名字是", "名字为", "名叫", "名为", "叫做",
-               "称为", "标题叫", "标题是", "标题为", "叫")
+               "称为", "标题叫", "标题是", "标题为",
+               # 改名族（20260922 续六）：`把标签「X」改名叫「Y」` 里 Y 就是新名字，
+               # 与"新建时起名"是同一类命名证据（`名叫` 能擦边命中，但 `改成/改为`
+               # 这类不带"名/叫"的形态必须显式列上）。
+               "改名叫", "改名为", "改名成", "更名叫", "更名为", "改成", "改为", "换成",
+               "叫")
 _NAME_MARK_RE = re.compile(r"(?:" + "|".join(_NAME_MARKS) + r")\s*[:：]?\s*")
 _NAME_VALUE_STOP = "，,。；;、！？!?～~\n"
 # 捕获段的干净度判据（与 `_bare_target_name` 同源，另加"父标签"这一族泛称）
@@ -2956,7 +2963,12 @@ def _value_clean(raw: str) -> str:
         return ""
     if any(ch in raw for ch in _NAME_VALUE_STOP):
         return ""
-    if any(w in raw for w in _TARGET_NOUNS + _TARGET_ACTION_MARKS):
+    # 名词只在**段首**算脏（"标签"/"一级标签"/"分类名"是名词短语形态）；名字里**含**名词
+    # 是常见形态——实测 `把分类「探针分类0922193132」改名叫「探针分类0922193132R」` 里那段
+    # 正确的新名字被整段判脏（`分类` 恰好在词汇里）⇒ 值空缺、回落到目标那段 ⇒ 改名被写成
+    # 一次空转。动作词仍按"含"判（名字里出现 `挪到/改名叫` 基本只可能是误捕获；判脏的代价
+    # 是零写 + 如实追问，方向安全）。
+    if raw.startswith(_TARGET_NOUNS) or any(w in raw for w in _TARGET_ACTION_MARKS):
         return ""
     if any(w in raw for w in ("这个", "那个", "名字", "名称")):
         return ""
@@ -2981,11 +2993,12 @@ def _msg_named_value(user_msg) -> str:
 
 
 def _value_candidate_spans(user_msg) -> list[str]:
-    """主人这句话里可以当"名字值"的那几段引号（排除父标签/另一个操作数那几段）。
+    """主人这句话里可以当"名字值"的那几段引号（排除父标签/目标/另一个操作数那几段）。
 
-    排除两种领法：前面贴着 `挪到/改名叫` 的（那是"另一个操作数"）、后面跟着
-    `下面/里` 的（那是父标签）。`在「编程」下面加一个二级标签，名字叫 X` 里的
-    「编程」正是靠这条被排除，否则新标签会被起名叫「编程」。
+    排除三种领法：前面贴着 `挪到` 的（那是父标签，另一个操作数）、后面跟着 `改名叫`
+    的（那是**目标**，值在标记**后面**那段）、后面跟着 `下面/里` 的（那是父标签）。
+    `在「编程」下面加一个二级标签，名字叫 X` 里的「编程」正是靠最后一条被排除，否则
+    新标签会被起名叫「编程」。
     """
     text = str(user_msg or "")
     out: list[str] = []
@@ -2993,7 +3006,9 @@ def _value_candidate_spans(user_msg) -> list[str]:
         frag = next((g for g in m.groups() if g), "").strip()
         if not frag:
             continue
-        if _OPERAND_MARK_RE.search(text[:m.start()]):
+        if _MOVE_MARK_RE.search(text[:m.start()]):
+            continue
+        if _RENAME_AHEAD_RE.match(text[m.end():]):
             continue
         if _PARENT_TAIL_RE.match(text[m.end():]):
             continue
@@ -3033,7 +3048,7 @@ def _name_arg_fix(plan_obj: dict, user_msg) -> tuple[str, str] | None:
         return None
     tool = _tool_name(tools[0])
     vfields = _WRITE_VALUE_FIELDS.get(tool) or ()
-    pkey = (_WRITE_NAME_FIELDS.get(tool) or (None, None))[1]
+    tkey, pkey = _WRITE_NAME_FIELDS.get(tool) or (None, None)
     if not vfields and not pkey:
         return None
     args, args_ok = _tool_args(tools[0])
@@ -3042,6 +3057,10 @@ def _name_arg_fix(plan_obj: dict, user_msg) -> tuple[str, str] | None:
     msg = str(user_msg or "")
     sq = _squash_spaces(msg)
     named = _msg_named_value(msg)
+    # 主人这句话里有没有"改名"意图（`改名叫/改成/改为/换成…`，含口语的"改个名"）。
+    # 只给下面那条"新名字 == 目标自己"的判据当闸用：没有改名意图时，同名 new_title
+    # 是 planner 的冗余填充，不该把一次真移动拦下来。
+    rename_intent = bool(_RENAME_INTENT_RE.search(msg))
     # 这句话里标出了**父标签**（`在「编程」下面`）→ 引号段是父，不是新名字的候选：
     # 一旦把它当值，新标签就会被起名叫「编程」（实测 `在「编程」和「摄影」下面都建一个`
     # 这类句子正落在这里）。没有命名标记时宁可拒绝，也不拿父名当新名。
@@ -3049,6 +3068,7 @@ def _name_arg_fix(plan_obj: dict, user_msg) -> tuple[str, str] | None:
     cand_spans = [] if parent_hint else _value_candidate_spans(msg)
     fixed: dict[str, object] = {}
     unresolved: list[str] = []
+    selfsame: list[str] = []
 
     for key in vfields:
         cur = args.get(key)
@@ -3074,8 +3094,21 @@ def _name_arg_fix(plan_obj: dict, user_msg) -> tuple[str, str] | None:
             continue
         got = str(cur).strip()
         want = named or (cand_spans[0] if len(cand_spans) == 1 else "")
+        tgt_name = _squash_spaces(str(args.get(tkey) or "")) if tkey else ""
+        if want and tgt_name and _squash_spaces(want) == tgt_name:
+            # 抽出来的"值"就是**目标自己**：等于没抽出来（实测现场见下）——丢掉它，
+            # 让下面两条判据接着说话（有正确的命名证据时优先校正，没有才追问）。
+            want = ""
         if want and _squash_spaces(want) != _squash_spaces(got):
             fixed[key] = want
+        elif (tgt_name and rename_intent and _squash_spaces(got) == tgt_name):
+            # 要写进去的"新名字"就是它**自己现在的名字**——一次注定空转的改名：工具照写、
+            # 回执写"X → X"、库一个字节没动，而回执读起来像改成功了。实测现场（探针腿⑭
+            # 20260922）：目标名恰是新名字的**前缀**时，抽取落回目标那段、planner 写对的
+            # 值被覆写成目标名。这种形态没有任何命名证据，不猜：零写 + 如实追问。
+            # （只在主人这句话里**有改名意图**时才判——移动类命令里 planner 顺手带上
+            # 同名 new_title 是无害冗余，不能因此把一次真移动拦掉。）
+            selfsame.append(got)
         elif not _grounded_value(got, sq):
             unresolved.append(got)
 
@@ -3087,15 +3120,21 @@ def _name_arg_fix(plan_obj: dict, user_msg) -> tuple[str, str] | None:
         elif not fixed:
             unresolved.append(pv)
 
-    if unresolved:
-        got_txt = "」「".join(dict.fromkeys(unresolved))
-        why = (f"主人这句话里没有能对上「{got_txt}」这个参数值的名字"
-               f"（它既不是主人逐字说过的名字，也不是主人标出来的任何一段"
-               f"——命名标记后面那段、引号里那几段，都对不上）")
+    if unresolved or selfsame:
+        if selfsame and not unresolved:
+            got_txt = "」「".join(dict.fromkeys(selfsame))
+            why = (f"主人这句话里没有能当「新名字」的那一段——唯一对得上的是"
+                   f"**要改的那条自己现在的名字**「{got_txt}」，照字面执行就是一次"
+                   f"没有改动的空转，所以没有动手")
+        else:
+            got_txt = "」「".join(dict.fromkeys(unresolved))
+            why = (f"主人这句话里没有能对上「{got_txt}」这个参数值的名字"
+                   f"（它既不是主人逐字说过的名字，也不是主人标出来的任何一段"
+                   f"——命名标记后面那段、引号里那几段，都对不上）")
         logger.warning("[planner] 写参数值在主人原话里找不到来源（%s）：%s → 确定性如实收尾",
                        tool, why)
         record("planner", "write_value_unresolved", tool=tool,
-               values=list(dict.fromkeys(unresolved))[:3], round=None)
+               values=list(dict.fromkeys(unresolved or selfsame))[:3], round=None)
         return tool, why
     if not fixed:
         return None
