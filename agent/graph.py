@@ -63,7 +63,7 @@ import json
 import logging
 import re
 import time
-from typing import Annotated, Literal, TypedDict
+from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -94,6 +94,11 @@ from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
                           _CALLABLE_QUERY_TOOLS_ORDER, _WRITE_NAME_TARGET_SKILLS,
                           build_planner_context, instantiate_plan, visible_skills)
 from utils.trace import record
+
+if TYPE_CHECKING:   # 只为下面 `_principal_of` 的**字符串**注解能被静态检查看见。
+    # 运行时恒 False、不产生任何导入副作用；注解必须保持字符串（本文件顶部不能加
+    # `from __future__ import annotations`，那会让 langgraph 认不出 config，见头注）。
+    from agent.principal import Principal
 
 logger = logging.getLogger(__name__)
 
