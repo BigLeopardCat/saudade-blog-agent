@@ -109,16 +109,27 @@ def _shape(data) -> str:
 # 早期图省事。tests/test_hardening.py 里有一条盯着校验开关的断言。
 _client = httpx.Client(timeout=15)
 
-def _get(path: str) -> dict | list | ToolResult:
+def _get(path: str, *, not_found_text: str = "") -> dict | list | ToolResult:
     """Helper: call API and return data field.
 
     ⚠️ 失败返回 `UPSTREAM_DOWN`（kind=unavailable）而**不是** `[]`——见上面 ToolResult
     的注释：把故障吞成空列表，会让"服务挂了"伪装成"查到了、就是空的"进入执行回执。
     绝大多数调用方 `return _shape(data)`，不改也能拿到人话（只是这时带 unavailable 标记）；
     要迭代结果的（如 get_article_detail）必须自己先判 `isinstance(data, list)`。
+
+    `not_found_text` 非空时，**HTTP 404 是另一个族**（20260924）：传进来的那句话原样
+    变成 `not_found`（kind=not_found，checker 判 BLOCK + 原因码 target_not_found），
+    而不是"服务不可用"。这两件事的应对是相反的——查无此物要换 id 或如实问主人，
+    服务不可用才等一会儿再试；而 404 恰好是"查无此物"最常见的传法。
+    不传则维持原样（404 仍算 unavailable）：只有知道"这个 id 查不到意味着什么"的
+    调用方（现已带话术的那几个）才该打开它，否则会把路由写错/参数写错也读成"没有"。
+    其余失败码（5xx/超时/连不上/坏 JSON）一律仍是 unavailable。
     """
     try:
         resp = _client.get(f"{API_BASE}{path}")
+        if not_found_text and resp.status_code == 404:
+            logger.info("API 404: %s", path)
+            return not_found(not_found_text)
         resp.raise_for_status()
         body = resp.json()
         if body.get("code") == 200:
@@ -287,13 +298,22 @@ def get_article_detail(
 
     标签：返回里的 `tags` 是**中文标签名**（如「编程 / Python」，含层级）；`noteTags`
     是内部 id 串，**回答"这篇有什么标签"要用 `tags`**，别把 id 念给访客。
+
+    **查无此篇不是故障**（20260924）：id 不存在时返回的是"站内没有这篇文章"这句
+    事实（kind=not_found），并且**点明 id 的来路**——通知/留言板里的 id 是留言 id，
+    与文章 id 不是同一套（trace `20260924T030031` 实证：planner 把通知链接里的留言
+    id 当文章 id 读了，拿到"服务暂时不可用"，于是一边重试一边准备说系统挂了）。
+    应对是换 id 或如实告知，不是"稍后再试"。
     """
     if doc_type == "note":
-        data = _get(f"/notes/{article_id}")
+        data = _get(f"/notes/{article_id}", not_found_text=(
+            f"站内没有 id={article_id} 这篇文章，本次**没有**读到任何正文。"
+            "另注意 id 不是同一套：通知/留言板里的 id 是留言 id，不是文章 id。"
+            "按标题找文章用 search_notes 或 rag_search；读留言/说说用 list_guestbook / list_talks。"))
         if isinstance(data, dict):
             data = _note_row_with_tag_names(data)
         if not section or not isinstance(data, dict):
-            return _shape(data)          # 故障（unavailable）原样透出，不伪装成空
+            return _shape(data)          # 故障（unavailable）与查无此篇（not_found）原样透出，都不伪装成空
         return _read_section(data, article_id, section)
     endpoint, key_field = {
         "talk": ("/talk", "talkKey"),
@@ -306,7 +326,15 @@ def get_article_detail(
     for it in rows:
         if str(it.get(key_field)) == str(article_id):
             return str(it)
-    return empty("未找到该文档")
+    # 列表里没这一条：同样是"查无此物"（20260924 与上面 note 分支同办），但措辞必须
+    # 交代边界——这些列表接口可能只回最近的若干条，且河灯留言只放行**审核通过**的
+    # （`talks.rs::list_by_src` 恒过滤 approved=1），"不在列表里"与"真的不存在"
+    # 不是一回事（not_found 的语义，见它的定义）。此前这里给 empty："查到了、就是
+    # 空的"会 PASS 进回执，跨轮执行记忆里就多出一条"读取文章 N"的假事实。
+    return not_found(
+        f"公开列表里没有 {key_field}={article_id} 这一条（河灯留言只放行审核通过的，"
+        "待审与被驳回的不在列表里；列表也可能只回最近若干条）。所以这是『我没找到』，"
+        "不是『站内一定没有』。另注意 id 不是同一套：通知链接里的 lid 是留言 id，不是文章 id。")
 
 
 @tool
