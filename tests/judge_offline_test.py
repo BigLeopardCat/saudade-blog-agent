@@ -13,17 +13,20 @@ not_contains_exempt_quote）后先跑本脚本——判据是纯文本函数，�
   * 反向用例：纯重新声称 / 加强式重新声称 / 「没有」非撤回标记 / 裸声称——
     判据放宽必须不放过这些（否则 e1b 的豁免会变成后门）。
 
-用法：.venv/bin/python eval/judge_offline_test.py  → 逐项"期望/实得"，全符合
+用法：.venv/bin/python tests/judge_offline_test.py  → 逐项"期望/实得"，全符合
 预期时退出码 0。
 """
 import json
 import sys
 import os
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：本文件已搬进 tests/）
+EVAL = ROOT / "eval"                           # 判据与 golden 语料仍在 eval/
+sys.path.insert(0, str(EVAL))
 import run_golden as rg  # noqa: E402
 
-GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden", "basic.jsonl")
+GOLDEN = os.path.join(EVAL, "golden", "basic.jsonl")
 GOLD = {}
 for line in open(GOLDEN):
     d = json.loads(line)

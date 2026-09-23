@@ -53,7 +53,7 @@ jobs:
         run: uv run python tests/test_entities.py
 
       - name: golden 判据离线自测（词表/正则族/引述豁免，秒级，纯文本函数，无网络）
-        run: uv run python eval/judge_offline_test.py
+        run: uv run python tests/judge_offline_test.py
 
       - name: 权限模型单测（scope 声明完备性/角色授予表/失败取向，秒级，纯函数）
         run: uv run python tests/test_authz.py
@@ -83,10 +83,10 @@ jobs:
         run: uv run python tests/test_golden_trace.py
 
       - name: 回归组重跑单测（假 LLM 驱动 main：复跑才绿按方差放行但必须出声/复跑不许覆盖首跑/能力题不重跑，秒级，不联网）
-        run: uv run python eval/golden_rerun_offline_test.py
+        run: uv run python tests/golden_rerun_offline_test.py
 
       - name: 跨源对账单测（假夹具喂每条判据两侧/窗口裁剪/伪造字段/gz 往返，并断言夜间脚本真的接了线，秒级，不联网）
-        run: uv run python eval/reconcile_offline_test.py
+        run: uv run python tests/reconcile_offline_test.py
 
       # 未定义名静态扫描（20260924 补）。Python 没有编译期拦截：一个只在**另一个作用域**
       # 存在的名字（server.py 的 `req` 写进了 `_run_agent_stream_to_queue`）要到运行到那一行

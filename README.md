@@ -56,11 +56,12 @@ saudade-blog-agent/
 ├── eval/                   # 评测：golden set（78 条）+ run_golden.py（L2 任务级，真实 LLM）
 │   │                       #       + golden_case_runner.py/golden_full_run.py（进程隔离跑法）
 │   │                       #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
-│   │                       #       + judge_offline_test.py（判据离线自测）+ trace_metrics.py/trace_alert.py（trace 指标与语义巡检）
+│   │                       #       + trace_metrics.py/trace_alert.py（trace 指标与语义巡检）
 │   │                       #       + golden_draft.py（真实 trace 现场 → golden 用例草稿，供人审后入库）
 ├── scripts/                # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）+ sticker_smoke（贴纸冒烟）
-├── tests/                  # L0 单元级（13 个秒级套件：技能注册表/plan 契约、权限模型、确认令牌与弹窗、
-│                           #   写面、侧任务、分节、报表、加固、协作取消、实体摘要、自己的数据、golden trace）
+├── tests/                  # L0 单元级（16 个秒级套件 + 统一入口 run_all.py：技能注册表/plan 契约、权限模型、
+│                           #   确认令牌与弹窗、写面、侧任务、分节、报表、加固、协作取消、实体摘要、自己的
+│                           #   数据、golden trace、判据自测、回归组重跑、跨源对账）
 └── docs/                   # 架构文档 + 评测可观测设计
 ```
 
@@ -134,6 +135,7 @@ planner 注入时自动带描述）。**可规划性由白名单决定（2026090
 .venv/bin/python eval/run_golden.py           # L2：78 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答/执行记忆）；--limit N / --only <id1,id2> 单跑
 .venv/bin/python eval/golden_full_run.py      # L2 进程隔离全量跑（逐条独立进程 + 180s 超时，防悬挂污染）
 .venv/bin/python eval/recall_eval.py          # L1 检索：recall@k/MRR（21 条 queries = 12 正例 + 9 噪声）
+.venv/bin/python tests/run_all.py             # 全部离线套件一把跑（glob 枚举，单套件超时；CI 的同一批）
 ```
 
 - **CI（`.github/workflows/eval.yml`）**：push 跑上面五个秒级套件（L0）。
