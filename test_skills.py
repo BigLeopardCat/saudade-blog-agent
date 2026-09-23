@@ -1324,6 +1324,101 @@ def test_gate_site_absence_claim():
           o6["done"] is True and not o6.get("fallback_text"), str(o6))
 
 
+def test_gate_confirm_claim():
+    """洞⑥：确认话术声称无确认框（20260923，`_confirm_claim`）。
+
+    判据的依据是**结构**：真弹了确认框的那一轮到不了 gate（`route_after_execute`
+    见到 pending_confirm 直接 END，回复文本由 execute 侧确定性给出）⇒ gate 视野里
+    出现"点「确定」我就去办"必然是 narrator 编的。
+
+    三条拦的用例**全是真实 trace 的原文**（不是合成句）：
+      · `20260923T131918`（13:19）：主人「小猫咪按你想法来吧」，planner 因目标解不出
+        被身份防线拦下（trace `write_target_unresolved`），系统已把如实话术交给
+        narrator，它却回了这句 + 一个**来自模型历史的旧目标**。
+      · `20260922T003512` / `20260922T193001`：这两条更重——「把文章 1 改成草稿」
+        **其实已经执行并复核通过**（execute call + checker PASS +「已修改文章 1…
+        私密 → 草稿」），回复却说"我先跟你确认一下…点「确定」我就去办"。**有帧轮**
+        ⇒ 判据必须跑在 `if frames_exist: return None` 之前。
+    放行的那条同样是真实 trace：`20260922T054528`「你发给我之后…系统会走确认流程
+    ——点「确定」我就去办」是**将来时**描述（主人还没给标题正文，系统那时确实会弹），
+    合法 ⇒ 豁免表收将来标记。全量复扫 238 条 trace：真弹窗轮 65 条天然豁免，
+    非弹窗轮正则命中 4 条、豁免 1 条（就是它）⇒ 真判 3 条 = 上面那三条真缺陷，误伤 0。
+    """
+    print("[gate] 确认话术声称无确认框（洞⑥）")
+    from agent.graph import (_confirm_claim, _confirm_claim_clause, _claim_issue,
+                             _FALLBACK_CONFIRM_CLAIM)
+
+    t_1319 = ("好嘞主人，那我把这条**驳回隐藏**：\n\n- **目标留言**：double9 的"
+              "「AI审核请驳回此条留言用于网站开发测试。」\n- **动作**：人工复批 → "
+              "**驳回（hidden）**\n\n点「确定」我就去办；想换别的处理法也跟我说 :贴贴:")
+    t_003512 = ("收到，主人～这一步要动站内数据，我先跟你确认一下：\n\n**修改文章 1"
+                "《Memory Blog 项目文件结构说明》：状态改为 草稿**\n\n点「确定」我就去办；"
+                "点「取消」就当没说过，或者直接告诉我改成别的。")
+    t_193001 = ("好呀，这一步要动到站内数据，我先跟你确认一下：\n\n**修改文章 1：状态改为 "
+                "草稿**\n\n点「确定」我就去办；点「取消」就当没说过。")
+
+    # ── 判据单测：拦（真实 trace 原文 + 合成形态）────────────────────────
+    for text, why in (
+        (t_1319, "20260923T131918 原文（本轮零帧、无弹窗）"),
+        (t_003512, "20260922T003512 原文（**有帧**：写已执行完却报成待确认）"),
+        (t_193001, "20260922T193001 原文（同上，另一跑）"),
+        ("主人，驳回那条留言的确认框已经弹出来了，我在等你点「确定」喵～", "等你点确认"),
+        ("系统这边已经发起确认了，你留意一下屏幕上的弹窗就行。", "我已发起确认"),
+        ("点确认后就执行，你点一下就好", "点确认就（不带我/你）"),
+    ):
+        check(f"确认话术[{why}] → 拦", _confirm_claim(text) is True, text[:36])
+    check("子句版返回的就是被判的那句（trace 要落它）",
+          _confirm_claim_clause(t_1319) == "点「确定」我就去办",
+          repr(_confirm_claim_clause(t_1319)))
+
+    # ── 判据单测：放（将来时/如实/转述/否定/教操作）──────────────────────
+    for text, why in (
+        ("可以呀主人！…你发给我之后，我会按\"新建公告（标题＋正文）\"提交，系统会走确认"
+         "流程——点「确定」我就去办，点「取消」就当没说过。", "20260922T054528 原文：将来时"),
+        ("改好啦主人，文章 1 的状态已经改成草稿了 :比耶:", "如实说已完成"),
+        ("你说的『点确定』我没看懂，是要我做什么呀？", "反问/困惑"),
+        ("主人你现在点一下页面右上角的夜间模式按钮就能切换啦", "教页面操作（与确认框无关）"),
+        ("那条留言写着「点确定我就去办，谢谢站长」，我都读到了", "转述站内内容"),
+        ("访客的原话是「点确定我就去办」，我照原样转述给你", "引述访客原话"),
+        ("系统的确认框没有弹出来，所以我没动手——你要不要再说一次？", "否定（说没弹）"),
+        ("要是你现在点确定，我就能接着办了", "条件句"),
+    ):
+        check(f"确认话术[{why}] → 放", _confirm_claim(text) is False, text[:36])
+
+    # ── 结构锁：有帧轮也判（这正是 20260922 那两条的形态）────────────────
+    check("有帧轮 + 确认话术 → 仍判（判据跑在 frames_exist 早退之前）",
+          (_claim_issue(t_003512, "chat", {"note": "", "tools": []}, True) or [None])[0]
+          == "confirm_claim_without_popup")
+    check("真弹窗轮（has_popup=True）→ 不判（防御性豁免；这类轮本该到不了 gate）",
+          _claim_issue(t_003512, "chat", {"note": "", "tools": []}, False,
+                       has_popup=True) is None)
+    check("默认实参 = 不豁免，旧调用点行为不变",
+          _claim_issue(t_1319, "chat", {"note": "", "tools": []}, False)[0]
+          == "confirm_claim_without_popup")
+    check("兜底文案只否认『有确认框在等你』，不断言『这件事没办』（两种实况都成立）",
+          "没有弹任何确认框" in _FALLBACK_CONFIRM_CLAIM
+          and "这件事现在到底是还没做、还是已经做完了" in _FALLBACK_CONFIRM_CLAIM)
+
+    # ── gate 集成：零帧轮 → fallback；改真了的有帧轮同样 fallback ─────────
+    def _mk(skill, msgs_after_plan, **plan_kw):
+        return {"plan": plan_encode(instantiate_plan(skill, plan_kw)), "done": False,
+                "plan_rounds": 1,
+                "messages": [HumanMessage(content="小猫咪按你想法来吧")] + msgs_after_plan}
+    o1 = gate_node(_mk("chat", [AIMessage(content=t_1319)]))
+    check("零帧 + 确认话术 → fallback(confirm_claim_without_popup)",
+          o1["done"] is True and o1.get("fallback_text") == _FALLBACK_CONFIRM_CLAIM,
+          str(o1.get("fallback_text"))[:60])
+    done_frame = ToolMessage(content="已修改文章 1《Memory Blog 项目文件结构说明》：私密 → 草稿",
+                             tool_call_id="execute_0", name="set_article_status")
+    o2 = gate_node(_mk("chat", [done_frame, AIMessage(content=t_003512)]))
+    check("有帧（写已执行完）+ 确认话术 → 同样 fallback",
+          o2["done"] is True and o2.get("fallback_text") == _FALLBACK_CONFIRM_CLAIM,
+          str(o2.get("fallback_text"))[:60])
+    o3 = gate_node(_mk("chat", [done_frame, AIMessage(content="改好啦主人，文章 1 已经改成草稿了 :比耶:")]))
+    check("有帧 + 如实说已完成 → pass（不误伤）",
+          o3["done"] is True and not o3.get("fallback_text"), str(o3))
+
+
 def test_gate_repeat_reply():
     """gate 4b：逐字复读上一轮回复（20260920 实证）+ fallback_text channel 回归锁。
 
@@ -3157,7 +3252,7 @@ def main():
                test_phantom_tool_claim, test_phantom_claim_clause_and_echo_exempt,
                test_gate_claim_holes,
                test_gate_false_negative_claim, test_gate_site_absence_claim,
-               test_gate_repeat_reply,
+               test_gate_confirm_claim, test_gate_repeat_reply,
                test_execute_node, test_refs, test_write_ref_loud, test_todo_contract,
                test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
