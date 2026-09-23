@@ -146,7 +146,14 @@ REFLECT_MAX_ROUNDS = 2
 # 再规划拿的是同一份数据（CPU 会重采，但那是噪声不是新信息）。实测
 # ops_report_admin 连规划 4 轮 = 同两个工具各跑 4 遍（22s，工具 8 次），
 # 病灶与"数据工具重复拦截"（content_query 族）相同，只是报表技能不经那条通道。
-SNAPSHOT_SKILLS = frozenset({"ops_report", "moderation_report", "user_report"})
+# 20260924 补 `admin_notes`：与上面三张报表**同判据**——plan 只有一条
+# `list_admin_notes`（无参、零依赖、只读），第二轮起再规划拿回的是同一份清单。
+# 由来：管理读工具按角色进了点名通道之后，`admin_notes_console_list` 从
+# 4 轮/4 次降到 2 轮/2 次，**剩下的那一轮就是它**（手里已有清单，却又把同一只读
+# 工具规划了一遍）。判据与 EXECUTED_ONCE_SKILLS 的分野同报表族：读是快照，
+# 写不是（写重复可能是"另一篇"）。
+SNAPSHOT_SKILLS = frozenset({"ops_report", "moderation_report", "user_report",
+                             "admin_notes"})
 
 # 后台写技能（20260921 第二轮）：**不是**快照型——见 planner 里的重复规划防护。
 # 20260921 第三轮评估（新写技能 tag_update/tag_delete/category_* 要不要进来）→ **不进**。

@@ -593,10 +593,21 @@ check("过程行有中文动作词（否则显示『执行 get_server_status』�
 
 # 快照去重（20260921）：报表技能进了 planner 的重复规划防护名单——不进的话
 # ops_report_admin 会连规划 4 轮、同两个工具各跑 4 遍（实测 22s/8 次调用）。
+# 20260924 补 `admin_notes`（同判据：单条无参只读 plan）。
 from agent.graph import SNAPSHOT_SKILLS, _PLANNER_PROMPT  # noqa: E402
-check("三个报表技能都在快照去重名单里",
-      SNAPSHOT_SKILLS == frozenset({"ops_report", "moderation_report", "user_report"}),
+from agent.skills import SKILLS  # noqa: E402
+
+check("四件快照型只读技能都在去重名单里（三张报表 + admin_notes）",
+      SNAPSHOT_SKILLS == frozenset({"ops_report", "moderation_report", "user_report",
+                                    "admin_notes"}),
       str(sorted(SNAPSHOT_SKILLS)))
+_admin = next((s for s in SKILLS if s.name == "admin_notes"), None)
+# 名单的准入判据是"这一轮再规划拿回同一份数据"，而它成立的前提是**只读 + 无参**：
+# admin_notes 只有一条 `list_admin_notes`，把它规划第二遍没有新信息。
+# （若哪天给它加一条带参工具，这条断言会红——那正是重审是否该留在名单里的时机。）
+check("admin_notes 仍是单条无参只读 plan（进名单的前提）",
+      _admin is not None and [t for t, _ in _admin.plan] == ["list_admin_notes"],
+      str(getattr(_admin, "plan", None)))
 check("该名单里的技能都是只读报表（不含动作/检索技能，别把去重写宽了）",
       not (SNAPSHOT_SKILLS & {"content_query", "navigate", "effect", "darkmode",
                               "read_article", "device_display", "device_query"}))
