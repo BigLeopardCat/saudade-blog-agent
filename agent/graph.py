@@ -3416,19 +3416,70 @@ def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
 #     点名）；读不到 ≠ 没有（同 `_tag_index` 纪律：读失败绝不写成"没有"）。
 _REVIEW_INTENT_RE = re.compile(r"留言|审核|复核|待审|驳回|放行|通过|隐藏")
 _AUDIT_REJECT_RE = re.compile(r"驳回|隐藏|不放行|不通过|未通过")
+# 放行族的**否定前缀必须排除**（20260923 P2 六轮后的复扫实证）：提案句是
+# "那我把这条**驳回隐藏**（只有作者自己在「我的河灯」看到未通过）"——括号里那句
+# 「未通过」是**用来解释驳回后果**的，旧判据（裸 `通过|放行`）把它读成"也提到放行"
+# ⇒ 两族都命中 ⇒ 返回空串 ⇒ 唯一待审也拼不出计划，退回 LLM 自由决策（实测两跑
+# 两次都选了 chat 空工具，narrator 反过来问主人一句打太极的话）。
+# 判据分两层（`_audit_words`）：紧贴的「不通过/未通过」靠原始模式；
+# **隔着字的否定/使役式**（"不让它通过""别放行了"）靠 4 字窗口——它们语义上是
+# 驳回，读成放行是**反向错**（比读不出危险：快道会拼一条与主人意图相反的写计划，
+# 弹窗上还写着"放行"）。窗口之外的长否定式交给提案句作用域与 LLM：本判据宁可
+# 回空串（空串 ⇒ 不替主人决定，交 planner 自己判断）也绝不猜反。
 _AUDIT_PASS_RE = re.compile(r"通过|放行")
+_AUDIT_NEG_BEFORE_RE = re.compile(r"[不未别没禁]\s?.{0,3}$")
+
+
+def _audit_words(s: str) -> tuple[bool, bool]:
+    """一句里读出的 `(驳回, 放行)` 两类结论词。
+
+    **否定式放行算驳回**（"别放行""不让它通过""未通过"= 不让它露出来）：这一条是
+    判据的方向性保证——"不通过"读成放行是反向错，会让快道拼出一条与主人意图相反
+    的写计划，而弹窗上写着"放行"，要靠主人自己看出来才拦得住。
+    """
+    rej = bool(_AUDIT_REJECT_RE.search(s))
+    allow = False
+    for m in _AUDIT_PASS_RE.finditer(s):
+        if _AUDIT_NEG_BEFORE_RE.search(s[max(0, m.start() - 4):m.start()]):
+            rej = True
+        else:
+            allow = True
+    return rej, allow
+
+
+# 提案句的标记词（20260923 G2）：单条回复里常混着"解释/复述/工具原文"，结论必须
+# 从**提议那几句**里读。判据按句切（。！？；换行），只在这些带标记的句子里找；
+# 一句都没标记（多数短回复）→ 回退整段（与旧行为逐字相同）。实测依据：13:19 事故
+# 原话与线上那条铺垫轮回复里，标记句各自只提一族结论，而未标记句里混着另一族的
+# 否定形态——旧判据两族都命中 ⇒ 快道从不命中（那种"靠运气"的判据等于没有）。
+_PROPOSAL_MARK_RE = re.compile(
+    r"建议|维持|我这就|那我|把这条|这条就|处理成|判为|决定|打算|准备|结论|按.{0,6}(办|做)")
+_PROPOSAL_SENT_RE = re.compile(r"[。\n；;！!？?]")
 
 
 def _verdict_from_proposal(text: str) -> str:
     """从上一轮泠月那句提议里读出复核结论：'reject'/'pass'/''（读不出或自相矛盾）。
 
     读不出**绝不默认**（默认驳回 = 替主人下了一个会隐藏访客留言的决定）。
+    两级作用域：先只在**带提案标记的句子**里读（回复里"顺带一提/解释后果"的句子
+    常常提到另一族词），那儿读不出再回退整段——回退是为了不改变"短回复"这类
+    没有标记句的既有行为。
     """
     t = text or ""
-    reject, allow = bool(_AUDIT_REJECT_RE.search(t)), bool(_AUDIT_PASS_RE.search(t))
-    if reject == allow:      # 都没提 / 两种都提 ⇒ 分不清
-        return ""
-    return "reject" if reject else "pass"
+    sentences = [s for s in _PROPOSAL_SENT_RE.split(t) if s.strip()]
+    marked = [s for s in sentences if _PROPOSAL_MARK_RE.search(s)]
+    for scope in (marked, [t]):
+        if not scope:
+            continue
+        reject = False
+        allow = False
+        for s in scope:
+            r, a = _audit_words(s)
+            reject = reject or r
+            allow = allow or a
+        if reject != allow:
+            return "reject" if reject else "pass"
+    return ""
 
 
 def _render_pending_facts(pending: list) -> str:
@@ -3455,10 +3506,10 @@ def _render_pending_facts(pending: list) -> str:
 
 def _auth_review_path(user_msg: str, prev_ai: str, principal, config
                       ) -> tuple[str, dict | None]:
-    """授权式审查：返回 `(系统事实块, 确定性计划或 None)`，都不适用给 `("", None)`。
+    """授权式审查：返回 `(系统事实块, 确定性计划或 None)`，不适用给 `("", None)`。
 
-    事实块与计划互斥使用：拿到计划 = 唯一待审 + 结论明确（零 LLM 直接拼，写操作
-    必弹窗）；拿到事实块 = 交 planner 决策（0 条/≥2 条/结论读不出/台账读不到）。
+    两种形态：拿到计划 = 唯一待审 + 结论明确（零 LLM 直接拼，写操作必弹窗）；
+    只有事实块 = 0 条 / ≥2 条 / 结论读不出 / 台账读不到 ⇒ 交 planner 决策（不替他挑）。
     """
     if _short_reply_kind(user_msg) != "auth":
         return "", None

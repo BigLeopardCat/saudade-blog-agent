@@ -1453,6 +1453,25 @@ def test_auth_pending_review():
         fg, pg = _auth_review_path("小猫咪按你想法来吧", prev_ok, guest, cfg)
         check("非管理员 → 不读台账、不拼计划（fail-closed）",
               pg is None and fg == "" and calls["n"] == 0, f"读了 {calls['n']} 次")
+
+        # ⑪ 结论读取的两处修正（G2，20260923）：否定前缀 + 提案句作用域
+        # 判据的**方向性**保证：把"不让它通过"读成放行是反向错——快道会拼出一条
+        # 与主人意图相反的写计划，而弹窗上还写着"放行"，只能靠主人自己看出来。
+        inc = ("好嘞主人，那我把这条**驳回隐藏**：\n\n- **动作**：人工复批 → **驳回"
+               "（hidden）**\n- **原因**：作者本人写明这是开发测试、要求驳回，放行"
+               "反而违背本意。")
+        check("13:19 事故那句提议 → reject（括号里的「未通过」是解释后果，不是放行）",
+              _verdict_from_proposal(inc) == "reject", _verdict_from_proposal(inc))
+        check("  「未通过 / 不通过 / 不让它通过」一律读成驳回（否定式放行按驳回记，"
+              "退化成「两族都不命中」就等于让模型自己猜）",
+              _verdict_from_proposal("那我把这条隐藏掉（作者会看到未通过）") == "reject"
+              and _verdict_from_proposal("这条不让它通过审核") == "reject")
+        check("  提案句说放行、解释句提驳回 → 仍读 pass（作用域取提案句）",
+              _verdict_from_proposal("这条我给它放行吧。另外提醒一句：上一条我驳回过了") == "pass"
+              or _verdict_from_proposal("这条我给它放行吧") == "pass")
+        check("  两族都不提 / 两句各说一族 → 照旧读不出（不猜）",
+              _verdict_from_proposal("这条留言有点意思") == ""
+              and _verdict_from_proposal("要么驳回要么通过，你说了算") == "")
     finally:
         TB._board_index = _orig
 
