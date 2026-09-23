@@ -479,8 +479,10 @@ def main():
     ap.add_argument("--no-trace", action="store_true",
                     help="不落 golden trace（默认落 logs/agent/golden_traces/<run>/；"
                          "显式关掉只用于省盘/极速冒烟）")
-    ap.add_argument("--keep-traces", type=int, default=5,
-                    help="保留最近 N 次 golden run 的 trace 目录（默认 5；0=不清理）")
+    ap.add_argument("--keep-traces", type=int, default=golden_trace.KEEP_DEFAULT,
+                    help=f"保留最近 N 次 golden run 的 trace 目录（默认 "
+                         f"{golden_trace.KEEP_DEFAULT}；0=不清理。**有失败的 run 一律不清理**"
+                         f"——判红那次的 planner 决策只在它里面）")
     ap.add_argument("--trace-run-id", default="",
                     help="指定 trace run_id（进程隔离跑法由父进程给，让所有子进程落同一目录）")
     args = ap.parse_args()

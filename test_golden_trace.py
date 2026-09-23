@@ -15,7 +15,9 @@
   ③ 接线与清理：三个跑法（`run_golden.py` / `golden_case_runner.py` / `golden_full_run.py`）
      真的把 trace 接上了（源码级检查——这类"能力有测试≠接线有测试"的坑，
      本仓已有先例：`langgraph-future-annotations-config-injection`），
-     prune 只删时间戳形状的目录、只留最近 N 个、根目录下别的东西一概不碰。
+     prune 只删时间戳形状的目录、只留最近 N 个、根目录下别的东西一概不碰；
+     20260924 起**有失败的旧 run 一律不清理**（判据 = 反查 `eval/report/runs/*.json`
+     的 trace_run：只有能证明那晚干净的才删，留档缺失/形态不认识/读坏一律留）。
 
 `settings.trace_dir` 在本套件里被指到临时目录 ⇒ 生产 trace 目录（`logs/agent/traces`）
 在整轮测试中零写入。
@@ -117,7 +119,7 @@ check("run_golden.py 每条用例的 trace 路径进了报告",
 check("run_golden.py 报告的 trace_run/trace_dir 从**实际落盘路径**反推",
       "_first_trace = next((r.get(\"trace\") for r in results if r.get(\"trace\")), None)" in src_run
       and '"trace_dir": os.path.dirname(_first_trace) if _first_trace else None' in src_run)
-check("run_golden.py 收尾调 prune（keep 可配，默认 5）",
+check("run_golden.py 收尾调 prune（keep 可配，默认取 KEEP_DEFAULT）",
       "golden_trace.prune(args.keep_traces)" in src_run
       and "--keep-traces" in src_run and "--no-trace" in src_run)
 check("进度打印里红条带 trace 路径（红了照着读，不再靠复采样猜）",
@@ -132,7 +134,7 @@ check("生产调用点（server.py）不传 dir/name（行为与改动前逐字�
       and "dir=" not in re.search(r"start_trace\((?:[^()]|\([^()]*\))*\)",
                                   (ROOT / "server.py").read_text(encoding="utf-8")).group(0))
 
-# prune：只认时间戳目录，只留最近 N 个
+# prune：只认时间戳目录、只留最近 N 个，**外加所有有失败的旧 run 一律不清理**
 root = golden_trace.trace_root()
 names = [f"2026090{i}_12000{i}" for i in range(1, 8)]  # 7 个时间戳目录
 for n in names:
@@ -141,18 +143,62 @@ os.makedirs(os.path.join(root, "handmade_samples"), exist_ok=True)   # 非时间
 open(os.path.join(root, "note.txt"), "w").write("x")                  # 根下的散文件
 open(os.path.join(root, "handmade_samples", "keep.json"), "w").write("{}")
 _ts_dirs = sorted(names + [run_id])           # 7 个人造的 + 本用例真跑出来的那个
-_keep = _ts_dirs[-5:]
-doomed = golden_trace.prune(keep=5)
-check("prune 只删时间戳目录、只删最旧的（时间戳目录共 8 个，留 5）",
-      doomed == _ts_dirs[:-5], str(doomed))
+
+# 反查留档的目录指到 tmpdir（否则读的是真实 eval/report/runs/，离线测试不该依赖它；
+# 更要紧的是：写出/读走生产留档 = 测试改了别人的证据链）
+_reports = os.path.join(TMP, "reports")
+os.makedirs(_reports, exist_ok=True)
+golden_trace._REPORT_DIR = _reports
+
+
+def _write_report(name, doc) -> None:
+    with open(os.path.join(_reports, name), "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False)
+
+
+# 被淘汰区（最旧 3 个）各给一种情况：
+_write_report("clean.json", {"trace_run": _ts_dirs[0], "failed": 0,
+                             "regression": {"all_passed": True}})        # 干净 → 可删
+_write_report("red.json", {"trace_run": _ts_dirs[1], "failed": 2})       # 红了 → 留
+# _ts_dirs[2] 没有留档 → 证据不足 → 留
+_buf = io.StringIO()
+with contextlib.redirect_stdout(_buf):
+    doomed = golden_trace.prune(keep=5)
+check("prune 只删「留档能证明它干净」的那一个（红的、无留档的都留着）",
+      doomed == [_ts_dirs[0]], str(doomed))
+check("红那晚的目录还在（判红的 trace 就是证据）",
+      os.path.isdir(os.path.join(root, _ts_dirs[1])))
+check("没有留档的旧 run 一并留下（证据不足 ≠ 干净）",
+      os.path.isdir(os.path.join(root, _ts_dirs[2])))
+check("留下的这批**吭声**（不静默保留：下次没人知道它为什么还在）",
+      "保留" in _buf.getvalue() and _ts_dirs[1] in _buf.getvalue(), _buf.getvalue().strip()[:80])
+check("被删的目录真的不在了", not os.path.exists(os.path.join(root, _ts_dirs[0])))
 check("非时间戳目录与散文件一个不碰",
       os.path.isdir(os.path.join(root, "handmade_samples"))
       and os.path.isfile(os.path.join(root, "handmade_samples", "keep.json"))
       and os.path.isfile(os.path.join(root, "note.txt")))
 check("最近 5 个都在（含本次 run 自己）",
-      all(os.path.isdir(os.path.join(root, n)) for n in _keep))
+      all(os.path.isdir(os.path.join(root, n)) for n in _ts_dirs[-5:]))
+# 回归组红（failed=0 但组内红）同样算"这一晚是红的"
+_write_report("reg.json", {"trace_run": _ts_dirs[3], "failed": 0,
+                           "regression": {"all_passed": False}})
+check("回归组红也算红（不只看 failed 计数）",
+      golden_trace._run_verdicts().get(_ts_dirs[3]) is True)
+# 形态不认识的留档（旧格式没有 trace_run / 字段不是 int / JSON 坏）一律不当成"干净"
+_write_report("old.json", {"failed": 0})
+_write_report("weird.json", {"trace_run": _ts_dirs[4], "failed": "0"})
+open(os.path.join(_reports, "broken.json"), "w").write("{ 不是 json")
+_v = golden_trace._run_verdicts()
+check("旧格式/坏字段/坏 JSON 都不进判据（查不到 ⇒ 不删）",
+      _ts_dirs[4] not in _v, str(_v))
+check("判据收的是「能确定的那几个」：干净的 False、红的 True",
+      _v.get(_ts_dirs[0]) is False and _v.get(_ts_dirs[1]) is True
+      and _v.get(_ts_dirs[3]) is True, str(_v))
+check("keep 默认值来自 KEEP_DEFAULT（两处不再各写一个数字）",
+      golden_trace.KEEP_DEFAULT >= 30
+      and "default=golden_trace.KEEP_DEFAULT" in src_run)
 check("keep<=0 = 不清理", golden_trace.prune(0) == []
-      and all(os.path.isdir(os.path.join(root, n)) for n in _keep))
+      and all(os.path.isdir(os.path.join(root, n)) for n in _ts_dirs[-5:]))
 
 # 关掉开关：start_case 返回 None、finish_case(None) 也 None，且**不建目录**
 os.environ[golden_trace.ENV_OFF] = "1"
