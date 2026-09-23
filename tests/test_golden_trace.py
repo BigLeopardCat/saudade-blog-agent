@@ -23,6 +23,10 @@
      `golden_full_run.py` 隔离子进程）都对首跑红的回归用例复跑一次，复跑绿记进
      `regression.flaked_ids` + `failed_first_run` 后仍照常出声（复跑必须落**另一个**
      trace 名，否则首跑那份证据被覆盖）。
+     同日再锁**身份通道**的接线：`needs_admin_uid` / `needs_user_uid` 两条表在两个跑法
+     里都在、未设环境变量就响亮 SKIP（并进 `skipped_ids`）、只给用例自己声明的条目注入
+     uid；外加用例侧契约（标记与 `context.role` 配对；带标记的用例不得要求确认帧——
+     弹卡轮意味着写路径可达，那条路要留给 uid=0 哨兵当最后一道保险）。
 
 `settings.trace_dir` 在本套件里被指到临时目录 ⇒ 生产 trace 目录（`logs/agent/traces`）
 在整轮测试中零写入。
@@ -165,6 +169,46 @@ check("隔离跑法同款：复跑仍走独立子进程 + 报告带 regression �
       and '"flaked_ids": _reg_flaked' in src_full
       and '"failed_first_run": failed_first' in src_full
       and '"all_passed": not _reg_bad' in src_full)
+
+# 身份通道（20260924）：role 决定"能做什么"、uid 决定"对谁做"——需要真身份真调上游的
+# 用例（管理员读后台清单、普通用户的写请求被拒）声明 `needs_admin_uid` / `needs_user_uid`，
+# 跑法按表注入 context.user_id；未设环境变量则**响亮跳过**（跳过关乎通过率分母，不许静默）。
+# 三条纪律都在这里锁住：两条通道两个跑法都在、只给声明的条目注入、标记与角色配对。
+check("两条身份通道在**两个跑法**里都在（needs_admin_uid / needs_user_uid）",
+      '"needs_user_uid", "GOLDEN_USER_UID"' in src_run
+      and '"needs_user_uid", "GOLDEN_USER_UID"' in src_full
+      and "_UID_CHANNELS" in src_run and "_UID_CHANNELS" in src_full)
+check("未设变量 ⇒ 响亮 SKIP（打印 + 记进 skipped_ids + 本轮剔除），不静默豁免",
+      'print(f"[skip] {cid}: SKIP (needs {_env})")' in src_run
+      and "skip_ids += _need_uid" in src_run
+      and "cases = [c for c in cases if not c.get(_marker)]" in src_run
+      and '"skipped_ids": skip_ids' in src_run
+      and 'print(f"[skip] {_cid}: SKIP (needs {_env})", flush=True)' in src_full
+      and "_SKIPPED_IDS += _NEED_UID" in src_full
+      and "CASES = [c for c in CASES if not c.get(_marker)]" in src_full)
+check("只给**用例自己声明要身份**的条目注入 uid（uid=0 哨兵是写面最后一道保险）",
+      "if c.get(_marker):" in src_run and "if _c.get(_marker):" in src_full
+      and '["user_id"] = int(_real_uid)' in src_run
+      and '["user_id"] = int(_real_uid)' in src_full)
+
+# 用例侧契约：标记与 context.role 必须配对（role 是权限判定的唯一输入），且带标记的用例
+# 一律不得要求确认帧——弹卡轮意味着写路径可达，那条路要靠 uid=0 哨兵兜"模型跑飞真写下去"。
+# 「被拒」那类（role=user、gold 只写 forbid_tool_calls）才是这条通道的正确用法。
+_MARK_ROLE = {"needs_admin_uid": "admin", "needs_user_uid": "user"}
+_cases_jsonl = [json.loads(l) for l in (ROOT / "eval" / "golden" / "basic.jsonl")
+                .read_text(encoding="utf-8").splitlines() if l.strip()]
+for _c in _cases_jsonl:
+    _gold = _c.get("gold") or {}
+    _frames = _gold.get("require_frame_prefix") or []
+    for _m, _role in _MARK_ROLE.items():
+        if not _c.get(_m):
+            continue
+        check(f"{_c['id']}: {_m} 与 context.role 配对",
+              (_c.get("context") or {}).get("role") == _role,
+              f"role={(_c.get('context') or {}).get('role')!r}")
+        check(f"{_c['id']}: 声明身份但不得要求确认帧（写面靠 uid=0 哨兵）",
+              not any(f in ("__CONFIRM__:", "__PENDING__:") for f in _frames),
+              str(_frames))
 
 # prune：只认时间戳目录、只留最近 N 个，**外加所有有失败的旧 run 一律不清理**
 root = golden_trace.trace_root()
