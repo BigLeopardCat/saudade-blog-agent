@@ -14,19 +14,30 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_bufferin
 sys.path.insert(0, "eval")
 
 CASES = [json.loads(l) for l in open("eval/golden/basic.jsonl", encoding="utf-8") if l.strip()]
-# 管理助手「读后台」用例需要真实 admin uid（20260921）：口径与 run_golden.py 一致
-# ——未设 GOLDEN_ADMIN_UID 就明确跳过并打印（如实计入分母变化，不静默豁免）。
+# 需要**真实身份**的用例（管理员读后台 20260921；普通用户被拒那条 20260924）：口径与
+# run_golden.py 逐字一致——两条通道（GOLDEN_ADMIN_UID / GOLDEN_USER_UID），未设就明确
+# 跳过并打印（如实计入分母变化，不静默豁免）。
 # 子进程继承环境变量，但**用例文件是父进程写的**，所以 uid 注入必须在这里做。
-_ADMIN_UID = os.environ.get("GOLDEN_ADMIN_UID", "").strip()
-_NEED_UID = [c["id"] for c in CASES if c.get("needs_admin_uid")]
-if _NEED_UID and not _ADMIN_UID:
-    CASES = [c for c in CASES if not c.get("needs_admin_uid")]
-    for _cid in _NEED_UID:
-        print(f"[skip] {_cid}: SKIP (needs GOLDEN_ADMIN_UID)", flush=True)
-elif _ADMIN_UID:
-    for _c in CASES:
-        if _c.get("needs_admin_uid"):
-            _c.setdefault("context", {})["user_id"] = int(_ADMIN_UID)
+_UID_CHANNELS = (("needs_admin_uid", "GOLDEN_ADMIN_UID"),
+                 ("needs_user_uid", "GOLDEN_USER_UID"))
+# 跳过的用例在**过滤之前**记下来（20260924 修）：报告里的 skipped_ids 要按"是不是回归组"
+# 分拣，而回归组的分拣靠 tags —— 过滤之后再查就查不到了（用例已不在 CASES 里）。
+_ALL_TAGS = {c["id"]: (c.get("tags") or []) for c in CASES}
+_SKIPPED_IDS = []
+for _marker, _env in _UID_CHANNELS:
+    _NEED_UID = [c["id"] for c in CASES if c.get(_marker)]
+    _real_uid = os.environ.get(_env, "").strip()
+    if not _NEED_UID:
+        continue
+    if not _real_uid:
+        CASES = [c for c in CASES if not c.get(_marker)]
+        _SKIPPED_IDS += _NEED_UID
+        for _cid in _NEED_UID:
+            print(f"[skip] {_cid}: SKIP (needs {_env})", flush=True)
+    else:
+        for _c in CASES:
+            if _c.get(_marker):
+                _c.setdefault("context", {})["user_id"] = int(_real_uid)
 RUNNER = "eval/golden_case_runner.py"
 TMPDIR = "/tmp/golden_cases"
 TIMEOUT = 180
@@ -159,7 +170,10 @@ report = {"ts": ts, "corpus": "full", "total": len(CASES), "passed": len(CASES) 
                          "failed_ids": _reg_bad,
                          "all_passed": not _reg_bad,
                          "flaked_ids": _reg_flaked,
-                         "skipped_ids": _NEED_UID if not _ADMIN_UID else []},
+                         # 跳过的用例里只有回归组值得单列（口径同 run_golden.py：跳过会改变
+                         # 通过率分母，回归组的硬判 100% 更要看得见谁没跑）
+                         "skipped_ids": [s for s in _SKIPPED_IDS
+                                         if "regression" in _ALL_TAGS.get(s, [])]},
           # 这一轮的 trace 目录（20260922）：run_id 是本进程定的，子进程都落在它下面
           "trace_run": GOLDEN_RUN,
           "cases": results}

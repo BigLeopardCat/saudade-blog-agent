@@ -529,25 +529,36 @@ def main():
     if args.limit:
         cases = cases[: args.limit]
 
-    # 管理助手「读后台」用例需要**真实 admin uid**（20260921）：用例里刻意不写 uid
-    # （仓库是公开的），改由环境变量给：`GOLDEN_ADMIN_UID=<管理员的 uid>`。
-    # 未设置 → 明确打印 SKIP 并记进 skipped_ids —— **不做静默豁免**：跳过会改变
-    # 通过率分母，必须出现在报告里（同 --skip-ids 的口径）。
-    # 注意这两个用例走的是「以发起人身份代调」，uid 就是准入门槛本身：拿一个
-    # 非 admin 的 uid 跑，它们会如实失败（而不是假通过）。
+    # 需要**真实身份**的用例：用例里刻意不写 uid（仓库是公开的），改由环境变量给。
+    # 未设置 → 明确打印 SKIP 并记进 skipped_ids —— **不做静默豁免**：跳过会改变通过率
+    # 分母，必须出现在报告里（同 --skip-ids 的口径）。
+    #
+    # 20260924 补第二条通道（`GOLDEN_USER_UID`）。**为什么是两条而不是一条**：role 决定
+    # "能做什么"、uid 决定"对谁做"——以发起人身份真调上游的用例，uid 就是准入门槛本身，
+    # 拿一个非该 role 的 uid 跑会如实失败（而不是假通过，也不是假红）。而 uid=0 是另一回事：
+    # 那是 agent 侧的哨兵（一个字节都不发），用例会由于"谁都调不动"而通过——**通过的理由
+    # 是错的**。管理员那 5 条（读后台清单/查无此物如实说）与普通用户那条（写请求被拒）就是
+    # 靠这条通道把"被 role/权限挡住"与"被 uid 哨兵挡住"分开的。
+    #
+    # ⚠️ 只给**用例自己声明要身份**的条目注入：写面用例的正确行为是"弹卡/零写"，它们靠
+    # uid=0 的哨兵兜住"模型跑飞真写下去"这最后一道保险，不在这条通道的适用范围里。
     import os as _os
-    admin_uid = _os.environ.get("GOLDEN_ADMIN_UID", "").strip()
-    need_uid = [c["id"] for c in cases if c.get("needs_admin_uid")]
-    if need_uid:
-        if not admin_uid:
-            skip_ids += need_uid
-            cases = [c for c in cases if not c.get("needs_admin_uid")]
-            for cid in need_uid:
-                print(f"[skip] {cid}: SKIP (needs GOLDEN_ADMIN_UID)")
+    _UID_CHANNELS = (("needs_admin_uid", "GOLDEN_ADMIN_UID"),
+                     ("needs_user_uid", "GOLDEN_USER_UID"))
+    for _marker, _env in _UID_CHANNELS:
+        _real_uid = _os.environ.get(_env, "").strip()
+        _need_uid = [c["id"] for c in cases if c.get(_marker)]
+        if not _need_uid:
+            continue
+        if not _real_uid:
+            skip_ids += _need_uid
+            cases = [c for c in cases if not c.get(_marker)]
+            for cid in _need_uid:
+                print(f"[skip] {cid}: SKIP (needs {_env})")
         else:
             for c in cases:
-                if c.get("needs_admin_uid"):
-                    c.setdefault("context", {})["user_id"] = int(admin_uid)
+                if c.get(_marker):
+                    c.setdefault("context", {})["user_id"] = int(_real_uid)
     print(f"[run] {len(cases)} 条 golden 样本（真实 LLM，约 {len(cases) * 30}s）\n")
 
     results = []
