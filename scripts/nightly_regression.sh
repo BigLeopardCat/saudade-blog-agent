@@ -33,6 +33,11 @@ $PY tests/test_skills.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] test_skills FAI
 echo "--- 检索基准 recall@k / MRR (直接测线上 rag/search.py, 秒级, 非门禁) ---" >> "$LOG"
 $PY eval/recall_eval.py >> "$LOG" 2>&1 || echo "[$TS] recall_eval 运行异常（不影响门禁）" >> "$LOG"
 echo "--- golden set (78 条真实对话, 约 20 分钟) ---" >> "$LOG"
+# 20260924 起：给「需要真身份」的那类用例一个 uid，治那 5 条常年 SKIP（moderation_report_admin /
+# user_report_admin / 三条 *_unresolved_target_honest）。721 是**测试专用管理员账号**（不是主人
+# 的 uid=1——那条写用例会真改主人自己的数据），role=admin、口令已是不可知哈希，只为这条通道存在。
+# 未设该变量时 run_golden 会**响亮跳过并打印**（跳过关乎通过率分母，不静默豁免）。
+export GOLDEN_ADMIN_UID=721
 $PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED (复审单 eval/report/review_*.md；回归组红 = 当天必修)" >> "$LOG"; }
 # 20260912 起：语义告警巡检（非门禁——只记录不置失败标记，避免与 golden 门禁混同）
 echo "--- trace 语义告警 (近 7 天真实对话, 巡检非门禁) ---" >> "$LOG"
