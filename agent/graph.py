@@ -1621,6 +1621,32 @@ _ABSENCE_LEAD_RE = re.compile(
     r"^(?:(?:确实|真的|其实|目前|现在|暂时|根本|压根)|[也确实都并]){0,2}"
     r"(?:没有|没找到|没写|没讲过|没提|没介绍|未收录|暂无|查不到|找不到|未见"
     r"|无相关|不涉及)")
+# 能力否定（20260924）：`没有权限/没有功能/…` 说的是"这个动作**做不到**"，不是"站内没有
+# 这个内容"。它会跟 ① 的另两个条件在同子句里凑齐（实测「访客是没有权限更改站内文章状态的」
+# ——站内 + 没有 + **文章**，而三条之间本就没有任何句法关系）⇒ 把**诚实拒答**判成凭空结论，
+# 整轮换成兜底道歉，而那句道歉本身是假话（"我其实没有去站里查过"，可系统压根不需要查）。
+# 判据：否定词**紧跟**能力名词的那一次不算存在性结论（`_absence_span` 逐次判定）；同子句里
+# 另有一次"否定 + 内容名词"照旧命中。
+# 边界如实：能力名词后面必须**跟动作词/标点/句尾**才算能力否定——"没有权限**相关的**教程"
+# "站内暂无功能**说明文档**"是被内容名词修饰的用法（货真价实的内容缺失结论），不在豁免内。
+# 词表只收"这个动作我做不到"那一族的动词（前置能愿词 `能/可以/可/直接` 可选：实测
+# 「站里没有入口**能看**这些文章」也是同一族的能力陈述）；宁可漏豁免（多报一次 fallback）
+# 也不吞真结论。
+_CAPABILITY_NEG_RE = re.compile(
+    r"(?:没有|暂无|没|无)(?:权限|功能|接口|入口|办法|能力|按钮|开关)"
+    r"(?=[，,。；;！!？?～~\s]|$|(?:能|可以|可|直接)?"
+    r"(?:去|来|帮|做|操作|执行|更改|改动|改|修改|调整|设置"
+    r"|删除|删|添加|加|创建|建|写入|写|调用|访问|登录|查看|查|看|发布|处理|完成))")
+
+
+def _absence_span(clause: str):
+    """本子句里**算存在性结论**的那一次否定（跳过能力否定那几次）。无 → None。"""
+    for m in _ABSENCE_RE.finditer(clause):
+        if _CAPABILITY_NEG_RE.match(clause, m.start()):
+            continue
+        return m
+    return None
+
 # 跨轮回执行记忆里的"检索类动作"痕迹（Rust render_exec_row 定稿措辞：rag_search →
 # "站内检索「…」"、search_notes → "搜索「…」"）——有它即视为站内结论有据
 _EXEC_SEARCH_TRACE_RE = re.compile(r"站内检索「|搜索「")
@@ -1654,12 +1680,14 @@ def _site_absence_claim_clause(text: str, search_evidence: bool = False) -> str 
     for i, clause in enumerate(clauses):
         if _ABSENCE_EXEMPT_RE.search(clause):
             continue
-        if (_SITE_DOMAIN_RE.search(clause) and _ABSENCE_RE.search(clause)
+        if (_SITE_DOMAIN_RE.search(clause) and _absence_span(clause)
                 and _CONTENT_NOUN_RE.search(clause)):
             return clause
+        _lead = _ABSENCE_LEAD_RE.search(clauses[i + 1]) if i + 1 < len(clauses) else None
         if (i + 1 < len(clauses) and _SITE_DOMAIN_RE.search(clause)
                 and _CONTENT_NOUN_RE.search(clause)
-                and _ABSENCE_LEAD_RE.search(clauses[i + 1])
+                and _lead
+                and not _CAPABILITY_NEG_RE.search(clauses[i + 1], 0, _lead.end())
                 and not _ABSENCE_EXEMPT_RE.search(clauses[i + 1])):
             # 跨子句桥形态：把**结论那两句**一起交出去（前子句给对象、后子句给否定）
             return clause + clauses[i + 1]
@@ -1674,6 +1702,8 @@ def _site_absence_claim(text: str, search_evidence: bool = False) -> bool:
       ② 跨子句桥：本子句有站内词 + 内容域名词，**下一子句以否定存在领起**
          （"站内那些文章，没有写过 async 的""全站翻过的笔记，没讲过这个"）——
          中文逗号断句的常见形态，缺了它真结论会整片漏掉。
+    **能力否定不算**（20260924，见 `_CAPABILITY_NEG_RE`）："没有权限/没有功能"是"做不到"，
+    不是"站内没有这个内容"——诚实拒答不该被换成道歉。两种形态都已接这条判据。
     search_evidence=True（本轮有内容类工具帧，或跨轮回执里有检索痕迹）→ 结论有据，放行。"""
     return _site_absence_claim_clause(text, search_evidence) is not None
 
