@@ -488,6 +488,13 @@ print("⑦ 被拒的确认请求必须留痕（20260924：点确定没生效这�
 # 但这一轮**根本不落 trace**（旧的 invalid 分支在 start_trace 之前就 return 了）。
 # 复盘时 agent 侧查不到"有人点过、被拒了"，只能靠前端日志——而前端这条链路正路径
 # 也没留痕。这一节同时锁两件事：查得到（字段齐）与**查不到（令牌绝不在里面）**。
+# 密钥桩：⑥ 收尾把密钥还原成了 _SAVED_SECRET，而 **CI 里没有 .env、它是空串**——
+# 不重新立桩，下面 confirm.sign 会静默返回空串，"令牌不在元数据里"就成了恒真的
+# 假绿（CI 实测：本地带 .env 绿、CI 红，正是这一条）。故先立桩再用。
+settings.jwt_secret = _STUB_SECRET
+check("前置探针：此刻签得出令牌（下面那条'令牌不在里面'才有意义）",
+      len(confirm.sign(1, 246, "favorite_add",
+                       [{"tool": "add_favorite", "args": {"article_id": 19}}])) > 20)
 _meta = confirm.invalid_trace_meta(1, 246, 220)
 check("被拒轮有 trace 元数据，且标明'这一跳是点确定'", _meta.get("has_confirm") is True)
 check("  标明验签没过（零执行）⇒ 复盘时不会与'真执行了'混淆",
@@ -511,6 +518,7 @@ check("接线：验签失败分支调用了落 trace（不是只打个 warning �
       and _src.index("_record_invalid_confirm(get_trace_id()") > _src.index("if grant is None:"))
 check("接线：正常轮的 trace input 带 conversation_id",
       '"conversation_id": req.conversation_id' in _src)
+settings.jwt_secret = _SAVED_SECRET   # 还原（⑥ 与本节各自立桩，改完归还原值）
 
 print()
 if FAILED:
