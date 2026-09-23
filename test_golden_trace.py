@@ -17,7 +17,12 @@
      本仓已有先例：`langgraph-future-annotations-config-injection`），
      prune 只删时间戳形状的目录、只留最近 N 个、根目录下别的东西一概不碰；
      20260924 起**有失败的旧 run 一律不清理**（判据 = 反查 `eval/report/runs/*.json`
-     的 trace_run：只有能证明那晚干净的才删，留档缺失/形态不认识/读坏一律留）。
+     的 trace_run：只有能证明那晚干净的才删，留档缺失/形态不认识/读坏一律留；
+     `regression.flaked_ids`（首跑红复跑绿）同样算"不干净"⇒ 留）；
+     同日另锁**回归组 FAIL 重跑一次再判**的接线：两个跑法（`run_golden.py` 进程内 /
+     `golden_full_run.py` 隔离子进程）都对首跑红的回归用例复跑一次，复跑绿记进
+     `regression.flaked_ids` + `failed_first_run` 后仍照常出声（复跑必须落**另一个**
+     trace 名，否则首跑那份证据被覆盖）。
 
 `settings.trace_dir` 在本套件里被指到临时目录 ⇒ 生产 trace 目录（`logs/agent/traces`）
 在整轮测试中零写入。
@@ -134,6 +139,33 @@ check("生产调用点（server.py）不传 dir/name（行为与改动前逐字�
       and "dir=" not in re.search(r"start_trace\((?:[^()]|\([^()]*\))*\)",
                                   (ROOT / "server.py").read_text(encoding="utf-8")).group(0))
 
+# 回归组 FAIL 重跑一次再判（20260924）：两个跑法都要接上，且复跑 trace 必须换个名字——
+# 同名文件会把首跑那份覆盖掉，而"首跑为什么红"正是复跑要回答的问题（能力有测试
+# ≠ 接线有测试：本仓已在 langgraph-future-annotations 上栽过一次）
+src_runner_case = (ROOT / "eval" / "golden_case_runner.py").read_text(encoding="utf-8")
+check("run_golden.py 对首跑红的回归用例复跑一次（按 tags 挑，不重跑能力题）",
+      '_rerun_ids = [r["id"] for r in results' in src_run
+      and 'and "regression" in (r.get("tags") or [])' in src_run
+      and '_rr = run_one(build_request(_case), build_principal(_case),' in src_run)
+check("run_golden.py 复跑落**另一份** trace（`__rerun` 后缀，首跑的证据不被覆盖）",
+      'trace_ctx={"run": run_id, "case": f"{r[\'id\']}__rerun"}' in src_run
+      and 'sys.argv[3] if len(sys.argv) > 3 else ""' in src_runner_case
+      and 'trace_ctx={"run": run_id, "case": case["id"] + suffix}' in src_runner_case)
+check("run_golden.py 判据用复跑后的终判（final_ok），首跑红另计 failed_first_run",
+      'r["final_ok"] = r["ok"] or _rok' in src_run
+      and '"failed_first_run": failed_first' in src_run
+      and '_reg_bad = [r["id"] for r in _reg if not r.get("final_ok", r["ok"])]' in src_run)
+check("run_golden.py 复跑绿进 flaked_ids + 出声（放行但不静默宽恕）",
+      '"flaked_ids": _reg_flaked' in src_run
+      and 'if _reg_flaked:' in src_run
+      and '_reg_flaked = [r["id"] for r in _reg if not r["ok"] and r.get("final_ok")]' in src_run
+      and "复跑才绿" in src_run)
+check("隔离跑法同款：复跑仍走独立子进程 + 报告带 regression 块与 flaked_ids",
+      'rr = run_case(case, "_rerun")' in src_full
+      and '"flaked_ids": _reg_flaked' in src_full
+      and '"failed_first_run": failed_first' in src_full
+      and '"all_passed": not _reg_bad' in src_full)
+
 # prune：只认时间戳目录、只留最近 N 个，**外加所有有失败的旧 run 一律不清理**
 root = golden_trace.trace_root()
 names = [f"2026090{i}_12000{i}" for i in range(1, 8)]  # 7 个时间戳目录
@@ -184,6 +216,13 @@ _write_report("reg.json", {"trace_run": _ts_dirs[3], "failed": 0,
                            "regression": {"all_passed": False}})
 check("回归组红也算红（不只看 failed 计数）",
       golden_trace._run_verdicts().get(_ts_dirs[3]) is True)
+# 首跑红复跑绿（flaked_ids，20260924）：门禁按方差放行了，但那一夜的 trace 是唯一能
+# 回答"首跑为什么红"的东西 ⇒ 与判红同等对待，不清理
+_write_report("flake.json", {"trace_run": _ts_dirs[5], "failed": 0,
+                             "regression": {"all_passed": True,
+                                            "flaked_ids": ["case_x"]}})
+check("首跑红复跑绿也算「这一晚不干净」（那份首跑 trace 是唯一证据）",
+      golden_trace._run_verdicts().get(_ts_dirs[5]) is True)
 # 形态不认识的留档（旧格式没有 trace_run / 字段不是 int / JSON 坏）一律不当成"干净"
 _write_report("old.json", {"failed": 0})
 _write_report("weird.json", {"trace_run": _ts_dirs[4], "failed": "0"})

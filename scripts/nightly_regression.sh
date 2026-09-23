@@ -6,6 +6,9 @@
 # 复审规则（20260912）：假失败当轮修判据，真 FAIL 才允许挂着（否则门禁失去区分度）。
 # 20260921 起 golden 分两层判：**回归组（tags 含 regression）硬判 100%**（不受
 # --min-pass-rate 放宽），能力题仍按通过率——两类红的严重度不同，不许被平均数吸收。
+# 20260924 起回归组红**先复跑一次再定论**（判据脆弱/采样波动不再直接废掉整夜门禁）：
+# 复跑仍红=真 FAIL；复跑绿=按方差放行，但名单进报告 regression.flaked_ids 与复审单
+# 置顶，日志里也单列——放行不等于静默宽恕。
 # 同日补：trace_alert 抓到的现场回灌成 golden 草稿（eval/golden_draft.py，只产草稿
 # 到 eval/report/ 供人审，不自动入库、非门禁）。
 # 20260924 补：跨源对账（eval/trace_reconcile.py，把 trace ↔ agent.log ↔ monitor.log

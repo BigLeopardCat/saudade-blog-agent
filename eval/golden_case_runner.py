@@ -2,7 +2,7 @@
 """单条 golden 用例独立进程运行器：主脚本 spawn 本脚本跑一条用例，结果写 stdout JSON。
 进程隔离：卡死（LLM/HTTP 悬挂）由主脚本按超时 kill，悬挂连接随进程消亡，不污染后续用例。
 SIGABRT 注册 faulthandler：主脚本超时先发 SIGABRT 拿全线程栈（卡死点定位），再 kill。
-用法: python golden_case_runner.py <case.json 文件路径> [report_dir]
+用法: python golden_case_runner.py <case.json 文件路径> [report_dir] [trace_case_suffix]
 """
 import faulthandler
 import json
@@ -34,9 +34,13 @@ def main():
     # 一个 run 一个目录，子进程各自 resolve 会散成 N 个目录）。父进程没设时退回当前
     # 时刻——单条手跑也照样有 trace，只是那条独占一个目录。
     run_id = golden_trace.resolve_run_id()
+    # 复跑（20260924）：父进程给的名字后缀 —— 回归组首跑红要重跑一次，两次必须落
+    # **两份** trace（同名文件会把首跑那份覆盖掉，而"首跑为什么红"正是复跑要回答的）。
+    # 结果 dict 的 id 不带后缀（父进程按 id 归并）。
+    suffix = sys.argv[3] if len(sys.argv) > 3 else ""
     t0 = time.time()
     result = run_golden.run_one(req, run_golden.build_principal(case),
-                                trace_ctx={"run": run_id, "case": case["id"]})
+                                trace_ctx={"run": run_id, "case": case["id"] + suffix})
     elapsed = time.time() - t0
     fails = run_golden.check_gold(g, result)
     ok = not fails and not result["error"]

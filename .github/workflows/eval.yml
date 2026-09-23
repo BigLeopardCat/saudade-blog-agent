@@ -82,5 +82,8 @@ jobs:
       - name: golden trace 落盘单测（目录守卫/uid 恒 0/三个跑法接线/prune 只删时间戳目录，秒级，不联网）
         run: uv run python test_golden_trace.py
 
+      - name: 回归组重跑单测（假 LLM 驱动 main：复跑才绿按方差放行但必须出声/复跑不许覆盖首跑/能力题不重跑，秒级，不联网）
+        run: uv run python eval/golden_rerun_offline_test.py
+
       - name: 跨源对账单测（假夹具喂每条判据两侧/窗口裁剪/伪造字段/gz 往返，并断言夜间脚本真的接了线，秒级，不联网）
         run: uv run python eval/reconcile_offline_test.py
