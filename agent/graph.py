@@ -2398,6 +2398,12 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
         return _VERDICT_BLOCK, "args_parse"
     if kind == "unavailable":
         return _VERDICT_BLOCK, "unavailable"
+    if kind == "not_found":
+        # 目标不存在 / 不在我能确认的范围内（20260923 三轮，见 tools.base.not_found）：
+        # 同样 BLOCK（什么都没改成事实），但与 unavailable 分开给原因码——planner 的
+        # 应对是**换个 id 或如实问主人**，不是"稍后再试"；过程行也从「服务不可用」
+        # 改成「目标不存在」（server._REASON_CN）。
+        return _VERDICT_BLOCK, "target_not_found"
     text = raw or ""
     if not text.strip():
         return _VERDICT_BLOCK, "empty_result"

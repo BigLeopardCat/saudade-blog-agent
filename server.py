@@ -591,7 +591,12 @@ _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败"
               "unknown_target": "目标未经确认",
               # 上游服务不可用（_check_spec 的 kind=unavailable 分支，20260916 就有；
               # 20260921 补中文——此前会原样打出英文原因码，用户看到 "unavailable"）
-              "unavailable": "服务不可用"}
+              "unavailable": "服务不可用",
+              # 目标不存在（20260923 三轮，kind=not_found）：与上一条分开。此前
+              # planner 拿错 id（把「共 3 条」的 3 当 id）时，工具报的是 unavailable
+              # ⇒ 过程行显示「服务不可用」，用户读成"系统挂了"，而真问题是"你要标的
+              # 那条不存在"（trace `20260923T130033_9` 用户原话："显示服务不可用"）
+              "target_not_found": "目标不存在"}
 
 
 # 参数引用（agent/refs.py 的 $<工具>[<序号>].<字段>）在过程行里的可读来源名。

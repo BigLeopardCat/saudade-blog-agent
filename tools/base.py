@@ -72,6 +72,23 @@ def unavailable(text: str, meta: dict | None = None) -> ToolResult:
     return ToolResult(text, "unavailable", meta)
 
 
+def not_found(text: str, meta: dict | None = None) -> ToolResult:
+    """目标不存在 / 不属于你（20260923 三轮）——**第三个失败族**，与 unavailable 分开。
+
+    为什么必须分开（trace `20260923T130033_9` 实证）：planner 拿"条数"当 id 填进
+    `ids:[3]`，服务端按 3 匹配 0 行，写后复核（未读数没降）如实报"未确认生效"——
+    但那是 `unavailable`，过程行按 `_REASON_CN` 显示成**「服务不可用」**。用户看到
+    的是"系统挂了"，而真问题是"你要标的第 3 条根本不存在"。两者的**应对**也相反：
+    服务不可用 = 稍后再试；目标不存在 = 换个 id 或如实问主人（planner 拿到这个
+    原因码才会去读列表/追问，而不是重试同一条）。
+
+    与 `empty` 也分开：empty 是"查到了、就是空的"（是事实，checker 判 PASS 进回执），
+    这里是"你要动的东西不在我能确认的范围内"（不是"没有这条"的结论——可能是列表
+    只回最近 100 条，措辞里必须如实交代这个边界）。
+    """
+    return ToolResult(text, "not_found", meta)
+
+
 # 上游故障哨兵：`_get` 失败时返回它而不是 `[]`（"故障伪装成空"的源头就在那）。
 # 工具的出口要用 `_shape(data)` 而不是 `str(data)`——理由见 _shape 的注释。
 UPSTREAM_DOWN = unavailable("服务暂时不可用，请稍后再试")
@@ -2546,7 +2563,10 @@ def remove_favorite(
 @tool
 def read_notifications(
     config: RunnableConfig,
-    ids: Annotated[list[int] | None, "要标记已读的通知 id 列表（用户点名了具体哪几条时给）"] = None,
+    ids: Annotated[list[int] | None, "要标记已读的通知 id 列表（用户点名了具体哪几条时给；"
+                                     "id 只能来自 list_notifications 的返回或执行记忆摘要里 "
+                                     "`id《标题》` 形态的编号，**不许把「共 N 条」里的 N 当 id**，"
+                                     "也不许自己编——编号必须是真的才能在列表里对上"] = None,
     all: Annotated[bool | None, "true = 把**全部**未读通知标记已读（用户说了「全部/都/所有」"
                                 "才给；只是「把通知标记为已读」这种没限定范围的**不要自己填 True**）"] = None,
 ) -> str:
@@ -2577,9 +2597,29 @@ def read_notifications(
     if want_all:
         targets = [i for i, r in rows.items() if not r.get("isRead")]
     else:
-        # 点名的 id 原样交出去（列表只回最近 100 条，更早的可能不在里面——
-        # 按 id 交出去由服务端在**它自己的**全量里改，比按"我看得见的"改更对）。
         targets = want_ids
+        # ⚠️ 这里刻意**不是**"按 id 原样交给服务端、由它在全量里改"（那是本工具
+        # 20260923 批 7 最早的写法）：列表只回最近 100 条，交出去确实能覆盖到更早的
+        # 那些，但代价是**编出来的 id 也会被照样发出去**——服务端按它匹配 0 行，
+        # 写后复核报"未确认生效"，过程行还说成「服务不可用」。trace 实证
+        # （`20260923T130033_9`）：planner 把摘要里的条数「3」当 id 填了进来（真实那条
+        # 是 23），用户看到的就是"标记已读未成功（服务不可用）"——一次注定 0 行的写
+        # 换来一句误导。现在改成写**之前**先确认这些 id 至少是**我读得到的**：
+        # 一个都不在就零写 + not_found 如实说清。上限 100 条这个边界写进话里
+        # （**不谎称"站内没有这条"**——它可能只是比最近 100 条更早）。
+        unknown = [i for i in targets if i not in rows]
+        if len(unknown) == len(targets):
+            return not_found(
+                f"你点名的通知 {'、'.join(str(i) for i in unknown)} 不在我读到的通知列表"
+                f"（最近 {len(rows)} 条，最多 100 条）里，无法确认是哪几条——"
+                f"本次一个字节都没改（没有发出写请求）。"
+                f"要标记哪一条请先读一遍通知列表拿它的 id（列表里每条都带着 id）。")
+        if unknown:
+            return not_found(
+                f"你点名的通知里 {'、'.join(str(i) for i in unknown)} 不在我读到的通知列表"
+                f"（最近 {len(rows)} 条，最多 100 条）里，无法确认是哪几条——"
+                f"本次一个字节都没改（没有发出写请求）。"
+                f"请把 id 核对一遍（或说「全部标记已读」由系统按未读的那几条来标）。")
         # 已经全是已读 → 不发请求（写前读的副产品，见本节头注的幂等段）。
         # 显式循环而非 all(...)：见本函数 docstring 的形参遮蔽警告。
         all_read = True
