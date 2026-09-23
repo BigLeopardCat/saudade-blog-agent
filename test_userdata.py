@@ -396,6 +396,36 @@ try:
           out.kind == "ok" and "本来就没有未读的" in out and _writes(c) == [],
           f"{out.kind}: {out} / {_writes(c)}")
 
+    # ── read_notifications：点名的 id 不在自己列表里（20260923 三轮）────
+    # 生产事故（trace `20260923T130033_9`）：planner 把摘要里的**条数**「3」当 id
+    # 填进 `ids:[3]`（真实那条是 23）⇒ 服务端按 3 匹配 0 行 ⇒ 写后复核报
+    # "未确认生效"，过程行还显示成「服务不可用」。现在**写之前**就判：读到的列表里
+    # 没有这几个编号 ⇒ 一个字节都不发 + kind=not_found（与"服务挂了"分开）。
+    base._client = _SeqClient(_data(NOTICES))
+    c = base._client
+    out = base.read_notifications.invoke({"ids": [3]}, config=cfg(7))
+    check("点名的 id 不在读到的列表里 → kind=not_found 且**零写请求**（不是服务故障）",
+          out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+    check("措辞点名了那个 id、写明一个字节没改、并把列表上限如实交代（不谎称站内没有）",
+          "通知 3 不在" in str(out) and "一个字节都没改" in str(out)
+          and "100" in str(out) and "未确认生效" not in str(out), str(out))
+
+    base._client = _SeqClient(_data(NOTICES))
+    c = base._client
+    out = base.read_notifications.invoke({"ids": [7, 8]}, config=cfg(7))
+    check("混着来（7 在列表里、8 不在）→ 同样**整批零写**（绝不部分改）",
+          out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+    check("混着来的措辞也给另一条出口（「全部标记已读」由系统按未读的来标）",
+          "全部标记已读" in str(out), str(out))
+
+    base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}),
+                              _data({"notifications": 0, "messages": 1, "total": 1}))
+    c = base._client
+    out = base.read_notifications.invoke({"all": True}, config=cfg(7))
+    check("「全部」路径不受新判据影响（它不点名 id，直接按读到的未读来标）",
+          out.kind == "ok" and _writes(c) and _writes(c)[0][2] == {"ids": [], "all": True},
+          f"{out.kind}: {out} / {_writes(c)}")
+
     # ── read_notifications：成功路径（复核判据 = 未读数真的下降）───
     base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}),
                               _data({"notifications": 0, "messages": 1, "total": 1}))
@@ -414,9 +444,9 @@ try:
     base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}),
                               _data({"notifications": 1, "messages": 1, "total": 2}))
     c = base._client
-    out = base.read_notifications.invoke({"ids": [7, 8, 7]}, config=cfg(7))
+    out = base.read_notifications.invoke({"ids": [7, 6, 7]}, config=cfg(7))
     check("点名 id 路径 → payload 用 sorted 去重后的 id（'all': False）",
-          _writes(c)[0][2] == {"ids": [7, 8], "all": False}, str(_writes(c)))
+          _writes(c)[0][2] == {"ids": [6, 7], "all": False}, str(_writes(c)))
     check("复核只认服务端重数出来的未读数：2→1 也在降，报 2 条",
           out.kind == "ok" and "已把 2 条通知标记为已读" in out, f"{out.kind}: {out}")
 
@@ -680,6 +710,24 @@ check("输入形态判据仍是「命令式 ⇒ 免弹窗直执行」（改了 a
                                 "read_notifications", "把通知都标记成已读"))
 check("两条提问形态仍是「提问 ⇒ 不弹窗」（否则用例会落进确认弹窗、测的不是同一条链路）",
       authz.is_question_like("我有哪些未读通知？"))
+
+# ── 原因码：not_found 是**独立**一族（20260923 三轮）──────────────────
+# 事故形态：工具把"你要标的第 3 条不存在"报成 unavailable ⇒ checker 用同一个码 ⇒
+# 过程行显示「服务不可用」（用户看到的就是这句）。判据两头都要锁：checker 给出
+# **不同**的原因码，且 server 的 `_REASON_CN` 里有对应人话（新码漏配中文 = 过程行
+# 原样打英文，20260921 之前 `unavailable` 就是这样）。
+check("checker：kind=not_found → BLOCK + 独立原因码 target_not_found",
+      _G._check_spec("read_notifications", {"ids": [3]}, True, "通知 3 不在…", "notice_read",
+                     kind="not_found") == ("BLOCK", "target_not_found"),
+      str(_G._check_spec("read_notifications", {"ids": [3]}, True, "…", "notice_read",
+                         kind="not_found")))
+check("checker：kind=unavailable 仍是它自己的码（两族不许合并）",
+      _G._check_spec("read_notifications", {}, True, "…", "notice_read",
+                     kind="unavailable") == ("BLOCK", "unavailable"))
+_s_src = (Path(__file__).resolve().parent / "server.py").read_text(encoding="utf-8")
+check("过程行有中文：target_not_found →「目标不存在」（不是「服务不可用」）",
+      '"target_not_found": "目标不存在"' in _s_src and '"unavailable": "服务不可用"' in _s_src,
+      str([l for l in _s_src.splitlines() if "target_not_found" in l]))
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
