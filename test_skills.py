@@ -1391,7 +1391,7 @@ def test_auth_pending_review():
     try:
         TB._board_index = _board_stub(PENDING_1)
         # ③ 唯一待审 + 结论明确 → 零 LLM 拼计划（quote = 台账里那条的原文）
-        facts, plan_obj = _auth_review_path("小猫咪按你想法来吧", prev_ok, admin, cfg)
+        facts, plan_obj, forced1 = _auth_review_path("小猫咪按你想法来吧", prev_ok, admin, cfg)
         check("唯一待审 + 提议说驳回 → 拼出 board_audit 计划（弹窗的前一步）",
               plan_obj is not None and plan_obj["skill"] == "board_audit"
               and 'audit_board_comment' in plan_obj["tools"][0]
@@ -1410,28 +1410,37 @@ def test_auth_pending_review():
 
         # ④ 多条待审 → 不拼计划，只注入候选（planner 仍要如实列）
         TB._board_index = _board_stub(PENDING_2)
-        facts2, plan2 = _auth_review_path("你看着办", prev_ok, admin, cfg)
+        facts2, plan2, forced2 = _auth_review_path("你看着办", prev_ok, admin, cfg)
         check("多条待审 → 不拼计划（绝不替主人挑）", plan2 is None)
         check("  候选事实块进提示（#94 与 #101 都在）", "#94" in facts2 and "#101" in facts2)
         check("  提示里明写零写", "零写" in facts2)
+        check("  且**不进入目标定死模式**（多条时连目标都不许替他挑）", forced2 is None)
 
-        # ⑤ 结论读不出 → 同样不拼（哪怕只有一条）
+        # ⑤ 结论读不出 → 不拼计划，但**目标照样由系统定死**（G1，20260923）
         TB._board_index = _board_stub(PENDING_1)
-        facts3, plan3 = _auth_review_path("按你想法来吧", "有一条留言在等人复核",
-                                          admin, cfg)
+        prev_no_verdict = "有一条留言在等人复核"
+        facts3, plan3, forced3 = _auth_review_path("按你想法来吧", prev_no_verdict,
+                                                   admin, cfg)
         check("唯一待审但提议没说结论 → 不拼计划（不替主人决定驳回还是放行）",
               plan3 is None and "共 1 条" in facts3)
+        check("  但进入目标定死模式：台账那条（原文）交给 planner 只做结论",
+              isinstance(forced3, dict) and forced3.get("quote") == "垃圾网站，什么破烂，主动申请驳回都失败",
+              str(forced3)[:90])
+        check("  提示块写明技能与两种结论，且**禁止**选 chat / 零工具 / 再问是哪一条",
+              "board_audit" in facts3 and "reject" in facts3 and "pass" in facts3
+              and "把 SKILL 选成 chat" in facts3)
 
         # ⑥ 台账里 approved=1 的那条**不算待办**（正是事故里被误当成目标的那种）
         TB._board_index = _board_stub(MIXED)
-        facts4, plan4 = _auth_review_path("小猫咪按你想法来吧", prev_ok, admin, cfg)
+        facts4, plan4, forced4 = _auth_review_path("小猫咪按你想法来吧", prev_ok, admin, cfg)
         check("已通过的留言不进待审候选", "已通过的那条" not in facts4, facts4[:80])
         check("  待审恰 1 条 ⇒ 拼的是那条待审的", plan4 is not None
               and "垃圾网站" in plan4["tools"][0])
+        check("  结论读得出 ⇒ 走快道，不进定死模式（两条路不重叠）", forced4 is None)
 
         # ⑦ 台账读不到 ≠ 没有待审（不许据此说"没有留言要复核"）
         TB._board_index = lambda config: None
-        facts5, plan5 = _auth_review_path("你看着办", prev_ok, admin, cfg)
+        facts5, plan5, forced5 = _auth_review_path("你看着办", prev_ok, admin, cfg)
         check("台账读不到 → 既不拼计划也不注入「没有待审」（读不到≠没有）",
               plan5 is None and facts5 == "")
 
@@ -1442,21 +1451,52 @@ def test_auth_pending_review():
                                ("不用了", prev_ok, "拒绝式"),
                                ("小猫咪按你想法来吧", "今天天气不错呀", "提议里没有审查意图"),
                                ("小猫咪按你想法来吧", "", "没有上一轮提议")):
-            f, p = _auth_review_path(msg, prev, admin, cfg)
-            check(f"不触发·{why} → 不拼计划不注入", p is None and f == "")
+            f, p, fc = _auth_review_path(msg, prev, admin, cfg)
+            check(f"不触发·{why} → 不拼计划不注入", p is None and f == "" and fc is None)
         check("  且**一次台账都没读**（非授权式轮次零额外开销）", calls["n"] == 0,
               f"读了 {calls['n']} 次")
 
         # ⑨ 权限：没有复核权限的人连台账都不读（弹窗本也到不了他）
         guest = Principal(uid=0, role="guest")
         calls["n"] = 0
-        fg, pg = _auth_review_path("小猫咪按你想法来吧", prev_ok, guest, cfg)
+        fg, pg, fcg = _auth_review_path("小猫咪按你想法来吧", prev_ok, guest, cfg)
         check("非管理员 → 不读台账、不拼计划（fail-closed）",
-              pg is None and fg == "" and calls["n"] == 0, f"读了 {calls['n']} 次")
+              pg is None and fg == "" and calls["n"] == 0 and fcg is None,
+              f"读了 {calls['n']} 次")
 
-        # ⑪ 结论读取的两处修正（G2，20260923）：否定前缀 + 提案句作用域
-        # 判据的**方向性**保证：把"不让它通过"读成放行是反向错——快道会拼出一条
-        # 与主人意图相反的写计划，而弹窗上还写着"放行"，只能靠主人自己看出来。
+        # ⑩ 定死模式的两条去路（G1）：合格计划**目标归位**，不合格就地判死
+        from agent.graph import (_LEDGER_NOTE_PREFIX, _ask_verdict_note,
+                                 _forced_review_fix)
+        fq = "垃圾网站，什么破烂，主动申请驳回都失败"
+        good = instantiate_plan("board_audit", {"quote": "模型自己概括的一小段",
+                                                "verdict": "reject"})
+        good["params"] = {"quote": "模型自己概括的一小段", "verdict": "reject"}
+        check("合格计划（board_audit + 合法结论）→ 放行", _forced_review_fix(good, forced3) is None)
+        check("  且 quote **一律归位**到台账那条（模型抄的片段不进参数）",
+              fq in good["tools"][0] and "模型自己概括的一小段" not in good["tools"][0],
+              good["tools"][0][:100])
+        check("  归位后计划仍是 board_audit（技能不许漂）", good["skill"] == "board_audit")
+        bad_chat = {"skill": "chat", "tools": [], "note": "", "params": {}}
+        check("不合格·SKILL 选成 chat → 返回原因（→ 确定性问结论）",
+              bool(_forced_review_fix(bad_chat, forced3)))
+        bad_verdict = instantiate_plan("board_audit", {"quote": fq, "verdict": ""})
+        bad_verdict["params"] = {"quote": fq, "verdict": ""}
+        check("不合格·结论留空 → 返回原因（不猜驳回）",
+              bool(_forced_review_fix(bad_verdict, forced3)))
+        bad_tool = instantiate_plan("board_audit", {"quote": fq, "verdict": "pass"})
+        bad_tool["tools"] = ['set_article_status({"article_id": 12, "status": "private"})']
+        bad_tool["params"] = {"quote": fq, "verdict": "pass"}
+        check("不合格·工具不是留言写 → 返回原因",
+              bool(_forced_review_fix(bad_tool, forced3)))
+        note = _ask_verdict_note(forced3)
+        check("确定性问结论的注记：印出那条留言 + 只问驳回还是放行 + 禁止句",
+              "驳回" in note and "放行" in note and "#94" in note
+              and "「" in note and "一个字节都没有改动" in note
+              and "不许出现「看过/读过/查过/检索过/调用过工具」" in note)
+        check("  且带台账豁免前缀（洞④：这轮的站内结论是系统核对出来的）",
+              note.startswith(_LEDGER_NOTE_PREFIX), note[:40])
+
+        # ⑪ 结论读取的两处修正（G2）：否定前缀 + 提案句作用域
         inc = ("好嘞主人，那我把这条**驳回隐藏**：\n\n- **动作**：人工复批 → **驳回"
                "（hidden）**\n- **原因**：作者本人写明这是开发测试、要求驳回，放行"
                "反而违背本意。")
@@ -1474,6 +1514,90 @@ def test_auth_pending_review():
               and _verdict_from_proposal("要么驳回要么通过，你说了算") == "")
     finally:
         TB._board_index = _orig
+
+
+def test_auth_review_forced():
+    """目标定死的受限决策（G1，20260923）：结论读不出时**只把结论留给 planner**。
+
+    生产实测（P2 六轮里两跑两中）：主人说"你看着办"、台账里恰好 1 条待审、而上一轮
+    那句提议里读不出结论时，planner 选 `chat` + 零工具 ⇒ narrator 反过来问主人一句
+    打太极的话。目标本来就有唯一权威来源（台账那一条），缺的只是"哪一种结论"这一个
+    字——所以系统把目标**定死**（技能 board_audit + quote 用台账正文），planner 只剩
+    一个自由度；它若仍不落在写技能上 ⇒ 确定性收尾，把那条留言印给主人、只问
+    「驳回还是放行」（零写零编造）。
+
+    两条锁：① 合格计划的目标**归位**到台账那条（模型抄的片段不进参数）；
+    ② 不合格时是**问结论**，不是身份防线那句"请把那条留言的原话抄一小段给我"
+    ——后者在授权式场景里是死路（主人本来就没点名）。②靠**代码顺序**保证：
+    forced 分支必须排在 `_board_quote_fix` 之前（见那里的注释）。
+    """
+    print("[auth_review] 目标定死的受限决策（G1：只把结论留给 planner）")
+    import agent.graph as G
+    import tools.base as TB
+    from agent.graph import (_LEDGER_NOTE_PREFIX, parse_plan, planner_node)
+    from agent.principal import Principal
+
+    class _ScriptedLLM:
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    class _Row(dict):
+        pass
+
+    # 台账里恰好 1 条待审（≥2 条或 0 条都不进定死模式）
+    LEDGER = {94: _Row({"talkKey": 94, "author": "visitor", "approved": 0,
+                        "content": "垃圾网站，什么破烂，主动申请驳回都失败"})}
+    _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
+                             "user_id": 7, "conversation_id": 42, "stop_event": None}}
+    # 上一轮那句提议：有审查意图（留言）但**两族都没提** ⇒ 结论读不出 ⇒ 定死模式
+    _prev = "回头那几条留言咱们商量一下再定吧"
+    _auth_msg = "小猫咪按你想法来吧"
+    _orig_llm, _orig_board = G.get_llm, TB._board_index
+    try:
+        TB._board_index = lambda config: dict(LEDGER)
+
+        # ① 生产实测那个形态：planner 选 chat + 零工具 ⇒ 确定性问结论（不再打太极）
+        llm = _ScriptedLLM(["SKILL=chat\nPARAMS={}\nREPLY: 直接回答"])
+        G.get_llm = lambda **kw: llm
+        out = planner_node({"messages": [HumanMessage(content=_auth_msg),
+                                         AIMessage(content=_prev)],
+                            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        plan = parse_plan(out["plan"])
+        _n = plan["note"] or ""
+        check("planner 落不到写技能上 → 零工具确定性收尾（一个工具都不许跑）",
+              plan["tools"] == [], str(plan["tools"]))
+        check("  收尾是**问结论**：印出那条留言 + 只问驳回/放行",
+              "驳回" in _n and "放行" in _n and "垃圾网站" in _n, _n[:120])
+        check("  带台账豁免前缀（洞④）+ 如实说这轮什么都没动",
+              _n.startswith(_LEDGER_NOTE_PREFIX) and "一个字节都没有改动" in _n)
+        check("  **不是**身份防线那句「抄一小段原话给我」（授权式场景里那是死路）",
+              "没有给出那条留言的正文片段" not in _n and "没有能指认" not in _n, _n[:120])
+        check("  只问 planner 一次（不重决策——首轮已拿到定死指令）",
+              len(llm.prompts) == 1, str(len(llm.prompts)))
+
+        # ② 它落对了：结论合法 ⇒ 照办，且目标**归位**到台账那条（模型抄的片段不作数）
+        llm2 = _ScriptedLLM(['SKILL=board_audit\n'
+                             'PARAMS={"quote": "模型自己概括的一小段", '
+                             '"verdict": "pass"}\nREPLY: 如实回答'])
+        G.get_llm = lambda **kw: llm2
+        out2 = planner_node({"messages": [HumanMessage(content=_auth_msg),
+                                           AIMessage(content=_prev)],
+                             "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        plan2 = parse_plan(out2["plan"])
+        _spec2 = " ".join(plan2["tools"])
+        check("planner 落在 board_audit 上 → 照办（目标归位到台账那条）",
+              plan2["skill"] == "board_audit" and "垃圾网站" in _spec2
+              and "模型自己概括的一小段" not in _spec2, _spec2[:140])
+        check("  结论用它自己读出来的那个（pass）",
+              '"verdict": "pass"' in _spec2, _spec2[:140])
+        check("  且这一轮**不问**主人（目标是系统给的，结论也读出来了）",
+              "驳回还是放行" not in (plan2["note"] or ""), (plan2["note"] or "")[:120])
+    finally:
+        G.get_llm, TB._board_index = _orig_llm, _orig_board
 
 
 def test_gate_confirm_claim():
@@ -3115,8 +3239,12 @@ def test_write_ledger_note_round():
     结论整轮换成兜底道歉，而道歉说的还是假话（"我其实没有去站里查过"）。
 
     三条锁：① 锚是系统写进注记的那句前缀（narrator 写不进去）；② gate 侧读到锚即放行、
-    没有锚照旧判（豁免不是把判据关掉）；③ 两条确定性收尾路径共用**同一个常量**——
-    各写一遍字面量的话，改一处漏另一处 = 那一族的真结论又会被吞掉。
+    没有锚照旧判（豁免不是把判据关掉）；③ **每一处**确定性收尾路径共用**同一个常量**
+    ——各写一遍字面量的话，改一处漏另一处 = 那一族的真结论又会被吞掉。
+    第 ③ 条两用：既数引用点个数（今天 3 处：目标预检收尾、剔空收尾、G1 的问结论轮），
+    也数字面量本身只准出现 1 次（= 只有常量定义那处）。新增一条确定性收尾路径时，
+    引用点数会变 ⇒ **这里是故意要红的**：逼作者回来确认那条新路径确实复用锚、
+    而不是顺手又写了一遍「【系统台账核对】」。
     """
     print("[write_ledger] 确定性收尾的洞④ 豁免锚（gate 侧接线）")
     from agent.graph import _LEDGER_NOTE_PREFIX, _claim_issue
@@ -3134,9 +3262,12 @@ def test_write_ledger_note_round():
           str(_hit)[:90])
     _src = (pathlib.Path(__file__).resolve().parent / "agent"
             / "graph.py").read_text(encoding="utf-8")
-    check("两条确定性收尾路径都用了同一个锚常量（不是各写一遍字面量）",
-          _src.count("_LEDGER_NOTE_PREFIX +") == 2,
+    check("三处确定性收尾路径都用了同一个锚常量（不是各写一遍字面量）",
+          _src.count("_LEDGER_NOTE_PREFIX +") == 3,
           str(_src.count("_LEDGER_NOTE_PREFIX +")))
+    check("锚的字面量在 graph.py 里只出现一次（= 常量定义那处，没有第二份手抄）",
+          _src.count(_LEDGER_NOTE_PREFIX) == 1,
+          str(_src.count(_LEDGER_NOTE_PREFIX)))
     check("gate 的洞④ 分支真的读了它（锚写了但判据不认 = 白写）",
           "_LEDGER_NOTE_PREFIX not in _note" in _src)
 
@@ -3433,6 +3564,7 @@ def main():
                test_gate_claim_holes,
                test_gate_false_negative_claim, test_gate_site_absence_claim,
                test_gate_confirm_claim, test_auth_pending_review,
+               test_auth_review_forced,
                test_gate_repeat_reply,
                test_execute_node, test_refs, test_write_ref_loud, test_todo_contract,
                test_checker,

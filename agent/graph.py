@@ -1978,7 +1978,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 那几条就是目标的唯一权威来源（见 `_auth_review_path` 头注）。这里先取一次
     # ——唯一一条时下面直接走快道，多条/零条时这份事实块进 planner 提示。非授权式
     # 短应答（占绝大多数轮次）在这一行就被 `_short_reply_kind` 挡掉，零额外开销。
-    auth_facts, auth_plan = _auth_review_path(
+    auth_facts, auth_plan, auth_forced = _auth_review_path(
         user_msg, _last_assistant_utterance(state["messages"]),
         _principal_of(config), config)
     if rounds == 0:
@@ -2099,7 +2099,13 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
             # 有帧就基于帧收尾（narrator 仍能正常叙述），无帧走 chat 诚实答复。
             logger.warning("[planner] LLM 异常，兜底收尾计划: %s", e)
-            plan_obj = _wrap_up_plan(has_frames)
+            # G1（auth_forced）：LLM 抖动也不能退回"让 narrator 自由发挥"——目标已由
+            # 台账定死、只差结论这一个字，无帧的确定性收尾照旧是那条问结论的注记。
+            # 有帧时不套用：那条注记里写着"本轮一个工具都没有执行"，与事实不符。
+            plan_obj = _wrap_up_plan(
+                has_frames,
+                note=_ask_verdict_note(auth_forced)
+                if auth_forced and not has_frames else "")
             return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
         # 20260830：慢调用监控——>30s 打 WARN（正常 <5s，慢=服务端排队/长思考，
         # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）
@@ -2129,6 +2135,39 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                            "、".join(plan_obj["dropped"]), rounds + 1, MAX_PLAN_ROUNDS)
             record("planner", "rejected_call", dropped=plan_obj["dropped"],
                    skill=plan_obj["skill"], round=rounds)
+
+        # 授权式审查（G1，20260923）：台账里唯一一条待审、而上一轮那句提议的结论
+        # **读不出来**时，系统仍把目标定死（见 `_auth_review_path` 的 forced 段 +
+        # `_forced_review_note`），留给 planner 的自由度只有一个：结论是哪一种。
+        # 没有这一段时（生产实测两跑两中）：LLM 把 SKILL 选成 chat、调用清单空 ⇒
+        # narrator 反过来问主人一句打太极的话——正是 P2 要消掉的那条死路形态。
+        # 两种去路：落在 board_audit 上且结论合法 ⇒ 照办（目标归位到台账那条）；
+        # 否则 ⇒ 确定性收尾（把那条留言印给主人、只问「驳回还是放行」），零写零编造。
+        # ⚠️ 必须**排在 `_board_quote_fix` 之前**：主人这句话里没有引号（他说的是
+        # "按你想法来吧"），而片段校正在"主人没给片段"时是**拒绝**——排在它后面就
+        # 永远轮不到本段，收尾文案还会反过来让主人去抄一条他自己没提过的留言。
+        if auth_forced:
+            missed = _forced_review_fix(plan_obj, auth_forced)
+            if missed:
+                logger.warning("[planner] 授权式审查（目标已由系统定死）但决策没落在"
+                               "写技能上（%s）→ 确定性问结论", missed)
+                record("planner", "auth_forced_miss", reason=missed,
+                       skill=plan_obj.get("skill"), round=rounds)
+                plan_obj = _wrap_up_plan(False, note=_ask_verdict_note(auth_forced))
+                return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                        "done": False}
+            record("planner", "auth_forced_plan", round=rounds,
+                   verdict=_tool_args(plan_obj["tools"][0])[0].get("verdict"))
+            logger.info("[planner] 授权式审查（目标由系统定死）照办：%s",
+                        plan_obj["tools"][0][:80])
+            # 决策到此收口（与快道同构：那条路也在下面这几道防线**之前**就返回了）。
+            # 下面三道（片段校正 / 名字值 / 目标预检）判的都是"主人自己说出口的那段
+            # 字才是身份"，而授权式场景里主人**本来就没有点名**——权威是台账（唯一
+            # 一条待审）+ 弹窗签字（他会看见那条留言的序号/作者/原文）。让它们跑一遍
+            # 只会拿"主人这句话里没有片段"把这一轮拒掉，并把主人的诉求变成一句
+            # "请把那条留言的原话抄一小段给我"。
+            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                    "done": False}
 
         # 写操作的目标按名字解不出来 → 不弹窗、不执行，直接确定性如实收尾
         # （见 _write_target_refusal 上方长注：名字通道下"解不出来"必须响亮，
@@ -3425,7 +3464,7 @@ _AUDIT_REJECT_RE = re.compile(r"驳回|隐藏|不放行|不通过|未通过")
 # **隔着字的否定/使役式**（"不让它通过""别放行了"）靠 4 字窗口——它们语义上是
 # 驳回，读成放行是**反向错**（比读不出危险：快道会拼一条与主人意图相反的写计划，
 # 弹窗上还写着"放行"）。窗口之外的长否定式交给提案句作用域与 LLM：本判据宁可
-# 回空串（空串 ⇒ 不替主人决定，交 planner 自己判断）也绝不猜反。
+# 回空串（回空串 ⇒ 目标定死模式，只把结论交给模型）也绝不猜反。
 _AUDIT_PASS_RE = re.compile(r"通过|放行")
 _AUDIT_NEG_BEFORE_RE = re.compile(r"[不未别没禁]\s?.{0,3}$")
 
@@ -3504,43 +3543,123 @@ def _render_pending_facts(pending: list) -> str:
             f"作者原文一起列给主人请他点名，绝不替他挑。")
 
 
-def _auth_review_path(user_msg: str, prev_ai: str, principal, config
-                      ) -> tuple[str, dict | None]:
-    """授权式审查：返回 `(系统事实块, 确定性计划或 None)`，不适用给 `("", None)`。
+def _forced_review_note(forced: dict) -> str:
+    """目标已由系统定死时的提示块（G1，20260923）：决策自由度只剩"哪一种结论"。
 
-    两种形态：拿到计划 = 唯一待审 + 结论明确（零 LLM 直接拼，写操作必弹窗）；
-    只有事实块 = 0 条 / ≥2 条 / 结论读不出 / 台账读不到 ⇒ 交 planner 决策（不替他挑）。
+    写给 planner 的**纪律**：只写机器能保证的事实（台账里那条的 #id/作者/原文）
+    与它必须落在哪个技能上，**不替它读结论**（结论仍是它的判断）。
+    """
+    return (
+        "\n**本轮的决策自由度只剩一个：这件写操作的结论是哪一种。**系统已经替你"
+        f"把**目标**定死了——台账里唯一一条待审留言：{forced['label']}"
+        f"「{forced['excerpt']}」。请这样决策：\n"
+        "　　· SKILL 选 `board_audit`，`quote` 用上面那条留言的正文（系统按台账"
+        "校正，你不必抄准）；`verdict` 只填 `reject`（驳回/隐藏）或 `pass`（放行）\n"
+        "　　· 结论从**上一轮泠月那句提议**的语义里读——它当时说要办的是哪一种就是"
+        "哪一种；读不出来就填不出来，别猜\n"
+        "　　· **不许**把 SKILL 选成 chat、不许零工具、不许再问主人「是哪一条留言」"
+        "（目标是系统给的），也不许说这件事已经办了或已经有确认弹窗了")
+
+
+def _ask_verdict_note(forced: dict) -> str:
+    """确定性收尾的注记（G1）：把台账那条印给主人，只问「驳回还是放行」。
+
+    ⚠️ 原文用「」包起来（`_board_excerpt` 的形态）是**刻意的**：主人回话时把这段
+    原话带上，就同时给了身份（`_board_quote_fix` 认引号里那段）与结论——否则他
+    只回一句「驳回」，留言写操作会按②防线如实拒绝（"请把那条留言的原话抄一小段
+    给我"），那条路要走两轮。注记里的**禁止句**照旧必须有：写给 narrator 的机制
+    描述会变成它的词汇。
+    """
+    return (
+        _LEDGER_NOTE_PREFIX +
+        "**这件事这次没有做：站内数据一个字节都没有改动**（本轮一个工具都没有执行）。"
+        f"系统查过台账：现在待审的留言**只有一条**——{forced['label']}"
+        f"「{forced['excerpt']}」。而上一轮泠月那句提议里，系统读不出它当时要办的"
+        "是「驳回」还是「放行」，所以本轮该做的是**问主人一句**：把这条留言（序号、"
+        "作者、原文）如实报给他，问他这一条要驳回还是放行，并请他把这条留言的原话"
+        "带上一小段。**只许**问这一个问题：不许出现「看过/读过/查过/检索过/调用过"
+        "工具」这类说法，不许说这件事已经办了或正在办，也不许声称有确认弹窗。")
+
+
+def _forced_review_fix(plan_obj: dict, forced: dict) -> str | None:
+    """就地判 forced 模式的计划：合格则**目标归位**到台账那条，否则返回不合格的原因。
+
+    合格 = SKILL 是 board_audit、恰好一条留言写工具、`verdict` 是 reject/pass。
+    `quote` 一律改写成台账里那条的正文（同 `_board_quote_fix` 的"校正"取向：主人
+    没有点名 ⇒ 唯一权威是系统台账，模型的片段概括不许进参数）。
+    """
+    tools = plan_obj.get("tools") or []
+    if plan_obj.get("skill") != "board_audit" or len(tools) != 1:
+        return f"skill={plan_obj.get('skill')}、调用清单 {len(tools)} 条"
+    name = _tool_name(tools[0])
+    if not name.endswith("_board_comment"):
+        return f"工具={name}"
+    args, args_ok = _tool_args(tools[0])
+    if not args_ok:
+        return "参数不是 JSON 对象"
+    verdict = str(args.get("verdict") or "").strip().lower()
+    if verdict not in ("reject", "pass"):
+        return f"verdict={verdict or '空'}"
+    params = {"quote": forced["quote"], "verdict": verdict}
+    fresh = instantiate_plan("board_audit", params)
+    fresh["params"] = params
+    plan_obj.clear()
+    plan_obj.update(fresh)
+    return None
+
+
+def _auth_review_path(user_msg: str, prev_ai: str, principal, config
+                      ) -> tuple[str, dict | None, dict | None]:
+    """授权式审查：返回 `(系统事实块, 确定性计划或 None, forced 或 None)`，不适用给 `("", None, None)`。
+
+    三种形态：
+      · 拿到计划 = 唯一待审 + 结论明确（零 LLM 直接拼，写操作必弹窗）；
+      · 拿到 forced = 唯一待审但结论读不出 ⇒ **目标照样由系统定死**，只把"哪一种
+        结论"留给 planner 决策（G1，20260923）——提示块里写明技能与那一条留言，
+        计划侧由 `_forced_review_fix` 判合格/归位；不合格则确定性收尾问结论。
+      · 只有事实块 = 0 条 / ≥2 条 / 台账读不到 ⇒ 交 planner 决策（不替他挑）。
     """
     if _short_reply_kind(user_msg) != "auth":
-        return "", None
+        return "", None, None
     if not _REVIEW_INTENT_RE.search(prev_ai or ""):
-        return "", None
+        return "", None, None
     # 权限先判：主人自己都不能复核留言时，读那份台账只会白拿一次 403
     # （判据用 authz 现成的表——推送人身份→scope，不另立规则）。
     if not authz.check(principal, "audit_board_comment").allowed:
-        return "", None
+        return "", None, None
     try:
         from tools.base import _board_index
         index = _board_index(config)
     except Exception:
         logger.warning("[planner] 授权式审查：读留言台账异常 → 交 planner 自行决策")
-        return "", None
+        return "", None, None
     if index is None:
-        return "", None          # 读不到 ≠ 没有（不许据此说"没有待审"）
+        return "", None, None    # 读不到 ≠ 没有（不许据此说"没有待审"）
     pending = [r for r in index.values() if r.get("approved") == 0]
     pending.sort(key=lambda r: int(r.get("talkKey") or 0))
     facts = _render_pending_facts(pending)
-    verdict = _verdict_from_proposal(prev_ai)
-    if len(pending) != 1 or not verdict:
-        return facts, None
+    if len(pending) != 1:
+        return facts, None, None
     content = str(pending[0].get("content") or "").strip()
     if not content:
-        return facts, None       # 正文空 ⇒ 无法指认（工具按正文片段定位）
+        return facts, None, None  # 正文空 ⇒ 无法指认（工具按正文片段定位）
+    verdict = _verdict_from_proposal(prev_ai)
+    if not verdict:
+        # G1：结论读不出**不等于**目标也定不了。台账里就这一条 —— 目标由系统定死
+        # （主人说的是"你看着办"，他本来就没打算点名），只把结论留给 planner。
+        from tools.base import _board_excerpt, _board_label
+        forced = {"quote": content, "label": _board_label(pending[0]),
+                  "excerpt": _board_excerpt(pending[0])}
+        logger.info("[planner] 授权式审查：唯一待审 #%s 但提议里读不出结论 → "
+                    "目标由系统定死、只留结论给 planner",
+                    pending[0].get("talkKey"))
+        record("planner", "auth_review_forced", talk_key=pending[0].get("talkKey"))
+        return facts + _forced_review_note(forced), None, forced
     plan_obj = instantiate_plan("board_audit", {"quote": content, "verdict": verdict})
     plan_obj["params"] = {"quote": content, "verdict": verdict}
     logger.info("[planner] 授权式审查快道命中（零 LLM）：唯一待审 #%s → 拼计划交弹窗",
                 pending[0].get("talkKey"))
-    return facts, plan_obj
+    return facts, plan_obj, None
 
 
 def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
