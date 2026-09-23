@@ -132,7 +132,9 @@ def prune(keep: int = KEEP_DEFAULT) -> list[str]:
         真正稀缺的不是盘而是"红那次到底 planner 怎么决策的"；
       · **有失败的 run 永久保留**：判据不靠目录名撞报告名，而是**反查留档**——
         `eval/report/runs/*.json` 里的 `trace_run` 就是这份报告的 trace 目录，那份
-        报告自己写着 `failed` / `regression.all_passed`。**只有能证明那晚是干净的才删**：
+        报告自己写着 `failed` / `regression.all_passed`（`flaked_ids` 同样算"不干净"：
+        首跑红复跑绿的那一夜，首跑 trace 是唯一能回答"为什么红"的东西）。
+        **只有能证明那晚是干净的才删**：
         留档说失败 → 留；留档缺失、字段不认识（旧格式）、JSON 读不出来 → 同样留
         （证据不足就不删，缺的正是排障时要看的那份）。故意的：宁可多留几个目录。
     """
@@ -181,7 +183,11 @@ def _run_verdicts() -> dict[str, bool]:
         if not isinstance(rid, str) or not rid or not isinstance(failed, int):
             continue                     # 旧留档没有 trace_run / 形态不认识 ⇒ 不当成"干净"
         reg = doc.get("regression")
-        bad = bool(failed) or (isinstance(reg, dict) and reg.get("all_passed") is False)
+        # 首跑红复跑绿（`flaked_ids`，20260924）同样算"这一晚不干净" ⇒ 留着：门禁虽然
+        # 按方差放行了，但那一份首跑 trace 是**唯一**能回答"首跑为什么红"的东西。
+        bad = bool(failed) or (isinstance(reg, dict)
+                               and (reg.get("all_passed") is False
+                                    or bool(reg.get("flaked_ids"))))
         # 同一个 run_id 可能被多份留档引用：只要有一份说红，就按红算（保守）
         out[rid] = out.get(rid, False) or bad
     return out

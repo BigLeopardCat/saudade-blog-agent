@@ -21,6 +21,9 @@
   .venv/bin/python eval/run_golden.py --only rag_python_is,rag_arch_components  # 多选（链路诊断）
   .venv/bin/python eval/run_golden.py --min-pass-rate 0.9 --skip-ids device_query  # CI 口径
 退出码：0=达到 --min-pass-rate（默认 1.0，即全过）1=低于门禁
+回归组（tags 含 regression）另按硬判（100%，不受 --min-pass-rate 放宽）；20260924 起
+判据以**首跑红后复跑一次**的终判为准，复跑绿的那批记进 regression.flaked_ids 并单列
+打印（放行但必须有人看——首跑红/复跑绿两条都在报告与复审单里，不许静默宽恕）。
 ⚠ 通过率 vs 全过：本机（生产链路）默认全过；CI 在北美 runner 上跨网调用 LLM/站点，
   单条超时类波动与"环境不可达"用例不该让整轮门禁变红——门禁按**通过率**判，
   失败清单仍逐条打印、报告随 artifact 上传（见 .github/workflows/eval.yml）。
@@ -589,6 +592,57 @@ def main():
             "trace": result.get("trace"),
         })
 
+    # 回归组 FAIL **重跑一次再判**（20260924 用户拍板，动的是既有硬判纪律）。
+    # 动机：回归组是 109 条里唯一"一条红即整轮红"的硬判据，而它红的原因里混着方差
+    # （判据脆弱/采样波动）——后果不是"更严格"，而是红斑常态化后没人再看（与判据脆弱
+    # 同一后果，20260910-12 连红三天就是这么来的）。故对**首跑红的回归用例**各重跑一次：
+    #   复跑仍红 → 照旧硬判（真 FAIL）；
+    #   复跑绿   → 按方差放行，但**必须响**：首跑红与复跑绿两条都进报告
+    #             （cases[].rerun / regression.flaked_ids / failed_first_run）、
+    #             进汇总打印、进复审单——复跑才绿的用例恰恰最该有人看（要么判据太脆，
+    #             要么概率性幻觉）。
+    # **只重跑回归组**：能力题本来就按 --min-pass-rate 放宽，不需要第二条判据。
+    # 复跑的 trace 用 `<case>__rerun` 名（同名词条会覆盖首跑那份，而"首跑为什么红"
+    # 正是复跑要回答的问题）。
+    _case_by_id = {c["id"]: c for c in cases}
+    _rerun_ids = [r["id"] for r in results
+                  if not r["ok"] and "regression" in (r.get("tags") or [])
+                  and r["id"] in _case_by_id]
+    if _rerun_ids:
+        print(f"\n[rerun] 回归组首跑红 {len(_rerun_ids)} 条，各重跑一次再判：{_rerun_ids}")
+    for r in results:
+        if r["id"] not in _rerun_ids:
+            r["rerun"] = None
+            r["final_ok"] = r["ok"]
+            continue
+        _case = _case_by_id[r["id"]]
+        _t0 = time.time()
+        _rr = run_one(build_request(_case), build_principal(_case),
+                      trace_ctx={"run": run_id, "case": f"{r['id']}__rerun"})
+        _relapsed = time.time() - _t0
+        _rfails = check_gold(_case["gold"], _rr)
+        _rok = not _rfails and not _rr["error"]
+        r["rerun"] = {
+            "ok": _rok, "elapsed": round(_relapsed, 1), "fails": _rfails,
+            "error": _rr["error"], "resets": _rr["resets"],
+            "resets_reasons": _rr["resets_reasons"], "text": _rr["text"],
+            "trace": _rr.get("trace"),
+        }
+        r["final_ok"] = r["ok"] or _rok
+        print(f"[rerun] {r['id']}: 首跑红 → "
+              + ("复跑绿（按方差放行，首跑红仍在报告里）" if _rok else "复跑仍红（真 FAIL）"))
+        if _rok:
+            print(f"          └ 首跑失败项：{r['fails'] or ('error: ' + str(r['error']))}")
+            print(f"          └ 首跑 trace: {r.get('trace')}")
+            print(f"          └ 复跑 trace: {_rr.get('trace')}")
+    # 判据以**复跑后的终判**为准（门禁/通过率/复审单都用它）；首跑红数单独留着，
+    # 这样"这一夜有多少红斑被复跑吸收掉"在报告里看得见（不许静默宽恕）。
+    failed_first = sum(1 for r in results if not r["ok"])
+    failed = sum(1 for r in results if not r.get("final_ok", r["ok"]))
+    if failed != failed_first:
+        print(f"[rerun] 终判 {len(cases) - failed}/{len(cases)}（首跑红 {failed_first} 条，"
+              f"其中 {failed_first - failed} 条复跑绿）")
+
     # 报告：last_run.json 供工具读取（每次覆盖）；runs/<ts>.json 全量留档（防覆盖丢历史，
     # 基线对比查旧档用）。eval/report/ 整体 gitignore，baseline_*.json 例外进 git（见 .gitignore）。
     ts_str = time.strftime("%Y%m%d_%H%M%S")
@@ -645,7 +699,10 @@ def main():
     # 撤回话术），不是"能力题"——能力题允许单条波动，回归题不许。混跑时两类红被同等对待
     # （通过率门禁会把回归红一起吸收掉），故单独成组并在门禁中独立硬判（见文件末尾）。
     _reg = [r for r in results if "regression" in (r.get("tags") or [])]
-    _reg_bad = [r["id"] for r in _reg if not r["ok"]]
+    # 硬判用**复跑后的终判**；首跑红复跑绿的那批单独成 flaked_ids（放行但必须有人看，
+    # 见上面重跑一节）。列表里同时留着首跑红数（failed_first_run）供对账。
+    _reg_bad = [r["id"] for r in _reg if not r.get("final_ok", r["ok"])]
+    _reg_flaked = [r["id"] for r in _reg if not r["ok"] and r.get("final_ok")]
     # 被 --skip-ids/--only 摘掉的回归用例：组内分母随之变小，如实报出来（不许静默豁免）
     _reg_skipped = [s for s in skip_ids if "regression" in _ALL_TAGS.get(s, [])]
     # 第一条真正落盘的 trace（用例顺序 = 跑的顺序，取第一条即为目录的实证）：
@@ -657,6 +714,9 @@ def main():
         # 旧基线不可比是预期（变更即新基线），快照字段用于对账变更内容
         "corpus": corpus,
         "total": len(cases), "passed": len(cases) - failed, "failed": failed,
+        # 首跑红数（20260924）：failed 是**复跑后的终判**，这个字段留着首跑口径 ——
+        # 两者不等时差额就是"被复跑吸收掉的红斑"（不许静默：flaked_ids 逐条点名）
+        "failed_first_run": failed_first,
         "pass_rate": round((len(cases) - failed) / len(cases), 4) if cases else 0.0,
         "skipped_ids": skip_ids,
         "latency_s": {
@@ -679,6 +739,9 @@ def main():
             "passed": len(_reg) - len(_reg_bad),
             "failed_ids": _reg_bad,
             "all_passed": not _reg_bad,
+            # 首跑红、复跑绿（20260924）：硬判放行，但名单必须留在报告里——这一族
+            # 就是"要么判据太脆、要么概率性幻觉"的候选，静默宽恕等于把门禁信号吃掉
+            "flaked_ids": _reg_flaked,
             "skipped_ids": _reg_skipped,
         },
         # golden trace（20260922）：这一轮跑落下的目录（None=没开或一条都没写成功）。
@@ -698,34 +761,56 @@ def main():
     # 时导出「判据 vs 模型实际输出」对照单。复审规则：假失败当轮修判据，真 FAIL
     # 才允许挂着（否则门禁失去区分度）。
     review_path = ""
-    if failed:
+    if failed or _reg_flaked:
         review_path = f"eval/report/review_{ts_str}.md"
         case_by_id = {c["id"]: c for c in cases}
         with open(review_path, "w", encoding="utf-8") as f:
             f.write(f"# golden FAIL 复审单 {report['ts']}\n\n")
-            f.write(f"{failed}/{len(cases)} 条 FAIL。逐条判定并勾选（假失败当轮修判据，"
-                    f"真 FAIL 允许挂着并在下方写原因）：\n\n")
+            f.write(f"{failed}/{len(cases)} 条 FAIL"
+                    + (f"（首跑红 {failed_first} 条，另 {len(_reg_flaked)} 条复跑绿后放行）"
+                       if failed != failed_first else "")
+                    + "。逐条判定并勾选（假失败当轮修判据，"
+                      "真 FAIL 允许挂着并在下方写原因）：\n\n")
             # 回归组红单列在最前：这些不是"允许波动"的能力题，门禁已按硬判退出码 1
             if _reg_bad:
                 f.write("> ⚠ **回归组（regression）FAIL，本轮不得放行**："
                         + "、".join(f"`{i}`" for i in _reg_bad)
                         + f"\n> 回归组要求 100% 通过（{len(_reg) - len(_reg_bad)}/{len(_reg)}），"
                           "不受 `--min-pass-rate` 放宽；假失败当轮修判据，真 FAIL 当轮修行为。\n\n")
+            # 复跑才绿的那批（20260924）：门禁放行了，但它们是最可疑的一族
+            if _reg_flaked:
+                f.write("> ⚠ **复跑才绿的回归用例（首跑红、复跑绿，已按方差放行）**："
+                        + "、".join(f"`{i}`" for i in _reg_flaked)
+                        + "\n> 一条用例两次结论不同，只有两种解释：判据太脆（该修判据），"
+                          "或行为本身是概率性的（该修行为）。参照下方首跑失败项与两份 trace"
+                          "（首跑 / 复跑）逐条定性——不要把这一节当成「已经过了」。\n\n")
             for r in results:
-                if r["ok"]:
+                if r["ok"] and not r.get("rerun"):
                     continue
                 case = case_by_id.get(r["id"], {})
                 f.write(f"## {r['id']}\n\n")
                 f.write(f"- 失败项：{r['fails'] or ('error: ' + str(r['error']))}\n")
-                f.write(f"- 打回：{r['resets']}（原因 {r['resets_reasons'] or '无'}）\n\n")
-                f.write("**判据（gold）**：\n\n```json\n")
+                f.write(f"- 打回：{r['resets']}（原因 {r['resets_reasons'] or '无'}）\n")
+                f.write(f"- 首跑 trace: {r.get('trace')}\n")
+                if r.get("rerun"):
+                    rr = r["rerun"]
+                    f.write(f"- **复跑：{'绿（按方差放行）' if rr['ok'] else '仍红'}**"
+                            f"（{rr['elapsed']}s，打回 {rr['resets']}，"
+                            f"失败项 {rr['fails'] or '无'}）\n")
+                    f.write(f"- 复跑 trace: {rr.get('trace')}\n")
+                f.write("\n**判据（gold）**：\n\n```json\n")
                 f.write(json.dumps(case.get("gold", {}), ensure_ascii=False, indent=1))
-                f.write("\n```\n\n**模型实际输出**：\n\n")
+                f.write("\n```\n\n**模型实际输出（首跑）**：\n\n")
                 f.write((r["text"] or "（空）") + "\n\n")
+                if r.get("rerun"):
+                    f.write("**模型实际输出（复跑）**：\n\n")
+                    f.write((r["rerun"]["text"] or "（空）") + "\n\n")
                 f.write("- [ ] 假失败（判据缺覆盖）→ 修订判据\n")
                 f.write("- [ ] 真 FAIL（行为错误）→ 原因：\n\n---\n\n")
 
-    print(f"\n=== 汇总：{len(cases) - failed}/{len(cases)} 通过 ===")
+    print(f"\n=== 汇总：{len(cases) - failed}/{len(cases)} 通过"
+          + (f"（首跑红 {failed_first} 条，其中 {failed_first - failed} 条复跑绿）"
+             if failed != failed_first else "") + " ===")
     print(f"耗时基线: min={report['latency_s']['min']}s P50={report['latency_s']['p50']}s "
           f"P95={report['latency_s']['p95']}s max={report['latency_s']['max']}s")
     print(f"效率基线: resets 总={eff['resets_total']} 用例={eff['cases_with_resets']}"
@@ -738,8 +823,11 @@ def main():
           f" 多轮绕圈例 {efficiency['cases_multi_tool_rounds']}{efficiency['cases_multi_tool_rounds_ids']}"
           f" 重复检索例 {efficiency['cases_repeat_search']}{efficiency['cases_repeat_search_ids']}")
     # 回归组单列（20260921）：能力题允许波动，回归题不许——组内一条红即整轮红
+    # （20260924 起：红先复跑一次再定论，复跑绿的那批单独点名，见上面重跑一节）
     print(f"回归组: {len(_reg) - len(_reg_bad)}/{len(_reg)}"
           + (f"  ⚠ 红：{_reg_bad}（回归组要求 100%，不受 --min-pass-rate 放宽）" if _reg_bad else "")
+          + (f"  ⚠ 复跑才绿：{_reg_flaked}（首跑红，已按方差放行——逐条见复审单）"
+             if _reg_flaked else "")
           + (f"  ⚠ 被跳过：{_reg_skipped}（组内分母随之变小）" if _reg_skipped else ""))
     print(f"报告: {REPORT_FILE}")
     print(f"留档: eval/report/runs/{ts_str}.json")
@@ -761,6 +849,11 @@ def main():
     pass_rate = (len(cases) - failed) / len(cases) if cases else 0.0
     print(f"通过率: {pass_rate:.3f}（门禁 {args.min_pass_rate:.3f}，"
           f"跳过 {len(skip_ids)} 条）")
+    if _reg_flaked:
+        # 放行了但绝不静默：这一族是"判据太脆或行为概率性"的候选，出声才有人看
+        print(f"⚠ 回归组有 {len(_reg_flaked)} 条**首跑红、复跑绿**：{_reg_flaked}"
+              f" —— 门禁按方差放行，但首跑红已记入报告（failed_first_run={failed_first}）"
+              f"与复审单：{review_path or REPORT_FILE}")
     if failed == 0:
         sys.exit(0)
     if _reg_bad:
