@@ -3126,7 +3126,11 @@ _TARGET_NOUN_RE = re.compile(
 # parent_tag="父标签名"）——它们不是主人的名字，即便恰好是这句话的子串也不算"有据"。
 # 同 20260921「对模型的举例里不许出现具体取值」那条教训的镜像：描述里的措辞会被抄成参数值。
 _GENERIC_NAME_WORDS = ("标签", "分类", "一级标签", "二级标签", "标签名", "分类名",
-                       "名称", "名字", "目标标签", "目标分类", "这个标签", "这个分类")
+                       "名称", "名字", "目标标签", "目标分类", "这个标签", "这个分类",
+                       # 公告那一族的同形（20260924）：参数描述里叫 title=公告标题，
+                       # 实测 planner 会把它抄成 `title="标题"`——「把标题是「公告」的
+                       # 那条公告删掉吧」里"标题"**正是原话的子串**，子串级地基照样放它过去。
+                       "标题", "公告标题")
 
 
 def _marked_operand(user_msg, spans: list[str]) -> tuple[str, str]:
@@ -3204,6 +3208,14 @@ def _owner_target_span(got: str, spans: list[str], parent: str,
     · ④ 新增：此前这种形态一律"说不清就不动"，代价是「标签「大笨狗」我不想要了，
       删掉吧」被 planner 填成 `name="河灯留言"` 后**原样弹卡**——卡片上写着"删除
       标签「河灯留言」"，主人点确定就删错标签（弹卡文案是这里唯一的防线）。
+
+    20260924 第三处修正（同一族的采样现场，第二次撞见泛称）：主人原话「标签「大笨狗」
+    我不想要了，删掉吧」，planner 填 `name="标签"`——**描述里的泛称又被抄成了取值**，
+    而它恰好是主人这句话的子串（`_GENERIC_NAME_WORDS` 的注释早就点出这个形态：
+    "它甚至是这句话的子串，子串级地基放它过去"），④ 的"值整句查无"那道闸于是放行，
+    弹卡问成了「删除标签「标签」」。泛称在任何句子里都不是名字 ⇒ 取值为泛称时那道闸
+    作废；`not other_marked` 那道**留着**——它护的是"挪到/改名叫「B」"里 B 是另一个
+    操作数的形态（那里唯一一段引号不是目标）。
     """
     sq = _squash_spaces(got)
     hits = [s for s in spans if sq and sq in _squash_spaces(s)]
@@ -3222,8 +3234,8 @@ def _owner_target_span(got: str, spans: list[str], parent: str,
             if len(ph) == 1:
                 other = next(s for s in spans if s is not ph[0])
                 return other
-    if len(spans) == 1 and not other_marked and not parent and msg \
-            and sq and sq not in _squash_spaces(msg):
+    if len(spans) == 1 and not other_marked and not parent and msg and sq \
+            and (sq not in _squash_spaces(msg) or got in _GENERIC_NAME_WORDS):
         return spans[0]
     return None
 

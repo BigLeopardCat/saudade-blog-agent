@@ -1200,6 +1200,26 @@ g._name_target_fix(_ren, "把标签「Asyncio」改名叫「协程」")
 check("改名形态：新名字**不会**被当成父标签填进去（族别搞混就是参数对调）",
       not _ren["params"].get("parent_tag"), str(_ren["params"]))
 
+# 20260924：泛称词表补「标题 / 公告标题」（公告族的同形——参数描述里 title=公告标题，
+# planner 会把它抄成 `title="标题"`；而"标题"**正是主人这句话的子串**，子串级地基
+# 放它过去 ⇒ 弹窗问成了「删除公告「标题」」）
+def _ann_plan(spec, title):
+    return {"skill": "announcement_delete", "params": {"title": title}, "tools": [spec],
+            "note": "注记原文", "reply": "直接回答"}
+
+
+_ann = _ann_plan('delete_announcement({"title": "标题"})', "标题")
+g._name_target_fix(_ann, "把标题是「公告」的那条公告删掉吧")
+check("公告族：planner 抄了参数描述里的「标题」→ 校正成主人引号里那个标题",
+      _ann["params"].get("title") == "公告", str(_ann["params"]))
+
+_ann_ok = _ann_plan('delete_announcement({"title": "公告"})', "公告")
+_before_a = json.dumps(_ann_ok, ensure_ascii=False, sort_keys=True)
+g._name_target_fix(_ann_ok, "把标题是「公告」的那条公告删掉吧")
+check("公告族：本来就是主人说的标题 → 一个字节都不改",
+      json.dumps(_ann_ok, ensure_ascii=False, sort_keys=True) == _before_a,
+      str(_ann_ok["params"]))
+
 print("\n⑳ 写参数的值也要来自主人这句话（②防线续五：新建编名 / 抄短 / 抄泛称）")
 
 
