@@ -207,8 +207,13 @@ planner 原始决策、被剔清单、gate 打回原因与四段耗时。三条�
   效率基线扫的是生产那个目录，评测流量混进去等于污染判据）；`case_dir()` 带越界与生产目录守卫。
 - **`user_id` 恒 0**：那几条 `needs_admin_uid` 用例带真管理员 uid，而身份是测试夹具不是真人。
 - **一个 run 一个目录**：文件名 = 用例 id，报告里带路径（红条直接指着读）；`--keep-traces N`
-  （默认 5）只删时间戳形状的目录，`--no-trace` 整体关；隔离跑法的 run_id 由父进程经
+  只删时间戳形状的目录，`--no-trace` 整体关；隔离跑法的 run_id 由父进程经
   `GOLDEN_TRACE_RUN` 下发（子进程各自 resolve 会把一次全量散成上百个目录）。
+- **有失败的 run 永久保留**（20260924）：`--keep-traces` 默认从 5 提到 30，且只删**留档
+  能证明它干净**的旧 run——判据是反查 `eval/report/runs/*.json` 的 `trace_run` 指回哪个目录、
+  那份留档自己写着 `failed` 与 `regression.all_passed`。留档说红 → 留；留档缺失、字段不认识、
+  JSON 读坏 → 同样留（证据不足就不删，缺的正是排障要看的那份）。保留的那批会自己打一行
+  `[trace] 保留 N 个有失败的旧 run`（不静默保留）。容量不是理由：一次全量约 50KB，30 次一两兆。
 
 **坑（实测踩到）**：`ThreadPoolExecutor.submit` **不拷贝 contextvars**（只有 `asyncio.to_thread`
 自动做）——照 `server._submit_with_context` 的办法 `copy_context()` + `ctx.run` 提交，否则 recorder

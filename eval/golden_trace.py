@@ -27,6 +27,7 @@
 `_submit_with_context` 的 copy_context 传进 producer 线程；晚一步调就是一份空壳 trace。
 """
 
+import json
 import os
 import re
 import shutil
@@ -39,6 +40,13 @@ ENV_OFF = "GOLDEN_NO_TRACE"
 
 # run 目录名 = 时间戳（`%Y%m%d_%H%M%S`）；清理只认这个形状
 _RUN_RE = re.compile(r"^\d{8}_\d{6}$")
+
+# 保留最近多少次 run 的 trace（20260924 从写死的 5 提高；`run_golden --keep-traces`
+# 的默认值也取这里——两处各写一个数字就是下一次"改了一处忘了另一处"）
+KEEP_DEFAULT = 30
+
+# 留档目录（`eval/report/runs/`）：prune 靠它反查"那一晚是不是红的"。整体 gitignore。
+_REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report", "runs")
 
 
 def trace_root() -> str:
@@ -111,11 +119,22 @@ def finish_case(trace_id: str | None, duration_s: float, frames: int = 0) -> str
     return path
 
 
-def prune(keep: int = 5) -> list[str]:
-    """只保留最近 `keep` 个 run 目录，返回被删的名单。
+def prune(keep: int = KEEP_DEFAULT) -> list[str]:
+    """只保留最近 `keep` 个 run 目录（**外加所有有失败的旧 run**），返回被删的名单。
 
     目录名是时间戳 ⇒ 字典序即时间序。**只删形如 `<8位日期>_<6位时刻>` 的目录**：
     根目录下别的东西（手放的样本、临时的 .tmp）一概不碰。`keep<=0` 表示不清理。
+
+    20260924 两条改动（动机：判红的用例只能靠"复采样几次看是不是方差"来裁决，而它
+    的 trace 恰恰是被清掉的那一批）：
+
+      · 默认 `keep` 从 5 提到 `KEEP_DEFAULT`——一次全量约 50KB，30 次也就一两兆，
+        真正稀缺的不是盘而是"红那次到底 planner 怎么决策的"；
+      · **有失败的 run 永久保留**：判据不靠目录名撞报告名，而是**反查留档**——
+        `eval/report/runs/*.json` 里的 `trace_run` 就是这份报告的 trace 目录，那份
+        报告自己写着 `failed` / `regression.all_passed`。**只有能证明那晚是干净的才删**：
+        留档说失败 → 留；留档缺失、字段不认识（旧格式）、JSON 读不出来 → 同样留
+        （证据不足就不删，缺的正是排障时要看的那份）。故意的：宁可多留几个目录。
     """
     if keep <= 0:
         return []
@@ -125,6 +144,44 @@ def prune(keep: int = 5) -> list[str]:
     runs = sorted(n for n in os.listdir(root)
                   if _RUN_RE.match(n) and os.path.isdir(os.path.join(root, n)))
     doomed = runs[:-keep] if len(runs) > keep else []
+    verdict = _run_verdicts()
+    kept_fail = [n for n in doomed if verdict.get(n) is not False]
+    doomed = [n for n in doomed if verdict.get(n) is False]
     for n in doomed:
         shutil.rmtree(os.path.join(root, n), ignore_errors=True)
+    if kept_fail:
+        # 调用方（run_golden / golden_full_run）只打印"删了几个"，留下的这批得自己吭声：
+        # 悄悄留下 = 下次没人知道为什么这个目录还在
+        print(f"[trace] 保留 {len(kept_fail)} 个有失败的旧 run（失败夜的 trace 是证据，"
+              f"不清理）：{kept_fail[0]} … {kept_fail[-1]}")
     return doomed
+
+
+def _run_verdicts() -> dict[str, bool]:
+    """留档反查：`{run_id: 那晚有没有失败}`（只在能确定时进字典）。
+
+    读者是纯函数式的——目录路径走模块常量 `_REPORT_DIR`（测试 monkeypatch 到 tmpdir，
+    照 `test_golden_trace` 既有约定：离线测试必须能把目录指走、生产目录零写入）。
+    """
+    out: dict[str, bool] = {}
+    if not os.path.isdir(_REPORT_DIR):
+        return out
+    for name in sorted(os.listdir(_REPORT_DIR)):
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(_REPORT_DIR, name), encoding="utf-8") as f:
+                doc = json.load(f)
+        except Exception:                # noqa: BLE001 —— 读不出=证据不足，跳过（对应"留"）
+            continue
+        if not isinstance(doc, dict):
+            continue
+        rid = doc.get("trace_run")
+        failed = doc.get("failed")
+        if not isinstance(rid, str) or not rid or not isinstance(failed, int):
+            continue                     # 旧留档没有 trace_run / 形态不认识 ⇒ 不当成"干净"
+        reg = doc.get("regression")
+        bad = bool(failed) or (isinstance(reg, dict) and reg.get("all_passed") is False)
+        # 同一个 run_id 可能被多份留档引用：只要有一份说红，就按红算（保守）
+        out[rid] = out.get(rid, False) or bad
+    return out
