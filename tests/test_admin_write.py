@@ -22,7 +22,7 @@
      看的文本里（回执会经 execution_log 注入下一轮，带《标题》会被读成"我读过这篇"
      的指代证据）。
 
-用法：.venv/bin/python test_admin_write.py
+用法：.venv/bin/python tests/test_admin_write.py
 """
 import base64
 import contextlib
@@ -33,7 +33,8 @@ from pathlib import Path
 
 from langchain_core.messages import HumanMessage, ToolMessage
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+sys.path.insert(0, str(ROOT))
 
 import agent.graph as g  # noqa: E402
 from agent import adminops as A  # noqa: E402
@@ -876,7 +877,7 @@ check("三个写技能都在名单里，且与快照型报表名单不重叠",
       and not (EXECUTED_ONCE_SKILLS & SNAPSHOT_SKILLS),
       f"{sorted(EXECUTED_ONCE_SKILLS)} / {sorted(SNAPSHOT_SKILLS)}")
 
-gsrc = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encoding="utf-8")
+gsrc = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("写工具**不进** _CONTENT_TOOLS（否则「建了个标签」会变成「我检索过」的证据）",
       not ({"set_article_status", "set_article_tags", "create_tag"} & _CONTENT_TOOLS)
       and "list_admin_notes" in _CONTENT_TOOLS, str(sorted(_CONTENT_TOOLS)))
@@ -1096,7 +1097,7 @@ print("\n⑱ 确定性收尾的洞④ 豁免锚（gate 侧接线）")
 
 check("锚常量是**系统**写进注记的那句前缀（不是随意字符串）",
       g._LEDGER_NOTE_PREFIX == "【系统台账核对】", g._LEDGER_NOTE_PREFIX)
-_src = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encoding="utf-8")
+_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("gate 的洞④ 分支真的读了它（锚写了但判据不认 = 白写）",
       "_LEDGER_NOTE_PREFIX not in _note" in _src)
 
@@ -1109,7 +1110,7 @@ for _n in ("tag_create", "article_status", "article_tags"):
     _d = _BY_NAME[_n].description
     check(f"{_n} 描述含「照常选本技能 + 系统弹确认框」纪律",
           "照常选本技能" in _d and "索要确认" in _d, _d[-60:])
-gsrc2 = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encoding="utf-8")
+gsrc2 = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("planner 规则里也有同一条（4b 写操作纪律：要不要执行不由你判断）",
       "要不要执行" in gsrc2 and "4b." in gsrc2)
 
@@ -1382,7 +1383,7 @@ check("标签写操作不受 notes 影响（同一份快照只服务文章那两
           {}, None, None, _NOTES))
 # 接线（渲染层收到 notes 是一回事，graph 真的去读是另一回事）：只在要点到文章时读，
 # 标签/分类写操作不该为此多一次后台往返。
-_gsrc = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encoding="utf-8")
+_gsrc = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("接线：只在 picks 里有**要报标题的**文章写工具时才读文章清单"
       "（收藏两件不动标题——它们是普通访客也能用的，读后台清单只会白拿 403）",
       "in _POPUP_TITLE_TOOLS for s in picks" in _gsrc

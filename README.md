@@ -59,7 +59,8 @@ saudade-blog-agent/
 │   │                       #       + judge_offline_test.py（判据离线自测）+ trace_metrics.py/trace_alert.py（trace 指标与语义巡检）
 │   │                       #       + golden_draft.py（真实 trace 现场 → golden 用例草稿，供人审后入库）
 ├── scripts/                # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）+ sticker_smoke（贴纸冒烟）
-├── test_skills.py          # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
+├── tests/                  # L0 单元级（13 个秒级套件：技能注册表/plan 契约、权限模型、确认令牌与弹窗、
+│                           #   写面、侧任务、分节、报表、加固、协作取消、实体摘要、自己的数据、golden trace）
 └── docs/                   # 架构文档 + 评测可观测设计
 ```
 
@@ -126,10 +127,10 @@ planner 注入时自动带描述）。**可规划性由白名单决定（2026090
 ## ✅ 测试与评测
 
 ```bash
-.venv/bin/python test_skills.py               # L0：秒级，无 LLM（映射表/计划实例化/解析容错/execute 确定性执行/gate 声称闸与 fallback）
-.venv/bin/python test_hardening.py            # L0：秒级（TLS 校验/输入限额/体积闸/并发闸/工具返回三类/身份断言/幂等并发/RAG 两态）
-.venv/bin/python test_cancel.py               # L0：秒级（协作取消：五节点入口/写操作零调用/中途取消/LLM 阻塞期间的能力边界）
-.venv/bin/python test_entities.py             # L0：秒级（数据工具回执的实体摘要：序号/计数/候选照抄，解析失败给空摘要，planner 规则 6b 契约在位）
+.venv/bin/python tests/test_skills.py    # L0：秒级，无 LLM（映射表/计划实例化/解析容错/execute 确定性执行/gate 声称闸与 fallback）
+.venv/bin/python tests/test_hardening.py # L0：秒级（TLS 校验/输入限额/体积闸/并发闸/工具返回三类/身份断言/幂等并发/RAG 两态）
+.venv/bin/python tests/test_cancel.py    # L0：秒级（协作取消：五节点入口/写操作零调用/中途取消/LLM 阻塞期间的能力边界）
+.venv/bin/python tests/test_entities.py  # L0：秒级（数据工具回执的实体摘要：序号/计数/候选照抄，解析失败给空摘要，planner 规则 6b 契约在位）
 .venv/bin/python eval/run_golden.py           # L2：78 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答/执行记忆）；--limit N / --only <id1,id2> 单跑
 .venv/bin/python eval/golden_full_run.py      # L2 进程隔离全量跑（逐条独立进程 + 180s 超时，防悬挂污染）
 .venv/bin/python eval/recall_eval.py          # L1 检索：recall@k/MRR（21 条 queries = 12 正例 + 9 噪声）

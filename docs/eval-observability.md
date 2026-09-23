@@ -26,7 +26,7 @@
 > 截断改**相对断崖**（`_CLIFF_RATIO=0.25`，平均候选 5.45→3.50、recall@1/@3 与噪声 top-1
 > 一条不动；α≥0.35 起丢多答文档），`rag_arch_ports_real` 作为**已知 FAIL**（rank=2，词法
 > 表征局限、三类排序改法实测均无效）单列在 recall_eval 报告里。
-> 上版 2026-09-20（**golden 全量撤出 CI**，L0 秒级套件增至 5 个（新增 `test_entities.py`
+> 上版 2026-09-20（**golden 全量撤出 CI**，L0 秒级套件增至 5 个（新增 `tests/test_entities.py`
 > 实体摘要单测）、golden 扩至 78 条/63 标签——新增三条跨轮实体取值用例 `followup_entity_slot_*`；
 > 撤下依据与长任务三护栏见 §4 与 `.github/workflows/eval.yml` 头部注释）。
 > 上版 2026-09-19（golden 扩至 70 条、54 标签：§4 新增**依赖链断言**
@@ -101,7 +101,7 @@ flowchart TB
 
 | 层 | 评测对象 | 手段 | 指标 | 对应升级组件 |
 |---|---|---|---|---|
-| **L0 单元级** | 图节点、工具、schema | 单测（`test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率 | 图重写、记忆剥离 |
+| **L0 单元级** | 图节点、工具、schema | 单测（`tests/test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率 | 图重写、记忆剥离 |
 | **L1 基准级** | 检索器、生成层、端到端 RAG | BEIR / RGB / CRAG（§3） | nDCG@10、Recall@5、MRR；噪声准确率 / 拒答率 / 错误检测率；Truthfulness（幻觉=-1） | RAG、防幻觉 |
 | **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 78 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
 | **L3 对账级**（原设计为"回放级"） | 线上行为的**跨源一致性** | `eval/trace_reconcile.py`：trace ↔ `agent.log` ↔ `monitor.log` 三源确定性对账（零 LLM、只读） | 各判据条数：trace 有收尾行没有 / 收尾行有 trace 没有 / 重复 trace_id / end_reason·frames 不等 / 只在失败分支出现的前端上报 | 全部（每次升级后跑） |
@@ -228,7 +228,7 @@ planner 原始决策、被剔清单、gate 打回原因与四段耗时。三条�
 **坑（实测踩到）**：`ThreadPoolExecutor.submit` **不拷贝 contextvars**（只有 `asyncio.to_thread`
 自动做）——照 `server._submit_with_context` 的办法 `copy_context()` + `ctx.run` 提交，否则 recorder
 进不了 producer 线程，落下来的是一份**只有元数据的空壳 trace**，而"评测有 trace 了"看起来完全正常。
-空事件会打 ⚠（`test_golden_trace.py` 进 CI 锁守卫/接线/prune 三组，秒级不联网）。
+空事件会打 ⚠（`tests/test_golden_trace.py` 进 CI 锁守卫/接线/prune 三组，秒级不联网）。
 
 ---
 
@@ -294,7 +294,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 
 | 阶段 | 并行建设的评测/可观测 |
 |---|---|
-| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（78 条、63 标签：rag 24/chat 8/hallucination 8/multi-turn 9/nav 8/effect 6/noise 5/content_query 5/device 3/exec_memory 2 等）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>`、`--only <id1,id2>` 逗号多选定位、`--skip-ids`、`--min-pass-rate`；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`eval/judge_offline_test.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。**20260921 补**：`eval/golden_draft.py`
+| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（78 条、63 标签：rag 24/chat 8/hallucination 8/multi-turn 9/nav 8/effect 6/noise 5/content_query 5/device 3/exec_memory 2 等）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>`、`--only <id1,id2>` 逗号多选定位、`--skip-ids`、`--min-pass-rate`；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `tests/test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`eval/judge_offline_test.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。**20260921 补**：`eval/golden_draft.py`
 （trace_alert 命中的真实现场 → 用例草稿 + 人审对照单，落 `eval/report/golden_drafts_*.{jsonl,md}`；
 **只产草稿不自动入库**，含真实用户文本故不进 git）+ L2 门禁分两层（回归组硬判 100%，见 §2 门槛分工）。
 LLM-as-judge 未做 |
@@ -309,7 +309,7 @@ LLM-as-judge 未做 |
 | 升级组件 | 评测手段 | 可观测指标 |
 |---|---|---|
 | Agent 核心重写（手写图） | L0 节点单测 + L2 golden（意图/防幻觉） | 图路径、递归深度、planner/reflector 计数 |
-| 记忆体系升级 | L0（摘要协议已移除，test_skills.py 断言不再 REVISE）+ golden summary_round（不得输出 SUMMARY:）+ 记忆专项评测（未做） | 摘要触发率、召回命中率、污染事件 |
+| 记忆体系升级 | L0（摘要协议已移除，tests/test_skills.py 断言不再 REVISE）+ golden summary_round（不得输出 SUMMARY:）+ 记忆专项评测（未做） | 摘要触发率、召回命中率、污染事件 |
 | 多 agent | L2 路由正确性 + 子任务成功率 | 路由分布、子 agent 延迟/成本分解 |
 | 防幻觉 | L1 RGB 四 testbed + L2 攻击样本 | 空回复率、恢复语触发率、`__ERROR__` 率 |
 | RAG | 🟡 已落地：检索基线 L1（recall_eval.py 直接测线上 rag/search.py，词法 2/3-gram BM25 文档级聚合，21 条 queries（12 正例 + 9 噪声）recall@1=1.00——词法已打满当前语料，向量留 BEIR 对比再上）+ L2 golden rag_* 22 条（端到端，同源出题）。未做：BEIR 基准、CRAG Truthfulness | 检索耗时、top-k 来源分布、拒绝回答率 |

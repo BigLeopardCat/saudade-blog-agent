@@ -12,17 +12,26 @@
      调用自然结束才在**下一个检查点**生效——但"下一个检查点"一定是拦得住的，
      所以"用户走了还写设备"这件事不会发生。
 
-纯函数 / 无网络 / 不起图（直接调节点函数，与 test_skills.py 同款）。
+纯函数 / 无网络 / 不起图（直接调节点函数，与 tests/test_skills.py 同款）。
 """
 import sys
 import threading
 
 from langchain_core.messages import HumanMessage
 
+from pathlib import Path
+
+# ── 仓根（20260924：测试统一搬进 tests/）───────────────────────────────────────
+# 此前本文件就躺在仓根，`sys.path[0]` 天然是仓根；搬进 tests/ 之后要靠这两行才 import
+# 得到 agent/ tools/ rag/。
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+sys.path.insert(0, str(ROOT))
+
 import agent.graph as g
 from agent.graph import AgentCancelled, execute_node, gate_node, model_node, planner_node, reflector_node
 from agent.skills import instantiate_plan
 from agent.graph import plan_encode
+
 
 FAILS: list[str] = []
 

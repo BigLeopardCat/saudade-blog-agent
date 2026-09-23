@@ -56,7 +56,7 @@ LangGraph 四件套：
 # 字符串注解比对不上 ⇒ 节点被当成只收 state 调用 ⇒ `config` 静默取默认值 None，
 # 于是 `_stopped(config)` 恒为 False（断连中断在节点内失效）、principal 恒为 UNKNOWN。
 # 没有报错、没有异常，只有一条 UserWarning（生产日志里根本不会被看见）。
-# test_authz.py 用 `warnings.simplefilter("error")` 构建图来锁这一条：注解一旦退回
+# tests/test_authz.py 用 `warnings.simplefilter("error")` 构建图来锁这一条：注解一旦退回
 # 字符串，套件立刻红。
 import ast
 import json
@@ -852,7 +852,7 @@ _COMPLETION_CLAIM_RE = re.compile(
 #   ③ `成功…` 自带完成语义。
 # 完成标记（了/啦/好/完成/成功/完毕）距动词 ≤4 字：把"我能帮你把留言发出去吗"这类
 # **提议/征询**与"已经帮你把留言发出去了"这类**声称**分开——5a 的误伤会吞掉整轮叙述，
-# 而提问是未获确认时最正确的收尾（见 test_authz.py ⑨b 的两条端到端用例）。
+# 而提问是未获确认时最正确的收尾（见 tests/test_authz.py ⑨b 的两条端到端用例）。
 _WRITE_CONTENT_CLAIM_RE = re.compile(
     r"(?:"
     # ①②③ 共用末尾那一个完成标记（原有语义逐字不变）。
@@ -879,7 +879,7 @@ _WRITE_CONTENT_CLAIM_RE = re.compile(
     # "是不是已经…了"），而门恰好在"有 __ERROR__ 帧 + 完成式声称"时触发；把正解
     # 判成谎称 = 整轮换成兜底道歉（本仓一贯的取向：这一步的误伤成本 > 漏拦）。
     # 历史影响为零：516 条真实 trace 复扫，W/C 既有命中集合里没有"标记后紧跟
-    # 吗/呢/吧/？"的句子（见 test_authz.py ⑨b 的成对表）。
+    # 吗/呢/吧/？"的句子（见 tests/test_authz.py ⑨b 的成对表）。
     r"[^\n。！？!?；;，,]{0,4}?(?:了(?![多久很])|啦|好|完成|成功|完毕)(?![吗呢吧]|[?？])"
     # ④ 远距离式（20260921 补）：**没有**施事前缀的"已经把它设为私密了"是未获确认时
     #    最自然的编造口吻，①②③ 都抓不到（① 要"帮你"，② 要动词紧跟"已/刚刚"）。
@@ -1295,7 +1295,7 @@ def _phantom_tool_claim_span(reply: str, executed: set[str], exec_memory: bool,
     尾句自带另一个工具名（「要挂到文章上用 set_article_tags」），narrator 照抄 ⇒
     被判 5c ⇒ 整条回复被换成"这一轮什么都没执行"，与刚发生的执行**当面矛盾**。
     配套硬约束：工具的返回文本**不许再出现任何工具名**（见 adminops.render_tag_created
-    与 test_skills.py 的同源 lint）——把这条豁免的适用面压到零。
+    与 tests/test_skills.py 的同源 lint）——把这条豁免的适用面压到零。
     """
     if not executed:
         return None
@@ -4744,7 +4744,7 @@ def route_after_reflector(state: AgentState) -> Literal["planner", "model"]:
 # 前端只看到一行 `'model'` 这样的报错。
 # 20260921 22:37 生产实证：确认轮（confirm_grant → 写成功 → 直去 narrator）加进来
 # 时漏了 execute 这一侧的 "model" 映射，于是**每一次"点确定"都以报错收场**
-# （标签/状态其实改成了，用户看到的是错误）。test_confirm.py ⑦ 用假工具 + 假 LLM
+# （标签/状态其实改成了，用户看到的是错误）。tests/test_confirm.py ⑦ 用假工具 + 假 LLM
 # 把整条确认轮跑一遍当回归锁（含"路由标签 ⊆ 映射表"的全扫）。
 PLANNER_ROUTES = {"execute": "execute", "model": "model"}
 EXECUTE_ROUTES = {"planner": "planner", "reflector": "reflector",

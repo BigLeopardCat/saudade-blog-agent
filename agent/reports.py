@@ -17,7 +17,7 @@
 前缀识别命令，所以一条内容是 `EFFECT:rain:on` 或
 `AUTO_NAVIGATE:/dashboard` 的留言，只要被 narrator 原样复述出去，就可能在
 **管理员自己的浏览器**里真的生效（同源路径还能过掉 BLOG_ROUTES 白名单）。
-`sanitize_untrusted` 负责这件事，见它的注释与 `test_reports.py` 的回归锁。
+`sanitize_untrusted` 负责这件事，见它的注释与 `tests/test_reports.py` 的回归锁。
 """
 
 from __future__ import annotations

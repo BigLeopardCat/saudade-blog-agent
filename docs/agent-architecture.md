@@ -17,8 +17,8 @@
 > **这是唯一能批量改写文章数据的在线接口**，边界见父仓 `docs/security-boundary.md`；
 > id 策略 keepId 优先、不可证明安全时回落 newId（后者要重写 `note.tags`）。
 > ⑤**技能名 ≠ 工具名**（分类三件：技能 `category_*` / 工具 `*_category`）——混用会产生
-> "未知工具"错误帧、整轮零弹窗；已在 `test_tag_admin.py` ⑧ 用"工具名 ∈ 注册表"锁死。
-> 验证：`test_tag_admin.py`（离线）+ golden 92 条（新增 4 条写类用例，**不做真写**）+
+> "未知工具"错误帧、整轮零弹窗；已在 `tests/test_tag_admin.py` ⑧ 用"工具名 ∈ 注册表"锁死。
+> 验证：`tests/test_tag_admin.py`（离线）+ golden 92 条（新增 4 条写类用例，**不做真写**）+
 > 活体探针腿 ⑪–⑮（`eval/probe_admin_write.py`，统一"读到连接关闭才算干净收尾"）。
 > 上版：2026-09-20（**20260920 七项**：①调用者身份与权限模型——新增 `agent/principal.py`
 > （身份的唯一构造点）+ `agent/authz.py`（scope 词汇表 / 工具→scope 声明表 / 角色→授予表 /
@@ -36,13 +36,13 @@
 > ⚠️ 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
 > annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
 > **静默失效**（无报错，只有一条没人看的 UserWarning）；详见 `docs/问题记录.md` §1.3，
-> 回归锁 = `test_authz.py` 第 ⑧ 节）。
+> 回归锁 = `tests/test_authz.py` 第 ⑧ 节）。
 > ⑥**两条侧任务收成模块**（`agent/moderator.py` / `agent/summarizer.py`，此前是 `server.py`
 > 里的内联适配层、零测试、不可信文本裸插值）：各自带不可信输入围栏 + 输出白名单 + 明确
-> 失败取向（审核 fail-open、摘要 fail-empty），`test_side_tasks.py`（48 项）进 CI 门禁。
+> 失败取向（审核 fail-open、摘要 fail-empty），`tests/test_side_tasks.py`（48 项）进 CI 门禁。
 > ⑦**超长文章分节渲染与按节取回**（新增 `agent/sections.py`，见 §5.2）——全文帧不再逐字
 > 无声硬截断；`get_article_detail(section=…)` 提供取回手段；索引/渲染/取回三处共用同一套
-> 节边界。回归锁 = `test_sections.py`（68 项）。
+> 节边界。回归锁 = `tests/test_sections.py`（68 项）。
 > 上上版：2026-09-19（**20260919 参数引用**：§6.5 新增 `$<工具>[<序号>].<字段>` 参数绑定——
 > 下一步的参数取值由 execute 从结构化返回里绑，不再靠模型从 300 字截断帧里"读出来再抄"；
 > 见 `agent/refs.py`、`AgentState.tool_data`、planner 规则 3b）。
@@ -161,8 +161,8 @@ flowchart TB
 │   │                          #       + golden_case_runner.py / golden_full_run.py（进程隔离跑法）
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
-├── test_skills.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
-├── test_authz.py              # L0 单元级（权限模型：scope 声明完备性 + 角色授予表 + 失败取向
+├── tests/test_skills.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
+├── tests/test_authz.py              # L0 单元级（权限模型：scope 声明完备性 + 角色授予表 + 失败取向
 │                              #   + 写操作的"人在回路"确认闸 + config 接线回归锁，秒级）
 ├── docs/                      # 本文档 + eval-observability.md + secretary.md（秘书框架与前置需求）+ 问题记录.md（踩坑史）
 └── .env.example / pyproject.toml / uv.lock / .github/workflows/eval.yml（CI 评测门禁）
@@ -566,7 +566,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 | `tools/base.get_article_detail(section=…)` | 按节取回被略去的那一节（三级指称：标题全称 / 编号"9" / 唯一子串；不唯一 → 返回候选清单而不是赌一个） |
 
 数据不变式：**"读到的一节"必须与"索引里的那一节"完全同边界**——三处各写一份切分逻辑，
-下场就是同一篇文章在检索里叫 §9、在取回时找不到 §9（本文件 §5.2 与 `test_sections.py` ① 锁住）。
+下场就是同一篇文章在检索里叫 §9、在取回时找不到 §9（本文件 §5.2 与 `tests/test_sections.py` ① 锁住）。
 
 渲染侧帧长这样（实测 note 19，19,702 字 ≤ 20,000 上限）：
 
@@ -623,7 +623,7 @@ execute 去报错误码，不再静默变 `None`；注记只写已知事实（�
 探针实测：真实标签「Python」id=5 带文章 [19,23]，编程 → 摄影 → 编程往返后 **id 与 `note.tags`
 一字未变**；id ≥ 10000 的新二级标签升级走 newId 路径（旧 10000 → 新 22）。
 
-**验证（三件套，口径不同）**：`test_tag_admin.py`（离线、秒级、进 CI：名字解析四态 / 六工具 args
+**验证（三件套，口径不同）**：`tests/test_tag_admin.py`（离线、秒级、进 CI：名字解析四态 / 六工具 args
 组装与成功判据 / `_admin_request` 的 PUT-DELETE 形态 / **工具名 ∈ 注册表**——技能名 `category_*`
 与工具名 `*_category` 不同名，混用会产"未知工具"错误帧、整轮零弹窗）；golden 新增 4 条
 （`admin_tag_move_popup` / `admin_tag_delete_popup` / `admin_category_create_popup` /
@@ -995,7 +995,7 @@ flowchart TB
   灰色折叠区；gate 打回时被否定叙述的完整文本归档为可展开子项（`archiveRejected`）——用户既只看
   到最终输出，又能展开查看中间过程。**Rust 对 `__PROCESS__` 帧只转发、不累积进 reply**（过程行
   不属于最终回复，否则污染 chat_history）。
-- **测试**：`test_skills.py`（映射表完整性、instantiate_plan 参数实例化含已下线/未识别区分、
+- **测试**：`tests/test_skills.py`（映射表完整性、instantiate_plan 参数实例化含已下线/未识别区分、
   content_query calls/tools 白名单展开、plan 编码/解析往返与容错、execute 确定性执行、gate 收窄
   作用域 + fallback 终局语义）+ golden set 端到端 + `eval/recall_eval.py`（检索基线，直接测线上
   rag/search.py）。改技能注册表/plan 契约后必须跑。

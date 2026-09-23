@@ -25,7 +25,8 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+sys.path.insert(0, str(ROOT))
 
 from agent import sections                       # noqa: E402
 from agent.context import _frame_texts           # noqa: E402
@@ -184,18 +185,18 @@ check("指称不唯一 → 走候选分支而不是赌一个",
       and ast.literal_eval(str(amb))["sectionText"] == "")
 
 print("⑦ 接线：工具签名与调用面")
-src = (Path(__file__).resolve().parent / "tools" / "base.py").read_text(encoding="utf-8")
+src = (ROOT / "tools" / "base.py").read_text(encoding="utf-8")
 check("get_article_detail 有 section 参数", "section: Annotated[str," in src)
 check("section 只对 note 生效（talk/board/announcement 走原路）",
       src.index("if not section or not isinstance(data, dict)") < src.index('"talk": ("/talk"'))
-ctx_src = (Path(__file__).resolve().parent / "agent" / "context.py").read_text(encoding="utf-8")
+ctx_src = (ROOT / "agent" / "context.py").read_text(encoding="utf-8")
 check("渲染侧用 frame_excerpt", "sections.frame_excerpt(text, _DETAIL_FRAME_PER)" in ctx_src)
 check("旧的无声硬截断已移除", "原文过长仅示前" not in ctx_src)
-g_src = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encoding="utf-8")
+g_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("planner 规则含按节补读", "超长文章按节补读" in g_src)
 check("narrator 纪律 14 在位", "14. 工具返回帧标注" in g_src)
 check("trace 记录帧体量 frames_chars", "frames_chars=len(frames_txt)" in g_src)
-rag_src = (Path(__file__).resolve().parent / "rag" / "search.py").read_text(encoding="utf-8")
+rag_src = (ROOT / "rag" / "search.py").read_text(encoding="utf-8")
 check("索引切分只是转发（不再各写一份）",
       "from agent.sections import split" in rag_src and "def chunk_note" in rag_src)
 

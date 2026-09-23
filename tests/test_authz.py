@@ -16,7 +16,8 @@ import inspect
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+sys.path.insert(0, str(ROOT))
 
 from agent import authz  # noqa: E402
 from agent.graph import execute_node  # noqa: E402
@@ -126,7 +127,7 @@ check("authz_enforce 默认 False", settings.authz_enforce is False)
 check("enforcing() 与设置一致", authz.enforcing() == bool(settings.authz_enforce))
 
 print("⑦ 接线在位（图与 server 真的用了这套判据）")
-root = Path(__file__).resolve().parent
+root = ROOT
 graph_src = (root / "agent" / "graph.py").read_text(encoding="utf-8")
 server_src = (root / "server.py").read_text(encoding="utf-8")
 check("execute_node 调用 authz.check", "decision = authz.check(principal, name)" in graph_src)
@@ -748,7 +749,7 @@ check("未确认 + 反问确认 → 放行（正解不许被吞）",
 
 print("⑩ 管理助手 admin.console（20260921）：硬拦 + 身份过滤双层")
 # 这一批是"纯新增能力"：历史流量里一条都没有 ⇒ 没有 shadow 观测期可谈，硬拦。
-# 三层结构，本节点验后两层（第一层"结构性不可达"在 test_reports.py ⑪）：
+# 三层结构，本节点验后两层（第一层"结构性不可达"在 tests/test_reports.py ⑪）：
 #   ② 身份：非 admin 的 planner 上下文里看不到这三个技能 ⇒ 选不出来；
 #   ③ 判据：execute 前的 authz.check + enforcing(scope) 硬拦。
 ADMIN_TOOLS = ["get_server_status", "get_service_health", "get_moderation_status", "get_user_stats"]
@@ -778,7 +779,7 @@ check("list_admin_notes 是读 scope（读后台列表不是写）",
 check("审计名单只含 write.console（回执带执行身份的那一族）",
       authz.AUDIT_SCOPES == frozenset({authz.SCOPE_WRITE_CONSOLE}), str(authz.AUDIT_SCOPES))
 
-# write.console 的三层（第一层"planner 结构性不可达"在 test_reports.py ⑪；第二层
+# write.console 的三层（第一层"planner 结构性不可达"在 tests/test_reports.py ⑪；第二层
 # 身份过滤在 ⑩ 末段；这里验第三层 = execute 前的硬拦 —— **与 authz_enforce 无关**，
 # 因为它是纯新增能力、没有 shadow 观测期可谈）
 for tool in ("create_tag", "set_article_status", "set_article_tags"):

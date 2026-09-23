@@ -98,7 +98,7 @@ WRITE_SKILL_NAMES = frozenset({
 # 被它尾部的兜底当成「未知的写技能」⇒ 零工具零写、还不报错（`instantiate_plan` 里
 # 那条 `if not note` 会把它填成"参数齐备"，看起来一切正常）。加写技能时**两个地方
 # 都要补**：这里的名单（或者下面 `_OWN_WRITE_SKILLS`），以及 `instantiate_plan` 的
-# 分支。test_skills.py 有锁：注册表里每个写技能都必须落进三者之一。
+# 分支。tests/test_skills.py 有锁：注册表里每个写技能都必须落进三者之一。
 _WRITE_NAME_TARGET_SKILLS = frozenset({
     "tag_create", "tag_update", "tag_delete",
     "category_create", "category_update", "category_delete",

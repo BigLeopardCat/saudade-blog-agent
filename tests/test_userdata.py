@@ -24,7 +24,7 @@
   3. **未登录不发请求**：uid≤0 时一个字节都不出去（写侧同一条更严：写操作最不该
      做的就是在没身份时猜）。
 
-写法沿用 test_reports.py：假 httpx 只桩边界（`base._client`），工具的输入输出
+写法沿用 tests/test_reports.py：假 httpx 只桩边界（`base._client`），工具的输入输出
 一律用真对象。
 """
 import base64
@@ -33,7 +33,8 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+sys.path.insert(0, str(ROOT))
 
 from agent import authz  # noqa: E402
 from agent.entities import receipt_digest  # noqa: E402
@@ -912,14 +913,14 @@ print("\n⑥ 接线在位（改坏了这几处，上面的功能静默失效）"
 
 
 def _src(p):
-    return (Path(__file__).resolve().parent / p).read_text(encoding="utf-8")
+    return (ROOT / p).read_text(encoding="utf-8")
 
 
 # 父仓那一半（`src/routes/chat.rs` 的 render_exec_row 同名臂）：措辞必须与
 # `server.py::_tool_action_text` **逐字一致**（预告帧与落库回执行是同一件事的两处
 # 渲染，两处不一样会让主人以为发生了两件事）。agent 仓单独 checkout（CI）时读不到
 # 父仓 —— 那时**明说跳过**，不假装通过。
-_rust_path = Path(__file__).resolve().parent.parent / "src" / "routes" / "chat.rs"
+_rust_path = ROOT.parent / "src" / "routes" / "chat.rs"
 if _rust_path.exists():
     _rust = _rust_path.read_text(encoding="utf-8")
 else:
@@ -1112,7 +1113,7 @@ check("checker：kind=not_found → BLOCK + 独立原因码 target_not_found",
 check("checker：kind=unavailable 仍是它自己的码（两族不许合并）",
       _G._check_spec("read_notifications", {}, True, "…", "notice_read",
                      kind="unavailable") == ("BLOCK", "unavailable"))
-_s_src = (Path(__file__).resolve().parent / "server.py").read_text(encoding="utf-8")
+_s_src = (ROOT / "server.py").read_text(encoding="utf-8")
 check("过程行有中文：target_not_found →「目标不存在」（不是「服务不可用」）",
       '"target_not_found": "目标不存在"' in _s_src and '"unavailable": "服务不可用"' in _s_src,
       str([l for l in _s_src.splitlines() if "target_not_found" in l]))

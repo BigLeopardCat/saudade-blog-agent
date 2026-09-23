@@ -5,7 +5,7 @@
 这里放的是"把后台数据翻译成人话、把关名字↔id 的对应、判参数是否合法、算出
 变更前→变更后"这类确定性逻辑；tools/base.py 里的 @tool 只做 IO 与拼装。
 
-无网络、无 LLM、无状态：test_admin_write.py 全部秒级复跑。
+无网络、无 LLM、无状态：tests/test_admin_write.py 全部秒级复跑。
 
 三条与前端**同源**的契约（改一侧必须同步另一侧，否则同一件事在两个界面上
 表现不一致——前端那两处是 `frontend/src/utils/noteTags.ts` 与
@@ -527,7 +527,7 @@ def render_tag_created(info: TagInfo) -> str:
     判定"点名了本轮没执行的工具" ⇒ 整条回复被换成"这一轮什么都没执行"，
     与该标签**真的建成了**这件事当面矛盾（165645）。工具名是系统内部词汇，
     一句给访客看的人话里出现它，就等着被复述成"我调用了它"。同源 lint 见
-    test_skills.py::test_no_tool_name_in_user_facing_text。"""
+    tests/test_skills.py::test_no_tool_name_in_user_facing_text。"""
     color = f"，颜色：{describe_color(info.color)}" if info.color else ""
     return (f"已新建{level_cn(info)}标签「{info.label}」（id={info.id}{color}）。"
             f"它目前还挂在标签字典里、没有挂到任何文章上——"

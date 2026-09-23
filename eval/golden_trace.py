@@ -70,7 +70,7 @@ def case_dir(run_id: str) -> str:
 
     注意比的是**生产 trace 目录本身**（`settings.trace_dir`），不是它的父目录——
     golden 根正是那个父目录下的兄弟目录，拿父目录比会把每一次 golden 落盘都拒掉
-    （20260922 由 `test_golden_trace.py` 抓出：守卫写错方向，功能整个不可用）。
+    （20260922 由 `tests/test_golden_trace.py` 抓出：守卫写错方向，功能整个不可用）。
     """
     prod = os.path.abspath(settings.trace_dir)
     d = os.path.abspath(os.path.join(trace_root(), run_id))

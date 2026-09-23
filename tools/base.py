@@ -106,7 +106,7 @@ def _shape(data) -> str:
 # **第三方** `https://wttr.in`（天气工具）——关掉校验等于把 TLS 降级成"加密但不可
 # 认证"，第三方那条尤其说不通（中间人可替换响应体，而响应会进 prompt）。
 # 两个域名证书链都正常（实测 verify=True 均 200），所以关校验从来不是"必需"，只是
-# 早期图省事。test_hardening.py 里有一条盯着校验开关的断言。
+# 早期图省事。tests/test_hardening.py 里有一条盯着校验开关的断言。
 _client = httpx.Client(timeout=15)
 
 def _get(path: str) -> dict | list | ToolResult:

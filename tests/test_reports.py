@@ -28,7 +28,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+sys.path.insert(0, str(ROOT))
 
 from agent import authz  # noqa: E402
 from agent import hostinfo as H  # noqa: E402
@@ -575,7 +576,7 @@ check("admin 的 planner 上下文里能看到",
 check("既有公开技能对非 admin 仍然可见（别把过滤写宽了）",
       all(n in build_planner_context("user") for n in ("chat", "content_query", "navigate")))
 
-src = (Path(__file__).resolve().parent / "server.py").read_text(encoding="utf-8")
+src = (ROOT / "server.py").read_text(encoding="utf-8")
 check("过程行有中文动作词（否则显示『执行 get_server_status』）",
       all(f'"{n}":' in src for n in NEW))
 
@@ -588,7 +589,7 @@ check("三个报表技能都在快照去重名单里",
 check("该名单里的技能都是只读报表（不含动作/检索技能，别把去重写宽了）",
       not (SNAPSHOT_SKILLS & {"content_query", "navigate", "effect", "darkmode",
                               "read_article", "device_display", "device_query"}))
-gsrc = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encoding="utf-8")
+gsrc = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("防护判据取 receipts（PASS 回执）——用帧名会把失败重试也一并堵死",
       'plan_obj["skill"] in SNAPSHOT_SKILLS' in gsrc
       and 'passed = {r.get("tool") for r in (state.get("receipts") or [])}' in gsrc)
