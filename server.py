@@ -1249,6 +1249,16 @@ async def chat_stream(req: ChatRequest, request: Request):
                 last_frame = loop.time()
                 if chunk is None:
                     end_reason = "producer_done"
+                    # 终止帧必须是最后一帧（20260923）：哨兵由生产者在 finally 里投出
+                    # （它在所有帧之后），**哨兵之后再入队的帧永远不会被本循环取走**
+                    # （循环已 break）——那就是"悄悄丢了内容"。而三端对"终止帧之后还能
+                    # 不能有帧"的语义各不相同：Rust 见 __END__ 即 break 停止转发，前端
+                    # 却是 continue 继续读到连接关闭，此前没有一端把它写成断言。这里只查
+                    # 不改：残留照旧丢弃（不留不确定性），但必须响亮。
+                    residue = queue.qsize()
+                    if residue:
+                        logger.error("[stream] 终止帧之后生产者又投了 %d 个帧（协议违约："
+                                     "这些帧不会下发，检查 queue.put 是否晚于哨兵 None）", residue)
                     break
                 if isinstance(chunk, Exception):
                     end_reason = "producer_error"
