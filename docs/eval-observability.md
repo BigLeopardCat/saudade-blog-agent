@@ -3,7 +3,16 @@
 > 升级路线（手写图 → eval → 记忆 → 可观测 → 多 agent）的**验证地基**：先立"怎么验证"，再动工升级。
 > 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、[问题记录.md](问题记录.md)（事故与根因）。
 > 部署与运维细节（服务名、路径、可复制命令）属私有运行簿，不进仓库。
-> 最后更新：2026-09-20 晚（**命令前缀判据的元讨论豁免（提及 ≠ 发命令）**：判据由全文裸搜改为
+> 最后更新：2026-09-24（**评测体系补"断言层之上"的两层**：① 前端渲染层进夜间——`frontend/tests/`
+> 的 9 个 Playwright 沙箱此前**写了没有任何东西跑它**，现由父仓 `scripts/nightly_sandboxes.sh`
+> 每天 04:40 串行跑（CI 仍只留秒级 node 套件）；② L3 落地为**跨源对账**——`eval/trace_reconcile.py`
+> 把 trace ↔ `agent.log` ↔ `monitor.log` 对起来（单源规则扫描看不见"两个源之间"的错），接入
+> nightly、异常时写一条 `logs/health.log` 的 WARN；驱动它的现场是"数据真改了、回执落了库、
+> 前端只见报错"那类**每一段都自洽、错在源之间**的事故。同日把 nightly 缺的 L1 补齐
+> （`recall_eval.py` 进夜间，README 里"nightly 自动跑 L1/L2"从此为真）；`GOLDEN_ADMIN_UID`
+> 的测试专用账号已备好迁移文件，**账号落库前不接线**（否则常年 SKIP 的管理员写用例会变红）。
+> 本节起 L3 的"脱敏重放"如实改写为已落地的对账层——**没做的不再写成做了**）
+> 上版 2026-09-20 晚（**命令前缀判据的元讨论豁免（提及 ≠ 发命令）**：判据由全文裸搜改为
 > `_cmd_prefix_directive`（引号/内联代码区 **且** 同句含机制词 = 举例说明，放行），配前端
 > `chat-core.js` 的 `stripMentionSpans`（正文兜底命令解析跳过同类跨度）——两侧口径必须
 > 一致，否则"放行的提及"会在页面上真的生效；**golden 新增 `forbid_fallback` opt-in 断言**
@@ -78,7 +87,7 @@ flowchart TB
     subgraph CI[CI 流水线]
         P0[push 触发] --> L0[L0 单元/组件级<br/>秒级 · 每次必跑]
         N[nightly 定时] --> L1[L1 基准级开源数据集<br/>小时级 · 离线]
-        N --> L3[L3 线上回放<br/>采样生产日志脱敏重放]
+        N --> L3[L3 线上对账<br/>trace ↔ agent.log ↔ monitor.log]
     end
     subgraph LOCAL[本机（生产服务器）]
         P1[按需手动] --> L2[L2 任务级 golden set<br/>78 条 · 约 19 分钟 · 硬门禁]
@@ -87,7 +96,7 @@ flowchart TB
     L0 -->|失败| BLOCK[阻塞合并]
     L2 -->|指标回归| BLOCK
     L1 --> R1[基准报告]
-    L3 --> R2[漂移报告<br/>模型/图升级前后对比]
+    L3 --> R2[对账报告<br/>三源对不上的条目]
 ```
 
 | 层 | 评测对象 | 手段 | 指标 | 对应升级组件 |
@@ -95,9 +104,23 @@ flowchart TB
 | **L0 单元级** | 图节点、工具、schema | 单测（`test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率 | 图重写、记忆剥离 |
 | **L1 基准级** | 检索器、生成层、端到端 RAG | BEIR / RGB / CRAG（§3） | nDCG@10、Recall@5、MRR；噪声准确率 / 拒答率 / 错误检测率；Truthfulness（幻觉=-1） | RAG、防幻觉 |
 | **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 78 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
-| **L3 回放级** | 线上行为漂移 | 生产对话脱敏采样 → 离线重放 → 与 golden 指标对齐 | 漂移方向/幅度 | 全部（每次升级后跑） |
+| **L3 对账级**（原设计为"回放级"） | 线上行为的**跨源一致性** | `eval/trace_reconcile.py`：trace ↔ `agent.log` ↔ `monitor.log` 三源确定性对账（零 LLM、只读） | 各判据条数：trace 有收尾行没有 / 收尾行有 trace 没有 / 重复 trace_id / end_reason·frames 不等 / 只在失败分支出现的前端上报 | 全部（每次升级后跑） |
+| **渲染层**（不在 L0–L3 编号里，与被测对象不同：测前端而非 agent） | 前端组件在真浏览器里的渲染与时序 | `frontend/tests/*.py` 九份 Playwright 沙箱（esbuild 打真组件 + 无头 Chrome，把后端桩掉） | 断言通过率；时序判据（时刻证人）| 前端任何改动（sass/esbuild 两步是本机唯一能拦下构建级缺陷的环节） |
 
-**门槛分工**（20260920 起）：**CI** 只跑 L0（push 触发，秒级，硬门禁）；**L2 全量 golden 在本机跑**（按需手动 `eval/run_golden.py` / `eval/golden_full_run.py`，nightly 04:00 由 `scripts/nightly_regression.sh` 自动跑一轮，失败标 `~/agent_regression.failed`）；nightly 另跑 L1 全量 + L3 回放（小时级，出基准报告）。
+**L3 的现状要说清**：文档原写的"生产对话脱敏采样 → 离线重放"**没有做**，落地的是**跨源对账**——
+它不重放、不判"行为漂移方向"，只判"同一轮对话在两个源里的记录对不对得上"。这条比前者便宜得多
+（零 LLM、秒级），且正对事故史：现有 trace 工具都是**单源规则扫描**，而"数据真改了、回执落了库、
+前端只见报错"那类事故里 trace 每一段都自洽，错在两个源之间。报告落 `eval/report/reconcile_<ts>.md`，
+异常才写 `logs/health.log`（与一分钟心跳探针同一条通道）。脱敏重放仍**未做**。
+
+**门槛分工**（20260920 起）：**CI** 只跑 L0（push 触发，秒级，硬门禁；20260924 起含新增的
+`eval/reconcile_offline_test.py`——它跑的是假夹具，不碰生产目录）；**L2 全量 golden 在本机跑**
+（按需手动 `eval/run_golden.py` / `eval/golden_full_run.py`，nightly 04:00 由
+`scripts/nightly_regression.sh` 自动跑一轮，失败标 `~/agent_regression.failed`）；**nightly 另跑
+L1（`recall_eval.py`，秒级）与 L3 对账（非门禁——判据还在观察期，红了不该让整个夜间任务变红）**
+＋既有的两个巡检节（`trace_alert` 近 7 天、`golden_draft`）。前端渲染层不在这个脚本里，
+由父仓 `scripts/nightly_sandboxes.sh` 每天 04:40 单独跑（结果落 `~/sandbox_regression.log`，
+失败标 `~/sandbox_regression.failed`）。
 
 **L2 门禁分两层**（20260921）：`tags` 含 `regression` 的用例（16 条防幻觉/契约/撤回话术/执行记忆）
 **硬判 100% 通过**，不受 `--min-pass-rate` 放宽——回归题锁的是"已经定性为错误的行为不许回来"，
@@ -204,7 +227,7 @@ flowchart LR
     A --> L[LLM API]
     A --> T[(trace 落库<br/>chat_trace)]
     R --> M[(metrics 落库<br/>chat_metrics)]
-    T -->|采样回放| EVAL[离线评测 L3]
+    T -->|与其他源对账| EVAL[离线对账 L3]
     M -->|异常告警| DASH[看板 / SQL 报表]
 ```
 
@@ -245,7 +268,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
   → 按 trace_id 采样定位故障模式
   → 构造新 golden 样本进 L2（数据集版本管理）
   → 全量回归（本机）从此拦截同类
-  → 修复后跑 L1 + L3 验证无漂移
+  → 修复后跑 L1 + L3（对账）验证没有新的对不上
 ```
 
 ---
@@ -263,7 +286,7 @@ LLM-as-judge 未做 |
 | 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:）；20260830 修 golden 断言过严三条（行为正确不判失败） |
 | 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0 秒级套件硬门禁）；L2 全量 golden 本机跑（20260920 起撤出 CI）+ nightly crontab（scripts/nightly_regression，失败标 `~/agent_regression.failed`）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
 | 3 记忆 | 🟡 部分完成：摘要独立化（2026-08-26）结构性关闭污染面；**未做**：记忆专项评测（召回相关性、摘要合并质量、污染检测） |
-| 4 可观测 | 🟡 部分完成：对话 trace JSON 落盘（utils/trace.py → logs/agent/traces/，20260829）+ LLM 慢调用监控（>30s WARN + trace slow 标记，20260830）+ trace_id 中间件。**未做**：metrics 落库、看板、L3 回放 |
+| 4 可观测 | 🟡 部分完成：对话 trace JSON 落盘（utils/trace.py → logs/agent/traces/，20260829）+ LLM 慢调用监控（>30s WARN + trace slow 标记，20260830）+ trace_id 中间件。**未做**：metrics 落库、看板、L3 的脱敏重放（20260924 落地的是**跨源对账**这一可落地版本，见 §2） |
 | 5 多 agent | 路由正确性评测 + 子 agent 指标分解 |
 
 **组件映射速查**：
