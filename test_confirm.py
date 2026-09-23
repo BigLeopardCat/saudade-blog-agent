@@ -14,6 +14,8 @@
   ⑤ 授权式短应答（P2）：台账唯一待审 ⇒ 目标由系统定，但**仍要主人点一下**。
   ⑥ 跨轮待办的结构化形态（P4）：弹窗那一轮同时产出 pending_action，
      且字段/同源关系/MISS 语义与 Rust 侧的读取契约一致。
+  ⑦ 被拒的确认请求留痕（20260924）：元数据里**有**会话 id 与令牌长度、
+     **没有**令牌本身；并断言两个调用点在 server.py 里真的接上了。
 
 用法：.venv/bin/python test_confirm.py
 """
@@ -479,6 +481,36 @@ check("不弹窗的轮次**没有**待办（提问/无权限不许凭空记一�
       and not (_popup("一级标签，名字叫X，使用粉色颜色",
                       principal=Principal(uid=9, role="user")) or {}).get("pending_action"))
 settings.jwt_secret = _SAVED_SECRET
+
+print()
+print("⑦ 被拒的确认请求必须留痕（20260924：点确定没生效这件事，agent 侧此前零证据）")
+# 事故：主人点「确定」→ 令牌过期 → 服务端回"这次确认已经失效了…没有执行任何改动"，
+# 但这一轮**根本不落 trace**（旧的 invalid 分支在 start_trace 之前就 return 了）。
+# 复盘时 agent 侧查不到"有人点过、被拒了"，只能靠前端日志——而前端这条链路正路径
+# 也没留痕。这一节同时锁两件事：查得到（字段齐）与**查不到（令牌绝不在里面）**。
+_meta = confirm.invalid_trace_meta(1, 246, 220)
+check("被拒轮有 trace 元数据，且标明'这一跳是点确定'", _meta.get("has_confirm") is True)
+check("  标明验签没过（零执行）⇒ 复盘时不会与'真执行了'混淆",
+      _meta.get("confirm_rejected") is True)
+check("  带会话 id（20260924 之前 trace 只有随机 thread_id，认不出属于哪个会话）",
+      _meta.get("conversation_id") == 246)
+check("  只记令牌**长度**（够复现'客户端有没有发全'，长度本身不是凭据）",
+      _meta.get("confirm_token_len") == 220)
+# 令牌本身一个字符都不许进 trace：用真令牌做输入，断言它的任何一段都不在元数据里
+_real_token = confirm.sign(1, 246, "favorite_add", [{"tool": "add_favorite", "args": {"article_id": 19}}])
+_meta2 = confirm.invalid_trace_meta(1, 246, len(_real_token))
+_flat = json.dumps(_meta2, ensure_ascii=False) + str(sorted(_meta2))
+check("  真令牌的任何一段（完整串/签名段/载荷段）都不在元数据里",
+      _real_token not in _flat
+      and _real_token.split(".")[0] not in _flat and _real_token.split(".")[1] not in _flat)
+
+# 接线断言（"能力有测试 ≠ 接线有测试"）：两个调用点必须在 chat_stream 里真的接上
+_src = open("server.py", encoding="utf-8").read()
+check("接线：验签失败分支调用了落 trace（不是只打个 warning 就 return）",
+      "_record_invalid_confirm(get_trace_id()" in _src
+      and _src.index("_record_invalid_confirm(get_trace_id()") > _src.index("if grant is None:"))
+check("接线：正常轮的 trace input 带 conversation_id",
+      '"conversation_id": req.conversation_id' in _src)
 
 print()
 if FAILED:

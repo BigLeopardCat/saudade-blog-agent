@@ -70,6 +70,29 @@ def _b64d(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + pad)
 
 
+def invalid_trace_meta(uid: int, conv_id, token_len: int) -> dict:
+    """**被拒**的确认请求落 trace 时用的 input 元数据（纯函数，`test_confirm.py` 锁住）。
+
+    为什么是纯函数 + 单测而不是就地写个 dict：这里同时是两条纪律的**唯一展开点**——
+      · "哪次被拒了"必须事后查得到（在此之前这条路径连 trace 都没有，见 server.py
+        `_record_invalid_confirm` 的头注）；
+      · "令牌绝不进 trace/日志/回执/prompt"必须查不出来（模块头注的第一条安全语义）。
+    只记 `token_len` 是刻意的：长度足够复现"客户端到底有没有把令牌发全"，而长度
+    本身不是凭据。`uid` 只用来做 trace 的归属，不参与内容。
+    """
+    return {
+        "message": "",                      # 隐藏请求的合成文本不是主人说的话
+        "has_image": False,
+        "needs_summary": False,
+        "history_len": 0,
+        "has_exec": False,
+        "has_confirm": True,                # 是"点确定"那一跳
+        "conversation_id": conv_id,
+        "confirm_rejected": True,           # 验签没过 ⇒ 零执行
+        "confirm_token_len": int(token_len),
+    }
+
+
 def has_refs(specs) -> bool:
     """specs 里有没有残留的 `$ref`（见模块头注：有引用就不签发）。
 
