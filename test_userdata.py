@@ -250,13 +250,27 @@ try:
           "notifications" in out and "total" in out and "unread_items" in out, str(out)[:60])
     check("条目只含**未读**的（已读那条 5 不进 unread_items）",
           "'id': 7" in out and "'id': 6" in out and "'id': 5" not in out, out[-120:])
-    check("条目字段是给指代用的那几个（id/type/title/link/createdAt，不搬 content）",
-          "国庆维护公告" in out and "凌晨维护" not in out, out[-120:])
+    check("条目带 id/type/title/content/link/createdAt"
+          "（20260924 二改：content 进条目——留言审核的驳回理由就写在正文里）",
+          "国庆维护公告" in out and "凌晨维护" in out and "/guestbook?lid=88" in out,
+          out[-160:])
     check("两个端点都打了（summary 在前，列表在后）",
           [u.rsplit("/api", 1)[1] for u in c.calls]
           == ["/protected/notifications/summary", "/protected/notifications"], str(c.calls))
     check("条数对得上时**不加**说明字段（别让正常路径多一句噪音）",
           "unread_items_note" not in out, out[-80:])
+
+    # 正文过长 → 截断（条目是摘要，要原文走 list_notifications；别把整条通知搬进帧）
+    _long = "理由：" + "很长的驳回说明" * 30
+    c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}),
+             _Resp(200, {"code": 200, "data": {"unread": 1, "items": [
+                 {"id": 9, "type": "notice", "title": "留言未通过审核", "content": _long,
+                  "link": "/guestbook?lid=96", "isRead": False,
+                  "createdAt": "2026-09-23 22:06:09"}]}}))
+    base._client = c
+    out = base.get_unread_summary.invoke({}, config=cfg(7))
+    check("正文过长 → 截断到 120 字并带省略号",
+          _long[:120] in out and _long[:121] not in out and "…" in out, out[-160:])
 
     # 计数说 3、列表只带回 2 条（模拟未读里较早的落在列表接口最近 100 条窗口外）
     c = _two(_Resp(200, {"code": 200, "data": UNREAD}),
