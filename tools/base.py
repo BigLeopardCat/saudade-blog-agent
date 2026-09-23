@@ -2371,14 +2371,63 @@ def list_my_favorites(config: RunnableConfig) -> str:
     return _shape(data)
 
 
+# 未读汇总连带带回的条目（20260924）：红点问的是"几条"，紧接着的一句必定是
+# "是什么"——只有计数时那一句要么再调一次 list_notifications（多一轮）、要么
+# 拿计数去编内容。上限 10 条：条目是给"红点里是什么"看的，不是列表副本
+# （要全量走 list_notifications）；超限时在 `unread_items_note` 里如实说明。
+_UNREAD_ITEMS_MAX = 10
+_UNREAD_ITEM_KEYS = ("id", "type", "title", "link", "createdAt")
+# 条目那半读不到时的措辞（计数是真的、条目没有）：**不许**退化成"没有未读条目"
+_UNREAD_ITEMS_DOWN = "未读条目的内容这次没读到（只有计数是可信的）"
+
+
 @tool
 def get_unread_summary(config: RunnableConfig) -> str:
-    """查看**当前登录用户自己**的未读数汇总（返回 notifications / messages / total）。
+    """查看**当前登录用户自己**的未读汇总：计数（notifications / messages / total）
+    **连带未读的那几条通知**（`unread_items`：id / type / title / link / createdAt，
+    最多 10 条，超出时另有 `unread_items_note` 说明）。
     红点数 = 站内通知未读 + 私信未读；**公告在发布时按用户展开成通知行**，所以
     公告的未读也计在 notifications 里，不需要另一套计数。
-    访客问"我有未读吗""红点上有几条""有多少没看的消息"时用。未登录时如实告知读不到。"""
+    访客问"我有未读吗""红点上有几条""有多少没看的消息""红点里是什么/是什么通知"时用
+    ——问"是什么"**不必**再调 list_notifications（未读条目就在这次返回里）。
+    未登录时如实告知读不到。"""
     data = _own_get("/api/protected/notifications/summary", config)
-    return _shape(data)
+    if isinstance(data, ToolResult):
+        # 计数都没读到：原样透出（fail-closed），**不做任何"连带"**——
+        # 计数读不到时再补一次列表调用，只会让"未登录"变成一次多余的请求
+        return data
+    if not isinstance(data, dict):
+        return _shape(data)
+    notices = _own_get("/api/protected/notifications", config)
+    rows: list = []
+    if isinstance(notices, dict):
+        if isinstance(notices.get("items"), list):
+            rows = notices["items"]
+    elif isinstance(notices, list):
+        rows = notices
+    if isinstance(notices, ToolResult) or not rows:
+        # 两种情况分开：条目读失败（notices 是 unavailable）与真的零条目。
+        # 读失败绝不能写成"你没有未读的通知"——本模块头注第 2 条纪律。
+        note = (_UNREAD_ITEMS_DOWN if isinstance(notices, ToolResult)
+                else "")
+        out = dict(data, unread_items=[])
+        if note:
+            out["unread_items_note"] = note
+        return _shape(out)
+    unread = [r for r in rows
+              if isinstance(r, dict) and not r.get("isRead")]
+    slim = [{k: r[k] for k in _UNREAD_ITEM_KEYS if k in r}
+            for r in unread[:_UNREAD_ITEMS_MAX]]
+    out = dict(data, unread_items=slim)
+    # 抬头那个计数（notifications）才是权威数量：拿它跟带回来的条数比，**两种缺口
+    # 用同一句话如实说**——① 超过本条上限；② 未读里较早的落在列表接口的最近 100 条
+    # 窗口之外（那时"未读里还有几条"照样成立）。不许默默少给。
+    total_unread = data.get("notifications")
+    if (isinstance(total_unread, int) and not isinstance(total_unread, bool)
+            and total_unread > len(slim)):
+        out["unread_items_note"] = (f"只带回 {len(slim)} 条"
+                                    f"（未读通知共 {total_unread} 条）")
+    return _shape(out)
 
 
 @tool

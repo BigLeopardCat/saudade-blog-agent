@@ -205,10 +205,16 @@ def _notification_digest(data) -> str:
 
 
 def _unread_digest(data) -> str:
-    """未读汇总（20260923）：两个数 + 总数。
+    """未读汇总（20260923）：两个数 + 总数；20260924 起**连带未读条目的 id《标题》**。
 
     只认 int（缺字段/形态不符返回空串，不写成 0——"0 条未读"是结论，
     "没读到字段"不是，两者必须分开）。key 名与 Rust `UnreadDto` 同源。
+
+    条目那半取自同一次调用的 `unread_items`（工具已按未读过滤）——**id 必须给**：
+    `read_notifications` 的实参是 id 列表，"摘要里不给 id"就只能靠编
+    （20260923 三轮把条数当 id 的教训，见 `_notification_digest`）。
+    读失败时工具带 `unread_items_note` 而条目为空，这里自然退化成计数版——
+    不编条目，也不把"没读到"写成 0。
     """
     if not isinstance(data, dict):
         return ""
@@ -219,7 +225,22 @@ def _unread_digest(data) -> str:
             return ""
         vals.append(v)
     n, m, t = vals
-    return f"未读: 通知 {n} 条 / 私信 {m} 条（合计 {t}）"
+    base = f"未读: 通知 {n} 条 / 私信 {m} 条（合计 {t}）"
+    items = data.get("unread_items")
+    if not isinstance(items, list):
+        return base
+    rows = [r for r in items if isinstance(r, dict)]
+    parts = []
+    for r in rows[:_TITLE_MAX]:
+        title = _clip(r.get("title") or "", 18)
+        if not title:
+            continue
+        nid = r.get("id")
+        if isinstance(nid, int) and not isinstance(nid, bool):
+            parts.append(f"{nid}《{title}》")
+        else:
+            parts.append(f"《{title}》")     # 缺 id 不写假 id（缺字段绝不编）
+    return f"{base} — 未读通知: " + _join(parts) if parts else base
 
 
 def _mailbox_digest(data) -> str:

@@ -186,8 +186,10 @@ finally:
 # ══════════════════════════════════════════════════════════════════
 print("\n② 三个读工具：以发起人身份读、读不到就如实说（走真工具）")
 
-CASES = [("list_my_favorites", FAVS), ("get_unread_summary", UNREAD),
+CASES = [("list_my_favorites", FAVS),
          ("list_notifications", NOTICES), ("list_my_messages", MAILBOX)]
+# `get_unread_summary` **不在这一组**：20260924 起它多打一个列表端点、返回合并结构
+# （计数 + 未读条目），"一次请求、原样透出"那条契约对它已不成立——它单列在 ②b。
 try:
     for name, sample in CASES:
         tool = getattr(base, name)
@@ -213,6 +215,91 @@ try:
     out = base.list_my_favorites.invoke({}, config=cfg(7))
     check("收藏为空 → 原样透出 '[]'（不是 unavailable、不是『暂无收藏』这种人话）",
           out == "[]" and not getattr(out, "kind", ""), f"{getattr(out, 'kind', '')}: {out}")
+finally:
+    base._client = real_client
+
+
+# ══════════════════════════════════════════════════════════════════
+print("\n②b 未读汇总连带条目（20260924）：计数 + 未读的那几条")
+
+# 动机：红点问的是"几条"，紧接着的一句必定是"是什么"。只有计数时那一句要么再调一次
+# list_notifications（多一轮），要么拿计数去编内容。合并之后"是什么"在同一次返回里。
+# 三条纪律照旧不许破：读不到 ≠ 是空的、未登录零请求、缺字段绝不编。
+UNREAD_MERGE = {"notifications": 2, "messages": 1, "total": 3}
+
+
+def _two(summary, notices):
+    """按调用顺序喂两个端点的返回（summary → notifications）。"""
+    class _Seq:
+        def __init__(self):
+            self.calls = []
+            self.resps = [summary, notices]
+
+        def get(self, url, headers=None, timeout=None):
+            self.calls.append(url)
+            return self.resps.pop(0)
+    return _Seq()
+
+
+try:
+    c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}),
+             _Resp(200, {"code": 200, "data": NOTICES}))
+    base._client = c
+    out = base.get_unread_summary.invoke({}, config=cfg(7))
+    check("计数 + 未读条目一起回来（三个计数一个不少）",
+          "notifications" in out and "total" in out and "unread_items" in out, str(out)[:60])
+    check("条目只含**未读**的（已读那条 5 不进 unread_items）",
+          "'id': 7" in out and "'id': 6" in out and "'id': 5" not in out, out[-120:])
+    check("条目字段是给指代用的那几个（id/type/title/link/createdAt，不搬 content）",
+          "国庆维护公告" in out and "凌晨维护" not in out, out[-120:])
+    check("两个端点都打了（summary 在前，列表在后）",
+          [u.rsplit("/api", 1)[1] for u in c.calls]
+          == ["/protected/notifications/summary", "/protected/notifications"], str(c.calls))
+    check("条数对得上时**不加**说明字段（别让正常路径多一句噪音）",
+          "unread_items_note" not in out, out[-80:])
+
+    # 计数说 3、列表只带回 2 条（模拟未读里较早的落在列表接口最近 100 条窗口外）
+    c = _two(_Resp(200, {"code": 200, "data": UNREAD}),
+             _Resp(200, {"code": 200, "data": NOTICES}))
+    base._client = c
+    out = base.get_unread_summary.invoke({}, config=cfg(7))
+    check("带回来的比计数少 → unread_items_note 如实说少给了几条",
+          "只带回 2 条" in out and "共 3 条" in out, out[-90:])
+
+    # 条目那半读失败：计数是真读到的（ok 进回执），但**绝不许**说成"没有未读条目"
+    c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}), _Resp(500))
+    base._client = c
+    out = base.get_unread_summary.invoke({}, config=cfg(7))
+    check("条目读失败 → 计数照旧透出、unread_items 为空但带『没读到』说明",
+          not getattr(out, "kind", "") and "'total': 3" in out
+          and "没读到" in out and "没有未读" not in str(out),
+          f"{getattr(out, 'kind', '')}: {out}")
+    check("条目读失败**不说**未登录/管理员（那是故障不是身份问题）",
+          "未登录" not in str(out) and "管理员" not in str(out), str(out))
+
+    # 未登录：第一跳就 unavailable ⇒ 不应再打第二个端点（fail-closed 的早退）
+    c = _two(_Resp(200, {"code": 500, "message": "未登录"}), _Resp(200, {"code": 200, "data": NOTICES}))
+    base._client = c
+    out = base.get_unread_summary.invoke({}, config=cfg(7))
+    check("计数读不到 → unavailable 且**不补一次列表调用**",
+          out.kind == "unavailable" and len(c.calls) == 1, f"{out.kind}: {c.calls}")
+
+    c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}), _Resp(200, {"code": 200, "data": NOTICES}))
+    base._client = c
+    out = base.get_unread_summary.invoke({}, config=cfg(0))
+    check("未登录 → kind=unavailable 且零请求（连带那一路也不发）",
+          out.kind == "unavailable" and c.calls == [], f"{out.kind}: {c.calls}")
+
+    # 一条未读都没有：`unread_items` 为空数组，**不是** unavailable
+    c = _two(_Resp(200, {"code": 200, "data": {"notifications": 0, "messages": 0, "total": 0}}),
+             _Resp(200, {"code": 200, "data": {"unread": 0, "items": [
+                 {"id": 5, "type": "notice", "title": "欢迎来到 Saudade", "link": None,
+                  "isRead": True, "createdAt": "2026-09-01 08:00:00"}]}}))
+    base._client = c
+    out = base.get_unread_summary.invoke({}, config=cfg(7))
+    check("零未读 → 空条目 + 计数 0（是事实，不是失败）",
+          not getattr(out, "kind", "") and "'unread_items': []" in out
+          and "'total': 0" in out, f"{getattr(out, 'kind', '')}: {out}")
 finally:
     base._client = real_client
 
@@ -276,6 +363,40 @@ check("未读汇总 → 两个数 + 合计（key 名与 Rust UnreadDto 同源）
       receipt_digest("get_unread_summary", str(UNREAD))
       == "未读: 通知 3 条 / 私信 1 条（合计 4）",
       receipt_digest("get_unread_summary", str(UNREAD)))
+# 20260924：条目那半随摘要进跨轮记忆——**id 必须给**（read_notifications 要的是 id
+# 列表，只给"3 条"就是 20260923 三轮那个"把条数当 id"的坑）；标题带书名号，正文不进。
+check("未读汇总带条目 → 计数 + 未读条目的 `id《标题》`",
+      receipt_digest("get_unread_summary",
+                     str({**UNREAD, "unread_items": [
+                         {"id": 7, "type": "announcement", "title": "国庆维护公告",
+                          "link": "/article/3", "createdAt": "2026-09-22 10:00:00"},
+                         {"id": 6, "title": "你的留言已通过审核", "isRead": False}]}))
+      == "未读: 通知 3 条 / 私信 1 条（合计 4） — 未读通知: 7《国庆维护公告》/6《你的留言已通过审核》",
+      receipt_digest("get_unread_summary",
+                     str({**UNREAD, "unread_items": [
+                         {"id": 7, "title": "国庆维护公告"},
+                         {"id": 6, "title": "你的留言已通过审核"}]})))
+check("未读条目缺 id → 不编 id（只给标题）",
+      receipt_digest("get_unread_summary",
+                     str({**UNREAD, "unread_items": [{"title": "国庆维护公告"}]}))
+      == "未读: 通知 3 条 / 私信 1 条（合计 4） — 未读通知: 《国庆维护公告》",
+      receipt_digest("get_unread_summary",
+                     str({**UNREAD, "unread_items": [{"title": "国庆维护公告"}]})))
+check("条目读失败（空条目 + 说明字段）→ 退化成计数版，不编条目",
+      receipt_digest("get_unread_summary",
+                     str({**UNREAD, "unread_items": [],
+                          "unread_items_note": "未读条目的内容这次没读到（只有计数是可信的）"}))
+      == "未读: 通知 3 条 / 私信 1 条（合计 4）",
+      receipt_digest("get_unread_summary", str({**UNREAD, "unread_items": []})))
+check("未读摘要 ≤150 字（Rust detail 列宽的一半留给动作行）",
+      len(receipt_digest("get_unread_summary",
+                         str({**UNREAD, "unread_items": [
+                             {"id": i, "title": "国庆维护公告与站点维护安排的详细说明" * 2}
+                             for i in range(1, 11)]}))) <= 150,
+      str(len(receipt_digest("get_unread_summary",
+                             str({**UNREAD, "unread_items": [
+                                 {"id": i, "title": "国庆维护公告与站点维护安排的详细说明" * 2}
+                                 for i in range(1, 11)]})))))
 
 # 缺字段/形态不符一律空串——**不写 0**（"0 条未读"是结论，"没读到字段"不是）
 check("未读汇总缺字段 → 空摘要（不写 0）",
