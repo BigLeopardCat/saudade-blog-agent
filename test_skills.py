@@ -2444,6 +2444,21 @@ def test_short_reply_and_adjacent_pairs():
         check(f"短应答·同意「{t}」", _short_reply_kind(t) == "pos", _short_reply_kind(t))
     for t in ("不用了", "不用", "那算了", "算了，不用", "别了", "先不用", "没事了"):
         check(f"短应答·拒绝「{t}」", _short_reply_kind(t) == "neg", _short_reply_kind(t))
+    # —— 授权式（20260923 P1）：主人没指定做哪件，把选择权也交给泠月 ——
+    # 事故原文就是第一条（20260923T131918 主人原话），它此前落在三不管地带：
+    # 不在 pos（=不是"同意那件具体事"）、不在 neg，于是 short_reply 恒为空 ⇒
+    # planner 没有任何确定性指引，最后 narrator 从历史里挑了个旧留言当目标。
+    for t in ("小猫咪按你想法来吧", "按你想法来", "按你的想法来办吧", "你看着办",
+              "看着办吧", "你决定", "都听你的", "听你的", "随你", "随你便", "随便你",
+              "都行", "怎么都行", "都可以", "你拿主意", "你说了算", "你安排"):
+        check(f"短应答·授权「{t}」", _short_reply_kind(t) == "auth", _short_reply_kind(t))
+    # 授权 ≠ 同意：裸"好/行/可以"承接的是**具体那件事**，不许被并进 auth
+    for t in ("好", "行", "可以", "好的"):
+        check(f"裸肯定「{t}」仍是 pos（授权式不吞同意式）",
+              _short_reply_kind(t) == "pos", _short_reply_kind(t))
+    for t in ("帮我把樱花打开", "你看着办吧，先别动那篇文章", "我觉得都行啊不过先看看"):
+        check(f"非短应答（授权形态的长句）「{t[:10]}」",
+              _short_reply_kind(t) == "", _short_reply_kind(t))
     # 非短应答：长句 / 别的话题 / 近似但不同的句子都不许误判成应答
     for t in ("帮我看看《架构文档》里快道怎么写的", "你好呀小猫咪", "要的是哪一篇来着",
               "把樱花打开", "不用麻烦了，我自己去看那篇文章就好"):
@@ -2495,6 +2510,19 @@ def test_short_reply_and_adjacent_pairs():
           "同意" in pos and "规划" in pos and "不得只口头答应" in pos)
     neg = _short_reply_hint(proposal + [HumanMessage(content="不用了")])
     check("短应答提示·拒绝：零调用收尾", "拒绝" in neg and "不规划任何工具" in neg)
+    # —— 授权式提示（20260923 P1）：三件事必须都写清，缺一条就会重演 13:19 那条事故 ——
+    auth = _short_reply_hint(proposal + [HumanMessage(content="小猫咪按你想法来吧")])
+    check("短应答提示·授权：点名「授权式」而不是当成同意", "授权式" in auth)
+    check("短应答提示·授权：目标必须从系统数据里定", "目标必须从系统数据里定" in auth)
+    check("短应答提示·授权：禁止从历史里挑自然语言当目标",
+          "不许从历史对话里挑一条自然语言当目标" in auth)
+    check("短应答提示·授权：候选不唯一 → 零写 + 请主人点名",
+          "零写" in auth and "绝不替主人选" in auth)
+    check("短应答提示·授权：不许声称已发起/已确认", "绝不声称已经发起" in auth)
+    check("带壳授权式提示：真的给出「授权式」指令（生产形态）",
+          "授权式" in _short_reply_hint(proposal + [HumanMessage(content="[当前问题]: 小猫咪按你想法来吧")]))
+    check("带壳授权式分类", _short_reply_kind("[当前问题]: 你看着办") == "auth",
+          _short_reply_kind("[当前问题]: 你看着办"))
     # 提示块本身也要在**带壳**形态下生效（用户消息进 hint 前同样带壳）
     check("带壳短应答提示·同意：真的给出「同意」指令",
           "同意" in _short_reply_hint(proposal + [HumanMessage(content="[当前问题]: 要")]))
