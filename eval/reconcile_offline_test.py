@@ -19,6 +19,7 @@
 import gzip
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -261,6 +262,18 @@ check("⑪ 对账是**非门禁**（失败不置 fail 标记）",
       and not any("trace_reconcile" in ln and "fail=1" in ln for ln in src.splitlines()),
       "对账红了不该让整个夜间任务变红")
 check("⑪ 脚本头部提到对账这一节（考古锚点）", "跨源对账" in src)
+
+# 20260924：`>> "$LOG"echo "…"` 这种"两条语句粘成一行"不会报语法错（bash -n 全绿），
+# 但后一条变成了前一条 `||` 的右支：段头只在**上一条失败时**才打进日志。实测就是这么
+# 埋进去的——golden 那一节的段头从此不见了。判据：重定向目标 `"$LOG"` 之后只能接空白、
+# 行尾或 shell 分隔符（`;` `&` `|` `)`），接别的就是粘了一个裸词上去。
+_glued = [ln for ln in src.splitlines()
+          if re.search(r'"\$LOG"[^\s;&|)]', ln)]
+check("⑪ 没有语句粘连（`>> \"$LOG\"` 后面不得直接跟词）", not _glued,
+      "；".join(_glued) or "粘连的语句会退化成一行的右支，段头只在失败时才出现")
+_golden_hdr = [ln for ln in src.splitlines() if ln.startswith("echo ") and "golden set" in ln]
+check("⑪ golden 那一节的段头自占一行（它就是被粘连吃掉的那一条）", len(_golden_hdr) == 1,
+      _golden_hdr or "找不到 golden set 段头")
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("全部符合预期" if not FAILS else f"不符预期 {len(FAILS)} 项：" + "; ".join(FAILS)))
