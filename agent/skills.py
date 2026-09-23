@@ -64,6 +64,11 @@ NAV_MAP: dict[str, str | None] = {
 from tools.base import _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS
 from agent.refs import is_ref  # 参数引用 $tool[0].field（20260919，见 instantiate_plan）
 from agent.principal import ROLE_ADMIN  # 技能可见性按角色过滤（20260921 管理助手）
+# 管理读工具清单从 authz 的 scope 表**派生**（20260924）：哪些工具是"后台读面"
+# 是安全边界的事实，边界定义在 authz（`SCOPE_ADMIN_CONSOLE` = Rust auth_guard 后面的
+# 只读接口），这里只消费它——手抄一份名单必然与边界漂移。authz 只依赖 principal，
+# 无循环导入。
+import agent.authz as authz
 import agent.adminops as A  # 写操作的纯函数层（归一/渲染，见 instantiate_plan 写分支）
 
 
@@ -166,11 +171,87 @@ _CALLABLE_QUERY_TOOLS_ORDER: list[str] = _EXPLICIT_TOOLS_ORDER + [
 ]
 _CALLABLE_QUERY_TOOLS: set[str] = set(_CALLABLE_QUERY_TOOLS_ORDER)
 
-# 工具枚举文本（技能描述/参数说明注入用）：从上面两份清单派生——白名单增删时
-# 描述文本自动跟随，杜绝"清单加了工具、描述还写着旧枚举"的手抄漂移。
-_EXPLICIT_TOOLS_TEXT = "/".join(_EXPLICIT_TOOLS_ORDER)
-_PARAM_TOOLS_TEXT = "/".join(
-    t for t in _CALLABLE_QUERY_TOOLS_ORDER if t not in _EXPLICIT_TOOLS)
+# 后台读面工具（20260924 用户拍板：**按角色**并入可点名清单）——从 authz 的 scope 表
+# 派生（见顶部 import 注），顺序即 authz 里的登记顺序（按报表分组，稳定）。
+_ADMIN_QUERY_TOOLS_ORDER: list[str] = [
+    name for name, scope in authz.TOOL_SCOPE.items()
+    if scope == authz.SCOPE_ADMIN_CONSOLE
+]
+
+
+def _admin_extra(flat: list[str]) -> list[str]:
+    """后台读面里**不在** `flat` 的那些（按 authz 登记顺序）——两条通道共用。"""
+    return [t for t in _ADMIN_QUERY_TOOLS_ORDER if t not in flat]
+
+
+def callable_query_tools(role: str | None) -> list[str]:
+    """本轮角色可点名的工具清单（顺序 = planner 菜单展示顺序，= `PARAMS.calls` 的可用集合）。
+
+    公开那半是角色无关常量（`_CALLABLE_QUERY_TOOLS_ORDER`）；**管理员**额外拿到
+    `_ADMIN_QUERY_TOOLS_ORDER`（后台读面，scope=admin.console）。
+
+    **为什么按角色放开**（20260924 实测的代价）：那 5 个后台读工具本来只有
+    `admin_notes`/`user_report`/… **技能通道**一条路可达，而工具菜单是角色无关常量
+    ⇒ 管理员 planner 看到菜单上有 `list_admin_notes` 就点名它 ⇒ 被剔空 ⇒ 触发剔空
+    纠偏重决策 ⇒ 下一轮再点一次。实测 `admin_notes_console_list` **每次跑满 4 个
+    规划轮、同一工具执行 4 次**（四倍 token、四倍上游查询）——"意图对路但通道不对"
+    的账单。
+
+    **两条通道都要按角色取**（同日第二版，被 golden 实证打回）：planner 看菜单上
+    写的是 `- list_admin_notes()`（无参），自然写进 **`PARAMS.tools`**（无参点名），
+    而 `tools` 那条通道此前仍是角色无关常量 ⇒ 照样剔空、照样 4 轮（trace
+    `20260924T055910` 实证）。所以 `tools` 的可用集合由 `explicit_tools(role)` 给、
+    `calls` 的由本函数给，**两条同源同角色**。
+
+    **写面工具永远不在清单里**（它们经技能模板展开，写操作必须过"本轮明确下令"
+    那道门）；本函数只加 `SCOPE_ADMIN_CONSOLE`（只读）那一族，`test_skills` 另有
+    断言把这条锁死——清单里出现任何写 scope 的工具即红。
+
+    `role=None`（身份不明/单测/老路径）→ 只剩公开清单，**失败取向往保守一侧倒**
+    （与 `visible_skills`、authz 同向）。
+    """
+    if role == ROLE_ADMIN:
+        return _CALLABLE_QUERY_TOOLS_ORDER + _admin_extra(_CALLABLE_QUERY_TOOLS_ORDER)
+    return list(_CALLABLE_QUERY_TOOLS_ORDER)
+
+
+def explicit_tools(role: str | None) -> list[str]:
+    """本轮角色可经 `PARAMS.tools` 点名的**无参只读**工具（顺序同上）。
+
+    与 `callable_query_tools` 的差别是"这条通道只收无参的"：后台读面那 5 件都
+    可以无参调用（`get_moderation_status` 的 `status` 是可选过滤），所以整族在
+    管理员档进本通道，同时在 `param_tools(admin)` 里也有——带过滤参数的写法走
+    `PARAMS.calls` 同样合法，**两条写着都一样**，planner 不必猜哪条才对。
+    """
+    if role == ROLE_ADMIN:
+        return _EXPLICIT_TOOLS_ORDER + _admin_extra(_EXPLICIT_TOOLS_ORDER)
+    return list(_EXPLICIT_TOOLS_ORDER)
+
+
+def param_tools(role: str | None) -> list[str]:
+    """`PARAMS.calls` 描述文本里列出的工具（= 调用清单减去无参点名那半）。
+
+    只为**描述文本**服务（白名单判据在 `callable_query_tools`，别拿它当判据）。
+    管理员档把后台读面整族也列上——它们带过滤参数（如 `get_moderation_status` 的
+    `status`）时只能走本通道。
+    """
+    public = [t for t in _CALLABLE_QUERY_TOOLS_ORDER if t not in _EXPLICIT_TOOLS]
+    if role == ROLE_ADMIN:
+        return public + list(_ADMIN_QUERY_TOOLS_ORDER)
+    return public
+
+
+# 技能描述里的工具枚举**不能是模块常量**（20260924）：它是角色相关的，得在
+# build_planner_context 里按 role 展开。占位标记刻意**不含花括号**——整份 planner
+# 提示词最后要过 `_PLANNER_PROMPT.format(...)`，带 `{}` 的标记会被当成占位符炸掉。
+_EXPLICIT_TOOLS_MARK = "__无参只读工具清单__"
+_PARAM_TOOLS_MARK = "__带参工具清单__"
+
+
+def render_tool_marks(text: str, role: str | None) -> str:
+    """把技能描述里的工具枚举标记按本轮角色展开（`build_planner_context` 调）。"""
+    return (text.replace(_EXPLICIT_TOOLS_MARK, "/".join(explicit_tools(role)))
+                .replace(_PARAM_TOOLS_MARK, "/".join(param_tools(role))))
 
 
 # 口语模糊归一（NAV_MAP 精确命中的兜底）：枚举别名覆盖不了无穷口语变体
@@ -301,7 +382,7 @@ SKILLS: list[Skill] = [
             "内容是否存在；执行是否属实的问题归跨轮执行记忆（页面上下文『确认与执行事实』块里『已执行』那半），"
             "见规划规则 6，不在本技能范围）。"
             "规划方式：数据/列表型 → PARAMS.tools 点名无参只读数据工具"
-            f"（{_EXPLICIT_TOOLS_TEXT}，"
+            f"（{_EXPLICIT_TOOLS_MARK}，"
             "'有没有人聊过/写过 X'必须成对点名两个数据源；天气用 PARAMS.calls 给 "
             "get_weather(location)）；知识型/验证型 → PARAMS.calls"
             " 给出带参调用清单（search_notes/rag_search 定位、get_article_detail 读全文），"
@@ -309,12 +390,12 @@ SKILLS: list[Skill] = [
         ),
         inputs={
             "tools": (
-                f"（可选）无参只读数据工具点名列表，仅限 {_EXPLICIT_TOOLS_TEXT}；"
+                f"（可选）无参只读数据工具点名列表，仅限 {_EXPLICIT_TOOLS_MARK}；"
                 "'有没有人聊过/写过 X'必须成对点名 list_guestbook 与 list_talks"
             ),
             "calls": (
                 "（可选）带参调用清单：[{\"tool\": \"search_notes\", \"args\": {\"keyword\": "
-                f"\"用户原词\"}}]；工具仅限 {_PARAM_TOOLS_TEXT} 与无参数据工具；"
+                f"\"用户原词\"}}]；工具仅限 {_PARAM_TOOLS_MARK}；"
                 "get_article_detail 的 id 只能取自上一轮工具返回"
             ),
         },
@@ -1248,7 +1329,8 @@ def _expand_own_skill(skill, params: dict) -> tuple[list[str], str]:
     return [], f"{name}：未知的写技能（不调用任何工具）"
 
 
-def instantiate_plan(skill_name: str, params: dict) -> dict:
+def instantiate_plan(skill_name: str, params: dict,
+                     role: str | None = None) -> dict:
     """技能模板 + 参数 → 结构化计划。
 
     返回 {"skill", "tools"(list[str]), "note"(str), "reply"(str), "chat"(bool)}。
@@ -1256,6 +1338,15 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
     特殊处理：
       - navigate：target 经 NAV_MAP 映射；映射为 None（已下线）→ 不调用工具、如实告知；
         未识别别名 → 如实告知没有该页面；confirm 由 mode 派生
+
+    `role`（20260924）= 本轮调用者角色，只影响 content_query 的 `PARAMS.calls`
+    白名单（见 `callable_query_tools`：管理员多一份后台只读清单）。**默认 None =
+    公开清单**——`planner_node` 必须把本轮 role 传进来；漏传的后果是**静默的**：
+    管理员点名的后台读工具在 calls 里被剔除 ⇒ 剔空纠偏 ⇒ planner 反复重规划
+    （`admin_notes_console_list` 实测每次跑满 4 轮就是这条路径）。其余调用点
+    （`_*_fix` 校正器、decisions 快道）重建的都是自己构造的参数、且技能都不是
+    content_query，传 None 无害；但凡能把 planner 产出的计划整体重建一遍的地方，
+    都应当把 role 一并带上。
     """
     skill = SKILL_MAP.get(skill_name) or SKILL_MAP["chat"]
     tools: list[str] = []
@@ -1318,8 +1409,10 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
             note = f"读取当前文章全文（ID={aid}）"
     elif skill.name == "content_query" and (params.get("tools") or params.get("calls")):
         # 20260903 架构裁决（planner 全权）：内容查询的调用清单由 planner 产出——
-        # params.tools（无参只读点名，白名单 _EXPLICIT_TOOLS）或 params.calls
-        # （带参检索调用，白名单 _CALLABLE_QUERY_TOOLS）。两层白名单校验，非法/
+        # params.tools（无参只读点名，白名单 explicit_tools(role)）或 params.calls
+        # （带参检索调用，白名单 callable_query_tools(role)）。两条白名单都**按
+        # 本轮角色**取（20260924：管理员多一份后台只读项，见 callable_query_tools
+        # 与 explicit_tools 的注）。两层白名单校验，非法/
         # 重复条目剔除（合法条目仍生效——不因模型多写一个越权工具就整单作废）；
         # 调用清单为空 = planner 决策无需工具（收尾轮）——不再是"自由 ReAct"。
         # 20260913：剔除项记入 dropped 返回给 planner_node（WARNING + trace 事件）
@@ -1328,21 +1421,28 @@ def instantiate_plan(skill_name: str, params: dict) -> dict:
         picked: list[str] = []
         explicit = params.get("tools")
         if isinstance(explicit, list):
+            # 无参点名通道**也按角色取**（20260924 第二版）：菜单里那 5 个后台读
+            # 工具是无参的，planner 自然写进 PARAMS.tools——只看 calls 会让这条
+            # 通道继续剔空（golden trace 20260924T055910 实证：仍跑满 4 轮）。
+            allowed_explicit = set(explicit_tools(role))
             for t in explicit:
                 if not isinstance(t, str):
                     dropped.append(str(t))
-                elif t.strip() not in _EXPLICIT_TOOLS:
+                elif t.strip() not in allowed_explicit:
                     dropped.append(t.strip())
                 elif t.strip() not in picked:
                     picked.append(t.strip())
         calls = params.get("calls")
         if isinstance(calls, list):
+            # 白名单按本轮角色取（20260924）：管理员多一份后台只读清单。取一次算好，
+            # 别在循环里重复构造（这条路径每轮规划都走）。
+            allowed = callable_query_tools(role)
             for c in calls:
                 if not isinstance(c, dict) or not isinstance(c.get("tool"), str):
                     dropped.append(str(c))
                     continue
                 cname = c["tool"].strip()
-                if cname not in _CALLABLE_QUERY_TOOLS:
+                if cname not in allowed:
                     dropped.append(cname)
                 elif not isinstance(c.get("args"), dict):
                     dropped.append(f"{cname}（args 非对象）")
@@ -1526,4 +1626,6 @@ def build_planner_context(role: str | None = None) -> str:
         "口语变体（大小写 IOT/IoT/iot、'设备面板''管理设备'等同义说法）由系统自动归一，"
         "PARAMS.target 直接填映射表中最接近的别名即可，无需自创目标名"
     )
-    return "\n".join(lines)
+    # 技能描述里的工具枚举按角色展开（20260924）：那些标记是角色相关的，
+    # 用哪个角色渲染这条注入，白名单就必须用哪个角色判——两处同一个 role。
+    return render_tool_marks("\n".join(lines), role)

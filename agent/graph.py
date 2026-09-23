@@ -63,6 +63,7 @@ import json
 import logging
 import re
 import time
+from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -91,8 +92,9 @@ from agent.principal import UNKNOWN as UNKNOWN_PRINCIPAL
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
-                          _CALLABLE_QUERY_TOOLS_ORDER, _WRITE_NAME_TARGET_SKILLS,
-                          build_planner_context, instantiate_plan, visible_skills)
+                          _WRITE_NAME_TARGET_SKILLS,
+                          build_planner_context, callable_query_tools,
+                          instantiate_plan, visible_skills)
 from utils.trace import record
 
 if TYPE_CHECKING:   # 只为下面 `_principal_of` 的**字符串**注解能被静态检查看见。
@@ -589,17 +591,32 @@ _TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 doc
     # 两级一起给（20260921 修）：只写"一级标签"时 planner 会照菜单作答"站内没有
     # 二级标签"——工具早就读得到两级了，缺的只是菜单没说
     "list_tags": "无参直取：全部标签（一级 + 其下的二级，靠 level/fatherTag 区分）",
+    # 后台读面（20260924 用户拍板）：**只对 admin 出现**（白名单侧由
+    # skills.callable_query_tools 按角色放开，见该函数注）。说明里都带上"仅管理员"
+    # ——非 admin 的菜单里根本没有这些行，这句是给"管理员看到后知道自己为什么有"
+    # 用的，也顺带提醒它这类问题归管理岗、别拿去回答访客。
+    "list_admin_notes": "仅管理员：后台文章清单（含草稿/私密/置顶，公开接口看不见的那些）",
+    "get_user_stats": "仅管理员：用户数据统计（用户数/活跃度/会话与消息量）",
+    "get_moderation_status": "仅管理员：河灯留言审核状况（AI 通过/驳回/待人工复批），"
+                             "可选 status=ai_passed|ai_rejected|pending 只看某一类",
+    "get_server_status": "仅管理员：服务器状态报表（CPU/内存/磁盘/负载）",
+    "get_service_health": "仅管理员：服务健康报表（服务是否正常/异常告警/日志与心跳）",
 }
 
 
-def _tools_desc() -> str:
-    """planner 菜单：白名单顺序 × 注册表（工具名 + 派生参数签名 + 中文说明）。
+def _tools_desc(role: str | None = None) -> str:
+    """planner 菜单：**本轮角色**可点名的工具 × 注册表（工具名 + 派生参数签名 + 中文说明）。
 
     白名单里有、注册表里没有的工具（配置错误）跳过并告警——它进不了 execute
     （_TOOL_MAP 查不到 → __ERROR__ 帧），列进菜单只会诱导 planner 点它。
+
+    `role`（20260924）：清单本身由 `skills.callable_query_tools(role)` 给（管理员
+    多一份后台只读项）。**菜单与白名单必须是同一个来源**——菜单列了而白名单没有
+    = planner 照菜单点名、条目被剔空、白白重规划一轮（这正是本函数改成按角色取
+    的原因）；反过来白名单有而菜单没列 = planner 想不起来用它。
     """
     lines = []
-    for name in _CALLABLE_QUERY_TOOLS_ORDER:
+    for name in callable_query_tools(role):
         tool = _TOOL_MAP.get(name)
         if tool is None:
             logger.warning("[planner] 白名单工具 %s 不在注册表，菜单已剔除", name)
@@ -610,7 +627,11 @@ def _tools_desc() -> str:
     return "\n".join(lines)
 
 
-_QUERY_TOOLS_DESC = _tools_desc()
+# 菜单按角色缓存：每轮规划都要用，而 role 只有那么几种（role 是 hashable 的
+# str | None）。缓存值只依赖 role ⇒ 无状态，进程内共享安全。
+@lru_cache(maxsize=8)
+def _tools_desc_cached(role: str | None) -> str:
+    return _tools_desc(role)
 
 
 def _drop_correction(dropped: list[str], role: str | None) -> str:
@@ -2258,7 +2279,9 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 # 技能表按本轮角色过滤（20260921）：管理助手那三个技能只对 admin 列出，
                 # 其余角色看不到 ⇒ 选不出来。用 known_role（未知角色 → None → 只列公开技能）
                 skills_context=build_planner_context(role),
-                tools_desc=_QUERY_TOOLS_DESC,
+                # 菜单与 calls 白名单同源同角色（20260924）：菜单列了而白名单没有
+                # ⇒ planner 照菜单点名、条目被剔空、白跑一轮（见 _tools_desc 注）。
+                tools_desc=_tools_desc_cached(role),
                 page_ctx=page_ctx, round_info=round_info,
                 intent_hints=_intent_hints(state.get("executed") or [], user_msg),
                 doc_anchors=doc_anchors,
@@ -2303,7 +2326,8 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         skill_name = re.search(r"SKILL\s*[:=]\s*(\w+)", raw, re.IGNORECASE)
         skill_name = skill_name.group(1) if skill_name else "chat"
         params = _parse_params(raw)
-        plan_obj = instantiate_plan(skill_name, params)
+        # role 必须传：calls 白名单按角色取（管理员含后台只读项）。漏传 = 静默剔空。
+        plan_obj = instantiate_plan(skill_name, params, role)
         plan_obj["params"] = params
 
         # 白名单剔除可见化（20260913 B 项）：planner 点名了白名单外的工具时，条目被
@@ -2357,17 +2381,17 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 先过片段地基（20260922 ②防线）：留言的 quote 校正到主人引号里那段原话
         # （或在没有可指认的片段时确定性拒绝）——**必须在目标预检之前**，否则预检
         # 判的是 planner 那个被截短/被概括错的片段。
-        quote_refuse = _board_quote_fix(plan_obj, user_msg, rounds)
+        quote_refuse = _board_quote_fix(plan_obj, user_msg, rounds, role)
         # 公告的 title/content 同样有"主人自己标出来的原话"通道（20260922 ②防线续）：
         # 没有可拒绝的形态（公告一律弹窗、主人签字前看得见），只做校正。
-        _announcement_text_fix(plan_obj, user_msg)
+        _announcement_text_fix(plan_obj, user_msg, role)
         # 标签/分类/公告的**目标名**同理（②防线续二）：引号里那一段就是主人点名的
         # 那一个，planner 抄短了就校正回来——**必须在目标预检之前**，否则预检报的是
         # 另一个名字（"站内没有叫「绝对」的标签"）。
-        _name_target_fix(plan_obj, user_msg)
+        _name_target_fix(plan_obj, user_msg, role)
         # 写参数里的**名字值**（新名字 / 标签名列表 / 父标签）同理（②防线续五，见
         # `_name_arg_fix` 上方长注）：新建的名字天然不在字典里，只能来自主人这句话。
-        value_refuse = _name_arg_fix(plan_obj, user_msg)
+        value_refuse = _name_arg_fix(plan_obj, user_msg, role)
         subject = "站内的台账（标签/分类字典、公告清单、留言列表）与主人这句话本身"
         refusal = None
         if quote_refuse:
@@ -2907,11 +2931,16 @@ def _msg_verdict(user_msg) -> str | None:
     return "reject" if rej else "pass"
 
 
-def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0) -> str | None:
+def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0,
+                     role: str | None = None) -> str | None:
     """留言类写工具的 `quote` 校正到主人引号里那段原话。返回拒绝原因或 None（就地改）。
 
     单 spec 时校正/拒绝；**零工具**时补参（见下）。两者与 `_write_target_refusal`
     共用同一条边界。
+
+    `role` 只是往下透传给 `instantiate_plan`（重建计划时 calls 白名单要按角色取）。
+    本函数重建的总是留言类写技能、参数由它自己构造，角色在此不影响结果；带上它是
+    为了让"重建整个 planner 计划"的每一处都拿到同一个 role——漏传是静默的。
     """
     tools = plan_obj.get("tools") or []
     skill = plan_obj.get("skill") or "chat"
@@ -2937,7 +2966,7 @@ def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0) -> str | None:
                     "（%r）→ 按主人原话补参", spans[0][:40])
         record("planner", "quote_fill_from_span", skill=skill, quote=spans[0][:60],
                verdict=params.get("verdict"))
-        fresh = instantiate_plan(skill, params)
+        fresh = instantiate_plan(skill, params, role)
         fresh["params"] = params
         plan_obj.clear()
         plan_obj.update(fresh)
@@ -2977,7 +3006,7 @@ def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0) -> str | None:
             # 还写着 planner 那个错片段（实测："删除含「泠月」的那条…"）。
             params = dict(plan_obj.get("params") or {})
             params["quote"] = want
-            fresh = instantiate_plan(plan_obj.get("skill") or "chat", params)
+            fresh = instantiate_plan(plan_obj.get("skill") or "chat", params, role)
             fresh["params"] = params
             plan_obj.clear()
             plan_obj.update(fresh)
@@ -3025,12 +3054,16 @@ def _msg_marked_field(user_msg, kind: str) -> str | None:
     return m.group(1).strip().strip("「」『』“”\"") or None
 
 
-def _announcement_text_fix(plan_obj: dict, user_msg) -> None:
+def _announcement_text_fix(plan_obj: dict, user_msg,
+                          role: str | None = None) -> None:
     """公告的 `title`/`content` 校正到主人写下的原话（就地改；无标记/多 spec 不动）。
 
     · create：`title` 认「标题叫「X」」标记，`content` 认「正文写：…」标记；
     · update/delete：`title` 是**要动的那条**的身份，只认**唯一一段引号**
       （改公告那句话里常有两段引号——旧标题与新标题，指向谁并不唯一）。
+
+    `role` 仅透传给 `instantiate_plan`（重建计划时 calls 白名单按角色取），
+    本函数只处理公告三件、参数自造，角色不改变结果。
     """
     tools = plan_obj.get("tools") or []
     if len(tools) != 1:
@@ -3076,7 +3109,7 @@ def _announcement_text_fix(plan_obj: dict, user_msg) -> None:
     # `_board_quote_fix`：只改 spec 字符串的话，注记里还是 planner 那个错值）。
     params = dict(plan_obj.get("params") or {})
     params.update(fixed)
-    fresh = instantiate_plan(plan_obj.get("skill") or "chat", params)
+    fresh = instantiate_plan(plan_obj.get("skill") or "chat", params, role)
     fresh["params"] = params
     plan_obj.clear()
     plan_obj.update(fresh)
@@ -3240,8 +3273,12 @@ def _owner_target_span(got: str, spans: list[str], parent: str,
     return None
 
 
-def _name_target_fix(plan_obj: dict, user_msg) -> None:
-    """按名字指认的写工具：目标名校正到主人引号里那一段（就地改；不动别的参数）。"""
+def _name_target_fix(plan_obj: dict, user_msg,
+                     role: str | None = None) -> None:
+    """按名字指认的写工具：目标名校正到主人引号里那一段（就地改；不动别的参数）。
+
+    `role` 仅透传给 `instantiate_plan`（重建计划时 calls 白名单按角色取）。
+    """
     tools = plan_obj.get("tools") or []
     if len(tools) != 1:
         return
@@ -3301,7 +3338,7 @@ def _name_target_fix(plan_obj: dict, user_msg) -> None:
         record("planner", "name_target_correct", tool=name, field=pkey,
                got=pv[:60], used=other[:60])
         params[pkey] = other
-    fresh = instantiate_plan(plan_obj.get("skill") or "chat", params)
+    fresh = instantiate_plan(plan_obj.get("skill") or "chat", params, role)
     fresh["params"] = params
     plan_obj.clear()
     plan_obj.update(fresh)
@@ -3443,11 +3480,14 @@ def _grounded_value(val, sq_msg: str) -> bool:
     return v in sq_msg
 
 
-def _name_arg_fix(plan_obj: dict, user_msg) -> tuple[str, str] | None:
+def _name_arg_fix(plan_obj: dict, user_msg,
+                  role: str | None = None) -> tuple[str, str] | None:
     """写参数里的名字值校正到主人的原话（就地改）；校正不了则返回 `(工具名, 原因)`。
 
     只管**值**字段（`_WRITE_VALUE_FIELDS`）与 `parent_tag`——目标字段是
     `_name_target_fix` 的地盘，两者分工不重叠。
+
+    `role` 仅透传给 `instantiate_plan`（重建计划时 calls 白名单按角色取）。
     """
     tools = plan_obj.get("tools") or []
     if len(tools) != 1:
@@ -3551,7 +3591,7 @@ def _name_arg_fix(plan_obj: dict, user_msg) -> tuple[str, str] | None:
            got={k: str(params.get(k))[:60] for k in fixed},
            used={k: str(v)[:60] for k, v in fixed.items()})
     params.update(fixed)
-    fresh = instantiate_plan(plan_obj.get("skill") or "chat", params)
+    fresh = instantiate_plan(plan_obj.get("skill") or "chat", params, role)
     fresh["params"] = params
     plan_obj.clear()
     plan_obj.update(fresh)
@@ -4062,7 +4102,8 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     20260827 实测教训保留：工具执行前做断连检查——写操作（设备指令下发/导航/
     特效切换）绝不发生在用户已离开之后。
     执行器无自由意志因此也无越权通道：planner 决策经 instantiate_plan 白名单
-    （_EXPLICIT_TOOLS/_CALLABLE_QUERY_TOOLS/技能模板）生成，execute 照单全收；
+    （explicit_tools/callable_query_tools 按本轮角色取，或技能模板）生成，execute
+    照单全收；
     与旧 tools_node 的差异 = 没有"model 自拟参数""计划外调用授权拒绝"分支——
     那些自由在 20260903 已从执行层移除（用户裁决）。20260904：checker 是
     确定性验收函数（读回执形态），不新增决策权——执行层仍零自由。

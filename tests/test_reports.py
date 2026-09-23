@@ -544,14 +544,25 @@ finally:
 
 
 print("\n⑪ 结构性不可达 + 接线在位（改坏了这几处，上面的功能就静默失效）")
-from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS, SKILL_MAP, build_planner_context  # noqa: E402
-from agent.graph import _CALLABLE_QUERY_TOOLS_ORDER, _CONTENT_TOOLS, _tools_desc  # noqa: E402
+from agent.skills import (_CALLABLE_QUERY_TOOLS, _CALLABLE_QUERY_TOOLS_ORDER,
+                          _EXPLICIT_TOOLS, SKILL_MAP, build_planner_context,
+                          callable_query_tools)  # noqa: E402
+from agent.graph import _CONTENT_TOOLS, _tools_desc  # noqa: E402
 
 NEW = ["get_server_status", "get_service_health", "get_moderation_status", "get_user_stats"]
-check("四个新工具都不在 planner 点名白名单（planner 结构上点不到）",
-      all(n not in _EXPLICIT_TOOLS and n not in _CALLABLE_QUERY_TOOLS for n in NEW))
-check("也不在 planner 可调用清单顺序表里", all(n not in _CALLABLE_QUERY_TOOLS_ORDER for n in NEW))
-check("_tools_desc() 里不出现（菜单不可见）", all(n not in _tools_desc() for n in NEW))
+# 「结构性不可达」是**分角色**的（20260924 起）：这台四个报表工具都声明为
+# admin.console ⇒ 访客/未知身份结构上点不到，管理员则可经 calls 直接点名
+# （与 list_admin_notes 同批放开，见 tests/test_skills.test_admin_console_role_channel）。
+check("四个新工具都不在**访客**点名白名单（role=None 结构上点不到）",
+      all(n not in _EXPLICIT_TOOLS and n not in callable_query_tools(None) for n in NEW))
+check("也不在访客可调用清单顺序表里（公开那半是角色无关常量）",
+      all(n not in _CALLABLE_QUERY_TOOLS_ORDER for n in NEW))
+check("_tools_desc(None) 里不出现（访客菜单不可见）",
+      all(n not in _tools_desc(None) for n in NEW))
+check("反过来：管理员既能点名、菜单里也看得见（菜单与白名单同源）",
+      all(n in callable_query_tools("admin") and f"- {n}(" in _tools_desc("admin")
+          for n in NEW),
+      str([n for n in NEW if n not in callable_query_tools("admin")]))
 check("都进了 _CONTENT_TOOLS（否则报表轮的『暂无待审』会被判洞④整轮 fallback）",
       all(n in _CONTENT_TOOLS for n in NEW))
 check("都进了注册表", all(n in {t.name for t in base._TOOL_REGISTRY} for n in NEW))
@@ -600,10 +611,20 @@ from agent.skills import WRITE_SKILL_NAMES  # noqa: E402
 
 W2 = ["list_admin_notes", "create_tag", "set_article_status", "set_article_tags"]
 WRITES = ["create_tag", "set_article_status", "set_article_tags"]
-check("四个后台工具都不在 planner 点名白名单（planner 结构上点不到）",
-      all(n not in _EXPLICIT_TOOLS and n not in _CALLABLE_QUERY_TOOLS for n in W2))
-check("也不在 planner 可调用清单顺序表里", all(n not in _CALLABLE_QUERY_TOOLS_ORDER for n in W2))
-check("_tools_desc() 里不出现（菜单不可见）", all(n not in _tools_desc() for n in W2))
+# `list_admin_notes` 是**读**面：20260924 起按角色可点名（管理员），本段其余三个
+# 是写面——写工具**任何角色**都不得出现在 planner 白名单/菜单里（只由技能模板展开）。
+check("读面那件不在访客白名单、写面三件谁的白名单都不在",
+      all(n not in _EXPLICIT_TOOLS and n not in _CALLABLE_QUERY_TOOLS for n in W2)
+      and all(n not in callable_query_tools(r) for n in WRITES
+              for r in (None, "user", "admin")))
+check("admin.console 的读面按角色放开（管理员可在）、write.console 那三个永远不在",
+      "list_admin_notes" in callable_query_tools("admin")
+      and "list_admin_notes" not in callable_query_tools("user")
+      and all(n not in _CALLABLE_QUERY_TOOLS_ORDER for n in WRITES))
+check("写面三件在任一档菜单里都不可见；读面那件只在管理员菜单里",
+      all(n not in _tools_desc(None) and n not in _tools_desc("admin") for n in WRITES)
+      and "list_admin_notes" not in _tools_desc(None)
+      and "- list_admin_notes(" in _tools_desc("admin"))
 check("都进了注册表", all(n in {t.name for t in base._TOOL_REGISTRY} for n in W2))
 check("scope：读走 admin.console、三个写走 write.console（写是**另一个** scope，"
       "不是把读的权限放大）",

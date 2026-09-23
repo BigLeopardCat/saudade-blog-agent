@@ -582,7 +582,8 @@ def test_planner_tool_menu():
     print("[planner_menu] 菜单 = 白名单 × 注册表")
     import agent.graph as g
     from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
-    menu = g._QUERY_TOOLS_DESC
+    # 菜单按角色取（20260924）：本段锁的是**公开**那半（role=None ⇒ 保守一侧）
+    menu = g._tools_desc(None)
     missing = [t for t in sorted(_CALLABLE_QUERY_TOOLS) if f"- {t}(" not in menu]
     check("白名单每个工具都在菜单里（无漏列）", not missing, f"missing={missing}")
     check("白名单工具都能进 execute（注册表齐全）",
@@ -600,11 +601,172 @@ def test_planner_tool_menu():
     # 参数签名从注册表派生（planner 看得到要填什么参数）
     check("菜单派生参数签名（search_notes(keyword)）", "- search_notes(keyword)：" in menu, f"menu={menu}")
     check("菜单派生参数签名（get_weather(location)）", "- get_weather(location)：" in menu, f"menu={menu}")
-    # 无参工具枚举文本与白名单同源（技能描述/参数说明注入）
-    from agent.skills import _EXPLICIT_TOOLS_TEXT
-    check("描述枚举与白名单同源",
-          all(t in _EXPLICIT_TOOLS_TEXT for t in sorted(_EXPLICIT_TOOLS)),
-          f"text={_EXPLICIT_TOOLS_TEXT}")
+    # 技能描述里的工具枚举与白名单同源（20260924 起按角色渲染，断言**渲染后的**
+    # 注入文本——标记漏渲染会让提示词里直接露出占位符）
+    from agent.skills import _EXPLICIT_TOOLS_MARK, _PARAM_TOOLS_MARK, build_planner_context
+    ctx_txt = build_planner_context(None)
+    check("描述枚举与白名单同源（渲染后逐项可见）",
+          all(t in ctx_txt for t in sorted(_EXPLICIT_TOOLS)),
+          str([t for t in sorted(_EXPLICIT_TOOLS) if t not in ctx_txt]))
+    check("占位标记已渲染掉（不许把标记原文泄进 planner 提示词）",
+          _EXPLICIT_TOOLS_MARK not in ctx_txt and _PARAM_TOOLS_MARK not in ctx_txt)
+
+
+def _menu_names(desc: str) -> list[str]:
+    """菜单文本 → 工具名列表（`- name(args)：说明` 每行一条）。"""
+    return [ln[2:].split("(")[0].strip() for ln in desc.splitlines() if ln.startswith("- ")]
+
+
+def test_admin_console_role_channel():
+    """后台读工具**按角色**进 calls 白名单（20260924 用户拍板）。
+
+    动机是实测账单：管理员读后台清单的用例 `admin_notes_console_list` **每次跑满
+    4 个规划轮、同一工具执行 4 次**——planner 照菜单（角色无关常量）点名
+    `list_admin_notes`，而 calls 白名单里没有它 ⇒ 每轮剔空 ⇒ 剔空纠偏重决策 ⇒
+    下一轮再点一次。四倍 token、四倍上游查询，就是"意图对路但通道不对"的账单。
+
+    本段锁三条契约：①菜单与白名单**同源**（列了不放行 = 白填一轮；放行没列 =
+    想不起来用）；②扩展的**只有读面**（admin.console），写面工具永远不在清单里；
+    ③`role=None`/未知角色失败取向往保守一侧倒（只剩公开清单）。
+    """
+    print("[admin_channel] 后台读工具按角色进 calls 白名单")
+    import agent.authz as authz
+    import agent.graph as g
+    from agent.skills import (_ADMIN_QUERY_TOOLS_ORDER, _CALLABLE_QUERY_TOOLS_ORDER,
+                              _EXPLICIT_TOOLS_ORDER, build_planner_context,
+                              callable_query_tools, explicit_tools)
+
+    public = list(_CALLABLE_QUERY_TOOLS_ORDER)
+    check("后台读清单非空（派生自 authz 的 admin.console 那族）",
+          bool(_ADMIN_QUERY_TOOLS_ORDER),
+          "authz.TOOL_SCOPE 里没有 scope=admin.console 的工具？派生链断了")
+    # ① 只读锁：扩展清单里出现任何写 scope 的工具即红
+    writable = [t for t in _ADMIN_QUERY_TOOLS_ORDER
+                if authz.required_scope(t) in authz.WRITE_SCOPES]
+    check("只读锁：扩展项里没有写 scope 的工具（写只走技能模板）",
+          not writable, f"writable={writable}")
+    check("扩展项就是 admin.console 那一族",
+          all(authz.required_scope(t) == authz.SCOPE_ADMIN_CONSOLE
+              for t in _ADMIN_QUERY_TOOLS_ORDER),
+          str({t: authz.required_scope(t) for t in _ADMIN_QUERY_TOOLS_ORDER}))
+    check("写面 scope 与后台读 scope 是两个（别把 write.console 当读面放开）",
+          authz.SCOPE_WRITE_CONSOLE != authz.SCOPE_ADMIN_CONSOLE
+          and authz.SCOPE_WRITE_CONSOLE in authz.WRITE_SCOPES)
+    # ② 角色分档（role=None / 未知角色 → 保守一侧）
+    check("role=None → 只有公开清单", callable_query_tools(None) == public,
+          str(callable_query_tools(None)))
+    check("未知角色（user / 空串 / 乱码）→ 与 None 同",
+          all(callable_query_tools(r) == public for r in ("user", "", "owner", "root")))
+    admin = callable_query_tools(authz.ROLE_ADMIN)
+    check("role=admin → 公开清单 + 后台读清单（只增不减、无重复）",
+          admin[:len(public)] == public and len(admin) == len(set(admin))
+          and set(admin) - set(public) == set(_ADMIN_QUERY_TOOLS_ORDER),
+          f"admin={admin}")
+    # ③ 菜单与白名单同源（顺序也要同）
+    menu_admin = g._tools_desc(authz.ROLE_ADMIN)
+    menu_none = g._tools_desc(None)
+    check("菜单（公开档）逐条 == 白名单（公开档）",
+          _menu_names(menu_none) == public, str(_menu_names(menu_none)))
+    check("菜单（admin 档）逐条 == 白名单（admin 档）",
+          _menu_names(menu_admin) == admin, str(_menu_names(menu_admin)))
+    missing = [t for t in _ADMIN_QUERY_TOOLS_ORDER if f"- {t}(" not in menu_admin]
+    check("后台读工具都在 admin 菜单里（带参数签名）", not missing, f"missing={missing}")
+    check("后台读工具在公开菜单里一个都没有",
+          not any(f"- {t}(" in menu_none for t in _ADMIN_QUERY_TOOLS_ORDER))
+    check("菜单说明带「仅管理员」标记（让管理员知道为什么自己有、访客没有）",
+          all(f"- {t}(" in menu_admin and "仅管理员" in menu_admin
+              for t in _ADMIN_QUERY_TOOLS_ORDER) and "仅管理员" not in menu_none)
+    check("admin 菜单也不含写/动作工具（写只能经技能模板触发）",
+          not any(f"- {t}(" in menu_admin
+                  for t in ("add_favorite", "remove_favorite", "read_messages",
+                            "delete_tag", "create_tag", "article_status",
+                            "navigate_to", "toggle_effect", "device_oled_display")))
+    # 穷举版（不手抄名单）：scope 表里凡写面工具，任一档菜单都不得出现、也不得进
+    # callable_query_tools —— 将来往 authz 加工具时这条自动覆盖
+    _write_tools = sorted(t for t, s in authz.TOOL_SCOPE.items()
+                          if s in authz.WRITE_SCOPES)
+    check(f"穷举：{len(_write_tools)} 个写面工具在任一档菜单/白名单里都不可见",
+          bool(_write_tools)
+          and not any(f"- {t}(" in menu_admin or f"- {t}(" in menu_none
+                      or t in callable_query_tools(authz.ROLE_ADMIN)
+                      for t in _write_tools),
+          str([t for t in _write_tools
+               if f"- {t}(" in menu_admin or t in callable_query_tools(authz.ROLE_ADMIN)]))
+    # 参数签名从注册表派生（planner 看得到要填什么）
+    sig = ", ".join((getattr(g._TOOL_MAP["get_moderation_status"], "args", None) or {}).keys())
+    check(f"菜单派生参数签名（get_moderation_status({sig})）",
+          f"- get_moderation_status({sig})：" in menu_admin, f"menu={menu_admin}")
+    check("菜单缓存按角色分开（同角色同对象，不同角色不同串）",
+          g._tools_desc_cached(authz.ROLE_ADMIN) is g._tools_desc_cached("admin")
+          and isinstance(g._tools_desc_cached(None), str)
+          and g._tools_desc_cached(None) != g._tools_desc_cached(authz.ROLE_ADMIN))
+    # ④ 端到端：同一条 calls 在两个角色下的处置（本批修复的验收点）
+    def _p(role):
+        return instantiate_plan("content_query",
+                                {"calls": [{"tool": "list_admin_notes", "args": {}}]}, role)
+    p_none = _p(None)
+    check("role=None：后台读工具被剔除并记入 dropped（有据不静默）",
+          p_none["tools"] == [] and p_none["dropped"] == ["list_admin_notes"],
+          str(p_none))
+    p_admin = _p(authz.ROLE_ADMIN)
+    check("role=admin：展开进 TOOLS 行、dropped 为空（不再触发剔空纠偏）",
+          p_admin["tools"] == ['list_admin_notes({})'] and p_admin["dropped"] == [],
+          str(p_admin))
+    p_user = _p("user")
+    check("role=user：与 None 同（后台容量只对管理员开）",
+          p_user["tools"] == [] and p_user["dropped"] == ["list_admin_notes"],
+          str(p_user))
+    # 公开工具不受影响：两个角色下都能照常展开（只增不减的另一半）
+    def _pub(role):
+        return instantiate_plan("content_query",
+                                {"calls": [{"tool": "search_notes",
+                                            "args": {"keyword": "架构"}}]}, role)
+    check("公开工具在两个角色下都照常展开",
+          all(_pub(r)["tools"] == ['search_notes({"keyword": "架构"})']
+              and _pub(r)["dropped"] == []
+              for r in (None, "user", authz.ROLE_ADMIN)))
+
+    # ⑤ **无参点名通道同源同角色**（同日第二版：golden 实证只看 calls 不够）
+    # 菜单里后台读工具写的是 `- list_admin_notes()`（无参形态）⇒ planner 自然写进
+    # PARAMS.tools。trace 20260924T055910：只按角色放开 calls 之后，管理员仍跑满
+    # 4 轮（tools 那条通道照旧剔空）。
+    check("explicit_tools：公开档 = 无参只读清单，admin 档多出后台读面整族",
+          explicit_tools(None) == list(_EXPLICIT_TOOLS_ORDER)
+          and explicit_tools("user") == list(_EXPLICIT_TOOLS_ORDER)
+          and explicit_tools(authz.ROLE_ADMIN)[:len(_EXPLICIT_TOOLS_ORDER)]
+          == list(_EXPLICIT_TOOLS_ORDER)
+          and set(explicit_tools(authz.ROLE_ADMIN)) - set(_EXPLICIT_TOOLS_ORDER)
+          == set(_ADMIN_QUERY_TOOLS_ORDER))
+    check("无参通道的只读锁同上（explicit_tools 里也没有写 scope 的工具）",
+          not [t for t in explicit_tools(authz.ROLE_ADMIN)
+               if authz.required_scope(t) in authz.WRITE_SCOPES])
+
+    def _t(role):
+        return instantiate_plan("content_query", {"tools": ["list_admin_notes"]}, role)
+
+    check("role=admin：无参点名也放行（本轮修复的验收点）",
+          _t(authz.ROLE_ADMIN)["tools"] == ["list_admin_notes({})"]
+          and _t(authz.ROLE_ADMIN)["dropped"] == [], str(_t(authz.ROLE_ADMIN)))
+    check("role=None / user：无参点名照样剔除并记 dropped",
+          all(_t(r)["tools"] == [] and _t(r)["dropped"] == ["list_admin_notes"]
+              for r in (None, "user")))
+    check("动作工具在 admin 档也不进无参通道（越权通道不可存在）",
+          instantiate_plan("content_query",
+                           {"tools": ["navigate_to", "device_oled_display"]},
+                           authz.ROLE_ADMIN)["dropped"]
+          == ["navigate_to", "device_oled_display"])
+
+    # ⑥ 描述里的工具枚举按角色渲染（技能描述里若留标记原文，模型会照抄一个
+    # 不存在的工具名；若渲染成公开档，管理员看不到自己能点名什么）
+    ctx_admin = build_planner_context(authz.ROLE_ADMIN)
+    ctx_none = build_planner_context(None)
+    check("admin 的 planner 上下文里列了后台读工具（在技能参数说明里）",
+          all(t in ctx_admin for t in _ADMIN_QUERY_TOOLS_ORDER),
+          str([t for t in _ADMIN_QUERY_TOOLS_ORDER if t not in ctx_admin]))
+    check("访客的上下文里一个后台读工具都没有",
+          not any(t in ctx_none for t in _ADMIN_QUERY_TOOLS_ORDER))
+    check("带参清单管理员档含 get_moderation_status（带 status 过滤只能走 calls）",
+          "get_moderation_status" in ctx_admin)
 
 
 def test_gate_claim_scope():
@@ -3118,6 +3280,10 @@ def test_drop_correction():
     清单被剔空 ⇒ 旧行为把"剔空"当"无需工具的收尾轮"（route_after_planner 见 TOOLS
     空即去 model）⇒ narrator 对着零工具零帧编出「我刚才查看了文章列表和读取了文章
     详情」⇒ gate 打回 ⇒ 用户看到一句"被抓包"的降级回复，本轮就此结束。
+    （**这起事故的根因 20260924 已从源头修掉**：后台读工具按角色进 calls 白名单，
+    管理员点名 `list_admin_notes` 现在直接执行、不再剔空——见
+    `test_admin_console_role_channel`。本函数锁的纠偏机制仍在，只是触发面收窄到
+    "任何人都不该点名"的那些名字，见下方剧本。）
 
     现在的契约：剔空 → 确定性纠偏一次（把"零执行"与工具归属写回给它重决策），
     再剔空 → 确定性如实收尾（零帧轮绝不交给 narrator 自由发挥）。
@@ -3153,10 +3319,17 @@ def test_drop_correction():
             self.prompts.append(prompt)
             return AIMessage(content=self.replies.pop(0))
 
+    # 剧本里的被剔工具用 `navigate_to`（**动作工具**：谁都不能经 calls 点名，
+    # 它对任何角色都结构性地不可点名，包括管理员——写/动作工具只由技能模板展开）。
+    # 20260924 之前这里用的是 `list_admin_notes`：那会儿它对管理员也不在白名单里，
+    # 而现在后台读工具已按角色放开（见 test_admin_console_role_channel）⇒ 拿它当
+    # 剧本会被放行、纠偏压根不触发。换名字换的是剧本，锁的三条契约一条没动。
     _DROPPED = ('SKILL=content_query\n'
-                'PARAMS={"calls": [{"tool": "list_admin_notes", "args": {}}]}\n'
+                'PARAMS={"calls": [{"tool": "navigate_to",'
+                ' "args": {"path": "/guestbook"}}]}\n'
                 "REPLY: 如实回答")
-    _FIXED = "SKILL=admin_notes\nPARAMS={}\nREPLY: 如实转述清单"
+    _FIXED = ('SKILL=navigate\nPARAMS={"target": "留言板", "mode": "direct"}\n'
+              "REPLY: 好的，带你去留言板")
     _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}
     _STATE = {"messages": [HumanMessage(content="小猫咪那篇文章都有什么标签呀")],
@@ -3171,9 +3344,10 @@ def test_drop_correction():
         check("剔空后重决策一次（不是就此收尾）", len(llm.prompts) == 2,
               f"llm_calls={len(llm.prompts)}")
         check("  第二版决策真的变成了可执行计划（换成技能通道）",
-              plan["tools"] == ["list_admin_notes({})"], f"tools={plan['tools']}")
+              plan["tools"] == ['navigate_to({"path": "/guestbook", "confirm": false})'],
+              f"tools={plan['tools']}")
         check("  纠偏文本确实进了第二次提示词（模型看得见）",
-              "一个都没有执行" in llm.prompts[1] and "admin_notes" in llm.prompts[1])
+              "一个都没有执行" in llm.prompts[1] and "属于技能 navigate" in llm.prompts[1])
         check("  首决策那次不带纠偏（缺省语，不无谓干扰）",
               "无纠偏提示" in llm.prompts[0]
               and "无纠偏提示" not in llm.prompts[1])
@@ -3722,7 +3896,8 @@ def main():
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
                test_nav_fast_path, test_fast_path_shell_transparency,
                test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
-               test_explicit_tools, test_planner_tool_menu, test_gate_claim_scope, test_gate_frame_checks,
+               test_explicit_tools, test_planner_tool_menu, test_admin_console_role_channel,
+               test_gate_claim_scope, test_gate_frame_checks,
                test_gate_cmd_prefix_meta,
                test_phantom_tool_claim, test_phantom_claim_clause_and_echo_exempt,
                test_gate_claim_holes,

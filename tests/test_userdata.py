@@ -958,8 +958,8 @@ check("工具描述里写了『自己』（措辞不许让 planner 读成『全�
 # 工具描述——少了这一条，planner 会看到菜单里没有这三项，于是拿检索去绕。
 import agent.graph as _G  # noqa: E402
 check("三个都在 planner 菜单里（带描述，`- name():` 形态）",
-      all(f"- {n}()：" in _G._QUERY_TOOLS_DESC for n in READ_TOOLS),
-      str([n for n in READ_TOOLS if f"- {n}()：" not in _G._QUERY_TOOLS_DESC]))
+      all(f"- {n}()：" in _G._tools_desc(None) for n in READ_TOOLS),
+      str([n for n in READ_TOOLS if f"- {n}()：" not in _G._tools_desc(None)]))
 
 # ── 写侧接线（20260923 批 7）────────────────────────────────────────
 check("三个写工具都在注册表里",
@@ -984,11 +984,11 @@ check("同意闸对同一句话给出**不同**工具各自的结论（判据按
                                     "read_notifications", "收藏这篇文章"))
 check("站内信**读**工具也进 planner 点名白名单（自指提问：我信箱里有什么）",
       "list_my_messages" in _EXPLICIT_TOOLS and "list_my_messages" in _CALLABLE_QUERY_TOOLS
-      and "list_my_messages" in _G._QUERY_TOOLS_DESC
+      and "list_my_messages" in _G._tools_desc(None)
       and "list_my_messages" in _CONTENT_TOOLS)
 check("站内信**写**工具（read_messages）**不在**任何 planner 白名单（写只走技能模板）",
       "read_messages" not in _EXPLICIT_TOOLS and "read_messages" not in _CALLABLE_QUERY_TOOLS
-      and "read_messages" not in _G._QUERY_TOOLS_DESC)
+      and "read_messages" not in _G._tools_desc(None))
 check("read_messages 与 read_notifications 共用一个同意闸族（同一句命令的两种目标）",
       authz.TOOL_SCOPE["read_messages"] == authz.TOOL_SCOPE["read_notifications"]
       == authz.SCOPE_WRITE_OWN
@@ -1013,7 +1013,7 @@ check("两件描述里都写了『自己』，且都点了『与河灯留言是�
 
 check("写工具都不在 planner 点名白名单（写只能由技能模板展开）",
       all(n not in _EXPLICIT_TOOLS and n not in _CALLABLE_QUERY_TOOLS
-          and n not in _G._QUERY_TOOLS_DESC for n in WRITE_TOOLS))
+          and n not in _G._tools_desc(None) for n in WRITE_TOOLS))
 check("三个写工具都有中文动作词分支（否则过程行显示『执行 add_favorite』）",
       'if name in ("add_favorite", "remove_favorite")' in _s
       and 'if name == "read_notifications"' in _s
