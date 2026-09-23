@@ -1618,6 +1618,69 @@ def _site_absence_claim(text: str, search_evidence: bool = False) -> bool:
     return _site_absence_claim_clause(text, search_evidence) is not None
 
 
+# ── 确认话术声称（gate 洞⑥，20260923）──────────────────────────────────────
+# "点「确定」我就去办"这类**确认动作声称**：说话人声称系统正等他点确认框。
+# 这条判据的依据是**结构**而不是概率：真弹了确认框的那一轮**到不了 gate**——
+# `route_after_execute` 见到 `pending_confirm` 直接 END，回复文本由 execute 侧
+# 确定性给出（`confirm_text`，见该函数与 `_confirm_popup` 的注释）。
+# ⇒ gate 视野里出现"点「确定」我就去办"，**必然是 narrator 自己编的**。
+#
+# 为什么非要有硬判据（纪律 18 已经逐字写了这条，却还是发生了）：
+#   纪律 18 原文："确认框一个字都不要提：真弹了确认框的那一轮根本轮不到你说话…
+#   说'已经发起/已提交/请留意确认弹窗/等你点确认'就是编的"。
+#   20260923 13:19 实测：主人说"小猫咪按你想法来吧"，planner 因目标解不出被身份
+#   防线拦下（trace `write_target_unresolved`），系统**已经**把如实话术交给
+#   narrator（`_wrap_up_plan` 的 note："这件事这次没有做…不许出现看过/读过/查过"），
+#   narrator 却回了"我把这条驳回隐藏…点「确定」我就去办"，gate PASS。
+# ⇒ prompt 层纪律不是防线，判据才是。
+#
+# 全量真实 trace 复扫（238 条，20260923）：真弹窗轮 65 条（按 `consent_popup`
+# 事件识别，全部不经过 gate）；非弹窗轮**正则命中 4 条**（其中 1 条被下面那张
+# 豁免表以将来时放行 ⇒ **真判 3 条**，即误伤 0），其中
+#   · 1 条即上面那条（目标还错成了模型历史里的旧留言）；
+#   · 2 条更重（`20260922T003512` / `20260922T193001`，同一天两跑）：「把文章 1
+#     改成草稿」**其实已经执行并复核通过**（execute call + checker PASS +
+#     「已修改文章 1…私密 → 草稿」），回复却说"我先跟你确认一下…点「确定」我就去办"
+#     ——把办好的说成待确认（抄的正是上一轮 `recent_tail` 里系统的确认文本，
+#     与"写给 narrator 的机制描述会变成它的词汇"同一条教训）；
+#   · 1 条是**将来时描述**（`20260922T054528`："你发给我之后…系统会走确认流程——
+#     点「确定」我就去办"），合法 ⇒ 豁免表收将来标记（会/将/之后…），见下。
+_CONFIRM_CLAIM_RE = re.compile(
+    # ① 承诺形态：点「确定」我就去办 / 点了确定就执行 / 等你点确认
+    r"点\s*[「\"'『]?\s*(?:确定|确认)[」\"'』]?\s*(?:我|就|即|便|后)"
+    r"|(?:等|等候|等待)\s*(?:主人|你|您|访客)?\s*(?:去)?\s*(?:点|按|戳)\s*[「\"'『]?\s*(?:确定|确认)"
+    # ② 完成/进行形态：确认框已经弹出来了 / 我已发起确认 / 确认弹窗在等你
+    r"|(?:确认框|确认弹窗|弹窗)\s*(?:已经|已|就|正)?\s*(?:弹|出现|显示|在等|等着|挂)"
+    r"|(?:已经|已|我)\s*(?:经)?\s*(?:发起|走了|推送|提交)\s*了?\s*确认",
+    re.S)
+# 豁免（同子句内生效，见 `_clause_hit`）：将来时描述（"系统会走确认流程——点确定我就
+# 去办"）、否定（"没有弹确认框"多数形态因语序本就命中不了，这里再兜一层）、
+# 转述（"你说点确定""你说的'等你点确认'"）。
+_CONFIRM_EXEMPT_RE = re.compile(
+    r"(?:会|将|之后|届时|到时候|未来|下次)"      # 将来时 ⇒ 说的是"到时候会弹"，不是"现在正等着"
+    r"|(?:没有?|未|不会|别|不必|不用)\s*(?:弹|发|等|点)"
+    r"|(?:你|主人|他|她|访客)\s*(?:说|问|提到|指的是|那句)"
+    # 转述他人/站内内容的词（留言、说说、公告、访客原话里都可能出现"点确定"这种字面）
+    r"|(?:写|标|照抄|引述|转述|转告|复述)(?:着|的是|的|了)?"
+    r"|(?:留言|评论|说说|公告|原话|正文|内容是)"
+    r"|(?:如果|要是|倘若|假设)", re.S)
+
+
+def _confirm_claim_clause(text: str) -> str:
+    """确认话术声称的子句（trace 用，见 `_clause_hit`）；没有则空串。
+
+    ⚠️ **不剥引号**（与 `_claim_issue` 里其它判据的做法相反）：系统的确认文案本身
+    就是"点「确定」我就去办"——「确定」两个字**永远**在引号里，剥掉引号等于把这条
+    判据的存在意义剥没了（写完当场实测：四条真话全判空）。转述豁免改由豁免表里的
+    "写着/留言/原话"那族承担。"""
+    return _clause_hit(text, _CONFIRM_CLAIM_RE, _CONFIRM_EXEMPT_RE) or ""
+
+
+def _confirm_claim(text: str) -> bool:
+    """确认话术声称（gate 洞⑥）：本轮没弹确认框却说"点「确定」我就去办"。"""
+    return bool(_confirm_claim_clause(text))
+
+
 # NOTE 零工具（页面不存在/已下线）轮的如实措辞核验词表（与 instantiate_plan 的
 # note 文本配套，见 gate_node）。
 _HONEST_DOWN = ("下线", "下架", "无法访问", "没有了")
@@ -1626,7 +1689,8 @@ _HONEST_GONE = ("没有", "不存在", "找不到", "无法识别", "没有找�
 
 def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                  exec_memory: bool = False,
-                 exec_search_evidence: bool = False) -> tuple[str, str, str] | None:
+                 exec_search_evidence: bool = False,
+                 has_popup: bool = False) -> tuple[str, str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本, **被否掉的那一句**)；有据/无声称 → None。
 
@@ -1637,6 +1701,9 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     作用域（20260903 收窄后的设计 + 20260919 两洞 + 20260920 洞③）：
       - 任何轮：命令前缀文本（_cmd_prefix_directive——引号/内联代码区 + 同句机制词
         = 元讨论里的提及，放行；见该函数注释与 golden `forbid_fallback`）
+      - 任何轮：确认话术声称（_confirm_claim，洞⑥，20260923）——"点「确定」我就去办"
+        这类声称与帧无关（有帧轮也可能是假的：写完了却报成待确认），依据是**结构**：
+        真弹窗轮由 `route_after_execute` 直接 END、到不了 gate（见该正则上方长注）
       - 零工具轮（不分技能）：操作完成声称（_STATE_ACTION_CLAIM_RE，洞①）与
         站内检索声称（_site_search_claim，洞②）——零帧 = 本轮什么都没发生，
         这两族声称必为编造。**两族共用同一条回执豁免**（20260921 补齐）：本轮带跨轮
@@ -1659,6 +1726,15 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     hit = _cmd_prefix_hit(reply)
     if hit:
         return ("cmd_prefix", _FALLBACK_CMD_PREFIX, hit)
+    # 洞⑥（20260923）：确认话术声称——**任何轮次都查**，包括有帧轮。
+    # 位置在 `if frames_exist: return None` **之前**是刻意的：这一条说的不是"有没有
+    # 干活"，而是"有没有在等主人点确定"，与帧无关（20260922 那两条正是**有帧**的轮
+    # ——写已经执行并复核通过，回复却说在等确认）。has_popup=True 只作防御性豁免：
+    # 弹窗轮本该到不了这里（route_after_execute 见 pending_confirm 直接 END）。
+    if not has_popup:
+        span = _confirm_claim_clause(reply)
+        if span:
+            return ("confirm_claim_without_popup", _FALLBACK_CONFIRM_CLAIM, span)
     if frames_exist:
         return None  # 帧存在：声称有据（err 帧/确认帧/具名/检索族场景由 gate_node 兜）
     # 引号内是被转述的访客留言/说说正文，不算 narrator 自己的声称（20260913：
@@ -1731,6 +1807,16 @@ _FALLBACK_SITE_ABSENCE = (
     "喵呜……主人，我得收回一句：这一轮我其实**没有去站里查过**，却说成了『站内没有"
     "…』——站里到底有没有，我没核实过就不能下结论 :犯错: 要我现在认认真真检索一遍"
     "再回答你嘛？这次查到什么、没查到什么都如实告诉你喵。")
+# 洞⑥（20260923）：本轮没弹确认框，却说了"点「确定」我就去办"这类确认话术。
+# 文案必须对**两种实况都成立**（判据不区分，因为判据看到的是同一句假话）：
+#   ① 什么都没做（13:19 那条：写被身份防线拦下、零帧）；
+#   ② **其实已经做完了**（20260922 那两条：写已执行并复核通过，回复却说"等确认"）。
+# 所以不写"这件事没办"，只写"没有确认框在等你 + 状态以系统记录为准"。
+_FALLBACK_CONFIRM_CLAIM = (
+    "喵呜……主人，我得纠正自己一句：这一轮系统**没有弹任何确认框**，也没有在等谁点"
+    "「确定」——我刚才那句『点「确定」我就去办』是句空话，系统那边根本没有这个待确认"
+    "的动作 :犯错: 这件事现在到底是还没做、还是已经做完了，一律以系统记录为准，别信"
+    "我上一条的措辞。要不要我重新走一遍？（该确认的会真的弹窗给你）")
 _FALLBACK_NO_EXEC = (
     "喵呜……主人，我得纠正自己一句：这一轮系统**其实执行过工具**（只是返回是空的，"
     "没有查到东西），我刚才却说成『本轮没有执行任何工具』——把『查了但没有』讲成"
@@ -3989,7 +4075,8 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # ── 2. 命令前缀文本（任何轮次，正文出现命令帧前缀 = 假装发命令）─────────
     # ── 3. 编造资源 URL（任何轮次，工具返回/用户消息中不存在的 /api 或图片）──
     issue = _claim_issue(reply, plan["skill"], plan, bool(frames),
-                         _has_exec_memory(msgs), _exec_memory_has_search(msgs))
+                         _has_exec_memory(msgs), _exec_memory_has_search(msgs),
+                         has_popup=bool(state.get("pending_confirm")))
     if issue:
         i_name, i_text, i_clause = issue
         return _fallback_result(i_name, i_text, plan, len(frames), i_clause)
