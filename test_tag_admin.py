@@ -566,6 +566,8 @@ _MIN_PARAMS = {
     "favorite_add": {"article_id": 12},
     "favorite_remove": {"article_id": 12},
     "notice_read": {"all": True},
+    # 站内信标记已读（20260923 批 8）：与 notice_read 同一形状、另一个物件。
+    "message_read": {"all": True},
 }
 _EXPECT_TOOL = {
     "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
@@ -579,6 +581,7 @@ _EXPECT_TOOL = {
     "article_status": "set_article_status", "article_tags": "set_article_tags",
     "favorite_add": "add_favorite", "favorite_remove": "remove_favorite",
     "notice_read": "read_notifications",
+    "message_read": "read_messages",
 }
 check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",
       set(_EXPECT_TOOL) == set(WRITE_SKILL_NAMES) and set(_MIN_PARAMS) == set(WRITE_SKILL_NAMES),

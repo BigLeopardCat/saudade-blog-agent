@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """用户自己的数据工具单测（纯函数 / 假 httpx，零网络零 LLM，秒级）。
 
-被测两半：
+被测各批：
   · **读**（20260923 批 6）：`list_my_favorites` / `get_unread_summary` /
     `list_notifications`，scope=`read.own`，走 `_own_get`；
   · **写**（20260923 批 7）：`add_favorite` / `remove_favorite` /
-    `read_notifications`，scope=`write.own`。
+    `read_notifications`，scope=`write.own`；
+  · **站内信**（20260923 批 8）：`list_my_messages`（read.own）与 `read_messages`
+    （write.own）——**站内信（私信）不是站内通知**：两族各有各的 id 空间，摘要
+    与回执的措辞刻意不同字（混了就是拿通知的 id 去标记信、或反过来）。本文件
+    在 ③ 锁摘要、在 ④ 锁"发件箱里的 id 标不得"、在 ⑥ 锁两处回执措辞不同字，
+    父仓 `chat.rs` 的同名测试再锁一次（`assert_ne!` 那一对）。
 
 这一批与"管理助手"那批共用一个请求本体（`_principal_get`，见 tools/base.py）、
 但**共用的只有请求形状**——两件事必须分开，本文件就是那两件事的回归锁：
@@ -44,7 +49,8 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-READ_TOOLS = ["list_my_favorites", "get_unread_summary", "list_notifications"]
+READ_TOOLS = ["list_my_favorites", "get_unread_summary", "list_notifications",
+              "list_my_messages"]
 
 # 三个端点的返回样本（形态抄自 src/routes/profile.rs 的 FavoriteDto /
 # UnreadDto / NotificationListDto，字段名一个不差——它们是 Python↔Rust 的契约）
@@ -53,6 +59,24 @@ FAVS = [{"noteId": 12, "title": "留言板怎么用", "status": "published",
         {"noteId": 19, "title": "Saudade Blog AI Agent（泠月喵）架构文档", "status": "published",
          "createdAt": "2026-09-18 09:30:00"}]
 UNREAD = {"notifications": 3, "messages": 1, "total": 4}
+# 站内信（20260923 批 8）：Rust `MailboxDto{inbox, outbox, unread}` 的形态——
+# **不是行列表**（所以进不了 `_rows` 那族摘要器），字段名抄自 src/routes/profile.rs
+# 的 MessageDto（peerName 是"对方的展示名"，title 可为 null = 没填标题）
+MAILBOX = {"unread": 2, "inbox": [
+    {"id": 11, "fromUserId": 3, "toUserId": 7, "peerName": "小猫咪",
+     "peerAvatar": None, "title": "河灯集那篇", "content": "第三段的说法想跟你确认一下",
+     "isRead": False, "createdAt": "2026-09-22 21:00:00"},
+    {"id": 9, "fromUserId": 4, "toUserId": 7, "peerName": "阿岚", "peerAvatar": None,
+     "title": None, "content": "上次那个 ESP32 的问题解决了",
+     "isRead": False, "createdAt": "2026-09-21 10:00:00"},
+    {"id": 8, "fromUserId": 5, "toUserId": 7, "peerName": "路人甲", "peerAvatar": None,
+     "title": "问好", "content": "你好呀", "isRead": True,
+     "createdAt": "2026-09-01 08:00:00"},
+], "outbox": [
+    {"id": 10, "fromUserId": 7, "toUserId": 3, "peerName": "小猫咪",
+     "peerAvatar": None, "title": "回你", "content": "好，我看下", "isRead": True,
+     "createdAt": "2026-09-22 22:00:00"},
+]}
 NOTICES = {"unread": 2, "items": [
     {"id": 7, "type": "announcement", "title": "国庆维护公告", "content": "10 月 1 日凌晨维护",
      "link": "/article/3", "isRead": False, "createdAt": "2026-09-22 10:00:00"},
@@ -163,7 +187,7 @@ finally:
 print("\n② 三个读工具：以发起人身份读、读不到就如实说（走真工具）")
 
 CASES = [("list_my_favorites", FAVS), ("get_unread_summary", UNREAD),
-         ("list_notifications", NOTICES)]
+         ("list_notifications", NOTICES), ("list_my_messages", MAILBOX)]
 try:
     for name, sample in CASES:
         tool = getattr(base, name)
@@ -217,6 +241,37 @@ check("通知条目缺 id 字段 → 不编 id（只给标题）",
       "通知共 1 条（未读 0）: 没有 id 的通知")
 check("通知**正文不进摘要**（挤进来只会把标题挤掉——要正文就再调一次工具）",
       "10 月 1 日" not in receipt_digest("list_notifications", str(NOTICES)))
+# ── 站内信（20260923 批 8）─────────────────────────────────────
+check("站内信 → 收件/发出封数 + 未读封数 + **id《标题》寄自谁（未读）**",
+      receipt_digest("list_my_messages", str(MAILBOX))
+      == "信箱: 收件 3 封（未读 2） / 发出 1 封: 11《河灯集那篇》寄自小猫咪（未读）"
+         "/9（无标题信）寄自阿岚（未读）/8《问好》寄自路人甲",
+      receipt_digest("list_my_messages", str(MAILBOX)))
+# id 给足是**判据的一部分**：20260923 三轮那次「把条数当 id」的误导，堵法只有
+# "摘要里每个可点名的东西都带编号"（见 agent/entities.py `_mailbox_digest` 头注）。
+check("信件摘要里每封都带编号（planner 不必编 id 就能点名）",
+      all(f"{i}《" in receipt_digest("list_my_messages", str(MAILBOX)) or
+          f"{i}（无标题信）" in receipt_digest("list_my_messages", str(MAILBOX))
+          for i in (11, 9, 8)))
+check("信件摘要用**封**这个量词（通知是「条」——量词分开，两个 id 空间就不会被混）",
+      "封" in receipt_digest("list_my_messages", str(MAILBOX))
+      and "条" not in receipt_digest("list_my_messages", str(MAILBOX)))
+check("发给别人的信**不进摘要**（发件箱里的 isRead 是别人的事，也不能被当成本人收到过）",
+      "10《回你》" not in receipt_digest("list_my_messages", str(MAILBOX)))
+check("信件**正文不进摘要**（要正文就再调一次工具）",
+      "第三段" not in receipt_digest("list_my_messages", str(MAILBOX)))
+check("缺 id 的信 → 不编编号（只给标题/寄信人）",
+      receipt_digest("list_my_messages",
+                     str({"inbox": [{"peerName": "无 id 无标题"}], "outbox": [],
+                          "unread": 1})) == "信箱: 收件 1 封（未读 1） / 发出 0 封: （无标题信）寄自无 id 无标题（未读）")
+check("空信箱 → 只留封数（不是空串：**一封都没有**是事实，与「读不到」不是一回事）",
+      receipt_digest("list_my_messages",
+                     str({"inbox": [], "outbox": [], "unread": 0}))
+      == "信箱: 收件 0 封（未读 0） / 发出 0 封")
+check("信箱形态不符（缺 inbox/outbox）→ 空摘要（不猜）",
+      receipt_digest("list_my_messages", str({"unread": 0, "items": []})) == ""
+      and receipt_digest("list_my_messages", "未登录：读不到你自己的数据") == "")
+
 check("未读汇总 → 两个数 + 合计（key 名与 Rust UnreadDto 同源）",
       receipt_digest("get_unread_summary", str(UNREAD))
       == "未读: 通知 3 条 / 私信 1 条（合计 4）",
@@ -243,7 +298,8 @@ check("通知摘要 ≤150 字（Rust detail 列 varchar(300) 的一半留给动
 # ══════════════════════════════════════════════════════════════════
 print("\n④ 写侧：写前先读（读不到就不写）＋ 写后复核（读不回就不确认）")
 
-WRITE_TOOLS = ["add_favorite", "remove_favorite", "read_notifications"]
+WRITE_TOOLS = ["add_favorite", "remove_favorite", "read_notifications",
+               "read_messages"]
 
 
 def _data(x):
@@ -475,10 +531,136 @@ try:
           out.kind == "unavailable" and "标记已读请求已发出" in str(out)
           and "不要声称已标记" in str(out), f"{out.kind}: {out}")
 
+    # ── read_messages（20260923 批 8）：与 read_notifications 同一形状，
+    #    但物件是**收到**的信——发件箱里的 id 不能标、别人读没读也不归他管。──
+    MB_AFTER = {"unread": 1, "inbox": [MAILBOX["inbox"][0],
+                                       {**MAILBOX["inbox"][1], "isRead": True},
+                                       MAILBOX["inbox"][2]],
+                "outbox": MAILBOX["outbox"]}
+    MB_ALL_READ = {"unread": 0,
+                   "inbox": [{**r, "isRead": True} for r in MAILBOX["inbox"]],
+                   "outbox": MAILBOX["outbox"]}
+
+    base._client = _SeqClient(_data(MAILBOX))
+    c = base._client
+    out = base.read_messages.invoke({}, config=cfg(7))
+    check("既没给 id 也没说『全部』→ unavailable 且零请求（同一句命令的双胞胎工具也不猜）",
+          out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
+    base._client = _SeqClient(_data(MAILBOX))
+    c = base._client
+    out = base.read_messages.invoke({"all": False}, config=cfg(7))
+    check("all=False 不等于『全部』→ 同样零请求",
+          out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
+
+    base._client = _SeqClient(_data(MAILBOX))
+    c = base._client
+    out = base.read_messages.invoke({"ids": [8]}, config=cfg(7))
+    check("点名的信本来就是已读 → 零写请求、如实说本来就读过",
+          out.kind == "ok" and "本来就是已读" in out and _writes(c) == [],
+          f"{out.kind}: {out} / {_writes(c)}")
+    base._client = _SeqClient(_data(MB_ALL_READ))
+    c = base._client
+    out = base.read_messages.invoke({"all": True}, config=cfg(7))
+    check("全部已读 → 零写请求、如实说本来就没有未读的信",
+          out.kind == "ok" and "本来就没有未读的信" in out and _writes(c) == [],
+          f"{out.kind}: {out} / {_writes(c)}")
+
+    # 发件箱里的 id（10 是"我发出去的那封"）同样不在收件箱里 ⇒ 一个字节都不发。
+    # 这条是这族工具的**独有**风险：通知只有一个列表，信有两个（收/发），
+    # 拿发件箱的 id 去标已读是"改别人的东西"的错觉。
+    base._client = _SeqClient(_data(MAILBOX))
+    c = base._client
+    out = base.read_messages.invoke({"ids": [10]}, config=cfg(7))
+    check("点的是**发件箱**里的信（我发出去的）→ kind=not_found 且零写请求",
+          out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+    check("措辞把出口写清楚（先说读一遍信箱拿 id），且不谎称站内没有这封信",
+          "不在我读到的收件箱" in str(out) and "一个字节都没改" in str(out)
+          and "未确认生效" not in str(out), str(out))
+
+    base._client = _SeqClient(_data(MAILBOX))
+    c = base._client
+    out = base.read_messages.invoke({"ids": [11, 99]}, config=cfg(7))
+    check("混着来（11 在、99 不在）→ **整批零写**（绝不部分改）",
+          out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+
+    # 成功路径：写前读 → 写 → 写后再读（三次，复核是独立读数）
+    base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _data(MB_ALL_READ))
+    c = base._client
+    out = base.read_messages.invoke({"all": True}, config=cfg(7))
+    check("全部标记已读 → POST {'ids': [], 'all': True} 到 /messages/read",
+          _writes(c) == [("POST", base.ADMIN_BASE + "/api/protected/messages/read",
+                          {"ids": [], "all": True})], str(_writes(c)))
+    check("顺序 = 写前读信箱 → 写 → 写后再读信箱（三次）",
+          [m for m, _u, _h, _p in c.calls] == ["GET", "POST", "GET"],
+          str([m for m, _u, _h, _p in c.calls]))
+    check("成功回执报的是**减少的封数**（2→0）与收件箱剩余未读",
+          out.kind == "ok" and "已把 2 封信标记为已读" in out
+          and "收件箱现在未读 0 封" in out, f"{out.kind}: {out}")
+    check("回执 meta 是 message_read（与通知那族的 op 分开——跨轮记忆按 op 区分）",
+          out.meta.get("op") == "message_read", str(out.meta))
+
+    base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _data(MB_AFTER))
+    c = base._client
+    out = base.read_messages.invoke({"ids": [9, 9]}, config=cfg(7))
+    check("点名路径 → payload 用 sorted 去重后的 id（'all': False）",
+          _writes(c)[0][2] == {"ids": [9], "all": False}, str(_writes(c)))
+    check("复核只认服务端重数出来的未读封数（2→1 也在降）",
+          out.kind == "ok" and "已把 1 封信标记为已读" in out, f"{out.kind}: {out}")
+
+    # 「报的是服务端重数出来的数」与「报的是我点了几封」在数字上通常是同一个，
+    # 这里造一个**能让两者分开**的夹具：收件箱列表被截到只剩 2 封未读可见（最多
+    # 100 封），而服务端报的未读是 5 —— 复核读回来 4 ⇒ 净降 1，如实报 1（不是 2）。
+    # 宁可报小：跨轮执行记忆里"标了 2 封"而实际只降了 1 是虚报。
+    MB_TRUNC = {"unread": 5, "inbox": MAILBOX["inbox"][:2], "outbox": MAILBOX["outbox"]}
+    MB_TRUNC_AFTER = {"unread": 4,
+                      "inbox": [{**r, "isRead": True} for r in MAILBOX["inbox"][:2]],
+                      "outbox": MAILBOX["outbox"]}
+    base._client = _SeqClient(_data(MB_TRUNC), _data({"ok": True}), _data(MB_TRUNC_AFTER))
+    out = base.read_messages.invoke({"all": True}, config=cfg(7))
+    check("报的封数 = 服务端两次读数之差（不是「我点了几封」）",
+          out.kind == "ok" and "已把 1 封信标记为已读" in out, f"{out.kind}: {out}")
+
+    # 复核判据是**两条**：封数真降 + 点名的每一封都确实已读。只看"降了"会在
+    # "标错了一封、又漏了一封"的巧合下判成功（净变化相同）。
+    base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _data(MB_AFTER))
+    out = base.read_messages.invoke({"all": True}, config=cfg(7))
+    check("封数降了但有一封仍不是已读 → unavailable（净变化相同也能抓出来）",
+          out.kind == "unavailable" and "还不是已读" in str(out), f"{out.kind}: {out}")
+    check("未确认生效的措辞明确写了『不要声称已标记』", "不要声称已标记" in str(out), str(out))
+
+    base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}),
+                              _data({"unread": 2, "inbox": [{**r, "isRead": False}
+                                                            for r in MAILBOX["inbox"]],
+                                     "outbox": MAILBOX["outbox"]}))
+    out = base.read_messages.invoke({"all": True}, config=cfg(7))
+    check("未读封数**没降** → unavailable（接口说成功也不算数）",
+          out.kind == "unavailable" and "未确认生效" in str(out), f"{out.kind}: {out}")
+
+    base._client = _SeqClient(_err(500))
+    c = base._client
+    out = base.read_messages.invoke({"all": True}, config=cfg(7))
+    check("写前读失败 → 零写请求（读不到就不写）",
+          out.kind == "unavailable" and _writes(c) == [] and "未改动" in str(out),
+          f"{out.kind}: {out} / {_writes(c)}")
+
+    base._client = _SeqClient(_data({"unread": "2", "inbox": [MAILBOX["inbox"][0]],
+                                     "outbox": []}))
+    c = base._client
+    out = base.read_messages.invoke({"all": True}, config=cfg(7))
+    check("未读封数形态不符（字符串）→ 零写请求（不 int() 硬转）",
+          out.kind == "unavailable" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+
+    base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _err(500))
+    out = base.read_messages.invoke({"all": True}, config=cfg(7))
+    check("写已发出但复核读失败 → 措辞是『已发出 + 未确认生效』",
+          out.kind == "unavailable" and "标记已读请求已发出" in str(out)
+          and "不要声称已标记" in str(out), f"{out.kind}: {out}")
+
     # ── 未登录：写侧比读侧更严（一个字节都不发）───────────────────
     for name, args in (("add_favorite", {"article_id": 12}),
                        ("remove_favorite", {"article_id": 12}),
-                       ("read_notifications", {"all": True})):
+                       ("read_notifications", {"all": True}),
+                       ("read_messages", {"all": True})):
         base._client = _SeqClient(_data([]))
         c = base._client
         out = getattr(base, name).invoke(args, config=cfg(0))
@@ -545,8 +727,37 @@ p = _plan("notice_read", {"all": "maybe"})
 check("notice_read all 认不出来（'maybe'）→ 零工具（不默认 True）",
       p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
 
-check("三个 own 写技能都落在 _OWN_WRITE_SKILLS 里（不是靠减法落到名字通道）",
-      _OWN_WRITE_SKILLS == {"favorite_add", "favorite_remove", "notice_read"},
+# notice_read 的双胞胎（20260923 批 8）：同一形状、另一个物件。这一组刻意**逐条
+# 对称**——两个技能共用 `_expand_own_skill` 的同一个分支，哪一条不对称就说明
+# 有一边漏改了（例如"缺范围就零工具"只在通知那半保留着）。
+p = _plan("message_read", {"all": True})
+check("message_read all=True → 一条 read_messages({'all': True})",
+      len(p["tools"]) == 1 and _args(p["tools"][0]) == ("read_messages", {"all": True}),
+      str(p["tools"]))
+p = _plan("message_read", {"ids": [11, 9]})
+check("message_read ids → 一条 read_messages({'ids': [11, 9]})",
+      p["tools"] and _args(p["tools"][0])[1] == {"ids": [11, 9]}, str(p["tools"]))
+p = _plan("message_read", {})
+check("message_read 既没 id 也没 all → **零工具**（把全部未读一次清掉是不可逆的）",
+      p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
+p = _plan("message_read", {"all": True, "ids": [11]})
+check("message_read all 与 ids 同时给 → 零工具 + 追问",
+      p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
+p = _plan("message_read", {"all": "True"})
+check("message_read all 是字符串 'True' 也认",
+      p["tools"] and _args(p["tools"][0]) == ("read_messages", {"all": True}),
+      str(p["tools"]))
+p = _plan("message_read", {})
+check("message_read 的注记指向 list_my_messages（要 id 就先读信箱，不是读通知）",
+      "list_my_messages" in p["note"] and "list_notifications" not in p["note"],
+      p["note"])
+p = _plan("message_read", {"all": True})
+check("message_read 的注记说的是**信**、不是通知（两个 id 空间不许混）",
+      "信" in p["note"] and "通知" not in p["note"], p["note"])
+
+check("own 写技能都落在 _OWN_WRITE_SKILLS 里（不是靠减法落到名字通道）",
+      _OWN_WRITE_SKILLS == {"favorite_add", "favorite_remove", "notice_read",
+                            "message_read"},
       str(sorted(_OWN_WRITE_SKILLS)))
 check("own 写技能与名字通道不重叠（两套展开器的判据互斥）",
       not (_OWN_WRITE_SKILLS & _WRITE_NAME_TARGET_SKILLS))
@@ -635,6 +846,35 @@ check("同意闸对同一句话给出**不同**工具各自的结论（判据按
       authz.consent_granted(Principal(uid=7, role="user"), "add_favorite", "收藏这篇文章")
       and not authz.consent_granted(Principal(uid=7, role="user"),
                                     "read_notifications", "收藏这篇文章"))
+check("站内信**读**工具也进 planner 点名白名单（自指提问：我信箱里有什么）",
+      "list_my_messages" in _EXPLICIT_TOOLS and "list_my_messages" in _CALLABLE_QUERY_TOOLS
+      and "list_my_messages" in _G._QUERY_TOOLS_DESC
+      and "list_my_messages" in _CONTENT_TOOLS)
+check("站内信**写**工具（read_messages）**不在**任何 planner 白名单（写只走技能模板）",
+      "read_messages" not in _EXPLICIT_TOOLS and "read_messages" not in _CALLABLE_QUERY_TOOLS
+      and "read_messages" not in _G._QUERY_TOOLS_DESC)
+check("read_messages 与 read_notifications 共用一个同意闸族（同一句命令的两种目标）",
+      authz.TOOL_SCOPE["read_messages"] == authz.TOOL_SCOPE["read_notifications"]
+      == authz.SCOPE_WRITE_OWN
+      and authz._OWN_TOOL_FAMILY["read_messages"] == authz._OWN_TOOL_FAMILY["read_notifications"],
+      f"{authz.TOOL_SCOPE['read_messages']} / {authz._OWN_TOOL_FAMILY.get('read_messages')}")
+check("站内信两件都有中文动作词分支（否则过程行显示『执行 read_messages』）",
+      'if name == "read_messages"' in _s and '"标记站内信已读（全部未读）"' in _s
+      and '"list_my_messages": "查看站内信"' in _s)
+if _rust:
+    check("Rust 侧两个臂都在，且措辞与 agent 侧同源",
+          '"list_my_messages" => "查看站内信"' in _rust
+          and '"标记站内信已读（全部未读）"' in _rust,
+          "src/routes/chat.rs 缺臂")
+    check("Rust 侧通知/信两族的措辞**不同字**（同字=有一族被复制粘贴漏改）",
+          '"标记站内信已读（全部未读）"' in _rust
+          and '"标记站内通知已读（全部未读）"' in _rust)
+check("两件描述里都写了『自己』，且都点了『与河灯留言是两回事』",
+      all("自己" in getattr(base, n).description for n in
+          ("list_my_messages", "read_messages"))
+      and "河灯留言" in base.list_my_messages.description,
+      base.list_my_messages.description[:40])
+
 check("写工具都不在 planner 点名白名单（写只能由技能模板展开）",
       all(n not in _EXPLICIT_TOOLS and n not in _CALLABLE_QUERY_TOOLS
           and n not in _G._QUERY_TOOLS_DESC for n in WRITE_TOOLS))
@@ -688,6 +928,13 @@ NEW_CASES = {
     "own_unread_not_logged_in": {"require_tool_calls_any": ["list_notifications",
                                                             "get_unread_summary"]},
     "own_mark_read_not_logged_in": {"require_tool_calls": ["read_notifications"]},
+    # 站内信（20260923 批 8）：同一对形态的另一个物件。断言刻意**点名同族的另一个
+    # 工具**（read_messages 而非 read_notifications）：两族 id 空间不同，走错族
+    # 会把通知标成已读、信一封没动，而回执看着像成功——这种错只能靠"点名哪个工具"
+    # 抓（见两条用例 _note 里的"术语分辨"）。
+    "own_messages_not_logged_in": {"require_tool_calls_any": ["list_my_messages",
+                                                             "get_unread_summary"]},
+    "own_message_read_not_logged_in": {"require_tool_calls": ["read_messages"]},
 }
 for _cid, _want in NEW_CASES.items():
     _c = _by_id.get(_cid)
@@ -703,6 +950,12 @@ for _cid, _want in NEW_CASES.items():
           bool(_g.get("text_not_match_regex")))
     check(f"  {_cid}：匿名（无 user_id / 无 role）",
           "user_id" not in _c.get("context", {}) and "role" not in _c.get("context", {}))
+
+check("站内信那两条点名的是**信**这一族的工具（复制粘贴时最容易串成通知族）",
+      "list_my_messages" in NEW_CASES["own_messages_not_logged_in"]
+      ["require_tool_calls_any"]
+      and NEW_CASES["own_message_read_not_logged_in"]["require_tool_calls"]
+      == ["read_messages"])
 
 check("输入形态判据仍是「命令式 ⇒ 免弹窗直执行」（改了 authz 判据这条先红）",
       authz.consent_granted(Principal(uid=7, role="user"), "add_favorite", "收藏这篇文章")

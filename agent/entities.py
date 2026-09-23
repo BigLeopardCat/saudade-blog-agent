@@ -222,6 +222,52 @@ def _unread_digest(data) -> str:
     return f"未读: 通知 {n} 条 / 私信 {m} 条（合计 {t}）"
 
 
+def _mailbox_digest(data) -> str:
+    """站内信（20260923 批 8）：收件/发出各几封 + 未读几封 + 每封 `id《标题》寄自谁（未读）`。
+
+    **id 必须给**（与通知摘要同一条教训，20260923 三轮）：`read_messages` 要的实参是
+    id 列表，摘要里不给 id，"要标记哪几封"就只能靠编——trace `20260923T130020_9` 那次
+    「把条数当 id」的误导正是这么来的。
+
+    抬头刻意写「收件 N 封」而不是「收到 N 条」：**封**是信的量词、**条**是通知的，
+    量词分开能让 planner（和 narrator）一眼看出这是另一个物件——两个工具的实参
+    （通知 id / 信 id）来源不同，混了就是一次注定对不上的写。
+
+    只认 list 形态；标题是真的空（历史信件 title 列是 NULL）就写「（无标题）」——
+    那是事实，不是缺字段；id 不是整数则**不写编号**（缺字段绝不编，见本模块头注）。
+    """
+    if not isinstance(data, dict):
+        return ""
+    inbox, outbox = data.get("inbox"), data.get("outbox")
+    if not isinstance(inbox, list) or not isinstance(outbox, list):
+        return ""
+    head = f"信箱: 收件 {len(inbox)} 封"
+    unread = data.get("unread")
+    if isinstance(unread, int) and not isinstance(unread, bool):
+        head += f"（未读 {unread}）"
+    head += f" / 发出 {len(outbox)} 封"
+    items = []
+    for r in inbox[:_ITEM_MAX]:
+        if not isinstance(r, dict):
+            continue
+        title = _clip(r.get("title") or "", 14)
+        mid = r.get("id")
+        has_id = isinstance(mid, int) and not isinstance(mid, bool)
+        if title:
+            body = f"{mid}《{title}》" if has_id else f"《{title}》"
+        else:
+            # 标题是真的空（历史信件 title 列是 NULL）——那是事实不是缺字段，但
+            # **别写成 `9《（无标题）》`**（括号套括号，会被读成标题就叫「（无标题）」）。
+            body = f"{mid}（无标题信）" if has_id else "（无标题信）"
+        peer = _clip(r.get("peerName") or "", 8)
+        if peer:
+            body += f"寄自{peer}"
+        items.append(body + ("" if r.get("isRead") else "（未读）"))
+    if not items:
+        return head
+    return f"{head}: " + _join(items)
+
+
 def _announcement_digest(data) -> str:
     rows = _rows(data)
     if not rows:
@@ -250,6 +296,9 @@ _DIGESTERS = {
     "list_my_favorites": lambda d: _note_digest(d, "我的收藏"),
     "list_notifications": _notification_digest,
     "get_unread_summary": _unread_digest,
+    # 站内信（20260923 批 8）：`{inbox, outbox, unread}` 形态，不是"行列表"，
+    # 所以进不了 `_rows` 那族摘要器
+    "list_my_messages": _mailbox_digest,
 }
 
 

@@ -188,14 +188,16 @@ CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), 
 # 已读）。它们**不满足**"离开用户眼前"那句措辞（只写自己账号里、不外显），但满足
 # 措辞背后的真判据——"这一次到底要不要做"需要一个确定性答案（agent 自己判断"这篇
 # 值得收藏"就替用户收藏，是以用户名义往他账号里写状态）。详见 authz 的 CONSENT_SCOPES。
-check("需确认的工具恰好是十六个（十三个后台写 + 三个用户自己的写）",
+# 20260923 批 8 到十七个：同族再加一件 `read_messages`（标记**信**已读）。
+check("需确认的工具恰好是十七个（十三个后台写 + 四个用户自己的写）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
                         "create_announcement", "update_announcement",
                         "delete_announcement",
                         "audit_board_comment", "delete_board_comment",
                         "set_article_status", "set_article_tags",
-                        "add_favorite", "remove_favorite", "read_notifications"},
+                        "add_favorite", "remove_favorite", "read_notifications",
+                        "read_messages"},
       str(sorted(CONSENT_TOOLS)))
 # 公告三件**永不走"同轮命令即确认"**（用户点名要求：内容必须弹窗等管理员确认）。
 # 这条锁的形态是"恒 False"而不是"某句话判不出来"：只要有人把捷径重新打开，
@@ -479,9 +481,23 @@ check("动作家族表里没有死条目（登记的工具都真声明了 write.
 check("未登记家族的工具 → 判不出命令（fail-closed，绝不『反正都是 own』就放行）",
       not authz._own_command("收藏这篇文章", "_probe_own_notmapped")
       and not authz._own_command("收藏这篇文章", None))
+# 刻意保留的边界（20260923 批 8）：标记**信**已读与标记**通知**已读是同一个动作
+# 家族，`_own_command` **认不出物件**——「把通知都标记为已读」对 read_messages 也返回
+# True。这不是遗漏而是分工：consent 只回答"这一轮主人下令了没有"，"下的是哪一件"
+# 由 planner 选技能决定（选错族由 golden 的术语分辨用例钉，见
+# own_message_read_not_logged_in 的 _note）。写成断言是为了让这条边界**可见**：
+# 哪天想把物件也纳入判据，这条会红，改的人得先想清楚为什么。
+check("同一动作家族覆盖两个工具（判据只认动作、不认物件——物件由 planner 选技能决定）",
+      authz._OWN_TOOL_FAMILY["read_messages"] == authz._OWN_TOOL_FAMILY["read_notifications"]
+      and authz._own_command("把通知都标记为已读", "read_messages")
+      and authz._own_command("把私信都标记为已读", "read_notifications"))
 
 # 判据矩阵：正例（命令）/ 反例（提问、假设、陈述、名词用法、跨工具误靶）。
 _OWN_ADD, _OWN_RM, _OWN_RD = "add_favorite", "remove_favorite", "read_notifications"
+# 标记**信**已读（20260923 批 8）：与 read_notifications **同一个动作家族**
+# （"把 X 标记已读"）——物件（通知 / 信）不进判据，那是 planner 选技能的活；
+# consent 只回答"这一轮主人到底下令了没有"。这条边界是刻意的，下面有断言锁着。
+_OWN_MSG = "read_messages"
 OWN_POS = [
     (_OWN_ADD, "收藏这篇文章"),
     (_OWN_ADD, "收藏一下这篇"),
@@ -502,6 +518,13 @@ OWN_POS = [
     (_OWN_RD, "帮我标记为已读"),
     (_OWN_RD, "把未读的都标为已读"),
     (_OWN_RD, "未读的都标记为已读"),
+    # 信族（20260923 批 8）：同一动作家族，**叫法要收全**（少了「私信」这句最自然的
+    # 说法就漏判、落回弹窗；本批实测过一次）。物件不参与判据——那一层由 planner
+    # 选技能决定（见下面那条"家族覆盖两件"的断言）。
+    (_OWN_MSG, "把私信标记为已读"),
+    (_OWN_MSG, "我的私信都标成已读"),
+    (_OWN_MSG, "站内信都标成已读"),
+    (_OWN_MSG, "信件都标为已读"),
 ]
 OWN_NEG = [
     # 提问/打听（**"我收藏了哪些文章" 是最容易误判的一条**：有动作词、没有问号、
@@ -530,6 +553,12 @@ OWN_NEG = [
     (_OWN_RM, "标记已读"),
     (_OWN_RD, "收藏这篇文章"),
     (_OWN_RD, ""),
+    # 信族的提问/陈述/名词用法（与通知族同形）
+    (_OWN_MSG, "有未读私信吗"),
+    (_OWN_MSG, "我信箱里有几封信"),
+    (_OWN_MSG, "我的私信怎么看"),
+    (_OWN_MSG, "我已经把私信标记为已读"),
+    (_OWN_MSG, "把信标记一下"),
 ]
 _bad_own_pos = [f"{t}:{m}" for t, m in OWN_POS if not authz._own_command(m, t)]
 _bad_own_neg = [f"{t}:{m}" for t, m in OWN_NEG if authz._own_command(m, t)]

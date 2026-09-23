@@ -576,6 +576,9 @@ _NOARG_VERB = {
     "list_my_favorites": "查看我的收藏",
     "get_unread_summary": "查看未读汇总",
     "list_notifications": "查看站内通知",
+    # 自己的信箱（20260923 批 8）。措辞与 Rust `render_exec_row` 的同名臂同源
+    # ——"查看站内信"（不是"查看留言"：那是 list_guestbook 的公开留言板）。
+    "list_my_messages": "查看站内信",
 }
 
 _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",
@@ -806,6 +809,17 @@ def _tool_action_text(name: str, args: dict | None) -> str:
         aid = _leaf(a.get("article_id"))
         what = "收藏文章" if name == "add_favorite" else "取消收藏文章"
         return f"{what} {aid}" if aid else what
+    if name == "read_messages":
+        # 标记信已读（20260923 批 8）：与下面通知那条同一形状，措辞与 Rust
+        # `render_exec_row` 逐字一致（预告帧与落库回执是同一件事的两处渲染）。
+        if _norm_true(a.get("all")):
+            return "标记站内信已读（全部未读）"
+        mid = _norm_id_list(a.get("ids"))
+        if mid:
+            shown = "、".join(_leaf(i) for i in mid[:3])
+            more = f" 等 {len(mid)} 封" if len(mid) > 3 else ""
+            return f"标记站内信已读（{shown}{more}）"
+        return "标记站内信已读"
     if name == "read_notifications":
         # 标记已读（20260923 批 7）：说清**标的是哪几条**（全标 / 具体 id 列表）。
         if _norm_true(a.get("all")):

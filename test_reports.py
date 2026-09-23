@@ -620,7 +620,7 @@ for name, tool, args in [("admin_notes", "list_admin_notes", {}),
     check(f"技能 {name} 在位、只对 admin 可见、计划首项是 {tool}",
           sk is not None and sk.roles == frozenset({"admin"})
           and [t for t, _ in sk.plan] == [tool], str(sk and (sk.roles, sk.plan)))
-check("写技能名单 = 十六个**技能**名（instantiate_plan 缺参守卫按它分支；"
+check("写技能名单 = 十七个**技能**名（instantiate_plan 缺参守卫按它分支；"
       "注意它与工具名不是一套字面量，混用会让守卫静默不生效）",
       WRITE_SKILL_NAMES == frozenset({"tag_create", "tag_update", "tag_delete",
                                       "category_create", "category_update",
@@ -631,7 +631,12 @@ check("写技能名单 = 十六个**技能**名（instantiate_plan 缺参守卫�
                                       "article_status", "article_tags",
                                       # 用户自己账号里的写（20260923 批 7）
                                       "favorite_add", "favorite_remove",
-                                      "notice_read"})
+                                      "notice_read",
+                                      # 站内信标记已读（20260923 批 8）：与
+                                      # notice_read 同形——漏在这份名单外会让它
+                                      # 落进通用模板分支，把 `{"ids": null}` 当
+                                      # 参数实例化出去（test_userdata ⑤ 钉着）
+                                      "message_read"})
       and WRITE_SKILL_NAMES <= set(SKILL_MAP), str(sorted(WRITE_SKILL_NAMES)))
 check("非 admin 的 planner 上下文里看不到这四个技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
