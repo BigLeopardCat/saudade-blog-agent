@@ -547,12 +547,34 @@ def _compact_row(row: dict) -> str:
     return " ".join(parts)
 
 
+def _compact_head(obj: dict) -> str:
+    """信封 dict 里**与数组同级**的标量 → 一行抬头（`k=v k=v`）。
+
+    20260924 补：此前信封只取数组、同级字段**整个丢掉**——`{unread: 2, items: […]}` 的
+    帧里永远看不到 `unread=2`，`get_unread_summary` 那类"计数 + 明细"的返回一旦带上
+    明细，计数就没了（用户问"我有几条未读"反而取不到那个数）。丢的是**决策依据**，
+    不是展示噪音，所以补一行抬头；行的取舍预算照旧只算明细行。
+    """
+    parts = []
+    for k, v in obj.items():
+        if k in _FRAME_NOISE_KEYS or v is None or v == "" or isinstance(v, (dict, list)):
+            continue
+        if not isinstance(v, (str, int, float, bool)):
+            continue
+        s = str(v)
+        if len(s) > _FRAME_FIELD_CAP:
+            s = s[:_FRAME_FIELD_CAP] + "…"
+        parts.append(f"{k}={s}")
+    return " ".join(parts)
+
+
 def _compact_list_frame(text: str, budget: int) -> str | None:
     """数组帧 → "一行一条"紧凑文本（超预算按**整行**取舍并标注共几条）。
 
     认不出（不是数组/元素不是 dict）返回 None，调用方按普通文本处理。
     两种字面量都要认：`str(data)` 出来的是 **Python repr**（单引号，tools 层
     绝大多数工具的出口），少数工具是 `json.dumps`（双引号）。
+    信封形态（`{"unread": 2, "items": […]}`）先出一行**同级标量抬头**（见 `_compact_head`）。
     """
     obj = None
     for loader in (ast.literal_eval, json.loads):
@@ -562,6 +584,7 @@ def _compact_list_frame(text: str, budget: int) -> str | None:
         except Exception:      # noqa: BLE001 —— 不是字面量就走普通文本分支
             continue
     rows = None
+    head = ""
     if isinstance(obj, list):
         rows = obj
     elif isinstance(obj, dict):
@@ -569,10 +592,12 @@ def _compact_list_frame(text: str, budget: int) -> str | None:
             if isinstance(obj.get(k), list):
                 rows = obj[k]
                 break
+        if rows is not None:
+            head = _compact_head(obj)
     if not rows or not all(isinstance(r, dict) for r in rows):
         return None
     lines: list[str] = []
-    used = 0
+    used = len(head) + 1 if head else 0
     for i, r in enumerate(rows, 1):
         body = _compact_row(r)
         if not body:
@@ -580,13 +605,18 @@ def _compact_list_frame(text: str, budget: int) -> str | None:
         line = f"{i}. {body}"
         if used + len(line) + 1 > budget:
             if lines:
-                return ("\n".join(lines)
-                        + f"\n（节选：显示前 {len(lines)} 条，共 {len(rows)} 条）")
+                out = ("\n".join(lines)
+                       + f"\n（节选：显示前 {len(lines)} 条，共 {len(rows)} 条）")
+                return f"{head}\n{out}" if head else out
             # 第一条就超预算：单条过长，截断并说明（不静默）
-            return f"1. {body[:budget]}…（单条过长已截断，共 {len(rows)} 条）"
+            cut = f"1. {body[:budget]}…（单条过长已截断，共 {len(rows)} 条）"
+            return f"{head}\n{cut}" if head else cut
         lines.append(line)
         used += len(line) + 1
-    return "\n".join(lines) if lines else None
+    if not lines:
+        return None
+    out = "\n".join(lines)
+    return f"{head}\n{out}" if head else out
 
 
 def _frame_texts(messages: list, limit: int = 5, per: int = 300) -> str:

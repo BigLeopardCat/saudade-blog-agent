@@ -223,6 +223,29 @@ check("单条过长 → 截断 + 「单条过长已截断，共 1 条」", "单�
 cenv = _frame_texts([ToolMessage(content=str({"code": 0, "data": [{"tagKey": 7, "title": "摄影"}]}),
                                  name="list_tags", tool_call_id="c3")])
 check("信封 dict 里的 data 数组同样紧凑渲染", "tagKey=7" in cenv and "摄影" in cenv, cenv)
+check("信封 dict 里的**同级标量**不再被丢掉（code=0 出一行抬头）",
+      "code=0" in cenv and cenv.index("code=0") < cenv.index("tagKey=7"), cenv)
+# 20260924：`{unread: 2, items: […]}` 这类"计数 + 明细"的帧此前只出明细——计数
+# 是决策依据（"我有几条未读"要那个数），不是展示噪音，所以抬头必须带上它。
+chead = _frame_texts([ToolMessage(content=str({"unread": 2, "items": [
+    {"id": 7, "title": "国庆维护公告", "isRead": False}]}),
+    name="get_unread_summary", tool_call_id="c6")])
+check("计数与明细同时在场（抬头 unread=2 + 明细行）",
+      "unread=2" in chead and "id=7" in chead and "国庆维护公告" in chead, chead)
+check("抬头不占明细行的编号（第一条仍是 1.）", "\n1. " in chead, chead)
+# 裸数组那一路没有抬头可言（不许凭空多一行：首行就是 1.）
+check("裸数组不产生抬头（明细首行即 1.）",
+      c10.split("返回: ", 1)[1].startswith("1. "), c10[:40])
+# 抬头也吃预算：抬头 + 明细一起不超过 per（预算不是只算明细）
+_ctight = _frame_texts(
+    [ToolMessage(content=str({"kind": "k" * 200, "items": [
+        {"id": i, "title": "第%d条" % i} for i in range(1, 20)]}),
+        name="x", tool_call_id="c7")], per=300)
+_ct_lines = _ctight.split("返回: ", 1)[1].splitlines()
+check("超长抬头不把明细挤成半截（仍是整行取舍 + 节选标注）",
+      _ct_lines[0].startswith("kind=") and _ct_lines[-1].startswith("（节选")
+      and all(re.match(r"^\d+\. id=\d+ title=第\d+条$", ln) for ln in _ct_lines[1:-1]),
+      _ctight[:80])
 # 认不出的（非列表）走普通文本路径：短文原样、长文带既有（节选，原文 N 字）标注
 cshort = _frame_texts([ToolMessage(content="EFFECT:sakura:on", name="toggle_effect", tool_call_id="c4")])
 check("非列表短文本原样透出（不套列表标注）",
