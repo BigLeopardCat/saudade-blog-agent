@@ -39,6 +39,13 @@
   * 问句里必须有**正文预览**（只写标题等于让主人盲签一条对全体访客说的话）；
   * 改**只改正文**：PUT 的 title/content 都必填，标题没原样带上就会把公告改成没有标题。
 
+⑰ 是 20260923 第六轮加的（授权式短应答的审查路径，P2）：主人说一句授权式短应答
+（"小猫咪按你想法来吧"）时，**目标由系统台账定**（`agent/graph.py _auth_review_path`
+读 `approved=0` 的那一条）——但**授权不等于替主人签字**：照旧弹确认框，问句里印着
+#id/作者/原文/现状/动作，主人点「确定」才真写。靶子是**台账里那条真实待审留言**
+（快道按设计只在"恰好一条待审"时定目标），所以本腿除了 `--allow-write` 还要
+`--allow-board-audit`，**且跑完不复原**（审核端点只有 通过/驳回 两态，没有"退回待审"）。
+
 **所有写轮都必须干净收尾**（`clean_end`）：发过终止帧且流里没有错误帧。20260921 22:37
 的线上故障形态就是"数据真改了、回执也落了库，前端只看到一行报错"（路由表缺一个去向，
 langgraph 在节点执行完之后才抛 KeyError）——腿⑧ 当时只核库真值，所以写了就判 PASS，
@@ -1452,6 +1459,225 @@ def step15_loud_target(rep: Report, uid: int, role: str) -> None:
 #  ，颜色直接取 `row["color"]`，与"这一轮到底建了什么"同一份数据，不再绕一层。）
 
 
+# ── ⑰ 授权式短应答的审查路径（20260923 第六轮，P2）─────────────────────────
+# 链路：主人一句授权式短应答 → 系统台账里**唯一**那条待审 ⇒ 目标由系统定（零 LLM）
+# → 写操作同意闸照旧弹确认框（问句印出 #id/作者/原文/现状/动作）→ 主人点确定才写。
+# 与 ⑧⑪⑭ 的差别只有一处：**靶子不是探针造的**，是台账里那条真实待审留言。
+
+def _board_rows(uid: int, role: str) -> list[dict]:
+    """后台留言台账（后台管理视图，与 agent 的 `_board_index` 同一个数据源）。"""
+    rows = backend_get("/api/protect/board", uid, role)
+    return [r for r in (rows or []) if isinstance(r, dict)]
+
+
+def _board_row(uid: int, role: str, tid: int) -> dict | None:
+    for r in _board_rows(uid, role):
+        if int(r.get("talkKey") or 0) == tid:
+            return r
+    return None
+
+
+def _stage_review_proposal(rep: Report, uid: int, role: str, conv_id: int, tag: str):
+    """铺垫上一轮那句话——**只发问句**（零执行、零写），返回 `(回复, 有复核意图?, 结论)`。
+
+    为什么需要"铺垫"：快道读的是**上一轮 AI 那句话**（`_last_assistant_utterance`），
+    而那句话是模型写的 ⇒ 措辞有方差。判据直接借**生产那一份**
+    （`agent.graph._REVIEW_INTENT_RE` / `_verdict_from_proposal`）——在探针里照抄一份
+    等于让两份判据各自漂。
+
+    结论读成 `""`（回复把"放行"和"驳回"**两族都提了**）**不是缺陷**：那是快道的
+    fail-closed 取向——结论不唯一就不替主人定，退回"注入事实 + planner 自己看系统数据"
+    那条路，弹窗照旧。本腿对**两种情况都验**（见 step17），并在 trace 里核对到底走了哪条。
+    """
+    from agent.graph import _REVIEW_INTENT_RE, _verdict_from_proposal
+    asks = [
+        "留言板那条待审的留言，你建议怎么处理？（先别动手，我还没定）",
+        "那条留言作者自己都申请驳回了，按站里的规矩该怎么处理？先别动手",
+        # 第三句是**刻意收敛**的：快道要求"上一轮那句话结论唯一"，而模型很爱在建议后面
+        # 补一句"也可以放行/也可以删掉"的备选（两族都提 ⇒ 判据读不出 ⇒ 快道不触发，
+        # 那是 fail-closed 不是缺陷）。这一句把回复压成单结论，好让本腿验到快道那一段。
+        "那条就一句话回答我：驳回，还是放行？只说结论，别解释、别提别的做法",
+    ]
+    best = ("", False, "")
+    for i, q in enumerate(asks, 1):
+        d = stream_rust(q, uid, role, conv_id)
+        clean_end(rep, f"{tag} 铺垫轮{i}", d)
+        reply = d.get("reply") or ""
+        intent = bool(_REVIEW_INTENT_RE.search(reply))
+        verdict = _verdict_from_proposal(reply)
+        print(f"  [{'PASS' if (intent and verdict) else 'INFO'}] {tag} 铺垫轮{i}："
+              f"复核意图={intent} 结论={verdict or '（读不出/两族都提了）'}")
+        print(f"        回复：{reply[:300]}")
+        if intent and verdict:
+            return reply, True, verdict
+        # 有意图但结论读不出 ⇒ **继续问下一句**（三句是刻意的收敛阶梯）；
+        # 记下最后那句"有意图"的，供失败时的兜底判定用。
+        if intent:
+            best = (reply, True, "")
+    return best
+
+
+def _trace_fastpath(msg: str, kind: str, within_s: int = 300) -> dict | None:
+    """最近一轮 trace 里有没有那条快道事件（**只读盘**，探针只判"有没有发生"）。
+
+    为什么非读 trace 不可：授权式这一轮**两条路都合法**（快道直拼计划 / 事实注入后
+    planner 自己选），从帧上看不出走的哪条。判据按 `input.message` **完全相等** +
+    起始时间在 `within_s` 秒内认自己那一份（不按 mtime 认——并发对话会顶掉 newest）。
+    """
+    from config.settings import settings
+    best: tuple[str, dict] | None = None
+    for name in os.listdir(settings.trace_dir):
+        if not name.endswith(".json"):
+            continue
+        p = os.path.join(settings.trace_dir, name)
+        try:
+            if time.time() - os.path.getmtime(p) > within_s:
+                continue
+            with open(p, encoding="utf-8") as fh:
+                d = json.load(fh)
+        except Exception:  # noqa: BLE001
+            continue
+        if (d.get("input") or {}).get("message") != msg:
+            continue
+        if best is None or name > best[0]:
+            best = (name, d)
+    if best is None:
+        return None
+    for e in best[1].get("events") or []:
+        if e.get("event") == "fastpath" and e.get("kind") == kind:
+            return e
+    return None
+
+
+def step17_auth_review(rep: Report, uid: int, role: str) -> None:
+    """⑰ 授权式短应答 → 台账定目标 → 弹窗印给主人 → 点确定 → 真写（不复原）。
+
+    靶子是**真实待审留言**（不是探针造的）⇒ 单独一颗 `--allow-board-audit`：跑一次就
+    真把那条留言判成驳回（隐藏）。**结论是"放行"时不点**——那会让它在公开面立刻可见，
+    而结论值本身不影响链路（同一段代码逐字相同），没必要把垃圾留言放出来。
+    """
+    from agent.adminops import BOARD_VERDICT_CN
+    print("\n⑰ 授权式短应答的审查路径（--allow-write + --allow-board-audit）")
+    pending = sorted([r for r in _board_rows(uid, role) if r.get("approved") == 0],
+                     key=lambda r: int(r.get("talkKey") or 0))
+    if len(pending) != 1:
+        print(f"  [skip] 台账里待审 {len(pending)} 条——快道按设计只在**恰好一条**时定目标"
+              f"（0 条/多条一律零写、只注入事实），本腿无从触发；这一轮**没动留言**")
+        rep.warn(f"⑰ 未跑：台账待审 {len(pending)} 条（需恰好 1 条）")
+        return
+    row = pending[0]
+    tid = int(row.get("talkKey") or 0)
+    content = str(row.get("content") or "")
+    print(f"  靶子 = 台账里唯一待审的那条：#{tid} 作者 {row.get('author')!r} 正文 {content[:40]!r}")
+    conv_id = _probe_conv(rep, uid, role, "⑰")
+    if conv_id is None:
+        return
+    try:
+        reply, intent, staged = _stage_review_proposal(rep, uid, role, conv_id, "⑰")
+        if not intent:
+            print("  [skip] 铺垫不出「复核意图」（问句的回复压根没提审核）⇒ 快道的前提就不成立；"
+                  "这一轮**没动留言**")
+            rep.warn("⑰ 未跑：铺垫轮的回复里读不出复核意图（快道前提不成立）")
+            return
+
+        # 授权式短应答（P1 三分类之一：主人把"做哪一件"也交出去了）
+        d = stream_rust("小猫咪按你想法来吧", uid, role, conv_id)
+        got = confirm_frames(d["frames"])
+        clean_end(rep, "⑰ 授权式轮", d)
+        print(f"  [{'PASS' if got else 'FAIL'}] 授权式短应答 → 确认帧"
+              f"（帧 {len(d['frames'])}，确认帧 {len(got)}）")
+        print(f"        回复：{(d.get('reply') or '')[:200]}")
+        fast = _trace_fastpath("小猫咪按你想法来吧", "auth_pending_review")
+        if staged:
+            # 铺垫轮那句话结论唯一 ⇒ 快道**必须**命中（否则 P2 又是一条永不命中的快道）
+            print(f"  [{'PASS' if fast else 'FAIL'}] 铺垫轮结论唯一（{staged}）⇒ trace 里出现"
+                  f"授权式快道（kind=auth_pending_review）")
+            if not fast:
+                rep.fails.append(f"⑰ 铺垫轮结论唯一（{staged}）却走了 planner（trace 无 "
+                                 f"auth_pending_review）= 快道在生产里没命中")
+        else:
+            print("  [INFO] 铺垫轮两族（放行/驳回）都提了 ⇒ 结论读不出 ⇒ 快道按设计不触发；"
+                  "本轮验的是**兜底那条路**：注入系统事实 + planner 自己从系统数据里定目标")
+            rep.check(fast is None, "⑰ 铺垫轮结论不唯一却走了快道（判据与 trace 不一致）")
+        if not got:
+            rep.fails.append(f"⑰ 授权式短应答没弹确认框（帧：{[f[:24] for f in d['frames']]}）"
+                             f"——目标由系统定了，但**签字必须是主人**")
+            return
+        payload, _raw = got[0]
+        if not payload:
+            rep.fails.append("⑰ 确认帧不是合法 JSON")
+            return
+        q = payload.get("q") or ""
+        tok = payload.get("token") or ""
+        load = _token_payload(tok)
+        specs = load.get("specs") or []
+        verdict = (specs[0].get("args", {}) or {}).get("verdict") if specs else None
+        print(f"        问句：{q}")
+        # 弹窗必须让主人**看得见自己在签什么**（用户拍板的形态）：
+        # 内部 id / 留言原文 / 现状 / 动作，四样缺一就是"盲签"。
+        for want, why in ((f"#{tid}", "内部 id"), (content[:12], "留言原文（人类唯一能核对的指称）"),
+                          ("待审", "现状"), (BOARD_VERDICT_CN.get(verdict, "?"), "动作")):
+            okq = want in q
+            print(f"  [{'PASS' if okq else 'FAIL'}] ⑰ 问句含 {want!r}（{why}）")
+            if not okq:
+                rep.fails.append(f"⑰ 弹窗问句里没有 {want!r}（问句：{q!r}）= 主人被迫盲签")
+        rep.check(bool(specs) and specs[0].get("tool") == "audit_board_comment",
+                  f"⑰ 令牌载荷里的 spec 不是 audit_board_comment：{specs!r}")
+        rep.check(load.get("skill") == "board_audit",
+                  f"⑰ 令牌载荷里的技能名不是 board_audit：{load.get('skill')!r}")
+        if staged:
+            rep.check([s.get("args", {}).get("verdict") for s in specs] == [staged],
+                      f"⑰ 令牌载荷里的结论不是铺垫轮那句提议（{staged}）：{specs!r}")
+        if tok and tok in (d.get("reply") or ""):
+            rep.fails.append("⑰ 令牌出现在回复正文里 = Rust 把 __CONFIRM__ 累积进历史了")
+
+        # 弹窗轮零执行：还没点确定，这条留言必须一个字节都没动
+        still = _board_row(uid, role, tid) or {}
+        ok0 = still.get("approved") == 0
+        print(f"  [{'PASS' if ok0 else 'FAIL'}] ⑰ 弹窗轮零执行"
+              f"（库真值 approved={still.get('approved')}，期望 0）")
+        if not ok0:
+            rep.fails.append(f"⑰ 还没点确定，留言 #{tid} 的 approved 就变成 "
+                             f"{still.get('approved')} = 授权被当成了签字")
+            return
+        if verdict != "reject":
+            print(f"  [skip] 令牌里的结论是「{verdict}」——点确定会把这条留言"
+                  f"**放行给全体访客**，超出本腿的安全范围；这一轮**没动留言**")
+            rep.warn(f"⑰ 未点确定：令牌里的结论是 {BOARD_VERDICT_CN.get(verdict, verdict)}"
+                     f"（放行会对全体访客可见）——弹窗那一段已验到，只差点击")
+            return
+
+        # 点「确定」（前端那颗按钮走的就是这条：隐藏确认请求 + 令牌）
+        d2 = stream_rust(f"确认执行：{q}", uid, role, conv_id, confirm_token=tok)
+        clean_end(rep, "⑰ 点确定（真写轮）", d2)
+        after = _board_row(uid, role, tid) or {}
+        want_code = {"reject": 2, "pass": 1}[verdict]
+        ok2 = after.get("approved") == want_code
+        print(f"  [{'PASS' if ok2 else 'FAIL'}] 点确定 → 真写  库真值 approved="
+              f"{after.get('approved')}（期望 {want_code}）")
+        print(f"        回复：{(d2.get('reply') or '')[:200]}")
+        if not ok2:
+            rep.fails.append(f"⑰ 点了确定但留言 #{tid} 的 approved="
+                             f"{after.get('approved')} ≠ {want_code}（回执不可信，以库为准）")
+
+        # 隐藏确认请求**不落用户消息**（同 ⑧）
+        rows_h = history_items(uid, role, conv_id)
+        users = [r for r in rows_h if r.get("role") == "user"]
+        empties = [r for r in users if not (r.get("content") or "").strip()]
+        print(f"        历史：user {len(users)} 行（空 {len(empties)}）／"
+              f"assistant {len([r for r in rows_h if r.get('role') == 'assistant'])} 行")
+        if empties:
+            rep.fails.append(f"⑰ 历史里有 {len(empties)} 条空 user 行 = 隐藏确认请求落库了")
+
+        print(f"  ⚠ 本腿**不复原**：留言 #{tid} 已判为{BOARD_VERDICT_CN[verdict]}"
+              f"——审核端点只有 通过/驳回 两态，没有「退回待审」。"
+              f"要恢复显示请在后台再判一次通过。")
+        rep.warn(f"⑰ 台账里唯一待审的那条留言 #{tid} 已被本腿判为"
+                 f"{BOARD_VERDICT_CN[verdict]}（真实数据，非探针所造，本腿不复原）")
+    finally:
+        _drop_conv(rep, uid, role, conv_id, "⑰")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="管理助手写操作线上活体探针（见模块头注）")
     ap.add_argument("--uid", type=int, default=int(os.environ.get("APP_ADMIN_UID") or 0),
@@ -1464,6 +1690,8 @@ def main() -> int:
                     help="允许删除临时标签（会触发全表 prune_note_tags，不可回滚；不加则只建不删）")
     ap.add_argument("--draft-id", type=int, default=0,
                     help="指定靶子文章 id（必须是草稿；默认自动挑第一篇草稿）")
+    ap.add_argument("--allow-board-audit", action="store_true",
+                    help="允许 ⑰ 真复核台账里那条待审留言（判成驳回=隐藏，且本腿不复原）")
     ap.add_argument("--skip-popup", action="store_true",
                     help="跳过 ⑧⑨⑩（弹窗链路/令牌边界/颜色）——它们要经 SSE 真链路，最慢")
     args = ap.parse_args()
@@ -1541,6 +1769,15 @@ def main() -> int:
                 step14_category(rep, args.uid, "admin")
                 # ⑯ 公告三件（20260922 第五轮）：靶子是一次性公告，跑完必删
                 step16_announcement(rep, args.uid, "admin")
+                # ⑰ 授权式短应答的审查路径（20260923 第六轮）：靶子是**真实待审留言**，
+                # 所以再要一颗开关——跑一次就真判一条留言，且本腿不复原。
+                if args.allow_board_audit:
+                    step17_auth_review(rep, args.uid, "admin")
+                else:
+                    print("\n[skip] ⑰ 授权式短应答的审查路径：未给 --allow-board-audit"
+                          "（该腿会真把台账里那条待审留言判成驳回，且不复原）；"
+                          "这一轮**没动留言**")
+                    rep.warn("⑰ 未跑：缺 --allow-board-audit")
 
     print(f"\n=== {'全部符合预期' if not rep.fails else f'{len(rep.fails)} 项不符'}"
           f"｜警告 {len(rep.warns)} 条｜{round(time.time() - t0, 1)}s ===")
