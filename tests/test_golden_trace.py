@@ -210,6 +210,17 @@ for _c in _cases_jsonl:
               not any(f in ("__CONFIRM__:", "__PENDING__:") for f in _frames),
               str(_frames))
 
+# 接线（能力有测试 ≠ 接线有测试）：通道落在跑法里不代表夜间真给身份——脚本里少了那行
+# export，夜里跑的仍是 uid=0 的虚构态，而报告里只会安静地多出几条 SKIP。两条都要在，
+# 且都带"未设即响亮跳过"的说明（与 reconcile_offline_test 读脚本原文同一纪律）。
+_nightly_src = (ROOT / "scripts" / "nightly_regression.sh")
+_nightly = _nightly_src.read_text(encoding="utf-8") if _nightly_src.exists() else ""
+check("夜间脚本真给两条身份（export GOLDEN_ADMIN_UID / GOLDEN_USER_UID）",
+      "export GOLDEN_ADMIN_UID=721" in _nightly
+      and "export GOLDEN_USER_UID=722" in _nightly, str(_nightly_src))
+check("两条 export 都写明了「未设即响亮跳过」（跳过关乎通过率分母）",
+      _nightly.count("响亮跳过") >= 2)
+
 # prune：只认时间戳目录、只留最近 N 个，**外加所有有失败的旧 run 一律不清理**
 root = golden_trace.trace_root()
 names = [f"2026090{i}_12000{i}" for i in range(1, 8)]  # 7 个时间戳目录
