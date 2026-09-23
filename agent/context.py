@@ -316,8 +316,14 @@ def _short_reply_kind(text: str) -> str:
     return ""
 
 
-def _short_reply_hint(messages: list) -> str:
-    """短应答提示块（planner 模板 {short_reply_hint}）；非短应答给缺省语。"""
+def _short_reply_hint(messages: list, system_facts: str = "") -> str:
+    """短应答提示块（planner 模板 {short_reply_hint}）；非短应答给缺省语。
+
+    `system_facts`（20260923 P2）：随本轮从**系统台账**读来的候选清单，只在授权式
+    那一类后面追加——授权式的目标不许从模型历史里挑，只能从这份台账里定，而
+    "台账里到底有哪几条"必须由系统给（模型自己编不出、也不许编）。给空串则与旧
+    行为逐字相同（非授权式轮次调用点根本不传）。
+    """
     user_msg = _last_user_msg(messages)
     kind = _short_reply_kind(user_msg)
     if not kind:
@@ -341,8 +347,11 @@ def _short_reply_hint(messages: list) -> str:
     else:
         act = ("判定：这是对上一轮提议的**拒绝/收回** → 本轮不规划任何工具，零调用收尾，"
                "简短确认「好，那就不做了」；不得再执行那个动作，也不得声称已经做了什么。")
-    return (f"当前消息是**短应答**（「{user_msg}」）——它本身不含意图，含义由上一轮泠月"
+    text = (f"当前消息是**短应答**（「{user_msg}」）——它本身不含意图，含义由上一轮泠月"
             f"的发言决定：\n　　泠月：{ai}\n{act}")
+    if kind == "auth" and system_facts:
+        text += "\n" + system_facts
+    return text
 
 
 def _has_frames(messages: list) -> bool:
