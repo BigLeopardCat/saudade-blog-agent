@@ -15,7 +15,7 @@ planner 与 narrator ⇒ 指代可以**零调用直接取值**（见 graph.py �
 纪律：
   · 只搬事实、不做判断（摘要里的数字/条目原文必须与工具返回一致）；
   · 解析失败/形态不符一律返回空串——**绝不猜**（空摘要退化为改动前的行为）；
-  · 纯函数、零 LLM、可离线单测（test_entities.py）。
+  · 纯函数、零 LLM、可离线单测（tests/test_entities.py）。
 """
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly regression: test_skills 单测 + 检索基准 + golden set（78 条真实 LLM 用例）+ 巡检
+# Nightly regression: tests/test_skills.py 单测 + 检索基准 + golden set（78 条真实 LLM 用例）+ 巡检
 # 由 crontab 触发（见仓库 README 或 crontab -l）。结果追加到 ~/agent_regression.log；
 # 任一门禁项失败会在 ~/agent_regression.failed 留下标记（存在 = 上次运行失败）。
 # golden 有 FAIL 时导出复审单 eval/report/review_<ts>.md（判据 vs 模型实际输出）——
@@ -25,8 +25,8 @@ TS=$(date '+%Y-%m-%d %H:%M:%S')
 echo "=== nightly regression $TS ===" >> "$LOG"
 
 fail=0
-echo "--- test_skills (技能注册表/plan 契约, 秒级) ---" >> "$LOG"
-$PY test_skills.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] test_skills FAILED" >> "$LOG"; }
+echo "--- tests/test_skills.py (技能注册表/plan 契约, 秒级) ---" >> "$LOG"
+$PY tests/test_skills.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] test_skills FAILED" >> "$LOG"; }
 # 20260924 起：检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）。
 # README 里一直写着 nightly 跑 L1/L2 两项，实际只有 L2——这一节把它补齐。
 # 非门禁：已知 FAIL 是词法表征的局限（脚本自己在报告里点名），不该让夜间任务变红。

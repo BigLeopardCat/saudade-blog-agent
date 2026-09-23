@@ -14,14 +14,14 @@
 失败取向（enforce 打开后）：
   - 未知角色（role=None / 不在 KNOWN_ROLES）→ **零权限**。从不"默认放行"，
     也从不"默认当管理员"。
-  - 未声明的工具 → **拒绝**（fail-closed），并由 test_authz.py 的完备性断言在
+  - 未声明的工具 → **拒绝**（fail-closed），并由 tests/test_authz.py 的完备性断言在
     CI 层拦住——新增工具忘了声明是工程疏漏，不该靠运行时宽容。
   - 拒绝的形态复用既有 blocked 链路（`__ERROR__` 帧 + `scope_denied` 原因码）：
     planner 如实收尾、reflector 受限复盘，不新增决策分支，也不静默吞掉。
 
 跨语言契约：角色名与 scope 名与 Rust 侧 `src/authz.rs` 必须一致（roles 是
 `user.role` 列的取值域，scope 是两边的共同词汇表）。改一侧须同步另一侧 +
-两侧各自的单测（agent: test_authz.py / rust: authz.rs 尾部 #[cfg(test)]）。
+两侧各自的单测（agent: tests/test_authz.py / rust: authz.rs 尾部 #[cfg(test)]）。
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ WRITE_SCOPES = frozenset({SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE, SCOPE_WRITE_CONT
 # 尤其危险的是：若只加 CONSENT_SCOPES 不加 _HARD_SCOPES，生产环境
 # `authz_enforce=False` 会让 `decision.allowed=False` 的非 admin **直接落到 invoke**
 # （graph.execute_node 的 `not allowed and not enforcing` 分支只记录不拦）——即
-# "有确认语的非管理员能把文章设成私密"。test_admin_write.py 有专门一条断言锁它。
+# "有确认语的非管理员能把文章设成私密"。tests/test_admin_write.py 有专门一条断言锁它。
 _HARD_SCOPES = frozenset({SCOPE_ADMIN_CONSOLE, SCOPE_WRITE_CONSOLE})
 # 20260923 刻意**没有** `write.own`：那张表的判据是"纯新增能力、历史流量里一条都没有、
 # 没有观测期可谈"，而"给自己收藏一篇文章"恰恰是**每个登录用户本来就能在页面上做的事**
@@ -113,7 +113,7 @@ _ROLE_SCOPES: dict[str, frozenset[str]] = {
     ROLE_ADMIN: ALL_SCOPES,
 }
 
-# ── 工具 → 所需 scope（**完备性是硬要求**：见 test_authz.py）───────────
+# ── 工具 → 所需 scope（**完备性是硬要求**：见 tests/test_authz.py）───────────
 # 键 = 工具名（与 _TOOL_REGISTRY 一一对应）；值 = 单个 scope。
 # 一个工具要多个 scope 的情况现在没有，出现时改成 tuple 并同步 check()——
 # 不为想象中的需求先把判据复杂化。
@@ -454,7 +454,7 @@ _CONSENT_PATTERNS[SCOPE_WRITE_CONSOLE] = _console_command
 # 防它的闸门里溜过去。工具名进来之后，"这句话里有没有**这个动作**"就是判据本身。
 #
 # 家族名：`_OWN_TOOL_FAMILY` 是工具 → 家族的**完备映射**——没登记的工具一律 False
-# （fail-closed，绝不用"反正都是 own 就放行"兜底），test_authz.py ⑨d 锁完备性。
+# （fail-closed，绝不用"反正都是 own 就放行"兜底），tests/test_authz.py ⑨d 锁完备性。
 _OWN_FAMILY_ADD = "add"
 _OWN_FAMILY_REMOVE = "remove"
 _OWN_FAMILY_READ = "read"

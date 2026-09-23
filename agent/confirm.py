@@ -30,7 +30,7 @@ uvicorn 跑 **2 个 worker**：进程内的一张 pending 表在另一个 worker
 
 ## 纯函数、无网络、无 LLM
 
-`test_confirm.py` 全部秒级复跑。
+`tests/test_confirm.py` 全部秒级复跑。
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def _b64d(text: str) -> bytes:
 
 
 def invalid_trace_meta(uid: int, conv_id, token_len: int) -> dict:
-    """**被拒**的确认请求落 trace 时用的 input 元数据（纯函数，`test_confirm.py` 锁住）。
+    """**被拒**的确认请求落 trace 时用的 input 元数据（纯函数，`tests/test_confirm.py` 锁住）。
 
     为什么是纯函数 + 单测而不是就地写个 dict：这里同时是两条纪律的**唯一展开点**——
       · "哪次被拒了"必须事后查得到（在此之前这条路径连 trace 都没有，见 server.py

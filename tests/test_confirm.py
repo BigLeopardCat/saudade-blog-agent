@@ -17,7 +17,7 @@
   ⑦ 被拒的确认请求留痕（20260924）：元数据里**有**会话 id 与令牌长度、
      **没有**令牌本身；并断言两个调用点在 server.py 里真的接上了。
 
-用法：.venv/bin/python test_confirm.py
+用法：.venv/bin/python tests/test_confirm.py
 """
 
 from __future__ import annotations
@@ -28,6 +28,15 @@ import sys
 import time
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+from pathlib import Path
+
+# ── 仓根（20260924：测试统一搬进 tests/）───────────────────────────────────────
+# 此前本文件就躺在仓根，`sys.path[0]` 天然是仓根；搬进 tests/ 之后要靠这两行才 import
+# 得到 agent/ tools/ rag/。
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+sys.path.insert(0, str(ROOT))
+
 from tools import base as _base  # 工具的返回值契约（ToolResult：str 子类 + kind）
 
 import agent.graph as g
@@ -425,6 +434,7 @@ print()
 # 印着 #id/作者/原文/现状/动作，主人点"确定"才是身份。这条链路正是用户拍板的形态
 # （"弹窗把目标印给主人"），也是 20260923 13:19 那条事故的正解。
 from tools import base as _tb  # noqa: E402
+
 
 _PEND = {94: {"talkKey": 94, "author": "visitor", "approved": 0,
               "content": "垃圾网站，什么破烂，主动申请驳回都失败"}}

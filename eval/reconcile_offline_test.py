@@ -12,7 +12,7 @@
   · `monitor.log`（含只在失败分支出现的 `confirm_card` / `orphan_dom_drop`，以及伪造的带空格 type）
 
 最后一段是**接线断言**：读 `scripts/nightly_regression.sh` 原文，断言对账那一节在里面
-——"能力有测试 ≠ 接线有测试"是本仓踩过的坑（`test_golden_trace.py` 同款纪律）。
+——"能力有测试 ≠ 接线有测试"是本仓踩过的坑（`tests/test_golden_trace.py` 同款纪律）。
 
 用法：.venv/bin/python eval/reconcile_offline_test.py → 全符合预期时退出码 0。
 """

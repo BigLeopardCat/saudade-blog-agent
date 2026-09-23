@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """服务加固单元测试（20260916）：TLS 校验、输入限额、请求体积、并发闸。
 
-纯函数 / 无网络 / 秒级——与 test_skills.py 同款，供 CI（eval.yml）在 push 时跑。
+纯函数 / 无网络 / 秒级——与 tests/test_skills.py 同款，供 CI（eval.yml）在 push 时跑。
 为什么这几条要写成测试而不是只写在文档里：它们全是**默认值一改就悄悄失效**的那类约束
 （少写一个 max_length、顺手加个 verify=False、把 release 删掉），失败方式还不是报错而是
 "慢慢漏：槽位越借越少、prompt 越灌越长"。断言盯着的是**行为**不是行号。
@@ -16,6 +16,13 @@ import asyncio
 import inspect
 import ssl
 import sys
+from pathlib import Path
+
+# ── 仓根（20260924：测试统一搬进 tests/）───────────────────────────────────────
+# 此前本文件就躺在仓根，`sys.path[0]` 天然是仓根；搬进 tests/ 之后要靠这两行才 import
+# 得到 agent/ tools/ rag/。
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+sys.path.insert(0, str(ROOT))
 
 FAILS: list[str] = []
 

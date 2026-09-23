@@ -17,7 +17,8 @@ tagone,topnotes,announcements}），字段名照抄，防"改了字段名测试�
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+sys.path.insert(0, str(ROOT))
 
 from agent.entities import receipt_digest  # noqa: E402
 
@@ -109,7 +110,7 @@ check("截断发生在条目边界（不留半条）", lg.rstrip('」').count("�
 check("None/非字符串不炸", receipt_digest("list_guestbook", None) == "")
 
 print("⑥ planner 契约在位（规则 6b + 回执字段名与 Rust 侧一致）")
-src = (Path(__file__).resolve().parent / "agent" / "graph.py").read_text(encoding="utf-8")
+src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("planner 提示词含规则 6b", "6b. 指代取值优先于重查" in src)
 check("规则 6b 点了 recent_executions 实体摘要", "实体摘要" in src)
 check("回执写入 digest 字段（Rust render_exec_row 读同名键）", 'rcpt["digest"] = digest' in src)

@@ -14,7 +14,7 @@
 #   cd saudade-blog-agent
 #   .venv/bin/python eval/run_golden.py                     # 全量；--limit N / --only a,b / --min-pass-rate
 #   .venv/bin/python eval/golden_full_run.py                # 进程隔离版：逐条独立进程 + 180s 超时，防悬挂
-#   夜间 04:00 已有 scripts/nightly_regression.sh（crontab）跑 test_skills + 全量 golden + trace 巡检。
+#   夜间 04:00 已有 scripts/nightly_regression.sh（crontab）跑 tests/test_skills.py + 全量 golden + trace 巡检。
 #
 # 仓库 Secrets QUALITY_GATE_API_KEY / QUALITY_GATE_BASE_URL 与 Variables
 # GOLDEN_MIN_PASS_RATE / QWEN_MODEL 已无引用，可留可删（留下不影响任何运行）。
@@ -41,46 +41,46 @@ jobs:
         run: uv sync --frozen
 
       - name: 技能注册表/plan 契约单元测试（秒级，纯函数）
-        run: uv run python test_skills.py
+        run: uv run python tests/test_skills.py
 
       - name: 服务加固单元测试（TLS 校验/输入限额/请求体积/并发闸/工具返回三类，秒级，无网络）
-        run: uv run python test_hardening.py
+        run: uv run python tests/test_hardening.py
 
       - name: 协作取消能力边界测试（stop_event 检查点/写操作不被执行，秒级，无网络）
-        run: uv run python test_cancel.py
+        run: uv run python tests/test_cancel.py
 
       - name: 实体摘要单测（数据工具返回 → 可引用实体行，秒级，纯函数）
-        run: uv run python test_entities.py
+        run: uv run python tests/test_entities.py
 
       - name: golden 判据离线自测（词表/正则族/引述豁免，秒级，纯文本函数，无网络）
         run: uv run python eval/judge_offline_test.py
 
       - name: 权限模型单测（scope 声明完备性/角色授予表/失败取向，秒级，纯函数）
-        run: uv run python test_authz.py
+        run: uv run python tests/test_authz.py
 
       - name: 侧任务单测（留言审核/对话摘要：不可信输入围栏 + 输出白名单 + 失败取向，秒级，假模型不联网）
-        run: uv run python test_side_tasks.py
+        run: uv run python tests/test_side_tasks.py
 
       - name: 超长文章单测（分节/按节取回/帧节选：索引与渲染同一套节边界、不无声截断，秒级，纯函数不联网）
-        run: uv run python test_sections.py
+        run: uv run python tests/test_sections.py
 
       - name: 管理助手报表单测（/proc 解析与渲染/读不到≠空/命令前缀消毒/后台代调失败取向，秒级，假 httpx 不联网）
-        run: uv run python test_reports.py
+        run: uv run python tests/test_reports.py
 
       - name: 管理助手写操作单测（失败取向/三道门·权限·确认·目标/写去重 args-aware/回执契约，秒级，假 httpx 不联网）
-        run: uv run python test_admin_write.py
+        run: uv run python tests/test_admin_write.py
 
       - name: 写操作确认弹窗单测（确认令牌签发/验签·fail-closed/弹窗触发矩阵/点确定后的执行轮，秒级，纯函数不联网）
-        run: uv run python test_confirm.py
+        run: uv run python tests/test_confirm.py
 
       - name: 标签/分类写能力单测（名字通道四态·影响面播报·写通道形态·弹窗问句，秒级，假 httpx 不联网）
-        run: uv run python test_tag_admin.py
+        run: uv run python tests/test_tag_admin.py
 
       - name: 用户自己的数据单测（收藏/未读/通知：读完不等于空·未登录零请求·措辞不串后台，秒级，假 httpx 不联网）
-        run: uv run python test_userdata.py
+        run: uv run python tests/test_userdata.py
 
       - name: golden trace 落盘单测（目录守卫/uid 恒 0/三个跑法接线/prune 只删时间戳目录，秒级，不联网）
-        run: uv run python test_golden_trace.py
+        run: uv run python tests/test_golden_trace.py
 
       - name: 回归组重跑单测（假 LLM 驱动 main：复跑才绿按方差放行但必须出声/复跑不许覆盖首跑/能力题不重跑，秒级，不联网）
         run: uv run python eval/golden_rerun_offline_test.py

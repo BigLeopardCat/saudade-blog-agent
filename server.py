@@ -512,7 +512,7 @@ def _summarize_dialogue(user_msg: str, history: list[HistoryItem], old_summary: 
     """needs_summary 轮的独立对话摘要（与 agent 回复解耦，随图并行执行）。
 
     实现已收进 `agent/summarizer.py`（20260920）：那里有不信任输入的围栏、输出清洗
-    与 fail-empty 取向，以及 test_side_tasks.py 的回归锁。这里只留一句转发——
+    与 fail-empty 取向，以及 tests/test_side_tasks.py 的回归锁。这里只留一句转发——
     历史背景（为什么不用"回复末尾顺带输出 SUMMARY"）见该模块头注。
     """
     return summarize(user_msg, history, old_summary)
@@ -1505,7 +1505,7 @@ def review_message(req: ReviewRequest):
     from agent import moderator
     text = (req.content or "").strip()
     # 实现收进 agent/moderator.py（20260920）：不信任输入（访客正文进围栏）、
-    # 输出白名单、fail-open 取向，以及 test_side_tasks.py 的回归锁。
+    # 输出白名单、fail-open 取向，以及 tests/test_side_tasks.py 的回归锁。
     try:
         result = moderator.review(text)
     except Exception:

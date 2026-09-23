@@ -14,7 +14,7 @@
 
 与 graph.py 的关系：graph.py 定义图拓扑与节点（planner/execute/model/gate），
 节点调用本层；本层只依赖 skills / rag.search / context（无反向依赖，避免循环导入）。
-命名沿用原下划线前缀（test_skills.py 与 graph.py 按原名引用，重构不改契约）。
+命名沿用原下划线前缀（tests/test_skills.py 与 graph.py 按原名引用，重构不改契约）。
 
 依赖：skills（技能表/实例化）、rag.search（分词）、context（消息文本）。
 """

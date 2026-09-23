@@ -16,7 +16,8 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+sys.path.insert(0, str(ROOT))
 
 from agent import moderator, summarizer  # noqa: E402
 
@@ -163,7 +164,7 @@ check("模型异常 → 空串（fail-empty，不让失败变成一条摘要）"
       summarizer.summarize("x", [], "", llm=FakeLLM(exc=RuntimeError("boom"))) == "")
 
 print("⑦ 接线：server.py 真的在用这两个模块（不是又抄了一份）")
-server_src = (Path(__file__).resolve().parent / "server.py").read_text(encoding="utf-8")
+server_src = (ROOT / "server.py").read_text(encoding="utf-8")
 check("review_message 转发到 moderator.review", "moderator.review(text)" in server_src)
 check("摘要转发到 agent.summarizer.summarize", "from agent.summarizer import summarize" in server_src
       and "return summarize(user_msg, history, old_summary)" in server_src)
@@ -175,7 +176,7 @@ check("server 仍保留失败日志（异常不静默）",
 # agent 这边三处注释 + 本套件一条断言，此前都写着"调用方降级放行"——而 Rust 从
 # b3c4d83 起就是**转人工待审**（`board_approved` 的三个失败分支都返回
 # `(0, None, None)`）。父仓单独 checkout 时读不到 ⇒ 明说跳过，不假装通过。
-_talks = Path(__file__).resolve().parent.parent / "src" / "routes" / "talks.rs"
+_talks = ROOT.parent / "src" / "routes" / "talks.rs"
 if _talks.exists():
     _ts = _talks.read_text(encoding="utf-8")
     check("父仓 talks.rs 的审核失败分支确实返回「转人工待审」(0, None, None)",

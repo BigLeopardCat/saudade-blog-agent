@@ -62,7 +62,7 @@ scope 词汇表（`<动作>.<对象>`）：`read.public` / `read.own` / `read.an
 | `secretary` | 上面全部 + read.any、write.content | 新增档：能读他人数据、能代写；**进不了后台管理面** |
 | `admin`（博主） | 全部 | = 今天的行为 |
 
-工具级的 `TOOL_SCOPE`（22 个工具一个不漏，**完备性由 `test_authz.py` 在 CI 层锁死**：
+工具级的 `TOOL_SCOPE`（22 个工具一个不漏，**完备性由 `tests/test_authz.py` 在 CI 层锁死**：
 新增工具忘了声明会红，不靠运行时宽容）。`write.*` 三档单独成集（`WRITE_SCOPES`），
 留给"人在回路确认"挂钩（前置需求 ③）。
 
@@ -99,7 +99,7 @@ requires_consent(principal, tool)         # 只看 scope 是否在 CONSENT_SCOPE
   判 BLOCK → planner 去问用户。用 `__ERROR__` 而不是普通文本是有意的：gate 分支 5a
   （错误帧 + 完成式声称 → fallback）因此自动生效，**叙述侧无法把"没执行"说成"已发布"**
   （需要"已经帮你发布好啦"这类句子被判据认出来，见 `_WRITE_CONTENT_CLAIM_RE` 三支的取舍）。
-- **`write.content` 至今空转**：现有工具里**没有一个是 `write.content`**（`test_authz.py` ⑨
+- **`write.content` 至今空转**：现有工具里**没有一个是 `write.content`**（`tests/test_authz.py` ⑨
   锁着这条事实）。它等的是第一个"代用户发文"的工具——**新增时不需要改这段代码**，
   声明表里给它 `write.content` 就自动落在闸下。
 
@@ -111,13 +111,13 @@ requires_consent(principal, tool)         # 只看 scope 是否在 CONSENT_SCOPE
   就是命令、也是确认，**不再要第二句"确认"**。所以这个判据回答的是"**本轮有没有明确命令**"，
   **不是**"有没有第二次确认"——措辞与文档都要说准，否则下一个人会以为漏了一层。
 - **判据必须是命令式的**（动作词 + 目标词），并**排除疑问/假设/转述**。成对断言锁在
-  `test_authz.py` 与 `test_admin_write.py`：`"把文章 12 设为私密"` → 放行；
+  `tests/test_authz.py` 与 `tests/test_admin_write.py`：`"把文章 12 设为私密"` → 放行；
   `"把文章 12 设为私密会有什么影响？"` / `"如果我把文章 12 设为私密的话"` → **不放行**。
 - **fail-closed 的方向 = 判不出来就先追问**（多问一次，不误写）。这一条与 §3.4 顶部那句
   同源：确认闸宁可挡下一次合法写，也不能放行一次没被要求的写。
 - **`write.console` 同样进 `_HARD_SCOPES`**（不吃 shadow）：写能力纯新增、没有观测期。
   ⚠️ 只进 `CONSENT_SCOPES` 而**不进** `_HARD_SCOPES` 是本轮最危险的一处——`authz_enforce=False`
-  时 `decision.allowed=False` 会直接落到 invoke。两个集合都进，`test_admin_write.py` 用
+  时 `decision.allowed=False` 会直接落到 invoke。两个集合都进，`tests/test_admin_write.py` 用
   `authz_enforce=False` 下的非 admin 断言把这条锁死。
 - **叙述侧的第二道网**：同意闸挡的是执行，narrator 还有可能把"没执行"讲成"已经置顶啦"。
   因此新写动词进了 gate 的两族判据（err 帧轮走 5a 的 `_WRITE_CONTENT_CLAIM_RE`，
@@ -136,7 +136,7 @@ requires_consent(principal, tool)         # 只看 scope 是否在 CONSENT_SCOPE
   （句首 把/将、句首动词、句首假设词）——带着壳一条都命不中。后果实测到两条：
   **教科书式的明确命令**「把文章 12 设为私密」判 False（连"同轮命令即确认"这条快道
   也从未真正生效过），假设句「如果我把文章 12 设为私密」也判不出提问。修法 =
-  判据入口先剥系统方括号注记（`authz._strip_system_tags`），`test_authz.py` ⑨f 用
+  判据入口先剥系统方括号注记（`authz._strip_system_tags`），`tests/test_authz.py` ⑨f 用
   "带壳与不带壳判定一致 + 剥完仍是对的那个判定"两句锁住（只测透明度的话，
   "两边都判 False"也能过）。**教训**：判据函数有测试 ≠ 判据在真实输入形态上有测试；
   真实输入形态是 server 拼出来的，测试必须按它的拼法喂。
@@ -154,7 +154,7 @@ requires_consent(principal, tool)         # 只看 scope 是否在 CONSENT_SCOPE
   在一个本为防它而设的闸门里溜过去。所以 `consent_granted` 对**可调用**的判据多传一个
   参数（工具名），`_own_command(msg, tool)` 据此判"这句是不是在命令**这一个**工具"；
   `_console_command` 收下不用（后台写的靶子由技能模板与目标校验管，那里更硬）。
-  回归锁 = `test_authz.py` ⑨g 的"同一句话对不同 own 工具结论相反"。
+  回归锁 = `tests/test_authz.py` ⑨g 的"同一句话对不同 own 工具结论相反"。
 - **工具 → 动作家族是完备映射**（`_OWN_TOOL_FAMILY`，仿 `TOOL_SCOPE` 的完备性纪律）：
   没登记的工具一律 False，**不用"反正都是 own"兜底**（那正是上面那条要防的）。
 - **三档角色都授予、不进 `_HARD_SCOPES`、不进 `_ALWAYS_CONFIRM_TOOLS`**：它写的是调用者
@@ -296,7 +296,7 @@ Python 写 / Rust 读，`src/routes/chat.rs::render_exec_row` 四个新臂），
 写操作从不由访客发起，把管理员的操作标成访客是伪造审计记录。
 
 **验证（三件套，口径不同）**：
-- `test_admin_write.py`（秒级、零网络、**进 CI**）= 本轮回归主力：假 httpx 验 `_admin_post`
+- `tests/test_admin_write.py`（秒级、零网络、**进 CI**）= 本轮回归主力：假 httpx 验 `_admin_post`
   的 `uid<=0` 不发请求 / 401 / 403 / HTTP 200+code 500 一律 unavailable；假工具 + 假 principal
   直接驱动 `execute_node`，验三道门（疑问句/假设句 → 零调用 + `consent_required`；
   非 admin → `denied`；**`authz_enforce=False` 下非 admin 也必须被硬拦**；目标无据 →
@@ -385,7 +385,7 @@ execute 遇到写 spec 卡在同意闸上
   拼计划（技能名取自签名、**不猜**；参数一字不改；技能名与工具对不上 → 整单拒绝，防令牌
   被换工具）。execute 的两道确定性门（同意闸 / 目标有据）对确认轮**放行**——"用户点的确认"
   本身就是凭据，而"有据"已在签发时校验；**授权不放行**：非 admin 即便持有有效令牌，
-  仍被 `_HARD_SCOPES` 硬拦（`test_confirm.py` ⑤ 锁着）。
+  仍被 `_HARD_SCOPES` 硬拦（`tests/test_confirm.py` ⑤ 锁着）。
 - **弹窗只弹该弹的**：`_confirm_popup` 要求"授权过 ∧ 未判成命令 ∧ 非提问 ∧ 参数能实例化 ∧
   无 `$ref` ∧ 文章写有目标有据"，任一不满足都不弹（退回既有链路）。**目标无据不弹**尤其
   重要：弹出来的是"要不要改文章 12"，而 12 是编的——确认框会把一个幻觉洗成一条已授权的写。
@@ -406,8 +406,8 @@ execute 遇到写 spec 卡在同意闸上
 
 #### 验证与**诚实缺口**
 
-- 离线（进 CI）：`test_confirm.py`（令牌往返/篡改/换 uid/换会话/过期/空密钥/`$ref` 拒签 +
-  弹窗触发矩阵 + 点确定后的执行轮 + 颜色表）、`test_authz.py` ⑨d/⑨f、`judge_offline_test.py`
+- 离线（进 CI）：`tests/test_confirm.py`（令牌往返/篡改/换 uid/换会话/过期/空密钥/`$ref` 拒签 +
+  弹窗触发矩阵 + 点确定后的执行轮 + 颜色表）、`tests/test_authz.py` ⑨d/⑨f、`judge_offline_test.py`
   新增帧级判据的 fixture。
 - golden（**点不了按钮**）：`admin_write_natural_confirm_popup` 只能验"该弹窗时弹了窗、
   且什么都没写"——帧级断言 `require_frame_prefix: ["__CONFIRM__:"]` + 零写工具 + 文本里
@@ -457,7 +457,7 @@ execute 遇到写 spec 卡在同意闸上
 **审计口径不变**（同 §5.2 ⑥）：回执行仍走 `execution_log.detail` 的渲染定稿，新 op 在父仓
 `render_exec_row` 补分支（`修改标签「X」` / `删除标签「X」` / `新建分类「X」` …），零迁移。
 
-**验证**：`test_tag_admin.py`（离线、进 CI）+ golden 4 条零真写用例 + 探针腿 ⑪–⑮（真写，全部复原；
+**验证**：`tests/test_tag_admin.py`（离线、进 CI）+ golden 4 条零真写用例 + 探针腿 ⑪–⑮（真写，全部复原；
 **统一读到连接关闭才算干净收尾**——20260921 那次"库改了、回执落了、前端只看到一行报错"就是
 旧盲区放过去的）。**诚实备注**：① 腿⑭ 建分类时 planner 会把名字里的**首尾下划线当 markdown 强调
 吃掉**（trace 实证：说 `_探针分类_0922…`、传 `title="探针分类_0922…"`）⇒ 探针改成按 token 认人、

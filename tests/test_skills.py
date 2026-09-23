@@ -19,13 +19,21 @@ narrator）→ gate（确定性检查 + fallback 收尾）。原"落回 LLM 质�
   - gate 确定性检查（零帧声称收窄作用域/err 帧完成声称/确认式导航声称/注记核验/
     fallback 终局语义）
 
-用法：.venv/bin/python test_skills.py
+用法：.venv/bin/python tests/test_skills.py
 """
 import json
 import pathlib
 import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+from pathlib import Path
+
+# ── 仓根（20260924：测试统一搬进 tests/）───────────────────────────────────────
+# 此前本文件就躺在仓根，`sys.path[0]` 天然是仓根；搬进 tests/ 之后要靠这两行才 import
+# 得到 agent/ tools/ rag/。
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+sys.path.insert(0, str(ROOT))
 
 from agent.graph import (_PLANNER_OUTPUT_RE, REFLECT_MAX_ROUNDS, _article_fast_path,
                          _check_spec, _display_fast_path, _effect_switch_fast_path,
@@ -34,6 +42,7 @@ from agent.graph import (_PLANNER_OUTPUT_RE, REFLECT_MAX_ROUNDS, _article_fast_p
                          plan_encode, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, SKILL_MAP, instantiate_plan
+
 
 FAILS = []
 
@@ -2978,7 +2987,7 @@ def test_no_sibling_tool_name_in_user_text():
     # "本技能计划里会执行哪些工具"在静态上不可判定 ⇒ 用它们自己的可调用白名单当上界
     # （planner 只能从那两个白名单里点名）；白名单之外的工具名依旧算泄漏。
     DYNAMIC = {"chat", "content_query"}
-    root = pathlib.Path(__file__).parent
+    root = ROOT
 
     # ① adminops.py：全部字符串字面量（去 docstring、去"整串就是工具名"的比较常量）
     src = (root / "agent/adminops.py").read_text()
@@ -3389,7 +3398,7 @@ def test_write_ledger_note_round():
     check("gate 洞④：没有锚时照旧判（豁免不是把判据关掉）",
           _hit is not None and _hit[0] == "site_absence_claim_without_tool",
           str(_hit)[:90])
-    _src = (pathlib.Path(__file__).resolve().parent / "agent"
+    _src = (ROOT / "agent"
             / "graph.py").read_text(encoding="utf-8")
     check("三处确定性收尾路径都用了同一个锚常量（不是各写一遍字面量）",
           _src.count("_LEDGER_NOTE_PREFIX +") == 3,

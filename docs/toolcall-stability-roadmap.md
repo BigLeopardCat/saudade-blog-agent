@@ -105,7 +105,7 @@ tool_use / tool_result 直接进 transcript，模型对执行结果的"转述"�
 **现状**：`gate_node` 里有 13 处 `_fallback_result` 调用点、15 个 reason 码
 （6 张编号闸 5a–5f + 1b 逐字复读 + 命令前缀 + 编造 URL + 零帧注记核验 + `_claim_issue` 的 5 个子判据），
 词表随每次事故单调增长；
-`test_skills.py` 里散着约 20 条布尔断言锁判据，但**没有一份"真实语料 + 期望判定"的基线**，
+`tests/test_skills.py` 里散着约 20 条布尔断言锁判据，但**没有一份"真实语料 + 期望判定"的基线**，
 所以"这次改判据少抓了几条 / 多抓了几条"永远算不出来。今天补的 clause 落 trace
 （`_clip_clause` / `_claim_clause` / `_fallback_result(clause=)`）是这条的前置：**先有句子，才有语料**。
 
@@ -255,7 +255,7 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 新增"同工具不同目标不误去重"用例（现在是靠渲染文本不同来区分的）。
 
 **风险**：迁移（生产库）+ 跨语言契约（Python 写 / Rust 读，`digest` 的同族风险：
-改一侧必须同步另一侧 + `test_entities.py`）。
+改一侧必须同步另一侧 + `tests/test_entities.py`）。
 
 ---
 
@@ -315,10 +315,10 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 | # | 修法 | 落点 |
 |---|------|------|
 | ① | 有帧轮专用兜底文案（只否认被点名的那件事，不否认整轮） | `graph.py` `_FALLBACK_PHANTOM_CLAIM` / `_FALLBACK_SEARCH_CLAIM_FRAMED` |
-| ② | 判据命中的**子句**落 trace（`_clause_hit` 系列 + `_claim_clause` + `_fallback_result(clause=)`） | `graph.py`；`test_skills.py::test_gate_frame_checks` |
+| ② | 判据命中的**子句**落 trace（`_clause_hit` 系列 + `_claim_clause` + `_fallback_result(clause=)`） | `graph.py`；`tests/test_skills.py::test_gate_frame_checks` |
 | ③ | `list_tags` 读 `/tagone + /tagtwo` 并保持层级（`merge_tag_rows`，父/子写成 `父/子`） | `tools/base.py` / `agent/adminops.py` / `agent/entities.py` |
 | ④ | 能力清单**由注册表按角色渲染**（`Skill.capability` + `visible_skills` + `context.site_guide(role)`） | `agent/skills.py` / `agent/context.py` / `graph.py` 三节点 |
-| ⑤ | 5c 加"复述本轮工具自己说的话"豁免 + 工具返回文本里禁止出现工具名（lint 锁） | `graph.py` `_phantom_tool_claim_span`；`adminops.py` 渲染层；`test_skills.py::test_no_sibling_tool_name_in_user_text` |
+| ⑤ | 5c 加"复述本轮工具自己说的话"豁免 + 工具返回文本里禁止出现工具名（lint 锁） | `graph.py` `_phantom_tool_claim_span`；`adminops.py` 渲染层；`tests/test_skills.py::test_no_sibling_tool_name_in_user_text` |
 | ⑥ | 回执顶层 meta 的 `tag_name` 不再被当工具实参读 | `src/routes/chat.rs`（+ 3 条单测） |
 | ⑦ | planner 侧参数语义写进技能描述 + 工具侧"父子同名"确定性拒绝 | `agent/skills.py` / `tools/base.py` |
 | ⑧ | 确认弹窗问句点名父标签（读不到字典则退回 id，不因此不弹窗） | `agent/adminops.py` `_confirm_one/render_confirm_question` + `graph.py` `_confirm_popup` |
@@ -331,8 +331,8 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 | ⑩ | 「把文章 1 的「摄影」标签去掉」——planner 没产出写 spec，用 chat 回了一句"请再确认一下"，于是**弹窗链路根本没被触发**，用户看到的是又一轮往返 | **叙述权/决定权错位**：planner 把"要不要执行"判成了自己的事（那本是同意闸 + 确认框的事） | `graph.py` planner 规则 4b + `skills.py` 三个写技能描述同句；`adminops._confirm_one` 顺带补"摘哪个标签"（同族盲签） |
 
 两条都在**判据/措辞层**收口（P3/P4 方向的最小动作），并各补了 golden 用例
-（`admin_write_intent_tag_remove_popup` 锁⑩；⑨ 的判据在 `test_admin_write.py` §⑮ +
-`test_confirm.py` 弹窗一节两级锁死，golden 不做真写故不覆盖）。
+（`admin_write_intent_tag_remove_popup` 锁⑩；⑨ 的判据在 `tests/test_admin_write.py` §⑮ +
+`tests/test_confirm.py` 弹窗一节两级锁死，golden 不做真写故不覆盖）。
 
 ### 附三：②防线——写操作的身份回落（20260922，P3 方向的第二次加固）
 
@@ -367,11 +367,11 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 全绿——差别不在代码在**环境**：`test_admin_write` 的 §⑰ 正例暗中依赖本机 `.env` 里的
 `settings.jwt_secret`，而 CI 没有 `.env`、该值是空串；`confirm.sign` 密钥空缺时返回空串，
 `_confirm_popup` 据此 `return None`（既有 fail-closed 兜底），于是**三条"该弹窗"的正例在 CI 里
-静默变成"没弹"**，反例却照样绿——典型的"反例恒真"假绿形态（`test_confirm.py:48` 早就为同一个坑
+静默变成"没弹"**，反例却照样绿——典型的"反例恒真"假绿形态（`tests/test_confirm.py:63-66` 早就为同一个坑
 留过注释）。两处修：套件按成例打**密钥桩**并在收尾还原；`_confirm_popup` 的空令牌分支补
 **WARNING + trace `token_sign_failed`**（它一旦生效会静默关掉**所有**写确认弹窗、退回"判不成命令
 就追问"的死路形态，而链路上没有别的信号——fail-closed 语义不变，只是不再无声）。
-**本地复现 CI 的办法**：`JWT_SECRET= .venv/bin/python test_admin_write.py`（pydantic-settings
+**本地复现 CI 的办法**：`JWT_SECRET= .venv/bin/python tests/test_admin_write.py`（pydantic-settings
 里环境变量优先于 `.env`，实测密钥长度 64 → 0），改前红、改后绿；12 个套件全部按此法复跑过。
 **推广的纪律**：凡判据读全局单例配置（settings / 密钥 / 旗标），正例必须**自带桩**——"本机有
 `.env`"是一个隐式的测试前提，而它不在仓库里。
