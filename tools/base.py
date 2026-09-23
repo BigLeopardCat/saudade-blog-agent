@@ -2375,21 +2375,38 @@ def list_my_favorites(config: RunnableConfig) -> str:
 # "是什么"——只有计数时那一句要么再调一次 list_notifications（多一轮）、要么
 # 拿计数去编内容。上限 10 条：条目是给"红点里是什么"看的，不是列表副本
 # （要全量走 list_notifications）；超限时在 `unread_items_note` 里如实说明。
+# 20260924 二改：`content` **进**条目。首版刻意不搬它（当时的口径是"条目只给指代用"），
+# 实测错了——留言审核的**驳回理由就写在 content 里**，不搬等于逼着多问一轮：
+# trace 20260924T025619 只拿到 title，访客紧接着问"那两条留言的审核意见是什么"，
+# 正是这一句逼出后面两轮（其中一轮还把通知里的留言 id 当文章 id 去查 get_article_detail）。
+# 截断到 120 字：条目是摘要，要原文走 list_notifications。
 _UNREAD_ITEMS_MAX = 10
-_UNREAD_ITEM_KEYS = ("id", "type", "title", "link", "createdAt")
+_UNREAD_ITEM_KEYS = ("id", "type", "title", "content", "link", "createdAt")
+_UNREAD_CONTENT_MAX = 120
 # 条目那半读不到时的措辞（计数是真的、条目没有）：**不许**退化成"没有未读条目"
 _UNREAD_ITEMS_DOWN = "未读条目的内容这次没读到（只有计数是可信的）"
+
+
+def _unread_item_slim(row: dict) -> dict:
+    """一条未读通知 → 给 planner/narrator 看的条目（`content` 截断，别把整条通知搬进帧）。"""
+    out = {k: row[k] for k in _UNREAD_ITEM_KEYS if k in row}
+    text = out.get("content")
+    if isinstance(text, str) and len(text) > _UNREAD_CONTENT_MAX:
+        out["content"] = text[:_UNREAD_CONTENT_MAX] + "…"
+    return out
 
 
 @tool
 def get_unread_summary(config: RunnableConfig) -> str:
     """查看**当前登录用户自己**的未读汇总：计数（notifications / messages / total）
-    **连带未读的那几条通知**（`unread_items`：id / type / title / link / createdAt，
-    最多 10 条，超出时另有 `unread_items_note` 说明）。
+    **连带未读的那几条通知**（`unread_items`：id / type / title / content（正文，截断
+    120 字）/ link / createdAt，最多 10 条，超出时另有 `unread_items_note` 说明）。
     红点数 = 站内通知未读 + 私信未读；**公告在发布时按用户展开成通知行**，所以
     公告的未读也计在 notifications 里，不需要另一套计数。
     访客问"我有未读吗""红点上有几条""有多少没看的消息""红点里是什么/是什么通知"时用
-    ——问"是什么"**不必**再调 list_notifications（未读条目就在这次返回里）。
+    ——问"是什么"**不必**再调 list_notifications（未读条目连同正文就在这次返回里）。
+    **通知正文里往往就是答案本体**（如留言审核的驳回理由写在 content 里）：访客追问
+    "那是什么内容/理由是什么"时先看这里，别绕去查别的接口，更不许说"读不到内容"。
     未登录时如实告知读不到。"""
     data = _own_get("/api/protected/notifications/summary", config)
     if isinstance(data, ToolResult):
@@ -2416,8 +2433,7 @@ def get_unread_summary(config: RunnableConfig) -> str:
         return _shape(out)
     unread = [r for r in rows
               if isinstance(r, dict) and not r.get("isRead")]
-    slim = [{k: r[k] for k in _UNREAD_ITEM_KEYS if k in r}
-            for r in unread[:_UNREAD_ITEMS_MAX]]
+    slim = [_unread_item_slim(r) for r in unread[:_UNREAD_ITEMS_MAX]]
     out = dict(data, unread_items=slim)
     # 抬头那个计数（notifications）才是权威数量：拿它跟带回来的条数比，**两种缺口
     # 用同一句话如实说**——① 超过本条上限；② 未读里较早的落在列表接口的最近 100 条
