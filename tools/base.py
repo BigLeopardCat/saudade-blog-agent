@@ -2667,6 +2667,160 @@ def read_notifications(
 
 
 # ---------------------------------------------------------------------------
+# 站内信（私信）（20260923 批 8）：读信箱 / 标记已读（发信见本节的最后一小节）
+# ---------------------------------------------------------------------------
+# **术语必须分开**（用户点名要求）：站内信（私信）≠ 河灯留言。
+#   · 河灯留言 = 访客在**公开页面**写下的内容（灯影集/说说），谁都看得见
+#     ——那是 `list_guestbook` / `list_talks`。
+#   · 站内信 = 一封**一对一**的信，只有收发双方看得见——就是这一节。
+# 两者混用会让 narrator 说出"我看了你留言板上收到的私信"这种不存在的东西，
+# 所以每个工具的 docstring 与技能描述里都把这句话写死一遍。
+#
+# 端点（Rust src/routes/profile.rs）：`GET /api/protected/messages`（收件箱 +
+# 发件箱，各最近 100 条）、`POST /api/protected/messages/read`（只动收件箱里我的
+# 信）、`POST /api/protected/messages`（发一条，收件人**按账号或 UID** 精确匹配）。
+# 收发双方都只认 auth_uid——**没有"读别人的信箱"的接口**。
+#
+# 读那一半（scope = read.own）与收藏/通知同族：`_own_get` fail-closed，读不到
+# 绝不返回空（"你信箱里没有信"是结论，"没读到"不是）。
+
+
+def _mailbox_inbox(data) -> dict[int, dict] | None:
+    """信箱返回（`{inbox, outbox, unread}`）→ `{id: 收件箱那一行}`；形态不对 → None。
+
+    只收**收件箱**：这个函数的两个调用点（写前读、写后复核）都只关心"我收到的信"，
+    发件箱里的信被别人读没读是别人的事（`isRead` 只对收件人有意义）。
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("inbox"), list):
+        return None
+    out: dict[int, dict] = {}
+    for r in data["inbox"]:
+        if not isinstance(r, dict):
+            continue
+        mid = _as_article_id(r.get("id"))
+        if mid is not None:
+            out[mid] = r
+    return out
+
+
+def _mailbox_unread(data) -> int | None:
+    """信箱返回里的未读封数（Rust `MailboxDto.unread`）；读不出 → None（不写 0）。"""
+    n = (data or {}).get("unread") if isinstance(data, dict) else None
+    return n if isinstance(n, int) and not isinstance(n, bool) else None
+
+
+@tool
+def list_my_messages(config: RunnableConfig) -> str:
+    """列出**当前登录用户自己**的站内信（私信）：收件箱与发件箱各最近 100 条，
+    外加未读封数（返回 inbox / outbox / unread，每封带 id / fromUserId / toUserId /
+    peerName / title / content / isRead / createdAt）。
+    访客问"我的信箱里有什么""谁给我写过信""我发出去的信"时用。
+    ⚠️ 站内信与**河灯留言**是两回事：留言在公开页面上、谁都看得见（那是
+    list_guestbook）；站内信是一对一写的信，只有收发双方看得见。
+    未登录时如实告知读不到。"""
+    data = _own_get("/api/protected/messages", config)
+    return _shape(data)
+
+
+@tool
+def read_messages(
+    config: RunnableConfig,
+    ids: Annotated[list[int] | None, "要标记已读的那几封**收到的信**的 id（用户点名了具体"
+                                     "哪几封时给；id 只能来自 list_my_messages 的返回或执行"
+                                     "记忆摘要里 `id《标题》` 形态的编号，**不许把「共 N 封」"
+                                     "里的 N 当 id**，也不许自己编"] = None,
+    all: Annotated[bool | None, "true = 把**全部**未读的收信标记已读（用户说了「全部/都/"
+                                "所有」才给；只是「把信读了」这种没限定范围的**不要自己填 True**）"] = None,
+) -> str:
+    """把**当前登录用户自己收到的**站内信标记为已读（按 id 或全部）。**已读不可撤销**：
+    标记之后那几封就不再是未读（红点会变小），所以只有用户明确说了要标记才用。
+    既能要不到 id 也没说"全部"时**什么都不动**，如实问清是哪几封。
+    只动**收到的**信——发出去的信别人读没读改不了。
+    未登录时如实告知，一个请求都不发。
+
+    ⚠️ 与 read_notifications 同一个坑：形参名 `all` 遮蔽内置 `all()`，本函数体内
+    不得再调用内置 `all(...)`（要判"全都没读"用显式循环）。
+    """
+    want_all = _as_bool(all) is True
+    want_ids = _as_ids(ids)
+    guard = _own_write_guard(config)
+    if guard is not None:
+        return guard
+    if not want_all and not want_ids:
+        return unavailable("没有指出要标记哪几封信（是全部未读、还是某几封的 id），未改动")
+
+    before = _own_get("/api/protected/messages", config)
+    if isinstance(before, ToolResult):
+        return _pre_read_fail(before, "你的信箱（无法确认哪几封是未读）")
+    rows = _mailbox_inbox(before)
+    if rows is None:
+        return unavailable("读不到你的信箱，无法确认哪几封是未读，本次未改动")
+
+    if want_all:
+        targets = [i for i, r in rows.items() if r.get("isRead") is not True]
+    else:
+        targets = want_ids
+        # 与 read_notifications 同一条纪律（20260923 三轮的那次误导）：**写之前**先确认
+        # 这些 id 至少是"我读得到的"——一个都不在就零写 + not_found 如实说清，绝不让
+        # 一个编出来的 id 变成一次注定 0 行的写 + 一句「服务不可用」的误报。
+        unknown = [i for i in targets if i not in rows]
+        if len(unknown) == len(targets):
+            return not_found(
+                f"你点名的信 {'、'.join(str(i) for i in unknown)} 不在我读到的收件箱"
+                f"（最近 {len(rows)} 封，最多 100 封）里，无法确认是哪几封——"
+                f"本次一个字节都没改（没有发出写请求）。"
+                f"要标记哪一封请先读一遍信箱拿它的 id（每封都带着 id）。")
+        if unknown:
+            return not_found(
+                f"你点名的信里 {'、'.join(str(i) for i in unknown)} 不在我读到的收件箱"
+                f"（最近 {len(rows)} 封，最多 100 封）里，无法确认是哪几封——"
+                f"本次一个字节都没改（没有发出写请求）。"
+                f"请把 id 核对一遍（或说「全部标记已读」由系统按未读的那几封来标）。")
+        all_read = True
+        for i in targets:
+            if rows.get(i, {}).get("isRead") is not True:
+                all_read = False
+                break
+        if all_read:
+            return ok(f"信 {('、'.join(str(i) for i in targets))} 本来就是已读，"
+                      f"无需改动（没有发出写请求）。",
+                      meta={"op": "message_read", "change": "本来就读过", "noop": True})
+    if want_all and not targets:
+        return ok("你的收件箱本来就没有未读的信，无需改动（没有发出写请求）。",
+                  meta={"op": "message_read", "change": "本来就没未读", "noop": True})
+
+    n_before = _mailbox_unread(before)
+    if n_before is None:
+        return unavailable("读不回未读的封数，无法确认改动是否生效，本次未改动")
+
+    payload = {"ids": [], "all": True} if want_all else {"ids": sorted(targets), "all": False}
+    data = _own_post("/api/protected/messages/read", payload, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    # 写后复核 = **一次独立读数**（接口回的那份不算判据）：未读封数必须真降，
+    # 且点名的每一封都确实是已读了——只看"降了"会在"标错了几封、又漏了几封"
+    # 的巧合下判成功（净变化相同）。
+    after = _own_get("/api/protected/messages", config)
+    if isinstance(after, ToolResult):
+        return unavailable(f"标记已读请求已发出，但读不回你的信箱（{after}），"
+                           f"本次改动未确认生效（不要声称已标记）")
+    n_after = _mailbox_unread(after)
+    if n_after is None:
+        return unavailable("标记已读请求已发出，但读不回未读封数，本次改动未确认生效")
+    if n_after >= n_before:
+        return unavailable(f"标记已读请求已发出，但读回未读的信仍是 {n_after} 封"
+                           f"（可能这几封本来就是已读）——本次改动未确认生效，不要声称已标记")
+    arows = _mailbox_inbox(after) or {}
+    still = [i for i in targets if arows.get(i, {}).get("isRead") is not True]
+    if still:
+        return unavailable(f"标记已读请求已发出，但读回信 {'、'.join(str(i) for i in still)} "
+                           f"还不是已读——本次改动未确认生效，不要声称已标记")
+    return ok(f"已把 {n_before - n_after} 封信标记为已读（收件箱现在未读 {n_after} 封）。",
+              meta={"op": "message_read", "change": f"标记已读 {n_before - n_after} 封"})
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -2728,6 +2882,10 @@ _TOOL_REGISTRY = [
     add_favorite,
     remove_favorite,
     read_notifications,
+    # 站内信（私信）（20260923 批 8）：读信箱=read.own，标记已读=write.own，
+    # 见"站内信"节头注（术语：站内信 ≠ 河灯留言）
+    list_my_messages,
+    read_messages,
 ]
 
 def get_all_tools():

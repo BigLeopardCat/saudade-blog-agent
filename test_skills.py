@@ -938,9 +938,10 @@ def test_phantom_tool_claim():
     # 河灯留言人工复核两件：audit_board_comment / delete_board_comment；
     # 40 → 43 是 20260923 加的用户自己的数据三件：list_my_favorites /
     # get_unread_summary / list_notifications；43 → 46 是同一批的写三件：
-    # add_favorite / remove_favorite / read_notifications）。
+    # add_favorite / remove_favorite / read_notifications；46 → 48 是 20260923
+    # 批 8 的站内信两件：list_my_messages / read_messages）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 46 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 48 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 

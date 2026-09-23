@@ -80,6 +80,12 @@ WRITE_SKILL_NAMES = frozenset({
     # 用户**自己**的数据（20260923 批 7）：动的是发起人自己账号里的私有数据
     # （收藏夹 / 已读状态），scope=write.own 而不是 write.console，roles 不设限。
     "favorite_add", "favorite_remove", "notice_read",
+    # 站内信标记已读（20260923 批 8）：与 notice_read 同一形状、另一个物件。
+    # ⚠️ 漏了这里的后果是**静默的**：不在 WRITE_SKILL_NAMES 就进不了
+    # instantiate_plan 的写分支，会落到下面的通用模板分支，把
+    # `{"ids": null, "all": null}` 原样实例化成一次"零范围"的写（本文件
+    # test_userdata ⑤ 有一条专门盯它）。
+    "message_read",
 })
 
 # 其中"目标是一个**名字**"的那批（标签 / 分类 / 公告 / 留言片段），共用
@@ -103,7 +109,8 @@ _WRITE_NAME_TARGET_SKILLS = frozenset({
 # 用户自己数据的写技能（20260923 批 7），共用 `_expand_own_skill`：目标是 article_id
 # （收藏两件）或通知 id 列表 / "全部"（标记已读），**且有"无范围就零工具"这条硬判据**
 # ——见该函数头注。
-_OWN_WRITE_SKILLS = frozenset({"favorite_add", "favorite_remove", "notice_read"})
+_OWN_WRITE_SKILLS = frozenset({"favorite_add", "favorite_remove", "notice_read",
+                                "message_read"})
 
 
 def _norm_pos_int(value) -> int | None:
@@ -142,6 +149,10 @@ _EXPLICIT_TOOLS_ORDER: list[str] = [
     # （收藏是用户私有关系，不在文章正文里），绕完只会如实答"站内没有"。
     # 匿名用户同样看得到这三项（菜单是角色无关常量），命中时由工具层如实说未登录。
     "list_my_favorites", "get_unread_summary", "list_notifications",
+    # 自己的信箱（20260923 批 8）：同一族——"我信箱里有谁给我写过信/我发的信"
+    # 是自指提问，而检索索引里没有"谁给谁写过信"（私信是私有关系，不在正文里）。
+    # ⚠️ 站内信（私信）≠ 河灯留言：后者是公开页面上谁都看得见的内容（list_guestbook）。
+    "list_my_messages",
 ]
 _EXPLICIT_TOOLS: set[str] = set(_EXPLICIT_TOOLS_ORDER)
 
@@ -861,6 +872,34 @@ SKILLS: list[Skill] = [
         ),
     ),
     Skill(
+        name="message_read",
+        capability="把**你自己收到的**站内信标记为已读（可指定几封或全部未读）",
+        description=(
+            "用户要求**把站内信（私信）标记为已读 / 消掉信封上的红点**时使用"
+            "（「把我的私信都标记已读」「把那两封信标成已读」）。"
+            "⚠️ 只有**收到的**信能标记——发出去的信对方读没读改不了；"
+            "而且站内信**不是河灯留言**（留言在公开页面、谁都看得见，也没有「已读」这回事）。"
+            "参数 ids=要标记的那几封**收到的信**的 id 列表（用户点名了具体哪几封时给；"
+            "id **只能**来自 list_my_messages 的返回、或执行记忆摘要里 `id《标题》`"
+            "形态的编号——**绝不许把「共 N 封」里的 N 当 id**（那是封数），也不许自己编；"
+            "拿不到 id 就先去 list_my_messages 读一遍）；"
+            "all=true 表示把**全部未读**的信标记已读（**只有用户明确说了「全部/都/所有」才给**）。"
+            "**既没给 ids 也没说全部时不要选本技能**——先去问清楚要标哪几封。"
+            "**已读不可撤销**（标了就不再是未读），只有用户明确说要标时才选。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，"
+            "也**照常选本技能**——要不要真动手由系统弹确认框问主人。"
+        ),
+        inputs={"ids": "（可选）要标记已读的那几封**收到的信**的 id 列表",
+                "all": "（可选）true=把全部未读的收信标记已读（用户说了「全部」才给）"},
+        plan=[("read_messages", {"ids": "$ids", "all": "$all"})],
+        complete_when="read_messages 返回了标记结果（含「本来就是已读」）",
+        reply_contract=(
+            "只能按 read_messages 的实际返回作答，说清标了几封；"
+            "返回「本来就是已读」「本来就没有未读的信」就说没有可标的、什么都没改；"
+            "返回失败/未确认时如实说没标成，**绝不得用完成式声称已标记**"
+        ),
+    ),
+    Skill(
         name="chat",
         capability="闲聊、陪你说话",
         description="闲聊、问候、情感交流、纯文字问答（不需要任何工具）时使用。",
@@ -1181,25 +1220,30 @@ def _expand_own_skill(skill, params: dict) -> tuple[list[str], str]:
         return [_spec("remove_favorite", {"article_id": aid})], (
             f"把{shown}从**他自己**的收藏夹里去掉（本来就没收藏时工具会如实说明）")
 
-    if name == "notice_read":
+    if name in ("notice_read", "message_read"):
+        # 两件同一形状（"一串 id 或者全部"这个二选一，都没给就零工具追问）；
+        # 差别只在**物件**与措辞：通知 vs 收到的信（且信只有收到的能标）。
+        thing = "通知" if name == "notice_read" else "站内信"
+        read_tool = "read_notifications" if name == "notice_read" else "read_messages"
+        list_tool = "list_notifications" if name == "notice_read" else "list_my_messages"
         ids = _norm_id_list(params.get("ids"))
         want_all = _norm_true(params.get("all"))
         if want_all and ids:
-            return [], ("notice_read 同时给了 all 和具体 id（一个说\"全部都标\"、"
-                        "一个说\"就这几条\"）：不调用任何工具，如实向主人问清要标哪一些")
+            return [], (f"{name} 同时给了 all 和具体 id（一个说\"全部都标\"、"
+                        f"一个说\"就这几条\"）：不调用任何工具，如实向主人问清要标哪一些")
         if want_all:
-            return [_spec("read_notifications", {"all": True})], (
-                "把**全部**未读通知标记为已读（不可逆：标的就不再是未读）")
+            return [_spec(read_tool, {"all": True})], (
+                f"把**全部**未读的{thing}标记为已读（不可逆：标的就不再是未读）")
         if ids:
             shown = "、".join(str(i) for i in ids)
-            return [_spec("read_notifications", {"ids": ids})], (
-                f"把通知 {shown} 标记为已读（不可逆：标的就不再是未读）；"
-                "id 没对上的（本来就不是他的通知 / 不存在）会如实说明")
+            return [_spec(read_tool, {"ids": ids})], (
+                f"把{thing} {shown} 标记为已读（不可逆：标的就不再是未读）；"
+                f"id 没对上的（不在他收件箱里 / 本来就不存在）会如实说明")
         # 既没给 id 也没说"全部"：**零工具**，问清楚再来（见函数头注：默认全部
         # 等于替主人做一次不可逆的操作）。
-        return [], ("notice_read 没有指出要标记哪些通知（ids 与 all 都没给）："
-                    "不调用任何工具，如实向主人问清是把**全部**未读标掉、还是只标某几条"
-                    "（若是某几条，先用 list_notifications 读出它们的 id 再回来）")
+        return [], (f"{name} 没有指出要标记哪些{thing}（ids 与 all 都没给）："
+                    f"不调用任何工具，如实向主人问清是把**全部**未读标掉、还是只标某几条"
+                    f"（若是某几条，先用 {list_tool} 读出它们的 id 再回来）")
 
     return [], f"{name}：未知的写技能（不调用任何工具）"
 

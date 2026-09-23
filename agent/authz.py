@@ -144,6 +144,9 @@ TOOL_SCOPE: dict[str, str] = {
     "list_my_favorites": SCOPE_READ_OWN,
     "get_unread_summary": SCOPE_READ_OWN,
     "list_notifications": SCOPE_READ_OWN,
+    # 自己的信箱（20260923 批 8）：同一档——Rust `/api/protected/messages` 只认
+    # auth_uid，**没有"读别人的信箱"的接口**。
+    "list_my_messages": SCOPE_READ_OWN,
     # 用户自己的数据·**写**那一半（20260923 批 7）：收藏 / 取消收藏 / 标记已读。
     # 写的是同一个人的同一份数据，所以 scope 是 read.own 的写方向 `write.own`：
     # 三档角色都有、匿名没有、**不进 `_HARD_SCOPES`**（秘书代博主收藏是正当的
@@ -155,6 +158,10 @@ TOOL_SCOPE: dict[str, str] = {
     "add_favorite": SCOPE_WRITE_OWN,
     "remove_favorite": SCOPE_WRITE_OWN,
     "read_notifications": SCOPE_WRITE_OWN,
+    # 标记**收到的**信已读（20260923 批 8）：与标记通知已读是同一件事的不同物件，
+    # 同一档 scope（写的是自己账号里的已读态，不外显、不碰别人的东西）。
+    # **发信不在这张表里**——它写进的是**别人的**收件箱，见"站内信·发信"那一批。
+    "read_messages": SCOPE_WRITE_OWN,
     # 作用于访客自己的页面
     "navigate_to": SCOPE_WRITE_PAGE,
     "toggle_effect": SCOPE_WRITE_PAGE,
@@ -456,6 +463,9 @@ _OWN_TOOL_FAMILY: dict[str, str] = {
     "add_favorite": _OWN_FAMILY_ADD,
     "remove_favorite": _OWN_FAMILY_REMOVE,
     "read_notifications": _OWN_FAMILY_READ,
+    # 标记信已读与标记通知已读是**同一个动作家族**（"把 X 标记已读"），共用
+    # `_OWN_READ_RE`：它只认"标记/标注…已读"这种连用，与随口说一句"标记"不撞车。
+    "read_messages": _OWN_FAMILY_READ,
 }
 
 # 命令骨架（与后台写同构：句首的「把/将」，或动词起首，前面允许礼貌前缀）：
@@ -500,7 +510,18 @@ _OWN_READ_RE = re.compile(
     rf"^(?:{_OWN_POLITE})?(?:把|将)[^\n。！？!?；;，,]{{0,24}}?{_OWN_READ_VERB}"
     r"[^\n。！？!?；;，,]{0,6}?已读"
     # 动词起首（"标记已读"/"全部标记为已读"）：前面允许挂几个量词/名词（全部/未读的/通知）
-    rf"|^(?:{_OWN_POLITE})?(?:(?:所有|全部|全|都|未读的?|未读通知|通知|公告|站内信|消息)\s*){{0,3}}"
+    # 名词表覆盖两种物件的两种叫法（通知族：通知/公告；信族：站内信/私信/信件/消息）
+    # ——物件本身不参与判据（同一个动作家族，见 _OWN_TOOL_FAMILY 的注释），但**叫法
+    # 要收全**：少了「私信」的话，「我的私信都标成已读」这句最自然的说法会漏判、
+    # 落回弹窗（20260923 批 8 实测：只有「把私信…」那种把字结构能过）。
+    # 「我(的)」这个所有格前缀也认（「我的私信都标成已读」是最自然的一种说法；
+    # 只取所有格，不含「已经/刚」那类时间副词——带时间副词的句子是**陈述现状**，
+    # 由上面的 _OWN_STATEMENT_RE 管，别在这里放进来）。
+    rf"|^(?:{_OWN_POLITE})?(?:(?:我|咱|俺)(?:的)?\s*)?"
+    # ⚠️ 这一行必须是 **rf** 串：`{{0,3}}` 在 rf 里才折叠成量词 `{0,3}`，写成普通 r 串
+    # 就变成"字面量 {0,3}"（永远匹配不上）⇒ 整支动词起首分支恒不命中（本批改这句时
+    # 真踩过一次：只有「把…」那支还能过）。
+    rf"(?:(?:所有|全部|全|都|未读的?|未读通知|通知|公告|站内信|私信|信件|消息)\s*){{0,3}}"
     r"(?:都\s*)?" + _OWN_READ_VERB + r"[^\n。！？!?；;，,]{0,6}?已读"
 )
 

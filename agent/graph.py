@@ -1051,6 +1051,9 @@ _CONTENT_TOOLS = frozenset({
     # 用户自己的数据（20260923）：跑过 = "我手上就是你自己那份收藏/通知"，
     # 与上面四族同一条道理——缺了它们，"你还没有未读通知"这句站内结论就没有帧。
     "list_my_favorites", "get_unread_summary", "list_notifications",
+    # 自己的信箱（20260923 批 8）：跑过 = "我手上就是你自己那封信"，同一条道理
+    # ——缺了它，"你信箱里没有未读的信"这句站内结论会被读成洞④（无帧结论）。
+    "list_my_messages",
 })
 # 命令前缀文本：回复正文出现系统命令帧前缀 = 模型在"假装发命令"（旧事故：正文
 # 输出 AUTO_NAVIGATE:/NAVIGATE:/EFFECT:/DARKMODE: 文本既不会执行、还误导用户
