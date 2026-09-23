@@ -202,6 +202,41 @@ def test_tool_result_kinds():
     check("_get 失败 → kind=unavailable（不是 []）",
           getattr(out, "kind", None) == "unavailable", getattr(out, "kind", None))
     check("_get 失败 → 人话可直接给用户看", "不可用" in str(out), str(out))
+
+    # 404 与"服务挂了"分家（20260924）：只有**显式带了话术**的调用点才把 404 读成
+    # "查无此物"。两件事的应对是相反的（换 id / 稍后再试），而 404 正是"查无此物"
+    # 最常见的传法——此前它一路走到 unavailable，planner 于是准备说"系统不可用"。
+    class _Resp:
+        def __init__(self, code, body):
+            self.status_code, self._body = code, body
+        def raise_for_status(self):
+            if self.status_code >= 400:            # 只有真错误码才抛（httpx 的语义）
+                raise RuntimeError(f"{self.status_code} Client Error")
+        def json(self):
+            return self._body
+
+    base._client.get = lambda url, *a, **kw: (
+        _Resp(200, {"code": 200, "data": []}) if str(url).endswith("/talk") else _Resp(404, {}))
+    try:
+        miss = base.get_article_detail.invoke({"article_id": 999999})
+        plain = base._get("/notes")                       # 同一路径、不带话术
+        # 列表接口正常（200，只是没有那一条）——与"端点 404"是两回事，
+        # 所以这条走的是"列表里查不到"那一支，不是 unavailable
+        absent = base.get_article_detail.invoke({"article_id": 7, "doc_type": "talk"})
+    finally:
+        base._client.get = orig_get
+
+    check("带话术的 404 → kind=not_found（查无此篇不是服务故障）",
+          getattr(miss, "kind", None) == "not_found", getattr(miss, "kind", None))
+    check("话术点明『这不是文章 id』（通知里的留言 id 最容易走到这条路上）",
+          "留言 id" in str(miss) and str(999999) in str(miss), str(miss))
+    check("不带话术的调用点不受影响：404 仍是 unavailable（默认语义没被改）",
+          getattr(plain, "kind", None) == "unavailable", getattr(plain, "kind", None))
+    check("列表里查不到那一条 → 也是 not_found，且措辞交代『列表可能只回最近若干条』",
+          getattr(absent, "kind", None) == "not_found" and "最近" in str(absent), str(absent))
+    check("列表没找到的措辞点明『审核通过才在列表里』+ id 不是同一套"
+          "（20260924T030031 那条留言正是被驳回、通知链接给的是 lid）",
+          "审核通过" in str(absent) and "不是文章 id" in str(absent), str(absent))
     check("工具 .invoke() 透传 kind（LangChain 不吞标记）",
           getattr(via_tool, "kind", None) == "unavailable", getattr(via_tool, "kind", None))
     check("知识库工具失败也走 unavailable", getattr(via_kb, "kind", None) == "unavailable",
