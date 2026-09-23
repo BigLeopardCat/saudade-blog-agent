@@ -200,10 +200,21 @@ check("收藏 → `noteId《标题》`（noteId 是 favorites 的字段名，此
       receipt_digest("list_my_favorites", str(FAVS))
       == "我的收藏: 12《留言板怎么用》/19《Saudade Blog AI Agent》",
       receipt_digest("list_my_favorites", str(FAVS)))
-check("通知 → 总条数 + 未读条数 + 标题（未读标出来）",
+check("通知 → 总条数 + 未读条数 + **id《标题》**（未读标出来）",
       receipt_digest("list_notifications", str(NOTICES))
-      == "通知 3 条（未读 2）: 国庆维护公告（未读）/你的留言已通过审核（未读）/欢迎来到 Saudade",
+      == "通知共 3 条（未读 2）: 7《国庆维护公告》（未读）/6《你的留言已通过审核》（未读）/5《欢迎来到 Saudade》",
       receipt_digest("list_notifications", str(NOTICES)))
+# 20260923 三轮（trace 实证）：摘要里的"3 条"曾被 planner 读成 id 填进参数
+# ⇒ 一次注定 0 行的写 + 一次「服务不可用」误报。两条判据分开锁：
+#   ① id 必须给足（上面那条）；
+#   ② 条数不得写成可被读成 id 的形态（抬头带"共"字、且数字紧贴"条"）。
+check("通知条数带「共…条」措辞（「3 条」不再是一个可被读成 id 的裸数字）",
+      "共 3 条" in receipt_digest("list_notifications", str(NOTICES))
+      and not receipt_digest("list_notifications", str(NOTICES)).startswith("通知 3"))
+check("通知条目缺 id 字段 → 不编 id（只给标题）",
+      receipt_digest("list_notifications", str({"unread": 0, "items": [
+          {"title": "没有 id 的通知", "isRead": True}]})) ==
+      "通知共 1 条（未读 0）: 没有 id 的通知")
 check("通知**正文不进摘要**（挤进来只会把标题挤掉——要正文就再调一次工具）",
       "10 月 1 日" not in receipt_digest("list_notifications", str(NOTICES)))
 check("未读汇总 → 两个数 + 合计（key 名与 Rust UnreadDto 同源）",

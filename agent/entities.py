@@ -171,11 +171,19 @@ def _note_digest(data, label: str) -> str:
 
 
 def _notification_digest(data) -> str:
-    """站内通知/公告（20260923）：总条数 + 未读条数 + 标题（未读的标出来）。
+    """站内通知/公告（20260923）：总条数 + 未读条数 + **id《标题》**（未读的标出来）。
 
     **正文刻意不进摘要**：通知正文是一段话（公告正文、驳回理由），挤进这 150 字
     只会把标题挤掉，而"第几条的标题是什么"才是跨轮指代的锚点；要正文就再调一次
     工具（摘要是"有哪些、哪条没看"，不是全文副本）。
+
+    20260923 三轮：条目从「标题」补成「id《标题》」，抬头从「通知 N 条」改成
+    「通知**共** N 条」。trace `20260923T130020_9` 实证 planner 把**条数**读成了
+    **id**——它要填的是 `ids`，而摘要里唯一的数字是"3 条"（真实那条是 id 23），
+    于是写下 `ids:[3]` ⇒ 一次注定 0 行的写 + 一次「服务不可用」的误报（原因码
+    也改准了，见 tools/base.py 的 read_notifications）。"参数要 id 而摘要不给 id"
+    这种缺什么就编什么的坑，只能靠**把 id 给足**来堵；"共"字是第二道，让 3 只能
+    被读成条数。id 缺字段时不写假 id（缺字段绝不编，与 `_clip` 同一条纪律）。
     """
     rows = _rows(data)
     if not rows:
@@ -186,8 +194,13 @@ def _notification_digest(data) -> str:
         title = _clip(r.get("title") or "", 18)
         if not title:
             continue
-        items.append(f"{title}（未读）" if not r.get("isRead") else title)
-    head = f"通知 {len(rows)} 条（未读 {unread}）"
+        nid = r.get("id")
+        mark = "" if r.get("isRead") else "（未读）"
+        if isinstance(nid, int) and not isinstance(nid, bool):
+            items.append(f"{nid}《{title}》{mark}")
+        else:
+            items.append(f"{title}{mark}")
+    head = f"通知共 {len(rows)} 条（未读 {unread}）"
     return f"{head}: " + _join(items) if items else head
 
 
