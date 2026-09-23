@@ -77,9 +77,10 @@ from agent import authz
 from agent import confirm
 from agent import refs
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
-                           _doc_anchors, _frame_texts, _has_frames, _last_user_msg,
+                           _doc_anchors, _frame_texts, _has_frames,
+                           _last_assistant_utterance, _last_user_msg,
                            _msg_text, _page_ctx, _receipts_text, _recent_tail,
-                           _short_reply_hint)
+                           _short_reply_hint, _short_reply_kind)
 from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
                              _effect_switch_fast_path, _intent_done, _intent_hints,
@@ -1959,6 +1960,13 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     page_ctx = _page_ctx(state["messages"], role)
     has_frames = _has_frames(state["messages"])
     doc_anchors = _doc_anchors(state["messages"])
+    # 授权式审查（20260923 P2）：主人说"你看着办"而后端有**待审留言**时，台账里
+    # 那几条就是目标的唯一权威来源（见 `_auth_review_path` 头注）。这里先取一次
+    # ——唯一一条时下面直接走快道，多条/零条时这份事实块进 planner 提示。非授权式
+    # 短应答（占绝大多数轮次）在这一行就被 `_short_reply_kind` 挡掉，零额外开销。
+    auth_facts, auth_plan = _auth_review_path(
+        user_msg, _last_assistant_utterance(state["messages"]),
+        _principal_of(config), config)
     if rounds == 0:
         # 注入上下文留痕（20260919 D）：本轮 planner 实际看到的 page_ctx /
         # 节选 / 锚点清单落 trace——此前 trace 里没有这些，复盘"agent 到底看到
@@ -1992,6 +2000,15 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if display is not None:
             record("planner", "fastpath", kind="display", round=rounds)
             return {"plan": plan_encode(display), "plan_rounds": rounds + 1, "done": False}
+
+        # 授权式审查快道（零 LLM，20260923 P2）：主人说"你看着办"+上一轮提议是复核
+        # 留言+台账里恰好 1 条待审+结论能从那句提议里读出 ⇒ 系统直接拼计划；写操作
+        # 同意闸必弹窗，弹窗把 #id/作者/原文/现状/动作印出来，主人点确定 = 身份
+        # （`_confirm_popup` 会因为"这句不是命令"放行到弹窗，见那里 `_ident_grounded`）。
+        if auth_plan is not None:
+            record("planner", "fastpath", kind="auth_pending_review",
+                   tools=auth_plan["tools"], round=rounds)
+            return {"plan": plan_encode(auth_plan), "plan_rounds": rounds + 1, "done": False}
 
         # 当前文章读取确定性快道（零 LLM，20260901 系统性修复）：用户当前页面是
         # 文章详情页且消息引用"这篇/我正在读"等 → read_article 计划，TOOLS 行
@@ -2053,7 +2070,8 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 # 短应答提示只在首轮（rounds==0）给：第二轮起本轮已有工具帧，短应答
                 # 的语义已由第一轮的规划兑现，再念一遍"把提议那件事规划出来"只会
                 # 诱导重复规划（同一件事已经执行过一次了）。
-                short_reply_hint=(_short_reply_hint(state["messages"]) if rounds == 0
+                short_reply_hint=(_short_reply_hint(state["messages"], auth_facts)
+                                  if rounds == 0
                                   else "（非首轮决策：短应答语义已在上轮兑现）"),
                 tool_results=frames_txt,
                 # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
@@ -3362,6 +3380,102 @@ def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
             if err:
                 return name, err
     return None
+
+
+# ── 授权式短应答 + 审查类提议 ⇒ 系统台账里的待审候选（20260923，P2）───────────
+# 事故事实（`20260923T131918`）：主人说"小猫咪按你想法来吧"（授权式——连目标都
+# 没点），planner 点对了技能 `board_audit`，但**目标解不出来**（留言没有标题，
+# 只能按正文片段指认，而片段必须来自主人这句话本身）⇒ 身份防线如实收尾 ⇒
+# narrator 却从**历史对话**里挑了一条旧留言（早已通过的那条）当目标，还报了
+# "点确定我就去办"（洞⑥ 判据已拦）。
+# 两个缺口叠在一起才是这条事故：① 授权式此前判据认不出来（P1 已修）；
+# ② 目标本来有**唯一权威来源**——系统台账里"待审（approved=0）"的那几条——
+# 却没人去读，模型只能回历史里抓。用户拍板的形态就是补上②：
+# **"弹窗把目标印给主人"**——系统按台账把计划拼出来，写操作同意闸必弹窗，弹窗里
+# 印着 #id/作者/原文/现状/动作，主人点"确定"= 身份（不再依赖"名字得在主人这句话
+# 里"那道防线：那条防线的前提是主人点过名，这里主人明确说"你定"）。
+# 边界（一条都不许松）：
+#   · 只在**审查类**提议之后（上一轮泠月说的就是留言审核），且**恰好 1 条待审**
+#     + 结论能从上一轮那句话里确定地读出来（驳回/放行）⇒ 才自动拼计划；
+#   · 0 条 / ≥2 条 / 结论读不出 / 台账读不到 ⇒ **一律不替主人挑**，只把台账事实
+#     注入给 planner（0 条时它必须如实说"没有待审留言"，≥2 条时只能列候选请主人
+#     点名）；读不到 ≠ 没有（同 `_tag_index` 纪律：读失败绝不写成"没有"）。
+_REVIEW_INTENT_RE = re.compile(r"留言|审核|复核|待审|驳回|放行|通过|隐藏")
+_AUDIT_REJECT_RE = re.compile(r"驳回|隐藏|不放行|不通过|未通过")
+_AUDIT_PASS_RE = re.compile(r"通过|放行")
+
+
+def _verdict_from_proposal(text: str) -> str:
+    """从上一轮泠月那句提议里读出复核结论：'reject'/'pass'/''（读不出或自相矛盾）。
+
+    读不出**绝不默认**（默认驳回 = 替主人下了一个会隐藏访客留言的决定）。
+    """
+    t = text or ""
+    reject, allow = bool(_AUDIT_REJECT_RE.search(t)), bool(_AUDIT_PASS_RE.search(t))
+    if reject == allow:      # 都没提 / 两种都提 ⇒ 分不清
+        return ""
+    return "reject" if reject else "pass"
+
+
+def _render_pending_facts(pending: list) -> str:
+    """待审候选的**系统事实**块（注入 planner；也用于 0 条时的如实告知）。
+
+    候选连**作者与原文节选**一起给（≤5 条）：留言没有标题，主人要认的就是那句话
+    本身，而这些字是访客可控文本 ⇒ 一律经 `_board_label`/`_board_excerpt` 消毒
+    （拆命令前缀，同问句/回执行的既有口径）。
+    """
+    if not pending:
+        return ("系统台账（确定性事实，读自后台留言清单）：**当前没有任何待审留言**"
+                "（approved=0 的为 0 条）——没有『你替我定一条』这回事：如实告诉主人"
+                "现在没有等他复核的留言即可，不要凭空说出一条。")
+    from tools.base import _board_excerpt, _board_label
+    rows = "\n".join(f"　　· {_board_label(r)}「{_board_excerpt(r)}」"
+                     for r in pending[:5])
+    more = f"\n　　· …还有 {len(pending) - 5} 条未列出" if len(pending) > 5 else ""
+    return (f"系统台账（确定性事实，读自后台留言清单，不是模型回忆）：当前**待审**留言"
+            f"共 {len(pending)} 条：\n{rows}{more}\n"
+            f"授权式 = 主人没有点目标 ⇒ 目标只能从这份台账里定：恰好 1 条就办那一条"
+            f"（写操作照常弹确认框给主人签字）；≥2 条一律**零写**，把上面的候选连"
+            f"作者原文一起列给主人请他点名，绝不替他挑。")
+
+
+def _auth_review_path(user_msg: str, prev_ai: str, principal, config
+                      ) -> tuple[str, dict | None]:
+    """授权式审查：返回 `(系统事实块, 确定性计划或 None)`，都不适用给 `("", None)`。
+
+    事实块与计划互斥使用：拿到计划 = 唯一待审 + 结论明确（零 LLM 直接拼，写操作
+    必弹窗）；拿到事实块 = 交 planner 决策（0 条/≥2 条/结论读不出/台账读不到）。
+    """
+    if _short_reply_kind(user_msg) != "auth":
+        return "", None
+    if not _REVIEW_INTENT_RE.search(prev_ai or ""):
+        return "", None
+    # 权限先判：主人自己都不能复核留言时，读那份台账只会白拿一次 403
+    # （判据用 authz 现成的表——推送人身份→scope，不另立规则）。
+    if not authz.check(principal, "audit_board_comment").allowed:
+        return "", None
+    try:
+        from tools.base import _board_index
+        index = _board_index(config)
+    except Exception:
+        logger.warning("[planner] 授权式审查：读留言台账异常 → 交 planner 自行决策")
+        return "", None
+    if index is None:
+        return "", None          # 读不到 ≠ 没有（不许据此说"没有待审"）
+    pending = [r for r in index.values() if r.get("approved") == 0]
+    pending.sort(key=lambda r: int(r.get("talkKey") or 0))
+    facts = _render_pending_facts(pending)
+    verdict = _verdict_from_proposal(prev_ai)
+    if len(pending) != 1 or not verdict:
+        return facts, None
+    content = str(pending[0].get("content") or "").strip()
+    if not content:
+        return facts, None       # 正文空 ⇒ 无法指认（工具按正文片段定位）
+    plan_obj = instantiate_plan("board_audit", {"quote": content, "verdict": verdict})
+    plan_obj["params"] = {"quote": content, "verdict": verdict}
+    logger.info("[planner] 授权式审查快道命中（零 LLM）：唯一待审 #%s → 拼计划交弹窗",
+                pending[0].get("talkKey"))
+    return facts, plan_obj
 
 
 def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,

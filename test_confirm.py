@@ -394,6 +394,39 @@ finally:
     g.get_llm = _orig_llm
 
 print()
+# ── ⑤ 授权式短应答的审查路径（20260923 P2）：目标由系统台账定，但**仍要主人点一下** ──
+# 主人说"小猫咪按你想法来吧"（授权式）时目标由系统定（`g._auth_review_path` 读台账里
+# approved=0 的那一条）——但**授权不等于替主人签字**：写操作同意闸照旧弹窗，弹窗里
+# 印着 #id/作者/原文/现状/动作，主人点"确定"才是身份。这条链路正是用户拍板的形态
+# （"弹窗把目标印给主人"），也是 20260923 13:19 那条事故的正解。
+from tools import base as _tb  # noqa: E402
+
+_PEND = {94: {"talkKey": 94, "author": "visitor", "approved": 0,
+              "content": "垃圾网站，什么破烂，主动申请驳回都失败"}}
+_orig_board = _tb._board_index
+try:
+    _tb._board_index = lambda config: dict(_PEND)
+    _facts, _plan_obj = g._auth_review_path(
+        "小猫咪按你想法来吧", "有一条留言在等人复核，那我把这条**驳回隐藏**：",
+        Principal(uid=7, role="admin"), CFG)
+    _r = execute_node({"messages": [HumanMessage(content="小猫咪按你想法来吧")],
+                       "plan": plan_encode(_plan_obj), "plan_rounds": 0, "done": False,
+                       "receipts": []}, CFG)
+    check("授权式 + 台账唯一待审 ⇒ 执行前弹确认框（授权不等于替主人签字）",
+          isinstance(_r, dict) and "pending_confirm" in _r, str(_r)[:80])
+    _q = (_r or {}).get("pending_confirm", {}).get("q", "")
+    check("  弹窗把目标印给主人（#id + 作者 + 原文 + 现状）",
+          "#94" in _q and "垃圾网站" in _q and "待审" in _q, _q[:110])
+    check("  结论取自上一轮那句提议（驳回）——主人签字前看得见自己同意了什么",
+          [_s.get("args", {}).get("verdict") for _s in (_r or {})
+           .get("pending_confirm", {}).get("specs", [])] == ["reject"], _q[:70])
+    check("  弹窗轮零执行（一个工具都没跑）", _r.get("messages") == [])
+    check("  令牌照常签发（点确定后照签名拼计划，不靠模型回忆）",
+          len((_r or {}).get("pending_confirm", {}).get("token", "")) > 20)
+finally:
+    _tb._board_index = _orig_board
+
+print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
     sys.exit(1)

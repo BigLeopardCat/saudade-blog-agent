@@ -1324,6 +1324,139 @@ def test_gate_site_absence_claim():
           o6["done"] is True and not o6.get("fallback_text"), str(o6))
 
 
+def test_auth_pending_review():
+    """授权式审查：待审候选只认系统台账（20260923 P2）。
+
+    事故形态（`20260923T131918` 原文）：主人说"小猫咪按你想法来吧"，planner 点对了
+    `board_audit`，但留言没有标题、只能按正文片段指认，而片段必须来自主人这句话
+    ——主人什么都没点 ⇒ 解不出来 ⇒ 如实收尾 ⇒ **narrator 从历史里挑了一条早已通过的
+    旧留言当目标**。系统手里明明有唯一权威来源（台账里 approved=0 的那几条），却没读。
+
+    这里锁三件事：① 结论只从上一轮那句提议里读（读不出/自相矛盾 → 空，绝不默认驳回）；
+    ② 恰好 1 条待审 + 结论明确 → **零 LLM** 直接拼计划（写操作同意闸必弹窗）；
+    ③ 0 条 / ≥2 条 / 台账读不到 → **一律不替主人挑**，只注入系统事实。
+    """
+    print("[auth_review] 授权式短应答的审查路径（台账唯一权威）")
+    import agent.graph as G
+    import tools.base as TB
+    from agent.graph import (_auth_review_path, _render_pending_facts,
+                             _verdict_from_proposal, parse_plan, planner_node)
+    from agent.principal import Principal
+
+    # ── ① 结论读取：读不出绝不默认（默认驳回 = 替主人隐藏了访客的留言）────────
+    for t, want in (("那我把这条驳回隐藏", "reject"), ("这条我给它放行吧", "pass"),
+                    ("我把它隐藏掉", "reject"), ("先通过审核", "pass"),
+                    ("这条留言有点意思", ""), ("要么驳回要么通过，你说了算", "")):
+        check(f"结论读取「{t[:14]}」→ {want or '读不出（不猜）'}",
+              _verdict_from_proposal(t) == want, _verdict_from_proposal(t))
+
+    # ── ② 事实块：0 条时说的是"没有待审"，不许凭空生出候选 ──────────────────
+    f0 = _render_pending_facts([])
+    check("台账 0 条 → 如实说没有任何待审留言",
+          "没有任何待审留言" in f0 and "不要凭空说出一条" in f0)
+    f2 = _render_pending_facts([
+        {"talkKey": 94, "content": "垃圾网站，什么破烂，主动申请驳回都失败", "author": "visitor",
+         "approved": 0},
+        {"talkKey": 101, "content": "泠月喵好棒", "author": "访客", "approved": 0}])
+    check("多条 → 连作者与原文一起列出（主人要认的就是那句话）",
+          "#94" in f2 and "垃圾网站" in f2 and "#101" in f2 and "共 2 条" in f2)
+    check("多条 → 明写零写 + 不替他挑", "零写" in f2 and "绝不替他挑" in f2)
+
+    class _Row(dict):
+        pass
+
+    PENDING_1 = {94: _Row({"talkKey": 94, "author": "visitor", "approved": 0,
+                           "content": "垃圾网站，什么破烂，主动申请驳回都失败"})}
+    PENDING_2 = {**PENDING_1, 101: _Row({"talkKey": 101, "author": "访客",
+                                        "approved": 0, "content": "泠月喵好棒"})}
+    MIXED = {**PENDING_1, 77: _Row({"talkKey": 77, "author": "访客", "approved": 1,
+                                    "content": "已通过的那条，不能被当成待办"})}
+    cfg = {"configurable": {"principal": Principal(uid=7, role="admin"), "user_id": 7,
+                            "conversation_id": 42, "stop_event": None}}
+    admin = Principal(uid=7, role="admin")
+    prev_ok = "有一条留言在等人复核，那我把这条**驳回隐藏**："
+    calls = {"n": 0}
+    _orig = TB._board_index
+
+    class _Boom:
+        def invoke(self, prompt):        # 快道命中时**一次 LLM 都不该调**
+            raise AssertionError("授权式审查快道命中却调了 planner LLM")
+
+    def _board_stub(rows):
+        def _f(config):
+            calls["n"] += 1
+            return dict(rows)
+        return _f
+
+    try:
+        TB._board_index = _board_stub(PENDING_1)
+        # ③ 唯一待审 + 结论明确 → 零 LLM 拼计划（quote = 台账里那条的原文）
+        facts, plan_obj = _auth_review_path("小猫咪按你想法来吧", prev_ok, admin, cfg)
+        check("唯一待审 + 提议说驳回 → 拼出 board_audit 计划（弹窗的前一步）",
+              plan_obj is not None and plan_obj["skill"] == "board_audit"
+              and 'audit_board_comment' in plan_obj["tools"][0]
+              and '"verdict": "reject"' in plan_obj["tools"][0], str(plan_obj)[:120])
+        check("  目标 = 台账里那条的原文（不是历史里的旧留言）",
+              "垃圾网站，什么破烂" in plan_obj["tools"][0], plan_obj["tools"][0][:90])
+        check("  事实块同时给出（多条时的退路与唯一时同源）", "共 1 条" in facts)
+        G.get_llm = lambda **kw: _Boom()
+        out = planner_node({"messages": [HumanMessage(content="小猫咪按你想法来吧"),
+                                          AIMessage(content=prev_ok)], "plan_rounds": 0,
+                            "done": False}, cfg)
+        p = parse_plan(out["plan"])
+        check("  planner_node 走快道：零 LLM 拿到计划",
+              p["skill"] == "board_audit" and "audit_board_comment" in p["tools"][0],
+              str(p["tools"])[:80])
+
+        # ④ 多条待审 → 不拼计划，只注入候选（planner 仍要如实列）
+        TB._board_index = _board_stub(PENDING_2)
+        facts2, plan2 = _auth_review_path("你看着办", prev_ok, admin, cfg)
+        check("多条待审 → 不拼计划（绝不替主人挑）", plan2 is None)
+        check("  候选事实块进提示（#94 与 #101 都在）", "#94" in facts2 and "#101" in facts2)
+        check("  提示里明写零写", "零写" in facts2)
+
+        # ⑤ 结论读不出 → 同样不拼（哪怕只有一条）
+        TB._board_index = _board_stub(PENDING_1)
+        facts3, plan3 = _auth_review_path("按你想法来吧", "有一条留言在等人复核",
+                                          admin, cfg)
+        check("唯一待审但提议没说结论 → 不拼计划（不替主人决定驳回还是放行）",
+              plan3 is None and "共 1 条" in facts3)
+
+        # ⑥ 台账里 approved=1 的那条**不算待办**（正是事故里被误当成目标的那种）
+        TB._board_index = _board_stub(MIXED)
+        facts4, plan4 = _auth_review_path("小猫咪按你想法来吧", prev_ok, admin, cfg)
+        check("已通过的留言不进待审候选", "已通过的那条" not in facts4, facts4[:80])
+        check("  待审恰 1 条 ⇒ 拼的是那条待审的", plan4 is not None
+              and "垃圾网站" in plan4["tools"][0])
+
+        # ⑦ 台账读不到 ≠ 没有待审（不许据此说"没有留言要复核"）
+        TB._board_index = lambda config: None
+        facts5, plan5 = _auth_review_path("你看着办", prev_ok, admin, cfg)
+        check("台账读不到 → 既不拼计划也不注入「没有待审」（读不到≠没有）",
+              plan5 is None and facts5 == "")
+
+        # ⑧ 不该触发的形态：不读台账（零额外网络开销），也不改任何行为
+        calls["n"] = 0
+        TB._board_index = _board_stub(PENDING_1)
+        for msg, prev, why in (("要", prev_ok, "同意式（承接的是那件具体事）"),
+                               ("不用了", prev_ok, "拒绝式"),
+                               ("小猫咪按你想法来吧", "今天天气不错呀", "提议里没有审查意图"),
+                               ("小猫咪按你想法来吧", "", "没有上一轮提议")):
+            f, p = _auth_review_path(msg, prev, admin, cfg)
+            check(f"不触发·{why} → 不拼计划不注入", p is None and f == "")
+        check("  且**一次台账都没读**（非授权式轮次零额外开销）", calls["n"] == 0,
+              f"读了 {calls['n']} 次")
+
+        # ⑨ 权限：没有复核权限的人连台账都不读（弹窗本也到不了他）
+        guest = Principal(uid=0, role="guest")
+        calls["n"] = 0
+        fg, pg = _auth_review_path("小猫咪按你想法来吧", prev_ok, guest, cfg)
+        check("非管理员 → 不读台账、不拼计划（fail-closed）",
+              pg is None and fg == "" and calls["n"] == 0, f"读了 {calls['n']} 次")
+    finally:
+        TB._board_index = _orig
+
+
 def test_gate_confirm_claim():
     """洞⑥：确认话术声称无确认框（20260923，`_confirm_claim`）。
 
@@ -3280,7 +3413,8 @@ def main():
                test_phantom_tool_claim, test_phantom_claim_clause_and_echo_exempt,
                test_gate_claim_holes,
                test_gate_false_negative_claim, test_gate_site_absence_claim,
-               test_gate_confirm_claim, test_gate_repeat_reply,
+               test_gate_confirm_claim, test_auth_pending_review,
+               test_gate_repeat_reply,
                test_execute_node, test_refs, test_write_ref_loud, test_todo_contract,
                test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
