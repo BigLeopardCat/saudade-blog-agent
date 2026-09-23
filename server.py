@@ -911,7 +911,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                stop_event: threading.Event | None = None,
                                principal: Principal | None = None,
                                confirm_grant: dict | None = None,
-                               conversation_id: int | None = None):
+                               conversation_id: int | None = None,
+                               ledger: dict | None = None):
     """Run agent in a thread, push each chunk into an asyncio.Queue."""
     # user_id 注入 configurable（设备类工具经 RunnableConfig 读取，见 _run_agent_sync 注释）；
     # stop_event 一并注入——图内 model/tools 节点检查它实现断连中断（见 graph.AgentCancelled）
@@ -921,6 +922,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
     # recursion_limit 覆盖默认 9999（等效无界，见 _run_agent_sync 注释）
     # confirm_grant：已验签的确认令牌 payload（**验签在 /chat/stream，不在图内**）
     #   ——非空即"用户在确认框上点了确定"这一轮，见 graph.graph_input
+    # ledger：本请求注入给模型的两块台账原文（**由调用方算好传进来**）。图内的台账
+    #   否认判据看的是"系统给模型看过什么"，而 `req` 只活在 /chat/stream 的处理器里、
+    #   这里只有 messages ⇒ 台账必须由调用方（拿得到 req 的地方）传进来，与
+    #   `_run_agent_sync` 的第 5 个参数同源同义（20260924：这行曾按 req/grant 直写，
+    #   两个名字在本函数里都不存在 ⇒ 流式路径每次请求 NameError、零帧退出）。
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "stop_event": stop_event,
                                "principal": principal or Principal(uid=user_id),
                                "conversation_id": conversation_id},
@@ -964,7 +970,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
 
         for mode, data in _agent.stream(
             graph_input(messages, confirm_grant=confirm_grant,
-                        ledger=_ledger_for_graph(req, confirmed=bool(grant))),
+                        ledger=ledger),
             config,
             stream_mode=["messages", "updates"],
         ):
@@ -1275,7 +1281,10 @@ async def chat_stream(req: ChatRequest, request: Request):
         # 生成结束才一次性下发，等于没有流式）——边生成边推送
         producer_task = _submit_with_context(
             loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id, stop_event,
-            principal, grant, req.conversation_id
+            principal, grant, req.conversation_id,
+            # 台账事实（洞⑦ 判据）：与 _build_messages 注入的同源，**在这里算**
+            # ——req 只在这个作用域里（20260924 的线上事故就是把它写进了被调函数）
+            _ledger_for_graph(req, confirmed=bool(grant)),
         )
 
         # 可观测性：请求生命周期账本（帧数/退出原因，finally 汇总）
