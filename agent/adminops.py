@@ -1040,6 +1040,17 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None) -> 
     return f"执行 {tool}"
 
 
+def render_action_lines(specs, index=None, cats=None, boards=None, notes=None) -> str:
+    """一份调用清单 → 主人看得懂的动作串（"；"分隔）。
+
+    三处共用同一份措辞：确认框问句、确认轮的气泡正文、**跨轮待办的人读目标**
+    （`pending_action.target`）。分开写必然漂移——主人在弹窗里看到的目标，与他
+    事后在待办/回执里读到的目标，必须是同一句话（这正是"盲签"那条纪律的延伸：
+    系统对同一件事的两种表述不一致时，点「确定」的人无从判断谁是真的）。
+    """
+    return "；".join(_confirm_one(s, index, cats, boards, notes) for s in (specs or []))
+
+
 def render_confirm_question(specs, index=None, cats=None, boards=None, notes=None) -> str:
     """确认框的问题行：**把要发生的事说全**（含颜色名与色值），再问一句。
 
@@ -1049,7 +1060,7 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
     （`index`/`cats`/`notes` 见 _confirm_one；读不到字典时退化成名字原文或 id，
     不因此不弹窗——这一轮的价值就是让主人确认，读不到就少说，不是不弹。）
     """
-    acts = "；".join(_confirm_one(s, index, cats, boards, notes) for s in (specs or []))
+    acts = render_action_lines(specs, index, cats, boards, notes)
     return f"要{acts}吗？点「确定」我就去办。"
 
 
@@ -1059,7 +1070,7 @@ def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None) -
     刻意写得像"在等你的意思"而不是"已经在办了"：这一轮零执行。给一个明确
     的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
     """
-    acts = "；".join(_confirm_one(s, index, cats, boards, notes) for s in (specs or []))
+    acts = render_action_lines(specs, index, cats, boards, notes)
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
     return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
