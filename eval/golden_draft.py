@@ -31,7 +31,7 @@ R3 高频拉锯），人看告警；本脚本 = 把同一批现场转成**待补
   3. `id`/`tags` 自己起（事故类现场一律打 `regression`——回归组要求 100% 通过，
      见 run_golden.py 门禁；纯能力题不要打）；
   4. 先 `--only <新id>` 单跑一条验判据（真红 = 判据或行为有问题，别直接收工），
-     再进全量。判据改了要同步 `eval/judge_offline_test.py` 的语料。
+     再进全量。判据改了要同步 `tests/judge_offline_test.py` 的语料。
 
 用法（cd saudade-blog-agent）：
   .venv/bin/python eval/golden_draft.py                 # 近 1 天（夜间用的口径）
@@ -312,7 +312,7 @@ def main():
                 "1. 用例追加进 `eval/golden/basic.jsonl`（一行一条 JSON）；\n"
                 "2. 事故类现场打 `regression` 标签（回归组硬判 100%）；\n"
                 "3. `.venv/bin/python eval/run_golden.py --only <新id>` 单跑验判据；\n"
-                "4. 判据改动同步 `eval/judge_offline_test.py` 语料；草稿文件本身**不进 git**"
+                "4. 判据改动同步 `tests/judge_offline_test.py` 语料；草稿文件本身**不进 git**"
                 "（`eval/report/*` 已忽略，且含真实用户文本）。\n")
 
     print(f"== golden 草稿回灌 [{since} → {until}] ==")

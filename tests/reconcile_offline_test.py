@@ -14,7 +14,7 @@
 最后一段是**接线断言**：读 `scripts/nightly_regression.sh` 原文，断言对账那一节在里面
 ——"能力有测试 ≠ 接线有测试"是本仓踩过的坑（`tests/test_golden_trace.py` 同款纪律）。
 
-用法：.venv/bin/python eval/reconcile_offline_test.py → 全符合预期时退出码 0。
+用法：.venv/bin/python tests/reconcile_offline_test.py → 全符合预期时退出码 0。
 """
 import gzip
 import json
@@ -24,7 +24,8 @@ import shutil
 import sys
 import tempfile
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓根（tests/ 的上一级）
+# 对账脚本本身留在 eval/（它是产物生成脚本、被 nightly 调用），测试陪它跨目录
 sys.path.insert(0, os.path.join(ROOT, "eval"))
 import trace_reconcile as tr  # noqa: E402
 

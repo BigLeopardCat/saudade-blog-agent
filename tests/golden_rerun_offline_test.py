@@ -27,9 +27,10 @@ import tempfile
 import types
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：本文件已搬进 tests/）
+EVAL = ROOT / "eval"                           # run_golden / golden_trace 仍在 eval/
+sys.path.insert(0, str(EVAL))
+sys.path.insert(0, str(ROOT))
 
 import golden_trace          # noqa: E402
 import run_golden as rg      # noqa: E402
