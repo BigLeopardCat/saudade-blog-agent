@@ -487,8 +487,9 @@ _pa = _popup("一级标签，名字叫X，使用粉色颜色") or {}
 _pad = _pa.get("pending_action") or {}
 check("弹窗那一轮同时产出结构化待办（不是只发一个 __CONFIRM__ 就完了）",
       bool(_pad), str(_pa.get("pending_confirm") is not None))
-check("  字段恰是六件（增字段＝改跨语言契约：Rust 侧读的就是这六个）",
-      set(_pad) == {"task_id", "skill", "specs", "target", "requested_by", "source_event"},
+check("  字段恰是十一件（增字段＝改跨语言契约：Rust 侧读的就是这十一件）",
+      set(_pad) == {"task_id", "skill", "specs", "target", "requested_by", "source_event",
+                    "question", "options", "token", "jti", "expires_at"},
       str(sorted(_pad)))
 check("  task_id 形状 pa_YYYYMMDD_9位（同一条待办重发时用它对齐）",
       bool(re.fullmatch(r"pa_\d{8}_\d{9}", str(_pad.get("task_id", "")))),
@@ -505,6 +506,27 @@ check("  specs 与令牌里签名的是同一份（照它重发＝重发主人�
 check("  技能随计划（下一轮据此拼计划，不靠模型回忆）", _pad.get("skill") == "tag_create")
 check("  提出者/来源是系统事实（不是模型叙述，也够不上访客痕迹）",
       _pad.get("requested_by") == "user" and _pad.get("source_event") == "confirm_popup")
+# 卡片本体落库（20260924）：这批字段的唯一用途是**刷新后把卡片重建出来**（此前
+# 卡片只活在当轮 SSE 帧里，刷新/断流就再也回不来，而库里那条待办还在）。判据落在
+# "重建所需五件都在，且与当轮那张卡**同源**"上——重建出来的问句/按钮若与主人当时
+# 看到的不一致，他就等于在确认一件没看过的事。
+_pc = _pa.get("pending_confirm") or {}
+check("  重建卡片五件齐（问句/按钮/令牌/一次性编号/到期时刻）",
+      bool(_pad.get("question")) and bool(_pad.get("options"))
+      and bool(_pad.get("token")) and bool(_pad.get("jti"))
+      and isinstance(_pad.get("expires_at"), int),
+      str(sorted(k for k in ("question", "options", "token", "jti", "expires_at")
+                 if not _pad.get(k))))
+check("  问句/按钮与当轮弹的那张**逐字同源**（不是各算一遍）",
+      _pad.get("question") == _pc.get("q") and _pad.get("options") == _pc.get("opts"))
+check("  令牌与帧里那张是同一张（重放同一张才谈得上'用掉一次'）",
+      _pad.get("token") == _pc.get("token") and bool(_pad.get("token")))
+check("  jti 与令牌自带的那个相等（落库侧认领的就是它）",
+      _pad.get("jti") == confirm.token_jti(_pad.get("token", ""))
+      and bool(re.fullmatch(r"[0-9a-f]{32}", str(_pad.get("jti", "")))),
+      str(_pad.get("jti")))
+check("  expires_at 与令牌里的 exp 相等（读侧按它滤掉过期卡片）",
+      _pad.get("expires_at") == _pc.get("exp") and _pad["expires_at"] > 0)
 check("不弹窗的轮次**没有**待办（提问/无权限不许凭空记一条等主人点头的事）",
       not (_popup("把文章 12 设为私密会有什么影响？") or {}).get("pending_action")
       and not (_popup("一级标签，名字叫X，使用粉色颜色",
@@ -552,6 +574,38 @@ check("接线：正常轮的 trace input 带 conversation_id",
 check("接线：__CONFIRM__ 帧体带 exp（前端靠它起倒计时/到期结算）",
       '"exp": popup.get("exp") or 0' in _src)
 settings.jwt_secret = _SAVED_SECRET   # 还原（⑥ 与本节各自立桩，改完归还原值）
+
+print()
+print("⑧ 令牌的一次性编号 jti（20260924）：同一张令牌不许兑现两次")
+# 动因：令牌在此之前是**可重放**的——写操作不幂等，"确定"点两下、或同一条隐藏请求
+# 重发一遍，两次都验签通过、两次都真写。落库侧靠 `jti` 认领（见 src/routes/chat.rs）；
+# 本节只锁 agent 侧那份**签发/解出**的契约，认领本身在 Rust 侧。
+settings.jwt_secret = _STUB_SECRET
+_t1 = confirm.sign(7, 42, "tag_create", [{"tool": "create_tag_one", "args": {"name": "X"}}])
+_t2 = confirm.sign(7, 42, "tag_create", [{"tool": "create_tag_one", "args": {"name": "X"}}])
+_j1, _j2 = confirm.token_jti(_t1), confirm.token_jti(_t2)
+check("jti 是 32 位十六进制（落库列 varchar(64)，不撞不改写）",
+      bool(re.fullmatch(r"[0-9a-f]{32}", _j1)) and bool(re.fullmatch(r"[0-9a-f]{32}", _j2)),
+      f"{_j1!r}/{_j2!r}")
+check("  同一秒内两次签发得到**不同** jti（不派生自 uid/会话/时间——派生就会撞）",
+      _j1 != _j2)
+check("  jti 取自令牌自身、与验签解出的 payload 一致（认领键的信任来源）",
+      confirm.token_jti(_t1) == (confirm.verify(_t1, 7, 42) or {}).get("jti"))
+check("  坏输入给空串、不抛（签发那一轮绝不因为解不出 jti 而断）",
+      confirm.token_jti("") == "" and confirm.token_jti("x.y.z") == ""
+      and confirm.token_jti(None) == "" and confirm.token_jti("没有点号") == "")
+check("  版本号已 +1（改 payload 结构必须 +1：留着旧号旧令牌会'少个字段也照发'）",
+      confirm._VERSION == 2)
+# v1 令牌（无 jti）必须验不过——这是版本号这道闸的**唯一**意义。手工造一张签名正确、
+# 只是 v=1 的令牌：证明拒绝来自版本比对，而不是"签名恰好不对"。
+_v1_body = json.dumps({"v": 1, "uid": 7, "conv": 42, "exp": int(time.time()) + 600,
+                       "skill": "tag_create", "specs": []},
+                      ensure_ascii=False, separators=(",", ":")).encode()
+_v1 = confirm._b64e(_v1_body) + "." + confirm._b64e(
+    hmac.new(_STUB_SECRET.encode(), confirm._DOMAIN + _v1_body, hashlib.sha256).digest())
+check("  签名正确但版本为 1 的令牌验不过（旧令牌一律失效，而不是尽力解析）",
+      confirm.verify(_v1, 7, 42) is None)
+settings.jwt_secret = _SAVED_SECRET
 
 print()
 if FAILED:

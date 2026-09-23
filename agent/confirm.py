@@ -19,6 +19,11 @@ uvicorn 跑 **2 个 worker**：进程内的一张 pending 表在另一个 worker
 ## 安全语义（本文件存在的全部理由，改任何一条都要重新想清楚）
 
   · 令牌 = **一次已授权的写的等价物**：不落 trace、不进日志、不进回执、不进 prompt。
+  · **"一次"是字面意思（20260924）**：令牌自带随机 `jti`，落库侧认领（HTTP 端
+    `pending_action.jti`）。同一张令牌重放第二次会被如实拒绝——在此之前它是可
+    重放的，"确定"卡片点两下就写两次（写操作不幂等，这是真的会改数据）。认领
+    是**尽力而为**：认领表里没有这张令牌（老客户端/无状态路径/落库失败）时照常
+    放行，验签仍是唯一凭据，本机制只负责"同一张令牌不兑现两次"。
   · 绑定 `uid` + `conversation_id` + 签发时刻，TTL `TTL_SECONDS`（10 分钟）。
   · 密钥空缺（配置没读到）时**既不签也不验**——绝不降级成"无签名令牌"。
   · 验签失败一律 `None`（签名不符 / 过期 / 换人 / 换会话 / 格式坏 / 版本不符），
@@ -39,6 +44,7 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
 import time
 
 from config import settings
@@ -53,7 +59,10 @@ _DOMAIN = b"saudade-confirm-v1"
 TTL_SECONDS = 600
 
 # 令牌版本（将来改 payload 结构时 +1，旧版本一律验不过，而不是"尽力解析"）
-_VERSION = 1
+# 20260924：1 → 2（payload 加 `jti`，见 `token_jti`）。**版本号就是这次改动的
+# 兼容策略**——加字段就必须 +1：留着 1 的旧令牌验签时会被 `payload["v"] != _VERSION`
+# 挡住（而不是"少一个字段也照发"，见 verify 末段）。
+_VERSION = 2
 
 
 def _secret() -> bytes:
@@ -118,6 +127,34 @@ def token_expiry(token: str) -> int:
     return exp if isinstance(exp, int) else 0
 
 
+def token_jti(token: str) -> str:
+    """解出令牌**自己携带**的 `jti`（一次性编号）；解不出 → 空串。
+
+    存在的理由与 `token_expiry` 同源、用途完全不同：**令牌要能被"用掉"**。
+    在此之前令牌是无状态的、可重放的——同一张"确定"卡片点两次、或者把同一条
+    隐藏请求重发一遍，两次都会验签通过、两次都真执行（写操作不是幂等的）。
+    20260924 起签发时给每张令牌一个随机 `jti`，落库侧认领这个编号；同一个 jti
+    只兑现一次，第二次如实拒绝。
+
+    **这里同样不验签**，调用方必须清楚它的信任等级：本函数的返回值只用来
+    （a）随 `pending_action` 落库做标记、（b）给前端展示；**认领键必须取自
+    `verify()` 解出的 payload**——拿客户端单独传上来的字段当认领键，等于让
+    调用方自己指定"我要兑现哪张令牌"。与 `token_expiry` 一样，格式坏就给空串，
+    绝不抛异常打断签发那一轮。
+    """
+    if not token or not isinstance(token, str):
+        return ""
+    parts = token.split(".")
+    if len(parts) != 2:
+        return ""
+    try:
+        payload = json.loads(_b64d(parts[0]).decode())
+    except Exception:
+        return ""
+    jti = payload.get("jti") if isinstance(payload, dict) else None
+    return jti if isinstance(jti, str) else ""
+
+
 def has_refs(specs) -> bool:
     """specs 里有没有残留的 `$ref`（见模块头注：有引用就不签发）。
 
@@ -147,6 +184,10 @@ def sign(uid: int, conv_id, skill: str, specs: list) -> str:
         "uid": int(uid),
         "conv": conv_id if isinstance(conv_id, int) else None,
         "exp": int(time.time()) + TTL_SECONDS,
+        # 一次性编号（20260924）：32 位十六进制，容得下落库侧的 varchar(64)。
+        # 每次签发都是新的随机值——**不派生自 uid/会话/时间**，否则同一秒内两次
+        # 签发会撞成同一个 jti，第二次会被自己的第一次认领挡掉。
+        "jti": secrets.token_hex(16),
         "skill": str(skill),
         "specs": specs or [],
     }

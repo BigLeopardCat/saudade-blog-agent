@@ -3927,12 +3927,18 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             note_index = _note_index(config)
         except Exception:
             note_index = None
+    # 弹窗两件在下面两处都要用（SSE 帧 + 落库的待办行），提成局部量只为**同源**：
+    # 20260924 起卡片能在刷新后从库里重建，重建出来的问句/按钮必须与当轮弹的那张
+    # 逐字一致，各算一遍就是两份实现。
+    question = A.render_confirm_question(picks, tag_index, cat_index, board_index,
+                                         note_index)
+    opts = [{"label": "确定", "value": "yes", "kind": "primary"},
+            {"label": "取消", "value": "no", "kind": "default"}]
+    expires_at = confirm.token_expiry(token)
     return {
         "pending_confirm": {
-            "q": A.render_confirm_question(picks, tag_index, cat_index, board_index,
-                                           note_index),
-            "opts": [{"label": "确定", "value": "yes", "kind": "primary"},
-                     {"label": "取消", "value": "no", "kind": "default"}],
+            "q": question,
+            "opts": opts,
             "token": token,
             "specs": picks,
             "skill": _plan_skill(state),
@@ -3944,7 +3950,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             # 取自令牌自身（confirm.token_expiry，**不是重算**）：展示的有效期必须与
             # 验签时真正被比较的那个数逐秒一致。签名失败时令牌是空串 → 这里 0，
             # 前端按"无倒计时"处理（那种情况下根本没有弹窗，见上面的 warning 分支）。
-            "exp": confirm.token_expiry(token),
+            "exp": expires_at,
         },
         # 跨轮待办（20260923）：这一轮的提议落成系统记录。target 与弹窗问句同源
         # （同一个 A.render_action_lines），specs 是**已经解析好的具体参数**——
@@ -3957,6 +3963,19 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                                             note_index),
             "requested_by": "user",
             "source_event": "confirm_popup",
+            # 卡片本体一并落库（20260924）：此前卡片只活在当轮的 SSE 帧里——刷新、
+            # 断流、或者流没读完就切走，那张卡片就再也回不来了，而库里那条待办
+            # 还在（用户 20260924 报的正是这个：刷新后卡片没了）。下面五件是重建
+            # 一张**可点**的卡片所需的全部：问句、按钮、令牌、令牌的一次性编号、
+            # 到期时刻。令牌本身不敏感于此前的纪律（不进 trace/日志/回执/prompt），
+            # 它是**签给本人的**、绑定 uid+会话，读侧也只回本人。
+            "question": question,
+            "options": opts,
+            # token/jti/expires_at 三件同源于上：jti 供落库侧认领（见 confirm.token_jti
+            # 的信任等级说明），expires_at 供读侧过滤掉过期卡片。
+            "token": token,
+            "jti": confirm.token_jti(token),
+            "expires_at": expires_at,
         },
         "confirm_text": A.render_confirm_text(picks, tag_index, cat_index, board_index,
                                                note_index),
