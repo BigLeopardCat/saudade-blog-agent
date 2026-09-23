@@ -1736,6 +1736,94 @@ def step17_auth_review(rep: Report, uid: int, role: str) -> None:
         _drop_conv(rep, uid, role, conv_id, "⑰")
 
 
+# ── ⑰/⑱ 共用的数据前提：台账里恰好 1 条待审（`--allow-board-stage` 可自造一条）──
+# 为什么造得出来一条"待审"：站点现在是「AI 审核开 + 人工复核关」（web_info 两个
+# 开关），经 `POST /api/public/board` 发的留言由 AI 裁决定 approved——**占位符式的正文
+# 被判「存疑」(flag) ⇒ approved=0 进人工待审**（20260923 实测 9 个候选：占位符/无意义
+# 串 8 个判 flag，正常句子与语气词判 pass）。所以造出来的这条**从不进公开面**：它一路
+# 是待审（公开列表只看 approved=1），跑完 DELETE。
+# 若哪次 AI 判了 pass / 驳回（approved=1/2），那条留言**当场删掉**并把"可能短暂公开
+# 可见"如实报成警告——不静默、也不假装它没发生。
+_STAGE_TEXT = "探针临时留言（验证复核链路，跑完即删）"
+_atexit_done: set[int] = set()      # 兜底清理已处理过的 id（正常路径删过就不再删）
+
+
+def _atexit_cleanup_stage(uid: int, role: str, tid: int) -> None:
+    """进程退出前的兜底清理（正常路径已删则跳过）。"""
+    if tid in _atexit_done:
+        return
+    try:
+        _http("DELETE", f"{BASE}/api/protect/board/{tid}", None,
+              {"Authorization": "Bearer " + login_jwt(uid, role)}, 15)
+        print(f"  [staging] 兜底清理：已删除留言 #{tid}")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [staging] 兜底清理失败：{e}（请手工删掉留言 #{tid}）")
+
+
+def _del_board_comment(rep: Report, uid: int, role: str, tid: int, tag: str) -> None:
+    _atexit_done.add(tid)
+    try:
+        backend_send("DELETE", f"/api/protect/board/{tid}", {}, uid, role)
+        print(f"  [PASS] {tag}：已删除 staging 留言 #{tid}")
+    except Exception as e:  # noqa: BLE001
+        rep.fails.append(f"{tag} 删除 staging 留言 #{tid} 失败：{e}（请手工删）")
+
+
+def _stage_pending_comment(rep: Report, uid: int, role: str) -> int | None:
+    """造一条**待审**留言（返回 talkKey；造不出返回 None 并记警告）。
+
+    只在台账 0 条待审时造（1 条就不必造，≥2 条造了也没用——两条待审反而让 ⑰/⑱
+    都失去前提）。**经生产入口**发（`POST /api/public/board`，须登录）⇒ 审核链路
+    与访客留言逐字相同，不是后台插数据。
+    """
+    pending = [r for r in _board_rows(uid, role) if r.get("approved") == 0]
+    if len(pending) == 1:
+        print("\n[staging] 台账里已经有 1 条待审，不必造（省一次真写）")
+        return None
+    if len(pending) > 1:
+        rep.warn(f"staging 未造：台账里已经有 {len(pending)} 条待审（先人工清到 1 条再跑）")
+        print(f"\n[staging] 台账里已有 {len(pending)} 条待审 ⇒ 不造（造了也触发不了快道/定死模式）")
+        return None
+    for attempt, content in enumerate((f"{_STAGE_TEXT} [stage{int(time.time()) % 100000}]",
+                                       _STAGE_TEXT), 1):
+        print(f"\n[staging] 第 {attempt} 次经生产入口发一条一次性留言（AI 判存疑 ⇒ 进待审、"
+              f"从不公开）：{content!r}")
+        try:
+            backend_send("POST", "/api/public/board",
+                         {"talkTitle": "探针临时留言", "content": content,
+                          "cat": "诉", "v": 0, "author": ""}, uid, role)
+        except Exception as e:  # noqa: BLE001
+            rep.fails.append(f"staging 发留言失败：{e}")
+            print(f"  [FAIL] 发留言失败：{e}")
+            return None
+        row = next((r for r in _board_rows(uid, role)
+                    if str(r.get("content") or "").strip() == content), None)
+        if row is None:
+            rep.fails.append(f"staging 发出的留言没在台账里找到（正文 {content!r}）")
+            print("  [FAIL] 台账里找不到刚发的那条（无法定位 ⇒ 无法清理）")
+            return None
+        tid = int(row.get("talkKey") or 0)
+        okp = row.get("approved") == 0
+        print(f"  [{'PASS' if okp else 'FAIL'}] 新留言 #{tid} approved="
+              f"{row.get('approved')}（期望 0 = 待审）ai_result={row.get('aiResult')!r}")
+        if okp:
+            import atexit
+            atexit.register(_atexit_cleanup_stage, uid, role, tid)
+            rep.warn(f"staging：本次跑用了一条**探针自造**的待审留言 #{tid}"
+                     f"（经生产入口真发，跑完删除）")
+            return tid
+        # AI 没判存疑 ⇒ 这条已经进了公开面或已隐藏：立刻删掉，如实报出来
+        if row.get("approved") == 1:
+            rep.warn(f"staging：刚发的留言 #{tid} 被 AI 判为**通过**（approved=1）⇒ 它在这"
+                     f"几秒内对访客可见，已立刻删除")
+            print(f"  [warn] 这条被判通过 ⇒ 短暂公开可见，立刻删掉")
+        else:
+            print(f"  [INFO] 这条被判驳回（approved={row.get('approved')}）⇒ 删掉重试")
+        _del_board_comment(rep, uid, role, tid, "staging 重试前清理")
+    rep.warn("staging 两次都没造出待审留言（AI 每次都没判存疑）——⑰/⑱ 这一轮没跑")
+    return None
+
+
 def step18_forced_review(rep: Report, uid: int, role: str) -> None:
     """⑱ 目标定死的受限决策（G1）：结论读不出时，系统**只把结论留给 planner**，零写。
 
@@ -1910,6 +1998,9 @@ def main() -> int:
                     help="指定靶子文章 id（必须是草稿；默认自动挑第一篇草稿）")
     ap.add_argument("--allow-board-audit", action="store_true",
                     help="允许 ⑰ 真复核台账里那条待审留言（判成驳回=隐藏，且本腿不复原）")
+    ap.add_argument("--allow-board-stage", action="store_true",
+                    help="允许为 ⑰⑱ 造前提：经生产入口发一条一次性留言（AI 判存疑 ⇒ 进待审、"
+                         "从不公开），跑完删除。只在台账 0 条待审时造")
     ap.add_argument("--skip-popup", action="store_true",
                     help="跳过 ⑧⑨⑩（弹窗链路/令牌边界/颜色）——它们要经 SSE 真链路，最慢")
     args = ap.parse_args()
@@ -1944,6 +2035,11 @@ def main() -> int:
             step3_unknown_id(rep, args.uid, "admin")
             # ⑮ 零真写（只是"必须说不"），所以放在安全段：没给 --allow-write 也跑
             step15_loud_target(rep, args.uid, "admin")
+            # ⑱/⑰ 的数据前提（台账里恰好 1 条待审）可由探针自造（`--allow-board-stage`）：
+            # 台账 0 条时发一条占位符正文的一次性留言（AI 判存疑 ⇒ 进待审、从不公开），
+            # 跑完在下面删除；进程异常退出还有 atexit 兜底。
+            staged_tid = (_stage_pending_comment(rep, args.uid, "admin")
+                          if args.allow_board_stage else None)
             # ⑱ 零真写（从不点确定），所以也放在安全段；**必须排在 ⑰ 之前**——
             # ⑰ 会真判掉台账里那条待审留言，台账一空 ⑱ 的前提就没了（见 step18 头注）。
             step18_forced_review(rep, args.uid, "admin")
@@ -1999,6 +2095,9 @@ def main() -> int:
                           "（该腿会真把台账里那条待审留言判成驳回，且不复原）；"
                           "这一轮**没动留言**")
                     rep.warn("⑰ 未跑：缺 --allow-board-audit")
+            # staging 的一次性留言跑完就删（⑰ 若把它判成驳回，也照删——它本来就是探针造的）
+            if staged_tid:
+                _del_board_comment(rep, args.uid, "admin", staged_tid, "staging 收尾")
 
     print(f"\n=== {'全部符合预期' if not rep.fails else f'{len(rep.fails)} 项不符'}"
           f"｜警告 {len(rep.warns)} 条｜{round(time.time() - t0, 1)}s ===")
