@@ -1100,6 +1100,27 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
 
 
+def _record_invalid_confirm(trace_id: str, uid: int, conv_id, token_len: int) -> None:
+    """给被拒的确认请求落一份最小 trace。
+
+    20260924 补：此前这条路径在 `start_trace` **之前** return（见下方 chat_stream），
+    于是一个**自称"没执行任何改动"的回复在 trace 语料里完全不存在**——主人报"我点
+    了确定但什么都没发生"时，agent 侧零证据，只能靠前端日志（而前端在这条链路的
+    正路径上也没有留痕，见 chat-stream.js 的 reportConfirm）。落盘失败不影响回复。
+
+    元数据由 `confirm.invalid_trace_meta` 给定（纯函数、被单测锁住：**只记令牌长度，
+    绝不记令牌本身**）——那条纪律属于确认模块的语义，不属于这个调用点。
+    """
+    try:
+        start_trace(trace_id, uid, f"invalid_confirm_{uuid.uuid4().hex[:8]}",
+                    confirm.invalid_trace_meta(uid, conv_id, token_len))
+        record("confirm", "rejected", reason="invalid_token",
+               conversation_id=conv_id, token_len=int(token_len))
+        finish_trace(trace_id, "invalid_confirm_token", 0.0, 1)
+    except Exception:                        # trace 是观测，不是业务：绝不因它中断
+        logger.exception("invalid confirm trace dump failed")
+
+
 async def _invalid_confirm_stream():
     """确认令牌验不过时的最小 SSE 流：**一句话 + 结束帧，零执行零 LLM**。
 
@@ -1108,6 +1129,9 @@ async def _invalid_confirm_stream():
     弹一条重试按钮（隐藏轮不该出现任何用户可见的重试控件）。走正常帧则：
     Rust 照常落库（主人回头能看见"确认已失效，没有执行任何改动"这句），
     前端照常渲染成一条 assistant 消息。
+
+    正文里点明两种失效原因（超时 / 不同会话）：令牌是四重绑定的，主人看到的
+    "我明明点了"多数是其中一种，说清楚才知道下一步该做什么。
     """
     text = "这次确认已经失效了（超过 10 分钟、或者不是在同一个会话里点的），我没有执行任何改动。需要的话跟我说一遍要做什么，我再问一次。"
     yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
@@ -1136,6 +1160,8 @@ async def chat_stream(req: ChatRequest, request: Request):
         if grant is None:
             logger.warning("[confirm] 令牌验签失败（uid=%s conv=%s 长度=%d）→ 零执行",
                            principal.uid, req.conversation_id, len(req.confirm_token))
+            _record_invalid_confirm(get_trace_id(), principal.uid,
+                                    req.conversation_id, len(req.confirm_token))
             return StreamingResponse(
                 _invalid_confirm_stream(), media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -1156,6 +1182,12 @@ async def chat_stream(req: ChatRequest, request: Request):
         start_trace(get_trace_id(), req.user_id, thread_id, {
             "message": (req.message or "")[:200], "has_image": bool(req.image),
             "needs_summary": bool(req.needs_summary), "history_len": len(req.history),
+            # 会话 id（20260924 补）：trace 里此前只有每请求随机的 thread_id，**没有
+            # 会话身份**——跨源对账与事故复盘都缺这个最基本的锚点（20260924 复盘
+            # "哪几张确认卡片属于同一个会话"时，只能靠 rust.log 的 chat POST 反推，
+            # 而隐藏确认请求的轮次在 rust.log 里也认不出来）。会话 id 是系统事实、
+            # 不含凭据（令牌/口令绝不进 trace，见下方 has_confirm 只记布尔）。
+            "conversation_id": req.conversation_id,
             # 本轮是否带跨轮执行回执（gate 的"回执豁免"就靠这个事实，判据复扫时
             # 没有它就只能反推——20260921 补记，见 _state_action_claim 注释）
             "has_exec": bool(req.executions),
