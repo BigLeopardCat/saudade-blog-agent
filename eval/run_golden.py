@@ -96,6 +96,10 @@ def build_request(case: dict) -> ChatRequest:
         # 20260904 C3：跨轮执行记忆（模拟 Rust 侧 execution_log 渲染注入——
         # 二轮用例把首轮回执作为 executions 传进来，锁"据记忆如实回答"路径）
         executions=ctx.get("executions", ""),
+        # 20260924：跨轮待办（Rust 侧从 pending_action 表读回注入的另一半台账，
+        # 与 executions 合一成"确认与执行事实"块，见 server._ledger_block）——
+        # 用例带了才能在 golden 里跑到那条路径（gate 洞⑦ 的判据也看这一半）。
+        pending_action=ctx.get("pending_action", ""),
     )
 
 
