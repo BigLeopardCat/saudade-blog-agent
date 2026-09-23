@@ -1579,10 +1579,10 @@ def _trace_events(msg: str, name: str, within_s: int = 300) -> list[dict]:
     """
     from config.settings import settings
     best: tuple[str, dict] | None = None
-    for name in os.listdir(settings.trace_dir):
-        if not name.endswith(".json"):
+    for fname in os.listdir(settings.trace_dir):   # ⚠ 别叫 name：会盖掉事件名参数
+        if not fname.endswith(".json"):
             continue
-        p = os.path.join(settings.trace_dir, name)
+        p = os.path.join(settings.trace_dir, fname)
         try:
             if time.time() - os.path.getmtime(p) > within_s:
                 continue
@@ -1592,8 +1592,8 @@ def _trace_events(msg: str, name: str, within_s: int = 300) -> list[dict]:
             continue
         if (d.get("input") or {}).get("message") != msg:
             continue
-        if best is None or name > best[0]:
-            best = (name, d)
+        if best is None or fname > best[0]:
+            best = (fname, d)
     if best is None:
         return []
     return [e for e in (best[1].get("events") or []) if e.get("event") == name]
