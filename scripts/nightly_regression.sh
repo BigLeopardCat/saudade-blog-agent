@@ -8,6 +8,10 @@
 # --min-pass-rate 放宽），能力题仍按通过率——两类红的严重度不同，不许被平均数吸收。
 # 同日补：trace_alert 抓到的现场回灌成 golden 草稿（eval/golden_draft.py，只产草稿
 # 到 eval/report/ 供人审，不自动入库、非门禁）。
+# 20260924 补：跨源对账（eval/trace_reconcile.py，把 trace ↔ agent.log ↔ monitor.log
+# 三个源对起来看，非门禁）——单源规则扫描看不见"两个源之间"的错（轮次自洽、前端只见
+# 报错那类），报告进 eval/report/reconcile_<ts>.md，异常时另写一条 WARN 到
+# logs/health.log（与一分钟心跳探针同一条通道）。
 set -u
 cd /home/ubuntu/memory_blog_rust/saudade-blog-agent
 PY=.venv/bin/python
@@ -29,6 +33,10 @@ $PY eval/trace_alert.py --days 7 >> "$LOG" 2>&1 || echo "[$TS] trace_alert 运�
 # eval/report/ 下、不自动入库；人审后手抄进 eval/golden/basic.jsonl 并打标签）
 echo "--- golden 草稿回灌 (非门禁, 只产草稿供人审) ---" >> "$LOG"
 $PY eval/golden_draft.py --days 1 >> "$LOG" 2>&1 || echo "[$TS] golden_draft 运行异常（不影响门禁）" >> "$LOG"
+# 20260924 起：跨源对账（非门禁）。默认窗口就是"刚过去这一天"——夜里跑，对的正是
+# 刚过去的这一夜。异常时它自己写 health.log 的 WARN，这里只留一行结论在日志里。
+echo "--- 跨源对账 (trace ↔ agent.log ↔ monitor.log, 巡检非门禁) ---" >> "$LOG"
+$PY eval/trace_reconcile.py >> "$LOG" 2>&1 || echo "[$TS] trace_reconcile 运行异常（不影响门禁）" >> "$LOG"
 
 if [ "$fail" -eq 0 ]; then
   echo "[$TS] ALL PASS" >> "$LOG"
