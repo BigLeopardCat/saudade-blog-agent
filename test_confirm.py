@@ -405,6 +405,12 @@ _PEND = {94: {"talkKey": 94, "author": "visitor", "approved": 0,
               "content": "垃圾网站，什么破烂，主动申请驳回都失败"}}
 _orig_board = _tb._board_index
 try:
+    # ⚠️ 本段排在 `:319` 那次"还原成进来时的样子"**之后**：CI 无 .env ⇒ 还原回去的是
+    # **空串** ⇒ `confirm.sign` 返回 "" ⇒ `_confirm_popup` fail-closed 不弹窗（本地有
+    # .env 时还原回真密钥，于是本地全绿）。这正是 `_STUB_SECRET` 注释里那条坑的第二次
+    # 踩中（20260923 CI run 35858357150：本段 5 项全红、症状是 execute 产
+    # `consent_required` 错误帧而不是 `pending_confirm`）⇒ 这里必须**自己再设一次桩**。
+    settings.jwt_secret = _STUB_SECRET
     _tb._board_index = lambda config: dict(_PEND)
     _facts, _plan_obj = g._auth_review_path(
         "小猫咪按你想法来吧", "有一条留言在等人复核，那我把这条**驳回隐藏**：",
@@ -413,7 +419,9 @@ try:
                        "plan": plan_encode(_plan_obj), "plan_rounds": 0, "done": False,
                        "receipts": []}, CFG)
     check("授权式 + 台账唯一待审 ⇒ 执行前弹确认框（授权不等于替主人签字）",
-          isinstance(_r, dict) and "pending_confirm" in _r, str(_r)[:80])
+          isinstance(_r, dict) and "pending_confirm" in _r,
+          f"{str(_r)[:80]}（令牌长度 {len((_r or {}).get('pending_confirm', {}).get('token', ''))}"
+          "—— 为 0 就是签名密钥空缺，见本段开头的密钥桩注释）")
     _q = (_r or {}).get("pending_confirm", {}).get("q", "")
     check("  弹窗把目标印给主人（#id + 作者 + 原文 + 现状）",
           "#94" in _q and "垃圾网站" in _q and "待审" in _q, _q[:110])
@@ -425,6 +433,7 @@ try:
           len((_r or {}).get("pending_confirm", {}).get("token", "")) > 20)
 finally:
     _tb._board_index = _orig_board
+    settings.jwt_secret = _SAVED_SECRET   # 本段是最后一段，还原即收尾
 
 print()
 if FAILED:
