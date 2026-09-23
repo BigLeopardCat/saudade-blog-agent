@@ -93,6 +93,31 @@ def invalid_trace_meta(uid: int, conv_id, token_len: int) -> dict:
     }
 
 
+def token_expiry(token: str) -> int:
+    """解出令牌**自己携带**的 `exp`（UTC 秒级时间戳）；解不出 → 0。
+
+    刻意不重算（`int(time.time()) + TTL_SECONDS`）：签名里的 exp 才是验签时真正被
+    比较的那个数，展示用的有效期必须与它**逐秒一致**。重算会让两者相差签发那一瞬的
+    跨秒误差——前端按重算值起倒计时，卡片就会在令牌已失效之后还多活一秒（用户点下去、
+    必被拒），正是 20260924 那类"看着能点、点了白点"。
+
+    这里**不验签**：令牌是同一个进程刚签出来的，只用于给前端画倒计时。验签是
+    `verify` 的唯一职责，前端拿到的 exp 只是展示线索，**服务端仍以 verify 为唯一凭据**
+    （前端时钟被改、或旧客户端根本没有 exp，都不影响安全性，只影响倒计时显示）。
+    """
+    if not token or not isinstance(token, str):
+        return 0
+    parts = token.split(".")
+    if len(parts) != 2:
+        return 0
+    try:
+        payload = json.loads(_b64d(parts[0]).decode())
+    except Exception:
+        return 0
+    exp = payload.get("exp") if isinstance(payload, dict) else None
+    return exp if isinstance(exp, int) else 0
+
+
 def has_refs(specs) -> bool:
     """specs 里有没有残留的 `$ref`（见模块头注：有引用就不签发）。
 

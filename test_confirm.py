@@ -98,6 +98,13 @@ check("过期（exp 在签发后已过）→ None（签名合法也不行）",
       confirm.verify(_stale, 7, 42) is None)
 check("TTL 是 10 分钟量级（够读完想一下，又短到过夜必失效）",
       300 <= confirm.TTL_SECONDS <= 900, str(confirm.TTL_SECONDS))
+# token_expiry：给前端画倒计时用的展示值（20260924）。它必须**读令牌自己**，而不是
+# 重算 now+TTL——重算会让展示值比签名值晚一秒，卡片在令牌失效后还多活一会儿。
+check("token_expiry：解出来的就是签名里那一个（与 verify 的 payload 逐字相等）",
+      confirm.token_expiry(tok) == (confirm.verify(tok, 7, 42) or {}).get("exp"))
+check("token_expiry：坏输入一律 0、不抛（前端按'无倒计时'处理，不影响验签）",
+      confirm.token_expiry("") == 0 and confirm.token_expiry("abc") == 0
+      and confirm.token_expiry("!!!.???") == 0 and confirm.token_expiry(None) == 0)
 
 print("\n② 令牌边界")
 check("specs 带 $ref → 不签发（引用依赖签发轮的帧，执行轮早已不在）",
@@ -152,6 +159,18 @@ if p:
           p["confirm_text"] and "已完成" not in p["confirm_text"]
           and "确认" in p["confirm_text"])
     check("  令牌已签发（不是空串）", len(p["pending_confirm"]["token"]) > 20)
+    # 失效时刻随帧下发（20260924）：前端拿它起倒计时，到点自动把卡片结算成
+    # "已过期，未执行"。判据不是"exp 约等于 now+TTL"（那只能证明算了个大概），
+    # 而是**与验签真正比较的那个数逐字相等**——展示值一旦与签名值脱钩，卡片就会
+    # 在令牌失效之后还多活一会儿，用户点下去必被拒（20260924 的"看着能点、
+    # 点了白点"）。所以直接拿 verify 解出来的 payload 对齐。
+    _pay = confirm.verify(p["pending_confirm"]["token"], 7, 42) or {}
+    _exp = p["pending_confirm"].get("exp")
+    check("  exp 已下发，且**等于签名里那一个**（展示不重算，重算会跨秒漂）",
+          isinstance(_exp, int) and _exp == _pay.get("exp") and _exp > 0)
+    _now = int(time.time())
+    check("  exp ≈ now + TTL_SECONDS（10 分钟量级，不是随便一个未来数）",
+          confirm.TTL_SECONDS - 5 <= _exp - _now <= confirm.TTL_SECONDS + 5)
     check("  签发的 spec 是**具体值**（没有 $ref 残留）",
           not confirm.has_refs(p["pending_confirm"]["specs"]))
     check("  带着技能名（执行轮照它拼计划，不靠模型回忆）",
@@ -518,6 +537,10 @@ check("接线：验签失败分支调用了落 trace（不是只打个 warning �
       and _src.index("_record_invalid_confirm(get_trace_id()") > _src.index("if grant is None:"))
 check("接线：正常轮的 trace input 带 conversation_id",
       '"conversation_id": req.conversation_id' in _src)
+# 弹窗帧带 exp（20260924）：图形侧算了、服务端没转发，等于没算（前端拿不到就起不了
+# 倒计时，卡片照样永远停在"已确认"）。帧体与 state 增量两处都要在位。
+check("接线：__CONFIRM__ 帧体带 exp（前端靠它起倒计时/到期结算）",
+      '"exp": popup.get("exp") or 0' in _src)
 settings.jwt_secret = _SAVED_SECRET   # 还原（⑥ 与本节各自立桩，改完归还原值）
 
 print()

@@ -1012,7 +1012,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         asyncio.run_coroutine_threadsafe(
                             queue.put("__CONFIRM__:" + json.dumps(
                                 {"id": uuid.uuid4().hex[:8], "q": popup.get("q", ""),
-                                 "opts": popup.get("opts") or [], "token": popup.get("token", "")},
+                                 "opts": popup.get("opts") or [], "token": popup.get("token", ""),
+                                 # 令牌失效时刻（20260924）：前端据此起倒计时、到点把
+                                 # 卡片结算成"已过期，未执行"，不让它永远停在"已确认"。
+                                 # 服务端仍以验签为唯一凭据——这个数只驱动展示。
+                                 "exp": popup.get("exp") or 0},
                                 ensure_ascii=False)),
                             loop).result()
                         # 跨轮待办（20260923）：同一件事的**结构化形态**落库（Rust 侧

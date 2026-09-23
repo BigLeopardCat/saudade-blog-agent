@@ -3784,6 +3784,15 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             "token": token,
             "specs": picks,
             "skill": _plan_skill(state),
+            # 令牌失效时刻随帧下发（20260924）：前端此前**不知道令牌什么时候过期**，
+            # 于是"已确认"是点击那一刻写下的乐观文本、永不回收——令牌过期了、或者那
+            # 一条隐藏请求根本没发出去，卡片仍写着"已确认"（20260924 生产事故 00:21：
+            # 卡片说已确认，系统里零执行，agent 又答"系统里也没有生成待确认的指令"）。
+            # 给前端一个到点自动结算的钩子，卡片就不会永远停在那个乐观态。
+            # 取自令牌自身（confirm.token_expiry，**不是重算**）：展示的有效期必须与
+            # 验签时真正被比较的那个数逐秒一致。签名失败时令牌是空串 → 这里 0，
+            # 前端按"无倒计时"处理（那种情况下根本没有弹窗，见上面的 warning 分支）。
+            "exp": confirm.token_expiry(token),
         },
         # 跨轮待办（20260923）：这一轮的提议落成系统记录。target 与弹窗问句同源
         # （同一个 A.render_action_lines），specs 是**已经解析好的具体参数**——
