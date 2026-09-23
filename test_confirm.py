@@ -11,6 +11,9 @@
      无权限、目标无据、参数没解析出来）。
   ④ 点确定之后：_confirm_grant_plan 照签名拼计划（技能对不上→空清单）；
      execute 放行同意闸与目标有据两门，但**权限不放行**。
+  ⑤ 授权式短应答（P2）：台账唯一待审 ⇒ 目标由系统定，但**仍要主人点一下**。
+  ⑥ 跨轮待办的结构化形态（P4）：弹窗那一轮同时产出 pending_action，
+     且字段/同源关系/MISS 语义与 Rust 侧的读取契约一致。
 
 用法：.venv/bin/python test_confirm.py
 """
@@ -18,6 +21,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 
@@ -433,7 +437,43 @@ try:
           len((_r or {}).get("pending_confirm", {}).get("token", "")) > 20)
 finally:
     _tb._board_index = _orig_board
-    settings.jwt_secret = _SAVED_SECRET   # 本段是最后一段，还原即收尾
+    settings.jwt_secret = _SAVED_SECRET   # ⑥ 段自己会再设一次桩
+
+print()
+# ── ⑥ 跨轮待办的结构化形态（20260923 P4）：弹窗那一轮的提议落成系统记录 ──
+# 目的不是"多一个字段"：主人下一轮说"那就办吧"时 planner 要能照这一行**原样重发**
+# （技能/工具/参数照抄），而不是回历史自然语言里另挑一个目标——历史是解释层，这一行
+# 是系统事实。三端契约：这里产的 dict → server.py 发 `__PENDING__:` 帧 → Rust 落库、
+# 下一轮 prepare_chat 读回来注入页面上下文（字段名见 src/routes/chat.rs
+# `save_pending_action`，**改一侧必须同步另一侧**）。
+settings.jwt_secret = _STUB_SECRET   # ⑤ 的 finally 还原成 _SAVED_SECRET（CI 里是空串）
+_pa = _popup("一级标签，名字叫X，使用粉色颜色") or {}
+_pad = _pa.get("pending_action") or {}
+check("弹窗那一轮同时产出结构化待办（不是只发一个 __CONFIRM__ 就完了）",
+      bool(_pad), str(_pa.get("pending_confirm") is not None))
+check("  字段恰是六件（增字段＝改跨语言契约：Rust 侧读的就是这六个）",
+      set(_pad) == {"task_id", "skill", "specs", "target", "requested_by", "source_event"},
+      str(sorted(_pad)))
+check("  task_id 形状 pa_YYYYMMDD_9位（同一条待办重发时用它对齐）",
+      bool(re.fullmatch(r"pa_\d{8}_\d{9}", str(_pad.get("task_id", "")))),
+      str(_pad.get("task_id")))
+check("  目标与弹窗问句同源（同一个 render_action_lines——两处措辞永不走散）",
+      bool(_pad.get("target"))
+      and _pad["target"] in (_pa.get("pending_confirm") or {}).get("q", ""),
+      str(_pad.get("target"))[:80])
+check("  specs 与令牌里签名的是同一份（照它重发＝重发主人签字时看到的那个具体请求）",
+      _pad.get("specs") == (_pa.get("pending_confirm") or {}).get("specs")
+      and bool(_pad.get("specs"))
+      and confirm.verify((_pa.get("pending_confirm") or {}).get("token", ""), 7,
+                         42)["specs"] == _pad["specs"])
+check("  技能随计划（下一轮据此拼计划，不靠模型回忆）", _pad.get("skill") == "tag_create")
+check("  提出者/来源是系统事实（不是模型叙述，也够不上访客痕迹）",
+      _pad.get("requested_by") == "user" and _pad.get("source_event") == "confirm_popup")
+check("不弹窗的轮次**没有**待办（提问/无权限不许凭空记一条等主人点头的事）",
+      not (_popup("把文章 12 设为私密会有什么影响？") or {}).get("pending_action")
+      and not (_popup("一级标签，名字叫X，使用粉色颜色",
+                      principal=Principal(uid=9, role="user")) or {}).get("pending_action"))
+settings.jwt_secret = _SAVED_SECRET
 
 print()
 if FAILED:
