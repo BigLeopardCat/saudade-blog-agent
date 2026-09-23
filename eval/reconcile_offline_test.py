@@ -275,6 +275,99 @@ _golden_hdr = [ln for ln in src.splitlines() if ln.startswith("echo ") and "gold
 check("⑪ golden 那一节的段头自占一行（它就是被粘连吃掉的那一条）", len(_golden_hdr) == 1,
       _golden_hdr or "找不到 golden set 段头")
 
+print("⑫ 弹窗链（正常分支埋点）：同一枚待办串成一条链，跳数不齐才算线索")
+D = mkdirs(TMP, "flow")
+put_trace(os.path.join(D, "traces"), "r" + "g" * 31, 1, "2026-09-22T15:00:00", popup=True)
+write(os.path.join(D, "log", "agent.log"), end_line("2026-09-22 15:00:05", "r" + "g" * 31))
+
+
+def flow_line(ts, msg, uid="1"):
+    return monitor_line(ts, "confirm_flow", uid=uid, extra=f"url=/x msg={msg} stack=")
+
+
+# ① 完整一条链（五个阶段齐、以 ok 收尾）——不该出线索
+_ok = "".join(flow_line(f"2026-09-22 15:0{i}:0{i}", m) for i, m in enumerate([
+    "stage=frame n=1 id=chainok opts=2 exp=yes q=要把这篇加进收藏吗",
+    "stage=card n=2 id=chainok",
+    "stage=click n=3 id=chainok value=yes",
+    "stage=sent n=4 id=chainok conv=1",
+    "stage=settle n=5 id=chainok result=ok"], start=0))
+# ② 有请求、没有点击记录（结构性：请求该由点击发起）——线索，且它的 frame 落在
+#    monitor.log.1.gz 里（跨归档文件也要合成同一条链）
+# ③ 点了却没有任何结论，附近也没有该轮次的失败上报——线索
+# ④ 忙守卫形态：点了没结论，但 4 分钟前有一条同 uid 的 confirm_card 留痕 ⇒ **不算线索**
+# ⑤ 帧到手、卡片没挂上（20260923 那类形态）——线索
+# ⑥ 埋点新增了阶段名而这里没同步——线索（静默漏掉才是问题）
+# ⑦ 没有 id 的埋点：串不成链，单独计数、不猜
+write(os.path.join(D, "mon", "monitor.log"), _ok
+      + flow_line("2026-09-22 15:50:00", "stage=sent n=3 id=noclick conv=1")
+      + flow_line("2026-09-22 16:00:00", "stage=frame n=1 id=stuck")
+      + flow_line("2026-09-22 16:00:01", "stage=card n=2 id=stuck")
+      + flow_line("2026-09-22 16:00:02", "stage=click n=3 id=stuck value=yes")
+      + flow_line("2026-09-22 15:05:00", "stage=frame n=1 id=busy")
+      + flow_line("2026-09-22 15:05:01", "stage=card n=2 id=busy")
+      + flow_line("2026-09-22 15:05:02", "stage=click n=3 id=busy value=yes")
+      + flow_line("2026-09-22 17:00:00", "stage=frame n=1 id=nocard")
+      + flow_line("2026-09-22 18:00:00", "stage=teleported n=1 id=weird")
+      + flow_line("2026-09-22 19:00:00", "stage=frame n=1")
+      # 忙守卫那一跳本尊（与 15:00 弹窗轮差 1 分钟 ⇒ 配对得上，不作 orphan）
+      + monitor_line("2026-09-22 15:01:00", "confirm_card", uid="1"))
+with gzip.open(os.path.join(D, "mon", "monitor.log.1.gz"), "wt", encoding="utf-8") as f:
+    f.write(flow_line("2026-09-22 15:49:59", "stage=frame n=1 id=noclick")
+            + flow_line("2026-09-22 15:50:01", "stage=card n=2 id=noclick"))
+r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
+ids = {c["id"]: c for c in r["flow_clues"]}
+why = lambda cid: "；".join(ids.get(cid, {}).get("why", []))     # noqa: E731
+
+
+def stages_of(cid):
+    return ids.get(cid, {}).get("stage", {})
+
+
+check("⑫ 链数 6 条（无 id 的那条不算链）",
+      r["flow_chains"] == 6, str(r["flow_chains"]))
+check("⑫ 没有 id 的埋点单独计数、不硬凑成链", r["flow_noid"] == 1, str(r["flow_noid"]))
+check("⑫ 完整链不出线索", "chainok" not in ids, str(sorted(ids)))
+check("⑫ 结论分布只数 settle 的 result",
+      r["flow_results"] == {"ok": 1}, json.dumps(r["flow_results"], ensure_ascii=False))
+check("⑫ 有请求没有点击记录 ⇒ 线索",
+      "没有对应的点击记录" in why("noclick"), why("noclick"))
+check("⑫ 该链跨 monitor.log.1.gz 归档也合成了一条",
+      stages_of("noclick").get("frame") == 1 and stages_of("noclick").get("sent") == 1,
+      json.dumps(stages_of("noclick"), ensure_ascii=False))
+check("⑫ 点了却没有任何结论（附近也没有失败上报）⇒ 线索",
+      "点了却没有任何结论" in why("stuck"), why("stuck"))
+check("⑫ 忙守卫形态不算线索（点了没结论但附近有该轮次的 confirm_card 留痕）",
+      "busy" not in ids, why("busy"))
+check("⑫ 帧到手卡片没挂上 ⇒ 线索", "卡片没挂上" in why("nocard"), why("nocard"))
+check("⑫ 阶段名不认识 ⇒ 线索（埋点与对账没同步要看得见）",
+      "不认识" in why("weird"), why("weird"))
+check("⑫ 正常分支埋点不算'前端异常'（数异常的口径里只有失败类型）",
+      all(ev["type"] != tr.FLOW_TYPE for ev in r["monitor_failure"])
+      and tr.FLOW_TYPE not in tr.MON_FAILURE_TYPES,
+      json.dumps([ev["type"] for ev in r["monitor_failure"]]))
+check("⑫ 上面那条 has_anomaly 的唯一来源是刻意种下的失败上报，不是链（这条夹具里 orphan_card 应为空）",
+      r["has_anomaly"] is True and len(r["monitor_failure"]) == 1 and not r["orphan_card"],
+      json.dumps({k: len(r[k]) for k in ("orphan_card", "monitor_failure")}))
+# 真判据要单独关灯验：一个只有不齐的链、别的什么都没种的目录，has_anomaly 必须**不翻**
+# ——否则"关掉页签"这种完全正常的成因会让 health.log 每晚响一次（判据 ⑦ 的全文理由）。
+F = mkdirs(TMP, "flow_only")
+put_trace(os.path.join(F, "traces"), "r" + "h" * 31, 1, "2026-09-22T15:00:00")
+write(os.path.join(F, "log", "agent.log"), end_line("2026-09-22 15:00:05", "r" + "h" * 31))
+write(os.path.join(F, "mon", "monitor.log"), flow_line("2026-09-22 20:00:00", "stage=frame n=1 id=onlyclue"))
+r2 = tr.reconcile(F + "/traces", F + "/log", F + "/mon", *win())
+check("⑫ 只有跳数不齐的线索时 has_anomaly 不翻（关页签也会留下不齐的链）",
+      r2["has_anomaly"] is False and r2["flow_clues"] and not r2["flow_noid"],
+      json.dumps({"clues": [c["id"] for c in r2["flow_clues"]],
+                  "has_anomaly": r2["has_anomaly"],
+                  **{k: len(r2[k]) for k in ("orphan_card", "monitor_failure")}}, ensure_ascii=False))
+check("⑫ 但线索在报告里看得见（不出声 ≠ 藏起来）",
+      "onlyclue" in tr.render_md(r2) and "跳数不齐 1" in tr.summarize(r2),
+      tr.summarize(r2))
+md = tr.render_md(r)
+check("⑫ 报告里有弹窗链小节与结论分布", "弹窗链" in md and "跳数不齐" in md and "结论分布" in md)
+check("⑫ 一行结论带弹窗链计数", "弹窗链 6 条" in tr.summarize(r), tr.summarize(r))
+
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("全部符合预期" if not FAILS else f"不符预期 {len(FAILS)} 项：" + "; ".join(FAILS)))
 sys.exit(1 if FAILS else 0)

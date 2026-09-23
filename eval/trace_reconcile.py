@@ -25,6 +25,8 @@
        `orphan_dom_drop`（消息流 DOM 清理）
   ⑥ CLUE               不做硬判：弹窗轮（`execute.consent_popup` 事件）与 `confirm_card`
        的候选配对，**必须 uid 相同且 |时间差| ≤ CLUE_MIN**——否则就是巧合检测器
+  ⑦ CLUE               不做硬判：弹窗链的逐跳记录（前端 `confirm_flow` 埋点，20260924）
+       ——同一枚待办靠帧里的 id 串成 frame→card→click→sent→settle，跳数对不上即线索
 
 三条纪律（都是踩过的坑）：
   · **只在两个源覆盖范围的交集里判 ①②**：logrotate 00:00 对 `*.log` 用 copytruncate
@@ -33,6 +35,13 @@
     这类非 hex 的 tid；文件名只有前 8 位）。
   · **monitor.log 只能是线索、不能当证据**：`type=` 是匿名可写的原样插值
     （`monitor.rs`），内容可以被伪造。所以 ⑤ 只报计数与原文，⑥ 只做候选配对。
+
+⑦ 为什么也**只出线索、不进 has_anomaly**（后来者别顺手改）：链上跳数不齐的真实成因
+里混着"用户关掉了标签页"——点了确定、请求还没收尾就把页面关了，这类天天可能有几条，
+一旦接进 health.log 那条通道，每晚一条 WARN 会让整条告警通道失真（本文件开头就写着
+"响多了就没人看了"）。它的价值在于**单源看不见的那类**：链在日志里存在、跳数却不齐，
+夜里对账时能把"点了没结论""请求出去了没结论""帧到手卡片没挂上"这几种形态分出来并
+点名，人再去看报告。计数进 stdout 一行结论（夜间日志收它）。
 
 输出：一行结论到 stdout（夜间日志收它）+ `eval/report/reconcile_<ts>.md` +
 `eval/report/last_reconcile.json`；**仅在异常时**往 `logs/health.log` 追加一条 WARN
@@ -77,6 +86,16 @@ DUMP_FAILED_RE = re.compile(r"trace dump failed trace_id=(\S+)")
 MON_HEAD_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:[.,]\d+)? \S+ \[monitor\] ")
 # 前端上报里"只在失败分支出现"的两个 type（前者是弹窗链路，后者是消息流 DOM 清理）
 MON_FAILURE_TYPES = ("confirm_card", "orphan_dom_drop")
+# 弹窗链的**正常分支**逐跳记录（20260924 前端埋点）。**不能并进 MON_FAILURE_TYPES**：
+# 那是"数异常"的口径，把正常链路算进去，等于每点一次确定都算一次异常。
+FLOW_TYPE = "confirm_flow"
+# 弹窗链上五个阶段（判据 ⑦ 按它数跳、缺哪一跳点名哪一跳）
+FLOW_STAGES = ("frame", "card", "click", "sent", "settle")
+# `type=confirm_flow uid=… url=… msg=stage=frame n=1 id=c1 opts=2 exp=no q=… stack=`
+# 埋点把阶段与字段拼在 message 里（`k=v` 空格分隔，q 里的空白已被前端压成单空格）。
+FLOW_MSG_RE = re.compile(r"msg=(.*?)(?: stack=|$)")
+FLOW_KV_RE = re.compile(r"([A-Za-z_][\w]*)=(\S*)")
+
 # 生产 trace 的正常文件名：`<时间戳>_<uid>_<trace_id 前 8 位>.json`（golden/diag 不落这里）
 TRACE_NAME_RE = re.compile(r"^\d{8}T\d{6}_\d+_[0-9a-zA-Z]+\.json$")
 
@@ -209,8 +228,19 @@ def read_monitor(monitor_dir: str) -> dict:
         t = re.search(r"type=(.*?)(?: uid=| url=| msg=| stack=|$)", rest)
         u = re.search(r"uid=(.*?)(?: url=| msg=| stack=| type=|$)", rest)
         events.append({"ts": ts, "type": (t.group(1) if t else "").strip(),
-                       "uid": (u.group(1) if u else "").strip(), "line": line[:300]})
+                       "uid": (u.group(1) if u else "").strip(), "line": line[:300],
+                       "msg": (FLOW_MSG_RE.search(rest).group(1).strip()
+                               if FLOW_MSG_RE.search(rest) else "")})
     return {"events": events, "raw_lines": raw}
+
+
+def flow_kv(ev: dict) -> dict:
+    """把逐跳埋点的 message 拆成 {stage, n, id, result, …}。
+
+    message 是 `stage=frame n=1 id=… q=…` 这种空格分隔的 k=v（前端把值里的空白压成
+    单空格）。**认不出的整段照抄进报告、不做推断**——那份 message 是唯一原文。
+    """
+    return dict(FLOW_KV_RE.findall(ev.get("msg") or ""))
 
 
 def reconcile(trace_dir: str, log_dir: str, monitor_dir: str,
@@ -291,6 +321,63 @@ def reconcile(trace_dir: str, log_dir: str, monitor_dir: str,
             # 反方向更强：报了 confirm_card 却在附近找不到任何弹窗轮
             orphan_cards.append(ev)
 
+    # ⑦ 弹窗链的逐跳记录（正常分支埋点）：同一枚待办靠 id 串，跳数不齐即线索。
+    # 为什么按**跳数**判而不是按顺序判：一条链的几跳可能落在同一秒里，而日志行只有
+    # 整秒 ⇒ 顺序不可靠；跳数（以及每条链自己的 n 单调）是可靠的。顺序另有 n 兜底。
+    flow = [ev for ev in mon if ev["type"] == FLOW_TYPE]
+    chains = {}
+    flow_noid = 0
+    for ev in flow:
+        kv = flow_kv(ev)
+        cid = kv.get("id") or ""
+        if not cid:
+            flow_noid += 1        # 埋点丢了 id ⇒ 这条链串不起来，单独计数（不猜）
+            continue
+        ch = chains.setdefault(cid, {"id": cid, "uid": ev["uid"], "ts": ev["ts"],
+                                     "stage": {s: 0 for s in FLOW_STAGES},
+                                     "results": {}, "n_max": {}, "unknown_stage": 0})
+        st = kv.get("stage") or ""
+        if st in ch["stage"]:
+            ch["stage"][st] += 1
+        else:
+            ch["unknown_stage"] += 1      # 埋点新增了阶段而这里没同步 ⇒ 要看得见
+        if st == "settle":
+            r = kv.get("result") or "(无 result)"
+            ch["results"][r] = ch["results"].get(r, 0) + 1
+        # 序号在同一枚待办里必须单调（前端靠它绕开上报链的去重）：回退即线索
+        try:
+            n = int(kv.get("n") or 0)
+        except ValueError:
+            n = 0
+        ch["n_max"][st] = max(ch["n_max"].get(st, 0), n)
+
+    flow_clues = []
+    for cid, ch in sorted(chains.items(), key=lambda kv: kv[1]["ts"]):
+        s = ch["stage"]
+        why = []
+        if s["sent"] > s["click"]:
+            why.append("有确认请求却没有对应的点击记录")
+        if s["click"] > s["settle"] and not any(
+                str(ev["uid"]) == ch["uid"]
+                and abs((ev["ts"] - ch["ts"]).total_seconds()) <= clue_min * 60
+                for ev in confirm_cards):
+            # 忙守卫挡下是**合法**的"点了没结论"（卡片保留、另有 confirm_card 留痕），
+            # 所以只有"附近连一条失败上报都没有"才算线索——不然这条判据天天响。
+            why.append("点了却没有任何结论（附近也没有该轮次的失败上报）")
+        if s["sent"] > s["settle"]:
+            why.append(f"发出了 {s['sent']} 次确认请求、只结算了 {s['settle']} 次")
+        if s["frame"] and not s["card"]:
+            why.append("确认帧到手但卡片没挂上（20260923 那类形态）")
+        if ch["unknown_stage"]:
+            why.append(f"{ch['unknown_stage']} 条埋点的阶段名不认识（埋点与对账要同步）")
+        if why:
+            flow_clues.append({**{k: ch[k] for k in ("id", "uid", "ts", "results")},
+                               "stage": s, "why": why})
+    flow_results = {}
+    for ch in chains.values():
+        for r, c in ch["results"].items():
+            flow_results[r] = flow_results.get(r, 0) + c
+
     # 卫生项（生产目录里的异物）**不算异常**：它是"有人把 golden/诊断产物落错了地方"，
     # 不是这一夜的对账结果，报在报告里、进一行结论，但不该让 health.log 每晚响一次
     # （响多了就没人看了——那条通道要留给真异常）。
@@ -317,6 +404,8 @@ def reconcile(trace_dir: str, log_dir: str, monitor_dir: str,
         "trace_without_end": trace_without_end, "end_without_trace": end_without_trace,
         "dup_tid": dup_tid, "mismatch": mismatch,
         "monitor_failure": mon_fail, "clues": clues, "orphan_card": orphan_cards,
+        "flow_chains": len(chains), "flow_events": len(flow), "flow_noid": flow_noid,
+        "flow_results": flow_results, "flow_clues": flow_clues,
         "self_check": self_check, "has_anomaly": has_anomaly,
     }
 
@@ -340,6 +429,15 @@ def render_md(r: dict) -> str:
     if r["self_check"]:
         A(f"⚠️ {r['self_check']}")
         A("")
+    if r["flow_chains"] or r["flow_noid"]:
+        # 弹窗链是**信息**不是异常（判据 ⑦ 的说明在文件头）：这一行说的是"这一夜里
+        # 用户点过多少次确定、各自以什么结束"，跳数不齐的另在下面点名。
+        res = "、".join(f"{k} {v}" for k, v in sorted(r["flow_results"].items())) or "（无结论记录）"
+        A(f"弹窗链：{r['flow_chains']} 条（{r['flow_events']} 条埋点）"
+          f"｜结论分布：{res}"
+          f"{'｜' + str(r['flow_noid']) + ' 条埋点没有 id（串不成链）' if r['flow_noid'] else ''}"
+          f"｜跳数不齐的线索 {len(r['flow_clues'])} 条")
+        A("")
     A(f"## 结论：{'有异常' if r['has_anomaly'] else '干净'}")
     A("")
     A("| 判据 | 数量 |")
@@ -350,6 +448,7 @@ def render_md(r: dict) -> str:
     A(f"| 配上了但 end_reason/frames 不等 | {len(r['mismatch'])} |")
     A(f"| 前端上报（失败分支）| {len(r['monitor_failure'])} |")
     A(f"| 其中配对不上任何弹窗轮 | {len(r['orphan_card'])} |")
+    A(f"| 弹窗链跳数不齐（正常分支埋点，线索、不计异常）| {len(r['flow_clues'])} |")
     A(f"| 生产 trace 目录里的异物（窗口内，卫生项、不计异常）| {len(r['shape_odd'])} |")
     A("")
 
@@ -382,6 +481,13 @@ def render_md(r: dict) -> str:
     block("线索：弹窗轮 ↔ confirm_card 配对", r["clues"],
           lambda x: f"{x['popup']['ts']} u{x['popup']['uid']} 弹窗 tid=`{x['popup']['tid']}`"
                     f" ↔ {x['card']['ts']} 上报（差 {x['gap_s']}s）")
+    block("线索：弹窗链跳数不齐（正常分支埋点）", r["flow_clues"],
+          lambda x: f"`{x['ts']}` id={x['id']} u{x['uid']}"
+                    f" frame{x['stage']['frame']}/card{x['stage']['card']}"
+                    f"/click{x['stage']['click']}/sent{x['stage']['sent']}"
+                    f"/settle{x['stage']['settle']}"
+                    f" → {'；'.join(x['why'])}",
+          "用户关掉页签也会留下不齐的链 ⇒ **只是线索**，不进 health.log（见判据 ⑦）")
     block("生产 trace 目录里的异物（窗口内）", r["shape_odd"],
           lambda x: f"`{x['file']}`：{x['why']}——golden/诊断产出不该落生产目录")
     A(f"（另有 {r['uid0']} 份 uid=0 的历史 trace 在目录里，不在窗口内 ⇒ 只计数不报）")
@@ -396,6 +502,7 @@ def summarize(r: dict) -> str:
             f"重复tid {len(r['dup_tid'])} / 字段不符 {len(r['mismatch'])} / "
             f"前端上报 {len(r['monitor_failure'])}"
             f"{'（其中 ' + str(len(r['orphan_card'])) + ' 条配对不上弹窗轮）' if r['orphan_card'] else ''}"
+            f" / 弹窗链 {r['flow_chains']} 条（跳数不齐 {len(r['flow_clues'])}）"
             f"{' / 目录异物 ' + str(len(r['shape_odd'])) if r['shape_odd'] else ''}"
             f" ⇒ {'有异常' if r['has_anomaly'] else '干净'}")
 
