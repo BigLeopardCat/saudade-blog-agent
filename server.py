@@ -153,6 +153,11 @@ class ChatRequest(BaseModel):
     # （Rust 侧从 execution_log 读最近 8 条渲染成 "· 屏幕显示「…」" 式行）——
     # 下轮质疑"你刚才屏上写了什么"时据实回答，不重发不编造
     executions: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
+    # 跨轮待办（20260923）：本会话"已提出、还没被确认"的写操作（Rust 侧从
+    # pending_action 表读最新一条仍 pending 的行渲染成一行）。与 executions 同
+    # 语义的系统事实注入——短应答/授权式轮次据此定"那件事"，而不是回历史里挑
+    # 一句自然语言当目标（13:19 事故）。空串 = 没有待办。
+    pending_action: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
 
     # ── 写操作确认（20260921）────────────────────────────────────────
     # conversation_id：确认令牌的绑定维度之一（令牌只在这个会话里有效）。
@@ -357,6 +362,15 @@ def _build_messages(req: ChatRequest) -> list:
         ctx_parts.append(
             "recent_executions（泠月自己已执行、系统验收过的动作记录，不是访客的浏览痕迹）: "
             f"{req.executions[:1500]}")
+    if req.pending_action:
+        # 跨轮待办（20260923）：与 recent_executions 相反的一半——**已提出、还没办**
+        # 的那件事（系统记的结构化提议：技能/工具/参数/人读目标/时间/状态）。
+        # 定性必须点明（同 recent_executions 那条教训："状态 awaiting（尚未执行）"
+        # 若被读成访客痕迹或已完成事实，短应答轮与叙述轮都会跑偏）。
+        ctx_parts.append(
+            "pending_action（泠月上一轮已经向主人提出、等主人点头的写操作，"
+            "系统记下来的结构化提议——不是访客的浏览痕迹，也**不是已执行**）: "
+            f"{req.pending_action[:800]}")
     # 20260905 重复提问注入（18:17:36/18:18:52 实证：同句重发时 narrator 逐字
     # 复读上轮回复，两条一字不差的回复并排出现在会话里——qwen 对同句重问的
     # 最优策略判断是原样复读，prompt 软约束压不住，需确定性旁路）。
@@ -1001,6 +1015,14 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                  "opts": popup.get("opts") or [], "token": popup.get("token", "")},
                                 ensure_ascii=False)),
                             loop).result()
+                        # 跨轮待办（20260923）：同一件事的**结构化形态**落库（Rust 侧
+                        # 收到即写、不转发前端）。与弹窗同轮发出是刻意的——主人可能
+                        # 点完就切走/关页面，晚发等于没发；下一轮 planner 靠它认人。
+                        pa = ex_upd.get("pending_action") or {}
+                        if pa:
+                            asyncio.run_coroutine_threadsafe(
+                                queue.put("__PENDING__:" + json.dumps(pa, ensure_ascii=False)),
+                                loop).result()
                         text = str(ex_upd.get("confirm_text") or "")
                         if text:
                             final_reply = text
@@ -1252,6 +1274,13 @@ async def chat_stream(req: ChatRequest, request: Request):
                     had_output = True
                     frames += 1
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    continue
+                if isinstance(chunk, str) and chunk.startswith("__PENDING__:"):
+                    # 跨轮待办帧（20260923）：与 __EXEC__ 同族——同样**必须带
+                    # "data: " 前缀**（Rust 的 SSE 解析是 strip_prefix(b"data: ")，
+                    # 裸 yield 到不了落库分支），Rust 落库后吞掉、不转发前端
+                    # （前端无此帧协议，透传会被当正文渲染）。
+                    yield f"data: {chunk}\n\n"
                     continue
                 if isinstance(chunk, str) and chunk.startswith("__EXEC__:"):
                     # 跨轮执行记忆帧（20260904 C3）：Rust 收帧解析落库 execution_log，
