@@ -3154,18 +3154,31 @@ def _bare_target_name(user_msg) -> str:
 
 
 def _owner_target_span(got: str, spans: list[str], parent: str,
-                       other_marked: str = "") -> str | None:
+                       other_marked: str = "", msg: str = "") -> str | None:
     """主人引号里哪一段是**目标名**？证据不唯一 → None（见上方长注）。
 
     ① planner 写的名字落在**唯一一段**引号里（抄短了/概括了）→ 那一段就是它；
     ② 引号里有一段被"另一个操作数"的标记词领着（`挪到「B」下面` / `改名叫「B」`
        ——见 `_marked_other_operand`）→ 剩下的那**唯一一段**就是目标；
-    ③ 两段引号、其中一段正是 planner 填的父标签名 → 另一段是目标。
+    ③ 两段引号、其中一段正是 planner 填的父标签名 → 另一段是目标；
+    ④ 主人**只**引了一段名字、句里没有第二个操作数标记、该工具也没有父操作数，
+       而 planner 填的名字**在主人这句话里整句查无** → 那一段就是目标。
     刻意**不做**"只有一段引号就把目标改成它"——「帮我把标签 Asyncio 挪到「编程」
-    下面」只有一段引号（是父标签），那样改会把要挪的标签改成父标签本身。
+    下面」只有一段引号（是父标签），那样改会把要挪的标签改成父标签本身；④ 的两道
+    闸（`not other_marked` + planner 的值整句查无）正是为了不碰这种句子。
+
+    20260924 两处修正（各有现场）：
+    · ① 的例外：命中的那段引号若**正是另一个操作数**（父标签），不算证据。实测
+      「把标签 Rust 挪到「嵌入式」下面」planner 把 name 填成了"嵌入式"——它确实
+      "落在唯一一段引号里"，① 于是给这个错值背书，要挪的标签就成了父标签自己。
+    · ④ 新增：此前这种形态一律"说不清就不动"，代价是「标签「大笨狗」我不想要了，
+      删掉吧」被 planner 填成 `name="河灯留言"` 后**原样弹卡**——卡片上写着"删除
+      标签「河灯留言」"，主人点确定就删错标签（弹卡文案是这里唯一的防线）。
     """
     sq = _squash_spaces(got)
     hits = [s for s in spans if sq and sq in _squash_spaces(s)]
+    if other_marked and hits and _squash_spaces(hits[0]) == _squash_spaces(other_marked):
+        hits = []
     if len(hits) == 1:
         return hits[0]
     if other_marked:
@@ -3179,6 +3192,9 @@ def _owner_target_span(got: str, spans: list[str], parent: str,
             if len(ph) == 1:
                 other = next(s for s in spans if s is not ph[0])
                 return other
+    if len(spans) == 1 and not other_marked and not parent and msg \
+            and sq and sq not in _squash_spaces(msg):
+        return spans[0]
     return None
 
 
@@ -3201,7 +3217,8 @@ def _name_target_fix(plan_obj: dict, user_msg) -> None:
         return
     spans = _msg_quote_spans(user_msg)
     other, kind = _marked_operand(user_msg, spans)
-    want = _owner_target_span(got, spans, args.get(pkey) if pkey else "", other)
+    want = _owner_target_span(got, spans, args.get(pkey) if pkey else "", other,
+                              str(user_msg or ""))
     if not want:
         # 免引号形态（"帮我把标签 Asyncio 挪到「编程」下面"）：目标名在名词与动作词之间。
         # planner 的值**在主人这句话里有据**（逐字说过、且不是泛称、也不是这段的截断）
@@ -3212,7 +3229,13 @@ def _name_target_fix(plan_obj: dict, user_msg) -> None:
         # 子串，子串级地基照样放它过去）。取向与引号那条一致：主人原话里那一段是系统
         # 数据，模型的截断让位。只在"捕获段确实更长"时用，且捕获段里不许混补语。
         _frag = bool(_cq and _cq != _gq and _gq in _cq)
-        if cand and _cq != _gq and (_gq not in _squash_spaces(user_msg)
+        # 第四种让位的形态（20260924）：move 类请求里 planner 把**父标签名**填成了目标名
+        # （实测「把标签 Rust 挪到「嵌入式」下面」→ `name="嵌入式"`，而"嵌入式"正是句里
+        # 另一个操作数）。父标签跟在"挪到"后面、目标名在名词与动作词之间，两者不是一回事
+        # ——planner 的值与父操作数相等时，`_gq not in msg` 这条有据性判据恰好失明（父名
+        # 当然在句里），故单列一条：此时主人原话里那一段才是目标。
+        _as_parent = bool(other and _squash_spaces(other) == _gq)
+        if cand and _cq != _gq and (_as_parent or _gq not in _squash_spaces(user_msg)
                                     or got in _GENERIC_NAME_WORDS or _frag):
             want = cand
     # 父标签走同一条地基：planner 填的父标签不在主人这句话里，而主人用"挪到/移到「X」
