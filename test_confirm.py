@@ -416,9 +416,14 @@ try:
     # `consent_required` 错误帧而不是 `pending_confirm`）⇒ 这里必须**自己再设一次桩**。
     settings.jwt_secret = _STUB_SECRET
     _tb._board_index = lambda config: dict(_PEND)
-    _facts, _plan_obj = g._auth_review_path(
+    _facts, _plan_obj, _forced = g._auth_review_path(
         "小猫咪按你想法来吧", "有一条留言在等人复核，那我把这条**驳回隐藏**：",
         Principal(uid=7, role="admin"), CFG)
+    # G1 的三态：这句提议里结论**读得出**（驳回）⇒ 走快道直接拼计划，
+    # `forced`（目标定死、只把结论留给 planner）必须为 None——两个形态同时开火
+    # 会互相盖（forced 分支早退，快道拼好的计划就废了）。
+    check("  结论读得出时走快道：不进目标定死模式（forced 必须为 None）",
+          _forced is None and _plan_obj is not None, str(_forced)[:80])
     _r = execute_node({"messages": [HumanMessage(content="小猫咪按你想法来吧")],
                        "plan": plan_encode(_plan_obj), "plan_rounds": 0, "done": False,
                        "receipts": []}, CFG)
