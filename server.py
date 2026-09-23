@@ -335,8 +335,54 @@ def _resolve_user_id(request: Request, body_uid: int) -> int:
     return _resolve_principal(request, body_uid).uid
 
 
-def _build_messages(req: ChatRequest) -> list:
-    """Build the message list from the request (sync, no blocking)."""
+def _ledger_block(req: ChatRequest, confirmed: bool = False) -> str:
+    """确认与执行事实（系统台账）——两块合一注入（20260924）。
+
+    此前是两条独立的 ctx_parts（`recent_executions` / `pending_action`），各自的定性
+    括号都是事后补的补丁。合一之后"真做过的"与"还没做的"在同一个块里**互斥对照**，
+    模型没有机会把一半读成另一半；两块都空时整块不注入（不占上下文）。
+
+    `confirmed`（本轮是"点确定"那一跳，令牌已验签）：待办那一半**正被本轮执行**，
+    不能再照旧说"等主人点头、尚未执行"——那句话是 20260923 洞⑥ 那族假话的样板文本，
+    原样摆在上下文里等于给 narrator 递台词（20260922 两跑的"把办好的说成待确认"
+    正是抄了它）。此时改写成执行中的定性，其余原样。
+    """
+    head = ("确认与执行事实（系统台账——泠月自己的动作记录，不是访客的浏览痕迹；"
+            "两半互斥：『已执行』是真做过、系统验收过的，『待主人点头』是**还没做**的。"
+            "这两块都是系统事实：不许否认它们存在，也不许把一半说成另一半）")
+    exec_txt = req.executions.strip()[:1500] or "（本会话暂无记录）"
+    if confirmed:
+        # 待办那一半**整行改写、不回引 Rust 渲染的行**：那行尾巴写死了
+        # "状态 awaiting（等主人点头，尚未执行）"，正是 20260923 洞⑥ 那族假话的
+        # 样板文本（20260922 两跑的"把办好的说成待确认"就是抄了它）——本轮它已经被
+        # 主人的那一下确定消费掉，再摆出来等于给 narrator 递台词。目标/参数不丢：
+        # 本轮的执行回执（工具帧）本来就有，叙述以回执为准。
+        return (head + "\n· 已执行（系统验收过）: " + exec_txt
+                + "\n· 待办: 主人**刚刚点了「确定」**，本轮正在执行它——**不是**尚未执行，"
+                  "也不是没生成过确认；办到哪一步一律以本轮执行回执为准")
+    return (head + "\n· 已执行（系统验收过）: " + exec_txt
+            + "\n· 待主人点头（还没做）: "
+            + (req.pending_action.strip()[:800] or "（本会话暂无记录）"))
+
+
+def _ledger_for_graph(req: ChatRequest, confirmed: bool = False) -> dict:
+    """给图内判据（洞⑦ 台账否认）的台账事实——**与 `_ledger_block` 注入的同源**。
+
+    判据要看的就是"系统给模型看过什么"：注入说待办还没办，判据就得认这一半非空；
+    注入改写成了"正在执行"（confirmed），判据就不能再把否认当假话（那时候说
+    "系统里已经没有待确认的了"是真话）。两个来源各算各的必然对不上。
+    """
+    return {"executions": req.executions.strip(),
+            "pending": "" if confirmed else req.pending_action.strip()}
+
+
+def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list:
+    """Build the message list from the request (sync, no blocking).
+
+    `confirm_grant`：已验签的确认令牌 payload（见 /chat/stream）。只用于**台账定性**
+    （这一轮是"用户刚点了确定"那一跳，见 `_ledger_block`）——授权判据不看它，
+    令牌验签的唯一权威在调用方。非流式 `/chat`（golden/评测直连）不传 = 普通轮。
+    """
     messages = []
     ctx_parts = [f"user_id={req.user_id}, page={req.current_url}, title={req.page_title}"]
     ctx_parts.append(f"current_effects={req.current_effects or 'none'}")
@@ -350,27 +396,8 @@ def _build_messages(req: ChatRequest) -> list:
     ctx_parts.append(f"current_time={_now.strftime(f'%Y年%m月%d日 {_weekdays[_now.weekday()]} %H:%M')}")
     if req.summary:
         ctx_parts.append(f"conversation_summary: {req.summary}")
-    if req.executions:
-        # 跨轮执行记忆（20260904 C3；20260920 批次 c 补行首时间与（×N）次数）：
-        # checker 验收过的本会话最近执行（Rust 渲染，"· MM-DD HH:MM 动作行（×N）"）
-        # ——质疑"你刚才真显示了/屏上写了什么/什么时候"的如实依据。
-        # 与 conversation_summary 同语义：系统确认事实注入，模型不得扩展/编造。
-        # 括号里的定性不是装饰（20260920 实证）：行首是时间戳、又与 page=/title=/
-        # current_time= 同处一个 page_ctx 串，模型会把它读成"访客浏览痕迹"并据此
-        # 否认自己刚执行过（原话"那个时间戳是系统上报的访客浏览行为记录"）——
-        # 必须点明这是**泠月自己**已执行、系统验收过的动作。
-        ctx_parts.append(
-            "recent_executions（泠月自己已执行、系统验收过的动作记录，不是访客的浏览痕迹）: "
-            f"{req.executions[:1500]}")
-    if req.pending_action:
-        # 跨轮待办（20260923）：与 recent_executions 相反的一半——**已提出、还没办**
-        # 的那件事（系统记的结构化提议：技能/工具/参数/人读目标/时间/状态）。
-        # 定性必须点明（同 recent_executions 那条教训："状态 awaiting（尚未执行）"
-        # 若被读成访客痕迹或已完成事实，短应答轮与叙述轮都会跑偏）。
-        ctx_parts.append(
-            "pending_action（泠月上一轮已经向主人提出、等主人点头的写操作，"
-            "系统记下来的结构化提议——不是访客的浏览痕迹，也**不是已执行**）: "
-            f"{req.pending_action[:800]}")
+    if req.executions or req.pending_action:
+        ctx_parts.append(_ledger_block(req, confirmed=bool(confirm_grant)))
     # 20260905 重复提问注入（18:17:36/18:18:52 实证：同句重发时 narrator 逐字
     # 复读上轮回复，两条一字不差的回复并排出现在会话里——qwen 对同句重问的
     # 最优策略判断是原样复读，prompt 软约束压不住，需确定性旁路）。
@@ -432,11 +459,13 @@ def _build_messages(req: ChatRequest) -> list:
 
 
 def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
-                    principal: Principal | None = None) -> tuple[str, str, list]:
+                    principal: Principal | None = None,
+                    ledger: dict | None = None) -> tuple[str, str, list]:
     """Run agent synchronously in a thread. Returns (reply, nav_line, exec_rows)."""
     # user_id 注入 configurable：设备类工具（list_devices/device_oled_display）
     # 经 RunnableConfig 读取并以用户身份签发 JWT 调用 device-service
     # principal 一并注入：execute 的权限判据读它（agent/authz.py；缺省 = 身份不明）
+    # ledger 一并注入：gate 的台账否认判据（洞⑦）读它，见 _ledger_for_graph
     # recursion_limit 覆盖默认 9999（等效无界）：幻觉重试循环有界
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id,
                                "principal": principal or Principal(uid=user_id)},
@@ -445,7 +474,7 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
     nav_line = ""
     exec_rows: list = []  # 跨轮执行记忆（20260904 C3）：checker 验收回执，累计语义末批即全量
     for mode, data in _agent.stream(
-        graph_input(messages),
+        graph_input(messages, ledger=ledger or {}),
         config,
         stream_mode=["messages", "updates"],
     ):
@@ -517,7 +546,8 @@ async def chat(req: ChatRequest, request: Request):
                 loop, _summarize_dialogue, req.message, req.history, req.summary
             )
         reply, nav_line, exec_rows = await _submit_with_context(
-            loop, _run_agent_sync, messages, thread_id, req.user_id, principal)
+            loop, _run_agent_sync, messages, thread_id, req.user_id, principal,
+            _ledger_for_graph(req))
         new_summary = None
         if summary_task is not None:
             new_summary = (await summary_task).strip() or None
@@ -933,7 +963,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             asyncio.run_coroutine_threadsafe(queue.put(f"__RESET__:{reason}"), loop).result()
 
         for mode, data in _agent.stream(
-            graph_input(messages, confirm_grant=confirm_grant),
+            graph_input(messages, confirm_grant=confirm_grant,
+                        ledger=_ledger_for_graph(req, confirmed=bool(grant))),
             config,
             stream_mode=["messages", "updates"],
         ):
@@ -1177,7 +1208,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     if not await _try_acquire_slot():
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
     try:
-        messages = _build_messages(req)
+        messages = _build_messages(req, confirm_grant=grant)
         # 每请求独立线程：避免 MemorySaver 线程状态随长对话无限累积（见 /chat 注释）
         thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
         # trace 落盘（roadmap 步骤 2）：请求级 recorder 挂 contextvar——producer

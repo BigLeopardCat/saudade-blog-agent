@@ -271,6 +271,14 @@ class AgentState(TypedDict):
     #                 之前，"已提出未执行"只存在于上一轮的自然语言里（execution_log
     #                 只装已执行的事实），下一轮只能回历史挑一句当目标（13:19 事故）。
     pending_action: dict
+    # ledger: 本请求**注入用**的两块台账原文（{"executions": str, "pending": str}，
+    #                 server.py 由 ChatRequest 填）——gate 的台账否认判据（洞⑦）据此
+    #                 判"被否认的是不是系统事实"，命中时还把这两行如实列举进兜底回复。
+    #                 **必须显式声明**（理由同 fallback_text：未声明的 key 会被
+    #                 LangGraph 静默丢出 updates 流，判据恒收到 None ⇒ 静默失效）。
+    #                 与 pending_action（execute 写的**结构化提议**）分工不同：
+    #                 那个是本轮弹窗的产物，这个是上一轮起就注入给 planner 的渲染文本。
+    ledger: dict
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +370,7 @@ _PLANNER_PROMPT = """\
    - content_query：一切与博客内容有关的询问与核实（文章/说说/留言/公告/站点
      信息里写了什么、怎么做、是什么；博客机制如何工作，如"agent 怎么防止模型
      假装调用了工具"；页面/内容存在性质疑，如"真有这个页面？确定有这篇？"——
-     注意质疑"某操作是否真执行过"不是本技能，见规则 6 的 recent_executions）。
+     注意质疑"某操作是否真执行过"不是本技能，见规则 6 的『已执行』台账）。
    - navigate/effect/darkmode/device_display/device_query：对应动作技能
      （用户要求去某页/开特效/切夜间模式/屏幕上显示文字/查设备）。
 2. 涉站必查：问题只要可能涉及站内内容就选 content_query 并给调用清单，不得
@@ -460,7 +468,7 @@ _PLANNER_PROMPT = """\
      （20260919 实证：为找《架构文档》(19) 跑 rag_search，BM25 命中同主题的
      《文章向量空间图谱项目文档》(46)，被拦截器读全文，整轮跑偏）；
      ① 否则看当前页面是否就是文章页（current_url 是 /article/<id>）→ 以它为准；
-     ② 否则看页面上下文 recent_executions 里最近读取的文章行（形如"MM-DD HH:MM
+     ② 否则看页面上下文『确认与执行事实』块里『已执行』那半的最近读取文章行（形如"MM-DD HH:MM
      读取文章 19《标题》"，行首时间是发生时刻）——限定词与标题对得上 → 用该
      id（重读或据此作答）；
      ③ 只有标题没有 id（列表里未见过 id）→ **list_notes(page=1, page_size=50)
@@ -506,9 +514,11 @@ _PLANNER_PROMPT = """\
      会强制收尾（基于已有工具返回如实作答），不存在无限追问
 6. 用户质疑/催促执行（"你真显示了？""到底跳了没？""别光说，带我去啊"）：
    - 真实性询问（质疑某操作是否真执行过/执行细节，如"屏幕上写了什么"）→
-     看页面上下文 recent_executions=（跨轮执行记忆：**你自己**在本会话里执行过、
+     看页面上下文『确认与执行事实（系统台账）』块里『已执行（系统验收过）』那半
+     （跨轮执行记忆：**你自己**在本会话里执行过、
      系统验收过的动作记录，格式"· MM-DD HH:MM 动作行（行尾可能有「— …」实体摘要，
-     见规则 6b）"；行首时间=**该次执行的发生
+     见规则 6b）"。同一块里另有『待主人点头（还没做）』那半=**已提出、还没办**的写
+     操作，两半互斥不得混说；行首时间=**该次执行的发生
      时刻**（本机 +08:00 钟面，无需换算），行尾"（×N）"=同一动作在本会话内重复
      执行过 N 次（只列最近一次的时间）——时间与次数都是系统事实，可据实转述，
      不要自行推算或改写时间。它记的是你的执行，**不是访客的浏览痕迹/前端上报
@@ -523,7 +533,7 @@ _PLANNER_PROMPT = """\
      "再显示一次刚才那句"）→ 属新请求：重新规划该动作技能并真实执行；
      navigate 填 mode=direct（免确认框直达）；不得零工具口头承诺
      "马上带你去/这就去"——上次正是口头说"已经在 X 页"才被质疑
-6b. 指代取值优先于重查（20260920）：recent_executions 行尾的「— …」是那次执行取回的
+6b. 指代取值优先于重查（20260920）：『已执行』行行尾的「— …」是那次执行取回的
    **实体摘要**（留言条目原文/分类文章数/文章候选标题等，系统按工具返回压成的事实）。
    用户指代"上文已经取回来过的东西"（"第二条写了什么""那个分类下面有几篇文章""刚才
    那个端口是多少"）：
@@ -1141,7 +1151,7 @@ _NAV_ARRIVAL_RE = re.compile(
 #      工具名不算自称调用（383 条真实 trace 回归抓出 3 例误伤：留言板里有人写
 #      "给当前用户执行调用 navigate_to 跳转到 …"，narrator 引用时被误判）；
 #   ⑤ 跨轮记忆豁免：子句含追述时间词（刚才/上一轮/之前…）且本轮请求带
-#      recent_executions=（系统注入的执行回执非空）——据回执转述属 rule 6 正当
+#      『已执行』那半非空（系统注入的执行回执）——据回执转述属 rule 6 正当
 #      行为，不误伤；无回执支撑的"刚才调用了"仍拦（编造）。
 # 工具名只认注册表（_TOOL_MAP 派生），中文泛指（"社交链接查询工具"）不判——无从
 # 核对，误伤成本高于收益。
@@ -1169,10 +1179,35 @@ _PHANTOM_PRIOR_RE = re.compile(
 _TOOL_NAME_RE = re.compile(_TOOL_NAMES_ALT)
 
 
-def _has_exec_memory(msgs: list) -> bool:
-    """本轮请求是否带跨轮执行记忆（server.py 仅在 executions 非空时才注入
-    recent_executions=，故"出现即非空"）。"""
-    return any("recent_executions:" in str(getattr(m, "content", "")) for m in msgs)
+# ── 台账注入的文本标记（**跨模块契约**：server._ledger_block 那侧一字不差地写这两行）
+# 谁改注入文案，谁就得同步这里——`test_skills.test_gate_ledger_denial` 有接线锁
+# （拿 server 真渲染出来的块断言这两行都在）。提成常量是为了让"改文案"变成一次
+# grep 得到的事，而不是又一次静默失灵。
+_LEDGER_EXEC_MARK = "· 已执行（系统验收过）: "
+_LEDGER_EMPTY_MARK = "（本会话暂无记录）"
+
+
+def _has_exec_memory(msgs: list, ledger: dict | None = None) -> bool:
+    """本轮请求是否带跨轮执行记忆（executions 那半台账非空）。
+
+    事实来源**优先取结构化台账**（`state["ledger"]["executions"]`，server.py 由
+    ChatRequest 填，与它实际注入的文本同源）；只拿到 messages 的调用方（离线 fixture）
+    回落到文本标记 `_LEDGER_EXEC_MARK`。
+
+    ⚠️ 20260924 记一笔（本函数踩过的坑）：此前认的是 `"recent_executions:"` 这个
+    **字面量**，而"确认与执行事实"合一注入改了那行的写法 ⇒ 嗅探当场失效、rule 6 的
+    回执豁免全线失灵，且无声。能力有测试 ≠ 接线有测试——凡"文本嗅探当接线"的地方，
+    改注入文案就是改协议。故：① 结构化通道优先；② 标记提成常量；③ `test_skills`
+    里加了接线锁（server 渲染出来的块必须带该标记，且空态不得被认成有）。
+    """
+    if ledger is not None:
+        return bool(ledger.get("executions"))
+    for m in msgs:
+        c = str(getattr(m, "content", ""))
+        i = c.find(_LEDGER_EXEC_MARK)
+        if i >= 0 and not c[i + len(_LEDGER_EXEC_MARK):].startswith(_LEDGER_EMPTY_MARK):
+            return True
+    return False
 
 
 # 引号区段（成对才算，避免英文撇号等单边字符误吞整段）：被引内容 = 转述访客留言/
@@ -1701,6 +1736,77 @@ def _confirm_claim(text: str) -> bool:
     return bool(_confirm_claim_clause(text))
 
 
+# ── 台账否认（gate 洞⑦，20260924）──────────────────────────────────────────
+# 与洞⑥ 相反的那一半：洞⑥ 抓"没弹框却说弹了"，这条抓**否认系统台账里记着的事实**。
+# 依据同样是**结构**而不是概率：只要本请求的 pending_action 非空，那行"待主人点头、
+# 尚未执行"就摆在 system 上下文里（server.py `_ledger_block` 注入）——narrator 说
+# "系统里没有生成待确认的指令"必然是假话。
+#
+# 为什么只判**待确认**这一半、不判执行台账那一半（实测数据，不是偷懒）：
+# 执行台账非空**不能**证伪一句带具体动作的否认——全量真实 trace 复扫（843 条，
+# 其中带执行台账的 210 条）里，执行侧的候选命中三条全是**真话或框架误伤**：
+#   · `20260921T232117`「我这边没有看到把 Asyncio 标签改成下二级标签的执行记录」
+#     ——那次改动确实没发生（本轮只复用了标签），是如实说明；该子句本无系统锚点，
+#     只是 `……` 不在 `_CLAUSE_RE` 的切分集里、把下一句的"系统"并进了同一子句；
+#   · `20260922T193155`「系统核对台账的结果是：站内并没有叫 X 的分类」——确定性
+#     收尾轮复述系统核对结论（`_LEDGER_NOTE_PREFIX` 那类），是履职不是否认；
+#   · 带具体动作的"没有…记录"（"没有那次执行的记录"）在台账列的是**别的事**时
+#     一个字都不假。执行侧真判会误伤，故只留注入与纪律约束（见 `_ledger_block`）。
+#
+# 待确认这一半的实测（全量真实 trace 复扫 843 条，写法同洞⑥ 那次）：
+#   · 真判据（has_pending 取实际注入值）命中 **0 条**——pending 注入本身还从未在
+#     生产里出现过（第一次读回注入是 2026-09-23 22:38 那条待办，60 分钟时效内没人
+#     再说话，`logs/agent/traces` 里 `pending_action（` 零命中），故此侧目前是纯预防；
+#   · 假想 has_pending 恒非空的**最坏情形**命中 1 条（`20260924T002115`
+#     「我刚刚点确认了吗」→"所以系统里也没有生成待确认的指令"）——该轮 pending_action
+#     **确实是空的**（原件 `logs/agent/traces/20260924T002115_1_rca41aef.json`），
+#     即那句在事实上是真话；若台账真的有这条待办，它就是要拦的那句话。
+# 该轮真正的问题在注入侧：已执行的 09-24 00:12 收藏文章 19 明摆着，回复却说"并没有
+# 发起任何操作"——由 `_ledger_block` 的合一注入解决（判据宁漏勿误伤，注入治本）。
+# 子句切分：同 _CLAUSE_RE，另把 `……` 与破折号当界（中文里这两个断句比句号还常见，
+# 不切开就会把下一句的主语并进同一子句——实证见下）
+_LEDGER_CLAUSE_RE = re.compile(r"[^。！？；，、…—\n!?;,]+")
+# 系统锚点：否认必须是**关于系统里有什么**的，不能只是句中提到"系统核对…"
+_LEDGER_ANCHOR_RE = re.compile(
+    r"系统(?:里|中|记录|那边|那儿|台账)|(?:台账|记录)里|后台(?:里|记录)")
+_LEDGER_DENY_RE = re.compile(r"没有|没|无|未|查不到|找不到|不存在")
+# 待确认域名词（"待办"是最常被借去说**站内通知**的词——"目前没有待办事项"是查通知
+# 的结论，不是否认台账，故锚点缺一不可，见上）
+_LEDGER_PENDING_NOUN_RE = re.compile(
+    r"待确认|待办|待批|确认框|确认弹窗|确认指令|确认请求|确认流程|确认动作|确认记录")
+_LEDGER_DENIAL_EXEMPT_RE = re.compile(
+    r"要是|如果|假如|假设|除非|若|为什么|是不是|有没有|难道|吗|[?？]"
+    r"|要不要|需不需要|可以|能否|能帮|帮你|让我|我来|去查|去搜|查查|搜搜"
+    r"|你说|你问|你提到|你让我|引用|原话"
+    r"|这次|那次|这一轮|上一轮|本轮|上轮|这一条|那一条|这一项|那件事|这件事"
+    r"|会|将|之后|届时|到时候|未来|下次"
+    r"|留言|评论|说说|公告|正文|内容是")
+
+
+def _ledger_denial_clause(text: str, has_pending: bool) -> str | None:
+    """台账否认的子句（trace 用）；无命中 → None（判据见 `_ledger_denial`）。
+
+    三个条件同子句内齐备才算：系统锚点 + 否定存在 + **待确认**域名词。
+    子句切分用 `_LEDGER_CLAUSE_RE`（比 `_CLAUSE_RE` 多认 `……` 为界）——中文里
+    "……"断句比句号还常见，不切开就会把下一句的主语并进来（实证见上方长注）。
+    """
+    if not has_pending:
+        return None
+    for c in _LEDGER_CLAUSE_RE.finditer(text):
+        clause = c.group(0)
+        if _LEDGER_DENIAL_EXEMPT_RE.search(clause):
+            continue
+        if (_LEDGER_ANCHOR_RE.search(clause) and _LEDGER_DENY_RE.search(clause)
+                and _LEDGER_PENDING_NOUN_RE.search(clause)):
+            return clause
+    return None
+
+
+def _ledger_denial(text: str, has_pending: bool) -> bool:
+    """台账否认（gate 洞⑦）：系统台账里有待确认的动作，回复却否认它存在。"""
+    return _ledger_denial_clause(text, has_pending) is not None
+
+
 # NOTE 零工具（页面不存在/已下线）轮的如实措辞核验词表（与 instantiate_plan 的
 # note 文本配套，见 gate_node）。
 _HONEST_DOWN = ("下线", "下架", "无法访问", "没有了")
@@ -1710,7 +1816,8 @@ _HONEST_GONE = ("没有", "不存在", "找不到", "无法识别", "没有找�
 def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                  exec_memory: bool = False,
                  exec_search_evidence: bool = False,
-                 has_popup: bool = False) -> tuple[str, str, str] | None:
+                 has_popup: bool = False,
+                 ledger: dict | None = None) -> tuple[str, str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本, **被否掉的那一句**)；有据/无声称 → None。
 
@@ -1724,6 +1831,10 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
       - 任何轮：确认话术声称（_confirm_claim，洞⑥，20260923）——"点「确定」我就去办"
         这类声称与帧无关（有帧轮也可能是假的：写完了却报成待确认），依据是**结构**：
         真弹窗轮由 `route_after_execute` 直接 END、到不了 gate（见该正则上方长注）
+      - 任何轮：台账否认（_ledger_denial，洞⑦，20260924）——待确认的提议就在 system
+        上下文里摆着，回复却说"系统里没有生成待确认的指令"；同样与帧无关。
+        只判**待确认**那一半（执行台账的否认实测会误伤，见该判据上方长注）
+
       - 零工具轮（不分技能）：操作完成声称（_STATE_ACTION_CLAIM_RE，洞①）与
         站内检索声称（_site_search_claim，洞②）——零帧 = 本轮什么都没发生，
         这两族声称必为编造。**两族共用同一条回执豁免**（20260921 补齐）：本轮带跨轮
@@ -1755,6 +1866,14 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         span = _confirm_claim_clause(reply)
         if span:
             return ("confirm_claim_without_popup", _FALLBACK_CONFIRM_CLAIM, span)
+    # 洞⑦（20260924）：台账否认——待确认的提议就摆在 system 上下文里，回复却否认
+    # 它存在。同样**与帧无关**（否认的是系统事实，不是"有没有干活"），故也在
+    # `if frames_exist: return None` 之前。引号内是转述（访客留言里"没生成确认"
+    # 这种字面），照 `own` 的规则剥掉。
+    if ledger and ledger.get("pending"):
+        ledger_span = _ledger_denial_clause(_strip_quoted_spans(reply), True)
+        if ledger_span:
+            return ("ledger_denial", _fallback_ledger_denial(ledger), ledger_span)
     if frames_exist:
         return None  # 帧存在：声称有据（err 帧/确认帧/具名/检索族场景由 gate_node 兜）
     # 引号内是被转述的访客留言/说说正文，不算 narrator 自己的声称（20260913：
@@ -1837,6 +1956,34 @@ _FALLBACK_CONFIRM_CLAIM = (
     "「确定」——我刚才那句『点「确定」我就去办』是句空话，系统那边根本没有这个待确认"
     "的动作 :犯错: 这件事现在到底是还没做、还是已经做完了，一律以系统记录为准，别信"
     "我上一条的措辞。要不要我重新走一遍？（该确认的会真的弹窗给你）")
+# 洞⑦（20260924）：台账否认的兜底。与其它 fallback 常量不同，这条**按请求拼**——
+# 被否认的恰恰是"台账里有什么"，兜底只认错而不把台账摆出来，主人还得再问一遍才拿得到
+# 事实（判据侧已确认那块台账非空，列举必然有内容）。列举取自 server.py 注入用的那两份
+# 渲染文本原文（不二次加工：格式是 Rust render_exec_row/render_pending_action 定的）。
+_FALLBACK_LEDGER_DENIAL_HEAD = (
+    "喵呜……主人，我得纠正自己一句：系统台账里**是有记录的**，我刚才那句"
+    "『系统里没有待确认的指令』是假话——系统记着的事实是下面这些，以它为准，"
+    "别信我上一句的措辞 :犯错:")
+_FALLBACK_LEDGER_DENIAL_CLIP = 300     # 每块台账在**给访客看**的兜底里的截断上限
+_FALLBACK_LEDGER_DENIAL_TAIL = "要接着办哪一件，或者想让我把台账念全，说一声喵～"
+
+
+def _fallback_ledger_denial(ledger: dict) -> str:
+    """洞⑦ 兜底文本：如实列举两块台账（有哪块列哪块）。"""
+    lines = []
+    for key, label in (("pending", "待主人点头（还没做）"),
+                       ("executions", "已执行（系统验收过）")):
+        text = str(ledger.get(key) or "").strip()
+        if text:
+            lines.append(f"· {label}: {text[:_FALLBACK_LEDGER_DENIAL_CLIP]}")
+    if not lines:
+        # 判据只在 pending 非空时才可能命中（调用方保证），走到这里说明台账没传进来
+        # ——只说"我说错了"，不编造内容（宁可少说）。
+        return _FALLBACK_LEDGER_DENIAL_HEAD + "要我把台账念一遍嘛？"
+    return _FALLBACK_LEDGER_DENIAL_HEAD + "\n" + "\n".join(lines) + "\n" + \
+        _FALLBACK_LEDGER_DENIAL_TAIL
+
+
 _FALLBACK_NO_EXEC = (
     "喵呜……主人，我得纠正自己一句：这一轮系统**其实执行过工具**（只是返回是空的，"
     "没有查到东西），我刚才却说成『本轮没有执行任何工具』——把『查了但没有』讲成"
@@ -4207,7 +4354,7 @@ _EXECUTOR_PROMPT = """\
    - 记录里有对应工具返回 → 如实转述该返回（含失败/错误信息），不扩大不粉饰；
    - 记录里没有对应执行 → 如实承认"我这边没有看到这次操作的执行记录，刚才
      好像没有真正执行"，绝不圆场说"其实已经做了"。
-   - 跨轮记忆（页面上下文 recent_executions=，20260904）与"本轮工具执行记录/
+   - 跨轮记忆（页面上下文『已执行』那半，20260904）与"本轮工具执行记录/
      本轮执行回执"同为准绳：转述执行事实（含上轮/历史轮的实际屏文/路径/开关
      状态）以三者为准，三者之外的执行声称（"我记得好像显示过"）不得出口。
 5. 工具返回以 __ERROR__ 开头 → 如实转述失败原因，不把失败说成成功、不声称
@@ -4243,7 +4390,7 @@ _EXECUTOR_PROMPT = """\
     如实说那一节我这轮没读到、可以按小节名再取一次（系统下一轮会读回），
     绝不拿相近小节的内容顶替作答。
 15. 指代不唯一时先追问，不替访客挑一个（20260921）：访客用"那个分类""那篇"这类
-    指代，而依据里并列着**多个同类候选**（页面上下文 recent_executions= 的实体
+    指代，而依据里并列着**多个同类候选**（页面上下文『已执行』行的实体
     摘要形如"5 个分类: 测试 5 篇/…/编程 8 篇"——并列命名、无序号）→ **先问清是
     哪一项**再答，不得默认挑第一个/最多的那个（挑错了访客看不出来你在猜）。
     追问要**点名候选**（"测试、本项目介绍、摄影、编程、Web3 里的哪一个？"）。
@@ -4404,8 +4551,9 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # ── 2. 命令前缀文本（任何轮次，正文出现命令帧前缀 = 假装发命令）─────────
     # ── 3. 编造资源 URL（任何轮次，工具返回/用户消息中不存在的 /api 或图片）──
     issue = _claim_issue(reply, plan["skill"], plan, bool(frames),
-                         _has_exec_memory(msgs), _exec_memory_has_search(msgs),
-                         has_popup=bool(state.get("pending_confirm")))
+                         _has_exec_memory(msgs, state.get("ledger")), _exec_memory_has_search(msgs),
+                         has_popup=bool(state.get("pending_confirm")),
+                         ledger=state.get("ledger"))
     if issue:
         i_name, i_text, i_clause = issue
         return _fallback_result(i_name, i_text, plan, len(frames), i_clause)
@@ -4472,8 +4620,8 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     #     （15:51 实证句："这次我用专门的社交链接查询工具（get_social_links）调了一次"）
     executed_names = {str(getattr(m, "name", "") or "") for m in frames}
     # frame_text 传入 = 开启"复述工具自己说的话"豁免（20260921，见 _phantom_tool_claim_span）
-    phantom = _phantom_tool_claim_span(reply, executed_names, _has_exec_memory(msgs),
-                                       tool_text)
+    phantom = _phantom_tool_claim_span(
+        reply, executed_names, _has_exec_memory(msgs, state.get("ledger")), tool_text)
     if phantom:
         logger.info("[gate] 具名工具声称无帧支撑：%s（本轮执行=%s）｜子句=%s → fallback",
                     phantom[0], "、".join(sorted(n for n in executed_names if n)) or "无",
@@ -4492,7 +4640,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     #     点名工具，泛指检索声称归这里。
     if not (executed_names & _CONTENT_TOOLS):
         own5d = _strip_quoted_spans(reply)
-        clause5d = _site_search_claim_clause(own5d, _has_exec_memory(msgs))
+        clause5d = _site_search_claim_clause(own5d, _has_exec_memory(msgs, state.get("ledger")))
         if clause5d:
             logger.info("[gate] 站内检索声称但本轮无内容类工具帧（执行=%s）｜子句=%s → fallback",
                         "、".join(sorted(n for n in executed_names if n)) or "无",
@@ -4634,7 +4782,8 @@ def build_graph():
     return g.compile()
 
 
-def graph_input(messages: list, confirm_grant: dict | None = None) -> dict:
+def graph_input(messages: list, confirm_grant: dict | None = None,
+                ledger: dict | None = None) -> dict:
     """图输入构造：state 形状归本模块管，调用方（server.py）不手写字段。
 
     planner 节点会立刻写入 plan/plan_rounds/done，这里给空初值只为了让输入
@@ -4643,10 +4792,14 @@ def graph_input(messages: list, confirm_grant: dict | None = None) -> dict:
     `confirm_grant`（20260921）：隐藏确认请求的**已验签 payload**（server.py 侧
     验签，验不过根本不会走到这里）。它由 planner 的确定性短路径消费，并在
     execute 里放行"同意闸"与"目标有据"两门——用户点的那一下确定就是这两门的凭据。
+
+    `ledger`（20260924）：本请求注入用的两块台账原文（见 AgentState.ledger）。
+    **由 server.py 按它实际注入的内容原样传入**——判据看的是"系统给模型看过什么"，
+    两个来源各算各的必然对不上（洞⑦ 的假阴性/误伤都从这里来）。
     """
     return {"messages": messages, "plan": "", "plan_rounds": 0, "done": False,
             "executed": [], "receipts": [], "blocked": [], "blocked_seen": [],
             "blocked_repeat": False, "reflect_rounds": 0, "issues": "",
             "reflect_end": False, "tool_data": [], "fallback_text": "",
             "pending_confirm": None, "confirm_text": "",
-            "confirm_grant": confirm_grant}
+            "confirm_grant": confirm_grant, "ledger": ledger or {}}

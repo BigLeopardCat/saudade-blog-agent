@@ -860,7 +860,7 @@ def test_gate_frame_checks():
                                                  "只找到两篇不太相关的文章")]))
     check("有帧 + 点名本轮已执行工具 → pass",
           out7["done"] is True and not out7.get("fallback_text"), str(out7))
-    ctx = HumanMessage(content="[System: user_id=1; recent_executions: · 查看社交链接「GitHub」]")
+    ctx = HumanMessage(content="[System: user_id=1; 确认与执行事实（系统台账）: · 已执行（系统验收过）: · 查看社交链接「GitHub」]")
     out8 = gate_node(_st("content_query",
                          [ctx, rags, AIMessage(content="刚才我用 get_social_links 查过啦，"
                                                       "就是 GitHub 和 B站")]))
@@ -1271,10 +1271,10 @@ def test_gate_site_absence_claim():
     check("站内没结论[默认实参 = 不豁免，旧调用点行为不变]",
           _site_absence_claim("站内没有讲过这个") is True)
     check("回执检索痕迹识别（Rust render_exec_row 定稿措辞）",
-          _exec_memory_has_search([SystemMessage(content="recent_executions: 09-21 10:00 "
+          _exec_memory_has_search([SystemMessage(content="确认与执行事实（系统台账）: · 已执行（系统验收过）: 09-21 10:00 "
                                                         "站内检索「Rust async」 — 3 篇")]) is True)
     check("无检索行（只有读取行）→ 不算依据",
-          _exec_memory_has_search([SystemMessage(content="recent_executions: 09-21 10:00 "
+          _exec_memory_has_search([SystemMessage(content="确认与执行事实（系统台账）: · 已执行（系统验收过）: 09-21 10:00 "
                                                         "读取文章 12《ESP32-S3 OTA》")]) is False)
 
     # ── gate 集成 ───────────────────────────────────────────────────────
@@ -1294,7 +1294,7 @@ def test_gate_site_absence_claim():
     check("零帧 + 页面/入口结论 → pass（不误伤）",
           o2["done"] is True and not o2.get("fallback_text"), str(o2))
     # 零帧 + 跨轮回执里有检索痕迹 → pass（rule 6 据回执转述）
-    o3 = gate_node(_st("chat", [SystemMessage(content="recent_executions: 09-21 10:00 "
+    o3 = gate_node(_st("chat", [SystemMessage(content="确认与执行事实（系统台账）: · 已执行（系统验收过）: 09-21 10:00 "
                                                      "站内检索「Rust async」 — 2 篇"),
                                 AIMessage(content=absence)]))
     check("零帧 + 回执含检索痕迹 → pass（说结论有据）",
@@ -1693,6 +1693,135 @@ def test_gate_confirm_claim():
     o3 = gate_node(_mk("chat", [done_frame, AIMessage(content="改好啦主人，文章 1 已经改成草稿了 :比耶:")]))
     check("有帧 + 如实说已完成 → pass（不误伤）",
           o3["done"] is True and not o3.get("fallback_text"), str(o3))
+
+
+def test_gate_ledger_denial():
+    """洞⑦：台账否认（20260924，`_ledger_denial`）+ 合一注入（`_ledger_block`）。
+
+    判据依据是**结构**：只要本请求的 `pending_action` 非空，那行"待主人点头、
+    尚未执行"就摆在 system 上下文里（server.py `_ledger_block` 注入）⇒ 回复说
+    "系统里没有生成待确认的指令"必然是假话。与帧无关，故也跑在 frames_exist 早退之前。
+
+    **只判待确认那一半**是实测定的，不是省事：全量真实 trace 复扫（843 条，其中
+    带执行台账的 210 条）执行侧候选命中三条**全是真话或框架误伤**——`20260921T232117`
+    「我这边没有看到把 Asyncio 标签改成下二级标签的执行记录」（那次改动确实没发生）、
+    `20260922T193155`「系统核对台账的结果是：站内并没有叫 X 的分类」（确定性收尾轮
+    复述系统核对结论）。执行台账非空**不能**证伪一句带具体动作的否认，故不判。
+
+    待确认侧真命中 1 条候选：`20260924T002115`「我刚刚点确认了吗」→ 回复里
+    "…所以系统里也没有生成待确认的指令——你自然也没点过确认喵"——**该轮
+    pending_action 确实是空的**（trace 原件可查），判据不发火，也是对的；
+    那一轮真该修的是注入（09-24 00:12 收藏文章 19 明摆着，回复却说"并没有发起
+    任何操作"），见下面 `_ledger_block` 组。
+    """
+    print("[gate] 台账否认（洞⑦）+ 确认与执行事实合一注入")
+    from agent.graph import (_ledger_denial, _ledger_denial_clause, _claim_issue,
+                             _fallback_ledger_denial, _FALLBACK_LEDGER_DENIAL_HEAD)
+    import server
+
+    t_002115 = ("没有哦，主人。刚才我提到“要不要帮你标记为已读”时，并没有发起任何操作，"
+                "所以系统里也没有生成待确认的指令——你自然也没点过确认喵。")
+    ledger = {"executions": "09-24 00:12 收藏文章 19",
+              "pending": "收藏文章 23；动作 add_favorite（技能 favorite_add）；"
+                         "提出于 09-23 22:38；状态 awaiting（等主人点头，尚未执行）"}
+
+    # ── 判据单测：拦 ─────────────────────────────────────────────────────
+    for text, why in (
+        (t_002115, "20260924T002115 原文（pending 非空时它就是假话）"),
+        ("系统里没有生成待确认的指令哦", "系统锚点 + 待确认名词"),
+        ("系统那边没有待办，你不用点", "系统那边 + 待办"),
+        ("台账里没有这条待确认的动作", "台账里 + 待确认"),
+    ):
+        check(f"台账否认[{why}] → 拦", _ledger_denial(text, True) is True, text[:36])
+    check("子句版返回的就是被判的那句（trace 要落它）",
+          _ledger_denial_clause(t_002115, True) == "所以系统里也没有生成待确认的指令",
+          repr(_ledger_denial_clause(t_002115, True)))
+
+    # ── 判据单测：放 ─────────────────────────────────────────────────────
+    for text, why in (
+        ("系统里没有生成待确认的指令", "台账为空 ⇒ 这是**真话**（判据自己不判）"),
+        ("目前没有待办事项，主人安心喵～", "查站内通知的结论（无系统锚点）"),
+        ("后台那边你还没点过确认按钮，需要的话随时点", "无系统锚点（描述复核流程）"),
+        ("我这边没有看到把 Asyncio 标签改成下二级标签的执行记录喵",
+         "20260921T232117 原文：具体动作的如实说明"),
+        ("系统核对台账的结果是：站内并没有叫「X」的分类",
+         "20260922T193155 原文：确定性收尾轮复述系统核对结论"),
+        ("系统里有没有待确认的指令呀？", "疑问句"),
+        ("要是系统里没有待确认的，我就当没提过", "条件句"),
+        ("你说『系统里没有待确认的』，我不太确定", "转述"),
+        ("系统里不会生成待确认的指令的", "将来/能力否定"),
+    ):
+        check(f"台账否认[{why}] → 放", _ledger_denial(text, False if "台账为空" in why else True)
+              is False, text[:36])
+
+    # ── 兜底：如实列举两块台账（不只说"我错了"）────────────────────────
+    fb = _fallback_ledger_denial(ledger)
+    check("兜底挨着台账摆事实（待办 + 已执行都在）",
+          fb.startswith(_FALLBACK_LEDGER_DENIAL_HEAD)
+          and "· 待主人点头（还没做）: 收藏文章 23" in fb
+          and "· 已执行（系统验收过）: 09-24 00:12 收藏文章 19" in fb, fb[:80])
+    check("兜底对**没传台账**的接线漏做降级（只说错了，不编内容）",
+          _fallback_ledger_denial({}) == _FALLBACK_LEDGER_DENIAL_HEAD + "要我把台账念一遍嘛？")
+
+    # ── _claim_issue / gate 接线 ─────────────────────────────────────────
+    check("_claim_issue 带 ledger → 判 ledger_denial",
+          (_claim_issue(t_002115, "chat", {"note": "", "tools": []}, False,
+                        ledger=ledger) or [None])[0] == "ledger_denial")
+    check("_claim_issue 不带 ledger（默认实参）→ 不判，旧调用点行为不变",
+          _claim_issue(t_002115, "chat", {"note": "", "tools": []}, False) is None)
+    check("有帧轮也判（判据跑在 frames_exist 早退之前）",
+          (_claim_issue(t_002115, "chat", {"note": "", "tools": []}, True,
+                        ledger=ledger) or [None])[0] == "ledger_denial")
+
+    def _mk(msgs_after_plan, **extra):
+        st = {"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+              "plan_rounds": 1, "messages": [HumanMessage(content="我刚刚点确认了吗")] + msgs_after_plan}
+        st.update(extra)
+        return st
+    o1 = gate_node(_mk([AIMessage(content=t_002115)], ledger=ledger))
+    check("gate：台账否认 → fallback 且文本含台账事实",
+          o1["done"] is True and "收藏文章 23" in (o1.get("fallback_text") or ""),
+          str(o1.get("fallback_text"))[:60])
+    o2 = gate_node(_mk([AIMessage(content=t_002115)]))
+    check("gate：没传 ledger（旧路径/golden）→ 不判，行为不变",
+          o2["done"] is True and not o2.get("fallback_text"))
+    o3 = gate_node(_mk([AIMessage(content="系统里没有生成待确认的指令")],
+                       ledger={"executions": "09-24 00:12 收藏文章 19", "pending": ""}))
+    check("gate：待办那一半为空 → 不判（执行台账非空也不判，见 docstring）",
+          o3["done"] is True and not o3.get("fallback_text"))
+
+    # ── 合一注入（server.py）─────────────────────────────────────────────
+    req = server.ChatRequest(message="我刚刚点确认了吗", executions=ledger["executions"],
+                             pending_action=ledger["pending"])
+    blk = server._ledger_block(req)
+    check("注入：两半在一块里、各带互斥定性",
+          "确认与执行事实" in blk and "· 已执行（系统验收过）: 09-24 00:12 收藏文章 19" in blk
+          and "· 待主人点头（还没做）: 收藏文章 23" in blk, blk[:60])
+    check("注入：空的那半写明『本会话暂无记录』（不是整块不注入）",
+          "待主人点头（还没做）: （本会话暂无记录）"
+          in server._ledger_block(server.ChatRequest(message="x", executions="09-24 00:12 收藏文章 19")))
+    check("注入：两块都空 → 整块不注入（不占上下文）",
+          "_ledger_block" in "".join(
+              l for l in __import__("inspect").getsource(server._build_messages).splitlines()
+              if "_ledger_block" in l)
+          and server._build_messages(server.ChatRequest(message="x"))[0].content.count("确认与执行事实") == 0)
+    # 确认那一跳：待办正在被执行，**不许**再照旧说"尚未执行"（那是洞⑥ 那族假话的样板文本）
+    cblk = server._ledger_block(req, confirmed=True)
+    check("注入：确认那一跳不回引『尚未执行』那句",
+          "尚未执行" in cblk and "**不是**尚未执行" in cblk
+          and "状态 awaiting（等主人点头，尚未执行）" not in cblk, cblk[-60:])
+    check("注入与判据同源：确认那一跳的 ledger.pending 被判据侧视为空",
+          server._ledger_for_graph(req, confirmed=True)["pending"] == ""
+          and server._ledger_for_graph(req)["pending"] == ledger["pending"])
+    # 接线锁：gate 只从 state 的 ledger 拿事实，那个 key 必须在 AgentState 里声明
+    #   （20260920 的教训：未声明的 key 被 LangGraph 静默丢出 updates 流 ⇒ 判据恒 None）
+    import agent.graph as G
+    check("AgentState 声明了 ledger（否则判据静默失效）",
+          "ledger" in G.AgentState.__annotations__)
+    check("graph_input 把 ledger 落到 state（缺省空 dict）",
+          G.graph_input([])["ledger"] == {} and G.graph_input([], ledger=ledger)["ledger"] == ledger)
+    check("gate_node 把 state 的 ledger 交给 _claim_issue",
+          "ledger=state.get(\"ledger\")" in __import__("inspect").getsource(G.gate_node))
 
 
 def test_gate_repeat_reply():
@@ -2580,7 +2709,7 @@ def test_doc_anchors_and_clip():
 
     sys_msg = HumanMessage(content=(
         "[System: user_id=1, page=https://saudade.site/device-console/; current_effects=none; "
-        "recent_executions: · 跳转「/device-console/」"
+        "确认与执行事实（系统台账）: · 已执行（系统验收过）: · 跳转「/device-console/」"
         "· 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》"
         "· 站内检索「AI Agent 架构文档 narrator 节点定义 planner-authority 流程」"
         "· 搜索「架构」]"))
@@ -2641,7 +2770,7 @@ def test_doc_anchors_and_clip():
     row = "09-20 21:03 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》"
     m = _DOC_READ_ROW_RE.search(row)
     check("执行记忆行：行首时间不破坏读取行解析", bool(m) and m.group(1) == "19")
-    out_ts = _doc_anchors([HumanMessage(content=f"[System: page=/; recent_executions: · {row}")])
+    out_ts = _doc_anchors([HumanMessage(content=f"[System: page=/; 确认与执行事实（系统台账）: · 已执行（系统验收过）: · {row}")])
     check("执行记忆行：带时间戳的读取行仍产出文档锚点",
           "《Saudade Blog AI Agent（泠月喵）架构文档》 id=19" in out_ts)
     check("执行记忆行：重复标记（×N）不影响读取行解析",
@@ -2693,7 +2822,7 @@ def test_doc_title_resolution():
         check("锚点：解析不到时仍如实写未见过 id",
               "（未见过 id）" in ctx._doc_anchors([HumanMessage(content="把《查无此篇》读一遍")]))
         dup = ctx._doc_anchors([
-            HumanMessage(content="[System: page=/; recent_executions: "
+            HumanMessage(content="[System: page=/; 确认与执行事实（系统台账）: · 已执行（系统验收过）: "
                                  "· 09-20 21:03 读取文章 14《ESP32-S3-OBC固件接入参考》"),
             HumanMessage(content="再读一遍《ESP32-S3-OBC固件接入参考》"),
         ])
@@ -3563,7 +3692,7 @@ def main():
                test_phantom_tool_claim, test_phantom_claim_clause_and_echo_exempt,
                test_gate_claim_holes,
                test_gate_false_negative_claim, test_gate_site_absence_claim,
-               test_gate_confirm_claim, test_auth_pending_review,
+               test_gate_confirm_claim, test_gate_ledger_denial, test_auth_pending_review,
                test_auth_review_forced,
                test_gate_repeat_reply,
                test_execute_node, test_refs, test_write_ref_loud, test_todo_contract,
