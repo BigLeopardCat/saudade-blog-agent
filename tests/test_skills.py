@@ -2779,6 +2779,145 @@ def test_search_retry_kind():
           _search_retry_kind(dict(cq, tools=[soc, rag_a]), [soc, rag_a]) == "retry_loop")
 
 
+def test_trim_done_reads():
+    """已取回的只读 spec 从本轮清单剔除（20260925 A 方案，纯函数）。
+
+    要治的病（trace 20260925T004234）：round 0 点名取回 get_server_status（PASS），
+    round 1 planner 改选 ops_report，技能模板写死了两件 ⇒ 已在手里的那件又跑一遍
+    （同一轮两份快照：CPU 28.7%/30.0%、内存 61%/60%）。四道既有守卫按"整集合包含"
+    判，超集一件都不拦。
+    """
+    from agent.graph import _trim_done_reads
+
+    def rcpt(tool, **args):
+        return {"tool": tool, "args": {k: str(v) for k, v in args.items()}}
+
+    srv = "get_server_status({})"
+    health = "get_service_health({})"
+    ops = {"skill": "ops_report", "tools": [srv, health], "params": {}, "note": "报表"}
+
+    out = _trim_done_reads(ops, [rcpt("get_server_status")])
+    check("换技能后模板里的已取回件被剔（本次现场）",
+          out is not None and out[0]["tools"] == [health] and out[1] == [srv],
+          f"{out and out[0]['tools']}")
+    check("  注记写明「已取回不重复取」（narrator 读到的唯一解释）",
+          out and "本轮已取回" in out[0]["note"] and "get_server_status" in out[0]["note"],
+          (out or ({}, []))[0].get("note", "")[:100])
+    check("  原计划的注记保留（不整段替换）", out and out[0]["note"].startswith("报表｜"))
+    check("  原计划对象未被就地改动（纯函数）", ops["tools"] == [srv, health] and ops["note"] == "报表")
+    # 全取回 → 剔空（收尾与否由调用方判，本函数不判）
+    out2 = _trim_done_reads(ops, [rcpt("get_server_status"), rcpt("get_service_health")])
+    check("两件都已取回 → 剔空（调用方据此收尾）", out2 and out2[0]["tools"] == [])
+    check("空回执不剔（首轮无据）", _trim_done_reads(ops, []) is None)
+    check("无工具的轮次不剔", _trim_done_reads(dict(ops, tools=[]), [rcpt("get_server_status")]) is None)
+
+    # 归一化：只在 JSON 类型上不同的"同一件事"判得出来（旧判据拿 spec 原文比较，
+    # 全量 861 条 trace 里"同一篇读两遍"有 5 条正是这种）
+    cq = {"skill": "content_query",
+          "tools": ['get_article_detail({"article_id": "46", "doc_type": "note"})'],
+          "params": {"calls": [{"tool": "get_article_detail",
+                                "args": {"article_id": "46", "doc_type": "note"}}]},
+          "note": ""}
+    out3 = _trim_done_reads(cq, [rcpt("get_article_detail", article_id=46, doc_type="note")])
+    check("参数仅 JSON 类型不同 → 判为同一件事（归一化签名）",
+          out3 is not None and out3[0]["tools"] == [], f"{out3 and out3[0]['tools']}")
+    check("  PARAMS 里的同源条目一并剔（计划文本自洽）",
+          out3 and out3[0]["params"]["calls"] == [], f"{out3 and out3[0]['params']}")
+    check("参数真的变了不剔（换参 = 另一件事）",
+          _trim_done_reads(cq, [rcpt("get_article_detail", article_id=47, doc_type="note")]) is None)
+    cq_ref = {"skill": "content_query",
+              "tools": ['get_article_detail({"article_id": "$search_notes[0].noteKey"})'],
+              "params": {}, "note": ""}
+    check("$ref 未解析的 spec 不剔（与已解析回执签名不同）",
+          _trim_done_reads(cq_ref, [rcpt("get_article_detail", article_id=46, doc_type="note")]) is None)
+
+    # 写族一律不动：写重复可能是"另一件事"（EXECUTED_ONCE_SKILLS 上方的取舍）；
+    # device_oled_display 同理（"再显示一次"是新请求，rule 6 要求重发）
+    for tool, spec in (("update_category", 'update_category({"name": "x", "new_title": "y"})'),
+                       ("delete_tag", 'delete_tag({"name": "x"})'),
+                       ("device_oled_display", 'device_oled_display({"text": "hi"})'),
+                       ("toggle_effect", 'toggle_effect({"effect": "sakura", "action": "on"})')):
+        check(f"写族不剔（{tool}）",
+              _trim_done_reads({"skill": "chat", "tools": [spec], "params": {}, "note": ""},
+                               [rcpt(tool, **({"name": "x", "new_title": "y"} if tool == "update_category"
+                                              else {"name": "x"} if tool == "delete_tag"
+                                              else {"text": "hi"} if tool == "device_oled_display"
+                                              else {"effect": "sakura", "action": "on"}))]) is None)
+
+
+def test_read_repeat_round():
+    """整轮：换技能 / 换写法后同一件只读工具不再重跑（trace 20260925T004234 形状）。
+
+    走假 LLM 跑 `planner_node` 而不只测纯函数：这道裁剪改的是**返回值**（TOOLS 行），
+    只测判据会漏掉"判对了但计划没带上"（20260922 目标预检那次就是分支走通、收尾
+    路径没走通）。两条锁：① 计划里不再含已取回的那件；② 一件都不剩时确定性收尾、
+    不重决策（只问 planner 一次）。
+    """
+    print("[read_repeat] 已取回的只读工具不再重跑（换技能 / 换写法两种形状）")
+    import agent.graph as G
+    from agent.graph import parse_plan, planner_node
+    from agent.principal import Principal
+
+    class _ScriptedLLM:
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    _cfg = {"configurable": {"principal": Principal(uid=721, role="admin"),
+                             "user_id": 721, "conversation_id": 42, "stop_event": None}}
+    _orig_llm = G.get_llm
+    try:
+        # ① 换技能：点名取回磁盘 → 改选 ops_report（模板固定两件）
+        ops = "SKILL=ops_report\nPARAMS={}\nREPLY: 如实汇报"
+        llm = _ScriptedLLM([ops])
+        G.get_llm = lambda **kw: llm
+        out = planner_node({
+            "messages": [HumanMessage(content="小猫咪，目前服务器还有多少磁盘空间"),
+                         ToolMessage(content="服务器状态（2026-09-25 00:42）\n- 磁盘 /：可用 10.5 GB",
+                                     tool_call_id="execute_0", name="get_server_status")],
+            "plan_rounds": 1, "executed": ["get_server_status({})"], "tool_data": [],
+            "receipts": [{"skill": "content_query", "tool": "get_server_status",
+                          "args": {}, "result": "服务器状态…"}],
+        }, _cfg)
+        plan = parse_plan(out["plan"])
+        check("换技能后只补取缺的那件（get_server_status 不重跑）",
+              plan["tools"] == ["get_service_health({})"], f"{plan['tools']}")
+        check("  技能仍是 ops_report（只裁剪清单，不改技能）", plan["skill"] == "ops_report")
+        check("  只问 planner 一次", len(llm.prompts) == 1)
+
+        # ② 换写法：同一篇的 spec 只在 JSON 类型上不同（旧判据拿原文比较，判不出）
+        cq = ('SKILL=content_query\n'
+              'PARAMS={"calls": [{"tool": "get_article_detail", '
+              '"args": {"article_id": "46", "doc_type": "note"}}]}\n'
+              "REPLY: 如实回答")
+        llm2 = _ScriptedLLM([cq])
+        G.get_llm = lambda **kw: llm2
+        out2 = planner_node({
+            "messages": [HumanMessage(content="把文章 46 读一遍，用一句话说它讲什么"),
+                         ToolMessage(content="{'noteTitle': 'x'}", tool_call_id="execute_0",
+                                     name="get_article_detail")],
+            "plan_rounds": 1,
+            "executed": ['get_article_detail({"article_id": 46, "doc_type": "note"})'],
+            "tool_data": [],
+            "receipts": [{"skill": "content_query", "tool": "get_article_detail",
+                          "args": {"article_id": "46", "doc_type": "note"},
+                          "result": "{'noteTitle': 'x'}"}],
+        }, _cfg)
+        plan2 = parse_plan(out2["plan"])
+        check("同一篇的重复读取剔空后确定性收尾（零工具）", plan2["tools"] == [], f"{plan2['tools']}")
+        check("  注记点明「已取回的只读数据就在上方工具返回里」",
+              "已取回" in (plan2["note"] or ""), (plan2["note"] or "")[:100])
+        check("  不重决策（只问 planner 一次）", len(llm2.prompts) == 1)
+        # 反向（写族照旧重规划）不在这一轮里跑：写技能的整轮要读真台账（标签/分类
+        # 字典），这条判据的形状与字典无关。写族不被剔由上面 `_trim_done_reads` 的
+        # 四条纯函数断言锁死（剔与不剔都在那一个函数里判，接线只在非 None 时动计划）。
+    finally:
+        G.get_llm = _orig_llm
+
+
 def test_candidate_relevance_pick():
     """检索重复拦截的候选选择（20260912 位置规则加固，9/8 跑题现场可复现）。
 
@@ -3927,7 +4066,8 @@ def main():
                test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
-               test_search_retry_kind, test_candidate_relevance_pick,
+               test_search_retry_kind, test_trim_done_reads, test_read_repeat_round,
+               test_candidate_relevance_pick,
                test_scan_action_intents, test_doc_anchors_and_clip,
                test_doc_title_resolution, test_short_reply_and_adjacent_pairs,
                test_no_sibling_tool_name_in_user_text, test_site_guide_is_role_rendered,
