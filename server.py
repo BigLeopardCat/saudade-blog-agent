@@ -384,6 +384,26 @@ def _ledger_for_graph(req: ChatRequest, confirmed: bool = False) -> dict:
             "pending": "" if confirmed else req.pending_action.strip()}
 
 
+def _ctx_field(s, limit: int = 500) -> str:
+    """系统上下文里的**客户端字段**：剥掉会破坏 `key=value; key=value` 结构的字符
+    （20260925 审计）。
+
+    这些值由**浏览器**给（`current_url`/`page_title` 直接来自页面 JS，`current_effects`/
+    `current_darkmode` 来自访客本机的 localStorage），Rust 原样转发，而它们拼进的是
+    `[System: …]` 那一段——**可信通道里不许有不可信文本**。不清洗的后果是：访客能在自己
+    的字段里塞 `;`、`[System:` 之类，让系统上下文里长出第二段（例如伪造
+    `current_darkmode=on` 覆盖真实状态）。
+
+    今天它只是"自注入"（效果不比直接在对话框里打字更多，`page_title` 的来源
+    `document.title` 全前端无人改写，第三方内容进不来）——但哪天 `page_title` 改成跟着
+    文章标题/留言标题走（很容易发生），同一处代码会立刻从"低"变成"跨用户注入"。
+    """
+    return _CTX_UNSAFE_RE.sub(" ", str(s or ""))[:limit]
+
+
+_CTX_UNSAFE_RE = re.compile(r"[\r\n\[\];=]")
+
+
 def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list:
     """Build the message list from the request (sync, no blocking).
 
@@ -392,9 +412,10 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
     令牌验签的唯一权威在调用方。非流式 `/chat`（golden/评测直连）不传 = 普通轮。
     """
     messages = []
-    ctx_parts = [f"user_id={req.user_id}, page={req.current_url}, title={req.page_title}"]
-    ctx_parts.append(f"current_effects={req.current_effects or 'none'}")
-    ctx_parts.append(f"current_darkmode={req.current_darkmode or 'off'}")
+    ctx_parts = [f"user_id={req.user_id}, page={_ctx_field(req.current_url)}, "
+                 f"title={_ctx_field(req.page_title)}"]
+    ctx_parts.append(f"current_effects={_ctx_field(req.current_effects, 200) or 'none'}")
+    ctx_parts.append(f"current_darkmode={_ctx_field(req.current_darkmode, 20) or 'off'}")
     # 20260902 时间锚（幻觉事故 13:34 实证）：会话断点续接/问候语场景模型会锚定
     # 历史里的旧时间戳编造"现在"（05:29 会话 13:34 续接 → 编"现在 05:34"）。
     # 当前时刻必须作为系统事实注入（与 current_effects/darkmode 同语义，格式与
