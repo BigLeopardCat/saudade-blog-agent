@@ -11,6 +11,7 @@
 # 置顶，日志里也单列——放行不等于静默宽恕。
 # 同日补：trace_alert 抓到的现场回灌成 golden 草稿（eval/golden_draft.py，只产草稿
 # 到 eval/report/ 供人审，不自动入库、非门禁）。
+# 20260925 补：语料漂移哨兵（eval/corpus_terms.py --drift，非门禁）——见下方该节的注释。
 # 20260924 补：跨源对账（eval/trace_reconcile.py，把 trace ↔ agent.log ↔ monitor.log
 # 三个源对起来看，非门禁）——单源规则扫描看不见"两个源之间"的错（轮次自洽、前端只见
 # 报错那类），报告进 eval/report/reconcile_<ts>.md，异常时另写一条 WARN 到
@@ -32,6 +33,16 @@ $PY tests/test_skills.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] test_skills FAI
 # 非门禁：已知 FAIL 是词法表征的局限（脚本自己在报告里点名），不该让夜间任务变红。
 echo "--- 检索基准 recall@k / MRR (直接测线上 rag/search.py, 秒级, 非门禁) ---" >> "$LOG"
 $PY eval/recall_eval.py >> "$LOG" 2>&1 || echo "[$TS] recall_eval 运行异常（不影响门禁）" >> "$LOG"
+echo "--- 语料漂移哨兵 (词表型断言 vs 语料, 秒级, 非门禁) ---" >> "$LOG"
+# 20260925 起：扫 golden 里每个 text_contains 词——还在语料里吗（ORPHAN）/ 是不是满语料
+# （GENERIC）/ 落点是不是该用例申报的那几篇（MISBOUND）；require_doc_terms 的派生集太小
+# 报 THIN。动机就是 rag_ota_http：人抄的期望词随语料漂移，而漂移的表现是「用例继续红或
+# 继续绿，没人知道判据已经不成立」。
+# **非门禁**：退出码 1 只表示"有 ORPHAN/MISBOUND"，当前已知 9 条 ORPHAN（rag_fingerprint_*
+# 的死支、rag_arch_check 的陈旧词、rag_python_copy 的深/浅拷贝）是**本轮范围外**的存量，
+# 已进报告待点名——让它置 fail=1 只会让整夜门禁天天红（哨兵一响就没人看了）。
+# 报告落 eval/report/corpus_drift_<ts>.md。
+$PY eval/corpus_terms.py --drift >> "$LOG" 2>&1 || echo "[$TS] corpus_terms --drift 有 ORPHAN/MISBOUND 或运行异常（非门禁，看报告）" >> "$LOG"
 echo "--- golden set (110 条真实对话, 约 20 分钟) ---" >> "$LOG"
 # 20260924 起：给「需要真身份」的那类用例一个 uid，治那 5 条常年 SKIP（moderation_report_admin /
 # user_report_admin / 三条 *_unresolved_target_honest）。721 是**测试专用管理员账号**（不是主人
