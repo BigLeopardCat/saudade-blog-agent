@@ -2399,6 +2399,13 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 写参数里的**名字值**（新名字 / 标签名列表 / 父标签）同理（②防线续五，见
         # `_name_arg_fix` 上方长注）：新建的名字天然不在字典里，只能来自主人这句话。
         value_refuse = _name_arg_fix(plan_obj, user_msg, role)
+        # 目标名的**来源态**（20260924 治本，见 `_target_grounding_refusal` 上方长注）：
+        # 校正（`_name_target_fix`）之后这个字面若仍**取不出处**，就是"主人没说过这个
+        # 名字"——零写 + 如实追问。排在台账预检**之前**是刻意的：它不读台账，台账读不到
+        # 时它仍然生效（台账那条路读不到就放行，见 `_write_target_refusal` 的边界注）。
+        # ⚠️ 必须在 `_name_arg_fix` **之后**——那一步可能就地重建 plan（`plan_obj.clear()
+        # + update(fresh)`），在它之前判的是重建前的旧参数。
+        grounded_refuse = _target_grounding_refusal(plan_obj, user_msg)
         subject = "站内的台账（标签/分类字典、公告清单、留言列表）与主人这句话本身"
         refusal = None
         if quote_refuse:
@@ -2406,20 +2413,25 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         elif value_refuse:
             refusal = value_refuse
             subject = "主人这句话本身（要写进站内的名字只能来自这里）"
+        elif grounded_refuse:
+            refusal = grounded_refuse
+            subject = "主人这句话本身（目标名只能来自主人说出口的那几个字）"
         else:
             refusal = _write_target_refusal(plan_obj, config)
         if refusal:
             wtool, why = refusal
-            # 值被拒时补一句：那个字面是**系统自己的参数值**，不是主人点名的名字
+            # 值/目标名被拒时补一句：那个字面是**系统自己的参数值**，不是主人点名的名字
             # （20260922 探针 ⑤ 实测：如实答复里出现了"站内并没有叫「音乐」的现成
             # 标签"——系统查的是占位文字「标签名」，叙述把两者画了等号 = 假话）。
-            value_tail = ("" if not value_refuse else
+            value_tail = ("" if not (value_refuse or grounded_refuse) else
                           "系统要填进参数的那个字面是**系统自己的参数值**，"
                           "不是主人点名的名字——转述它时**原样引述**，"
                           "绝不许把它说成主人说的那个名字。")
             logger.warning("[planner] 写操作参数解不出「主人这句话」里的来源（%s）：%s"
                            " → 确定性如实收尾", wtool, why)
             record("planner", "write_target_unresolved", tool=wtool,
+                   source=("quote" if quote_refuse else "value" if value_refuse
+                           else "grounding" if grounded_refuse else "ledger"),
                    reason=why[:160], round=rounds)
             plan_obj = _wrap_up_plan(False, note=(
                 _LEDGER_NOTE_PREFIX +
@@ -3162,6 +3174,11 @@ _TARGET_ACTION_MARKS = _MOVE_MARKS + _RENAME_MARKS + _DELETE_MARKS
 _TARGET_NOUN_RE = re.compile(
     r"(?:" + "|".join(_TARGET_NOUNS) + r")\s*(.+?)\s*(?:"
     + "|".join(_TARGET_ACTION_MARKS) + r")")
+# 名词标记**之前**那一段（`大笨狗那个标签` 里的"大笨狗那个"）：中文里"X 那个标签/这个
+# 分类"是把目标名放在名词**前面**的常见语序。句读（，。！？；、空白）与引号都会切断，
+# 只认"粘在名词左边、一口气念下来"的那一段（见 `_msg_pre_noun_runs`）。
+_PRE_NOUN_RUN_RE = re.compile(
+    r"([^，。！？；、,.!?;\s「」]{1,24})(?=" + "|".join(_TARGET_NOUNS) + r")")
 # planner 从技能/参数描述里抄下来的**泛称**（20260922 全量回归实测取值：name="标签"、
 # parent_tag="父标签名"）——它们不是主人的名字，即便恰好是这句话的子串也不算"有据"。
 # 同 20260921「对模型的举例里不许出现具体取值」那条教训的镜像：描述里的措辞会被抄成参数值。
@@ -3227,6 +3244,79 @@ def _bare_target_name(user_msg) -> str:
     return raw
 
 
+def _msg_name_slot(user_msg) -> str:
+    """主人原话里**目标槽位**的原始捕获段：名词标记与动作标记之间的那一段（未过干净度判据）。
+
+    与 `_bare_target_name` 同源不同职：那个回答"这段能不能当成名字用"（脏了就返回空），
+    这个回答"这段字面上是什么"（取全部、不判干净）。用在"取值有没有出处"这一层——
+    planner 填的名字落在这段里头，说明它是主人写在**目标位置**上的字（哪怕这一段因为
+    夹了标点/引号而不能直接当名字用）。唯一匹配时才有值（一句话里点了不止一处 → 说不清）。
+    """
+    hits = _TARGET_NOUN_RE.findall(str(user_msg or ""))
+    return hits[0].strip() if len(hits) == 1 else ""
+
+
+def _msg_pre_noun_runs(user_msg) -> list[str]:
+    """主人原话里**紧贴目标名词、且不含句读**的那几段（名词标记**之前**的那一段）。
+
+    「大笨狗那个标签我不想要了，删掉吧」里目标名在名词**前面**，而目标槽位窗口从名词
+    之后起算 ⇒ 没有这一格，判据会把这个名字判成"主人没说过"（它明明在句子里，如实
+    追问会自相矛盾）。边界与窗口同级：，。！？；、空白与引号都会切断，只认"粘在名词
+    左边、一口气念下来"的那一段——不退回"整句话里出现过"那条假通道。
+    """
+    return [m.group(1).strip()
+            for m in _PRE_NOUN_RUN_RE.finditer(str(user_msg or ""))]
+
+
+def _msg_grounded_name(got: str, user_msg, spans: list[str] | None = None) -> bool:
+    """planner 填的这个名字，能不能由主人这句话**取出来**？（四个具名抽取器，见长注）
+
+    · Q 引号段：值落在主人加引号的某一段里（`标签「大笨狗」…`）；
+    · B 免引号目标名：值就是 `_bare_target_name` 认出的那一段（`标签 Asyncio 删掉`）；
+    · S 目标槽位：值落在名词→动作词的**原始捕获段**里——比 Q/B 宽一格，因为那一段可能
+      因为夹着引号/标点而判不出干净的名字，但主人确实把名字写在了这个位置。
+      （实测形态：「把标签「编程」下面那个 Asyncio 删掉」——唯一一段引号是那个**父级**，
+      要删的名字没加引号、且落在脏窗口里：没有 S 这一格，判据会认为 Asyncio"没有出处"
+      而把目标改成「编程」，等于**弹卡问要不要删父标签**。S 严格窄于"整句话里出现过"
+      这条老通道——它只认目标槽位那一段。）
+    · P 名词前的同指段：值落在紧贴目标名词、且不含句读的那一段里（`大笨狗那个标签`）。
+      中文里"X 那个标签/这个分类"是常见语序，而 X 落在 S 窗口**之外**（窗口从名词之后
+      起算）。没有这一格，「大笨狗那个标签我不想要了，删掉吧」会被判成"这个名字我没说
+      过"——如实追问里就会出现"「大笨狗」不是主人说出口的名字"这种**自相矛盾**的话
+      （它就在句子里）。边界与 S 同级：句读（，。！？；、空白/引号）切断，故不会退化成
+      "整句话里出现过"那条假通道。
+
+    空值返回 True：`got` 为空是"没填"（由别的判据管），不是"编的"。
+    `spans` 可由调用方传入（同一句话里多处复用，省一次正则）。
+    """
+    sq = _squash_spaces(got)
+    if not sq:
+        return True
+    spans = _msg_quote_spans(user_msg) if spans is None else spans
+    if any(sq in _squash_spaces(s) for s in spans):
+        return True
+    if sq == _squash_spaces(_bare_target_name(user_msg)):
+        return True
+    slot = _msg_name_slot(user_msg)
+    if slot and sq in _squash_spaces(slot):
+        return True
+    return any(sq in _squash_spaces(run) for run in _msg_pre_noun_runs(user_msg))
+
+
+def _name_like(text) -> bool:
+    """这句话里有没有"能被取出来的名字"（引号段 / 免引号目标名 / 目标槽位）。
+    一处都没有 = 指代型（"把那个标签删掉吧"）——判据无从对照，不介入。
+
+    ⚠️ 名词前的同指段（P）**不**参与这条判据：它的内容可能整段就是指代语（"把那个"、
+    "这个"），证明不了主人点过名——把它算进"有病"会让纯指代句也进判据面，
+    而指代解析的权威在模型 + 弹卡上的人（本轮刻意不碰，见 `_target_grounding_refusal`
+    的边界注）。P 只在**句子确实点了名**（有引号或目标槽位）时，用来把"名字在名词
+    前面"这种语序救回来（"大笨狗那个标签我不想要了，删掉吧"）。
+    """
+    msg = str(text or "")
+    return bool(_msg_quote_spans(msg) or _msg_name_slot(msg) or _bare_target_name(msg))
+
+
 def _owner_target_span(got: str, spans: list[str], parent: str,
                        other_marked: str = "", msg: str = "") -> str | None:
     """主人引号里哪一段是**目标名**？证据不唯一 → None（见上方长注）。
@@ -3236,10 +3326,11 @@ def _owner_target_span(got: str, spans: list[str], parent: str,
        ——见 `_marked_other_operand`）→ 剩下的那**唯一一段**就是目标；
     ③ 两段引号、其中一段正是 planner 填的父标签名 → 另一段是目标；
     ④ 主人**只**引了一段名字、句里没有第二个操作数标记、该工具也没有父操作数，
-       而 planner 填的名字**在主人这句话里整句查无** → 那一段就是目标。
+       而 planner 填的名字**取不出来**（`_msg_grounded_name`：不在引号段里、不是免引号的
+       目标名、也不在目标槽位里）→ 那一段就是目标。
     刻意**不做**"只有一段引号就把目标改成它"——「帮我把标签 Asyncio 挪到「编程」
     下面」只有一段引号（是父标签），那样改会把要挪的标签改成父标签本身；④ 的两道
-    闸（`not other_marked` + planner 的值整句查无）正是为了不碰这种句子。
+    闸（`not other_marked` + planner 的值取不出处）正是为了不碰这种句子。
 
     20260924 两处修正（各有现场）：
     · ① 的例外：命中的那段引号若**正是另一个操作数**（父标签），不算证据。实测
@@ -3252,10 +3343,20 @@ def _owner_target_span(got: str, spans: list[str], parent: str,
     20260924 第三处修正（同一族的采样现场，第二次撞见泛称）：主人原话「标签「大笨狗」
     我不想要了，删掉吧」，planner 填 `name="标签"`——**描述里的泛称又被抄成了取值**，
     而它恰好是主人这句话的子串（`_GENERIC_NAME_WORDS` 的注释早就点出这个形态：
-    "它甚至是这句话的子串，子串级地基放它过去"），④ 的"值整句查无"那道闸于是放行，
+    "它甚至是主人这句话的子串，子串级地基放它过去"），④ 的"值整句查无"那道闸于是放行，
     弹卡问成了「删除标签「标签」」。泛称在任何句子里都不是名字 ⇒ 取值为泛称时那道闸
     作废；`not other_marked` 那道**留着**——它护的是"挪到/改名叫「B」"里 B 是另一个
     操作数的形态（那里唯一一段引号不是目标）。
+
+    20260924 第四处修正（本条是"治本"的那一步）：④ 的触发条件从**"值在整句里查无"**
+    换成**"值取不出处"**（`_msg_grounded_name`）。老条件把"**恰是整句话的子串**"当成了
+    有据——那是一条假通道：动作短语（`删掉吧`）与泛称（`标签`）都从它漏过去（上一条
+    修正给泛称打了单点补丁，动作短语那条仍然漏）。新判据不认"像不像动作短语/是不是
+    泛称"，只问"这个字面能不能由主人这句话的**具名位置**取出来"：
+      · 「标签就叫「删掉吧」」→ 引号段就是那个字面量 ⇒ 放行，弹卡问的也正是它（自然正确）；
+      · 「…删掉吧」里被填成 `删掉吧` → 四个抽取器都取不出 ⇒ 校正成主人引号里那一段。
+    `_GENERIC_NAME_WORDS` 在此降为**兜底**（仍被 `_bare_target_name` / `_value_clean` 用），
+    不再是这条判据的主判词——判据里不再有任何"人抄的词表"。
     """
     sq = _squash_spaces(got)
     hits = [s for s in spans if sq and sq in _squash_spaces(s)]
@@ -3275,7 +3376,7 @@ def _owner_target_span(got: str, spans: list[str], parent: str,
                 other = next(s for s in spans if s is not ph[0])
                 return other
     if len(spans) == 1 and not other_marked and not parent and msg and sq \
-            and (sq not in _squash_spaces(msg) or got in _GENERIC_NAME_WORDS):
+            and not _msg_grounded_name(got, msg, spans):
         return spans[0]
     return None
 
@@ -3632,6 +3733,59 @@ def _ident_grounded(name: str, args: dict, user_msg) -> bool:
         if val and val not in msg:
             return False
     return True
+
+
+def _target_grounding_refusal(plan_obj: dict, user_msg) -> tuple[str, str] | None:
+    """写操作的目标名**能不能由主人这句话取出来**？取不出 ⇒ `(工具名, 拒绝说明)`。
+
+    与 `_write_target_refusal` 的分工是"**这是不是主人说的字**" vs "站内有没有这个字"：
+    本门**不读台账**（所以台账读不到时它照样生效——`_write_target_refusal` 在那条路上
+    一律放行，见它的边界注），只回答"这个字面在主人这句话里的**出处**是不是目标位置"。
+    出处只有四个具名抽取器（`_msg_grounded_name`）：引号段 / 免引号目标名 / 目标槽位 /
+    名词前的同指段（"大笨狗那个标签"）。
+    「恰是整句话的子串」**不算**出处——那是一条假通道（20260924 治本：动作短语
+    `删掉吧` 与泛称 `标签` 都从它漏过去，现场见 `_owner_target_span` 规则④长注）。
+
+    为什么这一层要独立存在：目标名字段此前只有两态（尽力校正 → 原值留着），校正不动的
+    错值直接进弹卡，而弹卡文案里印着那个名字**是唯一的防线**；值字段早有三态（定不了
+    就零写），目标名字段缺的就是这第三态。台账通道答不了它——"站内正好有个叫
+    `删掉吧` 的标签"时台账是查得到的，可主人并没有说过这个名字。
+
+    早退条件与 `_write_target_refusal` 同款（多 spec / 不在名字表 / args 解不出 /
+    带 `$tool[N]` 引用）：这些形态下"取值从哪来"不由主人这句话决定，不在这里判。
+    """
+    tools = plan_obj.get("tools") or []
+    if len(tools) != 1:
+        return None
+    name = _tool_name(tools[0])
+    if name not in _WRITE_NAME_FIELDS:
+        return None
+    args, args_ok = _tool_args(tools[0])
+    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+        return None
+    msg = str(user_msg or "")
+    if not _name_like(msg):
+        return None  # 指代型（"那个标签"）：一处名字都没标出来，本门不介入
+    spans = _msg_quote_spans(msg)
+    tkey, pkey = _WRITE_NAME_FIELDS[name]
+    for key, label in ((tkey, "目标"), (pkey, "父标签")):
+        if not key:
+            continue
+        got = str(args.get(key) or "").strip()
+        if not got or _msg_grounded_name(got, msg, spans):
+            continue
+        if spans:
+            tail = "主人这句话里点名的名字只有 " + \
+                   "、".join(f"「{s}」" for s in spans[:3]) + "。"
+        else:
+            # 不给"主人没说过这个名字"这种断言：值可能是主人换个语序说的（"大笨狗那个
+            # 标签"），本层只知道它**对不回名字位置**。话术只说系统知道的那件事。
+            tail = "主人这句话里没有加引号点名的名字。"
+        why = (f"系统给{label}填的名字是「{got}」，没能对回主人这句话里的名字位置——"
+               f"{tail}本次没有改动任何内容；请主人确认要操作的到底是哪一个"
+               "（把那个名字原样再说一次即可，系统照着办）。")
+        return name, why
+    return None
 
 
 def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
