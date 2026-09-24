@@ -75,6 +75,7 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
 import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
 import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
+from utils import trace as trace_mod  # trace 工具返回留多长（run_case 里放开，见其注释）
 
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
 # 导航命令帧族：AUTO_NAVIGATE 与 NAVIGATE 同属"导航已执行"，断言时视为一族
@@ -413,6 +414,13 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
         其中 `fails` 只装**驱动层**的失败，由 `check_case` 聚合，判据侧不往里写）；
       · `confirm_tokens`/`confirm_payloads`：**末轮**的（`run_one` 已给）。
     """
+    # 工具返回在 trace 里留多长（20260925）：生产留 200 字符，评测轮放开——
+    # `eval/llm_judge.py` 判"回复有没有编材料"时，**材料就是 trace 里那份返回文本**，
+    # 只留 200 字符会让它把"文章里确实有、只是没记进 trace"的事实判成编造
+    # （实测 `rag_git_branch`：`get_article_detail` 只留 200 字符，判官据此断定回复编了
+    # 「第 3.3 节」）。设在这里而不是各入口 = 三个跑法（进程内 main / 隔离子进程
+    # golden_case_runner / 批量 golden_full_run）本来就都走这个函数，不必各写一遍。
+    os.environ.setdefault(trace_mod.TOOL_RESULT_LIMIT_ENV, "40000")
     rounds = iter_rounds(case)
     principal = build_principal(case)
     conv_id = (case.get("context") or {}).get("conversation_id")

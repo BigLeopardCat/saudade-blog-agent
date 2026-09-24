@@ -41,6 +41,39 @@ _LOCK = threading.Lock()
 # SAUDADE_TRACE_DIR 环境变量覆盖
 TRACE_DIR = settings.trace_dir
 
+# 工具返回写进 trace 时留多长（字符）。**生产默认 200**：trace 是"节点事件序列"，
+# 不是工具输出的第二份存档，全量留会把单份 trace 从几 KB 撑到几百 KB。
+#
+# 20260925 起可用 TRACE_TOOL_RESULT_LIMIT 覆盖，**唯一消费者是 L2 golden 轮**
+# （`run_golden.run_case` 把它设成 8000）：评测侧的 LLM 评审员
+# （`eval/llm_judge.py`）判"回复有没有编材料"时，**材料就是这里写下的东西**——
+# 只留 200 字符，判官会理直气壮地把"文章里确实有、只是没记进 trace"的事实判成编造
+# （实测：`rag_git_branch` 的 `get_article_detail` 只留了 200 字符，判官据此断定回复
+# 编了「第 3.3 节」）。**生产不设这个变量** ⇒ 行为与改动前逐字一致。
+# 运行时读环境（不缓存到模块级常量）：跑法在进程内改它也能生效，不依赖 import 顺序。
+TOOL_RESULT_LIMIT_ENV = "TRACE_TOOL_RESULT_LIMIT"
+TOOL_RESULT_LIMIT_DEFAULT = 200
+
+
+def tool_result_text(result: str, tool: str = "") -> str:
+    """工具返回 → 写进 trace 的文本。`rag_search` 例外：**一直全文**。
+
+    （20260831 事故复盘：检索候选要能事后完整分析，"首位为什么是它"不该靠重跑复现。
+    20260925 起其余工具在 golden 轮同样放开，理由见 TOOL_RESULT_LIMIT_ENV 注释。）
+
+    限值语义：`正数` = 留这么多字符；`≤0` = 不截断（全文）；值写坏了 = 默认 200。
+    """
+    text = str(result)
+    if tool == "rag_search":
+        return text
+    try:
+        limit = int(os.environ.get(TOOL_RESULT_LIMIT_ENV) or TOOL_RESULT_LIMIT_DEFAULT)
+    except ValueError:                       # 值写坏了 ⇒ 退回默认，**不是**放开
+        logger.warning("[trace] %s 不是整数，工具返回按默认 %d 字符落盘",
+                       TOOL_RESULT_LIMIT_ENV, TOOL_RESULT_LIMIT_DEFAULT)
+        limit = TOOL_RESULT_LIMIT_DEFAULT
+    return text if limit <= 0 else text[:limit]
+
 
 class _TraceRecorder:
     def __init__(self, trace_id: str, user_id: int, thread_id: str, input_meta: dict,
