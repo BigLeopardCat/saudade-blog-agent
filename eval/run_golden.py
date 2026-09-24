@@ -21,9 +21,22 @@
   .venv/bin/python eval/run_golden.py --only rag_python_is,rag_arch_components  # 多选（链路诊断）
   .venv/bin/python eval/run_golden.py --min-pass-rate 0.9 --skip-ids device_query  # CI 口径
 退出码：0=达到 --min-pass-rate（默认 1.0，即全过）1=低于门禁
-回归组（tags 含 regression）另按硬判（100%，不受 --min-pass-rate 放宽）；20260924 起
-判据以**首跑红后复跑一次**的终判为准，复跑绿的那批记进 regression.flaked_ids 并单列
-打印（放行但必须有人看——首跑红/复跑绿两条都在报告与复审单里，不许静默宽恕）。
+
+**`--min-pass-rate` 的确切语义**（20260924 写清——此前只在文档里含糊带过，实际有四层）：
+  1. 它管的是**本轮实际跑了的那些用例**的通过率，不是全语料的。`--only` / `--limit` /
+     `--skip-ids` / 未设 uid 而跳过的用例**都改变分母**——所以"通过率达标"在非全量跑里
+     读起来要打折扣（报告里的 `full_run` 字段就是给这件事用的）。
+  2. 它是**一个比率**，不是"每条都不许红"。0.9 意味着 10% 的用例可以是红的而门禁照样绿
+     ——失败清单仍逐条打印、报告里逐条有名，但退出码是 0。
+  3. **回归组（tags 含 regression）另按硬判 100%，不受它放宽**——先判回归组，红了直接
+     退出码 1，与通过率高低无关。
+  4. 默认值是 1.0，而 `scripts/nightly_regression.sh` **不带参数调用**它 ⇒ 夜间那道门禁
+     实际是"一条都不许红"。
+20260924 起判据以**首跑红后复跑一次**的终判为准，复跑绿的那批记进 regression.flaked_ids
+并单列打印（放行但必须有人看——首跑红/复跑绿两条都在报告与复审单里，不许静默宽恕）。
+⚠ 复跑只对**回归组**做（能力题本来就按比率放宽），所以 flake 统计是**单向**的：只重跑
+首跑红的，不重跑首跑绿的 ⇒ `flaked_ids` 系统性低估（一条"首跑绿、其实 30% 概率红"的用例
+在这里永远不可见）。别把它当成稳定性的上界。
 ⚠ 通过率 vs 全过：本机（生产链路）默认全过；CI 在北美 runner 上跨网调用 LLM/站点，
   单条超时类波动与"环境不可达"用例不该让整轮门禁变红——门禁按**通过率**判，
   失败清单仍逐条打印、报告随 artifact 上传（见 .github/workflows/eval.yml）。
@@ -310,6 +323,38 @@ def _forbidden_hit(text: str, kw: str, exempt_quote: bool) -> bool:
         start = i + 1
 
 
+# ── golden 键的三张表（20260924）─────────────────────────────────────────────
+# 键名写错是一个**静默 no-op**：gold 是 dict，把 require_cmd_all 敲成 require_cmdall 时
+# 取值取到 None、那段断言根本不执行，而用例照样绿——判据看着在、其实不在。已经抓到一条
+# 活的：`attack_embed_command` 把注释键 `_note` 写成了 `note`（那条注释从没被读过）。
+# 所以键分三类写死在这里，`tests/test_golden_keys.py` 三向交叉核对：
+#   ① 反射扫本文件与 golden_case_runner.py 里的**字面量取键**写法，必须都在表里
+#      （防「代码读了新键、表没跟上」）；
+#   ② 表里每个键必须真在源码里被读（防「表里留着已经删掉的键」）；
+#   ③ 逐条扫 `eval/golden/basic.jsonl`，每个 gold 键必须属于三类之一（防拼错）。
+# **加新断言键时这两张表要一起改**——这是刻意的摩擦：漏改会在 CI 上红，而不是静默失效。
+# 注意：本注释块里刻意**不写出取键的代码形态**（那会被 ① 的反射扫成"读了一个表外的键"）。
+GOLD_ASSERT_KEYS = frozenset({
+    # 回复文本
+    "nonempty", "text_contains", "text_any_regex", "text_not_contains",
+    "text_not_match_regex", "not_contains_exempt_quote",
+    # 命令帧（EFFECT:/DARKMODE:/NAVIGATE:…）
+    "require_cmd_prefixes", "require_cmd_contains", "require_cmd_all",
+    "forbid_cmd_prefixes", "forbid_cmd_contains", "either_cmd_or_text",
+    # 工具调用（planner 决策侧）
+    "require_tool_calls", "require_tool_calls_any", "no_tool_calls", "forbid_tool_calls",
+    # 执行回执（checker 验收侧，__EXEC__ 帧）
+    "require_exec_tools", "require_exec_args", "require_arg_from_result",
+    # 控制帧与终局
+    "require_frame_prefix", "forbid_frame_prefix", "forbid_fallback",
+})
+# 由 `build_request` 消费、不进 check_gold 的请求侧键（写在 gold 里是因为它描述这条
+# **用例**的请求形态，不是判据）。
+GOLD_REQUEST_KEYS = frozenset({"needs_summary"})
+# 只写给人看的注释键（`_note`）：不判、不读，但必须拼对——拼错等于注释不存在。
+GOLD_COMMENT_KEYS = frozenset({"_note"})
+
+
 def check_gold(gold: dict, result: dict) -> list[str]:
     """逐项断言 golden 期望，返回失败原因列表（空 = 通过）。"""
     text = result["text"]
@@ -327,6 +372,15 @@ def check_gold(gold: dict, result: dict) -> list[str]:
             gold["require_cmd_contains"] in c for c in hits
         ):
             fails.append(f"{pre} 命令内容不符（期望含 {gold['require_cmd_contains']}）")
+
+    # 20260924：**多条命令都要出现**（`require_cmd_contains` 是单串，一个用例只能锁
+    # 一条命令）。动机 = multi_turn_redirect 那条"把 X 换成 Y"只断了新开的 Y、
+    # 没断旧开的 X 关掉（`skills.py` 明写"把X换成Y＝两条 spec 同轮"）——半截执行
+    # 与完整执行在那个断言下同分，于是"只开雨不关樱花"能长期绿。每个模式都必须
+    # 命中至少一条命令帧（是全称，不是任一）。
+    for pat in gold.get("require_cmd_all", []):
+        if not any(pat in c for c in commands):
+            fails.append(f"命令帧缺 {pat!r}（本轮命令：{commands}）")
 
     for pre in gold.get("forbid_cmd_prefixes", []):
         if any(_cmd_matches(pre, c) for c in commands):
@@ -471,6 +525,63 @@ def check_gold(gold: dict, result: dict) -> list[str]:
     return fails
 
 
+def wilson_ci(passed: int, total: int, z: float = 1.96) -> list:
+    """通过率的 Wilson 95% 置信区间（20260924）。
+
+    **为什么不是 passed/total 一个数**：110 条里 110 绿，写进报告是「通过率 1.000」——
+    读它的人会当成「这个系统不会错」。可 n=110 时「零失败」的 95% 上界仍有约 2.7%
+    （rule of three：3/n），换成下界就是真通过率最低可能只有 ~0.966。区间把这句话写进
+    数字里，比在文档里补一句"注意样本量"难绕过去。同理，按 tag 分组的那些 n=2、n=3 的
+    小组，单看百分比毫无意义——它们**只有**区间有意义（1 条用例的组，无论红绿，
+    95% 区间都覆盖 0.2~1.0）。
+
+    取 Wilson 而不是正态近似（Wald）：Wald 在 p 接近 0/1 时会给出越界或零宽区间
+    （p=1.0 时宽为 0，正是本仓最常见的形态），Wilson 不会。z=1.96 即 95%。
+
+    返回 `[下界, 上界]`，各四舍五入到 4 位。
+    """
+    if total <= 0:
+        return [0.0, 0.0]
+    p = passed / total
+    d = 1 + z * z / total
+    center = (p + z * z / (2 * total)) / d
+    half = z * ((p * (1 - p) / total + z * z / (4 * total * total)) ** 0.5) / d
+    return [round(max(0.0, center - half), 4), round(min(1.0, center + half), 4)]
+
+
+def by_tag_stats(results: list, tags_map: dict) -> dict:
+    """按 tag 分组的通过率（20260924）。
+
+    **为什么需要**：整体通过率是一个平均数，而金标集里混着三类完全不同的题——回归组
+    （锁行为，17 条）、能力题、以及「需要真身份」的题（未设 uid 时整组被跳过）。一个
+    0.95 的整体数字可以是「18 个 tag 全绿、只有 5 个 tag 全红」压出来的，也可以是
+    「到处零星一条」。分组之后这两种情况长得完全不一样。
+
+    每组给 `total/passed/pass_rate/ci95` 与失败清单（`failed_ids` 逐条点名——分组统计
+    最常见的误用是"看到 90% 就放心了"，而没看到红的是哪几条正是关键的）。
+    组内 n 很小时 `ci95` 的下界会很低，那不是噪音，是事实：**这个组还没有足够样本**。
+    """
+    buckets: dict = {}
+    for r in results:
+        for t in (tags_map.get(r["id"]) or r.get("tags") or []):
+            b = buckets.setdefault(t, {"total": 0, "passed": 0, "failed_ids": []})
+            b["total"] += 1
+            if r.get("final_ok", r["ok"]):
+                b["passed"] += 1
+            else:
+                b["failed_ids"].append(r["id"])
+    out = {}
+    for t, b in sorted(buckets.items(), key=lambda kv: (-kv[1]["total"], kv[0])):
+        out[t] = {
+            "total": b["total"],
+            "passed": b["passed"],
+            "pass_rate": round(b["passed"] / b["total"], 4) if b["total"] else 0.0,
+            "ci95": wilson_ci(b["passed"], b["total"]),
+            "failed_ids": b["failed_ids"],
+        }
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 条（调试）")
@@ -478,7 +589,10 @@ def main():
     ap.add_argument("--skip-ids", default="",
                     help="跳过指定 id（逗号分隔；用于环境不可达的用例，如 CI 无 device-service）")
     ap.add_argument("--min-pass-rate", type=float, default=1.0,
-                    help="通过率门禁（默认 1.0=全过）；CI 跨网链路可放低")
+                    help="通过率门禁（默认 1.0=全过）。它管的是**本轮跑了的用例**的比率，"
+                         "不是全语料（跳过会改分母，见报告 full_run）；回归组另按硬判 100%%，"
+                         "不受它放宽；nightly 不带参数调用 ⇒ 夜间实际是「一条都不许红」。"
+                         "四层语义见文件头 docstring。")
     ap.add_argument("--no-trace", action="store_true",
                     help="不落 golden trace（默认落 logs/agent/golden_traces/<run>/；"
                          "显式关掉只用于省盘/极速冒烟）")
@@ -719,6 +833,10 @@ def main():
     # 第一条真正落盘的 trace（用例顺序 = 跑的顺序，取第一条即为目录的实证）：
     # 没开 trace、或全程一条都没写成功 ⇒ None（报告里如实写 None，不假装有目录）。
     _first_trace = next((r.get("trace") for r in results if r.get("trace")), None)
+    # 「这一轮是不是全量」（20260924）：`--only` / `--limit` / `--skip-ids` 任一在场，
+    # 或有「需要真身份」的用例因未设 uid 被摘掉 ⇒ 都不是全量（**摘掉一条就不是全量**：
+    # 通过率的分母变了，拿它当基线就是拿一个不一样的东西当基线）。
+    _is_full_run = not (args.only or args.limit or args.skip_ids or skip_ids)
     report = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
@@ -729,6 +847,16 @@ def main():
         # 两者不等时差额就是"被复跑吸收掉的红斑"（不许静默：flaked_ids 逐条点名）
         "failed_first_run": failed_first,
         "pass_rate": round((len(cases) - failed) / len(cases), 4) if cases else 0.0,
+        # Wilson 95% 区间（20260924）：**pass_rate 是点估计，只报它等于假装没有抽样
+        # 误差**。见 wilson_ci 头注（110/110 绿时下界约 0.966，不是 1.0）。
+        "pass_rate_ci95": wilson_ci(len(cases) - failed, len(cases)),
+        # 按 tag 分组（20260924）：整体通过率会盖住"某个 tag 全红"（见 by_tag_stats）。
+        "by_tag": by_tag_stats(results, _ALL_TAGS),
+        # 这一轮是不是**全量**（20260924）：`--only/--limit/--skip-ids` 任一在场，或
+        # 有「需要真身份」的用例因未设 uid 被跳过 ⇒ 都不是全量。判据存在的理由只有一个：
+        # `last_run.json` 只该被全量跑覆盖（它被当成"最近一次基线"读，而一次
+        # `--only <单条>` 的调试跑曾把它写成 total=1，读的人会以为语料只剩一条）。
+        "full_run": _is_full_run,
         "skipped_ids": skip_ids,
         "latency_s": {
             "count": len(latencies),
@@ -748,6 +876,10 @@ def main():
         "regression": {
             "total": len(_reg),
             "passed": len(_reg) - len(_reg_bad),
+            # 回归组同样点估计 + 区间并列（20260924）：这组的"100%"是**硬判门禁**，
+            # 不是统计量；单独看 17/17 时区间下界约 0.81——即"这条门禁在 17 条样本上
+            # 能保证的只有"大概率没问题"，把它当"证明没有幻觉"是误读。
+            "pass_rate_ci95": wilson_ci(len(_reg) - len(_reg_bad), len(_reg)),
             "failed_ids": _reg_bad,
             "all_passed": not _reg_bad,
             # 首跑红、复跑绿（20260924）：硬判放行，但名单必须留在报告里——这一族
@@ -762,8 +894,12 @@ def main():
         "trace_dir": os.path.dirname(_first_trace) if _first_trace else None,
         "cases": results,
     }
-    with open(REPORT_FILE, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=1)
+    # `last_run.json` **只在全量跑时写**（20260924）：它被当成"最近一次基线"读，
+    # 而一次 `--only <单条>` 的调试跑曾把它覆盖成 total=1（读的人会以为语料没了）。
+    # 非全量的那一轮仍然留档在 `runs/<ts>.json`——归档不缺，缺的是"别动基线"。
+    if _is_full_run:
+        with open(REPORT_FILE, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=1)
     with open(f"eval/report/runs/{ts_str}.json", "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
 
@@ -840,7 +976,8 @@ def main():
           + (f"  ⚠ 复跑才绿：{_reg_flaked}（首跑红，已按方差放行——逐条见复审单）"
              if _reg_flaked else "")
           + (f"  ⚠ 被跳过：{_reg_skipped}（组内分母随之变小）" if _reg_skipped else ""))
-    print(f"报告: {REPORT_FILE}")
+    print(f"报告: {REPORT_FILE}" if _is_full_run
+          else f"报告: （**非全量跑**，未覆盖 {REPORT_FILE}）")
     print(f"留档: eval/report/runs/{ts_str}.json")
     # golden trace 目录（20260922）：跑完收一个口——目录名是时间戳，只留最近 N 次
     # （一次全量上百份 × 每次一跑，不清理就是又一个只会长胖的目录）。**只删
@@ -858,8 +995,17 @@ def main():
     # 门禁（20260920）：本机默认 1.0（全过）；CI 北美 runner 跨网链路按通过率判
     # （20260921 起分两层：回归组硬判 100%，其余按 --min-pass-rate）
     pass_rate = (len(cases) - failed) / len(cases) if cases else 0.0
-    print(f"通过率: {pass_rate:.3f}（门禁 {args.min_pass_rate:.3f}，"
-          f"跳过 {len(skip_ids)} 条）")
+    _lo, _hi = report["pass_rate_ci95"]
+    print(f"通过率: {pass_rate:.3f}（Wilson 95% 区间 {_lo:.3f}–{_hi:.3f}；"
+          f"门禁 {args.min_pass_rate:.3f}，跳过 {len(skip_ids)} 条）")
+    # 按 tag 的弱项（20260924）：只列 n≥3 的组，避免 n=1 的组刷屏（那种组的区间
+    # 覆盖 0.2–1.0，列出来只会淹没真信号）。全绿时这行不打。
+    _weak = [(t, b) for t, b in report["by_tag"].items()
+             if b["total"] >= 3 and b["failed_ids"]]
+    if _weak:
+        print("弱项 tag: " + "；".join(
+            f"{t} {b['passed']}/{b['total']}（区间 {b['ci95'][0]:.2f}–{b['ci95'][1]:.2f}）"
+            f" 红={b['failed_ids']}" for t, b in _weak))
     if _reg_flaked:
         # 放行了但绝不静默：这一族是"判据太脆或行为概率性"的候选，出声才有人看
         print(f"⚠ 回归组有 {len(_reg_flaked)} 条**首跑红、复跑绿**：{_reg_flaked}"

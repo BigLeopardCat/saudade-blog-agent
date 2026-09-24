@@ -2,7 +2,10 @@
 """全量 golden 进程隔离跑：逐条独立子进程（eval/golden_case_runner.py），
 180s 超时 SIGABRT（faulthandler 栈）再 SIGKILL——防 LLM/HTTP 悬挂污染后续用例。
 用法（仓库根 cwd）: nohup .venv/bin/python eval/golden_full_run.py
-报告: eval/report/runs/<ts>.json（与 run_golden.py 同目录双写 last_run.json 不冲突）
+报告: eval/report/runs/<ts>.json **并更新 eval/report/last_run.json**
+（20260924 起 last_run.json 的语义 = 最近一次**全量**跑；run_golden.py 那边同样只在
+ full_run 时写它，两边不打架——此前注释写着"双写不冲突"，实际是 run_golden 每次调试跑
+ 都会覆盖它，最后一次 `--only <单条>` 就把它写成了 total=1）
 
 20260924：回归组（tags 含 regression）首跑红 → **各重跑一次再判**（口径与
 run_golden.py 逐字一致，复跑也走独立子进程）：复跑仍红=真 FAIL，复跑绿=按方差放行但
@@ -159,8 +162,22 @@ print(f"回归组: {len(_REG) - len(_reg_bad)}/{len(_REG)}"
          if _reg_flaked else ""))
 
 ts = time.strftime("%Y%m%d_%H%M%S")
+# 指标口径与 run_golden.py **共用同一份实现**（20260924）：Wilson 区间与按 tag 分组都
+# 从那边导入，不在这里抄第二份——两份判据/两份统计必然会漂移（build_request 那条
+# "字段表只留一处"的教训是同一个道理，只是那次漂移的是请求体、这次会是数字）。
+from run_golden import wilson_ci, by_tag_stats           # noqa: E402
+_TAGS_MAP = {r["id"]: r["tags"] for r in results}
 report = {"ts": ts, "corpus": "full", "total": len(CASES), "passed": len(CASES) - failed,
           "failed": failed, "latency_s": [r["elapsed"] for r in results],
+          # 通过率（20260924 补）：这个跑法此前**没有** pass_rate 字段——只打印了
+          # "N/M 通过"，报告里只有 passed/total 两个原子数，读的人要自己除。
+          "pass_rate": round((len(CASES) - failed) / len(CASES), 4) if CASES else 0.0,
+          "pass_rate_ci95": wilson_ci(len(CASES) - failed, len(CASES)),
+          "by_tag": by_tag_stats(results, _TAGS_MAP),
+          # 这个跑法就是全量的定义（逐条独立子进程），恒 True——留着是为了让两个
+          # 报告文件的字段表形状一致（读报告的地方不必先问"这是哪个跑法写的"）。
+          "full_run": True,
+          "skipped_ids": list(_SKIPPED_IDS),
           # 首跑红数（20260924）：failed 是复跑后的终判，这个留着首跑口径（差额=被吸收的红斑）
           "failed_first_run": failed_first,
           # 回归组块（20260924）：与 run_golden.py 同名字段——留档反查（golden_trace.
@@ -179,7 +196,20 @@ report = {"ts": ts, "corpus": "full", "total": len(CASES), "passed": len(CASES) 
           "cases": results}
 with open(f"eval/report/runs/{ts}.json", "w", encoding="utf-8") as f:
     json.dump(report, f, ensure_ascii=False, indent=1)
-print(f"报告: eval/report/runs/{ts}.json")
+# `last_run.json` 的语义（20260924 定）：**最近一次全量跑**。这个跑法就是全量跑，
+# 所以由它写（run_golden.py 那边加了 full_run 判据，非全量不再覆盖——此前一次
+# `--only <单条>` 的调试跑会把它写成 total=1）。
+with open("eval/report/last_run.json", "w", encoding="utf-8") as f:
+    json.dump(report, f, ensure_ascii=False, indent=1)
+print(f"报告: eval/report/runs/{ts}.json（并更新 eval/report/last_run.json）")
+_lo, _hi = report["pass_rate_ci95"]
+print(f"通过率: {report['pass_rate']:.3f}（Wilson 95% 区间 {_lo:.3f}–{_hi:.3f}）")
+_weak = [(t, b) for t, b in report["by_tag"].items()
+         if b["total"] >= 3 and b["failed_ids"]]
+if _weak:
+    print("弱项 tag: " + "；".join(
+        f"{t} {b['passed']}/{b['total']}（区间 {b['ci95'][0]:.2f}–{b['ci95'][1]:.2f}）"
+        f" 红={b['failed_ids']}" for t, b in _weak))
 if GOLDEN_RUN:
     _ntr = sum(1 for r in results if r.get("trace"))
     print(f"trace: logs/agent/golden_traces/{GOLDEN_RUN}/（{_ntr}/{len(results)} 条落盘）")

@@ -68,10 +68,16 @@ def _stub_run_one(plan: dict, calls: list):
     return _run
 
 
-def drive(cases: list[dict], plan: dict, argv_extra: list[str] | None = None) -> dict:
-    """在临时目录里整条跑一次 `main()`，收齐退出码/报告/打印/复审单/run_one 调用序列。"""
-    tmp = tempfile.mkdtemp(prefix="golden_rerun_test_")
-    os.makedirs(os.path.join(tmp, "eval", "golden"))
+def drive(cases: list[dict], plan: dict, argv_extra: list[str] | None = None,
+          tmp: str | None = None) -> dict:
+    """在临时目录里整条跑一次 `main()`，收齐退出码/报告/打印/复审单/run_one 调用序列。
+
+    `tmp` 给定时复用同一个目录（⑥ 要"先全量跑一次、再 --only 跑一次"看基线有没有被覆盖）。
+    用例文件仍按本次传进来的 `cases` 重写——同一个目录跑两次就是两轮不同的题。
+    """
+    _caller_owned = tmp is not None      # 调用方给的目录由调用方清（⑥ 要在同一目录跑两轮）
+    tmp = tmp or tempfile.mkdtemp(prefix="golden_rerun_test_")
+    os.makedirs(os.path.join(tmp, "eval", "golden"), exist_ok=True)
     with open(os.path.join(tmp, "eval", "golden", "basic.jsonl"), "w", encoding="utf-8") as f:
         for c in cases:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
@@ -96,8 +102,11 @@ def drive(cases: list[dict], plan: dict, argv_extra: list[str] | None = None) ->
                 code = 0
             except SystemExit as e:
                 code = e.code if isinstance(e.code, int) else 0
-        report = json.load(open(os.path.join(tmp, "eval", "report", "last_run.json"),
-                               encoding="utf-8"))
+        # `last_run.json` = **最近一次全量跑**（20260924 收窄）：非全量（`--only` / `--limit` /
+        # 有跳过）的跑法**不写它**——它被当成"当前基线"读，一次调试跑把它写成 total=1 就
+        # 把基线弄丢了。所以这里按"可缺席"读，缺席本身就是一条要断言的结论（见 ⑤⑥）。
+        _lr = os.path.join(tmp, "eval", "report", "last_run.json")
+        report = json.load(open(_lr, encoding="utf-8")) if os.path.exists(_lr) else None
         archived = sorted(glob.glob(os.path.join(tmp, "eval", "report", "runs", "*.json")))
         reviews = sorted(glob.glob(os.path.join(tmp, "eval", "report", "review_*.md")))
         # 留档内容当场读出来：tmpdir 在本函数返回前就被清了（返回路径等于返回死链）
@@ -106,7 +115,7 @@ def drive(cases: list[dict], plan: dict, argv_extra: list[str] | None = None) ->
                 "archived_doc": (json.load(open(archived[0], encoding="utf-8"))
                                  if archived else None),
                 "review": open(reviews[0], encoding="utf-8").read() if reviews else "",
-                "calls": calls}
+                "calls": calls, "tmp": tmp}
     finally:
         os.chdir(old_cwd)
         rg.run_one, rg.ensure_agent, sys.argv = saved
@@ -114,7 +123,8 @@ def drive(cases: list[dict], plan: dict, argv_extra: list[str] | None = None) ->
             sys.modules.pop("corpus_check", None)
         else:
             sys.modules["corpus_check"] = had_corpus
-        shutil.rmtree(tmp, ignore_errors=True)
+        if not _caller_owned:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 RED, GREEN = False, True
@@ -191,9 +201,40 @@ r = drive([mkcase("reg_a", ["regression"]), mkcase("reg_b", ["regression"])],
           {"reg_a": [RED, GREEN]}, argv_extra=["--only", "reg_a"])
 check("--only 之外的用例不跑、也不进报告分母",
       [c["case"] for c in r["calls"]] == ["reg_a", "reg_a__rerun"]
-      and r["report"]["total"] == 1, str([c["case"] for c in r["calls"]]))
+      and r["archived_doc"]["total"] == 1, str([c["case"] for c in r["calls"]]))
 check("复跑绿照样按方差放行", r["code"] == 0
-      and r["report"]["regression"]["flaked_ids"] == ["reg_a"])
+      and r["archived_doc"]["regression"]["flaked_ids"] == ["reg_a"])
+# 非全量跑**不写** last_run.json（20260924 收窄）：它被当成"当前基线"读，
+# 一次 --only 的调试跑覆盖它 = 把基线写成 total=1（正是要治的病）。留档 runs/<ts>.json 照写。
+check("--only 不覆盖 last_run.json（基线不被调试跑改写）", r["report"] is None)
+check("非全量跑如实告知没覆盖（不静默）",
+      "非全量跑" in r["out"] and "last_run.json" in r["out"], r["out"][-160:])
+check("非全量仍留档 runs/<ts>.json", len(r["archived"]) == 1 and r["archived_doc"]["total"] == 1)
+
+print("\n⑥ 同一目录先全量、后 --only：基线必须还是全量那一份")
+_tmp = tempfile.mkdtemp(prefix="golden_rerun_base_")
+try:
+    r1 = drive([mkcase("reg_a", ["regression"]), mkcase("reg_b", ["regression"])],
+               {"reg_a": [GREEN], "reg_b": [GREEN]}, tmp=_tmp)
+    check("全量跑写了基线（total=2、full_run=True）",
+          r1["report"] is not None and r1["report"]["total"] == 2
+          and r1["report"]["full_run"] is True,
+          str(r1["report"] and {k: r1["report"][k] for k in ("total", "full_run")}))
+    r2 = drive([mkcase("reg_a", ["regression"])], {"reg_a": [GREEN]},
+               argv_extra=["--only", "reg_a"], tmp=_tmp)
+    # 注意 ⑥ 与 ⑤ 的判据不同：⑤ 的目录里从来没有基线（读回 None = 没写），
+    # ⑥ 的目录里**已经有**基线，所以"没写"的判据是"读回来的还是上一轮那份"。
+    check("--only 这一轮自己的留档是 total=1（它确实只跑了 1 条）",
+          r2["archived_doc"]["total"] == 1, str(r2["archived_doc"]["total"]))
+    check("而读回来的基线仍是 total=2（两份文件各说各话，基线归全量）",
+          r2["report"]["total"] == 2, str(r2["report"]["total"]))
+    _after = json.load(open(os.path.join(_tmp, "eval", "report", "last_run.json"),
+                            encoding="utf-8"))
+    check("**基线原封不动**（仍是全量那一份：total=2、full_run=True）",
+          _after["total"] == 2 and _after["full_run"] is True,
+          str({k: _after[k] for k in ("total", "full_run")}))
+finally:
+    shutil.rmtree(_tmp, ignore_errors=True)
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
