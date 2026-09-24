@@ -75,7 +75,7 @@ ARCH = {
 }
 
 
-def judge(case_id, text, cmds=(), frames=None):
+def judge(case_id, text, cmds=(), frames=None, corpus=None):
     # 文本断言离线重放：**把用例声明的工具帧视为已满足**——本文件只验文本侧判据，
     # 帧/命令侧由真实跑法（golden_case_runner）验证。20260921 起多条用例补了
     # require_tool_calls_any 帧级正断言，若这里仍喂空 tool_calls，全部历史文本重放会
@@ -90,7 +90,10 @@ def judge(case_id, text, cmds=(), frames=None):
            "exec_rows": [], "exec_tools": list(g.get("require_exec_tools") or []),
            "frames": list(g.get("require_frame_prefix") or []) if frames is None else list(frames),
            "resets": [], "resets_reasons": [], "error": None}
-    return rg.check_gold(g, res)
+    # 语料快照按需传入（20260925）：`require_doc_terms` 的判据要吃语料正文，本文件
+    # 默认 `corpus=None`，而**未评估会被判红**——所以只有真要重放带该键的用例时
+    # 才传（离线夹具足够，不必联网）。
+    return rg.check_gold(g, res, docs=corpus)
 
 
 CASES = [

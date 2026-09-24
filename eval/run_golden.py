@@ -59,6 +59,7 @@ from agent import create_agent
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
+import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
 import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
 
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
@@ -347,6 +348,8 @@ GOLD_ASSERT_KEYS = frozenset({
     "require_exec_tools", "require_exec_args", "require_arg_from_result",
     # 控制帧与终局
     "require_frame_prefix", "forbid_frame_prefix", "forbid_fallback",
+    # 语料化（术语由申报文档运行期派生，见 eval/corpus_terms.py）
+    "require_doc_terms",
 })
 # 由 `build_request` 消费、不进 check_gold 的请求侧键（写在 gold 里是因为它描述这条
 # **用例**的请求形态，不是判据）。
@@ -355,8 +358,36 @@ GOLD_REQUEST_KEYS = frozenset({"needs_summary"})
 GOLD_COMMENT_KEYS = frozenset({"_note"})
 
 
-def check_gold(gold: dict, result: dict) -> list[str]:
-    """逐项断言 golden 期望，返回失败原因列表（空 = 通过）。"""
+def judge_corpus() -> "list | None":
+    """判据用的语料快照（**取一次**，逐例复用）。取不到 ⇒ `None`（判据报「未评估」）。
+
+    与 `corpus_check.presence_check` 同一份语料（同一进程同一索引），但不依赖它的
+    返回值：那边只给计数与哈希，判据要的是**含正文的文档列表**。
+    取不到**不抛**——评测要继续跑，只是带 `require_doc_terms` 的用例会红成「未评估」。
+    """
+    try:
+        from rag.search import get_index
+        idx = get_index()
+        snap = idx.docs_snapshot()
+        if not snap:
+            idx.build()
+            snap = idx.docs_snapshot()
+    except Exception as e:
+        print(f"[corpus] 判据语料快照取不到（{type(e).__name__}: {e}）——"
+              f"带 require_doc_terms 的用例本轮判「未评估」")
+        return None
+    if not snap:
+        print("[corpus] 判据语料快照为空——带 require_doc_terms 的用例本轮判「未评估」")
+        return None
+    return snap
+
+
+def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
+    """逐项断言 golden 期望，返回失败原因列表（空 = 通过）。
+
+    `docs`：语料快照（含正文的文档列表），只有 `require_doc_terms` 用得上。跑法在
+    **启动时取一次**逐例传入；`None` ⇒ 带该键的用例判「未评估」（**不是通过**）。
+    """
     text = result["text"]
     commands = result["commands"]
     fails: list[str] = []
@@ -522,6 +553,41 @@ def check_gold(gold: dict, result: dict) -> list[str]:
         if want not in got:
             fails.append(f"{spec['tool']}.{spec['arg']} 期望 {want}，实际 {got}")
 
+    # 20260925：**语料化断言**（`require_doc_terms`，派生器 `eval/corpus_terms.py`）。
+    # 动机 = `rag_ota_http` 现场：人手抄的期望词会随语料漂移（那条用例三个词里两个
+    # df=2，第三个 `A/B` 被 `tokenize` 按字符类切碎成满语料 token ⇒ 恒真），而"改词表"
+    # 只是把下一次漂移推后。新写法：gold 只声明**这篇回答必须扎根在哪几篇**（`doc` 给
+    # `type:id`），术语由语料**运行期派生**——语料改了期望跟着变，不需要人去改词表。
+    #   `docs` 由跑法启动时取一次快照逐例传入（`judge_corpus()`）。
+    #   **`docs is None` 而 gold 带本键 ⇒ 判「未评估」**：没语料时这条断言什么都没验，
+    #   静默放过等于又造一条"看着在、其实不在"的判据——未评估不是通过。
+    for spec in gold.get("require_doc_terms", []):
+        if docs is None:
+            fails.append("[未评估] 本轮没有语料快照，require_doc_terms 判不了"
+                         "（未评估 ≠ 通过；跑法需在启动时取一次快照逐例传入）")
+            continue
+        terms, tdiag = corpus_terms.derive(
+            spec.get("doc") or [], docs=docs,
+            df_max=int(spec.get("df_max", 2)),
+            strict=bool(spec.get("strict", False)),
+            cap=None,   # 判据侧不截断：cap 只服务回显，截断会把用了常见词的诚实回答判红
+        )
+        if tdiag.get("unavailable"):
+            fails.append(f"[未评估] 语料不可用（{tdiag.get('why') or '快照为空'}）")
+            continue
+        if tdiag.get("no_doc") or tdiag.get("missing"):
+            fails.append(
+                f"申报的文档不在语料里（{tdiag.get('missing') or '用例没写 require_doc_terms.doc'}）"
+                f"—— 期望过期，请更新该用例的 `doc`（不是模型退化）")
+            continue
+        hits = corpus_terms.hit_terms(terms, text)
+        want = int(spec.get("min_terms", 2))
+        if len(hits) < want:
+            fails.append(
+                f"回复没扎根在申报的 {'、'.join(tdiag['docs'])} 里：命中 {len(hits)}/{want} 个"
+                f"该篇派生术语（派生集 {tdiag.get('n_kept')} 个；"
+                f"该篇常用词如 {tdiag.get('common')}）")
+
     return fails
 
 
@@ -623,6 +689,10 @@ def main():
     except Exception as e:  # 语料拉取失败不阻断评测，仅提示
         print(f"[corpus] 在位性检查失败（{e}），跳过")
         corpus = {}
+    # 判据侧的语料快照（20260925）：**取一次**逐例传给 check_gold（术语派生要吃正文）。
+    # 与上面同一份索引，故这次取基本零成本；取不到不阻断评测——带 require_doc_terms
+    # 的用例会红成「未评估」，那是事实，不是故障。
+    judge_docs = judge_corpus()
 
     cases = [json.loads(line) for line in open(GOLDEN_FILE, encoding="utf-8") if line.strip()]
     # 全量标签表（过滤前）：回归组的"被跳过"清点要用它（见报告 regression 块与门禁）
@@ -685,7 +755,7 @@ def main():
         result = run_one(req, build_principal(case),
                          trace_ctx={"run": run_id, "case": case["id"]})
         elapsed = time.time() - t0
-        fails = check_gold(g, result)
+        fails = check_gold(g, result, docs=judge_docs)
         ok = not fails and not result["error"]
 
         status = "PASS" if ok else "FAIL"
@@ -745,7 +815,7 @@ def main():
         _rr = run_one(build_request(_case), build_principal(_case),
                       trace_ctx={"run": run_id, "case": f"{r['id']}__rerun"})
         _relapsed = time.time() - _t0
-        _rfails = check_gold(_case["gold"], _rr)
+        _rfails = check_gold(_case["gold"], _rr, docs=judge_docs)
         _rok = not _rfails and not _rr["error"]
         r["rerun"] = {
             "ok": _rok, "elapsed": round(_relapsed, 1), "fails": _rfails,

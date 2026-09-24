@@ -171,11 +171,16 @@ def derive(doc_keys, *, docs=None, df_max: int = 2, strict: bool = False,
                              1 if _ASCII_ALPHA.search(t) else 2,
                              df.get(t, 0), -len(t), -tf.get(t, 0), t))
     out = kept if cap is None else kept[:cap]
+    # `top` 是"最像专有术语"的前几个（判据没命中时，人要看的是**回答本该用到什么词**）。
+    # `common` 反过来按篇内词频排：一个真的在讲这两篇的回答，多半会用到这几个常用词——
+    # 判据消息与漂移哨兵的"建议替换词"都用它（对着一张 `esp_mqtt_client_subscribe`
+    # 想不出该写什么，对着 `固件/设备/配置` 就能）。
     diag.update(n_terms=len(out), n_kept=len(kept),
                 docs=[doc_key(d) for d in declared], df_max=df_max, strict=strict,
                 marks={"id_like": [t for t in out if "." in t],        # S5：只标记
                        "gram3": [t for t in out if _PURE_CJK3.match(t)]},
-                top=[{"term": t, "df": df.get(t, 0), "tf": tf.get(t, 0)} for t in out[:10]])
+                top=[{"term": t, "df": df.get(t, 0), "tf": tf.get(t, 0)} for t in out[:10]],
+                common=sorted(out, key=lambda t: (-df.get(t, 0), -tf.get(t, 0), t))[:8])
     if len(out) < 2:
         diag["thin"] = True
     return out, diag
@@ -217,6 +222,8 @@ def _dump(title: str, terms: list[str], diag: dict) -> None:
           + (f"  ⚠️ 短文档 {diag['short_docs']}" if diag.get("short_docs") else ""))
     for row in diag.get("top") or []:
         print(f"    {row['term']:<28} df={row['df']} tf={row['tf']}")
+    if diag.get("common"):
+        print(f"    [常用] {diag['common']}")
     marks = diag.get("marks") or {}
     if marks.get("id_like") or marks.get("gram3"):
         print(f"    [S5 标记] id_like={marks.get('id_like')} gram3={marks.get('gram3')}")
