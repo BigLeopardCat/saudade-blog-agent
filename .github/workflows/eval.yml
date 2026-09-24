@@ -88,6 +88,9 @@ jobs:
       - name: 跨源对账单测（假夹具喂每条判据两侧/窗口裁剪/伪造字段/gz 往返，并断言夜间脚本真的接了线，秒级，不联网）
         run: uv run python tests/reconcile_offline_test.py
 
+      - name: SSE 终止帧契约（真调 chat_stream：异常/空闲超时两条路径 + 换行不撕帧 + 全仓发出点都 JSON 编码，秒级，不联网不调 LLM）
+        run: uv run python tests/test_error_frame.py
+
       # 未定义名静态扫描（20260924 补）。Python 没有编译期拦截：一个只在**另一个作用域**
       # 存在的名字（server.py 的 `req` 写进了 `_run_agent_stream_to_queue`）要到运行到那一行
       # 才炸，而线上位置恰在图启动前 ⇒ 表现成"整轮零帧"，看着像模型没回复。那次事故挂了
