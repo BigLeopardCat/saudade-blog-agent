@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""语料术语派生（`eval/corpus_terms.py`）的离线自测：S1–S5 五条过滤规则逐条锁。
+"""语料术语派生（`eval/corpus_terms.py`）的离线自测：S1–S5 五条过滤规则逐条锁，
+外加判据接线（`run_golden.check_gold` 的 `require_doc_terms`，含「未评估 ≠ 通过」）。
 
-秒级、纯函数、无网络；由 eval.yml 在 push 时跑。
+秒级、无网络；由 eval.yml 在 push 时跑。
 
-四篇内联夹具（不联网），设计成每条规则**至少有一条词专门踩它**：
+五篇内联夹具（不联网），设计成每条规则**至少有一条词专门踩它**：
 
 | 词 | 落在 | 该被哪条规则拦下 | 为什么 |
 |---|---|---|---|
@@ -145,6 +146,46 @@ check("hit_terms 大小写不敏感（模型回复里常见大写形态）",
 check("hit_terms 空正文/空术语表 → 空（不抛）",
       ct.hit_terms(["轮询"], "") == [] and ct.hit_terms([], "轮询") == []
       and ct.hit_terms(None, None) == [])
+
+print("\n⑦ 判据接线（`run_golden.check_gold` 的 `require_doc_terms`）")
+import run_golden as rg  # noqa: E402  （重：会拉起 server/agent，与 judge_offline 同款）
+
+
+def _judge(gold: dict, text: str, docs) -> list[str]:
+    plan = {"text": text, "commands": [], "tool_calls": [], "exec_rows": [],
+            "exec_tools": [], "frames": [], "resets": [], "resets_reasons": [],
+            "error": None}
+    return rg.check_gold(gold, plan, docs=docs)
+
+
+_SPEC = [{"doc": "note:1", "min_terms": 2}]
+check("命中 ≥min_terms 个派生术语 ⇒ 不判红",
+      _judge({"require_doc_terms": _SPEC}, "文中提到 ESP_HTTPS_OTA 与轮询机制", DOCS) == [])
+check("术语命中大小写不敏感（模型回复里常见大写形态）",
+      _judge({"require_doc_terms": _SPEC}, "用到 esp_https_ota，也讲了轮询", DOCS) == [])
+_f = _judge({"require_doc_terms": _SPEC}, "这篇讲了别的东西，与它无关", DOCS)
+check("命中不足 ⇒ 判红，且红里写着命中数与派生集规模（排障要能读出现场）",
+      len(_f) == 1 and "命中 0/2" in _f[0] and "派生集" in _f[0], str(_f)[:160])
+check("**没语料 ⇒ 判「未评估」而不是通过**（未评估 ≠ 通过）",
+      len(_f2 := _judge({"require_doc_terms": _SPEC}, "文中提到 ESP_HTTPS_OTA 与轮询", None)) == 1
+      and "[未评估]" in _f2[0], str(_f2)[:160])
+check("语料不可用（快照空）同样判「未评估」",
+      any("[未评估]" in x for x in _judge({"require_doc_terms": _SPEC}, "轮询", [])))
+check("申报的文档不在语料里 ⇒ 红里点名「期望过期」，不赖模型",
+      any("期望过期" in x for x in
+          _judge({"require_doc_terms": [{"doc": "note:404", "min_terms": 1}]}, "轮询", DOCS)))
+check("用例没写 doc ⇒ 红（判据没有来源 = 没判据）",
+      any("没写" in x for x in
+          _judge({"require_doc_terms": [{"min_terms": 1}]}, "轮询", DOCS)))
+
+# 判据侧**不截断**的锁：造一篇 60 个 ASCII 术语的文档，目标词长度最短 ⇒ 排序最末。
+# 若判据侧误用默认 cap=40，目标词会被截掉、一条诚实的回答必然假红。
+_LONG = " ".join(f"verylongtoken_identifier_{i:02d}" for i in range(60))
+_CAPDOC = [{"type": "note", "id": 7, "title": "", "content": _LONG + " zebra"}]
+check("判据侧用的是不截断的派生集（cap=40 是回显口径，不能拿来判诚实回答）",
+      _judge({"require_doc_terms": [{"doc": "note:7", "min_terms": 1}]}, "这题说的是 zebra", _CAPDOC) == []
+      and ct.derive(["note:7"], docs=_CAPDOC, min_doc_chars=0)[0][:1] != ["zebra"],
+      str(ct.derive(["note:7"], docs=_CAPDOC, min_doc_chars=0)[0][:2]))
 
 print()
 if FAILED:

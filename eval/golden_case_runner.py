@@ -42,7 +42,10 @@ def main():
     result = run_golden.run_one(req, run_golden.build_principal(case),
                                 trace_ctx={"run": run_id, "case": case["id"] + suffix})
     elapsed = time.time() - t0
-    fails = run_golden.check_gold(g, result)
+    # 语料快照同进程内取一次（20260925）：`require_doc_terms` 要拿**正文**派生术语，
+    # 取不到就得判「未评估」而不是静默通过——两个跑法（进程内 / 隔离）在这一点上必须
+    # 给出同一个结论（判据侧不做"这个跑法没接上就放行"的妥协）。
+    fails = run_golden.check_gold(g, result, docs=run_golden.judge_corpus())
     ok = not fails and not result["error"]
     # 字段表与 run_golden.py 的 `results.append({...})` **逐字段对齐**（20260924）：两个
     # 跑法（进程内 / 隔离子进程）写出形状不同的报告，"红了照报告读现场"这条纪律就只在
