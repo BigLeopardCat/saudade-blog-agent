@@ -324,6 +324,11 @@ def test_nightly_runs_the_judge():
           "--traces" not in judge_line)
     check("跑在 golden 之后（材料就是刚那一轮）",
           sh.index("$PY eval/run_golden.py") < sh.index("$PY eval/llm_judge.py"))
+    # 20260925 实测：stdout 是文件时 Python 块缓冲 ⇒ 十分钟里日志一行不涨，中途去看
+    # 只能看到空文件（我据此误判过一次"0 字节 = 没跑"）。这是**可观测性**要求，不是
+    # 判据变化——所以锁在接线里，别让后来人顺手删掉。
+    check("评审员那一步带 PYTHONUNBUFFERED=1（否则日志块缓冲、中途看是空的）",
+          judge_line.lstrip().startswith("PYTHONUNBUFFERED=1 "))
 
 
 def main():
