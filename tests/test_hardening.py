@@ -402,12 +402,47 @@ def test_rag_unavailable_vs_empty():
         eq(getattr(out2, "kind", None), "empty", "真没命中仍是 empty（照常进回执）")
 
 
+def test_weather_location_shape_gate():
+    """`get_weather` 的城市名要有形状闸（20260925 安全审计）。
+
+    host 固定 `wttr.in`（不是 SSRF），但这个值直接进 URL 路径段 ⇒ 任意字符串不该进
+    URL（`?`/`/`/`#` 都能改掉请求形状）。判据是"非法就**不碰网络**"——数 mock 调用
+    次数，而不是看返回文案。"""
+    import tools.base as base
+
+    calls: list[str] = []
+    orig_get = base._client.get
+
+    class _Resp:
+        status_code, text = 200, "晴 +20°C 3km/h 40%"
+
+    def _spy(url, **kw):
+        calls.append(url)
+        return _Resp()
+
+    base._client.get = _spy
+    try:
+        bad = base.get_weather.invoke({"location": "beijing/../evil?x=1"})
+        bad2 = base.get_weather.invoke({"location": ""})
+        good = base.get_weather.invoke({"location": "杭州"})
+    finally:
+        base._client.get = orig_get
+
+    check("非法城市名 → unavailable 且没有发出请求",
+          getattr(bad, "kind", None) == "unavailable" and getattr(bad2, "kind", None) == "unavailable",
+          (getattr(bad, "kind", None), getattr(bad2, "kind", None)))
+    check("非法城市名不碰网络（一次都没调）", len(calls) == 1, calls)
+    check("合法城市名正常查询（中文被百分号编码进路径）",
+          "wttr.in/%E6%9D%AD%E5%B7%9E" in calls[0] and "杭州天气" in str(good), calls)
+
+
 def main():
     for fn in (test_tls_verification_on, test_request_limits,
                test_body_limit_middleware, test_stream_slots,
                test_tool_result_kinds, test_history_model_and_review_limits,
                test_user_assertion, test_display_idempotency_race,
-               test_rag_unavailable_vs_empty):
+               test_rag_unavailable_vs_empty,
+               test_weather_location_shape_gate):
         print(f"\n── {fn.__name__} ──")
         fn()
     if FAILS:
