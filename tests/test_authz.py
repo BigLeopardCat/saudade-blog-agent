@@ -632,6 +632,25 @@ check("未确认帧写得出这次要确认的是什么（own 版本）",
       and authz.consent_error_reason(authz.consent_frame(_OWN_ADD, p(ROLE_USER)))
       == authz.REASON_CONSENT)
 
+# 未确认帧的文案按**工具族**取（20260925）：按 scope 取的那三张是文章族口径
+# （"哪一篇、从什么变成什么"），而一律弹窗族里的公告根本不是"改哪一篇"。生产 trace
+# 20260924T234402 的代价实测到了：公告被挡时模型收到的正是那段文章族措辞，读成"内容
+# 不合规"，连着四轮改写公告正文。这一支锁三件事：公告族拿到的是公告的话、文章族措辞
+# 没被覆盖掉、这批工具**每个**都登记了文案（漏登记会静默退回文章族措辞）。
+check("一律弹窗族按工具族给文案（不是文章族那套「哪一篇」措辞）",
+      "公告" in authz.consent_frame("create_announcement", p(ROLE_ADMIN))
+      and "哪一篇" not in authz.consent_frame("create_announcement", p(ROLE_ADMIN))
+      and "公告" in authz.consent_frame("delete_announcement", p(ROLE_ADMIN))
+      and "留言" in authz.consent_frame("delete_board_comment", p(ROLE_ADMIN)))
+check("公告族文案把「不要重写」讲成下一步动作（否则重写正文仍是模型的默认出路）",
+      "不要再改内容" in authz.consent_frame("create_announcement", p(ROLE_ADMIN)))
+check("一律弹窗的工具每个都登记了文案（漏登记会静默退回文章族措辞）",
+      all(t in authz._CONSENT_WHY_TOOL for t in authz._ALWAYS_CONFIRM_TOOLS),
+      str(sorted(authz._ALWAYS_CONFIRM_TOOLS - set(authz._CONSENT_WHY_TOOL))))
+check("文章族措辞没被覆盖掉（按 scope 取的那三张原样生效）",
+      "哪一篇" in authz.consent_frame("set_article_status", p(ROLE_ADMIN))
+      and "自己" in authz.consent_frame(_OWN_ADD, p(ROLE_USER)))
+
 print("⑨b 接线：闸在调用之前，拒绝说得出原因，叙述侧封得住")
 check("execute 在调用前算确认", "consent_missing = (authz.requires_consent" in graph_src)
 check("未确认时不执行（产帧而非 invoke）", "out = authz.consent_frame(name, principal)" in graph_src)
