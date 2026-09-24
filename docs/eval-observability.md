@@ -156,7 +156,7 @@ flowchart TB
 |---|---|---|---|---|
 | **L0 单元级** | 图节点、工具、schema | 单测（`tests/test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率 | 图重写、记忆剥离 |
 | **L1 基准级** | 检索器、生成层、端到端 RAG | BEIR / RGB / CRAG（§3） | nDCG@10、Recall@5、MRR；噪声准确率 / 拒答率 / 错误检测率；Truthfulness（幻觉=-1） | RAG、防幻觉 |
-| **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 128 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
+| **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 128 条）；**LLM 评审员**（20260925，报告非门禁，见 §2 末） | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
 | **L3 对账级**（原设计为"回放级"） | 线上行为的**跨源一致性** | `eval/trace_reconcile.py`：trace ↔ `agent.log` ↔ `monitor.log` 三源确定性对账（零 LLM、只读） | 各判据条数：trace 有收尾行没有 / 收尾行有 trace 没有 / 重复 trace_id / end_reason·frames 不等 / 只在失败分支出现的前端上报 | 全部（每次升级后跑） |
 | **渲染层**（不在 L0–L3 编号里，与被测对象不同：测前端而非 agent） | 前端组件在真浏览器里的渲染与时序 | 父仓 `frontend/tests/` 下的渲染沙箱（Playwright 打真组件 + 无头 Chrome，把后端桩掉；**数目以父仓 `run-suites.mjs` 的清单为准，这里不抄**——抄一次就会漂一次） | 断言通过率；时序判据（时刻证人）| 前端任何改动（sass/esbuild 两步是本机唯一能拦下构建级缺陷的环节） |
 
@@ -209,6 +209,34 @@ FAIL 复审单把回归组红置顶（当天必修）。混跑的坏处正是这
 - **`last_run.json` = 最近一次*全量*跑**（20260924 收窄）：只有全量跑写它（`run_golden.py` 加了
   `full_run` 判据）。此前一次 `--only <单条>` 的调试跑会把它覆盖成 `total=1`，而读它的人以为那是
   当前基线。跑法本身也写进报告（`full_run` / `corpus` / `skipped_ids`），读的人不必先问"这是哪个跑法写的"。
+
+**LLM 评审员**（`eval/llm_judge.py`，20260925 落地，**报告非门禁**）：确定性判据判的是"该出现的
+东西出现没出现"（`text_contains` / 正则 / 形状键），**判不了**"回复通顺、该出现的词都有，但编了材料里
+没有的事实"——比如工具只回了 3 条留言、回复写"共 5 条"。评审员把一条用例的**材料**（提问 + 本轮真实
+工具调用的名字/参数/**返回原文**）与回复正文一起交给一个 LLM，用结构化输出（json_schema）拿逐条裁决
+（`unsupported` / `answered` / `verdict` / `reason`），报告落 `eval/report/judge_<ts>.md`。
+
+四条纪律（都在 `eval/llm_judge.py` 模块头注里，`tests/test_llm_judge.py` 离线锁住）：
+
+1. **不是判分器**：不进任何门禁、不改 golden 的 PASS/FAIL、不影响退出码。判官默认就是**生产同一个
+   模型**（本机只有一个可用端点）——同源模型评自己**不构成 ground truth**，所以它只挑"值得人看一眼"
+   的候选，每条都附材料原文让人能自己核。
+2. **材料必须是原文**：材料取自 golden trace 的 `call` 事件。这直接决定了一条配套改动——trace 里
+   工具返回**生产只留 200 字符**（`utils/trace.TOOL_RESULT_LIMIT_ENV`，golden 轮设为 40000），
+   而评审员拿 200 字符的摘要当材料时会把"文章里确实有、只是没记进 trace"的内容判成编造（实测：
+   Git 分支那篇的正文只留了 200 字符，回复里的「第 3.3 节」被判定为无出处）。现在上限随 trace 落进
+   `input.tool_result_limit`，评审员据此**认出材料被截断并响亮警告**（那批用例的红条不可信）。
+3. **判官看不到的东西写在材料里**：当前时间、当前页面、特效/夜间开关、`NAV_MAP`（页面别名→路径）、
+   会话历史与摘要、跨轮执行记忆、人设文案——这些都不在 trace 里，但叙述者当时确实有。不写进材料，
+   这些**有据的**说法（"现在是凌晨三点"、"/device-console/ 是物联网控制台"、"我是泠月喵"）会被判成
+   编造，一份误报多的报告没人会看。这条是实测教训，不是设计洁癖。
+4. **它评的是"这一次采样的回复"**：回复换个采样结论就可能变（实测 `summary_round` 首跑提到"站内
+   检索功能"（材料里的站点地图没这一项）被判 suspect，复跑那次没提、判 ok）。读法 =
+   "这批回复里有没有可疑的说法"，不是"哪条用例有问题"。
+
+**判官答坏了要吵**：非法 JSON / 缺字段 / `verdict` 非法一律抛（记成 error 进报告，**不静默当"没问题"**）；
+它自己前后不一致时**以它列出的条目为准**（列表是观察、`verdict` 只是它的摘要）；端点不认结构化输出
+时降级重问一次并留 `degraded` 标记。**是否进夜间**（116 条 ≈ 10 分钟 LLM 调用）待拍板，目前只手动跑。
 
 ---
 
@@ -373,7 +401,9 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 | **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（128 条、82 个标签；**逐 tag 分量见 `eval/report/last_run.json` 的 `by_tag`，不在文档里手抄**）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>`、`--only <id1,id2>` 逗号多选定位、`--skip-ids`、`--min-pass-rate`；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `tests/test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`tests/judge_offline_test.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。**20260921 补**：`eval/golden_draft.py`
 （trace_alert 命中的真实现场 → 用例草稿 + 人审对照单，落 `eval/report/golden_drafts_*.{jsonl,md}`；
 **只产草稿不自动入库**，含真实用户文本故不进 git）+ L2 门禁分两层（回归组硬判 100%，见 §2 门槛分工）。
-LLM-as-judge 未做 |
+**20260925 补**：`eval/llm_judge.py`（LLM 评审员，判"回复有没有编材料"，**只出报告不进任何门禁**，
+口径与四条纪律见 §2 末）+ trace 的工具返回上限可配（`TRACE_TOOL_RESULT_LIMIT`，golden 轮 40000，
+生产仍 200——评审员拿摘要当材料会误判，这条是它的前置条件）|
 | 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:）；20260830 修 golden 断言过严三条（行为正确不判失败） |
 | 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0 秒级套件硬门禁）；L2 全量 golden 本机跑（20260920 起撤出 CI）+ nightly crontab（scripts/nightly_regression，失败标 `~/agent_regression.failed`）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
 | 3 记忆 | 🟡 部分完成：摘要独立化（2026-08-26）结构性关闭污染面；**未做**：记忆专项评测（召回相关性、摘要合并质量、污染检测） |
