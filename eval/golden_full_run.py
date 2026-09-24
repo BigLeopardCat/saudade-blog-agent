@@ -41,6 +41,32 @@ for _marker, _env in _UID_CHANNELS:
         for _c in CASES:
             if _c.get(_marker):
                 _c.setdefault("context", {})["user_id"] = int(_real_uid)
+# 真写用例的两道闸（20260925）：**口径与 run_golden.py 逐字一致**（那两段是判据，
+# 不是跑法的实现细节——两个跑法各写一套就会重演"同一个用例两个结论"）。
+# 顺序也一样：先问"谁有权触发真写"（默认没有许可），再看夹具在不在位。
+_REAL_WRITE_ENV = "GOLDEN_ALLOW_REAL_WRITE"
+_NEED_WRITE = [c["id"] for c in CASES if c.get("needs_real_write")]
+if _NEED_WRITE and not os.environ.get(_REAL_WRITE_ENV, "").strip():
+    CASES = [c for c in CASES if not c.get("needs_real_write")]
+    _SKIPPED_IDS += _NEED_WRITE
+    for _cid in _NEED_WRITE:
+        print(f"[skip] {_cid}: SKIP (needs {_REAL_WRITE_ENV}=1 —— 真写用例默认不自动跑)", flush=True)
+_NEED_FIX = {c["id"]: str(c["requires_fixture"]) for c in CASES if c.get("requires_fixture")}
+if _NEED_FIX:
+    # 局部导入：本判据只在有夹具用例时才需要（它会拉起 tools.base，父进程平时不必付这笔钱）。
+    # `eval/` 在 sys.path 上（见文件头第一段）。
+    import golden_fixture  # noqa: E402
+    _TITLES = golden_fixture.category_titles()
+    for _cid, _fname in _NEED_FIX.items():
+        _state = golden_fixture.fixture_state(_fname, _TITLES)
+        if _state == "present":
+            continue
+        CASES = [c for c in CASES if c["id"] != _cid]
+        _SKIPPED_IDS.append(_cid)
+        _why = ("夹具不在位（先按授权串跑 scripts/migration/golden_write_fixture_20260925.sql）"
+                if _state == "absent" else
+                f"夹具在位检查读不到公开分类接口（{golden_fixture.UNREADABLE_TAG}）—— 不知道在不在，不跑")
+        print(f"[skip] {_cid}: SKIP ({_why})", flush=True)
 RUNNER = "eval/golden_case_runner.py"
 TMPDIR = "/tmp/golden_cases"
 TIMEOUT = 180

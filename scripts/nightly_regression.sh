@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly regression: tests/test_skills.py 单测 + 检索基准 + golden set（126 条真实 LLM 用例）+ 巡检
+# Nightly regression: tests/test_skills.py 单测 + 检索基准 + golden set（127 条真实 LLM 用例）+ 巡检
 # 由 crontab 触发（见仓库 README 或 crontab -l）。结果追加到 ~/agent_regression.log；
 # 任一门禁项失败会在 ~/agent_regression.failed 留下标记（存在 = 上次运行失败）。
 # golden 有 FAIL 时导出复审单 eval/report/review_<ts>.md（判据 vs 模型实际输出）——
@@ -12,6 +12,8 @@
 # 同日补：trace_alert 抓到的现场回灌成 golden 草稿（eval/golden_draft.py，只产草稿
 # 到 eval/report/ 供人审，不自动入库、非门禁）。
 # 20260925 补：语料漂移哨兵（eval/corpus_terms.py --drift，非门禁）——见下方该节的注释。
+# 同日补：真写夹具残留哨兵（eval/golden_fixture.py --verify，非门禁，只读公开接口）——
+# 见下方该节的注释。**真写用例本身不在夜间跑**（needs_real_write 默认关，见 run_golden.py）。
 # 20260924 补：跨源对账（eval/trace_reconcile.py，把 trace ↔ agent.log ↔ monitor.log
 # 三个源对起来看，非门禁）——单源规则扫描看不见"两个源之间"的错（轮次自洽、前端只见
 # 报错那类），报告进 eval/report/reconcile_<ts>.md，异常时另写一条 WARN 到
@@ -43,6 +45,16 @@ echo "--- 语料漂移哨兵 (词表型断言 vs 语料, 秒级, 非门禁) ---"
 # 已进报告待点名——让它置 fail=1 只会让整夜门禁天天红（哨兵一响就没人看了）。
 # 报告落 eval/report/corpus_drift_<ts>.md。
 $PY eval/corpus_terms.py --drift >> "$LOG" 2>&1 || echo "[$TS] corpus_terms --drift 有 ORPHAN/MISBOUND 或运行异常（非门禁，看报告）" >> "$LOG"
+echo "--- 真写夹具残留哨兵 (只读公开接口, 秒级, 非门禁) ---" >> "$LOG"
+# 20260925 起：真写用例（golden_write_category_delete_exec）的目标是**夹具**
+# （分类 agent_fixture_category_a，见 scripts/migration/golden_write_fixture_20260925.sql）。
+# 那条用例跑完即把自己删掉，所以正常态是"公开分类列表里一行夹具都没有"。它没删掉
+# （用例红在中途、或有人手工建了同族名字）时夹具会**留在生产库里，而且访客在分类页
+# 看得见**——这件事不该靠"我记得跑过"来判断，要有只读的机械检查。
+# 退出码：0 干净 / 1 有残留（[fixture-leftover] 逐行点名）/ 2 读不到接口（**无法确认**，
+# 不是"没有"）。**非门禁**：真删不掉时金色的那条用例自己就是红的（fail=1 已经置位），
+# 这里只是把"生产库里留了什么"讲清楚。
+$PY eval/golden_fixture.py --verify >> "$LOG" 2>&1 || echo "[$TS] 真写夹具有残留或读不到公开接口（非门禁，见上面的 [fixture-leftover]/[fixture-check-failed] 行）" >> "$LOG"
 echo "--- golden set (110 条真实对话, 约 20 分钟) ---" >> "$LOG"
 # 20260924 起：给「需要真身份」的那类用例一个 uid，治那 5 条常年 SKIP（moderation_report_admin /
 # user_report_admin / 三条 *_unresolved_target_honest）。721 是**测试专用管理员账号**（不是主人

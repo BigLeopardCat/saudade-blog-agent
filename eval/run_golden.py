@@ -14,12 +14,24 @@
                 require_exec_args（执行回执里某工具某参数**等于**期望值——没有
                 producer 可挂时用，如 20260920 确定性文档锚点解析出的 id）
 
+**用例的顶层开关**（不在 `gold` 里，也不是断言——它们决定"这条用例今天跑不跑"）：
+  needs_admin_uid / needs_user_uid   需要真身份：uid 由环境变量给（用例里刻意不写 uid，
+                                     仓库是公开的）——GOLDEN_ADMIN_UID / GOLDEN_USER_UID
+  needs_real_write（20260925）       这条用例会**真写生产库**（本机即生产）⇒ 只有
+                                     GOLDEN_ALLOW_REAL_WRITE=1 时才跑，默认**关**
+  requires_fixture（20260925）       它要动的那个夹具（`agent_fixture_` 前缀族）——
+                                     不在位就响亮跳过，见 eval/golden_fixture.py
+  三者未满足都**响亮 SKIP 并计入 skipped_ids**（不静默豁免：跳过关乎通过率分母）。
+
 用法（cd saudade-blog-agent）：
   .venv/bin/python eval/run_golden.py               # 全量（本机=生产链路，耗时基线有效）
   .venv/bin/python eval/run_golden.py --limit 3     # 前 3 条（调试）
   .venv/bin/python eval/run_golden.py --only nav_friends_down
   .venv/bin/python eval/run_golden.py --only rag_python_is,rag_arch_components  # 多选（链路诊断）
   .venv/bin/python eval/run_golden.py --min-pass-rate 0.9 --skip-ids device_query  # CI 口径
+  # 真写用例（夹具先在位，见 scripts/migration/golden_write_fixture_20260925.sql）：
+  GOLDEN_ADMIN_UID=721 GOLDEN_ALLOW_REAL_WRITE=1 \
+    .venv/bin/python eval/run_golden.py --only golden_write_category_delete_exec
 退出码：0=达到 --min-pass-rate（默认 1.0，即全过）1=低于门禁
 
 **`--min-pass-rate` 的确切语义**（20260924 写清——此前只在文档里含糊带过，实际有四层）：
@@ -61,6 +73,7 @@ from agent.principal import Principal  # 管理助手用例的调用者身份（
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
 import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
+import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
 import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
 
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
@@ -92,7 +105,7 @@ def ensure_agent() -> None:
 def iter_rounds(case: dict) -> list[dict]:
     """用例 dict → **轮**的列表（20260925：多轮用例的唯一归一化点）。
 
-    单轮用例（今天 126 条里的绝大多数）没有 `rounds`，整条用例就是一个第 1 轮——
+    单轮用例（今天 127 条里的绝大多数）没有 `rounds`，整条用例就是一个第 1 轮——
     字段全在顶层，行为与 20260925 之前逐字相同。多轮用例写 `rounds`：
 
     ```json
@@ -1019,6 +1032,46 @@ def main():
             for c in cases:
                 if c.get(_marker):
                     c.setdefault("context", {})["user_id"] = int(_real_uid)
+
+    # 真写用例的两道闸（20260925）——**顺序刻意如此**：先问"谁有权触发真写"，再看前置
+    # 条件在不在。两道都不会被静默豁免（都进 skipped_ids，都打印）。
+    #
+    # ① `needs_real_write`：这条用例会**真删生产库**（本机即生产）。凡是"没人看着"的跑法
+    #    一律不许跑到它——夜间、CI、任何批量跑都是。判据 = 环境变量，**默认关**：
+    #    这不是"忘了设就跳过"的宽松，而是"默认没有许可"的严格（授权串由人来给，
+    #    与生产迁移要点名「库名+迁移文件」同源）。要跑就得在命令行上明说：
+    #       GOLDEN_ADMIN_UID=721 GOLDEN_ALLOW_REAL_WRITE=1 \
+    #         .venv/bin/python eval/run_golden.py --only golden_write_category_delete_exec
+    _REAL_WRITE_ENV = "GOLDEN_ALLOW_REAL_WRITE"
+    _need_write = [c["id"] for c in cases if c.get("needs_real_write")]
+    if _need_write and not _os.environ.get(_REAL_WRITE_ENV, "").strip():
+        skip_ids += _need_write
+        cases = [c for c in cases if not c.get("needs_real_write")]
+        for cid in _need_write:
+            print(f"[skip] {cid}: SKIP (needs {_REAL_WRITE_ENV}=1 —— 真写用例默认不自动跑)")
+    #
+    # ② `requires_fixture`：真写用例的目标是**夹具**（见 eval/golden_fixture.py 头注），
+    #    夹具不在位时跑它，红出来的是一句误导性的"站内没有叫 X 的分类"——看着像模型退化，
+    #    其实是前置条件缺失。所以先只读地问一次公开分类列表，**不在位就响亮跳过**。
+    #    `unreadable` 与 `absent` 分开报（读不到不是没有）——但两者都不跑：不知道就不动。
+    _need_fix = {c["id"]: str(c["requires_fixture"]) for c in cases if c.get("requires_fixture")}
+    if _need_fix:
+        _titles = golden_fixture.category_titles()
+        _drop: list[str] = []
+        for _cid, _fname in _need_fix.items():
+            _state = golden_fixture.fixture_state(_fname, _titles)
+            if _state == "present":
+                continue
+            _drop.append(_cid)
+            _why = ("夹具不在位（公开分类列表里没有它——先按授权串跑 "
+                    "scripts/migration/golden_write_fixture_20260925.sql）"
+                    if _state == "absent" else
+                    f"夹具在位检查读不到公开分类接口（{golden_fixture.UNREADABLE_TAG}）"
+                    "—— 不知道在不在，不跑")
+            print(f"[skip] {_cid}: SKIP ({_why})")
+        if _drop:
+            skip_ids += _drop
+            cases = [c for c in cases if c["id"] not in _drop]
     print(f"[run] {len(cases)} 条 golden 样本（真实 LLM，约 {len(cases) * 30}s）\n")
 
     results = []
