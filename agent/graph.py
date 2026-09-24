@@ -95,6 +95,7 @@ from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
                           _WRITE_NAME_TARGET_SKILLS,
                           build_planner_context, callable_query_tools,
                           instantiate_plan, visible_skills)
+from utils import trace as trace_mod
 from utils.trace import record
 
 if TYPE_CHECKING:   # 只为下面 `_principal_of` 的**字符串**注解能被静态检查看见。
@@ -4587,11 +4588,10 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 引用要走结构。解析不出 → data=None（引用它时报 ref_unparsed，不猜）。
         tool_data.append({"tool": name, "data": parse_data(str(out)),
                           "round": state.get("plan_rounds", 0)})
-        result_ = str(out)
-        # rag_search 完整落盘（行式候选已精简）——事后可分析完整候选与选择
-        # 对比，不必翻代码复现截断（20260831 事故复盘教训）
-        if name != "rag_search":
-            result_ = result_[:200]
+        # 落进 trace 的返回文本：留多长由 utils/trace.tool_result_text 一处决定
+        # （生产 200 字符、rag_search 全文、golden 轮放开——20260925 评测侧 LLM 评审员
+        # 需要有完整材料才判得出"回复有没有编材料"）
+        result_ = trace_mod.tool_result_text(str(out), name)
         record("execute", "call", name=name, args=args,
                duration_s=round(time.monotonic() - _t_tool, 3), result=result_)
         # checker 确定性验收（20260904）：PASS → 回执（系统确认事实，跨轮执行

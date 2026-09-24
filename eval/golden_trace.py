@@ -34,6 +34,7 @@ import shutil
 import time
 
 from config.settings import settings
+from utils import trace as trace_mod  # 工具返回在 trace 里留多长（写进 input 供读的人判断）
 
 ENV_RUN = "GOLDEN_TRACE_RUN"
 ENV_OFF = "GOLDEN_NO_TRACE"
@@ -93,9 +94,19 @@ def start_case(run_id: str, case_id: str, message: str = "", role: str | None = 
     from utils.trace import start_trace
 
     tid = f"{run_id}__{case_id}"
+    # tool_result_limit：**这一轮的工具返回在 trace 里被截到多少字符**。落进 trace 是为了
+    # 让读的人（尤其 `eval/llm_judge.py` 判"回复有没有编材料"）知道自己手上这份返回文本
+    # 是全文还是摘要——看不到这个数就只能靠"长度恰好等于某个整数"猜（20260925：
+    # 判官曾拿 200 字符的摘要当完整材料，把文章里真有的「第 3.3 节」判成编造）。
+    # 取不到（未设）= 生产默认 200，与 utils/trace.tool_result_text 同源。
+    try:
+        _lim = int(os.environ.get(trace_mod.TOOL_RESULT_LIMIT_ENV)
+                   or trace_mod.TOOL_RESULT_LIMIT_DEFAULT)
+    except ValueError:
+        _lim = trace_mod.TOOL_RESULT_LIMIT_DEFAULT
     start_trace(tid, 0, "golden_thread",
                 {"golden": True, "run": run_id, "case": case_id, "role": role,
-                 "message": (message or "")[:200]},
+                 "message": (message or "")[:200], "tool_result_limit": _lim},
                 dir=case_dir(run_id), name=case_id)
     return tid
 
