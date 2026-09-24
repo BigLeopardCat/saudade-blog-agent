@@ -239,3 +239,32 @@ def verify(token: str, uid: int, conv_id) -> dict | None:
     if not payload.get("skill") or not isinstance(payload.get("specs"), list):
         return None
     return payload
+
+
+def inspect(token: str) -> dict | None:
+    """**只解载荷，不验签**：读一眼这张令牌里装了哪个技能、哪些参数；解不出 → `None`。
+
+    ⚠️ **任何授权判据不得调用本函数。** 「解得出载荷」与「这张令牌可信」是两件毫不
+    相干的事：载荷就是 `base64(JSON)`，谁都能造一张出来；本函数刻意不比对签名、不看过期、
+    不看 uid/会话绑定。授予执行的唯一入口是 `verify()`——它验签失败一律 `None`，
+    而本函数对同一张伪造令牌会**高高兴兴地**把 payload 还给你。
+
+    存在的理由只有两个，都发生在**令牌刚由本进程签发之后、还没离开可信边界**时：
+      · 评测：`eval/run_golden.py` 用它读第一轮控制帧里的令牌，断言"卡片上问的技能与
+        参数可溯源"（`require_confirm_payload`）。评测若走 `verify()`，就得在跑法里
+        复刻一份 uid/会话/时钟上下文，那是把授权判据搬到测试里——方向反了。
+      · 排障：手工看一眼刚签出来的令牌里写了什么（令牌本身绝不进日志，见模块头注）。
+
+    这条边界有**单测机械守着**（`tests/test_confirm.py` 第 ⑨ 节源码扫描）：`agent/`、
+    `tools/`、`server.py` 三处生产代码里出现任何一次调用即判红。
+    """
+    if not token or not isinstance(token, str):
+        return None
+    parts = token.split(".")
+    if len(parts) != 2:
+        return None
+    try:
+        payload = json.loads(_b64d(parts[0]).decode())
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None

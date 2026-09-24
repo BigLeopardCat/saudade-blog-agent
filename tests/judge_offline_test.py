@@ -30,7 +30,11 @@ GOLDEN = os.path.join(EVAL, "golden", "basic.jsonl")
 GOLD = {}
 for line in open(GOLDEN):
     d = json.loads(line)
-    GOLD[d["id"]] = d["gold"]
+    # 取第 1 轮的 gold（`rg.first_gold`）：多轮用例（20260925 双轮）的 gold 写在各轮里、
+    # 顶层**没有** `gold` 键，直接下标会在 import 期 KeyError。本文件按 id 合成结果跑
+    # check_gold，天然只对应第 1 轮；逐轮判据的锁在 tests/test_golden_keys.py 与
+    # tests/golden_rerun_offline_test.py 那两处。
+    GOLD[d["id"]] = rg.first_gold(d)
 
 CH = "challenge_claim_phantom_nav"
 EX = "exec_memory_none_honest"

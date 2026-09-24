@@ -54,13 +54,17 @@ GOLDEN_RUN = golden_trace.resolve_run_id() if _TRACE_ON else None
 if GOLDEN_RUN:
     os.environ[golden_trace.ENV_RUN] = GOLDEN_RUN
 
-def run_case(case: dict, suffix: str = "") -> dict:
+def spawn_case(case: dict, suffix: str = "") -> dict:
     """跑一条用例（独立子进程），返回结果 dict。
 
     `suffix` 追加到 trace 用例名上（20260924）：回归组首跑红要重跑一次，两次必须落
     **两份** trace——同名文件会把首跑那份覆盖掉，而"首跑为什么红"正是复跑要回答的。
     复跑同样走独立子进程（与首跑同一条链路），否则"两个跑法结论不同"那个老坑会以
     "进程内复跑 vs 隔离复跑"的形式重演。
+
+    **20260925 改名（原 `run_case`）**：轮次驱动（发几轮、第 2 轮怎么带令牌）现在只有
+    一份实现，在 `run_golden.run_case`，由子进程调用；本函数只是"spawn 一个进程"这层
+    壳。两个不同的东西共用一个名字，正是"两个跑法悄悄各跑一套"最容易发生的地方。
     """
     cid = case["id"]
     json.dump(case, open(f"{TMPDIR}/{cid}.json", "w", encoding="utf-8"), ensure_ascii=False)
@@ -100,7 +104,7 @@ results, failed, timed_out = [], 0, []
 t_all = time.time()
 for i, case in enumerate(CASES, 1):
     cid = case["id"]
-    r = run_case(case)
+    r = spawn_case(case)
     if r.pop("_timeout", False):
         timed_out.append(cid)
     # tags 落进结果（20260924）：回归组的分组判据要用它，报告里也该看得见（哪条是回归题）
@@ -124,7 +128,7 @@ for r in results:
         r["rerun"] = None
         r["final_ok"] = r["ok"]
         continue
-    rr = run_case(case, "_rerun")
+    rr = spawn_case(case, "_rerun")
     rr.pop("_timeout", None)
     r["rerun"] = rr
     r["final_ok"] = r["ok"] or rr["ok"]
