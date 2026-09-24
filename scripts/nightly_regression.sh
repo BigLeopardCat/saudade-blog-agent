@@ -81,7 +81,10 @@ $PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED
 # 拿生产那 200 字符截断当材料会把"文章里真有"的内容判成编造；判官认出截断会响亮警告。
 # 跑在 golden 之后、不传 --traces（默认取最新一轮 = 刚那一轮）。
 echo "--- 回复出处评审 (LLM-as-judge, 约 10 分钟, 非门禁) ---" >> "$LOG"
-$PY eval/llm_judge.py >> "$LOG" 2>&1 || echo "[$TS] llm_judge 运行异常（非门禁，看 eval/report/judge_*.md）" >> "$LOG"
+# PYTHONUNBUFFERED 必须留着（20260925 实测）：stdout 重定向到文件时 Python 默认**块缓冲**，
+# 这一步要跑十分钟，块缓冲的表现是"日志里什么都没有、报告却已经写完"——中途想看一眼进度
+# 只能看到空文件（实测过一次，误判成"跑了 0 字节"）。加它只影响缓冲、不改判据。
+PYTHONUNBUFFERED=1 $PY eval/llm_judge.py >> "$LOG" 2>&1 || echo "[$TS] llm_judge 运行异常（非门禁，看 eval/report/judge_*.md）" >> "$LOG"
 # 20260912 起：语义告警巡检（非门禁——只记录不置失败标记，避免与 golden 门禁混同）
 echo "--- trace 语义告警 (近 7 天真实对话, 巡检非门禁) ---" >> "$LOG"
 $PY eval/trace_alert.py --days 7 >> "$LOG" 2>&1 || echo "[$TS] trace_alert 运行异常（不影响门禁）" >> "$LOG"
