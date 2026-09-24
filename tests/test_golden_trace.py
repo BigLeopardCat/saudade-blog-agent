@@ -121,8 +121,9 @@ print("\n③ 接线与清理")
 src_run = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
 src_runner = (ROOT / "eval" / "golden_case_runner.py").read_text(encoding="utf-8")
 src_full = (ROOT / "eval" / "golden_full_run.py").read_text(encoding="utf-8")
-check("run_golden.py 逐条传 trace_ctx（run + case）",
-      'trace_ctx={"run": run_id, "case": case["id"]}' in src_run)
+check("run_golden.py 逐条传 trace_ctx（run + case + 复跑后缀）",
+      'trace_ctx=({"run": run_id, "case": case["id"] + suffix} if run_id else None)' in src_run
+      and "def run_case(case: dict, *, run_id: str = \"\", suffix: str = \"\")" in src_run)
 check("run_golden.py 每条用例的 trace 路径进了报告",
       '"trace": result.get("trace")' in src_run)
 check("run_golden.py 报告的 trace_run/trace_dir 从**实际落盘路径**反推",
@@ -133,8 +134,9 @@ check("run_golden.py 收尾调 prune（keep 可配，默认取 KEEP_DEFAULT）",
       and "--keep-traces" in src_run and "--no-trace" in src_run)
 check("进度打印里红条带 trace 路径（红了照着读，不再靠复采样猜）",
       'print(f"          └ trace: {result[\'trace\']}")' in src_run)
-check("隔离跑法：子进程按父进程给的 run_id 落同一目录",
-      "golden_trace.resolve_run_id()" in src_runner and "trace_ctx=" in src_runner)
+check("隔离跑法：子进程按父进程给的 run_id 落同一目录（轮次驱动统一走 run_golden.run_case）",
+      "golden_trace.resolve_run_id()" in src_runner
+      and "run_golden.run_case(case, run_id=run_id, suffix=suffix)" in src_runner)
 check("隔离跑法：父进程定 run_id 并 prune + 报告带 trace_run",
       "os.environ[golden_trace.ENV_RUN] = GOLDEN_RUN" in src_full
       and "golden_trace.prune()" in src_full and '"trace_run": GOLDEN_RUN' in src_full)
@@ -150,11 +152,11 @@ src_runner_case = (ROOT / "eval" / "golden_case_runner.py").read_text(encoding="
 check("run_golden.py 对首跑红的回归用例复跑一次（按 tags 挑，不重跑能力题）",
       '_rerun_ids = [r["id"] for r in results' in src_run
       and 'and "regression" in (r.get("tags") or [])' in src_run
-      and '_rr = run_one(build_request(_case), build_principal(_case),' in src_run)
+      and '_rr = run_case(_case, run_id=run_id, suffix="__rerun")' in src_run)
 check("run_golden.py 复跑落**另一份** trace（`__rerun` 后缀，首跑的证据不被覆盖）",
-      'trace_ctx={"run": run_id, "case": f"{r[\'id\']}__rerun"}' in src_run
+      'suffix="__rerun"' in src_run
       and 'sys.argv[3] if len(sys.argv) > 3 else ""' in src_runner_case
-      and 'trace_ctx={"run": run_id, "case": case["id"] + suffix}' in src_runner_case)
+      and 'run_golden.run_case(case, run_id=run_id, suffix=suffix)' in src_runner_case)
 check("run_golden.py 判据用复跑后的终判（final_ok），首跑红另计 failed_first_run",
       'r["final_ok"] = r["ok"] or _rok' in src_run
       and '"failed_first_run": failed_first' in src_run
@@ -165,7 +167,7 @@ check("run_golden.py 复跑绿进 flaked_ids + 出声（放行但不静默宽恕
       and '_reg_flaked = [r["id"] for r in _reg if not r["ok"] and r.get("final_ok")]' in src_run
       and "复跑才绿" in src_run)
 check("隔离跑法同款：复跑仍走独立子进程 + 报告带 regression 块与 flaked_ids",
-      'rr = run_case(case, "_rerun")' in src_full
+      'rr = spawn_case(case, "_rerun")' in src_full
       and '"flaked_ids": _reg_flaked' in src_full
       and '"failed_first_run": failed_first' in src_full
       and '"all_passed": not _reg_bad' in src_full)

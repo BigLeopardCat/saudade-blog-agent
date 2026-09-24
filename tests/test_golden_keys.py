@@ -8,10 +8,10 @@
 三向交叉（硬编码表负责语义分类，反射负责防漂移，两者互为对方的哨兵）：
   ① **代码 → 表**：扫 `eval/run_golden.py` / `eval/golden_case_runner.py` 源码里所有
      `gold.get("X")` / `gold["X"]` / `g.get("X")` / `g["X"]` 字面量，必须都在
-     `GOLD_ASSERT_KEYS ∪ GOLD_REQUEST_KEYS` 里（新读一个键却没改表 ⇒ 红）。
+     `GOLD_ASSERT_KEYS ∪ GOLD_REQUEST_KEYS ∪ GOLD_ROUND_KEYS` 里（新读一个键却没改表 ⇒ 红）。
   ② **表 → 代码**：表里每个键必须真在源码里被读（删了实现却留着表项 ⇒ 红）。
-  ③ **用例 → 三类之并**：逐条扫 `eval/golden/basic.jsonl`，每个 gold 键必须属于
-     断言键 / 请求键 / 注释键之一（`note` 这种拼错的第三个名字 ⇒ 红，并点名是哪条用例）。
+  ③ **用例 → 四类之并**：逐条扫 `eval/golden/basic.jsonl`，每个 gold 键必须属于
+     断言键 / 请求键 / 注释键 / 轮次键之一（`note` 这种拼错的第三个名字 ⇒ 红，并点名是哪条用例）。
 另加一条**动态取键**的守卫：源码里任何 `g.get(` / `gold[` 后面不跟字符串字面量的写法，
 都会让上面三条全部失效（键名在运行期才知道，反射扫不到）——一律判红，要求改成字面量。
 
@@ -54,7 +54,7 @@ _LITERAL = (
 # 非字面量取键：`g.get(` 后面不是引号 ⇒ 键名运行期才知道，反射扫不到。
 _DYNAMIC = re.compile(r"""\b(?:gold|g)\.get\(\s*[^"'\s)]|\b(?:gold|g)\[\s*[^"'\]]""")
 
-KNOWN = rg.GOLD_ASSERT_KEYS | rg.GOLD_REQUEST_KEYS
+KNOWN = rg.GOLD_ASSERT_KEYS | rg.GOLD_REQUEST_KEYS | rg.GOLD_ROUND_KEYS
 
 
 def scan_keys(text: str) -> set[str]:
@@ -83,14 +83,25 @@ check("GOLD_ASSERT_KEYS 无孤儿", rg.GOLD_ASSERT_KEYS <= _read,
       f"未被读：{sorted(rg.GOLD_ASSERT_KEYS - _read)}")
 check("GOLD_REQUEST_KEYS 无孤儿", rg.GOLD_REQUEST_KEYS <= _read,
       f"未被读：{sorted(rg.GOLD_REQUEST_KEYS - _read)}")
-check("三类键互不重叠（一个键只能属于一类，否则「是哪一类」没有答案）",
-      not (rg.GOLD_ASSERT_KEYS & rg.GOLD_REQUEST_KEYS
-           or rg.GOLD_ASSERT_KEYS & rg.GOLD_COMMENT_KEYS
-           or rg.GOLD_REQUEST_KEYS & rg.GOLD_COMMENT_KEYS))
+# 轮次键（`round`/`confirm_message`）与请求键同款：它们真被读，只是读的地方是轮次驱动
+# （`run_case` 逐轮归一 gold），不是 `check_gold`。
+check("GOLD_ROUND_KEYS 无孤儿", rg.GOLD_ROUND_KEYS <= _read,
+      f"未被读：{sorted(rg.GOLD_ROUND_KEYS - _read)}")
+_TABLES = {
+    "GOLD_ASSERT_KEYS": rg.GOLD_ASSERT_KEYS,
+    "GOLD_REQUEST_KEYS": rg.GOLD_REQUEST_KEYS,
+    "GOLD_ROUND_KEYS": rg.GOLD_ROUND_KEYS,
+    "GOLD_COMMENT_KEYS": rg.GOLD_COMMENT_KEYS,
+}
+_overlap = [f"{a}∩{b}={sorted(_TABLES[a] & _TABLES[b])}"
+            for i, a in enumerate(_TABLES) for b in list(_TABLES)[i + 1:]
+            if _TABLES[a] & _TABLES[b]]
+check("四类键互不重叠（一个键只能属于一类，否则「是哪一类」没有答案）",
+      not _overlap, "；".join(_overlap))
 check("注释键只有 `_note` 一个", rg.GOLD_COMMENT_KEYS == {"_note"},
       str(sorted(rg.GOLD_COMMENT_KEYS)))
 
-print("\n③ 逐条扫用例文件：每个 gold 键都属于三类之一")
+print("\n③ 逐条扫用例文件：每个 gold 键都属于四类之一")
 CASES_FILE = ROOT / "eval/golden/basic.jsonl"
 _lines = [ln for ln in CASES_FILE.read_text(encoding="utf-8").splitlines() if ln.strip()]
 _cases = [json.loads(ln) for ln in _lines]

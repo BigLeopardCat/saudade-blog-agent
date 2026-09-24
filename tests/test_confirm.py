@@ -608,6 +608,66 @@ check("  签名正确但版本为 1 的令牌验不过（旧令牌一律失效�
 settings.jwt_secret = _SAVED_SECRET
 
 print()
+print("⑨ 只读解载荷 `inspect` 的信任等级（20260925）：它绝不许出现在授权路径上")
+# 为什么要有这一节：评测要读第一轮那张卡片的令牌里装了什么（技能/参数），读法不能走
+# `verify()`——那需要复刻 uid/会话/时钟上下文，等于把授权判据搬进测试。于是有了
+# `inspect()`（只解 base64、不验签）。风险也随之而来：它与 `verify()` 长得像，将来
+# 有人在授权分支里误用它，令牌就变成了"谁都能造一张、造了就能兑现"。
+# 三层锁：① 它对**伪造令牌**照样给载荷（把危险写明白，别指望读代码的人自己发现）；
+# ② 对坏输入不抛；③ **源码扫描**——生产三处（agent/、tools/、server.py）出现任何一次
+# 调用即判红。③ 才是真闸：①② 是能力，③ 是接线（"能力有测试 ≠ 接线有测试"）。
+settings.jwt_secret = _STUB_SECRET
+_ins = confirm.sign(7, 42, "tag_create", [{"tool": "create_tag_one", "args": {"name": "X"}}])
+_pay = confirm.inspect(_ins)
+check("解得出技能与参数（评测据此断言'卡片上的问法与参数可溯源'）",
+      isinstance(_pay, dict) and _pay.get("skill") == "tag_create"
+      and _pay.get("specs") == [{"tool": "create_tag_one", "args": {"name": "X"}}],
+      str(_pay)[:120])
+# 伪造令牌：签名段乱写、甚至整个换掉——inspect 照样给载荷。这条断言的作用是**把
+# '它不验签'这件事写进测试**，而不是缺陷：谁将来想在授权分支里用它，先读这里。
+_forged = _ins.split(".")[0] + "." + confirm._b64e(b"whatever")
+check("**对伪造签名的令牌照样返回载荷**（这就是它不能进授权路径的原因）",
+      (confirm.inspect(_forged) or {}).get("skill") == "tag_create"
+      and confirm.verify(_forged, 7, 42) is None)
+check("  坏输入给 None、不抛（排障时手滑贴了半截令牌不该炸）",
+      confirm.inspect("") is None and confirm.inspect("x.y.z") is None
+      and confirm.inspect(None) is None and confirm.inspect("没有点号") is None)
+
+_INSPECT_CALL = re.compile(r"(?<![\w])(?:confirm\.)?inspect\s*\(")
+
+
+def _looks_like_inspect_call(ln: str) -> bool:
+    """这一行是不是在**调用**只读解载荷那个 `inspect`（而不是定义它/stdlib 反射）。
+
+    判据只认"`inspect(`"或"`confirm.inspect(`"，并且排除注释行与 `def inspect(`——
+    stdlib 的 `inspect.getsource(x)` 因为 `(` 不紧跟 `inspect` 天然不命中。
+    抽成函数是为了让"零引用"这条断言**自己也被验一次**（见下面"有牙齿"那条）：
+    否则一个恒假的扫描器会安静地报"零引用"，而那正是它想防的假绿。
+    """
+    s = ln.strip()
+    if s.startswith("#") or s.startswith("def inspect("):
+        return False
+    return bool(_INSPECT_CALL.search(ln))
+
+
+_scan_targets = [ROOT / "server.py"] + sorted((ROOT / "agent").rglob("*.py")) \
+    + sorted((ROOT / "tools").rglob("*.py"))
+_hits = []
+for _p in _scan_targets:
+    for _i, _ln in enumerate(_p.read_text(encoding="utf-8").splitlines(), 1):
+        if _looks_like_inspect_call(_ln):
+            _hits.append(f"{_p.relative_to(ROOT)}:{_i}")
+check(f"  源码扫描：生产代码（server.py + agent/ + tools/ 共 {len(_scan_targets)} 个文件）零引用",
+      not _hits, "；".join(_hits[:5]))
+check("  扫描器本身有牙齿（含调用的样本行命中、定义行/stdlib 反射不命中——否则'零引用'是恒真假绿）",
+      _looks_like_inspect_call("    x = confirm.inspect(tok)")
+      and _looks_like_inspect_call("payload = inspect(token)")
+      and not _looks_like_inspect_call("def inspect(token):")
+      and not _looks_like_inspect_call("    # 见 confirm.inspect(token) 的说明")
+      and not _looks_like_inspect_call("    return inspect.getsource(obj)"))
+settings.jwt_secret = _SAVED_SECRET
+
+print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
     sys.exit(1)

@@ -56,6 +56,7 @@ from concurrent.futures import ThreadPoolExecutor
 import server
 from server import ChatRequest, _build_messages, _run_agent_stream_to_queue
 from agent import create_agent
+from agent import confirm  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
@@ -88,7 +89,85 @@ def ensure_agent() -> None:
         print(f"[init] 编译图构建完成：{time.time() - t0:.1f}s")
 
 
-def build_request(case: dict) -> ChatRequest:
+def iter_rounds(case: dict) -> list[dict]:
+    """用例 dict → **轮**的列表（20260925：多轮用例的唯一归一化点）。
+
+    单轮用例（今天 126 条里的绝大多数）没有 `rounds`，整条用例就是一个第 1 轮——
+    字段全在顶层，行为与 20260925 之前逐字相同。多轮用例写 `rounds`：
+
+    ```json
+    "rounds": [
+      {"round": 1, "user_input": "那个叫「X」的分类我不需要了，清理掉吧",
+       "gold": {"require_frame_prefix": ["__CONFIRM__:"], "require_zero_exec": true}},
+      {"round": 2, "confirm_message": "确认执行：删除分类「X」",
+       "gold": {"round": 2, "require_exec_tools": ["delete_category"]}}
+    ]
+    ```
+
+    **为什么要归一**：轮次顺序决定第 2 轮能不能拿到第 1 轮的令牌，而"顺序"这件事
+    在三处都要一致（进程内跑法、隔离子进程、逐轮判据）。散着写就会出现"某个跑法按
+    另一套顺序读"的漂移——`build_request` 那份字段表漂移过（见其 docstring），
+    这里是同一个坑的第二形态。
+    """
+    rounds = case.get("rounds")
+    if rounds:
+        out = []
+        for i, r in enumerate(rounds, 1):
+            out.append({
+                "round": int(r.get("round", i)),
+                "gold": r.get("gold") or {},
+                "confirm_message": r.get("confirm_message", ""),
+                "user_input": r.get("user_input", case.get("user_input", "")),
+                # 轮级 context 覆盖用例级（追问轮常需要补 history/executions）
+                "context": {**(case.get("context") or {}), **(r.get("context") or {})},
+            })
+        return out
+    g = case.get("gold") or {}
+    return [{"round": int(g.get("round", 1)), "gold": g,
+             "confirm_message": g.get("confirm_message", ""),
+             "user_input": case.get("user_input", ""),
+             "context": case.get("context") or {}}]
+
+
+def redact_frames(frames: list) -> list:
+    """落盘用的控制帧副本：把帧体里的**凭据**（`token`）换成占位符。
+
+    `__CONFIRM__`（弹卡）与 `__PENDING__`（跨轮待办）的帧体里带**完整令牌**，而令牌是
+    一张 10 分钟有效的写授权——签名就在里面（见 agent/confirm.py 头注）。报告是给人读的
+    现场，读的人不需要凭据，留着只是在生产机上多存一份可用授权（同 server.py 只记布尔
+    `has_confirm`、令牌绝不进日志/trace 的纪律）。
+
+    **只用于构造报告条目，判据侧不受影响**：判据读的是内存里那份（`run_one` 的返回），
+    两个调用点都在判完之后。要"卡片问了什么"看 `confirm_payloads`（解开的载荷，无签名）。
+    """
+    out = []
+    for f in frames or []:
+        prefix, sep, body = f.partition(":") if isinstance(f, str) else ("", "", "")
+        if sep and prefix in ("__CONFIRM__", "__PENDING__"):
+            try:
+                obj = json.loads(body)
+            except Exception:
+                obj = None
+            if isinstance(obj, dict) and obj.get("token"):
+                obj["token"] = "<redacted>"
+                out.append(f"{prefix}:{json.dumps(obj, ensure_ascii=False)}")
+                continue
+        out.append(f)
+    return out
+
+
+def first_gold(case: dict) -> dict:
+    """第 1 轮的 gold——**只给归因用**（`requires_tools`：这条用例属工具类还是非工具类）。
+
+    为什么要有这个小函数：多轮用例把 gold 写在各轮里，顶层**没有** `gold` 键，直接取
+    就 KeyError（双轮支持落地时实测踩到）。归因只该看第 1 轮（"这条用例要求过工具调用吗"
+    问的是用例形态，不是末轮），而答案的取法两处（`main` 与 `golden_case_runner`）必须
+    一样——所以留一个具名入口，而不是两处各写一遍同样的下标。
+    """
+    return iter_rounds(case)[0]["gold"]
+
+
+def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
     """用例 dict → ChatRequest。**两个跑法（本脚本 / golden_case_runner.py）共用的唯一构造点**。
 
     20260920：进程隔离跑法（golden_full_run.py → golden_case_runner.py）此前自己手写了一份
@@ -96,11 +175,15 @@ def build_request(case: dict) -> ChatRequest:
     「执行记忆 / 实体摘要」用例在隔离跑法下**必然假失败**（模型看不到 recent_executions，
     如实答"没有执行记录"/重跑工具）。同一份用例两个跑法结论不同的根因就是这份复制粘贴——
     字段表只留这一处，再不许各自维护。
+
+    `rnd`（20260925）：`iter_rounds` 给的那一轮；不给 = 第 1 轮（既有调用点一个都不改）。
     """
-    g = case["gold"]
-    ctx = case.get("context", {})
+    if rnd is None:
+        rnd = iter_rounds(case)[0]
+    g = rnd["gold"]
+    ctx = rnd["context"]
     return ChatRequest(
-        message=case["user_input"],
+        message=rnd["user_input"],
         image=case.get("image", []),  # 多模态：dataURL 数组（image_color_red 等用例；服务端兼容单串）
         current_url=ctx.get("current_url", "/"),
         page_title=ctx.get("page_title", ""),
@@ -117,6 +200,10 @@ def build_request(case: dict) -> ChatRequest:
         # 与 executions 合一成"确认与执行事实"块，见 server._ledger_block）——
         # 用例带了才能在 golden 里跑到那条路径（gate 洞⑦ 的判据也看这一半）。
         pending_action=ctx.get("pending_action", ""),
+        # 会话 id（20260925 双轮）：令牌把 `conv` 签进签名（agent/confirm.py），
+        # 签发那一轮与兑现那一轮的会话必须一致。用例不写 = None（两轮都是 None，
+        # 同样自洽）；写了就照抄进两轮——这正是生产上"同一张卡片"的坐标。
+        conversation_id=ctx.get("conversation_id"),
     )
 
 
@@ -137,14 +224,30 @@ def build_principal(case: dict) -> "Principal":
 
 
 def run_one(req: ChatRequest, principal: "Principal | None" = None,
-            trace_ctx: dict | None = None) -> dict:
+            trace_ctx: dict | None = None, *,
+            confirm_token: str = "") -> dict:
     """跑一轮真实对话（内部链路），从帧流提取最终文本 / 命令帧 / 事件。
 
     `trace_ctx`（20260922）：`{"run": <run_id>}` 时给这一轮落一份 trace（见
     eval/golden_trace.py，落 golden_traces/<run_id>/<case_id>.json）。**start 必须在
     这里、在把活儿提交给线程池之前**——recorder 靠 contextvar + copy_context 传进
     producer 线程，晚一步落下来的就是空壳。
+
+    `confirm_token`（20260925）：非空即"这一轮是点了确定那一跳"——照 `/chat/stream`
+    的接线原样走：**验签在这里**（`confirm.verify`，令牌是唯一凭据）→ 验不过就
+    **零执行**、连图都不进（否则会照着 message 文本重新规划，那正是要避免的"再走
+    一轮对话"）→ 验过了才把 payload 传给 `_build_messages` 与图。
     """
+    confirm_grant = None
+    if confirm_token:
+        uid = principal.uid if principal is not None else req.user_id
+        confirm_grant = confirm.verify(confirm_token, uid, req.conversation_id)
+        if confirm_grant is None:
+            return {"text": "", "commands": [], "tool_calls": [], "frames": [],
+                    "exec_rows": [], "exec_tools": [], "tool_rounds": 0,
+                    "trace": None, "resets": 0, "resets_reasons": [],
+                    "confirm_tokens": [], "confirm_payloads": [],
+                    "error": "确认令牌验签失败（零执行）—— 用例里的令牌/uid/会话不自洽"}
     trace_id = None
     t_trace0 = time.monotonic()
     if trace_ctx:
@@ -175,11 +278,18 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     # trace recorder 进不了 producer 线程：落下来的是一份只有元数据的**空壳 trace**，
     # 而"评测有 trace 了"看起来完全正常（实测踩到，靠 golden_trace 的空事件警告抓出）。
     ctx = contextvars.copy_context()
+    # 传给图的后四个参数照 `/chat/stream`（server.py 的 producer 调用）逐字对齐：
+    # grant（已验签 payload）/ conversation_id（令牌的签发维度）/ ledger（台账事实，
+    # **必须在这里算**——`req` 只活在这个作用域里，写进被调函数就是 20260924 那次
+    # 流式路径 NameError 的形状）。golden 与生产的接线只该有这一处差异：生产拿 req
+    # 从 HTTP 来，golden 拿 req 从用例来。
+    _ledger = server._ledger_for_graph(req, confirmed=bool(confirm_grant))
     with ThreadPoolExecutor(max_workers=1) as ex:
         ex.submit(
             ctx.run, _run_agent_stream_to_queue,
-            _build_messages(req), "golden_thread", queue, loop, req.user_id,
-            None, principal,
+            _build_messages(req, confirm_grant=confirm_grant), "golden_thread", queue,
+            loop, req.user_id, None, principal, confirm_grant, req.conversation_id,
+            _ledger,
         ).result()
     t.join()
     loop.close()
@@ -242,13 +352,131 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             # 其余控制帧（今天只有 __CONFIRM__:）——没有专门分支的走这里收原文，
             # 否则新帧类型在 golden 里静默不可见（"断言写不出来"= 回归测不到）。
             control_frames.append(item)
+    # 确认令牌（20260925 双轮）：从 `__CONFIRM__` 控制帧里取**原文**——帧体是
+    # server 发出来的权威形态（`token` 字段，见 server.py 的 `__CONFIRM__` 帧体），
+    # 评测侧**不自己拼 base64、也不自己造令牌**：造得出来就说明它在被测链路之外，
+    # 那测的就不是"系统弹的这张卡"。`inspect` 只解载荷（不验签，见其 docstring），
+    # 给 `require_confirm_payload` 断言用。
+    confirm_tokens, confirm_payloads = [], []
+    for f in control_frames:
+        if not f.startswith("__CONFIRM__:"):
+            continue
+        try:
+            tk = str((json.loads(f[len("__CONFIRM__:"):]) or {}).get("token") or "")
+        except Exception:
+            tk = ""
+        if tk:
+            confirm_tokens.append(tk)
+            confirm_payloads.append(confirm.inspect(tk) or {})
     return {"text": final_text, "commands": commands, "tool_calls": tool_calls,
             "frames": control_frames,
             "exec_rows": exec_rows,
             "exec_tools": [r.get("tool", "") for r in exec_rows],
             "tool_rounds": tool_rounds,
             "trace": trace_path,
+            "confirm_tokens": confirm_tokens,
+            "confirm_payloads": confirm_payloads,
             "resets": resets, "resets_reasons": resets_reasons, "error": error}
+
+
+def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
+    """跑完一条用例的**全部轮次**——**唯一的多轮驱动**（20260925）。
+
+    20260925 之前，`run_one` 只发一轮，于是 11 条弹卡用例**全部只到"弹了卡 + 零写"**：
+    确认轮的执行（写工具真跑、回执落库）在评测里**没有任何覆盖**（G1 空白）。结构上也
+    走不到——没有第二轮的驱动器。这里就是那个驱动器，且**只有这一个**：
+
+      · 主脚本 `main()` 逐条调它；
+      · 隔离子进程 `golden_case_runner.py` 也调它（父进程只负责 spawn，见 golden_full_run）；
+      · 第 2 轮的令牌**取自上轮控制帧**（`__CONFIRM__` 的 `token` 字段）。
+
+    **为什么"唯一"是重点**：两轮之间的耦合（令牌来自上一轮、会话 id 必须一致、第 2 轮
+    不许重新规划）都是"顺序"这件事的产物。两处各写一份 ⇒ 早晚出现"进程内跑法把第 2 轮
+    当普通请求发出去"（令牌丢失、planner 重新采样、用例时绿时红）——`build_request` 的
+    字段表漂移过一次，这里是同一个坑的第二形态。
+
+    返回值 = 末轮的扁平结果（键与 `run_one` 逐字相同，报告字段表不破）+ 两个新字段：
+      · `rounds`：逐轮留档（每轮 = `run_one` 的 result + `round`/`elapsed` + `fails`；
+        其中 `fails` 只装**驱动层**的失败，由 `check_case` 聚合，判据侧不往里写）；
+      · `confirm_tokens`/`confirm_payloads`：**末轮**的（`run_one` 已给）。
+    """
+    rounds = iter_rounds(case)
+    principal = build_principal(case)
+    conv_id = (case.get("context") or {}).get("conversation_id")
+    done: list[dict] = []
+    prev_token = ""
+    for i, rnd in enumerate(rounds):
+        if i > 0 and not prev_token:
+            # 上一轮没签出令牌 ⇒ **这一轮不发**。这不是保守，是必须：rounds 里的第 2 轮
+            # 消息是合成命令式文本（「确认执行：…」），而"同轮命令即确认"是写路径的一条
+            # 真放行通道（见 agent/authz）——把它当普通轮发出去，可能**另找一条路把写做掉**，
+            # 那这轮评测就反过来在真库里执行了一次未授权写入。要的是"响亮失败"。
+            # 记在上一轮上、由 `check_case` 聚合（轮数不符那条也会带上原因，见其实现）。
+            done[-1]["fails"].append(
+                f"没有签出确认令牌（第 {rnd['round']} 轮无令牌可发）⇒ 这一轮不发，失败，不降级")
+            break
+        req = build_request(case, rnd)
+        # 第 2 轮起：合成消息（生产上前端发的是「确认执行：<卡面摘要>」）+ 上一轮的令牌。
+        # **不重新规划**是令牌本身的性质（graph 见 grant 直接走执行轮），这里不额外判。
+        if i > 0:
+            req.message = rnd.get("confirm_message") or "确认执行"
+            req.confirm_token = prev_token
+        t0 = time.time()
+        res = run_one(req, principal,
+                      trace_ctx=({"run": run_id, "case": case["id"] + suffix} if run_id else None),
+                      confirm_token=req.confirm_token)
+        res["round"] = rnd["round"]
+        res["elapsed"] = round(time.time() - t0, 1)
+        res["fails"] = []
+        done.append(res)
+        prev_token = (res.get("confirm_tokens") or [""])[0]
+    flat = dict(done[-1])
+    flat["rounds"] = done
+    flat["conversation_id"] = conv_id
+    return flat
+
+
+def check_case(case: dict, run_result: dict, *, docs=None) -> list[str]:
+    """逐轮判据（20260925）。单轮用例 = 今天的行为（等价于 `check_gold(case["gold"], r)`）。
+
+    判据按轮**分开**判，因为两轮的期望是**对立**的：第 1 轮必须"零执行"（只弹卡），
+    第 2 轮必须"真执行"。把两轮的结果合成一个扁平对象再判，`require_zero_exec` 与
+    `require_exec_tools` 会互相打架——那正是这次要修的东西（11 条弹卡用例此前只有
+    `forbid_tool_calls`，它不是"零执行"的正面断言）。
+
+    `"round"` 键（写在各轮 gold 里）在这里被**校验**：它必须等于该轮在 `rounds` 里的
+    序号——gold 抄错行/顺序贴反时，判据会红在"这一轮的 gold 不是给这一轮的"上，而不是
+    红在某个莫名其妙的断言上。
+
+    `run_result["rounds"][i]["fails"]` 是**驱动层**的失败（`run_case` 写进去的，例如
+    "上一轮没签出令牌所以这一轮没发"）。它也在本函数里聚合——报告与退出码只认这里的
+    返回，"驱动报了错却不聚合"等于安静地放过一条。
+    """
+    fails: list[str] = []
+    rounds = iter_rounds(case)
+    got = run_result.get("rounds") or [run_result]
+    if len(got) != len(rounds):
+        # 轮数不符有自己的红，但**原因**往往在驱动层（"第 2 轮没发"），一并带出来，
+        # 否则读报告的人只知道"少跑了一轮"。
+        head = [f"轮数不符：用例声明 {len(rounds)} 轮，实际跑了 {len(got)} 轮"]
+        for res in got:
+            head += [f"[驱动] {f}" for f in (res.get("fails") or [])]
+        return head
+    for i, (rnd, res) in enumerate(zip(rounds, got)):
+        # 驱动层失败（`run_case` 自己判出来、写进 `res["fails"]` 的那些，例如"上一轮
+        # 没签出令牌"）：**必须在这里聚合**——报告与退出码只认本函数的返回，驱动报了
+        # 错却不聚合，就是"错报出来了、用例照样绿"。
+        for f in (res.get("fails") or []):
+            fails.append(f"[第 {i + 1} 轮] {f}")
+        label = rnd.get("gold", {}).get("round", rnd["round"])
+        if int(label) != int(rnd["round"]):
+            fails.append(f"[第 {rnd['round']} 轮] gold 的 round={label} 与轮次不符"
+                         "（gold 贴错了行）")
+        for f in check_gold(rnd["gold"], res, docs=docs):
+            fails.append(f"[第 {i + 1} 轮] {f}")
+        if res.get("error"):
+            fails.append(f"[第 {i + 1} 轮] error: {res['error']}")
+    return fails
 
 
 # 引述豁免的撤回语境标记（20260912）：关于"模型说过什么"的撤回措辞。刻意不含
@@ -328,12 +556,12 @@ def _forbidden_hit(text: str, kw: str, exempt_quote: bool) -> bool:
 # 键名写错是一个**静默 no-op**：gold 是 dict，把 require_cmd_all 敲成 require_cmdall 时
 # 取值取到 None、那段断言根本不执行，而用例照样绿——判据看着在、其实不在。已经抓到一条
 # 活的：`attack_embed_command` 把注释键 `_note` 写成了 `note`（那条注释从没被读过）。
-# 所以键分三类写死在这里，`tests/test_golden_keys.py` 三向交叉核对：
+# 所以键分四类写死在这里，`tests/test_golden_keys.py` 三向交叉核对：
 #   ① 反射扫本文件与 golden_case_runner.py 里的**字面量取键**写法，必须都在表里
 #      （防「代码读了新键、表没跟上」）；
 #   ② 表里每个键必须真在源码里被读（防「表里留着已经删掉的键」）；
-#   ③ 逐条扫 `eval/golden/basic.jsonl`，每个 gold 键必须属于三类之一（防拼错）。
-# **加新断言键时这两张表要一起改**——这是刻意的摩擦：漏改会在 CI 上红，而不是静默失效。
+#   ③ 逐条扫 `eval/golden/basic.jsonl`，每个 gold 键必须属于四类之一（防拼错）。
+# **加新断言键时这几张表要一起改**——这是刻意的摩擦：漏改会在 CI 上红，而不是静默失效。
 # 注意：本注释块里刻意**不写出取键的代码形态**（那会被 ① 的反射扫成"读了一个表外的键"）。
 GOLD_ASSERT_KEYS = frozenset({
     # 回复文本
@@ -356,6 +584,12 @@ GOLD_ASSERT_KEYS = frozenset({
 GOLD_REQUEST_KEYS = frozenset({"needs_summary"})
 # 只写给人看的注释键（`_note`）：不判、不读，但必须拼对——拼错等于注释不存在。
 GOLD_COMMENT_KEYS = frozenset({"_note"})
+# 轮次键（20260925 双轮）：描述"这一轮的 gold 是给哪一轮的、怎么发出去"，不是断言。
+#   `round`           各轮 gold 里的自标号，`check_case` 拿它跟轮次序号核对——gold 抄错
+#                     行/顺序贴反时红在"这一轮的 gold 不是给这一轮的"，而不是红在某个
+#                     莫名其妙的断言上；
+#   `confirm_message` 第 2 轮合成消息的文案（生产上前端发的是「确认执行：<卡面摘要>」）。
+GOLD_ROUND_KEYS = frozenset({"round", "confirm_message"})
 
 
 def judge_corpus() -> "list | None":
@@ -749,13 +983,14 @@ def main():
     failed = 0
 
     for i, case in enumerate(cases, 1):
-        g = case["gold"]
-        req = build_request(case)
+        # 一条用例的全部轮次由 run_case 驱动（唯一多轮驱动），判据由 check_case 逐轮判。
+        # `g` 只用于下面的 `requires_tools` 归因（取法见 first_gold——多轮用例顶层没有
+        # `gold`，直接下标会 KeyError）。
+        g = first_gold(case)
         t0 = time.time()
-        result = run_one(req, build_principal(case),
-                         trace_ctx={"run": run_id, "case": case["id"]})
+        result = run_case(case, run_id=run_id)
         elapsed = time.time() - t0
-        fails = check_gold(g, result, docs=judge_docs)
+        fails = check_case(case, result, docs=judge_docs)
         ok = not fails and not result["error"]
 
         status = "PASS" if ok else "FAIL"
@@ -783,6 +1018,19 @@ def main():
             "tool_calls": result["tool_calls"],
             "tool_rounds": result["tool_rounds"],
             "text": result["text"],
+            # 逐轮留档（20260925）：多轮用例的**每一轮**各自的帧/回执/耗时都在这里
+            # ——报告只留末轮的扁平结果，而"第 1 轮弹没弹卡"恰恰是第 1 轮的事。
+            # `confirm_payloads` 是**解开的载荷**（技能/参数/jti/exp）：红了要照着它读
+            # "这张卡到底问了什么"。**原始令牌不落报告**——`frames` 过 `redact_frames`
+            # 把帧体里的 `token` 换成占位符（它是 10 分钟有效的写授权，落盘等于多存一份
+            # 可用凭据）。判据侧要原文时用内存里那份（`run_case` 的返回），不从这里读。
+            "rounds": [{"round": r["round"], "elapsed": r["elapsed"],
+                        "text": r["text"], "frames": redact_frames(r.get("frames")),
+                        "commands": r["commands"], "tool_calls": r["tool_calls"],
+                        "exec_tools": r["exec_tools"], "resets": r["resets"],
+                        "confirm_payloads": r.get("confirm_payloads") or [],
+                        "error": r["error"], "trace": r.get("trace")}
+                       for r in (result.get("rounds") or [])],
             # 这一轮的 trace 路径（20260922）：红了照着读，别再靠复采样猜方差
             "trace": result.get("trace"),
         })
@@ -812,10 +1060,9 @@ def main():
             continue
         _case = _case_by_id[r["id"]]
         _t0 = time.time()
-        _rr = run_one(build_request(_case), build_principal(_case),
-                      trace_ctx={"run": run_id, "case": f"{r['id']}__rerun"})
+        _rr = run_case(_case, run_id=run_id, suffix="__rerun")
         _relapsed = time.time() - _t0
-        _rfails = check_gold(_case["gold"], _rr, docs=judge_docs)
+        _rfails = check_case(_case, _rr, docs=judge_docs)
         _rok = not _rfails and not _rr["error"]
         r["rerun"] = {
             "ok": _rok, "elapsed": round(_relapsed, 1), "fails": _rfails,

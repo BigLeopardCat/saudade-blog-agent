@@ -50,30 +50,66 @@ def mkcase(cid: str, tags: list[str]) -> dict:
             "gold": {"text_contains": ["回答"]}}
 
 
-def _stub_run_one(plan: dict, calls: list):
-    """桩：按 `plan[case_id]` 顺次弹出这一跑判绿(True)/判红(False)，并记录收到的参数。"""
+def mk2(cid: str, g1: dict, g2: dict) -> dict:
+    """最小**双轮**用例（20260925）：第 1 轮发命令式话术（生产上这一步弹卡），
+    第 2 轮发前端合成的确认消息。两轮写死同一个 `conversation_id`——令牌把会话签进
+    签名，两轮会话不一致是"令牌作废"的一种，用例形态上就得先对。
+    """
+    return {"id": cid, "tags": ["write"], "context": {"conversation_id": 4242},
+            "user_input": "那个叫「X」的分类我不需要了，清理掉吧",
+            "rounds": [
+                {"round": 1, "gold": g1},
+                {"round": 2, "confirm_message": "确认执行：删除分类「X」", "gold": g2},
+            ]}
 
-    def _run(req, principal=None, trace_ctx=None):
+
+def _stub_run_one(plan: dict, calls: list, tokens: dict | None = None):
+    """桩：按 `plan[case_id]` 顺次弹出这一跑判绿(True)/判红(False)，并记录收到的参数。
+
+    `tokens`（20260925 双轮）：按 `tokens[case_id]` 顺次弹出这一轮"弹卡签出的令牌原文"。
+    缺/空 = 这一轮**没弹卡**——正是双轮用例要区分的那件事（第 1 轮没签出 ⇒ 第 2 轮不该发）。
+    """
+
+    def _run(req, principal=None, trace_ctx=None, *, confirm_token=""):
+        # 签名跟着真 `run_one` 走（20260925 加 `confirm_token` 具名参，双轮用）——
+        # 桩与真函数签名不一致时，报的是 TypeError，而不是"用例行为不对"，那种红
+        # 读起来像环境问题（本文件 20260924 就是这么红过一次）。
         cid = (trace_ctx or {}).get("case", "")
         base = cid[: -len("__rerun")] if cid.endswith("__rerun") else cid
-        calls.append({"case": cid, "message": req.message,
+        calls.append({"case": cid, "message": req.message, "confirm_token": confirm_token,
+                      "conversation_id": req.conversation_id,
                       "principal": (principal.uid, principal.role) if principal else None})
         seq = plan.setdefault(base, [])
         ok = seq.pop(0) if seq else False
+        tseq = (tokens or {}).setdefault(base, [])
+        tok = tseq.pop(0) if tseq else ""
+        # 有令牌的这一轮，帧里就真的放一条 `__CONFIRM__`（含令牌原文）——真 `run_one`
+        # 的 `confirm_tokens`/`confirm_payloads` 正是**从这条帧**里解出来的，桩把三者
+        # 一起造出来（帧、令牌、载荷自洽），报告侧才测得到"帧里的令牌有没有被抹掉"。
+        frame = "" if not tok else "__CONFIRM__:" + json.dumps(
+            {"token": tok, "q": "要不要执行？"}, ensure_ascii=False)
         return {"text": "回答" if ok else "跑偏", "commands": [], "tool_calls": [],
-                "frames": [], "exec_rows": [], "exec_tools": [], "tool_rounds": 0,
+                "frames": [frame] if frame else [],
+                "exec_rows": [], "exec_tools": [], "tool_rounds": 0,
                 "trace": None, "resets": 0 if ok else 1,
-                "resets_reasons": [] if ok else ["stub 判红"], "error": None}
+                "resets_reasons": [] if ok else ["stub 判红"], "error": None,
+                # 真 `run_one` 的返回形状里有这两个（20260925）：桩少给一个键，
+                # 驱动侧读到的是"这一轮没弹卡"，于是所有双轮用例都红在"没令牌上"
+                # ——桩与真函数**返回形状**不一致，和签名不一致一样会骗人。
+                "confirm_tokens": [tok] if tok else [],
+                "confirm_payloads": ([{"skill": "tag_delete",
+                                       "specs": [{"tool": "delete_tag"}]}] if tok else [])}
 
     return _run
 
 
 def drive(cases: list[dict], plan: dict, argv_extra: list[str] | None = None,
-          tmp: str | None = None) -> dict:
+          tmp: str | None = None, tokens: dict | None = None) -> dict:
     """在临时目录里整条跑一次 `main()`，收齐退出码/报告/打印/复审单/run_one 调用序列。
 
     `tmp` 给定时复用同一个目录（⑥ 要"先全量跑一次、再 --only 跑一次"看基线有没有被覆盖）。
     用例文件仍按本次传进来的 `cases` 重写——同一个目录跑两次就是两轮不同的题。
+    `tokens` 透传给桩（双轮用例的第 1 轮弹卡签出的令牌，见 `_stub_run_one`）。
     """
     _caller_owned = tmp is not None      # 调用方给的目录由调用方清（⑥ 要在同一目录跑两轮）
     tmp = tmp or tempfile.mkdtemp(prefix="golden_rerun_test_")
@@ -92,7 +128,7 @@ def drive(cases: list[dict], plan: dict, argv_extra: list[str] | None = None,
     old_cwd = os.getcwd()
     try:
         os.chdir(tmp)
-        rg.run_one = _stub_run_one(plan, calls)
+        rg.run_one = _stub_run_one(plan, calls, tokens)
         rg.ensure_agent = lambda: None
         sys.argv = ["run_golden.py"] + list(argv_extra or [])
         buf = io.StringIO()
@@ -235,6 +271,57 @@ try:
           str({k: _after[k] for k in ("total", "full_run")}))
 finally:
     shutil.rmtree(_tmp, ignore_errors=True)
+
+print("\n⑦ 双轮用例：第 2 轮的令牌只能来自第 1 轮的控制帧（20260925）")
+_r = drive([mk2("wr_ok", {"round": 1, "text_contains": ["回答"]},
+                {"round": 2, "text_contains": ["回答"]})],
+           {"wr_ok": [GREEN, GREEN]}, tokens={"wr_ok": ["tok-1"]})
+check("两轮都跑了、退出码 0", _r["code"] == 0
+      and [c["case"] for c in _r["calls"]] == ["wr_ok", "wr_ok"], str(_r["code"]))
+check("第 2 轮带的是第 1 轮签出的**那张**令牌（不是自己造的、也不是空的）",
+      _r["calls"][0]["confirm_token"] == "" and _r["calls"][1]["confirm_token"] == "tok-1",
+      str([c["confirm_token"] for c in _r["calls"]]))
+check("两轮同一个会话（令牌把会话签进签名，换了会话就等于换了张卡）",
+      [c["conversation_id"] for c in _r["calls"]] == [4242, 4242],
+      str([c["conversation_id"] for c in _r["calls"]]))
+check("第 2 轮发的是**合成消息**（生产上前端发的是「确认执行：<卡面摘要>」）",
+      _r["calls"][1]["message"] == "确认执行：删除分类「X」", _r["calls"][1]["message"])
+check("报告逐轮留档（两轮各自的 round，末轮的扁平结果不淹掉第 1 轮）",
+      [x["round"] for x in _r["report"]["cases"][0]["rounds"]] == [1, 2],
+      str(_r["report"]["cases"][0]["rounds"]))
+# 报告里**留载荷、抹令牌**：载荷（技能/参数）是红了要照着读的现场；令牌是 10 分钟有效的
+# 写授权凭据，落盘等于在生产机上多存一份可用的授权（同 server.py 只记布尔 has_confirm）。
+check("报告带着解开的载荷（红了照着读「这张卡问了什么」）",
+      _r["report"]["cases"][0]["rounds"][0]["confirm_payloads"][0]["skill"] == "tag_delete",
+      str(_r["report"]["cases"][0]["rounds"][0]["confirm_payloads"]))
+check("报告里没有原始令牌（帧体里的 token 被抹成占位符）",
+      "tok-1" not in json.dumps(_r["report"], ensure_ascii=False)
+      and "<redacted>" in json.dumps(_r["report"]["cases"][0]["rounds"][0]["frames"],
+                                     ensure_ascii=False),
+      json.dumps(_r["report"]["cases"][0]["rounds"][0]["frames"], ensure_ascii=False))
+
+print("\n⑧ 第 1 轮没弹卡 ⇒ 第 2 轮**不发** + 响亮失败（不静默降级成普通轮）")
+_r = drive([mk2("wr_notoken", {"round": 1, "text_contains": ["回答"]},
+                {"round": 2, "text_contains": ["回答"]})], {"wr_notoken": [GREEN]})
+check("退出码 1（没令牌是失败，不是「跳过」）", _r["code"] == 1, str(_r["code"]))
+# 这一条是**安全**判据不只是正确性判据：第 2 轮的消息是合成命令式文本，而写路径有一条
+# "同轮命令即确认"的放行通道——把它当普通轮发出去，可能另找一条路把写做掉。
+check("第 2 轮一次都没发出去（零请求 ⇒ 结构上不可能另走一条路把写做掉）",
+      [c["case"] for c in _r["calls"]] == ["wr_notoken"],
+      str([c["case"] for c in _r["calls"]]))
+check("报告里两处都点了名：轮数不符 **和** 它的原因（没有签出令牌）",
+      any("轮数不符" in f for f in _r["report"]["cases"][0]["fails"])
+      and any("没有签出确认令牌" in f for f in _r["report"]["cases"][0]["fails"]),
+      str(_r["report"]["cases"][0]["fails"]))
+
+print("\n⑨ gold 贴错行 ⇒ 红在「这一轮的 gold 不是给这一轮的」，不是红在莫名其妙的断言上")
+_r = drive([mk2("wr_mislabel", {"round": 1, "text_contains": ["回答"]},
+                {"round": 1, "text_contains": ["回答"]})],
+           {"wr_mislabel": [GREEN, GREEN]}, tokens={"wr_mislabel": ["tok-1"]})
+check("退出码 1", _r["code"] == 1, str(_r["code"]))
+check("红信息点名 gold 的自标号与轮次不符（第 2 轮的 gold 写着 round=1）",
+      any("与轮次不符" in f for f in _r["report"]["cases"][0]["fails"]),
+      str(_r["report"]["cases"][0]["fails"]))
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
