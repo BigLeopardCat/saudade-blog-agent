@@ -302,11 +302,36 @@ def test_golden_runs_raise_the_trace_limit():
             _os.environ[trace_mod.TOOL_RESULT_LIMIT_ENV] = old
 
 
+def test_nightly_runs_the_judge():
+    """接线锁（20260925）：评审员进了夜间，但**没有**因此变成门禁。
+
+    纪律 1 说它"不是判分器"，那么夜间脚本里它就不许出现在 `{ fail=1; … }` 那一支；
+    同时它必须跑在 golden **之后**（材料就是刚那一轮，不传 `--traces` 时取最新一轮）。
+    "能力有测试 ≠ 接线有测试"——上面那些测试全绿也说明不了它真的被跑起来了。
+    """
+    print("[接线] 夜间回归跑评审员，且它仍是非门禁")
+    sh = (ROOT / "scripts" / "nightly_regression.sh").read_text(encoding="utf-8")
+    lines = [ln for ln in sh.splitlines() if "$PY eval/llm_judge.py" in ln]
+    check("夜间脚本里真的调了评审员", len(lines) == 1)
+    if len(lines) != 1:
+        return
+    judge_line = lines[0]
+    check("评审员不置 fail=1（可疑 ≠ 失败，它不进任何门禁）",
+          "fail=1" not in judge_line and "|| echo" in judge_line)
+    check("不写 health.log（一条观察性判据不该进告警通道）",
+          "health.log" not in judge_line)
+    check("不传 --traces（默认取最新一轮 = 刚跑完的 golden 那一轮）",
+          "--traces" not in judge_line)
+    check("跑在 golden 之后（材料就是刚那一轮）",
+          sh.index("$PY eval/run_golden.py") < sh.index("$PY eval/llm_judge.py"))
+
+
 def main():
     for fn in (test_material_completeness, test_material_clip_is_visible,
                test_truncation_detector, test_parse_verdict_strictness,
                test_judge_one_paths, test_report_and_no_gate,
-               test_golden_runs_raise_the_trace_limit):
+               test_golden_runs_raise_the_trace_limit,
+               test_nightly_runs_the_judge):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")

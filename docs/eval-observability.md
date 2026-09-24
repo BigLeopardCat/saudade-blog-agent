@@ -236,7 +236,13 @@ FAIL 复审单把回归组红置顶（当天必修）。混跑的坏处正是这
 
 **判官答坏了要吵**：非法 JSON / 缺字段 / `verdict` 非法一律抛（记成 error 进报告，**不静默当"没问题"**）；
 它自己前后不一致时**以它列出的条目为准**（列表是观察、`verdict` 只是它的摘要）；端点不认结构化输出
-时降级重问一次并留 `degraded` 标记。**是否进夜间**（116 条 ≈ 10 分钟 LLM 调用）待拍板，目前只手动跑。
+时降级重问一次并留 `degraded` 标记。
+
+**20260925 已接进夜间**（用户拍板）：`scripts/nightly_regression.sh` 在 golden 之后跑
+`eval/llm_judge.py`（不传 `--traces` ⇒ 评刚那一轮，约 10 分钟 LLM 调用）。**非门禁**：不置
+`fail=1`、不写 `health.log`——"可疑"是观察不是判定，置红会让整夜门禁被一条观察性判据带红。
+报告落 `eval/report/judge_<ts>.md`，**要人看**（每条可疑都附材料原文）。接线由
+`tests/test_llm_judge.py::test_nightly_runs_the_judge` 读夜间脚本原文锁住。
 
 ---
 
@@ -402,7 +408,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 （trace_alert 命中的真实现场 → 用例草稿 + 人审对照单，落 `eval/report/golden_drafts_*.{jsonl,md}`；
 **只产草稿不自动入库**，含真实用户文本故不进 git）+ L2 门禁分两层（回归组硬判 100%，见 §2 门槛分工）。
 **20260925 补**：`eval/llm_judge.py`（LLM 评审员，判"回复有没有编材料"，**只出报告不进任何门禁**，
-口径与四条纪律见 §2 末）+ trace 的工具返回上限可配（`TRACE_TOOL_RESULT_LIMIT`，golden 轮 40000，
+**已接进夜间**（跑在 golden 之后、不置 `fail=1`），口径与四条纪律见 §2 末）+ trace 的工具返回上限可配（`TRACE_TOOL_RESULT_LIMIT`，golden 轮 40000，
 生产仍 200——评审员拿摘要当材料会误判，这条是它的前置条件）|
 | 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:）；20260830 修 golden 断言过严三条（行为正确不判失败） |
 | 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0 秒级套件硬门禁）；L2 全量 golden 本机跑（20260920 起撤出 CI）+ nightly crontab（scripts/nightly_regression，失败标 `~/agent_regression.failed`）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
