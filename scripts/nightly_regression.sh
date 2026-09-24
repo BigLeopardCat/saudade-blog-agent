@@ -12,6 +12,9 @@
 # 置顶，日志里也单列——放行不等于静默宽恕。
 # 同日补：trace_alert 抓到的现场回灌成 golden 草稿（eval/golden_draft.py，只产草稿
 # 到 eval/report/ 供人审，不自动入库、非门禁）。
+# 20260925 补：回复出处评审（eval/llm_judge.py，非门禁）——紧跟 golden 之后跑，评的正是刚那
+# 一轮的 trace（不传 --traces 时它取最新一轮）；只出报告 eval/report/judge_<ts>.md，可疑**不是**
+# 失败（它挑可疑样本、不是判分器，见模块头注纪律 1），故不置 fail=1、也不写 health.log。
 # 20260925 补：语料漂移哨兵（eval/corpus_terms.py --drift，非门禁）——见下方该节的注释。
 # 同日补：真写夹具残留哨兵（eval/golden_fixture.py --verify，非门禁，只读公开接口）——
 # 见下方该节的注释。**真写用例本身不在夜间跑**（needs_real_write 默认关，见 run_golden.py）。
@@ -69,6 +72,16 @@ export GOLDEN_ADMIN_UID=721
 # 未设该变量时同样**响亮跳过并打印**（跳过关乎通过率分母，不静默豁免）。
 export GOLDEN_USER_UID=722
 $PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED (复审单 eval/report/review_*.md；回归组红 = 当天必修)" >> "$LOG"; }
+# 20260925 起：回复出处评审（LLM-as-judge，非门禁）。确定性判据判"该出现的东西在不在"，
+# 判不了"回复里有没有编出材料之外的事实"（工具只回了 3 条、回复写"共 5 条"）——这一格由它补。
+# **刻意不进门禁**：同源模型评自己不构成 ground truth，"可疑"不等于"错了"（模块头注纪律 1），
+# 置 fail=1 会让整夜门禁被一条观察性判据带红（哨兵一响就没人看了）。报告落
+# eval/report/judge_<ts>.md，每条可疑条目都附材料原文供人核——**报告要人看**。
+# 材料供给是它的前置条件：golden 跑法已把 trace 的工具返回上限放开（TRACE_TOOL_RESULT_LIMIT），
+# 拿生产那 200 字符截断当材料会把"文章里真有"的内容判成编造；判官认出截断会响亮警告。
+# 跑在 golden 之后、不传 --traces（默认取最新一轮 = 刚那一轮）。
+echo "--- 回复出处评审 (LLM-as-judge, 约 10 分钟, 非门禁) ---" >> "$LOG"
+$PY eval/llm_judge.py >> "$LOG" 2>&1 || echo "[$TS] llm_judge 运行异常（非门禁，看 eval/report/judge_*.md）" >> "$LOG"
 # 20260912 起：语义告警巡检（非门禁——只记录不置失败标记，避免与 golden 门禁混同）
 echo "--- trace 语义告警 (近 7 天真实对话, 巡检非门禁) ---" >> "$LOG"
 $PY eval/trace_alert.py --days 7 >> "$LOG" 2>&1 || echo "[$TS] trace_alert 运行异常（不影响门禁）" >> "$LOG"
