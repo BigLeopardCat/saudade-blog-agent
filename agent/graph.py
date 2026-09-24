@@ -612,6 +612,69 @@ _TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 doc
 }
 
 
+# 参数类型 → 菜单里的短标记（20260925）。**纯展示**：只为让 planner 看得见"哪些必填、
+# 什么类型、默认值是多少"。将来若做执行前校验，依据仍是同一个 args_schema，
+# **不许读这里渲染出来的字符串**——判据与展示必须同源不同形。
+_ARG_TYPE_SHORT = {"string": "str", "integer": "int", "number": "num",
+                   "boolean": "bool", "array": "list", "object": "dict"}
+
+
+def _menu_arg_type(spec: object) -> str:
+    """JSON-Schema 的属性片段 → 短类型名；可空（`anyOf` 里带 `null`）取非 null 那一支。"""
+    if not isinstance(spec, dict):
+        return "?"
+    for key in ("anyOf", "oneOf"):
+        cand = spec.get(key)
+        if isinstance(cand, list):
+            for one in cand:
+                if isinstance(one, dict) and one.get("type") not in (None, "null"):
+                    return _ARG_TYPE_SHORT.get(str(one["type"]), str(one["type"]))
+    t = spec.get("type")
+    if isinstance(t, list):
+        t = next((x for x in t if x != "null"), None)
+    return _ARG_TYPE_SHORT.get(str(t), str(t)) if isinstance(t, str) else "?"
+
+
+def _menu_arg_signature(tool: object) -> str:
+    """菜单里的参数签名：`名字:类型`，**必填加 `*`、有默认值的加 `=值`**（20260925）。
+
+    为什么加这一层（参数 schema 化缺的正是这一半）：在此之前菜单只列**参数名**——
+    `update_tag(name, new_title, color, …)`——必填、类型、默认值一概不显示，planner
+    只能靠常识猜。漏了必填参数会一路走到工具层抛异常，烧掉一个 `__ERROR__` 帧再重规划
+    一轮；而这些信息**本来就在工具签名里**（`args_schema`），缺的只是"没给 planner 看"。
+    所以这里一律从 `args_schema` 派生，**不另维护一份参数表**（手写名单是漏项来源，
+    同 20260913 菜单枚举那次教训）。
+
+    边界：拿不到 `args_schema`（没给 schema / 生成期异常）时**不猜必填**——那时只渲染
+    `名字:?`，不标 `*` 也不标默认值。宁可少说，不说错。
+    """
+    props = getattr(tool, "args", None) or {}
+    if not props:
+        return ""
+    schema = getattr(tool, "args_schema", None)
+    try:
+        js = schema.model_json_schema() if schema is not None else {}
+    except Exception:  # 取不到就当"没有必填信息"，**绝不因此拦住整份菜单**
+        logger.warning("[planner] 取 %s 的 args_schema 失败，参数标注降级",
+                       getattr(tool, "name", tool))
+        js = {}
+    known = isinstance(js, dict) and bool(js.get("properties"))
+    required = set(js.get("required") or ()) if known else set()
+    parts = []
+    for pname, spec in props.items():
+        seg = f"{pname}:{_menu_arg_type(spec)}"
+        if known:
+            if pname in required:
+                seg += "*"
+            else:
+                dflt = spec.get("default") if isinstance(spec, dict) else None
+                if dflt is not None:
+                    shown = f'"{dflt}"' if isinstance(dflt, str) and not dflt else str(dflt)
+                    seg += "=" + shown[:12]
+        parts.append(seg)
+    return ", ".join(parts)
+
+
 def _tools_desc(role: str | None = None) -> str:
     """planner 菜单：**本轮角色**可点名的工具 × 注册表（工具名 + 派生参数签名 + 中文说明）。
 
@@ -623,13 +686,14 @@ def _tools_desc(role: str | None = None) -> str:
     = planner 照菜单点名、条目被剔空、白白重规划一轮（这正是本函数改成按角色取
     的原因）；反过来白名单有而菜单没列 = planner 想不起来用它。
     """
-    lines = []
+    lines = ["（参数写法 `名字:类型`：带 `*` 的是必填、不能省；没带 `*` 的都可以省略；"
+             "`=值` 是它的默认值）"]
     for name in callable_query_tools(role):
         tool = _TOOL_MAP.get(name)
         if tool is None:
             logger.warning("[planner] 白名单工具 %s 不在注册表，菜单已剔除", name)
             continue
-        args = ", ".join((getattr(tool, "args", None) or {}).keys())
+        args = _menu_arg_signature(tool)
         desc = _TOOL_MENU_LINES.get(name) or (tool.description or "").strip().replace("\n", " ")
         lines.append(f"- {name}({args})：{desc}")
     return "\n".join(lines)
