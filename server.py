@@ -343,6 +343,63 @@ def _resolve_user_id(request: Request, body_uid: int) -> int:
     return _resolve_principal(request, body_uid).uid
 
 
+# 台账记录的"现时"有效期（分钟，20260925）：超过它的记录只能说明"当时是那样"，
+# 不能拿来回答"现在怎样"。10 分钟 = 服务器状态这类指标够用的新鲜度（再短会让
+# "再问一句现状"每次都多跑一次查询，再长就把三小时前的读数当成现场）。
+# 只管**现时状态类询问**；取值指代（规则 6b，"第二条写的什么"）问的是历史事实，
+# 照抄摘要永远是对的，不受此限。
+EXEC_STALE_MINUTES = 10
+
+# 台账行行首的时间戳（Rust 侧渲染时补的 `MM-DD HH:MM`，见 chat.rs render_exec_row）。
+# 两侧的排除项都是为了**只认自己那一行的时间**：前面不许接数字或连字符（挡掉完整日期
+# `2026-09-05 14:06:57` 里的后两段）、后面不许接数字或冒号（挡掉带秒的时间）。看不懂
+# 的一律不标——标注宁缺勿错，标错了是凭空给模型一个假事实。
+_EXEC_TS_RE = re.compile(r"(?<![\d-])(\d{2})-(\d{2}) (\d{2}):(\d{2})(?![\d:])")
+
+
+def _age_phrase(minutes: int) -> str:
+    if minutes <= 0:
+        return "刚刚"
+    if minutes < 60:
+        return f"{minutes} 分钟前"
+    if minutes < 60 * 24:
+        h, m = divmod(minutes, 60)
+        return f"{h} 小时前" if not m else f"{h} 小时 {m} 分前"
+    return f"{minutes // (60 * 24)} 天前"
+
+
+def annotate_exec_ages(exec_txt: str, now: "datetime | None" = None) -> str:
+    """给台账每行的行首时间补一个**系统算出来的相对年龄**：`09-25 00:42（3 小时前·已过期）`。
+
+    动机（20260925 生产实证，trace 20260925T035331）：访客问"现在服务器怎么了"，
+    台账里最近一条是 3 小时 11 分前的服务器状态，planner 零工具照抄摘要、narrator
+    又写成"刚才查到的"——数据过期 + 措辞不实，两头都错。年龄是**事实**（系统算的），
+    要不要据此重查是**决策**（planner 的规则 6c）——所以这里只标注、不拦截。
+
+    行首时间戳由 Rust 渲染（`MM-DD HH:MM`，只有月日没有年）：跨年时"12-31 23:50"
+    在 1 月 1 日按当年解析会变成"十一个月后的未来"，故超前 6 小时以上一律退一年。
+    解析不了的时间戳（脏行/别的格式）**原样留着**——不猜、也不因为看不懂就标"刚刚"。
+    """
+    now = now or datetime.now()
+
+    def _rep(m: "re.Match[str]") -> str:
+        try:
+            t = datetime(now.year, int(m.group(1)), int(m.group(2)),
+                         int(m.group(3)), int(m.group(4)))
+        except ValueError:
+            return m.group(0)
+        if (t - now).total_seconds() > 6 * 3600:
+            try:
+                t = t.replace(year=t.year - 1)
+            except ValueError:
+                return m.group(0)
+        minutes = int((now - t).total_seconds() // 60)
+        mark = "·已过期" if minutes > EXEC_STALE_MINUTES else ""
+        return f"{m.group(0)}（{_age_phrase(minutes)}{mark}）"
+
+    return _EXEC_TS_RE.sub(_rep, exec_txt)
+
+
 def _ledger_block(req: ChatRequest, confirmed: bool = False) -> str:
     """确认与执行事实（系统台账）——两块合一注入（20260924）。
 
@@ -357,8 +414,13 @@ def _ledger_block(req: ChatRequest, confirmed: bool = False) -> str:
     """
     head = ("确认与执行事实（系统台账——泠月自己的动作记录，不是访客的浏览痕迹；"
             "两半互斥：『已执行』是真做过、系统验收过的，『待主人点头』是**还没做**的。"
-            "这两块都是系统事实：不许否认它们存在，也不许把一半说成另一半）")
-    exec_txt = req.executions.strip()[:1500] or "（本会话暂无记录）"
+            "这两块都是系统事实：不许否认它们存在，也不许把一半说成另一半。"
+            "『已执行』行行首时间后面那个「（…前）」是系统按当前时间算好的年龄，"
+            f"带「·已过期」的=超过 {EXEC_STALE_MINUTES} 分钟——只能说明「当时是那样」，"
+            "不要拿它回答「现在怎样」，见规划纪律 6c；叙述里也不许把这种记录说成「刚才」）")
+    # 年龄标注放在 [:1500] 截断**之后**：截断的额度留给台账原文本身，
+    # 标注是系统补的事实，不该挤掉主人的执行记录。
+    exec_txt = annotate_exec_ages(req.executions.strip()[:1500]) or "（本会话暂无记录）"
     if confirmed:
         # 待办那一半**整行改写、不回引 Rust 渲染的行**：那行尾巴写死了
         # "状态 awaiting（等主人点头，尚未执行）"，正是 20260923 洞⑥ 那族假话的

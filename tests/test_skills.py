@@ -1995,8 +1995,12 @@ def test_gate_ledger_denial():
     req = server.ChatRequest(message="我刚刚点确认了吗", executions=ledger["executions"],
                              pending_action=ledger["pending"])
     blk = server._ledger_block(req)
+    # 20260925：已执行那半的行首时间后面多了系统算的年龄标注（server.annotate_exec_ages，
+    # 形如 `09-24 00:12（1 天前·已过期） 收藏文章 19`）——年龄标注的语义与边界另外锁在
+    # tests/test_ledger_age.py，这里只断言"两半仍在一块、内容没被标注吃掉"。
     check("注入：两半在一块里、各带互斥定性",
-          "确认与执行事实" in blk and "· 已执行（系统验收过）: 09-24 00:12 收藏文章 19" in blk
+          "确认与执行事实" in blk and "· 已执行（系统验收过）: 09-24 00:12" in blk
+          and "收藏文章 19" in blk
           and "· 待主人点头（还没做）: 收藏文章 23" in blk, blk[:60])
     check("注入：空的那半写明『本会话暂无记录』（不是整块不注入）",
           "待主人点头（还没做）: （本会话暂无记录）"
