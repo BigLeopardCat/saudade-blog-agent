@@ -13,6 +13,9 @@ not_contains_exempt_quote）后先跑本脚本——判据是纯文本函数，�
   * 反向用例：纯重新声称 / 加强式重新声称 / 「没有」非撤回标记 / 裸声称——
     判据放宽必须不放过这些（否则 e1b 的豁免会变成后门）。
 
+20260925 补第二批 `SHAPE_CASES`：喂**合成的 result** 而不是文本——零执行、
+执行回执、确认卡片载荷这三个键看的根本不是回复文字（见那一段的注释）。
+
 用法：.venv/bin/python tests/judge_offline_test.py  → 逐项"期望/实得"，全符合
 预期时退出码 0。
 """
@@ -313,6 +316,62 @@ CASES = [
 ]
 
 
+# ── 结果形状侧判据：零执行 / 执行回执 / 确认卡片载荷（20260925）──────────────
+# 上面那批喂的是**文本**（判据看回复说了什么）。下面这批喂的是**合成的 result**：
+# `require_zero_exec`（弹卡轮一个写都没发生）/ `forbid_exec_tools`（回执里不许出现的
+# 工具）/ `require_confirm_payload`（卡片问的是哪个技能、几个参数）看的根本不是文本，
+# 而是帧与回执——不合成 result 就一条都验不到，而它们恰恰是"第 1 轮零写、第 2 轮真写"
+# 这条双轮语义的判据本身。
+# gold 写成字面量（不取 basic.jsonl）：这里锁的是判据，不该随用例文件一起漂。
+SHAPE_CASES = [
+    # (期望, gold, result 覆盖项, 说明)
+    ("PASS", {"require_zero_exec": True}, {},
+     "弹卡轮：planner 零调用、checker 零回执 ⇒ 过"),
+    ("FAIL", {"require_zero_exec": True}, {"tool_calls": ["delete_tag"]},
+     "planner 决定了工具（哪怕没执行成）⇒ 零执行的正面断言必须红"),
+    ("FAIL", {"require_zero_exec": True}, {"exec_rows": [{"tool": "delete_tag"}]},
+     "真执行过（有验收回执）⇒ 红"),
+    ("PASS", {"forbid_exec_tools": ["delete_tag"]}, {}, "没执行过 ⇒ 负向断言过"),
+    ("FAIL", {"forbid_exec_tools": ["delete_tag"]}, {"exec_rows": [{"tool": "delete_tag"}]},
+     "真执行过 ⇒ 红（负向断言看的是回执，不是 planner 的决策）"),
+    # 这两条一起说明"决策"与"执行"是两个信号：同一个工具，决定了但没执行成 ⇒
+    # require_zero_exec 红、forbid_exec_tools 过（用例可以按自己在意哪一侧来选键）
+    ("PASS", {"forbid_exec_tools": ["delete_tag"]}, {"tool_calls": ["delete_tag"]},
+     "决定了但没执行成 ⇒ 负向回执断言不误伤"),
+    ("PASS", {"require_confirm_payload": {"skill": "tag_delete", "specs": 1}},
+     {"confirm_payloads": [{"skill": "tag_delete", "specs": [{"tool": "delete_tag"}]}]},
+     "卡片技能与参数条数都对 ⇒ 过"),
+    ("FAIL", {"require_confirm_payload": {"skill": "tag_delete", "specs": 1}},
+     {"confirm_payloads": [{"skill": "tag_create", "specs": [{"tool": "create_tag_one"}]}]},
+     "卡片问的是别的技能 ⇒ 红（弹了卡但弹错了事也是错）"),
+    ("FAIL", {"require_confirm_payload": {"skill": "tag_delete", "specs": 2}},
+     {"confirm_payloads": [{"skill": "tag_delete", "specs": [{"tool": "delete_tag"}]}]},
+     "参数条数不符 ⇒ 红"),
+    ("FAIL", {"require_confirm_payload": {"skill": "tag_delete"}}, {"confirm_payloads": []},
+     "压根没弹卡（没有载荷可读）⇒ 红，绝不静默通过"),
+    ("FAIL", {"require_confirm_payload": {"skill": "tag_delete"}},
+     {"confirm_payloads": [{"skill": "tag_delete", "specs": []}],
+      "confirm_tokens": ["tk-1"], "text": "这是令牌 tk-1 请查收"},
+     "令牌原文出现在给用户看的正文里 ⇒ 红（它是 10 分钟有效的写授权）"),
+    ("PASS", {"require_confirm_payload": {"skill": "tag_delete"}},
+     {"confirm_payloads": [{"skill": "tag_delete", "specs": []}], "confirm_tokens": ["tk-1"]},
+     "令牌只在控制帧里、不在正文里 ⇒ 过"),
+]
+
+
+def judge_result(gold: dict, overrides: dict) -> list[str]:
+    """合成 result → `check_gold`（形状侧判据离线重放）。"""
+    res = {"text": "回答", "commands": [], "tool_calls": [], "exec_rows": [],
+           "exec_tools": [], "frames": [], "confirm_tokens": [], "confirm_payloads": [],
+           "resets": [], "resets_reasons": [], "error": None}
+    res.update(overrides)
+    # 真链路里这两个同源（`exec_tools` 由回执派生，见 run_golden.run_one 的返回）——
+    # 这里照着同源生成，免得合成出一个真链路造不出来的组合。
+    if "exec_rows" in overrides:
+        res["exec_tools"] = [r.get("tool", "") for r in res["exec_rows"]]
+    return rg.check_gold(gold, res)
+
+
 def main() -> int:
     bad = 0
     for row in CASES:
@@ -323,6 +382,15 @@ def main() -> int:
         if got != expect:
             bad += 1
         print(f"{mark} [{cid}] {desc}\n    期望 {expect} / 实得 {got} {fails if fails else ''}")
+    print("\n── 结果形状侧：零执行 / 执行回执 / 确认卡片载荷（20260925 双轮）")
+    for expect, gold, overrides, desc in SHAPE_CASES:
+        fails = judge_result(gold, overrides)
+        got = "FAIL" if fails else "PASS"
+        mark = "✓" if got == expect else "✗ 不符"
+        if got != expect:
+            bad += 1
+        print(f"{mark} [{','.join(sorted(gold))}] {desc}\n"
+              f"    期望 {expect} / 实得 {got} {fails if fails else ''}")
     print(f"\n=== {'全部符合预期' if bad == 0 else f'{bad} 项不符'} ===")
     return 1 if bad else 0
 
