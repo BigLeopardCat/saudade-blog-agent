@@ -73,6 +73,9 @@ jobs:
       - name: 写操作确认弹窗单测（确认令牌签发/验签·fail-closed/弹窗触发矩阵/点确定后的执行轮，秒级，纯函数不联网）
         run: uv run python tests/test_confirm.py
 
+      - name: 写目标名来源态单测（目标名只能由引号段/免引号目标名/目标槽位取出·判据无词表·弹卡用例不误伤，秒级，不联网）
+        run: uv run python tests/test_target_grounding.py
+
       - name: 标签/分类写能力单测（名字通道四态·影响面播报·写通道形态·弹窗问句，秒级，假 httpx 不联网）
         run: uv run python tests/test_tag_admin.py
 
@@ -90,6 +93,9 @@ jobs:
 
       - name: golden 断言键拼写校验（反射扫取键字面量 × 表 × 逐条用例三向交叉，秒级，不联网）
         run: uv run python tests/test_golden_keys.py
+
+      - name: 语料术语派生单测（过滤五条规则/排序截断/申报失配，秒级，内联夹具不联网）
+        run: uv run python tests/test_corpus_terms.py
 
       - name: SSE 终止帧契约（真调 chat_stream：异常/空闲超时两条路径 + 换行不撕帧 + 全仓发出点都 JSON 编码，秒级，不联网不调 LLM）
         run: uv run python tests/test_error_frame.py
