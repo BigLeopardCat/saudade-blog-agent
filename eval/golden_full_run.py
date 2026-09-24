@@ -46,9 +46,12 @@ for _marker, _env in _UID_CHANNELS:
 # 顺序也一样：先问"谁有权触发真写"（默认没有许可），再看夹具在不在位。
 _REAL_WRITE_ENV = "GOLDEN_ALLOW_REAL_WRITE"
 _NEED_WRITE = [c["id"] for c in CASES if c.get("needs_real_write")]
+# 「按设计不跑」的那批单列（口径同 run_golden.py）：真写用例默认不跑，这不是分母缺失。
+_WRITE_SKIPPED: list[str] = []
 if _NEED_WRITE and not os.environ.get(_REAL_WRITE_ENV, "").strip():
     CASES = [c for c in CASES if not c.get("needs_real_write")]
     _SKIPPED_IDS += _NEED_WRITE
+    _WRITE_SKIPPED = list(_NEED_WRITE)
     for _cid in _NEED_WRITE:
         print(f"[skip] {_cid}: SKIP (needs {_REAL_WRITE_ENV}=1 —— 真写用例默认不自动跑)", flush=True)
 _NEED_FIX = {c["id"]: str(c["requires_fixture"]) for c in CASES if c.get("requires_fixture")}
@@ -67,6 +70,13 @@ if _NEED_FIX:
                 if _state == "absent" else
                 f"夹具在位检查读不到公开分类接口（{golden_fixture.UNREADABLE_TAG}）—— 不知道在不在，不跑")
         print(f"[skip] {_cid}: SKIP ({_why})", flush=True)
+# 空分母（20260925）：全部被摘掉时**不许往下走**——本脚本的收尾统计会对空序列取
+# min()/P50（ValueError），构造报告时还会除零；就算不炸，打印出来的也是"0/0 通过 = 100%"
+# 那种静默的绿，而这一轮什么都没评。口径与 run_golden.py 逐字一致：退出码 2。
+if not CASES:
+    print("[full] ⚠ 一条用例都没剩下（被身份闸 / 真写闸 / 夹具闸摘干净了）—— 这一轮"
+          "**没有评测任何东西**：空分母不是一个通过率，退出码 2（不是 0）", flush=True)
+    sys.exit(2)
 RUNNER = "eval/golden_case_runner.py"
 TMPDIR = "/tmp/golden_cases"
 TIMEOUT = 180
@@ -208,6 +218,8 @@ report = {"ts": ts, "corpus": "full", "total": len(CASES), "passed": len(CASES) 
           # 报告文件的字段表形状一致（读报告的地方不必先问"这是哪个跑法写的"）。
           "full_run": True,
           "skipped_ids": list(_SKIPPED_IDS),
+          # 其中「按设计不跑」的那批单列（口径同 run_golden.py）：真写用例默认不跑。
+          "skipped_real_write_ids": list(_WRITE_SKIPPED),
           # 首跑红数（20260924）：failed 是复跑后的终判，这个留着首跑口径（差额=被吸收的红斑）
           "failed_first_run": failed_first,
           # 回归组块（20260924）：与 run_golden.py 同名字段——留档反查（golden_trace.
