@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly regression: tests/test_skills.py 单测 + 检索基准 + golden set（78 条真实 LLM 用例）+ 巡检
+# Nightly regression: tests/test_skills.py 单测 + 检索基准 + golden set（126 条真实 LLM 用例）+ 巡检
 # 由 crontab 触发（见仓库 README 或 crontab -l）。结果追加到 ~/agent_regression.log；
 # 任一门禁项失败会在 ~/agent_regression.failed 留下标记（存在 = 上次运行失败）。
 # golden 有 FAIL 时导出复审单 eval/report/review_<ts>.md（判据 vs 模型实际输出）——
