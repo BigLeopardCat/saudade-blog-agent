@@ -44,6 +44,17 @@ def main():
     elapsed = time.time() - t0
     fails = run_golden.check_gold(g, result)
     ok = not fails and not result["error"]
+    # 字段表与 run_golden.py 的 `results.append({...})` **逐字段对齐**（20260924）：两个
+    # 跑法（进程内 / 隔离子进程）写出形状不同的报告，"红了照报告读现场"这条纪律就只在
+    # 一个跑法里成立。此前这里差三处：
+    #   ① `text` 被 `[:300]` 截断——报告是隔离跑法唯一的产物（stdout 只有一行 JSON），
+    #      截断等于**把现场丢掉**：红条要看的正是"它到底说了什么"，而前 300 字常常只是
+    #      客套。现在全文落报告，并显式写 `text_truncated: false` 让读的人不必去猜阈值。
+    #   ② `tool_rounds`（效率基线的规划轮数）缺席 ⇒ 隔离跑法算不出这条指标。
+    #   ③ `requires_tools`（工具类/非工具类归因）缺席 ⇒ 同上。判据与 run_golden 一致：
+    #      该用例**要求**过工具调用即算工具类。
+    # `tags` 仍不在这里出——父进程（golden_full_run.py）从用例文件本地补，两边不重复。
+    requires = bool(g.get("require_tool_calls") or g.get("require_tool_calls_any"))
     out = {
         "id": case["id"],
         "ok": ok,
@@ -54,7 +65,10 @@ def main():
         "resets_reasons": result["resets_reasons"],
         "commands": result["commands"],
         "tool_calls": result["tool_calls"],
-        "text": result["text"][:300],
+        "tool_rounds": result["tool_rounds"],
+        "requires_tools": requires,
+        "text": result["text"],
+        "text_truncated": False,
         # 这一条的 trace 路径（20260922）：父进程报告里带出去，红条能直接指着读
         "trace": result.get("trace"),
     }

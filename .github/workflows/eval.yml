@@ -88,6 +88,9 @@ jobs:
       - name: 跨源对账单测（假夹具喂每条判据两侧/窗口裁剪/伪造字段/gz 往返，并断言夜间脚本真的接了线，秒级，不联网）
         run: uv run python tests/reconcile_offline_test.py
 
+      - name: golden 断言键拼写校验（反射扫取键字面量 × 表 × 逐条用例三向交叉，秒级，不联网）
+        run: uv run python tests/test_golden_keys.py
+
       - name: SSE 终止帧契约（真调 chat_stream：异常/空闲超时两条路径 + 换行不撕帧 + 全仓发出点都 JSON 编码，秒级，不联网不调 LLM）
         run: uv run python tests/test_error_frame.py
 

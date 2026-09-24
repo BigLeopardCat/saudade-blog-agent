@@ -1,9 +1,39 @@
 # Agent 评测与可观测性设计（升级路线第 0 步）
 
 > 升级路线（手写图 → eval → 记忆 → 可观测 → 多 agent）的**验证地基**：先立"怎么验证"，再动工升级。
-> 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、[问题记录.md](问题记录.md)（事故与根因）。
+> 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、[问题记录.md](问题记录.md)（事故与根因）、
+> [agent-eval-report-20260924.md](agent-eval-report-20260924.md)（20260924 覆盖面盘点、口径审查、一次全量跑的读数与逐条定性）。
 > 部署与运维细节（服务名、路径、可复制命令）属私有运行簿，不进仓库。
-> 最后更新：2026-09-24（**评测体系补"断言层之上"的两层**：① 前端渲染层进夜间——`frontend/tests/`
+> 最后更新：2026-09-24 晚（**L2 覆盖面补完 + 指标口径补完**（同一日为两件事，都在这一版）。三块：
+  ① **覆盖面**：golden 110 → **126 条**（80 标签）。补的是"断言层饱和之后还剩下什么没人看"——
+  G2 **九条数据工具零覆盖**（top_notes/categories/tags/announcements/blog_info/social_links/
+  site_map/weather/devices，此前整族只有间接覆盖；这一族只用**结构化工具断言**锁、不用词表，
+  因为"空"是事实不是失败）、G3 **三条零用例的写技能**（category_update/announcement_update/
+  favorite_remove——写面此前只覆盖了 tag 一族，形态是"写前先读 + 幂等"与"查无此物即零写"）、
+  G4 时间锚 1 条（负断言**不断言必须调 `get_current_time`**——server 已注入 `current_time=`，
+  照提示词直接作答才是正确行为，断成必须调用等于把对的判成错的）、G5 能力清单 2 条
+  （user 侧不得自称能做管理操作、admin 侧要看得见管理操作，负断言只取"自称能做"句式以留元讨论豁免）、
+  G8 夜间关 1 条（`require_cmd_all:["off"]` + `forbid_cmd_contains:["on"]`，锁"关掉"不许只发 on）。
+  另就地补强 2 条：`multi_turn_redirect` 与 `admin_write_no_identity_honest`。
+  ② **判据**：新增 `require_cmd_all`（**全称**——`require_cmd_contains` 是单串，一个用例只能锁一条
+  命令，于是"把 X 换成 Y"里只断新开的 Y、不断旧关的 X，半截执行与完整执行同分）；
+  否定式完成声称的负断言补「就」进排除集（"帮你把这篇取消收藏就**好啦**"是**提议**不是完成式）。
+  ③ **指标口径**（代码 + 文档一起改）：报告新增 `pass_rate_ci95`（Wilson 95%，110/110 的下界约
+  0.966——点估计 1.000 会让人把"跑过 110 条都对"读成"正确率就是 100%"）与 `by_tag` 分组
+  （整体通过率会盖住"某个 tag 全红"）；**`last_run.json` 语义收窄为"最近一次全量跑"**
+  （此前一次 `--only <单条>` 的调试跑会把它写成 total=1）；`--min-pass-rate` 的四层语义写进
+  `--help` 与文件头（① 管的是本轮**跑了的**用例的比率，跳过改分母 ② 是比率不是逐条硬判
+  ③ 回归组另按硬判 100%、不受它放宽 ④ 默认 1.0 ⇒ 夜间是"一条都不许红"）；
+  **复跑只对回归组做 ⇒ flake 统计是单向的**（`flaked_ids` 系统性低估，只重跑首跑红），
+  这一条写进报告与文末，免得后来人拿它当"flake 率"读。
+  **有意不覆盖三处**（不是缺口）：`search_knowledge_base`（`/knowledge` 端点返回空）、
+  `get_chat_history`（占位实现）、`device_oled_display`（真硬件副作用）；`__ERROR__` 帧契约
+  **归 L0 不归 L2**（只有超时/异常路径可达，golden 无法确定性触发；工具级的已在
+  `test_admin_write.py`/`test_confirm.py`/`test_authz.py` 有覆盖）。
+  本节起，文档正文里**不再手抄逐 tag 分量**——分量由全量跑的报告给出，见 §4 与
+  `eval/report/last_run.json` 的 `by_tag`（手抄一份必然与它对不上，这是第四次了）。
+  留档见 `eval/report/runs/<ts>.json`）
+> 上版 2026-09-24（**评测体系补"断言层之上"的两层**：① 前端渲染层进夜间——`frontend/tests/`
 > 的 9 个 Playwright 沙箱此前**写了没有任何东西跑它**，现由父仓 `scripts/nightly_sandboxes.sh`
 > 每天 04:40 串行跑（CI 仍只留秒级 node 套件）；② L3 落地为**跨源对账**——`eval/trace_reconcile.py`
 > 把 trace ↔ `agent.log` ↔ `monitor.log` 对起来（单源规则扫描看不见"两个源之间"的错），接入
@@ -68,7 +98,7 @@
 
 ## 1. 定位与原则
 
-- **评测 = 离线质量门禁**（"做得好不好"）：L0 秒级套件（5 个）在 CI 里跑（push 即拦截）；L2 全量 golden 在**本机**跑（20260920 起，CI 侧跨网链路不可用，见 §4 末注）。
+- **评测 = 离线质量门禁**（"做得好不好"）：L0 秒级套件（17 个，`tests/run_all.py` 全跑一遍；CI 侧 `.github/workflows/eval.yml` 逐个 `uv run python tests/...` + 一条 `ruff --select F821`）在 CI 里跑（push 即拦截）；L2 全量 golden 在**本机**跑（20260920 起，CI 侧跨网链路不可用，见 §4 末注）。
 - **可观测性 = 线上实时监控**（"现在跑得怎么样"）：trace/metrics/logs 三支柱。
 - **回放打通两者**：线上日志采样 → 离线评测 → 行为漂移检测。
 - **原则一：评测与语料解耦**。检索器质量、生成鲁棒性用开源数据集评测（与博客文章无关）；
@@ -90,7 +120,7 @@ flowchart TB
         N --> L3[L3 线上对账<br/>trace ↔ agent.log ↔ monitor.log]
     end
     subgraph LOCAL[本机（生产服务器）]
-        P1[按需手动] --> L2[L2 任务级 golden set<br/>78 条 · 约 19 分钟 · 硬门禁]
+        P1[按需手动] --> L2[L2 任务级 golden set<br/>126 条 · 约 25 分钟 · 硬门禁]
         N2[04:00 nightly] --> L2
     end
     L0 -->|失败| BLOCK[阻塞合并]
@@ -103,9 +133,9 @@ flowchart TB
 |---|---|---|---|---|
 | **L0 单元级** | 图节点、工具、schema | 单测（`tests/test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率 | 图重写、记忆剥离 |
 | **L1 基准级** | 检索器、生成层、端到端 RAG | BEIR / RGB / CRAG（§3） | nDCG@10、Recall@5、MRR；噪声准确率 / 拒答率 / 错误检测率；Truthfulness（幻觉=-1） | RAG、防幻觉 |
-| **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 78 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
+| **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，已落地 126 条）；LLM-as-judge 未做 | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
 | **L3 对账级**（原设计为"回放级"） | 线上行为的**跨源一致性** | `eval/trace_reconcile.py`：trace ↔ `agent.log` ↔ `monitor.log` 三源确定性对账（零 LLM、只读） | 各判据条数：trace 有收尾行没有 / 收尾行有 trace 没有 / 重复 trace_id / end_reason·frames 不等 / 只在失败分支出现的前端上报 | 全部（每次升级后跑） |
-| **渲染层**（不在 L0–L3 编号里，与被测对象不同：测前端而非 agent） | 前端组件在真浏览器里的渲染与时序 | `frontend/tests/*.py` 九份 Playwright 沙箱（esbuild 打真组件 + 无头 Chrome，把后端桩掉） | 断言通过率；时序判据（时刻证人）| 前端任何改动（sass/esbuild 两步是本机唯一能拦下构建级缺陷的环节） |
+| **渲染层**（不在 L0–L3 编号里，与被测对象不同：测前端而非 agent） | 前端组件在真浏览器里的渲染与时序 | 父仓 `frontend/tests/` 下的渲染沙箱（Playwright 打真组件 + 无头 Chrome，把后端桩掉；**数目以父仓 `run-suites.mjs` 的清单为准，这里不抄**——抄一次就会漂一次） | 断言通过率；时序判据（时刻证人）| 前端任何改动（sass/esbuild 两步是本机唯一能拦下构建级缺陷的环节） |
 
 **L3 的现状要说清**：文档原写的"生产对话脱敏采样 → 离线重放"**没有做**，落地的是**跨源对账**——
 它不重放、不判"行为漂移方向"，只判"同一轮对话在两个源里的记录对不对得上"。这条比前者便宜得多
@@ -122,7 +152,7 @@ L1（`recall_eval.py`，秒级）与 L3 对账（非门禁——判据还在观�
 由父仓 `scripts/nightly_sandboxes.sh` 每天 04:40 单独跑（结果落 `~/sandbox_regression.log`，
 失败标 `~/sandbox_regression.failed`）。
 
-**L2 门禁分两层**（20260921）：`tags` 含 `regression` 的用例（16 条防幻觉/契约/撤回话术/执行记忆）
+**L2 门禁分两层**（20260921）：`tags` 含 `regression` 的用例（17 条防幻觉/契约/撤回话术/执行记忆）
 **硬判 100% 通过**，不受 `--min-pass-rate` 放宽——回归题锁的是"已经定性为错误的行为不许回来"，
 单条波动就是回归；其余用例是能力题（问答措辞有正常方差），按通过率判。报告 `regression` 块单列，
 FAIL 复审单把回归组红置顶（当天必修）。混跑的坏处正是这个改动要治的病：一次全量里有 1 条回归红、
@@ -137,6 +167,25 @@ FAIL 复审单把回归组红置顶（当天必修）。混跑的坏处正是这
 的终判**（`final_ok`）。复跑的 trace 用 `<case>__rerun` 名——同名会把首跑那份覆盖掉，而"首跑为什么
 红"正是复跑要回答的问题；`golden_trace._run_verdicts` 把 `flaked_ids` 也当"这一晚不干净"，那一夜
 的 trace 不清理。两个跑法（`run_golden.py` 进程内 / `golden_full_run.py` 隔离子进程）口径一致。
+
+**通过率怎么读（20260924 口径补完，此前只写在代码里）**：
+
+- `--min-pass-rate` **四层语义**，每一层都踩过：① 它管的是**本轮真正跑了的**用例的比率——跳过
+  （`needs_admin_uid`/`needs_user_uid` 未设环境变量）**改变分母**，所以跳过必须出现在报告里而不是
+  悄悄豁免；② 它是**比率**不是逐条硬判，`1.0` 与 `0.999` 之间隔着"可以有 0 条红"与"可以有 1 条红"；
+  ③ **回归组另按硬判 100%**，不受它放宽（见上）；④ 默认值就是 `1.0`，而 `scripts/nightly_regression.sh`
+  不带参数调用它 ⇒ **夜间的实际语义是"一条都不许红"**，"按通过率判"只在有人手动传更宽的值时成立。
+- **区间比点估计重要**：报告除 `pass_rate` 还写 `pass_rate_ci95`（Wilson 95%）。110/110 的区间下界
+  约 0.966——点估计 `1.000` 会让人把"跑过的 110 条都对"读成"正确率就是 100%"，而真正的含义是
+  "真值不低于约 0.97 是我能说的全部"。样本越小越要看区间：n=3 的组点估计毫无信息量。
+- **整体通过率会盖住"某个 tag 全红"**：报告按 `by_tag` 分组（`{total, passed, pass_rate, ci95, failed_ids}`），
+  stdout 另打一行「弱项 tag」（只列 `total >= 3` 且有条红的组——n<3 的组红一条就 66%，没有区分度，
+  列出来只会天天响）。分量看这里，不在本文手抄（见 §4）。
+- **复跑只对回归组做 ⇒ flake 统计是单向的**：`flaked_ids` 只统计"首跑红、复跑绿"，**首跑绿复跑会红的
+  那些永远统计不到**（没重跑）。所以它是"已知红斑的下界"，**不是 flake 率**，别拿它做趋势分析。
+- **`last_run.json` = 最近一次*全量*跑**（20260924 收窄）：只有全量跑写它（`run_golden.py` 加了
+  `full_run` 判据）。此前一次 `--only <单条>` 的调试跑会把它覆盖成 `total=1`，而读它的人以为那是
+  当前基线。跑法本身也写进报告（`full_run` / `corpus` / `skipped_ids`），读的人不必先问"这是哪个跑法写的"。
 
 ---
 
@@ -156,25 +205,23 @@ FAIL 复审单把回归组红置顶（当天必修）。混跑的坏处正是这
 
 ## 4. L2 任务级：golden set 设计（核心资产）
 
-**规模 30-50 条，按意图分层（当前已落地 78 条、63 个标签，条目可多标签；主要标签分布：rag_* 22
-（含 recall 正例 10 + noise/拒答组）/ chat 8 / multi-turn 7 / nav 6 / effect 6 / hallucination 8 /
-noise 5 / content_query 5 / knowledge 4 / tool_call 4 / device 3 / regression 7 / exec_memory 2 /
-truth_query 2 / idempotency 2 / summary 2 / display 2 / image 2 / deep 2 / article_read 2 /
-efficiency 2 等——20260901 起新增 article_read/content_query 分层，20260902 起新增
-efficiency/claim/thinking-leak/cover/concurrent/boundary 标签，20260904 起新增
-exec_memory/truth_query/todo 等回执驱动用例，20260905 起新增 repeat-ask/anti-verbatim/
-sticker/planner 等判据改写用例，20260919 起新增 dep/refs 标签（依赖链：检索→读全文））**：
+**规模 30-50 条，按意图分层（当前已落地 126 条、80 个标签，条目可多标签）。**
+
+> **逐 tag 分量看报告，不在本文手抄**：全量跑后在 `eval/report/last_run.json` 的 `by_tag`
+> 里（`{total, passed, pass_rate, ci95, failed_ids}`）——它是从用例文件直接算出来的。
+> 这里手抄过一次就漂过一次（78 条时代抄的分布到 110 条时已有半数对不上），这是第四次了。
+> 标签族的演进史（哪批用例引入了哪些标签）见文首变更注，那段是**考古锚点**，不改。
 
 | 分层 | 条数 | 覆盖 | 断言方式 |
 |---|---|---|---|
 | 意图正确性 | 12 | 导航/特效/夜间/显示/问答/闲聊 | 结构化断言：`tool_called`、`cmd_frame`（金标比对） |
 | 防幻觉攻击 | 8 | 元消息/表演调用/格式漂移/去不存在的页面 | 断言：不伪造命令、不声称未发生的动作 |
 | 多轮上下文 | 8 | 历史引用/摘要恢复/用户改口 | 断言：上下文注入生效 |
-| RAG 问答 | 22 | 12 条 recall 正例（文章出题，与 recall_eval 同源）+ noise/拒答组（语料外问题诚实拒答） | 断言（知识词命中）+ 检索 eval recall@k（L1 落地） |
+| RAG 问答 | 24 | 12 条 recall 正例（文章出题，与 recall_eval 同源）+ noise/拒答组（语料外问题诚实拒答） | 断言（知识词命中）+ 检索 eval recall@k（L1 落地） |
 | 边界输入 | 4 | 空消息/超长/无权限/未登录 | 断言：正确降级路径 |
 
 > 注：上表条数是分层设计目标，实际以 `eval/golden/basic.jsonl` 为准——多标签重叠、持续演进，
-> 现状盘点见上文分布（78 条/63 标签）。
+> 现状盘点见 `eval/report/last_run.json` 的 `by_tag`（本版起分量由报告给出，文档不手抄）。
 
 **评分双输出（LLM-as-judge）**：
 
@@ -195,6 +242,12 @@ sticker/planner 等判据改写用例，20260919 起新增 dep/refs 标签（依
    - 用例：`dep_search_read_ota`（检索→读命中最靠前那篇→答正文细节）、`dep_search_read_graph`
      （换主题防单例运气 + 走检索键字段路径）。
 
+5. **命令全称断言**（20260924 上线）：`require_cmd_all: ["rain:on", "sakura:off"]` —— 每个模式
+   都必须命中至少一条命令帧（**全称**，不是任一）。为什么需要它：既有的 `require_cmd_contains` 是
+   单串，**一个用例只能锁一条命令**，于是「把樱花换成雨」那条用例只断了新开的雨、没断旧开的樱花要
+   关掉——"只开雨不关樱花"（半截执行）与完整执行在那个断言下**同分**，能长期绿。技能的语义明写
+   着"把 X 换成 Y = 两条 spec 同轮"，判据却只看得见其中一条。
+
 **数据集版本管理**：`eval/golden/` 下 JSONL，每条含 `id / user_input / context / gold_assert / gold_score_floor / tags`。
 线上发现新故障模式 → 构造新样本 → 进 golden set → 全量回归（本机按需 / nightly）从此拦截同类回归。golden set 是持续演进资产，
 **改 prompt/图/记忆前必跑，防止"修一个幻觉、引入三个回归"**。
@@ -203,7 +256,7 @@ sticker/planner 等判据改写用例，20260919 起新增 dep/refs 标签（依
 （最坏一次 planner 调用 20+ 分钟才返回），3 条本机合计 39 秒的用例在 CI 里跑 21 分钟未完；
 一次 120 分钟上限的全量跑被杀且零产出（报告只在结尾写 + 非 TTY 块缓冲，日志与 artifact 双双为空）；
 诊断跑还抓出 CI 侧凭据 `401 Invalid API-key`——**CI 一轮都没跑出过真实通过率**。
-结论：L2 **本机跑**（本机即生产服务器，链路真实，78 条约 19 分钟，device 真机用例天然覆盖）；
+结论：L2 **本机跑**（本机即生产服务器，链路真实，126 条约 25 分钟，device 真机用例天然覆盖）；
 `eval/golden_full_run.py` 已提供进程隔离 + 单条 180s 超时（防悬挂污染），是本机的看门狗。
 CI 只留 L0 秒级套件。
 
@@ -294,7 +347,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 
 | 阶段 | 并行建设的评测/可观测 |
 |---|---|
-| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（78 条、63 标签：rag 24/chat 8/hallucination 8/multi-turn 9/nav 8/effect 6/noise 5/content_query 5/device 3/exec_memory 2 等）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>`、`--only <id1,id2>` 逗号多选定位、`--skip-ids`、`--min-pass-rate`；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `tests/test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`tests/judge_offline_test.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。**20260921 补**：`eval/golden_draft.py`
+| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（126 条、80 个标签；**逐 tag 分量见 `eval/report/last_run.json` 的 `by_tag`，不在文档里手抄**）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>`、`--only <id1,id2>` 逗号多选定位、`--skip-ids`、`--min-pass-rate`；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `tests/test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`tests/judge_offline_test.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。**20260921 补**：`eval/golden_draft.py`
 （trace_alert 命中的真实现场 → 用例草稿 + 人审对照单，落 `eval/report/golden_drafts_*.{jsonl,md}`；
 **只产草稿不自动入库**，含真实用户文本故不进 git）+ L2 门禁分两层（回归组硬判 100%，见 §2 门槛分工）。
 LLM-as-judge 未做 |
@@ -312,4 +365,4 @@ LLM-as-judge 未做 |
 | 记忆体系升级 | L0（摘要协议已移除，tests/test_skills.py 断言不再 REVISE）+ golden summary_round（不得输出 SUMMARY:）+ 记忆专项评测（未做） | 摘要触发率、召回命中率、污染事件 |
 | 多 agent | L2 路由正确性 + 子任务成功率 | 路由分布、子 agent 延迟/成本分解 |
 | 防幻觉 | L1 RGB 四 testbed + L2 攻击样本 | 空回复率、恢复语触发率、`__ERROR__` 率 |
-| RAG | 🟡 已落地：检索基线 L1（recall_eval.py 直接测线上 rag/search.py，词法 2/3-gram BM25 文档级聚合，21 条 queries（12 正例 + 9 噪声）recall@1=1.00——词法已打满当前语料，向量留 BEIR 对比再上）+ L2 golden rag_* 22 条（端到端，同源出题）。未做：BEIR 基准、CRAG Truthfulness | 检索耗时、top-k 来源分布、拒绝回答率 |
+| RAG | 🟡 已落地：检索基线 L1（recall_eval.py 直接测线上 rag/search.py，词法 2/3-gram BM25 文档级聚合，21 条 queries（12 正例 + 9 噪声）recall@1=1.00——词法已打满当前语料，向量留 BEIR 对比再上）+ L2 golden rag 族 24 条（端到端，同源出题）。未做：BEIR 基准、CRAG Truthfulness | 检索耗时、top-k 来源分布、拒绝回答率 |
