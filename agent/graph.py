@@ -2625,6 +2625,30 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
 
+    # 只读重复执行裁剪（20260925，用户拍板"按 A 方案修"）：见 _trim_done_reads 头注。
+    # 刻意放在上面四道守卫**之后**：整集合包含的那两道（动作族按帧名 / SNAPSHOT 按
+    # 回执）各自带着自己的豁免（动作族的"意图清单还有未完成项就不收尾"），先让它们
+    # 按原语义处置；这里只补它们够不着的那一格——**部分**已取回（多工具技能模板里
+    # 一半已 PASS、另一半还没有），以及"spec 原文不同但归一化后同一件事"的漏网。
+    trim = _trim_done_reads(plan_obj, state.get("receipts"))
+    if trim is not None:
+        plan_obj, done_specs = trim
+        if not plan_obj["tools"]:
+            logger.info("[planner] 只读工具重复（%s）→ 收尾不重取",
+                        "、".join(_tool_name(s) for s in done_specs))
+            plan_obj = _wrap_up_plan(
+                True, "本轮已取回的只读数据就在上方工具返回里（同一件工具、同一份参数"
+                      "只取一次，重复调用拿回的是同一份数据），基于已有返回如实作答")
+            record("planner", "intercept", reason="read_repeat", dups=done_specs,
+                   redirected=False)
+            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                    "done": False}
+        logger.info("[planner] 只读工具重复（%s）→ 从本轮清单剔除，只执行 %s",
+                    "、".join(_tool_name(s) for s in done_specs),
+                    "、".join(_tool_name(s) for s in plan_obj["tools"]))
+        record("planner", "intercept", reason="read_repeat", dups=done_specs,
+               redirected=True)
+
     logger.info("[planner] skill=%s params=%s tools=%s（round %d/%d）",
                 plan_obj["skill"], plan_obj["params"], plan_obj["tools"], rounds + 1,
                 MAX_PLAN_ROUNDS)
@@ -2710,6 +2734,76 @@ def _already_done_writes(plan_obj: dict, receipts) -> bool:
     planned = {_spec_signature(_tool_name(s), _tool_args(s)[0] or {})
                for s in plan_obj["tools"]}
     return bool(planned) and planned <= passed
+
+
+def _trim_done_reads(plan_obj: dict, receipts) -> tuple[dict, list[str]] | None:
+    """把**已在回执里**的只读 spec 从本轮 TOOLS 行剔除（纯函数，20260925）。
+
+    要治的病（trace 20260925T004234 实证）：round 0 管理员走点名通道取了
+    `get_server_status`（PASS），round 1 planner 改选 `ops_report` 技能，而技能模板
+    写死了 `[get_server_status, get_service_health]` ⇒ 已在手里的那件**又跑一遍**
+    （两份快照 CPU 28.7%→30.0%、内存 61%→60%，同一轮同一指标两个读数）。既有四道
+    守卫都够不着它：动作族那道按"整集合 ⊆ 帧名"、SNAPSHOT 那道按"整集合 ⊆ 回执"，
+    而这里的计划是**超集**（多带一件服务健康）；`content_query` 专用的 data_repeat
+    分支又因为 skill 已切换而整块跳过。
+
+    判据 = **工具粒度 + 归一化 (工具, 参数)**：`_spec_signature` 与回执侧同源
+    （`str(v)[:200]` + 键序抹平），于是 `{"article_id": "46"}` 与回执里的
+    `{"article_id": 46}` 是同一个签名——旧判据拿 spec **原文**比较，只在 JSON 类型
+    上不同的重复一件都判不出来（全量 861 条 trace 里"同一篇读两遍"有 5 条是这种）。
+
+    **只动只读工具**（`authz.WRITE_SCOPES` 之外的）：写族的"再来一次"可能是**另一
+    件事**（改回原名、再删一个），取舍见 EXECUTED_ONCE_SKILLS 上方注释；`device_oled_display`
+    同理（write.device，"再显示一次"是新请求，rule 6 明确要求重发）。参数解析失败
+    （`ok=False`）的 spec 一律保留——那是要交给 execute 响亮报错的，不是"已完成"。
+
+    返回 `(裁剪后的计划, 被剔的 spec 原文)`；一件都没剔 → None（调用方按原计划走）。
+    剔空时 `tools` 为空，由调用方决定收尾——本函数不判"要不要收尾"。
+
+    **边界**：键集必须**完全一致**才算同一件事（签名是整份参数字典的归一化）。
+    计划里少带一个键（如只写 `article_id` 不写 `doc_type`）按"另一次调用"放行——
+    宁可多跑一次，也不把带过滤参数的调用（`get_moderation_status({"status": "pending"})`
+    与无参的那次）并成同一件。
+    """
+    if not (plan_obj.get("tools") and receipts):
+        return None
+    passed = {_spec_signature(r.get("tool"), r.get("args") or {})
+              for r in receipts}
+    kept, dropped = [], []
+    for s in plan_obj["tools"]:
+        name = _tool_name(s)
+        args, ok = _tool_args(s)
+        if (ok and authz.required_scope(name) not in authz.WRITE_SCOPES
+                and _spec_signature(name, args) in passed):
+            dropped.append(s)
+        else:
+            kept.append(s)
+    if not dropped:
+        return None
+    drop_sigs = {_spec_signature(_tool_name(s), _tool_args(s)[0]) for s in dropped}
+    drop_names = {_tool_name(s) for s in dropped}
+    fresh = dict(plan_obj)
+    fresh["tools"] = kept
+    # PARAMS 与 TOOLS 行同源生成，剔了 TOOLS 行就得同剔 PARAMS——计划文本是 narrator
+    # 读到的唯一计划，两行不一致等于让它猜"到底取了没有"（判据仍是签名，见上）。
+    params = dict(plan_obj.get("params") or {})
+    calls = params.get("calls")
+    if isinstance(calls, list):
+        params["calls"] = [
+            c for c in calls
+            if not (isinstance(c, dict)
+                    and _spec_signature(c.get("tool"),
+                                        c.get("args") or {}) in drop_sigs)]
+    names = params.get("tools")
+    if isinstance(names, list):
+        params["tools"] = [n for n in names if n not in drop_names]
+    fresh["params"] = params
+    why = "、".join(_tool_name(s) for s in dropped)
+    old_note = (plan_obj.get("note") or "").strip()
+    tail = (f"{why} 本轮已取回，不重复取（返回就在上方工具返回里）；"
+            "其余按清单继续，全部基于已有返回如实作答")
+    fresh["note"] = f"{old_note}｜{tail}" if old_note else tail
+    return fresh, dropped
 
 
 def _tool_args(tool_spec: str) -> tuple[dict, bool]:
