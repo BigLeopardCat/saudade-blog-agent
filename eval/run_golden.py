@@ -574,8 +574,13 @@ GOLD_ASSERT_KEYS = frozenset({
     "require_tool_calls", "require_tool_calls_any", "no_tool_calls", "forbid_tool_calls",
     # 执行回执（checker 验收侧，__EXEC__ 帧）
     "require_exec_tools", "require_exec_args", "require_arg_from_result",
+    # 零执行（20260925 双轮）：第 1 轮"只弹卡、一个写都没发生"的**正面**断言，
+    # 与第 2 轮的 require_exec_tools 配对（`forbid_exec_tools` 是它的负向孪生）
+    "require_zero_exec", "forbid_exec_tools",
     # 控制帧与终局
     "require_frame_prefix", "forbid_frame_prefix", "forbid_fallback",
+    # 确认卡片载荷（20260925）：从 __CONFIRM__ 帧的令牌里解出的技能/参数条数
+    "require_confirm_payload",
     # 语料化（术语由申报文档运行期派生，见 eval/corpus_terms.py）
     "require_doc_terms",
 })
@@ -719,6 +724,23 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
     for t in gold.get("require_exec_tools", []):
         if t not in result["exec_tools"]:
             fails.append(f"checker 验收回执缺少工具 {t}（exec：{result['exec_tools']}）")
+    # 20260925：**零执行**的正面断言。此前 11 条弹卡用例只有 `forbid_tool_calls`
+    # （点名几个不许调的工具）——那不是"一个写都没发生"：漏点一个、或将来新增一个写
+    # 工具，用例照样绿。本键断言的是**整轮零执行**：planner 侧一个工具调用都没有，
+    # 且 checker 侧一条验收回执都没有（回执只由 PASS 执行产生 ⇒ 零回执 = 没有任何
+    # 成功执行）。它与第 2 轮的 `require_exec_tools` 配对：第 1 轮零执行、第 2 轮真执行。
+    if gold.get("require_zero_exec"):
+        if result["tool_calls"] or result["exec_rows"]:
+            fails.append(
+                "本轮应零执行（planner 未决定任何工具、checker 未验收任何执行），实际："
+                f"tool_calls={result['tool_calls']}，"
+                f"exec={[r.get('tool') for r in result['exec_rows']]}")
+    # `require_exec_tools` 的负向孪生（20260925）：这些工具不得出现在**验收回执**里。
+    # 与 `forbid_tool_calls` 的分工：那个看 planner 的决策，这个看真被执行过——排查
+    # "决定了但没执行" 与 "真执行了" 两件事时，这两个信号必须分得开。
+    for t in gold.get("forbid_exec_tools", []):
+        if t in result["exec_tools"]:
+            fails.append(f"不应有工具 {t} 的执行回执（exec：{result['exec_tools']}）")
 
     # 20260919：参数引用（agent/refs.py）不得以未解析形态进入成功执行。这条在
     # 拓扑上不可能违反（resolve_args 失败即不执行），但断言的是**不变量**：
@@ -767,6 +789,26 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
         hits = [f for f in result["frames"] if f.startswith(p)]
         if hits:
             fails.append(f"本轮不应发出 {p} 帧（实际发了一条：{hits[0][:60]}）")
+
+    # 20260925：确认卡片**载荷**断言——这张卡问的是哪个技能、带了几个参数。载荷从
+    # `__CONFIRM__` 帧里的令牌解出（`confirm.inspect`：只解 base64、不验签；评测读它
+    # 不构成授权判据，见 agent/confirm.py 里那条警告）。顺带锁一条安全不变量：**令牌
+    # 原文不得出现在给用户看的正文里**（它是 10 分钟有效的写授权凭据）。
+    _cp = gold.get("require_confirm_payload")
+    if _cp:
+        _pays = [p for p in (result.get("confirm_payloads") or []) if p]
+        if not _pays:
+            fails.append("本轮没有可读的确认载荷（没弹卡，或控制帧里没带 token）")
+        else:
+            _pay = _pays[0]
+            _specs = _pay.get("specs") or []
+            if _cp.get("skill") and _pay.get("skill") != _cp["skill"]:
+                fails.append(f"卡片技能不符：期望 {_cp['skill']}，载荷 {_pay.get('skill')!r}")
+            if "specs" in _cp and len(_specs) != _cp["specs"]:
+                fails.append(f"卡片参数条数不符：期望 {_cp['specs']}，载荷 {len(_specs)}")
+        for _tk in (result.get("confirm_tokens") or []):
+            if _tk and _tk in text:
+                fails.append("令牌原文出现在正文里（它是 10 分钟有效的写授权凭据）")
 
     if gold.get("forbid_fallback") and result["resets"]:
         fails.append(f"本轮走了 gate fallback（__RESET__×{result['resets']}："
