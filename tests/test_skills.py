@@ -599,8 +599,12 @@ def test_planner_tool_menu():
     for t in ("get_social_links", "get_blog_info", "get_site_map"):
         check(f"菜单含 {t} 且带数据说明", f"- {t}()：" in menu, f"menu={menu}")
     # 参数签名从注册表派生（planner 看得到要填什么参数）
-    check("菜单派生参数签名（search_notes(keyword)）", "- search_notes(keyword)：" in menu, f"menu={menu}")
-    check("菜单派生参数签名（get_weather(location)）", "- get_weather(location)：" in menu, f"menu={menu}")
+    # 参数签名 20260925 起带类型与必填标记（`名字:类型` + `*`/`=值`，见 tests/test_tools_desc.py
+    # 逐工具锁死）；这里只锁"签名是从 args_schema 派生的"这件事本身。
+    check("菜单派生参数签名（search_notes(keyword:str*)）",
+          "- search_notes(keyword:str*)：" in menu, f"menu={menu}")
+    check("菜单派生参数签名（get_weather(location:str…）",
+          "- get_weather(location:str" in menu, f"menu={menu}")
     # 技能描述里的工具枚举与白名单同源（20260924 起按角色渲染，断言**渲染后的**
     # 注入文本——标记漏渲染会让提示词里直接露出占位符）
     from agent.skills import _EXPLICIT_TOOLS_MARK, _PARAM_TOOLS_MARK, build_planner_context
@@ -692,10 +696,10 @@ def test_admin_console_role_channel():
                       for t in _write_tools),
           str([t for t in _write_tools
                if f"- {t}(" in menu_admin or t in callable_query_tools(authz.ROLE_ADMIN)]))
-    # 参数签名从注册表派生（planner 看得到要填什么）
-    sig = ", ".join((getattr(g._TOOL_MAP["get_moderation_status"], "args", None) or {}).keys())
-    check(f"菜单派生参数签名（get_moderation_status({sig})）",
-          f"- get_moderation_status({sig})：" in menu_admin, f"menu={menu_admin}")
+    # 参数签名从注册表派生（planner 看得到要填什么）。**签名带类型/必填标记**（20260925 起），
+    # 这里只锁"这个参数在菜单里看得见"，逐工具对 args_schema 的锁在 tests/test_tools_desc.py。
+    check("菜单派生参数签名（get_moderation_status 带 status 参数）",
+          "- get_moderation_status(status:" in menu_admin, f"menu={menu_admin}")
     check("菜单缓存按角色分开（同角色同对象，不同角色不同串）",
           g._tools_desc_cached(authz.ROLE_ADMIN) is g._tools_desc_cached("admin")
           and isinstance(g._tools_desc_cached(None), str)
