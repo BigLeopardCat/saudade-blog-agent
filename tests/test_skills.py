@@ -2572,8 +2572,13 @@ def test_checker():
 
 def test_execute_receipts_and_route():
     """execute checker 集成（20260904）：PASS → 累计 receipts（skill/tool/args/result/ts）、
-    BLOCK → blocked（只含本轮）+ blocked_seen 累计 + blocked_repeat（spec 二次受阻 =
-    首轮改参重试已败/链断）；route_after_execute 据此路由 reflector。"""
+    BLOCK → blocked（只含本轮）+ blocked_seen 累计 + blocked_repeat（**「工具::原因码」
+    二次受阻** = 首轮改参重试已败/链断）；route_after_execute 据此路由 reflector。
+
+    20260925 键收窄：此前 blocked_seen 存 spec 原文，于是"同一个工具、同一个原因、只换了
+    参数"永远判不出重复——trace 20260924T234402 里 planner 连着四轮改写公告正文（参数每轮
+    都不同）⇒ 一次 reflector 都没进，空转到强制收尾。下面这一节同时锁两半：**同键**必须
+    判重（哪怕参数不同）、**换原因码**必须不判重（改参重试空间不许被收窄掉）。"""
     print("[execute/route] 回执 + 受阻 + 路由")
     def _st(tools_list, **extra):
         obj = instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"})
@@ -2604,15 +2609,28 @@ def test_execute_receipts_and_route():
           str(out2["blocked"]))
     check("首现受阻 → blocked_repeat False（rule5 改参重试空间）",
           out2["blocked_repeat"] is False
-          and out2["blocked_seen"] == ['nonsense_tool({"x": 1})'], str(out2))
-    # 同 spec 二次受阻（把首轮 blocked_seen 带进 state）→ blocked_repeat True
+          and out2["blocked_seen"] == ["nonsense_tool::unknown_tool"], str(out2))
+    # 同键二次受阻（把首轮 blocked_seen 带进 state）→ blocked_repeat True
     out3 = _st(['nonsense_tool({"x": 1})'],
                receipts=out2["receipts"], blocked_seen=out2["blocked_seen"])
-    check("同 spec 二次受阻 → blocked_repeat True",
+    check("同键二次受阻 → blocked_repeat True",
           out3["blocked_repeat"] is True and len(out3["blocked"]) == 1, str(out3))
+    # **换了参数但同工具同原因** → 仍判重复（20260925 收窄的正是这一条：旧键是 spec
+    # 原文，参数一变就是新键，于是改参重试变成"永远在重试"）
+    out3b = _st(['nonsense_tool({"x": 2, "note": "改了一下参数"})'],
+                receipts=out2["receipts"], blocked_seen=out2["blocked_seen"])
+    check("同工具同原因、**参数不同** → 仍判重复（trace 20260924T234402 的现场）",
+          out3b["blocked_repeat"] is True
+          and out3b["blocked_seen"] == ["nonsense_tool::unknown_tool"], str(out3b))
     # 首次受阻但此前 blocked 的是别的 spec → repeat False（planner 改参重试合法）
-    out4 = _st(['nonsense_tool({"x": 1})'], blocked_seen=['another_bad({"y": 2})'])
-    check("受阻 spec 不同 → blocked_repeat False", out4["blocked_repeat"] is False, str(out4))
+    out4 = _st(['nonsense_tool({"x": 1})'], blocked_seen=['another_bad::unknown_tool'])
+    check("受阻工具不同 → blocked_repeat False", out4["blocked_repeat"] is False, str(out4))
+    # 换的是**原因码**（参数改对了、撞上另一类问题）→ 不判重：改参重试空间一分不少。
+    # 稳态只有 `unavailable` 这一条路（真去改工具参数会连上上游），所以直接喂一个
+    # 已经记过的键——键的比较是纯字符串，这一条测的就是"原因码换代次"这件事。
+    out5 = _st(['nonsense_tool({"x": 1})'], blocked_seen=["nonsense_tool::args_parse"])
+    check("同一工具**换了原因码** → blocked_repeat False（改参后换原因不算重复）",
+          out5["blocked_repeat"] is False, str(out5))
     # 路由纯函数
     print("  [route] route_after_execute")
     base_state = {"messages": [], "plan": "", "blocked": [], "blocked_repeat": False}

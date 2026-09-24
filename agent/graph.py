@@ -233,9 +233,10 @@ class AgentState(TypedDict):
                    是 reflector 输入与跨轮执行记忆（__EXEC__ 帧）的原料。
     - blocked:     本轮 execute 的 BLOCK 受阻项（[{spec,tool,reason,result}]，
                    只含本轮——路由判断与 reflector 输入用）。
-    - blocked_seen: 请求内累计受阻 spec 原文（blocked 的累计集，repeat 判定用）。
-    - blocked_repeat: 本轮受阻项里是否有此前已受阻过的 spec（= 首轮改参重试
-                   已失败/链断）→ 路由去 reflector。
+    - blocked_seen: 请求内累计受阻**键**「工具::原因码」（blocked 的累计集，repeat
+                   判定用；20260925 前是 spec 原文，见 execute_node 里收窄的理由）。
+    - blocked_repeat: 本轮受阻项里是否有此前已受阻过的键（= 同一个工具同一个原因
+                   再次受阻，首轮改参重试已失败/链断）→ 路由去 reflector。
     - reflect_rounds: reflector 复盘次数（≤ REFLECT_MAX_ROUNDS，到顶确定性终局）。
     - issues:       reflector 上次输出的 ISSUE 文本（注入下一轮 planner 提示词）。
     - reflect_end:  reflector 判定终局（wrap_up/预算耗尽）→ 路由去 model 叙述。
@@ -4305,7 +4306,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     results: list = []
     receipts = list(state.get("receipts") or [])  # 请求内累计（与 executed 同模式）
     blocked: list = []                            # 只含本轮受阻项（路由/reflector 用）
-    prev_seen = set(state.get("blocked_seen") or [])  # 本轮之前的受阻 spec 集
+    prev_seen = set(state.get("blocked_seen") or [])  # 本轮之前的受阻「键」集（见下）
     tool_data = list(state.get("tool_data") or [])    # 参数引用的取值源（请求内累计）
     for idx, spec in enumerate(specs):
         if _stopped(config):
@@ -4477,11 +4478,32 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                             "result": str(out)[:300]})
         record("execute", "check", tool=name, verdict=verdict, reason=reason,
                skill=plan["skill"])
-    repeat = any(b["spec"] in prev_seen for b in blocked)  # 同 spec 二次受阻 = 重试已败/链断
+    # 受阻去重的**键**（20260925）：从 spec 原文收窄成「工具::原因码」。
+    #
+    # 旧键是 spec 原文（工具 + 全部参数），于是"同一个工具、同一个原因再次受阻"只要参数
+    # 变了就不算重复——而 planner 每轮都会重写参数（trace 20260924T234402：连着四轮改
+    # 公告标题与正文），spec 原文随之每次不同 ⇒ 永远判不出 repeat ⇒ 走不到 reflector，
+    # 一直空转到 MAX_PLAN_ROUNDS 强制收尾，四轮里每轮都对外重新发明一份内容。
+    #
+    # 为什么"原因码"才是重试粒度：有些受阻原因**由用户那句话决定**、不随参数变
+    # （consent_required = 这句没被判成命令；把标题从「今晚不许熬夜！」改成「别熬夜了」
+    # 仍然是"没同意"）——改参重试对它结构上无效，早一步交 reflector 是对的。而参数型
+    # 原因（args_parse/target_not_found）改对参数后**换的是原因码**，键随之不同、仍然
+    # 回到 planner，rule5 的"改参重试一次"空间一分没少；同一个工具同一个原因第二次
+    # 出现，恰恰是"改参已经试过一次还没成"的定义。
+    def _blocked_key(b: dict) -> str:
+        tool, reason = b.get("tool"), b.get("reason")
+        if not tool or not reason:
+            # 键不完整（理论上不会有：唯一的 append 点两个字段都写了）就退回 spec 原文——
+            # 退回的是**更细**的键，方向上只会少判 repeat，不会把两件不相干的事并成一件。
+            return str(b.get("spec") or "")
+        return f"{tool}::{reason}"
+
+    repeat = any(_blocked_key(b) in prev_seen for b in blocked)  # 同键二次受阻 = 重试已败/链断
     updates = {"messages": results,
                "executed": executed + [s for s in specs if s not in executed],
                "receipts": receipts, "blocked": blocked,
-               "blocked_seen": sorted(prev_seen | {b["spec"] for b in blocked}),
+               "blocked_seen": sorted(prev_seen | {_blocked_key(b) for b in blocked}),
                "blocked_repeat": repeat, "tool_data": tool_data}
     if not blocked:
         updates["issues"] = ""  # 全 PASS → 复盘建议清空（不残留误导下一轮 planner）
