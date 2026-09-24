@@ -10,7 +10,8 @@
      `gold.get("X")` / `gold["X"]` / `g.get("X")` / `g["X"]` 字面量，必须都在
      `GOLD_ASSERT_KEYS ∪ GOLD_REQUEST_KEYS ∪ GOLD_ROUND_KEYS` 里（新读一个键却没改表 ⇒ 红）。
   ② **表 → 代码**：表里每个键必须真在源码里被读（删了实现却留着表项 ⇒ 红）。
-  ③ **用例 → 四类之并**：逐条扫 `eval/golden/basic.jsonl`，每个 gold 键必须属于
+  ③ **用例 → 四类之并**：逐条扫 `eval/golden/basic.jsonl`（多轮用例要**走进每一轮**的
+     gold——双轮用例的判据全在轮里，只扫顶层等于它一个键都没受校验），每个 gold 键必须属于
      断言键 / 请求键 / 注释键 / 轮次键之一（`note` 这种拼错的第三个名字 ⇒ 红，并点名是哪条用例）。
 另加一条**动态取键**的守卫：源码里任何 `g.get(` / `gold[` 后面不跟字符串字面量的写法，
 都会让上面三条全部失效（键名在运行期才知道，反射扫不到）——一律判红，要求改成字面量。
@@ -110,21 +111,36 @@ for case in _cases:
     for k in (case.get("gold") or {}):
         if k not in KNOWN | rg.GOLD_COMMENT_KEYS:
             _unknown.append(f"{case.get('id')}: gold.{k}")
+    # 多轮用例（20260925 起的 `rounds`）的 gold 写在各轮里——本检查必须跟着走进去，
+    # 否则双轮用例的全部断言键**一个都不受拼写校验**（本轮加的第一条真写用例正是这种
+    # 形状：它整个判据都在轮里，漏扫 = 拼错也没人知道）。
+    for i, rnd in enumerate(case.get("rounds") or [], 1):
+        for k in (rnd.get("gold") or {}):
+            if k not in KNOWN | rg.GOLD_COMMENT_KEYS:
+                _unknown.append(f"{case.get('id')}: rounds[{i}].gold.{k}")
 check("没有拼错的 gold 键（拼错 = 那段断言静默不执行）", not _unknown, "；".join(_unknown))
 # 单独点名 `note`：它是抓到的第一例（`_note` 少一个下划线）。后来人若复制粘贴了那一行，
 # 报错里直接给出正解。
 check("没有裸 `note`（注释键是 `_note`；写成 `note` 等于这条注释不存在）",
       not any(u.endswith("gold.note") for u in _unknown))
 _ids = [c.get("id", "?") for c in _cases]
-check("用例数（126 条）", len(_ids) == 126, f"实际 {len(_ids)}")
+check("用例数（127 条）", len(_ids) == 127, f"实际 {len(_ids)}")
 check("用例 id 无重复", len(_ids) == len(set(_ids)),
       f"重复：{sorted({i for i in _ids if _ids.count(i) > 1})}")
 # 每条用例至少带一个**断言**键——只有注释的用例等于没判。这不是拼写问题，但属同一族
-# 失效（看着有、其实没有），顺手在同一处拦下。
+# 失效（看着有、其实没有），顺手在同一处拦下。多轮用例的断言在各轮里，取并集
+# （判据照 `rg.iter_rounds` 走，不在这里自己写一套"哪一轮算数"）。
 _no_assert = [c.get("id") for c in _cases
-              if not (set(c.get("gold") or {}) & rg.GOLD_ASSERT_KEYS)]
+              if not (set().union(*(set(r["gold"]) for r in rg.iter_rounds(c)))
+                      & rg.GOLD_ASSERT_KEYS)]
 check("每条用例都至少带一个断言键（只有注释的用例等于没判）", not _no_assert,
       "；".join(_no_assert))
+# 反面：多轮用例顶上再写一个 `gold`。`iter_rounds` 有 `rounds` 时**只**看轮内的 gold
+# （顶层那个从此没有任何读者）——写了它等于给自己一个"这条用例判过了"的错觉。同一族
+# 失效，照上面的理由在这里一起拦。
+_ghost_gold = [c.get("id") for c in _cases if c.get("rounds") and c.get("gold")]
+check("多轮用例不写顶层 gold（有 rounds 时它一个读者都没有）", not _ghost_gold,
+      "；".join(_ghost_gold))
 
 print()
 if FAILED:
