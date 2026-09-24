@@ -97,6 +97,9 @@ jobs:
       - name: 语料术语派生单测（过滤五条规则/排序截断/申报失配，秒级，内联夹具不联网）
         run: uv run python tests/test_corpus_terms.py
 
+      - name: 真写夹具单测（在位三态·读不到≠不在位/残留只认前缀/只读源码扫描/用例侧不变量，秒级，不联网）
+        run: uv run python tests/test_golden_fixture.py
+
       - name: SSE 终止帧契约（真调 chat_stream：异常/空闲超时两条路径 + 换行不撕帧 + 全仓发出点都 JSON 编码，秒级，不联网不调 LLM）
         run: uv run python tests/test_error_frame.py
 
