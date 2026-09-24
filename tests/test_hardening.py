@@ -436,13 +436,108 @@ def test_weather_location_shape_gate():
           "wttr.in/%E6%9D%AD%E5%B7%9E" in calls[0] and "杭州天气" in str(good), calls)
 
 
+def test_review_endpoint_hardening():
+    """`/review` 的身份与并发闸（20260925 安全审计）。
+
+    这个端点的失败处理在**调用方**（Rust 侧超时/非 200/解析失败一律转人工待审，绝不放行）
+    ⇒ "闸满 503"的代价是多一次人工，不是漏审。身份那一半走与 `/chat` 同一个开关
+    （`AGENT_REQUIRE_ASSERTION`）——**开关在生产 .env 里已经是 1**，所以这两半的部署顺序
+    是有硬要求的：Rust 必须先发 `X-Agent-Assertion`，agent 侧才允许接上 `_resolve_principal`，
+    顺序反了会把留言审核成片打成 401（每一条都转人工）。
+
+    ⚠️ 与 `test_user_assertion` 同款纪律：**测试自己钉开关与密钥，不读环境**
+    （本机 .env 是 1、CI 无 .env ⇒ 读环境值必然本机绿 CI 红，或者反过来）。"""
+    import base64 as b64
+    import hashlib as hl
+    import hmac as hm
+    import json as js
+    import time as tm
+    from unittest.mock import patch
+
+    import fastapi
+    import server
+    from config.settings import settings
+
+    class _Req:
+        """只实现 `_resolve_principal` 用到的 `headers.get`。"""
+        def __init__(self, headers=None):
+            self.headers = headers or {}
+
+    TEST_SECRET = "ci-test-secret-不参与生产"
+    orig_secret, orig_flag = settings.jwt_secret, settings.agent_require_assertion
+
+    def sign(sub, role=None, ttl=60):
+        b = lambda x: b64.urlsafe_b64encode(x).rstrip(b"=")
+        h = b(js.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+        payload = {"sub": str(sub), "aud": "agent", "exp": int(tm.time()) + ttl}
+        if role:
+            payload["role"] = role
+        p = b(js.dumps(payload).encode())
+        return (h + b"." + p + b"." + b(hm.new(TEST_SECRET.encode(), h + b"." + p, hl.sha256).digest())).decode()
+
+    check("ReviewRequest 收 uid（老调用方不传仍是 0）",
+          server.ReviewRequest(content="x").uid == 0
+          and server.ReviewRequest(content="x", uid=721).uid == 721)
+
+    seen: list[str] = []
+    with patch("agent.moderator.review",
+               lambda t: seen.append(t) or {"verdict": "pass", "reason": ""}):
+        # ① 开关关（代码默认）= 滚动期的兼容行为：无头照常审核，只记 WARNING
+        settings.agent_require_assertion = False
+        out = server.review_message(_Req(), server.ReviewRequest(content="你好", uid=721))
+        check("开关关 + 无断言 → 按 body uid 照常审核（滚动期行为不变）",
+              out["verdict"] == "pass" and seen == ["你好"], (out, seen))
+
+        # ② 开关关 + 带有效断言 = 断言覆盖 body（换成生产配置后的正常路径）
+        settings.jwt_secret = TEST_SECRET
+        out = server.review_message(
+            _Req({server._ASSERTION_HEADER: sign(721, role="admin")}),
+            server.ReviewRequest(content="再来一条", uid=1))
+        check("带断言 → 验签通过、以断言里的 uid 为准（body 只是回退值）",
+              out["verdict"] == "pass" and len(seen) == 2, (out, seen))
+
+        # ③ 开关开 = 生产 .env 的现状：缺头必须 401（fail-closed）
+        settings.agent_require_assertion = True
+        try:
+            server.review_message(_Req(), server.ReviewRequest(content="x", uid=721))
+            check("开关开 + 无断言 → 401", False, "未抛、直接放行")
+        except fastapi.HTTPException as e:
+            check("开关开 + 无断言 → 401（Rust 未发头时绝不放行）", e.status_code == 401, e.status_code)
+
+    # 并发闸：占满槽位后新请求在等待窗口内拿不到 → 503（不放行、也不无声排队）
+    settings.agent_require_assertion = False
+    settings.jwt_secret = orig_secret
+    orig_wait = server.REVIEW_QUEUE_WAIT
+    server.REVIEW_QUEUE_WAIT = 0.1
+    held = [server._review_slots.acquire(blocking=False)
+            for _ in range(server.REVIEW_CONCURRENCY)]
+    try:
+        check("测试自己占满了全部槽位（否则下面这条是空转）",
+              all(held), (held, server.REVIEW_CONCURRENCY))
+        try:
+            server.review_message(_Req(), server.ReviewRequest(content="x"))
+            check("闸满 → 503", False, "未抛、直接放行")
+        except fastapi.HTTPException as e:
+            check("闸满 → 503（调用方转人工待审）", e.status_code == 503, e.status_code)
+    finally:
+        settings.jwt_secret = orig_secret
+        settings.agent_require_assertion = orig_flag
+        server.REVIEW_QUEUE_WAIT = orig_wait
+        for ok in held:
+            if ok:
+                server._review_slots.release()
+    check("槽位已全部归还（下一次请求不受影响）",
+          server._review_slots.acquire(blocking=False) and not server._review_slots.release())
+
+
 def main():
     for fn in (test_tls_verification_on, test_request_limits,
                test_body_limit_middleware, test_stream_slots,
                test_tool_result_kinds, test_history_model_and_review_limits,
                test_user_assertion, test_display_idempotency_race,
                test_rag_unavailable_vs_empty,
-               test_weather_location_shape_gate):
+               test_weather_location_shape_gate,
+               test_review_endpoint_hardening):
         print(f"\n── {fn.__name__} ──")
         fn()
     if FAILS:

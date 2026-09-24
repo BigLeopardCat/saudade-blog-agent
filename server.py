@@ -104,6 +104,14 @@ STREAM_QUEUE_WAIT = 3.0         # 秒；排队超过这个时间就如实 503，
 # Python 3.10+ 起 asyncio.Semaphore() 不在构造时绑事件循环，模块级创建是安全的。
 _stream_slots = asyncio.Semaphore(MAX_CONCURRENT_STREAMS)
 
+# /review 的**独立**小闸（20260925 审计）：它是"外部文本 → 一次 LLM 裁决"，此前不占任何
+# 闸 ⇒ 任何能连到 8010 的进程都能免费烧模型额度。刻意不共用对话那 8 个槽位：留言审核是
+# 同步短任务（上限 25s），与访客对话抢槽位会让留言高峰把对话打成 503。
+# 用 threading 版（`/review` 是 sync def，FastAPI 放线程池里跑，不占事件循环）。
+REVIEW_CONCURRENCY = int(os.environ.get("AGENT_MAX_REVIEW", "4"))
+REVIEW_QUEUE_WAIT = 3.0
+_review_slots = threading.BoundedSemaphore(REVIEW_CONCURRENCY)
+
 
 async def _try_acquire_slot() -> bool:
     """拿并发槽位；排队超过 STREAM_QUEUE_WAIT 秒返回 False（调用方回 503，别无声排队）。"""
@@ -1489,10 +1497,13 @@ class ReviewRequest(BaseModel):
     `content=%.60s`，只打 60 字符。）"""
     content: str = Field(max_length=4000)
     author: str = Field(default="", max_length=100)
+    # 发起人 uid（20260925 审计 A5 起由 Rust 带上）：只用于身份断言核对与日志留痕。
+    # 缺省 0 = 老调用方（那时只能靠断言本身，或用不了断言时退回"身份不明"）。
+    uid: int = Field(default=0, ge=0)
 
 
 @app.post("/review")
-def review_message(req: ReviewRequest):
+def review_message(request: Request, req: ReviewRequest):
     """对一条留言做 pass/flag 一次裁决（qwen 低随机、无思考链、同步、25s 上限）。
 
     语义：pass = 内容可公开展示；flag = 拦下进待审（是否还需人工放行由 Rust 按
@@ -1501,18 +1512,36 @@ def review_message(req: ReviewRequest):
     不是放行——`talks.rs::board_approved` 的三个失败分支都返回 `(0, None, None)`，
     即"宁可多一次人工，绝不放行未经审核的内容"。兜底决策在调用方，此处不吞异常，
     保证 Rust 日志可见性）。
+
+    20260925 审计两处加固：
+    · **身份**：此前这个端点没有任何身份断言，严重度完全押在"8010 只听回环"这一个
+      部署事实上（谁连得上就能免费烧模型额度）。现在与 `/chat` 同款走
+      `_resolve_principal`（同一个开关 `AGENT_REQUIRE_ASSERTION`）。
+      **部署顺序是硬要求**：该开关在生产 .env 里**已经是 1**（不是"以后再打开"）⇒
+      必须先部署 Rust 的 `talks.rs`（它开始随请求发 `X-Agent-Assertion`），
+      再部署这半；顺序反了这条端点会成片 401，每一条留言都转人工待审。
+    · **并发**：`REVIEW_CONCURRENCY` 槽位（默认 4），排队超 3s 如实 503 —— 调用方
+      对这个端点的失败处理是"转人工待审"，不会漏审。
     """
-    from agent import moderator
-    text = (req.content or "").strip()
-    # 实现收进 agent/moderator.py（20260920）：不信任输入（访客正文进围栏）、
-    # 输出白名单、fail-open 取向，以及 tests/test_side_tasks.py 的回归锁。
+    principal = _resolve_principal(request, req.uid)
+    if not _review_slots.acquire(timeout=REVIEW_QUEUE_WAIT):
+        logger.warning("[review] 并发闸已满（%d 槽），排队 %.1fs 未拿到 → 503",
+                       REVIEW_CONCURRENCY, REVIEW_QUEUE_WAIT)
+        raise HTTPException(503, "审核队列已满，请稍后重试")
     try:
-        result = moderator.review(text)
-    except Exception:
-        logger.exception("[review] LLM 调用失败（Rust 侧将转人工待审）")
-        raise
-    logger.info("[review] verdict=%s reason=%.60s content=%.60s",
-                result["verdict"], result["reason"], text)
+        from agent import moderator
+        text = (req.content or "").strip()
+        # 实现收进 agent/moderator.py（20260920）：不信任输入（访客正文进围栏）、
+        # 输出白名单、fail-open 取向，以及 tests/test_side_tasks.py 的回归锁。
+        try:
+            result = moderator.review(text)
+        except Exception:
+            logger.exception("[review] LLM 调用失败（Rust 侧将转人工待审）")
+            raise
+    finally:
+        _review_slots.release()
+    logger.info("[review] verdict=%s reason=%.60s uid=%s content=%.60s",
+                result["verdict"], result["reason"], principal.uid, text)
     return result
 
 
