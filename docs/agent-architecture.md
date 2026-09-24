@@ -938,8 +938,10 @@ flowchart TB
   ——如实告知场景，软失败不升受阻链）。**回执是后续一切事实链的源头**：narrator 转述、跨轮记忆
   落库、gate 完成声称对照都只认 PASS 回执。
 - **reflector = 受阻复盘（20260904，≤`REFLECT_MAX_ROUNDS=2`）**：路由 `route_after_execute`——
-  本轮无受阻 → planner（正常循环）；受阻**首现**（spec 不在 blocked_seen）→ planner（现有 rule5
-  改参重试，零新增 LLM）；同一 spec **重复受阻**（blocked_seen 命中，重试已败/链断）→ reflector。
+  本轮无受阻 → planner（正常循环）；受阻**首现**（「工具::原因码」不在 blocked_seen）→ planner
+  （现有 rule5 改参重试，零新增 LLM）；同一键**重复受阻**（blocked_seen 命中，重试已败/链断）→
+  reflector。键是「工具::原因码」而非 spec 原文（20260925 收窄）：参数每轮都会被重写，按 spec
+  原文判重会让"同一个工具同一个原因"永远判不出来。
   输入**结构性无散文**（计划文本 + blocked 项 spec/原因码/截断结果 + 回执 + 工具帧截断，≤900
   字），LLM 输出两行契约 `ISSUE: <每项|缺什么|怎么改>` + `DECIDE: replan|wrap_up`（temp 0.0/300
   tokens/30s/无 thinking）；解析失败/预算耗尽 → `_terminal_plan` 确定性终局（无静默 accept）。
