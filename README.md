@@ -1,159 +1,245 @@
-# Saudade Blog AI Agent（泠月喵）🐱
+# Saudade Blog AI Agent
 
-博客看板娘"泠月喵"的对话 Agent 后端（FastAPI，:8010）。它真实跑在生产环境里——宿主博客是
-一套 Rust 后端（:3000，鉴权/DB/SSE 编排）+ React 前端（含 Live2D 看板娘对话面板），
-**那部分是私有仓库**（另一个仓库、不在本仓库范围内）。
-本仓库负责：对话生成、博客内容查询、导航/特效/夜间模式命令、IoT 设备（ESP32 OLED）屏幕显示。
+博客看板娘“泠月喵”的生产型对话 Agent。项目运行在 FastAPI + LangGraph 上，负责站内内容问答、检索、页面动作、IoT 设备交互、后台管理助手和留言 AI 审核。
 
-**核心定位：手写 LangGraph 图（planner ⇄ execute 决策-执行循环 → model → gate）+ 技能注册表受限规划，
-20260903 起 planner 全权（自由 ReAct / reflector / REVISE 已废除）；对话记忆全部外置 MySQL（agent 无状态，每请求独立线程）。**
+项目面向单一业务域，提供确定性执行、权限控制、流式输出和运行时可观测能力。
 
----
+## 项目定位
 
-## 🏗️ 架构一句话
+当前系统解决的核心问题不是“模型能不能调用工具”，而是：
 
-```
-浏览器(autoload.js)
-  → POST /api/chat/stream (SSE)          [nginx → Rust :3000]
-  → Rust: 鉴权JWT → 消息入库 → 组装请求体（20 条历史 + 摘要 + 状态）
-  → Python Agent :8010: 手写图（planner ⇄ execute 决策-执行 ≤4 轮 → model 叙述 → gate 检查/fallback）
-  → Rust: 逐帧转发 + 流结束存回复 + __SUMMARY__ 帧摘要入库
-  → 浏览器: 逐帧渲染 + 命令帧执行（导航/特效/夜间）
-```
+- 模型输出不稳定时，如何仍然按白名单执行；
+- 工具失败、返回空结果、服务不可用时，如何区分事实和故障；
+- 用户追问、短应答、多轮任务时，如何避免重复执行或编造执行；
+- 写操作涉及后台数据时，如何同时做权限校验、目标校验和用户确认；
+- 流式连接断开、LLM 超时、并发升高时，如何限制资源和副作用；
+- 最终回复如何与真实工具回执保持一致。
 
-详细架构：[docs/agent-architecture.md](docs/agent-architecture.md)（全链路：时序、记忆、工具、防幻觉、超时、部署）。
-评测与可观测设计：[docs/eval-observability.md](docs/eval-observability.md)。
-RAG 检索设计总结：[docs/rag-design.md](docs/rag-design.md)（历史设计记录，检索现状见 [rag/search.py](rag/search.py) 头注释）。
+## 架构
 
----
-
-## 📁 目录结构
-
-```
-saudade-blog-agent/
-├── server.py               # FastAPI 入口：/chat、/chat/stream、/review（留言 AI 审核）、/graph/query（图谱检索）、/health
-│                           #   流式编排 + 身份断言验签 + 输入限额/体积闸/并发闸
-├── agent/
-│   ├── graph.py            # ★ 手写 LangGraph 图（1648 行）：planner(唯一决策) ⇄ execute(确定性执行) → model(零工具叙述) → gate(确定性检查)
-│   ├── decisions.py        # ★ 确定性决策层（523 行，零 LLM）：快道/动作意图扫描/检索候选裁决/终局计划
-│   ├── context.py          # 上下文组装（210 行，纯函数叶子层）：消息文本/页面上下文/工具帧摘要/回执摘要
-│   ├── skills.py           # ★ 技能注册表：8 技能静态定义 + NAV_MAP 导航映射（业务唯一数据源）
-│   ├── agent.py            # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
-│   ├── memory.py           # MemorySaver 兼容存根（实际不承担记忆，见文档 §4.6）
-│   └── prompts.py          # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 叙述规则（model 零工具 narrator 用）
-├── rag/                    # ★ RAG 检索管线（20260830）：词法 2/3-gram BM25 内存倒排索引，
-│   │                       #   语料=线上可见文章（20260901 净化：说说/留言/公告移出检索池；
-│   │                       #   20260912 修：翻页累加，不再吃接口默认 pageSize=6 只索引 6 篇），
-│   │                       #   10 分钟懒刷新；检索只定位（候选 ID+标题+分），解读走 get_article_detail 全文
-│   ├── search.py           # RagIndex + search()：检索 eval 直接测本实现（评测即线上行为）；
-│   │                       #   **索引不可用时返回 None**（区别于"没命中"的 []，工具层据此标 unavailable）
-│   └── wordgraph.py        # 另一条独立检索线：词向量图谱的查询侧（1024 维余弦，纯 stdlib array+map，
-│                           #   无 numpy；建图是离线脚本 scripts/build_word_graph.py）
-├── config/settings.py      # pydantic-settings 配置
-├── models/llm.py           # LLM 工厂：provider 三选一（qwen/deepseek/openai）
-├── tools/base.py           # 22 个 @tool 工具 + _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重
-├── utils/                  # logging（trace_id/日志）+ trace（对话 trace 落盘）+ tts（未启用）+ helpers
-├── eval/                   # 评测：golden set（78 条）+ run_golden.py（L2 任务级，真实 LLM）
-│   │                       #       + golden_case_runner.py/golden_full_run.py（进程隔离跑法）
-│   │                       #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
-│   │                       #       + trace_metrics.py/trace_alert.py（trace 指标与语义巡检）
-│   │                       #       + golden_draft.py（真实 trace 现场 → golden 用例草稿，供人审后入库）
-├── scripts/                # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）+ sticker_smoke（贴纸冒烟）
-├── tests/                  # L0 单元级（16 个秒级套件 + 统一入口 run_all.py：技能注册表/plan 契约、权限模型、
-│                           #   确认令牌与弹窗、写面、侧任务、分节、报表、加固、协作取消、实体摘要、自己的
-│                           #   数据、golden trace、判据自测、回归组重跑、跨源对账）
-└── docs/                   # 架构文档 + 评测可观测设计
+```text
+浏览器 Live2D 对话面板
+        │ SSE
+        ▼
+Rust 后端：鉴权、MySQL 记忆、SSE 转发、身份断言
+        │ HTTP
+        ▼
+Python Agent :8010
+        │
+        ├─ planner：唯一的正常路径决策者
+        ├─ execute：按计划确定性执行工具
+        ├─ planner：读取工具帧，继续、修正或收尾
+        ├─ reflector：重复受阻时的受限诊断
+        ├─ model：零工具 narrator，只组织最终回复
+        └─ gate：确定性事实/声称校验，失败直接 fallback
 ```
 
----
+正常任务的主循环是：
 
-## 🚦 快速开始
-
-```bash
-cd saudade-blog-agent
-uv sync                       # 创建 .venv + 安装依赖
-cp .env.example .env         # 填入 LLM API Key（生产：qwen → qwen3.8-flash；代码默认值见下方配置表）
+```text
+planner → execute → planner → ... → model → gate → END
 ```
 
-**以服务方式运行（生产形态）**：systemd 常驻服务（2 workers，`Restart=always` 崩溃自愈，
-`TimeoutStopSec=120` 优雅停等在途对话——SIGTERM 后在途对话自然收尾再停，不硬掐）。
-**push 不等于部署**：改动要重启该服务才生效（具体服务名与运维命令属私有运行簿，不进仓库）。
-健康检查：`curl http://localhost:8010/health`（agent_ready）。
+只有同一执行项重复受阻时才进入 `reflector`。第一次受阻回到 planner，允许基于真实错误帧修正参数；重复受阻才升级诊断，避免每个普通参数错误都启动额外 LLM 复盘。
 
-**日志**（20260830f 日志分组）：`logs/agent/agent.log`（systemd StandardOutput/Error append）
-+ `logs/agent/traces/`（对话 trace JSON，路径由 `trace_dir` 配置）——排障直接读 trace 的分段
-耗时（planner/execute/reflector/model/gate 五段，reflector 未触发时无该段），不必翻日志。
+## 关键设计
 
----
+### 1. 受限规划，而不是自由 ReAct
 
-## 🧠 关键机制
+`agent/skills.py` 维护技能注册表。planner 只能选择注册技能、填写参数并生成调用清单；`instantiate_plan()` 再做模板展开和白名单校验。
 
-| 机制 | 说明 |
-|---|---|
-| **技能注册表 + 受限规划（20260903 planner 全权）** | 固定流程任务（导航/特效/夜间/设备显示/设备查询）落地为 `skills.py` 静态技能定义（8 技能 + NAV_MAP）；planner = **唯一决策者**：选技能 + 填参数（`SKILL:/PARAMS:` 结构化输出）并**每轮产出调用清单**，TOOLS 行 = "执行清单"而非"允许名单"——execute 确定性逐条执行，"点名了却不执行"在结构上不存在。**内容问答（content_query）**：planner 经 `PARAMS.tools`（无参只读点名，`_EXPLICIT_TOOLS` 白名单）或 `PARAMS.calls`（带参检索调用，`_CALLABLE_QUERY_TOOLS` 白名单）给调用清单 → instantiate_plan 白名单校验展开进 TOOLS 行 → execute 必执行（检索定位 → 看帧 → 读全文/换词再搜/收尾的多轮由 planner 驱动）；**自由 ReAct 已废除** |
-| **确定性 gate（取代 reflector/REVISE）** | 执行正确性不需要检查（execute 是确定性执行器）；gate 只兜 model 叙述失真与计划注记不遵守：声称检查作用域收窄（宁可漏拦不可误伤），发现问题 **validate→fallback 直接收尾**（`[Fallback 决定]` + fallback_text，server 发 `__RESET__` 以如实文本替换最终回复）；**无 REVISE 重考轮 / 无质检预算 / 无 LLM 质检** |
-| **记忆外置 MySQL** | 每请求独立线程（无 checkpointer），连续性靠 Rust 注入 20 条历史 + 滚动摘要；摘要由后端**独立任务调用**生成（`_summarize_dialogue`，与回复解耦，模型对记忆无写权限，防摘要幻觉污染）；流式经 `__SUMMARY__` 帧、非流式经 `new_summary` 字段入库 |
-| **显示类请求保障链** | 意图识别确定性（显示快道 `_DISPLAY_FAST_RE` 强模式或 planner 决策）→ 计划模板固定展开 `device_oled_display`（屏幕文案由 execute 内小 LLM 结合对话创作，不进 planner 文本通道）→ execute 确定性执行（有执行必有帧）→ model 零工具叙述（无帧声称"已显示"结构上不可能，叙述失真由 gate 兜底）+ 30s 幂等去重；曾用后端强制路由（_force_display）先执行，20260828 影子系统事故（与主链路并存致决策漂移）后**移除**——20260903 起并入 planner 全权的单一确定性执行路径 |
-| **SSE 帧协议** | JSON 编码 + `\n\n` 分隔；文本帧/命令帧/`__PROCESS__`（过程轨迹）/`__RESET__`（20260903 起仅 gate fallback 发：清屏重绘 + fallback 文本替换最终回复）/`__SUMMARY__`/`__END__`；Rust 逐帧转发，`X-Accel-Buffering: no` |
-| **生成有界性** | planner ⇄ execute 轮次上限 `MAX_PLAN_ROUNDS=4`（超限确定性强制收尾）+ `recursion_limit=30` + LLM 120s + 流式空闲 120s + 总时长 300s + 16 线程池；空回复后端补发恢复语 |
-| **服务间身份断言（20260917）** | agent 的 `user_id` 直接进 config 并被 IoT 工具用来签用户 JWT ⇒ 身份边界不能只靠"只听回环"。Rust 用同一 `JWT_SECRET` 签 60s 短时效断言（`X-Agent-Assertion`，`aud=agent` 防被当登录 token 复用），agent 验签后**用断言里的 uid 覆盖请求体**。滚动上线：`AGENT_REQUIRE_ASSERTION=0`（默认，缺头只 WARNING）→ Rust 部署 → 打开严格模式（缺头/验签失败 → 401） |
-| **工具返回三类（20260917）** | `ToolResult`（str 子类 + `kind`）：`ok` / `empty`（结果就是空，**是事实**，照常进执行回执）/ `unavailable`（服务不可用，**不是事实**，checker 判 BLOCK、不进跨轮执行记忆）。此前 `_get` 把上游故障吞成 `[]`，"服务挂了"伪装成"查到了、就是空的"。⚠️ 工具出口必须走 `_shape()`——`str(ToolResult)` 会退化成普通 str 丢掉 kind |
-| **输入限额与并发闸（20260916）** | 字段级 Pydantic 限额（message 4000 / history 60 / 图片 6 张且单张 ≤1.6M 字符 …）+ Content-Length > 12MB → 413（starlette 默认**不限制** body 大小）+ 流式并发闸（每 worker 8 槽，排队 3s 拿不到 → 503，槽位在 `event_stream` 的 finally 归还） |
-| **协作取消的颗粒度（20260917）** | 断连 → `stop_event` → 循环级 + 节点级 + **逐 spec** 三层检查（一份 `[导航, 屏显]` 清单在中途断连时，后面的写操作不执行）。**边界如实**：in-flight 的 HTTP（LLM/设备/回执轮询）拦不住，最坏等它自己超时——所以承诺是"**写操作绝不发生在用户离开之后**"，不是"立刻停止一切副作用" |
+工具调用有三种入口：
 
----
+- 无参只读数据工具：显式工具白名单；
+- 带参检索和全文读取：参数调用白名单；
+- 有副作用的动作和后台写操作：只能由技能模板展开，不能通过普通查询通道越权。
 
-## 🛠️ 添加新工具
+因此 execute 不再判断“要不要调用”，也不重新生成参数，而是执行已经确定的计划。
 
-在 `tools/base.py` 中用 `@tool` 装饰器定义函数，加入 `_TOOL_REGISTRY`（execute 经 `_TOOL_MAP` 调用，
-planner 注入时自动带描述）。**可规划性由白名单决定（20260903）**：无参只读数据工具 → 加
-`agent/skills.py` 的 `_EXPLICIT_TOOLS`（PARAMS.tools 点名）；带参检索/读全文 → 加
-`_CALLABLE_QUERY_TOOLS`（PARAMS.calls 调用）；**动作工具（有副作用）只能经技能模板展开**——在
-`agent/skills.py` 注册对应技能（触发条件 + 工具序列模板 + 回复契约），planner 才选得到它。
-不注册不进白名单 = planner 不可规划、execute 必拒（`__ERROR__` 帧）——这是本项目的核心约定。
+### 2. 执行回执与受阻状态
 
-## 🔧 配置速查（.env）
+每个工具调用经过确定性 checker，结论只有两种：
 
-| 变量 | 默认值 | 说明 |
+- `PASS`：进入 `receipts`，成为系统确认过的事实；
+- `BLOCK`：进入 `blocked`，不进入跨轮事实记忆。
+
+判据来自工具返回值的 `kind`（`tools/base.py` 的 `ToolResult`）。`kind` 有四个取值，checker 把它们归成上面那两态——**这是两个层级，数目别混着数**（早先的文档既写“工具返回三态”又想把 PASS/BLOCK 算进去，结果两边都对不上）：
+
+| `kind` | 含义 | checker |
 |---|---|---|
-| `LLM_PROVIDER` | `qwen` | `qwen` / `deepseek` / `openai` 三选一 |
-| `QWEN_MODEL` | `qwen3.6-flash` | 模型名（按 provider 前缀：`QWEN_`/`DEEPSEEK_`/`OPENAI_`） |
-| `LLM_ENABLE_THINKING` | `true` | Qwen 思考模式总开关；图内 LLM 调用均显式关闭思考（20260903：planner 决策 / model 叙述——narrator，20260831 46~106s 慢调用实证 / execute 屏幕文案创作 / 摘要），关闭是 per-call 覆写、与总开关无关 |
-| `AGENT_RECURSION_LIMIT` | `30` | 工具循环上限（幻觉重试兜底，server.py 读取） |
-| `AGENT_REQUIRE_ASSERTION` | `0` | 是否**强制**要求服务间身份断言（见「关键机制」表）；生产已开 `1`，本机调试可关 |
-| `AGENT_MAX_CONCURRENT` | `8` | 每 worker 并发流上限（超了排队 3s 后 503） |
-| `AGENT_MAX_BODY_BYTES` | `12582912` | 请求体上限（12MB → 413） |
-| `trace_dir` | `logs/agent/traces` | 对话 trace 落盘目录（20260830f 随日志分组迁移） |
+| `ok` | 正常返回 | PASS |
+| `empty` | 工具确实执行了，结果就是空的——空结果是事实 | PASS，照常进回执 |
+| `not_found` | 查无此物（上游 404），并点明所查 id 的来路 | BLOCK，原因码 `target_not_found` |
+| `unavailable` | 服务不可用——**不是事实** | BLOCK |
 
-## ✅ 测试与评测
+上游调用失败返回 `unavailable` 而**不是** `[]`，因此“查不到内容”和“检索服务挂了”在状态上可区分，也不会被 narrator 讲成“站内没有”。工具出口一律用 `_shape(data)` 而不是 `str(data)`（`str()` 作用在 `ToolResult` 这个 str 子类上会把 `kind` 丢掉）。
 
-```bash
-.venv/bin/python tests/test_skills.py    # L0：秒级，无 LLM（映射表/计划实例化/解析容错/execute 确定性执行/gate 声称闸与 fallback）
-.venv/bin/python tests/test_hardening.py # L0：秒级（TLS 校验/输入限额/体积闸/并发闸/工具返回三类/身份断言/幂等并发/RAG 两态）
-.venv/bin/python tests/test_cancel.py    # L0：秒级（协作取消：五节点入口/写操作零调用/中途取消/LLM 阻塞期间的能力边界）
-.venv/bin/python tests/test_entities.py  # L0：秒级（数据工具回执的实体摘要：序号/计数/候选照抄，解析失败给空摘要，planner 规则 6b 契约在位）
-.venv/bin/python eval/run_golden.py           # L2：78 条真实 LLM 端到端（导航/特效/夜间/多轮/设备显示/注入攻击/摘要/闲聊/RAG 内容问答/执行记忆）；--limit N / --only <id1,id2> 单跑
-.venv/bin/python eval/golden_full_run.py      # L2 进程隔离全量跑（逐条独立进程 + 180s 超时，防悬挂污染）
-.venv/bin/python eval/recall_eval.py          # L1 检索：recall@k/MRR（21 条 queries = 12 正例 + 9 噪声）
-.venv/bin/python tests/run_all.py             # 全部离线套件一把跑（glob 枚举，单套件超时；CI 的同一批）
+### 3. 权限与确认分离
+
+权限回答“这个身份能不能调用工具”，确认回答“这一次用户是否同意执行”。
+
+- `Principal` 是调用者身份载体；
+- `authz.py` 维护 scope、工具权限声明和角色授予表；
+- 后台管理读写使用硬权限闸，不受 shadow 模式放行；
+- 写操作确认使用无状态 HMAC 令牌（TTL 10 分钟），绑定用户、会话、签发时刻和具体工具参数，并带一次性 `jti`——同一张令牌重放第二次会被如实拒绝；
+- execute 只执行验签后的确认计划，不让模型在确认轮重新解释用户意图。
+
+前端确认卡片只由系统事件 `__CONFIRM__` 触发，模型正文不能凭空制造确认框。用户那一下“确定”进入的是一跳**跳过 planner 的执行轮**：意图已经由令牌固定，不再重新规划。
+
+### 4. 无状态 Agent 与外部记忆
+
+Agent 不依赖进程内会话记忆。Rust 后端从 MySQL 组装并注入：
+
+- 最近对话历史；
+- 滚动摘要；
+- 页面上下文（当前 URL、当前文章 id、特效与夜间模式等状态）；
+- 系统台账：**已执行**（`execution_log` 里 checker PASS 过的回执）与**待主人点头**（`pending_action` 表）两块合一，互斥对照；
+- 当前调用者身份和权限上下文。
+
+两块台账合到一个注入块里是刻意的：分成两条时 narrator 有机会把一半读成另一半（把“还没做的”说成“已经办好了”）。点“确定”那一跳里，待办那一半会被改写成“正在执行”，避免它照着“尚未执行”的旧样板文本复述。
+
+摘要由独立任务生成，Agent 回复模型没有记忆写权限，避免模型把自己的猜测污染长期记忆。
+
+### 5. 最终回复不是执行器
+
+`model` 节点不绑定工具，结构上没有 `tool_calls` 通道。它只根据计划、工具帧、回执和叙述规则组织自然语言。
+
+`gate` 负责拦截：
+
+- 工具失败却声称成功；
+- 无工具帧却声称查过、读过或执行过；
+- 确认式导航却声称已经到达；
+- 编造资源 URL；
+- 回复中出现伪命令前缀；
+- 系统台账已经给出确定性结论却被错误改写。
+
+gate 失败不再把回复丢回 LLM 重考，而是生成确定性 fallback，减少再次幻觉的机会。
+
+### 6. SSE 帧协议（Python / Rust / 前端三端契约）
+
+帧分隔 `\n\n`，带载荷的帧其载荷一律 JSON 编码（防换行破坏帧）。改协议必须三端同步：
+
+| 帧 | 载荷形态 | Rust 侧行为 |
+|---|---|---|
+| 普通文本 | `data: <json 字符串>` | 转发前端，并累积进本轮 `reply` |
+| `__PROCESS__:<步骤>` / `__RESET__:<原因>` / `__CONFIRM__:<json>` | **整帧再 JSON 编码** | 按前缀判定；`__PROCESS__` 只转发不入历史；`__RESET__` 清空已累积的 `reply`（被否定的整轮连同标记都不入库）；`__CONFIRM__` 只转发、不落库 |
+| `__PENDING__:<json>` / `__EXEC__:<json>` | 裸帧，但**必须带 `data: ` 前缀** | 收到即**落库**，绝不转发前端（前端无此帧协议） |
+| `__SUMMARY__:<json>` | 裸帧 | 独立摘要结果，必须在 `__END__` 之前到达 |
+| `__END__` / `__NAV_END__` / `__ERROR__:<json>` | 终止帧 | 见终止帧即停止解析并收尾 |
+
+两个反复踩过的坑，写在这里当护栏：
+
+- **`__PENDING__` / `__EXEC__` 的 `data: ` 前缀不能省**。Rust 的 SSE 解析是 `strip_prefix(b"data: ")`，裸 yield 的帧 payload 是空的、会被静默丢弃——`__EXEC__` 上线首轮就因此从未到达落库分支，而链路两端都以为对方有问题。
+- **落库帧要先于终止帧发出**。Rust 见到 `__END__` 就停止解析循环，排在它后面的帧一律读不到。断连同样如此：客户端一见 `__END__` 就断开，所以回复的落库是从生成器生命周期里摘出来单独跑的。
+
+另外，`__CONFIRM__` / `__PENDING__` 的帧体带确认令牌，所以 Rust 在遇到无法解析的帧时那条 WARN 只截前 24 个字符——整帧落进日志文件等于把令牌记在了盘上。
+
+## 目录导览
+
+```text
+saudade-blog-agent/
+├── server.py              FastAPI 入口、SSE 编排、输入限制、并发和取消
+├── agent/
+│   ├── graph.py           LangGraph 状态、节点和条件边
+│   ├── decisions.py       零 LLM 确定性决策和快道
+│   ├── context.py         上下文、工具帧和回执组装
+│   ├── skills.py          技能注册表、计划模板和业务映射
+│   ├── authz.py           scope 权限模型
+│   ├── confirm.py         无状态 HMAC 确认令牌
+│   ├── adminops.py        后台目标解析、写操作确认文案和回执摘要
+│   ├── refs.py            结构化参数引用
+│   ├── moderator.py       留言 AI 审核侧任务
+│   ├── summarizer.py      对话摘要侧任务
+│   └── entities.py        执行回执实体摘要
+├── tools/base.py          48 个工具、工具注册表和 ToolResult 契约
+├── rag/search.py          BM25 内存倒排检索
+├── eval/                  检索评测、golden 评测、trace 分析与跨源对账
+├── tests/                 秒级离线回归测试
+└── docs/                  架构、评测可观测性和问题记录
 ```
 
-- **CI（`.github/workflows/eval.yml`）**：push 跑上面五个秒级套件（L0）。
-- **golden 全量（L2）不进 CI（20260920 撤下）**：CI 侧那条 LLM 腿每次调用先吊住（3 条本机
-  39 秒的用例在 CI 跑 21 分钟未完）、一次 120 分钟的全量跑被杀且零产出、且诊断出 CI 凭据
-  `401 invalid_api_key`。全量改为**本机按需手动跑**（本机即生产服务器，链路真实，78 条约 19 分钟）：
-  `.venv/bin/python eval/run_golden.py`（`--limit N` / `--only a,b`）或
-  `.venv/bin/python eval/golden_full_run.py`（进程隔离 + 单条 180s 超时）。
-- **门禁分两层判（20260921）**：`tags` 含 `regression` 的用例（16 条：防幻觉/契约/撤回话术/
-  执行记忆）**硬判 100%**，不受 `--min-pass-rate` 放宽（回归题不许波动）；其余是能力题，按通过率判。
-  报告里 `regression` 块单列，复审单把回归组红写在最前（当天必修）。
-- nightly cron 自动跑 L1/L2 两项 + `eval/golden_draft.py`（把 trace_alert 命中的真实现场整理成
-  用例草稿到 `eval/report/golden_drafts_*.md`，**只产草稿、人审后手抄入库**，含真实用户文本故不进 git），
-  失败标记 `~/agent_regression.failed`。
-- **改技能注册表 / plan 契约 / 摘要逻辑 / prompt 后必跑**（golden 断言含"回复不得包含 SUMMARY:"）。
+技能注册表当前有 29 个技能，覆盖：导航、页面特效、夜间模式、设备显示与查询、内容检索、文章读取、运维和审核报表、后台文章/标签/分类/公告/留言管理、收藏和通知处理、闲聊等。
 
----
+## 可靠性边界
 
-## 📄 许可
+系统已经具备以下生产防线：
+
+- planner 轮次上限和 LangGraph `recursion_limit`；
+- LLM 调用超时、流式空闲超时、总时长上限；
+- 线程池和流式并发闸；
+- 请求体、字段、历史条数和图片大小限制；
+- 客户端断连后的循环级、节点级和逐工具调用检查；
+- 服务间身份断言和短时效 JWT；
+- 工具返回 `ok / empty / not_found / unavailable` 四态；
+- 结构化 trace：节点事件、分段耗时、回执、受阻原因和结束原因；
+- L0 离线单测、L1 检索评测、L2 golden 任务评测、L3 跨源对账和夜间自动化。
+
+## 评测
+
+评测分四层（L0–L3），分层口径以 `docs/eval-observability.md` 为准：
+
+```bash
+uv sync
+
+# L0 离线、秒级、无 LLM、无网络——整个秒级套件
+.venv/bin/python tests/run_all.py
+
+# L0 局部（改技能注册表/计划契约后必跑 test_skills.py）
+.venv/bin/python tests/test_skills.py
+.venv/bin/python tests/test_authz.py
+.venv/bin/python tests/test_confirm.py
+
+# L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
+.venv/bin/python eval/recall_eval.py
+
+# L2 真实 LLM 任务评测：110 条 golden，约 20 分钟，按需运行
+.venv/bin/python eval/run_golden.py
+.venv/bin/python eval/run_golden.py --only <id>,<id>   # 只跑指定用例
+.venv/bin/python eval/golden_full_run.py               # 全量跑（与 run_golden 共用判据）
+
+# L3 跨源对账（零 LLM、零网络、只读）：trace ↔ agent.log ↔ 前端上报
+.venv/bin/python eval/trace_reconcile.py --days 1
+```
+
+三点要知道：
+
+- **L0 适合 CI**（秒级、无外部依赖），push 即拦截；L2 依赖真实模型和外部服务，不进普通 push 门禁——它由 `scripts/nightly_regression.sh` 在夜间跑，联动 L1 与 L3，任一门禁项失败会在磁盘上留一个标记文件由心跳探针带出来。
+- **golden 分两类判**：带 `regression` 标签的回归组硬判 100%，能力题按通过率。平均数会把两类红混在一起，严重度不同，所以分开。
+- **有几条用例需要“真实身份”**（要以某个 uid 真调上游），由环境变量给出（见下一节）；未设时它们**响亮地跳过并计入报告**，不静默豁免。
+
+## 环境变量
+
+配置分两处：`config/settings.py`（pydantic-settings，字段名的全大写即变量名，读 `.env`）与 `server.py` 直接读的几个进程变量。常用项：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `LLM_PROVIDER` | `qwen` | 选 `qwen` / `deepseek` / `openai`，各家的 key/base_url/model 各自独立 |
+| `QWEN_API_KEY` / `QWEN_BASE_URL` / `QWEN_MODEL` | — | 当前生产提供方的三项（其余提供方同名同形） |
+| `LLM_TIMEOUT` | `120` | 单次 LLM 调用超时（秒） |
+| `JWT_SECRET` | — | 与 Rust 侧共用，服务间身份断言与短时效 JWT 的签名键 |
+| `AGENT_ADMIN_BASE` | `http://127.0.0.1:3000` | 管理读接口的上游地址 |
+| `DEVICE_SERVICE_URL` | `http://127.0.0.1:3100` | IoT 设备服务地址 |
+| `TRACE_DIR` | 部署方的日志目录 | 对话 trace 落盘目录（默认值绑定部署环境，自建部署须覆盖） |
+| `AGENT_REQUIRE_ASSERTION` | `0` | 置 1 时缺失身份断言的请求直接拒绝（默认只记 WARNING，便于滚动上线） |
+| `AUTHZ_ENFORCE` | `0` | 权限模型的强制开关 |
+| `AGENT_RECURSION_LIMIT` | `30` | 图递归上界，防止幻觉重试循环烧满流式总时长 |
+| `AGENT_MAX_BODY_BYTES` | `12 MiB` | 请求体上限，超限 413 |
+| `AGENT_MAX_CONCURRENT` | `8` | 每 worker 的流式并发闸，超限 503 |
+| `GOLDEN_ADMIN_UID` / `GOLDEN_USER_UID` | — | 只给 golden 里“需要真身份”的用例用；未设则那些用例响亮跳过 |
+
+流式超时（空闲 120s / 总时长 300s）当前是 `server.py` 里的常量，不通过环境变量调。
+
+## 后续维护方向
+
+当前维护重点是稳定性和可维护性：
+
+- 稳定现有主链路；
+- 强化目标歧义和短应答的确定性继承；
+- 保持 feature freeze，只增加稳定性、安全性、可观测性和回归测试；
+- 在保持现有注册表边界的前提下，逐步抽取可复用的工具、技能、权限和评测接口。
+
+跨轮状态结构化已经落地两块：**执行台账**（checker PASS 过的回执落 `execution_log`，读侧去重后注入）与**待办台账**（`pending_action` 表记录弹窗那一轮的结构化提议，含目标与参数）。不单独引入更重的通用 `TaskState`：这两块台账合起来已经覆盖“做过了什么 / 还欠什么”这两个跨轮问题，再叠一层任务状态机只会多出一份需要同步的真源。后续若要扩展，方向是把任务 id 与台账绑定，而不是新增状态层。
+
+## 许可
+
 Apache-2.0
-
