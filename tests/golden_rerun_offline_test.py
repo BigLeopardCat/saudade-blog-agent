@@ -323,5 +323,29 @@ check("红信息点名 gold 的自标号与轮次不符（第 2 轮的 gold 写�
       any("与轮次不符" in f for f in _r["report"]["cases"][0]["fails"]),
       str(_r["report"]["cases"][0]["fails"]))
 
+print("\n⑩ 用例被摘空 ⇒ 响亮退出码 2（空分母不是一个通过率，旧行为是退 0 + 「0/0 通过」）")
+_r = drive([mkcase("reg_only_one", ["regression"])], {"reg_only_one": [GREEN]},
+           argv_extra=["--only", "typo_not_a_case"])
+check("退出码 2（静默的绿在这里是最坏的结果：看起来这轮全过，其实一条都没跑）",
+      _r["code"] == 2, str(_r["code"]))
+check("出声说明这一轮没有评测任何东西", "没有评测任何东西" in _r["out"], _r["out"][-160:])
+check("一份留档都不写（没有通过率可留，也不该留一个 0/0 的）",
+      not _r["archived"], str(_r["archived"]))
+check("一条用例都没执行（桩没被叫到）", not _r["calls"], str(_r["calls"]))
+
+print("\n⑪ 真写用例被闸摘掉 ⇒ 报告里单列一栏（不与「分母真的变小」混在一个 skipped_ids 里）")
+os.environ.pop("GOLDEN_ALLOW_REAL_WRITE", None)   # 这一节测的就是"没放行"这一态
+_wr = mkcase("wr_gated", ["write"])
+_wr["needs_real_write"] = True
+_r = drive([mkcase("reg_ok", ["regression"]), _wr], {"reg_ok": [GREEN]})
+# 有跳过 ⇒ 不是全量跑 ⇒ 不写 `last_run.json`（读留档那份，见 ⑥ 的口径）
+_rep = _r["archived_doc"]
+check("真写用例进了 skipped_ids（照旧不静默豁免）",
+      _rep["skipped_ids"] == ["wr_gated"], str(_rep["skipped_ids"]))
+check("同时又单列在 skipped_real_write_ids（读报告的人能一眼分出「按设计不跑」）",
+      _rep["skipped_real_write_ids"] == ["wr_gated"],
+      str(_rep.get("skipped_real_write_ids")))
+check("分母只剩它实际评的那一条", _rep["total"] == 1, str(_rep["total"]))
+
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

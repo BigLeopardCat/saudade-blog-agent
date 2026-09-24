@@ -1044,8 +1044,14 @@ def main():
     #         .venv/bin/python eval/run_golden.py --only golden_write_category_delete_exec
     _REAL_WRITE_ENV = "GOLDEN_ALLOW_REAL_WRITE"
     _need_write = [c["id"] for c in cases if c.get("needs_real_write")]
+    # 被这道闸摘掉的用例**单列一栏**（`skipped_real_write_ids`）：它们与"因为缺凭据 /
+    # 夹具不在位"被摘掉的用例不是一回事——前者是**设计如此**（真写用例本就不该自动跑，
+    # 分母从一开始就不含它），后者是分母真的变小了。混在一个 `skipped_ids` 里，
+    # 「skipped_ids 空 = 分母完整」这条口径就再也读不出来。不是豁免，是分类。
+    _write_skipped: list[str] = []
     if _need_write and not _os.environ.get(_REAL_WRITE_ENV, "").strip():
         skip_ids += _need_write
+        _write_skipped = list(_need_write)
         cases = [c for c in cases if not c.get("needs_real_write")]
         for cid in _need_write:
             print(f"[skip] {cid}: SKIP (needs {_REAL_WRITE_ENV}=1 —— 真写用例默认不自动跑)")
@@ -1072,6 +1078,16 @@ def main():
         if _drop:
             skip_ids += _drop
             cases = [c for c in cases if c["id"] not in _drop]
+    # 空分母（20260925）：全部被上面的闸摘掉时，**不许按"零失败 = 通过"收尾**——
+    # 末尾那条 `failed == 0 → 退出码 0` 会把 0/0 打印成"通过率 0.000"却退 0，读的人
+    # （或夜间脚本、或 CI）看到的是一个静默的绿，而这一轮**什么都没评**。实测触发路径：
+    # `--only <一条真写用例>` 而没开真写闸、或 `--only <一条需要真身份的用例>` 而没给
+    # uid、或 `--only` 拼错了 id。空分母的正确含义是"没评"，不是"全过"。
+    if not cases:
+        print("[run] ⚠ 一条用例都没剩下（被 --only / --skip-ids / 身份闸 / 真写闸 / 夹具闸"
+              "摘干净了）—— 这一轮**没有评测任何东西**：空分母不是一个通过率，"
+              "退出码 2（不是 0）")
+        sys.exit(2)
     print(f"[run] {len(cases)} 条 golden 样本（真实 LLM，约 {len(cases) * 30}s）\n")
 
     results = []
@@ -1270,6 +1286,10 @@ def main():
         # `--only <单条>` 的调试跑曾把它写成 total=1，读的人会以为语料只剩一条）。
         "full_run": _is_full_run,
         "skipped_ids": skip_ids,
+        # 其中「按设计不跑」的那批单列（20260925）：真写用例（needs_real_write）只许由人
+        # 在命令行上放行，任何无人看着的跑法都跳过它——这是设计，不是分母缺失。读报告的人
+        # 想判「这一轮分母完整吗」应当看 `skipped_ids` 减去本栏。
+        "skipped_real_write_ids": _write_skipped,
         "latency_s": {
             "count": len(latencies),
             "min": round(_pct(latencies, 0), 1),
