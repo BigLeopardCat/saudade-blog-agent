@@ -10,7 +10,7 @@
 #   - 一次 120 分钟上限的全量跑被杀，且**零产出**（报告只在结尾写 + 非 TTY 块缓冲，
 #     日志与 artifact 双双为空）。
 #
-# 全量 golden 在本机跑（本机即生产服务器，链路真实，约 126 条 / 25 分钟）：
+# 全量 golden 在本机跑（本机即生产服务器，链路真实，约 127 条 / 25 分钟）：
 #   cd saudade-blog-agent
 #   .venv/bin/python eval/run_golden.py                     # 全量；--limit N / --only a,b / --min-pass-rate
 #   .venv/bin/python eval/golden_full_run.py                # 进程隔离版：逐条独立进程 + 180s 超时，防悬挂
