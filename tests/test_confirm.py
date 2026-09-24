@@ -207,6 +207,22 @@ check("生产消息壳（`[当前问题]: `，server.py:413）不影响弹窗判
       and _popup("把文章 12 设为私密", PLAN_STATUS) is None)
 check("带壳的意图原句照样弹窗（壳不许把弹窗也一起弄哑）",
       _popup("[当前问题]: 一级标签，名字叫X，使用粉色颜色") is not None)
+# 生产事故回归锁（trace 20260924T234402）：公告是 `_ALWAYS_CONFIRM_TOOLS` 成员、
+# 同意闸恒不放行 ⇒ **弹窗是它唯一的执行途径**，而弹窗分叉被"要求"这个裸名词挡掉了
+# （旧表把裸名词当疑问锚）⇒ 连着四轮一份公告都没执行途径，planner 每轮改写一遍正文。
+# 这一节锁的是"这句话**必须**弹得出来"，判据在 is_question_like 那边（test_authz ⑨e）。
+PLAN_ANN = ('SKILL=announcement_create\nPARAMS={}\nTOOLS: create_announcement('
+            '{"title": "今晚不许熬夜！", "content": "全体用户今晚不许熬夜"})\nNOTE: x\nREPLY: y')
+check("公告原句弹得出卡（裸名词「要求/注意」不是疑问锚）：一字不改的两条生产原句 + 两条",
+      _popup("小猫咪替我发一个公告要求全体用户今晚不许熬夜，以你的口吻声明",
+             PLAN_ANN) is not None
+      and _popup("小猫咪替我发个公告，要求全体用户今晚务必早睡！", PLAN_ANN) is not None
+      and _popup("帮我发个公告，提醒大家注意身体", PLAN_ANN) is not None
+      and _popup("[当前问题]: 帮我发个公告说明今晚更新，注意提前保存", PLAN_ANN) is not None)
+check("同一张表没被收窄过头：真提问照样不弹",
+      _popup("公告的标题和正文要怎么写", PLAN_ANN) is None
+      and _popup("发公告有什么注意事项", PLAN_ANN) is None
+      and _popup("发公告的流程是什么", PLAN_ANN) is None)
 check("免弹窗的第二个前提扩到**值**：计划要写进去的字面也得在主人这句话里"
       "（20260922 ②防线；新建类写操作过去只查父标签，title 写什么都不算没据）",
       # 计划写 title=测试标签，主人这句里没有 —— 带壳不带壳一个待遇（不弹＝直接写）
