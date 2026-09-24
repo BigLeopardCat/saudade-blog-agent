@@ -192,7 +192,7 @@ uv sync
 # L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
 .venv/bin/python eval/recall_eval.py
 
-# L2 真实 LLM 任务评测：110 条 golden，约 20 分钟，按需运行
+# L2 真实 LLM 任务评测：126 条 golden，约 25 分钟，按需运行
 .venv/bin/python eval/run_golden.py
 .venv/bin/python eval/run_golden.py --only <id>,<id>   # 只跑指定用例
 .venv/bin/python eval/golden_full_run.py               # 全量跑（与 run_golden 共用判据）
@@ -206,6 +206,8 @@ uv sync
 - **L0 适合 CI**（秒级、无外部依赖），push 即拦截；L2 依赖真实模型和外部服务，不进普通 push 门禁——它由 `scripts/nightly_regression.sh` 在夜间跑，联动 L1 与 L3，任一门禁项失败会在磁盘上留一个标记文件由心跳探针带出来。
 - **golden 分两类判**：带 `regression` 标签的回归组硬判 100%，能力题按通过率。平均数会把两类红混在一起，严重度不同，所以分开。
 - **有几条用例需要“真实身份”**（要以某个 uid 真调上游），由环境变量给出（见下一节）；未设时它们**响亮地跳过并计入报告**，不静默豁免。
+- **有意不覆盖三处**（不是缺口，别照着“补上”）：`search_knowledge_base`（`/knowledge` 端点返回空）、
+  `get_chat_history`（占位实现）、`device_oled_display`（真硬件副作用，不适合进自动化）。
 
 ## 环境变量
 
