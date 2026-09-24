@@ -38,6 +38,8 @@
 用法：
   .venv/bin/python eval/corpus_terms.py --show note:14,note:22   # 逐篇派生（需网络）
   .venv/bin/python eval/corpus_terms.py --show note:12 --df-max 4
+  .venv/bin/python eval/corpus_terms.py --drift                  # 漂移哨兵（扫 golden 词表）
+  .venv/bin/python eval/corpus_terms.py --drift --case rag_ota_http
 """
 from __future__ import annotations
 
@@ -72,9 +74,27 @@ _FUNCTION_WORDS = (
 )
 
 
+# 缺失语义族（漂移哨兵用）：这些词做**正**断言时判的是"如实说没有"（否定/拒绝语义），
+# 不是主题词——它们的成立与语料无关，不参与 ORPHAN/GENERIC 判定，只打印计数。
+_ABSENCE_WORDS = ("没有", "没找到", "未收录", "不存在", "找不到", "未找到", "暂无", "无此",
+                  "没写", "帮不上", "没法", "无法", "对不上", "不能", "查不到", "看不到",
+                  "没看到", "不清楚", "不掌握", "记录里", "这次执行")
+
+# 漂移哨兵的扫描范围：**只有这些用例的期望来自文章语料**。
+# 反面例子（被排除的）：贴纸（`:害羞:`）、特效（樱花/蓝）、执行记忆（执行记录）、
+# 当前文章正文（欧洲）——它们的正断言判的是"系统状态/人设/别的数据源"，语料不是来源，
+# 拿 ORPHAN 去判它们只会刷出一屏噪音，把真信号淹掉。范围外的**计数会打印**，不静默丢。
+_SCOPE_TAGS = ("rag", "recall")
+
+
 def doc_key(doc: dict) -> str:
     """文档 → `type:id`（与 `recall_eval.QUERIES` 的 expected 同一形态）。"""
     return f"{doc.get('type') or 'note'}:{doc.get('id')}"
+
+
+def _doc_text(doc: dict) -> str:
+    """文档的检索文本（标题 + 正文），与索引建库时用的同一形态。"""
+    return str(doc.get("title") or "") + "\n" + str(doc.get("content") or "")
 
 
 def _norm_keys(keys) -> list[str]:
@@ -142,7 +162,7 @@ def derive(doc_keys, *, docs=None, df_max: int = 2, strict: bool = False,
         return [], diag
 
     def _text(d: dict) -> str:
-        return str(d.get("title") or "") + "\n" + str(d.get("content") or "")
+        return _doc_text(d)
 
     diag["short_docs"] = [doc_key(d) for d in declared if len(_text(d)) < min_doc_chars]
     # S4 的分母：整个语料的**篇级** df（同一篇里出现多次只算 1）。
@@ -192,6 +212,237 @@ def hit_terms(terms, text) -> list[str]:
     return [t for t in (terms or []) if str(t).lower() in low]
 
 
+def _literal_df(docs: list[dict], word: str) -> int:
+    """字面（子串）落在多少篇里——**与 token 的 df 不是一回事**。
+
+    `Content-Type` 是最好的反例：它字面就在 note:12 的正文里，词频 df 却是 0，因为
+    `tokenize` 按字符类把 `-` 切掉、只剩 `content`/`type` 两个 token。哨兵若只报 token df，
+    会把一条**有语料依据**的断言误判成死支（这正是 20260925 差点发生的事）。
+    """
+    return sum(1 for d in docs if word.lower() in _doc_text(d).lower())
+
+
+def _token_df(docs: list[dict], word: str) -> int:
+    """这个词（当 token 时）在多少篇里出现；切碎的词取它切出来的**最长** token 的 df。"""
+    toks = tokenize(word)
+    if not toks:
+        return 0
+    df: dict[str, int] = {}
+    for d in docs:
+        for t in set(tokenize(_doc_text(d))):
+            df[t] = df.get(t, 0) + 1
+    return max((df.get(t, 0) for t in toks), default=0)
+
+
+def drift(*, case: str = "", docs=None, df_max: int = 2, generic_df: int = 4,
+          report_dir: str = "eval/report") -> int:
+    """**漂移哨兵**：扫 golden 的词表型断言，报出四类"看着在、其实不在"的判据。
+
+    人抄的词表会随语料漂移（`rag_ota_http` 就是现场：期望词的前提"某篇已下架"过期了），
+    而漂移的表现是**用例继续绿或持续红，没人知道判据已经不成立**。四类：
+
+      ORPHAN    词在**全库**都不出现 ⇒ 模型只要"猜"就能过（假阳性通路）；
+      GENERIC   词字面落在 ≥`generic_df` 篇里 ⇒ 恒真（对任何回答都可能成立）；
+      MISBOUND  该用例申报了 `doc`，而这个词**不在申报篇里** ⇒ 词表与申报互相矛盾；
+      THIN      申报篇派生不出 ≥2 个术语 ⇒ 判据力不足（别用"派生集只有 1 个词"冒充严判据）。
+
+    **只判"能判的"**：缺失语义族（没有/找不到/未收录…）是**否定**语义，不是主题词，
+    按小词表白名单跳过并打印计数（语料里 `没有` 字面就在 4 篇里，拿"满语料"去判它毫无意义）。
+    没有申报 `doc` 的用例仍扫 ORPHAN/GENERIC，但**给不出建议替换词**（没有建议来源）。
+    **扫描范围**见 `_SCOPE_TAGS`：只扫"期望来自文章语料"的用例，其余**计数但不判**（范围外的
+    正断言判的是贴纸名单/特效开关/执行记忆/当前文章正文等别的数据源，拿 ORPHAN 判它们
+    只会刷一屏噪音——首次上线实测 38 条全是此类）。范围外计数照打，不静默丢。
+
+    报告落 `eval/report/corpus_drift_<ts>.md`（与 `review_*.md`/`reconcile_*.md` 同族）；
+    有 ORPHAN/MISBOUND ⇒ 非零退出。**非门禁**：它是"给人看的哨兵"，不是 CI 闸。
+    """
+    import json as _json
+    from datetime import datetime
+
+    all_docs, diag = _load_docs(docs)
+    if diag.get("unavailable") or not all_docs:
+        print(f"[drift] 语料不可用（{diag.get('why') or '快照为空'}）—— 未评估，不写报告")
+        return 1
+    cases_file = Path(__file__).resolve().parent / "golden" / "basic.jsonl"
+    cases = [_json.loads(ln) for ln in
+             cases_file.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if case:
+        cases = [c for c in cases if c.get("id") == case]
+        if not cases:
+            print(f"[drift] 没有这条用例：{case}", file=sys.stderr)
+            return 2
+
+    corpus_keys = [doc_key(d) for d in all_docs]
+    orphan, generic, misbound, thin, skipped, undeclared = [], [], [], [], [], []
+    declared_rows = []  # 申报概览：(用例, 申报篇, 派生集大小)——`--case X` 时它是主要输出
+    n_words, out_of_scope = 0, []
+    for c in cases:
+        cid, gold = c.get("id"), (c.get("gold") or {})
+        specs = gold.get("require_doc_terms") or []
+        if not (set(c.get("tags") or []) & set(_SCOPE_TAGS) or specs):
+            out_of_scope += [(cid, w) for w in (gold.get("text_contains") or [])]
+            continue
+        declared = [k for s in specs for k in _norm_keys(s.get("doc"))]
+        # 申报篇的派生集：既是 THIN 的判据，也是建议替换词的来源。
+        suggestion: dict[str, list] = {}
+        for s in specs:
+            keys = _norm_keys(s.get("doc"))
+            terms, tdiag = derive(keys, docs=all_docs, df_max=int(s.get("df_max", df_max)),
+                                  strict=bool(s.get("strict", False)), cap=None)
+            if tdiag.get("thin"):
+                thin.append((cid, keys, tdiag.get("n_kept")))
+            declared_rows.append((cid, keys, tdiag.get("n_kept")))
+            for k in keys:
+                suggestion[k] = tdiag.get("common") or tdiag.get("top") or []
+        for w in (gold.get("text_contains") or []):
+            n_words += 1
+            if any(a in str(w) for a in _ABSENCE_WORDS):
+                skipped.append((cid, w))
+                continue
+            lit, tdf = _literal_df(all_docs, str(w)), _token_df(all_docs, str(w))
+            row = (cid, w, lit, tdf, len(all_docs))
+            if lit == 0:
+                orphan.append(row)
+            elif lit >= generic_df:
+                generic.append(row)
+            if declared and not any(
+                    str(w).lower() in _doc_text(d).lower()
+                    for d in all_docs if doc_key(d) in declared):
+                misbound.append(row)
+            if not declared:
+                undeclared.append((cid, w))
+
+    rc = 1 if (orphan or misbound) else 0
+    md = _drift_md(corpus_keys, cases_file, cases, orphan, generic, misbound, thin,
+                   skipped, undeclared, n_words, df_max, generic_df, out_of_scope,
+                   declared_rows)
+    Path(report_dir).mkdir(parents=True, exist_ok=True)
+    out = Path(report_dir) / f"corpus_drift_{datetime.now():%Y%m%d_%H%M%S}.md"
+    out.write_text(md, encoding="utf-8")
+    print(f"[drift] 范围内词 {n_words} 个：ORPHAN {len(orphan)} / GENERIC {len(generic)} / "
+          f"MISBOUND {len(misbound)} / THIN {len(thin)} / 跳过(缺失语义族) {len(skipped)} "
+          f"/ 无申报 {len(undeclared)}；范围外（期望不来自语料）{len(out_of_scope)} 个")
+    for cid, keys, n in declared_rows:
+        print(f"  申报     {cid}: {'、'.join(keys)} ⇒ 派生集 {n} 个词")
+    for r in orphan:
+        print(f"  ORPHAN   {r[0]}: {r[1]!r}（字面命中 0/{r[4]} 篇）")
+    for r in misbound:
+        print(f"  MISBOUND {r[0]}: {r[1]!r}（不在申报篇里；字面 {r[2]}/{r[4]} 篇）")
+    print(f"[drift] 报告 → {out}" + ("" if rc == 0 else "（有 ORPHAN/MISBOUND ⇒ 非零退出）"))
+    return rc
+
+
+def _drift_md(corpus_keys, cases_file, cases, orphan, generic, misbound, thin,
+              skipped, undeclared, n_words, df_max, generic_df, out_of_scope,
+              declared_rows) -> str:
+    from datetime import datetime
+    L = [f"# 语料漂移哨兵（{datetime.now():%Y-%m-%d %H:%M:%S}）", "",
+         f"- 语料：{len(corpus_keys)} 篇 — {'、'.join(corpus_keys)}",
+         f"- 用例：{cases_file.name} 取 {len(cases)} 条；**范围内**（标签 ∈ {_SCOPE_TAGS} "
+         f"或带 `require_doc_terms`）的 `text_contains` 词 {n_words} 个，"
+         f"范围外 {len(out_of_scope)} 个",
+         f"- 口径：字面命中 0 ⇒ ORPHAN；字面落在 ≥{generic_df} 篇 ⇒ GENERIC；"
+         f"申报篇派生 df≤{df_max}；**只判能判的**（缺失语义族跳过 {len(skipped)} 个）", ""]
+
+    def table(title, rows, note):
+        L.append(f"## {title}（{len(rows)}）")
+        L.append("")
+        L.append(note)
+        if not rows:
+            L.append("")
+            L.append("无。")
+            L.append("")
+            return
+        L.append("")
+        L.append("| 用例 | 词 | 字面命中 | token df | 语料篇数 |")
+        L.append("|---|---|---|---|---|")
+        for cid, w, lit, tdf, n in rows:
+            L.append(f"| {cid} | `{w}` | {lit} | {tdf} | {n} |")
+        L.append("")
+
+    table("ORPHAN：词在全库都不出现 ⇒ 模型猜对即可通过",
+          orphan,
+          "这些词在语料里找不到任何依据：一条**编造**的回复只要凑出这个词就能通过断言。"
+          "要么删词，要么换成有语料依据的词（见各用例的申报篇派生集）。")
+    table("MISBOUND：词不在该用例申报的篇里",
+          misbound,
+          "用例一边说\"回答必须扎根这几篇\"、一边把正断言押在**别的篇**的词上——两处期望互相"
+          "矛盾，模型无论扎根哪边都可能红。（`rag_ota_http` 20260925 之前就是这个形状的变体。）")
+    table(f"GENERIC：字面落在 ≥{generic_df} 篇里 ⇒ 恒真",
+          generic,
+          "太常见 ⇒ 判不出\"扎没扎根\"。注意与 `Content-Type` 那类**分词**假象区分："
+          "本表的\"字面命中\"是子串计数，与 token df 分列两栏。")
+    L.append(f"## THIN：申报篇派生不出 ≥2 个术语 ⇒ 判据力不足（{len(thin)}）")
+    L.append("")
+    L.append("申报的那一篇太短/太同质，派生集撑不起 `min_terms`：要么放宽 `df_max`，要么挑更对口的一篇。")
+    L.append("")
+    if not thin:
+        L.append("无。")
+    else:
+        L.append("| 用例 | 申报篇 | 派生集大小 |")
+        L.append("|---|---|---|")
+        for cid, keys, n in thin:
+            L.append(f"| {cid} | {'、'.join(keys)} | {n} |")
+    L.append("")
+
+    L.append(f"## 申报概览：`require_doc_terms` 声明了什么、派生集多大（{len(declared_rows)} 条申报）")
+    L.append("")
+    L.append("派生集大小 = 该申报篇在 `df≤%d` 下能取出的术语个数（判据侧 `cap=None`）。"
+             "本表也是 `--case X` 的主要输出：那条用例若已把词表换成申报，`text_contains` 词数会是 0，"
+             "\"判据还成不成立\"只能从这里读。" % df_max)
+    if declared_rows:
+        L.append("")
+        L.append("| 用例 | 申报篇 | 派生集大小 |")
+        L.append("|---|---|---|")
+        for cid, keys, n in declared_rows:
+            L.append(f"| {cid} | {'、'.join(keys)} | {n} |")
+    else:
+        L.append("")
+        L.append("无。")
+    L.append("")
+
+    L.append(f"## 跳过：缺失语义族（{len(skipped)}）")
+    L.append("")
+    L.append("「没有/找不到/未收录…」是**否定**语义，不是主题词——它们做正断言时判的是"
+             "\"如实说没有\"，不受语料漂移影响（所以不参与 ORPHAN/GENERIC 判定）。")
+    if skipped:
+        L.append("")
+        L.append("· " + "；".join(f"{cid}:`{w}`" for cid, w in skipped))
+    L.append("")
+
+    L.append(f"## 无申报文档的用例（{len(set(c for c, _ in undeclared))} 条用例）")
+    L.append("")
+    L.append("这些用例没有 `require_doc_terms`，所以**给不出建议替换词**（没有申报篇就没有派生集）。"
+             "它们的词只按 ORPHAN/GENERIC 判。要拿到建议，先补申报："
+             "`.venv/bin/python eval/corpus_terms.py --show note:X` 读一遍再写。")
+    if undeclared:
+        L.append("")
+        L.append("· " + "；".join(f"{cid}:`{w}`" for cid, w in undeclared[:40]))
+        if len(undeclared) > 40:
+            L.append(f"· …其余 {len(undeclared) - 40} 个")
+    L.append("")
+    L.append(f"## 范围外：期望不来自文章语料的用例（{len(out_of_scope)} 个词）")
+    L.append("")
+    L.append(f"扫描范围 = 标签含 {'/'.join(_SCOPE_TAGS)} 或带 `require_doc_terms` 的用例。"
+             "范围外那些用例的正断言判的是**别的数据源**，不是这份 RAG 快照：贴纸名"
+             "（8 个 `:名字:` 是 prompts 里的名单）、页面特效/夜间开关、`recent_executions` "
+             "执行记忆、当前文章正文、工具返回本身（`cq_*` 类走 `search_notes` 读库、"
+             "时间/设备类走 IoT 接口——库里有没有这个词与 RAG 索引快照是两件事）。"
+             "拿 ORPHAN/GENERIC 去判它们只会刷一屏噪音（首次上线实测 38 条全是此类），"
+             "所以**排除但计数**——不静默丢，范围本身将来要改时有据可查。")
+    if out_of_scope:
+        L.append("")
+        L.append("· " + "；".join(f"{cid}:`{w}`" for cid, w in out_of_scope[:40]))
+        if len(out_of_scope) > 40:
+            L.append(f"· …其余 {len(out_of_scope) - 40} 个")
+    L.append("")
+    L.append("## 建议替换词从哪来")
+    L.append("")
+    L.append("`derive()` 的 `common`（申报篇里最常用的几个词）——**不是** `top`（那是最冷僻的"
+             "专有术语形态，人对着它想不出该写什么）。同一份口径见 `--show` 的 `[常用]` 行。")
+    return "\n".join(L) + "\n"
+
+
 def _show(keys: list[str], *, df_max: int, strict: bool, docs=None) -> int:
     """逐篇 + 合并地打印派生结果（迁移前"读该问题最贴的那一篇"的落地工具）。"""
     print(f"[corpus_terms] 语料来源：{'内联夹具' if docs is not None else '线上快照'}"
@@ -232,7 +483,7 @@ def _dump(title: str, terms: list[str], diag: dict) -> None:
 def main(argv: list[str]) -> int:
     args = list(argv[1:])
     keys: list[str] = []
-    df_max, strict = 2, False
+    df_max, strict, do_drift, case = 2, False, False, ""
     i = 0
     while i < len(args):
         a = args[i]
@@ -248,12 +499,20 @@ def main(argv: list[str]) -> int:
         elif a == "--strict":
             strict = True
             i += 1
+        elif a == "--drift":                      # 漂移哨兵（扫 golden 的词表型断言）
+            do_drift = True
+            i += 1
+        elif a == "--case":                       # 只扫一条用例
+            case = args[i + 1] if i + 1 < len(args) else ""
+            i += 2
         else:
             print(f"未知参数：{a}", file=sys.stderr)
             print(__doc__.strip().split("用法：")[-1].strip(), file=sys.stderr)
             return 2
+    if do_drift:
+        return drift(case=case, df_max=df_max)
     if not keys:
-        print("需要 `--show note:14[,note:22]`（或 `--drift`）", file=sys.stderr)
+        print("需要 `--show note:14[,note:22]`（或 `--drift [--case X]`）", file=sys.stderr)
         return 2
     return _show(keys, df_max=df_max, strict=strict)
 
