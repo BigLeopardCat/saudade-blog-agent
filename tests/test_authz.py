@@ -399,9 +399,37 @@ Q_NEG = [
     "把文章 12 设为私密",
     "标签名字叫 测试",
     "帮我把文章 12 置顶",
+    # 20260925 句式化：表里的名词**裸着出现**时是内容里的普通词，不是疑问锚。
+    # 生产事故 trace 20260924T234402 的原句在下面第一条（它让公告连着四轮没有
+    # 执行途径，附「薛定谔的猫」那句编造在同一次诊断里）。
+    "小猫咪替我发一个公告要求全体用户今晚不许熬夜，以你的口吻声明",
+    "小猫咪替我发个公告，要求全体用户今晚务必早睡！",
+    "帮我发个公告，提醒大家注意身体",
+    "帮我发个公告说明今晚更新，注意提前保存",
+    "发个公告，把流程和注意事项写进去，要求大家看完",
 ]
 _bad_q_neg = [t for t in Q_NEG if authz.is_question_like(t)]
 check(f"意图陈述不误判成提问（{len(Q_NEG)} 条）", not _bad_q_neg, f"误判: {_bad_q_neg}")
+
+# 句式化的**反面**（20260925）：锚必须落在句法位置上，所以下面这几条仍是提问——
+# 「的<名词>」「什么/哪些<名词>」都把名词放进了疑问短语里。这一支与上面那一支是同一
+# 条判据的两半，缺了它，"裸词全删"也能过（那会把真提问读成意图、白弹一张卡）。
+Q_POS_FORM = [
+    "python 异步都有哪些注意事项和实践技巧",   # 生产实测（20260915T020047）
+    "改文章状态的后果是什么",
+    "设为私密的步骤有哪些",
+]
+_bad_form = [t for t in Q_POS_FORM if not authz.is_question_like(t)]
+check(f"名词挂在句法位置上仍是提问（{len(Q_POS_FORM)} 条）", not _bad_form, f"漏判: {_bad_form}")
+
+# 两张表必须都在（20260925）：宽表只剩 `_own_command` 在用，它判错的方向是**多一次
+# 点击**，与弹窗分叉（少一张卡）相反——所以句式化只动了一支，别顺手把另一支也收窄。
+check("弹窗分叉用句式化表、写自己数据用宽表（两支的错向相反，不共用一张表）",
+      authz._CONSOLE_INQUIRY_RE is not authz._CONSOLE_INQUIRY_BROAD_RE
+      and not authz._CONSOLE_INQUIRY_RE.search("提醒大家注意身体")
+      and bool(authz._CONSOLE_INQUIRY_BROAD_RE.search("提醒大家注意身体"))
+      # 宽表放行的真命令仍必须放行（不是"两边都 False"的假分开）
+      and authz._own_command("收藏这篇", "add_favorite"))
 check("空消息保守按提问走（无从判断时不弹窗）", authz.is_question_like("")
       and authz.is_question_like("   ") and authz.is_question_like(None))
 
