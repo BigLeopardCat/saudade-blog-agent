@@ -54,22 +54,16 @@ if _NEED_WRITE and not os.environ.get(_REAL_WRITE_ENV, "").strip():
     _WRITE_SKIPPED = list(_NEED_WRITE)
     for _cid in _NEED_WRITE:
         print(f"[skip] {_cid}: SKIP (needs {_REAL_WRITE_ENV}=1 —— 真写用例默认不自动跑)", flush=True)
-_NEED_FIX = {c["id"]: str(c["requires_fixture"]) for c in CASES if c.get("requires_fixture")}
-if _NEED_FIX:
+if any(c.get("requires_fixture") for c in CASES):
     # 局部导入：本判据只在有夹具用例时才需要（它会拉起 tools.base，父进程平时不必付这笔钱）。
     # `eval/` 在 sys.path 上（见文件头第一段）。
     import golden_fixture  # noqa: E402
-    _TITLES = golden_fixture.category_titles()
-    for _cid, _fname in _NEED_FIX.items():
-        _state = golden_fixture.fixture_state(_fname, _TITLES)
-        if _state == "present":
-            continue
-        CASES = [c for c in CASES if c["id"] != _cid]
-        _SKIPPED_IDS.append(_cid)
-        _why = ("夹具不在位（先按授权串跑 scripts/migration/golden_write_fixture_20260925.sql）"
-                if _state == "absent" else
-                f"夹具在位检查读不到公开分类接口（{golden_fixture.UNREADABLE_TAG}）—— 不知道在不在，不跑")
-        print(f"[skip] {_cid}: SKIP ({_why})", flush=True)
+    # 闸的实现只有一处（`golden_fixture.gate`，两族夹具都在里面）——与 run_golden.py
+    # **共用同一个函数**，不再是"两份实现 + 一句口径一致的注释"。
+    CASES, _DROPPED, _LINES = golden_fixture.gate(CASES)
+    _SKIPPED_IDS += _DROPPED
+    for _ln in _LINES:
+        print(_ln, flush=True)
 # 空分母（20260925）：全部被摘掉时**不许往下走**——本脚本的收尾统计会对空序列取
 # min()/P50（ValueError），构造报告时还会除零；就算不炸，打印出来的也是"0/0 通过 = 100%"
 # 那种静默的绿，而这一轮什么都没评。口径与 run_golden.py 逐字一致：退出码 2。
