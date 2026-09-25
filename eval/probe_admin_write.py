@@ -143,7 +143,13 @@ def _sign(payload: dict) -> str:
 
 
 def login_jwt(uid: int, role: str, ttl: int = 300) -> str:
-    """Rust `auth_jwt::Claims` = `{sub, exp, role}`（**无 aud**），据此签一个登录态令牌。"""
+    """签一个登录态令牌。Rust `auth_jwt::Claims` 是 `{sub, exp, role}` 加一个**可选的 `ver`**
+    （20260926 起；**无 aud** —— Rust 用的是 `Validation::default()`，带 aud 反而会被拒）。
+
+    这里**刻意不写 `ver`**：`check_token` 对"没有代次声明"的令牌只判冻结、跳过代次比对，
+    正是 agent 代调令牌（`tools/base.py::_sign_local_jwt`）依赖的那条分支。
+    另注：**不带 `ver` 的令牌在"改密码"这条路径上不受代次收回约束**（冻结照判）——
+    详见 `docs/security-boundary.md` §2.3。"""
     return _sign({"sub": uid, "exp": int(time.time()) + ttl, "role": role})
 
 
