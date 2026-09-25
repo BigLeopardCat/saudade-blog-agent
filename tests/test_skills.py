@@ -321,6 +321,97 @@ def test_nav_fast_path():
               _nav_fast_path(msg) is None, str(_nav_fast_path(msg)))
 
 
+def test_dashboard_nav_expansion():
+    """后台各面板可以成为导航目标（20260926）。
+
+    需求原话：「URL转跳扩充，dashboard面板可以定位到具体URL，后台主页/笔记、说说、
+    图库、公告、用户管理、数据板、站点设置。如果直接说转跳后台就是默认dashboard
+    不要让agent再问具体是什么板块。」
+
+    此前白名单里只有 /dashboard 一条：说「打开后台笔记」时 `navigate_to` 回一句
+    「导航路径无效」，planner 只能如实说"站内没有这个页面"——**假话**（页面真实存在，
+    只是白名单没登记）。本组断言锁四件事：
+      ① 面板表 → 白名单 → 别名映射三处同源（面板名/路径与后台侧边栏、前端路由逐字一致）；
+      ② 公开页的裸名不被抢走（裸「主页」= /、裸「说说」= /talk 仍然成立）；
+      ③ 白名单**没有**放宽成 `/dashboard/*` 前缀——未知子页仍被拒（前端 /dashboard 下
+         没有通配子路由，猜出来的路径渲染的是一片空白，不是 NotFound 页）；
+      ④ 「转跳后台」不再需要澄清板块，且 planner 提示词里写着这条纪律。
+    """
+    print("[dashboard_nav] 后台各面板进导航白名单（面板名与后台侧边栏逐字一致）")
+    from agent.skills import DASHBOARD_PANELS, _NAV_MAP_LINES
+    from agent.graph import _PLANNER_PROMPT
+    import tools.base as base
+
+    # ① 面板表 → 白名单 → 别名：三处同源（面板名/路径 = Dashboard/index.tsx 的
+    #    sidebar 数组 + frontend/src/router/index.tsx 的 /dashboard 子路由）
+    check("每个后台面板的路径都在导航白名单里",
+          all(p in NAV_VALID_PATHS for _, p in DASHBOARD_PANELS),
+          str([p for _, p in DASHBOARD_PANELS if p not in NAV_VALID_PATHS]))
+    for name, path in DASHBOARD_PANELS:
+        check(f"NAV_MAP[后台{name}] → {path}", NAV_MAP.get(f"后台{name}") == path,
+              str(NAV_MAP.get(f"后台{name}")))
+    for alias, path in [("笔记", "/dashboard/notes"), ("图库", "/dashboard/albums"),
+                        ("公告", "/dashboard/announcement"), ("用户管理", "/dashboard/users"),
+                        ("数据板", "/dashboard/analytics"), ("站点设置", "/dashboard/usercontrol"),
+                        ("后台", "/dashboard"), ("后台主页", "/dashboard")]:
+        check(f"裸名/带前缀别名「{alias}」→ {path}", NAV_MAP.get(alias) == path, str(NAV_MAP.get(alias)))
+    # ② 公开页的裸名不受影响：后台的「主页」「说说」只能带前缀（纪律②）
+    check("裸「主页」仍是公开首页", NAV_MAP.get("主页") == "/")
+    check("裸「说说」仍是公开说说页", NAV_MAP.get("说说") == "/talk")
+    check("后台那两个面板用带前缀的说法",
+          NAV_MAP.get("后台说说") == "/dashboard/comments"
+          and NAV_MAP.get("后台主页") == "/dashboard")
+
+    # ③ 工具层：白名单内直用，白名单外的后台子路径照旧拒绝（不放开前缀）
+    frame = base.navigate_to.invoke({"path": "/dashboard/notes", "confirm": False})
+    check("navigate_to(/dashboard/notes) → 出导航帧", frame == "AUTO_NAVIGATE:https://saudade.site/dashboard/notes", frame)
+    bad = base.navigate_to.invoke({"path": "/dashboard/nope", "confirm": False})
+    check("navigate_to(/dashboard/nope) → 仍被拒（没放开前缀）",
+          "导航路径无效" in bad, bad[:80])
+    check("拒绝提示把后台各面板的真实路径全列出来（让模型照着重调）",
+          all(p in bad for _, p in DASHBOARD_PANELS), bad)
+
+    # ④ planner 侧：别名表分组渲染 + 具体面板直达 + 不追问板块
+    p = instantiate_plan("navigate", {"target": "后台笔记", "mode": "direct"})
+    check("instantiate：后台笔记 → /dashboard/notes",
+          p["tools"] == ['navigate_to({"path": "/dashboard/notes", "confirm": false})'], str(p["tools"]))
+    p = instantiate_plan("navigate", {"target": "转跳后台", "mode": "direct"})
+    check("planner 把「转跳后台」当目标时，模糊归一也落后台主页（不是「是哪个板块」的反问）",
+          'navigate_to({"path": "/dashboard", "confirm": false})' in p["tools"] and "模糊归一" in p["note"],
+          f"tools={p['tools']} note={p['note']}")
+    p = instantiate_plan("navigate", {"target": "说说管理", "mode": "direct"})
+    check("模糊归一「说说管理」→ 后台说说页（不是公开 /talk：面板规则在公开页规则之前）",
+          'navigate_to({"path": "/dashboard/comments", "confirm": false})' in p["tools"],
+          f"tools={p['tools']}")
+    p = _nav_fast_path("转跳后台")
+    check("快道：「转跳后台」直达后台主页（不追问板块）",
+          p is not None and 'navigate_to({"path": "/dashboard", "confirm": false})' in p["tools"],
+          f"tools={p and p['tools']}")
+    check("planner 提示词写明「不要追问是哪个板块」", "不要追问是哪个板块" in _PLANNER_PROMPT)
+    check("别名表把后台面板分到单独一行（主行不再混进十几个后台名）",
+          "后台笔记→/dashboard/notes" in _NAV_MAP_LINES
+          and "后台笔记→/dashboard/notes" not in _NAV_MAP_LINES.split("\n")[0],
+          _NAV_MAP_LINES)
+
+    # ⑤ 模糊归一：顺序敏感——后台面板规则必须早于宽规则（"后台"/"管理"）与公开页
+    #    「说说」。反了的话下面这两句会被截胡成 /dashboard 主页和 /talk。
+    for msg, path in [("去后台的笔记", "/dashboard/notes"), ("打开后台的图库", "/dashboard/albums"),
+                      ("去后台的数据板", "/dashboard/analytics"), ("去图库", "/dashboard/albums"),
+                      ("打开公告", "/dashboard/announcement")]:
+        p = _nav_fast_path(msg)
+        check(f"快道「{msg}」→ {path}",
+              p is not None and f'navigate_to({{"path": "{path}", "confirm": false}})' in p["tools"],
+              f"tools={p and p['tools']}")
+    p = _nav_fast_path("去后台")
+    check("宽规则「去后台」仍落后台主页（新增面板规则没截胡它）",
+          p is not None and 'navigate_to({"path": "/dashboard", "confirm": false})' in p["tools"],
+          f"tools={p and p['tools']}")
+    p = _nav_fast_path("去说说")
+    check("公开页「去说说」仍落 /talk（面板规则没截胡它）",
+          p is not None and 'navigate_to({"path": "/talk", "confirm": false})' in p["tools"],
+          f"tools={p and p['tools']}")
+
+
 def test_fast_path_shell_transparency():
     """四条确定性快道对系统消息壳 `[当前问题]: ` 透明（20260923）。
 
@@ -4327,7 +4418,8 @@ def test_write_desc_no_example_names():
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
-               test_nav_fast_path, test_fast_path_shell_transparency,
+               test_nav_fast_path, test_dashboard_nav_expansion,
+               test_fast_path_shell_transparency,
                test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
                test_explicit_tools, test_planner_tool_menu, test_admin_console_role_channel,
                test_gate_claim_scope, test_gate_frame_checks,

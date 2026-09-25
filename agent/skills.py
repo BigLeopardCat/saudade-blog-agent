@@ -73,6 +73,39 @@ NAV_MAP: dict[str, str | None] = {
     "友链板块": None,
 }
 
+# ---------------------------------------------------------------------------
+# 后台面板（20260926：转跳要能定位到后台的每一个板块）
+# ---------------------------------------------------------------------------
+# 面板名与后台侧边栏**逐字一致**（frontend/src/pages/Dashboard/index.tsx 的
+# `sidebar` 数组 + 底部那颗「站点设置」按钮），路径与前端路由逐字一致
+# （frontend/src/router/index.tsx 的 /dashboard 子路由）。
+# 表驱动而不是往 NAV_MAP 里手写十几条：这批名字要同时喂三处——NAV_MAP 别名、
+# planner 提示词的分组行、SITE_GUIDE 的板块清单；三份手写清单必然漂移（本模块
+# 20260921 的能力清单就是这么漂的：注册表加了三个写技能、清单一个字没变）。
+# 别名的两条纪律：
+#  ① 面板名本身（笔记/图库/公告/用户管理/数据板/站点设置）站内没有第二个同名
+#     页面 ⇒ 裸名直接可用；② 裸「主页」→ /（首页）、裸「说说」→ /talk 是**公开页**
+#     的既定指向，后台那两个只能听带前缀的说法（「后台主页」「后台说说」）。
+# 带前缀的说法（后台+面板名）由下面这段循环统一生成，不必逐条手写。
+DASHBOARD_PANELS: tuple[tuple[str, str], ...] = (
+    ("主页", "/dashboard"),
+    ("笔记", "/dashboard/notes"),
+    ("说说", "/dashboard/comments"),
+    ("图库", "/dashboard/albums"),
+    ("公告", "/dashboard/announcement"),
+    ("用户管理", "/dashboard/users"),
+    ("数据板", "/dashboard/analytics"),
+    ("站点设置", "/dashboard/usercontrol"),
+)
+# 裸名已被公开页占用（纪律②）：后台那个只能用「后台+面板名」
+_PUBLIC_NAME_TAKEN = frozenset({"主页", "说说"})
+
+for _panel, _panel_path in DASHBOARD_PANELS:
+    NAV_MAP.setdefault(f"后台{_panel}", _panel_path)
+    if _panel not in _PUBLIC_NAME_TAKEN:
+        NAV_MAP.setdefault(_panel, _panel_path)
+del _panel, _panel_path
+
 # 白名单路径（单一事实来源 = 工具层 navigate_to 的校验常量，避免双源漂移；
 # /category/*、/article/* 为前缀匹配，需至少带一个 id 段）
 from tools.base import _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS
@@ -276,6 +309,17 @@ def render_tool_marks(text: str, role: str | None) -> str:
 # 降级 chat 快道、裸输出路径文本还声称已打开）。顺序敏感：宽词（设备/管理）
 # 归设备域在前，避免被后续规则截胡。
 FUZZY_NAV_RULES: list[tuple[tuple[str, ...], str]] = [
+    # 后台面板（20260926）**必须排在最前**：宽规则（"后台"/"管理"）与公开页
+    # 「说说」→/talk 都在其后，而 "去后台的笔记" 同时含"后台"与"笔记"、
+    # 「说说管理」同时含"说说"——顺序反了就被先命中的宽规则截胡成 /dashboard 主页
+    # 或公开说说页（用户要的是那个后台面板）。
+    (("后台说说", "说说管理"), "/dashboard/comments"),
+    (("用户管理", "账号管理"), "/dashboard/users"),
+    (("站点设置", "后台设置"), "/dashboard/usercontrol"),
+    (("笔记", "文章管理"), "/dashboard/notes"),
+    (("图库", "相册"), "/dashboard/albums"),
+    (("公告", "公告管理"), "/dashboard/announcement"),
+    (("数据板", "后台数据"), "/dashboard/analytics"),
     (("物联网", "IOT", "iot", "IoT", "设备控制", "设备管理", "设备面板", "设备平台", "设备"), "/device-console/"),
     (("留言", "留个言", "河灯", "河灯集"), "/guestbook"),
     (("说说", "碎语", "动态"), "/talk"),
@@ -322,7 +366,9 @@ SKILLS: list[Skill] = [
         capability="跳转到站内任意板块（首页/留言板/说说/时间轴/关于我/物联网控制台…）",
         description="用户要求前往/去/回/回到/返回/打开/跳转/访问/进入/转到某个页面时使用；主动向用户推荐某个页面时也可使用。",
         inputs={
-            "target": "页面别名（从导航映射表取值）：首页/留言板/说说/时间轴/关于我/登录/后台/物联网平台等",
+            "target": "页面别名（从导航映射表取值）：首页/留言板/说说/时间轴/关于我/登录/物联网平台等；"
+                      "后台各面板：后台（=后台主页）/后台笔记/后台说说/后台图库/后台公告/"
+                      "后台用户管理/后台数据板/后台站点设置（面板名不带「后台」也可，除主页与说说）",
             "mode": "direct（用户明确要求跳转）或 suggest（主动推荐，需用户确认）",
         },
         # target 必填（20260925）：target 由本技能自己的代码消费（查 NAV_MAP），
@@ -1440,7 +1486,7 @@ def instantiate_plan(skill_name: str, params: dict,
             else:
                 note = (
                     f"导航目标「{target}」不存在：如实告知没有该页面，不调用任何工具，"
-                    f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/后台/物联网平台）给出建议（文本链接即可）"
+                    f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/物联网平台/后台各面板）给出建议（文本链接即可）"
                 )
         else:
             # 不在映射表：先试口语模糊归一（关键词规则，确定性），
@@ -1457,7 +1503,7 @@ def instantiate_plan(skill_name: str, params: dict,
             else:
                 note = (
                     f"无法识别导航目标「{target}」：如实告知没有该页面，不调用任何工具，"
-                    f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/后台/物联网平台）给出建议（文本链接即可）"
+                    f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/物联网平台/后台各面板）给出建议（文本链接即可）"
                 )
     elif skill.name == "read_article":
         # 系统快道专用：article_id 由 planner_node 从 current_url 解析注入。
@@ -2061,10 +2107,25 @@ def check_call_args(tool_name: str, args: dict) -> dict:
 # prompt 注入块构建（planner 提示词注入用）
 # ---------------------------------------------------------------------------
 
-_NAV_MAP_LINES = "、".join(
-    (f"{alias}→{path}" if path else f"{alias}→（已下线，如实告知）")
-    for alias, path in NAV_MAP.items()
-)
+def _nav_map_lines() -> str:
+    """导航映射表的提示词形态（**分组**，20260926）。
+
+    后台面板那十几个别名单独一行：混进主行后，模型要在三四十个 `别名→路径`
+    里挑，而后台名彼此长得很像。分组只是排版——数据源仍是 NAV_MAP 一处
+    （后台那组按 DASHBOARD_PANELS 的路径认出来，不维护第二份名单）。
+    """
+    dash_paths = {p for _, p in DASHBOARD_PANELS}
+    plain, dash = [], []
+    for alias, path in NAV_MAP.items():
+        line = f"{alias}→{path}" if path else f"{alias}→（已下线，如实告知）"
+        (dash if path in dash_paths else plain).append(line)
+    return ("、".join(plain)
+            + "\n后台面板（仅博主可用；用户说「转跳后台/去后台」而没点名板块时，"
+              "target 填「后台」即可——那就是后台主页，不要追问是哪个板块）："
+            + "、".join(dash))
+
+
+_NAV_MAP_LINES = _nav_map_lines()
 
 
 def visible_skills(role: str | None, include_system: bool = False) -> list[Skill]:

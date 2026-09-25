@@ -76,6 +76,18 @@ _SITE_GUIDE_HEAD = (
 # 非技能类的能力（多模态看图等）：注册表里没有对应技能，只能手写；保持极短，
 # 真正会漂移的是"哪些技能可用"，那部分由注册表渲染（见 site_guide）。
 _SITE_GUIDE_TAIL = "看访客发来的图片并描述内容/颜色。"
+
+
+def _dashboard_clause() -> str:
+    """/dashboard 各面板的板块短语（**从 skills.DASHBOARD_PANELS 渲染**，20260926）。
+
+    它们要进板块清单有两个理由：① `test_site_guide_covers_nav_map` 的覆盖断言——
+    清单必须覆盖 NAV_MAP 的**全部**存活路径，而后台面板 20260926 起进了 NAV_MAP；
+    ② 访客问"后台里有什么"、博主问"我能改哪些东西"时，narrator 得答得出来。
+    手写这份清单就是第三份副本（本模块 20260921 刚把能力行改成渲染），所以现算。
+    """
+    from agent.skills import DASHBOARD_PANELS    # 局部导入：同 site_guide 的理由（叶子层）
+    return "、".join(f"{name}（{path}）" for name, path in DASHBOARD_PANELS)
 # 管理能力的引导语（能力**内容**仍来自注册表的 capability 字段，这里只有抬头）
 _ADMIN_GUIDE_HEAD = "🔑 以管理员身份（本轮对话者是博主本人）你还额外能做："
 
@@ -99,7 +111,7 @@ def site_guide(role: str | None = None) -> str:
             continue
         (admin if s.roles else base).append(s.capability)
     caps = "；".join(base + [_SITE_GUIDE_TAIL])
-    out = _SITE_GUIDE_HEAD + f"你能做的：{caps}"
+    out = _SITE_GUIDE_HEAD + "后台面板：" + _dashboard_clause() + "。" + f"你能做的：{caps}"
     if admin:
         out += _ADMIN_GUIDE_HEAD + "；".join(admin) + "。"
     return out + "介绍能力时按此完整列出，不要遗漏。"
