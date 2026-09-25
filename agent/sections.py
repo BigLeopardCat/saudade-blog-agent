@@ -207,6 +207,44 @@ def _unescape(text: str) -> str:
     return text.replace("\\n", "\n")
 
 
+def slim_frame(frame: str) -> str:
+    """详情执行帧 → 去掉**同文本的重复正文键**（帧体积接近减半）。
+
+    `frame_excerpt` 注释里那个坑②（详情 dict 同时带 `noteContent` 与 `content`）此前
+    只在**渲染**时被吸收——那只救了 planner 看的那一份（`_frame_texts`）；narrator 拿的是
+    **原始 ToolMessage**（`graph.model_node` 的 `[system] + state["messages"]`），重复原样
+    进提示词：note 19 的帧 52,834 字里有一半是同一段正文（实测正文 25,445 字）。
+    20260925 把去重**前移到造帧那一刻**（`execute_node` 的 ToolMessage 出口），两个键都省。
+
+    三条边界：
+      · 两个键必须**字节相等**才删（不等 ⇒ 内容真不同，一个都不动）；
+      · 判据不认识的帧**原样返回**——帧的形态不止一种（`__ERROR__` 帧、命令帧、列表帧），
+        本函数对它们必须是恒等变换；
+      · **只动帧**：`tool_data` 仍由 `parse_data(str(out))` 从**原始**字符串解析
+        ⇒ `$tool[N].content` 之类的参数引用取值不受影响（**不许**改 `tools/base.py` 的
+        `_shape`，那会同时改掉引用取值源）。
+    删键后仍是合法 dict repr ⇒ `_split_frame` 的 `literal_eval` 路径照旧。
+    """
+    if "'noteContent'" not in frame and '"noteContent"' not in frame:
+        return frame                     # 快路：绝大多数帧没有这个键，不必 literal_eval
+    import ast
+    try:
+        data = ast.literal_eval(frame)
+    except Exception:
+        return frame
+    if not isinstance(data, dict):
+        return frame
+    body = data.get("noteContent")
+    if not isinstance(body, str) or not body:
+        return frame
+    dup = [k for k, v in data.items() if k != "noteContent" and v == body]
+    if not dup:
+        return frame
+    for k in dup:
+        data.pop(k)
+    return str(data)
+
+
 def frame_excerpt(frame: str, cap: int) -> str:
     """get_article_detail 的执行帧 → 提示词里可读的按节节选。
 

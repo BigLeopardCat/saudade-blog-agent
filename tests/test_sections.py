@@ -29,8 +29,9 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统�
 sys.path.insert(0, str(ROOT))
 
 from agent import sections                       # noqa: E402
-from agent.context import _frame_texts           # noqa: E402
+from agent.context import _DETAIL_FRAME_PER, _frame_texts  # noqa: E402
 from agent.decisions import _doc_title           # noqa: E402
+from agent.refs import parse_data                 # noqa: E402
 from langchain_core.messages import ToolMessage  # noqa: E402
 from rag.search import chunk_note                # noqa: E402
 from tools.base import _read_section             # noqa: E402
@@ -49,6 +50,10 @@ TITLE = "Saudade Blog AI Agent（泠月喵）架构文档"
 SEC_NAMES = ["1. 系统总览", "2. 组件与目录", "3. 一次对话的完整链路", "4. 记忆机制",
              "5. 工具系统", "6. 防幻觉与可靠性加固", "7. LLM 与配置",
              "8. 前端看板娘关键机制", "9. 部署与运维", "10. 已知边界与坑（维护必读）"]
+# 本套件自己的节选上限：**刻意独立于** `agent/context.py` 的 `_DETAIL_FRAME_PER`——
+# 生产预算调整时，夹具的期望（哪几节展开、哪几节进清单）不该跟着漂。⑤ 那条"渲染体积
+# 受控"断的是**生产那一侧**的上限，故用真常量（20260925：两者此前同为 20000，
+# 预算提到 28000 后若还拿 CAP 断言，红的是夹具而不是代码）。
 CAP = 20000
 
 
@@ -145,13 +150,47 @@ check("非 dict 帧退回文本路径（转义还原 + 有标注）",
 check("小节名重复不误判（pick 取第一个匹配）",
       sections.pick(LONG + "\n\n## 9. 部署与运维\n重复节", "9", TITLE) is not None)
 
+print("④b slim_frame：造帧那一刻去掉同文本的重复正文键（20260925）")
+# 被锁住的问题：坑②此前只在**渲染**时被吸收（`frame_excerpt` 那只救 planner 看的那份），
+# narrator 拿的是**原始 ToolMessage** ⇒ 同一段正文原样进它的提示词。实测 note 19 的帧
+# 52,834 字里一半是重复的 `content` 键（全站 11 篇逐篇省 42%~50%）。
+slim = sections.slim_frame(frame)
+check("帧体积接近减半（省 ≥45%）", len(slim) < len(frame) * 0.55,
+      f"{len(frame)} → {len(slim)}")
+check("重复键被去掉、留下的那个还在", "'content'" not in slim and "'noteContent'" in slim)
+check("正文一个字都没少（去的是重复，不是内容）",
+      slim.count("第1节的正文内容") == 150 and slim.count("第10节的正文内容") == 150)
+check("仍可 literal_eval（refs 的 $tool[N].field 靠它取值）",
+      isinstance(ast.literal_eval(slim), dict))
+check("去重只删字节相等的键：内容不同（真有两段正文）时一个都不动",
+      sections.slim_frame(str({"noteContent": "AAA", "content": "BBB"})) ==
+      str({"noteContent": "AAA", "content": "BBB"}))
+_empty = str({"noteContent": "", "content": ""})
+check("空正文不去重（两个空串相等，但那不是同一段正文）",
+      sections.slim_frame(_empty) == _empty)
+check("判据不认识的帧恒等：`__ERROR__` 帧",
+      sections.slim_frame("__ERROR__: 未知工具 x") == "__ERROR__: 未知工具 x")
+check("判据不认识的帧恒等：列表帧", sections.slim_frame("[{'a': 1}]") == "[{'a': 1}]")
+check("判据不认识的帧恒等：命令帧",
+      sections.slim_frame("NAVIGATE:/talk") == "NAVIGATE:/talk")
+check("判据不认识的帧恒等：没有该键的 dict",
+      sections.slim_frame(str({"noteKey": 1, "noteTitle": "T"})) ==
+      str({"noteKey": 1, "noteTitle": "T"}))
+check("判据不认识的帧恒等：不是 repr 的自由文本（含 noteContent 字样也不动）",
+      sections.slim_frame("正文里提到 noteContent 这个词") == "正文里提到 noteContent 这个词")
+# 与"引用取值源"分家：帧去掉重复键，但 tool_data 仍按**原始**字符串解析
+ref_row = str({"noteKey": 19, "noteContent": LONG, "content": LONG})
+check("原始字符串里 `content` 还在（`_shape` 没被动过 ⇒ $tool[N].content 不受影响）",
+      "'content'" in ref_row and "content" in parse_data(ref_row))
+
 print("⑤ 渲染链路：_frame_texts 真的走节选")
 msg = ToolMessage(content=frame, name="get_article_detail", tool_call_id="t1")
 rendered = _frame_texts([msg])
 check("帧注记说明了「超单帧上限，已按小节节选」",
       "超单帧上限" in rendered and "按小节节选" in rendered)
 check("未展开清单进了提示词", sections.UNEXPANDED_MARK in rendered)
-check("帧体积受控（≤ 上限 + 注记开销）", len(rendered) <= CAP + 400, str(len(rendered)))
+check("帧体积受控（≤ 生产上限 + 注记开销）",
+      len(rendered) <= _DETAIL_FRAME_PER + 400, str(len(rendered)))
 small = ToolMessage(content=str({"noteKey": 5, "noteTitle": "短文章", "noteContent": "正文"}),
                     name="get_article_detail", tool_call_id="t2")
 check("未超限的帧原样透出（既有行为不变）",
@@ -195,6 +234,10 @@ check("旧的无声硬截断已移除", "原文过长仅示前" not in ctx_src)
 g_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("planner 规则含按节补读", "超长文章按节补读" in g_src)
 check("narrator 纪律 14 在位", "14. 工具返回帧标注" in g_src)
+check("造帧侧（execute）在 ToolMessage 出口去重",
+      "sections.slim_frame(str(out))" in g_src)
+check("去重没有动 `_shape`（那是引用取值源，必须保持原样）",
+      "slim_frame" not in (ROOT / "tools" / "base.py").read_text(encoding="utf-8"))
 check("trace 记录帧体量 frames_chars", "frames_chars=len(frames_txt)" in g_src)
 rag_src = (ROOT / "rag" / "search.py").read_text(encoding="utf-8")
 check("索引切分只是转发（不再各写一份）",
