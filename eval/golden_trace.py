@@ -94,11 +94,13 @@ def start_case(run_id: str, case_id: str, message: str = "", role: str | None = 
     from utils.trace import start_trace
 
     tid = f"{run_id}__{case_id}"
-    # tool_result_limit：**这一轮的工具返回在 trace 里被截到多少字符**。落进 trace 是为了
-    # 让读的人（尤其 `eval/llm_judge.py` 判"回复有没有编材料"）知道自己手上这份返回文本
-    # 是全文还是摘要——看不到这个数就只能靠"长度恰好等于某个整数"猜（20260925：
-    # 判官曾拿 200 字符的摘要当完整材料，把文章里真有的「第 3.3 节」判成编造）。
-    # 取不到（未设）= 生产默认 200，与 utils/trace.tool_result_text 同源。
+    # tool_result_limit：这一轮的**全局**上限（`TRACE_TOOL_RESULT_LIMIT` 设了就是它，
+    # 没设就是默认档 `TOOL_RESULT_LIMIT_DEFAULT`）。落进 trace 是给读的人一个坐标：
+    # 手上这份返回文本是全文还是摘要（20260925：判官曾拿 200 字符的摘要当完整材料，
+    # 把文章里真有的「第 3.3 节」判成编造）。
+    # **它不是"这一轮所有工具的上限"**（20260925 起生产按工具分档，一篇正文 8000、其余
+    # 4000）——判断"这份被截断了吗"的唯一权威是**截断标记**（`utils.trace.is_truncated`），
+    # 这个数只服务于 20260925 之前那些无标记的老 trace（见 llm_judge.truncated_calls）。
     try:
         _lim = int(os.environ.get(trace_mod.TOOL_RESULT_LIMIT_ENV)
                    or trace_mod.TOOL_RESULT_LIMIT_DEFAULT)

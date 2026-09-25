@@ -77,8 +77,8 @@ $PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED
 # **刻意不进门禁**：同源模型评自己不构成 ground truth，"可疑"不等于"错了"（模块头注纪律 1），
 # 置 fail=1 会让整夜门禁被一条观察性判据带红（哨兵一响就没人看了）。报告落
 # eval/report/judge_<ts>.md，每条可疑条目都附材料原文供人核——**报告要人看**。
-# 材料供给是它的前置条件：golden 跑法已把 trace 的工具返回上限放开（TRACE_TOOL_RESULT_LIMIT），
-# 拿生产那 200 字符截断当材料会把"文章里真有"的内容判成编造；判官认出截断会响亮警告。
+# 材料供给是它的前置条件：golden 跑法已把 trace 的工具返回上限放开（TRACE_TOOL_RESULT_LIMIT=40000，
+# 生产是按工具分档），拿被截断的材料会把"文章里真有"的内容判成编造；判官认出截断会响亮警告。
 # 跑在 golden 之后、不传 --traces（默认取最新一轮 = 刚那一轮）。
 echo "--- 回复出处评审 (LLM-as-judge, 约 10 分钟, 非门禁) ---" >> "$LOG"
 # PYTHONUNBUFFERED 必须留着（20260925 实测）：stdout 重定向到文件时 Python 默认**块缓冲**，

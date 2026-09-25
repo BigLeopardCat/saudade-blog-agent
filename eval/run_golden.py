@@ -414,9 +414,9 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
         其中 `fails` 只装**驱动层**的失败，由 `check_case` 聚合，判据侧不往里写）；
       · `confirm_tokens`/`confirm_payloads`：**末轮**的（`run_one` 已给）。
     """
-    # 工具返回在 trace 里留多长（20260925）：生产留 200 字符，评测轮放开——
-    # `eval/llm_judge.py` 判"回复有没有编材料"时，**材料就是 trace 里那份返回文本**，
-    # 只留 200 字符会让它把"文章里确实有、只是没记进 trace"的事实判成编造
+    # 工具返回在 trace 里留多长（20260925）：生产按工具分档（正文 8000/其余 4000/检索全文），
+    # 评测轮**全局放开到 40000**——`eval/llm_judge.py` 判"回复有没有编材料"时，**材料就是
+    # trace 里那份返回文本**，砍太狠会让它把"文章里确实有、只是没记进 trace"的事实判成编造
     # （实测 `rag_git_branch`：`get_article_detail` 只留 200 字符，判官据此断定回复编了
     # 「第 3.3 节」）。设在这里而不是各入口 = 三个跑法（进程内 main / 隔离子进程
     # golden_case_runner / 批量 golden_full_run）本来就都走这个函数，不必各写一遍。

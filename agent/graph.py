@@ -4606,9 +4606,10 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 引用要走结构。解析不出 → data=None（引用它时报 ref_unparsed，不猜）。
         tool_data.append({"tool": name, "data": parse_data(str(out)),
                           "round": state.get("plan_rounds", 0)})
-        # 落进 trace 的返回文本：留多长由 utils/trace.tool_result_text 一处决定
-        # （生产 200 字符、rag_search 全文、golden 轮放开——20260925 评测侧 LLM 评审员
-        # 需要有完整材料才判得出"回复有没有编材料"）
+        # 落进 trace 的返回文本：留多长由 utils/trace.tool_result_text 一处决定（20260925 起
+        # **按工具分档**：正文 8000、其余 4000、rag_search 全文；golden 轮由
+        # `TRACE_TOOL_RESULT_LIMIT` 全局放开到 40000）。**工具名必须传**，否则分档不生效。
+        # 截断时带标记（判官与读 trace 的人据此知道材料缺了一块）。
         result_ = trace_mod.tool_result_text(str(out), name)
         record("execute", "call", name=name, args=args,
                duration_s=round(time.monotonic() - _t_tool, 3), result=result_)

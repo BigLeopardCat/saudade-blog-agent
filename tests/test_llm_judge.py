@@ -9,10 +9,11 @@
      零工具轮如实写成"一条都没有"（那正是最该盯的一类）；`BLIND_SPOTS`（时间/页面/
      人设/历史…）**必须写进材料**——20260925 实测：不写，判官会把"现在是凌晨三点"
      （来自系统注入的语境）和"我是泠月喵"（人设）判成编造，整份报告就没人看了。
-  ② **材料被截断必须被认出来**：生产 trace 只留 200 字符（`utils/trace.
-     TOOL_RESULT_LIMIT_ENV`），拿它当材料 = 拿摘要当真相当证据。判据用**那一条 trace
-     自己声明的上限**（`input.tool_result_limit`），不靠"长度像不像"猜；老 trace（没声明）
-     退化为宽判。**宁可多报**——多报只是让人重跑一轮。
+  ② **材料被截断必须被认出来**：trace 里的工具返回会被截（20260925 起生产**按工具分档**：
+     正文 8000、其余 4000；golden 轮 env 放开到 40000），拿它当材料 = 拿摘要当真相当证据。
+     判据**首选截断标记**（`utils.trace.is_truncated`——分档之后"上限是哪个数"不再是一个
+     常量，只有标记可靠）；老 trace（20260925 之前的无标记 `text[:200]`）退化为"长度恰等于
+     当轮声明的上限"或"≥200"的宽判。**宁可多报**——多报只是让人重跑一轮。
   ③ **判官答坏了不许被洗成「没问题」**：非法 JSON / 缺字段 / verdict 非法一律抛；
      `unsupported` 列了东西却判 `ok`（或反之）**以列表为准**；判官调用失败（端点不认
      结构化输出）降级重问一次并**留下 degraded 标记**，而不是静默换一种问法。
@@ -113,18 +114,19 @@ def test_material_clip_is_visible():
 
 
 def test_truncation_detector():
-    print("[stub] 材料是否被 trace 截断：按当轮声明的上限判，老 trace 宽判")
-    # 声明了上限（golden 20260925 起落 input.tool_result_limit；这里的 8000 只是夹具取值，
+    print("[stub] 材料是否被 trace 截断：标记优先，老 trace 退化为长度启发式")
+    # 以下三条都是**老 trace** 的兜底启发式（无标记）：声明了上限的按"恰等于"判
+    # （golden 20260925 起落 input.tool_result_limit；这里的 8000 只是夹具取值，
     # 真实跑法用的是多少由 run_golden.run_case 一处决定）
     tr_big = _trace(input={"message": "q", "tool_result_limit": 8000},
                     events=[_call("get_article_detail", result="x" * 8000)],
                     reply="r")
-    check("长度恰等于声明上限 ⇒ 判为被截断（哪怕上限是 8000）",
+    check("老 trace：长度恰等于声明上限 ⇒ 判为被截断（哪怕上限是 8000）",
           llm_judge.truncated_calls(tr_big) == ["get_article_detail"],
           str(llm_judge.truncated_calls(tr_big)))
     tr_ok = _trace(input={"message": "q", "tool_result_limit": 8000},
                    events=[_call("get_article_detail", result="x" * 7999)], reply="r")
-    check("比上限短一个字符 ⇒ 不算截断（真结果不被误报）",
+    check("老 trace：比上限短一个字符 ⇒ 不算截断（真结果不被误报）",
           llm_judge.truncated_calls(tr_ok) == [])
     # 老 trace（没声明上限）：按生产默认 200 宽判
     tr_old = _trace(events=[_call("get_article_detail", result="y" * 200),
@@ -136,9 +138,27 @@ def test_truncation_detector():
           llm_judge.declared_result_limit({"input": {"tool_result_limit": 0}}) is None
           and llm_judge.declared_result_limit({"input": {"tool_result_limit": "8000"}}) is None
           and llm_judge.declared_result_limit({}) is None)
-    check("rag_search 永远不算截断（它一直是全文，见 utils/trace）",
+    check("无标记的 rag_search 不算截断（它一直是全文，见 utils/trace）",
           llm_judge.truncated_calls(
               _trace(events=[_call("rag_search", result="z" * 9000)], reply="r")) == [])
+
+    # 标记优先（20260925 起的新 trace 走这条）：分档之后"上限是哪一个数"已经不是一个常量，
+    # 只剩标记这一个可靠判据；长度对不上也要认出来。
+    from utils import trace as trace_mod
+    tr_marked = _trace(input={"message": "q"},   # 连 tool_result_limit 都没有
+                       events=[_call("list_guestbook",
+                                     result="x" * 300 + trace_mod.truncation_mark(99999))],
+                       reply="r")
+    check("带截断标记 ⇒ 判为被截断（长度既不等于 200 也不等于任何声明上限）",
+          llm_judge.truncated_calls(tr_marked) == ["list_guestbook"],
+          str(llm_judge.truncated_calls(tr_marked)))
+    check("标记赢过 rag_search 的豁免（真被截断过就得报，工具名不该改变这件事）",
+          llm_judge.truncated_calls(
+              _trace(events=[_call("rag_search", result="z" * 300 + trace_mod.truncation_mark(9))],
+                     reply="r")) == ["rag_search"])
+    m = llm_judge.material(tr_marked, result_limit=99999)
+    check("材料里明说这份被截断过（判官据此不判截断处之后的说法）",
+          "在 trace 里被截断过" in m and "99999" in m)
 
 
 def test_parse_verdict_strictness():
@@ -281,21 +301,30 @@ def test_golden_runs_raise_the_trace_limit():
           '"tool_result_limit": _lim' in (ROOT / "eval" / "golden_trace.py").read_text(
               encoding="utf-8"))
 
-    # 策略本身（纯函数）：默认 200、可放开、值写坏退回默认、rag_search 永远全文
+    # 策略本身（纯函数）：按工具分档、env 全局覆盖、值写坏退回分档、rag_search 永远全文。
+    # 分档那几条是**唯一**的机械证据（`TOOL_RESULT_LIMITS` 改了这里不跟着改就会红）。
     import os as _os
     t = trace_mod.tool_result_text
     old = _os.environ.pop(trace_mod.TOOL_RESULT_LIMIT_ENV, None)
     try:
-        check("不设变量 = 生产默认 200",
-              t("x" * 500, "get_article_detail") == "x" * 200)
-        check("rag_search 不截断（一直是全文）", t("x" * 500, "rag_search") == "x" * 500)
+        check("不设变量 = 走分档：正文那档留 8000",
+              t("x" * 9000, "get_article_detail") == "x" * 8000 + trace_mod.truncation_mark(9000))
+        check("不设变量 = 走分档：其余工具走默认档（4000）",
+              t("x" * 9000, "list_guestbook")
+              == "x" * trace_mod.TOOL_RESULT_LIMIT_DEFAULT + trace_mod.truncation_mark(9000))
+        check("默认档就是 4000（改它要同改上面这条）", trace_mod.TOOL_RESULT_LIMIT_DEFAULT == 4000)
+        check("短返回一分钱不多花（不截断就不带标记）",
+              t("编程(8)", "list_tags") == "编程(8)"
+              and not trace_mod.is_truncated(t("编程(8)", "list_tags")))
+        check("rag_search 不截断（一直是全文）", t("x" * 9000, "rag_search") == "x" * 9000)
         _os.environ[trace_mod.TOOL_RESULT_LIMIT_ENV] = "8000"
-        check("设了上限就按上限留（评测轮 8000）",
-              t("x" * 9000, "get_article_detail") == "x" * 8000)
+        check("env 是**全局**覆盖：非正文工具也按它留（评测轮的语义）",
+              t("x" * 9000, "list_guestbook") == "x" * 8000 + trace_mod.truncation_mark(9000))
         _os.environ[trace_mod.TOOL_RESULT_LIMIT_ENV] = "0"
         check("0 = 不截断（语义明写：≤0 全文）", t("x" * 9000, "get_article_detail") == "x" * 9000)
         _os.environ[trace_mod.TOOL_RESULT_LIMIT_ENV] = "八千"
-        check("值写坏了退回默认（不是悄悄放开）", t("x" * 500, "get_article_detail") == "x" * 200)
+        check("值写坏了退回分档（不是悄悄放开，也不是悄悄砍到 200）",
+              t("x" * 9000, "get_article_detail") == "x" * 8000 + trace_mod.truncation_mark(9000))
     finally:
         _os.environ.pop(trace_mod.TOOL_RESULT_LIMIT_ENV, None)
         if old is not None:

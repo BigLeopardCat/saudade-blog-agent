@@ -51,10 +51,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
+from utils import trace as trace_mod  # 截断标记的唯一事实源（`is_truncated`），别在本文件另抄一份
+
 # 工具返回与回复正文的截断上限：判官看的是"有没有出处"，不是复述全文。
 # **截太狠会把出处截掉 ⇒ 假 suspect**（20260925 实测：判官拿 200 字符的文章摘要当真材料，
-# 把回复里的「第 3.3 节」判成编造）。所以这里给得宽（比 golden 轮的 trace 上限 8000 还大
-# 一档，正常轮里等于不截断），真被截断时材料里会带可见的截断标记。
+# 把回复里的「第 3.3 节」判成编造）。所以这里给得宽（比 golden 轮的 trace 上限 40000
+# 低一档，正常轮里等于不截断），真被截断时材料里会带可见的截断标记。
 RESULT_LIMIT = 12000
 REPLY_LIMIT = 3000          # trace 里 reply 本身落盘时已截 2000（utils/trace.set_reply）
 
@@ -102,7 +104,8 @@ _JUDGE_SYS = """你是评测评审员，只做一件事：核对一条客服回�
 - 时间点（"现在是凌晨"）、当前页面、特效/夜间开关状态——来自系统注入的语境，不是工具返回；
 - 指代或复述本会话之前聊过的内容；
 - "我帮你查了/我看看"这类不承载事实的说法；
-- 材料里带「…（截断，原文共 N 字符）」标记时，**截断处之后的说法**（无从判断 ⇒ 不列）。
+- 材料里带截断标记时（`…（截断，原文共 N 字符）` 或 `…[trace 截断：原文共 N 字符]`），
+  **截断处之后的说法**（无从判断 ⇒ 不列）。
 - **只列得出具体结论的事实**：含糊的形容、概括、建议、追问都不算。要指出"站内共 5 条留言"
   而材料只回了 3 条，不要指出"回复提到了留言板"。
 
@@ -137,11 +140,19 @@ def calls_of(trace: dict) -> list[dict]:
 def _call_body(result: object, declared: int | None, judge_limit: int) -> str:
     """一条工具返回写进材料的样子（含"这份是不是全文"的说明）。
 
-    **两种截断必须分开说**：trace 那一层的截断（长度恰等于当轮声明的上限）是"素材本来就
-    缺一块"，要明说"真实返回可能更长"；判官自己这层的截断（超过 `judge_limit`）是"给多了
-    看不完"。混成一句话会让判官以为 trace 里的长度就是真实长度。
+    **两种截断必须分开说**：trace 那一层的截断是"素材本来就缺一块"，要明说"真实返回可能
+    更长"；判官自己这层的截断（超过 `judge_limit`）是"给多了看不完"。混成一句话会让判官
+    以为 trace 里的长度就是真实长度。
+
+    trace 那层怎么认（20260925 起）：**标记说了算**——`utils/trace` 截断时会附
+    「…[trace 截断：原文共 N 字符]」。老 trace 没有标记，退化成"长度恰等于当轮声明的上限"
+    （那条启发式的两个前提——上限是全局的一个数、且恰好等于才是砍在这里了——只对老
+    trace 成立；新 trace 一律带标记，不再需要猜）。
     """
     text = str(result or "")
+    if trace_mod.is_truncated(text):
+        return (text + "\n   …（**这一轮的工具返回在 trace 里被截断过**——"
+                       "标记里的长度是原文长度，超出的部分无从判断）").replace("\n", "\n   ")
     if declared is not None and len(text) == declared:
         return (text + f"\n   …（**这一轮的工具返回在 trace 里被截到 {declared} 字符**——"
                        "真实返回可能更长，超出的部分无从判断）").replace("\n", "\n   ")
@@ -157,10 +168,11 @@ def material(trace: dict, *, result_limit: int = RESULT_LIMIT) -> str:
     （返回原文，不是摘要），`reply` 是最终回复。没有 `call` 事件就是零帧轮——如实写成
     "本轮没有执行任何工具"，那正是最需要盯的一类（零帧轮回复里的具体事实必然无出处）。
 
-    **材料不完整必须写在材料里**（20260925 实测教训）：trace 只记 200 字符的那些轮
-    （见 `utils/trace.TOOL_RESULT_LIMIT_ENV`），判官会拿摘要当真相当成"回复编造"，而它其实
-    什么都没看到；`input` 里也没有注入给叙述者的时间/页面语境，于是"现在是凌晨三点"这种
-    有据的话被判成编造。这两类都不是回复的错 ⇒ 材料里明写盲区，并让判官据此**不列**。
+    **材料不完整必须写在材料里**（20260925 实测教训）：trace 里工具返回被截断的那些轮
+    （生产曾一律只留 200 字符，20260925 起改分档但仍会截正文，见 `utils/trace`），判官会拿
+    摘要当真相当成"回复编造"，而它其实什么都没看到；`input` 里也没有注入给叙述者的时间/
+    页面语境，于是"现在是凌晨三点"这种有据的话被判成编造。这两类都不是回复的错 ⇒
+    材料里明写盲区与截断标记，并让判官据此**不列**。
     """
     lines = []
     inp = trace.get("input") or {}
@@ -185,33 +197,44 @@ def material(trace: dict, *, result_limit: int = RESULT_LIMIT) -> str:
     return "\n".join(lines)
 
 
-# trace 里"这一轮的工具返回被截断了"的判据（20260925）：生产 trace 只留 200 字符，
-# 用这种 trace 跑评审 = 拿摘要当真相当材料，结论不可信 ⇒ **响亮说出来**。
-# rag_search 一直是全文，所以只挑非 rag_search 的 call 看长度。
+# trace 里"这一轮的工具返回被截断了"的判据（20260925）：拿被截断的材料当真相当材料，
+# 判官会把"它没看到"读成"回复编造"，结论不可信 ⇒ **响亮说出来**。
+#
+# 判据从"猜"改成"读标记"（20260925 同批）：`utils/trace` 截断时附
+# 「…[trace 截断：原文共 N 字符]」，认标记即可，不再依赖"上限是全局的一个数"这个前提
+# （分档之后它也不成立了——unset 时不同工具的上限不同）。
+# `STUB_LEN` 只服务于**老 trace**（20260925 之前落的，`text[:200]` 无标记）那条兜底启发式。
 STUB_LEN = 200
 
 
 def declared_result_limit(trace: dict) -> int | None:
     """这一轮声明的工具返回上限（`input.tool_result_limit`，golden 20260925 起落）。
 
-    老 trace 没有这个字段 ⇒ 返回 None（调用侧按生产默认 200 判，并把"这是猜的"说出来）。
+    老 trace 没有这个字段 ⇒ 返回 None。**它现在只是老 trace 那条启发式要用的输入**
+    （见 `truncated_calls`）——生产侧已改分档，一个数字不再能描述"这一轮的上限是多少"。
     """
     v = (trace.get("input") or {}).get("tool_result_limit")
     return v if isinstance(v, int) and v > 0 else None
 
 
 def truncated_calls(trace: dict) -> list[str]:
-    """这一轮里"返回文本**可能**被 trace 截断过"的工具名（空列表 = 材料完整）。
+    """这一轮里"返回文本被 trace 截断过"的工具名（空列表 = 材料完整）。
 
-    判据 = 长度恰好等于那一轮声明的上限——**恰好等于**才是"砍在这里了"的形态，
-    比它短的真结果不会被误判。上限取不到（老 trace）时退化成 `>= 200`（宽判，宁多报）。
+    **标记优先**：`utils/trace` 截断时附标记，`is_truncated` 认它——这是新 trace 的唯一判据。
+    老 trace（20260925 之前）没有标记，退化成两个启发式：长度恰等于当轮声明的上限，
+    或（上限也取不到的更老的 trace）长度 ≥ `STUB_LEN`。宽判宁多报——**"材料可能不完整"
+    多报一条的代价，远小于把"判官没看到"当成"回复编造"**。
     """
     limit = declared_result_limit(trace)
     hit = []
     for e in calls_of(trace):
+        text = str(e.get("result") or "")
+        if trace_mod.is_truncated(text):
+            hit.append(str(e.get("name")))
+            continue
         if e.get("name") == "rag_search":        # 检索候选一直是全文（见 utils/trace）
             continue
-        n = len(str(e.get("result") or ""))
+        n = len(text)
         if (limit is not None and n == limit) or (limit is None and n >= STUB_LEN):
             hit.append(str(e.get("name")))
     return hit
@@ -311,8 +334,9 @@ def render_report(run_name: str, model: str, rows: list[dict], *,
     if warn_stub:
         out.append(f"- 🚨 **材料不完整**：{len(warn_stub)} 条用例的工具返回在 trace 里被截断过"
                    f"（{', '.join(warn_stub[:6])}{' …' if len(warn_stub) > 6 else ''}）"
-                   "——这批 trace 是用**生产截断（200 字符）**记的，判官拿摘要当材料，"
-                   "它对长返回用例的红条**不可信**。重跑一轮 golden 再评审。")
+                   "——判官看到的材料缺一块，它对**长返回用例**的红条**不可信**"
+                   "（「它没看到」会被读成「回复编造」）。重跑一轮 golden"
+                   "（`run_case` 会把上限放到 40000）再评审。")
     out.append("")
     if trace_dir:
         out += [f"每条的材料原文取自 `{trace_dir}/<用例 id>.json` 的 `call` 事件"
@@ -357,14 +381,14 @@ def main() -> int:
     traces = load_traces(dir_path, only, args.limit)
     print(f"trace 轮 {dir_path.name}：{len(traces)} 条待评")
 
-    # 材料被截断过的用例（trace 用生产截断记的）——**响亮，且进报告**：不吭声的话，
-    # 这份报告会拿"判官没看到"当成"回复编造"，比不做评审更坏。
+    # 材料被截断过的用例（trace 里工具返回被截断）——**响亮，且进报告**：不吭声的话，
+    # 这份报告会拿「判官没看到」当成「回复编造」，比不做评审更坏。
     stubs = [cid for cid, tr in traces if truncated_calls(tr)]
     if stubs:
         print(f"🚨 {len(stubs)} 条用例的工具返回在 trace 里被截断过"
               f"（{'、'.join(stubs[:6])}{' …' if len(stubs) > 6 else ''}）"
-              "——这批 trace 是生产截断（200 字符）记的，长返回用例的红条**不可信**；"
-              "重跑一轮 golden（run_case 会把上限放开）再评。")
+              "——判官看到的材料缺一块，长返回用例的红条**不可信**；"
+              "重跑一轮 golden（run_case 会把上限放到 40000）再评。")
 
     if args.dry_run:
         for cid, tr in traces:
