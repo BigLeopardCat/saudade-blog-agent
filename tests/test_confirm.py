@@ -681,6 +681,37 @@ check("  扫描器本身有牙齿（含调用的样本行命中、定义行/stdl
       and not _looks_like_inspect_call("def inspect(token):")
       and not _looks_like_inspect_call("    # 见 confirm.inspect(token) 的说明")
       and not _looks_like_inspect_call("    return inspect.getsource(obj)"))
+
+# ── 卡片问句的措辞：标已读两族 ──────────────────────────────────────────
+# 用户在真机上读到的两处毛病（20260925）：
+#   ① 问句凭空发明了"红点会变小"这个中间态——头顶那个点问的是「未读总数 > 0」
+#      （frontend/src/frontHome/Head/index.tsx 的 .avatarDot），只标一部分时它
+#      **没有变化**（不是变小：它根本没有大小）。卡片上的话与屏幕上的事实不符，
+#      正是让主人无从核对"我要同意的是什么"的那类错。
+#   ② 站内信那一族压根没有分支，卡片上给主人看的是工具名 `read_messages`。
+_q_notice_all = A.render_confirm_question([{"tool": "read_notifications", "args": {"all": True}}])
+_q_notice_ids = A.render_confirm_question([{"tool": "read_notifications", "args": {"ids": [7]}}])
+_q_mail_all = A.render_confirm_question([{"tool": "read_messages", "args": {"all": True}}])
+_q_mail_ids = A.render_confirm_question([{"tool": "read_messages", "args": {"ids": [3]}}])
+check("两族的问句都是人话（不落到『执行 <工具名>』那条兜底）",
+      all("read_" not in q for q in (_q_notice_all, _q_notice_ids, _q_mail_all, _q_mail_ids)),
+      " | ".join((_q_notice_all, _q_mail_all)))
+check("全写面没有一条问句说『红点会变小』（那是屏幕上看不到的状态）",
+      not any("变小" in q for q in (_q_notice_all, _q_notice_ids, _q_mail_all, _q_mail_ids)))
+check("通知·全部：可以说红点会消失（判据是未读总数 > 0，标完它真的没了）",
+      "红点会消失" in _q_notice_all, _q_notice_all)
+check("通知·点名几条：**不许**说这次标完红点就没了——只标一部分时它没有变化",
+      "红点会消失" not in _q_notice_ids and "变小" not in _q_notice_ids
+      and "要等未读全部读完才会消失" in _q_notice_ids, _q_notice_ids)
+check("站内信一族一个字都不提红点（头顶的点是通知+信两类之和，只标信它不消失）",
+      "红点" not in _q_mail_all and "红点" not in _q_mail_ids,
+      f"{_q_mail_all} | {_q_mail_ids}")
+check("两族都写明不可撤销（全写面里唯一点完回不到原状的操作）",
+      all("不可撤销" in q for q in (_q_notice_all, _q_notice_ids, _q_mail_all, _q_mail_ids)))
+check("问句里没有嵌套的全角括号（『（…（…））吗？』读不出去哪半边收在哪儿）",
+      not any("（" in q.split("不可撤销：", 1)[-1].split("）吗")[0]
+              for q in (_q_notice_all, _q_notice_ids, _q_mail_all, _q_mail_ids)),
+      _q_notice_ids)
 settings.jwt_secret = _SAVED_SECRET
 
 print()
