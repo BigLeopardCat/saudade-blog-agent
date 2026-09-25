@@ -25,6 +25,14 @@
 # 20260925 补：产物保留登记表 + 执行者（eval/retention_manifest.py + artifact_retention.py，
 # 末尾一节）——先统一回答"盘上每一类产物归谁清"，再让它真的清。同族坑第四次
 # （R2 --keep 3 / logrotate rotate 14 / logs/archive / eval/report/runs）。
+# 20260926 补：①令牌收回/冻结**真链路探针**每日跑（scripts/probe_token_revoke.py，门禁；
+# 写生产库但只建删自己的一次性靶子账号 probe_revoke_*）——这一整套判据（冻结即作废令牌、
+# 改密码作废旧代次、向量图谱/河灯两处旁路收口）的失效方式都是**静默**的，只有真打一遍
+# 才分辨得出；位置在 golden 之前，坏掉时先出现的是一行 ❌ 语义断言而不是十几条像"模型退化"
+# 的 golden 红。②golden 的**身份前置在位检查**（eval/identity_preflight.py）——`GOLDEN_ADMIN_UID`
+# 被冻结/改密码/角色不符时，十几条真身份用例会集体变红且长相与模型退化同形；现在配了 uid
+# 就先只读探一次，明确不可用 ⇒ 这批**未评估** + **退出码 3**（"没评"不是"通过率"），
+# 读不到 ⇒ 只警告照跑（"不知道"不等于"不可用"）。
 set -u
 cd /home/ubuntu/memory_blog_rust/saudade-blog-agent
 PY=.venv/bin/python
@@ -74,7 +82,35 @@ export GOLDEN_ADMIN_UID=721
 # 约一半概率被换成兜底道歉 ⇒ 夜间门禁 1.000 会间歇性变红（哨兵一响就没人看了）。
 # 未设该变量时同样**响亮跳过并打印**（跳过关乎通过率分母，不静默豁免）。
 export GOLDEN_USER_UID=722
-$PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED (复审单 eval/report/review_*.md；回归组红 = 当天必修)" >> "$LOG"; }
+# 20260926 起：**令牌收回/账号冻结探针每日进夜间（用户点名授权）**，位置刻意在 golden 之前。
+#
+# 为什么每日跑它：这一整套判据（冻结立即作废令牌、改密码作废旧代次、向量图谱与河灯两处
+# 旁路收口）全是"库里的值与令牌里的值比一次"，而它的失效方式是**静默**的——列不存在 ⇒
+# 全站 401；列在但判据读错列 ⇒ 收回不生效（一切看起来正常）。只有真发一遍请求才分辨得出。
+#
+# 为什么在 golden 之前：`GOLDEN_ADMIN_UID` 就是这个探针要验的那个身份（`--admin-uid`），
+# 而 run_golden 现在开跑前也会做一次只读在位检查（eval/identity_preflight.py）。两者是
+# 同一件事的两层——探针验**语义**（收回真的生效）、在位检查验**可用性**（这个 uid 今天
+# 还活着吗）。先探针后 golden，坏掉时日志里先出现的是一行 ❌ 语义断言，而不是十几条
+# 看着像"模型退化"的 golden 红。
+#
+# 它**真的写生产库**（本机即生产）：靶子是它自己建的一次性账号 `probe_revoke_<时间戳>`，
+# 跑完在 finally 里删掉；不碰任何真实用户（冻结会顺手把代次 +1，落在真人账号上等于把人
+# 踢下线）。【六】【七】两节**刻意去冻结/删除管理员自己的 uid**并期望后端拒绝——那两条是
+# 负向断言，拒绝才是通过（后端有"不能冻结自己"/"非普通账号不能被这个入口删掉"两道闸）。
+#
+# **门禁**（与 golden 同级）：它红了说明这套安全判据当天不成立，比能力题红严重得多。
+# 探针在父仓（不是本仓）、只用标准库 ⇒ 用系统 python3 跑，不引本仓 venv。
+PROBE=/home/ubuntu/memory_blog_rust/scripts/probe_token_revoke.py
+echo "--- 令牌收回/冻结 真链路探针 (写生产库: 只建删 probe_revoke_* 靶子账号, 门禁) ---" >> "$LOG"
+if [ ! -f "$PROBE" ]; then
+  fail=1
+  echo "[$TS] 令牌收回探针不在位：$PROBE（父仓文件被移动/改名了？这一夜**没验**收回语义）" >> "$LOG"
+else
+  python3 "$PROBE" --admin-uid "$GOLDEN_ADMIN_UID" >> "$LOG" 2>&1 \
+    || { fail=1; echo "[$TS] 令牌收回探针 FAILED（冻结/改密码/旁路收口有回归——先看上面逐条 ❌，再谈 golden）" >> "$LOG"; }
+fi
+$PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED (复审单 eval/report/review_*.md；回归组红 = 当天必修；退出码 3 = 身份前置不可用，不是通过率)" >> "$LOG"; }
 # 20260925 起：回复出处评审（LLM-as-judge，非门禁）。确定性判据判"该出现的东西在不在"，
 # 判不了"回复里有没有编出材料之外的事实"（工具只回了 3 条、回复写"共 5 条"）——这一格由它补。
 # **刻意不进门禁**：同源模型评自己不构成 ground truth，"可疑"不等于"错了"（模块头注纪律 1），
