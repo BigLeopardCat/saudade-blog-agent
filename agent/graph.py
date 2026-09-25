@@ -4646,10 +4646,19 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # `str(dict)` 而 dict 同时带 `noteContent` 与 `content`（实测 11 篇逐篇相等）
         # ⇒ 帧体积 ≈ 正文 ×2；此前只有渲染侧（`_frame_texts` → `sections.frame_excerpt`）
         # 吸收了这个重复，narrator 拿的是这里的原始 ToolMessage，重复原样进它的提示词。
-        # 判据不认识的帧（`__ERROR__`/命令帧/列表帧）本函数恒等返回；`tool_data` 与
-        # trace 仍按 `str(out)` 原文（引用取值与排障材料都不受这条影响）。
+        # 判据不认识的帧（`__ERROR__`/命令帧/列表帧）本函数恒等返回。`tool_data` 仍按
+        # `str(out)`（引用取值走结构，与帧文本无关）。
+        #
+        # trace 落**同一份** frame_text（20260925 批 D，此前落 `str(out)` 原文）：理由
+        # 是 trace 里那份返回文本就是判官的材料（`eval/llm_judge.py` 判"回复有没有编
+        # 材料"），而它要评的正是"模型看到的帧"——落原文等于给它一份模型从没见过的
+        # 文本（同一段正文两遍，占掉 46% 的体积），还让 40000 全局上限被**多余的那一份**
+        # 撞穿（实测最长 52,834 ⇒ 撞满并截断 ⇒ 13 条用例的判官材料缺一块）。`slim_frame`
+        # 删的是**字节相等的重复键**、零信息损失，所以这不是"少记了东西"。
+        # 一个变量两处用也把"trace 里那份 == 模型看的那份"变成结构事实，不再靠约定。
+        frame_text = sections.slim_frame(str(out))
         results.append(ToolMessage(
-            content=sections.slim_frame(str(out)), tool_call_id=f"execute_{idx}", name=name))
+            content=frame_text, tool_call_id=f"execute_{idx}", name=name))
         logger.info("[execute] %s(%s) → %.100s", name, json.dumps(args, ensure_ascii=False),
                     str(out))
         # 结构化返回值入 tool_data（引用取值源）：帧文本是给人看的（还截断），
@@ -4660,7 +4669,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # **按工具分档**：正文 8000、其余 4000、rag_search 全文；golden 轮由
         # `TRACE_TOOL_RESULT_LIMIT` 全局放开到 40000）。**工具名必须传**，否则分档不生效。
         # 截断时带标记（判官与读 trace 的人据此知道材料缺了一块）。
-        result_ = trace_mod.tool_result_text(str(out), name)
+        result_ = trace_mod.tool_result_text(frame_text, name)
         record("execute", "call", name=name, args=args,
                duration_s=round(time.monotonic() - _t_tool, 3), result=result_)
         # checker 确定性验收（20260904）：PASS → 回执（系统确认事实，跨轮执行

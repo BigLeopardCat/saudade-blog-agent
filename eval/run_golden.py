@@ -420,7 +420,10 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
     # （实测 `rag_git_branch`：`get_article_detail` 只留 200 字符，判官据此断定回复编了
     # 「第 3.3 节」）。设在这里而不是各入口 = 三个跑法（进程内 main / 隔离子进程
     # golden_case_runner / 批量 golden_full_run）本来就都走这个函数，不必各写一遍。
-    os.environ.setdefault(trace_mod.TOOL_RESULT_LIMIT_ENV, "40000")
+    # 数值只有一处来源（`utils/trace.GOLDEN_MATERIAL_LIMIT`）——哨兵
+    # `eval/frame_budget.py` 拿同一个常量量"判官的材料够不够"，见那里的 material 一节。
+    os.environ.setdefault(trace_mod.TOOL_RESULT_LIMIT_ENV,
+                          str(trace_mod.GOLDEN_MATERIAL_LIMIT))
     rounds = iter_rounds(case)
     principal = build_principal(case)
     conv_id = (case.get("context") or {}).get("conversation_id")

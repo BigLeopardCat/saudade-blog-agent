@@ -2,6 +2,10 @@
 # -*- coding: utf-8 -*-
 r"""单帧预算哨兵：`agent/context.py::_DETAIL_FRAME_PER` 今天还装得下最长的文章吗。
 
+（20260925 批 D 起同时看**第二把尺子**：判官的材料上限
+`utils/trace.GOLDEN_MATERIAL_LIMIT`——`execute_node` 落进 trace 的就是这份帧文本，
+所以同一份帧长也回答"`eval/llm_judge.py` 手里的材料是不是完整的"。判据与第一把同形。）
+
 ## 它解决的是什么
 
 那个常数的旧注释写着「20000 覆盖站内全部文章正文长度」——而实测最长那篇
@@ -36,18 +40,26 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent import sections                                    # noqa: E402
 from agent.context import _DETAIL_FRAME_PER                    # noqa: E402
 from tools.base import _get, _note_row_with_tag_names          # noqa: E402
+from utils import trace as trace_mod                           # noqa: E402
 
 
-def summarize(rows: list[tuple[int, int, str]], budget: int) -> dict:
+def summarize(rows: list[tuple[int, int, str]], budget: int,
+              material_limit: int | None = None) -> dict:
     """[(帧长, id, 标题)] + 预算 → 报告用摘要。**纯函数**（离线可测，见 tests/test_frame_budget.py）。
 
     边界：帧长**等于**预算不算超——`_frame_texts` 那一支是 `len(text) <= _DETAIL_FRAME_PER`
     （相等走原样透出），这里必须与它逐字一致，否则哨兵会与真实行为错开一个字。
+
+    `material_limit`（20260925 批 D）= golden 轮给判官的材料上限
+    （`run_golden` 设的 `TRACE_TOOL_RESULT_LIMIT`）。**用同一份帧长去量**，因为
+    `execute_node` 落进 trace 的就是这份帧文本（一个变量两处用）⇒ "最长帧 vs 它"
+    就是"判官的材料有没有缺角"的判据。判据与上面那条同形（**等于**不算超：`len(text)
+    <= limit` 时 `tool_result_text` 原样返回），**不是**"差不多就行"。
     """
     ordered = sorted(rows, reverse=True)
     over = [{"id": i, "chars": n, "title": t} for n, i, t in ordered if n > budget]
     longest = ordered[0] if ordered else (0, 0, "")
-    return {
+    rep = {
         "budget": budget,
         "total": len(rows),
         "longest": {"id": longest[1], "chars": longest[0], "title": longest[2]},
@@ -56,6 +68,15 @@ def summarize(rows: list[tuple[int, int, str]], budget: int) -> dict:
         "over": over,
         "top": [{"id": i, "chars": n, "title": t} for n, i, t in ordered[:5]],
     }
+    if material_limit is not None:
+        rep["material"] = {
+            "limit": material_limit,
+            "longest": longest[0],
+            "margin": material_limit - longest[0],
+            "cut": [{"id": i, "chars": n, "title": t} for n, i, t in ordered
+                    if n > material_limit],
+        }
+    return rep
 
 
 def frames_of_site() -> list[tuple[int, int, str]]:
@@ -85,6 +106,14 @@ def render(rep: dict) -> str:
     lines.append(f"预算 {rep['budget']} 字；量了 {rep['total']} 篇；"
                  f"最长帧 {lg['chars']}（note {lg['id']}《{lg['title']}》），"
                  f"余量 {rep['margin']} 字（{rep['margin_pct']}%）")
+    mat = rep.get("material")
+    if mat:
+        lines.append(f"判官材料上限 {mat['limit']} 字（golden 轮的 TRACE_TOOL_RESULT_LIMIT，"
+                     f"trace 落的就是上面这份帧文本）：余量 {mat['margin']} 字")
+        lines.append(("✅ 也装得下：判官手里是完整材料" if not mat["cut"] else
+                      f"⚠ {len(mat['cut'])} 篇超上限 ⇒ **判官的材料被截断**，"
+                      f"它会把文章里确有、只是没进材料的内容判成编造："
+                      + "、".join(f"note {it['id']}（{it['chars']} 字）" for it in mat["cut"])))
     if not rep["over"]:
         lines.append("✅ 全部装得下：没有一篇会走按节节选")
         return "\n".join(lines)
@@ -103,9 +132,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="只打印 JSON（夜间日志用）")
     args = ap.parse_args(argv)
 
-    rep = summarize(frames_of_site(), _DETAIL_FRAME_PER)
+    # 第二把尺子（20260925 批 D）：判官的材料上限。同一份帧长两用——`execute_node` 落进
+    # trace 的就是这份帧文本（一个变量两处用），所以"最长帧 vs 这个上限"就是
+    # "判官的材料有没有缺角"。超了它，判官会把文章里确有、只是没进材料的事实判成编造。
+    rep = summarize(frames_of_site(), _DETAIL_FRAME_PER, trace_mod.GOLDEN_MATERIAL_LIMIT)
     print(json.dumps(rep, ensure_ascii=False, indent=1) if args.json else render(rep))
-    return 1 if rep["over"] else 0
+    # 两把尺子任一被越过 ⇒ 退出 1（都是"该维护常数了"，但都要有人看见）。非门禁。
+    return 1 if (rep["over"] or (rep.get("material") or {}).get("cut")) else 0
 
 
 if __name__ == "__main__":

@@ -47,7 +47,21 @@ def main() -> int:
     r3 = fb.summarize([(500, 1, "短")], 3000)
     check("没超 ⇒ over 空、余量为正", r3["over"] == [] and r3["margin"] == 2500)
 
-    print("③ 空语料不是「全部装得下」")
+    print("③ 第二把尺子：判官的材料上限（20260925 批 D）")
+    # 不传 material_limit ⇒ 报告里没有这一节（老行为不破，调用方按需开）
+    check("不传上限 ⇒ 不产生 material 一节", "material" not in r3)
+    m = fb.summarize([(5000, 19, "最长"), (4000, 46, "次长")], 3000, 4500)["material"]
+    check("超上限的篇目逐篇点名（判官材料缺角要看得见）",
+          [x["id"] for x in m["cut"]] == [19], str(m["cut"]))
+    check("余量按上限算（不是按帧预算）", m["margin"] == -500, str(m["margin"]))
+    m2 = fb.summarize([(4500, 19, "等于上限")], 3000, 4500)["material"]
+    check("帧长 == 材料上限 ⇒ 不算截断（与 tool_result_text 的 `<=` 逐字一致）",
+          m2["cut"] == [] and m2["margin"] == 0, str(m2["cut"]))
+    check("上限的默认值来自 trace 层常量（哨兵与跑法同一个数）",
+          fb.trace_mod.GOLDEN_MATERIAL_LIMIT == 40000,
+          str(fb.trace_mod.GOLDEN_MATERIAL_LIMIT))
+
+    print("④ 空语料不是「全部装得下」")
     r4 = fb.summarize([], 3000)
     check("零篇时至少不炸、且 total=0（让调用方看得出没量到）",
           r4["total"] == 0 and r4["longest"]["chars"] == 0, str(r4["longest"]))
