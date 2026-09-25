@@ -3549,6 +3549,96 @@ def test_drop_correction():
         G.get_llm = _orig_llm
 
 
+def test_calls_in_wrong_skill_round():
+    """点名写进了不读清单的技能 → 记账 + 同轮纠偏（20260925 批 C）。
+
+    **要治的洞**：`instantiate_plan` 里只有 `content_query` 分支读
+    `PARAMS.tools` / `PARAMS.calls`（见那条 elif 的条件）。planner 把清单写进别的技能
+    （chat / navigate / read_article / 写技能）时，此前是**静默零执行**：`dropped` 空
+    ⇒ 剔空纠偏不触发；`drop_terminal` 也不触发（它要 `not tools`）⇒ planner 以为
+    计划已执行、narrator 照计划声称"我调用了 X"，而 agent.log 里毫无痕迹。
+    与 20260913 的"白名单静默剔除"同族（计划里写了东西、执行侧没有对应物、
+    中间无人记账），也是"点名的工具没执行"的第三种原因——前两种是"不在你这个
+    身份的清单里"与"args 不合格"，三种改法不同，话术必须分开。
+
+    锁四件事：① 记账真的发生且**带专属后缀**；② 后缀话术讲的是"写错了技能"
+    （不能讲成"你够不到这个工具"，那是假话）；③ **content_query 不受影响**
+    （不得给它凭空添 dropped，否则正常检索每次都要多纠偏一轮）；④ 整轮跑通——
+    首轮纠偏一次、再写成 chat 就确定性收尾且注记写明零执行（房子规矩：分支走通了
+    不等于收尾路径走通了，20260922 的 KeyError('params') 就是这么漏的）。
+    """
+    print("[calls_in_wrong_skill] 点名写进不读清单的技能 → 记账 + 纠偏")
+    import agent.graph as G
+    from agent.graph import _drop_correction, parse_plan, planner_node
+    from agent.principal import Principal
+    from agent.skills import DROP_SUFFIX_SKILL_NO_CALLS
+
+    _CALLS = [{"tool": "list_notes", "args": {"limit": 5}}]
+    # ① 记账 + 后缀（三种技能各测一遍：chat 走通用分支、navigate 有自己分支、
+    #    read_article 此前**连 param_unknown 都没有**——它不走参数校验）
+    for sk, extra in (("chat", {}), ("navigate", {"target": "首页"}),
+                      ("read_article", {"article_id": 12})):
+        p = instantiate_plan(sk, dict(extra, calls=_CALLS, tools=["list_notes"]))
+        check(f"{sk}：点名进了 dropped 且带专属后缀",
+              p["dropped"] == [f"list_notes{DROP_SUFFIX_SKILL_NO_CALLS}{sk}："
+                               "该技能的模板不执行 PARAMS.tools/PARAMS.calls）"],
+              f"dropped={p['dropped']}")
+        check(f"  {sk}：同一工具写在 tools 与 calls 里只记一次", len(p["dropped"]) == 1)
+    # ② 话术：讲"写错了地方"并给出改法；不得出现"够不到这个工具"
+    hint = _drop_correction(instantiate_plan("chat", {"calls": _CALLS})["dropped"], None)
+    check("纠偏文本讲的是「写错了地方」+ 改法（换成 content_query）",
+          "写错了地方" in hint and "SKILL=content_query" in hint, hint[:160])
+    check("  不把这条说成「够不到这个工具」（那是假话：工具他够得着）",
+          "够不到" not in hint)
+    # ③ content_query 不受影响（它才是读清单的那条通道）
+    cq = instantiate_plan("content_query", {"tools": ["list_guestbook"]})
+    check("content_query 照常执行点名、不被记成写错技能",
+          cq["tools"] == ["list_guestbook({})"]
+          and not any(DROP_SUFFIX_SKILL_NO_CALLS in d for d in cq["dropped"]),
+          f"tools={cq['tools']} dropped={cq['dropped']}")
+    # ④ 整轮：纠偏一次 → 仍写错 → 确定性收尾（零工具 + 注记写零执行）
+    class _ScriptedLLM:
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    _WRONG = ('SKILL=chat\nPARAMS={"calls": [{"tool": "list_notes", "args": {"limit": 5}}]}\n'
+              "REPLY: 我查查")
+    _FIXED = ('SKILL=content_query\nPARAMS={"tools": ["list_categories"],'
+              ' "calls": [{"tool": "get_article_detail", "args": {"article_id": 12}}]}\n'
+              "REPLY: 这是最近的几篇")
+    _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
+                             "user_id": 7, "conversation_id": 42, "stop_event": None}}
+    _STATE = {"messages": [HumanMessage(content="最近有哪些文章呀")],
+              "plan_rounds": 0, "executed": [], "tool_data": []}
+    _orig = G.get_llm
+    try:
+        llm = _ScriptedLLM([_WRONG, _FIXED])
+        G.get_llm = lambda **kw: llm
+        plan = parse_plan(planner_node(dict(_STATE), _CFG)["plan"])
+        check("写错技能 → 同轮纠偏重决策一次（不是静默零工具收尾）",
+              len(llm.prompts) == 2, f"llm_calls={len(llm.prompts)}")
+        check("  第二版真的执行成了（换技能后两条通道都生效）",
+              plan["tools"] == ['list_categories({})', 'get_article_detail({"article_id": 12})'],
+              f"tools={plan['tools']}")
+        check("  纠偏文本进了第二次提示词（模型看得见改法）",
+              "写错了地方" in llm.prompts[1] and "content_query" in llm.prompts[1])
+
+        llm2 = _ScriptedLLM([_WRONG, _WRONG])
+        G.get_llm = lambda **kw: llm2
+        plan2 = parse_plan(planner_node(dict(_STATE), _CFG)["plan"])
+        check("两次都写错 → 确定性收尾（零工具，且只问两次）",
+              plan2["tools"] == [] and len(llm2.prompts) == 2, f"tools={plan2['tools']}")
+        check("  收尾注记写明本轮零执行 + 禁止句",
+              "一个工具都没有执行" in (plan2["note"] or "")
+              and "不许" in (plan2["note"] or ""), (plan2["note"] or "")[:120])
+    finally:
+        G.get_llm = _orig
+
+
 def test_write_target_refusal_round():
     """写目标解不出来 → **整轮**跑通（假 LLM + 假字典），且零工具、注记带原因。
 
@@ -4093,6 +4183,7 @@ def main():
                test_doc_title_resolution, test_short_reply_and_adjacent_pairs,
                test_no_sibling_tool_name_in_user_text, test_site_guide_is_role_rendered,
                test_site_guide_covers_nav_map, test_drop_correction,
+               test_calls_in_wrong_skill_round,
                test_write_target_refusal_round, test_write_grounding_round,
                test_write_ledger_note_round,
                test_announcement_text_round, test_name_target_round,
