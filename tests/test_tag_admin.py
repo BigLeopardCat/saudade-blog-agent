@@ -204,7 +204,7 @@ with patch(_tag_index=lambda c: IDX):
           err is None and got.id == 1, str(err))
 
 with patch(_tag_index=lambda c: IDX):
-    # —— 近失（20260925 D2）：名字差一截时**不能说"站内没有"** ——
+    # —— 近失（20260925）：名字差一截时**不能说"站内没有"** ——
     # 那个字面可能只是被节选截短/被模型抄漏了一个字母，而站内**有**这一个。
     # 说不存在就是一句假话，主人还得自己重新描述一遍；候选摆出来他才点得动。
     got, err = base._find_named_tag("编程 / Asynci", None)
@@ -788,7 +788,7 @@ with patch(_announcement_index=lambda c: aidx(), _admin_request=put):
           r.kind == "unavailable" and put.calls == []
           and "站内有 2 条标题都叫「维护通知」" in r, f"{r.kind}: {r}")
 
-# —— 近失（20260925 D2 生产现场，trace 20260925T232645）——
+# —— 近失（20260925 生产现场，trace 20260925T232645）——
 # 目标标题被节选截短成"管理员助手公告发布测试"（真名「泠月喵管理员助手公告发布测试」，
 # 少了开引号和前三个字）⇒ 台账按**完全相等**查不到 ⇒ 旧行为回一句"站内没有标题是「…」的
 # 公告"，而站内明明有——**一次假否定**，随后 narrator 与 planner 各说各话。
