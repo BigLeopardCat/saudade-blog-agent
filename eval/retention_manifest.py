@@ -21,10 +21,10 @@
 - 管：**盘的形状**——哪些类产物该存在、由谁清、留多久、谁碰不得。
 - 不管：**内容是否正确**（那是测试的事）。审计器只回答「这个路径登记过吗」。
 - 判据是**路径**，不是文件内容，也不看大小 ⇒ 对空目录同样有效
-  （`agent/traces/output_audio/` 今天就是空的，它照样得登记）。
+  （空 ≠ 不存在，空目录也得有主人；这条判据当初就是被一个 0 文件的空目录逼出来的）。
 - 匹配**按 CLASSES 顺序取第一个命中**（`owner_of`）⇒ 更具体的类必须排在更宽的前面
-  （`trace-audio` 是 `traces/**` 的子集、`archive-sql-backup` 是 `archive/**` 的子集，
-  所以它们必须排在各自更宽的那个之上）。排在前面的那个是**归属的答案**——`archive/` 下的
+  （`archive-sql-backup` 是 `archive/**` 的子集，所以必须排在 `archive` 之上）。
+  排在前面的那个是**归属的答案**——`archive/` 下的
   `*.sql` 被判给 `archive-sql-backup`（永久保留），而不是判给 `archive`（90 天）——
   后者会让人读成「这个文件会被 retain 掉」，而事实正好相反。
 
@@ -93,22 +93,11 @@ CLASSES = [
             "20260925 实测三组各有完整 14 代际",
         rule=None,
     ),
-    # trace-audio 必须排在 traces 之前：`agent/traces/**` 的正则能吞下 output_audio/，
-    # 先匹配者得 ⇒ 具体类在前（见模块头注「匹配按 CLASSES 顺序取第一个命中」）
-    dict(
-        key="trace-audio",
-        label="设备屏显/TTS 的输出音频",
-        root=DEFAULT_LOGS_ROOT,
-        patterns=["agent/traces/output_audio/**"],
-        status="open",
-        owner=None,
-        owner_ref=None,
-        retention="未接管",
-        why="由 `utils/tts.py` 写（相对路径 `output_audio`），住在 traces/ 下但**不是 trace**"
-            "（`eval/trace_files.py` 刻意不枚举它）。**今天 0 个文件 ⇒ 尚无增长压力**，"
-            "所以本轮只登记、不加保留期；哪天它开始攒，处置是明确的（按 mtime 加一条 keep-days）",
-        rule=None,
-    ),
+    # 曾经这里登记过 `trace-audio`（`utils/tts.py` 写的 output_audio）。**20260925 删除**：
+    # 那条登记项的三处坐标全是错的——tts.py 的 OUTPUT_DIR 已锚在**仓根**（不再随调用方
+    # CWD 漂移），目录因此不在 `logs/` 之下（本表只管 `logs/` 这一棵树），而且那个目录
+    # 已随修复一起消失（原先散落的 6 个都是 0 文件）。留一条"管不到的路径"等于给下一个人
+    # 一个假坐标；真要再出现在 traces/ 下，`audit()` 会照常报"未登记"。
     dict(
         key="traces",
         label="对话 trace",
@@ -186,9 +175,9 @@ CLASSES = [
     ),
     dict(
         key="deploy-state",
-        label="部署管线的锁与上一版 sha",
+        label="部署管线的锁、上一版 sha 与本代前端清单",
         root=DEFAULT_LOGS_ROOT,
-        patterns=[".deploy.lock", ".last_deploy_sha"],
+        patterns=[".deploy.lock", ".last_deploy_sha", ".deploy_manifest.txt"],
         status="frozen",
         # 没人负责清（frozen）⇒ 不填 owner（填了 check_classes 判自相矛盾）
         owner=None,
@@ -200,9 +189,12 @@ CLASSES = [
         retention="不轮转、不删",
         why="住在 logs/ 但不是日志（读写者 = 父仓 `scripts/deploy/deploy_from_r2.sh`）："
             "`.deploy.lock` 是 flock 的目标文件、`.last_deploy_sha` 是「上一版 sha」"
-            "（后端按源码是否变化决定要不要重启）。**登记它们正是因为盘点时"
+            "（后端按源码是否变化决定要不要重启）、`.deploy_manifest.txt` 是本代前端的"
+            "`js`/`vendor` 成员清单（20260925 起解压那一步顺手写，落地后按**集合差**删上一代"
+            "死块；每次部署整文件覆盖写 ⇒ 零增长）。**登记它们正是因为盘点时"
             "它们以「非 log 形态的异类」冒出来**——没有登记的表现就是「没人知道这是什么、"
-            "能不能删」",
+            "能不能删」（`.deploy_manifest.txt` 就是这么被 `audit()` 在 20260925 当天抓出来的："
+            "父仓那次改动落地后 4 分钟，L0 的「真树零未登记」就红了）",
         rule=None,
     ),
     dict(
@@ -304,8 +296,9 @@ def iter_entries(root: str) -> list[str]:
     """枚举 root 下**需要登记的条目**，相对路径、目录带尾斜杠。
 
     只收「文件」与「空目录」：中间层目录（`agent/`、`frontend/`）是结构不是产物，
-    收了就得给每个父目录也编一条登记项。空目录要收——`agent/traces/output_audio/`
-    今天就是空的，**空不等于不存在**（它照样得有主人）。
+    收了就得给每个父目录也编一条登记项。空目录要收——这条判据就是被一个 0 文件的空目录
+    逼出来的（`agent/traces/output_audio/`，20260925 已随 `utils/tts.py` 的锚定修复消失），
+    **空不等于不存在**（它照样得有主人）。
     """
     out: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
