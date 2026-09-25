@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly regression: tests/test_skills.py 单测 + 检索基准 + golden set（语料 128 条，夜间实跑 127
+# Nightly regression: tests/test_skills.py 单测 + 检索基准 + golden set（语料 129 条，夜间实跑 128
 # ——唯一的例外是那条会真写生产库的用例，它按设计不由任何无人看着的跑法触发）+ 巡检
 # 由 crontab 触发（见仓库 README 或 crontab -l）。结果追加到 ~/agent_regression.log；
 # 任一门禁项失败会在 ~/agent_regression.failed 留下标记（存在 = 上次运行失败）。
@@ -62,7 +62,7 @@ echo "--- 真写夹具残留哨兵 (只读公开接口, 秒级, 非门禁) ---" 
 # 不是"没有"）。**非门禁**：真删不掉时金色的那条用例自己就是红的（fail=1 已经置位），
 # 这里只是把"生产库里留了什么"讲清楚。
 $PY eval/golden_fixture.py --verify >> "$LOG" 2>&1 || echo "[$TS] 真写夹具有残留或读不到公开接口（非门禁，见上面的 [fixture-leftover]/[fixture-check-failed] 行）" >> "$LOG"
-echo "--- golden set (127 条真实对话, 约 25 分钟；另有 1 条真写用例按设计不在此处跑) ---" >> "$LOG"
+echo "--- golden set (128 条真实对话, 约 25 分钟；另有 1 条真写用例按设计不在此处跑) ---" >> "$LOG"
 # 20260924 起：给「需要真身份」的那类用例一个 uid，治那 5 条常年 SKIP（moderation_report_admin /
 # user_report_admin / 三条 *_unresolved_target_honest）。721 是**测试专用管理员账号**（不是主人
 # 的 uid=1——那条写用例会真改主人自己的数据），role=admin、口令已是不可知哈希，只为这条通道存在。
