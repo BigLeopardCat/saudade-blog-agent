@@ -203,6 +203,23 @@ with patch(_tag_index=lambda c: IDX):
     check("role 只改措辞（找父标签时说「一级标签」，用户才知道该给什么）",
           err is None and got.id == 1, str(err))
 
+with patch(_tag_index=lambda c: IDX):
+    # —— 近失（20260925 D2）：名字差一截时**不能说"站内没有"** ——
+    # 那个字面可能只是被节选截短/被模型抄漏了一个字母，而站内**有**这一个。
+    # 说不存在就是一句假话，主人还得自己重新描述一遍；候选摆出来他才点得动。
+    got, err = base._find_named_tag("编程 / Asynci", None)
+    check("名字差一截 → 零写 + 把最接近的候选摆出来请主人点名",
+          got is None and "名字最接近的是" in err
+          and "编程 / Asyncio（id=10001）" in err, str(err))
+    got, err = base._find_named_tag("编程 / Asyncio 异步", None)
+    check("近似候选**只用来提问**：包住真名字的长名字照样零写（不按模糊匹配动手）",
+          got is None and "名字最接近的是" in err
+          and "编程 / Asyncio（id=10001）" in err, str(err))
+    got, err = base._find_named_tag("分布", None)
+    check("过短的名字不生成近似候选（2 字包含一切，只会把追问变成噪声）",
+          got is None and "名字最接近的是" not in err
+          and "站内没有叫「分布」的标签" in err, str(err))
+
 with patch(_tag_index=lambda c: None):
     got, err = base._find_named_tag("编程", None)
     check("字典读不到 → **单独一种说法**（「读不到」≠「没有」：说成没有会让管理员以为标签真没了）",
@@ -770,6 +787,33 @@ with patch(_announcement_index=lambda c: aidx(), _admin_request=put):
     check("同名两条 → 追问、零请求（改错一条就是改了别人的公告）",
           r.kind == "unavailable" and put.calls == []
           and "站内有 2 条标题都叫「维护通知」" in r, f"{r.kind}: {r}")
+
+# —— 近失（20260925 D2 生产现场，trace 20260925T232645）——
+# 目标标题被节选截短成"管理员助手公告发布测试"（真名「泠月喵管理员助手公告发布测试」，
+# 少了开引号和前三个字）⇒ 台账按**完全相等**查不到 ⇒ 旧行为回一句"站内没有标题是「…」的
+# 公告"，而站内明明有——**一次假否定**，随后 narrator 与 planner 各说各话。
+# 判据：没有完全同名的，就把**最接近的真标题**连同 id 摆出来，仍然零写。
+put = _Req("Updated")
+near = aidx({"id": 14, "title": "泠月喵管理员助手公告发布测试", "content": "测试公告",
+             "createdAt": "2026-09-25 15:56:00"})
+with patch(_announcement_index=lambda c: near, _admin_request=put):
+    r = base.update_announcement.invoke({"title": "管理员助手公告发布测试", "content": "x"},
+                                        config=None)
+    check("被截短的标题 → 零请求 + 把最接近的真标题摆出来（不是一句「站内没有」）",
+          r.kind == "unavailable" and put.calls == []
+          and "名字最接近的是" in r and "id=14" in r
+          and "泠月喵管理员助手公告发布测试" in r, f"{r.kind}: {r}")
+    r = base.update_announcement.invoke({"title": "维护通知（补充）", "content": "x"},
+                                        config=None)
+    check("  近似只用来提问：包住真标题的长标题照样零请求、照样只回候选",
+          r.kind == "unavailable" and put.calls == []
+          and "名字最接近的是" in r and "id=4" in r, f"{r.kind}: {r}")
+    check("  近失分支把结论**限定**在「没有完全同名的」（不笼统说站内没有这条公告）",
+          "站内没有标题**完全等于**" in r, f"{r.kind}: {r}")
+    r = base.update_announcement.invoke({"title": "维护", "content": "x"}, config=None)
+    check("  过短的标题不生成近似候选（2 字包含一切）",
+          r.kind == "unavailable" and "名字最接近的是" not in r
+          and "站内没有标题是「维护」的公告" in r, f"{r.kind}: {r}")
 
 with patch(_announcement_index=lambda c: None, _admin_request=_Req("Updated")):
     r = base.update_announcement.invoke({"title": "欢迎", "content": "x"}, config=None)
