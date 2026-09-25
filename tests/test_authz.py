@@ -21,8 +21,10 @@ sys.path.insert(0, str(ROOT))
 
 from agent import authz  # noqa: E402
 from agent.graph import execute_node  # noqa: E402
-from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER,  # noqa: E402
-                             SOURCE_ASSERTION, SOURCE_BODY, UNKNOWN, Principal)
+from agent.prompts import audience_block  # noqa: E402
+from agent.principal import (ADMIN_ROLES, KNOWN_ROLES, ROLE_ADMIN,  # noqa: E402
+                             ROLE_SECRETARY, ROLE_USER, SOURCE_ASSERTION,
+                             SOURCE_BODY, ROLE_SUPERADMIN, UNKNOWN, Principal)
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
 FAILS: list[str] = []
@@ -863,18 +865,50 @@ for tool in ADMIN_TOOLS:
 check("秘书一档**没有**被顺手放开（_ROLE_SCOPES 未动）",
       not any(authz.check(p(ROLE_SECRETARY), t).allowed for t in ADMIN_TOOLS))
 
-from agent.skills import SKILL_MAP, build_planner_context  # noqa: E402
+# ── 超级管理员（20260926）──────────────────────────────────────────────
+# "超管有最高权限"在 agent 这一侧的落点就是**这两条**：授予与管理员一致（不新开一档）
+# 与人设不降级。至于"谁都不能动超管"那半边是**策略**，只在 Rust 侧实现一次
+# （graph._FREEZE_ALLOWED_TARGETS 只做"目标不能是超管"的保守预检，见那里的注）。
+check("超管在 KNOWN_ROLES 里、ADMIN_ROLES = 管理员族这两个",
+      ROLE_SUPERADMIN in KNOWN_ROLES and ADMIN_ROLES == frozenset({ROLE_ADMIN, ROLE_SUPERADMIN}),
+      str(KNOWN_ROLES))
+for tool in ADMIN_TOOLS + ["create_tag", "set_article_status", "set_article_tags",
+                           "list_admin_notes", "freeze_account", "unfreeze_account"]:
+    check(f"超管 → {tool}：与管理员逐条同权",
+          authz.check(p(ROLE_SUPERADMIN), tool).allowed
+          == authz.check(p(ROLE_ADMIN), tool).allowed is True)
+check("超管也不吃 shadow（后台读面与写面都是硬拦）",
+      all(authz.enforcing(authz.required_scope(t)) for t in
+          ("get_server_status", "create_tag", "freeze_account")))
+check("超管的『一律弹窗』与管理员逐条相同（弹不弹卡不看角色，看工具）",
+      all(authz.requires_consent(p(ROLE_SUPERADMIN), t)
+          == authz.requires_consent(p(ROLE_ADMIN), t) for t in sorted(authz.TOOL_SCOPE)))
+check("⭐ 超管的人设是管理员档（写死 role == 'admin' 时它会拿到**访客**段）",
+      audience_block(ROLE_SUPERADMIN) == audience_block(ROLE_ADMIN)
+      != audience_block(ROLE_USER))
+
+from agent.skills import SKILLS, SKILL_MAP, build_planner_context  # noqa: E402
 
 for name in ADMIN_SKILLS:
     sk = SKILL_MAP.get(name)
-    check(f"技能 {name} 声明了 roles={{admin}}", sk is not None and sk.roles == frozenset({ROLE_ADMIN}),
+    check(f"技能 {name} 声明了 roles=管理员族", sk is not None and sk.roles == ADMIN_ROLES,
           str(sk and sk.roles))
+# 派生锁（20260926）：上面那几条只覆盖 ADMIN_SKILLS 这份**手写名单**——新加的管理技能
+# 若不进那份名单，它写死 `frozenset({ROLE_ADMIN})` 就没人管，而后果是**静默**的：
+# uid=1 提权成超管后，agent 眼里那个技能不可见 ⇒ 博主自己少了这项能力，且没有任何
+# 报错。判据 = 全表扫"roles 恰好等于那个字面量"，正解是 `principal.ADMIN_ROLES`。
+_literal_admin = sorted(sk.name for sk in SKILLS
+                        if sk.roles == frozenset({ROLE_ADMIN}))
+check("⭐ 没有技能的 roles 写死字面量 {admin}（超管会被静默挡在外面）",
+      not _literal_admin, "；".join(_literal_admin))
 for role in (None, ROLE_USER, ROLE_SECRETARY):
     ctx = build_planner_context(role)
     check(f"planner 上下文（role={role}）不含管理助手技能",
           all(n not in ctx for n in ADMIN_SKILLS))
 check("planner 上下文（admin）含全部三个管理助手技能",
       all(n in build_planner_context(ROLE_ADMIN) for n in ADMIN_SKILLS))
+check("⭐ planner 上下文（superadmin）同样含全部三个（技能可见性只有 visible_skills 一个判据）",
+      all(n in build_planner_context(ROLE_SUPERADMIN) for n in ADMIN_SKILLS))
 check("公开技能对任何角色都还在（过滤没写宽）",
       all(n in build_planner_context(None) for n in ("chat", "content_query", "navigate"))
       and all(n in build_planner_context(ROLE_USER) for n in ("chat", "content_query", "navigate")))

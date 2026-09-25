@@ -29,7 +29,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from agent.principal import KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, Principal
+from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY,
+                            ROLE_SUPERADMIN, ROLE_USER, Principal)
 
 # ── scope 词汇表 ─────────────────────────────────────────────────────
 # 命名 = <动作>.<对象>。对象轴现在只有「谁的」这一维（public / own / any），
@@ -111,6 +112,10 @@ _ROLE_SCOPES: dict[str, frozenset[str]] = {
         SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE, SCOPE_WRITE_CONTENT, SCOPE_WRITE_OWN,
     }),
     ROLE_ADMIN: ALL_SCOPES,
+    # 超管（20260926）：管理员的**超集**。授予上不新开一档——它多出来的那部分不是
+    # "更多 scope"，而是策略上的豁免（谁能被冻/被改身份），那个只在 Rust 侧实现一次
+    # （src/authz.rs 的账号管理策略），agent 侧不复制。
+    ROLE_SUPERADMIN: ALL_SCOPES,
 }
 
 # ── 工具 → 所需 scope（**完备性是硬要求**：见 tests/test_authz.py）───────────

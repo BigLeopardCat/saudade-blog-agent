@@ -21,14 +21,26 @@ from dataclasses import dataclass
 
 # ── 角色常量 ─────────────────────────────────────────────────────────
 # 与 Rust 侧 src/authz.rs 的 ROLE_* 是**跨语言契约**（同名同义），改一侧须同步另一侧。
-# admin —— 博主本人，后台全权（middleware.rs auth_guard 现在只认它）
+# superadmin —— 超级管理员：博主本人的账号（今天 uid=1）。在**权限**上它是管理员的
+#              超集，在**被管理**上它是谁都不能动的那一个（不能被冻结/降级/删除，
+#              也不出现在后台账号列表里——那两条规则的后端实现见 src/authz.rs 的
+#              账号管理策略一节；agent 侧只有"目标不能是超管"这半边，见
+#              graph._FREEZE_ALLOWED_TARGETS）
+# admin —— 管理员，后台全权（middleware.rs auth_guard 认它和超管两个）
 # secretary —— 秘书：可以读他人数据、可以代博主做写操作，但进不了后台管理面
 # user —— 普通访客/体验账号：只能读公开内容、操作自己的设备与自己的页面
+ROLE_SUPERADMIN = "superadmin"
 ROLE_ADMIN = "admin"
 ROLE_SECRETARY = "secretary"
 ROLE_USER = "user"
 
-KNOWN_ROLES = (ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER)
+KNOWN_ROLES = (ROLE_SUPERADMIN, ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER)
+
+# "管理员族"：能进后台管理面的那几个角色。**判据只有这一处**——技能可见性、planner
+# 的人设分档、管理工具菜单都从它派生，不许在别处写 `role == ROLE_ADMIN` 这种字面量
+# 比较（写一次就漏超管一次，而漏了是**静默**的：超管提权后 agent 眼里零权限 +
+# 拿到访客的人设，博主自己反而用不了管理助手）。
+ADMIN_ROLES = frozenset({ROLE_ADMIN, ROLE_SUPERADMIN})
 
 # 身份来源（审计字段，不做判据）
 SOURCE_ASSERTION = "assertion"  # Rust 签名断言（权威）

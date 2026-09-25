@@ -89,7 +89,8 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_pa
                              _nav_fast_path, _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.entities import receipt_digest
-from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER,
+from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY,
+                             ROLE_SUPERADMIN, ROLE_USER,
                              UNKNOWN as UNKNOWN_PRINCIPAL)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
@@ -4402,16 +4403,14 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
 
 
 # ── 冻结/解冻的**政策预检**（20260926，见下方 `_freeze_policy_refusal`）─────────
-# 超管角色名：与 Rust 侧 `src/authz.rs::ROLE_SUPERADMIN` 同名同义（跨语言契约）。
-# 这里先写字面量——它进 `principal.KNOWN_ROLES` 属于"超管本人能做什么"那一批，
-# 本函数只用到"目标不能是超管"这半边，与那一批解耦。
-_ROLE_SUPERADMIN = "superadmin"
-
 # 发起人角色 → 他**冻得动**的目标角色。表里没有的发起人角色 ⇒ 不拦（放行给后端）。
 # 这张表只写"确定知道"的部分：管理员冻不动管理员（更冻不动超管），超管谁都能冻
 # 但**超管不在目标角色里**——因此这一行也顺带表达了"超管谁都不行"。
+#
+# 角色名一律用 `principal` 里的常量（跨语言契约，与 Rust `src/authz.rs` 同名同义）：
+# 这里写过一次字面量，就会在下一个人改常量时留下一个静默失效的比较。
 _FREEZE_ALLOWED_TARGETS = {
-    _ROLE_SUPERADMIN: {ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER},
+    ROLE_SUPERADMIN: {ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER},
     ROLE_ADMIN: {ROLE_SECRETARY, ROLE_USER},
 }
 
