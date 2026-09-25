@@ -1429,6 +1429,24 @@ check("文章清单与写工具的读前值走同一端点（弹窗里的「现�
       '"/api/protected/notes/list"' in _rn and '"/api/protected/notes/list"' in _ni
       and "draft/editor" not in _ni, _ni[:60])
 
+# ── 代调令牌的载荷形状（跨仓契约，20260926）────────────────────────────────
+# Rust 侧 20260926 给登录令牌加了代次声明 `ver`（改密码/冻结即作废旧令牌），而
+# `authz::check_token` 把"没有 ver"单独当一支：跳过代次比对、只判账号冻结。**管理助手
+# 这枚 60 秒代调令牌必须停在这一支上**——它代表的是 Rust 本次请求刚认证过的身份；
+# 若哪天有人"顺手补全"给它填个 0，那么"改过密码的管理员 + 管理助手"会整体 401
+# （对方的 token_version 早就不是 0 了），而这条链路的失败长得像"没权限"，很难查。
+import base64 as _b64  # noqa: E402
+_tok = _B._sign_local_jwt(721, "admin")
+_part = _tok.split(".")[1]
+_pad = _part + "=" * (-len(_part) % 4)
+_payload = json.loads(_b64.urlsafe_b64decode(_pad).decode())
+check("代调令牌的载荷就是 {sub, exp, role} 三个键",
+      sorted(_payload) == ["exp", "role", "sub"], f"{sorted(_payload)}")
+check("代调令牌**不带 ver**（无 ver 的那一支是刻意保留的，不是漏填）",
+      "ver" not in _payload, f"{sorted(_payload)}")
+check("代调令牌不带 aud（Rust 用 Validation::default()，多个 aud 会验签失败）",
+      "aud" not in _payload, f"{sorted(_payload)}")
+
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
