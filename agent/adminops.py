@@ -1027,16 +1027,42 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None) -> 
         what = "收藏" if tool == "add_favorite" else "取消收藏"
         return f"{what}文章 {a.get('article_id')}{where_article}"
     if tool == "read_notifications":
-        # 标记已读**不可撤销**（is_read 撤不回，红点变小就回不去），问句必须把
+        # 标记已读**不可撤销**（is_read 撤不回，读过的通知回不到未读），问句必须把
         # 这一句写出来——它是全写面里唯一"点了确定就再也回不到原状"的操作。
+        # 后果要按**标的**分别说准（20260925 用户纠正）：头顶那个红点的可见性判据是
+        # 「未读总数 > 0」（frontend/src/frontHome/Head/index.tsx 的 .avatarDot），
+        # 所以只标一部分时红点**没有变化**（不是变小——它根本没有大小），标完「全部」
+        # 才会消失。写成"红点会变小"是凭空发明了中间态：屏幕上的事实与卡片上的话不符。
+        # 尾句用「；」分句而不是再套一层括号：外层已经是「（不可撤销：…）」，
+        # 里面再套全角括号就成了「（…（…））吗？」，一眼看不出哪半边收在哪儿。
         ids = a.get("ids")
         if isinstance(ids, (list, tuple)) and ids:
             head = "把通知 " + "、".join(str(x) for x in ids) + " 标记为已读"
+            tail = "标的就不再是未读；头顶红点要等未读全部读完才会消失"
         elif str(a.get("all")).lower() in ("true", "1", "yes"):
             head = "把**全部**未读通知标记为已读"
+            tail = "标的就不再是未读，头顶的红点会消失"
         else:
             head = "把通知标记为已读（没说清是哪几条）"
-        return f"{head}（不可撤销：标的就不再是未读，红点会变小）"
+            tail = "标过的就不再是未读；头顶红点要等未读全部读完才会消失"
+        return f"{head}（不可撤销：{tail}）"
+    if tool == "read_messages":
+        # 站内信与通知同一件事的两种物件（同 scope、同同意闸），问句必须同源同形
+        # ——否则这条落到本函数末尾的 `执行 {tool}`，卡片上给主人看的是工具名
+        # （`read_messages`），同族两张卡一张说人话一张说英文，是漏改不是设计。
+        # 后果**刻意不提红点**：头顶那个点问的是"未读总数 > 0"，分子是
+        # 通知 + 站内信两类之和（frontend/src/frontHome/Head/index.tsx 的
+        # `.avatarDot`，读数见 components/UserCenter/unread.ts）——只读完全部信
+        # 而通知还有未读时，点**不会**消失。同一句话在通知那张卡上说"会消失"
+        # 成立（那是它自己的标的），搬到信这张卡上就成了新的错话。
+        ids = a.get("ids")
+        if isinstance(ids, (list, tuple)) and ids:
+            head = "把站内信 " + "、".join(str(x) for x in ids) + " 标记为已读"
+        elif str(a.get("all")).lower() in ("true", "1", "yes"):
+            head = "把**全部**未读站内信标记为已读"
+        else:
+            head = "把站内信标记为已读（没说清是哪几封）"
+        return f"{head}（不可撤销：标过的就不再是未读）"
     return f"执行 {tool}"
 
 
