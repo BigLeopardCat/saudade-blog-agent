@@ -109,6 +109,9 @@ del _panel, _panel_path
 # 白名单路径（单一事实来源 = 工具层 navigate_to 的校验常量，避免双源漂移；
 # /category/*、/article/* 为前缀匹配，需至少带一个 id 段）
 from tools.base import _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS
+# 待办正文上限：**只此一处**（tools/base.py，与 Rust `MAX_TEXT_CHARS` 同源）。
+# 展开层挡住超长只是为了"零写 + 说清原因"，真正的判据在工具与服务端那两道。
+from tools.base import _TODO_TEXT_LIMIT
 from agent.refs import is_ref  # 参数引用 $tool[0].field（20260919，见 instantiate_plan）
 from agent.principal import ROLE_ADMIN  # 技能可见性按角色过滤（20260921 管理助手）
 # 管理读工具清单从 authz 的 scope 表**派生**（20260924）：哪些工具是"后台读面"
@@ -140,6 +143,13 @@ WRITE_SKILL_NAMES = frozenset({
     # `{"ids": null, "all": null}` 原样实例化成一次"零范围"的写（本文件
     # test_userdata ⑤ 有一条专门盯它）。
     "message_read",
+    # 后台首页待办 / 日程（20260926 第八轮）：`dashboard_todo_add` 是写面里
+    # **唯一目标是自由文本**的一件（既不是站内既有名字，也不是 article_id），
+    # 另起一条展开路径见 `_expand_todo_skill`。
+    # `dashboard_todo_list` **不在**这份名单里：它是读（admin.console），走的是
+    # 注册表里普通技能那条路——把它写进来会让它落进写分支的参数展开，产出一次
+    # 不成形的写。⚠️ 同上：名单与 `instantiate_plan` 的分支**两处都要补**。
+    "dashboard_todo_add",
 })
 
 # 其中"目标是一个**名字**"的那批（标签 / 分类 / 公告 / 留言片段），共用
@@ -165,6 +175,12 @@ _WRITE_NAME_TARGET_SKILLS = frozenset({
 # ——见该函数头注。
 _OWN_WRITE_SKILLS = frozenset({"favorite_add", "favorite_remove", "notice_read",
                                 "message_read"})
+
+# 目标是**自由文本**的写技能（20260926 第八轮），共用 `_expand_todo_skill`：上面三组
+# 的目标都是"能在站内核对出来的东西"（名字 / article_id / 通知 id），这一组的目标是
+# 主人随口说的那件事——**没有东西可核对**，所以它的判据只能是"正文在不在、排期翻不翻
+# 得出来"（见该函数头注）。同 `_WRITE_NAME_TARGET_SKILLS`：显式白名单，不是减法。
+_FREE_TEXT_WRITE_SKILLS = frozenset({"dashboard_todo_add"})
 
 
 def _norm_pos_int(value) -> int | None:
@@ -1075,6 +1091,58 @@ SKILLS: list[Skill] = [
             "返回失败/未确认时如实说没标成，**绝不得用完成式声称已标记**"
         ),
     ),
+    # ── 后台首页的待办 / 日程（20260926 第八轮）─────────────────────────
+    # 这一族是写面里**唯一目标不是"站内既有的名字/ id"**的：目标就是主人心里
+    # 那件事本身（自由文本）。所以它既不能走 `_expand_write_skill`（那套的前提是
+    # "名字→id 的解析在工具侧对着实时字典做"），也不认 article_id ⇒ 另起一条展开
+    # 路径 `_expand_todo_skill`（instantiate_plan 里有对应分支）。
+    Skill(
+        name="dashboard_todo_add",
+        capability="往你后台首页的待办列表里加一条（可带排期日）",
+        description=(
+            "博主（管理员）要求**记一件事到后台首页的待办 / 日程里**时使用"
+            "（「记一下〈要记的事〉」「帮我在待办里加一条〈…〉」"
+            "「安排一下〈什么时候〉〈要做什么〉」——〈…〉是占位符，正文照抄主人原话）。"
+            "参数 text=那件事的正文（**照抄主人说的，不许润色、补细节或改写法**）；"
+            "date=他说的那一天（「明天」「后天」「9月28日」这类说法**都照他原样说**，"
+            "系统会翻成日期；**他没说日子就别填**，不要自己挑一个）。"
+            "⚠️ 只**追加**一条，不动列表里原有的任何一条；它写的是主人**自己的私人清单**，"
+            "站内公开页面上看不到。若他只是问「我有哪些待办」，改用 list_dashboard_todos"
+            "（那是读，不用本技能）。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，"
+            "也**照常选本技能**——要不要真记下由系统弹确认框问主人（正文与排期日会显示在"
+            "确认框里），你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+        ),
+        inputs={"text": "这条待办的正文（用户说的那件事，原样，不要改写）",
+                "date": "（可选）排期日：用户说的那一天（如「明天」「9月28日」）；没说就留空"},
+        plan=[("create_dashboard_todo", {"text": "$text", "date": "$date"})],
+        complete_when="create_dashboard_todo 返回了已记下",
+        reply_contract=(
+            "只能按 create_dashboard_todo 的实际返回作答，说清记下的是哪件事、排期是哪天"
+            "（没排期就说没定日子）；返回失败/未确认时如实说没记成，"
+            "**绝不得用完成式声称已记下**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    Skill(
+        name="dashboard_todo_list",
+        capability="查看你后台首页的待办 / 日程列表（含排期与完成情况）",
+        description=(
+            "博主（管理员）问**他自己那份后台待办 / 日程清单**时使用"
+            "（「我后台有哪些待办」「我的日程上有什么」「那个 xx 是不是还没做」）。"
+            "无参数——它读的就是主人自己那份列表。"
+            "⚠️ 要**加**一条时不用本技能（那是 dashboard_todo_add）。**仅管理员可用**"
+        ),
+        inputs={},
+        plan=[("list_dashboard_todos", {})],
+        complete_when="list_dashboard_todos 返回了清单",
+        reply_contract=(
+            "只能按 list_dashboard_todos 的实际返回作答，**逐条**说清（正文、排期、完成没有）；"
+            "返回「列表是空的」就如实说一条都没记；返回失败/读不到时如实说没读到，"
+            "**绝不得凭印象编出待办**"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
     Skill(
         name="chat",
         capability="闲聊、陪你说话",
@@ -1424,6 +1492,48 @@ def _expand_own_skill(skill, params: dict) -> tuple[list[str], str]:
     return [], f"{name}：未知的写技能（不调用任何工具）"
 
 
+def _expand_todo_skill(skill, params: dict) -> tuple[list[str], str]:
+    """后台首页待办 / 日程（20260926 第八轮）→ (TOOLS 行清单, 注记)。
+
+    与 `_expand_write_skill` 分开写（同 `_expand_own_skill` 的理由）：那两套的前提
+    都是"目标能在站内核对"——一个按名字解析 id，一个认 article_id / 通知 id。这一件
+    的目标是主人随口说的一件事，**站内没有东西可核对**；把它塞进名字通道，只会让
+    `_owner_target_span` 那套"目标名必须能从主人原话里抽出来"的判据作用在一段自由
+    文本上（那套判据是为了防"模型自己编了一个目标名"，而这里正文本来就该是主人的话
+    ——**判据错位比没有判据更糟**：它会把好参数判红）。
+
+    判据只剩两条，都是"缺了就不写"：
+      · 正文空 → 零工具 + 注记（"记一下"三个字本身就是正文时，那是主人的口误，
+        不是一件待办）；
+      · 排期翻不出来 → 零工具 + 注记，**绝不挑一个日子顶上**（翻成什么由
+        `A.normalize_due_date` 一处决定；这里翻出来的值同时进 TOOLS 行、确认框与
+        令牌载荷，三处是同一个值）。
+    超长也在这里挡（**不截断**：截断等于替主人改字，同 Rust 侧的取舍）。
+    """
+    text = _write_arg(params.get("text"))
+    if not text:
+        return [], ("dashboard_todo_add 缺少正文（text）：不调用任何工具，"
+                    "如实向主人问清要记的是哪一件事；**不要**拿他这句话本身当正文猜一个")
+    if len(text) > _TODO_TEXT_LIMIT:
+        # 上限与服务端同源（tools/base.py 的 `_TODO_TEXT_LIMIT` = Rust MAX_TEXT_CHARS）；
+        # 这里挡一道只是为了"零写 + 能说清原因"，服务端那一道才是判据。
+        return [], (f"dashboard_todo_add 的正文太长（{len(text)} 字，上限 {_TODO_TEXT_LIMIT} 字）："
+                    "不调用任何工具，如实请主人把这件事说短一点（**不许**替他截断）")
+    raw = _write_arg(params.get("date"))
+    due = A.normalize_due_date(raw) if raw else None
+    if raw and due is None:
+        return [], (f"dashboard_todo_add 的排期日「{raw}」认不出来（只认 年-月-日 / "
+                    "年/月/日 / X月X日 / 今天·明天·后天）：不调用任何工具，"
+                    "如实向主人问清是哪一天——**不许**自己挑一个日子顶上")
+    args: dict = {"text": text}
+    if due:
+        args["date"] = due
+    return ([f"create_dashboard_todo({json.dumps(args, ensure_ascii=False)})"],
+            (f"往他**自己**后台首页的待办里加一条「{A.clip(text, 20)}」"
+             + (f"，排期 {A.due_date_cn(due)}" if due else "（未排期）")
+             + "；只追加这一条，列表里原有的都不动"))
+
+
 def instantiate_plan(skill_name: str, params: dict,
                      role: str | None = None) -> dict:
     """技能模板 + 参数 → 结构化计划。
@@ -1603,6 +1713,12 @@ def instantiate_plan(skill_name: str, params: dict,
             # 用户自己的数据（20260923 批 7）：收藏两件（article_id）+ 标记已读
             # （ids 或 all，二选一，都没给就零工具追问）。
             wtools, note = _expand_own_skill(skill, params)
+            tools.extend(wtools)
+        elif skill.name in _FREE_TEXT_WRITE_SKILLS:
+            # 目标是**自由文本**的写技能（20260926 第八轮）：待办 / 日程。
+            # 前两组的目标都能在站内核对（名字 / id），这一组只有"正文在不在、
+            # 排期翻不翻得出来"两条判据——见 `_expand_todo_skill` 头注。
+            wtools, note = _expand_todo_skill(skill, params)
             tools.extend(wtools)
         elif skill.name not in ("article_status", "article_tags"):
             # fail-closed（20260923）：落到这里的只可能是"加了新写技能、没在

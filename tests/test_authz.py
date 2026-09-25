@@ -190,12 +190,18 @@ CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), 
 # 措辞背后的真判据——"这一次到底要不要做"需要一个确定性答案（agent 自己判断"这篇
 # 值得收藏"就替用户收藏，是以用户名义往他账号里写状态）。详见 authz 的 CONSENT_SCOPES。
 # 20260923 批 8 到十七个：同族再加一件 `read_messages`（标记**信**已读）。
-check("需确认的工具恰好是十七个（十三个后台写 + 四个用户自己的写）",
+# 20260926 到十八个：加的是 `create_dashboard_todo`（往主人后台首页的待办里加一条）。
+# 它进这张表**不是**因为后果更重（他随时能删能改），而是因为它是唯一一件"目标由主人
+# 随口描述、站内没有东西可核对"的写——命令式措辞与内容描述在这句话里同形，那个
+# `_console_command` 判据本来也答不了"他是在让我记、还是在跟我聊这件事"（详见 authz
+# 里 `_ALWAYS_CONFIRM_TOOLS` 的注）。它是**一律弹窗**族的一员 ⇒ 这一条也是它的锁。
+check("需确认的工具恰好是十八个（十四个后台写 + 四个用户自己的写）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
                         "create_announcement", "update_announcement",
                         "delete_announcement",
                         "audit_board_comment", "delete_board_comment",
+                        "create_dashboard_todo",
                         "set_article_status", "set_article_tags",
                         "add_favorite", "remove_favorite", "read_notifications",
                         "read_messages"},

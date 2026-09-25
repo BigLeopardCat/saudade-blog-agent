@@ -3002,6 +3002,132 @@ def read_messages(
 
 
 # ---------------------------------------------------------------------------
+# 后台首页待办 / 日程（20260926）：读整份 / 追加一条
+# ---------------------------------------------------------------------------
+# 端点在守卫域内（Rust `src/routes/todos.rs`，`auth_guard` 之后）⇒ 这一族照例是
+# `admin.console` / `write.console`（见 agent/authz.py 的登记与那里的取舍说明：
+# 接口虽然按 uid 存"你自己的那份列表"，但普通登录用户前端根本打不开后台首页，
+# 取 read.own/write.own 会让授权层对普通用户说"允许"而 Rust 随后 403）。
+#
+# **agent 只有"追加一条"这一条写通道**（POST /api/protected/todos/item），它读的
+# 却是整份 GET：为什么不用 PUT 整份覆盖，见该文件头注——主人自己的那份列表在他
+# 手里，agent 先读再写会把主人刚做的改动抹掉，而"发一份自己拼的"在整份覆盖的
+# 语义下等于清空他的待办。
+#
+# 契约同源（改一侧必须同步另一侧）：条数上限与正文上限都写在 Rust 那侧的
+# `MAX_TODOS` / `MAX_TEXT_CHARS`；这里各留一份**只为不发注定被拒的请求**，真正的
+# 判据在服务端（本地这份写小了只是少发一次，写大了服务端照样拒）。
+_TODO_TEXT_LIMIT = 200     # = src/routes/todos.rs MAX_TEXT_CHARS（按字符数）
+_TODO_MAX_ROWS = 200       # = src/routes/todos.rs MAX_TODOS
+
+
+def _todo_rows(data) -> list[dict] | None:
+    """接口返回 → 待办行列表；形态不对 → None（≠ 空列表，同 `_tag_index` 的区分）。"""
+    if not isinstance(data, list):
+        return None
+    return [r for r in data if isinstance(r, dict)]
+
+
+def _todo_row_key(row: dict) -> tuple[str, str]:
+    """一行的**判等键** = (正文, 排期日)。用于"写后复核"里认哪一条是新加的。
+
+    为什么不用 id：这张列表的读接口**不回 id**（前端那份列表的"身份"是它自己那份
+    数组，服务端只存"此刻的样子"，见 Rust 头注）——所以复核只能按内容认。用内容
+    判等的前提也写清楚了：正文与排期日都由我们自己发出去、服务端原样落库，两边
+    逐字相等才是"读到了我加的那一条"。
+    """
+    return (str(row.get("text") or "").strip(),
+            str(row.get("date") or "").strip())
+
+
+@tool
+def list_dashboard_todos(config: RunnableConfig) -> str:
+    """查看**后台首页**的待办 / 日程列表（主人自己在后台首页那张卡里记的事）：
+    每行给出正文、排期日（写「未排期」的是没定日子那条）与是否已完成。
+    主人问"我有哪些待办 / 我日程上有什么 / 那个 xx 是不是还没做"时用它。
+    这是**他自己那份私人列表**，站内公开页面上看不到；需要管理员身份。"""
+    from agent import adminops as A
+    data = _admin_get("/api/protected/todos", config)
+    if isinstance(data, ToolResult):
+        return data
+    rows = _todo_rows(data)
+    if rows is None:
+        return unavailable("后台待办接口返回的不是列表，没法读出你的待办")
+    if not rows:
+        # 读到了、就是空的 —— 这是**事实**（`empty`，checker 照常 PASS 进回执），
+        # 不能写成 unavailable：那会把"你还没记过待办"说成"系统挂了"。
+        return empty("后台首页的待办列表现在是空的（一条都没记）。")
+    return ok(A.render_todo_list(rows), meta={"op": "dashboard_todo_list",
+                                              "count": len(rows)})
+
+
+@tool
+def create_dashboard_todo(
+    text: Annotated[str, "这条待办/日程的正文：**照抄主人说的那件事**，不许润色、补细节或改写法"
+                         "（他给几个字就写几个字）"],
+    config: RunnableConfig,
+    date: Annotated[str | None, "排期日：主人说了哪一天就填那一天（「明天」「后天」直接照抄他的"
+                                "说法也行，系统会翻成日期）；他没说日子就不填，**不要自己挑一个**"] = None,
+) -> str:
+    """在**后台首页的待办列表**里加一条（排期可选）。这是主人自己的私人清单——
+    不会对外可见，加完他自己随时能改能删；他问"记一下…/帮我记着…/安排一下…"时用它。
+    只**追加**一条，不动列表里原有的任何一条。需要管理员身份，且要经主人确认。"""
+    from agent import adminops as A
+    body = str(text or "").strip()
+    if not body:
+        return unavailable("这条待办没写内容（正文是空的），本次未改动")
+    if len(body) > _TODO_TEXT_LIMIT:
+        return unavailable(f"这条待办太长了（{len(body)} 字，最多 {_TODO_TEXT_LIMIT} 字），"
+                           f"本次未改动——请让主人把这件事说短一点")
+    raw_date = "" if date is None else str(date).strip()
+    due = A.normalize_due_date(raw_date) if raw_date else None
+    if raw_date and due is None:
+        # 认不出来就不挑一个顶上（见 adminops.normalize_due_date 头注）：错一天的
+        # 日程会静静地躺在后台日历的错误格子里，主人不翻到那天根本不会发现。
+        return unavailable(f"认不出排期日「{raw_date}」（只认 年-月-日 / 年/月/日 / X月X日 / "
+                           f"今天·明天·后天），本次未改动——请向主人问清是哪一天")
+
+    # 写前先读（同族纪律）：① 拿"加之前有几条"当复核基线 ② 满员时不发注定被拒的请求
+    before = _admin_get("/api/protected/todos", config)
+    if isinstance(before, ToolResult):
+        return _pre_read_fail(before, "你后台首页的待办列表")
+    rows_before = _todo_rows(before)
+    if rows_before is None:
+        return unavailable("读回的后台待办不是列表，无法确认这次追加，本次未改动")
+    if len(rows_before) >= _TODO_MAX_ROWS:
+        return unavailable(f"待办已经满了（{len(rows_before)} 条，上限 {_TODO_MAX_ROWS} 条），"
+                           f"本次未改动——请先到后台首页清掉几条")
+    key = (body, due or "")
+    n_before = sum(1 for r in rows_before if _todo_row_key(r) == key)
+
+    payload: dict = {"text": body}
+    if due:
+        payload["date"] = due       # 没排期就**不带这个键**（不写 null，省得两种"没填"混在一起）
+    data = _admin_request("POST", "/api/protected/todos/item", payload, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    # 写后复核 = **一次独立读数**（接口回的那一条不算判据）：这一条必须真在列表里，
+    # 且**同键的条数比写前多**——只判"列表里有这么一条"会在"主人本来就记过同样一条"
+    # 的情况下把一次失败的追加判成功（净变化才是判据，同 read_messages 那条注释）。
+    after = _admin_get("/api/protected/todos", config)
+    if isinstance(after, ToolResult):
+        return unavailable(f"追加请求已发出，但读不回你后台首页的待办列表（{after}），"
+                           f"本次改动未确认生效")
+    rows_after = _todo_rows(after)
+    if rows_after is None:
+        return unavailable("追加请求已发出，但读回的后台待办不是列表，本次改动未确认生效")
+    n_after = sum(1 for r in rows_after if _todo_row_key(r) == key)
+    if n_after <= n_before:
+        return unavailable(f"追加请求已发出，但读回列表里没多出这一条"
+                           f"（同内容的仍是 {n_after} 条，写前 {n_before} 条）"
+                           f"——本次改动未确认生效，不要声称已记下")
+    return ok(A.render_todo_added(body, due),
+              meta={"op": "dashboard_todo_add", "text": body, "date": due or "",
+                    "count": len(rows_after)})
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -3067,6 +3193,11 @@ _TOOL_REGISTRY = [
     # 见"站内信"节头注（术语：站内信 ≠ 河灯留言）
     list_my_messages,
     read_messages,
+    # 后台首页待办 / 日程（20260926）：读=admin.console、追加=write.console，
+    # 见"后台首页待办 / 日程"节头注。写只有**追加一条**这一条通道（agent 手里
+    # 没有那份列表，整份覆盖会抹掉主人的改动）。
+    list_dashboard_todos,
+    create_dashboard_todo,
 ]
 
 def get_all_tools():
