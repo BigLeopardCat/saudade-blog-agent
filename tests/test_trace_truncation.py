@@ -175,8 +175,10 @@ def test_judge_reads_the_marker():
 def test_wiring():
     print("[接线] 落盘那一处必须传工具名，否则分档不生效")
     src_graph = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+    # 20260925 批 D：落盘的那份文本从 `str(out)` 改成 `frame_text`（= 模型看到的帧，
+    # 由 slim_frame 去掉重复正文键，见 execute_node 的注）——**工具名仍然必须传**。
     check("graph 的 call 事件调用 tool_result_text 时**传了工具名**",
-          "trace_mod.tool_result_text(str(out), name)" in src_graph)
+          "trace_mod.tool_result_text(frame_text, name)" in src_graph)
     check("graph 里没有别处再截一次工具返回（两处截断会各自为政）",
           src_graph.count("tool_result_text(") == 1)
     src_run = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")

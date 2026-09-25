@@ -60,11 +60,23 @@ TRACE_DIR = settings.trace_dir
 # 默认 4000 覆盖除正文外的全部实测最大。体积代价：约 33 份/天、每份最坏几 KB
 # ⇒ 一年 100MB 量级（20260925 实测：27 天 3.7MB；磁盘余 9.1G）。
 #
+# 那行"最大 40000、是唯一撞的"是**换算法之前**的读数：20260925 批 D 起，落进 trace 的
+# 文本改由 `execute_node` 的 `sections.slim_frame` 去重（去掉字节相等的重复正文键），
+# 于是同一批数据的最长帧从 52,834 降到 26,847 —— 40000 那档从此有 33% 余量，
+# 判官的材料也不再缺角。**这条余量有哨兵看着**（`eval/frame_budget.py` 同时量
+# "最长帧 vs 这个上限"，超了就点名），不靠注释里的这句话成立。
+#
 # `TRACE_TOOL_RESULT_LIMIT` 仍然**全局**覆盖分档（不是"只改默认档"）：L2 golden 轮
 # `run_golden.run_case` 把它设成 40000，判官要材料。**生产不设这个变量** ⇒ 走分档。
 # 运行时读环境（不缓存到模块级常量）：跑法在进程内改它也能生效，不依赖 import 顺序。
 TOOL_RESULT_LIMIT_ENV = "TRACE_TOOL_RESULT_LIMIT"
 TOOL_RESULT_LIMIT_DEFAULT = 4000
+# golden 轮给判官放开的上限。**数字只有一个来源**：`run_golden.run_case` 拿它设环境变量，
+# `eval/frame_budget.py` 拿它量"判官的材料会不会被截断"（批 D 补的那半边）——写两处就会
+# 漂移成"哨兵盯着 40000、跑法其实设的是别的数"。放在这里而不是 eval/ 侧：它是这一层
+# 的上限语义（谁能覆盖、覆盖成什么），`eval/run_golden.py` 一 import 就是整个 server，
+# 哨兵不该为了读一个数字去拉那一串（那是 nightly 里额外的一份导入副作用）。
+GOLDEN_MATERIAL_LIMIT = 40000
 
 # 单工具覆盖（名字 → 上限；0/负数 = 不截断）。改这里要同改 tests/test_trace_truncation.py
 # 里那几条断言——它们是"这档是不是还在"的唯一机械证据。

@@ -295,8 +295,10 @@ def test_golden_runs_raise_the_trace_limit():
           "trace_mod.TOOL_RESULT_LIMIT_ENV" in src_run
           and "os.environ.setdefault(trace_mod.TOOL_RESULT_LIMIT_ENV" in src_run)
     src_graph = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+    # 落盘的文本是 `frame_text`（模型看到的那份帧，20260925 批 D——判官的材料就是它），
+    # 截断策略仍是同一处（不是 graph 自己再写一个 200/8000）。
     check("graph 的 call 事件用同一处策略（不再自己写 200）",
-          "trace_mod.tool_result_text(str(out), name)" in src_graph)
+          "trace_mod.tool_result_text(frame_text, name)" in src_graph)
     check("golden trace 的 input 里落了本轮上限（读的人知道自己手里是不是全文）",
           '"tool_result_limit": _lim' in (ROOT / "eval" / "golden_trace.py").read_text(
               encoding="utf-8"))
