@@ -77,6 +77,7 @@ from agent import adminops as A
 from agent import authz
 from agent import confirm
 from agent import refs
+from agent import sections
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _doc_anchors, _frame_texts, _has_frames,
                            _last_assistant_utterance, _last_user_msg,
@@ -4622,8 +4623,14 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 out = tool.invoke(args)
             except Exception as e:
                 out = f"__ERROR__: {type(e).__name__}: {e}"
+        # 帧文本 = 原始返回去掉"同一段正文存两份"的那个重复键（20260925）。详情帧是
+        # `str(dict)` 而 dict 同时带 `noteContent` 与 `content`（实测 11 篇逐篇相等）
+        # ⇒ 帧体积 ≈ 正文 ×2；此前只有渲染侧（`_frame_texts` → `sections.frame_excerpt`）
+        # 吸收了这个重复，narrator 拿的是这里的原始 ToolMessage，重复原样进它的提示词。
+        # 判据不认识的帧（`__ERROR__`/命令帧/列表帧）本函数恒等返回；`tool_data` 与
+        # trace 仍按 `str(out)` 原文（引用取值与排障材料都不受这条影响）。
         results.append(ToolMessage(
-            content=str(out), tool_call_id=f"execute_{idx}", name=name))
+            content=sections.slim_frame(str(out)), tool_call_id=f"execute_{idx}", name=name))
         logger.info("[execute] %s(%s) → %.100s", name, json.dumps(args, ensure_ascii=False),
                     str(out))
         # 结构化返回值入 tool_data（引用取值源）：帧文本是给人看的（还截断），
