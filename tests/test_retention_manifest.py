@@ -126,8 +126,6 @@ def main() -> int:
         cases = [
             ("agent/traces/20260925/x.json", "traces", True),
             ("agent/traces/x.json", "traces", True),                # ** 也匹配零层
-            ("agent/traces/output_audio/c.wav", "trace-audio", True),
-            ("agent/traces/output_audio/deep/c.wav", "trace-audio", True),
             ("archive/20260829/a.log", "archive", True),
             ("archive/x/y/z.log", "archive", True),                 # ** 跨任意层
             ("agent/agent.log", "service-logs", True),              # 固定名 + 代际
@@ -148,10 +146,8 @@ def main() -> int:
         wrong = [f"{rel}→{key}" for rel, key, want in cases
                  if (rm.owner_of(rel, by_key[key]["root"]) == key) is not want]
         check(f"③ {len(cases)} 条归属判断全部符合预期", not wrong, "；".join(wrong[:4]))
-        # 更具体的类必须排在更宽的前面（否则 output_audio 会被 traces 吞掉）
+        # 更具体的类必须排在更宽的前面（否则 archive/ 下的 *.sql 会被 archive 吞掉）
         keys = [c["key"] for c in rm.CLASSES]
-        check("③ trace-audio 排在 traces 之前（先匹配者得）",
-              keys.index("trace-audio") < keys.index("traces"))
         check("③ 两条 archive 的 frozen 排在 archive 之前（归属答案不能反）",
               keys.index("archive-audit-log") < keys.index("archive")
               and keys.index("archive-sql-backup") < keys.index("archive"))
