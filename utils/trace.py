@@ -41,38 +41,81 @@ _LOCK = threading.Lock()
 # SAUDADE_TRACE_DIR 环境变量覆盖
 TRACE_DIR = settings.trace_dir
 
-# 工具返回写进 trace 时留多长（字符）。**生产默认 200**：trace 是"节点事件序列"，
-# 不是工具输出的第二份存档，全量留会把单份 trace 从几 KB 撑到几百 KB。
+# 工具返回写进 trace 时留多长（字符）。**上限是天花板不是配额**——返回短的工具一分钱
+# 不多花，所以档位按"事后核查这条返回**需要**多少材料"定，不按"典型多长"定。
 #
-# 20260925 起可用 TRACE_TOOL_RESULT_LIMIT 覆盖，**唯一消费者是 L2 golden 轮**
-# （`run_golden.run_case` 把它设成 8000）：评测侧的 LLM 评审员
-# （`eval/llm_judge.py`）判"回复有没有编材料"时，**材料就是这里写下的东西**——
-# 只留 200 字符，判官会理直气壮地把"文章里确实有、只是没记进 trace"的事实判成编造
-# （实测：`rag_git_branch` 的 `get_article_detail` 只留了 200 字符，判官据此断定回复
-# 编了「第 3.3 节」）。**生产不设这个变量** ⇒ 行为与改动前逐字一致。
+# 20260925 从「一律 200」改成分档，两个动机都有实证：
+#   ① 材料被悄悄砍掉：判官（`eval/llm_judge.py`）判"回复有没有编材料"时，材料就是这里
+#      写下的东西——只留 200 字符，它会把文章里确实有、只是没记进 trace 的事实判成编造
+#      （实测 `rag_git_branch`：`get_article_detail` 只留 200 字符，判官据此断定回复编了
+#      「第 3.3 节」）。
+#   ② 截断**看不出来**：`text[:limit]` 不带任何标记，读 trace 的人和脚本只能靠"长度恰好
+#      等于上限"这个启发式猜（`llm_judge.truncated_calls` 就是这么猜的）。现在任何截断
+#      都带 TRUNCATION_MARK（含原文长度），猜测那半退化成兼容老 trace 的兜底。
+#
+# 档位数值来自 20260925 golden 那一批**不受限**的实测（641 份 trace 的 call 事件）：
+#   get_article_detail 最大 40000（撞到 golden 的上限，是唯一撞的）、list_guestbook 4335、
+#   list_talks 2254、list_notes 1107、list_tags 993、get_service_health 617，其余 ≤ 700。
+# 于是：正文单列 8000（再长就该按小节读——`agent/sections.py` 机制既有），
+# 默认 4000 覆盖除正文外的全部实测最大。体积代价：约 33 份/天、每份最坏几 KB
+# ⇒ 一年 100MB 量级（20260925 实测：27 天 3.7MB；磁盘余 9.1G）。
+#
+# `TRACE_TOOL_RESULT_LIMIT` 仍然**全局**覆盖分档（不是"只改默认档"）：L2 golden 轮
+# `run_golden.run_case` 把它设成 40000，判官要材料。**生产不设这个变量** ⇒ 走分档。
 # 运行时读环境（不缓存到模块级常量）：跑法在进程内改它也能生效，不依赖 import 顺序。
 TOOL_RESULT_LIMIT_ENV = "TRACE_TOOL_RESULT_LIMIT"
-TOOL_RESULT_LIMIT_DEFAULT = 200
+TOOL_RESULT_LIMIT_DEFAULT = 4000
+
+# 单工具覆盖（名字 → 上限；0/负数 = 不截断）。改这里要同改 tests/test_trace_truncation.py
+# 里那几条断言——它们是"这档是不是还在"的唯一机械证据。
+TOOL_RESULT_LIMITS: dict[str, int] = {
+    # 长正文：唯一会撞到上限的工具（golden 40000 档实测撞满）。8000 够核"回复引的那段在不在"
+    "get_article_detail": 8000,
+}
+
+# 不截断的工具（一直是全文）。`rag_search` 是 20260831 事故复盘定的：检索候选要能事后完整
+# 分析，"首位为什么是它"不该靠重跑复现。
+NO_LIMIT_TOOLS = frozenset({"rag_search"})
+
+# 截断标记（带原文长度）。机器判定用 `is_truncated()`，**别在别处硬编码这段文本**。
+TRUNCATION_MARK_PREFIX = "…[trace 截断：原文共 "
+
+
+def truncation_mark(original_len: int) -> str:
+    return f"{TRUNCATION_MARK_PREFIX}{original_len} 字符]"
+
+
+def is_truncated(text: str) -> bool:
+    """这段落进 trace 的返回文本**被截断过**吗（标记说了算，不靠长度猜）。"""
+    return TRUNCATION_MARK_PREFIX in str(text)
 
 
 def tool_result_text(result: str, tool: str = "") -> str:
-    """工具返回 → 写进 trace 的文本。`rag_search` 例外：**一直全文**。
+    """工具返回 → 写进 trace 的文本。分档见 TOOL_RESULT_LIMITS / NO_LIMIT_TOOLS。
 
-    （20260831 事故复盘：检索候选要能事后完整分析，"首位为什么是它"不该靠重跑复现。
-    20260925 起其余工具在 golden 轮同样放开，理由见 TOOL_RESULT_LIMIT_ENV 注释。）
-
-    限值语义：`正数` = 留这么多字符；`≤0` = 不截断（全文）；值写坏了 = 默认 200。
+    限值语义（三层，从高到低）：
+      ① 环境变量 `TRACE_TOOL_RESULT_LIMIT` 设了 ⇒ **全局**按它（正数=留这么多；≤0=不截断；
+         值写坏了 ⇒ 告警并**退回分档**，不是悄悄放开也不是悄悄砍到 200）；
+      ② 否则看单工具覆盖 `TOOL_RESULT_LIMITS`（≤0 = 不截断）；
+      ③ 否则 `TOOL_RESULT_LIMIT_DEFAULT`。
+    `NO_LIMIT_TOOLS` 里的工具在任何情况下都不截断。截断时**带标记**（`is_truncated` 可判）。
     """
     text = str(result)
-    if tool == "rag_search":
+    if tool in NO_LIMIT_TOOLS:
         return text
-    try:
-        limit = int(os.environ.get(TOOL_RESULT_LIMIT_ENV) or TOOL_RESULT_LIMIT_DEFAULT)
-    except ValueError:                       # 值写坏了 ⇒ 退回默认，**不是**放开
-        logger.warning("[trace] %s 不是整数，工具返回按默认 %d 字符落盘",
-                       TOOL_RESULT_LIMIT_ENV, TOOL_RESULT_LIMIT_DEFAULT)
-        limit = TOOL_RESULT_LIMIT_DEFAULT
-    return text if limit <= 0 else text[:limit]
+    raw = os.environ.get(TOOL_RESULT_LIMIT_ENV)
+    limit: int | None = None
+    if raw:
+        try:
+            limit = int(raw)
+        except ValueError:                   # 值写坏了 ⇒ 退回分档（告警，不静默）
+            logger.warning("[trace] %s=%r 不是整数，工具返回按分档上限落盘",
+                           TOOL_RESULT_LIMIT_ENV, raw)
+    if limit is None:
+        limit = TOOL_RESULT_LIMITS.get(tool, TOOL_RESULT_LIMIT_DEFAULT)
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[:limit] + truncation_mark(len(text))
 
 
 class _TraceRecorder:

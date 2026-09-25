@@ -222,6 +222,7 @@ uv sync
 | `AGENT_ADMIN_BASE` | `http://127.0.0.1:3000` | 管理读接口的上游地址 |
 | `DEVICE_SERVICE_URL` | `http://127.0.0.1:3100` | IoT 设备服务地址 |
 | `TRACE_DIR` | 部署方的日志目录 | 对话 trace 落盘目录（默认值绑定部署环境，自建部署须覆盖） |
+| `TRACE_TOOL_RESULT_LIMIT` | 不设 | trace 里工具返回留多长（字符）。不设 = 按工具分档（正文 8000／其余 4000／`rag_search` 全文）；设了就**全局**覆盖（≤0 = 全文）。golden 轮设为 40000 供评审员取材料。任何截断都带标记 |
 | `AGENT_REQUIRE_ASSERTION` | `0` | 置 1 时缺失身份断言的请求直接拒绝（默认只记 WARNING，便于滚动上线） |
 | `AUTHZ_ENFORCE` | `0` | 权限模型的强制开关 |
 | `AGENT_RECURSION_LIMIT` | `30` | 图递归上界，防止幻觉重试循环烧满流式总时长 |
