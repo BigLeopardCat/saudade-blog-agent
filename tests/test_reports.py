@@ -548,6 +548,7 @@ from agent.skills import (_CALLABLE_QUERY_TOOLS, _CALLABLE_QUERY_TOOLS_ORDER,
                           _EXPLICIT_TOOLS, SKILL_MAP, build_planner_context,
                           callable_query_tools)  # noqa: E402
 from agent.graph import _CONTENT_TOOLS, _tools_desc  # noqa: E402
+from agent.principal import ADMIN_ROLES  # noqa: E402
 
 NEW = ["get_server_status", "get_service_health", "get_moderation_status", "get_user_stats"]
 # 「结构性不可达」是**分角色**的（20260924 起）：这台四个报表工具都声明为
@@ -575,8 +576,10 @@ for name, tools in [("ops_report", ["get_server_status", "get_service_health"]),
     sk = SKILL_MAP.get(name)
     check(f"技能 {name} 在位且计划就是这几个工具",
           sk is not None and [t for t, _ in sk.plan] == tools, str(sk and sk.plan))
-    check(f"技能 {name} 只对 admin 可见", sk is not None and sk.roles == frozenset({"admin"}),
-          str(sk and sk.roles))
+    # 判据是**管理员族**（20260926 起含超级管理员）：写死 {"admin"} 的那天，
+    # uid=1 提权后看不见这三张报表技能，而那条错法是静默的
+    check(f"技能 {name} 对管理员族（admin + superadmin）可见",
+          sk is not None and sk.roles == ADMIN_ROLES, str(sk and sk.roles))
 
 check("非 admin 的 planner 上下文里看不到这三个技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
@@ -650,10 +653,10 @@ for name, tool, args in [("admin_notes", "list_admin_notes", {}),
                          ("article_status", "set_article_status", "$article_id"),
                          ("article_tags", "set_article_tags", "$article_id")]:
     sk = SKILL_MAP.get(name)
-    check(f"技能 {name} 在位、只对 admin 可见、计划首项是 {tool}",
-          sk is not None and sk.roles == frozenset({"admin"})
+    check(f"技能 {name} 在位、对管理员族可见、计划首项是 {tool}",
+          sk is not None and sk.roles == ADMIN_ROLES
           and [t for t, _ in sk.plan] == [tool], str(sk and (sk.roles, sk.plan)))
-check("写技能名单 = 二十个**技能**名（instantiate_plan 缺参守卫按它分支；"
+check("写技能名单 = 二十二个**技能**名（instantiate_plan 缺参守卫按它分支；"
       "注意它与工具名不是一套字面量，混用会让守卫静默不生效）",
       WRITE_SKILL_NAMES == frozenset({"tag_create", "tag_update", "tag_delete",
                                       "category_create", "category_update",
@@ -691,6 +694,10 @@ check("非 admin 的 planner 上下文里看不到这四个技能",
           for n in ("admin_notes", "tag_create", "article_status", "article_tags")))
 check("admin 的 planner 上下文里能看到",
       all(n in build_planner_context("admin")
+          for n in ("admin_notes", "tag_create", "article_status", "article_tags")))
+check("⭐ superadmin 的 planner 上下文里同样能看到（技能可见性只有 visible_skills 一个判据，"
+      "而它是按管理员族过滤的——写死 'admin' 会让博主自己看不见管理技能）",
+      all(n in build_planner_context("superadmin")
           for n in ("admin_notes", "tag_create", "article_status", "article_tags")))
 check("过程行有中文动作词（否则显示『执行 create_tag』）",
       all(f'"{n}":' in src for n in W2))

@@ -113,7 +113,8 @@ from tools.base import _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS
 # 展开层挡住超长只是为了"零写 + 说清原因"，真正的判据在工具与服务端那两道。
 from tools.base import _TODO_TEXT_LIMIT
 from agent.refs import is_ref  # 参数引用 $tool[0].field（20260919，见 instantiate_plan）
-from agent.principal import ROLE_ADMIN  # 技能可见性按角色过滤（20260921 管理助手）
+from agent.principal import ADMIN_ROLES  # 技能可见性按角色过滤（20260921 管理助手；
+                             # 20260926 起是**管理员族**，超管同权）
 # 管理读工具清单从 authz 的 scope 表**派生**（20260924）：哪些工具是"后台读面"
 # 是安全边界的事实，边界定义在 authz（`SCOPE_ADMIN_CONSOLE` = Rust auth_guard 后面的
 # 只读接口），这里只消费它——手抄一份名单必然与边界漂移。authz 只依赖 principal，
@@ -288,7 +289,7 @@ def callable_query_tools(role: str | None) -> list[str]:
     `role=None`（身份不明/单测/老路径）→ 只剩公开清单，**失败取向往保守一侧倒**
     （与 `visible_skills`、authz 同向）。
     """
-    if role == ROLE_ADMIN:
+    if role in ADMIN_ROLES:
         return _CALLABLE_QUERY_TOOLS_ORDER + _admin_extra(_CALLABLE_QUERY_TOOLS_ORDER)
     return list(_CALLABLE_QUERY_TOOLS_ORDER)
 
@@ -301,7 +302,7 @@ def explicit_tools(role: str | None) -> list[str]:
     管理员档进本通道，同时在 `param_tools(admin)` 里也有——带过滤参数的写法走
     `PARAMS.calls` 同样合法，**两条写着都一样**，planner 不必猜哪条才对。
     """
-    if role == ROLE_ADMIN:
+    if role in ADMIN_ROLES:
         return _EXPLICIT_TOOLS_ORDER + _admin_extra(_EXPLICIT_TOOLS_ORDER)
     return list(_EXPLICIT_TOOLS_ORDER)
 
@@ -314,7 +315,7 @@ def param_tools(role: str | None) -> list[str]:
     `status`）时只能走本通道。
     """
     public = [t for t in _CALLABLE_QUERY_TOOLS_ORDER if t not in _EXPLICIT_TOOLS]
-    if role == ROLE_ADMIN:
+    if role in ADMIN_ROLES:
         return public + list(_ADMIN_QUERY_TOOLS_ORDER)
     return public
 
@@ -575,7 +576,7 @@ SKILLS: list[Skill] = [
             "没有的数字；报表里写「读不到」的项就如实说读不到（那是采集失败，不等于正常）；"
             "本技能**只读不写**：没有重启、清理、修复任何东西，不得用完成式声称做过"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="moderation_report",
@@ -600,7 +601,7 @@ SKILLS: list[Skill] = [
             "只能说报表里真列出来的那些（写了「另有 N 条未列出」就说还有 N 条没列）；"
             "报表说没有待审才可以说没有待审——工具返回失败或读不到时如实说读不到"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="user_report",
@@ -617,7 +618,7 @@ SKILLS: list[Skill] = [
             "聚合值（明细列表封顶 50 行，不能拿明细行数当总数）；"
             "报表里没有的维度（如注册时间、登录记录）如实说系统没有这项数据"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     # ── 管理助手·后台写（20260921 第二轮，仅 admin 可见）────────────────
     # 四件：读后台文章清单（admin_notes）+ 三件写（建标签 / 改文章状态 / 打标签）。
@@ -641,7 +642,7 @@ SKILLS: list[Skill] = [
             "如实转述清单里的 id 与标题、状态、标签；不得改动数字，也不得凭记忆补充清单里"
             "没有的文章；工具返回失败或读不到时如实说读不到"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="tag_create",
@@ -679,7 +680,7 @@ SKILLS: list[Skill] = [
             "返回失败/未确认时如实说没建成，**不得用完成式声称已创建**。"
             "本工具只建标签、不会挂到任何文章上（挂标签是另一件事，用户要求时再说）"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="article_status",
@@ -704,7 +705,7 @@ SKILLS: list[Skill] = [
             "返回「本来就是…无需改动」就说本来就是这个状态；"
             "返回失败/未确认/待确认时如实说没改，**绝不得用完成式声称已改好**"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="article_tags",
@@ -728,7 +729,7 @@ SKILLS: list[Skill] = [
             "返回「站内没有这些标签」时如实转述并说明需要先建标签或改名字；"
             "返回失败/未确认时如实说没改，**绝不得用完成式声称已改好，也不得说已经建了新标签**"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     # ── 标签改 / 删（20260921 第四轮）────────────────────────────────
     # 事故背景：用户说「把标签 Asyncio 改成编程的子标签」，系统里**没有这个动作**
@@ -771,7 +772,7 @@ SKILLS: list[Skill] = [
             "返回失败/未确认时如实说没改成"
             + _NEAR_MISS_CONTRACT
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="tag_delete",
@@ -797,7 +798,7 @@ SKILLS: list[Skill] = [
             "返回失败/未确认时如实说没删掉，**绝不得用完成式声称已删除**"
             + _NEAR_MISS_CONTRACT
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     # ── 分类三件（20260921 第四轮）───────────────────────────────────
     Skill(
@@ -825,7 +826,7 @@ SKILLS: list[Skill] = [
             "返回「站内已经有叫 X 的分类」时如实说已有同名分类、没有重复创建；"
             "返回失败/未确认时如实说没建成，**绝不得用完成式声称已创建**"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="category_update",
@@ -855,7 +856,7 @@ SKILLS: list[Skill] = [
             "返回失败/未确认时如实说没改，**绝不得用完成式声称已改好**"
             + _NEAR_MISS_CONTRACT
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="category_delete",
@@ -876,7 +877,7 @@ SKILLS: list[Skill] = [
             "返回失败/未确认时如实说没删掉，**绝不得用完成式声称已删除**"
             + _NEAR_MISS_CONTRACT
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     # ── 站内公告三件（20260922 第五轮）───────────────────────────────
     # 公告**没有 id 稳定指称**（用户从来只说标题），也没有层级，所以这一组比
@@ -901,7 +902,7 @@ SKILLS: list[Skill] = [
             "只能按 create_announcement 的实际返回作答，说清发出去的公告标题；"
             "返回失败/未确认时如实说没发出去，**绝不得用完成式声称已发布**"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="announcement_update",
@@ -927,7 +928,7 @@ SKILLS: list[Skill] = [
             "返回失败/未确认时如实说没改成，**绝不得用完成式声称已改好**"
             + _NEAR_MISS_CONTRACT
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="announcement_delete",
@@ -947,7 +948,7 @@ SKILLS: list[Skill] = [
             "返回失败/未确认时如实说没删掉，**绝不得用完成式声称已删除**"
             + _NEAR_MISS_CONTRACT
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     # ── 河灯留言的人工复核两件（20260922 第六轮）─────────────────────
     # 留言**没有名字、没有标题**（talk 表只有正文/作者/时间），用户嘴里说的就是
@@ -974,7 +975,7 @@ SKILLS: list[Skill] = [
             "并说明什么都没改；返回失败/未确认时如实说没复核成，"
             "**绝不得用完成式声称已通过/已驳回**"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="board_delete",
@@ -995,7 +996,7 @@ SKILLS: list[Skill] = [
             "并说明什么都没删；返回失败/未确认时如实说没删掉，"
             "**绝不得用完成式声称已删除**"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     # ── 用户**自己**的数据三件（20260923 批 7）───────────────────────────
     # 与上面那批管理助手写技能的分界不是"要不要确认"，而是**动谁的东西**：
@@ -1135,7 +1136,7 @@ SKILLS: list[Skill] = [
             "（没排期就说没定日子）；返回失败/未确认时如实说没记成，"
             "**绝不得用完成式声称已记下**"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="dashboard_todo_list",
@@ -1154,7 +1155,7 @@ SKILLS: list[Skill] = [
             "返回「列表是空的」就如实说一条都没记；返回失败/读不到时如实说没读到，"
             "**绝不得凭印象编出待办**"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     # ── 后台账号的冻结 / 解冻（20260926 第九轮）───────────────────────────
     # 两个技能而不是一个带布尔参数的：方向在卡面文案、回执动作词、权限判据上
@@ -1188,7 +1189,7 @@ SKILLS: list[Skill] = [
             "**不要**替对方断言「他已经被踢下线了」——系统能看到的是会话已失效，"
             "对方此刻在不在线只有他自己知道"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="account_unfreeze",
@@ -1215,7 +1216,7 @@ SKILLS: list[Skill] = [
             "什么都没改；返回失败/未确认时如实说没解成，**绝不得用完成式声称已解冻**；"
             "**不要**承诺「他的会话回来了」——回来的只是「能不能登录」"
         ),
-        roles=frozenset({ROLE_ADMIN}),
+        roles=ADMIN_ROLES,
     ),
     Skill(
         name="chat",

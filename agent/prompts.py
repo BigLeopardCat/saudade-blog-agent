@@ -69,9 +69,13 @@ def audience_block(role: str | None) -> str:
 
     未知角色（role=None，未登录/身份不明）走**访客**那段：fail-closed 的方向是
     "别把人当主人"——把访客认成主人 = 用主人的口径答权限相关的事。
+
+    判据是**管理员族**（`ADMIN_ROLES`，20260926 起含超级管理员）而不是
+    `role == "admin"`：写死字面量的那天，uid=1 提权成超管后拿到的是**访客人设**
+    （"以访客的口径答权限相关的事"），而这条错法完全静默。
     """
-    from agent.principal import ROLE_ADMIN
-    return AUDIENCE_ADMIN if role == ROLE_ADMIN else AUDIENCE_VISITOR
+    from agent.principal import ADMIN_ROLES
+    return AUDIENCE_ADMIN if role in ADMIN_ROLES else AUDIENCE_VISITOR
 
 # ════════════════════════════════════════════════════════════════════
 # 叙述规则（narrator 行为约束，20260903 executor 时代规则重写）
