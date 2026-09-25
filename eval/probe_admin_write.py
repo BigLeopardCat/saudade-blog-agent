@@ -18,6 +18,8 @@
 真写（草稿文章置顶来回、标签加减、经生产入口真写一轮、**⑧ 弹窗全链路**、**⑩ 颜色**）需显式
 `--allow-write`；建临时标签后**删除**（会触发全表 `prune_note_tags`，不可回滚）须再显式
 `--allow-tag-delete`——没给就不跑，且**打印出来说明没跑**（不静默豁免）。
+**⑲ 冻结/解冻账号**另有自己的一颗开关 `--allow-account-freeze`（自建一次性账号、跑完删除）：
+它动的是"别人的登录能力"，与上面那批（文章/标签/分类/公告）不是一回事，不共用一颗开关。
 
 ⑧⑨⑩ 是 20260921 第三轮加的（写操作确认弹窗）：**必须走 `/api/chat/stream` 真帧流**
 （令牌只在 `__CONFIRM__:` 帧里，非流式 `/chat` 看不到），读端规则与 chat-stream.js 一致。
@@ -58,6 +60,24 @@
 它不进 `--allow-write` 段（从不签字 ⇒ 不需要写授权），但**必须排在 ⑰ 之前**跑：
 ⑰ 会真判掉那条待审留言，台账一空 ⑱ 的前提就没了。
 
+⑲ 是 20260926 加的（**冻结 / 解冻一个账号**，第七轮）：靶子是探针**自建**的一次性账号
+（`agent_fixture_probe_<ts>`，role=user、口令结构性不可用、从不登录），跑完必删——名字带
+夹具保留前缀，所以崩溃残留会被夜间的账号夹具哨兵点出来。它要**自己的开关**
+（`--allow-account-freeze`）而不是挂在 `--allow-write` 下：前者动的是文章/标签/分类/公告，
+这一条动的是**一整个账号的登录能力**（做完还要解冻回来），两件事的后果不在一个量级。
+  * 明确**命令式**措辞（"把账号「X」冻结掉"）也必须弹卡——两个工具在
+    `authz._ALWAYS_CONFIRM_TOOLS` 里，"同轮命令即确认"那条捷径被结构性关掉（用户拍板
+    「每次都弹卡」）；弹卡轮库真值必须一个字都没变；
+  * 点确定之后 `status` 真的翻了（后端真值），且那个账号**手里的旧令牌**立刻被拒——
+    拒绝理由要能分清「账号已被冻结」与「登录状态已失效」两种（后端分得开，探针照抄）；
+  * **解冻之后那枚旧令牌仍然被拒**（理由是"令牌被收回"）：这正是卡面那句
+    「解冻也换不回那批会话」的实现。⚠️ 这一条必须用**带 `ver` 的令牌**——`login_jwt`
+    刻意不写 `ver`，而 `check_token` 对没有代次声明的令牌跳过代次比对（§2.3），拿它去
+    验会拿到 200，把这条腿变成假话（见 `_login_jwt_with_ver` 的注释）；
+  * 同一个目标再解冻一次 ⇒ 后端真 no-op，回复必须出现「本来就是／没有重复」那两句之一
+    （与 golden 真写用例的 `require_exec_result.not_match` 同一判据）——把 no-op 叙述成
+    一个动作是本族最坏的形态，而那正是夹具被上次跑成"正常"时那条**静默的绿**的来源。
+
 **所有写轮都必须干净收尾**（`clean_end`）：发过终止帧且流里没有错误帧。20260921 22:37
 的线上故障形态就是"数据真改了、回执也落了库，前端只看到一行报错"（路由表缺一个去向，
 langgraph 在节点执行完之后才抛 KeyError）——腿⑧ 当时只核库真值，所以写了就判 PASS，
@@ -86,6 +106,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 
 # 8010 = agent 直连（快速问一轮，只看 executions 与文本）；
@@ -1990,6 +2011,267 @@ def step18_forced_review(rep: Report, uid: int, role: str) -> None:
         _drop_conv(rep, uid, role, conv_id, "⑱")
 
 
+# ── ⑲ 冻结 / 解冻账号（20260926，--allow-account-freeze）────────────────────────
+# 为什么非活体不可：golden 的真写用例走的是**进程内** harness（读 `__EXEC__` 帧里的回执），
+# 它能证明"工具被调用、参数逐字对、工具自己的写后复核过了"，但证不了 Rust 落库、更证不了
+# 库里那一行真的翻了；而"冻结"这个动作的全部意义落在**别人的登录能力**上——只有走真 HTTP
+# 才能验。
+#
+# 靶子是探针**自建**的一次性账号（`agent_fixture_probe_<ts>`：role=user、口令是结构性不可用
+# 的占位串，**从不登录**），跑完在 finally 里删掉。名字带夹具保留前缀 ⇒ 崩溃残留会被夜间的
+# 账号夹具哨兵点出来（`eval/golden_fixture_account.py --verify` 的 `[fixture-leftover]` 行）
+# ——这正是那个前缀的用处：一个没人管的探针账号不该静默躺在生产库里。
+#
+# 三件本腿独有、别的腿证不了的事：
+#   ① 弹卡轮库真值一个字节没变（"未确认前零写"在**真链路**上成立，不是靠离线桩）；
+#   ② 点确定之后 `status` 真的翻了（后端真值，不看工具自述）；
+#   ③ 那个账号**手里的旧令牌**依次被两种理由拒掉：冻结中「账号已被冻结」、解冻后
+#      「登录状态已失效」——后者正是卡面那句"解冻也换不回那批会话"的实现。
+#      ⚠️ 这一条**必须用带 `ver` 的令牌**（`_login_jwt_with_ver`）：`login_jwt` 刻意不写
+#      `ver`，而 `authz::check_token` 对没有代次声明的令牌**跳过代次比对**
+#      （见 `docs/security-boundary.md` §2.3）⇒ 拿它去验"解冻后旧令牌仍被拒"会拿到 200，
+#      这条腿就成了一句假话。**别把它"统一"回 login_jwt。**
+
+_ACCOUNT_PROBE_PASSWORD = "agent_fixture_probe_no_login_do_not_use"
+# 「没有真的发生变更」的口吻：后端那份对同一目标再来一次时走**真 no-op 分支**，agent 的回执
+# 必带这两句之一（`agent/adminops.py::render_account_status(changed=False)`）。与 golden 真写
+# 用例的 `require_exec_result.not_match` 是同一个判据、同一个理由（那两句话只在没发生变更时出现）。
+_ACCOUNT_NOOP_RE = re.compile(r"本来就是|没有重复")
+
+
+def _account_directory(uid: int, role: str) -> dict:
+    """后台账号名录（探针自己的真值读路径）：`{"name": row}`。
+
+    **不走 `backend_get`**：`/api/temp-users` 是全站唯一不套 `ApiResponse` 信封的
+    `/api/protected` 接口（裸数组），而那个 helper 要 `{code,data}` ⇒ 会在读取**成功**时
+    抛 ProbeError（与 20260921 那次探针自身 BUG 同族）。也不许反过来去改后端包信封：
+    前端账号页与 token 探针都按裸数组读。
+    """
+    rows = _http("GET", f"{BASE}/api/temp-users", None,
+                 {"Authorization": "Bearer " + login_jwt(uid, role)}, 15)
+    if not isinstance(rows, list):
+        raise ProbeError(f"/api/temp-users 没回数组：{str(rows)[:120]}")
+    return {str(r.get("username")): r for r in rows if isinstance(r, dict)}
+
+
+def _acct_status(uid: int, role: str, name: str):
+    """名录里那个账号的 `status`（0=正常 / 1=冻结）；**那一行不在 → None**（与"读到 1"分开）。"""
+    row = _account_directory(uid, role).get(name)
+    if row is None:
+        return None
+    try:
+        return int(row.get("status"))
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _login_jwt_with_ver(uid: int, role: str, ver: int, ttl: int = 300) -> str:
+    """带代次的登录令牌——⑲ 的关键工具，理由见上面那段 ⚠️（别换成 `login_jwt`）。"""
+    return _sign({"sub": uid, "exp": int(time.time()) + ttl, "role": role, "ver": ver})
+
+
+def _raw_get_code(path: str, token: str) -> tuple:
+    """原始 GET → `(HTTP 状态码, message)`。
+
+    `_http` 对非 2xx 抛异常，而这里要的**正是** 401 与那句 message：冻结（`AuthError::Frozen`
+    「账号已被冻结」）与令牌被收回（`Revoked`「登录状态已失效」）是两种拒绝，后端分得开，
+    探针就照抄这个区分——把两者混成一句"未登录"，本腿就退化成"反正是被拒了"。
+    """
+    req = urllib.request.Request(f"{BASE}{path}", method="GET",
+                                 headers={"Authorization": "Bearer " + token})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status, ""
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.loads(e.read().decode("utf-8", "replace"))
+        except Exception:  # noqa: BLE001
+            body = {}
+        return e.code, str((body or {}).get("message") or "")
+
+
+def _new_probe_account(rep: Report, uid: int, role: str, name: str):
+    """自建一次性靶子账号 → 它的 id；失败返回 None。"""
+    try:
+        backend_send("POST", "/api/temp-users",
+                     {"username": name, "password": _ACCOUNT_PROBE_PASSWORD}, uid, role)
+        row = _account_directory(uid, role).get(name)
+        if row is None:
+            raise ProbeError("建号接口回了成功，但名录里读不到它")
+        aid = int(row["id"])
+    except Exception as e:  # noqa: BLE001
+        rep.fails.append(f"⑲ 自建靶子账号失败：{e}")
+        print(f"  [FAIL] 自建靶子账号失败：{e}")
+        return None
+    print(f"  靶子账号：{name}（id={aid}，role={row.get('role')}，status={row.get('status')}）")
+    return aid
+
+
+def _del_probe_account(rep: Report, uid: int, role: str, name: str) -> None:
+    """删掉靶子账号（**不复原**——它是一次性的）。删不掉就点名，让人能手工清。"""
+    try:
+        row = _account_directory(uid, role).get(name)
+        if row is None:
+            print(f"  靶子账号 {name} 已不在名录里（无需删除）")
+            return
+        backend_send("DELETE", f"/api/temp-users/{int(row['id'])}", {}, uid, role)
+        left = _account_directory(uid, role).get(name)
+        print(f"  已删除靶子账号 {name}" if left is None
+              else f"  ⚠ 靶子账号 {name} 仍在名录里（id={left.get('id')}）")
+        if left is not None:
+            rep.fails.append(f"⑲ 靶子账号 {name}（id={left.get('id')}）没删掉——请手工清")
+    except Exception as e:  # noqa: BLE001
+        rep.fails.append(f"⑲ 删除靶子账号 {name} 失败：{e}（请手工清，别留一个探针账号）")
+
+
+def _acct_popup(rep: Report, uid: int, role: str, conv: int, intent: str, tag: str,
+                want_skill: str, name: str, want_state: str):
+    """弹卡轮 → `(令牌载荷, 问句)`；没弹出来返回 `(None, "")`。
+
+    拿到的问句要满足三件（都在"主人点确定之前"这一侧）：**账号名一字不改**、印着
+    `账号 id=`、印着**现状**——这三样是主人唯一能核对的依据（名字对不上、现状是旧的，
+    都意味着他在盲签）。
+    """
+    payload = _popup_token(rep, uid, role, conv, intent, tag, want_skill)
+    if payload is None:
+        return None, ""
+    q = payload.get("q") or ""
+    for want in (name, "账号 id=", f"现在：{want_state}"):
+        ok = want in q
+        print(f"  [{'PASS' if ok else 'FAIL'}] {tag} 问句含 {want!r}")
+        if not ok:
+            rep.fails.append(f"{tag} 问句里没有 {want!r}（问句：{q!r}）"
+                             f"= 主人点确定之前核对不了这一下要动谁/它现在什么样")
+    return payload, q
+
+
+def _acct_jump(rep: Report, uid: int, role: str, conv: int, q: str, tok: str, tag: str) -> dict:
+    """点「确定」（前端走的就是这一条：带令牌的隐藏确认请求）。"""
+    d = stream_rust(f"确认执行：{q}", uid, role, conv, confirm_token=tok)
+    clean_end(rep, f"{tag} 点确定", d)
+    print(f"        回复：{(d.get('reply') or '')[:200]}")
+    return d
+
+
+def _acct_token_check(rep: Report, tag: str, token: str, want_code: int, want_in_msg: str) -> bool:
+    """旧令牌此刻该被怎么拒（`want_code=200` 表示"还能用"）→ 是否符合预期。"""
+    code, msg = _raw_get_code("/api/chat/conversations", token)
+    ok = code == want_code and (not want_in_msg or want_in_msg in msg)
+    print(f"  [{'PASS' if ok else 'FAIL'}] {tag}：HTTP {code} {msg!r}"
+          f"（期望 {want_code}{f' 且含「{want_in_msg}」' if want_in_msg else ''}）")
+    if not ok:
+        rep.fails.append(f"{tag}: HTTP {code} {msg!r} ≠ 期望 {want_code}"
+                         f"{f' + 「{want_in_msg}」' if want_in_msg else ''}")
+    return ok
+
+
+def step19_account_freeze(rep: Report, uid: int, role: str) -> None:
+    """⑲ 冻结/解冻一个自建账号（`--allow-account-freeze`）。
+
+    顺序刻意是"先冻后解"：解冻那一半的判据（旧令牌**仍**被拒）只有在冻结真的翻过状态、
+    真的把代次 +1 之后才有意义。
+    """
+    print("\n⑲ 冻结/解冻账号（--allow-account-freeze）：自建靶子 → 弹卡零写 → 点确定"
+          " → 旧令牌被拒 → 解冻 → 幂等 no-op → 用完即删")
+    name = f"agent_fixture_probe_{int(time.time())}"
+    aid = _new_probe_account(rep, uid, role, name)
+    if aid is None:
+        return
+    conv = None
+    try:
+        base = _acct_status(uid, role, name)
+        if base != 0:
+            rep.fails.append(f"⑲ 新账号的初始状态是 {base!r}（期望 0=正常）——后面全都无从判起")
+            return
+        # 基线：这一枚令牌**带代次 0**。它能用 ⇒ 顺带证明了这个账号的代次现在确实是 0
+        # （代次对不上的话 `check_token` 直接判 Revoked ⇒ 401）。后面的 401 才有意义。
+        tok = _login_jwt_with_ver(aid, "user", 0)
+        if not _acct_token_check(rep, "⑲ 冻结前（基线，必须能用）", tok, 200, ""):
+            return
+
+        conv = _probe_conv(rep, uid, role, "⑲")
+        if conv is None:
+            return
+        # ── 冻结：**明确命令式**措辞也必须弹卡（这两个工具在 `_ALWAYS_CONFIRM_TOOLS` 里，
+        #    "同轮命令即确认"那条捷径被结构性关掉——用户拍板「每次都弹卡」）
+        payload, q_freeze = _acct_popup(rep, uid, role, conv, f"把账号「{name}」冻结掉",
+                                        "⑲ 冻结", "account_freeze", name, "正常")
+        if payload is None:
+            return
+        still = _acct_status(uid, role, name)
+        print(f"  [{'PASS' if still == 0 else 'FAIL'}] ⑲ 弹卡轮零写（库真值 status={still}，期望 0）")
+        if still != 0:
+            rep.fails.append(f"⑲ 弹卡轮就动了数据（status={still}）= 未确认前零写被破坏")
+        _acct_jump(rep, uid, role, conv, q_freeze, payload["token"], "⑲ 冻结")
+        after = _acct_status(uid, role, name)
+        print(f"  [{'PASS' if after == 1 else 'FAIL'}] ⑲ 点确定 → 库真值 status={after}"
+              f"（期望 1=冻结）")
+        if after != 1:
+            rep.fails.append(f"⑲ 确认后库真值 status={after} ≠ 1（回执不可信，以库为准）")
+        _acct_token_check(rep, "⑲ 冻结中：旧令牌被拒（理由是冻结）", tok, 401, "冻结")
+
+        # 跨轮复述：答案只能来自 `execution_log` 注入（工具帧不跨轮）——这是"回执真的落库了"
+        # 的唯一活体验证（Rust 不把 `__EXEC__` 转发给客户端，探针看不到那一帧）。
+        d3 = stream_rust("刚才你冻结的是哪个账号？", uid, role, conv)
+        clean_end(rep, "⑲ 跨轮复述", d3)
+        r3 = d3.get("reply") or ""
+        ok = name in r3
+        print(f"  [{'PASS' if ok else 'FAIL'}] ⑲ 跨轮复述含账号名（execution_log 注入生效）")
+        if not ok:
+            rep.fails.append(f"⑲ 下一轮说不出刚冻结的账号名（账号 {name}）——"
+                             f"执行回执没落库，或 narrator 没据实转述：{r3[:160]!r}")
+
+        # ── 解冻：同一个会话、同一套两跳
+        payload2, q_unfreeze = _acct_popup(rep, uid, role, conv, f"把账号「{name}」解冻掉",
+                                          "⑲ 解冻", "account_unfreeze", name, "已冻结")
+        if payload2 is None:
+            return
+        ok = q_freeze != q_unfreeze
+        print(f"  [{'PASS' if ok else 'FAIL'}] ⑲ 冻结与解冻的问句**不同形**（后果不同，不是换个动词）")
+        if not ok:
+            rep.fails.append("⑲ 冻结/解冻的问句一模一样 = 主人从卡面上分不出这一下会造成什么")
+        still = _acct_status(uid, role, name)
+        print(f"  [{'PASS' if still == 1 else 'FAIL'}] ⑲ 解冻弹卡轮零写（库真值 status={still}）")
+        if still != 1:
+            rep.fails.append(f"⑲ 解冻弹卡轮就动了数据（status={still}）")
+        _acct_jump(rep, uid, role, conv, q_unfreeze, payload2["token"], "⑲ 解冻")
+        back = _acct_status(uid, role, name)
+        print(f"  [{'PASS' if back == 0 else 'FAIL'}] ⑲ 点确定 → 库真值 status={back}"
+              f"（期望 0=正常）")
+        if back != 0:
+            rep.fails.append(f"⑲ 解冻后库真值 status={back} ≠ 0")
+        # **本腿最要紧的一条**：解冻只恢复"能不能登录"，不复活被收回的令牌——卡面那句
+        # 「解冻也换不回那批会话」必须与实现一致（`token_version` 只增不减）。
+        _acct_token_check(rep, "⑲ 解冻后：旧令牌**仍**被拒（理由是令牌被收回，不是冻结）",
+                          tok, 401, "失效")
+
+        # ── 幂等：对同一个目标再来一次解冻（后端走真 no-op 分支）。这一下**不该**被叙述成
+        #    一次变更——「本来就是／没有重复」那两句只在没发生变更时出现（同 golden 真写用例）。
+        payload3, q_noop = _acct_popup(rep, uid, role, conv, f"把账号「{name}」再解冻一次",
+                                       "⑲ 幂等", "account_unfreeze", name, "正常")
+        if payload3 is None:
+            return
+        d5 = _acct_jump(rep, uid, role, conv, q_noop, payload3["token"], "⑲ 幂等")
+        r5 = d5.get("reply") or ""
+        ok = bool(_ACCOUNT_NOOP_RE.search(r5))
+        print(f"  [{'PASS' if ok else 'FAIL'}] ⑲ 幂等轮如实说「本次未发生变更」"
+              f"（没把 no-op 叙述成一个动作）")
+        if not ok:
+            rep.fails.append(f"⑲ 幂等轮的回执/回复里没有「本来就是／没有重复」那两句之一"
+                             f"（那是后端真 no-op 的唯一标志）：{r5[:160]!r}")
+        same = _acct_status(uid, role, name)
+        print(f"  [{'PASS' if same == 0 else 'FAIL'}] ⑲ 幂等轮之后库真值 status={same}（仍 0）")
+        if same != 0:
+            rep.fails.append(f"⑲ 幂等轮把 status 改成了 {same}")
+    except ProbeError as e:
+        rep.fails.append(f"⑲ 真值读失败：{e}")
+        print(f"  [FAIL] 真值读失败：{e}")
+    finally:
+        if conv is not None:
+            _drop_conv(rep, uid, role, conv, "⑲")
+        _del_probe_account(rep, uid, role, name)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="管理助手写操作线上活体探针（见模块头注）")
     ap.add_argument("--uid", type=int, default=int(os.environ.get("APP_ADMIN_UID") or 0),
@@ -2009,6 +2291,10 @@ def main() -> int:
                          "从不公开），跑完删除。只在台账 0 条待审时造")
     ap.add_argument("--skip-popup", action="store_true",
                     help="跳过 ⑧⑨⑩（弹窗链路/令牌边界/颜色）——它们要经 SSE 真链路，最慢")
+    ap.add_argument("--allow-account-freeze", action="store_true",
+                    help="允许 ⑲：自建一个一次性账号（agent_fixture_probe_<ts>）并真冻结/解冻它，"
+                         "跑完删除。它做的是**生产写**，所以与 --allow-write 分开一颗开关"
+                         "（那一颗管的是文章/标签/分类/公告，这条动的是别人的登录能力）")
     args = ap.parse_args()
 
     global BASE
@@ -2101,6 +2387,15 @@ def main() -> int:
                           "（该腿会真把台账里那条待审留言判成驳回，且不复原）；"
                           "这一轮**没动留言**")
                     rep.warn("⑰ 未跑：缺 --allow-board-audit")
+            # ⑲ 冻结/解冻账号（20260926）：靶子**自建自删**，动的是一整个账号的登录能力，
+            # 所以与 --allow-write 分开一颗开关（理由见 §⑲ 头注）。零写那半（弹卡、账真值）
+            # 也在里面，所以不开这颗开关时这条腿**整条没验**——打印出来，不静默豁免。
+            if args.allow_account_freeze:
+                step19_account_freeze(rep, args.uid, "admin")
+            else:
+                print("\n[skip] ⑲ 冻结/解冻账号：未给 --allow-account-freeze"
+                      "（该腿会自建一个一次性账号并真冻结/解冻它）；这一轮**没动任何账号**")
+                rep.warn("⑲ 未跑：缺 --allow-account-freeze")
             # staging 的一次性留言跑完就删（⑰ 若把它判成驳回，也照删——它本来就是探针造的）
             if staged_tid:
                 _del_board_comment(rep, args.uid, "admin", staged_tid, "staging 收尾")

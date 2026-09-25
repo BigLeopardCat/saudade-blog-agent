@@ -20,6 +20,18 @@
 不在任何人的授权串里（生产写必须点名「库名+迁移文件」）。这条纪律有**测试机械守着**
 （`tests/test_golden_fixture.py` 的源码扫描节：本文件里出现凭据读取/写方法即判红）。
 
+## 两族夹具与本文件的分派角色（20260926）
+
+夹具现在有两族，`requires_fixture_kind` 说明是哪一族（**不写就是分类族**）：
+
+    category  `agent_fixture_category_*`  公开分类列表里读得到 ⇒ 本文件（零凭据）
+    account   `agent_fixture_freeze_*`    后台账号名录里读得到 ⇒ `golden_fixture_account.py`
+                                          （只读管理员身份，为什么非带不可见那边头注）
+
+两个跑法的夹具闸都收在本文件的 `gate()` 里（此前各写一份、靠注释维持"口径一致"）；
+本文件自己**仍然不读任何带身份的东西**——账号族那条读路径在那个模块里，这里只是按 kind
+挑模块。
+
 ## 判据是"公开接口读得到"
 
 `API_BASE = https://saudade.site/api/public`，`/category` 与用例里 agent 走的那条名通道
@@ -113,6 +125,82 @@ def verify(titles: list[str] | None) -> tuple[int, list[str]]:
                    f"清场见 scripts/migration/golden_write_fixture_20260925.sql 的回滚段"
                    for n in left]
     return 0, [f"[fixture-clean] 公开分类列表 {len(titles)} 个，无 {FIXTURE_PREFIX}* 残留"]
+
+
+# ── 夹具闸（20260926）：两个跑法共用这一个实现 ──────────────────────────────
+# 20260926 之前，`run_golden.py`（进程内）与 `golden_full_run.py`（逐条子进程）**各写
+# 了一份**同样的闸，只靠注释写着"口径逐字一致"。那种一致靠的是人记得住，而这条闸的
+# 判据（跑不跑、跳过的理由是什么）本来就是**判据**、不是跑法的实现细节——两份迟早分叉，
+# 而分叉的形态正是最坏的那种：同一个用例在两个跑法里得到不同结论（一个跑了、一个跳过）。
+# 现在两族夹具、两个模块的读路径都收在这里，跑法只管调用。
+#
+# 分派与本模块的零凭据纪律**不冲突**：本模块自己不读任何带身份的东西——账号族那条读路径
+# 在 `golden_fixture_account.py`（要一个只读管理员身份，理由见那边头注），这里只是按
+# `requires_fixture_kind` 挑模块。
+FIXTURE_KINDS = ("category", "account")
+
+
+def snapshot(kind: str):
+    """取一次某族夹具的**快照**（读不到 → `None`）。未知 kind **响亮报错**。
+
+    未知 kind 必须报错而不是退回分类族：`"acount"` 这种拼错会让闸去查**分类**列表，
+    于是夹具判 absent、用例静默跳过——一个拼错的字母吃掉一条用例，而打印出来的理由是
+    "分类列表里没有它"（读的人只会去查分类）。**拼错要红在拼错上。**
+    """
+    if kind == "account":
+        import golden_fixture_account  # 局部导入：只在真有账号族用例时才拉那条读路径
+        return golden_fixture_account.directory()
+    if kind == "category":
+        return category_titles()
+    raise SystemExit(f"golden 用例声明了未知的 requires_fixture_kind={kind!r}"
+                     f"（已知：{'/'.join(FIXTURE_KINDS)}）—— 先改 FIXTURE_KINDS 再跑")
+
+
+def state_of(kind: str, name: str, snap) -> str:
+    """按族判 `present` / `absent` / `wrong_state` / `unreadable`（`wrong_state` 只有账号族）。"""
+    if kind == "account":
+        import golden_fixture_account
+        return golden_fixture_account.fixture_state(name, snap)
+    return fixture_state(name, snap)
+
+
+def skip_reason(kind: str, name: str, state: str) -> str:
+    """夹具不可用时**可行动**的一句人话（打印在 `[skip]` 行里）。"""
+    if kind == "account":
+        import golden_fixture_account
+        return golden_fixture_account.state_label(state, name)
+    if state == "absent":
+        return ("夹具不在位（公开分类列表里没有它——先按授权串跑 "
+                "scripts/migration/golden_write_fixture_20260925.sql）")
+    return (f"夹具在位检查读不到公开分类接口（{UNREADABLE_TAG}）"
+            f"—— 不知道在不在，不跑")
+
+
+def gate(cases: list) -> tuple[list, list[str], list[str]]:
+    """按夹具在位情况摘掉跑不了的用例 → `(剩下的用例, 被摘掉的 id, 待打印行)`。
+
+    `requires_fixture_kind` **不写就是分类族**（存量那条用例逐字不变）。快照按 kind
+    **各取一次**：同一批用例看到同一份名录/清单（省往返，也免得"前一条用例看到的是
+    第 n 版、后一条是第 n+1 版"）。
+    """
+    need = {c["id"]: (str(c["requires_fixture"]),
+                      str(c.get("requires_fixture_kind") or "category"))
+            for c in cases if c.get("requires_fixture")}
+    if not need:
+        return cases, [], []
+    snaps: dict[str, object] = {}
+    dropped: list[str] = []
+    lines: list[str] = []
+    for cid, (name, kind) in need.items():
+        if kind not in snaps:
+            snaps[kind] = snapshot(kind)
+        state = state_of(kind, name, snaps[kind])
+        if state == "present":
+            continue
+        dropped.append(cid)
+        lines.append(f"[skip] {cid}: SKIP ({skip_reason(kind, name, state)})")
+    kept = [c for c in cases if c["id"] not in set(dropped)]
+    return kept, dropped, lines
 
 
 def main(argv: list[str]) -> int:

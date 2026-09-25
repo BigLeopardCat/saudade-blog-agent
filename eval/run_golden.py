@@ -21,6 +21,10 @@
                                      GOLDEN_ALLOW_REAL_WRITE=1 时才跑，默认**关**
   requires_fixture（20260925）       它要动的那个夹具（`agent_fixture_` 前缀族）——
                                      不在位就响亮跳过，见 eval/golden_fixture.py
+  requires_fixture_kind（20260926）  夹具属于哪一族：`category`（默认，公开分类列表里
+                                     读得到）/ `account`（后台账号名录里读得到，见
+                                     eval/golden_fixture_account.py）。拼错的 kind 会
+                                     响亮报错，不会悄悄按分类族去查
   三者未满足都**响亮 SKIP 并计入 skipped_ids**（不静默豁免：跳过关乎通过率分母）。
   20260926 起两条身份通道**不再"设了就用"**：设了也要先做一次**只读在位检查**
   （eval/identity_preflight.py，拿与 agent 代调同源的令牌打一次管理员域只读接口）。
@@ -696,6 +700,8 @@ GOLD_ASSERT_KEYS = frozenset({
     "require_tool_calls", "require_tool_calls_any", "no_tool_calls", "forbid_tool_calls",
     # 执行回执（checker 验收侧，__EXEC__ 帧）
     "require_exec_tools", "require_exec_args", "require_arg_from_result",
+    # 回执**文本**（20260926，真写用例专用）：args 对了不等于"那件事真的发生了"
+    "require_exec_result",
     # 零执行（20260925 双轮）：第 1 轮"只弹卡、一个写都没发生"的**正面**断言，
     # 与第 2 轮的 require_exec_tools 配对（`forbid_exec_tools` 是它的负向孪生）
     "require_zero_exec", "forbid_exec_tools",
@@ -956,6 +962,34 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
         if want not in got:
             fails.append(f"{spec['tool']}.{spec['arg']} 期望 {want}，实际 {got}")
 
+    # 20260926：**回执文本**断言（spec = `{"tool":…, "match":…, "not_match":…}`，两条
+    # 正则至少给一条）。动机是一条具体的假绿路径，不是"想多判一点"：
+    # 真写用例（`account_unfreeze_exec`）跑完夹具就变成"正常"了，此时不复位再跑一次，
+    # 后端那个方向本来就有真 no-op 分支（"该账号已经是正常状态" ⇒ success），于是
+    # **回执照样生成、require_exec_tools 照样过** ⇒ 用例静默变绿而什么都没证明。
+    # `require_exec_args` 只看 args，对这件事一句话也说不了；工具自己的写后复核文本
+    # 恰好把它说清了（`adminops.render_account_status` 在 changed=False 时必然出现
+    # 「本来就是…/没有重复…」）——那就断言它。
+    # 两条都空 = 这条断言什么都没声明 ⇒ 响亮报错（与 `require_doc_terms` 同一条取向：
+    # 空转的判据比没有判据更坏，它会让人以为这里验过了）。
+    for spec in gold.get("require_exec_result", []):
+        _rows = [r for r in result["exec_rows"] if r.get("tool") == spec.get("tool")]
+        if not _rows:
+            fails.append(f"缺少 {spec.get('tool')} 的执行回执（无法核对回执文本）")
+            continue
+        _blob = "\n".join(str(r.get("result") or "") for r in _rows)
+        _hit, _miss = spec.get("match"), spec.get("not_match")
+        if not _hit and not _miss:
+            fails.append(f"require_exec_result 没声明 match/not_match（这条什么都没判）"
+                         f"：{spec!r}")
+            continue
+        if _hit and not re.search(_hit, _blob):
+            fails.append(f"{spec['tool']} 的回执文本里没有 {_hit!r}（回执：{_blob[:120]}）")
+        if _miss and re.search(_miss, _blob):
+            fails.append(f"{spec['tool']} 的回执文本命中了不该出现的 {_miss!r}"
+                         f"—— 那一次**没有真的发生变更**（后端走了 no-op 分支），"
+                         f"回执：{_blob[:120]}")
+
     # 20260925：**语料化断言**（`require_doc_terms`，派生器 `eval/corpus_terms.py`）。
     # 动机 = `rag_ota_http` 现场：人手抄的期望词会随语料漂移（那条用例三个词里两个
     # df=2，第三个 `A/B` 被 `tokenize` 按字符类切碎成满语料 token ⇒ 恒真），而"改词表"
@@ -1196,26 +1230,16 @@ def main():
     #
     # ② `requires_fixture`：真写用例的目标是**夹具**（见 eval/golden_fixture.py 头注），
     #    夹具不在位时跑它，红出来的是一句误导性的"站内没有叫 X 的分类"——看着像模型退化，
-    #    其实是前置条件缺失。所以先只读地问一次公开分类列表，**不在位就响亮跳过**。
-    #    `unreadable` 与 `absent` 分开报（读不到不是没有）——但两者都不跑：不知道就不动。
-    _need_fix = {c["id"]: str(c["requires_fixture"]) for c in cases if c.get("requires_fixture")}
-    if _need_fix:
-        _titles = golden_fixture.category_titles()
-        _drop: list[str] = []
-        for _cid, _fname in _need_fix.items():
-            _state = golden_fixture.fixture_state(_fname, _titles)
-            if _state == "present":
-                continue
-            _drop.append(_cid)
-            _why = ("夹具不在位（公开分类列表里没有它——先按授权串跑 "
-                    "scripts/migration/golden_write_fixture_20260925.sql）"
-                    if _state == "absent" else
-                    f"夹具在位检查读不到公开分类接口（{golden_fixture.UNREADABLE_TAG}）"
-                    "—— 不知道在不在，不跑")
-            print(f"[skip] {_cid}: SKIP ({_why})")
-        if _drop:
-            skip_ids += _drop
-            cases = [c for c in cases if c["id"] not in _drop]
+    #    其实是前置条件缺失。所以先只读地问一次该族夹具的在位情况，**不在位就响亮跳过**。
+    #    `unreadable` 与 `absent` 分开报（读不到不是没有）——但两者都不跑：不知道就不动；
+    #    账号族还多一态 `wrong_state`（行在、状态不对 ⇒ 跑出来的是一条空的绿）。
+    #    **闸的实现只有一处**（`golden_fixture.gate`）：那个逐条子进程跑法
+    #    （`eval/golden_full_run.py`）用的是同一个函数——两族的读路径也在那边收着。
+    if any(c.get("requires_fixture") for c in cases):
+        cases, _drop, _lines = golden_fixture.gate(cases)
+        skip_ids += _drop
+        for _ln in _lines:
+            print(_ln)
     # 空分母（20260925）：全部被上面的闸摘掉时，**不许按"零失败 = 通过"收尾**——
     # 末尾那条 `failed == 0 → 退出码 0` 会把 0/0 打印成"通过率 0.000"却退 0，读的人
     # （或夜间脚本、或 CI）看到的是一个静默的绿，而这一轮**什么都没评**。实测触发路径：
