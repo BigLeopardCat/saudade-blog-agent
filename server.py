@@ -734,7 +734,13 @@ _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败"
               # planner 拿错 id（把「共 3 条」的 3 当 id）时，工具报的是 unavailable
               # ⇒ 过程行显示「服务不可用」，用户读成"系统挂了"，而真问题是"你要标的
               # 那条不存在"（trace `20260923T130033_9` 用户原话："显示服务不可用"）
-              "target_not_found": "目标不存在"}
+              "target_not_found": "目标不存在",
+              # 后台规则拒绝（账号冻结/解冻，20260926）：后端那三条策略（不能冻自己 /
+              # 不能冻超管 / 管理员之间不可互冻）与 agent 侧预检都走这个码。
+              # 漏了这行不会静默——它会原样打出英文码 `policy_refused` 给访客看。
+              # 与"服务不可用"刻意分开：那个的下一步是稍后重试，这个重试一万次也一样
+              # （要换的是目标或身份，见 graph 规则里那条"不要改参重试"）。
+              "policy_refused": "后台规则拒绝"}
 
 
 # 参数引用（agent/refs.py 的 $<工具>[<序号>].<字段>）在过程行里的可读来源名。
@@ -965,6 +971,14 @@ def _tool_action_text(name: str, args: dict | None) -> str:
             more = f" 等 {len(ids)} 条" if len(ids) > 3 else ""
             return f"标记站内通知已读（{shown}{more}）"
         return "标记站内通知已读"
+    if name in ("freeze_account", "unfreeze_account"):
+        # 账号冻结 / 解冻（20260926）：过程行只报**账号名**（账号没有《标题》可写，
+        # 见 graph._POPUP_TITLE_TOOLS 那条注），**不报 uid**——uid 是内部编号，
+        # 主人核对靠名字。措辞与 Rust `render_exec_row` 的同名臂**逐字一致**：
+        # 预告帧与落库回执是同一件事的两处渲染，两处不一样会让主人以为发生了两件事。
+        verb = "冻结账号" if name == "freeze_account" else "解冻账号"
+        acct = _leaf(a.get("name"))
+        return f"{verb}「{acct}」" if acct else verb
     if name in _NOARG_VERB:
         return _NOARG_VERB[name]
     return f"执行 {name}"

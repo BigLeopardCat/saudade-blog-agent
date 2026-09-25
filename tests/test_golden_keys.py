@@ -124,7 +124,7 @@ check("没有拼错的 gold 键（拼错 = 那段断言静默不执行）", not 
 check("没有裸 `note`（注释键是 `_note`；写成 `note` 等于这条注释不存在）",
       not any(u.endswith("gold.note") for u in _unknown))
 _ids = [c.get("id", "?") for c in _cases]
-check("用例数（131 条）", len(_ids) == 131, f"实际 {len(_ids)}")
+check("用例数（134 条）", len(_ids) == 134, f"实际 {len(_ids)}")
 check("用例 id 无重复", len(_ids) == len(set(_ids)),
       f"重复：{sorted({i for i in _ids if _ids.count(i) > 1})}")
 # 每条用例至少带一个**断言**键——只有注释的用例等于没判。这不是拼写问题，但属同一族

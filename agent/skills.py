@@ -150,6 +150,13 @@ WRITE_SKILL_NAMES = frozenset({
     # 注册表里普通技能那条路——把它写进来会让它落进写分支的参数展开，产出一次
     # 不成形的写。⚠️ 同上：名单与 `instantiate_plan` 的分支**两处都要补**。
     "dashboard_todo_add",
+    # 后台账号冻结 / 解冻（20260926 第九轮）：目标是一个**账号名**（在后台账号
+    # 列表里核对得到的名字）⇒ 走 `_WRITE_NAME_TARGET_SKILLS` 那条名字通道。
+    # ⚠️ 两个技能名与两个工具名**不是一套字面量**（技能 `account_freeze` /
+    # 工具 `freeze_account`）：技能名说的是"这件事"，工具名说的是"这个动作"。
+    # 混用会让 `_expand_write_skill` 的分支静默不命中（尾部兜底 → "未知的写技能"
+    # → 零工具零写，还不报错）。
+    "account_freeze", "account_unfreeze",
 })
 
 # 其中"目标是一个**名字**"的那批（标签 / 分类 / 公告 / 留言片段），共用
@@ -168,6 +175,12 @@ _WRITE_NAME_TARGET_SKILLS = frozenset({
     "category_create", "category_update", "category_delete",
     "announcement_create", "announcement_update", "announcement_delete",
     "board_audit", "board_delete",
+    # 账号冻结/解冻（20260926 第九轮）：同一条通道——planner 写名字，工具对着
+    # 后台账号名录解析（`tools.base._find_named_user`），名字不在名录里就零写 +
+    # 如实说"后台账号列表里没有这个账号"。**刻意不开编号通道**：后台列表不列
+    # 超管那一行（src/routes/temp_user.rs），这条防线只在"定位必须经过列表"时
+    # 成立——给一个 user_id 参数就等于从第二扇门把"冻结一个看不见的超管"打开。
+    "account_freeze", "account_unfreeze",
 })
 
 # 用户自己数据的写技能（20260923 批 7），共用 `_expand_own_skill`：目标是 article_id
@@ -1143,6 +1156,67 @@ SKILLS: list[Skill] = [
         ),
         roles=frozenset({ROLE_ADMIN}),
     ),
+    # ── 后台账号的冻结 / 解冻（20260926 第九轮）───────────────────────────
+    # 两个技能而不是一个带布尔参数的：方向在卡面文案、回执动作词、权限判据上
+    # 都要各说各的话（见 `_expand_write_skill` 里那一族的注）。
+    # 目标只有**名字**一个通道：后台账号列表不列超管那一行，而"按名字解析"要求
+    # 定位必须经过那份列表 ⇒ 结构上冻不到超管（写进 tools/base.py 的那条注与
+    # tests/test_account_freeze.py 的断言里，不靠"碰巧"）。
+    Skill(
+        name="account_freeze",
+        capability="冻结一个后台账号（他所有已登录的会话立刻失效）",
+        description=(
+            "博主（管理员）要求**冻结某个后台账号**时使用"
+            "（「把〈账号名〉冻结掉」「封停〈账号名〉那个号」「冻结〈账号名〉的账号」"
+            "——〈账号名〉是占位符，照抄主人说的那个名字）。"
+            "参数 name=那个账号的**名字**（后台账号列表里看得见的那一行；"
+            "**必须能在列表里看到**——列表里没有就当它不存在，**不要**用账号编号，"
+            "也不要用你猜的名字）。"
+            "⚠️ 冻的是**别人**的登录能力：他当前所有会话立刻失效，且解冻也换不回"
+            "那批会话（要重新登录）。要**解冻**时用 account_unfreeze（这是两个技能）。"
+            "⚠️ 「管理员之间不可互相冻结」与「超级管理员谁都不能冻」两条规则由后台"
+            "判定**并给出原话**——被拒时如实把那句话转述给主人，**不要**换个账号或"
+            "换个说法重试。**仅管理员可用**"
+        ),
+        inputs={"name": "要冻结的那个后台账号的名字（后台账号列表里看得见的那一行）"},
+        plan=[("freeze_account", {"name": "$name"})],
+        complete_when="freeze_account 返回了冻结结果（含「本来就是冻结」）",
+        reply_contract=(
+            "只能按 freeze_account 的实际返回作答，**逐字转述后台给出的那句话**"
+            "（含账号名与 id）；返回「后台账号列表里没有叫 X 的账号」就如实说没找到、"
+            "什么都没改；返回失败/未确认时如实说没冻成，**绝不得用完成式声称已冻结**；"
+            "**不要**替对方断言「他已经被踢下线了」——系统能看到的是会话已失效，"
+            "对方此刻在不在线只有他自己知道"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
+    Skill(
+        name="account_unfreeze",
+        capability="解冻一个后台账号（他重新能登录了）",
+        description=(
+            "博主（管理员）要求**解冻（解封）某个后台账号**时使用"
+            "（「把〈账号名〉解冻」「把〈账号名〉那个号放出来」「解封〈账号名〉」"
+            "——〈账号名〉是占位符，照抄主人说的那个名字）。"
+            "参数 name=那个账号的**名字**（后台账号列表里看得见的那一行；"
+            "**必须能在列表里看到**——列表里没有就当它不存在，**不要**用账号编号，"
+            "也不要用你猜的名字）。"
+            "⚠️ 解冻只是让他**重新能登录**：冻结期间被踢下线的会话不会自动恢复，"
+            "要他本人重新登录一次——**不许**说成「恢复原状 / 撤销冻结」。"
+            "⚠️ 「管理员之间不可互相冻结」那条规则对**解冻方向同样成立**（把一个被"
+            "超管冻结的管理员解冻，等于推翻超管的决定），后台判定**并给出原话**——"
+            "被拒时如实转述，**不要**换个说法重试。**仅管理员可用**"
+        ),
+        inputs={"name": "要解冻的那个后台账号的名字（后台账号列表里看得见的那一行）"},
+        plan=[("unfreeze_account", {"name": "$name"})],
+        complete_when="unfreeze_account 返回了解冻结果（含「本来就是正常」）",
+        reply_contract=(
+            "只能按 unfreeze_account 的实际返回作答，**逐字转述后台给出的那句话**"
+            "（含账号名与 id）；返回「后台账号列表里没有叫 X 的账号」就如实说没找到、"
+            "什么都没改；返回失败/未确认时如实说没解成，**绝不得用完成式声称已解冻**；"
+            "**不要**承诺「他的会话回来了」——回来的只是「能不能登录」"
+        ),
+        roles=frozenset({ROLE_ADMIN}),
+    ),
     Skill(
         name="chat",
         capability="闲聊、陪你说话",
@@ -1381,6 +1455,32 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
         return [_spec("audit_board_comment", {"quote": quote, "verdict": verdict})], (
             f"把含「{A.clip(quote, 20)}」的那条河灯留言人工复核为"
             f"{A.BOARD_VERDICT_CN[verdict]}")
+
+    if name in ("account_freeze", "account_unfreeze"):
+        # 账号冻结 / 解冻（20260926 第九轮）。它与上面那几件同族（目标是一个
+        # **名字**、解析在工具侧对着实时名录做），但两条注记的措辞要更硬一档：
+        # 这一族说错话的代价是**把一个活人踢下线**（不是"标签建歪了"）。
+        #   · 缺名字 ⇒ 明写"不要拿你猜的名字顶上"——这一族唯一的定位方式就是名字；
+        #   · 纯数字 ⇒ 后台账号列表里只有名字，没有编号可写（工具**没有** user_id
+        #     参数：列表不列超管那一行，那条防线只在"定位必须经过列表"时成立）。
+        # 方向由**技能名**定死而不是参数：`frozen: bool` 那种参数在
+        # `graph._confirm_grant_plan` 的"工具 ⊆ 技能 plan"判据下看不见——卡上写
+        # 「冻结」、实际执行解冻，且无人可见。
+        target = _write_arg(params.get("name"))
+        if not target:
+            return [], (f"{name} 缺少账号名（name）：不调用任何工具，"
+                        "如实向主人问清要动的是哪一个后台账号——**不要**拿你猜的名字顶上，"
+                        "也不要用账号编号")
+        if target.isdigit():
+            return [], (f"{name} 给的是一串数字「{target}」：不调用任何工具，"
+                        "如实向主人问清那个账号的**名字**（后台账号列表里看得见的那一行；"
+                        "系统不支持按编号操作账号）")
+        is_freeze = name == "account_freeze"
+        return ([_spec("freeze_account" if is_freeze else "unfreeze_account",
+                       {"name": target})],
+                (f"{'冻结' if is_freeze else '解冻'}后台账号「{target}」"
+                 "（按名字在后台账号列表里解析；名字不在列表里就不动任何数据、"
+                 "如实说明）——**要动的那个名字必须能在后台账号列表里看到**"))
 
     return [], f"{name}：未知的写技能（不调用任何工具）"
 

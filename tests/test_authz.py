@@ -195,13 +195,17 @@ CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), 
 # 随口描述、站内没有东西可核对"的写——命令式措辞与内容描述在这句话里同形，那个
 # `_console_command` 判据本来也答不了"他是在让我记、还是在跟我聊这件事"（详见 authz
 # 里 `_ALWAYS_CONFIRM_TOOLS` 的注）。它是**一律弹窗**族的一员 ⇒ 这一条也是它的锁。
-check("需确认的工具恰好是十八个（十四个后台写 + 四个用户自己的写）",
+# 20260926 到二十个：同一天再加 `freeze_account` / `unfreeze_account`——它们动的
+# **不是主人的东西**（后果落在第三方的登录能力上，解冻也换不回被踢的会话），
+# 用户拍板"每次都弹卡、不留任何捷径"（详见 authz 里 `_ALWAYS_CONFIRM_TOOLS` 的注）。
+check("需确认的工具恰好是二十个（十六个后台写 + 四个用户自己的写）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
                         "create_announcement", "update_announcement",
                         "delete_announcement",
                         "audit_board_comment", "delete_board_comment",
                         "create_dashboard_todo",
+                        "freeze_account", "unfreeze_account",
                         "set_article_status", "set_article_tags",
                         "add_favorite", "remove_favorite", "read_notifications",
                         "read_messages"},

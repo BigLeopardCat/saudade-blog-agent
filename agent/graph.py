@@ -89,7 +89,8 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_pa
                              _nav_fast_path, _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.entities import receipt_digest
-from agent.principal import UNKNOWN as UNKNOWN_PRINCIPAL
+from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER,
+                             UNKNOWN as UNKNOWN_PRINCIPAL)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
@@ -181,6 +182,9 @@ _ARTICLE_WRITE_TOOLS = frozenset({"set_article_status", "set_article_tags",
 # 只会拿到一次 403。判据放在"这个人能不能读后台清单"上（authz.check），
 # **不是**"这个工具要不要弹窗"：读不到就退回只写 id（同全表取向，绝不因此不弹窗）。
 _POPUP_TITLE_TOOLS = frozenset({"set_article_status", "set_article_tags"})
+# ⚠️ 冻结/解冻账号**不进这张表**（20260926）：账号没有《文章标题》可写，它是按
+# **账号名 + 账号 id** 认人的（见 `_confirm_popup` 里那条账号名录的惰性读）。顺手
+# "补上"这两个工具会让弹窗去读**文章**清单，然后给一个账号配一篇同名文章的标题。
 
 # 写工具回执里允许进 meta 的键（白名单，防止工具侧随手加的键悄悄进生产库 detail；
 # 消费端 Rust 只认这几个，多出来的键是无声的兼容性债）。
@@ -192,7 +196,11 @@ _RCPT_META_KEYS = ("op", "article_id", "before", "after",
                    "tag_id", "tag_name", "level",
                    "category_id", "category_name", "change",
                    "announcement_id", "announcement_title",
-                   "board_id", "board_author")
+                   "board_id", "board_author",
+                   # 账号（20260926）：不在白名单里 = **静默丢键**——下一轮主人问
+                   # "你刚冻的是谁"时，跨轮执行记忆里那行只剩一个动作、没有对象。
+                   # 名字进回执是**设计意图**（审计的一部分，与 board_author 同族）。
+                   "account_id", "account_name")
 
 # 目标证据的来源工具：本轮帧里**真带 note id** 的那几个（公开列表/检索/详情、
 # 后台列表、置顶列表）。刻意不含写工具自身的回显（"刚刚写过 id=12"不能成为
@@ -531,7 +539,11 @@ _PLANNER_PROMPT = """\
      （chat 或 content_query 留空），绝不重复规划同款调用——动作已由工具帧完成，
      回复层会基于帧确认
    - 上一轮工具返回以 __ERROR__ 开头 → 按错误修正参数重试一次；已重试过或
-     无法修正 → 收尾如实告知失败，不得声称成功
+     无法修正 → 收尾如实告知失败，不得声称成功。
+     ⚠️ **例外：帧里带 `[policy_refused]`（后端规则拒绝）时不许重试**——那不是
+     参数写错了，是后台的规则不允许这一次操作（如不能冻自己、不能动超级管理员、
+     管理员之间不能互冻）。改参数、换措辞、再试一遍都不会变；**逐字转述后台给的
+     那句话**后收尾，把它说成成功是假话
    - 上方复盘建议存在（reflector ISSUE，指明受阻项缺什么/怎么改）→ 按建议
      重试该修正；按建议执行后仍受阻 → 不再第三次自试，收尾如实结束——复盘
      建议是对已受阻项的修正指引，不是无限重试授权
@@ -2282,6 +2294,13 @@ _FALLBACK_UNKNOWN_TARGET = (
     "喵呜……主人，我**还没有动那篇文章**——我不确定你说的是哪一篇，不敢凭印象"
     "填一个编号（改错了是要紧事）。你告诉我文章名字或编号，或者让我先把后台文章"
     "列表读出来给你看，我再动手喵。")
+# 后台规则拒绝（20260926，账号冻结/解冻那一族）：与上面两条同族——**什么都没动**。
+# 但"再试一次"这句指引在这里是错的（政策拒绝不是抖动，重试一万次也一样），
+# 所以文案只请主人**换目标或换人**，不请他重试。
+_FALLBACK_POLICY = (
+    "喵呜……主人，这件事我**还没有动手**——后台的账号管理规则不允许这一次操作"
+    "（比如不能冻自己、不能动超级管理员、管理员之间也不能互相冻结）。我不该把"
+    "它说成已经办好了。要动别的账号的话说一声，我按规则再来一次喵。")
 _FALLBACK_DOWN = (
     "喵呜……那个板块确实已经下线了，刚才说得好像还能去一样，是我不好。现在站里"
     "能逛的真实页面是：首页、留言板、说说、时间轴、关于我～要去哪边嘛？")
@@ -2379,7 +2398,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     user_msg = _last_user_msg(state["messages"])
     # 角色要在**取 page_ctx 之前**定：能力清单按角色渲染（20260921——清单里不含
     # 管理能力是 narrator 讲"我不能改后台"的"依据"，见 context.site_guide）。
-    role = _principal_of(config).known_role
+    # principal 也在这里一并取：下面写门序列里的政策预检要读它的 uid 与角色
+    # （`_freeze_policy_refusal`）。同一个 config 读两次是同一个对象，取一次更省。
+    principal = _principal_of(config)
+    role = principal.known_role
     page_ctx = _page_ctx(state["messages"], role)
     has_frames = _has_frames(state["messages"])
     doc_anchors = _doc_anchors(state["messages"])
@@ -2640,6 +2662,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         grounded_refuse = _target_grounding_refusal(plan_obj, user_msg)
         subject = "站内的台账（标签/分类字典、公告清单、留言列表）与主人这句话本身"
         refusal = None
+        policy_refuse = False
         if quote_refuse:
             refusal = (_tool_name((plan_obj.get("tools") or ["?"])[0]), quote_refuse)
         elif value_refuse:
@@ -2650,6 +2673,14 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             subject = "主人这句话本身（目标名只能来自主人说出口的那几个字）"
         else:
             refusal = _write_target_refusal(plan_obj, config, user_msg, role)
+            if not refusal:
+                # 政策门**放最后**（见 `_freeze_policy_refusal` 上方长注）：前面任一环
+                # 拒绝时不该再花一次名录读；而且"无据"比"政策不允许"更该先开口——
+                # 主人说的那个账号根本不存在时，"不能冻管理员"是答非所问。
+                refusal = _freeze_policy_refusal(plan_obj, config, principal)
+                if refusal:
+                    policy_refuse = True
+                    subject = "后端的账号管理规则（预检只判它确定知道的那两种）"
         if refusal:
             wtool, why = refusal
             # 值/目标名被拒时补一句：那个字面是**系统自己的参数值**，不是主人点名的名字
@@ -2659,11 +2690,18 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                           "系统要填进参数的那个字面是**系统自己的参数值**，"
                           "不是主人点名的名字——转述它时**原样引述**，"
                           "绝不许把它说成主人说的那个名字。")
+            # 政策拒绝**不能**请主人"换个说法再试"：那条路是被规则堵死的，不是被
+            # 信息缺失堵死的（把它讲成"换个说法"就是把一条死路讲成一道门槛）。
+            why_tail = ("后端那条规则不认这次的目标，**别请主人换个说法重试**——"
+                        "把原话转告给他就够了，他要改主意是另一件事。"
+                        if policy_refuse else
+                        "并问他接下来想怎么办（换个说法、或先把那个目标建出来）。")
             logger.warning("[planner] 写操作参数解不出「主人这句话」里的来源（%s）：%s"
                            " → 确定性如实收尾", wtool, why)
             record("planner", "write_target_unresolved", tool=wtool,
                    source=("quote" if quote_refuse else "value" if value_refuse
-                           else "grounding" if grounded_refuse else "ledger"),
+                           else "grounding" if grounded_refuse
+                           else "policy" if policy_refuse else "ledger"),
                    reason=why[:160], round=rounds)
             plan_obj = _wrap_up_plan(False, note=(
                 _LEDGER_NOTE_PREFIX +
@@ -2671,7 +2709,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 "（本轮一个工具都没有执行）。"
                 f"系统核对过{subject}，结果是：{why}。"
                 "请把这条原因**如实**转告主人（连同里面的候选名单或该补的信息），"
-                "并问他接下来想怎么办（换个说法、或先把那个目标建出来）。"
+                + why_tail +
                 "**不许**出现「看过/读过/查过/检索过/调用过工具」这类说法；"
                 "也**不许**把它讲成一篇内容层面的结论。"
                 + value_tail))
@@ -3134,9 +3172,15 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
         # 要分开——planner 的应对是如实告知，不是换个工具再试。
         # 未获确认的写操作同办（20260920）：consent_required 是"还没问过用户"，
         # planner 的应对是去问，而不是当成"做不到"。
+        # 后台政策拒绝同办（20260926）：policy_refused 是"规则不许做"，planner 的
+        # 应对是如实转述、**不是改参重试**——与上面三个原因码并列的第四个消费者
+        # （生产方 = adminops.policy_frame，见那里"为什么走错误帧族"的长注：
+        # 这一条接不上的后果是良性的「执行出错」，而新开一个 ToolResult kind
+        # 漏接的后果是**静默**产回执）。
         return _VERDICT_BLOCK, (ref_error_reason(text) or authz.scope_error_reason(text)
                                 or authz.consent_error_reason(text)
-                                or A.target_error_reason(text) or "error_frame")
+                                or A.target_error_reason(text)
+                                or A.policy_error_reason(text) or "error_frame")
     # 命令工具契约层校验：动作工具必须返回命令帧（工具返回形态漂移 = 执行未
     # 按契约发生，如 navigate 返回了纯文本而非 NAVIGATE:/AUTO_NAVIGATE:）。
     # device_oled_display 的"未在 5s 内回执确认"属软失败（指令确已下发），判
@@ -3216,6 +3260,11 @@ _WRITE_NAME_FIELDS = {
     # 用户嘴里说的就是那句话本身）。字段名统一叫 quote，解析器同一套口径。
     "audit_board_comment": ("quote", None),
     "delete_board_comment": ("quote", None),
+    # 账号（20260926）：按**账号名**指认。名字是唯一的通道——工具**没有** `user_id`
+    # 参数，因为"后台列表不列超管那一行"这道防线只在"定位必须经过列表"时才成立
+    # （开一个编号参数就是从第二扇门把"冻结一个看不见的超管"重新打开）。
+    "freeze_account": ("name", None),
+    "unfreeze_account": ("name", None),
 }
 
 
@@ -3475,7 +3524,10 @@ def _announcement_text_fix(plan_obj: dict, user_msg,
 # 也不猜一个名字去查）。
 _NAME_TARGET_TOOLS = ("update_tag", "delete_tag", "update_category",
                       "delete_category", "update_announcement",
-                      "delete_announcement")
+                      "delete_announcement",
+                      # 账号族同族（20260926）：名字要**原样**写进如实答复——
+                      # "后台没有叫「guest」的账号"里的那个名字，必须是主人说的那个。
+                      "freeze_account", "unfreeze_account")
 
 # "另一个操作数"的标记词：紧跟在它后面的那段引号**不是**目标，而是父标签
 # （挪到…下面）或新名字（改名叫…）。语序本身就是主人给的标记——20260922 实测另一跑
@@ -3501,14 +3553,27 @@ _TARGET_NOUNS = ("一级标签", "二级标签", "标签", "分类")
 # 它只用于**取名字**，不进 `_marked_operand`（删掉后面没有"另一个操作数"）。
 _DELETE_MARKS = ("删掉", "删除", "移除", "去掉", "撤下", "下架")
 _TARGET_ACTION_MARKS = _MOVE_MARKS + _RENAME_MARKS + _DELETE_MARKS
-_TARGET_NOUN_RE = re.compile(
-    r"(?:" + "|".join(_TARGET_NOUNS) + r")\s*(.+?)\s*(?:"
-    + "|".join(_TARGET_ACTION_MARKS) + r")")
+@lru_cache(maxsize=None)
+def _noun_re(nouns: tuple, marks: tuple):
+    """`名词标记 → 目标名 → 动作标记` 的捕获窗口（按词表编译，见 `_lexicon`）。
+
+    带缓存：词表是常量元组，同一工具每轮拿到的都是同一个正则对象（原本就是个模块级
+    常量，编译一次；这条路只是把"编译一次"变成"每种词表编译一次"）。
+    """
+    return re.compile(
+        r"(?:" + "|".join(nouns) + r")\s*(.+?)\s*(?:"
+        + "|".join(marks) + r")")
+
+
 # 名词标记**之前**那一段（`大笨狗那个标签` 里的"大笨狗那个"）：中文里"X 那个标签/这个
 # 分类"是把目标名放在名词**前面**的常见语序。句读（，。！？；、空白）与引号都会切断，
 # 只认"粘在名词左边、一口气念下来"的那一段（见 `_msg_pre_noun_runs`）。
-_PRE_NOUN_RUN_RE = re.compile(
-    r"([^，。！？；、,.!?;\s「」]{1,24})(?=" + "|".join(_TARGET_NOUNS) + r")")
+@lru_cache(maxsize=None)
+def _pre_noun_re(nouns: tuple):
+    return re.compile(
+        r"([^，。！？；、,.!?;\s「」]{1,24})(?=" + "|".join(nouns) + r")")
+
+
 # planner 从技能/参数描述里抄下来的**泛称**（20260922 全量回归实测取值：name="标签"、
 # parent_tag="父标签名"）——它们不是主人的名字，即便恰好是这句话的子串也不算"有据"。
 # 同 20260921「对模型的举例里不许出现具体取值」那条教训的镜像：描述里的措辞会被抄成参数值。
@@ -3518,6 +3583,39 @@ _GENERIC_NAME_WORDS = ("标签", "分类", "一级标签", "二级标签", "标�
                        # 实测 planner 会把它抄成 `title="标题"`——「把标题是「公告」的
                        # 那条公告删掉吧」里"标题"**正是原话的子串**，子串级地基照样放它过去。
                        "标题", "公告标题")
+
+
+# ── 按工具取词表（20260926）──────────────────────────────────────────────
+# 上面那三张表喂着**免引号**的目标名抽取。账号族（冻结/解冻）的目标是「账号名」，
+# 它的名词是"账号/用户"、动作词是"冻结/解冻"——**不能直接往全局表里塞**：
+# 「用户」是全站高频词（前台筛选器就叫"普通用户账号"），而抽取器的判据含"唯一
+# 定位"那类形态要求，塞进全局表会搅动标签/分类族的免引号抽取（那是存量行为，
+# 回归只有一次机会）。所以按工具取：`_lexicon(tool)` 给账号族一份自己的，
+# 其余工具拿到的是**默认那三张表本身**（同一批对象 ⇒ 编译出的正则逐字节相同 ⇒
+# 存量行为零变化；`tests/test_account_freeze.py` 用对拍锁着这一点）。
+_DEFAULT_LEXICON = (_TARGET_NOUNS, _TARGET_ACTION_MARKS, _GENERIC_NAME_WORDS)
+_TARGET_NOUN_RE = _noun_re(_TARGET_NOUNS, _TARGET_ACTION_MARKS)
+_PRE_NOUN_RUN_RE = _pre_noun_re(_TARGET_NOUNS)
+
+# 账号族的名词：长的在前（同一个位置优先匹配更具体的那个）。
+_ACCOUNT_NOUNS = ("账号名", "账号", "用户名", "用户")
+# 动作词 = 既有那三族（挪到/改名叫/删掉）**加上**这一族的口语说法。既有那三族要带
+# 上：主人说「把账号 guest5 删掉」时同样是"点了名的"，这里只回答"这个名字有没有出处"
+# （该不该删由权限与政策管）。
+_ACCOUNT_MARKS = _TARGET_ACTION_MARKS + ("冻结", "解冻", "封停", "解封", "封掉", "停用")
+# 泛称：planner 会从参数描述里抄下来的那些字面（见 `_GENERIC_NAME_WORDS` 长注），
+# 账号族独有的那几个加进去，全局那份照旧。
+_ACCOUNT_GENERIC = _GENERIC_NAME_WORDS + (
+    "账号", "账号名", "用户", "用户名", "目标账号", "目标用户",
+    "这个账号", "那个账号", "这个用户", "那个用户")
+# 冻结 / 解冻两个工具（本节多处共用这一份名单：词表、目标预检、政策预检）。
+_FREEZE_TOOLS = ("freeze_account", "unfreeze_account")
+_ACCOUNT_LEXICON = (_ACCOUNT_NOUNS, _ACCOUNT_MARKS, _ACCOUNT_GENERIC)
+
+
+def _lexicon(tool: str | None):
+    """工具名 → `(名词表, 动作词表, 泛称表)`。未登记的工具拿**默认那三张表本身**。"""
+    return _ACCOUNT_LEXICON if tool in _FREEZE_TOOLS else _DEFAULT_LEXICON
 
 
 def _marked_operand(user_msg, spans: list[str]) -> tuple[str, str]:
@@ -3543,7 +3641,7 @@ def _marked_other_operand(user_msg, spans: list[str]) -> str:
     return _marked_operand(user_msg, spans)[0]
 
 
-def _bare_target_name(user_msg) -> str:
+def _bare_target_name(user_msg, lex=None) -> str:
     """主人原话里**没加引号**的目标名：名词标记与动作标记之间的那一段。
 
     20260922 全量回归现场（`admin_tag_move_popup` 五跑一红）：主人说「帮我把标签
@@ -3553,19 +3651,24 @@ def _bare_target_name(user_msg) -> str:
 
     只认**唯一且干净**的候选：跨小句（有标点）、含别的名词/动作标记、超长、就是泛称
     → 一律返回空串（说不清就不动，与 `_owner_target_span` 同一条边界）。
+
+    `lex` = 可选的词表（`_lexicon(tool)`，见那里的长注）：不传就是标签/分类族那三张
+    全局表（**默认路径逐字节不变**）。
     """
+    nouns, marks, generic = lex or _DEFAULT_LEXICON
+    rx = _noun_re(nouns, marks)
     text = str(user_msg or "")
-    if len(_TARGET_NOUN_RE.findall(text)) != 1:
+    if len(rx.findall(text)) != 1:
         return ""  # 一句话里点了不止一个名字（"把标签 A 删掉，再把标签 B 挪到…"）→ 说不清
-    m = _TARGET_NOUN_RE.search(text)
+    m = rx.search(text)
     if not m:
         return ""
     raw = m.group(1).strip().strip("「」『』“”\"'").strip()
-    if not raw or len(raw) > 60 or raw in _GENERIC_NAME_WORDS:
+    if not raw or len(raw) > 60 or raw in generic:
         return ""
     if any(ch in raw for ch in "，,。；;、！？!?～~"):
         return ""
-    if any(w in raw for w in _TARGET_NOUNS + _TARGET_ACTION_MARKS):
+    if any(w in raw for w in nouns + marks):
         return ""
     # "Asyncio 这个名字" 这类补语：多出来的是主人的解释，不是名字的一部分——一出现就
     # 说不清边界（"抄短了"的对照判据会把整段当成名字，那还不如不动）。
@@ -3574,31 +3677,36 @@ def _bare_target_name(user_msg) -> str:
     return raw
 
 
-def _msg_name_slot(user_msg) -> str:
+def _msg_name_slot(user_msg, lex=None) -> str:
     """主人原话里**目标槽位**的原始捕获段：名词标记与动作标记之间的那一段（未过干净度判据）。
 
     与 `_bare_target_name` 同源不同职：那个回答"这段能不能当成名字用"（脏了就返回空），
     这个回答"这段字面上是什么"（取全部、不判干净）。用在"取值有没有出处"这一层——
     planner 填的名字落在这段里头，说明它是主人写在**目标位置**上的字（哪怕这一段因为
     夹了标点/引号而不能直接当名字用）。唯一匹配时才有值（一句话里点了不止一处 → 说不清）。
+    `lex` 同 `_bare_target_name`。
     """
-    hits = _TARGET_NOUN_RE.findall(str(user_msg or ""))
+    nouns, marks, _g = lex or _DEFAULT_LEXICON
+    hits = _noun_re(nouns, marks).findall(str(user_msg or ""))
     return hits[0].strip() if len(hits) == 1 else ""
 
 
-def _msg_pre_noun_runs(user_msg) -> list[str]:
+def _msg_pre_noun_runs(user_msg, lex=None) -> list[str]:
     """主人原话里**紧贴目标名词、且不含句读**的那几段（名词标记**之前**的那一段）。
 
     「大笨狗那个标签我不想要了，删掉吧」里目标名在名词**前面**，而目标槽位窗口从名词
     之后起算 ⇒ 没有这一格，判据会把这个名字判成"主人没说过"（它明明在句子里，如实
     追问会自相矛盾）。边界与窗口同级：，。！？；、空白与引号都会切断，只认"粘在名词
     左边、一口气念下来"的那一段——不退回"整句话里出现过"那条假通道。
+    `lex` 同 `_bare_target_name`。
     """
+    nouns, _m, _g = lex or _DEFAULT_LEXICON
     return [m.group(1).strip()
-            for m in _PRE_NOUN_RUN_RE.finditer(str(user_msg or ""))]
+            for m in _pre_noun_re(nouns).finditer(str(user_msg or ""))]
 
 
-def _msg_grounded_name(got: str, user_msg, spans: list[str] | None = None) -> bool:
+def _msg_grounded_name(got: str, user_msg, spans: list[str] | None = None,
+                       lex=None) -> bool:
     """planner 填的这个名字，能不能由主人这句话**取出来**？（四个具名抽取器，见长注）
 
     · Q 引号段：值落在主人加引号的某一段里（`标签「大笨狗」…`）；
@@ -3625,15 +3733,15 @@ def _msg_grounded_name(got: str, user_msg, spans: list[str] | None = None) -> bo
     spans = _msg_quote_spans(user_msg) if spans is None else spans
     if any(sq in _squash_spaces(s) for s in spans):
         return True
-    if sq == _squash_spaces(_bare_target_name(user_msg)):
+    if sq == _squash_spaces(_bare_target_name(user_msg, lex)):
         return True
-    slot = _msg_name_slot(user_msg)
+    slot = _msg_name_slot(user_msg, lex)
     if slot and sq in _squash_spaces(slot):
         return True
-    return any(sq in _squash_spaces(run) for run in _msg_pre_noun_runs(user_msg))
+    return any(sq in _squash_spaces(run) for run in _msg_pre_noun_runs(user_msg, lex))
 
 
-def _name_like(text) -> bool:
+def _name_like(text, lex=None) -> bool:
     """这句话里有没有"能被取出来的名字"（引号段 / 免引号目标名 / 目标槽位）。
     一处都没有 = 指代型（"把那个标签删掉吧"）——判据无从对照，不介入。
 
@@ -3642,13 +3750,15 @@ def _name_like(text) -> bool:
     而指代解析的权威在模型 + 弹卡上的人（本轮刻意不碰，见 `_target_grounding_refusal`
     的边界注）。P 只在**句子确实点了名**（有引号或目标槽位）时，用来把"名字在名词
     前面"这种语序救回来（"大笨狗那个标签我不想要了，删掉吧"）。
+    `lex` 同 `_bare_target_name`（账号族的名词是"账号/用户"，见 `_lexicon`）。
     """
     msg = str(text or "")
-    return bool(_msg_quote_spans(msg) or _msg_name_slot(msg) or _bare_target_name(msg))
+    return bool(_msg_quote_spans(msg) or _msg_name_slot(msg, lex)
+                or _bare_target_name(msg, lex))
 
 
 def _owner_target_span(got: str, spans: list[str], parent: str,
-                       other_marked: str = "", msg: str = "") -> str | None:
+                       other_marked: str = "", msg: str = "", lex=None) -> str | None:
     """主人引号里哪一段是**目标名**？证据不唯一 → None（见上方长注）。
 
     ① planner 写的名字落在**唯一一段**引号里（抄短了/概括了）→ 那一段就是它；
@@ -3706,7 +3816,7 @@ def _owner_target_span(got: str, spans: list[str], parent: str,
                 other = next(s for s in spans if s is not ph[0])
                 return other
     if len(spans) == 1 and not other_marked and not parent and msg and sq \
-            and not _msg_grounded_name(got, msg, spans):
+            and not _msg_grounded_name(got, msg, spans, lex):
         return spans[0]
     return None
 
@@ -3733,14 +3843,15 @@ def _name_target_fix(plan_obj: dict, user_msg,
     if not got:
         return
     spans = _msg_quote_spans(user_msg)
+    lex = _lexicon(name)          # 词表按工具取（账号族的名词是"账号/用户"，见 _lexicon）
     other, kind = _marked_operand(user_msg, spans)
     want = _owner_target_span(got, spans, args.get(pkey) if pkey else "", other,
-                              str(user_msg or ""))
+                              str(user_msg or ""), lex)
     if not want:
         # 免引号形态（"帮我把标签 Asyncio 挪到「编程」下面"）：目标名在名词与动作词之间。
         # planner 的值**在主人这句话里有据**（逐字说过、且不是泛称、也不是这段的截断）
         # 就不动——防线不是重写器。
-        cand = _bare_target_name(user_msg)
+        cand = _bare_target_name(user_msg, lex)
         _gq, _cq = _squash_spaces(got), _squash_spaces(cand)
         # 第三种让位的形态：planner 把名字**抄短了**（实测 name="Async"——它是原话的
         # 子串，子串级地基照样放它过去）。取向与引号那条一致：主人原话里那一段是系统
@@ -3753,7 +3864,7 @@ def _name_target_fix(plan_obj: dict, user_msg,
         # 当然在句里），故单列一条：此时主人原话里那一段才是目标。
         _as_parent = bool(other and _squash_spaces(other) == _gq)
         if cand and _cq != _gq and (_as_parent or _gq not in _squash_spaces(user_msg)
-                                    or got in _GENERIC_NAME_WORDS or _frag):
+                                    or got in lex[2] or _frag):
             want = cand
     # 父标签走同一条地基：planner 填的父标签不在主人这句话里，而主人用"挪到/移到「X」
     # 下面"给了**唯一**一个候选 → 用它（实测它填的是描述里的「父标签名」「分类」，
@@ -4094,7 +4205,8 @@ def _target_grounding_refusal(plan_obj: dict, user_msg) -> tuple[str, str] | Non
     if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
         return None
     msg = str(user_msg or "")
-    if not _name_like(msg):
+    lex = _lexicon(name)          # 词表按工具取（账号族的名词是"账号/用户"，见 _lexicon）
+    if not _name_like(msg, lex):
         return None  # 指代型（"那个标签"）：一处名字都没标出来，本门不介入
     spans = _msg_quote_spans(msg)
     tkey, pkey = _WRITE_NAME_FIELDS[name]
@@ -4102,7 +4214,7 @@ def _target_grounding_refusal(plan_obj: dict, user_msg) -> tuple[str, str] | Non
         if not key:
             continue
         got = str(args.get(key) or "").strip()
-        if not got or _msg_grounded_name(got, msg, spans):
+        if not got or _msg_grounded_name(got, msg, spans, lex):
             continue
         if spans:
             tail = "主人这句话里点名的名字只有 " + \
@@ -4180,15 +4292,23 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
     args, args_ok = _tool_args(tools[0])
     if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
         return None
-    from tools.base import (_announcement_index, _board_index, _category_index,
-                            _find_board_comment, _find_named_announcement,
-                            _find_named_category, _find_named_tag, _tag_index)
+    from tools.base import (ToolResult, _announcement_index, _board_index,
+                            _category_index, _find_board_comment,
+                            _find_named_announcement, _find_named_category,
+                            _find_named_tag, _find_named_user, _tag_index,
+                            _user_directory)
     tkey, pkey = _WRITE_NAME_FIELDS[name]
     is_cat = name.endswith("_category")
     is_ann = name.endswith("_announcement")
     is_board = name.endswith("_board_comment")
-    tag_index = None if (is_cat or is_ann or is_board) else _tag_index(config)
+    # 账号族（冻结/解冻）的目标名字在**后台账号名录**里，不在标签字典里。这一支不加，
+    # 分派会掉进最后那个 `else`（标签）⇒ 账号名被拿去查标签 ⇒ 主人得到一句
+    # 「站内没有叫「X」的**标签**」：措辞错、查的台账错，而这句错话恰好长得像
+    # 一句诚实拒绝，最容易被当成"系统说没有就是没有"。
+    is_user = name in _FREEZE_TOOLS
+    tag_index = None if (is_cat or is_ann or is_board or is_user) else _tag_index(config)
     cat_index = ann_index = board_index = None
+    user_index = None
     if is_cat:
         cat_index = _category_index(config)
         if cat_index is None:
@@ -4201,6 +4321,13 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
         board_index = _board_index(config)
         if board_index is None:
             return None  # 同上（读不到清单不是"没有这条留言"）
+    elif is_user:
+        user_index = _user_directory(config)
+        if isinstance(user_index, ToolResult):
+            # 读不到名录 ⇒ **放行给工具**（与上面三支同向：读不到不是"没有"）。
+            # 工具自己会再读一次名录，那一层读不到就零写 —— 预检这一层的方向与
+            # `_find_named_user` 相反是刻意留给工具那一层的，见它的头注。
+            return None
     elif tag_index is None:
         return None
     def _lookup(w: str):
@@ -4212,6 +4339,8 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
             return _find_named_announcement(w, config, index=ann_index)
         if is_board:
             return _find_board_comment(w, config, index=board_index)
+        if is_user:
+            return _find_named_user(w, config, index=user_index)
         return _find_named_tag(w, config, args.get("level"), index=tag_index)
 
     def _ledger_names():
@@ -4224,15 +4353,21 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
             return [(cid, str(getattr(r, "name", "") or "")) for cid, r in cat_index.items()]
         if is_ann:
             return [(rid, str(r.get("title") or "")) for rid, r in ann_index.items()]
+        if is_user:
+            return [(uid, str(r.get("username") or "")) for uid, r in user_index.items()]
         return [(tid, str(t.name or "")) for tid, t in tag_index.items()]
 
     if tkey:
         want = str(args.get(tkey) or "").strip()
         if want:
             hit, err = _lookup(want)
-            if err and not is_board and _msg_grounded_name(want, user_msg):
+            if err and not is_board and not is_user and _msg_grounded_name(
+                    want, user_msg, lex=_lexicon(name)):
                 # 只有"主人自己说的就是短的那一截"才校正（见函数头注的边界）：全名不在
                 # 他原话里 ⇒ `_ident_grounded` 判不成立 ⇒ 必弹卡，由他看着全名点。
+                # **账号族不校正**（`not is_user`）：标签族那条校正靠"弹卡由主人确认
+                # 全名"这条信任链，而账号这边动的是**第三方账号的登录能力**，
+                # `_find_named_user` 的近失候选只如实摆出来请主人点名，不替他认领目标。
                 fixed = _truncation_candidate(want, _ledger_names())
                 if fixed and not _lookup(fixed)[1]:
                     params = dict(plan_obj.get("params") or {})
@@ -4263,6 +4398,84 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
                                        index=tag_index)
             if err:
                 return name, err
+    return None
+
+
+# ── 冻结/解冻的**政策预检**（20260926，见下方 `_freeze_policy_refusal`）─────────
+# 超管角色名：与 Rust 侧 `src/authz.rs::ROLE_SUPERADMIN` 同名同义（跨语言契约）。
+# 这里先写字面量——它进 `principal.KNOWN_ROLES` 属于"超管本人能做什么"那一批，
+# 本函数只用到"目标不能是超管"这半边，与那一批解耦。
+_ROLE_SUPERADMIN = "superadmin"
+
+# 发起人角色 → 他**冻得动**的目标角色。表里没有的发起人角色 ⇒ 不拦（放行给后端）。
+# 这张表只写"确定知道"的部分：管理员冻不动管理员（更冻不动超管），超管谁都能冻
+# 但**超管不在目标角色里**——因此这一行也顺带表达了"超管谁都不行"。
+_FREEZE_ALLOWED_TARGETS = {
+    _ROLE_SUPERADMIN: {ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER},
+    ROLE_ADMIN: {ROLE_SECRETARY, ROLE_USER},
+}
+
+
+def _freeze_policy_refusal(plan_obj: dict, config,
+                           principal) -> tuple[str, str] | None:
+    """冻结/解冻的**政策预检**：返回 `(工具名, 拒绝说明)` 或 None（=放行给后端）。
+
+    只拦**我们确定知道**的两种情形（后端是政策的唯一实现，这一层不复制它）：
+
+      ① **目标是发起人自己**：uid 两边都确定、永远可判，而且**不看名字**——
+         主人说"把 X 冻结"而 X 就是他自己的账号时，卡都不该弹（他自己点确定也
+         办不成，弹一次卡只是让他白点）。判据是 id，不是名字：账号名可以被改，
+         id 不会。
+      ② `principal.role` 与目标行的 `role` **都已知**，且后者不在
+         `_FREEZE_ALLOWED_TARGETS[前者]` 里（管理员之间不可互冻）。
+
+    **其余一律放行**：名录读不出来、名字查不到、任一侧角色未知、不是这两个工具、
+    多 spec 混排、参数里还有 `$ref`。方向是硬要求——预检只允许比后端**更保守**，
+    绝不允许更宽松：宽松那侧的代价是一次注定失败的请求（后端用原话拒掉，主人
+    照旧看到真相），保守那侧的代价是能力**静默消失**（没有任何闸能发现"这件事
+    本来做得成却没做"）。所以宁放行勿多拦。
+
+    ⚠️ 后端那句原话才是政策的真相（`src/authz.rs` 的 check_freeze + 四条中文拒绝，
+    见 `docs/security-boundary.md`）：agent 侧**不复制**那套规则，只在能确定
+    "这事办不成"时提前把话说清楚，免得主人点完确定才被告知。
+    """
+    tools = plan_obj.get("tools") or []
+    if len(tools) != 1:
+        return None
+    name = _tool_name(tools[0])
+    if name not in _FREEZE_TOOLS:
+        return None
+    tkey, _pkey = _WRITE_NAME_FIELDS[name]
+    args, args_ok = _tool_args(tools[0])
+    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+        return None
+    want = str(args.get(tkey) or "").strip()
+    if not want:
+        return None
+    from tools.base import _find_named_user
+    row, err = _find_named_user(want, config)
+    if err or not isinstance(row, dict):
+        return None
+    op_role = getattr(principal, "known_role", None)
+    target_role = str(row.get("role") or "").strip() or None
+    try:
+        target_uid = int(row.get("id"))
+    except (TypeError, ValueError):
+        target_uid = None
+    op_uid = int(getattr(principal, "uid", 0) or 0)
+    if target_uid is not None and op_uid > 0 and target_uid == op_uid:
+        return name, (f"「{want}」就是主人**自己**的账号（id={target_uid}）："
+                      f"账号管理里没有人能冻自己的账号——连超管也不行。"
+                      f"本次未改动。"
+                      f"（如果他真想停用自己的登录，那是别的事：换密码、或退出登录。）")
+    if op_role in _FREEZE_ALLOWED_TARGETS and target_role in KNOWN_ROLES:
+        if target_role not in _FREEZE_ALLOWED_TARGETS[op_role]:
+            # 文案里不放角色英文码（那是给机器看的，主人读的是后半句那条规则）。
+            # 名字与 id 都印出来，是因为主人要能核对"拦的是不是那个人"。
+            return name, (f"「{want}」（账号 id={target_uid}）这一行的身份，"
+                          f"不让当前这个发起人去动：管理员之间不能互相冻结，"
+                          f"超级管理员的账号谁都冻不了。本次未改动——也不要换个说法"
+                          f"重试（再试多少次都是这个结果）。")
     return None
 
 
@@ -4609,8 +4822,22 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     # 弹窗两件在下面两处都要用（SSE 帧 + 落库的待办行），提成局部量只为**同源**：
     # 20260924 起卡片能在刷新后从库里重建，重建出来的问句/按钮必须与当轮弹的那张
     # 逐字一致，各算一遍就是两份实现。
+    # 账号名录同理（20260926）：冻结/解冻的问句要把**账号 id 与现状**写出来
+    # （「冻结账号「guest5」（账号 id=126，现在：正常）」）——主人得能核对"是不是
+    # 那个人"，而账号名是可以被改的、id 不会。同样**惰性**读：只有 plan 里真含这两个
+    # 工具时才多这一次请求，别的写弹窗一次都不多花。读不到 → 只印名字，
+    # **绝不因此不弹窗**（弹窗是这类写操作唯一的人类兜底，少了它比少一句现状严重得多）。
+    users = None
+    if any(str(s.get("tool") or "") in _FREEZE_TOOLS for s in picks):
+        try:
+            from tools.base import _user_directory
+            users = _user_directory(config)
+            if not isinstance(users, dict):
+                users = None   # 读失败时它是 ToolResult（含原因文本），这里只当"没有"
+        except Exception:
+            users = None
     question = A.render_confirm_question(picks, tag_index, cat_index, board_index,
-                                         note_index)
+                                         note_index, users)
     opts = [{"label": "确定", "value": "yes", "kind": "primary"},
             {"label": "取消", "value": "no", "kind": "default"}]
     expires_at = confirm.token_expiry(token)
@@ -4639,7 +4866,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             "skill": _plan_skill(state),
             "specs": picks,
             "target": A.render_action_lines(picks, tag_index, cat_index, board_index,
-                                            note_index),
+                                            note_index, users),
             "requested_by": "user",
             "source_event": "confirm_popup",
             # 卡片本体一并落库（20260924）：此前卡片只活在当轮的 SSE 帧里——刷新、
@@ -4657,7 +4884,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             "expires_at": expires_at,
         },
         "confirm_text": A.render_confirm_text(picks, tag_index, cat_index, board_index,
-                                               note_index),
+                                               note_index, users),
     }
 
 
@@ -5099,6 +5326,9 @@ _EXECUTOR_PROMPT = """\
      状态）以三者为准，三者之外的执行声称（"我记得好像显示过"）不得出口。
 5. 工具返回以 __ERROR__ 开头 → 如实转述失败原因，不把失败说成成功、不声称
    已完成。执行计划 NOTE 要求如实告知的（页面不存在/已下线）照做。
+   帧里带 `[policy_refused]`（后端规则拒绝，如"不能冻自己/不能动超级管理员/
+   管理员之间不能互冻"）时：**逐字转述后台给的那句话**，不要换个说法、不要
+   暗示"再试一次就行"、更不要说成办好了。
 6. 回复正文绝不输出 NAVIGATE:/AUTO_NAVIGATE:/EFFECT:/DARKMODE: 等命令前缀文本，
    也不要用伪工具调用格式表演执行过程。执行计划里的 TODO/过程注记是系统内部
    规划信息，不要复述。
@@ -5351,6 +5581,12 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             if A.target_error_reason(err_text):
                 logger.info("[gate] 写操作目标无据却声称已完成 → fallback(unknown_target)")
                 return _fallback_result("err_frame_claim_target", _FALLBACK_UNKNOWN_TARGET,
+                                        plan, len(frames), clause5a)
+            if A.policy_error_reason(err_text):
+                # 后台规则拒绝（20260926）：与上面两条同为"还没动手"，但指引不同——
+                # 政策拒绝**不许**说"再试一次"（重试一万次也一样），要换目标或换人。
+                logger.info("[gate] 写操作被后台规则拒绝却声称已完成 → fallback(policy)")
+                return _fallback_result("err_frame_claim_policy", _FALLBACK_POLICY,
                                         plan, len(frames), clause5a)
             logger.info("[gate] 工具帧 __ERROR__ 但回复含完成式声称 → fallback")
             return _fallback_result("err_frame_claim", _FALLBACK_ERR_CLAIM, plan, len(frames),
