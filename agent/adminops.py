@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import datetime
 import re
 
 # ── 标签配色（与前端 NEW_TAG_COLORS 同源同序；顺序变了颜色就全变）──────────
@@ -802,6 +803,119 @@ def render_board_deleted(row) -> str:
             f"（后台已复核：留言列表里已经没有它）")
 
 
+# ── 后台首页待办 / 日程（20260926）──────────────────────────────────────
+# 这张列表的存储口径（线上 `{text, done, date}`、`date` = `YYYY-MM-DD` 或 null）
+# 见 src/routes/todos.rs 与 scripts/migration/dashboard_todo_20260924.sql：**前端
+# 拥有那份列表的顺序与身份**（拖拽换位、空行回收、行文本就地编辑），服务端只存
+# "此刻的这份列表"。agent 手里没有那份列表，所以它只有**追加一条**这一条通道
+# （POST /api/protected/todos/item）——整份覆盖会抹掉主人刚做的改动。
+#
+# 日期为什么在这一层翻：主人嘴里说的时间词（"明天""后天"）是最常见的形态，而
+# 日期一旦错一天，这条日程会静静地躺在错误的格子里（后台首页的日历就是按它画点
+# 的）。翻不出来就**返回 None 让调用方零写 + 追问**，绝不挑一个默认日期顶上。
+_DUE_REL_DAYS = {"今天": 0, "今日": 0, "明天": 1, "明日": 1, "后天": 2,
+                 "後天": 2, "大后天": 3, "大後天": 3}
+# 带年份：分隔符宽容（`2026-09-27` / `2026/9/27` / `2026年9月27日`）
+_DUE_FULL_RE = re.compile(r"^(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?$")
+# 不带年份：`9月27日` / `9-27`
+_DUE_MONTH_DAY_RE = re.compile(r"^(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?$")
+
+
+def normalize_due_date(value, *, today=None) -> str | None:
+    """排期日 → `YYYY-MM-DD`；认不出来 → None（**不猜**，调用方零写 + 追问）。
+
+    认这几种写法（都是主人嘴里或 planner 手里真会出现的形态）：
+      · `YYYY-MM-DD`（标准口径——planner 手里有 current_time，能算就该直接给这个）
+      · `YYYY/M/D`、`YYYY年M月D日`
+      · 今天 / 今日 / 明天 / 明日 / 后天 / 大后天
+      · `M月D日` / `M-D`：**按当年**解释。这是条确定的规则、不是猜——无年份时
+        分辨不出"去年的 9 月 27"和"今年的 9 月 27"，跨年必须写年份；真解释错了
+        还有一道兜底：确认框那一行会把翻出来的日子写出来（「排期 9月27日」），
+        主人点确定之前就看得到。
+
+    `today` 只为测试注入（默认取本地今天，与全站 +08:00 钟面约定一致）。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    if s in _DUE_REL_DAYS:
+        base = today or datetime.date.today()
+        return (base + datetime.timedelta(days=_DUE_REL_DAYS[s])).isoformat()
+    m = _DUE_FULL_RE.match(s)
+    if m:
+        try:
+            return datetime.date(int(m.group(1)), int(m.group(2)),
+                                 int(m.group(3))).isoformat()
+        except ValueError:
+            return None                      # 2026-02-30 这类：存在不了一天
+    m = _DUE_MONTH_DAY_RE.match(s)
+    if m:
+        base = today or datetime.date.today()
+        try:
+            return datetime.date(base.year, int(m.group(1)), int(m.group(2))).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+def due_date_cn(iso) -> str:
+    """`YYYY-MM-DD` → 「9月27日」；认不出的原样带引号吐回去（不假装它是已知日期）。"""
+    s = str(iso or "").strip()
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", s)
+    if not m:
+        return f"「{s}」" if s else "（没写日期）"
+    return f"{int(m.group(2))}月{int(m.group(3))}日"
+
+
+def _due_hint(iso: str, today) -> str:
+    """排期相对今天的位置 → `（今天）` / `（已过期）` / 空串。
+
+    与 `due_date_cn` 分开：那个只管"怎么念这个日子"，这个管"它相对今天是什么"。
+    两个都不是猜——`iso` 是库里读出来的、`today` 是钟面，等宽 ISO 串直接比大小
+    （`YYYY-MM-DD` 字典序 = 时间序，这也是 `normalize_due_date` 归一成这个形状的
+    理由之一）。判不出来（形状不对）就**不标**，不硬套一个相对说法。
+    """
+    if len(iso) != 10 or iso[4] != "-" or iso[7] != "-":
+        return ""
+    now = today or datetime.date.today()
+    if iso == now.isoformat():
+        return "（今天）"
+    return "（已过期）" if iso < now.isoformat() else ""
+
+
+def render_todo_list(rows, *, today=None) -> str:
+    """后台待办清单 → narrator 读的一行一条。
+
+    **一行一条 + 字段用 ` | ` 分开**（同 tag 列表族的帧瘦身口径）：narrator 要能
+    一眼看出"哪条、哪天、完成没有"，而把这三样揉成一句话会让它开始自己拆句子
+    （拆错就把"已完成"读成"未完成"）。序号是**列表里的位次**——它只是给人读的，
+    不是 id（这张列表没有稳定的行 id，见 src/routes/todos.rs 头注；任何按序号
+    指认某一条的后续动作都做不到，所以 narrator 也**不该**用它指认）。
+    """
+    rows = [r for r in (rows or []) if isinstance(r, dict)]
+    if not rows:
+        return "后台首页的待办列表是空的（一条都没有）。"
+    undone = sum(1 for r in rows if not r.get("done"))
+    lines = [f"后台首页待办共 {len(rows)} 条（未完成 {undone} 条）："]
+    for i, r in enumerate(rows, 1):
+        iso = str(r.get("date") or "").strip()
+        when = f"排期 {due_date_cn(iso)}{_due_hint(iso, today)}" if iso else "未排期"
+        lines.append(f"{i}. {clip(str(r.get('text') or ''), 60)} | {when} | "
+                     f"{'已完成' if r.get('done') else '未完成'}")
+    return "\n".join(lines)
+
+
+def render_todo_added(text: str, date: str | None = None) -> str:
+    """追加成功的回执行。**说清加的是什么、排在哪天**，并点明它在哪（后台首页的
+    待办卡）——这条是主人自己那份列表，不是对外可见的东西，回执行不必吓唬他，
+    但必须让他知道去哪儿看。"""
+    when = f"排期 {due_date_cn(date)}" if date else "未排期"
+    return (f"已在后台首页的待办里加了一条「{clip(text, 60)}」（{when}）"
+            f"（后台已复核：列表里读到了这一条）")
+
+
 # ── 写操作确认框（20260921）：问句与回复文本都是**确定性中文**────────────
 # 与 agent/reports.py 同一条纪律：能算的都不交给 LLM。这两段文本会直接进
 # ①确认框的问题行 ②那一轮的对话气泡，都是用户一眼看到的东西——让模型写它，
@@ -1063,6 +1177,17 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None) -> 
         else:
             head = "把站内信标记为已读（没说清是哪几封）"
         return f"{head}（不可撤销：标过的就不再是未读）"
+    if tool == "create_dashboard_todo":
+        # 待办 / 日程（20260926）：这一族的**目标不是站内某个已有的名字**（不像标签
+        # /分类/公告/留言那样要去字典里核对），而是主人心里那件事本身——所以问句里
+        # 逐字念出正文与排期日，主人只能靠这两样核对"是不是我要记的那条"。
+        # 排期日按 `due_date_cn` 翻成人话（不写 `2026-09-27`：主人说的是"明天"，
+        # 卡上要让他能验算这个日子对不对——翻错了正是在这一步被他看见）。
+        text = str(a.get("text") or "").strip()
+        raw_date = a.get("date")
+        when = due_date_cn(raw_date) if str(raw_date or "").strip() else "未排期"
+        head = f"在后台首页的待办里加一条「{clip(text, 60) or '（没写内容）'}」，排期 {when}"
+        return head + "（那是你自己那份列表，加完随时能改能删）"
     return f"执行 {tool}"
 
 

@@ -207,6 +207,16 @@ TOOL_SCOPE: dict[str, str] = {
     # 那条留言，除非他去翻）。驳回是可改判的，删除不是。
     "audit_board_comment": SCOPE_WRITE_CONSOLE,
     "delete_board_comment": SCOPE_WRITE_CONSOLE,
+    # 第七轮（20260926）：后台首页的待办 / 日程。**读那条**取 admin.console——
+    # 它读的是 `/api/protected/todos`（Rust `auth_guard` 之后，只有管理员拿得到），
+    # 与上面四个报表工具同一道门；**追加那条**取 write.console，因为 `/api/protected/
+    # todos/item` 同样在守卫域内。
+    #   为什么不取 read.own / write.own：那张列表**按用户**存（uid 过滤），看着像
+    #   "自己的数据"，但接口本身挂在 admin 守卫后面——普通登录用户在前端也打不开
+    #   后台首页。取 own 会让授权层对普通用户说"允许"，而 Rust 那道门随后 403：
+    #   一道会说谎的授权层比一道更严的授权层糟糕得多（同 `list_admin_notes` 的取舍）。
+    "list_dashboard_todos": SCOPE_ADMIN_CONSOLE,
+    "create_dashboard_todo": SCOPE_WRITE_CONSOLE,
 }
 
 
@@ -244,6 +254,13 @@ _ALWAYS_CONFIRM_TOOLS = frozenset({
     # 表**：它可改判（驳回的能再放行），且改的只是可见性——与 `set_article_status`
     # 同类，走既有的"命令式措辞才免问"那条路（判不出来就弹窗，fail-closed 方向不变）。
     "delete_board_comment",
+    # 20260926 补**加待办/日程**：它写的是主人**自己**那份列表（不外显、可删可改），
+    # 单看后果够不上前两条那种"收不回"。进这张表的理由是**判据的形状**：这是唯一
+    # 一件"目标由主人随口描述、没有站内既有名字可核对"的写入（"记一条：周五交房租"）
+    # ——命令式措辞与内容描述在这句话里长得一模一样，`_console_command` 判不出"他
+    # 到底是在让我加，还是在跟我聊这件事"。而漏判的代价不是"多做一件小事"，是
+    # **凭空往他的列表里塞一条他没让记的东西**。判不出来就别判：结构上每次都弹卡。
+    "create_dashboard_todo",
 })
 
 # 每个需确认的 scope 配一张**确认语表**：用户的**本轮消息**命中才算确认。
@@ -770,6 +787,11 @@ _CONSENT_WHY_TOOL = {
         "会删掉**访客写下的一条留言**（删了没有回收站）",
         "请把**那条留言的 #id、作者与原文**一字不改地写出来，"
         "并请他明确说一句命令——不要替他改写留言内容"),
+    "create_dashboard_todo": (
+        "会往主人**后台首页的待办列表**里加一条（那是他自己那份列表，加完可改可删）",
+        "请把**这条待办的正文与排期日**一字不改地念给主人看（排期按「X月X日」说，"
+        "他没说日期就说「未排期」），然后等他点确认——"
+        "**这一轮到这里就够了：不要再改写正文，也不要换个说法重试**"),
 }
 
 

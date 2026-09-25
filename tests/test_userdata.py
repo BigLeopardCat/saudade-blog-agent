@@ -812,6 +812,7 @@ finally:
 print("\n⑤ 写技能展开：范围缺失就零工具（不是零参数硬跑）")
 
 from agent.skills import (SKILL_MAP, _OWN_WRITE_SKILLS,  # noqa: E402
+                          _FREE_TEXT_WRITE_SKILLS,
                           _WRITE_NAME_TARGET_SKILLS, WRITE_SKILL_NAMES)
 from agent.skills import instantiate_plan  # noqa: E402
 
@@ -897,10 +898,12 @@ check("own 写技能都落在 _OWN_WRITE_SKILLS 里（不是靠减法落到名�
       str(sorted(_OWN_WRITE_SKILLS)))
 check("own 写技能与名字通道不重叠（两套展开器的判据互斥）",
       not (_OWN_WRITE_SKILLS & _WRITE_NAME_TARGET_SKILLS))
-check("注册表里每个写技能都落进三者之一（名字通道 / own 通道 / 文章两件）",
+check("注册表里每个写技能都落进四者之一（名字通道 / own 通道 / 自由文本 / 文章两件）",
       WRITE_SKILL_NAMES <= (_WRITE_NAME_TARGET_SKILLS | _OWN_WRITE_SKILLS
+                            | _FREE_TEXT_WRITE_SKILLS
                             | {"article_status", "article_tags"}),
       str(sorted(WRITE_SKILL_NAMES - (_WRITE_NAME_TARGET_SKILLS | _OWN_WRITE_SKILLS
+                                      | _FREE_TEXT_WRITE_SKILLS
                                       | {"article_status", "article_tags"}))))
 for n in sorted(_OWN_WRITE_SKILLS):
     sk = SKILL_MAP.get(n)
