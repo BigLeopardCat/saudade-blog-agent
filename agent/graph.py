@@ -91,8 +91,9 @@ from agent.entities import receipt_digest
 from agent.principal import UNKNOWN as UNKNOWN_PRINCIPAL
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
-from agent.skills import (FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
-                          _WRITE_NAME_TARGET_SKILLS,
+from agent.skills import (DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
+                          FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
+                          _WRITE_NAME_TARGET_SKILLS, arg_type_short,
                           build_planner_context, callable_query_tools,
                           instantiate_plan, visible_skills)
 from utils import trace as trace_mod
@@ -634,24 +635,9 @@ _TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 doc
 # 参数类型 → 菜单里的短标记（20260925）。**纯展示**：只为让 planner 看得见"哪些必填、
 # 什么类型、默认值是多少"。将来若做执行前校验，依据仍是同一个 args_schema，
 # **不许读这里渲染出来的字符串**——判据与展示必须同源不同形。
-_ARG_TYPE_SHORT = {"string": "str", "integer": "int", "number": "num",
-                   "boolean": "bool", "array": "list", "object": "dict"}
-
-
-def _menu_arg_type(spec: object) -> str:
-    """JSON-Schema 的属性片段 → 短类型名；可空（`anyOf` 里带 `null`）取非 null 那一支。"""
-    if not isinstance(spec, dict):
-        return "?"
-    for key in ("anyOf", "oneOf"):
-        cand = spec.get(key)
-        if isinstance(cand, list):
-            for one in cand:
-                if isinstance(one, dict) and one.get("type") not in (None, "null"):
-                    return _ARG_TYPE_SHORT.get(str(one["type"]), str(one["type"]))
-    t = spec.get("type")
-    if isinstance(t, list):
-        t = next((x for x in t if x != "null"), None)
-    return _ARG_TYPE_SHORT.get(str(t), str(t)) if isinstance(t, str) else "?"
+# 类型写法映射（`_ARG_TYPE_SHORT`）与它所服务的 `arg_type_short` 20260925 搬去了
+# `agent/skills.py`：技能菜单（`render_skill_params`）与工具菜单（下面这个函数）
+# 必须同一套写法，两处各留一份就会漂移成 "str" / "string" 两种叫法。这里只导入。
 
 
 def _menu_arg_signature(tool: object) -> str:
@@ -681,7 +667,7 @@ def _menu_arg_signature(tool: object) -> str:
     required = set(js.get("required") or ()) if known else set()
     parts = []
     for pname, spec in props.items():
-        seg = f"{pname}:{_menu_arg_type(spec)}"
+        seg = f"{pname}:{arg_type_short(spec)}"
         if known:
             if pname in required:
                 seg += "*"
@@ -740,13 +726,24 @@ def _drop_correction(dropped: list[str], role: str | None) -> str:
     lines = ["**你上一版决策点名的工具一个都没有执行**（不在你这个身份可点名的调用"
              "清单里，本轮零工具、零结果）。逐个说明："]
     for raw_name in dropped:
-        name = str(raw_name).split("（", 1)[0].strip()   # 去掉"（args 非对象）"后缀
+        name = str(raw_name).split("（", 1)[0].strip()   # 去掉带后缀时候的那个"（"
         suffix = str(raw_name)[len(name):]
         if suffix:
-            # 带后缀 = 工具没问题、是**这条例目**不合法（args 不是对象）——不能
-            # 说成"你够不到这个工具"（那是假的，会把 planner 往错方向推）
-            lines.append(f"- {name}：工具本身你可以调用，但这条例目不合法{suffix}"
-                         f"——args 要写成 JSON 对象（键值对），别写成字符串")
+            # 带后缀 = 工具没问题、是**这条例目**不合法——不能说成"你够不到这个
+            # 工具"（那是假的，会把 planner 往错方向推）。两种后缀对应**两种不同的
+            # 改法**，话术必须分开（否则 planner 会照着"改成 JSON 对象"去修一个
+            # 其实是"参数不合格"的条目，白试一轮）。
+            if suffix.startswith(DROP_SUFFIX_BAD_ARGS):
+                detail = suffix[len(DROP_SUFFIX_BAD_ARGS):].rstrip("）")
+                lines.append(f"- {name}：工具本身你可以调用，但这条例目的参数不合格"
+                             f"（{detail}）——按提示把参数补齐/改成合格的值"
+                             f"（缺必填就从上一步已执行的工具结果里取，"
+                             f"或先调一次取值的只读工具）")
+            elif suffix.startswith(DROP_SUFFIX_NOT_OBJECT):
+                lines.append(f"- {name}：工具本身你可以调用，但这条例目不合法{suffix}"
+                             f"——args 要写成 JSON 对象（键值对），别写成字符串")
+            else:
+                lines.append(f"- {name}：工具本身你可以调用，但这条例目不合法{suffix}")
             continue
         if name not in _TOOL_MAP:
             lines.append(f"- {name}：站内**没有**这个工具（工具名必须来自上方清单，不许臆造）")
@@ -2432,6 +2429,33 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                            "、".join(plan_obj["dropped"]), rounds + 1, MAX_PLAN_ROUNDS)
             record("planner", "rejected_call", dropped=plan_obj["dropped"],
                    skill=plan_obj["skill"], round=rounds)
+
+        # 没人读的参数名（20260925）：planner 在 PARAMS 里写了系统不认识的键——
+        # 此前**静默忽略**（"我以为填了、其实没人读"，与剔空白名单同族）。工具照常
+        # 执行、不做任何阻断，只把"这个键没有消费方"留进日志与 trace——它是注册表
+        # 与提示词漂移的探针（planner 写得出这个键，说明它认为自己该填）。
+        if plan_obj.get("param_unknown"):
+            logger.warning("[planner] PARAMS 里有没人读的参数（已忽略，不影响本轮执行）："
+                           "%s（skill=%s，round %d/%d）——若属技能该收的参数，"
+                           "检查 skills.py 该技能的 inputs/plan 模板",
+                           "、".join(plan_obj["param_unknown"]),
+                           plan_obj["skill"], rounds + 1, MAX_PLAN_ROUNDS)
+            record("planner", "param_unknown", names=plan_obj["param_unknown"],
+                   skill=plan_obj["skill"], round=rounds)
+
+        # 参数不合格 ⇒ 本轮零工具（20260925，见 skills.check_skill_params）：注记已经
+        # 写进 plan 的 NOTE 行交回 planner，这里再留一条日志/trace——否则"某一轮什么
+        # 都没执行"在事后只能从注记文本里看出来，而 trace 的 tools 列表是空的、
+        # 与"planner 主动决定不调工具"长得一模一样。
+        if plan_obj.get("param_problem"):
+            pp = plan_obj["param_problem"]
+            logger.warning("[planner] PARAMS 不合格 → 零工具（skill=%s，round %d/%d）："
+                           "缺=%s 坏=%s——注记已交回 planner 重决策",
+                           plan_obj["skill"], rounds + 1, MAX_PLAN_ROUNDS,
+                           "、".join(pp.get("missing") or []) or "无",
+                           "、".join(pp.get("bad") or []) or "无")
+            record("planner", "param_rejected", skill=plan_obj["skill"], round=rounds,
+                   missing=pp.get("missing") or [], bad=pp.get("bad") or [])
 
         # 授权式审查（G1，20260923）：台账里唯一一条待审、而上一轮那句提议的结论
         # **读不出来**时，系统仍把目标定死（见 `_auth_review_path` 的 forced 段 +

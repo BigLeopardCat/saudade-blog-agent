@@ -17,7 +17,8 @@ planner 选 navigate 技能时能看到映射表，"去物联网平台"→ /devi
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -70,6 +71,8 @@ from agent.principal import ROLE_ADMIN  # 技能可见性按角色过滤（20260
 # 无循环导入。
 import agent.authz as authz
 import agent.adminops as A  # 写操作的纯函数层（归一/渲染，见 instantiate_plan 写分支）
+
+logger = logging.getLogger(__name__)
 
 
 # 管理助手写技能（20260921 第二轮，第四轮补齐标签改删与分类三件）。刻意**不进**
@@ -277,6 +280,13 @@ class Skill:
     description: str                   # 触发条件（planner 选技能用）
     inputs: dict[str, str]             # 参数名 → 提取要求（planner 填 PARAMS 用）
     plan: list[tuple[str, dict]] = field(default_factory=list)  # 固定工具序列：(工具名, 参数模板)
+    # 参数必填性（20260925，见"技能参数 schema"节）。**默认从工具 args_schema 派生**，
+    # 这两个元组只用来盖掉派生结果——技能参数与工具参数不是同一层，形状必填 ≠ 策略必填。
+    # 例：`device_display.text` 在 pydantic 里必填，但技能在代码侧被空参调用（`decisions.py`
+    # 的 `instantiate_plan("device_display", {})`，文案由执行层创作）⇒ optional_params 里点名。
+    # **只写有实证的例外，不写"我觉得该必填"的名字**——多一条就多一个 planner 被白白拦住的路。
+    required_params: tuple[str, ...] = ()
+    optional_params: tuple[str, ...] = ()
     complete_when: str = ""            # 完成判定（注入 planner 提示词，辅助收尾决策）
     reply_contract: str = ""           # 回复契约（model 遵守）
     chat: bool = False                 # 闲聊（chat 轮零工具叙述，gate 声称检查按窄作用域）
@@ -302,6 +312,12 @@ SKILLS: list[Skill] = [
             "target": "页面别名（从导航映射表取值）：首页/留言板/说说/时间轴/关于我/登录/后台/物联网平台等",
             "mode": "direct（用户明确要求跳转）或 suggest（主动推荐，需用户确认）",
         },
+        # target 必填（20260925）：target 由本技能自己的代码消费（查 NAV_MAP），
+        # 模板里的 `$path`/`$confirm` 是死代码 ⇒ 派生出不来，只能显式声明。
+        # 漏 target 的后果此前是**一句面向用户的假话**：走到"无法识别导航目标「」"
+        # 那一支，如实告知访客「站内没有该页面」——而真相是参数没给。现在改成
+        # 零工具 + 「必填参数没给」，让 planner 下一轮把 target 补上或转 chat。
+        required_params=("target",),
         plan=[("navigate_to", {"path": "$path", "confirm": "$confirm"})],
         complete_when="navigate_to 返回 NAVIGATE:/AUTO_NAVIGATE: 帧",
         reply_contract=(
@@ -322,6 +338,12 @@ SKILLS: list[Skill] = [
             "effect": "sakura（樱花）/ rain（大雨）/ snow（雪花）",
             "action": "on（开启）/ off（关闭）",
         },
+        # action 必填（20260925）：工具签名里它有默认值 `"on"`，但**这个默认值对技能
+        # 语义不安全**——on/off 是主人意图本身，不是环境默认。planner 漏填 action 时若
+        # 让工具默认值接管，用户说"关掉樱花"会被**静默打开**（改前是 `action: null`
+        # 撞 pydantic 报错 → 下一轮改对；那虽然白烧一轮，但不会做错事）。所以这里把它
+        # 钉成必填：缺了 ⇒ 零工具 + 一句"必填参数没给"，planner 同轮改对，既不猜也不烧轮。
+        required_params=("action",),
         plan=[("toggle_effect", {"effect": "$effect", "action": "$action"})],
         complete_when="toggle_effect 返回 EFFECT: 帧",
         reply_contract=(
@@ -346,6 +368,12 @@ SKILLS: list[Skill] = [
         capability="让接入的 ESP32 OLED 屏幕显示你指定的文字",
         description="用户要求在 IoT 设备（ESP32 OLED 屏幕）上显示某段文字时使用。",
         inputs={"text": "要显示的文字内容（planner 无需填写，由执行模型结合对话创作）"},
+        # text 可选（20260925）：pydantic 里它是必填（工具签名无默认值），但**技能策略**
+        # 是"planner 不填、由执行层创作"——`decisions.py` 有一处直接
+        # `instantiate_plan("device_display", {})`，`graph.py` 在执行时补文案。
+        # 不声明这条例外的后果：planner 按提示词不填 text ⇒ 被判"必填没给"⇒ 零工具，
+        # 屏幕这条能力**从 planner 通道整体不可达**。
+        optional_params=("text",),
         plan=[("device_oled_display", {"text": "$text"})],
         complete_when="device_oled_display 返回成功",
         reply_contract=(
@@ -1351,8 +1379,19 @@ def instantiate_plan(skill_name: str, params: dict,
     skill = SKILL_MAP.get(skill_name) or SKILL_MAP["chat"]
     tools: list[str] = []
     dropped: list[str] = []  # 白名单剔除的 planner 点名项（planner_node 记账，见下）
+    param_unknown: list[str] = []  # PARAMS 里没人读的参数名（只读分支填，见通用分支）
     note = ""
     if skill.name == "navigate":
+        # target 的事前校验（20260925）：**必须排在本技能自己的映射表判据之前**。
+        # 现状是 target 为空时一路落到最后的"无法识别导航目标「」"——那会给访客一句
+        # **假话**（"站内没有该页面"），而真相是参数没给（`required_params=("target",)`
+        # 就是为此声明的）。`path`/`confirm` 不在 `inputs` 里 ⇒ 不在参数表里，planner
+        # 真填了会被 `unknown` 记账（它们由本分支从 NAV_MAP 算出，是模板里的死占位符）。
+        specs = skill_param_specs(skill)
+        chk = check_skill_params(skill, params, specs)
+        param_unknown = chk["unknown"]
+        if chk["missing"] or chk["bad"]:
+            return _param_problem_plan(skill, chk, specs)
         target = (params.get("target") or "").strip()
         mapped = NAV_MAP.get(target)
         if target in NAV_MAP and mapped is None:
@@ -1445,11 +1484,25 @@ def instantiate_plan(skill_name: str, params: dict,
                 if cname not in allowed:
                     dropped.append(cname)
                 elif not isinstance(c.get("args"), dict):
-                    dropped.append(f"{cname}（args 非对象）")
+                    dropped.append(f"{cname}{DROP_SUFFIX_NOT_OBJECT}")
                 else:
-                    spec = f"{cname}({json.dumps(c['args'], ensure_ascii=False)})"
-                    if spec not in picked:
-                        picked.append(spec)
+                    # 参数**事前校验**（20260925）：同一条通道的"点名了但参数不对"
+                    # 此前要等工具侧报错才发现。缺必填/值归不了 ⇒ 这条例目整体剔除
+                    # （拼进 dropped，后缀写明原因——`_drop_correction` 认后缀选话术，
+                    # 没有后缀它会把参数问题讲成"你够不到这个工具"）；多写的参数名
+                    # **只剔掉那个参数**，调用照常（pydantic 本来就忽略多余字段，
+                    # 这里只是让"已被忽略"留痕，不再静默）。
+                    vchk = check_call_args(cname, c["args"])
+                    if vchk["bad"]:
+                        dropped.append(f"{cname}{DROP_SUFFIX_BAD_ARGS}"
+                                       + "、".join(vchk["bad"]) + "）")
+                    else:
+                        spec = f"{cname}({json.dumps(vchk['args'], ensure_ascii=False)})"
+                        if spec not in picked:
+                            picked.append(spec)
+                        if vchk["unknown"]:
+                            logger.warning("[skills] %s 的调用带了没人读的参数 %s（已忽略）",
+                                           cname, "、".join(vchk["unknown"]))
         for t in picked:
             if "(" in t:
                 tools.append(t)
@@ -1484,7 +1537,7 @@ def instantiate_plan(skill_name: str, params: dict,
             # instantiate_plan 里接分支"——旧写法的减法是**静默**的（下面那段
             # 会把它当 article_status 处理，产出一个看不懂的注记或一个凭空的
             # article_id 校验）。响亮地说出来，并保持零工具零写。
-            return {"skill": skill.name, "tools": [], "dropped": [],
+            return {"skill": skill.name, "tools": [], "dropped": [], "param_unknown": [],
                     "note": (f"{skill.name}：新加的写技能没有接入参数展开（系统内部"
                              "配置缺项）：不调用任何工具，如实告知这次没能执行"),
                     "reply": skill.reply_contract, "chat": False}
@@ -1546,16 +1599,18 @@ def instantiate_plan(skill_name: str, params: dict,
         if not note:
             note = f"{skill.name}：参数齐备"
     else:
+        # 通用模板分支：参数**事前校验**（20260925）。此前这一支拿到 PARAMS 就原样展开，
+        # 缺参/类型不对要等工具侧 pydantic 报错才发现——那已经是"下一轮"了，白烧一轮
+        # 规划，而 planner 从错误帧里也读不出"本技能收哪些参数"。现在缺/坏 ⇒ 零工具 +
+        # 一句机器可保证的事实（`param_problem_note`），planner 同轮内就能改对。
+        # 写技能各自有更专门的守卫、navigate/content_query 各有自己的判据，都**不**走这里。
+        specs = skill_param_specs(skill)
+        chk = check_skill_params(skill, params, specs)
+        param_unknown = chk["unknown"]
+        if chk["missing"] or chk["bad"]:
+            return _param_problem_plan(skill, chk, specs)
         for tool_name, tmpl in skill.plan:
-            args = {}
-            for k, v in tmpl.items():
-                # `$param` = 取 PARAMS 里的同名参数（技能模板自有语法）；但**参数
-                # 引用**（$tool[0].field，agent/refs.py）是另一层语义，必须原样透传
-                # 给 execute 解析——否则这里会去 PARAMS 里查 "tool[0].field" 拿到
-                # None，把引用悄悄变成空参数（20260919 两套 $ 语法共存的口子）。
-                args[k] = (params.get(v[1:])
-                           if isinstance(v, str) and v.startswith("$") and not is_ref(v)
-                           else v)
+            args = expand_template_args(tmpl, params, specs)
             tools.append(f"{tool_name}({json.dumps(args, ensure_ascii=False)})")
     return {
         "skill": skill.name,
@@ -1566,7 +1621,381 @@ def instantiate_plan(skill_name: str, params: dict,
         # 白名单剔除项（只读、不进 plan 文本）：planner_node 据此打 WARNING +
         # trace 事件，让"点名的工具没执行"在日志里可见（20260913 B 项）
         "dropped": dropped,
+        # 没人读的参数名（20260925，只读）：planner 以为填了、实际没人消费——与
+        # "点名却未执行"同族，同样只记账不阻断（工具照常跑）。见 planner_node 的
+        # `planner.param_unknown` 事件。
+        "param_unknown": param_unknown,
     }
+
+
+# 剔空纠偏的"这条例目为什么不合法"后缀（`graph._drop_correction` 认它选话术）。
+# 带后缀 = 工具本身可达、是**这条**不可用——不能笼统说成"你够不到这个工具"
+# （那是假的，会把 planner 往错方向推）。两个后缀各自对应一种改法。
+DROP_SUFFIX_NOT_OBJECT = "（args 非对象）"
+DROP_SUFFIX_BAD_ARGS = "（参数不合格："
+
+
+# ---------------------------------------------------------------------------
+# 技能参数 schema（参数通道 schema 化的校验侧，20260925）
+# ---------------------------------------------------------------------------
+# 为什么要有这一段：planner 填 PARAMS 时，菜单里只有**中文散文**（`inputs`）——
+# 必填/类型/默认值一概看不见，它只能靠常识猜；而 `instantiate_plan` 拿到 PARAMS 后
+# **什么都不查**。后果两类，都是实测过的形态：
+#   · 必填漏了 → 模板展开出 `{"effect": null}` 送进工具 → pydantic 报错 →
+#     `__ERROR__` 帧 → 白烧一轮规划（而"缺哪个参数"这一轮就该说清楚）；
+#   · 参数名写错/臆造 → **静默忽略**（planner 以为传了、其实没人读）——与
+#     "剔空白名单静默"同族，20260913 那次事故的教训在这里同样成立。
+# 生成侧那半（只读工具菜单的 `名字:类型*`）20260925 已由 `graph._menu_arg_signature`
+# 补上；这里补**技能这半**，并且**菜单与校验读同一份规格**（判据与展示同源不同形）。
+#
+# 三条来源约定（都是"不造第二份真相"）：
+#   · **类型/默认值从工具自己的 `args_schema` 派生**：技能模板里的 `$占位` 与工具
+#     参数一对一，因此不需要另维护一张手写参数表（手写名单是漏项来源——20260913
+#     工具枚举、20260925 菜单签名，两次教训一致）；
+#   · **推不出映射的参数**（navigate 的 target/mode、content_query 的 tools/calls、
+#     read_article 的 article_id：由技能自己的代码消费）→ 类型 `any`，**不校验类型**，
+#     只保留散文说明；
+#   · **枚举没有来源**：工具的 JSON Schema 里没有 `enum`（闭集只活在说明文字与工具
+#     体内）⇒ 本层不造枚举表。要收紧闭集，先给工具加 `Literal[...]` 注解。
+_NO_DEFAULT = object()   # 哨兵：`default=None` 在 schema 里是有意义的（可空参数），不能拿 None 当"没默认值"
+
+
+@dataclass(frozen=True)
+class ParamSpec:
+    """一个技能参数的规格（**菜单渲染与事前校验共用这一份**）。"""
+    type: str = "any"          # str/int/bool/list/dict/any（any = 推不出映射，不校验类型）
+    required: bool = False
+    default: Any = _NO_DEFAULT
+    desc: str = ""             # 中文说明（就是 `inputs` 里的那句散文）
+    from_tool: str = ""        # 派生自哪个工具的哪个参数（空 = 推不出映射）
+
+
+# JSON-Schema 属性片段 → 短类型名。**纯展示与校验共用的写法映射**，不是判据本身。
+# （20260925 从 `graph._menu_arg_type` 搬来这里：技能菜单与工具菜单必须同一套写法，
+#   两处各写一份就会漂移成"str"和"string"两种叫法。）
+TOOL_ARG_TYPE_SHORT = {"string": "str", "integer": "int", "number": "num",
+                       "boolean": "bool", "array": "list", "object": "dict"}
+
+
+def arg_type_short(spec: object) -> str:
+    """JSON-Schema 的属性片段 → 短类型名；可空（`anyOf` 里带 `null`）取非 null 那一支。"""
+    if not isinstance(spec, dict):
+        return "?"
+    for key in ("anyOf", "oneOf"):
+        cand = spec.get(key)
+        if isinstance(cand, list):
+            for one in cand:
+                if isinstance(one, dict) and one.get("type") not in (None, "null"):
+                    return TOOL_ARG_TYPE_SHORT.get(str(one["type"]), str(one["type"]))
+    t = spec.get("type")
+    if isinstance(t, list):
+        t = next((x for x in t if x != "null"), None)
+    return TOOL_ARG_TYPE_SHORT.get(str(t), str(t)) if isinstance(t, str) else "?"
+
+
+_TOOL_ARG_SCHEMAS: dict[str, dict] = {}   # 工具名 → {"properties": {...}, "required": frozenset}（首次用时建一次）
+
+
+def tool_arg_schemas() -> dict[str, dict]:
+    """工具名 → `{"properties": {参数名: JSON-Schema 片段}, "required": frozenset(必填名)}`。
+
+    **首次调用时建、之后复用**（import 期不做这活：工具注册表在 import 期未必就绪，
+    而且大多数进程（测试子集）根本不查参数）。
+    `required` 是 **JSON Schema 里与 `properties` 平级的那个数组**——别往每个字段里塞
+    自己发明的标记（那样 pydantic 不认识、我们也就读不到了）。
+    """
+    if not _TOOL_ARG_SCHEMAS:
+        from tools.base import get_all_tools   # 同文件已在模块级导入 tools.base，这里只是取注册表
+        for t in get_all_tools():
+            schema = getattr(t, "args_schema", None)
+            try:
+                js = schema.model_json_schema() if schema is not None else {}
+            except Exception:   # 取不到就跳过：**不因为一个工具没有 schema 而拦住参数校验**
+                logger.warning("[skills] 取 %s 的 args_schema 失败，该工具的参数不参与校验",
+                               getattr(t, "name", t))
+                continue
+            if not isinstance(js, dict):
+                continue
+            req = js.get("required")
+            _TOOL_ARG_SCHEMAS[t.name] = {
+                "properties": js.get("properties") or {},
+                "required": frozenset(req) if isinstance(req, list) else frozenset(),
+            }
+    return _TOOL_ARG_SCHEMAS
+
+
+def _template_param_map(skill: Skill) -> dict[str, tuple[str, str]]:
+    """技能参数名 → (工具名, 工具参数名)：从 `skill.plan` 模板的 `$占位` 反查。
+
+    只认 `$名字` 这一种（`$tool[0].field` 那种参数引用是另一层语义，由 execute 解析，
+    见 `agent/refs.py`）——与 `instantiate_plan` 模板展开时的判据逐字相同。
+    """
+    out: dict[str, tuple[str, str]] = {}
+    for tool_name, tmpl in (skill.plan or ()):
+        for arg, val in tmpl.items():
+            if isinstance(val, str) and val.startswith("$") and not is_ref(val):
+                out.setdefault(val[1:], (tool_name, arg))
+    return out
+
+
+def skill_param_specs(skill: Skill) -> dict[str, ParamSpec]:
+    """这个技能的合法参数表：名字 → 规格。见本节头注的三条来源约定。
+
+    **合法集合 = `inputs` 的键**（既有事实，不新增名单）。工具的 `args_schema` 只用来
+    给这些名字**派生类型/默认值/必填**（按名字与模板占位符配对），不用来扩集合——
+    理由是可证伪的：模板占位符里有一类是**给工具看的管道**，不是给 planner 填的参数。
+    navigate 就是现场：它的模板写着 `$path`/`$confirm`，可这两个值由技能自己的代码
+    从 `NAV_MAP` 算出来（`path` = 映射结果、`confirm` = `mode` 的派生），模板里那两行
+    是**死代码**；把它们当成 planner 可填的参数渲染进菜单，等于请它去填一个没人读的
+    参数（它真填了还会被判成"本技能参数"，连"没人读"的告警都不会响）。
+    """
+    tmap = _template_param_map(skill)
+    schemas = tool_arg_schemas()
+    out: dict[str, ParamSpec] = {}
+    for name, desc in skill.inputs.items():
+        tool_name, arg = tmap.get(name, ("", ""))
+        entry = schemas.get(tool_name) or {}
+        prop = (entry.get("properties") or {}).get(arg) if tool_name else None
+        required = bool(arg) and arg in (entry.get("required") or frozenset())
+        default: Any = prop.get("default", _NO_DEFAULT) if isinstance(prop, dict) else _NO_DEFAULT
+        out[name] = ParamSpec(type=arg_type_short(prop) if prop else "any",
+                              required=required,
+                              default=default,
+                              desc=str(desc),
+                              from_tool=f"{tool_name}.{arg}" if tool_name else "")
+    # 必填以**技能自己的声明**为准（工具形状只给了个默认）——技能参数与工具参数
+    # 不是同一层：`device_display.text` 在 pydantic 里必填，但技能在代码侧被空参调用
+    # （文案由执行层创作），这种"形状必填、策略可选"的分叉必须由技能自己说清楚。
+    for name in skill.required_params:
+        if name in out:
+            out[name] = replace(out[name], required=True)
+    for name in skill.optional_params:
+        if name in out:
+            out[name] = replace(out[name], required=False)
+    return out
+
+
+def render_skill_params(skill: Skill, specs: dict[str, ParamSpec] | None = None) -> str:
+    """planner 菜单里的参数一行：`名字:类型`，必填加 `*`、有默认值加 `=值`、后跟中文说明。
+
+    写法与工具菜单（`graph._menu_arg_signature`）**逐字一致**——两个菜单在 planner
+    眼里是同一张表的两段，记号不同会让它两套读法。推不出类型的参数（`any`）不标
+    `*`：**宁可少说，不说错**。
+    """
+    specs = specs if specs is not None else skill_param_specs(skill)
+    if not specs:
+        return ""
+    parts = []
+    for name, sp in specs.items():
+        seg = f"{name}:{sp.type}"
+        if sp.required:
+            seg += "*"
+        elif sp.default is not _NO_DEFAULT and sp.default is not None:
+            shown = f'"{sp.default}"' if isinstance(sp.default, str) and sp.default else str(sp.default)
+            seg += "=" + shown[:12]
+        if sp.desc:
+            seg += f"（{sp.desc}）"
+        parts.append(seg)
+    return "、".join(parts)
+
+
+def _contains_ref(value: Any) -> bool:
+    """值里（含 list/dict 元素位置）是否含**未解析的参数引用**（`$tool[N].field`）。
+
+    引用是**程序化取值**、不是字面量：它的类型由被引用的那次工具返回决定，规划期
+    根本不知道 ⇒ 一律**放行、不做类型判据**（"类型不对"在这里只可能是误报）。
+    判据本身来自 `agent.refs`（`REF_RE`），这里只做容器的递归遍历。
+    """
+    if is_ref(value):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_ref(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_ref(v) for v in value)
+    return False
+
+
+def _coerce_value(want: str, value: Any) -> tuple[bool, Any]:
+    """按派生的类型把值归一成工具能收的形态 → `(能不能用, 归一后的值/说明)`。
+
+    只做**无损**的那几种（"3"→3、123→"123"、真假词→bool）：它们与 pydantic 的宽松
+    模式同解，归一后工具行为不变，只是省掉一次 `__ERROR__` 帧。归不了的**不许猜**
+    （猜一个值去写操作比报错更坏，同写路径"缺参守卫"的取向）。
+    """
+    if want in ("any", "?", ""):
+        return True, value
+    if want == "str":
+        if isinstance(value, str):
+            return True, value
+        if isinstance(value, bool):
+            return True, "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return True, str(value)
+        return False, f"要字符串，收到 {type(value).__name__}"
+    if want == "int":
+        if isinstance(value, bool):
+            return False, "要整数，收到布尔"
+        if isinstance(value, int):
+            return True, value
+        if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+            return True, int(value.strip())
+        return False, f"要整数，收到 {value!r}"
+    if want == "bool":
+        if isinstance(value, bool):
+            return True, value
+        if isinstance(value, str) and value.strip().lower() in ("true", "false", "1", "0", "yes", "no"):
+            return True, value.strip().lower() in ("true", "1", "yes")
+        if isinstance(value, int) and value in (0, 1):
+            return True, bool(value)
+        return False, f"要布尔，收到 {value!r}"
+    if want == "list":
+        return (True, value) if isinstance(value, list) else (False, "要列表")
+    if want == "dict":
+        return (True, value) if isinstance(value, dict) else (False, "要对象")
+    return True, value      # 不认识的类型标记：不拦（宁可少说）
+
+
+def check_skill_params(skill: Skill, params: dict,
+                       specs: dict[str, ParamSpec] | None = None) -> dict:
+    """PARAMS 事前校验（纯函数）→ `{"fixed": [...], "unknown": [...], "missing": [...], "bad": [...]}`。
+
+    · `fixed`：归一过的值（`article_id "3"→3`），只作说明——**不是问题**；
+    · `unknown`：系统不认识的参数名（planner 写了但没人读）——**响亮但不阻断**
+      （没有"点名却未执行"的损失，工具照常跑，见 planner_node 的 trace 事件）；
+    · `missing` / `bad`：必填没给、值归不了 → **调用方必须零工具**（展开成 `null`
+      实参只有一条路：工具层报错，白烧一轮）。
+
+    **作用范围**（20260925 定）：只覆盖 `instantiate_plan` 的**通用模板分支**——
+    写技能各自的 `_expand_*` 守卫更专门（缺参零工具 + 自己的追问话术），navigate 的
+    target 另有 NAV_MAP 这条更准的判据，content_query 的条目走 `check_call_args`。
+    换句话说：**哪儿模板会被原样展开、哪儿才需要这一层**，不是全局门。
+    """
+    specs = specs if specs is not None else skill_param_specs(skill)
+    params = params if isinstance(params, dict) else {}
+    fixed, unknown, missing, bad = [], [], [], []
+    for name, value in params.items():
+        if name not in specs:
+            unknown.append(name)
+            continue
+        if value in (None, ""):
+            continue                      # 空值当"没给"处理（missing 那一支判）
+        if _contains_ref(value):
+            continue                      # 参数引用：类型由被引用的返回决定，规划期不判
+        ok, got = _coerce_value(specs[name].type, value)
+        if not ok:
+            bad.append(f"{name}={value!r}（{got}）")
+        elif got is not value and got != value:
+            fixed.append(f"{name} {value!r}→{got!r}")
+    for name, sp in specs.items():
+        if sp.required and params.get(name) in (None, ""):
+            missing.append(name)
+    return {"fixed": fixed, "unknown": unknown, "missing": missing, "bad": bad}
+
+
+def param_problem_note(skill: Skill, chk: dict, specs: dict[str, ParamSpec] | None = None) -> str:
+    """参数不齐/不可用时给 planner 的确定性话术（零 LLM、只说机器能保证的事实）。
+
+    **不许**出现"站内没有/查不到"这类台账话术——这一层压根没读过台账，缺的是参数。
+    这句话就是 planner 下一轮看到的"工具帧"，因此它必须**同时**给出：缺什么、本技能
+    收哪些参数（带类型与必填标记）、下一步能做什么。
+    """
+    why = []
+    if chk["missing"]:
+        why.append("必填参数没给：" + "、".join(chk["missing"]))
+    if chk["bad"]:
+        why.append("参数值用不了：" + "、".join(chk["bad"]))
+    specs = specs if specs is not None else skill_param_specs(skill)
+    sig = "、".join(f"{n}:{s.type}{'*' if s.required else ''}"
+                    for n, s in specs.items())
+    return (f"{skill.name}：{'；'.join(why)}（本技能参数：{sig}）：不调用任何工具，"
+            f"重新决策——参数要么补齐（主人原话里能取到就据实填、取不到就如实问清），"
+            f"要么改用别的技能（比如 SKILL=chat 如实说明）")
+
+
+def _param_problem_plan(skill: Skill, chk: dict,
+                        specs: dict[str, ParamSpec] | None = None) -> dict:
+    """参数不合格时的零工具计划（`instantiate_plan` 的几个分支共用这一份形状）。
+
+    `dropped` 刻意留空、另给 `param_problem`：`dropped` 的语义是**工具可达性**
+    （"你够不到这个工具"），而这里工具可达、是参数不齐——混进同一个键会让
+    `_drop_correction` 把两件事讲成一件。
+    """
+    return {
+        "skill": skill.name,
+        "tools": [],
+        "dropped": [],
+        "param_unknown": chk.get("unknown") or [],
+        "note": param_problem_note(skill, chk, specs),
+        "reply": skill.reply_contract,
+        "chat": False,
+        "param_problem": chk,
+    }
+
+
+def expand_template_args(tmpl: dict, params: dict,
+                         specs: dict[str, ParamSpec] | None = None) -> dict:
+    """把 `skill.plan` 的参数模板实例化成工具实参（通用分支的唯一展开点）。
+
+    `$名字` = 取 PARAMS 里同名参数；**参数引用**（`$tool[0].field`）是另一层语义，
+    必须原样透传给 execute 解析——否则这里会去 PARAMS 里查 `"tool[0].field"` 拿到
+    None，把引用悄悄变成空参数（20260919 两套 `$` 语法共存的口子）。
+
+    20260925 补一条：**没给值的可选参数不落进实参**。此前模板里的 `$action` 会展开成
+    `{"effect": "sakura", "action": null}`——而 `toggle_effect` 的 `action` 有默认值
+    `"on"`，显式传 null 反而**覆盖掉**默认值、直接被 pydantic 判非法 ⇒ 白烧一轮。
+    "模板里写了 `$p` 而 planner 没填"的语义是**用工具的默认值**，不是"显式传空"。
+    （只丢 None/空串；`[]`/`0`/`False` 都是有语义的值，一律保留。）
+    """
+    specs = specs if specs is not None else {}
+    args: dict = {}
+    for k, v in tmpl.items():
+        if not (isinstance(v, str) and v.startswith("$") and not is_ref(v)):
+            args[k] = v
+            continue
+        got = params.get(v[1:])
+        sp = specs.get(v[1:])
+        if got in (None, "") and (sp is None or not sp.required):
+            continue
+        args[k] = got
+    return args
+
+
+def check_call_args(tool_name: str, args: dict) -> dict:
+    """`content_query` 的 `PARAMS.calls[].args` 校验 → `{"args": 归一后的, "bad": [...]}"`。
+
+    用的是**同一个** `tool_arg_schemas()`（单一来源）：必填没给、值归不了 → 这条例目
+    被剔除（调用方把原因拼进 `dropped` 后缀）；只多写了系统不认识的参数 → **只剔掉
+    那个参数**、调用照常（pydantic 本来就忽略多余字段，剔掉它只是让"已忽略"这件事
+    在 trace 里留痕而不是静默）。
+    """
+    schemas = tool_arg_schemas()
+    entry = schemas.get(tool_name)
+    if entry is None:                      # 注册表里没有/没有 schema：不拦（白名单那一层已判过工具名）
+        return {"args": dict(args), "bad": [], "unknown": []}
+    props, req = entry.get("properties") or {}, entry.get("required") or frozenset()
+    out, bad, unknown = {}, [], []
+    for name, value in (args or {}).items():
+        if name not in props:
+            unknown.append(name)
+            continue
+        want = arg_type_short(props[name])
+        if _contains_ref(value):
+            out[name] = value
+            continue
+        if value in (None, ""):
+            # 没给值的**可选**参数不落进实参（同 `expand_template_args` 的理由：显式
+            # null 会覆盖掉工具自己的默认值、被 pydantic 判非法）。必填那一格由下面的
+            # `req` 循环照旧报"缺必填"——所以这里直接丢掉不影响它。
+            continue
+        ok, got = _coerce_value(want, value)
+        if ok:
+            out[name] = got
+        else:
+            bad.append(f"{name}={value!r}（{got}）")
+    for name in req:
+        if (args or {}).get(name) in (None, ""):
+            bad.append(f"缺必填 {name}")
+    return {"args": out, "bad": bad, "unknown": unknown}
 
 
 # ---------------------------------------------------------------------------
@@ -1614,8 +2043,14 @@ def build_planner_context(role: str | None = None) -> str:
     lines = ["可用技能（只能从以下技能中选择一个，不得自创步骤或自由编写执行计划）："]
     for s in visible_skills(role):
         lines.append(f"- {s.name}：{s.description}")
-        if s.inputs:
-            lines.append(f"  参数：{json.dumps(s.inputs, ensure_ascii=False)}")
+        # 参数一行 = `名字:类型` + 必填 `*` + 默认值 `=值` + 中文说明（20260925）。
+        # 此前这里是 `json.dumps(s.inputs)` ——**只有散文**，必填/类型/默认值一概
+        # 看不见，planner 只能靠常识猜，而 `instantiate_plan` 拿到 PARAMS 后什么
+        # 都不查（缺参要等工具侧报错，白烧一轮）。记号与工具菜单（`_menu_arg_signature`）
+        # 逐字一致：两个菜单在 planner 眼里是同一张表的两段，记号不同会让它两套读法。
+        sig = render_skill_params(s)
+        if sig:
+            lines.append(f"  参数：{sig}")
         if s.plan:
             seq = " → ".join(f"{t}({json.dumps(a, ensure_ascii=False)})" for t, a in s.plan)
             lines.append(f"  执行步骤：{seq}")

@@ -85,9 +85,15 @@ def test_navigate_instantiation():
     check("未识别目标 → 不调工具 + 未识别注记（非下线）",
           not p["tools"] and "无法识别" in p["note"] and "已下线" not in p["note"],
           f"note={p['note']}")
+    # 空 target（20260925 改判）：**必须**是"必填参数没给"，不能沿用上面那条"未识别"
+    # 注记。区别不是措辞问题：上一行 `不存在的页` 是真的查过映射表、确实没有这个页面，
+    # 如实说"没有该页面"成立；空 target 是**参数压根没填**，说"没有该页面"是**假话**
+    # ——planner 会把"我漏填了 target"读成"这个页面站内没有"，然后放弃或换技能。
+    # 两条判据都保留（`不存在的页` 那条在上面，仍是"无法识别"）。
     p = instantiate_plan("navigate", {"target": ""})
-    check("空 target → 未识别注记",
-          not p["tools"] and "无法识别" in p["note"], f"note={p['note']}")
+    check("空 target → 必填缺失注记（不是「站内没有该页面」）",
+          not p["tools"] and "必填参数没给" in p["note"] and "无法识别" not in p["note"],
+          f"note={p['note']}")
     p = instantiate_plan("navigate", {"target": "/device-console/", "mode": "direct"})
     check("字面路径(白名单)直用 → confirm=false + 不推断语义",
           p["tools"] == ['navigate_to({"path": "/device-console/", "confirm": false})'],
@@ -2916,8 +2922,15 @@ def test_read_repeat_round():
         }, _cfg)
         plan2 = parse_plan(out2["plan"])
         check("同一篇的重复读取剔空后确定性收尾（零工具）", plan2["tools"] == [], f"{plan2['tools']}")
-        check("  注记点明「已取回的只读数据就在上方工具返回里」",
-              "已取回" in (plan2["note"] or ""), (plan2["note"] or "")[:100])
+        # 注记只需点明"数据已经在手里"，**不必是某一条守卫的话术**：本用例的形态
+        # （spec 只在 JSON 类型上不同）20260925 起会被更早的"数据工具重复"守卫
+        # 直接命中——参数在 instantiate_plan 里就被归一（"46"→46），spec 与 executed
+        # 变成逐字相同，于是那道按原文比较的守卫也能认出来了。两道守卫的语义一致
+        # （零工具收尾 + 数据在上方返回里），只有措辞不同；钉死措辞会让"守卫顺序
+        # 变化"这种正常演进变成假红。
+        note2 = plan2["note"] or ""
+        check("  注记点明数据已在上方工具返回里",
+              ("已取回" in note2) or ("已在上方工具返回里" in note2), note2[:100])
         check("  不重决策（只问 planner 一次）", len(llm2.prompts) == 1)
         # 反向（写族照旧重规划）不在这一轮里跑：写技能的整轮要读真台账（标签/分类
         # 字典），这条判据的形状与字典无关。写族不被剔由上面 `_trim_done_reads` 的
