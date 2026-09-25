@@ -199,6 +199,11 @@ uv sync
 
 # L3 跨源对账（零 LLM、零网络、只读）：trace ↔ agent.log ↔ 前端上报
 .venv/bin/python eval/trace_reconcile.py --days 1
+
+# 产物保留：先审计盘上有没有"没人认领"的产物，再按登记表执行保留期（默认只列不删）
+.venv/bin/python eval/retention_manifest.py          # 未登记 0 条 = 每类产物都有主人
+.venv/bin/python eval/artifact_retention.py          # dry-run
+.venv/bin/python eval/artifact_retention.py --apply  # 真删（夜间脚本已接）
 ```
 
 三点要知道：
@@ -208,6 +213,21 @@ uv sync
 - **有几条用例需要“真实身份”**（要以某个 uid 真调上游），由环境变量给出（见下一节）；未设时它们**响亮地跳过并计入报告**，不静默豁免。
 - **有意不覆盖三处**（不是缺口，别照着“补上”）：`search_knowledge_base`（`/knowledge` 端点返回空）、
   `get_chat_history`（占位实现）、`device_oled_display`（真硬件副作用，不适合进自动化）。
+
+### 产物保留（谁负责清）
+
+盘上每一类产物都在 `eval/retention_manifest.py` 的登记表里有主：登记 `managed`（谁清、留多久）
+/ `frozen`（刻意永不删）/ `open`（登记了、暂未接管）。`audit()` 报出**没登记的条目**——
+那就是"缺口"的定义；表里 `managed` 且带 `rule` 的那几类由 `eval/artifact_retention.py`
+**真的执行**（默认只列不删，`--apply` 才动手，已接进夜间脚本）。
+
+保留期与路径**只写在表里这一处**，执行者与夜间脚本都不复述——改保留期改表里的常量即可。
+trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`、
+`eval/golden_trace.py::prune`），表里 `rule=None` 各指一处。
+
+这条规矩的由来：同一族坑踩过四次（R2 的保留数、logrotate 的 `rotate 14`、`logs/archive/`、
+`eval/report/runs/`），形态都是**「策略写了，但没有任何东西在执行它」**——装饰性配置比没有配置
+更坏，因为它看起来是对的。
 
 ## 环境变量
 
