@@ -3953,6 +3953,24 @@ def test_write_target_refusal_round():
               "一个字节都没有改动" in note and "不许" in note)
         check("  只问 planner 一次（确定性收尾，不重决策）", len(llm.prompts) == 1)
 
+        # 截断形态的**接线**（20260926）：判据对不对已由 test_tag_admin ⑫ 纯函数锁住，
+        # 这条锁的是**这一层真的被接上了**——`planner_node` 必须把主人原话与角色传进
+        # 预检（不传 ⇒ 校正永远不发生，而纯函数全绿也看不出来）。形态：「主人自己说的
+        # 就是短的那一截」，台账里只有一条以它开头。
+        TB._tag_index = lambda config: {3: _Tag(3, "大笨狗汪汪", 1)}
+        _llm_fix = _ScriptedLLM(['SKILL=tag_delete\nPARAMS={"name": "大笨狗"}\n'
+                                 "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: _llm_fix
+        out_fix = planner_node({"messages": [HumanMessage(content="那把「大笨狗」删了吧")],
+                                "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        plan_fix = parse_plan(out_fix["plan"])
+        _spec_fix = " ".join(plan_fix["tools"])
+        check("  主人说的是短的那一截 + 台账唯一一条以它开头 → 就地校正成全名",
+              "大笨狗汪汪" in _spec_fix, _spec_fix[:140])
+        check("    注记同步重生成（陈旧注记会让 narrator 照旧说错名字）",
+              "大笨狗汪汪" in (plan_fix["note"] or ""), (plan_fix["note"] or "")[:120])
+        check("    只问 planner 一次（确定性校正，不重决策）", len(_llm_fix.prompts) == 1)
+
         # 反向：字典**读不到**（None）时不拦（"读不到"≠"没有"）——弹窗那条路照旧
         TB._tag_index = lambda config: None
         llm2 = _ScriptedLLM([_WRITE])
@@ -4360,8 +4378,55 @@ def test_name_target_round():
               "绝对不存在的标签名xyz" in _note4
               and parse_plan(out4["plan"])["tools"] == [], _note4[:140])
 
+        # ④a2 **连引号都没有**的写形态请求（20260926）：原话是「把大笨狗汪汪那个标签
+        #     删了吧」——既没加引号、也不是"两个字说不全"的截短形态。旧判据要求"主人
+        #     原话里必须有引号段"才纠偏，于是这一族（最口语的一族）结构上拿不到兜底：
+        #     零工具直落 narrator，写请求变成一问一答。判据改成"动作词（词形族，见
+        #     `_name_write_verbs`）+ 不是提问句 + 当前身份看得见名字通道写技能"。
+        class _T:  # 台账里真有一个一级标签（站内存在 ⇒ 纠偏后能落成一条写计划）
+            def __init__(self, tid, name, level):
+                self.id, self.name, self.level = tid, name, level
+                self.label, self.note_count, self.color = name, 0, ""
+                self.father_id, self.father_name = None, ""
+        TB._tag_index = lambda config: {3: _T(3, "大笨狗汪汪", 1)}
+        _MSG_NOQ = "把大笨狗汪汪那个标签删了吧"
+        llm4q = _ScriptedLLM([
+            'SKILL=chat\nPARAMS={}\nREPLY: 您想删哪个标签呀？',
+            'SKILL=tag_delete\nPARAMS={"name": "大笨狗汪汪"}\nREPLY: 如实回答'])
+        G.get_llm = lambda **kw: llm4q
+        out4q = planner_node({"messages": [HumanMessage(content=_MSG_NOQ)],
+                              "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _spec4q = " ".join(parse_plan(out4q["plan"])["tools"])
+        check("无引号的写形态请求零工具 → 同样纠偏（最口语的一族不再直落 narrator）",
+              len(llm4q.prompts) == 2, str(len(llm4q.prompts)))
+        check("  第二次提示走的是「没有加引号」那一支措辞",
+              "没有加引号把目标名字单独标出来" in llm4q.prompts[1], "纠偏文本未进提示")
+        # 纠偏文本本身**不许报出任何名字**（对模型举例＝给它一个待抄的取值）。
+        # 注意判据只能看纠偏那一段：planner 提示里本来就有主人原话（含那个名字）。
+        _nudge = G._name_write_nudge({"tools": [], "params": {}, "note": ""},
+                                     _MSG_NOQ, 0, "admin")
+        check("  纠偏文本自己**不报任何名字/占位符**（对模型举例＝给它一个待抄的取值）",
+              _nudge is not None and "大笨狗" not in _nudge and "〈" not in _nudge,
+              (_nudge or "")[:120])
+        check("  有引号那一支才报出引号里那一段（该报的时候必须报）",
+              "「大笨狗汪汪」" in (G._name_write_nudge(
+                  {"tools": [], "params": {}, "note": ""},
+                  "把「大笨狗汪汪」删了吧", 0, "admin") or ""))
+        check("  重决策后目标落成一条写规格（交弹卡，不直接执行）",
+              "delete_tag" in _spec4q and "大笨狗汪汪" in _spec4q, _spec4q[:140])
+
+        # ④a3 动作词的**词形族**：判据是一个词干而不是一张穷举表（"删了"这种词形
+        #     从前一条都不命中——表里只有"删掉/删除/去掉"）。留一条纯函数锁，免得
+        #     以后有人把 `_name_write_verbs` 改回字面表。
+        check("  词形族：「删了」命中（靠词干「删」），「清理/清空/清除」同族",
+              "删" in G._name_write_verbs(_MSG_NOQ)
+              and set(G._name_write_verbs("把那些缓存文件清理掉")) >= {"清理"}
+              and G._name_write_verbs("今天天气怎么样") == [],
+              str(G._name_write_verbs(_MSG_NOQ)))
+
         # ④b 提问句 / 闲聊结构上不纠偏（多问一次就是白烧一轮 + 诱导乱写）
         for _label, _q in (("疑问句（问影响）", "把标签 Rust 挪到「嵌入式」下面会有什么影响？"),
+                           ("疑问句（无引号）", "把大笨狗汪汪那个标签删了会有什么影响？"),
                            ("闲聊带引号", "「李白」写过什么诗？")):
             llm5 = _ScriptedLLM(['SKILL=chat\nPARAMS={}\nREPLY: 如实说明'])
             G.get_llm = lambda **kw: llm5

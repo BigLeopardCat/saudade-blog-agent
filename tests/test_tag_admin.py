@@ -586,6 +586,10 @@ _MIN_PARAMS = {
     "notice_read": {"all": True},
     # 站内信标记已读（20260923 批 8）：与 notice_read 同一形状、另一个物件。
     "message_read": {"all": True},
+    # 后台首页待办 / 日程（20260926）：写面里**唯一目标是自由文本**的一件——
+    # 目标不是站内既有名字、也不是 id，所以它既不在名字通道也不在 own 通道，
+    # 由 `_expand_todo_skill` 展开（见 agent/skills.py 的同名函数头注）。
+    "dashboard_todo_add": {"text": "给猫买罐头", "date": "明天"},
 }
 _EXPECT_TOOL = {
     "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
@@ -600,6 +604,7 @@ _EXPECT_TOOL = {
     "favorite_add": "add_favorite", "favorite_remove": "remove_favorite",
     "notice_read": "read_notifications",
     "message_read": "read_messages",
+    "dashboard_todo_add": "create_dashboard_todo",
 }
 check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",
       set(_EXPECT_TOOL) == set(WRITE_SKILL_NAMES) and set(_MIN_PARAMS) == set(WRITE_SKILL_NAMES),
@@ -1087,6 +1092,165 @@ with patch(_board_index=lambda c: None):
 
 check("白名单里已有 board_id / board_author（新回执键不许被静默过滤）",
       {"board_id", "board_author"} <= set(_RCPT_META_KEYS), str(_RCPT_META_KEYS))
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑫ 近失的**截断形态**：候选当系统数据带走，载体是弹卡（20260926，D3）
+#    现场：主人上一轮听系统报过候选（「名字最接近的是「大笨狗汪汪」」），这一轮他说
+#    「那把「大笨狗」删了吧」——他给的是**短的那一截**。旧行为是又一次"站内没有叫
+#    「大笨狗」的标签"（候选名单只活在 narrator 的回复里，下一轮就被历史节选截断，
+#    主人的「就那个」再也对不上任何东西）。新行为：台账里**只有一条**以他说的那一截
+#    开头 ⇒ 就地改回全名 ⇒ 走弹卡（卡片上印着全名与 id，他点一下），**不直接执行**。
+#    本节锁四件事：判据只认"抄短"这一种形态；改完必须重新验一遍；纯指代句里模型自己
+#    猜的名字不算来源；改出来的计划**注记同步重生成**（陈旧注记会让 narrator 说错名字）。
+print("\n⑫ 台账近失的截断形态：唯一候选 → 就地校正，交弹卡（不是又一次「站内没有」）")
+from agent.graph import _truncation_candidate, _confirm_popup, plan_encode  # noqa: E402
+from agent.graph import _tool_args  # noqa: E402
+
+
+def _args_of(plan):
+    """计划里唯一那条规格的参数（用执行器同一套解析，不自己 split/loads）。"""
+    return _tool_args(plan["tools"][0])[0]
+
+
+# 台账样本：多一条一级标签「大笨狗汪汪」（id=3），其余同 ONE/TWO
+IDX_DOG = A.build_tag_index(
+    ONE + [{"tagKey": 3, "title": "大笨狗汪汪", "level": 1, "color": "#1677ff", "noteCount": 2}],
+    TWO)
+# 同名二级两条挂在不同父下（校正出来的名字**歧义** ⇒ 不许替主人挑）
+IDX_DUP = A.build_tag_index(ONE, TWO + [
+    {"tagKey": 10010, "title": "大笨狗汪汪", "level": 2, "fatherTag": "编程",
+     "fatherKey": 1, "color": "#52c41a"},
+    {"tagKey": 10011, "title": "大笨狗汪汪", "level": 2, "fatherTag": "架构",
+     "fatherKey": 2, "color": "#52c41a"}])
+
+print("  · 判据本身（纯函数）：只认「以它开头」，且只认唯一一条")
+check("唯一一条以它开头 → 返回那条的全名",
+      _truncation_candidate("大笨狗", [(1, "编程"), (3, "大笨狗汪汪")]) == "大笨狗汪汪")
+check("两条都以它开头 → None（歧义不替主人挑）",
+      _truncation_candidate("大笨狗", [(3, "大笨狗汪汪"), (4, "大笨狗流浪记")]) is None)
+check("中段包含（不在开头）→ None（那不是「抄短了」的形态）",
+      _truncation_candidate("大笨狗", [(3, "汪汪大笨狗")]) is None)
+check("反方向（主人说的比台账那条还长）→ None",
+      _truncation_candidate("大笨狗汪汪", [(3, "大笨狗")]) is None)
+check("短于 3 字 → None（两个字的前缀能命中一大片，只会把判据变成噪声）",
+      _truncation_candidate("笨狗", [(3, "笨狗汪汪")]) is None)
+check("台账里没有以它开头的 → None",
+      _truncation_candidate("大笨狗", [(1, "编程"), (2, "架构")]) is None)
+
+print("  · 走进预检：校正后交弹卡；形态不对就照旧如实拒绝")
+MSG_DOG = "那把「大笨狗」删了吧"
+with patch(_tag_index=lambda c: IDX_DOG):
+    plan = _plan("tag_delete", {"name": "大笨狗"})
+    check("前置：这一步之前计划里写的还是主人说的那一截",
+          _args_of(plan)["name"] == "大笨狗", f"{plan['tools']}")
+    got = _write_target_refusal(plan, cfg(), MSG_DOG)
+    check("唯一截断候选 → **不拦**（放行去弹卡）", got is None, f"{got}")
+    check("  计划里的目标已改成台账全名",
+          _args_of(plan)["name"] == "大笨狗汪汪", f"{plan['tools']}")
+    check("  params 同步（不是只改 spec 字符串）",
+          plan["params"].get("name") == "大笨狗汪汪", str(plan.get("params")))
+    check("  **注记同步重生成**（陈旧注记会让 narrator 照旧说错名字）",
+          "大笨狗汪汪" in plan["note"], plan["note"])
+    check("  同一条计划、只把主人原话换成纯指代 → 拒绝（模型自己猜的名字不算来源）",
+          _write_target_refusal(_plan("tag_delete", {"name": "大笨狗"}), cfg(),
+                                "把那个标签删了吧") is not None)
+    check("  不传原话（默认 None）→ 同样不动手（存量调用点零影响）",
+          _write_target_refusal(_plan("tag_delete", {"name": "大笨狗"}), cfg()) is not None)
+    got = _write_target_refusal(_plan("tag_delete", {"name": "大笨狗", "level": "two"}),
+                                cfg(), MSG_DOG)
+    check("校正出来的名字在 planner 指定的层级里查不到 → **不校正**，退回如实拒绝",
+          got is not None and got[0] == "delete_tag", f"{got}")
+with patch(_tag_index=lambda c: IDX_DUP):
+    # 「大笨狗汪汪」在台账里是**同名两条**（挂 编程 / 架构 两个父下）。判据这一步算得出
+    # 候选（两条同名去重后只剩一个名字），所以挡住它的是**解析器复验**那一道：
+    # `_lookup("大笨狗汪汪")` 不唯一 ⇒ 不校正，退回主人那句话本身的如实拒绝（顺带把
+    # 两条候选连展示名一起摆出来，请他照「父 / 子」指认）。
+    plan = _plan("tag_delete", {"name": "大笨狗"})
+    got = _write_target_refusal(plan, cfg(), MSG_DOG)
+    check("校正出来的名字**同名两条**（不同父下）→ 复验不唯一，退回如实拒绝",
+          got is not None and got[0] == "delete_tag"
+          and "名字最接近的是" in got[1]
+          and "（id=10010）" in got[1] and "（id=10011）" in got[1], f"{got}")
+    check("  且计划一个字节都没改（没拿两条里的任何一条当目标）",
+          _args_of(plan)["name"] == "大笨狗", f"{plan['tools']}")
+with patch(_tag_index=lambda c: None):
+    check("台账读不到 → 照旧不拦（读了才能校正，读不到这一层什么都不做）",
+          _write_target_refusal(_plan("tag_delete", {"name": "大笨狗"}), cfg(),
+                                MSG_DOG) is None)
+
+print("  · 分类与公告同族：同一条判据、同一个解析器")
+CAT_DOG = A.build_category_index(CATS + [
+    {"categoryKey": 21, "categoryTitle": "随笔集锦", "pathName": "essay2",
+     "introduce": "", "icon": "", "color": "", "noteCount": 0}])
+ANN_DOG = [{"id": 7, "title": "图库上线公告", "content": "图库上线了",
+            "createdAt": "2026-09-26 09:00:00"}]
+with patch(_category_index=lambda c: CAT_DOG):
+    # 主人说的是「随笔集」——台账里「随笔集锦」以它开头（同族的「随笔」不以它开头，
+    # 所以候选唯一）。注意判据要求那一截 **≥3 字**：两个字的前缀能命中一大片。
+    plan = _plan("category_delete", {"name": "随笔集"})
+    check("分类：唯一截断候选「随笔集锦」→ 校正",
+          _write_target_refusal(plan, cfg(), "把「随笔集」那个分类清理掉吧") is None
+          and _args_of(plan)["name"] == "随笔集锦", f"{plan['tools']}")
+with patch(_tag_index=lambda c: IDX_DOG):
+    # 主人只说了 2 个字：判据自己就把这一形态挡了（`_truncation_candidate` 要求那一截
+    # **≥3 字**——两个字的前缀能命中一大片，那不是"抄短了"而是"说得太笼统"）。
+    plan = _plan("tag_delete", {"name": "大笨"})
+    check("主人只说得出一半（2 字）→ 不校正，照旧如实拒绝（宁少认不多认）",
+          _write_target_refusal(plan, cfg(), "把「大笨」那个标签删掉吧") is not None
+          and _args_of(plan)["name"] == "大笨", f"{plan['tools']}")
+with patch(_announcement_index=lambda c: {r["id"]: dict(r) for r in ANN_DOG}):
+    plan = _plan("announcement_delete", {"title": "图库上线"})
+    check("公告：唯一截断候选「图库上线公告」→ 校正",
+          _write_target_refusal(plan, cfg(), "把标题是「图库上线」的公告删掉吧") is None
+          and _args_of(plan)["title"] == "图库上线公告", f"{plan['tools']}")
+
+print("  · 留言族**不校正**（片段是正文；「抄短了」在片段匹配下根本不需要，也会挑错人）")
+with patch(_board_index=lambda c: bidx()):
+    # ① 主人给的那一截**正好是**某条正文的前缀：片段匹配本身就落对了（子串级），
+    #    计划一个字节都不该动——这一步不是"校正生效"，是"根本用不着校正"。
+    plan = _plan("board_delete", {"quote": "今天天气真好"})
+    check("片段是唯一命中那条的**前缀** → 片段匹配自己就落对了，计划原样",
+          _write_target_refusal(plan, cfg(),
+                                "把写着「今天天气真好」的那条留言删掉吧") is None
+          and _args_of(plan)["quote"] == "今天天气真好", f"{plan['tools']}")
+    # ② 这才是守卫真正挡下的形态：片段**撞车**（13/14 两条都含「谢谢站长的分享！」），
+    #    而 14 的正文恰好**以那一截开头** ⇒ 判据自己会算出唯一候选「…学到了」。
+    #    放行就等于系统替主人从两条命中的留言里挑定了 14 条——`D3` 在留言族不成立
+    #    （留言没有"名字"，片段本来就允许多条候选由人指认）。
+    plan = _plan("board_delete", {"quote": "谢谢站长的分享！"})
+    check("前置：这个形状判据自己算得出候选（挡住它的是留言族守卫，不是判据算不出）",
+          _truncation_candidate("谢谢站长的分享！",
+                                [(13, "谢谢站长的分享！"),
+                                 (14, "谢谢站长的分享！学到了")]) == "谢谢站长的分享！学到了")
+    got = _write_target_refusal(plan, cfg(), "把写着「谢谢站长的分享！」的那条留言删掉吧")
+    check("片段撞车 → 照旧如实拒绝，不替主人从命中的两条里挑一条",
+          got is not None and got[0] == "delete_board_comment"
+          and "2 条留言都含" in got[1], f"{got}")
+    check("  计划一个字节都没改",
+          _args_of(plan)["quote"] == "谢谢站长的分享！", f"{plan['tools']}")
+
+print("  · 卡片上印的是**台账全名**（主人点确定之前看得出系统要动哪一个）")
+from config.settings import settings as _settings  # noqa: E402
+_saved_secret = _settings.jwt_secret
+_settings.jwt_secret = "test-secret-for-confirm-tokens"   # CI 里没有 .env（同 test_confirm 的桩）
+try:
+    with patch(_tag_index=lambda c: IDX_DOG):
+        plan = _plan("tag_delete", {"name": "大笨狗"})
+        _write_target_refusal(plan, cfg(), MSG_DOG)
+        st = {"messages": [], "plan": plan_encode(plan), "plan_rounds": 0, "done": False}
+        pop = _confirm_popup(st, plan["tools"], cfg()["configurable"]["principal"],
+                             MSG_DOG, cfg())
+        check("校正后**照旧弹卡**（全名不在主人原话里 → 免弹窗前提不成立）",
+              pop is not None, f"{pop}")
+        if pop:
+            q = pop["pending_confirm"]["q"]
+            check("  问句印的是台账全名（不是主人说的那一截）",
+                  "大笨狗汪汪" in q and "大笨狗」" not in q, q)
+            check("  签发的 spec 也是全名（执行轮照它走）",
+                  _args_of(plan)["name"] == "大笨狗汪汪")
+finally:
+    _settings.jwt_secret = _saved_secret
 
 
 print("\n" + ("=== 全部通过 ===" if not FAILS else f"=== {len(FAILS)} 项失败 ==="))

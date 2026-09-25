@@ -792,12 +792,33 @@ def _drop_correction(dropped: list[str], role: str | None) -> str:
 # 系统弹确认框问主人」**早已写在那儿**，它照样这么干 ⇒ 一句话劝不动，得给一次确定性
 # 纠偏（做法同 `_drop_correction`：只写机器能保证的事实 + 讲清"这不是你该预判的"，
 # 重选仍由 planner 自己做）。
-# 触发刻意收窄：首轮、零工具、无剔除、主人原话里有引号指认、不是提问/假设、且带
-# 写域动作词——闲聊与问答（「「李白」写过什么诗」）结构上命不中。
+# 触发刻意收窄：首轮、零工具、无剔除、不是提问/假设、且带写域动作词——闲聊与问答
+# （「「李白」写过什么诗」）结构上命不中。
+# 20260926（D5）：**"原话里有引号"这道前提已删**——它把最要修的那一类整个挡在外面。
+# 现场：主人说「把测试公告删了」——没有引号（中文口语里点目标根本不必加引号），于是
+# 纠偏从不发生，这一轮零工具直接交给 narrator（而它没有任何工具帧可用）。留着的两道
+# 是"写域动作词 + 不是提问"，加上技能可见性；重决策仍由 planner 自己做，文本里那句
+# 逃生口（"本来就不是要改动数据就保持原决定"）原样保留 ⇒ 闲聊最多多花一次采样。
+# 动作词判据是**词形族**不是逐字字面（同一条纪律见 20260925 的"修词形族，别删断言"）：
+# 「删掉/删除/删了/都删了吧」是同一个动作的四种词形，逐字表每遇一个新词形就漏一次，
+# 而漏掉的恰好是最口语的那一个。故删除族改用词干「删」（一次覆盖全部词形），
+# 再把口语音同义的「清空/清理/清除」并进同一族；其余各族的字面本身已含"到/成/名"
+# 这种粘着成分，没有"了/掉"那一层变形，维持原样。
 _NAME_WRITE_VERBS = ("挪", "移到", "移动到", "挪到", "挂到", "换到", "放到",
                      "改名叫", "改名为", "改名", "改成", "换成",
                      "删掉", "删除", "去掉", "移除", "取消",
                      "新建", "创建", "建立", "新增")
+_NAME_WRITE_VERB_RE = re.compile("|".join(
+    [re.escape(v) for v in _NAME_WRITE_VERBS] + ["删", "清空", "清理", "清除"]))
+
+
+def _name_write_verbs(text) -> list[str]:
+    """这句话里命中的写域动作词（词形族口径，见 `_NAME_WRITE_VERB_RE`）。
+
+    单独成一个函数是为了**日志与判据同源**：纠偏触发时 trace 里记的那些词，
+    必须就是判据当时认出来的那几个（各算一遍必然漂移）。
+    """
+    return sorted({m.group(0) for m in _NAME_WRITE_VERB_RE.finditer(str(text or ""))})
 
 
 def _name_write_nudge(plan_obj: dict, user_msg, rounds: int,
@@ -806,25 +827,34 @@ def _name_write_nudge(plan_obj: dict, user_msg, rounds: int,
     if rounds or (plan_obj.get("tools") or []) or plan_obj.get("dropped"):
         return None
     text = str(user_msg or "")
-    spans = _msg_quote_spans(text)
-    if not spans or authz.is_question_like(text):
+    if authz.is_question_like(text):
         return None
-    if not any(v in text for v in _NAME_WRITE_VERBS):
+    if not _name_write_verbs(text):
         return None
     # 角色判据只走 visible_skills 这一处（同 _drop_correction）：当前身份连一个
     # 名字通道写技能都看不到时（非管理员），纠偏只会把它往够不到的方向推。
     if not any(s.name in _WRITE_NAME_TARGET_SKILLS for s in visible_skills(role)):
         return None
+    # 两种形态分开说（都只剩"动作词"这一道共同前提）：有引号时告诉它**是那一段**，
+    # 没引号时**绝不能报出任何名字**（那会让它把系统给的例子抄成参数值——20260925 的
+    # 教训："对模型的举例里不许出现具体取值"）。
+    spans = _msg_quote_spans(text)
+    head = ("**主人在原话里已经用引号点名了目标**："
+            + "、".join(f"「{s}」" for s in spans[:3]) + "。"
+            if spans else
+            "**主人这句话是在要求你改动站内的数据**（用了动作词），"
+            "只是没有加引号把目标名字单独标出来。")
+    how = ("（SKILL 选对、目标名字就抄主人引号里那一段，一个字都不要改写或截短）"
+           if spans else
+           "（SKILL 选对、目标名字**照主人原话里的那个名字原样抄**，"
+           "一个字都不要改写或截短）")
     return (
-        "**主人在原话里已经用引号点名了目标**："
-        + "、".join(f"「{s}」" for s in spans[:3])
-        + "。你这一版没有产出任何工具规格。\n"
+        head + "你这一版没有产出任何工具规格。\n"
         "如果你是因为『不确定站内有没有这个名字 / 这件事做不做得成』而打算先问主人"
         "——**那不是你该预判的事**：名字落不到唯一一行、或者站里本来就没有这个名字，"
         "系统会照着站内台账**如实回话**（并写明本轮零执行、站内数据一个字节都没改）。"
-        "你要做的是**照主人的原话把工具规格写出来**（SKILL 选对、目标名字就抄主人引号里"
-        "那一段，一个字都不要改写或截短），要不要真动手、影响面多大，由系统弹确认框"
-        "问主人。\n"
+        "你要做的是**照主人的原话把工具规格写出来**" + how +
+        "，要不要真动手、影响面多大，由系统弹确认框问主人。\n"
         "（反过来：如果主人这句话本来就不是要改动站内数据的请求——只是提问、闲聊，"
         "或是要你解释/整理某段内容——那保持你现在的决定即可，不必强行凑一个写操作。）"
     )
@@ -2550,7 +2580,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             refusal = grounded_refuse
             subject = "主人这句话本身（目标名只能来自主人说出口的那几个字）"
         else:
-            refusal = _write_target_refusal(plan_obj, config)
+            refusal = _write_target_refusal(plan_obj, config, user_msg, role)
         if refusal:
             wtool, why = refusal
             # 值/目标名被拒时补一句：那个字面是**系统自己的参数值**，不是主人点名的名字
@@ -2589,10 +2619,13 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 剔空纠偏共用同一条重决策通道（同一轮内只纠一次，纠完仍零工具就照原样走）。
         nudge = None if correction else _name_write_nudge(plan_obj, user_msg, rounds, role)
         if nudge:
-            logger.warning("[planner] 主人点名了目标却零工具 → 写形态纠偏重决策：%s",
-                           "、".join(_msg_quote_spans(user_msg)[:3]))
+            _spans = _msg_quote_spans(user_msg)
+            _verbs = _name_write_verbs(user_msg)
+            logger.warning("[planner] 写形态的请求却零工具 → 纠偏重决策（动作词=%s，"
+                           "引号点名=%s）", "、".join(_verbs[:3]),
+                           "、".join(_spans[:3]) or "无")
             record("planner", "name_nudge", round=rounds,
-                   spans=_msg_quote_spans(user_msg)[:3])
+                   spans=_spans[:3], verbs=_verbs[:3])
             correction = nudge
             continue
 
@@ -4016,12 +4049,56 @@ def _target_grounding_refusal(plan_obj: dict, user_msg) -> tuple[str, str] | Non
     return None
 
 
-def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
+def _truncation_candidate(want: str, cands) -> str | None:
+    """台账里**只有一条**是"主人说的那个名字被抄短了"的候选 → 它的全名；否则 None。
+
+    判据 = 去空白后 `want` 是候选名的**真前缀**（`候选名.startswith(want)`），
+    且这样的候选**恰好一条**。只用在这一处、只往一个方向放行：
+      · 反方向（候选名 ⊂ want，即 planner 多说了一截）**不校正**——那说明台账里有个
+        更短的同名物，没有理由认定主人说的是哪一条；
+      · 中段包含（want 在候选名里但不在开头）**不校正**——那不是"抄短了"的形态，
+        更可能是两个不同的名字恰好共用一个词（"编程" ⊂ 二级标签展示名"编程 / Asyncio"）。
+    这两条边界与 `_near_miss_names`（提问用的宽判据）刻意不同：那一条只把候选摆给人
+    看、人自己会挑；这一条要**替主人定死目标**，所以判据必须窄到只剩"抄短"一种解释。
+    重名的两个条目（两个二级标签同名）算两条 ⇒ 返回 None（歧义不替主人选）。
+    """
+    w = _squash_spaces(want)
+    if len(w) < 3:
+        return None
+    hits: list[str] = []
+    for _cid, nm in cands:
+        name = str(nm or "")
+        sn = _squash_spaces(name)
+        if len(sn) > len(w) and sn.startswith(w) and name not in hits:
+            hits.append(name)
+    return hits[0] if len(hits) == 1 else None
+
+
+def _write_target_refusal(plan_obj: dict, config, user_msg=None,
+                          role: str | None = None) -> tuple[str, str] | None:
     """本轮写操作的目标名字能否唯一落到站内一行？返回 `(工具名, 拒绝说明)` 或 None。
 
     与工具**同一套解析**（`tools.base._find_named_tag` / `_find_named_category`），
     并且目标与父标签用**同一份字典快照**查。这一层只回答"这件事现在做得成吗"，
     真做的时候工具仍会自己再读一次字典——两次判断互不背书，谁都不替对方下结论。
+
+    **近失的截断形态就地校正**（20260926 D3，见 `_truncation_candidate`）：查无此名、
+    而台账里有**唯一一条**以它开头的名字时，把目标名改回台账原文再放行——于是这一轮
+    走的是弹卡（卡片上印着台账的全名与 id，由主人点一下），而不是一句"站内没有"。
+    动机：近失候选从前只活在 narrator 的回复里，下一轮就被历史节选截断，主人的
+    「就那个」再也对不上任何东西。**候选要当系统数据带走**，而带走它的载体是弹卡。
+    三条边界（都不许松）：非"截断"形态不校正（见 `_truncation_candidate`）；校正后
+    必须用**同一个解析器**再验一次、对不上就退回原来的如实拒绝；留言族不校正
+    （`quote` 是正文片段，"以它开头"没有任何指认力）。校正后**永远不会免弹窗**：
+    主人原话说的是短的那一截，全名不在他这句话里，`_confirm_popup` 的
+    `_ident_grounded` 自动判不成立 ⇒ 必弹卡。父标签（`pkey`）不做这一步。
+
+    `user_msg` 只服务这一处校正（还有一条硬边界：**planner 填的那个短名字必须能由
+    主人原话取出来**）——纯指代句（"把那个标签删了"）里 planner 自己猜的名字不算来源，
+    那与 `_target_grounding_refusal` 是同一条纪律，本层不替它开新口子（否则"猜出来的
+    名字 + 台账里唯一一条以它开头的"就成了一次系统替主人认领目标）。默认 None ⇒
+    这条校正不发生（存量调用点与离线单测因此零影响）。`role` 仅透传给
+    `instantiate_plan`（重建计划时 calls 白名单按角色取）。
     """
     tools = plan_obj.get("tools") or []
     if not tools:
@@ -4057,18 +4134,57 @@ def _write_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
             return None  # 同上（读不到清单不是"没有这条留言"）
     elif tag_index is None:
         return None
+    def _lookup(w: str):
+        """同一份快照上的名字解析——判定与近失校正**必须用同一份**，两份快照之间
+        的写入会让校正出来的名字对不上（`_ledger_names` 与它成对）。"""
+        if is_cat:
+            return _find_named_category(w, config, index=cat_index)
+        if is_ann:
+            return _find_named_announcement(w, config, index=ann_index)
+        if is_board:
+            return _find_board_comment(w, config, index=board_index)
+        return _find_named_tag(w, config, args.get("level"), index=tag_index)
+
+    def _ledger_names():
+        """台账的 `(id, 名字)` 快照。三个台账的**行形态各不相同**：标签与分类是对象
+        （`TagInfo` / `CategoryInfo`）、公告是 dict——各按各的取，别指望有统一接口
+        （20260926：这里曾一律按 dict 取，分类那一支一走到就 `AttributeError`）。
+        标签用 `t.name`（`find_tag` 比的就是它）而不是展示名 `t.label`——拿展示名去比
+        会把"编程"误配成二级标签"编程 / Asyncio"。"""
+        if is_cat:
+            return [(cid, str(getattr(r, "name", "") or "")) for cid, r in cat_index.items()]
+        if is_ann:
+            return [(rid, str(r.get("title") or "")) for rid, r in ann_index.items()]
+        return [(tid, str(t.name or "")) for tid, t in tag_index.items()]
+
     if tkey:
         want = str(args.get(tkey) or "").strip()
         if want:
-            if is_cat:
-                hit, err = _find_named_category(want, config, index=cat_index)
-            elif is_ann:
-                hit, err = _find_named_announcement(want, config, index=ann_index)
-            elif is_board:
-                hit, err = _find_board_comment(want, config, index=board_index)
-            else:
-                hit, err = _find_named_tag(want, config, args.get("level"),
-                                           index=tag_index)
+            hit, err = _lookup(want)
+            if err and not is_board and _msg_grounded_name(want, user_msg):
+                # 只有"主人自己说的就是短的那一截"才校正（见函数头注的边界）：全名不在
+                # 他原话里 ⇒ `_ident_grounded` 判不成立 ⇒ 必弹卡，由他看着全名点。
+                fixed = _truncation_candidate(want, _ledger_names())
+                if fixed and not _lookup(fixed)[1]:
+                    params = dict(plan_obj.get("params") or {})
+                    params[tkey] = fixed
+                    fresh = instantiate_plan(plan_obj.get("skill") or "chat",
+                                             params, role)
+                    # 重建出的计划**必须**还是同一个工具、且只有一条：写技能的重建
+                    # 由 `_expand_write_skill` 按技能名分支决定，理论上不会变，但一旦
+                    # 变了（比如技能表将来改了），悄悄少掉一条规格就等于这一轮什么都不
+                    # 做而谁也不知道 ⇒ 退回原来的如实拒绝，不动它。
+                    if [s for s in (fresh.get("tools") or [])
+                            if _tool_name(s) == name] == [fresh["tools"][0]]:
+                        logger.warning("[planner] 目标名「%s」在台账里查不到，但它是"
+                                       "「%s」被抄短的那一截 → 就地校正"
+                                       "（弹卡由主人确认，不直接执行）", want, fixed)
+                        record("planner", "ledger_truncation_fix", tool=name,
+                               got=want[:60], used=fixed[:60])
+                        fresh["params"] = params
+                        plan_obj.clear()
+                        plan_obj.update(fresh)
+                        return None
             if err:
                 return name, err
     if pkey:
