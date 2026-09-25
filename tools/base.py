@@ -574,13 +574,24 @@ def get_weather(
 # NAV_VALID_PATHS 从这里同源导入，规划侧约束 = NAV_MAP 别名映射 + instantiate_plan
 # 校验 + planner 提示词规则）：模型不可信，工具必须自证。
 # 教训：模型曾把"友链板块"猜成 /links 直接发出去（真实页是 /guestbook）。
-_NAV_EXACT_PATHS = {"/", "/about", "/guestbook", "/talk", "/times", "/login", "/dashboard", "/device-console/"}
+# 后台子页（20260926：转跳要能定位到后台各板块）在这里**逐个列出**，对应
+# skills.py 的 DASHBOARD_PANELS（面板名与路径的第二处，由 tests/test_skills.py
+# 的两侧覆盖断言锁住同源）。**不放开 `/dashboard/` 前缀**：前缀放行等于让模型
+# 自己拼子路径，而前端 /dashboard 下没有通配子路由——猜出来的路径渲染的是一片
+# 空白（不是 NotFound 页），比"拒绝并回真实清单"糟得多。
+_NAV_EXACT_PATHS = {
+    "/", "/about", "/guestbook", "/talk", "/times", "/login", "/dashboard",
+    "/dashboard/notes", "/dashboard/comments", "/dashboard/albums",
+    "/dashboard/announcement", "/dashboard/users", "/dashboard/analytics",
+    "/dashboard/usercontrol",
+    "/device-console/",
+}
 _NAV_PREFIX_PATHS = ("/category/", "/article/")
 
 
 @tool
 def navigate_to(
-    path: Annotated[str, "Page path to navigate to, e.g. / /times /category/tech /article/3 /talk /guestbook /about"],
+    path: Annotated[str, "Page path to navigate to, e.g. / /times /category/tech /article/3 /talk /guestbook /about /dashboard/notes"],
     confirm: Annotated[bool, "Whether user confirmation is needed. false=direct nav, true=ask user"] = True,
 ) -> str:
     """导航到博客页面。页面跳转只能通过调用本工具生效：调用后返回 NAVIGATE:/AUTO_NAVIGATE: 前缀命令，由系统执行跳转。
@@ -592,7 +603,11 @@ def navigate_to(
         # 拒绝时把真实约束回给模型，让它用有效路径重新调用（而不是返回错误命令让前端执行）
         return (
             f"导航路径无效: {p!r}。博客真实存在的页面: /（首页）、/about、/guestbook、/talk、"
-            f"/times、/login、/dashboard、/category/*、/article/*、/device-console/。"
+            f"/times、/login、/category/*、/article/*、/device-console/、以及后台各面板："
+            f"/dashboard（后台主页）、/dashboard/notes（后台笔记）、"
+            f"/dashboard/comments（后台说说）、/dashboard/albums（后台图库）、"
+            f"/dashboard/announcement（后台公告）、/dashboard/users（后台用户管理）、"
+            f"/dashboard/analytics（后台数据板）、/dashboard/usercontrol（后台站点设置）。"
             f"请用有效路径重新调用 navigate_to。"
         )
     full_url = f"https://saudade.site{p}"
