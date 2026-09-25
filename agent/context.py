@@ -300,6 +300,12 @@ def _last_assistant_utterance(messages: list) -> str:
 # 指令（同意 = 把提议那件事真的规划出来；拒绝 = 零调用收尾、绝不执行）。
 # 只是一句提示（不改决策权）：判断仍归 planner，但它不再需要猜"要"指什么。
 _SHORT_MAX = 12  # 去标点空白后的长度上限——超过就不是"短应答"
+# 语气尾缀（20260925）：泠月的人设自带"喵"字尾（主人回「要喵」「好的喵呜」），
+# 而本判据是**整串相等**型 ⇒ 一个尾缀就把"同意"判成"不是短应答"，planner 于是失去
+# 那条确定性指引（与 20260923 的系统消息壳同族：整串相等型被一层外壳架空）。
+# 修的是**形态族**（剥尾缀词素），不是往三个集合里逐条加带喵的写法——词表追不全。
+# 只剥**结尾**的喵：句中/句首的喵是别的意思（`_SHORT_LEAD_RE` 已在句首剥过一道）。
+_SHORT_TAIL_TIC_RE = re.compile(r"(?:喵呜|喵)+$")
 _PUNCT_ONLY_RE = re.compile(r"[\s，。！？~～、；：,.!?…·\-—_/\\|]+")
 _SHORT_LEAD_RE = re.compile(r"^(那|那就|就|我|咱|我们|你|小猫咪|泠月|喵|，|,|、)+")
 _SHORT_POS = frozenset({
@@ -356,8 +362,11 @@ def _short_reply_kind(text: str) -> str:
     自 20260920 批次 b 上线起在各处恒不触发（那两条用例仍 PASS = LLM 自己读懂了，
     属"少一层助力"而非观测到的故障）。同款坑第二例，第一例见 decisions.py 的导航快道。
     **只影响判定，不碰给模型的 prompt**（壳是给模型看的锚点，不是缺陷）。
+    ⚠️ **结尾语气词先剥（20260925）**：`_SHORT_TAIL_TIC_RE` 见上方注释——同族第三例，
+    同一处"整串相等"被外壳架空的形态。
     """
     core = _SHORT_LEAD_RE.sub("", _PUNCT_ONLY_RE.sub("", strip_system_tags(text or ""))).strip()
+    core = _SHORT_TAIL_TIC_RE.sub("", core)  # 尾缀剥空（整句只有一个"喵"）⇒ 下面按"不是短应答"返回
     if not core or len(core) > _SHORT_MAX:
         return ""
     if core in _SHORT_NEG:  # 先否定：三集合无交集，顺序只为可读
