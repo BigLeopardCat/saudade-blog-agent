@@ -1335,6 +1335,35 @@ def create_tag(
         "op": "tag_create", "tag_id": got.id, "tag_name": got.name, "level": got.level})
 
 
+def _near_miss_names(want: str, cands, limit: int = 3):
+    """名字的**近似候选**（近失）→ `[(id, 展示名), …]`，按"更像"排序。
+
+    判据 = 去掉所有空白后**互相包含**（`want ⊂ 候选名` 或 `候选名 ⊂ want`），
+    长短任一侧至少 3 字（2 字的名字包含一切，只会把清单变成噪声）。
+
+    它只用来**把一次假否定换成一次可点名的追问**，绝不参与"要不要动手"：
+    写操作仍然只认完全相等（见各调用方 docstring）。
+    动机（20260925 D2 现场）：主人点名的公告被节选截短成"管理员助手公告发布测试"，
+    台账按标题**完全相等**查不到 ⇒ 工具回一句"站内没有标题是「…」的公告"——
+    而站内明明有一条名字只差前三个字的公告。**"查不到"被说成了"没有"**，
+    主人拿到的是一句假话加一次零写。近失候选把这句话变成可核对的事实：
+    「没有完全同名的；最接近的是 id=14「泠月喵管理员助手公告发布测试」」。
+    排序：先"候选名包含 want"（截断形态，最常见），再按长度差、再按 id。
+    """
+    w = re.sub(r"\s+", "", str(want or ""))
+    if len(w) < 3:
+        return []
+    out = []
+    for cid, name in cands:
+        n = re.sub(r"\s+", "", str(name or ""))
+        if len(n) < 3:
+            continue
+        if w in n or n in w:
+            out.append((0 if w in n else 1, abs(len(n) - len(w)), cid, name))
+    out.sort(key=lambda x: (x[0], x[1], x[2]))
+    return [(cid, name) for _, _, cid, name in out[:limit]]
+
+
 def _find_named_tag(name, config, level=None, role="标签", index=None):
     """按名字在标签字典里找一个标签 → `(TagInfo, None)` 或 `(None, 拒绝文本)`。
 
@@ -1343,7 +1372,8 @@ def _find_named_tag(name, config, level=None, role="标签", index=None):
       · 唯一命中 → 交给调用方；
       · 命中多个（不同父下的同名二级）→ 请调用方追问，**不替用户选一个**
         （选错就是改错/删错数据）；
-      · 一个都没有 → 如实说站内没这个标签，**绝不新建、绝不模糊匹配**；
+      · 一个都没有 → 如实说站内没这个标签，**并附上名字最接近的候选**请主人点名
+        （`_near_miss_names`，20260925 D2）；**绝不新建、绝不按模糊匹配动手**；
       · 字典读不到 → 单独一种说法（"读不到" ≠ "没有"）。
     `role` 只影响措辞（找父标签时说「一级标签」）；**给了 level 就自动说清是
     "一级里没有"还是"二级里没有"**——否则 planner 会以为这个名字站内根本不存在，
@@ -1383,6 +1413,15 @@ def _find_named_tag(name, config, level=None, role="标签", index=None):
                       + "、".join(c.label + f"（id={c.id}）" for c in cands)
                       + "）：无法确定要动的是哪一个，本次未改动——"
                         "请用「父 / 子」这样的全名指认它（或说明是一级还是二级）")
+    near = _near_miss_names(want, [(t.id, t.label) for t in index.values()])
+    if near:
+        # 近失（20260925 D2）：没有**同名**的，但名字接近——把候选摆出来请主人点名，
+        # 而不是丢一句"站内没有"（那句话在主人的视角里是假的：他记得站内有）。
+        return None, (f"站内没有叫「{want}」的{role}（完全同名的一个都没有）；"
+                      + "名字最接近的是 "
+                      + "、".join(f"{nm}（id={cid}）" for cid, nm in near)
+                      + f"：本次未改动——若就是其中一个，请照它的**完整名字**再说一遍，"
+                        f"我按那个名字动手")
     return None, f"站内没有叫「{want}」的{role}，本次未改动"
 
 
@@ -1592,7 +1631,7 @@ def _find_named_category(name, config, index=None):
 
     `index` 与 `_find_named_tag` 同义：可选的**外部快照**。调用方一次要查多个名字
     （或只是"先看看能不能做"，见 graph._write_target_refusal）时传进来，省一次往返、
-    也让两次判断看到同一份字典。"""
+    也让两次判断看到同一份字典。完全没有同名分类时附名字最接近的候选（同 `_near_miss_names`）。"""
     from agent import adminops as A
     if index is None:
         index = _category_index(config)
@@ -1608,6 +1647,13 @@ def _find_named_category(name, config, index=None):
         return None, (f"站内有 {len(cands)} 个叫「{want}」的分类（"
                       + "、".join(f"id={c.id}" for c in cands)
                       + "）：无法确定要动的是哪一个，本次未改动")
+    near = _near_miss_names(want, [(c.id, c.name) for c in index.values()])
+    if near:
+        return None, (f"站内没有叫「{want}」的分类（完全同名的一个都没有）；"
+                      + "名字最接近的是 "
+                      + "、".join(f"{nm}（id={cid}）" for cid, nm in near)
+                      + f"：本次未改动——若就是其中一个，请照它的**完整名字**再说一遍，"
+                        f"我按那个名字动手")
     return None, f"站内没有叫「{want}」的分类，本次未改动"
 
 
@@ -1821,8 +1867,10 @@ def _find_named_announcement(title, config, index=None):
 
     与 `_find_named_tag` 同取向（也是同一个"名字通道"的公告版）：唯一命中才动手；
     命中多条（同名公告）**不替用户选一条**——把候选连同 id/时间列出来让他指认；
-    一条都没有就如实说站内没有，**绝不新建、绝不模糊匹配**；字典读不到则单独一种
+    一条完全同名的都没有就如实说没有，**并附上名字最接近的候选**（`_near_miss_names`，
+    20260925 D2：被截短的标题在这里会撞成一句"站内没有"的假话）；字典读不到则单独一种
     说法（"读不到" ≠ "没有"，把一次网络故障说成"站内没这条公告"是最坏的错法）。
+    **模糊匹配只用来提问、不用来动手**：写操作仍然只认标题完全相等。
     `index` 是可选快照（一次操作要读同一份清单两回时用）。
     """
     if index is None:
@@ -1840,6 +1888,16 @@ def _find_named_announcement(title, config, index=None):
         return None, (f"站内有 {len(hits)} 条标题都叫「{want}」的公告（{cands}）："
                       f"无法确定要动的是哪一条，本次未改动——请先说明是哪一条"
                       f"（或让我按别的说法列出全部公告）")
+    near = _near_miss_names(want, [(r.get("id"), str(r.get("title") or ""))
+                                   for r in index.values()])
+    if near:
+        # 近失（20260925 D2 现场，见 _near_miss_names 长注）：主人点名的标题被节选
+        # 截短 ⇒ 完全相等查不到。此时说"站内没有这条公告"是**假话**——站内有，
+        # 只差三个字。把候选连同 id 摆出来，让"没有"变成一次可核对的追问。
+        cands2 = "、".join(f"id={cid}「{nm}」" for cid, nm in near)
+        return None, (f"站内没有标题**完全等于**「{want}」的公告；名字最接近的是 {cands2}。"
+                      f"本次未改动——若就是其中一条，请照它的**完整标题**再说一遍"
+                      f"（或直接给 id），我按那个标题动手")
     return None, f"站内没有标题是「{want}」的公告，本次未改动"
 
 
