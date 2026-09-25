@@ -4481,6 +4481,99 @@ def test_write_desc_no_example_names():
           "完整照抄" in block)
 
 
+def test_write_intent_never_expressed_round():
+    """写意图整轮没被表达出来 → 两处供给侧补丁（20260926 洞⑥ 复盘）。
+
+    现场（trace 20260926T020217，同形两例）：主人说「测试公告清除了吧」，planner
+    排的是一圈**只读**工具（get_announcements）——那一圈读**结构上不可能**让写发生，
+    同轮的 data_repeat 拦截又把重复的读收尾 ⇒ 写操作的规格从头到尾一次都没出现过。
+    而 narrator 手里也没有"本轮没提过任何写操作"这条系统事实，于是照着 recent_tail
+    里上一轮弹卡的确认文本编了一句"点「确定」我就去办"（系统画面上根本没有那张卡），
+    gate 按洞⑥ 打回——**供给侧的洞，让事后闸门去兜**。
+
+    锁三件事：
+      ① 纠偏触发面从"零工具"扩到"只排只读工具"（逐条 `authz.is_write` 判，不另立表）；
+      ② data_repeat 收尾的注记必须带上"没有写操作/没有待确认卡片"这条系统事实；
+      ③ 反向的两道：清单里已有写工具不纠偏、rounds≥1 的零工具不纠偏（那是见过帧
+         之后的收敛，不该再花一次采样）。
+    """
+    print("[write_intent_never_expressed] 只读清单一族：纠偏 + 收尾注记写清系统事实")
+    import agent.graph as G
+    from agent.graph import parse_plan, planner_node
+    from agent.principal import Principal
+
+    class _ScriptedLLM:
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
+                             "user_id": 7, "conversation_id": 42, "stop_event": None}}
+    _orig_llm = G.get_llm
+    _MSG = "测试公告清除了吧"
+    # 只读清单 + 动作词（词形族认「清除」）——**两种形态都要纠**：首轮如此，见过帧的
+    # 轮次同样如此（实测现场正是第 2 轮：planner 把上一轮那份读又排了一遍）
+    _READ_PLAN = ('SKILL=content_query\nPARAMS={"tools": ["get_announcements"]}\n'
+                  "REPLY: 如实回答")
+    _frame = ToolMessage(content='[{"id": 3, "title": "随便发一条公告"}]',
+                         tool_call_id="execute_0", name="get_announcements")
+    try:
+        # ① 首轮：零工具那一支（既有行为不许被这次扩面改动）
+        llm0 = _ScriptedLLM(['SKILL=chat\nPARAMS={}\nREPLY: 您想删哪条公告呀？', _READ_PLAN])
+        G.get_llm = lambda **kw: llm0
+        planner_node({"messages": [HumanMessage(content=_MSG)], "plan_rounds": 0,
+                      "executed": [], "tool_data": []}, _cfg)
+        check("  零工具那一支照旧纠偏（这次扩面没动它）", len(llm0.prompts) == 2,
+              str(len(llm0.prompts)))
+
+        # ② rounds≥1：只排只读工具 + 动作词 → 纠一次；重决策仍是只读 ⇒ data_repeat 收尾，
+        #    注记里必须写清"没提过写操作、没有待确认的卡片"（narrator 才有事实可依）
+        llm1 = _ScriptedLLM([_READ_PLAN, _READ_PLAN])
+        G.get_llm = lambda **kw: llm1
+        out1 = planner_node({"messages": [HumanMessage(content=_MSG), _frame],
+                             "plan_rounds": 1, "executed": ["get_announcements({})"],
+                             "tool_data": [], "receipts": []}, _cfg)
+        check("  只排只读清单也纠偏一次（现场形态：读了一圈，写从未被表达）",
+              len(llm1.prompts) == 2, str(len(llm1.prompts)))
+        check("  纠偏文本讲清「这一版排的全是只读的」",
+              "全是只读的" in llm1.prompts[1], "纠偏文本未进提示")
+        _note1 = parse_plan(out1["plan"])["note"] or ""
+        check("  重复只读 → data_repeat 收尾，注记写明没有写操作/没有待确认卡片",
+              "一个写操作都没提出来" in _note1 and "待确认的卡片" in _note1,
+              _note1[:200])
+        check("  注记里不许出现「确定」两字（写给 narrator 的机制描述会变成它的词汇）",
+              "确定" not in _note1, _note1[:200])
+
+        # ③ 反向：清单里已经有写工具 → 这件事已被当成"要动手的请求"处理，不再纠偏
+        check("  清单里已有写工具 → 不纠偏",
+              G._name_write_nudge({"tools": ['delete_tag({"name": "大笨狗汪汪"})'],
+                                   "params": {}}, "把大笨狗汪汪那个标签删了吧",
+                                  0, "admin") is None)
+        # ④ 反向：rounds≥1 的**零工具**是见过帧之后的收敛（明确的收尾决定），不纠
+        check("  rounds≥1 的零工具不纠偏（收敛不加采样）",
+              G._name_write_nudge({"tools": [], "params": {}}, _MSG, 1, "admin") is None)
+        # ⑤ 只读那一支**不许报出参数里的取值**（它只复述工具名——工具名是它自己刚写的
+        #    计划，参数里的名字却可能是系统给的取值）
+        _nudge = G._name_write_nudge(
+            {"tools": ['search_notes({"query": "大笨狗汪汪"})'], "params": {}},
+            "把大笨狗汪汪那个标签删了吧", 0, "admin") or ""
+        check("  纠偏文本只复述工具名、不带参数取值",
+              "search_notes" in _nudge and "大笨狗" not in _nudge, _nudge[:160])
+        # ⑥ 提问句/闲聊的两道原有前提在这次扩面后仍然生效
+        for _label, _t in (("提问句", "把那个公告删了会有什么影响？"),
+                           ("纯查询（无动作词）", "看看站里有什么公告")):
+            llm2 = _ScriptedLLM(['SKILL=content_query\nPARAMS={}\nREPLY: 如实回答'])
+            G.get_llm = lambda **kw: llm2
+            planner_node({"messages": [HumanMessage(content=_t)], "plan_rounds": 0,
+                          "executed": [], "tool_data": []}, _cfg)
+            check(f"  不纠偏：{_label}", len(llm2.prompts) == 1, str(len(llm2.prompts)))
+    finally:
+        G.get_llm = _orig_llm
+
+
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
@@ -4511,6 +4604,7 @@ def main():
                test_write_target_refusal_round, test_write_grounding_round,
                test_write_ledger_note_round,
                test_announcement_text_round, test_name_target_round,
+               test_write_intent_never_expressed_round,
                test_write_desc_no_example_names):
         fn()
     if FAILS:
