@@ -22,6 +22,10 @@
   requires_fixture（20260925）       它要动的那个夹具（`agent_fixture_` 前缀族）——
                                      不在位就响亮跳过，见 eval/golden_fixture.py
   三者未满足都**响亮 SKIP 并计入 skipped_ids**（不静默豁免：跳过关乎通过率分母）。
+  20260926 起两条身份通道**不再"设了就用"**：设了也要先做一次**只读在位检查**
+  （eval/identity_preflight.py，拿与 agent 代调同源的令牌打一次管理员域只读接口）。
+  明确不可用（401 被冻结/收回、403 角色不符）⇒ 那批用例**未评估** + **退出码 3**；
+  读不到（网络/重启）⇒ 只警告照跑（"不知道"不等于"不可用"，别改成对称的）。
 
 用法（cd saudade-blog-agent）：
   .venv/bin/python eval/run_golden.py               # 全量（本机=生产链路，耗时基线有效）
@@ -32,7 +36,9 @@
   # 真写用例（夹具先在位，见 scripts/migration/golden_write_fixture_20260925.sql）：
   GOLDEN_ADMIN_UID=721 GOLDEN_ALLOW_REAL_WRITE=1 \
     .venv/bin/python eval/run_golden.py --only golden_write_category_delete_exec
-退出码：0=达到 --min-pass-rate（默认 1.0，即全过）1=低于门禁
+退出码：0=达到 --min-pass-rate（默认 1.0，即全过）1=低于门禁 / 回归组红
+        2=一条用例都没剩下（空分母："没评"不是"通过"）
+        3=身份前置不可用（真身份用例**未评估**——同样"没评"，不受 --min-pass-rate 放宽）
 
 **`--min-pass-rate` 的确切语义**（20260924 写清——此前只在文档里含糊带过，实际有四层）：
   1. 它管的是**本轮实际跑了的那些用例**的通过率，不是全语料的。`--only` / `--limit` /
@@ -74,6 +80,7 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 
 import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
 import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
+import identity_preflight  # 同目录：真身份通道的前置在位检查（20260926）
 import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
 from utils import trace as trace_mod  # trace 工具返回留多长（run_case 里放开，见其注释）
 
@@ -1123,9 +1130,15 @@ def main():
     # ⚠️ 只给**用例自己声明要身份**的条目注入：写面用例的正确行为是"弹卡/零写"，它们靠
     # uid=0 的哨兵兜住"模型跑飞真写下去"这最后一道保险，不在这条通道的适用范围里。
     import os as _os
-    _UID_CHANNELS = (("needs_admin_uid", "GOLDEN_ADMIN_UID"),
-                     ("needs_user_uid", "GOLDEN_USER_UID"))
-    for _marker, _env in _UID_CHANNELS:
+    _UID_CHANNELS = (("needs_admin_uid", "GOLDEN_ADMIN_UID", "admin"),
+                     ("needs_user_uid", "GOLDEN_USER_UID", "user"))
+    # 前置在位检查（20260926）：**配了 uid 就一定先验一次**（见 identity_preflight 头注）。
+    # 治的是一类与"模型退化"长得一模一样的假红：721 被冻结 / 被改密码（代次 +1）/
+    # 换成一个角色不符的 uid ⇒ 十几条真身份用例集体红，而复审单上只有模型的错话。
+    _preflight_rows: list[dict] = []
+    _identity_skipped: list[str] = []
+    _precondition_bad = False
+    for _marker, _env, _role in _UID_CHANNELS:
         _real_uid = _os.environ.get(_env, "").strip()
         _need_uid = [c["id"] for c in cases if c.get(_marker)]
         if not _need_uid:
@@ -1136,6 +1149,24 @@ def main():
             for cid in _need_uid:
                 print(f"[skip] {cid}: SKIP (needs {_env})")
         else:
+            _state, _detail = identity_preflight.probe(int(_real_uid), role_expected=_role)
+            _preflight_rows.append({"env": _env, "uid": int(_real_uid), "role": _role,
+                                    "state": _state, "detail": _detail})
+            if _state == identity_preflight.UNUSABLE:
+                # 前置条件不满足 ⇒ 这些用例**没被评估**。摘掉 + 计入 skipped_ids
+                # （分母随之变小，`full_run` 自动为假）+ 退出码 3（见文件末尾）。
+                _precondition_bad = True
+                skip_ids += _need_uid
+                _identity_skipped += _need_uid
+                cases = [c for c in cases if not c.get(_marker)]
+                print(f"[precondition] ⚠ {_env}={_real_uid} 不可用：{_detail}")
+                print(f"[precondition] ⇒ {len(_need_uid)} 条真身份用例本轮**未评估**"
+                      f"：{_need_uid}")
+                continue
+            if _state == identity_preflight.UNKNOWN:
+                # 「不知道」不等于「不可用」：照跑（详见 identity_preflight 头注）。
+                print(f"[precondition] ⚠ {_env}={_real_uid} 在位检查读不到：{_detail}"
+                      " —— 照跑；这批用例若集体红，先看这一行")
             for c in cases:
                 if c.get(_marker):
                     c.setdefault("context", {})["user_id"] = int(_real_uid)
@@ -1191,10 +1222,15 @@ def main():
     # `--only <一条真写用例>` 而没开真写闸、或 `--only <一条需要真身份的用例>` 而没给
     # uid、或 `--only` 拼错了 id。空分母的正确含义是"没评"，不是"全过"。
     if not cases:
+        # 身份前置不可用时**优先报 3**（20260926）：`--only <一条要真身份的用例>` 配一个
+        # 不可用的 uid，用例会被摘光落到这里；只报 2 的话「前置条件坏了」这件事就没了
+        # （2 说的是"你自己把用例摘光了"），而它恰恰是唯一可行动的那条信息。
+        _code = 3 if _precondition_bad else 2
         print("[run] ⚠ 一条用例都没剩下（被 --only / --skip-ids / 身份闸 / 真写闸 / 夹具闸"
               "摘干净了）—— 这一轮**没有评测任何东西**：空分母不是一个通过率，"
-              "退出码 2（不是 0）")
-        sys.exit(2)
+              f"退出码 {_code}（不是 0）"
+              + ("；其中身份前置不可用是主因，先修前置" if _precondition_bad else ""))
+        sys.exit(_code)
     print(f"[run] {len(cases)} 条 golden 样本（真实 LLM，约 {len(cases) * 30}s）\n")
 
     results = []
@@ -1397,6 +1433,13 @@ def main():
         # 在命令行上放行，任何无人看着的跑法都跳过它——这是设计，不是分母缺失。读报告的人
         # 想判「这一轮分母完整吗」应当看 `skipped_ids` 减去本栏。
         "skipped_real_write_ids": _write_skipped,
+        # 其中「前置条件不满足而没评」的那批单列（20260926）：与上面那栏同理——它们
+        # 不是设计如此，也不只是"缺凭据"，而是**凭据给了却不生效**（被冻结/角色不符）。
+        # 读的人想判「这一轮有没有因为环境问题没评完」看本栏；非空时退出码是 3。
+        "skipped_identity_ids": _identity_skipped,
+        # 在位检查的原始结论（每条身份通道一行：env/uid/role/state/detail）。落进报告
+        # 是为了事后能回答"这一轮的前置当时到底是什么状态"——日志会轮转，报告不会。
+        "identity_preflight": _preflight_rows,
         "latency_s": {
             "count": len(latencies),
             "min": round(_pct(latencies, 0), 1),
@@ -1447,7 +1490,7 @@ def main():
     # 时导出「判据 vs 模型实际输出」对照单。复审规则：假失败当轮修判据，真 FAIL
     # 才允许挂着（否则门禁失去区分度）。
     review_path = ""
-    if failed or _reg_flaked:
+    if failed or _reg_flaked or _precondition_bad:
         review_path = f"eval/report/review_{ts_str}.md"
         case_by_id = {c["id"]: c for c in cases}
         with open(review_path, "w", encoding="utf-8") as f:
@@ -1457,6 +1500,17 @@ def main():
                        if failed != failed_first else "")
                     + "。逐条判定并勾选（假失败当轮修判据，"
                       "真 FAIL 允许挂着并在下方写原因）：\n\n")
+            # 身份前置不满足（20260926）排最前：它会让**别的**用例跟着变红，先看这一条，
+            # 否则复审单上每条红都像是在说模型坏了。
+            if _precondition_bad:
+                f.write("> ⚠ **身份前置不可用，{n} 条真身份用例本轮未评估（退出码 3）**："
+                        .format(n=len(_identity_skipped))
+                        + "、".join(f"`{i}`" for i in _identity_skipped)
+                        + "\n> 明细：" + "；".join(
+                            f"{r['env']}={r['uid']}（{r['state']}）{r['detail']}"
+                            for r in _preflight_rows
+                            if r["state"] == identity_preflight.UNUSABLE)
+                        + "\n> 先修前置再读下面任何一条红——模型那半这轮根本没被测到。\n\n")
             # 回归组红单列在最前：这些不是"允许波动"的能力题，门禁已按硬判退出码 1
             if _reg_bad:
                 f.write("> ⚠ **回归组（regression）FAIL，本轮不得放行**："
@@ -1550,6 +1604,14 @@ def main():
         print(f"⚠ 回归组有 {len(_reg_flaked)} 条**首跑红、复跑绿**：{_reg_flaked}"
               f" —— 门禁按方差放行，但首跑红已记入报告（failed_first_run={failed_first}）"
               f"与复审单：{review_path or REPORT_FILE}")
+    # 身份前置不满足（20260926）：**排在通过率判定之前**，与回归组硬判同源、不受
+    # `--min-pass-rate` 放宽。理由只有一句：这些用例这一轮**没被评估**，而退出码 0
+    # 会被读成"这一轮没问题"——空分母那次（退出码 2）就是同一条纪律的另一个现场。
+    # 上面已把逐条 `[precondition]` 打过，这里只是让退出码也说出来。
+    if _precondition_bad:
+        print(f"⚠ 身份前置不可用（{_identity_skipped} 未评估）⇒ 退出码 3："
+              "修好前置（解冻 / 换一个角色相符的 uid）后重跑，别把它读成通过率")
+        sys.exit(3)
     if failed == 0:
         sys.exit(0)
     if _reg_bad:
