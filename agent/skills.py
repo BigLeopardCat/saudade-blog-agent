@@ -1380,6 +1380,10 @@ def instantiate_plan(skill_name: str, params: dict,
     tools: list[str] = []
     dropped: list[str] = []  # 白名单剔除的 planner 点名项（planner_node 记账，见下）
     param_unknown: list[str] = []  # PARAMS 里没人读的参数名（只读分支填，见通用分支）
+    # 本分支有没有**消费** PARAMS.tools / PARAMS.calls（20260925 批 C）。只有
+    # content_query 分支读这两键；其余技能读不到却也不记账 ⇒ 清单凭空消失。见下方
+    # 收尾处那段 `_skill_no_calls_suffix` 的注。
+    consumed_calls = False
     note = ""
     if skill.name == "navigate":
         # target 的事前校验（20260925）：**必须排在本技能自己的映射表判据之前**。
@@ -1447,6 +1451,7 @@ def instantiate_plan(skill_name: str, params: dict,
             tools.append(f"get_article_detail({json.dumps(args, ensure_ascii=False)})")
             note = f"读取当前文章全文（ID={aid}）"
     elif skill.name == "content_query" and (params.get("tools") or params.get("calls")):
+        consumed_calls = True
         # 20260903 架构裁决（planner 全权）：内容查询的调用清单由 planner 产出——
         # params.tools（无参只读点名，白名单 explicit_tools(role)）或 params.calls
         # （带参检索调用，白名单 callable_query_tools(role)）。两条白名单都**按
@@ -1612,6 +1617,29 @@ def instantiate_plan(skill_name: str, params: dict,
         for tool_name, tmpl in skill.plan:
             args = expand_template_args(tmpl, params, specs)
             tools.append(f"{tool_name}({json.dumps(args, ensure_ascii=False)})")
+    # 点名写进了不读清单的技能（20260925 批 C）：**PARAMS.tools / PARAMS.calls 只有
+    # content_query 分支读**（见那条 elif 的条件）。planner 把清单写在别的技能里时，
+    # 此前的结果是**静默的零执行**——`dropped` 空 ⇒ 剔空纠偏不触发、`drop_terminal`
+    # 不触发（它要 `not tools`），planner 以为计划已执行、narrator 照计划声称
+    # "我调用了 X"，而 agent.log 里毫无痕迹。这与 20260913 的"白名单静默剔除"是同一族：
+    # 计划里写了东西、执行侧没有对应物、中间无人记账。
+    # 收进 `dropped` 即复用既有那两条通道（WARNING + trace `rejected_call`；
+    # 零工具时同轮内纠偏一次、纠不动就确定性收尾）。**后缀必须是新的**：真话是
+    # "工具你够得着、只是这条点名写错了技能"，讲成"你够不到这个工具"是假话，会把
+    # planner 往错方向推（同 DROP_SUFFIX_BAD_ARGS 的理由）。
+    if not consumed_calls:
+        _named: list[str] = []
+        _raw = params.get("tools")
+        if isinstance(_raw, list):
+            _named += [t.strip() for t in _raw if isinstance(t, str) and t.strip()]
+        _raw = params.get("calls")
+        if isinstance(_raw, list):
+            for _c in _raw:
+                if isinstance(_c, dict) and isinstance(_c.get("tool"), str) and _c["tool"].strip():
+                    _named.append(_c["tool"].strip())
+        _suffix = _skill_no_calls_suffix(skill.name)
+        for _n in dict.fromkeys(_named):        # 同一工具同时写在 tools 与 calls ⇒ 只记一次
+            dropped.append(f"{_n}{_suffix}")
     return {
         "skill": skill.name,
         "tools": tools,
@@ -1633,6 +1661,16 @@ def instantiate_plan(skill_name: str, params: dict,
 # （那是假的，会把 planner 往错方向推）。两个后缀各自对应一种改法。
 DROP_SUFFIX_NOT_OBJECT = "（args 非对象）"
 DROP_SUFFIX_BAD_ARGS = "（参数不合格："
+# 第三种后缀（20260925 批 C）：**工具够得着，但这条点名写错了技能**。真相与上两种
+# 又不同——改法是"把 SKILL 换成 content_query、清单原样搬过去"，所以话术必须再分一支
+# （笼统讲成"你够不到这个工具"是假话，会把 planner 推去换工具而不是换技能）。
+# 前缀单独成常量：`graph._drop_correction` 按前缀选话术，片段拼在后面。
+DROP_SUFFIX_SKILL_NO_CALLS = "（SKILL 是 "
+
+
+def _skill_no_calls_suffix(skill_name: str) -> str:
+    """点名写在 `skill_name` 里、而该技能不读调用清单。见 `instantiate_plan` 收尾处。"""
+    return f"{DROP_SUFFIX_SKILL_NO_CALLS}{skill_name}：该技能的模板不执行 PARAMS.tools/PARAMS.calls）"
 
 
 # ---------------------------------------------------------------------------

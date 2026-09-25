@@ -93,6 +93,7 @@ from agent.principal import UNKNOWN as UNKNOWN_PRINCIPAL
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
+                          DROP_SUFFIX_SKILL_NO_CALLS,
                           FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
                           _WRITE_NAME_TARGET_SKILLS, arg_type_short,
                           build_planner_context, callable_query_tools,
@@ -724,8 +725,11 @@ def _drop_correction(dropped: list[str], role: str | None) -> str:
     规划执行"）。纠偏文本只写机器能保证的事实（工具归属从注册表读、可见性走
     `visible_skills(role)` 这唯一一处角色判据），**不替 planner 选技能、不猜用户意图**。
     """
-    lines = ["**你上一版决策点名的工具一个都没有执行**（不在你这个身份可点名的调用"
-             "清单里，本轮零工具、零结果）。逐个说明："]
+    # 抬头刻意**不写原因**（20260925 批 C）：原因有三种——不在你这个身份的清单里、
+    # args 不合法、**点名写在了不读清单的技能里**——逐条说明里各说各的，抬头一概括
+    # 就会把后两种讲错（"在你够不到的工具里"对它们是假话）。
+    lines = ["**你上一版决策点名的工具一个都没有执行**（本轮零工具、零结果，"
+             "原因逐条见下）。逐个说明："]
     for raw_name in dropped:
         name = str(raw_name).split("（", 1)[0].strip()   # 去掉带后缀时候的那个"（"
         suffix = str(raw_name)[len(name):]
@@ -743,6 +747,14 @@ def _drop_correction(dropped: list[str], role: str | None) -> str:
             elif suffix.startswith(DROP_SUFFIX_NOT_OBJECT):
                 lines.append(f"- {name}：工具本身你可以调用，但这条例目不合法{suffix}"
                              f"——args 要写成 JSON 对象（键值对），别写成字符串")
+            elif suffix.startswith(DROP_SUFFIX_SKILL_NO_CALLS):
+                # 第三种原因（20260925 批 C）：工具够得着、**点名写错了技能**。
+                # 与上面两种一样，改法必须讲准（这条改的是 SKILL 不是工具，也不是参数）。
+                lines.append(f"- {name}：工具本身你可以调用，但这条点名写错了地方{suffix}"
+                             f"——只有 SKILL=content_query 会执行 PARAMS.tools / PARAMS.calls。"
+                             f"要用它就把 SKILL 改成 content_query，无参只读写 PARAMS.tools"
+                             f"（写成工具名）、带参调用写 PARAMS.calls（写成 "
+                             f'{{"tool": "名字", "args": {{…}}}}）')
             else:
                 lines.append(f"- {name}：工具本身你可以调用，但这条例目不合法{suffix}")
             continue
@@ -2425,7 +2437,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 点名 get_social_links，被静默剔除后回复谎称"这次我用专门的社交链接查询工具
         # 调了一次"）。现在剔除即 WARNING + trace 事件，排障不再靠猜。
         if plan_obj.get("dropped"):
-            logger.warning("[planner] 点名工具被白名单剔除（不会执行、无帧）：%s（round %d/%d）"
+            # 两类原因都走这里（20260925）：被白名单剔除、或**点名写在了不读调用清单的
+            # 技能里**（后者见 skills.py `_skill_no_calls_suffix`）。条目自带后缀区分，
+            # 日志文字不再断言"白名单剔除"——那就把第二类讲错了。
+            logger.warning("[planner] 点名了工具但本轮不会执行、无帧：%s（round %d/%d）"
                            "——若属应支持的数据工具，检查 skills.py 白名单与菜单",
                            "、".join(plan_obj["dropped"]), rounds + 1, MAX_PLAN_ROUNDS)
             record("planner", "rejected_call", dropped=plan_obj["dropped"],
@@ -2435,6 +2450,9 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 此前**静默忽略**（"我以为填了、其实没人读"，与剔空白名单同族）。工具照常
         # 执行、不做任何阻断，只把"这个键没有消费方"留进日志与 trace——它是注册表
         # 与提示词漂移的探针（planner 写得出这个键，说明它认为自己该填）。
+        # `tools`/`calls` 出现在这里时**同时**会进上面那条 dropped（20260925 批 C）——
+        # 两个事件看的是同一件事的两面（这个键没有读者 / 点名的工具不会执行），
+        # 不要因为"重复"删掉其中一个：前者是键的探针、后者触发纠偏。
         if plan_obj.get("param_unknown"):
             logger.warning("[planner] PARAMS 里有没人读的参数（已忽略，不影响本轮执行）："
                            "%s（skill=%s，round %d/%d）——若属技能该收的参数，"
@@ -2592,7 +2610,8 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         record("planner", "drop_terminal", dropped=plan_obj["dropped"], round=rounds)
         plan_obj = _wrap_up_plan(False, note=(
             _LEDGER_NOTE_PREFIX +
-            "**本轮一个工具都没有执行**（你点名的那几个工具都在可调用清单之外），"
+            "**本轮一个工具都没有执行**（你点名的那几个工具要么不在可调用清单里、"
+            "要么写在了不读 PARAMS.tools/PARAMS.calls 的技能里，见上方逐条说明），"
             "所以你现在**没有任何工具返回可用**。只许如实说明你查不到这项数据："
             "说清缺的是什么（需要用户指明是哪一篇/需要博主身份/站内没有这项数据），"
             "并请用户补充信息。**不许**出现「看过/读过/查过/检索过/调用过工具」"
