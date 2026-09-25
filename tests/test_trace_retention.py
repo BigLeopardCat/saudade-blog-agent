@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""trace 目录布局与保留治理（`utils/trace` 写侧 + `eval/trace_files` / `eval/trace_retention`）单测。
+"""trace 目录布局与保留治理（`utils/trace` + `trace_files` / `trace_retention`）单测。
 
 离线、秒级、零网络、零生产目录（全部在 tmpdir 里）。
 
@@ -31,6 +31,7 @@ sys.path.insert(0, str(ROOT / "eval"))
 
 import trace_files as tf  # noqa: E402
 import trace_retention as tr  # noqa: E402
+
 from utils import trace as trace_mod  # noqa: E402
 
 FAILS: list[str] = []
@@ -76,6 +77,12 @@ def main() -> int:
               p is not None and os.path.basename(p) ==
               f"{time.strftime('%Y%m%dT%H%M%S')}_{17}_{tid[:8]}.json",
               os.path.basename(p) if p else "None")
+        # 审计 A6 把 logs/ + logs/agent/ + logs/agent/traces/ 收到 0700；这个按天目录
+        # 是**新建**的一层，默认会是 0755 ⇒ 显式锁住（父目录挡得住时不构成暴露，但
+        # 边界一旦按审计建议放宽到 0750，逐级目录里有一层 0755 就等于没挡）
+        check("① 新建的按天目录是 0700，不吃 umask 的默认 0755",
+              p is not None and (os.stat(os.path.dirname(p)).st_mode & 0o777) == 0o700,
+              oct(os.stat(os.path.dirname(p)).st_mode & 0o777) if p else "None")
 
         # golden 形态：by_day=False ⇒ 平铺在 <dir>/<name>.json（它自己已有 <run_id>/ 一层）
         gold = os.path.join(tmp, "gtraces", "run_1")
@@ -118,13 +125,16 @@ def main() -> int:
         archived = write(os.path.join(prod, "20250101", "20250101T030000_1_dddddddd.json.1.gz"),
                          age_days=31)
         acts = {os.path.basename(i["path"]): i["action"] for i in tr.plan(prod)["items"]}
-        check("③ 400 天前 ⇒ delete", acts.get(os.path.basename(old)) == "delete", str(acts.get(os.path.basename(old))))
+        check("③ 400 天前 ⇒ delete",
+              acts.get(os.path.basename(old)) == "delete",
+              str(acts.get(os.path.basename(old))))
         check("③ 31 天前的 .json.1.gz 归档 ⇒ delete（logrotate 命名也认）",
               acts.get(os.path.basename(archived)) == "delete")
         check("③ 25 小时前的 .json ⇒ compress", acts.get(os.path.basename(mid)) == "compress")
         check("③ 1 小时前的 .json ⇒ keep", acts.get(os.path.basename(fresh)) == "keep")
         check("③ 已经该删的不再压（判序：先删后压）",
-              not any(i["action"] == "compress" and i["age_days"] > 30 for i in tr.plan(prod)["items"]))
+              not any(i["action"] == "compress" and i["age_days"] > 30
+                      for i in tr.plan(prod)["items"]))
         check("③ 保留期/压缩阈值是模块级常量（夜间脚本不复述）",
               tr.KEEP_DAYS_DEFAULT == 30 and tr.COMPRESS_AFTER_HOURS_DEFAULT == 24)
 
@@ -150,9 +160,10 @@ def main() -> int:
         check("⑤ **压缩保留原 mtime**（否则年龄归零、保留期再次失效）",
               abs(os.stat(mid + ".gz").st_mtime - mid_mtime) < 1e-6,
               f"{os.stat(mid + '.gz').st_mtime} vs {mid_mtime}")
+        gz_row = [i for i in tr.plan(prod)["items"]
+                  if i["name"] == os.path.basename(mid) + ".gz"][0]
         check("⑤ 压缩后重算年龄仍是 ~25 小时（没被续命）",
-              abs([i for i in tr.plan(prod)["items"] if i["name"] == os.path.basename(mid) + ".gz"][0]
-                  ["age_days"] - 25 / 24.0) < 0.01)
+              abs(gz_row["age_days"] - 25 / 24.0) < 0.01)
         check("⑤ 刚写的（keep）没被碰",
               os.path.exists(fresh) and os.path.exists(mid + ".gz"))
         check("⑤ apply 的结果计数一致",
@@ -179,8 +190,8 @@ def main() -> int:
               "⚠" in tr.report(pl2) and os.path.basename(skew) in tr.report(pl2))
 
         # ── ⑦ --json 摘要可解析 ───────────────────────────────────────────
-        import io
         import contextlib
+        import io
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             rc = tr.main(["--dir", prod, "--json"])
