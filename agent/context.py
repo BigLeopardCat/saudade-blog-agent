@@ -165,8 +165,58 @@ def _last_user_msg(messages: list) -> str:
 # 截掉——实证（会话 144，1257 字回复）里点名的《架构文档》在正文中段，planner
 # 眼里就成了"这轮从没提过这篇"，于是从零检索去找（还找错了另一篇）。改成头尾
 # 各取一段，中段被截时先把其中的指代锚点（《标题》/id=/article 链接）捞回来附上。
-_TAIL_MID_ANCHOR_RE = re.compile(r"《[^》\n]{2,40}》|id\s*[=:：]\s*\d+|/article/\d+")
+_TAIL_ID_ANCHOR_RE = re.compile(r"id\s*[=:：]\s*\d+|/article/\d+")
+# 「」是 20260925 补的：公告/标签/分类名在生产帧里就是「」形态（`id=14「泠月喵…」`、
+# 「大笨狗」），旧正则只认《》⇒ 中段那些名字捞不回来。
+_TAIL_TITLE_ANCHOR_RE = re.compile(r"《[^》\n]{2,40}》|「[^」\n]{2,40}」")
+_TAIL_ANCHOR_CAP = 4
 _TAIL_HEAD = 80
+# 尾段起点回退窗与句边界（见 _snap_tail_start）。`**` 也算边界：渲染帧里的粗体块
+# （`**（id=14…`）是一个语义单元，从块首开始比从块中间开始可读。
+_TAIL_SNAP_WINDOW = 60
+_TAIL_SNAP_RE = re.compile(r"[。！？；\n]|\*\*")
+# 成对定界符：起点落在**开符号之后、闭符号之前**= 切在引文/标题/括号内部
+_TAIL_PAIRS = (("「", "」"), ("《", "》"), ("（", "）"), ("【", "】"), ("(", ")"))
+
+
+def _tail_anchors(mid: str) -> list[str]:
+    """中段里值得打捞的指代锚点：id/链接在前、标题在后（都是系统帧里的原文）。
+
+    id 排在前是因为它**能直接落到参数上**（规则 4⓪ 授权 planner 直接采用），
+    标题还得再解析一次；两类各自去重后合并，总上限 `_TAIL_ANCHOR_CAP`。
+    """
+    ids = list(dict.fromkeys(_TAIL_ID_ANCHOR_RE.findall(mid)))
+    titles = [t for t in dict.fromkeys(_TAIL_TITLE_ANCHOR_RE.findall(mid)) if t not in ids]
+    return (ids + titles)[:_TAIL_ANCHOR_CAP]
+
+
+def _snap_tail_start(text: str, start: int) -> int:
+    """把尾部取样起点挪到**语义边界**——绝不切出半截字面量（20260925 修）。
+
+    现场（trace `20260925T232645` / `20260925T232715` 的 `recent_tail` 字段）：尾巴
+    正好切在 `…管理员助手公告发布测试」` 中间，planner 收到的目标名成了
+    "管理员助手公告发布测试"——少了开引号和前三个字。它随后拿这个名字查台账
+    （当然查不到），对外说成"站内没有这条公告"：**一个不存在的字面量被截断造了出来**，
+    而 narrator 看到的是全历史（它知道真名）⇒ 同一轮里 planner 与 narrator 互相矛盾。
+    截断只该丢掉整块文字，不该改动"系统/主人说过的原文"。
+    两步：① 起点落在未闭合的引号/书名号/括号内 ⇒ 退到开符号（把整段引文带回来）；
+    ② 再向前找最近的句边界（`。！？；`、换行、`**`，窗 `_TAIL_SNAP_WINDOW` 字）重开。
+    返回值可能**小于**请求值（尾段比 per 稍长）——宁可多给一点上下文，不可切碎名字；
+    退到与头部重叠时由 `_clip_mid` 改判"整条原文照给"。
+    """
+    for _ in range(4):  # 定界符最多叠四层（引号里套书名号之类），够用即停
+        backed = None
+        for op, cl in _TAIL_PAIRS:
+            i = text.rfind(op, 0, start)
+            if i >= 0 and text.find(cl, i) >= start:  # 闭符号在起点之后 ⇒ 起点在引文内
+                backed = i if backed is None else min(backed, i)
+        if backed is None:
+            break
+        start = backed
+    last = None
+    for m in _TAIL_SNAP_RE.finditer(text, max(0, start - _TAIL_SNAP_WINDOW), start):
+        last = m
+    return last.end() if last is not None else start
 
 
 def _clip_mid(text: str, head: int = _TAIL_HEAD, tail: int = 160) -> str:
@@ -174,9 +224,12 @@ def _clip_mid(text: str, head: int = _TAIL_HEAD, tail: int = 160) -> str:
     if len(text) <= head + tail + 8:
         return text
     mid = text[head:len(text) - tail]
-    uniq = list(dict.fromkeys(_TAIL_MID_ANCHOR_RE.findall(mid)))[:4]
+    uniq = _tail_anchors(mid)
     keep = ("（中段提到： " + " ".join(uniq) + " ）") if uniq else ""
-    return text[:head] + " …" + keep + "… " + text[-tail:]
+    start = _snap_tail_start(text, len(text) - tail)
+    if start <= head + 8:  # 回退后与头部重叠 ⇒ 这条其实没多长，整条照给
+        return text
+    return text[:head] + " …" + keep + "… " + text[start:]
 
 
 def _recent_tail(messages: list, max_turns: int = 4, per: int = 160) -> str:

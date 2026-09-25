@@ -3148,6 +3148,39 @@ def test_doc_anchors_and_clip():
           and "id=19" in clipped)
     check("节选：短文本原样不动", _clip_mid("短句", head=80, tail=160) == "短句")
     check("节选：头尾取样都在", clipped.startswith("喵" * 80) and clipped.endswith("尾" * 40))
+
+    # —— 截断（20260925）：尾段不许切出**半截字面量** ——
+    # 现场（trace 20260925T232645 / 20260925T232715 的 recent_tail 字段）：尾巴正好切在
+    # 「泠月喵管理员助手公告发布测试」中间 ⇒ planner 收到的目标名是"管理员助手公告发布测试"
+    # （少了开引号和前三个字），它拿这个名字查台账、查不到，对外说成"站内没有这条公告"——
+    # 一个**不存在的字面量**被截断造了出来，而同一轮 narrator（看全历史）还说得出真名。
+    # 判据：尾段起点只能落在语义边界上（先退出未闭合的引文，再退到最近的句边界）。
+    TITLE = "泠月喵管理员助手公告发布测试"
+    pre, body = "正" * 400, f"「{TITLE}」**（id=14，09-25 15:56）**"
+    # 尾段长度按**构造**算：让 `len(frame) - 160` 正好落在标题正中（不写死数字——
+    # 改文案/改 TITLE 都不会让这一组静默退化成"没测到"）
+    mid_at = len(pre) + 1 + len(TITLE) // 2
+    frame = pre + body + "尾" * (mid_at + 160 - len(pre) - len(body))
+    cut = len(frame) - 160
+    check("节选·截断 前置：这条的尾段起点确实落在标题内部（否则本组等于没测）",
+          frame.index(TITLE) < cut < frame.index(TITLE) + len(TITLE), f"cut={cut}")
+    got = _clip_mid(frame, head=80, tail=160)
+    check("节选·截断：尾段退到开引号，整段标题都在", f"「{TITLE}」" in got, got[-120:])
+    check("节选·截断：切出来的文本里没有半截标题",
+          "管理员助手公告发布测试" not in got.replace(f"「{TITLE}」", ""))
+    # 没有引文可退时退到最近的句边界（尾段 = 句号之后那一段，不是从半句中间开始）
+    sent = "甲" * 300 + "。" + "乙" * 200
+    check("节选·截断：无引文可退时退到句边界", _clip_mid(sent, head=80, tail=160).endswith("乙" * 200))
+    # 回退到与头部重叠 ⇒ 整条照给（不许把同一条内容拼成两截重复）
+    back = "丙" * 80 + "「" + "丁" * 120 + "」" + "尾" * 60
+    check("节选·截断：回退到头部之内就整条照给", _clip_mid(back, head=80, tail=160) == back)
+    # 没边界可退时行为不变（纯字尾取样）
+    check("节选·截断：无边界可退时仍是纯尾取样",
+          _clip_mid("戊" * 400, head=80, tail=160) == "戊" * 80 + " …… " + "戊" * 160)
+    # 中段锚点也要认得「」形态的名字（旧正则只认《》⇒ 公告/标签名捞不回来）
+    mid_frame = "己" * 200 + "公告「中秋快乐」和《架构文档》都在 id=14" + "庚" * 300
+    got3 = _clip_mid(mid_frame, head=80, tail=160)
+    check("节选·截断：中段锚点认得「」形态的名字", "「中秋快乐」" in got3 and "id=14" in got3, got3[:200])
     # _recent_tail 端到端：长回复中段点名的文档仍出现在节选里
     tail = _recent_tail([HumanMessage(content="上一句"), AIMessage(content=long_reply),
                          HumanMessage(content="你看了吗就说没写")])
