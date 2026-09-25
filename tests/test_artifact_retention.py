@@ -79,6 +79,9 @@ def build_fixture(root: str) -> None:
     for n, d in ((1, "20260101_000000"), (2, "20260102_000000"), (3, "20260103_000000")):
         write(f"{root}/review_{d}.md", age_days=10)
     write(f"{root}/review_20260925_000000.md", age_days=99)
+    # 另一族（草稿）：用来验「按族覆盖份数」——同一次 plan 里两族窗口不同
+    for d in ("20260101_000000", "20260102_000000", "20260103_000000"):
+        write(f"{root}/golden_drafts_{d}.jsonl", age_days=10)
     write(f"{root}/notes.md", age_days=99)                            # 无日期戳 ⇒ 不动
     write(f"{root}/mostly/idle.md", age_days=99)                      # 名字里没戳 ⇒ 不动
 
@@ -140,6 +143,28 @@ def main() -> int:
               "mostly/idle.md" not in r["unknown"])
         check("③ 记了「哪族留了几份」（人看报告时不用自己数）",
               "review" in r["note"] and "保留 1" in r["note"], r["note"])
+
+        # ── ③b keep_by_family：同一次 plan 里按族给不同窗口 ────────────────
+        rb = ar.plan(classes=with_rule("eval-reports", keep=3,
+                                       keep_by_family={"golden_drafts": 1}),
+                     only="eval-reports", roots={"eval-reports": root})[0]
+        db = rels(root, rb["delete"])
+        check("③b 被覆盖的族按自己的窗口判（草稿留 1 ⇒ 另 2 份进待删表）",
+              {p for p in db if p.startswith("golden_drafts_")} == {
+                  "golden_drafts_20260101_000000.jsonl",
+                  "golden_drafts_20260102_000000.jsonl"}, str(sorted(db)))
+        check("③b 同一族里留的是戳最新的那份",
+              "golden_drafts_20260103_000000.jsonl" not in db)
+        check("③b 没被覆盖的族仍按 keep=3 判（4 份 review 只删最老那 1 份）",
+              {p for p in db if p.startswith("review_")} == {"review_20260101_000000.md"},
+              str(sorted(db)))
+        check("③b 报告里写的是**各自的实际保留数**（1 / 3 都出现）",
+              "golden_drafts 族 3 份、保留 1" in rb["note"] and "review 族 4 份、保留 3" in rb["note"],
+              rb["note"])
+        check("③b 真登记表里草稿族的窗口确实比复审单短",
+              rm.CLASSES[[c["key"] for c in rm.CLASSES].index("eval-reports")]["rule"]
+              .get("keep_by_family", {}).get("golden_drafts") == rm.KEEP_COUNT_DRAFTS
+              and rm.KEEP_COUNT_DRAFTS < rm.KEEP_COUNT_REPORTS)
 
         # ── ④ 哪些类真的会执行 ───────────────────────────────────────────
         keys = [p["key"] for p in ar.plan()]

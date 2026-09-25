@@ -52,6 +52,7 @@ DEFAULT_REPORT_ROOT = os.path.join(REPO, "eval", "report")
 # ── 保留期常量（**唯一的数在这里**，`artifact_retention.py` 与夜间脚本都不复述） ──
 KEEP_DAYS_ARCHIVE = 90          # logs/archive/ 下手工归档的东西，三个月足够回头找
 KEEP_COUNT_REPORTS = 20         # eval/report/ 每族报告保留最近 N 份
+KEEP_COUNT_DRAFTS = 10          # 例外：golden 草稿族只留 10 份（人审用品的窗口比复审单短）
 KEEP_COUNT_WORDGRAPH = 10       # 词图构建中间产物
 
 # 报告文件名：`<族>_<YYYYMMDD>[-_]<HHMMSS>.<ext>`。族名非贪婪取到第一个 8 位日期前
@@ -212,10 +213,15 @@ CLASSES = [
         status="managed",
         owner="eval/artifact_retention.py",
         owner_ref="eval/artifact_retention.py",
-        retention=f"每族保留最近 {KEEP_COUNT_REPORTS} 份（族 = 文件名里日期戳之前的前缀）",
+        retention=f"每族保留最近 {KEEP_COUNT_REPORTS} 份（族 = 文件名里日期戳之前的前缀；"
+                  f"草稿族 {KEEP_COUNT_DRAFTS} 份，见 why）",
         why="按**份数**而不是天数：这些产物是「跑一次落一份」（review_ 一天能落 24 份），"
-            "按天数会在密集调试的那天把整族清掉、按份数才对应「最近几次跑」这个真实语义",
-        rule=dict(kind="keep-count", keep=KEEP_COUNT_REPORTS, family_re=FAMILY_RE.pattern),
+            "按天数会在密集调试的那天把整族清掉、按份数才对应「最近几次跑」这个真实语义。"
+            f"`golden_drafts` 例外留 {KEEP_COUNT_DRAFTS} 份（20260925）：它是夜间自动产的**候选草稿**、"
+            "等人手抄进 basic.jsonl，人审窗口比「复审单」短得多，留 20 天没有读者；"
+            "其余族仍是复审/对账/漂移那类要回头看现场的，保持 20。",
+        rule=dict(kind="keep-count", keep=KEEP_COUNT_REPORTS, family_re=FAMILY_RE.pattern,
+                  keep_by_family={"golden_drafts": KEEP_COUNT_DRAFTS}),
     ),
     dict(
         key="eval-baselines",

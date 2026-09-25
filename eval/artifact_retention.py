@@ -24,6 +24,8 @@ golden trace 走 `eval/golden_trace.py::prune`，本脚本不碰。）
   - `family_re`（每份 = 一个文件）：文件名 `^([a-z_]+?)_(\d{8})[-_](\d{6})\.(md|jsonl)$`
     ⇒ 族 = `group(1)`，同族内按日期戳排序保留最新 N 个。报告族用这种
     （`review_` 一天能落 24 份，按天数会把密集调试那天整族清掉）。
+    可选 `keep_by_family={"族名": M}` 按族覆盖份数（20260925：草稿族窗口比复审单短）——
+    **数仍然只在登记表里**，这里只是读它。
   - `name_re`（每份 = 一组同戳文件）：名首 `^(\d{8})-(\d{6})_`
     ⇒ **按戳分组、整组一起删**。词图构建一次落一套（`_vocab.txt` + `build.json`…），
     按文件数删会留下半个构建产物。
@@ -163,6 +165,8 @@ def plan_class(c: dict, root: str | None = None, now: float | None = None) -> di
         keep = int(rule["keep"])
         if rule.get("family_re"):
             # 每份 = 一个文件：同族按日期戳保留最新 keep 个
+            # `keep_by_family`：个别族要更短的窗口时按族覆盖（数仍然只在登记表里）
+            keep_by_family = rule.get("keep_by_family") or {}
             rx = re.compile(rule["family_re"])
             groups: dict[str, list] = {}
             for p in files:
@@ -176,12 +180,13 @@ def plan_class(c: dict, root: str | None = None, now: float | None = None) -> di
                     {"path": p, "size": sizes[p], "stamp": stamp,
                      "epoch": _stamp_epoch(stamp), "mtime": os.stat(p).st_mtime})
             for fam, items in sorted(groups.items()):
+                fam_keep = int(keep_by_family.get(fam, keep))
                 items.sort(key=lambda i: (i["epoch"], i["mtime"]), reverse=True)
-                for i in items[keep:]:
+                for i in items[fam_keep:]:
                     i["age_days"] = round((now - i["mtime"]) / DAY, 1)
                     out["delete"].append(i)
-                if len(items) > keep:
-                    out["note"] += f"{fam} 族 {len(items)} 份、保留 {keep}；"
+                if len(items) > fam_keep:
+                    out["note"] += f"{fam} 族 {len(items)} 份、保留 {fam_keep}；"
         elif rule.get("name_re"):
             # 每份 = 一组同戳文件：**按戳分组整组删**（半套构建产物比不删更糟）
             rx = re.compile(rule["name_re"])
