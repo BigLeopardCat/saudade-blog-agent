@@ -371,11 +371,22 @@ def _has_frames(messages: list) -> bool:
 # 解法与 intent_hints 同构：系统把锚点确定性抽出来注入（给事实、不夺决策——用户
 # 到底指哪篇仍由 planner 判断），planner 不必为了"知道是哪篇"再跑检索。
 _DOC_TITLE_RE = re.compile(r"《([^》\n]{2,60})》")
-_DOC_ID_NEAR_RE = re.compile(r"id\s*[=:：]\s*(\d+)")
 # 跨轮执行记忆的动作行（Rust render_exec_row 的产物，"读取文章 19《标题》"）
 _DOC_READ_ROW_RE = re.compile(r"读取文章\s*(\d+)\s*《([^》\n]{1,60})》")
+# 文章链接 = **唯一被认的邻域 id 形态**。裸 `id=N` 已于 20260925 摘除：它不具名，
+# 邻域里任何一个 id 都能被认成文章 id——线上实测把**标签 id** 认成了文章 id
+# （会话摘要写「为文章《Python asyncio 异步并发》添加…同**名一级标签（id=19）**」
+# ⇒ 锚点产出《Python asyncio 异步并发》 id=19，而 19 其实是另一篇文章）。
 _ARTICLE_PATH_RE = re.compile(r"/article/(\d+)")
-_DOC_ID_WINDOW = 48   # 《标题》前后多少字符内出现的 id=/article/ 链接算这篇的 id
+_DOC_ID_WINDOW = 48   # 《标题》前后多少字符内出现的 /article/ 链接算这篇的 id
+# markdown 链接当标题的写法（《[标题](url)》）：标题是标签文字，url 只是 id 来源
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
+# 窗口内的 id 还必须**与标题同一个句读单位**（20260925 二次收紧）：48 字窗口只挡了
+# "跨过下一条标题"，没挡"跨过句号"。线上实测（trace 20260920T140051 的回复正文）
+# 《IoT 设备接入物联网平台指南》后面那句「想直接看这条说说的原文，可以点
+# [ESP32-S3-OBC固件接入参考](…/article/46)」把 46 记到了 IoT 头上——46 是另一篇。
+# 中文、字母数字、句读、方括号任一出现即判为"另一个句子/另一条链接"。
+_DOC_LINK_GAP_RE = re.compile(r"[\w\[\]。！？；，、\n\r]")
 
 # 简称判定阈值（见 _doc_anchors 内注释：宁可漏并、绝不错并——错并会把 A 篇的 id
 # 挂到 B 篇名下，正是本次要修的故障形态）
@@ -416,7 +427,9 @@ def _doc_id_lookup(title: str) -> str:
     list_notes 里猜下标——线上实测把分页列表第一条（最新那篇）当成"用户点名的
     这篇"，读了错文章、还谎称站内没有该文（真文 note 14 存在）。语料索引里本来
     就有全部可见文章的标题与 id（rag/search.py，与前台可见性一致），直接解析：
-    **唯一命中才给 id**，有歧义就留"（未见过 id）"让 planner 按规则 4③ 去查。
+    **唯一命中才给 id**。解析不出来（歧义、草稿、索引未就绪、根本不是文章）一律
+    返回 ""——调用方据此**丢弃**这条（20260925 前是留着写"（未见过 id）"，见
+    `_doc_anchors` 头注）。
     """
     try:
         from rag.search import resolve_title
@@ -426,15 +439,121 @@ def _doc_id_lookup(title: str) -> str:
     return str(rid) if rid is not None else ""
 
 
+def _corpus_ready() -> bool:
+    """语料索引快照是否可用（只看"有没有内容"，不建索引、不阻塞）。"""
+    try:
+        from rag.search import get_index
+        return bool(get_index().docs_snapshot())
+    except Exception:
+        return False
+
+
+def _bounded_after(s: str) -> str:
+    """邻域截到**下一条标题之前**（《 或 》 都算边界）。"""
+    cut = len(s)
+    for ch in "《》":
+        i = s.find(ch)
+        if i >= 0:
+            cut = min(cut, i)
+    return s[:cut]
+
+
+def _bounded_before(s: str) -> str:
+    """邻域只留**上一条标题之后**的那一段（前面的标题与其邻域不许越界）。"""
+    cut = 0
+    for ch in "《》":
+        i = s.rfind(ch)
+        if i >= 0:
+            cut = max(cut, i + 1)
+    return s[cut:]
+
+
+def _clean_title(t: str) -> str:
+    """标题净化：`《[标题](url)》` 里标题只是标签文字（url 是 id 来源）；
+    `《**标题**》` 这种加粗写法把星号留在书名号里（实测锚点清单里出现过
+    `《**IoT 设备接入物联网平台指南**》`）。"""
+    return _MD_LINK_RE.sub(r"\1", t).strip().strip("*`_ \t")
+
+
+def _linked_doc_id(text: str, tm) -> str:
+    """《标题》对应的文章 id——**只有结构性绑定才算**，取不到返回 ""（不猜）。
+
+    三个位置，其余一律不认：
+    ① `/article/N` 就在《》**之内**：`《[标题](/article/22)》`；
+    ② 标题与一条 markdown 链接**同一句读单位内相邻**，且链接文字与标题指同一篇
+       （`[《TEST8》](…)` 标题即链接文字；`《甲文档》([甲](…))` 两边文字互相包含）；
+       相邻 = 之间只有标点/空白（`**(`、`（链接 `），没有中文、字母数字、句读、方括号。
+    ③ 同上相邻，但链接是**裸路径**（`《X》**（/article/9）`）。
+    窗口内第一条链接不合规就**放弃**（不往后找第二条）——往后找正是旧窗口的病根；
+    也正因如此，`《IoT…指南》…可以点 [ESP32-S3-OBC固件接入参考](…/article/46)`
+    这种「标题后面那句里另有一条链接」不会再被记到标题头上。
+    """
+    inner = _ARTICLE_PATH_RE.search(tm.group(0))
+    if inner:
+        return inner.group(1)
+    tkey = _clean_title(tm.group(1)).replace(" ", "").lower()
+    for lm in _MD_LINK_RE.finditer(text):
+        lt = _clean_title(lm.group(1)).replace(" ", "").lower()
+        if not lt:
+            continue
+        if lm.start(1) <= tm.start() and tm.end() <= lm.end(1):     # 标题就是链接文字
+            m = _ARTICLE_PATH_RE.search(lm.group(2))
+            return m.group(1) if m else ""
+        if not (lt in tkey or tkey in lt):                         # 同名才算同篇
+            continue
+        if lm.end(1) <= tm.start():
+            gap = text[lm.end(1):tm.start()]
+        elif lm.start() >= tm.end():
+            gap = text[tm.end():lm.start()]
+        else:
+            continue
+        if not _DOC_LINK_GAP_RE.search(gap):
+            m = _ARTICLE_PATH_RE.search(lm.group(2))
+            return m.group(1) if m else ""
+    tail = _bounded_after(text[tm.end():tm.end() + _DOC_ID_WINDOW])
+    m = _ARTICLE_PATH_RE.search(tail)
+    if m and not _DOC_LINK_GAP_RE.search(tail[:m.start()]):
+        return m.group(1)
+    head = _bounded_before(text[max(0, tm.start() - _DOC_ID_WINDOW):tm.start()])
+    hits = list(_ARTICLE_PATH_RE.finditer(head))     # 反向往前取**最近**那条
+    if hits:
+        m = hits[-1]
+        if not _DOC_LINK_GAP_RE.search(head[m.end():]):
+            return m.group(1)
+    return ""
+
+
 def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
     """本会话已点名文档清单（《标题》+ id + 是否已读全文）——跨轮指代的确定性锚点。
 
     来源 = 全部窗口消息（[System:…] 的 recent_executions 行 + 20 条人机历史，
     含工具帧之外的正文），**由近及远**扫描：最近被点到的排前面（越近越可能是
-    用户在说的那篇）。id 只认同一句里 《标题》 邻域的 id=/article 链接或
-    "读取文章 N《标题》" 行；都没有时再按标题查站内语料（_doc_id_lookup，唯一
-    命中才认）——不猜、不给没有依据的 id。同一篇被正文简称与执行记忆全称各提
-    一次时并成一行（简称留作别名），免得 planner 把一篇数成两篇。
+    用户在说的那篇）。同一篇被正文简称与执行记忆全称各提一次时并成一行（简称
+    留作别名），免得 planner 把一篇数成两篇。
+
+    **进清单的门（20260925 收紧）：一条《…》要么带**有来源的 id**，要么能解析成
+    站内文章；两者都不满足就**丢掉**。** 起因是线上实测「假文章污染」：
+
+    - 旧规则把「同一句里邻域的 `id=N`」也当文章 id，可 id 不具名 ⇒ 会话摘要里
+      「为文章《Python asyncio 异步并发》添加…同名一级标签（id=19）」让锚点产出
+      `《Python asyncio 异步并发》 id=19`（19 是另一篇文章），而规则 4⓪ 授权
+      planner **直接采用清单里的 id** ⇒ 会去读错的那一篇。现在邻域只认
+      `/article/N`（URL 路径本身就是文章命名空间）。
+    - 48 字窗口也不够：它只挡了"跨过下一条标题"，没挡"跨过句号"。实测
+      `《IoT 设备接入物联网平台指南》…可以点 [ESP32-S3-OBC固件接入参考](…/article/46)`
+      把 46 记到了 IoT 头上（46 是另一篇）。现在要求链接与标题**同一句读单位**
+      且**链接文字与标题指同一篇**（见 `_linked_doc_id`）。
+    - 旧规则对解析不出的标题仍写「（未见过 id）」并留在清单里，可抬头声称的是
+      "**已点名文档**"。实测这一栏里混着站内通知《留言未通过审核》、公告
+      《中秋快乐》《今晚不许熬夜！》《致李重九》——它们在对话里本来就写作
+      `26《标题》`（实体摘要格式），与文章读取行同形 ⇒ 被当成了文档。
+    - 语料索引未就绪时（解析全返回 ""）不再逐条降级成假象，改为在块尾如实注记。
+
+    **id 只有两种来源**：跨轮执行记忆的 `读取文章 N《标题》` 行（系统写的、文章
+    命名空间，**最高可信**），与结构性绑定的 `/article/N` 链接（自由文本里的，
+    可能本身是叙述幻觉 ⇒ 语料能唯一定位时以语料为准，链接 id 只用于草稿这类
+    语料里没有的篇目）。两者都没有、语料也解析不出的标题会被丢掉——当前消息
+    本身永远全文可见，真要找它还有规则 4③ 的 list_notes 通道。
     """
     rows: list[tuple[str, str, bool, str]] = []   # (标题, id 或 "", 是否已读全文, 简称)
 
@@ -473,30 +592,39 @@ def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
         for dm in _DOC_READ_ROW_RE.finditer(text):        # 跨轮执行记忆的读取行
             _add(dm.group(2), dm.group(1), True)
         for tm in _DOC_TITLE_RE.finditer(text):
-            # id 只在**标题之后**的邻域里认（"《X》**（id=19）"、"[《X》](/article/13)"；
-            # 先查后邻域再查前邻域，且前邻域仅作兜底——否则会认成上一条目的 id）
-            after = text[tm.end():tm.end() + _DOC_ID_WINDOW]
-            nid = (_DOC_ID_NEAR_RE.search(after) or _ARTICLE_PATH_RE.search(after))
-            if not nid:
-                before = text[max(0, tm.start() - _DOC_ID_WINDOW):tm.start()]
-                nid = (_DOC_ID_NEAR_RE.search(before) or _ARTICLE_PATH_RE.search(before))
-            _add(tm.group(1), nid.group(1) if nid else "", False)
+            # 邻域只认 `/article/N`（20260925：裸 `id=N` 不具名，会把标签/通知/留言
+            # 的 id 当文章 id）。标题**之内**也要看（《[标题](/article/13)》），
+            # 邻域**不许跨过另一条标题**（否则 A 篇后面那句里的链接会记到 A 头上）。
+            # 邻域 id 只认**结构性绑定**（见 _linked_doc_id）：裸 `id=N` 不具名，
+            # 48 字窗口内的链接也不一定属于本篇（跨句就会记错）。
+            _add(_clean_title(tm.group(1)), _linked_doc_id(text, tm), False)
 
     if not rows:
         return "（本会话还没有点名的文档）"
     lines: list[str] = []
     used = 0
+    dropped = 0
     seen_ids: set[str] = set()
     for title, doc_id, read, alias in rows[:limit]:
         resolved = False
+        if doc_id and not read:
+            # id 来自**自由文本里的链接**——链接本身可能是叙述幻觉（实测
+            # `[ESP32-S3-OBC固件接入参考](…/article/46)` 就指着一篇不相干的文章）
+            # ⇒ 语料能唯一定位就用语料那个；语料里查不到（草稿）才退用链接里的。
+            want = _doc_id_lookup(title)
+            if want:
+                doc_id, resolved = want, True
         if not doc_id:
             doc_id = _doc_id_lookup(title)
             resolved = bool(doc_id)
+            if not doc_id:
+                dropped += 1     # 没有来源也不像站内文章 ⇒ 不进清单（见函数头注）
+                continue
         if doc_id and doc_id in seen_ids:
             continue             # 两种写法解析到同一篇 ⇒ 只留最近那条（同 id 必同篇）
         if doc_id:
             seen_ids.add(doc_id)
-        line = f"· 《{title}》" + (f" id={doc_id}" if doc_id else "（未见过 id）")
+        line = f"· 《{title}》 id={doc_id}"
         marks = (["本会话已读过全文"] if read else [])
         if resolved:
             marks.append("站内标题匹配")
@@ -508,6 +636,12 @@ def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
             break
         used += len(line)
         lines.append(line)
+    if dropped and not _corpus_ready():
+        # 索引未就绪时解析一律返回 "" ⇒ 上面那些**不是**"站内没有这篇"，而是
+        # "这会儿查不了"。别让 planner 从一条空清单里读出"本会话没提过文章"。
+        lines.append("（语料索引未就绪：以上只含带 id 的条目，标题解析暂不可用）")
+    if not lines:
+        return "（本会话还没有点名的文档）"
     return "\n".join(lines)
 
 
