@@ -41,7 +41,6 @@ R3 高频拉锯），人看告警；本脚本 = 把同一批现场转成**待补
 """
 import argparse
 import difflib
-import glob
 import json
 import os
 import re
@@ -51,6 +50,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import trace_alert as ta  # noqa: E402  （规则本体与 trace 读取的唯一来源）
+from trace_files import iter_trace_files  # noqa: E402  （文件枚举的唯一实现）
 
 GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden", "basic.jsonl")
 OUT_DIR = "eval/report"
@@ -173,7 +173,7 @@ def main():
     since = args.since or (datetime.now() - timedelta(days=args.days)).strftime("%Y%m%d")
     until = args.until
 
-    files = sorted(glob.glob(ta.TRACE_DIR + "/*.json")) + sorted(glob.glob(ta.TRACE_DIR + "/*.gz"))
+    files = iter_trace_files(ta.TRACE_DIR)
     candidates, scanned, golden_skipped = [], 0, 0
     for f in files:
         m = re.search(r"(20\d{6})T(\d{6})_(\d+)_", f)

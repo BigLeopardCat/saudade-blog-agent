@@ -62,8 +62,15 @@ import gzip
 import json
 import os
 import re
+import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
+
+# trace 文件枚举的唯一实现（20260925：生产 trace 改按天分目录 `<root>/<YYYYMMDD>/`，
+# 四个读取端共用一处，免得"改了布局漏改一个脚本"= 那天它少看一半数据）。
+# 与 `trace_files.py` 同目录，直接按脚本目录导入（本模块本来就被 tests 以同样方式加载）。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from trace_files import iter_trace_files  # noqa: E402
 
 # ── CLI 默认路径（读者函数一律把路径当参数收，模块常量只给 CLI 与自测用）──────
 TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
@@ -142,8 +149,7 @@ def read_traces(trace_dir: str, since: datetime, until: datetime) -> dict:
     """
     index = defaultdict(list)
     records, bad, uid0, odd = [], 0, 0, []
-    paths = sorted(glob.glob(os.path.join(trace_dir, "*.json"))) + \
-        sorted(glob.glob(os.path.join(trace_dir, "*.gz")))
+    paths = iter_trace_files(trace_dir)
     for p in paths:
         name = os.path.basename(p).replace(".gz", "")
         # 轮转归档名是 `<原名>.json.N.gz` ⇒ 去掉 .gz 后再去掉 .N 才是原始名

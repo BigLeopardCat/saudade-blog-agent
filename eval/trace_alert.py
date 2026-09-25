@@ -22,11 +22,17 @@ golden 只测 66 条固定用例、trace_metrics 只测过程指标（轮次/工
 """
 import argparse
 import gzip
-import glob
 import json
+import os
 import re
+import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
+
+# trace 文件枚举的唯一实现（20260925：生产 trace 改按天分目录，四个读取端共用一处，
+# 免得"改了布局漏改一个脚本"= 那天它少看一半数据）。只吃路径参数、不依赖应用配置。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from trace_files import iter_trace_files  # noqa: E402
 
 TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
 
@@ -72,7 +78,7 @@ def main():
     until = args.until
 
     records, golden_skipped, scanned = [], 0, 0
-    files = sorted(glob.glob(TRACE_DIR + "/*.json")) + sorted(glob.glob(TRACE_DIR + "/*.gz"))
+    files = iter_trace_files(TRACE_DIR)
     for f in files:
         m = re.search(r"(20\d{6})T(\d{6})_(\d+)_", f)
         if not m:

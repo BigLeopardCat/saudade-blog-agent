@@ -120,7 +120,8 @@ def tool_result_text(result: str, tool: str = "") -> str:
 
 class _TraceRecorder:
     def __init__(self, trace_id: str, user_id: int, thread_id: str, input_meta: dict,
-                 trace_dir: str | None = None, name: str | None = None):
+                 trace_dir: str | None = None, name: str | None = None,
+                 by_day: bool = True):
         self.trace_id = trace_id
         self.user_id = user_id
         self.thread_id = thread_id
@@ -129,8 +130,15 @@ class _TraceRecorder:
         # （trace_alert/trace_metrics/效率基线扫的就是那个目录）。
         # `name` 给定时文件名就是 `<name>.json`（golden 要"一个用例一份、可直接点名"），
         # 否则沿用"时间戳_uid_trace_id 前 8 位"的可读命名。
+        #
+        # `by_day`（20260925）：生产 trace 落 `<dir>/<YYYYMMDD>/`，**golden 必须传 False**。
+        # 平铺到 20260925 积了 863 个文件（用户 20260925 提的"trace 列表很长"），
+        # 按天一层后 `ls` 是 26 个目录；保留治理（`eval/trace_retention.py`）也按天对齐。
+        # golden 不能跟着分：`golden_traces/<run_id>/` 已经是它自己的分目录，再套一层
+        # 会让 `llm_judge` 的 `glob("*.json")`、`golden_trace.prune` 和报告里的路径全落空。
         self.trace_dir = trace_dir or TRACE_DIR
         self.name = name or ""
+        self.by_day = by_day
         self.started_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
         self._t0 = time.monotonic()
         self.input_meta = input_meta
@@ -168,7 +176,6 @@ class _TraceRecorder:
             return None
         self.dumped = True
         try:
-            os.makedirs(self.trace_dir, exist_ok=True)
             doc = {
                 "trace_id": self.trace_id,
                 "user_id": self.user_id,
@@ -190,7 +197,12 @@ class _TraceRecorder:
                 fname = f"{self.name}.json"
             else:
                 fname = f"{stamp}_{self.user_id}_{self.trace_id[:8]}.json"
-            path = os.path.join(self.trace_dir, fname)
+            # 按天分目录（20260925）：读侧枚举在 `eval/trace_files.py::iter_trace_files`
+            # ——那个模块是"哪些文件算 trace"的唯一实现，改布局必须两处一起改
+            # （`tests/test_trace_retention.py` 有一次真实落盘的往返断言盯着）。
+            out_dir = os.path.join(self.trace_dir, stamp[:8]) if self.by_day else self.trace_dir
+            os.makedirs(out_dir, exist_ok=True)
+            path = os.path.join(out_dir, fname)
             tmp = path + ".tmp"  # 原子替换：reader 不会读到半截文件
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(doc, f, ensure_ascii=False, indent=1)
@@ -202,7 +214,7 @@ class _TraceRecorder:
 
 
 def start_trace(trace_id: str, user_id: int, thread_id: str, input_meta: dict | None = None,
-                dir: str | None = None, name: str | None = None):
+                dir: str | None = None, name: str | None = None, by_day: bool = True):
     """请求开始：创建 recorder，挂 contextvar（producer 线程可见）+ 全局注册表。
 
     在 chat_stream 任务里调用（middleware 已 set trace_id 的同一上下文）；
@@ -211,9 +223,12 @@ def start_trace(trace_id: str, user_id: int, thread_id: str, input_meta: dict | 
     `dir`/`name` 覆盖落盘位置与文件名（20260922 起 golden set 用；生产调用点
     一个都不传，行为与之前逐字一致）——**必须在"提交给线程池之前"的上下文里调**，
     否则 recorder 不会随 copy_context 传进 producer 线程（事件为空）。
+
+    `by_day` 默认 True（生产按天分目录）；**golden 调用点显式传 False**——理由见
+    `_TraceRecorder.__init__` 里那段（golden 自己已有 `<run_id>/` 一层）。
     """
     rec = _TraceRecorder(trace_id, user_id, thread_id, input_meta or {},
-                         trace_dir=dir, name=name)
+                         trace_dir=dir, name=name, by_day=by_day)
     _recorder.set(rec)
     with _LOCK:
         _ACTIVE[trace_id] = rec

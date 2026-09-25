@@ -20,10 +20,16 @@ golden 只断言最终文本——首轮零工具+编造+REVISE 修正照样 PAS
 """
 import argparse
 import gzip
-import glob
 import json
+import os
 import re
+import sys
 from collections import defaultdict
+
+# trace 文件枚举的唯一实现（20260925：生产 trace 改按天分目录，四种读取端共用一处，
+# 免得"改了布局漏改一个脚本"= 那天它少看一半数据）。只吃路径参数、不依赖应用配置。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from trace_files import iter_trace_files  # noqa: E402
 
 TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
 
@@ -68,7 +74,7 @@ def main():
 
     stat = defaultdict(lambda: [0, 0, 0, 0, 0])  # 总, 首轮即调, 首轮零工具, 打回过, 打回总次数
     detail = []
-    files = sorted(glob.glob(TRACE_DIR + "/*.json")) + sorted(glob.glob(TRACE_DIR + "/*.gz"))
+    files = iter_trace_files(TRACE_DIR)
     for f in files:
         m = re.search(r"(20\d{6})T(\d{6})_(\d+)_", f)  # 文件名 HHMMSS 6 位 + userid，三组捕获
         if not m:
