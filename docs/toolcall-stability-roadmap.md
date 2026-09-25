@@ -139,8 +139,9 @@ N/M 不为 0 时必须人工签字（写进 `eval/report/review_*.md` 的复审�
 参数语义（含"这个 id 从哪来"）写在 schema 的描述里，**描述与校验同一份**。
 
 **步骤**
-1. POC（必须先做）：验证生产模型（qwen 系，OpenAI 兼容端点）对 `response_format=json_schema`
-   或 function calling 的支持度与稳定性——**这是本方向的前置未知量，不验证不动手**。
+1. ~~POC（必须先做）：验证生产模型（qwen 系，OpenAI 兼容端点）对 `response_format=json_schema`
+   或 function calling 的支持度与稳定性——**这是本方向的前置未知量，不验证不动手**。~~
+   **20260925 已跑完并全部通过**，见下方「D4 POC 结果」；结论带两个协议设计风险，先读那个再动手。
 2. `agent/skill_schema.py`：由 `SKILLS` 注册表派生 schema（`inputs` 已是雏形），
    加 `required` / `enum`（如 `status ∈ {public,private,draft}`、`is_top ∈ {0,1}`）、
    加 id 类参数的来源约束（见 D5）。
@@ -152,6 +153,52 @@ N/M 不为 0 时必须人工签字（写进 `eval/report/review_*.md` 的复审�
 
 **风险**：中。①模型支持度未知（POC 挡在前面）；②结构化输出会挤掉 planner 的"思考"文本，
 而 planner 的低温度短输出正是当前决策质量的来源——需要对比决策质量（golden 通过率）不掉。
+
+### D4 POC 结果（20260925 已跑完，前置未知量清空）
+
+脚本 `eval/d4_structured_output_poc.py`（**只发 LLM 请求**：不碰库、不落 trace、不改进程状态；
+要网络与真模型，故**不入 L0、不进夜间**）。原始证据是本地留档
+`eval/report/d4_poc_20260925_140938.md`（`eval/report/` 按既有约定不入 git），
+重跑一次即得：`.venv/bin/python eval/d4_structured_output_poc.py --trials 5 --thinking`。
+
+**结论：支持度不再是未知量——结构化输出与 function calling 在生产端点上都真实可用，
+且判别结果是"真约束解码"，不是"接受了但静默忽略"。** 生产 qwen `qwen3.8-flash`
+（阿里云 MaaS compatible-mode），与 planner 完全同参（`temperature=0.2 / max_tokens=400 /
+timeout=30 / enable_thinking=False`），每档 5 次：
+
+| 档位 | 结果 | p50 延迟 |
+|---|---|---|
+| 纯文本写 JSON（**今天的形态**，对照） | JSON 可解析 5/5，**满足 schema 0/5**（模型自裁了形状） | 1.55s |
+| `response_format=json_schema` + `strict` | **达标 5/5** | 1.53s |
+| 同上 + **对抗提示词**（明令把 integer 写成字符串、action 取 enum 外的值） | **5/5 违不了** ★ | 2.36s |
+| `response_format=json_object`（弱档）+ 同一对抗提示词 | 5/5 可解析，**顺着提示词违约** | 0.98s |
+| tools + `tool_choice=auto` | 5/5 回 tool_call，`arguments` 是合法 JSON | 0.88s |
+| tools + 强制指定函数 | 5/5 必回 tool_call | 1.08s |
+| tools + 函数侧 `strict=true` | 5/5（无 400） | 0.80s |
+| 意图落不进 enum（"删掉「大笨狗」标签"） | 5/5 输出合法，**但内容是错的**（风险①） | 1.80s |
+
+**"真约束"这条是怎么证明的**（这档探针存在的唯一理由）：提示词明说"count 写成字符串、
+action 填「关闭」"，**弱档照着写了**（`count:"1"`、`action:"关闭"`），
+**strict 档结构上写不出来**（`count:1`、`action:"off"`）。同提示词、只差一个参数 ⇒
+"strict 在真约束解码"是实测而非推断。附带两条也精确生效：`required` 里没有的
+`action` 时有时无（不是无脑全填）；`additionalProperties:false` 没被绕过。
+
+**顺带清掉的两个未知量**：① 参数不会被端点拒绝（无 400）；② 思考模式与结构化输出**能共存**
+（返回 `reasoning_content` + 合法正文），但**延迟从 1.5s 涨到 p50 6.4s / 最大 28.5s**——
+planner 的 `timeout=30` 正好压在那条尾巴上。所以 D4 落地要么继续 thinking 关，
+要么**单独调这个时限**，不能想当然"开着思考也行"。
+
+**POC 新暴露的两个风险（都不是支持度问题，是协议设计问题，比支持度更该先想清楚）**：
+
+① **约束解码拿走了"这题我不会"这个选项**。P8 的意图落不进那四个 enum 值，
+模型**不能**答"没有对应技能"——它只能挑最近似的（`content_query`），再把自由文本部分
+填成看着合理的东西。⇒ schema 必须显式留一条"不匹配/闲聊"的出口；否则 D4 会把今天
+**零写 + 如实收尾**（剔空纠偏那条路）的轮次降级成**做错事**，比现状更差。
+
+② **`strict` 约束的是形状，不是真假**。P8 里 `tools:["delete_tag"]` 是个**真实存在的工具名**，
+但它不在 `content_query` 的通道白名单里（写工具只能由技能模板展开）。
+⇒ 结构化输出**不会**替你挡住"参数填了个站内不该用的东西"——那正是 D5 要管的事。
+**D4 与 D5 是配套的**；D4 单独上会让人误以为参数问题已经解决。
 
 ---
 
@@ -264,7 +311,7 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 | 阶段 | 内容 | 完成定义（DoD） |
 |------|------|----------------|
 | **阶段 0**（本周，零迁移零协议） | D6 语料化 + 判据差集脚本；D3 步骤 1 的量化统计；D2/D1 的**设计**（不写码） | 改判据能打出差集；能报出"动作轮回复里事实性内容占比" |
-| **阶段 1**（短期） | D4 POC → schema 化（双轨，开关回滚）+ D5 来源约束 | 参数类受阻（`args_parse`/pydantic/`unknown_target`）在 golden 与回放里归零 |
+| **阶段 1**（短期） | D4 **POC 已过（20260925）** → schema 化（双轨，开关回滚）+ D5 来源约束 | 参数类受阻（`args_parse`/pydantic/`unknown_target`）在 golden 与回放里归零 |
 | **阶段 2**（中期） | D3 方案 2/3 落地（**需拍板**） | 5a/5c/5d/5f 真实流量 30 天 0 命中；对抗性 fixture 恒绿 |
 | **阶段 3**（长期） | D1 前端回报 + D2 落库列（**需迁移授权**） | 动作类三态可答；同工具不同目标不误去重 |
 
@@ -306,7 +353,10 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
    （建议先做量化：动作轮回复里的"事实性内容"占比有多高。）
 2. **D2：`execution_log` 加列 = 生产迁移**——按纪律需要点名「库名 + 迁移文件」。
 3. **D1：新增一条"前端→后端"的动作回执上报通道**——要不要引入这个新的写入口？
-4. **D4：structured output 支持度**——先做 POC（qwen 系），POC 通过才排期。
+4. **D4：structured output 支持度**——**POC 已通过（20260925，见「D4 POC 结果」）**，
+   支持度不再是待拍板项。现在要拍的是那两条风险怎么处置：
+   schema 里"不匹配/闲聊"的出口怎么留（风险①）、D5 与 D4 的排期是否**必须同批**
+   （风险②说明 D4 单独上会掩盖参数来源问题）。
 
 ---
 
