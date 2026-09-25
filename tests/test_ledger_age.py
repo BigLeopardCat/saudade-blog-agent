@@ -16,6 +16,7 @@
   · 解析不了的时间戳原样留着（不猜、也不标"刚刚"）；
   · **只进注入**：gate 判据（洞⑦ 台账否认）读的 `_ledger_for_graph` 必须是原文。
 """
+import re
 import sys
 import types
 from pathlib import Path
@@ -93,8 +94,14 @@ def test_raw_ledger_stays_raw():
           "（" not in raw["executions"] and raw["executions"].startswith("09-25 00:42 查看服务器状态"),
           raw["executions"][:40])
     block = server._ledger_block(req)
-    check("注入块（_ledger_block）里带上年龄标记（此刻算出来的就是「几小时前·已过期」）",
-          "小时" in block and "·已过期）" in block, block[block.find("已执行"):][:80])
+    # 年龄是**相对此刻**算的，而这条台账行的时间是写死的（09-25 00:42）⇒ 断言不许钉在
+    # 某一个年龄词上：写这行时是「3 小时 20 分前」，隔一天就成了「1 天前」，钉「小时」
+    # 的写法会在某个夜里自己变红（20260926 实测）。判据改成"那一行的时间后面紧跟着一个
+    # 带 ·已过期 的括号"——与日期无关，而且比原来那句**更严**（认的是行与标注的绑定，
+    # 不是这段文本里出现过「小时」）。
+    age = re.search(r"09-25 00:42（[^）]*·已过期）", block)
+    check("注入块（_ledger_block）里带上年龄标记（行首时间后紧跟系统算的年龄 + ·已过期）",
+          age is not None, age.group(0) if age else block[block.find("已执行"):][:80])
     check("注入块里写明「已过期」的语义与 6c 的指引",
           "已过期" in block and "6c" in block and "刚才" in block)
 
