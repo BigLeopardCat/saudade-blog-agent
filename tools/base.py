@@ -1163,6 +1163,52 @@ def _admin_post(path: str, payload: dict, config: RunnableConfig):
     return _admin_request("POST", path, payload, config)
 
 
+def _admin_status_post(path: str, payload: dict, config: RunnableConfig):
+    """冻结/解冻专用的 POST：把**非 200 业务码无条件读成"后台规则拒绝"**。
+
+    为什么不能直接用 `_admin_request`：那条（= `_principal_request`）对**任何**
+    `code != 200` 都返回 `unavailable("接口报错: …")` ⇒ 后端的政策拒绝（「不能冻结
+    超级管理员账号」这类）被归成**服务不可用** ⇒ 过程行显示「服务不可用」、planner
+    收到"稍后再试"的指引 ⇒ 它照着这句话重试，而这条请求**永远不会**成功。
+    这个端点的非 200 只有三族（政策拒绝 / 客户不存在 / 角色未登记），**没有一族是
+    "服务不可用"**，所以无条件按政策拒绝出口是对的，也比按消息字符串匹配稳。
+
+    文案**逐字转述后端原话、不二次改写**：政策会变，agent 侧任何复述都会在政策
+    变更那天变成假话（那几句已登记为跨语言契约，见 docs/security-boundary.md §7⑫）。
+    """
+    from agent import adminops as A
+    uid = _device_get_user_id(config)
+    if uid <= 0:
+        # 身份不明时一个请求都不发（同 `_principal_request`）：写操作最不该做的
+        # 就是在没身份时猜。
+        return unavailable("未登录：本次未改动任何内容（需要先登录博客账号）")
+    principal = (config.get("configurable", {}) or {}).get("principal")
+    headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
+    try:
+        resp = _client.post(f"{ADMIN_BASE}{path}", headers=headers, json=payload, timeout=15)
+    except Exception as exc:
+        logger.error("admin status post %s failed: %s", path, exc)
+        return unavailable(f"接口请求失败: {exc}{_NO_SUCCESS_TAIL}")
+    if resp.status_code in (401, 403):
+        return unavailable("当前身份无权改动账号状态（该功能仅管理员可用），本次未改动任何内容")
+    if resp.status_code != 200:
+        return unavailable(f"接口返回 HTTP {resp.status_code}{_NO_SUCCESS_TAIL}")
+    try:
+        body = resp.json()
+    except Exception:
+        return unavailable(f"接口返回的不是 JSON{_NO_SUCCESS_TAIL}")
+    if body.get("code") != 200:
+        logger.warning("admin status post %s refused: %s", path, body.get("message"))
+        # ⚠️ 必须包成 `ToolResult` 再往外传（**不是**裸字符串）：调用方的失败判据是
+        # `isinstance(data, ToolResult)`，而 `policy_frame` 返回的是普通 str——
+        # 裸传会被当成"成功返回的 data"接着往下走写后复核，最后报成
+        # 「改动请求已发出…本次改动未确认生效」（一句**假话**：这条请求根本没改任何
+        # 东西，它是被政策拒了）。kind 仍是 "ok"：这一族的判据是**帧的形态**
+        # （`__ERROR__:` 前缀）而不是 kind，`_check_spec` 照旧 BLOCK + policy_refused。
+        return ToolResult(A.policy_frame(str(body.get("message") or "后台拒绝了这次改动")))
+    return body.get("data")
+
+
 def _tag_index(config: RunnableConfig):
     """读两级标签字典 → `{id: TagInfo}`；任一读不到 → **None**。
 
@@ -3135,6 +3181,242 @@ def create_dashboard_todo(
 
 
 # ---------------------------------------------------------------------------
+# 管理助手写工具：冻结 / 解冻账号（20260926）
+# ---------------------------------------------------------------------------
+# 与标签/分类/公告/留言同一套纪律（名字通道 + fail-closed + 读回复核），四件**这一族
+# 独有**的事实决定了实现的形状：
+#   ① 账号名录 `GET /api/temp-users` 是全站唯一**不回 `ApiResponse` 信封**的
+#      `/api/protected` 接口（裸数组）⇒ 不能复用 `_admin_get`，见 `_user_directory`；
+#   ② **只按名字**指认，没有编号通道（`user_id` 参数）：后台名录不列超管行这道防线
+#      （Rust `authz::is_listable_role`），只在"定位必须经过名录"时才成立——开一扇
+#      编号门等于把"冻一个看不见的超管"从第二扇门重新打开。名字重名就直接拒绝
+#      （选错就是冻了另一个活人）；
+#   ③ **两个工具而不是一个带布尔参数的**：方向必须写进**工具名**。单工具
+#      `set_account_status(frozen=…)` 的方向由 planner 填，而 `_confirm_grant_plan`
+#      的"工具 ⊆ 技能 plan"判据**看不见**这次翻转（工具名没变）⇒ 卡上写「冻结」、
+#      实际执行解冻，且无人可见（先例：add_favorite / remove_favorite 也是这样一对）；
+#   ④ 拒绝的形态是**后端的政策**，不是"目标不存在"⇒ 走 `policy_frame`
+#      （`__ERROR__` + 原因码族），见 `_admin_status_post` 与 agent/adminops.py。
+
+def _user_directory(config: RunnableConfig) -> dict[int, dict] | ToolResult:
+    """读后台**账号名录** → `{uid: 行}`；读不到 → `ToolResult`（失败，不是 None）。
+
+    ⚠️ **不要把它"统一"回 `_admin_get`**（本节最容易改错的一处）：
+    `GET /api/temp-users` 是全站唯一**不回 `ApiResponse` 信封**的 `/api/protected`
+    接口（Rust 侧直接 `Json<Vec<TempUserInfo>>`，src/routes/temp_user.rs），而
+    `_principal_get` 里取业务码的那一行（`body.get("code")`）在**裸 list** 上会抛
+    `AttributeError`——异常冒到 execute 的兜底，表现成过程行「执行出错」，看起来像
+    服务挂了。也**不要反过来**去改后端把它包成信封：前端 `Users/index.tsx` 按
+    `Array.isArray(res?.data)` 读、`scripts/probe_token_revoke.py` 直接迭代裸数组，
+    包信封会同时打断这两处。所以这里自带一次请求，其余形状照抄 `_principal_get`
+    （同一把 60 秒代签 JWT、同一条 `/api/protected` 前缀、同一套 fail-closed），
+    **唯一**的差别就是最后认的是"顶层是不是 list"。
+
+    失败返回 `ToolResult` 而不是 `None`：本族的调用方（按名字解析）在**任何**读不到
+    的情况下都必须零写，原样往外传一个带人话的 ToolResult 比 `None` 更好用
+    （`_tag_index` 那套 `None` 是给"读不到也要出报表"的只读场景用的）。
+    """
+    uid = _device_get_user_id(config)
+    if uid <= 0:
+        return unavailable("无法获取当前用户身份，后台账号列表不可用")
+    principal = (config.get("configurable", {}) or {}).get("principal")
+    headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
+    try:
+        resp = _client.get(f"{ADMIN_BASE}/api/temp-users", headers=headers, timeout=15)
+    except Exception as exc:
+        logger.error("user directory call failed: %s", exc)
+        return unavailable(f"读后台账号列表的请求失败: {exc}")
+    if resp.status_code in (401, 403):
+        return unavailable("当前身份无权访问后台账号列表（该功能仅管理员可用）")
+    if resp.status_code != 200:
+        return unavailable(f"后台账号列表返回 HTTP {resp.status_code}")
+    try:
+        rows = resp.json()
+    except Exception:
+        return unavailable("后台账号列表返回的不是 JSON")
+    if not isinstance(rows, list):
+        # 信封形状 = 后端换了契约。**不当成台账**：宁可如实说读不懂，也不让一次契约
+        # 变更变成"名录里一个账号都没有"（下一步就是零写，而"没有这个账号"是假话）。
+        return unavailable("后台账号列表返回的形状不对（不是数组），读不出账号名录")
+    out: dict[int, dict] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            rid = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        row["id"] = rid            # id 就地归一成 int：写后复核直接按 id 找回那一行
+        out[rid] = row
+    return out
+
+
+def _account_frozen(row) -> bool | None:
+    """名录里那一行"是不是冻结状态" → True/False；读不出这个字段 → **None**。
+
+    判据 = `status != 0`，与 Rust `authz::is_frozen` 同一条（取值域见 `authz.rs`）。
+    `None` **不是 False**：把"读不到"读成"正常"会让写后复核把一次失败的冻结判成功
+    ——同 `_tag_index` 的 `None ≠ 空表` 那条纪律。
+    """
+    try:
+        return int(row.get("status")) != 0
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _find_named_user(name, config, index=None):
+    """按**账号名**在后台账号名录里找一个账号 → `(行, None)` 或 `(None, 拒绝文本)`。
+
+    四种结局与 `_find_named_tag` 同取向（唯一命中才动手；同名多个如实说分不清、
+    **不替主人挑一个**；查无此名如实说没有并附名字最接近的候选；名录读不到单独
+    一种说法——"读不到" ≠ "没有"），**但有一处刻意的方向差异**：
+
+      名录读不出来时这里**一个字节都不发**（调用方直接零写收场），而
+      `graph._write_target_refusal` 在同一个情形下是"读不到就不拦"（放行给工具）。
+      两边不是不一致，是**定位方式不同**：那边台账只用来印证一个已知的名字，读不到
+      只损失一次预检；这边按名字定位是**唯一**的定位方式，读不到就没有任何可执行的
+      落点——放行等于让 planner 拿一个没核过的名字去冻结一个活人。
+      （不写这句，下一个人会把它当不一致"修"齐。）
+
+    `index` 是可选的外部快照（一次操作要读同一份名录两回时用，同 `_find_named_tag`）。
+    """
+    if index is None:
+        index = _user_directory(config)
+    if isinstance(index, ToolResult):
+        return None, str(index)
+    want = str(name or "").strip()
+    if not want:
+        return None, "账号名为空，本次未改动"
+    hits = [r for r in index.values()
+            if str(r.get("username") or "").strip() == want]
+    if len(hits) == 1:
+        return hits[0], None
+    if len(hits) > 1:
+        cands = "、".join(f"id={r.get('id')}" for r in hits)
+        return None, (f"后台有 {len(hits)} 个账号都叫「{want}」（{cands}）："
+                      f"无法确定要动的是哪一个，本次未改动——请让主人说清是哪一个"
+                      f"（id 是后台账号列表里那一行的编号）")
+    near = _near_miss_names(want, [(r.get("id"), str(r.get("username") or ""))
+                                   for r in index.values()])
+    if near:
+        # 近失（同 `_near_miss_names` 长注）：没有完全同名的，但名字接近——把候选
+        # 摆出来请主人点名，而不是丢一句"没有这个账号"（他记得后台里有）。
+        cands2 = "、".join(f"id={cid}「{nm}」" for cid, nm in near)
+        return None, (f"后台账号列表里没有叫「{want}」的账号（完全同名的一个都没有）；"
+                      f"名字最接近的是 {cands2}。本次未改动——若就是其中一个，"
+                      f"请照它的**完整账号名**再说一遍，我按那个名字动手")
+    return None, f"后台账号列表里没有叫「{want}」的账号，本次未改动"
+
+
+# 冻结/解冻每个方向的**结局句**——工具自己发音时用（回执）。卡面问句用的是
+# adminops 的 `_ACCOUNT_CONSEQ`：两份措辞必须以同一件事为真（"会话不回来"这半边
+# 两个方向都要说清），所以改一处必须看一眼另一处。
+_ACCOUNT_DONE = {
+    True: "他当前所有登录会话**已经全部失效**，在他被解冻之前连登录都进不来",
+    False: "他现在**能重新登录**了（冻结期间被踢下线的会话不会自动恢复，需要他自己重新登录）",
+}
+
+
+def _set_account_frozen(name, frozen: bool, config: RunnableConfig) -> ToolResult:
+    """冻结/解冻的公共实现（两个 @tool 只是方向不同的薄壳，见本节头注③）。
+
+    照 `delete_tag` 的五段式：① 读名录 → ② 解析出唯一一行 → ③ 写 → ④ 写后重读
+    **同一份名录**复核 → ⑤ 出口只有 `ok` / `not_found` / `policy_frame` /
+    `unavailable`，绝不 `return ""`。
+    """
+    from agent import adminops as A
+    want = str(name or "").strip()
+    if not want:
+        return unavailable("没给出要动的账号名，本次未改动——请让主人说清是哪个账号")
+
+    # ① 写前读：既拿复核基线，也让"名字不存在"在**发请求之前**就响亮地报出来
+    before_index = _user_directory(config)
+    if isinstance(before_index, ToolResult):
+        # 名录读不到 → 明说"本次未改动"（读侧那句原话留在括号里，便于排查）。
+        return _pre_read_fail(before_index, "后台账号名录")
+    # ② 解析：唯一命中才继续。**index 传进去**，于是这条路上的所有拒绝都是
+    #    "目标不明"（读不到那一支已经在上面被挡掉了），出口统一按 not_found 走
+    #    ——planner 的应对是换个名字或如实问主人，不是"稍后再试"。
+    row, err = _find_named_user(want, config, index=before_index)
+    if err:
+        return not_found(err)
+    target_id = int(row.get("id"))
+    username = str(row.get("username") or want)
+    was_frozen = _account_frozen(row)
+
+    # ③ 写。**幂等不短路**：目标已经是目标状态时照样发请求（后端那一支是真 no-op），
+    #    结论由下面的复核给——短路成 ok 会让回执把一次"没发生的事"读成一个动作
+    #    （"刚冻结的"与"本来就是冻结的"对主人是两句不同的话）。
+    data = _admin_status_post(f"/api/temp-users/{target_id}/status",
+                              {"frozen": frozen}, config)
+    if isinstance(data, ToolResult):
+        # 政策拒绝（自己 / 超管 / 同级管理员）就走这一支：`_admin_status_post` 已经
+        # 把后端的原话包成了 `policy_refused` 帧（checker BLOCK ⇒ 零回执 ⇒ 不进
+        # 跨轮执行记忆），这里原样往外传，不改写一个字。
+        return data
+
+    # ④ 写后复核：重读**同一份名录**按 id 找回那一行。三种情形一律 unavailable
+    #    （"…本次改动未确认生效"），**不许说成功**：读不回 / 那一行不见了
+    #    （并发删号）/ 状态仍是旧值。
+    after_index = _user_directory(config)
+    if isinstance(after_index, ToolResult):
+        return unavailable(f"改动请求已发出，但读不回后台账号名录（{after_index}），"
+                           f"本次改动未确认生效")
+    got = after_index.get(target_id)
+    if not isinstance(got, dict):
+        return unavailable(f"改动请求已发出，但读回的名录里找不到 id={target_id} 那一行"
+                           f"（账号可能已被删除），本次改动未确认生效")
+    now_frozen = _account_frozen(got)
+    if now_frozen is None:
+        return unavailable(f"改动请求已发出，但读回的账号「{username}」没有状态字段，"
+                           f"无法确认，本次改动未确认生效")
+    if now_frozen != frozen:
+        verb = "冻结" if frozen else "解冻"
+        state = "冻结" if now_frozen else "正常"
+        return unavailable(f"{verb}请求已发出，但读回账号「{username}」的状态仍是"
+                           f"「{state}」，本次改动未确认生效")
+
+    changed = (was_frozen != now_frozen)
+    return ok(
+        A.render_account_status(username, target_id, frozen, changed=changed,
+                                before_frozen=was_frozen),
+        meta={"op": "account_freeze" if frozen else "account_unfreeze",
+              "account_id": target_id, "account_name": username,
+              "before": "冻结" if was_frozen else ("正常" if was_frozen is False else ""),
+              "after": "冻结" if now_frozen else "正常",
+              "change": A.account_change_phrase(frozen, changed)})
+
+
+@tool
+def freeze_account(
+    name: Annotated[str, "要冻结的那个后台账号的**账号名**（后台账号列表里看得见的那一行）"],
+    config: RunnableConfig,
+) -> str:
+    """冻结一个后台账号：他立刻被踢下线，**在他被解冻之前连登录都进不来**。
+    已登录的会话不会恢复（解冻后他需要重新登录）。需要管理员身份，且每次都要经主人确认。
+
+    **要动的账号名必须能在后台账号列表里看到**；列表里没有这个名字就当它不存在
+    （不要用账号编号，也不要自己拼一个名字）。管理员之间不能互相冻结，超级管理员
+    谁的账号都冻不了——撞上这两条时，如实把系统给的原话转告主人，不要换个说法重试。"""
+    return _set_account_frozen(name, True, config)
+
+
+@tool
+def unfreeze_account(
+    name: Annotated[str, "要解冻的那个后台账号的**账号名**（后台账号列表里看得见的那一行）"],
+    config: RunnableConfig,
+) -> str:
+    """解冻一个被冻结的后台账号：他重新可以登录了。
+    **冻结期间被踢下线的会话不会自动恢复**——解冻不等于"恢复原状"，他需要自己重新
+    登录一次。需要管理员身份，且每次都要经主人确认。
+
+    **要动的账号名必须能在后台账号列表里看到**；列表里没有这个名字就当它不存在
+    （不要用账号编号，也不要自己拼一个名字）。超级管理员的账号谁都解冻不了——
+    撞上时如实转告系统给的原话，不要换个说法重试。"""
+    return _set_account_frozen(name, False, config)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -3205,6 +3487,11 @@ _TOOL_REGISTRY = [
     # 没有那份列表，整份覆盖会抹掉主人的改动）。
     list_dashboard_todos,
     create_dashboard_todo,
+    # 冻结 / 解冻账号（20260926）：write.console，目标=后台账号列表里的**账号名**，
+    # 见"管理助手写工具：冻结 / 解冻账号"节头注。两个工具而不是一个带方向的参数：
+    # 方向写进工具名，确认卡与回执才不可能与真正执行的方向相反。
+    freeze_account,
+    unfreeze_account,
 ]
 
 def get_all_tools():

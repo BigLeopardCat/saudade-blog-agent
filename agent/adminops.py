@@ -952,7 +952,110 @@ def _match_board(boards, quote) -> dict | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None) -> str:
+# ── 账号冻结 / 解冻（20260926）───────────────────────────────────────────
+# 这一族的措辞有**三条硬要求**（三条都不是文风问题，是"主人点确定之前能不能看懂
+# 自己将同意什么"的问题）：
+#   ① 账号名**一字不改**地进卡面——主人得能核对"是不是那个人"（同 `_board_ref`）；
+#   ② 冻结与解冻**必须不同形**，差异要落在**后果**上而不是动词上（"被踢下线、连
+#      登录都进不来" vs "能重新登录了"）；只换动词的两张卡读起来是同一个动作的
+#      两个方向，而真正的区别是"有人被踢下线"这件事可不可逆；
+#   ③ 解冻那句**不许**写成"撤销冻结 / 恢复原状"——那是假话：后端的 `token_version`
+#      **只增不减**（`scripts/probe_token_revoke.py` 的【三】专门验这个），解冻恢复
+#      的只是"能不能登录"。冻结也**不写**「不可撤销」（它可以解冻），要写清的是
+#      **哪半边不可逆**：被踢掉的会话不回来。
+_ACCOUNT_STATE_CN = {True: "已冻结", False: "正常"}
+# 卡面/问句里的后果句（`render_account_action` 用）
+_ACCOUNT_CONSEQ = {
+    True: "他当前所有登录会话立刻失效，在他被解冻之前连登录都进不来",
+    False: "他能重新登录了——冻结期间被踢下线的会话不会自动恢复，需要他自己重新登录",
+}
+
+
+def account_state_cn(frozen) -> str:
+    """`status` → 人话状态词。**读不出（None）不当成"正常"**：那是把"没读到"说成
+    事实（同 tools.base._account_frozen 那条纪律）。"""
+    if frozen is None:
+        return "状态未知"
+    return _ACCOUNT_STATE_CN[bool(frozen)]
+
+
+def _account_row(users, username):
+    """账号名录快照里按**账号名**找回那一行；快照不在/名字不在 → None。
+
+    `users` = `{uid: 行}`（tools.base._user_directory 的产物），**可能整个是 None**
+    （读不到名录）——调用方必须把"快照是 None"与"快照在手、名字不在里面"分开渲染，
+    这两件事给主人的信息不一样（一个是"没核对上"，一个是"后台根本没有这个账号"）。
+    """
+    if not users:
+        return None
+    want = str(username or "").strip()
+    if not want:
+        return None
+    for row in users.values():
+        if isinstance(row, dict) and str(row.get("username") or "").strip() == want:
+            return row
+    return None
+
+
+def render_account_action(username: str, frozen: bool, users=None) -> str:
+    """`冻结账号「guest5」（账号 id=126，现在：正常。他当前所有登录会话立刻失效，
+    在他被解冻之前连登录都进不来）`——**卡面、问句、跨轮待办的目标**共用这一行。
+
+    `users` 三态（与全表同一条纪律：读不到就少说，**不因此不弹窗**）：
+      · 快照在手、名字在里面 → 印 `账号 id=…，现在：<现状>`；
+      · 快照在手、名字不在 → 印「（后台账号列表里没有叫这个名字的账号）」——主人
+        点确定**之前**就该看到，而不是点完才被告知没做成（也**不再报后果**：一件
+        做不成的事的后果说了只会误导）；
+      · 快照没有（读不到名录）→ 只印名字 + 后果。
+    """
+    verb = "冻结" if frozen else "解冻"
+    row = _account_row(users, username)
+    if users and row is None:
+        return f"{verb}账号「{username}」（后台账号列表里没有叫这个名字的账号）"
+    where = ""
+    if row is not None:
+        where = f"账号 id={row.get('id')}，现在：{account_state_cn(_row_frozen(row))}。"
+    return f"{verb}账号「{username}」（{where}{_ACCOUNT_CONSEQ[bool(frozen)]}）"
+
+
+def _row_frozen(row):
+    """名录行 → 是否冻结（True/False/None，判据 = `status != 0`，同 Rust 侧）。"""
+    try:
+        return int(row.get("status")) != 0
+    except (TypeError, ValueError):
+        return None
+
+
+def account_change_phrase(frozen: bool, changed: bool) -> str:
+    """回执的 `change` 摘要：**必须区分"刚改的"与"本来就是"**。
+
+    "状态本来就是冻结，本次未发生变更"与"已冻结"对主人是两句不同的话（前者意味着
+    他这一下什么也没做成、后端走了 no-op 分支）；短路成一句会让回执行读成一个动作。
+    """
+    if not changed:
+        return f"状态本来就是{'冻结' if frozen else '正常'}，本次未发生变更"
+    return "已冻结" if frozen else "已解冻"
+
+
+def render_account_status(username: str, uid, frozen: bool, changed: bool = True,
+                          before_frozen=None) -> str:
+    """冻结/解冻成功后的回执行（工具 side 用；与卡面同源同事实）。"""
+    verb = "冻结" if frozen else "解冻"
+    if not changed:
+        return (f"账号「{username}」（账号 id={uid}）**本来就是"
+                f"{account_state_cn(before_frozen)}状态**，这次没有发生任何变更"
+                f"（没有重复{verb}）")
+    done = {
+        True: "他当前所有登录会话**已全部失效**，在他被解冻之前连登录都进不来",
+        False: "他现在**能重新登录**了（冻结期间被踢下线的会话不会自动恢复，"
+               "需要他自己重新登录）",
+    }[bool(frozen)]
+    return (f"已{verb}账号「{username}」（账号 id={uid}）：{done}"
+            f"（后台已复核：名录里这个账号现在就是{account_state_cn(frozen)}状态）")
+
+
+def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
+                 users=None) -> str:
     """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
 
     `index` = 可选的标签字典（`{id: TagInfo}`，见 build_tag_index）：给得起就
@@ -1188,10 +1291,17 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None) -> 
         when = due_date_cn(raw_date) if str(raw_date or "").strip() else "未排期"
         head = f"在后台首页的待办里加一条「{clip(text, 60) or '（没写内容）'}」，排期 {when}"
         return head + "（那是你自己那份列表，加完随时能改能删）"
+    if tool in ("freeze_account", "unfreeze_account"):
+        # 账号冻结/解冻（20260926）：措辞的三条硬要求见本节上方 `_ACCOUNT_*` 那段。
+        # `users` = 账号名录快照（tools.base._user_directory）：给得起就把 id 与现状
+        # 写进卡面，给不起只印名字（**不因此不弹窗**，同全表取向）。
+        return render_account_action(str(a.get("name") or "").strip() or "（没有给出账号名）",
+                                     tool == "freeze_account", users)
     return f"执行 {tool}"
 
 
-def render_action_lines(specs, index=None, cats=None, boards=None, notes=None) -> str:
+def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
+                        users=None) -> str:
     """一份调用清单 → 主人看得懂的动作串（"；"分隔）。
 
     三处共用同一份措辞：确认框问句、确认轮的气泡正文、**跨轮待办的人读目标**
@@ -1199,10 +1309,12 @@ def render_action_lines(specs, index=None, cats=None, boards=None, notes=None) -
     事后在待办/回执里读到的目标，必须是同一句话（这正是"盲签"那条纪律的延伸：
     系统对同一件事的两种表述不一致时，点「确定」的人无从判断谁是真的）。
     """
-    return "；".join(_confirm_one(s, index, cats, boards, notes) for s in (specs or []))
+    return "；".join(_confirm_one(s, index, cats, boards, notes, users)
+                     for s in (specs or []))
 
 
-def render_confirm_question(specs, index=None, cats=None, boards=None, notes=None) -> str:
+def render_confirm_question(specs, index=None, cats=None, boards=None, notes=None,
+                            users=None) -> str:
     """确认框的问题行：**把要发生的事说全**（含颜色名与色值），再问一句。
 
     用户点的是"确定"，他有权在点之前从这句话里看出自己将同意什么——
@@ -1211,17 +1323,18 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
     （`index`/`cats`/`notes` 见 _confirm_one；读不到字典时退化成名字原文或 id，
     不因此不弹窗——这一轮的价值就是让主人确认，读不到就少说，不是不弹。）
     """
-    acts = render_action_lines(specs, index, cats, boards, notes)
+    acts = render_action_lines(specs, index, cats, boards, notes, users)
     return f"要{acts}吗？点「确定」我就去办。"
 
 
-def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None) -> str:
+def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
+                        users=None) -> str:
     """弹窗那一轮的**对话气泡正文**（系统给的，不经 narrator）。
 
     刻意写得像"在等你的意思"而不是"已经在办了"：这一轮零执行。给一个明确
     的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
     """
-    acts = render_action_lines(specs, index, cats, boards, notes)
+    acts = render_action_lines(specs, index, cats, boards, notes, users)
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
     return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
@@ -1376,3 +1489,40 @@ def target_error_reason(text: str) -> str | None:
     if f"[{REASON_TARGET_MISMATCH}]" in s:
         return REASON_TARGET_MISMATCH
     return REASON_UNKNOWN_TARGET if f"[{REASON_UNKNOWN_TARGET}]" in s else None
+
+
+# ── 后台写的**政策拒绝**（20260926）：后端说"这件事规则上不许做" ─────────────
+# 与上面两族（目标没读到 / 目标读错了）并列的第三族，形态完全一样：原因码 + 帧 +
+# 取回函数，`_check_spec` 在 `target_error_reason` 那个 or 链上多接一条。
+#
+# 为什么走**错误帧族**而不是新增一个 `ToolResult` kind（这一条想清楚过）：
+# `_check_spec` 是一条**显式 if 链**。新 kind 若忘了加分支，会 fallthrough 到
+# "文本非空 ⇒ PASS"⇒ 产回执 ⇒ 进 execution_log ⇒ 下一轮 `recent_executions` 把
+# "冻结账号 X"当成**已完成的事实**喂给 narrator。这是本族最不能出现的错，而且
+# **完全静默**。错误帧族的"忘记接线"后果是良性的：落到最后一个 `or` 的
+# `error_frame`，照样 BLOCK、照样不进回执，只是过程行说「执行出错」而不是
+# 「后台规则拒绝」。此外只有错误帧族能吃到 gate 5a（错误帧 + 完成式声称 → fallback）
+# 这条结构保证——一般的 ToolResult 不是 err frame，5a 根本不触发。
+REASON_POLICY_REFUSED = "policy_refused"
+
+
+def policy_frame(message: str) -> str:
+    """后端政策拒绝的错误帧（checker 判 BLOCK；planner 读到原因码后应当**如实
+    转述、不再改参重试**）。
+
+    `message` 是**后端给的那句中文原话**，逐字放进帧里：政策只在 Rust 侧实现一次
+    （见 docs/security-boundary.md §7⑫），agent 这边任何"翻译"都会在政策变更那天
+    变成假话。帧里的指引也据此写成"如实转告"，而不是"换个参数再试"：这条请求
+    再试一百次也是同一个结果，而每一轮重试都会让主人在等一件永远不会发生的事。
+    """
+    return (f"__ERROR__: 后台规则拒绝[{REASON_POLICY_REFUSED}]"
+            f"（{str(message or '').strip() or '后台拒绝了这次改动'}——"
+            f"这条不是系统故障、也不是你没填对参数，是后台的规则不许这件事发生。"
+            f"**不要换参数重试**（再试多少次都是这个结果），把上面这句话如实转告主人，"
+            f"并说明本次**一个字节都没有改动**）")
+
+
+def policy_error_reason(text: str) -> str | None:
+    """从错误帧取回原因码（非本族帧 → None），供 _check_spec 用。"""
+    return (REASON_POLICY_REFUSED
+            if f"[{REASON_POLICY_REFUSED}]" in str(text or "") else None)

@@ -23,6 +23,7 @@ narrator）→ gate（确定性检查 + fallback 收尾）。原"落回 LLM 质�
 """
 import json
 import pathlib
+import re
 import sys
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -1212,9 +1213,10 @@ def test_phantom_tool_claim():
     # get_unread_summary / list_notifications；43 → 46 是同一批的写三件：
     # add_favorite / remove_favorite / read_notifications；46 → 48 是 20260923
     # 批 8 的站内信两件：list_my_messages / read_messages；48 → 50 是 20260926
-    # 的后台待办两件：list_dashboard_todos / create_dashboard_todo）。
+    # 的后台待办两件：list_dashboard_todos / create_dashboard_todo；50 → 52 是同一天
+    # 的账号冻结/解冻两件：freeze_account / unfreeze_account）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 50 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 52 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 
@@ -3634,13 +3636,17 @@ def test_no_sibling_tool_name_in_user_text():
     check("adminops.py 渲染层无工具名泄漏", not leaks, "；".join(leaks))
 
     # ② 技能 reply_contract：不许出现兄弟工具名
+    #    按**整词**匹配（20260926）：冻结/解冻这对工具名互为子串
+    #    （`freeze_account` ⊂ `unfreeze_account`），裸 `in` 会把"在契约里提到自己
+    #    的名字"判成"泄漏了兄弟的名字"。`\b` 在 `unfreeze_account` 的那个 freeze
+    #    前不成立（前一个字符是词字符 `n`）⇒ 自己的名字不再误红，别人的名字照旧拦。
     bad = []
     for sk in SKILLS:
         own = {spec[0] for spec in sk.plan}
         if sk.name in DYNAMIC:
             own |= set(_CALLABLE_QUERY_TOOLS) | set(_EXPLICIT_TOOLS)
         for n in sorted(names - own):
-            if n in (sk.reply_contract or ""):
+            if re.search(rf"\b{re.escape(n)}\b", sk.reply_contract or ""):
                 bad.append(f"{sk.name}.reply_contract [{n}]")
     check("技能 reply_contract 无兄弟工具名", not bad, "；".join(bad))
 

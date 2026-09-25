@@ -590,6 +590,12 @@ _MIN_PARAMS = {
     # 目标不是站内既有名字、也不是 id，所以它既不在名字通道也不在 own 通道，
     # 由 `_expand_todo_skill` 展开（见 agent/skills.py 的同名函数头注）。
     "dashboard_todo_add": {"text": "给猫买罐头", "date": "明天"},
+    # 后台账号冻结 / 解冻（20260926 第九轮）：名字通道的又一件——名字 → 账号的
+    # 解析在工具侧对着**后台账号名录**做（`tools.base._find_named_user`）。
+    # ⚠️ 目标名字必须**明显是假的**：这一族跑展开器只碰纯函数、不发请求，但名字
+    # 一旦写成一个真账号，将来谁把这条用例改成真跑就成了生产写。
+    "account_freeze": {"name": "probe_target_1"},
+    "account_unfreeze": {"name": "probe_target_1"},
 }
 _EXPECT_TOOL = {
     "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
@@ -605,6 +611,7 @@ _EXPECT_TOOL = {
     "notice_read": "read_notifications",
     "message_read": "read_messages",
     "dashboard_todo_add": "create_dashboard_todo",
+    "account_freeze": "freeze_account", "account_unfreeze": "unfreeze_account",
 }
 check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",
       set(_EXPECT_TOOL) == set(WRITE_SKILL_NAMES) and set(_MIN_PARAMS) == set(WRITE_SKILL_NAMES),

@@ -653,7 +653,7 @@ for name, tool, args in [("admin_notes", "list_admin_notes", {}),
     check(f"技能 {name} 在位、只对 admin 可见、计划首项是 {tool}",
           sk is not None and sk.roles == frozenset({"admin"})
           and [t for t, _ in sk.plan] == [tool], str(sk and (sk.roles, sk.plan)))
-check("写技能名单 = 十八个**技能**名（instantiate_plan 缺参守卫按它分支；"
+check("写技能名单 = 二十个**技能**名（instantiate_plan 缺参守卫按它分支；"
       "注意它与工具名不是一套字面量，混用会让守卫静默不生效）",
       WRITE_SKILL_NAMES == frozenset({"tag_create", "tag_update", "tag_delete",
                                       "category_create", "category_update",
@@ -675,7 +675,15 @@ check("写技能名单 = 十八个**技能**名（instantiate_plan 缺参守卫�
                                       # 名字，也不是 id）——漏在这份名单外同样会
                                       # 落进通用分支（test_userdata 的"落进四者
                                       # 之一"那条钉着）
-                                      "dashboard_todo_add"})
+                                      "dashboard_todo_add",
+                                      # 后台账号冻结 / 解冻（20260926 第九轮）：
+                                      # 两个技能名与两个工具名**不是一套字面量**
+                                      # （技能 account_freeze / 工具 freeze_account）
+                                      # ——混用会让 `_expand_write_skill` 的分支
+                                      # 静默不命中，尾部的"未知的写技能"兜底会
+                                      # 零工具零写还不报错（test_account_freeze
+                                      # ④ 钉着）
+                                      "account_freeze", "account_unfreeze"})
       and WRITE_SKILL_NAMES <= set(SKILL_MAP), str(sorted(WRITE_SKILL_NAMES)))
 check("非 admin 的 planner 上下文里看不到这四个技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
