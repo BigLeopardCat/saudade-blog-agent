@@ -190,8 +190,9 @@ class _TraceRecorder:
             }
             # 20260830：文件名可读化——时间戳 + user_id + trace_id 前 8 位，
             # ls 目录即知哪次对话（纯 hash 命名要挨个点开才知道）；trace_id
-            # 完整保留在 JSON 内对账。logrotate 按 traces/*.json 通配轮转（20260911
-            # 起 rename+compress：源文件归档为 .1.gz 不复存在，读取端需支持 gz）
+            # 完整保留在 JSON 内对账。保留期由 `eval/trace_retention.py` 执行、
+            # 不再走 logrotate（20260925 起，见该脚本头注），读取端因此要同时认
+            # `.json` 与 gz（存量归档件是 logrotate 时代留下的 .1.gz）
             stamp = self.started_at.replace("-", "").replace(":", "")
             if self.name:
                 fname = f"{self.name}.json"
@@ -201,7 +202,12 @@ class _TraceRecorder:
             # ——那个模块是"哪些文件算 trace"的唯一实现，改布局必须两处一起改
             # （`tests/test_trace_retention.py` 有一次真实落盘的往返断言盯着）。
             out_dir = os.path.join(self.trace_dir, stamp[:8]) if self.by_day else self.trace_dir
-            os.makedirs(out_dir, exist_ok=True)
+            # mode 显式 0700：20260925 安全审计 A6 把 logs/ + logs/agent/ + logs/agent/traces/
+            # 收紧到 0700（里面是访客对话正文），而这个按天目录是**新建**的——默认 0755。
+            # 今天父目录 0700 已经挡住横向越权，所以不是当下的暴露面；但边界一旦按审计建议
+            # 放宽到 0750，逐级目录里只要有一层 0755 就等于没挡（www-data 在 group ubuntu 里）。
+            # 与其留一个"靠上一层的模式兜着"的耦合，不如让这一层自己就是对的。
+            os.makedirs(out_dir, mode=0o700, exist_ok=True)
             path = os.path.join(out_dir, fname)
             tmp = path + ".tmp"  # 原子替换：reader 不会读到半截文件
             with open(tmp, "w", encoding="utf-8") as f:
