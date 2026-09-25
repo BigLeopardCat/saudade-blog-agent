@@ -1113,8 +1113,10 @@ flowchart TB
   会与 systemd 抢同一端口，抢到之后没人管它，崩溃也不会自愈。
   具体服务名、重启命令与探活地址属私有运行簿，不进仓库。
   日志：`logs/agent/agent.log`（服务标准输出/错误 append）+ `logs/agent/traces/`（对话 trace，
-  路径由 settings.py `trace_dir` 配置）；按日轮转、保留两周、压缩归档（轮转规则由系统级配置
-  下发，本仓不含）。
+  路径由 settings.py `trace_dir` 配置）；20260925 起按天分目录（`traces/<YYYYMMDD>/`），
+  枚举由 `eval/trace_files.py` 单点负责，**保留期由 `eval/trace_retention.py` 执行**
+  （>24h 压缩、>30 天删，接在夜间脚本里）。注意系统级 logrotate 那份 `rotate 14` 对这类
+  "文件名唯一"的产物**从来无效**（详见 [问题记录.md](问题记录.md) §4.7），那份配置正在等摘除。
 - **前端**：部署一律走 CI——本机不构建（20260830 OOM 事故：3.7GB 内存下本地 `vite build` 拖垮整机）。
   改动 commit → push `cn_sora_blog` → GitHub Actions 云端构建 → R2 → 服务器脚本部署。
 - **Rust**：同上走 CI；本地自检 `RUSTFLAGS="-D warnings" cargo check`（⚠️ CI 目前**未**启用 -D warnings——

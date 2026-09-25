@@ -96,6 +96,13 @@ $PY eval/golden_draft.py --days 1 >> "$LOG" 2>&1 || echo "[$TS] golden_draft 运
 # 刚过去的这一夜。异常时它自己写 health.log 的 WARN，这里只留一行结论在日志里。
 echo "--- 跨源对账 (trace ↔ agent.log ↔ monitor.log, 巡检非门禁) ---" >> "$LOG"
 $PY eval/trace_reconcile.py >> "$LOG" 2>&1 || echo "[$TS] trace_reconcile 运行异常（不影响门禁）" >> "$LOG"
+# 20260925 起：trace 保留治理（压缩 + 按保留期删）。**放在最后**：上面三步都要读 trace，
+# 保留期 30 天远大于它们的窗口（7 天/1 天），所以删不到它们要的东西。
+# 为什么必须有人执行：logrotate 那块的 `rotate 14` 对"文件名唯一"的 trace **从来无效**
+# （`.2.gz`/`.3.gz` 各 0 个、最老文件 26 天）——保留策略写进配置不等于会执行，
+# 这里才是真的执行者。删了什么会逐条落进本日志（这就是审计轨迹）。
+echo "--- trace 保留治理 (压缩 + 超 30 天删除; 明细即审计轨迹) ---" >> "$LOG"
+$PY eval/trace_retention.py --apply >> "$LOG" 2>&1 || echo "[$TS] trace_retention 运行异常（不影响门禁）" >> "$LOG"
 
 if [ "$fail" -eq 0 ]; then
   echo "[$TS] ALL PASS" >> "$LOG"

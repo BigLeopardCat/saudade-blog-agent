@@ -109,7 +109,11 @@ def start_case(run_id: str, case_id: str, message: str = "", role: str | None = 
     start_trace(tid, 0, "golden_thread",
                 {"golden": True, "run": run_id, "case": case_id, "role": role,
                  "message": (message or "")[:200], "tool_result_limit": _lim},
-                dir=case_dir(run_id), name=case_id)
+                dir=case_dir(run_id), name=case_id,
+                # 生产 trace 20260925 起按天分目录，**golden 不分**：`<run_id>/` 已经是
+                # 它自己的一层，再套 `<YYYYMMDD>/` 会让 `llm_judge` 的 `glob("*.json")`、
+                # `prune()` 与报告里写下的路径一起落空。
+                by_day=False)
     return tid
 
 
