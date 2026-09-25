@@ -99,6 +99,14 @@ $PY eval/golden_draft.py --days 1 >> "$LOG" 2>&1 || echo "[$TS] golden_draft 运
 # 刚过去的这一夜。异常时它自己写 health.log 的 WARN，这里只留一行结论在日志里。
 echo "--- 跨源对账 (trace ↔ agent.log ↔ monitor.log, 巡检非门禁) ---" >> "$LOG"
 $PY eval/trace_reconcile.py >> "$LOG" 2>&1 || echo "[$TS] trace_reconcile 运行异常（不影响门禁）" >> "$LOG"
+# 20260925 起：单帧预算哨兵（`agent/context.py::_DETAIL_FRAME_PER`，非门禁）。
+# 起因：那个常数的注释原写「覆盖站内全部文章正文长度」，而实测最长那篇去重后 26,847 字
+# ——**这句话早就不成立**，且没有任何东西会告诉你它不成立：超预算的帧会走按节节选
+# （保底正确、planner 少看一截、多花一轮），日志与 golden 里都看不出来。
+# 非门禁的理由同语料漂移哨兵：它报的是"该维护常数了"，不是"今天的改动坏了"。
+# 有超时它退出 1，这里只留一行结论 + 它自己打的逐篇明细（就在上一行日志里）。
+echo "--- 单帧预算哨兵 (最长文章帧 vs _DETAIL_FRAME_PER, 秒级, 非门禁) ---" >> "$LOG"
+$PY eval/frame_budget.py >> "$LOG" 2>&1 || echo "[$TS] frame_budget 报「有文章超过单帧预算」或运行异常（非门禁，看上面逐篇明细）" >> "$LOG"
 # 20260925 起：trace 保留治理（压缩 + 按保留期删）。**放在最后**：上面三步都要读 trace，
 # 保留期 30 天远大于它们的窗口（7 天/1 天），所以删不到它们要的东西。
 # 为什么必须有人执行：logrotate 那块的 `rotate 14` 对"文件名唯一"的 trace **从来无效**
