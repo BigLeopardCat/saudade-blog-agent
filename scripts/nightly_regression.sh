@@ -22,6 +22,9 @@
 # 三个源对起来看，非门禁）——单源规则扫描看不见"两个源之间"的错（轮次自洽、前端只见
 # 报错那类），报告进 eval/report/reconcile_<ts>.md，异常时另写一条 WARN 到
 # logs/health.log（与一分钟心跳探针同一条通道）。
+# 20260925 补：产物保留登记表 + 执行者（eval/retention_manifest.py + artifact_retention.py，
+# 末尾一节）——先统一回答"盘上每一类产物归谁清"，再让它真的清。同族坑第四次
+# （R2 --keep 3 / logrotate rotate 14 / logs/archive / eval/report/runs）。
 set -u
 cd /home/ubuntu/memory_blog_rust/saudade-blog-agent
 PY=.venv/bin/python
@@ -103,6 +106,16 @@ $PY eval/trace_reconcile.py >> "$LOG" 2>&1 || echo "[$TS] trace_reconcile 运行
 # 这里才是真的执行者。删了什么会逐条落进本日志（这就是审计轨迹）。
 echo "--- trace 保留治理 (压缩 + 超 30 天删除; 明细即审计轨迹) ---" >> "$LOG"
 $PY eval/trace_retention.py --apply >> "$LOG" 2>&1 || echo "[$TS] trace_retention 运行异常（不影响门禁）" >> "$LOG"
+# 20260925 起：产物保留执行（表 = eval/retention_manifest.py）。它管的是 trace 以外那几类：
+# `logs/archive/` 的保留期（90 天，审计留档与 .sql 快照由 frozen 登记项排除）、
+# `eval/report/` 每族报告保留最近 20 份、词图构建中间产物保留最近 10 套。
+# **这里不写任何路径与天数**——表是唯一事实源，改保留期改表里的常量，命令行不动。
+# 为什么必须有这一步：`logs/archive/` 曾零引用、最老到 2026-06-10，而 `runs/` 576 份零策略
+# ——同族坑第四次（前三次：R2 `--keep 3`、logrotate `rotate 14`、traces 保留期）。
+# 放在最末：上面几步产出的报告（review_/reconcile_/corpus_drift_）都还在"每族 20 份"内，
+# 一天落不了 20 份。删了什么逐条落进本日志 = 审计轨迹。
+echo "--- 产物保留执行 (logs/archive + eval/report，明细即审计轨迹) ---" >> "$LOG"
+$PY eval/artifact_retention.py --apply >> "$LOG" 2>&1 || echo "[$TS] artifact_retention 运行异常（不影响门禁）" >> "$LOG"
 
 if [ "$fail" -eq 0 ]; then
   echo "[$TS] ALL PASS" >> "$LOG"
