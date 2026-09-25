@@ -979,6 +979,24 @@ def _tool_action_text(name: str, args: dict | None) -> str:
         verb = "冻结账号" if name == "freeze_account" else "解冻账号"
         acct = _leaf(a.get("name"))
         return f"{verb}「{acct}」" if acct else verb
+    if name == "get_weather":
+        # 天气（20260926 补臂）：Rust `render_exec_row` 的同名臂一直有，Python 这半
+        # 漏了 ⇒ 过程行显示「执行 get_weather」（内部工具名带下划线）。
+        loc = _leaf(a.get("location"))
+        return f"查看天气「{loc}」" if loc else "查看天气"
+    if name == "list_dashboard_todos":
+        # 后台首页待办 / 日程（20260926 补臂）：**读**的那件（无参）。
+        return "查看待办列表"
+    if name == "create_dashboard_todo":
+        # 后台首页待办 / 日程（20260926 补臂）：**写**的那件。正文按
+        # device_oled_display 的同款截断（24 字）——待办正文上限 200 字，过程行放不下；
+        # 落库回执（Rust render_exec_row）按列宽自己去截，两侧**措辞一致**即可。
+        body = str(a.get("text") or "").strip()
+        if not body:
+            return "添加待办"
+        due = str(a.get("date") or "").strip()
+        head = f"添加待办「{body[:24]}」"
+        return f"{head}（{due}）" if due else head
     if name in _NOARG_VERB:
         return _NOARG_VERB[name]
     return f"执行 {name}"

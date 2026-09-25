@@ -594,6 +594,29 @@ src = (ROOT / "server.py").read_text(encoding="utf-8")
 check("过程行有中文动作词（否则显示『执行 get_server_status』）",
       all(f'"{n}":' in src for n in NEW))
 
+# ⭐ 派生锁（20260926）：**每一个可达工具**都要有中文动作词——判据是行为（调一次
+# `_tool_action_text`，看它是不是落进末尾那句 `执行 {name}`），不是"字符串出现在
+# 源码里"（上面那条就是后者，它对 `# 注释里提过 create_dashboard_todo` 也绿）。
+# 可达 = 技能模板里的工具 ∪ 两条点名白名单；刻意**不含** get_chat_history /
+# search_knowledge_base（占位实现、不在任何白名单里，进不来也出不了回执）。
+# Rust 侧 `render_exec_row` 是同一张表的镜像，但它不在这仓里（独立仓库、CI 看不见
+# 父仓），所以那半只能靠这条注释和提交说明提醒：**加工具时两边都要加**。
+import server as _srv  # noqa: E402
+from agent.skills import (SKILLS, _CALLABLE_QUERY_TOOLS,  # noqa: E402
+                          _EXPLICIT_TOOLS)
+_reachable = set(_EXPLICIT_TOOLS) | set(_CALLABLE_QUERY_TOOLS)
+for _sk in SKILLS:
+    _reachable |= {t for t, _ in _sk.plan}
+_noverb = sorted(n for n in _reachable
+                 if _srv._tool_action_text(n, {}) == f"执行 {n}")
+check(f"⭐ 可达工具（{len(_reachable)} 件）全都有中文动作词"
+      "（漏了过程行与执行回执都显示内部工具名 `执行 xxx`，带下划线）",
+      not _noverb, "；".join(_noverb))
+_reach_unknown = sorted(n for n in _reachable
+                        if n not in {t.name for t in base._TOOL_REGISTRY})
+check("可达工具都在注册表里（否则计划里那一行会执行成未知工具）",
+      not _reach_unknown, "；".join(_reach_unknown))
+
 # 快照去重（20260921）：报表技能进了 planner 的重复规划防护名单——不进的话
 # ops_report_admin 会连规划 4 轮、同两个工具各跑 4 遍（实测 22s/8 次调用）。
 # 20260924 补 `admin_notes`（同判据：单条无参只读 plan）。
