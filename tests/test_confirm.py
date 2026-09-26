@@ -376,10 +376,10 @@ print("\n⑦ 图接线：确认轮必须能走完（20260921 22:37 生产事故�
 # 站内数据真的改了 + 回执落库了 + 前端收到一行报错 `'model'`。
 # 两层锁：① 路由标签必须都在映射表里（结构性，谁漏谁红）；② 用假工具 + 假 LLM
 # 把整条确认轮在图里跑一遍（端到端，零网络零真写）。
-from agent.graph import (EXECUTE_ROUTES, PLANNER_ROUTES,  # noqa: E402
+from agent.graph import (EXECUTE_ROUTES, GATE_ROUTES, PLANNER_ROUTES,  # noqa: E402
                          REFLECTOR_ROUTES, build_graph, graph_input,
-                         route_after_execute, route_after_planner,
-                         route_after_reflector)
+                         route_after_execute, route_after_gate,
+                         route_after_planner, route_after_reflector)
 
 _GRANT = {"skill": "article_status", "specs": [
     {"tool": "set_article_status", "args": {"article_id": 12, "status": "private"}}]}
@@ -394,6 +394,14 @@ _ROUTE_CASES = [
         {"blocked": [{"reason": "error_frame"}], "blocked_repeat": True}]),
     ("reflector", route_after_reflector, REFLECTOR_ROUTES, [
         {"reflect_end": True}, {"reflect_end": False}]),
+    # gate 自 20260926 起不再是无条件 `add_edge("gate", END)`——"该查而没查"那一族
+    # 回 planner 重规划一次（见 graph.route_after_gate）。同一条事故纪律：路由函数
+    # 能返回的每个标签都必须在 GATE_ROUTES 里，否则节点跑完才炸。
+    ("gate", route_after_gate, GATE_ROUTES, [
+        {"done": True, "gate_replan": False},
+        {"done": False, "gate_replan": True},
+        {"done": True, "gate_replan": True},   # 防呆：已收尾就不再回 planner
+        {"gate_replan": False}]),
 ]
 for _node, _fn, _routes, _states in _ROUTE_CASES:
     _seen = {_fn(s) for s in _states}
@@ -402,6 +410,12 @@ for _node, _fn, _routes, _states in _ROUTE_CASES:
 check("确认轮执行成功 → 去 narrator（不再回 planner 重规划）",
       route_after_execute({"blocked": [], "confirm_grant": _GRANT}) == "model")
 check("execute 的条件边**真有** model 这一支（事故点）", "model" in EXECUTE_ROUTES)
+check("gate 的条件边**真有** planner 这一支（重规划通道）",
+      route_after_gate({"done": False, "gate_replan": True}) == "planner"
+      and "planner" in GATE_ROUTES)
+check("gate 未标重规划 → 收尾（缺省即终局，不靠真值才结束）",
+      route_after_gate({"done": True, "gate_replan": False}) == "end"
+      and route_after_gate({}) == "end")
 
 
 class _FakeNarrator:

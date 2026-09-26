@@ -66,7 +66,7 @@ import time
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -262,6 +262,11 @@ class AgentState(TypedDict):
                    未声明的 key 会被静默丢弃 ⇒ server.py 的 `upd.get("fallback_text")`
                    恒为假、`__RESET__` 永不发出、被 gate 否定的叙述照常展示并入库
                    （20260903 起 2.5 周实际失效，见 _fallback_result 注释）。
+    - gate_replan: gate 打回后**交回 planner 重规划一次**（20260926）。gate 写 True 表示
+                   "这一轮要求重规划"，`route_after_gate` 据此走回 planner；任何终局路径
+                   统一复位成 False。**同样必须显式声明**（理由同 fallback_text：未声明的
+                   key 会被静默丢出 updates 流 ⇒ 路由恒读不到、重规划静默不发生）。
+                   判据与提示见 `_REPLAN_ISSUES` / `_replan_note`。
     """
 
     messages: Annotated[list, add_messages]
@@ -307,6 +312,10 @@ class AgentState(TypedDict):
     #                 与 pending_action（execute 写的**结构化提议**）分工不同：
     #                 那个是本轮弹窗的产物，这个是上一轮起就注入给 planner 的渲染文本。
     ledger: dict
+    # gate 打回后交回 planner 重规划一次（20260926）：True = 本轮 gate 要求重规划，
+    #                 `route_after_gate` 据此走回 planner；终局路径统一复位成 False。
+    #                 判据与提示见 `_REPLAN_ISSUES` / `_replan_note`。
+    gate_replan: bool
 
 
 # ---------------------------------------------------------------------------
@@ -374,8 +383,9 @@ _PLANNER_PROMPT = """\
 {reflector_feedback}
 
 系统纠偏（确定性事实——只在你上一版决策**不可用**时才有内容（点名的工具全被剔除，
-或主人在原话里点名了目标、你却没写出任何工具规格）；正常决策轮是缺省语。有内容时按
-它重新决策：里面的工具归属是系统从技能注册表读出来的，不是猜测）：
+主人在原话里点名了目标、你却没写出任何工具规格，或**你上一轮交出去的叙述被系统否定**
+——最后这种会写明否定的是哪句话），正常决策轮是缺省语。有内容时按它重新决策：里面的
+工具归属是系统从技能注册表读出来的，不是猜测）：
 {correction}
 
 判定规则：
@@ -2477,14 +2487,101 @@ def _fallback_result(issue: str, text: str, plan: dict, frames: int,
     chat_history**，下一轮随历史注入又成为 narrator 自己的范文——20260920 实证四代
     克隆链，末两代一条 781 字回复与 11 小时前那条**逐字节相同**（见
     _REPEAT_MIN_RUN 注释）。声明见 AgentState 的 fallback_text 字段。
+
+    20260926 起：这一族（`_REPLAN_ISSUES`）**先不打到这里**——它们改走
+    `_replan_result`（交回 planner 重规划一次），兜底只在重规划之后仍不通过时发生。
+    其余 issue（空回复/复读/命令前缀/编造 URL/如实措辞核验…）照旧。
     """
     record("gate", "fallback", issue=issue, skill=plan["skill"], frames=frames,
            **({"clause": _clip_clause(clause)} if clause else {}))
     logger.info("[gate] fallback（%s）: skill=%s frames=%d%s", issue, plan["skill"], frames,
                 f" clause={_clip_clause(clause)}" if clause else "")
     return {"done": True,
+            "gate_replan": False,   # 终局路径统一复位（见 route_after_gate）
             "messages": [SystemMessage(content=f"[Fallback 决定]: {text}")],
             "fallback_text": text}
+
+
+# gate 打回后**交回 planner 重规划一次**的判据（20260926，用户点名）。
+#
+# 只收"narrator 声称了某个动作/某个结论、而本轮没有对应工具帧"这一族：它们的共同点是
+# **正确出路是真的去调一次工具**，而不是让主人看一句道歉——站内文章问答是使用最高频的
+# 场景，也正是这一族的高发区（trace 20260926T091548：主人说「西顿学院」，planner 落
+# chat 零工具，narrator 写下"站内并没有关于西顿学院的详细文章记录"，gate 抓住（洞④）
+# 后只能道歉收场——用户原话：「明明可以直接反馈给 planner，让 planner 重新规划，用户
+# 无感，而不是直接降级让用户看到道歉」）。
+#
+# 刻意**不收**的几类及理由（它们仍然一步到兜底）：
+#   · empty_reply / repeat_prev_reply —— 问题不是"少了一次工具"，重规划只会再跑一遍
+#     同样的路（复读还多烧一次 LLM）；
+#   · fabricated_url / 命令前缀文本 —— 编造的是资源地址或命令帧，重试解决不了；
+#   · not_honest / false_negative_claim —— 那两处**要求** narrator 如实说"没执行"，
+#     与"再去查一次"是同一个方向，但可查的东西并不存在（navigate 的下线页面）；
+#   · err_frame_* —— 帧本身就是错误，planner 已按原因码走过一轮，再问一次是同一个答案。
+_REPLAN_ISSUES = frozenset({
+    "site_absence_claim_without_tool",   # 洞④：站内"没有"的结论无帧依据（最高频的现场）
+    "site_absence_claim",                # 有帧、但帧里没有任何检索证据
+    "search_claim_without_tool",         # "我翻了一圈 / 两边都翻了"而无检索帧
+    "state_claim_without_tool",          # "已经打开了夜间模式"而无执行帧
+    "claim_without_tool",                # 第一人称"我调用了 X"而无帧
+    "phantom_tool_claim",                # 5c：点名了某个工具、那个工具却没在本轮帧里
+    "phantom_search_claim",              # 5d：点名检索工具却没跑
+})
+
+
+_REPLAN_NOTE_MARK = "[打回重规划]"
+
+
+def _replan_note(issue: str, clause: str) -> str:
+    """打回时给 planner 的**确定性**提示（零 LLM，见 `_REPLAN_ISSUES` 的长注）。
+
+    写法沿用 `_drop_correction` 的纪律：只写机器能保证的事实 + 讲清"这不是你该预判的"，
+    **不替 planner 选技能、不猜用户意图**。（同族教训：写给 narrator 的机制描述会变成
+    它的词汇——所以纪律写成禁止句，别写"系统会先做什么"。）
+
+    开头的 `_REPLAN_NOTE_MARK` 是**给代码看的**：这条提示以 SystemMessage 的形式进
+    消息流，而 `context._recent_tail` 只渲染 Human/AI 两种角色（SystemMessage 一律
+    跳过）——planner 要拿到它就得自己从消息流末尾认出来，认的判据就是这个标记
+    （见 planner_node 里那段"本轮专属"的说明）。
+    """
+    return _REPLAN_NOTE_MARK + "\n" + "\n".join([
+        "**你上一轮让 narrator 说的那段话已被系统否定、不会展示给用户**。否定的原因：",
+        f"- 它写下了「{clause}」这样的结论，" if clause
+        else "- 它写下了本轮工具结果里根本没有的结论，",
+        "  而**这一轮一个工具都没有执行**——那条结论没有任何依据。",
+        "现在重新决策（两条出路选一条）：",
+        "- 这类问题**要用工具去查**（站内有没有某篇文章/某条留言/某个说法 → 选检索类技能，"
+        "并真的把检索工具写进调用清单），查到什么就如实转述什么；",
+        "- 确实不需要查（纯闲聊/解释概念）→ SKILL=chat 老实作答，"
+        "**但不许对「站内有没有某内容」下任何结论**。",
+        "**不许**出现「看过/读过/查过/检索过/调用过」这类说法——除非本轮真的有对应的工具帧。",
+    ])
+
+
+def _replan_result(issue: str, plan: dict, frames: int, clause: str, last_ai) -> dict:
+    """gate 打回 → **交回 planner 重规划一次**（20260926，判据与提示见上）。
+
+    返回的更新做三件事：
+      · `done=False` + `gate_replan=True` ⇒ `route_after_gate` 走回 planner；
+      · **把被否定的那条 AI 消息从 state 里摘掉**（`RemoveMessage`）：留着它，下一轮
+        planner 与 narrator 都会把它当成"我方已经说过的话"，而克隆链正是这么来的
+        （见 `_fallback_result` 注释里 20260920 那四代）。此刻它还没被展示给用户
+        （server 收到 `gate_replan` 会发 `__RESET__` 让前端清掉），摘掉它不损失任何事实。
+      · 一条**确定性**提示（`_replan_note`）。
+
+    `last_ai` 的 id 由 langgraph 的 add_messages 分配（已实测），拿不到 id 就只加提示。
+    """
+    note = _replan_note(issue, clause)
+    record("gate", "replan", issue=issue, skill=plan["skill"], frames=frames,
+           **({"clause": _clip_clause(clause)} if clause else {}))
+    logger.warning("[gate] 打回并交回 planner 重规划（%s）: skill=%s frames=%d%s",
+                   issue, plan["skill"], frames,
+                   f" clause={_clip_clause(clause)}" if clause else "")
+    out = [SystemMessage(content=note)]
+    mid = getattr(last_ai, "id", None)
+    if mid:
+        out.insert(0, RemoveMessage(id=mid))
+    return {"done": False, "gate_replan": True, "messages": out}
 
 
 # ---------------------------------------------------------------------------
@@ -2632,6 +2729,18 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 剔空不是"不用查"，是"点错了通道"：确定性纠偏一次——把"你点名的工具一个都没执行"
     # 与"它属于哪个技能/为什么够不到"（机器从注册表读的）写给它看，让它重新决策
     # （planner 仍是唯一决策者，这里不替它选技能）。两次都剔空 → 确定性如实收尾。
+    # gate 打回重规划带来的提示（20260926）：gate 把它作为一条 SystemMessage 追加在
+    # 消息流**末尾**，而 `context._recent_tail` 只渲染 Human/AI 两种角色（SystemMessage
+    # 一律跳过，是页面上下文注入时代的纪律）——所以这里必须**显式取出来**放进提示词，
+    # 否则 planner 收到"打回"却看不到原因（"能力有接线 ≠ 接线被测试"那类静默洞：
+    # 机制全套跑通，模型只是没被告知）。判据取"末尾那条正是它"：planner 一旦决策完，
+    # 消息流上就会长出新的工具帧/叙述，下一轮自然取不到 ⇒ 无需任何清理代码，它天然
+    # 是本轮专属的（清早了 planner 看不到，清晚了会拿一句过期的否定去误导第三轮）。
+    gate_note = ""
+    if state["messages"]:
+        _tail = state["messages"][-1]
+        if isinstance(_tail, SystemMessage) and str(_tail.content).startswith(_REPLAN_NOTE_MARK):
+            gate_note = str(_tail.content)
     correction = ""
     for _attempt in (0, 1):
         _t0 = time.monotonic()
@@ -2660,7 +2769,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
                 ref_hints=ref_hints(state.get("tool_data") or []),
                 reflector_feedback=state.get("issues") or "（本决策轮无复盘建议）",
-                correction=correction or "（本决策轮无纠偏提示）",
+                # 两种纠偏的来源不同、优先级也不同：剔空纠偏说的是"你这一版刚点的工具
+                # 一条都没执行"（更近、更具体），打回提示说的是"你上一版交出去的叙述被
+                # 否定了"——同一轮里两者都有时，以前者为准（后者的事实仍在那条消息里）。
+                correction=correction or gate_note or "（本决策轮无纠偏提示）",
                 max_rounds=MAX_PLAN_ROUNDS, user_msg=user_msg)
             resp = llm.invoke(_prompt)
         except Exception as e:
@@ -5758,9 +5870,22 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     reply = ((getattr(last_ai, "content", "") or "").strip() if last_ai else "")
     record("gate", "check", skill=plan["skill"], frames=len(frames))
 
+    def fail(issue: str, text: str, plan: dict, frames: int, clause: str = "") -> dict:
+        """本节点**每一个**打回都经过这里（20260926 起）：`_REPLAN_ISSUES` 里那一族
+        （narrator 凭空声称动作/结论）→ 交回 planner 重规划一次；其余照旧确定性兜底。
+
+        用闭包而不是在每个调用点各判一次：漏掉一个调用点 = 那一族少一次挽回机会，
+        而"漏了哪一处"在代码里看不出来。**只重规划一次**——`gate_replan` 已经为真时
+        再打回就直接兜底（重规划不是无限循环：两轮都拿不出有依据的回复时，一句如实的
+        "我没查到"仍比继续试探强，也不会让主人等第三次）。
+        """
+        if issue in _REPLAN_ISSUES and not state.get("gate_replan"):
+            return _replan_result(issue, plan, frames, clause, last_ai)
+        return _fallback_result(issue, text, plan, frames, clause)
+
     # ── 1. 空回复（narrator 没说出话）→ fallback ─────────────────────────
     if not reply:
-        return _fallback_result("empty_reply", _FALLBACK_EMPTY, plan, len(frames))
+        return fail("empty_reply", _FALLBACK_EMPTY, plan, len(frames))
 
     # ── 1b. 逐字复读上一轮回复（任何轮次，20260920，见 _REPEAT_MIN_RUN 注释）──
     # 排在 2/3（声称/URL）之前：复读是**整段照抄**，比它夹带的单句声称更该先报——
@@ -5772,7 +5897,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         logger.info("[gate] 回复逐字复读上一轮（本轮 %d 字 / 上轮 %d 字，门槛 %d）→ fallback",
                     len(reply), len(prev_reply),
                     max(_REPEAT_MIN_RUN, int(len(reply) * _REPEAT_COVER)))
-        return _fallback_result("repeat_prev_reply", _FALLBACK_REPEAT, plan, len(frames))
+        return fail("repeat_prev_reply", _FALLBACK_REPEAT, plan, len(frames))
 
     # ── 2. 命令前缀文本（任何轮次，正文出现命令帧前缀 = 假装发命令）─────────
     # ── 3. 编造资源 URL（任何轮次，工具返回/用户消息中不存在的 /api 或图片）──
@@ -5782,12 +5907,12 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                          ledger=state.get("ledger"))
     if issue:
         i_name, i_text, i_clause = issue
-        return _fallback_result(i_name, i_text, plan, len(frames), i_clause)
+        return fail(i_name, i_text, plan, len(frames), i_clause)
     code_stripped = re.sub(r"```.*?```", "", reply, flags=re.S)
     fabricated = [u for u in _RESOURCE_URL_RE.findall(code_stripped) if not _url_trusted(u, msgs)]
     if fabricated:
         logger.info("[gate] URL 声称无依据：%s", "、".join(fabricated[:3]))
-        return _fallback_result("fabricated_url", _FALLBACK_URL, plan, len(frames))
+        return fail("fabricated_url", _FALLBACK_URL, plan, len(frames))
 
     if not frames:
         # ── 4. 零工具轮（计划 TOOLS 为空）───────────────────────────────
@@ -5803,11 +5928,11 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                 fb = _FALLBACK_GONE
             if not honest:
                 logger.info("[gate] 零工具注记但未如实告知 → fallback（navigate）")
-                return _fallback_result("not_honest", fb, plan, 0)
+                return fail("not_honest", fb, plan, 0)
         record("gate", "pass", zero_frame=True,
                duration_s=round(time.monotonic() - _t0, 2))
         logger.info("[gate] PASS（零工具轮，skill=%s）", plan["skill"])
-        return {"done": True}
+        return {"done": True, "gate_replan": False}
 
     # ── 5. 有帧轮：帧内容与叙述的一致性兜底 ──────────────────────────────
     tool_text = "\n".join(str(getattr(m, "content", "")) for m in frames)
@@ -5825,27 +5950,27 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             err_text = "\n".join(str(getattr(f, "content", "")) for f in err_frames)
             if authz.consent_error_reason(err_text):
                 logger.info("[gate] 写操作未获同意却声称已完成 → fallback(consent)")
-                return _fallback_result("err_frame_claim_consent", _FALLBACK_CONSENT,
+                return fail("err_frame_claim_consent", _FALLBACK_CONSENT,
                                         plan, len(frames), clause5a)
             if A.target_error_reason(err_text):
                 logger.info("[gate] 写操作目标无据却声称已完成 → fallback(unknown_target)")
-                return _fallback_result("err_frame_claim_target", _FALLBACK_UNKNOWN_TARGET,
+                return fail("err_frame_claim_target", _FALLBACK_UNKNOWN_TARGET,
                                         plan, len(frames), clause5a)
             if A.policy_error_reason(err_text):
                 # 后台规则拒绝（20260926）：与上面两条同为"还没动手"，但指引不同——
                 # 政策拒绝**不许**说"再试一次"（重试一万次也一样），要换目标或换人。
                 logger.info("[gate] 写操作被后台规则拒绝却声称已完成 → fallback(policy)")
-                return _fallback_result("err_frame_claim_policy", _FALLBACK_POLICY,
+                return fail("err_frame_claim_policy", _FALLBACK_POLICY,
                                         plan, len(frames), clause5a)
             logger.info("[gate] 工具帧 __ERROR__ 但回复含完成式声称 → fallback")
-            return _fallback_result("err_frame_claim", _FALLBACK_ERR_CLAIM, plan, len(frames),
+            return fail("err_frame_claim", _FALLBACK_ERR_CLAIM, plan, len(frames),
                                     clause5a)
     # 5b. 确认式导航（NAVIGATE: 帧、无 AUTO_NAVIGATE:）却回复到达声称 →
     #     页面实际未跳转（前端等确认）
     if plan["skill"] == "navigate" and "NAVIGATE:" in tool_text and "AUTO_NAVIGATE:" not in tool_text:
         if _NAV_ARRIVAL_RE.search(reply):
             logger.info("[gate] NAVIGATE 确认帧 + 到达声称 → fallback")
-            return _fallback_result("nav_pending_claim", _FALLBACK_NAV_PENDING, plan,
+            return fail("nav_pending_claim", _FALLBACK_NAV_PENDING, plan,
                                     len(frames), _claim_clause(reply, _NAV_ARRIVAL_RE))
     # 5c. 具名工具声称（20260913 C 项）：有帧 ≠ 帧里有那个工具——回复第一人称
     #     完成式点名"我调用了 X"而 X 本轮没执行（越权被剥/被跳过）= 编造调用
@@ -5863,7 +5988,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                executed=sorted(n for n in executed_names if n))
         # 文案用**有帧轮**那个变体：这条判据只在真有执行的轮才可能命中（_phantom_tool_claim_span
         # 在 `not executed` 时直接返回 None），_FALLBACK_CLAIM 的"没有任何工具执行"必然为假。
-        return _fallback_result("phantom_tool_claim", _FALLBACK_PHANTOM_CLAIM,
+        return fail("phantom_tool_claim", _FALLBACK_PHANTOM_CLAIM,
                                 plan, len(frames))
 
     # 5d. 站内检索声称 vs 本轮内容类帧（20260919 gate 洞②的混合轮形态）：回复说
@@ -5880,7 +6005,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             record("gate", "phantom_search_claim", clause=_clip_clause(clause5d),
                    executed=sorted(n for n in executed_names if n))
             # 有帧轮变体（同 5c 的理由：本分支位于 `if not frames: return` 之后）
-            return _fallback_result("phantom_search_claim", _FALLBACK_SEARCH_CLAIM_FRAMED,
+            return fail("phantom_search_claim", _FALLBACK_SEARCH_CLAIM_FRAMED,
                                     plan, len(frames))
         # 5f. 站内"没有"结论 vs 本轮内容类帧（洞④的混合轮形态，20260921）：本轮只跑了
         #     动作类工具（导航/特效/设备），回复却对站内内容下"没有"的结论 → 无依据。
@@ -5891,7 +6016,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                         _clip_clause(clause5f))
             record("gate", "site_absence_claim", clause=_clip_clause(clause5f),
                    executed=sorted(n for n in executed_names if n))
-            return _fallback_result("site_absence_claim", _FALLBACK_SITE_ABSENCE,
+            return fail("site_absence_claim", _FALLBACK_SITE_ABSENCE,
                                     plan, len(frames))
 
     # 5e. 假阴性声称（20260920 洞③）：本轮**真执行过**（有已验证回执）却宣称"本轮
@@ -5902,13 +6027,13 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                     len(state.get("receipts") or []))
         record("gate", "false_negative_claim",
                receipts=len(state.get("receipts") or []))
-        return _fallback_result("false_negative_claim", _FALLBACK_NO_EXEC,
+        return fail("false_negative_claim", _FALLBACK_NO_EXEC,
                                 plan, len(frames))
 
     record("gate", "pass", zero_frame=False, frames=len(frames),
            duration_s=round(time.monotonic() - _t0, 2))
     logger.info("[gate] PASS（skill=%s frames=%d）", plan["skill"], len(frames))
-    return {"done": True}
+    return {"done": True, "gate_replan": False}
 
 
 # ---------------------------------------------------------------------------
@@ -5961,6 +6086,19 @@ def route_after_reflector(state: AgentState) -> Literal["planner", "model"]:
     return "model" if state.get("reflect_end") else "planner"
 
 
+def route_after_gate(state: AgentState) -> Literal["planner", "end"]:
+    """gate 查完的下一站（20260926）：
+      - `gate_replan` 为真 ⇒ planner：本轮叙述被否定的原因是"该查而没查"，重规划一次
+        由 planner 自己决定查什么（决策权仍在 planner，gate 只给事实与禁止句）。**只此一次**
+        —— `gate_node::fail` 判过 `not state.get("gate_replan")`，第二次打回直接走兜底。
+      - 其余（PASS / 兜底收尾）⇒ end。
+
+    `not done` 是防呆的第二道锁：所有 PASS 路径都显式写 `gate_replan=False`，这里再确认
+    一次语义——"还没收尾"才可能回 planner，否则一个残留的真值就能让收尾轮无限循环。
+    """
+    return "planner" if state.get("gate_replan") and not state.get("done") else "end"
+
+
 # ---------------------------------------------------------------------------
 # 5. 组装与编译
 # ---------------------------------------------------------------------------
@@ -5977,6 +6115,7 @@ PLANNER_ROUTES = {"execute": "execute", "model": "model"}
 EXECUTE_ROUTES = {"planner": "planner", "reflector": "reflector",
                   "end": END, "model": "model"}
 REFLECTOR_ROUTES = {"planner": "planner", "model": "model"}
+GATE_ROUTES = {"planner": "planner", "end": END}
 
 
 def build_graph():
@@ -5991,10 +6130,13 @@ def build_graph():
                        │                    └─ 重复受阻 → reflector（复盘 ≤2 次）
                        │                         ├─ replan → planner（ISSUE 指引）
                        │                         └─ 终局 → model（确定性收尾计划）
-                       └─ 收尾轮 → model（narrator）→ gate → END
+                       └─ 收尾轮 → model（narrator）→ gate ─┬─ PASS/兜底 → END
+                                                          └─ 该查而没查 → planner（≤1 次）
+                                                             （见 route_after_gate）
 
     planner ⇄ execute 是主循环（决策-执行交替）；reflector 只在重复受阻的罕见
-    异常路径介入（小预算复盘，不复活老 LLM 质检）；model/gate 各走一次收尾。
+    异常路径介入（小预算复盘，不复活老 LLM 质检）；model/gate 是收尾段，gate 打回
+    `_REPLAN_ISSUES` 那一族时回 planner 重规划一次（20260926），其余仍是终局兜底。
     """
     g = StateGraph(AgentState)
 
@@ -6009,7 +6151,7 @@ def build_graph():
     g.add_conditional_edges("execute", route_after_execute, EXECUTE_ROUTES)
     g.add_conditional_edges("reflector", route_after_reflector, REFLECTOR_ROUTES)
     g.add_edge("model", "gate")
-    g.add_edge("gate", END)
+    g.add_conditional_edges("gate", route_after_gate, GATE_ROUTES)
 
     return g.compile()
 
@@ -6033,5 +6175,6 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
             "executed": [], "receipts": [], "blocked": [], "blocked_seen": [],
             "blocked_repeat": False, "reflect_rounds": 0, "issues": "",
             "reflect_end": False, "tool_data": [], "fallback_text": "",
+            "gate_replan": False,
             "pending_confirm": None, "confirm_text": "",
             "confirm_grant": confirm_grant, "ledger": ledger or {}}

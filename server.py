@@ -576,6 +576,14 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
             ex_upd = data.get("execute")
             if ex_upd and ex_upd.get("receipts"):
                 exec_rows = ex_upd["receipts"]
+            # gate 打回重规划（20260926，见 graph.route_after_gate）：那条被否定的
+            # 叙述已经累进 full_reply 了，不清零的话**最终回复 = 无依据那段 + 重查
+            # 之后的真话**，两段一起入库、一起给访客看——比原来的兜底更糟。流式那
+            # 半靠 `__RESET__` 帧达到同一效果（前端清已展示文本、Rust 清已累积
+            # reply），本函数没有前端可清，只能自己把缓冲区复位。
+            g_upd = data.get("gate")
+            if g_upd and g_upd.get("gate_replan"):
+                full_reply = ""
             continue
         chunk, meta = data
         if (isinstance(chunk, SystemMessage) and chunk.content
@@ -1154,6 +1162,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                             # chat 快道：只发占位帧，不发计划明细（避免每条闲聊都有过程行）
                             is_chat_skill = True
                         else:
+                            # 本标志跟**最新一轮**的计划走（20260926）：gate 打回重规划
+                            # 之后可能由 chat 换成检索类技能，不回落的话收尾那句
+                            # "✓ 质检通过"会被这一轮的 chat 身份吃掉（判据是当前计划，
+                            # 不是"历史上出现过 chat"）。
+                            is_chat_skill = False
                             # 计划行人话化（20260905 issue5）：不再贴 plan 机器
                             # 契约原文（SKILL=/PARAMS= 截断成残句），改发 TOOLS
                             # spec 的中文动作摘要——与回执完成帧共用渲染、前后一致。
@@ -1237,7 +1250,24 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                 upd = data.get("gate")
                 if not upd:
                     continue
-                if upd.get("fallback_text"):
+                if upd.get("gate_replan"):
+                    # 打回重规划（20260926）：gate 把"该查而没查"这一族交回 planner
+                    # 重决策一次（见 graph.route_after_gate），**本轮不结束**——所以
+                    # 这里既不发 fallback 文本、也不发"✓ 质检通过"：
+                    #   · 前端 RESET：把已经流出去的那段无依据叙述清掉（用户看不到它）；
+                    #   · emitted 清空：新的一轮 planner/model 会重新发"🧭 规划中…"与
+                    #     "🛠 正在调用工具…"，否则被同 key 去重吞掉、看起来像卡住；
+                    #   · final_reply 不在这里赋值——重规划后的 model 轮会照常覆盖它
+                    #     （Rust 收到 __RESET__ 也会清掉已累积的 reply，被否定的那段
+                    #     因此不会进 chat_history 变成下一轮的范文）。
+                    reason = "叙述缺少依据，正在重新查证"
+                    emit_process("✗ 质检打回：" + reason, key="gate_replan")
+                    emit_reset(reason)
+                    emitted.clear()
+                    # 具体判据（issue/子句）由 graph 侧记 trace 并打 WARNING，
+                    # 这里只记"发生过一次重规划"——两边重复记会把同一条读两遍。
+                    logger.info("[stream] gate 打回 → planner 重规划（本轮不结束）")
+                elif upd.get("fallback_text"):
                     # fallback：叙述校验不过 → 前端 RESET 清空已展示文本重绘，
                     # 注入 fallback 文本（人设内如实回复）作为最终回复
                     reason = "叙述校验未通过，已替换为如实回复"

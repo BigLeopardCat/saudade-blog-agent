@@ -63,6 +63,27 @@ def check(name, cond, detail=""):
         print(f"  ✓ {name}")
 
 
+def _terminal(state, *args, **kw):
+    """把 gate 的结果取成**终局形态**（20260926）。
+
+    gate 自 20260926 起有两条终局路：`_REPLAN_ISSUES` 那一族（"该查而没查"的声称）
+    **先交回 planner 重规划一次**（`done=False` + `gate_replan=True`），确定性兜底只在
+    "重规划之后仍不通过"时才发生（用户点名的那条改动，见 graph.route_after_gate）。
+
+    本文件几十条 gate 用例锁的是**判据本身**（哪句话该被哪一族抓住）与兜底文案，与
+    "抓住之后送去哪"无关 ⇒ 统一经这里取终局形态：已经落兜底的直接用；落的是重规划，
+    就按"那次机会已经用掉"再判一遍（同一条判据、同一条兜底文本）。**判据名一个字节
+    没改**，改的只是"跑一轮还是跑两轮"。
+
+    这不是替代：真的回 planner、被否定的叙述被摘掉、**只重规划一次**这三条行为由
+    `tests/test_gate_replan.py` 端到端锁（真图 + 假 LLM + 假工具），本函数不做任何断言。
+    """
+    out = gate_node(state, *args, **kw)
+    if isinstance(out, dict) and out.get("gate_replan") and not out.get("done"):
+        out = gate_node({**state, "gate_replan": True}, *args, **kw)
+    return out
+
+
 def test_nav_map_integrity():
     print("[nav_map] 映射表完整性")
     for alias, path in NAV_MAP.items():
@@ -228,7 +249,7 @@ def test_gate_note_honesty():
     out3 = gate_node(_st({"target": "/iot"}, "抱歉喵，/iot 这个页面不存在哦，可以去物联网平台看看！"))
     check("不存在注记 + 如实措辞 → pass",
           out3["done"] is True and not out3.get("fallback_text"), str(out3))
-    out4 = gate_node(_st({"target": "/iot"}, "已经帮你打开 /iot 啦，页面正在加载～"))
+    out4 = _terminal(_st({"target": "/iot"}, "已经帮你打开 /iot 啦，页面正在加载～"))
     check("不存在注记 + 声称已打开 → fallback(not_honest)",
           out4["done"] is True and bool(out4.get("fallback_text")), str(out4.get("fallback_text", ""))[:80])
 
@@ -898,7 +919,7 @@ def test_gate_claim_scope():
         "我用get_current_time查过时间，现在正好 05:34 喵～",   # 动词(用)+点名工具
         "我刚才调用了工具，时间应该对得上喵～",                  # 动词(调用了)+笼统工具
     ):
-        out = gate_node(_st("chat", claim_reply))
+        out = _terminal(_st("chat", claim_reply))
         check(f"chat 第一人称工具声称 + 零帧 → fallback：{claim_reply[:14]}…",
               out["done"] is True and bool(out.get("fallback_text"))
               and "没有任何工具执行" in out["fallback_text"],
@@ -910,7 +931,7 @@ def test_gate_claim_scope():
         "刚才我把整个博客都翻了一遍，没找到喵",                  # 把+整个+都 词序
         "喵把站内查了一圈，确实没有喵",                          # 喵+查了一圈
     ):
-        out8 = gate_node(_st("chat", scan_reply))
+        out8 = _terminal(_st("chat", scan_reply))
         check(f"chat 站内扫描声称 + 零帧 → fallback：{scan_reply[:14]}…",
               out8["done"] is True and bool(out8.get("fallback_text"))
               and "没有任何工具执行" in out8["fallback_text"],
@@ -930,13 +951,13 @@ def test_gate_claim_scope():
           and "系统命令文本" in out4["fallback_text"],
           str(out4.get("fallback_text", ""))[:60])
     # content_query 零帧 + 读取声称（025744「我读完了」实证）→ fallback
-    out5 = gate_node(_st("content_query", "您让我查的这两条，我读完了喵"))
+    out5 = _terminal(_st("content_query", "您让我查的这两条，我读完了喵"))
     check("content_query 零帧 + 读取声称 → fallback(claim_without_tool)",
           out5["done"] is True and bool(out5.get("fallback_text"))
           and "没有任何工具执行" in out5["fallback_text"],
           str(out5.get("fallback_text", ""))[:60])
     # content_query 零帧 + 调用声称（点名裸工具名）→ fallback
-    out6 = gate_node(_st("content_query", "我刚才调用了get_current_time查时间，留言板我用的list_guestbook"))
+    out6 = _terminal(_st("content_query", "我刚才调用了get_current_time查时间，留言板我用的list_guestbook"))
     check("content_query 零帧 + 工具调用声称 → fallback",
           out6["done"] is True and bool(out6.get("fallback_text")),
           str(out6.get("fallback_text", ""))[:60])
@@ -947,7 +968,7 @@ def test_gate_claim_scope():
     # 20260913 工具名名单扩展（注册表 22 名）的作用域：带动词/第一人称的分支用全名，
     # 裸名字分支保旧 7 名——383 条真实 trace 回归：扩展裸名字会新增 4 例误伤（元讨论
     # 讲 function call 协议、转述留言板里"执行调用 navigate_to"、复述文章正文工具名）
-    out9 = gate_node(_st("chat", "我用 list_categories 数了下，站里一共 5 个分类喵"))
+    out9 = _terminal(_st("chat", "我用 list_categories 数了下，站里一共 5 个分类喵"))
     check("chat 零帧 + 第一人称点名新工具 → fallback（动词分支用全量注册表名）",
           out9["done"] is True and bool(out9.get("fallback_text")), str(out9))
     out10 = gate_node(_st("content_query",
@@ -1116,7 +1137,7 @@ def test_gate_frame_checks():
     # （rag_search/get_article_detail）让旧"有帧即免检"整块放行，回复谎称调用了它
     rags = ToolMessage(content="1. type=note id=16 score=10.17 title=Git从入门到入土",
                        tool_call_id="execute_0", name="rag_search")
-    out6 = gate_node(_st("content_query",
+    out6 = _terminal(_st("content_query",
                          [rags, AIMessage(content="这次我用专门的**社交链接查询工具**"
                                                  "（`get_social_links`）调了一次，返回是空的")]))
     check("有帧 + 点名未执行工具 → fallback(phantom_tool_claim)",
@@ -1378,7 +1399,7 @@ def test_gate_claim_holes():
     site = ToolMessage(content="留言板 (/guestbook) — 河灯留言", tool_call_id="execute_0",
                        name="get_site_map")
     # 零帧 + 状态动作声称（20260907 实证句）→ fallback
-    o1 = gate_node(_st("chat", [AIMessage(content="喵～那泠月喵就帮你把夜间模式关掉，"
+    o1 = _terminal(_st("chat", [AIMessage(content="喵～那泠月喵就帮你把夜间模式关掉，"
                                                  "回到明亮的日间页面啦！")]))
     check("零帧 + 状态动作声称 → fallback(state_claim_without_tool)",
           o1["done"] is True and bool(o1.get("fallback_text"))
@@ -1389,13 +1410,13 @@ def test_gate_claim_holes():
     check("零帧 + 幂等陈述态 → pass（不误伤）",
           o2["done"] is True and not o2.get("fallback_text"), str(o2))
     # 零帧 + 站内检索声称（20260906 实证句）→ fallback
-    o3 = gate_node(_st("chat", [AIMessage(content="站内我查了一圈，没有找到专门讨论"
+    o3 = _terminal(_st("chat", [AIMessage(content="站内我查了一圈，没有找到专门讨论"
                                                  "『去中心化效率』的文章或说说")]))
     check("零帧 + 站内检索声称 → fallback(search_claim_without_tool)",
           o3["done"] is True and bool(o3.get("fallback_text"))
           and "没有任何工具执行" in o3["fallback_text"], str(o3.get("fallback_text"))[:60])
     # 混合轮（只有动作工具帧）+ 检索声称 → fallback（洞②的另一形态）
-    o4 = gate_node(_st("chat", [nav, AIMessage(content="我把站内文章都翻了一遍，"
+    o4 = _terminal(_st("chat", [nav, AIMessage(content="我把站内文章都翻了一遍，"
                                                        "确实没有讲过这个")],
                        target="说说", mode="direct"))
     check("有帧[仅动作工具] + 检索声称 → fallback(phantom_search_claim)",
@@ -1582,7 +1603,7 @@ def test_gate_site_absence_claim():
 
     absence = "这个站里没有写过讲 async/await 的文章呢，不过原理本身我可以给你讲讲喵"
     # 零帧 + 站内"没有"结论 → fallback（本轮没查过就不能替站里下结论）
-    o1 = gate_node(_st("chat", [AIMessage(content=absence)]))
+    o1 = _terminal(_st("chat", [AIMessage(content=absence)]))
     check("零帧 + 站内『没有』结论 → fallback(site_absence_claim_without_tool)",
           o1["done"] is True and o1.get("fallback_text") == _FALLBACK_SITE_ABSENCE,
           str(o1.get("fallback_text"))[:60])
@@ -1610,7 +1631,7 @@ def test_gate_site_absence_claim():
     # 混合轮（只跑了动作类工具）+ 站内"没有"结论 → fallback（5f）
     nav = ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/talk",
                       tool_call_id="execute_0", name="navigate_to")
-    o5 = gate_node(_st("chat", [nav, AIMessage(content=absence)]))
+    o5 = _terminal(_st("chat", [nav, AIMessage(content=absence)]))
     check("有帧[仅动作工具] + 站内『没有』结论 → fallback(site_absence_claim)",
           o5["done"] is True and o5.get("fallback_text") == _FALLBACK_SITE_ABSENCE,
           str(o5.get("fallback_text"))[:60])
@@ -2811,9 +2832,11 @@ def test_gate_fallback_message():
     不是"要求模型再试一次"的注记）。"""
     print("[gate] fallback 收尾消息结构")
     plan = plan_encode(instantiate_plan("chat", {}))
+    # 输入刻意取**不在** `_REPLAN_ISSUES` 里的那一族（编造资源 URL）：打回重规划只
+    # 收"该查而没查"的声称，其余照旧一步到兜底——本函数锁的是兜底那条路的返回体。
     state = {"plan": plan, "done": False, "plan_rounds": 0,
-             "messages": [HumanMessage(content="显示屏上写点东西"),
-                          AIMessage(content="我用get_current_time查过时间了喵")]}
+             "messages": [HumanMessage(content="给我看看那张图"),
+                          AIMessage(content="图在这里喵～ /api/protect/download/9527.png")]}
     out = gate_node(state)
     fb = [m for m in out.get("messages", []) if isinstance(m, SystemMessage)]
     check("fallback → done=True + [Fallback 决定] SystemMessage",
@@ -2824,6 +2847,25 @@ def test_gate_fallback_message():
           out.get("fallback_text") == str(fb[0].content).split(":", 1)[1].strip()
           and bool(out.get("fallback_text")),
           f"msg={str(fb[0].content)[:60]} fb={str(out.get('fallback_text', ''))[:60]}")
+    # ── 打回重规划那一族（20260926）：`_REPLAN_ISSUES` 里的声称**不再一步兜底** ──
+    # 同一句"我用 X 查过"从前是终局兜底（用户只看到道歉），现在交回 planner 重规划
+    # 一次；终局兜底只在"重规划之后仍不通过"时发生。端到端行为见 test_gate_replan.py，
+    # 这里锁返回体的形状与**只给一次**这一条。
+    _claim = {"plan": plan, "done": False, "plan_rounds": 0,
+              "messages": [HumanMessage(content="显示屏上写点东西"),
+                           AIMessage(content="我用get_current_time查过时间了喵")]}
+    rp = gate_node(_claim)
+    check("该查而没查那一族 → done=False + gate_replan=True（交回 planner，不是收尾）",
+          rp["done"] is False and rp.get("gate_replan") is True
+          and not rp.get("fallback_text"), str(rp)[:90])
+    check("  提示写明「被否定」且指出否定的是哪句话（planner 才有的放矢）",
+          "已被系统否定" in str(rp["messages"][-1].content)
+          and "get_current_time" in str(rp["messages"][-1].content),
+          str(rp["messages"][-1].content)[:60])
+    rp2 = gate_node({**_claim, "gate_replan": True})
+    check("  已经重规划过一次 → 再打回仍走兜底（**只给一次**，不会无限循环）",
+          rp2["done"] is True and bool(rp2.get("fallback_text")),
+          str(rp2)[:90])
     # pass 侧无 [Fallback 决定] 消息、无 fallback_text
     ok = gate_node({"plan": plan, "done": False, "plan_rounds": 0,
                     "messages": [HumanMessage(content="今天天气不错"),
