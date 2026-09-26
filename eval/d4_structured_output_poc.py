@@ -7,7 +7,7 @@
 
 ## 它要回答什么（roadmap D4 的"前置未知量"）
 
-roadmap D4 的目标是把 planner 的 7 行文本协议换成 JSON Schema 结构化输出，验收判据是
+roadmap D4 的目标是把 planner 的行文本协议换成 JSON Schema 结构化输出，验收判据是
 `args_parse` / pydantic `ValidationError` / `unknown_target` 三族受阻归零。**但生产模型
 到底支不支持、支持到什么程度，此前全是推测**——所以 POC 挡在动手之前。
 
