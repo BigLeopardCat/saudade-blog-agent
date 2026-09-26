@@ -124,7 +124,10 @@ check("没有拼错的 gold 键（拼错 = 那段断言静默不执行）", not 
 check("没有裸 `note`（注释键是 `_note`；写成 `note` 等于这条注释不存在）",
       not any(u.endswith("gold.note") for u in _unknown))
 _ids = [c.get("id", "?") for c in _cases]
-check("用例数（140 条）", len(_ids) == 140, f"实际 {len(_ids)}")
+# 数字是**刻意钉住的**：它逼着每加/删一条用例的人在这里露一次脸（顺带重新看一眼下面
+# 几条覆盖面断言）。改它的同时要一起看 `_cases` 上游有没有别的计数（README 与
+# eval 报告里的条数是另算的，别把它们与这里对齐成"同一个数"）。
+check("用例数（143 条）", len(_ids) == 143, f"实际 {len(_ids)}")
 check("用例 id 无重复", len(_ids) == len(set(_ids)),
       f"重复：{sorted({i for i in _ids if _ids.count(i) > 1})}")
 # 每条用例至少带一个**断言**键——只有注释的用例等于没判。这不是拼写问题，但属同一族

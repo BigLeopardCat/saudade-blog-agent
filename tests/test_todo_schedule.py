@@ -964,6 +964,40 @@ finally:
         g._TOOL_MAP["complete_dashboard_todo"] = _saved_done
 
 
+# ══════════════════════════════════════════════════════════════════
+print("\n⑯ 报待办时连带报出待审留言（第二个读带 status=pending，且是后台读）")
+
+from agent.skills import SKILL_MAP  # noqa: E402
+
+_todo_read = SKILL_MAP["dashboard_todo_list"]
+_tp = instantiate_plan("dashboard_todo_list", {}, role="admin")
+check("技能展开成**两个**工具：待办清单 + 留言审核状况",
+      _tp["tools"] == ['list_dashboard_todos({})',
+                       'get_moderation_status({"status": "pending"})'],
+      str(_tp["tools"]))
+check("第二个读**必须带 status=pending**（报表的 focus 只展开待审那一类 ⇒ 帧不膨胀；"
+      "不带参数的形态一次列三份名单）",
+      any("pending" in t for t in _tp["tools"] if t.startswith("get_moderation_status")))
+check("它是**只读**技能（不在写名单里、清单里没有写工具）",
+      "dashboard_todo_list" not in WRITE_SKILL_NAMES
+      and not any(t.split("(")[0] in {"create_dashboard_todo", "complete_dashboard_todo"}
+                  for t in _tp["tools"]))
+check("完成判定要求**两个**工具都返回（只等第一个 ⇒ 第二个没跑也当收尾轮）",
+      "list_dashboard_todos" in _todo_read.complete_when
+      and "get_moderation_status" in _todo_read.complete_when,
+      _todo_read.complete_when)
+check("回复契约分开写两段口径（待办逐条照抄 / 审核只报待人工复批那部分，明细不展开）",
+      "逐条" in _todo_read.reply_contract
+      and "待人工复批" in _todo_read.reply_contract
+      and "moderation_report" in _todo_read.reply_contract)
+check("  并写明 0 条也要说出来、读不到不许当成 0 条（两句缺一，"
+      "「没查」与「查了没有」在答复里就同形）",
+      "0 条" in _todo_read.reply_contract and "不许**当成 0 条" in _todo_read.reply_contract)
+check("技能仍只对管理员开放（读的是后台留言管理视图；普通用户拿不到这两个读）",
+      _todo_read.roles and ROLE_ADMIN in _todo_read.roles
+      and ROLE_USER not in _todo_read.roles,
+      str(sorted(_todo_read.roles)))
+
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))

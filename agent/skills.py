@@ -1198,16 +1198,28 @@ SKILLS: list[Skill] = [
         description=(
             "博主（管理员）问**他自己那份后台待办 / 日程清单**时使用"
             "（「我后台有哪些待办」「我的日程上有什么」「那个 xx 是不是还没做」）。"
-            "无参数——它读的就是主人自己那份列表。"
+            "无参数——它读的就是主人自己那份列表；顺带读一眼**还有几条留言等人审**"
+            "（20260926 加：主人问「待办有哪些」时把这件事漏掉过）。"
             "⚠️ 要**加**一条时不用本技能（那是 dashboard_todo_add）。**仅管理员可用**"
         ),
         inputs={},
-        plan=[("list_dashboard_todos", {})],
-        complete_when="list_dashboard_todos 返回了清单",
+        # 第二读刻意用 `status="pending"`：报表只展开待审那一类，帧不膨胀
+        # （要三份名单的明细是另一个技能 moderation_report 的事）。
+        plan=[
+            ("list_dashboard_todos", {}),
+            ("get_moderation_status", {"status": "pending"}),
+        ],
+        complete_when="list_dashboard_todos 与 get_moderation_status 都返回了",
         reply_contract=(
-            "只能按 list_dashboard_todos 的实际返回作答，**逐条**说清（正文、排期、完成没有）；"
-            "返回「列表是空的」就如实说一条都没记；返回失败/读不到时如实说没读到，"
-            "**绝不得凭印象编出待办**"
+            "分两段，各有各的口径，**不许混**："
+            "① 待办：只能按 list_dashboard_todos 的实际返回作答，**逐条**说清（正文、排期、"
+            "完成没有）；返回「列表是空的」就如实说一条都没记；返回失败/读不到时如实说没读到，"
+            "**绝不得凭印象编出待办**。"
+            "② 待审留言：只按 get_moderation_status 返回里的**待人工复批那部分**说"
+            "「另有 N 条留言待人工审核」＋是哪几条（时间/内容摘要），"
+            "**不要**展开 AI 通过/AI 驳回那些明细（主人追问会走 moderation_report 那个技能）；"
+            "这一类是 0 条就明说没有待审留言（别省掉这句：主人问的是「还有什么事没做」）；"
+            "get_moderation_status 读不到就如实说这次没读到，**不许**当成 0 条。"
         ),
         roles=ADMIN_ROLES,
     ),
