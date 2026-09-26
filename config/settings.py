@@ -88,6 +88,27 @@ class Settings(BaseSettings):
     # 滚动上线纪律（先观测、后收口）。打开后拒绝走既有 blocked 链路。
     authz_enforce: bool = False
 
+    # ── planner 接口层（20260927 新主线第一批）───────────────────────
+    # 取值 `text`（默认，历史行为：渲染文本菜单 → 模型写五行文本 → 正则抠）
+    # / `native`（API 的 tools 字段 + tool_calls 返回，见 agent/native_plan.py）
+    # / `shadow`（两条路都跑一遍、只比对不改变行为；**只给离线/调试用**）。
+    # 默认 `text` 是刻意的：上线后线上行为逐字节不变，回滚也只是把这个值改回来
+    # ——不需要回滚代码。`shadow` 写进生产 .env 会让每轮 planner 多一次 LLM 调用。
+    planner_engine: str = "text"
+    # native 档是否开思考。**单独一个开关是刻意的**：它是三个待拍板项之一
+    # （"开思考的预算"），要能单独开关才产得出对照数据；而文本档恒关思考
+    # （`graph.py` 那行 enable_thinking=False 是实测拍出来的，别跟着这个值走）。
+    planner_native_thinking: bool = True
+    # native 档的预算。**不能沿用文本档的 400**：模型开思考时思考链先吃掉额度，
+    # tool_call 的 arguments 会被截断在中途（finish_reason=length，JSON 都不完整）。
+    # 值取自 eval/d4 与 native 探针的实测上界，见 docs/native-toolcalls-mainline.md。
+    planner_native_max_tokens: int = 1200
+    # 同理，文本档的 30s 正压思考档的 p50 6.4s / max 28.5s（实测）⇒ 留出余量。
+    planner_native_timeout: float = 60.0
+    # 慢轮告警阈值（秒）：超了就记 WARNING。**参数化是为了"不许只放宽不监控"**
+    # ——放宽 timeout 而不看这个数，等于把超时问题藏起来。
+    planner_native_slow_s: float = 30.0
+
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
     # 与博客共用 JWT_SECRET：agent 以对话用户身份签发 JWT 调用 device-service
     jwt_secret: str = ""
