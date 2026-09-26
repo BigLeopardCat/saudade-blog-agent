@@ -1,0 +1,953 @@
+{
+ "ts": "2026-09-27 05:07:26",
+ "label": "multi_step_postfix",
+ "ids": [
+  "multi_step_referent_nav_effect",
+  "multi_step_effect_then_nav",
+  "multi_step_missing_param_asks",
+  "multi_step_search_then_read_top"
+ ],
+ "runs_per_dial": 3,
+ "dials": {
+  "text": {
+   "env": {
+    "PLANNER_ENGINE": "text"
+   },
+   "engine": "text",
+   "observed": {
+    "engine": "text",
+    "thinking": true,
+    "model": "qwen3.8-flash"
+   },
+   "runs": 3,
+   "case_runs": 12,
+   "case_passed": 9,
+   "pass_rate": 0.75,
+   "pass_rate_ci95": [
+    0.4677,
+    0.9111
+   ],
+   "cases": {
+    "multi_step_referent_nav_effect": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 7.7,
+      "p50": 8.0,
+      "max": 8.1
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi-turn",
+      "nav",
+      "effect"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_effect_then_nav": {
+     "runs": 3,
+     "passed": 1,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260927_050811.json",
+       "fails": [
+        "[第 1 轮] 缺少 NAVIGATE: 命令帧",
+        "[第 1 轮] 命令帧缺 '/guestbook'（本轮命令：['EFFECT:sakura:on']）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：['toggle_effect']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_050729/multi_step_effect_then_nav.json"
+      },
+      {
+       "report": "eval/report/runs/20260927_051800.json",
+       "fails": [
+        "[第 1 轮] 命令帧缺 '/guestbook'（本轮命令：['EFFECT:sakura:on', 'AUTO_NAVIGATE:https://saudade.site/']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_051724/multi_step_effect_then_nav.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 7.1,
+      "p50": 8.4,
+      "max": 8.7
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "pass_rate": 0.3333
+    },
+    "multi_step_missing_param_asks": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 8.6,
+      "p50": 8.8,
+      "max": 10.1
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "write",
+      "honest"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_search_then_read_top": {
+     "runs": 3,
+     "passed": 2,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260927_051256.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：['search_notes', 'list_notes']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_051211/multi_step_search_then_read_top.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 12.3,
+      "p50": 16.1,
+      "max": 17.5
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "content_query",
+      "rag"
+     ],
+     "pass_rate": 0.6667
+    }
+   },
+   "case_elapsed_s": {
+    "n": 12,
+    "p50": 8.65,
+    "max": 17.5
+   },
+   "planner_round_s": {
+    "n": 28,
+    "p50": 1.98,
+    "max": 9.39
+   },
+   "planner_round_s_raw": [
+    1.7,
+    4.66,
+    3.17,
+    2.03,
+    1.98,
+    1.68,
+    2.13,
+    2.07,
+    2.3,
+    1.85,
+    3.42,
+    1.68,
+    5.11,
+    1.58,
+    1.89,
+    1.57,
+    1.93,
+    9.39,
+    1.77,
+    1.59,
+    1.7,
+    2.58,
+    2.15,
+    1.9,
+    1.56,
+    2.5,
+    2.09,
+    1.99
+   ],
+   "native": {
+    "trace_files": 12,
+    "native_decisions": 0,
+    "native_fallbacks": 0,
+    "truncated": 0,
+    "fallback_rate": null,
+    "tool_call_completeness": null
+   },
+   "plan_efficiency": {
+    "tool_calls_total": 22,
+    "tool_rounds_total": 19,
+    "cases_multi_tool_rounds": 7
+   },
+   "reports": [
+    "eval/report/runs/20260927_050811.json",
+    "eval/report/runs/20260927_051256.json",
+    "eval/report/runs/20260927_051800.json"
+   ],
+   "trace_runs": [
+    "20260927_050729",
+    "20260927_051211",
+    "20260927_051724"
+   ],
+   "wall_s": [
+    43.9,
+    46.9,
+    38.3
+   ]
+  },
+  "native-think-flash": {
+   "env": {
+    "PLANNER_ENGINE": "native",
+    "PLANNER_NATIVE_THINKING": "true"
+   },
+   "engine": "native",
+   "observed": {
+    "engine": "native",
+    "thinking": true,
+    "model": "qwen3.8-flash"
+   },
+   "runs": 3,
+   "case_runs": 12,
+   "case_passed": 7,
+   "pass_rate": 0.5833,
+   "pass_rate_ci95": [
+    0.3195,
+    0.8067
+   ],
+   "cases": {
+    "multi_step_referent_nav_effect": {
+     "runs": 3,
+     "passed": 2,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260927_051945.json",
+       "fails": [
+        "[第 1 轮] 缺少 NAVIGATE: 命令帧",
+        "[第 1 轮] 命令帧缺 '/device-console/'（本轮命令：['EFFECT:sakura:on']）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：['toggle_effect']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_051802/multi_step_referent_nav_effect.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 21.6,
+      "p50": 29.6,
+      "max": 35.5
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi-turn",
+      "nav",
+      "effect"
+     ],
+     "pass_rate": 0.6667
+    },
+    "multi_step_effect_then_nav": {
+     "runs": 3,
+     "passed": 2,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260927_051441.json",
+       "fails": [
+        "[第 1 轮] 缺少 NAVIGATE: 命令帧",
+        "[第 1 轮] 命令帧缺 '/guestbook'（本轮命令：['EFFECT:sakura:on']）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：['toggle_effect']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_051258/multi_step_effect_then_nav.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 12.7,
+      "p50": 19.5,
+      "max": 26.0
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "pass_rate": 0.6667
+    },
+    "multi_step_missing_param_asks": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 18.4,
+      "p50": 21.7,
+      "max": 22.9
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "write",
+      "honest"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_search_then_read_top": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260927_050934.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：['search_notes', 'list_notes']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_050813/multi_step_search_then_read_top.json"
+      },
+      {
+       "report": "eval/report/runs/20260927_051441.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：['search_notes', 'list_notes']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_051258/multi_step_search_then_read_top.json"
+      },
+      {
+       "report": "eval/report/runs/20260927_051945.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：['search_notes', 'list_notes']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_051802/multi_step_search_then_read_top.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 24.0,
+      "p50": 24.4,
+      "max": 28.9
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "content_query",
+      "rag"
+     ],
+     "pass_rate": 0.0
+    }
+   },
+   "case_elapsed_s": {
+    "n": 12,
+    "p50": 23.45,
+    "max": 35.5
+   },
+   "planner_round_s": {
+    "n": 25,
+    "p50": 7.59,
+    "max": 21.48
+   },
+   "planner_round_s_raw": [
+    2.68,
+    5.35,
+    2.76,
+    13.58,
+    5.08,
+    7.07,
+    7.59,
+    5.09,
+    15.3,
+    5.76,
+    11.16,
+    11.44,
+    7.95,
+    6.22,
+    19.4,
+    3.65,
+    21.48,
+    6.24,
+    4.18,
+    13.68,
+    19.21,
+    8.05,
+    18.92,
+    3.67,
+    18.23
+   ],
+   "native": {
+    "trace_files": 12,
+    "native_decisions": 24,
+    "native_fallbacks": 1,
+    "truncated": 2,
+    "fallback_rate": 0.04,
+    "tool_call_completeness": 0.92
+   },
+   "plan_efficiency": {
+    "tool_calls_total": 19,
+    "tool_rounds_total": 16,
+    "cases_multi_tool_rounds": 4
+   },
+   "reports": [
+    "eval/report/runs/20260927_050934.json",
+    "eval/report/runs/20260927_051441.json",
+    "eval/report/runs/20260927_051945.json"
+   ],
+   "trace_runs": [
+    "20260927_050813",
+    "20260927_051258",
+    "20260927_051802"
+   ],
+   "wall_s": [
+    82.7,
+    104.8,
+    105.5
+   ]
+  },
+  "native-nothink-flash": {
+   "env": {
+    "PLANNER_ENGINE": "native",
+    "PLANNER_NATIVE_THINKING": "false"
+   },
+   "engine": "native",
+   "observed": {
+    "engine": "native",
+    "thinking": false,
+    "model": "qwen3.8-flash"
+   },
+   "runs": 3,
+   "case_runs": 12,
+   "case_passed": 6,
+   "pass_rate": 0.5,
+   "pass_rate_ci95": [
+    0.2538,
+    0.7462
+   ],
+   "cases": {
+    "multi_step_referent_nav_effect": {
+     "runs": 3,
+     "passed": 1,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260927_051012.json",
+       "fails": [
+        "[第 1 轮] 缺少 EFFECT: 命令帧",
+        "[第 1 轮] 命令帧缺 'sakura:on'（本轮命令：['AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/']）",
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：['navigate_to', 'navigate_to', 'navigate_to', 'navigate_to']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_050936/multi_step_referent_nav_effect.json"
+      },
+      {
+       "report": "eval/report/runs/20260927_052021.json",
+       "fails": [
+        "[第 1 轮] 缺少 EFFECT: 命令帧",
+        "[第 1 轮] 命令帧缺 'sakura:on'（本轮命令：['AUTO_NAVIGATE:https://saudade.site/device-console/']）",
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：['navigate_to']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_051947/multi_step_referent_nav_effect.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 5.7,
+      "p50": 8.2,
+      "max": 12.4
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi-turn",
+      "nav",
+      "effect"
+     ],
+     "pass_rate": 0.3333
+    },
+    "multi_step_effect_then_nav": {
+     "runs": 3,
+     "passed": 2,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260927_051511.json",
+       "fails": [
+        "[第 1 轮] 缺少 NAVIGATE: 命令帧",
+        "[第 1 轮] 命令帧缺 '/guestbook'（本轮命令：['EFFECT:sakura:on']）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：['toggle_effect']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_051443/multi_step_effect_then_nav.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 7.0,
+      "p50": 7.0,
+      "max": 7.5
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "pass_rate": 0.6667
+    },
+    "multi_step_missing_param_asks": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 8.7,
+      "p50": 10.5,
+      "max": 10.6
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "write",
+      "honest"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_search_then_read_top": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260927_051012.json",
+       "fails": [
+        "[第 1 轮] 未调用任一检索工具 ['search_notes', 'rag_search']（已调用：[]）",
+        "[第 1 轮] 未调用任一检索工具 ['search_notes', 'rag_search']（已调用：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：[]）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_050936/multi_step_search_then_read_top.json"
+      },
+      {
+       "report": "eval/report/runs/20260927_051511.json",
+       "fails": [
+        "[第 1 轮] 未调用任一检索工具 ['search_notes', 'rag_search']（已调用：[]）",
+        "[第 1 轮] 未调用任一检索工具 ['search_notes', 'rag_search']（已调用：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：[]）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_051443/multi_step_search_then_read_top.json"
+      },
+      {
+       "report": "eval/report/runs/20260927_052021.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：['search_notes', 'list_notes']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_051947/multi_step_search_then_read_top.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 4.2,
+      "p50": 5.7,
+      "max": 9.9
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "content_query",
+      "rag"
+     ],
+     "pass_rate": 0.0
+    }
+   },
+   "case_elapsed_s": {
+    "n": 12,
+    "p50": 7.85,
+    "max": 12.4
+   },
+   "planner_round_s": {
+    "n": 24,
+    "p50": 2.16,
+    "max": 3.52
+   },
+   "planner_round_s_raw": [
+    1.51,
+    2.27,
+    1.56,
+    3.52,
+    3.04,
+    2.04,
+    1.59,
+    2.54,
+    2.78,
+    2.51,
+    2.21,
+    3.16,
+    1.99,
+    1.56,
+    2.52,
+    1.61,
+    2.15,
+    1.64,
+    1.59,
+    3.35,
+    2.02,
+    1.58,
+    3.1,
+    2.17
+   ],
+   "native": {
+    "trace_files": 12,
+    "native_decisions": 24,
+    "native_fallbacks": 0,
+    "truncated": 0,
+    "fallback_rate": 0.0,
+    "tool_call_completeness": 1.0
+   },
+   "plan_efficiency": {
+    "tool_calls_total": 17,
+    "tool_rounds_total": 16,
+    "cases_multi_tool_rounds": 4
+   },
+   "reports": [
+    "eval/report/runs/20260927_051012.json",
+    "eval/report/runs/20260927_051511.json",
+    "eval/report/runs/20260927_052021.json"
+   ],
+   "trace_runs": [
+    "20260927_050936",
+    "20260927_051443",
+    "20260927_051947"
+   ],
+   "wall_s": [
+    38.2,
+    30.6,
+    36.4
+   ]
+  },
+  "native-think-max": {
+   "env": {
+    "PLANNER_ENGINE": "native",
+    "PLANNER_NATIVE_THINKING": "true",
+    "QWEN_MODEL": "qwen3.8-max"
+   },
+   "engine": "native",
+   "observed": {
+    "engine": "native",
+    "thinking": true,
+    "model": "qwen3.8-max"
+   },
+   "runs": 3,
+   "case_runs": 12,
+   "case_passed": 12,
+   "pass_rate": 1.0,
+   "pass_rate_ci95": [
+    0.7575,
+    1.0
+   ],
+   "cases": {
+    "multi_step_referent_nav_effect": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 18.0,
+      "p50": 20.4,
+      "max": 21.5
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi-turn",
+      "nav",
+      "effect"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_effect_then_nav": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 16.2,
+      "p50": 18.0,
+      "max": 20.0
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_missing_param_asks": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 16.8,
+      "p50": 25.1,
+      "max": 30.4
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "write",
+      "honest"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_search_then_read_top": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 28.7,
+      "p50": 29.1,
+      "max": 32.0
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "content_query",
+      "rag"
+     ],
+     "pass_rate": 1.0
+    }
+   },
+   "case_elapsed_s": {
+    "n": 12,
+    "p50": 20.95,
+    "max": 32.0
+   },
+   "planner_round_s": {
+    "n": 30,
+    "p50": 5.97,
+    "max": 27.5
+   },
+   "planner_round_s_raw": [
+    4.1,
+    5.88,
+    4.47,
+    12.03,
+    7.24,
+    4.13,
+    7.99,
+    4.38,
+    6.29,
+    11.87,
+    3.43,
+    5.77,
+    8.8,
+    20.43,
+    6.07,
+    5.81,
+    3.96,
+    5.23,
+    9.92,
+    9.48,
+    4.12,
+    7.27,
+    4.9,
+    27.5,
+    7.53,
+    4.5,
+    5.33,
+    4.61,
+    9.31,
+    7.48
+   ],
+   "native": {
+    "trace_files": 12,
+    "native_decisions": 30,
+    "native_fallbacks": 0,
+    "truncated": 0,
+    "fallback_rate": 0.0,
+    "tool_call_completeness": 1.0
+   },
+   "plan_efficiency": {
+    "tool_calls_total": 24,
+    "tool_rounds_total": 21,
+    "cases_multi_tool_rounds": 9
+   },
+   "reports": [
+    "eval/report/runs/20260927_051138.json",
+    "eval/report/runs/20260927_051649.json",
+    "eval/report/runs/20260927_052202.json"
+   ],
+   "trace_runs": [
+    "20260927_051014",
+    "20260927_051514",
+    "20260927_052024"
+   ],
+   "wall_s": [
+    86.2,
+    97.7,
+    100.1
+   ]
+  },
+  "native-nothink-max": {
+   "env": {
+    "PLANNER_ENGINE": "native",
+    "PLANNER_NATIVE_THINKING": "false",
+    "QWEN_MODEL": "qwen3.8-max"
+   },
+   "engine": "native",
+   "observed": {
+    "engine": "native",
+    "thinking": false,
+    "model": "qwen3.8-max"
+   },
+   "runs": 3,
+   "case_runs": 12,
+   "case_passed": 12,
+   "pass_rate": 1.0,
+   "pass_rate_ci95": [
+    0.7575,
+    1.0
+   ],
+   "cases": {
+    "multi_step_referent_nav_effect": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 5.4,
+      "p50": 6.1,
+      "max": 6.9
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi-turn",
+      "nav",
+      "effect"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_effect_then_nav": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 4.9,
+      "p50": 5.2,
+      "max": 5.8
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_missing_param_asks": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 6.4,
+      "p50": 7.4,
+      "max": 8.3
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "write",
+      "honest"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_search_then_read_top": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 10.1,
+      "p50": 10.8,
+      "max": 11.6
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "content_query",
+      "rag"
+     ],
+     "pass_rate": 1.0
+    }
+   },
+   "case_elapsed_s": {
+    "n": 12,
+    "p50": 6.65,
+    "max": 11.6
+   },
+   "planner_round_s": {
+    "n": 30,
+    "p50": 1.29,
+    "max": 3.87
+   },
+   "planner_round_s_raw": [
+    1.07,
+    0.98,
+    0.91,
+    3.23,
+    2.3,
+    1.41,
+    0.92,
+    1.06,
+    1.13,
+    1.77,
+    1.03,
+    0.88,
+    0.95,
+    3.87,
+    1.24,
+    1.35,
+    0.88,
+    1.76,
+    1.36,
+    1.57,
+    1.35,
+    1.11,
+    1.16,
+    2.01,
+    0.83,
+    1.42,
+    0.91,
+    1.35,
+    1.35,
+    1.53
+   ],
+   "native": {
+    "trace_files": 12,
+    "native_decisions": 30,
+    "native_fallbacks": 0,
+    "truncated": 0,
+    "fallback_rate": 0.0,
+    "tool_call_completeness": 1.0
+   },
+   "plan_efficiency": {
+    "tool_calls_total": 24,
+    "tool_rounds_total": 21,
+    "cases_multi_tool_rounds": 9
+   },
+   "reports": [
+    "eval/report/runs/20260927_051209.json",
+    "eval/report/runs/20260927_051721.json",
+    "eval/report/runs/20260927_052235.json"
+   ],
+   "trace_runs": [
+    "20260927_051140",
+    "20260927_051651",
+    "20260927_052204"
+   ],
+   "wall_s": [
+    30.8,
+    32.4,
+    33.4
+   ]
+  }
+ }
+}
