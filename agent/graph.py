@@ -71,6 +71,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
+from config import settings
 from models import get_llm
 from tools import get_all_tools
 from agent import adminops as A
@@ -89,6 +90,8 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_pa
                              _nav_fast_path, _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.entities import receipt_digest
+from agent.native_plan import (bind_native, finish_reason, tool_call_names,
+                               tool_calls_to_plan)
 from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY,
                              ROLE_SUPERADMIN, ROLE_USER,
                              UNKNOWN as UNKNOWN_PRINCIPAL)
@@ -635,15 +638,76 @@ _PLANNER_PROMPT = """\
    反例（20260925 生产实证 trace 20260925T035331）：问"小猫咪现在服务器怎么了"，
    台账里最近一条是 3 小时 11 分前的服务器状态 ⇒ 零工具照抄了那份过期读数，叙述
    还写成"刚才查到的"——数据过期 + 措辞不实，两头都错。
-7. 输出严格按以下格式——**两行纯文本**（不是 JSON 对象、不要用 `{{}}` 把整份答复
+{output_contract}
+
+用户消息：{user_msg}"""
+
+
+# ── 规则 7（输出契约）的两个版本：**这是 planner 接口层唯一会变的提示词内容** ──
+# 文本档让模型"写两行纯文本"，native 档必须让它"去调函数"——两者同时塞进一份提示词
+# 是自相矛盾的（一边说"不要任何其他文字、按这个格式写"，一边给出 tools 数组）。
+# 不换这一格而直接挂 tools，测出来的就不是"接口层换没换"而是"提示词和 schema 打架谁赢"
+# ——那样两档的对照数据没有任何意义。
+# **文本档这一份是历史原文逐字搬过来的**（内容一个字节都不许改：它在生产里跑了很久，
+# 而且 `tests/test_skills.py` 有多处断言按它取值）。注意 `{{}}`→`{}`：本常量是**被
+# 代入的值**，不再过一遍 `.format`，所以这里写单个花括号才对（原模板里写 `{{}}`
+# 是为了在 format 后得到 `{}`，代入的值不需要这层转义）。
+_PLANNER_OUTPUT_CONTRACT_TEXT = """\
+7. 输出严格按以下格式——**两行纯文本**（不是 JSON 对象、不要用 `{}` 把整份答复
    包起来、键名不要加引号），PARAMS 后面那个 JSON 里的键值用双引号。
    不要任何其他文字（除了下面那行可选的 TODO）：
 SKILL: <技能名>
 PARAMS: <JSON>
 （多步链中间轮可另加一行：TODO: <步骤1> → <步骤2>，只描述本轮之后的
-后续依赖步骤，单步/收尾轮不写）
+后续依赖步骤，单步/收尾轮不写）"""
 
-用户消息：{user_msg}"""
+# native 档：决定由**工具调用**表达。正文仍可写（收尾轮/闲聊轮的答复正文由 narrator
+# 另写，planner 这一轮的正文不可见），但**决策只认工具调用**——所以这里把"正文不是
+# 决策通道"说清楚，避免模型一半调函数一半写契约行（实测确实会两边都写）。
+# TODO 那行**保留**：`_parse_todo` 读的是正文，是这一档里唯一仍走文本的字段（多步链
+# 的中间轮声明靠它），删掉等于把既有能力悄悄砍掉一半。
+_PLANNER_OUTPUT_CONTRACT_NATIVE = """\
+7. 你的决定**通过工具调用表达**：调用本轮 tools 里与所选**技能同名**的那个函数，
+   把该技能的参数填进 arguments。技能名与参数名一律以 tools 里的定义为准——不要
+   自己造名字，也不要把**工具**名（技能模板内部用的那些）当成技能名。
+   - 正文不是决策通道：**不要**再写 SKILL=/PARAMS= 这类契约行，决策只以工具调用为准
+     （正文只在你自己想留一句说明时写，主人看不到规划轮的正文）。
+   - 只想闲聊、或如实说明查不到时，可以不调用任何函数、直接给正文。
+   - 多步链的中间轮仍可在正文里另起一行写 `TODO: <步骤1> → <步骤2>`（只描述本轮
+     之后的后续依赖步骤，单步/收尾轮不写）。"""
+
+
+def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
+                           user_msg: str, intent_hints: str, doc_anchors: str,
+                           recent_context: str, short_reply_hint: str, tool_results: str,
+                           ref_hints: str, reflector_feedback: str, correction: str,
+                           contract: str) -> str:
+    """渲染 planner 提示词（纯函数）。**唯一入口**：主路与影子档都走它。
+
+    20260927 从 `planner_node` 里抽出来，是为影子档服务的：影子**必须**拿同一个提示词
+    去跑另一条接口层，否则比的是"两个不同的提问"而不是"两个接口层"。留两份
+    `.format(...)` 就是留两份漂移源（这个仓里"手抄第二份名单"反复出过事）。
+    调用方只传**已经算好的**值，本函数不读 state、不碰库。
+    """
+    return _PLANNER_PROMPT.format(
+        # 技能表按本轮角色过滤（20260921）：管理助手那三个技能只对 admin 列出，
+        # 其余角色看不到 ⇒ 选不出来。用 known_role（未知角色 → None → 只列公开技能）
+        skills_context=build_planner_context(role),
+        # 菜单与 calls 白名单同源同角色（20260924）：菜单列了而白名单没有
+        # ⇒ planner 照菜单点名、条目被剔空、白跑一轮（见 _tools_desc 注）。
+        tools_desc=_tools_desc_cached(role),
+        page_ctx=page_ctx, round_info=round_info,
+        intent_hints=intent_hints,
+        doc_anchors=doc_anchors,
+        recent_context=recent_context,
+        short_reply_hint=short_reply_hint,
+        tool_results=tool_results,
+        ref_hints=ref_hints,
+        reflector_feedback=reflector_feedback,
+        correction=correction,
+        max_rounds=MAX_PLAN_ROUNDS, user_msg=user_msg,
+        # 规则 7：唯一按接口层档位取值的一格（见上面两个常量的注）
+        output_contract=contract)
 
 
 # planner 菜单（可规划执行的查询工具清单）——20260913 起由 skills.py 白名单
@@ -2770,6 +2834,20 @@ def _replan_result(issue: str, plan: dict, frames: int, clause: str, last_ai) ->
 # 3. Node：planner（唯一决策）/ execute（确定性执行）/ model（narrator）/ gate
 # ---------------------------------------------------------------------------
 
+# ── planner 接口层档位（20260927 主线批 A，见 config/settings.py::planner_engine）──
+# `text`   = 历史行为（渲染文本菜单 → 模型写契约行 → 正则抠），**默认值**；
+# `native` = API 的 tools 字段 + tool_calls 返回（agent/native_plan.py）；
+# `shadow` = 主路仍走 text、**另跑一遍** native 只比对（离线/调试用，见下）。
+# 认不出的取值**一律当 `text`**（含空串）：配置写错时退回**已经跑了很久的那条路**，
+# 而不是踩进一条没人验过的新路——失败方向朝"与历史一致"，与这个开关的整个意义一致。
+_PLANNER_ENGINES = ("text", "native", "shadow")
+
+
+def _planner_engine() -> str:
+    """本轮 planner 接口层档位（纯函数，不记日志——认不出的值在真正用到它时再报）。"""
+    got = str(getattr(settings, "planner_engine", "text") or "").strip().lower()
+    return got if got in _PLANNER_ENGINES else "text"
+
 
 def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """职责（唯一决策点）：选技能 + 填参数 + 给调用清单 → 实例化为计划 → state.plan。
@@ -2891,6 +2969,29 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 输出），thinking 思考链纯浪费（实测 13.4s → 预计 2-4s，且波动正来自 thinking
     # 链长度）；与 execute 文案创作/摘要等低 token 调用同一做法。
     llm = get_llm(temperature=0.2, max_tokens=400, timeout=30, enable_thinking=False)
+    # 接口层分叉（20260927 主线批 A）：只换"模型怎么表达决定"这一层，下游一个字不动。
+    # 三个档位的语义见 `_PLANNER_ENGINES`；**`shadow` 的主路仍是 text**（影子是观测
+    # 设备，不是第二条主路——它多跑一遍 native 只为产对照数据）。
+    engine = _planner_engine()
+    if str(getattr(settings, "planner_engine", "") or "").strip().lower() not in _PLANNER_ENGINES:
+        # 配置写错要**响亮**（静默退回 text 会让"我明明开了 native"变成一句查不出的疑问）。
+        # 只在这一处报：快道轮根本不碰接口层，不该为它刷日志。
+        logger.warning("[planner] 认不出的 planner_engine=%r → 按 text 处理（可选：%s）",
+                       getattr(settings, "planner_engine", ""), "、".join(_PLANNER_ENGINES))
+    use_native = engine == "native"
+    native_bound = None
+    if engine != "text":
+        # native 档的**独立预算**（settings 的三项，见那里的注）：文本档的 400/30s 是
+        # "选技能填参数"这个结构化任务的实测值，而思考链会先把额度吃掉——沿用会让
+        # arguments 断在半截（finish_reason=length）。这两个值必须能单独调，否则
+        # "开思考的预算够不够"这个待拍板项就没有对照数据。
+        native_bound = bind_native(get_llm(
+            temperature=0.2,
+            max_tokens=settings.planner_native_max_tokens,
+            timeout=settings.planner_native_timeout,
+            enable_thinking=settings.planner_native_thinking), role)
+    if use_native:
+        llm = native_bound
     round_info = (
         f"当前决策：第 {rounds + 1}/{MAX_PLAN_ROUNDS} 轮。"
         + ("本轮已有工具执行帧（见下方结果），决策据此收敛。" if has_frames
@@ -2927,19 +3028,19 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 纠偏的**种类**（只给日志看）：三种纠偏共用同一个 `{correction}` 槽，日志里
     # 只写"剔空纠偏"会把另两种讲错（20260926 起有三个来源：剔空 / 参数不齐 / 写形态零工具）。
     correction_kind = ""
+    # native 档的异常记账（如 native_multi_call）。**必须在循环外先声明**：循环外的
+    # `decision` 事件要读它，而它只在 native 档的某一支里被赋值——少了这一行，
+    # "某一轮走到某条提前 return 之外的路径"就会以 NameError 的形态炸在收尾上。
+    native_note = ""
     for _attempt in (0, 1):
         _t0 = time.monotonic()
         logger.info("[planner] LLM 调用开始（round %d/%d%s）", rounds + 1, MAX_PLAN_ROUNDS,
                     f"，{correction_kind}纠偏" if correction else "")
         try:
-            _prompt = _PLANNER_PROMPT.format(
-                # 技能表按本轮角色过滤（20260921）：管理助手那三个技能只对 admin 列出，
-                # 其余角色看不到 ⇒ 选不出来。用 known_role（未知角色 → None → 只列公开技能）
-                skills_context=build_planner_context(role),
-                # 菜单与 calls 白名单同源同角色（20260924）：菜单列了而白名单没有
-                # ⇒ planner 照菜单点名、条目被剔空、白跑一轮（见 _tools_desc 注）。
-                tools_desc=_tools_desc_cached(role),
-                page_ctx=page_ctx, round_info=round_info,
+            # 注入值先算好（`_render_planner_prompt` 只负责拼字符串，见其注）。影子档
+            # 拿的就是这一份——**同一个提问**，只有规则 7 按各自接口层取值。
+            _prompt_args = dict(
+                role=role, page_ctx=page_ctx, round_info=round_info, user_msg=user_msg,
                 intent_hints=_intent_hints(state.get("executed") or [], user_msg),
                 doc_anchors=doc_anchors,
                 recent_context=_recent_tail(state["messages"]),
@@ -2957,8 +3058,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 # 两种纠偏的来源不同、优先级也不同：剔空纠偏说的是"你这一版刚点的工具
                 # 一条都没执行"（更近、更具体），打回提示说的是"你上一版交出去的叙述被
                 # 否定了"——同一轮里两者都有时，以前者为准（后者的事实仍在那条消息里）。
-                correction=correction or gate_note or "（本决策轮无纠偏提示）",
-                max_rounds=MAX_PLAN_ROUNDS, user_msg=user_msg)
+                correction=correction or gate_note or "（本决策轮无纠偏提示）")
+            _prompt = _render_planner_prompt(
+                contract=(_PLANNER_OUTPUT_CONTRACT_NATIVE if use_native
+                          else _PLANNER_OUTPUT_CONTRACT_TEXT), **_prompt_args)
             resp = llm.invoke(_prompt)
         except Exception as e:
             # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
@@ -2973,29 +3076,74 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 if auth_forced and not has_frames else "")
             return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
         # 20260830：慢调用监控——>30s 打 WARN（正常 <5s，慢=服务端排队/长思考，
-        # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）
+        # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）。
+        # native 档的阈值走 settings（20260927）：它的 timeout 本就是 60s，沿用 30 会让
+        # 告警变成常态；而"放宽了也要看得见"是那一项的前提——阈值跟着档位走，不是删掉。
         dur = time.monotonic() - _t0
-        slow = dur > 30
+        slow_s = settings.planner_native_slow_s if use_native else 30
+        slow = dur > slow_s
         (logger.warning if slow else logger.info)(
-            "[planner] LLM %s 耗时=%.1fs", "慢调用" if slow else "完成", dur)
-        record("planner", "llm_done", duration_s=round(dur, 2),
+            "[planner] LLM %s 耗时=%.1fs（阈值 %.0fs，engine=%s）",
+            "慢调用" if slow else "完成", dur, slow_s, engine)
+        record("planner", "llm_done", duration_s=round(dur, 2), engine=engine,
                frames_chars=len(frames_txt), corrected=bool(correction),
                **({"slow": True} if slow else {}))
 
         raw = getattr(resp, "content", str(resp))
-        # 解析走唯一入口 `extract_plan_fields`（20260926）：此前这里自己写了一条只认
-        # 顶格 `SKILL:` 的正则，与 `parse_plan` 里那条是**两份拷贝**，而模型约 15% 的
-        # 轮次改用 JSON 对象回答 ⇒ 两份一起看不见、静默落成 chat（详见该函数头注）。
-        skill_name, params = extract_plan_fields(raw)
-        if skill_name is None:
-            skill_name = "chat"
-        elif not _PLANNER_OUTPUT_RE.search(raw):
-            # 契约行没写，但字段读出来了（JSON 对象/带引号键）——记一笔：这类轮次
-            # 此前全部落成 chat，日志里"没选中技能"与"闲聊"无法区分（20260926）。
-            logger.info("[planner] 输出不是五行契约（JSON 对象/带引号键），"
-                        "已按字段解析：skill=%s（round %d/%d）",
-                        skill_name, rounds + 1, MAX_PLAN_ROUNDS)
-            record("planner", "output_form", form="json", skill=skill_name, round=rounds)
+        native_note = ""
+        # native 档：**工具调用是主路**（`tool_calls_to_plan` 内部再判三道：截断/未知
+        # 函数名/args 非对象 ⇒ 返回 None）。判不了就**退回下面那段既有的文本解析**
+        # ——不新增降级路径：模型在 tools 档下仍可能把契约行写进正文（实测会两边都写），
+        # 那份正文按老办法读得出来，白扔掉它等于把一次能用的决策打成 chat。
+        decided = tool_calls_to_plan(resp, role) if use_native else None
+        if decided is not None:
+            skill_name, params = decided.skill, decided.params
+            if decided.notes:
+                native_note = "；".join(decided.notes)
+            record("planner", "native_decision", skill=skill_name, round=rounds,
+                   calls=tool_call_names(decided), finish=decided.finish_reason,
+                   **({"note": native_note} if native_note else {}))
+        else:
+            if use_native:
+                # 走到了这里 = native 这一版没给出可用决策。落一条独立事件：`length`
+                # 的占比正是"预算够不够"这个待拍板项的答案（截断是静默失败，不记就
+                # 只剩"模型没选技能"这一个笼统现象）。
+                logger.warning("[planner] native 决策判不了（finish=%s）→ 退回文本解析"
+                               "（round %d/%d）", finish_reason(resp), rounds + 1,
+                               MAX_PLAN_ROUNDS)
+                record("planner", "native_fallback", round=rounds,
+                       finish=finish_reason(resp), text_len=len(raw))
+            # 解析走唯一入口 `extract_plan_fields`（20260926）：此前这里自己写了一条只认
+            # 顶格 `SKILL:` 的正则，与 `parse_plan` 里那条是**两份拷贝**，而模型约 15% 的
+            # 轮次改用 JSON 对象回答 ⇒ 两份一起看不见、静默落成 chat（详见该函数头注）。
+            skill_name, params = extract_plan_fields(raw)
+            if skill_name is None:
+                skill_name = "chat"
+            elif not _PLANNER_OUTPUT_RE.search(raw):
+                # 契约行没写，但字段读出来了（JSON 对象/带引号键）——记一笔：这类轮次
+                # 此前全部落成 chat，日志里"没选中技能"与"闲聊"无法区分（20260926）。
+                logger.info("[planner] 输出不是五行契约（JSON 对象/带引号键），"
+                            "已按字段解析：skill=%s（round %d/%d）",
+                            skill_name, rounds + 1, MAX_PLAN_ROUNDS)
+                record("planner", "output_form", form="json", skill=skill_name, round=rounds)
+
+        # 影子档（**只给离线/调试用**，见 config/settings.py）：同一个提示词再走一遍
+        # native，只比对、不改变行为——`plan_obj`/`state["plan"]` 全由上面那条主路决定
+        # （`plan_encode` 只对主路执行一次 ⇒ 写工具结构上不可能执行两次）。
+        # 整段 try/except 包住：影子是观测设备，它自己出任何事都不许影响这一轮。
+        if engine == "shadow":
+            try:
+                _sresp = native_bound.invoke(_render_planner_prompt(
+                    contract=_PLANNER_OUTPUT_CONTRACT_NATIVE, **_prompt_args))
+                _sdec = tool_calls_to_plan(_sresp, role)
+                _sskill = _sdec.skill if _sdec else ""
+                record("planner", "shadow", round=rounds, skill_text=skill_name,
+                       skill_native=_sskill, agree=bool(_sskill) and _sskill == skill_name,
+                       finish=finish_reason(_sresp),
+                       calls=tool_call_names(_sdec) if _sdec else "")
+            except Exception as e:                  # noqa: BLE001 —— 影子绝不许影响主路
+                logger.warning("[planner] shadow 失败（不影响本轮）：%s", e)
+                record("planner", "shadow", round=rounds, error=str(e)[:160])
 
         # role 必须传：calls 白名单按角色取（管理员含后台只读项）。漏传 = 静默剔空。
         plan_obj = instantiate_plan(skill_name, params, role)
@@ -3454,8 +3602,13 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # "零工具计划交给 narrator" 拆成**系统记了账的**（`PLAN_STATUS_VALUES` 里那几个）
     # 与**没记账的**（空串）。用 `.get` 而不是下标：这一格读不到正是要**看见**的事
     # （读不到说明有条构造路径漏了 status），冒泡成 KeyError 反而看不见。
+    # `engine`/`native_note`（20260927 主线批 A）：两档的产出从这条事件起可比——同一个
+    # 用例在 text/native 下各跑一遍，比 `skill`/`tools` 是否一致就是一致率的来源。
+    # `native_note` 只在有异常记账时出现（如 native_multi_call），别让它常态占位。
     record("planner", "decision", skill=plan_obj["skill"], params=plan_obj["params"],
-           tools=plan_obj["tools"], round=rounds, status=plan_obj.get("status") or "")
+           tools=plan_obj["tools"], round=rounds, engine=engine,
+           status=plan_obj.get("status") or "",
+           **({"native_note": native_note} if native_note else {}))
 
     return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
 
