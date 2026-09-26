@@ -63,6 +63,14 @@ def check(name, cond, detail=""):
         print(f"  ✓ {name}")
 
 
+def _no_id(text, n):
+    """这条 id 没被当成本篇的 id。**两种写法都要查**：现行渲染是 `noteId=`，
+    而旧形是 `《标题》 id=`。只查旧形会**静默失效**——`noteId=19` 里那个是
+    大写 `I`，`"id=19" not in text` 恒真（20260926 批 4 实测：改名后这批负断言
+    全变成了空转，只有正断言报红）。"""
+    return f"noteId={n}" not in text and f" id={n}" not in text
+
+
 def _terminal(state, *args, **kw):
     """把 gate 的结果取成**终局形态**（20260926）。
 
@@ -1728,7 +1736,7 @@ def test_auth_pending_review():
          "approved": 0},
         {"talkKey": 101, "content": "泠月喵好棒", "author": "访客", "approved": 0}])
     check("多条 → 连作者与原文一起列出（主人要认的就是那句话）",
-          "#94" in f2 and "垃圾网站" in f2 and "#101" in f2 and "共 2 条" in f2)
+          "talkId:94" in f2 and "垃圾网站" in f2 and "talkId:101" in f2 and "共 2 条" in f2)
     check("多条 → 明写零写 + 不替他挑", "零写" in f2 and "绝不替他挑" in f2)
 
     class _Row(dict):
@@ -1781,7 +1789,8 @@ def test_auth_pending_review():
         TB._board_index = _board_stub(PENDING_2)
         facts2, plan2, forced2 = _auth_review_path("你看着办", prev_ok, admin, cfg)
         check("多条待审 → 不拼计划（绝不替主人挑）", plan2 is None)
-        check("  候选事实块进提示（#94 与 #101 都在）", "#94" in facts2 and "#101" in facts2)
+        check("  候选事实块进提示（talkId:94 与 talkId:101 都在）",
+              "talkId:94" in facts2 and "talkId:101" in facts2)
         check("  提示里明写零写", "零写" in facts2)
         check("  且**不进入目标定死模式**（多条时连目标都不许替他挑）", forced2 is None)
 
@@ -1859,7 +1868,7 @@ def test_auth_pending_review():
               bool(_forced_review_fix(bad_tool, forced3)))
         note = _ask_verdict_note(forced3)
         check("确定性问结论的注记：印出那条留言 + 只问驳回还是放行 + 禁止句",
-              "驳回" in note and "放行" in note and "#94" in note
+              "驳回" in note and "放行" in note and "talkId:94" in note
               and "「" in note and "一个字节都没有改动" in note
               and "不许出现「看过/读过/查过/检索过/调用过工具」" in note)
         check("  且带台账豁免前缀（洞④：这轮的站内结论是系统核对出来的）",
@@ -3395,17 +3404,18 @@ def test_doc_anchors_and_clip():
     ]
     # 解析器按"站内语料"打桩（这条测锚点侧接线，不走网络/索引）；stub 空值 = 语料里没有
     import agent.context as ctx
+
     orig_lookup = ctx._doc_id_lookup
     ctx._doc_id_lookup = lambda t: {"文章向量空间图谱项目文档": "46",
                                     "IoT 设备接入物联网平台指南": "22"}.get(t, "")
     try:
         out = _doc_anchors([sys_msg] + hist)
         check("锚点：跨轮执行记忆的读取行 → 标题 + id + 已读标记",
-              "《Saudade Blog AI Agent（泠月喵）架构文档》 id=19（本会话已读过全文）" in out)
-        check("锚点：markdown 文章链接 → id", "《TEST8》 id=13" in out)
+              "《Saudade Blog AI Agent（泠月喵）架构文档》 noteId=19（本会话已读过全文）" in out)
+        check("锚点：markdown 文章链接 → id", "《TEST8》 noteId=13" in out)
         check("锚点：裸（id=46）不作数，改由标题解析出 id 并标来源",
-              "《文章向量空间图谱项目文档》 id=46（站内标题匹配）" in out)
-        check("锚点：无 id 的标题解析出 id 后列出", "《IoT 设备接入物联网平台指南》 id=22" in out)
+              "《文章向量空间图谱项目文档》 noteId=46（站内标题匹配）" in out)
+        check("锚点：无 id 的标题解析出 id 后列出", "《IoT 设备接入物联网平台指南》 noteId=22" in out)
         check("锚点顺序：最近点名/读过的排前（TEST8 最近）",
               out.index("《TEST8》") < out.index("《文章向量空间图谱项目文档》"))
         check("锚点：无文档的会话给缺省语",
@@ -3413,7 +3423,7 @@ def test_doc_anchors_and_clip():
         # 相邻条目 id 不串台：后一条目的 id 不能被前一条目认领
         out2 = _doc_anchors([AIMessage(content="- **《甲文档》**([甲](/article/1)) "
                                                "- **《乙文档》**([乙](/article/2))")])
-        check("锚点：id 归属不前移", "《甲文档》 id=1" in out2 and "《乙文档》 id=2" in out2)
+        check("锚点：id 归属不前移", "《甲文档》 noteId=1" in out2 and "《乙文档》 noteId=2" in out2)
         # 裸 id 一律不算文章 id：`（id=N）` 里的 N 可能是标签/通知/留言的 id
         out2b = _doc_anchors([AIMessage(content="- **《甲文档》**（id=1） - **《乙文档》**（id=2）")])
         check("锚点：裸 id 不认（甲/乙 两条都不进清单）", "·" not in out2b)
@@ -3424,16 +3434,16 @@ def test_doc_anchors_and_clip():
     out3 = _doc_anchors([AIMessage(content="这个「导航关键词正则快道」我这篇《AI Agent 架构文档》里没写到"),
                          AIMessage(content="· 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》")])
     check("锚点：简称并入全称行且不重复计数",
-          out3.count("·") == 1 and "id=19" in out3 and "上文亦称《AI Agent 架构文档》" in out3)
+          out3.count("·") == 1 and "noteId=19" in out3 and "上文亦称《AI Agent 架构文档》" in out3)
     # 反向（简称在先、全称在后）同样并入，且留长标题
     out4 = _doc_anchors([AIMessage(content="· 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》"),
                          AIMessage(content="这篇《AI Agent 架构文档》里没写到")])
-    check("锚点：反序并入同篇", out4.count("·") == 1 and "《Saudade Blog AI Agent（泠月喵）架构文档》 id=19" in out4)
+    check("锚点：反序并入同篇", out4.count("·") == 1 and "《Saudade Blog AI Agent（泠月喵）架构文档》 noteId=19" in out4)
     # 短标题不参与简/全称合并——防"物联网平台"并进"物联网平台接入指南"这类**不同**篇
     # （错并 = 把 A 篇 id 挂到 B 篇名下，正是本次要修的故障形态，宁可漏并不错并）
     out5 = _doc_anchors([AIMessage(content="《物联网平台》 /article/22 和 《物联网平台接入指南》 /article/9 都写过")])
     check("锚点：短标题不误并（同名前缀的两篇不同文章）",
-          out5.count("·") == 2 and "《物联网平台》 id=22" in out5 and "《物联网平台接入指南》 id=9" in out5)
+          out5.count("·") == 2 and "《物联网平台》 noteId=22" in out5 and "《物联网平台接入指南》 noteId=9" in out5)
     check("锚点：无关联标题不并",
           _doc_anchors([AIMessage(content="《甲文档》 /article/1 和 《乙文档》 /article/2")]).count("·") == 2)
 
@@ -3490,7 +3500,7 @@ def test_doc_anchors_and_clip():
     check("执行记忆行：行首时间不破坏读取行解析", bool(m) and m.group(1) == "19")
     out_ts = _doc_anchors([HumanMessage(content=f"[System: page=/; 确认与执行事实（系统台账）: · 已执行（系统验收过）: · {row}")])
     check("执行记忆行：带时间戳的读取行仍产出文档锚点",
-          "《Saudade Blog AI Agent（泠月喵）架构文档》 id=19" in out_ts)
+          "《Saudade Blog AI Agent（泠月喵）架构文档》 noteId=19" in out_ts)
     check("执行记忆行：重复标记（×N）不影响读取行解析",
           bool(_DOC_READ_ROW_RE.search("09-20 21:05 读取文章 22《IoT 设备接入物联网平台指南》（×3）")))
 
@@ -3536,7 +3546,7 @@ def test_doc_title_resolution():
     try:
         out = ctx._doc_anchors([HumanMessage(content="把《ESP32-S3-OBC固件接入参考》读一遍")])
         check("锚点：标题解析出的 id 注入且标明来源",
-              "· 《ESP32-S3-OBC固件接入参考》 id=14（站内标题匹配）" in out)
+              "· 《ESP32-S3-OBC固件接入参考》 noteId=14（站内标题匹配）" in out)
         check("锚点：解析不出就不进清单（不编 id、也不留「未见过 id」占位）",
               "·" not in ctx._doc_anchors([HumanMessage(content="把《查无此篇》读一遍")]))
         dup = ctx._doc_anchors([
@@ -3545,7 +3555,7 @@ def test_doc_title_resolution():
             HumanMessage(content="再读一遍《ESP32-S3-OBC固件接入参考》"),
         ])
         check("锚点：解析出的 id 与已读行同篇只留一行",
-              dup.count("·") == 1 and "id=14" in dup and "本会话已读过全文" in dup)
+              dup.count("·") == 1 and "noteId=14" in dup and "本会话已读过全文" in dup)
     finally:
         ctx._doc_id_lookup = orig
 
@@ -3558,7 +3568,7 @@ def test_doc_anchor_grounding():
 
     ① 旧规则认「同句邻域的 `id=N`」为文章 id，可 id 不具名——会话摘要写
        「为文章《Python asyncio 异步并发》添加…同名一级标签（id=19）」，
-       于是锚点产出 `《Python asyncio 异步并发》 id=19`，而 19 是**另一篇文章**；
+       于是锚点产出 `《Python asyncio 异步并发》 noteId=19`，而 19 是**另一篇文章**；
        规则 4⓪ 又授权 planner"直接采用清单里的 id" ⇒ 会去读错的那一篇。
     ② 解析不出的标题仍以「（未见过 id）」留在清单里，而抬头声称"**已点名文档**"
        ——实测混着站内通知《留言未通过审核》与公告《中秋快乐》《今晚不许熬夜！》
@@ -3586,8 +3596,8 @@ def test_doc_anchor_grounding():
         tag = _doc_anchors([HumanMessage(content=(
             "[System: conversation_summary: 访客要求为文章《Python asyncio 异步并发》"
             "添加「编程/Asyncio」二级标签，但因站内已存在同名一级标签（id=19）导致新建失败。"))])
-        check("锚点：标签 id 不被当成文章 id", "id=19" not in tag)
-        check("锚点：标题仍能由语料解析出正确的 id", "《Python asyncio 异步并发》 id=23" in tag)
+        check("锚点：标签 id 不被当成文章 id", _no_id(tag, "19"))
+        check("锚点：标题仍能由语料解析出正确的 id", "《Python asyncio 异步并发》 noteId=23" in tag)
 
         # ② 站内通知/公告的标题（trace 20260924T025908 的 page_ctx，逐字）
         noti = _doc_anchors([HumanMessage(content=(
@@ -3603,7 +3613,7 @@ def test_doc_anchor_grounding():
             "具体协议细节去看另一篇《IoT 设备接入物联网平台指南》。想直接看这条说说的原文，"
             "可以点 [ESP32-S3-OBC固件接入参考](https://saudade.site/article/46)"))])
         check("锚点：链接不跨过下一条标题去认领（IoT 不拿 46）",
-              "《IoT 设备接入物联网平台指南》 id=22" in cross and "id=46" not in cross)
+              "《IoT 设备接入物联网平台指南》 noteId=22" in cross and _no_id(cross, "46"))
 
         # ③b 同一份 trace（20260920T140051）的**原句**：标题与链接之间隔着句号与换行，
         #     且链接文字是**另一篇**的名字——48 字窗口会把它算进来，句读判据不会
@@ -3611,7 +3621,7 @@ def test_doc_anchor_grounding():
             "具体协议细节去看另一篇《IoT 设备接入物联网平台指南》。**\n\n想直接看这条说说的"
             "原文，可以点 [ESP32-S3-OBC固件接入参考](https://saudade.site/article/46)"))])
         check("锚点：跨句的链接不算本标题的 id（句子边界即边界）",
-              "《IoT 设备接入物联网平台指南》 id=22" in sent and "id=46" not in sent)
+              "《IoT 设备接入物联网平台指南》 noteId=22" in sent and _no_id(sent, "46"))
         check("锚点：另一篇的名字不会被当成这一篇的链接文字", "ESP32" not in sent)
 
         # ③c 跨轮执行记忆的导航行紧随其后（trace 20260923T123344 的 recent_executions，
@@ -3621,20 +3631,20 @@ def test_doc_anchor_grounding():
             "[System: · 09-23 12:30 站内检索「Git」· 16《Git从入门到入土》\n"
             "· 09-23 12:33 跳转「/article/19」]"))])
         check("锚点：跳转行里的 /article/N 不记到上一行的标题头上",
-              "《Git从入门到入土》 id=16" in nav and "id=19" not in nav)
+              "《Git从入门到入土》 noteId=16" in nav and _no_id(nav, "19"))
 
         # ④ markdown 链接当标题：标题只留标签文字，url 是 id 来源
         md = _doc_anchors([AIMessage(content=(
             "- [《IoT 设备接入物联网平台指南》](https://saudade.site/article/22)"))])
         check("锚点：链接写法《[标题](url)》→ 标题净化 + id 取 url",
-              "· 《IoT 设备接入物联网平台指南》 id=22" in md and "http" not in md)
+              "· 《IoT 设备接入物联网平台指南》 noteId=22" in md and "http" not in md)
 
         # ④b 自由文本里的链接本身可能是**叙述幻觉**（同一条 trace 里 narrator 就把
         #     ESP32 那篇指到了 /article/46）⇒ 语料能唯一定位以语料为准，不跟链接走
         bogus = _doc_anchors([AIMessage(content=(
             "点这里看：[《IoT 设备接入物联网平台指南》](https://saudade.site/article/46)"))])
         check("锚点：链接里的 id 与语料冲突时以语料为准",
-              "《IoT 设备接入物联网平台指南》 id=22" in bogus and "id=46" not in bogus)
+              "《IoT 设备接入物联网平台指南》 noteId=22" in bogus and _no_id(bogus, "46"))
 
         # ⑤ 草稿类：只在正文出现过、语料里也没有 ⇒ 不进清单（不写占位行）
         draft = _doc_anchors([HumanMessage(content="《Memory Blog 项目文件结构说明》看过没有")])
@@ -3644,7 +3654,7 @@ def test_doc_anchor_grounding():
         ctx._corpus_ready = lambda: False
         down = _doc_anchors([HumanMessage(content="把《查无此篇》读一遍，还有《IoT 设备接入物联网平台指南》")])
         check("锚点：索引未就绪时如实注记（不伪造、不静默空清单）",
-              "语料索引未就绪" in down and "《IoT 设备接入物联网平台指南》 id=22" in down)
+              "语料索引未就绪" in down and "《IoT 设备接入物联网平台指南》 noteId=22" in down)
         only_down = _doc_anchors([HumanMessage(content="把《查无此篇》读一遍")])
         check("锚点：索引未就绪 + 无带 id 条目 ⇒ 缺省语 + 注记",
               "没有点名的文档" not in only_down and "语料索引未就绪" in only_down)

@@ -311,8 +311,8 @@ def _sec(text, start, end=None):
 
 check("① 只收 AI 通过且已展示的（1 条：另一条 AI 判过但被人驳回，不算「直接通过」）",
       "① AI 直接通过（AI 判通过且已展示，没经过人工）1 条:" in mr)
-check("① 明细是那条 AI 通过的", "#27 09-21 12:27 访客（AI通过）" in _sec(mr, "①", "②"))
-check("① 不含 AI 驳回行", "#24" not in _sec(mr, "①", "②"), _sec(mr, "①", "②"))
+check("① 明细是那条 AI 通过的", "talkId:27 09-21 12:27 访客（AI通过）" in _sec(mr, "①", "②"))
+check("① 不含 AI 驳回行", "talkId:24" not in _sec(mr, "①", "②"), _sec(mr, "①", "②"))
 # AI 判 pass 但人工闸开着（approved=0）的**没有直接露出** ⇒ 不许算进①
 # （否则主人会以为"AI 放过了"就等于"没人看过"，而那条恰恰还在等人）
 _gated = R.render_moderation_status([_row(1, 0, "pass"), _row(2, 1, "pass")], now=NOW)
@@ -323,35 +323,35 @@ check("① 排除「AI 通过但人工闸还开着」的",
 check("② 计数拆出人工后处置（维持/改判/还等）",
       "② AI 驳回 3 条：人工维持驳回 1、人工改判放行 1、还等着人工复批 1" in mr)
 check("② 明细列出被驳回的三条并标注人工处置",
-      "#24 09-21 12:24 访客（人工已驳回）" in mr
-      and "#23 09-21 12:23 访客（仍待人工）" in mr
-      and "#22 09-21 12:22 访客（人工已改判放行）" in mr)
+      "talkId:24 09-21 12:24 访客（人工已驳回）" in mr
+      and "talkId:23 09-21 12:23 访客（仍待人工）" in mr
+      and "talkId:22 09-21 12:22 访客（人工已改判放行）" in mr)
 
 check("③ 计数按 AI 侧拆分", "③ 需要人工复批 4 条：AI 存疑 2、AI 通过但人工闸 0、"
       "AI 驳回但人工闸 1、未走 AI 1" in mr)
 check("③ 明细含 AI 存疑 / 未走 AI / AI 驳回待人工三种标注",
       "（AI存疑）" in mr and "（AI未审）" in mr and "（AI驳回待人工）" in mr)
-check("明细带 ID 与作者（可溯源）", "#30" in mr and "小明" in mr)
+check("明细带 ID 与作者（可溯源）", "talkId:30" in mr and "小明" in mr)
 check("空列表：不报错，如实说没有待审", "当前没有待审留言" in R.render_moderation_status([], now=NOW))
 check("None 输入不炸", "总计 0 条" in R.render_moderation_status(None, now=NOW))
 
 # status 聚焦：主人追问"把被驳回的都列出来"——这一类放开到 20 条，另两类只留计数
 foc = R.render_moderation_status(rows, status="ai_rejected", now=NOW)
-check("聚焦 ai_rejected：② 明细照列", "#24" in foc and "#23" in foc and "#22" in foc)
+check("聚焦 ai_rejected：② 明细照列", "talkId:24" in foc and "talkId:23" in foc and "talkId:22" in foc)
 check("聚焦 ai_rejected：① ③ 只留计数（不展开）",
-      "#27" not in _sec(foc, "①", "②") and "另有 1 条未列出" in foc
-      and "#30" not in _sec(foc, "③"), foc)
+      "talkId:27" not in _sec(foc, "①", "②") and "另有 1 条未列出" in foc
+      and "talkId:30" not in _sec(foc, "③"), foc)
 check("认不出的 status 不炸（按不聚焦处理）",
       R.render_moderation_status(rows, status="???", now=NOW) == mr)
 many_rej = [_row(i, 2, "reject") for i in range(40, 70)]
 check("聚焦时明细上限 20 条", R.render_moderation_status(many_rej, status="ai_rejected", now=NOW)
-      .count("  · #") == 20)
+      .count("  · talkId:") == 20)
 check("聚焦时其余 10 条如实说未列出",
       "另有 10 条未列出" in R.render_moderation_status(many_rej, status="ai_rejected", now=NOW))
 
 many = [_row(i, 0, "flag") for i in range(40, 60)]
 mm = R.render_moderation_status(many, now=NOW)
-check("不聚焦时每类明细最多 5 条", mm.count("  · #") == 5, str(mm.count("  · #")))
+check("不聚焦时每类明细最多 5 条", mm.count("  · talkId:") == 5, str(mm.count("  · talkId:")))
 check("其余只计数（不静默丢弃）", "另有 15 条未列出" in mm)
 check("摘要有 total 可被跨轮取值", receipt_digest("get_moderation_status", mm).startswith("审核: 留言 20 条"), receipt_digest("get_moderation_status", mm)[:60])
 check("长内容截断到 30 字 + 省略号", "「" + "长" * 30 + "…" in R.render_moderation_status(
@@ -421,8 +421,8 @@ check("角色分布写出", "admin 1" in ur and "user 41" in ur)
 check("总量三件套", "- 会话 310 个、消息 5120 条、执行回执 880 条" in ur)
 check("活跃用 7/30 天窗口", "- 活跃（有会话或消息）：近 7 天 6 人、近 30 天 19 人" in ur)
 check("明细标注封顶口径", "共 2 人，最多 50 行" in ur)
-check("明细含角色与活动", "#1 博主（admin）会话 120／消息 3000／最近 09-21 11:30" in ur, ur)
-check("无活动时间写『无活动』而非空白", "#9 访客甲（user）会话 8／消息 22／最近 无活动" in ur)
+check("明细含角色与活动", "userId:1 博主（admin）会话 120／消息 3000／最近 09-21 11:30" in ur, ur)
+check("无活动时间写『无活动』而非空白", "userId:9 访客甲（user）会话 8／消息 22／最近 无活动" in ur)
 check("无用户时不编造", "没有任何用户产生过会话或消息" in R.render_user_stats(
     {"totalUsers": 0, "users": []}, now=NOW))
 check("缺字段不炸（用 0 兜底）", "用户总数 0" in R.render_user_stats({}, now=NOW))

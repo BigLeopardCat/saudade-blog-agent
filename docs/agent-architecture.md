@@ -716,7 +716,10 @@ id / type / title / link / createdAt，上限 10）连在同一个返回里。�
   说少给了几条，**不许默默少给**。
 
 摘要侧（`agent/entities.py` 的 `_unread_digest`）跟着补 `id《标题》`：`read_notifications` 要的
-实参是 id 列表，摘要里不给 id 就只能靠编（20260923 三轮那个"把条数当 id"的坑）。同批修了帧层
+实参是 id 列表，摘要里不给 id 就只能靠编（20260923 三轮那个"把条数当 id"的坑）。**该 id 自
+20260926 批 4 起带命名空间**（`notifId:7《…》`，同批 `noteId:`/`talkId:`/`userId:`/`mailId:`，
+见 `tests/test_id_namespaces.py`）——裸数字在帧里分不清是哪种物件（trace 20260924T030031 实证）。
+同批修了帧层
 的一处丢失——`_compact_list_frame` 此前对信封 dict 只渲染数组、**同级标量整个丢掉**，
 `{unread: 2, items: […]}` 的帧里永远看不到 `unread=2`（"计数 + 明细"的返回一旦带上明细，计数
 就没了）：现在先出一行 `k=v` 抬头，抬头也吃预算。

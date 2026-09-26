@@ -199,17 +199,20 @@ FOCUS_NAMES = {
 
 
 def _detail_line(r: dict, extra: str = "") -> str:
-    """一条留言的明细行：`#id 时间 作者（标注）「正文」`。
+    """一条留言的明细行：`talkId:<id> 时间 作者（标注）「正文」`。
+
+    **id 带命名空间**（20260926 批 4，理由见 tools/base.py::_board_label）：这份明细
+    直接进 planner/narrator 的提示词，裸 id 会被当成别的物件。
 
     `sanitize_untrusted` 是必须的（见模块头注）：这是全链路唯一"访客可控文本进
     prompt"的地方，命令前缀必须在这里拆掉——作者名同样是访客可控的（留言时可填）。
     """
     who = sanitize_untrusted(r.get("author") or r.get("nickname") or "", 16)
     if not who:
-        who = f"用户#{r.get('userId')}"
+        who = f"userId:{r.get('userId')}"
     body = sanitize_untrusted(r.get("content") or "", 30)
     at = _short_time(r.get("createTime"))
-    return f"  · #{r.get('talkKey')} {at} {who}（{extra}）「{body}」"
+    return f"  · talkId:{r.get('talkKey')} {at} {who}（{extra}）「{body}」"
 
 
 def _ai_bucket(v) -> str:
@@ -331,9 +334,9 @@ def render_user_stats(data: dict, now: datetime | None = None) -> str:
     else:
         lines.append(f"- 明细（按消息数倒序，共 {data.get('listedUsers', len(users))} 人，最多 50 行）:")
         for u in users:
-            name = sanitize_untrusted(u.get("name") or "", 20) or f"用户#{u.get('id')}"
+            name = sanitize_untrusted(u.get("name") or "", 20) or f"userId:{u.get('id')}"
             last = u.get("lastActiveAt") or "无活动"
-            lines.append(f"  · #{u.get('id')} {name}（{u.get('role')}）"
+            lines.append(f"  · userId:{u.get('id')} {name}（{u.get('role')}）"
                          f"会话 {u.get('conversations', 0)}／消息 {u.get('messages', 0)}"
                          f"／最近 {_short_time(last)}")
     return _cap("\n".join(lines))

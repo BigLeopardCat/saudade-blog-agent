@@ -487,9 +487,15 @@ get_article_detail({article_id: "96", doc_type: "board"})
 
 **登记但不做（本轮明确不做，等拍板）**：
 
-1. **帧里给 id 具名**：通知/留言帧里的 id 改成 `lid:`/`noteId:` 这类带命名空间的键（或前缀），
-   而不是裸 `id` + 一个 link。这是**根治**（②③都只是把撞上之后的措辞与行为修对）。动它要动
-   跨端帧契约与 golden 断言，成本明确但收益是"结构上不再混用"。
+1. ~~**帧里给 id 具名**~~ **已于 20260926 落地（批 4，「帧里 id 带来源」）**：落到 `talkId:` /
+   `noteId:` / `userId:` / `notifId:` / `mailId:` 五种命名空间，覆盖 `tools/base.py::_board_label`、
+   `agent/reports.py`（明细行 + 用户行）、`agent/adminops.py::_board_ref`、`agent/entities.py` 四个
+   摘要器、`agent/context.py::_doc_anchors`（`noteId=`）。**只改渲染出来的文本，DTO 键与跨端帧契约
+   一个字节没动**（所以 Rust/前端零改动、golden 零编辑）；确认弹窗卡面刻意仍是 `#{talkKey}`
+   （人眼看的 UX 面，见 `tests/test_id_namespaces.py` 的接线锁）。回归锁：`tests/test_id_namespaces.py`。
+   **遗留**：`agent/adminops.py` 的后台文章/标签列表仍写裸 `id=N`（`render_tag_list` 的 `id=1、id=2`
+   与文章行的 `id=12 [草稿]《…》`）——同一类缺陷、当时未在本批范围内，且那几处的取值语义与
+   写身份判据（`target_mentioned`）耦合，要单独一批做。
 2. **按 id 取留言的通道**：被驳回的留言**不在任何公开列表里**（只有 `/api/protect/board/mine`
    给本人、后台审核列表给 admin），所以 agent 现在结构上读不到它——主人问"那条被驳回的写了什么"
    时，agent 只能如实说读不到。要真能读，需要一条"按 id 取留言"的通道（带上身份与可见性判据，

@@ -322,13 +322,14 @@ finally:
 # ══════════════════════════════════════════════════════════════════
 print("\n③ 实体摘要：跨轮指代的取值来源")
 
-check("收藏 → `noteId《标题》`（noteId 是 favorites 的字段名，此前只有 noteKey/key）",
+check("收藏 → `noteId:<id>《标题》`（id 带命名空间；noteId 是 favorites 的字段名，此前只有 noteKey/key）",
       receipt_digest("list_my_favorites", str(FAVS))
-      == "我的收藏: 12《留言板怎么用》/19《Saudade Blog AI Agent》",
+      == "我的收藏: noteId:12《留言板怎么用》/noteId:19《Saudade Blog AI Agent》",
       receipt_digest("list_my_favorites", str(FAVS)))
 check("通知 → 总条数 + 未读条数 + **id《标题》**（未读标出来）",
       receipt_digest("list_notifications", str(NOTICES))
-      == "通知共 3 条（未读 2）: 7《国庆维护公告》（未读）/6《你的留言已通过审核》（未读）/5《欢迎来到 Saudade》",
+      == "通知共 3 条（未读 2）: notifId:7《国庆维护公告》（未读）"
+         "/notifId:6《你的留言已通过审核》（未读）/notifId:5《欢迎来到 Saudade》",
       receipt_digest("list_notifications", str(NOTICES)))
 # 20260923 三轮（trace 实证）：摘要里的"3 条"曾被 planner 读成 id 填进参数
 # ⇒ 一次注定 0 行的写 + 一次「服务不可用」误报。两条判据分开锁：
@@ -346,15 +347,13 @@ check("通知**正文不进摘要**（挤进来只会把标题挤掉——要正
 # ── 站内信（20260923 批 8）─────────────────────────────────────
 check("站内信 → 收件/发出封数 + 未读封数 + **id《标题》寄自谁（未读）**",
       receipt_digest("list_my_messages", str(MAILBOX))
-      == "信箱: 收件 3 封（未读 2） / 发出 1 封: 11《河灯集那篇》寄自小猫咪（未读）"
-         "/9（无标题信）寄自阿岚（未读）/8《问好》寄自路人甲",
+      == "信箱: 收件 3 封（未读 2） / 发出 1 封: mailId:11《河灯集那篇》寄自小猫咪（未读）"
+         "/mailId:9（无标题信）寄自阿岚（未读）/mailId:8《问好》寄自路人甲",
       receipt_digest("list_my_messages", str(MAILBOX)))
 # id 给足是**判据的一部分**：20260923 三轮那次「把条数当 id」的误导，堵法只有
 # "摘要里每个可点名的东西都带编号"（见 agent/entities.py `_mailbox_digest` 头注）。
-check("信件摘要里每封都带编号（planner 不必编 id 就能点名）",
-      all(f"{i}《" in receipt_digest("list_my_messages", str(MAILBOX)) or
-          f"{i}（无标题信）" in receipt_digest("list_my_messages", str(MAILBOX))
-          for i in (11, 9, 8)))
+check("信件摘要里每封都带**具名**编号（planner 不必编 id 就能点名，且知道这是信的 id）",
+      all(f"mailId:{i}" in receipt_digest("list_my_messages", str(MAILBOX)) for i in (11, 9, 8)))
 check("信件摘要用**封**这个量词（通知是「条」——量词分开，两个 id 空间就不会被混）",
       "封" in receipt_digest("list_my_messages", str(MAILBOX))
       and "条" not in receipt_digest("list_my_messages", str(MAILBOX)))
@@ -386,7 +385,8 @@ check("未读汇总带条目 → 计数 + 未读条目的 `id《标题》`",
                          {"id": 7, "type": "announcement", "title": "国庆维护公告",
                           "link": "/article/3", "createdAt": "2026-09-22 10:00:00"},
                          {"id": 6, "title": "你的留言已通过审核", "isRead": False}]}))
-      == "未读: 通知 3 条 / 私信 1 条（合计 4） — 未读通知: 7《国庆维护公告》/6《你的留言已通过审核》",
+      == "未读: 通知 3 条 / 私信 1 条（合计 4） — 未读通知: notifId:7《国庆维护公告》"
+         "/notifId:6《你的留言已通过审核》",
       receipt_digest("get_unread_summary",
                      str({**UNREAD, "unread_items": [
                          {"id": 7, "title": "国庆维护公告"},
