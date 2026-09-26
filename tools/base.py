@@ -1254,6 +1254,62 @@ def _admin_todo_done_post(payload: dict, config: RunnableConfig):
     return body.get("data")
 
 
+# 后端「给单个账号发通知」这批话术里属于**目标类**的两句（跨语言契约，见
+# `src/routes/temp_user.rs` 的头注与 docs/security-boundary.md §7⑫）。按它分族的理由
+# 见 `_admin_notice_post`——**认不出来的一律走 unavailable**，方向是硬要求。
+_NOTICE_TARGET_REFUSALS = ("用户不存在", "该账号不能接收通知")
+
+
+def _admin_notice_post(target_id: int, title: str, content: str, config: RunnableConfig):
+    """给单个账号发通知专用的 POST：非 200 业务码**按"是不是目标类"分两族**。
+
+    这个端点的非 200 有四种原因（`temp_user::send_user_notice` 逐条校验），落到这里
+    只剩两族的区分有意义：
+
+      · **目标类**（「用户不存在」「该账号不能接收通知」）⇒ `not_found`：planner 拿到
+        这个原因码才会去问主人 / 换一个账号，**不会**把"没这个人"读成"稍后再试"；
+      · **其余一律 unavailable**（含存储故障「通知发送失败，请稍后再试」、以及任何
+        我们没见过的措辞）⇒ 明说"未确认"，不替后端断言一个我们并不知道的原因。
+
+    方向刻意与 `_admin_status_post`（冻结族，非 200 **无条件**读成政策拒绝）不同：
+    那一族的非 200 **没有一族是"服务不可用"**，所以无条件按政策拒绝出口是对的；这一族
+    有真·存储故障，一律按目标类出口会把"库写失败"说成"没这个账号"——一句假话，而且
+    收件人是**别人**，说错方向的代价比冻结族更高（冻错方向还有读回复核兜着，这条没有）。
+
+    按消息字符串匹配这件事本身有代价（后端改字就认不出）。接受的依据是**兜底方向**：
+    认不出 ⇒ unavailable（"没确认"），永远不会断言一个假的"没有这个账号"。那两句已登记
+    为跨语言契约，改它们要走 `docs/security-boundary.md §7⑫` 那条同步流程。
+    """
+    uid = _device_get_user_id(config)
+    if uid <= 0:
+        # 身份不明时一个请求都不发（同 `_principal_request`）。
+        return unavailable(_NO_LOGIN_WRITE)
+    principal = (config.get("configurable", {}) or {}).get("principal")
+    headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
+    try:
+        resp = _client.post(f"{ADMIN_BASE}/api/temp-users/{target_id}/notice",
+                            headers=headers, json={"title": title, "content": content},
+                            timeout=15)
+    except Exception as exc:
+        logger.error("admin notice post failed: %s", exc)
+        return unavailable(f"接口请求失败: {exc}{_NO_SUCCESS_TAIL}")
+    if resp.status_code in (401, 403):
+        return unavailable("当前身份无权给账号发通知（该功能仅管理员可用），本次未发送")
+    if resp.status_code != 200:
+        return unavailable(f"接口返回 HTTP {resp.status_code}{_NO_SUCCESS_TAIL}")
+    try:
+        body = resp.json()
+    except Exception:
+        return unavailable(f"接口返回的不是 JSON{_NO_SUCCESS_TAIL}")
+    if body.get("code") != 200:
+        msg = str(body.get("message") or "").strip()
+        logger.warning("admin notice post refused: %s", msg)
+        if any(k in msg for k in _NOTICE_TARGET_REFUSALS):
+            return not_found(msg or "后台没有这个账号，本次未发送")
+        return unavailable(f"{msg or '后台没有接受这次发送'}{_NO_SUCCESS_TAIL}")
+    return body.get("data")
+
+
 def _tag_index(config: RunnableConfig):
     """读两级标签字典 → `{id: TagInfo}`；任一读不到 → **None**。
 
@@ -3326,8 +3382,13 @@ def complete_dashboard_todo(
 
 
 # ---------------------------------------------------------------------------
-# 管理助手写工具：冻结 / 解冻账号（20260926）
+# 管理助手写工具：账号管理（冻结 / 解冻 / 发通知）（20260926）
 # ---------------------------------------------------------------------------
+# 三件共用"目标 = 后台账号列表里的**账号名**"这条唯一通道（`_user_directory` /
+# `_find_named_user`），差别在**动的是什么**：冻结族动的是对方的登录能力、发通知
+# 动的是"发给对方的一段话"。下面四条是冻结族独有的事实，发通知那件只在 ①② 上同族
+# （它也走名录、也只按名字），③④ 是它自己的（见 `_send_user_notice` 头注）。
+#
 # 与标签/分类/公告/留言同一套纪律（名字通道 + fail-closed + 读回复核），四件**这一族
 # 独有**的事实决定了实现的形状：
 #   ① 账号名录 `GET /api/temp-users` 是全站唯一**不回 `ApiResponse` 信封**的
@@ -3561,6 +3622,98 @@ def unfreeze_account(
     return _set_account_frozen(name, False, config)
 
 
+# 通知的标题/正文上限与**服务端同一处口径**（`src/routes/notice.rs` 的 `TITLE_MAX` /
+# `CONTENT_MAX`，前端 `Users/index.tsx` 的 maxLength 也是这两个数）。三处必须一致：
+# 前端拦一道、展开层拦一道（零工具 + 说清原因）、工具这一道是硬闸；服务端那一道是
+# 最终判据，超长会被拒（**不是**静默截断——见 notice.rs 头注）。
+_NOTICE_TITLE_LIMIT = 128
+_NOTICE_CONTENT_LIMIT = 1000
+# 标题留空时用的默认标题。**是系统写的字**（服务端 `notice::DEFAULT_TITLE` 一处）。
+# 这里重复一份只为"工具自己也知道最终会是什么标题"（回执里念得出那个字），
+# 真正落库的字由服务端决定。
+_NOTICE_DEFAULT_TITLE = "站内通知"
+
+
+def _send_user_notice(name, content, title, config: RunnableConfig) -> ToolResult:
+    """给一个账号发一条站内通知（**只有**这一条写通道）。
+
+    五段式的前两段照 `_set_account_frozen`（① 读名录 → ② 按名字解析出唯一一行），
+    后三段**不同族**，三条都是"这一件事没有别的载体"的直接后果：
+
+      · **没有写后复核那条腿**。站内**不存在**"读别人的通知"的通道
+        （`/api/protected/notifications` 一族是 own-data only，`profile.rs` 只按自己的
+        uid 查），所以公告族那种"建完读回清单、按新旧 id 差集认人"在这里**结构上做不到**。
+        复核判据 = **端点回执本身**：`temp_user::send_user_notice` 只在
+        `notice::push_notice_checked` 插入成功时才回 code 200（那条 Result 直接决定
+        成败分支）——**这是后端契约**，后来人若把"插入失败也回 200"带进来，这一层的
+        "成功"就同时失真了。别以为这里漏写了一条腿。
+      · **不重读名录**。重读能证明的只是"账号还在"，证明不了通知发出去了——那会是一段
+        看着像复核、实际什么都没核的空转（同族里唯一没有读回复核的一件，理由写在这里）。
+      · 正文**可以不是主人的原话**（用户拍板：允许把主人的意思整理成一句得体的通知），
+        所以这里的措辞纪律与公告族相反：公告要求"只写用户给了的"，这里允许整理，但
+        **不许添加主人没说过的事实、承诺或威胁**（「你已被警告三次」这类编造），
+        而**唯一的人眼复核点是确认卡**（`adminops.render_notice_action` 把正文**全文**
+        印出来）——那条纪律是硬要求，不是措辞偏好。
+    """
+    from agent import adminops as A
+    want = str(name or "").strip()
+    if not want:
+        return unavailable("没给出要发给哪个账号，本次未发送——请让主人说清是哪个账号")
+    body_text = str(content or "").strip()
+    if not body_text:
+        # 空正文**不发**：一条什么都不说的通知对收件人只是打扰，而且它是一段以主人名义
+        # 发出去、删不掉的字（见 notice.rs 那条"发出后没有撤回的通道"）。
+        return unavailable("通知正文为空，本次未发送")
+    if len(body_text) > _NOTICE_CONTENT_LIMIT:
+        return unavailable(f"通知正文太长（{len(body_text)} 字，上限 {_NOTICE_CONTENT_LIMIT} 字），"
+                           f"本次未发送")
+    head = str(title or "").strip() or _NOTICE_DEFAULT_TITLE
+    if len(head) > _NOTICE_TITLE_LIMIT:
+        # 超长在**校验**这一层拒（不静默截断）：截断会让主人核对的是没被截的那一句、
+        # 库里存的是另一句（同 notice.rs 头注那条取舍）。
+        return unavailable(f"通知标题太长（{len(head)} 字，上限 {_NOTICE_TITLE_LIMIT} 字），"
+                           f"本次未发送")
+
+    # ① 写前读：既拿"这个名字在不在名录里"的判据，也让"查无此名"在**发请求之前**
+    #    就响亮地报出来（同 `_set_account_frozen`）。
+    before_index = _user_directory(config)
+    if isinstance(before_index, ToolResult):
+        return _pre_read_fail(before_index, "后台账号名录")
+    # ② 解析：唯一命中才继续（重名 ⇒ not_found，零写——选错就是给**另一个活人**发了一段话）。
+    row, err = _find_named_user(want, config, index=before_index)
+    if err:
+        return not_found(err)
+    target_id = int(row.get("id"))
+    username = str(row.get("username") or want)
+
+    # ③ 写。失败按原因码分区（见 `_admin_notice_post` 头注），**原样往外传**：
+    #    目标类走 not_found（planner 去问主人），其余走 unavailable（不许说成功）。
+    data = _admin_notice_post(target_id, head, body_text, config)
+    if isinstance(data, ToolResult):
+        return data
+    # ④ 回执即复核判据（这一族没有第二条腿，见头注）：端点回了 code 200 ⇒
+    #    服务端那次 `push_notice_checked` 插入成功。
+    return ok(A.render_notice_status(username, target_id, head, body_text),
+              meta={"op": "notice_send",
+                    "account_id": target_id, "account_name": username})
+
+
+@tool
+def send_user_notice(
+    name: Annotated[str, "收件人的**账号名**（后台账号列表里看得见的那一行）"],
+    content: Annotated[str, "通知正文（可以是一句整理过的话；不要编造主人没说过的事实、承诺或威胁）"],
+    config: RunnableConfig,
+    title: Annotated[str | None, "（可选）通知标题：一句话；主人没说标题就不填，**不要自己挑一个**"] = None,
+) -> str:
+    """给一个后台账号发一条站内通知（会出现在**对方**个人中心的通知面板里，**发出后没有撤回的通道**）。
+
+    **收件人的账号名必须能在后台账号列表里看到**；列表里没有这个名字就当它不存在
+    （不要用账号编号，也不要自己拼一个名字）。正文可以按主人的意思整理成一句得体的
+    通知，但**不许**添加主人没说过的事实、承诺或威胁。需要管理员身份，且每次都要经
+    主人确认（确认卡上会印出**正文全文**，主人核对的就是将要发出的那一句）。"""
+    return _send_user_notice(name, content, title, config)
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -3638,6 +3791,10 @@ _TOOL_REGISTRY = [
     # 方向写进工具名，确认卡与回执才不可能与真正执行的方向相反。
     freeze_account,
     unfreeze_account,
+    # 给单个账号发站内通知（20260926）：write.console，目标=同一个账号名录里的名字，
+    # 动的却是"发给对方的一段话"（发出后没有撤回的通道）⇒ 同样进「一律弹窗」族，
+    # 卡面必须印出**正文全文**由主人核对。见 `_send_user_notice` 头注。
+    send_user_notice,
 ]
 
 def get_all_tools():

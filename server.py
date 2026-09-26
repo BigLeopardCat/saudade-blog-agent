@@ -979,6 +979,13 @@ def _tool_action_text(name: str, args: dict | None) -> str:
         verb = "冻结账号" if name == "freeze_account" else "解冻账号"
         acct = _leaf(a.get("name"))
         return f"{verb}「{acct}」" if acct else verb
+    if name == "send_user_notice":
+        # 给单个账号发通知（20260926）：与冻结族同一条纪律——只报**账号名**、
+        # **不报 uid**、**不报正文**（正文是主人刚在确认卡上核对过的那段话，
+        # 过程行里再抄一遍只会让卡片上面的字和下面的字看起来是两件事）。
+        # 措辞与 Rust `render_exec_row` 的同名臂**逐字一致**。
+        acct = _leaf(a.get("name"))
+        return f"给账号「{acct}」发通知" if acct else "给账号发通知"
     if name == "get_weather":
         # 天气（20260926 补臂）：Rust `render_exec_row` 的同名臂一直有，Python 这半
         # 漏了 ⇒ 过程行显示「执行 get_weather」（内部工具名带下划线）。

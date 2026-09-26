@@ -2010,12 +2010,15 @@ def _no_popup_fact(state) -> str:
     **这条事实要跟着"本轮没有写操作"走，不跟着"确定性收尾轮"走**（20260926 扩面，
     调用面见 `_narrator_plan`）：此前只有 `data_repeat` 收尾那一处拼它，于是**零工具轮
     的 narrator 手里只剩"禁说"、没有事实**。第四例现场（trace 20260926T082919）：主人
-    要"给某个用户发个通知"——站内根本没有这条通道（通知类工具只有"读自己的"），
+    要"给某个用户发个通知"——**当时**站内根本没有这条通道（通知类工具只有"读自己的"；
     planner 只能落成 chat 零工具，narrator 便从 recent_tail 抄了上一轮**系统自己写的
     卡面文案**（`adminops.render_confirm_text` 的「点「确定」我就去办」，它以泠月的
     身份落库、就摆在上下文里），撞洞⑥ 又被 gate 换成兜底元话术——主人拿到的是一段
     自我纠正的废话，关于"发通知"一个字都没有。保留窗内 68 份 trace 里 5 次 fallback、
     4 次是这一句，**逐字相同**：不是四次幻觉，是一句模板被复用。
+    那条能力 20260926 当天就建出来了（技能 `notice_send` / 工具 `send_user_notice`），
+    所以"发通知"**不再**是"站内没有的能力"的例子——上面这段是**现场记录**，别拿它
+    当今天的现状引用；`build_planner_context` 的菜单兜底段里那个举例也已换掉。
 
     第三件事（20260926 加）：**"做不到"要有出口**。此前这段的尾巴是"要动手还得说清
     **对哪一条**做什么"——那正是"你说一声我就去办"的同义诱导（同一个洞的另一半）。
@@ -3318,6 +3321,10 @@ _WRITE_NAME_FIELDS = {
     # （开一个编号参数就是从第二扇门把"冻结一个看不见的超管"重新打开）。
     "freeze_account": ("name", None),
     "unfreeze_account": ("name", None),
+    # 发通知（20260926）：目标同样是**账号名**，但那个工具多了一个**自由文本参数**
+    # content——这正是 `_WRITE_VALUE_FIELDS`（"值字段要有字面出处"那道闸）**刻意不收
+    # 它**的原因，见那张表下面那条注。这里只登记目标字段。
+    "send_user_notice": ("name", None),
 }
 
 
@@ -3580,7 +3587,9 @@ _NAME_TARGET_TOOLS = ("update_tag", "delete_tag", "update_category",
                       "delete_announcement",
                       # 账号族同族（20260926）：名字要**原样**写进如实答复——
                       # "后台没有叫「guest」的账号"里的那个名字，必须是主人说的那个。
-                      "freeze_account", "unfreeze_account")
+                      # 发通知同族：它那句如实答复同样是"后台账号列表里没有叫「X」的
+                      # 账号"，X 也得是主人说的那个字。
+                      "freeze_account", "unfreeze_account", "send_user_notice")
 
 # "另一个操作数"的标记词：紧跟在它后面的那段引号**不是**目标，而是父标签
 # （挪到…下面）或新名字（改名叫…）。语序本身就是主人给的标记——20260922 实测另一跑
@@ -3661,17 +3670,38 @@ _ACCOUNT_MARKS = _TARGET_ACTION_MARKS + ("冻结", "解冻", "封停", "解封",
 _ACCOUNT_GENERIC = _GENERIC_NAME_WORDS + (
     "账号", "账号名", "用户", "用户名", "目标账号", "目标用户",
     "这个账号", "那个账号", "这个用户", "那个用户")
-# 冻结 / 解冻两个工具（本节多处共用这一份名单：词表、目标预检、政策预检）。
+# 冻结 / 解冻两个工具（**只**这两个：政策预检那一处专用的名单，见 `_ACCOUNT_TOOLS`）。
 _FREEZE_TOOLS = ("freeze_account", "unfreeze_account")
+# 账号管理一族的**全体**（20260926 第十一轮加发通知）：**目标都在后台账号名录里**，
+# 所以"名字在不在名录里"这一层判据（词表分派、目标预检的名录分派、弹窗惰性读名录）
+# 三处都该按这一份走。⚠️ 与 `_FREEZE_TOOLS` 分开是**硬要求**，别合成一个：
+# `_freeze_policy_refusal`（policy 预检）跑的是**冻结政策**（不能冻自己 / 管理员之间
+# 不可互冻 / 超管谁都不能冻），那三条对"给某人发一条通知"根本不适用——顺手把它并进
+# 去，会让"给自己发通知""给另一个管理员发通知"（两件都合法）被回一句**说错政策**的
+# "这事办不成"。两个方向都是"长得像诚实拒绝的错话"：漏进 ⇒ 账号名被拿去查标签
+# （`_write_target_refusal` 掉进 else 分支），多进 ⇒ 合法的事被假政策拦住。
+_ACCOUNT_TOOLS = _FREEZE_TOOLS + ("send_user_notice",)
+# 发通知单独的词表（同 `_lexicon` 的按工具分派）。**另起一份而不是往 `_ACCOUNT_MARKS`
+# 里加**：那张表是冻结族的动作词表，把"通知"加进去会让「别通知他账号的事」这类句子里
+# 冒出一个被认作"有出处"的名字——那是对冻结族的**放宽**（少拦一次）。
+_NOTICE_MARKS = _ACCOUNT_MARKS + ("发通知", "通知", "私信", "转告")
+# 发通知那一族（今天一件；单列一个元组是为了 `_lexicon` 那条分派有名字可用，
+# 将来同族再加一件时只改这里）。
+_NOTICE_TOOLS = ("send_user_notice",)
 # 需要**惰性读一次待办列表**的写工具（20260926 第十轮）：卡面要写出那一行的排期与
-# 当前完成状态。与 `_FREEZE_TOOLS` 同一条纪律——只有 plan 里真含它时才多这一次请求。
+# 当前完成状态。与 `_ACCOUNT_TOOLS` 同一条纪律——只有 plan 里真含它时才多这一次请求。
 _TODO_TOOLS = ("complete_dashboard_todo",)
 _ACCOUNT_LEXICON = (_ACCOUNT_NOUNS, _ACCOUNT_MARKS, _ACCOUNT_GENERIC)
+_NOTICE_LEXICON = (_ACCOUNT_NOUNS, _NOTICE_MARKS, _ACCOUNT_GENERIC)
 
 
 def _lexicon(tool: str | None):
     """工具名 → `(名词表, 动作词表, 泛称表)`。未登记的工具拿**默认那三张表本身**。"""
-    return _ACCOUNT_LEXICON if tool in _FREEZE_TOOLS else _DEFAULT_LEXICON
+    if tool in _FREEZE_TOOLS:
+        return _ACCOUNT_LEXICON
+    if tool in _NOTICE_TOOLS:
+        return _NOTICE_LEXICON
+    return _DEFAULT_LEXICON
 
 
 def _marked_operand(user_msg, spans: list[str]) -> tuple[str, str]:
@@ -3877,6 +3907,40 @@ def _owner_target_span(got: str, spans: list[str], parent: str,
     return None
 
 
+def _capture_extends_glued(got: str, cand: str) -> bool:
+    """捕获段 `cand` 是不是"planner 那个值**紧贴着**多出来一截"（`Async` ← `Asyncio`）？
+
+    判据落在**词边界（空白）**上：捕获段比 planner 的值多出来的那一截，如果是从一段
+    空白之后开始的，那它就不是同一个词的续写，而是**后面那个动词的填充词**——中文里
+    「给账号 guest5 发个通知」的捕获段是 `guest5 发个`、「发条/发一条」同形，冻结族
+    的存量形态是「把账号 guest5 给冻结了吧」→ `guest5 给`。
+
+    ⚠️ 为什么必须区分（20260926 第十一轮实测）：不区分的话，主人说「给账号 guest5
+    发个通知」、planner **填对了** `guest5`，这一格会把目标名**改写成** `guest5 发个`
+    ⇒ 工具按名字查名录查无此名 ⇒ 主人收到一句「后台账号列表里没有叫「guest5 发个」的
+    账号」——**一句长得像诚实拒绝的错话**，而那个账号本来就在名单上。
+
+    空白是这里唯一能用的判据：中文名之间不空格，而"抄短了"（Async ← Asyncio）多出来的
+    那一截必定**贴着**（同一串字符）。捕获段本身保留了原文的空白（`_bare_target_name`
+    只 strip 两端），所以词边界还在。
+    """
+    sq_got = _squash_spaces(got)
+    raw = str(cand or "")
+    if not sq_got or not raw:
+        return False
+    glued, boundaries = [], set()
+    for ch in raw:
+        if ch.isspace():
+            boundaries.add(len(glued))
+        else:
+            glued.append(ch)
+    text = "".join(glued)
+    at = text.find(sq_got)
+    if at < 0 or len(text) == len(sq_got):
+        return False
+    return (at + len(sq_got)) not in boundaries
+
+
 def _name_target_fix(plan_obj: dict, user_msg,
                      role: str | None = None) -> None:
     """按名字指认的写工具：目标名校正到主人引号里那一段（就地改；不动别的参数）。
@@ -3911,8 +3975,11 @@ def _name_target_fix(plan_obj: dict, user_msg,
         _gq, _cq = _squash_spaces(got), _squash_spaces(cand)
         # 第三种让位的形态：planner 把名字**抄短了**（实测 name="Async"——它是原话的
         # 子串，子串级地基照样放它过去）。取向与引号那条一致：主人原话里那一段是系统
-        # 数据，模型的截断让位。只在"捕获段确实更长"时用，且捕获段里不许混补语。
-        _frag = bool(_cq and _cq != _gq and _gq in _cq)
+        # 数据，模型的截断让位。只在"捕获段确实更长"时用，且**多出来的那一截必须紧贴着**
+        # （同一串字符、不隔空白）——隔了空白的多出部分不是名字的续写，是后面那个动词的
+        # 填充词（`guest5 发个` / `guest5 给`），让位会把对的名字改错（见
+        # `_capture_extends_glued` 头注那次实测）。
+        _frag = _capture_extends_glued(got, cand)
         # 第四种让位的形态（20260924）：move 类请求里 planner 把**父标签名**填成了目标名
         # （实测「把标签 Rust 挪到「嵌入式」下面」→ `name="嵌入式"`，而"嵌入式"正是句里
         # 另一个操作数）。父标签跟在"挪到"后面、目标名在名词与动作词之间，两者不是一回事
@@ -3985,6 +4052,16 @@ _WRITE_VALUE_FIELDS = {
     "update_tag": ("new_title",),
     "update_category": ("new_title",),
     "set_article_tags": ("add", "remove", "replace"),
+    # ⚠️ `send_user_notice`（20260926）**刻意不进这张表**，而且这一条是**反直觉**的
+    # ——先说清消费者再决定：这张表管"这个**值**在主人原话里有没有字面出处"，判据是
+    # **逐字子串**（`_grounded_value`：`v in _squash_spaces(msg)`），认不出就
+    # `return tool, why` ⇒ **确定性零写** + 一句"主人这句话里没有能对上「…」这个
+    # 参数值的名字"。而通知正文恰恰是用户拍板**允许整理、不必逐字**的那一段
+    # （见 tools/base.py `_send_user_notice` 头注）⇒ 把它登记进来 = 把用户刚批准的
+    # 能力**结构性关死**（模型每次润色都零写，拒绝文案还会说成是"名字"的问题）。
+    # `title` 同理（主人多半没说标题，那是可以留空的）。
+    # 正文真正的防线是**弹卡印全文**由主人核对，不是这条闸——两件事各自到位，
+    # 别互相顶替。反过来，**目标字段 name 照常登记**（见 `_WRITE_NAME_FIELDS`）。
 }
 # 命名标记：主人给"新名字"时用的词。长的在前（同一位置优先匹配更具体的那个）。
 # `叫` 单字放最后：它出现在别处的机会最多，靠捕获段的干净度判据兜底。
@@ -4357,11 +4434,13 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
     is_cat = name.endswith("_category")
     is_ann = name.endswith("_announcement")
     is_board = name.endswith("_board_comment")
-    # 账号族（冻结/解冻）的目标名字在**后台账号名录**里，不在标签字典里。这一支不加，
-    # 分派会掉进最后那个 `else`（标签）⇒ 账号名被拿去查标签 ⇒ 主人得到一句
+    # 账号族（冻结/解冻/发通知）的目标名字在**后台账号名录**里，不在标签字典里。这一支
+    # 不加，分派会掉进最后那个 `else`（标签）⇒ 账号名被拿去查标签 ⇒ 主人得到一句
     # 「站内没有叫「X」的**标签**」：措辞错、查的台账错，而这句错话恰好长得像
     # 一句诚实拒绝，最容易被当成"系统说没有就是没有"。
-    is_user = name in _FREEZE_TOOLS
+    # 用 `_ACCOUNT_TOOLS`（整族）而不是 `_FREEZE_TOOLS`：这一层判的是**台账属于谁**，
+    # 与"这三条是不是同一条政策"无关（政策预检那一处才用 `_FREEZE_TOOLS`，见那段注）。
+    is_user = name in _ACCOUNT_TOOLS
     tag_index = None if (is_cat or is_ann or is_board or is_user) else _tag_index(config)
     cat_index = ann_index = board_index = None
     user_index = None
@@ -4497,6 +4576,12 @@ def _freeze_policy_refusal(plan_obj: dict, config,
     if len(tools) != 1:
         return None
     name = _tool_name(tools[0])
+    # ⚠️ **只认 `_FREEZE_TOOLS`，不许扩成 `_ACCOUNT_TOOLS`**（20260926 第十一轮）：
+    # 下面这套判据是**冻结政策**（不能冻自己 / 管理员之间不可互冻 / 超管谁都不能冻），
+    # 对"给某个人发一条通知"根本不适用——给自己发一条通知、给另一个管理员发一条通知
+    # 都是合法的，扩进来会让它们被回一句**说错政策**的"这事办不成"（又一种"长得像
+    # 诚实拒绝的错话"）。账号族的共性消费者（词表 / 目标台账 / 弹窗读名录）用的是
+    # `_ACCOUNT_TOOLS`，这一处**刻意**不是其中之一。
     if name not in _FREEZE_TOOLS:
         return None
     tkey, _pkey = _WRITE_NAME_FIELDS[name]
@@ -4876,13 +4961,16 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     # 弹窗两件在下面两处都要用（SSE 帧 + 落库的待办行），提成局部量只为**同源**：
     # 20260924 起卡片能在刷新后从库里重建，重建出来的问句/按钮必须与当轮弹的那张
     # 逐字一致，各算一遍就是两份实现。
-    # 账号名录同理（20260926）：冻结/解冻的问句要把**账号 id 与现状**写出来
-    # （「冻结账号「guest5」（账号 id=126，现在：正常）」）——主人得能核对"是不是
-    # 那个人"，而账号名是可以被改的、id 不会。同样**惰性**读：只有 plan 里真含这两个
-    # 工具时才多这一次请求，别的写弹窗一次都不多花。读不到 → 只印名字，
+    # 账号名录同理（20260926）：账号族的问句要把**账号 id** 写出来
+    # （「冻结账号「guest5」（账号 id=126，现在：正常）」／「给账号「guest5」
+    # （账号 id=126）发一条**站内通知」（标题「…」，正文：「…」）」）——主人得能核对
+    # "是不是那个人"，而账号名是可以被改的、id 不会。同样**惰性**读：只有 plan 里真含
+    # 这一族的工具时才多这一次请求，别的写弹窗一次都不多花。读不到 → 只印名字，
     # **绝不因此不弹窗**（弹窗是这类写操作唯一的人类兜底，少了它比少一句现状严重得多）。
+    # 判据用 `_ACCOUNT_TOOLS`（整族）：发通知同样要印 id，漏了它卡面就只剩一个名字，
+    # 而正文全文才是那张卡真正要主人核对的东西（见 adminops.render_notice_action）。
     users = None
-    if any(str(s.get("tool") or "") in _FREEZE_TOOLS for s in picks):
+    if any(str(s.get("tool") or "") in _ACCOUNT_TOOLS for s in picks):
         try:
             from tools.base import _user_directory
             users = _user_directory(config)

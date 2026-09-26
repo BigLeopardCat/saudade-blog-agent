@@ -204,7 +204,11 @@ CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), 
 # 与加待办同一张表、同一条理由（目标是主人随口说的一句话，`_console_command` 判不出
 # "他是在让我勾、还是在跟我说这件事办完了"），而漏判的代价更贵：勾错的那一行在列表上
 # 和勾对的一模一样（没有 id 也没有日志给他看）。
-check("需确认的工具恰好是二十一个（十七个后台写 + 四个用户自己的写）",
+# 20260926 到二十二个：同一天再加 `send_user_notice`（给单个账号发一条站内通知）——
+# 它动的**不是主人的东西**、也不是仓库里的内容，而是**以主人的名义发给第三方的一段话**，
+# 且站内没有删除已发通知的通道（发出去收不回）。与冻结族同一条理由：正文由 agent 替
+# 主人**整理**（用户拍板允许），人眼复核点只剩卡面 ⇒ 一律弹卡、不留任何捷径。
+check("需确认的工具恰好是二十二个（十八个后台写 + 四个用户自己的写）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
                         "create_announcement", "update_announcement",
@@ -212,6 +216,7 @@ check("需确认的工具恰好是二十一个（十七个后台写 + 四个用�
                         "audit_board_comment", "delete_board_comment",
                         "create_dashboard_todo", "complete_dashboard_todo",
                         "freeze_account", "unfreeze_account",
+                        "send_user_notice",
                         "set_article_status", "set_article_tags",
                         "add_favorite", "remove_favorite", "read_notifications",
                         "read_messages"},

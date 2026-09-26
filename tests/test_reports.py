@@ -679,7 +679,7 @@ for name, tool, args in [("admin_notes", "list_admin_notes", {}),
     check(f"技能 {name} 在位、对管理员族可见、计划首项是 {tool}",
           sk is not None and sk.roles == ADMIN_ROLES
           and [t for t, _ in sk.plan] == [tool], str(sk and (sk.roles, sk.plan)))
-check("写技能名单 = 二十一个**技能**名（instantiate_plan 缺参守卫按它分支；"
+check("写技能名单 = 二十二个**技能**名（instantiate_plan 缺参守卫按它分支；"
       "注意它与工具名不是一套字面量，混用会让守卫静默不生效）",
       WRITE_SKILL_NAMES == frozenset({"tag_create", "tag_update", "tag_delete",
                                       "category_create", "category_update",
@@ -716,7 +716,15 @@ check("写技能名单 = 二十一个**技能**名（instantiate_plan 缺参守�
                                       # 静默不命中，尾部的"未知的写技能"兜底会
                                       # 零工具零写还不报错（test_account_freeze
                                       # ④ 钉着）
-                                      "account_freeze", "account_unfreeze"})
+                                      "account_freeze", "account_unfreeze",
+                                      # 给单个账号发通知（20260926 第十一轮）：与冻结族
+                                      # 同样"技能名 ≠ 工具名"（技能 notice_send / 工具
+                                      # send_user_notice），且目标是**人名 + 一段自由
+                                      # 文本**两样并存——漏在这份名单外会落进尾部"未知的
+                                      # 写技能"兜底：零工具、零写、还不报错，而
+                                      # `instantiate_plan` 那条 `if not note` 会把它填成
+                                      # "参数齐备"（test_user_notice 的展开断言钉着）
+                                      "notice_send"})
       and WRITE_SKILL_NAMES <= set(SKILL_MAP), str(sorted(WRITE_SKILL_NAMES)))
 check("非 admin 的 planner 上下文里看不到这四个技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
