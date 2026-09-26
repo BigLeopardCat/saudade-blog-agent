@@ -43,6 +43,7 @@ import agent.graph as g
 from agent import adminops as A
 from agent import authz
 from agent import confirm
+from agent import skills as S
 from agent.graph import _confirm_grant_plan, _confirm_popup, execute_node, parse_plan, plan_encode
 from agent.skills import instantiate_plan  # noqa: E402
 from agent.principal import Principal
@@ -713,6 +714,58 @@ check("问句里没有嵌套的全角括号（『（…（…））吗？』读�
               for q in (_q_notice_all, _q_notice_ids, _q_mail_all, _q_mail_ids)),
       _q_notice_ids)
 settings.jwt_secret = _SAVED_SECRET
+
+print()
+print("⑩ 零写轮的事实与出口（20260926）：narrator 拿得到「本轮没有写操作」，"
+       "planner 菜单里有「做不到」这条兜底语义")
+# 为什么要有这一节：洞⑥（没弹框却说"点「确定」我就去办"）此前只在**一个分支**上
+# 给了 narrator 那条事实（planner 的 data_repeat 收尾），于是零工具轮的 narrator
+# 手里只有"禁说"、没有事实，就从 recent_tail 抄上一轮**系统自己写的卡面文案**
+# （adminops.render_confirm_text —— 它以泠月的身份落库、就摆在上下文里）。保留窗内
+# 68 份 trace 里 5 次 fallback、4 次是**逐字同一句** ⇒ 不是幻觉，是模板被复用。
+# 三层锁：① 判据落在"写"上（不是"零工具"）：确认兑现轮有写、绝不能拿到这句；
+# ② 弹卡轮（pending_confirm）拿不到；③ `data_repeat` 已经拼过的不重复追加；
+# ④ 菜单那一段真被拼进了 planner 上下文（能力有测试 ≠ 接线有测试）。
+_NARRATOR_CHAT_PLAN = ("SKILL=chat\nPARAMS={}\nTOOLS: （无）\nNOTE: （无）\n"
+                       "REPLY: 直接回答")
+_st_chat = {"plan": _NARRATOR_CHAT_PLAN}
+_st_write = {"plan": "SKILL=account_freeze\nPARAMS={}\n"
+                     "TOOLS: freeze_account({\"name\": \"x\"})\n"
+                     "NOTE: （无）\nREPLY: 直接回答"}
+_out_chat = g._narrator_plan(_st_chat)
+check("零写轮：计划段带上那条系统事实（此前只有 data_repeat 那一支有）",
+      _out_chat != _NARRATOR_CHAT_PLAN and "一个写操作都没提出来" in _out_chat)
+check("  事实里给出「做不到」这条正面出口（不只是禁止句）",
+      "直接说" in _out_chat and "做不到" in _out_chat and "替代" in _out_chat)
+check("  旧措辞「要动手还得说清对哪一条做什么」已撤掉（那是同一洞的另一半："
+      "等于教它回一句『你说一声我就去办』）",
+      "说清**对哪一条**做什么" not in _out_chat)
+check("写轮（本轮真排了写操作）：一个字都不加——说了就是假的，等于把刚办成的事说成没做",
+      g._wrote_this_round(_st_write)
+      and g._narrator_plan(_st_write) == _st_write["plan"])
+check("弹卡轮（pending_confirm 在场）：不加（那种轮次结构上也轮不到 narrator 说话）",
+      g._narrator_plan(dict(_st_chat, pending_confirm={"skill": "x"}))
+      == _NARRATOR_CHAT_PLAN)
+check("data_repeat 那一支已拼过：不重复追加（同一段话在提示里出现两次）",
+      g._narrator_plan({"plan": _NARRATOR_CHAT_PLAN + "\n"
+                        + g._no_popup_fact(_st_chat)})
+      == _NARRATOR_CHAT_PLAN + "\n" + g._no_popup_fact(_st_chat))
+# 菜单侧：兜底语义必须真拼进 planner 的上下文（否则判据只是写在源码里没人读）。
+# 用**非管理员**也断言一次：能力缺位与身份无关，两个菜单都要有这条出口。
+_ctx_admin = S.build_planner_context("admin")
+_ctx_public = S.build_planner_context(None)
+check("planner 菜单有「技能都不覆盖 ⇒ 如实说做不到 + 给替代」这条兜底语义（管理员菜单）",
+      "根本没有" in _ctx_admin and "如实说做不到" in _ctx_admin)
+check("  公开菜单同样有（能力缺位与身份无关）",
+      "如实说做不到" in _ctx_public)
+check("  同一段里禁止索要「要不要我办」（不排写操作就不会有卡，那句承诺保证是假）",
+      "你说一声我就去办" in _ctx_admin and "保证是假的" in _ctx_admin)
+check("  兜底只在**菜单**、不在 chat 的 description 里"
+      "（写进 description 会让'没有能力'变成 chat 的常规用法，"
+      "真有技能的请求也可能被判成做不到）",
+      "如实说做不到" not in S.SKILL_MAP["chat"].description)
+check("  并且要求「拿不准就照常选技能」（失败取向往能干活那侧倒）",
+      "拿不准就照常选技能" in _ctx_admin)
 
 print()
 if FAILED:
