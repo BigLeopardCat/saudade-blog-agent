@@ -15,7 +15,7 @@ import threading
 import time
 
 import httpx
-from typing import Annotated
+from typing import Annotated, Literal
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
@@ -93,6 +93,36 @@ def not_found(text: str, meta: dict | None = None) -> ToolResult:
 # 上游故障哨兵：`_get` 失败时返回它而不是 `[]`（"故障伪装成空"的源头就在那）。
 # 工具的出口要用 `_shape(data)` 而不是 `str(data)`——理由见 _shape 的注释。
 UPSTREAM_DOWN = unavailable("服务暂时不可用，请稍后再试")
+
+
+# ── 闭集参数 = `Literal[...]`（20260926 批 5，参数 schema 化缺的那半边）──
+# 有些参数是**闭集**：只认几个固定取值，别的一律无效。此前这个闭集只活在两处
+# **散文**里——`Annotated` 的说明文字 + 工具体内的判据，而且那判据四种形态各异：
+#   `toggle_effect` 的 effect/action  → `if x not in (...)` 显式拒（见本文件 :670）
+#   `get_article_detail` 的 doc_type  → 查表 `KeyError`（表在工具体内）
+#   `toggle_dark_mode` 的 mode        → 无判据（非 "on" 一律当 off）
+#   `get_moderation_status` 的 status → 无判据（落回混合视图，**静默**）
+# 于是机器侧没有任何地方读得到它：`skills.check_skill_params` / `check_call_args`
+# 只能判"类型对不对"，判不了"值在不在闭集里"（`skills.py` 那段"枚举没有来源"
+# 的注记说的就是这件事）。后两种形态正是"臆造一个看着合理的值"最坏的去处：
+# 一个静默给出另一份数据、一个白烧一轮。
+# 现在把闭集**写在类型上**（`Literal[...]`）：pydantic 会把它渲染进工具的 JSON
+# Schema（`{"enum": [...]}`），参数校验层从 `tool_arg_schemas()` 直接派生 ⇒
+# **单一来源，没有第二份手写名单**（手写名单是漏项来源，同 20260913 / 20260925
+# 两次教训）。校验被拒时走"参数不齐"那条友好的同轮纠偏（零工具 + 一句列出合法
+# 取值的事实），**不是** pydantic 的 `__ERROR__` 帧。
+#
+# 两条边界（都实测过，别顺手"统一"）：
+#   · **带别名归一层的参数刻意保持 `str`**：`audit_board_comment.verdict` /
+#     `set_article_status.status` / `update_tag.to_level` / `delete_tag.level` 都
+#     接受中文或口语写法（`通过`/`公开`/`一级`/`1`，见 `adminops._*_ALIASES`），
+#     而 **pydantic 在工具体之前跑**——写成 `Literal["pass","reject"]` 会让
+#     `通过` 在归一化那一步之前就被拒，把一条刻意做出来的容错通道关死。
+#     那几族的闭集来源仍是 `adminops` 的别名表（本来就是单一来源）。
+#   · 工具体内原来的判据**保留**（纵深）：本文件以外的直接调用方（测试、内部重构、
+#     将来新增的通道）不经过参数校验层，那一层仍然兜底——`toggle_effect` 的
+#     `if x not in (...)` 不删；`doc_type` 的查表 `KeyError` 也不改成静默兜底
+#     （静默兜底会把它变成和 `status` 同一种坏法）。
 
 
 def _shape(data) -> str:
@@ -286,7 +316,8 @@ def _note_row_with_tag_names(row):
 @tool
 def get_article_detail(
     article_id: Annotated[int, "文档的唯一 ID（note 为 noteKey，talk/board 为 talkKey，announcement 为 id）"],
-    doc_type: Annotated[str, "文档类型：note（文章，默认）/ talk（说说）/ board（留言）/ announcement（公告）"] = "note",
+    doc_type: Annotated[Literal["note", "talk", "board", "announcement"],
+                        "文档类型：note（文章，默认）/ talk（说说）/ board（留言）/ announcement（公告）"] = "note",
     section: Annotated[str, "只读该文章的某一小节（标题全称/编号/唯一子串，如 \"9\" 或 \"9. 部署与运维\"）；留空读全文"] = "",
 ) -> str:
     """获取指定文档的内容（路线 B 契约的解读段：检索只定位、解读读全文）。
@@ -316,6 +347,9 @@ def get_article_detail(
         if not section or not isinstance(data, dict):
             return _shape(data)          # 故障（unavailable）与查无此篇（not_found）原样透出，都不伪装成空
         return _read_section(data, article_id, section)
+    # 这张表就是 `doc_type` 的闭集（类型上的 `Literal` 与它逐字相同）；查表仍可能
+    # KeyError——那是**直接调用方**（本文件以外、不走参数校验层）传了表外取值，
+    # 走 __ERROR__ 帧如实暴露，不算静默失败。
     endpoint, key_field = {
         "talk": ("/talk", "talkKey"),
         "board": ("/board", "talkKey"),
@@ -630,8 +664,9 @@ def navigate_to(
 
 @tool
 def toggle_effect(
-    effect: Annotated[str, "Effect name: sakura(樱花), rain(大雨), snow(雪花)"],
-    action: Annotated[str, "开启还是关闭: on(开启), off(关闭)"] = "on",
+    effect: Annotated[Literal["sakura", "rain", "snow"],
+                      "Effect name: sakura(樱花), rain(大雨), snow(雪花)"],
+    action: Annotated[Literal["on", "off"], "开启还是关闭: on(开启), off(关闭)"] = "on",
 ) -> str:
     """开启或关闭博客页面的视觉效果（樱花/大雨/雪花）。
     系统按本工具的执行回执驱动前端开关（按 action 显式开合，不因重复命令翻转状态）。
@@ -651,7 +686,7 @@ def toggle_effect(
 
 @tool
 def toggle_dark_mode(
-    mode: Annotated[str, "夜间模式开关: on(开启夜间模式), off(关闭夜间模式)"],
+    mode: Annotated[Literal["on", "off"], "夜间模式开关: on(开启夜间模式), off(关闭夜间模式)"],
 ) -> str:
     """开启或关闭博客页面的夜间模式（暗色主题）。
     系统按本工具的执行回执驱动前端切换；状态会持久化记忆。"""
@@ -1013,7 +1048,7 @@ def get_service_health() -> str:
 @tool
 def get_moderation_status(
     config: RunnableConfig,
-    status: Annotated[str | None,
+    status: Annotated[Literal["ai_passed", "ai_rejected", "pending"] | None,
                       "只列某一类明细：ai_passed=AI 直接通过的 / ai_rejected=AI 驳回的 / "
                       "pending=需要人工复批的；不填则三类各列最近几条（其余只计数）"] = None,
 ) -> str:

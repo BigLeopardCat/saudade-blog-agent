@@ -1893,12 +1893,42 @@ PLAN_STATUS_ABSENCE_EXEMPT = PLAN_STATUS_NAV_NOTE + ("param_missing", "refused")
 
 def instantiate_plan(skill_name: str, params: dict,
                      role: str | None = None) -> dict:
+    """公开入口：`_instantiate_plan` 的产物 + **统一补齐 `param_unknown`**。
+
+    **为什么要有这层薄壳**（20260926 批 5）：`param_unknown`（"planner 写了、没人读"的
+    参数名）此前**只有两个分支填**——navigate 与通用模板，因为只有那两条路调用了
+    `check_skill_params`。写技能（`_expand_*`）、content_query、read_article 三条路
+    **从不填** ⇒ planner 在那些技能里写的臆造参数名**完全无声**：既不记账也不纠偏，
+    工具照常执行、planner 以为自己填的东西被读了。全量 951 份 trace 实测：1157 次决策里
+    有 **69 处**"没人读的参数名"，其中 **68 处是静默的**（唯一的例外是一次 chat 的
+    `reply`，它恰好走通用分支）——按技能分：`navigate.mode` 58（该校验 20260925 才接上）、
+    `tag_create.parent_id` 8（**写技能分支从未接线**，正是 20260921 那次事故的现场：
+    参数被静默忽略、标签建到了错的层级）、`chat.reply/response` 3。
+
+    做成壳而不是"每个分支记得填"：**唯一入口谁都漏不掉**（同本仓"枚举只有一个入口"
+    `iter_trace_files` 的纪律）。语义与既有完全相同——`[n for n in params if n not in
+    specs]` 就是 `check_skill_params` 的 `unknown`，所以已经填过的那两条分支取值不变。
+    **只记账不阻断**（既有语义：工具照常执行，planner_node 打 WARNING + trace 事件）。
+    """
+    plan = _instantiate_plan(skill_name, params, role)
+    if isinstance(params, dict) and isinstance(plan, dict):
+        sk = SKILL_MAP.get(plan.get("skill"))
+        if sk is not None:
+            specs = skill_param_specs(sk)     # 与两个分支读的是同一份规格
+            plan["param_unknown"] = [n for n in params if n not in specs]
+    return plan
+
+
+def _instantiate_plan(skill_name: str, params: dict,
+                      role: str | None = None) -> dict:
     """技能模板 + 参数 → 结构化计划。
 
     返回 {"skill", "tools"(list[str]), "note"(str), "reply"(str), "chat"(bool),
     "status"(str)}。planner_node 据此编码 plan 字段文本。`status` 是本函数的
     **确定性产出**（见 `PLAN_STATUS_VALUES` 那段）——planner LLM 一个字都不填，
     它吐的是自由文本、没有这个字段，指望它自评就等于把判据交回给模型。
+    `param_unknown` 由**外面的公开入口**统一补齐（见 `instantiate_plan` 的注），
+    本函数里的那几个分支是历史现场——**别照着它们逐分支补**，也别删那层壳。
     特殊处理：
       - navigate：target 经 NAV_MAP 映射；映射为 None（已下线）→ 不调用工具、如实告知；
         未识别别名 → 如实告知没有该页面；confirm **恒 False**（20260926 删掉 mode 参数：
@@ -2260,8 +2290,14 @@ def _skill_no_calls_suffix(skill_name: str) -> str:
 #   · **推不出映射的参数**（navigate 的 target、content_query 的 tools/calls、
 #     read_article 的 article_id：由技能自己的代码消费）→ 类型 `any`，**不校验类型**，
 #     只保留散文说明；
-#   · **枚举没有来源**：工具的 JSON Schema 里没有 `enum`（闭集只活在说明文字与工具
-#     体内）⇒ 本层不造枚举表。要收紧闭集，先给工具加 `Literal[...]` 注解。
+#   · **枚举的来源 = 工具类型上的 `Literal[...]`**（20260926 批 5 落地）：闭集写在
+#     参数类型上 ⇒ pydantic 渲染进工具的 JSON Schema（`{"enum": [...]}`），本层用
+#     `arg_enum()` 派生（`ParamSpec.choices`），**不造第二份手写枚举表**。此前这条
+#     注释写的是"枚举没有来源 ⇒ 本层不造枚举表"——那句在工具侧补上 `Literal` 之后
+#     就过期了，改的是**工具**、不是在这里手抄一份。
+#     ⚠️ **带别名归一层的参数仍然没有枚举**（`audit_board_comment.verdict` 的
+#     `通过`/`驳回` 等）：pydantic 跑在工具体之前，写成 `Literal` 会先拒掉中文写法，
+#     把关不掉的那条容错通道关死——那几族的闭集来源仍是 `adminops` 的别名表。
 _NO_DEFAULT = object()   # 哨兵：`default=None` 在 schema 里是有意义的（可空参数），不能拿 None 当"没默认值"
 
 
@@ -2273,6 +2309,11 @@ class ParamSpec:
     default: Any = _NO_DEFAULT
     desc: str = ""             # 中文说明（就是 `inputs` 里的那句散文）
     from_tool: str = ""        # 派生自哪个工具的哪个参数（空 = 推不出映射）
+    # 闭集取值（来自工具 schema 的 `enum`；空 = 这个参数没有闭集，**不是**"闭集为空"）。
+    # 只用于**校验**，不进 `render_skill_params`（菜单逐字节不动——`Literal` 不改变
+    # `arg_type_short` 的结果，所以菜单本来也不会变，但这条要说清楚：想印进菜单是
+    # 另一件事，会改 planner 提示词，得单独拍板）。
+    choices: tuple[str, ...] = ()
 
 
 # JSON-Schema 属性片段 → 短类型名。**纯展示与校验共用的写法映射**，不是判据本身。
@@ -2296,6 +2337,33 @@ def arg_type_short(spec: object) -> str:
     if isinstance(t, list):
         t = next((x for x in t if x != "null"), None)
     return TOOL_ARG_TYPE_SHORT.get(str(t), str(t)) if isinstance(t, str) else "?"
+
+
+def arg_enum(spec: object) -> tuple[str, ...]:
+    """JSON-Schema 的属性片段 → 闭集取值（`enum`）；没有闭集 → 空元组。
+
+    闭集的来源是**工具类型上的 `Literal[...]`**（见 `tools/base.py` 那段契约），这里
+    只做派生，不判谁该有闭集。
+
+    ⚠️ 可空参数（`Optional[Literal[...]]`）的 `enum` **嵌在 `anyOf` 里**、不在顶层：
+    `{"anyOf": [{"enum": [...], "type": "string"}, {"type": "null"}]}`（pydantic 2.13
+    实测）。只看顶层会得出"它没有闭集"——`get_moderation_status.status` 正好是这一格
+    （而它恰恰是那个**静默失效**的参数，见 `check_skill_params` 的注）。所以遍历写法
+    与 `arg_type_short` **逐字同构**：两处各写一套必然漂移成"一个读得到一个读不到"。
+    """
+    if not isinstance(spec, dict):
+        return ()
+    for key in ("anyOf", "oneOf"):
+        cand = spec.get(key)
+        if isinstance(cand, list):
+            for one in cand:
+                got = arg_enum(one)
+                if got:
+                    return got
+    e = spec.get("enum")
+    if isinstance(e, list) and e and all(isinstance(x, str) for x in e):
+        return tuple(e)
+    return ()
 
 
 _TOOL_ARG_SCHEMAS: dict[str, dict] = {}   # 工具名 → {"properties": {...}, "required": frozenset}（首次用时建一次）
@@ -2367,7 +2435,8 @@ def skill_param_specs(skill: Skill) -> dict[str, ParamSpec]:
                               required=required,
                               default=default,
                               desc=str(desc),
-                              from_tool=f"{tool_name}.{arg}" if tool_name else "")
+                              from_tool=f"{tool_name}.{arg}" if tool_name else "",
+                              choices=arg_enum(prop) if prop else ())
     # 必填以**技能自己的声明**为准（工具形状只给了个默认）——技能参数与工具参数
     # 不是同一层：`device_display.text` 在 pydantic 里必填，但技能在代码侧被空参调用
     # （文案由执行层创作），这种"形状必填、策略可选"的分叉必须由技能自己说清楚。
@@ -2460,6 +2529,27 @@ def _coerce_value(want: str, value: Any) -> tuple[bool, Any]:
     return True, value      # 不认识的类型标记：不拦（宁可少说）
 
 
+def _bad_choice(name: str, value: Any, choices: tuple[str, ...]) -> str | None:
+    """值不在闭集里 → 一句"为什么用不了"（含**合法取值**）；在闭集里/没有闭集 → None。
+
+    与 `_coerce_value` 的分工：那个判"类型收不收得下"，这个判"值在不在闭集里"，合起来
+    才是"这个参数能不能用"。**为什么必须补这一条**（20260926 批 5）：闭集此前只活在
+    散文说明与工具体内 ⇒ 一个**看似合理的臆造值**（`doc_type="article"`、
+    `status="ai_reject"`）会一路走到工具，然后分两种坏法：
+      · 撞 `KeyError` → `__ERROR__` 帧（白烧一轮，且 planner 从错误里读不出合法取值）；
+      · 被工具**静默降级**成默认视图——`get_moderation_status.status` 落到
+        `render_moderation_status` 的 `focus = status if status in FOCUS_NAMES else None`，
+        回的是混合视图，而叙述完全可以把它说成"这些是被驳回的"，**答错且无声**。
+    报成 `bad` ⇒ 与"缺必填/类型不对"走同一条道：零工具 + 这句事实交回 planner 同轮改，
+    不猜、也不烧工具轮。合法取值直接印在这句话里（planner 下一轮就看得见）。
+    """
+    if not choices or not isinstance(value, str):
+        return None
+    if value in choices:
+        return None
+    return f"{name}={value!r}（不在可选值里：{' / '.join(choices)}）"
+
+
 def check_skill_params(skill: Skill, params: dict,
                        specs: dict[str, ParamSpec] | None = None) -> dict:
     """PARAMS 事前校验（纯函数）→ `{"fixed": [...], "unknown": [...], "missing": [...], "bad": [...]}`。
@@ -2489,7 +2579,12 @@ def check_skill_params(skill: Skill, params: dict,
         ok, got = _coerce_value(specs[name].type, value)
         if not ok:
             bad.append(f"{name}={value!r}（{got}）")
-        elif got is not value and got != value:
+            continue                  # 类型都不对，闭集无从谈起
+        why = _bad_choice(name, got, specs[name].choices)
+        if why:
+            bad.append(why)
+            continue                  # 值不在闭集里：**不要**再记成"归一过"（会自相矛盾）
+        if got is not value and got != value:
             fixed.append(f"{name} {value!r}→{got!r}")
     for name, sp in specs.items():
         if sp.required and params.get(name) in (None, ""):
@@ -2597,7 +2692,14 @@ def check_call_args(tool_name: str, args: dict) -> dict:
             continue
         ok, got = _coerce_value(want, value)
         if ok:
-            out[name] = got
+            # 闭集校验与技能参数那条**同源同判**（`arg_enum` 读同一份工具 schema）。
+            # 今天 calls 白名单里的工具只有 `get_article_detail.doc_type` 带闭集——
+            # 而它此前正是"臆造值 ⇒ 字典 KeyError ⇒ __ERROR__ 帧"的那一格。
+            why = _bad_choice(name, got, arg_enum(props[name]))
+            if why:
+                bad.append(why)
+            else:
+                out[name] = got
         else:
             bad.append(f"{name}={value!r}（{got}）")
     for name in req:

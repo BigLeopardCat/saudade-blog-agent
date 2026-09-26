@@ -11,7 +11,7 @@ heredoc——结论不可复核、口径每次都不一样，而且**同一段�
 清单逐条印现场供人分类，脚本不替人下结论（元讨论引述与真事故在字面上长得一样，
 机器分不干净——这正是它只列不判的理由）。要盯"有没有新增"，用 `--compare` 比基线。
 
-四条不变量：
+五条不变量：
   I1 `reply_cmd_prefix`        终稿正文里出现命令前缀标签
                                （`AUTO_NAVIGATE:` / `NAVIGATE:` / `EFFECT:` / `DARKMODE:`）
                                按"本轮有没有真命令回执"分两型——
@@ -49,6 +49,21 @@ heredoc——结论不可复核、口径每次都不一样，而且**同一段�
   I4 `fallback_total`          gate fallback 总数 = 生产侧 `__RESET__` 帧数。
                                **`0` 有强含义**：这个窗口里 gate 那条路一次都没被验到，
                                别读成"系统很干净"（golden 侧 `resets=0` 的同一条纪律）。
+  I5 `param_unread`            每次 `planner` 决策的 `PARAMS` 里，两类"机器侧本来能判、
+                               但此前没人判"的东西（20260926 批 5）：
+                                 `unread`        参数名不在该技能的参数表里（planner 以为
+                                                 填了、其实没人读）——按该轮**有没有**
+                                                 `planner.param_unknown` 事件分
+                                                 `reported` / `silent`；
+                                 `enum_illegal`  取值不在**闭集**里（闭集 = 工具类型上的
+                                                 `Literal[...]`，经 `arg_enum` 派生；含
+                                                 `PARAMS.calls[].args` 那一层）。
+                               批 5 的判据是后者的 `executed` 一栏 = **0**：非法取值若还
+                               让 `TOOLS` 行非空，说明校验没接在这条路上，那一轮会白烧成
+                               一次 pydantic 报错（或更坏：静默降级成混合视图）。⚠️ 与
+                               I1/I2 同一条口径纪律：`silent` 在**历史**窗口里高不奇怪
+                               （navigate 的 `mode` 参数 20260926 才删，当时它是合法输入），
+                               要看的是 `--from <上线日>` 的新窗口。
 
 用法（cd saudade-blog-agent）：
   .venv/bin/python eval/corpus_invariants.py                    # 全量语料，只列不写
@@ -75,7 +90,8 @@ from trace_io import load_trace  # noqa: E402
 # 这里刻意不复写一份：批 2 之后 trace 里的命令是结构化 `cmd`，与 golden/server 那边
 # 重建出来的是同一件东西，各写一份就是漂移（同 `_cmd_wire` 的文档字符串）。
 from agent.graph import _cmd_wire  # noqa: E402
-from agent.skills import PLAN_STATUS_VALUES  # noqa: E402
+from agent.skills import (PLAN_STATUS_VALUES, SKILL_MAP,  # noqa: E402
+                          arg_enum, skill_param_specs, tool_arg_schemas)
 
 TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report")
@@ -93,9 +109,64 @@ def _ev(d: dict, node: str, event: str) -> list:
             if e.get("node") == node and e.get("event") == event]
 
 
+def _enum_illegal(schemas: dict, tool: str, arg: str, value) -> bool:
+    """取值是不是"不在闭集里"。闭集从工具 schema 派生（`arg_enum`）——**不手写**：
+    手写一份就与工具漂移，而且这种漂移是静默的（判据还在跑、判的东西已经不是那个了）。"""
+    if not isinstance(value, str):
+        return False                      # 非字符串闭集本仓没有；类型问题归 check_* 判
+    prop = ((schemas.get(tool) or {}).get("properties") or {}).get(arg)
+    ch = arg_enum(prop) if prop else ()
+    return bool(ch) and value not in ch
+
+
+def _i5_rows(d: dict, decs: list) -> list:
+    """I5：`PARAMS` 里"没人读的参数名"与"不在闭集里的取值"。
+
+    判据读的是 trace 里记下的 `params`/`tools`（**当轮的计划**），不是今天的代码回放——
+    所以历史窗口里命中不等于当时违规（navigate 的 `mode` 参数 20260926 才删，在那之前
+    它是合法输入）。这也是 `--from` 开新窗口这条纪律存在的原因。
+    """
+    evs = d.get("events", [])
+    reported = set()
+    for e in evs:
+        if e.get("node") == "planner" and e.get("event") == "param_unknown":
+            reported |= {str(n) for n in (e.get("names") or [])}
+    schemas = tool_arg_schemas()
+    rows = []
+    for e in decs:
+        params = e.get("params")
+        sk = SKILL_MAP.get(e.get("skill"))
+        if not isinstance(params, dict) or sk is None:
+            continue
+        specs = skill_param_specs(sk)
+        # `TOOLS` 行非空 = 这一轮**真的打算执行**（批 0 之后它就是"参数过了校验"的证据）
+        executed = bool(e.get("tools") or [])
+        for n, v in params.items():
+            if n not in specs:
+                rows.append({"kind": "unread", "name": n, "skill": sk.name,
+                             "round": e.get("round"), "reported": n in reported,
+                             "executed": executed})
+            elif specs[n].choices and isinstance(v, str) and v not in specs[n].choices:
+                rows.append({"kind": "enum_illegal", "name": n, "value": str(v)[:40],
+                             "skill": sk.name, "round": e.get("round"),
+                             "reported": n in reported, "executed": executed})
+        calls = params.get("calls")            # calls[].args 那一层同判
+        if isinstance(calls, list):
+            for c in calls:
+                args = c.get("args") if isinstance(c, dict) else None
+                if not isinstance(args, dict):
+                    continue
+                for an, av in args.items():
+                    if _enum_illegal(schemas, str(c.get("tool") or ""), an, av):
+                        rows.append({"kind": "enum_illegal", "name": an, "value": str(av)[:40],
+                                     "skill": sk.name, "round": e.get("round"),
+                                     "reported": an in reported, "executed": executed})
+    return rows
+
+
 def scan_one(d: dict) -> dict:
-    """单份 trace 的命中（返回 {i1: [...], i2: [...], i3: [...], i4: n}）。"""
-    out = {"i1": [], "i2": [], "i3": [], "i4": 0}
+    """单份 trace 的命中（返回 {i1: [...], i2: [...], i3: [...], i4: n, i5: [...]}）。"""
+    out = {"i1": [], "i2": [], "i3": [], "i4": 0, "i5": []}
     evs = d.get("events", [])
 
     # ── I1 终稿正文里的命令前缀 ────────────────────────────────────────────
@@ -142,6 +213,9 @@ def scan_one(d: dict) -> dict:
     out["i3"] = [{"issue": e.get("issue"), "skill": e.get("skill"),
                   "clause": str(e.get("clause") or "")[:80].replace("\n", " ")} for e in fbs]
     out["i4"] = len(fbs)
+
+    # ── I5 PARAMS 里没人读的参数名 / 不在闭集里的取值 ──────────────────────
+    out["i5"] = _i5_rows(d, decs)
     return out
 
 
@@ -170,10 +244,20 @@ def scan(since: str, until: str) -> dict:
         for x in one["i3"]:
             counts[f"i3_{x['issue']}"] += 1
         counts["i4"] += one["i4"]
+        for x in one["i5"]:
+            counts[f"i5_{x['kind']}"] += 1
+            if x["reported"]:
+                counts[f"i5_{x['kind']}_reported"] += 1
+            else:
+                counts[f"i5_{x['kind']}_silent"] += 1
+            if x["kind"] == "enum_illegal" and x["executed"]:
+                counts["i5_enum_illegal_executed"] += 1
         for x in one["i1"]:
             hits[f"i1_{x['kind']}"].append({"stamp": stamp, "uid": uid, **x})
         for x in one["i2"]:
             hits["i2"].append({"stamp": stamp, "uid": uid, **x})
+        for x in one["i5"]:
+            hits[f"i5_{x['kind']}"].append({"stamp": stamp, "uid": uid, **x})
         for x in one["i3"]:
             hits[f"i3_{x['issue']}"].append({"stamp": stamp, "uid": uid, **x})
     return {"window": [since or "begin", until], "files": len(files), "in_window": n_win,
@@ -197,16 +281,31 @@ def report(r: dict) -> None:
           f"{'   ← 0 表示这条路这次没被验到，不是「干净」' if not c.get('i4') else ''}")
     i3 = sorted((k[3:], v) for k, v in c.items() if k.startswith("i3_"))
     print("I3 按原因码：" + ("  ".join(f"{k}={v}" for k, v in i3) if i3 else "（无）"))
+    print(f"I5 PARAMS 没人读的参数名 = {c.get('i5_unread', 0)}"
+          f"   （报告过 {c.get('i5_unread_reported', 0)} / 静默 {c.get('i5_unread_silent', 0)}）"
+          f"  ← 要看的是**静默**那一栏在新窗口里归零（历史窗口高是正常的，见头注）")
+    print(f"   取值不在闭集里 = {c.get('i5_enum_illegal', 0)}"
+          f"   （其中**照常执行**的 {c.get('i5_enum_illegal_executed', 0)}）"
+          f"  ← 批 5 的判据就是这个「照常执行」= 0（现在应表现为零工具 + 同轮纠偏）")
     for cat in sorted(r["hits"]):
         rows = r["hits"][cat]
         print(f"\n── {cat}（{len(rows)} 条）" + ("  ★ 批 2 的目标清单" if cat == "i1_cited" else ""))
+        _by_name = defaultdict(int)
         for x in sorted(rows, key=lambda x: x["stamp"]):
             tail = x.get("clause") or x.get("reply") or x.get("at") or ""
             extra = f" issue={x['issue']}" if x.get("issue") else ""
             extra += f" skill={x['skill']}" if x.get("skill") else ""
             extra += f" receipts={x['receipts']}" if "receipts" in x else ""
             extra += f" [{x['bucket']}]" if x.get("bucket") else ""
+            if cat.startswith("i5_"):
+                # 这一族**逐条印会淹掉屏幕**（实测 69 条未读参数名），改印"按名字归并"
+                # 的一行——名字相同就是同一处接线缺口，逐条列的是同一个原因重复 N 遍。
+                _by_name[f"{x['skill']}.{x['name']}"] += 1
+                continue
             print(f"  {x['stamp']} u{x['uid']}{extra}  {tail}")
+        if cat.startswith("i5_"):
+            for k, n in sorted(_by_name.items(), key=lambda y: -y[1]):
+                print(f"  {k}  ×{n}")
 
 
 def main() -> int:
