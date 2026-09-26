@@ -5621,6 +5621,25 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     收集的 spec 同时要过**目标有据**（id 必须本轮读到过/页面上下文/用户点名），
     否则弹出来的是"要不要把文章 12 设为私密"而 12 是编的：确认框会把一个幻觉
     洗成一条已授权的写。没据的走既有 unknown_target 链路（先去读、再回来）。
+
+    **返回值是两种出口，`kind` 是判别键**（20260927 修，见下）：
+
+      · `{"kind": "confirm", "pending_confirm": {…}}` —— 要弹卡的那一批；
+      · `{"kind": "noop", "noop_text": …, "noop_note": …}` —— 这一批**没有一件需要动**
+        （状态本来就已是目标值），不弹卡、零执行、回复由 `render_noop_text` 确定性给出。
+
+    **为什么补这个判别键**（生产实证，不是防患于未然）：调用方原先只写了
+    `popup["pending_confirm"]` 一条路，于是第二种出口一命中就 `KeyError('pending_confirm')`
+    ——异常冒到流级 `__ERROR__`，主人在气泡里看到的是「网络错误: 'pending_confirm'」。
+    20260927 07:29 生产真机复现（待办「解冻 niuniu」本来就是完成状态）。
+    形如"一个位置返回两种形状、调用方只认其中一种"的坑，本仓已有同族前例
+    （剔空纠偏：'两者长得一样'）。判别键让"这是哪种出口"变成一个**读得到的字段**，
+    而不是靠"哪个键恰好在场"去猜；`execute_node` 遇到认不出的 kind **响亮失败**
+    （不弹、零执行），不再有静默走错分支的余地。
+
+    ⚠️ 判别键**不许进 state**：`execute_node` 会把它剥掉再返回（`AgentState` 里没有
+    `kind` 字段，LangGraph 对未声明的键是**静默丢弃**——那正是本仓 `config 注入静默失效`
+    那一族的形状）。
     """
     grant = state.get("confirm_grant")
     if grant or authz.is_question_like(user_msg):
@@ -5807,7 +5826,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         note = ("状态已是目标值（" + "、".join(str(x.get("tool") or "") for x in already)
                 + "），本轮零改动")
         logger.info("[execute] 写操作的状态已达成 → 不弹卡、零执行: %s", note)
-        return {"noop_text": text, "noop_note": note, "messages": [],
+        return {"kind": "noop", "noop_text": text, "noop_note": note, "messages": [],
                 "receipts": list(state.get("receipts") or [])}
     conv_id = (config or {}).get("configurable", {}).get("conversation_id")
     token = confirm.sign(principal.uid, conv_id, _plan_skill(state), picks)
@@ -5827,6 +5846,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             {"label": "取消", "value": "no", "kind": "default"}]
     expires_at = confirm.token_expiry(token)
     return {
+        "kind": "confirm",
         "pending_confirm": {
             "q": question,
             "opts": opts,
@@ -5925,14 +5945,38 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 混排只可能是将来），而"问一句"这件事本身不该以执行一半为代价。
     popup = _confirm_popup(state, specs, principal, user_msg, config)
     if popup is not None:
-        record("execute", "consent_popup", principal=str(principal),
-               specs=",".join(s["tool"] for s in popup["pending_confirm"]["specs"]))
-        logger.info("[execute] 写操作未判成命令 → 弹确认框（零执行）: %s",
-                    ",".join(s["tool"] for s in popup["pending_confirm"]["specs"]))
+        # 两种出口（见 `_confirm_popup` 的返回契约）：`confirm` 弹卡、`noop` 零改动收尾。
+        # **按 `kind` 分派，不按"哪个键恰好在场"猜**——20260927 07:29 生产事故就是
+        # 只认前者：noop 出口一命中即 `KeyError('pending_confirm')`，异常冒到流级
+        # `__ERROR__`，主人在气泡里看到「网络错误: 'pending_confirm'」。
+        kind = str(popup.get("kind") or "")
+        # 判别键**剥掉再进 state**：`AgentState` 没有 `kind` 字段，未声明的键被
+        # LangGraph **静默丢弃**（不是报错）⇒ 留着只会让人以为它被记下来了。
+        body = {k: v for k, v in popup.items() if k != "kind"}
         # receipts 原样带回（本轮零执行，累计值不变）：execute 的 updates 里
         # 这个键是**形状契约**的一部分（多数轮次都带它），缺一次就让"回执累计"
         # 的消费方少一次更新——测试与 server 都按"每轮都有"读它。
-        return dict(popup, messages=[], receipts=list(state.get("receipts") or []))
+        if kind == "confirm":
+            _tools = ",".join(s["tool"] for s in popup["pending_confirm"]["specs"])
+            record("execute", "consent_popup", principal=str(principal), specs=_tools)
+            logger.info("[execute] 写操作未判成命令 → 弹确认框（零执行）: %s", _tools)
+        elif kind == "noop":
+            # 过程行与日志已在 `_confirm_popup` 里记过（那里知道 `already` 的明细），
+            # 这里只补一条执行侧的接线证据，便于事后确认"这一轮真走到了新出口"
+            # （`record` 的第二个位置参数就是 event，**别再传 `node=`**——
+            # 那是它的第一个形参，重名会被解释成"给了两个 node"）。
+            record("execute", "noop_exit", via="execute_node")
+            logger.info("[execute] 状态已达成 → 走零改动出口（不弹卡、零执行）")
+        else:
+            # 认不出的判别键 = 生产端与消费端漂移，**响亮失败**：宁可这一轮如实收尾，
+            # 也不能拿一个来路不明的 dict 去当弹卡批次返回（那正是刚才那类事故的形状）。
+            logger.error("[execute] 确认出口的判别键认不出（kind=%r，键=%s）→ 本轮零执行、"
+                         "按零改动收尾", kind, sorted(popup))
+            record("execute", "popup_kind_unknown", kind=kind, keys=sorted(popup))
+            return {"noop_text": "这一步现在没有需要改动的地方，我就没有动手。",
+                    "noop_note": f"确认出口判别键认不出（{kind or '空'}），本轮零改动",
+                    "messages": [], "receipts": list(state.get("receipts") or [])}
+        return dict(body, messages=[], receipts=list(state.get("receipts") or []))
     results: list = []
     receipts = list(state.get("receipts") or [])  # 请求内累计（与 executed 同模式）
     blocked: list = []                            # 只含本轮受阻项（路由/reflector 用）
