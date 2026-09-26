@@ -231,6 +231,10 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
         # 签发那一轮与兑现那一轮的会话必须一致。用例不写 = None（两轮都是 None，
         # 同样自洽）；写了就照抄进两轮——这正是生产上"同一张卡片"的坐标。
         conversation_id=ctx.get("conversation_id"),
+        # 跨轮任务状态（20260927 批 D）：Rust 读侧交回来的 `agent_tasks` 原文
+        # （JSON 数组串）。**用例不写 = 空串**（既有 148 条全都不写 ⇒ 零变化；
+        # 单轮用例本来也读不回任何东西，见 eval/task_state_probe.py 头注）。
+        agent_tasks=ctx.get("agent_tasks", ""),
     )
 
 
@@ -317,6 +321,15 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             _build_messages(req, confirm_grant=confirm_grant), "golden_thread", queue,
             loop, req.user_id, None, principal, confirm_grant, req.conversation_id,
             _ledger,
+            # 未完结任务原文（20260927 批 D）：**与生产 `/chat/stream` 的调用点逐字对齐**。
+            # 漏传的后果是**静默的、而且只在半条链路上**：注入侧照样把「本会话未做完的事」
+            # 渲染进 system 上下文（那一步读的是 `req`，在 `_build_messages` 里），
+            # 而流尾的确定性结算拿到的是空串 ⇒ 永远发不出 `__TASK__` 回写帧、
+            # `producer.task_inject` 恒 `n=0`——探针此前报"注入了却没人推进"就是这个
+            # （实测：模型明明认下了那件事并把它做了，游标却纹丝不动）。
+            # 同族前例见 `build_request` 的注（20260920 漏 `executions` 让 3 条用例
+            # 在隔离跑法下必然假失败）——**同一份调用表有两处，就会有两处漂移**。
+            req.agent_tasks,
         ).result()
     t.join()
     loop.close()
