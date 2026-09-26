@@ -99,7 +99,8 @@ from agent.skills import (DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
                           FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
                           _WRITE_NAME_TARGET_SKILLS, arg_type_short,
                           build_planner_context, callable_query_tools,
-                          instantiate_plan, visible_skills)
+                          instantiate_plan, param_problem_note,
+                          skill_param_specs, visible_skills)
 from utils import trace as trace_mod
 from utils.trace import record
 
@@ -593,7 +594,11 @@ _PLANNER_PROMPT = """\
      不要自行推算或改写时间。它记的是你的执行，**不是访客的浏览痕迹/前端上报
      的页面状态**——不许拿"那是访客行为记录"当理由否认自己执行过）。
      记录里有对应执行 → 选 chat 直接收尾，据记录如实
-     转述（含「」内实际内容/路径/开关状态以及发生时间），不规划任何工具、不重发；
+     转述（含「」内实际内容/路径/开关状态以及发生时间；**只抄「」里那一段**——
+     `AUTO_NAVIGATE:`/`NAVIGATE:`/`EFFECT:`/`DARKMODE:` 这些**前缀标签一个字都
+     不许进正文**，哪怕回执原文是连着前缀写的：20260926 实测过，照抄前缀的回复
+     会被系统判成"假装发命令"整段拦掉，主人反而看不到那句如实的话），
+     不规划任何工具、不重发；
      记录里没有对应执行 → 也选 chat 收尾，如实说"系统记录里没有这次执行"，
      不编造、不否认回执、不为了"补做"重新规划执行
    - 若质疑的是"某页面/内容是否存在"（"真有这个页面？""确定有这篇？"）→
@@ -1416,6 +1421,12 @@ _CONTENT_TOOLS = frozenset({
 # 以为已执行）。任何轮次命中一律兜底——叙述纪律已禁止，命中即确凿违规。
 # 20260920 收窄（元讨论豁免）：**提及**不是发命令（见 _cmd_prefix_directive）。
 _CMD_PREFIX_RE = re.compile(r"(?:AUTO_NAVIGATE|NAVIGATE|EFFECT|DARKMODE)\s*[:：]")
+# 前缀 + 载荷（20260926）：给"这句命令在这一轮真的被执行过吗"做核对用（见
+# `_cmd_prefix_corroborated`）——只有前缀没有载荷（模型只写了 `NAVIGATE:`）时
+# 组 2 为空、无法核对，按"没核对上"处理。载荷字符集刻意收在 URL/开关值域内
+# （到空白、常见标点、成对符号为止），避免把后面半句中文一起吃进来。
+_CMD_PREFIX_PAYLOAD_RE = re.compile(
+    r"(AUTO_NAVIGATE|NAVIGATE|EFFECT|DARKMODE)\s*[:：]\s*([^\s，。；、）」』\"'`]+)")
 # 机制/元讨论语境标记（同句出现 ⇒ 那句话在**讲命令机制**，不是在发命令）
 _CMD_META_RE = re.compile(
     r"系统|命令|前缀|正则|协议|帧|机制|实现|代码|文档|校验|核对|拦截|拦下|剔除|过滤"
@@ -2248,7 +2259,8 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                  exec_memory: bool = False,
                  exec_search_evidence: bool = False,
                  has_popup: bool = False,
-                 ledger: dict | None = None) -> tuple[str, str, str] | None:
+                 ledger: dict | None = None,
+                 frames_text: str = "") -> tuple[str, str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本, **被否掉的那一句**)；有据/无声称 → None。
 
@@ -2258,7 +2270,9 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
 
     作用域（20260903 收窄后的设计 + 20260919 两洞 + 20260920 洞③）：
       - 任何轮：命令前缀文本（_cmd_prefix_directive——引号/内联代码区 + 同句机制词
-        = 元讨论里的提及，放行；见该函数注释与 golden `forbid_fallback`）
+        = 元讨论里的提及，放行；见该函数注释与 golden `forbid_fallback`）。
+        兜底文案要**如实**：帧里有同一个动作（同一轮的收据里就写着那串命令）时
+        不能说"什么都没做"（20260926，见 `_cmd_prefix_fallback_text`）
       - 任何轮：确认话术声称（_confirm_claim，洞⑥，20260923）——"点「确定」我就去办"
         这类声称与帧无关（有帧轮也可能是假的：写完了却报成待确认），依据是**结构**：
         真弹窗轮由 `route_after_execute` 直接 END、到不了 gate（见该正则上方长注）
@@ -2287,7 +2301,11 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     """
     hit = _cmd_prefix_hit(reply)
     if hit:
-        return ("cmd_prefix", _FALLBACK_CMD_PREFIX, hit)
+        # 兜底文案按**帧里有没有同一个动作**分两种（20260926，见
+        # `_cmd_prefix_fallback_text`）：默认那句说"已经被我拦下啦"，而现场
+        # （trace 20260926T215115）里跳转是**真做过的**——整段换成"什么都没做"
+        # 比抄前缀本身更失真。`frames_text` 是这一轮全部工具返回的原文。
+        return ("cmd_prefix", _cmd_prefix_fallback_text(hit, frames_text), hit)
     # 洞⑥（20260923）：确认话术声称——**任何轮次都查**，包括有帧轮。
     # 位置在 `if frames_exist: return None` **之前**是刻意的：这一条说的不是"有没有
     # 干活"，而是"有没有在等主人点确定"，与帧无关（20260922 那两条正是**有帧**的轮
@@ -2346,6 +2364,49 @@ _FALLBACK_CMD_PREFIX = (
     "喵呜……主人，我刚才的回复里混进了不该出现的系统命令文本，已经被我拦下啦"
     "（正文里的命令不会生效的）。你真正想要的跳转/特效/夜间模式，直接告诉我要"
     "做什么，我让系统执行给你看～")
+# 命令前缀的**第二个变体**（20260926）：这一轮**真的执行过**那串命令时不许说
+# "什么都没做"。现场（trace 20260926T215115）：主人追问"你没调用工具带我去"，
+# planner 排了 `navigate_to({"path": "/article/46"})`、工具如实返回
+# `AUTO_NAVIGATE:https://saudade.site/article/46`（checker PASS，页面真跳了），
+# narrator 引回执行回执时**连前缀一起抄进了正文** ⇒ 判 cmd_prefix ⇒ 整段被换成
+# 上面那句"已经被我拦下啦…我让系统执行给你看～"——把一件已经办成的事说成了没办。
+# 文案只否认**被点名的那件事**（同 `_FALLBACK_PHANTOM_CLAIM` 的教训），
+# 并按帧里那串命令说清已经发生了什么（`{what}` 由 `_cmd_prefix_corroborated` 填）。
+_FALLBACK_CMD_PREFIX_DONE = (
+    "喵呜……主人，我刚才的回复里混进了不该出现的系统命令文本，已经把那段拦下重写了"
+    "（正文里的命令不会生效的，看着像命令的原文我不会再抄出来）。不过**这一轮那件事"
+    "是真做过的**：系统执行记录里写着{what}。还想再跳/再开一次的话，直接告诉我要做"
+    "什么就行～")
+
+
+def _cmd_prefix_corroborated(clause: str, tool_text: str) -> tuple[str, str] | None:
+    """回复里那串命令前缀，在**本轮工具返回**里找得到同一个载荷吗 → (前缀, 载荷)。
+
+    判据的一侧必须取**帧**（`tool_text`），不能只取回复——回复正是不可信的
+    那一侧（模型自己抄的一串命令，可能整段是编的）。取不到 → None（退回通用文案）。
+    """
+    for m in _CMD_PREFIX_PAYLOAD_RE.finditer(clause or ""):
+        prefix, payload = m.group(1).upper(), m.group(2)
+        if payload and payload in (tool_text or ""):
+            return prefix, payload
+    return None
+
+
+def _cmd_prefix_fallback_text(clause: str, tool_text: str = "") -> str:
+    """命令前缀打回的兜底文案（两种变体，见上方两个常量的长注）。"""
+    conf = _cmd_prefix_corroborated(clause, tool_text)
+    if not conf:
+        return _FALLBACK_CMD_PREFIX
+    prefix, payload = conf
+    if prefix in ("AUTO_NAVIGATE", "NAVIGATE"):
+        what = f"页面已经开到 {payload}"
+    elif prefix == "EFFECT":
+        name, _, state = payload.partition(":")
+        what = (f"特效 {name} 已经{'打开' if state != 'off' else '关闭'}"
+                if name else "特效已经按你说的切好了")
+    else:  # DARKMODE
+        what = f"夜间模式已经{'打开' if payload not in ('off', 'false', '0') else '关闭'}"
+    return _FALLBACK_CMD_PREFIX_DONE.format(what=what)
 _FALLBACK_CLAIM = (
     "喵呜……被主人抓包啦。这一轮系统记录里其实没有任何工具执行，我刚才说自己"
     "查过/读过/调用过是不对的——没核实过的事不能装成核实过的样子。你愿意的话"
@@ -2465,6 +2526,14 @@ _FALLBACK_GONE = (
     "喵呜……主人，那个页面我在站里确认过是不存在的，刚才不该说得像真的一样。"
     "站里真实能去的页面有：首页、留言板、说说、时间轴、关于我、登录、管理后台、"
     "物联网平台。要不要我带你逛逛？")
+# 有帧、但**帧里没有导航命令**却声称已到达（20260926，见 gate_node 5b2）。与
+# `_FALLBACK_GONE` 的区别是**不许说"那个页面不存在"**：这一轮根本没查过页面在不在
+# （缺的往往是参数，比如没说去哪一篇），把"系统没跳"讲成"页面不存在"是拿一句新
+# 假话换一句旧假话。文案只否认"跳过去了"这件事本身，然后把该问的问清。
+_FALLBACK_NAV_NO_FRAME = (
+    "喵呜……主人，我得收回一句：这一轮系统**没有执行任何跳转**（我手上没有跳转"
+    "回执），页面不会因为我那句话动一下，别信我上一条的『已经带你到…』。你想去哪个"
+    "页面、或者想看哪一篇文章，把名字告诉我，我就让系统带你过去～")
 
 
 def _claim_clause(text: str, *rxs) -> str:
@@ -2754,10 +2823,13 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if isinstance(_tail, SystemMessage) and str(_tail.content).startswith(_REPLAN_NOTE_MARK):
             gate_note = str(_tail.content)
     correction = ""
+    # 纠偏的**种类**（只给日志看）：三种纠偏共用同一个 `{correction}` 槽，日志里
+    # 只写"剔空纠偏"会把另两种讲错（20260926 起有三个来源：剔空 / 参数不齐 / 写形态零工具）。
+    correction_kind = ""
     for _attempt in (0, 1):
         _t0 = time.monotonic()
         logger.info("[planner] LLM 调用开始（round %d/%d%s）", rounds + 1, MAX_PLAN_ROUNDS,
-                    "，剔空纠偏" if correction else "")
+                    f"，{correction_kind}纠偏" if correction else "")
         try:
             _prompt = _PLANNER_PROMPT.format(
                 # 技能表按本轮角色过滤（20260921）：管理助手那三个技能只对 admin 列出，
@@ -2865,8 +2937,11 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 与"planner 主动决定不调工具"长得一模一样。
         if plan_obj.get("param_problem"):
             pp = plan_obj["param_problem"]
+            # 措辞只说**事实**（这一轮零工具），处置交给随后的纠偏/收尾两条日志：
+            # 原文案写的是"注记已交回 planner 重决策"，而那时系统根本不重决策
+            # （零工具轮不会回到 planner）——一句话把排障引向错的方向（20260926）。
             logger.warning("[planner] PARAMS 不合格 → 零工具（skill=%s，round %d/%d）："
-                           "缺=%s 坏=%s——注记已交回 planner 重决策",
+                           "缺=%s 坏=%s（处置见接下来的纠偏/收尾日志）",
                            plan_obj["skill"], rounds + 1, MAX_PLAN_ROUNDS,
                            "、".join(pp.get("missing") or []) or "无",
                            "、".join(pp.get("bad") or []) or "无")
@@ -2998,6 +3073,39 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
 
+        # 参数不齐 → 同轮纠偏重决策（20260926）：与剔空纠偏**同一条通道**，因为
+        # 两者是同一类事故——"计划里这一轮什么都不会执行"，而下游只有 narrator
+        # 一条路。此前这一段只记日志/trace，计划照原样往下走 ⇒ `route_after_planner`
+        # 见 TOOLS 空就把零工具零帧的轮次交给 narrator，而日志却写着「注记已交回
+        # planner 重决策」——**那句话在事实上是假的**：零工具轮不会再进 planner
+        # （两条既有纠偏通道都不收它：`_name_write_nudge` 要写域动作词、
+        # `_drop_correction` 要 `dropped` 非空，而参数不齐的 plan 刻意把 dropped 留空）。
+        # 现场（trace 20260926T212945）：主人说"随便带我去一篇文章吧"，planner 选了
+        # navigate 却没填 target ⇒ 零工具直落 narrator ⇒ 它把上一轮列表帧里的第一篇
+        # 编成"已经带你跳到《文章向量空间图谱项目文档》啦"（页面根本没动）。
+        # 纠偏文本用 `param_problem_note` 写好的那份（机器可保证的事实：缺哪个参数、
+        # 本技能收哪些参数）——这里不另写一句，避免两处话术漂移。
+        # **只纠一次**（`correction` 的既有语义）：纠完仍不齐 ⇒ 循环外那条确定性收口。
+        if not correction and plan_obj.get("param_problem"):
+            pp = plan_obj["param_problem"]
+            # 话术从注册表取：`_param_problem_plan` 已把同一份写进 NOTE（plan_obj
+            # 的 note 就是它），这里只在 note 缺失时才现算一次（防御性——note 是
+            # narrator 也看得见的那一行，两处必须同源）。
+            correction = (plan_obj.get("note") or "").strip() or (
+                param_problem_note(SKILL_MAP[plan_obj["skill"]], pp,
+                                   skill_param_specs(SKILL_MAP[plan_obj["skill"]]))
+                if plan_obj.get("skill") in SKILL_MAP else "")
+            correction_kind = "参数不齐"
+            record("planner", "param_correct", skill=plan_obj["skill"], round=rounds,
+                   missing=pp.get("missing") or [], bad=pp.get("bad") or [])
+            logger.warning("[planner] 参数不齐（本轮零工具）→ 同轮纠偏重决策"
+                           "（skill=%s 缺=%s 坏=%s）：%s",
+                           plan_obj["skill"],
+                           "、".join(pp.get("missing") or []) or "无",
+                           "、".join(pp.get("bad") or []) or "无",
+                           correction[:120])
+            continue
+
         # 写形态的请求上一条工具规格都没写（见 _name_write_nudge 上方长注）：与
         # 剔空纠偏共用同一条重决策通道（同一轮内只纠一次，纠完仍零工具就照原样走）。
         nudge = None if correction else _name_write_nudge(plan_obj, user_msg, rounds, role)
@@ -3038,6 +3146,45 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             "说清缺的是什么（需要用户指明是哪一篇/需要博主身份/站内没有这项数据），"
             "并请用户补充信息。**不许**出现「看过/读过/查过/检索过/调用过工具」"
             "这类说法，也不许描述你做了哪些步骤。"))
+        return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
+
+    if plan_obj.get("param_problem") and not plan_obj["tools"]:
+        # 纠偏之后参数仍然不齐：这一轮**确实没有可执行的计划**。确定性如实收口
+        # （与上面那条剔空收尾同款）——绝不把零工具零帧交给 narrator：现场实测
+        # 它会把上一轮列表帧里的第一篇编成"已经带你跳过去了"（见上方纠偏段的引证）。
+        #
+        # ⚠️ 这条注记**刻意不写「不调用任何工具」那句原话**：gate 第 4 节拿它当
+        # "navigate 的 NAV_MAP 注记轮"的判据（命中即按"页面不存在/已下线"核验措辞，
+        # 兜底文案是「那个页面在站里确认过是不存在的」）——这里缺的是**参数**，
+        # 页面在不在压根没查过，套上去就是一句新假话。
+        pp = plan_obj["param_problem"]
+        _miss = "、".join(pp.get("missing") or []) or "无"
+        _bad = "、".join(pp.get("bad") or []) or "无"
+        logger.warning("[planner] 参数不齐纠偏后仍零工具（skill=%s 缺=%s 坏=%s）"
+                       "→ 确定性如实收尾", plan_obj["skill"], _miss, _bad)
+        record("planner", "param_terminal", skill=plan_obj["skill"], round=rounds,
+               missing=pp.get("missing") or [], bad=pp.get("bad") or [])
+        # `has_frames` 必须如实传：本轮的帧可能来自**更早几轮**（D1 现场就是
+        # round 0 读了一次列表、round 1 才参数不齐）。写成"本轮什么都没执行"在
+        # 那种轮次上是假话，而 narrator 会照抄机制描述（同族的既有教训）。
+        plan_obj = _wrap_up_plan(has_frames, note=(
+            _LEDGER_NOTE_PREFIX +
+            ("**最后一次决策轮没有执行任何工具**：系统要用的参数不齐"
+             "（缺=" + _miss + "，不可用=" + _bad + "），所以这一次没有新的工具返回；"
+             "上面那些工具返回是**更早几轮**取回的，可以照它们如实作答，"
+             "但不要说你刚刚又查了一次。"
+             "要是按已有返回仍答不了主人这一问，就**用主人的话**把还缺的那一项"
+             "问清楚（例如『你想去哪个页面/哪一篇文章呀』）——别猜、别替主人挑一个。"
+             if has_frames else
+             "**本轮一个工具都没有执行**：系统要用的参数不齐"
+             "（缺=" + _miss + "，不可用=" + _bad + "），所以你现在**没有任何工具"
+             "返回可用**。只许如实说明你需要主人补什么："
+             "**用主人的话**把缺的那项信息问一遍（例如『你想去哪个页面/"
+             "哪一篇文章呀』），问清就走，别猜、别替主人挑一个。")
+            + "**不许**出现「已经带你到/已经跳转/已经打开/已经办好/看过/读过/"
+            "查过/调用过工具」这类说法，也不许描述你做了哪些步骤；"
+            "**不许**把参数名（如 target）当成人话念出来，也**不许**下"
+            "「站内没有这个页面/不存在」这类结论——参数不齐不代表页面不存在。"))
         return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
 
     # 字面路径防推断兜底（确定性修正，保留自旧架构）：用户消息里出现 / 开头的
@@ -5814,6 +5961,13 @@ _EXECUTOR_PROMPT = """\
 6. 回复正文绝不输出 NAVIGATE:/AUTO_NAVIGATE:/EFFECT:/DARKMODE: 等命令前缀文本，
    也不要用伪工具调用格式表演执行过程。执行计划里的 TODO/过程注记是系统内部
    规划信息，不要复述。
+   **引用执行回执时按这条走**（20260926）：回执原文常写成「AUTO_NAVIGATE:
+   https://…/article/46」这种"前缀 + 值"连写的形式，而"照抄回执"与"不许写前缀"
+   在这里会打架——规则是**只抄值、丢掉前缀标签**：路径（/article/46）、页面地址、
+   开关状态（sakura 开/关、夜间模式开/关）、「」内的原文都可以照抄，
+   **前缀标签本身一个字都不许出现在正文里**。写成"已经带你到 /article/46 这一篇啦"
+   是对的；写成"已经带你到 AUTO_NAVIGATE:https://…"会被系统判成假装发命令、整段
+   拦掉换成道歉，主人反而看不到那句如实的话（这条有生产实证，别试探）。
 7. 需要给出站内链接时，只能用"工具执行记录"或页面上下文里真实出现的地址，
    不确定就不要给。
 8. 纯闲聊与博客内容无关的问题自由回答，但纪律 2/3/6 仍然适用。
@@ -6023,12 +6177,16 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                     max(_REPEAT_MIN_RUN, int(len(reply) * _REPEAT_COVER)))
         return fail("repeat_prev_reply", _FALLBACK_REPEAT, plan, len(frames))
 
+    # 本轮全部工具返回原文（下面几道判据共用）。20260926 起**提前到这里**算：
+    # `_claim_issue` 的命令前缀那一支要拿它对账（回复里那串命令，是不是这一轮
+    # 真执行过的那条——见 `_cmd_prefix_corroborated`）。
+    tool_text = "\n".join(str(getattr(m, "content", "")) for m in frames)
     # ── 2. 命令前缀文本（任何轮次，正文出现命令帧前缀 = 假装发命令）─────────
     # ── 3. 编造资源 URL（任何轮次，工具返回/用户消息中不存在的 /api 或图片）──
     issue = _claim_issue(reply, plan["skill"], plan, bool(frames),
                          _has_exec_memory(msgs, state.get("ledger")), _exec_memory_has_search(msgs),
                          has_popup=bool(state.get("pending_confirm")),
-                         ledger=state.get("ledger"))
+                         ledger=state.get("ledger"), frames_text=tool_text)
     if issue:
         i_name, i_text, i_clause = issue
         return fail(i_name, i_text, plan, len(frames), i_clause)
@@ -6059,7 +6217,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         return {"done": True, "gate_replan": False}
 
     # ── 5. 有帧轮：帧内容与叙述的一致性兜底 ──────────────────────────────
-    tool_text = "\n".join(str(getattr(m, "content", "")) for m in frames)
+    # `tool_text` 已在第 2/3 节之前算好（命令前缀那一支要对账），这里直接用。
     err_frames = [f for f in frames
                   if str(getattr(f, "content", "")).lstrip().startswith("__ERROR__")]
     # 5a. 工具失败（__ERROR__ 帧）却回复完成式声称 → 把失败说成成功
@@ -6101,6 +6259,25 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             logger.info("[gate] NAVIGATE 确认帧 + 到达声称 → fallback")
             return fail("nav_pending_claim", _FALLBACK_NAV_PENDING, plan,
                                     len(frames), _claim_clause(reply, _NAV_ARRIVAL_RE))
+    # 5b2. 导航**到达声称**，而这一轮的帧里根本没有导航命令（20260926）→ 页面没动。
+    #     判据的关键在"这一轮"：`frames` 是 turn-scoped（合并本轮所有轮次的帧），
+    #     所以**不能拿 `not frames` 当判据**——D1 现场（trace 20260926T212945）里
+    #     round 0 读过一次文章列表 ⇒ frames=1，而第 4 节整族挂在 `if not frames:`
+    #     下面、navigate 那一轮实际零工具（PARAMS 缺 target 被系统置空）⇒ 唯一覆盖
+    #     这一类的判据被跳过，narrator 对着上一轮的列表帧编出"已经带你跳到《…》啦"
+    #     （页面根本没动）。零帧那半由第 4 节覆盖（navigate 的零工具注记恒含
+    #     「不调用任何工具」那句、是它唯一的入口，见 skills.instantiate_plan），
+    #     这里补的是**有帧但帧里没有导航命令**那半。
+    #     ⚠️ 不放进 `_REPLAN_ISSUES`：回 planner 重规划要用 `_replan_note`，而那条
+    #     提示写的是"这一轮一个工具都没有执行"——它有帧时是假话（同族教训：写给
+    #     narrator/planner 的机制描述会被照抄）。
+    if (plan["skill"] == "navigate"
+            and "AUTO_NAVIGATE:" not in tool_text and "NAVIGATE:" not in tool_text
+            and _NAV_ARRIVAL_RE.search(reply)
+            and not any(k in reply for k in _HONEST_GONE + _HONEST_DOWN)):
+        logger.info("[gate] navigate 本轮无任何导航帧却声称已到达 → fallback")
+        return fail("nav_arrival_no_frame", _FALLBACK_NAV_NO_FRAME, plan,
+                    len(frames), _claim_clause(reply, _NAV_ARRIVAL_RE))
     # 5c. 具名工具声称（20260913 C 项）：有帧 ≠ 帧里有那个工具——回复第一人称
     #     完成式点名"我调用了 X"而 X 本轮没执行（越权被剥/被跳过）= 编造调用
     #     （15:51 实证句："这次我用专门的社交链接查询工具（get_social_links）调了一次"）

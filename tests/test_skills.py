@@ -4332,8 +4332,10 @@ def test_write_ledger_note_round():
           str(_hit)[:90])
     _src = (ROOT / "agent"
             / "graph.py").read_text(encoding="utf-8")
-    check("三处确定性收尾路径都用了同一个锚常量（不是各写一遍字面量）",
-          _src.count("_LEDGER_NOTE_PREFIX +") == 3,
+    # 20260926 起是**四处**（第四处 = `param_problem` 纠偏后仍不齐的确定性收口，
+    # planner_node 里那条 `param_terminal`）：它同样复用锚常量、没有手抄字面量。
+    check("四处确定性收尾路径都用了同一个锚常量（不是各写一遍字面量）",
+          _src.count("_LEDGER_NOTE_PREFIX +") == 4,
           str(_src.count("_LEDGER_NOTE_PREFIX +")))
     check("锚的字面量在 graph.py 里只出现一次（= 常量定义那处，没有第二份手抄）",
           _src.count(_LEDGER_NOTE_PREFIX) == 1,
