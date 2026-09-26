@@ -49,8 +49,9 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import trace_alert as ta  # noqa: E402  （规则本体与 trace 读取的唯一来源）
-from trace_files import iter_trace_files  # noqa: E402  （文件枚举的唯一实现）
+import trace_alert as ta  # noqa: E402  （判定规则本体的唯一来源）
+from trace_files import iter_trace_files, parse_trace_name  # noqa: E402  （文件枚举的唯一实现）
+from trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
 
 GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden", "basic.jsonl")
 OUT_DIR = "eval/report"
@@ -176,17 +177,14 @@ def main():
     files = iter_trace_files(ta.TRACE_DIR)
     candidates, scanned, golden_skipped = [], 0, 0
     for f in files:
-        m = re.search(r"(20\d{6})T(\d{6})_(\d+)_", f)
-        if not m:
+        stamp, uid_s = parse_trace_name(f)
+        if not stamp or not (since <= stamp <= until):
             continue
-        stamp = m.group(1) + "T" + m.group(2)
-        if not (since <= stamp <= until):
-            continue
-        uid = int(m.group(3))
+        uid = int(uid_s)
         if uid == 0:  # golden 评测产出（run_golden 内部链路同样落 trace）
             golden_skipped += 1
             continue
-        d = ta.load_trace(f)
+        d = load_trace(f)
         if d is None:
             continue
         scanned += 1
@@ -208,16 +206,13 @@ def main():
     # 常是"第一轮答跑题、后面全是拉锯"，被质疑的那一轮才带 R1 信号，链头才是根因
     by_uid = defaultdict(list)
     for f in files:
-        m = re.search(r"(20\d{6})T(\d{6})_(\d+)_", f)
-        if not m:
+        stamp, uid_s = parse_trace_name(f)
+        if not stamp or not (since <= stamp <= until):
             continue
-        stamp = m.group(1) + "T" + m.group(2)
-        if not (since <= stamp <= until):
-            continue
-        uid = int(m.group(3))
+        uid = int(uid_s)
         if uid == 0:
             continue
-        d = ta.load_trace(f)
+        d = load_trace(f)
         if d is None:
             continue
         by_uid[uid].append((stamp, f, d))

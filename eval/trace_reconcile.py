@@ -71,6 +71,7 @@ from datetime import datetime, timedelta
 # 与 `trace_files.py` 同目录，直接按脚本目录导入（本模块本来就被 tests 以同样方式加载）。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from trace_files import iter_trace_files  # noqa: E402
+from trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
 
 # ── CLI 默认路径（读者函数一律把路径当参数收，模块常量只给 CLI 与自测用）──────
 TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
@@ -105,16 +106,6 @@ FLOW_KV_RE = re.compile(r"([A-Za-z_][\w]*)=(\S*)")
 
 # 生产 trace 的正常文件名：`<时间戳>_<uid>_<trace_id 前 8 位>.json`（golden/diag 不落这里）
 TRACE_NAME_RE = re.compile(r"^\d{8}T\d{6}_\d+_[0-9a-zA-Z]+\.json$")
-
-
-def load_trace(path: str) -> dict | None:
-    """读一份 trace（含 gz）；坏文件返回 None 而不是抛（扫描不能因为一个坏文件中断）。"""
-    try:
-        if path.endswith(".gz"):
-            return json.loads(gzip.decompress(open(path, "rb").read()))
-        return json.load(open(path))
-    except Exception:
-        return None
 
 
 def _parse_ts(s: str) -> datetime | None:

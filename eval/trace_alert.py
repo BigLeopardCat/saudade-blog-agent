@@ -21,8 +21,6 @@ golden 只测 66 条固定用例、trace_metrics 只测过程指标（轮次/工
   .venv/bin/python eval/trace_alert.py --from 20260908 --to 20260909
 """
 import argparse
-import gzip
-import json
 import os
 import re
 import sys
@@ -32,7 +30,8 @@ from datetime import datetime, timedelta
 # trace 文件枚举的唯一实现（20260925：生产 trace 改按天分目录，四个读取端共用一处，
 # 免得"改了布局漏改一个脚本"= 那天它少看一半数据）。只吃路径参数、不依赖应用配置。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from trace_files import iter_trace_files  # noqa: E402
+from trace_files import iter_trace_files, parse_trace_name  # noqa: E402
+from trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
 
 TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
 
@@ -47,15 +46,6 @@ AGENT_ADMIT = re.compile(
 AGENT_SELF_DENY = re.compile(r"串台|又错|我(搞|弄|看|读)错|弄错|读错|看错|搞混|认错")
 
 GAP = timedelta(minutes=10)  # R3 拉锯链的最大间隔
-
-
-def load_trace(path: str) -> dict | None:
-    try:
-        if path.endswith(".gz"):
-            return json.loads(gzip.decompress(open(path, "rb").read()))
-        return json.load(open(path))
-    except Exception:
-        return None
 
 
 def brief(s: str, n: int = 70) -> str:
@@ -80,13 +70,10 @@ def main():
     records, golden_skipped, scanned = [], 0, 0
     files = iter_trace_files(TRACE_DIR)
     for f in files:
-        m = re.search(r"(20\d{6})T(\d{6})_(\d+)_", f)
-        if not m:
+        stamp, uid_s = parse_trace_name(f)
+        if not stamp or not (since <= stamp <= until):
             continue
-        stamp = m.group(1) + "T" + m.group(2)
-        if not (since <= stamp <= until):
-            continue
-        uid = int(m.group(3))
+        uid = int(uid_s)
         if uid == 0:  # golden 评测产出（run_golden 内部链路同样落 trace）
             golden_skipped += 1
             continue

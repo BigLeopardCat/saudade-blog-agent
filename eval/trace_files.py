@@ -44,6 +44,18 @@ def parse_stamp(path: str) -> str:
     return (m.group(1) + "T" + m.group(2)) if m else ""
 
 
+def parse_trace_name(path: str) -> tuple[str, str]:
+    """从文件名取 `(stamp, uid)`；取不到返回 `("", "")`，不抛。
+
+    读取端要的从来是**两个**值：窗口过滤按 stamp、排除 golden 产出（uid==0）与按用户
+    切链按 uid。此前三份脚本各自内联同一根正则、各自拼 `group(1)+"T"+group(2)`——
+    改一处漏两处就是"某个脚本的时间窗口悄悄判错"。**新读取端一律用这个**，
+    别再内联 `STAMP_RE`。
+    """
+    m = STAMP_RE.search(os.path.basename(path))
+    return (m.group(1) + "T" + m.group(2), m.group(3)) if m else ("", "")
+
+
 def iter_trace_files(root: str) -> list[str]:
     """枚举 root 下全部 trace 文件（平铺 + 按天一层），排序返回。
 
