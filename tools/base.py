@@ -2995,7 +2995,11 @@ def read_notifications(
                       meta={"op": "notice_read", "change": "本来就读过", "noop": True})
     if want_all and not targets:
         return ok("你的通知本来就没有未读的，无需改动（没有发出写请求）。",
-                  meta={"op": "notice_read", "change": "本来就没未读", "noop": True})
+                  # `change` 与这句正文同源、要能**独立成句**：Rust 那边把它接在物件名
+                  # 后面渲染成「站内通知本来就没有未读的（未改动）」（`render_exec_row`
+                  # 的四臂），少一个「有…的」就变成「站内通知本来就没未读」这种半截话，
+                  # 而这一行会经 recent_executions 注回下一轮上下文。
+                  meta={"op": "notice_read", "change": "本来就没有未读的", "noop": True})
 
     before_sum = _own_get("/api/protected/notifications/summary", config)
     if isinstance(before_sum, ToolResult):
@@ -3168,7 +3172,9 @@ def read_messages(
                       meta={"op": "message_read", "change": "本来就读过", "noop": True})
     if want_all and not targets:
         return ok("你的收件箱本来就没有未读的信，无需改动（没有发出写请求）。",
-                  meta={"op": "message_read", "change": "本来就没未读", "noop": True})
+                  # `change` 要能独立成句，理由同上面通知那半（少一个「有…的」就成了
+                  # 半截话，而它会被拼在物件名后面落进跨轮执行记忆）。
+                  meta={"op": "message_read", "change": "本来就没有未读的", "noop": True})
 
     n_before = _mailbox_unread(before)
     if n_before is None:
