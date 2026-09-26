@@ -1992,7 +1992,7 @@ def _confirm_claim(text: str) -> bool:
 
 
 def _no_popup_fact(state) -> str:
-    """确定性收尾轮的注记尾巴：把"本轮没有确认框、也没有待确认的动作"写成系统事实。
+    """本轮没有写操作时的注记尾巴：把"没有确认框、也没有待确认的动作"写成系统事实。
 
     为什么要有（20260926 洞⑥ 的供给侧）：gate 那一侧只能**事后**抓"没弹框却说弹了"
     ——抓到即 fallback，主人拿到的是兜底话术，本来可以好好说清的一件事就此变成
@@ -2007,6 +2007,21 @@ def _no_popup_fact(state) -> str:
     回复里说"请留意确认弹窗"），所以这里不许写成"系统本可以弹一个确认框"这种
     句式，只许写"没有、不许说"。
 
+    **这条事实要跟着"本轮没有写操作"走，不跟着"确定性收尾轮"走**（20260926 扩面，
+    调用面见 `_narrator_plan`）：此前只有 `data_repeat` 收尾那一处拼它，于是**零工具轮
+    的 narrator 手里只剩"禁说"、没有事实**。第四例现场（trace 20260926T082919）：主人
+    要"给某个用户发个通知"——站内根本没有这条通道（通知类工具只有"读自己的"），
+    planner 只能落成 chat 零工具，narrator 便从 recent_tail 抄了上一轮**系统自己写的
+    卡面文案**（`adminops.render_confirm_text` 的「点「确定」我就去办」，它以泠月的
+    身份落库、就摆在上下文里），撞洞⑥ 又被 gate 换成兜底元话术——主人拿到的是一段
+    自我纠正的废话，关于"发通知"一个字都没有。保留窗内 68 份 trace 里 5 次 fallback、
+    4 次是这一句，**逐字相同**：不是四次幻觉，是一句模板被复用。
+
+    第三件事（20260926 加）：**"做不到"要有出口**。此前这段的尾巴是"要动手还得说清
+    **对哪一条**做什么"——那正是"你说一声我就去办"的同义诱导（同一个洞的另一半）。
+    现在写成三分：没有这个能力 → 直接说做不到 + 给替代；只缺目标 → 只问**信息**；
+    不许问"要不要办"。
+
     `pending_confirm` 在场时返回空串：那种轮次本来就到不了这里（`route_after_execute`
     见它就 END），留着这一道是为了将来拓扑若变，这句话仍然不可能说错。
     """
@@ -2015,8 +2030,38 @@ def _no_popup_fact(state) -> str:
     return (
         "**另有一条本轮的系统事实要照实说**：本轮**一个写操作都没提出来**、更没有"
         "执行，主人那边也不会看到任何待确认的卡片。所以**禁止**说任何"
-        "「系统正等着主人点一下」之类的话；主人若是在要求改动数据，就照实说这一轮"
-        "读到了什么，以及要动手还得说清**对哪一条**做什么。")
+        "「系统正等着主人点一下」「你说一声我就去办」之类的话。主人这一轮要办的事，"
+        "如果站内**根本没有对应的能力**（没有这个工具、没有这条通道），就**直接说"
+        "做不到**，再告诉他你能做的替代是什么；如果只是缺一个**目标**（办哪一条、"
+        "哪一篇），就问清那个目标——只许问**信息**，不许问「要不要办」。")
+
+
+def _wrote_this_round(state) -> bool:
+    """本轮计划里有没有写操作（真动手了 / 正等主人点头）。
+
+    判据走 `authz.is_write`（scope 声明表是唯一事实源，不另立工具名表），与
+    `_name_write_nudge` 第二种形态同一处口径。
+    """
+    return any(authz.is_write(_tool_name(s))
+               for s in parse_plan(state.get("plan", ""))["tools"])
+
+
+def _narrator_plan(state) -> str:
+    """narrator 的 [执行计划] 段 = 计划文本 +（本轮没有写操作时）那条系统事实。
+
+    注入口径是"这一轮没有写操作"，**不是"零工具"**：写必然经过工具，反过来不成立
+    ——读了数据、答了问题的轮次同样一个字节都没改，同样需要这条事实（`data_repeat`
+    那一支就是有帧的；反过来，确认兑现轮有写、`pending_confirm` 已清，这时说"一个
+    写操作都没提出来"就是**假的**，会把刚办成的事说成没做）。所以判据落在**写**上，
+    与 `_no_popup_fact` 的 `pending_confirm` 闸合起来才是完整条件。
+
+    计划文本里已经拼着这条的（`data_repeat` 那一支由调用方自己拼）不重复追加。
+    """
+    plan = state.get("plan", "")
+    fact = _no_popup_fact(state)
+    if not fact or fact in plan or _wrote_this_round(state):
+        return plan
+    return plan + "\n" + fact
 
 # ── 台账否认（gate 洞⑦，20260924）──────────────────────────────────────────
 # 与洞⑥ 相反的那一半：洞⑥ 抓"没弹框却说弹了"，这条抓**否认系统台账里记着的事实**。
@@ -5462,7 +5507,10 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     system = SystemMessage(content=_EXECUTOR_PROMPT.format(
         persona=BLOG_ASSISTANT_PROMPT,
         audience=audience_block(role),
-        plan=state["plan"],
+        # [执行计划] 段带一条本轮事实（本轮没有写操作时，见 `_narrator_plan`）：
+        # 此前它只在 `data_repeat` 收尾支注入，零工具轮拿不到 ⇒ narrator 抄历史里
+        # 系统自己写的卡面话术（trace 20260926T082919 实证）。
+        plan=_narrator_plan(state),
         tool_frames=_frame_texts(state["messages"]),
         exec_receipts=_receipts_text(state.get("receipts") or []),
         # 能力清单与 audience 同一角色源（20260921）：两处口径不同会出现
