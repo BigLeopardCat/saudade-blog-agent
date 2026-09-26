@@ -392,6 +392,9 @@ _PLANNER_PROMPT = """\
      上一轮泠月列过的**全部**事项——逐项还原成动作，**一项不少、也不许多**（上一轮没
      列过的事不许补进来；候选本身列得不全时，就按列出来的做，并把没做的如实说清）。
      短应答提示把这类归在承接块里（它认不出类别），看上面的泠月原话里到底列了哪几项。
+     **一张确认卡只装得下同一个技能的动作**（你一轮只选得出一个 SKILL）：上一轮列的
+     几项分属不同本领时，本轮就提**最靠前的那一项**，其余的一项都**不许说成已办**
+     ——"都办"这一声是主人的同意，不是把没提出来的那几项记成办过了。
    - **授权式**（"按你想法来吧/你看着办/都行"，短应答提示会标出来）：主人把
      「做哪一件」也交给了你 ⇒ 目标只能从**系统数据**里定（本轮待办/待审清单、
      上一轮泠月点过名的那件事、工具回执；**上方页面上下文的 pending_action=
@@ -3615,6 +3618,9 @@ _ACCOUNT_GENERIC = _GENERIC_NAME_WORDS + (
     "这个账号", "那个账号", "这个用户", "那个用户")
 # 冻结 / 解冻两个工具（本节多处共用这一份名单：词表、目标预检、政策预检）。
 _FREEZE_TOOLS = ("freeze_account", "unfreeze_account")
+# 需要**惰性读一次待办列表**的写工具（20260926 第十轮）：卡面要写出那一行的排期与
+# 当前完成状态。与 `_FREEZE_TOOLS` 同一条纪律——只有 plan 里真含它时才多这一次请求。
+_TODO_TOOLS = ("complete_dashboard_todo",)
 _ACCOUNT_LEXICON = (_ACCOUNT_NOUNS, _ACCOUNT_MARKS, _ACCOUNT_GENERIC)
 
 
@@ -4839,8 +4845,22 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                 users = None   # 读失败时它是 ToolResult（含原因文本），这里只当"没有"
         except Exception:
             users = None
+    # 待办列表同理（20260926 第十轮）：勾完成的问句要写出**那一行的排期与当前状态**
+    # （「把待办「交房租」勾成完成（排期 9月28日，现在：未完成）」）——待办没有 id 也
+    # 没有标题，正文是他唯一能认的；而"有没有这一条""是不是已经完成了"只有这份实时
+    # 列表能回答。同样**惰性**读：只有 plan 里真含这个工具时才多这一次请求。
+    # 读不到 → 只印正文，**绝不因此不弹窗**（同 users 那条注）。
+    todos = None
+    if any(str(s.get("tool") or "") in _TODO_TOOLS for s in picks):
+        try:
+            from tools.base import _admin_get, _todo_rows
+            # 读失败时 `_admin_get` 回的是 `ToolResult`（str 子类）⇒ `_todo_rows`
+            # 判它不是列表、回 None —— 正好就是"读不到"那一态，不必另设分支。
+            todos = _todo_rows(_admin_get("/api/protected/todos", config))
+        except Exception:
+            todos = None
     question = A.render_confirm_question(picks, tag_index, cat_index, board_index,
-                                         note_index, users)
+                                         note_index, users, todos)
     opts = [{"label": "确定", "value": "yes", "kind": "primary"},
             {"label": "取消", "value": "no", "kind": "default"}]
     expires_at = confirm.token_expiry(token)
@@ -4869,7 +4889,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             "skill": _plan_skill(state),
             "specs": picks,
             "target": A.render_action_lines(picks, tag_index, cat_index, board_index,
-                                            note_index, users),
+                                            note_index, users, todos),
             "requested_by": "user",
             "source_event": "confirm_popup",
             # 卡片本体一并落库（20260924）：此前卡片只活在当轮的 SSE 帧里——刷新、

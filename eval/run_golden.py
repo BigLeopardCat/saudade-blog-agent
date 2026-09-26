@@ -927,6 +927,8 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
     # `__CONFIRM__` 帧里的令牌解出（`confirm.inspect`：只解 base64、不验签；评测读它
     # 不构成授权判据，见 agent/confirm.py 里那条警告）。顺带锁一条安全不变量：**令牌
     # 原文不得出现在给用户看的正文里**（它是 10 分钟有效的写授权凭据）。
+    # 载荷三键（20260926 补第三键）：`skill`（精确相等）/ `specs`（参数条数）/
+    # `skill_any`（族——"是哪几件事之一"这种断言，理由见下面那段注）。
     _cp = gold.get("require_confirm_payload")
     if _cp:
         _pays = [p for p in (result.get("confirm_payloads") or []) if p]
@@ -937,6 +939,15 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
             _specs = _pay.get("specs") or []
             if _cp.get("skill") and _pay.get("skill") != _cp["skill"]:
                 fails.append(f"卡片技能不符：期望 {_cp['skill']}，载荷 {_pay.get('skill')!r}")
+            # 20260926：`skill_any`（族）——"这张卡必须是上一轮列出的某几件事之一"这一
+            # 类断言，用不了精确相等，而它恰好是**短应答承接**用例唯一说得清的形态：
+            # 「两个都做」这一声到底先落到哪一件上由 planner 采样决定，两件都算对；
+            # 真正要判的是"它接住了上一轮列的东西"（没接住时连卡都不会弹，见
+            # followup_short_all_two_picks 的 _note）。用精确相等写死其中一个，等于把
+            # 采样当判据——那一半的采样一旦换向就假红。
+            if _cp.get("skill_any") and _pay.get("skill") not in _cp["skill_any"]:
+                fails.append(f"卡片技能不在期望族里：期望 {_cp['skill_any']}，"
+                             f"载荷 {_pay.get('skill')!r}")
             if "specs" in _cp and len(_specs) != _cp["specs"]:
                 fails.append(f"卡片参数条数不符：期望 {_cp['specs']}，载荷 {len(_specs)}")
         for _tk in (result.get("confirm_tokens") or []):

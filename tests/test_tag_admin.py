@@ -596,6 +596,10 @@ _MIN_PARAMS = {
     # 一旦写成一个真账号，将来谁把这条用例改成真跑就成了生产写。
     "account_freeze": {"name": "probe_target_1"},
     "account_unfreeze": {"name": "probe_target_1"},
+    # 勾完成待办（20260926 第十轮）：同族（目标也是自由文本）但另一个展开函数。
+    # 正文写成一条**明显是假的**事（同上面那条纪律：将来谁把这条改成真跑，也只是
+    # 一次"列表里没有这一条"的零写，不会动到主人的真待办）。
+    "dashboard_todo_done": {"text": "给猫买罐头"},
 }
 _EXPECT_TOOL = {
     "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
@@ -611,6 +615,7 @@ _EXPECT_TOOL = {
     "notice_read": "read_notifications",
     "message_read": "read_messages",
     "dashboard_todo_add": "create_dashboard_todo",
+    "dashboard_todo_done": "complete_dashboard_todo",
     "account_freeze": "freeze_account", "account_unfreeze": "unfreeze_account",
 }
 check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",

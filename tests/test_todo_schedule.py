@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""后台首页待办 / 日程（20260926 第八轮）：纯函数 + 工具 + 确认闸，零网络零 LLM。
+"""后台首页待办 / 日程（20260926 第八轮 + 第十轮）：纯函数 + 工具 + 确认闸，零网络零 LLM。
 
-这一件与别的写操作最不一样的地方：**目标是主人随口说的一件事**，站内没有任何
+这一族与别的写操作最不一样的地方：**目标是主人随口说的一件事**，站内没有任何
 东西可以拿它来核对——标签/分类/公告/留言都能去字典里问"有没有这个名字"，而
 "下周三交房租"没处可查。于是判据只剩两条，且都必须是"缺了就零写"：
 
@@ -9,8 +9,13 @@
   2. **排期翻不出来 → 零工具 + 追问**（绝不挑一个日子顶上——错一天的日程会静静
      躺在后台日历的错误格子里，主人不翻到那天根本发现不了）。
 
-因为没处可核对，它在授权层被放进 `_ALWAYS_CONFIRM_TOOLS`：**每次都弹确认卡**，
-连"同轮命令即确认"那条捷径也不走（§⑦ 用真实的 execute 路径锁住这一点）。
+第十轮在同一族里加了**第二条写通道**：把某一条勾成完成（§⑨–⑮）。它比"加一条"
+少一条判据（没有排期参数），但多一条**定位判据**——这张列表没有行号也没有 id，
+正文是唯一能认出是哪一行的东西 ⇒ 判据是"正文逐字相等，且只此一条"，0 条 / 多条
+一律零写（§⑨ 用真实工具 + 桩客户端锁住）。
+
+两条都在授权层被放进 `_ALWAYS_CONFIRM_TOOLS`：**每次都弹确认卡**，连"同轮命令
+即确认"那条捷径也不走（§⑦ + §⑮ 用真实的 execute 路径锁住这一点）。
 
 另有三处跨语言/跨文件契约在这一层被钉住：
   · 上限 `_TODO_TEXT_LIMIT` / `_TODO_MAX_ROWS` = Rust `MAX_TEXT_CHARS` / `MAX_TODOS`；
@@ -241,8 +246,19 @@ check("正例（没排期）：spec 里**没有** date 键（不写 null，省�
 check("  注记写「（未排期）」", "（未排期）" in out["note"], out["note"][:70])
 check("展开出的工具名在注册表里（否则 execute 只能回「未知工具」错误帧）",
       "create_dashboard_todo" in {t.name for t in base.get_all_tools()})
-check("它是**自由文本**那一族（不在名字通道、也不在 own 通道——判据错位比没有判据更糟）",
-      _FREE_TEXT_WRITE_SKILLS == frozenset({"dashboard_todo_add"}), str(_FREE_TEXT_WRITE_SKILLS))
+check("这一族是**自由文本**那一族（不在名字通道、也不在 own 通道——判据错位比没有判据更糟）",
+      _FREE_TEXT_WRITE_SKILLS == frozenset({"dashboard_todo_add", "dashboard_todo_done"}),
+      str(_FREE_TEXT_WRITE_SKILLS))
+# 桶成员资格只说"目标是自由文本"，**展开函数要按技能名二分**（第十轮加了"勾完成"）：
+# 这条钉的是**两个技能名都真的在自己的路径上**——漏了二分的后果是静默的，"勾完成"
+# 会被 `_expand_todo_skill` 展开成 `create_dashboard_todo`（多记一条待办），
+# 所以判据落在"展开出的工具名"上，而不是"桶里有几个名字"。
+check("  桶内两个技能各自展开成自己的工具（勾完成不会展开成「加一条」）",
+      "complete_dashboard_todo" in "".join(
+          instantiate_plan("dashboard_todo_done", {"text": "给猫买罐头"})["tools"])
+      and "create_dashboard_todo" in "".join(
+          instantiate_plan("dashboard_todo_add", {"text": "给猫买罐头"})["tools"]),
+      str(instantiate_plan("dashboard_todo_done", {"text": "给猫买罐头"})["tools"]))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -548,6 +564,370 @@ check("工具侧**没有** PUT 整份覆盖这条路（agent 手里没有那份�
       (ROOT / "tools" / "base.py").read_text(encoding="utf-8")
       and '_admin_request("POST", "/api/protected/todos/item"' in
       (ROOT / "tools" / "base.py").read_text(encoding="utf-8"))
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑨ complete_dashboard_todo：按正文定位（0 条 / 多条零写，1 条才动手）")
+
+
+class _HResp:
+    def __init__(self, status, body=None):
+        self.status_code = status
+        self._body = body
+
+    def json(self):
+        if self._body is None:
+            raise ValueError("not json")
+        return self._body
+
+
+class _Http:
+    """桩 httpx 客户端：只记 POST（这一族的写通道 `_admin_todo_done_post` 直连
+    `_client.post`，不走 `_admin_request`——正因为"非 200 要映射成目标类失败"）。"""
+
+    def __init__(self, post=None, exc=None):
+        self.post_ret, self.exc = post, exc
+        self.calls: list = []
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        self.calls.append(("POST", url, headers or {}, json))
+        if self.exc:
+            raise self.exc
+        return self.post_ret
+
+
+def _done_ok(text="给猫买罐头"):
+    return _HResp(200, {"code": 200,
+                        "data": {"text": text, "done": True, "date": TOMORROW}})
+
+
+_OTHER = todo("已经办完的另一条")
+
+
+def _call(text="给猫买罐头", uid=7):
+    return base.complete_dashboard_todo.invoke({"text": text}, config=cfg(uid))
+
+
+with patch(_admin_get=lambda p, c: [_OTHER], _client=_Http()):
+    r = _call()
+    check("列表里没有这一条 → not_found（**不是**服务不可用：主人该做的是改说法，"
+          "不是稍后再试）",
+          r.kind == "not_found" and "没有「给猫买罐头」这一条" in r, f"{r.kind}: {r}")
+    check("  一个字节都不发（本地认不出就不发注定被拒的请求）",
+          base._client.calls == [], str(base._client.calls))
+
+with patch(_admin_get=lambda p, c: [], _client=_Http()):
+    r = _call()
+    check("列表整份是空的 → 如实说「没有可勾的」（与「没有这一条」分开：他要先记一条）",
+          r.kind == "not_found" and "空的" in r, f"{r.kind}: {r}")
+
+with patch(_admin_get=lambda p, c: [todo("给猫买罐头"), todo("给猫买罐头", None)], _client=_Http()):
+    r = _call()
+    check("两条同名 → not_found + 如实说分不清（**绝不替主人挑一条**：挑错的那次在"
+          "列表上看起来和挑对一模一样）",
+          r.kind == "not_found" and "2 条" in r and "分不清" in r, f"{r.kind}: {r}")
+    check("  多条同名同样零写", base._client.calls == [], str(base._client.calls))
+
+with patch(_admin_get=lambda p, c: [todo("买 菜"), todo("买菜。")], _client=_Http()):
+    r = _call("买菜")
+    check("定位是**逐字相等**（模糊匹配会在两条相近的待办里挑错一条）",
+          r.kind == "not_found", f"{r.kind}: {r}")
+
+cli = _Http(_done_ok())
+with patch(_admin_get=_Seq([todo("给猫买罐头")], [todo("给猫买罐头", done=True)]), _client=cli):
+    r = _call()
+    check("恰好一条 → ok，回执写明勾的是哪一条、且已复核",
+          r.kind == "ok" and "给猫买罐头" in r and "复核" in r, f"{r.kind}: {r}")
+    check("  恰好一次 POST，路径与 body 逐字（只发 text/done 两键）",
+          len(cli.calls) == 1 and cli.calls[0][1].endswith("/api/protected/todos/done")
+          and cli.calls[0][3] == {"text": "给猫买罐头", "done": True},
+          str(cli.calls[0][1:]))
+    check("  回执 meta 是结构化回执，且 before/after 都在白名单里（漏了是静默丢键）",
+          r.meta.get("op") == "dashboard_todo_done" and r.meta.get("before") == "未完成"
+          and r.meta.get("after") == "已完成"
+          and set(r.meta) <= set(g._RCPT_META_KEYS), str(r.meta))
+    check("  回执不留 uid、不留正文之外的私货（detail 进生产库、会被 narrator 念出来）",
+          "uid" not in json.dumps(r.meta), json.dumps(r.meta, ensure_ascii=False))
+
+# ⭐ 写后复核的判据是"那一行 **done 翻转**"，不是"列表里有没有这么一条"——那一行
+# 在写之前就在（这是翻标记不是新增），只判"存在"会把每一次失败都判成成功。
+cli = _Http(_done_ok())
+with patch(_admin_get=_Seq([todo("给猫买罐头")], [todo("给猫买罐头", done=False)]), _client=cli):
+    r = _call()
+    check("⭐ 写后复核仍是未完成 → **kind == unavailable**（措辞之外必须判 kind："
+          "只断文案是假绿）",
+          r.kind == "unavailable" and "不要声称已勾完成" in r, f"{r.kind}: {r}")
+
+cli = _Http(_done_ok())
+with patch(_admin_get=_Seq([todo("给猫买罐头")], base.unavailable("读不回来了")), _client=cli):
+    r = _call()
+    check("写后读不回 → unavailable 且明写「未确认生效」",
+          r.kind == "unavailable" and "未确认生效" in r, f"{r.kind}: {r}")
+
+cli = _Http(_done_ok())
+with patch(_admin_get=_Seq([todo("给猫买罐头")], [todo("别的")]), _client=cli):
+    r = _call()
+    check("写后那一行不见了 → unavailable（不能说成勾成了）",
+          r.kind == "unavailable" and "未确认生效" in r, f"{r.kind}: {r}")
+
+with patch(_admin_get=lambda p, c: base.unavailable("后台读不到"), _client=_Http()):
+    r = _call()
+    check("写前读失败 → unavailable + 「本次未改动」，**零 POST**",
+          r.kind == "unavailable" and "本次未改动" in r and base._client.calls == [],
+          f"{r.kind}: {r}")
+
+with patch(_admin_get=lambda p, c: {"weird": 1}, _client=_Http()):
+    r = _call()
+    check("写前读回的形态不对 → unavailable，零 POST",
+          r.kind == "unavailable" and base._client.calls == [], f"{r.kind}: {r}")
+
+with patch(_admin_get=lambda p, c: [todo("给猫买罐头")], _client=_Http()):
+    r = base.complete_dashboard_todo.invoke({"text": "  "}, config=cfg())
+    check("空正文 → unavailable，零网络（「勾一下」三个字里没有可勾的对象）",
+          r.kind == "unavailable" and base._client.calls == [], f"{r.kind}: {r}")
+    r = base.complete_dashboard_todo.invoke({"text": "长" * (base._TODO_TEXT_LIMIT + 1)},
+                                            config=cfg())
+    check("超上限 → unavailable，零网络（**不截断**：截断等于替主人改字，改完就不是同一行了）",
+          r.kind == "unavailable" and base._client.calls == [], f"{r.kind}: {r}")
+
+# 幂等**不短路**：写前就是完成态也照发请求（后端那个分支是真 no-op），结论由复核给
+cli = _Http(_done_ok())
+_seq = _Seq([todo("给猫买罐头", done=True)], [todo("给猫买罐头", done=True)])
+with patch(_admin_get=_seq, _client=cli):
+    r = _call()
+    check("本来就是完成状态 → 仍发一次请求（不短路），回执如实说**未发生变更**",
+          r.kind == "ok" and "本来就是完成状态" in r and "这次没有发生任何变更" in r
+          and len(cli.calls) == 1, f"{r.kind}: {r}")
+    check("  回执 meta 的 before 是已完成（跨轮记忆里能区分「刚勾的」与「本来就是」）",
+          r.meta.get("before") == "已完成" and r.meta.get("after") == "已完成", str(r.meta))
+
+_plain = _Http(_done_ok())
+_saved_client = base._client
+try:
+    base._client = _plain
+    base.complete_dashboard_todo.invoke({"text": "给猫买罐头"}, config=cfg(0))
+    check("uid ≤ 0 → 一个请求都不发（身份不明时不猜「勾谁的」）",
+          _plain.calls == [], str(_plain.calls))
+finally:
+    base._client = _saved_client
+
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑩ 后端非 200 的映射：目标类失败 → not_found（落进 unavailable 会诱发重试循环）")
+
+_REFUSE = "有 2 条待办都叫「给猫买罐头」，分不清是哪一条（先到后台首页把其中一条改个说法）"
+cli = _Http(_HResp(200, {"code": 500, "message": _REFUSE}))
+with patch(_admin_get=lambda p, c: [todo("给猫买罐头")], _client=cli):
+    r = _call()
+    check("后端非 200 业务码 → not_found（**不是** unavailable：政策/定位失败不是"
+          "「稍后再试」）", r.kind == "not_found", f"{r.kind}: {r}")
+    check("  文案**逐字等于后端那句**（agent 侧任何复述都会在判据变更那天变成假话）",
+          str(r) == _REFUSE, str(r))
+
+cli = _Http(_HResp(403))
+with patch(_admin_get=lambda p, c: [todo("给猫买罐头")], _client=cli):
+    r = _call()
+    check("403 → unavailable 且写明「仅管理员可用」（这是身份问题，不是目标问题）",
+          r.kind == "unavailable" and "管理员" in r, f"{r.kind}: {r}")
+
+cli = _Http(exc=RuntimeError("boom"))
+with patch(_admin_get=lambda p, c: [todo("给猫买罐头")], _client=cli):
+    r = _call()
+    check("请求抛异常 → unavailable + 「不要声称已改好」",
+          r.kind == "unavailable" and "不要声称已改好" in r, f"{r.kind}: {r}")
+
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑪ 确认闸：勾完成与「加一条」同族——每次都弹卡（判据是行为，不是文案）")
+
+_ADM = Principal(uid=7, role=ROLE_ADMIN)
+check("写那条要 write.console（同一道门：/api/protected/todos/done 在 auth_guard 之后）",
+      authz.TOOL_SCOPE["complete_dashboard_todo"] == authz.SCOPE_WRITE_CONSOLE
+      and authz.requires_consent(_ADM, "complete_dashboard_todo"))
+check("进「一律弹窗」族：任何措辞都不算同意（含命令式）",
+      "complete_dashboard_todo" in authz._ALWAYS_CONFIRM_TOOLS
+      and not authz.consent_granted(_ADM, "complete_dashboard_todo", "把那条待办勾了")
+      and not authz.consent_granted(_ADM, "complete_dashboard_todo", "把它标记成完成"))
+check("  非管理员不放行（权限先于确认：弹窗都到不了）",
+      not authz.check(Principal(uid=9, role=ROLE_USER),
+                      "complete_dashboard_todo").allowed)
+_why_done = authz._CONSENT_WHY_TOOL["complete_dashboard_todo"][0]
+_why_add = authz._CONSENT_WHY_TOOL["create_dashboard_todo"][0]
+_why_freeze = authz._CONSENT_WHY_TOOL["freeze_account"][0]
+check("  卡上给主人的理由与「加一条」「冻结」**互不同形**（同一句话换动词最容易被读错）",
+      _why_done != _why_add and _why_done != _why_freeze and _why_add != _why_freeze,
+      _why_done[:40])
+check("  理由点明「只翻完成标记、不增不删」（主人要能看出这一下不动列表的其他部分）",
+      "不新增也不删除" in _why_done and "正文与排期一个字都不动" in _why_done, _why_done)
+_fr = authz.consent_frame("complete_dashboard_todo", _ADM)
+check("  未确认帧带的是**这一件**的理由与要求（不是 scope 兜底那句空话）",
+      _why_done in _fr and f"待确认[{authz.REASON_CONSENT}]" in _fr, _fr[:80])
+
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑫ 技能展开：勾完成**绝不**展开成「加一条」（漏了二分就是静默多记一条待办）")
+
+out = instantiate_plan("dashboard_todo_done", {"text": "交房租"})
+check("tools 恰为 complete_dashboard_todo 一条，正文原样进 spec",
+      out["tools"] == ['complete_dashboard_todo({"text": "交房租"})'], str(out["tools"]))
+check("  展开出的工具名**不是** create_dashboard_todo（这条是桶内二分的锁）",
+      all("create_dashboard_todo" not in t for t in out["tools"]), str(out["tools"]))
+check("  工具名在注册表里（否则 execute 只能回「未知工具」错误帧）",
+      "complete_dashboard_todo" in {t.name for t in base.get_all_tools()})
+check("  注记写清「只翻完成标记」（跨轮记忆与卡面同源）",
+      "勾成完成" in out["note"] and "正文与排期都不动" in out["note"], out["note"])
+
+out = instantiate_plan("dashboard_todo_done", {})
+check("缺正文 → 零工具 + 非空注记（要求问清是哪一条，且**不许**替他挑）",
+      out["tools"] == [] and "问清" in out["note"] and "不要" in out["note"],
+      f"{out['tools']} / {out['note'][:60]}")
+
+out = instantiate_plan("dashboard_todo_done", {"text": "长" * (base._TODO_TEXT_LIMIT + 1)})
+check("正文超上限 → 零工具 + 注记（上限与工具侧同源）",
+      out["tools"] == [] and "太长" in out["note"]
+      and str(base._TODO_TEXT_LIMIT) in out["note"], f"{out['tools']} / {out['note'][:50]}")
+
+check("它在写技能名单里（漏了会落进通用模板分支，产出一次不成形的写）",
+      "dashboard_todo_done" in WRITE_SKILL_NAMES, str(sorted(WRITE_SKILL_NAMES)))
+
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑬ 卡面：正文与排期一字不改地进卡；查无此条**也弹卡**（只如实标注）")
+
+_SNAP = [todo("交房租", "2026-09-28"), todo("写周报", None, done=True)]
+_c = A.render_todo_done_action("交房租", _SNAP)
+check("卡面念出正文 + 排期 + 当前状态（主人点确定前唯一能核对的三样）",
+      "「交房租」" in _c and "排期 9月28日" in _c and "现在：未完成" in _c, _c)
+check("已完成的那条如实写「现在：已完成」（不许把现状说反）",
+      "现在：已完成" in A.render_todo_done_action("写周报", _SNAP))
+check("没排期的写「未排期」",
+      "未排期" in A.render_todo_done_action("写周报", _SNAP),
+      A.render_todo_done_action("写周报", _SNAP))
+check("列表里没有这一条 → 卡面如实标注「没有这一条」（**不是**不弹窗）",
+      "没有这一条" in A.render_todo_done_action("不存在的", _SNAP),
+      A.render_todo_done_action("不存在的", _SNAP))
+check("  列表整份是空的 → 另给一句（他要做的是先记一条）",
+      "空的" in A.render_todo_done_action("交房租", []))
+check("  多条同名 → 卡面写「分不清是哪一条」并给条数（与「没有这一条」分开："
+      "两件事要他做的动作不一样）",
+      "2 条" in A.render_todo_done_action("交房租", [todo("交房租"), todo("交房租")]))
+check("读不到列表（快照 None）→ 只印正文，**不编也不因此不弹窗**",
+      A.render_todo_done_action("交房租", None) == "把待办「交房租」勾成完成",
+      A.render_todo_done_action("交房租", None))
+_q_done = A.render_confirm_question([{"tool": "complete_dashboard_todo",
+                                      "args": {"text": "交房租"}}], None, None, None,
+                                    None, None, _SNAP)
+check("问句与卡面同源（同一个渲染函数，不是两份实现）",
+      "把待办「交房租」勾成完成（排期 9月28日，现在：未完成）" in _q_done, _q_done)
+check("  快照在手时问句里带现状、读不到时只带正文（三态透传真的接上了）",
+      "现在：" not in A.render_confirm_question(
+          [{"tool": "complete_dashboard_todo", "args": {"text": "交房租"}}],
+          None, None, None, None, None, None))
+check("畸形 spec 不炸（渲染层只退化不加戏）",
+      "（没有给出正文）" in A.render_confirm_question(
+          [{"tool": "complete_dashboard_todo", "args": {}}], None, None, None, None, None, _SNAP))
+_q_add = A.render_confirm_question([{"tool": "create_dashboard_todo",
+                                     "args": {"text": "交房租", "date": "2026-09-28"}}],
+                                   None, None, None, None, None, _SNAP)
+check("三张卡互不同形（勾 / 加 / 冻结 各自读起来是不同的事）",
+      len({_q_done, _q_add,
+           A.render_confirm_question([{"tool": "freeze_account", "args": {"name": "guest5"}}])}) == 3)
+check("回执行区分「刚勾的」与「本来就是」（一次 no-op 不能被读成一个动作）",
+      "本来就是完成状态" in A.render_todo_done("交房租", changed=False)
+      and "已把待办「交房租」勾成完成" in A.render_todo_done("交房租", changed=True),
+      A.render_todo_done("交房租", changed=False))
+
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑭ 过程行与落库回执：带正文、不带内部工具名（两处措辞逐字一致）")
+
+import server as _srv  # noqa: E402
+
+_a = _srv._tool_action_text("complete_dashboard_todo", {"text": "交房租"})
+check("过程行念出正文（这一行会经 recent_executions 注入下一轮——没有正文就认不出是哪条）",
+      "交房租" in _a and "勾成完成" in _a, _a)
+check("  不裸露内部工具名（带下划线的名字会被 narrator 照抄）",
+      "complete_dashboard_todo" not in _a)
+check("  这一行**不写「已完成」**（它是执行前的预告，后端幂等分支上是真 no-op）",
+      "已完成" not in _a, _a)
+check("  缺正文时退化成动作词，不炸",
+      _srv._tool_action_text("complete_dashboard_todo", {}) == "勾完成待办",
+      _srv._tool_action_text("complete_dashboard_todo", {}))
+_rsrc = (ROOT.parent / "src" / "routes" / "chat.rs").read_text(encoding="utf-8")
+check("Rust 那半有同名臂（漏了会把 `complete_dashboard_todo` 这种带下划线的内部名"
+      "写进 execution_log 被下一轮照抄）",
+      '"complete_dashboard_todo" =>' in _rsrc, "chat.rs")
+check("  两侧措辞逐字一致（预告帧与落库回执是同一件事的两处渲染）",
+      "把待办「{}」勾成完成" in _rsrc, "chat.rs")
+
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑮ 真实 execute 路径：弹卡轮**零执行**，令牌载荷就是这一件")
+
+_SPEC_DONE = 'complete_dashboard_todo({"text": "交房租"})'
+_saved_done = g._TOOL_MAP.get("complete_dashboard_todo")
+try:
+    g._TOOL_MAP["complete_dashboard_todo"] = _FakeTool(
+        base.ok("已把待办「交房租」勾成完成（后台已复核：列表里这一条现在就是完成状态）",
+                meta={"op": "dashboard_todo_done", "before": "未完成", "after": "已完成"}))
+    with patch(_admin_get=lambda p, c: _SNAP):
+        for msg, why in [("把交房租那条勾了", "命令式"),
+                         ("交房租办完了", "陈述式（同意闸本就判不出）")]:
+            CALLS.clear()
+            obj = instantiate_plan("navigate", {"target": "物联网平台"})
+            obj["skill"] = "dashboard_todo_done"
+            obj["tools"] = [_SPEC_DONE]
+            state = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+                     "messages": [HumanMessage(content=msg)]}
+            r = execute_node(state, cfg())
+            pop = r.get("pending_confirm") or {}
+            check(f"{why} → 弹卡且零调用（一律弹窗族不吃「同轮命令即确认」）",
+                  CALLS == [] and r.get("receipts") == [] and bool(pop), str(sorted(r)))
+            check("  卡上带正文、排期与现状（与 ⑬ 同源）",
+                  "「交房租」" in pop.get("q", "") and "排期 9月28日" in pop.get("q", "")
+                  and "现在：未完成" in pop.get("q", ""), pop.get("q", ""))
+            payload = confirm.inspect(pop.get("token") or "") or {}
+            check("  令牌载荷里的 skill 与参数就是这一件（卡上写什么就签什么）",
+                  payload.get("skill") == "dashboard_todo_done"
+                  and payload.get("specs") == [{"tool": "complete_dashboard_todo",
+                                                "args": {"text": "交房租"}}], str(payload))
+            check("  这一轮**零执行**（弹卡轮只弹卡）", CALLS == [] and r["receipts"] == [])
+
+        # 读不到列表时**仍要弹卡**（弹窗是这类写唯一的人类兜底；少一句现状比不弹轻得多）
+        CALLS.clear()
+        obj = instantiate_plan("navigate", {"target": "物联网平台"})
+        obj["skill"] = "dashboard_todo_done"
+        obj["tools"] = [_SPEC_DONE]
+        state = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+                 "messages": [HumanMessage(content="把交房租那条勾了")]}
+        with patch(_admin_get=lambda p, c: base.unavailable("读不到")):
+            r = execute_node(state, cfg())
+        pop = r.get("pending_confirm") or {}
+        check("台账读不到 → 卡照弹，只是卡上没有现状（**绝不因此不弹窗**）",
+              bool(pop) and "「交房租」" in pop.get("q", "") and "现在：" not in pop.get("q", ""),
+              pop.get("q", ""))
+
+    # 主人点了确定 → 放行执行（「一律弹窗」不是「永不执行」）
+    CALLS.clear()
+    obj = instantiate_plan("navigate", {"target": "物联网平台"})
+    obj["skill"] = "dashboard_todo_done"
+    obj["tools"] = [_SPEC_DONE]
+    state = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+             "messages": [HumanMessage(content="交房租办完了")],
+             "confirm_grant": {"token": "x"}}
+    r = execute_node(state, cfg())
+    check("确认轮 → 放行执行（工具收到的是**原样正文**）",
+          CALLS == [{"text": "交房租"}], str(CALLS))
+    check("  回执带 op 与执行角色（跨轮执行记忆只认结构化回执，不认叙述）",
+          r["receipts"] and r["receipts"][0]["op"] == "dashboard_todo_done"
+          and r["receipts"][0]["principal_role"] == "admin", str(r["receipts"]))
+except BaseException as e:  # noqa: BLE001
+    check(f"execute 勾完成写路径测试异常：{type(e).__name__}: {e}", False)
+finally:
+    if _saved_done is None:
+        g._TOOL_MAP.pop("complete_dashboard_todo", None)
+    else:
+        g._TOOL_MAP["complete_dashboard_todo"] = _saved_done
+
 
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 

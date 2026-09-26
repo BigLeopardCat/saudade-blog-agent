@@ -200,13 +200,17 @@ CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), 
 # 20260926 到二十个：同一天再加 `freeze_account` / `unfreeze_account`——它们动的
 # **不是主人的东西**（后果落在第三方的登录能力上，解冻也换不回被踢的会话），
 # 用户拍板"每次都弹卡、不留任何捷径"（详见 authz 里 `_ALWAYS_CONFIRM_TOOLS` 的注）。
-check("需确认的工具恰好是二十个（十六个后台写 + 四个用户自己的写）",
+# 20260926 到二十一个：再加 `complete_dashboard_todo`（把某一条待办勾成完成）——
+# 与加待办同一张表、同一条理由（目标是主人随口说的一句话，`_console_command` 判不出
+# "他是在让我勾、还是在跟我说这件事办完了"），而漏判的代价更贵：勾错的那一行在列表上
+# 和勾对的一模一样（没有 id 也没有日志给他看）。
+check("需确认的工具恰好是二十一个（十七个后台写 + 四个用户自己的写）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
                         "create_announcement", "update_announcement",
                         "delete_announcement",
                         "audit_board_comment", "delete_board_comment",
-                        "create_dashboard_todo",
+                        "create_dashboard_todo", "complete_dashboard_todo",
                         "freeze_account", "unfreeze_account",
                         "set_article_status", "set_article_tags",
                         "add_favorite", "remove_favorite", "read_notifications",
