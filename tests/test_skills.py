@@ -1214,9 +1214,10 @@ def test_phantom_tool_claim():
     # add_favorite / remove_favorite / read_notifications；46 → 48 是 20260923
     # 批 8 的站内信两件：list_my_messages / read_messages；48 → 50 是 20260926
     # 的后台待办两件：list_dashboard_todos / create_dashboard_todo；50 → 52 是同一天
-    # 的账号冻结/解冻两件：freeze_account / unfreeze_account）。
+    # 的账号冻结/解冻两件：freeze_account / unfreeze_account；52 → 53 是同一天第十轮
+    # 的待办勾完成一件：complete_dashboard_todo）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 52 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 53 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 

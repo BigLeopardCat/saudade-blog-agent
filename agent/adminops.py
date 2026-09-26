@@ -916,6 +916,80 @@ def render_todo_added(text: str, date: str | None = None) -> str:
             f"（后台已复核：列表里读到了这一条）")
 
 
+# ── 待办"勾完成"（20260926 第十轮）────────────────────────────────────────
+# 这一件的卡面有**一条硬要求**（不是文风问题，同账号族那三条）：`text` 一字不改地
+# 进卡面。主人点「确定」之前唯一能核对的就是"要勾的是不是这一条"，而这张列表没有
+# 行号、没有标题，正文就是他认得的全部；把它润色/截短等于让他盲签（"交房租"被写成
+# "交房"仍点得下去）。
+def render_todo_when(row) -> str:
+    """一行待办的排期短语（`排期 9月28日` / `未排期`）。
+
+    **只此一处**：列表帧、卡面、多条同名时的区分串走的是同一句话——系统对同一行
+    的两种表述不一致时，主人在卡上认出的东西与他事后在列表里看到的对不上。
+    """
+    iso = str((row or {}).get("date") or "").strip()
+    return f"排期 {due_date_cn(iso)}" if iso else "未排期"
+
+
+def _todo_face_row(todos, text) -> tuple[dict | None, int, bool, int]:
+    """渲染用的待办快照查询 → `(唯一命中行, 命中条数, 快照是否在手, 列表总条数)`。
+
+    与 `tools.base._todo_text_hits` 同一判据（正文逐字相等），但**只用于渲染**：
+    这里是"卡面上写不写得出具体是哪一条"，不是"能不能动"（那是工具侧独立判的
+    一次，同 `_match_board` 那条注）。快照不在手（读不到列表）时不编、也不因此
+    不弹窗——只印正文。总条数用来把"列表里没有这一条"与"你还没有任何待办"分开
+    （要主人做的事不一样：一个是改正文，一个是先去记一条）。
+    """
+    if todos is None:
+        return None, 0, False, 0
+    want = str(text or "").strip()
+    rows = [r for r in todos if isinstance(r, dict)]
+    hits = [r for r in rows if str(r.get("text") or "").strip() == want] if want else []
+    return (hits[0] if len(hits) == 1 else None), len(hits), True, len(rows)
+
+
+def render_todo_done_action(text: str, todos=None) -> str:
+    """`把待办「交房租」勾成完成（排期 9月28日，现在：未完成）`——卡面、问句、
+    跨轮待办的目标**共用这一行**（同 `render_account_action` 的分工）。
+
+    `todos` 三态（全表同一条纪律：读不到就少说，**不因此不弹窗**）：
+      · 快照在手、恰好一条同名 → 印 `排期 …，现在：未完成/已完成`；
+      · 快照在手、没有这条 → 印「（你后台首页的待办里没有这一条）」——主人点确定
+        **之前**就该看到，而不是点完才被告知没做成；
+      · 快照在手、多条同名 → 如实印「（有 N 条都叫这个，分不清是哪一条）」：
+        这一条**点下去也办不成**（后端与工具侧都是歧义即零写），而"没有这一条"
+        与"分不清是哪一条"要他做的事不一样（一个改正文、一个先去改个说法）；
+      · 快照没有（读不到列表）→ 只印正文。
+    """
+    want = str(text or "").strip()
+    act = f"把待办「{clip(want, 60)}」勾成完成"
+    row, n, have, total = _todo_face_row(todos, want)
+    if not have:
+        return act
+    if row is None:
+        if n > 1:
+            return f"{act}（有 {n} 条待办都叫这个，分不清是哪一条）"
+        if not total:
+            return f"{act}（你后台首页的待办列表现在是空的）"
+        return f"{act}（你后台首页的待办里没有这一条）"
+    return (f"{act}（{render_todo_when(row)}，现在："
+            f"{'已完成' if row.get('done') else '未完成'}）")
+
+
+def render_todo_done(text: str, *, changed: bool = True) -> str:
+    """勾完成成功后的回执行（工具侧用；与卡面同源同事实）。
+
+    `changed=False` = 写前它就是完成态（后端那次是真 no-op，走的是幂等分支）——
+    **必须与"刚勾的"分开说**（同 `account_change_phrase`）：主人这一下什么都没
+    发生，短路成"已勾成完成"会让回执读成一个动作。
+    """
+    want = clip(str(text or "").strip(), 60)
+    if not changed:
+        return (f"待办「{want}」**本来就是完成状态**，这次没有发生任何变更（没有重复勾）")
+    return (f"已把待办「{want}」勾成完成"
+            f"（后台已复核：列表里这一条现在就是完成状态）")
+
+
 # ── 写操作确认框（20260921）：问句与回复文本都是**确定性中文**────────────
 # 与 agent/reports.py 同一条纪律：能算的都不交给 LLM。这两段文本会直接进
 # ①确认框的问题行 ②那一轮的对话气泡，都是用户一眼看到的东西——让模型写它，
@@ -1055,7 +1129,7 @@ def render_account_status(username: str, uid, frozen: bool, changed: bool = True
 
 
 def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
-                 users=None) -> str:
+                 users=None, todos=None) -> str:
     """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
 
     `index` = 可选的标签字典（`{id: TagInfo}`，见 build_tag_index）：给得起就
@@ -1297,11 +1371,18 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         # 写进卡面，给不起只印名字（**不因此不弹窗**，同全表取向）。
         return render_account_action(str(a.get("name") or "").strip() or "（没有给出账号名）",
                                      tool == "freeze_account", users)
+    if tool == "complete_dashboard_todo":
+        # 勾完成（20260926 第十轮）：`todos` = 待办列表快照（`tools.base._todo_rows`），
+        # 三态见 `render_todo_done_action`。**刻意与加待办那张卡不同形**：加的是"一条
+        # 新东西"（读起来是个新增），勾的是"清单上已有的那一条"（读起来必须能让他核对
+        # 出是哪一行）——两张卡的动词、宾语、括号里的东西都不一样。
+        body = str(a.get("text") or "").strip()
+        return render_todo_done_action(body or "（没有给出正文）", todos)
     return f"执行 {tool}"
 
 
 def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
-                        users=None) -> str:
+                        users=None, todos=None) -> str:
     """一份调用清单 → 主人看得懂的动作串（"；"分隔）。
 
     三处共用同一份措辞：确认框问句、确认轮的气泡正文、**跨轮待办的人读目标**
@@ -1309,12 +1390,12 @@ def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
     事后在待办/回执里读到的目标，必须是同一句话（这正是"盲签"那条纪律的延伸：
     系统对同一件事的两种表述不一致时，点「确定」的人无从判断谁是真的）。
     """
-    return "；".join(_confirm_one(s, index, cats, boards, notes, users)
+    return "；".join(_confirm_one(s, index, cats, boards, notes, users, todos)
                      for s in (specs or []))
 
 
 def render_confirm_question(specs, index=None, cats=None, boards=None, notes=None,
-                            users=None) -> str:
+                            users=None, todos=None) -> str:
     """确认框的问题行：**把要发生的事说全**（含颜色名与色值），再问一句。
 
     用户点的是"确定"，他有权在点之前从这句话里看出自己将同意什么——
@@ -1323,18 +1404,18 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
     （`index`/`cats`/`notes` 见 _confirm_one；读不到字典时退化成名字原文或 id，
     不因此不弹窗——这一轮的价值就是让主人确认，读不到就少说，不是不弹。）
     """
-    acts = render_action_lines(specs, index, cats, boards, notes, users)
+    acts = render_action_lines(specs, index, cats, boards, notes, users, todos)
     return f"要{acts}吗？点「确定」我就去办。"
 
 
 def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
-                        users=None) -> str:
+                        users=None, todos=None) -> str:
     """弹窗那一轮的**对话气泡正文**（系统给的，不经 narrator）。
 
     刻意写得像"在等你的意思"而不是"已经在办了"：这一轮零执行。给一个明确
     的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
     """
-    acts = render_action_lines(specs, index, cats, boards, notes, users)
+    acts = render_action_lines(specs, index, cats, boards, notes, users, todos)
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
     return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"

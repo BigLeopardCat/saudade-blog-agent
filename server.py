@@ -997,6 +997,14 @@ def _tool_action_text(name: str, args: dict | None) -> str:
         due = str(a.get("date") or "").strip()
         head = f"添加待办「{body[:24]}」"
         return f"{head}（{due}）" if due else head
+    if name == "complete_dashboard_todo":
+        # 后台首页待办 / 日程（20260926 第十轮）：**勾完成**那件。正文同样按 24 字截断
+        # （待办正文上限 200 字，过程行放不下；落库回执那侧按列宽自己去截，两侧**措辞
+        # 一致**即可，同上面 create_dashboard_todo 那条注）。这里刻意**不写**「已完成」：
+        # 这一行是**预告**（执行前发的过程行），而后端在幂等分支上是真 no-op；把结果写进
+        # 动作名会让"本来就是完成"那一次看起来也改了什么（回执那侧另有 `changed` 判据）。
+        body = str(a.get("text") or "").strip()
+        return f"把待办「{body[:24]}」勾成完成" if body else "勾完成待办"
     if name in _NOARG_VERB:
         return _NOARG_VERB[name]
     return f"执行 {name}"

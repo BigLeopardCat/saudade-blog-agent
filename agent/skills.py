@@ -151,6 +151,11 @@ WRITE_SKILL_NAMES = frozenset({
     # 注册表里普通技能那条路——把它写进来会让它落进写分支的参数展开，产出一次
     # 不成形的写。⚠️ 同上：名单与 `instantiate_plan` 的分支**两处都要补**。
     "dashboard_todo_add",
+    # 把某一条勾成完成（20260926 第十轮）：与 `dashboard_todo_add` 同一族（目标也是
+    # 一段自由文本），但**展开函数不同**——`instantiate_plan` 的 `_FREE_TEXT_WRITE_SKILLS`
+    # 分支里按技能名二分，见那一段的注（漏了那一步会把"勾完成"静默展开成
+    # `create_dashboard_todo(...)`，即**多记一条待办**）。
+    "dashboard_todo_done",
     # 后台账号冻结 / 解冻（20260926 第九轮）：目标是一个**账号名**（在后台账号
     # 列表里核对得到的名字）⇒ 走 `_WRITE_NAME_TARGET_SKILLS` 那条名字通道。
     # ⚠️ 两个技能名与两个工具名**不是一套字面量**（技能 `account_freeze` /
@@ -190,11 +195,18 @@ _WRITE_NAME_TARGET_SKILLS = frozenset({
 _OWN_WRITE_SKILLS = frozenset({"favorite_add", "favorite_remove", "notice_read",
                                 "message_read"})
 
-# 目标是**自由文本**的写技能（20260926 第八轮），共用 `_expand_todo_skill`：上面三组
-# 的目标都是"能在站内核对出来的东西"（名字 / article_id / 通知 id），这一组的目标是
-# 主人随口说的那件事——**没有东西可核对**，所以它的判据只能是"正文在不在、排期翻不翻
-# 得出来"（见该函数头注）。同 `_WRITE_NAME_TARGET_SKILLS`：显式白名单，不是减法。
-_FREE_TEXT_WRITE_SKILLS = frozenset({"dashboard_todo_add"})
+# 目标是**自由文本**的写技能（20260926 第八轮），上面三组的目标都是"能在站内核对出来
+# 的东西"（名字 / article_id / 通知 id），这一组的目标是主人随口说的那件事——**没有
+# 东西可核对**，所以它的判据只能是"正文在不在、排期翻不翻得出来"（见两个展开函数的
+# 头注）。同 `_WRITE_NAME_TARGET_SKILLS`：显式白名单，不是减法。
+#
+# ⚠️ 这一桶**不止一个展开函数**（第十轮起）：桶成员资格回答的是"目标是不是自由文本"，
+# 而"加一条"与"勾一条"是两件不同的事（一个有 date 参数、一个连"这条在不在列表里"都
+# 要到工具侧才判）⇒ `instantiate_plan` 里按**技能名**二分。桶里加新成员时**必须同时
+# 补那条二分**：漏了的后果是静默的——"勾完成"会被 `_expand_todo_skill` 展开成
+# `create_dashboard_todo(...)`，**多记一条待办**（比零工具危险得多：主人看到一个成功
+# 的回执，而他的列表里悄悄多了一行）。
+_FREE_TEXT_WRITE_SKILLS = frozenset({"dashboard_todo_add", "dashboard_todo_done"})
 
 
 def _norm_pos_int(value) -> int | None:
@@ -1139,6 +1151,33 @@ SKILLS: list[Skill] = [
         roles=ADMIN_ROLES,
     ),
     Skill(
+        name="dashboard_todo_done",
+        capability="把你后台首页待办 / 日程里的某一条勾成完成",
+        description=(
+            "博主（管理员）要求**把后台首页待办 / 日程里的某一条勾成完成**时使用"
+            "（「那个〈…〉我办完了」「把〈…〉那条勾掉」「〈…〉标记成完成了」）。"
+            "参数 text = 那一行**现在的正文原样**：这张列表没有行号，正文是唯一能认出"
+            "是哪一条的东西——主人只给了模糊说法（「那个买菜的」）时，先用 "
+            "list_dashboard_todos 读出列表**照抄**，**不许自己改写、缩写或猜**一个正文。"
+            "⚠️ 只翻完成标记，正文与排期一个字都不动；**也不做**「取消完成」这个方向。"
+            "要**加**一条时用 dashboard_todo_add。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，"
+            "也**照常选本技能**——要不要真勾由系统弹确认框问主人（正文会显示在确认框里），"
+            "你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+        ),
+        inputs={"text": "要勾成完成的那条待办的正文原样（**照抄列表里的写法**，不要改写）"},
+        plan=[("complete_dashboard_todo", {"text": "$text"})],
+        complete_when="complete_dashboard_todo 返回了已勾成完成",
+        reply_contract=(
+            "只能按 complete_dashboard_todo 的实际返回作答，说清勾的是哪一条；"
+            "返回「本来就是完成状态」就说它本来就是、这次没有发生变更；"
+            "返回「列表里没有这一条 / 有几条都叫这个」时如实转述（**逐字**），"
+            "并按返回里的提示继续（照列表原文说，或先读列表再回来）；"
+            "返回失败/未确认时如实说没勾成，**绝不得用完成式声称已勾完成**"
+        ),
+        roles=ADMIN_ROLES,
+    ),
+    Skill(
         name="dashboard_todo_list",
         capability="查看你后台首页的待办 / 日程列表（含排期与完成情况）",
         description=(
@@ -1635,6 +1674,35 @@ def _expand_todo_skill(skill, params: dict) -> tuple[list[str], str]:
              + "；只追加这一条，列表里原有的都不动"))
 
 
+def _expand_todo_done_skill(skill, params: dict) -> tuple[list[str], str]:
+    """待办「勾完成」（20260926 第十轮）→ (TOOLS 行清单, 注记)。
+
+    与 `_expand_todo_skill`（追加一条）共用"目标是自由文本"这个前提，**但判据更少**：
+    那一件还要多一道"排期翻不翻得出来"（它有 date 参数），这一件只认 text。剩下的
+    两条都是"缺了就不写"：
+
+      · 正文空 → 零工具 + 注记（"勾一下"三个字里没有可勾的对象，去问主人）；
+      · 正文超长 → 零工具 + 注记（**不截断**，同 add 的取舍：截断等于替主人改字，
+        而这里改字会让"同一行"变成"另一行"）。
+
+    **计划层不判"这一条在不在列表里"**：那份列表在这一层读不到（它要经弹卡那一轮
+    惰性读一次，见 `graph._confirm_popup`），而把"查无此条 ⇒ 零工具"写在这里会把
+    "读不到列表"与"列表里没有这一条"混成同一件事——前者是系统读不到，后者是主人
+    说错了正文。真正的定位判据在工具侧对着**实时**列表做一次，那一次同时是写前读。
+    """
+    text = _write_arg(params.get("text"))
+    if not text:
+        return [], ("dashboard_todo_done 缺少正文（text）：不调用任何工具，"
+                    "如实向主人问清指的是哪一条（可先选 dashboard_todo_list 把列表读出来"
+                    "给他挑，**不要**替他挑一条）")
+    if len(text) > _TODO_TEXT_LIMIT:
+        return [], (f"dashboard_todo_done 的正文太长（{len(text)} 字，上限 {_TODO_TEXT_LIMIT} 字）："
+                    "不调用任何工具，如实请主人照列表里的写法说短一点（**不许**替他截断）")
+    return ([f"complete_dashboard_todo({json.dumps({'text': text}, ensure_ascii=False)})"],
+            (f"把他自己后台首页的待办里「{A.clip(text, 20)}」那一条勾成完成"
+             f"（只翻完成标记，正文与排期都不动）"))
+
+
 def instantiate_plan(skill_name: str, params: dict,
                      role: str | None = None) -> dict:
     """技能模板 + 参数 → 结构化计划。
@@ -1816,10 +1884,17 @@ def instantiate_plan(skill_name: str, params: dict,
             wtools, note = _expand_own_skill(skill, params)
             tools.extend(wtools)
         elif skill.name in _FREE_TEXT_WRITE_SKILLS:
-            # 目标是**自由文本**的写技能（20260926 第八轮）：待办 / 日程。
-            # 前两组的目标都能在站内核对（名字 / id），这一组只有"正文在不在、
-            # 排期翻不翻得出来"两条判据——见 `_expand_todo_skill` 头注。
-            wtools, note = _expand_todo_skill(skill, params)
+            # 目标是**自由文本**的写技能：待办 / 日程（20260926 第八轮 + 第十轮）。
+            # 前两组的目标都能在站内核对（名字 / id），这一组只有"正文在不在、排期
+            # 翻不翻得出来"那几条判据——见两个展开函数的头注。
+            # ⚠️ **必须按技能名二分**：桶成员资格只说"目标是自由文本"，而"加一条"与
+            # "勾一条"是两个展开函数。默认支（`_expand_todo_skill`）对 text 也认，
+            # 所以漏了二分**不会报错**——它会把"勾完成"展开成 `create_dashboard_todo`，
+            # 即**多记一条待办**（主人收到一个成功回执，列表里却悄悄多了一行）。
+            if skill.name == "dashboard_todo_done":
+                wtools, note = _expand_todo_done_skill(skill, params)
+            else:
+                wtools, note = _expand_todo_skill(skill, params)
             tools.extend(wtools)
         elif skill.name not in ("article_status", "article_tags"):
             # fail-closed（20260923）：落到这里的只可能是"加了新写技能、没在

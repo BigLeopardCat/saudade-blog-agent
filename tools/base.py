@@ -1209,6 +1209,51 @@ def _admin_status_post(path: str, payload: dict, config: RunnableConfig):
     return body.get("data")
 
 
+def _admin_todo_done_post(payload: dict, config: RunnableConfig):
+    """待办"翻完成标记"专用的 POST：把**非 200 业务码无条件读成"目标类失败"**。
+
+    为什么不能直接用 `_admin_request`：那条（= `_principal_request`）对**任何**
+    `code != 200` 都返回 `unavailable("接口报错: …")` ⇒ 后端的"查无此条 / 有多条
+    同名"被归成**服务不可用** ⇒ 过程行显示「服务不可用」、planner 收到"稍后再试"
+    的指引 ⇒ 它照着这句话**重试同一条**，而这条请求**永远不会**成功（与
+    `_admin_status_post` 头注里那条一模一样的坑）。这个端点的非 200 只有两族
+    （查无此条 / 多条同名）+ 存储故障，**没有一族是"目标不存在之外的服务不可用"
+    值得重试**，所以一律走 `not_found`：planner 拿到这个原因码才会去读列表、
+    换一个正文，或如实告诉主人"列表里没有这一条"。
+
+    文案**逐字转述后端原话**（同 `_admin_status_post`）：定位判据在服务端，agent
+    侧任何改写都会在判据变更那天变成假话。
+    """
+    uid = _device_get_user_id(config)
+    if uid <= 0:
+        # 身份不明时一个请求都不发（同 `_principal_request`）。
+        return unavailable(_NO_LOGIN_WRITE)
+    principal = (config.get("configurable", {}) or {}).get("principal")
+    headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
+    try:
+        resp = _client.post(f"{ADMIN_BASE}/api/protected/todos/done",
+                            headers=headers, json=payload, timeout=15)
+    except Exception as exc:
+        logger.error("admin todo done post failed: %s", exc)
+        return unavailable(f"接口请求失败: {exc}{_NO_SUCCESS_TAIL}")
+    if resp.status_code in (401, 403):
+        return unavailable("当前身份无权改动后台待办（该功能仅管理员可用），本次未改动任何内容")
+    if resp.status_code != 200:
+        return unavailable(f"接口返回 HTTP {resp.status_code}{_NO_SUCCESS_TAIL}")
+    try:
+        body = resp.json()
+    except Exception:
+        return unavailable(f"接口返回的不是 JSON{_NO_SUCCESS_TAIL}")
+    if body.get("code") != 200:
+        # ⚠️ 必须包成 `ToolResult`（`not_found` 就是），**不是**裸字符串：调用方的
+        # 失败判据是 `isinstance(data, ToolResult)`，裸传会被当成"成功返回的 data"
+        # 接着往下走写后复核，最后报成「请求已发出…本次改动未确认生效」——一句假话
+        # （这条请求根本没改任何东西，它被定位判据挡下了）。同 `_admin_status_post`。
+        logger.warning("admin todo done post refused: %s", body.get("message"))
+        return not_found(str(body.get("message") or "后台没找到这一条待办"))
+    return body.get("data")
+
+
 def _tag_index(config: RunnableConfig):
     """读两级标签字典 → `{id: TagInfo}`；任一读不到 → **None**。
 
@@ -3055,17 +3100,23 @@ def read_messages(
 
 
 # ---------------------------------------------------------------------------
-# 后台首页待办 / 日程（20260926）：读整份 / 追加一条
+# 后台首页待办 / 日程（20260926）：读整份 / 追加一条 / 翻完成标记
 # ---------------------------------------------------------------------------
 # 端点在守卫域内（Rust `src/routes/todos.rs`，`auth_guard` 之后）⇒ 这一族照例是
 # `admin.console` / `write.console`（见 agent/authz.py 的登记与那里的取舍说明：
 # 接口虽然按 uid 存"你自己的那份列表"，但普通登录用户前端根本打不开后台首页，
 # 取 read.own/write.own 会让授权层对普通用户说"允许"而 Rust 随后 403）。
 #
-# **agent 只有"追加一条"这一条写通道**（POST /api/protected/todos/item），它读的
-# 却是整份 GET：为什么不用 PUT 整份覆盖，见该文件头注——主人自己的那份列表在他
-# 手里，agent 先读再写会把主人刚做的改动抹掉，而"发一份自己拼的"在整份覆盖的
-# 语义下等于清空他的待办。
+# **agent 的写通道有两条**（POST /api/protected/todos/item 追加一条、
+# POST /api/protected/todos/done 翻某一条的完成标记），而它读的却是整份 GET：
+# 为什么不用 PUT 整份覆盖，见该文件头注——主人自己的那份列表在他手里，agent 先读
+# 再写会把主人刚做的改动抹掉，而"发一份自己拼的"在整份覆盖的语义下等于清空他的
+# 待办。两条写通道都只动**一行**，这正是它们能绕开那个取舍的原因。
+#
+# 两条通道的**定位判据同为"正文逐字相等"**（这张列表线上从不回行 id，正文是唯一
+# 能认出是哪一行的东西）：服务端 `pick_todo` 判一遍，agent 侧读回整份再判一遍
+# （**纵深，不互替**——agent 那遍是为了在发出请求之前就能如实说"没有这一条/
+# 分不清是哪一条"，且写后复核也只有这条路能认回那一行）。
 #
 # 契约同源（改一侧必须同步另一侧）：条数上限与正文上限都写在 Rust 那侧的
 # `MAX_TODOS` / `MAX_TEXT_CHARS`；这里各留一份**只为不发注定被拒的请求**，真正的
@@ -3178,6 +3229,100 @@ def create_dashboard_todo(
     return ok(A.render_todo_added(body, due),
               meta={"op": "dashboard_todo_add", "text": body, "date": due or "",
                     "count": len(rows_after)})
+
+
+def _todo_text_hits(rows, text: str) -> list[dict]:
+    """待办行快照里按**正文逐字相等**找命中行（写侧判据，渲染侧另有一份见 adminops）。
+
+    与 Rust `pick_todo` 同判据（`row.text == text`，两边都先 trim）：这张列表**线上
+    从不回行 id**，正文是唯一能认出是哪一行的东西。逐字相等意味着"买 菜"与"买菜"
+    是两条不同的行——这不是严苛，是**唯一**能保证"我们勾的就是主人指的那一条"的
+    判据：改成模糊匹配之后，"把「买菜」勾了"会在同名的两条里挑一条（挑错=主人以为
+    办完的事其实没办，而列表上看不出区别）。
+    """
+    want = str(text or "").strip()
+    if not want:
+        return []
+    return [r for r in (rows or [])
+            if isinstance(r, dict) and _todo_row_key(r)[0] == want]
+
+
+@tool
+def complete_dashboard_todo(
+    text: Annotated[str, "要勾成完成的那条待办的**正文原样**——必须一字不差地照抄它此刻"
+                         "在列表里的写法；主人只给了模糊说法（「那个买菜的」）时先读列表"
+                         "（list_dashboard_todos）再照抄，**不要自己改写或猜**"],
+    config: RunnableConfig,
+) -> str:
+    """把**后台首页待办列表**里的某一条勾成完成（那行前面的勾）。它写的是主人自己
+    那份私人清单，站内公开页面上看不到；他问"那个 xx 办完了 / 帮我把它勾掉"时用它。
+    `text` 必须是那一行**现在的正文原样**：这张列表没有行号，正文是唯一能认出是
+    哪一条的东西——对不上、或有多条同名，就一条都不改、如实告诉他。
+    **只翻完成标记**（正文与排期一个字都不动），**也不做**"取消完成"。需要管理员
+    身份，且要经主人确认。"""
+    from agent import adminops as A
+    body = str(text or "").strip()
+    if not body:
+        return unavailable("这条待办没写内容（正文是空的），本次未改动")
+    if len(body) > _TODO_TEXT_LIMIT:
+        return unavailable(f"这条待办太长了（{len(body)} 字，最多 {_TODO_TEXT_LIMIT} 字），"
+                           f"本次未改动——请让主人把这件事说短一点")
+
+    # 写前先读（同族纪律）：① 在**发出请求之前**就认出是哪一条——查无此条/有多条时
+    # 一个字节都不发（服务端也会拒，但那样主人拿到的是一句"服务端说没有"，而不是
+    # 我们读到的"你列表里现在有哪几条"）② 顺手记下它此刻的完成状态当回执基线。
+    before = _admin_get("/api/protected/todos", config)
+    if isinstance(before, ToolResult):
+        return _pre_read_fail(before, "你后台首页的待办列表")
+    rows_before = _todo_rows(before)
+    if rows_before is None:
+        return unavailable("读回的后台待办不是列表，没法确认你要勾的是哪一条，本次未改动")
+    hits = _todo_text_hits(rows_before, body)
+    if not hits:
+        if not rows_before:
+            return not_found("你后台首页的待办列表现在是空的（一条都没记），没有可勾的")
+        return not_found(f"你后台首页的待办里没有「{body}」这一条（列表里现在有 "
+                         f"{len(rows_before)} 条）——请照那一行现在的正文说，"
+                         f"或先读一遍列表再指")
+    if len(hits) > 1:
+        # **歧义即零写**（同 Rust `pick_todo`）：绝不替主人挑一条——挑错的那次
+        # 在列表上看起来和挑对一模一样。
+        where = "、".join(A.render_todo_when(r) for r in hits)
+        return not_found(f"有 {len(hits)} 条待办都叫「{body}」，分不清是哪一条"
+                         f"（{where}）——先到后台首页把其中一条改个说法")
+    before_done = bool(hits[0].get("done"))
+
+    data = _admin_todo_done_post({"text": body, "done": True}, config)
+    if isinstance(data, ToolResult):
+        return data
+
+    # 写后复核 = **一次独立读数**（接口回的那一条不算判据，同 create_dashboard_todo）：
+    # 按同一 key 找回那一行，它必须真的是完成态。这一条**不能**用"列表里有没有这么
+    # 一条"代替——那一行在写之前就在（这是"翻标记"不是"新增"），只有 done 翻转才是
+    # 净变化。
+    after = _admin_get("/api/protected/todos", config)
+    if isinstance(after, ToolResult):
+        return unavailable(f"勾完成的请求已发出，但读不回你后台首页的待办列表（{after}），"
+                           f"本次改动未确认生效")
+    rows_after = _todo_rows(after)
+    if rows_after is None:
+        return unavailable("勾完成的请求已发出，但读回的后台待办不是列表，本次改动未确认生效")
+    now_hits = _todo_text_hits(rows_after, body)
+    if len(now_hits) != 1:
+        return unavailable(f"勾完成的请求已发出，但读回列表里叫「{body}」的现在有 "
+                           f"{len(now_hits)} 条（写前 {len(hits)} 条）——"
+                           f"本次改动未确认生效，不要声称已勾完成")
+    after_done = bool(now_hits[0].get("done"))
+    if not after_done:
+        return unavailable(f"勾完成的请求已发出，但读回列表里这一条仍是**未完成**"
+                           f"——本次改动未确认生效，不要声称已勾完成")
+    # 幂等**不短路**（同冻结/解冻族）：写前已经是完成态也照发请求（服务端那个分支
+    # 是真 no-op），结论由上面这次复核给——回执按 `changed` 如实区分"刚勾的"与
+    # "本来就是"，绝不把一次什么都没做的请求叙述成一个动作。
+    return ok(A.render_todo_done(body, changed=not before_done),
+              meta={"op": "dashboard_todo_done",
+                    "before": "已完成" if before_done else "未完成",
+                    "after": "已完成"})
 
 
 # ---------------------------------------------------------------------------
@@ -3482,11 +3627,12 @@ _TOOL_REGISTRY = [
     # 见"站内信"节头注（术语：站内信 ≠ 河灯留言）
     list_my_messages,
     read_messages,
-    # 后台首页待办 / 日程（20260926）：读=admin.console、追加=write.console，
-    # 见"后台首页待办 / 日程"节头注。写只有**追加一条**这一条通道（agent 手里
-    # 没有那份列表，整份覆盖会抹掉主人的改动）。
+    # 后台首页待办 / 日程（20260926）：读=admin.console、写两件=write.console，
+    # 见"后台首页待办 / 日程"节头注。两条写通道都只动**一行**（追加一条 / 翻一条
+    # 的完成标记）——agent 手里没有那份列表，整份覆盖会抹掉主人的改动。
     list_dashboard_todos,
     create_dashboard_todo,
+    complete_dashboard_todo,
     # 冻结 / 解冻账号（20260926）：write.console，目标=后台账号列表里的**账号名**，
     # 见"管理助手写工具：冻结 / 解冻账号"节头注。两个工具而不是一个带方向的参数：
     # 方向写进工具名，确认卡与回执才不可能与真正执行的方向相反。
