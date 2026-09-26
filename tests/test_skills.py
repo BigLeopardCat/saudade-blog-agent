@@ -3487,6 +3487,34 @@ def test_short_reply_and_adjacent_pairs():
     for t in ("帮我看看《架构文档》里快道怎么写的", "你好呀小猫咪", "要的是哪一篇来着",
               "把樱花打开", "不用麻烦了，我自己去看那篇文章就好"):
         check(f"非短应答「{t[:12]}」", _short_reply_kind(t) == "", _short_reply_kind(t))
+    # —— 承接块（20260926）：认不出类别 ≠ 与上一轮无关 ——
+    # 事故（会话 247）：主人回「当然是都做」，三张表一张都不命中 ⇒ 旧写法在这里早退成
+    # 一句缺省语，上一轮泠月那句"①…还是②…"的提问**从未交给 planner**，两个动作都没做。
+    # 修的是"要不要给出上下文"（`_looks_like_followup` 宽容触发），**类别判据一个字节不放宽**
+    # ——上面那两条负例与下面的裸肯定就是这条不变性的锁（判宽会牵动同意/授权/拒绝的闸门）。
+    _hist_short = [HumanMessage(content="有没有关于 OTA 的文章"),
+                   AIMessage(content="站内有《ESP32-S3 OBC 固件接入参考》。"
+                                     "要我把它的 OTA 章节读一遍给你讲讲吗？")]
+    for t in ("都做", "当然是都做", "两个都做", "全都要", "都办了吧",
+              "执行这个日程", "好现在执行这个日程"):
+        _h = _short_reply_hint(_hist_short + [HumanMessage(content=t)])
+        check(f"承接块·全选式「{t}」仍不是短应答（类别不放宽）",
+              _short_reply_kind(t) == "", _short_reply_kind(t))
+        check(f"承接块·全选式「{t}」把上一轮泠月发言交出去",
+              "泠月：站内有《ESP32-S3 OBC 固件接入参考》" in _h
+              and "要我把它的 OTA 章节读一遍给你讲讲吗？" in _h, _h[:60])
+        check(f"承接块·全选式「{t}」写明逐项还原且不许补项",
+              "逐项还原" in _h and "不许自己补项" in _h)
+    # 出口必须成对：块里既要写"该接"，也要写"不接就当新话题"——只写前者的块会把
+    # 每一句短消息都往上一轮上硬接（「把樱花打开」也是短句，它是个独立命令）
+    _h_new = _short_reply_hint(_hist_short + [HumanMessage(content="把樱花打开")])
+    check("承接块：给出「按新话题处理」那条出口", "按字面当新话题" in _h_new)
+    check("承接块：没有上一轮发言时仍是缺省语（无物可承接）",
+          _short_reply_hint([HumanMessage(content="都做")]) == "（当前消息不是短应答）")
+    check("承接块：长句不触发（形态判据不等于什么都交出去）",
+          _short_reply_hint(_hist_short
+                            + [HumanMessage(content="帮我看看《架构文档》里快道怎么写的")])
+          == "（当前消息不是短应答）")
     # 带壳形态（20260923 修）：生产链路里用户消息自带 `[当前问题]: ` 锚点（server.py），
     # 而本判据是**整串相等**型 ⇒ 壳一在就恒返回 ''（实证：followup_short_yes_executes 的
     # trace 里 planner 收到的 short_reply 写着「当前消息不是短应答」）。这里**必须用带壳
@@ -3567,9 +3595,15 @@ def test_short_reply_and_adjacent_pairs():
           "同意" in _short_reply_hint(proposal + [HumanMessage(content="[当前问题]: 要")]))
     check("带壳短应答提示·拒绝：真的给出「拒绝」指令",
           "拒绝" in _short_reply_hint(proposal + [HumanMessage(content="[当前问题]: 不用了")]))
-    check("短应答提示：非短应答给缺省语",
-          _short_reply_hint(proposal + [HumanMessage(content="那《架构文档》里怎么写的？")])
+    check("短应答提示：长句非短应答给缺省语",
+          _short_reply_hint(proposal + [HumanMessage(content="那《架构文档》里怎么写的，帮我按章节梳理一遍吧？")])
           == "（当前消息不是短应答）")
+    # 短问句（≤12 字）走**承接块**：它形态上确实可能在承接上一轮，而块里那条"当新话题
+    # 处理"的出口就是给这类句子准备的。**不许**在这里断言缺省语——那等于要求"短句一律
+    # 不交上下文"，而这正是本次要修的洞（「都做」也只有两个字）。
+    _h_q = _short_reply_hint(proposal + [HumanMessage(content="那《架构文档》里怎么写的？")])
+    check("短问句：给承接块而不是缺省语（短 ≠ 短应答）",
+          "泠月：" in _h_q and "按字面当新话题" in _h_q, _h_q[:60])
     # 模板占位符即契约：多一个少一个都在这里红（漏传 → 运行时 KeyError）
     from string import Formatter
     import agent.graph as g
