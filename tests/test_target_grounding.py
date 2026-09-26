@@ -21,6 +21,8 @@ planner 填 `name="删掉吧"`——它**恰是这句话的子串**，于是"值
      判据收紧了，别把主人说过的话也拒掉）；
   ⑤ 判据里不再有词表（AST 级：`_owner_target_span` 规则④ 与门函数都不引用
      `_GENERIC_NAME_WORDS` / `_TARGET_ACTION_MARKS`——防止有人把补丁式的词表加回来）。
+  ⑥ **值**通道的指代（20260927）：命名标记后面跟的是代词时不算名字，来源态判据也不
+     认它——代词是原话的子串，那条逐字子串的地基对它本来是失效的（现场重放见下）。
 
 **令牌层的不变量**（弹卡印出来的那个名字可溯源）在**产物层**锁：需要两轮跑法把
 `__CONFIRM__:` 帧里的令牌载荷带回来（`run_case` 的 `confirm_payloads`），随确认轮
@@ -42,8 +44,9 @@ sys.path.insert(0, str(ROOT))
 
 import agent.graph as g  # noqa: E402
 from agent.graph import (  # noqa: E402
-    _bare_target_name, _msg_grounded_name, _msg_name_slot, _msg_quote_spans,
-    _name_like, _name_target_fix, _target_grounding_refusal)
+    _DEICTIC_WORDS, _bare_target_name, _grounded_value, _msg_grounded_name,
+    _msg_name_slot, _msg_named_value, _msg_quote_spans, _name_arg_fix, _name_like,
+    _name_target_fix, _target_grounding_refusal, _value_clean)
 
 FAILED: list[str] = []
 
@@ -222,6 +225,46 @@ check("判据读的是主人原话本身（四个抽取器，全部由名词/引
       str(sorted(_names_in(_msg_grounded_name))))
 check("指代型仍不介入（P 不参与 `_name_like`：`把那个标签删掉吧` 判假）",
       "_msg_pre_noun_runs" not in _names_in(_name_like))
+
+print("\n⑥ 值通道的指代（20260927：代词是原话的子串 ⇒ 来源态判据被上游校正器自满足）")
+# 现场（档位对照 trace 20260927T041139，native 不思考档）：原话
+# 「给我建个新标签，然后把这篇文章的标签换成它」，模型给的值是自编的「AI Agent」，
+# 而「换成」是命名标记 ⇒ 抽取器把紧跟其后的代词当成"新名字"，校正器据此把自编值
+# 改写成「它」——**逐字子串判据对代词恒真**，于是错值一路进写工具，两不思考档 5/6。
+_DEFECT_MSG = "给我建个新标签，然后把这篇文章的标签换成它"
+check("抽取端：命名标记后面跟的是指代 ⇒ 不是名字（原话实证）",
+      _msg_named_value(_DEFECT_MSG) == "" and _value_clean("它") == ""
+      and _value_clean("这个") == "" and _value_clean("那些") == "")
+check("引号 = 主人明说的字面量 ⇒ 起名叫「它」仍然合法（判据收窄不误伤）",
+      _msg_named_value("把那个标签改名叫「它」") == "它"
+      and _value_clean("「它」") == "它")
+check("真名字两端都不受影响",
+      _msg_named_value("在「编程」下面建一个二级标签，名字叫「向量数据库」") == "向量数据库"
+      and _value_clean("向量数据库") == "向量数据库")
+check("判据端：指代一律不算有据（就在原话里也不算）",
+      not _grounded_value("它", _DEFECT_MSG) and not _grounded_value("那些", "把那些标签删掉")
+      and _grounded_value("向量数据库", "名字叫「向量数据库」"))
+# 现场重放：模型参数照 trace 原样（got={"title": "AI Agent"}），断言校正器**不再**
+# 把它改写成代词，而是走"定不了 ⇒ 确定性零写 + 如实追问"那条路。
+po = _plan("create_tag", {"title": "AI Agent"}, skill="tag_create")
+_r = _name_arg_fix(po, _DEFECT_MSG, role="admin")
+check("现场重放：返回值是零写 + 追问（不是校正）",
+      _r is not None and _r[0] == "create_tag", str(_r)[:120])
+check("现场重放：计划里的值一个字没动（没有「它」）",
+      _args_of(po).get("title") == "AI Agent", str(po["tools"]))
+check("现场重放：追问文案点名的是模型那个值（不是代词）",
+      _r is not None and "AI Agent" in _r[1], (_r or ("", ""))[1][:160])
+po = _plan("create_tag", {"title": "向量数据库"}, skill="tag_create")
+check("反向：值本来就有据 ⇒ 校正器不介入（防线不是重写器）",
+      _name_arg_fix(po, "在「编程」下面建一个二级标签，名字叫「向量数据库」",
+                    role="admin") is None
+      and _args_of(po).get("title") == "向量数据库")
+check("两端同源（AST 级：抽取器与判据都得认这一族，改一端会被抓住）",
+      "_DEICTIC_WORDS" in _names_in(_value_clean)
+      and "_DEICTIC_WORDS" in _names_in(_grounded_value),
+      f"{sorted(_names_in(_value_clean))} / {sorted(_names_in(_grounded_value))}")
+check("这一族是**封闭类**（穷举得完：短词表，不是词形族的开放扩张）",
+      len(_DEICTIC_WORDS) <= 40 and all(len(w) <= 3 for w in _DEICTIC_WORDS))
 
 print()
 if FAILED:

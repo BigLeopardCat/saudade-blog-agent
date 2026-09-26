@@ -4724,16 +4724,38 @@ _NAME_VALUE_STOP = "，,。；;、！？!?～~\n"
 # 捕获段的干净度判据（与 `_bare_target_name` 同源，另加"父标签"这一族泛称）
 _GENERIC_VALUE_WORDS = _GENERIC_NAME_WORDS + (
     "父标签", "父标签名", "父级标签", "上级标签", "新名字", "新标签", "标题", "题目")
+# 指代家族（20260927）。**这一族特别危险**：它是原话的子串，所以拿它当值写进去，
+# 结果**天然通过下游的来源态判据**（`_grounded_value` 就是逐字子串）——判据被它
+# **上游的校正器**自满足，谁也拦不住。实测现场（档位对照，trace `20260927T041139`）：
+# 模型给 `create_tag` 的值是自编的「AI Agent」，而主人原话是「把这篇文章的标签换成**它**」
+# ——`_NAME_MARKS` 里的「换成」让 `_msg_named_value` 把紧跟其后的「它」当成了"新名字"，
+# 于是校正器把自编值改写成「它」（trace 的 `write_value_correct` got/used 一对实证），
+# 一路走到写工具。两不思考档 5/6 触发、思考档与 text 0/6。
+# 为什么这里可以列词表（而"动词词形族"那条教训恰恰是**不许**扩词表）：代词是**封闭类**，
+# 穷举得完、也不会长出新成员；动词是开放类，每遇新词形就假红一次。封闭类列在这里是
+# 划定义域，不是打补丁。
+_DEICTIC_WORDS = ("它", "他", "她", "它们", "他们", "她们",
+                  "此", "该", "其", "上述", "前者", "后者",
+                  "这", "那", "这些", "那些", "这种", "那种", "这个", "那个",
+                  "这里", "那里", "这边", "那边", "此处", "该标签", "该分类")
 # 父标签的语序标记：`在「编程」下面/里` 与 `挪到「编程」下面` 两种领法
 _PARENT_TAIL_RE = re.compile(r"\s*(?:下面|底下|之下|下|里|内|中)")
 
 
 def _value_clean(raw: str) -> str:
-    """捕获段过一遍干净度判据：脏（带标点/超长/是泛称/混着名词或动作词）→ 空串。"""
-    raw = str(raw or "").strip().strip("「」『』“”\"'").strip()
+    """捕获段过一遍干净度判据：脏（带标点/超长/是泛称/是指代/混着名词或动作词）→ 空串。"""
+    text = str(raw or "").strip()
+    # 引号 = 主人**明说**"就是这几个字"（与目标名通道同一条规矩）⇒ 指代那一族只在
+    # **没引号**时判脏：「改名叫「它」」是要一个叫"它"的名字（凭空起名合法），
+    # 而裸的「换成它」是**指代**、不是名字。
+    quoted = (len(text) >= 2
+              and text[0] in "「『“\"'" and text[-1] in "」』”\"'")
+    raw = text.strip("「」『』“”\"'").strip()
     if not raw or len(raw) > 60 or raw in _GENERIC_VALUE_WORDS:
         return ""
     if any(ch in raw for ch in _NAME_VALUE_STOP):
+        return ""
+    if not quoted and raw in _DEICTIC_WORDS:
         return ""
     # 名词只在**段首**算脏（"标签"/"一级标签"/"分类名"是名词短语形态）；名字里**含**名词
     # 是常见形态——实测 `把分类「探针分类0922193132」改名叫「探针分类0922193132R」` 里那段
@@ -4802,9 +4824,13 @@ def _parent_marked_span(user_msg) -> str:
 
 
 def _grounded_value(val, sq_msg: str) -> bool:
-    """这个值在主人原话里逐字有据吗？泛称/描述里的措辞**不算**有据。"""
+    """这个值在主人原话里逐字有据吗？泛称/描述里的措辞与**指代**都**不算**有据。
+
+    指代那一族的判据是**形状**（封闭类词表），不是"在不在原话里"——正因为它一定在
+    原话里，逐字子串那条地基对它是失效的（现场与论证见 `_DEICTIC_WORDS` 长注）。
+    """
     v = _squash_spaces(val)
-    if not v or v in _GENERIC_VALUE_WORDS:
+    if not v or v in _GENERIC_VALUE_WORDS or v in _DEICTIC_WORDS:
         return False
     return v in sq_msg
 
