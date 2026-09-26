@@ -278,6 +278,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
                     "exec_rows": [], "exec_tools": [], "tool_rounds": 0,
                     "trace": None, "resets": 0, "resets_reasons": [],
                     "confirm_tokens": [], "confirm_payloads": [],
+                    "task_frames": [],
                     "error": "确认令牌验签失败（零执行）—— 用例里的令牌/uid/会话不自洽"}
     trace_id = None
     t_trace0 = time.monotonic()
@@ -350,6 +351,12 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     # "该弹窗时弹了窗、且什么都没写"。刻意收原文而不是布尔：断言侧自己取前缀，
     # 判据与 server/Rust/前端三端的帧契约对得上。
     control_frames: list[str] = []
+    # 任务状态帧（20260927 批 D）：`__TASK__:<json>` 是**系统写回的权威终态**
+    # （登记 `running` / 撤下 `cancelled` / 按回执结算 `succeeded`），Rust 收帧落库、
+    # 下一轮读回来注入——所以它既是"这一轮系统认定了什么"的唯一判据，也是跨轮用例
+    # 唯一的断言对象。**解包后留 dict**（不像 `__CMD__` 那样重建回连线形）：这里要断言
+    # 的就是载荷里的 `state`/`cursor`，重建一层只会再多一份会漂移的形状。
+    task_frames: list[dict] = []
     for item in frames:
         if isinstance(item, str) and item.startswith("__RESET__"):
             final_text = ""  # REVISE/兜底轮作废 → 清空（与前端最终显示一致）
@@ -386,6 +393,16 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
                 _wire = ""
             if _wire:
                 commands.append(_wire)
+        elif isinstance(item, str) and item.startswith("__TASK__:"):
+            # 不与 `__CMD__` 那样重建连线形（见上面 `task_frames` 的声明）：断言读的是
+            # 载荷里的 `state`/`cursor`。`__RESET__` 那一支**不清**它——与 `__EXEC__` 同理：
+            # gate fallback 只否定叙述文本，任务登记/结算是已发生的系统事实。
+            try:
+                _tf = json.loads(item[len("__TASK__:"):])
+            except Exception:
+                _tf = None
+            if isinstance(_tf, dict):
+                task_frames.append(_tf)
         elif isinstance(item, AIMessageChunk) and item.content:
             final_text += str(item.content)
         elif isinstance(item, ToolMessage) and item.content:
@@ -434,6 +451,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             "trace": trace_path,
             "confirm_tokens": confirm_tokens,
             "confirm_payloads": confirm_payloads,
+            "task_frames": task_frames,
             "resets": resets, "resets_reasons": resets_reasons, "error": error}
 
 
@@ -447,6 +465,13 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
       · 主脚本 `main()` 逐条调它；
       · 隔离子进程 `golden_case_runner.py` 也调它（父进程只负责 spawn，见 golden_full_run）；
       · 第 2 轮的令牌**取自上轮控制帧**（`__CONFIRM__` 的 `token` 字段）。
+
+    **两类多轮，判据是 gold 有没有给 `confirm_message`**（20260927 批 D 加了第二类）：
+      · **确认跳**（`confirm_message` 在场）：第 2 轮是"点了确定"，消息由 gold 合成、
+        令牌来自上轮；上轮没签出令牌 ⇒ 响亮失败不发（理由见循环里那段）；
+      · **普通续轮**（没有 `confirm_message`）：第 2 轮是主人**又说了句话**（如「继续吧」），
+        用户文本取自该轮自己的 `user_input`，**不带令牌**——它本来就不是"照某张卡执行"。
+        跨轮任务状态用例走这一类（第 2 轮靠注入的未完结任务上下文续做）。
 
     **为什么"唯一"是重点**：两轮之间的耦合（令牌来自上一轮、会话 id 必须一致、第 2 轮
     不许重新规划）都是"顺序"这件事的产物。两处各写一份 ⇒ 早晚出现"进程内跑法把第 2 轮
@@ -474,8 +499,11 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
     done: list[dict] = []
     prev_token = ""
     for i, rnd in enumerate(rounds):
-        if i > 0 and not prev_token:
-            # 上一轮没签出令牌 ⇒ **这一轮不发**。这不是保守，是必须：rounds 里的第 2 轮
+        # 这一轮是**确认跳**（点确定那一跳）还是**普通续轮**（20260927 批 D 起两者都有）。
+        # 判据是 gold 侧有没有给合成命令文案——只有确认轮才该带令牌（见下面那段）。
+        is_confirm_round = bool(rnd.get("confirm_message"))
+        if i > 0 and is_confirm_round and not prev_token:
+            # 上一轮没签出令牌 ⇒ **这一轮不发**。这不是保守，是必须：rounds 里的确认轮
             # 消息是合成命令式文本（「确认执行：…」），而"同轮命令即确认"是写路径的一条
             # 真放行通道（见 agent/authz）——把它当普通轮发出去，可能**另找一条路把写做掉**，
             # 那这轮评测就反过来在真库里执行了一次未授权写入。要的是"响亮失败"。
@@ -486,9 +514,15 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
         req = build_request(case, rnd)
         # 第 2 轮起：合成消息（生产上前端发的是「确认执行：<卡面摘要>」）+ 上一轮的令牌。
         # **不重新规划**是令牌本身的性质（graph 见 grant 直接走执行轮），这里不额外判。
-        if i > 0:
+        if i > 0 and is_confirm_round:
             req.message = rnd.get("confirm_message") or "确认执行"
             req.confirm_token = prev_token
+        # **没有令牌的续轮不发令牌、也不改写消息**（20260927 批 D 的多轮用例：第 2 轮是
+        # 主人自己说的「继续吧」，走的是**普通请求**——planner 照常采样、靠注入的未完结
+        # 任务上下文决定做什么）。它不需要令牌：上面那条担心的"合成命令式文本借同轮命令
+        # 通道把写做掉"在这里不成立，这轮发的是用例自己写的自然语言 `user_input`。
+        # 反过来把令牌硬塞给它才是错的：令牌把技能与参数签在里面（agent/confirm.py），
+        # 那是"照这张卡执行"的授权，与"主人又说了一句话"不是一回事。
         t0 = time.time()
         res = run_one(req, principal,
                       trace_ctx=({"run": run_id, "case": case["id"] + suffix} if run_id else None),
@@ -742,6 +776,9 @@ GOLD_ASSERT_KEYS = frozenset({
     "require_frame_prefix", "forbid_frame_prefix", "forbid_fallback",
     # 确认卡片载荷（20260925）：从 __CONFIRM__ 帧的令牌里解出的技能/参数条数
     "require_confirm_payload",
+    # 跨轮任务状态（20260927 批 D）：本轮的 `__TASK__` 帧写回了什么状态。见下面
+    # check_gold 里那段的"为什么是末帧"。
+    "require_task_state", "forbid_task_state",
     # 语料化（术语由申报文档运行期派生，见 eval/corpus_terms.py）
     "require_doc_terms",
 })
@@ -986,6 +1023,28 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
         for _tk in (result.get("confirm_tokens") or []):
             if _tk and _tk in text:
                 fails.append("令牌原文出现在正文里（它是 10 分钟有效的写授权凭据）")
+
+    # 20260927 批 D：**跨轮任务状态**断言（`__TASK__` 帧，见 run_one 里那段）。
+    #   require_task_state —— 本轮**末帧**的 state 必须是其中之一（且至少有一帧）
+    #   forbid_task_state  —— 本轮任何一帧都不得是这些 state
+    # **为什么 require 看"末帧"而不是"出现过"**：一个 task 的写回是 last-write-wins
+    # （Rust 按 task_id 落库），所以"这一行最后成了什么"由末帧决定；写成"出现过"会让
+    # 「先 cancelled、后 succeeded」这种序列判过，而库里留的是后一个。同轮多任务的
+    # 顺序无契约，用例不该依赖它（真有两个任务要断言时，得先给帧加任务维度的过滤）。
+    # 这条键存在的直接理由：`task_drop` 拆出来之前，"撤下"与"我办完了"共用空 steps 一个
+    # 形状 ⇒ narrator 说「已按你的登记撤下（不再跟踪）」而结算把同一行写成 succeeded——
+    # 落库终态对、话不对，而这个错**在帧上看得见**（state=cancelled），在正文上只是措辞。
+    _tf_states = [str(f.get("state") or "") for f in (result.get("task_frames") or [])]
+    _req_ts = gold.get("require_task_state")
+    if _req_ts:
+        if not _tf_states:
+            fails.append(f"本轮没有发出 __TASK__ 帧（期望末帧 state ∈ {_req_ts}）")
+        elif _tf_states[-1] not in _req_ts:
+            fails.append(f"任务末帧 state={_tf_states[-1]!r}，期望 ∈ {_req_ts}"
+                         f"（本轮全部帧：{_tf_states}）")
+    for s in gold.get("forbid_task_state", []):
+        if s in _tf_states:
+            fails.append(f"任务状态不应是 {s!r}（本轮帧：{_tf_states}）")
 
     if gold.get("forbid_fallback") and result["resets"]:
         fails.append(f"本轮走了 gate fallback（__RESET__×{result['resets']}："

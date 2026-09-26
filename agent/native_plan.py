@@ -46,7 +46,13 @@ from agent.skills import (
     tool_arg_schemas,
     visible_skills,
 )
-from agent.tasks import TASK_HOLD, normalize_declaration, task_hold_schema
+from agent.tasks import (
+    TASK_DROP,
+    TASK_HOLD,
+    normalize_declaration,
+    normalize_drop,
+    pseudo_tool_schemas,
+)
 
 # 技能参数的短类型名（`ParamSpec.type`，见 `agent/skills.py::arg_type_short`）→ JSON Schema。
 # `any` / `?` 是"推不出映射"，不在表里——由 `_param_schema` 兜（见那里的注）。
@@ -180,11 +186,12 @@ def build_tool_schema(role: str | None, *, task_state: bool = False) -> list[dic
     `complete_when` 拼进 description：它在文本档里本来就只进提示词、**没有强制点**
     （没有任何代码读它），搬进 description 是等价的，且比原来离决策更近。
 
-    `task_state=True` 时**追加一个伪函数** `task_hold`（`agent/tasks.py`，"还有事情
-    没做完"的登记通道）。它不进 `visible_skills` 那条集合断言的口径里——断言写的是
-    "技能名集合 + 一个申报过的伪函数"（见 `tests/test_native_plan.py` ①）。
-    **这不是扩权**：它不是技能、不执行任何工具、也没有第二个消费方，只是让模型能把
-    "剩下的步骤"说出来；能不能真做，仍然由技能通道与下游全部防线决定。
+    `task_state=True` 时**追加两个伪函数**（`agent/tasks.py`：`task_hold` 登记
+    "还没做完的事"、`task_drop` 撤下一件已登记的事——为什么是两条而不是"空步骤"，
+    见 `tasks.TASK_DROP` 的注）。它们不进 `visible_skills` 那条集合断言的口径里——
+    断言写的是"技能名集合 + 申报过的伪函数"（见 `tests/test_native_plan.py` ①）。
+    **这不是扩权**：它们不是技能、不执行任何工具、也没有第二个消费方，只是让模型能把
+    "剩下的步骤"说出来、把"不做了"说清楚；能不能真做，仍然由技能通道与下游全部防线决定。
     """
     tools: list[dict] = []
     for skill in visible_skills(role):
@@ -206,7 +213,7 @@ def build_tool_schema(role: str | None, *, task_state: bool = False) -> list[dic
             fn["parameters"]["required"] = required
         tools.append({"type": "function", "function": fn})
     if task_state:
-        tools.append(task_hold_schema(role))
+        tools.extend(pseudo_tool_schemas(role))
     return tools
 
 
@@ -255,33 +262,51 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
 
     content 也空 ⇒ 返回 None，由调用方走既有收尾（`_wrap_up_plan`），不在这里编一句话。
 
-    `task_state=True` 时先摘出 `task_hold` 调用（20260927 批 D）：**它不参与技能选择**，
+    `task_state=True` 时先摘出两个伪函数的调用（20260927 批 D）：**它们不参与技能选择**，
     而是单独归一化成 `declare`，剩下的调用照旧走本函数原有的"取第一条"逻辑。两种组合
     都成立且都要支持——只登记（`skill="chat"`、`declare` 非空）、登记 + 一个动作调用
     （"这一轮做掉第一步，同时把剩下的记下来"，这正是多步目标该有的形态）。
-    `task_state=False`（开关 off）时 `task_hold` 与其它未知函数名一视同仁 ⇒ 返回 None，
-    登记通道在 schema 上就不存在（`build_tool_schema` 不追加它）。
+    `task_state=False`（开关 off）时这两个名字与其它未知函数名一视同仁 ⇒ 返回 None，
+    任务通道在 schema 上就不存在（`build_tool_schema` 不追加它们）。
+
+    **两个伪函数同轮出现时取登记、把撤下记账丢掉**（`task_drop_ignored`）：两条意图
+    互相矛盾，而误判代价不对称——丢掉登记 = 这件事又没人管了（本批要治的那个病）；
+    丢掉撤下 = 系统多跟踪一会儿（下一轮照样能撤）。同一条取向见 `agent/tasks.py`
+    的 `normalize_declaration`：判不了就记账、不猜。
     """
     if list(getattr(resp, "invalid_tool_calls", None) or ()):
         return None
     calls = list(getattr(resp, "tool_calls", None) or ())
     base = {"finish_reason": finish_reason(resp), "raw_tool_calls": tuple(calls)}
     declare: dict | None = None
+    notes: list[str] = []
     if task_state:
-        rest, holds = [], []
+        rest, holds, drops = [], [], []
         for c in calls:
             nm = str((c or {}).get("name") or "") if isinstance(c, dict) else ""
-            (holds if nm == TASK_HOLD else rest).append(c)
+            (holds if nm == TASK_HOLD else drops if nm == TASK_DROP else rest).append(c)
         calls = rest
-        # 归一化失败（例如没给 goal）**不等于判不了**：当作"这次登记无效"记一笔，
-        # 继续按剩下的调用决定这一轮——为此丢掉一个合法决策是更大的损失。
+        if holds and drops:
+            notes.append("task_drop_ignored")
+        # 归一化失败（没给 goal / 一条有效步骤都没有 / 撤下的 goal 是空的）**不等于判不了**：
+        # 当作"这次登记无效"记一笔（`task_hold_invalid`），继续按剩下的调用决定这一轮
+        # ——为此丢掉一个合法决策是更大的损失。这一格也是"空 steps 撤下"那条老路的
+        # 终点：它现在什么都不做（见 agent/tasks.py 的 TASK_DROP 注）。
         if holds:
             declare = normalize_declaration((holds[0] or {}).get("args"))
+            if declare is None:
+                notes.append("task_hold_invalid")
+        elif drops:
+            declare = normalize_drop((drops[0] or {}).get("args"))
+            if declare is None:
+                notes.append("task_drop_invalid")
     if not calls:
-        if declare is None and not _content_of(resp).strip():
+        if declare is None and not notes and not _content_of(resp).strip():
             return None
-        # 只有登记：技能位给 chat（本轮没有动作要执行），`declare` 交给 planner 那一支。
-        return NativeDecision(skill="chat", params={}, declare=declare, **base)
+        # 只有登记/撤回、或伪函数参数无效：技能位给 chat（本轮没有动作要执行），
+        # `declare` 交给 planner 那一支，`notes` 让那一格在 trace 里看得见。
+        return NativeDecision(skill="chat", params={}, notes=tuple(notes),
+                              declare=declare, **base)
     head = calls[0] if isinstance(calls[0], dict) else {}
     name = str(head.get("name") or "")
     if name not in {s.name for s in visible_skills(role)}:
@@ -289,7 +314,6 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
     args = head.get("args")
     if not isinstance(args, dict):
         return None
-    notes: list[str] = []
     if len(calls) > 1:
         # 并发调用本应由 `parallel_tool_calls=False` 挡在服务端；网关若忽略该参数，
         # 这里只取第一条、其余记账。**绝不**把多个技能拼进同一份计划——那会绕过
@@ -300,7 +324,8 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
         # 同一轮既调用动作又登记：**允许**（多步目标"做一步、记下剩下的"就是这个形状），
         # 但它越过了 `parallel_tool_calls=False` 的约定 ⇒ 记账，供事后看这个约定是否被
         # 网关遵守（若常态出现，那说明该参数的约束力要重新评估）。
-        notes.append(f"task_hold_inline:{name}")
+        notes.append(f"{TASK_HOLD if declare.get('state') != 'cancelled' else TASK_DROP}"
+                     f"_inline:{name}")
     return NativeDecision(skill=name, params=args, notes=tuple(notes),
                           declare=declare, **base)
 

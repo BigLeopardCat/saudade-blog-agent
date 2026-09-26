@@ -12,12 +12,14 @@
 `decisions.py::_scan_action_intents` 只认**具名别名**（`_EFFECT_ALIASES` 里有"樱花/
 大雨"才会扫出 effect 意图），而本族失败的第二步宾语恰恰是**未具名指称**（「开启一个
 特效」）——扫描器结构上看不见它。能看见的只有理解语义的模型，所以登记的入口是模型
-（native 档的一个伪函数 `task_hold`）。这不违反"服务端记录不许模型自报"那条纪律：
+（native 档的两个伪函数：登记 `task_hold`、撤下 `task_drop`）。
+这不违反"服务端记录不许模型自报"那条纪律：
 那条管的是**已发生的事实**（由 checker 回执认定，模型说了不算）；而"主人一共要几件事、
 还差哪一步"只存在于 planner 的决策里，没有任何下游能推导出来。
 
 **三端链路**（跨语言契约，改一处必须同步另外两处；表结构见迁移文件头注）：
-  agent 登记：planner 认定"这一轮做不完"→ `task_hold` → `frame_payload` 的 JSON
+  agent 登记：planner 认定"这一轮做不完"→ `task_hold`；主人说不做了 → `task_drop`
+             （两条意图各一次调用，载荷同构）→ `frame_payload` 的 JSON
              → 随该轮发 `__TASK__:` 帧；
   Rust  落库：chat.rs 在 JSON 文本解析**之前**拦帧（与 `__EXEC__`/`__PENDING__` 同族），
              **收到即落库、绝不转发前端**；按 `task_id` upsert（同一件事的后续回合只更新
@@ -33,10 +35,20 @@
     主人手动换了别的特效也会把该步算作完成。粗但确定，且比"模型自称做完了"可信；
   · 文本档（`PLANNER_ENGINE=text`）的 `TODO:` 行**不接进本表**：它没有机器可读的步骤
     工具，接进来只会产出永远结算不掉的行（`advance_by_receipts` 直接返回 None）；
-  · 取消只有一条通道：主人明确说不做了 ⇒ 模型用同一个 `goal`、`steps` 留空再登记一次
-    （`normalize_declaration` 把"空步骤"判成 `cancelled`）；
+  · 撤下是**另一个伪函数** `task_drop`（20260927 修，见下面的"两个伪函数"）；
   · **登记当轮不结算**（`declared_after` 只对同轮新登记的行走 ts 过滤）：不这么做的话，
-    "先导航再登记"的轮次里那半步会被自己刚执行的回执立刻算完成。
+    "先导航再登记"的轮次里那半步会被自己刚执行的回执立刻算完成；
+  · 撤下**不由系统核实"主人到底说没说不做"**（模型说撤就撤）：判据只能落在那句自然语言上，
+    而系统没有一条确定性的通道去核它（见下面那条"两个伪函数"的注——这里只做到"撤下必须
+    是一次**说得出口的独立动作**"）。唯一装上的一道确定性闸是**"完成 > 撤下"**
+    （`drop_is_completion`，20260927 实测加的）：那件事的剩余步骤这一轮真的按回执做完了
+    ⇒ 撤下不成立，改按完成收尾。**方向刻意是单向的**：拦住的多半是"我做完啦"被写成撤下
+    （实测 3/4 次采样），而真正的主人撤下（那一轮不会有该步骤的回执）不受影响；
+  · **撤下与结算的先后仍可能不一致**（同族残余）：模型在**同一次请求里先撤下、后执行**
+    （planner 轮 0 发 drop、轮 1 才做那一步）时，`drop_is_completion` 看不到还没产生的回执
+    ⇒ 撤下帧照发，随后流尾结算又写 `succeeded`。落库终态由后写者决定 ⇒ **对**，但那一轮
+    的 narrator 是照"撤下"的注记说的。这一支今天没有判据覆盖（多轮用例里它没出现过），
+    如实记在这里。
 
 ⚠️ **本模块不许 import `agent.graph`**（与 `agent/native_plan.py` 同一条）：graph 是
 消费方，反向 import 会成环。本模块只依赖 `agent.skills` 的可见技能表。
@@ -51,11 +63,26 @@ from typing import Any
 
 from agent.skills import callable_query_tools, visible_skills
 
-# 模型侧登记的伪函数名。**它不是技能**（技能表 `SKILLS` 里没有它，`instantiate_plan`
-# 也不认它）——它只在 native 档的 `tools` 数组里出现，被 `tool_calls_to_plan` 认出来
-# 后交给本模块。刻意用一个**不与任何技能重名**的名字：重名会让"模型到底点了技能还是
-# 登记"在 trace 里分不清。
+# 模型侧的两个伪函数名（**20260927 拆成两个**，理由见 `TASK_DROP` 上方那段）。
+# 它们**不是技能**（技能表 `SKILLS` 里没有它们，`instantiate_plan` 也不认）——只在
+# native 档的 `tools` 数组里出现，被 `tool_calls_to_plan` 认出来后才交给本模块。
+# 刻意用**不与任何技能重名**的名字：重名会让"模型到底点了技能还是登记"在 trace
+# 里分不清。
 TASK_HOLD = "task_hold"
+
+# 撤下（"这件事主人说不做了"）是一条**与登记并列的意图**，所以有自己的一次调用。
+#
+# 为什么不是"登记时 steps 留空"（20260927 改掉的那版，就是这条注存在的全部理由）：
+# 那种写法让**同一个形状担两种语义**——"没有剩下的步骤了"（模型心里的完成）与
+# "这件事撤下"（系统的 cancelled）长得一模一样。实测（`eval/task_state_probe.py`
+# 两轮探针）：模型把剩下那一步做完之后，又用同一个 goal、空 steps 登记了一次
+# ——它的意思是"我没剩什么要记的了"，系统读成"他不要这件事了"，narrator 于是说
+# 「系统已按你的登记把「X」这件事撤下（不再跟踪）」，而流尾结算按回执把同一行写成了
+# `succeeded`（落库终态对、话不对）。同族教训：剔空纠偏那次的缺陷本体就是
+# "两者长得一样"（`_drop_correction` 头注）。**判据要能分开的两种意图，就不该共用
+# 一个形状**——现在的分工是：`task_hold` 必须有 steps（空 steps 一律判无效，见
+# `normalize_declaration`），想撤下只能显式点 `task_drop`。
+TASK_DROP = "task_drop"
 
 # 六态状态机里"还没完结"的三态（与 Rust `TASK_OPEN_STATES` 同集合，两侧都在判：
 # 读侧过滤在 SQL 里，这里是注入前的防御）。
@@ -69,14 +96,24 @@ LABEL_MAX = 80
 TOOL_MAX = 64
 
 TASK_HOLD_DESC = (
-    "把「还没做完的事」登记下来（跨轮不会丢），或把已经不打算做的事撤下。"
+    "把「还没做完的事」登记下来（跨轮不会丢）。"
     "**只在你这一轮不打算继续做它、且不登记就会被忘掉的时候用**——"
     "目标 goal 写主人原话里那件事（别加工、别概括成「完成用户需求」这类空话）；"
-    "steps 写**还没做**的步骤，每步的 tool 必须是你打算用哪个站内工具去完成它"
-    "（从给定闭集里选最接近的那个），label 写成人话说清这一步做什么；"
+    "steps 写**还没做**的步骤（**至少一条**），每步的 tool 必须是你打算用哪个站内工具"
+    "去完成它（从给定闭集里选最接近的那个），label 写成人话说清这一步做什么；"
     "如果缺信息、必须先问主人才做得下去，把要问的那**一句原话**写进 pending_question。"
-    "主人明确说这件事不做了 ⇒ 用**同一个 goal** 再调一次、steps 留空，这件事就被撤下。"
     "⚠️ 登记不等于做了：这一轮该执行的动作照样要在同一轮里完成，登记只是记下剩下的。"
+    "⚠️ **做完的事不要登记，也不要为了「收尾」再调一次**：剩下没有步骤时调本函数"
+    "一律判无效（什么都不记）。做完由系统按本轮的执行回执**自动结算**，你不需要任何"
+    "动作。要撤下一件已经登记过的事，用 `task_drop`。"
+)
+
+TASK_DROP_DESC = (
+    "把之前登记过的那件事**撤下**（系统从此不再跟踪它）。"
+    "**只在主人明确说这件事不做了 / 不用做了 / 算了别弄了的时候用**——"
+    "goal 写你当初登记时那件事的说法（对得上才撤得掉同一行）。"
+    "⚠️ 你自己把它做完了**不要**用它：做完由系统按执行回执自动结算，"
+    "撤下只会让系统以为主人不要这件事了。"
 )
 
 
@@ -102,6 +139,10 @@ def task_hold_schema(role: str | None) -> dict:
 
     `tool` 的闭集省略**空集**那一格：JSON Schema 里 `enum: []` 是"永不可满足"，
     真出现（技能表全被角色过滤空）宁可不约束，也不让整份 schema 变成死局。
+
+    `steps` 带 `minItems: 1`：空步骤在**服务端**就不合法（`normalize_declaration`
+    是第二道）——这道约束的价值不在于拦住模型（它照样会发），而在于让"撤下"不再有
+    一条与"没有剩下的步骤"同形的表达（见 `TASK_DROP` 上方那段）。
     """
     tools = step_tool_enum(role)
     tool_prop: dict[str, Any] = {"type": "string"}
@@ -119,6 +160,7 @@ def task_hold_schema(role: str | None) -> dict:
                              "description": "这件事的一句话目标（取主人原话里的说法）"},
                     "steps": {
                         "type": "array",
+                        "minItems": 1,
                         "items": {
                             "type": "object",
                             "properties": {
@@ -129,7 +171,7 @@ def task_hold_schema(role: str | None) -> dict:
                             },
                             "required": ["label", "tool"],
                         },
-                        "description": "**还没做**的步骤（本轮已做完的不写进来）",
+                        "description": "**还没做**的步骤，至少一条（本轮已做完的不写进来）",
                     },
                     "pending_question": {
                         "type": "string",
@@ -142,6 +184,38 @@ def task_hold_schema(role: str | None) -> dict:
     }
 
 
+def task_drop_schema() -> dict:
+    """`task_drop`（撤下）的 OpenAI function schema。**只要 goal 一格**。
+
+    刻意没有 steps 可选：撤下这件事没有"剩下的步骤"，而留一个可空的 steps 正好会把
+    老那个歧义形状（空 steps）请回来——那正是这次要拆掉的东西。
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": TASK_DROP,
+            "description": TASK_DROP_DESC,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string",
+                             "description": "要撤下的那件事（用当初登记时的说法）"},
+                },
+                "required": ["goal"],
+            },
+        },
+    }
+
+
+def pseudo_tool_schemas(role: str | None) -> list[dict]:
+    """本开关打开时，`tools` 数组末尾追加的**全部伪函数**（登记 + 撤下）。
+
+    单一入口：`build_tool_schema` 只调它，名字集合的断言（`tests/test_native_plan.py`）
+    也只认它——两个伪函数的形状若各写一处，"开档只多两个名字"这条判据就会漂移。
+    """
+    return [task_hold_schema(role), task_drop_schema()]
+
+
 def normalize_declaration(args: Any) -> dict | None:
     """模型给的 `task_hold` 参数 → 归一化声明；**判不了就返回 None**。
 
@@ -149,8 +223,10 @@ def normalize_declaration(args: Any) -> dict | None:
       · `goal` 空白 ⇒ None（没有目标就没有这件事，也就没有可对齐的 id）；
       · 步骤超 `TASK_MAX_STEPS` 只收前几步；缺 label 用 tool 顶上、缺 tool 留空串；
       · `pending_question` 与 goal 同列宽截断（列宽是硬约束，超了 DB 会报 1406）；
-      · **空步骤 = 撤下**：`state="cancelled"`，且把 `pending_question` 一并清空
-        （撤下的事不该还挂着一个要问的问题——那会让下一轮又把它捡起来）。
+      · **一条有效步骤都没有 ⇒ None**（20260927 改）：以前这里返回
+        `state="cancelled"`，于是"模型心里没有剩下的步骤了"被读成"主人不要这件事了"
+        （实测现场见 `TASK_DROP` 的注）。现在空步骤**什么都不是**——调用方记一笔
+        `task_hold_invalid` 就放过，既不登记也不撤下。
     """
     if not isinstance(args, dict):
         return None
@@ -170,9 +246,28 @@ def normalize_declaration(args: Any) -> dict | None:
             if label or tool:
                 steps.append({"label": label or tool, "tool": tool})
     if not steps:
-        return {"goal": goal, "steps": [], "pending_question": "", "state": "cancelled"}
+        return None
     return {"goal": goal, "steps": steps, "pending_question": q,
             "state": "input_required" if q else "running"}
+
+
+def normalize_drop(args: Any) -> dict | None:
+    """模型给的 `task_drop` 参数 → 归一化的撤下声明；**判不了就返回 None**。
+
+    产出的形状与 `normalize_declaration` **完全同构**（同四个键），因为两条通道的载荷
+    走的是同一个消费方：`frame_payload` 派生 `task_id`、Rust 一套 upsert、producer 一套
+    结算。撤下的行 `steps=[]`、`total_steps=0`、`cursor=0`、`state="cancelled"`
+    ——`advance_by_receipts` 见空 steps 直接返回 None，所以它不可能被结算改写。
+
+    `pending_question` 一并清空：撤下的事不该还挂着一个要问的问题
+    （那会让下一轮又把它捡起来）。
+    """
+    if not isinstance(args, dict):
+        return None
+    goal = re.sub(r"\s+", " ", str(args.get("goal") or "")).strip()[:GOAL_COL_MAX]
+    if not goal:
+        return None
+    return {"goal": goal, "steps": [], "pending_question": "", "state": "cancelled"}
 
 
 # 指纹归一：把空白与标点抹掉再比。**这是"同一件事"的判据**——主人同一句话里
@@ -302,6 +397,64 @@ def task_rows(raw: Any) -> list[dict]:
     return [r for r in raw if isinstance(r, dict) and r.get("task_id")]
 
 
+def settled_by_receipts(task: Any, receipts: Any) -> bool:
+    """这一行的步骤**这一轮按回执全做完了**吗（纯函数，20260927）。
+
+    判据**与流尾结算同源**：直接问 `advance_by_receipts`——它说能推进到 `succeeded`，
+    这件事就是"做完了"。**不另写一套"步骤的工具名都在回执里"**：游标（做到第几步）
+    只有结算函数知道，各写一份迟早分叉（同族教训见 `rows_to_settle` 的注）。
+    """
+    adv = advance_by_receipts(task if isinstance(task, dict) else {}, receipts)
+    return bool(adv) and adv.get("state") == "succeeded"
+
+
+def drop_is_completion(open_tasks: Any, conversation_id: Any, decl: Any,
+                       receipts: Any) -> bool:
+    """这一次 `task_drop` 是不是其实是「**我已经把它做完了**」（纯函数，20260927）。
+
+    **为什么需要这道闸**（实测，不是推演）：`task_drop` 拆出来之后，模型并没有按描述
+    只在"主人说不做了"时用它——`eval/golden/basic.jsonl::task_state_resume_settle`
+    开开关跑 4 次，3 次出现"把剩下那步做完的同一轮里又调了一次 `task_drop`"
+    （trace 现场：`planner decision round 0 skill=effect status=executed` →
+    `planner task_declare round 1 state=cancelled`）。它的意思是"这行收掉吧，我做完了"，
+    而系统读成"主人不要这件事了"⇒ 帧写 `cancelled`、话术说「已撤下、不再跟踪」，
+    紧接着流尾结算又按回执把**同一行**写成 `succeeded`——**落库终态对、话不对**，
+    正是本批要治的那个病换了个入口回来（原入口是"空 steps 的登记"）。
+
+    所以这里加一道**方向单一**的确定性闸：那件事的剩余步骤这一轮真的按回执做完了 ⇒
+    撤下**不成立**（按完成收尾）。反方向不受影响：主人真说不做的那一轮**不会有该步骤的
+    回执**，撤下照旧生效。刻意**不**去核"主人到底说没说不做"（那要读自然语言、要词表，
+    误伤面比这一条大得多，同族讨论见模块头注那条"已知缺口"）。
+
+    查不到对应行（goal 没登记过 / 会话 id 不是整数）⇒ `False`（**按撤下处理**）：
+    此时没有"步骤"可判，而无从判定的撤下只会给 Rust upsert 出一行 `cancelled`
+    ——终态行不参与注入，代价接近零；反过来拦掉它才是瞎猜。
+    """
+    if not isinstance(decl, dict) or decl.get("state") != "cancelled":
+        return False
+    if not isinstance(conversation_id, int):
+        return False
+    tid = task_id_for(idempotency_key_for(conversation_id, decl.get("goal") or ""))
+    row = next((r for r in task_rows(open_tasks) if r.get("task_id") == tid), None)
+    if row is None:
+        return False
+    return settled_by_receipts(row, receipts)
+
+
+# 被判定为"其实是做完了"的撤下轮，交给 narrator 的注记（**单行**，理由同
+# `declaration_note`：它会被拼进计划契约的 `NOTE:` 行）。措辞的三条要求：
+#   ① **不许出现"撤下/取消/不做了"这类词**——注记是给 narrator 的，它照着措辞写字，
+#      而那正是被替换掉的那句错话（「系统已按你的登记把「X」撤下（不再跟踪）」）。
+#      用"撤下"去否定撤下，等于把词递到它嘴边；
+#   ② 要说清"系统会自己结算"：这一轮是确定性收尾、planner 不再决策，但下一轮它还会看到
+#      这一行（直到 Rust 按终态过滤掉），得让它知道**不用再去登记/清理**；
+#   ③ 只许照实叙述这一步做完了，不许扩写成"整件事都办妥了"（后面的步骤它并不知道）。
+TASK_DONE_NOTE = (
+    "这件事剩下的步骤这一轮已经按执行回执做完了，系统会自行结算成「已完成」。"
+    "照实告诉主人这一步已经执行完毕即可；**不要**说这件事被放下了、被清掉了，"
+    "也不要说整件事都办妥了。")
+
+
 # 注入块的抬头与纪律。**纪律句不是装饰**：这段文本是 planner 唯一能知道"这些事是
 # 上一轮我自己登记下来的"的地方，写漏了它会把这些行当成主人这一轮的新指令。
 _TASK_BLOCK_HEAD = (
@@ -311,7 +464,8 @@ _TASK_BLOCK_TAIL = (
     "（主人这一轮的话如果是在回答上面某个问题、或在推进某件事，就接着把它做完——"
     "该走的技能通道照常走；**做完由系统按执行回执自动结算，你不用再登记一次**。"
     "「」里要问主人的那一句**原样问出来**，不许改写成别的说法、不许自己加选项。"
-    "主人明确说不做某件事时，用同一个 goal、steps 留空再登记一次即可撤下它。"
+    "主人明确说不做某件事时，用 `task_drop`（同一个 goal）把它撤下；"
+    "**做完的事不要撤下、也不要再登记**，系统自己会结算。"
     "**不许**说你已经把上面任何一件事做完了。）")
 
 

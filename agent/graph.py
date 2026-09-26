@@ -107,7 +107,8 @@ from agent.skills import (DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
                           skill_param_specs, visible_skills)
 # 任务登记（20260927 批 D）：登记帧的构造与那一轮给 narrator 的注记/纠偏都在
 # `agent/tasks.py`——本模块只决定"什么时候用它"（见 planner 的那一支）。
-from agent.tasks import declaration_note, declaration_nudge, frame_payload
+from agent.tasks import (TASK_DONE_NOTE, declaration_note, declaration_nudge,
+                         drop_is_completion, frame_payload)
 from utils import trace as trace_mod
 from utils.trace import record
 
@@ -3168,6 +3169,9 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         #   · 只登记、既没执行任何工具、也没有要问的问题 ⇒ 这一轮访客什么都看不到，
         #     那是拖延不是交付 ⇒ 走既有纠偏通道（`correction`）重决策**一次**，
         #     由模型自己选"现在就做"还是"把问题写出来"——系统不替它选（决策权不搬走）；
+        #   · **撤下不走这条纠偏**（20260927）：主人说"这件事不做了"的那一轮本来就
+        #     零工具、零问题，那是对的一轮。以前它会被上面这条一起纠偏（措辞是
+        #     "你既没做也没问"），等于逼模型对一次合法撤下再找点事做。
         #   · 纠偏之后仍然这样 ⇒ 认它（第三条路已经没有了，继续丢只会退回"静默消失"
         #     那个本批要治的病）；有帧或有问题 ⇒ 直接认。
         # 登记轮用的 `status="wrapped"` 是**借用**确定性收尾轮的语义（本轮确实是
@@ -3177,7 +3181,25 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # `PLAN_STATUS_ABSENCE_EXEMPT` 里** ⇒ 站的"没有"结论判据照旧拦，fail-closed）。
         if use_native and decided is not None and decided.declare is not None:
             decl = decided.declare
-            if not decl.get("pending_question") and not has_frames and not correction:
+            _cancelled = decl.get("state") == "cancelled"
+            # **完成 > 撤下**（20260927 实测加的闸，见 `tasks.drop_is_completion` 的
+            # docstring）：模型把"剩下那步我做完了"写成 `task_drop` 时（4 次采样里 3 次），
+            # 帧会写 cancelled、话术会说"已撤下"，而紧接着的流尾结算又把同一行写成
+            # succeeded——正是本批要治的病换了个入口。撤下**先过这一道**：那件事的步骤
+            # 这一轮真按回执做完了 ⇒ 撤下不成立，按"已完成"收尾、**不发撤回帧**。
+            # 放在纠偏之前：撤下轮本来就不走纠偏（见下面那句注），这一支更不该走。
+            _cfgc = (config or {}).get("configurable", {})
+            if drop_is_completion(_cfgc.get("open_tasks"), _cfgc.get("conversation_id"),
+                                  decl, state.get("receipts")):
+                plan_obj = _wrap_up_plan(has_frames, note=TASK_DONE_NOTE)
+                record("planner", "task_drop_settled", goal=decl.get("goal"),
+                       round=rounds, frames=has_frames)
+                logger.info("[planner] 撤下改判为完成：%s（本轮回执已覆盖它剩下的步骤，"
+                            "不撤、不发帧，交给流尾结算）", decl.get("goal"))
+                return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                        "done": False, "task_frame": {}}
+            if (not _cancelled and not decl.get("pending_question")
+                    and not has_frames and not correction):
                 correction = declaration_nudge(decl)
                 correction_kind = "任务登记"
                 record("planner", "task_correct", goal=decl.get("goal"),
@@ -3202,7 +3224,8 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                    goal=decl.get("goal"), steps=len(decl.get("steps") or []),
                    state=decl.get("state"), question=bool(decl.get("pending_question")),
                    round=rounds, corrected=bool(correction), frames=has_frames)
-            logger.info("[planner] 任务登记：%s（剩 %d 步，状态 %s，问主人=%s，task_id=%s）",
+            logger.info("[planner] 任务%s：%s（剩 %d 步，状态 %s，问主人=%s，task_id=%s）",
+                        "撤下" if _cancelled else "登记",
                         decl.get("goal"), len(decl.get("steps") or []),
                         decl.get("state"), bool(decl.get("pending_question")),
                         frame.get("task_id") or "（未落库）")
