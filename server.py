@@ -31,7 +31,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 from agent import adminops as A  # 过程行中文取值（写工具的预告/完成帧共用）
 from agent import confirm  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
 from agent import create_agent
-from agent.graph import AgentCancelled, graph_input
+from agent.graph import AgentCancelled, graph_input, _cmd_wire
 from agent.principal import Principal
 from agent.summarizer import summarize
 from agent.skills import NAV_MAP  # 过程行路径反查中文别名用（展示层，非执行依据）
@@ -576,6 +576,16 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
             ex_upd = data.get("execute")
             if ex_upd and ex_upd.get("receipts"):
                 exec_rows = ex_upd["receipts"]
+                # 命令重建（20260926 批 2）：三个命令工具的返回文本不再带
+                # `AUTO_NAVIGATE:` 前缀，命令搬到了回执行的 `cmd` 字段。非流式
+                # 消费方（Rust `/chat` 响应体）读的仍是**连线形**，所以在这里
+                # 重建回原前缀行 ⇒ Rust 非流式那半零改动（流式那半走新 `__CMD__` 帧）。
+                # 取**最后一条**与旧语义一致：每个 ToolMessage 命令帧依次覆盖 nav_line。
+                _wires = [_cmd_wire(r.get("cmd")) for r in exec_rows
+                          if isinstance(r, dict)]
+                _wires = [w for w in _wires if w]
+                if _wires:
+                    nav_line = _wires[-1]
             # gate 打回重规划（20260926，见 graph.route_after_gate）：那条被否定的
             # 叙述已经累进 full_reply 了，不清零的话**最终回复 = 无依据那段 + 重查
             # 之后的真话**，两段一起入库、一起给访客看——比原来的兜底更糟。流式那
@@ -1265,6 +1275,20 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                             emit_process("✅ " + _tool_action_text(
                                 str(r.get("tool") or ""), r.get("args")),
                                 key=f"receipt_{i}")
+                            # 连线命令帧（20260926 批 2）：命令搬上了回执行的
+                            # `cmd`（Python 写 / Rust 读的既有跨语言契约），这里按
+                            # 新增回执逐条发 `__CMD__:<json>`。
+                            # ★ **必须从 producer 发**（不在 event_stream）：golden
+                            # 直接 drain 的就是本函数的队列（`run_golden.py::run_one`），
+                            # 只在 event_stream 发的话 golden 的 `commands` 恒为空，
+                            # 而且**在 golden 侧无法补救**（114 条 require_cmd_* 断言
+                            # 会一起失真）。放这里同时保住时序：execute 的 update 到达
+                            # = execute 节点收尾，早于 narrator 的 model 节点产文本。
+                            cmd = r.get("cmd")
+                            if isinstance(cmd, dict):
+                                asyncio.run_coroutine_threadsafe(
+                                    queue.put("__CMD__:" + json.dumps(cmd, ensure_ascii=False)),
+                                    loop).result()
                         receipt_sent = len(rows)
                     for b in ex_upd.get("blocked") or []:
                         # ✗ 行在前、✅ 行在后（本轮两列表分开到达，不混排）；
@@ -1568,6 +1592,23 @@ async def chat_stream(req: ChatRequest, request: Request):
                     # "data: " 前缀**（Rust 的 SSE 解析是 strip_prefix(b"data: ")，
                     # 裸 yield 到不了落库分支），Rust 落库后吞掉、不转发前端
                     # （前端无此帧协议，透传会被当正文渲染）。
+                    yield f"data: {chunk}\n\n"
+                    continue
+                if isinstance(chunk, str) and chunk.startswith("__CMD__:"):
+                    # 连线命令帧（20260926 批 2）：命令从"工具返回的字符串"搬到回执行的
+                    # `cmd`，由 producer 逐条发结构化 JSON（见那里"为什么从 producer 发"）。
+                    # 三件事必须都做，漏任一件都是静默坏路：
+                    #   ① 带 "data: " 前缀转发——Rust 的 SSE 解析是 `strip_prefix(b"data: ")`，
+                    #      裸 yield 到不了它的分支（20260904 `__EXEC__` 上线首轮就这样翻过车）；
+                    #   ② 置 `pending_nl`——命令帧必须**独占一行**（20260903 实证：命令与叙述
+                    #      无换行拼接成单行时，Rust 存库的 `strip_command_lines` 与前端
+                    #      `cleanAgentText` 都是行级过滤，会把整行剥空 ⇒ 转跳后回复丢失）；
+                    #   ③ 置 `nav_line`——决定收尾发 `__NAV_END__` 还是 `__END__`，
+                    #      不置的话前端不知道这一轮有导航、收尾不执行命令。
+                    had_output = True
+                    frames += 1
+                    nav_line = chunk
+                    pending_nl = True
                     yield f"data: {chunk}\n\n"
                     continue
                 if isinstance(chunk, str) and chunk.startswith("__EXEC__:"):

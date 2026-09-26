@@ -285,19 +285,26 @@ def test_gate_nav_pending_claim():
     assert '"confirm": true' in plan  # 手搓的休眠场景：confirm=true ⇒ 前端弹卡等确认
 
     def frame_state(reply: str, frame: str):
-        # 20260903：帧由 execute 直接产出，messages 无需旧的 tool_calls AIMessage
+        # 20260903：帧由 execute 直接产出，messages 无需旧的 tool_calls AIMessage。
+        # 20260926 批 2：命令搬上了**回执行**（`rcpt["cmd"]`），判据一律改读 receipts
+        # ——所以夹具从"帧里带连线形前缀"换成"回执里带结构化 cmd"。命令工具的事实文本
+        # 现在是无前缀的（「导航已发起，等主人确认后才会跳转：<url>」）。
         return {
             "plan": plan, "done": False, "plan_rounds": 0,
+            "receipts": [{"tool": "navigate_to", "result": "",
+                          "cmd": {"kind": "navigate", "url": "https://saudade.site/guestbook",
+                                  "mode": "confirm"}}],
             "messages": [HumanMessage(content="带我去留言板看看"),
                          ToolMessage(content=frame, tool_call_id="execute_0", name="navigate_to"),
                          AIMessage(content=reply)],
         }
 
+    confirm_frame = "导航已发起，等主人确认后才会跳转：https://saudade.site/guestbook"
     cases = [
-        # 用户实测案例：navigate 返回 NAVIGATE:（确认式），但回复"已经带您到"
-        ("已经带您到留言板页面了喵！", "NAVIGATE:https://saudade.site/guestbook"),
-        ("已跳转成功，请查看", "NAVIGATE:https://saudade.site/guestbook"),
-        ("好的，已经到留言板了", "NAVIGATE:https://saudade.site/guestbook"),
+        # 用户实测案例：navigate 返回确认式命令（回执 mode=confirm），但回复"已经带您到"
+        ("已经带您到留言板页面了喵！", confirm_frame),
+        ("已跳转成功，请查看", confirm_frame),
+        ("好的，已经到留言板了", confirm_frame),
     ]
     for reply, frame in cases:
         out = gate_node(frame_state(reply, frame))
@@ -306,7 +313,7 @@ def test_gate_nav_pending_claim():
               and "确认" in out["fallback_text"],
               str(out.get("fallback_text", ""))[:60])
     # 放行口吻（请访客确认，未声称到达）→ pass
-    out_ok = gate_node(frame_state("已为您打开跳转确认，请点击确认即可前往留言板～", "NAVIGATE:https://saudade.site/guestbook"))
+    out_ok = gate_node(frame_state("已为您打开跳转确认，请点击确认即可前往留言板～", confirm_frame))
     check("确认口吻（未声称到达）→ pass",
           out_ok["done"] is True and not out_ok.get("fallback_text"), str(out_ok))
 
@@ -402,7 +409,14 @@ def test_dashboard_nav_expansion():
 
     # ③ 工具层：白名单内直用，白名单外的后台子路径照旧拒绝（不放开前缀）
     frame = base.navigate_to.invoke({"path": "/dashboard/notes", "confirm": False})
-    check("navigate_to(/dashboard/notes) → 出导航帧", frame == "AUTO_NAVIGATE:https://saudade.site/dashboard/notes", frame)
+    # 20260926 批 2：命令工具的返回文本不再带连线前缀——命令走 `meta["cmd"]`
+    # （无前缀中文事实给模型看，结构化 cmd 给回执/浏览器用），见 tools/base.py 的长注。
+    check("navigate_to(/dashboard/notes) → 事实文本 + 结构化 cmd",
+          frame == "页面已跳转：https://saudade.site/dashboard/notes"
+          and (getattr(frame, "meta", None) or {}).get("cmd")
+          == {"kind": "navigate", "url": "https://saudade.site/dashboard/notes",
+              "mode": "direct"},
+          f"{frame!r} meta={getattr(frame, 'meta', None)}")
     bad = base.navigate_to.invoke({"path": "/dashboard/nope", "confirm": False})
     check("navigate_to(/dashboard/nope) → 仍被拒（没放开前缀）",
           "导航路径无效" in bad, bad[:80])
@@ -1077,15 +1091,28 @@ def test_gate_frame_checks():
     """
     print("[gate] 有帧轮一致性检查")
 
-    def _st(skill, msgs_after_plan, **plan_kw):
+    def _st(skill, msgs_after_plan, receipts=None, **plan_kw):
         plan = plan_encode(instantiate_plan(skill, plan_kw))
-        return {"plan": plan, "done": False, "plan_rounds": 1,
-                "messages": [HumanMessage(content="x")] + msgs_after_plan}
+        st = {"plan": plan, "done": False, "plan_rounds": 1,
+              "messages": [HumanMessage(content="x")] + msgs_after_plan}
+        if receipts is not None:
+            st["receipts"] = receipts
+        return st
+
+    def _cmd_row(kind, **kw):
+        """命令类回执行（命令工具的事实文本已无前缀，判据改读回执里的 cmd）。"""
+        cmd = {"kind": kind}
+        cmd.update(kw)
+        return {"skill": "navigate", "tool": "navigate_to", "cmd": cmd}
 
     # 工具帧 + 到达回复 → 放行（声称有据；无旧"落 LLM 质检"环节）
-    out = gate_node(_st("navigate", [ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/device-console/",
+    # 回复刻意带「已经到」——正是 _NAV_ARRIVAL_RE 会抓的那句，判据必须靠回执里的
+    # 导航命令放行，而不是靠"措辞没被正则抓到"侥幸变绿。
+    out = gate_node(_st("navigate", [ToolMessage(content="页面已跳转：https://saudade.site/device-console/",
                                                  tool_call_id="execute_0", name="navigate_to"),
-                                     AIMessage(content="到啦！这里是物联网设备控制台哟～")],
+                                     AIMessage(content="已经到啦！这里是物联网设备控制台哟～")],
+                        receipts=[_cmd_row("navigate", url="https://saudade.site/device-console/",
+                                           mode="direct")],
                         target="物联网平台"))
     check("AUTO 直跳帧 + 到达回复 → pass",
           out["done"] is True and not out.get("fallback_text"), str(out))
@@ -1133,9 +1160,11 @@ def test_gate_frame_checks():
         check("err 帧 fallback 的 trace 带 clause（被否掉的那一句）",
               bool(hits) and "跳转成功" in hits[0].get("clause", ""), str(seen))
         seen.clear()
-        navf = ToolMessage(content="NAVIGATE:https://saudade.site/guestbook",
+        navf = ToolMessage(content="导航已发起，等主人确认后才会跳转：https://saudade.site/guestbook",
                            tool_call_id="execute_0", name="navigate_to")
         gate_node(_st("navigate", [navf, AIMessage(content="好的，已经到留言板了")],
+                      receipts=[_cmd_row("navigate", url="https://saudade.site/guestbook",
+                                         mode="confirm")],
                       target="留言板"))
         hits = [d for n, e, d in seen
                 if e == "fallback" and d.get("issue") == "nav_pending_claim"]
@@ -2316,9 +2345,14 @@ def test_execute_node():
     # 计划内工具 → 确定性执行（参数照 spec 字面）
     out = _run(['navigate_to({"path": "/device-console/", "confirm": false})'])
     msgs = out["messages"]
-    check("清单工具 → 照单执行（AUTO_NAVIGATE 帧 + execute_0）",
-          msgs and msgs[-1].content.startswith("AUTO_NAVIGATE:")
-          and msgs[-1].name == "navigate_to" and msgs[-1].tool_call_id == "execute_0",
+    check("清单工具 → 照单执行（事实帧 + execute_0）",
+          msgs and msgs[-1].content == "页面已跳转：https://saudade.site/device-console/"
+          and msgs[-1].name == "navigate_to" and msgs[-1].tool_call_id == "execute_0"
+          # 连线命令（旧 AUTO_NAVIGATE:/NAVIGATE:）已搬进回执的 cmd 字段——帧里没有它，
+          # server 从回执取 cmd 发 __CMD__ 帧，前端照它执行
+          and out["receipts"][0]["cmd"] == {"kind": "navigate",
+                                            "url": "https://saudade.site/device-console/",
+                                            "mode": "direct"},
           str(msgs[-1].content[:60]) if msgs else "no msg")
     # 未知工具 → __ERROR__ 拒绝帧（execute 侧越界防御；正常清单到不了这）
     out2 = _run(['nonsense_tool({"x": 1})'])
@@ -2336,9 +2370,10 @@ def test_execute_node():
     ids = [m.tool_call_id for m in out4["messages"]]
     check("双工具按序 → execute_0/execute_1 + 直跳/确认两态",
           len(out4["messages"]) == 2 and ids == ["execute_0", "execute_1"]
-          and out4["messages"][0].content.startswith("AUTO_NAVIGATE:")
-          and out4["messages"][1].content.startswith("NAVIGATE:")
-          and "AUTO_NAVIGATE:" not in out4["messages"][1].content,
+          and out4["messages"][0].content == "页面已跳转：https://saudade.site/device-console/"
+          and out4["messages"][1].content
+          == "导航已发起，等主人确认后才会跳转：https://saudade.site/guestbook"
+          and [r["cmd"]["mode"] for r in out4["receipts"]] == ["direct", "confirm"],
           str(ids) + " / " + str(out4["messages"][1].content[:60]))
 
 
@@ -2693,15 +2728,36 @@ def test_checker():
     check("effect cmd_shape 漂移 → BLOCK", v == B and r == "cmd_shape", (v, r))
     v, r = _check_spec("toggle_dark_mode", {"on": True}, True, "on", "darkmode")
     check("darkmode cmd_shape 漂移 → BLOCK", v == B and r == "cmd_shape", (v, r))
-    # PASS 族
-    v, r = _check_spec("navigate_to", {"path": "/guestbook"}, True, "NAVIGATE:/guestbook", "navigate")
-    check("NAVIGATE: 确认帧 → PASS", v == P and r == "ok", (v, r))
-    v, r = _check_spec("navigate_to", {"path": "/guestbook"}, True, "AUTO_NAVIGATE:/guestbook", "navigate")
-    check("AUTO_NAVIGATE: 直跳帧 → PASS", v == P, (v, r))
-    v, r = _check_spec("toggle_effect", {"effect": "sakura", "action": "on"}, True, "EFFECT:sakura:on", "effect")
-    check("EFFECT: 帧 → PASS", v == P, (v, r))
-    v, r = _check_spec("toggle_dark_mode", {"on": True}, True, "DARKMODE:on", "darkmode")
-    check("DARKMODE: 帧 → PASS", v == P, (v, r))
+    # PASS 族（20260926 命令与事实分离：命令在 meta["cmd"] 里，帧文本只剩给人看的事实）
+    v, r = _check_spec("navigate_to", {"path": "/guestbook"}, True,
+                       "导航已发起，等主人确认后才会跳转：https://saudade.site/guestbook",
+                       "navigate", "ok",
+                       {"cmd": {"kind": "navigate", "url": "https://saudade.site/guestbook",
+                                "mode": "confirm"}})
+    check("导航命令（cmd.mode=confirm）→ PASS", v == P and r == "ok", (v, r))
+    v, r = _check_spec("navigate_to", {"path": "/guestbook"}, True,
+                       "页面已跳转：https://saudade.site/guestbook", "navigate", "ok",
+                       {"cmd": {"kind": "navigate", "url": "https://saudade.site/guestbook",
+                                "mode": "direct"}})
+    check("导航命令（cmd.mode=direct）→ PASS", v == P, (v, r))
+    v, r = _check_spec("toggle_effect", {"effect": "sakura", "action": "on"}, True,
+                       "特效 樱花(sakura) 已打开", "effect", "ok",
+                       {"cmd": {"kind": "effect", "effect": "sakura", "action": "on"}})
+    check("effect 命令 → PASS", v == P, (v, r))
+    v, r = _check_spec("toggle_dark_mode", {"mode": "on"}, True, "夜间模式已打开", "darkmode", "ok",
+                       {"cmd": {"kind": "darkmode", "mode": "on"}})
+    check("darkmode 命令 → PASS", v == P, (v, r))
+    # 形态错配三种：命令工具没带 cmd（帧文本再对也不算有命令）／种类对不上／
+    # 非命令工具带了 cmd（"别的工具冒充命令"的形态）
+    v, r = _check_spec("navigate_to", {"path": "/guestbook"}, True,
+                       "页面已跳转：https://saudade.site/guestbook", "navigate")
+    check("命令工具缺 cmd → BLOCK(cmd_shape)", v == B and r == "cmd_shape", (v, r))
+    v, r = _check_spec("navigate_to", {"path": "/guestbook"}, True, "页面已跳转：…", "navigate", "ok",
+                       {"cmd": {"kind": "darkmode", "mode": "on"}})
+    check("命令种类对不上 → BLOCK(cmd_shape)", v == B and r == "cmd_shape", (v, r))
+    v, r = _check_spec("list_notes", {"page": 1}, True, "1. 标题", "content_query", "ok",
+                       {"cmd": {"kind": "navigate", "url": "https://saudade.site/talk"}})
+    check("非命令工具带 cmd → BLOCK(cmd_shape)", v == B and r == "cmd_shape", (v, r))
     v, r = _check_spec("device_oled_display", {"text": "晚上好"}, True, "未在 5s 内收到回执确认", "device_display")
     check("device 软失败（指令已下发）→ PASS 不升受阻链", v == P, (v, r))
     v, r = _check_spec("list_notes", {"page": 1, "page_size": 50}, True, "1. 标题\n2. 标题2", "content_query")
@@ -2740,7 +2796,10 @@ def test_execute_receipts_and_route():
     check("PASS → receipts 含验收行", len(out["receipts"]) == 1
           and out["receipts"][0]["tool"] == "navigate_to"
           and out["receipts"][0]["skill"] == "navigate"
-          and out["receipts"][0]["result"].startswith("AUTO_NAVIGATE:")
+          and out["receipts"][0]["result"] == "页面已跳转：https://saudade.site/device-console/"
+          and out["receipts"][0]["cmd"] == {"kind": "navigate",
+                                            "url": "https://saudade.site/device-console/",
+                                            "mode": "direct"}
           and "ts" in out["receipts"][0] and "args" in out["receipts"][0],
           str(out["receipts"]))
     check("PASS → blocked 空、blocked_repeat False",

@@ -15,11 +15,21 @@ heredoc——结论不可复核、口径每次都不一样，而且**同一段�
   I1 `reply_cmd_prefix`        终稿正文里出现命令前缀标签
                                （`AUTO_NAVIGATE:` / `NAVIGATE:` / `EFFECT:` / `DARKMODE:`）
                                按"本轮有没有真命令回执"分两型——
-                               `cited`（有回执）= 引用回执时把标签一起抄进正文，**批 2 的目标是 0**；
-                               `invented`（无回执）= 模型自己在正文里写标签，含合法的元讨论引述，
+                               `cited`（有回执）= 引用回执时把标签一起抄进正文；`invented`
+                               （无回执）= 模型自己在正文里写标签，含合法的元讨论引述，
                                只列不设目标。
+                               **`cited` 只能在"改动上线之后的新窗口"里读 0**（`--from <上线日>`）：
+                               存量 trace 是**历史事实**，代码改了不会让昨天那份 trace 里的
+                               标签消失，它随保留期自然出清。拿全量语料的 `cited` 当"改完是不是
+                               好了"的判据，会得到"改了也没变"的假结论——这正是本脚本头注
+                               "判据是变了没有、不是判谁有罪"的那一层。
   I2 `zero_tool_plan_to_narrator`  末轮计划是非 chat 技能、工具清单为空，且**整个 trace 一次
                                执行都没有**——即"没有执行过任何东西的计划被交给了 narrator"。
+                               ⚠️ 这条口径**宽于**它要抓的缺陷：通用知识问答（合法）、如实说
+                               "我查不到/做不到"的收尾轮都落在里面（存量 11 条里多数是这类）。
+                               缺陷子集是"系统确定性层**明知**这一轮零执行、却照原样把计划交给
+                               narrator 自由发挥"——那需要 `plan.status` 才判得准（批 3），
+                               届时把这条收窄成子集，别拿现在的计数当"11 条事故"。
   I3 `fallback_by_issue`       gate fallback 按原因码计数（`cmd_prefix` 是批 2 的目标）。
   I4 `fallback_total`          gate fallback 总数 = 生产侧 `__RESET__` 帧数。
                                **`0` 有强含义**：这个窗口里 gate 那条路一次都没被验到，
@@ -46,6 +56,10 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from trace_files import iter_trace_files, parse_trace_name  # noqa: E402
 from trace_io import load_trace  # noqa: E402
+# 连线命令的**唯一** Python 侧实现（命令 → `AUTO_NAVIGATE:<url>` 等连线形）。
+# 这里刻意不复写一份：批 2 之后 trace 里的命令是结构化 `cmd`，与 golden/server 那边
+# 重建出来的是同一件东西，各写一份就是漂移（同 `_cmd_wire` 的文档字符串）。
+from agent.graph import _cmd_wire  # noqa: E402
 
 TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report")
@@ -72,8 +86,13 @@ def scan_one(d: dict) -> dict:
     reply = str(d.get("reply") or "")
     toks = {m.group(0) for m in CMD_PREFIX.finditer(reply)}
     if toks:
+        # "有回执"的两处来源：① 20260926 批 2 之前的工具返回文本（`result` 里带前缀）；
+        # ② 批 2 之后命令搬上了 `cmd` 字段（帧文本已无前缀）——两处都收，这条不变量
+        # 才跨得过那次改动（只认 ① 的话，新窗口里"引用回执"永远判不出来）。
         results = [str(e.get("result") or "") for e in evs
                    if (e.get("node"), e.get("event")) in CALL_EVENTS]
+        results += [_cmd_wire(e.get("cmd")) for e in evs
+                    if (e.get("node"), e.get("event")) in CALL_EVENTS]
         cited = any(t in r for t in toks for r in results)
         # 命中处前后各取 30 字，印出来才分得清"引用回执"和"解释机制"
         at = CMD_PREFIX.search(reply)
@@ -138,7 +157,8 @@ def report(r: dict) -> None:
     print(f"语料 {r['files']} 份文件，窗口内 {r['in_window']} 份"
           f"（读不出 {r['unread'].get('bad_file', 0)} 份——读不出不是「没有」，见脚本头注）\n")
     print(f"I1 正文含命令前缀   引用回执(cited)={c.get('i1_cited', 0)}  "
-          f"自己写的(invented)={c.get('i1_invented', 0)}   ← 批 2 目标是 cited=0")
+          f"自己写的(invented)={c.get('i1_invented', 0)}   ← 改完只看新窗口（--from），"
+          f"存量是历史、会自然出清")
     print(f"I2 零执行的计划交给 narrator = {c.get('i2', 0)}")
     print(f"I4 gate fallback 总数（= 生产侧 __RESET__ 帧数）= {c.get('i4', 0)}"
           f"{'   ← 0 表示这条路这次没被验到，不是「干净」' if not c.get('i4') else ''}")
