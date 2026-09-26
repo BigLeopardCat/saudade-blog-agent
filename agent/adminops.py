@@ -1128,6 +1128,51 @@ def render_account_status(username: str, uid, frozen: bool, changed: bool = True
             f"（后台已复核：名录里这个账号现在就是{account_state_cn(frozen)}状态）")
 
 
+# ── 给单个账号发通知（20260926）─────────────────────────────────────────
+# 这一族的卡面有**一条硬要求**（不是文风问题）：正文**全文**印出来。理由是这件事的
+# 性质——正文由模型按主人的意思**整理**（用户拍板的方向，见 `_send_user_notice` 头注），
+# 而它是一段以主人名义发给**第三方**、**发出后没有撤回通道**的话。整理过的东西加上
+# 收不回，唯一的人眼复核点就只剩这张卡：主人看到全文才能判断"这是不是我要说的那句话"。
+# 截断（哪怕只截尾）会让主人核对的文本与实际发出去的不是同一份 —— 同 `notice.rs`
+# 那条"超长在校验层拒、不静默截断"的取舍。
+_NOTICE_CONSEQ = ("（这条通知会出现在**对方的个人中心**，且**发出后没有撤回的通道**——"
+                  "站内没有删除已发通知的功能）")
+
+
+def render_notice_action(name: str, content: str, title: str = "", users=None) -> str:
+    """`给账号「guest5」（账号 id=126）发一条**站内通知**（标题「站内通知」，正文：
+    「请尽快补齐资料」…）` —— **卡面、问句、跨轮待办的目标**共用这一行。
+
+    `users` 三态与 `render_account_action` 逐字同源（读不到就少说，**不因此不弹窗**）：
+    名录在手且名字在里面 ⇒ 印 `账号 id=…`；名录在手但名字不在 ⇒ 如实标注（主人点
+    确定**之前**就该看到，而不是点完才被告知没发成）；名录读不到 ⇒ 只印名字。
+    """
+    row = _account_row(users, name)
+    if users and row is None:
+        return f"给账号「{name}」发一条**站内通知**（后台账号列表里没有叫这个名字的账号）"
+    # 账号 id 只在名录里查得到时才印（同 render_account_action 的三态）
+    who = f"（账号 id={row.get('id')}）" if row is not None else ""
+    t = str(title or "").strip() or "站内通知"
+    body = str(content or "").strip() or "（没有写正文）"
+    return (f"给账号「{name}」{who}发一条**站内通知**"
+            f"（标题「{t}」，正文：**「{body}」**）{_NOTICE_CONSEQ}")
+
+
+def render_notice_status(username: str, uid, title: str, content: str) -> str:
+    """发通知成功后的回执行（工具 side 用；与卡面同源同事实）。
+
+    正文在这里**截断**（卡面不许截、回执可以）：回执经 `__EXEC__` 落 execution_log，
+    整行有 300 字的列宽上限，而正文可以到 1000 字。截断要**如实标注节选**——回执是
+    下一轮 narrator 唯一的取值来源，一段没有标注的截断会被当成"全部"照念。
+    """
+    body = str(content or "").strip()
+    shown = clip(body, 60)
+    more = "" if len(body) <= 60 else f"（节选，共 {len(body)} 字）"
+    t = str(title or "").strip() or "站内通知"
+    return (f"已把通知发给账号「{username}」（账号 id={uid}）：标题「{t}」，"
+            f"正文「{shown}」{more}。{_NOTICE_CONSEQ}")
+
+
 def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
                  users=None, todos=None) -> str:
     """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
@@ -1371,6 +1416,14 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         # 写进卡面，给不起只印名字（**不因此不弹窗**，同全表取向）。
         return render_account_action(str(a.get("name") or "").strip() or "（没有给出账号名）",
                                      tool == "freeze_account", users)
+    if tool == "send_user_notice":
+        # 发通知（20260926）：与冻结族同走账号名录（`users`），但**卡面必须印出正文
+        # 全文**——见 `render_notice_action` 头注那条硬要求。刻意与冻结卡不同形：
+        # 冻的是"他的登录能力"，发的是"一段以主人名义对第三方说的话"，两张卡读起来
+        # 必须是两件不同的事（`tests/test_todo_schedule.py` 那条互不同形断言的口径）。
+        return render_notice_action(str(a.get("name") or "").strip() or "（没有给出账号名）",
+                                    str(a.get("content") or "").strip(),
+                                    str(a.get("title") or "").strip(), users)
     if tool == "complete_dashboard_todo":
         # 勾完成（20260926 第十轮）：`todos` = 待办列表快照（`tools.base._todo_rows`），
         # 三态见 `render_todo_done_action`。**刻意与加待办那张卡不同形**：加的是"一条

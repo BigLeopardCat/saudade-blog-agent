@@ -600,6 +600,12 @@ _MIN_PARAMS = {
     # 正文写成一条**明显是假的**事（同上面那条纪律：将来谁把这条改成真跑，也只是
     # 一次"列表里没有这一条"的零写，不会动到主人的真待办）。
     "dashboard_todo_done": {"text": "给猫买罐头"},
+    # 给单个账号发通知（20260926 第十一轮）：名字通道 + 自由文本正文两样并存的一件
+    # （收件人走 `_find_named_user` 对后台名录解析，正文由模型整理、卡面印全文）。
+    # ⚠️ 收件人的名字必须**明显是假的**（同上面那条纪律）：这一族跑展开器只碰纯函数、
+    # 不发请求，但名字一旦写成一个真账号，将来谁把这条用例改成真跑就成了生产写——
+    # 而这一件的后果落在**别人**的个人中心、且站内没有删除已发通知的通道。
+    "notice_send": {"name": "probe_target_1", "content": "这是一条发给不存在的账号的测试通知"},
 }
 _EXPECT_TOOL = {
     "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
@@ -617,6 +623,7 @@ _EXPECT_TOOL = {
     "dashboard_todo_add": "create_dashboard_todo",
     "dashboard_todo_done": "complete_dashboard_todo",
     "account_freeze": "freeze_account", "account_unfreeze": "unfreeze_account",
+    "notice_send": "send_user_notice",
 }
 check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",
       set(_EXPECT_TOOL) == set(WRITE_SKILL_NAMES) and set(_MIN_PARAMS) == set(WRITE_SKILL_NAMES),
