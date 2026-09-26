@@ -192,7 +192,7 @@ uv sync
 # L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
 .venv/bin/python eval/recall_eval.py
 
-# L2 真实 LLM 任务评测：128 条 golden（其中 1 条会真写生产库，默认不跑、需显式放行），约 25 分钟，按需运行
+# L2 真实 LLM 任务评测：143 条 golden（其中 3 条会真写生产库，默认不跑、需显式放行），约 25 分钟，按需运行
 .venv/bin/python eval/run_golden.py
 .venv/bin/python eval/run_golden.py --only <id>,<id>   # 只跑指定用例
 .venv/bin/python eval/golden_full_run.py               # 全量跑（与 run_golden 共用判据）
