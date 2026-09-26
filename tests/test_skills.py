@@ -39,7 +39,7 @@ sys.path.insert(0, str(ROOT))
 from agent.graph import (_PLANNER_OUTPUT_RE, REFLECT_MAX_ROUNDS, _article_fast_path,
                          _check_spec, _display_fast_path, _effect_switch_fast_path,
                          _nav_fast_path, _parse_params, _scan_action_intents,
-                         execute_node, gate_node,
+                         execute_node, extract_plan_fields, gate_node,
                          plan_encode, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
 from agent.skills import NAV_MAP, NAV_VALID_PATHS, SKILL_MAP, instantiate_plan
@@ -2848,6 +2848,89 @@ def test_planner_output_re():
         check(f"regex {raw[:20]!r} → {want}", got == want, f"got={got}")
 
 
+def test_planner_output_json_form():
+    """planner 把答复写成 JSON 对象时也要读出技能名（20260926 真机实证）。
+
+    背景：契约是两行纯文本（`SKILL:` + `PARAMS:`），但 40 次采样里 5 次模型改用
+    一个 JSON 对象回答。旧解析只认顶格键 ⇒ 那些轮次静默落成 chat，主人收到
+    「我做不到」（能力明明在），而 trace 里与"闲聊"长得一模一样。
+    """
+    print("[plan] planner 输出的 JSON 对象形态（容错解析）")
+    _P = '{"name": "guest5", "content": "请补齐资料"}'
+    for raw, want_skill, want_name in [
+        # 契约行（老路径不回归）
+        (f"SKILL: notice_send\nPARAMS: {_P}", "notice_send", "guest5"),
+        (f"SKILL=account_freeze\nPARAMS: {_P}", "account_freeze", "guest5"),
+        # 一个 JSON 对象（真机采到的形态：键带引号、可跨行）
+        ('{"SKILL": "notice_send", "PARAMS": {"name": "guest5", "content": "请补齐资料"}}',
+         "notice_send", "guest5"),
+        ('{\n  "SKILL": "notice_send",\n  "PARAMS": {\n    "name": "guest5",\n'
+         '    "content": "请补齐资料"\n  }\n}', "notice_send", "guest5"),
+        # 小写键 + markdown 围栏（模型偶尔两种都带上）
+        ('```json\n{"skill": "notice_send", "params": {"name": "guest5"}}\n```',
+         "notice_send", "guest5"),
+        # 方括号键位（真机采到过 `[SKILL] x` + `[PARAMS] {…}`）
+        ('[SKILL] notice_send\n[PARAMS] {"name": "guest5"}', "notice_send", "guest5"),
+    ]:
+        skill, params = extract_plan_fields(raw)
+        check(f"形态 {raw[:38]!r} → {want_skill}",
+              skill == want_skill and params.get("name") == want_name,
+              f"got skill={skill} params={params}")
+    # 反向：真散文（没有技能名）仍按 chat 兜底——"拿不到技能名"才是真漂移，
+    # 容错不许把"模型没做决策"读成"模型选了某个技能"
+    for raw in ["我理解您希望向特定账号发送通知，但请先告诉我收件人的账号名。",
+                "完全不是计划格式", ""]:
+        skill, params = extract_plan_fields(raw)
+        check(f"散文/空输出 {raw[:16]!r} → 给不出技能名（调用方落 chat）",
+              skill is None and params == {}, f"got skill={skill} params={params}")
+    # 契约行仍在（parse_plan 读的是系统自己写的契约，两处输入不同、判据也不同）
+    check("契约行解析不受影响", _PLANNER_OUTPUT_RE.search("SKILL: navigate") is not None)
+
+
+def test_planner_json_body_wiring():
+    """接线探针：模型给 JSON 对象时，planner_node 真的落到那个技能上。
+
+    上面那条是纯函数单测（**能力有测试 ≠ 接线有测试**，见 CLAUDE.md 里 langgraph
+    `config` 注入那次静默失效的教训）：这里把 planner_node 真跑一遍，确认"解析出来
+    的技能名"确实走进了计划（旧代码在这一层把 JSON 形态解析成了 chat）。
+    """
+    print("[plan] planner_node 收到 JSON 对象形态 → 落到技能上（接线探针）")
+    import agent.graph as G
+    from agent.graph import parse_plan, planner_node
+    from agent.principal import Principal
+
+    class _ScriptedLLM:
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    _msg = "给账号「agent_fixture_freeze_a」发个通知：这是投递测试，请查收。"
+    _cfg = {"configurable": {"principal": Principal(uid=721, role="admin"),
+                             "user_id": 721, "conversation_id": 7, "stop_event": None}}
+    llm = _ScriptedLLM(['{"SKILL": "notice_send",\n "PARAMS": {"name": "agent_fixture_freeze_a",'
+                        ' "content": "这是投递测试，请查收。"}}'])
+    orig = G.get_llm
+    try:
+        G.get_llm = lambda **kw: llm
+        out = planner_node({"messages": [HumanMessage(content=_msg)],
+                            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+    finally:
+        G.get_llm = orig
+    plan = parse_plan(out["plan"])
+    check("JSON 对象形态 → 计划落在 notice_send（不是 chat）",
+          plan["skill"] == "notice_send", plan["skill"])
+    _spec = " ".join(plan["tools"])
+    check("  收件人名字逐字来自主人那句话（不是模型自己编的）",
+          "send_user_notice" in _spec and "agent_fixture_freeze_a" in _spec, _spec[:160])
+    check("  正文原样落进参数（这句是模型整理的、允许整理但不许编事实）",
+          "投递测试" in _spec, _spec[:160])
+    check("  只叫了 planner 一次 LLM（解析成功就不该触发剔空纠偏）",
+          len(llm.prompts) == 1, str(len(llm.prompts)))
+
+
 def test_search_retry_kind():
     """检索重复清单拦截判定（20260905 工具级计数扩展，_search_retry_kind 纯函数）。
 
@@ -4467,6 +4550,38 @@ def test_name_target_round():
               and G._name_write_verbs("今天天气怎么样") == [],
               str(G._name_write_verbs(_MSG_NOQ)))
 
+        # ④a4 通知族的动作词（20260926 新增族）：这一族**不粘着目标**——「给他发个通知」
+        #     是动词粘着**物件**（发+通知），目标名字另在句首，上表那些字面量一条都命不中。
+        #     漏掉它 = 展开层把正文槽的占位符挡下之后，本轮零工具、**不弹卡**、直落 narrator
+        #     （20260926 真机实测：它写出自相矛盾的一句「这就把这条通知发出去喵」+
+        #     「（本轮系统未执行任何操作，通知尚未发出。）」——主人既没卡可点也没人给他重试，
+        #     而同一条重决策通道本就是为此而设）。判据仍是**词形族**（发个/发一条/发私信/
+        #     通知一下/转告），并刻意收窄到"发送动词紧挨着通知/私信"。
+        check("  词形族：通知族的祈使形态命中（发个/发一条/发私信/通知一下/转告）",
+              all(G._name_write_verbs(_s) for _s in (
+                  "给账号「boss」发个通知：请忽略。", "给他发一条通知，让他老实点",
+                  "给他发私信", "通知一下他", "麻烦你转告他一声"))
+              and all(G._name_write_verbs(_s) == [] for _s in (
+                  "看看有没有新通知", "他给我发了条通知，念一下", "这个通知是什么意思",
+                  "把通知列表拉出来")),
+              str(G._name_write_verbs("给账号「boss」发个通知：请忽略。")))
+        llm4n = _ScriptedLLM([
+            'SKILL: notice_send\nPARAMS: {"name": "notice_send", "content": "notice_send"}',
+            'SKILL: notice_send\nPARAMS: {"name": "boss", "content": "请以后老实一点。"}'])
+        G.get_llm = lambda **kw: llm4n
+        out4n = planner_node({"messages": [HumanMessage(
+            content="给账号「boss」发个通知：以后老实一点，不然就冻结。")],
+            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _spec4n = parse_plan(out4n["plan"])["tools"]
+        check("正文槽被填成技能名（展开层零工具）→ **重决策一次**，不再直落 narrator",
+              len(llm4n.prompts) == 2, str(len(llm4n.prompts)))
+        check("  重决策文本走的是「有引号」那一支，并写明目标名字不许改写或截短",
+              "引号点名了目标" in llm4n.prompts[1] and "截短" in llm4n.prompts[1],
+              "纠偏文本未进提示")
+        check("  重决策后落成一条写规格（名字由系统解析 id，交弹卡）",
+              _spec4n == ['send_user_notice({"name": "boss", "content": "请以后老实一点。"})'],
+              str(_spec4n))
+
         # ④b 提问句 / 闲聊结构上不纠偏（多问一次就是白烧一轮 + 诱导乱写）
         for _label, _q in (("疑问句（问影响）", "把标签 Rust 挪到「嵌入式」下面会有什么影响？"),
                            ("疑问句（无引号）", "把大笨狗汪汪那个标签删了会有什么影响？"),
@@ -4635,6 +4750,7 @@ def main():
                test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
+               test_planner_output_json_form, test_planner_json_body_wiring,
                test_search_retry_kind, test_trim_done_reads, test_read_repeat_round,
                test_candidate_relevance_pick,
                test_scan_action_intents, test_doc_anchors_and_clip,

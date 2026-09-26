@@ -606,7 +606,9 @@ _PLANNER_PROMPT = """\
    反例（20260925 生产实证 trace 20260925T035331）：问"小猫咪现在服务器怎么了"，
    台账里最近一条是 3 小时 11 分前的服务器状态 ⇒ 零工具照抄了那份过期读数，叙述
    还写成"刚才查到的"——数据过期 + 措辞不实，两头都错。
-7. 输出严格按以下格式（JSON 双引号），不要任何其他文字：
+7. 输出严格按以下格式——**两行纯文本**（不是 JSON 对象、不要用 `{{}}` 把整份答复
+   包起来、键名不要加引号），PARAMS 后面那个 JSON 里的键值用双引号。
+   不要任何其他文字（除了下面那行可选的 TODO）：
 SKILL: <技能名>
 PARAMS: <JSON>
 （多步链中间轮可另加一行：TODO: <步骤1> → <步骤2>，只描述本轮之后的
@@ -837,8 +839,25 @@ _NAME_WRITE_VERBS = ("挪", "移到", "移动到", "挪到", "挂到", "换到",
                      "改名叫", "改名为", "改名", "改成", "换成",
                      "删掉", "删除", "去掉", "移除", "取消",
                      "新建", "创建", "建立", "新增")
+# 20260926（通知族）：这一族的口语动作词是「给他**发个通知**」——与上表那些"动词直接
+# 粘着目标（删<名字>/把<名字>挪到…）"不同形：这里是**动词粘着物件**（发+通知），目标名字
+# 另在句首（`_bare_target_name` 靠"名词标记→名字→动作标记"那个窗口取）。不收进来的后果
+# 20260926 真机实测过：planner 把正文槽填成技能名/工具名（「notice_send」）被展开层挡下
+# ⇒ 本轮零工具、**不弹卡**，narrator 于是写出自相矛盾的一句（「这就把这条通知发出去喵」
+# +「（本轮系统未执行任何操作，通知尚未发出。）」）——主人既没卡可点、也没人给他重试，
+# 而同一条纠偏通道（首轮零工具 + 写域动作词 ⇒ 交回 planner 重决策一次）本是为此而设。
+# 收窄的理由：只认"**发送动词紧挨着** 通知/私信"，「看看有没有新通知」这类**读**意图
+# （`list_notifications`/`notice_read` 那族）结构上命不中——误命中的代价是多烧一次 planner
+# 采样（纠偏文本里带着"本来就不是要改动数据就保持原决定"的逃生口），而收益是零，故宁可窄。
+_NAME_WRITE_VERBS_EXTRA = ("通知一下", "转告")
+_NAME_WRITE_VERB_EXTRA_RE = (
+    # 填充位里**排除「了」**：「他给我发了条通知，念一下」是**读**别人发来的通知，
+    # 不是让 agent 去发——那种句子命中的话，纠偏会把 planner 往"排一条写规格"推。
+    # 祈使形态（发个通知/发一条通知/发送通知）本身与「了」不相容，排掉它不丢真阳性。
+    r"(?:发|送|推)(?:个|条|一条|一封|一下)?[^，。！？；\s了]{0,2}(?:通知|私信)")
 _NAME_WRITE_VERB_RE = re.compile("|".join(
-    [re.escape(v) for v in _NAME_WRITE_VERBS] + ["删", "清空", "清理", "清除"]))
+    [re.escape(v) for v in _NAME_WRITE_VERBS + _NAME_WRITE_VERBS_EXTRA]
+    + ["删", "清空", "清理", "清除", _NAME_WRITE_VERB_EXTRA_RE]))
 
 
 def _name_write_verbs(text) -> list[str]:
@@ -928,6 +947,15 @@ def _name_write_nudge(plan_obj: dict, user_msg, rounds: int,
 
 _PLANNER_OUTPUT_RE = re.compile(r"SKILL\s*[:=]\s*(\w+)", re.IGNORECASE)
 
+# 带引号/方括号的键位形态（20260926）：模型有时把整个答复写成一个 JSON 对象
+# （`{"SKILL": "notice_send", "PARAMS": {...}}`），键被引号包住 ⇒ 上面那条契约行
+# 正则匹配不到（`SKILL"` 后面不是 `:`）⇒ **静默落成 chat**。实测比例见
+# `extract_plan_fields` 的头注。
+_SKILL_QUOTED_RES = (
+    re.compile(r"[\"'\[]\s*SKILL\s*[\"'\]]\s*[:=]\s*[\"']?([A-Za-z_]\w*)", re.IGNORECASE),
+    re.compile(r"[\"'\[]\s*SKILL\s*[\"'\]]\s*[\"']?([A-Za-z_]\w*)", re.IGNORECASE),
+)
+
 
 def _loads_tolerant(text: str):
     """JSON 容错解析：常见漂移（单引号、尾逗号、行注释）逐个修正后重试。
@@ -947,12 +975,59 @@ def _loads_tolerant(text: str):
 
 
 def _parse_params(raw: str) -> dict:
-    """从 planner 输出提取 PARAMS JSON。容错：去 markdown 围栏、取第一个 {...} 块。"""
-    m = re.search(r"PARAMS\s*[:=]\s*(\{.*\})", raw, re.IGNORECASE | re.DOTALL)
+    """从 planner 输出提取 PARAMS JSON。容错：去 markdown 围栏、取第一个 {...} 块。
+
+    键位容错（20260926）：`"PARAMS": {...}` / `[PARAMS] {...}` 与 `PARAMS: {...}`
+    一样收（同 `_SKILL_QUOTED_RES` 的理由——模型改用 JSON 对象回答时，键被引号包住）。
+    """
+    m = re.search(r"[\"'\[]?\s*PARAMS\s*[\"'\]]?\s*[:=]?\s*(\{.*\})",
+                  raw, re.IGNORECASE | re.DOTALL)
     if not m:
         return {}
     obj = _loads_tolerant(m.group(1).strip().strip("`"))
     return obj if isinstance(obj, dict) else {}
+
+
+def _plan_body_of(raw: str):
+    """整份输出就是一个 JSON 对象时返回它，否则 None（`_loads_tolerant` 兜漂移）。"""
+    s = (raw or "").strip().strip("`").strip()
+    obj = _loads_tolerant(s)
+    if isinstance(obj, dict):
+        return obj
+    m = re.search(r"\{.*\}", s, re.DOTALL)          # 前后还带散文/markdown 围栏
+
+    obj = _loads_tolerant(m.group(0)) if m else None
+    return obj if isinstance(obj, dict) else None
+
+
+def extract_plan_fields(raw: str):
+    """planner 原始输出 → `(技能名 or None, PARAMS dict)`——两个消费端唯一入口。
+
+    **为什么需要它（20260926 实测）**：契约是两行纯文本（`SKILL:` 顶格 + `PARAMS:`
+    后跟 JSON，见 `_PLANNER_PROMPT` 规则 7），但 40 次采样里有 5 次模型改用**一个
+    JSON 对象**回答（notice_send 请求 20 次中 2 次、account_freeze 20 次中 3 次）。
+    此前 `planner_node` 拿一条只认顶格键的正则去读 ⇒ 这些轮次一律落成 chat，而
+    "技能没选中"与"闲聊"在 trace 里长得一模一样：**能力明明在，主人却收到一句
+    "我做不到"**（同族缺陷见记忆里的"长得像诚实拒绝的错话"）。那份 JSON 里语义是
+    **完整且无歧义**的——这是序列化漂移，不是"没给答案"，所以按 `_loads_tolerant`
+    已有的口径（单引号/尾逗号/注释/围栏）一并容错。
+
+    技能名给不出时返回 None（调用方落 chat）：拿不到技能名才是真漂移，此时
+    "宁可少干活，不硬猜"的旧口径不变。
+    """
+    body = _plan_body_of(raw)
+    if isinstance(body, dict) and ("SKILL" in body or "skill" in body):
+        skill = body.get("SKILL") or body.get("skill")
+        params = body.get("PARAMS")
+        if params is None:
+            params = body.get("params")
+        return (skill.strip() if isinstance(skill, str) and skill.strip() else None,
+                params if isinstance(params, dict) else {})
+    for rx in (_PLANNER_OUTPUT_RE,) + _SKILL_QUOTED_RES:
+        m = rx.search(raw or "")
+        if m:
+            return m.group(1), _parse_params(raw or "")
+    return None, _parse_params(raw or "")
 
 
 def plan_encode(plan_obj: dict) -> str:
@@ -995,6 +1070,10 @@ def parse_plan(raw: str) -> dict:
     返回 {"skill", "params", "tools", "note", "reply", "todo", "chat"}。
     容错原则：所有"LLM 输出 → 程序消费"的边界都要能优雅降级——LLM 不是
     JSON 解析器，输出格式漂移是常态（解析失败 → 按 chat 兜底，宁可少干活）。
+
+    ⚠️ 这里的输入是**系统自己写的**契约文本（`plan_encode` 的产物，只经过一次
+    `state` 存取），不是模型原始输出 ⇒ 用顶格正则即可。读**模型原始输出**要用
+    `extract_plan_fields`（它还容错 JSON 对象形态，20260926），别把这条拷过去。
     """
     m = re.search(r"SKILL\s*[:=]\s*(\w+)", raw or "", re.IGNORECASE)
     skill = m.group(1) if m else "chat"
@@ -2607,9 +2686,20 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                **({"slow": True} if slow else {}))
 
         raw = getattr(resp, "content", str(resp))
-        skill_name = re.search(r"SKILL\s*[:=]\s*(\w+)", raw, re.IGNORECASE)
-        skill_name = skill_name.group(1) if skill_name else "chat"
-        params = _parse_params(raw)
+        # 解析走唯一入口 `extract_plan_fields`（20260926）：此前这里自己写了一条只认
+        # 顶格 `SKILL:` 的正则，与 `parse_plan` 里那条是**两份拷贝**，而模型约 15% 的
+        # 轮次改用 JSON 对象回答 ⇒ 两份一起看不见、静默落成 chat（详见该函数头注）。
+        skill_name, params = extract_plan_fields(raw)
+        if skill_name is None:
+            skill_name = "chat"
+        elif not _PLANNER_OUTPUT_RE.search(raw):
+            # 契约行没写，但字段读出来了（JSON 对象/带引号键）——记一笔：这类轮次
+            # 此前全部落成 chat，日志里"没选中技能"与"闲聊"无法区分（20260926）。
+            logger.info("[planner] 输出不是五行契约（JSON 对象/带引号键），"
+                        "已按字段解析：skill=%s（round %d/%d）",
+                        skill_name, rounds + 1, MAX_PLAN_ROUNDS)
+            record("planner", "output_form", form="json", skill=skill_name, round=rounds)
+
         # role 必须传：calls 白名单按角色取（管理员含后台只读项）。漏传 = 静默剔空。
         plan_obj = instantiate_plan(skill_name, params, role)
         plan_obj["params"] = params

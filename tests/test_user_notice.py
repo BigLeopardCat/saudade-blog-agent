@@ -538,6 +538,28 @@ _bad = instantiate_plan("notice_send",
                          "title": "标" * (base._NOTICE_TITLE_LIMIT + 1)}, ROLE_ADMIN)
 check("标题超限 → 零工具 + 说明长度", _bad["tools"] == [] and "太长" in _bad["note"],
       _bad["note"][:70])
+
+# ── 正文槽被填成「系统自己的字」（20260926 真机实测：10 次真写里 2 次这样）────
+# 填进来的不是主人要说的话，是**我们自己的标识符**：技能名 `notice_send`、工具名
+# `SEND_USER_NOTICE`、或者模板占位符 `[当前登录用户]`。这一维**机器判得动**（判据是
+# 系统自己那份字面量清单），所以放在确定性层挡下、零工具交回 planner 重决策。而
+# 「整理得好不好」那一维机器判不动 ⇒ 留给弹卡给人眼看（见 ⑪）。
+# 判据不是"含不含方括号"——`【通知】` 这类正当写法要放行，判的是**整串被括号包住**。
+for _ph in ["notice_send", "SEND_USER_NOTICE", "[当前登录用户]", "【标题】",
+            "（正文）", "「标题」", "{name}", "<内容>", "notice_send "]:
+    _bad = instantiate_plan("notice_send", {"name": "guest5", "content": _ph}, ROLE_ADMIN)
+    check(f"⭐ 正文是系统自己的字（{_ph!r}）→ **零工具** + 交回 planner 重决策",
+          _bad["tools"] == [] and "占位符" in _bad["note"], f"{_bad['note'][:60]}")
+_bad = instantiate_plan("notice_send", {"name": "guest5", "content": "notice_send"}, ROLE_ADMIN)
+check("  拒绝文案说清「要写主人这轮真正要说的那句话」（而不是骂一句格式）",
+      "主人" in _bad["note"] and "整理" in _bad["note"], _bad["note"][:90])
+for _ok in ["你好，这是一条测试通知。", "这是给账号夹具的一次投递测试，请忽略。",
+            "（一）请尽快补齐资料", "「你好」请查收", "hello", "A"]:
+    _p_ok = instantiate_plan("notice_send", {"name": "guest5", "content": _ok}, ROLE_ADMIN)
+    check(f"  反向：正常句子 {_ok!r} 照常展开（守卫不许误伤正当正文）",
+          _p_ok["tools"] == ['send_user_notice({"name": "guest5", "content": "%s"})' % _ok],
+          str(_p_ok["tools"]))
+
 check("技能名与工具名不是一套字面量（混用会让展开分支静默不命中）",
       "notice_send" in instantiate_plan.__globals__["WRITE_SKILL_NAMES"]
       and "send_user_notice" not in instantiate_plan.__globals__["WRITE_SKILL_NAMES"], "")

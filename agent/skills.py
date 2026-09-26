@@ -1354,6 +1354,38 @@ def _write_arg(value) -> str:
     return str(value).strip()
 
 
+_PLACEHOLDER_WRAPS = (("[" , "]"), ("【", "】"), ("（", "）"), ("(", ")"), ("{", "}"),
+                      ("<", ">"), ("「", "」"), ("『", "』"), ('"', '"'), ("'", "'"))
+
+
+def _notice_placeholder(text: str) -> str:
+    """通知正文看起来是**占位符**时给一句原因，否则空串（20260926 真机实测）。
+
+    只认两种**机器能保证**的形态，不判"整理得好不好"（那一维靠弹卡给人眼）：
+      ① 整串就是一个工具名或技能名（实测出现过正文＝`notice_send`——模型把技能名
+         填进了正文槽）；
+      ② 整串被一对括号/引号包住（实测出现过正文＝`[当前登录用户]`——模板占位符）。
+    正常的人类句子（含"你好，这是一条测试通知。"这种改写过的一句）**一个都不拦**：
+    拦错的代价是主人被反问一句、而那句话本来办得成。
+    """
+    s = (text or "").strip()
+    if not s:
+        return ""
+    low = s.lower()
+    try:
+        from tools.base import get_all_tools
+        tool_names = {getattr(t, "name", "") for t in get_all_tools()}
+    except Exception:            # 注册表取不到就只查技能名（不因为取不到而放行①）
+        tool_names = set()
+    if low in {n.lower() for n in tool_names if n} or s in SKILL_MAP:
+        return f"正文是工具名/技能名「{s}」"
+    for open_c, close_c in _PLACEHOLDER_WRAPS:
+        if (len(s) <= 44 and s.startswith(open_c) and s.endswith(close_c)
+                and (open_c == close_c or s.count(open_c) == 1)):
+            return f"正文整个被括号包住「{s}」"
+    return ""
+
+
 def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
     """写技能（WRITE_SKILL_NAMES）模板 + 参数 → (TOOLS 行清单, 注记)。
 
@@ -1607,6 +1639,18 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
             return [], (f"notice_send 的正文太长（{len(content)} 字，上限 "
                         f"{_NOTICE_CONTENT_LIMIT} 字）：不调用任何工具，"
                         "如实向主人说明太长、请他说短一点")
+        ph = _notice_placeholder(content)
+        if ph:
+            # 20260926 真机实测（本技能上线当天，10 次采样）：planner 有 2 次把正文
+            # 填成了**系统自己的字**——一次 `notice_send`（技能名）、一次
+            # `[当前登录用户]`（模板占位符），另有几次把主人的话整个换成一句通用语。
+            # 正文是"以主人的名义发给第三方、且发出去删不掉"的那一段 ⇒ 占位符必须
+            # 在**展开这一层**就挡下来（零工具 + 交回 planner 重决策；这里只认机器能
+            # 保证的形态，不替它判断"整理得好不好"——那一维靠弹卡给人眼看）。
+            return [], (f"notice_send 的正文看起来是**占位符**（{ph}）：不调用任何工具，"
+                        "重新决策——正文要写主人这轮真正要说的那句话（可以按他的意思"
+                        "整理成一句得体的通知，但**不能**拿工具名/技能名/`[这样]`的"
+                        "占位符顶上，也不能整个换成一句与主人原话无关的通用语）")
         title = _write_arg(params.get("title"))
         if title and len(title) > _NOTICE_TITLE_LIMIT:
             return [], (f"notice_send 的标题太长（{len(title)} 字，上限 "
