@@ -1,0 +1,132 @@
+{
+ "tag": "multi_step",
+ "engine": "text",
+ "reports": [
+  "eval/report/runs/20260927_034719.json",
+  "eval/report/runs/20260927_034836.json",
+  "eval/report/runs/20260927_034847.json",
+  "eval/report/runs/20260927_034938.json",
+  "eval/report/runs/20260927_035031.json",
+  "eval/report/runs/20260927_035118.json",
+  "eval/report/runs/20260927_035210.json"
+ ],
+ "runs": 7,
+ "case_runs": 22,
+ "case_passed": 18,
+ "pass_rate": 0.8182,
+ "pass_rate_ci95": [
+  0.6148,
+  0.9269
+ ],
+ "cases": {
+  "multi_step_referent_nav_effect": {
+   "runs": 5,
+   "passed": 4,
+   "fails": [
+    {
+     "report": "eval/report/runs/20260927_035210.json",
+     "fails": [
+      "[第 1 轮] 缺少 EFFECT: 命令帧",
+      "[第 1 轮] 命令帧缺 'sakura:on'（本轮命令：['AUTO_NAVIGATE:https://saudade.site/device-console/']）",
+      "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：['navigate_to']）"
+     ],
+     "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_035120/multi_step_referent_nav_effect.json"
+    }
+   ],
+   "elapsed": {
+    "count": 5,
+    "min": 7.1,
+    "p50": 8.7,
+    "max": 10.5
+   },
+   "tags": [
+    "20260927",
+    "multi_step",
+    "multi-turn",
+    "nav",
+    "effect"
+   ],
+   "pass_rate": 0.8
+  },
+  "multi_step_effect_then_nav": {
+   "runs": 7,
+   "passed": 6,
+   "fails": [
+    {
+     "report": "eval/report/runs/20260927_034719.json",
+     "fails": [
+      "[第 1 轮] 缺少 NAVIGATE: 命令帧",
+      "[第 1 轮] 命令帧缺 '/guestbook'（本轮命令：['EFFECT:sakura:on']）",
+      "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：['toggle_effect']）"
+     ],
+     "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_034633/multi_step_effect_then_nav.json"
+    }
+   ],
+   "elapsed": {
+    "count": 7,
+    "min": 6.6,
+    "p50": 9.1,
+    "max": 11.5
+   },
+   "tags": [
+    "20260927",
+    "multi_step",
+    "multi_intent",
+    "effect",
+    "nav"
+   ],
+   "pass_rate": 0.8571
+  },
+  "multi_step_missing_param_asks": {
+   "runs": 5,
+   "passed": 3,
+   "fails": [
+    {
+     "report": "eval/report/runs/20260927_035031.json",
+     "fails": [
+      "[第 1 轮] 不应调用工具 create_tag（已调用：['get_article_detail', 'create_tag', 'create_tag']）"
+     ],
+     "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_034941/multi_step_missing_param_asks.json"
+    },
+    {
+     "report": "eval/report/runs/20260927_035210.json",
+     "fails": [
+      "[第 1 轮] 不应调用工具 create_tag（已调用：['get_article_detail', 'create_tag']）"
+     ],
+     "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260927_035120/multi_step_missing_param_asks.json"
+    }
+   ],
+   "elapsed": {
+    "count": 5,
+    "min": 9.2,
+    "p50": 10.2,
+    "max": 13.0
+   },
+   "tags": [
+    "20260927",
+    "multi_step",
+    "write",
+    "honest"
+   ],
+   "pass_rate": 0.6
+  },
+  "multi_step_search_then_read_top": {
+   "runs": 5,
+   "passed": 5,
+   "fails": [],
+   "elapsed": {
+    "count": 5,
+    "min": 13.0,
+    "p50": 16.7,
+    "max": 23.0
+   },
+   "tags": [
+    "20260927",
+    "multi_step",
+    "content_query",
+    "rag"
+   ],
+   "pass_rate": 1.0
+  }
+ }
+}

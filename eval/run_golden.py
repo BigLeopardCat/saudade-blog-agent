@@ -79,6 +79,7 @@ import server
 from server import ChatRequest, _build_messages, _run_agent_stream_to_queue
 from agent import create_agent
 from agent.graph import _cmd_wire  # 连线命令帧 → 连线形（见 __CMD__ 分支的长注）
+from agent.graph import _planner_engine  # 接口层档位（报告要记，见 report 里那一格）
 from agent import confirm  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 from langchain_core.messages import AIMessageChunk, ToolMessage
@@ -1467,6 +1468,11 @@ def main():
         # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
         # 旧基线不可比是预期（变更即新基线），快照字段用于对账变更内容
         "corpus": corpus,
+        # 接口层档位（20260927 主线批 A）：planner 可以走文本契约或 native tool calls，
+        # **两份报告都记这一格才可比**——"同一套用例在两档下各跑一遍"的对照表，第一列
+        # 就是它。取值走 `agent.graph._planner_engine`（`planner_node` 用的同一个函数），
+        # 不在这里重写一遍归一化：那是第二份判据，迟早与真的那个不一致。
+        "engine": _planner_engine(),
         "total": len(cases), "passed": len(cases) - failed, "failed": failed,
         # 首跑红数（20260924）：failed 是**复跑后的终判**，这个字段留着首跑口径 ——
         # 两者不等时差额就是"被复跑吸收掉的红斑"（不许静默：flaked_ids 逐条点名）
