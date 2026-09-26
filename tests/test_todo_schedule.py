@@ -842,6 +842,27 @@ check("回执行区分「刚勾的」与「本来就是」（一次 no-op 不能
       and "已把待办「交房租」勾成完成" in A.render_todo_done("交房租", changed=True),
       A.render_todo_done("交房租", changed=False))
 
+# ── 长正文：**卡面与回执都印全文**（20260926 修，trace `20260926T094843` 的现场）──
+# 此前 `clip(text, 60)` 被用在卡面与回执上：主人点「确定」时核对的是「…」前面那 60 字，
+# 而回执（narrator 唯一的取值来源）也是截断版 ⇒ 主人收到的回复就是「…2…」，他问
+# "为什么和我要的日程内容不一样、显示截断了"。正文上限 200 字（`_TODO_TEXT_LIMIT`），
+# 全文没有一个印不下的地方；`clip` 是**密表/帧**的收口工具，不许拿来量卡面。
+_LONG = "分析" + "很长的说明" * 30 + "结尾标记"          # 156 字，> 60 也 > 24
+check("前置：这条正文真的比 60 字长（否则下面三条是空转）", len(_LONG) > 60, str(len(_LONG)))
+_q_long = A.render_confirm_question([{"tool": "create_dashboard_todo",
+                                      "args": {"text": _LONG}}],
+                                    None, None, None, None, None, _SNAP)
+check("加待办的**卡面**：长正文一字不落（不再被裁成 60 字 + 省略号）",
+      _LONG in _q_long and "…" not in _q_long, _q_long[-30:])
+check("  **回执行**（下一轮 narrator 的唯一取值来源）同样印全文",
+      _LONG in A.render_todo_added(_LONG) and "…" not in A.render_todo_added(_LONG),
+      A.render_todo_added(_LONG)[-30:])
+check("勾完成的卡面也是全文（它的注释写的就是「一字不改地进卡面」，此前实现却在截）",
+      _LONG in A.render_todo_done_action(_LONG, None)
+      and "…" not in A.render_todo_done_action(_LONG, None),
+      A.render_todo_done_action(_LONG, None)[-30:])
+check("  勾完成的回执行同全文", _LONG in A.render_todo_done(_LONG, changed=True))
+
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑭ 过程行与落库回执：带正文、不带内部工具名（两处措辞逐字一致）")
@@ -858,6 +879,14 @@ check("  这一行**不写「已完成」**（它是执行前的预告，后端�
 check("  缺正文时退化成动作词，不炸",
       _srv._tool_action_text("complete_dashboard_todo", {}) == "勾完成待办",
       _srv._tool_action_text("complete_dashboard_todo", {}))
+# 过程行**可以**比卡面短（它是执行前的灰色预告），但截断必须**看得出来**：裸切一刀
+# 读成"系统只记了这半句"（真实现场里主人就是这么问的），而卡面/回执印的是全文。
+_a_long = _srv._tool_action_text("create_dashboard_todo", {"text": _LONG})
+check("  长正文的过程行是**带省略号的预览**（不是把正文裸切 24 字）",
+      _a_long.endswith("」") and "…」" in _a_long and _LONG not in _a_long, _a_long)
+check("  短正文的过程行不凭空加省略号（没截就是没截）",
+      "…" not in _srv._tool_action_text("create_dashboard_todo", {"text": "交房租"}),
+      _srv._tool_action_text("create_dashboard_todo", {"text": "交房租"}))
 _rsrc = (ROOT.parent / "src" / "routes" / "chat.rs").read_text(encoding="utf-8")
 check("Rust 那半有同名臂（漏了会把 `complete_dashboard_todo` 这种带下划线的内部名"
       "写进 execution_log 被下一轮照抄）",
