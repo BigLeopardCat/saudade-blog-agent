@@ -102,6 +102,9 @@ jobs:
       - name: golden 断言键拼写校验（反射扫取键字面量 × 表 × 逐条用例三向交叉，秒级，不联网）
         run: uv run python tests/test_golden_keys.py
 
+      - name: 基线聚合器单测（同档/同组两道门槛·缺席不等于失败·红样本留证据，秒级，纯数据不联网）
+        run: uv run python tests/test_baseline_group.py
+
       - name: 语料术语派生单测（过滤五条规则/排序截断/申报失配，秒级，内联夹具不联网）
         run: uv run python tests/test_corpus_terms.py
 
