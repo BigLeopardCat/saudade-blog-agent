@@ -23,10 +23,12 @@
 `tests/test_native_plan.py` 另有一条集合相等断言做防御。工具参数上的 `Literal` 闭集
 也第一次变成服务端强制的 `enum`（此前只是提示词里的一句话）。
 
-**边界（别过度承诺）**：这一层治格式正确性、参数正确性、单轮多调用。它**不治**
-"多步目标跨轮丢失"（那要会话级任务状态），也不改任何行为纪律（短应答还原 / 全选式
-短应答 / 授权式 / 写身份防线）——那是**行为**不是格式。所有防线（授权 scope、同意闸、
-确认卡、checker、gate）都在这一层的**下游**，因此天然继承、无需改写。
+**边界（别过度承诺）**：这一层治格式正确性、参数正确性、单轮多调用。多步目标跨轮丢失
+由**另一条通道**治（20260927 批 D）：schema 里多出来的 `task_hold` 让模型把"还没做完的
+步骤"说出来，跨轮的载体是 `agent_task` 表（见 `agent/tasks.py` 的头注）。它不改任何
+行为纪律（短应答还原 / 全选式短应答 / 授权式 / 写身份防线）——那是**行为**不是格式。
+所有防线（授权 scope、同意闸、确认卡、checker、gate）都在这一层的**下游**，因此天然
+继承、无需改写。
 
 ⚠️ **本模块不许 import `agent.graph`**：graph 是消费方，反向 import 会成环。
 """
@@ -44,6 +46,7 @@ from agent.skills import (
     tool_arg_schemas,
     visible_skills,
 )
+from agent.tasks import TASK_HOLD, normalize_declaration, task_hold_schema
 
 # 技能参数的短类型名（`ParamSpec.type`，见 `agent/skills.py::arg_type_short`）→ JSON Schema。
 # `any` / `?` 是"推不出映射"，不在表里——由 `_param_schema` 兜（见那里的注）。
@@ -57,12 +60,18 @@ class NativeDecision:
 
     `skill` / `params` 交给 `instantiate_plan` 展开，与文本档产出**同构**；其余字段
     只进 trace，供事后按 engine 切语料对账（见本模块头注的"边界"）。
+
+    `declare`（20260927 批 D）是唯一的例外：它不是技能参数，而是"这件事还没做完"的
+    结构化登记（`agent/tasks.py`）。它与 `skill`/`params` **可以同时有**——"这一轮把
+    第一步做掉 + 把剩下的登记下来"正是多步目标该有的形态。消费方（planner）见它就走
+    任务登记那一支，不把它塞进 `instantiate_plan`。
     """
     skill: str
     params: dict
     notes: tuple[str, ...] = ()      # 机器可读的异常记账（如 native_multi_call）
     finish_reason: str = ""          # `length` = 被额度截断（"预算够不够"的判据）
     raw_tool_calls: tuple = field(default_factory=tuple)
+    declare: dict | None = None      # 归一化后的任务登记（无 → None）
 
 
 def _items_schema(sp: ParamSpec) -> dict:
@@ -160,7 +169,7 @@ def _override_for(role: str | None, skill_name: str, param: str) -> dict | None:
     return out
 
 
-def build_tool_schema(role: str | None) -> list[dict]:
+def build_tool_schema(role: str | None, *, task_state: bool = False) -> list[dict]:
     """本轮这个身份能选的技能 → OpenAI `tools` 数组。
 
     **来源只有一处**：`visible_skills(role)` × `skill_param_specs(skill)`——与渲染
@@ -170,6 +179,12 @@ def build_tool_schema(role: str | None) -> list[dict]:
 
     `complete_when` 拼进 description：它在文本档里本来就只进提示词、**没有强制点**
     （没有任何代码读它），搬进 description 是等价的，且比原来离决策更近。
+
+    `task_state=True` 时**追加一个伪函数** `task_hold`（`agent/tasks.py`，"还有事情
+    没做完"的登记通道）。它不进 `visible_skills` 那条集合断言的口径里——断言写的是
+    "技能名集合 + 一个申报过的伪函数"（见 `tests/test_native_plan.py` ①）。
+    **这不是扩权**：它不是技能、不执行任何工具、也没有第二个消费方，只是让模型能把
+    "剩下的步骤"说出来；能不能真做，仍然由技能通道与下游全部防线决定。
     """
     tools: list[dict] = []
     for skill in visible_skills(role):
@@ -190,6 +205,8 @@ def build_tool_schema(role: str | None) -> list[dict]:
         if required:
             fn["parameters"]["required"] = required
         tools.append({"type": "function", "function": fn})
+    if task_state:
+        tools.append(task_hold_schema(role))
     return tools
 
 
@@ -216,7 +233,8 @@ def _content_of(resp: object) -> str:
     return ""
 
 
-def tool_calls_to_plan(resp: object, role: str | None) -> NativeDecision | None:
+def tool_calls_to_plan(resp: object, role: str | None, *,
+                       task_state: bool = False) -> NativeDecision | None:
     """一次 `tool_calls` 返回 → `NativeDecision`；**判不了就返回 None**（调用方兜底）。
 
     None 的三种来源（都交给调用方退回既有的文本解析路径，**不猜**）：
@@ -236,15 +254,34 @@ def tool_calls_to_plan(resp: object, role: str | None) -> NativeDecision | None:
     回复正文由 narrator 依据 `reply_contract` 生成——**两条路都是这样**，不是本模块的取舍。
 
     content 也空 ⇒ 返回 None，由调用方走既有收尾（`_wrap_up_plan`），不在这里编一句话。
+
+    `task_state=True` 时先摘出 `task_hold` 调用（20260927 批 D）：**它不参与技能选择**，
+    而是单独归一化成 `declare`，剩下的调用照旧走本函数原有的"取第一条"逻辑。两种组合
+    都成立且都要支持——只登记（`skill="chat"`、`declare` 非空）、登记 + 一个动作调用
+    （"这一轮做掉第一步，同时把剩下的记下来"，这正是多步目标该有的形态）。
+    `task_state=False`（开关 off）时 `task_hold` 与其它未知函数名一视同仁 ⇒ 返回 None，
+    登记通道在 schema 上就不存在（`build_tool_schema` 不追加它）。
     """
     if list(getattr(resp, "invalid_tool_calls", None) or ()):
         return None
     calls = list(getattr(resp, "tool_calls", None) or ())
     base = {"finish_reason": finish_reason(resp), "raw_tool_calls": tuple(calls)}
+    declare: dict | None = None
+    if task_state:
+        rest, holds = [], []
+        for c in calls:
+            nm = str((c or {}).get("name") or "") if isinstance(c, dict) else ""
+            (holds if nm == TASK_HOLD else rest).append(c)
+        calls = rest
+        # 归一化失败（例如没给 goal）**不等于判不了**：当作"这次登记无效"记一笔，
+        # 继续按剩下的调用决定这一轮——为此丢掉一个合法决策是更大的损失。
+        if holds:
+            declare = normalize_declaration((holds[0] or {}).get("args"))
     if not calls:
-        if not _content_of(resp).strip():
+        if declare is None and not _content_of(resp).strip():
             return None
-        return NativeDecision(skill="chat", params={}, **base)
+        # 只有登记：技能位给 chat（本轮没有动作要执行），`declare` 交给 planner 那一支。
+        return NativeDecision(skill="chat", params={}, declare=declare, **base)
     head = calls[0] if isinstance(calls[0], dict) else {}
     name = str(head.get("name") or "")
     if name not in {s.name for s in visible_skills(role)}:
@@ -259,10 +296,16 @@ def tool_calls_to_plan(resp: object, role: str | None) -> NativeDecision | None:
         # "一张确认卡只装同一个技能的动作"（见 mainline §6.5）。
         rest = ",".join(str((c or {}).get("name") or "?") for c in calls[1:])
         notes.append(f"native_multi_call:{name}|{rest}")
-    return NativeDecision(skill=name, params=args, notes=tuple(notes), **base)
+    if declare is not None:
+        # 同一轮既调用动作又登记：**允许**（多步目标"做一步、记下剩下的"就是这个形状），
+        # 但它越过了 `parallel_tool_calls=False` 的约定 ⇒ 记账，供事后看这个约定是否被
+        # 网关遵守（若常态出现，那说明该参数的约束力要重新评估）。
+        notes.append(f"task_hold_inline:{name}")
+    return NativeDecision(skill=name, params=args, notes=tuple(notes),
+                          declare=declare, **base)
 
 
-def bind_native(llm: object, role: str | None) -> object:
+def bind_native(llm: object, role: str | None, *, task_state: bool = False) -> object:
     """把 LLM 绑上本轮的 schema。**`tool_choice` 固定 `auto`、`parallel_tool_calls=False`**。
 
     · `auto` 而不是 `required`：强制会把闲聊轮也逼成一次假技能调用（模型明明该答
@@ -271,9 +314,12 @@ def bind_native(llm: object, role: str | None) -> object:
     · `parallel_tool_calls=False`：下游"一张确认卡只装同一个技能的动作"是按一轮一条
       设计的（见 `docs/native-toolcalls-mainline.md` §6.5）。网关若忽略这个参数，
       `tool_calls_to_plan` 只取第一条并记账——**两道都在**，不互替。
+    · `task_state=True` 时 schema 里多一个 `task_hold`（见 `build_tool_schema` 的注）：
+      开关默认 off ⇒ 这一格与它的消费方（planner 的任务登记支）一起不存在，
+      线上行为逐字节不变。
     """
-    return llm.bind_tools(build_tool_schema(role), tool_choice="auto",
-                          parallel_tool_calls=False)
+    return llm.bind_tools(build_tool_schema(role, task_state=task_state),
+                          tool_choice="auto", parallel_tool_calls=False)
 
 
 def tool_call_names(decision: NativeDecision) -> str:
