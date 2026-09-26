@@ -1236,6 +1236,24 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                             final_reply = text
                             asyncio.run_coroutine_threadsafe(
                                 queue.put(AIMessageChunk(content=text)), loop).result()
+                    # 状态已达成 ⇒ 不弹卡那一支（20260926）：execute 判出"这一批里没有
+                    # 一件需要动"（目标现在就已经是它要的样子）时写 `noop_note`，图直接
+                    # 路由到 END（route_after_execute，与上面 pending_confirm 同款出口）
+                    # ——narrator 结构上不会跑，所以不可能出现"我已经帮你办好啦"。
+                    # 与 pending_confirm **互斥**：那一支的 `picks` 非空（有东西要问），
+                    # 这一支恰恰是"滤完一件不剩"。
+                    if ex_upd.get("noop_note"):
+                        # 过程行用「⏭」而不是「✅」：这一轮**零执行**，✅ 会被读成
+                        # "办好了"（同 `_tool_action_text` 那条预告/回执分工的纪律——
+                        # 过程行只说这一轮发生了什么）。
+                        emit_process("⏭ 状态已是这个值，本轮零改动", key="idem_noop")
+                        text = str(ex_upd.get("noop_text") or "")
+                        if text:
+                            # 走 AI 帧的理由与 confirm_text 逐字相同：Rust 照常落库，
+                            # 主人切走再回来还看得见这段如实的话（它不是过程行）。
+                            final_reply = text
+                            asyncio.run_coroutine_threadsafe(
+                                queue.put(AIMessageChunk(content=text)), loop).result()
                     # 过程行以 checker 验收为准（20260905 issue5）：✅ 完成帧只对
                     # 新增 PASS 回执发（receipts 累计，diff 起点后为新增，带实际
                     # 内容）；BLOCK 受阻项发 ✗ 行——真实执行失败不再显示"完成"

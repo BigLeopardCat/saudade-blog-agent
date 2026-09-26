@@ -70,7 +70,7 @@ echo "--- 真写夹具残留哨兵 (只读公开接口, 秒级, 非门禁) ---" 
 # 不是"没有"）。**非门禁**：真删不掉时金色的那条用例自己就是红的（fail=1 已经置位），
 # 这里只是把"生产库里留了什么"讲清楚。
 $PY eval/golden_fixture.py --verify >> "$LOG" 2>&1 || echo "[$TS] 真写夹具有残留或读不到公开接口（非门禁，见上面的 [fixture-leftover]/[fixture-check-failed] 行）" >> "$LOG"
-echo "--- golden set (135 条用例；其中 2 条真写按设计不在此处跑 = 133 条真实对话，约 25 分钟) ---" >> "$LOG"
+echo "--- golden set (144 条用例；其中 3 条真写按设计不在此处跑 = 141 条真实对话，约 25 分钟) ---" >> "$LOG"
 # 20260924 起：给「需要真身份」的那类用例一个 uid，治那 5 条常年 SKIP（moderation_report_admin /
 # user_report_admin / 三条 *_unresolved_target_honest）。721 是**测试专用管理员账号**（不是主人
 # 的 uid=1——那条写用例会真改主人自己的数据），role=admin、口令已是不可知哈希，只为这条通道存在。

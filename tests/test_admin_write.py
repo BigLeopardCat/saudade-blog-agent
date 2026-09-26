@@ -1066,14 +1066,27 @@ with patch(_tag_index=lambda config: A.build_tag_index(
     check("快道可达的话 + 身份落地基 → 不弹窗（不是把写一律变成问）",
           r5 is None, str(r5)[:80])
 
-    r6 = _popup('create_tag({"title": "Asyncio", "parent_tag": "编程"})',
-                "确认创建标签 Asyncio，挂在异步下面")
+    # ⚠️ 20260926：这一条的 title 从 Asyncio 换成**站里没有的**「协程」——fixture 的
+    # 标签树里 `编程/Asyncio` **本来就在**（id=10000），而"状态已达成 ⇒ 不弹卡"上线后
+    # 那种 spec 走的是另一条出口（见紧跟的 r6b），问句这一支就测不到了。这里要测的是
+    # **卡面**（把 planner 填的那个爸爸印出来、主人当场能对出对不上），得用一件真待办的事。
+    r6 = _popup('create_tag({"title": "协程", "parent_tag": "编程"})',
+                "确认创建标签 协程，挂在异步下面")
     check("同一条命令，planner 把父标签填成主人**没说过**的名字 → 退回弹窗",
-          isinstance(r6, dict), str(r6)[:80])
+          isinstance(r6, dict) and "pending_confirm" in (r6 or {}), str(r6)[:80])
     _q6 = (r6 or {}).get("pending_confirm", {}).get("q", "")
     check("  问句把**它要挂的那个爸爸**写出来（主人说的是「异步」，问句问的是「编程」——"
           "对不上就能当场取消，而不是被静默挂错）",
-          "编程" in _q6 and "Asyncio" in _q6, _q6[:90])
+          "编程" in _q6 and "协程" in _q6, _q6[:90])
+
+    # 同一句话、planner 照样填错爸爸，但那个爸爸底下**同名标签本来就在站里** ⇒ 这次写
+    # 本来就无事可做（工具按重名复用短路、一个字节都不写）⇒ 20260926 起不弹卡，回复直接
+    # 把**完整路径**写出来。这是"被静默挂错"的另一种安全落地：路径摆在眼前，零改动。
+    r6b = _popup('create_tag({"title": "Asyncio", "parent_tag": "编程"})',
+                 "确认创建标签 Asyncio，挂在异步下面")
+    check("  而父标签下同名标签已在站里 → **不弹卡、零写**，回复写明完整路径",
+          isinstance(r6b, dict) and not r6b.get("pending_confirm")
+          and "编程" in str(r6b.get("noop_text") or ""), str(r6b)[:120])
 
     # 密钥空缺这一支：**fail-closed 但必须留痕**。它一旦生效，所有写确认弹窗静默消失
     # （退回"判不成命令就追问"的死路形态），链路上没有别的信号——20260922 CI 实测就是

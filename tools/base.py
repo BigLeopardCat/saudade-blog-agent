@@ -2740,6 +2740,26 @@ def list_notifications(config: RunnableConfig) -> str:
 # 那一行的时间戳（纯副作用、无收益），与 set_article_status 的同值 noop 同一条理由。
 
 
+def _favorites_snapshot(config: RunnableConfig,
+                        what: str) -> tuple[list | None, ToolResult | None]:
+    """本人收藏列表 → `(行列表, 失败原因)`，两者**恰有一个**为 None。
+
+    **弹窗的「状态已达成」判据与 add/remove_favorite 的写前读走这一个函数**（照
+    `_tag_index` / `_note_index` / `_todo_rows` 那条先例）：两处各写一套形态判断时，
+    "弹窗说本来就在收藏夹里、工具却照写一遍"这种不一致没有任何东西拦得住——而它正是
+    20260926 那一批要治的病。
+
+    `what` = 失败话里的那半句（收藏与取消收藏问的不是同一件事："是不是已经收藏过"
+    /"是不是本来就没收藏"），由调用点带进来，措辞不在这里分叉。
+    """
+    got = _own_get("/api/protected/favorites", config)
+    if isinstance(got, ToolResult):
+        return None, _pre_read_fail(got, what)
+    if not isinstance(got, list):
+        return None, unavailable(f"读不到{what}，本次未改动")
+    return got, None
+
+
 def _fav_row(data, note_id: int) -> dict | None:
     """收藏列表 → 目标那一行（不是列表/没这一行 → None，不猜）。"""
     if not isinstance(data, list):
@@ -2773,6 +2793,22 @@ def _note_items(data) -> dict[int, dict] | None:
         if nid is not None:
             out[nid] = r
     return out
+
+
+def _notifications_snapshot(config: RunnableConfig,
+                            what: str) -> tuple[dict[int, dict] | None, ToolResult | None]:
+    """通知列表 → `({id: 行}, 失败原因)`，两者**恰有一个**为 None。
+
+    与 `_favorites_snapshot` 同一条纪律（弹窗判据与 read_notifications 的写前读
+    必须是**同一份**读、同一份形态判断）。`what` 同上：由调用点给出失败话的那半句。
+    """
+    got = _own_get("/api/protected/notifications", config)
+    if isinstance(got, ToolResult):
+        return None, _pre_read_fail(got, what)
+    rows = _note_items(got)
+    if rows is None:
+        return None, unavailable(f"读不到{what}，本次未改动")
+    return rows, None
 
 
 def _as_ids(value) -> list[int]:
@@ -2818,11 +2854,9 @@ def add_favorite(
     if guard is not None:
         return guard
 
-    before = _own_get("/api/protected/favorites", config)
-    if isinstance(before, ToolResult):
-        return _pre_read_fail(before, "你的收藏列表（拿不准是不是已经收藏过）")
-    if not isinstance(before, list):
-        return unavailable("读不到你的收藏列表（拿不准是不是已经收藏过），本次未改动")
+    before, fail = _favorites_snapshot(config, "你的收藏列表（拿不准是不是已经收藏过）")
+    if fail is not None:
+        return fail
     hit = _fav_row(before, aid)
     if hit is not None:
         return ok(f"文章 {aid}{_fav_title(hit)}本来就在你的收藏夹里，无需改动（没有发出写请求）。",
@@ -2865,11 +2899,9 @@ def remove_favorite(
     if guard is not None:
         return guard
 
-    before = _own_get("/api/protected/favorites", config)
-    if isinstance(before, ToolResult):
-        return _pre_read_fail(before, "你的收藏列表（拿不准是不是本来就没收藏）")
-    if not isinstance(before, list):
-        return unavailable("读不到你的收藏列表（拿不准是不是本来就没收藏），本次未改动")
+    before, fail = _favorites_snapshot(config, "你的收藏列表（拿不准是不是本来就没收藏）")
+    if fail is not None:
+        return fail
     hit = _fav_row(before, aid)
     if hit is None:
         return ok(f"文章 {aid} 本来就不在你的收藏夹里，无需改动（没有发出写请求）。",
@@ -2920,12 +2952,9 @@ def read_notifications(
     if not want_all and not want_ids:
         return unavailable("没有指出要标记哪些通知（是全部未读、还是某几条的 id），未改动")
 
-    before = _own_get("/api/protected/notifications", config)
-    if isinstance(before, ToolResult):
-        return _pre_read_fail(before, "通知列表（无法确认哪几条是未读）")
-    rows = _note_items(before)
-    if rows is None:
-        return unavailable("读不到通知列表，无法确认哪几条是未读，本次未改动")
+    rows, fail = _notifications_snapshot(config, "通知列表（无法确认哪几条是未读）")
+    if fail is not None:
+        return fail
 
     if want_all:
         targets = [i for i, r in rows.items() if not r.get("isRead")]
@@ -3021,8 +3050,8 @@ def read_notifications(
 def _mailbox_inbox(data) -> dict[int, dict] | None:
     """信箱返回（`{inbox, outbox, unread}`）→ `{id: 收件箱那一行}`；形态不对 → None。
 
-    只收**收件箱**：这个函数的两个调用点（写前读、写后复核）都只关心"我收到的信"，
-    发件箱里的信被别人读没读是别人的事（`isRead` 只对收件人有意义）。
+    只收**收件箱**：这个函数的调用点（写前读、写后复核、弹窗判据）都只关心
+    "我收到的信"，发件箱里的信被别人读没读是别人的事（`isRead` 只对收件人有意义）。
     """
     if not isinstance(data, dict) or not isinstance(data.get("inbox"), list):
         return None
@@ -3034,6 +3063,25 @@ def _mailbox_inbox(data) -> dict[int, dict] | None:
         if mid is not None:
             out[mid] = r
     return out
+
+
+def _mailbox_snapshot(config: RunnableConfig,
+                      what: str) -> tuple[dict | None, ToolResult | None]:
+    """本人信箱 → `(信箱原始返回, 失败原因)`，两者**恰有一个**为 None。
+
+    这里回的是**原始返回**而不是直接给收件箱那半：同一个 payload 上还有第二个
+    事实（`unread` 未读封数）是 read_messages 的写前基线，只给 `inbox` 会逼它再读一次
+    （或者更糟——另算一遍未读数，那就成了同一件事的第二份判据）。调用方各自用
+    `_mailbox_inbox` / `_mailbox_unread` 取自己那半。
+
+    与 `_favorites_snapshot` 同一条纪律：弹窗的「已达成」判据与工具的写前读**同一份**。
+    """
+    got = _own_get("/api/protected/messages", config)
+    if isinstance(got, ToolResult):
+        return None, _pre_read_fail(got, what)
+    if _mailbox_inbox(got) is None:
+        return None, unavailable(f"读不到{what}，本次未改动")
+    return got, None
 
 
 def _mailbox_unread(data) -> int | None:
@@ -3084,12 +3132,10 @@ def read_messages(
     if not want_all and not want_ids:
         return unavailable("没有指出要标记哪几封信（是全部未读、还是某几封的 id），未改动")
 
-    before = _own_get("/api/protected/messages", config)
-    if isinstance(before, ToolResult):
-        return _pre_read_fail(before, "你的信箱（无法确认哪几封是未读）")
+    before, fail = _mailbox_snapshot(config, "你的信箱（无法确认哪几封是未读）")
+    if fail is not None:
+        return fail
     rows = _mailbox_inbox(before)
-    if rows is None:
-        return unavailable("读不到你的信箱，无法确认哪几封是未读，本次未改动")
 
     if want_all:
         targets = [i for i, r in rows.items() if r.get("isRead") is not True]
