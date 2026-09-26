@@ -31,6 +31,9 @@ native 引擎 + 目标来源态判据那批修好（轮 0 navigate → 轮 1 eff
   轮 2  把载荷当 `agent_tasks` 喂回去（**与 Rust 读侧交回来的形状一致**：JSON 数组串），
         看三件事：注入进没进上下文、planner 认不认这是"上一轮自己登记的事"、
         做完之后 producer 有没有按**回执**把游标推进。
+        外加一条负断言：**两轮都不该出现 `cancelled` 帧**——撤下只有 `task_drop` 一条
+        通道（20260927 拆形状，"做完后顺手再登记一次空 steps"不再等于撤下，
+        见 `agent/tasks.py` 的 `TASK_DROP` 头注）。
 
 ## 它不验什么（如实划界）
 
@@ -109,18 +112,13 @@ FALLBACK_DECL = {
 
 
 def _task_frames(res: dict) -> list:
-    """控制帧里的 `__TASK__` 载荷（帧体是 JSON；坏帧只记不算，不让探针自己崩）。"""
-    out = []
-    for f in res.get("frames") or []:
-        if not isinstance(f, str) or not f.startswith("__TASK__:"):
-            continue
-        try:
-            one = json.loads(f[len("__TASK__:"):])
-        except (ValueError, TypeError):
-            continue
-        if isinstance(one, dict):
-            out.append(one)
-    return out
+    """这一轮发出的 `__TASK__` 载荷。
+
+    **解析只有一处**（20260927）：`run_golden.run_one` 现在自己就把 `__TASK__` 帧解包成
+    `result["task_frames"]`（同一个帧、两个读者，正是本文件头注警告的"两份拷贝各自漂移"
+    的形状）——探针不再自己再解一遍。
+    """
+    return [f for f in (res.get("task_frames") or []) if isinstance(f, dict)]
 
 
 def _load_case_trace(run_id: str, case_id: str) -> dict | None:
@@ -226,6 +224,14 @@ def main() -> int:
     check("结算帧认的是**回执里的工具**，不是模型的话",
           any("toggle_effect" in (r2.get("exec_tools") or []) for _ in [0]),
           str(r2.get("exec_tools")))
+
+    # 撤下通道（20260927）：`cancelled` 只该由 `task_drop` 产生（主人明说"不做了"），
+    # 不该由"模型把这一步做完了、顺手又登记一次"产生。两轮都不该出现 cancelled——
+    # 轮 1 是"做了一步、剩下一步"，轮 2 是"把那一步做完"。
+    _canc = [str(f.get("state")) for f in (frames1 + _task_frames(r2))
+             if str(f.get("state")) == "cancelled"]
+    check("两轮都没有 cancelled 帧（撤下只有 task_drop 一条通道）",
+          not _canc, str(_canc) or "无")
 
     # ── 报告 ────────────────────────────────────────────────────────────
     os.makedirs("eval/report", exist_ok=True)

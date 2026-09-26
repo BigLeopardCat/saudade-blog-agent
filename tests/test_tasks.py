@@ -9,7 +9,10 @@
 
 钉住的契约（这里红 = 某条判据被改掉了，改动要同步改这里）：
 
-  · `normalize_declaration` 的四条归一：goal 必填、步骤上限、列宽截断、**空步骤 = 撤下**；
+  · `normalize_declaration` 的四条归一：goal 必填、步骤上限、列宽截断、
+    **空步骤什么都不算**（20260927 改：以前它等于"撤下"，于是模型"我没剩步骤了"的
+    意思被读成"主人不要这件事了"——撤下改走独立的 `task_drop`，见 agent/tasks.py
+    的 `TASK_DROP` 注）；`normalize_drop` 只认 goal、产出与登记同构的载荷；
   · 幂等键**只按目标**（步骤不进键）——撤下走的是同一个目标，键必须相同，
     否则撤下会长出第二行而原来那行永远挂着；
   · `frame_payload` 的键 = `agent_task` 的列，且**不含身份两列**（uid/会话由 Rust 从
@@ -17,6 +20,9 @@
   · `advance_by_receipts`：只认回执、**连续推进不跳跃**、`declared_after` 之前的回执
     不算数、解不出步骤就不结算；
   · `task_rows` 任何形状不对都当没有（不阻断对话）；
+  · **完成 > 撤下**（`settled_by_receipts` / `drop_is_completion`，20260927 实测加的）：
+    那件事的剩余步骤本轮回执已覆盖 ⇒ 这次 `task_drop` 不成立（判据与流尾结算同一个函数，
+    不另写一套"工具名在不在回执里"）；**零回执时一律放行**——方向单一，真撤下不受影响；
   · `render_open_tasks` 只渲染未完结态 + 抹掉能破坏 `[System: …]` 框架的字符；
   · 注记与纠偏文本**单行**（会被写进计划契约的 `NOTE:` 行）；
   · 本模块**不许 import `agent.graph`**（graph 是消费方，反向会成环）。
@@ -50,11 +56,49 @@ def test_normalize_requires_goal():
     check("非 dict → None", T.normalize_declaration(None) is None)
     check("缺 goal → None", T.normalize_declaration({"steps": []}) is None)
     check("goal 全空白 → None", T.normalize_declaration({"goal": "   \n\t "}) is None)
-    check("空步骤但没 goal → 仍是 None（不能靠空步骤蹭出一次撤下）",
+    check("空步骤但没 goal → 仍是 None",
           T.normalize_declaration({"goal": "", "steps": []}) is None)
-    got = T.normalize_declaration({"goal": "  把   它  关掉 ", "steps": []})
+    got = T.normalize_declaration({"goal": "  把   它  关掉 ", "steps": [{"tool": "toggle_effect"}]})
     check("goal 内部空白收成一个空格", got is not None and got["goal"] == "把 它 关掉",
           str(got and got["goal"]))
+
+
+def test_normalize_empty_steps_is_invalid():
+    """**空步骤既不是登记、也不是撤下**（20260927 拆形状的回归锁）。
+
+    老形状（空步骤 ⇒ cancelled）的现场：模型把最后一步做完后，又用同一个 goal、
+    空 steps 登记一次——它的意思是"我没剩什么要记的了"，系统读成"他不要这件事了"，
+    narrator 于是说「已撤下不再跟踪」，而结算按回执把同一行写成了 succeeded。
+    现在它落进"无效登记"（调用方记 `task_hold_invalid` 就放过），撤下另有 `task_drop`。
+    """
+    print("\n[归一] 空步骤 = 无效（不再等于撤下）")
+    for bad in ({"goal": DEF["goal"], "steps": []}, {"goal": DEF["goal"]},
+                {"goal": DEF["goal"], "steps": "not-a-list"},
+                {"goal": DEF["goal"], "steps": [{}]},
+                {"goal": DEF["goal"], "steps": [{"label": "  ", "tool": ""}]}):
+        check(f"steps={bad.get('steps', '<缺>')!r} → None", T.normalize_declaration(bad) is None)
+    check("有一步有效步骤就照常登记",
+          (T.normalize_declaration(DEF) or {}).get("state") == "running")
+
+
+def test_normalize_drop():
+    print("\n[撤下] task_drop 只认 goal，产出与登记**同构**的载荷")
+    got = T.normalize_drop({"goal": "  带我过去后  开启一个特效 "})
+    check("goal 必填（没有目标就撤不掉任何一行）", T.normalize_drop({}) is None
+          and T.normalize_drop({"goal": "  "}) is None and T.normalize_drop(None) is None)
+    check("goal 空白收成一个空格", got is not None and got["goal"] == "带我过去后 开启一个特效",
+          str(got and got["goal"]))
+    check("state=cancelled、steps 空、total 0", got is not None
+          and got["state"] == "cancelled" and got["steps"] == [], str(got))
+    check("键集合与登记**逐字相同**（两条通道共用同一个消费方）",
+          set(got) == set(T.normalize_declaration(DEF)), str(sorted(got or ())))
+    check("pending_question 被清空（撤下的事不该还挂着一个要问的问题）",
+          got is not None and got["pending_question"] == "")
+    check("列宽照样截断（DB 报 1406 是硬约束）",
+          len(T.normalize_drop({"goal": "目" * 400})["goal"]) == T.GOAL_COL_MAX)
+    check("steps 字段多余内容被忽略（撤下没有「剩下的步骤」这回事）",
+          (T.normalize_drop({"goal": "g", "steps": [{"tool": "toggle_effect"}]}) or {})
+          .get("steps") == [])
 
 
 def test_normalize_steps_shape():
@@ -73,11 +117,9 @@ def test_normalize_steps_shape():
                                                 "tool": "toggle_effect"}],
           str(got and got["steps"]))
     got = T.normalize_declaration({"goal": "g", "steps": [{"label": "  ", "tool": ""}, {}]})
-    check("两格都空 → 该步被丢，全部丢光即撤下",
-          got is not None and got["state"] == "cancelled", str(got))
+    check("两格都空 → 该步被丢，丢光了整条声明即无效", got is None, str(got))
     got = T.normalize_declaration({"goal": "g", "steps": "not-a-list"})
-    check("steps 不是 list → 当没有步骤（撤下）",
-          got is not None and got["state"] == "cancelled", str(got))
+    check("steps 不是 list → 当没有步骤（声明无效，不是撤下）", got is None, str(got))
 
 
 def test_normalize_truncates_to_column_width():
@@ -92,18 +134,8 @@ def test_normalize_truncates_to_column_width():
     check(f"tool 截到 {T.TOOL_MAX}", len(got["steps"][0]["tool"]) == T.TOOL_MAX)
 
 
-def test_normalize_empty_steps_means_cancel():
-    print("\n[归一] 空步骤 = 撤下（且把挂着的问题一并清掉）")
-    got = T.normalize_declaration({"goal": DEF["goal"], "steps": [],
-                                   "pending_question": "开哪个特效？"})
-    check("state=cancelled", got is not None and got["state"] == "cancelled", str(got))
-    check("pending_question 被清空（撤下的事不该还挂着一个要问的问题）",
-          got is not None and got["pending_question"] == "", str(got and got["pending_question"]))
-    check("steps 为空列表（不是 None）", got is not None and got["steps"] == [])
-
-
 def test_normalize_state_follows_pending_question():
-    print("\n[归一] 有要问的问题 ⇒ input_required，否则 running")
+    print("\n[归一] 有要问的问题 ⇒ input_required，否则 running（撤下是第三个入口）")
     plain = T.normalize_declaration(DEF)
     check("没问题 → running", plain is not None and plain["state"] == "running", str(plain))
     asked = T.normalize_declaration({**DEF, "pending_question": "要哪个特效？"})
@@ -111,11 +143,11 @@ def test_normalize_state_follows_pending_question():
           asked is not None and asked["state"] == "input_required", str(asked))
     check("声明只有这四格（帧契约的键集合钉死）",
           set(plain) == {"goal", "steps", "pending_question", "state"}, str(sorted(plain)))
-    check("state 取值全在六态机里（不发明新态）",
-          all(T.normalize_declaration({**DEF, "steps": [] if s == "cancelled" else DEF["steps"],
-                                       "pending_question": "q" if s == "input_required" else ""}
-                                      )["state"] == s
-              for s in ("cancelled", "input_required", "running")))
+    # 三态各有**唯一入口**（这是拆形状的意义所在：一条路径只生一种状态）
+    check("state 三态各有唯一来源：running / input_required 出自登记，cancelled 出自撤下",
+          T.normalize_declaration(DEF)["state"] == "running"
+          and T.normalize_declaration({**DEF, "pending_question": "q"})["state"] == "input_required"
+          and T.normalize_drop({"goal": "g"})["state"] == "cancelled")
 
 
 # ── ② 确定性 id：登记 / 结算 / 撤下必须对齐同一行 ────────────────────────
@@ -125,8 +157,8 @@ def test_idempotency_key_ignores_steps():
     k1 = T.idempotency_key_for(7, g)
     k2 = T.idempotency_key_for(7, g)
     check("同会话同目标 → 同键", k1 == k2)
-    check("撤下（steps 留空）与登记同键 ⇒ 不会长出第二行",
-          T.idempotency_key_for(7, g) == k1)
+    check("撤下的目标与登记同键 ⇒ 撤下落在原来那行上、不长出第二行",
+          T.idempotency_key_for(7, T.normalize_drop({"goal": g})["goal"]) == k1)
     check("换会话 → 换键（两件事在不同会话里是两件事）",
           T.idempotency_key_for(8, g) != k1)
     check("换目标 → 换键", T.idempotency_key_for(7, g + "再关掉它") != k1)
@@ -171,10 +203,12 @@ def test_frame_payload_matches_columns():
           json.loads(json.dumps(pl["steps"], ensure_ascii=False)) == decl["steps"])
     check("同会话同目标两次登记 → 同 task_id（后续回合更新同一行）",
           T.frame_payload(decl, 42)["task_id"] == pl["task_id"])
-    cancel = T.frame_payload(T.normalize_declaration({"goal": DEF["goal"], "steps": []}), 42)
+    cancel = T.frame_payload(T.normalize_drop({"goal": DEF["goal"]}), 42)
     check("撤下帧：state=cancelled、total_steps=0、task_id 不变（落在同一行上）",
           cancel["state"] == "cancelled" and cancel["total_steps"] == 0
           and cancel["task_id"] == pl["task_id"], str(cancel))
+    check("撤下帧的键集合与登记帧**逐字相同**（Rust 一套 upsert 认两种意图）",
+          set(cancel) == set(pl), str(sorted(set(cancel) ^ set(pl))))
 
 
 # ── ④ 结算：只认回执、连续推进、不看模型的话 ─────────────────────────────
@@ -302,6 +336,59 @@ def test_task_rows_tolerates_any_shape():
     check("JSON 字符串（Rust 交回来的那条路）可用", T.task_rows(json.dumps([ok])) == [ok])
 
 
+def test_settled_by_receipts():
+    print("\n[完成>撤下] 这一行是不是已经按回执做完了（与流尾结算同源）")
+    check("两步都做完 ⇒ True",
+          T.settled_by_receipts(_task(), [{"tool": "navigate_to", "ts": 9},
+                                          {"tool": "toggle_effect", "ts": 10}]))
+    check("只做完第一步 ⇒ False（还没完，撤下照旧生效）",
+          not T.settled_by_receipts(_task(), [{"tool": "navigate_to", "ts": 9}]))
+    check("零回执 ⇒ False", not T.settled_by_receipts(_task(), []))
+    check("行本身读不出步骤（列被写坏）⇒ False（判不了就不拦，见 drop_is_completion）",
+          not T.settled_by_receipts(_task(steps=[], total_steps=0),
+                                    [{"tool": "navigate_to", "ts": 9}]))
+    check("非 dict 的行 ⇒ False（不抛）", not T.settled_by_receipts(None, []))
+    # 游标语义与结算共用同一个函数 ⇒ 已推进过一半的行也判得对
+    check("游标已到 1、剩第二步的回执 ⇒ True",
+          T.settled_by_receipts(_task(cursor=1), [{"tool": "toggle_effect", "ts": 10}]))
+
+
+def test_drop_is_completion():
+    print("\n[完成>撤下] task_drop 的确定性闸：做完了就不许撤下")
+    goal = DEF["goal"]
+    conv = 20260927
+    row = _task(task_id=T.task_id_for(T.idempotency_key_for(conv, goal)))
+    raw = json.dumps([row], ensure_ascii=False)   # 与 Rust 读侧交回来的形状一致
+    drop = T.normalize_drop({"goal": goal})
+    done = [{"tool": "navigate_to", "ts": 9}, {"tool": "toggle_effect", "ts": 10}]
+    check("撤下 + 该行剩余步骤本轮回执全在场 ⇒ True（这就是'我做完啦'）",
+          T.drop_is_completion(raw, conv, drop, done))
+    check("只做完第一步 ⇒ False（真撤下照旧放行）",
+          not T.drop_is_completion(raw, conv, drop, [{"tool": "navigate_to", "ts": 9}]))
+    check("**零回执**（主人真说不做的那一轮）⇒ False——方向单一，不误伤真撤下",
+          not T.drop_is_completion(raw, conv, drop, []))
+    check("不是撤下（登记）⇒ False", not T.drop_is_completion(
+        raw, conv, T.normalize_declaration(
+            {"goal": goal, "steps": [{"label": "x", "tool": "toggle_effect"}]}), done))
+    check("行不在读回来的清单里（没登记过）⇒ False（按撤下处理，不瞎猜）",
+          not T.drop_is_completion("[]", conv, drop, done))
+    check("会话 id 不是整数（拿不到会话）⇒ False",
+          not T.drop_is_completion(raw, None, drop, done)
+          and not T.drop_is_completion(raw, "20260927", drop, done))
+    check("目标对不上（哈希口径变了会让它查不到行）⇒ False",
+          not T.drop_is_completion(raw, conv, T.normalize_drop({"goal": "另一件事"}), done))
+    check("形状全空 ⇒ False（不抛）",
+          not T.drop_is_completion(None, None, None, None))
+    print("\n[完成>撤下] 给 narrator 的注记：单行、不出现'撤下/取消/不做了'")
+    note = T.TASK_DONE_NOTE
+    check("单行（会被拼进计划契约的 NOTE: 行）", "\n" not in note and "\r" not in note)
+    # 注记是给 narrator 的，它照着措辞写字 ⇒ 用"撤下"去否定撤下等于把词递到它嘴边
+    # （被替掉的那句错话正是「系统已按你的登记把「X」撤下（不再跟踪）」）。
+    check("不出现'撤下/取消/不做了'（不许把那个词递给 narrator）",
+          not [w for w in ("撤下", "取消", "不做了") if w in note], note)
+    check("说清'系统会自己结算'（免得模型回头又去清理一次）", "结算" in note)
+
+
 def test_render_open_tasks():
     print("\n[注入] 只渲染未完结态 + 抹掉能破坏框架的字符")
     check("没有行 → 空串（调用方据此不注入）", T.render_open_tasks("") == "")
@@ -319,8 +406,8 @@ def test_render_open_tasks():
     check("进度 = 游标/总数", "1/2" in out, out)
     check("只列**还剩**的步骤（已推进的那步不出现）",
           "开启特效" in out and "跳过去" not in out, out)
-    check("纪律句在场（不许说做完了 / 撤下的走法）",
-          "不许" in out and "steps 留空" in out)
+    check("纪律句在场（不许说做完了 / 撤下走 task_drop / 做完别再登记）",
+          "不许" in out and "task_drop" in out and "不要再登记" in out)
     check("没有要问的问题时不渲染'需要问主人'", "需要问主人" not in out)
     asked = [dict(rows[0], state="input_required", pending_question="要哪个特效？")]
     out2 = T.render_open_tasks(json.dumps(asked, ensure_ascii=False))
@@ -351,7 +438,7 @@ def test_declaration_note_is_single_line():
     out = T.declaration_note(with_question, False)
     check("有待问句 ⇒ 逐字照抄那句原话", "要哪个特效？" in out and "原样问出来" in out)
     check("无待问句 ⇒ 不出现'问出来'那半", "原样问出来" not in T.declaration_note(running, True))
-    cancelled = T.normalize_declaration({"goal": DEF["goal"], "steps": []})
+    cancelled = T.normalize_drop({"goal": DEF["goal"]})
     out = T.declaration_note(cancelled, False)
     check("撤下轮：写明已撤下 + 不许说做过它", "撤下" in out and "不许" in out, out)
     check("撤下轮不出现'还没做完'（它不是未完结）", "还没做完" not in out)
@@ -365,7 +452,10 @@ def test_declaration_nudge_offers_both_paths():
     check("写明访客什么也看不到（这才是要纠偏的理由）", "什么也看不到" in out)
     check("两条路都给（执行 / 把问题问出来）", "技能把它做掉" in out and "pending_question" in out)
     check("不替它选（不问'你要哪条'，只把格子的形状摊开）", "你自己选" in out)
-    check("模型面前的说明也是单行（schema description）", "\n" not in T.TASK_HOLD_DESC)
+    check("模型面前的说明也是单行（两个 schema description）",
+          "\n" not in T.TASK_HOLD_DESC and "\n" not in T.TASK_DROP_DESC)
+    check("两个伪函数的描述**互相点名**（模型得知道'做完'不该走 task_drop）",
+          "task_drop" in T.TASK_HOLD_DESC and "自动结算" in T.TASK_DROP_DESC)
 
 
 # ── ⑦ 结构锁 ────────────────────────────────────────────────────────────
@@ -379,9 +469,17 @@ def test_module_does_not_import_graph():
         if isinstance(node, ast.Import):
             hits += [a.name for a in node.names if a.name.startswith("agent.graph")]
     check("没有 agent.graph 的 import", not hits, str(hits))
-    check("伪函数名不与任何技能重名（重名会让 trace 分不清点了技能还是登记）",
-          T.TASK_HOLD not in {s.name for s in T.visible_skills(None)}
-          and T.TASK_HOLD not in {s.name for s in T.visible_skills("admin")})
+    check("两个伪函数名都不与任何技能重名（重名会让 trace 分不清是技能还是任务）",
+          all(fn not in {s.name for s in T.visible_skills(r)}
+              for fn in (T.TASK_HOLD, T.TASK_DROP) for r in (None, "admin")))
+    check("伪函数只有这两个（多一个就要多一套判据，schema 集合由这里钉住）",
+          [s["function"]["name"] for s in T.pseudo_tool_schemas(None)]
+          == [T.TASK_HOLD, T.TASK_DROP])
+    check("task_hold 的 steps 在**服务端**就不许为空（minItems=1 是形状那一半的锁）",
+          (T.task_hold_schema(None)["function"]["parameters"]["properties"]["steps"]
+           .get("minItems") == 1))
+    check("task_drop 只有 goal 一格（留一个可空 steps 就把老歧义请回来了）",
+          list(T.task_drop_schema()["function"]["parameters"]["properties"]) == ["goal"])
     # 未完结态集合是**跨语言契约**（Rust `TASK_OPEN_STATES` 是它的孪生，两侧都在判）：
     # 钉成字面量，改这里必须同时改 `src/routes/chat.rs` 那一格。
     check("未完结态恰为三态（与 Rust TASK_OPEN_STATES 同集合）",
@@ -396,7 +494,8 @@ if __name__ == "__main__":
     for fn in (test_normalize_requires_goal,
                test_normalize_steps_shape,
                test_normalize_truncates_to_column_width,
-               test_normalize_empty_steps_means_cancel,
+               test_normalize_empty_steps_is_invalid,
+               test_normalize_drop,
                test_normalize_state_follows_pending_question,
                test_idempotency_key_ignores_steps,
                test_task_id_is_derived_not_random,
@@ -408,6 +507,8 @@ if __name__ == "__main__":
                test_advance_refuses_unreadable_steps,
                test_advance_total_steps_is_the_floor,
                test_task_rows_tolerates_any_shape,
+               test_settled_by_receipts,
+               test_drop_is_completion,
                test_render_open_tasks,
                test_declaration_note_is_single_line,
                test_declaration_nudge_offers_both_paths,

@@ -1130,7 +1130,14 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
     #   **同一条理由必须由调用方传**（req 不在这里），别再犯上面那个 NameError。
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "stop_event": stop_event,
                                "principal": principal or Principal(uid=user_id),
-                               "conversation_id": conversation_id},
+                               "conversation_id": conversation_id,
+                               # 未完结任务原文（20260927 批 D）：planner 侧判"这一次
+                               # `task_drop` 是不是其实是'我做完了'"要用它（回执已覆盖
+                               # 该行剩余步骤 ⇒ 撤下不成立，见 tasks.drop_is_completion）。
+                               # 走 configurable 与 conversation_id 同一条路：图里读得到、
+                               # 又不必动 AgentState（多一个 state 字段就要多一处初值，
+                               # 而这条只是**只读的判定输入**，没有回写需求）。
+                               "open_tasks": open_tasks},
               "recursion_limit": RECURSION_LIMIT}
     try:
         # 双 stream_mode：

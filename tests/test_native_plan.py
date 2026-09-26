@@ -17,9 +17,10 @@
   · 零调用 = 闲聊轮（`params` 给**空**，不臆造字段）、多条调用只取第一条并记账、
     判不了就返回 None；
   · 函数名满足 OpenAI 的 `^[a-zA-Z0-9_-]{1,64}$`（技能名带点/空格会让整份 tools 被拒）；
-  · **登记伪函数 `task_hold`（20260927 批 D）只在开关打开时多出来这一个名字**
-    ——集合相等因此是"技能名 + 一个申报过的名字"，且它的步骤工具闭集仍不许点出够不到的
-    工具；开关关闭（默认）时它与其它未知函数名一视同仁 ⇒ 决策层返回 None；
+  · **两个任务伪函数（20260927 批 D：`task_hold` 登记 / `task_drop` 撤下）只在开关
+    打开时多出来**——集合相等因此是"技能名 + 两个申报过的名字"，且步骤工具闭集仍不许
+    点出够不到的工具；开关关闭（默认）时它们与其它未知函数名一视同仁 ⇒ 决策层返回 None；
+    **空 steps 的 task_hold 是无效登记**（不是撤下，那条路 20260927 已拆掉）；
   · 本模块**不许 import `agent.graph`**（graph 是消费方，反向会成环）。
 """
 import ast
@@ -66,14 +67,19 @@ def test_name_set_equals_visible_skills():
     for role in (None, "admin"):
         got = {t["function"]["name"] for t in
                N.build_tool_schema(role, task_state=True)}
-        want = {s.name for s in S.visible_skills(role)} | {T.TASK_HOLD}
-        check(f"role={role!r} 开任务登记后只多 task_hold", got == want,
+        want = {s.name for s in S.visible_skills(role)} | {T.TASK_HOLD, T.TASK_DROP}
+        check(f"role={role!r} 开任务状态后只多这两个伪函数", got == want,
               f"多={sorted(got - want)} 少={sorted(want - got)}")
-    check("开关关（默认）时 schema 里没有 task_hold",
-          T.TASK_HOLD not in _by_name("admin"))
-    hold = N.build_tool_schema(None, task_state=True)[-1]["function"]
-    check("task_hold 排在最后（不参与技能顺序/菜单）",
-          hold["name"] == T.TASK_HOLD, hold["name"])
+    check("开关关（默认）时 schema 里两个伪函数都没有",
+          not ({T.TASK_HOLD, T.TASK_DROP} & set(_by_name("admin"))))
+    hold = N.build_tool_schema(None, task_state=True)[-2]["function"]
+    drop = N.build_tool_schema(None, task_state=True)[-1]["function"]
+    check("两个伪函数排在最后（不参与技能顺序/菜单）",
+          [hold["name"], drop["name"]] == [T.TASK_HOLD, T.TASK_DROP],
+          f"{hold['name']},{drop['name']}")
+    check("task_drop 只有 goal 一格（可空的 steps 会把老歧义请回来）",
+          list(drop["parameters"]["properties"]) == ["goal"]
+          and drop["parameters"].get("required") == ["goal"])
     enum = hold["parameters"]["properties"]["steps"]["items"]["properties"]["tool"]
     registry = {t.name for t in get_all_tools()}
     check("步骤工具闭集 = 技能模板工具 ∪ 点名白名单（非全量注册表）",
@@ -83,7 +89,7 @@ def test_name_set_equals_visible_skills():
     check("闭集里的名字**每一个都真的在注册表里**（闭集不许点出够不到的东西）",
           set(enum.get("enum") or []) <= registry,
           str(sorted(set(enum.get("enum") or []) - registry)))
-    adm = N.build_tool_schema("admin", task_state=True)[-1]["function"]
+    adm = N.build_tool_schema("admin", task_state=True)[-2]["function"]
     check("admin 的闭集严格大于公开身份（按角色展开，不是常量）",
           set(adm["parameters"]["properties"]["steps"]["items"]["properties"]["tool"]["enum"])
           > set(enum.get("enum") or []))
@@ -249,6 +255,13 @@ def test_unmappable_returns_none():
     check("args 不是对象 → None", N.tool_calls_to_plan(_Stub(), None) is None)
 
 
+def _hold_call(goal: str, *, steps: list | None = None, cid: str = "t") -> dict:
+    return {"name": T.TASK_HOLD, "id": cid, "type": "tool_call",
+            "args": {"goal": goal,
+                     "steps": steps if steps is not None
+                     else [{"label": "开启特效", "tool": "toggle_effect"}]}}
+
+
 def test_task_hold_declaration():
     """登记伪函数（20260927 批 D）：与技能调用**同轮共存**，且只在开关打开时被认。
 
@@ -259,10 +272,7 @@ def test_task_hold_declaration():
     """
     print("\n[登记] task_hold 与技能调用同轮共存")
     goal = "带我过去后开启一个特效"
-    only = AIMessage(content="", tool_calls=[{
-        "name": T.TASK_HOLD, "id": "t", "type": "tool_call",
-        "args": {"goal": goal,
-                 "steps": [{"label": "开启特效", "tool": "toggle_effect"}]}}])
+    only = AIMessage(content="", tool_calls=[_hold_call(goal)])
     got = N.tool_calls_to_plan(only, None, task_state=True)
     check("只登记 → skill=chat（本轮确实没执行工具）",
           got is not None and got.skill == "chat", str(got))
@@ -270,6 +280,7 @@ def test_task_hold_declaration():
           and (got.declare or {}).get("goal") == goal, str(got and got.declare))
     check("params 为空（不把登记当参数塞进 chat）",
           got is not None and got.params == {}, str(got and got.params))
+    check("有效登记不带异常记账", got is not None and got.notes == (), str(got and got.notes))
     # `tool_call_names` 是**连线原始证据**（"模型点了哪些函数"，含被丢弃的并发调用），
     # 决策结果由 `skill` 承载 —— 两者分工不同：这里如实记 `task_hold`，而技能位是 `chat`。
     check("原始函数名序列如实记 task_hold（决策位由 skill=chat 承载）",
@@ -278,9 +289,7 @@ def test_task_hold_declaration():
 
     both = AIMessage(content="", tool_calls=[
         {"name": "navigate", "args": {"target": "物联网平台"}, "id": "n", "type": "tool_call"},
-        {"name": T.TASK_HOLD, "id": "t", "type": "tool_call",
-         "args": {"goal": goal,
-                  "steps": [{"label": "开启特效", "tool": "toggle_effect"}]}}])
+        _hold_call(goal)])
     got = N.tool_calls_to_plan(both, None, task_state=True)
     check("做一步 + 登记 → skill=navigate", got is not None and got.skill == "navigate", str(got))
     check("params 是技能的参数（登记不抢参数位）",
@@ -309,6 +318,75 @@ def test_task_hold_declaration():
     got = N.tool_calls_to_plan(bad, None, task_state=True)
     check("登记缺 goal（不可用）→ 不落 declare、技能照旧",
           got is not None and got.skill == "navigate" and got.declare is None, str(got))
+    check("无效登记记一笔 task_hold_invalid（不是静默丢掉）",
+          got is not None and got.notes == ("task_hold_invalid",), str(got and got.notes))
+
+
+def test_empty_steps_hold_is_invalid_not_cancel():
+    """**空 steps 的登记 = 无效，不是撤下**（20260927 拆形状的回归锁，见 tasks.TASK_DROP）。
+
+    现场：模型把剩下那一步做完后，又用同一个 goal、空 steps 登记一次（它的意思是"我没剩
+    什么要记的了"），系统读成"主人不要这件事了"，narrator 说「已撤下不再跟踪」而结算把
+    同一行写成 succeeded。现在这一格落到 `declare=None` + `task_hold_invalid`。
+    """
+    print("\n[登记] 空 steps 的 task_hold 什么都不做（撤下走 task_drop）")
+    only = AIMessage(content="", tool_calls=[_hold_call("带我过去后开启一个特效", steps=[])])
+    got = N.tool_calls_to_plan(only, None, task_state=True)
+    check("只发空 steps 登记 → 技能位 chat（不进 fallback，模型确实点了函数）",
+          got is not None and got.skill == "chat", str(got))
+    check("**declare 为 None**（既没登记也没撤下）",
+          got is not None and got.declare is None, str(got and got.declare))
+    check("记一笔 task_hold_invalid（无效登记不许静默）",
+          got is not None and got.notes == ("task_hold_invalid",), str(got and got.notes))
+    with_action = AIMessage(content="", tool_calls=[
+        {"name": "navigate", "args": {"target": "物联网平台"}, "id": "n", "type": "tool_call"},
+        _hold_call("g", steps=[])])
+    got = N.tool_calls_to_plan(with_action, None, task_state=True)
+    check("动作 + 空 steps 登记 → 动作照做、登记无效",
+          got is not None and got.skill == "navigate" and got.declare is None
+          and "task_hold_invalid" in got.notes, str(got and got.notes))
+
+
+def test_task_drop_declaration():
+    """撤下伪函数：**只有主人说不做了**才该出现，参数只有 goal。"""
+    print("\n[撤下] task_drop 独立成一次调用（不再借空 steps 表达）")
+    goal = "带我过去后开启一个特效"
+    only = AIMessage(content="", tool_calls=[
+        {"name": T.TASK_DROP, "id": "d", "type": "tool_call", "args": {"goal": goal}}])
+    got = N.tool_calls_to_plan(only, None, task_state=True)
+    check("只撤下 → skill=chat + declare.state=cancelled",
+          got is not None and got.skill == "chat"
+          and (got.declare or {}).get("state") == "cancelled", str(got and got.declare))
+    check("撤下不带 pending_question（撤下的事不该还挂着问题）",
+          got is not None and (got.declare or {}).get("pending_question") == "")
+    check("原始函数名如实记 task_drop", got is not None
+          and N.tool_call_names(got) == T.TASK_DROP, repr(got and N.tool_call_names(got)))
+    with_action = AIMessage(content="", tool_calls=[
+        {"name": "navigate", "args": {"target": "留言板"}, "id": "n", "type": "tool_call"},
+        {"name": T.TASK_DROP, "id": "d", "type": "tool_call", "args": {"goal": goal}}])
+    got = N.tool_calls_to_plan(with_action, None, task_state=True)
+    check("撤下 + 一个动作 → 技能照旧取第一条，撤下并行走",
+          got is not None and got.skill == "navigate"
+          and (got.declare or {}).get("state") == "cancelled", str(got and got.declare))
+    check("记账用 task_drop_inline（与登记那一格分得开）",
+          got is not None and got.notes == ("task_drop_inline:navigate",),
+          str(got and got.notes))
+    # 两条意图互相矛盾时**取登记**：丢掉登记的代价是这件事又没人管了（本批要治的病），
+    # 丢掉撤下只是多跟踪一会儿（下一轮照样能撤）。
+    clash = AIMessage(content="", tool_calls=[_hold_call(goal), {
+        "name": T.TASK_DROP, "id": "d", "type": "tool_call", "args": {"goal": goal}}])
+    got = N.tool_calls_to_plan(clash, None, task_state=True)
+    check("同轮既登记又撤下 → 取登记（state=running），撤下记账丢弃",
+          got is not None and (got.declare or {}).get("state") == "running"
+          and "task_drop_ignored" in got.notes, str(got and got.notes))
+    bad = AIMessage(content="", tool_calls=[
+        {"name": T.TASK_DROP, "id": "d", "type": "tool_call", "args": {}}])
+    got = N.tool_calls_to_plan(bad, None, task_state=True)
+    check("撤下缺 goal → declare=None + task_drop_invalid",
+          got is not None and got.declare is None
+          and got.notes == ("task_drop_invalid",), str(got and got.notes))
+    check("开关关（默认）时 task_drop 与未知函数名同等 → None",
+          N.tool_calls_to_plan(only, None) is None)
 
 
 def test_role_filter_applies_at_decision_time():
