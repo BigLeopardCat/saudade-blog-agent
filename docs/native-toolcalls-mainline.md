@@ -557,8 +557,9 @@ submitted → running → succeeded / failed / cancelled
 **现场**（trace `20260927T072937_1_r5a1594e`，07:29:37）：主人对上一条「解冻 niuniu」待办回
 「要」→ planner 两轮（`dashboard_todo_list` 列待办 + 审核状况 → `complete_dashboard_todo`）
 → `execute` 判出该待办**本来就是已完成**（工具帧逐字：`4. 解冻 niuniu | 未排期 | 已完成`）
-→ 判据**正确地**走了「状态已达成 ⇒ 不弹卡」出口 → 调用方那一格只写了
-`popup["pending_confirm"]["specs"]` ⇒ `KeyError('pending_confirm')` → producer 异常 →
+→ 判据**正确地**走了「状态已达成 ⇒ 不弹卡」出口（trace 末条事件 `confirm.idem_reached`、
+`kept: []`，整批被滤空）→ 调用方那一格只写了 `popup["pending_confirm"]["specs"]` ⇒
+`KeyError('pending_confirm')` → producer 异常（`end_reason=producer_error`，6 帧）→
 流级 `__ERROR__` 帧载荷 = `str(异常)` = `'pending_confirm'` → 前端 `new Error(detail)` 无
 `userText` ⇒ 套上「网络错误: 」⇒ 主人读到 **「网络错误: 'pending_confirm'」**。
 
