@@ -493,7 +493,7 @@ submitted → running → succeeded / failed / cancelled
 | `parent_id` 父子链 | **不做**，一条任务装一串步骤 | 父子链要真做，就得先回答"父任务的完成条件是什么"（子任务全绿？）——那是另一件事，且 §1.2 那族用例用不到 |
 | 澄清卡复用 `pending_confirm` | `input_required` + `pending_question` **原样回放** | 两个不同的东西：确认卡问的是"你同意我执行吗"（**动作已定**，缺的是许可）；这里缺的是**参数**，动作还没定下来。借用前者的壳会把"要先问哪个特效"讲成"要不要开特效" |
 | 状态由服务端写死 | 意图**由模型声明**（伪函数 `task_hold`），完成度**由回执认定**（producer 流尾结算） | 见 ADR-0002：扫描器结构上看不见未具名宾语，而"还剩几步"只有 planner 知道；但"做完没有"必须回到回执，模型说了不算 |
-| 一个伪函数 `task_hold` 兼表"登记"与"撤下"（`steps` 为空即撤下） | **拆成两个**：登记 `task_hold`（`steps` `minItems:1`）／撤下 `task_drop`（只要 `goal`）；空 `steps` 的 `task_hold` 判**无效登记**，什么都不做 | 一个形状担两种语义 ⇒ 模型把「这步我做完了」也写成空 `steps`（见 §6.9 第 ② 行）。拆完仍有残余，所以又加了第三道闸"完成 > 撤下"——**形状拆开不够，语义边界得由确定性判据兜** |
+| 一个伪函数 `task_hold` 兼表"登记"与"撤下"（`steps` 为空即撤下） | **拆成两个**：登记 `task_hold`（`steps` `minItems:1`）／撤下 `task_drop`（只要 `goal`）；空 `steps` 的 `task_hold` 判**无效登记**，什么都不做 | 一个形状担两种语义 ⇒ 模型把「这步我做完了」也写成空 `steps`（见 §6.9 第 ② 行）。拆完仍有残余，所以又加了第三道闸"完成 > 撤下"——**形状拆开不够，语义边界得由确定性判据兜**。同族教训在别处又栽了一次（出口形状拆了、调用方没跟上，见 §6.10） |
 
 判据（同批落地，不是后补）：
 
@@ -551,6 +551,38 @@ submitted → running → succeeded / failed / cancelled
 **开关位置的诚实边界**：生产 `.env` 的 `AGENT_TASK_STATE` **仍是关的** ⇒ 写侧不可达、
 上面这条失败在生产**今天不可达**；flag-on 跑这条用例是**将来开启该功能的前置门禁**，
 不是线上现状。§7 第 7 行据此仍未改判——只是"先修工具描述再复测"这一步已做完。
+
+### 6.10 出口两种形状，调用方只认一种（20260927 生产事故，已修）
+
+**现场**（trace `20260927T072937_1_r5a1594e`，07:29:37）：主人对上一条「解冻 niuniu」待办回
+「要」→ planner 两轮（`dashboard_todo_list` 列待办 + 审核状况 → `complete_dashboard_todo`）
+→ `execute` 判出该待办**本来就是已完成**（工具帧逐字：`4. 解冻 niuniu | 未排期 | 已完成`）
+→ 判据**正确地**走了「状态已达成 ⇒ 不弹卡」出口 → 调用方那一格只写了
+`popup["pending_confirm"]["specs"]` ⇒ `KeyError('pending_confirm')` → producer 异常 →
+流级 `__ERROR__` 帧载荷 = `str(异常)` = `'pending_confirm'` → 前端 `new Error(detail)` 无
+`userText` ⇒ 套上「网络错误: 」⇒ 主人读到 **「网络错误: 'pending_confirm'」**。
+
+**这条出口不是本批新写的**（`git log -L` 指到 20260926 的那次提交）。它是一条**判据齐全、
+唯独没人测调用方**的潜伏缺陷：出口写好了、四种场景各有断言，但 `execute_node` 里那一格从未
+被驱动过 ⇒ 判据全绿、首次命中即崩。「能力有测试 ≠ 接线有测试」在本仓已第三次出现（前两次：
+`fallback_text` 通道、`gate_replan` 的 `__future__ annotations`）。
+
+| 修法 | 内容 | 判据 |
+|---|---|---|
+| ① 出口形状加**显式判别键** | 返回 `{"kind": "confirm" \| "noop", …}`，调用方按 `kind` 分派；**认不出的 kind 响亮收尾**（零执行、`record("execute","popup_kind_unknown")`）；判别键进 state 前剥掉 | `tests/test_idem_noop.py` 第 ⑥ 节——**驱动真 `execute_node`**（此前完全缺失的那一格）：noop 出口不抛 / 无 `pending_confirm` / 零执行 / `route_after_execute` 收尾 / 认不出的 kind 也响亮 |
+| ② 判据自检**以事故现场为输入** | 把事故当天那一行原文跑一遍，证明它确实 `KeyError`（否则"抓得到"只是自我感觉） | 同上第 ⑥ 节（自检输出 `KeyError: 'pending_confirm'`）；`tests/test_error_frame.py` ②b 以同一个异常为输入 |
+| ③ `__ERROR__` 载荷改**给人看的话术** | 模块常量 `server.PRODUCER_ERROR_TEXT`；异常原文与 traceback **一个字不丢**，照旧进 `logger.exception` 与 trace | `test_error_frame.py` ①（载荷 == 常量）+ ②b（不含 `KeyError`/`pending_confirm`/`Traceback`/`.py`/`line `）+ ④（源码锁：全仓每个 `__ERROR__` 发出点都走 `json.dumps`） |
+| ④ 前端不把服务端自己的话读成网络故障 | `__ERROR__` 分支的 error 带 `userText`（同 409 令牌那条先例），`errMsg` 取值优先 `userText` | `frontend/tests/chat-error-frame.test.mjs`：**求值真源码**（切帧分支 + 切 `errMsg` 取值），含"没有 `userText` 的异常确实带前缀"的判据自检 |
+
+**两条诚实边界**：
+
+- 那句话术写成**模块级常量**是判据的需要，不是风格：测试要能替换它才验得了"载荷里带换行
+  会不会把一帧劈成两帧"；写成内联字面量则这一格再无变量，判据退化成"常量不含换行"（永远为真）。
+- 前端那一改原先想用 `frontend/tests/repro-timegap.mjs` 兜，实测**兜不到**：它在
+  「创建新会话失败」那一步就早退了，根本到不了 `__ERROR__` 分支。该文件也没有接进任何套件
+  （是手排工具，`run-suites.mjs` 明确把 `repro-*` 排除在外），且场景 1/3/4/5/6/8 有一批与
+  本改动无关的既有陈旧红 ⇒ 拿它当判据既覆盖不到、红绿也不可信。所以另写了上表第 ④ 行那条
+  **接进 `npm test`（= CI 的 check job）**的套件。
 
 ---
 
