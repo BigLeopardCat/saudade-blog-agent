@@ -159,12 +159,18 @@ def declared_fixtures() -> list[str]:
     说了算——手抄一份名单，早晚出现"用例改了名字、哨兵还在放行旧的"（那种哨兵会对着
     一条真残留一直报，然后被学会忽略）。读不到用例文件 ⇒ 空列表（哨兵只报前缀族，
     不做"这个是不是合法夹具"的判断——宁可多报一行，不可静默放过）。
+
+    **去重**（保留首次出现顺序）：账号夹具是**常驻**的（用例只改它的状态，见模块头注），
+    所以多条用例共用同一个夹具是正常形态、而且会越来越多（20260926 起「解冻」与「发通知」
+    两条都挂在 `agent_fixture_freeze_a` 上）。不去重的话，`--verify` 会印成
+    「也不算残留：[A, A]」，而"同一个名字出现两次"读起来像是有两个夹具或有人插重了
+    ——哨兵自己生成的一句误导，正是这类哨兵最容易被学会忽略的方式。
     """
     try:
         lines = CASES_FILE.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
-    out = []
+    out: list[str] = []
     for ln in lines:
         if not ln.strip():
             continue
@@ -173,7 +179,9 @@ def declared_fixtures() -> list[str]:
         except Exception:  # noqa: BLE001
             continue
         if str(case.get("requires_fixture_kind") or "") == "account" and case.get("requires_fixture"):
-            out.append(str(case["requires_fixture"]))
+            name = str(case["requires_fixture"])
+            if name not in out:
+                out.append(name)
     return out
 
 

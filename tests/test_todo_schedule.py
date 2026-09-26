@@ -828,9 +828,15 @@ check("畸形 spec 不炸（渲染层只退化不加戏）",
 _q_add = A.render_confirm_question([{"tool": "create_dashboard_todo",
                                      "args": {"text": "交房租", "date": "2026-09-28"}}],
                                    None, None, None, None, None, _SNAP)
-check("三张卡互不同形（勾 / 加 / 冻结 各自读起来是不同的事）",
-      len({_q_done, _q_add,
-           A.render_confirm_question([{"tool": "freeze_account", "args": {"name": "guest5"}}])}) == 3)
+_q_notice = A.render_confirm_question([{"tool": "send_user_notice",
+                                        "args": {"name": "guest5",
+                                                 "content": "请尽快补齐资料"}}])
+check("四张卡互不同形（勾 / 加 / 冻结 / 发通知 各自读起来是不同的事）",
+      len({_q_done, _q_add, _q_notice,
+           A.render_confirm_question([{"tool": "freeze_account", "args": {"name": "guest5"}}])}) == 4)
+check("  发通知这张卡把正文**全文**印出来（模型整理过的、发给第三方且收不回的一段话，"
+      "人眼只有这一个复核点）",
+      "请尽快补齐资料" in _q_notice and "没有撤回的通道" in _q_notice, _q_notice)
 check("回执行区分「刚勾的」与「本来就是」（一次 no-op 不能被读成一个动作）",
       "本来就是完成状态" in A.render_todo_done("交房租", changed=False)
       and "已把待办「交房租」勾成完成" in A.render_todo_done("交房租", changed=True),
