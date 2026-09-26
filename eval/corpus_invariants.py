@@ -11,7 +11,7 @@ heredoc——结论不可复核、口径每次都不一样，而且**同一段�
 清单逐条印现场供人分类，脚本不替人下结论（元讨论引述与真事故在字面上长得一样，
 机器分不干净——这正是它只列不判的理由）。要盯"有没有新增"，用 `--compare` 比基线。
 
-五条不变量：
+六条不变量（I6 是 20260927 批 D 加的，理由见 `_i6_rows` 头注）：
   I1 `reply_cmd_prefix`        终稿正文里出现命令前缀标签
                                （`AUTO_NAVIGATE:` / `NAVIGATE:` / `EFFECT:` / `DARKMODE:`）
                                按"本轮有没有真命令回执"分两型——
@@ -64,6 +64,12 @@ heredoc——结论不可复核、口径每次都不一样，而且**同一段�
                                I1/I2 同一条口径纪律：`silent` 在**历史**窗口里高不奇怪
                                （navigate 的 `mode` 参数 20260926 才删，当时它是合法输入），
                                要看的是 `--from <上线日>` 的新窗口。
+  I6 `task_declared_unconsumed` 会话级任务状态（批 D）的写端/消费端对账：无 id 的登记、
+                               拿不到会话的登记、**注入了却没人管**（只列）、只登记不干活
+                               被纠偏的次数。前三格见 `_i6_rows` 头注与报告行。
+                               ⚠️ 开关 `AGENT_TASK_STATE` 默认 off ⇒ **off 窗口里六格全 0 是
+                               "功能没开"，不是"很干净"**（同 I4 的 `0` 那条纪律）——
+                               分母 `注入过未完结任务的轮次` 是给这一格用的。
 
 用法（cd saudade-blog-agent）：
   .venv/bin/python eval/corpus_invariants.py                    # 全量语料，只列不写
@@ -164,9 +170,57 @@ def _i5_rows(d: dict, decs: list) -> list:
     return rows
 
 
+def _i6_rows(d: dict) -> list:
+    """I6：任务登记的**写端 vs 消费端**对账（20260927 批 D）。
+
+    存在理由就是 §6.6 那条纪律本身——"模型/系统写下来的剩余步骤必须有消费者，否则
+    不许写"；`TODO:` 行的形态（模型写、无人读）在这个仓里已经犯过一次，所以任务状态
+    落地时**同批**配上这条扫它的不变量，而不是等第三次复盘时才发现。
+
+    四格，都是"写端产生了、消费端拿不到"的可判形状：
+      · `no_id`      `planner.task_declare` 的 `task_id` 为空 ⇒ 声明没有可落库的键，
+                     下一轮读回来的一定不是它（**登记等于没登记**）。目标 0。
+      · `noconv`     `planner.task_declare_noconv` ⇒ 这一轮拿不到会话 id，声明只落进
+                     trace、没有任何读端。目标 0。
+      · `unadvanced` 这一轮**注入过**未完结任务（`producer.task_inject` 的 n>0），却既无
+                     `producer.task_advance` 也无新的 `planner.task_declare`——挂着但
+                     既没推进、也没重述。⚠️ **只列不设目标**：主人这一轮聊的是别的事是
+                     完全合法的（注入是提醒不是命令），自动分不开"忘了"与"本来就该等"。
+      · `corrected`  `planner.task_correct`（"只登记、既没做也没问"被纠偏一次）——
+                     观察量，看的是**趋势**：长期为 0 说明登记纪律稳定，偶尔几条是
+                     正常的一次重决策。
+    判据读 trace 里记下的事件（不回放今天的代码）：批 D 之前的历史窗口四格全 0 是正常的
+    —— 那时这些事件根本不存在，**不是"当时很干净"**。
+    """
+    decl = _ev(d, "planner", "task_declare")
+    inj = _ev(d, "producer", "task_inject")
+    adv = _ev(d, "producer", "task_advance")
+    corr = _ev(d, "planner", "task_correct")
+    rows = []
+    for e in decl:
+        if not str(e.get("task_id") or ""):
+            rows.append({"kind": "no_id", "goal": str(e.get("goal") or "")[:60],
+                         "round": e.get("round")})
+    n_noconv = len(_ev(d, "planner", "task_declare_noconv"))
+    if n_noconv:
+        rows.append({"kind": "noconv", "n": n_noconv})
+    injected = sum(int(e.get("n") or 0) for e in inj)
+    if injected:
+        # 读端**接上了**的证据（分母）：没有这一格，"unadvanced=0"分不清是"每条都推进了"
+        # 还是"根本没注入过"——同 `resets=0` 那条纪律（0 只有在分母非 0 时才有含义）。
+        rows.append({"kind": "injected", "n": injected})
+    if injected and not adv and not decl:
+        ids = [i for e in inj for i in (e.get("ids") or [])]
+        rows.append({"kind": "unadvanced", "n": injected,
+                     "ids": ",".join(str(i) for i in ids[:3])})
+    if corr:
+        rows.append({"kind": "corrected", "n": len(corr)})
+    return rows
+
+
 def scan_one(d: dict) -> dict:
-    """单份 trace 的命中（返回 {i1: [...], i2: [...], i3: [...], i4: n, i5: [...]}）。"""
-    out = {"i1": [], "i2": [], "i3": [], "i4": 0, "i5": []}
+    """单份 trace 的命中（返回 {i1..i5, i6}；i1/i2/i3/i5/i6 是清单，i4 是计数）。"""
+    out = {"i1": [], "i2": [], "i3": [], "i4": 0, "i5": [], "i6": []}
     evs = d.get("events", [])
 
     # ── I1 终稿正文里的命令前缀 ────────────────────────────────────────────
@@ -216,7 +270,50 @@ def scan_one(d: dict) -> dict:
 
     # ── I5 PARAMS 里没人读的参数名 / 不在闭集里的取值 ──────────────────────
     out["i5"] = _i5_rows(d, decs)
+
+    # ── I6 任务登记的写端 vs 消费端（20260927 批 D）────────────────────────
+    out["i6"] = _i6_rows(d)
     return out
+
+
+def _accumulate(one: dict, counts: Counter, hits: dict, stamp: str, uid: int) -> None:
+    """把单份 trace 的命中累加进 `counts`/`hits`。
+
+    **抽成函数是为了可测**（20260927）：计数键名（`i6_no_id` 这类）只有 `report()` 读，
+    写错一个键在真语料上表现为"那一栏恒 0"——静默、且看起来像好消息。抽出来之后
+    `tests/test_corpus_invariants.py` 喂合成 trace 就能把键名与 hits 的分流一起钉住。
+    """
+    counts["i1_cited"] += sum(1 for x in one["i1"] if x["kind"] == "cited")
+    counts["i1_invented"] += sum(1 for x in one["i1"] if x["kind"] == "invented")
+    counts["i2"] += len(one["i2"])
+    for x in one["i2"]:
+        counts[f"i2_{x['bucket']}"] += 1
+    for x in one["i3"]:
+        counts[f"i3_{x['issue']}"] += 1
+    counts["i4"] += one["i4"]
+    for x in one["i5"]:
+        counts[f"i5_{x['kind']}"] += 1
+        if x["reported"]:
+            counts[f"i5_{x['kind']}_reported"] += 1
+        else:
+            counts[f"i5_{x['kind']}_silent"] += 1
+        if x["kind"] == "enum_illegal" and x["executed"]:
+            counts["i5_enum_illegal_executed"] += 1
+    for x in one["i1"]:
+        hits[f"i1_{x['kind']}"].append({"stamp": stamp, "uid": uid, **x})
+    for x in one["i2"]:
+        hits["i2"].append({"stamp": stamp, "uid": uid, **x})
+    for x in one["i5"]:
+        hits[f"i5_{x['kind']}"].append({"stamp": stamp, "uid": uid, **x})
+    for x in one["i3"]:
+        hits[f"i3_{x['issue']}"].append({"stamp": stamp, "uid": uid, **x})
+    for x in one["i6"]:
+        counts[f"i6_{x['kind']}"] += 1
+        # `corrected` 与 `injected` 是**观察量/分母**：只计数、不进 hits（它们不是
+        # "哪一条出事了"）。反过来 `unadvanced` 要进 hits——它只列不设目标，
+        # 不进清单就等于没人会看。
+        if x["kind"] not in ("corrected", "injected"):
+            hits[f"i6_{x['kind']}"].append({"stamp": stamp, "uid": uid, **x})
 
 
 def scan(since: str, until: str) -> dict:
@@ -236,30 +333,7 @@ def scan(since: str, until: str) -> dict:
             unread["bad_file"] += 1     # 坏文件 / 读不出——**不是"里面没有那件事"**
             continue
         one = scan_one(d)
-        counts["i1_cited"] += sum(1 for x in one["i1"] if x["kind"] == "cited")
-        counts["i1_invented"] += sum(1 for x in one["i1"] if x["kind"] == "invented")
-        counts["i2"] += len(one["i2"])
-        for x in one["i2"]:
-            counts[f"i2_{x['bucket']}"] += 1
-        for x in one["i3"]:
-            counts[f"i3_{x['issue']}"] += 1
-        counts["i4"] += one["i4"]
-        for x in one["i5"]:
-            counts[f"i5_{x['kind']}"] += 1
-            if x["reported"]:
-                counts[f"i5_{x['kind']}_reported"] += 1
-            else:
-                counts[f"i5_{x['kind']}_silent"] += 1
-            if x["kind"] == "enum_illegal" and x["executed"]:
-                counts["i5_enum_illegal_executed"] += 1
-        for x in one["i1"]:
-            hits[f"i1_{x['kind']}"].append({"stamp": stamp, "uid": uid, **x})
-        for x in one["i2"]:
-            hits["i2"].append({"stamp": stamp, "uid": uid, **x})
-        for x in one["i5"]:
-            hits[f"i5_{x['kind']}"].append({"stamp": stamp, "uid": uid, **x})
-        for x in one["i3"]:
-            hits[f"i3_{x['issue']}"].append({"stamp": stamp, "uid": uid, **x})
+        _accumulate(one, counts, hits, stamp, uid)
     return {"window": [since or "begin", until], "files": len(files), "in_window": n_win,
             "unread": dict(unread), "counts": dict(counts), "hits": {k: v for k, v in hits.items()}}
 
@@ -287,6 +361,13 @@ def report(r: dict) -> None:
     print(f"   取值不在闭集里 = {c.get('i5_enum_illegal', 0)}"
           f"   （其中**照常执行**的 {c.get('i5_enum_illegal_executed', 0)}）"
           f"  ← 批 5 的判据就是这个「照常执行」= 0（现在应表现为零工具 + 同轮纠偏）")
+    print(f"I6 任务登记写端/消费端对账  无 id 的登记 = {c.get('i6_no_id', 0)}"
+          f"  拿不到会话的登记 = {c.get('i6_noconv', 0)}"
+          f"  挂着没人管 = {c.get('i6_unadvanced', 0)}"
+          f"   （分母：注入过未完结任务的轮次 = {c.get('i6_injected', 0)}；"
+          f"只登记不干活被纠偏 = {c.get('i6_corrected', 0)}）"
+          f"  ← 前两格目标 0（写端产生了、消费端拿不到）；"
+          f"`挂着没人管` **只列不设目标**——主人这一轮聊别的事完全合法，见 `_i6_rows` 注")
     for cat in sorted(r["hits"]):
         rows = r["hits"][cat]
         print(f"\n── {cat}（{len(rows)} 条）" + ("  ★ 批 2 的目标清单" if cat == "i1_cited" else ""))
