@@ -20,11 +20,17 @@ golden 锁不住（无法确定性触发），手动测不到（要真等 120s �
      `json.dumps`。静态扫一遍是为了拦住"新加一条错误路径、顺手裸插值"——那种错误在
      正常流量下根本不出现，只在出问题时把帧撕坏，正是最难查的一类。
 
-**刻意不断言的一件事**：当前 `producer_error` 路径把**原始异常文本**发给访客
-（`server.py` 的 `json.dumps(str(chunk))`）——上游返回体、内部路径都可能顺着它出到页面上。
-这是内容策略问题（要不要换成"服务出了点问题，稍后再试"+ 服务端留原文），**待拍板**，
-所以这里只把它**当作当前行为记录下来**（下方标了「待拍板」的断言），
-谁改了这一行会看到失败信息直接告诉他要同步这条断言——不是"不许改"。
+**20260927 已拍板的一条（原为"待拍板"）**：`producer_error` 路径**不再把原始异常文本
+发给访客**。原文（`json.dumps(str(chunk))`）的代价是上线实测出来的：20260927 07:29
+主人看到的是「网络错误: 'pending_confirm'」——`graph.execute_node` 的一个 KeyError，
+既不是网络问题、也不是一句看得懂的话。现在帧里发的是模块常量
+`server.PRODUCER_ERROR_TEXT`（一句中文话术），**原文一个字不丢**：照旧进
+`logger.exception`（带 traceback）与 trace。这里的三条断言锁新策略：
+
+  ① 载荷是那句常量，**且不含**异常原文/异常类名（回归"别把内部错误名递出去"）；
+  ② 载荷里**没有**任何内部标识（`KeyError`/`pending_confirm`/文件路径/`Traceback`）；
+  ③ 常量在**模块级**（不是内联字面量）——测试要能替换它验②的"帧不被劈开"，
+     否则载荷再无变量、那条判据会退化成永远为真的空判据。
 
 无网络 / 无 LLM / 不起服务（直接调 `chat_stream`，把生产者换成桩）。
 """
@@ -130,8 +136,10 @@ def test_producer_error_frame():
         return
     payload = _payload(fr[0])
     check("载荷是 JSON 字符串（不是裸文本）", isinstance(payload, str), repr(payload))
-    check("载荷带异常原文「待拍板」：当前把 str(异常) 发给访客",
-          "boom" in payload, f"载荷={payload!r}")
+    check("载荷就是那句给人看的话术（模块常量）",
+          payload == server.PRODUCER_ERROR_TEXT, f"载荷={payload!r}")
+    check("  异常原文「boom」**不在**载荷里（原文只进日志与 trace）",
+          "boom" not in payload, f"载荷={payload!r}")
     # 终止性：__ERROR__ 之后不许再补 __END__（Rust 见终止帧即收尾，补了会把失败读成正常结束）
     check("终止性：无 __END__ / __NAV_END__ 尾随",
           not any("__END__" in f or "__NAV_END__" in f for f in fr),
@@ -142,15 +150,48 @@ def test_producer_error_frame():
 
 def test_payload_escaping():
     print("\n── ② 载荷里的换行与引号不撕帧 ──")
+    # 20260927：载荷改成常量之后，**必须**把常量换掉再测——否则这一格没有变量，
+    # 判据退化成"常量不含换行"（永远为真）。这正是常量写成模块级名字的理由。
+    # 换成生猛文本后，验的还是那条契约：任何带换行的载荷都要经 `json.dumps`，
+    # 裸插值会把一帧劈成三帧、前端读到半截。
     nasty = 'line1\n\nline2 "quoted" \\ tail'
-    chunks = asyncio.run(_drive(_producer(RuntimeError(nasty))))
-    fr = _frames(chunks)
+    _saved_text = server.PRODUCER_ERROR_TEXT
+    server.PRODUCER_ERROR_TEXT = nasty
+    try:
+        chunks = asyncio.run(_drive(_producer(RuntimeError("boom"))))
+        fr = _frames(chunks)
+    finally:
+        server.PRODUCER_ERROR_TEXT = _saved_text
 
-    # 裸插值（`data: __ERROR__:{e}`）会产 3 帧：line1 / line2… / 尾巴。
-    check("多行异常文本仍只有一帧（未被 \\n\\n 劈开）", len(fr) == 1, f"实际 {len(fr)} 帧：{fr}")
+    check("多行载荷仍只有一帧（未被 \\n\\n 劈开）", len(fr) == 1, f"实际 {len(fr)} 帧：{fr}")
     if len(fr) == 1:
-        check("载荷 JSON 解码后与原文本逐字相等", _payload(fr[0]) == nasty,
+        check("载荷 JSON 解码后与常量逐字相等", _payload(fr[0]) == nasty,
               repr(_payload(fr[0])))
+    # 判据自检（否则上面那条可能只是"换了个不含换行的常量、其实什么都没测"）：
+    # 把同一个 nasty 按**裸插值**拼一帧，确认它真的会被劈成多帧。
+    _naive = _frames([f"data: __ERROR__:{nasty}\n\n"])
+    check("判据自检：裸插值拼同一条载荷确实被劈开（上面'只有一帧'有牙）",
+          len(_naive) > 1, f"裸插值产出 {len(_naive)} 帧")
+
+
+# ────────────────────────── ②b 载荷不泄漏内部标识（20260927 事故输入）
+
+def test_producer_error_hides_internals():
+    print("\n── ②b 内部错误名不许进气泡（20260927 07:29 生产事故形态）──")
+    # 以**事故当天的真异常**为输入：`graph.execute_node` 的 KeyError('pending_confirm')
+    # （调用方只认一种出口、第二种一命中就炸）。主人当初看到的是
+    # 「网络错误: 'pending_confirm'」。这里锁住"内部名一个字都出不去"。
+    chunks = asyncio.run(_drive(_producer(KeyError("pending_confirm"))))
+    fr = _frames(chunks)
+    payload = _payload(fr[0]) if fr else ""
+    check("载荷不含异常类名 KeyError", "KeyError" not in payload, f"载荷={payload!r}")
+    check("载荷不含内部键名 pending_confirm", "pending_confirm" not in payload,
+          f"载荷={payload!r}")
+    check("载荷不含 traceback / 文件路径 / 栈帧字样",
+          not any(w in payload for w in ("Traceback", ".py", "line ", "File \"")),
+          f"载荷={payload!r}")
+    check("载荷是一句给人看的中文（不是内部标识的拼接）",
+          payload == server.PRODUCER_ERROR_TEXT, f"载荷={payload!r}")
 
 
 # ────────────────────────── ③ 空闲超时（真等 2s 轮询窗口）
@@ -209,6 +250,7 @@ def main():
         set_trace_id("test_error_frame")
         try:
             for fn in (test_producer_error_frame, test_payload_escaping,
+                       test_producer_error_hides_internals,
                        test_idle_timeout_frame, test_all_sites_json_encoded):
                 fn()
         finally:

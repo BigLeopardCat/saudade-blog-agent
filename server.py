@@ -80,6 +80,16 @@ STREAM_TOTAL_TIMEOUT = 300.0
 # 正常流程 5 次以内），超限走既有 __ERROR__ 异常路径，卡死窗口缩到 60-90s。
 RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "30"))
 
+# 生产者异常时 `__ERROR__` 帧里给**访客**看的那句话（20260927 拍板，原为"待拍板"）。
+# 此前这一格发的是 `str(异常)` 原文——上线实测的代价：异常名与内部路径顺着它出到
+# 气泡里，20260927 07:29 主人看到的是一句「网络错误: 'pending_confirm'」
+# （`graph.execute_node` 的 KeyError；既不是网络问题，也不是一句看得懂的话）。
+# **原文不丢**：它照旧进 `logger.exception`（带 traceback）与 trace 的 `end_reason`，
+# 排障读日志，访客读这一句。这里是**模块级常量**而不是内联字面量：测试要能替换它
+# 去验"帧不会被劈开"（见 `tests/test_error_frame.py` ②）——写成内联字面量后，
+# 载荷里再无变量，那条判据就会变成永远为真的空判据。
+PRODUCER_ERROR_TEXT = "服务这边出了点问题，这一轮没能生成回复，请再说一次。"
+
 # 空回复恢复语：agent 流正常收尾但无任何输出（qwen 偶发空内容）时补发的人设内
 # 兜底文本——否则前端静默无感知（Rust 空回复不存历史、UI 无任何反馈，即"卡死"）
 _RECOVERY_SENTENCE = "喵呜……主人抱歉，泠月喵刚才脑袋卡壳了，没有生成出回复，请主人再问一遍喵～ 🐾"
@@ -1673,7 +1683,13 @@ async def chat_stream(req: ChatRequest, request: Request):
                     # logging 会用它自带的 __traceback__ 渲染。
                     logger.error("Agent streaming failed: %s: %s",
                                  type(chunk).__name__, chunk, exc_info=chunk)
-                    yield f"data: __ERROR__:{json.dumps(str(chunk), ensure_ascii=False)}\n\n"
+                    # 载荷是**给访客的话术**（模块常量），不是 `str(异常)`：
+                    # 异常名/内部路径只进日志与 trace，不进气泡（见常量处的注）。
+                    # 仍然 `json.dumps`——帧形态契约不变（`data: __ERROR__:<JSON
+                    # 字符串>`），前端按 JSON 解，且将来若这一格再带回变量也照样不劈帧。
+                    # 保持**单行**且 `json.dumps(` 紧跟在 `__ERROR__:` 之后：
+                    # `tests/test_error_frame.py` ④ 是源码级接线锁，按这个形状扫全文。
+                    yield f"data: __ERROR__:{json.dumps(PRODUCER_ERROR_TEXT, ensure_ascii=False)}\n\n"
                     return
                 # 过程展示/质检重置控制帧（__PROCESS__:<步骤> / __RESET__:<原因>）：
                 # JSON 编码原样转发，前端归档到灰色可折叠过程行
