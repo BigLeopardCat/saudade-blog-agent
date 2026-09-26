@@ -27,9 +27,24 @@ heredoc——结论不可复核、口径每次都不一样，而且**同一段�
                                执行都没有**——即"没有执行过任何东西的计划被交给了 narrator"。
                                ⚠️ 这条口径**宽于**它要抓的缺陷：通用知识问答（合法）、如实说
                                "我查不到/做不到"的收尾轮都落在里面（存量 11 条里多数是这类）。
-                               缺陷子集是"系统确定性层**明知**这一轮零执行、却照原样把计划交给
-                               narrator 自由发挥"——那需要 `plan.status` 才判得准（批 3），
-                               届时把这条收窄成子集，别拿现在的计数当"11 条事故"。
+                               批 3 起按 `plan.status` 分档（planner 的 `decision` 事件带上了它），
+                               判读方式随之改变——**看分档，不看总数**：
+                                 `记账` = status 落在 `PLAN_STATUS_VALUES` 里 ⇒ 系统为这一轮
+                                          记了账（已下线/参数不齐/收尾轮/作答轮都在这一档），
+                                          不是缺陷；
+                                 `无字段` = 批 3 之前的历史 trace（那时还没有这个字段）⇒ 不判读，
+                                          随保留期出清；
+                                 `未记账` = 有该字段但为空 ⇒ 这一档混着好几种东西：合法的通用知识
+                                          作答、写技能零工具那一族（缺必填/目标查无此名，它们
+                                          各自带注记，gate 另有判据）。自动分不开，所以**能
+                                          自动判的只有字段本身**（见下一段）——刻意**不**把
+                                          "没工具就说成 `answer_only`"：那会把"缺参数"与
+                                          "本来不用查"讲成同一件事，比留空更坏。
+                               **批 3 之后可自动判的那一条**：planner LLM 路径的 `decision`
+                               事件里 `status` 必须存在且落在闭集内——`plan_encode` 的派生保证
+                               系统自己写的计划一定带 `STATUS=` 行，漏了就是有条构造路径没接上，
+                               而它在别处全都无声（判据读的是值，读不到就跳过 = fail-open）。
+                               于是新窗口 `--from <上线日>` 上 `无字段` 与 `非法值` 都应为 0。
   I3 `fallback_by_issue`       gate fallback 按原因码计数（`cmd_prefix` 是批 2 的目标）。
   I4 `fallback_total`          gate fallback 总数 = 生产侧 `__RESET__` 帧数。
                                **`0` 有强含义**：这个窗口里 gate 那条路一次都没被验到，
@@ -60,6 +75,7 @@ from trace_io import load_trace  # noqa: E402
 # 这里刻意不复写一份：批 2 之后 trace 里的命令是结构化 `cmd`，与 golden/server 那边
 # 重建出来的是同一件东西，各写一份就是漂移（同 `_cmd_wire` 的文档字符串）。
 from agent.graph import _cmd_wire  # noqa: E402
+from agent.skills import PLAN_STATUS_VALUES  # noqa: E402
 
 TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report")
@@ -106,8 +122,19 @@ def scan_one(d: dict) -> dict:
     if decs:
         last = decs[-1]
         if last.get("skill") != "chat" and not (last.get("tools") or []) and not calls:
+            # 分档（批 3）：`status` 是系统自己写的处境值。有值 = 系统为这一轮记了账；
+            # 无该字段 = 批 3 之前的 trace；有字段但为空 = 未记账（混着合法作答与漏写）。
+            if "status" not in last:
+                bucket = "无字段"
+            elif not last.get("status"):
+                bucket = "未记账"
+            elif last["status"] in PLAN_STATUS_VALUES:
+                bucket = "记账"
+            else:
+                bucket = "非法值"
             out["i2"].append({"skill": last.get("skill"), "round": last.get("round"),
-                              "plan_rounds": len(decs),
+                              "plan_rounds": len(decs), "bucket": bucket,
+                              "status": last.get("status"),
                               "reply": str(reply)[:70].replace("\n", " ")})
 
     # ── I3 / I4 gate fallback ─────────────────────────────────────────────
@@ -138,6 +165,8 @@ def scan(since: str, until: str) -> dict:
         counts["i1_cited"] += sum(1 for x in one["i1"] if x["kind"] == "cited")
         counts["i1_invented"] += sum(1 for x in one["i1"] if x["kind"] == "invented")
         counts["i2"] += len(one["i2"])
+        for x in one["i2"]:
+            counts[f"i2_{x['bucket']}"] += 1
         for x in one["i3"]:
             counts[f"i3_{x['issue']}"] += 1
         counts["i4"] += one["i4"]
@@ -159,7 +188,11 @@ def report(r: dict) -> None:
     print(f"I1 正文含命令前缀   引用回执(cited)={c.get('i1_cited', 0)}  "
           f"自己写的(invented)={c.get('i1_invented', 0)}   ← 改完只看新窗口（--from），"
           f"存量是历史、会自然出清")
-    print(f"I2 零执行的计划交给 narrator = {c.get('i2', 0)}")
+    print(f"I2 零执行的计划交给 narrator = {c.get('i2', 0)}"
+          f"   （记账 {c.get('i2_记账', 0)} / 未记账 {c.get('i2_未记账', 0)} /"
+          f" 无字段 {c.get('i2_无字段', 0)} / 非法值 {c.get('i2_非法值', 0)}）"
+          f"  ← **看分档不看总数**：`记账` 是系统为这一轮写了处境值（不是缺陷），"
+          f"`无字段` 是批 3 前的历史；新窗口里后两档都应为 0")
     print(f"I4 gate fallback 总数（= 生产侧 __RESET__ 帧数）= {c.get('i4', 0)}"
           f"{'   ← 0 表示这条路这次没被验到，不是「干净」' if not c.get('i4') else ''}")
     i3 = sorted((k[3:], v) for k, v in c.items() if k.startswith("i3_"))
@@ -172,6 +205,7 @@ def report(r: dict) -> None:
             extra = f" issue={x['issue']}" if x.get("issue") else ""
             extra += f" skill={x['skill']}" if x.get("skill") else ""
             extra += f" receipts={x['receipts']}" if "receipts" in x else ""
+            extra += f" [{x['bucket']}]" if x.get("bucket") else ""
             print(f"  {x['stamp']} u{x['uid']}{extra}  {tail}")
 
 

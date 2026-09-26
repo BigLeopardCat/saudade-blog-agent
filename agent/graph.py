@@ -96,7 +96,8 @@ from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
                           DROP_SUFFIX_SKILL_NO_CALLS,
-                          FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP,
+                          FUZZY_NAV_RULES, NAV_MAP, PLAN_STATUS_ABSENCE_EXEMPT,
+                          PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, SKILL_MAP,
                           _WRITE_NAME_TARGET_SKILLS, arg_type_short,
                           build_planner_context, callable_query_tools,
                           instantiate_plan, param_problem_note,
@@ -1058,10 +1059,31 @@ def extract_plan_fields(raw: str):
 
 
 def plan_encode(plan_obj: dict) -> str:
-    """结构化计划（instantiate_plan 产物）→ plan 字段（契约的写端）。"""
+    """结构化计划（instantiate_plan 产物）→ plan 字段（契约的写端）。
+
+    `STATUS=` 行（20260926 批 3）**由系统写死**，模型一个字都不填——所以它一定
+    排在 SKILL 之后（紧跟"这是份什么计划"，与人读的顺序一致），而**不是**塞在
+    REPLY 附近：`parse_plan` 的 REPLY 正则吃 DOTALL，它必须是末行。
+
+    派生规则（`plan_obj` 没带 status 时）：有工具 → `executed`；chat 技能 →
+    `answer_only`；其余留空。**留空不是"忘了填"的唯一形态，也不全是缺陷**：写技能
+    零工具那一族（缺必填/目标查无此名）目前也落在这里，而它们各自都带了系统写的
+    注记——所以 `""` 只说明"没有构造点用一个值认领这一轮"，消费侧据此 fail-open
+    （判据读不到就跳过），`eval/corpus_invariants.py` 的 I2 拿它当"未记账"档、
+    **不拿它当缺陷计数**。**别把这条派生当成判据的常态入口**——各构造点都显式给值
+    （navigate 三出口 / `_param_problem_plan` / `_terminal_plan` / fail-closed 写技能），
+    派生只兜住"手写的夹具文本"与"改造前留在 state 里的旧计划"。
+    """
     tools = "（无）" if not plan_obj.get("tools") else "; ".join(plan_obj["tools"])
+    status = plan_obj.get("status") or (
+        "executed" if plan_obj.get("tools")
+        else ("answer_only" if plan_obj.get("chat") else ""))
     lines = [
         f"SKILL={plan_obj['skill']}",
+    ]
+    if status:
+        lines.append(f"STATUS={status}")
+    lines += [
         f"PARAMS={json.dumps(plan_obj.get('params', {}), ensure_ascii=False)}",
         f"TOOLS: {tools}",
         f"NOTE: {plan_obj.get('note') or '（无）'}",
@@ -1094,7 +1116,9 @@ def _parse_todo(raw: str) -> list:
 def parse_plan(raw: str) -> dict:
     """解析 plan 字段（契约的读端）。容错：解析失败 → 按 chat 兜底（宁可少干活，不硬猜）。
 
-    返回 {"skill", "params", "tools", "note", "reply", "todo", "chat"}。
+    返回 {"skill", "params", "tools", "note", "reply", "todo", "chat", "status"}。
+    `status` 见 `PLAN_STATUS_VALUES`（批 3）：系统自己写的计划一定带 `STATUS=` 行，
+    缺了才走下面那段兼容派生（判据别依赖派生，它只是给旧文本留的路）。
     容错原则：所有"LLM 输出 → 程序消费"的边界都要能优雅降级——LLM 不是
     JSON 解析器，输出格式漂移是常态（解析失败 → 按 chat 兜底，宁可少干活）。
 
@@ -1119,6 +1143,30 @@ def parse_plan(raw: str) -> dict:
     rm = re.search(r"REPLY\s*[:=]\s*(.+)", raw or "", re.IGNORECASE | re.DOTALL)
     reply = rm.group(1).strip() if rm else ""
     todo = _parse_todo(raw)
+    sm = re.search(r"STATUS\s*[:=]\s*(\w+)", raw or "", re.IGNORECASE)
+    status = sm.group(1).strip().lower() if sm else ""
+    if status not in PLAN_STATUS_VALUES:
+        status = ""
+    if not status:
+        # 兼容派生（20260926 批 3）：**只兜旧文本与手写夹具**。系统自己写的计划
+        # 一定有 STATUS 行（`plan_encode`），所以下面这段不会在常态里跑到——
+        # `tests/test_status_judgements.py` 有源码锁钉住这一点。
+        #
+        # 为什么不留空、非要派生一遍：留空 = 判据 fail-open，而"缺 STATUS"最可能
+        # 的来历正是**改造前留在 state 里的旧计划文本**——那时判据判的是注记措辞，
+        # 派生一遍等于把旧行为原样接上，不会因为升级而突然少拦一类（也不会突然
+        # 多拦——派生只认系统自己那三条注记的**固定前缀**，见 skills.py）。
+        if tools:
+            status = "executed"
+        elif skill == "chat":
+            status = "answer_only"
+        elif skill == "navigate" and "不调用任何工具" in note:
+            if "已下线" in note:
+                status = "nav_offline"
+            elif "无法识别" in note:
+                status = "nav_unresolved"
+            elif "不存在" in note:
+                status = "target_unreachable"
     return {
         "skill": skill if skill in SKILL_MAP else "chat",
         "params": params,
@@ -1127,6 +1175,7 @@ def parse_plan(raw: str) -> dict:
         "reply": reply,
         "todo": todo,
         "chat": (skill in SKILL_MAP and SKILL_MAP[skill].chat) or skill == "chat",
+        "status": status,
     }
 
 
@@ -2338,12 +2387,16 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                 _site_search_claim_clause(own, exec_memory) or "")
     # 洞④（20260921）：站内"没有"结论无依据。两类收尾轮豁免——它们注记里的那句话是
     # **系统给的确定性事实**，narrator 的职责就是如实转告，不属凭空结论：
-    #   ① navigate 的零工具注记轮："页面不存在/已下线"来自 NAV_MAP
+    #   ① 目标不可达的零工具轮："页面不存在/已下线"来自 NAV_MAP
     #      （gate_node 第 4 节另有如实措辞核验）；
     #   ② 确定性收尾轮（`_LEDGER_NOTE_PREFIX`，20260922）：目标预检/剔空收尾给的是
     #      站内台账的核对结果（"站内没有含「…」的留言"）——见该常量的长注。
+    # 判据读 `plan["status"]` 而不是注记措辞（20260926 批 3，`PLAN_STATUS_VALUES`）：
+    # 豁免的语义是"这句话是**系统**说的、模型只是转告"——那就该由系统自己声明的
+    # 状态来判，而不是由它碰巧用了哪个词来判。空串（不知道）→ 不豁免（fail-closed：
+    # 这条豁免是**放宽**，放宽的判据读不到时应当保持原样拦截）。
     _note = plan.get("note") or ""
-    if not (skill == "navigate" and "不调用任何工具" in _note) \
+    if plan.get("status") not in PLAN_STATUS_ABSENCE_EXEMPT \
             and _LEDGER_NOTE_PREFIX not in _note:
         if _site_absence_claim(own, exec_search_evidence):
             return ("site_absence_claim_without_tool", _FALLBACK_SITE_ABSENCE,
@@ -3200,10 +3253,11 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # （与上面那条剔空收尾同款）——绝不把零工具零帧交给 narrator：现场实测
         # 它会把上一轮列表帧里的第一篇编成"已经带你跳过去了"（见上方纠偏段的引证）。
         #
-        # ⚠️ 这条注记**刻意不写「不调用任何工具」那句原话**：gate 第 4 节拿它当
-        # "navigate 的 NAV_MAP 注记轮"的判据（命中即按"页面不存在/已下线"核验措辞，
-        # 兜底文案是「那个页面在站里确认过是不存在的」）——这里缺的是**参数**，
-        # 页面在不在压根没查过，套上去就是一句新假话。
+        # 注记措辞（20260926 批 3 起**不再**是判据）：gate 第 4 节改读 `plan.status`
+        # 了，这里收尾走 `_wrap_up_plan` ⇒ status=wrapped，不会被当成"navigate 的
+        # NAV_MAP 注记轮"去核验"页面不存在"的措辞（那样套上去是一句新假话——这里
+        # 缺的是**参数**，页面在不在压根没查过）。**别把措辞捡回来当判据**：这条
+        # 注释是这一层区分的唯一记载（旧版曾写"刻意不写那句话"，那句已经过期）。
         pp = plan_obj["param_problem"]
         _miss = "、".join(pp.get("missing") or []) or "无"
         _bad = "、".join(pp.get("bad") or []) or "无"
@@ -3395,8 +3449,12 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     logger.info("[planner] skill=%s params=%s tools=%s（round %d/%d）",
                 plan_obj["skill"], plan_obj["params"], plan_obj["tools"], rounds + 1,
                 MAX_PLAN_ROUNDS)
+    # `status` 进 trace（20260926 批 3）：`eval/corpus_invariants.py` 的 I2 靠它把
+    # "零工具计划交给 narrator" 拆成**系统记了账的**（`PLAN_STATUS_VALUES` 里那几个）
+    # 与**没记账的**（空串）。用 `.get` 而不是下标：这一格读不到正是要**看见**的事
+    # （读不到说明有条构造路径漏了 status），冒泡成 KeyError 反而看不见。
     record("planner", "decision", skill=plan_obj["skill"], params=plan_obj["params"],
-           tools=plan_obj["tools"], round=rounds)
+           tools=plan_obj["tools"], round=rounds, status=plan_obj.get("status") or "")
 
     return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
 
@@ -6000,6 +6058,19 @@ _EXECUTOR_PROMPT = """\
 [执行计划]（系统决策结果——本轮执行了什么、按什么契约回复）：
 {plan}
 
+计划首行的 `STATUS=` 是**系统填的**本轮处境（20260926 批 3），照它决定口径。
+它不是给你念的字段，一个字都不要出现在回复里：
+  executed           本轮真的执行了工具 → 看"工具执行记录"如实说结果；
+  answer_only        本轮本来就不需要工具 → 直接回答就行；
+  param_missing      缺参数，这一轮什么都没执行 → 如实说没办成、问清缺的那项；
+  target_unreachable 目标页站内不存在 → 如实说没有该页面；
+  nav_offline        目标页**已下线**（与"不存在"不是一回事，别讲反）；
+  nav_unresolved     认不出要去的目标 → 如实说没听懂要去哪；
+  refused            系统按规则拒绝了这次操作 → 逐字转述后台给的理由；
+  wrapped            轮次/预算收尾 → 只用已有记录作答，不许再声称新动作。
+以上凡"什么都没执行"的那几档：**不许**说已经办好，也不许把没查过的事
+讲成站内没有。
+
 [本轮工具执行记录]（站内事实的唯一来源，逐字依据，不要扩展）：
 {tool_frames}
 
@@ -6281,18 +6352,25 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
 
     if not frames:
         # ── 4. 零工具轮（计划 TOOLS 为空）───────────────────────────────
-        # 动作技能（navigate）零工具 = NOTE 明示不存在/已下线（instantiate_plan
-        # 的注记路径）→ 核验回复如实措辞；chat/content_query 零工具声称检查
-        # 已在 _claim_issue 处理。
-        if plan["skill"] == "navigate" and "不调用任何工具" in plan["note"]:
-            if "已下线" in plan["note"]:
+        # 动作技能（navigate）零工具 = 目标不可达（`instantiate_plan` 的三条注记
+        # 出口）→ 核验回复如实措辞；chat/content_query 零工具声称检查已在
+        # `_claim_issue` 处理。
+        #
+        # **判据读 `plan["status"]`，不读注记措辞**（20260926 批 3）：此前这里 grep
+        # 的是「不调用任何工具」四个字——那是**文案**，谁改一句注记谁就把整条判据
+        # 悄悄关掉，而且关得无声（不报错、不误伤，只是再不拦）。三个值分开选文案：
+        # 已下线的真相是"这个页面没了"，目标不存在/认不出来才是"站内没有这个页面"。
+        # 空串（不知道）→ 整条跳过：宁可漏判也不误伤，见 `plan_encode` 那段派生注。
+        if plan["status"] in PLAN_STATUS_NAV_NOTE:
+            if plan["status"] == "nav_offline":
                 honest = any(k in reply for k in _HONEST_DOWN)
                 fb = _FALLBACK_DOWN
             else:
                 honest = any(k in reply for k in _HONEST_GONE)
                 fb = _FALLBACK_GONE
             if not honest:
-                logger.info("[gate] 零工具注记但未如实告知 → fallback（navigate）")
+                logger.info("[gate] 零工具注记但未如实告知 → fallback（navigate，status=%s）",
+                            plan["status"])
                 return fail("not_honest", fb, plan, 0)
         record("gate", "pass", zero_frame=True,
                duration_s=round(time.monotonic() - _t0, 2))

@@ -1864,12 +1864,41 @@ def _expand_todo_done_skill(skill, params: dict) -> tuple[list[str], str]:
              f"（只翻完成标记，正文与排期都不动）"))
 
 
+# ── 计划状态（plan["status"]，20260926 批 3）────────────────────────────
+# 这不是"模型自评"，而是**系统确定性知道的处境**：造计划的那一刻
+# （`instantiate_plan` / `_terminal_plan` / `_param_problem_plan`）就知道本轮是
+# "要调工具"还是"目标已下线"。此前 gate 判这类事只能 grep 注记里的「不调用任何
+# 工具」四个字——**判据挂在措辞上**，谁改一句文案谁就把判据悄悄关掉，而且关得无声
+# （不报错、不误伤，只是再也不拦）。闭集八值，每个对应一种系统已知的处境：
+#   executed           计划里有工具（这一轮要做的事就是执行）
+#   answer_only        纯作答轮（chat 技能，本来就不该有工具）
+#   param_missing      参数不齐（缺参/值归不了）——`_param_problem_plan`
+#   target_unreachable 目标页不存在（navigate 白名单外路径）
+#   nav_offline        目标页已下线（NAV_MAP 显式标记）
+#   nav_unresolved     导航目标认不出来（NAV_MAP 与模糊归一都没命中）
+#   refused            明确拒绝/办不成（写技能的 fail-closed 出口）
+#   wrapped            确定性收尾轮（轮次上限/复盘终局/剔空收尾）
+# **刻意不叫 `plan_status`**：路线图 D2 的 `execution_log` 里另有一个 status 列
+# （跨轮执行记忆的落库字段，记的是"那次执行的结果"）；这里是计划字典内部的键
+# `plan["status"]`，记的是"这一轮计划自身的处境"。同名不同物，注释里点破。
+PLAN_STATUS_VALUES = ("executed", "answer_only", "param_missing",
+                      "target_unreachable", "nav_offline", "nav_unresolved",
+                      "refused", "wrapped")
+# gate 的两处判据读这几个值（`graph.gate_node` 第 4 节选如实文案、
+# `graph._claim_issue` 的站内"没有"豁免）。*_NAV_NOTE 是"零工具的 navigate 注记轮"
+# 这一个集合——旧判据就是它，判的是措辞；现在判的是这里的值。
+PLAN_STATUS_NAV_NOTE = ("nav_offline", "target_unreachable", "nav_unresolved")
+PLAN_STATUS_ABSENCE_EXEMPT = PLAN_STATUS_NAV_NOTE + ("param_missing", "refused")
+
+
 def instantiate_plan(skill_name: str, params: dict,
                      role: str | None = None) -> dict:
     """技能模板 + 参数 → 结构化计划。
 
-    返回 {"skill", "tools"(list[str]), "note"(str), "reply"(str), "chat"(bool)}。
-    planner_node 据此编码 plan 字段文本。
+    返回 {"skill", "tools"(list[str]), "note"(str), "reply"(str), "chat"(bool),
+    "status"(str)}。planner_node 据此编码 plan 字段文本。`status` 是本函数的
+    **确定性产出**（见 `PLAN_STATUS_VALUES` 那段）——planner LLM 一个字都不填，
+    它吐的是自由文本、没有这个字段，指望它自评就等于把判据交回给模型。
     特殊处理：
       - navigate：target 经 NAV_MAP 映射；映射为 None（已下线）→ 不调用工具、如实告知；
         未识别别名 → 如实告知没有该页面；confirm **恒 False**（20260926 删掉 mode 参数：
@@ -1893,6 +1922,11 @@ def instantiate_plan(skill_name: str, params: dict,
     # 收尾处那段 `_skill_no_calls_suffix` 的注。
     consumed_calls = False
     note = ""
+    # 计划状态（`PLAN_STATUS_VALUES`）：下面每个"系统已知的处境"出口各写一个值；
+    # 收尾处再按 tools/技能补默认（executed / answer_only）。**空串 = 不知道**，
+    # 消费侧一律 fail-open（宁可漏判也不误伤）——但空串只应该出现在手写的夹具文本
+    # 或旧版计划上，系统性计划一定有值（`plan_encode` 写那一行）。
+    status = ""
     if skill.name == "navigate":
         # 跳转恒直达（20260926）：下面三条出口（映射命中/字面路径/模糊归一）都写
         # `confirm: False`。原来的 `mode` 参数（direct/suggest）已删——见技能定义里
@@ -1912,6 +1946,7 @@ def instantiate_plan(skill_name: str, params: dict,
         if target in NAV_MAP and mapped is None:
             # 映射表显式标记为已下线（友链等）：不调用工具、如实告知
             note = f"导航目标「{target}」已下线：如实告知访客，不调用任何工具"
+            status = "nav_offline"
         elif mapped:
             args = {"path": mapped, "confirm": False}
             tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
@@ -1930,6 +1965,7 @@ def instantiate_plan(skill_name: str, params: dict,
                     f"导航目标「{target}」不存在：如实告知没有该页面，不调用任何工具，"
                     f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/物联网平台/后台各面板）给出建议（文本链接即可）"
                 )
+                status = "target_unreachable"
         else:
             # 不在映射表：先试口语模糊归一（关键词规则，确定性），
             # 命中即等同映射命中；仍不命中才"无法识别、如实告知"
@@ -1946,6 +1982,7 @@ def instantiate_plan(skill_name: str, params: dict,
                     f"无法识别导航目标「{target}」：如实告知没有该页面，不调用任何工具，"
                     f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/物联网平台/后台各面板）给出建议（文本链接即可）"
                 )
+                status = "nav_unresolved"
     elif skill.name == "read_article":
         # 系统快道专用：article_id 由 planner_node 从 current_url 解析注入。
         # 缺失时按 chat 兜底（绝不生成 article_id=null 的非法工具调用——若
@@ -2066,7 +2103,9 @@ def instantiate_plan(skill_name: str, params: dict,
             return {"skill": skill.name, "tools": [], "dropped": [], "param_unknown": [],
                     "note": (f"{skill.name}：新加的写技能没有接入参数展开（系统内部"
                              "配置缺项）：不调用任何工具，如实告知这次没能执行"),
-                    "reply": skill.reply_contract, "chat": False}
+                    "reply": skill.reply_contract, "chat": False,
+                    # "办不成"是系统已知的处境（配置缺项，不是模型判断）
+                    "status": "refused"}
         else:
             aid = _norm_pos_int(params.get("article_id"))
             if aid is None:
@@ -2161,12 +2200,19 @@ def instantiate_plan(skill_name: str, params: dict,
         _suffix = _skill_no_calls_suffix(skill.name)
         for _n in dict.fromkeys(_named):        # 同一工具同时写在 tools 与 calls ⇒ 只记一次
             dropped.append(f"{_n}{_suffix}")
+    # 状态默认值（`PLAN_STATUS_VALUES`）：走到这里的都是"技能模板展开成功"的轮次，
+    # 有工具就是要执行、chat 技能本来就不该有工具。其余零工具的处境各分支已经
+    # 显式写过值（navigate 三出口 / `_param_problem_plan`）——空串到这里只剩
+    # "非 chat 技能 + 零工具"这一种，含义是"不知道"，消费侧 fail-open。
+    if not status:
+        status = "executed" if tools else ("answer_only" if skill.chat else "")
     return {
         "skill": skill.name,
         "tools": tools,
         "note": note,
         "reply": skill.reply_contract,
         "chat": skill.chat,
+        "status": status,
         # 白名单剔除项（只读、不进 plan 文本）：planner_node 据此打 WARNING +
         # trace 事件，让"点名的工具没执行"在日志里可见（20260913 B 项）
         "dropped": dropped,
@@ -2487,6 +2533,9 @@ def _param_problem_plan(skill: Skill, chk: dict,
         "note": param_problem_note(skill, chk, specs),
         "reply": skill.reply_contract,
         "chat": False,
+        # 参数不齐是**系统已知**的处境（不是猜的）：批 3 的洞④ 豁免读这个值
+        # （旧判据 grep 注记里的「不调用任何工具」，而注记文案是人写的）。
+        "status": "param_missing",
         "param_problem": chk,
     }
 
