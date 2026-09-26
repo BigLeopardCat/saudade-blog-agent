@@ -359,6 +359,27 @@ _SHORT_AUTH_RE = re.compile(
     r"|(?:决定|说了算|拿主意|安排|定夺)(?:吧|了)?"
     r"|(?:怎么|怎样)?(?:都|全)(?:行|可以|好|成)(?:吧|了)?"
     r")$")
+# 承接形态（20260926）：只用于 `_looks_like_followup` 那个**宽容触发器**（见它的 docstring），
+# 不参与任何分类。列的是"全选 / 接着上一步"的句首词——`_SHORT_LEAD_RE` 已经把句首的
+# 那/那就/就/我/你…剥掉了，所以这里只管它剥不到的那些。
+_SHORT_LEAD_CONT_RE = re.compile(
+    r"^(?:都|全|两个|俩|一起|接着|然后|现在|这样|这么|按你|照你|听你|依你|随你)")
+# 承接块里带出上一轮泠月发言的截断长度。**比短应答那条（200）长**：主人要承接的那句
+# 常常是"①…还是②…"式的二选一，候选列表落在**句尾**，而 `_clip_mid` 的中段只按
+# id/《》/「」打捞（`_TAIL_ID_ANCHOR_RE`/`_TAIL_TITLE_ANCHOR_RE`）——200 会把候选吃掉，
+# 于是块给出去了、要选的那两项却没给（有指引等于没指引）。
+_FOLLOWUP_TAIL = 320
+
+
+def _short_core(text: str) -> str:
+    """消息 → 剥掉外壳后的核心串（系统消息壳 + 标点 + 句首称呼/虚词 + 结尾喵尾缀）。
+
+    **单一来源**：`_short_reply_kind` 的分类判据与 `_looks_like_followup` 的形态判据
+    都在这同一份剥离结果上判。写两遍的下场是"同一句话，分类认得出、承接判不出"
+    （或反过来）——同一族外壳（消息壳 / 喵尾缀 / 结尾语气词）历史上已经架空过三处判据。
+    """
+    core = _SHORT_LEAD_RE.sub("", _PUNCT_ONLY_RE.sub("", strip_system_tags(text or ""))).strip()
+    return _SHORT_TAIL_TIC_RE.sub("", core)
 
 
 def _short_reply_kind(text: str) -> str:
@@ -377,8 +398,7 @@ def _short_reply_kind(text: str) -> str:
     ⚠️ **结尾语气词先剥（20260925）**：`_SHORT_TAIL_TIC_RE` 见上方注释——同族第三例，
     同一处"整串相等"被外壳架空的形态。
     """
-    core = _SHORT_LEAD_RE.sub("", _PUNCT_ONLY_RE.sub("", strip_system_tags(text or ""))).strip()
-    core = _SHORT_TAIL_TIC_RE.sub("", core)  # 尾缀剥空（整句只有一个"喵"）⇒ 下面按"不是短应答"返回
+    core = _short_core(text)  # 尾缀剥空（整句只有一个"喵"）⇒ 下面按"不是短应答"返回
     if not core or len(core) > _SHORT_MAX:
         return ""
     if core in _SHORT_NEG:  # 先否定：三集合无交集，顺序只为可读
@@ -390,8 +410,23 @@ def _short_reply_kind(text: str) -> str:
     return ""
 
 
+def _looks_like_followup(core: str) -> bool:
+    """核心串**可能**在承接上一轮吗（宽容触发器，不是分类器）。
+
+    ⚠️ 与 `_short_reply_kind` 的分工必须分清：那个函数回答"这句话属于哪一类应答"，本函数
+    只回答"要不要把上一轮泠月那句发言交给 planner 自己判断"。因此这里的误判代价**只有**
+    提示词长一点（planner 多读一段上一轮发言，块内两条互斥出口各自写着"该接/不该接"），
+    而漏判的代价是原来那个洞：主人回「都做」时 planner 看不到它承接的那句提问。
+    放过一个不算承接的短句，比漏掉一句全选式应答便宜得多——宽容是刻意的。
+    """
+    return len(core) <= _SHORT_MAX or bool(_SHORT_LEAD_CONT_RE.match(core))
+
+
 def _short_reply_hint(messages: list, system_facts: str = "") -> str:
-    """短应答提示块（planner 模板 {short_reply_hint}）；非短应答给缺省语。
+    """短应答提示块（planner 模板 {short_reply_hint}）。
+
+    四种出口：三类短应答（pos/neg/auth）给各自的动作指令；**形态上像承接但认不出类别**
+    的给"先读上一轮、再自己判"的承接块（20260926）；其余给缺省语「（当前消息不是短应答）」。
 
     `system_facts`（20260923 P2）：随本轮从**系统台账**读来的候选清单，只在授权式
     那一类后面追加——授权式的目标不许从模型历史里挑，只能从这份台账里定，而
@@ -400,9 +435,26 @@ def _short_reply_hint(messages: list, system_facts: str = "") -> str:
     """
     user_msg = _last_user_msg(messages)
     kind = _short_reply_kind(user_msg)
-    if not kind:
-        return "（当前消息不是短应答）"
     last = _last_assistant_utterance(messages)
+    if not kind:
+        # 认不出类别 ≠ 与上一轮无关（20260926 修）：主人回「当然是都做」「两个都做」这类
+        # **全选式**应答时，上面三张表一张都不命中，旧写法在这里早退成一句缺省语 ⇒
+        # 上一轮泠月那句"①…还是②…"的提问**从未交给 planner**（它只能从邻接节选里猜，
+        # 而候选列表正好落在被 `_clip_mid` 截掉的中段）。实证：20260926 会话 247 里
+        # 主人说「当然是都做」，planner 收到的就是这句缺省语，于是把上一轮的提议整个丢了。
+        # 现在：形态上像承接就把上一轮发言交出去，**判定仍归 planner**（下面两条互斥出口）。
+        # 这与前三次同族修复（消息壳 / 喵尾缀 / 结尾语气词）取向一致：放宽的是"要不要给出
+        # 上下文"，**不是**把"它算哪一类应答"判宽——后者会牵动同意/授权/拒绝的闸门语义。
+        core = _short_core(user_msg)
+        if not last or not _looks_like_followup(core):
+            return "（当前消息不是短应答）"
+        ai = _clip_mid(last.replace("\n", " "), tail=_FOLLOWUP_TAIL)
+        return (f"当前消息「{user_msg}」不算系统认得的短应答，但形态上像是在承接上一轮"
+                f"——先读它、再判：\n　　泠月：{ai}\n"
+                "判定：① 若它是在回应上面那句（含**全选式**：「都做 / 全都要 / 两个都做 / "
+                "一起」）→ 把上面那句里**真的列过**的事项逐项还原成动作（一项不少；"
+                "**不许自己补项**，也不许把上面没提过的事加进来）；"
+                "② 若它是一句独立的新请求 / 新问题 → 按字面当新话题，**不要**硬接上面那句。")
     if not last:
         return (f"当前消息「{user_msg}」是短应答，但本会话此前没有泠月的发言可承接"
                 "——按字面做最保守的解读，不要凭空补出一个动作。")
