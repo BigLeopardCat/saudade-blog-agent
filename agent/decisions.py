@@ -554,11 +554,15 @@ def _terminal_plan(has_frames: bool, reason: str, note: str = "") -> dict:
     `note` 可直接覆盖整段 note（20260921 剔空纠偏失败时用）：拼出来的句子会变成
     "……且无任何工具执行记录：如实告知……"这种叠句，而 narrator 对叠句的处置是
     抓一个它记得住的——纪律文案要一句话说清。传了 note 就不再拼 reason。
+
+    四个出口一律 `status="wrapped"`（见 `PLAN_STATUS_VALUES`，20260926 批 3）：
+    收尾轮是**确定性层造出来的**，它当然知道自己是收尾轮。
     """
     if has_frames:
         if note:
             return {"skill": "content_query", "tools": [], "note": note,
-                    "reply": SKILL_MAP["content_query"].reply_contract, "chat": False}
+                    "reply": SKILL_MAP["content_query"].reply_contract, "chat": False,
+                    "status": "wrapped"}
         return {
             "skill": "content_query",
             "tools": [],
@@ -567,10 +571,11 @@ def _terminal_plan(has_frames: bool, reason: str, note: str = "") -> dict:
                      "记忆硬答"),
             "reply": SKILL_MAP["content_query"].reply_contract,
             "chat": False,
+            "status": "wrapped",
         }
     if note:
         return {"skill": "chat", "tools": [], "note": note,
-                "reply": "直接回答", "chat": True}
+                "reply": "直接回答", "chat": True, "status": "wrapped"}
     return {
         "skill": "chat",
         "tools": [],
@@ -578,6 +583,7 @@ def _terminal_plan(has_frames: bool, reason: str, note: str = "") -> dict:
                  "不得编造"),
         "reply": "直接回答",
         "chat": True,
+        "status": "wrapped",
     }
 
 

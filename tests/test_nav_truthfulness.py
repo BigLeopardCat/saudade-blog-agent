@@ -132,9 +132,14 @@ def test_param_problem_corrected_in_round():
         check("  注记写明这一轮零执行 + 禁止声称（已经带你到/已经跳转…）",
               "没有执行任何工具" in plan2["note"] and "不许" in plan2["note"],
               plan2["note"][:80])
-        check("  注记**不含**「不调用任何工具」那句（那是 NAV_MAP 注记轮的判据，"
+        check("  注记**不含**「不调用任何工具」那句（旧版那是 NAV_MAP 注记轮的判据，"
               "套上去会得到一句『那个页面不存在』的假话）",
               "不调用任何工具" not in plan2["note"])
+        # 20260926 批 3：判据从"那句措辞"改成 plan["status"]——所以这里断言的是
+        # 状态值（收尾轮 = wrapped），措辞只是随它一起去的东西。上一行留着是**反向**
+        # 证据：措辞仍在，但它已经不再是判据了（"注意到措辞还在"不等于"判据还在"）。
+        check("  收口计划的状态是 wrapped（判据读状态，不读那句措辞）",
+              plan2["status"] == "wrapped", plan2["status"])
         check("  有帧时不许说「本轮一个工具都没有执行」（帧是更早几轮取回的）",
               "更早几轮" in plan2["note"])
         check("  只问 planner 两次（纠偏只有一次，不无限重规划）", len(llm2.prompts) == 2)
@@ -158,8 +163,12 @@ def test_gate_nav_arrival_without_nav_frame():
     """② gate 侧：navigate 计划 + 本轮无任何导航帧 + 到达声称 ⇒ fallback。"""
     print("[gate] 无导航帧的到达声称（有帧轮也不能漏判）")
     _plan = plan_encode(instantiate_plan("navigate", {}))   # 真形状：参数不齐的 navigate
-    check("用例前提：navigate 的参数不齐注记里带「不调用任何工具」那句",
-          "不调用任何工具" in parse_plan(_plan)["note"])
+    # 用例前提（20260926 批 3 改）：旧版这里断言的是"注记里带那句措辞"——那是当时
+    # 的判据。现在判据是 status，所以前提也该是状态值：参数不齐 ⇒ param_missing。
+    # 这个用例本身判的是**导航到达声称**那条（与状态无关），前提只是"计划是真形状"。
+    check("用例前提：navigate 参数不齐 ⇒ status=param_missing",
+          parse_plan(_plan)["status"] == "param_missing",
+          parse_plan(_plan)["status"])
 
     def _state(msgs, plan=_plan, receipts=None):
         st = {"plan": plan, "messages": msgs, "done": False, "plan_rounds": 2}
