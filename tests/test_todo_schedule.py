@@ -110,6 +110,31 @@ TODAY = datetime.date(2026, 9, 26)          # 固定钟面：相对日期断言�
 TOMORROW = "2026-09-27"
 
 
+class _FrozenDate(datetime.date):
+    """钟面固定成 TODAY 的 date（只换 today()，其余原样）。"""
+
+    @classmethod
+    def today(cls):
+        return TODAY
+
+
+class _FrozenDatetime:
+    """`agent.adminops` 的 datetime 模块替身（它只用 date / timedelta）。"""
+
+    date = _FrozenDate
+    timedelta = datetime.timedelta
+    datetime = datetime.datetime
+
+
+# 上面那句"固定钟面"此前只做到**一半**：夹具里显式传 `today=TODAY` 的那半是固定的，
+# 而**走真实工具**的那半（`create_dashboard_todo` 内部自己取 today）读的是真实时钟
+# ——2026-09-27 那天起，"明天"解析出的 ISO 与夹具写死的 2026-09-27 对不上，⑤ 整段
+# 四条转红，而那是**夹具过期**，不是行为回归（工具算出 09-28 是对的）。
+# 修法是把工具路径的钟面也钉住，而不是把断言的期望值改成"跟着今天跑"——后者会让
+# "相对日期"这组断言失去可复现性，也就失去了它存在的意义。
+A.datetime = _FrozenDatetime
+
+
 # ══════════════════════════════════════════════════════════════════
 print("\n① 排期归一：认哪些写法、认不出来绝不猜")
 
