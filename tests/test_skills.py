@@ -38,11 +38,13 @@ sys.path.insert(0, str(ROOT))
 
 from agent.graph import (_PLANNER_OUTPUT_RE, REFLECT_MAX_ROUNDS, _article_fast_path,
                          _check_spec, _display_fast_path, _effect_switch_fast_path,
-                         _nav_fast_path, _parse_params, _scan_action_intents,
+                         _nav_fast_path, _parse_params, _plan_skill, _scan_action_intents,
+                         _wrap_up_plan,
                          execute_node, extract_plan_fields, gate_node,
                          plan_encode, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
-from agent.skills import NAV_MAP, NAV_VALID_PATHS, SKILL_MAP, instantiate_plan
+from agent.skills import (NAV_MAP, NAV_VALID_PATHS, SKILL_MAP, instantiate_plan,
+                          visible_skills)
 
 
 FAILS = []
@@ -192,6 +194,41 @@ def test_plan_roundtrip():
     obj["params"] = {}
     parsed = parse_plan(plan_encode(obj))
     check("chat 往返 → chat=True 无工具", parsed["chat"] and parsed["tools"] == [], str(parsed))
+
+
+def test_plan_skill_line_contract():
+    """`_plan_skill` 与 `plan_encode` 的**隐式**契约：前者正则读 `SKILL=` 行，成立
+    前提是后者一定写这一行（且用 `=` 而不是 `:`）。
+
+    **为什么值得一条专门的锁**（20260927 主线批 A）：这条契约一直是隐式的——
+    `_plan_skill` 在确认卡那条链上给令牌定技能（`confirm.sign(uid, conv_id,
+    _plan_skill(state), picks)`），读不到就给空串、`sign` 拒绝签发。改 `plan_encode`
+    的输出格式（比如把键改成 `SKILL:`）不会让任何现有断言变红，只会让"点确定"
+    这条路径静默失效。这里用**往返**钉住：遍历注册表里每个技能各编码一次再读回，
+    比"源码里 grep 某个正则"结实（后者在正则被改写时照样绿）。
+    """
+    print("[plan] SKILL= 行的写端/读端契约（_plan_skill ← plan_encode）")
+    names = [s.name for s in visible_skills("admin")] + [s.name for s in visible_skills(None)]
+    bad = []
+    for name in dict.fromkeys(names):          # 去重保序
+        for params in ({}, {"target": "物联网平台"}):
+            obj = instantiate_plan(name, params)
+            got = _plan_skill({"plan": plan_encode(obj)})
+            if got != obj["skill"]:
+                bad.append(f"{name}: 编码出 {obj['skill']}、读回 {got!r}")
+    check(f"每个技能编码后都能读回同一个技能名（{len(set(names))} 个）", not bad, str(bad[:4]))
+    # 收尾计划（不带 params 的构造路径）同样必须带这一行——它是确认轮里
+    # "执行受阻 ⇒ 不再重发清单"那条路的产物，读不到就签不出令牌。
+    # 断言"读得回它自己声明的技能"，**不是**断言"等于 chat"：有帧收尾落 content_query
+    # 是有意的（narrator 要按"基于已有帧作答"的口径组织回复），钉死技能名会把那条
+    # 设计判成缺陷。
+    for has_frames in (True, False):
+        obj = _wrap_up_plan(has_frames)
+        got = _plan_skill({"plan": plan_encode(obj)})
+        check(f"收尾计划（has_frames={has_frames}）带 SKILL= 行且读得回同一个技能",
+              got == obj["skill"] and bool(got), f"{obj['skill']} → {got!r}")
+    check("读不到时给空串（sign 据此拒绝签发，不是猜一个技能）",
+          _plan_skill({"plan": ""}) == "" and _plan_skill({}) == "")
 
 
 def test_parse_tolerance():
@@ -3820,10 +3857,14 @@ def test_short_reply_and_adjacent_pairs():
     from string import Formatter
     import agent.graph as g
     fields = {f for _, f, _, _ in Formatter().parse(g._PLANNER_PROMPT) if f}
-    check("planner 模板占位符集合与注入点一致（短应答块、剔空纠偏块已接入）",
+    # `output_contract`（20260927 主线批 A）是**唯一按接口层档位取值**的占位符：
+    # 文本档代入"两行纯文本"契约、native 档代入"用工具调用表达决定"。它进这个集合
+    # 是刻意的——提示词里多一个注入点必须有人复核（这条断言就是这个作用）。
+    check("planner 模板占位符集合与注入点一致（短应答块、剔空纠偏块、输出契约已接入）",
           fields == {"skills_context", "tools_desc", "page_ctx", "intent_hints", "doc_anchors",
                      "round_info", "recent_context", "short_reply_hint", "tool_results",
-                     "ref_hints", "reflector_feedback", "correction", "max_rounds", "user_msg"},
+                     "ref_hints", "reflector_feedback", "correction", "max_rounds", "user_msg",
+                     "output_contract"},
           f"fields={sorted(fields)}")
     check("planner 模板：短应答块在节选之后、工具结果之前",
           g._PLANNER_PROMPT.index("{recent_context}")
@@ -4868,7 +4909,8 @@ def test_write_intent_never_expressed_round():
 
 def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
-               test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip, test_parse_tolerance,
+               test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip,
+               test_plan_skill_line_contract, test_parse_tolerance,
                test_nav_fast_path, test_dashboard_nav_expansion,
                test_fast_path_shell_transparency,
                test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
