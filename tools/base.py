@@ -41,8 +41,9 @@ API_BASE = "https://saudade.site/api/public"
 #   empty       服务正常、结果就是空（"你还没绑定设备"是**事实**，照常 PASS 进回执）
 #   unavailable 服务不可用 / 鉴权失败 / 超时（**不是事实**：checker 判 BLOCK，
 #               planner 据 reason=unavailable 决定重试还是如实告知）
-# 只覆盖"能碰外部服务或可能查空"的工具；命令类工具（导航/特效/暗色/屏显）本来就是
-# 命令帧契约（cmd_shape 校验），不动。
+# 只覆盖"能碰外部服务或可能查空"的工具；命令类工具（导航/特效/暗色）另有一条契约
+# ——连线命令走 `meta["cmd"]`（见 navigate_to 的长注），`_check_spec` 的 cmd_shape
+# 按它校验，**返回文本里不再有命令标签**。屏显（device_oled_display）不走这条。
 class ToolResult(str):
     kind: str = "ok"
     # 机器可读的副产物（20260921）：给**写操作**用——文本是给人/narrator 看的人话，
@@ -594,8 +595,9 @@ def navigate_to(
     path: Annotated[str, "Page path to navigate to, e.g. / /times /category/tech /article/3 /talk /guestbook /about /dashboard/notes"],
     confirm: Annotated[bool, "Whether user confirmation is needed. false=direct nav, true=ask user"] = True,
 ) -> str:
-    """导航到博客页面。页面跳转只能通过调用本工具生效：调用后返回 NAVIGATE:/AUTO_NAVIGATE: 前缀命令，由系统执行跳转。
-    严禁在回复正文中自行输出命令前缀文本——那不是工具调用，不会产生任何跳转，属于违规输出，会触发 gate 声称检查（fallback 如实文本收尾）。"""
+    """导航到博客页面。页面跳转只能通过调用本工具生效：系统按本工具的执行回执直接驱动
+    浏览器跳转，**正文里写任何命令文本都不会生效**（写了会被判成假装发命令、整段被替换）。
+    返回文本是给人看的事实（"页面已跳转：<url>"），不含任何命令标签。"""
     p = path.strip()
     # /category/*、/article/* 要求至少带一个 id 段（/category/ 裸前缀不算有效页面）
     valid = p in _NAV_EXACT_PATHS or (p.startswith(_NAV_PREFIX_PATHS) and p.count("/") >= 2)
@@ -611,7 +613,20 @@ def navigate_to(
             f"请用有效路径重新调用 navigate_to。"
         )
     full_url = f"https://saudade.site{p}"
-    return f"{chr(78)+chr(65)+chr(86)+chr(73)+chr(71)+chr(65)+chr(84)+chr(69) if confirm else chr(65)+chr(85)+chr(84)+chr(79)+chr(95)+chr(78)+chr(65)+chr(86)+chr(73)+chr(71)+chr(65)+chr(84)+chr(69)}:{full_url}"
+    # 命令与事实分离（20260926）：**连线命令搬进回执**（`meta["cmd"]` → 回执行
+    # `rcpt["cmd"]` → server 发 `__CMD__` 帧 → 前端执行），返回文本只剩**给人看的
+    # 事实**。为什么必须搬：同一根字符串此前既是发给浏览器的命令、又是模型唯一看得见的
+    # "这件事发生过"的凭据，于是"引用回执"与"假装发命令"在字面上是同一个动作——
+    # 模型照抄回执就会被 gate 判成假装发命令（trace 20260926T215115 实证：真跳了、
+    # 却被告知"已经被我拦下啦"）。
+    # 事实文本要**留住人类可读的 URL**（rule 6 的取值锚点），并按 mode 区分：
+    # confirm 式**还没跳**（前端等用户点确认），说成"已跳转"就是另一头失真。
+    mode = "confirm" if confirm else "direct"
+    if confirm:
+        return ok(f"导航已发起，等主人确认后才会跳转：{full_url}",
+                  meta={"cmd": {"kind": "navigate", "url": full_url, "mode": mode}})
+    return ok(f"页面已跳转：{full_url}",
+              meta={"cmd": {"kind": "navigate", "url": full_url, "mode": mode}})
 
 @tool
 def toggle_effect(
@@ -619,9 +634,9 @@ def toggle_effect(
     action: Annotated[str, "开启还是关闭: on(开启), off(关闭)"] = "on",
 ) -> str:
     """开启或关闭博客页面的视觉效果（樱花/大雨/雪花）。
-    返回 EFFECT: 前缀命令供前端执行；前端按 action 显式开关，不会因重复命令翻转状态。
-    参数校验：无效 effect/action 返回提示而非命令帧——命令帧只代表真实执行的切换，
-    未返回命令帧 = 动作未发生，回复不得声称已开/已关（gate 声称检查依据）。"""
+    系统按本工具的执行回执驱动前端开关（按 action 显式开合，不因重复命令翻转状态）。
+    参数校验：无效 effect/action 返回提示而非执行回执——**回执只代表真实发生的切换**，
+    没有回执 = 动作未发生，回复不得声称已开/已关（gate 声称检查依据）。"""
     if effect not in ("sakura", "rain", "snow"):
         return f"效果无效: {effect!r}。可选: sakura(樱花), rain(大雨), snow(雪花)"
     if action not in ("on", "off"):
@@ -629,7 +644,9 @@ def toggle_effect(
             f"action 无效: {action!r}。可选: on(开启), off(关闭)。"
             f"查询效果当前状态请以对话上下文中的 current_effects 字段为准，无需调用工具。"
         )
-    return f"EFFECT:{effect}:{action}"
+    _cn = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}[effect]
+    return ok(f"特效 {_cn}({effect}) 已{'打开' if action == 'on' else '关闭'}",
+              meta={"cmd": {"kind": "effect", "effect": effect, "action": action}})
 
 
 @tool
@@ -637,9 +654,10 @@ def toggle_dark_mode(
     mode: Annotated[str, "夜间模式开关: on(开启夜间模式), off(关闭夜间模式)"],
 ) -> str:
     """开启或关闭博客页面的夜间模式（暗色主题）。
-    返回 DARKMODE: 前缀命令供前端执行；状态会持久化记忆。"""
+    系统按本工具的执行回执驱动前端切换；状态会持久化记忆。"""
     if mode in ("on", "off"):
-        return f"DARKMODE:{mode}"
+        return ok(f"夜间模式已{'打开' if mode == 'on' else '关闭'}",
+                  meta={"cmd": {"kind": "darkmode", "mode": mode}})
     return "模式参数无效，应为 on 或 off"
 
 # ---------------------------------------------------------------------------

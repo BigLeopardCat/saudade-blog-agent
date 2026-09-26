@@ -26,8 +26,16 @@ RE_TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 RE_TRACE_ID = re.compile(r"tid=(\S+)")
 RE_PLANNER = re.compile(r"\[planner\] skill=(\w+)")
 RE_TOOL_CALLS = re.compile(r"\[model\] tool_calls=\[([^\]]*)\]")
-RE_TOOLS = re.compile(r"\[tools\] (\w+) → (.+)")
-RE_COMMAND_FRAME = re.compile(r"^(EFFECT|NAVIGATE|AUTO_NAVIGATE|DARKMODE):")
+# 工具执行行。**20260926 批 2 同步**：日志格式自 20260903 起是
+# `[execute] <工具名>(<json 参数>) → <返回文本>`（不是旧的 `[tools] <名> → <文本>`），
+# 旧正则在这条路上一行都匹配不到 ⇒ `tool_failures`/`dedup_blocks`/`command_frames`
+# 三个指标一起**静默归零**（看得出来是"最近一周没出过错"，看不出是"没在看"）。
+RE_TOOLS = re.compile(r"\[(?:tools|execute)\] (\w+)\(.*?\) → (.+)")
+# 命令帧计数改成**按工具名**判：命令工具的返回文本不再带 `AUTO_NAVIGATE:` 之类前缀
+# （命令搬上了执行回执的 `cmd`，连线形只剩"历史文本前缀"这一个身份），旧判据
+# "结果以命令前缀开头"因此恒假。不改的话日报里"命令帧"永远是 0——那看起来像
+# "这一周没人用过跳转/特效"。
+COMMAND_TOOLS = ("navigate_to", "toggle_effect", "toggle_dark_mode")
 RE_ERROR_FRAME = re.compile(r"^(__ERROR__|无效|失败)")
 RE_DEDUP = re.compile(r"该内容刚刚已由系统执行显示")
 
@@ -92,7 +100,7 @@ def collect(path: str, hours: int) -> dict:
             m = RE_TOOLS.search(text)
             if m:
                 out = m.group(2)
-                if RE_COMMAND_FRAME.match(out):
+                if m.group(1) in COMMAND_TOOLS:
                     stats["command_frames"] += 1
                 if RE_ERROR_FRAME.match(out):
                     stats["tool_failures"] += 1

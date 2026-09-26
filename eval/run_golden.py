@@ -78,6 +78,7 @@ from concurrent.futures import ThreadPoolExecutor
 import server
 from server import ChatRequest, _build_messages, _run_agent_stream_to_queue
 from agent import create_agent
+from agent.graph import _cmd_wire  # 连线命令帧 → 连线形（见 __CMD__ 分支的长注）
 from agent import confirm  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 from langchain_core.messages import AIMessageChunk, ToolMessage
@@ -353,6 +354,24 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
                     exec_rows.extend(r for r in rows if isinstance(r, dict))
             except Exception:
                 pass
+        elif isinstance(item, str) and item.startswith("__CMD__:"):
+            # 连线命令帧（20260926 批 2）：命令从工具返回文本搬到了回执行的 `cmd`
+            # （见 server.py producer 那段"为什么从 producer 发"）。这里把它**重建回连线形**
+            # 再进 `commands` —— 既有那 114 条 `require_cmd_*`/`forbid_cmd_*` 断言因此
+            # **零编辑**仍然有效。
+            # ⚠️ 不重建的后果是双重的、而且都不报错：`require_cmd_prefixes` ×13 与
+            # `require_cmd_all` ×3 **转红**，而 `forbid_cmd_prefixes` ×110 与
+            # `forbid_cmd_contains` ×6 **空转变绿**——整族"模型不许假装发命令"的护栏
+            # 从此不再测任何东西；同时下面 `elif item.startswith("__")` 的兜底会把
+            # `__CMD__:` 无声吞进 `control_frames`，看都看不出来。
+            # `__RESET__` 那一支已经 `commands.clear()`（被打回那一轮的坏命令照样作废）。
+            try:
+                _cmd = json.loads(item[len("__CMD__:"):])
+                _wire = _cmd_wire(_cmd) if isinstance(_cmd, dict) else ""
+            except Exception:
+                _wire = ""
+            if _wire:
+                commands.append(_wire)
         elif isinstance(item, AIMessageChunk) and item.content:
             final_text += str(item.content)
         elif isinstance(item, ToolMessage) and item.content:

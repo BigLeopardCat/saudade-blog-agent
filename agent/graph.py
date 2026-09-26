@@ -594,10 +594,10 @@ _PLANNER_PROMPT = """\
      不要自行推算或改写时间。它记的是你的执行，**不是访客的浏览痕迹/前端上报
      的页面状态**——不许拿"那是访客行为记录"当理由否认自己执行过）。
      记录里有对应执行 → 选 chat 直接收尾，据记录如实
-     转述（含「」内实际内容/路径/开关状态以及发生时间；**只抄「」里那一段**——
-     `AUTO_NAVIGATE:`/`NAVIGATE:`/`EFFECT:`/`DARKMODE:` 这些**前缀标签一个字都
-     不许进正文**，哪怕回执原文是连着前缀写的：20260926 实测过，照抄前缀的回复
-     会被系统判成"假装发命令"整段拦掉，主人反而看不到那句如实的话），
+     转述（含「」内实际内容/路径/开关状态以及发生时间；**照抄记录里的值就好**，
+     不要自己敲 `AUTO_NAVIGATE:`/`NAVIGATE:`/`EFFECT:`/`DARKMODE:` 这类前缀标签：
+     20260926 实测过，正文里出现前缀会被系统判成"假装发命令"整段拦掉，主人反而
+     看不到那句如实的话。批 2 起回执与工具帧**本身已不带任何前缀标签**），
      不规划任何工具、不重发；
      记录里没有对应执行 → 也选 chat 收尾，如实说"系统记录里没有这次执行"，
      不编造、不否认回执、不为了"补做"重新规划执行
@@ -2260,7 +2260,7 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                  exec_search_evidence: bool = False,
                  has_popup: bool = False,
                  ledger: dict | None = None,
-                 frames_text: str = "") -> tuple[str, str, str] | None:
+                 receipts: list | None = None) -> tuple[str, str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本, **被否掉的那一句**)；有据/无声称 → None。
 
@@ -2301,11 +2301,13 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     """
     hit = _cmd_prefix_hit(reply)
     if hit:
-        # 兜底文案按**帧里有没有同一个动作**分两种（20260926，见
+        # 兜底文案按**这一轮有没有真的执行过那条命令**分两种（20260926，见
         # `_cmd_prefix_fallback_text`）：默认那句说"已经被我拦下啦"，而现场
         # （trace 20260926T215115）里跳转是**真做过的**——整段换成"什么都没做"
-        # 比抄前缀本身更失真。`frames_text` 是这一轮全部工具返回的原文。
-        return ("cmd_prefix", _cmd_prefix_fallback_text(hit, frames_text), hit)
+        # 比抄前缀本身更失真。对账的一侧 = `receipts` 里那些**已验收**的
+        # `cmd`（批 2 起命令搬上了回执行，帧原文里已经没有命令可核了）。
+        return ("cmd_prefix",
+                _cmd_prefix_fallback_text(hit, _cmd_wires(receipts)), hit)
     # 洞⑥（20260923）：确认话术声称——**任何轮次都查**，包括有帧轮。
     # 位置在 `if frames_exist: return None` **之前**是刻意的：这一条说的不是"有没有
     # 干活"，而是"有没有在等主人点确定"，与帧无关（20260922 那两条正是**有帧**的轮
@@ -2379,22 +2381,67 @@ _FALLBACK_CMD_PREFIX_DONE = (
     "什么就行～")
 
 
-def _cmd_prefix_corroborated(clause: str, tool_text: str) -> tuple[str, str] | None:
-    """回复里那串命令前缀，在**本轮工具返回**里找得到同一个载荷吗 → (前缀, 载荷)。
+def _cmd_wire(cmd: dict) -> str:
+    """结构化命令 → 连线形字符串（`AUTO_NAVIGATE:<url>` / `EFFECT:<n>:<on|off>` /
+    `DARKMODE:<on|off>`）；不认识 → 空串。
 
-    判据的一侧必须取**帧**（`tool_text`），不能只取回复——回复正是不可信的
-    那一侧（模型自己抄的一串命令，可能整段是编的）。取不到 → None（退回通用文案）。
+    **连线形只用于三件与人无关的核对**：① `_cmd_prefix_corroborated` 判"narrator 抄的
+    那串命令这一轮真执行过吗"；② eval 侧把结构化命令重建回 `commands`
+    （`eval/run_golden.py`）；③ `scripts/agent_metrics.py` 的命令帧计数。**它不是传输
+    格式**——批 2 之后命令走 `__CMD__:<json>`（结构化、原样转发），连线形只剩"历史
+    文本前缀"这一个身份（老前端/老 Rust 兼容期仍在读它）。
+
+    三处都要用 ⇒ 只此一份实现（Python 侧），别在 eval 里再抄一个：抄出来的那份一定漂。
     """
+    kind = (cmd or {}).get("kind")
+    if kind == "navigate":
+        # 确认式与直跳式在连线形上就是两根不同前缀（历史协议照旧）
+        pre = "NAVIGATE:" if str(cmd.get("mode") or "") == "confirm" else "AUTO_NAVIGATE:"
+        return pre + str(cmd.get("url") or "")
+    if kind == "effect":
+        return f"EFFECT:{cmd.get('effect')}:{cmd.get('action')}"
+    if kind == "darkmode":
+        return f"DARKMODE:{cmd.get('mode')}"
+    return ""
+
+
+def _cmd_wires(receipts) -> list:
+    """本轮**已验收回执** → 连线形命令清单（只取 `rcpt["cmd"]` 那一层）。
+
+    20260926 批 2 起，判"这串命令真执行过吗"的唯一依据从帧原文改成回执——帧里再没有
+    命令了（命令搬上了回执行，见 `execute_node`），而回执是 **checker PASS 才算**的
+    系统确认事实，正是"真做过"该有的那一侧凭据。
+    """
+    out = []
+    for r in receipts or []:
+        cmd = r.get("cmd") if isinstance(r, dict) else None
+        if isinstance(cmd, dict):
+            w = _cmd_wire(cmd)
+            if w:
+                out.append(w)
+    return out
+
+
+def _cmd_prefix_corroborated(clause: str, cmd_wires) -> tuple[str, str] | None:
+    """回复里那串命令前缀，在**本轮已验收回执**里找得到同一个载荷吗 → (前缀, 载荷)。
+
+    判据的一侧必须取**回执**，不能只取回复——回复正是不可信的那一侧（模型自己抄的
+    一串命令，可能整段是编的）。取不到 → None（退回通用文案）。
+
+    `cmd_wires` 是本轮回执重建出的连线形清单（`_cmd_wires(receipts)`）。空清单
+    （这一轮没有任何命令执行）让核对必然落空——**这正是要的**：没有回执就是没做过。
+    """
+    wires = [str(w) for w in (cmd_wires or [])]
     for m in _CMD_PREFIX_PAYLOAD_RE.finditer(clause or ""):
         prefix, payload = m.group(1).upper(), m.group(2)
-        if payload and payload in (tool_text or ""):
+        if payload and any(payload in w for w in wires):
             return prefix, payload
     return None
 
 
-def _cmd_prefix_fallback_text(clause: str, tool_text: str = "") -> str:
+def _cmd_prefix_fallback_text(clause: str, cmd_wires=None) -> str:
     """命令前缀打回的兜底文案（两种变体，见上方两个常量的长注）。"""
-    conf = _cmd_prefix_corroborated(clause, tool_text)
+    conf = _cmd_prefix_corroborated(clause, cmd_wires)
     if not conf:
         return _FALLBACK_CMD_PREFIX
     prefix, payload = conf
@@ -3558,7 +3605,7 @@ _VERDICT_PASS, _VERDICT_BLOCK = "PASS", "BLOCK"
 
 
 def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
-                kind: str = "ok") -> tuple[str, str]:
+                kind: str = "ok", meta: dict | None = None) -> tuple[str, str]:
     """checker 确定性验收（20260904，execute 循环内逐 spec 调用，无 LLM）。
 
     输入 = spec 实际调用值（args 是文案注入后值）+ 工具原始返回 + 返回值的 kind
@@ -3604,15 +3651,25 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
                                 or authz.consent_error_reason(text)
                                 or A.target_error_reason(text)
                                 or A.policy_error_reason(text) or "error_frame")
-    # 命令工具契约层校验：动作工具必须返回命令帧（工具返回形态漂移 = 执行未
-    # 按契约发生，如 navigate 返回了纯文本而非 NAVIGATE:/AUTO_NAVIGATE:）。
+    # 命令工具契约层校验（20260926 批 2 改键）：动作工具必须交出**连线命令**——但
+    # 判据从"返回文本的前缀"改成"`meta["cmd"]` 的 kind"。工具返回形态漂移（忘了带
+    # cmd）依然是执行未按契约发生，判 BLOCK；`cmd_shape` 这个原因码保留（有测试引用）。
+    #
+    # ⚠️ **这是批 2 的第 0 步**：`_check_spec` 是硬闸，若先改工具返回文本、没同时改这里，
+    # 三个命令工具会被全判 BLOCK ⇒ 没有回执 ⇒ 没有 `__CMD__` 帧 ⇒ 页面不跳，而且
+    # 还多一条 blocked 把 execute 打回 planner（一次白重规划 + 一句道歉）。这是
+    # **硬失败不是降级**，所以两者必须同一次落地。
     # device_oled_display 的"未在 5s 内回执确认"属软失败（指令确已下发），判
     # PASS——如实告知场景，不把软失败升成受阻链。
-    if name == "navigate_to" and not text.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")):
+    _CMD_KINDS = {"navigate_to": "navigate", "toggle_effect": "effect",
+                  "toggle_dark_mode": "darkmode"}
+    cmd = (meta or {}).get("cmd")
+    want = _CMD_KINDS.get(name)
+    if want and not (isinstance(cmd, dict) and cmd.get("kind") == want):
         return _VERDICT_BLOCK, "cmd_shape"
-    if name == "toggle_effect" and not text.startswith("EFFECT:"):
-        return _VERDICT_BLOCK, "cmd_shape"
-    if name == "toggle_dark_mode" and not text.startswith("DARKMODE:"):
+    if not want and cmd:
+        # 非命令工具不该有 cmd——多带一个就是"别的工具冒充命令"的形态（回执会被
+        # 前端当连线命令执行）。响亮地拦，不静默放行。
         return _VERDICT_BLOCK, "cmd_shape"
     return _VERDICT_PASS, "ok"
 
@@ -5697,19 +5754,41 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # `TRACE_TOOL_RESULT_LIMIT` 全局放开到 40000）。**工具名必须传**，否则分档不生效。
         # 截断时带标记（判官与读 trace 的人据此知道材料缺了一块）。
         result_ = trace_mod.tool_result_text(frame_text, name)
-        record("execute", "call", name=name, args=args,
-               duration_s=round(time.monotonic() - _t_tool, 3), result=result_)
+        call_ev = {"name": name, "args": args,
+                   "duration_s": round(time.monotonic() - _t_tool, 3), "result": result_}
+        # 命令类工具的结构化命令也落 trace（20260926 批 2）：连线命令搬进回执行后，
+        # `result` 里再也没有 `AUTO_NAVIGATE:` 这类前缀了——不留这一份，"这一轮到底
+        # 有没有真的下令跳转"就只剩帧文本可查，而帧文本正是要脱离命令的那一侧。
+        trace_cmd = (getattr(out, "meta", None) or {}).get("cmd")
+        if isinstance(trace_cmd, dict):
+            call_ev["cmd"] = trace_cmd
+        record("execute", "call", **call_ev)
         # checker 确定性验收（20260904）：PASS → 回执（系统确认事实，跨轮执行
         # 记忆与 reflector 的原料）；BLOCK → 受阻项（不进回执——错误结果不是
         # 事实）。args 是文案注入后值（device_oled_display 回执须能呈现实际屏文）。
         # kind：工具自己声明的"两类"（ok/empty/unavailable，见 tools/base.py 的
         # ToolResult）。命令帧与 __ERROR__ 帧是纯字符串 → 默认 ok，由形态校验兜。
+        out_meta = getattr(out, "meta", None) or {}
         verdict, reason = _check_spec(name, args, args_ok, str(out), plan["skill"],
-                                      getattr(out, "kind", "ok"))
+                                      getattr(out, "kind", "ok"), out_meta)
         if verdict == _VERDICT_PASS:
             rcpt = {"skill": plan["skill"], "tool": name,
                     "args": {k: str(v)[:200] for k, v in args.items()},
                     "result": str(out)[:200], "ts": time.time()}
+            # 连线命令（20260926 批 2）：命令从"工具返回的字符串"搬到回执行——回执行
+            # 已经是 Python 写 / Rust 读的既有跨语言契约（`server.py` 读
+            # `ex_upd["receipts"]`、`chat.rs::render_exec_row` 渲染），命令搭这趟车
+            # 不需要新状态字段、不新增迁移。
+            #
+            # ⚠️ **必须是顶层 `rcpt["cmd"]`，不许塞进下面 `_RCPT_META_KEYS` 那套**：那个
+            # 拷贝循环对白名单值做 `str(v)[:120]`，dict 会被**字符串化**成一个废串。
+            # 而 `context.py::_receipts_text` 只渲染 tool/args/result ⇒ `cmd` **天然不会
+            # 进提示词**——这正是设计要的：模型的证据是那根无前缀中文事实（「页面已跳转：
+            # https://…」），命令本身只有浏览器看得见，于是"引用回执"与"输出命令"在
+            # 字面上不再是同一个动作（批 2 要治的那个 23 天 4 次的假道歉就出在这里）。
+            cmd = out_meta.get("cmd")
+            if isinstance(cmd, dict):
+                rcpt["cmd"] = cmd
             # 实体摘要（20260920，见 agent/entities.py）：数据工具取回的条目/计数
             # 压成一行随回执落 execution_log —— 工具帧只活当轮，不落这一行的话
             # 下轮「第二条写了什么」只能把工具再跑一遍（探针实测）。
@@ -5958,16 +6037,15 @@ _EXECUTOR_PROMPT = """\
    帧里带 `[policy_refused]`（后端规则拒绝，如"不能冻自己/不能动超级管理员/
    管理员之间不能互冻"）时：**逐字转述后台给的那句话**，不要换个说法、不要
    暗示"再试一次就行"、更不要说成办好了。
-6. 回复正文绝不输出 NAVIGATE:/AUTO_NAVIGATE:/EFFECT:/DARKMODE: 等命令前缀文本，
+6. 回复正文绝不输出 NAVIGATE:/AUTO_NAVIGATE:/EFFECT:/DARKMODE: 等命令前缀标签，
    也不要用伪工具调用格式表演执行过程。执行计划里的 TODO/过程注记是系统内部
    规划信息，不要复述。
-   **引用执行回执时按这条走**（20260926）：回执原文常写成「AUTO_NAVIGATE:
-   https://…/article/46」这种"前缀 + 值"连写的形式，而"照抄回执"与"不许写前缀"
-   在这里会打架——规则是**只抄值、丢掉前缀标签**：路径（/article/46）、页面地址、
-   开关状态（sakura 开/关、夜间模式开/关）、「」内的原文都可以照抄，
-   **前缀标签本身一个字都不许出现在正文里**。写成"已经带你到 /article/46 这一篇啦"
-   是对的；写成"已经带你到 AUTO_NAVIGATE:https://…"会被系统判成假装发命令、整段
-   拦掉换成道歉，主人反而看不到那句如实的话（这条有生产实证，别试探）。
+   **引用执行回执时照抄里面的值就好**（20260926 批 2 修订）：回执与工具帧都是自然
+   语言（如「页面已跳转：https://…/article/46」「特效 sakura 已打开」），路径、页面
+   地址、开关状态、「」内的原文一律可以照抄，**没有任何标签需要你拆**。写成
+   "已经带你到 /article/46 这一篇啦"是对的；自己敲一个 `AUTO_NAVIGATE:` 出来会被
+   系统判成假装发命令、整段拦掉换成道歉，主人反而看不到那句如实的话
+   （这条有生产实证，别试探）。
 7. 需要给出站内链接时，只能用"工具执行记录"或页面上下文里真实出现的地址，
    不确定就不要给。
 8. 纯闲聊与博客内容无关的问题自由回答，但纪律 2/3/6 仍然适用。
@@ -6178,15 +6256,20 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         return fail("repeat_prev_reply", _FALLBACK_REPEAT, plan, len(frames))
 
     # 本轮全部工具返回原文（下面几道判据共用）。20260926 起**提前到这里**算：
-    # `_claim_issue` 的命令前缀那一支要拿它对账（回复里那串命令，是不是这一轮
-    # 真执行过的那条——见 `_cmd_prefix_corroborated`）。
+    # 第 5 节那几条（err 帧族等）都要它，而它的算法就是一次 join，早算不亏。
     tool_text = "\n".join(str(getattr(m, "content", "")) for m in frames)
+    # 本轮**已验收回执**（checker PASS 才算，见 `execute_node`）。批 2 起这是"命令是否
+    # 真执行过"的**唯一**依据：命令搬上了回执行，帧原文里已经没有任何命令了——凡是从
+    # `tool_text` 里 grep `NAVIGATE:`/`EFFECT:`/`DARKMODE:` 的判据在这之后都恒假（静默
+    # fail-open，不报错也拦不住），所以下面 5b/5b2 与 `_claim_issue` 的命令前缀支一律
+    # 改读这里。**一处漏改 = 一条哑判据**，这就是批 2 最容易漏的地方。
+    receipts = [r for r in (state.get("receipts") or []) if isinstance(r, dict)]
     # ── 2. 命令前缀文本（任何轮次，正文出现命令帧前缀 = 假装发命令）─────────
     # ── 3. 编造资源 URL（任何轮次，工具返回/用户消息中不存在的 /api 或图片）──
     issue = _claim_issue(reply, plan["skill"], plan, bool(frames),
                          _has_exec_memory(msgs, state.get("ledger")), _exec_memory_has_search(msgs),
                          has_popup=bool(state.get("pending_confirm")),
-                         ledger=state.get("ledger"), frames_text=tool_text)
+                         ledger=state.get("ledger"), receipts=receipts)
     if issue:
         i_name, i_text, i_clause = issue
         return fail(i_name, i_text, plan, len(frames), i_clause)
@@ -6254,7 +6337,13 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     #     的 confirm 形参没删，恢复确认式只需改回技能模板那一行）；与之配套的
     #     提示词禁令（"不得说「点确定我就过去」"）反而因此变成了**纯兜底**：
     #     那句话在没有确认框的世界里只能是空承诺，由洞⑥ `_confirm_claim` 拦。
-    if plan["skill"] == "navigate" and "NAVIGATE:" in tool_text and "AUTO_NAVIGATE:" not in tool_text:
+    #     判据改读**回执**（批 2）：`navigate` 类的命令全部是确认式（连线形 `NAVIGATE:`）
+    #     且没有任何直跳（`AUTO_NAVIGATE:`）——帧里再也看不到这两根前缀了，从 `tool_text`
+    #     grep 是恒假的哑判据（这就是批 2 里"改了实现忘了改判据"的典型），所以这里
+    #     一律走 `_cmd_wires(receipts)`。
+    nav_wires = [w for w in _cmd_wires(receipts) if w.startswith("NAVIGATE:")]
+    auto_nav_wires = [w for w in _cmd_wires(receipts) if w.startswith("AUTO_NAVIGATE:")]
+    if plan["skill"] == "navigate" and nav_wires and not auto_nav_wires:
         if _NAV_ARRIVAL_RE.search(reply):
             logger.info("[gate] NAVIGATE 确认帧 + 到达声称 → fallback")
             return fail("nav_pending_claim", _FALLBACK_NAV_PENDING, plan,
@@ -6271,8 +6360,13 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     #     ⚠️ 不放进 `_REPLAN_ISSUES`：回 planner 重规划要用 `_replan_note`，而那条
     #     提示写的是"这一轮一个工具都没有执行"——它有帧时是假话（同族教训：写给
     #     narrator/planner 的机制描述会被照抄）。
+    #     判据同样改读**回执**（批 2）：`nav_wires`/`auto_nav_wires` 一起空 = 这一轮
+    #     一条导航命令都没执行过。⚠️ 这一处若漏改，症状是**反向**的：帧里无前缀后
+    #     `"AUTO_NAVIGATE:" not in tool_text` 恒真 ⇒ **每一次成功的导航**都被假判成
+    #     "没跳却说跳了"、整段换成道歉——在全新的输入集合上复现原来那个 bug，而
+    #     `nav_arrival_no_frame` 不在 `_REPLAN_ISSUES` 里 ⇒ 打回即终局。
     if (plan["skill"] == "navigate"
-            and "AUTO_NAVIGATE:" not in tool_text and "NAVIGATE:" not in tool_text
+            and not nav_wires and not auto_nav_wires
             and _NAV_ARRIVAL_RE.search(reply)
             and not any(k in reply for k in _HONEST_GONE + _HONEST_DOWN)):
         logger.info("[gate] navigate 本轮无任何导航帧却声称已到达 → fallback")

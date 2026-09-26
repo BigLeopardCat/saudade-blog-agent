@@ -438,9 +438,11 @@ SKILLS: list[Skill] = [
         # 原因见 reply_contract 那段——"推荐某个页面"不该变成跳转，也就不该有"确认式
         # 跳转"这回事。`navigate_to` 的 confirm 形参保留（签名不动），本技能不再传 True。
         plan=[("navigate_to", {"path": "$path", "confirm": False})],
-        complete_when="navigate_to 返回 NAVIGATE:/AUTO_NAVIGATE: 帧",
+        # 完成判定按**回执**说（20260926 批 2）：命令搬上了执行回执，工具返回的文本
+        # 只剩「页面已跳转：<url>」这样给人看的事实，正文与帧里都再没有命令前缀。
+        complete_when="navigate_to 的执行回执带导航命令（有回执 = 页面已跳转）",
         reply_contract=(
-            "跳转由系统执行（navigate_to 工具返回帧）：AUTO_NAVIGATE: 帧已发出 = 页面已跳转，"
+            "跳转由系统执行（命令在 navigate_to 的**执行回执**里，正文里没有）：有回执 = 页面已跳转，"
             "可以简短确认，**不得**说「点确定我就过去」「请确认后我再跳」之类需要访客再操作的话"
             "（没有确认框这回事，那种话是空承诺）；不得在正文输出任何命令前缀文本；"
             "**推荐某个页面时不要调用本技能**——直接在正文里给出 Markdown 链接即可；"
@@ -465,7 +467,7 @@ SKILLS: list[Skill] = [
         # 钉成必填：缺了 ⇒ 零工具 + 一句"必填参数没给"，planner 同轮改对，既不猜也不烧轮。
         required_params=("action",),
         plan=[("toggle_effect", {"effect": "$effect", "action": "$action"})],
-        complete_when="toggle_effect 返回 EFFECT: 帧",
+        complete_when="toggle_effect 的执行回执带特效开关命令",
         reply_contract=(
             "特效真实状态以 current_effects 字段为准；与目标一致时不调用工具、直接答复；"
             "调用成功后才可声称已开启/关闭"
@@ -477,7 +479,7 @@ SKILLS: list[Skill] = [
         description="开启或关闭博客页面的夜间模式（暗色主题）时使用。",
         inputs={"mode": "on（开启夜间模式）/ off（关闭）"},
         plan=[("toggle_dark_mode", {"mode": "$mode"})],
-        complete_when="toggle_dark_mode 返回 DARKMODE: 帧",
+        complete_when="toggle_dark_mode 的执行回执带夜间模式开关命令",
         reply_contract=(
             "夜间模式真实状态以 current_darkmode 字段为准；与目标一致时不调用工具、直接答复；"
             "调用成功后才可声称已切换"

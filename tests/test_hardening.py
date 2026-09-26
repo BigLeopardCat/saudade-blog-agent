@@ -241,9 +241,15 @@ def test_tool_result_kinds():
           getattr(via_tool, "kind", None) == "unavailable", getattr(via_tool, "kind", None))
     check("知识库工具失败也走 unavailable", getattr(via_kb, "kind", None) == "unavailable",
           getattr(via_kb, "kind", None))
-    # 命令类工具不受影响：仍是普通字符串（命令帧契约由 cmd_shape 校验，不掺 kind）
+    # 命令类工具（20260926 命令与事实分离）：返回文本是给人看的事实、不带命令前缀，
+    # 连线命令搬进 meta["cmd"]（由 cmd_shape 校验形态，不掺 kind）
     nav = base.navigate_to.invoke({"path": "/talk", "confirm": False})
-    check("命令工具仍返回命令帧字符串", nav.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")), str(nav)[:40])
+    check("命令工具返回无前缀事实文本 + meta.cmd 带结构化命令",
+          not nav.startswith(("NAVIGATE:", "AUTO_NAVIGATE:"))
+          and str(nav).startswith("页面已跳转：") and "/talk" in str(nav)
+          and getattr(nav, "meta", {}).get("cmd")
+          == {"kind": "navigate", "url": "https://saudade.site/talk", "mode": "direct"},
+          repr(str(nav)[:60]) + " / " + repr(getattr(nav, "meta", None)))
 
 
 
