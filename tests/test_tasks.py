@@ -228,6 +228,32 @@ def test_advance_honors_declared_after():
                                 declared_after=10) is None)
 
 
+def test_settle_rows_pair_by_row_not_by_id():
+    """结算范围的两类行**逐行配对**（20260927 探针实测抓出的缺陷的回归锁）。
+
+    缺陷形状：早先按 `task_id` 查表给下限（`fresh = {task_id: t0}` 再 `.get(tid)`），
+    而幂等键**只按目标**算 ⇒「本轮用同一个 goal 再登记一次」（撤下通道）算出的 id 与
+    上一轮读回来那行**逐字相同** ⇒ 读回来那行被套上"新登记时刻"的下限，本轮真执行过
+    的回执被整片滤掉、游标不推进。两行同 id 是常态，所以这里测的就是"同 id 也各按各的"。
+    """
+    print("\n[结算] 下限逐行跟行：同 id 的两行不互相污染（探针实测缺陷的回归锁）")
+    raw = json.dumps([_task(task_id="at_same", cursor=0)], ensure_ascii=False)
+    declared = [(_task(task_id="at_same", cursor=0), 10.5)]
+    rows = T.rows_to_settle(raw, declared)
+    check("两类行都在（读回来 1 + 本轮登记 1）", len(rows) == 2, str(len(rows)))
+    check("读回来那行下限恒 0（它必然早于本轮任何回执）", rows[0][1] == 0.0, str(rows[0][1]))
+    check("新登记那行带自己的登记时刻", rows[1][1] == 10.5, str(rows[1][1]))
+    # 同一个 id 走两条不同的下限 ⇒ 结果必然不同（这就是"按 id 查表"会毁掉的那一格）
+    r = [{"tool": "navigate_to", "ts": 10}]
+    check("同一份回执：读回来那行推进了",
+          T.advance_by_receipts(rows[0][0], r, declared_after=rows[0][1]) is not None)
+    check("同一份回执：新登记那行不动（ts=10 早于登记时刻 10.5）",
+          T.advance_by_receipts(rows[1][0], r, declared_after=rows[1][1]) is None)
+    check("形状容错：agent_tasks 是坏串/空 ⇒ 只剩登记的那类行",
+          len(T.rows_to_settle("{坏", declared)) == 1
+          and len(T.rows_to_settle("", [])) == 0)
+
+
 def test_advance_refuses_unreadable_steps():
     print("\n[结算] 步骤解不出来就不结算（绝不猜'就当它做完了'）")
     no_steps = _task()
@@ -378,6 +404,7 @@ if __name__ == "__main__":
                test_advance_requires_receipts,
                test_advance_does_not_jump,
                test_advance_honors_declared_after,
+               test_settle_rows_pair_by_row_not_by_id,
                test_advance_refuses_unreadable_steps,
                test_advance_total_steps_is_the_floor,
                test_task_rows_tolerates_any_shape,
