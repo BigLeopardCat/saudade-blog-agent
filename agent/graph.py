@@ -105,6 +105,9 @@ from agent.skills import (DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
                           build_planner_context, callable_query_tools,
                           instantiate_plan, param_problem_note,
                           skill_param_specs, visible_skills)
+# 任务登记（20260927 批 D）：登记帧的构造与那一轮给 narrator 的注记/纠偏都在
+# `agent/tasks.py`——本模块只决定"什么时候用它"（见 planner 的那一支）。
+from agent.tasks import declaration_note, declaration_nudge, frame_payload
 from utils import trace as trace_mod
 from utils.trace import record
 
@@ -333,6 +336,14 @@ class AgentState(TypedDict):
     #                 `route_after_gate` 据此走回 planner；终局路径统一复位成 False。
     #                 判据与提示见 `_REPLAN_ISSUES` / `_replan_note`。
     gate_replan: bool
+    # 任务登记帧（20260927 批 D）：planner 认定"这一轮做不完"时写入 `__TASK__` 的
+    #                 载荷（字段与 `agent_task` 的列一一对应，见 agent/tasks.py 的
+    #                 `frame_payload`），server.py 的 producer 见它就发 `__TASK__:` 帧
+    #                 （Rust 收到即落库、不转发前端）。**同样必须显式声明**（理由同
+    #                 fallback_text：未声明的 key 会被 LangGraph 静默丢出 updates 流
+    #                 ⇒ `upd.get("task_frame")` 恒为假、登记通道静默失效——那正是本批
+    #                 要治的"有写无读"本身）。
+    task_frame: dict
 
 
 # ---------------------------------------------------------------------------
@@ -2989,7 +3000,8 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             temperature=0.2,
             max_tokens=settings.planner_native_max_tokens,
             timeout=settings.planner_native_timeout,
-            enable_thinking=settings.planner_native_thinking), role)
+            enable_thinking=settings.planner_native_thinking), role,
+            task_state=bool(getattr(settings, "agent_task_state", False)))
     if use_native:
         llm = native_bound
     round_info = (
@@ -3095,7 +3107,9 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 函数名/args 非对象 ⇒ 返回 None）。判不了就**退回下面那段既有的文本解析**
         # ——不新增降级路径：模型在 tools 档下仍可能把契约行写进正文（实测会两边都写），
         # 那份正文按老办法读得出来，白扔掉它等于把一次能用的决策打成 chat。
-        decided = tool_calls_to_plan(resp, role) if use_native else None
+        decided = (tool_calls_to_plan(
+            resp, role, task_state=bool(getattr(settings, "agent_task_state", False)))
+            if use_native else None)
         if decided is not None:
             skill_name, params = decided.skill, decided.params
             if decided.notes:
@@ -3135,7 +3149,9 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             try:
                 _sresp = native_bound.invoke(_render_planner_prompt(
                     contract=_PLANNER_OUTPUT_CONTRACT_NATIVE, **_prompt_args))
-                _sdec = tool_calls_to_plan(_sresp, role)
+                _sdec = tool_calls_to_plan(
+                    _sresp, role,
+                    task_state=bool(getattr(settings, "agent_task_state", False)))
                 _sskill = _sdec.skill if _sdec else ""
                 record("planner", "shadow", round=rounds, skill_text=skill_name,
                        skill_native=_sskill, agree=bool(_sskill) and _sskill == skill_name,
@@ -3144,6 +3160,54 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             except Exception as e:                  # noqa: BLE001 —— 影子绝不许影响主路
                 logger.warning("[planner] shadow 失败（不影响本轮）：%s", e)
                 record("planner", "shadow", round=rounds, error=str(e)[:160])
+
+        # ── 任务登记（20260927 批 D，见 agent/tasks.py 头注）────────────────────
+        # 模型这一轮明确说"还有一件事没做完/做不下去"时，把它等级成会话级任务行
+        # （跨轮不丢），本轮到此收尾：把要问主人的那一句交给 narrator 原样问出来。
+        # **判据是形态、不是措辞**（同"消息壳架空判据"那族教训）：
+        #   · 只登记、既没执行任何工具、也没有要问的问题 ⇒ 这一轮访客什么都看不到，
+        #     那是拖延不是交付 ⇒ 走既有纠偏通道（`correction`）重决策**一次**，
+        #     由模型自己选"现在就做"还是"把问题写出来"——系统不替它选（决策权不搬走）；
+        #   · 纠偏之后仍然这样 ⇒ 认它（第三条路已经没有了，继续丢只会退回"静默消失"
+        #     那个本批要治的病）；有帧或有问题 ⇒ 直接认。
+        # 登记轮用的 `status="wrapped"` 是**借用**确定性收尾轮的语义（本轮确实是
+        # 确定性层收口、不再有动作）——刻意不新造一个 status 值：`PLAN_STATUS_VALUES`
+        # 的每一格都有消费方（gate 的豁免/文案判据、corpus_invariants 的 I2），
+        # 多一格就要多一套判据，而这里要的行为与 wrapped 逐字相同（**wrapped 不在
+        # `PLAN_STATUS_ABSENCE_EXEMPT` 里** ⇒ 站的"没有"结论判据照旧拦，fail-closed）。
+        if use_native and decided is not None and decided.declare is not None:
+            decl = decided.declare
+            if not decl.get("pending_question") and not has_frames and not correction:
+                correction = declaration_nudge(decl)
+                correction_kind = "任务登记"
+                record("planner", "task_correct", goal=decl.get("goal"),
+                       steps=len(decl.get("steps") or []), round=rounds)
+                logger.warning("[planner] 只登记任务、零工具零问题 → 纠偏重决策一次：%s",
+                               decl.get("goal"))
+                continue
+            plan_obj = _wrap_up_plan(has_frames, note=declaration_note(decl, has_frames))
+            # 会话 id 只从 config 取（与 execute 的确认令牌同一来源）。**取不到就不登记**
+            # ——幂等键里含着会话，退化成 0 会让不同会话里同一句话算出同一个 task_id，
+            # 那正是"跨会话串了同一件事"的入口（Rust 侧的 upsert 只按 task_id+uid 找行）。
+            # 不登记不影响这一轮：要问的那句照样由 narrator 问出来，丢的只是"下一轮还记得"。
+            conv_id = (config or {}).get("configurable", {}).get("conversation_id")
+            frame: dict = {}
+            if isinstance(conv_id, int):
+                frame = frame_payload(decl, conv_id)
+            else:
+                logger.warning("[planner] 任务登记拿不到会话 id（config 里没有）→ 本轮"
+                               "不落库，只如实收尾：%s", decl.get("goal"))
+                record("planner", "task_declare_noconv", goal=decl.get("goal"), round=rounds)
+            record("planner", "task_declare", task_id=frame.get("task_id") or "",
+                   goal=decl.get("goal"), steps=len(decl.get("steps") or []),
+                   state=decl.get("state"), question=bool(decl.get("pending_question")),
+                   round=rounds, corrected=bool(correction), frames=has_frames)
+            logger.info("[planner] 任务登记：%s（剩 %d 步，状态 %s，问主人=%s，task_id=%s）",
+                        decl.get("goal"), len(decl.get("steps") or []),
+                        decl.get("state"), bool(decl.get("pending_question")),
+                        frame.get("task_id") or "（未落库）")
+            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False,
+                    "task_frame": frame}
 
         # role 必须传：calls 白名单按角色取（管理员含后台只读项）。漏传 = 静默剔空。
         plan_obj = instantiate_plan(skill_name, params, role)
@@ -6839,7 +6903,7 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
             "executed": [], "receipts": [], "blocked": [], "blocked_seen": [],
             "blocked_repeat": False, "reflect_rounds": 0, "issues": "",
             "reflect_end": False, "tool_data": [], "fallback_text": "",
-            "gate_replan": False,
+            "gate_replan": False, "task_frame": {},
             "pending_confirm": None, "confirm_text": "",
             "noop_text": "", "noop_note": "",
             "confirm_grant": confirm_grant, "ledger": ledger or {}}

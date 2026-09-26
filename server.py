@@ -35,6 +35,9 @@ from agent.graph import AgentCancelled, graph_input, _cmd_wire
 from agent.principal import Principal
 from agent.summarizer import summarize
 from agent.skills import NAV_MAP  # 过程行路径反查中文别名用（展示层，非执行依据）
+# 会话级任务状态（20260927 批 D）：登记帧的发出与流尾的**确定性结算**都在 producer
+# （这里拿得到 req 与流内全部回执——两样东西凑齐的地方只有这一处，见 _run_agent_stream_to_queue）
+from agent.tasks import advance_by_receipts, render_open_tasks, task_rows
 # 写工具参数的归一（20260923 批 7）：与 instantiate_plan 展开时**同一组纯函数**，
 # 保证"预告帧"与"计划文本"对同一个参数值的理解一致（两处各写一份必然漂移）。
 from agent.skills import _norm_id_list, _norm_true
@@ -166,6 +169,14 @@ class ChatRequest(BaseModel):
     # 语义的系统事实注入——短应答/授权式轮次据此定"那件事"，而不是回历史里挑
     # 一句自然语言当目标（13:19 事故）。空串 = 没有待办。
     pending_action: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
+    # 会话级任务状态（20260927 批 D）：本会话**未完结的任务**（Rust 侧从 agent_task
+    # 表读终态之外的最近 3 条，交回的是 **JSON 数组串**——刻意不像 executions /
+    # pending_action 那样交一行渲染好的文本，理由见 chat.rs `load_agent_tasks` 的注）。
+    # 渲染进 system 上下文由本文件 `_build_messages` 调 `agent/tasks.py::render_open_tasks`
+    # 完成；流尾的确定性结算（按回执推进 cursor）用的是同一份原文。
+    # 形状不对一律当"没有任务"（`task_rows` 判）——这**不是**静默失效：JSON 解不出来
+    # 意味着 Rust 侧或表结构坏了，而它坏掉的症状是"未完结的事又忘了"，正是本表要治的病。
+    agent_tasks: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
 
     # ── 写操作确认（20260921）────────────────────────────────────────
     # conversation_id：确认令牌的绑定维度之一（令牌只在这个会话里有效）。
@@ -489,6 +500,19 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
         ctx_parts.append(f"conversation_summary: {req.summary}")
     if req.executions or req.pending_action:
         ctx_parts.append(_ledger_block(req, confirmed=bool(confirm_grant)))
+    # 会话级任务状态（20260927 批 D）：未完结的任务（"还没做完的事"）——与 executions
+    # （已发生的事实）构成对偶，缺了它多步目标只走得完第一步。渲染在 tasks 模块里
+    # （形状是 Python 产的结构，Rust 只透传）；空串 = 没有未完结的任务，**不注入占位行**
+    # （与 recent_executions 那格不同：那格有"（本会话暂无记录）"的显式占位，因为
+    # narrator 需要知道"系统查过了、确实没有"；这里没有这种语义——没有任务就是没有，
+    # 占位行只会让 planner 每轮都读一句废话）。
+    # （`settings` 在本文件是**函数内导入**的既有形态，见 `_resolve_principal`——
+    #  这里照旧，不改成模块级导入。）
+    from config.settings import settings
+    _open_tasks = render_open_tasks(req.agent_tasks,
+                                    limit=int(getattr(settings, "agent_task_inject_max", 3) or 3))
+    if _open_tasks:
+        ctx_parts.append("open_tasks:\n" + _open_tasks)
     # 20260905 重复提问注入（18:17:36/18:18:52 实证：同句重发时 narrator 逐字
     # 复读上轮回复，两条一字不差的回复并排出现在会话里——qwen 对同句重问的
     # 最优策略判断是原样复读，prompt 软约束压不住，需确定性旁路）。
@@ -1084,7 +1108,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                principal: Principal | None = None,
                                confirm_grant: dict | None = None,
                                conversation_id: int | None = None,
-                               ledger: dict | None = None):
+                               ledger: dict | None = None,
+                               open_tasks: str = ""):
     """Run agent in a thread, push each chunk into an asyncio.Queue."""
     # user_id 注入 configurable（设备类工具经 RunnableConfig 读取，见 _run_agent_sync 注释）；
     # stop_event 一并注入——图内 model/tools 节点检查它实现断连中断（见 graph.AgentCancelled）
@@ -1099,6 +1124,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
     #   这里只有 messages ⇒ 台账必须由调用方（拿得到 req 的地方）传进来，与
     #   `_run_agent_sync` 的第 5 个参数同源同义（20260924：这行曾按 req/grant 直写，
     #   两个名字在本函数里都不存在 ⇒ 流式路径每次请求 NameError、零帧退出）。
+    # open_tasks：本会话未完结任务（Rust 读回的 `req.agent_tasks` 原文，JSON 数组串，
+    #   20260927 批 D）——流尾按回执做**确定性结算**要用它（见下面的结算段）。
+    #   **同一条理由必须由调用方传**（req 不在这里），别再犯上面那个 NameError。
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "stop_event": stop_event,
                                "principal": principal or Principal(uid=user_id),
                                "conversation_id": conversation_id},
@@ -1127,6 +1155,18 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         # 完成帧 diff 起点（20260905 issue5）：receipts 全量累计，已发条数起点
         # 之后为新增回执（同一 update 内顺序与执行顺序一致）
         receipt_sent = 0
+        # 本次请求内新登记的任务（20260927 批 D）：[(载荷, 登记时刻)]——流尾结算时要用
+        # 它们的 `declared_after`（同轮新登记的行走 ts 过滤，见 tasks.advance_by_receipts
+        # 的注：不这么做，"先导航再登记"那半步会被自己刚执行的回执立刻算完成）。
+        declared_tasks: list = []
+        # 注入端记账（20260927 批 D）：本会话**读回来了几条**未完结任务、都是谁。
+        # 为什么值得一条 trace 事件：`eval/corpus_invariants.py` 的 I6 要判"挂着的任务
+        # 有没有人管"，而"这一轮系统给 planner 看过什么"只有 trace 知道——不记这一格，
+        # 那条不变量就只能看登记端，看不到读端有没有接上（**有写无读**那族的判据必须
+        # 两头都有出处）。条数为 0 时也记：那正是"读侧断了"与"本来就没有"的分界。
+        _injected = task_rows(open_tasks)
+        record("producer", "task_inject", n=len(_injected),
+               ids=[str(r.get("task_id") or "") for r in _injected])
 
         def emit_process(text: str, key: str = ""):
             nonlocal process_emitted
@@ -1210,6 +1250,17 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         # update 的 receipts/blocked 驱动（见下方 execute 分支）
                         if "\nTOOLS: " in plan and "TOOLS: （无）" not in plan:
                             emit_process("🛠 正在调用工具…", key="tool_running")
+                    # 任务登记帧（20260927 批 D）：planner 认定"这一轮做不完"时随本轮
+                    # 一起给出登记载荷（`agent/tasks.py::frame_payload`）。与弹窗那支的
+                    # `__PENDING__` 同一条纪律：**收到即发、不攒到收尾**——主人可能看完
+                    # 这一轮就切走/关页面，晚发等于没发（下一轮 planner 靠它认人）。
+                    # 空 dict 是常态（绝大多数轮次没有登记），`if` 天然跳过。
+                    tframe = planner_upd.get("task_frame") or {}
+                    if isinstance(tframe, dict) and tframe.get("task_id"):
+                        asyncio.run_coroutine_threadsafe(
+                            queue.put("__TASK__:" + json.dumps(tframe, ensure_ascii=False)),
+                            loop).result()
+                        declared_tasks.append((tframe, time.time()))
                 # execute 的 checker 验收回执（20260904 C3）：累计语义——每次
                 # execute update 的 receipts 都是请求内全部 PASS 行，末批即全量
                 ex_upd = data.get("execute")
@@ -1345,6 +1396,32 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             logger.info("[stream] graph complete (uninterrupted)")
         # trace 落盘：最终回复随 producer 收尾记录（finish_trace 落盘时并入）
         record("producer", "stream_end", reply=final_reply)
+        # 任务结算（20260927 批 D）：**由系统按回执结算，模型说了不算**（同
+        # execution_log 的纪律）。判据是"某一步声明的工具这一轮真的 PASS 执行过"
+        # （`tasks.advance_by_receipts`），推进一步发一帧 `__TASK__` 回写 cursor/state，
+        # 全部推进完 ⇒ succeeded ⇒ 下一轮不再注入（Rust 的终态过滤在 SQL 里）。
+        # 放在流尾（与 __EXEC__ 同处）是刻意的：执行的完整回执到这一刻才齐，
+        # 早发会拿半份回执去结算（把"还没做"记成"做了"）。
+        # 失败只记一行——它是辅助事实，绝不阻断对话（与 __EXEC__/__PENDING__ 同口径）。
+        try:
+            # 结算范围 = Rust 读回来的行（上一轮起就挂着）+ 本轮新登记的行；
+            # 本轮新登记的行用它的登记时刻做 ts 下限（`declared_after`），Rust 读回来的
+            # 行走 0——它必然早于本轮任何回执。
+            fresh = {str((f or {}).get("task_id") or ""): t0 for f, t0 in declared_tasks}
+            for task in task_rows(open_tasks) + [f for f, _t in declared_tasks]:
+                tid = str(task.get("task_id") or "")
+                adv = advance_by_receipts(task, exec_rows,
+                                          declared_after=fresh.get(tid, 0.0))
+                if not adv:
+                    continue
+                record("producer", "task_advance", task_id=tid,
+                       cursor=adv.get("cursor"), total=adv.get("total_steps"),
+                       state=adv.get("state"))
+                asyncio.run_coroutine_threadsafe(
+                    queue.put("__TASK__:" + json.dumps(adv, ensure_ascii=False)),
+                    loop).result()
+        except Exception as e:                      # noqa: BLE001 —— 结算失败不影响本轮
+            logger.warning("[producer] 任务结算失败（不影响本轮回复）：%s", e)
         # 跨轮执行记忆帧（20260904 C3）：checker 验收回执（本次请求全部行）随流
         # 尾发出，Rust 收帧落库 execution_log（读取侧限最近 8 条）。放 None 之前
         # ——event_stream 收到即裸转发，Rust 在 __END__ 前解析完即可
@@ -1511,6 +1588,9 @@ async def chat_stream(req: ChatRequest, request: Request):
             # 台账事实（洞⑦ 判据）：与 _build_messages 注入的同源，**在这里算**
             # ——req 只在这个作用域里（20260924 的线上事故就是把它写进了被调函数）
             _ledger_for_graph(req, confirmed=bool(grant)),
+            # 未完结任务原文（20260927 批 D）：流尾按回执结算要用，**同一条理由**
+            # 必须由这里传（req 不在被调函数里）
+            req.agent_tasks,
         )
 
         # 可观测性：请求生命周期账本（帧数/退出原因，finally 汇总）
@@ -1618,6 +1698,12 @@ async def chat_stream(req: ChatRequest, request: Request):
                     # SSE 帧解析 strip_prefix(b"data: ") 无前缀即空 payload 丢弃——
                     # 裸 yield 的 __EXEC__ 从未到达 Rust 落库分支。golden 内部链路
                     # 不经 SSE 文本协议（queue 直收 str）故测不到，只有线上 E2E 能暴露
+                    yield f"data: {chunk}\n\n"
+                    continue
+                if isinstance(chunk, str) and chunk.startswith("__TASK__:"):
+                    # 任务登记帧（20260927 批 D）：与 __PENDING__ 同族同规矩——
+                    # **必须带 "data: " 前缀**（Rust 的 SSE 解析是 strip_prefix(b"data: ")，
+                    # 裸 yield 到不了它的落库分支），Rust 收到即写 agent_task、不转发前端。
                     yield f"data: {chunk}\n\n"
                     continue
                 if isinstance(chunk, AIMessageChunk) and chunk.content:

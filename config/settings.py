@@ -109,6 +109,19 @@ class Settings(BaseSettings):
     # ——放宽 timeout 而不看这个数，等于把超时问题藏起来。
     planner_native_slow_s: float = 30.0
 
+    # ── 会话级任务状态（20260927 批 D）───────────────────────────────
+    # 未完成的意图（"带我过去后开启一个特效"的第二步）跨轮的载体，与 execution_log
+    # （已发生事实）对偶。表 `agent_task`（迁移 agent_task_20260927.sql，已跑）。
+    # **默认 off 是刻意的**：表先落地、代码先上线，线上行为逐字节不变；
+    # 打开才登记/注入。理由与三端链路见 agent/tasks.py 头注。
+    agent_task_state: bool = False
+    # 注入上限（读侧截断，存量行无需迁移——与 execution_log 去重"在读侧"同一条纪律）。
+    # 3 条是"一张卡装一件事"的量级上限：再多只会挤掉 page_ctx / 执行记忆的预算。
+    # **时效（72h）刻意不在这里再设一个值**：那需要解析 `created_at` 的钟面格式，
+    # 而解析失败在注入侧的后果是整块静默消失（同"枚举只有一个入口"那类坑）——
+    # 时效的单执行者是 Rust 读侧（`TASK_READ_TTL_HOURS`，见迁移头注）。
+    agent_task_inject_max: int = 3
+
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
     # 与博客共用 JWT_SECRET：agent 以对话用户身份签发 JWT 调用 device-service
     jwt_secret: str = ""

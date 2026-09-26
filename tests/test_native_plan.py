@@ -17,6 +17,9 @@
   · 零调用 = 闲聊轮（`params` 给**空**，不臆造字段）、多条调用只取第一条并记账、
     判不了就返回 None；
   · 函数名满足 OpenAI 的 `^[a-zA-Z0-9_-]{1,64}$`（技能名带点/空格会让整份 tools 被拒）；
+  · **登记伪函数 `task_hold`（20260927 批 D）只在开关打开时多出来这一个名字**
+    ——集合相等因此是"技能名 + 一个申报过的名字"，且它的步骤工具闭集仍不许点出够不到的
+    工具；开关关闭（默认）时它与其它未知函数名一视同仁 ⇒ 决策层返回 None；
   · 本模块**不许 import `agent.graph`**（graph 是消费方，反向会成环）。
 """
 import ast
@@ -31,6 +34,8 @@ from langchain_core.messages import AIMessage  # noqa: E402
 
 from agent import native_plan as N  # noqa: E402
 from agent import skills as S  # noqa: E402
+from agent import tasks as T  # noqa: E402
+from tools.base import get_all_tools  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -56,6 +61,33 @@ def test_name_set_equals_visible_skills():
     # 管理员与公开身份**必须不同**——否则说明角色过滤整条失效，集合相等也照样成立
     check("admin 的技能严格多于公开身份",
           set(_by_name("admin")) > set(_by_name(None)))
+    # 登记伪函数（20260927 批 D）**只在开关打开时**多出来这一个名字：集合相等
+    # 因此是"技能名 + 一个申报过的名字"，把多出来的那一格钉成字面量（多别的一律红）。
+    for role in (None, "admin"):
+        got = {t["function"]["name"] for t in
+               N.build_tool_schema(role, task_state=True)}
+        want = {s.name for s in S.visible_skills(role)} | {T.TASK_HOLD}
+        check(f"role={role!r} 开任务登记后只多 task_hold", got == want,
+              f"多={sorted(got - want)} 少={sorted(want - got)}")
+    check("开关关（默认）时 schema 里没有 task_hold",
+          T.TASK_HOLD not in _by_name("admin"))
+    hold = N.build_tool_schema(None, task_state=True)[-1]["function"]
+    check("task_hold 排在最后（不参与技能顺序/菜单）",
+          hold["name"] == T.TASK_HOLD, hold["name"])
+    enum = hold["parameters"]["properties"]["steps"]["items"]["properties"]["tool"]
+    registry = {t.name for t in get_all_tools()}
+    check("步骤工具闭集 = 技能模板工具 ∪ 点名白名单（非全量注册表）",
+          list(enum.get("enum") or []) == T.step_tool_enum(None)
+          and set(enum.get("enum") or []) < registry,
+          f"{len(enum.get('enum') or [])} / 注册表 {len(registry)}")
+    check("闭集里的名字**每一个都真的在注册表里**（闭集不许点出够不到的东西）",
+          set(enum.get("enum") or []) <= registry,
+          str(sorted(set(enum.get("enum") or []) - registry)))
+    adm = N.build_tool_schema("admin", task_state=True)[-1]["function"]
+    check("admin 的闭集严格大于公开身份（按角色展开，不是常量）",
+          set(adm["parameters"]["properties"]["steps"]["items"]["properties"]["tool"]["enum"])
+          > set(enum.get("enum") or []))
+
 
 
 def test_function_names_are_openai_safe():
@@ -217,6 +249,68 @@ def test_unmappable_returns_none():
     check("args 不是对象 → None", N.tool_calls_to_plan(_Stub(), None) is None)
 
 
+def test_task_hold_declaration():
+    """登记伪函数（20260927 批 D）：与技能调用**同轮共存**，且只在开关打开时被认。
+
+    三条边界各钉一格：
+      · 只登记不干活 → `chat` + `declare`（本轮真的没执行任何工具，不许假装点了技能）；
+      · 干一步 + 登记剩下的 → 技能照旧取第一条，`declare` 并行走（"做一步、记下剩下的"）；
+      · 开关关（默认）时 `task_hold` 是个**不存在的函数名** → None（模型发了也只当没看见）。
+    """
+    print("\n[登记] task_hold 与技能调用同轮共存")
+    goal = "带我过去后开启一个特效"
+    only = AIMessage(content="", tool_calls=[{
+        "name": T.TASK_HOLD, "id": "t", "type": "tool_call",
+        "args": {"goal": goal,
+                 "steps": [{"label": "开启特效", "tool": "toggle_effect"}]}}])
+    got = N.tool_calls_to_plan(only, None, task_state=True)
+    check("只登记 → skill=chat（本轮确实没执行工具）",
+          got is not None and got.skill == "chat", str(got))
+    check("declare 带 goal", got is not None
+          and (got.declare or {}).get("goal") == goal, str(got and got.declare))
+    check("params 为空（不把登记当参数塞进 chat）",
+          got is not None and got.params == {}, str(got and got.params))
+    # `tool_call_names` 是**连线原始证据**（"模型点了哪些函数"，含被丢弃的并发调用），
+    # 决策结果由 `skill` 承载 —— 两者分工不同：这里如实记 `task_hold`，而技能位是 `chat`。
+    check("原始函数名序列如实记 task_hold（决策位由 skill=chat 承载）",
+          got is not None and N.tool_call_names(got) == T.TASK_HOLD,
+          repr(got and N.tool_call_names(got)))
+
+    both = AIMessage(content="", tool_calls=[
+        {"name": "navigate", "args": {"target": "物联网平台"}, "id": "n", "type": "tool_call"},
+        {"name": T.TASK_HOLD, "id": "t", "type": "tool_call",
+         "args": {"goal": goal,
+                  "steps": [{"label": "开启特效", "tool": "toggle_effect"}]}}])
+    got = N.tool_calls_to_plan(both, None, task_state=True)
+    check("做一步 + 登记 → skill=navigate", got is not None and got.skill == "navigate", str(got))
+    check("params 是技能的参数（登记不抢参数位）",
+          got is not None and got.params == {"target": "物联网平台"}, str(got and got.params))
+    check("declare 并行带上", got is not None and (got.declare or {}).get("goal") == goal)
+    check("其余调用记账带 task_hold_inline（不是 native_multi_call）",
+          got is not None and got.notes == ("task_hold_inline:navigate",), str(got and got.notes))
+
+    check("开关关（默认）时只有登记 → None（task_hold 不在 schema 里，与未知函数名同等）",
+          N.tool_calls_to_plan(only, None) is None)
+    # 但"做一步 + 登记"这一格**不该**因为多了个够不到的名字就整轮判不了：`navigate`
+    # 是合法的，`task_hold` 在这里与"网关无视 parallel_tool_calls 时多的那条"长得一样
+    # ⇒ 取第一条 + 记账（这正是既有那条规则，不是为登记新开的分支）。
+    off = N.tool_calls_to_plan(both, None)
+    check("开关关时做一步+登记 → 仍认 navigate，多余的记成并发调用",
+          off is not None and off.skill == "navigate" and off.declare is None
+          and off.notes == ("native_multi_call:navigate|task_hold",), str(off and off.notes))
+    # 登记轮**不带** tool_calls 之外的收尾叙述：只有 content 的一轮仍是闲聊（无 declare）
+    plain = N.tool_calls_to_plan(AIMessage(content="好呀～"), None, task_state=True)
+    check("开关打开也不影响零调用轮（declare 为 None）",
+          plain is not None and plain.declare is None, str(plain))
+    # 形状不可用（缺 goal）→ 当没登记，技能照旧
+    bad = AIMessage(content="", tool_calls=[
+        {"name": "navigate", "args": {"target": "物联网平台"}, "id": "n", "type": "tool_call"},
+        {"name": T.TASK_HOLD, "id": "t", "type": "tool_call", "args": {"steps": []}}])
+    got = N.tool_calls_to_plan(bad, None, task_state=True)
+    check("登记缺 goal（不可用）→ 不落 declare、技能照旧",
+          got is not None and got.skill == "navigate" and got.declare is None, str(got))
+
+
 def test_role_filter_applies_at_decision_time():
     print("\n[决策] 管理员技能在公开身份下判不出来")
     msg = AIMessage(content="", tool_calls=[
@@ -250,6 +344,7 @@ if __name__ == "__main__":
                test_single_call_maps_to_skill_params,
                test_multi_call_keeps_first_and_accounts,
                test_unmappable_returns_none,
+               test_task_hold_declaration,
                test_role_filter_applies_at_decision_time,
                test_module_does_not_import_graph):
         fn()
