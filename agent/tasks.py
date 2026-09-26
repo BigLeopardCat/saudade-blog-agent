@@ -268,6 +268,23 @@ def advance_by_receipts(task: dict, receipts: list, *,
     }
 
 
+def rows_to_settle(open_tasks: Any, declared: list) -> list[tuple[dict, float]]:
+    """流尾结算的**行集合**：`[(行, 该行的 ts 下限)]`。
+
+    `declared` 是 `[(帧载荷, 登记时刻)]`（producer 传进来的本轮新登记行）。
+
+    ⚠️ **下限逐行跟行，绝不按 `task_id` 查表**（这是本函数存在的全部理由，20260927
+    探针实测抓出的缺陷）：幂等键只按目标算 ⇒「本轮用同一个 goal 再登记一次」（撤下
+    通道就是它）算出的 `task_id` 与上一轮 Rust 读回来那行**逐字相同**。早先的实现是
+    `fresh = {task_id: t0}` 再 `fresh.get(tid, 0.0)`——那个查表把**读回来那行**也套上了
+    新登记的 ts 下限，于是本轮真执行过、回执也齐的那一步被整片滤掉，游标纹丝不动
+    （现象：模型明明把剩下那步做完了，结算却什么都没回写）。两行同 id 是**常态**不是
+    巧合，所以这里按"行"配对而不是按 id 配对。
+    """
+    return ([(t, 0.0) for t in task_rows(open_tasks)]
+            + [(f, float(t0 or 0.0)) for f, t0 in declared])
+
+
 def task_rows(raw: Any) -> list[dict]:
     """Rust 交回来的 `agent_tasks` → 行列表。**任何形状不对都当没有**（不阻断对话）。
 

@@ -37,7 +37,8 @@ from agent.summarizer import summarize
 from agent.skills import NAV_MAP  # 过程行路径反查中文别名用（展示层，非执行依据）
 # 会话级任务状态（20260927 批 D）：登记帧的发出与流尾的**确定性结算**都在 producer
 # （这里拿得到 req 与流内全部回执——两样东西凑齐的地方只有这一处，见 _run_agent_stream_to_queue）
-from agent.tasks import advance_by_receipts, render_open_tasks, task_rows
+from agent.tasks import (advance_by_receipts, render_open_tasks, rows_to_settle,
+                         task_rows)
 # 写工具参数的归一（20260923 批 7）：与 instantiate_plan 展开时**同一组纯函数**，
 # 保证"预告帧"与"计划文本"对同一个参数值的理解一致（两处各写一份必然漂移）。
 from agent.skills import _norm_id_list, _norm_true
@@ -1404,14 +1405,13 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         # 早发会拿半份回执去结算（把"还没做"记成"做了"）。
         # 失败只记一行——它是辅助事实，绝不阻断对话（与 __EXEC__/__PENDING__ 同口径）。
         try:
-            # 结算范围 = Rust 读回来的行（上一轮起就挂着）+ 本轮新登记的行；
-            # 本轮新登记的行用它的登记时刻做 ts 下限（`declared_after`），Rust 读回来的
-            # 行走 0——它必然早于本轮任何回执。
-            fresh = {str((f or {}).get("task_id") or ""): t0 for f, t0 in declared_tasks}
-            for task in task_rows(open_tasks) + [f for f, _t in declared_tasks]:
+            # 结算范围 = Rust 读回来的行（上一轮起就挂着）+ 本轮新登记的行。两类的
+            # ts 下限不同（读回来的行 0、新登记的行用登记时刻），**逐行配对**的理由
+            # 与那个"两行同 id"的陷阱见 `tasks.rows_to_settle` 的 docstring。
+            rows = rows_to_settle(open_tasks, declared_tasks)
+            for task, after in rows:
                 tid = str(task.get("task_id") or "")
-                adv = advance_by_receipts(task, exec_rows,
-                                          declared_after=fresh.get(tid, 0.0))
+                adv = advance_by_receipts(task, exec_rows, declared_after=after)
                 if not adv:
                     continue
                 record("producer", "task_advance", task_id=tid,
@@ -1436,12 +1436,26 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         logger.info("[stream] graph cancelled by client disconnect")
         asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
     except Exception as e:
+        # 20260927：**异常必须留痕**。此前这一支只把异常对象塞进队列、不记日志——
+        # 进程内消费者（`eval/run_golden.py` 的 drain）见异常即 break，异常就再也
+        # 没有第二个读者，trace 也不会收尾（`finish_case` 在 run_one 里、永不执行），
+        # 于是"某一轮挂了"在语料里表现为**一条空 trace 都没有**、只有一个进程被
+        # timeout 杀掉。排障时只能靠猜（本批实测：探针整进程挂死，靠 faulthandler
+        # 才定位到这一行）。
+        logger.exception("[stream] producer 异常（已入队，event_stream 据此发 __ERROR__）：%s", e)
         asyncio.run_coroutine_threadsafe(queue.put(e), loop).result()
         # 20260905 哨兵补发：异常入队后仍须收尾 None——event_stream 遇异常对象
         # 即发 __ERROR__ 返回（不会读到 None），但 run_one/golden 等进程内消费者
         # 的 drain 线程只认 None 终止，缺哨兵会让调用方 t.join() 永久挂起
         # （实测：LLM client 未初始化时整进程挂到被 timeout 杀，exit 124/144）
-        asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
+        # 20260927：**带超时**。进程内消费者见异常即 break，`loop.run_until_complete`
+        # 的驱动也随之停摆 ⇒ 此刻 `.result()` 再也没有人来跑这个协程，**永久**挂住
+        # 整个调用方（实测：探针进程挂到被 timeout 杀，faulthandler 栈落在本行）。
+        # 哨兵是给"还在听的消费者"的礼貌：没人听就放过，不许把调用方拖死。
+        try:
+            asyncio.run_coroutine_threadsafe(queue.put(None), loop).result(timeout=5)
+        except Exception:                           # noqa: BLE001 —— 消费者已离场
+            logger.info("[stream] 收尾哨兵无人接收（消费者已退出），producer 提前结束")
 
 
 def _record_invalid_confirm(trace_id: str, uid: int, conv_id, token_len: int) -> None:
