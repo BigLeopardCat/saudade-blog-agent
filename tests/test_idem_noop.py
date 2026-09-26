@@ -24,6 +24,11 @@
      `graph_input` 都**显式声明**了这两个字段（未声明的 key 会被 LangGraph 静默丢出
      updates 流——`fallback_text` 与 `gate_replan` 各栽过一次，同族）。
   ⑤ **回执那一半**：短路的 `noop` 回执落 `change`、真写路径一个字都不落。
+  ⑥ **接线**（20260927 补）：**真跑 `execute_node`** 走 noop 出口——这一格此前没有任何
+     判据，而生产正是在这里崩的：调用方只写了 `popup["pending_confirm"]` 一条路，
+     第二种出口一命中就 `KeyError('pending_confirm')`，冒到流级 `__ERROR__`，
+     主人在气泡里看到「网络错误: 'pending_confirm'」（20260927 07:29 真机，待办
+     「解冻 niuniu」本来就是完成状态）。①②③④ 全绿也没拦住——**能力有测试 ≠ 接线有测试**。
 
 用法：.venv/bin/python tests/test_idem_noop.py
 """
@@ -428,6 +433,96 @@ finally:
         g._TOOL_MAP.pop("add_favorite", None)
     else:
         g._TOOL_MAP["add_favorite"] = _saved
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑥ 接线：真跑 execute_node 走 noop 出口（这一段此前没有任何判据）")
+
+# **为什么补这一段**（20260927 07:29 生产真机事故，不是推演）：上面 ②③④ 测的是
+# `_confirm_popup` **返回了什么**、路由**认不认**、字段**声明没声明**、server **接没接**
+# ——唯独没测"`execute_node` 拿到这个返回之后怎么办"。而它当时只写了
+# `popup["pending_confirm"]` 一条路 ⇒ ②那条出口在生产一命中就
+# `KeyError('pending_confirm')`，异常冒到流级 `__ERROR__`，主人看到的是
+# 「网络错误: 'pending_confirm'」（不是网络问题，是一句内部异常名）。
+# 同族教训：`langgraph-future-annotations` / `fallback_text` 通道 —— **能力有测试
+# ≠ 接线有测试**；判据齐全的那三层全绿，照样没能拦住线上崩。
+print("  （口径：真调 execute_node、真跑判据，只桩后端那几次读；不桩返回值）")
+
+_SPEC_FAV = 'add_favorite({"article_id": 19})'
+_MSG_FAV = "文章 19 这篇我先收藏一下吧"
+_EXEC_CFG = {"configurable": {"principal": Principal(uid=7, role="user"), "user_id": 7,
+                              "conversation_id": 42, "stop_event": None}}
+
+
+def _exec_round(specs, msg=_MSG_FAV):
+    st = graph_input([HumanMessage(content=msg)])
+    st["plan"] = plan_encode({"skill": "favorite_add", "params": {}, "tools": list(specs),
+                              "note": "", "reply": ""})
+    return execute_node(st, _EXEC_CFG)
+
+
+with patch.object(base, "_tag_index", lambda config: {}), \
+        patch.object(base, "_favorites_snapshot", lambda config, what: (FAV_ONLY_19, None)):
+    # ── 正面：掏空 ⇒ 走 noop 出口，**不许抛异常**
+    try:
+        r_noop = _exec_round([_SPEC_FAV])
+        _raised = ""
+    except Exception as e:                      # noqa: BLE001 —— 这正是被测的东西
+        r_noop, _raised = None, f"{type(e).__name__}: {e}"
+    check("已收藏再收藏一次 → execute_node **不抛异常**（事故现场就是这一格）",
+          not _raised, _raised)
+    check("  真走到了 noop 出口（noop_note / noop_text 在场）",
+          isinstance(r_noop, dict) and bool(r_noop.get("noop_note"))
+          and bool(r_noop.get("noop_text")), str(r_noop)[:100])
+    check("  没有 pending_confirm（这一轮不弹卡）",
+          isinstance(r_noop, dict) and not r_noop.get("pending_confirm"), str(r_noop)[:100])
+    check("  判别键 `kind` **不进 state**（AgentState 没有这个字段，LangGraph 会"
+          "静默丢弃它、留一份'以为记下来了'的错觉）",
+          isinstance(r_noop, dict) and "kind" not in r_noop, str(sorted(r_noop or {})))
+    check("  零执行（messages 空、receipts 原样带过）",
+          (r_noop or {}).get("messages") == [] and (r_noop or {}).get("receipts") == [],
+          str(r_noop)[:120])
+    check("  这一份增量交给 route_after_execute → end（不去 narrator）",
+          route_after_execute(r_noop or {}) == "end")
+    # **判据自检**（否则上面那条"不抛异常"可能只是"什么都没测到"）：把事故当时
+    # 那一行原样写出来跑一遍，确认它在这一格上真的会炸。判据能红，才说明它能拦。
+    try:
+        _raw = _popup([_SPEC_FAV], _MSG_FAV)      # `_confirm_popup` 的原样返回
+        _raw["pending_confirm"]["specs"]          # 事故当天的调用方写法
+        _old_raised = ""
+    except Exception as e:                        # noqa: BLE001
+        _old_raised = f"{type(e).__name__}: {e}"
+    check("  判据自检：老写法 `popup['pending_confirm']['specs']` 在这一格上确实 KeyError"
+          "（上面那条断言抓得到事故）",
+          "pending_confirm" in _old_raised, _old_raised or "老写法居然没炸——自检不成立")
+
+    # ── 正面：真要办 ⇒ 照旧弹卡（判别键那一路没把正常出口带坏）
+with patch.object(base, "_tag_index", lambda config: {}), \
+        patch.object(base, "_favorites_snapshot", lambda config, what: ([], None)):
+    try:
+        r_conf = _exec_round([_SPEC_FAV])
+        _raised2 = ""
+    except Exception as e:                       # noqa: BLE001
+        r_conf, _raised2 = None, f"{type(e).__name__}: {e}"
+    check("收藏夹里没有它 → execute_node 不抛异常、照弹卡",
+          not _raised2 and bool((r_conf or {}).get("pending_confirm")), _raised2 or str(r_conf)[:90])
+    check("  弹卡那份增量里也没有 `kind`（判别键只在函数内部用）",
+          isinstance(r_conf, dict) and "kind" not in r_conf, str(sorted(r_conf or {})))
+
+# ── 反面：判别键认不出 ⇒ 响亮收尾（不弹、零执行），绝不 KeyError
+_saved_popup = g._confirm_popup
+try:
+    g._confirm_popup = lambda *a, **k: {"kind": "drifted", "pending_confirm": {"specs": []}}
+    try:
+        r_bad = _exec_round([_SPEC_FAV])
+        _raised3 = ""
+    except Exception as e:                       # noqa: BLE001
+        r_bad, _raised3 = None, f"{type(e).__name__}: {e}"
+finally:
+    g._confirm_popup = _saved_popup
+check("判别键认不出 → 不抛异常（漂移要响亮，但不许炸流）", not _raised3, _raised3)
+check("  按零改动收尾（响亮的出口仍走 noop，不拿一个来路不明的 dict 当弹卡批次）",
+      isinstance(r_bad, dict) and bool(r_bad.get("noop_note")) and not r_bad.get("pending_confirm"),
+      str(r_bad)[:120])
 
 print()
 if FAILED:
