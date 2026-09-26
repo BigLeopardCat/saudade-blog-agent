@@ -220,8 +220,8 @@ def _nav_fast_path(user_msg: str) -> dict | None:
                     target = t
     if target is None:
         return None
-    plan_obj = instantiate_plan("navigate", {"target": target, "mode": "direct"})
-    plan_obj["params"] = {"target": target, "mode": "direct"}
+    plan_obj = instantiate_plan("navigate", {"target": target})
+    plan_obj["params"] = {"target": target}
     return plan_obj
 
 

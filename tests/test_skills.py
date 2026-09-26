@@ -9,7 +9,7 @@ narrator）→ gate（确定性检查 + fallback 收尾）。原"落回 LLM 质�
 
 覆盖：
   - 导航映射表完整性（值集 ⊆ 白名单）
-  - instantiate_plan 参数实例化：navigate（direct/suggest/已下线/未识别——NAV_MAP.get
+  - instantiate_plan 参数实例化：navigate（confirm 恒 false/已下线/未识别——NAV_MAP.get
     对"已下线"与"未识别"都返回 None，必须用 target in NAV_MAP 区分，防止未识别页面
     被误报成"已下线"）、effect/darkmode/device_display 参数填充、未知技能 → chat 兜底
   - content_query calls/tools 白名单展开（20260903 planner 全权通道）
@@ -92,14 +92,18 @@ def test_nav_map_integrity():
 
 def test_navigate_instantiation():
     print("[instantiate] navigate 参数实例化")
-    p = instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"})
-    check("direct → confirm=false + /device-console/",
+    p = instantiate_plan("navigate", {"target": "物联网平台"})
+    check("→ confirm=false + /device-console/",
           p["tools"] == ['navigate_to({"path": "/device-console/", "confirm": false})'],
           str(p["tools"]))
+    # 20260926：`mode` 参数已删（导航一律直达，确认卡停用）⇒ 只剩一条路。
+    # 三条用例锁"不再分叉"：旧参数 mode=suggest 也不许再翻出 confirm=true。
     p = instantiate_plan("navigate", {"target": "留言板", "mode": "suggest"})
-    check("suggest → confirm=true",
-          p["tools"] == ['navigate_to({"path": "/guestbook", "confirm": true})'],
+    check("残留的 mode=suggest 不再生效（confirm 恒 false）",
+          p["tools"] == ['navigate_to({"path": "/guestbook", "confirm": false})'],
           str(p["tools"]))
+    check("  且 mode 被记进 param_unknown（没有静默吞掉一个没人读的参数）",
+          p["param_unknown"] == ["mode"], str(p["param_unknown"]))
     p = instantiate_plan("navigate", {"target": "友链"})
     check("已下线(友链) → 不调工具 + 下线注记",
           not p["tools"] and "已下线" in p["note"], f"tools={p['tools']} note={p['note']}")
@@ -116,7 +120,7 @@ def test_navigate_instantiation():
     check("空 target → 必填缺失注记（不是「站内没有该页面」）",
           not p["tools"] and "必填参数没给" in p["note"] and "无法识别" not in p["note"],
           f"note={p['note']}")
-    p = instantiate_plan("navigate", {"target": "/device-console/", "mode": "direct"})
+    p = instantiate_plan("navigate", {"target": "/device-console/"})
     check("字面路径(白名单)直用 → confirm=false + 不推断语义",
           p["tools"] == ['navigate_to({"path": "/device-console/", "confirm": false})'],
           str(p["tools"]))
@@ -124,8 +128,8 @@ def test_navigate_instantiation():
     check("字面路径(白名单外) → 零工具 + 不存在注记，不做语义替身",
           not p["tools"] and "不存在" in p["note"], f"tools={p['tools']} note={p['note']}")
     p = instantiate_plan("navigate", {"target": "/category/tech"})
-    check("字面路径(前缀匹配)直用",
-          'navigate_to({"path": "/category/tech", "confirm": true})' in p["tools"], str(p["tools"]))
+    check("字面路径(前缀匹配)直用（confirm 恒 false）",
+          'navigate_to({"path": "/category/tech", "confirm": false})' in p["tools"], str(p["tools"]))
     # 口语模糊归一（映射表外变体 → 关键词规则确定性兜底，不依赖模型推断；
     # 用例须是映射表里没有的表述，映射表内的别名走精确分支、无"模糊归一"注记）
     for alias, path in [
@@ -138,11 +142,11 @@ def test_navigate_instantiation():
         ("后台管理", "/dashboard"),
         ("回主页", "/"),
     ]:
-        p = instantiate_plan("navigate", {"target": alias, "mode": "direct"})
+        p = instantiate_plan("navigate", {"target": alias})
         check(f"口语模糊归一「{alias}」→ {path}",
               f'navigate_to({{\"path\": "{path}", "confirm": false}})' in p["tools"] and "模糊归一" in p["note"],
               f"tools={p['tools']} note={p['note']}")
-    p = instantiate_plan("navigate", {"target": "火星基地", "mode": "direct"})
+    p = instantiate_plan("navigate", {"target": "火星基地"})
     check("完全无关目标 → 仍无法识别（不误归）",
           not p["tools"] and "无法识别" in p["note"], f"note={p['note']}")
 
@@ -168,12 +172,12 @@ def test_other_skills():
 
 def test_plan_roundtrip():
     print("[plan] 编码/解析往返")
-    obj = instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"})
-    obj["params"] = {"target": "物联网平台", "mode": "direct"}
+    obj = instantiate_plan("navigate", {"target": "物联网平台"})
+    obj["params"] = {"target": "物联网平台"}
     parsed = parse_plan(plan_encode(obj))
     check("往返后 skill/params 一致",
           parsed["skill"] == "navigate"
-          and parsed["params"] == {"target": "物联网平台", "mode": "direct"},
+          and parsed["params"] == {"target": "物联网平台"},
           str(parsed))
     check("往返后 tools 一致", parsed["tools"] == obj["tools"], str(parsed["tools"]))
     obj = instantiate_plan("chat", {})
@@ -263,10 +267,22 @@ def test_gate_nav_pending_claim():
     20260903 语义变化：旧实现命中即 REVISE 打回重考（LLM 有第二轮机会）；
     新实现 validate→fallback 终局——不重考，fallback 文本（请访客确认跳转）
     直接替换回复。放行口吻（"已为您打开跳转确认"）不触发，pass。
+
+    20260926 起**休眠**：`navigate` 技能删掉了 `mode` 参数、恒发 confirm=false，
+    前端确认卡也停用了 ⇒ 生产里再没有 `confirm=true` 的产者。判据留在 gate 里
+    （`navigate_to` 的 confirm 形参没删，恢复确认式只需改回技能模板一行），测试
+    也留着——但计划改为**手搓**：从技能派生会在参数删掉后自己造不出场景，
+    那时这条红得莫名其妙（测试的失败原因与被测代码无关）。
     """
     print("[gate] 确认式导航声称（NAVIGATE 帧 + 到达声称 → fallback）")
-    plan = plan_encode(instantiate_plan("navigate", {"target": "留言板", "mode": "suggest"}))
-    assert '"confirm": true' in plan  # suggest 模式 → confirm=true（确认式，声称检查的前提）
+    plan = plan_encode({
+        "skill": "navigate",
+        "params": {"target": "留言板"},
+        "tools": ['navigate_to({"path": "/guestbook", "confirm": true})'],
+        "note": "",
+        "reply": "",
+    })
+    assert '"confirm": true' in plan  # 手搓的休眠场景：confirm=true ⇒ 前端弹卡等确认
 
     def frame_state(reply: str, frame: str):
         # 20260903：帧由 execute 直接产出，messages 无需旧的 tool_calls AIMessage
@@ -394,14 +410,14 @@ def test_dashboard_nav_expansion():
           all(p in bad for _, p in DASHBOARD_PANELS), bad)
 
     # ④ planner 侧：别名表分组渲染 + 具体面板直达 + 不追问板块
-    p = instantiate_plan("navigate", {"target": "后台笔记", "mode": "direct"})
+    p = instantiate_plan("navigate", {"target": "后台笔记"})
     check("instantiate：后台笔记 → /dashboard/notes",
           p["tools"] == ['navigate_to({"path": "/dashboard/notes", "confirm": false})'], str(p["tools"]))
-    p = instantiate_plan("navigate", {"target": "转跳后台", "mode": "direct"})
+    p = instantiate_plan("navigate", {"target": "转跳后台"})
     check("planner 把「转跳后台」当目标时，模糊归一也落后台主页（不是「是哪个板块」的反问）",
           'navigate_to({"path": "/dashboard", "confirm": false})' in p["tools"] and "模糊归一" in p["note"],
           f"tools={p['tools']} note={p['note']}")
-    p = instantiate_plan("navigate", {"target": "说说管理", "mode": "direct"})
+    p = instantiate_plan("navigate", {"target": "说说管理"})
     check("模糊归一「说说管理」→ 后台说说页（不是公开 /talk：面板规则在公开页规则之前）",
           'navigate_to({"path": "/dashboard/comments", "confirm": false})' in p["tools"],
           f"tools={p['tools']}")
@@ -1070,7 +1086,7 @@ def test_gate_frame_checks():
     out = gate_node(_st("navigate", [ToolMessage(content="AUTO_NAVIGATE:https://saudade.site/device-console/",
                                                  tool_call_id="execute_0", name="navigate_to"),
                                      AIMessage(content="到啦！这里是物联网设备控制台哟～")],
-                        target="物联网平台", mode="direct"))
+                        target="物联网平台"))
     check("AUTO 直跳帧 + 到达回复 → pass",
           out["done"] is True and not out.get("fallback_text"), str(out))
     # chat 自称 + 真实工具帧 → 放行（轨迹支撑声称）
@@ -1082,12 +1098,12 @@ def test_gate_frame_checks():
     # err 帧 + 如实报告失败 → pass
     errf = ToolMessage(content="__ERROR__: 路径无效", tool_call_id="execute_0", name="navigate_to")
     out3 = gate_node(_st("navigate", [errf, AIMessage(content="呜，跳转失败了喵，路径好像无效")],
-                         target="物联网平台", mode="direct"))
+                         target="物联网平台"))
     check("err 帧 + 如实失败措辞 → pass",
           out3["done"] is True and not out3.get("fallback_text"), str(out3))
     # err 帧 + 完成式声称且无失败实词 → fallback（把失败说成成功）
     out4 = gate_node(_st("navigate", [errf, AIMessage(content="已经跳转成功了，页面马上就好！")],
-                         target="物联网平台", mode="direct"))
+                         target="物联网平台"))
     check("err 帧 + 完成式声称 → fallback(err_frame_claim)",
           out4["done"] is True and bool(out4.get("fallback_text"))
           and "失败" in out4["fallback_text"],
@@ -1112,7 +1128,7 @@ def test_gate_frame_checks():
     g.record = _fake
     try:
         gate_node(_st("navigate", [errf, AIMessage(content="已经跳转成功了，页面马上就好！")],
-                      target="物联网平台", mode="direct"))
+                      target="物联网平台"))
         hits = [d for n, e, d in seen if e == "fallback" and d.get("issue") == "err_frame_claim"]
         check("err 帧 fallback 的 trace 带 clause（被否掉的那一句）",
               bool(hits) and "跳转成功" in hits[0].get("clause", ""), str(seen))
@@ -1418,7 +1434,7 @@ def test_gate_claim_holes():
     # 混合轮（只有动作工具帧）+ 检索声称 → fallback（洞②的另一形态）
     o4 = _terminal(_st("chat", [nav, AIMessage(content="我把站内文章都翻了一遍，"
                                                        "确实没有讲过这个")],
-                       target="说说", mode="direct"))
+                       target="说说"))
     check("有帧[仅动作工具] + 检索声称 → fallback(phantom_search_claim)",
           o4["done"] is True and bool(o4.get("fallback_text"))
           and "站内的内容我一条都没查过" in o4["fallback_text"]
@@ -2292,7 +2308,7 @@ def test_execute_node():
     print("[execute] 调用清单确定性执行")
 
     def _run(tools_list):
-        obj = instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"})
+        obj = instantiate_plan("navigate", {"target": "物联网平台"})
         obj["tools"] = tools_list  # 手工覆盖清单（模拟 planner 决策产物）
         return execute_node({"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
                              "messages": [HumanMessage(content="带我去设备控制台")]})
@@ -2712,7 +2728,7 @@ def test_execute_receipts_and_route():
     判重（哪怕参数不同）、**换原因码**必须不判重（改参重试空间不许被收窄掉）。"""
     print("[execute/route] 回执 + 受阻 + 路由")
     def _st(tools_list, **extra):
-        obj = instantiate_plan("navigate", {"target": "物联网平台", "mode": "direct"})
+        obj = instantiate_plan("navigate", {"target": "物联网平台"})
         obj["tools"] = tools_list
         base = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
                 "messages": [HumanMessage(content="带我去设备控制台")]}
@@ -3930,7 +3946,7 @@ def test_drop_correction():
                 'PARAMS={"calls": [{"tool": "navigate_to",'
                 ' "args": {"path": "/guestbook"}}]}\n'
                 "REPLY: 如实回答")
-    _FIXED = ('SKILL=navigate\nPARAMS={"target": "留言板", "mode": "direct"}\n'
+    _FIXED = ('SKILL=navigate\nPARAMS={"target": "留言板"}\n'
               "REPLY: 好的，带你去留言板")
     _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}

@@ -295,6 +295,18 @@ class AgentState(TypedDict):
     pending_confirm: dict
     confirm_text: str
     confirm_grant: dict
+    # ── 「状态已达成 ⇒ 不弹卡」那一支（20260926，同样**必须显式声明**，理由同
+    #    fallback_text：未声明的 key 会被 LangGraph 静默丢出 updates 流 ⇒ server.py
+    #    的 `upd.get("noop_text")` 恒为假、这条如实的回复永远发不出去、主人看到的是
+    #    一段空白）──
+    # noop_text: 这一轮的**回复正文**（确定性中文，不经 LLM）：说明目标现在就已经是
+    #            它要的样子、并明说本轮零改动。与 confirm_text 同为"执行侧直接给出的
+    #            正文"，区别只在于这一轮连卡都不弹。
+    # noop_note: 机器可读的出口标记（"哪些工具因状态已达成被摘掉"）。`route_after_execute`
+    #            见它直接 END，理由与 pending_confirm 逐字相同：绝不能让 narrator 面对
+    #            "零工具帧 + 一件本来就办好的事"——它最可能说的就是"我已经帮你办好啦"。
+    noop_text: str
+    noop_note: str
     # pending_action: 本轮弹窗那条待办的**结构化形态**（{task_id, skill, specs, target,
     #                 requested_by, source_event}）——server.py 见它随 __CONFIRM__ 一起
     #                 发 `__PENDING__` 帧给 Rust 落库（Rust 收到即写、不转发前端），
@@ -325,7 +337,7 @@ class AgentState(TypedDict):
 # agent/skills.py 选技能 + 填参数，不自由写步骤）：
 #   第 1 行: SKILL=<技能名>（navigate/effect/darkmode/device_display/
 #            device_query/content_query/chat/read_article）
-#   第 2 行: PARAMS=<JSON 参数>（如 {"target": "物联网平台", "mode": "direct"}）
+#   第 2 行: PARAMS=<JSON 参数>（如 {"target": "物联网平台"}）
 #   第 3 行: TOOLS: <实例化后的工具调用序列>（chat/收尾轮为"（无）"）
 #   第 4 行: NOTE: <业务注记>（导航目标下线/不存在/已按决策执行等）
 #   第 5 行: REPLY: <技能回复契约>（model 叙述时遵守、gate 不做文本级对照）
@@ -588,8 +600,8 @@ _PLANNER_PROMPT = """\
      content_query 查证后据实作答（页面存在性是内容问题，不是执行真实性）
    - 再次要求（明确重发同款或升级指令——"别光说，带我去啊"= 要直接跳过去、
      "再显示一次刚才那句"）→ 属新请求：重新规划该动作技能并真实执行；
-     navigate 填 mode=direct（免确认框直达）；不得零工具口头承诺
-     "马上带你去/这就去"——上次正是口头说"已经在 X 页"才被质疑
+     navigate 无 mode 可填——它**恒直达**（20260926 起没有确认式跳转这回事）；不得零工具
+     口头承诺"马上带你去/这就去"——上次正是口头说"已经在 X 页"才被质疑
 6b. 指代取值优先于重查（20260920）：『已执行』行行尾的「— …」是那次执行取回的
    **实体摘要**（留言条目原文/分类文章数/文章候选标题等，系统按工具返回压成的事实）。
    用户指代"上文已经取回来过的东西"（"第二条写了什么""那个分类下面有几篇文章""刚才
@@ -3038,8 +3050,8 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             and plan_obj["params"].get("target") != lit.group(0)):
         logger.info("[planner] 字面路径修正：用户消息含 %s，planner 目标 %r → 强制 %s",
                     lit.group(0), plan_obj["params"].get("target"), lit.group(0))
-        plan_obj = instantiate_plan("navigate", {"target": lit.group(0), "mode": "direct"})
-        plan_obj["params"] = {"target": lit.group(0), "mode": "direct"}
+        plan_obj = instantiate_plan("navigate", {"target": lit.group(0)})
+        plan_obj["params"] = {"target": lit.group(0)}
 
     # TODO 剩余步骤声明提取（20260904 最小契约）：planner LLM 可选输出行，多步
     # 依赖链的中间轮用它声明"本轮之后还要做什么"——给后续轮次/reflector 看，
@@ -3899,6 +3911,17 @@ _NOTICE_TOOLS = ("send_user_notice",)
 # 需要**惰性读一次待办列表**的写工具（20260926 第十轮）：卡面要写出那一行的排期与
 # 当前完成状态。与 `_ACCOUNT_TOOLS` 同一条纪律——只有 plan 里真含它时才多这一次请求。
 _TODO_TOOLS = ("complete_dashboard_todo",)
+# 「状态已达成 ⇒ 不弹卡」判据要**惰性读一次本人作用域快照**的写工具族（20260926
+# 第十二轮）。收藏与已读写的都是主人自己账号里的状态（`write.own`），现状不在弹窗
+# 已经读的那几份渲染快照里（那些是后台/站内公共数据）。三族各一份名单，纪律同
+# `users`/`todos`：**只有该族真进了候选才读**，别的写弹窗一次都不多花。
+_FAVORITE_TOOLS = ("add_favorite", "remove_favorite")
+# 已读两件（`read_notifications` 通知 / `read_messages` 站内信）判据同形（"本来就是
+# 已读状态"），但**两份快照不通用**——它们是两个上游端点，行结构也不同（见
+# `tools/base.py` 的 `_notifications_snapshot` / `_mailbox_snapshot`）⇒ 不设族常量，
+# 下面按工具名逐个读。
+# 改公告（**只有改**）：新建没有"已经是这个状态"这回事、删除更没有，判据只看这一件。
+_ANNOUNCE_TOOLS = ("update_announcement",)
 _ACCOUNT_LEXICON = (_ACCOUNT_NOUNS, _ACCOUNT_MARKS, _ACCOUNT_GENERIC)
 _NOTICE_LEXICON = (_ACCOUNT_NOUNS, _NOTICE_MARKS, _ACCOUNT_GENERIC)
 
@@ -5109,18 +5132,6 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         picks.append({"tool": name, "args": args})
     if not picks:
         return None
-    conv_id = (config or {}).get("configurable", {}).get("conversation_id")
-    token = confirm.sign(principal.uid, conv_id, _plan_skill(state), picks)
-    if not token:
-        # 密钥没读到 → 不弹窗（宁可走追问，也不发一个验不过的令牌）。这个兜底**必须
-        # 留痕**：它一旦生效，**所有**写确认弹窗会静默消失、退回"判不成命令就追问"
-        # 的死路形态，而链路上没有任何别的信号。20260922 CI 实测：无 .env 的环境里
-        # `settings.jwt_secret` 是空串 ⇒ 本分支吃掉三条"该弹窗"的正例，本地因有
-        # .env 全绿。fail-closed 不变，只是不再无声。
-        logger.warning("[confirm] 签发密钥空缺（settings.jwt_secret 为空）→ 本轮不弹确认框：%s",
-                       [p.get("tool") for p in picks])
-        record("confirm", "token_sign_failed", tools=[p.get("tool") for p in picks])
-        return None
     # 问句要把父标签**名字**写出来（20260921）：只写「新建二级标签「Rust」」时
     # 用户无从核对它要挂到哪个爸爸底下，而"挂错父标签"正是本轮修的参数对调事故。
     # 读字典失败 → index=None，问句退回名字原文（宁可只给名字，也不能因为一次
@@ -5200,6 +5211,87 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             todos = _todo_rows(_admin_get("/api/protected/todos", config))
         except Exception:
             todos = None
+    # ── 「状态已达成」判据要的四份快照（20260926）─────────────────────────
+    # 收藏两件、已读两件写的是**主人自己账号里的**状态（`write.own`），公告改的是
+    # 标题/正文——三样都不在上面的渲染快照里。判据（adminops.reached_specs）要求
+    # "读得到现状"，所以这三族各补一次惰性读：**只在对应工具族真进了候选时才读**，
+    # 别的写弹窗一次都不多花（照 users/todos 那条既有纪律）。
+    # 读不到一律留 None ⇒ 判据判不了 ⇒ **照弹卡**（fail-open 的方向永远是弹卡，
+    # 绝不静默拒绝一次主人要的写）。
+    favorites = None
+    if any(str(s.get("tool") or "") in _FAVORITE_TOOLS for s in picks):
+        try:
+            from tools.base import _favorites_snapshot
+            # 与工具写前读**同一个函数**（见该函数头注）；这里只取第一项，失败
+            # 那一半（ToolResult）不进卡面（判据判不了就照弹，不需要多一句话）。
+            favorites, _fav_fail = _favorites_snapshot(
+                config, "你的收藏列表（拿不准现在是什么状态）")
+        except Exception:
+            favorites = None
+    notifications = None
+    if "read_notifications" in [str(s.get("tool") or "") for s in picks]:
+        try:
+            from tools.base import _notifications_snapshot
+            notifications, _nf = _notifications_snapshot(
+                config, "通知列表（拿不准哪几条是未读）")
+        except Exception:
+            notifications = None
+    messages = None
+    if "read_messages" in [str(s.get("tool") or "") for s in picks]:
+        try:
+            from tools.base import _mailbox_snapshot
+            messages, _mf = _mailbox_snapshot(
+                config, "你的信箱（拿不准哪几封是未读）")
+        except Exception:
+            messages = None
+    announcements = None
+    # `_ANNOUNCE_TOOLS` 里只有"改"这一件：新建没有"已经是这个状态"这回事、删除更没有
+    # （删一条已删的），两份都不该用"同值"这层判据去摘。
+    if any(str(s.get("tool") or "") in _ANNOUNCE_TOOLS for s in picks):
+        try:
+            from tools.base import _announcement_index
+            announcements = _announcement_index(config)
+        except Exception:
+            announcements = None
+    # ── 已经就是那个样子 ⇒ 从这一批里摘掉（20260926）─────────────────────
+    # 用户实测的病：对一篇**已经收藏**的文章说"收藏这篇"，卡照弹、点确定还照走一遍
+    # 写通道（回执诚实、卡不诚实）。判据是 `adminops.reached_specs` 那个纯函数，
+    # 三条（读到 + 认准 + 取值相等）缺一即判"没达成" —— 摘掉的只有**已经就是目标值**
+    # 的那些，其余一个不动。
+    # 这一滤必须发生在**签发令牌之前**：令牌绑定的就是卡上那一批 spec，签一份包含
+    # 已达成项的令牌等于让主人签一件系统根本不打算办的事（`pending_action.specs`
+    # 同理，下面两处都用 `picks`，滤完的才是真正在问的那几件）。
+    picks, already = A.reached_specs(picks, index=tag_index, boards=board_index,
+                                     notes=note_index, users=users, todos=todos,
+                                     favorites=favorites, notifications=notifications,
+                                     messages=messages, announcements=announcements)
+    if already:
+        record("confirm", "idem_reached", tools=[str(x.get("tool") or "") for x in already],
+               kept=[str(x.get("tool") or "") for x in picks])
+    if not picks:
+        # **掏空**：这一批里没有一件需要动。不弹卡、不签发令牌、零执行，回复由
+        # `adminops.render_noop_text` 确定性给出（说现状、明说没有做任何改动）。
+        # 出口与 pending_confirm 同形（route_after_execute 见 `noop_note` 直接 END），
+        # 绝不去 model：narrator 面对"零工具帧 + 一件本来就办好的事"最可能说的
+        # 就是"我已经帮你办好啦"。
+        text = A.render_noop_text(already)
+        note = ("状态已是目标值（" + "、".join(str(x.get("tool") or "") for x in already)
+                + "），本轮零改动")
+        logger.info("[execute] 写操作的状态已达成 → 不弹卡、零执行: %s", note)
+        return {"noop_text": text, "noop_note": note, "messages": [],
+                "receipts": list(state.get("receipts") or [])}
+    conv_id = (config or {}).get("configurable", {}).get("conversation_id")
+    token = confirm.sign(principal.uid, conv_id, _plan_skill(state), picks)
+    if not token:
+        # 密钥没读到 → 不弹窗（宁可走追问，也不发一个验不过的令牌）。这个兜底**必须
+        # 留痕**：它一旦生效，**所有**写确认弹窗会静默消失、退回"判不成命令就追问"
+        # 的死路形态，而链路上没有任何别的信号。20260922 CI 实测：无 .env 的环境里
+        # `settings.jwt_secret` 是空串 ⇒ 本分支吃掉三条"该弹窗"的正例，本地因有
+        # .env 全绿。fail-closed 不变，只是不再无声。
+        logger.warning("[confirm] 签发密钥空缺（settings.jwt_secret 为空）→ 本轮不弹确认框：%s",
+                       [p.get("tool") for p in picks])
+        record("confirm", "token_sign_failed", tools=[p.get("tool") for p in picks])
+        return None
     question = A.render_confirm_question(picks, tag_index, cat_index, board_index,
                                          note_index, users, todos)
     opts = [{"label": "确定", "value": "yes", "kind": "primary"},
@@ -5247,8 +5339,14 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             "jti": confirm.token_jti(token),
             "expires_at": expires_at,
         },
+        # 混合轮（20260926）：这一批里既有该问的、也有**已经就是那个样子**的 ⇒ 卡照弹，
+        # 但落库的那句卡面文本末尾要点明后者**不在这一批里**——否则主人点完「确定」，
+        # 发现有一件没动，会以为系统漏办了。这句**只补在 `confirm_text` 上、不补进
+        # `question`**：问句是给眼睛看的（越短越好），`confirm_text` 是"这张卡到底要办
+        # 什么"的落库记录，两者的读者不同。
         "confirm_text": A.render_confirm_text(picks, tag_index, cat_index, board_index,
-                                               note_index, users),
+                                               note_index, users)
+                        + A.render_already_note(already),
     }
 
 
@@ -5490,6 +5588,26 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                         # 一半回执取到空串"的经典来源——args 侧早已按同样理由
                         # 全部 str()（见上面 rcpt 的 args 构造）。
                         rcpt[k] = str(v)[:120]
+            elif (getattr(out, "meta", None) or {}).get("noop"):
+                # 写操作**短路**的回执（20260926）：工具压根没发出写请求、目标状态
+                # 本来就已经是它要的样子（收藏两件、已读两件——见 tools/base.py 里那
+                # 四处 `noop: True`）。这两族的 scope 是 `write.own`（本人作用域），
+                # **不在 AUDIT_SCOPES 里** ⇒ 上面那道闸一个 meta 键都不给它们 ⇒ Rust
+                # 只能从 args 渲染出「收藏文章 12」：一次**根本没发生的写**照样写进了
+                # 执行台账。它随下一轮 `recent_executions` 注回提示词时，主人问"你刚才
+                # 动过我收藏吗"，planner 看到的那一行就是"做过了"。
+                # 这里只放 `change` 一个键，够 Rust 那四臂渲染出「本来就已收藏（未改动）」，
+                # 且**不扩 AUDIT_SCOPES**（`test_authz` 精确锁着它的成员）：`principal_role`
+                # 是审计语义——"以管理身份改了站内数据"，与"本人对自己收藏的操作"无关。
+                # 用 `elif`：审计域的短路回执仍走上面那一支（那里 `change` 本来就在
+                # `_RCPT_META_KEYS` 里），两处不会重复也不会互相顶掉。
+                # ⚠️ **只在短路时放行，走真的写路径（`change="已收藏"`）一个字都不放**：
+                # 那一步 Rust 该照旧从 args 渲染「收藏文章 12」——写**真的发生了**，
+                # 动作词是对的；`change` 若也出现在那种行上，Rust 那四臂会改读 `change`，
+                # 于是整行只剩「已收藏」、**对象（哪一篇）没了**。
+                v = (getattr(out, "meta", None) or {}).get("change")
+                if v is not None:
+                    rcpt["change"] = str(v)[:120]
             receipts.append(rcpt)
         else:
             blocked.append({"spec": spec, "tool": name, "reason": reason,
@@ -5973,6 +6091,11 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                                     clause5a)
     # 5b. 确认式导航（NAVIGATE: 帧、无 AUTO_NAVIGATE:）却回复到达声称 →
     #     页面实际未跳转（前端等确认）
+    #     **20260926 起休眠**：navigate 技能恒发 confirm=false、前端确认卡停用 ⇒
+    #     生产里再没有 NAVIGATE: 帧（没有产者）。判据与测试都留着（`navigate_to`
+    #     的 confirm 形参没删，恢复确认式只需改回技能模板那一行）；与之配套的
+    #     提示词禁令（"不得说「点确定我就过去」"）反而因此变成了**纯兜底**：
+    #     那句话在没有确认框的世界里只能是空承诺，由洞⑥ `_confirm_claim` 拦。
     if plan["skill"] == "navigate" and "NAVIGATE:" in tool_text and "AUTO_NAVIGATE:" not in tool_text:
         if _NAV_ARRIVAL_RE.search(reply):
             logger.info("[gate] NAVIGATE 确认帧 + 到达声称 → fallback")
@@ -6061,6 +6184,10 @@ def route_after_execute(state: AgentState) -> Literal["planner", "reflector", "e
         绝不能去 model——narrator 面对"零工具帧 + 一条待确认的写"最可能的输出
         就是"我已经帮您建好啦"（那正是 gate 一直在打的地鼠）。图到此为止，
         弹窗那一轮的回复文本由 execute 侧确定性给出（confirm_text）。
+      - noop_note（20260926）→ **end**：多件里**没有一件需要动**（状态全已达成），
+        卡都不弹、零执行。理由同上、且更硬：这一轮连"待确认"都没有，narrator 手里
+        只有一个"主人要办的事已经就是那个样子"的负事实——那正是它最容易讲成
+        "我已经帮你办好了"的形状。回复文本同样由 execute 侧确定性给出（noop_text）。
       - 本轮无受阻项 → planner（正常多轮循环：看工具返回再决策，现状不变）
       - 有受阻项但都是首现（planner rule5 的合法改参重试空间，零新增 LLM）→
         planner 按错误修正重试
@@ -6068,6 +6195,8 @@ def route_after_execute(state: AgentState) -> Literal["planner", "reflector", "e
         reflector 复盘（≤2 次 LLM），不再让 planner 盲试第三遍
     """
     if state.get("pending_confirm"):
+        return "end"
+    if state.get("noop_note"):
         return "end"
     # 确认轮执行成功 → **直去 narrator**（20260921）：这一轮不存在"再规划一次"
     # 的任何理由（清单是签过名的），多回一趟 planner 只是多烧一次 LLM 决策、
@@ -6183,4 +6312,5 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
             "reflect_end": False, "tool_data": [], "fallback_text": "",
             "gate_replan": False,
             "pending_confirm": None, "confirm_text": "",
+            "noop_text": "", "noop_note": "",
             "confirm_grant": confirm_grant, "ledger": ledger or {}}

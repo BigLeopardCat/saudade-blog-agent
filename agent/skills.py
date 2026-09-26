@@ -421,26 +421,30 @@ SKILLS: list[Skill] = [
     Skill(
         name="navigate",
         capability="跳转到站内任意板块（首页/留言板/说说/时间轴/关于我/物联网控制台…）",
-        description="用户要求前往/去/回/回到/返回/打开/跳转/访问/进入/转到某个页面时使用；主动向用户推荐某个页面时也可使用。",
+        description="用户要求前往/去/回/回到/返回/打开/跳转/访问/进入/转到某个页面时使用。",
         inputs={
             "target": "页面别名（从导航映射表取值）：首页/留言板/说说/时间轴/关于我/登录/物联网平台等；"
                       "后台各面板：后台（=后台主页）/后台笔记/后台说说/后台图库/后台公告/"
                       "后台用户管理/后台数据板/后台站点设置（面板名不带「后台」也可，除主页与说说）",
-            "mode": "direct（用户明确要求跳转）或 suggest（主动推荐，需用户确认）",
         },
         # target 必填（20260925）：target 由本技能自己的代码消费（查 NAV_MAP），
-        # 模板里的 `$path`/`$confirm` 是死代码 ⇒ 派生出不来，只能显式声明。
+        # 模板里的 `$path` 是死代码（`path` 由本分支从 NAV_MAP 算出）⇒ 派生出不来，
+        # 只能显式声明。
         # 漏 target 的后果此前是**一句面向用户的假话**：走到"无法识别导航目标「」"
         # 那一支，如实告知访客「站内没有该页面」——而真相是参数没给。现在改成
         # 零工具 + 「必填参数没给」，让 planner 下一轮把 target 补上或转 chat。
         required_params=("target",),
-        plan=[("navigate_to", {"path": "$path", "confirm": "$confirm"})],
+        # confirm 恒 False（20260926）：原来的 mode 参数（direct/suggest）没了。
+        # 原因见 reply_contract 那段——"推荐某个页面"不该变成跳转，也就不该有"确认式
+        # 跳转"这回事。`navigate_to` 的 confirm 形参保留（签名不动），本技能不再传 True。
+        plan=[("navigate_to", {"path": "$path", "confirm": False})],
         complete_when="navigate_to 返回 NAVIGATE:/AUTO_NAVIGATE: 帧",
         reply_contract=(
             "跳转由系统执行（navigate_to 工具返回帧）：AUTO_NAVIGATE: 帧已发出 = 页面已跳转，"
-            "可以简短确认；NAVIGATE: 帧 = 已弹出跳转确认、等待访客确认——确认前不得声称"
-            "已到达/已跳转，只能请访客确认跳转；不得在正文输出任何命令前缀文本；"
-            "正文是否再附 Markdown 链接属风格问题，不影响跳转，非必需"
+            "可以简短确认，**不得**说「点确定我就过去」「请确认后我再跳」之类需要访客再操作的话"
+            "（没有确认框这回事，那种话是空承诺）；不得在正文输出任何命令前缀文本；"
+            "**推荐某个页面时不要调用本技能**——直接在正文里给出 Markdown 链接即可；"
+            "正文里是否再附链接属风格问题，不影响跳转，非必需"
         ),
     ),
     Skill(
@@ -1866,7 +1870,8 @@ def instantiate_plan(skill_name: str, params: dict,
     planner_node 据此编码 plan 字段文本。
     特殊处理：
       - navigate：target 经 NAV_MAP 映射；映射为 None（已下线）→ 不调用工具、如实告知；
-        未识别别名 → 如实告知没有该页面；confirm 由 mode 派生
+        未识别别名 → 如实告知没有该页面；confirm **恒 False**（20260926 删掉 mode 参数：
+        跳转一律直达，确认卡已停用）
 
     `role`（20260924）= 本轮调用者角色，只影响 content_query 的 `PARAMS.calls`
     白名单（见 `callable_query_tools`：管理员多一份后台只读清单）。**默认 None =
@@ -1887,6 +1892,9 @@ def instantiate_plan(skill_name: str, params: dict,
     consumed_calls = False
     note = ""
     if skill.name == "navigate":
+        # 跳转恒直达（20260926）：下面三条出口（映射命中/字面路径/模糊归一）都写
+        # `confirm: False`。原来的 `mode` 参数（direct/suggest）已删——见技能定义里
+        # 那段「推荐某个页面不该变成跳转」，`navigate_to` 的 confirm 形参保留未动。
         # target 的事前校验（20260925）：**必须排在本技能自己的映射表判据之前**。
         # 现状是 target 为空时一路落到最后的"无法识别导航目标「」"——那会给访客一句
         # **假话**（"站内没有该页面"），而真相是参数没给（`required_params=("target",)`
@@ -1903,8 +1911,7 @@ def instantiate_plan(skill_name: str, params: dict,
             # 映射表显式标记为已下线（友链等）：不调用工具、如实告知
             note = f"导航目标「{target}」已下线：如实告知访客，不调用任何工具"
         elif mapped:
-            confirm = params.get("mode") != "direct"
-            args = {"path": mapped, "confirm": confirm}
+            args = {"path": mapped, "confirm": False}
             tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
             note = f"目标页: {target} → {mapped}"
         elif target.startswith("/"):
@@ -1913,8 +1920,7 @@ def instantiate_plan(skill_name: str, params: dict,
             # 可能替身跳真实页/出确认帧）；白名单内直用路径。语义推断同样是禁止项
             # （把 /iot 猜成 /device-console/ 属于替身导航）。
             if target in NAV_VALID_PATHS or (target.startswith(_NAV_PREFIX_PATHS) and target.count("/") >= 2):
-                confirm = params.get("mode") != "direct"
-                args = {"path": target, "confirm": confirm}
+                args = {"path": target, "confirm": False}
                 tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
                 note = f"目标页: {target}（字面路径，白名单校验通过）"
             else:
@@ -1930,8 +1936,7 @@ def instantiate_plan(skill_name: str, params: dict,
                 None,
             )
             if fuzzy_hit:
-                confirm = params.get("mode") != "direct"
-                args = {"path": fuzzy_hit, "confirm": confirm}
+                args = {"path": fuzzy_hit, "confirm": False}
                 tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
                 note = f"目标页: {target}（口语模糊归一）→ {fuzzy_hit}"
             else:
@@ -2204,7 +2209,7 @@ def _skill_no_calls_suffix(skill_name: str) -> str:
 #   · **类型/默认值从工具自己的 `args_schema` 派生**：技能模板里的 `$占位` 与工具
 #     参数一对一，因此不需要另维护一张手写参数表（手写名单是漏项来源——20260913
 #     工具枚举、20260925 菜单签名，两次教训一致）；
-#   · **推不出映射的参数**（navigate 的 target/mode、content_query 的 tools/calls、
+#   · **推不出映射的参数**（navigate 的 target、content_query 的 tools/calls、
 #     read_article 的 article_id：由技能自己的代码消费）→ 类型 `any`，**不校验类型**，
 #     只保留散文说明；
 #   · **枚举没有来源**：工具的 JSON Schema 里没有 `enum`（闭集只活在说明文字与工具
@@ -2296,10 +2301,10 @@ def skill_param_specs(skill: Skill) -> dict[str, ParamSpec]:
     **合法集合 = `inputs` 的键**（既有事实，不新增名单）。工具的 `args_schema` 只用来
     给这些名字**派生类型/默认值/必填**（按名字与模板占位符配对），不用来扩集合——
     理由是可证伪的：模板占位符里有一类是**给工具看的管道**，不是给 planner 填的参数。
-    navigate 就是现场：它的模板写着 `$path`/`$confirm`，可这两个值由技能自己的代码
-    从 `NAV_MAP` 算出来（`path` = 映射结果、`confirm` = `mode` 的派生），模板里那两行
-    是**死代码**；把它们当成 planner 可填的参数渲染进菜单，等于请它去填一个没人读的
-    参数（它真填了还会被判成"本技能参数"，连"没人读"的告警都不会响）。
+    navigate 就是现场：它的模板写着 `$path`、`confirm` 写死成字面量 `False`（跳转恒直达，
+    20260926 起删掉了 `mode`），而 `path` 由技能自己的代码算出来（`NAV_MAP` 的映射结果）
+    ⇒ 模板里那一行是**死代码**；把它当成 planner 可填的参数渲染进菜单，等于请它去填一个
+    没人读的参数（它真填了还会被判成"本技能参数"，连"没人读"的告警都不会响）。
     """
     tmap = _template_param_map(skill)
     schemas = tool_arg_schemas()

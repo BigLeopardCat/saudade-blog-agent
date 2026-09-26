@@ -1505,6 +1505,304 @@ def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
             f"或者直接告诉我改成别的。")
 
 
+# ── 「状态已达成」判据（20260926）：已经就是那个样子就别弹卡、别执行 ──────────
+# 要治的病（用户实测）：对一篇**已经收藏**的文章说"收藏这篇"，系统照样弹卡，点确定
+# 还照样走一遍写通道——回执倒是诚实的（工具层短路说"本来就在你的收藏夹里"），可主人
+# 看到的是"一次要不要办的询问 + 一次其实没办的往返"。同一形态在八个族里都有。
+#
+# 判据**只在「读得到现状 + 认得出目标 + 取值就是目标」三条同时成立**时才算已达成；
+# 任何一条不成立（读失败 / 同名多条 / 目标不在快照里 / 参数认不出 / 工具自己会拒绝
+# 这个组合）一律返回 None ⇒ 走原路**照弹卡**。fail-open 的方向永远是弹卡：宁可多问
+# 一次，也**绝不静默拒绝一次主人要的写**（"我以为它办好了"比"它多问了我一句"贵得多）。
+#
+# 与工具层短路的分工（两边都留着，不是重复实现）：工具层管"真被调用时怎么写"，
+# 这里管"该不该弹这张卡、该不该发这次请求"。两边的现状取值必须来自**同一份快照**
+# （note_index / board_index / users / todos / favorites / notifications / messages
+# / 标签字典 / 公告清单）——各读各的必然出现"卡说已达成、工具却照写"的分裂。
+#
+# 现状话术的**一条硬要求**：只写状态、不写动作完成式。判据说"现在就是这个样子"，
+# 说成「已完成 / 已收藏 / 已标记」就会被读成"系统替我做过了一次"（那正是这一族的
+# 另一半病）。词表见下面各族返回的那几句与 tests/test_idem_noop.py 的负断言。
+
+
+def reached_specs(specs, *, index=None, boards=None, notes=None, users=None, todos=None,
+                  favorites=None, notifications=None, messages=None,
+                  announcements=None) -> tuple[list, list]:
+    """写 spec 清单 → `(该弹卡的, 已达成)`。
+
+    纯函数（无网络、无 LLM、无 config）：快照由调用方读好传进来——它们本来就都是
+    `_confirm_popup` 为了**渲染卡面**已经读到手的那几份（账号名录/待办/文章清单/
+    留言清单），只有收藏、通知、站内信、公告四条是这一批**新加**的惰性读。
+
+    `already` 的每一项是 `{"tool", "args", "why"}`，`why` 是给主人看的那半句现状
+    （「文章 12《…》本来就在你的收藏夹里」）——掏空那一轮的整体文案与混合轮末尾那句
+    补充都由它拼出来（`render_noop_text` / `render_already_note`），**不各写一套**。
+
+    ⚠️ 快照**入参形态以 `_confirm_popup` 传的原样为准**，几族并不统一（别按"看起来
+    该是什么形状"改，改了就是判不出）：`notifications` 要的是 `{id: 行}` 映射
+    （`tools.base._note_items` 的产物），而 `messages` 要的是**接口原始返回**
+    （`{inbox, outbox, unread}`）——它上面还有第二个事实（未读封数）是工具的写前
+    基线，所以那半由 `_mailbox_inbox` 在这里现取。其余几族见各臂内的取值。
+    """
+    snaps = {"index": index, "boards": boards, "notes": notes, "users": users,
+             "todos": todos, "favorites": favorites, "notifications": notifications,
+             "messages": messages, "announcements": announcements}
+    kept: list = []
+    already: list = []
+    for spec in specs or []:
+        if not isinstance(spec, dict):
+            kept.append(spec)
+            continue
+        args = spec.get("args") if isinstance(spec.get("args"), dict) else {}
+        why = _reached_one(str(spec.get("tool") or ""), args, snaps)
+        if why:
+            already.append({"tool": spec.get("tool"), "args": args, "why": why})
+        else:
+            kept.append(spec)
+    return kept, already
+
+
+def _reached_one(tool: str, a: dict, s: dict) -> str | None:
+    """单个写 spec 的「现在就已经是你要的样子了吗」→ 现状话术 | None（判不了）。"""
+    # 函数内导入：tools.base 在导入链的上游（它自己延迟导入本模块），模块级互导成环。
+    from tools.base import (_as_article_id, _as_bool, _as_ids, _mailbox_inbox)
+    if tool in ("add_favorite", "remove_favorite"):
+        rows = s.get("favorites")
+        if not isinstance(rows, list):
+            return None                      # 读不到收藏夹 ⇒ 判不了
+        aid = _as_article_id(a.get("article_id"))
+        if aid is None:
+            return None
+        hit = None
+        for r in rows:
+            if isinstance(r, dict) and _as_article_id(r.get("noteId")) == aid:
+                hit = r
+                break
+        want = tool == "add_favorite"
+        if want == (hit is None):
+            # 要收藏而它不在 / 要取消而它在 ⇒ 正是要办的那次写，照弹。
+            return None
+        t = str((hit or {}).get("title") or "").strip()
+        title = f"《{t}》" if t else ""
+        if want:
+            return f"文章 {aid}{title}本来就在你的收藏夹里"
+        return f"文章 {aid}本来就不在你的收藏夹里"
+    if tool in ("read_notifications", "read_messages"):
+        box = s.get("notifications") if tool == "read_notifications" else s.get("messages")
+        if tool == "read_messages":
+            # 信箱快照回的是原始返回（它还带着未读封数给工具当写前基线），
+            # 收件箱那半用**与工具同一个函数**取，不在这里重解一遍形态。
+            box = _mailbox_inbox(box) if isinstance(box, dict) else None
+        if not isinstance(box, dict):
+            return None
+        if _as_bool(a.get("all")) is True:
+            for r in box.values():
+                # `is not True`（不是 falsy 判据）：形态脏的行算"没读到已读"，照弹。
+                if not isinstance(r, dict) or r.get("isRead") is not True:
+                    return None
+            if tool == "read_notifications":
+                return "你的通知本来就没有未读的"
+            return "你的收件箱本来就没有未读的信"
+        ids = _as_ids(a.get("ids"))
+        if not ids:
+            return None                      # 没说清是哪几条（工具也会拒绝）
+        for i in ids:
+            if i not in box:
+                # 名单外的 id 走的是工具的 not_found 那条路（"最近 100 条里没有"），
+                # 那不是"已达成"，是一条要如实说清的失败——照弹。
+                return None
+            if box[i].get("isRead") is not True:
+                return None
+        noun = "通知" if tool == "read_notifications" else "站内信"
+        return f"{noun} {'、'.join(str(i) for i in ids)} 本来就是已读状态"
+    if tool in ("freeze_account", "unfreeze_account"):
+        users = s.get("users")
+        if not isinstance(users, dict) or not users:
+            return None
+        name = str(a.get("name") or "").strip()
+        row = _account_row(users, name)
+        if row is None:
+            return None                      # 名录里没这个名字 ⇒ 工具的拒绝路，不是已达成
+        frozen = _row_frozen(row)
+        if frozen is None:
+            return None                      # 状态读不出（不许当成"正常"）
+        want = tool == "freeze_account"
+        if bool(frozen) != want:
+            return None
+        # 状态词**不带「已」**（见本节头注那条硬要求）：写「现在就是冻结状态」而不是
+        # 「已冻结」——后者在气泡里读起来像"系统刚替你冻了一次"。
+        return (f"账号「{name}」（账号 id={row.get('id')}）"
+                f"现在就是{'冻结' if want else '正常'}状态")
+    if tool == "complete_dashboard_todo":
+        text = str(a.get("text") or "").strip()
+        row, _n, have, _total = _todo_face_row(s.get("todos"), text)
+        # 同名多条时 row 是 None（`_todo_face_row` 只认唯一命中）：那是"分不清是哪一条"，
+        # 与"已经完成了"是两件事，照弹。
+        if not have or row is None or row.get("done") is not True:
+            return None
+        return f"待办「{text}」本来就是完成状态（{render_todo_when(row)}）"
+    if tool == "set_article_status":
+        aid = _as_article_id(a.get("article_id"))
+        notes = s.get("notes")
+        row = notes.get(aid) if isinstance(notes, dict) and aid is not None else None
+        if not isinstance(row, dict):
+            return None                      # 清单里没有这一篇 ⇒ 工具会拒绝，不是已达成
+        has_status = a.get("status") is not None and str(a.get("status")).strip() != ""
+        has_top = a.get("is_top") is not None and str(a.get("is_top")).strip() != ""
+        if not has_status and not has_top:
+            return None
+        want_status = normalize_status(a.get("status")) if has_status else None
+        want_top = normalize_top(a.get("is_top")) if has_top else None
+        if (has_status and want_status is None) or (has_top and want_top is None):
+            return None                      # 目标值认不出 ⇒ 工具拒绝，照弹
+        # 与 tools.set_article_status 的 `same` **逐项同判**：只判点名的那些字段
+        # （没点名的字段保持不动，所以它是什么不影响"这次改动有没有必要"）。
+        if not ((want_status is None or normalize_status(row.get("status")) == want_status)
+                and (want_top is None or normalize_top(row.get("isTop")) == want_top)):
+            return None
+        now_cn = "、".join(filter(None, [
+            status_cn(row.get("status")) if has_status else "",
+            top_cn(row.get("isTop")) if has_top else ""]))
+        return f"文章 {aid}{_title_of(row)}本来就是{now_cn}"
+    if tool == "set_article_tags":
+        index = s.get("index")
+        notes = s.get("notes")
+        aid = _as_article_id(a.get("article_id"))
+        row = notes.get(aid) if isinstance(notes, dict) and aid is not None else None
+        if not isinstance(index, dict) or not isinstance(row, dict):
+            return None                      # 字典/清单读不到 ⇒ 名字对不上 id，判不了
+        if a.get("replace") is not None and (a.get("add") or a.get("remove")):
+            return None                      # 工具自己会拒绝这个组合，轮不到判已达成
+        cur = parse_tag_ids(row.get("noteTags"))
+
+        def _ids(items) -> list[int] | None:
+            """名字/数字混合列表 → id 列表；**认不出任何一个就整条判不了**（None）。"""
+            out: list[int] = []
+            for it in items:
+                i = _as_article_id(it)
+                if i is None:
+                    hit, _cands = find_tag(index, str(it))
+                    if hit is None:
+                        return None
+                    i = hit.id
+                out.append(i)
+            return out
+
+        if a.get("replace") is not None:
+            new = _ids(_name_list(a.get("replace")))
+        else:
+            add_ids = _ids(_name_list(a.get("add")))
+            rm_ids = _ids(_name_list(a.get("remove")))
+            if add_ids is None or rm_ids is None or (not add_ids and not rm_ids):
+                return None
+            new = [i for i in cur if i not in rm_ids]
+            for i in add_ids:
+                if i not in new:
+                    new.append(i)
+        if new is None or new != cur:
+            return None
+        title = _title_of(row)
+        # 标题与「的标签」之间那个空格只在**没有标题**时才补（`_confirm_one` 的同一条）：
+        # 「《架构漫谈》 的标签」读起来像两个并列短语。
+        return (f"文章 {aid}{title}"
+                f"{'的标签' if title else ' 的标签'}本来就是{render_tag_list(cur, index)}")
+    if tool == "audit_board_comment":
+        # **只判审核**：删除没有"已经是这个状态"这回事（删一条已删的没有同值可比）。
+        v = normalize_verdict(a.get("verdict"))
+        if v is None:
+            return None
+        # `_match_board` 判不了（清单没读到 / 片段对不上 / 命中多条）时返回 None：
+        # 与工具 `_find_board_comment` 同一判据，照弹。
+        hit = _match_board(s.get("boards"), a.get("quote"))
+        if hit is None or hit.get("approved") != BOARD_VERDICT_APPROVED[v]:
+            return None
+        who = str(hit.get("author") or hit.get("nickname") or "").strip()
+        return (f"留言 #{hit.get('talkKey')}{f'（{who} 的）' if who else ''}"
+                f"现在就是{BOARD_VERDICT_CN[v]}状态")
+    if tool == "create_tag":
+        index = s.get("index")
+        if not isinstance(index, dict):
+            return None
+        name = str(a.get("title") or "").strip()
+        if not name:
+            return None
+        color_spec = str(a.get("color") or "").strip()
+        hexval = match_tag_color(color_spec) if color_spec else None
+        if color_spec and hexval is None:
+            return None                      # 色认不出 ⇒ 工具拒绝，照弹
+        pname = str(a.get("parent_tag") or "").strip()
+        pid = None
+        if pname:
+            parent, _cands = find_tag(index, pname, level=1)
+            if parent is None:
+                return None                  # 父标签不存在（或同名多条）⇒ 另说，照弹
+            pid = parent.id
+        hit, _cands = find_tag(index, name, pid)
+        # 与 tools.create_tag 的复用判据逐字同形：同名**同层**才算"已经在站里"。
+        if hit is None or not (pid is not None or hit.level == 1):
+            return None
+        # 点名了颜色就必须也是那个色：同名标签是别的颜色时，主人要的那个标签其实
+        # **还没有**（工具那条路会复用并如实说出色差）——这是"已达成"之外的一件事。
+        if hexval is not None and (hit.color or "").strip().lower() != hexval.lower():
+            return None
+        return f"标签「{hit.label}」本来就在站里（id={hit.id}，{level_cn(hit)}标签）"
+    if tool == "update_announcement":
+        rows = s.get("announcements")
+        if not isinstance(rows, dict):
+            return None
+        title = str(a.get("title") or "").strip()
+        if not title:
+            return None
+        hits = [r for r in rows.values()
+                if isinstance(r, dict) and str(r.get("title") or "").strip() == title]
+        if len(hits) != 1:
+            return None                      # 同名多条/没有这条 ⇒ 工具的拒绝路，照弹
+        hit = hits[0]
+        nt = str(a.get("new_title") or "").strip()
+        nc = str(a.get("content") or "").strip()
+        if not nt and not nc:
+            return None
+        cur_t = str(hit.get("title") or "").strip()
+        cur_c = str(hit.get("content") or "")
+        # 与 tools.update_announcement 的 noop 判据同形（未点名的字段原样带上）。
+        if (nt or cur_t) != cur_t or (nc or cur_c.strip()) != cur_c.strip():
+            return None
+        return f"公告「{cur_t}」本来就是现在这个标题与正文"
+    return None
+
+
+def _title_of(row) -> str:
+    """文章行 → `《标题》`（没有标题就什么都不写，不补占位）。"""
+    t = str((row or {}).get("noteTitle") or "").strip()
+    return f"《{t}》" if t else ""
+
+
+def render_noop_text(already) -> str:
+    """「状态已经是这个值」那一轮的**气泡正文**（确定性中文，不经 narrator）。
+
+    三条硬要求：① 印出**现状值**（主人要能核对）；② 明说**没有做任何改动**、
+    连写请求都没发出去；③ **不许出现动作完成式**（「已完成 / 已收藏 / 已标记 /
+    已冻结」会被读成"系统替我做过了一次"）——说状态，不说动作。
+    """
+    parts = "；".join(str(x.get("why") or "").strip() for x in (already or []))
+    return (f"这几件现在就已经是你要的样子了：{parts}。\n\n"
+            f"所以这一轮**没有做任何改动**——连写请求都没有发出去，"
+            f"你要的状态本来就在。要改的话直接说要改成什么样就行。")
+
+
+def render_already_note(already) -> str:
+    """混合轮（既有该弹卡的、也有已达成的）挂在确认正文**末尾**的那句补充。
+
+    必须挂在末尾而不是混进正文：主人点「确定」时要知道**这一批到底包含哪几件**
+    （已达成的那几件不在里面），否则他会以为点一下两件都办了。
+    """
+    parts = "；".join(str(x.get("why") or "").strip() for x in (already or []))
+    if not parts:
+        return ""
+    return (f"\n\n（另外，{parts}——这几件**没有列进这一批**，"
+            f"点「确定」只会办前面那几件。）")
+
+
 # ── 后台写：目标校验（"没读到过就不许写"）────────────────────────────
 # 形态与 agent/authz.py 的三件套（REASON_* / *_frame / *_error_reason）一致——
 # 原因码是 planner 的输入（rule5 按原因码决定改参还是去问），帧是给 planner 读的，

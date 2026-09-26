@@ -87,8 +87,9 @@ def test_specs_derive_from_tool_schema():
     check("必填性 = 工具 required，仅被技能的两条声明盖掉", not bad, "；".join(bad[:4]))
 
     # 推不出映射的参数（技能自己的代码消费）→ any，且必须显式声明必填性
+    # 20260926：navigate 的 `mode` 已删（导航恒直达）⇒ 它不再是"推不出映射的
+    # 参数"，留在这里会变成对一条不存在的声明的断言（红得与被测代码无关）。
     for sk_name, pname, want_req in (("navigate", "target", True),
-                                     ("navigate", "mode", False),
                                      ("content_query", "tools", False),
                                      ("content_query", "calls", False)):
         sp = specs[sk_name][pname]
@@ -126,7 +127,10 @@ def test_param_set_is_inputs_only():
     print("\n[集合] 合法参数 = inputs 的键；模板死占位符不进去")
     # 已知的死占位符（模板里有、但值由技能自己的代码算出来，planner 填了也没人读）。
     # 新增一个就红——那时要选：要么进 inputs（planner 真填），要么进这里并写明理由。
-    KNOWN_DEAD = {("navigate", "path"), ("navigate", "confirm")}
+    # 20260926：`("navigate","confirm")` 从这张表里**移出**了——不是因为放宽判据，
+    # 而是它已经不是占位符：模板改写成字面量 `False`（导航恒直达），死占位符只剩
+    # `$path` 一个。判据本身（"模板里 planner 不该填的占位符，新增一个就红"）没动。
+    KNOWN_DEAD = {("navigate", "path")}
     seen_dead, wrong = [], []
     for sk in S.SKILLS:
         tmap = S._template_param_map(sk)
@@ -140,13 +144,13 @@ def test_param_set_is_inputs_only():
         if extra:
             wrong.append(f"{sk.name} 参数表溢出 inputs：{sorted(extra)}")
     check("没有新的模板死占位符", not wrong, "；".join(wrong[:4]))
-    check("已知死占位符正好是 navigate 的 path/confirm",
+    check("已知死占位符正好是 navigate 的 path（confirm 20260926 起是字面量、不是占位符）",
           sorted(seen_dead) == sorted(KNOWN_DEAD), str(sorted(seen_dead)))
 
     # 菜单渲染：navigate 一行里不许出现 path/confirm（它们是模板管道，不是可填参数）
     sig = S.render_skill_params(S.SKILL_MAP["navigate"])
-    check("navigate 菜单只列 target/mode", ("target" in sig and "mode" in sig
-                                          and "path" not in sig and "confirm" not in sig), sig)
+    check("navigate 菜单只列 target", ("target" in sig and "mode" not in sig
+                                     and "path" not in sig and "confirm" not in sig), sig)
     check("无参技能渲染成空串（不产生空白的「参数：」行）",
           all(not S.render_skill_params(s) for s in S.SKILLS
               if not s.inputs), "")
@@ -270,7 +274,7 @@ def test_unknown_params_are_loud_but_not_blocking():
           p["tools"] == ['toggle_effect({"effect": "sakura", "action": "on"})'], str(p["tools"]))
     check("  多写的参数不进实参", "speed" not in (p["tools"][0] if p["tools"] else ""), "")
     check("  也不进 dropped（dropped 是工具可达性）", p["dropped"] == [], str(p["dropped"]))
-    p = S.instantiate_plan("navigate", {"target": "留言板", "path": "/x", "mode": "direct"})
+    p = S.instantiate_plan("navigate", {"target": "留言板", "path": "/x"})
     check("navigate 填了模板死占位符 path ⇒ 记成没人读的参数",
           p["param_unknown"] == ["path"], str(p["param_unknown"]))
 
@@ -358,10 +362,10 @@ def test_wiring():
 
     # 端到端：菜单里对 navigate 说的参数集，正好等于校验接受并会消费的集合
     sig = S.render_skill_params(S.SKILL_MAP["navigate"])
-    p = S.instantiate_plan("navigate", {"target": "留言板", "mode": "direct"})
-    check("菜单说的 target/mode 都能被消费（说得到、用得上）",
-          all(k in sig for k in ("target", "mode")) and p["param_unknown"] == []
-          and p["tools"], f"{sig} / {p['tools']}")
+    p = S.instantiate_plan("navigate", {"target": "留言板"})
+    check("菜单说的 target 都能被消费（说得到、用得上）",
+          "target" in sig and p["param_unknown"] == [] and p["tools"],
+          f"{sig} / {p['tools']}")
 
 
 def main():
