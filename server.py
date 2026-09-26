@@ -800,6 +800,18 @@ def _leaf(value, normalize=None, word=None) -> str:
     return s[:12]
 
 
+def _todo_preview(value, limit: int = 24) -> str:
+    """待办正文 → 过程行用的**预览**（20260926）。
+
+    截断只发生在这一处、且**带上省略号**：这一行是执行前发出的灰色预告，主人核对
+    的那一面是确认卡（`adminops` 那两张卡与两条回执都印全文），所以它短一点没关系；
+    但裸切一刀（`body[:24]`）看上去就是"系统只记了这半句"——真实现场里主人正是
+    这么问的（trace `20260926T094843`）。
+    """
+    s = str(value or "").strip()
+    return s if len(s) <= limit else s[:limit] + "…"
+
+
 def _names_phrase(value) -> str:
     """标签名/ id 列表 → 「A、B、C」。"""
     items = list(value) if isinstance(value, (list, tuple)) else [value]
@@ -1006,20 +1018,24 @@ def _tool_action_text(name: str, args: dict | None) -> str:
         # 后台首页待办 / 日程（20260926 补臂）：**写**的那件。正文按
         # device_oled_display 的同款截断（24 字）——待办正文上限 200 字，过程行放不下；
         # 落库回执（Rust render_exec_row）按列宽自己去截，两侧**措辞一致**即可。
-        body = str(a.get("text") or "").strip()
+        # ⚠️ 这一行是**预告**（灰色过程行），不是主人核对用的那一面——卡面与回执都
+        # 必须印全文（见 `adminops.render_todo_added` 头注里那次真实现场）。截断要
+        # **带省略号**：裸切一刀会读成"系统只记了这半句"。
+        body = _todo_preview(a.get("text"))
         if not body:
             return "添加待办"
         due = str(a.get("date") or "").strip()
-        head = f"添加待办「{body[:24]}」"
+        head = f"添加待办「{body}」"
         return f"{head}（{due}）" if due else head
     if name == "complete_dashboard_todo":
         # 后台首页待办 / 日程（20260926 第十轮）：**勾完成**那件。正文同样按 24 字截断
-        # （待办正文上限 200 字，过程行放不下；落库回执那侧按列宽自己去截，两侧**措辞
-        # 一致**即可，同上面 create_dashboard_todo 那条注）。这里刻意**不写**「已完成」：
-        # 这一行是**预告**（执行前发的过程行），而后端在幂等分支上是真 no-op；把结果写进
-        # 动作名会让"本来就是完成"那一次看起来也改了什么（回执那侧另有 `changed` 判据）。
-        body = str(a.get("text") or "").strip()
-        return f"把待办「{body[:24]}」勾成完成" if body else "勾完成待办"
+        # 并带省略号（待办正文上限 200 字，过程行放不下；落库回执那侧按列宽自己去截，
+        # 两侧**措辞一致**即可，同上面 create_dashboard_todo 那条注）。这里刻意**不写**
+        # 「已完成」：这一行是**预告**（执行前发的过程行），而后端在幂等分支上是真 no-op；
+        # 把结果写进动作名会让"本来就是完成"那一次看起来也改了什么（回执那侧另有
+        # `changed` 判据）。
+        body = _todo_preview(a.get("text"))
+        return f"把待办「{body}」勾成完成" if body else "勾完成待办"
     if name in _NOARG_VERB:
         return _NOARG_VERB[name]
     return f"执行 {name}"

@@ -564,7 +564,16 @@ def render_change(pairs) -> tuple[str, str]:
 
 
 def clip(text: str, limit: int = 60) -> str:
-    """回执字段截断（Rust 侧 detail 列宽有限，先在这边收口，避免被截在半截字符上）。"""
+    """**密表/帧**里的字段截断（Rust 侧 detail 列宽有限，先在这边收口，避免被截在
+    半截字符上）。
+
+    ⚠️ **不许拿它量确认卡的面**（20260926 的现场）：卡面、以及"下一轮 narrator 唯一
+    取值来源"的那条回执行，都必须印主人要核对的那段字**全文**——`clip` 截了还不带
+    节选标注，读起来就是完整的一句。真实现场（trace `20260926T094843`）：主人要记的
+    待办 150 字，卡面与回执都给了「…/20260926/2…」，narrator 只能照着念，主人问
+    "为什么和我要的内容不一样、显示截断了"。要截的一面必须有**明确的节选标注**
+    （正面例子见 `render_notice_status`：「（节选，共 N 字）」）。
+    """
     s = str(text)
     return s if len(s) <= limit else s[:limit] + "…"
 
@@ -908,11 +917,17 @@ def render_todo_list(rows, *, today=None) -> str:
 
 
 def render_todo_added(text: str, date: str | None = None) -> str:
-    """追加成功的回执行。**说清加的是什么、排在哪天**，并点明它在哪（后台首页的
-    待办卡）——这条是主人自己那份列表，不是对外可见的东西，回执行不必吓唬他，
-    但必须让他知道去哪儿看。"""
+    """追加成功的回执行。**正文一字不改地进回执**（20260926 修，见本节上方那段
+    "正文是唯一的指认方式"）——回执行是 narrator 唯一的取值来源，它截到 60 字，
+    narrator 就**只能**照着那个截断版念给主人（真实现场：trace `20260926T094843`，
+    主人要记的那条 150 字，回执给的是「…/20260926/2…」、回复里也是「…2…」，
+    主人问"为什么和我要的内容不一样、显示截断了"）。`_TODO_TEXT_LIMIT` = 200 字，
+    回执行整行 ~240 字，没有撑爆谁的问题；要截也必须像 `render_notice_status`
+    那样**标注节选**，不能截了还读成完整的。
+    **说清加的是什么、排在哪天**，并点明它在哪（后台首页的待办卡）——这条是主人
+    自己那份列表，不是对外可见的东西，回执行不必吓唬他，但必须让他知道去哪儿看。"""
     when = f"排期 {due_date_cn(date)}" if date else "未排期"
-    return (f"已在后台首页的待办里加了一条「{clip(text, 60)}」（{when}）"
+    return (f"已在后台首页的待办里加了一条「{str(text or '').strip()}」（{when}）"
             f"（后台已复核：列表里读到了这一条）")
 
 
@@ -962,7 +977,10 @@ def render_todo_done_action(text: str, todos=None) -> str:
       · 快照没有（读不到列表）→ 只印正文。
     """
     want = str(text or "").strip()
-    act = f"把待办「{clip(want, 60)}」勾成完成"
+    # **一格都不截**（20260926 修）：上面那三行注释写的就是这条要求，此前实现的却是
+    # `clip(want, 60)`——注释与代码互相打脸了一个月，而"卡面印的是截断版"这件事在
+    # 长正文上是**真的会让人盲签**（主人核对的是「…」前面那 60 字，系统勾的是整条）。
+    act = f"把待办「{want}」勾成完成"
     row, n, have, total = _todo_face_row(todos, want)
     if not have:
         return act
@@ -982,8 +1000,12 @@ def render_todo_done(text: str, *, changed: bool = True) -> str:
     `changed=False` = 写前它就是完成态（后端那次是真 no-op，走的是幂等分支）——
     **必须与"刚勾的"分开说**（同 `account_change_phrase`）：主人这一下什么都没
     发生，短路成"已勾成完成"会让回执读成一个动作。
+
+    正文同样**不截**（与卡面同源同事实，20260926）：回执行是下一轮 narrator 的
+    取值来源，截了它 narrator 就只能念截断版（`render_todo_added` 里那次真实现场
+    的同一个道理）。
     """
-    want = clip(str(text or "").strip(), 60)
+    want = str(text or "").strip()
     if not changed:
         return (f"待办「{want}」**本来就是完成状态**，这次没有发生任何变更（没有重复勾）")
     return (f"已把待办「{want}」勾成完成"
@@ -1408,7 +1430,13 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         text = str(a.get("text") or "").strip()
         raw_date = a.get("date")
         when = due_date_cn(raw_date) if str(raw_date or "").strip() else "未排期"
-        head = f"在后台首页的待办里加一条「{clip(text, 60) or '（没写内容）'}」，排期 {when}"
+        # **一格都不截**（20260926 修）：上面那段注释写着"逐字念出正文"，实现的却是
+        # `clip(text, 60)`——`clip` 是**回执字段**的收口工具（Rust 侧 detail 列宽有限），
+        # 用在卡面上就是拿列宽的尺子量主人要核对的那句话。真实现场（trace
+        # `20260926T094843`）：150 字的待办，卡面给的是「…/20260926/2…」，主人点
+        # 「确定」时核对的是半截话。正文上限本来就是 200 字（`_TODO_TEXT_LIMIT`），
+        # 印全没有一个撑不下的地方。
+        head = f"在后台首页的待办里加一条「{text or '（没写内容）'}」，排期 {when}"
         return head + "（那是你自己那份列表，加完随时能改能删）"
     if tool in ("freeze_account", "unfreeze_account"):
         # 账号冻结/解冻（20260926）：措辞的三条硬要求见本节上方 `_ACCOUNT_*` 那段。
