@@ -15,6 +15,11 @@ planner 与 narrator ⇒ 指代可以**零调用直接取值**（见 graph.py �
 纪律：
   · 只搬事实、不做判断（摘要里的数字/条目原文必须与工具返回一致）；
   · 解析失败/形态不符一律返回空串——**绝不猜**（空摘要退化为改动前的行为）；
+  · **id 一律带命名空间**（20260926 批 4）：`noteId:` / `notifId:` / `mailId:`
+    （留言是 `talkId:`、用户是 `userId:`，见 tools/base.py::_board_label）。
+    帧里几个 id 命名空间并存，裸数字没有东西说明它是哪一种——trace
+    `20260924T030031` 实证 planner 把留言 id 当文章 id 去调 `get_article_detail`。
+    别名与 tools/base.py / reports.py 的渲染同一套，改一处要全改。
   · 纯函数、零 LLM、可离线单测（tests/test_entities.py）。
 """
 from __future__ import annotations
@@ -25,6 +30,9 @@ import re
 
 # 摘要总长上限：Rust 侧 detail 列 varchar(300)，动作行 + 摘要一起截断；
 # 留足动作行空间（"查看留言板"约 10 字），并防 8 行窗口把注入串（上限 1500）撑爆。
+# 20260926 批 4（id 具名，见下）给每条加了 5–8 字的命名空间前缀 ⇒ 满档时少列一条
+# ——**这是知道的取舍**：150 这个数是按"8 行 × 150 < 1500 注入上限"定的，动它要连带
+# 重算注入预算；而"id 被当别的物件用"是已经发生过的事故（trace 20260924T030031）。
 _DIGEST_MAX = 150
 _ITEM_MAX = 5          # 列表类最多列几条（"第N条"的 N 要数得出来，不截太狠）
 _TITLE_MAX = 6         # 标题/id 候选最多列几个
@@ -166,7 +174,7 @@ def _note_digest(data, label: str) -> str:
         nid = r.get("noteKey") or r.get("key") or r.get("noteId") or r.get("id")
         title = _clip(r.get("noteTitle") or r.get("title") or "", 22)
         if nid is not None and title:
-            items.append(f"{nid}《{title}》")
+            items.append(f"noteId:{nid}《{title}》")
     return f"{label}: " + _join(items) if items else ""
 
 
@@ -197,7 +205,7 @@ def _notification_digest(data) -> str:
         nid = r.get("id")
         mark = "" if r.get("isRead") else "（未读）"
         if isinstance(nid, int) and not isinstance(nid, bool):
-            items.append(f"{nid}《{title}》{mark}")
+            items.append(f"notifId:{nid}《{title}》{mark}")
         else:
             items.append(f"{title}{mark}")
     head = f"通知共 {len(rows)} 条（未读 {unread}）"
@@ -237,7 +245,7 @@ def _unread_digest(data) -> str:
             continue
         nid = r.get("id")
         if isinstance(nid, int) and not isinstance(nid, bool):
-            parts.append(f"{nid}《{title}》")
+            parts.append(f"notifId:{nid}《{title}》")
         else:
             parts.append(f"《{title}》")     # 缺 id 不写假 id（缺字段绝不编）
     return f"{base} — 未读通知: " + _join(parts) if parts else base
@@ -275,11 +283,11 @@ def _mailbox_digest(data) -> str:
         mid = r.get("id")
         has_id = isinstance(mid, int) and not isinstance(mid, bool)
         if title:
-            body = f"{mid}《{title}》" if has_id else f"《{title}》"
+            body = f"mailId:{mid}《{title}》" if has_id else f"《{title}》"
         else:
             # 标题是真的空（历史信件 title 列是 NULL）——那是事实不是缺字段，但
             # **别写成 `9《（无标题）》`**（括号套括号，会被读成标题就叫「（无标题）」）。
-            body = f"{mid}（无标题信）" if has_id else "（无标题信）"
+            body = f"mailId:{mid}（无标题信）" if has_id else "（无标题信）"
         peer = _clip(r.get("peerName") or "", 8)
         if peer:
             body += f"寄自{peer}"

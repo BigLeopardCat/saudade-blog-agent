@@ -943,7 +943,7 @@ with patch(_board_index=lambda c: bidx()):
 
     hit, err = base._find_board_comment("谢谢站长的分享！", None)
     check("片段撞车（2 条都含）→ 不替主人挑，列出候选（带 id/作者/原文）",
-          hit is None and "站内有 2 条留言都含" in err and "#13" in err and "#14" in err,
+          hit is None and "站内有 2 条留言都含" in err and "talkId:13" in err and "talkId:14" in err,
           str(err))
     check("  · 撞车时**零请求**（挑错一条就是把别人的留言驳回了）",
           "本次未改动" in err and "更完整的原话" in err, str(err))
@@ -980,7 +980,7 @@ with patch(_board_index=_Seq(bidx(), bstate(**{"12": 1})), _admin_request=put):
           and r.meta.get("board_id") == 12 and r.meta.get("board_author") == "路人甲"
           and r.meta.get("change") == "待审 → 通过", f"{r.kind}: {r.meta}")
     check("  回执说清这一动作**可改判**（否则主人会以为留言没了）",
-          "对所有访客可见" in r and "#12" in r, str(r))
+          "对所有访客可见" in r and "talkId:12" in r, str(r))
 
 put = _Req("Audited")
 with patch(_board_index=_Seq(bidx(), bstate(**{"14": 2})), _admin_request=put):

@@ -779,7 +779,11 @@ def render_announcement_deleted(row) -> str:
 # 与写工具同一条纪律：**措辞里不带工具名**（带了会让 narrator 复述内部名字），
 # 且必须把"这一动作可逆/不可逆"说清——审核可以改判（驳回的能再放行），删除不行。
 def _board_ref(row) -> str:
-    """回执行里的留言指称：`#id 「正文片段」（作者）`。
+    """回执行里的留言指称：`talkId:<id> 「正文片段」（作者）`。
+
+    **id 带命名空间**（20260926 批 4，理由见 tools/base.py::_board_label）：这行会
+    落进跨轮执行记忆，下轮主人说"把刚才那条删了"时，planner 读到的必须是一个
+    知道该拿去哪儿的 id，而不是一个可以当文章 id 用的裸数字。
 
     正文片段是**这条留言在跨轮记忆里唯一的可认物**（下轮主人说"把刚才那条删了"
     要能对上号），作者名字同理；时间不进回执行（列宽 300，读侧只留最近 8 行）。
@@ -789,7 +793,7 @@ def _board_ref(row) -> str:
     body = clip(sanitize_untrusted((row or {}).get("content") or "", 30), 30)
     who = clip(sanitize_untrusted((row or {}).get("author") or "", 16), 16)
     tail = f"（{who} 的留言）" if who else ""
-    return f"#{row.get('talkKey')} 「{body}」{tail}"
+    return f"talkId:{row.get('talkKey')} 「{body}」{tail}"
 
 
 def render_board_audited(row, verdict: str) -> str:

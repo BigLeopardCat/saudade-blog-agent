@@ -2287,7 +2287,13 @@ def _board_index(config: RunnableConfig) -> dict[int, dict] | None:
 
 
 def _board_label(row: dict) -> str:
-    """一条留言的指称（问句/回执行共用）：`#id 作者（时间）`。
+    """一条留言的指称（问句/回执行共用）：`talkId:<id> 作者（时间）`。
+
+    **id 必须带命名空间**（20260926 批 4）：帧里同时存在好几个 id 命名空间
+    （留言 talkKey、文章 id/key、用户 id、通知 id、信 id），裸 `#96` 没有任何东西
+    说明它是哪一种——trace `20260924T030031` 实证 planner 把通知链接里的留言 id
+    `96` 当成文章 id 去 `get_article_detail`，回来只能说"拿不到内容"。带名字后
+    读的人（和模型）一眼知道该拿它去调哪个工具。
 
     **不带正文**：正文由调用方按需 clip 后拼上（问句要预览、回执行只留列宽），
     而"作者"是访客可控文本（留言时可填），故经 `sanitize_untrusted` 拆命令前缀。
@@ -2296,9 +2302,9 @@ def _board_label(row: dict) -> str:
     from agent.adminops import clip as _clip
     who = sanitize_untrusted(row.get("author") or row.get("nickname") or "", 16)
     if not who:
-        who = f"用户#{row.get('userId')}"
+        who = f"userId:{row.get('userId')}"
     at = str(row.get("createTime") or "")[:16]
-    return f"#{row.get('talkKey')} {_clip(who, 16)}（{at}）"
+    return f"talkId:{row.get('talkKey')} {_clip(who, 16)}（{at}）"
 
 
 def _board_excerpt(row: dict) -> str:

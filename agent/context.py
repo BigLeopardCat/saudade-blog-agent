@@ -750,7 +750,7 @@ def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
             continue             # 两种写法解析到同一篇 ⇒ 只留最近那条（同 id 必同篇）
         if doc_id:
             seen_ids.add(doc_id)
-        line = f"· 《{title}》 id={doc_id}"
+        line = f"· 《{title}》 noteId={doc_id}"
         marks = (["本会话已读过全文"] if read else [])
         if resolved:
             marks.append("站内标题匹配")
