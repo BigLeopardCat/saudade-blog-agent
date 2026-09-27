@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -1392,6 +1393,41 @@ def _write_arg(value) -> str:
     return str(value).strip()
 
 
+_TEMPLATE_TOKEN_RE = re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _unfilled_placeholder(params: dict) -> tuple[str, str] | None:
+    """参数值**就是技能模板自己的占位符**时返回 `(键, 值)`，否则 None（20260928）。
+
+    技能 `plan` 模板里的参数位写的是 `$name` / `$title` 这种**填充记号**（由
+    `expand_template_args` 拿同名参数替换，见它的头注）——它**不是**一个可以照抄的值。
+    模型偶尔会把模板整行原样搬进 PARAMS（全库 trace 仅 1 例：`{"name": "$name"}`，
+    trace `20260927_235721` 的 `account_freeze`），而那一例真的把「冻结账号「$name」」
+    印上了确认卡：主人唯一能核对的那行字是个记号，他一点下去，动的就是一个活人的
+    登录能力。所以判据必须在**展开这一层**拦下（零工具 + 交回 planner 重决策），
+    而不是等卡片印出来才靠人眼发现。
+
+    只认两个**机器能保证**的形态，不判"填得好不好"（那一维靠弹卡给人眼看）：
+      ① 值恰好是 `$` + **它自己这个参数的键名**（模板照抄，实测的唯一形态）；
+      ② 值是一个**裸的 `$词`**（`_TEMPLATE_TOKEN_RE`）——模板记号换了个键名抄进来。
+    正常的主人原话里取到的名字不会长这样；万一真撞上（有人就管一个标签叫 `$foo`），
+    代价是主人被反问一句、而那句话本来办得成——比"印一张记号卡让他盲签"小得多。
+
+    与**参数引用**（`$tool[0].field`）不冲突：引用必须带方括号（`agent/refs.py` 的
+    `REF_RE`），撞不上这两个形态。那一层由 `check_skill_params` / `resolve_args` 管，
+    本函数不碰。
+    """
+    if not isinstance(params, dict):
+        return None
+    for key, val in params.items():
+        if not isinstance(val, str):
+            continue
+        tok = val.strip()
+        if tok == "$" + str(key) or _TEMPLATE_TOKEN_RE.match(tok):
+            return str(key), tok
+    return None
+
+
 _PLACEHOLDER_WRAPS = (("[" , "]"), ("【", "】"), ("（", "）"), ("(", ")"), ("{", "}"),
                       ("<", ">"), ("「", "」"), ("『", "』"), ('"', '"'), ("'", "'"))
 
@@ -2111,6 +2147,18 @@ def _instantiate_plan(skill_name: str, params: dict,
         if tools:
             note = f"按 planner 决策执行：{'、'.join(tools)}"
     elif skill.name in WRITE_SKILL_NAMES:
+        # 模板占位符当值（20260928）：**写分支的最前面**，先于下面所有按技能名的
+        # 分派——因为它判的不是"这个参数填得对不对"，而是"这个值压根不是主人给的，
+        # 是模型把技能模板抄了回来"。放在这里才覆盖得住写族的每一个展开函数
+        # （名字通道 / 自己数据 / 自由文本 / 文章两件），一处判、全族生效。
+        # 用 `_param_problem_plan` 那套现成形状（参数不齐 / 值用不了是**系统已知的处境**，
+        # 洞④ 的豁免读的是 status 而不是注记文案）：planner 同轮内重决策，问清或换技能。
+        _ph = _unfilled_placeholder(params)
+        if _ph:
+            return _param_problem_plan(skill, {
+                "fixed": [], "unknown": [], "missing": [],
+                "bad": [f"{_ph[0]}={_ph[1]!r}（还是技能模板里的占位符，没有被主人"
+                        "原话里的真实值替换）"]})
         # 管理助手写技能（20260921 第二轮起）：**缺参守卫 + 空参剔除**，不复用下方
         # 通用分支。通用分支对缺失参数会实例化出 `{"article_id": null}` 这样的
         # 非法实参（那一路进 JSON 就变成 null，工具侧还得再拦一遍），而写操作最
