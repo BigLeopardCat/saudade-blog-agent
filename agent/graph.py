@@ -92,6 +92,7 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.entities import receipt_digest
 from agent.factblock import action_facts, is_action_family, render_fact_block
+from agent.llm_usage import usage_fields
 from agent.native_plan import (bind_native, finish_reason, tool_call_names,
                                tool_calls_to_plan)
 from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY,
@@ -3318,6 +3319,9 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             "慢调用" if slow else "完成", dur, slow_s, engine)
         record("planner", "llm_done", duration_s=round(dur, 2), engine=engine,
                frames_chars=len(frames_txt), corrected=bool(correction),
+               # 用量（20260927）：`cache_read/input` 是"前缀缓存有没有在生产命中"
+               # 这个问题的唯一数据源——它决定了模板重排这类改动值不值得做。
+               **usage_fields(resp),
                **({"slow": True} if slow else {}))
 
         raw = getattr(resp, "content", str(resp))
@@ -4109,8 +4113,13 @@ def _create_display_text(user_msg: str, page_ctx: str) -> str:
     fallback = "主人来看我啦，今天也要开心喵～"
     try:
         llm = get_llm(temperature=0.7, max_tokens=80, timeout=20, enable_thinking=False)
+        _t0 = time.monotonic()
         resp = llm.invoke(_DISPLAY_CREATE_PROMPT.format(
             user_msg=user_msg[-200:], page_ctx=page_ctx[:200]))
+        # 用量与耗时（20260927）：这条调用此前在 trace 里**只有成功后的文案**，
+        # 连耗时都没有 ⇒ 屏幕文案这一族的成本看不见。事件名与另外三处一致。
+        record("execute", "llm_done", duration_s=round(time.monotonic() - _t0, 2),
+               **usage_fields(resp))
         text = (getattr(resp, "content", str(resp)) or "").strip().strip("\"'“”‘’")
         if not text:
             return fallback
@@ -6634,6 +6643,7 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
         record("reflector", "terminal", reason="llm_error", round=rounds + 1)
         return _terminal("受阻复盘 LLM 异常，按已验收执行如实收尾", rounds + 1)
     dur = time.monotonic() - _t0
+    record("reflector", "llm_done", duration_s=round(dur, 2), **usage_fields(resp))
     logger.info("[reflector] LLM 复盘耗时=%.1fs（round %d/%d）",
                 dur, rounds + 1, REFLECT_MAX_ROUNDS)
     raw = (getattr(resp, "content", str(resp)) or "").strip()
@@ -6884,7 +6894,7 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     (logger.warning if slow else logger.info)(
         "[model] LLM %s（narrator）耗时=%.1fs", "慢调用" if slow else "完成", dur)
     record("model", "llm_done", duration_s=round(dur, 2),
-           **({"slow": True} if slow else {}))
+           **usage_fields(resp), **({"slow": True} if slow else {}))
     return {"messages": [resp]}
 
 
