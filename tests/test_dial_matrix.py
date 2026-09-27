@@ -141,14 +141,25 @@ print("\n④ DIALS 自洽：一档一处声明")
 check("每档声明的 engine 与它注入的环境变量一致",
       all(sp["env"].get("PLANNER_ENGINE", "text") == sp["engine"] for sp in dm.DIALS.values()),
       str({k: (v["engine"], v["env"]) for k, v in dm.DIALS.items()}))
-check("声明的 model 与 QWEN_MODEL 一致（没有 QWEN_MODEL 的档声明 None）",
-      all(sp["model"] == sp["env"].get("QWEN_MODEL") for sp in dm.DIALS.values()))
+check("声明的 model 与**本档所选服务商**的型号变量一致（没声明型号的档声明 None）",
+      all(sp["model"] == sp["env"].get(
+              {"qwen": "QWEN_MODEL", "deepseek": "DEEPSEEK_MODEL"}[sp.get("provider", "qwen")])
+          for sp in dm.DIALS.values()),
+      str({k: (v["model"], v["env"].get("QWEN_MODEL"), v["env"].get("DEEPSEEK_MODEL"))
+           for k, v in dm.DIALS.items()}))
+check("声明了 provider 的档，注入的环境变量与它一致（换服务商那一档的自检）",
+      all(sp["env"].get("LLM_PROVIDER") == sp["provider"]
+          for sp in dm.DIALS.values() if sp.get("provider")))
 check("text 档存在且不吃 native 开关",
       "text" in dm.DIALS and "PLANNER_NATIVE_THINKING" not in dm.DIALS["text"]["env"])
-check("四个 native 档齐（思考 on/off × flash/max）",
+check("五个 native 档齐（思考 on/off × flash/max + 换服务商那一档）",
       sorted(k for k in dm.DIALS if k != "text") ==
-      ["native-nothink-flash", "native-nothink-max", "native-think-flash", "native-think-max"],
+      ["native-nothink-deepseek", "native-nothink-flash", "native-nothink-max",
+       "native-think-flash", "native-think-max"],
       str(list(dm.DIALS)))
+check("换服务商那一档**不带** QWEN_MODEL（型号由它自己的服务商变量给）",
+      "QWEN_MODEL" not in dm.DIALS["native-nothink-deepseek"]["env"]
+      and dm.DIALS["native-nothink-deepseek"]["env"]["DEEPSEEK_MODEL"] == "deepseek-flash")
 
 print("\n⑤ summarize：两条耗时两格、比率的分母与取值")
 ACC = acc_of([m_native], [case("m1", True, 9.0), case("m2", False, 11.0)])

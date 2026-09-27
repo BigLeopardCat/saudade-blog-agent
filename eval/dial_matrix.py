@@ -90,6 +90,28 @@ DIALS: dict[str, dict] = {
                                      "PLANNER_NATIVE_THINKING": "false",
                                      "QWEN_MODEL": "qwen3.8-max"},
                              "engine": "native", "model": "qwen3.8-max"},
+    # 换**服务商**（20260928）：与上面四档不同轴——那四档换的是引擎/思考/型号，
+    # 这一档换的是 endpoint + key + 模型族。加它是因为"换模型"也是候选替代之一
+    # （生产档 = native + 不思考 + flash），而换服务商的决定必须与 qwen 档落在
+    # 同一张表上才可比。加入前先探过（只读探针，未记入报告）：deepseek-flash 认
+    # `tools` 字段、**真的回 tool_calls**（`navigate({"target": "留言板"})` 一次命中）。
+    # ⚠️ `PLANNER_NATIVE_THINKING` 对这一档是**空开关**（`models/llm.py` 只对 qwen
+    # 发 `enable_thinking` 的 extra_body）——写 false 是为了与生产档**同形**，不是
+    # 因为它读这个值；标 `provider` 让档自检能验"服务商真的拨过去了"。
+    # ⚠️ **首跑（20260928）的 3/24 不是模型结论，别照着引用**：唯一绿的那条
+    # （casual_intro）恰好是**零工具**用例，其余全红于 narrator 的
+    # `400 Messages with role 'tool' must be a response to a preceding message with
+    # 'tool_calls'`——`model_node` 把 `[system] + state["messages"]` 交给服务商，而那些
+    # ToolMessage 的 `tool_call_id` 是自造的（`graph.py` 的 `execute_{idx}`）、前面没有
+    # 带 `tool_calls` 的 assistant 消息。qwen 端点容忍，deepseek 严格拒。**换服务商前
+    # 先修这个消息序列**，否则任何 provider 对照跑出来的都是这一条，不是质量差。
+    "native-nothink-deepseek": {
+                            "env": {"PLANNER_ENGINE": "native",
+                                    "PLANNER_NATIVE_THINKING": "false",
+                                    "LLM_PROVIDER": "deepseek",
+                                    "DEEPSEEK_MODEL": "deepseek-flash"},
+                            "engine": "native", "provider": "deepseek",
+                            "model": "deepseek-flash"},
 }
 
 _REPORT_LINE = re.compile(r"留档:\s*(\S+)")
@@ -98,6 +120,7 @@ _REPORT_LINE = re.compile(r"留档:\s*(\S+)")
 _PROBE = ("import json;from config.settings import settings;"
           "print(json.dumps({'engine': settings.planner_engine,"
           "'thinking': settings.planner_native_thinking,"
+          "'provider': settings.llm_provider,"
           "'model': settings.active_llm_model}))")
 
 
@@ -131,6 +154,12 @@ def preflight(dial: str, spec: dict, timeout: int = 120) -> dict:
                            f"期望={want_think}")
     if spec["model"] and got["model"] != spec["model"]:
         raise RuntimeError(f"[{dial}] model 没拨过去：settings={got['model']} 期望={spec['model']}")
+    # 服务商只在**声明了**的档上验（换服务商的档才需要；qwen 那几档由 model 那一格
+    # 间接管住——型号名对不上就抛）
+    want_provider = spec.get("provider")
+    if want_provider and got.get("provider") != want_provider:
+        raise RuntimeError(f"[{dial}] provider 没拨过去：settings={got.get('provider')} "
+                           f"期望={want_provider}")
     return got
 
 
