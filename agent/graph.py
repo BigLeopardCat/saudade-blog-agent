@@ -3341,7 +3341,11 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # ⚠️ 必须在 `_name_arg_fix` **之后**——那一步可能就地重建 plan（`plan_obj.clear()
         # + update(fresh)`），在它之前判的是重建前的旧参数。
         grounded_refuse = _target_grounding_refusal(plan_obj, user_msg)
-        subject = "站内的台账（标签/分类字典、公告清单、留言列表）与主人这句话本身"
+        # 这句要**如实说出系统查的是哪本台账**：待办族查的是后台首页那张待办清单
+        # （`_find_todo_row`），名单里漏了它，主人会以为系统翻错了地方（20260927
+        # 加待办那一支时同步补上）。
+        subject = ("站内的台账（标签/分类字典、公告清单、留言列表、"
+                   "后台待办清单）与主人这句话本身")
         refusal = None
         policy_refuse = False
         if quote_refuse:
@@ -4048,6 +4052,17 @@ _WRITE_NAME_FIELDS = {
     # content——这正是 `_WRITE_VALUE_FIELDS`（"值字段要有字面出处"那道闸）**刻意不收
     # 它**的原因，见那张表下面那条注。这里只登记目标字段。
     "send_user_notice": ("name", None),
+    # 待办「勾完成」（20260927）：目标 = 后台首页待办列表里**那一行的正文**。与留言
+    # 族的 `quote` 同形（主人嘴里说的就是那一段字），台账却不在站内字典里——它在
+    # `list_dashboard_todos` 那个后台接口里 ⇒ `_write_target_refusal` 必须多分派一支
+    # （`is_todo`）。**漏了那一支的后果**：正文被拿去查标签字典，主人得到一句
+    # 「站内没有叫「X」的标签」——措辞错、查的台账错，而这句错话**恰好长得像一句
+    # 诚实拒绝**（与账号族当初漏 `is_user` 是同一个形状）。
+    # 动机（golden `admin_todo_done_popup` 那条红）：planner 会把正文填成**另一条**
+    # 待办（现场：主人说「给多肉浇水」，它填了列表里的「买猫粮」）——而这张卡上印着的
+    # 那行字是主人唯一能核对的东西，填错等于让他盲签。登记进本表之后，
+    # `_name_target_fix` 的引号通道（规则④）把正文校正回主人引号里那一段。
+    "complete_dashboard_todo": ("text", None),
 }
 
 
@@ -4312,7 +4327,13 @@ _NAME_TARGET_TOOLS = ("update_tag", "delete_tag", "update_category",
                       # "后台没有叫「guest」的账号"里的那个名字，必须是主人说的那个。
                       # 发通知同族：它那句如实答复同样是"后台账号列表里没有叫「X」的
                       # 账号"，X 也得是主人说的那个字。
-                      "freeze_account", "unfreeze_account", "send_user_notice")
+                      "freeze_account", "unfreeze_account", "send_user_notice",
+                      # 待办勾完成同族（20260927）：卡面要**逐字**印出那一行的正文
+                      # （待办没有 id 也没有标题，正文是他唯一能核对的字），而
+                      # planner 会把它填成**另一条**待办 ⇒ 这一格正是"校正回主人说的
+                      # 那一段"。⚠️ 待办不走近失校正（`_write_target_refusal` 里那条
+                      # 「抄短了就补全」），理由见那一支的注。
+                      "complete_dashboard_todo")
 
 # "另一个操作数"的标记词：紧跟在它后面的那段引号**不是**目标，而是父标签
 # （挪到…下面）或新名字（改名叫…）。语序本身就是主人给的标记——20260922 实测另一跑
@@ -5148,6 +5169,36 @@ def _truncation_candidate(want: str, cands) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
+def _find_todo_row(want: str, rows) -> tuple[dict | None, str | None]:
+    """待办列表里的**逐字命中** → `(那一行, None)`；查无此条 / 多条同名 → `(None, 说明)`。
+
+    判据**不是这里新写的**：`_todo_text_hits` 是工具侧写前先读用的同一个函数（逐字
+    相等，理由见它的头注——这张列表线上从不回行 id，正文是唯一能认出是哪一行的东西），
+    这一层只是把它的结果翻译成"预检层的那句话"。两层判断互不背书、口径却必须是同一句：
+    各写一套模糊匹配会让主人撞上"预检说没有、工具说有"（或反过来），而那时他能看到的
+    只有预检那句话。
+
+    说明文字**照工具那一句抄**（`tools.base.complete_dashboard_todo` 的三个 not_found
+    分支）：主人在预检被拦与在工具侧被拦，读到的应该是同一件事、同一个下一步动作。
+    """
+    from tools.base import _todo_text_hits
+    rows = rows or []
+    if not rows:
+        # 读到了、就是空的 —— 这是事实，不是故障（同工具侧那条 `empty`）。
+        return None, "你后台首页的待办列表现在是空的（一条都没记），没有可勾的"
+    hits = _todo_text_hits(rows, want)
+    if not hits:
+        return None, (f"你后台首页的待办里没有「{want}」这一条"
+                      f"（列表里现在有 {len(rows)} 条）——请照那一行现在的正文说，"
+                      f"或先读一遍列表再指")
+    if len(hits) > 1:
+        # **歧义即零写**（同工具侧与 Rust `pick_todo`）：绝不替主人挑一条——挑错的
+        # 那一次在列表上看起来和挑对一模一样。
+        return None, (f"有 {len(hits)} 条待办都叫「{want}」，分不清是哪一条"
+                      f"——先到后台首页把其中一条改个说法")
+    return hits[0], None
+
+
 def _write_target_refusal(plan_obj: dict, config, user_msg=None,
                           role: str | None = None) -> tuple[str, str] | None:
     """本轮写操作的目标名字能否唯一落到站内一行？返回 `(工具名, 拒绝说明)` 或 None。
@@ -5163,7 +5214,12 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
     「就那个」再也对不上任何东西。**候选要当系统数据带走**，而带走它的载体是弹卡。
     三条边界（都不许松）：非"截断"形态不校正（见 `_truncation_candidate`）；校正后
     必须用**同一个解析器**再验一次、对不上就退回原来的如实拒绝；留言族不校正
-    （`quote` 是正文片段，"以它开头"没有任何指认力）。校正后**永远不会免弹窗**：
+    （`quote` 是正文片段，"以它开头"没有任何指认力）；**待办族也不校正**（20260927，
+    它的"名字"是主人自己写在清单上的自由文本、没有 id，近失候选在列表上只差一两个字
+    却常常是**另一件事**——把「给多肉浇水」补成「给多肉浇水呀」这种校正帮不到任何忙，
+    而它要动的是一条真实待办）。待办族查无此条时那句如实说明本身就是下一步动作
+    （"照那一行现在的正文说，或先读一遍列表再指"，见 `_find_todo_row`）。
+    校正后**永远不会免弹窗**：
     主人原话说的是短的那一截，全名不在他这句话里，`_confirm_popup` 的
     `_ident_grounded` 自动判不成立 ⇒ 必弹卡。父标签（`pkey`）不做这一步。
 
@@ -5185,15 +5241,31 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
     args, args_ok = _tool_args(tools[0])
     if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
         return None
-    from tools.base import (ToolResult, _announcement_index, _board_index,
-                            _category_index, _find_board_comment,
-                            _find_named_announcement, _find_named_category,
-                            _find_named_tag, _find_named_user, _tag_index,
-                            _user_directory)
+    # 一名一行：这一行上有魔法尾逗号 ⇒ ruff/isort 要求拆开（别为了"看着紧凑"再拼回去）
+    from tools.base import (
+        ToolResult,
+        _admin_get,
+        _announcement_index,
+        _board_index,
+        _category_index,
+        _find_board_comment,
+        _find_named_announcement,
+        _find_named_category,
+        _find_named_tag,
+        _find_named_user,
+        _tag_index,
+        _todo_rows,
+        _user_directory,
+    )
     tkey, pkey = _WRITE_NAME_FIELDS[name]
     is_cat = name.endswith("_category")
     is_ann = name.endswith("_announcement")
     is_board = name.endswith("_board_comment")
+    # 待办族（20260927）：目标正文在**后台首页那张待办列表**里（接口 `/api/protected/todos`），
+    # 既不在标签字典也不在账号名录里。判据**复用工具自己那一个**（`_todo_text_hits` 的
+    # 逐字相等）而不是另写一套模糊匹配：这一层与工具两层判断互不背书，但"这是不是同一行"
+    # 的口径必须**是同一句话**，否则主人会遇到"预检说没有、工具说有"（或反过来）。
+    is_todo = name in _TODO_TOOLS
     # 账号族（冻结/解冻/发通知）的目标名字在**后台账号名录**里，不在标签字典里。这一支
     # 不加，分派会掉进最后那个 `else`（标签）⇒ 账号名被拿去查标签 ⇒ 主人得到一句
     # 「站内没有叫「X」的**标签**」：措辞错、查的台账错，而这句错话恰好长得像
@@ -5201,9 +5273,10 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
     # 用 `_ACCOUNT_TOOLS`（整族）而不是 `_FREEZE_TOOLS`：这一层判的是**台账属于谁**，
     # 与"这三条是不是同一条政策"无关（政策预检那一处才用 `_FREEZE_TOOLS`，见那段注）。
     is_user = name in _ACCOUNT_TOOLS
-    tag_index = None if (is_cat or is_ann or is_board or is_user) else _tag_index(config)
+    tag_index = None if (is_cat or is_ann or is_board or is_user or is_todo) \
+        else _tag_index(config)
     cat_index = ann_index = board_index = None
-    user_index = None
+    user_index = todo_rows = None
     if is_cat:
         cat_index = _category_index(config)
         if cat_index is None:
@@ -5223,6 +5296,14 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
             # 工具自己会再读一次名录，那一层读不到就零写 —— 预检这一层的方向与
             # `_find_named_user` 相反是刻意留给工具那一层的，见它的头注。
             return None
+    elif is_todo:
+        # 读失败时 `_admin_get` 回的是 `ToolResult`（str 子类）⇒ `_todo_rows` 判它
+        # 不是列表、回 None —— 正好就是"读不到"那一态（与 `_confirm_popup` 同一招）。
+        # 读不到 ⇒ 放行给工具（同上：读不到不是"没有"；golden 的身份是 uid=0、
+        # 待办接口必然读不到，那一条用例要的"卡照弹"正是靠这里放行）。
+        todo_rows = _todo_rows(_admin_get("/api/protected/todos", config))
+        if todo_rows is None:
+            return None
     elif tag_index is None:
         return None
     def _lookup(w: str):
@@ -5236,6 +5317,8 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
             return _find_board_comment(w, config, index=board_index)
         if is_user:
             return _find_named_user(w, config, index=user_index)
+        if is_todo:
+            return _find_todo_row(w, todo_rows)
         return _find_named_tag(w, config, args.get("level"), index=tag_index)
 
     def _ledger_names():
@@ -5256,8 +5339,8 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
         want = str(args.get(tkey) or "").strip()
         if want:
             hit, err = _lookup(want)
-            if err and not is_board and not is_user and _msg_grounded_name(
-                    want, user_msg, lex=_lexicon(name)):
+            if err and not is_board and not is_user and not is_todo \
+                    and _msg_grounded_name(want, user_msg, lex=_lexicon(name)):
                 # 只有"主人自己说的就是短的那一截"才校正（见函数头注的边界）：全名不在
                 # 他原话里 ⇒ `_ident_grounded` 判不成立 ⇒ 必弹卡，由他看着全名点。
                 # **账号族不校正**（`not is_user`）：标签族那条校正靠"弹卡由主人确认
