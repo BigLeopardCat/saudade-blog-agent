@@ -1,0 +1,733 @@
+{
+ "ts": "2026-09-28 02:10:21",
+ "label": "deepseek_vs_qwen",
+ "ids": [
+  "multi_step_referent_nav_effect",
+  "multi_step_effect_then_nav",
+  "multi_step_missing_param_asks",
+  "multi_step_search_then_read_top",
+  "eff_on_sakura",
+  "rag_ota_partition",
+  "casual_intro",
+  "data_tags"
+ ],
+ "runs_per_dial": 3,
+ "dials": {
+  "native-nothink-flash": {
+   "env": {
+    "PLANNER_ENGINE": "native",
+    "PLANNER_NATIVE_THINKING": "false"
+   },
+   "engine": "native",
+   "observed": {
+    "engine": "native",
+    "thinking": false,
+    "provider": "qwen",
+    "model": "qwen3.8-flash"
+   },
+   "runs": 3,
+   "case_runs": 24,
+   "case_passed": 23,
+   "pass_rate": 0.9583,
+   "pass_rate_ci95": [
+    0.7976,
+    0.9926
+   ],
+   "cases": {
+    "eff_on_sakura": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 8.1,
+      "p50": 8.2,
+      "max": 9.1
+     },
+     "tags": [
+      "effect"
+     ],
+     "pass_rate": 1.0
+    },
+    "casual_intro": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 5.0,
+      "p50": 5.9,
+      "max": 6.3
+     },
+     "tags": [
+      "chat"
+     ],
+     "pass_rate": 1.0
+    },
+    "rag_ota_partition": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 15.9,
+      "p50": 22.0,
+      "max": 29.9
+     },
+     "tags": [
+      "rag",
+      "recall"
+     ],
+     "pass_rate": 1.0
+    },
+    "data_tags": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 6.9,
+      "p50": 8.0,
+      "max": 9.0
+     },
+     "tags": [
+      "content_query",
+      "read",
+      "tool_call",
+      "tag",
+      "20260924"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_referent_nav_effect": {
+     "runs": 3,
+     "passed": 2,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_021539.json",
+       "fails": [
+        "[第 1 轮] 缺少 EFFECT: 命令帧",
+        "[第 1 轮] 命令帧缺 'sakura:on'（本轮命令：['AUTO_NAVIGATE:https://saudade.site/device-console/']）",
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：['navigate_to']）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021406/multi_step_referent_nav_effect.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 4.3,
+      "p50": 9.7,
+      "max": 9.8
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi-turn",
+      "nav",
+      "effect"
+     ],
+     "pass_rate": 0.6667
+    },
+    "multi_step_effect_then_nav": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 7.6,
+      "p50": 9.6,
+      "max": 10.0
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_missing_param_asks": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 9.8,
+      "p50": 12.4,
+      "max": 13.0
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "write",
+      "honest"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_search_then_read_top": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 18.9,
+      "p50": 25.0,
+      "max": 29.1
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "content_query",
+      "rag"
+     ],
+     "pass_rate": 1.0
+    }
+   },
+   "case_elapsed_s": {
+    "n": 24,
+    "p50": 9.65,
+    "max": 29.9
+   },
+   "planner_round_s": {
+    "n": 59,
+    "p50": 2.19,
+    "max": 12.19
+   },
+   "planner_round_s_raw": [
+    1.37,
+    2.17,
+    2.1,
+    3.58,
+    1.57,
+    2.92,
+    1.87,
+    1.24,
+    2.84,
+    1.09,
+    1.37,
+    1.96,
+    2.49,
+    2.89,
+    1.97,
+    5.33,
+    3.46,
+    2.3,
+    1.36,
+    2.2,
+    9.74,
+    1.02,
+    1.6,
+    1.88,
+    2.6,
+    2.1,
+    1.3,
+    1.13,
+    1.37,
+    5.76,
+    1.46,
+    1.08,
+    2.46,
+    2.4,
+    12.19,
+    2.38,
+    1.57,
+    2.39,
+    2.19,
+    0.95,
+    2.11,
+    2.38,
+    2.8,
+    2.75,
+    2.97,
+    2.28,
+    1.35,
+    2.44,
+    2.28,
+    1.35,
+    2.87,
+    2.06,
+    1.4,
+    2.16,
+    2.59,
+    2.29,
+    1.69,
+    2.97,
+    9.21
+   ],
+   "native": {
+    "trace_files": 24,
+    "native_decisions": 59,
+    "native_fallbacks": 0,
+    "truncated": 0,
+    "fallback_rate": 0.0,
+    "tool_call_completeness": 1.0
+   },
+   "plan_efficiency": {
+    "tool_calls_total": 42,
+    "tool_rounds_total": 39,
+    "cases_multi_tool_rounds": 11
+   },
+   "reports": [
+    "eval/report/runs/20260928_021206.json",
+    "eval/report/runs/20260928_021539.json",
+    "eval/report/runs/20260928_021948.json"
+   ],
+   "trace_runs": [
+    "20260928_021024",
+    "20260928_021406",
+    "20260928_021808"
+   ],
+   "wall_s": [
+    104.7,
+    95.0,
+    102.3
+   ]
+  },
+  "native-nothink-deepseek": {
+   "env": {
+    "PLANNER_ENGINE": "native",
+    "PLANNER_NATIVE_THINKING": "false",
+    "LLM_PROVIDER": "deepseek",
+    "DEEPSEEK_MODEL": "deepseek-flash"
+   },
+   "engine": "native",
+   "observed": {
+    "engine": "native",
+    "thinking": false,
+    "provider": "deepseek",
+    "model": "deepseek-flash"
+   },
+   "runs": 3,
+   "case_runs": 24,
+   "case_passed": 3,
+   "pass_rate": 0.125,
+   "pass_rate_ci95": [
+    0.0434,
+    0.31
+   ],
+   "cases": {
+    "eff_on_sakura": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_021404.json",
+       "fails": [
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: bf92f431-7fd9-4860-ac1a-83e085ec5c66)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021209/eff_on_sakura.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_021805.json",
+       "fails": [
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: 6fbd8b60-9355-4e41-a148-0cd78c7191f7)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021541/eff_on_sakura.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_022144.json",
+       "fails": [
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: b604c763-93a0-4cc7-9101-494207a10757)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021950/eff_on_sakura.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 7.8,
+      "p50": 7.9,
+      "max": 8.4
+     },
+     "tags": [
+      "effect"
+     ],
+     "pass_rate": 0.0
+    },
+    "casual_intro": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 5.7,
+      "p50": 5.8,
+      "max": 8.1
+     },
+     "tags": [
+      "chat"
+     ],
+     "pass_rate": 1.0
+    },
+    "rag_ota_partition": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_021404.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] 文本缺少任一关键词 ['ota_0', 'OTA_0', '分区表'] 且未命中正则族 []",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: 287f1e44-10a3-4d43-a07f-77b0443d0de3)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021209/rag_ota_partition.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_021805.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] 文本缺少任一关键词 ['ota_0', 'OTA_0', '分区表'] 且未命中正则族 []",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: b989d162-3fba-439c-92d8-8dca504dd2dc)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021541/rag_ota_partition.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_022144.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] 文本缺少任一关键词 ['ota_0', 'OTA_0', '分区表'] 且未命中正则族 []",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: 226d47db-ba42-4c50-8ef6-21513b476bf3)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021950/rag_ota_partition.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 12.6,
+      "p50": 13.0,
+      "max": 16.9
+     },
+     "tags": [
+      "rag",
+      "recall"
+     ],
+     "pass_rate": 0.0
+    },
+    "data_tags": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_021404.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: 2de01d3e-78d7-42f4-99fe-b86e3117f057)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021209/data_tags.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_021805.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: dbd32270-b1a0-49ba-ab5e-b644d5672adc)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021541/data_tags.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_022144.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: 08caa5d5-a2e5-49c0-9a94-432c2d68b548)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021950/data_tags.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 19.7,
+      "p50": 26.6,
+      "max": 29.4
+     },
+     "tags": [
+      "content_query",
+      "read",
+      "tool_call",
+      "tag",
+      "20260924"
+     ],
+     "pass_rate": 0.0
+    },
+    "multi_step_referent_nav_effect": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_021404.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: 79746b24-de71-4de6-9168-7cdc49ea1d0c)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021209/multi_step_referent_nav_effect.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_021805.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: 5fb0cf2f-5e7a-4d20-bf32-a616abf2b7b0)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021541/multi_step_referent_nav_effect.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_022144.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: 1ce61a12-d05f-4f6d-8028-c46a332caa66)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021950/multi_step_referent_nav_effect.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 17.7,
+      "p50": 19.9,
+      "max": 57.9
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi-turn",
+      "nav",
+      "effect"
+     ],
+     "pass_rate": 0.0
+    },
+    "multi_step_effect_then_nav": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_021404.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: e4f9428f-0eff-438d-932b-ff903a352727)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021209/multi_step_effect_then_nav.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_021805.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: c466f671-2b24-4ae5-905d-071d3a26ad70)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021541/multi_step_effect_then_nav.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_022144.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: ea14d893-e05a-4341-9831-c7d5ceccda59)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021950/multi_step_effect_then_nav.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 9.3,
+      "p50": 11.3,
+      "max": 14.7
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "pass_rate": 0.0
+    },
+    "multi_step_missing_param_asks": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_021404.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] 文本缺少任一关键词 [] 且未命中正则族 ['名字', '名称', '叫什么']",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: d4575568-3beb-4e82-9988-26b42853129f)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021209/multi_step_missing_param_asks.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_021805.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] 文本缺少任一关键词 [] 且未命中正则族 ['名字', '名称', '叫什么']",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: e3a91698-42f0-4388-b973-dc399e632b0e)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021541/multi_step_missing_param_asks.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_022144.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] 文本缺少任一关键词 [] 且未命中正则族 ['名字', '名称', '叫什么']",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: da02f736-bf79-4828-a7a0-4d17134311c0)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021950/multi_step_missing_param_asks.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 10.0,
+      "p50": 12.5,
+      "max": 16.7
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "write",
+      "honest"
+     ],
+     "pass_rate": 0.0
+    },
+    "multi_step_search_then_read_top": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_021404.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: a4520992-b810-46e8-b576-5949115b4e41)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021209/multi_step_search_then_read_top.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_021805.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: e1ce91a9-19b4-49c8-b359-925d9e5fb0eb)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021541/multi_step_search_then_read_top.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_022144.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role 'tool' must be a response to a preceding message with 'tool_calls' (request_id: 0f553766-0e97-4f88-9468-210c4c3d0c0a)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_021950/multi_step_search_then_read_top.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 11.4,
+      "p50": 13.7,
+      "max": 15.5
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "content_query",
+      "rag"
+     ],
+     "pass_rate": 0.0
+    }
+   },
+   "case_elapsed_s": {
+    "n": 24,
+    "p50": 12.8,
+    "max": 57.9
+   },
+   "planner_round_s": {
+    "n": 54,
+    "p50": 2.26,
+    "max": 45.23
+   },
+   "planner_round_s_raw": [
+    1.61,
+    0.81,
+    23.41,
+    0.85,
+    1.74,
+    0.94,
+    6.63,
+    1.94,
+    7.31,
+    0.97,
+    2.33,
+    11.46,
+    1.26,
+    2.11,
+    2.83,
+    1.22,
+    3.3,
+    3.3,
+    1.04,
+    0.87,
+    20.62,
+    0.59,
+    1.63,
+    1.11,
+    1.12,
+    1.95,
+    4.8,
+    1.96,
+    5.56,
+    45.23,
+    2.19,
+    3.54,
+    2.58,
+    1.89,
+    2.56,
+    2.97,
+    2.94,
+    0.72,
+    13.81,
+    0.78,
+    1.32,
+    1.41,
+    2.78,
+    1.97,
+    11.54,
+    1.58,
+    2.41,
+    8.47,
+    1.5,
+    4.61,
+    4.2,
+    2.62,
+    6.21,
+    2.87
+   ],
+   "native": {
+    "trace_files": 24,
+    "native_decisions": 54,
+    "native_fallbacks": 0,
+    "truncated": 0,
+    "fallback_rate": 0.0,
+    "tool_call_completeness": 1.0
+   },
+   "plan_efficiency": {
+    "tool_calls_total": 39,
+    "tool_rounds_total": 33,
+    "cases_multi_tool_rounds": 12
+   },
+   "reports": [
+    "eval/report/runs/20260928_021404.json",
+    "eval/report/runs/20260928_021805.json",
+    "eval/report/runs/20260928_022144.json"
+   ],
+   "trace_runs": [
+    "20260928_021209",
+    "20260928_021541",
+    "20260928_021950"
+   ],
+   "wall_s": [
+    117.8,
+    146.5,
+    116.4
+   ]
+  }
+ }
+}
