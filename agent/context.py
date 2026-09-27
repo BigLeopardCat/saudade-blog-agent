@@ -173,6 +173,23 @@ def _last_user_msg(messages: list) -> str:
     return ""
 
 
+def _prev_user_msg(messages: list) -> str:
+    """倒数**第二条** HumanMessage 的文本（20260927）。
+
+    只给确认兑现轮用（`confirm_grant` 在场）：那一轮的"当前消息"是前端在主人点
+    「确定」时**合成**的确认句（`chat-stream.js` 拼的「确认执行：…」），主人真正
+    说的那句在它前面。取不到（历史里没有第二条）返回空串——调用方据此退回它
+    今天的口径（"没有可继承的意图"），**不抛异常**。
+    """
+    seen = 0
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            seen += 1
+            if seen == 2:
+                return _msg_text(m)[-500:]
+    return ""
+
+
 # 节选截断（20260919）：旧版只留**末尾** per 字，长回复中段的指代锚点会被整段
 # 截掉——实证（会话 144，1257 字回复）里点名的《架构文档》在正文中段，planner
 # 眼里就成了"这轮从没提过这篇"，于是从零检索去找（还找错了另一篇）。改成头尾

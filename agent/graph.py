@@ -82,9 +82,10 @@ from agent import sections
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _doc_anchors, _frame_texts, _has_frames,
                            _last_assistant_utterance, _last_user_msg,
-                           _msg_text, _page_ctx, _receipts_text, _recent_tail,
-                           _short_reply_hint, _short_reply_kind)
-from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_path,
+                           _msg_text, _page_ctx, _prev_user_msg, _receipts_text,
+                           _recent_tail, _short_reply_hint, _short_reply_kind)
+from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES,
+                             _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
                              _effect_switch_fast_path, _intent_done, _intent_hints,
                              _nav_fast_path, _scan_action_intents, _search_terms,
@@ -1531,6 +1532,94 @@ _ACTION_RESTATE_RE = re.compile(
     r"|(?:已经?|刚刚|方才)[^\n。！？!?；;，,]{0,8}?" + _ACTION_RESTATE_VERBS
     + r"(?!的)(?:了(?!的)|啦|好了|成功|完成|搞定|$)"
 )
+# ── 洞⑧（20260927）：动作族**实体**的"办好了"声称 vs 本轮回执 ──────────────
+# 事故实证（生产 trace 20260927T171550）：主人一句「不错收藏啦，开启夜间模式和雪花」
+# 里的后两件在弹窗之后丢失了（成因与修法见 `_pending_intents` 头注），narrator 却写
+# 「**夜间模式和雪花特效这边也一并处理好了**」，gate 判 PASS——主人读到的是一句
+# 系统没做过的事，而这一轮的全部动作只是一次收藏。
+#
+# **为什么现有四张网都漏掉它**（逐条查过，不是"再补一张网"的直觉）：
+#   · 洞① `_STATE_ACTION_CLAIM_RE` 只在**零帧轮**跑（这一轮有帧）；
+#   · 5c 要第一人称**点名工具**（这句一个工具名都没有）；
+#   · 5d/5f 是内容域（检索/站内结论），与动作族无关；
+#   · 5g `_ACTION_RESTATE_RE` 的锚是**动词**（打开/关闭/跳转…），而这句的动词是
+#     "处理好了"——不在词表里；且 5g 的射程是"回执在场时同一句话说了两遍"，
+#     这一句恰恰**没有**对应回执（两半互补，不是重复）。
+#
+# 判据（**实体锚定**，与上面几张网正交）：回复的某个**子句**里
+#   ① 出现命令族的动作实体（特效名 / 夜间模式——词表取自 `decisions.py` 的唯一
+#      实现，与快道/意图扫描同源）；
+#   ② 同一子句里有**施事式完成语**（`_DEED_DONE_RE`：一并/也/都/帮你… + 做/处理/
+#      开好… + 好了/了/啦）；
+#   ③ 而这一轮**没有那个实体的回执**（特效按 `args.effect` 比，夜间模式按工具名）。
+# 三条同时成立 = 说了系统没做的事 ⇒ fallback（文案只否认那一件，不否认整轮）。
+#
+# **刻意不认"状态陈述"**：`_DEED_DONE_RE` 要求施事标记（一并/也/都/帮你/已经/…）
+# **且**动词是"做事"族（处理/办/弄/安排/设置/开好/关好/切换好…）——"樱花特效已经
+# 开启啦"这种**幂等轮的正确答案**（golden `eff_state_consistent` 的措辞，20260920
+# 在洞①上误伤过一次）没有施事标记，不在射程内。误伤的代价是整轮被 fallback 吞掉，
+# 所以这一条与洞① 同一条纪律：**宁漏勿误伤**。
+_ACTION_ENTITY_VOCAB = sorted(
+    [(a, ("effect", v)) for a, v in _EFFECT_ALIASES.items()]
+    + [(a, ("darkmode", None)) for a in _DARKMODE_ALIASES],
+    key=lambda kv: len(kv[0]), reverse=True)
+_DEED_DONE_RE = re.compile(
+    r"(?:一并|一起|顺手|顺便|都|也|帮你|给你|替你|已经|已|刚刚|方才)"
+    r"[^\n。！？!?；;，,]{0,6}?"
+    r"(?:处理|办|弄|安排|设置|设好|设为|设成|做好|改好|调好|开好|关好|切换好"
+    r"|加好|建好|搞定|完成|修好)"
+    r"[^\n。！？!?；;，,]{0,4}?"
+    r"(?:好了|完毕|妥了|就绪|了|啦)")
+# 实体在回执里的**证据**（按实体比，不按族比）：特效看 `args.effect`，夜间模式看
+# 工具名。回执的 args 值一律 `str()` 过（见 execute 侧构造），所以两侧都按字符串比。
+_EFFECT_TOOL = "toggle_effect"
+_DARKMODE_TOOL = "toggle_dark_mode"
+
+
+def _entity_receipted(receipts: list, family: str, ident: str | None) -> bool:
+    """本轮回执里有没有**这个实体**的那次动作。"""
+    for r in receipts or []:
+        tool = str(r.get("tool") or "")
+        if family == "darkmode":
+            if tool == _DARKMODE_TOOL:
+                return True
+            continue
+        if tool != _EFFECT_TOOL:
+            continue
+        args = r.get("args")
+        if isinstance(args, dict) and str(args.get("effect") or "") == str(ident):
+            return True
+    return False
+
+
+def _unsupported_deed_claims(reply: str, receipts: list) -> list[tuple[str, str]]:
+    """回复里"某动作办完了"而本轮**没有那件事的回执**的子句 → [(实体标签, 子句)]。
+
+    纯函数（无 state、无 LLM），`tests/test_confirm_leftovers.py` 直接喂字符串复跑。
+    """
+    hits: list[tuple[str, str]] = []
+    for sent in _SENT_RE.split(reply or ""):
+        for clause in _CLAUSE_RE.finditer(sent):
+            text = clause.group(0)
+            if not _DEED_DONE_RE.search(text):
+                continue
+            seen_ident: set = set()
+            for alias, (family, ident) in _ACTION_ENTITY_VOCAB:
+                if alias not in text:
+                    continue
+                # 词表按别名长度降序，所以**同一实体第一次命中就是最长的那个别名**
+                # （"雪花"/"雪" 都命中同一句话时只算一次，否则标签会印成
+                # 「雪特效、雪花特效」——同一件事说两遍）。
+                if (family, ident) in seen_ident:
+                    continue
+                seen_ident.add((family, ident))
+                if _entity_receipted(receipts, family, ident):
+                    continue
+                label = f"{alias}特效" if family == "effect" else "夜间模式"
+                if (label, text.strip()) not in hits:
+                    hits.append((label, text.strip()))
+    return hits
+
 # ── gate 洞②：站内检索声称 vs 本轮帧族（20260919）──────────────────────────
 # 事故形态：回复说"我检索了一圈 / 把站内翻了一遍 / 用 rag_search 搜了一遍"，而本轮
 # 根本没跑任何内容类工具（零帧，或只跑了导航/特效这类动作工具）。旧判据两处缺口：
@@ -2747,6 +2836,27 @@ _FALLBACK_NAV_NO_FRAME = (
     "喵呜……主人，我得收回一句：这一轮系统**没有执行任何跳转**（我手上没有跳转"
     "回执），页面不会因为我那句话动一下，别信我上一条的『已经带你到…』。你想去哪个"
     "页面、或者想看哪一篇文章，把名字告诉我，我就让系统带你过去～")
+# 动作族**实体**的"办好了"声称、而本轮没有那个实体的回执（20260927，见 gate_node 5h
+# 与 `_unsupported_deed_claims`）。与 `_FALLBACK_NAV_NO_FRAME` 同族写法（不许拿一句
+# 新假话换旧假话）：不否认整轮、不说"站里没这东西"、不请主人"再试一次"——只把
+# "{things} 办好了"这一句收回，并把事实的权威指回**上方系统记录**（事实块由 producer
+# 在 narrator 出文本之前印好、`__RESET__` 之后重印，所以它一定在）。
+_FALLBACK_DEED_NO_RECEIPT = (
+    "喵呜……主人，我得收回一句：{things} 这一轮系统**没有执行**——我手上没有对应的"
+    "回执，上面那句「已经办好了」是我自己编的，别信它。这一轮真正发生过什么，以上方"
+    "系统记录的那几行为准。{things}要现在就去办的话，说一声我立刻安排喵。")
+
+
+def _fallback_deed_no_receipt(labels: list) -> str:
+    """洞⑧ 的兜底文本（`_FALLBACK_DEED_NO_RECEIPT` 的填充）。
+
+    只印**被点名的那几件**（`_unsupported_deed_claims` 给的实体标签），不印整轮的
+    动作——本轮真做过的那几件另有事实块印着，重复否认它们会把"系统做过的事"说成
+    没做过（那正是这一条判据要防的错，别在它自己的兜底里犯）。取不到标签时退一句
+    "这件事"（判据理论上不给空列表，退路只为不印出半截句子）。
+    """
+    things = "、".join(str(x).strip() for x in labels if str(x).strip()) or "这件事"
+    return _FALLBACK_DEED_NO_RECEIPT.format(things=things)
 
 
 def _claim_clause(text: str, *rxs) -> str:
@@ -2897,6 +3007,49 @@ def _planner_engine() -> str:
     return got if got in _PLANNER_ENGINES else "text"
 
 
+# ── 意图清单的**消息来源**（20260927，弹窗轮之后动作丢失的修复）──────────────
+# 事故实证（生产 trace 20260927T171545）：主人一句「不错收藏啦，开启夜间模式和雪花」
+# 含三个动作，而**一轮只能选一个技能**（SKILL= 单值）⇒ planner 选中收藏 ⇒ 写操作弹
+# 确认卡 ⇒ `route_after_execute` 见 `pending_confirm` 直接 END。下一轮主人点「确定」，
+# 那轮由**令牌拼计划、零 LLM**（本来就不许重新理解一遍），执行完直去 narrator ⇒
+# 另外两件事**再没有任何一轮会去规划**；而 narrator 手里有主人的原话，于是把没做的
+# 说成「夜间模式和雪花特效这边也一并处理好了」。
+#
+# 非弹窗轮不会这样：`_intent_hints` 每轮重算 + planner 规则 5"清单里还有【未完成】项
+# 就不得收尾"，多意图靠 planner⇄execute 循环自然走完（20260912 就是这么修的）。
+# 弹窗只是把那条路**截断**了一次。所以修法是把它接回去（见 `route_after_execute`
+# 的 confirm 分支），而不是另造一套执行通道——决策权仍只在 planner 手里。
+#
+# 接回去的第一步是**让意图清单看得见**：确认兑现轮的"当前消息"是前端合成的确认句
+# （见 `context._prev_user_msg`），不换源的话这一轮扫出来的意图恒为空，
+# 「还有没做完的事」这个判据在弹窗之后永远为假。
+def _intent_src(state: AgentState) -> str:
+    """意图扫描读**哪句话**：确认兑现轮读主人原话，其余轮读当前消息。
+
+    `messages` 缺席按空处理（不是 `state["messages"]`）：这个函数现在挂在**路由函数**
+    `route_after_execute` 底下，而路由的判据测试（`tests/test_confirm.py` ⑦"每个路由
+    去向都有条件边映射"）喂的是最小状态、不带 messages——取不到消息 ⇒ 扫不出意图 ⇒
+    走"没有未完成项"那一支，与改这条判据之前的行为**逐字节相同**（fail-safe 方向：
+    拿不准就不拦，绝不凭一个读不到的字段把执行轮改道）。真图里 messages 恒在场，
+    这一行只在测试与未来的构造性调用里生效。
+    """
+    msgs = state.get("messages") or []
+    if state.get("confirm_grant"):
+        return _prev_user_msg(msgs) or _last_user_msg(msgs)
+    return _last_user_msg(msgs)
+
+
+def _pending_intents(state: AgentState) -> list[dict]:
+    """主人这一轮真正说的那句话里，**还没有执行事实**的动作意图（每轮重算）。
+
+    同一个函数供三处读（planner 提示 / 动作去重收尾 / `route_after_execute`），
+    口径必须同源——分散成三份必然在某一处漏掉"确认兑现轮要换消息来源"这半句，
+    而那正是本仓"改了实现忘了改判据"的老形态。
+    """
+    return [i for i in _scan_action_intents(_intent_src(state))
+            if not _intent_done(i, state.get("executed") or [])]
+
+
 def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """职责（唯一决策点）：选技能 + 填参数 + 给调用清单 → 实例化为计划 → state.plan。
 
@@ -2923,9 +3076,18 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 同一份清单，就是把同一件写操作**做第二遍**——所以第二轮一律转确定性收尾，
     # 由 narrator 拿着真实回执如实说结果（这与"宁可少做也不做错"的写侧纪律一致：
     # 令牌只授权一次执行，不是一张可反复使用的通行证）。
+    #
+    # 20260927 加第三条入口：**令牌兑现成功、但主人那句话里还有没做完的动作**时，
+    # `route_after_execute` 把控制权交回这里（见 `_pending_intents` 头注的事故）。
+    # 那一轮走**正常的 LLM 决策轮**——令牌不会重发（下面 `resumed` 分支拦住），
+    # 同意闸也不会因为 `grant` 在场而放行任何新写（`_confirm_popup` 见 grant 直接
+    # 不弹卡、`authz` 的判据不看它），所以"令牌只授权一次"这条语义一字未动。
     grant = state.get("confirm_grant")
     rounds = state.get("plan_rounds", 0)
-    if grant:
+    # 受阻回环（blocked）**不算** resumed：那一支照旧确定性收尾（令牌那件事没做成，
+    # 更要紧的是别让模型在这一轮重新规划同一件写）。
+    resumed = bool(grant) and rounds > 0 and not state.get("blocked")
+    if grant and not resumed:
         if rounds == 0:
             plan_obj = _confirm_grant_plan(grant)
             record("planner", "confirm_grant", skill=plan_obj["skill"], tools=plan_obj["tools"])
@@ -2936,6 +3098,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
 
     user_msg = _last_user_msg(state["messages"])
+    # 意图清单的**消息来源**（20260927）：确认兑现轮读主人原话，其余轮同 `user_msg`。
+    # 下面三处共用它——提示词的 {intent_hints}、动作去重收尾的"还有未完成项"、
+    # 以及 resumed 轮的纠偏提示（{correction}）。
+    intent_msg = _intent_src(state)
     # 角色要在**取 page_ctx 之前**定：能力清单按角色渲染（20260921——清单里不含
     # 管理能力是 narrator 讲"我不能改后台"的"依据"，见 context.site_guide）。
     # principal 也在这里一并取：下面写门序列里的政策预检要读它的 uid 与角色
@@ -3077,6 +3243,22 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 纠偏的**种类**（只给日志看）：三种纠偏共用同一个 `{correction}` 槽，日志里
     # 只写"剔空纠偏"会把另两种讲错（20260926 起有三个来源：剔空 / 参数不齐 / 写形态零工具）。
     correction_kind = ""
+    # 第四种来源（20260927）：确认兑现轮回来**补主人那句话里剩下的动作**。这一轮的
+    # "当前消息"是前端合成的确认句，模型照它决策只会得出"没事可做"——必须把"上一件
+    # 已经办完、这几件还没办"讲给它听（只写机器能保证的事实，不做别的暗示）。
+    if resumed:
+        _left = [i for i in _pending_intents(state)]
+        if _left:
+            correction = (
+                "这一轮的主人消息是前端合成的确认句（他刚在确认框上点了「确定」，"
+                "那件事已经执行完、回执在上方）；他真正说的那句话里还有这些动作**没做完**："
+                + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
+                + "。本轮把没做完的做掉（一轮一件），**不要**重做刚刚兑现的那次操作。")
+            correction_kind = "确认轮剩余意图"
+    if resumed and not correction:
+        # 一条都没剩 ⇒ 这一轮不该被交回 planner（`route_after_execute` 只在"还剩"
+        # 时才交回来）。真出现了就是判据漂移，如实记一笔，决策照常走 LLM 那条路。
+        logger.warning("[planner] 确认兑现轮被交回但意图清单已空（判据漂移？）")
     # native 档的异常记账（如 native_multi_call）。**必须在循环外先声明**：循环外的
     # `decision` 事件要读它，而它只在 native 档的某一支里被赋值——少了这一行，
     # "某一轮走到某条提前 return 之外的路径"就会以 NameError 的形态炸在收尾上。
@@ -3090,7 +3272,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 拿的就是这一份——**同一个提问**，只有规则 7 按各自接口层取值。
             _prompt_args = dict(
                 role=role, page_ctx=page_ctx, round_info=round_info, user_msg=user_msg,
-                intent_hints=_intent_hints(state.get("executed") or [], user_msg),
+                intent_hints=_intent_hints(state.get("executed") or [], intent_msg),
                 doc_anchors=doc_anchors,
                 recent_context=_recent_tail(state["messages"]),
                 # 短应答提示只在首轮（rounds==0）给：第二轮起本轮已有工具帧，短应答
@@ -3602,8 +3784,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 第二个意图就此丢失，正是 multi_intent 14% FAIL 的成因）。此时放行
             # 本轮计划让 planner 下一轮据清单继续（动作工具是显式 on/off 语义，
             # 重复执行幂等无害；宁可多跑一轮，不可丢用户要求）。
-            pending = [i for i in _scan_action_intents(user_msg)
-                       if not _intent_done(i, state.get("executed") or [])]
+            pending = _pending_intents(state)
             if not pending:
                 logger.info("[planner] 动作已执行（%s），去重收尾",
                             "、".join(sorted(planned_names)))
@@ -7009,6 +7190,40 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             record("gate", "action_restate", clause=_clip_clause(clause5g),
                    facts=len(_action_block.splitlines()), soft=True)
 
+    # 5h. 动作族**实体**的"办好了"声称，而本轮没有那个实体的回执（20260927，判据与
+    #     事故见 `_unsupported_deed_claims` 头注）。与 5g 是**互补的两半**：5g 管
+    #     "回执在场、同一句话说两遍"（只记不判），这一条管"回执根本不在"——那是
+    #     无据的完成式声称，也就是幻觉本身。
+    #
+    #     **为什么这里敢判死，5g 不敢**（两条判据的差别只有这一处，别混用）：
+    #     `__RESET__` 会连**本轮的 `__CMD__` 缓冲**一起清掉（`chat-stream.js` 的
+    #     `programCmds = []`）⇒ 一轮里只要有命令族回执，判死就等于"命令没下发、气泡
+    #     里那句'已打开'却印出去了"（5g 的实测教训）。而这一条命中的轮子**本来就没有
+    #     那个实体的动作**——判死的代价只有"丢掉一句假话"，换来的是事实块（系统
+    #     真做过的那几件，fallback 后重印）+ 一句只否认那一件的实话。
+    #     ⇒ **本轮只要有任何命令族回执，这一条同样降为只记不判**（宁可漏一次假话，
+    #     也不能把已经生效的命令吞掉）。
+    _claims5h = _unsupported_deed_claims(_strip_quoted_spans(reply), receipts)
+    if _claims5h:
+        _cmd_risky = any(isinstance(r.get("cmd"), dict) for r in receipts)
+        clause5h = _claims5h[0][1]
+        if _cmd_risky:
+            logger.info("[gate] 动作声称无回执：%s｜子句=%s（本轮有命令族回执，"
+                        "RESET 会连命令一起清 ⇒ 只记不判）",
+                        "、".join(lbl for lbl, _ in _claims5h), _clip_clause(clause5h))
+            record("gate", "action_claim_no_receipt",
+                   entity=[lbl for lbl, _ in _claims5h],
+                   clause=_clip_clause(clause5h), soft=True)
+        else:
+            logger.info("[gate] 动作声称无回执：%s｜子句=%s → fallback",
+                        "、".join(lbl for lbl, _ in _claims5h), _clip_clause(clause5h))
+            record("gate", "action_claim_no_receipt",
+                   entity=[lbl for lbl, _ in _claims5h],
+                   clause=_clip_clause(clause5h), soft=False)
+            return fail("action_claim_no_receipt",
+                        _fallback_deed_no_receipt([lbl for lbl, _ in _claims5h]),
+                                    plan, len(frames), clause5h)
+
     record("gate", "pass", zero_frame=False, frames=len(frames),
            duration_s=round(time.monotonic() - _t0, 2))
     logger.info("[gate] PASS（skill=%s frames=%d）", plan["skill"], len(frames))
@@ -7052,8 +7267,16 @@ def route_after_execute(state: AgentState) -> Literal["planner", "reflector", "e
     # 的任何理由（清单是签过名的），多回一趟 planner 只是多烧一次 LLM 决策、
     # 多一次让模型"重新理解"的机会。受阻则照常回 planner（上面的 rounds 分支
     # 会把第二次进入转成收尾，不重发清单）。
+    #
+    # 20260927 唯一例外：**主人那句话里还有没做完的动作**时不许就此收尾。生产实证
+    # 20260927T171545——一句话三个动作（收藏 + 夜间模式 + 雪花），planner 一轮只能
+    # 选一个技能，选中收藏 ⇒ 弹卡 ⇒ 本轮 END；点确定那一轮零 LLM 拼令牌、执行完
+    # 直去 narrator ⇒ 另两件**再没有任何一轮会去规划**，而 narrator 手里有主人的
+    # 原话，于是把没做的说成「夜间模式和雪花特效这边也一并处理好了」（同轮 trace
+    # 实证，gate 放行）。交回 planner 正是**非弹窗轮早就在做的事**（规则 5 + 每轮
+    # 重算的 intent_hints），弹窗只是把那条路截断了一次。
     if state.get("confirm_grant") and not state.get("blocked"):
-        return "model"
+        return "planner" if _pending_intents(state) else "model"
     if not state.get("blocked"):
         return "planner"
     if state.get("blocked_repeat"):
