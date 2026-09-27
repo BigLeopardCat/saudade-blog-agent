@@ -249,6 +249,70 @@ check("两个名字都不在时才报 ref_path_missing",
 check("后台文章清单用的是 `noteId=` 而不是裸 ` id=`",
       "- noteId=" in _SRC["agent/adminops.py"] and "- id={" not in _SRC["agent/adminops.py"])
 
+print("\n⑥ 物件名与出口覆盖（20260928）：同一个数字不只以一种名字露面，也不只以一种身份露面")
+
+# 上面五节管的是"这个数字**叫什么**"，这一节管"这个数字**是什么**"。
+# 事故实证（trace `20260928T032411` / `20260928T032502`）：`get_article_detail` 是
+# **四个数据源共用的一件工具**，而动作词恒为"读取**文章**"⇒ 跨轮执行记忆里写着
+# 「读取文章 100」，而 100 是一条**留言**；下一轮 narrator 照抄，主人看到的就是
+# "把留言编号当成文章读"。
+from tools import base as _B  # noqa: E402
+from tools.base import DOC_TYPE_CN  # noqa: E402
+import server as _SRV  # noqa: E402
+
+check("物件名只有一份（`DOC_TYPE_CN`），四个源都在",
+      set(DOC_TYPE_CN) == {"note", "talk", "board", "announcement"}
+      and DOC_TYPE_CN["board"] == "留言" and DOC_TYPE_CN["talk"] == "说说",
+      str(DOC_TYPE_CN))
+for _dt, _noun in (("board", "留言"), ("talk", "说说"), ("announcement", "公告"),
+                   ("note", "文章")):
+    _line = _SRV._tool_action_text("get_article_detail",
+                                   {"article_id": 100, "doc_type": _dt})
+    check(f"过程行按 doc_type 说话：{_dt} → 读取{_noun} 100", _line == f"读取{_noun} 100", _line)
+check("  缺 doc_type 时回落到「文章」（存量行为与确定性快道一个字节不变）",
+      _SRV._tool_action_text("get_article_detail", {"article_id": 19}) == "读取文章 19",
+      _SRV._tool_action_text("get_article_detail", {"article_id": 19}))
+check("  `$ref` 形态同样按 doc_type 取名词",
+      _SRV._tool_action_text("get_article_detail",
+                             {"article_id": "$search_notes[0].noteId",
+                              "doc_type": "board"}).startswith("读取留言（"), "")
+
+# ⑥b 出口覆盖：这一支此前是裸 `str(it)`，绕过 `_shape` ⇒ 同一份帧里 article 族的键
+# 叫 `noteId`、留言族却仍是上游的 `talkKey`（读者回复里 `talkId 99` 与 `talkKey 100`
+# 混着出现，当时被误判成"模型编了个不存在的字段名"）。
+_saved_get2 = _B._get
+try:
+    _B._get = lambda p, **kw: [{"talkKey": 100, "talkTitle": "诉",
+                                "content": "博主是大笨狗", "approved": 1}]
+    _board_frame = _B.get_article_detail.invoke({"article_id": 100, "doc_type": "board"})
+finally:
+    _B._get = _saved_get2
+check("留言详情帧走出口改名：`talkId` 在、上游的 `talkKey` 不在",
+      "'talkId': 100" in _board_frame and "talkKey" not in _board_frame,
+      _board_frame[:80])
+
+# ⑥c 换措辞的**第二重收益**：文章指代锚点只认「读取文章 N《标题》」行，而留言读取
+# 行从今天起不再冒充它（此前若那条留言恰好在公开列表里、标题又非空，就会被当成本
+# 会话已点名的**文章** anchor）。判据钉在正反两侧。
+from agent.context import _DOC_READ_ROW_RE as _DRR  # noqa: E402
+check("跨轮执行记忆里，文章读取行仍被认成文档锚点",
+      bool(_DRR.search("09-20 21:03 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》")))
+check("  留言读取行**不再**冒充文章锚点（换措辞顺带堵掉的旧耦合）",
+      not _DRR.search("09-28 03:23 读取留言 100") and not _DRR.search("09-28 03:23 读取说说 88"))
+
+# ⑥d Rust 侧是同一个散文契约的另一半（父仓独立 checkout 时跳过，同 test_user_notice
+# 的做法）：`render_exec_row` 必须按 doc_type 分名词，否则线上落库的台账又会是"读取文章"。
+_rust = ROOT.parent / "src" / "routes" / "chat.rs"
+if _rust.exists():
+    _rsrc = _rust.read_text(encoding="utf-8")
+    check("父仓 `render_exec_row` 按 doc_type 分名词（board/talk/announcement 三臂）",
+          '"board" => "留言"' in _rsrc and '"talk" => "说说"' in _rsrc
+          and '"announcement" => "公告"' in _rsrc)
+    check("  且注明名词与 Python 侧 `DOC_TYPE_CN` 同源（改一处必须同步另一处）",
+          "DOC_TYPE_CN" in _rsrc)
+else:
+    print("  ⏭ 跳过父仓 Rust 侧断言（src/routes/chat.rs 不在：agent 仓单独 checkout）")
+
 print(f"\n{'全部通过' if not FAILS else f'失败 {len(FAILS)} 项'}")
 for f in FAILS:
     print("  - " + f)

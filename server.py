@@ -958,10 +958,14 @@ def _tool_action_text(name: str, args: dict | None) -> str:
                  "pending": "等人复批的"}.get(str(a.get("status") or "").strip())
         return f"查看审核状况（只看{focus}）" if focus else "查看审核状况"
     if name == "get_article_detail":
+        # 动作词按 **doc_type** 取（20260928）：这一件工具读的是文章/说说/留言/公告
+        # 四个源，此前一律说"读取文章" ⇒ 过程行与回执行都把留言读成文章。
+        from tools.base import DOC_TYPE_CN
+        what = DOC_TYPE_CN.get(str(a.get("doc_type") or "note").strip(), "文章")
         aid = str(a.get("article_id") or "").strip()
         if aid.startswith("$"):
-            return f"读取文章（{_ref_phrase(aid)}）"
-        return f"读取文章 {aid[:12]}" if aid else "读取文章"
+            return f"读取{what}（{_ref_phrase(aid)}）"
+        return f"读取{what} {aid[:12]}" if aid else f"读取{what}"
     if name in ("update_tag", "delete_tag"):
         # 第四轮（20260921）漏了这一处：四个写工具的过程行原样打出 `执行 update_tag`
         # 这种内部工具名（主人看到的是英文工具名，而不是"要做什么"）。20260922 补上。
