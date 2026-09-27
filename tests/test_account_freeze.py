@@ -29,7 +29,7 @@ import tools.base as base  # noqa: E402
 from agent.graph import (_RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec,  # noqa: E402
                          plan_encode)
 from agent.principal import ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, Principal  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.skills import PLAN_STATUS_ABSENCE_EXEMPT, instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_todo_schedule 的那一处）────────────────────────────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**（宁可退回追问，也不发一个
@@ -388,6 +388,36 @@ check("免引号「把账号 guest5 冻结掉」→ 抽出 guest5",
                                        g._lexicon("freeze_account")))
 check("同一句话在**默认词表**下抽不出东西（账号词不进全局表）",
       g._bare_target_name("把账号 guest5 冻结掉") == "")
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑤b 模板占位符当值：写族的统一闸（20260928）")
+# 现场（trace `20260927_235721`）：planner 把技能模板 `plan=[("freeze_account",
+# {"name": "$name"})]` **整行抄进了 PARAMS**（`{"name": "$name"}`）⇒ 一张印着
+# 「冻结账号「$name」」的确认卡被发了出去：主人唯一能核对的那行字是个记号，而他
+# 一点下去，动的是一个活人的登录能力。
+# 判据放在**展开这一层**（`instantiate_plan` 写分支的最前面）而不是卡片那一层：
+# 零工具 ⇒ 没有 spec 可执行 ⇒ 卡**结构上**弹不出来，不需要第二处判据。
+for _sk, _p in (("account_freeze", {"name": "$name"}),
+                ("account_unfreeze", {"name": "$name"}),
+                ("notice_send", {"name": "$name", "content": "你好"}),
+                ("tag_update", {"name": "$name", "new_title": "x"}),
+                ("account_freeze", {"name": "$account"})):   # ② 换个键名抄进来
+    _pl = instantiate_plan(_sk, _p, ROLE_ADMIN)
+    check(f"⭐ {_sk} 的目标槽拿到模板记号 {_p['name']!r} → 零工具 + param_missing",
+          _pl["tools"] == [] and _pl["status"] == "param_missing"
+          and "占位符" in _pl["note"], f"{_pl['tools']} {_pl['status']}")
+    check("  且它复用的是既有的「参数不齐」形状（洞④ 的豁免读 status 不读文案）",
+          _pl["status"] in PLAN_STATUS_ABSENCE_EXEMPT and bool(_pl.get("param_problem")))
+check("对照：真实名字照常展开成 freeze_account spec（闸只认记号，不判填得好不好）",
+      instantiate_plan("account_freeze", {"name": "guest5"}, ROLE_ADMIN)["tools"]
+      == ['freeze_account({"name": "guest5"})'])
+check("对照：参数引用（带方括号 `$tool[0].field`）**不是**记号，原样透传"
+      "（它是合法取值，由 execute 的 resolve_args 解析）",
+      instantiate_plan("tag_update", {"name": "$list_tags[0].name", "new_title": "x"},
+                       ROLE_ADMIN)["tools"]
+      == ['update_tag({"name": "$list_tags[0].name", "new_title": "x"})'])
+check("对照：空参数走原来那条「缺少账号名」的追问（两条路各说各的话）",
+      "缺少账号名" in instantiate_plan("account_freeze", {}, ROLE_ADMIN)["note"])
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑥ 政策预检 _freeze_policy_refusal：只拦**确定知道**的两种，其余一律放行")
