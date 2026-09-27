@@ -98,20 +98,30 @@ DIALS: dict[str, dict] = {
     # ⚠️ `PLANNER_NATIVE_THINKING` 对这一档是**空开关**（`models/llm.py` 只对 qwen
     # 发 `enable_thinking` 的 extra_body）——写 false 是为了与生产档**同形**，不是
     # 因为它读这个值；标 `provider` 让档自检能验"服务商真的拨过去了"。
-    # ⚠️ **首跑（20260928）的 3/24 不是模型结论，别照着引用**：唯一绿的那条
-    # （casual_intro）恰好是**零工具**用例，其余全红于 narrator 的
-    # `400 Messages with role 'tool' must be a response to a preceding message with
-    # 'tool_calls'`——`model_node` 把 `[system] + state["messages"]` 交给服务商，而那些
-    # ToolMessage 的 `tool_call_id` 是自造的（`graph.py` 的 `execute_{idx}`）、前面没有
-    # 带 `tool_calls` 的 assistant 消息。qwen 端点容忍，deepseek 严格拒。**换服务商前
-    # 先修这个消息序列**，否则任何 provider 对照跑出来的都是这一条，不是质量差。
+    # ⚠️ **首跑（20260928）的 3/24 不是模型结论，别照着引用**——它红在两个**前置缺陷**
+    # 上，两个都在换服务商之前就修掉了：
+    #   ① narrator 的消息序列非法：唯一绿的那条（casual_intro）恰好是**零工具**用例，
+    #      其余全红于 `400 Messages with role 'tool' must be a response to a preceding
+    #      message with 'tool_calls'`——`model_node` 把 `[system] + state["messages"]`
+    #      交给服务商，而那些 ToolMessage 的 `tool_call_id` 是自造的（`graph.py` 的
+    #      `execute_{idx}`）、前面没有带 `tool_calls` 的 assistant 消息。qwen 端点容忍，
+    #      deepseek 严格拒。修法 = `agent/context.py::with_tool_call_pairs`（**只补形状、
+    #      不动材料**）。
+    #   ② 档里原先写的是 **思考模型**：`deepseek-flash` / `deepseek-v4-flash` 默认回
+    #      `reasoning_content`，补形状之后紧接着 400「The reasoning_content in the
+    #      thinking mode must be passed back to the API.」——而我们补出来的 assistant
+    #      本来就是模型没发过的话，没有推理链可回传 ⇒ **思考型号结构上跑不了这条链**。
+    #      `deepseek-chat` 是**非思考**型号，实测接受补出来的形状并正常作答（探针：
+    #      同一段孤儿帧，chat ✅ / flash、v4-flash ❌）。
+    #      ⇒ 这一档比的是"服务商"，因此必须选**能力面对齐**的型号；拿思考型号去比，
+    #      量到的是推理开销不是服务商差异（qwen 侧同轴的那一档是 `native-think-flash`）。
     "native-nothink-deepseek": {
                             "env": {"PLANNER_ENGINE": "native",
                                     "PLANNER_NATIVE_THINKING": "false",
                                     "LLM_PROVIDER": "deepseek",
-                                    "DEEPSEEK_MODEL": "deepseek-flash"},
+                                    "DEEPSEEK_MODEL": "deepseek-chat"},
                             "engine": "native", "provider": "deepseek",
-                            "model": "deepseek-flash"},
+                            "model": "deepseek-chat"},
 }
 
 _REPORT_LINE = re.compile(r"留档:\s*(\S+)")

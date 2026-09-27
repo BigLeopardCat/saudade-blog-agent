@@ -159,7 +159,10 @@ check("五个 native 档齐（思考 on/off × flash/max + 换服务商那一档
       str(list(dm.DIALS)))
 check("换服务商那一档**不带** QWEN_MODEL（型号由它自己的服务商变量给）",
       "QWEN_MODEL" not in dm.DIALS["native-nothink-deepseek"]["env"]
-      and dm.DIALS["native-nothink-deepseek"]["env"]["DEEPSEEK_MODEL"] == "deepseek-flash")
+      and dm.DIALS["native-nothink-deepseek"]["env"]["DEEPSEEK_MODEL"] == "deepseek-chat")
+check("换服务商那一档用**非思考**型号（思考型号要回传 reasoning_content，结构上跑不了）",
+      dm.DIALS["native-nothink-deepseek"]["model"] == "deepseek-chat",
+      str(dm.DIALS["native-nothink-deepseek"]["model"]))
 
 print("\n⑤ summarize：两条耗时两格、比率的分母与取值")
 ACC = acc_of([m_native], [case("m1", True, 9.0), case("m2", False, 11.0)])
