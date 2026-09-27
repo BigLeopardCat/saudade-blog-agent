@@ -697,18 +697,23 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
                            user_msg: str, intent_hints: str, doc_anchors: str,
                            recent_context: str, short_reply_hint: str, tool_results: str,
                            ref_hints: str, reflector_feedback: str, correction: str,
-                           contract: str) -> str:
+                           contract: str, slim_skills: bool = False) -> str:
     """渲染 planner 提示词（纯函数）。**唯一入口**：主路与影子档都走它。
 
     20260927 从 `planner_node` 里抽出来，是为影子档服务的：影子**必须**拿同一个提示词
     去跑另一条接口层，否则比的是"两个不同的提问"而不是"两个接口层"。留两份
     `.format(...)` 就是留两份漂移源（这个仓里"手抄第二份名单"反复出过事）。
     调用方只传**已经算好的**值，本函数不读 state、不碰库。
+
+    `slim_skills`（20260927）= 技能块去掉与 `tools` schema 逐字重复的三行，
+    只给 native 档用（判据与不删清单见 `skills.build_planner_context`）。**它不在
+    `_prompt_args` 里**：影子档两侧各按自己在生产里的形态渲染（native 侧 slim、
+    text 侧完整），比的是两个接口层的实际形态，而不是被抹平成一个变量。
     """
     return _PLANNER_PROMPT.format(
         # 技能表按本轮角色过滤（20260921）：管理助手那三个技能只对 admin 列出，
         # 其余角色看不到 ⇒ 选不出来。用 known_role（未知角色 → None → 只列公开技能）
-        skills_context=build_planner_context(role),
+        skills_context=build_planner_context(role, slim=slim_skills),
         # 菜单与 calls 白名单同源同角色（20260924）：菜单列了而白名单没有
         # ⇒ planner 照菜单点名、条目被剔空、白跑一轮（见 _tools_desc 注）。
         tools_desc=_tools_desc_cached(role),
@@ -3294,7 +3299,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 correction=correction or gate_note or "（本决策轮无纠偏提示）")
             _prompt = _render_planner_prompt(
                 contract=(_PLANNER_OUTPUT_CONTRACT_NATIVE if use_native
-                          else _PLANNER_OUTPUT_CONTRACT_TEXT), **_prompt_args)
+                          else _PLANNER_OUTPUT_CONTRACT_TEXT),
+                # native 档的技能块去掉与 schema 逐字重复的三行（判据见
+                # skills.build_planner_context）；text 档逐字节不变。
+                slim_skills=use_native, **_prompt_args)
             resp = llm.invoke(_prompt)
         except Exception as e:
             # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
@@ -3372,7 +3380,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if engine == "shadow":
             try:
                 _sresp = native_bound.invoke(_render_planner_prompt(
-                    contract=_PLANNER_OUTPUT_CONTRACT_NATIVE, **_prompt_args))
+                    contract=_PLANNER_OUTPUT_CONTRACT_NATIVE,
+                    # 影子两侧各按生产形态渲染：native 侧 slim（生产 native 档就是
+                    # 这样发的），主路那侧是 text 档的完整菜单。
+                    slim_skills=True, **_prompt_args))
                 _sdec = tool_calls_to_plan(
                     _sresp, role,
                     task_state=bool(getattr(settings, "agent_task_state", False)))
