@@ -1378,7 +1378,7 @@ def _write_arg(value) -> str:
     """写技能参数值 → 字符串（**不做类型强转、不吞引用**）。
 
     20260921 事故的核心就在这一步：旧代码用 `_norm_pos_int(params.get("parent_id"))`
-    把 `$list_tags[3].tagKey` 变成 `None` ⇒ 参数**静默消失** ⇒ 注记还肯定地写下
+    把 `$list_tags[3].tagId` 变成 `None` ⇒ 参数**静默消失** ⇒ 注记还肯定地写下
     「（一级标签）」。现在：空 → 空串（调用方剔掉）；其余**原样字符串化**——
     引用字面量照原样进 TOOLS 行，交给 execute 的 `resolve_args` 解析；解析不出来
     会产带原因码的 `__ERROR__` 帧（响亮、零执行），解析得出来就是真取到了值。
@@ -1743,11 +1743,11 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
 
 
 def _norm_id_or_ref(value):
-    """实参 → 正整数 **或** 参数引用字面量（`$list_notes[0].noteKey`）；都认不出 → None。
+    """实参 → 正整数 **或** 参数引用字面量（`$list_notes[0].noteId`）；都认不出 → None。
 
     为什么 id 位置也要认引用（20260923 批 7）：planner 提示词规则 3b 说得很死——
     "只要某个参数的值来自本轮已执行工具的返回，就**一律优先用引用**"。它照办时写
-    `{"article_id": "$search_notes[0].noteKey"}`，而 `_norm_pos_int` 只认数字 ⇒ 一条
+    `{"article_id": "$search_notes[0].noteId"}`，而 `_norm_pos_int` 只认数字 ⇒ 一条
     合法的计划被当成"缺参"退回追问（步骤白跑一轮）。取值由 `agent/refs.py` 在
     execute 调用前完成（解析失败给原因码，走既有 blocker 链路），这一层只负责
     **认得出那是个引用**、原样透传。

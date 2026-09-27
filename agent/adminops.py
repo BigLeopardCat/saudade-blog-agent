@@ -497,7 +497,11 @@ def render_admin_notes(notes, index: dict[int, TagInfo] | None, limit: int = 60)
         if normalize_top(n.get("isTop")) == 1:
             marks.append("置顶")
         tags = render_tag_list(n.get("noteTags"), index)
-        lines.append(f"- id={n.get('noteKey')} [{'/'.join(marks)}]《{title}》标签：{tags}")
+        # 命名空间名（`noteId=`）而不是裸 `id=`：这一屏是 **planner 的取值来源**，
+        # 而它在别处看到的同族 id 都叫 `noteId`（帧出口统一改名，见
+        # `tools/base.py::_FRAME_ID_KEYS`）。旧形 ` id=` 正是 id_namespaces 那批
+        # 锁点名要清掉的东西——同一个数字两种写法，下一步的参数就可能填错族。
+        lines.append(f"- noteId={n.get('noteKey')} [{'/'.join(marks)}]《{title}》标签：{tags}")
     if len(notes) > limit:
         lines.append(f"（另有 {len(notes) - limit} 篇未列出，可用关键词检索）")
     return "\n".join(lines)

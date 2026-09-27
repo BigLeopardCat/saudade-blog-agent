@@ -466,8 +466,15 @@ def _candidate_detail_plan(messages: list, executed: list, terms: set[str]) -> d
                 obj = ast.literal_eval(text)
                 if isinstance(obj, list):
                     for r in obj:
-                        if isinstance(r, dict) and r.get("noteKey") is not None:
-                            rows.append((str(r["noteKey"]), "note",
+                        # 帧里的 id 字段名是**命名空间名** `noteId`（出口统一改名，
+                        # 见 `tools/base.py::_FRAME_ID_KEYS`）；认 `noteKey` 是为了
+                        # 手写的测试帧——两条都认，这一处不再自己维护一份字段名清单。
+                        nid = None
+                        if isinstance(r, dict):
+                            nid = r.get("noteId") if r.get("noteId") is not None \
+                                else r.get("noteKey")
+                        if nid is not None:
+                            rows.append((str(nid), "note",
                                          str(r.get("noteTitle") or ""), "kw", None))
             elif name == "rag_search":
                 for typ, rid, score, title in _RAG_ROW_RE.findall(text):

@@ -190,6 +190,65 @@ check("实体摘要里没有以 id 起头的条目模板（`f\"{nid}《` 这种�
 check("弹窗卡面仍是 `#{talkKey}`（人眼看的 UX 面，本批刻意不动）",
       'head = f"#{hit' in _SRC["agent/adminops.py"])
 
+print("\n⑤ 帧出口改名（20260928）：同一个数字只以一种身份露面")
+
+from tools import base as _B  # noqa: E402
+
+_saved_get = _B._get
+try:
+    _B._get = lambda p, **kw: [{"talkKey": 96, "noteKey": 96, "author": "小舟",
+                               "content": "谢谢站长的分享！", "approved": 1}]
+    _frame = _B.list_guestbook.invoke({})
+finally:
+    _B._get = _saved_get
+
+check("公开留言帧里是 `talkId` 而不是上游字段名 `talkKey`",
+      "'talkId': 96" in _frame and "talkKey" not in _frame, _frame[:120])
+check("  **递归**改名：包了一层的响应也不会漏（漏掉的那处又变成两个名字）",
+      "noteId" in str(_B._label_id_keys({"data": {"records": [{"noteKey": 7}]}}))
+      and "noteKey" not in str(_B._label_id_keys({"data": {"records": [{"noteKey": 7}]}})))
+check("只改键名，不动值（值仍是上游给的那个）",
+      _B._label_id_keys({"talkKey": 96}) == {"talkId": 96})
+check("取值失败哨兵原样透出（ToolResult 不是行数据，不许被当成 dict 拆）",
+      _B._shape(_B.UPSTREAM_DOWN) is _B.UPSTREAM_DOWN)
+import ast as _ast  # noqa: E402
+
+_note = _ast.literal_eval(_frame)
+check("帧仍然 `literal_eval` 得动（注记在 list **里面**，不是拼在文本外面）",
+      isinstance(_note, list) and isinstance(_note[0], dict), str(type(_note)))
+check("注记确实在帧里（narrator 读的是全文，边界要有出处）",
+      any("已通过审核" in str(x) for x in _note), str(_note)[-90:])
+check("注记**不占下标**：`[0]` 仍是第一条留言",
+      isinstance(_note[0], dict) and _note[0].get("talkId") == 96)
+_rows_kept = [x for x in _note if isinstance(x, dict)]
+from agent.entities import _rows as _ent_rows  # noqa: E402
+check("实体摘要器跳过注记元素（非 dict 元素天然被过滤）",
+      _ent_rows(_note) == _rows_kept, str(_ent_rows(_note)))
+# ⚠ 模型读的是 `.description` 而**不是** `.__doc__`：`@tool` 把函数包成 StructuredTool
+# 实例后，实例的 `__doc__` 是 pydantic 那个类自己的文档（实测恰好是
+# `"Tool that can operate on any number of inputs."`）。钉 `__doc__` 等于钉一句
+# 谁也没读过的话——本批第一版就写错了，是这条断言自己红出来的。
+_LS_DESC = (_B.list_guestbook.description or "")
+check("列表工具的说明（**模型读的那份 `.description`**）里写着「只列已通过审核」",
+      "只列已通过审核的留言" in _LS_DESC, _LS_DESC[:40])
+check("  且写着「查无此条不等于不存在」（planner 那一侧要有边界，不能只在注记里）",
+      "不等于" in _LS_DESC and "待审" in _LS_DESC)
+check("  说说那边同样披露（两个数据源不同的工具，边界不能只写一个）",
+      "只列已通过审核" in (_B.list_talks.description or ""))
+
+from agent.refs import parse_data, resolve_one  # noqa: E402
+
+_td = [{"tool": "list_guestbook", "data": parse_data(_frame)}]
+check("引用按**新名**取值", resolve_one("$list_guestbook[0].talkId", _td) == (96, None),
+      str(resolve_one("$list_guestbook[0].talkId", _td)))
+check("引用按**旧名**也取得到（模型的历史措辞不许被改名判成 ref_path_missing）",
+      resolve_one("$list_guestbook[0].talkKey", _td) == (96, None),
+      str(resolve_one("$list_guestbook[0].talkKey", _td)))
+check("两个名字都不在时才报 ref_path_missing",
+      resolve_one("$list_guestbook[0].nope", _td)[1] == "ref_path_missing")
+check("后台文章清单用的是 `noteId=` 而不是裸 ` id=`",
+      "- noteId=" in _SRC["agent/adminops.py"] and "- id={" not in _SRC["agent/adminops.py"])
+
 print(f"\n{'全部通过' if not FAILS else f'失败 {len(FAILS)} 项'}")
 for f in FAILS:
     print("  - " + f)
