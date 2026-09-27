@@ -88,6 +88,11 @@ RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "30"))
 # 排障读日志，访客读这一句。这里是**模块级常量**而不是内联字面量：测试要能替换它
 # 去验"帧不会被劈开"（见 `tests/test_error_frame.py` ②）——写成内联字面量后，
 # 载荷里再无变量，那条判据就会变成永远为真的空判据。
+#
+# 20260927 起**两条通道共用这一句**：流式的 `__ERROR__` 帧与非流式 `/chat` 的
+# `reply`/`error`（见下面 `chat()` 的 except 支）。共用是刻意的——两处说的是同一件事
+# （这一轮没生成出回复），而"同一个事实只有一句话术"正是这类补丁最容易长歪的地方：
+# 各写一句，下一个人改了其中一处，主人从两条路径读到的就是两种说法。
 PRODUCER_ERROR_TEXT = "服务这边出了点问题，这一轮没能生成回复，请再说一次。"
 
 # 空回复恢复语：agent 流正常收尾但无任何输出（qwen 偶发空内容）时补发的人设内
@@ -711,9 +716,16 @@ async def chat(req: ChatRequest, request: Request):
 
         return ChatResponse(reply=final_reply, success=True, new_summary=new_summary,
                             executions=exec_rows)
-    except Exception as e:
+    except Exception:
+        # 内部异常的**明细只进日志**（`logger.exception` 带 traceback），不下发。此前这里
+        # 是 `reply=""` + `error=str(e)`：异常名与内部路径顺着 `error` 出到调用方，
+        # 而 HTTP 状态码仍是 200 ⇒ 调用方若只看状态码就把它当成"成功但空回复"。
+        # 两条通道同族（20260927 的 SSE 事故就是这一族的另一条路），故两处同修：
+        # 这里把**话术**填进 reply、把 success 置假（Rust 侧按 `success` 判，见
+        # `src/routes/chat.rs::agent_reply_of`），明细留给日志。
         logger.exception("Agent invocation failed")
-        return ChatResponse(reply="", success=False, error=str(e))
+        return ChatResponse(reply=PRODUCER_ERROR_TEXT, success=False,
+                            error=PRODUCER_ERROR_TEXT)
 
 
 # ---------------------------------------------------------------------------
