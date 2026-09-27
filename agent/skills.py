@@ -403,6 +403,15 @@ class Skill:
     optional_params: tuple[str, ...] = ()
     complete_when: str = ""            # 完成判定（注入 planner 提示词，辅助收尾决策）
     reply_contract: str = ""           # 回复契约（model 遵守）
+    # 规划契约（20260927）：**必须怎么做**的那一句话，与"技能是干什么的"（description）
+    # 分开写。分开的理由是被实测逼出来的，不是文风：native 档去重（skills.build_planner_context
+    # 的 `slim`）把 description 从散文菜单里删掉、只留 schema，而 rag_talk_rag 这条用例
+    # 随之从 5/5 绿变成 0/5 红——「'有没有人聊过/写过 X'必须成对点名 list_guestbook 与
+    # list_talks」原本住在 description 里，搬进 `tools[].description` 之后模型照旧选对了
+    # 技能、照旧调了 list_guestbook，**唯独漏掉这条契约**。结论：描述（是什么）可以只留
+    # schema 一份，契约（必须怎么做）得留在提示词正文里。
+    # **别把契约再抄回 description**：抄回去就是两份，两份就会漂。
+    planner_contract: str = ""
     chat: bool = False                 # 闲聊（chat 轮零工具叙述，gate 声称检查按窄作用域）
     # 可见角色（20260921 管理助手）：**空集 = 所有角色可见**（含身份不明）。
     # 非空 ⇒ 只有列出的角色能在 planner 上下文里看到它。这是"身份"那道闸，
@@ -531,17 +540,28 @@ SKILLS: list[Skill] = [
             "页面/内容存在性质疑（如\"真有这个页面？确定有这篇？\"——查证页面或"
             "内容是否存在；执行是否属实的问题归跨轮执行记忆（页面上下文『确认与执行事实』块里『已执行』那半），"
             "见规划规则 6，不在本技能范围）。"
-            "规划方式：数据/列表型 → PARAMS.tools 点名无参只读数据工具"
-            f"（{_EXPLICIT_TOOLS_MARK}，"
-            "'有没有人聊过/写过 X'必须成对点名两个数据源；天气用 PARAMS.calls 给 "
-            "get_weather(location)）；知识型/验证型 → PARAMS.calls"
-            " 给出带参调用清单（search_notes/rag_search 定位、get_article_detail 读全文），"
-            "一次决策只给当前步，后续步骤在下一轮规划中按工具返回决定"
+            # 「规划方式：数据/列表型 → tools 点名；知识型/验证型 → calls 定位」这句
+            # 20260927 挪进了 planner_contract（**必须怎么做**那一半）：它住在这里时
+            # 随 slim 一起被交给 schema，测出路由回归（见 planner_contract 的注释）。
+            # 这里只留"这个技能是干什么的、什么时候用"。
+        ),
+        # 规划契约（见 Skill.planner_contract 的字段注释）：两条**必做**。
+        # ① 「必须给调用清单」原本写在 description 里，随 slim 一起被交给 schema ⇒
+        #    A/B 实测路由回归（`rag_git_svn` slim 5/9 vs 完整 9/9：模型改用通用知识
+        #    直接作答、一个检索工具都没调）。规划规则 3 在提示词正文里说的是同一件事，
+        #    但那是七条规则里的一段，**不等于**技能旁边那句 —— 与成对点名同一个洞。
+        # ② 成对点名原本写在 description 与 inputs.tools 两处（同一句话两份），
+        #    20260927 收成一处。
+        planner_contract=(
+            "涉站内容**必须先取回真实数据再作答**：知识型/验证型给 calls（search_notes/"
+            "rag_search 定位、get_article_detail 读全文），数据/列表型点名 tools；"
+            "除收尾轮（已有工具返回且信息足够 / 明确查无结果）外不许空着手回答。"
+            "问「留言板/说说里有没有人聊过、写过 X」时必须**成对**点名两个数据源："
+            "list_guestbook 与 list_talks（只点一个 = 少查一半，等于没查）"
         ),
         inputs={
             "tools": (
-                f"（可选）无参只读数据工具点名列表，仅限 {_EXPLICIT_TOOLS_MARK}；"
-                "'有没有人聊过/写过 X'必须成对点名 list_guestbook 与 list_talks"
+                f"（可选）无参只读数据工具点名列表，仅限 {_EXPLICIT_TOOLS_MARK}"
             ),
             "calls": (
                 "（可选）带参调用清单：[{\"tool\": \"search_notes\", \"args\": {\"keyword\": "
@@ -2754,7 +2774,12 @@ def visible_skills(role: str | None, include_system: bool = False) -> list[Skill
     return out
 
 
-def build_planner_context(role: str | None = None) -> str:
+def _skill_plan_seq(s) -> str:
+    """技能的固定工具序列渲染成一行（`工具(参数模板) → 工具(参数模板)`）。"""
+    return " → ".join(f"{t}({json.dumps(a, ensure_ascii=False)})" for t, a in s.plan)
+
+
+def build_planner_context(role: str | None = None, *, slim: bool = False) -> str:
     """planner 注入：技能表（触发条件 + 参数 + 工具序列 + 完成判定）+ 导航映射表。
 
     read_article 不列出——系统快道专用（article_id 是 current_url 解析的系统数据，
@@ -2764,9 +2789,44 @@ def build_planner_context(role: str | None = None) -> str:
     技能的 `roles` 非空且不含该角色 → **整个技能不列出来**。非 admin 的管理助手
     技能因此选不出来。传 None（未知身份/老路径/单测）等价于"只有公开技能"——
     失败取向往保守一侧倒，与本仓 authz 的取向一致。
+
+    `slim=True`（20260927，**只给 native 档用**）：去掉每条技能的**触发条件/参数/
+    完成判定**三行，只留技能名与它的固定工具序列。理由是这三样在同一轮的 `tools`
+    里逐字重复出现（schema 的 `description` = `s.description` + `完成判定：` +
+    `complete_when`，`properties` = 同一份 `skill_param_specs`），而**同一事实写两遍
+    是有代价的**：native 档下面临的是两份形态不同的同一张表（散文 vs JSON Schema），
+    模型得自己判断听哪一份，且两份会漂移——本批落地时就抓到一处：schema 侧的
+    `content_query` 描述里原样漏着未展开的 `__无参只读工具清单__` 标记（已修，
+    见 `native_plan.py`）。**不删的**：固定工具序列（`tools` 的 schema 里没有，
+    而 `content_query` 的 calls 通道要求写工具名）、导航映射表、能力边界兜底段、
+    口语变体说明——这些是这一块独有的信息，删了就真丢。
+
+    ⚠️ `slim` **只影响渲染，不影响任何判据**：谁能选（`visible_skills`）、参数怎么
+    校验（`skill_param_specs` / `check_skill_params`）都不看这段文本。
+
+    **规划契约（`planner_contract`）两档都渲染**（20260927 实测逼出来的规则）：slim 的
+    第一版只留"技能名 + 工具序列"，把 `content_query` 的成对点名（"留言板/说说有没有人
+    聊过写过 X"必须同时点 `list_guestbook` 与 `list_talks`）随描述一起交给了 schema 里的
+    `tools[].description`。A/B 五遍对照：`rag_talk_rag` 完整菜单 **5/5 绿**、slim **0/5 红**
+    ——契约句夹在长描述里时遵守率显著低于它在提示词正文里。故拆出独立字段：**描述
+    （是什么）归 schema，契约（必须怎么做）归提示词正文**。别把契约再抄回 description
+    （两份就会漂，且会重新落回"夹在长描述里"那个形态）。
     """
-    lines = ["可用技能（只能从以下技能中选择一个，不得自创步骤或自由编写执行计划）："]
+    lines = ["可调用的技能（函数名即技能名，一次选一个；每个技能的触发条件、参数与"
+             "完成判定见本轮 tools 里同名函数的 schema，此处不重复，只列它展开成哪些工具）："
+             if slim else
+             "可用技能（只能从以下技能中选择一个，不得自创步骤或自由编写执行计划）："]
     for s in visible_skills(role):
+        # 契约行**只算一次**，两档共用（各写一份必然漂）。措辞在 slim 档下是这一段里
+        # 唯一的"必须怎么做"，放在最显眼的地方（紧跟技能名/描述之后）。
+        contract = f"  契约：{s.planner_contract}" if s.planner_contract else ""
+        if slim:
+            # 没有固定工具序列的技能（如 chat）也列一行：它是"可选集合"的一员，
+            # 缺了会让模型以为没有这个出口（schema 里有、但这里是同一张表的读法）。
+            lines.append(f"- {s.name}：{_skill_plan_seq(s) if s.plan else '（无固定工具）'}")
+            if contract:
+                lines.append(contract)
+            continue
         lines.append(f"- {s.name}：{s.description}")
         # 参数一行 = `名字:类型` + 必填 `*` + 默认值 `=值` + 中文说明（20260925）。
         # 此前这里是 `json.dumps(s.inputs)` ——**只有散文**，必填/类型/默认值一概
@@ -2777,10 +2837,11 @@ def build_planner_context(role: str | None = None) -> str:
         if sig:
             lines.append(f"  参数：{sig}")
         if s.plan:
-            seq = " → ".join(f"{t}({json.dumps(a, ensure_ascii=False)})" for t, a in s.plan)
-            lines.append(f"  执行步骤：{seq}")
+            lines.append(f"  执行步骤：{_skill_plan_seq(s)}")
         if s.complete_when:
             lines.append(f"  完成判定：{s.complete_when}")
+        if contract:
+            lines.append(contract)
     # 兜底语义（20260926 洞⑥ 复盘）：这张表此前只有「能做什么」，**没有「做不到怎么办」**。
     # 请求落在表外时（trace 20260926T082919：主人要"给某个用户发个通知"——**当时**通知类
     # 工具只有"读自己的"、站内没有给单个用户发通知的通道），planner 唯一的去处是 chat，
