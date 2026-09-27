@@ -66,7 +66,11 @@ print("\n② 接线：那条规则真的进了 narrator 的 system prompt（能�
 _sys = g._EXECUTOR_PROMPT.format(
     persona=BLOG_ASSISTANT_PROMPT, audience="【对话者：访客】",
     plan="（本轮没有计划）", tool_frames="（本轮没有工具返回）",
-    exec_receipts="（无）", page_ctx="（无）", sticker_guide="（无）")
+    exec_receipts="（无）", page_ctx="（无）", sticker_guide="（无）",
+    # 动作事实块（20260927 D3）：新槽必须在这里也填上——`.format` 漏槽会直接
+    # KeyError（下面那条"花括号不许留给模型看"的判据就是这个理由）。这一节的价值
+    # 恰恰在于**它是真的在格式化那份 prompt**：槽变了它就红，而不是躺在常量里自证。
+    fact_block="（本轮没有动作族执行）")
 check("narrator 的 system prompt 里含来源归属这条（不是只在常量里躺着）",
       "系统给过的东西" in _sys and "来源就说系统" in _sys)
 check("  也含原有的那一维（两维同在，不是替换关系）",

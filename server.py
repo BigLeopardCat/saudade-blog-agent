@@ -30,6 +30,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 
 from agent import adminops as A  # 过程行中文取值（写工具的预告/完成帧共用）
 from agent import confirm  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
+from agent.factblock import action_facts, compose, render_fact_block  # 动作事实块（D3）
 from agent import create_agent
 from agent.graph import AgentCancelled, graph_input, _cmd_wire
 from agent.principal import Principal
@@ -604,6 +605,10 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
     full_reply = ""
     nav_line = ""
     exec_rows: list = []  # 跨轮执行记忆（20260904 C3）：checker 验收回执，累计语义末批即全量
+    # 动作事实块（20260927 D3）：命令族/写族的事实由系统印在正文最前面（与流式那半
+    # 同源同序，`agent/factblock.py`）。这里不流式，所以整块一次算：回执是累计语义，
+    # 末批即全量 ⇒ 每次覆盖成最新全量即可（`compose` 在末尾拼）。
+    fact_block = ""
     for mode, data in _agent.stream(
         graph_input(messages, ledger=ledger or {}),
         config,
@@ -616,6 +621,7 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
             ex_upd = data.get("execute")
             if ex_upd and ex_upd.get("receipts"):
                 exec_rows = ex_upd["receipts"]
+                fact_block = render_fact_block(action_facts(exec_rows))
                 # 命令重建（20260926 批 2）：三个命令工具的返回文本不再带
                 # `AUTO_NAVIGATE:` 前缀，命令搬到了回执行的 `cmd` 字段。非流式
                 # 消费方（Rust `/chat` 响应体）读的仍是**连线形**，所以在这里
@@ -651,7 +657,9 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
                 nav_line = text
             elif text.startswith("EFFECT:") or text.startswith("DARKMODE:"):
                 nav_line = text
-    reply = full_reply.strip()
+    # 动作族事实在前、narrator 正文在后（D3，与流式那半同序）。`fact_block` 在
+    # 重规划分支不清零：被否掉的是**措辞**，那些动作是真做过的（同流式那半的重印）。
+    reply = compose(fact_block, full_reply)
     # 不再在这里拼入 nav/effect 命令行——由调用方在摘要剥离之后追加，
     # 避免回复末尾的 SUMMARY: 截断把 EFFECT:/NAVIGATE: 命令一起吞掉
     return reply, nav_line, exec_rows
@@ -1185,6 +1193,12 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         # 完成帧 diff 起点（20260905 issue5）：receipts 全量累计，已发条数起点
         # 之后为新增回执（同一 update 内顺序与执行顺序一致）
         receipt_sent = 0
+        # 动作事实块（20260927 D3，`agent/factblock.py`）：命令族/写族的事实**由系统
+        # 印**——在 narrator 产文本之前就把那几行发给主人（用户可见正文 = 系统事实块
+        # + 模型包装）。`fact_sent` 是已印出的行（增量去重，跨 replan 重发要用），
+        # `prelude` 是它们渲染成的整块（trace 正文与 fallback 替换要用）。
+        fact_sent: list = []
+        prelude = ""
         # 本次请求内新登记的任务（20260927 批 D）：[(载荷, 登记时刻)]——流尾结算时要用
         # 它们的 `declared_after`（同轮新登记的行走 ts 过滤，见 tasks.advance_by_receipts
         # 的注：不这么做，"先导航再登记"那半步会被自己刚执行的回执立刻算完成）。
@@ -1209,6 +1223,24 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
 
         def emit_reset(reason: str):
             asyncio.run_coroutine_threadsafe(queue.put(f"__RESET__:{reason}"), loop).result()
+
+        def emit_facts(rows: list):
+            """动作族事实块（D3）：把**还没印过**的事实行发给主人（增量、按文本去重）。
+
+            发在 execute update 里是刻意的：那一刻 execute 节点已收尾、narrator 的
+            model 节点还没跑（同段代码里 `__CMD__` 帧的注释讲的是同一条时序）⇒
+            主人读到的顺序恒为"事实 → 包装"。块尾留一个空行（markdown 里单换行会被
+            并进同一段，"跳转：…好，我带你过去了"会连成一句）。"""
+            nonlocal prelude
+            fresh = [x for x in action_facts(rows) if x not in fact_sent]
+            if not fresh:
+                return
+            fact_sent.extend(fresh)
+            prelude = render_fact_block(fact_sent)
+            record("producer", "fact_block", n=len(fresh), total=len(fact_sent))
+            asyncio.run_coroutine_threadsafe(
+                queue.put(AIMessageChunk(content=render_fact_block(fresh) + "\n\n")),
+                loop).result()
 
         for mode, data in _agent.stream(
             graph_input(messages, confirm_grant=confirm_grant,
@@ -1371,6 +1403,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                     queue.put("__CMD__:" + json.dumps(cmd, ensure_ascii=False)),
                                     loop).result()
                         receipt_sent = len(rows)
+                        # 动作族事实块（D3）：紧随 `__CMD__` 之后发（命令是机器读的，
+                        # 块是给人读的），仍早于 narrator 的任何文本。
+                        emit_facts(rows)
                     for b in ex_upd.get("blocked") or []:
                         # ✗ 行在前、✅ 行在后（本轮两列表分开到达，不混排）；
                         # 同 spec 跨轮重复受阻只提示首次（key 按 spec 去重）
@@ -1403,6 +1438,14 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     emit_process("✗ 质检打回：" + reason, key="gate_replan")
                     emit_reset(reason)
                     emitted.clear()
+                    # 事实块跟着被 RESET 清掉了（前端清 displayText、Rust 清累积 reply）
+                    # ——但那些动作**是真做过的**，重规划不改变这一点 ⇒ 立刻重印一遍：
+                    # 否则主人只会看到重查之后的正文，而"页面已经跳过去了"这件事
+                    # 从气泡里消失了（丢的是事实，不是措辞）。清空 `fact_sent` 是
+                    # 重印的前提（下一轮 execute update 会照常增量补发新事实）。
+                    if prelude:
+                        fact_sent.clear()
+                        emit_facts(exec_rows)
                     # 具体判据（issue/子句）由 graph 侧记 trace 并打 WARNING，
                     # 这里只记"发生过一次重规划"——两边重复记会把同一条读两遍。
                     logger.info("[stream] gate 打回 → planner 重规划（本轮不结束）")
@@ -1414,8 +1457,13 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     emit_reset(reason)
                     final_reply = upd["fallback_text"]
                     emitted.clear()
+                    # RESET 把已经发出去的事实块也清了 ⇒ 重新拼上（D3）：块是真话、
+                    # 且是这一轮唯一有系统背书的正文（旁证：`action_restate` 这条网
+                    # 之所以不判死，正是因为它一旦走这条路，`emit_reset` 会连命令
+                    # 一起清掉——见 gate 5g 的注释）。`compose` 幂等，重复拼不上。
+                    final_reply = compose(prelude, final_reply)
                     asyncio.run_coroutine_threadsafe(
-                        queue.put(AIMessageChunk(content=upd["fallback_text"])), loop).result()
+                        queue.put(AIMessageChunk(content=final_reply)), loop).result()
                 else:
                     # 检查通过收尾（gate 恒 done=True）；chat 快道无执行可查，
                     # 不发（见 is_chat_skill）
@@ -1424,8 +1472,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         else:
             # for 自然耗尽（无 break）= graph 完整跑完，未被断连打断
             logger.info("[stream] graph complete (uninterrupted)")
-        # trace 落盘：最终回复随 producer 收尾记录（finish_trace 落盘时并入）
-        record("producer", "stream_end", reply=final_reply)
+        # trace 落盘：最终回复随 producer 收尾记录（finish_trace 落盘时并入）。
+        # **含事实块**（D3）：trace 的 reply 是"主人读到了什么"，而这一批起主人读到
+        # 的第一段是系统印的那几行（gate fallback 那支在上面已经拼过了，compose 幂等）。
+        # 反面：不加这块，trace 里就查不出"这一轮主人到底看到了什么事实"。
+        record("producer", "stream_end", reply=compose(prelude, final_reply))
         # 任务结算（20260927 批 D）：**由系统按回执结算，模型说了不算**（同
         # execution_log 的纪律）。判据是"某一步声明的工具这一轮真的 PASS 执行过"
         # （`tasks.advance_by_receipts`），推进一步发一帧 `__TASK__` 回写 cursor/state，

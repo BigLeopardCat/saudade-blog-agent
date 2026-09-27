@@ -90,6 +90,7 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _any_error_frame, _article_fast_pa
                              _nav_fast_path, _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.entities import receipt_digest
+from agent.factblock import action_facts, is_action_family, render_fact_block
 from agent.native_plan import (bind_native, finish_reason, tool_call_names,
                                tool_calls_to_plan)
 from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY,
@@ -1495,6 +1496,41 @@ _STATE_ACTION_EXEMPT_RE = re.compile(
 # 稍等哦～」被「为了」的"了"当成了完成态 → 洞①误伤（探针 40 跑 1 中，属真实复现）。
 _SENT_RE = re.compile(r"[。！？!?\n]+")
 _STATE_DONE_RE = re.compile(r"已经|刚刚|方才|啦|咯|喽|好了|(?<![为除罢算])了|成功|完成|搞定")
+
+# ── D3（20260927）：动作族轮次的"复述式声称" ────────────────────────────────
+# 命令族/写族的**事实**从这一批起由系统印在气泡最前面（`agent/factblock.py`
+# 渲染、`server.py` 发在 narrator 之前），叙述权收归系统：主人已经读到那几行了，
+# 再说一遍是同一句话说两次，和事实块对不上时还会读成自相矛盾。
+# 判据只在**动作族轮次**（本轮真有命令族/写族的已验收回执）上生效——射程与量化
+# 口径同源（`eval/narrator_facts_share.py` import 同一份分类）。
+# **命中了只记不判**（gate 5g 的那段注释写了为什么不能 fallback：RESET 会连命令
+# 一起丢掉，实测三条动作族 golden 因此"页面没跳却说已跳"）。
+#
+# **为什么不直接用 `_STATE_ACTION_CLAIM_RE`**：那张网是"零工具轮"用的，两处不合用——
+#   ① ①支要求施事前缀（帮你/给你）⇒「页面也跳转过去啦」这类**无施事**的复述漏掉；
+#   ② 它的动词表是"开合/显示/后台写"三段，命令族的**跳转**只在②③支（要时间副词
+#      或把字结构），而 D3 要抓的恰恰是最随口的那个形态（"跳过去啦"）。
+# 所以这里重列一张**动作族动词表**，两个方向都收紧：
+#   · 完成标记**必须紧贴动词**（①支）或由时间副词领起（②支）——完成式是"声称"的
+#     形态标志；**状态陈述**（"樱花特效现在是开启状态"，幂等轮的正确答案）不带完成
+#     标记，从而不误伤（与 `_STATE_ACTION_CLAIM_RE` ⑤支同一条理由）；
+#   · ②支不要求尾标记（回执原文本身就是"标签「音乐」已创建"这个形状，照抄回执 =
+#     复述），但加了 `(?!的)`——把"已经打开的**樱花**"这类定语用法放行（那是描述
+#     状态不是声称动作）。
+# 豁免复用 `_STATE_ACTION_EXEMPT_RE`（否定/提议/疑问/引述），另加 `_prior_time_veto`
+# （回执在场时的"刚才/之前" = rule 6 据实转述）——与零帧那条网同一族纪律。
+_ACTION_RESTATE_VERBS = (
+    r"(?:打开|开启|开好|关掉|关闭|关上|切换|切到|切成|切回来|调到|调成|改成|换成"
+    r"|显示|上屏|跳转|跳转过去|跳过去|切过去|带你过去|带过去"
+    r"|创建|新建|建好|加上|打上|去掉|移除|删除|删掉|改好|置顶|取消置顶|隐藏|下架"
+    r"|设为私密|设为公开|设为草稿|设成私密|设成公开|设成草稿"
+    r"|驳回|冻结|解冻|发通知|发送|收藏|取消收藏|登记|办完|办好|标记完成)"
+)
+_ACTION_RESTATE_RE = re.compile(
+    _ACTION_RESTATE_VERBS + r"(?:了|啦|好了|成功|完成|搞定|掉了)(?![的之])"
+    r"|(?:已经?|刚刚|方才)[^\n。！？!?；;，,]{0,8}?" + _ACTION_RESTATE_VERBS
+    + r"(?!的)(?:了(?!的)|啦|好了|成功|完成|搞定|$)"
+)
 # ── gate 洞②：站内检索声称 vs 本轮帧族（20260919）──────────────────────────
 # 事故形态：回复说"我检索了一圈 / 把站内翻了一遍 / 用 rag_search 搜了一遍"，而本轮
 # 根本没跑任何内容类工具（零帧，或只跑了导航/特效这类动作工具）。旧判据两处缺口：
@@ -6472,6 +6508,9 @@ _EXECUTOR_PROMPT = """\
 如实转述的依据；为空 = 本轮没有已验收的执行）：
 {exec_receipts}
 
+[本轮动作事实]（**系统已经印在气泡最前面**，主人一定会读到；这些行不再由你说）：
+{fact_block}
+
 当前页面上下文（前端实时上报的访客位置/特效/夜间模式，以此为准）：
 {page_ctx}
 
@@ -6593,7 +6632,20 @@ _EXECUTOR_PROMPT = """\
     小时前的事，说成"刚才查到的"就是措辞上的假话（20260925 生产实证：真的这么说了）。
     「刚才/刚刚」只能用于几分钟以内、系统没标过期的记录。要回答"现在怎样"而手里
     只有过期记录时，如实说明这一点（"我上次看是三天前，那会儿是这样；现在得重新
-    查一次才算数"），不要拿旧读数冒充现状。"""
+    查一次才算数"），不要拿旧读数冒充现状。
+23. 动作族轮次（[本轮动作事实] 非空时）：那几行**系统已经印在气泡最前面**，主人
+    一定会读到——**它们不再由你说**。不提跳转到哪、不提特效/夜间开关状态、不提
+    建/改/删成了没有：复述一遍只是把同一句话说两次，而且你说的那次没有系统背书。
+    你只写**它没说的那部分**：背景解释、为什么、下一步建议、语气与称呼；该展开
+    就展开——这条**不限长度，只限内容**（例如解释某个页面是做什么的、为什么做
+    不成某件事，照常讲透）。
+    **不要作完成式陈述**：「已经帮你打开啦」「页面跳过去啦」「标签建好啦」「都办
+    好啦」这类句子读起来是**同一句话说两遍**——而且一旦你和上面那几行对不上（哪怕
+    只是措辞上的出入），主人读到的就是自相矛盾的两句话，他会信哪一句都不对。要给
+    结果就给非完成式的措辞（"这次的动作是这样""要的话我再帮你…"），要问"还要不要
+    再来一个"就直接问——提议不是声称。
+    （纪律 6 的"回执值可以照抄"在动作族轮次**让位给这一条**：值主人已经在最前面
+    读到了，这里是复述；那条纪律管的是主人**专门问起**某次执行时的据实引用。）"""
 
 
 def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
@@ -6615,6 +6667,19 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 与称呼/口径按角色变。未知角色 → 访客那段（fail-closed：宁可把主人当访客，
     # 也不把访客当主人——后者会用主人的口径去答权限相关的事）。
     role = _principal_of(config).known_role
+    # 动作族事实块（20260927 D3，roadmap §D3）：命令族/写族的回执**由系统印**，
+    # 模型只写包装。三处一起做才成立：
+    #   ① 块进提示词（模型知道主人已经看到这几行，才不会去复述、也不会说"我没执行"）；
+    #   ② 同一份事实**从两个记录段里摘掉**（摘掉的不是事实，是"第二次出现的邀请"）；
+    #   ③ 块由 producer 发在 narrator 之前（`server.py`），用户先读事实再读包装。
+    _receipts = [r for r in (state.get("receipts") or []) if isinstance(r, dict)]
+    _facts = action_facts(_receipts)
+    _block = render_fact_block(_facts)
+    _drop = {str(r.get("tool") or "") for r in _receipts if is_action_family(r)}
+    if _facts:
+        record("model", "fact_block", n=len(_facts), tools=sorted(_drop))
+        logger.info("[model] 动作事实块 %d 行（族内工具 %s），叙述权收归系统",
+                    len(_facts), "、".join(sorted(_drop)) or "-")
     system = SystemMessage(content=_EXECUTOR_PROMPT.format(
         persona=BLOG_ASSISTANT_PROMPT,
         audience=audience_block(role),
@@ -6622,8 +6687,9 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         # 此前它只在 `data_repeat` 收尾支注入，零工具轮拿不到 ⇒ narrator 抄历史里
         # 系统自己写的卡面话术（trace 20260926T082919 实证）。
         plan=_narrator_plan(state),
-        tool_frames=_frame_texts(state["messages"]),
-        exec_receipts=_receipts_text(state.get("receipts") or []),
+        tool_frames=_frame_texts(state["messages"], drop_tools=_drop),
+        exec_receipts=_receipts_text(_receipts, drop_tools=_drop),
+        fact_block=_block or "（本轮没有动作族执行）",
         # 能力清单与 audience 同一角色源（20260921）：两处口径不同会出现
         # "管理员身份 + 清单里没有管理能力"的自相矛盾 prompt
         page_ctx=_page_ctx(state["messages"], role),
@@ -6901,6 +6967,47 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                receipts=len(state.get("receipts") or []))
         return fail("false_negative_claim", _FALLBACK_NO_EXEC,
                                 plan, len(frames))
+
+    # 5g. 动作族轮次的复述式声称（20260927 D3，判据见 `_ACTION_RESTATE_RE` 注释）：
+    #     命令族/写族的事实**已经由系统印在气泡最前面**（`server.py` 的 fact block），
+    #     narrator 这一批只写包装。它若仍作完成式声称（"已经帮你打开啦""页面也切过去
+    #     啦"），这一条**只记不判**——落 `gate.action_restate` 事件 + 一行 info，
+    #     正文照常放行。
+    #
+    #     **为什么不是 fallback（20260927 实测改口，别把它改回去）**：D3 落地前拿 19 条
+    #     动作族 golden 实跑，`eff_off_sakura` / `dark_off` / `nav_article_target` 三条
+    #     被这条网命中，三条都走了 fallback，而**三条的失败项都是"缺少 xxx 命令帧"**：
+    #     gate fallback 发 `__RESET__`，前端那份 20260926 的决定是 RESET **连命令缓冲一起
+    #     清**（`chat-stream.js` 的 `programCmds = []`，理由写在哪儿：被否定的那一轮命令
+    #     不该照旧执行）⇒ 命令**从未下发**，页面没跳、特效没关，而气泡里那句"已关闭"
+    #     （=我塞进去的事实块）已经印出去了。**系统说了它没做的事**——正是这一批要治的
+    #     病，被判死的却是唯一有系统背书的那一轮。
+    #
+    #     根因是**罚得不对**：这条网命中的句子**不是幻觉**（有族内回执在场，判据本身
+    #     就要求 `_action_block` 非空），它只是"同一句话说两遍"；而 fallback 的代价是
+    #     丢掉整轮措辞 + 丢掉命令。要真按"禁声称"判死，前提是 RESET 之后**重发**这一轮
+    #     的 `__CMD__`（回执是 checker PASS 的事实，命令本来就该生效）——那要动三端
+    #     RESET 语义，**待拍板**，不由这一批顺手改。所以此处的"禁"落在提示词（`_EXECUTOR_PROMPT`
+    #     纪律 23）上，这里只提供**达没达标的数据**：纪律 23 上线首测 19 轮里 3 轮复述
+    #     （16%），值不值得为它动 RESET 语义，看这条事件的累计计数再定。
+    #
+    #     **只在有动作族回执时生效**（射程＝命令族+写族，与 `agent/factblock.py` 的
+    #     量化口径同源）：数据族的 JSON 讲成人话本就是模型的活，那条路上它说的
+    #     "查到了/没有"由别的网管（5d/5f），不归这里。
+    #     **也不进 `_REPLAN_ISSUES`**：重规划会把这些工具**再执行一遍**（命令族/写族
+    #     都有副作用，而回执已证明它们成功执行过）。
+    _action_block = render_fact_block(action_facts(receipts))
+    if _action_block:
+        clause5g = _clause_hit(
+            reply, _ACTION_RESTATE_RE, _STATE_ACTION_EXEMPT_RE,
+            # 回执在场 ⇒ "刚才/之前"指的是**已记录的执行**（rule 6 据实转述），
+            # 与零帧那条网（洞①）共用同一族豁免，理由见 `_state_action_claim`。
+            veto=_prior_time_veto(_has_exec_memory(msgs, state.get("ledger"))))
+        if clause5g:
+            logger.info("[gate] 动作族轮次复述式声称（事实块已由系统印）｜子句=%s（只记不判）",
+                        _clip_clause(clause5g))
+            record("gate", "action_restate", clause=_clip_clause(clause5g),
+                   facts=len(_action_block.splitlines()), soft=True)
 
     record("gate", "pass", zero_frame=False, frames=len(frames),
            duration_s=round(time.monotonic() - _t0, 2))

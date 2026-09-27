@@ -889,7 +889,8 @@ def _compact_list_frame(text: str, budget: int) -> str | None:
     return f"{head}\n{out}" if head else out
 
 
-def _frame_texts(messages: list, limit: int = 5, per: int = 300) -> str:
+def _frame_texts(messages: list, limit: int = 5, per: int = 300,
+                 drop_tools: set | None = None) -> str:
     """最近的工具返回摘要（planner 下一轮决策依据 / narrator 叙述依据）。
 
     只取最近 limit 条。截断策略按帧型：普通帧（检索候选/列表）截 per 字符
@@ -897,8 +898,20 @@ def _frame_texts(messages: list, limit: int = 5, per: int = 300) -> str:
     大幅放宽并标注"节选"；__ERROR__ 信息完整保留（planner 需要据错误修正参数
     重试）；**列表帧走 _compact_list_frame**（一行一条 + 整行取舍 + 共几条），
     不再裸切半行。
+
+    `drop_tools`（20260927 D3）：动作族的帧**从这里摘掉**——它们只出现在
+    `[本轮动作事实]` 那一段（那里写明"系统已印、你不要复述"）。同一份事实在提示词
+    里出现两次，第二次出现天然是在邀请模型复述它（这就是动作轮 75%–82% 的字都在
+    复述的来源）。摘掉后可能一条不剩：那时**不能**回落到"本轮尚无工具执行"——那
+    是句假话（本轮明明执行了），改成指回事实块。
     """
     frames = [m for m in messages if isinstance(m, ToolMessage)]
+    if drop_tools:
+        frames = [m for m in frames
+                  if (getattr(m, "name", "") or "") not in drop_tools]
+        if not frames:
+            return ("（本轮动作族的工具返回已在上面的 [本轮动作事实] 里给出——"
+                    "那是系统印给主人的原文，本条不作重复）")
     if not frames:
         return "（本轮尚无工具执行）"
     parts = []
@@ -944,13 +957,22 @@ def _frame_texts(messages: list, limit: int = 5, per: int = 300) -> str:
     return "\n".join(parts)
 
 
-def _receipts_text(receipts: list) -> str:
+def _receipts_text(receipts: list, drop_tools: set | None = None) -> str:
     """checker 验收回执摘要（narrator 同轮如实转述依据，20260904）。
 
     工具帧是"执行了什么"的原始返回，回执是"系统验收确认执行成功"的收据——
     narrator 描述"实际显示了什么/跳转到哪"以回执为准（帧可能只含 ack 不含
     参数，回执的 args 是文案注入后值，含实际屏文）。空 → 本轮无已验收执行。
+
+    `drop_tools`（20260927 D3）：动作族的回执只进 `[本轮动作事实]`（理由与
+    `_frame_texts` 同）；全被摘掉时同样**不许**回落到"本轮没有已验收的执行"。
     """
+    if drop_tools:
+        receipts = [r for r in receipts
+                    if str((r or {}).get("tool") or "") not in drop_tools]
+        if not receipts:
+            return ("（本轮已验收的执行都在上面的 [本轮动作事实] 里——"
+                    "系统已印原文，本条不作重复）")
     if not receipts:
         return "（本轮没有已验收的执行）"
     lines = []
