@@ -1,0 +1,752 @@
+{
+ "ts": "2026-09-28 02:53:50",
+ "label": "provider_ab_postfix",
+ "ids": [
+  "eff_on_sakura",
+  "casual_intro",
+  "rag_ota_partition",
+  "data_tags",
+  "multi_step_referent_nav_effect",
+  "multi_step_effect_then_nav",
+  "multi_step_missing_param_asks",
+  "multi_step_search_then_read_top"
+ ],
+ "runs_per_dial": 3,
+ "dials": {
+  "native-nothink-flash": {
+   "env": {
+    "PLANNER_ENGINE": "native",
+    "PLANNER_NATIVE_THINKING": "false"
+   },
+   "engine": "native",
+   "observed": {
+    "engine": "native",
+    "thinking": false,
+    "provider": "qwen",
+    "model": "qwen3.8-flash"
+   },
+   "runs": 3,
+   "case_runs": 24,
+   "case_passed": 20,
+   "pass_rate": 0.8333,
+   "pass_rate_ci95": [
+    0.6415,
+    0.9332
+   ],
+   "cases": {
+    "eff_on_sakura": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 5.7,
+      "p50": 7.5,
+      "max": 7.7
+     },
+     "tags": [
+      "effect"
+     ],
+     "pass_rate": 1.0
+    },
+    "casual_intro": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 7.1,
+      "p50": 8.5,
+      "max": 8.7
+     },
+     "tags": [
+      "chat"
+     ],
+     "pass_rate": 1.0
+    },
+    "rag_ota_partition": {
+     "runs": 3,
+     "passed": 2,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_025448.json",
+       "fails": [
+        "[第 1 轮] 未调用任一检索工具 ['rag_search', 'search_notes', 'get_article_detail', 'list_notes']（已调用：[]）",
+        "[第 1 轮] 未调用任一检索工具 ['rag_search', 'search_notes', 'get_article_detail', 'list_notes']（已调用：[]）",
+        "[第 1 轮] 未调用任一检索工具 ['rag_search', 'search_notes', 'get_article_detail', 'list_notes']（已调用：[]）",
+        "[第 1 轮] 未调用任一检索工具 ['rag_search', 'search_notes', 'get_article_detail', 'list_notes']（已调用：[]）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025352/rag_ota_partition.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 6.7,
+      "p50": 15.3,
+      "max": 15.9
+     },
+     "tags": [
+      "rag",
+      "recall"
+     ],
+     "pass_rate": 0.6667
+    },
+    "data_tags": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 6.3,
+      "p50": 7.1,
+      "max": 8.8
+     },
+     "tags": [
+      "content_query",
+      "read",
+      "tool_call",
+      "tag",
+      "20260924"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_referent_nav_effect": {
+     "runs": 3,
+     "passed": 2,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_025701.json",
+       "fails": [
+        "[第 1 轮] 缺少 NAVIGATE: 命令帧",
+        "[第 1 轮] 缺少 EFFECT: 命令帧",
+        "[第 1 轮] 命令帧缺 '/device-console/'（本轮命令：[]）",
+        "[第 1 轮] 命令帧缺 'sakura:on'（本轮命令：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025551/multi_step_referent_nav_effect.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 3.7,
+      "p50": 7.7,
+      "max": 10.4
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi-turn",
+      "nav",
+      "effect"
+     ],
+     "pass_rate": 0.6667
+    },
+    "multi_step_effect_then_nav": {
+     "runs": 3,
+     "passed": 2,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_025448.json",
+       "fails": [
+        "[第 1 轮] 缺少 EFFECT: 命令帧",
+        "[第 1 轮] 缺少 NAVIGATE: 命令帧",
+        "[第 1 轮] 命令帧缺 'sakura:on'（本轮命令：[]）",
+        "[第 1 轮] 命令帧缺 '/guestbook'（本轮命令：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025352/multi_step_effect_then_nav.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 3.1,
+      "p50": 6.4,
+      "max": 7.6
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "pass_rate": 0.6667
+    },
+    "multi_step_missing_param_asks": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 9.4,
+      "p50": 11.7,
+      "max": 12.5
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "write",
+      "honest"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_search_then_read_top": {
+     "runs": 3,
+     "passed": 2,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_025448.json",
+       "fails": [
+        "[第 1 轮] 未调用任一检索工具 ['search_notes', 'rag_search']（已调用：[]）",
+        "[第 1 轮] 未调用任一检索工具 ['search_notes', 'rag_search']（已调用：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：[]）"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025352/multi_step_search_then_read_top.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 4.9,
+      "p50": 11.7,
+      "max": 14.7
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "content_query",
+      "rag"
+     ],
+     "pass_rate": 0.6667
+    }
+   },
+   "case_elapsed_s": {
+    "n": 24,
+    "p50": 7.7,
+    "max": 15.9
+   },
+   "planner_round_s": {
+    "n": 48,
+    "p50": 1.63,
+    "max": 6.92
+   },
+   "planner_round_s_raw": [
+    1.42,
+    1.35,
+    1.13,
+    2.57,
+    2.04,
+    1.44,
+    4.34,
+    2.0,
+    1.09,
+    1.89,
+    1.64,
+    1.95,
+    1.14,
+    0.94,
+    1.01,
+    2.78,
+    1.59,
+    1.29,
+    1.32,
+    2.08,
+    1.01,
+    4.52,
+    1.62,
+    1.63,
+    2.76,
+    1.26,
+    2.29,
+    1.52,
+    6.92,
+    2.26,
+    1.78,
+    1.04,
+    1.77,
+    3.48,
+    2.14,
+    1.29,
+    2.47,
+    5.43,
+    1.5,
+    1.45,
+    1.62,
+    3.2,
+    1.73,
+    1.63,
+    1.52,
+    2.52,
+    1.23,
+    2.43
+   ],
+   "native": {
+    "trace_files": 24,
+    "native_decisions": 48,
+    "native_fallbacks": 0,
+    "truncated": 0,
+    "fallback_rate": 0.0,
+    "tool_call_completeness": 1.0
+   },
+   "fails": {
+    "case_runs": 24,
+    "broken_runs": 0,
+    "messages": 0,
+    "quality_messages": 19
+   },
+   "tokens": {
+    "planner": {
+     "calls": 48,
+     "in_per_call": 13270,
+     "out_per_call": 62,
+     "in_total": 636975,
+     "out_total": 2959,
+     "cache_seen": 48,
+     "cache_total": 519168,
+     "hit_rate": 0.8151
+    },
+    "model": {
+     "calls": 24,
+     "in_per_call": 10093,
+     "out_per_call": 170,
+     "in_total": 242238,
+     "out_total": 4071,
+     "cache_seen": 24,
+     "cache_total": 115968,
+     "hit_rate": 0.4787
+    }
+   },
+   "plan_efficiency": {
+    "tool_calls_total": 30,
+    "tool_rounds_total": 28,
+    "cases_multi_tool_rounds": 8
+   },
+   "reports": [
+    "eval/report/runs/20260928_025448.json",
+    "eval/report/runs/20260928_025701.json",
+    "eval/report/runs/20260928_025910.json"
+   ],
+   "trace_runs": [
+    "20260928_025352",
+    "20260928_025551",
+    "20260928_025747"
+   ],
+   "wall_s": [
+    58.2,
+    73.3,
+    85.7
+   ]
+  },
+  "native-nothink-deepseek": {
+   "env": {
+    "PLANNER_ENGINE": "native",
+    "PLANNER_NATIVE_THINKING": "false",
+    "LLM_PROVIDER": "deepseek",
+    "DEEPSEEK_MODEL": "deepseek-chat"
+   },
+   "engine": "native",
+   "observed": {
+    "engine": "native",
+    "thinking": false,
+    "provider": "deepseek",
+    "model": "deepseek-chat"
+   },
+   "runs": 3,
+   "case_runs": 24,
+   "case_passed": 12,
+   "pass_rate": 0.5,
+   "pass_rate_ci95": [
+    0.3143,
+    0.6857
+   ],
+   "cases": {
+    "eff_on_sakura": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 2.6,
+      "p50": 2.6,
+      "max": 3.2
+     },
+     "tags": [
+      "effect"
+     ],
+     "pass_rate": 1.0
+    },
+    "casual_intro": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 2.4,
+      "p50": 2.5,
+      "max": 2.6
+     },
+     "tags": [
+      "chat"
+     ],
+     "pass_rate": 1.0
+    },
+    "rag_ota_partition": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_025548.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] 文本缺少任一关键词 ['ota_0', 'OTA_0', '分区表'] 且未命中正则族 []",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[3] (request_id: 1006b171-202e-4437-904b-233e1555e74e)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025450/rag_ota_partition.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_025745.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] 文本缺少任一关键词 ['ota_0', 'OTA_0', '分区表'] 且未命中正则族 []",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[3] (request_id: c310e67c-dedc-4071-8ede-120a2d891823)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025704/rag_ota_partition.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_025956.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] 文本缺少任一关键词 ['ota_0', 'OTA_0', '分区表'] 且未命中正则族 []",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[3] (request_id: ab978d81-076c-4e5b-9ba9-49faa82d3cec)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025913/rag_ota_partition.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 6.8,
+      "p50": 7.2,
+      "max": 10.7
+     },
+     "tags": [
+      "rag",
+      "recall"
+     ],
+     "pass_rate": 0.0
+    },
+    "data_tags": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 2.6,
+      "p50": 3.0,
+      "max": 4.8
+     },
+     "tags": [
+      "content_query",
+      "read",
+      "tool_call",
+      "tag",
+      "20260924"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_referent_nav_effect": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_025548.json",
+       "fails": [
+        "[第 1 轮] 缺少 EFFECT: 命令帧",
+        "[第 1 轮] 命令帧缺 'sakura:on'（本轮命令：['AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/']）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[5] (request_id: c4456bcc-b774-4f58-be95-841277b2cb24)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025450/multi_step_referent_nav_effect.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_025745.json",
+       "fails": [
+        "[第 1 轮] 缺少 EFFECT: 命令帧",
+        "[第 1 轮] 命令帧缺 'sakura:on'（本轮命令：['AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/']）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[5] (request_id: 7ee1d87c-9130-4b94-8f3c-c42726fa48cd)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025704/multi_step_referent_nav_effect.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_025956.json",
+       "fails": [
+        "[第 1 轮] 缺少 EFFECT: 命令帧",
+        "[第 1 轮] 命令帧缺 'sakura:on'（本轮命令：['AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/', 'AUTO_NAVIGATE:https://saudade.site/device-console/']）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[5] (request_id: 617cd932-3ff6-4fbc-b478-0492e9d409a3)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025913/multi_step_referent_nav_effect.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 7.2,
+      "p50": 8.8,
+      "max": 9.9
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi-turn",
+      "nav",
+      "effect"
+     ],
+     "pass_rate": 0.0
+    },
+    "multi_step_effect_then_nav": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_025548.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[3] (request_id: e24fc70b-fa5c-43a3-9c23-acadb262f52e)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025450/multi_step_effect_then_nav.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_025745.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[3] (request_id: e9b5d07b-fb25-4bfd-a602-145976e28e94)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025704/multi_step_effect_then_nav.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_025956.json",
+       "fails": [
+        "[第 1 轮] checker 验收回执缺少工具 toggle_effect（exec：[]）",
+        "[第 1 轮] checker 验收回执缺少工具 navigate_to（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[3] (request_id: 80939065-e8bc-4715-96b1-75a30bfabbf8)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025913/multi_step_effect_then_nav.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 6.8,
+      "p50": 7.7,
+      "max": 8.1
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "pass_rate": 0.0
+    },
+    "multi_step_missing_param_asks": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 2.8,
+      "p50": 3.8,
+      "max": 5.1
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "write",
+      "honest"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_search_then_read_top": {
+     "runs": 3,
+     "passed": 0,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_025548.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[3] (request_id: 735f4250-fe4c-4229-a98c-f37ce4362922)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025450/multi_step_search_then_read_top.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_025745.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[3] (request_id: 8372c13b-d4ad-4113-94ec-8850467828a1)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025704/multi_step_search_then_read_top.json"
+      },
+      {
+       "report": "eval/report/runs/20260928_025956.json",
+       "fails": [
+        "[第 1 轮] 回复为空",
+        "[第 1 轮] checker 验收回执缺少工具 get_article_detail（exec：[]）",
+        "[第 1 轮] error: Error code: 400 - {'error': {'message': \"Duplicate value for 'tool_call_id' of execute_0 in message[3] (request_id: a7495fdd-66f7-47c1-87ae-87a986476a35)\", 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_025913/multi_step_search_then_read_top.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 8.0,
+      "p50": 8.8,
+      "max": 13.6
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "content_query",
+      "rag"
+     ],
+     "pass_rate": 0.0
+    }
+   },
+   "case_elapsed_s": {
+    "n": 24,
+    "p50": 5.95,
+    "max": 13.6
+   },
+   "planner_round_s": {
+    "n": 60,
+    "p50": 0.77,
+    "max": 2.84
+   },
+   "planner_round_s_raw": [
+    0.55,
+    1.69,
+    1.79,
+    0.81,
+    0.7,
+    0.48,
+    0.68,
+    0.6,
+    2.74,
+    1.16,
+    1.78,
+    0.94,
+    0.48,
+    1.69,
+    1.45,
+    2.84,
+    1.58,
+    2.08,
+    1.33,
+    1.95,
+    0.5,
+    0.86,
+    0.57,
+    0.68,
+    0.56,
+    1.08,
+    0.84,
+    0.55,
+    1.5,
+    0.52,
+    0.55,
+    0.55,
+    0.46,
+    0.68,
+    0.76,
+    0.61,
+    0.59,
+    0.88,
+    0.59,
+    0.53,
+    0.82,
+    0.62,
+    0.83,
+    0.77,
+    0.61,
+    0.71,
+    0.45,
+    0.53,
+    2.6,
+    0.78,
+    1.28,
+    0.93,
+    0.62,
+    0.92,
+    0.98,
+    0.82,
+    0.9,
+    0.54,
+    0.53,
+    0.55
+   ],
+   "native": {
+    "trace_files": 24,
+    "native_decisions": 60,
+    "native_fallbacks": 0,
+    "truncated": 0,
+    "fallback_rate": 0.0,
+    "tool_call_completeness": 1.0
+   },
+   "fails": {
+    "case_runs": 24,
+    "broken_runs": 12,
+    "messages": 24,
+    "quality_messages": 30
+   },
+   "tokens": {
+    "planner": {
+     "calls": 60,
+     "in_per_call": 13250,
+     "out_per_call": 66,
+     "in_total": 795005,
+     "out_total": 3975,
+     "cache_seen": 60,
+     "cache_total": 649984,
+     "hit_rate": 0.8176
+    },
+    "model": {
+     "calls": 12,
+     "in_per_call": 12670,
+     "out_per_call": 180,
+     "in_total": 152034,
+     "out_total": 2157,
+     "cache_seen": 12,
+     "cache_total": 48000,
+     "hit_rate": 0.3157
+    }
+   },
+   "plan_efficiency": {
+    "tool_calls_total": 46,
+    "tool_rounds_total": 43,
+    "cases_multi_tool_rounds": 12
+   },
+   "reports": [
+    "eval/report/runs/20260928_025548.json",
+    "eval/report/runs/20260928_025745.json",
+    "eval/report/runs/20260928_025956.json"
+   ],
+   "trace_runs": [
+    "20260928_025450",
+    "20260928_025704",
+    "20260928_025913"
+   ],
+   "wall_s": [
+    60.6,
+    43.3,
+    46.0
+   ]
+  }
+ }
+}
