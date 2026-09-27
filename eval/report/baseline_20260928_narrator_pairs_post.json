@@ -1,0 +1,284 @@
+{
+ "ts": "2026-09-28 02:38:53",
+ "label": "narrator_pairs_ab_post",
+ "ids": [
+  "eff_on_sakura",
+  "casual_intro",
+  "rag_ota_partition",
+  "data_tags",
+  "multi_step_referent_nav_effect",
+  "multi_step_effect_then_nav",
+  "multi_step_missing_param_asks",
+  "multi_step_search_then_read_top"
+ ],
+ "runs_per_dial": 3,
+ "dials": {
+  "native-nothink-flash": {
+   "env": {
+    "PLANNER_ENGINE": "native",
+    "PLANNER_NATIVE_THINKING": "false"
+   },
+   "engine": "native",
+   "observed": {
+    "engine": "native",
+    "thinking": false,
+    "provider": "qwen",
+    "model": "qwen3.8-flash"
+   },
+   "runs": 3,
+   "case_runs": 24,
+   "case_passed": 23,
+   "pass_rate": 0.9583,
+   "pass_rate_ci95": [
+    0.7976,
+    0.9926
+   ],
+   "cases": {
+    "eff_on_sakura": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 5.5,
+      "p50": 7.2,
+      "max": 8.7
+     },
+     "tags": [
+      "effect"
+     ],
+     "pass_rate": 1.0
+    },
+    "casual_intro": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 5.8,
+      "p50": 7.5,
+      "max": 8.8
+     },
+     "tags": [
+      "chat"
+     ],
+     "pass_rate": 1.0
+    },
+    "rag_ota_partition": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 12.7,
+      "p50": 16.2,
+      "max": 25.4
+     },
+     "tags": [
+      "rag",
+      "recall"
+     ],
+     "pass_rate": 1.0
+    },
+    "data_tags": {
+     "runs": 3,
+     "passed": 2,
+     "fails": [
+      {
+       "report": "eval/report/runs/20260928_024311.json",
+       "fails": [
+        "[第 1 轮] 未调用工具 list_tags（已调用：[]）",
+        "[第 1 轮] 本轮走了 gate fallback（__RESET__×1：['叙述校验未通过，已替换为如实回复']）——用户收到的是兜底道歉，正断言命中的是道歉文本，不算通过"
+       ],
+       "trace": "/home/ubuntu/memory_blog_rust/logs/agent/golden_traces/20260928_024140/data_tags.json"
+      }
+     ],
+     "elapsed": {
+      "count": 3,
+      "min": 4.9,
+      "p50": 6.9,
+      "max": 8.5
+     },
+     "tags": [
+      "content_query",
+      "read",
+      "tool_call",
+      "tag",
+      "20260924"
+     ],
+     "pass_rate": 0.6667
+    },
+    "multi_step_referent_nav_effect": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 6.1,
+      "p50": 7.0,
+      "max": 8.6
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi-turn",
+      "nav",
+      "effect"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_effect_then_nav": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 6.9,
+      "p50": 7.5,
+      "max": 8.7
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_missing_param_asks": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 7.9,
+      "p50": 10.6,
+      "max": 11.1
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "write",
+      "honest"
+     ],
+     "pass_rate": 1.0
+    },
+    "multi_step_search_then_read_top": {
+     "runs": 3,
+     "passed": 3,
+     "fails": [],
+     "elapsed": {
+      "count": 3,
+      "min": 19.3,
+      "p50": 19.3,
+      "max": 19.3
+     },
+     "tags": [
+      "20260927",
+      "multi_step",
+      "content_query",
+      "rag"
+     ],
+     "pass_rate": 1.0
+    }
+   },
+   "case_elapsed_s": {
+    "n": 24,
+    "p50": 8.55,
+    "max": 25.4
+   },
+   "planner_round_s": {
+    "n": 56,
+    "p50": 1.75,
+    "max": 7.26
+   },
+   "planner_round_s_raw": [
+    1.14,
+    1.67,
+    1.02,
+    1.16,
+    1.88,
+    1.44,
+    1.43,
+    0.98,
+    1.81,
+    3.67,
+    1.02,
+    1.63,
+    1.12,
+    2.29,
+    1.18,
+    1.75,
+    1.88,
+    2.01,
+    4.81,
+    1.75,
+    1.97,
+    1.61,
+    1.18,
+    1.53,
+    1.73,
+    1.45,
+    1.5,
+    1.01,
+    2.13,
+    1.65,
+    1.22,
+    2.04,
+    3.63,
+    1.93,
+    2.08,
+    2.13,
+    2.89,
+    0.99,
+    1.32,
+    1.6,
+    2.18,
+    3.22,
+    2.86,
+    0.98,
+    1.81,
+    3.06,
+    1.93,
+    2.08,
+    2.38,
+    1.53,
+    1.35,
+    2.85,
+    2.89,
+    2.55,
+    1.48,
+    7.26
+   ],
+   "native": {
+    "trace_files": 24,
+    "native_decisions": 55,
+    "native_fallbacks": 1,
+    "truncated": 0,
+    "fallback_rate": 0.0179,
+    "tool_call_completeness": 1.0
+   },
+   "plan_efficiency": {
+    "tool_calls_total": 37,
+    "tool_rounds_total": 35,
+    "cases_multi_tool_rounds": 11
+   },
+   "reports": [
+    "eval/report/runs/20260928_024018.json",
+    "eval/report/runs/20260928_024137.json",
+    "eval/report/runs/20260928_024311.json"
+   ],
+   "trace_runs": [
+    "20260928_023856",
+    "20260928_024020",
+    "20260928_024140"
+   ],
+   "wall_s": [
+    84.6,
+    79.6,
+    94.0
+   ]
+  }
+ }
+}
