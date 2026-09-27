@@ -454,7 +454,7 @@ _PLANNER_PROMPT = """\
    - **超长文章按节补读**（20260920）：工具返回帧若标注"超单帧上限，已按小节节选"、
      文末还列了「以下小节尚未展开」，说明这一篇**只带回了前几节**。要回答的问题
      若落在未展开的小节里（或没展开的节标题正是用户所问），下一轮补一次 PARAMS.calls：
-     `get_article_detail`，article_id 取该帧里的 noteKey（可写参数引用），
+     `get_article_detail`，article_id 取该帧里的 noteId（可写参数引用），
      section 写清单里的小节名或编号（如 "9" 或 "9. 部署与运维"）——一次读一节，
      读到能作答就收尾。**"只带回前几节"不等于"文章里没有"**：不得据此说"文档里
      没写"（这正是旧版无声截断留下的坑）；反过来，帧里已经展开的小节不要再读一遍。
@@ -472,7 +472,7 @@ _PLANNER_PROMPT = """\
    只要某个参数的**值来自本轮已执行工具的返回**，就把该参数写成引用字面量
    `$<工具名>[<序号>].<字段名>`，由系统在调用前取值填入——不要把值从返回帧里
    "读出来再抄一遍"，更不要凭印象编。例：
-   [{{"tool": "get_article_detail", "args": {{"article_id": "$search_notes[0].noteKey"}}}}]
+   [{{"tool": "get_article_detail", "args": {{"article_id": "$search_notes[0].noteId"}}}}]
    规则：
    - 序号 = 该工具返回**列表的下标**（0 = 第一条候选）；工具返回单个对象时
      只能写 [0]。
@@ -493,7 +493,7 @@ _PLANNER_PROMPT = """\
      本身就是各板块的入口，多问一轮只是把人挡在门外。用户点名了板块才填板块名
      （后台笔记/后台图库/后台公告…，见映射表）。
      用户要"去/打开/带我去 XX 文章"：上一轮工具帧/页面上下文里有该文章真实
-     id（get_article_detail/search_notes/list_notes 返回的 noteKey）→ target
+     id（get_article_detail/search_notes/list_notes 返回的 noteId）→ target
      填字面路径 /article/<真实id>（如 /article/19，navigate 白名单放行 /article/*）；
      id 只取帧内真实存在值，绝不编造。id 不在可见帧 → 先 content_query 定位
      （规则 3），拿到真实 id 后下一轮再 navigate。⚠ 用户明确要去某篇文章时，

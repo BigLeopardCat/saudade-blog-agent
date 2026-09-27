@@ -127,6 +127,24 @@ def parse_data(text) -> object | None:
     return _parse_rag_lines(s)
 
 
+# 字段名别名（20260928）：帧里的 id 字段名已统一成**命名空间名**（`noteId`/`talkId`，
+# 单点见 `tools/base.py::_FRAME_ID_KEYS`），而引用字面量是**模型写的措辞**——提示词里的
+# 示例、它见过很多遍的旧写法都带 `Key`。同一个字段的两个名字都对得上时却报
+# `ref_path_missing`，代价是一条本来能跑通的计划零工具收尾（而且原因码指向"字段不存在"，
+# 排查时会往错误的方向找）。所以这里认两个名字，**不**把改名变成一次静默的能力退化。
+_FIELD_ALIASES = {"talkKey": "talkId", "noteKey": "noteId", "tagKey": "tagId",
+                  "categoryKey": "categoryId", "fatherKey": "fatherId",
+                  "friendKey": "friendId"}
+
+
+def _field_of(row: dict, part: str) -> str | None:
+    """字段在不在（认命名空间名与它的上游名）→ 实际用的那个键名。"""
+    if part in row:
+        return part
+    alt = _FIELD_ALIASES.get(part)
+    return alt if alt and alt in row else None
+
+
 def _walk(data: object, path: str, idx: int) -> tuple[object, str | None]:
     """按 序号+字段路径 取值 → (值, 错误码)。"""
     if path == "":
@@ -134,18 +152,20 @@ def _walk(data: object, path: str, idx: int) -> tuple[object, str | None]:
     cur = data
     for part in path.split("."):
         if isinstance(cur, dict):
-            if part not in cur:
+            key = _field_of(cur, part)
+            if key is None:
                 return None, "ref_path_missing"
-            cur = cur[part]
+            cur = cur[key]
         elif isinstance(cur, list):
             # 列表内的点分路径按"第 0 个元素"取（列表是候选集，逐项取字段
             # 属于筛选语义，本模块不做）
             if not cur:
                 return None, "ref_index_range"
             nxt = cur[0]
-            if not isinstance(nxt, dict) or part not in nxt:
+            key = _field_of(nxt, part) if isinstance(nxt, dict) else None
+            if key is None:
                 return None, "ref_path_missing"
-            cur = nxt[part]
+            cur = nxt[key]
         else:
             return None, "ref_path_missing"
     if isinstance(cur, (dict, list)):

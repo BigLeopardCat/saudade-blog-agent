@@ -817,14 +817,14 @@ _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败"
 
 
 # 参数引用（agent/refs.py 的 $<工具>[<序号>].<字段>）在过程行里的可读来源名。
-# 预告帧在 execute **之前**发，此刻引用还没解析，参数里就是 `$search_notes[0].noteKey`
+# 预告帧在 execute **之前**发，此刻引用还没解析，参数里就是 `$search_notes[0].noteId`
 # 这种内部语法——直接拼进去访客会看到 `读取文章 $search_notes[0].noteKe`。故按来源
 # 工具译成"上一步<来源>的第 N 条"，与解析后的完成帧（读的是回执里的实际值）
 # 语义一致：预告说"要读上一步检索的第 1 条"，完成说"读取文章 12"。
 _REF_SOURCE_CN = {
     "search_notes": "检索结果", "rag_search": "检索结果", "list_notes": "文章列表",
     "list_talks": "说说列表", "list_guestbook": "留言列表",
-    # 后台写轮最常见的引用源（20260921 第二轮）：`$list_admin_notes[0].noteKey`
+    # 后台写轮最常见的引用源（20260921 第二轮）：`$list_admin_notes[0].noteId`
     # 是"把《X》设为私密"的标准走法（先读列表拿 id 再写），缺了它就往过程行里
     # 打内部工具名。
     "list_admin_notes": "后台文章列表",

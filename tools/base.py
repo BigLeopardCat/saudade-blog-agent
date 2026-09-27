@@ -128,8 +128,64 @@ UPSTREAM_DOWN = unavailable("服务暂时不可用，请稍后再试")
 def _shape(data) -> str:
     """`_get` 结果的统一出口。**别写 `str(data)`**：`str()` 作用在 str 子类上会退化成
     普通 str（CPython 行为），kind 标记就丢了——20260916 加 kind 时踩过这个坑，
-    单测里有一条专门盯"经 .invoke() 透传后标记仍在"。"""
-    return data if isinstance(data, ToolResult) else str(data)
+    单测里有一条专门盯"经 .invoke() 透传后标记仍在"。
+
+    出口另做一件事：**把行里的上游字段名换成命名空间名**（见 `_FRAME_ID_KEYS`）。
+    出口只有这一个，所以帧、参数引用取值源（`graph.py` 的 `parse_data(str(out))`）
+    与实体摘要（`entities.receipt_digest`）三处**同时**看到同一个名字。
+    """
+    if isinstance(data, ToolResult):
+        return data
+    return str(_label_id_keys(data))
+
+
+# 线上 API 的行字段名（`talkKey`/`noteKey`/…）与我们给模型看的**命名空间名**
+# （`talkId`/`noteId`/…）不是一个词。同一个数字在帧里叫 Key、在回执与实体摘要里叫 Id
+# ——trace 实证：模型据此判断站内有"两套号段"，并拿 `talkKey` 的号去问另一族的工具
+# （20260924T030031 通知帧那条也是同族：id 不带来源只能猜）。
+#
+# 判据是**同一个数字只以一种身份露面**（`tests/test_id_namespaces.py` 的三组锁）：
+# 命名空间名是刻意造出来的那一个（`talkId:`/`userId:`/`notifId:`/`mailId:` 已在
+# 回执行/明细行/实体摘要里用了一整批），所以统一方向是 Key → Id，反过来会推翻那一批。
+#
+# 边界（别顺手扩大）：
+#   · **只改键名，不改值**，也不碰 JSON 结构——值仍是上游给的那个数字；
+#   · 只管"给模型看的渲染文本"。上游原始行（`_get` 的返回值）保持原样：`_board_index`
+#     / `_note_index` / `adminops` 这些内部索引读的仍是 Key 名，它们的产物再出口时才换。
+#   · `announcement` 的 id 上游就叫 `id`（没有 Key 形），不在表里——不编不存在的别名。
+_FRAME_ID_KEYS = {
+    "talkKey": "talkId",
+    "noteKey": "noteId",
+    "tagKey": "tagId",
+    "categoryKey": "categoryId",
+    "fatherKey": "fatherId",
+    "friendKey": "friendId",
+}
+
+
+def _rows_with_note(rows: list, note: str) -> list:
+    """列表帧尾补一条**系统注记**（给模型读的边界事实）。
+
+    为什么放在 list **里面**而不是拼在文本外面：帧文本还是 `$ref` 的取值源
+    （`graph.py` 的 `parse_data(str(out))`）——外面拼一行说明会让 `literal_eval`
+    整个失败、引用退化成 `ref_unparsed`。而多出来的**非 dict 元素**天然被结构化
+    消费者跳过（`entities._rows` 按 `isinstance(x, dict)` 过滤、`decisions` 的候选
+    扫描同样带 isinstance 判断），下标寻址（`$list_guestbook[0].content`）也不动。
+    """
+    return list(rows) + [f"〔系统注记〕{note}"]
+
+
+def _label_id_keys(data):
+    """递归把行里的上游字段名换成命名空间名（**只改键名，不动值**）。
+
+    递归是为了覆盖 `{"data": {"records": [...]}}` 这类包了一层的响应——按行处理的
+    实现会漏掉它们，而漏掉的那一处正好又是"同一个数字两个名字"。
+    """
+    if isinstance(data, list):
+        return [_label_id_keys(x) for x in data]
+    if isinstance(data, dict):
+        return {_FRAME_ID_KEYS.get(k, k): _label_id_keys(v) for k, v in data.items()}
+    return data
 
 
 # httpx 客户端复用。
@@ -229,7 +285,7 @@ def list_notes(
     page: Annotated[int, "Page number, default 1"] = 1,
     page_size: Annotated[int, "Items per page, default 10"] = 10,
 ) -> str:
-    """获取文章列表，按页返回。每篇给出：id（noteKey）、标题、状态、是否置顶、标签名。"""
+    """获取文章列表，按页返回。每篇给出：id（noteId）、标题、状态、是否置顶、标签名。"""
     data = _get(f"/notes?page={page}&page_size={page_size}")
     slim = _slim_note_rows(data)
     return _shape(slim if slim is not None else data)
@@ -270,7 +326,7 @@ def _read_section(data: dict, article_id, want: str) -> ToolResult:
     返回仍是 **Python repr 的 dict**（与全文分支同形），两个键不能少：
       - `noteTitle`：`agent/decisions.py::_doc_title` 从 repr 里正则抠它做跨轮
         指代锚点（"读取文章 19《架构文档》"），换掉键名会让执行记忆只剩 id；
-      - `noteKey`/`sectionText`：planner 的"未展开小节"清单要照抄这个 id 再读一次。
+      - `noteId`/`sectionText`：planner 的"未展开小节"清单要照抄这个 id 再读一次。
     取不到小节时**不返回空**：把候选小节名列出来才是可行动的（模型改一次指称即可），
     说"没找到"而不给候选，等于让它再赌一次。
     """
@@ -315,7 +371,7 @@ def _note_row_with_tag_names(row):
 
 @tool
 def get_article_detail(
-    article_id: Annotated[int, "文档的唯一 ID（note 为 noteKey，talk/board 为 talkKey，announcement 为 id）"],
+    article_id: Annotated[int, "文档的唯一 ID（note 为 noteId，talk/board 为 talkId，announcement 为 id）"],
     doc_type: Annotated[Literal["note", "talk", "board", "announcement"],
                         "文档类型：note（文章，默认）/ talk（说说）/ board（留言）/ announcement（公告）"] = "note",
     section: Annotated[str, "只读该文章的某一小节（标题全称/编号/唯一子串，如 \"9\" 或 \"9. 部署与运维\"）；留空读全文"] = "",
@@ -458,6 +514,11 @@ def get_announcements() -> str:
 def list_guestbook() -> str:
     """获取留言板（河灯留言）列表。
 
+    ⚠ **只列已通过审核的留言**（上游 `talks.rs::list_by_src` 恒 `filter(Approved=1)`，
+    与留言板页面看到的完全一致）。所以"列表里没有"**不等于"这条留言不存在"**——
+    它可能还在待审、或者被驳回了。要说"站内没有这条留言"，前提是**没有任何号段**
+    能对上；手上的 id 在列表里查无此条时，正确的说法是"这条不在公开列表里（未通过
+    审核或已删除），后台管理视图里能看到"，**不要**据此反推"站内没有"。
     留言板页面 /guestbook 叫「河灯集」（留言簿）：页面下方有留言输入框（提示语
     「此刻想说的话…」），在框里写好内容即可放灯；留名框在输入框旁，默认预填
     当前登录账号昵称，清空留名或点「匿名」则以无名/匿名身份放灯——无需注册或
@@ -468,6 +529,13 @@ def list_guestbook() -> str:
     这类问题时，需同时调用 list_talks 检查说说内容，两个都查全后才能回答。
     """
     data = _get("/board")
+    if isinstance(data, list):
+        # 读帧的人（planner 与 narrator）都要看得见这条边界：上游恒按 Approved=1 过滤，
+        # "列表里没有"不是"这条不存在"。不写这一句，帧就只在**数量**上沉默，而
+        # "站内没有这条留言"这个结论会被当成列表给的事实（20260928 现场那条就是）。
+        data = _rows_with_note(
+            data, "本列表只含**已通过审核**的留言（与留言板页面一致）；"
+                  "待审/被驳回的留言不在这里，查无此条不等于不存在")
     return _shape(data)
 
 # ---------------------------------------------------------------------------
@@ -478,10 +546,16 @@ def list_guestbook() -> str:
 def list_talks() -> str:
     """获取说说（动态/碎语）列表。
 
+    ⚠ **只列已通过审核的**（同上游过滤器）：列表里没有**不等于**这条不存在，别据此
+    下"站内没有"的结论（理由同 list_guestbook）。
     注意：说说与留言板（河灯留言）是两个独立的数据源——查询"博客里有没有人聊过 X"
     这类问题时，需同时调用 list_guestbook 检查留言板内容，两个都查全后才能回答。
     """
     data = _get("/talk")
+    if isinstance(data, list):
+        data = _rows_with_note(
+            data, "本列表只含**已通过审核**的说说；待审/被驳回的不在这里，"
+                  "查无此条不等于不存在")
     return _shape(data)
 
 # ---------------------------------------------------------------------------

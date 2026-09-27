@@ -270,8 +270,14 @@ check("状态+置顶 → 两条都在", A.render_change([("私密", "公开"), (
 check("回执字段截断带省略号（detail 列宽有限）",
       A.clip("x" * 80) == "x" * 60 + "…" and A.clip("ok") == "ok")
 _list = A.render_admin_notes([note(12, "架构文档", "draft", 1)], IDX)
+# 20260928 起这里是 `noteId=12`（命名空间名）而不是裸 `id=12`——这一屏正是 planner
+# 的**取值来源**，裸 id 会让同一个数字在别的帧里以另一重身份出现。注意 `noteId=12`
+# 里那个是**大写 I**，`"id=12"` 不是它的子串 ⇒ 只做包含断言的话，回退成旧形是**静默**
+# 的（测试还绿）。所以下面既钉新形，也用负向断言钉死旧形。
 check("后台清单带 id 与状态标记（planner 只有这一轮真读到 id 才有据可写）",
-      _list.startswith("后台文章共 1 篇") and "id=12 [草稿/置顶]《架构文档》" in _list, _list)
+      _list.startswith("后台文章共 1 篇") and "noteId=12 [草稿/置顶]《架构文档》" in _list, _list)
+check("  且不再是裸 ` id=`（同一个数字只以一种身份露面）",
+      " id=12" not in _list and "#12" not in _list, _list)
 check("超长标题截断，清单不撑爆提示词",
       "…" in A.render_admin_notes([note(1, "长" * 50)], IDX))
 
