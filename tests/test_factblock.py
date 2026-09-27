@@ -1,0 +1,436 @@
+# -*- coding: utf-8 -*-
+"""动作事实块（D3，`agent/factblock.py` + 接线）单测：离线、秒级、零网络零 LLM。
+
+**为什么单独一套**：D3 把动作族轮次的**叙述权**从模型搬到系统——用户可见正文 =
+系统印的事实块 + 模型的包装。这一搬动有三处会静默出错，每一处都只能靠判据钉：
+
+  ① **分类**（`family_of`）：射程（命令族 + 写族）与 `eval/narrator_facts_share.py`
+     的量化口径是同一份实现——两处各写一份正则会漂移，而漂移之后"能砍多少"这句话
+     就不可核（数字还在、说的是另一件事）；
+  ② **顺序**（`server.py` 的 producer）：事实块必须在 narrator 的文本**之前**流出去
+     （主人先读事实、再读包装），且 `__RESET__`（gate 兜底/重规划）会把已发文本清掉
+     ⇒ 块必须跟着重发。顺序错了在界面上只是"那段解释跑到了事实前面"，没人会报 bug；
+  ③ **复述的判据**（gate 的 `action_restate` 网）：模型仍作完成式声称时**只记不判**
+     （计数落 trace，正文照常放行）——这条网唯一的产出是"纪律 23 达没达标"的数据，
+     所以它必须**抓得准**：错抓成 fallback 会连同已发的 `__CMD__` 一起被 RESET 清掉
+     （页面没跳却说已跳，实测三条动作族 golden），漏抓则数据虚高、看着像达标。
+     护栏因此是双向的：6 个必拦 + 6 个必放，外加一条"命中也不许动正文"。
+
+本套件分三节：纯函数（①② 的分类/渲染/拼接）、真图（③ 的判据与提示词接线）、
+假 producer（② 的时序与 RESET 重发）。**真图那一节跑的是 build_graph() 的真图**
+（假 LLM + 假动作工具，零网络零真写），理由与 `test_gate_replan.py` 相同：判据在
+节点里，纯函数级断言证明不了它真的接上了（"能力有测试 ≠ 接线有测试"）。
+
+用法：.venv/bin/python tests/test_factblock.py
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+import threading
+from pathlib import Path
+
+# 出厂档钉子（与 `tests/run_all.py` 的 `_PINNED` 同值）：本机 `.env` 是产线那份
+# （20260927 起 `PLANNER_ENGINE=native`），而假 LLM 桩没有 `bind_tools` ⇒ 单跑本套件
+# 会在 planner 里 AttributeError。**必须在 import `agent.graph` 之前设**（settings 在
+# 那一刻构造）。run_all 下是同值覆盖，等于没设。
+os.environ.setdefault("PLANNER_ENGINE", "text")
+os.environ.setdefault("AGENT_TASK_STATE", "0")
+
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+
+ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+sys.path.insert(0, str(ROOT))
+
+import agent.graph as g  # noqa: E402
+from agent.factblock import (  # noqa: E402
+    FAMILY_CMD, FAMILY_DATA, FAMILY_WRITE, action_facts, block_of, compose,
+    family_of, is_action_family, render_fact_block,
+)
+from agent.graph import build_graph, graph_input  # noqa: E402
+from agent.principal import Principal  # noqa: E402
+from tools import base as _base  # noqa: E402
+
+FAILS: list[str] = []
+
+
+def check(desc: str, cond: bool, detail: str = "") -> None:
+    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
+    if not cond:
+        FAILS.append(desc)
+
+
+# ── 回执行形状（与 `execute_node` 的构造同形；`cmd` 非空 = 命令族）────────────
+_RCPT_CMD = {"skill": "effect", "tool": "toggle_effect", "args": {"effect": "sakura"},
+             "result": "特效 樱花(sakura) 已打开",
+             "cmd": {"kind": "effect", "effect": "sakura", "action": "on"}, "ts": 0}
+_RCPT_WRITE = {"skill": "admin_notes", "tool": "create_tag", "args": {"name": "音乐"},
+               "result": "标签「音乐」已创建", "ts": 0}
+_RCPT_DATA = {"skill": "content_query", "tool": "search_notes", "args": {"keyword": "x"},
+              "result": '[{"id": 46, "title": "架构"}]', "ts": 0}
+
+
+# ── ① 分类：射程只有命令族 + 写族（数据族刻意不收）───────────────────────
+def test_family_of():
+    print("\n[分类] 射程＝命令族 + 写族（照 JSON 讲人话是模型的活，D3 不碰）")
+    check("回执带 cmd → 命令族（与工具名无关）",
+          family_of("toggle_effect", True) == FAMILY_CMD)
+    check("写工具名前缀 → 写族", family_of("create_tag", False) == FAMILY_WRITE)
+    check("其余 → 数据族", family_of("search_notes", False) == FAMILY_DATA)
+    check("空工具名 + 无 cmd → 数据族（分不出别乱收，保守方向）",
+          family_of("", False) == FAMILY_DATA)
+    check("is_action_family 与 family_of 同判据",
+          is_action_family(_RCPT_CMD) and is_action_family(_RCPT_WRITE)
+          and not is_action_family(_RCPT_DATA))
+    # 写族前缀表的**唯一实现**在 `agent/factblock.py`：这里钉住它的覆盖面，
+    # 免得改名（如 create_* → add_*）之后写族静默缩水、射程跟着变。
+    check("写族前缀表认得住既有写工具（create/update/set/delete/move/audit/freeze/send…）",
+          all(family_of(n, False) == FAMILY_WRITE for n in (
+              "create_tag", "update_tag", "delete_tag", "set_article_status",
+              "audit_board_comment", "freeze_account", "unfreeze_account",
+              "send_user_notice", "complete_dashboard_todo", "add_favorite",
+              "remove_favorite", "move_tag")))
+
+
+def test_action_facts():
+    print("\n[取事实] 只取族内、去重、保序、跳过错误帧")
+    got = action_facts([_RCPT_CMD, _RCPT_DATA, _RCPT_WRITE])
+    check("数据族不进事实块（它返回的是 JSON）",
+          got == [_RCPT_CMD["result"], _RCPT_WRITE["result"]], str(got))
+    check("顺序＝执行顺序（receipts 是累计语义）",
+          action_facts([_RCPT_WRITE, _RCPT_CMD]) == [_RCPT_WRITE["result"], _RCPT_CMD["result"]])
+    check("同一次动作重复执行只印一行（主人不该读到三行一样的话）",
+          action_facts([_RCPT_CMD, _RCPT_CMD, _RCPT_CMD]) == [_RCPT_CMD["result"]])
+    check("__ERROR__ 不是事实",
+          action_facts([{**_RCPT_CMD, "result": "__ERROR__: 未知工具"}]) == [])
+    check("空 result 不算一行",
+          action_facts([{**_RCPT_CMD, "result": "   "}]) == [])
+    check("形状不对的项跳过，不抛",
+          action_facts([None, "x", 42, _RCPT_CMD]) == [_RCPT_CMD["result"]])
+    check("None/空列表安全", action_facts(None) == [] and action_facts([]) == [])
+
+
+def test_render_and_compose():
+    print("\n[渲染/拼接] 原样印、一行一条；块在前、幂等")
+    check("渲染不改写一个字（改动就是伪造）",
+          render_fact_block(["页面已跳转：https://a/b", "特效 樱花(sakura) 已打开"])
+          == "页面已跳转：https://a/b\n特效 樱花(sakura) 已打开")
+    check("块 = action_facts + render 的组合壳",
+          block_of([_RCPT_CMD]) == _RCPT_CMD["result"])
+    check("块在前、空行分隔（单换行会被 markdown 并成一句）",
+          compose("事实行", "包装文字") == "事实行\n\n包装文字")
+    check("正文已以块开头 ⇒ 不重复印（gate 兜底的替代文本**就是**块）",
+          compose("事实行", "事实行") == "事实行")
+    check("块是正文的前缀时也不重复（块已含两行、正文是整块）",
+          compose("行一\n行二", "行一\n行二\n\n包装") == "行一\n行二\n\n包装")
+    check("没有块 ⇒ 正文原样（闲聊/数据轮零影响）", compose("", "闲聊") == "闲聊")
+    check("正文为空 ⇒ 只剩块", compose("事实行", "") == "事实行")
+    check("全空 ⇒ 空串", compose("", "") == "")
+
+
+def test_share_one_classifier():
+    print("\n[同源] 量化脚本与射程共用同一份分类（两处各写一份必然漂移）")
+    import eval.narrator_facts_share as nfs  # noqa: E402
+    from agent import factblock as fb  # noqa: E402
+    check("量化脚本 import 的就是 agent.factblock 的 family_of",
+          nfs.family_of is fb.family_of)
+    check("量化脚本不再自带一份写族正则（重复实现就是漂移的起点）",
+          not hasattr(nfs, "_WRITE_PREFIX_RE"))
+    check("族常量同源（报告里的分档与射程同集合）",
+          {fb.FAMILY_CMD, fb.FAMILY_WRITE, fb.FAMILY_DATA}
+          == {nfs.FAMILY_CMD, nfs.FAMILY_WRITE, nfs.FAMILY_DATA})
+
+
+# ── ③ 判据：动作族轮次的复述式声称（gate 5g）───────────────────────────────
+_RESTATE_HITS = [
+    "已经帮你打开啦～",                      # 施事前缀 + 完成态（旧网也能抓）
+    "页面也跳转过去啦",                      # 无施事：旧网的①支抓不到（新增的那半）
+    "标签「音乐」已经建好了哦",               # 写族 + 完成态
+    "樱花特效已经打开了",                     # 时间副词 + 动词（①支要施事，这里不要）
+    "通知也发送完成",                         # 完成态的另一形态
+    "那条留言我驳回掉了",                     # 写族（审核）
+]
+_RESTATE_PASS = [
+    "樱花特效现在是开启状态",                 # 状态陈述：幂等轮的正确答案（不带完成标记）
+    "已经打开的樱花会一直飘",                 # 定语用法：描述状态不是声称动作
+    "要不要我帮你把夜间模式也关掉呢？",         # 提议（豁免：要不要/呢/？）
+    "要是跳过去了，应该能直接看到留言板",        # 假设（豁免：要是）
+    "这一轮什么都没做，因为还没确认",           # 否定（豁免：没）
+    "页面已跳转：https://saudade.site/talk",  # 系统块原文**不是**模型的话（喂给判据的是叙述）
+]
+
+
+def test_action_restate_regex():
+    print("\n[判据] 完成式复述抓得住；状态陈述/提议/假设放行")
+    for s in _RESTATE_HITS:
+        check("拦：%s" % s,
+              bool(g._clause_hit(s, g._ACTION_RESTATE_RE, g._STATE_ACTION_EXEMPT_RE)))
+    for s in _RESTATE_PASS:
+        check("放：%s" % s,
+              g._clause_hit(s, g._ACTION_RESTATE_RE, g._STATE_ACTION_EXEMPT_RE) is None)
+
+
+# ── ③ 真图：提示词接线 + 兜底替代文本 ──────────────────────────────────────
+class _ScriptedLLM:
+    """按入参形态分流 planner / model（同 `test_gate_replan.py` 的理由）。"""
+
+    def __init__(self, plans: list, narrations: list):
+        self.plans, self.narrations = list(plans), list(narrations)
+        self.model_prompts: list = []
+        self.exhausted: list = []
+
+    def invoke(self, prompt):
+        if isinstance(prompt, list):
+            self.model_prompts.append(prompt)
+            if not self.narrations:
+                self.exhausted.append("model")
+                return AIMessage(content="（脚本用尽）")
+            return AIMessage(content=self.narrations.pop(0))
+        if not self.plans:
+            self.exhausted.append("planner")
+            return AIMessage(content="SKILL: chat\nPARAMS: {}")
+        return AIMessage(content=self.plans.pop(0))
+
+
+class _FakeTool:
+    def __init__(self, result):
+        self.name = "toggle_effect"
+        self.result = result
+        self.calls: list = []
+
+    def invoke(self, args):
+        self.calls.append(args)
+        return self.result
+
+
+_PLAN_EFFECT = 'SKILL: effect\nPARAMS: {"effect": "sakura", "action": "on"}'
+_PLAN_CHAT = "SKILL: chat\nPARAMS: {}"
+_FACT_LINE = "特效 樱花(sakura) 已打开"
+
+
+def _run_graph(plans, narrations, result=None):
+    llm = _ScriptedLLM(plans, narrations)
+    tool = _FakeTool(result or _base.ok(
+        _FACT_LINE, {"cmd": {"kind": "effect", "effect": "sakura", "action": "on"}}))
+    events: list = []
+    orig_llm, orig_record, orig_tool = g.get_llm, g.record, g._TOOL_MAP.get("toggle_effect")
+    g.get_llm = lambda **kw: llm
+    g.record = lambda node, event, **data: events.append((node, event, data))
+    g._TOOL_MAP["toggle_effect"] = tool
+    try:
+        cfg = {"configurable": {"thread_id": "t-factblock", "user_id": 5,
+                                "principal": Principal(uid=5),
+                                "conversation_id": 1, "stop_event": None}}
+        out = build_graph().invoke(graph_input([HumanMessage(content="把樱花打开")]), cfg)
+    finally:
+        g.get_llm, g.record = orig_llm, orig_record
+        if orig_tool is None:
+            g._TOOL_MAP.pop("toggle_effect", None)
+        else:
+            g._TOOL_MAP["toggle_effect"] = orig_tool
+    return out, llm, tool, events
+
+
+def _system_prompt(llm: "_ScriptedLLM") -> str:
+    """最后一轮 narrator 的 system 提示词（model 传的是 [system] + messages）。"""
+    return str(llm.model_prompts[-1][0].content)
+
+
+def test_graph_wiring():
+    print("\n[真图] 事实块进提示词、族内帧从记录段摘掉、复述只记不判")
+    out, llm, tool, events = _run_graph([_PLAN_EFFECT, _PLAN_CHAT], ["已经帮你打开啦～"])
+    check("脚本足够跑完这一轮（没有靠「脚本用尽」混过去）",
+          llm.exhausted == [], str(llm.exhausted))
+    check("动作工具真的执行了一次", len(tool.calls) == 1, str(tool.calls))
+    sys_p = _system_prompt(llm)
+    check("提示词里有 [本轮动作事实] 段与那行事实",
+          "[本轮动作事实]" in sys_p and _FACT_LINE in sys_p)
+    check("  系统明说那几行**已经印在气泡最前面**（否则模型会以为主人没看到、去复述）",
+          "已经印在气泡最前面" in sys_p)
+    check("族内事实从 [本轮工具执行记录] 摘掉了（同一份事实出现两次＝邀请复述）",
+          "[本轮工具执行记录]" in sys_p
+          and "本轮动作族的工具返回已在上面的" in sys_p)
+    check("  也从 [本轮执行回执] 摘掉了",
+          "本轮已验收的执行都在上面的" in sys_p)
+    check("纪律 23 在场且写明「不限长度，只限内容」",
+          "不限长度，只限内容" in sys_p)
+    check("trace 有 model/fact_block 事件（判据可回溯）",
+          ("model", "fact_block") in [(n, e) for n, e, _ in events],
+          str([(n, e) for n, e, _ in events]))
+    check("复述被记下来了（gate.action_restate，soft=True）",
+          any(n == "gate" and e == "action_restate" and d.get("soft") is True
+              for n, e, d in events),
+          str([(n, e) for n, e, _ in events]))
+    # **这一节是 20260927 实测改口的锁**：这条网原先是 fallback，跑动作族 golden 时
+    # 三条被它命中、三条都因为 RESET 连命令一起清而"页面没跳却说已跳"。所以断言从
+    # "兜底文本是事实块"改成"正文一个字都不许动"——想改回 fallback 的人，先看
+    # gate 5g 那段注释里的三条 trace。
+    check("  正文**一字未动**（不是 fallback：拿文案去换命令是这一批最贵的错）",
+          not out.get("fallback_text")
+          and str(out["messages"][-1].content).strip() == "已经帮你打开啦～",
+          repr(str(out["messages"][-1].content)[:40]))
+    check("  不进 _REPLAN_ISSUES（重规划会把副作用工具再跑一遍）", "action_restate" not in g._REPLAN_ISSUES)
+    check("  没走重规划（gate_replan 未被置真）", not out.get("gate_replan"))
+
+
+def test_graph_no_false_positive():
+    print("\n[真图] 非完成式包装照常通过（零回归：这条网不是「一律兜底」）")
+    wrapper = "这次的动作用的是页面特效那一档，想换别的风格随时说～"
+    out, llm, tool, events = _run_graph([_PLAN_EFFECT, _PLAN_CHAT], [wrapper])
+    check("脚本足够跑完这一轮", llm.exhausted == [])
+    check("执行了一次", len(tool.calls) == 1)
+    check("没有 action_restate（它没说完成式）",
+          ("gate", "action_restate") not in [(n, e) for n, e, _ in events])
+    check("最终回复就是那段包装（没被替换）",
+          str(out["messages"][-1].content).strip() == wrapper,
+          repr(str(out["messages"][-1].content)[:40]))
+    check("同时没有走兜底", not out.get("fallback_text"))
+
+
+def test_graph_data_round_untouched():
+    print("\n[真图] 数据族轮次不产生事实块（讲 JSON 人话是模型的活）")
+    plan = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
+            '"args": {"keyword": "架构"}}]}')
+    llm = _ScriptedLLM([plan], ["站内检索到 1 篇讲架构的文章。"])
+    tool = _FakeTool(_base.ok('[{"id": 46, "title": "架构"}]'))
+    tool.name = "search_notes"
+    events: list = []
+    orig_llm, orig_record = g.get_llm, g.record
+    orig_tool = g._TOOL_MAP.get("search_notes")
+    g.get_llm, g.record = lambda **kw: llm, lambda node, event, **data: events.append((node, event, data))
+    g._TOOL_MAP["search_notes"] = tool
+    try:
+        cfg = {"configurable": {"thread_id": "t-factblock-data", "user_id": 5,
+                                "principal": Principal(uid=5),
+                                "conversation_id": 1, "stop_event": None}}
+        out = build_graph().invoke(graph_input([HumanMessage(content="有讲架构的文章吗")]), cfg)
+    finally:
+        g.get_llm, g.record = orig_llm, orig_record
+        if orig_tool is None:
+            g._TOOL_MAP.pop("search_notes", None)
+        else:
+            g._TOOL_MAP["search_notes"] = orig_tool
+    sys_p = _system_prompt(llm)
+    check("提示词里写着「本轮没有动作族执行」（不是空字段）",
+          "（本轮没有动作族执行）" in sys_p)
+    check("  数据帧**没有**被摘掉（记录段照常给模型）",
+          "本轮动作族的工具返回已在上面的" not in sys_p)
+    check("没有 model/fact_block 事件", ("model", "fact_block") not in [(n, e) for n, e, _ in events])
+    check("叙述照常通过（没有 action_restate）",
+          ("gate", "action_restate") not in [(n, e) for n, e, _ in events]
+          and not out.get("fallback_text"))
+    check("最终回复就是那条叙述", str(out["messages"][-1].content).strip() == "站内检索到 1 篇讲架构的文章。")
+
+
+# ── ② 假 producer：时序（块先于 narrator）与 RESET 重发 ────────────────────
+class _FakeAgent:
+    """假 `_agent`：按脚本产出 (mode, data)，让 producer 的时序完全可测。"""
+
+    def __init__(self, script: list):
+        self.script = script
+
+    def stream(self, inp, cfg, stream_mode=None):
+        for item in self.script:
+            yield item
+
+
+_ROW = {"skill": "effect", "tool": "toggle_effect",
+        "args": {"effect": "sakura", "action": "on"},
+        "result": _FACT_LINE, "ts": 0,
+        "cmd": {"kind": "effect", "effect": "sakura", "action": "on"}}
+
+
+def _drain(script: list) -> list:
+    import server  # 只在用到时 import（server import 会拉起 FastAPI 应用）
+    orig = server._agent
+    server._agent = _FakeAgent(script)
+    try:
+        async def run():
+            q: asyncio.Queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            t = threading.Thread(
+                target=server._run_agent_stream_to_queue,
+                args=([], "t-producer", q, loop, 1),
+                kwargs={"principal": Principal(uid=1)},
+                daemon=True)
+            t.start()
+            out = []
+            while True:
+                item = await asyncio.wait_for(q.get(), timeout=10)
+                if item is None:
+                    break
+                out.append(item)
+            t.join(timeout=5)
+            return out
+        return asyncio.run(run())
+    finally:
+        server._agent = orig
+
+
+def _ai_chunks(items: list) -> list:
+    return [str(i.content) for i in items if isinstance(i, AIMessageChunk)]
+
+
+def test_producer_order_and_reset():
+    print("\n[真 producer] 事实块先于 narrator 的文本；RESET 之后重发（不丢事实）")
+    script = [
+        ("updates", {"execute": {"receipts": [_ROW]}}),
+        ("messages", (AIMessageChunk(content="已经帮你打开啦～"),
+                      {"langgraph_node": "model"})),
+        ("updates", {"model": {"messages": [AIMessage(content="已经帮你打开啦～")]}}),
+        ("updates", {"gate": {"done": True, "fallback_text": _FACT_LINE,
+                              "gate_replan": False}}),
+    ]
+    items = _drain(script)
+    chunks = _ai_chunks(items)
+    check("三段 AI 文本：块 → narrator（它确实先流出去了）→ 兜底替换文本",
+          chunks == [_FACT_LINE + "\n\n", "已经帮你打开啦～", _FACT_LINE], str(chunks))
+    check("事实块在 narrator 之前（主人先读事实）",
+          chunks and chunks[0] == _FACT_LINE + "\n\n", repr(chunks[0] if chunks else ""))
+    check("兜底那一帧**没有把块印两遍**（compose 幂等：替代文本就是块）",
+          chunks[-1] == _FACT_LINE and chunks[-1].count(_FACT_LINE) == 1, repr(chunks[-1]))
+    check("__CMD__ 帧在事实块之前（机器读的命令与给人读的事实各就各位）",
+          next((i for i, x in enumerate(items) if isinstance(x, str)
+                and x.startswith("__CMD__:")), -1)
+          < next((i for i, x in enumerate(items)
+                  if isinstance(x, AIMessageChunk)), -1),
+          str(items))
+    _reset = next(i for i, x in enumerate(items) if isinstance(x, str)
+                  and x.startswith("__RESET__"))
+    _last_ai = max(i for i, x in enumerate(items) if isinstance(x, AIMessageChunk))
+    check("RESET 在兜底文本之前（前端先清空再重绘，否则被否定的叙述留在界面上）",
+          _reset < _last_ai, f"reset=#{_reset} last_ai=#{_last_ai}")
+
+
+def test_producer_pass_round():
+    print("\n[真 producer] 通过的一轮：块 + 包装都在，顺序不变")
+    script = [
+        ("updates", {"execute": {"receipts": [_ROW]}}),
+        ("messages", (AIMessageChunk(content="想换别的风格随时说～"),
+                      {"langgraph_node": "model"})),
+        ("updates", {"model": {"messages": [AIMessage(content="想换别的风格随时说～")]}}),
+        ("updates", {"gate": {"done": True, "gate_replan": False}}),
+    ]
+    chunks = _ai_chunks(_drain(script))
+    check("两段：块（带空行）+ 包装",
+          chunks == [_FACT_LINE + "\n\n", "想换别的风格随时说～"], str(chunks))
+    check("数据族回执不发块（只印动作族）",
+          _ai_chunks(_drain([
+              ("updates", {"execute": {"receipts": [_RCPT_DATA]}}),
+              ("messages", (AIMessageChunk(content="查到 1 篇。"),
+                            {"langgraph_node": "model"})),
+              ("updates", {"gate": {"done": True, "gate_replan": False}}),
+          ])) == ["查到 1 篇。"])
+
+
+if __name__ == "__main__":
+    for fn in (test_family_of, test_action_facts, test_render_and_compose,
+               test_share_one_classifier, test_action_restate_regex,
+               test_graph_wiring, test_graph_no_false_positive,
+               test_graph_data_round_untouched,
+               test_producer_order_and_reset, test_producer_pass_round):
+        fn()
+    print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
+    sys.exit(1 if FAILS else 0)
