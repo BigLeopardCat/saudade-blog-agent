@@ -15,6 +15,12 @@
 ⚠️ 顺序：**外层是第 i 次、内层是档**（不是一档跑完再跑下一档）。同一时刻的端点负载被所有
 档共享，档间差异才不会被"前半小时快、后半小时慢"冒充成档的效果。
 
+**判据分两堆（20260928）**：`跑不成` 与 `跑得差` 是两件事。首跑 provider 对照 24 例里 21 例
+压根没发出请求（400 孤儿 tool 消息），那一格若只有一个通过率，读起来就是"这个服务商质量
+只有 12.5%"——**一个不存在结论**。所以失败按**错误签名**分堆（`is_provider_error`：服务商
+HTTP 错误码 / 连接超时 / 两类协议非法消息），报成一列 `跑不成/用例次`；剩下的才是内容判据
+失败。钱与量同理：逐节点 token 与命中率单列（见下）。
+
 **四个指标，口径写死**（否则换档比的是不同的东西）：
   · `pass_rate`  逐条"几次里绿几次"的合计（计数复用 `baseline_group.aggregate`，
                  不在这里另写一套）
@@ -27,6 +33,11 @@
                  （0 = 量到了、没发生；null = 这一档没有这个概念）
   · `tool_call_completeness`  1 − `finish_reason=length` 的比例。截断是静默失败
                  （arguments 断在半截 JSON），`length` 占比正是"预算够不够"的答案
+  · `tokens`     逐节点 token 与**前缀缓存命中率**（`cache_read/input`，`input` 含命中那
+                 部分）。**按节点切**：planner 是一份几乎不变的长提示词（命中率高）、
+                 narrator 的提示词随对话增长（命中率低），一个合计数正好把"该优化哪条腿"
+                 抹掉。命中率只对上报了缓存字段的调用算，`cache_seen` 与 `calls` 一起进
+                 报告——分母被缩小这件事必须看得见；`cache_read` 缺席算 **null**，不是 0
 
 **两道自检**（本脚本自己也要有判据，否则"档没拨过去"会伪装成"这个档更慢/更差"）：
   · 前置探针：每个档先起一个只读子进程打印 `settings` 解析结果，断言 engine/thinking/model
@@ -126,6 +137,61 @@ DIALS: dict[str, dict] = {
 
 _REPORT_LINE = re.compile(r"留档:\s*(\S+)")
 
+# 「这一跑没跑成」与「这一跑跑成了但答得不对」是两件事，混在一格里就会得出
+# "换了服务商质量下降"这种**没有数据支撑的结论**（首跑 3/24 全红于 400 就是活例）。
+# 判据只看失败文本里的**错误签名**，不看措辞质量：
+#   · 服务商 HTTP 错误码（`Error code: 400/401/403/429/5xx`）
+#   · 请求根本没发出去（连接/超时/鉴权）
+#   · 请求发出去了但**协议非法**（服务商的 400 里那两类点名消息）
+# 只认这些签名，不认"回复里没有 X"之类的断言失败——那是内容判据，归质量。
+_PROVIDER_ERR_RE = re.compile(
+    r"Error code: [45]\d\d"                       # 服务商 HTTP 错误码
+    r"|Connection error|ConnectError|APITimeoutError|APIConnectionError|Timeout"
+    r"|RateLimitError|invalid_api_key"
+    r"|role 'tool' must be a response to a preceding"      # 协议：孤儿 tool 消息
+    r"|reasoning_content in the thinking mode must be passed back",  # 协议：思考链回传
+    re.I)
+
+
+def is_provider_error(text: str) -> bool:
+    """这句话是"没跑成"（服务商/协议错误）还是"跑成了但不对"（内容判据失败）。"""
+    return bool(_PROVIDER_ERR_RE.search(text or ""))
+
+
+def provider_error_stats(reports: list) -> dict:
+    """把**原始 run_golden 报告**的逐用例失败按上面那把尺子分两堆。
+
+    读的是 `reports` 里原始报告那份（`cases` 是 list、`fails` 是字符串列表）；`summarize`
+    另有一份经过 `aggregate` 的按 id 合并版（`cases` 是 dict），**这里不吃那个形状**——
+    两个形状同名不同义，混用会静默数错（已踩过一次）。
+
+    `case_runs` = 用例次数（一次采样算一次，与 `aggregate` 的分母同源）；
+    `broken_runs` = 其中**至少有一条** provider/协议错误的采样数——它才是"这一跑没跑成"；
+    `messages` / `quality_messages` 是消息级计数，用来区分"一跑错三次"与"三跑各错一次"。
+    """
+    case_runs = broken = messages = quality = 0
+    for _, rep in reports:
+        cases = rep.get("cases")
+        if isinstance(cases, dict):
+            # 按 id 合并过的形状（`baseline_group.aggregate` 的产物）：同名不同义，
+            # 照 list 迭代会得到 [] 并安静地数出 0——**空指标不许过关**，直接响。
+            raise RuntimeError("provider_error_stats 收到的是按 id 合并的 cases（dict），"
+                               "这一份要的是原始 run_golden 报告（cases 是 list）")
+        for c in (cases or []):
+            case_runs += 1
+            texts = [str(x) for x in (c.get("fails") or [])]
+            if c.get("error"):
+                texts.append(str(c["error"]))
+            if any(is_provider_error(t) for t in texts):
+                broken += 1
+            for t in texts:
+                if is_provider_error(t):
+                    messages += 1
+                else:
+                    quality += 1
+    return {"case_runs": case_runs, "broken_runs": broken,
+            "messages": messages, "quality_messages": quality}
+
 # 前置探针：只读 settings，不连库不发请求。打印的键名与 settings 字段同名，便于对照。
 _PROBE = ("import json;from config.settings import settings;"
           "print(json.dumps({'engine': settings.planner_engine,"
@@ -174,13 +240,19 @@ def preflight(dial: str, spec: dict, timeout: int = 120) -> dict:
 
 
 def trace_metrics(run_dir: str) -> dict:
-    """一次 run 的 trace 目录 → planner 决策轮的计数、耗时与截断。
+    """一次 run 的 trace 目录 → planner 决策轮的计数、耗时、截断，外加**逐节点 token 用量**。
 
     只认 `planner` 节点的事件；`__rerun` 那份**排除**（回归组复跑的 trace 是同一用例的第二次
     采样，混进来会把一条用例算两次——本脚本的用例集里没有回归组，但判据不该依赖那个巧合）。
+
+    token 那一段与耗时**共用这一次扫描**（同一份 trace 读两遍是白花钱）：
+    `llm_done` 带 `input/output/cache_read`（契约见 `agent/llm_usage.py`）。
+    **`cache_read` 缺席的调用不进命中率分母**——缺席是"这个形状量不到缓存"，不是"没命中"，
+    混进来会算出"缓存完全没命中"这种假结论（该文件与 `eval/token_cost_report.py` 同纪律）。
     """
     dur: list[float] = []
     decisions = fallbacks = truncated = files = 0
+    usage: dict[str, dict] = {}
     for path in sorted(glob.glob(os.path.join(run_dir, "*.json"))):
         if "__rerun" in os.path.basename(path):
             continue
@@ -189,6 +261,15 @@ def trace_metrics(run_dir: str) -> dict:
             continue        # 读不到、或不是 trace（合法 JSON 但不是对象）——都不算语料
         files += 1
         for e in t.get("events") or []:
+            if e.get("event") == "llm_done" and "input" in e:
+                u = usage.setdefault(e.get("node") or "?", {"calls": 0, "in": 0, "out": 0,
+                                                             "cache": 0, "cache_seen": 0})
+                u["calls"] += 1
+                u["in"] += int(e.get("input") or 0)
+                u["out"] += int(e.get("output") or 0)
+                if "cache_read" in e:
+                    u["cache_seen"] += 1
+                    u["cache"] += int(e.get("cache_read") or 0)
             if e.get("node") != "planner":
                 continue
             ev = e.get("event")
@@ -205,7 +286,7 @@ def trace_metrics(run_dir: str) -> dict:
                     truncated += 1
     return {"trace_files": files, "planner_round_s_raw": dur,
             "native_decisions": decisions, "native_fallbacks": fallbacks,
-            "truncated": truncated}
+            "truncated": truncated, "usage": usage}
 
 
 def trace_metrics_for(rep: dict) -> dict:
@@ -223,6 +304,38 @@ def trace_metrics_for(rep: dict) -> dict:
     if not os.path.isdir(run_dir):
         raise RuntimeError(f"trace 目录不在：{run_dir}（是不是设了 GOLDEN_NO_TRACE？）")
     return trace_metrics(run_dir)
+
+
+def token_stats(nmetrics: list) -> dict:
+    """逐节点 token：调用数、每次输入/输出、命中率。
+
+    命中率 = `cache_read / input`（`input` **含**命中那部分，契约见 `agent/llm_usage.py`），
+    只对"端点回了缓存字段的那些调用"算，并把 `cache_seen` 一起给出——分母被悄悄缩小的比率
+    必须能从报告里看出来。**没量到给 None 不给 0**（同 `pct_stats` 的纪律）。
+
+    为什么要按**节点**切而不是一个总数：planner 与 narrator 的成本结构完全不同——
+    前者是一份几乎不变的长提示词（命中率高），后者是随对话增长的短前缀（命中率低）。
+    一个合计数会把两者的差异平均掉，正好抹掉"该优化哪一条腿"这个唯一的决策信息。
+    """
+    merged: dict[str, dict] = {}
+    for m in nmetrics:
+        for node, u in (m.get("usage") or {}).items():
+            t = merged.setdefault(node, {"calls": 0, "in": 0, "out": 0, "cache": 0,
+                                         "cache_seen": 0})
+            for k in t:
+                t[k] += u.get(k, 0)
+    out = {}
+    for node, t in merged.items():
+        n = t["calls"] or 1
+        out[node] = {
+            "calls": t["calls"],
+            "in_per_call": round(t["in"] / n), "out_per_call": round(t["out"] / n),
+            "in_total": t["in"], "out_total": t["out"],
+            "cache_seen": t["cache_seen"], "cache_total": t["cache"],
+            "hit_rate": (round(t["cache"] / t["in"], 4)
+                         if t["cache_seen"] and t["in"] else None),
+        }
+    return out
 
 
 def run_once(dial: str, spec: dict, ids: list[str], timeout: int) -> tuple[str, dict]:
@@ -278,6 +391,11 @@ def summarize(dial: str, spec: dict, acc: dict) -> dict:
                    "fallback_rate": fb_rate,
                    "tool_call_completeness": (round(1 - merged["truncated"] / rounds, 4)
                                               if rounds else None)},
+        # provider/协议错误与内容失败分两堆：**"没跑成"不是"跑得差"**。首跑 3/24 就是
+        # 24 例里 21 例压根没发出去请求（400 孤儿 tool 消息），那一格若不分列，读起来
+        # 就是"deepseek 质量只有 12.5%"。
+        "fails": provider_error_stats(reports),
+        "tokens": token_stats(nmeta),
         "plan_efficiency": ({"tool_calls_total": sum(p.get("tool_calls_total", 0) for p in pe),
                              "tool_rounds_total": sum(p.get("tool_rounds_total", 0) for p in pe),
                              "cases_multi_tool_rounds": sum(p.get("cases_multi_tool_rounds", 0)
@@ -347,6 +465,7 @@ def main() -> int:
         json.dump(out, f, ensure_ascii=False, indent=1)
 
     print(f"\n{'档':<22}{'通过率':<16}{'端到端 p50/max':<20}{'planner p50/max':<20}"
+          f"{'planner tok 入/出(次)':<24}{'命中率':<10}{'跑不成/用例次':<16}"
           f"{'fallback':<12}{'完整率':<10}", flush=True)
     for dial in dials:
         d = out["dials"][dial]
@@ -354,9 +473,34 @@ def main() -> int:
         rate = f"{d['case_passed']}/{d['case_runs']} {d['pass_rate']:.3f}"
         e2e = f"{ce['p50']}/{ce['max']}s"
         round_s = f"{pr['p50']}/{pr['max']}s"
+        # 命中率那一格取 planner（跨档唯一可比的那条腿）：narrator 的提示词随对话增长、
+        # 前缀稳定度天生不同，两腿混着看会把"该优化哪条腿"这个决策信息抹掉。
+        # `n/a` = 这一档一次都没量到缓存字段（**不是 0%**）。
+        pl = (d.get("tokens") or {}).get("planner") or {}
+        tok = (f"{pl['in_per_call']}/{pl['out_per_call']}"
+               if pl.get("in_per_call") is not None else "—")
+        hit = f"{pl['hit_rate']:.1%}" if pl.get("hit_rate") is not None else "n/a"
+        fl = d.get("fails") or {}
+        broken = f"{fl.get('broken_runs', 0)}/{fl.get('case_runs', 0)}"
         print(f"{dial:<22}{rate:<16}{e2e:<20}{round_s:<20}"
+              f"{tok:<24}{hit:<10}{broken:<16}"
               f"{str(d['native']['fallback_rate']):<12}"
               f"{str(d['native']['tool_call_completeness']):<10}", flush=True)
+
+    # 逐节点 token 明细：主表只放 planner（可比性），narrator 与其它节点在这里单列。
+    nodes = sorted({n for d in out["dials"].values() for n in (d.get("tokens") or {})})
+    if nodes:
+        print(f"\n{'档':<22}" + "".join(f"{n + ' 入/出(次)':<22}" for n in nodes), flush=True)
+        for dial in dials:
+            t = out["dials"][dial].get("tokens") or {}
+            cells = ""
+            for n in nodes:
+                v = t.get(n)
+                cells += (f"{v['in_per_call']}/{v['out_per_call']} 命中"
+                          f"{v['hit_rate']:.1%}" if v and v.get("hit_rate") is not None
+                          else (f"{v['in_per_call']}/{v['out_per_call']}" if v
+                                else "—")).ljust(22)
+            print(f"{dial:<22}{cells}", flush=True)
     print(f"\n[矩阵] 落盘：{args.out}", flush=True)
     return 0
 
