@@ -83,7 +83,8 @@ from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _doc_anchors, _frame_texts, _has_frames,
                            _last_assistant_utterance, _last_user_msg,
                            _msg_text, _page_ctx, _prev_user_msg, _receipts_text,
-                           _recent_tail, _short_reply_hint, _short_reply_kind)
+                           _recent_tail, _short_reply_hint, _short_reply_kind,
+                           with_tool_call_pairs)
 from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES,
                              _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
@@ -6901,7 +6902,10 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     _t0 = time.monotonic()
     logger.info("[model] LLM 调用开始（narrator）")
     record("model", "llm_start")
-    resp = llm.invoke([system] + state["messages"])
+    # `with_tool_call_pairs`（20260928）：execute 造的 ToolMessage 前面没有声明过
+    # 调用的 assistant——qwen 容忍这条非法序列，strict 服务商一律 400 拒（见该函数
+    # docstring 的实测）。**只补形状、不动内容**：帧原文照旧是 narrator 的叙述材料。
+    resp = llm.invoke([system] + with_tool_call_pairs(state["messages"]))
     dur = time.monotonic() - _t0
     slow = dur > 30
     (logger.warning if slow else logger.info)(

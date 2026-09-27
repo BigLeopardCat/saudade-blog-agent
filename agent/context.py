@@ -974,6 +974,68 @@ def _frame_texts(messages: list, limit: int = 5, per: int = 300,
     return "\n".join(parts)
 
 
+def with_tool_call_pairs(messages: list) -> list:
+    """给孤儿 `ToolMessage` 补一条配对的 assistant（`tool_calls`）消息（20260928）。
+
+    **为什么存在**：执行端把工具返回 append 成 `ToolMessage`（`graph.py` 的
+    `execute_node`），但消息序列里**没有任何一条 assistant 声明过这些调用**——
+    planner 那一腿是 `llm.invoke(_prompt)`（传渲染好的字符串，根本不走消息列表），
+    工具的"调用者"在序列里不存在。于是 narrator 那句
+    `[system] + state["messages"]` 交给服务商时是一条**非法序列**：
+    `role:"tool"` 前面没有带 `tool_calls` 的 assistant。
+
+    **这件事是被一家严格的服务商照出来的**（20260928 实测）：qwen 端点容忍，
+    deepseek 一律拒 `400 Messages with role 'tool' must be a response to a
+    preceding message with 'tool_calls'`——8 用例 × 3 遍里 narrator 那一腿
+    21/24 全红，唯一绿的那条恰好是**零工具**用例。所以那个 3/24 **不是模型质量**，
+    是这条序列不合协议。任何 provider 对照跑之前都得先过这一关。
+
+    **只补形状、不动内容**：`ToolMessage.content` 是 narrator 的原始叙述材料
+    （`_frame_texts` 只取最近 5 条、每条还截 300 字符，救不了它），所以不能靠
+    "把 ToolMessage 删掉"来合规——那等于把叙述材料砍掉一大半，是**改行为**而不是
+    修协议。这里补一条 `content=""` + `tool_calls` 的 assistant，`tool_call_id`
+    用帧自己那个（`execute_node` 造的 `execute_{idx}`），服务商配对得上即可。
+    连续多条 ToolMessage 合进**同一条** assistant = 一轮并行调用，正是它们的来源。
+
+    纯函数、**幂等**：一段 ToolMessage 若紧跟在一条**已经认领了它全部
+    `tool_call_id`** 的 assistant 后面，就是本来合法的序列，原样透过——否则才补。
+    （"补形状"的函数如果见到合法序列还要再补一条，它自己就成了污染源。）
+    """
+    out: list = []
+    run: list = []
+
+    def append_run() -> None:
+        if not run:
+            return
+        claimed: set = set()
+        if out and isinstance(out[-1], AIMessage):
+            claimed = {str((tc or {}).get("id") or "") for tc in (out[-1].tool_calls or [])}
+        # **逐条**对，不按"前一条是 assistant 就算"：一段里前几条被认领、后面几条
+        # 没有，整段照单全收会把后几条挂到一个不认领它们的 assistant 后面（还是非法）。
+        # 认领了的前缀原样透过，剩下的整段补一条 assistant。
+        i = 0
+        while i < len(run) and str(getattr(run[i], "tool_call_id", "") or "") in claimed:
+            out.append(run[i])
+            i += 1
+        rest = run[i:]
+        if rest:
+            out.append(AIMessage(content="", tool_calls=[
+                {"name": getattr(m, "name", "") or "", "args": {},
+                 "id": str(getattr(m, "tool_call_id", "") or ""), "type": "tool_call"}
+                for m in rest]))
+            out.extend(rest)
+        run.clear()
+
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            run.append(m)
+            continue
+        append_run()
+        out.append(m)
+    append_run()
+    return out
+
+
 def _receipts_text(receipts: list, drop_tools: set | None = None) -> str:
     """checker 验收回执摘要（narrator 同轮如实转述依据，20260904）。
 
