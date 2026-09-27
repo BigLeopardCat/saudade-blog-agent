@@ -1023,6 +1023,102 @@ check("技能仍只对管理员开放（读的是后台留言管理视图；普�
       and ROLE_USER not in _todo_read.roles,
       str(sorted(_todo_read.roles)))
 
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑰ planner 侧目标门：正文登记成**目标名**，查的是后台待办台账（20260927）")
+
+# 现场（golden `admin_todo_done_popup` 那条红）：主人说「把待办「给多肉浇水」勾成完成」，
+# planner 把正文填成了**另一条**待办（列表里真有的那条，格式完全合法）——于是卡片上
+# 印的是别人的行。待办没有 id 也没有标题，**正文是主人唯一能核对的字**：填错 = 让他
+# 盲签。修法 = 把 `text` 登记成目标名字段（`_WRITE_NAME_FIELDS` + `_NAME_TARGET_TOOLS`），
+# 于是引号通道把正文校正回主人引号里那一段、台账通道再回答「你列表里有没有这一条」。
+#
+# 这条链**在本节之前没有任何判据**：登记位缺失时上面 ①–⑯ 全绿、而这条链整条不存在
+# （登记表是这几道门的唯一开关，`name not in _WRITE_NAME_FIELDS` 直接早退）——所以第
+# 一条断言就是「登记在位」，没有它，后面每一条都会变成零断言的绿。
+check("⭐ `complete_dashboard_todo` 已登记为目标名字段（漏登记 ⇒ 本节其余断言全部测不到）",
+      g._WRITE_NAME_FIELDS.get("complete_dashboard_todo") == ("text", None)
+      and "complete_dashboard_todo" in g._NAME_TARGET_TOOLS,
+      str(g._WRITE_NAME_FIELDS.get("complete_dashboard_todo")))
+
+_MSG_TODO = "把待办「给多肉浇水」勾成完成"
+_ROWS_TODO = [todo("给多肉浇水", date="2026-09-28"), todo("买猫粮", date=None)]
+
+
+def _todo_plan(text):
+    """真实展开路径产出的计划体（与 planner 同形：params 与 TOOLS 行都要有）。"""
+    return instantiate_plan("dashboard_todo_done", {"text": text}, "admin")
+
+
+def _run_target_gates(plan_obj, user_msg, rows):
+    """planner 侧那三道门的**真实调用序**（见 `planner_node` 里 fixer 链的注）。
+
+    返回 `(拒绝说明 or None, 计划里此刻的正文)`——用的是那三个真函数本身，不重写判据。
+    正文读的是 **TOOLS 行**（execute 真会执行的那一份），不是 `params`：`instantiate_plan`
+    的产物里根本没有 `params` 键（那是 planner 那份计划体才有的形状），而"这两处同步"
+    恰恰是要锁的性质之一。
+    """
+    g._name_target_fix(plan_obj, user_msg, "admin")
+    ref = g._target_grounding_refusal(plan_obj, user_msg)
+    if ref is None:
+        with patch(_admin_get=lambda p, c: rows):
+            ref = g._write_target_refusal(plan_obj, cfg(), user_msg, "admin")
+    args, _ok = g._tool_args((plan_obj.get("tools") or [""])[0])
+    return ref, str((args or {}).get("text") or "")
+
+
+_plan_wrong = _todo_plan("买猫粮")
+_ref_fix, _got_fix = _run_target_gates(_plan_wrong, _MSG_TODO, _ROWS_TODO)
+check("正例：planner 填的是列表里另一条 ⇒ 正文被校正回主人引号里那一段",
+      _got_fix == "给多肉浇水", _got_fix)
+check("  TOOLS 行**同步重建**（弹卡印的与执行的是同一份参数，不是两处各算一遍）",
+      _plan_wrong.get("tools") == ['complete_dashboard_todo({"text": "给多肉浇水"})'],
+      str(_plan_wrong.get("tools")))
+check("  校正后**来源态判据放行**（顺序锁：校正必须在 `_target_grounding_refusal` 之前，"
+      "否则它判的是 planner 那个错值）",
+      _ref_fix is None, str(_ref_fix))
+
+# 台账三态 + 读不到（每一态都用真实的三道门跑一遍）
+ref_hit, _ = _run_target_gates(_todo_plan("给多肉浇水"), _MSG_TODO, _ROWS_TODO)
+check("台账里有这一条 ⇒ 放行到弹窗（本层只回答这件事现在做不做得成，签字由主人点）",
+      ref_hit is None, str(ref_hit))
+
+ref_miss, _ = _run_target_gates(_todo_plan("给多肉浇水"), _MSG_TODO,
+                                [todo("买猫粮", date=None)])
+check("台账里没有这一条 ⇒ 零写 + 如实拒绝", ref_miss is not None, str(ref_miss))
+check("  说明里说的是**后台待办**（措辞错成「站内没有叫「X」的标签」是最坏的一种："
+      "它长得像一句诚实拒绝，查的却是另一本台账）",
+      ref_miss is not None and "待办" in ref_miss[1] and "标签" not in ref_miss[1],
+      str(ref_miss))
+check("  说明里带上主人说的那个字与列表条数（他要能照着改口）",
+      ref_miss is not None and "给多肉浇水" in ref_miss[1] and "1 条" in ref_miss[1],
+      str(ref_miss))
+
+ref_dup, _ = _run_target_gates(_todo_plan("给多肉浇水"), _MSG_TODO,
+                               [todo("给多肉浇水"), todo("给多肉浇水", date=None)])
+check("多条同名 ⇒ 零写（**歧义即零写**：挑错的那次在列表上看起来和挑对一模一样）",
+      ref_dup is not None and "分不清" in ref_dup[1], str(ref_dup))
+
+ref_empty, _ = _run_target_gates(_todo_plan("给多肉浇水"), _MSG_TODO, [])
+check("空列表 ⇒ 零写 + 说明是**事实**（「一条都没记」）而不是故障",
+      ref_empty is not None and "一条都没记" in ref_empty[1], str(ref_empty))
+
+ref_down, _ = _run_target_gates(_todo_plan("给多肉浇水"), _MSG_TODO,
+                                base.unavailable("后台读不到"))
+check("⭐ 台账**读不到** ⇒ 放行（读不到 ≠ 没有：把一次网络故障说成"
+      "「你列表里没有这一条」是本族最坏的错法；golden 那条 uid=0 的用例"
+      "「卡照弹」也正是靠这一格）",
+      ref_down is None, str(ref_down))
+
+# 待办族**不走近失校正**：主人引号里就是短的那一截，而台账里恰好有一条以它开头 ⇒ 若走
+# 标签族那条校正，目标会被改成台账全名。待办正文是主人自己写在清单上的自由文本、没有
+# id，「以它开头」根本没有指认力（「给多肉」与「给多肉浇水」是两件事）。
+_short_plan = _todo_plan("给多肉")
+_ref_short, _got_short = _run_target_gates(_short_plan, "把待办「给多肉」勾成完成",
+                                           [todo("给多肉浇水", date=None)])
+check("⭐ 待办族不做「抄短了就补全」的校正（引号里写什么就是什么，退回如实拒绝）",
+      _ref_short is not None and _got_short == "给多肉", f"{_ref_short} / {_got_short}")
+
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
