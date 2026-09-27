@@ -188,6 +188,85 @@ check("text 档（无 native 事件）的两个比率是 None 而不是 0——�
 check("同一格 planner 耗时才在 text 档也照常出数（不是整块空）",
       d_text["planner_round_s"]["n"] == 2, str(d_text["planner_round_s"]))
 
+print("\n⑥ 跑不成 ≠ 跑得差：provider/协议错误单独分堆")
+_REAL_400 = ("[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role "
+             "'tool' must be a response to a preceding message with 'tool_calls'\"}}")
+_REASONING = ("[第 1 轮] error: Error code: 400 - The reasoning_content in the thinking "
+              "mode must be passed back to the API.")
+_CONTENT = "[第 1 轮] 回复里没有「樱花」"
+check("真 400（孤儿 tool 消息）判成没跑成", dm.is_provider_error(_REAL_400))
+check("真 400（思考链没回传）判成没跑成", dm.is_provider_error(_REASONING))
+check("鉴权/连接/超时判成没跑成",
+      all(dm.is_provider_error(t) for t in
+          ("Error code: 401 - invalid_api_key", "Connection error.", "APITimeoutError")))
+check("内容判据失败**不许**判成没跑成（否则质量差会被读成服务商问题）",
+      not dm.is_provider_error(_CONTENT), _CONTENT)
+check("空串/None 不炸", not dm.is_provider_error("") and not dm.is_provider_error(None))
+
+def rep_of(entries: list) -> dict:
+    """**原始 run_golden 报告**的形状：`cases` 是 list、`fails` 是字符串列表。"""
+    return {"cases": entries}
+
+_STATS = dm.provider_error_stats([
+    ("/tmp/a.json", rep_of([{"id": "c1", "ok": False, "fails": [_REAL_400]},
+                            {"id": "c1", "ok": False, "fails": [_REAL_400]},
+                            {"id": "c1", "ok": False, "fails": [_CONTENT]},
+                            {"id": "c2", "ok": True, "fails": []}])),
+    ("/tmp/b.json", rep_of([{"id": "c3", "ok": True, "fails": []}])),
+])
+check("分母是**用例次数**（与 aggregate 同源：4+1）", _STATS["case_runs"] == 5, str(_STATS))
+check("「跑不成」按**采样**计（两次 400 = 2，不是 1 条用例）", _STATS["broken_runs"] == 2,
+      str(_STATS))
+check("消息级两堆分开：2 条协议错误 / 1 条内容失败",
+      (_STATS["messages"], _STATS["quality_messages"]) == (2, 1), str(_STATS))
+check("原始报告的 `error` 字段也过同一把尺子（异常不一定进 fails）",
+      dm.provider_error_stats([("/tmp/c.json", rep_of(
+          [{"id": "c4", "ok": False, "fails": [], "error": _REASONING}]))])["broken_runs"] == 1)
+try:
+    dm.provider_error_stats([("/tmp/d.json", {"cases": {"c5": {"runs": 3, "fails": [
+        {"fails": [_REAL_400]}]}}})])
+    check("吃到按 id 合并的 cases（dict）⇒ 抛，不许安静数出 0", False, "没抛")
+except RuntimeError as e:
+    check("吃到按 id 合并的 cases（dict）⇒ 抛，不许安静数出 0",
+          "cases" in str(e), str(e))
+
+print("\n⑦ token：逐节点、每次均值、命中率的分母")
+
+
+def nmet(usage: dict) -> dict:
+    """一份带 `usage` 的 trace_metrics 结果（其余键用零值，本段只喂 token 那条路）。"""
+    return {"trace_files": 0, "native_decisions": 0, "native_fallbacks": 0,
+            "truncated": 0, "planner_round_s_raw": [], "usage": usage}
+
+
+NM = [nmet({"planner": {"calls": 2, "in": 20000, "out": 100, "cache": 16000, "cache_seen": 2},
+            # 端点**说了**没命中（字段在、值是 0）：这是 0%，要能与"量不到"分开
+            "model": {"calls": 1, "in": 5000, "out": 200, "cache": 0, "cache_seen": 1}}),
+      nmet({"planner": {"calls": 2, "in": 10000, "out": 20, "cache": 8000, "cache_seen": 1}})]
+TS = dm.token_stats(NM)
+check("两次 run 的调用数/总量相加", TS["planner"]["calls"] == 4
+      and TS["planner"]["in_total"] == 30000, str(TS["planner"]))
+check("每次输入/输出取均值（30000/4=7500、120/4=30）",
+      (TS["planner"]["in_per_call"], TS["planner"]["out_per_call"]) == (7500, 30),
+      str(TS["planner"]))
+check("命中率 = cache/input，只算**报了缓存字段**的那些调用（24000/30000）",
+      TS["planner"]["hit_rate"] == 0.8, str(TS["planner"]))
+check("cache_seen 与 calls 一起给出：分母被缩小这件事要能看出来",
+      TS["planner"]["cache_seen"] == 3 and TS["planner"]["calls"] == 4, str(TS["planner"]))
+check("端点说了没命中（cache_read=0 但字段在）⇒ 0% 而不是 n/a",
+      TS["model"]["hit_rate"] == 0.0, str(TS["model"]))
+check("**一次都没量到缓存字段 ⇒ None（不是 0%）**",
+      dm.token_stats([nmet({"planner": {"calls": 1, "in": 900, "out": 5,
+                                        "cache": 0, "cache_seen": 0}})])
+      ["planner"]["hit_rate"] is None)
+check("全是零调用 ⇒ 空字典（不是一堆 0，也不是炸）",
+      dm.token_stats([]) == {}, str(dm.token_stats([])))
+ACC_TOK = acc_of(NM, [case("m1", True, 9.0)])
+d_tok = dm.summarize("native-nothink-flash", dm.DIALS["native-nothink-flash"], ACC_TOK)
+check("token 与 fails 两段一起进报告", "tokens" in d_tok and "fails" in d_tok, str(list(d_tok)))
+check("通过率那一格不受 token 段影响（两条腿各算各的）",
+      d_tok["case_passed"] == 1, str(d_tok["case_passed"]))
+
 print()
 if FAILED:
     print(f"❌ {len(FAILED)} 项未通过：")
