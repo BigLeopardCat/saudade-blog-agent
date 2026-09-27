@@ -4812,6 +4812,27 @@ def test_write_desc_no_example_names():
     check("  规则 4b 整段里没有具体名字（连失败样例也不许带真名字）", not hits, f"命中 {hits}")
     check("  规则 4b 明说了「完整照抄」（不许截断/去下划线/拆两截）",
           "完整照抄" in block)
+    # 同一条锁的**第二族**：示例里的**具体 id**（20260928）。上面那张表管的是"名字"
+    # （名词），而写参数里最要命的那个值是 **id**——它是"删哪条/改哪篇"的唯一指认。
+    # 审计实测残留：`favorite_add` / `favorite_remove` 的描述里写着「把文章 12 加到
+    # 收藏」，planner 规则 4b 与 narrator 规则 18/19 也各带一个真 id 的举例。描述经
+    # native 档 `tools[].description` 直达模型 ⇒ 与"示例名被抄成 title"是同一族机制，
+    # 只是抄出来的是**另一篇文章的 id**（改错文章，症状更隐蔽：操作会"成功"）。
+    # 判据是形态而不是取值：`文章<数字>` 一律换成 〈id〉——id 是**每轮现取**的
+    # （页面上下文 / 本轮工具帧 / 主人原话），任何写死在提示词里的号都是错的。
+    _id_re = re.compile(r"文章\s*[0-9]+")
+    for sk in S.SKILLS:
+        if sk.name not in S.WRITE_SKILL_NAMES:
+            continue
+        m = _id_re.search(sk.description or "")
+        check(f"  {sk.name} 描述里没有写死的文章 id 举例", m is None, m.group(0) if m else "")
+    m = _id_re.search(block)
+    check("  规则 4b 整段里没有写死的文章 id 举例", m is None, m.group(0) if m else "")
+    # narrator prompt（`_EXECUTOR_PROMPT`）是**此前没人扫过**的那一份（20260928 审计
+    # 指出：`音乐` 就住在它的规则 19 里）。它抄不出参数（零工具），但会把示例里的取值
+    # 当**可复述的事实**——规则 19 那条假话（"站内没有叫「音乐」的标签"）正是这么来的。
+    m = _id_re.search(G._EXECUTOR_PROMPT)
+    check("  narrator prompt 里没有写死的文章 id 举例", m is None, m.group(0) if m else "")
 
 
 def test_write_intent_never_expressed_round():
