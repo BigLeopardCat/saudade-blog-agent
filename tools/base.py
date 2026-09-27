@@ -369,6 +369,21 @@ def _note_row_with_tag_names(row):
     return out
 
 
+# 文档类型 → 中文物件名（**唯一一份**；server.py 的过程行与 Rust 的回执行都按它说话）。
+# 为什么值得单列一张：`get_article_detail` 是四个数据源共用的一件工具，读的是
+# 留言/说说/公告/文章——而动作词一度恒为"读取**文章**"（Rust `render_exec_row`
+# 与 `server._tool_action_text` 两处各写一遍、两处都错）。跨轮执行记忆里因此写着
+# 「读取文章 100」而那条其实是**留言**，下一轮 narrator 照抄，主人看到的就是
+# "把留言编号当文章读"（trace `20260928T032411` 实证）。Rust 侧有一份镜像
+# （`src/routes/chat.rs::render_exec_row`）——改这里必须同步那里（有测试钉住）。
+DOC_TYPE_CN = {
+    "note": "文章",
+    "talk": "说说",
+    "board": "留言",
+    "announcement": "公告",
+}
+
+
 @tool
 def get_article_detail(
     article_id: Annotated[int, "文档的唯一 ID（note 为 noteId，talk/board 为 talkId，announcement 为 id）"],
@@ -416,7 +431,13 @@ def get_article_detail(
         return rows
     for it in rows:
         if str(it.get(key_field)) == str(article_id):
-            return str(it)
+            # **必须走 `_shape`，不许写 `str(it)`**（20260928）：出口级的改名
+            # （`_FRAME_ID_KEYS`）只挂在 `_shape` 上，这一支裸 str 出去 ⇒ 同一份
+            # 上下文里 article 族的键叫 `noteId`、留言族却仍是上游的 `talkKey`。
+            # 实证：trace `20260928T032301` 的读者回复里 `talkId 99`（来自审核状况
+            # 报表）与 `talkKey 100、97`（来自这里）混着出现——当时被判成"模型编了
+            # 个不存在的字段名"，其实是本行漏了出口。
+            return _shape(it)
     # 列表里没这一条：同样是"查无此物"（20260924 与上面 note 分支同办），但措辞必须
     # 交代边界——这些列表接口可能只回最近的若干条，且河灯留言只放行**审核通过**的
     # （`talks.rs::list_by_src` 恒过滤 approved=1），"不在列表里"与"真的不存在"
@@ -2525,7 +2546,12 @@ def delete_board_comment(
     """删除一条河灯留言（**删掉取不回来**，也没有回收站）。
     留言按正文片段指认：片段对不上、或站内有好几条都含这段时什么都不做，并如实
     说明原因与候选。**只是要隐藏一条留言时改用审核（驳回），不要删。**
-    需要管理员身份，且要经主人确认才会真正删。"""
+    需要管理员身份，且要经主人确认才会真正删。
+
+    **待审与被驳回的留言删得掉**（`_board_index` 读的是后台管理清单
+    `GET /api/protect/board`，它不过滤 approved）——20260928 实证的反面说法
+    （"系统没有删除被驳回留言的通道"）是编的，见 `reports.render_moderation_status`
+    末尾那条"处置"注记。"""
     from agent import adminops as A
     hit, err = _find_board_comment(quote, config)
     if err:
