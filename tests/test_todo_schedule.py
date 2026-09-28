@@ -44,6 +44,12 @@ from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
 from agent.skills import _FREE_TEXT_WRITE_SKILLS, instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
 
+# 父仓（Rust）源码的读取统一走它：三态显式（找得到 → 断言；找不到且设了
+# SAUDADE_REQUIRE_PARENT → 红；找不到 → 响亮的 ⏭）。此前这里是一行裸 read_text，
+# **CI 里直接 FileNotFoundError 把整套炸掉**——而 CI 的名单里没有本套件，谁也不知道。
+sys.path.insert(0, str(ROOT / "tests"))
+import _parent_repo  # noqa: E402
+
 # ── 密钥桩：settings.jwt_secret 是全局单例（同 test_admin_write）────────────
 # `_confirm_popup` 在密钥空缺时**不弹窗**（宁可退回追问，也不发一个验不过的令牌）。
 # CI 里没有 .env ⇒ 本地会绿、CI 会静默变成"没弹"（"该弹窗"的正例整体消失）。桩完
@@ -912,12 +918,16 @@ check("  长正文的过程行是**带省略号的预览**（不是把正文裸�
 check("  短正文的过程行不凭空加省略号（没截就是没截）",
       "…" not in _srv._tool_action_text("create_dashboard_todo", {"text": "交房租"}),
       _srv._tool_action_text("create_dashboard_todo", {"text": "交房租"}))
-_rsrc = (ROOT.parent / "src" / "routes" / "chat.rs").read_text(encoding="utf-8")
-check("Rust 那半有同名臂（漏了会把 `complete_dashboard_todo` 这种带下划线的内部名"
-      "写进 execution_log 被下一轮照抄）",
-      '"complete_dashboard_todo" =>' in _rsrc, "chat.rs")
-check("  两侧措辞逐字一致（预告帧与落库回执是同一件事的两处渲染）",
-      "把待办「{}」勾成完成" in _rsrc, "chat.rs")
+_rsrc = _parent_repo.read(
+    "src/routes/chat.rs",
+    why="跨轮执行记忆的动作行是 Rust 写时渲染定稿的 ⇒ 只改 Python 一侧，线上台账里"
+        "那些行仍是旧措辞")
+if _rsrc is not None:
+    check("Rust 那半有同名臂（漏了会把 `complete_dashboard_todo` 这种带下划线的内部名"
+          "写进 execution_log 被下一轮照抄）",
+          '"complete_dashboard_todo" =>' in _rsrc, "chat.rs")
+    check("  两侧措辞逐字一致（预告帧与落库回执是同一件事的两处渲染）",
+          "把待办「{}」勾成完成" in _rsrc, "chat.rs")
 
 
 # ══════════════════════════════════════════════════════════════════
