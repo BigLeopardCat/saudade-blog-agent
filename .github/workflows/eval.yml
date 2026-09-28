@@ -58,6 +58,11 @@ jobs:
       # 才炸，而线上位置恰在图启动前 ⇒ 表现成"整轮零帧"，看着像模型没回复。那次事故挂了
       # 40 分钟、离线套件与夜间 golden 全都碰不到（见 docs/问题记录.md 1.43）。
       # 只开 F821 这一条规则是刻意的：其余 F/E 类（未使用导入等）不应拦住一次修复性推送。
-      # 本机同款命令：uvx ruff check --select F821 --no-cache .
+      # **ruff 的版本从 `pyproject.toml` 的 `[dependency-groups] dev` 来**（上面
+      # `uv sync --frozen` 已经把它按 uv.lock 装进项目环境），不再在这里手写
+      # `uvx ruff@0.14.4`——同一件事写两处就是"改一处忘另一处"的形状（本轮 20260928 收敛）。
+      # 本机跑同一条判据用隔离的 `uvx ruff@0.14.4 check --select F821 --no-cache .`
+      # （**不许**在本机 `uv sync`：`.venv` 就是产线那个 venv）；版本若升，两处一起改，
+      # `tests/test_ci_suite_list.py` ①b 会盯着它们是否同版。
       - name: 未定义名静态扫描（ruff F821，秒级）
-        run: uvx ruff@0.14.4 check --select F821 --no-cache .
+        run: uv run --frozen ruff check --select F821 --no-cache .
