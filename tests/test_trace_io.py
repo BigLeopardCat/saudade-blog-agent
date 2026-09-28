@@ -28,6 +28,8 @@ sys.path.insert(0, str(ROOT / "eval"))
 import trace_files as tf  # noqa: E402
 import trace_io  # noqa: E402
 
+from utils import trace as trace_mod  # noqa: E402  （⑦ 那条：真落一份盘看顶层字段）
+
 FAILS = []
 
 
@@ -112,6 +114,38 @@ def main() -> int:
         tfsrc = src("eval/trace_files.py")
         check("⑥ trace_files.py 不 import json/gzip（IO 归 trace_io）",
               "import json" not in tfsrc and "import gzip" not in tfsrc)
+
+        # ── ⑦ 顶层 schema_version：写侧盖章、读侧只许 .get（不许硬取）──────────
+        # 动机：trace 是保留 30 天、按天归档的**长期语料**，读它的脚本十几个；字段含义
+        # 变过一次（命令从字符串搬进 meta["cmd"]）之后，事后读旧 trace 的人分不清
+        # "旧格式" 与 "当时没有"——两种解释导出相反结论。版本号给出判据。
+        check("⑦ SCHEMA_VERSION 是 ≥1 的整数（版本号本身别写成字符串/0）",
+              isinstance(trace_mod.SCHEMA_VERSION, int) and trace_mod.SCHEMA_VERSION >= 1,
+              repr(trace_mod.SCHEMA_VERSION))
+        vdir = os.path.join(tmp, "vtrace")
+        trace_mod.start_trace("ver00001", 17, "thread-ver", {"message": "x"},
+                              dir=vdir, name="case_ver", by_day=False)
+        vpath = trace_mod.finish_trace("ver00001", "producer_done", 1.0, 2)
+        vdoc = trace_io.load_trace(vpath) if vpath else None
+        check("⑦ 落盘的 trace 顶层带 schema_version，且与常量同值（写读一致）",
+              bool(vdoc) and vdoc.get("schema_version") == trace_mod.SCHEMA_VERSION,
+              f"{vpath} → {vdoc.get('schema_version') if vdoc else None}")
+        # 存量的 30 天里全是没这个字段的文件：读侧必须"缺席即旧格式"，不能因此少读
+        oldp = os.path.join(tmp, "20250101T000000_3_old00000.json")
+        with open(oldp, "w", encoding="utf-8") as fh:
+            json.dump({"trace_id": "old", "events": [], "reply": "旧"}, fh, ensure_ascii=False)
+        od = trace_io.load_trace(oldp)
+        check("⑦ 没有该字段的存量 trace 照读不误（缺席 = 0 = 20260928 之前）",
+              isinstance(od, dict) and od.get("schema_version") is None and od.get("reply") == "旧")
+        # 读侧纪律：**不许**硬取。硬取会让"扫全量"在换版当天炸掉一半（存量按保留期老去）
+        _hard = []
+        for p in sorted(list((ROOT / "eval").glob("*.py")) + list((ROOT / "tests").glob("*.py"))):
+            if p.name == Path(__file__).name:
+                continue  # 本文件就是写这条判据的地方，字符串里带着它
+            if re.search(r'\["schema_version"\]', p.read_text(encoding="utf-8")):
+                _hard.append(p.name)
+        check("⑦ 没有任何读取端硬取 doc[\"schema_version\"]（只许 .get）",
+              not _hard, "、".join(_hard))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
