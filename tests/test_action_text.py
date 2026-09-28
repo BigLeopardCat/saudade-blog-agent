@@ -433,38 +433,49 @@ _INTENTIONAL = [
      "标记站内信已读（3、4、5 等 4 封）"),
 ]
 
-_pairs = _rust_pairs(_rs) if _rs is not None else []
-check(f"从父仓测试源码现取成对期望（{len(_pairs)} 对，下限 26）",
-      len(_pairs) >= 26, str(len(_pairs)))
+if _rs is None:
+    # ★ 这一节在这台机器上**没有比较过**（不是通过）。20260928 实测：CI 只 checkout
+    # agent 仓（父仓私有）⇒ `_parent_repo.read` 返回 None，而本节原先照样往下跑断言
+    # ⇒ 0 对、四条全红，且红得与 Python 侧一个字都没关系（本机恒绿、CI 恒红 = 判据在测
+    # "这台机器有没有兄弟目录"）。所以这里不是"少跑一条"，是把"没评"与"通过"分开写：
+    # 读到这行的人应当知道——这一节是这套跨语言契约在 CI 上的**唯一**比较点。
+    # 夜间门禁设 `SAUDADE_REQUIRE_PARENT=1` ⇒ 上一节 `_parent_repo.read` 直接
+    # SystemExit(1)，根本走不到这里。
+    print("  ⏭ ⑤ 未评估：拿不到父仓源码 ⇒ 这一节**一次也没比过**（不是通过）。"
+          "夜间门禁设 SAUDADE_REQUIRE_PARENT=1，那一侧会把它变成 ❌ 并退出 1。")
+else:
+    _pairs = _rust_pairs(_rs)
+    check(f"从父仓测试源码现取成对期望（{len(_pairs)} 对，下限 26）",
+          len(_pairs) >= 26, str(len(_pairs)))
 
-_same: list[str] = []
-_skipped: list[str] = []
-_diffs: list[tuple[str, str, str]] = []
-for _row, _want in _pairs:
-    _why = _why_not_compared(_row)
-    if _why:
-        _skipped.append(f"{_row.get('tool')}【{_why}】")
-        continue
-    _got = receipt_action(str(_row.get("tool") or ""), _row.get("args") or {},
-                          _meta_of(_row))
-    _got = _got.replace("[", "「").replace("]", "」")[:120]   # Rust 只排版的两件
-    if _got == _want:
-        _same.append(_want)
-    else:
-        _diffs.append((str(_row.get("tool")), _want, _got))
+    _same: list[str] = []
+    _skipped: list[str] = []
+    _diffs: list[tuple[str, str, str]] = []
+    for _row, _want in _pairs:
+        _why = _why_not_compared(_row)
+        if _why:
+            _skipped.append(f"{_row.get('tool')}【{_why}】")
+            continue
+        _got = receipt_action(str(_row.get("tool") or ""), _row.get("args") or {},
+                              _meta_of(_row))
+        _got = _got.replace("[", "「").replace("]", "」")[:120]  # Rust 只排版的两件
+        if _got == _want:
+            _same.append(_want)
+        else:
+            _diffs.append((str(_row.get("tool")), _want, _got))
 
-check(f"★ 逐条对上：{len(_same)} 条 Python 输出经 Rust 排版后与父仓期望**逐字相同**",
-      len(_same) >= 20, str(len(_same)))
-check("★ 剩下的差异**恰好**是有意偏离（白名单外差一个字都红）",
-      sorted(_diffs) == sorted(_INTENTIONAL), str(_diffs))
-check("  且白名单没有陈年条目（父仓哪天把某条改了，这条会红 ⇒ 删掉那行白名单）",
-      all(d in _diffs for d in _INTENTIONAL))
-check("★ 每一对都有归宿（逐字相同 / 有意偏离 / 三类结构性跳过），没有悄悄漏掉的",
-      len(_same) + len(_diffs) + len(_skipped) == len(_pairs),
-      f"same={len(_same)} diff={len(_diffs)} skip={len(_skipped)} all={len(_pairs)}")
-check("  跳过的每一对都写明了理由（无臂 / 合成输入 / 排版附加件）",
-      all(_why_not_compared(_row) for _row, _ in _pairs
-          if f"{_row.get('tool')}【{_why_not_compared(_row)}】" in _skipped))
+    check(f"★ 逐条对上：{len(_same)} 条 Python 输出经 Rust 排版后与父仓期望**逐字相同**",
+          len(_same) >= 20, str(len(_same)))
+    check("★ 剩下的差异**恰好**是有意偏离（白名单外差一个字都红）",
+          sorted(_diffs) == sorted(_INTENTIONAL), str(_diffs))
+    check("  且白名单没有陈年条目（父仓哪天把某条改了，这条会红 ⇒ 删掉那行白名单）",
+          all(d in _diffs for d in _INTENTIONAL))
+    check("★ 每一对都有归宿（逐字相同 / 有意偏离 / 三类结构性跳过），没有悄悄漏掉的",
+          len(_same) + len(_diffs) + len(_skipped) == len(_pairs),
+          f"same={len(_same)} diff={len(_diffs)} skip={len(_skipped)} all={len(_pairs)}")
+    check("  跳过的每一对都写明了理由（无臂 / 合成输入 / 排版附加件）",
+          all(_why_not_compared(_row) for _row, _ in _pairs
+              if f"{_row.get('tool')}【{_why_not_compared(_row)}】" in _skipped))
 
 print(f"\n{'全部通过' if not FAILS else f'失败 {len(FAILS)} 项'}")
 for f in FAILS:

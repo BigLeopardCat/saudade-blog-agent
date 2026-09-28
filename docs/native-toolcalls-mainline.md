@@ -505,6 +505,9 @@ submitted → running → succeeded / failed / cancelled
   此前**一条测试都没有**）；
 - `tests/run_all.py` 起钉住出厂档（`PLANNER_ENGINE=text`、`AGENT_TASK_STATE=0`）：
   离线判据不许跟着产线 `.env` 今天选了哪一档变（实测换档当天 4 个套件红，钉住后 47/47）。
+  20260928 扩到**整份 `.env` 不读**（`SAUDADE_IGNORE_ENV_FILE=1`）：只钉两项挡不住
+  "值本身影响判据形状"的那一类——实测 `test_confirm.py` 的弹窗矩阵靠本机 `.env` 里的
+  产线 `JWT_SECRET` 才签得出令牌，于是**本机恒绿、CI 恒红**，两侧都没在看代码。
 
 ### 6.8 两轮探针实测（20260927，`eval/task_state_probe.py`）
 

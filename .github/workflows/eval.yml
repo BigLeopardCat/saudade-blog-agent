@@ -49,7 +49,9 @@ jobs:
       # 收敛成一条 step 之后，**加套件不用改 CI**。回归锁：`tests/test_ci_suite_list.py`
       # 断言这里不许再出现逐套件的 `tests/test_*.py` 调用，也断言夜间脚本与本文同源。
       # 全套秒级、无网络、无 LLM；run_all.py 内部钉住出厂档（PLANNER_ENGINE=text /
-      # AGENT_TASK_STATE=0），不随仓库/运维环境的取值漂移。
+      # AGENT_TASK_STATE=0），并给子进程设 `SAUDADE_IGNORE_ENV_FILE=1`（**整份 .env 不读**）
+      # ⇒ 判据不随仓库/运维环境的取值漂移。20260928 加后半句的实测理由：CI 没有 .env、
+      # 本机有产线那份 ⇒ 同一片判据在这里红、在本机绿，而两边都没在看代码。
       - name: 全部离线套件（按磁盘枚举，秒级、无网络、无 LLM）
         run: uv run python tests/run_all.py
 

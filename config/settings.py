@@ -4,6 +4,8 @@ Each LLM provider keeps its own environment variables.
 Set ``LLM_PROVIDER=deepseek|qwen|openai`` to choose the active one.
 """
 
+import os
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ── Provider registry ──────────────────────────────────────────────
@@ -28,7 +30,13 @@ class Settings(BaseSettings):
     """Global application settings loaded from environment variables / .env file."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # `SAUDADE_IGNORE_ENV_FILE=1` ⇒ **整份 .env 不读**（环境变量照读）。离线套件用
+        # （`tests/run_all.py` 给每个子进程设上）：本机 `.env` 是**产线那份**，离线判据若
+        # 跟着它走，同一份代码在本机与 CI 上的结论会不同——而那正是 20260928 实测到的形状：
+        # `tests/test_confirm.py` 的弹窗矩阵只有在 `JWT_SECRET` 非空时签得出令牌
+        # ⇒ **本机恒绿、CI 恒红**，红得与代码一个字都没关系。判据钉代码形状，不钉这台机器
+        # 恰好装了什么。要按别的档跑，自己显式构造（如 `test_planner_engine.py` 传参）。
+        env_file=None if os.environ.get("SAUDADE_IGNORE_ENV_FILE") else ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

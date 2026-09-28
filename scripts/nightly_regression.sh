@@ -56,8 +56,9 @@ fail=0
 # ⇒ **一半以上的判据从不在任何自动化里运行**（其中就有前缀缓存稳定性的唯一哨兵
 # test_prompt_prefix 与 test_slim_skills）。夜间此前也只跑一个套件。名单制（三处各抄一份）
 # 正是这个漏的来源 ⇒ 夜间也改成按磁盘枚举，加套件不用改这里。
-# run_all.py 自带出厂档钉子（PLANNER_ENGINE=text / AGENT_TASK_STATE=0）：本机 `.env` 是
-# 产线那份（native 档），不钉的话离线判据会跟着运维取值变。
+# run_all.py 自带出厂档钉子（PLANNER_ENGINE=text / AGENT_TASK_STATE=0 + **整份 .env 不读**
+# 的 `SAUDADE_IGNORE_ENV_FILE=1`）：本机 `.env` 是产线那份（native 档），不钉的话离线判据
+# 会跟着运维取值变。**夜间也走这个入口**，所以夜间的绿与 CI 的绿是同一套环境下的绿。
 echo "--- tests/run_all.py (全部离线套件, 按磁盘枚举, 秒级, 无网络无 LLM) ---" >> "$LOG"
 $PY tests/run_all.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] run_all FAILED" >> "$LOG"; }
 # 20260924 起：检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）。

@@ -15,11 +15,20 @@ README 正文），加一个套件要改三处，漏一处就变成"看着在跑
 纪律：这些都必须是**秒级、无网络、无 LLM**的套件——要真模型的那几条腿（golden/L1/L2）
 不在这里，见 eval/ 与 README「测试与评测」。
 
-**离线套件一律按"出厂档"跑**（下面 `_PINNED` 两项）：`config/settings.py` 读 `.env`，
-而本机 `.env` 就是产线那份（20260927 起 `PLANNER_ENGINE=native`）——不钉的话，"离线判据"
-会跟着**产线今天选了哪一档**变，同一份代码在换档那天红一片（实测：换档后 4 个套件红，
-`PLANNER_ENGINE=text` 立刻全绿）。判据必须钉在代码的形状上，不能钉在运维的取值上。
+**离线套件一律按"出厂档"跑**：`config/settings.py` 读 `.env`，而本机 `.env` 就是产线那份
+（20260927 起 `PLANNER_ENGINE=native`）——不钉的话，"离线判据"会跟着**产线今天选了哪一档**
+变，同一份代码在换档那天红一片（实测：换档后 4 个套件红，`PLANNER_ENGINE=text` 立刻全绿）。
+判据必须钉在代码的形状上，不能钉在运维的取值上。
 需要按别的档跑的用例自己显式构造（如 `test_planner_engine.py` 直接调函数、走参数而不是 env）。
+
+20260928 起这个钉子从"钉两项"扩到**整个 .env 都不读**（`SAUDADE_IGNORE_ENV_FILE=1`，见
+`config/settings.py` 的 model_config）：只钉两项不够——凡是**值本身**会影响判据形状的取值
+都一样能造成"本机绿、CI 红"。实测那一次是 `JWT_SECRET`：CI 没有 `.env` ⇒ 空密钥 ⇒
+弹窗签不出令牌 ⇒ `test_confirm.py` 从 §⑪ 起整片红，而本机因为有产线密钥恒绿
+（= 判据在测"这台机器装了哪份 .env"，不是在测代码）。**离线套件的环境从今天起由本文件
+定义**：本机、CI、夜间三处同一套，差异不再来自 .env。
+下面 `_PINNED` 两项仍显式留着——它们是"出厂档"的**声明**（谁说得出跑的是哪一档），
+也防着有人临时单跑套件时漏了这个环境变量。
 ⚠️ **直接单跑某个套件**（`.venv/bin/python tests/test_x.py`）不带这个钉子：环境非默认时结论
 可能与这里相反——所以红了的套件先按上面打印的那行环境重跑一遍，再判断是不是真缺陷。
 """
@@ -37,7 +46,12 @@ TESTS = ROOT / "tests"
 # 判据**的那些：`PLANNER_ENGINE` 决定 planner 走文本契约还是 tools 数组（假 LLM 桩没有
 # `bind_tools`，native 档直接 AttributeError），`AGENT_TASK_STATE` 决定 schema 里多不多
 # 那个登记伪函数。其余（模型名、超时）不影响离线套件的形状判据，不钉。
-_PINNED = {"PLANNER_ENGINE": "text", "AGENT_TASK_STATE": "0"}
+#
+# 另有一项不是"取值"而是"环境"：`SAUDADE_IGNORE_ENV_FILE=1` ⇒ 子进程**整份 .env 不读**
+# （`config/settings.py` 的 model_config）。上面那两项漏了还能靠人眼从 ⚠️ 那行看出来，
+# 而 .env 漏了是**静默**的：判据照样绿，只是绿的理由变成了"这台机器有产线密钥"。
+_PINNED = {"PLANNER_ENGINE": "text", "AGENT_TASK_STATE": "0",
+           "SAUDADE_IGNORE_ENV_FILE": "1"}
 
 
 def suites(keyword: str = "") -> list[pathlib.Path]:
@@ -59,6 +73,10 @@ def _ambient_note(env: dict) -> str:
     而是躺在 `.env`（产线那份）——只看 `os.environ` 会得出"没有差异"的假结论，而那恰恰
     是这套钉子要防的那一格。settings 读进来即是**本机实际生效值**。
     读不进来（依赖缺失/校验失败）就**不猜**，直接说"读不到"，不静默当作没差异。
+
+    ⚠️ 只对**真设置项**做这个比较：`SAUDADE_IGNORE_ENV_FILE` 是"环境开关"不是设置项
+    （它决定 .env 读不读），本进程读的是**读 .env 的那一档**（子进程才不读）——
+    把它塞进 `live` 会 KeyError，也会把"本机 .env 与出厂档不同"这个本就该报的差异盖掉。
     """
     try:
         from config.settings import settings  # noqa: PLC0415  （只在需要时报这一行说明）
@@ -66,13 +84,13 @@ def _ambient_note(env: dict) -> str:
                 "AGENT_TASK_STATE": "1" if getattr(settings, "agent_task_state", False) else "0"}
     except Exception as e:  # pragma: no cover - 依赖缺失时也把话说清楚
         return f"读不到本机档位（{type(e).__name__}: {e}）——本次一律按出厂档跑"
-    diff = {k: live[k] for k in _PINNED if live[k].strip() != _PINNED[k]}
+    diff = {k: live[k] for k in live if live[k].strip() != _PINNED[k]}
     if not diff:
         return ""
-    return (f"本机生效档位 {'、'.join(f'{k}={v}' for k, v in diff.items())} "
-            f"（产线取值）与出厂档不同 ⇒ 本次运行**按 "
-            f"{'、'.join(f'{k}={v}' for k, v in _PINNED.items())} 跑**，与产线行为不同；"
-            f"单跑某个套件时请自行带上这两个值")
+    return (f"本机生效档位 {'、'.join(f'{k}={v}' for k, v in diff.items())}"
+            f"（产线取值）与出厂档不同 ⇒ 本次运行**整份 .env 都不读**、一律按出厂档跑"
+            f"（{'、'.join(f'{k}={v}' for k, v in live.items())}），与产线行为不同；"
+            f"单跑某个套件时请带上 `SAUDADE_IGNORE_ENV_FILE=1` 与这两个值")
 
 
 def main() -> int:
