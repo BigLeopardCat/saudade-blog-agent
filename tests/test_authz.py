@@ -208,7 +208,11 @@ CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), 
 # 它动的**不是主人的东西**、也不是仓库里的内容，而是**以主人的名义发给第三方的一段话**，
 # 且站内没有删除已发通知的通道（发出去收不回）。与冻结族同一条理由：正文由 agent 替
 # 主人**整理**（用户拍板允许），人眼复核点只剩卡面 ⇒ 一律弹卡、不留任何捷径。
-check("需确认的工具恰好是二十二个（十八个后台写 + 四个用户自己的写）",
+# 20260929 到二十五个：再加对话额度三件（`approve_quota_request` / `reject_quota_request`
+# / `reset_user_quota`）——批准等于**再给 500 轮**、驳回是**关于第三方**的裁决（且会给他
+# 发一条收不回的通知）、主动重置**不需要他申请过**。三件动的都不是主人的东西，且没有
+# 可改判的余地 ⇒ 一律弹卡（详见 authz 里 `_ALWAYS_CONFIRM_TOOLS` 的三条各自注）。
+check("需确认的工具恰好是二十五个（二十一个后台写 + 四个用户自己的写）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
                         "create_announcement", "update_announcement",
@@ -217,6 +221,8 @@ check("需确认的工具恰好是二十二个（十八个后台写 + 四个用�
                         "create_dashboard_todo", "complete_dashboard_todo",
                         "freeze_account", "unfreeze_account",
                         "send_user_notice",
+                        "approve_quota_request", "reject_quota_request",
+                        "reset_user_quota",
                         "set_article_status", "set_article_tags",
                         "add_favorite", "remove_favorite", "read_notifications",
                         "read_messages"},

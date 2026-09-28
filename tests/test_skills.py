@@ -1333,9 +1333,10 @@ def test_phantom_tool_claim():
     # 的后台待办两件：list_dashboard_todos / create_dashboard_todo；50 → 52 是同一天
     # 的账号冻结/解冻两件：freeze_account / unfreeze_account；52 → 53 是同一天第十轮
     # 的待办勾完成一件：complete_dashboard_todo；53 → 54 是同一天第十一轮的给单个
-    # 用户发通知一件：send_user_notice）。
+    # 用户发通知一件：send_user_notice）；54 → 58 是 20260929 的对话额度四件：
+    # list_quota_requests + 批准/驳回/重置三件）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 54 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 58 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 

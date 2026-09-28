@@ -168,6 +168,28 @@ class HistoryItem(BaseModel):
     content: str
 
 
+class QuotaInfo(BaseModel):
+    """对话额度的**机器事实**（Rust → agent，跨语言契约 C1）。
+
+    形状由本模型定义，Rust 侧 `src/quota.rs::forward_json` 按同一份逐字段产——
+    两侧各写一份同措辞注释，改一侧必须改另一侧（`tests/test_chat_quota.py` 有守卫）。
+
+    **刻意与 `agent_tasks` 不同**：那个字段交的是 JSON **串**，这个交的是 JSON
+    **对象**。原因不是疏忽——`agent_tasks` 的内容是 Python 产的结构（Rust 只透传，
+    读端有 `task_rows` 判形状），而这一份的形状由 Rust 拥有且极简（四个标量），
+    pydantic 的类型约束让"注入系统上下文"这件事**结构性不可能**：`used` 是 int、
+    `unlimited` 是 bool，拼进 `[System: …]` 的只能是数字与那个词，不需要 `_ctx_field`
+    清洗。**下一个人不要来"统一"这两处**，它们的不一致是设计。
+    """
+    used: int = 0
+    limit: int = 0
+    # remaining 由 **Rust 算好**（`max(0, limit - used)`）——agent 永不自算，
+    # 免得两个实现各自饱和、各自有一位偏差时说不清是谁的错。
+    remaining: int = 0
+    # 管理员档：True 时 used/limit/remaining 恒 0，注入行只写 `chat_quota=unlimited`。
+    unlimited: bool = False
+
+
 class ChatRequest(BaseModel):
     message: str = Field(max_length=MAX_MESSAGE_CHARS)
     current_url: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
@@ -200,6 +222,18 @@ class ChatRequest(BaseModel):
     # 形状不对一律当"没有任务"（`task_rows` 判）——这**不是**静默失效：JSON 解不出来
     # 意味着 Rust 侧或表结构坏了，而它坏掉的症状是"未完结的事又忘了"，正是本表要治的病。
     agent_tasks: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
+
+    # ── 对话额度（20260929，跨语言契约 C1/C3）──────────────────────────
+    # chat_quota：访客的终身额度现状（C1）。**读不到时整个键缺席**（Rust 侧 DB 故障
+    # ⇒ fail-open，放行且不计数）——缺席 ≠ 0：那时 `_build_messages` **什么都不注入**，
+    # 而不是编一句"剩 0 轮"给正在聊天的访客听。这与 `agent_tasks` 用空串表示"没有"
+    # 同一族纪律：把"不知道"说成"没有"是这一族最贵的错法。
+    chat_quota: QuotaInfo | None = None
+    # quota_blocked：本轮是**被额度硬拦的那一轮**（C3）。只在拦截轮出现，其余时候
+    # 键缺席。**不许由 `remaining == 0` 反推**——管理员在访客说话中途清零时 remaining
+    # 也是 0，而那一轮该正常回答。真假只有 Rust 知道（它是那个原子 UPDATE 的结果），
+    # 所以由它显式给；本字段默认 False 只是"旧 Rust / golden 直连"的容忍形状。
+    quota_blocked: bool = False
 
     # ── 写操作确认（20260921）────────────────────────────────────────
     # conversation_id：确认令牌的绑定维度之一（令牌只在这个会话里有效）。
@@ -519,6 +553,16 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
     _now = datetime.now()
     _weekdays = ('星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日')
     ctx_parts.append(f"current_time={_now.strftime(f'%Y年%m月%d日 {_weekdays[_now.weekday()]} %H:%M')}")
+    # 对话额度（20260929，跨语言契约 C2）：访客的终身额度现状。**只放事实、不放行为
+    # 指令**——"快用完了该提醒他"那类属于提示词（它管说什么），不属于系统上下文
+    # （它管是什么）。缺席时**整行不注入**（见 ChatRequest.chat_quota 的注释：缺席是
+    # "不知道"，编一个 0 会让 agent 对着正常聊天的访客说"你没额度了"）。
+    if req.chat_quota is not None:
+        if req.chat_quota.unlimited:
+            ctx_parts.append("chat_quota=unlimited")
+        else:
+            ctx_parts.append(f"chat_quota={req.chat_quota.used}/{req.chat_quota.limit}"
+                             f"（剩{req.chat_quota.remaining}轮）")
     if req.summary:
         ctx_parts.append(f"conversation_summary: {req.summary}")
     if req.executions or req.pending_action:
@@ -691,6 +735,15 @@ async def chat(req: ChatRequest, request: Request):
         raise HTTPException(503, "Agent not initialised")
     principal = _resolve_principal(request, req.user_id)   # 身份以签名为准（见 _resolve_principal）
     req.user_id = principal.uid
+
+    # 额度硬拦（20260929，契约 C3）：与流式路径同一条判据、同一句话术。非流式这条路
+    # 只有评测/golden 直连在走（线上 rust.log 实测零访问），所以这里不占并发槽、
+    # 也没有"提前返回省一次 LLM"的额外收益——但**形状必须与流式一致**，否则哪天
+    # 有人把非流式接回主链，两条路就是两种行为。
+    if req.quota_blocked:
+        _limit = req.chat_quota.limit if req.chat_quota is not None else 0
+        logger.info("[quota] 额度用尽，本轮零执行（uid=%s limit=%s）", req.user_id, _limit)
+        return ChatResponse(reply=_quota_blocked_text(_limit), success=True, error=None)
 
     messages = _build_messages(req)
     # 每请求独立线程：LangGraph 的 MemorySaver 线程状态会随对话无限累积，
@@ -1287,6 +1340,49 @@ async def _invalid_confirm_stream():
     yield "data: __END__\n\n"
 
 
+# 额度用尽的那句话（跨语言契约 C7）。**只有这一处**——Rust 侧不合成任何帧
+# （它为什么不该合成，见 `_quota_blocked_stream` 的 docstring），前端不兜底这句话。
+# 两句结构：① 说清是什么（终身额度用完，不是故障、不是"我不会"）；② 点明下一步
+# 做什么（去个人中心申请重置）。缺了第二句，访客只会以为助手坏了、反复重发。
+QUOTA_BLOCKED_TEXT = (
+    "额度用完啦（{limit} 轮终身额度，已经全部用掉了）……主人可以去个人中心的"
+    "「对话额度」提交一份重置申请，管理员批准之后额度就会清零；在那之前我没法再"
+    "回答新的问题了呢，抱歉喵 🐾"
+)
+
+
+def _quota_blocked_text(limit: int) -> str:
+    """按额度上限渲染 C7。`limit<=0`（旧 Rust 没带 chat_quota 却被判拦截）时
+    退化成一句不报数字的话——**宁可不说数字，也不能说错数字**。"""
+    if limit > 0:
+        return QUOTA_BLOCKED_TEXT.format(limit=limit)
+    return ("额度用完啦（终身额度已经全部用掉了）……主人可以去个人中心的"
+            "「对话额度」提交一份重置申请，管理员批准之后额度就会清零；在那之前"
+            "我没法再回答新的问题了呢，抱歉喵 🐾")
+
+
+async def _quota_blocked_stream(limit: int):
+    """额度用尽时的最小 SSE 流：**一句话 + 结束帧，零 LLM、零工具、零计数**。
+
+    形状照抄上面的 `_invalid_confirm_stream`（这是仓内对"确定性拒答"已经裁过一次的
+    形态），两条论证逐条复用：
+
+    ① **走正常帧协议而不是 4xx**。前端 `chat-stream.js` 的 `if (!resp.ok)` 是这条
+       链路**唯一**的错误分支：返 4xx/5xx 会落进"发送失败"兜底弹重试按钮，而这不是
+       发送失败。更要紧的是反过来的那一半——`prepare_chat` 的早期出口是
+       **HTTP 200 + JSON body**，`resp.ok` 成立 ⇒ 前端一路进 SSE 解析 ⇒ 而
+       `serde_json` 把 body 里的换行转义了，**一个 `\n\n` 都不产生** ⇒ 零帧 ⇒
+       气泡被当空回复移除 ⇒ **主人什么都看不到**。拒答必须骑着帧协议出门。
+    ② **照常落库**：Rust 侧这一轮的用户消息与这句拒答都正常入库（用户拍板：
+       额度管"能不能用"，记录管"发生过什么"；拦截轮**只少一件事——计数器不动**）。
+
+    **调用点在 `_try_acquire_slot()` 之前**（见 chat_stream）：被拦的人连点发送
+    不该占住 LLM 的并发槽——他没有在用 LLM。
+    """
+    yield f"data: {json.dumps(_quota_blocked_text(limit), ensure_ascii=False)}\n\n"
+    yield "data: __END__\n\n"
+
+
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest, request: Request):
     # request: FastAPI 注入的原始请求对象（req 是 body 模型）——断连感知用，
@@ -1314,6 +1410,17 @@ async def chat_stream(req: ChatRequest, request: Request):
             return StreamingResponse(
                 _invalid_confirm_stream(), media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    # 额度硬拦（20260929，契约 C3）：Rust 那个原子 UPDATE 没抢到额度 ⇒ 这一轮**零
+    # LLM、零工具、零计数**，只如实回一句并点明下一步（C7）。
+    # **位置在 `_try_acquire_slot()` 之前**：被拦的人狂点发送不该占住 LLM 并发槽。
+    # 注意这里**不看** `req.chat_quota.remaining == 0`——真假由 Rust 显式给
+    # （管理员在访客说话中途清零时 remaining 也是 0，而那一轮该正常回答）。
+    if req.quota_blocked:
+        _limit = req.chat_quota.limit if req.chat_quota is not None else 0
+        logger.info("[quota] 额度用尽，本轮零执行（uid=%s limit=%s）", req.user_id, _limit)
+        return StreamingResponse(
+            _quota_blocked_stream(_limit), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     # 并发闸（20260916 加固）：LLM 流是最贵的资源（单次最长 180s），无闸时并发涌进来
     # 只会一起排队到超时。**只加在生产路径 /chat/stream 上**——`/chat` 是非流式直连
     # 入口（评测脚本/golden 用，线上 rust.log 实测零访问），不占这条预算。
