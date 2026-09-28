@@ -4492,6 +4492,13 @@ _WRITE_NAME_FIELDS = {
     # content——这正是 `_WRITE_VALUE_FIELDS`（"值字段要有字面出处"那道闸）**刻意不收
     # 它**的原因，见那张表下面那条注。这里只登记目标字段。
     "send_user_notice": ("name", None),
+    # 对话额度的三件（20260929）：目标同样是**账号名**（后台账号名录里核对着解析）。
+    # 三件都登记（`reject_quota_request` 的 `reason` 是自由文本，但它**不是**目标
+    # 字段——目标是申请人；与 `send_user_notice` 的 content 同理，**不收进**
+    # `_WRITE_VALUE_FIELDS`，那一层靠弹卡给人眼看）。
+    "approve_quota_request": ("name", None),
+    "reject_quota_request": ("name", None),
+    "reset_user_quota": ("name", None),
     # 待办「勾完成」（20260927）：目标 = 后台首页待办列表里**那一行的正文**。与留言
     # 族的 `quote` 同形（主人嘴里说的就是那一段字），台账却不在站内字典里——它在
     # `list_dashboard_todos` 那个后台接口里 ⇒ `_write_target_refusal` 必须多分派一支
@@ -4856,6 +4863,15 @@ _ACCOUNT_GENERIC = _GENERIC_NAME_WORDS + (
     "这个账号", "那个账号", "这个用户", "那个用户")
 # 冻结 / 解冻两个工具（**只**这两个：政策预检那一处专用的名单，见 `_ACCOUNT_TOOLS`）。
 _FREEZE_TOOLS = ("freeze_account", "unfreeze_account")
+# 对话额度三件（20260929）：批准 / 驳回某人的重置申请、主动给他清零。目标同样是
+# **后台账号名录里的那一行**（批准谁、驳谁、清谁的额度），所以它们与冻结族、发通知
+# 同属账号族——`_ACCOUNT_TOOLS` 的三处消费者对这三件全都成立：① 目标名有没有出处
+# （`_write_target_refusal` 的名录分派）② 弹窗惰性读名录（卡面要印"是哪个账号、
+# 现在用掉多少轮"，主人才核得出来）③ 卡面印账号 id。
+# ⚠️ **但不进 `_FREEZE_TOOLS`**：那里跑的是冻结政策（不能冻自己 / 管理员之间不可
+# 互冻 / 超管谁都不能冻），对"把 Alice 的额度清零"一句都不适用——并进去会让合法的
+# 额度操作被回一句**说错政策**的"这事办不成"（同 `_ACCOUNT_TOOLS` 长注里那两个方向）。
+_QUOTA_TOOLS = ("approve_quota_request", "reject_quota_request", "reset_user_quota")
 # 账号管理一族的**全体**（20260926 第十一轮加发通知）：**目标都在后台账号名录里**，
 # 所以"名字在不在名录里"这一层判据（词表分派、目标预检的名录分派、弹窗惰性读名录）
 # 三处都该按这一份走。⚠️ 与 `_FREEZE_TOOLS` 分开是**硬要求**，别合成一个：
@@ -4864,7 +4880,7 @@ _FREEZE_TOOLS = ("freeze_account", "unfreeze_account")
 # 去，会让"给自己发通知""给另一个管理员发通知"（两件都合法）被回一句**说错政策**的
 # "这事办不成"。两个方向都是"长得像诚实拒绝的错话"：漏进 ⇒ 账号名被拿去查标签
 # （`_write_target_refusal` 掉进 else 分支），多进 ⇒ 合法的事被假政策拦住。
-_ACCOUNT_TOOLS = _FREEZE_TOOLS + ("send_user_notice",)
+_ACCOUNT_TOOLS = _FREEZE_TOOLS + ("send_user_notice",) + _QUOTA_TOOLS
 # 发通知单独的词表（同 `_lexicon` 的按工具分派）。**另起一份而不是往 `_ACCOUNT_MARKS`
 # 里加**：那张表是冻结族的动作词表，把"通知"加进去会让「别通知他账号的事」这类句子里
 # 冒出一个被认作"有出处"的名字——那是对冻结族的**放宽**（少拦一次）。
@@ -4886,8 +4902,23 @@ _FAVORITE_TOOLS = ("add_favorite", "remove_favorite")
 # 下面按工具名逐个读。
 # 改公告（**只有改**）：新建没有"已经是这个状态"这回事、删除更没有，判据只看这一件。
 _ANNOUNCE_TOOLS = ("update_announcement",)
+# 额度三件的词表（20260929）。**另起一份而不是直接复用 `_ACCOUNT_LEXICON`**：这三件
+# 的目标在主人嘴里有两种说法——「把**账号** Alice 的额度重置」与「把 Alice 的**额度**
+# 重置」——名词表要把"额度"一并认下，否则后一种语序连"这句话里点过名"都判不出来
+# （`_name_like` 为假 ⇒ 目标出处那一门整门不介入：一种静默的**放宽**）。
+# 动作词表 = 账号族那三族 + 这三件自己的动词（批准/通过/驳回/拒绝/重置/清零/恢复）：
+# 冻结族的动作词一个都不能少（"把账号 guest5 删掉"这类同样是点了名的，这一门只回答
+# "这个名字有没有出处"），而少了这一族的动词，`_bare_target_name` 的"名词→名字→
+# 动作词"窗口在「账号 Alice 批准」这类语序上就取不出名字。
+_QUOTA_NOUNS = _ACCOUNT_NOUNS + ("额度",)
+_QUOTA_MARKS = _ACCOUNT_MARKS + ("批准", "通过", "驳回", "拒绝", "重置", "清零", "恢复")
+# 泛称：planner 会从**参数描述**里抄下来的那些字面（同 `_ACCOUNT_GENERIC` 的长注）。
+# "申请人"是这一族独有的——三条技能参数的描述写的是「申请人的账号名（后台账号列表里
+# 看得见的那一行）」，而它正是"模板里的占位符被抄进参数"那一族事故的形状。
+_QUOTA_GENERIC = _ACCOUNT_GENERIC + ("申请人", "申请人账号名", "申请人的账号名")
 _ACCOUNT_LEXICON = (_ACCOUNT_NOUNS, _ACCOUNT_MARKS, _ACCOUNT_GENERIC)
 _NOTICE_LEXICON = (_ACCOUNT_NOUNS, _NOTICE_MARKS, _ACCOUNT_GENERIC)
+_QUOTA_LEXICON = (_QUOTA_NOUNS, _QUOTA_MARKS, _QUOTA_GENERIC)
 
 
 def _lexicon(tool: str | None):
@@ -4896,6 +4927,8 @@ def _lexicon(tool: str | None):
         return _ACCOUNT_LEXICON
     if tool in _NOTICE_TOOLS:
         return _NOTICE_LEXICON
+    if tool in _QUOTA_TOOLS:
+        return _QUOTA_LEXICON
     return _DEFAULT_LEXICON
 
 
@@ -6324,6 +6357,24 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             announcements = _announcement_index(config)
         except Exception:
             announcements = None
+    # 待处理的额度申请同理（20260929，第五份惰性读）：额度三件的卡面要印出**申请人
+    # 写的理由**（批准/驳回是拿别人的一句话做裁决，主人在点确定之前有权读到那句原话），
+    # 而"他现在有没有待处理的申请"只有这份实时队列能回答——驳回那一支的"状态已达成"
+    # 判据（没有 pending 行）也住在这里。同样**只在三件真进了候选时才读**，
+    # 别的写弹窗一次都不多花（照 users/todos 那条既有纪律）。
+    # 读不到 → 留 None ⇒ 判据判不了 ⇒ **照弹卡**（fail-open 的方向永远是弹卡）；
+    # 卡面那句理由跟着一起少说，绝不编。
+    quota_requests = None
+    if any(str(s.get("tool") or "") in _QUOTA_TOOLS for s in picks):
+        try:
+            from tools.base import _quota_pending_index
+            # 读失败时它回的是 `ToolResult`（str 子类，含原因文本）⇒ 判它不是 dict、
+            # 回 None —— 正好就是"读不到"那一态（与 users 那条同一招）。
+            quota_requests = _quota_pending_index(config)
+            if not isinstance(quota_requests, dict):
+                quota_requests = None
+        except Exception:
+            quota_requests = None
     # ── 已经就是那个样子 ⇒ 从这一批里摘掉（20260926）─────────────────────
     # 用户实测的病：对一篇**已经收藏**的文章说"收藏这篇"，卡照弹、点确定还照走一遍
     # 写通道（回执诚实、卡不诚实）。判据是 `adminops.reached_specs` 那个纯函数，
@@ -6335,7 +6386,8 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     picks, already = A.reached_specs(picks, index=tag_index, boards=board_index,
                                      notes=note_index, users=users, todos=todos,
                                      favorites=favorites, notifications=notifications,
-                                     messages=messages, announcements=announcements)
+                                     messages=messages, announcements=announcements,
+                                     quota_requests=quota_requests)
     if already:
         record("confirm", "idem_reached", tools=[str(x.get("tool") or "") for x in already],
                kept=[str(x.get("tool") or "") for x in picks])
@@ -6364,7 +6416,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         record("confirm", "token_sign_failed", tools=[p.get("tool") for p in picks])
         return None
     question = A.render_confirm_question(picks, tag_index, cat_index, board_index,
-                                         note_index, users, todos)
+                                         note_index, users, todos, quota_requests)
     opts = [{"label": "确定", "value": "yes", "kind": "primary"},
             {"label": "取消", "value": "no", "kind": "default"}]
     expires_at = confirm.token_expiry(token)
@@ -6394,7 +6446,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             "skill": _plan_skill(state),
             "specs": picks,
             "target": A.render_action_lines(picks, tag_index, cat_index, board_index,
-                                            note_index, users, todos),
+                                            note_index, users, todos, quota_requests),
             "requested_by": "user",
             "source_event": "confirm_popup",
             # 卡片本体一并落库（20260924）：此前卡片只活在当轮的 SSE 帧里——刷新、
@@ -6417,7 +6469,8 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         # `question`**：问句是给眼睛看的（越短越好），`confirm_text` 是"这张卡到底要办
         # 什么"的落库记录，两者的读者不同。
         "confirm_text": A.render_confirm_text(picks, tag_index, cat_index, board_index,
-                                               note_index, users)
+                                               note_index, users,
+                                               quota_requests=quota_requests)
                         + A.render_already_note(already),
     }
 

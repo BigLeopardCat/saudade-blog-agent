@@ -683,7 +683,7 @@ for name, tool, args in [("admin_notes", "list_admin_notes", {}),
     check(f"技能 {name} 在位、对管理员族可见、计划首项是 {tool}",
           sk is not None and sk.roles == ADMIN_ROLES
           and [t for t, _ in sk.plan] == [tool], str(sk and (sk.roles, sk.plan)))
-check("写技能名单 = 二十二个**技能**名（instantiate_plan 缺参守卫按它分支；"
+check("写技能名单 = 二十五个**技能**名（instantiate_plan 缺参守卫按它分支；"
       "注意它与工具名不是一套字面量，混用会让守卫静默不生效）",
       WRITE_SKILL_NAMES == frozenset({"tag_create", "tag_update", "tag_delete",
                                       "category_create", "category_update",
@@ -728,7 +728,14 @@ check("写技能名单 = 二十二个**技能**名（instantiate_plan 缺参守�
                                       # 写技能"兜底：零工具、零写、还不报错，而
                                       # `instantiate_plan` 那条 `if not note` 会把它填成
                                       # "参数齐备"（test_user_notice 的展开断言钉着）
-                                      "notice_send"})
+                                      "notice_send",
+                                      # 对话额度三件（20260929）：同一条名字通道（批准/
+                                      # 驳回/重置的目标都是后台名录里的账号名），技能名
+                                      # 同样是另一套字面量（技能 quota_approve / 工具
+                                      # approve_quota_request）。漏在这份名单外的后果与
+                                      # 上面两族逐条相同（零工具零写、还不报错），
+                                      # 而这三件的后果落在**别人的对话能力**上
+                                      "quota_approve", "quota_reject", "quota_reset"})
       and WRITE_SKILL_NAMES <= set(SKILL_MAP), str(sorted(WRITE_SKILL_NAMES)))
 check("非 admin 的 planner 上下文里看不到这四个技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)

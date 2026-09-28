@@ -1203,8 +1203,195 @@ def render_notice_status(username: str, uid, title: str, content: str) -> str:
             f"正文「{shown}」{more}。{_NOTICE_CONSEQ}")
 
 
+# ── 对话额度的重置申请（20260929）────────────────────────────────────────
+# 三个动作的**后果互不相同**，卡面必须分别说清（照 `_ACCOUNT_CONSEQ` 那条纪律：
+# 主人点的是「确定」，他有权在点之前看出自己同意的是什么）。三句的差异不是文风：
+#   · **批准** = 回应他的申请、把计数器清零、**不可撤销**（额度是个计数器，
+#     没有"撤回"这个概念——批完再想反悔只能等他哪天真的又用完）；
+#   · **驳回** = 他会收到一条站内通知、额度**不变**、**还可以再申请**——
+#     三个动作里唯一可逆、唯一"什么都不改变"的一件；
+#   · **主动重置** = **不需要他申请过**（这一件与前两件最容易被读混：批准是
+#     "回应他"，重置是"你替他决定"）。三者措辞互不相同是硬要求
+#     （`tests/test_chat_quota.py` 有一条断言逐句比对）。
+_QUOTA_CONSEQ = {
+    "approve": "（批准后他的计数器立刻清零、马上可以继续提问；**这个动作不可撤销**）",
+    "reject": "（驳回后他会收到一条站内通知，额度**不变**，他还可以重新申请）",
+    "reset": "（**不需要他申请过**；清零后他马上可以继续提问，**这个动作不可撤销**）",
+}
+# 三值状态词（与 Rust `quota_request.status` 的取值域同源：0/1/2，见迁移头注）。
+_QUOTA_STATUS_CN = {0: "待处理", 1: "已批准", 2: "已驳回"}
+# 三个动作在卡面/回执里的动词：**与工具名一一对应**（`approve_quota_request` 的
+# 动词就是「批准」），下一个人对照工具名读就该读得通。
+_QUOTA_VERB = {"approve": "批准", "reject": "驳回", "reset": "重置"}
+
+
+def _quota_pair(row) -> str:
+    """名录行 → `额度 137/500 轮` / `不限额` / `（额度未知）`（**不编 0**）。
+
+    读不出字段就说读不出：把"读不到"写成 `0/0` 会被读成"这个人额度是满的"或
+    "这个人不限额"，两句都可能是假话（同 `_account_frozen` 的 `None ≠ False`）。
+    """
+    used = quota_used(row)
+    lim = quota_limit(row)
+    if used is None or lim is None:
+        return "（额度未知）"
+    if lim <= 0:
+        return "不限额"
+    return f"额度 {used}/{lim} 轮"
+
+
+def render_quota_action(kind: str, name: str, users=None, quota_requests=None) -> str:
+    """`批准账号「Alice」（账号 id=126，现在 额度 500/500 轮）的额度重置申请（…）`
+    ——**卡面、问句、跨轮待办的目标**共用这一行。
+
+    `users` 三态与 `render_account_action` 逐字同源（读不到就少说，**不因此不弹窗**）：
+    名录在手且名字在里面 ⇒ 印 `账号 id=…，现在：<用量>`；名录在手但名字不在 ⇒ 如实
+    标注「后台账号列表里没有叫这个名字的账号」（主人点确定**之前**就该看到）；
+    名录读不到 ⇒ 只印名字。
+
+    `quota_requests` = 待处理申请快照（`tools.base._quota_pending_index` 的产物，
+    `{uid: 行}`）：在手就把**他的申请理由**印进卡面——主人正在决定批不批，理由是
+    申请人自己的诉求，而这是整条链上唯一印得出它的地方；复核时那一行已经不在了
+    （比如他刚被处理过）也如实标注，同 `users` 那条三态纪律。
+    """
+    verb = _QUOTA_VERB.get(kind, kind)
+    tail = _QUOTA_CONSEQ.get(kind, "")
+    row = _account_row(users, name)
+    if users and row is None:
+        return f"{verb}账号「{name}」的对话额度重置申请（后台账号列表里没有叫这个名字的账号）"
+    who = ""
+    if row is not None:
+        where = _quota_pair(row)
+        who = f"（账号 id={row.get('id')}，现在 {where}）" if where else f"（账号 id={row.get('id')}）"
+    entry = _quota_request_of(quota_requests, row)
+    if kind == "reset":
+        # 主动重置**不是**回应谁的申请（三件的差别里最容易被读混的一条），
+        # 所以这一支**不提「申请」两个字**，理由也不印（他没有申请过，或申请
+        # 与这一下无关——印出来会让主人以为自己在批那条申请）。
+        return f"**主动**把账号「{name}」{who}的对话额度清零{tail}"
+    if entry is None:
+        if quota_requests is not None:
+            # 快照在手而里面没有他 ⇒ 如实标注：主人点确定之前就该知道"他并没有
+            # 待处理的申请"，而不是点完再被告知没做成。
+            return (f"{verb}账号「{name}」{who}的额度重置申请"
+                    f"（他**现在没有待处理的额度申请**）{tail}")
+        return f"{verb}账号「{name}」{who}的额度重置申请{tail}"
+    reason = str(entry.get("reason") or "").strip()
+    return (f"{verb}账号「{name}」{who}的额度重置申请"
+            f"（他的申请理由：**「{reason or '（没有填写理由）'}」**）{tail}")
+
+
+def _quota_request_of(quota_requests, row):
+    """待处理申请快照里属于 `row` 的那一行（没有 / 快照不可用 / id 读不出 → None）。"""
+    if not isinstance(quota_requests, dict) or not isinstance(row, dict):
+        return None
+    try:
+        uid = int(row.get("id"))
+    except (TypeError, ValueError):
+        return None
+    hit = quota_requests.get(uid)
+    return hit if isinstance(hit, dict) else None
+
+
+def render_quota_status(kind: str, username: str, uid, limit, used) -> str:
+    """三个动作成功后的回执行（工具 side 用；与卡面同源同事实）。
+
+    `used` = **写后重读名录**实测到的计数器（工具给不出时是 None）——这一族唯一的
+    硬事实来源。三种情形分开说，**一句都不许猜**：
+      · `used == 0` ⇒ 读数确认已清零（这是绝大多数情况）；
+      · `used > 0`  ⇒ 他在这之后又聊过了（清零是真发生了，但读数已不是 0）——
+        如实报实测值，**不许**照抄"已清零"（那会是一句他自己能证伪的话）；
+      · `used is None` ⇒ 端点回了成功但读不回读数：只说端点那一半，明说未复核
+        （同 `_set_account_frozen` 的"未确认"取向，**不冒充已核实**）。
+    """
+    lim = limit if isinstance(limit, int) and limit > 0 else 0
+    pair = f"{used if used is not None else 0}/{lim}" if lim else "不限额"
+    head = {
+        "approve": f"已批准账号「{username}」（账号 id={uid}）的对话额度重置申请",
+        "reject": f"已驳回账号「{username}」（账号 id={uid}）的对话额度重置申请",
+        "reset": f"已把账号「{username}」（账号 id={uid}）的对话额度清零",
+    }.get(kind, f"已处理账号「{username}」（账号 id={uid}）的额度重置申请")
+    if kind == "reject":
+        return (f"{head}：他的额度**没有变化**（驳回不改变任何额度），"
+                f"他还会收到一条站内通知，可以重新申请。")
+    if used is None:
+        return (f"{head}（后台已受理，但**读不回他的计数器读数**，本次结果未复核——"
+                f"不要对外声称额度已经清零，如实说后台已受理即可）。")
+    if used == 0:
+        return f"{head}：他的计数器现在读数是 {pair}，马上可以继续提问了。"
+    return (f"{head}：后台已受理，复核时他的计数器读数是 **{pair}**"
+            f"——清零之后他又聊过了（这是重读到的实测值）。")
+
+
+def render_quota_requests(rows) -> str:
+    """额度重置申请队列 → 给 planner 看的清单。
+
+    这一屏的价值全在**申请人名字与他的用量**：管理员接着说"批准 Alice"时，planner
+    只有在这一轮真读到了这个名字，才有据可写（写通道按名字定位、且要求该名字能在
+    账号名录里唯一命中，见 `tools/base.py` 的额度节头注）。**行 id 刻意不印**——
+    agent 侧按不了编号动手，印出来只会诱发 planner 填一个猜的编号。
+    """
+    lines = [f"额度重置申请共 {len(rows)} 条："]
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        who = str(r.get("username") or "").strip() or "（账号名读不出）"
+        nick = str(r.get("nickname") or "").strip()
+        used = r.get("used")
+        lim = r.get("limit")
+        try:
+            pair = "不限额" if int(lim) <= 0 else f"{int(used)}/{int(lim)} 轮"
+        except (TypeError, ValueError):
+            pair = "（用量未知）"
+        st = _QUOTA_STATUS_CN.get(_quota_status_code(r.get("status")), "")
+        reason = clip(str(r.get("reason") or "").strip(), 60) or "（没有填写理由）"
+        extra = clip(str(r.get("note") or "").strip(), 40)
+        head = f"- 「{who}」" + (f"（昵称 {nick}）" if nick else "")
+        rest = [f"现在 {pair}"]
+        if st:
+            rest.append(f"[{st}]")
+        rest.append(f"理由：「{reason}」")
+        if extra:
+            rest.append(f"处理备注：「{extra}」")
+        when = str(r.get("createdAt") or "").strip()
+        if when:
+            rest.append(f"提交于 {when}")
+        lines.append(head + "，" + "，".join(rest))
+    return "\n".join(lines)
+
+
+def _quota_status_code(v):
+    """申请行的状态 → `0/1/2`；认不出 → None（**不当成待处理**，只是不印状态词）。"""
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n in _QUOTA_STATUS_CN else None
+
+
+def quota_used(row):
+    """名录/申请行 → 已用轮数；读不出 → **None**（同 `_account_frozen` 的判据纪律：
+    `None` 不是 0——把"读不到"当成 0 会让"额度已清零"的复核把一次没发生的事判成功）。
+
+    公开名（不带下划线）：`tools/base.py` 的三个写工具**也用这一份**读同一个字段
+    （写前预检与写后复核各一次）——两处各写一份取值必然在字段改名那天分叉，
+    所以只有这一处实现。"""
+    try:
+        return int(row.get("chatQuotaUsed"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def quota_limit(row):
+    """名录行 → 额度上限（0 = 不限额）；读不出 → None。"""
+    try:
+        return int(row.get("chatQuotaLimit"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
-                 users=None, todos=None) -> str:
+                 users=None, todos=None, quota_requests=None) -> str:
     """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
 
     `index` = 可选的标签字典（`{id: TagInfo}`，见 build_tag_index）：给得起就
@@ -1223,6 +1410,10 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
     `notes` = 可选的后台文章清单快照（`{id: 行}`，见 tools.base._note_index）：
     文章写操作的问句**此前只有内部 id**（全写面唯一的盲签），给得起快照就把
     `《标题》（现在：状态、置顶）` 写进去。给不起（读到 None）→ 退回只写 id。
+
+    `quota_requests` = 可选的**待处理额度申请**快照（`{uid: 行}`，见
+    tools.base._quota_pending_index）：额度三件的卡面靠它印出**申请理由**与
+    「他有没有待处理的申请」。给不起（读到 None）→ 少说一句，**不因此不弹窗**。
     """
     tool = str(spec.get("tool") or "")
     a = spec.get("args") or {}
@@ -1467,11 +1658,20 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         # 出是哪一行）——两张卡的动词、宾语、括号里的东西都不一样。
         body = str(a.get("text") or "").strip()
         return render_todo_done_action(body or "（没有给出正文）", todos)
+    if tool in ("approve_quota_request", "reject_quota_request", "reset_user_quota"):
+        # 对话额度的三件（20260929）：目标 = 账号名录里的**账号名**（与冻结族同一条
+        # 名字通道），但后果三句各不相同——见 `_QUOTA_CONSEQ` 那段；申请理由是
+        # 卡面唯一印得出来的地方，所以这一支必须拿到 `quota_requests` 快照。
+        kind = {"approve_quota_request": "approve",
+                "reject_quota_request": "reject",
+                "reset_user_quota": "reset"}[tool]
+        name = str(a.get("name") or "").strip()
+        return render_quota_action(kind, name or "（没有给出账号名）", users, quota_requests)
     return f"执行 {tool}"
 
 
 def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
-                        users=None, todos=None) -> str:
+                        users=None, todos=None, quota_requests=None) -> str:
     """一份调用清单 → 主人看得懂的动作串（"；"分隔）。
 
     三处共用同一份措辞：确认框问句、确认轮的气泡正文、**跨轮待办的人读目标**
@@ -1479,12 +1679,13 @@ def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
     事后在待办/回执里读到的目标，必须是同一句话（这正是"盲签"那条纪律的延伸：
     系统对同一件事的两种表述不一致时，点「确定」的人无从判断谁是真的）。
     """
-    return "；".join(_confirm_one(s, index, cats, boards, notes, users, todos)
+    return "；".join(_confirm_one(s, index, cats, boards, notes, users, todos,
+                                  quota_requests)
                      for s in (specs or []))
 
 
 def render_confirm_question(specs, index=None, cats=None, boards=None, notes=None,
-                            users=None, todos=None) -> str:
+                            users=None, todos=None, quota_requests=None) -> str:
     """确认框的问题行：**把要发生的事说全**（含颜色名与色值），再问一句。
 
     用户点的是"确定"，他有权在点之前从这句话里看出自己将同意什么——
@@ -1493,18 +1694,20 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
     （`index`/`cats`/`notes` 见 _confirm_one；读不到字典时退化成名字原文或 id，
     不因此不弹窗——这一轮的价值就是让主人确认，读不到就少说，不是不弹。）
     """
-    acts = render_action_lines(specs, index, cats, boards, notes, users, todos)
+    acts = render_action_lines(specs, index, cats, boards, notes, users, todos,
+                               quota_requests)
     return f"要{acts}吗？点「确定」我就去办。"
 
 
 def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
-                        users=None, todos=None) -> str:
+                        users=None, todos=None, quota_requests=None) -> str:
     """弹窗那一轮的**对话气泡正文**（系统给的，不经 narrator）。
 
     刻意写得像"在等你的意思"而不是"已经在办了"：这一轮零执行。给一个明确
     的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
     """
-    acts = render_action_lines(specs, index, cats, boards, notes, users, todos)
+    acts = render_action_lines(specs, index, cats, boards, notes, users, todos,
+                               quota_requests)
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
     return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
@@ -1535,12 +1738,17 @@ def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
 
 def reached_specs(specs, *, index=None, boards=None, notes=None, users=None, todos=None,
                   favorites=None, notifications=None, messages=None,
-                  announcements=None) -> tuple[list, list]:
+                  announcements=None, quota_requests=None) -> tuple[list, list]:
     """写 spec 清单 → `(该弹卡的, 已达成)`。
 
     纯函数（无网络、无 LLM、无 config）：快照由调用方读好传进来——它们本来就都是
     `_confirm_popup` 为了**渲染卡面**已经读到手的那几份（账号名录/待办/文章清单/
     留言清单），只有收藏、通知、站内信、公告四条是这一批**新加**的惰性读。
+
+    `quota_requests`（20260929 加的第五份惰性读，形态 `{uid: 行}`）是额度三件在
+    这里唯一用得上的快照：批准与主动重置判"额度本来就是满的"，驳回判"他现在没有
+    待处理的申请"。`used` 那半来自**名字通道本来就要读的** `users`（`TempUserInfo`
+    新带的 `chatQuotaUsed`）⇒ 判据不多花一次请求。
 
     `already` 的每一项是 `{"tool", "args", "why"}`，`why` 是给主人看的那半句现状
     （「文章 12《…》本来就在你的收藏夹里」）——掏空那一轮的整体文案与混合轮末尾那句
@@ -1554,7 +1762,8 @@ def reached_specs(specs, *, index=None, boards=None, notes=None, users=None, tod
     """
     snaps = {"index": index, "boards": boards, "notes": notes, "users": users,
              "todos": todos, "favorites": favorites, "notifications": notifications,
-             "messages": messages, "announcements": announcements}
+             "messages": messages, "announcements": announcements,
+             "quota_requests": quota_requests}
     kept: list = []
     already: list = []
     for spec in specs or []:
@@ -1641,6 +1850,48 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
         # 「已冻结」——后者在气泡里读起来像"系统刚替你冻了一次"。
         return (f"账号「{name}」（账号 id={row.get('id')}）"
                 f"现在就是{'冻结' if want else '正常'}状态")
+    if tool in ("approve_quota_request", "reset_user_quota"):
+        # 对话额度（20260929）：两个动作的**效果是同一个**（计数器清零），所以"已达成"
+        # 的判据也同一条 = **这个人的计数器本来就是 0**（没有可清零的东西）。
+        # 驳回不在此列（它不改变额度，判据是另一件事，见下一支）。
+        users = s.get("users")
+        if not isinstance(users, dict) or not users:
+            return None                      # 名录读不到 ⇒ 判不了（同冻结族）
+        name = str(a.get("name") or "").strip()
+        row = _account_row(users, name)
+        if row is None:
+            return None                      # 名录里没这个名字 ⇒ 工具的拒绝路，不是已达成
+        used = quota_used(row)
+        lim = quota_limit(row)
+        if used is None or lim is None:
+            return None                      # 用量/上限读不出 ⇒ 判不了（不许当成 0）
+        if used != 0:
+            return None                      # 还有额度没用完 ⇒ 这一下真会改变东西，照弹
+        if lim <= 0:
+            # 0 = 不限额（管理员档）。这一支**不是**"额度满"，是"本来就没有上限"——
+            # 说成「额度本来就是满的」会被读成"他刚好没用过"，而真相是他不受限。
+            return f"账号「{name}」是不限额的管理员，本来就没有额度需要重置"
+        return (f"账号「{name}」（账号 id={row.get('id')}）的额度本来就是满的"
+                f"（0/{lim} 轮，没有用掉任何一轮）")
+    if tool == "reject_quota_request":
+        # 驳回（20260929）：不改变额度，所以判据**不是**用量，而是"他现在有没有
+        # 待处理的申请"——没有的话这一下会被服务端拒（`该账号没有待处理的额度申请`），
+        # 那是一条要如实说清的失败，不是"已达成"。快照读不到 ⇒ 判不了，照弹。
+        users = s.get("users")
+        reqs = s.get("quota_requests")
+        if not isinstance(users, dict) or not users or not isinstance(reqs, dict):
+            return None
+        name = str(a.get("name") or "").strip()
+        row = _account_row(users, name)
+        if row is None:
+            return None
+        try:
+            uid = int(row.get("id"))
+        except (TypeError, ValueError):
+            return None
+        if uid in reqs:
+            return None                      # 有申请 ⇒ 正是要办的那一次，照弹
+        return f"账号「{name}」现在没有待处理的额度申请"
     if tool == "complete_dashboard_todo":
         text = str(a.get("text") or "").strip()
         row, _n, have, _total = _todo_face_row(s.get("todos"), text)

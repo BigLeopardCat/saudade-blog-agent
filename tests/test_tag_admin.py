@@ -606,6 +606,13 @@ _MIN_PARAMS = {
     # 不发请求，但名字一旦写成一个真账号，将来谁把这条用例改成真跑就成了生产写——
     # 而这一件的后果落在**别人**的个人中心、且站内没有删除已发通知的通道。
     "notice_send": {"name": "probe_target_1", "content": "这是一条发给不存在的账号的测试通知"},
+    # 对话额度三件（20260929）：名字通道 + 两个方向各自的附加参数——
+    # `quota_reject` 多一个**必填的自由文本**（驳回理由，会作为站内通知发给申请人）。
+    # ⚠️ 名字同样必须**明显是假的**（同上那条纪律）：这三件的后果落在别人的**对话
+    # 能力**上（批准 = 再给 500 轮、重置 = 立刻能继续问），比冻结更难收回。
+    "quota_approve": {"name": "probe_target_1"},
+    "quota_reject": {"name": "probe_target_1", "reason": "这是一条发给不存在的账号的测试理由"},
+    "quota_reset": {"name": "probe_target_1"},
 }
 _EXPECT_TOOL = {
     "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
@@ -624,6 +631,9 @@ _EXPECT_TOOL = {
     "dashboard_todo_done": "complete_dashboard_todo",
     "account_freeze": "freeze_account", "account_unfreeze": "unfreeze_account",
     "notice_send": "send_user_notice",
+    "quota_approve": "approve_quota_request",
+    "quota_reject": "reject_quota_request",
+    "quota_reset": "reset_user_quota",
 }
 check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",
       set(_EXPECT_TOOL) == set(WRITE_SKILL_NAMES) and set(_MIN_PARAMS) == set(WRITE_SKILL_NAMES),

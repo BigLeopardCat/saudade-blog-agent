@@ -481,6 +481,33 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         # 是两件事）。
         acct = _m(m, "account_name") or _leaf(a.get("name"))
         return f"给账号「{acct}」发通知" if acct else "给账号发通知"
+    # 对话额度三件（20260929）——账号族的新成员，同一条纪律：只报**账号名**、
+    # **不报 uid**、**不报驳回理由**、也**不报额度读数**。四条各有各的说法：
+    #  · uid 是内部编号，主人核对靠名字（同冻结族那条注）；
+    #  · 驳回理由与申请理由会经站内通知原样发给对方，两行里再抄一遍，会与卡面上主人
+    #    刚核对过的那一句话看起来像两件事（同发通知不报正文）；
+    #  · 额度读数（`chatQuotaUsed`）**不是这一行该说的话**：它是写后重读的**那一刻**
+    #    的实测值，而额度每一轮流在动——落进跨轮执行记忆后会被下轮读成"他现在还剩
+    #    N 轮"。读数只住在工具返回给 narrator 的那句话里（`render_quota_status`）。
+    if name in ("approve_quota_request", "reject_quota_request", "reset_user_quota"):
+        acct = _m(m, "account_name") or _leaf(a.get("name"))
+        # 名单里的字就是这一件的动作词（两档共用）：批准/驳回的是**他的申请**，
+        # 主动重置与他有没有申请过无关（技能描述里那条差别在台账行上也要看得出来）。
+        said = {"approve_quota_request": f"批准账号「{acct}」的额度重置申请",
+                "reject_quota_request": f"驳回账号「{acct}」的额度重置申请",
+                "reset_user_quota": f"把账号「{acct}」的对话额度清零"}[name]
+        unsaid = {"approve_quota_request": "批准额度重置申请",
+                  "reject_quota_request": "驳回额度重置申请",
+                  "reset_user_quota": "重置账号的对话额度"}[name]
+        # 名字读不出（台账行缺 meta、过程行缺参）→ 整句不带名字，**不拼空「」**
+        # （通用不变量那条锁）。
+        return said if acct else unsaid
+    if name == "list_quota_requests":
+        # 只读，两档同字；「看的是哪一半」要写出来——"待处理的"与"全部"是两次不同的
+        # 事实（同 `get_moderation_status` 的聚焦那条注）。
+        return ("查看额度重置申请（连已处理的一起）"
+                if _raw(a.get("status")).lower() in ("all", "全部", "所有")
+                else "查看额度重置申请（只看待处理的）")
 
     # ── 用户自己的数据（收藏 / 已读）──────────────────────────────────────
     if name in ("add_favorite", "remove_favorite"):
