@@ -38,3 +38,8 @@ data/word_graph/
 # 改代码前的本地备份（如 graph.py 拆分前的全量副本；内容等价于 git 历史，不进库）
 agent/*.bak_*
 *.bak_*
+
+# CI 里把父仓（Rust，私有）只读 checkout 到这个路径，给跨语言守卫当期望值来源
+# （见 docs/adr/adr-0004-cross-language-guard-in-ci.md）。它是**外部仓库**、不是本仓的一部分：
+# 忽略掉，`git status` 与一切按工作区遍历的工具都不会把它当本仓的文件。
+_parent/

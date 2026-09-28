@@ -44,10 +44,13 @@ echo "=== nightly regression $TS ===" >> "$LOG"
 
 # 20260928 起：跨语言守卫**跑不到就算红**（`tests/_parent_repo.py` 的三态）。
 # 那几处守卫断言「Rust 侧真有这个臂/这个键」（跨轮执行记忆的动作行、`__ERROR__` 帧形状…），
-# 此前每处各写一遍 `if exists(): … else: print("⏭ 跳过")`——而 CI 只 checkout agent 仓
-# （父仓私有），于是**最需要它的地方恒跳过**：本机绿、CI 绿，两侧谁都没真比过。
+# 此前每处各写一遍 `if exists(): … else: print("⏭ 跳过")`：没设要求时跳过是**静默**的，
+# 本机绿、CI 也绿，两侧谁都没真比过（审计实测：那七处守卫此前在 CI 里恒跳过）。
 # 夜间是本机跑、父仓就在兄弟目录，没有任何理由跳过 ⇒ 设上这个开关，让"找不到父仓"
 # 变成一行 ❌ + 退出码 1，而不是一行谁也不会读的 ⏭。
+# **CI 侧同一天也接上了这条纪律**（父仓以只读凭据稀疏 checkout 到 `_parent/`、并设同一个
+# 开关）：跨语言漂移不再只靠夜里这一次。接线与轮换见
+# docs/adr/adr-0004-cross-language-guard-in-ci.md。
 export SAUDADE_REQUIRE_PARENT=1
 
 fail=0

@@ -11,9 +11,11 @@
 同批的第二件事：几处跨语言守卫（断言 Rust 侧真有那个臂/那个键）此前各写一遍
 `if (父仓/chat.rs).exists(): 断言 else: print("⏭ 跳过")`。而 CI 只 checkout agent 仓
 （父仓私有）⇒ **那几处最需要它的地方恒跳过**。现在统一走 `tests/_parent_repo.py` 的三态：
-本机/夜间**跑不到就红**（`SAUDADE_REQUIRE_PARENT=1`），CI 里响亮跳过。
+本机 / 夜间 / CI **跑不到就红**（`SAUDADE_REQUIRE_PARENT=1`；CI 侧父仓以只读凭据稀疏
+checkout 到 `_parent/`，接线与凭据轮换见 `docs/adr/adr-0004-cross-language-guard-in-ci.md`）。
+**凭据由人配、接线由 ⑥ 判**——配置错了要红在"接线"上，而不是让六处守卫各自红一遍。
 
-这一套锁的就是上面两条——**它自己不判任何业务语义**，只判"入口有没有抄名单"。
+这一套锁的就是上面两条——**它自己不判任何业务语义**，只判"入口有没有抄名单 / 接线对不对"。
 判据刻意用**源码文本 + 磁盘枚举**两级，而不是"名单里有这几行"：后者的失效方式正是
 "列表对了、代码不在跑"。
 
@@ -102,7 +104,7 @@ check("夜间没有逐个套件的调用（此前这里是单列 test_skills.py�
 check("夜间给 run_all 也没传 -k（夜间=全量）",
       "run_all.py -k" not in _night and "run_all.py --keyword" not in _night)
 
-print("\n③ 跨语言守卫：跑不到就是红，不是静默跳过")
+print("\n③ 夜间：跨语言守卫跑不到就是红，不是静默跳过")
 check("夜间导出了 SAUDADE_REQUIRE_PARENT=1（父仓守卫跑不到 ⇒ 红）",
       re.search(r"^\s*export\s+SAUDADE_REQUIRE_PARENT=1\s*$", _night, re.M) is not None)
 
@@ -188,6 +190,72 @@ finally:
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
+
+print("\n⑥ CI 与父仓的接线（跨语言守卫在 CI 里也真判）")
+# 判的是**接线**不是语义：CI 有没有把父仓拉下来、有没有把"跑不到就红"设上、锥够不够。
+# 为什么值得单判：这道守卫此前在 CI 里恒跳过，而跳过**没有任何东西会告诉你**（本机绿、
+# CI 也绿）。凭据本身（只读 PAT）由人配置——这里判的是"配好之后接线对不对"。
+_ADR = ROOT / "docs" / "adr" / "adr-0004-cross-language-guard-in-ci.md"
+_ADR_NAME = _ADR.name
+_eval_txt = EVAL_YML.read_text(encoding="utf-8")        # 含注释：接线信息有一半写在注释里
+check("CI 里 checkout 了父仓（只读凭据 + 稀疏锥 + 浅克隆）",
+      "repository: BigLeopardCat/Saudade-Blog" in _eval_txt
+      and "secrets.PARENT_REPO_TOKEN" in _eval_txt
+      and "sparse-checkout:" in _eval_txt
+      and "persist-credentials: false" in _eval_txt, "eval.yml")
+check("父仓 checkout 的 token 是仓库秘密，不是写在 yml 里的字面凭据",
+      re.search(r"token:\s*\$\{\{\s*secrets\.", _eval_txt) is not None)
+check("CI 给套件设了 SAUDADE_PARENT_REPO（指到 checkout 落点）",
+      re.search(r"^\s*SAUDADE_PARENT_REPO:\s*\S+", _eval_txt, re.M) is not None)
+check("CI 给套件设了 SAUDADE_REQUIRE_PARENT=1（**跑不到就红**，与夜间同一条纪律）",
+      re.search(r'^\s*SAUDADE_REQUIRE_PARENT:\s*"?1"?\s*$', _eval_txt, re.M) is not None)
+check("CI 自检落位锚（锥配错/空目录会让守卫**假绿**）",
+      "test -f _parent/src/routes/chat.rs" in _eval_txt)
+# 凭据不许进日志。判据只看**展开**（`$PARENT_REPO_TOKEN` / `${PARENT_REPO_TOKEN}`）——
+# 出错信息里写出这个名字（不展开）是有意为之，不算泄漏。
+check("CI 不把凭据展开进日志（echo/printf 里不许出现变量展开）",
+      re.search(r"(echo|printf)[^\n]*\$\{?PARENT_REPO_TOKEN", _eval_txt) is None)
+
+# 锥够不够：**机械核对**所有守卫实际读的父仓路径是否落在 `sparse-checkout` 的锥里。
+# 这是"改一处忘另一处"在这一处的形状——新加一条读别处源码的守卫，CI 会因为"文件不在"
+# 而红，而红的理由看着像"Rust 那边没改"，有人会顺手把守卫删掉。把这条接线的边界先钉死。
+_cone_m = re.search(r"sparse-checkout:\s*(\S+)", _eval_txt)
+_cone = _cone_m.group(1) if _cone_m else ""
+_reads: dict[str, list[str]] = {}
+for _p in sorted((ROOT / "tests").glob("*.py")):
+    for _rel in re.findall(r'_parent_repo\.read\(\s*"([^"]+)"', _p.read_text(encoding="utf-8")):
+        _reads.setdefault(_rel, []).append(_p.name)
+
+
+def _cone_dirs(cone: str) -> set[str]:
+    """cone 模式实际会落盘哪些目录：锥 + 它的各级祖先 + 仓根（祖先目录的**直系文件**也在）。
+
+    文件落没落盘 = 它所在的目录在不在这个集合里。空锥 ⇒ 只有仓根 ⇒ 什么都拉不到。
+    """
+    parts = cone.split("/") if cone else []
+    return {"/".join(parts[:i]) for i in range(len(parts) + 1)}
+
+
+_covered = _cone_dirs(_cone)
+_outside = sorted(f"{rel}（{'+'.join(who)}）" for rel, who in _reads.items()
+                  if "/".join(rel.split("/")[:-1]) not in _covered)
+check("锥里真含父仓锚（`_SENTINEL`）——锥配窄了连「父仓在哪」都认不出来",
+      "/".join(_parent_repo._SENTINEL.split("/")[:-1]) in _covered)
+check(f"守卫读的每一个父仓文件都落在 CI 拉的锥里（锥={_cone or '未声明'}）[{len(_reads)} 处]",
+      not _outside, "锥外的：" + "、".join(_outside))
+check("锥的判据是**扫源码得出**的，不是这里手抄一份名单（扫不到路径=判据失效）",
+      len(_reads) >= 2, f"扫到 {len(_reads)} 处")
+# 上面那条"都在锥里"要能**判出不在**才算判据，否则它就是装饰（换成另一处锥重算一遍）。
+_other = sorted(rel for rel in _reads
+                if "/".join(rel.split("/")[:-1]) not in _cone_dirs("frontend/src"))
+check("锥判据真的咬：换成另一处锥（frontend/src）重算，扫到的路径全被判成锥外",
+      len(_other) == len(_reads) and len(_reads) > 0, f"锥外：{_other}")
+# 秘密名与文档同源：改名只改 yml 会留下一份「文档说 A、CI 用 B」的说明
+check(f"ADR 里写了同一个秘密名（{_ADR_NAME}）",
+      _ADR.is_file() and "PARENT_REPO_TOKEN" in _ADR.read_text(encoding="utf-8"),
+      _ADR_NAME)
+check("eval.yml 指着那份 ADR（接线与轮换只有一处说明）",
+      _ADR_NAME in _eval_txt)
 
 print()
 if FAILED:

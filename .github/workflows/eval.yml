@@ -18,6 +18,10 @@
 #
 # 仓库 Secrets QUALITY_GATE_API_KEY / QUALITY_GATE_BASE_URL 与 Variables
 # GOLDEN_MIN_PASS_RATE / QWEN_MODEL 已无引用，可留可删（留下不影响任何运行）。
+#
+# **这个 workflow 需要一枚只读凭据**：`secrets.PARENT_REPO_TOKEN`（父仓私有 ⇒ 跨语言守卫
+# 在 CI 里要读它的源码才能真判）。缺了就红——配置问题的正确表现是红，不是静默跳过。
+# 生成/授权/轮换步骤见 docs/adr/adr-0004-cross-language-guard-in-ci.md。
 name: Eval Gate
 
 on:
@@ -29,8 +33,42 @@ on:
 jobs:
   eval:
     runs-on: ubuntu-latest
+    # 父仓只读凭据放 **job 级 env**：step 的 `if:` 里读不了 `secrets`（GitHub 表达式不允许
+    # `secrets` 出现在 `if` 中）⇒ 只能先落成环境变量，再用 `env.X` 判。
+    env:
+      PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+
+      # 跨语言守卫（断言 Rust 侧真有那个臂/那个键/那个字面）此前在 CI 里**恒跳过**：CI 只
+      # checkout agent 仓，而父仓私有 ⇒ 最需要它的地方从不运行，本机绿、CI 也绿，两侧谁都没
+      # 真比过（20260928 审计实测）。现在父仓以**只读凭据**拉进来真判。取舍与轮换步骤见
+      # docs/adr/adr-0004-cross-language-guard-in-ci.md。
+      - name: 跨语言守卫的凭据自检（缺了就直接红，不让六处守卫各自红一遍）
+        run: |
+          if [ -z "${PARENT_REPO_TOKEN:-}" ]; then
+            echo "::error::缺 secrets.PARENT_REPO_TOKEN。跨语言守卫（断言 Rust 侧真有那个臂/那个键）在 CI 里**必须真跑**——凭据缺失是配置问题，配置问题的正确表现是红，不是静默跳过。配置步骤见 docs/adr/adr-0004-cross-language-guard-in-ci.md"
+            exit 1
+          fi
+
+      - name: 取父仓源码（只读、浅、稀疏）
+        uses: actions/checkout@v4
+        with:
+          repository: BigLeopardCat/Saudade-Blog
+          token: ${{ secrets.PARENT_REPO_TOKEN }}
+          path: _parent
+          # 守卫只读 `src/routes/chat.rs`（多数）与 `src/routes/talks.rs` 这两处。稀疏锥只为把
+          # 面收小、把时间省掉；**锥够不够**由 `tests/test_ci_suite_list.py` ⑥ 机械核对——它扫
+          # 所有 `_parent_repo.read("…")` 的路径逐个判是否落在锥里，加了读别处的守卫而忘了改这里
+          # 会红，而不是"那一条在 CI 上悄悄不判"。
+          sparse-checkout: src/routes
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: 父仓落位自检（锚 src/routes/chat.rs）
+        # 凭据权限不对时上一步就失败了；这一条兜的是"拉下来了但稀疏锥配错"——空目录/错目录会
+        # 让守卫**假绿**（`tests/_parent_repo.py` 头注里那两条边界之一）。
+        run: test -f _parent/src/routes/chat.rs
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -52,7 +90,15 @@ jobs:
       # AGENT_TASK_STATE=0），并给子进程设 `SAUDADE_IGNORE_ENV_FILE=1`（**整份 .env 不读**）
       # ⇒ 判据不随仓库/运维环境的取值漂移。20260928 加后半句的实测理由：CI 没有 .env、
       # 本机有产线那份 ⇒ 同一片判据在这里红、在本机绿，而两边都没在看代码。
+      # 跨语言守卫**跑不到就算红**（`tests/_parent_repo.py` 的三态），与夜间同一条纪律：
+      # `SAUDADE_REQUIRE_PARENT=1` 让"找不到父仓"变成一行 ❌ + 退出码 1，而不是一行谁也不会
+      # 读的 ⏭。父仓这次**真在**（上面两步），所以这一档在 CI 里判的是真东西。
+      # 注意它比较的是父仓**默认分支**的 HEAD：Rust 那边的改动还没并进默认分支时，这里会红
+      # 而本机（工作区里带着那份改动）是绿的——这是**可见的**红，不是静默的绿（取舍见 ADR-0004）。
       - name: 全部离线套件（按磁盘枚举，秒级、无网络、无 LLM）
+        env:
+          SAUDADE_PARENT_REPO: ${{ github.workspace }}/_parent
+          SAUDADE_REQUIRE_PARENT: "1"
         run: uv run python tests/run_all.py
 
       # 未定义名静态扫描（20260924 补）。Python 没有编译期拦截：一个只在**另一个作用域**
