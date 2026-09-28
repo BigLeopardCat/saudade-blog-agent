@@ -792,31 +792,45 @@ _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败"
               "policy_refused": "后台规则拒绝"}
 
 
-def _specs_from_plan(plan: str) -> list:
-    """plan 契约文本 → TOOLS spec 的 (工具名, 参数 dict|None) 列表。
+def _spec_one(spec: str):
+    """一条 TOOLS spec（`<工具名>(<json 参数>)`）→ `(工具名, 参数 dict|None)`。
 
-    切分规则与 graph.parse_plan 一致（`;` 分隔；「（无）」= 空清单）；参数
-    解析失败/空参给 None——预览只出动作词，不硬猜参数。
+    参数解析失败/空参给 None——过程行只出动作词，不硬猜参数。
+    「（无）」与空串 → None（不是一条动作）。与 `graph.parse_plan` 里那段**逐条**
+    解析同源（那边从文本行切出来，这边从 `plan_obj["tools"]` 直取，落到的都是同一
+    形状的 spec 串）。
+    """
+    spec = (spec or "").strip()
+    if not spec or spec in ("（无）",):
+        return None
+    nm = spec.split("(", 1)[0].strip()
+    args = None
+    am = re.match(r"^[^(]+\((.+)\)\s*$", spec, re.DOTALL)
+    if am:
+        try:
+            obj = json.loads(am.group(1))
+            if isinstance(obj, dict):
+                args = obj
+        except Exception:
+            pass
+    return (nm, args)
+
+
+def _specs_from_tools(tools) -> list:
+    """`plan_obj["tools"]`（spec 字符串列表）→ `[(工具名, 参数|None)]`。
+
+    20260928 批 C：此前这里吃的是 plan **契约文本**，自己正则切 TOOLS 行再按 `;`
+    拆（与 `graph.parse_plan` 的切分是两份拷贝）。改成直取结构化字段后，切分这件事
+    **不存在了**——顺带修掉一个文本腔的析构错误：spec 里的 JSON 字符串**可以含 `;`**
+    （标题/正文里带分号），按文本切开会把一条动作劈成两条残片（过程行会显示成
+    「计划：删除标签、b"})…」这种）。结构化读法没有这个面，见
+    `tests/test_plan_channel.py` ③ 末尾那条正例。
     """
     out = []
-    m = re.search(r"TOOLS\s*[:=]\s*(.+)", plan or "", re.IGNORECASE)
-    if not m:
-        return out
-    for spec in m.group(1).split(";"):
-        spec = spec.strip()
-        if not spec or spec in ("（无）",):
-            continue
-        nm = spec.split("(", 1)[0].strip()
-        am = re.match(r"^[^(]+\((.+)\)\s*$", spec, re.DOTALL)
-        args = None
-        if am:
-            try:
-                obj = json.loads(am.group(1))
-                if isinstance(obj, dict):
-                    args = obj
-            except Exception:
-                pass
-        out.append((nm, args))
+    for spec in tools or []:
+        one = _spec_one(spec)
+        if one:
+            out.append(one)
     return out
 
 
@@ -969,10 +983,16 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                 # 规划占位帧在此发：所有技能都有"规划中"第一阶段反馈）
                 planner_upd = data.get("planner")
                 if planner_upd:
-                    plan = str(planner_upd.get("plan", ""))
-                    if plan.startswith("SKILL="):
+                    # 20260928 批 C：这里曾用三段文本嗅探认 plan（`startswith("SKILL=")`
+                    # 判"是不是一份真计划"、`startswith("SKILL=chat")` 判闲聊、
+                    # `"\nTOOLS: " in plan` 判有没有执行清单）——三处都是"改 `plan_encode`
+                    # 的排版就要同步改这里"的人工约定。现在直取 `plan_obj`
+                    # （`graph.plan_state` 与文本一次写入），排版不再是判据的一部分。
+                    # 缺 `plan_obj`（缺省 `{}`）= 本轮没有计划，与"计划是 chat"分得开。
+                    pobj = planner_upd.get("plan_obj") or {}
+                    if pobj:
                         emit_process("🧭 规划中…", key="planning")
-                        if plan.startswith("SKILL=chat"):
+                        if str(pobj.get("skill") or "") == "chat":
                             # chat 快道：只发占位帧，不发计划明细（避免每条闲聊都有过程行）
                             is_chat_skill = True
                         else:
@@ -987,7 +1007,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                             # 收尾轮（TOOLS 空/（无），execute 后叙事轮）不发——
                             # 无动作可预告，避免"计划:执行规划动作"式空行
                             acts = [tool_action_text(nm, ar)
-                                    for nm, ar in _specs_from_plan(plan)]
+                                    for nm, ar in _specs_from_tools(pobj.get("tools"))]
                             if acts:
                                 hint = "、".join(acts)
                                 if len(hint) > 100:
@@ -996,7 +1016,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         # 计划含执行清单 → execute 将确定性执行（期间几秒静默，
                         # 无此占位帧前端会像"卡死"）；完成/受阻帧由 execute
                         # update 的 receipts/blocked 驱动（见下方 execute 分支）
-                        if "\nTOOLS: " in plan and "TOOLS: （无）" not in plan:
+                        if pobj.get("tools"):
                             emit_process("🛠 正在调用工具…", key="tool_running")
                     # 任务登记帧（20260927 批 D）：planner 认定"这一轮做不完"时随本轮
                     # 一起给出登记载荷（`agent/tasks.py::frame_payload`）。与弹窗那支的
@@ -1103,9 +1123,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         spec = str(b.get("spec") or "")
                         reason = _REASON_CN.get(str(b.get("reason") or ""),
                                                 str(b.get("reason") or "执行受阻"))
-                        bnm, bargs = "", None
-                        for _nm, _ar in _specs_from_plan("TOOLS: " + spec):
-                            bnm, bargs = _nm, _ar
+                        # 逐条解析（20260928 批 C）：此前借 `_specs_from_plan("TOOLS: " + spec)`
+                        # 复用文本切分，现在直接解析这一条 spec（`_spec_one`）
+                        bnm, bargs = _spec_one(spec) or ("", None)
                         emit_process("✗ " + tool_action_text(bnm or str(b.get("tool") or ""),
                                                              bargs) + f"未成功（{reason}）",
                                      key=f"blocked_{spec}")

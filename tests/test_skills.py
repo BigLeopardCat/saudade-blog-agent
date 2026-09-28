@@ -41,7 +41,7 @@ from agent.graph import (_PLANNER_OUTPUT_RE, REFLECT_MAX_ROUNDS, _article_fast_p
                          _nav_fast_path, _parse_params, _plan_skill, _scan_action_intents,
                          _wrap_up_plan,
                          execute_node, extract_plan_fields, gate_node,
-                         plan_encode, parse_plan, reflector_node,
+                         plan_encode, plan_state, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
 from agent.skills import (NAV_MAP, NAV_VALID_PATHS, SKILL_MAP, instantiate_plan,
                           visible_skills)
@@ -197,38 +197,44 @@ def test_plan_roundtrip():
 
 
 def test_plan_skill_line_contract():
-    """`_plan_skill` 与 `plan_encode` 的**隐式**契约：前者正则读 `SKILL=` 行，成立
-    前提是后者一定写这一行（且用 `=` 而不是 `:`）。
+    """`_plan_skill` 读的是**结构化那一态**（`state["plan_obj"]`）——与 `plan_encode`
+    的排版**无关**。
 
-    **为什么值得一条专门的锁**（20260927 主线批 A）：这条契约一直是隐式的——
-    `_plan_skill` 在确认卡那条链上给令牌定技能（`confirm.sign(uid, conv_id,
-    _plan_skill(state), picks)`），读不到就给空串、`sign` 拒绝签发。改 `plan_encode`
-    的输出格式（比如把键改成 `SKILL:`）不会让任何现有断言变红，只会让"点确定"
-    这条路径静默失效。这里用**往返**钉住：遍历注册表里每个技能各编码一次再读回，
-    比"源码里 grep 某个正则"结实（后者在正则被改写时照样绿）。
+    （20260928 批 C 改写。）此前它靠一条 `SKILL=` 正则去抠 `plan` 文本，成立前提是
+    `plan_encode` 一定把技能名写成 `SKILL=…`；那条**隐式契约**在本次改动后消失了：
+    等号换成冒号、行挪个位置，都不再影响这个函数。仍然用**往返**钉住，但钉的是
+    "对象进、技能名出"；另外把"只有文本时给空串"也钉住——那条是安全边界：
+    `sign` 据此拒绝签发，而不是从一个认不出的旧文本里猜一个技能名签进令牌。
     """
-    print("[plan] SKILL= 行的写端/读端契约（_plan_skill ← plan_encode）")
+    print("[plan] 技能名的读端 = plan_obj（与 plan_encode 的排版无关）")
     names = [s.name for s in visible_skills("admin")] + [s.name for s in visible_skills(None)]
     bad = []
     for name in dict.fromkeys(names):          # 去重保序
         for params in ({}, {"target": "物联网平台"}):
             obj = instantiate_plan(name, params)
-            got = _plan_skill({"plan": plan_encode(obj)})
+            got = _plan_skill(plan_state(obj))
             if got != obj["skill"]:
                 bad.append(f"{name}: 编码出 {obj['skill']}、读回 {got!r}")
     check(f"每个技能编码后都能读回同一个技能名（{len(set(names))} 个）", not bad, str(bad[:4]))
-    # 收尾计划（不带 params 的构造路径）同样必须带这一行——它是确认轮里
+    # 收尾计划（不带 params 的构造路径）同样要读得回——它是确认轮里
     # "执行受阻 ⇒ 不再重发清单"那条路的产物，读不到就签不出令牌。
     # 断言"读得回它自己声明的技能"，**不是**断言"等于 chat"：有帧收尾落 content_query
     # 是有意的（narrator 要按"基于已有帧作答"的口径组织回复），钉死技能名会把那条
     # 设计判成缺陷。
     for has_frames in (True, False):
         obj = _wrap_up_plan(has_frames)
-        got = _plan_skill({"plan": plan_encode(obj)})
-        check(f"收尾计划（has_frames={has_frames}）带 SKILL= 行且读得回同一个技能",
+        got = _plan_skill(plan_state(obj))
+        check(f"收尾计划（has_frames={has_frames}）读得回同一个技能名",
               got == obj["skill"] and bool(got), f"{obj['skill']} → {got!r}")
-    check("读不到时给空串（sign 据此拒绝签发，不是猜一个技能）",
-          _plan_skill({"plan": ""}) == "" and _plan_skill({}) == "")
+    # 排版不再是前提：把文本那一态换成一堆认不出的字（旧实现下 `=` 改成 `:`、或
+    # 行挪位，都会让正则读空 ⇒ sign 拒绝签发），读端照样给出技能名。
+    _nav = instantiate_plan("navigate", {"target": "物联网平台"})
+    check("★ 文本排版变了（对象没变）也照读不误——契约已从排版里解耦",
+          _plan_skill({"plan": "这行不是计划，SKILL 行也没有",
+                       "plan_obj": _nav}) == _nav["skill"])
+    check("只有文本、没有对象 ⇒ 空串（sign 据此拒绝签发，绝不从旧文本里猜）",
+          _plan_skill({"plan": plan_encode(_nav)}) == ""
+          and _plan_skill({"plan": ""}) == "" and _plan_skill({}) == "")
 
 
 def test_parse_tolerance():

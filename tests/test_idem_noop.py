@@ -47,7 +47,8 @@ sys.path.insert(0, str(ROOT))
 import agent.graph as g  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent import adminops as A  # noqa: E402
-from agent.graph import execute_node, graph_input, plan_encode, route_after_execute  # noqa: E402
+from agent.graph import (execute_node, graph_input, plan_state,  # noqa: E402
+                         route_after_execute)
 from agent.principal import Principal  # noqa: E402
 from config.settings import settings  # noqa: E402
 
@@ -78,13 +79,15 @@ NOTIF_ALL_READ = {3: {"id": 3, "isRead": True}, 5: {"id": 5, "isRead": True}}
 NOTIF_HAS_UNREAD = {3: {"id": 3, "isRead": False}, 5: {"id": 5, "isRead": True}}
 MAIL_ALL_READ = {"inbox": [{"id": 9, "isRead": True}], "outbox": [], "unread": 0}
 
-PLAN = "SKILL=favorite_add\nPARAMS={}\nTOOLS: \nNOTE: \nREPLY: 直接回答"
+# 计划夹具走**对象**（20260928 批 C）：`_plan_skill` 现在读 `state["plan_obj"]`，
+# 只喂契约文本的话技能名读成空串 ⇒ `confirm.sign` 拒签 ⇒ 该弹的全变 None。
+PLAN = {"skill": "favorite_add", "params": {}, "tools": [], "note": "", "reply": "直接回答"}
 
 
 def _popup(specs, msg, uid=7, role="user", plan=PLAN):
     """真跑 `_confirm_popup`：真判据、真签发，假的只有后端那几次读。"""
     return g._confirm_popup(
-        {"messages": [HumanMessage(content=msg)], "plan": plan},
+        {"messages": [HumanMessage(content=msg)], **g.plan_state(plan)},
         specs, Principal(uid=uid, role=role), msg,
         {"configurable": {"user_id": uid, "conversation_id": 42}})
 
@@ -383,7 +386,7 @@ def _grant_state(tool, args):
     """确认轮状态：`confirm_grant` 在场 ⇒ 同意闸与目标有据两门都放行。"""
     obj = {"skill": "favorite_add", "params": {}, "tools": [f"{tool}({_json(args)})"],
            "note": "x", "reply": "y"}
-    return {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+    return {**plan_state(obj), "plan_rounds": 1, "done": False,
             "messages": [HumanMessage(content="（点确定的执行轮）")],
             "confirm_grant": {"skill": "favorite_add",
                               "specs": [{"tool": tool, "args": args}]}}
@@ -455,8 +458,8 @@ _EXEC_CFG = {"configurable": {"principal": Principal(uid=7, role="user"), "user_
 
 def _exec_round(specs, msg=_MSG_FAV):
     st = graph_input([HumanMessage(content=msg)])
-    st["plan"] = plan_encode({"skill": "favorite_add", "params": {}, "tools": list(specs),
-                              "note": "", "reply": ""})
+    st.update(plan_state({"skill": "favorite_add", "params": {}, "tools": list(specs),
+                          "note": "", "reply": ""}))
     return execute_node(st, _EXEC_CFG)
 
 

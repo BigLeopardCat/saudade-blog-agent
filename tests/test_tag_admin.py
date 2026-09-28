@@ -1123,7 +1123,8 @@ check("白名单里已有 board_id / board_author（新回执键不许被静默�
 #    本节锁四件事：判据只认"抄短"这一种形态；改完必须重新验一遍；纯指代句里模型自己
 #    猜的名字不算来源；改出来的计划**注记同步重生成**（陈旧注记会让 narrator 说错名字）。
 print("\n⑫ 台账近失的截断形态：唯一候选 → 就地校正，交弹卡（不是又一次「站内没有」）")
-from agent.graph import _truncation_candidate, _confirm_popup, plan_encode  # noqa: E402
+from agent.graph import (_truncation_candidate, _confirm_popup,  # noqa: E402
+                         plan_state)
 from agent.graph import _tool_args  # noqa: E402
 
 
@@ -1257,7 +1258,7 @@ try:
     with patch(_tag_index=lambda c: IDX_DOG):
         plan = _plan("tag_delete", {"name": "大笨狗"})
         _write_target_refusal(plan, cfg(), MSG_DOG)
-        st = {"messages": [], "plan": plan_encode(plan), "plan_rounds": 0, "done": False}
+        st = {"messages": [], **plan_state(plan), "plan_rounds": 0, "done": False}
         pop = _confirm_popup(st, plan["tools"], cfg()["configurable"]["principal"],
                              MSG_DOG, cfg())
         check("校正后**照旧弹卡**（全名不在主人原话里 → 免弹窗前提不成立）",

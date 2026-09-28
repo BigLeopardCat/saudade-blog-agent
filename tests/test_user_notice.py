@@ -613,7 +613,7 @@ check("查无此名 → (BLOCK, target_not_found)（planner 换目标/追问，�
 print("\n⑭ 真实 execute 路径弹卡：第 1 轮零执行 + 令牌载荷就是这一件")
 from langchain_core.messages import HumanMessage  # noqa: E402
 from agent import confirm as _confirm  # noqa: E402
-from agent.graph import execute_node, plan_encode  # noqa: E402
+from agent.graph import execute_node, plan_state  # noqa: E402
 _CALLS: list = []
 
 
@@ -631,7 +631,7 @@ def _run_exec(msg, spec, skill="notice_send", grant=None):
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
     obj["skill"] = skill
     obj["tools"] = [spec]
-    state = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+    state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content=msg)]}
     if grant:
         state["confirm_grant"] = grant
