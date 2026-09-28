@@ -557,12 +557,17 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
     # 指令**——"快用完了该提醒他"那类属于提示词（它管说什么），不属于系统上下文
     # （它管是什么）。缺席时**整行不注入**（见 ChatRequest.chat_quota 的注释：缺席是
     # "不知道"，编一个 0 会让 agent 对着正常聊天的访客说"你没额度了"）。
+    #
+    # **口径 = 余额**（20260929 用户要求："500 开始减少而不是 0 开始计数"）。此前这一行
+    # 给的是 `used/limit`，与前端同一处口径问题：`137/500` 要心算一步才知道还剩多少，
+    # 而且模型转述时很容易说成"你已经用了 137 轮"——主人问的从来不是这个。三个数仍然
+    # 都在 C1 里（Rust 照发，前端后台按 `used` 显示），**这一行只挑余额说**；`used` 由
+    # `limit - remaining` 反推得出来，不必再写一遍。判据见 `tests/test_chat_quota.py`。
     if req.chat_quota is not None:
         if req.chat_quota.unlimited:
             ctx_parts.append("chat_quota=unlimited")
         else:
-            ctx_parts.append(f"chat_quota={req.chat_quota.used}/{req.chat_quota.limit}"
-                             f"（剩{req.chat_quota.remaining}轮）")
+            ctx_parts.append(f"chat_quota=剩{req.chat_quota.remaining}/{req.chat_quota.limit}轮")
     if req.summary:
         ctx_parts.append(f"conversation_summary: {req.summary}")
     if req.executions or req.pending_action:
