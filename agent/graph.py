@@ -1153,6 +1153,27 @@ def extract_plan_fields(raw: str):
     return None, _parse_params(raw or "")
 
 
+def _esc_spec(tool_spec: str) -> str:
+    """单条 spec 里的 `;` 转义成 `\\u003b`——**文本通道的分隔符不能出现在值里**。
+
+    `plan_encode` 用 `"; ".join(tools)` 拼 TOOLS 行，`parse_plan` 读回时 `split(";")`
+    （`_tool_args` 的贪婪正则能兜住参数里的 `(`/`)`，**兜不住 `;`**）。20260929 生产
+    实证：模型给 `device_oled_draw` 的 `ops` 写了一串用 `;` 分隔的伪指令（12 个分号，
+    `tri(30,6,…); circle(64,38,26,F); …`）⇒ **一条调用裂成 13 条 spec**：12 条被当成
+    不存在的工具（`tri`/`circle`/`line`/`text`）逐个拒掉，第 13 条（真名那条）截断在
+    第一个 `;` 上 ⇒ `args_parse` BLOCK。最狠的一层是它**不像失败**：那一轮工具其实
+    跑了、设备也回了执（"已下发、设备已确认执行"都印出来了），但 spec 解析不出参数 ⇒
+    checker 判 BLOCK ⇒ 无回执 ⇒ **屏幕画了、台账没记一笔**，跨轮执行记忆里什么都没有。
+
+    `\\u003b` 是合法 JSON 转义，`json.loads`/`ast.literal_eval` 读回都会还原成 `;`，
+    **语义一个字节没变**，只是文本里不再有裸 `;`。写在这里而不是那 13 个拼 spec 的地方
+    （`skills.py` 12 处 + 本文件 1 处）：写端只有这一处，且"改一处要同步十三处"正是
+    全仓审计点名的主导特征。分隔符本身由 `join` 产出、不经过这里，所以转义的只有值里的。
+    **PARAMS 行不用**：它不参与任何 `;` 切分（`json.dumps` 已把换行转义掉）。
+    """
+    return tool_spec.replace(";", "\\u003b")   # 落盘即 `;`（一个反斜杠，JSON 转义）
+
+
 def plan_encode(plan_obj: dict) -> str:
     """结构化计划（instantiate_plan 产物）→ plan 字段（契约的写端）。
 
@@ -1169,7 +1190,8 @@ def plan_encode(plan_obj: dict) -> str:
     （navigate 三出口 / `_param_problem_plan` / `_terminal_plan` / fail-closed 写技能），
     派生只兜住"手写的夹具文本"与"改造前留在 state 里的旧计划"。
     """
-    tools = "（无）" if not plan_obj.get("tools") else "; ".join(plan_obj["tools"])
+    tools = ("（无）" if not plan_obj.get("tools")
+             else "; ".join(_esc_spec(t) for t in plan_obj["tools"]))
     status = plan_obj.get("status") or (
         "executed" if plan_obj.get("tools")
         else ("answer_only" if plan_obj.get("chat") else ""))
