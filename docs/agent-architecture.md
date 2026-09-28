@@ -843,6 +843,12 @@ flowchart TB
 `PARAMS: <JSON>`），不再自由写执行步骤；`instantiate_plan` 把参数实例化为计划文本
 （`SKILL=/PARAMS=/TOOLS: /NOTE: /REPLY:` 五行契约）写入 `state.plan`。**TOOLS 行 = "执行清单"
 而非旧"允许名单"**——execute 把它当命令逐条执行，"点名了却不调用"的自由 20260903 已从执行层移除。
+**值里不许长分隔符**（20260929）：TOOLS 行是 `"; ".join(specs)` 拼的、`parse_plan` 用
+`split(";")` 读回 ⇒ `plan_encode` 把每条 spec 里的 `;` 转义成 JSON 的 `\u003b`（读回仍是
+`;`，语义一个字节不变；`_tool_args` 的贪婪正则兜得住值里的 `(`/`)`，兜不住 `;`）。生产
+实证：模型给 `device_oled_draw` 的 ops 自带 12 个分号 ⇒ 一条调用裂成 13 条，碎片被当成不存在
+的工具逐个拒掉、剩下那条截断在第一个分号 ⇒ **屏幕画了、台账没记一笔**。
+`tests/test_plan_channel.py` ④ 把这条不变量钉住（漏转义与转多两个方向都判红）。
 
 - **确定性快道链（planner_node 首轮、零 LLM；命中即实例化计划、不调用 planner LLM）**：
   ① 导航快道（`_NAV_VERB_RE` 句首动词 + `NAV_MAP` 映射/口语模糊归一，疑问/质疑句式排除、

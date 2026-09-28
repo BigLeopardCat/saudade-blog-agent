@@ -22,15 +22,20 @@
      反推 nav_offline/nav_unresolved/target_unreachable 那段）——它只是给旧文本与手写夹具
      留的路，见 `parse_plan` 里那段注。
   ③ **判据等价**：新读法（看 `skill == "chat"` / `tools` 非空）与旧读法（在文本上
-     startswith / 子串）在**技能注册表全集**上判定相同；两处刻意的偏离各自单独钉住：
-     技能名 `chat` 前缀的唯一性、以及 spec 里的 JSON 字符串含 `;` 时旧法会把一条动作
-     切成两条（文本腔的析构，见 `server._specs_from_tools` 头注）。
+     startswith / 子串）在**技能注册表全集**上判定相同；一处刻意的偏离单独钉住：
+     技能名 `chat` 前缀的唯一性。
+  ④ **分隔符不进值**（20260929）：TOOLS 行是 `"; ".join(specs)` 拼的，`parse_plan` 用
+     `split(";")` 读回 ⇒ 参数值里一个裸 `;` 就把**一条调用撕成 N 条**（`_tool_args` 的
+     贪婪正则兜得住值里的 `(`/`)`，兜不住 `;`）。写端现在把值里的 `;` 转义成 JSON
+     的 `\u003b`（读回仍是 `;`，语义一个字节不变）。④ 锁的就是这条不变量：
+     TOOLS 行的裸 `;` 只许是分隔符。
 
 **不测什么**：不测 `plan_encode` 的**排版**（`test_skills.py` 有往返用例）、不测
 planner/gate 行为（各有专测）。这里只锁"通道的形状"。
 
 跑法：`.venv/bin/python tests/run_all.py -k plan_channel`
 """
+import json
 import pathlib
 import re
 import sys
@@ -199,20 +204,106 @@ check("空计划（没有 plan_obj / 空文本）两边都判「不是真计划�
 _dup = [n for n in S.SKILL_MAP if n != "chat" and n.startswith("chat")]
 check("技能名里以 chat 开头的只有 chat 自己（新读法 `== \"chat\"` 与旧 startswith 等价的唯一前提）",
       not _dup, str(_dup))
-# 刻意偏离 2：spec 的 JSON 字符串里含 `;`（标题/正文带分号是常态）。旧法按 `;` 切文本 ⇒
-# 一条动作被劈成两条残片（过程行显示成「计划：tag_delete、b"})…」）；新法直取对象，
-# 切分这件事根本不存在。三段嗅探的判定不受影响，差的只是动作预览列表。
+# 刻意偏离：spec 的 JSON 字符串里含 `;`（标题/正文带分号是常态）。三段嗅探的判定不受影响
+# ——差的只是动作预览列表。撕成两条那件事已由写端堵上（见 ④），这里只留判定一致。
 _spec = 'tag_delete({"name": "a;b"})'
 _st = G.plan_state({"skill": "tag_delete", "tools": [_spec], "params": {},
                     "note": "", "reply": "r"})
-_old_specs, _new_specs = _old_specs_from_plan(_st["plan"]), SRV._specs_from_tools([_spec])
-check("旧法把含 `;` 的一条 spec 切成两条（文本腔的析构）",
-      len(_old_specs) == 2, str(_old_specs))
-check("新法仍是一条，且参数完整（直取对象没有切分这回事）",
-      len(_new_specs) == 1 and _new_specs[0] == ("tag_delete", {"name": "a;b"}),
-      str(_new_specs))
-check("  同一条上三段嗅探的判定两边仍然一致（差的是预览列表，不是闸）",
+check("值里含 `;` 时三段嗅探的判定两边仍然一致（差的是预览列表，不是闸）",
       _old_verdict(_st["plan"]) == _new_verdict(_st["plan_obj"]))
+check("  新读法（直取对象）照旧一条、参数完整",
+      SRV._specs_from_tools([_spec]) == [("tag_delete", {"name": "a;b"})],
+      str(SRV._specs_from_tools([_spec])))
+
+
+# ── ④ 分隔符不进值（20260929，生产缺陷）──────────────────────────────────────
+# TOOLS 行 = `"; ".join(specs)`，读端 = `split(";")` ⇒ **参数值里的裸 `;` 是一条调用的
+# 断点**。写端现在把值里的 `;` 转义成 JSON 的 `\u003b`（读回仍是 `;`，语义一个字节不
+# 变）。④ 锁的是不变量本身：**TOOLS 行的裸分号只许是分隔符**——漏转义（值里的分号当分隔
+# 符 ⇒ 条数变多）与转多（连分隔符一起转 ⇒ 条数变少）**两个方向都会被下面这条红**。
+print("④ 分隔符不进值：TOOLS 行的裸 `;` 只许是分隔符，不许长在参数值里")
+
+
+def _spec_with(name: str, key: str, value) -> str:
+    """按 `instantiate_plan` 的落盘形状造一条 spec（参数走 json.dumps）。"""
+    return f"{name}({json.dumps({key: value}, ensure_ascii=False)})"
+
+
+def _tools_line(txt: str) -> str:
+    return next(l for l in txt.splitlines() if l.startswith("TOOLS"))
+
+
+def _plan_with(tools: list[str]) -> str:
+    return G.plan_state({"skill": "tag_delete", "tools": tools, "params": {},
+                         "note": "", "reply": "r"})["plan"]
+
+
+check("_esc_spec 只动 ASCII 分号：全角 `；`、`(`/`)`/`,`/反斜杠一律原样",
+      G._esc_spec("；") == "；" and G._esc_spec("a(b),c\\d") == "a(b),c\\d")
+check("  且幂等（转义产物里没有裸分号，再来一次不再变）",
+      G._esc_spec(G._esc_spec("a;b")) == G._esc_spec("a;b") == "a\\u003bb")
+
+_bad = []
+for _v in ("a;b", "a;b;c", "；全角不算分隔符；", "分号后带空白 ; ", "a" + ";" * 12 + "z"):
+    _txt = _plan_with([_spec_with("tag_delete", "name", _v)])
+    _got = G.parse_plan(_txt)["tools"]
+    _args, _ok = G._tool_args(_got[0]) if len(_got) == 1 else ({}, False)
+    if _tools_line(_txt).count(";") or len(_got) != 1 or not _ok or _args.get("name") != _v:
+        _bad.append(f"{_v!r}: 裸分号={_tools_line(_txt).count(';')} 条数={len(_got)} "
+                    f"读回={_args.get('name')!r}")
+check("单条 spec：值里 1~12 个 `;` 都不裂（TOOLS 行 0 个裸分号、解析回来一条、值逐字节相同）",
+      not _bad, "；".join(_bad[:3]))
+
+_two = [_spec_with("tag_delete", "name", "甲;一"), _spec_with("tag_delete", "name", "乙;二")]
+_txt = _plan_with(_two)
+_got = G.parse_plan(_txt)["tools"]
+_vals = [G._tool_args(s)[0].get("name") for s in _got]
+check("两条 spec：TOOLS 行的裸分号数 == 分隔符数（N-1）——漏转义与转多两个方向都在这一条里",
+      _tools_line(_txt).count(";") == len(_two) - 1 and len(_got) == 2
+      and _vals == ["甲;一", "乙;二"],
+      f"裸分号={_tools_line(_txt).count(';')} 条数={len(_got)} 读回={_vals}")
+
+# 邻接的隐患：`parse_plan` 的 TOOLS 正则是 `(.+)`（**不带 DOTALL**）⇒ 值里的换行若原样落
+# 进 TOOLS 行，那一行会被截断在换行处。挡住它的是 `json.dumps`（换行转义成 `\n`），
+# 不是 `_esc_spec`——所以这条与上面那条分开钉，别把功劳记错人。
+_txt = _plan_with([_spec_with("tag_delete", "name", "上\n下")])
+_got = G.parse_plan(_txt)["tools"]
+_val = G._tool_args(_got[0])[0].get("name") if len(_got) == 1 else None
+check("值里含换行时 TOOLS 行仍是一行（json.dumps 转义），读回来逐字节含那个换行",
+      len(_got) == 1 and _val == "上\n下", f"条数={len(_got)} 读回={_val!r}")
+
+# 正向控制：PARAMS 行不参与任何 `;` 切分，转义器也不碰它（改坏了这条会红）。
+_st2 = G.plan_state({"skill": "navigate", "tools": [], "params": {"target": "a;b;c"},
+                     "note": "", "reply": "r"})
+check("PARAMS 行不受影响（分号原样进去、原样读回）",
+      G.parse_plan(_st2["plan"])["params"] == {"target": "a;b;c"},
+      str(G.parse_plan(_st2["plan"])["params"]))
+
+# 生产复现（20260929 01:11 那份 trace 的形状）：模型给 `device_oled_draw` 的 ops 写了一段
+# 用 `;` 分隔的伪指令（13 段、12 个分号）。当时 `plan_encode` 照原样拼进 TOOLS 行 ⇒ 一条
+# 调用裂成 13 条 spec：碎片被当成未知工具（`tri`/`circle`/`line`/`text`…）逐个拒掉，剩下的
+# 那条截断在第一个分号上（`args_parse`）⇒ **屏幕上真画了、台账却没记一笔**。
+_PROD_SHAPE = ('tri(30,6,18,24,42,24,F); tri(98,6,86,24,110,24,F); circle(64,38,26,F); '
+               'circle(54,34,4,T); circle(74,34,4,T); line(64,42,64,46,F); '
+               'line(64,46,58,50,F); line(64,46,70,50,F); line(20,40,44,44,F); '
+               'line(20,48,44,48,F); line(84,44,108,40,F); line(84,48,108,48,F); '
+               'text(40,58,"meow")')
+check("复现串就是那次事故的形状（13 段、12 个分号）", _PROD_SHAPE.count(";") == 12,
+      str(_PROD_SHAPE.count(";")))
+_old_specs = _old_specs_from_plan("TOOLS: " + _PROD_SHAPE)
+check("对照臂：同一串不经转义（= 改写前写端的产物）会被旧法撕成 13 条",
+      len(_old_specs) == 13, str(len(_old_specs)))
+_txt = G.plan_state(S.instantiate_plan("device_draw", {"ops": _PROD_SHAPE}))["plan"]
+_specs = G.parse_plan(_txt)["tools"]
+_args, _ok = G._tool_args(_specs[0]) if len(_specs) == 1 else ({}, False)
+check("生产复现：走真技能（instantiate_plan → plan_state → parse_plan）恰好一条 spec",
+      len(_specs) == 1, f"{len(_specs)} 条：{[s[:22] for s in _specs[:4]]}")
+check("  名是 device_oled_draw、ops 逐字节等于原文（转义读回还原成分号）",
+      bool(_specs) and _specs[0].startswith("device_oled_draw(") and _ok
+      and _args.get("ops") == _PROD_SHAPE,
+      f"ok={_ok} 读回 {len(_args.get('ops') or '')} 字 / 原文 {len(_PROD_SHAPE)} 字")
+check("  且 TOOLS 行 0 个裸分号（只有一条 spec，连分隔符都不该有）",
+      _tools_line(_txt).count(";") == 0, str(_tools_line(_txt).count(";")))
 
 print()
 if FAILS:
