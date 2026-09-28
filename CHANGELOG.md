@@ -38,6 +38,14 @@
   从 `uv.lock` 取（`[dependency-groups] dev` 一处声明），不再在 workflow 里手写。
 - **日志初始化不再靠 `for/else` 的隐式重置**：`setup_logging` 只留一条路径，"同一行日志
   不打两遍"成为判据（改回 `addHandler` 累加会红）。
+- **判据的运行环境收敛到一处**：`tests/run_all.py` 给每个子进程设 `SAUDADE_IGNORE_ENV_FILE=1`
+  （`config/settings.py` 整份 `.env` 不读）⇒ 本机 / CI / 夜间三处跑的是**同一套环境**。
+  动因是实测：弹窗矩阵（`test_confirm.py` §⑪）靠本机产线 `.env` 里的 `JWT_SECRET` 才签得出
+  令牌，于是**本机恒绿、CI 恒红**——两侧都没在看代码，看的是"这台机器装了什么"。
+- 同一次排查修掉另外两处"CI 上走的是另一条路"：跨语言对账（`test_action_text.py` ⑤）拿不到
+  父仓时不再直接判红、改为**响亮「未评估」**（夜间 `SAUDADE_REQUIRE_PARENT=1` 仍硬判）；
+  `test_retention_manifest.py` ⑤ 的夹具树期望值**本来就错**（`stray.log` 被 `*.log*` 认领、
+  且默认类的 root 是生产绝对路径）⇒ 那条判据从没在任何机器上绿过。
 
 ## 20260927
 

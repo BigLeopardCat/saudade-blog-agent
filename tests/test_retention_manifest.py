@@ -182,14 +182,38 @@ def main() -> int:
             check(f"⑤ 真树零未登记：{root}",
                   un == [], f"{len(un)} 条，例如 {un[:3]}")
         if not os.path.isdir(rm.DEFAULT_LOGS_ROOT):
-            # 非生产机上，审计逻辑仍要有实证——用夹具树再走一遍（上面 ③④ 已覆盖判据）
+            # 非生产机上，审计逻辑仍要有实证——用夹具树再走一遍（上面 ③④ 已覆盖判据）。
+            # 20260928 修（这一段此前**在任何地方都没绿过**）：真树那一支只在生产机上走
+            # （`logs/` 是绝对路径），而这里的期望值本身是错的、还叠了一个更根本的错：
+            #   · `stray.log` 被 `service-logs` 的 `*.log*` 认领——它**不是**"没人认领"的例子；
+            #   · `unregistered(f)` 用的是默认 CLASSES，而那些类的 root 是**生产的绝对路径**
+            #     ⇒ 整棵临时树一条都比不中，三条全报未登记（症状就是"期望 1 条、实得 3 条"）。
+            # 现在拆两步，都用模块的公开 API：① `matches`（它的 docstring 就写着刻意不看
+            # root、"配合 `--root` 覆盖到临时目录"，正是为这种场景留的）逐条问"这条归谁"；
+            # ② 把 logs 那批类的 root 改指到夹具上再走一遍 `unregistered`，端到端确认
+            # "没主人"的那条真被报出来。
             f = os.path.join(tmp, "logs")
             os.makedirs(os.path.join(f, "agent", "traces", "20260925"))
             open(os.path.join(f, "rust.log"), "w").write("x")
             open(os.path.join(f, "agent", "traces", "20260925", "t.json"), "w").write("{}")
-            open(os.path.join(f, "stray.log"), "w").write("x")
-            check("⑤ 夹具树：已登记的 0 条、没登记的 1 条（日志只在三处 glob 内）",
-                  rm.unregistered(f) == ["stray.log"], str(rm.unregistered(f)))
+            open(os.path.join(f, "stray.bin"), "w").write("x")
+            _logs = [c for c in rm.CLASSES if c["root"] == rm.DEFAULT_LOGS_ROOT]
+
+            def _claims(rel: str) -> list[str]:
+                return [c["key"] for c in _logs if rm.matches(rel, c)]
+
+            check("⑤ 夹具树：根下的 .log 归 service-logs（日志那三处 glob 真在管）",
+                  _claims("rust.log") == ["service-logs"], str(_claims("rust.log")))
+            check("⑤ 夹具树：trace 归 traces（不是被哪个宽 glob 顺手接走的）",
+                  _claims("agent/traces/20260925/t.json") == ["traces"],
+                  str(_claims("agent/traces/20260925/t.json")))
+            check("⑤ 夹具树：没有类认领的后缀，谁都不认（这正是「缺口」的形状）",
+                  _claims("stray.bin") == [], str(_claims("stray.bin")))
+            _reroot = [dict(c, root=f) if c["root"] == rm.DEFAULT_LOGS_ROOT else c
+                       for c in rm.CLASSES]
+            check("⑤ 夹具树：端到端只报出那一条没主人的（root 覆盖到临时目录）",
+                  rm.unregistered(f, _reroot) == ["stray.bin"],
+                  str(rm.unregistered(f, _reroot)))
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)

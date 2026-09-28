@@ -790,6 +790,12 @@ check("  并且要求「拿不准就照常选技能」（失败取向往能干�
       "拿不准就照常选技能" in _ctx_admin)
 
 print("\n⑪ 用户自己数据的四件：弹窗触发矩阵（20260928 契约精度修正）")
+# 密钥桩（20260928）：上一节收尾把密钥还原成 `_SAVED_SECRET`（本机 = .env 那份真密钥，
+# **CI 里没有 .env ⇒ 是空串**），而 `_confirm_popup` 要签令牌——空密钥签不出来就返回 None。
+# 少了这一行，本节四条"判不出来 + 目标有据 ⇒ 弹卡"会**全红，且红得与代码无关**（本机
+# 因为 .env 在而恒绿，CI 恒红——判据变成在测"这台机器有没有 .env"）。同族的桩见本文件
+# 开头 `_STUB_SECRET` 那段注释：CI 与生产在这里**必须被摆成同一个环境**。
+settings.jwt_secret = _STUB_SECRET
 # **为什么单列这一节**：审计（读码）判定 `favorite_add`/`favorite_remove`/`notice_read`/
 # `message_read`"实际**不**弹卡"，而技能描述里写着「由系统弹确认框问主人」。实测把这个
 # 结论反过来了一半，真相是**三档结局**：
@@ -866,6 +872,7 @@ check("非「一律弹窗」的写技能**不再**承诺「由系统弹确认框
 check("  且都写清了两档结局（判成明确命令就直接办）", not _missing_rule, str(_missing_rule))
 check("「一律弹窗」族没被顺手改成两档（它们的卡每轮都弹）",
       not _under_claim, str(_under_claim))
+settings.jwt_secret = _SAVED_SECRET   # 收尾还原（与其它节同一约定）
 
 print()
 if FAILED:

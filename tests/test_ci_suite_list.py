@@ -117,6 +117,52 @@ check("出厂档钉子还在（判据不跟运维取值走）",
       run_all._PINNED.get("PLANNER_ENGINE") == "text"
       and run_all._PINNED.get("AGENT_TASK_STATE") == "0", str(run_all._PINNED))
 
+print("\n④b 出厂环境：离线套件**不读 .env**（20260928）")
+# 为什么这一条和上面几条并列：CI 绿、本机绿，而**绿的理由不同**是同一族失效——
+# 实测那次是本机 `.env` 里有产线 `JWT_SECRET` ⇒ 弹窗签得出令牌 ⇒ `test_confirm.py`
+# 的弹窗矩阵恒绿；CI 没有 .env ⇒ 空密钥 ⇒ 同一片判据恒红（红得与代码无关）。
+# 这里验两半：**声明**（run_all 钉了它）+ **机制真的咬**（子进程里 .env 被跳过）。
+import json  # noqa: E402
+import subprocess  # noqa: E402
+
+check("run_all 给子进程设了 SAUDADE_IGNORE_ENV_FILE=1（环境由入口定义，不由这台机器定义）",
+      run_all._PINNED.get("SAUDADE_IGNORE_ENV_FILE") == "1", str(run_all._PINNED))
+# 子进程只回报**与声明默认值不同的字段名**，不回报值：`jwt_secret` / `*_api_key` 都在
+# 这批字段里，把值打进测试输出等于把凭据写进日志（本仓纪律：凭据一次都不许打印）。
+_PROBE = ("import json,sys;sys.path.insert(0,%r);"
+          "from config.settings import settings;"
+          "d=json.loads(%r);"
+          "print(json.dumps(sorted(k for k, v in d.items() "
+          "if str(getattr(settings, k)) != v)))")
+
+
+def _mismatch(ignore: bool) -> list[str] | None:
+    """子进程里 settings 与**声明的默认值**不同的字段名；子进程没跑成就 None。"""
+    env = dict(os.environ)
+    env.pop("SAUDADE_IGNORE_ENV_FILE", None)
+    if ignore:
+        env["SAUDADE_IGNORE_ENV_FILE"] = "1"
+    out = subprocess.run([sys.executable, "-c", _PROBE % (str(ROOT), json.dumps(_DEFAULTS))],
+                         cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=120)
+    if out.returncode != 0:
+        return None
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+from config.settings import Settings  # noqa: E402  （默认值从声明取，不手抄一份）
+
+# 全字段比较（不挑三个）：但凡 `.env` 能改的东西都在这条判据的作用范围内。
+_DEFAULTS = {k: str(f.default) for k, f in Settings.model_fields.items()}
+_factory = _mismatch(ignore=True)
+check("机制真的咬：带 SAUDADE_IGNORE_ENV_FILE=1 的子进程里，一个字段都不偏离默认值",
+      _factory == [], f"偏离的字段={_factory}")
+_ambient = _mismatch(ignore=False)
+if (ROOT / ".env").exists():
+    check("对照（本机有 .env）：不带那个变量时**确实有偏离**（否则这一整套是装饰）",
+          bool(_ambient), f"本机偏离的字段={_ambient}")
+else:
+    print("  ⏭  没有 .env（CI 就这样）⇒ 这一半无从对照；机制那半已在上一条验过")
+
 print("\n⑤ 三态守卫（tests/_parent_repo.py）本机行为")
 sys.path.insert(0, str(ROOT / "tests"))
 import _parent_repo  # noqa: E402
