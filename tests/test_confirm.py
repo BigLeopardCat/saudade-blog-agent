@@ -44,7 +44,8 @@ from agent import adminops as A
 from agent import authz
 from agent import confirm
 from agent import skills as S
-from agent.graph import _confirm_grant_plan, _confirm_popup, execute_node, parse_plan, plan_encode
+from agent.graph import (_confirm_grant_plan, _confirm_popup, execute_node,
+                         plan_state)
 from agent.skills import instantiate_plan  # noqa: E402
 from agent.principal import Principal
 
@@ -139,10 +140,14 @@ print("\n③ 弹窗从哪来（_confirm_popup）")
 check("前置探针：此刻密钥在位、签得出令牌（下面正例才有意义）",
       len(confirm.sign(7, 42, "tag_create", SPECS)) > 20)
 SPEC_STATUS = 'set_article_status({"article_id": 12, "status": "private"})'
-PLAN_STATUS = ('SKILL=article_status\nPARAMS={}\nTOOLS: ' + SPEC_STATUS
-               + '\nNOTE: x\nREPLY: y')
-PLAN_TAG = ('SKILL=tag_create\nPARAMS={}\nTOOLS: create_tag({"title": "测试标签", '
-            '"parent_id": null, "color": "#eb2f96"})\nNOTE: x\nREPLY: y')
+# 计划夹具改走**对象**（20260928 批 C）：`_plan_skill` 现在读 `state["plan_obj"]`，
+# 只喂契约文本的话技能名读成空串 ⇒ `confirm.sign` 拒签 ⇒ 正例全变 None（看起来
+# "全都符合预期"）。夹具与生产同路：对象经 `plan_state` 一次写两态。
+PLAN_STATUS = {"skill": "article_status", "params": {}, "tools": [SPEC_STATUS],
+               "note": "x", "reply": "y"}
+PLAN_TAG = {"skill": "tag_create", "params": {},
+            "tools": ['create_tag({"title": "测试标签", "parent_id": null, "color": "#eb2f96"})'],
+            "note": "x", "reply": "y"}
 CFG = {"configurable": {"principal": Principal(uid=7, role="admin"), "user_id": 7,
                         "conversation_id": 42, "stop_event": None}}
 EVID = ToolMessage(content="后台文章共 3 篇：\n- id=12 [私密]《架构文档》标签：",
@@ -150,9 +155,9 @@ EVID = ToolMessage(content="后台文章共 3 篇：\n- id=12 [私密]《架构�
 
 
 def _popup(msg, plan=PLAN_TAG, cfg=CFG, extra=(), principal=None):
-    st = {"messages": [HumanMessage(content=msg), *extra], "plan": plan,
+    st = {"messages": [HumanMessage(content=msg), *extra], **plan_state(plan),
           "plan_rounds": 0, "done": False}
-    return _confirm_popup(st, parse_plan(st["plan"])["tools"],
+    return _confirm_popup(st, list(plan["tools"]),
                           principal or Principal(uid=7, role="admin"), msg, cfg)
 
 p = _popup("一级标签，名字叫X，使用粉色颜色")
@@ -212,8 +217,10 @@ check("带壳的意图原句照样弹窗（壳不许把弹窗也一起弄哑）"
 # 同意闸恒不放行 ⇒ **弹窗是它唯一的执行途径**，而弹窗分叉被"要求"这个裸名词挡掉了
 # （旧表把裸名词当疑问锚）⇒ 连着四轮一份公告都没执行途径，planner 每轮改写一遍正文。
 # 这一节锁的是"这句话**必须**弹得出来"，判据在 is_question_like 那边（test_authz ⑨e）。
-PLAN_ANN = ('SKILL=announcement_create\nPARAMS={}\nTOOLS: create_announcement('
-            '{"title": "今晚不许熬夜！", "content": "全体用户今晚不许熬夜"})\nNOTE: x\nREPLY: y')
+PLAN_ANN = {"skill": "announcement_create", "params": {},
+            "tools": ['create_announcement({"title": "今晚不许熬夜！", '
+                      '"content": "全体用户今晚不许熬夜"})'],
+            "note": "x", "reply": "y"}
 check("公告原句弹得出卡（裸名词「要求/注意」不是疑问锚）：一字不改的两条生产原句 + 两条",
       _popup("小猫咪替我发一个公告要求全体用户今晚不许熬夜，以你的口吻声明",
              PLAN_ANN) is not None
@@ -254,13 +261,14 @@ check("点名 12 而计划写 12 → 弹（判据只否决不一致）",
 check("主人没点名（纯指代）→ 弹（判据不启用，行为与改动前一致）",
       _popup("《架构文档》我想改成私密", PLAN_STATUS, extra=(EVID2,)) is not None)
 check("参数含 $ref → 不弹（令牌签不出来，退回追问）",
-      _popup("改一下文章标签", 'SKILL=article_tags\nPARAMS={}\nTOOLS: '
-             'set_article_tags({"article_id": 12, "add": ["$list_tags[0].name"]})'
-             '\nNOTE: x\nREPLY: y', extra=(EVID,)) is None)
+      _popup("改一下文章标签", {"skill": "article_tags", "params": {},
+                              "tools": ['set_article_tags({"article_id": 12, '
+                                        '"add": ["$list_tags[0].name"]})'],
+                              "note": "x", "reply": "y"}, extra=(EVID,)) is None)
 check("确认轮自己（confirm_grant 在场）→ 不弹（否则点完确定又弹一个）",
       _confirm_popup({"messages": [HumanMessage(content="确认执行：建标签")],
-                      "plan": PLAN_TAG, "confirm_grant": {"skill": "tag_create",
-                                                          "specs": SPECS}},
+                      **plan_state(PLAN_TAG), "confirm_grant": {"skill": "tag_create",
+                                                                "specs": SPECS}},
                      [{"tool": "create_tag", "args": {"title": "X"}}],
                      Principal(uid=7, role="admin"), "确认执行：建标签", CFG) is None)
 
@@ -304,7 +312,7 @@ try:
         _base.ok("已修改文章 12：私密 → 公开（后台已复核读到新值）"))
     grant_cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
                                  "user_id": 7, "conversation_id": 42, "stop_event": None}}
-    grant_state = {"plan": PLAN_STATUS, "plan_rounds": 1, "done": False,
+    grant_state = {**plan_state(PLAN_STATUS), "plan_rounds": 1, "done": False,
                    "messages": [HumanMessage(content="确认执行：修改文章 12")],
                    "confirm_grant": {"skill": "article_status", "specs": [
                        {"tool": "set_article_status",
@@ -317,7 +325,7 @@ try:
 
     # 权限不放行：非 admin 拿着同一份 grant 照样被硬拦
     CALLS.clear()
-    r2 = execute_node({**grant_state, "plan": PLAN_STATUS},
+    r2 = execute_node({**grant_state, **plan_state(PLAN_STATUS)},
                       {"configurable": {"principal": Principal(uid=9, role="user"),
                                         "user_id": 9, "conversation_id": 42,
                                         "stop_event": None}})
@@ -385,8 +393,8 @@ _GRANT = {"skill": "article_status", "specs": [
     {"tool": "set_article_status", "args": {"article_id": 12, "status": "private"}}]}
 _ROUTE_CASES = [
     ("planner", route_after_planner, PLANNER_ROUTES, [
-        {"plan": PLAN_STATUS},
-        {"plan": plan_encode(instantiate_plan("chat", {}))}]),
+        {**plan_state(PLAN_STATUS)},
+        {**plan_state(instantiate_plan("chat", {}))}]),
     ("execute", route_after_execute, EXECUTE_ROUTES, [
         {"blocked": []}, {"blocked": [], "confirm_grant": _GRANT},
         {"blocked": [], "pending_confirm": {"q": "?", "token": "t"}},
@@ -487,7 +495,7 @@ try:
     check("  结论读得出时走快道：不进目标定死模式（forced 必须为 None）",
           _forced is None and _plan_obj is not None, str(_forced)[:80])
     _r = execute_node({"messages": [HumanMessage(content="小猫咪按你想法来吧")],
-                       "plan": plan_encode(_plan_obj), "plan_rounds": 0, "done": False,
+                       **plan_state(_plan_obj), "plan_rounds": 0, "done": False,
                        "receipts": []}, CFG)
     check("授权式 + 台账唯一待审 ⇒ 执行前弹确认框（授权不等于替主人签字）",
           isinstance(_r, dict) and "pending_confirm" in _r,
@@ -808,10 +816,12 @@ _EV_NOTIF = ToolMessage(content="站内通知（未读 1）：notifId:23《留�
 
 
 def _own_popup(skill, spec, msg, ev):
-    plan = f'SKILL={skill}\nPARAMS={{}}\nTOOLS: {spec}\nNOTE: x\nREPLY: y'
+    # 手拼**对象**（20260928 批 C）：此前手拼契约文本，`_plan_skill` 改读 `plan_obj`
+    # 之后那份文本读不出技能名 ⇒ 令牌签不出来。夹具与生产同路：走 `plan_state`。
+    obj = {"skill": skill, "params": {}, "tools": [spec], "note": "x", "reply": "y"}
     msgs = [HumanMessage(content=msg)] + ([ev] if ev is not None else [])
-    st = {"messages": msgs, "plan": plan, "plan_rounds": 0, "done": False}
-    return _confirm_popup(st, parse_plan(plan)["tools"],
+    st = {"messages": msgs, **plan_state(obj), "plan_rounds": 0, "done": False}
+    return _confirm_popup(st, obj["tools"],
                           Principal(uid=7, role="admin"), msg, CFG)
 
 

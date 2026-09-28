@@ -285,6 +285,12 @@ class AgentState(TypedDict):
 
     messages: Annotated[list, add_messages]
     plan: str
+    # plan_obj: 本轮计划的**结构化那一态**（`plan_state` 与 `plan` 一次写入，20260928
+    #           批 C）：`plan` 是给人和提示词看的契约文本，`plan_obj` 是给程序读的
+    #           字段（skill/tools/params/status/…）。读端要拿字段就读这个，**不要**再
+    #           从 `plan` 文本里抠 `SKILL=`/`TOOLS: `（那三处已于 20260928 改掉，
+    #           见 `plan_state` 头注）。缺省 `{}` = 本轮没有计划（graph_input 的初值）。
+    plan_obj: dict
     plan_rounds: int
     done: bool
     executed: list[str]
@@ -1182,6 +1188,33 @@ def plan_encode(plan_obj: dict) -> str:
         lines.append(f"TODO: {' → '.join(todo)}")
     lines.append(f"REPLY: {plan_obj['reply']}")
     return "\n".join(lines)
+
+
+def plan_state(plan_obj: dict) -> dict:
+    """**写计划的唯一入口**：同一份计划出两态，一次写入——人读的契约文本
+    （`plan`，进提示词/进 trace/进测试夹具）＋ 程序读的结构化对象（`plan_obj`）。
+
+    **为什么要有它（20260928，架构审计第 ② 条的一半）**：此前 24 个计划构造点各自写
+    `{"plan": plan_encode(plan_obj), …}`，而**读端**要拿其中某个字段时只能再去抠那段
+    文本——`server.py` 用 `plan.startswith("SKILL=")` 判"这是不是一份真计划"、
+    `"\nTOOLS: " in plan` 判"有没有执行清单"，`_plan_skill` 又自己写了一条
+    `SKILL=` 正则（与 `parse_plan` 里那条是两份拷贝）。三处都是"改 `plan_encode`
+    的排版必须同步改三个读端"的人工约定。现在读端直取 `state["plan_obj"]`。
+
+    **两态必须**由这一处一起给**（而不是各构造点自己填两遍）：文本是派生物，
+    谁漏了 `plan_obj` 谁就让读端退回文本抠字——`tests/test_plan_channel.py` 用源码锁
+    钉住"`plan_encode` 只许在这个函数里被调用"，构造点想绕开它就得先删掉那条锁。
+
+    ⚠️ 别把 `plan_obj` 当成"文本的缓存"来用后又去改它：它进了 state 就是**程序读
+    计划的首选**来源，两态一旦分叉，判据会照着对象走、而人照着文本吵。
+
+    **文本仍然有人读**（别把"改掉三处"读成"文本没人读了"）：`plan` 进 narrator
+    提示词（`_narrator_plan`）、进 trace、进测试夹具；`parse_plan` 这个**容错全解析器**
+    仍在 `route_after_planner`/`execute_node`/`gate_node`/`_wrote_this_round` 四处用它
+    （它按 `KEY[:=]` 搜索、不依赖行序与分隔符，是"契约的读端"而不是"排版的嗅探"）。
+    批 C 治的是**排版嗅探**，不是要废掉文本态。
+    """
+    return {"plan": plan_encode(plan_obj), "plan_obj": plan_obj}
 
 
 def _parse_todo(raw: str) -> list:
@@ -3247,7 +3280,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             plan_obj = _wrap_up_plan(_has_frames(state["messages"]))
             record("planner", "confirm_wrap", rounds=rounds,
                    reason="确认轮执行受阻，不重发清单")
-        return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
+        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
 
     user_msg = _last_user_msg(state["messages"])
     # 意图清单的**消息来源**（20260927）：确认兑现轮读主人原话，其余轮同 `user_msg`。
@@ -3284,7 +3317,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     if rounds >= MAX_PLAN_ROUNDS:
         plan_obj = _wrap_up_plan(has_frames)
         logger.info("[planner] 规划轮次上限(%d)，强制收尾", MAX_PLAN_ROUNDS)
-        return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
+        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
 
     # 确定性快道只在首轮（rounds==0 且本轮尚无任何工具帧）判定——execute 完成
     # 后控制权回到 planner 时若再命中快道，会重复规划同一动作 → 死循环
@@ -3295,14 +3328,14 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if nav is not None:
             logger.info("[planner] 导航快道命中（零 LLM）: %s", nav["tools"])
             record("planner", "fastpath", kind="nav", tools=nav["tools"], round=rounds)
-            return {"plan": plan_encode(nav), "plan_rounds": rounds + 1, "done": False}
+            return {**plan_state(nav), "plan_rounds": rounds + 1, "done": False}
 
         # 显示意图确定性快道（零 LLM）：屏幕类名词+写/显示动词强模式 →
         # device_display 计划（内容由 execute 创作，PARAMS 不填 text）。
         display = _display_fast_path(user_msg)
         if display is not None:
             record("planner", "fastpath", kind="display", round=rounds)
-            return {"plan": plan_encode(display), "plan_rounds": rounds + 1, "done": False}
+            return {**plan_state(display), "plan_rounds": rounds + 1, "done": False}
 
         # 授权式审查快道（零 LLM，20260923 P2）：主人说"你看着办"+上一轮提议是复核
         # 留言+台账里恰好 1 条待审+结论能从那句提议里读出 ⇒ 系统直接拼计划；写操作
@@ -3311,7 +3344,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if auth_plan is not None:
             record("planner", "fastpath", kind="auth_pending_review",
                    tools=auth_plan["tools"], round=rounds)
-            return {"plan": plan_encode(auth_plan), "plan_rounds": rounds + 1, "done": False}
+            return {**plan_state(auth_plan), "plan_rounds": rounds + 1, "done": False}
 
         # 当前文章读取确定性快道（零 LLM，20260901 系统性修复）：用户当前页面是
         # 文章详情页且消息引用"这篇/我正在读"等 → read_article 计划，TOOLS 行
@@ -3320,7 +3353,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         article = _article_fast_path(user_msg, page_ctx)
         if article is not None:
             record("planner", "fastpath", kind="article_read", tools=article["tools"], round=rounds)
-            return {"plan": plan_encode(article), "plan_rounds": rounds + 1, "done": False}
+            return {**plan_state(article), "plan_rounds": rounds + 1, "done": False}
 
         # 特效切换确定性快道（零 LLM，20260904）：把 X 换成/改成 Y → 关旧开新
         # 双 spec 同轮（planner LLM 反复丢目标效果半边，见 _effect_switch_fast_path）。
@@ -3328,7 +3361,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         switch = _effect_switch_fast_path(user_msg, eff_cur.group(1) if eff_cur else "")
         if switch is not None:
             record("planner", "fastpath", kind="effect_switch", tools=switch["tools"], round=rounds)
-            return {"plan": plan_encode(switch), "plan_rounds": rounds + 1, "done": False}
+            return {**plan_state(switch), "plan_rounds": rounds + 1, "done": False}
 
     # LLM 决策轮。低温度（分类不需要创造力）、小 max_tokens、短超时。
     # enable_thinking=False：planner 是"选技能+填参数"的结构化分类任务（300 token
@@ -3460,7 +3493,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 has_frames,
                 note=_ask_verdict_note(auth_forced)
                 if auth_forced and not has_frames else "")
-            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
+            return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
         # 20260830：慢调用监控——>30s 打 WARN（正常 <5s，慢=服务端排队/长思考，
         # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）。
         # native 档的阈值走 settings（20260927）：它的 timeout 本就是 60s，沿用 30 会让
@@ -3575,7 +3608,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                        round=rounds, frames=has_frames)
                 logger.info("[planner] 撤下改判为完成：%s（本轮回执已覆盖它剩下的步骤，"
                             "不撤、不发帧，交给流尾结算）", decl.get("goal"))
-                return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                         "done": False, "task_frame": {}}
             if (not _cancelled and not decl.get("pending_question")
                     and not has_frames and not correction):
@@ -3608,7 +3641,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                         decl.get("goal"), len(decl.get("steps") or []),
                         decl.get("state"), bool(decl.get("pending_question")),
                         frame.get("task_id") or "（未落库）")
-            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False,
+            return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False,
                     "task_frame": frame}
 
         # role 必须传：calls 白名单按角色取（管理员含后台只读项）。漏传 = 静默剔空。
@@ -3681,7 +3714,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 record("planner", "auth_forced_miss", reason=missed,
                        skill=plan_obj.get("skill"), round=rounds)
                 plan_obj = _wrap_up_plan(False, note=_ask_verdict_note(auth_forced))
-                return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                         "done": False}
             record("planner", "auth_forced_plan", round=rounds,
                    verdict=_tool_args(plan_obj["tools"][0])[0].get("verdict"))
@@ -3693,7 +3726,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 一条待审）+ 弹窗签字（他会看见那条留言的序号/作者/原文）。让它们跑一遍
             # 只会拿"主人这句话里没有片段"把这一轮拒掉，并把主人的诉求变成一句
             # "请把那条留言的原话抄一小段给我"。
-            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
 
         # 写操作的目标按名字解不出来 → 不弹窗、不执行，直接确定性如实收尾
@@ -3789,7 +3822,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # （20260922 实测：正是本函数要修的那条用例把整轮打成 __ERROR__，
             # 与 20260921 22:37 的 KeyError('model') 同一类错——"分支走通了、
             # 收尾路径没走通"，故 test_skills 里也补了假 LLM 整轮锁）。
-            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
 
         # 参数不齐 → 同轮纠偏重决策（20260926）：与剔空纠偏**同一条通道**，因为
@@ -3865,7 +3898,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             "说清缺的是什么（需要用户指明是哪一篇/需要博主身份/站内没有这项数据），"
             "并请用户补充信息。**不许**出现「看过/读过/查过/检索过/调用过工具」"
             "这类说法，也不许描述你做了哪些步骤。"))
-        return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
+        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
 
     if plan_obj.get("param_problem") and not plan_obj["tools"]:
         # 纠偏之后参数仍然不齐：这一轮**确实没有可执行的计划**。确定性如实收口
@@ -3905,7 +3938,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             "查过/调用过工具」这类说法，也不许描述你做了哪些步骤；"
             "**不许**把参数名（如 target）当成人话念出来，也**不许**下"
             "「站内没有这个页面/不存在」这类结论——参数不齐不代表页面不存在。"))
-        return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
+        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
 
     # 字面路径防推断兜底（确定性修正，保留自旧架构）：用户消息里出现 / 开头的
     # 路径且 planner 选了 navigate 时，target 必须原样用该路径——qwen 曾把
@@ -3950,7 +3983,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 logger.info("[planner] 动作已执行（%s），去重收尾",
                             "、".join(sorted(planned_names)))
                 plan_obj = _wrap_up_plan(True)
-                return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                         "done": False}
             logger.info("[planner] 动作重复（%s）但意图清单仍有未完成项（%s）→ 不收尾",
                         "、".join(sorted(planned_names)),
@@ -3969,7 +4002,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             plan_obj = _wrap_up_plan(
                 True, "本轮已取回的报表数据就在上方工具返回里（快照型只读，"
                       "重复调用拿回同一份数据），基于已有返回如实作答")
-            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
 
     # 后台写技能重复规划防护（20260921 第二轮，与上一条同源、判据**更严**）：
@@ -3988,7 +4021,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                       "照它如实报告改的是哪一篇、从什么变成什么。"
                       "**不要**再说「正在改」，被问到时也不许否认；"
                       "若还有没改的，说清楚哪一件没做。")
-            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
 
     # 检索重复清单拦截（20260903 golden 实证：rag_arch_ports planner 把同一
@@ -4021,7 +4054,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                     True, "该数据工具本轮已执行过（数据已在上方工具返回里），"
                           "基于已有返回如实作答，不重复调用。" + _no_popup_fact(state))
                 record("planner", "intercept", reason=kind, dups=dups, redirected=False)
-                return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+                return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                         "done": False}
             terms = _search_terms(plan_obj, executed, user_msg)
             cand = _candidate_detail_plan(state["messages"], executed, terms)
@@ -4037,7 +4070,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 plan_obj = cand
             record("planner", "intercept", reason=kind, dups=dups,
                    terms=sorted(terms), redirected=cand is not None)
-            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
 
     # 只读重复执行裁剪（20260925，用户拍板"按 A 方案修"）：见 _trim_done_reads 头注。
@@ -4056,7 +4089,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                       "只取一次，重复调用拿回的是同一份数据），基于已有返回如实作答")
             record("planner", "intercept", reason="read_repeat", dups=done_specs,
                    redirected=False)
-            return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1,
+            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
         logger.info("[planner] 只读工具重复（%s）→ 从本轮清单剔除，只执行 %s",
                     "、".join(_tool_name(s) for s in done_specs),
@@ -4079,7 +4112,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
            status=plan_obj.get("status") or "",
            **({"native_note": native_note} if native_note else {}))
 
-    return {"plan": plan_encode(plan_obj), "plan_rounds": rounds + 1, "done": False}
+    return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
 
 
 # ---------------------------------------------------------------------------
@@ -6366,10 +6399,21 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
 
 
 def _plan_skill(state: AgentState) -> str:
-    """当前计划的技能名（plan 文本第 1 行 SKILL=…）——令牌里带着它，执行轮据此
-    拼计划，**不靠模型回忆**。取不到给空串（sign 会拒绝签发）。"""
-    m = re.search(r"SKILL\s*=\s*(\S+)", state.get("plan", "") or "")
-    return m.group(1) if m else ""
+    """当前计划的技能名——令牌里带着它，执行轮据此拼计划，**不靠模型回忆**。
+    取不到给空串（sign 会拒绝签发）。
+
+    20260928 批 C：从 `state["plan_obj"]` 直取（`plan_state` 与文本一次写入），
+    不再自己拿正则去抠 `plan` 文本——此前这里那条正则与 `parse_plan` 里那条是
+    **两份拷贝**，改一处漏一处就会让"签发的技能"与"执行的技能"悄悄分家。于是
+    `plan_encode` 的排版（它把 SKILL 写成第几行、用 `=` 还是 `:`）**不再**是这里的
+    成立前提：那条隐式契约随本次改动消失，`tests/test_plan_channel.py` 钉住它。
+
+    ⚠️ **故意不回落去解析 `plan` 文本**：没有 `plan_obj` 就是"本轮没有计划"（初值
+    `{}`，`graph_input`），给空串让 `sign` 拒绝签发。回落解析会把"改造前留在 state 里
+    的旧计划文本"当成有效计划——而那种文本恰恰是本函数**认不出**的那一类（旧格式、
+    或技能名不在注册表里），解析它等于把一条猜出来的技能名签进令牌。
+    """
+    return str((state.get("plan_obj") or {}).get("skill") or "")
 
 
 def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
@@ -6786,7 +6830,7 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
         """确定性收尾计划 + reflect_end → model。记录后无 LLM，绝不静默 accept。"""
         plan_obj = _terminal_plan(has_frames, reason)
         logger.info("[reflector] 终局收尾（%s）", reason)
-        return {"plan": plan_encode(plan_obj), "issues": "",
+        return {**plan_state(plan_obj), "issues": "",
                 "reflect_rounds": new_rounds, "reflect_end": True}
 
     if rounds >= REFLECT_MAX_ROUNDS or not blocked:
@@ -7567,7 +7611,8 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
     **由 server.py 按它实际注入的内容原样传入**——判据看的是"系统给模型看过什么"，
     两个来源各算各的必然对不上（洞⑦ 的假阴性/误伤都从这里来）。
     """
-    return {"messages": messages, "plan": "", "plan_rounds": 0, "done": False,
+    return {"messages": messages, "plan": "", "plan_obj": {}, "plan_rounds": 0,
+            "done": False,
             "executed": [], "receipts": [], "blocked": [], "blocked_seen": [],
             "blocked_repeat": False, "reflect_rounds": 0, "issues": "",
             "reflect_end": False, "tool_data": [], "fallback_text": "",

@@ -41,7 +41,7 @@ from agent import adminops as A  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.graph import (EXECUTED_ONCE_SKILLS, SNAPSHOT_SKILLS,  # noqa: E402
                          _CONTENT_TOOLS, _already_done_writes, _check_spec,
-                         execute_node, plan_encode)
+                         execute_node, plan_state)
 from agent.principal import ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, Principal  # noqa: E402
 from agent.skills import instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
@@ -732,15 +732,16 @@ class _FakeTool:
 
 
 def _plan(tools_list, skill="article_status"):
+    """改后返回**对象**（20260928 批 C：夹具与生产同路，经 `plan_state` 一次写两态）。"""
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
     obj["skill"] = skill
     obj["tools"] = tools_list
-    return plan_encode(obj)
+    return obj
 
 
 def _run(tools_list, msg, config, extra_msgs=(), skill="article_status"):
     CALLS.clear()
-    return execute_node({"plan": _plan(tools_list, skill),
+    return execute_node({**plan_state(_plan(tools_list, skill)),
                          "plan_rounds": 1, "done": False,
                          "messages": [HumanMessage(content=msg), *extra_msgs]},
                         config)
@@ -904,7 +905,7 @@ check("authz.enforcing(decision.scope) 三处（shadow/硬拦/弹窗前置筛）
 print("\n⑭ 参数类型非法：产错误帧如实退回 planner，绝不炸图")
 
 CALLS.clear()
-_typed = execute_node({"plan": _plan(['set_article_status({"article_id": 12, "is_top": "也许"})']),
+_typed = execute_node({**plan_state(_plan(['set_article_status({"article_id": 12, "is_top": "也许"})'])),
                        "plan_rounds": 1, "done": False,
                        "messages": [HumanMessage(content="把文章 12 置顶")]},
                       cfg())
@@ -1026,9 +1027,15 @@ check("不在名字表里的写工具不受这一条约束（文章族走 target
 
 
 def _popup(spec, msg, uid=7, role=ROLE_ADMIN):
-    """跑一次 `_confirm_popup`（真判据 + 真签发，假的是标签字典与后端）。"""
+    """跑一次 `_confirm_popup`（真判据 + 真签发，假的是标签字典与后端）。
+
+    计划夹具走 `plan_state`（20260928 批 C）：`_plan_skill` 现在读 `state["plan_obj"]`，
+    只喂契约文本的话技能名读成空串 ⇒ `confirm.sign` 拒签 ⇒ 该弹的全变 None
+    （看起来"符合预期"，其实是密钥/技能名两件事长得一样）。
+    """
     return g._confirm_popup(
-        {"plan": "SKILL=tag_delete\nPARAMS={}\nTOOLS: \nNOTE: \nREPLY: 直接回答"},
+        {**g.plan_state({"skill": "tag_delete", "params": {}, "tools": [],
+                         "note": "", "reply": "直接回答"})},
         [spec], Principal(uid=uid, role=role), msg,
         {"configurable": {"user_id": uid, "conversation_id": 42}})
 

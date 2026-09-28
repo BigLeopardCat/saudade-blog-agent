@@ -39,7 +39,7 @@ sys.path.insert(0, str(ROOT))
 import agent.graph as g  # noqa: E402
 from agent import adminops as A  # noqa: E402
 from agent import authz, confirm  # noqa: E402
-from agent.graph import execute_node, plan_encode  # noqa: E402
+from agent.graph import execute_node, plan_state  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
 from agent.skills import _FREE_TEXT_WRITE_SKILLS, instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
@@ -509,7 +509,7 @@ def _run(msg, spec, grant=None):
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
     obj["skill"] = "dashboard_todo_add"
     obj["tools"] = [spec]
-    state = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+    state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content=msg)]}
     if grant:
         state["confirm_grant"] = grant
@@ -946,7 +946,7 @@ try:
             obj = instantiate_plan("navigate", {"target": "物联网平台"})
             obj["skill"] = "dashboard_todo_done"
             obj["tools"] = [_SPEC_DONE]
-            state = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+            state = {**plan_state(obj), "plan_rounds": 1, "done": False,
                      "messages": [HumanMessage(content=msg)]}
             r = execute_node(state, cfg())
             pop = r.get("pending_confirm") or {}
@@ -967,7 +967,7 @@ try:
         obj = instantiate_plan("navigate", {"target": "物联网平台"})
         obj["skill"] = "dashboard_todo_done"
         obj["tools"] = [_SPEC_DONE]
-        state = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+        state = {**plan_state(obj), "plan_rounds": 1, "done": False,
                  "messages": [HumanMessage(content="把交房租那条勾了")]}
         with patch(_admin_get=lambda p, c: base.unavailable("读不到")):
             r = execute_node(state, cfg())
@@ -981,7 +981,7 @@ try:
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
     obj["skill"] = "dashboard_todo_done"
     obj["tools"] = [_SPEC_DONE]
-    state = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+    state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content="交房租办完了")],
              "confirm_grant": {"token": "x"}}
     r = execute_node(state, cfg())

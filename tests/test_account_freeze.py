@@ -27,7 +27,7 @@ import agent.adminops as A  # noqa: E402
 import agent.graph as g  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import (_RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec,  # noqa: E402
-                         plan_encode)
+                         plan_state)
 from agent.principal import ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, Principal  # noqa: E402
 from agent.skills import PLAN_STATUS_ABSENCE_EXEMPT, instantiate_plan  # noqa: E402
 
@@ -692,7 +692,7 @@ check("  两个账号技能都在名字通道名单里（不在 = 展开器尾�
 print("\n⑰ 真实 execute 路径弹卡：第 1 轮零执行 + 令牌载荷就是这一件")
 from langchain_core.messages import HumanMessage  # noqa: E402
 from agent import confirm as _confirm  # noqa: E402
-from agent.graph import execute_node, plan_encode  # noqa: E402
+from agent.graph import execute_node, plan_state  # noqa: E402
 _CALLS: list = []
 
 
@@ -710,7 +710,7 @@ def _run_exec(msg, spec, skill="account_freeze", grant=None):
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
     obj["skill"] = skill
     obj["tools"] = [spec]
-    state = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+    state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content=msg)]}
     if grant:
         state["confirm_grant"] = grant
