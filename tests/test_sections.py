@@ -19,6 +19,10 @@
   ⑧ 列表帧的紧凑渲染（20260921）：超预算的列表帧**一行一条**、按**整行**取舍、
      末尾如实标注「共 N 条」——旧路径是 `text[:300]` 裸切，会在一条记录中间断掉，
      planner 既读不出后半条的 id、也看不出后面还有多少条。
+  ⑨ 「我自己的数据」帧（20260928）：信封**按结构认**（不再只看四个键名——`unread_items`
+     就在那份清单之外，于是 ⑧ 那套渲染在一个真工具上从未生效）；预算与字段上限按
+     **工具自报的上限**派生、族按 scope 认（`read.own`）。真事故：未读三条只进了两条，
+     narrator 回了「系统返回的数据里被截断了，我这边看不到具体内容」。
 """
 import ast
 import re
@@ -29,7 +33,8 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统�
 sys.path.insert(0, str(ROOT))
 
 from agent import sections                       # noqa: E402
-from agent.context import _DETAIL_FRAME_PER, _frame_texts  # noqa: E402
+from agent.context import (_DETAIL_FRAME_PER, _compact_list_frame,  # noqa: E402
+                           _frame_texts)
 from agent.decisions import _doc_title           # noqa: E402
 from agent.refs import parse_data                 # noqa: E402
 from langchain_core.messages import ToolMessage  # noqa: E402
@@ -296,6 +301,89 @@ check("非列表短文本原样透出（不套列表标注）",
       cshort.endswith("EFFECT:sakura:on") and "节选" not in cshort, cshort)
 clong = _frame_texts([ToolMessage(content="命令帧" * 200, name="x", tool_call_id="c5")])
 check("非列表长文本仍走「节选，原文 N 字」老路径", "节选，原文" in clong, clong[:60])
+
+print("⑨ 「我自己的数据」帧：结构认信封 + 不比工具愿意给的更小（20260928）")
+# 被锁住的问题（真实 trace `20260928T175240`，下面这份就是那次返回的逐字形状）：
+# 主人问「看看我的未读信息都有哪些」，工具返回三条未读俱全（566 字），而帧被 per=300
+# **在第二条的 dict 中间**切断 ⇒ 第三条整条没进提示词，narrator 如实回了「还有一条
+# 未读通知，系统返回的数据里被截断了，我这边看不到具体内容呢」。两处根因各自钉一条：
+#   ① 认信封只看四个键名（data/records/list/items），这个工具的信封键是
+#      `unread_items` ⇒ 20260921 那套"一行一条 + 共 N 条"在它身上从未生效，退化成裸切；
+#   ② 300 字对这族"计数 + 明细"的帧只装得下一条——而明细就是答案本体（驳回理由写在
+#      content 里）。预算与字段上限改按**工具自报的上限**派生，族按 scope 认。
+_UNREAD_ROWS = [
+    {"id": 102, "type": "notice", "title": "留言已通过审核",
+     "content": "你的留言「博主是大笨狗」已通过审核，现在可以在留言板看到了。",
+     "link": "/guestbook?lid=100", "createdAt": "2026-09-26 17:18:26"},
+    {"id": 101, "type": "notice", "title": "留言未通过审核",
+     "content": "你的留言「博主是SB」未通过审核，理由：包含辱骂攻击性词汇",
+     "link": "/guestbook?lid=99", "createdAt": "2026-09-26 17:15:12"},
+    {"id": 100, "type": "notice", "title": "留言已通过审核",
+     "content": "你的留言「垃圾博客」已通过审核，现在可以在留言板看到了。",
+     "link": "/guestbook?lid=97", "createdAt": "2026-09-26 17:13:39"},
+]
+_UNREAD = str({"notifications": 3, "messages": 0, "total": 3, "pendingReview": 0,
+               "unread_items": _UNREAD_ROWS})
+cu = _frame_texts([ToolMessage(content=_UNREAD, tool_call_id="c8",
+                               name="get_unread_summary")])
+check("三条未读**全部**进帧（真事故那次第三条整条不见了）",
+      all(f"id={i} " in cu for i in (102, 101, 100)), cu[:120])
+check("不再退化成半截 JSON（那次的 frame 是 `…'co` 断在第二条中间）",
+      "节选" not in cu and "…" not in cu, cu[-80:])
+check("抬头仍是计数（notifications=3 与明细同在）",
+      "notifications=3" in cu and cu.index("notifications=3") < cu.index("id=102"))
+# ① 的结构判据：键名不在那份清单里也认（清单必有滞后，这正是上次失效的形状）
+_rec = str({"weird_key": [{"a": 1, "b": "x"}]})
+_c1 = _frame_texts([ToolMessage(content=_rec, name="get_unread_summary", tool_call_id="c9")])
+check("信封键名不在已知清单里也按列表渲染（结构判据，不是键名清单）",
+      "a=1" in _c1 and "b=x" in _c1, _c1)
+_multi = str({"x": [{"a": 1}], "unread_items": [{"b": 2}]})
+check("多个候选数组时不猜（宁可回普通文本，也不挑一个当明细）",
+      _compact_list_frame(_multi, 300) is None)
+_known = str({"items": [{"a": 1}], "other": [{"b": 2}]})
+check("已知键名优先（既有行为不破：items 赢）",
+      "a=1" in _frame_texts([ToolMessage(content=_known, name="list_notifications",
+                                         tool_call_id="c11")]))
+# ② 的族判据：按 scope 声明派生，**不手写工具名清单**（逐个工具核，不是抽样）
+from agent.authz import SCOPE_READ_OWN, TOOL_SCOPE  # noqa: E402
+from agent.context import _frame_view              # noqa: E402
+_own = sorted(t for t, s in TOOL_SCOPE.items() if s == SCOPE_READ_OWN)
+_bad = [t for t, s in TOOL_SCOPE.items()
+        if (s == SCOPE_READ_OWN) != (_frame_view(t, 300)[0] > 300)]
+check(f"大预算严格跟着 scope 走（read.own 共 {len(_own)} 个工具，其余一个都不沾）",
+      not _bad, "、".join(_bad))
+check("非 read.own 的预算与字段上限原样不动（300 / 60）",
+      _frame_view("list_notes", 300) == (300, 60)
+      and _frame_view("x", 300) == (300, 60), str(_frame_view("list_notes", 300)))
+# 字段上限跟着工具自己的正文上限走：120 字不截（60 字会截）
+_long = "驳" * 120
+_cl = _frame_texts([ToolMessage(content=str({"unread_items": [
+    {"id": 1, "content": _long}]}), name="get_unread_summary", tool_call_id="c12")])
+_cn = _frame_texts([ToolMessage(content=str({"items": [
+    {"id": 1, "content": _long}]}), name="x", tool_call_id="c13")])
+check("read.own 帧里 120 字正文不截（工具自己就是截到 120）", _long in _cl, _cl[-40:])
+check("对照：默认族同样长度仍截到 60（不是把全局上限抬了）",
+      _long not in _cn and "…" in _cn, _cn[-40:])
+# 与工具侧的两个上限对账：它们变了，上面的预算就该重算（这条红着提醒）
+from tools.base import _UNREAD_CONTENT_MAX, _UNREAD_ITEMS_MAX  # noqa: E402
+from agent.context import _OWN_DATA_FIELD_CAP, _OWN_DATA_FRAME_PER  # noqa: E402
+check("字段上限 == 工具的正文上限（_UNREAD_CONTENT_MAX）",
+      _OWN_DATA_FIELD_CAP == _UNREAD_CONTENT_MAX,
+      f"{_OWN_DATA_FIELD_CAP} vs {_UNREAD_CONTENT_MAX}")
+# 预算够不够：拿工具自己的条数上限造满，实拍一次不出现节选标注就算够
+_full = str({"notifications": _UNREAD_ITEMS_MAX, "messages": 0,
+             "total": _UNREAD_ITEMS_MAX, "pendingReview": 0,
+             "unread_items": [dict(_UNREAD_ROWS[1], id=200 + i, content=_long)
+                              for i in range(_UNREAD_ITEMS_MAX)]})
+_cf = _frame_texts([ToolMessage(content=_full, name="get_unread_summary", tool_call_id="c14")])
+check(f"工具的条数上限（{_UNREAD_ITEMS_MAX} 条 × 正文顶格）也装得下",
+      "节选" not in _cf, f"帧长 {len(_cf)} / 预算 {_OWN_DATA_FRAME_PER}")
+# 大预算**不是**把"装不下就说清楚"换掉：100 条的通知列表照样整行取舍 + 标注
+_many = str({"unread": 100, "items": [{"id": i, "title": "第%d条" % i,
+                                       "content": _long} for i in range(100)]})
+_cm = _frame_texts([ToolMessage(content=_many, name="list_notifications", tool_call_id="c15")])
+check("100 条的帧仍按整行取舍 + 「节选：显示前 K 条，共 100 条」",
+      "节选：显示前" in _cm and "共 100 条" in _cm, _cm[-60:])
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
