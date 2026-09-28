@@ -10,14 +10,16 @@
    也要认得出"——完成帧此前会说成"标记站内通知已读"、不带对象，与预告帧不一致）；
 ② **台账行（full）**：逐条抄自父仓 `chat.rs` 的 `#[cfg(test)]` 期望值——那份期望是
    Rust 侧多年攒下来的契约（跨轮执行记忆里出现过的字），Python 接管后必须一一对上，
-   抄在这里才可能在**改 Python 时立刻知道哪一条的字会变**（三处**有意**偏离都写在
-   断言旁，理由见 `agent/action_text.py` 的模块头注）；
+   抄在这里才可能在**改 Python 时立刻知道哪一条的字会变**（五处**有意**偏离都写在
+   断言旁，理由见 `agent/action_text.py` 的模块头注）；抄归抄，**手抄的东西不会因为
+   "那边改了"而变红**——真正把两边钉在一起的是 ⑤（从父仓测试源码现取期望值逐条对账）；
 ③ **通用不变量**：任何工具的空参行都不许退化成空书名号/空冒号——"Rust 读顶层 meta、
    Python 只有实参"那类分叉的症状就是它（`新建一级标签「」`）；
 ④ **接线**：Python 只在**有真臂**时才写 `rcpt["action"]`（没臂的留给 Rust 的老表，
    于是上线前后存量行的字一个字节都不变）；Rust 那半必须**优先读**它——不读的话
    这个字段就是个摆设，而且**看不出来**（两边都绿、线上字不变）。
 """
+import json
 import re
 import sys
 from pathlib import Path
@@ -119,8 +121,8 @@ print("\n② 执行台账行（full）：逐条对齐父仓 chat.rs 的期望")
 
 # **这批断言抄自 `src/routes/chat.rs` 的 `#[cfg(test)]`**（函数名见前缀注释）：
 # 那份期望就是跨轮执行记忆里出现过的字（下一轮 narrator 照着念的原料），
-# Python 接管渲染后必须一一对上。**父仓改了那边的那条测试，这里就该红**——
-# 两边同时改才算"收敛完成"，只改一边正是这批要治的病。
+# Python 接管渲染后必须一一对上。**抄件不会自己变红**——把"父仓改了那边就该红"
+# 这句话变成判据的是 ⑤：它不读这份手抄表，而是现从父仓测试源码里取期望值对账。
 _LEDGER = [
     # exec_row_create_tag_reads_toplevel_name / _reuse_level2
     ("新建一级标签「大笨狗」", "create_tag", {"title": "大笨狗"},
@@ -220,7 +222,7 @@ for want, name, args, meta in _LEDGER:
     got = _full(name, args, meta)
     check(f"台账行 {name} → {want}", got == want, got)
 
-# ── 三处**有意**偏离父仓那张表（理由在 `agent/action_text.py` 头注，都是"同一件事
+# ── 五处**有意**偏离父仓那张表（理由在 `agent/action_text.py` 头注，都是"同一件事
 #    两套字里留一套"与"空书名号一律不给"这两条）────────────────────────────
 check("★ 有意：名字缺失时**不给空书名号**（父仓那张表渲染「新建一级标签「」」）",
       _full("create_tag", {"title": "X"}, {"op": "tag_create", "level": "1"})
@@ -329,6 +331,123 @@ if _rs is not None:
     check("  排版三件仍留在 Rust 侧（方括号归一 / 实体摘要拼接 / 列宽截断）",
           'replace(\'[\', "「")' in _body and 'row["digest"]' in _body
           and ".take(120)" in _body and ".take(300)" in _body)
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑤ 两边真的比过：现从父仓测试源码取期望值，逐条与 Python 对账")
+
+# ② 那份字表是**手抄**的，而手抄件不会因为"那边改了"而变红。这一节把 ② 的声明做成
+# 判据：直接从 `src/routes/chat.rs` 的 `#[cfg(test)]` 里解析出
+# `let row = json!{…}; assert_eq!(render_exec_row(&row), "…")` 的成对值，用同一份输入
+# 调 Python 的 `receipt_action`，再套上 Rust 只**排版**的那两件（方括号归一 + 列宽
+# 截断，见 ④ 的清单），与父仓期望逐字比。
+#
+# **为什么这是"真的比较两边"**：两份措辞此前是两份互不相干的实现，靠注释互相提醒；
+# 光有"两边各自都有测试"抓不到分叉（各自都对自己那套字自洽）。这一节是唯一一处
+# **一份输入走两侧、结果直接相等**的地方。
+_RUST_PAIR_RE = re.compile(
+    r'let (\w+) = json!\(\s*\{'
+    r'|assert_eq!\(render_exec_row\(&(\w+)\)\s*,\s*'
+    r'("(?:[^"\\]|\\.)*"(?:\s*\.to_string\(\))?(?:\s*,\s*"(?:[^"\\]|\\.)*")*)\s*,?\s*\)'
+)
+
+
+def _rust_pairs(src: str) -> list[tuple[dict, str]]:
+    """按**出现顺序**取 (回执行, 期望字) 成对值。
+
+    线性扫描就够：每个 `assert_eq!` 用的都是它前面最近一次 `let <ident> = json!`，
+    同名 `row` 在不同 `#[test]` 里被反复赋值也分得开（文件顺序天然分隔）。
+    解析不出来的 `json!`（带变量、`Row::default()` 之类）**丢掉**——丢多少有下限
+    断言兜着，丢多了会红。
+    """
+    env: dict[str, dict] = {}
+    out: list[tuple[dict, str]] = []
+    for m in _RUST_PAIR_RE.finditer(src):
+        if m.group(1):
+            ident, start = m.group(1), m.end() - 1
+            depth = 0
+            for j in range(start, len(src)):
+                if src[j] == "{":
+                    depth += 1
+                elif src[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        raw = src[start:j + 1]
+                        break
+            else:
+                continue
+            raw = re.sub(r"//[^\n]*", "", raw)        # json! 里允许行注释
+            raw = re.sub(r",(\s*[}\]])", r"\1", raw)  # json! 允许尾逗号
+            try:
+                env[ident] = json.loads(raw)
+            except ValueError:
+                env.pop(ident, None)
+        else:
+            ident, lit = m.group(2), m.group(3)
+            try:
+                want = "".join(json.loads("[" + re.sub(r"\.to_string\(\)", "", lit) + "]"))
+            except ValueError:
+                continue
+            if ident in env:
+                out.append((env[ident], want))
+    return out
+
+
+def _meta_of(row: dict) -> dict:
+    return {k: v for k, v in row.items() if k not in ("tool", "args")}
+
+
+def _why_not_compared(row: dict) -> str:
+    """这一对**结构上**不参与比较的理由；空串 = 应当参与。"""
+    if row.get("digest") or row.get("principal_role"):
+        return "排版附加件（身份前缀 / 实体摘要）只在 Rust 侧拼，Python 那档看不到"
+    if "action" in row:
+        return "合成输入：action 是手写的（含方括号 [12]），钉的是接线不是 Python 的输出"
+    if not receipt_action(str(row.get("tool") or ""), row.get("args") or {}, _meta_of(row)):
+        return "无臂工具（Python 不写 action，这份回执仍走 Rust 老表）"
+    return ""
+
+
+# **有意偏离**：只有父仓测试里**真有**对应行的才需要列在这里。另三处偏离（检索类写
+# 「检索文章」、文章标签那句多一个「的」、before/after 全缺时不给空冒号）在父仓那张
+# 表里没有对应测试行，因此这一节比不到它们——它们由 ② 的手抄表钉着。
+_INTENTIONAL = [
+    ("create_tag", "新建一级标签「」", "新建标签"),
+    ("read_messages", "标记站内信已读（3、4、5 等 4 条）",
+     "标记站内信已读（3、4、5 等 4 封）"),
+]
+
+_pairs = _rust_pairs(_rs) if _rs is not None else []
+check(f"从父仓测试源码现取成对期望（{len(_pairs)} 对，下限 26）",
+      len(_pairs) >= 26, str(len(_pairs)))
+
+_same: list[str] = []
+_skipped: list[str] = []
+_diffs: list[tuple[str, str, str]] = []
+for _row, _want in _pairs:
+    _why = _why_not_compared(_row)
+    if _why:
+        _skipped.append(f"{_row.get('tool')}【{_why}】")
+        continue
+    _got = receipt_action(str(_row.get("tool") or ""), _row.get("args") or {},
+                          _meta_of(_row))
+    _got = _got.replace("[", "「").replace("]", "」")[:120]   # Rust 只排版的两件
+    if _got == _want:
+        _same.append(_want)
+    else:
+        _diffs.append((str(_row.get("tool")), _want, _got))
+
+check(f"★ 逐条对上：{len(_same)} 条 Python 输出经 Rust 排版后与父仓期望**逐字相同**",
+      len(_same) >= 20, str(len(_same)))
+check("★ 剩下的差异**恰好**是有意偏离（白名单外差一个字都红）",
+      sorted(_diffs) == sorted(_INTENTIONAL), str(_diffs))
+check("  且白名单没有陈年条目（父仓哪天把某条改了，这条会红 ⇒ 删掉那行白名单）",
+      all(d in _diffs for d in _INTENTIONAL))
+check("★ 每一对都有归宿（逐字相同 / 有意偏离 / 三类结构性跳过），没有悄悄漏掉的",
+      len(_same) + len(_diffs) + len(_skipped) == len(_pairs),
+      f"same={len(_same)} diff={len(_diffs)} skip={len(_skipped)} all={len(_pairs)}")
+check("  跳过的每一对都写明了理由（无臂 / 合成输入 / 排版附加件）",
+      all(_why_not_compared(_row) for _row, _ in _pairs
+          if f"{_row.get('tool')}【{_why_not_compared(_row)}】" in _skipped))
 
 print(f"\n{'全部通过' if not FAILS else f'失败 {len(FAILS)} 项'}")
 for f in FAILS:
