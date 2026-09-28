@@ -92,6 +92,26 @@ NO_LIMIT_TOOLS = frozenset({"rag_search"})
 # 截断标记（带原文长度）。机器判定用 `is_truncated()`，**别在别处硬编码这段文本**。
 TRUNCATION_MARK_PREFIX = "…[trace 截断：原文共 "
 
+# trace JSON 的 schema 版本（20260928 起写进每份 trace 的顶层）。
+#
+# **为什么需要它**：trace 是跨语言、跨批次的**长期语料**——保留期 30 天、按天压缩归档，
+# 而读它的东西散了十几个脚本（排障扫描、效率基线、判官、对账、不变量计数）。字段只增不减
+# 时没人需要版本号；一旦某个字段的**含义**变了（比如 `receipts` 里的命令从字符串搬进
+# `meta["cmd"]`、`digest` 从无到有），事后读一份旧 trace 的人无法只凭内容判断"这是旧格式"
+# 还是"模型当时没产出"——两种解释会导出完全相反的结论（这正是 20260926 那次"帧里
+# talkKey/noteId 混用"的复盘成本）。
+#
+# **什么时候 +1**（判据是"读者能不能按同一套假设读"，不是"加了字段就 +1"）：
+#   · 已有字段的**含义/单位/嵌套形状**变了，或字段被删/改名 ⇒ +1；
+#   · 纯新增可选字段（读者 `.get()` 得到 None 就是"当时没有"）⇒ **不 +1**，
+#     因为新旧两份用同一套假设读得出正确结论。事件（`events[]`）的 `event` 名是开放集合，
+#     加新事件不算 schema 变更。
+#
+# **读侧契约**：字段缺失 = 0（= 20260928 之前的存量 trace）。**任何读取端都不许硬取**
+# `doc["schema_version"]`——存量文件会按保留期自然老去，硬取等于让"扫全量"在
+# 换版当天炸掉一半（`tests/test_trace_io.py` ⑦ 用源码锁盯着这条）。
+SCHEMA_VERSION = 1
+
 
 def truncation_mark(original_len: int) -> str:
     return f"{TRUNCATION_MARK_PREFIX}{original_len} 字符]"
@@ -189,6 +209,8 @@ class _TraceRecorder:
         self.dumped = True
         try:
             doc = {
+                # 放第一个：读一份 trace 第一眼就知道该用哪套假设（见 SCHEMA_VERSION 的注释）
+                "schema_version": SCHEMA_VERSION,
                 "trace_id": self.trace_id,
                 "user_id": self.user_id,
                 "thread_id": self.thread_id,
