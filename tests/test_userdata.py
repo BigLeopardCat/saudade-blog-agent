@@ -923,12 +923,13 @@ def _src(p):
 # `server.py::_tool_action_text` **逐字一致**（预告帧与落库回执行是同一件事的两处
 # 渲染，两处不一样会让主人以为发生了两件事）。agent 仓单独 checkout（CI）时读不到
 # 父仓 —— 那时**明说跳过**，不假装通过。
-_rust_path = ROOT.parent / "src" / "routes" / "chat.rs"
-if _rust_path.exists():
-    _rust = _rust_path.read_text(encoding="utf-8")
-else:
-    _rust = ""
-    print("  ⏭ 跳过父仓 Rust 侧断言（src/routes/chat.rs 不在：agent 仓单独 checkout）")
+sys.path.insert(0, str(ROOT / "tests"))
+import _parent_repo  # noqa: E402
+
+_rust = _parent_repo.read(
+    "src/routes/chat.rs",
+    why="这几条措辞（站内信/收藏的动作行）是 Rust 写时渲染定稿的 ⇒ 只改 Python 一侧，"
+        "线上台账里仍是旧措辞；下面的 `if _rust:` 读不到就整段不判")
 
 
 from agent.graph import _CONTENT_TOOLS  # noqa: E402

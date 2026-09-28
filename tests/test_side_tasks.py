@@ -175,19 +175,23 @@ check("server 仍保留失败日志（异常不静默）",
 # 跨仓：这句措辞的**事实依据**在父仓（措辞跟代码走，不跟记忆走）。20260923 复盘：
 # agent 这边三处注释 + 本套件一条断言，此前都写着"调用方降级放行"——而 Rust 从
 # b3c4d83 起就是**转人工待审**（`board_approved` 的失败分支都返回"未通过 + 无 AI
-# 判定"）。父仓单独 checkout 时读不到 ⇒ 明说跳过，不假装通过。
+# 判定"）。父仓单独 checkout 时读不到 ⇒ 走 `_parent_repo` 的三态：响亮跳过（CI），
+# 或按 `SAUDADE_REQUIRE_PARENT=1` 判红（本机/夜间——那里父仓就在兄弟目录，没有理由读不到）。
 #
 # 20260926：返回值从三元组变四元组（多了 AI 审核说明 `ai_reason`，见
 # `board_approved` 头注）⇒ 字面量随之变长。**这正是这条断言存在的意义**：父仓改
 # 形状这边立刻红、必须有人来看一眼"agent 侧的理解还对不对"，而不是两边各自漂移。
-_talks = ROOT.parent / "src" / "routes" / "talks.rs"
-if _talks.exists():
-    _ts = _talks.read_text(encoding="utf-8")
+sys.path.insert(0, str(ROOT / "tests"))
+import _parent_repo  # noqa: E402
+
+_ts = _parent_repo.read(
+    "src/routes/talks.rs",
+    why="上面那句措辞的**事实依据**在 Rust 侧（审核失败到底返回什么）——只改 agent 一侧的"
+        "注释与断言，会让这边继续以为「降级放行」而那边早已「转人工待审」")
+if _ts is not None:
     check("父仓 talks.rs 的审核失败分支确实返回「转人工待审」(0, None, None, None)",
           _ts.count("(0, None, None, None)") >= 3,
           f"计到 {_ts.count('(0, None, None, None)')} 处")
-else:
-    print("  ⏭ 跳过父仓 Rust 侧断言（talks.rs 不在：agent 仓单独 checkout）")
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
