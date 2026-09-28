@@ -16,7 +16,9 @@ import re
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from agent import sections
-from agent.authz import strip_system_tags  # 消息壳剥除（见下方 _short_reply_kind 注释）
+from agent.authz import (SCOPE_READ_OWN,  # 帧预算按 scope 分族（见 _frame_view）
+                         required_scope,
+                         strip_system_tags)  # 消息壳剥除（见下方 _short_reply_kind 注释）
 
 # ---------------------------------------------------------------------------
 # 消息/上下文工具
@@ -820,21 +822,59 @@ _FRAME_NOISE_KEYS = {"cover", "coverFocusX", "coverFocusY", "coverZoom",
                      "carouselFocusX", "carouselFocusY", "carouselZoom"}
 _FRAME_FIELD_CAP = 60      # 单字段值的字符上限（超出带 … 标记）
 
+# ── "我自己的数据"帧：不比工具自己愿意给的更小（20260928）────────────────
+# 动因是一次真实 trace（`20260928T175240`）：主人问「看看我的未读信息都有哪些」，
+# `get_unread_summary` 返回 566 字、三条未读俱全（每条 content 28-30 字，离工具那层
+# 120 字的上限还远），而帧被 `per=300` **在第二条的 dict 中间**切断——第三条整条没进
+# 提示词。narrator 据此回了「还有一条未读通知，系统返回的数据里被截断了，我这边看不到
+# 具体内容呢」。**数据是全的，被切的是这份视图**（narrator 手上另有一份完整的
+# ToolMessage，见 `graph.py::model_node`；那一次它读的是摘要这一份）。
+#
+# 这族帧的形状是"计数 + 明细"，而明细往往**就是答案本体**（留言驳回理由写在 content
+# 里——`tools/base.py` 的 `_UNREAD_CONTENT_MAX` 那段记着这个教训），按 300 字切大约
+# 只装得下一条。所以三个数按同一条原则取——**帧不比工具自己愿意给的更小**：
+#   条数：工具自己封顶 10 条（`tools/base.py::_UNREAD_ITEMS_MAX`）
+#   正文：工具自己封顶 120 字（`_UNREAD_CONTENT_MAX`）⇒ 单字段上限跟着放到 120
+#   预算：10 条 × 每行 215 字（正文顶到 120 + 四个短字段，实测）+ 抬头 52 字 ≈ 2250
+# 超出去的部分**仍然如实标注**（"节选：显示前 K 条，共 N 条"）——大预算治的是
+# "常常只看到一条"，不是把"装不下就说清楚"这条纪律替换掉（list_notifications 能
+# 返 100 条，那种帧照样按整行取舍）。
+#
+# **族怎么认**：scope == `read.own`（`agent/authz.py::TOOL_SCOPE`），**不是**手写工具名
+# 清单。手写清单正是这次缺陷的形状——`_compact_list_frame` 认信封只看四个键名，
+# 而 `get_unread_summary` 的键是 `unread_items` ⇒ "一行一条 + 共 N 条"这套渲染在这个
+# 工具上**从来没生效过**，一路退化成裸切半截 JSON。工具名清单换个地方再抄一遍，就是
+# 同一个形状换个落点。与工具侧那两个上限的对账在 `tests/test_sections.py` ⑨：上限被
+# 改动时那条会红着提醒重算这里。
+_OWN_DATA_FRAME_PER = 2400
+_OWN_DATA_FIELD_CAP = 120
 
-def _compact_row(row: dict) -> str:
+
+def _frame_view(name: str, per: int) -> tuple[int, int]:
+    """工具名 → (帧预算, 单字段上限)。`read.own` 族走 `_OWN_DATA_*`，其余走默认。
+
+    判据是 **scope 声明**（`authz.required_scope`），不是"名字看起来像"：认不出的名字
+    （命令帧那种自造的 name、离线夹具里的 `x`）自然落回默认分支。
+    """
+    if required_scope(name) == SCOPE_READ_OWN:
+        return _OWN_DATA_FRAME_PER, _OWN_DATA_FIELD_CAP
+    return per, _FRAME_FIELD_CAP
+
+
+def _compact_row(row: dict, field_cap: int = _FRAME_FIELD_CAP) -> str:
     """一行记录 → `k=v k=v`（丢空值/纯展示字段/嵌套结构，长值截断带 …）。"""
     parts = []
     for k, v in row.items():
         if k in _FRAME_NOISE_KEYS or v is None or v == "" or isinstance(v, (dict, list)):
             continue
         s = str(v)
-        if len(s) > _FRAME_FIELD_CAP:
-            s = s[:_FRAME_FIELD_CAP] + "…"
+        if len(s) > field_cap:
+            s = s[:field_cap] + "…"
         parts.append(f"{k}={s}")
     return " ".join(parts)
 
 
-def _compact_head(obj: dict) -> str:
+def _compact_head(obj: dict, field_cap: int = _FRAME_FIELD_CAP) -> str:
     """信封 dict 里**与数组同级**的标量 → 一行抬头（`k=v k=v`）。
 
     20260924 补：此前信封只取数组、同级字段**整个丢掉**——`{unread: 2, items: […]}` 的
@@ -849,19 +889,47 @@ def _compact_head(obj: dict) -> str:
         if not isinstance(v, (str, int, float, bool)):
             continue
         s = str(v)
-        if len(s) > _FRAME_FIELD_CAP:
-            s = s[:_FRAME_FIELD_CAP] + "…"
+        if len(s) > field_cap:
+            s = s[:field_cap] + "…"
         parts.append(f"{k}={s}")
     return " ".join(parts)
 
 
-def _compact_list_frame(text: str, budget: int) -> str | None:
+# 已知的信封键名（按这个顺序挑）。**它不是判据的全部**——见 `_envelope_rows`：
+# 认不出已知键名时按结构认，别让这份清单成为"新工具的信封看不见"的来源。
+_ENVELOPE_KEYS = ("data", "records", "list", "items")
+
+
+def _envelope_rows(obj: dict) -> list | None:
+    """信封 dict → 里面那个数组；认不出返回 None。
+
+    两条路：先按**已知键名**（保持既有行为），认不出再按**结构**——整份 dict 里
+    **唯一**一个"非空且元素全是 dict"的数组。后者是治"改一处忘另一处"的：键名清单
+    必然滞后于新工具，`get_unread_summary` 的 `unread_items` 就不在里面，于是
+    20260921 那套"一行一条 + 共 N 条"从未在它身上生效过，一路退化成裸切半截 JSON
+    （20260928 真实 trace 取证，见 `_OWN_DATA_FRAME_PER` 上面那段）。
+
+    有**多个**候选数组时**不猜**（宁可回普通文本路径，也别把两个列表里随便挑一个
+    当成"这个帧的明细"）。
+    """
+    for k in _ENVELOPE_KEYS:
+        if isinstance(obj.get(k), list):
+            return obj[k]
+    cands = [v for v in obj.values()
+             if isinstance(v, list) and v and all(isinstance(r, dict) for r in v)]
+    return cands[0] if len(cands) == 1 else None
+
+
+def _compact_list_frame(text: str, budget: int,
+                        field_cap: int = _FRAME_FIELD_CAP) -> str | None:
     """数组帧 → "一行一条"紧凑文本（超预算按**整行**取舍并标注共几条）。
 
     认不出（不是数组/元素不是 dict）返回 None，调用方按普通文本处理。
     两种字面量都要认：`str(data)` 出来的是 **Python repr**（单引号，tools 层
     绝大多数工具的出口），少数工具是 `json.dumps`（双引号）。
-    信封形态（`{"unread": 2, "items": […]}`）先出一行**同级标量抬头**（见 `_compact_head`）。
+    信封形态（`{"unread": 2, "items": […]}`）先出一行**同级标量抬头**（见 `_compact_head`），
+    信封怎么认见 `_envelope_rows`。`field_cap` 由调用方按工具族给（"我自己的数据"
+    那族是 `_OWN_DATA_FIELD_CAP`）。
     """
     obj = None
     for loader in (ast.literal_eval, json.loads):
@@ -875,18 +943,15 @@ def _compact_list_frame(text: str, budget: int) -> str | None:
     if isinstance(obj, list):
         rows = obj
     elif isinstance(obj, dict):
-        for k in ("data", "records", "list", "items"):
-            if isinstance(obj.get(k), list):
-                rows = obj[k]
-                break
+        rows = _envelope_rows(obj)
         if rows is not None:
-            head = _compact_head(obj)
+            head = _compact_head(obj, field_cap)
     if not rows or not all(isinstance(r, dict) for r in rows):
         return None
     lines: list[str] = []
     used = len(head) + 1 if head else 0
     for i, r in enumerate(rows, 1):
-        body = _compact_row(r)
+        body = _compact_row(r, field_cap)
         if not body:
             continue
         line = f"{i}. {body}"
@@ -914,7 +979,9 @@ def _frame_texts(messages: list, limit: int = 5, per: int = 300,
     （行式精简，够看）；get_article_detail 是全文读取帧，按 _DETAIL_FRAME_PER
     大幅放宽并标注"节选"；__ERROR__ 信息完整保留（planner 需要据错误修正参数
     重试）；**列表帧走 _compact_list_frame**（一行一条 + 整行取舍 + 共几条），
-    不再裸切半行。
+    不再裸切半行；**"我自己的数据"那族（scope = read.own）另给一对更宽的
+    (预算, 字段上限)**——见 `_frame_view` 与 `_OWN_DATA_FRAME_PER` 的注释：
+    "计数 + 明细"的帧里明细就是答案本体，按 300 字切只能看一条。
 
     `drop_tools`（20260927 D3）：动作族的帧**从这里摘掉**——它们只出现在
     `[本轮动作事实]` 那一段（那里写明"系统已印、你不要复述"）。同一份事实在提示词
@@ -962,13 +1029,14 @@ def _frame_texts(messages: list, limit: int = 5, per: int = 300,
                     f"工具 {name} 返回（节选，原文 {len(text)} 字，仅示前 {len(cut)} 字）: "
                     f"{cut}")
         else:
-            compact = _compact_list_frame(text, per)
+            budget, field_cap = _frame_view(name, per)
+            compact = _compact_list_frame(text, budget, field_cap)
             if compact is not None:
                 parts.append(f"工具 {name} 返回: {compact}")
-            elif len(text) > per:
+            elif len(text) > budget:
                 # 非列表帧也可能超预算（长文本/大对象）：同样如实标注，不裸切
                 parts.append(f"工具 {name} 返回（节选，原文 {len(text)} 字）: "
-                             f"{text[:per]}…")
+                             f"{text[:budget]}…")
             else:
                 parts.append(f"工具 {name} 返回: {text}")
     return "\n".join(parts)
