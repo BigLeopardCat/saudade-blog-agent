@@ -70,6 +70,10 @@ jobs:
         # 让守卫**假绿**（`tests/_parent_repo.py` 头注里那两条边界之一）。
         run: test -f _parent/src/routes/chat.rs
 
+      # ⚠️ 20260928 首跑带出两条**信息性**注解（不影响本次绿）：`actions/checkout@v4` 与
+      # `astral-sh/setup-uv@v5` 是针对 Node 20 的，runner 已强制它们跑在 Node 24 上。等上游
+      # 退役 Node 20 支持时这两步会失效——升到 v5 / v6 是**另一件事**（要连带核对 checkout 在
+      # 父仓那一处用的 `sparse-checkout` 输入是否改名），别混进无关的提交里。
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
         with:
