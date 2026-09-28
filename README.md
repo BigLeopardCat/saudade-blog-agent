@@ -184,10 +184,9 @@ uv sync
 # L0 离线、秒级、无 LLM、无网络——整个秒级套件
 .venv/bin/python tests/run_all.py
 
-# L0 局部（改技能注册表/计划契约后必跑 test_skills.py）
-.venv/bin/python tests/test_skills.py
-.venv/bin/python tests/test_authz.py
-.venv/bin/python tests/test_confirm.py
+# L0 局部（-k 按文件名筛选；改技能注册表/计划契约后至少跑 skills + authz + confirm）
+.venv/bin/python tests/run_all.py -k skills
+# 套件清单**只有 run_all.py 一处**（按磁盘枚举）：加套件不用改 CI、不用改夜间脚本、不用改本文。
 
 # L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
 .venv/bin/python eval/recall_eval.py
