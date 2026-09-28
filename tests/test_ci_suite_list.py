@@ -72,6 +72,27 @@ check("CI 里没有任何逐个套件的调用（加套件不用改 CI）",
 check("CI 不传 -k（传了就是静默地把 CI 收窄成子集）",
       "run_all.py -k" not in _eval and "run_all.py --keyword" not in _eval)
 
+print("\n①b ruff 版本只有一处事实源（pyproject 的 dev 分组）")
+_eval_code = "\n".join(ln for ln in _eval.splitlines() if not ln.lstrip().startswith("#"))
+# 注释里提一句"本机用 uvx ruff@X"不算手写版本——判据看的是**会执行的**那一行
+check("CI 的 lint 步骤从项目环境取 ruff（uv run --frozen ruff）",
+      "uv run --frozen ruff" in _eval_code and "uvx ruff" not in _eval_code)
+_pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+_m = re.search(r'^dev\s*=\s*\[\s*"ruff==([0-9.]+)"\s*\]', _pyproject, re.M)
+check("pyproject 的 [dependency-groups] dev 钉了 ruff 版本",
+      _m is not None, _m.group(1) if _m else '没找到 dev = ["ruff==X"]')
+if _m:
+    _pin = _m.group(1)
+    # 本机命令散在文档里写的是 `uvx ruff@X`（隔离环境，不碰产线 venv）：**必须同版**。
+    # 这条是"改一处忘另一处"唯一能被机械抓住的形状（升版只改 pyproject 忘了改文档）。
+    _bad = []
+    for p in [ROOT / "README.md", ROOT / "CLAUDE.md"] + sorted((ROOT / "docs").glob("*.md")):
+        if not p.exists():
+            continue
+        _bad += [f"{p.name}@{v}" for v in re.findall(r"uvx ruff@([0-9.]+)",
+                                                   p.read_text(encoding="utf-8")) if v != _pin]
+    check(f"文档里的 `uvx ruff@X` 与 dev 分组同版（{_pin}）", not _bad, "、".join(_bad))
+
 print("\n② 夜间（scripts/nightly_regression.sh）：与 CI 同一份清单")
 _night = NIGHTLY.read_text(encoding="utf-8")
 _night_called = _called_suites(_night)

@@ -11,6 +11,12 @@ uvx ruff@0.14.4 check --no-cache .            # 与 CI 同版本
 uvx ruff@0.14.4 check --no-cache --statistics .   # 按规则计数
 ```
 
+**版本的事实源是 `pyproject.toml` 的 `[dependency-groups] dev`**（`ruff==0.14.4`，
+经 `uv.lock` 定版）：CI 直接用 `uv run --frozen ruff …` 跑它，本机因为 `.venv` 是
+**产线 venv、不许 `uv sync`**，才改用隔离的 `uvx ruff@0.14.4`（同版）。升版 = 改
+`pyproject.toml` + `uv lock` + 本文件的 `uvx ruff@X`，`tests/test_ci_suite_list.py` ①b
+会断言"文档里的版本 == dev 分组的版本"，漏掉一处就红。
+
 - **578 errors**（`select = ["E", "F", "I", "W"]`、`line-length = 100`，见 `pyproject.toml`）。
   **CI 同版本（0.14.4）与本机默认版本（0.16.9）实测同数**（578 / 139 fixable）——所以
   "版本不一致导致数字对不上"不是这里的解释，别往那个方向排查。
@@ -33,7 +39,7 @@ uvx ruff@0.14.4 check --no-cache --statistics .   # 按规则计数
 - 最集中的文件：`tests/test_skills.py` 108、`tools/base.py` 45、`agent/skills.py` 41、
   `tests/test_reports.py` 39、`eval/probe_admin_write.py` 28、`agent/graph.py` 16。
 
-**CI 目前只跑一个更窄的闸**：`eval.yml` 的 `uvx ruff check --select F821 .`（未定义名，秒级）。
+**CI 目前只跑一个更窄的闸**：`eval.yml` 的 `uv run --frozen ruff check --select F821 .`（未定义名，秒级）。
 F821 是"会炸"的那一类，E/F/I/W 是"会烂"的那一类。本文件管后者。
 
 ## 纪律（本批起所有新代码按此交付）

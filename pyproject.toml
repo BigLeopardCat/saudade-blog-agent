@@ -5,16 +5,46 @@ description = "泠月喵看板娘 AI 对话 Agent：LangGraph 技能注册表 + 
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
+# 依赖一律 `==` 钉死（20260928）：这里声明的版本 = 生产 `.venv` 里实际在跑的版本。
+# 之前全是 `>=`，`uv.lock` 与声明的下限可以差出好几十个版本都"合法"（lock 停在 8 月，
+# 而 pyproject 只说"不早于"），装机的人拿到什么版本全看当天 PyPI——判据钉在运维取值上
+# 就长这样。改版本的正确姿势：改这里 + `uv lock` + 看 lock 的 diff（`uv sync`
+# **绝不在本机跑**：`.venv` 就是产线那个 venv，sync 会按 lock 修剪/升降级产线依赖）。
+#
+# 名单的判据 = **代码里真的 import 了什么**（`python -c` 扫全仓 top-level import 得出），
+# 不是"装了什么"。三处曾经的缺口与处理：
+#   · `langgraph` / `langchain-core` / `pydantic` —— 直接被 import（planner 图、消息类型、
+#     请求体校验），却只作传递依赖存在：上游哪天换实现，本仓会以"运行时 ImportError"
+#     的方式知道，而不是装依赖时就知道。
+#   · `langchain` —— 声明了但**全仓零 import**（只用它的 langchain-core / langchain-openai /
+#     langgraph 三个子包，实测这三个都不需要 meta 包）。已删。
+#   · `starlette` —— 生产代码不 import 它，但它**是**断连中断机制的行为依赖：
+#     `StreamingResponse` 的 task_group / `listen_for_disconnect` / `asyncio.CancelledError`
+#     传播这套语义直接决定"用户离开后 agent 还执不执行"，而这一族语义跨大版本会变
+#     （见 docs/问题记录.md 与 CLAUDE.md「断连中断机制」）。声明它是一种"我知道我在依赖它"
+#     的记号，不是多余的：只有一个测试文件 import 它，删掉那行import 就没人记得这层关系。
 dependencies = [
-    "langchain>=1.3.11",
-    "langchain-openai>=1.3.3",
-    "openai>=2.44.0",
-    "pydantic-settings>=2.1.0",
-    "httpx>=0.28.0",
-    "edge-tts>=7.2.8",
-    "fastapi>=0.115.0",
-    "uvicorn>=0.30.0",
+    "edge-tts==7.2.8",
+    "fastapi==0.141.1",
+    "httpx==0.28.1",
+    "langchain-core==1.4.8",
+    "langchain-openai==1.3.3",
+    "langgraph==1.2.7",
+    "openai==2.44.0",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
+    "starlette==1.6.0",
+    "uvicorn==0.52.4",
 ]
+
+# 开发工具单独一组：`uv sync` 默认会装它，但**不进运行时依赖**（部署包/产线 venv 只需要
+# 上面那 11 个）。目前只有 ruff——本仓的静态扫描就是它那一条 F821（见 .github/workflows/eval.yml），
+# 版本放这里 = CI 的扫描版本跟着 `uv.lock` 走，不再在 workflow 里手写 `uvx ruff@0.14.4`
+# （那正是"同一件事写两处、改一处忘另一处"的形状）。
+# ⚠️ 本机 `.venv` 是**产线 venv**，不许 `uv sync` ⇒ 本机跑静态扫描仍用隔离的
+# `uvx ruff@0.14.4 check …`（与这里同版；升版 = 改这一行 + `uv lock`，本机命令一起改）。
+[dependency-groups]
+dev = ["ruff==0.14.4"]
 
 [project.urls]
 Homepage = "https://github.com/BigLeopardCat/saudade-blog-agent"
