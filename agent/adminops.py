@@ -1226,10 +1226,15 @@ _QUOTA_VERB = {"approve": "批准", "reject": "驳回", "reset": "重置"}
 
 
 def _quota_pair(row) -> str:
-    """名录行 → `额度 137/500 轮` / `不限额` / `（额度未知）`（**不编 0**）。
+    """名录行 → `额度 剩363/500 轮` / `不限额` / `（额度未知）`（**不编 0**）。
 
-    读不出字段就说读不出：把"读不到"写成 `0/0` 会被读成"这个人额度是满的"或
+    读不出字段就说读不出：把"读不到"写成 `剩 0/0` 会被读成"这个人额度是满的"或
     "这个人不限额"，两句都可能是假话（同 `_account_frozen` 的 `None ≠ False`）。
+
+    读数写**余额**（20260929b，与前端四处、系统上下文行统一口径）：主人看卡面那一眼要
+    判断的是"这一下会不会改变什么"，而答案取决于他**还剩**多少（见 `_reached_one` 的
+    noop 判据）——`137/500` 要心算一步。判据本身仍然是 `chatQuotaUsed`（内部读数），
+    这里只改给人看的字。
     """
     used = quota_used(row)
     lim = quota_limit(row)
@@ -1237,7 +1242,7 @@ def _quota_pair(row) -> str:
         return "（额度未知）"
     if lim <= 0:
         return "不限额"
-    return f"额度 {used}/{lim} 轮"
+    return f"额度 剩{max(0, lim - used)}/{lim} 轮"
 
 
 def render_quota_action(kind: str, name: str, users=None, quota_requests=None) -> str:
@@ -1305,7 +1310,13 @@ def render_quota_status(kind: str, username: str, uid, limit, used) -> str:
         （同 `_set_account_frozen` 的"未确认"取向，**不冒充已核实**）。
     """
     lim = limit if isinstance(limit, int) and limit > 0 else 0
-    pair = f"{used if used is not None else 0}/{lim}" if lim else "不限额"
+    # 读数写**余额**（20260929b）：这一族的判据仍然是 `chatQuotaUsed`（见 `_quota_readback`），
+    # 但那是一个内部判据、不是给主人看的读数。`剩 500/500` 与 `0/500` 是同一件事，
+    # 前者一眼就是"清零了"，后者要先分辨 0 是哪一栏。`used is None`（读不回读数）与
+    # `reject` 两支都不印这一对读数（各自只说端点那一半 / "额度没有变化"），
+    # 那里把 None 当 0 只是取个确定的形状。
+    _u = used if isinstance(used, int) else 0
+    pair = f"剩 {max(0, lim - _u)}/{lim}" if lim else "不限额"
     head = {
         "approve": f"已批准账号「{username}」（账号 id={uid}）的对话额度重置申请",
         "reject": f"已驳回账号「{username}」（账号 id={uid}）的对话额度重置申请",
@@ -1340,7 +1351,10 @@ def render_quota_requests(rows) -> str:
         used = r.get("used")
         lim = r.get("limit")
         try:
-            pair = "不限额" if int(lim) <= 0 else f"{int(used)}/{int(lim)} 轮"
+            # 余额口径（20260929b）：这一屏的用法正是"管理员看完之后说'批准 Alice'"，
+            # 而他那一眼要判的就是"他还剩多少"。减法只在这里做一次，判据 `used` 不变。
+            pair = ("不限额" if int(lim) <= 0
+                    else f"剩{max(0, int(lim) - int(used))}/{int(lim)} 轮")
         except (TypeError, ValueError):
             pair = "（用量未知）"
         st = _QUOTA_STATUS_CN.get(_quota_status_code(r.get("status")), "")
@@ -1871,8 +1885,10 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
             # 0 = 不限额（管理员档）。这一支**不是**"额度满"，是"本来就没有上限"——
             # 说成「额度本来就是满的」会被读成"他刚好没用过"，而真相是他不受限。
             return f"账号「{name}」是不限额的管理员，本来就没有额度需要重置"
+        # 读数写**余额**（20260929b 与前端四处、系统上下文行统一口径）：「剩 500/500 轮」
+        # 与「0/500 轮」说的是同一件事，但前者一眼就是"满的"，后者要先想一下 0 是哪一栏。
         return (f"账号「{name}」（账号 id={row.get('id')}）的额度本来就是满的"
-                f"（0/{lim} 轮，没有用掉任何一轮）")
+                f"（剩 {lim}/{lim} 轮，没有用掉任何一轮）")
     if tool == "reject_quota_request":
         # 驳回（20260929）：不改变额度，所以判据**不是**用量，而是"他现在有没有
         # 待处理的申请"——没有的话这一下会被服务端拒（`该账号没有待处理的额度申请`），

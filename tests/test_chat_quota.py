@@ -184,11 +184,15 @@ def _ctx(**kw) -> str:
 
 
 _fin = _ctx(chat_quota=server.QuotaInfo(used=137, limit=500, remaining=363))
-check("⭐ 有限档注入的就是 `chat_quota=137/500（剩363轮）`（三个数都由 Rust 给）",
-      "chat_quota=137/500（剩363轮）" in _fin, _fin[-90:])
+check("⭐ 有限档注入的是**余额**口径 `chat_quota=剩363/500轮`"
+      "（用户要求「500 开始减少而不是 0 开始计数」；减法由 Rust 给好）",
+      "chat_quota=剩363/500轮" in _fin, _fin[-90:])
 check("  注入行逐字等于那个形状（不许夹带任何行为指令——'快用完了该提醒他'属于提示词）",
-      "; chat_quota=137/500（剩363轮）" in _fin
+      "; chat_quota=剩363/500轮" in _fin
       and "提醒" not in _fin and "应当" not in _fin, _fin[-60:])
+check("  **不许**退回 `used/limit` 那套：`137/500` 要心算一步，且模型转述时很容易"
+      "说成'你已经用了 137 轮'——主人问的从来不是这个（探针锁失效形态）",
+      "137/500" not in _fin, _fin[-90:])
 _unl = _ctx(chat_quota=server.QuotaInfo(unlimited=True))
 check("⭐ 不限档只写 `chat_quota=unlimited`——**不写 0/0**"
       "（管理员看到 0/0 会以为自己的额度用光了）",
@@ -200,7 +204,7 @@ check("  缺席时也**不许**编一个「剩0轮」/「用完」顶上（失�
       "剩0轮" not in _none and "用完" not in _none, _none[-70:])
 _zero = _ctx(chat_quota=server.QuotaInfo(used=500, limit=500, remaining=0))
 check("  真的剩 0 轮时**照实注入**（0 是事实，不是'读不到'的替身）",
-      "chat_quota=500/500（剩0轮）" in _zero, _zero[-70:])
+      "chat_quota=剩0/500轮" in _zero, _zero[-70:])
 
 # ══════════════════════════════════════════════════════════════════
 print("\n② C7 拒答（流式）：帧形状 + **零 LLM、不占槽**（断言成行为）")
@@ -411,7 +415,7 @@ _card_a = A.render_quota_action("approve", "Alice", DIRD, PEND)
 check("⭐ 批准卡印出**申请理由**（主人正在拿别人的一句话做裁决，有权在点之前读到它）",
       "额度用完了，我想接着问" in _card_a, _card_a[:110])
 check("  卡面含账号名 + 账号 id + 当前用量",
-      "Alice" in _card_a and "126" in _card_a and "137/500" in _card_a, _card_a[:110])
+      "Alice" in _card_a and "126" in _card_a and "剩363/500" in _card_a, _card_a[:110])
 check("  卡面说清后果：批准**不可撤销**",
       "不可撤销" in _card_a, _card_a[-40:])
 _card_r = A.render_quota_action("reject", "Alice", DIRD, PEND)
@@ -445,7 +449,7 @@ check("  名录读不到 → 只印名字，**照旧弹窗**",
 
 _list = A.render_quota_requests(list(PEND.values()))
 check("⭐ 队列帧里有申请人名字、昵称、用量、状态、理由、提交时间",
-      all(x in _list for x in ("Alice", "137/500 轮", "待处理", "我想接着问", "2026-09-29")),
+      all(x in _list for x in ("Alice", "剩363/500 轮", "待处理", "我想接着问", "2026-09-29")),
       _list[:140])
 check("⭐⭐ 队列里**印不出行 id**（agent 按不了编号动手，印出来只会诱发 planner 猜一个）",
       "900" not in _list, _list[:100])
@@ -456,7 +460,7 @@ check("  空理由如实写「（没有填写理由）」而不是留空白",
 _empty_list = A.render_quota_requests([])
 check("  一条都没有时**不产空串**（空串会被读成'没读到'）",
       "共 0 条" in _empty_list, repr(_empty_list))
-check("  不限额的账号在队列里印「不限额」而不是 `3/0`",
+check("  不限额的账号在队列里印「不限额」而不是 `剩3/0`",
       "不限额" in A.render_quota_requests(
           [{"username": "root", "used": 3, "limit": 0, "status": 0}]), "")
 
@@ -468,7 +472,7 @@ check("⭐ 读数读不回 ⇒ 明说**未复核**，且不许说'马上可以�
       "未复核" in _s_read and "马上可以继续提问" not in _s_read, _s_read[:90])
 _s_after = A.render_quota_status("approve", "Alice", 126, 500, 42)
 check("⭐ 复核读数非 0 ⇒ 如实报实测值（清零真发生了，但他之后又聊过了）",
-      "42/500" in _s_after and "又聊过了" in _s_after
+      "剩 458/500" in _s_after and "又聊过了" in _s_after
       and "马上可以继续提问" not in _s_after, _s_after[:100])
 _s_rej = A.render_quota_status("reject", "Alice", 126, 500, None)
 check("⭐ 驳回的回执行说的是'额度没有变化'、**不说'清零'**"
@@ -512,8 +516,8 @@ out, cli = run_tool("approve_quota_request", {"name": "Alice"},
 check("⭐ 批准成功：恰好一次 POST 到 review 那条、载荷 `{approved: true}`",
       kind(out) == "ok" and posts(cli) and posts(cli)[0][1] == REVIEW_URL
       and posts(cli)[0][3] == {"approved": True}, f"{kind(out)} {posts(cli)}")
-check("  回执行里带**写后重读的读数**（0/500），meta 的 op/account_name 齐备",
-      "0/500" in str(out) and getattr(out, "meta", {}).get("op") == "approve"
+check("  回执行里带**写后重读的读数**（剩500/500），meta 的 op/account_name 齐备",
+      "剩 500/500" in str(out) and getattr(out, "meta", {}).get("op") == "approve"
       and getattr(out, "meta", {}).get("account_name") == "Alice", str(out)[:90])
 check("  带 Bearer 局部 JWT（三段）",
       posts(cli) and posts(cli)[0][2].get("Authorization", "").count(".") == 2, "")
