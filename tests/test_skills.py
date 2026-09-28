@@ -4450,8 +4450,12 @@ def test_write_ledger_note_round():
     check("锚的字面量在 graph.py 里只出现一次（= 常量定义那处，没有第二份手抄）",
           _src.count(_LEDGER_NOTE_PREFIX) == 1,
           str(_src.count(_LEDGER_NOTE_PREFIX)))
+    # 20260928 架构规范化 ③ 起，豁免判据住在**族表** `_zero_frame_families` 里
+    # （`_claim_issue` 只按表过一道）⇒ 这一锁跟着看表。
+    _tbl = _src[_src.index("def _zero_frame_families("):]
+    _tbl = _tbl[:_tbl.index("\ndef ", 10)]
     check("gate 的洞④ 分支真的读了它（锚写了但判据不认 = 白写）",
-          "_LEDGER_NOTE_PREFIX not in _note" in _src)
+          "_LEDGER_NOTE_PREFIX in _note" in _tbl)
 
 
 def test_announcement_text_round():

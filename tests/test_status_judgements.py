@@ -208,7 +208,11 @@ def _code_only(src_fragment: str) -> str:
         if t.type != tokenize.COMMENT)
 
 
-_gate_body, _claim_body = _body("gate_node"), _body("_claim_issue")
+_gate_body = _body("gate_node")
+# 零帧轮的判据（含洞④ 那条豁免）20260928 搬进了族表 `_zero_frame_families`，
+# `_claim_issue` 只剩"按表过一道"。两者合起来才是"零帧路径的判据源"——
+# 只取 `_claim_issue` 会把判据本身看漏（这条断言正是要防"判据哑了没人发现"）。
+_claim_body = _body("_claim_issue") + _body("_zero_frame_families")
 check("gate_node 第 4 节不再拿「不调用任何工具」当判据（可执行代码里零引用）",
       "不调用任何工具" not in _code_only(_gate_body))
 check("_claim_issue 的洞④ 不再拿「不调用任何工具」当判据（可执行代码里零引用）",
