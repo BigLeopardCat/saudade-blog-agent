@@ -53,6 +53,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests"))          # 同目录的 `_` 辅助模块（run_all 不收它们）
+
+import _parent_repo                              # noqa: E402
 
 import server                                    # noqa: E402
 from utils import trace as trace_mod             # noqa: E402
@@ -315,13 +318,12 @@ def test_sync_chat_source_shape():
           hit is None, hit.group(0) if hit else "")
     # 跨语言另一半：agent 说"这轮失败"只有 Rust 真读 `success` 才有意义
     #（`r.status().is_success()` 对 HTTP 200 恒真 ⇒ 会把这一轮当成功并落一条空回复）。
-    rust = ROOT.parent / "src" / "routes" / "chat.rs"
-    if rust.exists():
-        rsrc = rust.read_text(encoding="utf-8")
+    rsrc = _parent_repo.read(
+        "src/routes/chat.rs",
+        why="agent 说「这一轮失败」只有 Rust 真读 success 才有意义（HTTP 200 恒真 ⇒ 会把这一轮当成功并落一条空回复）")
+    if rsrc:
         check("Rust 那半读 agent 的 success/error（`agent_reply_of`）",
               "agent_reply_of" in rsrc and 'data.get("success")' in rsrc, "chat.rs")
-    else:
-        print("  ⏭ 跳过父仓 Rust 侧断言（不在 agent 仓单独 checkout 的场景里）")
 
 
 def main():

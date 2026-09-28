@@ -582,15 +582,17 @@ check("  没给名字也只给中文动作词", "send_user_notice" not in
 check("  与冻结族不同形（冻结是「冻结账号「X」」）",
       _a != _srv._tool_action_text("freeze_account", {"name": "guest5"}), _a)
 
-_rust_path = ROOT.parent / "src" / "routes" / "chat.rs"
-if _rust_path.exists():
-    _rust = _rust_path.read_text(encoding="utf-8")
+sys.path.insert(0, str(ROOT / "tests"))
+import _parent_repo  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
+_rust = _parent_repo.read(
+    "src/routes/chat.rs",
+    why="回执行的动作措辞两侧同源（预告帧与落库回执是同一件事的两处渲染）")
+if _rust:
     check("父仓 render_exec_row 有同名臂（否则过程行落成「执行 send_user_notice」）",
           '"send_user_notice" =>' in _rust, "src/routes/chat.rs 缺臂")
     check("  ⭐ Rust 侧措辞与 server.py **逐字一致**（预告帧与落库回执是同一件事的两处渲染）",
           "给账号「{}」发通知" in _rust and "给账号「" in _a, _a)
-else:
-    print("  ⏭ 跳过父仓 Rust 侧断言（src/routes/chat.rs 不在：agent 仓单独 checkout）")
 
 check("成功回执不套错误帧 ⇒ checker 照常 PASS（这一族没有 policy_refused 形态）",
       _check_spec("send_user_notice", {"name": "guest5"}, True,

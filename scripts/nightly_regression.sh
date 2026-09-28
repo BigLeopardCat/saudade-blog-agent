@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly regression: tests/test_skills.py 单测 + 检索基准 + golden set（语料 129 条，夜间实跑 128
+# Nightly regression: tests/run_all.py（全部离线套件，按磁盘枚举） + 检索基准 + golden set（语料 129 条，夜间实跑 128
 # ——唯一的例外是那条会真写生产库的用例，它按设计不由任何无人看着的跑法触发）+ 巡检
 # 由 crontab 触发（见仓库 README 或 crontab -l）。结果追加到 ~/agent_regression.log；
 # 任一门禁项失败会在 ~/agent_regression.failed 留下标记（存在 = 上次运行失败）。
@@ -42,9 +42,24 @@ TS=$(date '+%Y-%m-%d %H:%M:%S')
 
 echo "=== nightly regression $TS ===" >> "$LOG"
 
+# 20260928 起：跨语言守卫**跑不到就算红**（`tests/_parent_repo.py` 的三态）。
+# 那几处守卫断言「Rust 侧真有这个臂/这个键」（跨轮执行记忆的动作行、`__ERROR__` 帧形状…），
+# 此前每处各写一遍 `if exists(): … else: print("⏭ 跳过")`——而 CI 只 checkout agent 仓
+# （父仓私有），于是**最需要它的地方恒跳过**：本机绿、CI 绿，两侧谁都没真比过。
+# 夜间是本机跑、父仓就在兄弟目录，没有任何理由跳过 ⇒ 设上这个开关，让"找不到父仓"
+# 变成一行 ❌ + 退出码 1，而不是一行谁也不会读的 ⏭。
+export SAUDADE_REQUIRE_PARENT=1
+
 fail=0
-echo "--- tests/test_skills.py (技能注册表/plan 契约, 秒级) ---" >> "$LOG"
-$PY tests/test_skills.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] test_skills FAILED" >> "$LOG"; }
+# 20260928 起：这一节从"单跑 test_skills.py"换成 **tests/run_all.py**（按磁盘枚举 tests/*.py）。
+# 理由是审计实测出来的那个数：CI 的 eval.yml 手工维护 26 个 step，而磁盘上有 50+ 个套件
+# ⇒ **一半以上的判据从不在任何自动化里运行**（其中就有前缀缓存稳定性的唯一哨兵
+# test_prompt_prefix 与 test_slim_skills）。夜间此前也只跑一个套件。名单制（三处各抄一份）
+# 正是这个漏的来源 ⇒ 夜间也改成按磁盘枚举，加套件不用改这里。
+# run_all.py 自带出厂档钉子（PLANNER_ENGINE=text / AGENT_TASK_STATE=0）：本机 `.env` 是
+# 产线那份（native 档），不钉的话离线判据会跟着运维取值变。
+echo "--- tests/run_all.py (全部离线套件, 按磁盘枚举, 秒级, 无网络无 LLM) ---" >> "$LOG"
+$PY tests/run_all.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] run_all FAILED" >> "$LOG"; }
 # 20260924 起：检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）。
 # README 里一直写着 nightly 跑 L1/L2 两项，实际只有 L2——这一节把它补齐。
 # 非门禁：已知 FAIL 是词法表征的局限（脚本自己在报告里点名），不该让夜间任务变红。

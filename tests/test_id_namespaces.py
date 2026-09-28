@@ -302,16 +302,18 @@ check("  留言读取行**不再**冒充文章锚点（换措辞顺带堵掉的�
 
 # ⑥d Rust 侧是同一个散文契约的另一半（父仓独立 checkout 时跳过，同 test_user_notice
 # 的做法）：`render_exec_row` 必须按 doc_type 分名词，否则线上落库的台账又会是"读取文章"。
-_rust = ROOT.parent / "src" / "routes" / "chat.rs"
-if _rust.exists():
-    _rsrc = _rust.read_text(encoding="utf-8")
+sys.path.insert(0, str(ROOT / "tests"))
+import _parent_repo  # noqa: E402
+
+_rsrc = _parent_repo.read(
+    "src/routes/chat.rs",
+    why="跨轮执行记忆是 Rust 渲染定稿的 ⇒ 只改 Python 一侧，线上台账仍写「读取文章」")
+if _rsrc:
     check("父仓 `render_exec_row` 按 doc_type 分名词（board/talk/announcement 三臂）",
           '"board" => "留言"' in _rsrc and '"talk" => "说说"' in _rsrc
           and '"announcement" => "公告"' in _rsrc)
     check("  且注明名词与 Python 侧 `DOC_TYPE_CN` 同源（改一处必须同步另一处）",
           "DOC_TYPE_CN" in _rsrc)
-else:
-    print("  ⏭ 跳过父仓 Rust 侧断言（src/routes/chat.rs 不在：agent 仓单独 checkout）")
 
 print(f"\n{'全部通过' if not FAILS else f'失败 {len(FAILS)} 项'}")
 for f in FAILS:
