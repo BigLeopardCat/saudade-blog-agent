@@ -112,8 +112,9 @@ def test_declared_exceptions_are_the_known_three():
     non_empty = {n: v for n, v in declared.items() if v[0] or v[1]}
     check("没有任何技能声明 required_params/optional_params 之外的例外字段",
           set(declared) == {s.name for s in S.SKILLS})
-    check("只有 navigate / effect / device_display 用了这两个字段",
-          set(non_empty) == {"navigate", "effect", "device_display"}, str(sorted(non_empty)))
+    check("只有 navigate / effect / device_display / device_draw 用了这两个字段",
+          set(non_empty) == {"navigate", "effect", "device_display", "device_draw"},
+          str(sorted(non_empty)))
     check("navigate.required_params = (target,)（漏了它会说「站内没有该页面」）",
           S.SKILL_MAP["navigate"].required_params == ("target",),
           str(S.SKILL_MAP["navigate"].required_params))
@@ -123,10 +124,16 @@ def test_declared_exceptions_are_the_known_three():
     check("device_display.optional_params = (text,)（文案由执行层创作）",
           S.SKILL_MAP["device_display"].optional_params == ("text",),
           str(S.SKILL_MAP["device_display"].optional_params))
+    check("device_draw.optional_params = (ops,)（绘图指令由执行层创作）",
+          S.SKILL_MAP["device_draw"].optional_params == ("ops",),
+          str(S.SKILL_MAP["device_draw"].optional_params))
     # 反面：把 device_display.text 当成必填会让"屏幕显示"这条能力从 planner 通道**整体
     # 不可达**（planner 按 inputs 的说明就不该填 text）。这条断言是上面那条的意义所在。
     sp = S.skill_param_specs(S.SKILL_MAP["device_display"])["text"]
     check("device_display.text 不是必填（否则技能整体不可达）", not sp.required, f"{sp}")
+    # 画板逐字同源（同一条失败形状：必填 ⇒ 画板从 planner 通道整体不可达）
+    sps = S.skill_param_specs(S.SKILL_MAP["device_draw"])["ops"]
+    check("device_draw.ops 不是必填（否则技能整体不可达）", not sps.required, f"{sps}")
 
 
 # ── ③ 合法集合 = inputs：模板死占位符不许进参数表 ────────────────────────────
