@@ -74,6 +74,7 @@ from langgraph.graph.message import add_messages
 from config import settings
 from models import get_llm
 from tools import get_all_tools
+from agent import action_text
 from agent import adminops as A
 from agent import authz
 from agent import confirm
@@ -6668,6 +6669,23 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 v = (getattr(out, "meta", None) or {}).get("change")
                 if v is not None:
                     rcpt["change"] = str(v)[:120]
+            # 用户可见的动作措辞（20260928，唯一实现在 `agent/action_text.py`）：
+            # 跨轮执行记忆那一行过去由 Rust 的 `render_exec_row` 独立渲染，与主人看到的
+            # 过程行各自维护一套词表——20260928 逐行对照，54 条取样里只有 31 条逐字相同。
+            # 这里把台账侧的字也在 Python 侧定稿，Rust 从此只**排版**（加身份前缀、方括号
+            # 归一为「」、拼实体摘要、按列宽截断）。
+            #
+            # ⚠️ 位置在**全部 meta 分支之后**：`receipt_action` 要读顶层 meta
+            # （before/after/change/tag_name/account_name…），写在前面等于对着一份
+            # 还没长齐的回执渲染。
+            #
+            # ⚠️ 无臂的工具**不写这个键**：Rust 那边认不出 `action` 时才回落它的老表，
+            # 于是存量回执与被收敛遗漏的工具行为逐字节不变（`receipt_action` 对无臂
+            # 工具返回空串，正是这条"不写"的判据）。反过来若无条件写，`action` 里那句
+            # 兜底的「执行 X」会把老表的「屏幕显示「…」」这类字**覆盖掉**。
+            act = action_text.receipt_action(name, rcpt["args"], rcpt)
+            if act:
+                rcpt["action"] = act
             receipts.append(rcpt)
         else:
             blocked.append({"spec": spec, "tool": name, "reason": reason,

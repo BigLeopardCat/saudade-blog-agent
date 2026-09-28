@@ -28,21 +28,27 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 
-from agent import adminops as A  # 过程行中文取值（写工具的预告/完成帧共用）
+# 过程行/台账行的中文措辞（20260928）：唯一实现在 `agent/action_text.py`（与本文件
+# 之外的 Rust `render_exec_row` 那一份**合并成了一份**，见该模块头注）。这里只保留
+# "什么时候发哪条过程行"，以及受阻原因码的中文（`_REASON_CN`，它贴的是 BLOCK 原因码、
+# 不属于动作措辞）。
+from agent.action_text import tool_action_text
 from agent import confirm  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
 from agent.factblock import action_facts, compose, render_fact_block  # 动作事实块（D3）
 from agent import create_agent
 from agent.graph import AgentCancelled, graph_input, _cmd_wire
 from agent.principal import Principal
 from agent.summarizer import summarize
-from agent.skills import NAV_MAP  # 过程行路径反查中文别名用（展示层，非执行依据）
+# `NAV_MAP` 的 import 随渲染一起搬走了（20260928）：路径→中文别名的反查只服务于
+# 过程行，现在在 `agent/action_text.py` 里。
 # 会话级任务状态（20260927 批 D）：登记帧的发出与流尾的**确定性结算**都在 producer
 # （这里拿得到 req 与流内全部回执——两样东西凑齐的地方只有这一处，见 _run_agent_stream_to_queue）
 from agent.tasks import (advance_by_receipts, render_open_tasks, rows_to_settle,
                          task_rows)
-# 写工具参数的归一（20260923 批 7）：与 instantiate_plan 展开时**同一组纯函数**，
-# 保证"预告帧"与"计划文本"对同一个参数值的理解一致（两处各写一份必然漂移）。
-from agent.skills import _norm_id_list, _norm_true
+# 写工具参数的归一（20260923 批 7）原在本文件 import：`_tool_action_text` 用它把
+# "预告帧"与"计划文本"对同一个参数值的理解对齐。**20260928 渲染搬进
+# `agent/action_text.py` 后这里不再需要**（那两件仍从同一处 import，纪律不变：
+# 两侧不许各写一份归一）。
 from rag import search as rag_search, wordgraph
 from utils import setup_logging
 from utils.logging import get_trace_id, set_trace_id
@@ -749,45 +755,15 @@ async def chat(req: ChatRequest, request: Request):
 #   ③ 命令类完成帧（"🛠 调用工具：页面跳转 navigate_to"）没有目标细节。
 # 修复：计划行解析 TOOLS spec 成中文动作预告；完成/受阻行改由 execute update
 #   的 receipts（checker PASS 回执）与 blocked（受阻清单）驱动——验收通过才发
-#   ✅，受阻发 ✗；预告与完成共用 _tool_action_text 渲染，展示前后一致。
+#   ✅，受阻发 ✗；预告与完成共用同一份渲染，展示前后一致。
 #   注：gate 打回/通过的「✗ 质检打回」「✓ 质检通过」行不受影响（见 gate 分支）。
-
-_EFFECT_CN = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}
-
-# 无参只读点名工具 → 中文动作（planner 直接点名展开，见 skills._EXPLICIT_TOOLS）
-_NOARG_VERB = {
-    "list_guestbook": "查看留言板",
-    "list_talks": "查看说说",
-    "list_notes": "查看文章列表",
-    "list_devices": "查看设备列表",
-    "get_announcements": "查看公告",
-    "get_current_time": "查看当前时间",
-    # 20260913 新入白名单的站点信息类（此前 planner 点不到，无中文动作词；
-    # 缺省会落到"执行 get_social_links"的内部格式）
-    "get_blog_info": "查看博客信息",
-    "get_social_links": "查看社交链接",
-    "get_site_map": "查看站点结构",
-    "get_top_notes": "查看置顶文章",
-    "list_categories": "查看分类",
-    "list_tags": "查看标签",
-    # 管理助手报表（20260921）：**不在** _EXPLICIT_TOOLS 里（planner 点不到名，
-    # 只由 ops_report / moderation_report / user_report 三个技能模板展开），
-    # 但过程行渲染走的是同一张表——缺了就显示"执行 get_server_status"。
-    "get_server_status": "查看服务器状态",
-    "get_service_health": "查看服务健康",
-    "get_moderation_status": "查看审核状况",
-    "get_user_stats": "查看用户统计",
-    # 后台文章列表（20260921 第二轮，**读**）：无参，同上面四个报表工具——
-    # planner 点不到名（不在 _EXPLICIT_TOOLS），由 admin_notes 技能模板展开。
-    "list_admin_notes": "查看后台文章列表",
-    # 用户自己的数据（20260923）：planner 直接点名（在 _EXPLICIT_TOOLS 里）
-    "list_my_favorites": "查看我的收藏",
-    "get_unread_summary": "查看未读汇总",
-    "list_notifications": "查看站内通知",
-    # 自己的信箱（20260923 批 8）。措辞与 Rust `render_exec_row` 的同名臂同源
-    # ——"查看站内信"（不是"查看留言"：那是 list_guestbook 的公开留言板）。
-    "list_my_messages": "查看站内信",
-}
+#
+# **20260928 渲染本身搬走了**：那份"过程行 + 跨轮执行台账行"的词表原住在本文件
+# （`_tool_action_text`），与 Rust `src/routes/chat.rs::render_exec_row` 是**两份互不
+# 相干的实现**，靠注释互相提醒——逐行对照实测 54 条取样只有 31 条逐字相同。现在唯一
+# 实现在 `agent/action_text.py`（一份实现两档：`tool_action_text` 过程行 /
+# `receipt_action` 台账行），本文件只剩"什么时候发这条过程行"的编排。改措辞去改那里，
+# 且**两侧的期望值都锁在** `tests/test_action_text.py`。
 
 _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",
               "empty_result": "结果为空", "error_frame": "执行出错",
@@ -814,300 +790,6 @@ _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败"
               # 与"服务不可用"刻意分开：那个的下一步是稍后重试，这个重试一万次也一样
               # （要换的是目标或身份，见 graph 规则里那条"不要改参重试"）。
               "policy_refused": "后台规则拒绝"}
-
-
-# 参数引用（agent/refs.py 的 $<工具>[<序号>].<字段>）在过程行里的可读来源名。
-# 预告帧在 execute **之前**发，此刻引用还没解析，参数里就是 `$search_notes[0].noteId`
-# 这种内部语法——直接拼进去访客会看到 `读取文章 $search_notes[0].noteKe`。故按来源
-# 工具译成"上一步<来源>的第 N 条"，与解析后的完成帧（读的是回执里的实际值）
-# 语义一致：预告说"要读上一步检索的第 1 条"，完成说"读取文章 12"。
-_REF_SOURCE_CN = {
-    "search_notes": "检索结果", "rag_search": "检索结果", "list_notes": "文章列表",
-    "list_talks": "说说列表", "list_guestbook": "留言列表",
-    # 后台写轮最常见的引用源（20260921 第二轮）：`$list_admin_notes[0].noteId`
-    # 是"把《X》设为私密"的标准走法（先读列表拿 id 再写），缺了它就往过程行里
-    # 打内部工具名。
-    "list_admin_notes": "后台文章列表",
-    # 用户自己的数据（20260923 批 6/7）：`$list_my_favorites[0].noteId` 是"取消收藏
-    # 那一篇"的标准走法（先读自己的收藏夹拿 id 再撤），`$list_notifications[0].id`
-    # 是"把那条公告标记已读"的走法。缺了这两个来源名，过程行会打出内部工具名。
-    "list_my_favorites": "收藏列表",
-    "list_notifications": "通知列表",
-}
-
-
-def _ref_phrase(value: str) -> str:
-    """引用字面量 → 过程行可读短语（非引用或形态不认识 → 泛称，绝不打印原语法）。"""
-    m = re.match(r"^\$([a-z_][a-z0-9_]*)\[(\d+)\]", str(value or "").strip())
-    if not m:
-        return "上一步返回"
-    src = _REF_SOURCE_CN.get(m.group(1), f"{m.group(1)} 的返回")
-    return f"上一步{src}的第 {int(m.group(2)) + 1} 条"
-
-
-def _leaf(value, normalize=None, word=None) -> str:
-    """写工具的参数值 → 过程行可读短语（20260921 第二轮）。
-
-    三个来源各自成序，缺一不可：引用走 `_ref_phrase`（**绝不能打印 `$…` 原语法**）、
-    认识的取值走中文词、其余按原值截断——写工具的预告帧与完成帧都经这里，
-    两帧必须给主人看到**同一句话**（预告说"设为私密"、完成说"设为 private"会让人
-    以为改了两次）。
-    """
-    s = str(value if value is not None else "").strip()
-    if not s:
-        return ""
-    if s.startswith("$"):
-        return _ref_phrase(s)
-    if normalize is not None:
-        got = normalize(s)
-        if got is not None:
-            return word[got] if word else str(got)
-    return s[:12]
-
-
-def _todo_preview(value, limit: int = 24) -> str:
-    """待办正文 → 过程行用的**预览**（20260926）。
-
-    截断只发生在这一处、且**带上省略号**：这一行是执行前发出的灰色预告，主人核对
-    的那一面是确认卡（`adminops` 那两张卡与两条回执都印全文），所以它短一点没关系；
-    但裸切一刀（`body[:24]`）看上去就是"系统只记了这半句"——真实现场里主人正是
-    这么问的（trace `20260926T094843`）。
-    """
-    s = str(value or "").strip()
-    return s if len(s) <= limit else s[:limit] + "…"
-
-
-def _names_phrase(value) -> str:
-    """标签名/ id 列表 → 「A、B、C」。"""
-    items = list(value) if isinstance(value, (list, tuple)) else [value]
-    out = [_leaf(v) for v in items[:3]]
-    out = [x for x in out if x]
-    if len(items) > 3:
-        out.append(f"等 {len(items)} 个")
-    return "「" + "、".join(out) + "」" if out else "（空）"
-
-
-def _tool_action_text(name: str, args: dict | None) -> str:
-    """TOOLS spec 参数 → 中文动作正文（预告/回执完成帧共用，前后一致）。
-
-    参数值截断防长文本撑爆过程行；navigate 路径经 NAV_MAP 反查中文别名
-    （反查失败展示路径本身——路径是 execute 实际下发的真实值，不硬凑）。
-    引用形态的参数（$tool[0].field）译成来源短语，不打印内部语法。
-    """
-    a = args or {}
-    if name == "create_tag":
-        # 一级/二级只差一个父 id；标题为空（planner 漏参）时也要给出一行像样的中文
-        title = _leaf(a.get("title"))
-        pid = _leaf(a.get("parent_id"))
-        # 颜色（20260921）：点名了才显示——过程行是"这件事长什么样"的预告，
-        # 参数里带色就说明用户点了色（没点名时 color 根本不进 args）
-        hexval = A.match_tag_color(a.get("color")) if a.get("color") else None
-        color = f"，颜色 {A.describe_color(hexval)}" if hexval else ""
-        if not title:
-            return "新建标签"
-        return (f"新建二级标签「{title}」（父标签 id {pid}）{color}" if pid
-                else f"新建一级标签「{title}」{color}")
-    if name == "set_article_status":
-        aid = _leaf(a.get("article_id"))
-        bits = [_leaf(a.get("status"), A.normalize_status, A.STATUS_CN),
-                _leaf(a.get("is_top"), A.normalize_top,
-                      {1: "置顶", 0: "取消置顶"})]
-        head = f"修改文章 {aid}" if aid else "修改文章状态"
-        bits = [b for b in bits if b]
-        return f"{head}：{'、'.join(bits)}" if bits else head
-    if name == "set_article_tags":
-        aid = _leaf(a.get("article_id"))
-        head = f"修改文章 {aid} 的标签" if aid else "修改文章标签"
-        acts = []
-        if a.get("replace") is not None:
-            # replace=[] 是有语义的（清空标签），"改成（空）"读起来像出错，直说清空
-            acts.append("清空全部标签" if not a.get("replace")
-                        else "改成 " + _names_phrase(a.get("replace")))
-        if a.get("add"):
-            acts.append("加上 " + _names_phrase(a.get("add")))
-        if a.get("remove"):
-            acts.append("去掉 " + _names_phrase(a.get("remove")))
-        return f"{head}：{'、'.join(acts)}" if acts else head
-    if name == "navigate_to":
-        path = str(a.get("path") or "").strip()
-        if path:
-            label = next((k for k, v in NAV_MAP.items() if v == path), path)
-            return f"页面跳转「{label[:20]}」"
-        return "页面跳转"
-    if name == "toggle_dark_mode":
-        on = str(a.get("mode") or a.get("action") or "").lower() in ("on", "开", "true")
-        return "开启夜间模式" if on else "关闭夜间模式"
-    if name == "toggle_effect":
-        eff_raw = str(a.get("effect") or "")
-        eff = _EFFECT_CN.get(eff_raw, eff_raw or "页面")
-        on = str(a.get("action") or "").lower() in ("on", "开", "true")
-        return f"{'开启' if on else '关闭'}{eff}特效"
-    if name == "device_oled_display":
-        text = str(a.get("text") or "").strip()
-        return f"屏幕显示「{text[:24]}」" if text else "屏幕显示"
-    if name == "rag_search":
-        q = str(a.get("query") or "").strip()
-        return f"站内检索「{q[:24]}」" if q else "站内检索"
-    if name == "search_notes":
-        k = str(a.get("keyword") or "").strip()
-        return f"检索文章「{k[:24]}」" if k else "检索文章"
-    if name == "get_moderation_status":
-        # 聚焦某一类时把"看的是哪一类"写进过程行（20260922）：只写「查看审核状况」
-        # 会让"主人问被驳回的、agent 却在看全部"这种偏差在过程行里看不出来。
-        focus = {"ai_passed": "AI 直接通过的", "ai_rejected": "被 AI 驳回的",
-                 "pending": "等人复批的"}.get(str(a.get("status") or "").strip())
-        return f"查看审核状况（只看{focus}）" if focus else "查看审核状况"
-    if name == "get_article_detail":
-        # 动作词按 **doc_type** 取（20260928）：这一件工具读的是文章/说说/留言/公告
-        # 四个源，此前一律说"读取文章" ⇒ 过程行与回执行都把留言读成文章。
-        from tools.base import DOC_TYPE_CN
-        what = DOC_TYPE_CN.get(str(a.get("doc_type") or "note").strip(), "文章")
-        aid = str(a.get("article_id") or "").strip()
-        if aid.startswith("$"):
-            return f"读取{what}（{_ref_phrase(aid)}）"
-        return f"读取{what} {aid[:12]}" if aid else f"读取{what}"
-    if name in ("update_tag", "delete_tag"):
-        # 第四轮（20260921）漏了这一处：四个写工具的过程行原样打出 `执行 update_tag`
-        # 这种内部工具名（主人看到的是英文工具名，而不是"要做什么"）。20260922 补上。
-        title = _leaf(a.get("name"))
-        if not title:
-            return "修改标签" if name == "update_tag" else "删除标签"
-        if name == "delete_tag":
-            return f"删除标签「{title}」"
-        acts = []
-        if str(a.get("new_title") or "").strip():
-            acts.append(f"改名为「{_leaf(a.get('new_title'))}」")
-        hexval = A.match_tag_color(a.get("color")) if a.get("color") else None
-        if hexval:
-            acts.append(f"颜色→{A.describe_color(hexval)}")
-        if str(a.get("parent_tag") or "").strip():
-            acts.append(f"移到「{_leaf(a.get('parent_tag'))}」下面")
-        elif str(a.get("to_level") or "").strip() == "one":
-            acts.append("改成一级标签")
-        elif str(a.get("to_level") or "").strip() == "two":
-            acts.append("改成二级标签")
-        head = f"修改标签「{title}」"
-        return f"{head}：{'、'.join(acts)}" if acts else head
-    if name in ("create_category", "update_category", "delete_category"):
-        title = _leaf(a.get("new_title") or a.get("title") or a.get("name"))
-        if name == "create_category":
-            return f"新建分类「{title}」" if title else "新建分类"
-        if name == "delete_category":
-            return f"删除分类「{title}」" if title else "删除分类"
-        if not title:
-            return "修改分类"
-        acts = []
-        if str(a.get("new_title") or "").strip():
-            acts.append(f"改名为「{_leaf(a.get('new_title'))}」")
-        for key, cn in (("path_name", "路径"), ("introduce", "简介"),
-                        ("icon", "图标"), ("color", "颜色")):
-            if str(a.get(key) or "").strip():
-                acts.append(f"{cn}→{_leaf(a.get(key))}")
-        head = f"修改分类「{title}」"
-        return f"{head}：{'、'.join(acts)}" if acts else head
-    if name in ("create_announcement", "update_announcement", "delete_announcement"):
-        # 公告（20260922 第五轮）：过程行**只报标题，不打印正文**——正文是主人要
-        # 对全体访客说的话，过程行只是一行"在做什么"的预告，预览在确认框里。
-        title = _leaf(a.get("title"))
-        if name == "create_announcement":
-            return f"发布公告「{title}」" if title else "发布公告"
-        if name == "delete_announcement":
-            return f"删除公告「{title}」" if title else "删除公告"
-        acts = []
-        if str(a.get("new_title") or "").strip():
-            acts.append(f"改名为「{_leaf(a.get('new_title'))}」")
-        if str(a.get("content") or "").strip():
-            acts.append("正文更新")
-        head = f"修改公告「{title}」" if title else "修改公告"
-        return f"{head}：{'、'.join(acts)}" if acts else head
-    if name in ("audit_board_comment", "delete_board_comment"):
-        # 河灯留言（20260922 第六轮）：留言没有标题，**正文片段就是它唯一的身份**
-        # ⇒ 过程行报片段（与"报标题不报正文"的公告同一条取向：只报认得出是哪一条的
-        # 那一小截，完整正文留给确认框）。12 字截断沿用 _leaf 的统一口径。
-        quote = _leaf(a.get("quote"))
-        if name == "delete_board_comment":
-            return f"删除留言（含「{quote}」的那条）" if quote else "删除留言"
-        v = A.normalize_verdict(a.get("verdict"))
-        cn = A.BOARD_VERDICT_CN.get(v or "", "")
-        head = f"人工复核留言（含「{quote}」的那条）" if quote else "人工复核留言"
-        return f"{head}：{cn}" if cn else head
-    if name in ("add_favorite", "remove_favorite"):
-        # 用户自己的收藏（20260923 批 7）：过程行只报 id，**不报《标题》**——写行
-        # 带标题会被下一轮读成"我读过这篇"的指代证据（同 execution_log 那条纪律）。
-        # 措辞与 Rust `render_exec_row` 的同名臂**逐字一致**：预告帧与落库回执行
-        # 是同一件事的两处渲染，两处不一样会让主人以为发生了两件事。
-        aid = _leaf(a.get("article_id"))
-        what = "收藏文章" if name == "add_favorite" else "取消收藏文章"
-        return f"{what} {aid}" if aid else what
-    if name == "read_messages":
-        # 标记信已读（20260923 批 8）：与下面通知那条同一形状，措辞与 Rust
-        # `render_exec_row` 逐字一致（预告帧与落库回执是同一件事的两处渲染）。
-        if _norm_true(a.get("all")):
-            return "标记站内信已读（全部未读）"
-        mid = _norm_id_list(a.get("ids"))
-        if mid:
-            shown = "、".join(_leaf(i) for i in mid[:3])
-            more = f" 等 {len(mid)} 封" if len(mid) > 3 else ""
-            return f"标记站内信已读（{shown}{more}）"
-        return "标记站内信已读"
-    if name == "read_notifications":
-        # 标记已读（20260923 批 7）：说清**标的是哪几条**（全标 / 具体 id 列表）。
-        if _norm_true(a.get("all")):
-            return "标记站内通知已读（全部未读）"
-        ids = _norm_id_list(a.get("ids"))
-        if ids:
-            shown = "、".join(_leaf(i) for i in ids[:3])
-            more = f" 等 {len(ids)} 条" if len(ids) > 3 else ""
-            return f"标记站内通知已读（{shown}{more}）"
-        return "标记站内通知已读"
-    if name in ("freeze_account", "unfreeze_account"):
-        # 账号冻结 / 解冻（20260926）：过程行只报**账号名**（账号没有《标题》可写，
-        # 见 graph._POPUP_TITLE_TOOLS 那条注），**不报 uid**——uid 是内部编号，
-        # 主人核对靠名字。措辞与 Rust `render_exec_row` 的同名臂**逐字一致**：
-        # 预告帧与落库回执是同一件事的两处渲染，两处不一样会让主人以为发生了两件事。
-        verb = "冻结账号" if name == "freeze_account" else "解冻账号"
-        acct = _leaf(a.get("name"))
-        return f"{verb}「{acct}」" if acct else verb
-    if name == "send_user_notice":
-        # 给单个账号发通知（20260926）：与冻结族同一条纪律——只报**账号名**、
-        # **不报 uid**、**不报正文**（正文是主人刚在确认卡上核对过的那段话，
-        # 过程行里再抄一遍只会让卡片上面的字和下面的字看起来是两件事）。
-        # 措辞与 Rust `render_exec_row` 的同名臂**逐字一致**。
-        acct = _leaf(a.get("name"))
-        return f"给账号「{acct}」发通知" if acct else "给账号发通知"
-    if name == "get_weather":
-        # 天气（20260926 补臂）：Rust `render_exec_row` 的同名臂一直有，Python 这半
-        # 漏了 ⇒ 过程行显示「执行 get_weather」（内部工具名带下划线）。
-        loc = _leaf(a.get("location"))
-        return f"查看天气「{loc}」" if loc else "查看天气"
-    if name == "list_dashboard_todos":
-        # 后台首页待办 / 日程（20260926 补臂）：**读**的那件（无参）。
-        return "查看待办列表"
-    if name == "create_dashboard_todo":
-        # 后台首页待办 / 日程（20260926 补臂）：**写**的那件。正文按
-        # device_oled_display 的同款截断（24 字）——待办正文上限 200 字，过程行放不下；
-        # 落库回执（Rust render_exec_row）按列宽自己去截，两侧**措辞一致**即可。
-        # ⚠️ 这一行是**预告**（灰色过程行），不是主人核对用的那一面——卡面与回执都
-        # 必须印全文（见 `adminops.render_todo_added` 头注里那次真实现场）。截断要
-        # **带省略号**：裸切一刀会读成"系统只记了这半句"。
-        body = _todo_preview(a.get("text"))
-        if not body:
-            return "添加待办"
-        due = str(a.get("date") or "").strip()
-        head = f"添加待办「{body}」"
-        return f"{head}（{due}）" if due else head
-    if name == "complete_dashboard_todo":
-        # 后台首页待办 / 日程（20260926 第十轮）：**勾完成**那件。正文同样按 24 字截断
-        # 并带省略号（待办正文上限 200 字，过程行放不下；落库回执那侧按列宽自己去截，
-        # 两侧**措辞一致**即可，同上面 create_dashboard_todo 那条注）。这里刻意**不写**
-        # 「已完成」：这一行是**预告**（执行前发的过程行），而后端在幂等分支上是真 no-op；
-        # 把结果写进动作名会让"本来就是完成"那一次看起来也改了什么（回执那侧另有
-        # `changed` 判据）。
-        body = _todo_preview(a.get("text"))
-        return f"把待办「{body}」勾成完成" if body else "勾完成待办"
-    if name in _NOARG_VERB:
-        return _NOARG_VERB[name]
-    return f"执行 {name}"
 
 
 def _specs_from_plan(plan: str) -> list:
@@ -1304,7 +986,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                             # spec 的中文动作摘要——与回执完成帧共用渲染、前后一致。
                             # 收尾轮（TOOLS 空/（无），execute 后叙事轮）不发——
                             # 无动作可预告，避免"计划:执行规划动作"式空行
-                            acts = [_tool_action_text(nm, ar)
+                            acts = [tool_action_text(nm, ar)
                                     for nm, ar in _specs_from_plan(plan)]
                             if acts:
                                 hint = "、".join(acts)
@@ -1389,7 +1071,12 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         exec_rows = rows  # 全量（流收尾 __EXEC__ 用）
                         for i in range(receipt_sent, len(rows)):
                             r = rows[i]
-                            emit_process("✅ " + _tool_action_text(
+                            # 完成行仍走**过程行那档**（默认 preview=True）：主人看到的
+                            # 那一行此前逐字如此，这次收敛不动它。回执里的 `action` 是
+                            # **台账档**（多带了《标题》/「公开 → 私密」这类 meta 派生
+                            # 细节），它是给跨轮执行记忆用的，不在这儿显示——两档分工见
+                            # `agent/action_text.py` 头注。
+                            emit_process("✅ " + tool_action_text(
                                 str(r.get("tool") or ""), r.get("args")),
                                 key=f"receipt_{i}")
                             # 连线命令帧（20260926 批 2）：命令搬上了回执行的
@@ -1419,8 +1106,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         bnm, bargs = "", None
                         for _nm, _ar in _specs_from_plan("TOOLS: " + spec):
                             bnm, bargs = _nm, _ar
-                        emit_process("✗ " + _tool_action_text(bnm or str(b.get("tool") or ""),
-                                                              bargs) + f"未成功（{reason}）",
+                        emit_process("✗ " + tool_action_text(bnm or str(b.get("tool") or ""),
+                                                             bargs) + f"未成功（{reason}）",
                                      key=f"blocked_{spec}")
                 # gate 检查判定（20260903：reflector/REVISE/LLM-QC 已废除——gate
                 # 是终节点只收尾不重考：pass → done 收尾；fail → fallback 文本

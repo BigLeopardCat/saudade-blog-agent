@@ -898,9 +898,9 @@ check("  勾完成的回执行同全文", _LONG in A.render_todo_done(_LONG, cha
 # ══════════════════════════════════════════════════════════════════
 print("\n⑭ 过程行与落库回执：带正文、不带内部工具名（两处措辞逐字一致）")
 
-import server as _srv  # noqa: E402
+from agent.action_text import tool_action_text as _tool_action_text  # noqa: E402
 
-_a = _srv._tool_action_text("complete_dashboard_todo", {"text": "交房租"})
+_a = _tool_action_text("complete_dashboard_todo", {"text": "交房租"})
 check("过程行念出正文（这一行会经 recent_executions 注入下一轮——没有正文就认不出是哪条）",
       "交房租" in _a and "勾成完成" in _a, _a)
 check("  不裸露内部工具名（带下划线的名字会被 narrator 照抄）",
@@ -908,26 +908,26 @@ check("  不裸露内部工具名（带下划线的名字会被 narrator 照抄�
 check("  这一行**不写「已完成」**（它是执行前的预告，后端幂等分支上是真 no-op）",
       "已完成" not in _a, _a)
 check("  缺正文时退化成动作词，不炸",
-      _srv._tool_action_text("complete_dashboard_todo", {}) == "勾完成待办",
-      _srv._tool_action_text("complete_dashboard_todo", {}))
+      _tool_action_text("complete_dashboard_todo", {}) == "勾完成待办",
+      _tool_action_text("complete_dashboard_todo", {}))
 # 过程行**可以**比卡面短（它是执行前的灰色预告），但截断必须**看得出来**：裸切一刀
 # 读成"系统只记了这半句"（真实现场里主人就是这么问的），而卡面/回执印的是全文。
-_a_long = _srv._tool_action_text("create_dashboard_todo", {"text": _LONG})
+_a_long = _tool_action_text("create_dashboard_todo", {"text": _LONG})
 check("  长正文的过程行是**带省略号的预览**（不是把正文裸切 24 字）",
       _a_long.endswith("」") and "…」" in _a_long and _LONG not in _a_long, _a_long)
 check("  短正文的过程行不凭空加省略号（没截就是没截）",
-      "…" not in _srv._tool_action_text("create_dashboard_todo", {"text": "交房租"}),
-      _srv._tool_action_text("create_dashboard_todo", {"text": "交房租"}))
+      "…" not in _tool_action_text("create_dashboard_todo", {"text": "交房租"}),
+      _tool_action_text("create_dashboard_todo", {"text": "交房租"}))
 _rsrc = _parent_repo.read(
     "src/routes/chat.rs",
-    why="跨轮执行记忆的动作行是 Rust 写时渲染定稿的 ⇒ 只改 Python 一侧，线上台账里"
-        "那些行仍是旧措辞")
+    why="跨轮执行记忆的动作行**自 20260928 起由 Python 写时渲染定稿**"
+        "（`agent/action_text.py::receipt_action`，落 `rcpt[\"action\"]`）⇒ 这里要钉的是"
+        "Rust 那半**认得出这个字段**，而不是它自己也有一张同名表")
 if _rsrc is not None:
-    check("Rust 那半有同名臂（漏了会把 `complete_dashboard_todo` 这种带下划线的内部名"
-          "写进 execution_log 被下一轮照抄）",
+    check("Rust 那半读回执顶层的 `action`（不读的话这一行仍是老表渲染的旧措辞）",
+          'row["action"]' in _rsrc, "chat.rs")
+    check("  老表仍在（存量行 + 无臂工具仍走它——删了历史台账会渲染成空）",
           '"complete_dashboard_todo" =>' in _rsrc, "chat.rs")
-    check("  两侧措辞逐字一致（预告帧与落库回执是同一件事的两处渲染）",
-          "把待办「{}」勾成完成" in _rsrc, "chat.rs")
 
 
 # ══════════════════════════════════════════════════════════════════
