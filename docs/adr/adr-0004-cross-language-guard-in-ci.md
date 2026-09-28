@@ -104,4 +104,9 @@ steps:
   set src/routes`），然后
   `SAUDADE_PARENT_REPO=<那份> SAUDADE_REQUIRE_PARENT=1 .venv/bin/python tests/run_all.py`
   → **60/60 通过**；逐个跑七处守卫，`⏭ 跳过父仓断言` 命中数 **0/7**（= 都真判了）。
-- **CI**：首跑记录待补（接线自我引用：本文件的存在与秘密名由 `test_ci_suite_list.py` ⑥ 判）。
+- **CI 首跑**（20260928，run `36435335977`，提交 `335f8ca`）：**绿**。现场读数——父仓 checkout
+  与落位自检两步通过；离线套件 `60/60`；日志里 `跳过父仓断言` 命中 **0**（= 七处守卫在 CI 里
+  **全部真判**），例如「父仓 `render_exec_row` 按 doc_type 分名词（board/talk/announcement
+  三臂）」「父仓 talks.rs 的审核失败分支确实返回「转人工待审」(0, None, None, None)」「Rust
+  那半读回执顶层的 `action`」。**这些行在 CI 里此前一次也没出现过**——那七处守卫过去在这里
+  恒返 `None`，两侧的绿谁也没证明过对方。
