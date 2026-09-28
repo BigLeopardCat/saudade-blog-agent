@@ -11,16 +11,19 @@
   ③ **CHANGELOG 的价值全在"能信"**：日期倒序、每条有正文、最新日期不晚于最后一笔提交。
      最后一条是**强制决定**：那一天"没有值得记的行为变更"也是一个决定，写成一行
      `- （这天只有文档/排版与测试补件，无行为变更）` 即可——不许默默不写。
+     "今天"一律取**本仓钟面**（+08:00，见 `_today_cn`）：判据读机器本地钟的后果是
+     本机与 CI 看的不是同一件事（20260929 实测：CI 恒红）。
   ④ **版本号只有一个来源**（`pyproject.toml`）：另立 `VERSION` 文件或 `__version__` 常量
      就是第二份名单，迟早对不上（同族教训：`rotate 14` 与实际最老 26 天、R2 的 `--keep 3`
      写了没人执行）。
 
 用法：.venv/bin/python tests/test_style_hygiene.py
 """
+import os
 import re
 import subprocess
 import sys
-from datetime import date
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
@@ -45,6 +48,19 @@ GENERATED = re.compile(r"^eval/report/.*\.json$")
 # 判据常量：与 `.editorconfig` 的 `[*]` 段**同源**（下面 ② 会去解析那份文件并比对）
 WANT = {"charset": "utf-8", "end_of_line": "lf",
         "insert_final_newline": "true", "trim_trailing_whitespace": "true"}
+
+
+# 「今天」= **本仓钟面**（+08:00 本地日）的当天，与 CHANGELOG 头注「日期是本地（+08:00）
+# 日期」、`docs/问题记录.md` 的日期戳同源。**不能用 `date.today()`**：它取的是"跑这条判据
+# 的那台机器"的本地日期，而 CI runner 是 UTC —— 每晚 16:00–24:00 UTC（= 本地 00:00–08:00）
+# 之间提交的条目会被判成"未来"，症状正是本仓最怕的那种：**本机恒绿、CI 恒红，两边看的都
+# 不是代码**（家族教训见 20260928 的 `JWT_SECRET` 那条）。固定 +08:00 而不是 `ZoneInfo`：
+# 中国无夏令时，+08:00 就是"本地钟面"的定义，且不依赖那台机器装没装 tzdata。
+_CST = timezone(timedelta(hours=8))
+
+
+def _today_cn() -> str:
+    return datetime.now(_CST).strftime("%Y%m%d")
 
 
 def _tracked() -> list[str] | None:
@@ -165,8 +181,22 @@ def main() -> int:
                   f"条目={dates[0] if dates else None}")
         else:
             check("取到最后一笔提交的日期（取不到就不算通过）", False, repr(latest))
-        check("最新条目日期不是未来", bool(dates) and dates[0] <= date.today().strftime("%Y%m%d"),
-              dates[0] if dates else "")
+        check("最新条目日期不是未来", bool(dates) and dates[0] <= _today_cn(),
+              f"条目={dates[0] if dates else None} 本仓钟面今天={_today_cn()}")
+        # 反面锁：**判据本身必须环境无关**。上面那条在另一个时区里跑整个套件再判一次——
+        # 子进程里所有断言都重跑，所以"有一次读回了跑它的那台机器的钟"就会红。用环境变量
+        # 挡住递归（子进程不再套娃）；America/New_York 与 +08:00 的日期在一天里大半时间不同，
+        # 正是 CI 那个窗口的形状。成本约 0.1 秒。
+        if os.environ.get("SAUDADE_STYLE_TZ_LOCK") == "1":
+            pass
+        else:
+            _sub = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve())],
+                cwd=ROOT, capture_output=True, text=True, timeout=60,
+                env={**os.environ, "TZ": "America/New_York", "SAUDADE_STYLE_TZ_LOCK": "1"})
+            _tail = [ln for ln in (_sub.stdout or _sub.stderr or "").splitlines() if ln.strip()]
+            check("换一个时区（TZ=America/New_York）跑本套件仍然通过（判据不读跑它那台机器的钟）",
+                  _sub.returncode == 0, _tail[-1].strip() if _tail and _sub.returncode else "")
 
     print("\n④ 版本号只有一个来源（pyproject.toml）")
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
