@@ -936,7 +936,11 @@ from agent.graph import _CONTENT_TOOLS  # noqa: E402
 from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
-_s = _src("server.py")
+_s = _src("agent/action_text.py")
+# 动作措辞 20260928 从 `server.py` 搬进 `agent/action_text.py`（唯一实现，见模块头注）；
+# 下面这几条从"扫源码里有没有那个字符串"改成**调一次看结果**——同样的判据，
+# 但改内部写法（换 if/elif、改分支顺序）不会再假红。
+from agent.action_text import tool_action_text as _act  # noqa: E402
 check("三个读工具都在注册表里",
       all(n in {t.name for t in _TOOL_REGISTRY} for n in READ_TOOLS),
       str(sorted(n for n in READ_TOOLS if n not in {t.name for t in _TOOL_REGISTRY})))
@@ -955,7 +959,8 @@ check("三个都在 planner 点名白名单（无参只读，走 PARAMS.tools）
 check("三个都在 _CONTENT_TOOLS（否则『你还没有未读通知』这句站内结论没有帧）",
       all(n in _CONTENT_TOOLS for n in READ_TOOLS))
 check("三个都有中文动作词（否则过程行显示『执行 list_notifications』）",
-      all(f'"{n}":' in _s for n in READ_TOOLS))
+      all(f'"{n}":' in _s for n in READ_TOOLS)
+      and all(_act(n, {}) != f"执行 {n}" for n in READ_TOOLS))
 check("工具描述里写了『自己』（措辞不许让 planner 读成『全站』）",
       all("自己" in getattr(base, n).description for n in READ_TOOLS))
 # 菜单是白名单 × 注册表**生成**的（不手抄）：进了白名单就必然进菜单，且带着
@@ -999,7 +1004,8 @@ check("read_messages 与 read_notifications 共用一个同意闸族（同一句
       and authz._OWN_TOOL_FAMILY["read_messages"] == authz._OWN_TOOL_FAMILY["read_notifications"],
       f"{authz.TOOL_SCOPE['read_messages']} / {authz._OWN_TOOL_FAMILY.get('read_messages')}")
 check("站内信两件都有中文动作词分支（否则过程行显示『执行 read_messages』）",
-      'if name == "read_messages"' in _s and '"标记站内信已读（全部未读）"' in _s
+      _act("read_messages", {"all": "True"}) == "标记站内信已读（全部未读）"
+      and _act("list_my_messages", {}) == "查看站内信"
       and '"list_my_messages": "查看站内信"' in _s)
 if _rust:
     check("Rust 侧两个臂都在，且措辞与 agent 侧同源",
@@ -1019,10 +1025,9 @@ check("写工具都不在 planner 点名白名单（写只能由技能模板展�
       all(n not in _EXPLICIT_TOOLS and n not in _CALLABLE_QUERY_TOOLS
           and n not in _G._tools_desc(None) for n in WRITE_TOOLS))
 check("三个写工具都有中文动作词分支（否则过程行显示『执行 add_favorite』）",
-      'if name in ("add_favorite", "remove_favorite")' in _s
-      and 'if name == "read_notifications"' in _s
-      and '"收藏文章" if name == "add_favorite" else "取消收藏文章"' in _s
-      and '"标记站内通知已读（全部未读）"' in _s)
+      _act("add_favorite", {"article_id": "12"}) == "收藏文章 12"
+      and _act("remove_favorite", {"article_id": "12"}) == "取消收藏文章 12"
+      and _act("read_notifications", {"all": "True"}) == "标记站内通知已读（全部未读）")
 if _rust:
     check("过程行动作词与 Rust render_exec_row 的同名臂措辞同源（收藏/取消收藏）",
           '收藏文章 {}' in _rust and '取消收藏文章 {}' in _rust,

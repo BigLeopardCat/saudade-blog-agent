@@ -570,29 +570,35 @@ check("  它走名字通道（收件人在名录里核对得出来 ⇒ 不进「
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑬ 过程行：报账号名，**不报工具名、不报正文**")
-import server as _srv  # noqa: E402
-_a = _srv._tool_action_text("send_user_notice",
-                            {"name": "guest5", "content": BODY, "title": "关于留言规范"})
+from agent.action_text import (receipt_action as _receipt_action,  # noqa: E402
+                               tool_action_text as _tool_action_text)
+_a = _tool_action_text("send_user_notice",
+                       {"name": "guest5", "content": BODY, "title": "关于留言规范"})
 check("中文动作 + 账号名，没有裸工具名", "guest5" in _a and "send_user_notice" not in _a,
       _a)
 check("  **不带正文**（正文是主人刚在卡上核对过的那段话，回执里再抄一遍会像两件事）",
       BODY[:6] not in _a and "关于留言规范" not in _a, _a)
 check("  没给名字也只给中文动作词", "send_user_notice" not in
-      _srv._tool_action_text("send_user_notice", {"content": BODY}), "")
+      _tool_action_text("send_user_notice", {"content": BODY}), "")
 check("  与冻结族不同形（冻结是「冻结账号「X」」）",
-      _a != _srv._tool_action_text("freeze_account", {"name": "guest5"}), _a)
+      _a != _tool_action_text("freeze_account", {"name": "guest5"}), _a)
 
 sys.path.insert(0, str(ROOT / "tests"))
 import _parent_repo  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
 _rust = _parent_repo.read(
     "src/routes/chat.rs",
-    why="回执行的动作措辞两侧同源（预告帧与落库回执是同一件事的两处渲染）")
+    why="执行台账的动作行**自 20260928 起由 Python 渲染**（`rcpt[\"action\"]`）⇒ 两侧"
+        "不再各有一份词表；要钉的是 Rust 认得出这个字段（见 tests/test_action_text.py ④）")
 if _rust:
-    check("父仓 render_exec_row 有同名臂（否则过程行落成「执行 send_user_notice」）",
-          '"send_user_notice" =>' in _rust, "src/routes/chat.rs 缺臂")
-    check("  ⭐ Rust 侧措辞与 server.py **逐字一致**（预告帧与落库回执是同一件事的两处渲染）",
-          "给账号「{}」发通知" in _rust and "给账号「" in _a, _a)
+    check("父仓 render_exec_row 读回执顶层的 action（不读 ⇒ 台账里仍是老表那句）",
+          'row["action"]' in _rust, "src/routes/chat.rs 未接线")
+    check("  老表仍在（存量行与无臂工具仍走它）", '"send_user_notice" =>' in _rust,
+          "src/routes/chat.rs 缺臂")
+    check("  ⭐ 台账行与过程行同字（同一份实现的两档——这一句正是 20260928 收敛的目标）",
+          _receipt_action("send_user_notice", {"name": "guest5", "content": BODY},
+                          {"op": "notice_send", "account_name": "guest5"})
+          == "给账号「guest5」发通知" and "给账号「" in _a, _a)
 
 check("成功回执不套错误帧 ⇒ checker 照常 PASS（这一族没有 policy_refused 形态）",
       _check_spec("send_user_notice", {"name": "guest5"}, True,

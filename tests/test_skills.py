@@ -2631,12 +2631,13 @@ def test_refs():
     # 过程行渲染：预告帧在 execute 之前发，此刻引用尚未解析——不能把内部语法
     # 打印给访客（`读取文章 $search_notes[0].noteKe`）
     import server
-    label = server._tool_action_text("get_article_detail",
-                                     {"article_id": "$search_notes[0].noteKey"})
+    from agent.action_text import tool_action_text as _tool_action_text
+    label = _tool_action_text("get_article_detail",
+                              {"article_id": "$search_notes[0].noteKey"})
     check("过程行把引用译成来源短语、不泄露 $x[0].y 语法",
           "$" not in label and "检索结果" in label and "第 1 条" in label, label)
     check("过程行：字面 id 照旧（行为不变）",
-          server._tool_action_text("get_article_detail", {"article_id": 19}) == "读取文章 19")
+          _tool_action_text("get_article_detail", {"article_id": 19}) == "读取文章 19")
     check("受阻行原因码有中文（✗ 行不裸露英文码）",
           all(c in server._REASON_CN for c in
               ("ref_unknown_tool", "ref_unparsed", "ref_index_range",

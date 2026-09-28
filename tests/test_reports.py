@@ -591,24 +591,28 @@ check("既有公开技能对非 admin 仍然可见（别把过滤写宽了）",
       all(n in build_planner_context("user") for n in ("chat", "content_query", "navigate")))
 
 src = (ROOT / "server.py").read_text(encoding="utf-8")
+# 动作词表 20260928 从 `server.py` 搬进 `agent/action_text.py`（唯一实现，见该模块头注）；
+# 原因码表 `_REASON_CN` 仍留 `server.py`（它贴的是 BLOCK 原因码，不是动作措辞）。
+asrc = (ROOT / "agent" / "action_text.py").read_text(encoding="utf-8")
 check("过程行有中文动作词（否则显示『执行 get_server_status』）",
-      all(f'"{n}":' in src for n in NEW))
+      all(f'"{n}":' in asrc for n in NEW))
 
 # ⭐ 派生锁（20260926）：**每一个可达工具**都要有中文动作词——判据是行为（调一次
 # `_tool_action_text`，看它是不是落进末尾那句 `执行 {name}`），不是"字符串出现在
 # 源码里"（上面那条就是后者，它对 `# 注释里提过 create_dashboard_todo` 也绿）。
 # 可达 = 技能模板里的工具 ∪ 两条点名白名单；刻意**不含** get_chat_history /
 # search_knowledge_base（占位实现、不在任何白名单里，进不来也出不了回执）。
-# Rust 侧 `render_exec_row` 是同一张表的镜像，但它不在这仓里（独立仓库、CI 看不见
-# 父仓），所以那半只能靠这条注释和提交说明提醒：**加工具时两边都要加**。
-import server as _srv  # noqa: E402
+# **20260928 起这张表只有一份**（`agent/action_text.py`）：Rust `render_exec_row` 那张
+# 镜像表退成"认不出 `action` 时的回落"，加工具**只在这一处加**（两侧期望值都锁在
+# `tests/test_action_text.py`；这条注释此前的"两边都要加"已作废）。
+from agent.action_text import tool_action_text as _tool_action_text  # noqa: E402
 from agent.skills import (SKILLS, _CALLABLE_QUERY_TOOLS,  # noqa: E402
                           _EXPLICIT_TOOLS)
 _reachable = set(_EXPLICIT_TOOLS) | set(_CALLABLE_QUERY_TOOLS)
 for _sk in SKILLS:
     _reachable |= {t for t, _ in _sk.plan}
 _noverb = sorted(n for n in _reachable
-                 if _srv._tool_action_text(n, {}) == f"执行 {n}")
+                 if _tool_action_text(n, {}) == f"执行 {n}")
 check(f"⭐ 可达工具（{len(_reachable)} 件）全都有中文动作词"
       "（漏了过程行与执行回执都显示内部工具名 `执行 xxx`，带下划线）",
       not _noverb, "；".join(_noverb))
@@ -738,7 +742,7 @@ check("⭐ superadmin 的 planner 上下文里同样能看到（技能可见性�
       all(n in build_planner_context("superadmin")
           for n in ("admin_notes", "tag_create", "article_status", "article_tags")))
 check("过程行有中文动作词（否则显示『执行 create_tag』）",
-      all(f'"{n}":' in src for n in W2))
+      all(f'"{n}":' in asrc for n in W2))
 check("reason 中文表里有 unknown_target（错误帧原因码要翻译给用户看）",
       '"unknown_target"' in src and "目标未经确认" in src)
 

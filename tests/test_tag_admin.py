@@ -883,17 +883,17 @@ _q = A.render_confirm_question([{"tool": "delete_announcement",
                                 "args": {"title": "维护通知"}}])
 check("删公告的问句写清「取不回来」", "删除公告「维护通知」" in _q and "取不回来" in _q, _q)
 
-print("  · 过程行（server._tool_action_text）有中文动作词，且**不打印正文**")
-import server as _srv  # noqa: E402
-_p = _srv._tool_action_text("create_announcement",
-                            {"title": "维护通知", "content": "今晚 23 点维护"})
+print("  · 过程行（agent.action_text.tool_action_text）有中文动作词，且**不打印正文**")
+from agent.action_text import tool_action_text as _tool_action_text  # noqa: E402
+_p = _tool_action_text("create_announcement",
+                       {"title": "维护通知", "content": "今晚 23 点维护"})
 check("新建公告的过程行 = 发布公告「维护通知」，正文不进过程行",
       _p == "发布公告「维护通知」", _p)
 check("改/删的过程行也只报标题",
-      _srv._tool_action_text("update_announcement",
-                             {"title": "维护通知", "new_title": "维护改期"})
+      _tool_action_text("update_announcement",
+                        {"title": "维护通知", "new_title": "维护改期"})
       == "修改公告「维护通知」：改名为「维护改期」"
-      and _srv._tool_action_text("delete_announcement", {"title": "维护通知"})
+      and _tool_action_text("delete_announcement", {"title": "维护通知"})
       == "删除公告「维护通知」")
 
 
@@ -1076,15 +1076,15 @@ _q = A.render_confirm_question([{"tool": "audit_board_comment",
 check("读不到留言清单（boards=None）→ 同样如实标注，且**照样弹窗**（不因此不弹）",
       "没能核对上" in _q and "通过（放行" in _q, _q)
 
-print("  · 过程行（server._tool_action_text）报片段、报结论，**不打印整条留言**")
+print("  · 过程行（agent.action_text.tool_action_text）报片段、报结论，**不打印整条留言**")
 check("复核的过程行 = 人工复核留言（含「…」的那条）：通过",
-      _srv._tool_action_text("audit_board_comment",
-                             {"quote": "今天天气真好呀", "verdict": "reject"})
+      _tool_action_text("audit_board_comment",
+                        {"quote": "今天天气真好呀", "verdict": "reject"})
       == "人工复核留言（含「今天天气真好呀」的那条）：驳回"
-      and _srv._tool_action_text("delete_board_comment", {"quote": "今天天气真好呀"})
+      and _tool_action_text("delete_board_comment", {"quote": "今天天气真好呀"})
       == "删除留言（含「今天天气真好呀」的那条）",
-      _srv._tool_action_text("audit_board_comment",
-                             {"quote": "今天天气真好呀", "verdict": "reject"}))
+      _tool_action_text("audit_board_comment",
+                        {"quote": "今天天气真好呀", "verdict": "reject"}))
 
 print("  · 规划轮的「先看能不能做」：留言走**同一套**预检（⑨ 的留言版）")
 with patch(_board_index=lambda c: bidx()):

@@ -258,7 +258,7 @@ print("\n⑥ 物件名与出口覆盖（20260928）：同一个数字不只以�
 # "把留言编号当成文章读"。
 from tools import base as _B  # noqa: E402
 from tools.base import DOC_TYPE_CN  # noqa: E402
-import server as _SRV  # noqa: E402
+from agent.action_text import tool_action_text as _tool_action_text  # noqa: E402
 
 check("物件名只有一份（`DOC_TYPE_CN`），四个源都在",
       set(DOC_TYPE_CN) == {"note", "talk", "board", "announcement"}
@@ -266,16 +266,16 @@ check("物件名只有一份（`DOC_TYPE_CN`），四个源都在",
       str(DOC_TYPE_CN))
 for _dt, _noun in (("board", "留言"), ("talk", "说说"), ("announcement", "公告"),
                    ("note", "文章")):
-    _line = _SRV._tool_action_text("get_article_detail",
-                                   {"article_id": 100, "doc_type": _dt})
+    _line = _tool_action_text("get_article_detail",
+                              {"article_id": 100, "doc_type": _dt})
     check(f"过程行按 doc_type 说话：{_dt} → 读取{_noun} 100", _line == f"读取{_noun} 100", _line)
 check("  缺 doc_type 时回落到「文章」（存量行为与确定性快道一个字节不变）",
-      _SRV._tool_action_text("get_article_detail", {"article_id": 19}) == "读取文章 19",
-      _SRV._tool_action_text("get_article_detail", {"article_id": 19}))
+      _tool_action_text("get_article_detail", {"article_id": 19}) == "读取文章 19",
+      _tool_action_text("get_article_detail", {"article_id": 19}))
 check("  `$ref` 形态同样按 doc_type 取名词",
-      _SRV._tool_action_text("get_article_detail",
-                             {"article_id": "$search_notes[0].noteId",
-                              "doc_type": "board"}).startswith("读取留言（"), "")
+      _tool_action_text("get_article_detail",
+                        {"article_id": "$search_notes[0].noteId",
+                         "doc_type": "board"}).startswith("读取留言（"), "")
 
 # ⑥b 出口覆盖：这一支此前是裸 `str(it)`，绕过 `_shape` ⇒ 同一份帧里 article 族的键
 # 叫 `noteId`、留言族却仍是上游的 `talkKey`（读者回复里 `talkId 99` 与 `talkKey 100`

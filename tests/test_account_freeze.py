@@ -641,21 +641,22 @@ check("  两个技能名与两个工具名不是一套字面量（混用会让�
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑭ 过程行与原因码：不许把英文码/内部工具名打给访客看")
-import server as _srv  # noqa: E402
+import server as _srv  # noqa: E402  （下面只取 `_REASON_CN`）
+from agent.action_text import tool_action_text as _tool_action_text  # noqa: E402
 check("⭐ _REASON_CN 有 policy_refused 且是中文（漏了会原样打出英文码）",
       "policy_refused" in _srv._REASON_CN
       and not _srv._REASON_CN["policy_refused"].isascii(),
       str(_srv._REASON_CN.get("policy_refused")))
 check("  它与 unavailable 是两个词（政策拒绝 ≠ 服务不可用：前者重试无意义）",
       _srv._REASON_CN["policy_refused"] != _srv._REASON_CN["unavailable"], "")
-_a_f = _srv._tool_action_text("freeze_account", {"name": "guest5"})
-_a_t = _srv._tool_action_text("unfreeze_account", {"name": "guest5"})
+_a_f = _tool_action_text("freeze_account", {"name": "guest5"})
+_a_t = _tool_action_text("unfreeze_account", {"name": "guest5"})
 check("⭐ 过程行报账号名、不报裸工具名",
       "guest5" in _a_f and "freeze_account" not in _a_f and _a_f != _a_t, _a_f)
 check("  解冻方向措辞不同（预告帧与落库回执是同一件事的两处渲染）",
       _a_t == "解冻账号「guest5」" and _a_f == "冻结账号「guest5」", f"{_a_f} | {_a_t}")
 check("  没给名字也只给中文动作词（不打印内部工具名）",
-      "freeze_account" not in _srv._tool_action_text("freeze_account", {}))
+      "freeze_account" not in _tool_action_text("freeze_account", {}))
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑮ gate 5a：政策拒绝被叙述成完成式 → fallback 用**政策那张**文案")

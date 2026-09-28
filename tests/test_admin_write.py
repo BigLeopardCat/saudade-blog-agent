@@ -799,10 +799,16 @@ try:
     check("  回执带执行角色与结构化的变更前后（跨语言契约）",
           rcpt["principal_role"] == "admin" and rcpt["op"] == "set_status"
           and rcpt["before"] == "私密" and rcpt["after"] == "公开", str(rcpt))
+    # `action` 是 20260928 新加的那一个（跨轮执行记忆那一行的**定稿措辞**，Python
+    # 写 / Rust 只排版）。加它的正当性：此前那一行由 Rust 独立渲染，同一件事两处
+    # 措辞已经漂了（54 条取样只有 31 条逐字相同）——**它是收敛，不是新债**。
+    # 除此之外键集仍然固定：这一条的意义正是"想加键就得来改这份清单"。
     check("  回执键集固定（多出来的键是无声的兼容性债）",
-          set(rcpt) == {"skill", "tool", "args", "result", "ts",
+          set(rcpt) == {"skill", "tool", "args", "result", "ts", "action",
                         "principal_role", "op", "article_id", "before", "after"},
           str(sorted(rcpt)))
+    check("  这一行台账措辞确实定了稿（不是留空等 Rust 兜）",
+          rcpt["action"] == "修改文章 12：私密 → 公开", rcpt.get("action"))
     check("  回执里没有 uid（detail 进生产库、还可能被 narrator 念出来）",
           not any("uid" in k for k in rcpt) and "uid" not in json.dumps(rcpt), str(rcpt))
     check("  回执不带《标题》（下一轮会把它读成「我读过这篇」的指代证据）",
