@@ -16,9 +16,11 @@
 断"文本里有没有「不能」"是假绿——换一句措辞就过。
 
 `_parent_repo.py` 的跨语言守卫（Rust 源码里真有 `"chat_quota"` / `"quota_blocked"`、
-真有 `WHERE status=0` 的原子认领、`temp_user.rs` 仍回裸 `Vec`）**刻意不在这里**——Rust
-那半尚未落地，此刻挂上去只会是一条结构性假红（而那个窗口里没有任何 Rust 代码可漂移）。
-它随交付顺序 ③ 之后那一小笔补进本文件，末节留了一行显式的 ⏭。
+真有 `WHERE status=0` 的原子认领、`temp_user.rs` 仍回裸 `Vec`）在**末节 ⑫**：它随交付
+顺序 ③（Rust + 前端那一笔）落地后补上——在那之前挂上去只会是一条结构性假红，而那个
+窗口里没有任何 Rust 代码可漂移。**末节的存在意义**是这一条：本文件的主断言全在
+Python 侧，而额度这个功能的失败面有一半住在 Rust 的**形状**里（键名、闸门位置、
+原子认领），错了以后运行时是静默的。
 
 用法：.venv/bin/python tests/test_chat_quota.py
 """
@@ -787,9 +789,103 @@ finally:
         g._TOOL_MAP["approve_quota_request"] = _saved_tool
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⏭ 跨语言守卫（Rust 侧 `chat_quota` / `quota_blocked` / 原子认领 / 裸 `Vec`）"
-      "**本笔不在此**：Rust 那半尚未落地，此刻挂上去是结构性假红——"
-      "它随交付顺序 ③ 之后那一小笔补进本文件。")
+# ⑫ 跨语言守卫：Rust 那半（20260929 ③ 落地后补上）
+# 这一节守的全是**形状**而不是文案，因为这几处坏掉时运行时**一句话都不说**：
+#   · 键名对不上 ⇒ pydantic 的 `extra=ignore` 把整个额度字段丢掉，日志里零痕迹；
+#   · 闸门挪到 `is_confirm` 之前 ⇒ 点一次确认卡烧掉一轮，而**离线套件一条都抓不到**
+#     （前端 `.test.py` 用的是假 axios，跑不到 Rust 这一段）；
+#   · 原子认领的 `WHERE status=0` 被删 ⇒ 重复点通过会清零两次、发两条通知；
+#   · `/api/temp-users` 被"顺手"包成信封 ⇒ `_user_directory` 的顶层 list 判据失效，
+#     症状是过程行「执行出错」（看起来像服务挂了）。
+import _parent_repo  # noqa: E402
+
+_rust_chat = _parent_repo.read(
+    "src/routes/chat.rs",
+    why="C1/C3 两个键由 Rust 写、agent 读；键名或闸门位置一错，额度在运行时静默失效")
+_rust_quota = _parent_repo.read(
+    "src/routes/quota.rs",
+    why="原子认领（`WHERE id=? AND status=0`）是「重复点通过 ⇒ 清零两次 + 两条通知」的唯一防线")
+_rust_temp = _parent_repo.read(
+    "src/routes/temp_user.rs",
+    why="`GET /api/temp-users` 是裸数组（`_user_directory` 按顶层 list 认），且它带着额度字段")
+_rust_lib = _parent_repo.read(
+    "src/quota.rs",
+    why="扣减是**一条**语句（并发下计数器绝不越过上限）、免额判据委托 authz")
+
+if _rust_chat:
+    check("body 里真的带 `chat_quota` 与 `quota_blocked` 两个键（C1/C3 的写端）",
+          '"chat_quota"' in _rust_chat and '"quota_blocked"' in _rust_chat,
+          "src/routes/chat.rs 未见这两个键")
+    check("  两键是**条件插入**（`chat_quota` 是 `Option`，`json!` 会写成 null ⇒ 冒出"
+          "「键在、值是 null」这种第三种形状，而契约只有「有」和「整个键缺席」两种）",
+          "if let Some(q) = &quota {" in _rust_chat and "if quota_blocked {" in _rust_chat,
+          "两处 insert 不在条件里")
+    # ⭐ 位置判据（两条，缺一条就漏一种改法）：**先判是不是确认轮、再谈扣减**，
+    # 且确认那一支**整段什么都不做**。取 `if is_confirm {` 与它自己的 `} else {` 之间
+    # 那一段，要求里面一次 `quota::` 都不出现（读、扣、判角色都算）。
+    _i_cfm = _rust_chat.find("let is_confirm = ")
+    _i_gate = _rust_chat.find("let (quota, quota_blocked) = ")
+    check("⭐ 闸门落在 `is_confirm` **之后**（早几行落 ⇒ 每次点确认卡都烧掉一轮，"
+          "而离线判据一条都抓不到：前端沙箱用的是假 axios，跑不到这一段）",
+          0 <= _i_cfm < _i_gate, f"is_confirm={_i_cfm} 闸门={_i_gate}")
+    _gseg = _rust_chat[_i_gate:_rust_chat.find("} else {", _i_gate)] if _i_gate >= 0 else ""
+    check("⭐ 确认轮那一支**整段跳过**（不读、不扣、不判角色）",
+          "(None, false)" in _gseg and "quota::" not in _gseg,
+          "确认分支里出现了额度动作：" + _gseg[:70].replace("\n", " "))
+
+if _rust_quota:
+    _c0 = _rust_quota.find("let claimed = ")
+    _cseg = _rust_quota[_c0:_rust_quota.find(".await", _c0)] if _c0 >= 0 else ""
+    check("审核的 UPDATE 自己带「还是待处理」这个条件（并发下只有一个能匹配到行）",
+          "quota_request::Column::Status.eq(STATUS_PENDING)" in _cseg,
+          _cseg[:90].replace("\n", " "))
+    _i_zero = _rust_quota.find('return Json(ApiResponse::error("这条申请已经处理过了"))')
+    _i_wipe = _rust_quota.find("user::Column::ChatQuotaUsed, Expr::value(0)")
+    check("⭐ 认领不到就 return（**清零在认领之后**；顺序反了 = 并发下同一个人的额度被清两次、"
+          "两条通知都发出去）",
+          _i_zero >= 0 and _i_wipe > _i_zero, f"认领={_i_zero} 清零={_i_wipe}")
+
+if _rust_lib:
+    check("扣减是**一条**语句：`+1` 与 `WHERE chat_quota_used < limit` 同句"
+          "（先查后写会留下越过上限的窗口）",
+          "Expr::col(user::Column::ChatQuotaUsed).add(1)" in _rust_lib
+          and "user::Column::ChatQuotaUsed.lt(limit)" in _rust_lib, "src/quota.rs 未见条件 UPDATE")
+    check("  判据是 `rows_affected`（1=扣到 / 0=用尽），不是「读回来的值猜一猜」",
+          "rows_affected == 1" in _rust_lib, "src/quota.rs 未按 rows_affected 判")
+    check("免额判据**委托** `authz::can_access_console`"
+          "（不是第二份角色比较——那正是它被造出来防的）",
+          "can_access_console" in _rust_lib, "src/quota.rs 自己比了角色")
+
+if _rust_temp:
+    check("`GET /api/temp-users` 仍回**裸 Vec**（不是信封）：`_user_directory` 的顶层 list "
+          "判据、前端 `Array.isArray`、探针三处都认这个形状",
+          "-> Json<Vec<TempUserInfo>>" in _rust_temp, "src/routes/temp_user.rs 的信封被改了")
+    check("  每行真的多了 `chatQuotaUsed` / `chatQuotaLimit`（serde camelCase）",
+          '"chatQuotaUsed"' in _rust_temp and '"chatQuotaLimit"' in _rust_temp,
+          "src/routes/temp_user.rs 缺这两个 rename")
+    check("  主动重置挂在账号族、判据 `authz::is_listable_role`（与发通知逐字同一条 ⇒ 超管够不着）",
+          "is_listable_role" in _rust_temp, "src/routes/temp_user.rs 未走名录判据")
+    _adm = (ROOT / "agent" / "adminops.py").read_text(encoding="utf-8")
+    check("⭐ 两侧读的是**同一个键名**（Rust 的 serde rename ↔ agent 的 `row.get`）"
+          "——改一侧不会报错，只会让用量一直读到 0",
+          'row.get("chatQuotaUsed")' in _adm, "agent 侧读的键名不是 chatQuotaUsed")
+
+# 后端那批措辞：agent 按它们分族（政策类 ⇒ 如实转述、不许改参重试）。
+# ⚠️ **说清哪些真从 Rust 来**：三句政策措辞里只有两句是后端发的，第三句
+# （`该账号没有待处理的额度申请`）是 agent 自己在"这个 uid 没有 pending 行"时合成的
+# ——Rust 侧从不发它。把三句一律断言成"Rust 会说的"，是一条**假的**守卫。
+if _rust_quota and _rust_temp:
+    _rust_all = _rust_chat + _rust_quota + _rust_temp
+    check("agent 认作政策类的两句后端措辞，Rust 侧真的会说（认不出 ⇒ 落到 unavailable，"
+          "主人收到一句「没确认」而不是「已经处理过了」）",
+          "这条申请已经处理过了" in _rust_all
+          and "你已经有一份待处理的申请了" in _rust_all, "Rust 缺这两句之一")
+    check("  第三句是 agent 自己合成的（Rust 从不发它）——如实记下，别让它看起来像后端措辞",
+          "该账号没有待处理的额度申请" not in _rust_all
+          and "该账号没有待处理的额度申请" in base._QUOTA_POLICY_REFUSALS,
+          "第三句的来源与注释不符")
+    check("目标类那句 `用户不存在` 在账号族里（⇒ `not_found`：换账号 / 问主人，不是重试）",
+          "用户不存在" in _rust_temp, "src/routes/temp_user.rs 未见该措辞")
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
