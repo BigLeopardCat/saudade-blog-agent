@@ -107,10 +107,6 @@ check("夜间给 run_all 也没传 -k（夜间=全量）",
 print("\n③ 夜间：跨语言守卫跑不到就是红，不是静默跳过")
 check("夜间导出了 SAUDADE_REQUIRE_PARENT=1（父仓守卫跑不到 ⇒ 红）",
       re.search(r"^\s*export\s+SAUDADE_REQUIRE_PARENT=1\s*$", _night, re.M) is not None)
-# 固件仓那条（`_firmware_repo.py`，20260929 起）**在夜间是硬判**：画板的 op 契约两仓
-# 各一份实现，跳过就等于这一条结论是空的（CI 侧本批有意未接线，见 ADR-0004 的取舍）。
-check("夜间导出了 SAUDADE_REQUIRE_FIRMWARE=1（固件仓守卫跑不到 ⇒ 红）",
-      re.search(r"^\s*export\s+SAUDADE_REQUIRE_FIRMWARE=1\s*$", _night, re.M) is not None)
 
 print("\n④ run_all.py 的枚举规则：按磁盘，不写名单")
 _disk = {p.name for p in sorted((ROOT / "tests").glob("*.py"))

@@ -515,29 +515,6 @@ SKILLS: list[Skill] = [
         ),
     ),
     Skill(
-        name="device_draw",
-        capability=(
-            "在接入的 ESP32 OLED 屏幕上画图形：圆（实心/空心）、线、矩形（实心/空心/圆角）、"
-            "三角、单点、文字，画布 128×64 单色"
-        ),
-        description="用户要求在 IoT 设备（ESP32 OLED 屏幕）上画图/绘图/画个图案时使用。",
-        inputs={"ops": "绘图指令（planner 无需填写，由执行模型结合对话创作）"},
-        # ops 可选（同 device_display 的 text，理由逐字同源）：pydantic 里它是必填
-        # （工具签名无默认值），但**技能策略**是"planner 不填、由执行层创作"——
-        # `decisions.py` 的 `_draw_fast_path` 直接 `instantiate_plan("device_draw", {})`，
-        # `graph.py::execute_node` 在执行时补 ops。不声明这条例外的后果同屏显：
-        # planner 按提示词不填 ⇒ 被判"必填没给" ⇒ 零工具，画板这条能力**从 planner
-        # 通道整体不可达**。
-        optional_params=("ops",),
-        plan=[("device_oled_draw", {"ops": "$ops"})],
-        complete_when="device_oled_draw 返回成功",
-        reply_contract=(
-            "调用 device_oled_draw 绘图：ops 参数由你结合当前对话/场景创作（一行一个图形，"
-            "如 `circle 64,26,18`）；执行结果以工具返回为准，回复不得编造屏幕上画了什么、"
-            "也不得描述像素级细节（屏幕没有回读通道）"
-        ),
-    ),
-    Skill(
         name="device_query",
         capability="查询有哪些 IoT 设备、哪些在线",
         description="用户询问有哪些 IoT 设备/设备在线状态时使用。",

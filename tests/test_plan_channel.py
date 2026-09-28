@@ -293,15 +293,18 @@ check("复现串就是那次事故的形状（13 段、12 个分号）", _PROD_S
 _old_specs = _old_specs_from_plan("TOOLS: " + _PROD_SHAPE)
 check("对照臂：同一串不经转义（= 改写前写端的产物）会被旧法撕成 13 条",
       len(_old_specs) == 13, str(len(_old_specs)))
-_txt = G.plan_state(S.instantiate_plan("device_draw", {"ops": _PROD_SHAPE}))["plan"]
+# 走真技能：`device_draw` 当天已随画板撤掉（见 CHANGELOG），这里换成同样把整串塞进
+# **一个**参数的 `tag_delete`——这条判据要的是"真 `instantiate_plan` 产出的 spec"，
+# 与是哪个技能无关；不管哪个技能，值里的 `;` 都得原样活下来。
+_txt = G.plan_state(S.instantiate_plan("tag_delete", {"name": _PROD_SHAPE}))["plan"]
 _specs = G.parse_plan(_txt)["tools"]
 _args, _ok = G._tool_args(_specs[0]) if len(_specs) == 1 else ({}, False)
 check("生产复现：走真技能（instantiate_plan → plan_state → parse_plan）恰好一条 spec",
       len(_specs) == 1, f"{len(_specs)} 条：{[s[:22] for s in _specs[:4]]}")
-check("  名是 device_oled_draw、ops 逐字节等于原文（转义读回还原成分号）",
-      bool(_specs) and _specs[0].startswith("device_oled_draw(") and _ok
-      and _args.get("ops") == _PROD_SHAPE,
-      f"ok={_ok} 读回 {len(_args.get('ops') or '')} 字 / 原文 {len(_PROD_SHAPE)} 字")
+check("  名是 delete_tag、name 逐字节等于原文（转义读回还原成分号）",
+      bool(_specs) and _specs[0].startswith("delete_tag(") and _ok
+      and _args.get("name") == _PROD_SHAPE,
+      f"ok={_ok} 读回 {len(_args.get('name') or '')} 字 / 原文 {len(_PROD_SHAPE)} 字")
 check("  且 TOOLS 行 0 个裸分号（只有一条 spec，连分隔符都不该有）",
       _tools_line(_txt).count(";") == 0, str(_tools_line(_txt).count(";")))
 
