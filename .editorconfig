@@ -1,0 +1,25 @@
+# 编辑器约定（20260928 建立）。
+#
+# ⚠️ **这里写的是声明，执行者是 `tests/test_style_hygiene.py`**：它按下面这几行真去扫一遍
+# tracked 的手写文本文件（UTF-8 / LF / 末尾换行 / 不用制表符缩进 / 行尾无空白），并在测试里
+# **同源比对**这四项的取值（文件里写一套、测试查另一套＝本仓审计里"改一处要同步另一处"的
+# 那个形状，所以两者钉在一起：改这里不同改那边会红）。
+# 现状（20260928 实测）：172 个 tracked 文件里非 UTF-8 0 个、CRLF 0 个、制表符 0 个——
+# 这份文件是"把已经做到的写下来"，不是"要求大家改习惯"。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{md,yml,yaml,json,toml}]
+indent_size = 2
+
+# 生成物例外：`eval/report/*.json` 是 `json.dump` 写的历史读数（评测基线快照），不带末尾
+# 换行、也不该被编辑器"顺手修一下"——它们是当时那份报告的原样留档，字节变了就没法对账。
+[eval/report/*.json]
+insert_final_newline = false
