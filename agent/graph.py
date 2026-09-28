@@ -64,7 +64,7 @@ import logging
 import re
 import time
 from functools import lru_cache
-from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
+from typing import TYPE_CHECKING, Annotated, Callable, Literal, NamedTuple, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -2584,6 +2584,79 @@ _HONEST_DOWN = ("下线", "下架", "无法访问", "没有了")
 _HONEST_GONE = ("没有", "不存在", "找不到", "无法识别", "没有找到")
 
 
+class _ClaimFamily(NamedTuple):
+    """零帧轮的一族声称（见 `_zero_frame_families`；为什么有这张表写在它上面）。"""
+    issue: str                      # issue 码（trace 与兜底按它分族）
+    pred: Callable                  # 谓词；`needs` 非空时按 `(own, 豁免标志)` 调
+    clause: Callable                # 取出"被否掉的那一句"（进 trace，20260921）
+    fallback: str                   # 人设内兜底文案
+    needs: str = ""                 # "exec_memory" / "exec_search" / ""（不豁免）
+    skills: tuple = ()              # 非空 = 只在这个技能上判（收窄，不是放宽）
+    guard: Callable | None = None   # 额外的"此刻适不适用"（收尾轮豁免那类）
+
+
+def _zero_frame_families(plan: dict, skill: str) -> list:
+    """零帧轮要按顺序过的声称族（**顺序即语义**，别按字母序/重要性重排）。
+
+    **为什么是一张表**（20260928 架构规范化 ③）：此前这五族是**一段一段手抄**的
+
+        if <族谓词>(own, <豁免标志>):
+            return (issue, 兜底文案, <族子句>(own, <豁免标志>))
+
+    ——五份一模一样的三行，靠人保证"顺序 / 豁免标志 / 兜底文案"三处都不抄错，
+    而**顺序本身就是语义**：一句话可以同时像好几族，判据返回**第一族**，于是
+    "站内检索声称"要排在站内"没有"结论**之前**（"我刚才翻了一圈，站内没有这篇"
+    该按"谎称检索"记，不该按"结论无依据"记）。每加一个洞就再抄一份——本仓 gate
+    一族就是这么长到 24 个 issue 码的——而抄错一处不会有任何东西报错。现在一族
+    = 一行，`_claim_issue` 只按表过一道。
+
+    判定的**内容**一个字没动：谓词、子句函数、兜底文案、豁免标志、先后顺序全照旧。
+
+    ⚠️ 这一族只在**零帧轮**跑（`_claim_issue` 在 `if frames_exist: return None`
+    之后才走到这里）。有帧轮的同族判据在 `gate_node` 那一侧，两张表刻意分开：
+    零帧轮是"本轮什么都没发生"，有帧轮是"本轮发生了别的"，同一个洞的两副面孔
+    （洞②/洞④ 的混合轮形态就是有帧那一副）。
+    """
+    _note = plan.get("note") or ""
+    # 站内"没有"结论的两类收尾轮豁免（见洞④ 长注）：目标不可达（NAV_MAP 的确定性
+    # 事实）与确定性收尾轮（`_LEDGER_NOTE_PREFIX` 的台账核对结果）。判据读
+    # `plan["status"]` 而不是注记措辞（20260926 批 3）：豁免的语义是"这句话是
+    # **系统**说的、模型只是转告"，那就该由系统自己声明的状态来判。空串（不知道）
+    # → **不豁免**（fail-closed：这条豁免是放宽，放宽的判据读不到时保持原样拦截）。
+    _absence_exempt = (plan.get("status") in PLAN_STATUS_ABSENCE_EXEMPT
+                       or _LEDGER_NOTE_PREFIX in _note)
+    return [
+        # 洞①：完成式操作声称。依据豁免 = 本轮带跨轮执行回执且子句含追述时间词
+        # （"刚才已经帮你显示上去了"是**引回执**，不是编造）。
+        _ClaimFamily("state_claim_without_tool",
+                     _state_action_claim, _state_action_claim_clause,
+                     _FALLBACK_STATE_CLAIM, "exec_memory"),
+        # 洞②：站内检索声称（"我检索了一圈/把站内翻了一遍"）。豁免同上，20260921 补齐
+        # ——此前只有这一族接了 exec_memory，洞① 漏了，于是引回执的回合被整轮换成道歉。
+        _ClaimFamily("search_claim_without_tool",
+                     _site_search_claim, _site_search_claim_clause,
+                     _FALLBACK_SEARCH_CLAIM, "exec_memory"),
+        # 第三人称系统取数声称（20260928）：比"我查过"更毒——它拿一个没发生的
+        # **取数动作**当证据（"返回的最近 21 条里已经没有 97 了"）。**不吃豁免**：
+        # 上述豁免放的是**追述**（"记录里那次…"），而本条正则要求"重新/又"+
+        # 完成态，说的必是本轮。
+        _ClaimFamily("sys_fetch_claim_without_tool",
+                     _sys_fetch_claim, _sys_fetch_claim_clause,
+                     _FALLBACK_SYS_FETCH_CLAIM),
+        # 洞④：站内"没有"结论无依据。豁免比上面两族宽（跨轮回执里有检索痕迹即
+        # 放行）——这里说的是**结论**不是动作。
+        _ClaimFamily("site_absence_claim_without_tool",
+                     _site_absence_claim, _site_absence_claim_clause,
+                     _FALLBACK_SITE_ABSENCE, "exec_search",
+                     guard=lambda: not _absence_exempt),
+        # chat 零帧轮的**第一人称工具调用**声称（高精确模式；"重读/查过"这类读取
+        # 声称不在此拦——chat 轮多为口语，误伤成本高）。技能轴在这里是**收窄**。
+        _ClaimFamily("claim_without_tool",
+                     _chat_tool_claim, _chat_tool_claim_clause,
+                     _FALLBACK_CLAIM, skills=("chat",)),
+    ]
+
+
 def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                  exec_memory: bool = False,
                  exec_search_evidence: bool = False,
@@ -2666,39 +2739,18 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     # 引号内是被转述的访客留言/说说正文，不算 narrator 自己的声称（20260913：
     # 留言板里那句"执行调用 navigate_to"被转述时误伤）
     own = _strip_quoted_spans(reply)
-    if _state_action_claim(own, exec_memory):
-        return ("state_claim_without_tool", _FALLBACK_STATE_CLAIM,
-                _state_action_claim_clause(own, exec_memory))
-    if _site_search_claim(own, exec_memory):
-        return ("search_claim_without_tool", _FALLBACK_SEARCH_CLAIM,
-                _site_search_claim_clause(own, exec_memory) or "")
-    # 第三人称系统取数声称（20260928）：零帧轮里"系统刚刚又重新拉了一次列表"必为编造，
-    # 且它比第一人称版本更毒——它不是"我查过"，是**拿一个没发生的动作当证据**
-    # （"返回的最近 21 条里已经没有它了"）。与洞①/② 一样不看 exec_memory：那一支豁免的
-    # 是**追述**（"记录里那次…"），本条正则要求"重新/又"+完成态，说的必是本轮。
-    if _sys_fetch_claim(own):
-        return ("sys_fetch_claim_without_tool", _FALLBACK_SYS_FETCH_CLAIM,
-                _sys_fetch_claim_clause(own))
-    # 洞④（20260921）：站内"没有"结论无依据。两类收尾轮豁免——它们注记里的那句话是
-    # **系统给的确定性事实**，narrator 的职责就是如实转告，不属凭空结论：
-    #   ① 目标不可达的零工具轮："页面不存在/已下线"来自 NAV_MAP
-    #      （gate_node 第 4 节另有如实措辞核验）；
-    #   ② 确定性收尾轮（`_LEDGER_NOTE_PREFIX`，20260922）：目标预检/剔空收尾给的是
-    #      站内台账的核对结果（"站内没有含「…」的留言"）——见该常量的长注。
-    # 判据读 `plan["status"]` 而不是注记措辞（20260926 批 3，`PLAN_STATUS_VALUES`）：
-    # 豁免的语义是"这句话是**系统**说的、模型只是转告"——那就该由系统自己声明的
-    # 状态来判，而不是由它碰巧用了哪个词来判。空串（不知道）→ 不豁免（fail-closed：
-    # 这条豁免是**放宽**，放宽的判据读不到时应当保持原样拦截）。
-    _note = plan.get("note") or ""
-    if plan.get("status") not in PLAN_STATUS_ABSENCE_EXEMPT \
-            and _LEDGER_NOTE_PREFIX not in _note:
-        if _site_absence_claim(own, exec_search_evidence):
-            return ("site_absence_claim_without_tool", _FALLBACK_SITE_ABSENCE,
-                    _site_absence_claim_clause(own, exec_search_evidence) or "")
-    if skill == "chat":
-        if _chat_tool_claim(own):
-            return ("claim_without_tool", _FALLBACK_CLAIM, _chat_tool_claim_clause(own))
-        return None
+    # 各族按**表里的顺序**过（顺序即语义：复读要先于它夹带的声称、站内检索声称要先于
+    # 站内"没有"结论）。谓词/子句/豁免/兜底文案全在表里，逐个说明也在那里。
+    # 早退纪律不变：零帧轮的族**只**在这里跑——有帧轮走 `if frames_exist: return None`。
+    for fam in _zero_frame_families(plan, skill):
+        if fam.skills and skill not in fam.skills:
+            continue
+        if fam.guard is not None and not fam.guard():
+            continue
+        ex = exec_search_evidence if fam.needs == "exec_search" else exec_memory
+        args = (own, ex) if fam.needs else (own,)
+        if fam.pred(*args):
+            return (fam.issue, fam.fallback, fam.clause(*args) or "")
     if skill == "content_query":
         for rx in (_READ_CLAIM_RE, _EXECUTION_CLAIM_RE, _CALLED_TOOL_CLAIM_RE):
             m = rx.search(own)

@@ -83,17 +83,37 @@ for t in NEG:
 print("\n③ 接线锁：判据挂在**零帧路径**上，有帧轮不查")
 
 _SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-_ci = _SRC.index("def _claim_issue(")
-_ci_end = _SRC.index("\ndef ", _ci + 10)
-_BODY = _SRC[_ci:_ci_end]
-check("`_claim_issue` 里调用了 `_sys_fetch_claim(own)`（引号内是转述，要剥）",
-      "_sys_fetch_claim(own)" in _BODY)
-check("  且排在 `if frames_exist: return None` **之后**（有帧轮不查这一族）",
-      _BODY.index("if frames_exist") < _BODY.index("_sys_fetch_claim(own)"))
+
+
+def _fn_src(name: str) -> str:
+    """取某个顶格函数的函数体（到下一个顶格 def 为止）。"""
+    at = _SRC.index(f"def {name}(")
+    body = _SRC[at:]
+    return body[:body.index("\ndef ", 10)]
+
+
+# 20260928 架构规范化 ③ 起，零帧轮的声称族**写成一张表**（`_zero_frame_families`），
+# 由 `_claim_issue` 单循环过。判定的内容（谓词/子句/豁免/兜底）全在表里 ⇒ 接线锁跟着
+# 搬家：**族在不在表里** + **表是不是在 `if frames_exist` 之后才过**。
+_BODY = _fn_src("_zero_frame_families")
+_RUNNER = _fn_src("_claim_issue")
+check("这一族在零帧族表里（判定写在一处，不再往 `_claim_issue` 里手抄一段）",
+      "_sys_fetch_claim" in _BODY and "_sys_fetch_claim_clause" in _BODY)
+check("  且 `_claim_issue` 过表排在 `if frames_exist: return None` **之后**（有帧轮不查）",
+      _RUNNER.index("if frames_exist") < _RUNNER.index("_zero_frame_families("))
 check("  子句版也接了（trace 要能指出判的是哪句话）",
-      "_sys_fetch_claim_clause(own)" in _BODY)
+      "_sys_fetch_claim_clause" in _BODY)
 check("  返回的原因码是 `sys_fetch_claim_without_tool`",
       '"sys_fetch_claim_without_tool"' in _BODY)
+# 行为锁（比子串锁抗重构）：这一族**不吃**回执豁免——豁免放的是"追述"（"记录里那次…"），
+# 而本条说的必是本轮。传 exec_memory=True（乃至 exec_search_evidence=True）也必须照判。
+_CLAIM_TEXT = "刚才系统重新拉了一次留言板，返回的最近 21 条里已经没有 97 了"
+check("  传 exec_memory=True 也照判（这一族不吃回执豁免）",
+      (lambda r: bool(r) and r[0] == "sys_fetch_claim_without_tool")(
+          G._claim_issue(_CLAIM_TEXT, "chat", {"note": "", "status": ""}, False,
+                         exec_memory=True, exec_search_evidence=True)),
+      str(G._claim_issue(_CLAIM_TEXT, "chat", {"note": "", "status": ""}, False,
+                         exec_memory=True)))
 check("兜底文案存在且只否认被点名的那件事（不许说「这一轮什么都没有发生」）",
       bool(G._FALLBACK_SYS_FETCH_CLAIM)
       and "没有再取一次数据" in G._FALLBACK_SYS_FETCH_CLAIM
