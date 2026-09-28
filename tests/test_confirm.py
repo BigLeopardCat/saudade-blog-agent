@@ -781,6 +781,82 @@ check("  兜底只在**菜单**、不在 chat 的 description 里"
 check("  并且要求「拿不准就照常选技能」（失败取向往能干活那侧倒）",
       "拿不准就照常选技能" in _ctx_admin)
 
+print("\n⑪ 用户自己数据的四件：弹窗触发矩阵（20260928 契约精度修正）")
+# **为什么单列这一节**：审计（读码）判定 `favorite_add`/`favorite_remove`/`notice_read`/
+# `message_read`"实际**不**弹卡"，而技能描述里写着「由系统弹确认框问主人」。实测把这个
+# 结论反过来了一半，真相是**三档结局**：
+#   ① 本轮这句被判成**明确命令** + 目标有据 ⇒ 直接执行（快路径，**没有卡**）；
+#   ② 判不出来 + 目标有据 ⇒ 弹卡；
+#   ③ 判不出来 + **文章目标无据**（`_ARTICLE_WRITE_TOOLS` 那一支）⇒ 本轮不弹卡，
+#      交回 planner 先把那篇文章读清楚——弹卡得先知道卡上写的是哪一篇。
+# 收藏两件有第 ③ 档，已读两件的目标（通知/信件 id）不要求"本轮读到过"⇒ 没有第 ③ 档。
+# 判据用**行为**而不是读源码：审计恰恰是读码读出来的结论，行为跑一遍才知道谁对。
+_OWN_CASES = [
+    ("favorite_add", 'add_favorite({"article_id": 12})',
+     "我想收藏这一篇", "收藏这篇文章 12"),
+    ("favorite_remove", 'remove_favorite({"article_id": 12})',
+     "我想把那篇取消收藏", "取消收藏文章 12"),
+    ("notice_read", 'read_notifications({"ids": [23]})',
+     "通知那边有点乱", "把通知都标记已读"),
+    ("message_read", 'read_messages({"ids": [5]})',
+     "信箱那边有点乱", "把站内信都标记已读"),
+]
+_EV_ART = ToolMessage(content="后台文章共 3 篇：\n- id=12 [私密]《架构文档》标签：Rust",
+                      tool_call_id="o1", name="list_admin_notes")
+_EV_NOTIF = ToolMessage(content="站内通知（未读 1）：notifId:23《留言已通过审核》",
+                        tool_call_id="o2", name="list_notifications")
+
+
+def _own_popup(skill, spec, msg, ev):
+    plan = f'SKILL={skill}\nPARAMS={{}}\nTOOLS: {spec}\nNOTE: x\nREPLY: y'
+    msgs = [HumanMessage(content=msg)] + ([ev] if ev is not None else [])
+    st = {"messages": msgs, "plan": plan, "plan_rounds": 0, "done": False}
+    return _confirm_popup(st, parse_plan(plan)["tools"],
+                          Principal(uid=7, role="admin"), msg, CFG)
+
+
+for _skill, _spec, _intent, _cmd in _OWN_CASES:
+    _ev = _EV_ART if _skill.startswith("favorite") else _EV_NOTIF
+    check(f"{_skill}：有意向没判成命令 + 目标有据 → **弹卡**",
+          bool(_own_popup(_skill, _spec, _intent, _ev)))
+    check(f"  同一件事写成明确命令 → **不弹卡**（快路径直执行，卡不是必经之路）",
+          _own_popup(_skill, _spec, _cmd, _ev) is None)
+    check(f"  提问形态照旧不弹（提问不是下令）",
+          _own_popup(_skill, _spec, "这个操作是什么意思呀", _ev) is None)
+
+check("收藏两件：目标**无据**（本轮没读到那篇文章）→ 本轮不弹卡（交回 planner 先读）",
+      _own_popup("favorite_add", 'add_favorite({"article_id": 12})',
+                 "我想收藏这一篇", None) is None)
+check("  对照：已读两件没有这一档——目标不要求有据 ⇒ 判不出来照样弹",
+      bool(_own_popup("notice_read", 'read_notifications({"ids": [23]})',
+                      "通知那边有点乱", None)))
+
+print("\n  描述 ↔ 代码事实：契约句必须跟着 `_ALWAYS_CONFIRM_TOOLS` 走")
+# 上面矩阵的结论要落到**模型读的那句话**上（native 档 description 直达模型）。两条
+# 相反的方向都要锁：非「一律弹窗」族不许承诺"一定有卡"；「一律弹窗」族不许承诺"直接办"
+# （它们的 `consent_granted` 恒 False ⇒ 快路径在结构上关掉了）。
+_always = authz._ALWAYS_CONFIRM_TOOLS
+_over_promise, _missing_rule, _under_claim = [], [], []
+for _s in S.SKILLS:
+    _tools = [t for t, _ in _s.plan if t]
+    if not _tools:
+        continue
+    if not ({authz.required_scope(t) for t in _tools} & set(authz.CONSENT_SCOPES)):
+        continue  # 不是需确认的写技能（读技能、无工具技能）
+    if all(t in _always for t in _tools):
+        if "判成明确命令就直接办" in _s.description:
+            _under_claim.append(_s.name)
+    else:
+        if "由系统弹确认框问主人" in _s.description:
+            _over_promise.append(_s.name)
+        if "判成明确命令就直接办" not in _s.description:
+            _missing_rule.append(_s.name)
+check("非「一律弹窗」的写技能**不再**承诺「由系统弹确认框问主人」（那句只对一律弹窗族成立）",
+      not _over_promise, str(_over_promise))
+check("  且都写清了两档结局（判成明确命令就直接办）", not _missing_rule, str(_missing_rule))
+check("「一律弹窗」族没被顺手改成两档（它们的卡每轮都弹）",
+      not _under_claim, str(_under_claim))
+
 print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
