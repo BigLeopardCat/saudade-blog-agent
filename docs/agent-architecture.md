@@ -524,9 +524,9 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 | 留言板 | `list_guestbook` | 读 `/api/public/board`（河灯留言；写侧见 §5.5） |
 | 说说 | `list_talks` | 读 `/api/public/talk` |
 | 站点信息 | `get_blog_info`、`get_social_links`、`get_site_map` | 作者信息/社交链/功能地图（静态） |
-| 知识库 | `search_knowledge_base` | 读 `/api/public/knowledge` 本地过滤 |
+| 知识库 | `search_knowledge_base` | **不可达**（只住在注册表里：不在菜单/点名白名单/技能模板）——端点恒返回空，见 `tools/base.py` 的定性块 |
 | 时间/天气 | `get_current_time`、`get_weather` | 本地时间；wttr.in |
-| 聊天历史 | `get_chat_history` | **占位**：提示"历史已自动注入上下文"（防模型以为要自己查） |
+| 聊天历史 | `get_chat_history` | **不可达**（只住在注册表里）**占位**实现：提示"历史已自动注入上下文"（防模型以为要自己查）；留在注册表是为 gate 的具名工具声称核对保住这个名字 |
 | 导航 | `navigate_to(path, confirm)` | 返回 `NAVIGATE:https://…`（confirm=true）或 `AUTO_NAVIGATE:https://…`（confirm=false） |
 | 特效 | `toggle_effect(effect, action)` | 返回 `EFFECT:{effect}:{action}`，前端按显式意图执行 |
 | 夜间模式 | `toggle_dark_mode(mode)` | 返回 `DARKMODE:{mode}` |

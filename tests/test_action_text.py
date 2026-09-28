@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import _parent_repo  # noqa: E402
+from agent import skills as S  # noqa: E402  （③ 末尾那条：死工具的可达性只认这两条通道）
 from agent.action_text import receipt_action, tool_action_text  # noqa: E402
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
@@ -288,6 +289,22 @@ check("无臂工具的 preview 档是显式的兜底行（不是空串——过�
       all(_pre(n) == f"执行 {n}" for n in _DEAD))
 check("有臂工具的 full 档非空（空串=不写 action=悄悄退回老表，那条路只留给无臂的）",
       all(receipt_action(n, {}, {}) for n in _NAMES if n not in _DEAD))
+
+# ── 「死工具」三个字是有判据的（20260928）──────────────────────────────────
+# 上面把 `_DEAD` 当负例用，那就得先证明它真是死的：注册表之外的**每一条**能让 planner
+# 点到名的通道（点名白名单 / 技能模板）都不许出现它们。这条锁的用处是"防止标签腐烂"——
+# 谁哪天把这两件接回去，断言立刻红，逼他回来改标签、改负例、想清楚 gate 的词汇怎么办。
+_dead_reachable = []
+for _n in sorted(_DEAD):
+    if _n in S._EXPLICIT_TOOLS or _n in S._CALLABLE_QUERY_TOOLS:
+        _dead_reachable.append(f"{_n}:点名白名单")
+    if any(_n == _t for _s in S.SKILLS for _t, _ in (_s.plan or ())):
+        _dead_reachable.append(f"{_n}:技能模板")
+check("★ 两件死工具在哪条点名/模板通道里都够不到（够不到 ⇒ 「死」字成立）",
+      not _dead_reachable, "、".join(_dead_reachable))
+check("★ ……但它们**仍留在注册表里**：gate 的具名工具声称核对词汇是从注册表派生的，"
+      "删了这两行，模型声称「我调用了 get_chat_history 查了记录」就再没有判据可对",
+      all(n in {t.name for t in _TOOL_REGISTRY} for n in _DEAD))
 
 # ══════════════════════════════════════════════════════════════════
 print("\n④ 接线锁：Python 只对有臂的写 action；Rust 必须优先读它")
