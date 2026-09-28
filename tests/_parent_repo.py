@@ -9,11 +9,13 @@
 
 三种状态**显式**，不再有隐形的第四种：
   · **找得到** → 正常断言；
-  · **找不到 + `SAUDADE_REQUIRE_PARENT=1`**（夜间门禁 `scripts/nightly_regression.sh` 这么设）
-    → **红**（`SystemExit(1)`）。跨语言守卫是"必须跑"的那一类，跑不到不能算通过；
-  · **找不到 + 没设要求** → 打一行**响亮**的说明并返回 `None`（本机在 agent 仓单独
-    checkout 时的常规情形，CI 也是这一种）。**那行字必须显眼**：静默跳过正是这套守卫
-    失效的方式本身。
+  · **找不到 + `SAUDADE_REQUIRE_PARENT=1`** → **红**（`SystemExit(1)`）。跨语言守卫是
+    "必须跑"的那一类，跑不到不能算通过。**夜间门禁与 CI 都这么设**——CI 侧父仓以只读凭据
+    稀疏 checkout 到 `_parent/`（`.github/workflows/eval.yml`，取舍见
+    `docs/adr/adr-0004-cross-language-guard-in-ci.md`），所以这一档在 CI 里判的是真东西；
+  · **找不到 + 没设要求** → 打一行**响亮**的说明并返回 `None`。这是**本机在 agent 仓单独
+    checkout 且父仓不在兄弟目录**时的情形（调试用），不是 CI 的常态——CI 走上面那一档。
+    **那行字必须显眼**：静默跳过正是这套守卫失效的方式本身。
 
 ⚠️ 两条边界：
   · 路径必须**真的含有** `src/routes/chat.rs` 才认（指向一个空目录/错误目录会让守卫**假绿**）；
@@ -72,5 +74,6 @@ def _bail(msg: str, why: str) -> None:
         print(f"  ❌ {msg}（SAUDADE_REQUIRE_PARENT=1 ⇒ 跨语言守卫跑不到就不算通过）{note}")
         sys.exit(1)
     print(f"  ⏭ 跳过父仓断言：{msg}。{note}")
-    print("     （本机常规布局下应有兄弟目录；CI 里父仓私有、读不到 ⇒ 这一处**只在本机/夜间**"
-          "真正生效。夜间门禁设 SAUDADE_REQUIRE_PARENT=1，把'跑不到'变成红。）")
+    print("     （本机常规布局下父仓应在兄弟目录；夜间门禁与 CI 都设 SAUDADE_REQUIRE_PARENT=1"
+          "、把这一处**跑不到变成红**——CI 侧父仓由 workflow 稀疏 checkout 到 `_parent/`。"
+          "**看到这行 ⏭ 说明你在用一个没配父仓的临时环境单跑**，结论里这一条是空的。）")
