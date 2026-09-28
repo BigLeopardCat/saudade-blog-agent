@@ -89,7 +89,6 @@ from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
 from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES,
                              _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
-                             _draw_fast_path,
                              _effect_switch_fast_path, _intent_done, _intent_hints,
                              _nav_fast_path, _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
@@ -1164,6 +1163,8 @@ def _esc_spec(tool_spec: str) -> str:
     第一个 `;` 上 ⇒ `args_parse` BLOCK。最狠的一层是它**不像失败**：那一轮工具其实
     跑了、设备也回了执（"已下发、设备已确认执行"都印出来了），但 spec 解析不出参数 ⇒
     checker 判 BLOCK ⇒ 无回执 ⇒ **屏幕画了、台账没记一笔**，跨轮执行记忆里什么都没有。
+    （`device_oled_draw` 当天随画板功能一起撤掉了，此处是历史取证；这个转义与绘图
+    无关——任何参数值里带 `;` 的调用都会中招。）
 
     `\\u003b` 是合法 JSON 转义，`json.loads`/`ast.literal_eval` 读回都会还原成 `;`，
     **语义一个字节没变**，只是文本里不再有裸 `;`。写在这里而不是那 13 个拼 spec 的地方
@@ -3360,15 +3361,6 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             record("planner", "fastpath", kind="display", round=rounds)
             return {**plan_state(display), "plan_rounds": rounds + 1, "done": False}
 
-        # 绘图意图确定性快道（零 LLM，20260929）：屏幕类名词+**绘图**动词强模式 →
-        # device_draw 计划（图形由 execute 的创作层生成，PARAMS 不填 ops）。
-        # 放在显示快道**之后**：两套动词表互斥（写/显示 vs 画/绘制），谁先谁后都不
-        # 会互相截胡，但顺序固定下来才好判读 trace。
-        draw = _draw_fast_path(user_msg)
-        if draw is not None:
-            record("planner", "fastpath", kind="draw", round=rounds)
-            return {**plan_state(draw), "plan_rounds": rounds + 1, "done": False}
-
         # 授权式审查快道（零 LLM，20260923 P2）：主人说"你看着办"+上一轮提议是复核
         # 留言+台账里恰好 1 条待审+结论能从那句提议里读出 ⇒ 系统直接拼计划；写操作
         # 同意闸必弹窗，弹窗把 #id/作者/原文/现状/动作印出来，主人点确定 = 身份
@@ -4350,74 +4342,6 @@ def _create_display_text(user_msg: str, page_ctx: str) -> str:
     except Exception as e:
         logger.warning("[execute] 屏幕文案创作失败，用兜底文案: %s", e)
         return fallback
-
-
-_DRAW_CREATE_PROMPT = """\
-你是 128x64 单色 OLED 屏幕的绘图指令创作器。结合最近这句对话，画一幅**简单、一眼
-认得出**的图案（笑脸、箭头、房子、太阳、进度条、棋盘之类）。
-
-画布：128 宽 × 64 高，左上角是 0,0（x 向右到 127，y 向下到 63）。每条指令一行，
-只能使用下面这几个 op：
-
-{ops_help}
-
-规则：
-- 数字都是**整数**，参数之间用半角逗号分隔（`circle 64,26,18`）。
-- `text x,y,内容` 里内容要短（2~6 个字最清楚）；它是该行剩余全文，可以有逗号。
-- 坐标**不要贴边**（贴边会被钳进来、形状就变了）；画面居中最好看。
-- 只输出绘图指令。**不要**输出解释、代码块、`clear`（每条指令都会先清屏）。
-
-几个常见图案的搭法（照这个思路画，位置你自己定）：
-- 笑脸：一个空心圆当脸 + 两个小实心圆当眼睛 + 一条短横线当嘴
-- 箭头：一条长线当杆 + 一个三角当箭头（三角尖朝哪边，杆就朝反方向）
-- 房子：一个实心矩形当墙 + 一个三角当屋顶 + 一个空心矩形当门
-- 进度条：一个空心矩形当外框 + 一个实心矩形当已完成的量
-
-最近对话：{user_msg}
-页面上下文：{page_ctx}"""
-
-
-def _create_draw_ops(user_msg: str, page_ctx: str) -> str | None:
-    """device_oled_draw 缺 ops 时的绘图指令创作（execute 内唯一创作点）。
-
-    与屏显文案那处（`_create_display_text`）**关键差别是这里允许失败**：屏显有兜底
-    文案（写什么都是合法的"一句话"），绘图**没有"通用图形"这种东西**——硬编一个兜底
-    （比如总画个笑脸）就是拿主人要的箭头去换一张笑脸，**还留一条"已画好"的回执**
-    （"回执必须有据"是本批的硬线）。所以两次都解析不出合法图形 ⇒ 返回 None，调用方
-    （execute_node）产一条通用 `__ERROR__` 帧 ⇒ checker 判 BLOCK ⇒ 这个 spec 既不下发、
-    也不留回执。
-
-    纠偏策略与全仓一致：**把错误回灌再问一次**（而不是系统替它猜一个合法图形）。
-    提示词里**不给带具体坐标的示例**——本仓有实证：对模型的举例会被抄成实际参数
-    （`docs/eval-observability.md` 那条纪律），画板上抄示例的后果是"要箭头画出笑脸"。
-    给的是**搭法**（"空心圆当脸 + 两个实心圆当眼睛"），没有可抄的数字。
-    """
-    from agent.oled_draw import OPS_HELP, build
-
-    prompt = _DRAW_CREATE_PROMPT.format(
-        ops_help=OPS_HELP, user_msg=user_msg[-200:], page_ctx=page_ctx[:200])
-    problem = ""
-    last = ""
-    for attempt in (1, 2):
-        try:
-            llm = get_llm(temperature=0.2, max_tokens=200, timeout=20, enable_thinking=False)
-            _t0 = time.monotonic()
-            resp = llm.invoke(prompt + problem)
-            # 用量与耗时（同 _create_display_text：这一族的成本要看得见）
-            record("execute", "llm_done", duration_s=round(time.monotonic() - _t0, 2),
-                   **usage_fields(resp))
-            text = (getattr(resp, "content", str(resp)) or "").strip()
-            build(text)      # 只校验，不下发；不合法会抛 OledDrawError
-            record("execute", "draw_create", ops=text[:200], attempt=attempt)
-            return text
-        except Exception as e:
-            last = f"{type(e).__name__}: {e}"
-            logger.warning("[execute] 绘图指令创作第 %d 次失败: %s", attempt, last)
-            problem = (f"\n\n上一次你输出的指令有问题：{last}\n"
-                       f"请只输出绘图指令（每行一个 op，数字用整数、半角逗号），不要解释、"
-                       f"不要代码块。")
-    record("execute", "draw_create_failed", reason=last[:200])
-    return None
 
 
 _VERDICT_PASS, _VERDICT_BLOCK = "PASS", "BLOCK"
@@ -6681,30 +6605,10 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if ref_err is None and name == "device_oled_display" and not args.get("text"):
             args = dict(args)
             args["text"] = _create_display_text(user_msg, page_ctx)
-        # 绘图指令创作（20260929）：ops 缺失/为空 → 现场创作；**两次都失败则这个 spec
-        # 根本不执行**（下面产通用 __ERROR__ 帧，理由与"不许兜底一个笑脸"写在
-        # `_create_draw_ops` 的头注里）。与屏显那处的差别就在这里：文案有兜底、
-        # 图形没有，所以这一支要允许失败。
-        draw_create_failed = False
-        if ref_err is None and name == "device_oled_draw" and not args.get("ops"):
-            created = _create_draw_ops(user_msg, page_ctx)
-            if created is None:
-                draw_create_failed = True
-            else:
-                args = dict(args)
-                args["ops"] = created
         _t_tool = time.monotonic()
         if ref_err:
             out = f"__ERROR__: 参数引用无法解析[{ref_err}]（上一步返回里没有这个值——改参数或换个工具）"
             logger.warning("[execute] 参数引用解析失败，不执行: %s → %s", spec, ref_err)
-        elif draw_create_failed:
-            # 创作失败的形状（不新开原因码、不新开帧族）：走既有的 `__ERROR__` 族 ⇒
-            # `_check_spec` 判 BLOCK、原因码是通用的 `error_frame` ⇒ 这个 spec 天然
-            # **无回执**（于是也不进跨轮执行记忆、不会被下一轮当作"我刚才画过"的证据）。
-            # 与上面 ref_err 那条支路是同一个形状。**绝不给它 `meta["cmd"]`**：
-            # 那是命令工具契约，撞上去是另一个原因码（cmd_shape），红在那里说明接错了支路。
-            out = "__ERROR__: 绘图指令创作失败（两次都解析不出合法图形，未下发）"
-            logger.warning("[execute] 绘图指令创作失败，不执行: %s", spec)
         elif not decision.allowed and authz.enforcing(decision.scope):
             out = authz.denial_frame(decision, principal)
             logger.warning("[execute] 权限拒绝，不执行: %s → %s", spec, decision)

@@ -530,7 +530,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 | 导航 | `navigate_to(path, confirm)` | 返回 `NAVIGATE:https://…`（confirm=true）或 `AUTO_NAVIGATE:https://…`（confirm=false） |
 | 特效 | `toggle_effect(effect, action)` | 返回 `EFFECT:{effect}:{action}`，前端按显式意图执行 |
 | 夜间模式 | `toggle_dark_mode(mode)` | 返回 `DARKMODE:{mode}` |
-| IoT 设备 | `list_devices`、`device_oled_display`、`device_oled_draw` | 代签 JWT 调 device-service；支持自动选在线设备、幂等去重（屏显按文本、绘图按 payload 字节各一个 store） |
+| IoT 设备 | `list_devices`、`device_oled_display` | 代签 JWT 调 device-service；支持自动选在线设备、幂等去重 |
 | 后台只读（admin） | `list_admin_notes`、`get_server_status`、`get_service_health`、`get_moderation_status`、`get_user_stats` | **以发起人身份代调** `127.0.0.1:3000` 的受保护接口（现签 60 秒 JWT）；scope `admin.console`，进 `_HARD_SCOPES`（非 admin 结构上够不到）；`list_admin_notes` 是草稿/私密文章的**唯一可达读口** |
 | 后台写（admin） | `create_tag`、`update_tag`、`delete_tag`、`create_category`、`update_category`、`delete_category`、`create_announcement`、`update_announcement`、`delete_announcement`、`audit_board_comment`、`delete_board_comment`、`set_article_status`、`set_article_tags` | scope `write.console`（`_HARD_SCOPES` + `CONSENT_SCOPES`）；**只能由写技能模板展开**——`PARAMS.calls` 名单里没有它们，越权清单在技能白名单那一步就被剥掉；三道门见 §5.3；身份/目标的地基见 §6.6 |
 | 用户自己的读（own） | `list_my_favorites`、`get_unread_summary`、`list_notifications` | scope `read.own`（三档角色都有、匿名没有）；**以本轮发起人身份读他自己的数据**（代签 60 秒 JWT 调 `/api/protected/*`，"自己读自己"由 uid 落地）；见 §5.6 |
@@ -540,23 +540,13 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 转发，前端解析执行。**不是**让模型把命令写进正文——正文里的命令会被 `cleanAgentText` 当幻觉剔除
 （除非命中 §6.2 的兜底解析）。
 
-### 5.1 IoT 工具细节（device_oled_display / device_oled_draw）
+### 5.1 IoT 工具细节（device_oled_display）
 
 - **用户身份**：`RunnableConfig.configurable.user_id`（server.py 注入）→ 工具用**博客同一个 JWT_SECRET**
   代签 5 分钟有效 HS256 JWT（sub=user_id）→ device-service 校验，保证用户只能操作自己的设备。
 - **device_id 可省略**：自动选该用户第一个在线设备——多步工具链（先 list 再操作）是 IoT 工具失败的
   结构性原因（模型无法从 schema 知道运行时才有的 device_id，参数缺失时倾向文本声称），单步化后一次调用即成功。
 - **约束**：text ≤ 64 字符；30s 同内容去重；404 = 设备不存在或不属于当前用户。
-- **画板（`device_oled_draw`，20260929）**：9 个 op（`pixel`/`line`/`box`/`frame`/`rbox`/`disc`/
-  `circle`/`tri`/`text`，画布 128×64），ops 是**一行一条的 DSL**，由 `agent/oled_draw.py`
-  解析→归一（越界钳进画布并**如实计数**、`rbox` 圆角按 `min(w,h)/2` 收、超 `MAX_OPS` 截断）→
-  编码成 `[["circle",64,26,18], …]` → 设备按名字查表调 u8g2（**C 侧没有第二个 DSL 解析器**；
-  流水线图见该模块头注）。两条与屏显**刻意不同**：① 没下发的每条路都是 `__ERROR__` 帧
-  （BLOCK ⇒ 无回执），屏显那些路径回纯字符串（会被判 PASS 记成事实）；② 创作层两次都失败就
-  **不执行这个 spec**（回执必须有据）。去重签名是**要发出去的 payload 逐字节**。
-  op 名单/6-12 像素宽度规则/上限在固件 `main/main.c` 各有一份实现 ⇒ `tests/test_oled_draw.py`
-  的跨仓守卫逐项比对（跑不到 = 响亮「未评估」，夜间 `SAUDADE_REQUIRE_FIRMWARE=1` 硬判）；
-  **改一侧必须同步另一侧**。
 
 ### 5.2 超长文章：分节渲染与按节取回（20260920）
 
@@ -848,6 +838,8 @@ flowchart TB
 `;`，语义一个字节不变；`_tool_args` 的贪婪正则兜得住值里的 `(`/`)`，兜不住 `;`）。生产
 实证：模型给 `device_oled_draw` 的 ops 自带 12 个分号 ⇒ 一条调用裂成 13 条，碎片被当成不存在
 的工具逐个拒掉、剩下那条截断在第一个分号 ⇒ **屏幕画了、台账没记一笔**。
+（那次事故的工具当天随画板功能一起撤掉了，此处是历史取证；转义与绘图无关——任何
+参数值里带 `;` 的调用都会中招。）
 `tests/test_plan_channel.py` ④ 把这条不变量钉住（漏转义与转多两个方向都判红）。
 
 - **确定性快道链（planner_node 首轮、零 LLM；命中即实例化计划、不调用 planner LLM）**：

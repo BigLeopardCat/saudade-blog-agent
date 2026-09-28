@@ -51,8 +51,6 @@ planner 菜单也不在任何技能模板里）没有臂：`receipt_action` 对�
 import re
 
 from agent import adminops as A          # 标签颜色/状态的既有中文词表（写工具问句共用）
-from agent.oled_draw import describe as _draw_describe, normalize as _draw_normalize, \
-    parse_dsl as _draw_parse
 from agent.skills import NAV_MAP, _norm_id_list, _norm_true
 from tools.base import DOC_TYPE_CN       # 四个数据源的中文名词（note/talk/board/announcement）
 
@@ -166,22 +164,6 @@ def _todo_preview(value, limit: int = 24) -> str:
     """
     s = str(value or "").strip()
     return s if len(s) <= limit else s[:limit] + "…"
-
-
-def _draw_summary(ops: str) -> str:
-    """绘图指令（DSL）→ 一句人话（`点(58,20)、空心圆(64,26,r18)`）。
-
-    由 `agent.oled_draw.describe` 印——**事实由系统印，不让模型复述**（同一个实现，
-    过程行与台账行两档共用）。解析不出来 ⇒ 返回空串，调用方只印「屏幕绘图」：
-    宁可少说，**绝不编画了什么**。正常路径上这里不会失败（执行层的创作层在拿到
-    指令时已经校验过一遍，planner 直接填的指令则由工具自己再校验一次）。
-    """
-    if not ops:
-        return ""
-    try:
-        return _draw_describe(_draw_normalize(_draw_parse(ops))[0])
-    except Exception:
-        return ""
 
 
 def _names_phrase(value) -> str:
@@ -442,11 +424,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         if not text:
             return "屏幕显示"
         return f"屏幕显示「{text[:24] if preview else text}」"
-    if name == "device_oled_draw":
-        summary = _draw_summary(_raw(a.get("ops")))
-        if not summary:
-            return "屏幕绘图"
-        return f"屏幕绘图「{summary[:24] if preview else summary}」"
 
     # ── 检索 / 读取 ─────────────────────────────────────────────────────
     if name == "rag_search":

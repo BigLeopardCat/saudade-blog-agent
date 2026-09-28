@@ -53,14 +53,6 @@ echo "=== nightly regression $TS ===" >> "$LOG"
 # docs/adr/adr-0004-cross-language-guard-in-ci.md。
 export SAUDADE_REQUIRE_PARENT=1
 
-# 20260929 同法：OLED 画板那条**固件**跨仓守卫（`tests/_firmware_repo.py`）。
-# 它比的是 op 名单/参数个数/6-12 像素宽度规则/payload 上限/固件版本——Python 与
-# `ESP32-S3-OBC/main/main.c` 各有一份实现，漂移的症状是「屏幕怎么没变」或「画了一半」。
-# 固件仓同样在本机兄弟目录（`/home/ubuntu/ESP32-S3-OBC`），夜间没有任何理由跳过。
-# **CI 侧本批有意未接线**（要再一枚只读凭据稀疏 checkout 第二个仓，见 ADR-0004 的取舍）
-# ⇒ 这一处目前在 CI 上是"未评估"、在本机/夜间是硬判。
-export SAUDADE_REQUIRE_FIRMWARE=1
-
 fail=0
 # 20260928 起：这一节从"单跑 test_skills.py"换成 **tests/run_all.py**（按磁盘枚举 tests/*.py）。
 # 理由是审计实测出来的那个数：CI 的 eval.yml 手工维护 26 个 step，而磁盘上有 50+ 个套件

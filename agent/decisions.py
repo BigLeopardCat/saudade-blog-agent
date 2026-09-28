@@ -240,44 +240,6 @@ _DISPLAY_FAST_RE = re.compile(
 )
 
 
-# 绘图意图确定性快道（20260929）：屏幕类名词 + **绘图**动词强模式 → device_draw 计划。
-# 与显示快道同构（零 LLM，内容由 execute 的创作层生成），但**动词表必须与显示那套分开**
-# ——显示是"写/显示/展示/放"，绘图是"画/绘制/绘图/涂鸦/描"，两套动词不能混：混了
-# 「屏幕上写个笑脸」会被当绘图（那是要文字），「屏幕上画个笑脸」会被当显示（那是要图）。
-#
-# 防误伤的两道（判据⑧的负例锁就是这个）：
-#  - 锚定：必须**同时**出现屏幕类名词与绘图动词，且相距 ≤12 字。裸「画画」不触发
-#    （"你画画真好看"是夸人，不是命令）。
-#  - 构词排除：`画` 前面是「漫动国油书画」这类**构词字**（漫画/动画/国画/油画/书画）时
-#    不算动词；`画` 后面是「面/风/质」时也不算（画面/画风/画质）。否则
-#    「这个漫画在屏幕上看很爽」会因为"画…屏幕"近邻而被判成绘图命令。
-# 疑问句/否定式一律不触发（与显示快道同一对判据，复用 _QUESTION_RE/_NEGATION_RE）。
-_DRAW_VERB = r"(?:(?<![漫动国油书画])画(?![面风质])|绘制|绘图|涂鸦|描(?![述]))"
-_DRAW_SCREEN = r"(?:屏幕|OLED|显示屏|显示器|大屏)"
-_DRAW_FAST_RE = re.compile(
-    rf"{_DRAW_SCREEN}[^\n。！？!?]{{0,12}}{_DRAW_VERB}"
-    rf"|{_DRAW_VERB}[^\n。！？!?]{{0,12}}{_DRAW_SCREEN}"
-)
-
-
-def _draw_fast_path(user_msg: str) -> dict | None:
-    """绘图意图快道：屏幕类名词+绘图动词强模式 → device_draw 计划（零 LLM）。
-
-    返回带 params 的 plan dict（与 planner LLM 路径同构），或 None 落回 planner LLM。
-    画什么由 execute 节点创作（PARAMS 不填 ops，见 `_create_draw_ops`）——绘图指令
-    不进 planner 文本通道，与屏显不填 text 是同一个理由。
-    """
-    msg = _bare(user_msg)
-    if _QUESTION_RE.search(msg) or _NEGATION_RE.search(msg):
-        return None
-    if not _DRAW_FAST_RE.search(msg):
-        return None
-    plan_obj = instantiate_plan("device_draw", {})
-    plan_obj["params"] = {}
-    logger.info("[planner] 绘图意图快道命中（零 LLM，图形由 execute 创作）")
-    return plan_obj
-
-
 def _display_fast_path(user_msg: str) -> dict | None:
     """显示意图快道：屏幕类名词+写/显示动词强模式 → device_display 计划（零 LLM）。
 
@@ -386,11 +348,6 @@ def _scan_action_intents(user_msg: str) -> list[dict]:
     if _DISPLAY_FAST_RE.search(user_msg) and not _NEGATION_RE.search(user_msg):
         intents.append({"key": "display", "family": "device_display",
                         "label": "屏幕显示文字", "tool": "device_oled_display", "args": {}})
-    # 屏幕绘图（与显示并列：两套动词表互斥，同一条消息两者都命中时按两个意图如实记，
-    # 由 planner 决定做哪个——系统只补事实，不夺决策权）
-    if _DRAW_FAST_RE.search(user_msg) and not _NEGATION_RE.search(user_msg):
-        intents.append({"key": "draw", "family": "device_draw",
-                        "label": "屏幕绘图", "tool": "device_oled_draw", "args": {}})
     # 导航（动词必须在句首，与导航快道同判据）
     if _NAV_VERB_RE.match(user_msg.strip().strip("，。！？!?～~、")):
         intents.append({"key": "navigate", "family": "navigate",

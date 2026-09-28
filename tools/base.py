@@ -821,46 +821,16 @@ from config import settings as _settings
 DEVICE_SERVICE_URL = _settings.device_service_url
 JWT_SECRET = _settings.jwt_secret
 
-# 设备写（屏显/绘图）幂等去重：同一用户短时间内相同内容的重复下发直接跳过。
+# 显示指令幂等去重：同一用户短时间内相同内容的重复下发直接跳过。
 # 场景：多轮重复调用（planner 重试/多轮规划） / 客户端重试 / MQTT QoS1
 # at-least-once 重投——工具层保证"同内容只发一次"。（曾防后端强制路由
 # _force_display 与自主调用双调，20260828 影子系统事故后强制路由已移除。）
-# 两个工具**各有一个 store**（签名不同型：屏显是文案、绘图是 payload），
-# 共用的是下面那一对操作、不是同一个 dict。
-_DEVICE_DEDUP_SECONDS = 30.0
+_DISPLAY_DEDUP_SECONDS = 30.0
 # ⚠️ 20260917 加锁：此前是裸 dict 的 check-then-act——两个并发请求可以同时通过
 # "30s 内没发过"的检查，同一条屏显下发两次（外部审计指出；影响面只在这条幂等优化
 # 本身，不是越权）。execute 跑在线程池里、工具会被并发调用，所以这个锁是必需的。
-# 结构是 `{uid: (签名, 占位时间)}`——屏显那条有既有断言盯着（tests/test_hardening.py），
-# 所以保持不变（只把它那套"占位先写、失败才撤、比对身份"抽成下面两个函数）。
 _last_display: dict[int, tuple[str, float]] = {}
 _last_display_lock = threading.Lock()
-_last_draw: dict[int, tuple[str, float]] = {}
-_last_draw_lock = threading.Lock()
-
-
-def _dedup_reserve(store: dict, lock: threading.Lock, uid: int, sig: str) -> float | None:
-    """占位式去重：**下发前先占位**（不是发完再记）——占位与检查在同一把锁里，
-    两个并发请求只有一个能过。返回占位时刻；窗口内已有同签名 ⇒ 返回 None（跳过）。
-
-    绘制工具复用这份实现，而不是把它抄第二遍（抄一遍就是"改一处忘一处"）。
-    """
-    now = time.time()
-    with lock:
-        prev = store.get(uid)
-        if prev and prev[0] == sig and now - prev[1] < _DEVICE_DEDUP_SECONDS:
-            return None
-        store[uid] = (sig, now)
-    return now
-
-
-def _dedup_release(store: dict, lock: threading.Lock, uid: int, sig: str, now: float) -> None:
-    """失败路径把占位撤掉（**没真正下发才撤**）：否则一次失败（设备离线/HTTP 错）会把
-    30s 内的正常重试也一并挡掉——那是加锁时最容易引入的行为回归。撤之前核对占位
-    还是自己那一条，别误撤别人后来占的。"""
-    with lock:
-        if store.get(uid) == (sig, now):
-            store.pop(uid, None)
 
 
 def _sign_user_jwt(user_id: int) -> str:
@@ -929,9 +899,14 @@ def device_oled_display(
     if not text or len(text) > 64:
         return "显示内容为空或超过 64 字符限制"
     # 幂等去重：30s 内相同用户相同内容不重复下发（防多轮重复调用、QoS1 重投）
-    now = _dedup_reserve(_last_display, _last_display_lock, uid, text)
-    if now is None:
-        return "该内容刚刚已下发过，无需重复下发（执行结果以设备回执为准）"
+    now = time.time()
+    with _last_display_lock:
+        prev = _last_display.get(uid)
+        if prev and prev[0] == text and now - prev[1] < _DISPLAY_DEDUP_SECONDS:
+            return "该内容刚刚已下发过，无需重复下发（执行结果以设备回执为准）"
+        # **下发前就占位**（不是发完再记）：占位与检查在同一把锁里，两个并发请求
+        # 只有一个能过——这正是原来那版缺的一步。失败路径会在下面把它撤掉。
+        _last_display[uid] = (text, now)
     sent = False
     try:
         # device_id 未指定时自动选择第一个在线设备（多步工具链是 IoT 工具失败的
@@ -1003,134 +978,9 @@ def device_oled_display(
         # 30s 内的正常重试也一并挡掉——那是加锁时最容易引入的行为回归。
         # 撤之前核对占位还是自己那一条，别误撤别人后来占的。
         if not sent:
-            _dedup_release(_last_display, _last_display_lock, uid, text, now)
-
-
-@tool
-def device_oled_draw(
-    ops: Annotated[str, "要画的图形，一行一个（如 circle 64,26,18）"],
-    config: RunnableConfig,
-    device_id: Annotated[str | None, "设备 id（可选；不填时自动选择当前用户第一个在线设备）"] = None,
-) -> str:
-    """在 ESP32 OLED 屏幕上画一组图形（128x64 单色屏，经 MQTT 指令实时下发）。
-    `ops` 是绘图指令文本，一行一个图形：
-
-        disc x,y,r / circle x,y,r      实心圆 / 空心圆
-        pixel x,y                      单点
-        line x1,y1,x2,y2               直线
-        box x,y,w,h / frame x,y,w,h    实心矩形 / 空心矩形
-        rbox x,y,w,h,r                 圆角矩形
-        tri x1,y1,x2,y2,x3,y3          三角
-        text x,y,文字                  一行文字（左上角对齐，中文可用）
-
-    画布 128x64；坐标会收进画布；每条指令先清屏再按序画。
-    屏幕**没有回读通道**：本工具只能确认"指令合法、已下发、设备已回执"，
-    画出来长什么样只有人眼看得见——回复不得描述屏幕上的细节。"""
-    # 注意：config 必须是精确的 RunnableConfig 类型（无默认值）——框架按类型注入，
-    # 写成 Optional[RunnableConfig] 会破坏注入导致拿不到 user_id。
-    #
-    # ⚠️ **两条与屏显不同、且是刻意的**：
-    # ① **没下发的路径全部返回 `__ERROR__` 帧**（checker 判 BLOCK ⇒ 不进回执），
-    #    屏显那边每条路径都回纯字符串（"无法获取身份，指令未下发"也是），于是那条
-    #    "未下发"被 checker 判 PASS 记成**系统确认事实**——台账上留了一笔屏幕没发生的事。
-    #    本批的硬线是"回执必须有据"：屏幕没动就不能有台账行（否则下一轮模型会照着
-    #    这条回执说"我刚才画了"）。去重命中是唯一例外（那份内容确实已下发过、屏幕
-    #    上的状态就是要的那个），照常回执。
-    # ② **绝不设 `meta["cmd"]`**（同屏显）：非命令工具带了 cmd 会撞 `_check_spec`
-    #    的 `cmd_shape` BLOCK，那是另一个原因码，红在那里说明有人接错了支路。
-    uid = _device_get_user_id(config)
-    if uid <= 0:
-        return "__ERROR__: 无法获取当前用户身份，绘图指令未下发"
-    # 惰性导入：别让 tools 层启动即拉 agent 包（同 tools/base.py 其他处的既成做法）
-    from agent.oled_draw import OledDrawError, build as build_drawing
-    try:
-        drawing = build_drawing(ops or "")
-    except OledDrawError as e:
-        return f"__ERROR__: 绘图指令非法（未下发）：{e}"
-    # 幂等去重：签名 = **要发出去的那份 payload 逐字节**（不同内容各自发，同内容跳过）
-    now = _dedup_reserve(_last_draw, _last_draw_lock, uid, drawing.payload)
-    if now is None:
-        return "该绘图内容刚刚已下发过，无需重复下发（执行结果以设备回执为准）"
-    notes = ("（" + "；".join(drawing.notes) + "）") if drawing.notes else ""
-    sent = False
-    try:
-        # device_id 未指定时自动选择第一个在线设备（理由同屏显：模型无法从 schema
-        # 知道运行时才能拿到的 device_id）
-        if not device_id:
-            resp = httpx.get(
-                f"{DEVICE_SERVICE_URL}/api/devices",
-                headers={"Authorization": "Bearer " + _sign_user_jwt(uid)},
-                timeout=10,
-            )
-            devices = resp.json()
-            online = [d for d in devices if d.get("online")]
-            chosen = (online or devices)[0] if devices else None
-            if chosen is None:
-                # 空结果（"你还没绑定设备"）是**事实**，与屏显同款：`empty` 走 PASS
-                # （`_check_spec` 只对**空文本**判 `empty_result`）——"查到了，就是空的"
-                # 本身有据，回执行照记；这不是"没下发"那一族，不该按错误帧处理。
-                return empty("当前用户还没有绑定任何 IoT 设备")
-            device_id = chosen.get("id")
-            if not device_id:
-                return "__ERROR__: 设备列表返回异常，无法获取设备 id"
-        if not _valid_device_id(device_id):
-            return "__ERROR__: 设备 id 格式非法"
-        headers = {
-            "Authorization": "Bearer " + _sign_user_jwt(uid),
-            # body 是自己序列化的那份字符串 ⇒ 这一行是必需的（httpx 不会替 content 设）
-            "Content-Type": "application/json",
-        }
-        tid = get_trace_id()
-        if tid and tid != "-":
-            headers["X-Request-Id"] = tid
-        resp = httpx.put(
-            f"{DEVICE_SERVICE_URL}/api/devices/{device_id}/cmd",
-            headers=headers,
-            # **发出去的就是 `encode()` 产出的那份字节**（不让 httpx 再序列化一遍）：
-            # 判据里测的字节与线上发的字节因此是同一份，尺寸上限不是估的。
-            content=drawing.payload.encode("utf-8"),
-            timeout=10,
-        )
-        if resp.status_code == 404:
-            return "__ERROR__: 设备不存在或不属于当前用户，绘图指令未下发"
-        if resp.status_code == 409:
-            return "__ERROR__: 设备当前不在线，无法绘图（设备可能断电或 MQTT 连接断开）"
-        if resp.status_code != 200:
-            return f"__ERROR__: 绘图指令下发失败（HTTP {resp.status_code}）: {resp.text[:100]}"
-        sent = True          # 已真正下发 ⇒ 占位保留，30s 内的重复调用会被去重
-        # 回执确认（同屏显）：幽灵在线窗口内下发会"假成功"，5s 内没回执就如实说未确认。
-        # 注意这一档**判 PASS**（指令确已下发，属软失败）——与上面那些"没下发"不同：
-        # 屏幕可能真的变了，台账记一笔不算无据。
-        rid = None
-        try:
-            rid = resp.json().get("req_id") or None
-        except Exception:
-            rid = None
-        if rid:
-            for _ in range(5):
-                time.sleep(1)
-                try:
-                    st = httpx.get(
-                        f"{DEVICE_SERVICE_URL}/api/devices/{device_id}/cmd/{rid}",
-                        headers={"Authorization": "Bearer " + _sign_user_jwt(uid)},
-                        timeout=5,
-                    )
-                    if st.status_code == 200 and st.json().get("acked"):
-                        return f"OLED 绘图指令已下发，设备已确认执行：{drawing.summary}{notes}"
-                    if st.status_code == 401:
-                        break  # 查询鉴权失效，不再等待
-                except Exception:
-                    break  # 查询接口异常，不再等待
-            return (f"绘图指令已入队下发，但设备未在 5 秒内回执确认——设备可能已断电或 "
-                    f"MQTT 连接断开，请稍后到设备控制台确认。本次下发："
-                    f"{drawing.summary}{notes}")
-        return f"OLED 绘图指令已下发：{drawing.summary}{notes}"
-    except Exception as e:
-        return f"__ERROR__: 绘图指令下发失败: {e}"
-    finally:
-        # 没真正下发就把占位撤掉（同屏显）
-        if not sent:
-            _dedup_release(_last_draw, _last_draw_lock, uid, drawing.payload, now)
+            with _last_display_lock:
+                if _last_display.get(uid) == (text, now):
+                    _last_display.pop(uid, None)
 
 
 # ---------------------------------------------------------------------------
@@ -4123,7 +3973,6 @@ _TOOL_REGISTRY = [
     toggle_dark_mode,
     list_devices,
     device_oled_display,
-    device_oled_draw,
     # 管理助手报表（20260921）：scope = admin.console，见本节头注
     get_server_status,
     get_service_health,

@@ -173,11 +173,6 @@ TOOL_SCOPE: dict[str, str] = {
     "toggle_dark_mode": SCOPE_WRITE_PAGE,
     # 物理世界写操作
     "device_oled_display": SCOPE_WRITE_DEVICE,
-    # 画板（20260929）：与屏显同一档 scope、同一档"免问"语义——动的是主人自己的
-    # 设备、结果立刻在他眼前、可随手覆盖。**不给它单独开卡**：要卡是一个连屏显
-    # 一起改的独立决定（把 write.device 加进 CONSENT_SCOPES 并写 _CONSENT_PATTERNS
-    # 分支），不在画板这一批里。
-    "device_oled_draw": SCOPE_WRITE_DEVICE,
     # 管理助手（20260921）：报表类只读工具，但**数据来自后台管理面**——
     # 它们读的是 Rust `auth_guard` 后面的东西（留言审核视图、全站用户统计），
     # 以及本机的服务/磁盘/日志。scope 取 admin.console 而不是 read.any：
