@@ -48,12 +48,19 @@ def setup_logging() -> None:
 
     root = logging.getLogger()
     root.setLevel(level)
-    # Avoid duplicate handlers on reload
-    if not root.handlers:
-        root.addHandler(handler)
+    # **整体替换**、不是 addHandler 累加：本函数在 lifespan 里每个 worker 各调一次，
+    # 重复调用（reload / 测试里连调）不许把同一行日志打印两三遍。
+    # 这里**刻意**连 root 上原有的 handler 一起丢掉——本进程的日志只走本模块这一种
+    # 格式：agent.log 是 stdout 追加，混进第二种格式（比如某个库自己 basicConfig 的
+    # 裸 `%(message)s`）对排障的伤害比"少一个日志来源"大得多。要改这条决定，
+    # 先看 tests/test_logging_setup.py ② 那条判据在锁什么。
+    #
+    # 历史坑（20260928）：这里原来写的是 `if not root.handlers: addHandler(handler)`
+    # 紧跟一个 `for noisy ...: ... else: root.handlers = [handler]`——for/else 的 else
+    # 在"没有 break"时**恒执行**，于是上面那个 if 形同虚设（每次调用都重置一遍），
+    # 而读代码的人以为幂等靠的是 if。现在只有一条路径，不再有两种解释。
+    root.handlers = [handler]
 
     # Silence noisy third-party loggers
     for noisy in ("httpx", "httpcore", "urllib3", "openai"):
         logging.getLogger(noisy).setLevel(max(level, logging.WARNING))
-    else:
-        root.handlers = [handler]
