@@ -1755,7 +1755,9 @@ def test_auth_pending_review():
 
     这里锁三件事：① 结论只从上一轮那句提议里读（读不出/自相矛盾 → 空，绝不默认驳回）；
     ② 恰好 1 条待审 + 结论明确 → **零 LLM** 直接拼计划（写操作同意闸必弹窗）；
-    ③ 0 条 / ≥2 条 / 台账读不到 → **一律不替主人挑**，只注入系统事实。
+    ③ 0 条 / 台账读不到 → 只注入系统事实；≥2 条 → **变更集**（20260929 批 F：
+    一个技能名下 N 条 spec，卡片逐条列全交主人挑）——"绝不替主人挑"这条纪律两处
+    都没变，变的只是"谁挑"（planner 不挑 → 主人挑）。
     """
     print("[auth_review] 授权式短应答的审查路径（台账唯一权威）")
     import agent.graph as G
@@ -1829,13 +1831,20 @@ def test_auth_pending_review():
               p["skill"] == "board_audit" and "audit_board_comment" in p["tools"][0],
               str(p["tools"])[:80])
 
-        # ④ 多条待审 → 不拼计划，只注入候选（planner 仍要如实列）
+        # ④ 多条待审 → **变更集**（20260929 批 F）：一个技能名下 N 条 spec，逐条列全
+        #    交一张卡给主人挑（此前是"只给事实块、不拼计划"——用户拍板改成"卡片列全，
+        #    让主人挑"；"绝不替主人挑"这条纪律没变，只是"谁挑"从 planner 换成了主人）
         TB._board_index = _board_stub(PENDING_2)
         facts2, plan2, forced2 = _auth_review_path("你看着办", prev_ok, admin, cfg)
-        check("多条待审 → 不拼计划（绝不替主人挑）", plan2 is None)
+        check("多条待审 → 拼出变更集（一个技能名下 N 条 spec）",
+              plan2 is not None and plan2["skill"] == "review_inbox"
+              and len(plan2["params"]["specs"]) == 2, str(plan2)[:140])
+        check("  两条都按台账原文指认（planner 没有挑的余地）",
+              "垃圾网站，什么破烂" in plan2["tools"][0]
+              and "泠月喵好棒" in plan2["tools"][1], str(plan2["tools"])[:140])
         check("  候选事实块进提示（talkId:94 与 talkId:101 都在）",
               "talkId:94" in facts2 and "talkId:101" in facts2)
-        check("  提示里明写零写", "零写" in facts2)
+        check("  提示里明写零写（= 系统这一轮没能拼出卡时的退路）", "零写" in facts2)
         check("  且**不进入目标定死模式**（多条时连目标都不许替他挑）", forced2 is None)
 
         # ⑤ 结论读不出 → 不拼计划，但**目标照样由系统定死**（G1，20260923）

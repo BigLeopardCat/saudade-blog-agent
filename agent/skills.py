@@ -182,6 +182,18 @@ WRITE_SKILL_NAMES = frozenset({
     # 漏了这里的后果是**静默的**——技能落进 `_expand_write_skill` 的尾部兜底，
     # 零工具零写还不报错。
     "quota_approve", "quota_reject", "quota_reset",
+    # 审核队列的**变更集**（20260929 批 F）：一次点头办 N 件，可跨族（留言复核 +
+    # 额度批准）。它的 `params` 不是"主人填的参数"，而是**系统拼好的逐条调用**
+    # （`{"specs": [{"tool","args"}]}`，见 `_expand_change_set`），因此：
+    #   · **不进 planner 菜单**（`visible_skills` 的系统快道专用名单）——变更集在结构上
+    #     只能由 `graph._auth_review_path` 那条确定性快道产生，模型拼不出跨技能清单；
+    #   · `plan` 声明的是**允许出现在变更集里的工具全集**（`_confirm_grant_plan` 按它
+    #     逐条核对"技能与工具对得上"），不是一套固定序列模板。
+    # ⚠️ 与 `dashboard_todo_add/done` 同一类坑：桶成员资格说"目标是名字/正文"，
+    # 而它的展开函数与 `_expand_write_skill` **不是同一个** ⇒ `_WRITE_NAME_TARGET_SKILLS`
+    # 那一支里按技能名二分（漏了会落进 `_expand_write_skill` 的尾部兜底：
+    # 零工具零写还不报错）。
+    "review_inbox",
 })
 
 # 其中"目标是一个**名字**"的那批（标签 / 分类 / 公告 / 留言片段），共用
@@ -218,6 +230,10 @@ _WRITE_NAME_TARGET_SKILLS = frozenset({
     # 相同（账号族不列超管那一行，防线只在"定位必须经过列表"时成立）。
     # 三个技能而不是一件带方向的参数：方向必须写进动作本身（同账冻族那条论证）。
     "quota_approve", "quota_reject", "quota_reset",
+    # 审核队列的变更集（20260929 批 F）：两族的目标都走名字/正文通道（留言按正文片段、
+    # 账号按账号名），所以它属于这一桶——但**展开函数不同**（`_expand_change_set`），
+    # 见 `instantiate_plan` 里那处按技能名的二分。
+    "review_inbox",
 })
 
 # 用户自己数据的写技能（20260923 批 7），共用 `_expand_own_skill`：目标是 article_id
@@ -1479,6 +1495,55 @@ SKILLS: list[Skill] = [
         ),
         roles=ADMIN_ROLES,
     ),
+    # ── 变更集：一次点头办 N 件（20260929 批 F）───────────────────────────
+    # **这一件不由 planner 选**（`visible_skills` 的系统专用名单，与 read_article 同一处
+    # 过滤）：它只由确定性快道 `graph._auth_review_path` 产出——主人一句授权语
+    # （「按你的方案」）⇒ 系统把**审核队列**读成候选（河灯待审留言 + 额度待处理申请）、
+    # 判决从上一轮那句提案里读、拼成 `params={"specs": [{"tool","args"}]}` 交
+    # `instantiate_plan` 展开。因此"模型自己拼一份跨技能清单"在结构上不存在
+    # （不需要再论证 `parallel_tool_calls=False` 那半）。
+    #
+    # 为什么整批调用住**一个技能名下**（而不是单开一条通道）：确认令牌的 payload 里
+    # `skill` 是一个字符串、`specs` 是一个列表，而执行轮 `_confirm_grant_plan` 只判
+    # 两件事——技能名认得出、逐条工具在该技能的 `plan` 里。于是"一个技能 + N 条 specs"
+    # 天然满足全部不变量，**`agent/confirm.py` 一个字都不用改**（改了 `_VERSION` 会让
+    # 部署后 10 分钟内在途的卡片全部验签失败——能不做就不做）。
+    # 因此下面的 `plan` 是**允许出现在变更集里的工具全集**，不是其余技能那种"固定执行
+    # 序列"；`_expand_change_set` 按它逐条核对（`skill.plan` 仍是同一个字段、同一份读法）。
+    #
+    # 允许清单里**没有**两件，各自有据：
+    #   · `delete_board_comment`：删除不属于"复核一条待审留言"（待审与被驳回的都删得掉，
+    #     那不是队列这件事），主人要删走 board_delete 单独点名；
+    #   · `reject_quota_request`：它的 `reason` **必填**，而主人的授权语里从来不带来理由、
+    #     其 docstring 又明令"不要自己编一个"（申请人收到的是主人的裁决）⇒ 驳回这一支在
+    #     变更集里结构性不可达。快道照此跳过并如实写进注记（不静默）。
+    # 加工具进这份清单时**同时**要看：`_SPEC_SKILL` 里有没有它的归属（快道按那是拼 spec），
+    # 以及 `tools.base` 里它是不是写操作（写操作照旧必经弹卡，见 authz 的 `_ALWAYS_CONFIRM_TOOLS`）。
+    Skill(
+        name="review_inbox",
+        capability="把审核队列里等主人点头的几件事一次办完（一次点头办 N 件）",
+        description=(
+            "**系统专用技能，不由模型选择**：主人用一句授权语（「按你的方案」「就按你的想法啦」）"
+            "把上一轮提议的复核一次性交回系统时，由确定性快道产出。"
+            "参数 specs=系统拼好的逐条调用（不是给模型填的参数）。"
+            "要不要真动手由系统定：清单里每一件按它自己所属的那一族走——留言复核那件"
+            "判成明确命令就直接办、额度批准那件一律弹确认框；而**变更集的每一条目标都"
+            "取自系统队列、不在主人原话里**，所以这一族照旧每次弹卡由主人签字"
+            "（tests/test_confirm.py 的派生判据按工具成员资格要求这句话，见那里）。"
+        ),
+        inputs={"specs": "系统拼好的逐条调用（不是给模型填的参数）"},
+        plan=[("audit_board_comment", {}), ("approve_quota_request", {})],
+        complete_when="清单里的每一条都返回了结果（成败逐条如实转述）",
+        reply_contract=(
+            "**逐条对照实际返回**：哪几条真办了、各改成了什么，一条一句如实说；"
+            "有任何一条没执行/被拒/未确认，就如实说那一条没办成——"
+            "**绝不得把没执行的那几条说成办了**，也不得在清单里有失败项时把整批说成"
+            "「全都办好了」；"
+            "每一件的措辞边界照它自己的返回（留言复核照 board_audit、额度批准照 "
+            "quota_approve），没拿到回执的那一件不要用完成式"
+        ),
+        roles=ADMIN_ROLES,
+    ),
     Skill(
         name="chat",
         capability="闲聊、陪你说话",
@@ -1582,6 +1647,53 @@ def _notice_placeholder(text: str) -> str:
                 and (open_c == close_c or s.count(open_c) == 1)):
             return f"正文整个被括号包住「{s}」"
     return ""
+
+
+def _expand_change_set(skill, params: dict) -> tuple[list[str], str]:
+    """**变更集**技能（`review_inbox`）的展开：`params["specs"]` 逐条照抄成调用清单。
+
+    与其余展开函数的根本差别：**这里没有"解释"这一步**。`specs` 不是模型填的参数，
+    而是确定性快道从系统队列里拼出来的**具体调用**（`graph._change_set_specs`：
+    留言按正文片段 + 结论、额度按账号名）——这一层与它之间是一条**恒等**通道：
+    不补参、不改写、不排序、不合并。理由是同一条纪律的另一面："参数不全时猜一个"
+    在别处只是办不成，在这一族是**拿别人的一句话做裁决**。
+
+    两条形状判据（缺一即**零工具 + 注记**，交 planner 如实收尾）：
+      · `specs` 必须是非空列表，每条是 `{"tool": 名字, "args": 非空对象}`；
+      · 工具名必须在本技能 `plan` 声明的**全集**里——与 `_confirm_grant_plan` 执行轮
+        那条"技能与工具必须对得上"是同一条判据，在这里**先判一次**的理由是：展开
+        结果一旦含 plan 之外的工具，令牌签发（按技能名）与执行（按 plan 逐条核对）
+        会得出不同结论，而"写操作跑在一份没人预期它会跑的技能名下"是最难查的那类事故。
+
+    **任何一条不合格 → 整批零工具**（不是"跳过坏的那条"）：卡是为这一批签的，
+    少办一件而主人以为全办了，比一件都不办更坏（同 `_drop_correction` 的剔空取向）。
+    """
+    allowed = {t for t, _ in skill.plan}
+    specs = params.get("specs")
+    if not isinstance(specs, list) or not specs:
+        return [], ("变更集里没有一条可执行的调用（系统没拼出清单）："
+                    "不调用任何工具，如实告诉主人这一轮没有能替他办的事")
+    tools: list[str] = []
+    bad: list[str] = []
+    for s in specs:
+        if not isinstance(s, dict):
+            bad.append("（有条目不是对象）")
+            continue
+        name = str(s.get("tool") or "").strip()
+        args = s.get("args")
+        if not name or not isinstance(args, dict) or not args:
+            bad.append(f"「{name or '没有工具名'}」缺参数")
+            continue
+        if name not in allowed:
+            bad.append(f"「{name}」不在本技能的允许清单里")
+            continue
+        # 调用行的写法是**跨模块契约**：`<工具名>(<JSON>)`，读端是
+        # `graph._tool_name` / `_tool_args` 与 `_confirm_grant_plan`（它拼的是同一形状）。
+        tools.append(f"{name}({json.dumps(args, ensure_ascii=False)})")
+    if bad or not tools:
+        return [], ("变更集里有条目不合格（" + "、".join(bad[:5])
+                    + "）：不调用任何工具，如实告诉主人这一轮什么都没有办")
+    return tools, f"变更集：按系统拼好的清单逐条执行（共 {len(tools)} 件）"
 
 
 def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
@@ -2349,7 +2461,16 @@ def _instantiate_plan(skill_name: str, params: dict,
         #     文章类两件留在下面（它们的目标是 article_id，另有"点名即据"的判据）。
         note = ""
         if skill.name in _WRITE_NAME_TARGET_SKILLS:
-            wtools, note = _expand_write_skill(skill, params)
+            # ⚠️ **桶成员资格只说"目标按名字（正文片段）"，展开函数还要按技能名二分**
+            # （20260929 批 F）：`review_inbox` 与 board_audit 同属这一桶（留言按正文
+            # 片段、账号按账号名），但它的 `params` 不是"主人填的参数"而是**系统拼好的
+            # 整批调用**（`_expand_change_set`）。与下面 `_FREE_TEXT_WRITE_SKILLS` 那处
+            # 二分同一个坑：落进默认支**不会报错**——`_expand_write_skill` 会把 `specs`
+            # 当成一个它不认识的参数、静悄悄地零工具零写，主人只看到"什么都没办"。
+            if skill.name == "review_inbox":
+                wtools, note = _expand_change_set(skill, params)
+            else:
+                wtools, note = _expand_write_skill(skill, params)
             tools.extend(wtools)
         elif skill.name in _OWN_WRITE_SKILLS:
             # 用户自己的数据（20260923 批 7）：收藏两件（article_id）+ 标记已读
@@ -2977,6 +3098,14 @@ def _nav_map_lines() -> str:
 _NAV_MAP_LINES = _nav_map_lines()
 
 
+# 系统快道专用技能（20260929 批 F）：**不由 planner 选、也不对外介绍**的技能名。
+# read_article：article_id 是 current_url 解析出来的系统数据，planner 无参可填；
+# review_inbox：整批调用由确定性快道拼好（`_auth_review_path`），模型既不该也不能拼出
+# 一份跨技能变更集——**"模型选不出来"在结构上替代了"选出来再拦一次"**。
+# 收成一条名单的理由同 `visible_skills` 自己：可见性判据只能有一处，两处必然漂移。
+_SYSTEM_ONLY_SKILLS = frozenset({"read_article", "review_inbox"})
+
+
 def visible_skills(role: str | None, include_system: bool = False) -> list[Skill]:
     """按角色过滤的技能列表——**角色可见性判据只有这一处**（20260921）。
 
@@ -2984,13 +3113,14 @@ def visible_skills(role: str | None, include_system: bool = False) -> list[Skill
     （context.site_guide）此前各写各的可见性——两张表必然漂移，而它们回答的是
     同一个问题（"这个人能用什么"）。165525-165937 同一能力三轮两种答案就是这么来的。
 
-    `include_system=True` 才带上 read_article（系统快道专用技能：article_id 是
-    current_url 解析出来的系统数据，planner 无参可填、narrator 也不该对外介绍）。
+    `include_system=True` 才带上系统快道专用技能（`_SYSTEM_ONLY_SKILLS`：
+    article_id 是 current_url 解析的系统数据、变更集是系统拼好的逐条调用，
+    planner 都无参可填、narrator 也不该对外介绍）。
     `role=None`（身份不明/单测）→ 只剩公开技能，失败取向往保守一侧倒（同 authz）。
     """
     out = []
     for s in SKILLS:
-        if s.name == "read_article" and not include_system:
+        if s.name in _SYSTEM_ONLY_SKILLS and not include_system:
             continue
         if s.roles and role not in s.roles:
             continue
