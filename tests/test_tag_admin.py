@@ -613,6 +613,14 @@ _MIN_PARAMS = {
     "quota_approve": {"name": "probe_target_1"},
     "quota_reject": {"name": "probe_target_1", "reason": "这是一条发给不存在的账号的测试理由"},
     "quota_reset": {"name": "probe_target_1"},
+    # 审核队列的**变更集**（20260929 批 F）：参数不是"主人填的值"而是**系统拼好的
+    # 逐条调用**（`_expand_change_set` 只做恒等照抄 + 允许清单核对，不补参不改写）。
+    # ⚠️ 这里填的两件都是**定位用的字面量**（留言片段 / 账号名，全是明显假的），
+    # 展开器是纯函数、不发请求——同上面那条"将来谁把这条改成真跑也只是零写"的纪律。
+    "review_inbox": {"specs": [
+        {"tool": "audit_board_comment", "args": {"quote": "今天天气真好呀", "verdict": "pass"}},
+        {"tool": "approve_quota_request", "args": {"name": "probe_target_1"}},
+    ]},
 }
 _EXPECT_TOOL = {
     "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
@@ -634,6 +642,9 @@ _EXPECT_TOOL = {
     "quota_approve": "approve_quota_request",
     "quota_reject": "reject_quota_request",
     "quota_reset": "reset_user_quota",
+    # 变更集（20260929 批 F）：期望值是**列表**——它的 `plan` 是"允许出现的工具全集"
+    # 而不是固定序列，展开结果由 `params.specs` 逐条决定（下面那条判据按形状取值）。
+    "review_inbox": ["audit_board_comment", "approve_quota_request"],
 }
 check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",
       set(_EXPECT_TOOL) == set(WRITE_SKILL_NAMES) and set(_MIN_PARAMS) == set(WRITE_SKILL_NAMES),
@@ -642,8 +653,12 @@ for skill_name, params in _MIN_PARAMS.items():
     out = instantiate_plan(skill_name, params)
     specs = out["tools"]
     names = [s.split("(", 1)[0] for s in specs]
-    check(f"{skill_name} 展开出的工具名 = {_EXPECT_TOOL[skill_name]}",
-          names == [_EXPECT_TOOL[skill_name]], f"{names}（注记：{out['note'][:40]}）")
+    # 期望值两种形状：单工具（固定序列技能，绝大多数）与**列表**（变更集：逐条照抄
+    # 系统拼好的清单）。写成一个字段、按类型取值，比另起一张表更不容易漂。
+    _want = _EXPECT_TOOL[skill_name]
+    _want = list(_want) if isinstance(_want, list) else [_want]
+    check(f"{skill_name} 展开出的工具名 = {_want}",
+          names == _want, f"{names}（注记：{out['note'][:40]}）")
     check(f"{skill_name} 展开出的工具名都在 _TOOL_REGISTRY 里（否则 execute 只能回"
           f"「未知工具」错误帧）",
           all(n in _REGISTERED for n in names), f"{[n for n in names if n not in _REGISTERED]}")

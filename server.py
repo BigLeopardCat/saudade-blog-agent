@@ -123,6 +123,10 @@ MAX_SHORT_FIELD_CHARS = 500     # current_url / page_title
 # 数组都在里面）——500 字在"建二级标签 + 长名字"时会被顶到。给足额度（令牌本身
 # 只是 HMAC 材料，不进 prompt、不落库），形状校验交给 confirm.verify（fail-closed）。
 MAX_CONFIRM_TOKEN_CHARS = 4000
+# 上一轮执行过的工具名（20260929 批 F1'）：只是**判定输入**（"上一轮读过审核队列吗"），
+# 不进 prompt。Rust 侧从本会话最近 8 条回执去重后给出，上限取 40 是给"旧 Rust 忘了
+# 去重"留余量——超出即截断，最坏结果是那一条结构化判据落空、退回散文判据（fail-open）。
+MAX_RECENT_TOOLS = 40
 MAX_CONCURRENT_STREAMS = int(os.environ.get("AGENT_MAX_CONCURRENT", "8"))
 STREAM_QUEUE_WAIT = 3.0         # 秒；排队超过这个时间就如实 503，不让请求无声堆着
 
@@ -222,6 +226,19 @@ class ChatRequest(BaseModel):
     # 形状不对一律当"没有任务"（`task_rows` 判）——这**不是**静默失效：JSON 解不出来
     # 意味着 Rust 侧或表结构坏了，而它坏掉的症状是"未完结的事又忘了"，正是本表要治的病。
     agent_tasks: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
+    # 上一轮执行过的**工具名**（20260929 批 F1'，Rust 侧从最近 8 条回执去重得出）。
+    # 用途只有一个：让"上一轮读过审核队列吗"成为一个**结构化事实**，而不是对
+    # narrator 散文做正则（`_REVIEW_INTENT_RE`）——授权式审核快道（"按你的方案办"）
+    # 的准入判据此前全靠后者，而它被判据的读者是**模型写的字**。
+    # 三条纪律：
+    #   · **空列表不是"键缺席"**：这里给的是 `[]` 而不是 None，因为"上一轮什么都没
+    #     执行"是一个**确定的事实**（与 `chat_quota` 那条"读不到 ⇒ 整个键缺席"恰好
+    #     相反：那一族的缺席说的是"不知道"，这一族的空说的是"知道，是空的"）。
+    #     用 `default_factory=list` 也照顾了直接构造 ChatRequest 的评测夹具。
+    #   · **绝不进 prompt**：它不注入 system 上下文、不进任何提示词——一旦进提示词，
+    #     模型就会开始复述"我上一轮调用过 X"（同 `meta` 那条不进提示词的纪律）。
+    #   · 旧 Rust 端没有这个字段 ⇒ `[]` ⇒ 快道退回散文判据（fail-open，零行为变更）。
+    recent_tools: list[str] = Field(default_factory=list, max_length=MAX_RECENT_TOOLS)
 
     # ── 对话额度（20260929，跨语言契约 C1/C3）──────────────────────────
     # chat_quota：访客的终身额度现状（C1）。**读不到时整个键缺席**（Rust 侧 DB 故障
@@ -647,15 +664,19 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
 
 def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
                     principal: Principal | None = None,
-                    ledger: dict | None = None) -> tuple[str, str, list]:
+                    ledger: dict | None = None,
+                    recent_tools: list[str] | None = None) -> tuple[str, str, list]:
     """Run agent synchronously in a thread. Returns (reply, nav_line, exec_rows)."""
     # user_id 注入 configurable：设备类工具（list_devices/device_oled_display）
     # 经 RunnableConfig 读取并以用户身份签发 JWT 调用 device-service
     # principal 一并注入：execute 的权限判据读它（agent/authz.py；缺省 = 身份不明）
     # ledger 一并注入：gate 的台账否认判据（洞⑦）读它，见 _ledger_for_graph
+    # recent_tools 一并注入：授权式审核快道的**结构化准入判据**（20260929 批 F1'，
+    #   与流式那半同源同义，见 `_run_agent_stream_to_queue` 的同名参数注）
     # recursion_limit 覆盖默认 9999（等效无界）：幻觉重试循环有界
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id,
-                               "principal": principal or Principal(uid=user_id)},
+                               "principal": principal or Principal(uid=user_id),
+                               "recent_tools": list(recent_tools or [])},
               "recursion_limit": RECURSION_LIMIT}
     full_reply = ""
     nav_line = ""
@@ -768,7 +789,9 @@ async def chat(req: ChatRequest, request: Request):
             )
         reply, nav_line, exec_rows = await _submit_with_context(
             loop, _run_agent_sync, messages, thread_id, req.user_id, principal,
-            _ledger_for_graph(req))
+            # `_submit_with_context` 只收 `*args`（没有 kwargs 通道，见它的签名）
+            # ⇒ recent_tools 按**位置**传（`_run_agent_sync` 的第 6 个形参）
+            _ledger_for_graph(req), req.recent_tools)
         new_summary = None
         if summary_task is not None:
             new_summary = (await summary_task).strip() or None
@@ -898,7 +921,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                confirm_grant: dict | None = None,
                                conversation_id: int | None = None,
                                ledger: dict | None = None,
-                               open_tasks: str = ""):
+                               open_tasks: str = "",
+                               recent_tools: list[str] | None = None):
     """Run agent in a thread, push each chunk into an asyncio.Queue."""
     # user_id 注入 configurable（设备类工具经 RunnableConfig 读取，见 _run_agent_sync 注释）；
     # stop_event 一并注入——图内 model/tools 节点检查它实现断连中断（见 graph.AgentCancelled）
@@ -925,7 +949,15 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                # 走 configurable 与 conversation_id 同一条路：图里读得到、
                                # 又不必动 AgentState（多一个 state 字段就要多一处初值，
                                # 而这条只是**只读的判定输入**，没有回写需求）。
-                               "open_tasks": open_tasks},
+                               "open_tasks": open_tasks,
+                               # 上一轮执行过的工具名（20260929 批 F1'）：授权式审核
+                               # 快道的**结构化准入判据**（"上一轮读过审核队列吗"）。
+                               # 走 configurable 与 conversation_id / open_tasks 同一条
+                               # 路：图里读得到、又不必动 AgentState（只是只读的判定
+                               # 输入，没有回写需求）。传 `[]` 而不是缺键——"上一轮什么
+                               # 都没执行"是一个确定的事实（与 chat_quota 的"读不到 ⇒
+                               # 整个键缺席"恰好相反，见 ChatRequest 那条注）。
+                               "recent_tools": list(recent_tools or [])},
               "recursion_limit": RECURSION_LIMIT}
     try:
         # 双 stream_mode：
@@ -1508,6 +1540,9 @@ async def chat_stream(req: ChatRequest, request: Request):
             # 未完结任务原文（20260927 批 D）：流尾按回执结算要用，**同一条理由**
             # 必须由这里传（req 不在被调函数里）
             req.agent_tasks,
+            # 上一轮执行过的工具名（20260929 批 F1'）：**同一条理由**必须由这里传
+            # （req 不在被调函数里），见 `_run_agent_stream_to_queue` 的同名参数注
+            req.recent_tools,
         )
 
         # 可观测性：请求生命周期账本（帧数/退出原因，finally 汇总）
