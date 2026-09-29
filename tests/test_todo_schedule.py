@@ -1211,6 +1211,66 @@ _ref_short, _got_short = _run_target_gates(_short_plan, "把待办「给多肉�
 check("⭐ 待办族不做「抄短了就补全」的校正（引号里写什么就是什么，退回如实拒绝）",
       _ref_short is not None and _got_short == "给多肉", f"{_ref_short} / {_got_short}")
 
+# ── ⑰b 待办的**引用式**唯一命中（20260929 批 G，D2）────────────────────────────
+# 现场：主人说「把简历那条挪到 10 月 8 号」，台账里**唯一**一行含「简历」，可定位判据是
+# 逐字相等 ⇒ 系统反问"请你点名是哪一件"，主人只好把台账原文抄一遍。这一支补的不是新
+# 判据，是**候选来源**：从主人**没加引号**的那部分说法出发（2-gram 包含），恰好命中一行
+# 才把目标校正成台账那一行的逐字正文，再走上面那条既有的重建机制。
+#
+# 与上面那条 20260927 的锁**不是同一件事**（别把这两段合并）：那一条锁的是"引号里的短
+# 字面不许被补全"，这一支把引号段整段排除在外，所以它一个字都没放松——本节第三条断言
+# 就是这个边界本身。
+print("\n⑰b 待办的引用式唯一命中：主人自己的字唯一指向一行 ⇒ 校正成台账原文（批 G）")
+
+_MSG_REF = "把简历那条勾成完成"
+_ROWS_REF = [todo("更新简历（国庆后）", date="2026-10-08"), todo("买猫粮", date=None)]
+
+_plan_ref = _todo_plan("简历")
+_ref_r, _got_r = _run_target_gates(_plan_ref, _MSG_REF, _ROWS_REF)
+check("⭐ 主人没加引号的说法**唯一**指向台账一行 ⇒ 正文校正成那一行的逐字正文、放行到弹卡",
+      _ref_r is None and _got_r == "更新简历（国庆后）", f"{_ref_r} / {_got_r}")
+check("  TOOLS 行与 `params` **同步**重建（弹卡印的与 execute 执行的是同一份参数）",
+      _plan_ref.get("tools") == ['complete_dashboard_todo({"text": "更新简历（国庆后）"})']
+      and (_plan_ref.get("params") or {}).get("text") == "更新简历（国庆后）",
+      f"{_plan_ref.get('tools')} / {_plan_ref.get('params')}")
+
+_plan_none = _todo_plan("那件事")
+_ref_n, _got_n = _run_target_gates(_plan_none, "把那条勾成完成", _ROWS_REF)
+check("这批字在台账里**一行都指向不到** ⇒ 今天的拒绝原样保留（不许凭空认领一个是目标）",
+      _ref_n is not None and _got_n == "那件事", f"{_ref_n} / {_got_n}")
+
+_plan_two = _todo_plan("简历")
+_ref_two, _got_two = _run_target_gates(
+    _plan_two, _MSG_REF, [todo("更新简历", date=None), todo("简历附件", date=None)])
+check("⭐ 被引用的行有**两条** ⇒ 零写（歧义即零写：两行都含「简历」，判据认得出多个候选）",
+      _ref_two is not None and _got_two == "简历", f"{_ref_two} / {_got_two}")
+
+_plan_q = _todo_plan("简历")
+_ref_q, _got_q = _run_target_gates(_plan_q, "把「简历」那条勾成完成", _ROWS_REF)
+check("⭐ 引号里写的是短的那一截 ⇒ 仍走今天的如实拒绝（这一支只看主人**没加引号**的说法，"
+      "20260927 那条纪律一个字没放松）",
+      _ref_q is not None and _got_q == "简历", f"{_ref_q} / {_got_q}")
+
+_plan_one = _todo_plan("那个菜")
+_ref_one, _got_one = _run_target_gates(_plan_one, "把菜那条勾成完成", [todo("菜")])
+check("只有**一个字**的正文永远不被认领（凑不出 2-gram ⇒ 一个字没有指认力），退回如实拒绝",
+      _ref_one is not None and _got_one == "那个菜", f"{_ref_one} / {_got_one}")
+
+# 负锁（两条）：这一支只改「我们找哪一行」，**不改**「怎么找」——
+# ① 工具侧仍是逐字相等（校正出来的那一行，换个近似说法就找不到它）；
+# ② Rust `pick_todo` 与它同口径（`r.text == text`，不是 contains/startswith）。
+check("⭐ 执行端定位判据仍是**逐字相等**（近似说法找到 0 条，原文才找到那一条）",
+      base._todo_text_hits([{"text": "更新简历（国庆后）"}], "更新简历") == []
+      and len(base._todo_text_hits([{"text": "更新简历（国庆后）"}],
+                                   "更新简历（国庆后）")) == 1)
+_rs_todos = _parent_repo.read(
+    "src/routes/todos.rs",
+    why="待办定位是**跨语言同口径**：Python 侧 `_todo_text_hits` 与 Rust 侧 `pick_todo`"
+        "都必须是逐字相等；这一支只改候选来源，两边判据都不许被放宽")
+if _rs_todos is not None:
+    check("  Rust `pick_todo` 也是逐字相等（含 `trim`，与写入口径同源）",
+          "r.text == text" in _rs_todos and ".trim()" in _rs_todos)
+
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
