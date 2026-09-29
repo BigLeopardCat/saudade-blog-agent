@@ -261,6 +261,13 @@ class ChatRequest(BaseModel):
     # ⇒ 内存 pending 表在另一个 worker 上不存在）。Rust 侧对带此字段的请求
     # **跳过用户消息入库**——所以它不会在历史里留下一条空用户消息。
     confirm_token: str = Field(default="", max_length=MAX_CONFIRM_TOKEN_CHARS)
+    # confirm_pick：确认卡上点了**某一件**（而不是「全部办」）时，前端带回来的选择
+    # 记号（20260929 批 F，形态 `pick:<下标>`；`""` = 全部办）。它**不是凭据**——
+    # 凭据仍然只有 confirm_token（签名、绑 uid+会话、一次性）。本字段只用来把
+    # 已签名的那批 specs **收窄成它的子集**（见 /chat/stream 里 `_narrow_grant`）：
+    # 收窄是安全的（放行范围只可能变小），越界/读不懂一律收窄成空集 ⇒ 零执行 +
+    # 如实告知。不验签、不落库、不进 prompt。
+    confirm_pick: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
 
     @field_validator("image")
     @classmethod
@@ -1339,7 +1346,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             logger.info("[stream] 收尾哨兵无人接收（消费者已退出），producer 提前结束")
 
 
-def _record_invalid_confirm(trace_id: str, uid: int, conv_id, token_len: int) -> None:
+def _record_invalid_confirm(trace_id: str, uid: int, conv_id, token_len: int,
+                            reason: str = "invalid_token", detail: str = "",
+                            exit_reason: str = "invalid_confirm_token") -> None:
     """给被拒的确认请求落一份最小 trace。
 
     20260924 补：此前这条路径在 `start_trace` **之前** return（见下方 chat_stream），
@@ -1349,13 +1358,22 @@ def _record_invalid_confirm(trace_id: str, uid: int, conv_id, token_len: int) ->
 
     元数据由 `confirm.invalid_trace_meta` 给定（纯函数、被单测锁住：**只记令牌长度，
     绝不记令牌本身**）——那条纪律属于确认模块的语义，不属于这个调用点。
+
+    `reason` / `detail`（20260929 批 F）只为**区分两个出口**：`invalid_token`（验签
+    没过）与 `invalid_pick`（令牌没问题、是"只办第几件"那个记号读不懂）。两者都是
+    零执行，但复盘时要走的路完全不同——一个是"令牌过期/换了会话"，一个是"前端把
+    下标写坏了"。`detail` **不许带令牌**（它只装 `confirm.narrow` 给的那句原因）。
     """
     try:
         start_trace(trace_id, uid, f"invalid_confirm_{uuid.uuid4().hex[:8]}",
                     confirm.invalid_trace_meta(uid, conv_id, token_len))
-        record("confirm", "rejected", reason="invalid_token",
-               conversation_id=conv_id, token_len=int(token_len))
-        finish_trace(trace_id, "invalid_confirm_token", 0.0, 1)
+        record("confirm", "rejected", reason=reason,
+               conversation_id=conv_id, token_len=int(token_len),
+               detail=str(detail or "")[:120])
+        # 退出原因**显式传入**（不给默认值拼一个 "invalid_confirm_invalid_token"：
+        # 存量那条 `invalid_confirm_token` 是既有观测面的字面量，改一个字就是换了一个
+        # 退出原因、跨源对账的旧账本会对不上）。
+        finish_trace(trace_id, exit_reason, 0.0, 1)
     except Exception:                        # trace 是观测，不是业务：绝不因它中断
         logger.exception("invalid confirm trace dump failed")
 
@@ -1373,6 +1391,20 @@ async def _invalid_confirm_stream():
     "我明明点了"多数是其中一种，说清楚才知道下一步该做什么。
     """
     text = "这次确认已经失效了（超过 10 分钟、或者不是在同一个会话里点的），我没有执行任何改动。需要的话跟我说一遍要做什么，我再问一次。"
+    yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
+    yield "data: __END__\n\n"
+
+
+async def _invalid_pick_stream():
+    """「只办其中一件」那个记号读不懂时的最小 SSE 流（20260929 批 F）：一句话 + 结束帧。
+
+    形状逐字照抄上面的 `_invalid_confirm_stream`（走正常帧协议而不是 4xx，理由见
+    它那段论证），**换的只有正文**：这里令牌本身是好的、失效的不是"确认"而是"选的是
+    哪一件"。两句话必须分开说——把它们混成同一句，主人下次还是不知道该重点一次卡
+    还是该说一遍要求；而这两条路的下一步动作确实不同。
+    """
+    text = ("我没看清你要办的是哪一件（这张卡上的选择记号读不出来），"
+            "所以这次**一件都没有办**。要办的话跟我说一遍，我再问一次。")
     yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
     yield "data: __END__\n\n"
 
@@ -1447,6 +1479,28 @@ async def chat_stream(req: ChatRequest, request: Request):
             return StreamingResponse(
                 _invalid_confirm_stream(), media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        # 只办其中一件（20260929 批 F）：卡片列了 N 件时主人可以点「只办 1」——
+        # 前端带回来的只是一个**下标**，收窄在**验签之后、任何消费之前**做
+        # （`_build_messages` / `_ledger_for_graph` / 图内 planner 读到的都必须是
+        # 收窄后的那一份，否则会出现"卡上问一件、实际执行一批"）。收窄只可能让
+        # 放行范围**变小**；记号读不懂/越界一律零执行（fail-closed），
+        # 绝不"读不懂就当全部办"——那正是这一层唯一能出的重伤。
+        if req.confirm_pick.strip():
+            before = len(grant.get("specs") or [])
+            grant, pick_err = confirm.narrow(grant, req.confirm_pick)
+            if pick_err:
+                logger.warning("[confirm] 挑选记号读不懂（uid=%s conv=%s pick=%r：%s）→ 零执行",
+                               principal.uid, req.conversation_id,
+                               req.confirm_pick[:32], pick_err)
+                _record_invalid_confirm(get_trace_id(), principal.uid,
+                                        req.conversation_id, len(req.confirm_token),
+                                        reason="invalid_pick", detail=pick_err,
+                                        exit_reason="invalid_confirm_pick")
+                return StreamingResponse(
+                    _invalid_pick_stream(), media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            logger.info("[confirm] 确认收窄：%d 件 → 1 件（%s）", before,
+                        (grant.get("specs") or [{}])[0].get("tool"))
     # 额度硬拦（20260929，契约 C3）：Rust 那个原子 UPDATE 没抢到额度 ⇒ 这一轮**零
     # LLM、零工具、零计数**，只如实回一句并点明下一步（C7）。
     # **位置在 `_try_acquire_slot()` 之前**：被拦的人狂点发送不该占住 LLM 并发槽。

@@ -1763,6 +1763,38 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
     return f"执行 {tool}"
 
 
+def _spec_count(specs) -> int:
+    """清单条数（读不出结构就当 0 件——调用方据此走单件那条既有分支）。"""
+    try:
+        return len(specs or [])
+    except TypeError:
+        return 0
+
+
+def confirm_opts(count: int) -> list:
+    """确认卡上的按钮（20260929 批 F4）。
+
+    **`count` 必须取自已签名的那份 `specs`**（`confirm.sign(...)` 的入参条数）：
+    按钮的 `value` 是 `pick:<i>`（0 基），服务端 `confirm.narrow` 就按这个下标去
+    裁签名过的清单——按钮那一侧若自己数一遍（例如拿 `picks` 之外的列表、或在过滤
+    前后各数一次），点第 2 件就会办成别的第 2 件。这里的字面与
+    `render_confirm_question` 里写的「只办第 N 件」是**同一套**，改一处必须改另一处
+    （两侧不一致时，问句指的那个按钮在卡上根本不存在）。
+
+    单件仍返回**旧的两枚**（确定/取消）——既有卡片的字面与 `tests/test_confirm.py`
+    的锁都按它写的，本批不动。
+    """
+    n = int(count or 0)
+    if n <= 1:
+        return [{"label": "确定", "value": "yes", "kind": "primary"},
+                {"label": "取消", "value": "no", "kind": "default"}]
+    opts = [{"label": f"全部办（{n} 件）", "value": "yes", "kind": "primary"}]
+    opts += [{"label": f"只办第 {i} 件", "value": f"pick:{i - 1}", "kind": "default"}
+             for i in range(1, n + 1)]
+    opts.append({"label": "取消", "value": "no", "kind": "default"})
+    return opts
+
+
 def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
                         users=None, todos=None, quota_requests=None) -> str:
     """一份调用清单 → 主人看得懂的动作串（"；"分隔）。
@@ -1771,10 +1803,19 @@ def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
     （`pending_action.target`）。分开写必然漂移——主人在弹窗里看到的目标，与他
     事后在待办/回执里读到的目标，必须是同一句话（这正是"盲签"那条纪律的延伸：
     系统对同一件事的两种表述不一致时，点「确定」的人无从判断谁是真的）。
+
+    **多件（20260929 批 F4）**：同一句话换成**编号列表**（`1. …；2. …`）——编号
+    是卡面上「只办第 i 件」那几枚按钮**唯一能指的东西**（按钮的 `pick:i` 取的是
+    已签名 `specs` 的那个下标），所以编号只在本函数里生成一次：按钮上的 N 与卡面
+    上的 N 必然指向同一件。若让按钮那一侧自己数一遍，主人点「只办 2」而系统执行
+    另一件这种事就只是时间问题。
     """
-    return "；".join(_confirm_one(s, index, cats, boards, notes, users, todos,
-                                  quota_requests)
-                     for s in (specs or []))
+    items = [_confirm_one(s, index, cats, boards, notes, users, todos,
+                          quota_requests)
+             for s in (specs or [])]
+    if len(items) > 1:
+        return "；".join(f"{i}. {t}" for i, t in enumerate(items, 1))
+    return "；".join(items)
 
 
 def render_confirm_question(specs, index=None, cats=None, boards=None, notes=None,
@@ -1789,6 +1830,13 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
     """
     acts = render_action_lines(specs, index, cats, boards, notes, users, todos,
                                quota_requests)
+    if _spec_count(specs) > 1:
+        # 多件（20260929 批 F4）：这一句话里必须把"能只办一件"讲出来——否则主人
+        # 看到一串编号却只有一枚「确定」，他唯一能做的就是全签（盲签的反面不是
+        # "问一句"，是"让他能只同意其中一件"）。按钮名与 `_confirm_opts` 同一套字面。
+        return (f"要办这几件事吗？\n\n{acts}\n\n"
+                f"点「全部办」我就都办；只想办其中一件，"
+                f"点「只办第 N 件」（N 就是上面的编号）。")
     return f"要{acts}吗？点「确定」我就去办。"
 
 
@@ -1803,6 +1851,12 @@ def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
                                quota_requests)
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
+    if _spec_count(specs) > 1:
+        return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
+                f"**{acts}**\n\n"
+                f"点「全部办」我就都办；只想办其中一件，点对应的"
+                f"「只办第 N 件」；点「取消」就当没说过，"
+                f"或者直接告诉我改成别的。")
     return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
             f"**{acts}**\n\n"
             f"点「确定」我就去办；点「取消」就当没说过，"
