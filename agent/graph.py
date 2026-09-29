@@ -6682,8 +6682,12 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         return None
     question = A.render_confirm_question(picks, tag_index, cat_index, board_index,
                                          note_index, users, todos, quota_requests)
-    opts = [{"label": "确定", "value": "yes", "kind": "primary"},
-            {"label": "取消", "value": "no", "kind": "default"}]
+    # 按钮按**已签名的那一份 `picks`** 生成（20260929 批 F4）：这一批里 N ≥ 2 时给
+    # 「全部办」+ 逐条「只办第 i 件」+「取消」（`pick:<i>` 是 0 基下标，服务端
+    # `confirm.narrow` 按下标裁 —— 下标必须与刚签发的 `specs` 同一顺序，
+    # 所以这里传 `picks` 本身、不许另数一份；编号的字面在 `A.render_action_lines` 里
+    # 与卡面同源）。单件仍是旧的两枚，字面一个字节没动。
+    opts = A.confirm_opts(len(picks))
     expires_at = confirm.token_expiry(token)
     return {
         "kind": "confirm",

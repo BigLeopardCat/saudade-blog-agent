@@ -44,6 +44,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 
@@ -163,6 +164,41 @@ def has_refs(specs) -> bool:
     """
     from agent.refs import has_refs as _has_refs  # 局部导入：避免模块级循环
     return _has_refs(specs)
+
+
+def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:
+    """把已验签的 payload 的 `specs` **收窄成其中一条**；返回 `(payload, "")` 或 `(None, 原因)`。
+
+    用途（20260929 批 F）：确认卡上列了 N 件时，主人可以点「全部办」，也可以只办其中
+    一件——前端把那一件的**下标**带回来（形态 `pick:<i>`，0 基），这里据此把签名过的
+    那一批裁成一条。**只做收窄，绝不做转发**：
+
+      · 收窄是安全方向——放行范围只可能变小；`pick` 里出现任何解析不出的东西
+        （非 `pick:<数字>`、负数、越界、payload 里没有 specs）都是 `(None, 原因)`，
+        调用方据此**零执行**（fail-closed）。**绝不"读不懂就当全部办"**：那会把一次
+        针对单件的选择放大成整批执行，是这一层唯一能出的重伤。
+      · `specs` 里原有的顺序就是**签名的顺序**，也是卡片上编号的顺序（`render_action_lines`
+        按同一个列表渲染）——下标因此是两端同源的，不需要另带记号。
+      · 这个函数**不改 payload 的其他字段**（uid/conv/exp/jti/skill 原样）：它只是
+        按主人的选择裁一下清单，不是重新签发。令牌仍然一次性（jti CAS 在 Rust 侧）。
+    """
+    raw = (pick or "").strip()
+    if not raw:
+        return payload, ""          # 空 = 没有选择 = 全部办（与旧前端逐字兼容）
+    if not isinstance(payload, dict):
+        return None, "payload 不是对象"
+    specs = payload.get("specs")
+    if not isinstance(specs, list) or not specs:
+        return None, "令牌里没有可挑选的清单"
+    m = re.fullmatch(r"pick:(\d{1,3})", raw)
+    if not m:
+        return None, f"选择记号读不懂（{raw[:32]}）"
+    idx = int(m.group(1))
+    if idx >= len(specs) or not isinstance(specs[idx], dict):
+        return None, f"选择越界（{idx} / 共 {len(specs)} 件）"
+    out = dict(payload)
+    out["specs"] = [specs[idx]]
+    return out, ""
 
 
 def sign(uid: int, conv_id, skill: str, specs: list) -> str:
