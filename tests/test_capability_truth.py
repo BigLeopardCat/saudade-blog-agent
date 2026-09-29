@@ -93,6 +93,83 @@ _src = (ROOT / "tools" / "base.py").read_text(encoding="utf-8")
 check("  且注明后台清单不过滤 approved（能力有据，不是口头承诺）",
       "不过滤 approved" in _src)
 
+# ══════════════════════════════════════════════════════════════════
+print("\n④ 待办族：能力清单是**能力的上界**——清单里每一句都得有真通道，通道有的也得写得出")
+
+from agent import context as C  # noqa: E402
+
+# 这一节的由来（批 G 的 D3，trace `20260929T193152`）：主人问「猫咪今日待办有什么」
+# ——**只读**的一轮——narrator 在末尾主动提议「要不要我帮你勾掉或者**重新排个日子**呀？」。
+# 当时待办族只有「加一条」与「勾完成」，改日期**没有通道**；它是把 `dashboard_todo_add`
+# 的 capability「加一条（可带排期日）」里的**参数**读成了**动作**。
+# 一句文案能造成这种误读，是因为清单是**唯一**的承诺来源（planner 与 narrator 读同一份）
+# ⇒ 判据也就只能落在这里：清单里说的每件事都得能兑现，做不到的别写得像能做。
+
+_TODO_WRITES = sorted(n for n in _SK
+                      if n.startswith("dashboard_todo_") and n in S.WRITE_SKILL_NAMES)
+check("待办族的窄写恰好三件（再加一条窄写必须回来看这一节：下面的对称判据只对这三件成立）",
+      _TODO_WRITES == ["dashboard_todo_add", "dashboard_todo_done",
+                       "dashboard_todo_reschedule"], str(_TODO_WRITES))
+check("  只剩读那件不在写名单里（读写名单不许串）",
+      "dashboard_todo_list" not in S.WRITE_SKILL_NAMES)
+
+
+def _tool_args(skill_name: str) -> list[str]:
+    """技能模板里那件工具**真实**收哪些参数（从注册表取，不读文案）。"""
+    tool = (_SK[skill_name].plan or [(None, None)])[0][0]
+    t = next((x for x in B._TOOL_REGISTRY if x.name == tool), None)
+    check(f"  {skill_name} 模板里的 {tool} 在注册表里（清单承诺的动作有真工具）", t is not None)
+    return sorted(t.args or {}) if t is not None else []
+
+
+_add_cap = _SK["dashboard_todo_add"].capability
+_rsc_cap = _SK["dashboard_todo_reschedule"].capability
+_done_cap = _SK["dashboard_todo_done"].capability
+
+check("★ 加待办那件：提到排期时必须带上「新建」这个时机（旧文案只说了参数、没说时机，"
+      "于是被读成了「能改日子」）",
+      "排期" not in _add_cap or "新建" in _add_cap, _add_cap)
+check("  且那句旧文案一字不留（它是 D3 的原文，回来即红）",
+      "（可带排期日）" not in _add_cap, _add_cap)
+check("  这份「能提排期」的资格**有据**：它模板里的工具真的收 `date`",
+      "date" in _tool_args("dashboard_todo_add"), str(_tool_args("dashboard_todo_add")))
+
+check("★ 改排期那件与它**对称**：一个说「新建时」、一个说「已有那一条」"
+      "（两句一起读，日子归哪一件没有缝）",
+      "新建" in _add_cap and "已有" in _rsc_cap, f"{_add_cap} / {_rsc_cap}")
+check("  两件不许互相冒充（各自的动作词不进对方那一句）",
+      "改掉" not in _add_cap and "加一条" not in _rsc_cap,
+      f"{_add_cap} / {_rsc_cap}")
+check("  ★ 勾完成那件**根本不该提排期**：它模板里的工具只收正文（提了就是又一次"
+      "把参数说成能力）",
+      "排期" not in _done_cap and _tool_args("dashboard_todo_done") == ["text"], _done_cap)
+check("  改排期那件「能提排期」同样有据（工具收 `date`）",
+      "date" in _tool_args("dashboard_todo_reschedule"))
+check("  ★ 改排期那件承诺的那件事**有真通道**（P4 落地之前，清单里这句话是不能说的）",
+      bool(_SK["dashboard_todo_reschedule"].plan)
+      and _SK["dashboard_todo_reschedule"].plan[0][0] == "reschedule_dashboard_todo",
+      str(_SK["dashboard_todo_reschedule"].plan))
+
+_in_guide = any(c in C.site_guide("admin") for c in (_add_cap, _done_cap, _rsc_cap))
+check("★ 三句 capability 都在管理员那份清单里（改在被渲染出来的那一份里才算数）",
+      _in_guide, _rsc_cap)
+
+# ── 收束句（对偶两句）─────────────────────────────────────────────────────
+# 第一句防「漏列」（说「我不能改后台」），第二句防「超纲」（说「我可以重新排个日子」）。
+# 两句话都在**同一个渲染点**，planner 与 narrator 各拿一次 ⇒ 一处覆盖两个节点。
+check("★ 收束句在位，且是清单的**最后一句**（埋在中间等于没写）",
+      C.site_guide("admin").endswith(C._SITE_GUIDE_CLOSING)
+      and C.site_guide(None).endswith(C._SITE_GUIDE_CLOSING))
+check("  对偶第二句写的是「清单之外的动作一律不许承诺」（D3 那句提议的判据形态）",
+      "清单之外的动作一律不许承诺" in C._SITE_GUIDE_CLOSING)
+check("  第一句（防漏列）仍在——两句并列，不许拿第二句换掉第一句",
+      "按此完整列出，不要遗漏" in C._SITE_GUIDE_CLOSING)
+# 诚实标注：这句话是**提示词级**，不是闸门。标注本身也要有锁，否则下一个人会把它
+# 读成「已经有判据了」，然后在别处再补一条正则（本仓 20260928 审计点名的那个形状）。
+_ctx_src = (ROOT / "agent" / "context.py").read_text(encoding="utf-8")
+check("  且诚实标注在位：这是提示词级、不是闸门（判据分不出诚实与胡说的「做不到」）",
+      "这是提示词级，不是闸门" in _ctx_src)
+
 print(f"\n{'全部通过' if not FAILS else f'失败 {len(FAILS)} 项'}")
 for f in FAILS:
     print("  - " + f)
