@@ -1843,10 +1843,40 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
 
         judged = "、".join(f"#{t} {BOARD_VERDICT_CN.get(verdicts.get(t), verdicts.get(t))}"
                           for t in targets)
-        print(f"  ⚠ 本腿**不复原**：{judged}（审核端点只有 通过/驳回 两态，"
-              f"没有「退回待审」）。要恢复显示请在后台再判一次通过。")
-        rep.warn(f"⑰ 台账里 {len(targets)} 条真实待审留言已被本腿判掉（{judged}）"
-                 f"——真实数据，非探针所造，本腿不复原")
+        # ⚠️ 这两句的主语只能是**库里真的变过去了**的那几条，不能是"卡上写了什么"。
+        # 20260930 实测：额度那半的写整条失败（回执「无法获取当前用户身份」、库真值纹丝不动），
+        # 而旧措辞照样写着「本腿办掉了、不复原」——把一次**没发生**的写说成了既成事实，
+        # 读日志的人会照着它去"恢复"一条根本没被碰过的申请。（同轮留言那半是真落地的。）
+        really = [t for t in targets if after.get(t) == want.get(t)]
+        missed = [t for t in targets if t not in really]
+        if really:
+            j2 = "、".join(f"#{t} {BOARD_VERDICT_CN.get(verdicts.get(t), verdicts.get(t))}"
+                          for t in really)
+            print(f"  ⚠ 本腿**不复原**：{j2}（审核端点只有 通过/驳回 两态，"
+                  f"没有「退回待审」）。要恢复显示请在后台再判一次通过。")
+            rep.warn(f"⑰ 台账里 {len(really)} 条真实待审留言已被本腿判掉（{j2}）"
+                     f"——真实数据，非探针所造，本腿不复原")
+        if missed:
+            jm = "、".join(f"#{t}" for t in missed)
+            print(f"  ⚠ {jm} **没落地**（写失败，见上面的 FAIL）：那几条仍原样待审，"
+                  f"本腿没有动过它们的数据，无需恢复。")
+            rep.warn(f"⑰ {jm} 这次没落地 ⇒ 它们仍是待审、**没有被消费**"
+                     f"（上面那条 FAIL 才是这次的真结论）")
+        if quota_rows:
+            consumed = [u for u, _v in quota_rows if q_after is not None and u not in q_after]
+            intact = [u for u, _v in quota_rows if q_after is not None and u in q_after]
+            if consumed:
+                qj = "、".join(f"账号 id={u} {v}" for u, v in quota_rows if u in consumed)
+                print(f"  ⚠ 本腿**不复原**：{qj}（额度申请处理过就没了那一行，"
+                      f"要恢复得再让他申请一次）")
+                rep.warn(f"⑰ 另有 {len(consumed)} 件真实额度申请被本腿办掉（{qj}）"
+                         f"——真实数据，本腿不复原")
+            if intact:
+                qi = "、".join(f"账号 id={u}" for u in intact)
+                print(f"  ⚠ {qi} **没落地**（仍待处理，见上面的 FAIL）：申请还在原地，"
+                      f"无需恢复。")
+                rep.warn(f"⑰ 额度那 {len(intact)} 件（{qi}）这次没落地 ⇒ 申请仍待处理、"
+                         f"**没有被消费**")
     finally:
         _drop_conv(rep, uid, role, conv_id, "⑰")
 
