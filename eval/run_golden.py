@@ -1268,6 +1268,35 @@ def by_tag_stats(results: list, tags_map: dict) -> dict:
     return out
 
 
+def is_full_run(*, only: str, limit: int, skip_ids_arg: str, skipped_ids: list,
+                design_skipped_ids: list) -> bool:
+    """这一轮是不是**全量**（= `last_run.json` 该不该被它覆盖）。
+
+    **为什么把它从 `main()` 里那一行布尔式提出来**：20260924 写下这条判据时是内联的
+    `not (args.only or args.limit or args.skip_ids or skip_ids)`，而它错在一个看不见的
+    地方——`skip_ids` 里混着**两类完全不同的跳过**：
+
+      · **设计如此**（`design_skipped_ids`）：真写用例（`needs_real_write`）默认不自动跑。
+        它们的名字**每一次**都会进 `skip_ids`，所以两次跑的分母**完全一样** ⇒ 它们不改变
+        通过率的口径，只是把这份语料永久地定格在"不含真写用例"这一版上。
+      · **环境**（其余全部）：缺 uid / 夹具不在位 / 服务不可达 / `--skip-ids` 显式点名。
+        这些才真的让"这一轮的分母"与别轮不同——拿它当基线就是拿一个不一样的东西当基线。
+
+    原式把两类一起算 ⇒ 夜间（永远有真写用例被设计跳过）**永远不是全量** ⇒
+    `last_run.json` 自 20260928 01:30 之后再没被覆盖过，而它被当成"最近一次基线"读
+    （同族坑：判据看着在、其实不在。报告里 `skipped_real_write_ids` 那一栏的注本来就写着
+    "不是豁免，是分类"——本函数只是让 `full_run` 也按同一个分类算）。
+
+    **残余（写下来，不假装没有）**：整轮开着 `GOLDEN_ALLOW_REAL_WRITE=1` 跑（没有
+    `--only`）时，设计跳过为空 ⇒ 也算全量，会把基线覆盖成 149 条那一版。报告里
+    `total` 与 `skipped_real_write_ids` 两栏足以让读的人看出来；而那种跑法按文档只配
+    `--only <真写那条>`（`--only` 一在场就不是全量）。
+    """
+    if only or limit or skip_ids_arg:
+        return False
+    return not [s for s in skipped_ids if s not in design_skipped_ids]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 条（调试）")
@@ -1611,10 +1640,15 @@ def main():
     # 第一条真正落盘的 trace（用例顺序 = 跑的顺序，取第一条即为目录的实证）：
     # 没开 trace、或全程一条都没写成功 ⇒ None（报告里如实写 None，不假装有目录）。
     _first_trace = next((r.get("trace") for r in results if r.get("trace")), None)
-    # 「这一轮是不是全量」（20260924）：`--only` / `--limit` / `--skip-ids` 任一在场，
-    # 或有「需要真身份」的用例因未设 uid 被摘掉 ⇒ 都不是全量（**摘掉一条就不是全量**：
-    # 通过率的分母变了，拿它当基线就是拿一个不一样的东西当基线）。
-    _is_full_run = not (args.only or args.limit or args.skip_ids or skip_ids)
+    # 「这一轮是不是全量」（20260924；20260929 判据提取成 `is_full_run`）：`--only` /
+    # `--limit` / `--skip-ids` 任一在场，或有**环境原因**被摘掉的用例 ⇒ 都不是全量
+    # （**摘掉一条就不是全量**：通过率的分母变了，拿它当基线就是拿一个不一样的东西
+    # 当基线）。**设计如此的那批不算**（真写用例默认不跑，它们每轮都在）——两类跳过的
+    # 区别与那次的失效现场见 `is_full_run` 的头注。
+    _is_full_run = is_full_run(only=args.only, limit=args.limit,
+                               skip_ids_arg=args.skip_ids,
+                               skipped_ids=skip_ids,
+                               design_skipped_ids=_write_skipped)
     report = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
