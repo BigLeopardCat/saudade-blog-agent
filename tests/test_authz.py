@@ -259,11 +259,13 @@ check("删留言即使写成明确命令也判不出确认（捷径结构性关�
           for m in _BOARD_DEL_CMDS),
       str([m for m in _BOARD_DEL_CMDS
            if authz.consent_granted(p(ROLE_ADMIN), "delete_board_comment", m)]))
-# 审核（通过/驳回）**不在**"一律弹窗"表里：它可改判，与 set_article_status 同类，
-# 走既有的"命令式措辞才免问"。这条锁的是**别把它顺手加进去**（加进去也能工作，
-# 但会让每次复核都多问一遍，且掩盖了"这张表的语义 = 不可逆"）。
-check("留言审核不在「一律弹窗」表里（可改判，与改文章状态同类）",
-      "audit_board_comment" not in authz._ALWAYS_CONFIRM_TOOLS)
+# 审核（通过/驳回）**20260929 起改判为"一律弹窗"**（批 H · S2）。旧理由（"它可改判、
+# 命令式措辞可免问"）随目标改走**台账编号**而失效：编号是模型从帧里抄的，系统判不出
+# "主人这句话是不是在命令它办那一件"。而两向都是**以主人名义对访客留言的裁决**（还有
+# 一条以主人名义发出去的额度通知），误判方向的代价不对称 ⇒ 与公告/删留言同族。
+# 这条锁的是**别看它长得像 set_article_status 就把它挪出去**。
+check("留言审核在「一律弹窗」表里（目标由模型抄台账编号，系统判不出命令语）",
+      "audit_board_comment" in authz._ALWAYS_CONFIRM_TOOLS)
 check("写站点内容属于需确认 scope", authz.SCOPE_WRITE_CONTENT in authz.CONSENT_SCOPES)
 check("后台写属于需确认 scope", authz.SCOPE_WRITE_CONSOLE in authz.CONSENT_SCOPES)
 check("页面/设备写不需要确认（效果就在用户眼前）",

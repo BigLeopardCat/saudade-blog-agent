@@ -321,39 +321,42 @@ check(" （控制）未被拦截的轮次照常交给生产者——上面那条
 
 # ══════════════════════════════════════════════════════════════════
 print("\n④ 技能展开 ×3：一条 spec / 纯数字拒绝 / 驳回理由必填与占位符")
-_p = instantiate_plan("quota_approve", {"name": "Alice"}, ROLE_ADMIN)
-check("⭐ quota_approve 展开出**恰好一条** approve_quota_request（目标走名字通道）",
-      _p["tools"] == ['approve_quota_request({"name": "Alice"})'], str(_p["tools"]))
+_p = instantiate_plan("quota_approve", {"user_id": "126"}, ROLE_ADMIN)
+check("⭐ quota_approve 展开出**恰好一条** approve_quota_request（目标走**台账编号**通道）",
+      _p["tools"] == ['approve_quota_request({"user_id": 126})'], str(_p["tools"]))
 check("  注记写清后果与不可撤销（planner 决策有据可依）",
-      "不可撤销" in _p["note"] and "后台账号列表" in _p["note"], _p["note"][:90])
+      "不可撤销" in _p["note"] and "恢复到上限" in _p["note"], _p["note"][:90])
 _p_r = instantiate_plan("quota_reset", {"name": "Alice"}, ROLE_ADMIN)
 check("⭐ quota_reset 的注记点明**不需要他申请过**（与批准最容易被读混的一处）",
       _p_r["tools"] == ['reset_user_quota({"name": "Alice"})']
       and "不需要他申请过" in _p_r["note"], _p_r["note"][:100])
-_p_j = instantiate_plan("quota_reject", {"name": "Alice", "reason": "理由不充分"},
+_p_j = instantiate_plan("quota_reject", {"user_id": "126", "reason": "理由不充分"},
                         ROLE_ADMIN)
 check("quota_reject 带上理由，注记点明**没有撤回的通道**",
-      _p_j["tools"] == ['reject_quota_request({"name": "Alice", "reason": "理由不充分"})']
+      _p_j["tools"] == ['reject_quota_request({"user_id": 126, "reason": "理由不充分"})']
       and "撤回" in _p_j["note"], _p_j["note"][:100])
+# 两族的目标**刻意不同形**（20260929 批 H · S2）：批准/驳回治的是"队列里等着办的那一行"
+# ⇒ 只认台账上的**编号**（账号名填进去就是零工具，系统不去猜是哪一个账号）；主动重置治的
+# 是"主人点名要动某个账号"⇒ 仍只认**账号名**（编号填进去零工具，见下一条）。
 for _skill, _params, _why, _must in [
-    ("quota_approve", {}, "缺账号名", "不要"),
+    ("quota_approve", {}, "缺账号 id", "不认账号名"),
+    ("quota_approve", {"user_id": "Alice"}, "把账号名填进编号位", "不认账号名"),
     ("quota_reset", {"name": "  "}, "名字只有空白", "不要"),
-    ("quota_reject", {"name": "Alice"}, "缺驳回理由", "替他"),
-    ("quota_reject", {"name": "Alice", "reason": "  "}, "理由只有空白", "替他"),
+    ("quota_reject", {"user_id": "126"}, "缺驳回理由", "替他"),
+    ("quota_reject", {"user_id": "126", "reason": "  "}, "理由只有空白", "替他"),
 ]:
     _bad = instantiate_plan(_skill, _params, ROLE_ADMIN)
     check(f"{_why} → **零工具** + 非空注记，且注记里有「{_must}」",
           _bad["tools"] == [] and _must in _bad["note"],
           f"{_bad['tools']} {_bad['note'][:70]}")
-for _skill in ("quota_approve", "quota_reject", "quota_reset"):
-    _bad = instantiate_plan(_skill, {"name": "126"}, ROLE_ADMIN)
-    check(f"⭐ {_skill} 收到**纯数字**名字 → 零工具 + 说清'不支持按编号操作账号'"
-          "（账号族不列超管那一行 ⇒ 编号通道一开，那道防线就没了）",
-          _bad["tools"] == [] and "编号" in _bad["note"], _bad["note"][:70])
-_bad = instantiate_plan("quota_reject", {"name": "Alice", "reason": "字" * 300}, ROLE_ADMIN)
+_bad = instantiate_plan("quota_reset", {"name": "126"}, ROLE_ADMIN)
+check("⭐ quota_reset 收到**纯数字**名字 → 零工具 + 说清'不支持按编号操作账号'"
+      "（主动重置那一件**不认编号**：编号归队列那一族，两件后果不同、不能互相绕）",
+      _bad["tools"] == [] and "编号" in _bad["note"], _bad["note"][:70])
+_bad = instantiate_plan("quota_reject", {"user_id": "126", "reason": "字" * 300}, ROLE_ADMIN)
 check("驳回理由超限 → 零工具 + 说明长度（不是让它撞一次工具再报错）",
       _bad["tools"] == [] and "太长" in _bad["note"], _bad["note"][:70])
-_bad = instantiate_plan("quota_reject", {"name": "Alice", "reason": "[这样]"}, ROLE_ADMIN)
+_bad = instantiate_plan("quota_reject", {"user_id": "126", "reason": "[这样]"}, ROLE_ADMIN)
 check("⭐ 驳回理由被填成**占位符** → 零工具 + 要求重新决策"
       "（理由会以主人的名义发给申请人，占位符发出去比不写更糟）",
       _bad["tools"] == [] and "占位符" in _bad["note"], _bad["note"][:70])
@@ -482,21 +485,21 @@ check("⭐ 驳回的回执行说的是'额度没有变化'、**不说'清零'**"
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑦ 「状态已达成 ⇒ 不弹卡」：判据是**用量**（驳回那件是 pending 行）")
-_ap = [{"tool": "approve_quota_request", "args": {"name": "Alice"}}]
+_ap = [{"tool": "approve_quota_request", "args": {"user_id": 126}}]
 _kept, _alr = A.reached_specs(_ap, users=DIRD, quota_requests={})
 check("used=137 ⇒ **照弹**（这一下真会改变东西）", _kept == _ap and _alr == [], str(_alr))
 _kept0, _alr0 = A.reached_specs(_ap, users=DIRD_ZERO, quota_requests={})
 check("⭐ used=0 ⇒ 不弹，并明说'本来就是满的'（**状态陈述**，不是'已完成'）",
       _kept0 == [] and "本来就是满的" in _alr0[0]["why"]
       and "已重置" not in _alr0[0]["why"], str(_alr0))
-_admin_row = {1: row(1, "Alice", role="superadmin", used=0, limit=0)}
+_admin_row = {126: row(126, "Alice", role="superadmin", used=0, limit=0)}
 _, _alr_admin = A.reached_specs(_ap, users=_admin_row, quota_requests={})
 check("⭐ 不限额的管理员走**另一句**（说'额度本来就是满的'会被读成'他刚好没用过'）",
       "不限额" in _alr_admin[0]["why"], str(_alr_admin))
 _kept_n, _alr_n = A.reached_specs(_ap, users=None, quota_requests={})
 check("名录读不到 ⇒ 判不了 ⇒ **照弹**（fail-open 的方向永远是弹卡）",
       _kept_n == _ap and _alr_n == [], str(_alr_n))
-_rj = [{"tool": "reject_quota_request", "args": {"name": "Alice", "reason": "x"}}]
+_rj = [{"tool": "reject_quota_request", "args": {"user_id": 126, "reason": "x"}}]
 _k1, _a1 = A.reached_specs(_rj, users=DIRD, quota_requests=PEND)
 check("驳回：他**有**待处理的申请 ⇒ 正是要办的那一次，照弹",
       _k1 == _rj and _a1 == [], str(_a1))
@@ -511,7 +514,7 @@ check("已达成那几句**都不带完成式**（说成'已完成'会被读成�
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑧ 工具层：五段式 + 非 200 **按族分流**（方向错了就是一句假话）")
-out, cli = run_tool("approve_quota_request", {"name": "Alice"},
+out, cli = run_tool("approve_quota_request", {"user_id": 126},
                     users_seq=_seq(DIRD, DIRD_ZERO), pending=PEND)
 check("⭐ 批准成功：恰好一次 POST 到 review 那条、载荷 `{approved: true}`",
       kind(out) == "ok" and posts(cli) and posts(cli)[0][1] == REVIEW_URL
@@ -522,7 +525,7 @@ check("  回执行里带**写后重读的读数**（剩500/500），meta 的 op/
 check("  带 Bearer 局部 JWT（三段）",
       posts(cli) and posts(cli)[0][2].get("Authorization", "").count(".") == 2, "")
 
-out, cli = run_tool("reject_quota_request", {"name": "Alice", "reason": "理由不充分"},
+out, cli = run_tool("reject_quota_request", {"user_id": 126, "reason": "理由不充分"},
                     users=DIRD, pending=_seq(PEND, {}))
 check("⭐ 驳回成功：载荷带 `approved: false` 与理由，**只发一次** POST",
       kind(out) == "ok" and posts(cli)[0][3] == {"approved": False, "reason": "理由不充分"}
@@ -530,7 +533,7 @@ check("⭐ 驳回成功：载荷带 `approved: false` 与理由，**只发一次
 check("  回执行说'额度没有变化'，meta 的 op 是 quota_reject",
       "没有变化" in str(out) and getattr(out, "meta", {}).get("op") == "quota_reject",
       str(out)[:90])
-out, cli = run_tool("reject_quota_request", {"name": "Alice", "reason": "x"},
+out, cli = run_tool("reject_quota_request", {"user_id": 126, "reason": "x"},
                     users=DIRD, pending=_seq(PEND, PEND))
 check("⭐ 驳回写后复核发现那一行**还在** ⇒ unavailable（'未确认生效'，不是 ok）",
       kind(out) == "unavailable" and "还有" in str(out), f"{kind(out)} {str(out)[:90]}")
@@ -543,40 +546,45 @@ check("  写前**不读**待处理申请（他申请没申请过都行——读�
       "整趟只发一个请求",
       len(cli.calls) == 1, str(cli.calls))
 
-out, cli = run_tool("approve_quota_request", {"name": "Alice"}, pending={})
+out, cli = run_tool("approve_quota_request", {"user_id": 126}, pending={})
 check("⭐ 他没有待处理的申请 ⇒ 政策帧（BLOCK 族）、**零 POST**",
       str(out).startswith("__ERROR__") and "[policy_refused]" in str(out)
       and posts(cli) == [], f"{str(out)[:70]} {cli.calls}")
-out, cli = run_tool("approve_quota_request", {"name": "Alice"},
+out, cli = run_tool("approve_quota_request", {"user_id": 126},
                     pending=PEND, resp={"code": 500, "message": "这条申请已经处理过了"})
 check("⭐⭐ 后端说'已经处理过了' ⇒ **政策族**（再试一次也是它，planner 该如实转述）",
       "[policy_refused]" in str(out) and "这条申请已经处理过了" in str(out)
       and len(posts(cli)) == 1, str(out)[:90])
-out, cli = run_tool("approve_quota_request", {"name": "Alice"},
+out, cli = run_tool("approve_quota_request", {"user_id": 126},
                     pending=PEND, resp={"code": 500, "message": "用户不存在"})
 check("⭐ 后端说'用户不存在' ⇒ **目标族**（planner 该换账号/问主人，不是'稍后再试'）",
       kind(out) == "not_found" and len(posts(cli)) == 1, f"{kind(out)} {str(out)[:70]}")
-out, cli = run_tool("approve_quota_request", {"name": "Alice"},
+out, cli = run_tool("approve_quota_request", {"user_id": 126},
                     pending=PEND, resp={"code": 500, "message": "数据库连接失败"})
 check("⭐⭐ 没见过的措辞 ⇒ **unavailable**（'没确认'）——**绝不许**一律按目标/政策出口："
       "那会把'库写失败'说成'没这个账号'，而后果是额度没清零却以为清了",
       kind(out) == "unavailable" and "未确认" in str(out), f"{kind(out)} {str(out)[:80]}")
-out, cli = run_tool("approve_quota_request", {"name": "Alice"}, pending=PEND, status=503)
+out, cli = run_tool("approve_quota_request", {"user_id": 126}, pending=PEND, status=503)
 check("  HTTP 非 200 ⇒ unavailable（不是政策族）",
       kind(out) == "unavailable" and "HTTP 503" in str(out), str(out)[:70])
-out, cli = run_tool("approve_quota_request", {"name": "Alice"}, pending=PEND, status=403)
+out, cli = run_tool("approve_quota_request", {"user_id": 126}, pending=PEND, status=403)
 check("  401/403 ⇒ unavailable + 明说'无权处理额度申请、本次未改动'",
       kind(out) == "unavailable" and "无权" in str(out) and "未改动" in str(out),
       str(out)[:80])
-out, cli = run_tool("approve_quota_request", {"name": "Alice"}, pending=PEND,
+out, cli = run_tool("approve_quota_request", {"user_id": 126}, pending=PEND,
                     exc=RuntimeError("boom"))
 check("  网络异常 ⇒ unavailable，不抛给 execute 兜底",
       kind(out) == "unavailable" and "未确认" in str(out), str(out)[:70])
 
-out, cli = run_tool("approve_quota_request", {"name": "没有这个人"}, pending=PEND)
-check("⭐ 查无此名 ⇒ not_found + **零 POST**（选错就是批了**另一个活人**）",
+out, cli = run_tool("approve_quota_request", {"user_id": 999}, pending=PEND)
+check("⭐ 名录里没有这个编号 ⇒ not_found + **零 POST**（选错就是批了**另一个活人**）",
       kind(out) == "not_found" and posts(cli) == []
-      and "后台账号列表里没有叫「没有这个人」的账号" in str(out), f"{kind(out)} {cli.calls}")
+      and "没有编号为 id=999 的账号" in str(out), f"{kind(out)} {cli.calls}")
+out, cli = run_tool("approve_quota_request", {"user_id": "Alice"}, pending=PEND)
+check("⭐ 编号位填了账号名 ⇒ not_found + **零 POST**"
+      "（id 通道**不退回去按名字猜**——那正是这条通道要关掉的口子）",
+      kind(out) == "not_found" and posts(cli) == []
+      and "不是一个账号编号" in str(out), f"{kind(out)} {str(out)[:70]}")
 _dup = {1: row(1, "same"), 2: row(2, "same")}
 out, cli = run_tool("reset_user_quota", {"name": "same"}, users=_dup)
 check("  重名 ⇒ not_found + 零 POST（不替主人挑一个）",
@@ -585,11 +593,11 @@ check("  重名 ⇒ not_found + 零 POST（不替主人挑一个）",
 out, cli = run_tool("reset_user_quota", {"name": ""})
 check("  名字为空 ⇒ unavailable + 零 POST（不许拿空名字去撞一次）",
       kind(out) == "unavailable" and posts(cli) == [], f"{kind(out)} {cli.calls}")
-out, cli = run_tool("reject_quota_request", {"name": "Alice", "reason": "  "}, pending=PEND)
+out, cli = run_tool("reject_quota_request", {"user_id": 126, "reason": "  "}, pending=PEND)
 check("⭐ 驳回理由为空 ⇒ unavailable + **零 POST**（那条理由会以主人的名义发出去）",
       kind(out) == "unavailable" and posts(cli) == []
       and "驳回理由为空" in str(out), f"{kind(out)} {cli.calls}")
-out, cli = run_tool("reject_quota_request", {"name": "Alice", "reason": "字" * 300},
+out, cli = run_tool("reject_quota_request", {"user_id": 126, "reason": "字" * 300},
                     pending=PEND)
 check("  驳回理由超限 ⇒ unavailable + 零 POST（**拒绝而不是截断**："
       "截断等于主人核对的是一句、存的是另一句）",
@@ -647,7 +655,7 @@ for _out, _want in [
           _v == _VERDICT_BLOCK and _r == _want, f"{_v} {_r}")
 _ok_out = base.ok(A.render_quota_status("approve", "Alice", 126, 500, 0),
                   meta={"op": "approve", "account_id": 126, "account_name": "Alice"})
-_v, _r = verdict("approve_quota_request", {"name": "Alice"}, _ok_out, "quota_approve")
+_v, _r = verdict("approve_quota_request", {"user_id": 126}, _ok_out, "quota_approve")
 check("成功回执行 ⇒ PASS（进回执 = 跨轮执行记忆只认结构化回执）",
       _v == "PASS" and _r == "ok", f"{_v} {_r}")
 _v, _r = verdict("reset_user_quota", {"name": "Alice"}, _ok_out, "quota_reset", args_ok=False)
@@ -656,8 +664,8 @@ check("  参数解不出 ⇒ args_parse（在文本判据之前）", _r == "args
 # ══════════════════════════════════════════════════════════════════
 print("\n⑩ 接线锁：台账白名单 / 词表分岔 / 只读通道不含写工具 / 过程行有臂")
 from agent.skills import (  # noqa: E402
-    _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS, _WRITE_NAME_TARGET_SKILLS,
-    WRITE_SKILL_NAMES, callable_query_tools,
+    _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS, _LEDGER_TARGET_WRITE_SKILLS,
+    _WRITE_NAME_TARGET_SKILLS, WRITE_SKILL_NAMES, callable_query_tools,
 )
 from agent.skills import SKILL_MAP  # noqa: E402
 
@@ -669,8 +677,18 @@ for _t in _Q3:
           _t in g._ACCOUNT_TOOLS)
     check(f"⭐ 但**不在** `_FREEZE_TOOLS`（并进去会让合法的额度操作被回一句"
           f"**说错政策**的'这事办不成'）", _t not in g._FREEZE_TOOLS)
-    check(f"{_t} 登记在 `_WRITE_NAME_FIELDS`（名字通道的目标字段）",
-          g._WRITE_NAME_FIELDS.get(_t) == ("name", None), str(g._WRITE_NAME_FIELDS.get(_t)))
+# **两族的通道刻意不同形**（20260929 批 H · S2）：批准/驳回治的是"队列里等着办的那一行"
+# ⇒ 目标是**台账编号**，判据落在 `_LEDGER_TARGET_FIELDS` / `_ledger_target_refusal`；
+# 主动重置治的是"主人点名要动某个账号"⇒ 仍是**账号名**那一套。两张表**严格互斥**，
+# 互斥断言在 `tests/test_target_grounding.py`；这里逐件钉住各自在哪一张表上。
+for _t in ("approve_quota_request", "reject_quota_request"):
+    check(f"⭐ {_t} 登记在 `_LEDGER_TARGET_FIELDS`（编号通道的目标字段）",
+          g._LEDGER_TARGET_FIELDS.get(_t) == "user_id", str(g._LEDGER_TARGET_FIELDS.get(_t)))
+    check(f"  且**不在** `_WRITE_NAME_FIELDS`（在 ⇒ 同一件工具被两套判据同时管）",
+          _t not in g._WRITE_NAME_FIELDS, str(g._WRITE_NAME_FIELDS.get(_t)))
+check("⭐ reset_user_quota 仍在 `_WRITE_NAME_FIELDS`（它按账号名认，没有被搬去编号通道）",
+      g._WRITE_NAME_FIELDS.get("reset_user_quota") == ("name", None),
+      str(g._WRITE_NAME_FIELDS.get("reset_user_quota")))
 check("  额度三件的回执 meta 键全在 `_RCPT_META_KEYS` 白名单里"
       "（不在 ⇒ 值被静默丢掉，跨轮记忆里只剩一句没有对象的动作）",
       {"op", "account_id", "account_name"} <= set(_RCPT_META_KEYS), "")
@@ -687,8 +705,9 @@ check("  `list_quota_requests` 走默认词表（它是读，不参与目标出�
 for _s in ("quota_approve", "quota_reject", "quota_reset"):
     check(f"⭐ 技能名 {_s} 在 `WRITE_SKILL_NAMES`（两个名单**都要加**，漏一个是静默的："
           f"落进尾部兜底 ⇒ 零工具零写还不报错）", _s in WRITE_SKILL_NAMES)
-    check(f"  技能名 {_s} 在 `_WRITE_NAME_TARGET_SKILLS`（同一条名字通道）",
-          _s in _WRITE_NAME_TARGET_SKILLS)
+    check(f"  技能名 {_s} 在 `_LEDGER_TARGET_WRITE_SKILLS` ∪ `_WRITE_NAME_TARGET_SKILLS`"
+          f"（漏一个 ⇒ 目标出处那一步不过）",
+          _s in (_LEDGER_TARGET_WRITE_SKILLS | _WRITE_NAME_TARGET_SKILLS))
     check(f"  {_s} 注册在 SKILL_MAP 且仅管理员可见",
           _s in SKILL_MAP and ROLE_ADMIN in SKILL_MAP[_s].roles
           and ROLE_USER not in SKILL_MAP[_s].roles, "")
@@ -710,7 +729,7 @@ for _t, _want in zip(_Q3, ("批准账号「Alice」的额度重置申请",
 check("  台账行**不报额度读数**（读数是写后重读那一刻的实测值，额度每轮都在变——"
       "落进跨轮记忆会被下轮读成'他现在还剩 N 轮'）",
       not any(ch.isdigit() for ch in AT.receipt_action(
-          "approve_quota_request", {"name": "Alice"},
+          "approve_quota_request", {"user_id": 126},
           {"account_name": "Alice", "chatQuotaUsed": 0})), "")
 check("  `list_quota_requests` 的两档过程行说出了'看的是哪一半'",
       AT.tool_action_text("list_quota_requests", {"status": "all"})
@@ -752,7 +771,7 @@ def _run_exec(msg, spec, skill, grant=None, users=DIRD, pending=None):
         return execute_node(state, cfg())
 
 
-_SPEC_A = 'approve_quota_request({"name": "Alice"})'
+_SPEC_A = 'approve_quota_request({"user_id": 126})'
 _saved_tool = g._TOOL_MAP.get("approve_quota_request")
 try:
     g._TOOL_MAP["approve_quota_request"] = _FakeTool(
@@ -769,11 +788,11 @@ try:
     check("  令牌载荷里的 skill 与 specs 就是这一件（卡上写什么就签什么）",
           _payload.get("skill") == "quota_approve"
           and _payload.get("specs") == [{"tool": "approve_quota_request",
-                                        "args": {"name": "Alice"}}], str(_payload))
+                                        "args": {"user_id": 126}}], str(_payload))
     r = _run_exec("批准一下 Alice 的额度申请", _SPEC_A, "quota_approve",
                   grant={"token": "x"}, users=_seq(DIRD, DIRD_ZERO), pending=PEND)
     check("确认轮（主人点了确定）→ 放行执行（「一律弹窗」不是「永不执行」）",
-          _CALLS == [{"name": "Alice"}], str(_CALLS))
+          _CALLS == [{"user_id": 126}], str(_CALLS))
     check("  回执带执行角色与 op（跨轮执行记忆只认结构化回执，不认叙述）",
           bool(r["receipts"]) and r["receipts"][0]["principal_role"] == "admin"
           and r["receipts"][0]["op"] == "approve", str(r["receipts"])[:120])

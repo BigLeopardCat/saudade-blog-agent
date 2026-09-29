@@ -133,7 +133,8 @@ logger = logging.getLogger(__name__)
 # 管理助手写技能（20260921 第二轮，第四轮补齐标签改删与分类三件）。刻意**不进**
 # 上面两份 planner 点名白名单：写操作只能由技能模板展开（planner 选技能 + 填参数），
 # 不能经 PARAMS.calls 直接点名工具——白名单是"只读"这一条纪律的载体，写工具混进去
-# 等于放弃它。
+# 等于放弃它。（`review_inbox` 的 `calls` 不是这条纪律的例外：它只能填该技能 `plan`
+# 里那两个工具，闭集是另一份、判在 `_expand_change_set`。）
 WRITE_SKILL_NAMES = frozenset({
     "tag_create", "article_status", "article_tags",
     "tag_update", "tag_delete",
@@ -177,45 +178,54 @@ WRITE_SKILL_NAMES = frozenset({
     # ——目标是收件人，正文是"要发出去的那段字"，所以**不进** `_FREE_TEXT_WRITE_SKILLS`
     # （那一桶的判据是"目标没有东西可核对"）。
     "notice_send",
-    # 对话额度的申请审核 + 主动重置（20260929）：三个技能的目标都是**账号名**（后台
-    # 账号列表里核对得到）⇒ 同走名字通道。三件的后果互不相同（批准=清零且不可撤销 /
-    # 驳回=额度不变但会通知他 / 主动重置=**不需要他申请过**），所以是**三个技能**
-    # 而不是一件带方向的——方向必须写进动作本身，卡面才不可能与真正执行的方向相反
-    # （同 account_freeze/account_unfreeze 那条论证）。
+    # 对话额度的申请审核 + 主动重置（20260929）：三件的后果互不相同（批准=清零且
+    # 不可撤销 / 驳回=额度不变但会通知他 / 主动重置=**不需要他申请过**），所以是
+    # **三个技能**而不是一件带方向的——方向必须写进动作本身，卡面才不可能与真正
+    # 执行的方向相反（同 account_freeze/account_unfreeze 那条论证）。
+    # 批 H 起**目标通道分成两条**：批准与驳回治的是"申请表里等着办的那一行"⇒ 按
+    # **台账编号**（`_LEDGER_TARGET_WRITE_SKILLS`）；主动重置不在任何队列里 ⇒ 仍按
+    # **账号名**（`_WRITE_NAME_TARGET_SKILLS`）。三条理由写在各自桶的头注里。
     # ⚠️ 技能名与工具名**不是一套字面量**（`quota_approve` / `approve_quota_request`）：
     # 漏了这里的后果是**静默的**——技能落进 `_expand_write_skill` 的尾部兜底，
     # 零工具零写还不报错。
     "quota_approve", "quota_reject", "quota_reset",
     # 审核队列的**变更集**（20260929 批 F）：一次点头办 N 件，可跨族（留言复核 +
-    # 额度批准）。它的 `params` 不是"主人填的参数"，而是**系统拼好的逐条调用**
-    # （`{"specs": [{"tool","args"}]}`，见 `_expand_change_set`），因此：
-    #   · **不进 planner 菜单**（`visible_skills` 的系统快道专用名单）——变更集在结构上
-    #     只能由 `graph._auth_review_path` 那条确定性快道产生，模型拼不出跨技能清单；
+    # 额度批准）。它的 `params` 是**逐条调用**（`{"calls": [{"tool","args"}]}`，形状
+    # 与 `content_query.calls` 同构，见 `_expand_change_set`），因此：
+    #   · 批 H 起**进 planner 菜单**（从 `_SYSTEM_ONLY_SKILLS` 移出）——主人一句
+    #     「全部批准」要办哪几件，由模型看着台账帧自己拼，系统不再替他读上一轮散文；
     #   · `plan` 声明的是**允许出现在变更集里的工具全集**（`_confirm_grant_plan` 按它
-    #     逐条核对"技能与工具对得上"），不是一套固定序列模板。
-    # ⚠️ 与 `dashboard_todo_add/done` 同一类坑：桶成员资格说"目标是名字/正文"，
-    # 而它的展开函数与 `_expand_write_skill` **不是同一个** ⇒ `_WRITE_NAME_TARGET_SKILLS`
-    # 那一支里按技能名二分（漏了会落进 `_expand_write_skill` 的尾部兜底：
-    # 零工具零写还不报错）。
+    #     逐条核对"技能与工具对得上"），不是一套固定序列模板——它同时是跨族安全性的
+    #     来源：别的写工具名拼不进 `calls`。
+    # ⚠️ 与 `dashboard_todo_add/done` 同一类坑：它的展开函数与 `_expand_write_skill`
+    # **不是同一个** ⇒ `instantiate_plan` 那一支里按技能名二分（漏了会落进
+    # `_expand_write_skill` 的尾部兜底：零工具零写还不报错）。
     "review_inbox",
 })
 
-# 其中"目标是一个**名字**"的那批（标签 / 分类 / 公告 / 留言片段），共用
-# `_expand_write_skill`：它们与其余几件的差别不在写法而在**目标通道**——文章两件
-# 与收藏两件认 article_id（有"用户点名即据"的判据），标签/分类/公告写认名字
-# （公告认标题），解析在工具侧对着实时字典做。
+# 其中"目标是一个**名字**（或留言的正文片段）"的那批（标签 / 分类 / 公告 / 账号 /
+# 账号通知 / 留言删除 / 主动重置额度），共用 `_expand_write_skill`：它们与其余几件的
+# 差别不在写法而在**目标通道**——文章两件与收藏两件认 article_id（有"用户点名即据"
+# 的判据），标签/分类/公告写认名字（公告认标题），账号族认账号名，解析在工具侧对着
+# 实时字典做。**模型必须把那个名字本身写出来**，系统从主人原话里核对（`graph` 的
+# `_WRITE_NAME_FIELDS` 那一族）。
 #
 # ⚠️ 这份名单从 20260923 起是**显式白名单**，不再是 `WRITE_SKILL_NAMES - {…}` 的
 # 减法：减法定义下，任何"目标不是名字"的新写技能都会**悄悄落进** `_expand_write_skill`，
 # 被它尾部的兜底当成「未知的写技能」⇒ 零工具零写、还不报错（`instantiate_plan` 里
 # 那条 `if not note` 会把它填成"参数齐备"，看起来一切正常）。加写技能时**两个地方
-# 都要补**：这里的名单（或者下面 `_OWN_WRITE_SKILLS`），以及 `instantiate_plan` 的
-# 分支。tests/test_skills.py 有锁：注册表里每个写技能都必须落进三者之一。
+# 都要补**：这里的名单（或者下面 `_OWN_WRITE_SKILLS` / `_LEDGER_TARGET_WRITE_SKILLS`），
+# 以及 `instantiate_plan` 的分支。tests 有锁：注册表里每个写技能都必须落进四者之一。
 _WRITE_NAME_TARGET_SKILLS = frozenset({
     "tag_create", "tag_update", "tag_delete",
     "category_create", "category_update", "category_delete",
     "announcement_create", "announcement_update", "announcement_delete",
-    "board_audit", "board_delete",
+    # 留言删除（20260922 第六轮）：留言没有名字/标题，主人说的就是那句话本身 ⇒
+    # 名字通道的留言版（目标参数 quote，唯一子串命中在工具侧判）。
+    # 它**没有**跟复核那件一起改成按 talkId（20260929 批 H）：已通过/已驳回的留言
+    # 不在待办台账里，只认编号会让"删掉那条老留言"可能连编号都拿不到，
+    # 见 `tools.base.delete_board_comment` 的 docstring。
+    "board_delete",
     # 账号冻结/解冻（20260926 第九轮）：同一条通道——planner 写名字，工具对着
     # 后台账号名录解析（`tools.base._find_named_user`），名字不在名录里就零写 +
     # 如实说"后台账号列表里没有这个账号"。**刻意不开编号通道**：后台列表不列
@@ -228,15 +238,35 @@ _WRITE_NAME_TARGET_SKILLS = frozenset({
     # （write.own，走 `_OWN_WRITE_SKILLS`），这一件动的是**发给别人**的一段话。
     # 名字近形，别把两个技能名读成一族（见 `_expand_write_skill` 那一支）。
     "notice_send",
-    # 对话额度的申请审核 + 主动重置（20260929）：同一条通道（同样是
-    # `tools.base._find_named_user` 对着后台账号名录解析名字，名字不在名录里就零写 +
-    # 如实说"后台账号列表里没有这个账号"）。**刻意不开编号通道**，理由与冻结族逐字
-    # 相同（账号族不列超管那一行，防线只在"定位必须经过列表"时成立）。
+    # 主动重置额度（20260929）：同一条通道。**只有这一件留在名字通道**——它不需要
+    # 对方申请过（"你替他决定"），所以目标不在任何队列里、没有系统印的编号可抄；
+    # 同一族的 quota_approve / quota_reject 治的是"申请表里等着办的那一行"，批 H
+    # 起按台账编号，见 `_LEDGER_TARGET_WRITE_SKILLS`。
     # 三个技能而不是一件带方向的参数：方向必须写进动作本身（同账冻族那条论证）。
-    "quota_approve", "quota_reject", "quota_reset",
-    # 审核队列的变更集（20260929 批 F）：两族的目标都走名字/正文通道（留言按正文片段、
-    # 账号按账号名），所以它属于这一桶——但**展开函数不同**（`_expand_change_set`），
-    # 见 `instantiate_plan` 里那处按技能名的二分。
+    "quota_reset",
+})
+
+# **目标是一个台账编号**的那批（20260929 批 H）：它们治的不是"主人点名叫出来的一个
+# 名字"，而是**队列里等着办的那一行**——主人说的是「全部批准」「按你的想法来吧」，
+# 那一行是谁、编号多少，只有系统摊开的那份台账说得清。于是目标通道从"这段字面出自
+# 主人原话"换成"这个编号出自现场台账"（更强：可验证、不可能编造），校验与拒绝在
+# `graph._ledger_target_refusal`。
+#
+# 与 `_WRITE_NAME_TARGET_SKILLS` **共用 `_expand_write_skill`**（缺参零工具 / 只落
+# 点名的参数 / 归一在确定性层做，这套纪律两族完全一致），差别只在展开函数里那几支
+# 怎么取目标。加新成员时同上面那条警告：名单与 `instantiate_plan` 的分支两处都要补。
+_LEDGER_TARGET_WRITE_SKILLS = frozenset({
+    # 河灯留言复核（20260929 批 H）：目标 talk_id，编号印在台账帧 `talkId:<n>` 与
+    # 审核状况明细上。
+    "board_audit",
+    # 额度申请的两件（20260929 批 H）：目标 user_id，编号印在台账帧
+    # `账号 id=<n>` 与 `list_quota_requests` 的行上（`reset_user_quota` 不在这一桶，
+    # 理由见上）。
+    "quota_approve", "quota_reject",
+    # 审核队列的**变更集**（20260929 批 F；批 H 交回模型）：它的若干条目标同样取自
+    # 台账编号，而它的展开函数**不是** `_expand_write_skill`（`_expand_change_set`）
+    # ——见 `instantiate_plan` 里那处按技能名的二分。放在这一桶是因为"目标从台账来"
+    # 这条性质它最强调（整批都是）。
     "review_inbox",
 })
 
@@ -1042,24 +1072,34 @@ SKILLS: list[Skill] = [
         ),
         roles=ADMIN_ROLES,
     ),
-    # ── 河灯留言的人工复核两件（20260922 第六轮）─────────────────────
-    # 留言**没有名字、没有标题**（talk 表只有正文/作者/时间），用户嘴里说的就是
-    # **那句话本身** ⇒ 目标参数 quote = 从那句留言正文里**原样抄一段**。这是
-    # "名字通道"的留言版：解析（唯一子串命中）在工具侧确定性完成，抄错/抄得不全
-    # 就零写 + 如实说明候选。**不许改写、概括、只抄半个词**——片段越碎越容易撞车。
+    # ── 河灯留言的人工复核两件（20260922 第六轮；复核件 20260929 批 H 改按 id）──
+    # 两件的**目标通道现在不是同一条**（这是本批有意留下的不对称，理由各写在下面）：
+    #   · `board_audit` 动的是**队列里等着办的那一行** ⇒ 目标按 **talkId**（台账帧与
+    #     审核状况报表都印着 `talkId:<编号>`，编号是系统给的、模型只负责原样抄）；
+    #     现场台账校验见 `graph._ledger_target_refusal`。
+    #   · `board_delete` 动的是**主人点着名要删的那一条**（可能是已通过/已驳回的，
+    #     而台账只摊开待审那些）⇒ 目标仍按**正文原话**（唯一子串命中在工具侧确定性
+    #     完成）。改成只认 id 会让"删一条已通过的留言"变成结构上不可达——那是
+    #     **静默降级**，本仓反复写明要避免的形状。
     Skill(
         name="board_audit",
         capability="人工复核一条河灯留言（通过放行 / 驳回隐藏）",
         description=(
             "博主（管理员）要求**人工复核（通过 / 驳回 / 放行 / 隐藏）某一条河灯留言**时使用。"
-            "参数 quote=那条留言正文里的**一段原话**（原样抄，不许改写或概括）；"
+            "参数 talk_id=那条留言的 **talkId**（系统给的那个编号：待办台账里印成 "
+            "`talkId:<编号>`、审核状况明细里也印着同一串，**原样抄数字**——编号不许自己编、"
+            "也不许拿正文去猜；没有编号时先读一次那条留言所在的台账/审核状况再抄）；"
             "verdict=pass（通过，放行给所有人看）或 reject（驳回，隐藏）。"
-            "**这是可改判的**：驳回的能再放行，所以只说「隐藏这条」时选本技能、不要用删除。"
-            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统定：判成明确命令就直接办、判不出来才弹确认框问主人（确认框里会写出匹配到的那条留言原文），你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+            "**这是「改判」不是删除**：驳回只是让它对访客不可见，留言本身留着，所以只说"
+            "「隐藏这条」时选本技能、不要用删除。**这一轮只能办台账里还在等办的那一行**"
+            "（编号出自系统摆出来的待办台账）；那一行已经不是待审了系统会拒绝并如实告诉你"
+            "——改判已经办过的留言要到后台留言管理页，这条通道不办。"
+            "**这一件一律弹确认框问主人**（卡面印着那条留言的原文、作者与现状），"
+            "主人点确定才真动手——你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
         ),
-        inputs={"quote": "那条留言正文里的一段原话（原样抄）",
+        inputs={"talk_id": "那条留言的 talkId（台账/审核状况里印着的编号，原样抄）",
                 "verdict": "pass=通过放行 / reject=驳回隐藏"},
-        plan=[("audit_board_comment", {"quote": "$quote", "verdict": "$verdict"})],
+        plan=[("audit_board_comment", {"talk_id": "$talk_id", "verdict": "$verdict"})],
         complete_when="audit_board_comment 返回了复核结果",
         reply_contract=(
             "只能按 audit_board_comment 的实际返回作答，说清复核的是哪条留言、改成了什么；"
@@ -1078,7 +1118,8 @@ SKILLS: list[Skill] = [
             "**待审与被驳回的留言同样删得掉**（系统读的是后台清单，不是公开列表）——"
             "主人以为被驳回的删不掉时，明确告诉他可以删。"
             "**删除没有回收站、删掉就取不回来**，所以只有用户**明确说要删**时才选本技能"
-            "（「把那条删了」「删掉这条留言」）；只是想让它别显示时选 board_audit（驳回可改判）。"
+            "（「把那条删了」「删掉这条留言」）；只是想让它别显示时选 board_audit"
+            "（驳回只隐藏、留言还留着，而且办过了也还能在后台再改判）。"
             "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
         ),
         inputs={"quote": "那条留言正文里的一段原话（原样抄）"},
@@ -1090,7 +1131,8 @@ SKILLS: list[Skill] = [
             "并说明什么都没删；返回失败/未确认时如实说没删掉，"
             "**绝不得用完成式声称已删除**。"
             "要主人指认目标时只认**正文原话**：请他把那条里的原话抄一小段给你，"
-            "**不要让他报编号**（写通道不认 talkId 一类的编号，报了也做不成）；"
+            "**不要让他报编号**（这一件不认 talkId——编号只有复核那条通道收；"
+            "主人本人也无从知道编号，报了只会白跑一轮）；"
             "要删好几条就请他**一条一段原话**，一次处理一条。"
             "**绝不说「没有删除被驳回留言的通道」这类话**——删得掉。"
         ),
@@ -1442,8 +1484,14 @@ SKILLS: list[Skill] = [
         roles=ADMIN_ROLES,
     ),
     # 对话额度的申请审核（20260929）：普通用户终身 500 轮、管理员不限；用尽之后只能
-    # 由管理员清零。这一族**三个技能**，目标是同一个**账号名**（与冻结/通知族同一条
-    # 名字通道），但**动作的后果互不相同**——所以是三件而不是一件带方向的：
+    # 由管理员清零。这一族**三个技能**，但**目标通道不是同一条**（20260929 批 H）：
+    #   · `quota_approve` / `quota_reject` 动的是**队列里等着办的那一行** ⇒ 目标按
+    #     `user_id`（台账帧与 `list_quota_requests` 都印着 `账号 id=<编号>`；现场台账
+    #     校验见 `graph._ledger_target_refusal`）；
+    #   · `quota_reset` 动的是**主人点着名要重置的那个账号**（不需要他申请过、也就
+    #     不在任何队列里）⇒ 目标仍按**账号名**。改成只认 id 会让"给某人的额度恢复
+    #     满额"变成结构上不可达（没有任何读通道印出无权申请者的 uid）——静默降级。
+    # 动作的后果互不相同——所以是三件而不是一件带方向的：
     #   · `quota_approve` = 回应他的申请、清零；
     #   · `quota_reject`  = 唯一"额度不变"的一件，代价是给他发一条通知（不可撤回）；
     #   · `quota_reset`   = **不需要他申请过**（"你替他决定"）。
@@ -1457,21 +1505,20 @@ SKILLS: list[Skill] = [
         capability="批准某个用户的对话额度重置申请（额度恢复到上限，他可以继续提问）",
         description=(
             "博主（管理员）要求**批准某人的额度重置申请**时使用"
-            "（「批准〈账号名〉的申请」「通过〈账号名〉的额度申请」「给〈账号名〉"
-            "把额度批了」——〈账号名〉是占位符，照抄主人说的那个名字）。"
-            "参数 name=申请人的**账号名**（后台账号列表里看得见的那一行；"
-            "**必须能在列表里看到**——列表里没有就当它不存在，**不要**用账号编号，"
-            "也不要用你猜的名字）。"
+            "（「批准〈谁〉的申请」「通过那几条额度申请」「给他把额度批了」）。"
+            "参数 user_id=申请人的**账号 id**（一个编号：待办台账里印成 `账号 id=<编号>`、"
+            "`list_quota_requests` 的每一行也印着同一个编号，**原样抄数字**——"
+            "编号不许自己编、也不要用账号名去猜；没有编号时先读一次队列再抄）。"
             "⚠️ 批准 = 把他的额度恢复到上限（他还剩的轮数变回满格）、他马上能继续提问，"
             "**这个动作不可撤销**。"
             "⚠️ 若不确定谁申请了、或要核对申请理由，先用 list_quota_requests 看队列"
-            "（申请人的名字必须在那一屏里读到，才有据可写）。"
+            "（申请人的账号 id 必须在那一屏里读到，才有据可写）。"
             "⚠️ 他**没有**待处理的申请（比如刚被别人处理过）时后台会拒绝——如实"
             "转述那句话，**不要**改用 quota_reset 去绕开它（那两件事后果不同）。"
             "**仅管理员可用**"
         ),
-        inputs={"name": "申请人的账号名（后台账号列表里看得见的那一行）"},
-        plan=[("approve_quota_request", {"name": "$name"})],
+        inputs={"user_id": "申请人的账号 id（台账/申请队列里印着的编号，原样抄）"},
+        plan=[("approve_quota_request", {"user_id": "$user_id"})],
         complete_when="approve_quota_request 返回了处理结果（含账号名与读数）",
         reply_contract=(
             "只能按 approve_quota_request 的实际返回作答，**逐字转述后台给出的那句话**"
@@ -1487,11 +1534,10 @@ SKILLS: list[Skill] = [
         capability="驳回某个用户的对话额度重置申请（额度不变，但会通知他）",
         description=(
             "博主（管理员）要求**驳回某人的额度重置申请**时使用"
-            "（「驳回〈账号名〉的申请」「不批〈账号名〉」「拒了〈账号名〉那个申请」"
-            "——〈账号名〉是占位符，照抄主人说的那个名字）。"
-            "参数 name=申请人的**账号名**（后台账号列表里看得见的那一行；"
-            "**必须能在列表里看到**，**不要**用账号编号）；reason=驳回理由"
-            "（**必填**，会作为站内通知发给申请人）。"
+            "（「驳回〈谁〉的申请」「不批〈谁〉」「拒了那个申请」）。"
+            "参数 user_id=申请人的**账号 id**（一个编号：待办台账里印成 `账号 id=<编号>`、"
+            "`list_quota_requests` 的每一行也印着同一个编号，**原样抄数字**——不许自己编）；"
+            "reason=驳回理由（**必填**，会作为站内通知发给申请人）。"
             "⚠️ 驳回**不改变他的额度**（他还是用尽的样子，可以重新申请），但会给他发"
             "一条**站内通知**，理由原样写在那条通知里、发出后没有撤回的通道。"
             "⚠️ 理由必须是主人给的那一句——他没说理由就问他要，**不要自己编一个**："
@@ -1500,10 +1546,10 @@ SKILLS: list[Skill] = [
             "**仅管理员可用**"
         ),
         inputs={
-            "name": "申请人的账号名（后台账号列表里看得见的那一行）",
+            "user_id": "申请人的账号 id（台账/申请队列里印着的编号，原样抄）",
             "reason": "驳回理由（会发给申请人；主人没说就问他要，不要自己编）",
         },
-        plan=[("reject_quota_request", {"name": "$name", "reason": "$reason"})],
+        plan=[("reject_quota_request", {"user_id": "$user_id", "reason": "$reason"})],
         complete_when="reject_quota_request 返回了处理结果（含账号名）",
         reply_contract=(
             "只能按 reject_quota_request 的实际返回作答，**逐字转述后台给出的那句话**"
@@ -1544,13 +1590,12 @@ SKILLS: list[Skill] = [
         ),
         roles=ADMIN_ROLES,
     ),
-    # ── 变更集：一次点头办 N 件（20260929 批 F）───────────────────────────
-    # **这一件不由 planner 选**（`visible_skills` 的系统专用名单，与 read_article 同一处
-    # 过滤）：它只由确定性快道 `graph._auth_review_path` 产出——主人一句授权语
-    # （「按你的方案」）⇒ 系统把**审核队列**读成候选（河灯待审留言 + 额度待处理申请）、
-    # 判决从上一轮那句提案里读、拼成 `params={"specs": [{"tool","args"}]}` 交
-    # `instantiate_plan` 展开。因此"模型自己拼一份跨技能清单"在结构上不存在
-    # （不需要再论证 `parallel_tool_calls=False` 那半）。
+    # ── 变更集：一次点头办 N 件（20260929 批 F；20260929 批 H 交回模型）──────
+    # **这一件由 planner 选**（20260929 批 H 从 `_SYSTEM_ONLY_SKILLS` 里移出）：
+    # 主人一句授权语（「全部批准」「按你的想法来吧」）或一次追问之后，模型看着帧里的
+    # 待办台账，把要办的那几件**逐条拼成 `calls`** 交进来。批 F 时它只由确定性快道
+    # `graph._auth_review_path` 产出（参数 `specs`，且不在菜单里）——那条快道批 H 已
+    # 整族删除（"系统替模型读上一轮散文判结论"正是要消灭的形状）。
     #
     # 为什么整批调用住**一个技能名下**（而不是单开一条通道）：确认令牌的 payload 里
     # `skill` 是一个字符串、`specs` 是一个列表，而执行轮 `_confirm_grant_plan` 只判
@@ -1565,22 +1610,29 @@ SKILLS: list[Skill] = [
     #     那不是队列这件事），主人要删走 board_delete 单独点名；
     #   · `reject_quota_request`：它的 `reason` **必填**，而主人的授权语里从来不带来理由、
     #     其 docstring 又明令"不要自己编一个"（申请人收到的是主人的裁决）⇒ 驳回这一支在
-    #     变更集里结构性不可达。快道照此跳过并如实写进注记（不静默）。
-    # 加工具进这份清单时**同时**要看：`_SPEC_SKILL` 里有没有它的归属（快道按那是拼 spec），
-    # 以及 `tools.base` 里它是不是写操作（写操作照旧必经弹卡，见 authz 的 `_ALWAYS_CONFIRM_TOOLS`）。
+    #     变更集里结构性不可达（模型想驳回就得自己说清理由，走 quota_reject 单件）。
+    # 加工具进这份清单时**同时**要看：`tools.base` 里它是不是写操作（写操作照旧必经弹卡，
+    # 见 authz 的 `_ALWAYS_CONFIRM_TOOLS`）。
     Skill(
         name="review_inbox",
         capability="把审核队列里等主人点头的几件事一次办完（一次点头办 N 件）",
         description=(
-            "**系统专用技能，不由模型选择**：主人用一句授权语（「按你的方案」「就按你的想法啦」）"
-            "把上一轮提议的复核一次性交回系统时，由确定性快道产出。"
-            "参数 specs=系统拼好的逐条调用（不是给模型填的参数）。"
-            "要不要真动手由系统定：清单里每一件按它自己所属的那一族走——留言复核那件"
-            "判成明确命令就直接办、额度批准那件一律弹确认框；而**变更集的每一条目标都"
-            "取自系统队列、不在主人原话里**，所以这一族照旧每次弹卡由主人签字"
-            "（tests/test_confirm.py 的派生判据按工具成员资格要求这句话，见那里）。"
+            "主人让**一次办掉台账里那几件审核/额度的事**时使用（「全部批准」"
+            "「按你的想法来吧」「都办了吧」「把那两条留言和那个申请都批了」）。"
+            "参数 calls=**逐条调用**：`[{\"tool\": 工具名, \"args\": {…}}]`，"
+            "工具只能是 `audit_board_comment`（复核留言）与 `approve_quota_request`"
+            "（批准额度申请）两个之一；每一件的目标都**照抄待办台账帧里的编号**"
+            "（留言抄 `talkId:<编号>`、额度抄 `账号 id=<编号>`）——台账里没有的编号"
+            "**不许编**。每一件做什么、什么方向，全由你按台账事实决定。"
+            "⚠️ 一件都拿不准就别选本技能（选 chat 如实说明）。"
+            "⚠️ **本技能一律弹确认框**：卡面逐条印出台账原文与结论，主人点确定才真动手。"
         ),
-        inputs={"specs": "系统拼好的逐条调用（不是给模型填的参数）"},
+        inputs={"calls": "要办的那几件，逐条 {\"tool\": …, \"args\": {…}}"},
+        # `calls` 是**必填**（20260929 批 H）：它是这一件存在的全部理由，而它没有
+        # 工具模板占位符可回查（上面的 plan 两个模板的参数都是空的）⇒ 不显式点名
+        # 就落成"可选"，schema 里也不会进 `required`（同 `content_query.tools/calls`
+        # 那两个"可选"的写法——那两件确实可以只点一个，这一件不行）。
+        required_params=("calls",),
         plan=[("audit_board_comment", {}), ("approve_quota_request", {})],
         complete_when="清单里的每一条都返回了结果（成败逐条如实转述）",
         reply_contract=(
@@ -1699,32 +1751,34 @@ def _notice_placeholder(text: str) -> str:
 
 
 def _expand_change_set(skill, params: dict) -> tuple[list[str], str]:
-    """**变更集**技能（`review_inbox`）的展开：`params["specs"]` 逐条照抄成调用清单。
+    """**变更集**技能（`review_inbox`）的展开：`params["calls"]` 逐条照抄成调用清单。
 
-    与其余展开函数的根本差别：**这里没有"解释"这一步**。`specs` 不是模型填的参数，
-    而是确定性快道从系统队列里拼出来的**具体调用**（`graph._change_set_specs`：
-    留言按正文片段 + 结论、额度按账号名）——这一层与它之间是一条**恒等**通道：
-    不补参、不改写、不排序、不合并。理由是同一条纪律的另一面："参数不全时猜一个"
-    在别处只是办不成，在这一族是**拿别人的一句话做裁决**。
+    与其余展开函数的根本差别：**这里没有"解释"这一步**。`calls` 里的每一条已经是
+    「工具 + 参数」的完整调用（形状与 `content_query.calls` **逐字同构**：模型侧由
+    `native_plan._SCHEMA_OVERRIDES[("review_inbox","calls")]` 给出闭集）——这一层与
+    它之间是一条**恒等**通道：不补参、不改写、不排序、不合并。理由是同一条纪律的
+    另一面："参数不全时猜一个"在别处只是办不成，在这一族是**拿别人的一句话做裁决**。
 
     两条形状判据（缺一即**零工具 + 注记**，交 planner 如实收尾）：
-      · `specs` 必须是非空列表，每条是 `{"tool": 名字, "args": 非空对象}`；
+      · `calls` 必须是非空列表，每条是 `{"tool": 名字, "args": 非空对象}`；
       · 工具名必须在本技能 `plan` 声明的**全集**里——与 `_confirm_grant_plan` 执行轮
         那条"技能与工具必须对得上"是同一条判据，在这里**先判一次**的理由是：展开
         结果一旦含 plan 之外的工具，令牌签发（按技能名）与执行（按 plan 逐条核对）
         会得出不同结论，而"写操作跑在一份没人预期它会跑的技能名下"是最难查的那类事故。
+        这一条同时是**跨族安全性的来源**：模型能在 `calls` 里写的工具名被收在这两件里，
+        别的写工具（删留言 / 重置额度 / 发通知…）拼不进来。
 
     **任何一条不合格 → 整批零工具**（不是"跳过坏的那条"）：卡是为这一批签的，
     少办一件而主人以为全办了，比一件都不办更坏（同 `_drop_correction` 的剔空取向）。
     """
     allowed = {t for t, _ in skill.plan}
-    specs = params.get("specs")
-    if not isinstance(specs, list) or not specs:
-        return [], ("变更集里没有一条可执行的调用（系统没拼出清单）："
+    calls = params.get("calls")
+    if not isinstance(calls, list) or not calls:
+        return [], ("变更集里没有一条可执行的调用（`calls` 是空的）："
                     "不调用任何工具，如实告诉主人这一轮没有能替他办的事")
     tools: list[str] = []
     bad: list[str] = []
-    for s in specs:
+    for s in calls:
         if not isinstance(s, dict):
             bad.append("（有条目不是对象）")
             continue
@@ -1742,7 +1796,7 @@ def _expand_change_set(skill, params: dict) -> tuple[list[str], str]:
     if bad or not tools:
         return [], ("变更集里有条目不合格（" + "、".join(bad[:5])
                     + "）：不调用任何工具，如实告诉主人这一轮什么都没有办")
-    return tools, f"变更集：按系统拼好的清单逐条执行（共 {len(tools)} 件）"
+    return tools, f"变更集：按清单逐条执行（共 {len(tools)} 件）"
 
 
 def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
@@ -1926,8 +1980,30 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
             bits.append("正文改成主人给的那段")
         return [_spec("update_announcement", args)], f"修改公告「{title}」：{'、'.join(bits)}"
 
-    if name.startswith("board_"):
-        # 河灯留言（20260922 第六轮）：目标按**正文片段**指认（留言没有名字/标题）。
+    if name == "board_audit":
+        # 河灯留言复核（20260929 批 H 起按 **talkId**）：它治的是"台账里等着办的那
+        # 一行"，编号是系统给的、模型只负责原样抄 ⇒ 这里只做**归一**（`talkId:101`
+        # / `"101"` / `101` / `#101` 都收），解不出就零工具 + 追问。行是否存在、
+        # 是否仍在待审态由 `graph._ledger_target_refusal` 现场读台账判（比"这段字面
+        # 出自主人原话"更强：可验证、不可能编造）。
+        tid = A.normalize_target_id(params.get("talk_id"))
+        if tid is None:
+            return [], (f"board_audit 缺少指认用的留言编号（talk_id，给的是"
+                        f"「{_write_arg(params.get('talk_id')) or '空'}」）：不调用任何"
+                        "工具，如实向主人说明要先把那条留言的编号读出来"
+                        "（台账帧或审核状况明细里印着 `talkId:<编号>`，原样抄那个数字）")
+        verdict = A.normalize_verdict(params.get("verdict"))
+        if verdict is None:
+            return [], (f"verdict「{params.get('verdict')}」认不出来（只能是通过/pass "
+                        "或驳回/reject）：不调用任何工具，如实向主人问清要放行还是驳回")
+        return ([_spec("audit_board_comment", {"talk_id": tid, "verdict": verdict})],
+                (f"把留言 talkId:{tid} 人工复核为{A.BOARD_VERDICT_CN[verdict]}"
+                 "（卡面会印出那条留言的原文与作者，由主人核对）"))
+
+    if name == "board_delete":
+        # 河灯留言删除（20260922 第六轮）：**目标仍按正文片段**指认，与审核件分开
+        # 的理由写在 `tools.base.delete_board_comment` 的 docstring 里（已通过/已驳回
+        # 的留言不在待办台账里，只认编号会让"删掉那条老留言"变得可能拿不到编号）。
         # quote 原样透传——它是模型从留言原文里抄的一段，**不许在这里改写/截断**：
         # 片段越碎越容易撞到别的留言（工具侧命中多条会零写，不会选错）。
         quote = _write_arg(params.get("quote"))
@@ -1935,16 +2011,8 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
             return [], (f"{name} 缺少指认用的正文片段（quote）：不调用任何工具，"
                         "如实向主人问清说的是哪一条留言（或先去后台审核状况里把"
                         "那几条列出来让他指认）")
-        if name == "board_delete":
-            return [_spec("delete_board_comment", {"quote": quote})], (
-                f"删除含「{A.clip(quote, 20)}」的那条河灯留言（删掉取不回来）")
-        verdict = A.normalize_verdict(params.get("verdict"))
-        if verdict is None:
-            return [], (f"verdict「{params.get('verdict')}」认不出来（只能是通过/pass "
-                        "或驳回/reject）：不调用任何工具，如实向主人问清要放行还是驳回")
-        return [_spec("audit_board_comment", {"quote": quote, "verdict": verdict})], (
-            f"把含「{A.clip(quote, 20)}」的那条河灯留言人工复核为"
-            f"{A.BOARD_VERDICT_CN[verdict]}")
+        return [_spec("delete_board_comment", {"quote": quote})], (
+            f"删除含「{A.clip(quote, 20)}」的那条河灯留言（删掉取不回来）")
 
     if name in ("account_freeze", "account_unfreeze"):
         # 账号冻结 / 解冻（20260926 第九轮）。它与上面那几件同族（目标是一个
@@ -2024,25 +2092,26 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
                  "——**收件人的账号名必须能在后台账号列表里看到**；"
                  "正文会印在确认卡上由主人核对**全文**（发出后没有撤回的通道）"))
 
-    if name in ("quota_approve", "quota_reject", "quota_reset"):
-        # 对话额度的三件（20260929）。与冻结族同一条名字通道（目标都是后台账号名录
-        # 里核对得到的**账号名**），两条注记的措辞也同硬——这一族说错话的代价是
-        # **清掉一个活人的额度**（批准与主动重置还不可撤销）。
-        #   · 缺名字 ⇒ 明写"不要拿你猜的名字顶上"（名字是唯一通道）；
-        #   · 纯数字 ⇒ 后台账号列表里只有名字，没有编号可写（工具**没有** user_id
-        #     参数：账号族不列超管那一行，那条防线只在"定位必须经过列表"时成立）。
+    if name in ("quota_approve", "quota_reject"):
+        # 队列里的那两件（20260929 批 H 起按 **user_id**）：它们治的是"申请表里等着
+        # 办的那一行"，编号由系统印在台账帧与 `list_quota_requests` 的行上
+        # （`账号 id=<编号>`），模型只负责原样抄。**账号 id 与账号名只在这一支上
+        # 分家**——`quota_reset` 仍按名字，那一件不需要他申请过、也就不在任何队列里
+        # （见技能定义上的注）。
+        #   · 解不出编号 ⇒ 零工具 + 追问（**响亮**，不当"没填"）：工具侧已经没有名字
+        #     通道了，拿一个名字去猜 uid 等于把额度清给另一个人。
         # 方向由**技能名**定死而不是参数（同冻结族）：`approved: bool` 那种参数在
         # `graph._confirm_grant_plan` 的"工具 ⊆ 技能 plan"判据下看不见——卡上写
         # 「批准」、实际执行驳回，且无人可见。
-        target = _write_arg(params.get("name"))
-        if not target:
-            return [], (f"{name} 缺少账号名（name）：不调用任何工具，"
-                        "如实向主人问清要动的是哪一个后台账号——**不要**拿你猜的名字顶上，"
-                        "也不要用账号编号")
-        if target.isdigit():
-            return [], (f"{name} 给的是一串数字「{target}」：不调用任何工具，"
-                        "如实向主人问清那个账号的**名字**（后台账号列表里看得见的那一行；"
-                        "系统不支持按编号操作账号）")
+        raw = params.get("user_id")
+        uid = A.normalize_target_id(raw)
+        if uid is None:
+            said = _write_arg(raw)
+            return [], (f"{name} 缺少申请人的账号 id（user_id，给的是「{said or '空'}」）："
+                        "不调用任何工具，如实向主人说明要先把申请队列读一次、"
+                        "把申请人那一行的编号原样抄下来"
+                        "（台账帧或申请队列的行上印着 `账号 id=<编号>`；"
+                        "这一件**不认账号名**）")
         if name == "quota_reject":
             # 驳回理由**必填**，而且与 `notice_send` 的正文同一条纪律：它是**以主人
             # 的名义**发给申请人的那句话（会原样进站内通知）。主人没说就问他要——
@@ -2061,15 +2130,29 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
                 return [], (f"quota_reject 的理由看起来是**占位符**（{ph}）："
                             "不调用任何工具，重新决策——理由要写主人这轮真正给的"
                             "那一句（不能拿技能名/工具名/`[这样]`的占位符顶上）")
-            return ([_spec("reject_quota_request", {"name": target, "reason": reason})],
-                    (f"驳回后台账号「{target}」的对话额度重置申请（额度不变，"
+            return ([_spec("reject_quota_request", {"user_id": uid, "reason": reason})],
+                    (f"驳回账号 id={uid} 的对话额度重置申请（额度不变，"
                      f"但会给他发一条站内通知、理由「{A.clip(reason, 30)}」"
-                     "——**发出后没有撤回的通道**）"))
-        if name == "quota_approve":
-            return ([_spec("approve_quota_request", {"name": target})],
-                    (f"批准后台账号「{target}」的对话额度重置申请（他的额度恢复到上限、"
-                     "马上能继续提问；**批准不可撤销**）"
-                     "——**要动的那个名字必须能在后台账号列表里看到**"))
+                     "——**发出后没有撤回的通道**；卡面会印出申请人是谁）"))
+        return ([_spec("approve_quota_request", {"user_id": uid})],
+                (f"批准账号 id={uid} 的对话额度重置申请（他的额度恢复到上限、"
+                 "马上能继续提问；**批准不可撤销**；卡面会印出申请人是谁）"))
+
+    if name == "quota_reset":
+        # **主动**重置（20260929）：与上面两件不同——它不需要对方申请过，因此目标
+        # 不在队列里、没有系统印的编号可抄 ⇒ 仍走**账号名**通道（与冻结/通知族同）。
+        #   · 缺名字 ⇒ 明写"不要拿你猜的名字顶上"（名字是唯一通道）；
+        #   · 纯数字 ⇒ 后台账号列表里只有名字，没有编号可写（工具**没有** user_id
+        #     参数：账号族不列超管那一行，那条防线只在"定位必须经过列表"时成立）。
+        target = _write_arg(params.get("name"))
+        if not target:
+            return [], ("quota_reset 缺少账号名（name）：不调用任何工具，"
+                        "如实向主人问清要重置的是哪一个后台账号——**不要**拿你猜的"
+                        "名字顶上，也不要用账号编号")
+        if target.isdigit():
+            return [], (f"quota_reset 给的是一串数字「{target}」：不调用任何工具，"
+                        "如实向主人问清那个账号的**名字**（后台账号列表里看得见的那一行；"
+                        "这一件不按编号操作账号）")
         return ([_spec("reset_user_quota", {"name": target})],
                 (f"**主动**把后台账号「{target}」的对话额度恢复满额"
                  "（**不需要他申请过**的一次重置，他那边不会收到任何提示；"
@@ -2554,13 +2637,16 @@ def _instantiate_plan(skill_name: str, params: dict,
         #   · 标签 / 分类类写技能全部走 `_expand_write_skill`（目标按名字，见其头注）；
         #     文章类两件留在下面（它们的目标是 article_id，另有"点名即据"的判据）。
         note = ""
-        if skill.name in _WRITE_NAME_TARGET_SKILLS:
-            # ⚠️ **桶成员资格只说"目标按名字（正文片段）"，展开函数还要按技能名二分**
-            # （20260929 批 F）：`review_inbox` 与 board_audit 同属这一桶（留言按正文
-            # 片段、账号按账号名），但它的 `params` 不是"主人填的参数"而是**系统拼好的
-            # 整批调用**（`_expand_change_set`）。与下面 `_FREE_TEXT_WRITE_SKILLS` 那处
-            # 二分同一个坑：落进默认支**不会报错**——`_expand_write_skill` 会把 `specs`
-            # 当成一个它不认识的参数、静悄悄地零工具零写，主人只看到"什么都没办"。
+        if (skill.name in _WRITE_NAME_TARGET_SKILLS
+                or skill.name in _LEDGER_TARGET_WRITE_SKILLS):
+            # 两桶（名字/正文片段 ⇄ 台账编号）**共用** `_expand_write_skill`（缺参
+            # 零工具 / 只落点名的参数 / 归一在确定性层做，这套纪律两族一致），差别只
+            # 在展开函数里那几支怎么取目标。
+            # ⚠️ **展开函数还要按技能名二分**（20260929 批 F）：`review_inbox` 与
+            # board_audit 同属台账那一桶，但它的 `params` 是**逐条调用清单**
+            # （`_expand_change_set`）。与下面 `_FREE_TEXT_WRITE_SKILLS` 那处二分同一个
+            # 坑：落进默认支**不会报错**——`_expand_write_skill` 会把 `calls` 当成一个
+            # 它不认识的参数、静悄悄地零工具零写，主人只看到"什么都没办"。
             if skill.name == "review_inbox":
                 wtools, note = _expand_change_set(skill, params)
             else:
@@ -2704,7 +2790,7 @@ def _instantiate_plan(skill_name: str, params: dict,
         if not (chk["missing"] or chk["bad"]):
             # 规格全可选 / 参数都在却仍然零工具 ⇒ "没缺没坏"，但这一轮是真的**没有
             # 可执行的东西**（notice_read / message_read 的目标藏在可选参数里、
-            # review_inbox 的清单没拼出来、正文是占位符被展开层挡下）。
+            # review_inbox 的 `calls` 是空的或逐条都不合格、正文是占位符被展开层挡下）。
             # 不补这一条，纠偏日志与 trace 上会写着"缺=无 坏=无"却一件事都没办。
             # ⚠️ 措辞**不许指认具体原因**——这一支收的是好几种处境，把"可选参数里
             # 没有可办的对象"写死会让占位符那一档的日志说一句错原因（真原因是
@@ -3247,12 +3333,15 @@ def _nav_map_lines() -> str:
 _NAV_MAP_LINES = _nav_map_lines()
 
 
-# 系统快道专用技能（20260929 批 F）：**不由 planner 选、也不对外介绍**的技能名。
-# read_article：article_id 是 current_url 解析出来的系统数据，planner 无参可填；
-# review_inbox：整批调用由确定性快道拼好（`_auth_review_path`），模型既不该也不能拼出
-# 一份跨技能变更集——**"模型选不出来"在结构上替代了"选出来再拦一次"**。
+# 系统专用技能：**不由 planner 选、也不对外介绍**的技能名。
+# 现在只剩一个：`read_article`——它的 article_id 是 current_url 解析出来的系统数据，
+# planner 无参可填。
+# （`review_inbox` 批 F 曾在这份名单里，理由是"模型拼不出一份跨技能变更集"；批 H 把
+# 它**移出**了：拼不出清单的真相是**系统没把台账摆到它面前**，于是系统只好自己读
+# 上一轮散文替它决定——那正是「没有一点 LLM 优势」的机制成因。改成把台账摊开、
+# 让模型逐条拼 `calls`，闭集仍由 `_expand_change_set` 的 `plan` 白名单收着。）
 # 收成一条名单的理由同 `visible_skills` 自己：可见性判据只能有一处，两处必然漂移。
-_SYSTEM_ONLY_SKILLS = frozenset({"read_article", "review_inbox"})
+_SYSTEM_ONLY_SKILLS = frozenset({"read_article"})
 
 
 def visible_skills(role: str | None, include_system: bool = False) -> list[Skill]:
@@ -3262,9 +3351,8 @@ def visible_skills(role: str | None, include_system: bool = False) -> list[Skill
     （context.site_guide）此前各写各的可见性——两张表必然漂移，而它们回答的是
     同一个问题（"这个人能用什么"）。165525-165937 同一能力三轮两种答案就是这么来的。
 
-    `include_system=True` 才带上系统快道专用技能（`_SYSTEM_ONLY_SKILLS`：
-    article_id 是 current_url 解析的系统数据、变更集是系统拼好的逐条调用，
-    planner 都无参可填、narrator 也不该对外介绍）。
+    `include_system=True` 才带上系统专用技能（`_SYSTEM_ONLY_SKILLS`：article_id 是
+    current_url 解析的系统数据，planner 无参可填、narrator 也不该对外介绍）。
     `role=None`（身份不明/单测）→ 只剩公开技能，失败取向往保守一侧倒（同 authz）。
     """
     out = []

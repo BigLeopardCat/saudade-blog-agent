@@ -109,7 +109,7 @@ USERS = {126: {"id": 126, "username": "guest5", "status": 0},
          127: {"id": 127, "username": "guest6", "status": 1}}
 TODOS = [{"text": "交房租", "done": True, "date": "2026-09-28"},
          {"text": "写周报", "done": False, "date": ""}]
-BOARDS = {9: {"talkKey": 9, "content": "泠月喵好笨啊", "approved": 1, "author": "guest5"}}
+BOARDS = {94: {"talkKey": 94, "content": "泠月喵好笨啊", "approved": 1, "author": "guest5"}}
 ANNS = {1: {"id": 1, "title": "维护通知", "content": "今晚维护"}}
 
 
@@ -223,13 +223,13 @@ oky, _ = _verdict({"tool": "set_article_tags",
                   notes=NOTES, index=TAGS)
 check("文章标签：名字对不上 id → **照弹**（不猜）", oky)
 
-# 留言审核（只判审核：删除没有"同值"这回事）
+# 留言审核（**目标走台账编号**，20260929 批 H · S2 起；只判审核：删除没有"同值"这回事）
 okz, whyz = _verdict({"tool": "audit_board_comment",
-                      "args": {"quote": "泠月喵好笨啊", "verdict": "pass"}}, True, boards=BOARDS)
+                      "args": {"talk_id": 94, "verdict": "pass"}}, True, boards=BOARDS)
 check("留言审核：现在就是通过状态 → 判定「已达成」",
       okz and "现在就是通过状态" in whyz, whyz)
 okaa, _ = _verdict({"tool": "audit_board_comment",
-                    "args": {"quote": "泠月喵好笨啊", "verdict": "reject"}}, False, boards=BOARDS)
+                    "args": {"talk_id": 94, "verdict": "reject"}}, False, boards=BOARDS)
 check("留言审核：目标裁决不同 → **照弹**", okaa)
 okab, _ = _verdict({"tool": "delete_board_comment", "args": {"quote": "泠月喵好笨啊"}}, False,
                    boards=BOARDS)

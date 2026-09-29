@@ -131,11 +131,15 @@ def test_params_mirror_skill_param_specs():
 
 
 def test_override_table_is_closed():
-    print("\n[同源] 覆盖表只有申报过的两格")
+    print("\n[同源] 覆盖表只有申报过的三格")
     # 钉成字面量：加一格必须同改这里（= 有人复核这一格为什么推不出形状）
-    check("_SCHEMA_OVERRIDES 的键集合恰为 content_query 的两格",
+    # 20260929 批 H 加的第三格 `review_inbox.calls`：与 `content_query.calls` 同一个
+    # 理由（逐条调用的**工具名由模型写**，模板给不出映射）——两份 `calls` 的 items
+    # 形状因此必须逐字同构，见 `test_review_inbox_calls_shape`。
+    check("_SCHEMA_OVERRIDES 的键集合恰为 content_query 两格 + review_inbox 一格",
           set(N._SCHEMA_OVERRIDES) == {("content_query", "tools"),
-                                       ("content_query", "calls")},
+                                       ("content_query", "calls"),
+                                       ("review_inbox", "calls")},
           str(sorted(N._SCHEMA_OVERRIDES)))
 
 
@@ -398,6 +402,51 @@ def test_role_filter_applies_at_decision_time():
 
 
 # ── ④ 源码锁：本模块不许反向 import graph ─────────────────────────────────
+def test_review_inbox_calls_channel():
+    """`review_inbox.calls` = 一次点头办 N 件的那份清单（20260929 批 H · S2）。
+
+    这一格是本批最要紧的新面：**逐条调用里的工具名由模型写**，所以它同时受两道收
+    ——schema 这层的 `enum`（服务端强制）与展开层 `_expand_change_set` 的 `allowed`
+    白名单（`任一条不合格 ⇒ 整批零工具`）。两道独立、不互替，这里把**第一道**钉住。
+    """
+    print("\n[同源] review_inbox 的 calls 清单与 content_query 同构、闭集 = 该技能的 plan")
+    pub, adm = _by_name(None), _by_name("admin")
+    check("公开身份没有 review_inbox（它是管理能力）", "review_inbox" not in pub)
+    check("admin 有 review_inbox", "review_inbox" in adm)
+    cq = adm["content_query"]["parameters"]["properties"]["calls"]["items"]
+    ri = adm["review_inbox"]["parameters"]["properties"]["calls"]["items"]
+    # **不比整份 dict**：两份 `items` 各自带一个按角色展开的 `enum`，逐字相等在结构上
+    # 不可能成立（也不该成立）。同源的是**模板给的形状**——去掉那一格逐项比。
+    def _shape(d):
+        return {"required": d.get("required"),
+                "type": d.get("type"),
+                "keys": sorted((d.get("properties") or {}).keys()),
+                "tool": (d.get("properties") or {}).get("tool", {}).get("type"),
+                "args": (d.get("properties") or {}).get("args")}
+    check("两份 calls 的 items 形状同构（同一份 _CALLS_ITEMS，只差按角色展开的 enum）",
+          _shape(cq) == _shape(ri), f"{_shape(cq)} ≠ {_shape(ri)}")
+    for label, d in (("content_query", cq), ("review_inbox", ri)):
+        enum = (d.get("properties") or {}).get("tool", {}).get("enum")
+        check(f"{label}.calls 的 tool 是个非空字符串闭集（服务端强制那一关）",
+              isinstance(enum, list) and enum and all(isinstance(x, str) for x in enum),
+              str(enum))
+    allowed = [t for t, _ in (S.SKILL_MAP["review_inbox"].plan or ())]
+    check("tool 闭集 == 该技能 plan 里声明的工具全集（执行端读的是同一个字段）",
+          list(ri["properties"]["tool"].get("enum") or []) == allowed,
+          f"{ri['properties']['tool'].get('enum')} ≠ {allowed}")
+    check("两个工具名都在闭集里（审核 + 批准额度）",
+          set(allowed) == {"audit_board_comment", "approve_quota_request"}, str(allowed))
+    # 参数名提示挂在 **`calls` 这一格参数**的描述上（不是技能描述）——`args` 声明的是
+    # 裸 `{"type":"object"}`，不给键名模型只能猜。
+    par = adm["review_inbox"]["parameters"]["properties"]["calls"]
+    hint = str(par.get("description") or "")
+    check("calls 参数的描述里带上了每件要填的参数名（从工具 schema 现取，不是手抄一份签名）",
+          "talk_id" in hint and "user_id" in hint, hint[:200])
+    check("calls 是必填（空清单 = 一张什么都不办的卡）",
+          "calls" in (adm["review_inbox"]["parameters"].get("required") or []),
+          str(adm["review_inbox"]["parameters"].get("required")))
+
+
 def test_module_does_not_import_graph():
     print("\n[结构] native_plan 不许 import agent.graph（会成环）")
     tree = ast.parse((ROOT / "agent" / "native_plan.py").read_text(encoding="utf-8"))
@@ -424,6 +473,7 @@ if __name__ == "__main__":
                test_unmappable_returns_none,
                test_task_hold_declaration,
                test_role_filter_applies_at_decision_time,
+               test_review_inbox_calls_channel,
                test_module_does_not_import_graph):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))

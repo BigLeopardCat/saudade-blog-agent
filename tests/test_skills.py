@@ -1746,297 +1746,192 @@ def test_gate_site_absence_claim():
           o7["done"] is True and not o7.get("fallback_text"), str(o7))
 
 
-def test_auth_pending_review():
-    """授权式审查：待审候选只认系统台账（20260923 P2）。
+def test_ledger_target_guard():
+    """台账编号通道的**写保护**（20260929 批 H · S2）：目标必须出自现场台账。
 
-    事故形态（`20260923T131918` 原文）：主人说"小猫咪按你想法来吧"，planner 点对了
-    `board_audit`，但留言没有标题、只能按正文片段指认，而片段必须来自主人这句话
-    ——主人什么都没点 ⇒ 解不出来 ⇒ 如实收尾 ⇒ **narrator 从历史里挑了一条早已通过的
-    旧留言当目标**。系统手里明明有唯一权威来源（台账里 approved=0 的那几条），却没读。
+    旧判据是"这段字面出自主人原话"——正是它在 trace `20260929T221854` 里把模型
+    从上一轮残留里取回的正确留言打死（那句原话当然不在主人这一句「全部批准」里）。
+    新判据更强、也可验证：**这个编号出自系统这一轮现场读出来的台账**，而且那一行
+    **还在等办**。系统读不到台账时一律放行（预检只允许更保守，方向同
+    `_write_target_refusal`）。
 
-    这里锁三件事：① 结论只从上一轮那句提议里读（读不出/自相矛盾 → 空，绝不默认驳回）；
-    ② 恰好 1 条待审 + 结论明确 → **零 LLM** 直接拼计划（写操作同意闸必弹窗）；
-    ③ 0 条 / 台账读不到 → 只注入系统事实；≥2 条 → **变更集**（20260929 批 F：
-    一个技能名下 N 条 spec，卡片逐条列全交主人挑）——"绝不替主人挑"这条纪律两处
-    都没变，变的只是"谁挑"（planner 不挑 → 主人挑）。
+    两族各一：留言（`audit_board_comment` 按 `talkId`）与额度（`approve_quota_request`
+    按 `userId`）。这里逐条钉住那五个出口，并钉住**两张目标表严格互斥**——
+    互斥本身是结构性的：同一件工具同时被两套判据管，就会出"一边说 A 成立、
+    另一边说 A 不成立"的分裂。
     """
-    print("[auth_review] 授权式短应答的审查路径（台账唯一权威）")
+    print("[ledger_guard] 台账编号通道的写保护（目标必须出自现场台账且在待办态）")
+    import json as _json
+
     import agent.graph as G
     import tools.base as TB
-    from agent.graph import (_auth_review_path, _render_pending_facts,
-                             _verdict_from_proposal, parse_plan, planner_node)
     from agent.principal import Principal
 
-    # ── ① 结论读取：读不出绝不默认（默认驳回 = 替主人隐藏了访客的留言）────────
-    for t, want in (("那我把这条驳回隐藏", "reject"), ("这条我给它放行吧", "pass"),
-                    ("我把它隐藏掉", "reject"), ("先通过审核", "pass"),
-                    ("这条留言有点意思", ""), ("要么驳回要么通过，你说了算", "")):
-        check(f"结论读取「{t[:14]}」→ {want or '读不出（不猜）'}",
-              _verdict_from_proposal(t) == want, _verdict_from_proposal(t))
+    class _Row(dict):
+        pass
 
-    # ── ② 事实块：0 条时说的是"没有待审"，不许凭空生出候选 ──────────────────
-    f0 = _render_pending_facts([])
+    PENDING = {94: _Row({"talkKey": 94, "author": "visitor", "approved": 0,
+                         "content": "垃圾网站，什么破烂，主动申请驳回都失败"})}
+    PASSED = {95: _Row({"talkKey": 95, "author": "访客", "approved": 1,
+                        "content": "已经通过的那条"})}
+    QPEND = {126: _Row({"id": 900, "userId": 126, "username": "guest5",
+                        "reason": "额度用完了，我想接着问"})}
+    cfg = {"configurable": {"principal": Principal(uid=7, role="admin"), "user_id": 7,
+                            "conversation_id": 42, "stop_event": None}}
+
+    # ── ① 两张目标表严格互斥（结构性：同一件工具被两套判据同时管 = 判据分裂）────
+    check("⭐ `_LEDGER_TARGET_FIELDS` 与 `_WRITE_NAME_FIELDS` 无交集",
+          not (set(G._LEDGER_TARGET_FIELDS) & set(G._WRITE_NAME_FIELDS)),
+          str(sorted(set(G._LEDGER_TARGET_FIELDS) & set(G._WRITE_NAME_FIELDS))))
+    check("  台账编号通道恰好三件（留言复核 + 额度批准/驳回）",
+          set(G._LEDGER_TARGET_FIELDS) ==
+          {"audit_board_comment", "approve_quota_request", "reject_quota_request"},
+          str(sorted(G._LEDGER_TARGET_FIELDS)))
+
+    # ── ② 事实块：0 条时说的是"没有待审"，多条时连作者与原文一起列 ─────────────
+    f0 = G._render_pending_facts([])
     check("台账 0 条 → 如实说没有任何待审留言",
           "没有任何待审留言" in f0 and "不要凭空说出一条" in f0)
-    f2 = _render_pending_facts([
+    f2 = G._render_pending_facts([
         {"talkKey": 94, "content": "垃圾网站，什么破烂，主动申请驳回都失败", "author": "visitor",
          "approved": 0},
         {"talkKey": 101, "content": "泠月喵好棒", "author": "访客", "approved": 0}])
     check("多条 → 连作者与原文一起列出（主人要认的就是那句话）",
           "talkId:94" in f2 and "垃圾网站" in f2 and "talkId:101" in f2 and "共 2 条" in f2)
-    # 20260929 批 H：这块事实**只给事实**了。旧版末尾那句「本轮零写 / 绝不替他挑」是旧
-    # 确定性快道的产物（台账只在快道拼卡时读 ⇒ 读到了即"卡没拼出来 ⇒ 本轮零写"），而
-    # 候选现在每轮如实摆上桌、办不办由模型定——那句话会把**授权**读成"系统办不成了、
-    # 你别动"（生产实证 trace 20260929T221832 就是这么落成 answer_only 的）；
-    # 「目标只许出自台账 id、写操作一律弹卡签字」这条纪律挪进台账帧的表头。
     check("多条 → 只剩事实，不再带旧快道那套「本轮零写 / 绝不替他挑」",
           all(_p not in f2 for _p in ("零写", "绝不替他挑", "一条都不要写成已办")))
 
-    class _Row(dict):
-        pass
-
-    PENDING_1 = {94: _Row({"talkKey": 94, "author": "visitor", "approved": 0,
-                           "content": "垃圾网站，什么破烂，主动申请驳回都失败"})}
-    PENDING_2 = {**PENDING_1, 101: _Row({"talkKey": 101, "author": "访客",
-                                        "approved": 0, "content": "泠月喵好棒"})}
-    MIXED = {**PENDING_1, 77: _Row({"talkKey": 77, "author": "访客", "approved": 1,
-                                    "content": "已通过的那条，不能被当成待办"})}
-    cfg = {"configurable": {"principal": Principal(uid=7, role="admin"), "user_id": 7,
-                            "conversation_id": 42, "stop_event": None}}
-    admin = Principal(uid=7, role="admin")
-    prev_ok = "有一条留言在等人复核，那我把这条**驳回隐藏**："
-    calls = {"n": 0}
-    _orig = TB._board_index
-
-    class _Boom:
-        def invoke(self, prompt):        # 快道命中时**一次 LLM 都不该调**
-            raise AssertionError("授权式审查快道命中却调了 planner LLM")
-
-    def _board_stub(rows):
-        def _f(config):
-            calls["n"] += 1
-            return dict(rows)
-        return _f
-
+    _orig_board, _orig_q = TB._board_index, TB._quota_pending_index
     try:
-        TB._board_index = _board_stub(PENDING_1)
-        # ③ 唯一待审 + 结论明确 → 零 LLM 拼计划（quote = 台账里那条的原文）
-        facts, plan_obj, forced1 = _auth_review_path("小猫咪按你想法来吧", prev_ok, admin, cfg)
-        check("唯一待审 + 提议说驳回 → 拼出 board_audit 计划（弹窗的前一步）",
-              plan_obj is not None and plan_obj["skill"] == "board_audit"
-              and 'audit_board_comment' in plan_obj["tools"][0]
-              and '"verdict": "reject"' in plan_obj["tools"][0], str(plan_obj)[:120])
-        check("  目标 = 台账里那条的原文（不是历史里的旧留言）",
-              "垃圾网站，什么破烂" in plan_obj["tools"][0], plan_obj["tools"][0][:90])
-        check("  事实块同时给出（多条时的退路与唯一时同源）", "共 1 条" in facts)
-        G.get_llm = lambda **kw: _Boom()
-        out = planner_node({"messages": [HumanMessage(content="小猫咪按你想法来吧"),
-                                          AIMessage(content=prev_ok)], "plan_rounds": 0,
-                            "done": False}, cfg)
-        p = parse_plan(out["plan"])
-        check("  planner_node 走快道：零 LLM 拿到计划",
-              p["skill"] == "board_audit" and "audit_board_comment" in p["tools"][0],
-              str(p["tools"])[:80])
+        TB._board_index = lambda config: dict(PENDING)
+        TB._quota_pending_index = lambda config: dict(QPEND)
 
-        # ④ 多条待审 → **变更集**（20260929 批 F）：一个技能名下 N 条 spec，逐条列全
-        #    交一张卡给主人挑（此前是"只给事实块、不拼计划"——用户拍板改成"卡片列全，
-        #    让主人挑"；"绝不替主人挑"这条纪律没变，只是"谁挑"从 planner 换成了主人）
-        TB._board_index = _board_stub(PENDING_2)
-        facts2, plan2, forced2 = _auth_review_path("你看着办", prev_ok, admin, cfg)
-        check("多条待审 → 拼出变更集（一个技能名下 N 条 spec）",
-              plan2 is not None and plan2["skill"] == "review_inbox"
-              and len(plan2["params"]["specs"]) == 2, str(plan2)[:140])
-        check("  两条都按台账原文指认（planner 没有挑的余地）",
-              "垃圾网站，什么破烂" in plan2["tools"][0]
-              and "泠月喵好棒" in plan2["tools"][1], str(plan2["tools"])[:140])
-        check("  候选事实块进提示（talkId:94 与 talkId:101 都在）",
-              "talkId:94" in facts2 and "talkId:101" in facts2)
-        check("  提示里只剩事实（旧快道那句「本轮零写」已随批 H 删掉）",
-              "零写" not in facts2 and "talkId:94" in facts2)
-        check("  且**不进入目标定死模式**（多条时连目标都不许替他挑）", forced2 is None)
+        def _mk(name, args):
+            """按 `instantiate_plan` 的落盘口径拼一条 TOOLS 行条目。
 
-        # ⑤ 结论读不出 → 不拼计划，但**目标照样由系统定死**（G1，20260923）
-        TB._board_index = _board_stub(PENDING_1)
-        prev_no_verdict = "有一条留言在等人复核"
-        facts3, plan3, forced3 = _auth_review_path("按你想法来吧", prev_no_verdict,
-                                                   admin, cfg)
-        check("唯一待审但提议没说结论 → 不拼计划（不替主人决定驳回还是放行）",
-              plan3 is None and "共 1 条" in facts3)
-        check("  但进入目标定死模式：台账那条（原文）交给 planner 只做结论",
-              isinstance(forced3, dict) and forced3.get("quote") == "垃圾网站，什么破烂，主动申请驳回都失败",
-              str(forced3)[:90])
-        check("  提示块写明技能与两种结论，且**禁止**选 chat / 零工具 / 再问是哪一条",
-              "board_audit" in facts3 and "reject" in facts3 and "pass" in facts3
-              and "把 SKILL 选成 chat" in facts3)
+            预检读的是**计划里的 TOOLS 行**（spec 字符串），不是 `{tool,args}` 那种
+            结构化形状——参数由 json.dumps 落地（这也是 `_tool_args` 先 json.loads
+            的原因）。测试要贴着生产那条形状走，否则测的是另一个东西。
+            """
+            return f"{name}({_json.dumps(args, ensure_ascii=False)})"
 
-        # ⑥ 台账里 approved=1 的那条**不算待办**（正是事故里被误当成目标的那种）
-        TB._board_index = _board_stub(MIXED)
-        facts4, plan4, forced4 = _auth_review_path("小猫咪按你想法来吧", prev_ok, admin, cfg)
-        check("已通过的留言不进待审候选", "已通过的那条" not in facts4, facts4[:80])
-        check("  待审恰 1 条 ⇒ 拼的是那条待审的", plan4 is not None
-              and "垃圾网站" in plan4["tools"][0])
-        check("  结论读得出 ⇒ 走快道，不进定死模式（两条路不重叠）", forced4 is None)
+        def _guard(pairs):
+            return G._ledger_target_refusal(
+                {"tools": [_mk(n, a) for n, a in pairs]},
+                cfg)
 
-        # ⑦ 台账读不到 ≠ 没有待审（不许据此说"没有留言要复核"）
+        # ── ③ 留言族：四种出口 ────────────────────────────────────────────
+        _ok = [("audit_board_comment", {"talk_id": 94, "verdict": "reject"})]
+        check("台账里真有这一行、且还在待审 ⇒ 放行（预检不拦）", _guard(_ok) is None, "")
+        _bad_id = [("audit_board_comment", {"talk_id": "垃圾网站", "verdict": "pass"})]
+        _r = _guard(_bad_id)
+        check("⭐ 编号解不出 ⇒ 拒绝，并说清'编号就是台账行上印着的那串数字'",
+              _r is not None and "不是编号" in _r[1], str(_r)[:110])
+        _missing = [("audit_board_comment", {"talk_id": 999, "verdict": "pass"})]
+        _r = _guard(_missing)
+        check("⭐ 台账里没有这个编号 ⇒ 拒绝，如实说查无此条（不许错动别人）",
+              _r is not None and "没有编号为 talkId:999 的留言" in _r[1], str(_r)[:110])
+        TB._board_index = lambda config: dict(PASSED)
+        _done = [("audit_board_comment", {"talk_id": 95, "verdict": "reject"})]
+        _r = _guard(_done)
+        check("⭐ 那一行**已不是待审** ⇒ 拒绝，并如实报它现在的状态"
+              "（待办台账只摆待审的；改判要回后台留言管理页）",
+              _r is not None and "「已通过」" in _r[1] and "后台留言管理页" in _r[1],
+              str(_r)[:140])
         TB._board_index = lambda config: None
-        facts5, plan5, forced5 = _auth_review_path("你看着办", prev_ok, admin, cfg)
-        check("台账读不到 → 既不拼计划也不注入「没有待审」（读不到≠没有）",
-              plan5 is None and facts5 == "")
+        check("⭐ 留言台账读不到 ⇒ **放行**（读不到 ≠ 没有这一条，同 `_write_target_refusal`）",
+              _guard(_ok) is None, "")
+        TB._board_index = lambda config: dict(PENDING)
 
-        # ⑧ 不该触发的形态：不读台账（零额外网络开销），也不改任何行为
-        calls["n"] = 0
-        TB._board_index = _board_stub(PENDING_1)
-        for msg, prev, why in (("要", prev_ok, "同意式（承接的是那件具体事）"),
-                               ("不用了", prev_ok, "拒绝式"),
-                               ("小猫咪按你想法来吧", "今天天气不错呀", "提议里没有审查意图"),
-                               ("小猫咪按你想法来吧", "", "没有上一轮提议")):
-            f, p, fc = _auth_review_path(msg, prev, admin, cfg)
-            check(f"不触发·{why} → 不拼计划不注入", p is None and f == "" and fc is None)
-        check("  且**一次台账都没读**（非授权式轮次零额外开销）", calls["n"] == 0,
-              f"读了 {calls['n']} 次")
+        # ── ④ 额度族：三种出口（存在性与待办态是同一个查询）────────────────
+        _q_ok = [("approve_quota_request", {"user_id": 126})]
+        check("队列里真有这个账号的待处理申请 ⇒ 放行", _guard(_q_ok) is None, "")
+        _q_name = [("approve_quota_request", {"user_id": "guest5"})]
+        _r = _guard(_q_name)
+        check("⭐ 编号位填了账号名 ⇒ 拒绝，说清'编号就是台账行上印着的那串数字'"
+              "（id 通道**不退回去按名字猜**）",
+              _r is not None and "不是编号" in _r[1], str(_r)[:110])
+        _q_miss = [("approve_quota_request", {"user_id": 999})]
+        _r = _guard(_q_miss)
+        check("⭐ 队列里没有这个账号的待处理申请 ⇒ 拒绝，如实说'可能已经被处理过'",
+              _r is not None and "没有待处理的额度申请" in _r[1], str(_r)[:130])
+        _q_gone = [("reject_quota_request", {"user_id": 999, "reason": "x"})]
+        _r = _guard(_q_gone)
+        check("⭐ 队列里没有这一行 ⇒ 拒绝（'那条申请可能已经被处理过'）",
+              _r is not None and "没有待处理的额度申请" in _r[1], str(_r)[:130])
+        TB._quota_pending_index = lambda config: None
+        check("⭐ 队列读不到 ⇒ **放行**（同留言台账那一支）", _guard(_q_ok) is None, "")
+        TB._quota_pending_index = lambda config: dict(QPEND)
 
-        # ⑨ 权限：没有复核权限的人连台账都不读（弹窗本也到不了他）
-        guest = Principal(uid=0, role="guest")
-        calls["n"] = 0
-        fg, pg, fcg = _auth_review_path("小猫咪按你想法来吧", prev_ok, guest, cfg)
-        check("非管理员 → 不读台账、不拼计划（fail-closed）",
-              pg is None and fg == "" and calls["n"] == 0 and fcg is None,
-              f"读了 {calls['n']} 次")
+        # ── ⑤ 不属于这条通道的写法一个字节都不碰（严格互斥的运行期证据）──────
+        check("  参数里带 `$` 引用 ⇒ 预检让路（由 refs 那层解，不在这里猜）",
+              _guard([("audit_board_comment",
+                       {"talk_id": "$tool[0].talkKey", "verdict": "pass"})]) is None, "")
+        check("  名字通道的工具（reset_user_quota 按账号名）⇒ 本预检一概不管",
+              _guard([("reset_user_quota", {"name": "没有这个人"})]) is None, "")
+        check("  一次多条 spec ⇒ 预检只管第一条（多件的裁决在展开层与令牌层）",
+              _guard([("reset_user_quota", {"name": "x"}),
+                      ("audit_board_comment", {"talk_id": 999, "verdict": "pass"})]) is None, "")
 
-        # ⑩ 定死模式的两条去路（G1）：合格计划**目标归位**，不合格就地判死
-        from agent.graph import (_LEDGER_NOTE_PREFIX, _ask_verdict_note,
-                                 _forced_review_fix)
-        fq = "垃圾网站，什么破烂，主动申请驳回都失败"
-        good = instantiate_plan("board_audit", {"quote": "模型自己概括的一小段",
-                                                "verdict": "reject"})
-        good["params"] = {"quote": "模型自己概括的一小段", "verdict": "reject"}
-        check("合格计划（board_audit + 合法结论）→ 放行", _forced_review_fix(good, forced3) is None)
-        check("  且 quote **一律归位**到台账那条（模型抄的片段不进参数）",
-              fq in good["tools"][0] and "模型自己概括的一小段" not in good["tools"][0],
-              good["tools"][0][:100])
-        check("  归位后计划仍是 board_audit（技能不许漂）", good["skill"] == "board_audit")
-        bad_chat = {"skill": "chat", "tools": [], "note": "", "params": {}}
-        check("不合格·SKILL 选成 chat → 返回原因（→ 确定性问结论）",
-              bool(_forced_review_fix(bad_chat, forced3)))
-        bad_verdict = instantiate_plan("board_audit", {"quote": fq, "verdict": ""})
-        bad_verdict["params"] = {"quote": fq, "verdict": ""}
-        check("不合格·结论留空 → 返回原因（不猜驳回）",
-              bool(_forced_review_fix(bad_verdict, forced3)))
-        bad_tool = instantiate_plan("board_audit", {"quote": fq, "verdict": "pass"})
-        bad_tool["tools"] = ['set_article_status({"article_id": 12, "status": "private"})']
-        bad_tool["params"] = {"quote": fq, "verdict": "pass"}
-        check("不合格·工具不是留言写 → 返回原因",
-              bool(_forced_review_fix(bad_tool, forced3)))
-        note = _ask_verdict_note(forced3)
-        check("确定性问结论的注记：印出那条留言 + 只问驳回还是放行 + 禁止句",
-              "驳回" in note and "放行" in note and "talkId:94" in note
-              and "「" in note and "一个字节都没有改动" in note
-              and "不许出现「看过/读过/查过/检索过/调用过工具」" in note)
-        check("  且带台账豁免前缀（洞④：这轮的站内结论是系统核对出来的）",
-              note.startswith(_LEDGER_NOTE_PREFIX), note[:40])
-
-        # ⑪ 结论读取的两处修正（G2）：否定前缀 + 提案句作用域
-        inc = ("好嘞主人，那我把这条**驳回隐藏**：\n\n- **动作**：人工复批 → **驳回"
-               "（hidden）**\n- **原因**：作者本人写明这是开发测试、要求驳回，放行"
-               "反而违背本意。")
-        check("13:19 事故那句提议 → reject（括号里的「未通过」是解释后果，不是放行）",
-              _verdict_from_proposal(inc) == "reject", _verdict_from_proposal(inc))
-        check("  「未通过 / 不通过 / 不让它通过」一律读成驳回（否定式放行按驳回记，"
-              "退化成「两族都不命中」就等于让模型自己猜）",
-              _verdict_from_proposal("那我把这条隐藏掉（作者会看到未通过）") == "reject"
-              and _verdict_from_proposal("这条不让它通过审核") == "reject")
-        check("  提案句说放行、解释句提驳回 → 仍读 pass（作用域取提案句）",
-              _verdict_from_proposal("这条我给它放行吧。另外提醒一句：上一条我驳回过了") == "pass"
-              or _verdict_from_proposal("这条我给它放行吧") == "pass")
-        check("  两族都不提 / 两句各说一族 → 照旧读不出（不猜）",
-              _verdict_from_proposal("这条留言有点意思") == ""
-              and _verdict_from_proposal("要么驳回要么通过，你说了算") == "")
+        # ── ⑥ 拒绝的那一轮真的零写（不只是返回了一句话）──────────────────
+        from agent.graph import execute_node, plan_state
+        from langchain_core.messages import HumanMessage
+        _spec = 'audit_board_comment({"talk_id": 999, "verdict": "pass"})'
+        # 走 planner 的守卫链太重，这里直接验"预检给出的拒绝文本进得了收尾注记"：
+        _r = _guard([("audit_board_comment", {"talk_id": 999, "verdict": "pass"})])
+        check("  拒绝文本是给主人看的整句（不是裸错误码）",
+              _r is not None and _r[0] == "audit_board_comment"
+              and len(_r[1]) > 20 and "本次未改动" in _r[1], str(_r)[:120])
     finally:
-        TB._board_index = _orig
+        TB._board_index, TB._quota_pending_index = _orig_board, _orig_q
 
 
-def test_auth_review_forced():
-    """目标定死的受限决策（G1，20260923）：结论读不出时**只把结论留给 planner**。
+def test_review_inbox_calls_whitelist():
+    """`review_inbox.calls` 的**第二道关**：展开层的 `allowed` 白名单（负锁二）。
 
-    生产实测（P2 六轮里两跑两中）：主人说"你看着办"、台账里恰好 1 条待审、而上一轮
-    那句提议里读不出结论时，planner 选 `chat` + 零工具 ⇒ narrator 反过来问主人一句
-    打太极的话。目标本来就有唯一权威来源（台账那一条），缺的只是"哪一种结论"这一个
-    字——所以系统把目标**定死**（技能 board_audit + quote 用台账正文），planner 只剩
-    一个自由度；它若仍不落在写技能上 ⇒ 确定性收尾，把那条留言印给主人、只问
-    「驳回还是放行」（零写零编造）。
+    逐条调用里的工具名由模型写 ⇒ 两道独立防线：schema 的 `enum`（服务端强制，见
+    `tests/test_native_plan.py`）与 `_expand_change_set` 的 `allowed`（`skill.plan`
+    声明的工具全集）。**任一条不合格 ⇒ 整批零工具**——不是"剔掉那条、办其余几条"：
+    一个装了两族的卡上少了一条，主人点"全部办"时看到的件数就是错的。
 
-    两条锁：① 合格计划的目标**归位**到台账那条（模型抄的片段不进参数）；
-    ② 不合格时是**问结论**，不是身份防线那句"请把那条留言的原话抄一小段给我"
-    ——后者在授权式场景里是死路（主人本来就没点名）。②靠**代码顺序**保证：
-    forced 分支必须排在 `_board_quote_fix` 之前（见那里的注释）。
+    这条锁的形态是"整批"，因为最危险的错法恰好是"部分执行"：模型在清单里塞一条
+    越权工具，若展开层只剔掉它，卡片仍然会弹、主人仍然会签字，而卡上列的件数与
+    实际办的件数从此对不上（且不一致的地方正是被剔掉的那条）。
     """
-    print("[auth_review] 目标定死的受限决策（G1：只把结论留给 planner）")
-    import agent.graph as G
-    import tools.base as TB
-    from agent.graph import (_LEDGER_NOTE_PREFIX, parse_plan, planner_node)
-    from agent.principal import Principal
+    print("[review_inbox] calls 展开：白名单外一条 ⇒ 整批零工具")
+    from agent.skills import SKILL_MAP, _expand_change_set
 
-    class _ScriptedLLM:
-        def __init__(self, replies):
-            self.replies, self.prompts = list(replies), []
+    _ri = SKILL_MAP["review_inbox"]
+    _allowed = {t for t, _ in (_ri.plan or ())}
+    check("白名单来自 `skill.plan`（注册表唯一对应关系）",
+          _allowed == {"audit_board_comment", "approve_quota_request"}, str(sorted(_allowed)))
 
-        def invoke(self, prompt):
-            self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
+    _good, _note = _expand_change_set(_ri, {"calls": [
+        {"tool": "audit_board_comment", "args": {"talk_id": 94, "verdict": "reject"}},
+        {"tool": "approve_quota_request", "args": {"user_id": 126}}]})
+    check("两件合法的 ⇒ 恰好两条 spec（内容一字不改地照抄）",
+          len(_good) == 2 and "audit_board_comment" in _good[0]
+          and "approve_quota_request" in _good[1], str(_good)[:140])
+    check("  注记非空（卡面要说清这一次办几件）", bool(_note), _note[:80])
 
-    class _Row(dict):
-        pass
+    for _bad, _why in (
+            ([{"tool": "delete_tag", "args": {"name": "编程"}}], "不是本技能声明的工具"),
+            ([{"tool": "audit_board_comment", "args": {"talk_id": 94, "verdict": "reject"}},
+              {"tool": "reset_user_quota", "args": {"name": "someone"}}],
+             "两条里混进一条越权工具"),
+            ([{"tool": "audit_board_comment"}], "缺 args（形状不合格）"),
+            ([{"tool": "audit_board_comment", "args": "not-an-object"}], "args 不是对象"),
+            (["audit_board_comment"], "条目本身不是 `{tool,args}` 形状"),
+            ([{"args": {"talk_id": 94}}], "缺 tool"),
+    ):
+        _out, _n = _expand_change_set(_ri, {"calls": _bad})
+        check(f"⭐ 负锁二·{_why} ⇒ **整批零工具** + 非空注记"
+              f"（不许只剔掉那一条、把其余几条办了）",
+              _out == [] and bool(_n), f"{_out} {_n[:70]}")
 
-    # 台账里恰好 1 条待审（≥2 条或 0 条都不进定死模式）
-    LEDGER = {94: _Row({"talkKey": 94, "author": "visitor", "approved": 0,
-                        "content": "垃圾网站，什么破烂，主动申请驳回都失败"})}
-    _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
-                             "user_id": 7, "conversation_id": 42, "stop_event": None}}
-    # 上一轮那句提议：有审查意图（留言）但**两族都没提** ⇒ 结论读不出 ⇒ 定死模式
-    _prev = "回头那几条留言咱们商量一下再定吧"
-    _auth_msg = "小猫咪按你想法来吧"
-    _orig_llm, _orig_board = G.get_llm, TB._board_index
-    try:
-        TB._board_index = lambda config: dict(LEDGER)
-
-        # ① 生产实测那个形态：planner 选 chat + 零工具 ⇒ 确定性问结论（不再打太极）
-        llm = _ScriptedLLM(["SKILL=chat\nPARAMS={}\nREPLY: 直接回答"])
-        G.get_llm = lambda **kw: llm
-        out = planner_node({"messages": [HumanMessage(content=_auth_msg),
-                                         AIMessage(content=_prev)],
-                            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
-        plan = parse_plan(out["plan"])
-        _n = plan["note"] or ""
-        check("planner 落不到写技能上 → 零工具确定性收尾（一个工具都不许跑）",
-              plan["tools"] == [], str(plan["tools"]))
-        check("  收尾是**问结论**：印出那条留言 + 只问驳回/放行",
-              "驳回" in _n and "放行" in _n and "垃圾网站" in _n, _n[:120])
-        check("  带台账豁免前缀（洞④）+ 如实说这轮什么都没动",
-              _n.startswith(_LEDGER_NOTE_PREFIX) and "一个字节都没有改动" in _n)
-        check("  **不是**身份防线那句「抄一小段原话给我」（授权式场景里那是死路）",
-              "没有给出那条留言的正文片段" not in _n and "没有能指认" not in _n, _n[:120])
-        check("  只问 planner 一次（不重决策——首轮已拿到定死指令）",
-              len(llm.prompts) == 1, str(len(llm.prompts)))
-
-        # ② 它落对了：结论合法 ⇒ 照办，且目标**归位**到台账那条（模型抄的片段不作数）
-        llm2 = _ScriptedLLM(['SKILL=board_audit\n'
-                             'PARAMS={"quote": "模型自己概括的一小段", '
-                             '"verdict": "pass"}\nREPLY: 如实回答'])
-        G.get_llm = lambda **kw: llm2
-        out2 = planner_node({"messages": [HumanMessage(content=_auth_msg),
-                                           AIMessage(content=_prev)],
-                             "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
-        plan2 = parse_plan(out2["plan"])
-        _spec2 = " ".join(plan2["tools"])
-        check("planner 落在 board_audit 上 → 照办（目标归位到台账那条）",
-              plan2["skill"] == "board_audit" and "垃圾网站" in _spec2
-              and "模型自己概括的一小段" not in _spec2, _spec2[:140])
-        check("  结论用它自己读出来的那个（pass）",
-              '"verdict": "pass"' in _spec2, _spec2[:140])
-        check("  且这一轮**不问**主人（目标是系统给的，结论也读出来了）",
-              "驳回还是放行" not in (plan2["note"] or ""), (plan2["note"] or "")[:120])
-    finally:
-        G.get_llm, TB._board_index = _orig_llm, _orig_board
+    _none, _n2 = _expand_change_set(_ri, {})
+    check("空清单 ⇒ 零工具 + 注记（一张什么都不办的卡不该被弹出来）",
+          _none == [] and bool(_n2), f"{_none} {_n2[:70]}")
 
 
 def test_gate_confirm_claim():
@@ -4442,9 +4337,12 @@ def test_write_grounding_round():
         TB._board_index = lambda config: dict(BOARD)
 
         # ① 片段被填成主人给的**理由** → 校正成引号里那段原话
-        _msg = "帮我把那条写着「泠月喵真棒！」的留言驳回吧，看着有点乱"
-        llm = _ScriptedLLM(['SKILL=board_audit\n'
-                            'PARAMS={"quote": "有点乱", "verdict": "reject"}\n'
+        # ⚠️ 这一族（片段校正）20260929 批 H 起**只剩删除**：审核的目标已改走台账编号
+        # （`talk_id`），不再有"按正文片段指认"这一步，所以它不该再出现在这条判据里
+        # （`_board_quote_fix` 收窄成 delete-only，见那里的注释）。
+        _msg = "帮我把那条写着「泠月喵真棒！」的留言删掉吧，看着有点乱"
+        llm = _ScriptedLLM(['SKILL=board_delete\n'
+                            'PARAMS={"quote": "有点乱"}\n'
                             "REPLY: 如实回答"])
         G.get_llm = lambda **kw: llm
         out = planner_node({"messages": [HumanMessage(content=_msg)],
@@ -4459,6 +4357,11 @@ def test_write_grounding_round():
         check("  只问 planner 一次（确定性校正，不重决策）", len(llm.prompts) == 1)
         check("  校正**先于**目标预检（预检判的是校正后的片段，不是错靶）",
               plan["tools"] != [] and "未改动" not in (plan["note"] or ""))
+        check("⭐ 审核（board_audit）**不吃**这条校正：它的目标是台账编号，"
+              "正文片段填进来也改不了什么——通道收窄到删除一族",
+              G._WRITE_NAME_FIELDS.get("delete_board_comment") == ("quote", None)
+              and "audit_board_comment" not in G._WRITE_NAME_FIELDS,
+              str(G._WRITE_NAME_FIELDS.get("audit_board_comment")))
 
         # ①b 截短形态（实测填「好笨」/「泠月」）→ 校正回完整那一段
         TB._board_index = lambda config: {45: _Row(
@@ -4479,9 +4382,6 @@ def test_write_grounding_round():
             ("board_delete", 'SKILL=board_delete\nPARAMS={}\n'
                              "NOTE: 缺少指认用的正文片段（quote）：不调用任何工具，"
                              "如实向主人问清说的是哪一条留言\nREPLY: 问清哪一条", "delete_board_comment"),
-            ("board_audit", 'SKILL=board_audit\nPARAMS={}\n'
-                            "NOTE: 缺少指认用的正文片段（quote）：不调用任何工具\n"
-                            "REPLY: 问清哪一条", "audit_board_comment"),
         ):
             llm_c = _ScriptedLLM([_rep])
             G.get_llm = lambda **kw: llm_c
@@ -4491,9 +4391,6 @@ def test_write_grounding_round():
             _spec_c = " ".join(plan_c["tools"])
             check(f"零工具追问 + 主人引号里有唯一一段原话 → 补上片段照常办事（{_sk}）",
                   "泠月喵真棒！" in _spec_c and _want in _spec_c, _spec_c[:120])
-            if _sk == "board_audit":
-                check("  复核取向按主人话里的单向词补（「驳回」→ reject）",
-                      '"verdict": "reject"' in _spec_c, _spec_c[:140])
 
         # ①d 补参只在首轮：看到工具帧之后 planner 决定"问一句"是对的不该被覆盖
         llm_d = _ScriptedLLM(['SKILL=board_delete\nPARAMS={}\n'
@@ -4561,8 +4458,12 @@ def test_write_ledger_note_round():
     # 20260929 批 G 起是**五处**（第五处 = 「不成账」的零工具轮那条 Layer B 兜底）：
     # 那一轮同样是"系统核对过的处境"（这一轮什么都没执行），洞④ 的豁免对它是正当的
     # ——它说的站内结论同样是系统给的，不是 narrator 编的。
-    check("五处确定性收尾路径都用了同一个锚常量（不是各写一遍字面量）",
-          _src.count("_LEDGER_NOTE_PREFIX +") == 5,
+    # **20260929 批 H 起回到四处**：第五处是旧确定性快道的「问结论」注记
+    # （`_ask_verdict_note`），随那条车道整族删除（S3）——它服务的场景
+    # （系统替模型定目标、只留结论一个自由度）已经不存在了。**这次减一是复核过的**：
+    # 删掉的是一处引用，锚常量本身与另外四条路径一字未动。
+    check("四处确定性收尾路径都用了同一个锚常量（不是各写一遍字面量）",
+          _src.count("_LEDGER_NOTE_PREFIX +") == 4,
           str(_src.count("_LEDGER_NOTE_PREFIX +")))
     check("锚的字面量在 graph.py 里只出现一次（= 常量定义那处，没有第二份手抄）",
           _src.count(_LEDGER_NOTE_PREFIX) == 1,
@@ -5072,8 +4973,8 @@ def main():
                test_phantom_tool_claim, test_phantom_claim_clause_and_echo_exempt,
                test_gate_claim_holes,
                test_gate_false_negative_claim, test_gate_site_absence_claim,
-               test_gate_confirm_claim, test_gate_ledger_denial, test_auth_pending_review,
-               test_auth_review_forced,
+               test_gate_confirm_claim, test_gate_ledger_denial, test_ledger_target_guard,
+               test_review_inbox_calls_whitelist,
                test_gate_repeat_reply,
                test_execute_node, test_refs, test_write_ref_loud, test_todo_contract,
                test_checker,

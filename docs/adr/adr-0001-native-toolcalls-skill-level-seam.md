@@ -27,20 +27,25 @@ planner 此前用**文本计划协议**决策：系统渲染文本菜单 → 模
 三条都是可当场复核的反证，不是偏好：
 
 1. **7 个参数校正器全部读技能级 `plan_obj["params"]`**：
-   `_board_quote_fix`(`graph.py:3875`)、`_announcement_text_fix`(`:3998`)、
-   `_name_target_fix`(`:4438`)、`_name_arg_fix`(`:4659`)、
-   `_target_grounding_refusal`(`:4806`)、`_write_target_refusal`(`:4885`)、
-   `_forced_review_fix`(`:5261`)。传工具原始实参进去 ⇒ 这 7 处全瞎。
+   `_board_quote_fix`、`_announcement_text_fix`、`_name_target_fix`、`_name_arg_fix`、
+   `_target_grounding_refusal`、`_write_target_refusal`、`_ledger_target_refusal`
+   （都在 `agent/graph.py`）。传工具原始实参进去 ⇒ 这 7 处全瞎。
 2. **技能参数与工具参数不是同一层**：`navigate` 技能的参数叫 `target`
-   （`decisions.py:224`），而它模板里的 `navigate_to` 工具参数叫 `path`
-   （`tools/base.py:629`），且 `path` 由技能自己从 `NAV_MAP` 算出
+   （`agent/decisions.py`），而它模板里的 `navigate_to` 工具参数叫 `path`
+   （`tools/base.py`），且 `path` 由技能自己从 `NAV_MAP` 算出
    （`skills.py::skill_param_specs` 的注专门写了这个"死占位符"陷阱）。
-3. **工具→技能反查天生歧义**：`get_moderation_status` 同时出现在 `skills.py:625`
-   与 `:1216` 两处技能模板里 ⇒ 反查不唯一，只能猜。
+3. **工具→技能反查天生歧义**：`get_moderation_status` 同时出现在两处技能模板里
+   （`agent/skills.py` 的后台报表技能与后台首页技能）⇒ 反查不唯一，只能猜。
 
-另有一条形状约束：`_plan_skill`(`graph.py:5618`) 与
-`confirm.sign(uid, conv_id, _plan_skill(state), picks)`(`_confirm_popup:5547`) 配合
-`_confirm_grant_plan:3736` 的 `tool ∈ skill.plan` 检查，要求 skill 与工具集自洽。
+另有一条形状约束：`_plan_skill`（`agent/graph.py`）与
+`confirm.sign(uid, conv_id, _plan_skill(state), picks)`（`_confirm_popup`）配合
+`_confirm_grant_plan` 的 `tool ∈ skill.plan` 检查，要求 skill 与工具集自洽。
+
+> **上面只写符号名、不写行号是刻意的**（20260929 批 H 整理）：这份 ADR 原来那组
+> `graph.py:NNNN` 锚点在几个月里全部漂走，而其中一条（`_forced_review_fix`）随旧
+> 确定性快道整族删掉之后**连名字都不存在了**——一个指错地方的行号比没有行号更坏
+> （读的人会以为核实过了）。判据是符号与事实，位置用 grep 找。同族的行号锚点在
+> `docs/agent-architecture.md` 等处还有一批，整理不在本批范围。
 
 ## 后果
 

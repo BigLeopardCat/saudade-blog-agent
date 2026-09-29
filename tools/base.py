@@ -2508,26 +2508,62 @@ def _find_board_comment(quote, config: RunnableConfig, index=None):
                   f"（可能记错了字，或那条已经被删了）")
 
 
+# ⚠️ 三个 id 参数的注记写成 `str | int` 是**故意的、别收紧成 `str`**：模型照抄的是
+# 一串数字，而计划模板展开时那段文字要过一遍 JSON 解析（`"$user_id"` → `126`），
+# 纯数字串**必然**变 `int` 回来。声明 `str` 的话 pydantic 会在工具入口直接拒掉——
+# 一条本来正确的写操作在结构上到不了执行（20260929 批 H 实测踩到）。判据本体是
+# `adminops.normalize_target_id`，它本来就认 `int`／纯数字串／带命名空间三种形态。
+def _find_board_comment_by_id(talk_id, config: RunnableConfig, index=None):
+    """按 **talkId**（后台清单的 `talkKey`）定位一条留言 → `(行, None)` / `(None, 拒绝文本)`。
+
+    这是审核的**第二条目标通道**（20260929 批 H · S2），与按正文片段的
+    `_find_board_comment` 并列：目标来自系统摆上桌的待办台账（`talkId:<id>` 那一栏），
+    模型抄的就是这个 id。判据因此比"这段字面出自主人原话"更强——**可验证**（id 要么
+    在清单里、要么不在），也正是「你看着办」这类授权式的话能成立的前提。
+
+    三条失败各自如实说（都零写）：
+      · id 认不出（不是正整数）⇒ 说清那不是一个留言编号，**不退回去按正文猜**；
+      · 清单读不到 ⇒ 单独一种说法（"读不到" ≠ "没有"）；
+      · 清单里没有这个 id ⇒ 说清站内没有这条留言（可能已经被删了）。
+    `index` 是可选快照（一次操作要读同一份清单两回时用）。
+    """
+    from agent import adminops as A
+    if index is None:
+        index = _board_index(config)
+    if index is None:
+        return None, "读不到后台的留言列表，无法按编号核对那条留言，本次未改动"
+    tid = A.normalize_target_id(talk_id)
+    if tid is None:
+        return None, (f"「{str(talk_id or '').strip()[:40]}」不是一个留言编号，"
+                      f"本次未改动——请把待办台账里那条留言的 talkId 原样抄过来")
+    hit = index.get(tid)
+    if not isinstance(hit, dict):
+        return None, (f"站内没有编号为 talkId:{tid} 的留言，本次未改动"
+                      f"（可能记错了编号，或那条已经被删了）")
+    return hit, None
+
+
 def _board_state_cn(row: dict) -> str:
     return BOARD_APPROVED_CN.get(row.get("approved"), "状态未知")
 
 
 @tool
 def audit_board_comment(
-    quote: Annotated[str, "用来指认是哪一条留言的**原话片段**（从那条留言正文里原样抄一段，"
-                          "用户说的就是这句；别改写、别概括）"],
+    talk_id: Annotated[str | int,
+                        "那条留言的 **talkId**（从待办台账里原样抄，形如 101 或 talkId:101）"],
     verdict: Annotated[str, "复核结论：pass=通过（放行展示）/ reject=驳回（隐藏）"],
     config: RunnableConfig,
 ) -> str:
     """人工复核一条河灯留言：**通过**（放行给所有人看）或**驳回**（隐藏起来）。
-    留言按正文片段指认：片段对不上、或站内有好几条都含这段时什么都不做，并如实
-    说明原因与候选。这一动作**可以改判**（驳回的能再放行），不是删除。
-    需要管理员身份，且要经主人确认才会真正生效。"""
+    留言按 **talkId** 指认（编号来自系统读出的待办台账）：编号认不出、或站内没有
+    这条留言时什么都不做，并如实说明原因。这一动作**不是删除**（驳回只是隐藏、留言
+    本身留着），但它**只治台账里还在等办的那一行**：那一行已经办过了就拒绝并如实说明
+    （改判已办过的留言要到后台留言管理页）。需要管理员身份，且要经主人确认才会真正生效。"""
     from agent import adminops as A
     v = A.normalize_verdict(verdict)
     if v is None:
         return unavailable(f"认不出复核结论「{verdict}」（只能是 通过/pass 或 驳回/reject），未改动")
-    hit, err = _find_board_comment(quote, config)
+    hit, err = _find_board_comment_by_id(talk_id, config)
     if err:
         return unavailable(err)
 
@@ -2577,7 +2613,16 @@ def delete_board_comment(
     **待审与被驳回的留言删得掉**（`_board_index` 读的是后台管理清单
     `GET /api/protect/board`，它不过滤 approved）——20260928 实证的反面说法
     （"系统没有删除被驳回留言的通道"）是编的，见 `reports.render_moderation_status`
-    末尾那条"处置"注记。"""
+    末尾那条"处置"注记。
+
+    ⚠️ **为什么删除不跟审核一起改成按 `talkId`**（20260929 批 H · S2 的选择，不是
+    漏改）：审核治的是"台账里等着办的那一行"，而**待办台账只摆待审**（approved=0）
+    的行——已通过/已驳回的留言在台账帧里**根本不出现**。它们的 talkId 全站只有一处
+    读得到（审核状况报表的明细行），而且那份报表**每类只列前 `MAX_LIST_DETAIL` 条**
+    （5 条；主人点名某一类时才放宽到 20）⇒ "删掉那条三个月前已通过的老留言"改成只认
+    id 就**可能连编号都拿不到**。那是本仓反复警告的「静默降级」形状。所以删除保留
+    正文片段通道：主人本来就只认那句话本身，而删除是一条"取不回来"的动作，让他抄
+    一句原话（而不是报一个他自己也认不出的编号）在这条路上反而更稳。"""
     from agent import adminops as A
     hit, err = _find_board_comment(quote, config)
     if err:
@@ -3894,6 +3939,36 @@ def _find_named_user(name, config, index=None):
     return None, f"后台账号列表里没有叫「{want}」的账号，本次未改动"
 
 
+def _find_user_by_id(user_id, config, index=None):
+    """按 **uid**（台账里的「账号 id=」）在后台账号名录里取那一行 → `(行, None)` / `(None, 拒绝文本)`。
+
+    额度批准/驳回的**第二条目标通道**（20260929 批 H · S2），与按账号名的
+    `_find_named_user` 并列：目标来自系统摆上桌的待办台账，模型抄的是 uid。
+
+    **仍然要过一次名录**（不是直接拿 uid 去发请求）：名录是"这个账号还在不在"的
+    唯一事实源，也是复核基线（`limit`/写前用量）的来源；id 查不到就如实说"名录里
+    没有这个编号"，而不是让后端回一句更含糊的拒绝。uid 认不出（不是正整数）同样
+    零写——**不退回去按名字猜**。
+
+    ⚠️ 与 `_find_named_user` 那处"方向差异"的注**不是同一条**：那里的读不到是指
+    按名字定位无从落地；这里 uid 已经给了，读不到名录就只是"没核对上"，所以这条
+    通道的读不到同样是零写（同 `_pre_read_fail` 的取向）。
+    """
+    from agent import adminops as A
+    if index is None:
+        index = _user_directory(config)
+    if isinstance(index, ToolResult):
+        return None, str(index)
+    uid = A.normalize_target_id(user_id)
+    if uid is None:
+        return None, (f"「{str(user_id or '').strip()[:40]}」不是一个账号编号，"
+                      f"本次未改动——请把待办台账里那个申请人的账号 id 原样抄过来")
+    row = index.get(uid)
+    if not isinstance(row, dict):
+        return None, f"后台账号列表里没有编号为 id={uid} 的账号，本次未改动"
+    return row, None
+
+
 # 冻结/解冻每个方向的**结局句**——工具自己发音时用（回执）。卡面问句用的是
 # adminops 的 `_ACCOUNT_CONSEQ`：两份措辞必须以同一件事为真（"会话不回来"这半边
 # 两个方向都要说清），所以改一处必须看一眼另一处。
@@ -4206,10 +4281,12 @@ def _admin_quota_post(path: str, payload: dict, config: RunnableConfig):
 def _quota_pending_index(config: RunnableConfig):
     """读**待处理**的额度重置申请 → `{uid: 行}`；读不到 → `ToolResult`。
 
-    为什么按 uid 建索引而不是按行 id：agent 侧定位目标**只能走名字通道**（见本节
-    头注），行 id 是模型永远猜不出的内部键。"这个账号有没有待处理的申请"因此是
-    **一次读同时回答两件事**：定位（拿到行 id）与预检（没有这一行就不发请求、
-    直接如实说"他现在没有待处理的申请"——那比让后端回一句拒绝更早、更清楚）。
+    为什么按 uid 建索引而不是按行 id：**uid 是模型看得见、可核对的目标**（台账与
+    `list_quota_requests` 都印「账号 id=」），而行 id（`rid`）是模型永远猜不出、
+    也永远不需要知道的内部键——它由本函数的结果就地取给写通道。"这个账号有没有
+    待处理的申请"因此是**一次读同时回答两件事**：定位（拿到行 id）与预检（没有
+    这一行就不发请求、直接如实说"他现在没有待处理的申请"——那比让后端回一句
+    拒绝更早、更清楚）。
 
     返回的是 `ToolResult` 而不是 `None`：调用方在**任何**读不到的情况下都必须零写
     （同 `_user_directory` 那条纪律），原样往外传一个带人话的 ToolResult 最好用。
@@ -4239,12 +4316,13 @@ def list_quota_requests(
     status: Annotated[str | None,
                       "看哪些：「pending」只看待处理的（默认），「all」连已处理的一起看"] = None,
 ) -> str:
-    """查看用户提交的**对话额度重置申请**清单：每行给出申请人的账号名、他现在用了
-    多少轮、申请理由与状态。
+    """查看用户提交的**对话额度重置申请**清单：每行给出申请人的**账号 id**、账号名、
+    他现在用了多少轮、申请理由与状态。
 
-    批准或驳回某人之前，先用它确认**申请人的账号名**（写通道按名字定位，且要求这个
-    名字能在账号名录里唯一命中）。要改某个用户的额度而不涉及他的申请，用不上这个
-    工具——直接按账号名重置即可。需要管理员身份。"""
+    批准或驳回某人之前，先用它确认**申请人的账号 id**（`账号 id=` 就是写通道收的
+    目标；编号必须真实存在于账号名录里，系统在写之前还会对着现场队列再校验一次）。
+    要改某个用户的额度而不涉及他的申请，用不上这个工具——直接按账号名重置即可
+    （主动重置仍走名字通道）。需要管理员身份。"""
     from agent import adminops as A
     want = str(status or "").strip().lower()
     q = "all" if want in ("all", "全部", "所有") else "pending"
@@ -4284,12 +4362,17 @@ def _quota_readback(config: RunnableConfig, target_id: int, username: str, limit
               meta={"op": kind, "account_id": target_id, "account_name": username})
 
 
-def _review_quota_request(name, approved: bool, reason, config: RunnableConfig) -> ToolResult:
+def _review_quota_request(user_id, approved: bool, reason, config: RunnableConfig) -> ToolResult:
     """批准 / 驳回某人的额度重置申请（两个 @tool 是方向不同的薄壳，同冻结族）。
 
-    照 `_set_account_frozen` 的五段式：① 读名录 → ② 按名字解析出唯一一行 →
+    照 `_set_account_frozen` 的五段式：① 读名录 → ② 按 **uid** 取出那一行 →
     ③ 读**待处理申请**（定位 + 预检，读不到/没有他那一行都零写）→ ④ 写 →
     ⑤ 写后复核 → 出口只有 `ok` / `not_found` / `policy_frame` / `unavailable`。
+
+    **目标走 id 通道**（20260929 批 H · S2）：参数是系统摆上桌的台账里那个
+    「账号 id=」——申请行 id（`rid`）由系统从 `_quota_pending_index[uid]` 自己取，
+    模型永远不需要知道它（它是模型猜不出的内部键）。**仍然过一次名录**：uid 必须
+    在场且真存在，见 `_find_user_by_id` 头注。
 
     复核分两个方向，因为**两个方向改变的东西不同**：
       · **批准**恢复额度满额 ⇒ 重读名录判 `chatQuotaUsed`（同主动重置，走
@@ -4299,9 +4382,6 @@ def _review_quota_request(name, approved: bool, reason, config: RunnableConfig) 
         是错的——驳回之后他的额度本来就还是用尽的样子，判它必然误报"未生效"。
     """
     from agent import adminops as A
-    want = str(name or "").strip()
-    if not want:
-        return unavailable("没给出要处理的账号名，本次未改动——请让主人说清是哪个账号")
     note = str(reason or "").strip()
     if not approved and not note:
         # 驳回理由必填（用户拍板）。为零的理由不是"空着没关系"：那条通知的正文
@@ -4312,17 +4392,17 @@ def _review_quota_request(name, approved: bool, reason, config: RunnableConfig) 
         return unavailable(f"驳回理由太长（{len(note)} 字，上限 {_QUOTA_NOTE_LIMIT} 字），"
                            f"本次未改动")
 
-    # ① 写前读：既拿复核基线（`limit`、写前的用量），也让"查无此名"在发请求之前
-    #    就响亮地报出来。
+    # ① 写前读：既拿复核基线（`limit`、写前的用量），也让"这个编号不在名录里"在
+    #    发请求之前就响亮地报出来。
     before_index = _user_directory(config)
     if isinstance(before_index, ToolResult):
         return _pre_read_fail(before_index, "后台账号名录")
-    # ② 解析：唯一命中才继续（重名 ⇒ not_found，零写——选错就是批了**另一个活人**）。
-    row, err = _find_named_user(want, config, index=before_index)
+    # ② 解析：uid 必须在名录里（不在 ⇒ not_found，零写——选错就是批了**另一个活人**）。
+    row, err = _find_user_by_id(user_id, before_index)
     if err:
         return not_found(err)
     target_id = int(row.get("id"))
-    username = str(row.get("username") or want)
+    username = str(row.get("username") or f"账号 id={target_id}")
     limit = A.quota_limit(row)
 
     # ③ 读待处理申请：定位（拿行 id）与预检（没他那一行就不发请求）一次完成。
@@ -4369,22 +4449,24 @@ def _review_quota_request(name, approved: bool, reason, config: RunnableConfig) 
 
 @tool
 def approve_quota_request(
-    name: Annotated[str, "申请人的**账号名**（后台账号列表里看得见的那一行）"],
+    user_id: Annotated[str | int,
+                       "申请人的**账号 id**（从待办台账里原样抄，形如 3 或 账号 id=3）"],
     config: RunnableConfig,
 ) -> str:
     """**批准**某个用户的对话额度重置申请：他的额度立刻恢复到上限，马上可以继续提问。
     需要管理员身份，且每次都要经主人确认。
 
-    **批准不可撤销**（额度是个数，没有"撤回"这个概念）。申请人的账号名必须能在
-    后台账号列表里看到；他没有待处理的申请、或那条已经被处理过时，如实把系统给的
+    **批准不可撤销**（额度是个数，没有"撤回"这个概念）。申请人的账号 id 必须能在
+    后台账号列表里找到；他没有待处理的申请、或那条已经被处理过时，如实把系统给的
     原话转告主人——**不要**换个说法重试，也**不要**改用主动重置去"绕开"这句话
     （那两件事的后果不同，主人同意的是前者）。"""
-    return _review_quota_request(name, True, None, config)
+    return _review_quota_request(user_id, True, None, config)
 
 
 @tool
 def reject_quota_request(
-    name: Annotated[str, "申请人的**账号名**（后台账号列表里看得见的那一行）"],
+    user_id: Annotated[str | int,
+                       "申请人的**账号 id**（从待办台账里原样抄，形如 3 或 账号 id=3）"],
     reason: Annotated[str, "驳回理由（会作为站内通知发给申请人，让他知道为什么；必填）"],
     config: RunnableConfig,
 ) -> str:
@@ -4393,9 +4475,9 @@ def reject_quota_request(
     确认。
 
     这里给的理由会原样出现在发给申请人的通知里——主人没说理由就问他要一句，**不要
-    自己编一个**（申请人收到的是主人的裁决，理由写错比不写更糟）。申请人的账号名必须
-    能在后台账号列表里看到；他没有待处理的申请时如实转告系统原话，不要重试。"""
-    return _review_quota_request(name, False, reason, config)
+    自己编一个**（申请人收到的是主人的裁决，理由写错比不写更糟）。申请人的账号 id
+    必须能在后台账号列表里找到；他没有待处理的申请时如实转告系统原话，不要重试。"""
+    return _review_quota_request(user_id, False, reason, config)
 
 
 def _reset_user_quota(name, config: RunnableConfig) -> ToolResult:
@@ -4448,7 +4530,14 @@ def reset_user_quota(
     做这件事不会改变任何东西。需要管理员身份，且每次都要经主人确认。
 
     **要动的账号名必须能在后台账号列表里看到**；列表里没有这个名字就当它不存在
-    （不要用账号编号，也不要自己拼一个名字）。"""
+    （不要用账号编号，也不要自己拼一个名字）。
+
+    ⚠️ **为什么这一件仍是名字通道**（20260929 批 H · S2 的选择，不是漏改）：批准与
+    驳回治的是"台账里等着办的那一行"，目标现成；而这一件治的是**主人临时想起的某个
+    人**——站内**没有**"列出全部账号"的读工具（`list_quota_requests` 只有申请队列），
+    所以改成只认 id 就**静默丢掉**「给某个没申请过的人重置额度」这条今天真能办的事
+    （`_find_named_user` 按名字查名录正是为它服务的）。名字→uid 的解析在工具侧对着
+    实时名录做，唯一命中才动手，与冻结族逐字同规。"""
     return _reset_user_quota(name, config)
 
 

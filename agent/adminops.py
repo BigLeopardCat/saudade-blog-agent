@@ -1162,6 +1162,45 @@ def render_todo_rescheduled(text: str, date, *, changed: bool = True) -> str:
             f"（后台已复核：列表里这一条现在的排期就是 {when}）")
 
 
+# ── 目标 id 的归一（20260929 批 H · S2）─────────────────────────────────
+# 写通道从"名字/正文片段"改成"台账里的 id"之后，模型填进来的值有两种合法写法：
+# 裸数字（`101`）与**帧里印出来的带命名空间写法**（`talkId:101` / `账号 id=3` /
+# `userId:3` / `#101`）。`_board_label` 印的就是前者，而 `_render_quota_facts`
+# 印的是「（账号 id=3，…）」——模型照抄整段时会把命名空间一起抄进来。
+#
+# **宽容的只是写法，不是"猜"**：剥掉命名空间后必须剩下**一个纯整数**，多一个
+# 字符都算认不出（返回 None ⇒ 零工具/零写，交回 planner）。所以这里既不是模糊
+# 匹配、也不替模型解释它想说的是谁——"这个 id 是不是真的存在"由**现场台账**判
+# （`tools.base` 的 id 分支与 `graph._ledger_target_refusal`）。
+_TARGET_ID_NS_RE = re.compile(
+    r"(?:talkId|talk_id|talkid|userId|user_id|userid|账号\s*id|account_id|id|#)"
+    r"\s*[:=#]?\s*#?(\d+)", re.IGNORECASE)
+
+
+def normalize_target_id(value) -> int | None:
+    """写目标 id（留言 talkId / 额度申请人的 userId）→ 正整数；认不出 → None。
+
+    认三种形态：`int`、纯数字串、带命名空间的写法（见上面那张正则的注）。
+    **不认**：负数、0（id 从 1 起）、浮点、带别的内容的串——一律 None。
+    `bool` 显式排除（`True` 是 `int` 的子类，`id=True` 会变成 1）。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    s = str(value or "").strip()
+    if not s:
+        return None
+    if s.isdigit():
+        n = int(s)
+        return n if n > 0 else None
+    m = _TARGET_ID_NS_RE.fullmatch(s)
+    if not m:
+        return None
+    n = int(m.group(1))
+    return n if n > 0 else None
+
+
 # ── 写操作确认框（20260921）：问句与回复文本都是**确定性中文**────────────
 # 与 agent/reports.py 同一条纪律：能算的都不交给 LLM。这两段文本会直接进
 # ①确认框的问题行 ②那一轮的对话气泡，都是用户一眼看到的东西——让模型写它，
@@ -1241,6 +1280,54 @@ def _account_row(users, username):
         if isinstance(row, dict) and str(row.get("username") or "").strip() == want:
             return row
     return None
+
+
+def _account_row_by_id(users, user_id):
+    """账号名录快照里按 **uid** 找回那一行（id 通道的对应物）；取不到 → None。
+
+    三态与 `_account_row` 逐字同源（快照是 None / 快照在手但没这一行 / 找到了）。
+    **id 认不出（`normalize_target_id` 返 None）也返回 None**：那种情况下渲染方
+    连"是哪一行"都说不出来，只能如实标注没核对上——绝不退回去按名字猜。
+    """
+    if not isinstance(users, dict) or not users:
+        return None
+    uid = normalize_target_id(user_id)
+    if uid is None:
+        return None
+    row = users.get(uid)
+    return row if isinstance(row, dict) else None
+
+
+def _quota_target_row(tool: str, a: dict, users):
+    """额度族的目标 → `(快照行, 显示用名字)`；id 通道与名字通道在这里合流。
+
+    目标通道按**工具**分（`reset_user_quota` 走账号名、批准/驳回走 uid），与
+    `_confirm_one` 那一支逐字同源——两处判据必须同源，否则会出现"卡面说批的是
+    Alice、这里的判据却在看另一个账号"的分裂（那正是 `reached_specs` 头注警告的形态）。
+    行取不到时返回 `(None, 名字)`，由各臂自己决定"判不了"还是"如实说一句"。
+    """
+    if tool == "reset_user_quota":
+        name = str(a.get("name") or "").strip()
+        return _account_row(users, name), name
+    row = _account_row_by_id(users, a.get("user_id"))
+    shown = str(row.get("username") or "").strip() if isinstance(row, dict) else ""
+    return row, shown
+
+
+def _board_row_by_id(boards, talk_id):
+    """留言清单快照里按 **talkId** 取那一行（id 通道的问句渲染）；取不到 → None。
+
+    与 `tools.base._find_board_comment_by_id` 同一判据（清单里有没有这个 talkKey），
+    但**只用于渲染**：None 只表示"问句里写不出具体是哪一条"（快照读不到 / id 认不出
+    / 清单里没这一条）。真正的"能不能动"仍由规划轮的目标预检与工具侧的复核各判一次。
+    """
+    if not isinstance(boards, dict) or not boards:
+        return None
+    tid = normalize_target_id(talk_id)
+    if tid is None:
+        return None
+    row = boards.get(tid)
+    return row if isinstance(row, dict) else None
 
 
 def render_account_action(username: str, frozen: bool, users=None) -> str:
@@ -1397,7 +1484,8 @@ def _quota_pair(row) -> str:
     return f"额度 剩{max(0, lim - used)}/{lim} 轮"
 
 
-def render_quota_action(kind: str, name: str, users=None, quota_requests=None) -> str:
+def render_quota_action(kind: str, name: str, users=None, quota_requests=None,
+                        user_id=None) -> str:
     """`批准账号「Alice」（账号 id=126，现在 额度 500/500 轮）的额度重置申请（…）`
     ——**卡面、问句、跨轮待办的目标**共用这一行。
 
@@ -1410,12 +1498,30 @@ def render_quota_action(kind: str, name: str, users=None, quota_requests=None) -
     `{uid: 行}`）：在手就把**他的申请理由**印进卡面——主人正在决定批不批，理由是
     申请人自己的诉求，而这是整条链上唯一印得出它的地方；复核时那一行已经不在了
     （比如他刚被处理过）也如实标注，同 `users` 那条三态纪律。
+
+    **两条目标通道**（20260929 批 H · S2）：`user_id` 给得起就走 **id 通道**（批准与
+    驳回的参数是台账里的 uid，模型的参数里根本没有名字——名字从名录快照取回来印，
+    取不到就只印编号）；给不起就走**名字通道**（主动重置仍按账号名，见 `_expand_write_skill`
+    那一支的注）。两条通道渲染出来的卡面**同形同事实**，只在"名录里没有这一行"时
+    措辞各自说准（一个说名字、一个说编号）。
     """
     verb = _QUOTA_VERB.get(kind, kind)
     tail = _QUOTA_CONSEQ.get(kind, "")
-    row = _account_row(users, name)
-    if users and row is None:
-        return f"{verb}账号「{name}」的对话额度重置申请（后台账号列表里没有叫这个名字的账号）"
+    by_id = user_id is not None
+    if by_id:
+        uid = normalize_target_id(user_id)
+        row = _account_row_by_id(users, uid)
+        # 名字从名录取回；取不到就退回「账号 id=N」——id 认不出时连编号都说不出来，
+        # 那时如实写「没给出账号编号」（渲染不许编一个数）。
+        name = (str(row.get("username") or "").strip() if row else "") or (
+            f"账号 id={uid}" if uid is not None else "（没有给出账号编号）")
+        if users and row is None:
+            return (f"{verb}账号「{name}」的对话额度重置申请"
+                    f"（后台账号列表里没有这个编号的账号）")
+    else:
+        row = _account_row(users, name)
+        if users and row is None:
+            return f"{verb}账号「{name}」的对话额度重置申请（后台账号列表里没有叫这个名字的账号）"
     who = ""
     if row is not None:
         where = _quota_pair(row)
@@ -1489,10 +1595,18 @@ def render_quota_status(kind: str, username: str, uid, limit, used) -> str:
 def render_quota_requests(rows) -> str:
     """额度重置申请队列 → 给 planner 看的清单。
 
-    这一屏的价值全在**申请人名字与他的用量**：管理员接着说"批准 Alice"时，planner
-    只有在这一轮真读到了这个名字，才有据可写（写通道按名字定位、且要求该名字能在
-    账号名录里唯一命中，见 `tools/base.py` 的额度节头注）。**行 id 刻意不印**——
-    agent 侧按不了编号动手，印出来只会诱发 planner 填一个猜的编号。
+    这一屏的价值全在**申请人的账号 id、名字与他的用量**（20260929 批 H · S2 改）：
+    批准/驳回的参数就是台账里的 `账号 id=`（uid），所以**这一屏必须印 uid**——
+    不印的话"读到了队列"与"能动手"之间就断了一截，planner 只能去猜一个编号，
+    而那正是写保护要拒的东西。旧版的「**行 id 刻意不印**……印出来只会诱发 planner
+    猜一个编号」讲的是**申请行 id**（`rid`，后端 `quota_requests.id`）：那个键
+    到今天仍然不印也不该印——模型永远不需要知道它，`rid` 由系统从
+    `_quota_pending_index[uid]` 自己取。两个 id 是两样东西，别把这一条读成
+    "行 id 可以印了"。
+
+    印出来的 uid 不是"要求模型相信它"：写之前由 `graph._ledger_target_refusal`
+    对着**现场台账**再校验一次（id 必须真实存在且仍在待办态），所以印错/抄错
+    不会变成一次错写，只会变成一次如实收尾。
     """
     lines = [f"额度重置申请共 {len(rows)} 条："]
     for r in rows:
@@ -1512,7 +1626,12 @@ def render_quota_requests(rows) -> str:
         st = _QUOTA_STATUS_CN.get(_quota_status_code(r.get("status")), "")
         reason = clip(str(r.get("reason") or "").strip(), 60) or "（没有填写理由）"
         extra = clip(str(r.get("note") or "").strip(), 40)
-        head = f"- 「{who}」" + (f"（昵称 {nick}）" if nick else "")
+        # uid 取不出（脏行）就**不印 id 那一格**，不能印一个 `账号 id=None`：
+        # 那看起来像一个编号，而模型会照着抄（同 `_board_label` 那条"id 必须带
+        # 命名空间"的取向——宁可少印一格，不印一个假编号）。
+        uid = normalize_target_id(r.get("userId"))
+        head = f"- 「{who}」" + (f"（账号 id={uid}）" if uid is not None else "") \
+            + (f"（昵称 {nick}）" if nick else "")
         rest = [f"现在 {pair}"]
         if st:
             rest.append(f"[{st}]")
@@ -1685,15 +1804,39 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         # 删公告：真删、没有回收站，且访客首页立刻看不到。
         return f"删除公告「{title}」（删掉后首页立刻看不到，且取不回来）"
     if tool in ("audit_board_comment", "delete_board_comment"):
-        # 留言按**正文片段**指认（见 tools.base._find_board_comment）。问句里必须
-        # 把**匹配到的那一条**写出来（#id + 作者 + 原文），否则主人签的是"一段话"
-        # ——而这段话在站内可能出现在好几条留言里，他无从核对要动的到底是哪一条。
-        # `boards` 给不起（读不到清单）时退回片段原文 + 明说"没核对上"，不装作核对过。
-        quote = str(a.get("quote") or "").strip()
-        shown = clip(quote, 40) or "（没有给出片段）"
+        # 留言的目标有**两条通道**（20260929 批 H · S2），两条的卡面判据是同一条：
+        # 必须把**那一行印全**（#id + 作者 + 原文 + 现状），否则主人签的是一个他
+        # 自己都认不出的东西，等于盲签。
+        #   · 审核走 **talkId**（id 通道）——目标来自系统摆上桌的待办台账；
+        #   · 删除仍走**正文片段**（名字通道）——见 `tools/base.py` 审核节头注里
+        #     "为什么删除不跟着改"那条；片段命中的那一条由快照核对后印出来。
+        # `boards` 给不起（读不到清单）时退回编号/片段 + 明说"没核对上"，不装作核对过。
+        from tools.base import BOARD_APPROVED_CN
+        if tool == "audit_board_comment":
+            tid = normalize_target_id(a.get("talk_id"))
+            hit = _board_row_by_id(boards, tid)
+            head = f"#{tid}" if tid is not None else "（没有给出留言编号）"
+            if hit is None:
+                where = ("（没能核对上站内具体是哪一条：留言列表没读到，"
+                         "或列表里没有这个编号）")
+            else:
+                head = (f"#{hit.get('talkKey')}"
+                        f"「{clip(str(hit.get('content') or ''), 40)}」")
+                who = clip(str(hit.get("author") or hit.get("nickname") or ""), 16)
+                if who:
+                    head += f"（{who} 的留言）"
+                head += f"（现在：{BOARD_APPROVED_CN.get(hit.get('approved'), '状态未知')}）"
+                where = ""
+            v = normalize_verdict(a.get("verdict"))
+            what = BOARD_VERDICT_FULL.get(v, f"复核为「{a.get('verdict')}」")
+            return f"把留言 {head}{where} 人工复核为 {what}"
+        # 删除：仍按**正文片段**指认（`tools.base._find_board_comment` 的同一判据
+        # ——原文子串 → 去空白子串兜底），快照里命中的那一条印全（#id + 作者 + 原文
+        # + 现状）。片段在站内可能出现在好几条留言里，所以"没核对上"必须说出来。
         # 状态词表只有一份，在 tools/base.py（它描述的是 DB 里 approved 那三个取值，
         # 与工具的读回复核同源）——这里只借来渲染，不另抄一张。
-        from tools.base import BOARD_APPROVED_CN
+        quote = str(a.get("quote") or "").strip()
+        shown = clip(quote, 40) or "（没有给出片段）"
         hit = _match_board(boards, quote)
         if hit is None:
             where = "（没能核对上站内具体是哪一条：留言列表没读到，或含这段话的不止一条）"
@@ -1705,11 +1848,7 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
             if who:
                 head += f"（{who} 的留言）"
             head += f"（现在：{BOARD_APPROVED_CN.get(hit.get('approved'), '状态未知')}）"
-        if tool == "delete_board_comment":
-            return f"删除留言 {head}{where}（删掉取不回来）"
-        v = normalize_verdict(a.get("verdict"))
-        what = BOARD_VERDICT_FULL.get(v, f"复核为「{a.get('verdict')}」")
-        return f"把留言 {head}{where} 人工复核为 {what}"
+        return f"删除留言 {head}{where}（删掉取不回来）"
     if tool == "set_article_status":
         head = f"修改文章 {a.get('article_id')}{where_article}"
         bits = []
@@ -1832,14 +1971,22 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         return render_todo_reschedule_action(body or "（没有给出正文）",
                                              str(a.get("date") or "").strip(), todos)
     if tool in ("approve_quota_request", "reject_quota_request", "reset_user_quota"):
-        # 对话额度的三件（20260929）：目标 = 账号名录里的**账号名**（与冻结族同一条
-        # 名字通道），但后果三句各不相同——见 `_QUOTA_CONSEQ` 那段；申请理由是
-        # 卡面唯一印得出来的地方，所以这一支必须拿到 `quota_requests` 快照。
+        # 对话额度的三件（20260929）：后果三句各不相同——见 `_QUOTA_CONSEQ` 那段；
+        # 申请理由是卡面唯一印得出来的地方，所以这一支必须拿到 `quota_requests` 快照。
+        # 目标有**两条通道**（20260929 批 H · S2）：
+        #   · 批准 / 驳回走 **id 通道**（`user_id` = 台账里的 uid）——这两件正是"回应
+        #     队列里等着办的那一行"，目标由系统摆上桌；名字由 `render_quota_action`
+        #     从名录快照取回来印，卡面与名字通道同形。
+        #   · 主动重置仍走**名字通道**：站内没有"列全部账号"的读工具，改成只认 id
+        #     会**静默丢掉**「给某个没申请过的人重置额度」这条真能力（见 `tools/base.py`
+        #     额度节头注与 `_expand_write_skill` 那一支）。
         kind = {"approve_quota_request": "approve",
                 "reject_quota_request": "reject",
                 "reset_user_quota": "reset"}[tool]
-        name = str(a.get("name") or "").strip()
-        return render_quota_action(kind, name or "（没有给出账号名）", users, quota_requests)
+        if tool == "reset_user_quota":
+            name = str(a.get("name") or "").strip()
+            return render_quota_action(kind, name or "（没有给出账号名）", users, quota_requests)
+        return render_quota_action(kind, "", users, quota_requests, user_id=a.get("user_id"))
     return f"执行 {tool}"
 
 
@@ -2084,10 +2231,11 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
         users = s.get("users")
         if not isinstance(users, dict) or not users:
             return None                      # 名录读不到 ⇒ 判不了（同冻结族）
-        name = str(a.get("name") or "").strip()
-        row = _account_row(users, name)
+        row, name = _quota_target_row(tool, a, users)
         if row is None:
-            return None                      # 名录里没这个名字 ⇒ 工具的拒绝路，不是已达成
+            return None                      # 名录里没这一行 ⇒ 工具的拒绝路，不是已达成
+        if not name:
+            name = f"账号 id={row.get('id')}"
         used = quota_used(row)
         lim = quota_limit(row)
         if used is None or lim is None:
@@ -2110,8 +2258,7 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
         reqs = s.get("quota_requests")
         if not isinstance(users, dict) or not users or not isinstance(reqs, dict):
             return None
-        name = str(a.get("name") or "").strip()
-        row = _account_row(users, name)
+        row, name = _quota_target_row(tool, a, users)
         if row is None:
             return None
         try:
@@ -2120,6 +2267,8 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
             return None
         if uid in reqs:
             return None                      # 有申请 ⇒ 正是要办的那一次，照弹
+        if not name:
+            name = f"账号 id={uid}"
         return f"账号「{name}」现在没有待处理的额度申请"
     if tool == "complete_dashboard_todo":
         text = str(a.get("text") or "").strip()
@@ -2218,9 +2367,10 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
         v = normalize_verdict(a.get("verdict"))
         if v is None:
             return None
-        # `_match_board` 判不了（清单没读到 / 片段对不上 / 命中多条）时返回 None：
-        # 与工具 `_find_board_comment` 同一判据，照弹。
-        hit = _match_board(s.get("boards"), a.get("quote"))
+        # 目标走 **talkId**（与 `_confirm_one` 同一条通道）；`_board_row_by_id` 判不了
+        # （清单没读到 / id 认不出 / 清单里没这一条）时返回 None：与工具
+        # `_find_board_comment_by_id` 同一判据，照弹。
+        hit = _board_row_by_id(s.get("boards"), a.get("talk_id"))
         if hit is None or hit.get("approved") != BOARD_VERDICT_APPROVED[v]:
             return None
         who = str(hit.get("author") or hit.get("nickname") or "").strip()

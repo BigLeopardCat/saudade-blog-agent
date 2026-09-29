@@ -48,6 +48,7 @@ from agent.graph import (_confirm_grant_plan, _confirm_popup, execute_node,
                          plan_state)
 from agent.skills import instantiate_plan  # noqa: E402
 from agent.principal import Principal
+import _parent_repo  # noqa: E402  （父仓三态：找得到/要求却找不到=红/找不到=响亮跳过）
 
 FAILED: list[str] = []
 
@@ -467,11 +468,13 @@ finally:
     g.get_llm = _orig_llm
 
 print()
-# ── ⑤ 授权式短应答的审查路径（20260923 P2）：目标由系统台账定，但**仍要主人点一下** ──
-# 主人说"小猫咪按你想法来吧"（授权式）时目标由系统定（`g._auth_review_path` 读台账里
-# approved=0 的那一条）——但**授权不等于替主人签字**：写操作同意闸照旧弹窗，弹窗里
-# 印着 #id/作者/原文/现状/动作，主人点"确定"才是身份。这条链路正是用户拍板的形态
-# （"弹窗把目标印给主人"），也是 20260923 13:19 那条事故的正解。
+# ── ⑤ 审核走**台账编号**通道：目标由模型从帧里抄，但**仍要主人点一下**（负锁一）──
+# 20260929 批 H · S2 起，`board_audit` 的旧车道（系统读上一轮散文定结论、按正文原话
+# 认目标）**整族删除**——决策全归模型，系统只留①台账事实②人闸③写保护。这条断言组
+# 就是那张人闸的形状：模型自己写出一条**带编号**的审核调用，执行前照样弹卡、零执行，
+# 卡面逐条印出台账原文与结论，主人点"确定"才是身份。
+# ⚠️ 这一段同时也是**负锁一**（计划里点名的）：判据不能只到 `requires_consent`——
+# 必须真跑 `execute_node`，否则"一律弹窗"只是声明而不是行为。
 from tools import base as _tb  # noqa: E402
 
 
@@ -486,30 +489,38 @@ try:
     # `consent_required` 错误帧而不是 `pending_confirm`）⇒ 这里必须**自己再设一次桩**。
     settings.jwt_secret = _STUB_SECRET
     _tb._board_index = lambda config: dict(_PEND)
-    _facts, _plan_obj, _forced = g._auth_review_path(
-        "小猫咪按你想法来吧", "有一条留言在等人复核，那我把这条**驳回隐藏**：",
-        Principal(uid=7, role="admin"), CFG)
-    # G1 的三态：这句提议里结论**读得出**（驳回）⇒ 走快道直接拼计划，
-    # `forced`（目标定死、只把结论留给 planner）必须为 None——两个形态同时开火
-    # 会互相盖（forced 分支早退，快道拼好的计划就废了）。
-    check("  结论读得出时走快道：不进目标定死模式（forced 必须为 None）",
-          _forced is None and _plan_obj is not None, str(_forced)[:80])
+    # 模型按台账帧写出来的计划（`talk_id` 抄的是帧里那串数字，verdict 是它自己的判断）。
+    _plan_obj = instantiate_plan(
+        "board_audit", {"talk_id": "94", "verdict": "reject"}, "admin")
     _r = execute_node({"messages": [HumanMessage(content="小猫咪按你想法来吧")],
                        **plan_state(_plan_obj), "plan_rounds": 0, "done": False,
                        "receipts": []}, CFG)
-    check("授权式 + 台账唯一待审 ⇒ 执行前弹确认框（授权不等于替主人签字）",
+    check("带台账编号的审核调用 ⇒ 执行前弹确认框（模型决策 ≠ 替主人签字）",
           isinstance(_r, dict) and "pending_confirm" in _r,
           f"{str(_r)[:80]}（令牌长度 {len((_r or {}).get('pending_confirm', {}).get('token', ''))}"
           "—— 为 0 就是签名密钥空缺，见本段开头的密钥桩注释）")
     _q = (_r or {}).get("pending_confirm", {}).get("q", "")
+    check("  ⭐ 负锁一：弹窗轮**零执行**（一个工具都没跑，`_CALLS` 空）",
+          _r.get("messages") == [], str(_r.get("messages"))[:80])
     check("  弹窗把目标印给主人（#id + 作者 + 原文 + 现状）",
           "#94" in _q and "垃圾网站" in _q and "待审" in _q, _q[:110])
-    check("  结论取自上一轮那句提议（驳回）——主人签字前看得见自己同意了什么",
+    check("  卡上签的就是这一件（编号 + 模型给的结论，签名后逐字可对账）",
           [_s.get("args", {}).get("verdict") for _s in (_r or {})
            .get("pending_confirm", {}).get("specs", [])] == ["reject"], _q[:70])
-    check("  弹窗轮零执行（一个工具都没跑）", _r.get("messages") == [])
     check("  令牌照常签发（点确定后照签名拼计划，不靠模型回忆）",
           len((_r or {}).get("pending_confirm", {}).get("token", "")) > 20)
+    # 对照组：同一个计划、同样真跑 execute，**确认轮**必须真执行（弹卡 ≠ 不办）。
+    _r2 = execute_node({"messages": [HumanMessage(content="确定")],
+                        **plan_state(_plan_obj), "plan_rounds": 0, "done": False,
+                        "receipts": [],
+                        "confirm_grant": {"token": "x"}},
+                       {**CFG, "configurable": {**CFG.get("configurable", {}),
+                                                "principal": Principal(uid=7,
+                                                                       role="admin")}})
+    check("  对照：同一条计划在**确认轮**放行执行（人闸是闸门，不是拒绝）",
+          isinstance(_r2, dict) and "pending_confirm" not in _r2
+          and any(t in str(_r2.get("messages")) for t in ("audit_board_comment", "复核")),
+          str(_r2)[:120])
 finally:
     _tb._board_index = _orig_board
     settings.jwt_secret = _SAVED_SECRET   # ⑥ 段自己会再设一次桩
@@ -873,6 +884,72 @@ check("  且都写清了两档结局（判成明确命令就直接办）", not _
 check("「一律弹窗」族没被顺手改成两档（它们的卡每轮都弹）",
       not _under_claim, str(_under_claim))
 settings.jwt_secret = _SAVED_SECRET   # 收尾还原（与其它节同一约定）
+
+print("\n⑫ 收窄 `pick:<i>` 与跨语言守卫（原 `test_change_set.py` 里没被批 H 删掉的那几条）")
+# **为什么搬到这里**：20260929 批 H 删掉了 `test_change_set.py`（它锁的"授权语 ⇒ 系统
+# 拼变更集"那条确定性快道整族下线）。但那张文件里有两块跟那条快道**没有关系**：卡面
+# 的收窄语义（`pick:<i>`）与跨语言守卫（Rust 那半真的转发 `confirm_pick`）。它们锁的
+# 机器一行都没改，覆盖率不该跟着文件一起消失——删除测试文件时"顺带丢掉无关锁"是本仓
+# 反复写明的形状。这一节原样重挂，并把清单换成 **id 通道**的写法（批 H 起的目标通道）。
+settings.jwt_secret = _STUB_SECRET
+_grant_specs = [{"tool": "audit_board_comment",
+                 "args": {"talk_id": 94, "verdict": "reject"}},
+                {"tool": "approve_quota_request", "args": {"user_id": 5}}]
+_tok = confirm.sign(7, 42, "review_inbox", _grant_specs)
+_pay = confirm.verify(_tok, 7, 42)
+check("令牌签发→验签往返（批 H **不改**令牌格式、不改版本号——一次点头办 N 件的机器已在位）",
+      isinstance(_pay, dict) and _pay.get("v") == confirm._VERSION
+      and _pay.get("specs") == _grant_specs, str(_pay)[:80])
+_opts = A.confirm_opts(len(_grant_specs))
+check("卡面 N+1 枚按钮：全部办 + 逐条「只办第 i 件」+ 取消",
+      [o["value"] for o in _opts] == ["yes", "pick:0", "pick:1", "no"],
+      str([o["value"] for o in _opts]))
+check("  「全部办」写着件数（主人点之前看得见自己要同意几件）",
+      f"{len(_grant_specs)} 件" in _opts[0]["label"])
+for _i in (0, 1):
+    _narrowed, _err = confirm.narrow(_pay, _opts[_i + 1]["value"])
+    check(f"  按钮「{_opts[_i + 1]['label']}」⇒ 恰好裁到签名清单里那一件",
+          _err == "" and (_narrowed or {}).get("specs") == [_grant_specs[_i]],
+          f"{_err} {str(_narrowed)[:60]}")
+check("问句里点名的按钮与卡面按钮同一套字面（不一致 = 问句指着一个不存在的按钮）",
+      all(o["label"].startswith("只办第") for o in _opts[1:-1])
+      and "只办第" in A.render_confirm_question(_grant_specs)
+      and "全部办" in A.render_confirm_question(_grant_specs))
+check("  多件问句里**逐条编号**（编号就是按钮指的那个下标）",
+      "1. " in A.render_action_lines(_grant_specs)
+      and "2. " in A.render_action_lines(_grant_specs))
+for _bad_pick in ("pick:9", "pick:99", "2", "pick:-1", "pick:", "全部"):
+    _n2, _e2 = confirm.narrow(_pay, _bad_pick)
+    check(f"  读不懂/越界的选择「{_bad_pick}」⇒ 空 + 原因（fail-closed，绝不放大成全部办）",
+          _n2 is None and bool(_e2), _e2)
+_n3, _e3 = confirm.narrow(_pay, "")
+check("  空选择 = 全部办（旧客户端不发 confirm_pick 时逐字兼容）",
+      _n3 is not None and len(_n3["specs"]) == 2 and _e3 == "")
+check("  单件仍是旧的两枚（确定/取消），字面一个字节没动",
+      [o["label"] for o in A.confirm_opts(1)] == ["确定", "取消"]
+      and A.render_confirm_question(_grant_specs[:1]).endswith("点「确定」我就去办。"))
+settings.jwt_secret = _SAVED_SECRET
+
+print("\n  · 跨语言守卫：Rust 那半得真的接上（本机父仓在兄弟目录，找不到会响亮跳过）")
+_rs = _parent_repo.read(
+    "src/routes/chat.rs",
+    why="「只办其中一件」的凭据是 `confirm_pick` 纯透传 —— Rust 那半若不转发它，"
+        "前端点了「只办第 1 件」到服务端就退化成「全部办」（一次挑一件变成整批执行）")
+if _rs is not None:
+    check("Rust 有 `confirm_pick` 透传字段（不验签、不落库）",
+          re.search(r"pub confirm_pick:\s*Option<String>", _rs) is not None)
+    check("  且真的进了转发 body（键名与 Python 侧逐字一致）",
+          '"confirm_pick":' in _rs or '"confirm_pick" :' in _rs)
+    check("「上一轮执行过哪些工具」（结构化事实）也在 body 里",
+          "recent_tools" in _rs and '"recent_tools"' in _rs)
+    check("  jti 认领仍是**单条** UPDATE（不改幂等语义：N 件共用一枚令牌，"
+          "重放判据仍是那一条 CAS）",
+          "ClaimedAt" in _rs and "rows_affected == 1" in _rs)
+# 前端那一半（取消判据只有 `'no'` / 挑选值进隐藏请求 / 重建时不写死两枚）**不在这里**：
+# `frontend/public/live2d-widgets/chat-stream.js` 落在 CI 稀疏锥（`src/routes`）之外，
+# `_parent_repo.read` 在 CI 里会红（这正是 `test_ci_suite_list.py` ⑦ 判据的作用）。
+# 它由父仓自己的 `frontend/tests/confirm-pick.test.mjs` 锁（`npm test`，源码级扫法）。
+# **两侧都要跑**：Python 侧判"协议字段接得上"，前端侧判"点击语义没被旧判据吞掉"。
 
 print()
 if FAILED:
