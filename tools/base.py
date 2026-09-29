@@ -3847,6 +3847,19 @@ def _user_directory(config: RunnableConfig) -> dict[int, dict] | ToolResult:
     的情况下都必须零写，原样往外传一个带人话的 ToolResult 比 `None` 更好用
     （`_tag_index` 那套 `None` 是给"读不到也要出报表"的只读场景用的）。
     """
+    # ⚠️ 传进来的**必须是 config**（20260930 加的响亮失败）。本函数的调用方里有一族
+    #    `_find_*(name, config, index=…)` 的形状——"读好的快照"是**第三个**参数。一旦
+    #    有人把快照当 config 传进来，下面读出的是 uid=0，函数会回一句「无法获取当前
+    #    用户身份」，而**身份其实好着**：那是一句假话，调用方还会照着它零写收场，谁也
+    #    看不出哪里错了。生产实证：额度批准/驳回整条通道自 4cb1f93（20260930）起一次都
+    #    没成功过，而离线套件全绿——桩写成 `lambda config: …`，把参数整个忽略了。
+    #    所以这里不猜、也不返回一句含糊的"读不到"：形状不对直接抛，让错误以
+    #    `__ERROR__: TypeError` 进 trace —— **这是编程错误，不是一次业务失败**。
+    if not isinstance(config, dict) or "configurable" not in config:
+        raise TypeError(
+            f"_user_directory 收到的东西不是 config（{type(config).__name__}）——"
+            f"调用方很可能把名录快照或别的 dict 当 config 传了；快照是第三个形参 "
+            f"`index=`（见 _find_named_user / _find_user_by_id 的签名）")
     uid = _device_get_user_id(config)
     if uid <= 0:
         return unavailable("无法获取当前用户身份，后台账号列表不可用")
@@ -4398,7 +4411,13 @@ def _review_quota_request(user_id, approved: bool, reason, config: RunnableConfi
     if isinstance(before_index, ToolResult):
         return _pre_read_fail(before_index, "后台账号名录")
     # ② 解析：uid 必须在名录里（不在 ⇒ not_found，零写——选错就是批了**另一个活人**）。
-    row, err = _find_user_by_id(user_id, before_index)
+    # ⚠️ `index=` 必须写成关键字（同一行曾写成 `_find_user_by_id(user_id, before_index)`，
+    # 于是名录快照落进了 `config` 形参、`index` 仍是 None ⇒ 该函数自己拿快照去当
+    # config 再读一次名录 ⇒ 读到 uid=0 ⇒ 回一句「无法获取当前用户身份」（**假话**：
+    # 身份好着，是调用姿势错了）⇒ 批准/驳回整条通道自 4cb1f93 起一次都没成功过。
+    # 定义处的三件同族（`_find_named_user` / `_find_named_tag` / `_find_board_comment_by_id`）
+    # 都是这个形状，调用方一律写 `index=`）。
+    row, err = _find_user_by_id(user_id, config, index=before_index)
     if err:
         return not_found(err)
     target_id = int(row.get("id"))
