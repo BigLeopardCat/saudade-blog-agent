@@ -83,6 +83,7 @@ from agent import sections
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _doc_anchors, _frame_texts, _has_frames,
                            _last_assistant_utterance, _last_user_msg,
+                           _ledger_frame_wanted,
                            _msg_text, _page_ctx, _prev_user_msg, _receipts_text,
                            _recent_tail, _short_reply_hint, _short_reply_kind,
                            with_tool_call_pairs)
@@ -646,6 +647,11 @@ _PLANNER_PROMPT = """\
 承接的上一轮泠月发言与判定方向；不是短应答则为缺省语）：
 {short_reply_hint}
 
+待办台账（**系统现场读的后台队列**：留言审核队列与额度申请队列里"等着主人点头"的
+那几件，逐条带 id。它是**事实**，不是纪律——办不办、办哪几件、办成哪一种由你决定；
+这一轮没去读它时这里是缺省语）：
+{pending_ledger}
+
 {tool_results}
 
 本轮已执行工具的**可引用字段**（参数引用的取值来源，见规则 3b——字段名照抄，
@@ -704,6 +710,7 @@ _PLANNER_OUTPUT_CONTRACT_NATIVE = """\
 def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
                            user_msg: str, intent_hints: str, doc_anchors: str,
                            recent_context: str, short_reply_hint: str, tool_results: str,
+                           pending_ledger: str,
                            ref_hints: str, reflector_feedback: str, correction: str,
                            contract: str, slim_skills: bool = False) -> str:
     """渲染 planner 提示词（纯函数）。**唯一入口**：主路与影子档都走它。
@@ -730,6 +737,7 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
         doc_anchors=doc_anchors,
         recent_context=recent_context,
         short_reply_hint=short_reply_hint,
+        pending_ledger=pending_ledger,
         tool_results=tool_results,
         ref_hints=ref_hints,
         reflector_feedback=reflector_feedback,
@@ -3327,6 +3335,18 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     auth_facts, auth_plan, auth_forced = _auth_review_path(
         user_msg, _last_assistant_utterance(state["messages"]),
         _principal_of(config), config)
+    # 待办台账帧（批 H · S1）：把"等着主人点头的那几件"按 id 摆上桌——**事实归系统、
+    # 决策归模型**。触发器在 `_ledger_families_due` 里（族名命中 / 授权式全选式 /
+    # 上一轮真读过那份队列），都不命中就一次都不读。每一轮都重读（而不是只在首轮算
+    # 一次）：它同时是写保护的现场依据，几秒钟的偏差比"拿到一份过期台账"便宜。
+    ledger_frame, ledger_meta = _pending_ledger_frame(
+        user_msg, _last_assistant_utterance(state["messages"]),
+        principal, config)
+    if rounds == 0 and ledger_frame:
+        # **可核验性**：trace 不保存 planner 的输入消息（只记首轮的 `planner.context`，
+        # 而那一格各字段都是截断的），没有这条事件，"台账到底进没进帧"在生产上没法
+        # 复核——20260929 那两轮正是靠"facts 出现过没有"这种间接证据反推的。
+        record("planner", "ledger_frame", **ledger_meta)
     if rounds == 0:
         # 注入上下文留痕（20260919 D）：本轮 planner 实际看到的 page_ctx /
         # 节选 / 锚点清单落 trace——此前 trace 里没有这些，复盘"agent 到底看到
@@ -3487,9 +3507,13 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 # 短应答提示只在首轮（rounds==0）给：第二轮起本轮已有工具帧，短应答
                 # 的语义已由第一轮的规划兑现，再念一遍"把提议那件事规划出来"只会
                 # 诱导重复规划（同一件事已经执行过一次了）。
-                short_reply_hint=(_short_reply_hint(state["messages"], auth_facts)
+                short_reply_hint=(_short_reply_hint(state["messages"])
                                   if rounds == 0
                                   else "（非首轮决策：短应答语义已在上轮兑现）"),
+                # 台账**每一轮都给**（见上面那段计算）：它是系统事实，不该只在首轮
+                # 出现——第二轮起模型往往正在决定"先读哪些再动手"，那一轮少了台账
+                # 就只能凭记忆，等于把已经拿到手的事实又收回去。
+                pending_ledger=ledger_frame or "（本轮没有去读待办台账）",
                 tool_results=frames_txt,
                 # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
                 # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
@@ -6217,27 +6241,30 @@ def _verdict_from_proposal(text: str) -> str:
 
 
 def _render_pending_facts(pending: list) -> str:
-    """待审候选的**系统事实**块（注入 planner；也用于 0 条时的如实告知）。
+    """待审留言的**系统事实**行（进待办台账帧；也用于 0 条时的如实告知）。
 
-    候选连**作者与原文节选**一起给（≤5 条）：留言没有标题，主人要认的就是那句话
-    本身，而这些字是访客可控文本 ⇒ 一律经 `_board_label`/`_board_excerpt` 消毒
-    （拆命令前缀，同问句/回执行的既有口径）。
+    候选连**作者与原文节选**一起给（≤5 条）：留言没有标题，要认的就是那句话本身，
+    而这些字是访客可控文本 ⇒ 一律经 `_board_label`/`_board_excerpt` 消毒（拆命令
+    前缀，同问句/回执行的既有口径）。`_board_label` 印的是 `talkId:<id>`——**目标
+    就靠它**（写通道收的是这个 id，见 `tools/base.py` 的 id 通道）。
+
+    **本函数只给事实，不给纪律**（20260929 批 H）：旧版末尾挂着「授权式 = 主人没有
+    点目标 ⇒ 目标只能从这份台账里定……**读到本块 = 系统这一轮没能拼出那张卡**，
+    那就把候选列给主人请他点名，一条都不要写成已办（本轮零写）」。那段话是**旧
+    确定性快道的产物**——台账只在快道拼卡时读，读到了就说明卡没拼出来 ⇒ 本轮零写。
+    台账改成每轮如实摆上桌之后，同样一段话会把「你看着办」读成「系统办不成了、
+    你别动」：生产实证 trace 20260929T221832，模型手里有台账、有正确的两条候选，
+    却回了一句 `answer_only`。办不办、办哪几件现在由模型定；系统只在**写之前**
+    校验目标 id（见 `_ledger_target_refusal`）。
     """
     if not pending:
-        return ("系统台账（确定性事实，读自后台留言清单）：**当前没有任何待审留言**"
-                "（approved=0 的为 0 条）——没有『你替我定一条』这回事：如实告诉主人"
-                "现在没有等他复核的留言即可，不要凭空说出一条。")
+        return ("当前**没有任何待审留言**（approved=0 的为 0 条）——没有『你替我定一条』"
+                "这回事：如实告诉主人现在没有等他复核的留言即可，不要凭空说出一条。")
     from tools.base import _board_excerpt, _board_label
     rows = "\n".join(f"　　· {_board_label(r)}「{_board_excerpt(r)}」"
                      for r in pending[:5])
     more = f"\n　　· …还有 {len(pending) - 5} 条未列出" if len(pending) > 5 else ""
-    return (f"系统台账（确定性事实，读自后台留言清单，不是模型回忆）：当前**待审**留言"
-            f"共 {len(pending)} 条：\n{rows}{more}\n"
-            f"授权式 = 主人没有点目标 ⇒ 目标只能从这份台账里定：恰好 1 条就办那一条"
-            f"（写操作照常弹确认框给主人签字）；≥2 条由系统把候选**列全在一张确认卡**上"
-            f"请主人挑（他点头即逐条办）。**读到本块 = 系统这一轮没能拼出那张卡**"
-            f"（判决读不出 / 超上限 / 队列读不到）：那就把上面的候选连作者原文一起列给"
-            f"主人请他点名，绝不替他挑，**一条都不要写成已办**（本轮零写）。")
+    return f"当前**待审**（approved=0）的留言共 {len(pending)} 条：\n{rows}{more}"
 
 
 def _quota_reason_excerpt(row: dict) -> str:
@@ -6253,25 +6280,136 @@ def _quota_reason_excerpt(row: dict) -> str:
 
 
 def _render_quota_facts(quota: list) -> str:
-    """额度待处理申请的**系统事实**块（与留言那份同源同纪律，读自后台申请队列）。
+    """额度待处理申请的**系统事实**行（与留言那份同源同纪律，读自后台申请队列）。
 
-    只印**申请人账号 + 他写的理由**（理由是他自己的诉求原文，经上面那条消毒口径
-    截断）。额度申请行没有标题、没有别的可认的东西——主人要认的就是"谁在要额度、
-    他为什么要"，而这两样都只有这一份实时队列给得出。
+    只印**申请人账号 + 账号 id + 他写的理由**（理由是他自己的诉求原文，经上面那条
+    消毒口径截断）。额度申请行没有标题、没有别的可认的东西——要认的就是"谁在要额度、
+    他为什么要"，而这两样都只有这一份实时队列给得出。`账号 id=` 就是写通道收的目标
+    （`rid` 那种内部行 id 由系统自己取，模型不需要知道）。
+
+    末尾那句"驳回必须给一句理由、理由不许自己编"是**真的契约**（理由会原样发给
+    申请人），留下来；旧版后面那句「如实把这份清单报给主人、请他给一句理由或直接
+    点名」是旧快道"把活推回主人"的形状，随 S3 一并删。
     """
     if not quota:
-        return ("\n系统台账（同一来源）：对话额度重置申请**当前没有待处理的**"
-                "（status=pending 为 0 条）——如实告诉主人现在没有等他处理的额度申请，"
-                "不要凭空说出一份。")
+        return ("对话额度重置申请**当前没有待处理的**（status=pending 为 0 条）——如实"
+                "告诉主人现在没有等他处理的额度申请，不要凭空说出一份。")
     rows = "\n".join(
         f"　　· {str(r.get('username') or '（账号已不存在）')}"
         f"（账号 id={r.get('userId')}，他写的理由：「{_quota_reason_excerpt(r) or '（没有填写理由）'}」）"
         for r in quota[:5])
     more = f"\n　　· …还有 {len(quota) - 5} 件未列出" if len(quota) > 5 else ""
-    return (f"\n系统台账（确定性事实，读自后台额度申请队列，不是模型回忆）：当前**待处理**的"
-            f"额度重置申请共 {len(quota)} 件：\n{rows}{more}\n"
-            f"驳回额度申请**必须给一句理由**（会原样发给申请人）——主人的授权语里没有"
-            f"理由时**不要自己编**，如实把这份清单报给主人、请他给一句理由或直接点名。")
+    return (f"当前**待处理**（status=pending）的额度重置申请共 {len(quota)} 件：\n{rows}{more}\n"
+            f"驳回额度申请**必须给一句理由**（会原样发给申请人）——主人没说理由时"
+            f"**不要自己编**：那几条就如实告诉他「要驳得您给一句理由」。")
+
+
+def _read_ledger_family(family: str, config) -> tuple[list, bool]:
+    """读某一族的待办行 → `(行列表, readable)`；`readable=False` = **读不到**。
+
+    读不到 ≠ 没有（同 `_board_index` / `_tag_index` 那条纪律）：读失败一律返回
+    `([], False)`，调用方据此写"没读到、不确定有几条"，**绝不许**写成"没有"——
+    主人正等着处理两件事时，"没有"是最坏的一句假话。
+    """
+    try:
+        if family == "board":
+            from tools.base import _board_index
+            index = _board_index(config)
+            if index is None:
+                return [], False
+            rows = [r for r in index.values() if r.get("approved") == 0]
+            rows.sort(key=lambda r: int(r.get("talkKey") or 0))
+            return rows, True
+        from tools.base import _quota_pending_index
+        pending = _quota_pending_index(config)
+        if not isinstance(pending, dict):
+            # `ToolResult`（含人话的原因）= 读不到，**不是**"没有申请"。
+            return [], False
+        return sorted(pending.values(), key=lambda r: int(r.get("userId") or 0)), True
+    except Exception as e:  # noqa: BLE001 —— 台账读失败绝不许炸整轮规划
+        logger.warning("[planner] 待办台账帧：读 %s 队列异常（按「没读到」处理）：%s",
+                       family, e)
+        return [], False
+
+
+def _ledger_families_due(user_msg: str, prev_ai: str, config) -> dict:
+    """这一轮要把哪几族的**待办台账**摆上桌（`{"board": bool, "quota": bool}`）。
+
+    三条来源，取或：
+      · 主人这句话或上一轮泠月那句里提到了这一族（`_REVIEW_INTENT_RE` / `_QUOTA_INTENT_RE`）
+        ——这两个正则自此**只做帧触发器**，不再替模型读结论（旧确定性快道已删）；
+      · 这句话是**授权式/全选式**（`_ledger_frame_wanted`：`你看着办`/`全都要`/`全部批准`）
+        ⇒ **两族都摆**——这类话里目标根本没出现，"有什么正等着办"是系统必须给的事实；
+      · 上一轮**真的读过**这份队列（`_QUEUE_READ_TOOLS` ∩ `recent_tools`）。
+    都不命中 ⇒ 该族一次都不读（"不提也不读的族不读队列"的零额外网络开销纪律照旧）。
+    """
+    touched = {_QUEUE_READ_TOOLS[t] for t in _recent_tools_of(config)
+               if t in _QUEUE_READ_TOOLS}
+    prev = prev_ai or ""
+    msg = user_msg or ""
+    bulk = _ledger_frame_wanted(msg)
+    return {
+        "board": (bulk or bool(_REVIEW_INTENT_RE.search(msg))
+                  or bool(_REVIEW_INTENT_RE.search(prev)) or "board" in touched),
+        "quota": (bulk or bool(_QUOTA_INTENT_RE.search(msg))
+                  or bool(_QUOTA_INTENT_RE.search(prev)) or "quota" in touched),
+    }
+
+
+def _pending_ledger_frame(user_msg: str, prev_ai: str, principal, config
+                          ) -> tuple[str, dict]:
+    """待办台账帧：把"等着主人点头的那几件"**按 id** 摆上桌（批 H · S1）。
+
+    返回 `(进 {pending_ledger} 槽的文本, trace 元数据)`；不该摆时 `("", {})`。
+
+    这一段只给**事实**——哪几条在等、各是什么、id 是多少。它**一条结论都不读、
+    一个目标都不挑**：办不办、办哪几件、办成哪一种全归模型（旧快道正是"系统替模型
+    读结论"那一族，已删）。系统只剩三件事：给事实（本函数）、人闸（弹卡）、
+    写保护（`_ledger_target_refusal`）。
+
+    权限**按族各判各的**（复用 authz 现成的表，不另立规则）：主人自己都不能复核
+    留言 / 不能处理额度申请时，读那份队列只会白拿一次 403。
+    """
+    due = _ledger_families_due(user_msg, prev_ai, config)
+    if due["board"] and not authz.check(principal, "audit_board_comment").allowed:
+        due["board"] = False
+    if due["quota"] and not authz.check(principal, "approve_quota_request").allowed:
+        due["quota"] = False
+    if not (due["board"] or due["quota"]):
+        return "", {}
+
+    blocks: list[str] = []
+    meta = {"board": 0, "quota": 0, "ids": [], "unread": []}
+    if due["board"]:
+        rows, readable = _read_ledger_family("board", config)
+        if readable:
+            meta["board"] = len(rows)
+            meta["ids"] += [f"talkId:{r.get('talkKey')}" for r in rows]
+            blocks.append(_render_pending_facts(rows))
+        else:
+            meta["unread"].append("board")
+            blocks.append("留言审核队列**这一次没读到**（后台接口没返回）——不确定还有"
+                          "几条等着复核：如实告诉主人「没读到、不确定」，**不要**说成"
+                          "「没有待审」")
+    if due["quota"]:
+        rows, readable = _read_ledger_family("quota", config)
+        if readable:
+            meta["quota"] = len(rows)
+            meta["ids"] += [f"userId:{r.get('userId')}" for r in rows]
+            blocks.append(_render_quota_facts(rows))
+        else:
+            meta["unread"].append("quota")
+            blocks.append("额度重置申请队列**这一次没读到**（后台接口没返回）——不确定"
+                          "还有几件：如实告诉主人「没读到、不确定」，**不要**说成「没有申请」")
+    header = ("系统台账（确定性事实：系统现读的后台队列，不是模型回忆）。下面这几件是"
+              "**当前真的在等主人点头**的事——**只有主人这句话真的指向它们时才办**；"
+              "与他这句话无关的一轮里，这一块只是背景，不要拿它去凑一句话。\n"
+              "办哪几件、办成哪一种**由你定**；目标一律填台账里的 **id**"
+              "（`talkId:` 是留言、`账号 id=` 是额度申请人），**不要**用原话片段或账号名"
+              "代替 id——系统会拿现场台账校验你填的 id。\n")
+    text = header + "\n".join(blocks)
+    meta["chars"] = len(text)
+    return text, meta
 
 
 def _forced_review_note(forced: dict) -> str:

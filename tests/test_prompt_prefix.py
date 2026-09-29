@@ -51,6 +51,7 @@ def lcp(a: str, b: str) -> int:
 _VOLA = dict(page_ctx="页面A：/article/7（特效 sakura 开着）", round_info="当前决策：第 1/4 轮。",
              intent_hints="本句动作意图：开特效（未完成）", doc_anchors="已点名文档：19《架构文档》",
              recent_context="泠月：好呀～", short_reply_hint="这是短应答，承接上一轮的提议",
+             pending_ledger="台账帧：talkId:101 访客（2026-09-29 22:10）「画板我已经回退掉了。」",
              tool_results="（本轮尚无工具执行）", ref_hints="search_notes: noteKey/title",
              reflector_feedback="（本决策轮无复盘建议）", correction="（本决策轮无纠偏提示）")
 _VOLB = {k: v.replace("A", "B").replace("1", "2").replace("7", "8").replace("19", "46")
