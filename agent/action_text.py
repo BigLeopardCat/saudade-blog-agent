@@ -495,7 +495,7 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         # 主动重置与他有没有申请过无关（技能描述里那条差别在台账行上也要看得出来）。
         said = {"approve_quota_request": f"批准账号「{acct}」的额度重置申请",
                 "reject_quota_request": f"驳回账号「{acct}」的额度重置申请",
-                "reset_user_quota": f"把账号「{acct}」的对话额度清零"}[name]
+                "reset_user_quota": f"把账号「{acct}」的对话额度恢复满额"}[name]
         unsaid = {"approve_quota_request": "批准额度重置申请",
                   "reject_quota_request": "驳回额度重置申请",
                   "reset_user_quota": "重置账号的对话额度"}[name]
