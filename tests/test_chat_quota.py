@@ -139,6 +139,31 @@ def _seq(*values):
     return gen
 
 
+def _stub(value, name):
+    """把一个常量/生成器包成读桩，**并自检入参**（20260930 加的，理由见下）。
+
+    桩过去写作 `lambda config: users`——**把参数整个忽略**。于是"调用方把读好的快照
+    当 config 传进 `_user_directory`"这唯一一种姿势错误，在桩眼里与正确姿势长得一模
+    一样：桩照样返回名录、断言全绿，而生产上那条通道会回一句**假话**「无法获取当前
+    用户身份」（身份其实好着）。生产实证：额度批准/驳回整条通道自 `4cb1f93` 起从未
+    成功过一次，离线套件 64/64 全绿——**桩的宽容就是那次漏网的唯一原因**。
+
+    自检之后这种错误在 CI 当场变红：`_user_directory` / `_quota_pending_index` 的
+    第一个形参只能是 config（"读好的快照"是第三个参数 `index=`），而 config 一定带
+    `configurable`（langchain 的 `ensure_config` 保证），名录快照一定不带。
+    """
+    fn = value if callable(value) else (lambda config: value)
+
+    def stub(config):
+        if not isinstance(config, dict) or "configurable" not in config:
+            raise AssertionError(
+                f"{name} 收到的不是 config（{type(config).__name__}: {str(config)[:60]}）"
+                f"——调用方很可能把快照当 config 传了，快照是第三个形参 `index=`")
+        return fn(config)
+
+    return stub
+
+
 def run_tool(tool, args, *, users=DIRD, pending=None, resp=None, status=200, exc=None,
              users_seq=None):
     """跑一次额度工具：名录与待处理队列走桩，POST 走 `_Client`。
@@ -149,9 +174,8 @@ def run_tool(tool, args, *, users=DIRD, pending=None, resp=None, status=200, exc
     """
     body = {"code": 200, "data": "已受理"} if resp is None else resp
     cli = _Client(post=_Resp(status, body), exc=exc)
-    u = users_seq if users_seq is not None else (
-        users if callable(users) else (lambda config: users))
-    p = pending if callable(pending) else (lambda config: ({} if pending is None else pending))
+    u = _stub(users_seq if users_seq is not None else users, "_user_directory")
+    p = _stub({} if pending is None else pending, "_quota_pending_index")
     with patch(_user_directory=u, _quota_pending_index=p):
         saved = base._client
         base._client = cli
@@ -765,9 +789,9 @@ def _run_exec(msg, spec, skill, grant=None, users=DIRD, pending=None):
              "messages": [HumanMessage(content=msg)]}
     if grant:
         state["confirm_grant"] = grant
-    u = users if callable(users) else (lambda config: users)
-    p = pending if callable(pending) else (lambda config: ({} if pending is None else pending))
-    with patch(_tag_index=lambda config: {}, _user_directory=u, _quota_pending_index=p):
+    u = _stub(users, "_user_directory")
+    p = _stub({} if pending is None else pending, "_quota_pending_index")
+    with patch(_tag_index=_stub({}, "_tag_index"), _user_directory=u, _quota_pending_index=p):
         return execute_node(state, cfg())
 
 
@@ -909,6 +933,45 @@ if _rust_quota and _rust_temp:
           "第三句的来源与注释不符")
     check("目标类那句 `用户不存在` 在账号族里（⇒ `not_found`：换账号 / 问主人，不是重试）",
           "用户不存在" in _rust_temp, "src/routes/temp_user.rs 未见该措辞")
+
+# ══════════════════════════════════════════════════════════════════
+# ⑬ "把快照当 config 传"这一类错必须响亮（20260930 生产事故的锁）
+#
+# 事故形状：`_find_user_by_id` 的签名是 `(user_id, config, index=None)`，而调用方
+# 写成了 `_find_user_by_id(user_id, before_index)`——快照落进 `config` 形参、`index`
+# 仍是 None ⇒ 函数自己拿快照当 config 去重读名录 ⇒ uid=0 ⇒ 回一句
+# **「无法获取当前用户身份，后台账号列表不可用」，而身份其实好着**（一句假话），
+# 调用方照着它零写收场。净效果：额度批准/驳回整条通道自 `4cb1f93` 起一次都没成功过，
+# 而离线套件 64/64 全绿——**桩写成 `lambda config: …`，把参数整个忽略了**。
+#
+# 这一节锁两件事，缺一条就复现原样：① 调用姿势错 ⇒ **抛**（不是回一句像业务失败的话）；
+# ② 桩自己认得出这个姿势错 ⇒ 谁把桩改回 `lambda config: …` 也当场变红。
+_SNAP = {126: {"id": 126, "username": "Alice"}}          # 名录快照的形状
+try:
+    base._user_directory(_SNAP)
+    check("⭐ 快照当 config 传 ⇒ **抛 TypeError**（不是回一句含糊的「读不到」）",
+          False, "没抛——这句「无法获取当前用户身份」是假话，调用方会照它零写收场")
+except TypeError as exc:
+    check("⭐ 快照当 config 传 ⇒ **抛 TypeError**（不是回一句含糊的「读不到」）",
+          "index=" in str(exc), str(exc)[:110])
+except Exception as exc:  # noqa: BLE001
+    check("⭐ 快照当 config 传 ⇒ **抛 TypeError**（不是回一句含糊的「读不到」）",
+          False, f"抛的是 {type(exc).__name__}：{exc}")
+
+# 对照组：config 形状对、但 uid=0（**真的**没身份）⇒ 照旧如实回一句，
+# 不许因为"uid=0 曾是一次 bug 的症状"就把它也弄成异常——那样匿名轮会崩。
+_r0 = base._user_directory({"configurable": {"user_id": 0}})
+check("  对照组：形状对但 uid=0 ⇒ 照旧**如实**回 unavailable（不许也改成抛）",
+      isinstance(_r0, base.ToolResult) and _r0.kind == "unavailable"
+      and "无法获取当前用户身份" in str(_r0), repr(_r0)[:80])
+
+try:
+    _stub(_SNAP, "_user_directory")(_SNAP)
+    check("⭐ 读桩自检：喂给桩的东西不是 config ⇒ AssertionError（桩不再是哑巴）",
+          False, "桩把快照照单全收——这就是那次能全绿的原因")
+except AssertionError as exc:
+    check("⭐ 读桩自检：喂给桩的东西不是 config ⇒ AssertionError（桩不再是哑巴）",
+          "index=" in str(exc), str(exc)[:110])
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
