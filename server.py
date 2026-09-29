@@ -1817,7 +1817,43 @@ async def graph_query(req: GraphQueryRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "agent_ready": _agent is not None}
+    """存活探针 + **这一进程实际在跑的档位**（20260929 补 dials）。
+
+    为什么要多这一块：`/health` 此前只回 `agent_ready`，于是"线上到底跑的哪一档"
+    这件事**只能靠读 `.env` 去推**。而这个仓库吃过两次亏，形状一模一样——
+      · 20260927 那次 provider 中断：`.env` 里换 key/端点之后**新键四个端点一律 401**，
+        而 `/health` 照旧 `agent_ready: true`、一开口就错（故障与探针之间没有交集）；
+      · `agent_task_state` 这类开关：判据（离线套件）跑的是**钉住的够档**，而线上读的是
+        `.env`；「能力有测试 ≠ 接线有测试」——接线有测试也 ≠ **这个进程真的加载了它**。
+    这两件事的解药是同一个：把**这个进程的内存取值**暴露出来，而不是让下一个人去读文件
+    再假设它被加载了。所以这块是**回显本进程的 settings**，不是重新解析 `.env`。
+
+    只回**档位名**（引擎/模型名/布尔），**绝不回任何 key、URL 或密钥**——本端口只绑
+    127.0.0.1（见文件末尾 uvicorn.run），nginx 也不反代它，故不构成对外信息面。
+    `scripts/healthcheck.sh` 按 `"agent_ready":true` 子串判活，多这几个键不影响它。
+    """
+    from config.settings import settings
+    # 模型名走**派生属性**（已按 provider 解析过），但**不许让认不出的 provider 把本接口
+    # 打成 500**：/health 是存活权威（心跳探针每分钟读它、部署落地后的存活探测也读它），
+    # 一个 `LLM_PROVIDER` 的拼写错误会让探针报"agent 挂了"——那是**指错方向**的告警
+    # （真故障是配置写错，不是进程死了）。所以这里降级成一句自证的字符串，照旧 200。
+    # 余下几项是普通字段，取不到就是空串/False（同 fail-open 取向）。
+    try:
+        _model = settings.active_llm_model
+    except Exception:                               # noqa: BLE001
+        _model = f"<认不出 provider={getattr(settings, 'llm_provider', '')!r}>"
+    return {
+        "status": "ok",
+        "agent_ready": _agent is not None,
+        # 这一进程真正生效的档位（回的是**内存里的取值**，不是 env 原文）。
+        "dials": {
+            "planner_engine": getattr(settings, "planner_engine", ""),
+            "planner_native_thinking": bool(getattr(settings, "planner_native_thinking", False)),
+            "agent_task_state": bool(getattr(settings, "agent_task_state", False)),
+            "llm_provider": getattr(settings, "llm_provider", ""),
+            "llm_model": _model,
+        },
+    }
 
 
 if __name__ == "__main__":
