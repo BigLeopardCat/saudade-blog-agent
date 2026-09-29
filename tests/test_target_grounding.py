@@ -13,7 +13,7 @@ planner 填 `name="删掉吧"`——它**恰是这句话的子串**，于是"值
 出处**。这样"标签就叫「删掉吧」"自然正确（主人加了引号 ⇒ 引号段就是那个字面），
 不需要任何"像不像动作短语"的词表分类。
 
-覆盖五块：
+覆盖七块：
   ① 三个抽取器各自取得到什么（正例）；
   ② 真 planner 采样值的校正（20260924 三条现场 + move 族的父子错位）；
   ③ 门本身（`_target_grounding_refusal`）：该拒的拒、话术不越界、五条早退；
@@ -23,6 +23,9 @@ planner 填 `name="删掉吧"`——它**恰是这句话的子串**，于是"值
      `_GENERIC_NAME_WORDS` / `_TARGET_ACTION_MARKS`——防止有人把补丁式的词表加回来）。
   ⑥ **值**通道的指代（20260927）：命名标记后面跟的是代词时不算名字，来源态判据也不
      认它——代词是原话的子串，那条逐字子串的地基对它本来是失效的（现场重放见下）。
+  ⑦ 待办族"引用式唯一命中"的**来源**（20260929 批 G）：候选只来自主人**没加引号**的
+     原话（引号里那一段归引号通道），且**没有第二个来源**（签名里没有 planner 的值）；
+     行为面（唯一命中才校正、0/多即零写）在 `test_todo_schedule.py` ⑰b 用真门跑。
 
 **令牌层的不变量**（弹卡印出来的那个名字可溯源）在**产物层**锁：需要两轮跑法把
 `__CONFIRM__:` 帧里的令牌载荷带回来（`run_case` 的 `confirm_payloads`），随确认轮
@@ -265,6 +268,35 @@ check("两端同源（AST 级：抽取器与判据都得认这一族，改一端
       f"{sorted(_names_in(_value_clean))} / {sorted(_names_in(_grounded_value))}")
 check("这一族是**封闭类**（穷举得完：短词表，不是词形族的开放扩张）",
       len(_DEICTIC_WORDS) <= 40 and all(len(w) <= 3 for w in _DEICTIC_WORDS))
+
+print("\n⑦ 待办的引用式唯一命中（20260929 批 G）：候选只来自主人**没加引号**的原话")
+# P2 那一支（`_write_target_refusal` 的 `is_todo` 格）把"主人在原话里唯一指向台账一行"
+# 当作候选来源。与 ①–⑥ 是同一个题材：**是主人的字才算数**。行为面（唯一命中 ⇒ 校正成
+# 台账原文；0 行 / ≥2 行 ⇒ 零写）在 `test_todo_schedule.py` ⑰b 用三道真门跑；这一节钉的
+# 是"来源"本身——纯函数、无夹具、无网络。
+_ROWS = [{"text": "更新简历（国庆后）"}, {"text": "买猫粮"}, {"text": "菜"}]
+check("没加引号的指称 ⇒ 命中那一行（主人说「简历那条」，台账行里含「简历」）",
+      [r["text"] for r in g._todo_reference_rows(_ROWS, "把简历那条挪到 10 月 8 号")]
+      == ["更新简历（国庆后）"])
+check("★ 同一批字放进引号 ⇒ **不**命中（引号里那一段归引号通道，20260927 的纪律）",
+      g._todo_reference_rows(_ROWS, "把「简历」那条挪到 10 月 8 号") == [])
+check("  抹掉空白后仍判得动（主人/模型转写常带空格）",
+      [r["text"] for r in g._todo_reference_rows(_ROWS, "把 简历 那条挪到 10 月 8 号")]
+      == ["更新简历（国庆后）"])
+check("一行都指向不到 ⇒ 空（调用方按「查无此条」如实拒绝，不替主人挑）",
+      g._todo_reference_rows(_ROWS, "把那条挪到 10 月 8 号") == [])
+check("多行被引用 ⇒ **全部**返回（歧义交给调用方拒绝，这里不做「挑一条」这件事）",
+      [r["text"] for r in g._todo_reference_rows(
+          [{"text": "更新简历"}, {"text": "简历附件"}], "把简历那条挪一下")]
+      == ["更新简历", "简历附件"])
+check("只有**一个字**的正文永远不入选（凑不出 2-gram ⇒ 一个字没有指认力）",
+      g._todo_reference_rows(_ROWS, "把菜那条挪一下") == [])
+check("★ 没有第二个来源：判据只看主人原话（签名里没有 planner 填的那个值）",
+      list(inspect.signature(g._todo_reference_rows).parameters) == ["rows", "user_msg"],
+      str(list(inspect.signature(g._todo_reference_rows).parameters)))
+check("  去掉引号段 ≠ 去掉标点（只摘引号里那一段，别的字一个不动）",
+      g._msg_without_quotes("把「简历」那条挪到 10 月 8 号").replace(" ", "")
+      == "把那条挪到10月8号")
 
 print()
 if FAILED:

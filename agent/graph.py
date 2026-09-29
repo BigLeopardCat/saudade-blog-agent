@@ -5719,6 +5719,56 @@ def _find_todo_row(want: str, rows) -> tuple[dict | None, str | None]:
     return hits[0], None
 
 
+def _msg_without_quotes(user_msg) -> str:
+    """主人原话去掉**引号段**之后的字（引号里那一段归 `_name_target_fix` 的引号通道管）。"""
+    return _QUOTE_SPAN_RE.sub(" ", str(user_msg or ""))
+
+
+# 引用判定用的片段长度（2-gram；见 `_todo_reference_rows` 的头注）
+_TODO_REF_GRAM = 2
+
+
+def _todo_reference_rows(rows, user_msg) -> list[dict]:
+    """主人**没加引号**的那部分说法，指向台账里的哪几行？（待办族唯一命中的候选来源）
+
+    判据 = 逐 **2-gram** 求包含：把某行正文按相邻两字切片，任一片出现在主人这句话里，
+    该行就算被**引用**。不分词、不查词表——中文里实词的指认力本来就集中在双字片段上
+    （主人说「简历那条」，台账行「更新简历」的「简历」必然出现在这句话里），而这条
+    判据的失效方向是**安全侧**：多行被引用 ⇒ 上层拒绝（不是"认错一行"）。
+
+    **为什么要去掉引号段**：引号里那一段是主人**声明的字面**（「给多肉」），它已经由
+    `_name_target_fix` 的引号通道校正进 spec 了；逐字相等没命中就该如实拒绝——这正是
+    20260927 的定论（待办正文是主人自己写在清单上的自由文本、没有 id，「给多肉」与
+    「给多肉浇水」是两件事，"以它开头"没有指认力）。这一层看的是他**没加引号**的那部分
+    说法（「把简历那条挪到 10 月 8 号」里的"简历"）——那是**指称**，把一句指称落到台账
+    某一行上，本来就是系统该干的活。**加上这一条之后，本层不可能去动引号通道的结论。**
+
+    **不并 planner 填的那个 `want`**（计划里原本有一个"并集"）：`want` 要能进来，前提是
+    它**能由主人这句话取出来**（来源态判据）——那样的 `want` 其字面本来就整段出自这句话，
+    于是它的每一个 2-gram 都是这句话的子串；再要求它是某行正文的子串，那些 2-gram 也就是
+    **那一行**的 2-gram。结论：2-gram 这一路已经把它全覆盖了。并进来只会多一条**永不命中**
+    的通道，而它在唯一还能命中的形状（`want` 只剩一个字）上恰恰是最该拒绝的那种（一个字
+    没有指认力）。所以这里只有一条来源：主人自己的字。
+
+    一个字都没有的正文（或空白）凑不出 2-gram ⇒ 永不入选；一行都不命中 ⇒ 返回空列表
+    （上层按"查无此条"原样拒绝）。**读不到台账**（`rows` 为 None）由调用方先挡住，这里
+    只认列表。
+    """
+    msg = _squash_spaces(_msg_without_quotes(user_msg))
+    rows = rows or []
+    if not msg:
+        return []
+    hits: list[int] = []
+    for i, r in enumerate(rows):
+        text = _squash_spaces(str(r.get("text") or ""))
+        if len(text) < _TODO_REF_GRAM:
+            continue
+        if any(text[j:j + _TODO_REF_GRAM] in msg
+               for j in range(len(text) - _TODO_REF_GRAM + 1)):
+            hits.append(i)
+    return [rows[i] for i in hits]
+
+
 def _write_target_refusal(plan_obj: dict, config, user_msg=None,
                           role: str | None = None) -> tuple[str, str] | None:
     """本轮写操作的目标名字能否唯一落到站内一行？返回 `(工具名, 拒绝说明)` 或 None。
@@ -5734,11 +5784,14 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
     「就那个」再也对不上任何东西。**候选要当系统数据带走**，而带走它的载体是弹卡。
     三条边界（都不许松）：非"截断"形态不校正（见 `_truncation_candidate`）；校正后
     必须用**同一个解析器**再验一次、对不上就退回原来的如实拒绝；留言族不校正
-    （`quote` 是正文片段，"以它开头"没有任何指认力）；**待办族也不校正**（20260927，
-    它的"名字"是主人自己写在清单上的自由文本、没有 id，近失候选在列表上只差一两个字
-    却常常是**另一件事**——把「给多肉浇水」补成「给多肉浇水呀」这种校正帮不到任何忙，
+    （`quote` 是正文片段，"以它开头"没有任何指认力）；**待办族不走这条近失校正**
+    （20260927，它的"名字"是主人自己写在清单上的自由文本、没有 id，近失候选在列表上只差
+    一两个字却常常是**另一件事**——把「给多肉」补成「给多肉浇水」这种校正帮不到任何忙，
     而它要动的是一条真实待办）。待办族查无此条时那句如实说明本身就是下一步动作
     （"照那一行现在的正文说，或先读一遍列表再指"，见 `_find_todo_row`）。
+    ⚠️ 20260929 批 G 给待办族单加了一支**引用式**解析（下面的 `is_todo` 那一格，判据与
+    这条近失校正是两回事：候选只来自**主人没加引号的原话**、且必须唯一命中）。**上面那句
+    "待办族不走校正"说的是引号通道出来的短字面，不是这一支**——别把它当依据删掉/改回去。
     校正后**永远不会免弹窗**：
     主人原话说的是短的那一截，全名不在他这句话里，`_confirm_popup` 的
     `_ident_grounded` 自动判不成立 ⇒ 必弹卡。父标签（`pkey`）不做这一步。
@@ -5859,6 +5912,54 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
         want = str(args.get(tkey) or "").strip()
         if want:
             hit, err = _lookup(want)
+            if err and is_todo:
+                # ── 待办族的"引用式"唯一命中（20260929 批 G，D2）──────────────────
+                # 现场：主人说「把简历那条挪到 10 月 8 号」，台账里**唯一**一行含
+                # 「简历」，可待办族的定位判据是逐字相等（`_todo_text_hits` / Rust
+                # `pick_todo`）⇒ 系统反问"请你点名是哪一件"，主人只好把台账原文抄一遍。
+                # 这里补的不是新判据，是**候选来源**：从主人自己没加引号的那部分说法出发
+                # 找被引用的行（`_todo_reference_rows`），**恰好一行**才把目标校正成台账
+                # 那一行的逐字正文，交给既有的重建机制重跑。
+                #
+                # 与上方 20260927「待办族也不校正」那句**不冲突**（那里写的是 `not is_todo`，
+                # 别把这一支当成它的回退）：那次拒绝的是**从 planner 猜的名字出发做前缀
+                # 近失**——「以它开头」这件事本身没有指认力（「给多肉」与「给多肉浇水」是
+                # 两件事），证据来源是模型自己填的字。这一支的候选**只来自主人原话**，
+                # 而且是"这句话唯一指向台账哪一行"这个**更强**的关系：多行被引用就一条都
+                # 不认（0 行 / ≥2 行 ⇒ 今天的拒绝原样保留，主人被问一句而不是被猜一次）。
+                # 引号段被 `_todo_reference_rows` 排除在外，所以 20260927 那条纪律在它
+                # 自己的形状上（主人引号里就是短的那一截）逐字不变。
+                #
+                # 安全性：①只认唯一命中（同 `_find_board_comment` 的先例）；
+                # ②校正后 TOOLS 行里是**台账自己的字**，弹卡印的就是它，主人的"确定"
+                # 就是目标的合法性；③待办写工具全在 `_ALWAYS_CONFIRM_TOOLS` ⇒ **恒弹卡**，
+                # 不受"同轮命令即确认"的免弹窗影响；④执行端仍是逐字相等——这一支只改
+                # "我们找哪一行"，不改"怎么找"。
+                # ⚠️ 变量名别叫 `refs`：本函数上面那个 `refs` 是 `$tool[N]` 引用模块
+                # （`refs.has_refs`），重名会让它变成未赋值的局部变量（实测踩过）。
+                ref_rows = _todo_reference_rows(todo_rows, user_msg)
+                if len(ref_rows) == 1:
+                    fixed = str(ref_rows[0].get("text") or "").strip()
+                    if fixed and not _lookup(fixed)[1]:
+                        params = dict(plan_obj.get("params") or {})
+                        params[tkey] = fixed
+                        fresh = instantiate_plan(plan_obj.get("skill") or "chat",
+                                                 params, role)
+                        # 重建出的计划**必须**还是同一个工具、且**只有一条**（与相邻那条
+                        # 截断校正同一意图；这里写成显式的两条比较，因为"多出一条"的重建
+                        # 在那种写法下会被放过）。
+                        _t2 = fresh.get("tools") or []
+                        if len(_t2) == 1 and _tool_name(_t2[0]) == name:
+                            logger.warning("[planner] 台账里没有「%s」，但主人这句话"
+                                           "**唯一**指向「%s」→ 就地校正"
+                                           "（弹卡由主人确认，不直接执行）",
+                                           want, fixed)
+                            record("planner", "todo_target_resolved", tool=name,
+                                   got=want[:60], used=fixed[:60])
+                            fresh["params"] = params
+                            plan_obj.clear()
+                            plan_obj.update(fresh)
+                            return None
             if err and not is_board and not is_user and not is_todo \
                     and _msg_grounded_name(want, user_msg, lex=_lexicon(name)):
                 # 只有"主人自己说的就是短的那一截"才校正（见函数头注的边界）：全名不在
