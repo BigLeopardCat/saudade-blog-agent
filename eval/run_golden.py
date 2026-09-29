@@ -973,11 +973,15 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
     # 20260902 下午：自选工具族断言（任一命中即过）——内容查询的自由 ReAct 下
     # 检索工具选型（rag_search vs search_notes）是执行层的事，planner/断言不得
     # 锁死具体工具（否则退化为 0901 前的固定两段式模板），但"必须真查过"要拦
-    for t in gold.get("require_tool_calls_any", []):
-        if not any(x in result["tool_calls"] for x in gold["require_tool_calls_any"]):
-            fails.append(
-                f"未调用任一检索工具 {gold['require_tool_calls_any']}（已调用：{result['tool_calls']}）"
-            )
+    # 20260929 修一处"看着在、其实在重复"的判据：原写法是 `for t in […]: if not any(…)`，
+    # 循环变量 `t` **根本没进判断体** ⇒ 列表有几个元素就 append 几条**逐字相同**的 FAIL。
+    # 代价在读的人身上：`dep_search_read_graph` 那两夜的红字里同一条消息出现两次，复审单
+    # 被读成"两轮都没调用"（其实是一轮、报了两遍）。判据本身没变，只是不再重复报同一件事。
+    _any_of = gold.get("require_tool_calls_any") or []
+    if _any_of and not any(x in result["tool_calls"] for x in _any_of):
+        fails.append(
+            f"未调用任一检索工具 {_any_of}（已调用：{result['tool_calls']}）"
+        )
 
     # 20260904 C3：跨轮执行记忆断言
     #   forbid_tool_calls —— 真实性质疑轮应零工具据回执回答（重发/补做 = 越权）
@@ -1036,9 +1040,21 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
                 pool |= set(re.findall(rf"{f}\D{{0,4}}(\d+)", txt))
         got = str((cons[-1].get("args") or {}).get(spec["arg"]) or "")
         if got not in pool:
+            # **两种"空"要分开说**（20260929）：池子为空可能是"生产者真的什么都没返回"，
+            # 也可能是"判据按不认识的名字去抠、或回执被截断到 200 字"（`graph.py` 的
+            # `"result": str(out)[:200]`，而 `search_notes` 一条瘦身行约 94 字 ⇒ 只看得到
+            # 前两条候选）。两种空的排查方向相反，一句「回执里只有 []」会把读的人直接
+            # 带去"检索失败"——9/29 那条假红（`fields` 里写着已改名的 `noteKey`）正是
+            # 这样被误读的。所以池子空时把回执原文截一段印出来。
+            if not pool:
+                hint = (f"（回执里抠不出任何 {'/'.join(fields)} 形式的 id——**要么生产者真没"
+                        f"返回、要么字段名不认识、要么回执被截断到 200 字**；回执原文前 120 字："
+                        f"{str(prods[-1].get('result') or '')[:120]!r}）")
+            else:
+                hint = f"（回执里只有 {sorted(pool)}）"
             fails.append(f"{spec['consumer']}.{spec['arg']}={got!r} 不来自 "
-                         f"{'/'.join(producers)} 的 {'/'.join(fields)}"
-                         f"（回执里只有 {sorted(pool)}）—— 取的 id 不是检索结果给的")
+                         f"{'/'.join(producers)} 的 {'/'.join(fields)}{hint}"
+                         f" —— 取的 id 不是检索结果给的")
 
     # 20260920：**fallback 盲区断言**（opt-in）。gate 打回（__RESET__）会把整轮
     # 叙述换成一句人设内兜底道歉——而道歉文本**照样能命中 text_contains 正断言**
