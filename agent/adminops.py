@@ -1089,6 +1089,79 @@ def render_todo_done(text: str, *, changed: bool = True) -> str:
             f"（后台已复核：列表里这一条现在就是完成状态）")
 
 
+# ── 待办"改排期"（20260929 批 G）──────────────────────────────────────────
+# 「清空排期」这条通道上的**契约写法**：改排期与新增不一样——新增那次"没给 date"就是
+# 没排期，而这里**必须**分出三种处境：给了日子 / 说了不要排期 / 压根没说（第三种要
+# 回头问主人，见 `skills._expand_todo_reschedule_skill`）。所以"清掉"要有一个**说得出
+# 口**的写法，就是这一个词；工具侧另收几个明显同义的词兜底（封闭小集，见
+# `tools.base._TODO_CLEAR_DATES`），但契约只有这一个。
+_TODO_CLEAR_WORD = "未排期"
+# 工具侧**兜底**收的同义词（封闭小集、不做模糊匹配）：planner 没照契约写那个词、而是
+# 按主人原话填了「清空」「取消」时，认它比回一句"认不出这个日子"对主人更有用——而漏收
+# 一个的代价是"把那条的日子清掉"被答成日期格式错误。**认不出来的一律不是清空**：它们
+# 会走"翻不出日期 ⇒ 零写 + 问清哪一天"那条既有的路。
+_TODO_CLEAR_DATES = frozenset({_TODO_CLEAR_WORD, "无", "清空", "取消"})
+
+
+def todo_due_phrase(date) -> str:
+    """目标排期 → 「10月8日」/「未排期」（卡面、回执行、跨轮目标行**共用这一行**）。
+
+    与 `render_todo_when` 分工：那个读的是**台账里一行**的现状（`date` 是库里的
+    `YYYY-MM-DD` 或空），这个读的是**计划里要写进去的那个值**（可能是清空那个契约词、
+    也可能是没翻过的脏值）。两者都必须落到同一句人话上——主人在卡上看到的"改成几号"
+    与事后在列表里看到的"排期几号"是同一件事的两种说法。
+    """
+    s = str(date or "").strip()
+    if not s or s in _TODO_CLEAR_DATES:
+        return "未排期"
+    return due_date_cn(s)
+
+
+def render_todo_reschedule_action(text: str, date, todos=None) -> str:
+    """`把待办「更新简历（国庆后）」的排期改成10月8日（现在：排期 9月28日）`——卡面、问句、
+    跨轮待办的目标**共用这一行**（同 `render_todo_done_action` 的分工）。
+
+    与勾完成那张卡同一套三态（快照在手且唯一命中 → 印现状；没有这一条 / 有多条同名 →
+    如实说清；快照读不到 → 只印正文，**不因此不弹窗**），差在"现状"那一格印的是
+    **当前排期**（`render_todo_when`）而不是完成态——主人核对的是"要改的是不是这一条、
+    它现在排在几号"。现状那一格的写法与勾完成那张卡同形（`现在：…`）：两张卡印的是
+    同一件事的两种问法，主人不必学两套读法。正文同样**一格都不截**（见
+    `render_todo_done_action` 里那段）。
+    """
+    want = str(text or "").strip()
+    act = f"把待办「{want}」的排期改成{todo_due_phrase(date)}"
+    row, n, have, total = _todo_face_row(todos, want)
+    if not have:
+        return act
+    if row is None:
+        if n > 1:
+            return f"{act}（有 {n} 条待办都叫这个，分不清是哪一条）"
+        if not total:
+            return f"{act}（你后台首页的待办列表现在是空的）"
+        return f"{act}（你后台首页的待办里没有这一条）"
+    return f"{act}（现在：{render_todo_when(row)}）"
+
+
+def render_todo_rescheduled(text: str, date, *, changed: bool = True) -> str:
+    """改排期成功后的回执行（工具侧用；与卡面同源同事实）。
+
+    `changed=False` = 写前它就排在那一天（后端那次是真 no-op，走的是幂等分支）——
+    **必须与"刚改的"分开说**（同 `render_todo_done`）：主人这一下什么都没发生，短路成
+    "已改成…"会让回执读成一个动作，而下一轮 narrator 就照着它讲。
+
+    正文**不截**（与卡面同源同事实，同 `render_todo_done` 的论证）。
+    """
+    want = str(text or "").strip()
+    when = todo_due_phrase(date)
+    # 「未排期」不能套进「排在…」这个句式（「本来就排在未排期」不是中文）——清空那一路
+    # 的说法与 `_reached_one` 的幂等臂共用同一句（两处印的是同一个事实，不许各写一套）。
+    was = f"本来就排在{when}" if when != _TODO_CLEAR_WORD else "本来就没有排期"
+    if not changed:
+        return (f"待办「{want}」**{was}**，这次没有发生任何变更（没有重复改）")
+    return (f"已把待办「{want}」的排期改成{when}"
+            f"（后台已复核：列表里这一条现在的排期就是 {when}）")
+
+
 # ── 写操作确认框（20260921）：问句与回复文本都是**确定性中文**────────────
 # 与 agent/reports.py 同一条纪律：能算的都不交给 LLM。这两段文本会直接进
 # ①确认框的问题行 ②那一轮的对话气泡，都是用户一眼看到的东西——让模型写它，
@@ -1751,6 +1824,13 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         # 出是哪一行）——两张卡的动词、宾语、括号里的东西都不一样。
         body = str(a.get("text") or "").strip()
         return render_todo_done_action(body or "（没有给出正文）", todos)
+    if tool == "reschedule_dashboard_todo":
+        # 改排期（20260929 批 G）：与勾完成同走"清单上已有的那一条"这套卡面（同三态、
+        # 同不截正文），差在括号里印的是**当前排期**。三个写动词因此各自不同形：
+        # 加一条 / 勾成完成 / 把排期改成…
+        body = str(a.get("text") or "").strip()
+        return render_todo_reschedule_action(body or "（没有给出正文）",
+                                             str(a.get("date") or "").strip(), todos)
     if tool in ("approve_quota_request", "reject_quota_request", "reset_user_quota"):
         # 对话额度的三件（20260929）：目标 = 账号名录里的**账号名**（与冻结族同一条
         # 名字通道），但后果三句各不相同——见 `_QUOTA_CONSEQ` 那段；申请理由是
@@ -2049,6 +2129,25 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
         if not have or row is None or row.get("done") is not True:
             return None
         return f"待办「{text}」本来就是完成状态（{render_todo_when(row)}）"
+    if tool == "reschedule_dashboard_todo":
+        # 改排期（20260929 批 G）：「已达成」= 那一行的排期**本来就是**这一次要写进去的
+        # 那一天（含"本来就没排期、这次正是要清掉"）。比的是两个 ISO 串，与工具侧那次
+        # `changed` 同源——**只在"不会真改变什么"时**才免弹卡，判不出来（快照读不到、
+        # 同名多条、认不出的值）一律照弹。
+        text = str(a.get("text") or "").strip()
+        row, _n, have, _total = _todo_face_row(s.get("todos"), text)
+        if not have or row is None:
+            return None
+        want = str(a.get("date") or "").strip()
+        if want in _TODO_CLEAR_DATES:
+            want = ""
+        if str(row.get("date") or "").strip() != want:
+            return None
+        # 与 `render_todo_rescheduled(changed=False)` 同一句（同一件事实、两处印出来，
+        # 不许各写一套）。判据仍是 `row.get("done")` 的镜像——这里比的是日期。
+        when = todo_due_phrase(a.get("date"))
+        was = f"本来就排在{when}" if when != _TODO_CLEAR_WORD else "本来就没有排期"
+        return f"待办「{text}」{was}"
     if tool == "set_article_status":
         aid = _as_article_id(a.get("article_id"))
         notes = s.get("notes")

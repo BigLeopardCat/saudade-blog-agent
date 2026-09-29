@@ -600,6 +600,11 @@ _MIN_PARAMS = {
     # 正文写成一条**明显是假的**事（同上面那条纪律：将来谁把这条改成真跑，也只是
     # 一次"列表里没有这一条"的零写，不会动到主人的真待办）。
     "dashboard_todo_done": {"text": "给猫买罐头"},
+    # 改排期（20260929 批 G，第三条最小通道）：同族（目标仍是自由文本），第三个展开
+    # 函数。`date` 这里填的是**人话**（展开器负责翻成 ISO 再落进 spec——所以 spec 里
+    # 永远不会出现「明天」这种随运行日漂移的词，这是 `_expand_todo_reschedule_skill`
+    # 与 `create` 那条通道共用 `adminops.normalize_due_date` 的地方）。
+    "dashboard_todo_reschedule": {"text": "给猫买罐头", "date": "明天"},
     # 给单个账号发通知（20260926 第十一轮）：名字通道 + 自由文本正文两样并存的一件
     # （收件人走 `_find_named_user` 对后台名录解析，正文由模型整理、卡面印全文）。
     # ⚠️ 收件人的名字必须**明显是假的**（同上面那条纪律）：这一族跑展开器只碰纯函数、
@@ -637,6 +642,7 @@ _EXPECT_TOOL = {
     "message_read": "read_messages",
     "dashboard_todo_add": "create_dashboard_todo",
     "dashboard_todo_done": "complete_dashboard_todo",
+    "dashboard_todo_reschedule": "reschedule_dashboard_todo",
     "account_freeze": "freeze_account", "account_unfreeze": "unfreeze_account",
     "notice_send": "send_user_notice",
     "quota_approve": "approve_quota_request",

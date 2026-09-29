@@ -683,7 +683,7 @@ for name, tool, args in [("admin_notes", "list_admin_notes", {}),
     check(f"技能 {name} 在位、对管理员族可见、计划首项是 {tool}",
           sk is not None and sk.roles == ADMIN_ROLES
           and [t for t, _ in sk.plan] == [tool], str(sk and (sk.roles, sk.plan)))
-check("写技能名单 = 二十六个**技能**名（instantiate_plan 缺参守卫按它分支；"
+check("写技能名单 = 二十七个**技能**名（instantiate_plan 缺参守卫按它分支；"
       "注意它与工具名不是一套字面量，混用会让守卫静默不生效）",
       WRITE_SKILL_NAMES == frozenset({"tag_create", "tag_update", "tag_delete",
                                       "category_create", "category_update",
@@ -713,6 +713,14 @@ check("写技能名单 = 二十六个**技能**名（instantiate_plan 缺参守�
                                       # **二分**会把"勾一条"展开成 `create_dashboard_todo`
                                       # （多记一条待办，test_todo_schedule ⑫ 钉着）
                                       "dashboard_todo_done",
+                                      # 改排期（20260929 批 G，第三条最小通道）：同一族
+                                      # 的第三件（目标也是自由文本），**第三个**展开函数
+                                      # ——`instantiate_plan` 从二分变三分。漏在这份名单外
+                                      # 与漏了那次二分的后果同族且更隐蔽：会把"改一条的
+                                      # 日子"展开成 `create_dashboard_todo`（又记一条待办，
+                                      # 而列表上多出来的那一行看起来就是主人想要的那条，
+                                      # test_todo_schedule ⑱ 钉着三分）
+                                      "dashboard_todo_reschedule",
                                       # 后台账号冻结 / 解冻（20260926 第九轮）：
                                       # 两个技能名与两个工具名**不是一套字面量**
                                       # （技能 account_freeze / 工具 freeze_account）

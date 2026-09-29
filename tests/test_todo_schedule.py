@@ -316,17 +316,22 @@ check("  注记写「（未排期）」", "（未排期）" in out["note"], out[
 check("展开出的工具名在注册表里（否则 execute 只能回「未知工具」错误帧）",
       "create_dashboard_todo" in {t.name for t in base.get_all_tools()})
 check("这一族是**自由文本**那一族（不在名字通道、也不在 own 通道——判据错位比没有判据更糟）",
-      _FREE_TEXT_WRITE_SKILLS == frozenset({"dashboard_todo_add", "dashboard_todo_done"}),
+      _FREE_TEXT_WRITE_SKILLS == frozenset({"dashboard_todo_add", "dashboard_todo_done",
+                                            "dashboard_todo_reschedule"}),
       str(_FREE_TEXT_WRITE_SKILLS))
-# 桶成员资格只说"目标是自由文本"，**展开函数要按技能名二分**（第十轮加了"勾完成"）：
-# 这条钉的是**两个技能名都真的在自己的路径上**——漏了二分的后果是静默的，"勾完成"
-# 会被 `_expand_todo_skill` 展开成 `create_dashboard_todo`（多记一条待办），
-# 所以判据落在"展开出的工具名"上，而不是"桶里有几个名字"。
-check("  桶内两个技能各自展开成自己的工具（勾完成不会展开成「加一条」）",
+# 桶成员资格只说"目标是自由文本"，**展开函数要按技能名三分**（第十轮加"勾完成"、
+# 批 G 加"改排期"）：这条钉的是**三个技能名都真的在自己的路径上**——漏了那次分派的
+# 后果是静默的，"勾完成"会被 `_expand_todo_skill` 展开成 `create_dashboard_todo`
+# （多记一条待办），"改排期"同样会**又记一条**（而列表上多出来的那一行看起来就是主人
+# 想要的那条）；所以判据落在"展开出的工具名"上，而不是"桶里有几个名字"。
+check("  桶内三个技能各自展开成自己的工具（勾完成/改排期都不会展开成「加一条」）",
       "complete_dashboard_todo" in "".join(
           instantiate_plan("dashboard_todo_done", {"text": "给猫买罐头"})["tools"])
       and "create_dashboard_todo" in "".join(
-          instantiate_plan("dashboard_todo_add", {"text": "给猫买罐头"})["tools"]),
+          instantiate_plan("dashboard_todo_add", {"text": "给猫买罐头"})["tools"])
+      and "reschedule_dashboard_todo" in "".join(
+          instantiate_plan("dashboard_todo_reschedule",
+                           {"text": "给猫买罐头", "date": "明天"})["tools"]),
       str(instantiate_plan("dashboard_todo_done", {"text": "给猫买罐头"})["tools"]))
 
 
@@ -656,7 +661,7 @@ finally:
 
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⑧ 接线：读技能不进写名单，且后台待办**只有**追加这一条写通道")
+print("\n⑧ 接线：读技能不进写名单，且后台待办的写通道**全是「只动一行」的最小通道")
 
 from agent.skills import WRITE_SKILL_NAMES  # noqa: E402
 
@@ -677,6 +682,21 @@ check("工具侧**没有** PUT 整份覆盖这条路（agent 手里没有那份�
       (ROOT / "tools" / "base.py").read_text(encoding="utf-8")
       and '_admin_request("POST", "/api/protected/todos/item"' in
       (ROOT / "tools" / "base.py").read_text(encoding="utf-8"))
+# 批 G 起写通道有三条（追加一条 / 翻完成标记 / 改排期日），三条都是"只动一行"的最小
+# 通道——这一条锁的是**第三条真的存在且与第二条同源**：两条按正文定位的通道共用一处
+# 实现（`_admin_todo_post`），「改一处必须同步另一处」在这里被结构上消掉了。
+_bsrc = (ROOT / "tools" / "base.py").read_text(encoding="utf-8")
+check("三条最小通道各自点名自己的端点（追加那条在自己的臂里、另两条共用 `_admin_todo_post`）",
+      '_admin_request("POST", "/api/protected/todos/item"' in _bsrc
+      and '_admin_todo_post("/api/protected/todos/done"' in _bsrc
+      and '_admin_todo_post("/api/protected/todos/date"' in _bsrc,
+      str(sorted({p for p in ("/api/protected/todos/item", "/api/protected/todos/done",
+                              "/api/protected/todos/date") if p in _bsrc})))
+check("  按正文定位的两条**共用同一个函数**（`_admin_todo_post` 一处实现：uid/鉴权/HTTP/"
+      "非 JSON/业务码五项失败映射不许各写一遍——那是这一族最容易分叉的地方）",
+      _bsrc.count("def _admin_todo_post(") == 1
+      and _bsrc.count('_admin_todo_post("/api/protected/todos/') == 2,
+      str(_bsrc.count('_admin_todo_post("/api/protected/todos/')))
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑨ complete_dashboard_todo：按正文定位（0 条 / 多条零写，1 条才动手）")
@@ -1000,6 +1020,23 @@ check("  长正文的过程行是**带省略号的预览**（不是把正文裸�
 check("  短正文的过程行不凭空加省略号（没截就是没截）",
       "…" not in _tool_action_text("create_dashboard_todo", {"text": "交房租"}),
       _tool_action_text("create_dashboard_todo", {"text": "交房租"}))
+_r_act = _tool_action_text("reschedule_dashboard_todo",
+                           {"text": "发简历给阿里", "date": "2026-10-08"})
+check("改排期的过程行：正文与新排期都在这一行里（缺任一项都认不出改的是哪一条、改成几号）",
+      _r_act == "把待办「发简历给阿里」的排期改成2026-10-08", _r_act)
+check("  日期**不做二次翻译**（就是展开函数归一过的那个值——翻成人话会多出一处与卡面"
+      "分叉的说法，而这一行当初是按「两份措辞逐字对账」设计的）",
+      "10月8日" not in _r_act, _r_act)
+check("  清空那一档读起来不含歧义（同一个句式，值换成契约词）",
+      _tool_action_text("reschedule_dashboard_todo",
+                        {"text": "发简历给阿里", "date": A._TODO_CLEAR_WORD})
+      == "把待办「发简历给阿里」的排期改成未排期")
+check("  日期缺席 ⇒ 少说一句排期，**不补默认值**（猜一个日子比不说更坏）",
+      _tool_action_text("reschedule_dashboard_todo", {"text": "发简历给阿里"})
+      == "把待办「发简历给阿里」改排期")
+check("  正文也缺 ⇒ 只留动作词，且不裸露带下划线的内部工具名",
+      _tool_action_text("reschedule_dashboard_todo", {}) == "改待办排期")
+
 _rsrc = _parent_repo.read(
     "src/routes/chat.rs",
     why="跨轮执行记忆的动作行**自 20260928 起由 Python 写时渲染定稿**"
@@ -1008,8 +1045,14 @@ _rsrc = _parent_repo.read(
 if _rsrc is not None:
     check("Rust 那半读回执顶层的 `action`（不读的话这一行仍是老表渲染的旧措辞）",
           'row["action"]' in _rsrc, "chat.rs")
-    check("  老表仍在（存量行 + 无臂工具仍走它——删了历史台账会渲染成空）",
+    # 老表的**唯一**活路径：回执里**没有 `action`** 的行——只可能是 agent 回滚到
+    # 20260928 之前送进来的回执行，或 Python 侧至今没有臂的工具（两件死工具）。
+    # 已落库的行不走它（`execution_log.detail` 存的就是渲染后的字）。
+    check("  老表仍在（回执缺 `action` 时才走它——那条路只留给回滚与两件无臂死工具）",
           '"complete_dashboard_todo" =>' in _rsrc, "chat.rs")
+    check("  改排期**不在**老表里（新工具的动作词只加在 Python 那侧：给它加臂是永远"
+          "走不到的死代码，还会让「两份措辞互相对账」看着比实际更严）",
+          '"reschedule_dashboard_todo" =>' not in _rsrc, "chat.rs")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1270,6 +1313,331 @@ _rs_todos = _parent_repo.read(
 if _rs_todos is not None:
     check("  Rust `pick_todo` 也是逐字相等（含 `trim`，与写入口径同源）",
           "r.text == text" in _rs_todos and ".trim()" in _rs_todos)
+
+# ══════════════════════════════════════════════════════════════════
+# ⑱ 第三条窄写：改某一条的**排期日**（20260929 批 G，P4）
+#   为什么这一族还要有第三条通道：主人说「简历那条挪到 10 月 8 号」时，系统手里只有
+#   「加一条」与「勾完成」——前者会把一次改动记成一条**新**待办（列表上多出来的那一行
+#   看起来就是主人想要的那条），后者会把一件**没办完**的事勾掉。这一件补的是"只动
+#   那一行的日期"这个动作，与另两件共用同一条定位判据（正文逐字相等 + 唯一命中）。
+print("\n⑱ 改排期（第三条窄写）：展开四态 / 登记位 / 工具三态 / 卡面（批 G）")
+
+
+def rex(**params):
+    """真实展开路径（与 planner 同形）。"""
+    return instantiate_plan("dashboard_todo_reschedule", params)
+
+
+out = rex()
+check("正文缺失 → 零工具 + 注记（这张列表没有行号，正文是唯一的指认方式）",
+      out["tools"] == [] and "缺少正文" in out["note"], f"{out['tools']} / {out['note'][:50]}")
+check("  注记明写**不要替他挑一条**（本族恒弹卡，但「挑错的那条看起来一样」)",
+      "不要" in out["note"], out["note"][:70])
+
+out = rex(text="给猫买罐头", date="")          # 「帮我改个日子」，一个字都没说
+check("没说日期 → 零工具 + 追问「要改到哪一天」（与「翻不出来」分开：两件事要他做的动作不同）",
+      out["tools"] == [] and "没给日期" in out["note"], f"{out['tools']} / {out['note'][:60]}")
+check("  同一句注记里给出清空那个契约词（主人说「不用排期了」时 planner 该往里填什么）",
+      A._TODO_CLEAR_WORD in out["note"], out["note"][:90])
+
+out = rex(text="给猫买罐头", date="下周三")
+check("⭐ 日期翻不出来 → 零工具 + 问清哪一天（**绝不挑一天顶上**：错一天的日程会静静躺在"
+      "后台日历的错误格子里，而「改好了」这三个字会让主人以为系统听懂了他的说法）",
+      out["tools"] == [] and "认不出来" in out["note"] and "不许" in out["note"],
+      f"{out['tools']} / {out['note'][:70]}")
+check("  零写那一句落到 status 上（不是只写在注记里——gate/planner 读的是键）",
+      out.get("status") == "param_missing", str(out.get("status")))
+
+out = rex(text="长" * (base._TODO_TEXT_LIMIT + 1), date="明天")
+check("正文超上限 → 零工具（**不截断**：截断等于替主人改字，改完就不是同一行了）",
+      out["tools"] == [] and "太长" in out["note"], f"{out['tools']} / {out['note'][:50]}")
+
+out = rex(text="给猫买罐头", date="明天")
+_due = A.normalize_due_date("明天")
+check("正例：正文原样 + **翻好的** ISO 日期进 TOOLS 行",
+      out["tools"] == [f'reschedule_dashboard_todo('
+                       f'{json.dumps({"text": "给猫买罐头", "date": _due}, ensure_ascii=False)})'],
+      str(out["tools"]))
+check("  注记把日期念成人话，且写明**只动排期**（正文与完成标记一个字都不动）",
+      f"排期改成{A.due_date_cn(_due)}" in out["note"] and "只动排期" in out["note"],
+      out["note"][:80])
+
+# 清空排期：主人那几种说法（「不用排期了」「把日子清掉」）**收敛到同一个契约词**，
+# 落进 TOOLS 行的永远是那一个字面 —— 工具与卡面都只认它（单一来源 `_TODO_CLEAR_WORD`）。
+_cleared = {tuple(rex(text="给猫买罐头", date=w)["tools"])
+            for w in sorted(A._TODO_CLEAR_DATES)}
+_want_clear = [f'reschedule_dashboard_todo('
+               f'{json.dumps({"text": "给猫买罐头", "date": A._TODO_CLEAR_WORD}, ensure_ascii=False)})']
+check("清空排期的几种说法**收敛成同一份 TOOLS 行**（同义词只在入口收，往里传的永远是契约词）",
+      _cleared == {tuple(_want_clear)}, str(_cleared))
+check("  注记写「排期清掉」（不是「改成未排期」——清空是主人自己那几种说法的意思）",
+      "排期清掉" in rex(text="给猫买罐头", date="清空")["note"],
+      rex(text="给猫买罐头", date="清空")["note"][:60])
+
+# 登记位（三条）：缺任何一条的后果都是**静默的**
+check("⭐ 登记成目标名字段（漏登记 ⇒ 口径里的「正文必须能从他原话里抽出来」那道闸整个不作用）",
+      g._WRITE_NAME_FIELDS.get("reschedule_dashboard_todo") == ("text", None)
+      and "reschedule_dashboard_todo" in g._NAME_TARGET_TOOLS,
+      str(g._WRITE_NAME_FIELDS.get("reschedule_dashboard_todo")))
+check("⭐ 在 `_TODO_TOOLS` 里（漏了 ⇒ 弹卡那一轮**不读台账**、卡面印不出「现在：排期…」，"
+      "主人只能盲签——而这张卡的全部意义就是让他核对「改的是不是这一条、它现在排在几号」）",
+      "reschedule_dashboard_todo" in g._TODO_TOOLS, str(g._TODO_TOOLS))
+check("  `date` **不**登记成目标名（它是要写进去的值，不是身份——登记了会让"
+      "「名字必须能从原话里抽出来」这条判据作用在一个日期串上）",
+      g._WRITE_NAME_FIELDS["reschedule_dashboard_todo"][1] is None)
+check("  工具参数说明里那个清空关键词与契约词是同一个字面（两处各写一份的那天，"
+      "「清空」会在一条通道上成立、另一条上变成格式错误）",
+      A._TODO_CLEAR_WORD in json.dumps(base.reschedule_dashboard_todo.args,
+                                       ensure_ascii=False),
+      str(base.reschedule_dashboard_todo.args.get("date"))[:40])
+
+# ── 工具四态（真实工具 + 桩客户端；写前读 / 写后复核是两次独立读数）──────────
+_TOMORROW = A.normalize_due_date("明天")
+_ROWS_R = [todo("更新简历（国庆后）", date="2026-10-08"), todo("买猫粮", date=None)]
+
+
+def _rsch(text="更新简历（国庆后）", date="明天", uid=7):
+    return base.reschedule_dashboard_todo.invoke({"text": text, "date": date}, config=cfg(uid))
+
+
+def _date_ok(text="更新简历（国庆后）", date=_TOMORROW):
+    return _HResp(200, {"code": 200, "data": {"text": text, "done": False, "date": date}})
+
+
+with patch(_admin_get=lambda p, c: _ROWS_R, _client=_Http(_date_ok())):
+    r = _rsch(date="下周三")
+    check("日期翻不出来 → unavailable + 问清哪一天，**零 POST**（一个字节都不发）",
+          r.kind == "unavailable" and "认不出排期日" in r and base._client.calls == [],
+          f"{r.kind}: {r}")
+    r = _rsch(text="  ")
+    check("正文空 → unavailable，零 POST", r.kind == "unavailable" and base._client.calls == [],
+          f"{r.kind}: {r}")
+    r = _rsch(text="长" * (base._TODO_TEXT_LIMIT + 1))
+    check("正文超上限 → unavailable，零 POST",
+          r.kind == "unavailable" and base._client.calls == [], f"{r.kind}: {r}")
+
+with patch(_admin_get=lambda p, c: [todo("买猫粮", date=None)], _client=_Http(_date_ok())):
+    r = _rsch()
+    check("写前读：列表里没有这一条 → not_found（**不是**服务不可用：他要做的是照那一行"
+          "现在的正文说，不是稍后再试），且零 POST",
+          r.kind == "not_found" and "没有「更新简历（国庆后）」这一条" in r
+          and base._client.calls == [], f"{r.kind}: {r}")
+
+with patch(_admin_get=lambda p, c: [todo("更新简历", date=None), todo("更新简历", "2026-10-08")],
+           _client=_Http(_date_ok())):
+    r = _rsch(text="更新简历")
+    check("写前读：两条同名 → not_found + 说清分不清（**歧义即零写**，绝不替主人挑一条）"
+          "且零 POST",
+          r.kind == "not_found" and "2 条" in r and "分不清" in r
+          and base._client.calls == [], f"{r.kind}: {r}")
+
+with patch(_admin_get=lambda p, c: base.unavailable("读不到"), _client=_Http(_date_ok())):
+    r = _rsch()
+    check("写前读失败 → unavailable + 「本次未改动」，零 POST（读不到 ≠ 没有）",
+          r.kind == "unavailable" and "本次未改动" in r and base._client.calls == [],
+          f"{r.kind}: {r}")
+
+# 正例：一次 POST 到**新端点**，body 只发 text/date 两键、日期是 ISO
+cli = _Http(_date_ok())
+with patch(_admin_get=_Seq(_ROWS_R, [todo("更新简历（国庆后）", date=_TOMORROW)]),
+           _client=cli):
+    r = _rsch()
+    check("恰好一条命中 → ok，回执行写明改成了哪一天且已复核",
+          r.kind == "ok" and "更新简历（国庆后）" in r and "复核" in r, f"{r.kind}: {r}")
+    check("  恰好一次 POST：路径是新端点、body 只发 text/date（date 是归一后的 ISO）",
+          len(cli.calls) == 1
+          and cli.calls[0][1].endswith("/api/protected/todos/date")
+          and cli.calls[0][3] == {"text": "更新简历（国庆后）", "date": _TOMORROW},
+          str(cli.calls[0][1:]))
+    check("  回执 meta 是结构化回执：op + 新旧排期，且键都在白名单里（漏了是静默丢键）",
+          r.meta.get("op") == "dashboard_todo_reschedule"
+          and r.meta.get("before") == "排期 10月8日"
+          and r.meta.get("after") == f"排期 {A.due_date_cn(_TOMORROW)}"
+          and set(r.meta) <= set(g._RCPT_META_KEYS), str(r.meta))
+    check("  回执不留 uid（detail 进生产库、会被 narrator 念出来）",
+          "uid" not in json.dumps(r.meta), json.dumps(r.meta, ensure_ascii=False))
+
+# 写后复核的判据是"那一行的**日期**变了"——那一行在写之前就在（这是改不是新增），
+# 只判"列表里有没有这么一条"会把每一次失败都判成成功。
+cli = _Http(_date_ok())
+with patch(_admin_get=_Seq(_ROWS_R, [todo("更新简历（国庆后）", date="2026-10-08")]),
+           _client=cli):
+    r = _rsch()
+    check("⭐ 写后复核仍是旧日期 → **kind == unavailable**（措辞之外必须判 kind，"
+          "只断文案是假绿）",
+          r.kind == "unavailable" and "未确认生效" in r and "不要声称已改好" in r,
+          f"{r.kind}: {r}")
+
+cli = _Http(_date_ok())
+with patch(_admin_get=_Seq(_ROWS_R, base.unavailable("读不回来了")), _client=cli):
+    r = _rsch()
+    check("写后读不回 → unavailable 且明写「未确认生效」",
+          r.kind == "unavailable" and "未确认生效" in r, f"{r.kind}: {r}")
+
+cli = _Http(_date_ok())
+with patch(_admin_get=_Seq(_ROWS_R, [todo("别的", date=_TOMORROW)]), _client=cli):
+    r = _rsch()
+    check("写后那一行不见了 → unavailable（不能说成改好了）",
+          r.kind == "unavailable" and "未确认生效" in r, f"{r.kind}: {r}")
+
+# 幂等**不短路**（同勾完成族）：目标日期与写前相同也照发一次（服务端那个分支是真 no-op），
+# 结论由复核给——回执必须**如实区分**"刚改的"与"本来就是这一天"。
+cli = _Http(_date_ok(date=_TOMORROW))
+with patch(_admin_get=_Seq([todo("更新简历（国庆后）", date=_TOMORROW)],
+                          [todo("更新简历（国庆后）", date=_TOMORROW)]), _client=cli):
+    r = _rsch()
+    check("本来就是这一天 → 仍发一次请求（不短路），回执行如实说**未发生任何变更**",
+          r.kind == "ok" and "本来就排在" in r and "这次没有发生任何变更" in r
+          and len(cli.calls) == 1, f"{r.kind}: {r}")
+    check("  meta 的 before/after 都写出来了（跨轮记忆里能区分「刚改的」与「本来就是」）",
+          r.meta.get("before") == f"排期 {A.due_date_cn(_TOMORROW)}"
+          and r.meta.get("after") == f"排期 {A.due_date_cn(_TOMORROW)}", str(r.meta))
+
+# 清空那一次：body 里的 date 是**空串**（Rust 侧 `null`/空串 = 清空，与前端 `allowClear`
+# 同语义），回执行同样区分"刚清掉的"与"本来就没排期"。
+cli = _Http(_HResp(200, {"code": 200, "data": {"text": "更新简历（国庆后）", "done": False,
+                                               "date": None}}))
+with patch(_admin_get=_Seq(_ROWS_R, [todo("更新简历（国庆后）", date=None)]), _client=cli):
+    r = _rsch(date="未排期")
+    check("清空排期：body 的 date 是空串（**不是缺键**——缺键在后端是 400）",
+          cli.calls and cli.calls[0][3] == {"text": "更新简历（国庆后）", "date": ""},
+          str(cli.calls[0][3]) if cli.calls else "零 POST")
+    check("  回执行说「排期改成未排期」且已复核",
+          r.kind == "ok" and "排期改成未排期" in r and "复核" in r, f"{r.kind}: {r}")
+
+cli = _Http(_HResp(200, {"code": 200, "data": {"text": "更新简历（国庆后）", "done": False,
+                                               "date": None}}))
+with patch(_admin_get=_Seq([todo("更新简历（国庆后）", date=None)],
+                          [todo("更新简历（国庆后）", date=None)]), _client=cli):
+    r = _rsch(date="未排期")
+    check("本来就没排期 → 「**本来就没有排期**」（「本来就排在未排期」不是中文；"
+          "与幂等臂同一句，两处共用同一份措辞）",
+          r.kind == "ok" and "本来就没有排期" in r and "变更" in r, f"{r.kind}: {r}")
+
+# uid 不明 → 一个请求都不发（同族纪律）
+_plain = _Http(_date_ok())
+_saved_c = base._client
+try:
+    base._client = _plain
+    base.reschedule_dashboard_todo.invoke({"text": "更新简历（国庆后）", "date": "明天"},
+                                          config=cfg(0))
+    check("uid ≤ 0 → 一个请求都不发（身份不明时不猜「改谁的」）",
+          _plain.calls == [], str(_plain.calls))
+finally:
+    base._client = _saved_c
+
+# ── 卡面与问句（与勾完成那张卡同形：正文一字不改 + 现状那一格换成排期）──────
+_c = A.render_todo_reschedule_action("更新简历（国庆后）", "2026-10-09", _ROWS_R)
+check("卡面念出正文 + 改到哪天 + **它现在排在几号**（主人点确定前唯一能核对的三样）",
+      "「更新简历（国庆后）」" in _c and "排期改成10月9日" in _c and "现在：排期 10月8日" in _c, _c)
+check("清空那一次卡面说「改成未排期」（不是「改成 None」也不是「改成」）",
+      "排期改成未排期" in A.render_todo_reschedule_action("买猫粮", A._TODO_CLEAR_WORD, _ROWS_R),
+      A.render_todo_reschedule_action("买猫粮", A._TODO_CLEAR_WORD, _ROWS_R))
+check("列表里没有这一条 / 有多条同名 / 列表是空的 → 三种如实标注各不相同"
+      "（**不是**不弹窗）",
+      "没有这一条" in A.render_todo_reschedule_action("不存在", _TOMORROW, _ROWS_R)
+      and "2 条" in A.render_todo_reschedule_action("买猫粮", _TOMORROW,
+                                                   [todo("买猫粮"), todo("买猫粮")])
+      and "空的" in A.render_todo_reschedule_action("买猫粮", _TOMORROW, []),
+      A.render_todo_reschedule_action("不存在", _TOMORROW, _ROWS_R))
+check("读不到列表（快照 None）→ 只印正文与目标日期，**不编也不因此不弹窗**",
+      A.render_todo_reschedule_action("买猫粮", _TOMORROW, None)
+      == f"把待办「买猫粮」的排期改成{A.due_date_cn(_TOMORROW)}",
+      A.render_todo_reschedule_action("买猫粮", _TOMORROW, None))
+_q_r = A.render_confirm_question([{"tool": "reschedule_dashboard_todo",
+                                   "args": {"text": "更新简历（国庆后）", "date": "2026-10-09"}}],
+                                 None, None, None, None, None, _ROWS_R)
+check("问句与卡面同源（同一个渲染函数，不是两份实现）",
+      "把待办「更新简历（国庆后）」的排期改成10月9日（现在：排期 10月8日）" in _q_r, _q_r)
+check("  改排期这张卡与勾完成那张卡**不同形**（同一行正文、两件不同的事——"
+      "主人不能把「挪个日子」读成「办完了」）",
+      _q_r != _q_done, _q_r)
+check("畸形 spec 不炸（渲染层只退化不加戏）",
+      "（没有给出正文）" in A.render_confirm_question(
+          [{"tool": "reschedule_dashboard_todo", "args": {}}], None, None, None, None, None, _ROWS_R))
+check("回执行区分「刚要改」与「本来就排在」（一次 no-op 不能被读成一个动作）",
+      "本来就排在10月9日" in A.render_todo_rescheduled("更新简历（国庆后）", "2026-10-09",
+                                                    changed=False)
+      and "已把待办「更新简历（国庆后）」的排期改成10月9日" in A.render_todo_rescheduled(
+          "更新简历（国庆后）", "2026-10-09", changed=True),
+      A.render_todo_rescheduled("更新简历（国庆后）", "2026-10-09", changed=False))
+
+# 「状态已达成 ⇒ 不弹卡」的判据（`reached_specs`）：比的是**两个日期**，只在"不会真改变
+# 什么"时才免弹卡；判不出来（快照读不到 / 同名多条 / 认不出的值）一律照弹。
+_spec_r = {"tool": "reschedule_dashboard_todo",
+           "args": {"text": "更新简历（国庆后）", "date": "2026-10-08"}}
+_kept_r, _already_r = A.reached_specs([_spec_r], todos=_ROWS_R)
+check("⭐ 要改成的正是它现在的排期 ⇒ 判成已达成（主人看到的是「本来就在那天」，不是一张白点的卡）",
+      _kept_r == [] and len(_already_r) == 1 and "本来就排在10月8日" in _already_r[0]["why"],
+      str(_already_r))
+_spec_r2 = {"tool": "reschedule_dashboard_todo",
+            "args": {"text": "更新简历（国庆后）", "date": "2026-10-09"}}
+_kept_r2, _already_r2 = A.reached_specs([_spec_r2], todos=_ROWS_R)
+check("  要改成的是别的一天 ⇒ **照弹**（这一下真会改变什么）",
+      len(_kept_r2) == 1 and _already_r2 == [], str((_kept_r2, _already_r2)))
+_kept_r3, _already_r3 = A.reached_specs([_spec_r2], todos=None)
+check("  台账读不到 ⇒ 照弹（判不出来不等于已达成）",
+      len(_kept_r3) == 1 and _already_r3 == [], str((_kept_r3, _already_r3)))
+_kept_r4, _already_r4 = A.reached_specs([_spec_r2], todos=[todo("更新简历（国庆后）"),
+                                                          todo("更新简历（国庆后）")])
+check("  同名多条 ⇒ 照弹（分不清是哪一条，更判不出「已在不在那天」）",
+      len(_kept_r4) == 1 and _already_r4 == [], str((_kept_r4, _already_r4)))
+
+# ── 真实 execute 路径：弹卡轮**零执行**，令牌载荷就是这一件 ──────────────
+_SPEC_RSCH = ('reschedule_dashboard_todo('
+              '{"text": "更新简历（国庆后）", "date": "' + _TOMORROW + '"})')
+_saved_rsch = g._TOOL_MAP.get("reschedule_dashboard_todo")
+try:
+    g._TOOL_MAP["reschedule_dashboard_todo"] = _FakeTool(
+        base.ok(A.render_todo_rescheduled("更新简历（国庆后）", _TOMORROW),
+                meta={"op": "dashboard_todo_reschedule",
+                      "before": "排期 10月8日",
+                      "after": f"排期 {A.due_date_cn(_TOMORROW)}"}))
+    with patch(_admin_get=lambda p, c: _ROWS_R):
+        for msg, why in [("把简历那条挪到 10 月 8 号", "命令式"),
+                         ("简历那条的日子我想挪一下", "陈述式（同意闸本就判不出）")]:
+            CALLS.clear()
+            obj = instantiate_plan("navigate", {"target": "物联网平台"})
+            obj["skill"] = "dashboard_todo_reschedule"
+            obj["tools"] = [_SPEC_RSCH]
+            state = {**plan_state(obj), "plan_rounds": 1, "done": False,
+                     "messages": [HumanMessage(content=msg)]}
+            r = execute_node(state, cfg())
+            pop = r.get("pending_confirm") or {}
+            check(f"{why} → 弹卡且零调用（一律弹窗族不吃「同轮命令即确认」）",
+                  CALLS == [] and r.get("receipts") == [] and bool(pop), str(sorted(r)))
+            check("  卡面印台账原文 + 新旧两个排期（漏了 `_TODO_TOOLS` 这一格就会少后半句）",
+                  "「更新简历（国庆后）」" in pop.get("q", "")
+                  and f"排期改成{A.due_date_cn(_TOMORROW)}" in pop.get("q", "")
+                  and "现在：排期 10月8日" in pop.get("q", ""), pop.get("q", ""))
+            payload = confirm.inspect(pop.get("token") or "") or {}
+            check("  令牌载荷里的 skill 与参数就是这一件（卡上写什么就签什么）",
+                  payload.get("skill") == "dashboard_todo_reschedule"
+                  and payload.get("specs") == [{"tool": "reschedule_dashboard_todo",
+                                                "args": {"text": "更新简历（国庆后）",
+                                                         "date": _TOMORROW}}], str(payload))
+
+    # 主人点了确定 → 放行执行
+    CALLS.clear()
+    obj = instantiate_plan("navigate", {"target": "物联网平台"})
+    obj["skill"] = "dashboard_todo_reschedule"
+    obj["tools"] = [_SPEC_RSCH]
+    state = {**plan_state(obj), "plan_rounds": 1, "done": False,
+             "messages": [HumanMessage(content="简历那条的日子我想挪一下")],
+             "confirm_grant": {"token": "x"}}
+    r = execute_node(state, cfg())
+    check("确认轮 → 放行执行（工具收到的是**原样正文 + 归一后的日期**）",
+          CALLS == [{"text": "更新简历（国庆后）", "date": _TOMORROW}], str(CALLS))
+    check("  回执带 op 与执行角色（跨轮执行记忆只认结构化回执，不认叙述）",
+          r["receipts"] and r["receipts"][0]["op"] == "dashboard_todo_reschedule"
+          and r["receipts"][0]["principal_role"] == "admin", str(r["receipts"]))
+except BaseException as e:  # noqa: BLE001
+    check(f"execute 改排期写路径测试异常：{type(e).__name__}: {e}", False)
+finally:
+    if _saved_rsch is None:
+        g._TOOL_MAP.pop("reschedule_dashboard_todo", None)
+    else:
+        g._TOOL_MAP["reschedule_dashboard_todo"] = _saved_rsch
 
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
