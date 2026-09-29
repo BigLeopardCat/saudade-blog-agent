@@ -40,6 +40,7 @@ from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as g  # noqa: E402
 import tools.base as tb  # noqa: E402
+from agent import authz  # noqa: E402
 from agent.context import (_ledger_frame_wanted, _short_reply_hint,  # noqa: E402
                            _short_reply_kind)
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
@@ -258,6 +259,169 @@ try:
     check("  system_facts 形参已删除（多传即 TypeError）", False)
 except TypeError:
     check("  system_facts 形参已删除（多传即 TypeError）", True)
+
+print("⑪ 收尾那两句话（S4）：改完再询问 / 没动作就问一句")
+# 判据全在结构上（回执 / 令牌 / 写计划 / 提问判据），事实**现场重读**台账。
+# 两句都只进 narrator 的 [执行计划] 段（`_narrator_plan`），planner 那份帧文本一个字
+# 都不复用（它的 header 是对 planner 说的，见 `_ledger_closing_note` 的头注）。
+_CHAT_PLAN = ("SKILL=chat\nPARAMS={}\nTOOLS: （无）\nNOTE: （无）\nREPLY: 直接回答")
+_WRITE_PLAN = ("SKILL=board_audit\nPARAMS={}\n"
+               'TOOLS: audit_board_comment({"talk_id": 101, "verdict": "pass"})\n'
+               "NOTE: （无）\nREPLY: 直接回答")
+_GRANT_AUDIT = {"skill": "board_audit",
+                "specs": [{"tool": "audit_board_comment",
+                           "args": {"talk_id": 101, "verdict": "pass"}}]}
+_GRANT_OFFLINE = {"skill": "article_status",
+                  "specs": [{"tool": "set_article_status", "args": {"article_id": 3}}]}
+
+
+def _receipt(tool, **kw):
+    return {"skill": "review_inbox", "tool": tool, "args": {}, "result": "ok", **kw}
+
+
+def _st(msgs, receipts=None, grant=None, plan=_CHAT_PLAN):
+    return {"plan": plan, "messages": list(msgs), "receipts": receipts or [],
+            "confirm_grant": grant}
+
+
+check("回执判据只认**写**工具（读回执不是'办了几件'）",
+      [r["tool"] for r in g._write_receipts(
+          _st([HumanMessage("好")], [_receipt("audit_board_comment"),
+                                     _receipt("list_notes")]))]
+      == ["audit_board_comment"])
+check("编号字段 → 队列的这张表与 `_LEDGER_TARGET_FIELDS` 的值集合**相等**"
+      "（加一件新的台账编号工具而漏了这里，是静默少问一句）",
+      set(g._LEDGER_FIELD_FAMILY) == set(g._LEDGER_TARGET_FIELDS.values()))
+check("  且族名就是 `_read_ledger_family` 认的那两个",
+      set(g._LEDGER_FIELD_FAMILY.values()) == {"board", "quota"})
+
+_lg = _Ledger().install()
+try:
+    # ── 改完再询问：令牌里的工具反查得出队列 ⇒ 重读、报剩余 ──
+    _n = g._ledger_closing_note(
+        _st([HumanMessage("确定")], [_receipt("audit_board_comment")], _GRANT_AUDIT),
+        _cfg())
+    check("改完再询问：说明这一轮真执行了几件（回执口径，不是计划口径）",
+          "真的执行了** 1 件" in _n, _n[:80])
+    check("  并且报出台账里还剩几件、逐条念出来",
+          "还剩 2 件" in _n and "talkId:102" in _n)
+    check("  且明确要它问一句「要不要也一起办」", "要不要也一起办" in _n)
+    check("  只重读**那一族**（额度队列一次都不读：这次点头的是一件留言审核）",
+          _lg.reads == ["board"], str(_lg.reads))
+    check("  也**不许**编一件没办的事（禁止句在）", "不许编一件他" in _n)
+
+    _lg.reads.clear()
+    _lg.board = {102: BOARD_PENDING[102]}      # 只剩一件还没办
+    _n1 = g._ledger_closing_note(
+        _st([HumanMessage("确定")], [_receipt("audit_board_comment")], _GRANT_AUDIT),
+        _cfg())
+    check("  剩下几件是**重读**后的现状（办掉那件就不在'还剩'里了）",
+          "还剩 1 件" in _n1 and "talkId:101" not in _n1, _n1[:80])
+
+    _lg.board = {}
+    _n0 = g._ledger_closing_note(
+        _st([HumanMessage("确定")], [_receipt("audit_board_comment")], _GRANT_AUDIT),
+        _cfg())
+    check("  台账清空 ⇒ 如实说没有别的待办了（不许为了接话编一件）",
+          "一件等着办的都没有了" in _n0 and "不要**为了接话再编一件事" in _n0)
+
+    tb._board_index = lambda config: None
+    _nu = g._ledger_closing_note(
+        _st([HumanMessage("确定")], [_receipt("audit_board_comment")], _GRANT_AUDIT),
+        _cfg())
+    check("  重读读不到 ⇒ 说「没读到、不确定」，**不许**说成「没有别的了」",
+          "没读到" in _nu and "没有别的了" in _nu and "一件等着办的都没有" not in _nu)
+finally:
+    _lg.uninstall()
+
+_lg = _Ledger().install()
+try:
+    # 与台账无关的确认轮（如改文章状态）⇒ 一个字都不加、台账一次都不读
+    _no = g._ledger_closing_note(
+        _st([HumanMessage("确定")], [_receipt("set_article_status")], _GRANT_OFFLINE),
+        _cfg())
+    check("与台账无关的确认轮：不加收尾那一问（不顺手提两句待审留言）",
+          _no == "" and _lg.reads == [], f"{_no!r} {_lg.reads}")
+    _ng = g._ledger_closing_note(
+        _st([HumanMessage("好的")], [_receipt("audit_board_comment")]), _cfg())
+    check("没有令牌的轮次（普通写）：不走进收尾那一问（它是确认兑现轮的专属）",
+          _ng == "" and _lg.reads == [], repr(_ng[:60]))
+finally:
+    _lg.uninstall()
+
+print("⑫ 没动作就问一句（删掉旧快道之后唯一的确定性兜底）")
+_SILENT = "留言那边我来处理"          # 提到留言、不是提问、没有写
+check(f"「{_SILENT}」不是提问（这条腿自己先核实判据，免得测的是空转）",
+      not authz.is_question_like(_SILENT))
+for _q in ("留言板现在还有什么等着办的吗", "额度申请批了会怎么样"):
+    check(f"「{_q}」被判成提问", authz.is_question_like(_q), _q)
+_lg = _Ledger().install()
+try:
+    _n = g._ledger_closing_note(_st([HumanMessage(_SILENT)]), _cfg())
+    check("该摆台账 + 零写 + 不是提问 ⇒ 把台账念一遍、问他要办哪几件",
+          "一条写操作都没有执行" in _n and "talkId:101" in _n and "只问，不替他挑" in _n,
+          _n[:80])
+    check("  且明令禁止「系统正等着您点一下」这类话（本轮结构上不会有卡）",
+          "系统正等着您点一下" in _n and "禁止" in _n)
+    check("  且不许把任何一条写成已办", "写成已经办了的" in _n)
+    _both = g._ledger_closing_note(_st([HumanMessage("你看着办")]), _cfg())
+    check("两族都该摆时（授权式）两族都念", "guest5" in _both and "talkId:101" in _both)
+finally:
+    _lg.uninstall()
+
+_lg = _Ledger().install()
+try:
+    check("提问轮：一个字都不加（主人只是在问，不是让它办）",
+          g._ledger_closing_note(
+              _st([HumanMessage("留言板现在还有什么等着办的吗")]), _cfg()) == "")
+    check("  且这一次**一次都没读**（不该为了问一句去连后台）",
+          _lg.reads == [], str(_lg.reads))
+    check("这一轮计划里有写 ⇒ 不加（真办了由'改完再询问'那一支说话）",
+          g._ledger_closing_note(_st([HumanMessage(_SILENT)], plan=_WRITE_PLAN),
+                                 _cfg()) == "")
+    check("计划里已经有系统台账核对结论（确定性收尾轮）⇒ 不加，别抢那句话",
+          g._ledger_closing_note(
+              _st([HumanMessage(_SILENT)],
+                  plan=_CHAT_PLAN + "\n" + g._LEDGER_NOTE_PREFIX + "站内没有这条留言"),
+              _cfg()) == "")
+finally:
+    _lg.uninstall()
+
+_lg = _Ledger(board={}, quota={}).install()
+try:
+    _n = g._ledger_closing_note(_st([HumanMessage(_SILENT)]), _cfg())
+    check("台账空 ⇒ 如实说「现在没有等着处理的」，不许编一件出来",
+          "现在没有任何等着办的事" in _n and "不要**为了接话编" in _n, _n[:80])
+finally:
+    _lg.uninstall()
+
+_lg = _Ledger().install()
+try:
+    tb._board_index = lambda config: None
+    _n = g._ledger_closing_note(_st([HumanMessage(_SILENT)]), _cfg())
+    check("读不到 ⇒ 说「没读到、不确定」，**不许**说成「没有等着办的」",
+          "没读到" in _n and "不要**说成「没有等着办的」" in _n, _n[:80])
+finally:
+    _lg.uninstall()
+
+print("⑬ 接线：这一问真的进了 narrator 的 [执行计划] 段（能力有测试 ≠ 接线有测试）")
+_lg = _Ledger().install()
+try:
+    _state = _st([HumanMessage(_SILENT)])
+    _plan_text = g._narrator_plan(_state, _cfg())
+    check("接上 config 后，收尾那一问进了计划段",
+          g._LEDGER_ASK_MARK in _plan_text and "talkId:101" in _plan_text)
+    check("  且不再追加 `_no_popup_fact`（两句会互相拆台：一个要问、一个禁问）",
+          bool(g._no_popup_fact(_state)) and g._no_popup_fact(_state) not in _plan_text)
+    _lg.reads.clear()
+    check("  单参数调用（老路径/纯单测）行为不变、**一次都不读台账**",
+          g._narrator_plan(_state) == _CHAT_PLAN + "\n" + g._no_popup_fact(_state)
+          and _lg.reads == [], str(_lg.reads))
+finally:
+    _lg.uninstall()
+_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+check("  `model_node` 把 config 传给了它（漏了 = 这一问永远算不出来）",
+      "plan=_narrator_plan(state, config)," in _src)
 
 print()
 if FAILED:

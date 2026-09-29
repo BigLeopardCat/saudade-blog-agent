@@ -2556,8 +2556,8 @@ def _wrote_this_round(state) -> bool:
                for s in parse_plan(state.get("plan", ""))["tools"])
 
 
-def _narrator_plan(state) -> str:
-    """narrator 的 [执行计划] 段 = 计划文本 +（本轮没有写操作时）那条系统事实。
+def _narrator_plan(state, config=None) -> str:
+    """narrator 的 [执行计划] 段 = 计划文本 + 一条系统事实。
 
     注入口径是"这一轮没有写操作"，**不是"零工具"**：写必然经过工具，反过来不成立
     ——读了数据、答了问题的轮次同样一个字节都没改，同样需要这条事实（`data_repeat`
@@ -2566,8 +2566,17 @@ def _narrator_plan(state) -> str:
     与 `_no_popup_fact` 的 `pending_confirm` 闸合起来才是完整条件。
 
     计划文本里已经拼着这条的（`data_repeat` 那一支由调用方自己拼）不重复追加。
+
+    **台账收尾那一问优先于 `_no_popup_fact`**（20260929 批 H · S4）：`_ledger_closing_note`
+    的第二支（真摆了台账、模型一条写都没发）与 `_no_popup_fact` 讲的是同一件事的两种
+    说法，一起给会互相拆台——前者要它"问主人要办哪几件"，后者写着"不许问要不要办"。
+    有收尾那一问时就不再追加 `_no_popup_fact`：那些禁止句已经写在那一问里了。
+    `config` 缺省（老的单参调用、纯单测）⇒ 不读台账、行为与从前逐字节相同。
     """
     plan = state.get("plan", "")
+    note = _ledger_closing_note(state, config)
+    if note:
+        return plan if note in plan else plan + "\n" + note
     fact = _no_popup_fact(state)
     if not fact or fact in plan or _wrote_this_round(state):
         return plan
@@ -6012,6 +6021,13 @@ _LEDGER_TARGET_FIELDS = {
     "reject_quota_request": "user_id",
 }
 
+# 编号字段 → 它属于**哪一份队列**（`_read_ledger_family` 的族名）。收尾那一问
+# （S4 的"改完再询问"）用它反查"主人刚才点头的那几件治的是哪一份队列"，据此只重读
+# 那一份——两族都读会把一次与台账无关的确认轮变成一句"顺嘴提两句待审留言"。
+# 它的键集合必须**恰好**等于 `_LEDGER_TARGET_FIELDS` 的值集合（tests 有锁）：漏一个
+# 新字段的后果是那一族静默少问一句（方向安全，但看起来像"模型没问"）。
+_LEDGER_FIELD_FAMILY = {"talk_id": "board", "user_id": "quota"}
+
 
 def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
     """台账编号通道的**目标预检**：这个编号确实出自现场台账、且那一行还在等办吗？
@@ -6248,6 +6264,33 @@ def _render_quota_facts(quota: list) -> str:
             f"**不要自己编**：那几条就如实告诉他「要驳得您给一句理由」。")
 
 
+def _ledger_family_allowed(family: str, principal) -> bool:
+    """这一族主人办不办得了（权限判据的**唯一一处**，20260929 批 H · S4）。
+
+    `_pending_ledger_frame`（摆不摆上桌）与 `_ledger_closing_note`（收尾问不问）
+    共用它：两处各写一遍 `authz.check` 就会出现"帧摆了、收尾却不问"（或反过来）
+    的分岔，而这两处**必须**看到同一个答案——否则收尾那句会对着一个主人根本无权
+    过目的队列发问。
+
+    族名 → 守卫工具是**族自己的属性**（读这份队列要的那件工具），不让调用方传：
+    传进来的话，同一个族在两处可以是两件工具（正是上面那条分岔）。
+    """
+    tool = "audit_board_comment" if family == "board" else "approve_quota_request"
+    return bool(authz.check(principal, tool).allowed)
+
+
+def _ledger_due_families(user_msg: str, prev_ai: str, principal, config) -> list[str]:
+    """这一轮该把**哪几族**的台账摆上桌（族名列表；空 = 一次都不读）。
+
+    判据本体在 `_ledger_families_due`（三条来源取或），这里只多一道"主人办不办得了"
+    ——主人自己都不能复核留言 / 不能处理额度申请时，读那份队列只会白拿一次 403。
+    两个消费方（S1 的帧、S4 的收尾一问）走同一个函数才能保证同进同出。
+    """
+    due = _ledger_families_due(user_msg, prev_ai, config)
+    return [f for f in ("board", "quota")
+            if due[f] and _ledger_family_allowed(f, principal)]
+
+
 def _read_ledger_family(family: str, config) -> tuple[list, bool]:
     """读某一族的待办行 → `(行列表, readable)`；`readable=False` = **读不到**。
 
@@ -6318,51 +6361,62 @@ def _ledger_families_due(user_msg: str, prev_ai: str, config) -> dict:
     }
 
 
+def _ledger_fact_blocks(families: list[str], config) -> tuple[list[str], dict]:
+    """读这几族的待办行、渲染成事实块 → `(块列表, 元数据)`。
+
+    元数据：每族的条数（`meta["board"]` / `meta["quota"]`，**只给读到的族**）、
+    `id` 清单、`unread`（读不到的族名）、`rows`（逐族行数，收尾那一问要用它算
+    "还剩几件"）。
+
+    **读不到 ≠ 没有**（`_read_ledger_family` 的同一条纪律）：读失败的那一族进
+    `unread`、块里明写"这一次没读到、不确定还有几条"，**绝不许**写成"没有"——
+    主人正等着处理两件事时，"没有"是最坏的一句假话。
+    """
+    blocks: list[str] = []
+    meta: dict = {"ids": [], "unread": [], "rows": {}}
+    for family in families:
+        rows, readable = _read_ledger_family(family, config)
+        meta[family] = len(rows) if readable else 0
+        meta["rows"][family] = len(rows) if readable else 0
+        if readable:
+            key, tag = ("talkKey", "talkId") if family == "board" else ("userId", "userId")
+            meta["ids"] += [f"{tag}:{r.get(key)}" for r in rows]
+            blocks.append(_render_pending_facts(rows) if family == "board"
+                          else _render_quota_facts(rows))
+        else:
+            meta["unread"].append(family)
+            blocks.append(_LEDGER_UNREAD_BLOCK[family])
+    return blocks, meta
+
+
+# 「读不到」那两段话住在这里而不是各自内联：两族各一句、字面量必须与渲染器
+# （`_render_pending_facts` / `_render_quota_facts` 的 0 条那支）**长得不一样**
+# ——"没读到"与"没有"混掉的后果正是本族最怕的那句假话。
+_LEDGER_UNREAD_BLOCK = {
+    "board": ("留言审核队列**这一次没读到**（后台接口没返回）——不确定还有几条等着"
+              "复核：如实告诉主人「没读到、不确定」，**不要**说成「没有待审」"),
+    "quota": ("额度重置申请队列**这一次没读到**（后台接口没返回）——不确定还有几件："
+              "如实告诉主人「没读到、不确定」，**不要**说成「没有申请」"),
+}
+
+
 def _pending_ledger_frame(user_msg: str, prev_ai: str, principal, config
                           ) -> tuple[str, dict]:
     """待办台账帧：把"等着主人点头的那几件"**按 id** 摆上桌（批 H · S1）。
 
     返回 `(进 {pending_ledger} 槽的文本, trace 元数据)`；不该摆时 `("", {})`。
+    正文由 `_ledger_due_families`（该摆哪几族，含权限）与 `_ledger_fact_blocks`
+    （读 + 渲染）拼成——它们同时被 narrator 的收尾一问（S4）用，两处判据同源。
 
     这一段只给**事实**——哪几条在等、各是什么、id 是多少。它**一条结论都不读、
     一个目标都不挑**：办不办、办哪几件、办成哪一种全归模型（旧快道正是"系统替模型
     读结论"那一族，已删）。系统只剩三件事：给事实（本函数）、人闸（弹卡）、
     写保护（`_ledger_target_refusal`）。
-
-    权限**按族各判各的**（复用 authz 现成的表，不另立规则）：主人自己都不能复核
-    留言 / 不能处理额度申请时，读那份队列只会白拿一次 403。
     """
-    due = _ledger_families_due(user_msg, prev_ai, config)
-    if due["board"] and not authz.check(principal, "audit_board_comment").allowed:
-        due["board"] = False
-    if due["quota"] and not authz.check(principal, "approve_quota_request").allowed:
-        due["quota"] = False
-    if not (due["board"] or due["quota"]):
+    families = _ledger_due_families(user_msg, prev_ai, principal, config)
+    if not families:
         return "", {}
-
-    blocks: list[str] = []
-    meta = {"board": 0, "quota": 0, "ids": [], "unread": []}
-    if due["board"]:
-        rows, readable = _read_ledger_family("board", config)
-        if readable:
-            meta["board"] = len(rows)
-            meta["ids"] += [f"talkId:{r.get('talkKey')}" for r in rows]
-            blocks.append(_render_pending_facts(rows))
-        else:
-            meta["unread"].append("board")
-            blocks.append("留言审核队列**这一次没读到**（后台接口没返回）——不确定还有"
-                          "几条等着复核：如实告诉主人「没读到、不确定」，**不要**说成"
-                          "「没有待审」")
-    if due["quota"]:
-        rows, readable = _read_ledger_family("quota", config)
-        if readable:
-            meta["quota"] = len(rows)
-            meta["ids"] += [f"userId:{r.get('userId')}" for r in rows]
-            blocks.append(_render_quota_facts(rows))
-        else:
-            meta["unread"].append("quota")
-            blocks.append("额度重置申请队列**这一次没读到**（后台接口没返回）——不确定"
-                          "还有几件：如实告诉主人「没读到、不确定」，**不要**说成「没有申请」")
+    blocks, meta = _ledger_fact_blocks(families, config)
     header = ("系统台账（确定性事实：系统现读的后台队列，不是模型回忆）。下面这几件是"
               "**当前真的在等主人点头**的事——**只有主人这句话真的指向它们时才办**；"
               "与他这句话无关的一轮里，这一块只是背景，不要拿它去凑一句话。\n"
@@ -6372,6 +6426,127 @@ def _pending_ledger_frame(user_msg: str, prev_ai: str, principal, config
     text = header + "\n".join(blocks)
     meta["chars"] = len(text)
     return text, meta
+
+
+# ── 收尾那两句话（批 H · S4）────────────────────────────────────────────────
+# 旧确定性快道删掉之后，系统在这件事上只剩最后一件事：**如实收尾**。两条，都只从
+# 台账来：
+#   · **改完再询问**——主人刚在卡上点了头、系统真办了 N 件 ⇒ 重读那份队列，把"还剩
+#     几件、是哪几件"念给他，并问一句"剩下这几件要不要也一起办"；
+#   · **没动作就问一句**——这一轮该摆台账、模型却一条写都没发 ⇒ 把台账念一遍、问
+#     他要办哪几件。**只问**，不替他挑、不许写成已办。这是删掉旧快道之后留下的唯一
+#     确定性兜底：模型不动作时，主人至少不会被静默。
+# 两句都进 narrator 的 [执行计划] 段（`_narrator_plan`），事实一律**现场重读**（与写
+# 保护同一条取向：几秒钟的偏差比"拿到一份过期台账"便宜）。
+#
+# 为什么不复用 planner 那份帧文本：那个 header 是对 planner 说的（「办哪几件、办成
+# 哪一种由你定；目标填台账里的 id」），塞给 narrator 等于给它下一道它没有的权限；
+# 这里只用 `_ledger_fact_blocks` 那份**逐条事实**。
+_LEDGER_ASK_MARK = "【台账回话】"
+
+
+def _write_receipts(state) -> list:
+    """本轮**验收通过**的写操作回执（`_wrote_this_round` 的回执版）。
+
+    两个判据不是一回事，两条收尾各用一个：「计划里有写」（`_wrote_this_round`）=
+    模型把这件事提出来了（含正等主人点头的那批）；「回执里有写」= 系统真执行了、
+    且 checker 判过 PASS（`receipts` 是验收后的累计，BLOCK 的不进）。"已办 N 件"
+    只能是后者——把一次弹卡说成"办完了"正是 gate 一直在打的那只地鼠。
+    """
+    return [r for r in (state.get("receipts") or []) if isinstance(r, dict)
+            and authz.is_write(_tool_name(str(r.get("tool") or "")))]
+
+
+def _ledger_grant_families(grant: dict) -> list[str]:
+    """主人刚才点头的那批**治的是哪一份队列**（S4「改完再询问」该重读谁）。
+
+    从令牌的 specs 反查（`_LEDGER_FIELD_FAMILY`：编号字段 → 队列），**不是**看主人
+    那句话——确认轮的"当前消息"是前端合成的点击句，它什么都不说。反查不到（这次
+    点头的是一件与台账无关的写，如改文章状态）⇒ 空列表 ⇒ 一句都不加：一次与台账
+    无关的确认轮不该顺嘴提两句待审留言。
+    """
+    fams: list[str] = []
+    for spec in (grant.get("specs") or []):
+        if not isinstance(spec, dict):
+            continue
+        field = _LEDGER_TARGET_FIELDS.get(str(spec.get("tool") or ""))
+        fam = _LEDGER_FIELD_FAMILY.get(field or "")
+        if fam and fam not in fams:
+            fams.append(fam)
+    return fams
+
+
+def _ledger_closing_note(state, config) -> str:
+    """narrator 收尾那句**系统事实**（S4）：改完再询问 / 没动作就问一句。
+
+    空串 = 这一轮不加（绝大多数轮次走这一支）。两条判据全落在**结构**上（回执、
+    令牌、写计划、提问判据），没有一条是对模型散文做正则。
+
+    两句都只写**台账里读到的**事实、一个结论都不替主人下：办哪几件、剩下要不要办
+    仍然归模型和主人。
+
+    ⚠️ 判"这一轮该摆台账"用的是**与 planner 同一个函数**（`_ledger_due_families`），
+    而不是"帧真的进了提示词"——两者在确定性快道轮会分岔（帧算了但没进 prompt，
+    见 `planner_node` 里那段计算的落点）。分岔的后果是 narrator 多念一句**真的**
+    台账事实、多问一句；方向安全（多问一句 ≠ 谎称办了），而要消掉它得给 planner 那
+    8 条 return 各加一个状态字段（未声明的 state key 会被静默丢出 updates 流，见
+    `AgentState` 的纪律），代价与收益不成比例。
+    """
+    if config is None:
+        return ""
+    msgs = state.get("messages") or []
+    wrote = _write_receipts(state)
+    plan = state.get("plan", "")
+    grant = state.get("confirm_grant")
+    # ① 改完再询问：主人刚点过头、系统真办了 ⇒ 重读那份队列，把剩下的念给他。
+    if grant and wrote:
+        families = _ledger_grant_families(grant)
+        if not families:
+            return ""
+        blocks, meta = _ledger_fact_blocks(families, config)
+        head = (f"{_LEDGER_ASK_MARK}主人刚在确认框上点过「确定」，这一轮系统**真的"
+                f"执行了** {len(wrote)} 件写操作（回执在执行记录里）。")
+        if meta["unread"]:
+            return (head + "办完之后系统**没读到**那份台账（后台接口没返回）——不确定"
+                    "还有没有等着办的：如实说清这一轮办成了哪几件，再说明「剩下还有没有"
+                    "没读到、不确定」，**不许**说成「没有别的了」。")
+        left = sum(int(meta["rows"].get(f) or 0) for f in families)
+        if not left:
+            return (head + "办完重读那份队列：**一件等着办的都没有了**。如实说清这一轮"
+                    "办成了什么、**没有别的待办了**；**不要**为了接话再编一件事出来。")
+        return (head + f"办完**重读**那份队列，里面**还剩 {left} 件**等着主人点头：\n"
+                + "\n".join(blocks) +
+                "\n收尾就照它说：先把这一轮办成的说清楚，再把这剩下的几件念给他听、"
+                "问一句「这几件要不要也一起办」。**只念这份台账里的**——不许编一件他"
+                "没办的事，也不许替他把剩下的挑着办了。")
+    # ② 没动作就问一句：这一轮该摆台账、模型一条写都没发、主人这句又不是提问。
+    #    `_LEDGER_NOTE_PREFIX` 那道闸是"别抢系统收尾轮的话"：确定性收尾计划（如编号
+    #    不在台账里）自己已经把事实说完了，再叠一句是系统自己跟自己说话。
+    if wrote or _wrote_this_round(state) or _LEDGER_NOTE_PREFIX in plan:
+        return ""
+    user_msg = _last_user_msg(msgs)
+    if authz.is_question_like(user_msg):
+        return ""
+    families = _ledger_due_families(user_msg, _last_assistant_utterance(msgs),
+                                    _principal_of(config), config)
+    if not families:
+        return ""
+    blocks, meta = _ledger_fact_blocks(families, config)
+    head = (f"{_LEDGER_ASK_MARK}这一轮系统**一条写操作都没有执行**（主人那边不会看到"
+            "任何待确认的卡片）——**禁止**说「已经帮您办好了」「我这就去办」"
+            "「系统正等着您点一下」之类的话。")
+    if meta["unread"]:
+        return (head + "想核对后台还等着办什么，**没读到**那份台账（后台接口没返回）"
+                "——如实告诉主人「没读到、不确定还有几件」，**不要**说成「没有等着办的」。")
+    left = sum(int(meta["rows"].get(f) or 0) for f in families)
+    if not left:
+        return (head + "系统重读了后台：**现在没有任何等着办的事**——如实告诉主人"
+                "「现在没有等着处理的」，**不要**为了接话编一件出来。")
+    return (head + "后台**现在真的有这几件在等他点头**（下面这份是重读的现状）：\n"
+            + "\n".join(blocks) +
+            "\n收尾就照它问一句：把这几件念给他听，问「要办哪几件」（或者要不要"
+            "一起办）。**只问，不替他挑**——不许把任何一条当成已经定了的，也不许把"
+            "任何一条写成已经办了的。")
 
 
 _QUEUE_READ_TOOLS = {"get_moderation_status": "board", "list_quota_requests": "quota"}
@@ -7391,8 +7566,10 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         audience=audience_block(role),
         # [执行计划] 段带一条本轮事实（本轮没有写操作时，见 `_narrator_plan`）：
         # 此前它只在 `data_repeat` 收尾支注入，零工具轮拿不到 ⇒ narrator 抄历史里
-        # 系统自己写的卡面话术（trace 20260926T082919 实证）。
-        plan=_narrator_plan(state),
+        # 系统自己写的卡面话术（trace 20260926T082919 实证）。S4 起这里还带上
+        # 台账收尾那一问（改完再询问 / 没动作就问一句，见 `_ledger_closing_note`）
+        # ——它要现场重读台账，所以必须拿到 config。
+        plan=_narrator_plan(state, config),
         tool_frames=_frame_texts(state["messages"], drop_tools=_drop),
         exec_receipts=_receipts_text(_receipts, drop_tools=_drop),
         fact_block=_block or "（本轮没有动作族执行）",
