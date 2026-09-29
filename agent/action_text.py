@@ -559,6 +559,22 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         # "本来就是完成"那一次看起来也改了什么（台账行那侧另有 `change` 判据）。
         body = _todo_preview(a.get("text")) if preview else _raw(a.get("text"))
         return f"把待办「{body}」勾成完成" if body else "勾完成待办"
+    if name == "reschedule_dashboard_todo":
+        # 改排期（20260929 批 G）：同前两件的分工（正文 24 字预览 / 台账行不截）。
+        # 日期**原样带出来、不做二次翻译**：它到这一行时已经是展开函数归一过的值
+        # ——要么是 `YYYY-MM-DD`、要么是"清空"那个契约词（`adminops._TODO_CLEAR_WORD`），
+        # 两者在这里读起来都不含歧义（「…的排期改成2026-10-08」「…的排期改成未排期」）。
+        # 这里再翻一遍人话（「10月8日」）会多一处与卡面/回执分叉的说法——卡面与回执
+        # （`adminops.render_todo_rescheduled`）印的是人话，两者本就该各说各的：
+        # 这一行是**台账**，要的是"改成了什么值"能一眼对上库里的那一列。
+        # ⚠️ 本臂**没有** Rust 侧的同名臂，这是刻意的：Rust 老表自 20260929 起冻结
+        # （`tests/test_action_text.py` ④ 有那份声明的机器锁），新工具的措辞只住在本仓
+        # 这一侧 ⇒ 它的锁也在本仓（`tests/test_todo_schedule.py` ⑭ 逐字钉住）。
+        body = _todo_preview(a.get("text")) if preview else _raw(a.get("text"))
+        when = _raw(a.get("date"))
+        if not body:
+            return "改待办排期"
+        return f"把待办「{body}」的排期改成{when}" if when else f"把待办「{body}」改排期"
     return None
 
 

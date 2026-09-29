@@ -161,6 +161,10 @@ WRITE_SKILL_NAMES = frozenset({
     # 分支里按技能名二分，见那一段的注（漏了那一步会把"勾完成"静默展开成
     # `create_dashboard_todo(...)`，即**多记一条待办**）。
     "dashboard_todo_done",
+    # 改某一条的排期日（20260929 批 G）：与上面两件同一族（目标也是一段自由文本），
+    # 展开函数是第三个（`_expand_todo_reschedule_skill`）——三件各有各的必填项，
+    # 见 `_FREE_TEXT_WRITE_SKILLS` 那条注。
+    "dashboard_todo_reschedule",
     # 后台账号冻结 / 解冻（20260926 第九轮）：目标是一个**账号名**（在后台账号
     # 列表里核对得到的名字）⇒ 走 `_WRITE_NAME_TARGET_SKILLS` 那条名字通道。
     # ⚠️ 两个技能名与两个工具名**不是一套字面量**（技能 `account_freeze` /
@@ -247,13 +251,16 @@ _OWN_WRITE_SKILLS = frozenset({"favorite_add", "favorite_remove", "notice_read",
 # 东西可核对**，所以它的判据只能是"正文在不在、排期翻不翻得出来"（见两个展开函数的
 # 头注）。同 `_WRITE_NAME_TARGET_SKILLS`：显式白名单，不是减法。
 #
-# ⚠️ 这一桶**不止一个展开函数**（第十轮起）：桶成员资格回答的是"目标是不是自由文本"，
-# 而"加一条"与"勾一条"是两件不同的事（一个有 date 参数、一个连"这条在不在列表里"都
-# 要到工具侧才判）⇒ `instantiate_plan` 里按**技能名**二分。桶里加新成员时**必须同时
-# 补那条二分**：漏了的后果是静默的——"勾完成"会被 `_expand_todo_skill` 展开成
-# `create_dashboard_todo(...)`，**多记一条待办**（比零工具危险得多：主人看到一个成功
-# 的回执，而他的列表里悄悄多了一行）。
-_FREE_TEXT_WRITE_SKILLS = frozenset({"dashboard_todo_add", "dashboard_todo_done"})
+# ⚠️ 这一桶**不止一个展开函数**（第十轮起两件、批 G 起三件）：桶成员资格回答的是
+# "目标是不是自由文本"，而"加一条 / 勾一条 / 改一条的排期"是三件不同的事（各有各的
+# 必填项，勾那条连"这条在不在列表里"都要到工具侧才判）⇒ `instantiate_plan` 里按
+# **技能名**三分。桶里加新成员时**必须同时补那条分支**：漏了的后果是静默的——
+# "勾完成"会被 `_expand_todo_skill` 展开成 `create_dashboard_todo(...)`，**多记一条
+# 待办**（比零工具危险得多：主人看到一个成功的回执，而他的列表里悄悄多了一行）；
+# "改排期"漏了则更隐蔽——它会被展开成 `create_dashboard_todo({'text': …, 'date': …})`，
+# 于是"把简历挪到 10 月 8 号"变成**又记一条简历**，而主人以为日期改好了。
+_FREE_TEXT_WRITE_SKILLS = frozenset({"dashboard_todo_add", "dashboard_todo_done",
+                                     "dashboard_todo_reschedule"})
 
 
 def _norm_pos_int(value) -> int | None:
@@ -1257,6 +1264,41 @@ SKILLS: list[Skill] = [
         roles=ADMIN_ROLES,
     ),
     Skill(
+        name="dashboard_todo_reschedule",
+        # 与 `dashboard_todo_add` 的 capability **对称着读**：「新建时可以顺便指定」⇄
+        # 「已有那一条改掉」。这正是它要防的那个误读（把加一条的参数描述当成改日期的
+        # 动作）——两句一起看时，日子这件事归哪一件就没有缝了。
+        capability="把你后台首页待办 / 日程里已有那一条的排期日改掉（也可以把排期清空）",
+        description=(
+            "博主（管理员）要求**改后台首页待办 / 日程里某一条的日期**时使用"
+            "（「把〈…〉挪到 10 月 8 号」「〈…〉改到下周」「〈…〉那条不用排期了 / "
+            "把日子清掉」）。"
+            "参数 text = 那一行**现在的正文原样**：这张列表没有行号，正文是唯一能认出"
+            "是哪一条的东西——主人只给了模糊说法（「简历那条」）时，先用 "
+            "list_dashboard_todos 读出列表**照抄**，**不许自己改写、缩写或猜**一个正文。"
+            "date = 他说的那一天（「明天」「10月8日」这类说法**都照他原样说**，系统会"
+            "翻成日期）；他要把这条的排期**清掉**时 date 填「未排期」。"
+            "⚠️ 只改排期这一列，正文与完成标记一个字都不动；要**加**一条用 "
+            "dashboard_todo_add，要**勾完成**用 dashboard_todo_done。"
+            "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，"
+            "也**照常选本技能**——要不要真改由系统弹确认框问主人（正文、当前排期与"
+            "新排期会显示在确认框里），你用 chat 索要确认会让这一轮什么都不发生。"
+            "**仅管理员可用**"
+        ),
+        inputs={"text": "要改排期的那条待办的正文原样（**照抄列表里的写法**，不要改写）",
+                "date": "改成哪一天（如「10月8日」「明天」）；要把排期清掉就填「未排期」"},
+        plan=[("reschedule_dashboard_todo", {"text": "$text", "date": "$date"})],
+        complete_when="reschedule_dashboard_todo 返回了改好的结果（含「本来就排在…」）",
+        reply_contract=(
+            "只能按 reschedule_dashboard_todo 的实际返回作答，说清改的是哪一条、改成"
+            "哪一天（清空就说这条现在没有排期了）；返回「本来就排在…」就说它本来就排在"
+            "那天、这次没有发生变更；返回「列表里没有这一条 / 有几条都叫这个」时如实"
+            "转述（**逐字**），并按返回里的提示继续（照列表原文说，或先读列表再回来）；"
+            "返回失败/未确认时如实说没改成，**绝不得用完成式声称已改好**"
+        ),
+        roles=ADMIN_ROLES,
+    ),
+    Skill(
         name="dashboard_todo_list",
         capability="查看你后台首页的待办 / 日程列表（含排期与完成情况）",
         description=(
@@ -2208,6 +2250,51 @@ def _expand_todo_done_skill(skill, params: dict) -> tuple[list[str], str]:
              f"（只翻完成标记，正文与排期都不动）"))
 
 
+def _expand_todo_reschedule_skill(skill, params: dict) -> tuple[list[str], str]:
+    """改某一条待办的排期日（20260929 批 G）→ (TOOLS 行清单, 注记)。
+
+    与 `_expand_todo_done_skill` 同一族（目标是一段自由文本，站内没有东西可核对，
+    连"这一条在不在列表里"都要到工具侧对着实时列表判），差别只有一处：**日期是
+    这一件事的全部内容**，所以它必须说清楚。而"说清楚"要分**三**种处境，别混：
+      · 契约词「未排期」⇒ **清空**（主人说"不用排期了/把日子清掉"就是它，见
+        `adminops._TODO_CLEAR_WORD`；这是与"没说日子"完全不同的第三态）；
+      · 说了日子、但翻不出来 ⇒ 零写 + 追问（**绝不挑一天顶上**——错一天的日程会
+        静静地躺在后台日历的错误格子里）；
+      · **压根没说**日子 ⇒ 零写 + 追问，问的是另一句（"要改到哪一天"）。
+    三种出口的注记各不相同：planner 同轮纠偏读的就是这段正文（`graph.param_correct`）。
+    """
+    text = _write_arg(params.get("text"))
+    if not text:
+        return [], ("dashboard_todo_reschedule 缺少正文（text）：不调用任何工具，"
+                    "如实向主人问清改的是哪一条（可先选 dashboard_todo_list 把列表读出来"
+                    "给他挑，**不要**替他挑一条）")
+    if len(text) > _TODO_TEXT_LIMIT:
+        return [], (f"dashboard_todo_reschedule 的正文太长（{len(text)} 字，上限 "
+                    f"{_TODO_TEXT_LIMIT} 字）：不调用任何工具，如实请主人照列表里的写法"
+                    f"说短一点（**不许**替他截断）")
+    raw = _write_arg(params.get("date"))
+    if not raw:
+        return [], ("dashboard_todo_reschedule 没给日期（date）：不调用任何工具，"
+                    f"如实向主人问清要改到哪一天（他要是说不要排期了，date 就填"
+                    f"「{A._TODO_CLEAR_WORD}」）")
+    if raw in A._TODO_CLEAR_DATES:
+        # 清空：传**契约词**（不是主人嘴里那个说法）——工具与卡面都只认这一个字面。
+        return ([f"reschedule_dashboard_todo("
+                 f"{json.dumps({'text': text, 'date': A._TODO_CLEAR_WORD}, ensure_ascii=False)})"],
+                f"把他自己后台首页的待办里「{A.clip(text, 20)}」那一条的**排期清掉**"
+                f"（只动排期，正文与完成标记都不动）")
+    due = A.normalize_due_date(raw)
+    if due is None:
+        return [], (f"dashboard_todo_reschedule 的排期日「{raw}」认不出来（只认 年-月-日 / "
+                    f"年/月/日 / X月X日 / 今天·明天·后天；清空排期填"
+                    f"「{A._TODO_CLEAR_WORD}」）：不调用任何工具，"
+                    "如实向主人问清是哪一天——**不许**自己挑一个日子顶上")
+    return ([f"reschedule_dashboard_todo("
+             f"{json.dumps({'text': text, 'date': due}, ensure_ascii=False)})"],
+            (f"把他自己后台首页的待办里「{A.clip(text, 20)}」那一条的排期改成"
+             f"{A.due_date_cn(due)}（只动排期，正文与完成标记都不动）"))
+
+
 # ── 计划状态（plan["status"]，20260926 批 3）────────────────────────────
 # 这不是"模型自评"，而是**系统确定性知道的处境**：造计划的那一刻
 # （`instantiate_plan` / `_terminal_plan` / `_param_problem_plan`）就知道本轮是
@@ -2478,15 +2565,19 @@ def _instantiate_plan(skill_name: str, params: dict,
             wtools, note = _expand_own_skill(skill, params)
             tools.extend(wtools)
         elif skill.name in _FREE_TEXT_WRITE_SKILLS:
-            # 目标是**自由文本**的写技能：待办 / 日程（20260926 第八轮 + 第十轮）。
-            # 前两组的目标都能在站内核对（名字 / id），这一组只有"正文在不在、排期
-            # 翻不翻得出来"那几条判据——见两个展开函数的头注。
-            # ⚠️ **必须按技能名二分**：桶成员资格只说"目标是自由文本"，而"加一条"与
-            # "勾一条"是两个展开函数。默认支（`_expand_todo_skill`）对 text 也认，
-            # 所以漏了二分**不会报错**——它会把"勾完成"展开成 `create_dashboard_todo`，
-            # 即**多记一条待办**（主人收到一个成功回执，列表里却悄悄多了一行）。
+            # 目标是**自由文本**的写技能：待办 / 日程（20260926 第八轮 + 第十轮，
+            # 20260929 批 G 加第三件）。前两组的目标都能在站内核对（名字 / id），
+            # 这一组只有"正文在不在、日期说清楚没有"那几条判据——见三个展开函数的头注。
+            # ⚠️ **必须按技能名三分**：桶成员资格只说"目标是自由文本"，而"加一条 /
+            # 勾一条 / 改一条的排期"是三个展开函数。默认支（`_expand_todo_skill`）
+            # 对 text/date 都认，所以漏了分支**不会报错**——它会把"勾完成"展开成
+            # `create_dashboard_todo`（**多记一条待办**），把"改排期"展开成
+            # `create_dashboard_todo({'text':…, 'date':…})`（**又记一条**，而主人以为
+            # 只是改了日子）。两次都是"主人收到成功回执、列表却多了东西"。
             if skill.name == "dashboard_todo_done":
                 wtools, note = _expand_todo_done_skill(skill, params)
+            elif skill.name == "dashboard_todo_reschedule":
+                wtools, note = _expand_todo_reschedule_skill(skill, params)
             else:
                 wtools, note = _expand_todo_skill(skill, params)
             tools.extend(wtools)

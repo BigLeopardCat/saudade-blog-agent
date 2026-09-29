@@ -4557,6 +4557,13 @@ _WRITE_NAME_FIELDS = {
     # 那行字是主人唯一能核对的东西，填错等于让他盲签。登记进本表之后，
     # `_name_target_fix` 的引号通道（规则④）把正文校正回主人引号里那一段。
     "complete_dashboard_todo": ("text", None),
+    # 待办「改排期」（20260929 批 G）：目标字段与上一件**同一个字面**（都是那一行的
+    # 正文），台账也是同一份（`list_dashboard_todos` 那个接口）⇒ 同样走 `is_todo`
+    # 那一支（`_write_target_refusal` 的引用式唯一命中），`date` **不登记**：它是
+    # **要写进去的值**，不是身份——主人说的那个日子本来就该由展开函数归一
+    # （`normalize_due_date` 一处），登记进本表只会让"名字必须能从原话里抽出来"
+    # 这条判据作用在一个日期串上。
+    "reschedule_dashboard_todo": ("text", None),
 }
 
 
@@ -4827,7 +4834,11 @@ _NAME_TARGET_TOOLS = ("update_tag", "delete_tag", "update_category",
                       # planner 会把它填成**另一条**待办 ⇒ 这一格正是"校正回主人说的
                       # 那一段"。⚠️ 待办不走近失校正（`_write_target_refusal` 里那条
                       # 「抄短了就补全」），理由见那一支的注。
-                      "complete_dashboard_todo")
+                      "complete_dashboard_todo",
+                      # 改排期（20260929 批 G）同族：卡面同样要逐字印出那一行的正文
+                      # （它同时也是"现在是几号"那一格的查询键）。⚠️ 同待办族不走近失
+                      # 校正——它走的是引用式唯一命中（`_todo_reference_rows`）。
+                      "reschedule_dashboard_todo")
 
 # "另一个操作数"的标记词：紧跟在它后面的那段引号**不是**目标，而是父标签
 # （挪到…下面）或新名字（改名叫…）。语序本身就是主人给的标记——20260922 实测另一跑
@@ -4935,9 +4946,11 @@ _NOTICE_MARKS = _ACCOUNT_MARKS + ("发通知", "通知", "私信", "转告")
 # 发通知那一族（今天一件；单列一个元组是为了 `_lexicon` 那条分派有名字可用，
 # 将来同族再加一件时只改这里）。
 _NOTICE_TOOLS = ("send_user_notice",)
-# 需要**惰性读一次待办列表**的写工具（20260926 第十轮）：卡面要写出那一行的排期与
-# 当前完成状态。与 `_ACCOUNT_TOOLS` 同一条纪律——只有 plan 里真含它时才多这一次请求。
-_TODO_TOOLS = ("complete_dashboard_todo",)
+# 需要**惰性读一次待办列表**的写工具（20260926 第十轮；20260929 批 G 加第二件）：
+# 卡面要写出那一行的排期 / 当前完成状态。与 `_ACCOUNT_TOOLS` 同一条纪律——只有 plan
+# 里真含它时才多这一次请求。**漏了新工具这一格**的后果：卡面印不出"现在是几号"，
+# 主人只能盲签（改排期那张卡的全部意义就是让他核对"改的是哪一条、现在排在几号"）。
+_TODO_TOOLS = ("complete_dashboard_todo", "reschedule_dashboard_todo")
 # 「状态已达成 ⇒ 不弹卡」判据要**惰性读一次本人作用域快照**的写工具族（20260926
 # 第十二轮）。收藏与已读写的都是主人自己账号里的状态（`write.own`），现状不在弹窗
 # 已经读的那几份渲染快照里（那些是后台/站内公共数据）。三族各一份名单，纪律同

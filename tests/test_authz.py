@@ -212,13 +212,19 @@ CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), 
 # / `reset_user_quota`）——批准等于**再给 500 轮**、驳回是**关于第三方**的裁决（且会给他
 # 发一条收不回的通知）、主动重置**不需要他申请过**。三件动的都不是主人的东西，且没有
 # 可改判的余地 ⇒ 一律弹卡（详见 authz 里 `_ALWAYS_CONFIRM_TOOLS` 的三条各自注）。
-check("需确认的工具恰好是二十五个（二十一个后台写 + 四个用户自己的写）",
+# 20260929 到二十六个：待办族的第三条最小通道 `reschedule_dashboard_todo`（改某一条的
+# 排期日）。与勾完成逐字同族——两条通道都**只动主人后台首页那一行**、判据都是"正文逐字
+# 相等"，而错格子的代价更隐蔽：勾错了看得见（列表上多一个勾），日子改错了**没有任何
+# 痕迹**，主人要等到那天没被提醒才发现。同族的 `create_dashboard_todo` /
+# `complete_dashboard_todo` 已在名单里，这一条不与它们分家。
+check("需确认的工具恰好是二十六个（二十二个后台写 + 四个用户自己的写）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
                         "create_announcement", "update_announcement",
                         "delete_announcement",
                         "audit_board_comment", "delete_board_comment",
                         "create_dashboard_todo", "complete_dashboard_todo",
+                        "reschedule_dashboard_todo",
                         "freeze_account", "unfreeze_account",
                         "send_user_notice",
                         "approve_quota_request", "reject_quota_request",

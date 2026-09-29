@@ -1378,17 +1378,22 @@ def _admin_status_post(path: str, payload: dict, config: RunnableConfig):
     return body.get("data")
 
 
-def _admin_todo_done_post(payload: dict, config: RunnableConfig):
-    """待办"翻完成标记"专用的 POST：把**非 200 业务码无条件读成"目标类失败"**。
+def _admin_todo_post(path: str, payload: dict, config: RunnableConfig, default_msg: str):
+    """待办窄写通道（`/done`、`/date`）共用的 POST：把**非 200 业务码无条件读成"目标类失败"**。
 
     为什么不能直接用 `_admin_request`：那条（= `_principal_request`）对**任何**
     `code != 200` 都返回 `unavailable("接口报错: …")` ⇒ 后端的"查无此条 / 有多条
     同名"被归成**服务不可用** ⇒ 过程行显示「服务不可用」、planner 收到"稍后再试"
     的指引 ⇒ 它照着这句话**重试同一条**，而这条请求**永远不会**成功（与
-    `_admin_status_post` 头注里那条一模一样的坑）。这个端点的非 200 只有两族
+    `_admin_status_post` 头注里那条一模一样的坑）。这些端点的非 200 只有两族
     （查无此条 / 多条同名）+ 存储故障，**没有一族是"目标不存在之外的服务不可用"
     值得重试**，所以一律走 `not_found`：planner 拿到这个原因码才会去读列表、
     换一个正文，或如实告诉主人"列表里没有这一条"。
+
+    两个端点（翻完成标记 / 改排期）**共用同一处定位判据**（Rust `pick_todo`），所以
+    分族的判断逐字相同——**一件实现、一处收口**，第三个端点来了也只多一行路径
+    （第三个副本必然会慢慢分叉，而分叉的那一份在"后端换了判据"那天静默说错话）。
+    `default_msg` = 后端没给 message 时的兜底话术（各端点指向的东西不同）。
 
     文案**逐字转述后端原话**（同 `_admin_status_post`）：定位判据在服务端，agent
     侧任何改写都会在判据变更那天变成假话。
@@ -1400,10 +1405,10 @@ def _admin_todo_done_post(payload: dict, config: RunnableConfig):
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
     try:
-        resp = _client.post(f"{ADMIN_BASE}/api/protected/todos/done",
+        resp = _client.post(f"{ADMIN_BASE}{path}",
                             headers=headers, json=payload, timeout=15)
     except Exception as exc:
-        logger.error("admin todo done post failed: %s", exc)
+        logger.error("admin todo post %s failed: %s", path, exc)
         return unavailable(f"接口请求失败: {exc}{_NO_SUCCESS_TAIL}")
     if resp.status_code in (401, 403):
         return unavailable("当前身份无权改动后台待办（该功能仅管理员可用），本次未改动任何内容")
@@ -1418,8 +1423,8 @@ def _admin_todo_done_post(payload: dict, config: RunnableConfig):
         # 失败判据是 `isinstance(data, ToolResult)`，裸传会被当成"成功返回的 data"
         # 接着往下走写后复核，最后报成「请求已发出…本次改动未确认生效」——一句假话
         # （这条请求根本没改任何东西，它被定位判据挡下了）。同 `_admin_status_post`。
-        logger.warning("admin todo done post refused: %s", body.get("message"))
-        return not_found(str(body.get("message") or "后台没找到这一条待办"))
+        logger.warning("admin todo post %s refused: %s", path, body.get("message"))
+        return not_found(str(body.get("message") or default_msg))
     return body.get("data")
 
 
@@ -3388,20 +3393,21 @@ def read_messages(
 
 
 # ---------------------------------------------------------------------------
-# 后台首页待办 / 日程（20260926）：读整份 / 追加一条 / 翻完成标记
+# 后台首页待办 / 日程（20260926）：读整份 / 追加一条 / 翻完成标记 / 改排期日
 # ---------------------------------------------------------------------------
 # 端点在守卫域内（Rust `src/routes/todos.rs`，`auth_guard` 之后）⇒ 这一族照例是
 # `admin.console` / `write.console`（见 agent/authz.py 的登记与那里的取舍说明：
 # 接口虽然按 uid 存"你自己的那份列表"，但普通登录用户前端根本打不开后台首页，
 # 取 read.own/write.own 会让授权层对普通用户说"允许"而 Rust 随后 403）。
 #
-# **agent 的写通道有两条**（POST /api/protected/todos/item 追加一条、
-# POST /api/protected/todos/done 翻某一条的完成标记），而它读的却是整份 GET：
+# **agent 的写通道有三条**（POST /api/protected/todos/item 追加一条、
+# POST /api/protected/todos/done 翻某一条的完成标记、POST /api/protected/todos/date
+# 改某一条的排期日），而它读的却是整份 GET：
 # 为什么不用 PUT 整份覆盖，见该文件头注——主人自己的那份列表在他手里，agent 先读
 # 再写会把主人刚做的改动抹掉，而"发一份自己拼的"在整份覆盖的语义下等于清空他的
-# 待办。两条写通道都只动**一行**，这正是它们能绕开那个取舍的原因。
+# 待办。三条写通道都只动**一行**，这正是它们能绕开那个取舍的原因。
 #
-# 两条通道的**定位判据同为"正文逐字相等"**（这张列表线上从不回行 id，正文是唯一
+# 三条通道的**定位判据同为"正文逐字相等"**（这张列表线上从不回行 id，正文是唯一
 # 能认出是哪一行的东西）：服务端 `pick_todo` 判一遍，agent 侧读回整份再判一遍
 # （**纵深，不互替**——agent 那遍是为了在发出请求之前就能如实说"没有这一条/
 # 分不清是哪一条"，且写后复核也只有这条路能认回那一行）。
@@ -3611,7 +3617,8 @@ def complete_dashboard_todo(
                          f"（{where}）——先到后台首页把其中一条改个说法")
     before_done = bool(hits[0].get("done"))
 
-    data = _admin_todo_done_post({"text": body, "done": True}, config)
+    data = _admin_todo_post("/api/protected/todos/done", {"text": body, "done": True},
+                            config, "后台没找到这一条待办")
     if isinstance(data, ToolResult):
         return data
 
@@ -3642,6 +3649,116 @@ def complete_dashboard_todo(
               meta={"op": "dashboard_todo_done",
                     "before": "已完成" if before_done else "未完成",
                     "after": "已完成"})
+
+
+# 「清空排期」的契约写法与它的同义词集**只有一处来源**（`agent/adminops.py`
+# 的 `_TODO_CLEAR_WORD` / `_TODO_CLEAR_DATES`）：那个词进工具参数的描述、进展开函数
+# 的判定、也进卡面（卡上印「未排期」）。工具这里只读它，不再抄一份字面量——两份
+# 字面量迟早会分叉，而分叉的那一天"清空"会在一条通道上成立、另一条上变成格式错误。
+
+
+@tool
+def reschedule_dashboard_todo(
+    text: Annotated[str, "要改排期的那条待办的**正文原样**——必须一字不差地照抄它此刻"
+                         "在列表里的写法；主人只给了模糊说法（「简历那条」）时先读列表"
+                         "（list_dashboard_todos）再照抄，**不要自己改写或猜**"],
+    config: RunnableConfig,
+    date: Annotated[str, "改成哪一天：主人说了哪一天就填那一天（「明天」「后天」直接照抄"
+                         "他的说法也行，系统会翻成日期）；主人说**不要排期了 / 把日子"
+                         "清掉**时填「未排期」"],
+) -> str:
+    """把**后台首页待办列表**里某一条的**排期日**改掉（那行右边的日期）。它写的是主人
+    自己那份私人清单，站内公开页面上看不到；他问"把 xx 挪到 10 月 8 号 / 改到下周 /
+    这条不用排期了"时用它。
+    `text` 必须是那一行**现在的正文原样**：这张列表没有行号，正文是唯一能认出是哪一条
+    的东西——对不上、或有多条同名，就一条都不改、如实告诉他。
+    **只改排期**（正文与完成标记一个字都不动）。日期翻不出来时零写并问清是哪一天，
+    **绝不自己挑一天顶上**。需要管理员身份，且要经主人确认。"""
+    from agent import adminops as A
+    body = str(text or "").strip()
+    if not body:
+        return unavailable("这条待办没写内容（正文是空的），本次未改动")
+    if len(body) > _TODO_TEXT_LIMIT:
+        return unavailable(f"这条待办太长了（{len(body)} 字，最多 {_TODO_TEXT_LIMIT} 字），"
+                           f"本次未改动——请让主人把这件事说短一点")
+    raw_date = str(date or "").strip()
+    if raw_date in A._TODO_CLEAR_DATES:
+        due = None
+    else:
+        due = A.normalize_due_date(raw_date)
+        if due is None:
+            # 认不出来就不挑一个顶上（同 create_dashboard_todo）：错一天的日程会静静地
+            # 躺在后台日历的错误格子里，而**改排期**比新增更容易被主人信任——他刚说过
+            # 一个日子，看见"改好了"就以为系统听懂了他的说法。
+            return unavailable(f"认不出排期日「{raw_date}」（只认 年-月-日 / 年/月/日 / "
+                               f"X月X日 / 今天·明天·后天；清空排期填"
+                               f"「{A._TODO_CLEAR_WORD}」），"
+                               f"本次未改动——请向主人问清是哪一天")
+
+    # 写前先读（同族纪律）：① 在**发出请求之前**就认出是哪一条——查无此条/有多条时
+    # 一个字节都不发（服务端也会拒，但那样主人拿到的是一句"服务端说没有"，而不是
+    # 我们读到的"你列表里现在有哪几条"）② 顺手记下它此刻的排期当回执基线。
+    before = _admin_get("/api/protected/todos", config)
+    if isinstance(before, ToolResult):
+        return _pre_read_fail(before, "你后台首页的待办列表")
+    rows_before = _todo_rows(before)
+    if rows_before is None:
+        return unavailable("读回的后台待办不是列表，没法确认你要改的是哪一条，本次未改动")
+    hits = _todo_text_hits(rows_before, body)
+    if not hits:
+        if not rows_before:
+            return not_found("你后台首页的待办列表现在是空的（一条都没记），没有可改排期的")
+        return not_found(f"你后台首页的待办里没有「{body}」这一条（列表里现在有 "
+                         f"{len(rows_before)} 条）——请照那一行现在的正文说，"
+                         f"或先读一遍列表再指")
+    if len(hits) > 1:
+        # **歧义即零写**（同 Rust `pick_todo`）：绝不替主人挑一条——挑错的那次
+        # 在列表上看起来和挑对一模一样。
+        where = "、".join(A.render_todo_when(r) for r in hits)
+        return not_found(f"有 {len(hits)} 条待办都叫「{body}」，分不清是哪一条"
+                         f"（{where}）——先到后台首页把其中一条改个说法")
+    before_date = str(hits[0].get("date") or "").strip()
+
+    data = _admin_todo_post("/api/protected/todos/date",
+                            {"text": body, "date": due or ""}, config,
+                            "后台没找到这一条待办")
+    if isinstance(data, ToolResult):
+        return data
+
+    # 写后复核 = **一次独立读数**（接口回的那一条不算判据，同 create_dashboard_todo）：
+    # 按同一正文找回那一行，它此刻的排期必须**就是目标那一天**。这一条**不能**用
+    # "列表里有没有这么一条"代替——那一行在写之前就在（这是"改排期"不是"新增"），
+    # 只有 date 变了才是净变化。
+    after = _admin_get("/api/protected/todos", config)
+    if isinstance(after, ToolResult):
+        return unavailable(f"改排期的请求已发出，但读不回你后台首页的待办列表（{after}），"
+                           f"本次改动未确认生效")
+    rows_after = _todo_rows(after)
+    if rows_after is None:
+        return unavailable("改排期的请求已发出，但读回的后台待办不是列表，本次改动未确认生效")
+    now_hits = _todo_text_hits(rows_after, body)
+    if len(now_hits) != 1:
+        return unavailable(f"改排期的请求已发出，但读回列表里叫「{body}」的现在有 "
+                           f"{len(now_hits)} 条（写前 {len(hits)} 条）"
+                           f"——本次改动未确认生效，不要声称已改好")
+    after_date = str(now_hits[0].get("date") or "").strip()
+    if after_date != (due or ""):
+        want_cn = A.due_date_cn(due) if due else "未排期"
+        return unavailable(f"改排期的请求已发出，但读回列表里这一条的排期是"
+                           f"{A.render_todo_when(now_hits[0])}（要改的是 {want_cn}）"
+                           f"——本次改动未确认生效，不要声称已改好")
+    # 幂等**不短路**（同勾完成族）：目标日期与写前相同也照发请求（服务端那个分支是真
+    # no-op），结论由上面这次复核给——回执按 `changed` 如实区分"刚改的"与"本来就是
+    # 这一天"，绝不把一次什么都没做的请求叙述成一个动作。
+    # 回执顶层只放 `_RCPT_META_KEYS` 里的键（与勾完成那一件逐字同形）：正文与目标日期
+    # 走回执的 **args**（`graph.execute_node` 落的是 `str(v)`，跨轮记忆里读得到），
+    # 这里的 before/after 是**新旧排期**。**刻意不塞 text/date**——白名单外的键会被
+    # 无声丢掉（`_RCPT_META_KEYS` 那条拷贝循环），看起来"记下来了"、其实一行都没落，
+    # 而这一族最容易的误判正是"回执里有就等于库里有"。
+    return ok(A.render_todo_rescheduled(body, due, changed=before_date != (due or "")),
+              meta={"op": "dashboard_todo_reschedule",
+                    "before": A.render_todo_when(hits[0]),
+                    "after": A.render_todo_when(now_hits[0])})
 
 
 # ---------------------------------------------------------------------------
@@ -4401,12 +4518,14 @@ _TOOL_REGISTRY = [
     # 见"站内信"节头注（术语：站内信 ≠ 河灯留言）
     list_my_messages,
     read_messages,
-    # 后台首页待办 / 日程（20260926）：读=admin.console、写两件=write.console，
-    # 见"后台首页待办 / 日程"节头注。两条写通道都只动**一行**（追加一条 / 翻一条
-    # 的完成标记）——agent 手里没有那份列表，整份覆盖会抹掉主人的改动。
+    # 后台首页待办 / 日程（20260926；20260929 加第三条写通道）：读=admin.console、
+    # 写三件=write.console，见"后台首页待办 / 日程"节头注。三条写通道都只动**一行**
+    # （追加一条 / 翻一条的完成标记 / 改一条的排期日）——agent 手里没有那份列表，
+    # 整份覆盖会抹掉主人的改动。
     list_dashboard_todos,
     create_dashboard_todo,
     complete_dashboard_todo,
+    reschedule_dashboard_todo,
     # 冻结 / 解冻账号（20260926）：write.console，目标=后台账号列表里的**账号名**，
     # 见"管理助手写工具：冻结 / 解冻账号"节头注。两个工具而不是一个带方向的参数：
     # 方向写进工具名，确认卡与回执才不可能与真正执行的方向相反。
