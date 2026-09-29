@@ -575,7 +575,8 @@ _MIN_PARAMS = {
     "announcement_create": {"title": "维护通知", "content": "今晚 23 点维护"},
     "announcement_update": {"title": "维护通知", "new_title": "维护改期"},
     "announcement_delete": {"title": "维护通知"},
-    "board_audit": {"quote": "今天天气真好呀", "verdict": "通过"},
+    # 复核（20260929 批 H · S2 起）按 **talkId**（台账编号）；删除仍按正文片段。
+    "board_audit": {"talk_id": "12", "verdict": "通过"},
     "board_delete": {"quote": "今天天气真好呀"},
     "article_status": {"article_id": 12, "status": "private"},
     "article_tags": {"article_id": 12, "add": ["摄影"]},
@@ -615,16 +616,18 @@ _MIN_PARAMS = {
     # `quota_reject` 多一个**必填的自由文本**（驳回理由，会作为站内通知发给申请人）。
     # ⚠️ 名字同样必须**明显是假的**（同上那条纪律）：这三件的后果落在别人的**对话
     # 能力**上（批准 = 再给 500 轮、重置 = 立刻能继续问），比冻结更难收回。
-    "quota_approve": {"name": "probe_target_1"},
-    "quota_reject": {"name": "probe_target_1", "reason": "这是一条发给不存在的账号的测试理由"},
+    # ⚠️ 目标改成**编号**之后，这里填的数字同样必须**不是真账号**（同上那条纪律）：
+    # 展开器只做归一与透传，真正"这个编号在不在名录里"由工具侧对着后台名录判。
+    "quota_approve": {"user_id": "90000001"},
+    "quota_reject": {"user_id": "90000001", "reason": "这是一条发给不存在的账号的测试理由"},
     "quota_reset": {"name": "probe_target_1"},
     # 审核队列的**变更集**（20260929 批 F）：参数不是"主人填的值"而是**系统拼好的
     # 逐条调用**（`_expand_change_set` 只做恒等照抄 + 允许清单核对，不补参不改写）。
     # ⚠️ 这里填的两件都是**定位用的字面量**（留言片段 / 账号名，全是明显假的），
     # 展开器是纯函数、不发请求——同上面那条"将来谁把这条改成真跑也只是零写"的纪律。
-    "review_inbox": {"specs": [
-        {"tool": "audit_board_comment", "args": {"quote": "今天天气真好呀", "verdict": "pass"}},
-        {"tool": "approve_quota_request", "args": {"name": "probe_target_1"}},
+    "review_inbox": {"calls": [
+        {"tool": "audit_board_comment", "args": {"talk_id": 12, "verdict": "pass"}},
+        {"tool": "approve_quota_request", "args": {"user_id": 90000001}},
     ]},
 }
 _EXPECT_TOOL = {
@@ -677,7 +680,9 @@ for skill_name, params in _MIN_PARAMS.items():
 #    读不到字典（None）与"名字不存在"必须分开，挂 $ref 的 spec 不许被它拦，
 #    不是按名字的写工具（多 spec / 文章写）一律不碰。
 print("\n⑨ 写目标预检 _write_target_refusal：只拦「名字落不到唯一一行」，其余一律不碰")
-from agent.graph import _write_target_refusal  # noqa: E402
+from agent.graph import (_LEDGER_TARGET_FIELDS,  # noqa: E402
+                         _ledger_target_refusal, _WRITE_NAME_FIELDS,
+                         _write_target_refusal)
 
 
 def _plan(skill, params):
@@ -931,15 +936,18 @@ check("改/删的过程行也只报标题",
 # ══════════════════════════════════════════════════════════════════
 # ⑪ 河灯留言人工复核（20260922 第六轮）：留言没有名字，**正文片段就是它的身份**
 #    与标签/分类/公告的差别不在写法，在三件留言独有的事实：
-#      ① 目标通道 = **正文片段**（唯一子串匹配）。片段撞车比标签重名常见得多
-#         （「谢谢」一撞就是好几条）⇒ "命中多条一律不追问、绝不挑最新那条"必须单独锁；
+#      ① 目标通道**两件不同**（20260929 批 H · S2 起，有意留下的不对称）：
+#         复核按 **talkId**（编号出自系统摊开的待办台账，模型只负责原样抄），
+#         删除仍按 **正文片段**（唯一子串匹配；已通过/已驳回的留言不在待办台账里，
+#         只认编号会让"删掉那条老留言"变成结构上不可达）。两条通道各自的四态都要锁
+#         ——含"片段撞车一律不追问、绝不挑最新那条"（删除侧最贵的一条错法）；
 #      ② 审核端点的请求体是 `{approved: i8}` 且 **0 = 驳回**（Rust 收到非 0 写
 #         DB 的 1；收到 0 写 DB 的 2）⇒ **请求体值与 DB 值是两张不同的表**
 #         （1/0 与 1/2）。合并它们就会把 DB 语义的 2 当请求体发出去，端点读成"通过"，
 #         于是"该驳回的给放行了"——这是本组最贵的一条错法，故方向两侧都锁；
 #      ③ DELETE 对不存在的 id **静默 no-op**（照样返回 "Deleted"）⇒ 读不回就等于
 #         没删掉（与公告三件同一取向）。
-print("\n⑪ 留言复核：正文片段指认、请求体 0/1 与 DB 1/2 是两张表、删不回")
+print("\n⑪ 留言复核（按 talkId）/ 删除（按正文片段）、请求体 0/1 与 DB 1/2 是两张表、删不回")
 
 BOARD = [
     {"talkKey": 12, "content": "今天天气真好呀", "author": "路人甲", "nickname": "路人甲",
@@ -966,7 +974,34 @@ def bstate(**kv):
     return out
 
 
-print("  · 目标通道四态：唯一命中 / 片段撞车 / 查无此句 / 清单读不到")
+print("  · 复核的目标通道（talkId）四态：解得出 / 认不出 / 查无此条 / 清单读不到")
+with patch(_board_index=lambda c: bidx()):
+    hit, err = base._find_board_comment_by_id("12", None)
+    check("编号命中 → 给那一行（id/作者/正文都在），不报错",
+          err is None and hit is not None and hit.get("talkKey") == 12, f"{hit} / {err}")
+    hit, err = base._find_board_comment_by_id("talkId:12", None)
+    check("  带命名空间的形态（台账帧原样抄下来就是这样）照样认得",
+          err is None and hit is not None and hit.get("talkKey") == 12, f"{hit} / {err}")
+    hit, err = base._find_board_comment_by_id(12, None)
+    check("  纯整数也认（模板展开要过一遍 JSON 解析，抄下来的数字会变回 int）",
+          err is None and hit is not None and hit.get("talkKey") == 12, f"{hit} / {err}")
+
+    hit, err = base._find_board_comment_by_id("今天天气真好呀", None)
+    check("编号认不出 → 说清那不是编号，**绝不退回去按正文猜**（猜等于绕过台账）",
+          hit is None and "不是一个留言编号" in err and "原样抄过来" in err
+          and "本次未改动" in err, str(err))
+
+    hit, err = base._find_board_comment_by_id("999", None)
+    check("清单里没有这个编号 → 单独一种说法（不是「有这条但状态不对」）",
+          hit is None and "没有编号为 talkId:999 的留言" in err and "本次未改动" in err,
+          str(err))
+
+with patch(_board_index=lambda c: None):
+    hit, err = base._find_board_comment_by_id("12", None)
+    check("清单读不到 → 单独一种说法（「读不到」 ≠ 「没有这条留言」）",
+          hit is None and "读不到后台的留言列表" in err and "本次未改动" in err, str(err))
+
+print("  · 删除的目标通道（正文片段）四态：唯一命中 / 片段撞车 / 查无此句 / 清单读不到")
 with patch(_board_index=lambda c: bidx()):
     hit, err = base._find_board_comment("今天天气真好呀", None)
     check("唯一命中 → 给那一行（id/作者/正文都在），不报错",
@@ -998,10 +1033,10 @@ with patch(_board_index=lambda c: None):
     check("清单读不到 → 单独一种说法（「读不到」 ≠ 「没有这条留言」）",
           hit is None and "读不到后台的留言列表" in err and "本次未改动" in err, str(err))
 
-print("  · 审核：请求体发 1/0，读回复核 DB 的 1/2（两张表不许合并）")
+print("  · 复核：请求体发 1/0，读回复核 DB 的 1/2（两张表不许合并）")
 put = _Req("Audited")
 with patch(_board_index=_Seq(bidx(), bstate(**{"12": 1})), _admin_request=put):
-    r = base.audit_board_comment.invoke({"quote": "今天天气真好呀", "verdict": "通过"},
+    r = base.audit_board_comment.invoke({"talk_id": "12", "verdict": "通过"},
                                         config=None)
     check("通过：PUT /api/protect/board/12/audit，载荷恰好 {approved: 1}",
           put.calls == [("PUT", "/api/protect/board/12/audit", {"approved": 1})],
@@ -1015,8 +1050,8 @@ with patch(_board_index=_Seq(bidx(), bstate(**{"12": 1})), _admin_request=put):
 
 put = _Req("Audited")
 with patch(_board_index=_Seq(bidx(), bstate(**{"14": 2})), _admin_request=put):
-    r = base.audit_board_comment.invoke({"quote": "谢谢站长的分享！学到了",
-                                        "verdict": "驳回"}, config=None)
+    r = base.audit_board_comment.invoke({"talk_id": "14", "verdict": "驳回"},
+                                        config=None)
     check("驳回：载荷发 **0**（端点内部落 DB 的 2——发 2 会被读成「通过」）",
           put.calls == [("PUT", "/api/protect/board/14/audit", {"approved": 0})],
           str(put.calls))
@@ -1027,21 +1062,21 @@ with patch(_board_index=_Seq(bidx(), bstate(**{"14": 2})), _admin_request=put):
 
 put = _Req("Audited")
 with patch(_board_index=_Seq(bidx(), bstate(**{"14": 1})), _admin_request=put):
-    r = base.audit_board_comment.invoke({"quote": "谢谢站长的分享！学到了",
-                                        "verdict": "驳回"}, config=None)
+    r = base.audit_board_comment.invoke({"talk_id": "14", "verdict": "驳回"},
+                                        config=None)
     check("驳回后读回「已通过」→ unavailable（方向传反必须响亮，绝不能算成功）",
           r.kind == "unavailable" and "未确认生效" in r, f"{r.kind}: {r}")
 
 put = _Req("Audited")
 with patch(_board_index=_Seq(bidx(), None), _admin_request=put):
-    r = base.audit_board_comment.invoke({"quote": "今天天气真好呀", "verdict": "通过"},
+    r = base.audit_board_comment.invoke({"talk_id": "12", "verdict": "通过"},
                                         config=None)
     check("复核后读不回清单 → unavailable（「发出去了」 ≠ 「改上了」）",
           r.kind == "unavailable" and "读不回" in r, f"{r.kind}: {r}")
 
 put = _Req("Audited")
 with patch(_board_index=_Seq(bidx(), bidx()), _admin_request=put):
-    r = base.audit_board_comment.invoke({"quote": "这条早就被驳回了", "verdict": "驳回"},
+    r = base.audit_board_comment.invoke({"talk_id": "15", "verdict": "驳回"},
                                         config=None)
     check("现状即目标（已是驳回）→ 零请求 + ok「无需改动」（这不是失败，是事实）",
           r.kind == "ok" and put.calls == [] and "现在就是「驳回」状态" in r,
@@ -1049,7 +1084,7 @@ with patch(_board_index=_Seq(bidx(), bidx()), _admin_request=put):
 
 put = _Req("Audited")
 with patch(_board_index=lambda c: bidx(), _admin_request=put):
-    r = base.audit_board_comment.invoke({"quote": "今天天气真好呀", "verdict": "删掉吧"},
+    r = base.audit_board_comment.invoke({"talk_id": "12", "verdict": "删掉吧"},
                                         config=None)
     check("认不出的复核结论 → unavailable 且**零请求**（1/0 由工具内部产生，模型不许碰）",
           r.kind == "unavailable" and put.calls == [] and "认不出复核结论" in r,
@@ -1085,9 +1120,9 @@ with patch(_board_index=lambda c: bidx(), _admin_request=dl):
           r.kind == "unavailable" and dl.calls == [] and "2 条留言都含" in r,
           f"{r.kind}: {r} / {dl.calls}")
 
-print("  · 弹窗问句：必须写清**要动的是哪一条**（片段是主人唯一的核对依据）")
+print("  · 弹窗问句：必须写清**要动的是哪一条**（复核按编号取行，删除按片段核对）")
 _q = A.render_confirm_question([{"tool": "audit_board_comment",
-                                 "args": {"quote": "今天天气真好呀", "verdict": "reject"}}],
+                                 "args": {"talk_id": 12, "verdict": "reject"}}],
                                None, None, bidx())
 check("问句里有 #id + 原文 + 作者 + 当前状态（缺一项，主人就无从核对）",
       "#12「今天天气真好呀」" in _q and "路人甲 的留言" in _q and "现在：待审" in _q, _q)
@@ -1102,7 +1137,7 @@ _q = A.render_confirm_question([{"tool": "delete_board_comment",
 check("片段对不上唯一一条（撞车）→ 问句**如实标注没核对上**，不装作核对过",
       "没能核对上站内具体是哪一条" in _q and "「谢谢站长的分享！」" in _q, _q)
 _q = A.render_confirm_question([{"tool": "audit_board_comment",
-                                 "args": {"quote": "今天天气真好呀", "verdict": "pass"}}],
+                                 "args": {"talk_id": 12, "verdict": "pass"}}],
                                None, None, None)
 check("读不到留言清单（boards=None）→ 同样如实标注，且**照样弹窗**（不因此不弹）",
       "没能核对上" in _q and "通过（放行" in _q, _q)
@@ -1117,28 +1152,47 @@ check("复核的过程行 = 人工复核留言（含「…」的那条）：通�
       _tool_action_text("audit_board_comment",
                         {"quote": "今天天气真好呀", "verdict": "reject"}))
 
-print("  · 规划轮的「先看能不能做」：留言走**同一套**预检（⑨ 的留言版）")
+print("  · 规划轮的「先看能不能做」：删除走名字预检（⑨ 的留言版），复核走台账预检")
 with patch(_board_index=lambda c: bidx()):
-    check("唯一命中 → 不拦",
+    check("删除：唯一命中 → 不拦",
           _write_target_refusal(
               _plan("board_delete", {"quote": "今天天气真好呀"}), cfg()) is None)
     got = _write_target_refusal(_plan("board_delete", {"quote": "谢谢站长的分享！"}), cfg())
-    check("片段撞车 → 拦下（连弹窗都不弹：弹了也是一句「哪一条？」）",
+    check("删除：片段撞车 → 拦下（连弹窗都不弹：弹了也是一句「哪一条？」）",
           got is not None and got[0] == "delete_board_comment"
           and "2 条留言都含" in got[1], f"{got}")
-    got = _write_target_refusal(_plan("board_audit", {"quote": "根本没有这句话",
-                                                     "verdict": "通过"}), cfg())
-    check("查无此句 → 拦下，理由与工具同一套措辞",
+    check("复核：台账里在的那一行 → 不拦",
+          _ledger_target_refusal(_plan("board_audit", {"talk_id": "12",
+                                                      "verdict": "通过"}), cfg()) is None)
+    got = _ledger_target_refusal(_plan("board_audit", {"talk_id": "999",
+                                                       "verdict": "通过"}), cfg())
+    check("复核：台账里没有这个编号 → 拦下，理由与工具同一套措辞",
           got is not None and got[0] == "audit_board_comment"
-          and "站内没有含" in got[1], f"{got}")
+          and "没有编号为 talkId:999 的留言" in got[1], f"{got}")
+    got = _ledger_target_refusal(_plan("board_audit", {"talk_id": "15",
+                                                       "verdict": "通过"}), cfg())
+    check("复核：那一行**已经不是待审**（已驳回）→ 拦下并指路后台（改判走另一处）",
+          got is not None and got[0] == "audit_board_comment"
+          and "后台留言管理页" in got[1], f"{got}")
     check("认不出的结论在**技能展开**那一层就被拒（零工具 + 具体原因）",
-          _plan("board_audit", {"quote": "今天天气真好呀", "verdict": "随便看看"})["tools"] == []
-          and "认不出来" in _plan("board_audit", {"quote": "今天天气真好呀",
+          _plan("board_audit", {"talk_id": "12", "verdict": "随便看看"})["tools"] == []
+          and "认不出来" in _plan("board_audit", {"talk_id": "12",
                                                 "verdict": "随便看看"})["note"])
+    check("编号解不出也在**技能展开**那一层被拒（零工具 + 指路台账）",
+          _plan("board_audit", {"talk_id": "今天天气真好呀",
+                                "verdict": "通过"})["tools"] == []
+          and "talkId" in _plan("board_audit", {"talk_id": "今天天气真好呀",
+                                              "verdict": "通过"})["note"])
+    check("删除不吃编号通道（两件工具分属两桶，谁也别管谁）",
+          "delete_board_comment" not in _LEDGER_TARGET_FIELDS
+          and "audit_board_comment" not in _WRITE_NAME_FIELDS)
 with patch(_board_index=lambda c: None):
-    check("清单读不到 → **不拦**（读不到 ≠ 没有这条留言）",
+    check("删除：清单读不到 → **不拦**（读不到 ≠ 没有这条留言）",
           _write_target_refusal(
               _plan("board_delete", {"quote": "随便什么"}), cfg()) is None)
+    check("复核：清单读不到 → **不拦**（同一条取向：读不到台账 ≠ 本该拒绝）",
+          _ledger_target_refusal(_plan("board_audit", {"talk_id": "12",
+                                                      "verdict": "通过"}), cfg()) is None)
 
 check("白名单里已有 board_id / board_author（新回执键不许被静默过滤）",
       {"board_id", "board_author"} <= set(_RCPT_META_KEYS), str(_RCPT_META_KEYS))

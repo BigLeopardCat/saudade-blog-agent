@@ -105,15 +105,16 @@ def test_specs_derive_from_tool_schema():
         check(f"{sk_name}.{pname} 必填性有显式结论", sp.required == want_req, f"{sp}")
 
 
-# ── ② 例外清单：只许这三条，且每条都要有实证依据 ──────────────────────────────
+# ── ② 例外清单：只许这四条，且每条都要有实证依据 ──────────────────────────────
 def test_declared_exceptions_are_the_known_three():
-    print("\n[例外] 技能盖掉派生结果的地方只有这三处")
+    print("\n[例外] 技能盖掉派生结果的地方只有这四件")
     declared = {s.name: (s.required_params, s.optional_params) for s in S.SKILLS}
     non_empty = {n: v for n, v in declared.items() if v[0] or v[1]}
     check("没有任何技能声明 required_params/optional_params 之外的例外字段",
           set(declared) == {s.name for s in S.SKILLS})
-    check("只有 navigate / effect / device_display 用了这两个字段",
-          set(non_empty) == {"navigate", "effect", "device_display"}, str(sorted(non_empty)))
+    check("只有 navigate / effect / device_display / review_inbox 用了这两个字段",
+          set(non_empty) == {"navigate", "effect", "device_display", "review_inbox"},
+          str(sorted(non_empty)))
     check("navigate.required_params = (target,)（漏了它会说「站内没有该页面」）",
           S.SKILL_MAP["navigate"].required_params == ("target",),
           str(S.SKILL_MAP["navigate"].required_params))
@@ -123,6 +124,13 @@ def test_declared_exceptions_are_the_known_three():
     check("device_display.optional_params = (text,)（文案由执行层创作）",
           S.SKILL_MAP["device_display"].optional_params == ("text",),
           str(S.SKILL_MAP["device_display"].optional_params))
+    # 20260929 批 H：`review_inbox` 从"系统专用技能、参数不给模型填"改成模型可见的
+    # **变更集**技能，参数 `calls` 由模型逐条写（`{tool, args}`，与 `content_query.calls`
+    # 同构）⇒ 必填性只能显式声明（模板给不出映射：工具名本身就是模型写的）。
+    # 它进这张表是**本批的核心事实**，不是顺手加的例外。
+    check("review_inbox.required_params = (calls,)（空清单 = 一张什么都不办的卡）",
+          S.SKILL_MAP["review_inbox"].required_params == ("calls",),
+          str(S.SKILL_MAP["review_inbox"].required_params))
     # 反面：把 device_display.text 当成必填会让"屏幕显示"这条能力从 planner 通道**整体
     # 不可达**（planner 按 inputs 的说明就不该填 text）。这条断言是上面那条的意义所在。
     sp = S.skill_param_specs(S.SKILL_MAP["device_display"])["text"]
@@ -432,13 +440,15 @@ def test_alias_normalized_params_stay_open():
         check(f"{sk_name}.{pname} 没有闭集（闭集在 adminops 的别名表里，不在工具层）",
               sp.choices == () and sp.type == "str", f"{sp}")
 
-    ok = S.instantiate_plan("board_audit", {"verdict": "驳回", "quote": "某条留言"})
+    # 20260929 批 H：目标参数从 `quote`（正文片段）换成 `talk_id`（台账编号）——
+    # 这一格的被测对象是 **verdict 的别名归一**，目标字段跟着换，断言内容一字不变。
+    ok = S.instantiate_plan("board_audit", {"verdict": "驳回", "talk_id": "101"})
     check("中文「驳回」仍被归一成 reject 并照常执行（这条通道没被闭集关死）",
-          ok["tools"] == ['audit_board_comment({"quote": "某条留言", "verdict": "reject"})'],
+          ok["tools"] == ['audit_board_comment({"talk_id": 101, "verdict": "reject"})'],
           str(ok["tools"]))
-    ok = S.instantiate_plan("board_audit", {"verdict": "通过", "quote": "某条留言"})
+    ok = S.instantiate_plan("board_audit", {"verdict": "通过", "talk_id": "101"})
     check("中文「通过」→ pass", "pass" in (ok["tools"][0] if ok["tools"] else ""), str(ok["tools"]))
-    bad = S.instantiate_plan("board_audit", {"verdict": "随便", "quote": "某条留言"})
+    bad = S.instantiate_plan("board_audit", {"verdict": "随便", "talk_id": "101"})
     check("归不了的值仍由别名层如实拒绝（不是闭集判据顺手接管）",
           bad["tools"] == [] and "认不出来" in bad["note"], bad["note"][:60])
 

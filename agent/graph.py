@@ -85,7 +85,7 @@ from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _last_assistant_utterance, _last_user_msg,
                            _ledger_frame_wanted,
                            _msg_text, _page_ctx, _prev_user_msg, _receipts_text,
-                           _recent_tail, _short_reply_hint, _short_reply_kind,
+                           _recent_tail, _short_reply_hint,
                            with_tool_call_pairs)
 from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES,
                              _any_error_frame, _article_fast_path,
@@ -3328,13 +3328,6 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     page_ctx = _page_ctx(state["messages"], role)
     has_frames = _has_frames(state["messages"])
     doc_anchors = _doc_anchors(state["messages"])
-    # 授权式审查（20260923 P2）：主人说"你看着办"而后端有**待审留言**时，台账里
-    # 那几条就是目标的唯一权威来源（见 `_auth_review_path` 头注）。这里先取一次
-    # ——唯一一条时下面直接走快道，多条/零条时这份事实块进 planner 提示。非授权式
-    # 短应答（占绝大多数轮次）在这一行就被 `_short_reply_kind` 挡掉，零额外开销。
-    auth_facts, auth_plan, auth_forced = _auth_review_path(
-        user_msg, _last_assistant_utterance(state["messages"]),
-        _principal_of(config), config)
     # 待办台账帧（批 H · S1）：把"等着主人点头的那几件"按 id 摆上桌——**事实归系统、
     # 决策归模型**。触发器在 `_ledger_families_due` 里（族名命中 / 授权式全选式 /
     # 上一轮真读过那份队列），都不命中就一次都不读。每一轮都重读（而不是只在首轮算
@@ -3381,14 +3374,11 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             record("planner", "fastpath", kind="display", round=rounds)
             return {**plan_state(display), "plan_rounds": rounds + 1, "done": False}
 
-        # 授权式审查快道（零 LLM，20260923 P2）：主人说"你看着办"+上一轮提议是复核
-        # 留言+台账里恰好 1 条待审+结论能从那句提议里读出 ⇒ 系统直接拼计划；写操作
-        # 同意闸必弹窗，弹窗把 #id/作者/原文/现状/动作印出来，主人点确定 = 身份
-        # （`_confirm_popup` 会因为"这句不是命令"放行到弹窗，见那里 `_ident_grounded`）。
-        if auth_plan is not None:
-            record("planner", "fastpath", kind="auth_pending_review",
-                   tools=auth_plan["tools"], round=rounds)
-            return {**plan_state(auth_plan), "plan_rounds": rounds + 1, "done": False}
+        # 授权式审查快道（20260923 P2）**已整族删除**（20260929 批 H）：它替主人
+        # 从上一轮那句提议里读结论、再照着拼一张写计划——正是"系统替模型决策"的
+        # 典型。那件事现在由模型做：台账按 id 摆进帧（`{pending_ledger}`），办哪几件、
+        # 办成哪一种由它定，写之前由 `_ledger_target_refusal` 拿现场台账校验编号，
+        # 一律弹卡由主人签字。
 
         # 当前文章读取确定性快道（零 LLM，20260901 系统性修复）：用户当前页面是
         # 文章详情页且消息引用"这篇/我正在读"等 → read_article 计划，TOOLS 行
@@ -3534,13 +3524,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
             # 有帧就基于帧收尾（narrator 仍能正常叙述），无帧走 chat 诚实答复。
             logger.warning("[planner] LLM 异常，兜底收尾计划: %s", e)
-            # G1（auth_forced）：LLM 抖动也不能退回"让 narrator 自由发挥"——目标已由
-            # 台账定死、只差结论这一个字，无帧的确定性收尾照旧是那条问结论的注记。
-            # 有帧时不套用：那条注记里写着"本轮一个工具都没有执行"，与事实不符。
-            plan_obj = _wrap_up_plan(
-                has_frames,
-                note=_ask_verdict_note(auth_forced)
-                if auth_forced and not has_frames else "")
+            plan_obj = _wrap_up_plan(has_frames)
             return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
         # 20260830：慢调用监控——>30s 打 WARN（正常 <5s，慢=服务端排队/长思考，
         # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）。
@@ -3744,38 +3728,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             record("planner", "param_rejected", skill=plan_obj["skill"], round=rounds,
                    missing=pp.get("missing") or [], bad=pp.get("bad") or [])
 
-        # 授权式审查（G1，20260923）：台账里唯一一条待审、而上一轮那句提议的结论
-        # **读不出来**时，系统仍把目标定死（见 `_auth_review_path` 的 forced 段 +
-        # `_forced_review_note`），留给 planner 的自由度只有一个：结论是哪一种。
-        # 没有这一段时（生产实测两跑两中）：LLM 把 SKILL 选成 chat、调用清单空 ⇒
-        # narrator 反过来问主人一句打太极的话——正是 P2 要消掉的那条死路形态。
-        # 两种去路：落在 board_audit 上且结论合法 ⇒ 照办（目标归位到台账那条）；
-        # 否则 ⇒ 确定性收尾（把那条留言印给主人、只问「驳回还是放行」），零写零编造。
-        # ⚠️ 必须**排在 `_board_quote_fix` 之前**：主人这句话里没有引号（他说的是
-        # "按你想法来吧"），而片段校正在"主人没给片段"时是**拒绝**——排在它后面就
-        # 永远轮不到本段，收尾文案还会反过来让主人去抄一条他自己没提过的留言。
-        if auth_forced:
-            missed = _forced_review_fix(plan_obj, auth_forced)
-            if missed:
-                logger.warning("[planner] 授权式审查（目标已由系统定死）但决策没落在"
-                               "写技能上（%s）→ 确定性问结论", missed)
-                record("planner", "auth_forced_miss", reason=missed,
-                       skill=plan_obj.get("skill"), round=rounds)
-                plan_obj = _wrap_up_plan(False, note=_ask_verdict_note(auth_forced))
-                return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                        "done": False}
-            record("planner", "auth_forced_plan", round=rounds,
-                   verdict=_tool_args(plan_obj["tools"][0])[0].get("verdict"))
-            logger.info("[planner] 授权式审查（目标由系统定死）照办：%s",
-                        plan_obj["tools"][0][:80])
-            # 决策到此收口（与快道同构：那条路也在下面这几道防线**之前**就返回了）。
-            # 下面三道（片段校正 / 名字值 / 目标预检）判的都是"主人自己说出口的那段
-            # 字才是身份"，而授权式场景里主人**本来就没有点名**——权威是台账（唯一
-            # 一条待审）+ 弹窗签字（他会看见那条留言的序号/作者/原文）。让它们跑一遍
-            # 只会拿"主人这句话里没有片段"把这一轮拒掉，并把主人的诉求变成一句
-            # "请把那条留言的原话抄一小段给我"。
-            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                    "done": False}
+        # 「目标由系统定死」（G1，20260923）那一段**已整族删除**（20260929 批 H）：
+        # 它治的是"主人说『你看着办』、上一轮提议里读不出结论"时 planner 退回 chat
+        # 打太极。同类事故现在的治法完全不同——台账连**编号**一起摆进帧，模型自己
+        # 选目标与结论，写前 `_ledger_target_refusal` 拿现场台账校验，一律弹卡。
 
         # 写操作的目标按名字解不出来 → 不弹窗、不执行，直接确定性如实收尾
         # （见 _write_target_refusal 上方长注：名字通道下"解不出来"必须响亮，
@@ -3808,6 +3764,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                    "后台待办清单）与主人这句话本身")
         refusal = None
         policy_refuse = False
+        ledger_refuse = False
         if quote_refuse:
             refusal = (_tool_name((plan_obj.get("tools") or ["?"])[0]), quote_refuse)
         elif value_refuse:
@@ -3819,13 +3776,23 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         else:
             refusal = _write_target_refusal(plan_obj, config, user_msg, role)
             if not refusal:
-                # 政策门**放最后**（见 `_freeze_policy_refusal` 上方长注）：前面任一环
-                # 拒绝时不该再花一次名录读；而且"无据"比"政策不允许"更该先开口——
-                # 主人说的那个账号根本不存在时，"不能冻管理员"是答非所问。
-                refusal = _freeze_policy_refusal(plan_obj, config, principal)
+                # 台账**编号**通道（20260929 批 H · S2，见 `_ledger_target_refusal`）：
+                # 审核/额度三件的目标不是"主人原话里的字面"而是"系统摆上桌的编号"，
+                # 判据因此是**现场重读台账**（真有这一行、且还在待办态）。它与上面那条
+                # 名字通道按工具名严格互斥，两处不会撞在同一件工具上。
+                refusal = _ledger_target_refusal(plan_obj, config)
                 if refusal:
-                    policy_refuse = True
-                    subject = "后端的账号管理规则（预检只判它确定知道的那两种）"
+                    ledger_refuse = True
+                    subject = ("系统这一轮现场读出来的待办台账"
+                               "（后台留言审核队列 / 额度申请队列）")
+                else:
+                    # 政策门**放最后**（见 `_freeze_policy_refusal` 上方长注）：前面任一环
+                    # 拒绝时不该再花一次名录读；而且"无据"比"政策不允许"更该先开口——
+                    # 主人说的那个账号根本不存在时，"不能冻管理员"是答非所问。
+                    refusal = _freeze_policy_refusal(plan_obj, config, principal)
+                    if refusal:
+                        policy_refuse = True
+                        subject = "后端的账号管理规则（预检只判它确定知道的那两种）"
         if refusal:
             wtool, why = refusal
             # 值/目标名被拒时补一句：那个字面是**系统自己的参数值**，不是主人点名的名字
@@ -3840,12 +3807,24 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             why_tail = ("后端那条规则不认这次的目标，**别请主人换个说法重试**——"
                         "把原话转告给他就够了，他要改主意是另一件事。"
                         if policy_refuse else
+                        # 台账编号被拒**不是**"没听清"：台账上就没有这样一行等着办
+                        # （或那件已经办完了），换个说法也不会多出一行来。请主人
+                        # "重说一遍"会把一条已查清的事实讲成一道他没跨过的门槛。
+                        "**别请他换个说法重试**：这不是「没听清」，是系统现场查过"
+                        "台账、上面没有这样一行等着办（或那一件已经不待办了）——"
+                        "把查到的状态如实转告他就够了，他要办别的事是另一件事。"
+                        if ledger_refuse else
                         "并问他接下来想怎么办（换个说法、或先把那个目标建出来）。")
-            logger.warning("[planner] 写操作参数解不出「主人这句话」里的来源（%s）：%s"
-                           " → 确定性如实收尾", wtool, why)
+            if ledger_refuse:
+                logger.warning("[planner] 写操作的目标编号对不上现场待办台账（%s）：%s"
+                               " → 确定性如实收尾", wtool, why)
+            else:
+                logger.warning("[planner] 写操作参数解不出「主人这句话」里的来源（%s）：%s"
+                               " → 确定性如实收尾", wtool, why)
             record("planner", "write_target_unresolved", tool=wtool,
                    source=("quote" if quote_refuse else "value" if value_refuse
                            else "grounding" if grounded_refuse
+                           else "ledger_id" if ledger_refuse
                            else "policy" if policy_refuse else "ledger"),
                    reason=why[:160], round=rounds)
             plan_obj = _wrap_up_plan(False, note=(
@@ -4552,7 +4531,10 @@ _WRITE_NAME_FIELDS = {
     "delete_announcement": ("title", None),
     # 河灯留言（20260922 第六轮）：按**正文片段**指认（留言没有名字/标题，
     # 用户嘴里说的就是那句话本身）。字段名统一叫 quote，解析器同一套口径。
-    "audit_board_comment": ("quote", None),
+    # ⚠️ 复核那件（`audit_board_comment`）**不在这张表**（20260929 批 H）：它治的是
+    # "台账里等着办的那一行"，目标换成台账编号 ⇒ 判据换成"这个编号出自现场台账"
+    # （见下面的 `_LEDGER_TARGET_FIELDS`）。删除那件留在本表：已通过/已驳回的留言
+    # 不在台账里，只认编号会让"删掉那条老留言"可能连编号都拿不到。
     "delete_board_comment": ("quote", None),
     # 账号（20260926）：按**账号名**指认。名字是唯一的通道——工具**没有** `user_id`
     # 参数，因为"后台列表不列超管那一行"这道防线只在"定位必须经过列表"时才成立
@@ -4563,12 +4545,11 @@ _WRITE_NAME_FIELDS = {
     # content——这正是 `_WRITE_VALUE_FIELDS`（"值字段要有字面出处"那道闸）**刻意不收
     # 它**的原因，见那张表下面那条注。这里只登记目标字段。
     "send_user_notice": ("name", None),
-    # 对话额度的三件（20260929）：目标同样是**账号名**（后台账号名录里核对着解析）。
-    # 三件都登记（`reject_quota_request` 的 `reason` 是自由文本，但它**不是**目标
-    # 字段——目标是申请人；与 `send_user_notice` 的 content 同理，**不收进**
-    # `_WRITE_VALUE_FIELDS`，那一层靠弹卡给人眼看）。
-    "approve_quota_request": ("name", None),
-    "reject_quota_request": ("name", None),
+    # 对话额度（20260929）：**只有主动重置那件在这张表上**（目标是账号名）。
+    # 批准与驳回批 H 起按台账编号，见 `_LEDGER_TARGET_FIELDS`。
+    # （`reject_quota_request` 的 `reason` 是自由文本，但它**不是**目标字段——
+    # 目标是申请人；与 `send_user_notice` 的 content 同理，**不收进**
+    # `_WRITE_VALUE_FIELDS`，那一层靠弹卡给人眼看。）
     "reset_user_quota": ("name", None),
     # 待办「勾完成」（20260927）：目标 = 后台首页待办列表里**那一行的正文**。与留言
     # 族的 `quote` 同形（主人嘴里说的就是那一段字），台账却不在站内字典里——它在
@@ -4633,34 +4614,20 @@ def _msg_quote_spans(user_msg) -> list[str]:
     return out
 
 
-_BOARD_REJECT_WORDS = ("驳回", "隐藏", "不放行", "别显示", "撤下", "下架", "不通过")
-_BOARD_PASS_WORDS = ("通过", "放行", "批准", "恢复显示", "放出来", "同意显示")
-
-
-def _msg_verdict(user_msg) -> str | None:
-    """主人这句话里的复核取向（只认**单向**：两边词都出现 = 说不清，返回 None）。
-
-    只给 `_board_quote_fix` 的补参分支用——补出来的 verdict 会**写在弹窗问句里**
-    （"人工复核为 驳回（隐藏…）"）由主人确认，所以"认错方向"的代价是一次点取消，
-    不是一次错写。
-    """
-    text = str(user_msg or "")
-    rej = any(w in text for w in _BOARD_REJECT_WORDS)
-    pas = any(w in text for w in _BOARD_PASS_WORDS)
-    if rej == pas:
-        return None
-    return "reject" if rej else "pass"
-
-
 def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0,
                      role: str | None = None) -> str | None:
-    """留言类写工具的 `quote` 校正到主人引号里那段原话。返回拒绝原因或 None（就地改）。
+    """`delete_board_comment` 的 `quote` 校正到主人引号里那段原话。返回拒绝原因或 None。
 
     单 spec 时校正/拒绝；**零工具**时补参（见下）。两者与 `_write_target_refusal`
     共用同一条边界。
 
+    ⚠️ **只治删除这一件**（20260929 批 H）：复核那件（`audit_board_comment`）的目标
+    换成了台账编号，判据换成"这个编号出自现场台账"（`_ledger_target_refusal`）。
+    把它一起收进来的话，本函数会拿着一个**没有 quote 的** spec 走进下面那段"值不在
+    引号里 ⇒ 用引号那一段顶上"的校正，把一段主人随口引来的人话塞进一个编号字段。
+
     `role` 只是往下透传给 `instantiate_plan`（重建计划时 calls 白名单要按角色取）。
-    本函数重建的总是留言类写技能、参数由它自己构造，角色在此不影响结果；带上它是
+    本函数重建的总是留言删除技能、参数由它自己构造，角色在此不影响结果；带上它是
     为了让"重建整个 planner 计划"的每一处都拿到同一个 role——漏传是静默的。
     """
     tools = plan_obj.get("tools") or []
@@ -4672,21 +4639,15 @@ def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0,
         # 于是按主人原话补上（弹窗照旧让主人确认，没有静默写）。
         # 只在**首轮**补：后续轮次 planner 看到工具帧之后决定"问一句"可能是对的，
         # 不该被覆盖。
-        if rounds or skill not in ("board_audit", "board_delete"):
+        if rounds or skill != "board_delete":
             return None
         spans = _msg_quote_spans(user_msg)
         if len(spans) != 1:
             return None  # 没引号 / 多段引号：真说不清是哪一条，让 planner 的追问成立
         params = {"quote": spans[0]}
-        if skill == "board_audit":
-            verdict = _msg_verdict(user_msg)
-            if not verdict:
-                return None  # 取向也说不清（或两边都说了）→ 不猜
-            params["verdict"] = verdict
         logger.info("[planner] 片段通道：planner 零工具追问，但主人引号里有唯一一段原话"
                     "（%r）→ 按主人原话补参", spans[0][:40])
-        record("planner", "quote_fill_from_span", skill=skill, quote=spans[0][:60],
-               verdict=params.get("verdict"))
+        record("planner", "quote_fill_from_span", skill=skill, quote=spans[0][:60])
         fresh = instantiate_plan(skill, params, role)
         fresh["params"] = params
         plan_obj.clear()
@@ -4695,7 +4656,7 @@ def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0,
     if len(tools) != 1:
         return None
     name = _tool_name(tools[0])
-    if not name.endswith("_board_comment"):
+    if name != "delete_board_comment":
         return None
     args, args_ok = _tool_args(tools[0])
     if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
@@ -6037,6 +5998,96 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
     return None
 
 
+# ── 台账编号通道（20260929 批 H · S2）────────────────────────────────────────
+# 工具 → 它那个"台账编号"参数名。这三件治的都是**队列里等着办的那一行**
+# （留言的待审行 / 额度的待处理申请），目标由系统摆上桌（S1 的 `{pending_ledger}` 槽），
+# 模型照抄编号 ⇒ 判据不是"这段字面出自主人原话"，而是"这个编号出自**现场台账**"。
+#
+# **与 `_WRITE_NAME_FIELDS` 严格互斥**：同一件工具同时出现在两张表里，"按名字解"与
+# "按编号解"会各判一次，谁先拒都是一句可能更松或更紧的话（`test_target_grounding`
+# 有一条互斥断言钉住）。留在名字通道那几件的理由见两张表各自的注。
+_LEDGER_TARGET_FIELDS = {
+    "audit_board_comment": "talk_id",
+    "approve_quota_request": "user_id",
+    "reject_quota_request": "user_id",
+}
+
+
+def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
+    """台账编号通道的**目标预检**：这个编号确实出自现场台账、且那一行还在等办吗？
+
+    返回 `(工具名, 拒绝说明)` 或 None（=放行给工具）。三条判据，缺一即拒：
+
+      ① **编号解得出来**（`adminops.normalize_target_id`：裸数字与帧里印的
+         `talkId:101` / `账号 id=3` 都算，其余一律认不出）——认不出就如实说，
+         **绝不退回去猜**（猜出来的目标没人签得了字）；
+      ② **现场台账里真有这一行**（留言按 `talkKey`、额度按 `userId`）；
+      ③ **那一行还在待办态**（留言仍 `approved == 0`、额度仍在那份 pending 队列里）。
+
+    ③ 是本层与"按名字解"最大的不同，也是它比后者**更强**的地方：可写集恒等于
+    "系统这一轮摆上桌的那一集"，而不是"站内存在的任意一行"。代价要说清——**已复核
+    过的留言（已通过 / 未通过）不在待办台账里，编号也就无从取得**，主人想反悔得去
+    后台留言管理页。这是本批刻意选的方向（宁可不办，也不让模型拿一个从报表里瞥见的
+    编号去动一行主人当下没在决定的事）；正因为代价是"能力变窄"，拒绝话术必须
+    **如实说出那一行现在是什么状态**，而不是一句含糊的"做不了"。
+
+    **读不到台账 ⇒ 放行**（与 `_write_target_refusal` 同向）：读不到不是"没有"，
+    工具自己会再读一次、那一层读不到才零写。预检只允许比工具**更保守**，绝不允许
+    更宽松——保守那侧的代价是能力静默消失（没有任何闸能发现"这件事本来做得成"）。
+
+    trace 的 `source` 用 **`ledger_id`** 而不是 `_write_target_refusal` 用的 `ledger`：
+    两层的拒绝原因完全不同（"名字解不出" / "编号不在待办态"），合成一个值就再也
+    分不开这两类事故。
+    """
+    tools = plan_obj.get("tools") or []
+    if not tools:
+        return None
+    name = _tool_name(tools[0]) if len(tools) == 1 else None
+    if name not in _LEDGER_TARGET_FIELDS:
+        # 多 spec 混排 / 不是编号通道的写工具：不在这里判（同 `_write_target_refusal`
+        # 那条边界——真出现混排该由工具自己如实拒绝）。
+        return None
+    args, args_ok = _tool_args(tools[0])
+    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+        return None
+    from tools.base import (
+        BOARD_APPROVED_CN,
+        _board_index,
+        _quota_pending_index,
+    )
+    field = _LEDGER_TARGET_FIELDS[name]
+    raw = args.get(field)
+    tid = A.normalize_target_id(raw)
+    if tid is None:
+        said = str(raw if raw is not None else "").strip()[:40]
+        return name, (f"要动的是台账里等着办的那一行，目标必须填**台账上的编号**，"
+                      f"而参数 `{field}` 里给的是「{said or '空'}」——那不是编号"
+                      f"（编号就是台账行上印着的那串数字，原样抄即可）")
+    if name == "audit_board_comment":
+        index = _board_index(config)
+        if index is None:
+            return None  # 读不到留言清单 ≠ 没有这一条（见头注末段）
+        row = index.get(tid)
+        if not isinstance(row, dict):
+            return name, (f"站内没有编号为 talkId:{tid} 的留言，本次未改动"
+                          f"（可能记错了编号，或那条已经被删了）")
+        if row.get("approved") != 0:
+            state = BOARD_APPROVED_CN.get(row.get("approved"), "状态未知")
+            return name, (f"留言 talkId:{tid} 现在的状态是「{state}」，不在待审之列"
+                          f"——待办台账只摆**待审**（未复核）的留言，这一条不在系统"
+                          f"摆上桌的那一集里，本次未改动（要改回来得到后台留言管理页）")
+        return None
+    # 额度族：`_quota_pending_index` 读的就是 `?status=pending` ⇒ "这一行在不在"
+    # 与"是不是还在待办态"是同一个问题，一次查同时回答两条（见它的头注）。
+    pending = _quota_pending_index(config)
+    if not isinstance(pending, dict):
+        return None  # `ToolResult`（读不到队列）⇒ 放行，同上
+    if tid not in pending:
+        return name, (f"账号 id={tid} 现在没有待处理的额度申请，本次未改动"
+                      f"（那条申请可能已经被处理过，也可能他本来就没申请过）")
+    return None
+
+
 # ── 冻结/解冻的**政策预检**（20260926，见下方 `_freeze_policy_refusal`）─────────
 # 发起人角色 → 他**冻得动**的目标角色。表里没有的发起人角色 ⇒ 不拦（放行给后端）。
 # 这张表只写"确定知道"的部分：管理员冻不动管理员（更冻不动超管），超管谁都能冻
@@ -6119,125 +6170,18 @@ def _freeze_policy_refusal(plan_obj: dict, config,
     return None
 
 
-# ── 授权式短应答 + 审查类提议 ⇒ 系统台账里的待审候选（20260923，P2）───────────
-# 事故事实（`20260923T131918`）：主人说"小猫咪按你想法来吧"（授权式——连目标都
-# 没点），planner 点对了技能 `board_audit`，但**目标解不出来**（留言没有标题，
-# 只能按正文片段指认，而片段必须来自主人这句话本身）⇒ 身份防线如实收尾 ⇒
-# narrator 却从**历史对话**里挑了一条旧留言（早已通过的那条）当目标，还报了
-# "点确定我就去办"（洞⑥ 判据已拦）。
-# 两个缺口叠在一起才是这条事故：① 授权式此前判据认不出来（P1 已修）；
-# ② 目标本来有**唯一权威来源**——系统台账里"待审（approved=0）"的那几条——
-# 却没人去读，模型只能回历史里抓。用户拍板的形态就是补上②：
-# **"弹窗把目标印给主人"**——系统按台账把计划拼出来，写操作同意闸必弹窗，弹窗里
-# 印着 #id/作者/原文/现状/动作，主人点"确定"= 身份（不再依赖"名字得在主人这句话
-# 里"那道防线：那条防线的前提是主人点过名，这里主人明确说"你定"）。
-# 边界（一条都不许松）：
-#   · 只在**审查类**提议之后（上一轮泠月说的就是留言审核），且**恰好 1 条待审**
-#     + 结论能从上一轮那句话里确定地读出来（驳回/放行）⇒ 才自动拼计划；
-#   · 0 条 / ≥2 条 / 结论读不出 / 台账读不到 ⇒ **一律不替主人挑**，只把台账事实
-#     注入给 planner（0 条时它必须如实说"没有待审留言"，≥2 条时只能列候选请主人
-#     点名）；读不到 ≠ 没有（同 `_tag_index` 纪律：读失败绝不写成"没有"）。
+# ── 两族的**族名触发词**（只决定"摆不摆台账"，不判结论）─────────────────────
+# 它们曾经是一条确定性快道的一部分：从上一轮那句提议里**读出结论**、再照着拼一张
+# 写计划。那条快道 20260929 批 H 整族删掉了（用户拍板：决策全交模型）——现在
+# 这两个正则只剩一个用途：`_ledger_families_due` 判"主人这句话/上一轮那句话提到
+# 了哪一族"，据此决定要不要去读那一份后台队列、把待办摆上桌。**读到的任何东西
+# 都不再变成结论**，办不办、办成哪一种由模型看着台账定。
+#
+# ⚠️ `_REVIEW_INTENT_RE` **只加词、不改结构**：`eval/probe_admin_write.py` 把它当
+# 判据本体 import 去判"这一轮该不该读到台账"，改宽它等于同时改掉探针的判据。
+# 额度族另起一份（两族读的是两份队列，一份正则分不出该读哪份）。
 _REVIEW_INTENT_RE = re.compile(r"留言|审核|复核|待审|驳回|放行|通过|隐藏")
-# 额度族的**准入**词（20260929 批 F）：与留言族分开一份，因为两族要读的是两份队列，
-# 而"上一轮那句提议提到了哪一族"决定这一轮去读哪一份台账（见 `_family_in_play`）。
-# 合起来那一份（`_QUEUE_INTENT_RE`）是**总准入**判据：两族都不提就整条快道不适用。
-# ⚠️ 只加词、**不动** `_REVIEW_INTENT_RE`：它是 `eval/probe_admin_write.py` 的判据本体
-# （探针自己 import 它去判"这轮该不该走定死模式"），改宽它等于同时改掉探针的判据——
-# 那一族的行为要变只能另起一份（同 `_QUEUE_INTENT_RE` 的形态）。
 _QUOTA_INTENT_RE = re.compile(r"额度|配额|申请")
-_QUEUE_INTENT_RE = re.compile(_REVIEW_INTENT_RE.pattern + r"|额度|配额|申请")
-_AUDIT_REJECT_RE = re.compile(r"驳回|隐藏|不放行|不通过|未通过")
-# 放行族的**否定前缀必须排除**（20260923 P2 六轮后的复扫实证）：提案句是
-# "那我把这条**驳回隐藏**（只有作者自己在「我的河灯」看到未通过）"——括号里那句
-# 「未通过」是**用来解释驳回后果**的，旧判据（裸 `通过|放行`）把它读成"也提到放行"
-# ⇒ 两族都命中 ⇒ 返回空串 ⇒ 唯一待审也拼不出计划，退回 LLM 自由决策（实测两跑
-# 两次都选了 chat 空工具，narrator 反过来问主人一句打太极的话）。
-# 判据分两层（`_audit_words`）：紧贴的「不通过/未通过」靠原始模式；
-# **隔着字的否定/使役式**（"不让它通过""别放行了"）靠 4 字窗口——它们语义上是
-# 驳回，读成放行是**反向错**（比读不出危险：快道会拼一条与主人意图相反的写计划，
-# 弹窗上还写着"放行"）。窗口之外的长否定式交给提案句作用域与 LLM：本判据宁可
-# 回空串（回空串 ⇒ 目标定死模式，只把结论交给模型）也绝不猜反。
-_AUDIT_PASS_RE = re.compile(r"通过|放行")
-_AUDIT_NEG_BEFORE_RE = re.compile(r"[不未别没禁]\s?.{0,3}$")
-
-
-def _family_words(s: str, pass_re, reject_re) -> tuple[bool, bool]:
-    """一句里读出的 `(驳回, 放行)` 两类结论词（`pass_re`/`reject_re` = 这一族的词对）。
-
-    **否定式放行算驳回**（"别放行""不让它通过""未通过"= 不让它露出来）：这一条是
-    判据的方向性保证——"不通过"读成放行是反向错，会让快道拼出一条与主人意图相反
-    的写计划，而弹窗上写着"放行"，要靠主人自己看出来才拦得住。
-    """
-    rej = bool(reject_re.search(s))
-    allow = False
-    for m in pass_re.finditer(s):
-        if _AUDIT_NEG_BEFORE_RE.search(s[max(0, m.start() - 4):m.start()]):
-            rej = True
-        else:
-            allow = True
-    return rej, allow
-
-
-def _audit_words(s: str) -> tuple[bool, bool]:
-    """**留言族**的结论词（`_family_words` 的薄壳：抽族时保留原签名，语义一字未变）。"""
-    return _family_words(s, _AUDIT_PASS_RE, _AUDIT_REJECT_RE)
-
-
-# 额度族的词对（20260929 批 F）。**必须与留言族分开一对**：同一个词在两族里的后果
-# 不同（「通过」在留言族是放行、在额度族是批准），共用一对会让一句只提了额度的话
-# 拿去解留言的候选。形态照抄留言族（两层作用域 + 否定窗口），只换词对。
-# 「驳回」两侧共用是刻意的——它在两族里都是"不给"，方向一致。
-_QUOTA_PASS_RE = re.compile(r"批准|批了|通过|同意|放行")
-_QUOTA_REJECT_RE = re.compile(r"驳回|拒绝|不批|否决|不同意")
-
-# 族 → 词对。**唯一一份**族名与词对的对应（`_family_verdict` 与候选装配共用）。
-_FAMILY_WORDS = {"board": (_AUDIT_PASS_RE, _AUDIT_REJECT_RE),
-                 "quota": (_QUOTA_PASS_RE, _QUOTA_REJECT_RE)}
-
-
-# 提案句的标记词（20260923 G2）：单条回复里常混着"解释/复述/工具原文"，结论必须
-# 从**提议那几句**里读。判据按句切（。！？；换行），只在这些带标记的句子里找；
-# 一句都没标记（多数短回复）→ 回退整段（与旧行为逐字相同）。实测依据：13:19 事故
-# 原话与线上那条铺垫轮回复里，标记句各自只提一族结论，而未标记句里混着另一族的
-# 否定形态——旧判据两族都命中 ⇒ 快道从不命中（那种"靠运气"的判据等于没有）。
-_PROPOSAL_MARK_RE = re.compile(
-    r"建议|维持|我这就|那我|把这条|这条就|处理成|判为|决定|打算|准备|结论|按.{0,6}(办|做)")
-_PROPOSAL_SENT_RE = re.compile(r"[。\n；;！!？?]")
-
-
-def _family_verdict(text: str, family: str) -> str:
-    """从上一轮泠月那句提议里读出**这一族**的结论：'reject'/'pass'/''（读不出或自相矛盾）。
-
-    读不出**绝不默认**（默认驳回 = 替主人下了一个会隐藏访客留言 / 驳回一份申请的决定）。
-    两级作用域：先只在**带提案标记的句子**里读（回复里"顺带一提/解释后果"的句子
-    常常提到另一族词），那儿读不出再回退整段——回退是为了不改变"短回复"这类
-    没有标记句的既有行为。
-    """
-    pass_re, reject_re = _FAMILY_WORDS[family]
-    t = text or ""
-    sentences = [s for s in _PROPOSAL_SENT_RE.split(t) if s.strip()]
-    marked = [s for s in sentences if _PROPOSAL_MARK_RE.search(s)]
-    for scope in (marked, [t]):
-        if not scope:
-            continue
-        reject = False
-        allow = False
-        for s in scope:
-            r, a = _family_words(s, pass_re, reject_re)
-            reject = reject or r
-            allow = allow or a
-        if reject != allow:
-            return "reject" if reject else "pass"
-    return ""
-
-
-def _verdict_from_proposal(text: str) -> str:
-    """**留言族**的结论读取（20260929 批 F 抽族后的薄壳）。
-
-    保留这个名字与签名，因为调用方读的是"留言复核"这件事本身：`eval/probe_admin_write.py`
-    与 `tests/test_skills.py` 都按它判"上一轮那句提议里说的是驳回还是放行"。
-    """
-    return _family_verdict(text, "board")
 
 
 def _render_pending_facts(pending: list) -> str:
@@ -6332,6 +6276,24 @@ def _read_ledger_family(family: str, config) -> tuple[list, bool]:
         return [], False
 
 
+def _recent_tools_of(config) -> set:
+    """上一轮**真的执行过**哪些工具（`config["configurable"]["recent_tools"]`）。
+
+    Rust 从本会话最近几条执行回执里取的工具名（去重、上限 8）——**系统事实**，
+    不是对 narrator 散文做正则。缺省（`[]`）的含义是"确定地什么都没执行"
+    （旧 Rust 不发这个键时同样是空列表 ⇒ 回落散文判据，见 server.py 那条注）。
+
+    20260929 批 H 起它的用途只剩一处：`_ledger_families_due` 判"上一轮读过这两份
+    队列没有"，据此决定这一轮要不要把待办台账摆上桌（"他刚看过、正在处理这件事"
+    是比词表更硬的证据）。**不再决定办不办**——决策全归模型。
+    """
+    cfg = (config or {}).get("configurable") or {}
+    raw = cfg.get("recent_tools")
+    if not isinstance(raw, (list, tuple)):
+        return set()
+    return {str(t) for t in raw if isinstance(t, str) and t}
+
+
 def _ledger_families_due(user_msg: str, prev_ai: str, config) -> dict:
     """这一轮要把哪几族的**待办台账**摆上桌（`{"board": bool, "quota": bool}`）。
 
@@ -6412,318 +6374,7 @@ def _pending_ledger_frame(user_msg: str, prev_ai: str, principal, config
     return text, meta
 
 
-def _forced_review_note(forced: dict) -> str:
-    """目标已由系统定死时的提示块（G1，20260923）：决策自由度只剩"哪一种结论"。
-
-    写给 planner 的**纪律**：只写机器能保证的事实（台账里那条的 #id/作者/原文）
-    与它必须落在哪个技能上，**不替它读结论**（结论仍是它的判断）。
-    """
-    return (
-        "\n**本轮的决策自由度只剩一个：这件写操作的结论是哪一种。**系统已经替你"
-        f"把**目标**定死了——台账里唯一一条待审留言：{forced['label']}"
-        f"「{forced['excerpt']}」。请这样决策：\n"
-        "　　· SKILL 选 `board_audit`，`quote` 用上面那条留言的正文（系统按台账"
-        "校正，你不必抄准）；`verdict` 只填 `reject`（驳回/隐藏）或 `pass`（放行）\n"
-        "　　· 结论从**上一轮泠月那句提议**的语义里读——它当时说要办的是哪一种就是"
-        "哪一种；读不出来就填不出来，别猜\n"
-        "　　· **不许**把 SKILL 选成 chat、不许零工具、不许再问主人「是哪一条留言」"
-        "（目标是系统给的），也不许说这件事已经办了或已经有确认弹窗了")
-
-
-def _ask_verdict_note(forced: dict) -> str:
-    """确定性收尾的注记（G1）：把台账那条印给主人，只问「驳回还是放行」。
-
-    ⚠️ 原文用「」包起来（`_board_excerpt` 的形态）是**刻意的**：主人回话时把这段
-    原话带上，就同时给了身份（`_board_quote_fix` 认引号里那段）与结论——否则他
-    只回一句「驳回」，留言写操作会按②防线如实拒绝（"请把那条留言的原话抄一小段
-    给我"），那条路要走两轮。注记里的**禁止句**照旧必须有：写给 narrator 的机制
-    描述会变成它的词汇。
-    """
-    return (
-        _LEDGER_NOTE_PREFIX +
-        "**这件事这次没有做：站内数据一个字节都没有改动**（本轮一个工具都没有执行）。"
-        f"系统查过台账：现在待审的留言**只有一条**——{forced['label']}"
-        f"「{forced['excerpt']}」。而上一轮泠月那句提议里，系统读不出它当时要办的"
-        "是「驳回」还是「放行」，所以本轮该做的是**问主人一句**：把这条留言（序号、"
-        "作者、原文）如实报给他，问他这一条要驳回还是放行，并请他把这条留言的原话"
-        "带上一小段。**只许**问这一个问题：不许出现「看过/读过/查过/检索过/调用过"
-        "工具」这类说法，不许说这件事已经办了或正在办，也不许声称有确认弹窗。")
-
-
-# 「定死一条留言目标、只把结论留给 planner」这条车道允许出现的技能。
-# = 注册表里 **plan 声明了 `audit_board_comment`** 的那几个技能（`board_audit` 是
-# 单件技能、`review_inbox` 是变更集技能）——主人若在定死车道上把变更集技能点回来，
-# 目标同样必须归位。两份名单的对齐由 `tests/test_change_set.py` 的派生锁钉住
-# （判据从注册表现算，不手抄第二份真相）。
-_REVIEW_SKILLS = ("board_audit", "review_inbox")
-
-
-def _forced_review_fix(plan_obj: dict, forced: dict) -> str | None:
-    """就地判 forced 模式的计划：合格则**目标归位**到台账那条，否则返回不合格的原因。
-
-    合格 = SKILL 是**留言复核族**的技能、恰好一条留言写工具、`verdict` 是 reject/pass。
-    `quote` 一律改写成台账里那条的正文（同 `_board_quote_fix` 的"校正"取向：主人
-    没有点名 ⇒ 唯一权威是系统台账，模型的片段概括不许进参数）。
-
-    技能集合从**硬编码的一个名字**改成 `_REVIEW_SKILLS`（20260929 批 F）：变更集技能
-    `review_inbox` 与 `board_audit` 都声明了 `audit_board_comment`，主人在这条定死
-    车道上点回一个变更集技能时，目标同样必须归位——"落在这两个技能上"与"工具在
-    该技能的 plan 里"两条一起判，技能名与工具名的对应关系仍然只有一处（注册表）。
-    """
-    tools = plan_obj.get("tools") or []
-    if plan_obj.get("skill") not in _REVIEW_SKILLS or len(tools) != 1:
-        return f"skill={plan_obj.get('skill')}、调用清单 {len(tools)} 条"
-    name = _tool_name(tools[0])
-    if not name.endswith("_board_comment"):
-        return f"工具={name}"
-    args, args_ok = _tool_args(tools[0])
-    if not args_ok:
-        return "参数不是 JSON 对象"
-    verdict = str(args.get("verdict") or "").strip().lower()
-    if verdict not in ("reject", "pass"):
-        return f"verdict={verdict or '空'}"
-    params = {"quote": forced["quote"], "verdict": verdict}
-    fresh = instantiate_plan("board_audit", params)
-    fresh["params"] = params
-    plan_obj.clear()
-    plan_obj.update(fresh)
-    return None
-
-
-# ── 变更集（20260929 批 F）：一次点头办 N 件 ─────────────────────────────
-# 用户拍板的三条（不许再改）：① 野心档 = 变更集（可跨技能）；② "主人点头"由
-# **确定性封闭表**认（`context._short_reply_kind`，不用 LLM）；③ 多候选时**卡片列全，
-# 让主人挑**。于是 `_auth_review_path` 从"唯一一条才敢办"扩成"队列里有几条就列几条"。
-#
-# 一条卡最多几件：与 `_render_pending_facts` 的 ≤5 条同口径（那张卡要一屏读完）。
-# 超出部分**如实说还有几件**（进计划的 NOTE 行交 narrator 说出来），绝不静默截断。
-_CHANGE_SET_MAX = 5
-
-# 哪几个工具算"读过这份队列"（F1' 的结构化准入判据）：工具名 → 它读的是哪一族。
-# `get_moderation_status` 读的是 `GET /api/protect/board`（与 `_board_index` 同一份
-# 后台留言视图）；`list_quota_requests` 读的是额度申请队列（与 `_quota_pending_index`
-# 同一个接口）。**不列 `list_guestbook`**：那是公开留言板，看不见 approved 状态，
-# 读过它不等于主人正在看"等你复核的那几条"。
 _QUEUE_READ_TOOLS = {"get_moderation_status": "board", "list_quota_requests": "quota"}
-
-# 单件车道上"工具 → 技能"的对应（这两件各自的单件技能）——变更集技能 `review_inbox`
-# 是这两族工具的**并集**，只在 ≥2 件时用。对齐由 tests/test_change_set.py 的派生锁
-# 钉住（每个工具都必须在该技能 plan 里声明）。
-_SPEC_SKILL = {"audit_board_comment": "board_audit",
-               "approve_quota_request": "quota_approve"}
-
-
-def _recent_tools_of(config) -> set:
-    """上一轮**真的执行过**哪些工具（`config["configurable"]["recent_tools"]`）。
-
-    Rust 从本会话最近几条执行回执里取的工具名（去重、上限 8）——**系统事实**，
-    不是对 narrator 散文做正则。缺省（`[]`）的含义是"确定地什么都没执行"
-    （旧 Rust 不发这个键时同样是空列表 ⇒ 回落散文判据，见 server.py 那条注）。
-    只用于**判哪几份队列该读**，不进任何提示词。
-    """
-    cfg = (config or {}).get("configurable") or {}
-    raw = cfg.get("recent_tools")
-    if not isinstance(raw, (list, tuple)):
-        return set()
-    return {str(t) for t in raw if isinstance(t, str) and t}
-
-
-def _families_in_play(prev_ai: str, config) -> dict:
-    """这一轮要读哪几份队列（`{"board": bool, "quota": bool}`）。
-
-    两条来源，取或：
-      · 上一轮那句提议里提到了这一族（`_REVIEW_INTENT_RE` / `_QUOTA_INTENT_RE`）；
-      · 上一轮**真的读过这份队列**（`_QUEUE_READ_TOOLS` ∩ `recent_tools`）。
-    第二条是 20260929 批 F1' 新增的结构化判据，治的正是"提议句里没用审核那几个词、
-    但它明明就是在等主人点头"这一类——那种轮次此前整条快道连门都进不去。
-
-    **只读在册的那几份**：不提也不读的族不读队列（零额外网络开销），这份名单因此
-    也是"非授权式轮次一次台账都不读"那条既有纪律的载体。
-    """
-    touched = {_QUEUE_READ_TOOLS[t] for t in _recent_tools_of(config)
-               if t in _QUEUE_READ_TOOLS}
-    prev = prev_ai or ""
-    return {"board": bool(_REVIEW_INTENT_RE.search(prev)) or "board" in touched,
-            "quota": bool(_QUOTA_INTENT_RE.search(prev)) or "quota" in touched}
-
-
-def _change_set_specs(board: list, quota: list, prev_ai: str
-                      ) -> tuple[list, list]:
-    """候选 + 上一轮那句提议里的结论 → 变更集的逐条调用 `[{"tool","args"}]`。
-
-    返回 `(specs, skipped)`：`skipped` 是**没进集合的原因**（只进日志与计划注记，
-    不进卡面——卡面只印真要办的那几件）。
-
-    判决是**按族**读的（一句"这两条都驳回吧"对同一族的每一条都成立），三条纪律：
-      · **判决读不出的候选不进集合**（读不出 ≠ 默认驳回：默认驳回是替主人隐藏访客的
-        留言、驳回一份申请，方向错得最狠的那一类）；
-      · **额度族的"驳回"不进集合**：`reject_quota_request` 的 `reason` 是必填的
-        （会原样发给申请人），而主人的授权语里从来不带理由——那件必须由 planner 追问，
-        **绝不替主人编一句**；
-      · 指认用的字（留言正文 / 账号名）为空的条目不进集合：工具的定位通道就是它，
-        空值必然零写。
-    """
-    vb = _family_verdict(prev_ai, "board")
-    vq = _family_verdict(prev_ai, "quota")
-    specs: list = []
-    skipped: list = []
-    for r in board:
-        tag = f"talkId:{r.get('talkKey')}"
-        content = str(r.get("content") or "").strip()
-        if not content:
-            skipped.append(f"{tag}（留言正文为空，按正文片段指认不了）")
-        elif not vb:
-            skipped.append(f"{tag}（上一轮那句提议里读不出结论：驳回还是放行）")
-        else:
-            specs.append({"tool": "audit_board_comment",
-                          "args": {"quote": content, "verdict": vb}})
-    for r in quota:
-        name = str(r.get("username") or "").strip()
-        tag = f"账号「{name}」" if name else f"账号 id={r.get('userId')}"
-        if not name:
-            skipped.append(f"{tag}（账号已不存在，按账号名定位不了）")
-        elif not vq:
-            skipped.append(f"{tag}的额度申请（上一轮那句提议里读不出结论）")
-        elif vq != "pass":
-            skipped.append(f"{tag}的额度申请（驳回要一句理由——系统不替主人编，"
-                           f"这一件要他自己说）")
-        else:
-            specs.append({"tool": "approve_quota_request", "args": {"name": name}})
-    return specs, skipped
-
-
-def _single_spec_plan(spec: dict) -> dict:
-    """单件车道：用**那件工具自己的技能**拼计划（与现状逐字同形）。
-
-    刻意不走 `review_inbox`：`board_audit` / `quota_approve` 是这两件事各自的技能，
-    它们的 `reply_contract` 是写给 narrator 的"这件事办完该怎么说"；变更集技能只有
-    并集语义，用在单件上会让回复契约变粗。
-    """
-    params = dict(spec.get("args") or {})
-    plan_obj = instantiate_plan(_SPEC_SKILL[str(spec["tool"])], params)
-    plan_obj["params"] = params
-    return plan_obj
-
-
-def _change_set_plan(specs: list, skipped: list) -> dict:
-    """变更集车道：一个技能名下 N 条 spec（令牌格式一个字都不用改，见批 F 设计决定 1）。
-
-    超出 `_CHANGE_SET_MAX` 的部分**不静默截断**：件数写进计划的 NOTE 行（narrator
-    读得到），并留一条 trace——"这一轮只办了一部分"必须是一句说得出的话。
-    """
-    keep = specs[:_CHANGE_SET_MAX]
-    over = len(specs) - len(keep)
-    params = {"specs": keep}
-    plan_obj = instantiate_plan("review_inbox", params)
-    plan_obj["params"] = params
-    extra = []
-    if over > 0:
-        extra.append(f"这张卡最多装 {_CHANGE_SET_MAX} 件，**还有 {over} 件没有列进去**："
-                     f"如实告诉主人还有几件、请他再说一声，"
-                     f"**不得把没列进卡的那几条说成已办或正在办**")
-    if skipped:
-        extra.append("这几件这次没有列进卡（如实说明原因，不要说成已办）："
-                     + "、".join(skipped[:5]))
-    if extra:
-        plan_obj["note"] = ((plan_obj.get("note") or "") + "；" + "；".join(extra)).strip("；")
-    return plan_obj
-
-
-def _auth_review_path(user_msg: str, prev_ai: str, principal, config
-                      ) -> tuple[str, dict | None, dict | None]:
-    """授权式审查：返回 `(系统事实块, 确定性计划或 None, forced 或 None)`，不适用给 `("", None, None)`。
-
-    四种形态（20260929 批 F 起）：
-      · 拿到计划·**变更集** = 候选 ≥2 件、逐件结论读得出 ⇒ 一个技能名下 N 条 spec
-        （弹窗把每条都印出来，主人可以「全部办」也可以「只办第 i 件」）；
-      · 拿到计划·**单件** = 队列里恰好一件、结论读得出（与 20260923 起的现状逐字同形）；
-      · 拿到 forced = 队列里恰好一条留言、只有结论读不出 ⇒ **目标照样由系统定死**，
-        只把"哪一种结论"留给 planner（G1，20260923）；
-      · 只有事实块 = 一条都拼不出（判决读不出 / 队列读不到）⇒ 交 planner，不替他挑。
-
-    **哪几份队列该读**由 `_families_in_play` 定（提议里提到的那一族，或上一轮真读过
-    的那一份）。不读的族连网络请求都不发；**任一份在册队列读不到就整条快道不拼计划**
-    （读不到 ≠ 没有：把一次读失败说成"没有等你的待办"正是这一族最坏的错法）。
-    """
-    if _short_reply_kind(user_msg) != "auth":
-        return "", None, None
-    play = _families_in_play(prev_ai, config)
-    if not (play["board"] or play["quota"]):
-        return "", None, None
-    # 权限**按族各判各的**（用 authz 现成的表——身份→scope，不另立规则）：主人自己
-    # 都不能复核留言 / 不能处理额度申请时，读那份队列只会白拿一次 403。
-    if play["board"] and not authz.check(principal, "audit_board_comment").allowed:
-        play["board"] = False
-    if play["quota"] and not authz.check(principal, "approve_quota_request").allowed:
-        play["quota"] = False
-    if not (play["board"] or play["quota"]):
-        return "", None, None
-
-    board: list = []
-    quota: list = []
-    if play["board"]:
-        try:
-            from tools.base import _board_index
-            index = _board_index(config)
-        except Exception:
-            logger.warning("[planner] 授权式审查：读留言台账异常 → 交 planner 自行决策")
-            return "", None, None
-        if index is None:
-            return "", None, None    # 读不到 ≠ 没有（不许据此说"没有待审"）
-        board = [r for r in index.values() if r.get("approved") == 0]
-        board.sort(key=lambda r: int(r.get("talkKey") or 0))
-    if play["quota"]:
-        try:
-            from tools.base import _quota_pending_index
-            pending_q = _quota_pending_index(config)
-        except Exception:
-            logger.warning("[planner] 授权式审查：读额度申请队列异常 → 交 planner 自行决策")
-            return "", None, None
-        if not isinstance(pending_q, dict):
-            # `ToolResult`（含人话的原因）= 读不到，**不是**"没有申请"（同 `_board_index`
-            # 那条纪律）：整条快道退回，绝不据此拼一张"没有待办"的卡。
-            return "", None, None
-        quota = sorted(pending_q.values(), key=lambda r: int(r.get("userId") or 0))
-
-    facts = ""
-    if play["board"]:
-        facts += _render_pending_facts(board)
-    if play["quota"]:
-        facts += _render_quota_facts(quota)
-
-    specs, skipped = _change_set_specs(board, quota, prev_ai)
-    total = len(board) + len(quota)
-    if not specs:
-        # 一条都拼不出 ⇒ 交 planner。唯一例外是那条**定死目标**的车道：队列里恰好
-        # 一条留言、只是结论读不出（G1，20260923）——目标由系统定死，只留结论给 planner。
-        if total == 1 and len(board) == 1 and str(board[0].get("content") or "").strip():
-            row = board[0]
-            content = str(row["content"]).strip()
-            from tools.base import _board_excerpt, _board_label
-            forced = {"quote": content, "label": _board_label(row),
-                      "excerpt": _board_excerpt(row)}
-            logger.info("[planner] 授权式审查：唯一待审 #%s 但提议里读不出结论 → "
-                        "目标由系统定死、只留结论给 planner", row.get("talkKey"))
-            record("planner", "auth_review_forced", talk_key=row.get("talkKey"))
-            return facts + _forced_review_note(forced), None, forced
-        if skipped:
-            record("planner", "auth_change_set_empty", reasons=skipped[:8])
-        return facts, None, None
-
-    if len(specs) == 1 and total == 1:
-        # 单件（与现状同形）：`board_audit` / `quota_approve` 各自的技能。
-        plan_obj = _single_spec_plan(specs[0])
-        logger.info("[planner] 授权式审查快道命中（零 LLM）：唯一待办（%s）→ 拼计划交弹窗",
-                    specs[0]["tool"])
-        return facts, plan_obj, None
-
-    plan_obj = _change_set_plan(specs, skipped)
-    record("planner", "auth_change_set", specs=len(plan_obj["params"]["specs"]),
-           total=total, skipped=len(skipped))
-    logger.info("[planner] 授权式审查快道命中（零 LLM）：%d 件候选（队列共 %d 件）→ "
-                "变更集交弹窗（主人可全部办或只办其中一件）", len(specs), total)
-    return facts, plan_obj, None
-
 
 def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                    config) -> dict | None:

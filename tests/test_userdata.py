@@ -812,7 +812,7 @@ finally:
 print("\n⑤ 写技能展开：范围缺失就零工具（不是零参数硬跑）")
 
 from agent.skills import (SKILL_MAP, _OWN_WRITE_SKILLS,  # noqa: E402
-                          _FREE_TEXT_WRITE_SKILLS,
+                          _FREE_TEXT_WRITE_SKILLS, _LEDGER_TARGET_WRITE_SKILLS,
                           _WRITE_NAME_TARGET_SKILLS, WRITE_SKILL_NAMES)
 from agent.skills import instantiate_plan  # noqa: E402
 
@@ -898,13 +898,18 @@ check("own 写技能都落在 _OWN_WRITE_SKILLS 里（不是靠减法落到名�
       str(sorted(_OWN_WRITE_SKILLS)))
 check("own 写技能与名字通道不重叠（两套展开器的判据互斥）",
       not (_OWN_WRITE_SKILLS & _WRITE_NAME_TARGET_SKILLS))
-check("注册表里每个写技能都落进四者之一（名字通道 / own 通道 / 自由文本 / 文章两件）",
-      WRITE_SKILL_NAMES <= (_WRITE_NAME_TARGET_SKILLS | _OWN_WRITE_SKILLS
-                            | _FREE_TEXT_WRITE_SKILLS
-                            | {"article_status", "article_tags"}),
-      str(sorted(WRITE_SKILL_NAMES - (_WRITE_NAME_TARGET_SKILLS | _OWN_WRITE_SKILLS
-                                      | _FREE_TEXT_WRITE_SKILLS
-                                      | {"article_status", "article_tags"}))))
+# 20260929 批 H · S2 起是**五者**：多一条 `_LEDGER_TARGET_WRITE_SKILLS`（目标是台账
+# 编号的那一族）。这张分类表的用途是"每条写技能都有人管"——漏一个就落进尾部兜底、
+# 零工具零写还不报错，所以它必须随名单生长一起长。
+_BUCKETS = (_WRITE_NAME_TARGET_SKILLS | _OWN_WRITE_SKILLS | _FREE_TEXT_WRITE_SKILLS
+            | _LEDGER_TARGET_WRITE_SKILLS
+            | {"article_status", "article_tags"})
+check("注册表里每个写技能都落进五者之一（名字通道 / 台账编号 / own 通道 / 自由文本 / 文章两件）",
+      WRITE_SKILL_NAMES <= _BUCKETS,
+      str(sorted(WRITE_SKILL_NAMES - _BUCKETS)))
+check("  且台账编号通道与名字通道**不重叠**（一件工具被两套目标判据同时管 = 判据分裂）",
+      not (_LEDGER_TARGET_WRITE_SKILLS & _WRITE_NAME_TARGET_SKILLS),
+      str(sorted(_LEDGER_TARGET_WRITE_SKILLS & _WRITE_NAME_TARGET_SKILLS)))
 for n in sorted(_OWN_WRITE_SKILLS):
     sk = SKILL_MAP.get(n)
     check(f"own 写技能 {n} 不设 roles（三档角色都看得见：动的是他自己的数据）",

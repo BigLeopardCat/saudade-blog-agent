@@ -10,7 +10,8 @@
 初看更自然是"模型直接调工具、我们再反查技能"，核完代码后不成立——
 ① `planner_node` 的 7 个参数校正器（`_board_quote_fix` / `_announcement_text_fix` /
    `_name_target_fix` / `_name_arg_fix` / `_target_grounding_refusal` /
-   `_write_target_refusal` / `_forced_review_fix`）全部读**技能级** `plan_obj["params"]`；
+   `_write_target_refusal` / `_ledger_target_refusal`）全部读**技能级**
+   `plan_obj["params"]`；
 ② 技能参数与工具参数**不是同一层**：`navigate` 技能的参数叫 `target`，而它模板里的
    `navigate_to` 工具参数叫 `path`，且由技能自己从 `NAV_MAP` 算出；
 ③ 工具→技能反查**天生歧义**：`get_moderation_status` 同时出现在两处技能模板里。
@@ -39,6 +40,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent.skills import (
+    SKILL_MAP,
     ParamSpec,
     callable_query_tools,
     explicit_tools,
@@ -128,12 +130,23 @@ def _param_schema(sp: ParamSpec) -> dict:
     return js
 
 
-# ── 手写覆盖：只有这两格，理由是它们**恰恰是 `ParamSpec` 推不出形状的那两格** ──
+# ── 手写覆盖：只有这几格，理由是它们**恰恰是 `ParamSpec` 推不出形状的那几格** ──
 # `content_query.plan` 是空列表（调用清单由 planner 经 PARAMS.tools/calls 注入，
 # 见技能定义），所以 `_template_param_map` 配不到工具、两个参数一律落在 `any`。
 # 而它们正是 native 收益最大的地方：白名单此前只是提示词里的一句话，现在可以变成
-# 服务端强制的 `enum`。**别顺手往这张表里加别的键**——每加一格就少一格同源保证，
+# 服务端强制的 `enum`。`review_inbox.calls` 同理（它的 `plan` 模板参数也是空的——
+# 逐条调用的**工具名由模型写**，模板给不出映射）。
+# **别顺手往这张表里加别的键**——每加一格就少一格同源保证，
 # `tests/test_native_plan.py` 把键集合钉成了字面量，加键必须同改测试（= 有人复核）。
+_CALLS_ITEMS = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string"},
+        "args": {"type": "object"},
+    },
+    "required": ["tool", "args"],
+}
+
 _SCHEMA_OVERRIDES: dict[tuple[str, str], dict] = {
     ("content_query", "tools"): {
         "type": "array",
@@ -142,17 +155,34 @@ _SCHEMA_OVERRIDES: dict[tuple[str, str], dict] = {
     },
     ("content_query", "calls"): {
         "type": "array",
-        "items": {
-            "type": "object",
-            "properties": {
-                "tool": {"type": "string"},
-                "args": {"type": "object"},
-            },
-            "required": ["tool", "args"],
-        },
+        "items": _CALLS_ITEMS,
         "description": "带参调用清单：[{tool, args}]，只给当前步",
     },
+    ("review_inbox", "calls"): {
+        "type": "array",
+        "items": _CALLS_ITEMS,
+        "description": "要一次办的那几件，逐条 {tool, args}",
+    },
 }
+
+
+def _calls_arg_hint(tool_names) -> str:
+    """`[{tool,args}]` 里每个工具的**参数名**（从工具自己的 schema 现取）。
+
+    **为什么必须现取而不是在这写死一句**：`args` 声明的是 `{"type": "object"}`——
+    形状对，但模型还得知道每件要填哪些键，否则只能靠猜。把键名写在描述里就等于在这
+    手抄一份工具签名（本仓反复打掉的"第二份名单"），而 `tool_arg_schemas()` 是那条
+    派生链的正主（`ParamSpec.from_tool` 回查的是同一份，见 `_items_schema`）。
+    取不到的工具**整条跳过**（宁可少说，不说错）。
+    """
+    schemas = tool_arg_schemas()
+    bits = []
+    for t in tool_names:
+        got = schemas.get(t) or {}
+        req = [n for n in (got.get("properties") or {}) if n in (got.get("required") or ())]
+        if req:
+            bits.append(f"{t} 填 {'、'.join(sorted(req))}")
+    return "；".join(bits)
 
 
 def _override_for(role: str | None, skill_name: str, param: str) -> dict | None:
@@ -173,6 +203,18 @@ def _override_for(role: str | None, skill_name: str, param: str) -> dict | None:
                 "tool": {"type": "string", "enum": callable_query_tools(role)},
             },
         }
+    elif skill_name == "review_inbox" and param == "calls":
+        # 闭集 = 该技能 `plan` 声明的工具全集（与 `_expand_change_set` / 执行轮
+        # `_confirm_grant_plan` 读的是**同一个字段**，见技能定义：它同时是跨族安全性
+        # 的来源）。枚举之外的写工具名因此连 schema 这一关都过不了。
+        allowed = [t for t, _ in (SKILL_MAP[skill_name].plan or ())]
+        items = {**base["items"],
+                 "properties": {**base["items"]["properties"],
+                                "tool": {"type": "string", "enum": allowed}}}
+        hint = _calls_arg_hint(allowed)
+        out = {**base, "items": items}
+        if hint:
+            out["description"] = f"{base['description']}（{hint}）"
     return out
 
 
