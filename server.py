@@ -228,8 +228,9 @@ class ChatRequest(BaseModel):
     agent_tasks: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     # 上一轮执行过的**工具名**（20260929 批 F1'，Rust 侧从最近 8 条回执去重得出）。
     # 用途只有一个：让"上一轮读过审核队列吗"成为一个**结构化事实**，而不是对
-    # narrator 散文做正则（`_REVIEW_INTENT_RE`）——授权式审核快道（"按你的方案办"）
-    # 的准入判据此前全靠后者，而它被判据的读者是**模型写的字**。
+    # narrator 散文做正则——批 H 之前它是那条授权式审核快道的准入判据（快道已整族
+    # 删除），现在只喂 `graph._ledger_due_families` 的第三条触发器（上一轮真读过那份
+    # 队列 ⇒ 这一轮接着把它的待办摆上桌）。
     # 三条纪律：
     #   · **空列表不是"键缺席"**：这里给的是 `[]` 而不是 None，因为"上一轮什么都没
     #     执行"是一个**确定的事实**（与 `chat_quota` 那条"读不到 ⇒ 整个键缺席"恰好
@@ -237,7 +238,8 @@ class ChatRequest(BaseModel):
     #     用 `default_factory=list` 也照顾了直接构造 ChatRequest 的评测夹具。
     #   · **绝不进 prompt**：它不注入 system 上下文、不进任何提示词——一旦进提示词，
     #     模型就会开始复述"我上一轮调用过 X"（同 `meta` 那条不进提示词的纪律）。
-    #   · 旧 Rust 端没有这个字段 ⇒ `[]` ⇒ 快道退回散文判据（fail-open，零行为变更）。
+    #   · 旧 Rust 端没有这个字段 ⇒ `[]` ⇒ 第三条触发器不成立 ⇒ 那一轮少摆一次台账
+    #     （少摆就不读，方向安全：模型手里的信息少一点，不会凭空多出一次写）。
     recent_tools: list[str] = Field(default_factory=list, max_length=MAX_RECENT_TOOLS)
 
     # ── 对话额度（20260929，跨语言契约 C1/C3）──────────────────────────
