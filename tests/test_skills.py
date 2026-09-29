@@ -3991,9 +3991,15 @@ def test_site_guide_is_role_rendered():
     # ③ 访客口径不得出现"管理/后台写"类字眼（防将来有人把管理能力塞进公共段）
     for word in ["新建文章标签", "发布状态", "服务器运行状况"]:
         assert word not in guest, f"访客清单出现管理能力字眼: {word}"
-    # ④ 两份清单都必须保住"介绍能力时按此完整列出"这句（转述契约的落点）
+    # ④ 两份清单都必须保住收束句（转述契约的落点）。
+    # 20260929 批 G 起这句是**两句**（防漏列 + 防超纲，见 context._SITE_GUIDE_CLOSING）：
+    # 这里断言的是**常量整句**而不是手抄的子串——手抄件会随着句子变长悄悄失配
+    # （本轮实测：句子尾巴一改，这条就红在"引用了一句已经不存在的话"上）。
+    from agent.context import _SITE_GUIDE_CLOSING
     for text in (guest, admin):
-        assert "介绍能力时按此完整列出，不要遗漏。" in text
+        assert text.endswith(_SITE_GUIDE_CLOSING)
+        assert "介绍能力时按此完整列出，不要遗漏" in text
+        assert "清单之外的动作一律不许承诺" in text
     # ⑤ 反向探针：删掉注册表里的能力行，清单必然跟着缺（证明它真是渲染出来的）
     class _Bare:
         name, roles, capability = "probe", None, ""
