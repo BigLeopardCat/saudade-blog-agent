@@ -1784,7 +1784,13 @@ def test_auth_pending_review():
         {"talkKey": 101, "content": "泠月喵好棒", "author": "访客", "approved": 0}])
     check("多条 → 连作者与原文一起列出（主人要认的就是那句话）",
           "talkId:94" in f2 and "垃圾网站" in f2 and "talkId:101" in f2 and "共 2 条" in f2)
-    check("多条 → 明写零写 + 不替他挑", "零写" in f2 and "绝不替他挑" in f2)
+    # 20260929 批 H：这块事实**只给事实**了。旧版末尾那句「本轮零写 / 绝不替他挑」是旧
+    # 确定性快道的产物（台账只在快道拼卡时读 ⇒ 读到了即"卡没拼出来 ⇒ 本轮零写"），而
+    # 候选现在每轮如实摆上桌、办不办由模型定——那句话会把**授权**读成"系统办不成了、
+    # 你别动"（生产实证 trace 20260929T221832 就是这么落成 answer_only 的）；
+    # 「目标只许出自台账 id、写操作一律弹卡签字」这条纪律挪进台账帧的表头。
+    check("多条 → 只剩事实，不再带旧快道那套「本轮零写 / 绝不替他挑」",
+          all(_p not in f2 for _p in ("零写", "绝不替他挑", "一条都不要写成已办")))
 
     class _Row(dict):
         pass
@@ -1845,7 +1851,8 @@ def test_auth_pending_review():
               and "泠月喵好棒" in plan2["tools"][1], str(plan2["tools"])[:140])
         check("  候选事实块进提示（talkId:94 与 talkId:101 都在）",
               "talkId:94" in facts2 and "talkId:101" in facts2)
-        check("  提示里明写零写（= 系统这一轮没能拼出卡时的退路）", "零写" in facts2)
+        check("  提示里只剩事实（旧快道那句「本轮零写」已随批 H 删掉）",
+              "零写" not in facts2 and "talkId:94" in facts2)
         check("  且**不进入目标定死模式**（多条时连目标都不许替他挑）", forced2 is None)
 
         # ⑤ 结论读不出 → 不拼计划，但**目标照样由系统定死**（G1，20260923）
@@ -3850,8 +3857,16 @@ def test_short_reply_and_adjacent_pairs():
     check("短应答提示·授权：目标必须从系统数据里定", "目标必须从系统数据里定" in auth)
     check("短应答提示·授权：禁止从历史里挑自然语言当目标",
           "不许从历史对话里挑一条自然语言当目标" in auth)
-    check("短应答提示·授权：候选不唯一 → 零写 + 请主人点名",
-          "零写" in auth and "绝不替主人选" in auth)
+    # 20260929 批 H:旧写法是「候选不唯一 → 零写 + 请主人点名」——那条口径随旧快道一起
+    # 作废（主人说「全部批准」时**本来就是要模型挑**，而挑的依据是台账里的 id、不是
+    # 从原话里抠出来的引文）。新的三件事：目标只许出自台账 id / 写操作一律弹卡签字 /
+    # 台账空 ⇒ 零写并如实说没有、不许编一条。
+    check("短应答提示·授权：目标只许出自台账 id（不许从历史里挑自然语言）",
+          "照台账里的 id" in auth)
+    check("短应答提示·授权：写操作一律弹卡、主人点确定才算数",
+          "弹确认框给主人签字" in auth and "点确定才算数" in auth)
+    check("短应答提示·授权：台账空 ⇒ 零写 + 如实说、不许编一条",
+          "本轮零写" in auth and "绝不许编一件出来" in auth)
     check("短应答提示·授权：不许声称已发起/已确认", "绝不声称已经发起" in auth)
     check("带壳授权式提示：真的给出「授权式」指令（生产形态）",
           "授权式" in _short_reply_hint(proposal + [HumanMessage(content="[当前问题]: 小猫咪按你想法来吧")]))
@@ -3878,11 +3893,11 @@ def test_short_reply_and_adjacent_pairs():
     # `output_contract`（20260927 主线批 A）是**唯一按接口层档位取值**的占位符：
     # 文本档代入"两行纯文本"契约、native 档代入"用工具调用表达决定"。它进这个集合
     # 是刻意的——提示词里多一个注入点必须有人复核（这条断言就是这个作用）。
-    check("planner 模板占位符集合与注入点一致（短应答块、剔空纠偏块、输出契约已接入）",
+    check("planner 模板占位符集合与注入点一致（短应答块、台账块、剔空纠偏块、输出契约已接入）",
           fields == {"skills_context", "tools_desc", "page_ctx", "intent_hints", "doc_anchors",
-                     "round_info", "recent_context", "short_reply_hint", "tool_results",
-                     "ref_hints", "reflector_feedback", "correction", "max_rounds", "user_msg",
-                     "output_contract"},
+                     "round_info", "recent_context", "short_reply_hint", "pending_ledger",
+                     "tool_results", "ref_hints", "reflector_feedback", "correction",
+                     "max_rounds", "user_msg", "output_contract"},
           f"fields={sorted(fields)}")
     check("planner 模板：短应答块在节选之后、工具结果之前",
           g._PLANNER_PROMPT.index("{recent_context}")

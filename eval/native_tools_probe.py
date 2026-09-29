@@ -114,6 +114,10 @@ def _real_prompt(user_msg: str) -> str:
         doc_anchors=_doc_anchors(msgs),
         recent_context=_recent_tail(msgs),
         short_reply_hint=_short_reply_hint(msgs),
+        # 待办台账（20260929 批 H · S1）：本探针只喂一句裸问题、也不带 config，
+        # 拿不到现场队列 ⇒ 填"这一轮没去读"的缺省语（与 `planner_node` 同款）。
+        # 要连台账一起验，得自己构造一份帧传进来（`graph._pending_ledger_frame`）。
+        pending_ledger="（本轮没有去读待办台账）",
         tool_results=_frame_texts([]),
         ref_hints=ref_hints([]),
         reflector_feedback="（本决策轮无复盘建议）",
