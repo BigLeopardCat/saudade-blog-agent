@@ -6193,8 +6193,11 @@ def _freeze_policy_refusal(plan_obj: dict, config,
 # 了哪一族"，据此决定要不要去读那一份后台队列、把待办摆上桌。**读到的任何东西
 # 都不再变成结论**，办不办、办成哪一种由模型看着台账定。
 #
-# ⚠️ `_REVIEW_INTENT_RE` **只加词、不改结构**：`eval/probe_admin_write.py` 把它当
-# 判据本体 import 去判"这一轮该不该读到台账"，改宽它等于同时改掉探针的判据。
+# ⚠️ `_REVIEW_INTENT_RE` **只加词、不改结构**：它是"要不要去读那份队列"的唯一门，
+# 改宽一次就是一次白读两次后台（外加一份与主人这句话无关的台账进提示词），
+# 改窄则是该摆的没摆、模型手里又空一次。两个方向都有锁（`tests/test_pending_ledger.py`
+# ①②），而活体那一侧看的是 **trace 里有没有 `planner.ledger_frame` 事件**
+# （`eval/probe_admin_write.py` ⑰/⑱）——探针**不再** import 这个正则当判据了。
 # 额度族另起一份（两族读的是两份队列，一份正则分不出该读哪份）。
 _REVIEW_INTENT_RE = re.compile(r"留言|审核|复核|待审|驳回|放行|通过|隐藏")
 _QUOTA_INTENT_RE = re.compile(r"额度|配额|申请")
