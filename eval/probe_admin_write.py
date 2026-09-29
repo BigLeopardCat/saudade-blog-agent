@@ -54,7 +54,8 @@
 校验"这个 id 出自现场台账且那一行仍在待办态"⇒ **一律弹确认框**（`audit_board_comment`
 进了 `_ALWAYS_CONFIRM_TOOLS`）⇒ 主人点「确定」才真写。
 
-  * **⑰ = 真写腿**（`--allow-write` + `--allow-board-audit`）：靶子是台账里**真实待审
+  * **⑰ = 真写腿**（`--allow-write` + `--allow-board-audit`，或 `--only-board` +
+    `--allow-board-audit`）：靶子是台账里**真实待审
     留言**（≥1 条即可，不再要求"恰好一条"——那是旧快道的约束）。它验四件事：台账帧真的
     进了提示词（trace 事件的 id 与现场台账对得上）／卡上目标 id 出自台账且问句印出那行
     原文（不盲签）／不点确定时库真值一个字节不动／点了确定库真值真的翻。
@@ -100,6 +101,9 @@ langgraph 在节点执行完之后才抛 KeyError）——腿⑧ 当时只核库
   .venv/bin/python eval/probe_admin_write.py --uid <uid> --allow-write --allow-tag-delete
   # ⑰（真写腿）逐颗开关：--allow-board-audit 才会跑；结论为放行时还要 --allow-board-publish
   .venv/bin/python eval/probe_admin_write.py --uid <uid> --allow-write --allow-board-audit
+  # 只想验 ⑱/⑰、不愿放开其余九条写腿（草稿/标签/分类/公告）：加 --only-board
+  #（这时 ⑰ 只看它自己那颗 --allow-board-audit，其余腿逐条打印「没验」）
+  .venv/bin/python eval/probe_admin_write.py --uid <uid> --only-board --allow-board-audit
   APP_ADMIN_UID=<uid> .venv/bin/python eval/probe_admin_write.py
 退出码 = 不符预期的检查项数（0 = 全绿）。agent（8010）与 Rust（3000）都必须已在跑。
 
@@ -1874,7 +1878,8 @@ def step18_ledger_zero_write(rep: Report, uid: int, role: str) -> None:
         finally:
             _drop_conv(rep, uid, role, conv0, "⑱-chat")
 
-    pending0 = _pending_rows(uid, role)
+    # 台账编号的集合（不是行本身）：本腿要拿它当"这些行必须一个字节没动"的键
+    pending0 = {int(r.get("talkKey") or 0) for r in _pending_rows(uid, role)}
     if not pending0:
         print("  [skip] 台账 0 条待审 ⇒ 授权式轮只会如实说「没有等着办的」，验不到这两条"
               "去路（可加 --allow-board-stage 自造一条）；这一轮**没动留言**")
@@ -2286,6 +2291,11 @@ def main() -> int:
                     help="允许 ⑲：自建一个一次性账号（agent_fixture_probe_<ts>）并真冻结/解冻它，"
                          "跑完删除。它做的是**生产写**，所以与 --allow-write 分开一颗开关"
                          "（那一颗管的是文章/标签/分类/公告，这条动的是别人的登录能力）")
+    ap.add_argument("--only-board", action="store_true",
+                    help="只验 ⑱/⑰（台账那条腿）：其余腿一条都不跑（逐条打印「没验」，"
+                         "不静默豁免）。为的是在**不放开其余九条写腿**（草稿来回/临时标签/"
+                         "分类增删/对全体访客可见的公告）的前提下验 ⑰。带上它时 ⑰ 只看它自己"
+                         "那颗 --allow-board-audit")
     args = ap.parse_args()
 
     global BASE
@@ -2297,7 +2307,12 @@ def main() -> int:
     print(f"探针目标：agent={AGENT}  backend={BASE}")
 
     # ① 非管理员（**不需要 admin uid**，权限模型本就该在这里兜住）
-    step1_visitor(rep, args.visitor_uid, "user")
+    if args.only_board:
+        print("\n[skip] ①–⑯⑲：--only-board（本轮只验台账那条腿 ⑱/⑰）——数字腿的含义见文件头，"
+              "这一轮它们**一条都没验**")
+        rep.warn("--only-board：本轮只有 ⑱/⑰ 跑了，其余腿没验")
+    else:
+        step1_visitor(rep, args.visitor_uid, "user")
 
     if args.uid <= 0:
         print("\n[skip] ②③④⑤⑥⑦⑧⑨⑩：未提供 --uid / APP_ADMIN_UID（管理员的真身份没法编，"
@@ -2314,10 +2329,13 @@ def main() -> int:
             rep.fails.append(f"管理员 uid 读后台失败：{e}")
             notes = {}
         if notes:
-            step2_admin_question(rep, args.uid)
-            step3_unknown_id(rep, args.uid, "admin")
-            # ⑮ 零真写（只是"必须说不"），所以放在安全段：没给 --allow-write 也跑
-            step15_loud_target(rep, args.uid, "admin")
+            if args.only_board:
+                print("\n[skip] ②③⑮：--only-board（这三条一条都不跑）")
+            else:
+                step2_admin_question(rep, args.uid)
+                step3_unknown_id(rep, args.uid, "admin")
+                # ⑮ 零真写（只是"必须说不"），所以放在安全段：没给 --allow-write 也跑
+                step15_loud_target(rep, args.uid, "admin")
             # ⑱/⑰ 的数据前提（台账里**至少 1 条**待审）可由探针自造（`--allow-board-stage`）：
             # 台账 0 条时发一条占位符正文的一次性留言（AI 判存疑 ⇒ 进待审、从不公开），
             # 跑完在下面删除；进程异常退出还有 atexit 兜底。
@@ -2326,63 +2344,75 @@ def main() -> int:
             # ⑱ 零真写（从不点确定），所以也放在安全段；**必须排在 ⑰ 之前**——
             # ⑰ 会真判掉台账里那些待审留言，台账一空 ⑱ 的前提就没了（见 step18 头注）。
             step18_ledger_zero_write(rep, args.uid, "admin")
-            draft = pick_target(notes, args.draft_id)
-            if not args.allow_write:
-                print("\n[skip] ④⑤⑥⑦ 真写：未给 --allow-write（写操作要显式授权；"
-                      "这一轮**没写任何东西**）")
-                rep.warn("真写四条未跑：缺 --allow-write")
-            elif draft is None:
-                print("\n[skip] ④⑤⑦：后台没有草稿/私密文章可当靶子（也不许现建一篇）")
-                rep.warn("真写四条未跑：后台没有草稿/私密文章")
+            if args.only_board:
+                # --only-board：写面一条都不碰（这几条会真写文章/标签/分类/公告）。
+                print("\n[skip] ④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑯：--only-board"
+                      "（本轮不碰文章/标签/分类/公告）")
+                rep.warn("④–⑯ 未跑：--only-board")
             else:
-                aid, row = draft
-                title = str(row.get("noteTitle") or "")
-                print(f"\n靶子文章：id={aid}《{title}》status={row.get('status')} "
-                      f"isTop={row.get('isTop')} tags={row.get('noteTags')!r}")
-                if row.get("status") not in _SAFE_TARGET_STATUS:
-                    print(f"  ⚠ 指定的靶子状态是 {row.get('status')}——`public` 文章的改动"
-                          f"在公开面上立刻可见；已停下，请换 --draft-id")
-                    rep.fails.append(f"靶子 {aid} 不是草稿/私密（--draft-id 指错了）")
+                draft = pick_target(notes, args.draft_id)
+                if not args.allow_write:
+                    print("\n[skip] ④⑤⑥⑦ 真写：未给 --allow-write（写操作要显式授权；"
+                          "这一轮**没写任何东西**）")
+                    rep.warn("真写四条未跑：缺 --allow-write")
+                elif draft is None:
+                    print("\n[skip] ④⑤⑦：后台没有草稿/私密文章可当靶子（也不许现建一篇）")
+                    rep.warn("真写四条未跑：后台没有草稿/私密文章")
                 else:
-                    ok4 = step4_status(rep, args.uid, "admin", aid, title)
-                    ok5 = step5_tags(rep, args.uid, "admin", aid, title)
-                    if ok4 and ok5:
-                        step7_cross_turn(rep, args.uid, "admin", aid, title)
+                    aid, row = draft
+                    title = str(row.get("noteTitle") or "")
+                    print(f"\n靶子文章：id={aid}《{title}》status={row.get('status')} "
+                          f"isTop={row.get('isTop')} tags={row.get('noteTags')!r}")
+                    if row.get("status") not in _SAFE_TARGET_STATUS:
+                        print(f"  ⚠ 指定的靶子状态是 {row.get('status')}——`public` 文章的改动"
+                              f"在公开面上立刻可见；已停下，请换 --draft-id")
+                        rep.fails.append(f"靶子 {aid} 不是草稿/私密（--draft-id 指错了）")
                     else:
-                        print("\n[skip] ⑦：④/⑤ 未还原到原状，先修好再跑跨轮（不叠加副作用）")
-                        rep.warn("⑦ 跨轮未跑：④/⑤ 未复原")
-                    if not args.skip_popup and ok4 and ok5:
-                        step8_popup_write(rep, args.uid, "admin", aid, title)
-                    elif args.skip_popup:
-                        rep.warn("⑧⑨ 未跑：--skip-popup")
+                        ok4 = step4_status(rep, args.uid, "admin", aid, title)
+                        ok5 = step5_tags(rep, args.uid, "admin", aid, title)
+                        if ok4 and ok5:
+                            step7_cross_turn(rep, args.uid, "admin", aid, title)
+                        else:
+                            print("\n[skip] ⑦：④/⑤ 未还原到原状，先修好再跑跨轮（不叠加副作用）")
+                            rep.warn("⑦ 跨轮未跑：④/⑤ 未复原")
+                        if not args.skip_popup and ok4 and ok5:
+                            step8_popup_write(rep, args.uid, "admin", aid, title)
+                        elif args.skip_popup:
+                            rep.warn("⑧⑨ 未跑：--skip-popup")
+                        else:
+                            rep.warn("⑧⑨ 未跑：④/⑤ 未复原")
+                if args.allow_write:
+                    step6_temp_tag(rep, args.uid, "admin", args.allow_tag_delete)
+                    if not args.skip_popup:
+                        step10_color(rep, args.uid, "admin", args.allow_tag_delete)
                     else:
-                        rep.warn("⑧⑨ 未跑：④/⑤ 未复原")
-            if args.allow_write:
-                step6_temp_tag(rep, args.uid, "admin", args.allow_tag_delete)
-                if not args.skip_popup:
-                    step10_color(rep, args.uid, "admin", args.allow_tag_delete)
-                else:
-                    rep.warn("⑩ 未跑：--skip-popup")
-                # ⑪⑫⑬⑭ 是 20260922 第四轮加的（标签改/删 + 分类增删改）：走真帧流，
-                # 与 ⑧⑩ 同一套"读到连接关闭 + 干净收尾"断言；⑮ 不写真数据。
-                step11_tag_admin(rep, args.uid, "admin", args.allow_tag_delete)
-                step14_category(rep, args.uid, "admin")
-                # ⑯ 公告三件（20260922 第五轮）：靶子是一次性公告，跑完必删
-                step16_announcement(rep, args.uid, "admin")
-                # ⑰ 授权式短应答那条腿（20260923 第六轮，20260930 重写为按 id 的真写腿）：
-                # 靶子是**真实待审留言**，所以再要一颗开关——跑一次就真判掉它们，且不复原。
-                if args.allow_board_audit:
-                    step17_auth_review(rep, args.uid, "admin",
-                                       allow_publish=args.allow_board_publish)
-                else:
-                    print("\n[skip] ⑰ 授权式短应答那条腿：未给 --allow-board-audit"
-                          "（该腿会真把台账里那些待审留言判掉，且不复原）；"
-                          "这一轮**没动留言**")
-                    rep.warn("⑰ 未跑：缺 --allow-board-audit")
+                        rep.warn("⑩ 未跑：--skip-popup")
+                    # ⑪⑫⑬⑭ 是 20260922 第四轮加的（标签改/删 + 分类增删改）：走真帧流，
+                    # 与 ⑧⑩ 同一套"读到连接关闭 + 干净收尾"断言；⑮ 不写真数据。
+                    step11_tag_admin(rep, args.uid, "admin", args.allow_tag_delete)
+                    step14_category(rep, args.uid, "admin")
+                    # ⑯ 公告三件（20260922 第五轮）：靶子是一次性公告，跑完必删
+                    step16_announcement(rep, args.uid, "admin")
+            # ⑰ 授权式短应答那条腿（20260923 第六轮，20260930 重写为按 id 的真写腿）：
+            # 靶子是**真实待审留言**，所以再要一颗开关——跑一次就真判掉它们，且不复原。
+            # `--only-board` 下那颗开关就是唯一授权：其余写腿都没跑，`--allow-write`
+            # 在这里没有别的含义（不带它也能验 ⑰）。
+            if args.allow_board_audit and (args.only_board or args.allow_write):
+                step17_auth_review(rep, args.uid, "admin",
+                                   allow_publish=args.allow_board_publish)
+            else:
+                print("\n[skip] ⑰ 授权式短应答那条腿：未给 --allow-board-audit"
+                      + ("" if args.only_board else "（或未给 --allow-write）")
+                      + "（该腿会真把台账里那些待审留言判掉，且不复原）；"
+                      "这一轮**没动留言**")
+                rep.warn("⑰ 未跑：缺 --allow-board-audit")
             # ⑲ 冻结/解冻账号（20260926）：靶子**自建自删**，动的是一整个账号的登录能力，
             # 所以与 --allow-write 分开一颗开关（理由见 §⑲ 头注）。零写那半（弹卡、账真值）
             # 也在里面，所以不开这颗开关时这条腿**整条没验**——打印出来，不静默豁免。
-            if args.allow_account_freeze:
+            if args.only_board:
+                print("\n[skip] ⑲ 冻结/解冻账号：--only-board（本轮只验台账那条腿）")
+                rep.warn("⑲ 未跑：--only-board")
+            elif args.allow_account_freeze:
                 step19_account_freeze(rep, args.uid, "admin")
             else:
                 print("\n[skip] ⑲ 冻结/解冻账号：未给 --allow-account-freeze"
