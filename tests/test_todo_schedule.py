@@ -218,6 +218,44 @@ check("畸形行不炸（渲染层只退化不加戏）",
 check("超长正文截断带省略号（帧不撑爆提示词）",
       "…" in A.render_todo_list([todo("长" * 80)], today=TODAY))
 
+# ── 另两类等着他处理的（留言待审 / 额度重置申请）─────────────────────────────
+# 四态各一条。**`None` 与哨兵必须是两句话**：前者 = "这一类本次不适用"（私人清单的
+# 调用方），后者 = "适用、但这一次没读到"——把后者渲染成空串，等于让主人听到
+# "就这些"，而我们其实一个字都没读到（同族纪律见 `TODO_PENDING_UNREAD` 的注释）。
+check("不适用（None）⇒ 一个字都不加（私人清单那一档的既有形态）",
+      A.render_todo_pending(None) == "" and
+      A.render_todo_list([todo()], today=TODAY, pending=None).count("\n") == 1)
+check("两类都是 0 ⇒ 也不加（0 条不是一条待办）",
+      A.render_todo_pending({"review": 0, "quota": 0}) == "")
+check("有留言待审 ⇒ 说出条数、并写明**不在上面那张私人待办里**",
+      "留言待审 3 条" in A.render_todo_pending({"review": 3, "quota": 0})
+      and "不在上面这张私人待办里" in A.render_todo_pending({"review": 3, "quota": 0}),
+      A.render_todo_pending({"review": 3, "quota": 0}))
+_p = A.render_todo_pending({"review": 3, "quota": 2})
+check("两类都有 ⇒ 一句里两样齐全（不印成两段，也不漏掉后一样）",
+      "留言待审 3 条" in _p and "额度重置申请 2 份" in _p, _p)
+check("  只有这一类 > 0 时只印这一类（「额度重置申请 0 份」是一句噪声）",
+      "额度重置申请" not in A.render_todo_pending({"review": 1, "quota": 0}), "")
+check("⭐ 没读到（哨兵）⇒ 明说「没读到、不确定有几条」，**绝不说成 0 条**",
+      "没读到" in A.render_todo_pending(A.TODO_PENDING_UNREAD)
+      and "不确定有几条" in A.render_todo_pending(A.TODO_PENDING_UNREAD),
+      A.render_todo_pending(A.TODO_PENDING_UNREAD))
+check("  畸形入参不炸（渲染层只退化不加戏）",
+      A.render_todo_pending("有 3 条") == "" and
+      A.render_todo_pending({"review": "三条", "quota": None}) == "")
+check("  负数 / 布尔不当条数（`True` 是 int 的子类，会印出「留言待审 True 条」）",
+      A.render_todo_pending({"review": True, "quota": -2}) == "")
+check("空清单那一支也带上尾注（否则「待办是空的」正好把两类漏掉——那是最容易漏的分支）",
+      "留言待审 1 条" in A.render_todo_list([], today=TODAY, pending={"review": 1}),
+      A.render_todo_list([], today=TODAY, pending={"review": 1}))
+check("  空清单 + 没读到 ⇒ 两句都说（空的是私人清单，不是那两类）",
+      "一条都没有" in A.render_todo_list([], today=TODAY,
+                                          pending=A.TODO_PENDING_UNREAD)
+      and "没读到" in A.render_todo_list([], today=TODAY, pending=A.TODO_PENDING_UNREAD))
+check("非空清单 + 有尾注 ⇒ 尾注在最后一行（在它后面加东西会让人读成第 N+1 条待办）",
+      A.render_todo_list([todo()], today=TODAY, pending={"review": 1}).split("\n")[-1]
+      .startswith("另有两件等着你处理"), "")
+
 _added = A.render_todo_added("给猫买罐头", TOMORROW)
 check("追加回执说清加的是什么、排在哪天、去哪儿看",
       "给猫买罐头" in _added and "排期 9月27日" in _added and "后台首页" in _added, _added)
@@ -422,25 +460,69 @@ finally:
 # ══════════════════════════════════════════════════════════════════
 print("\n⑥ list_dashboard_todos：空是事实、读不到是故障（两者不能混说）")
 
-with patch(_admin_get=lambda p, c: []):
+with patch(_admin_get=lambda p, c: [], _own_get=lambda p, c: {"pendingReview": 0, "pendingQuota": 0}):
     r = base.list_dashboard_todos.invoke({}, config=cfg())
     check("真的没记过 → kind=empty（**事实**，checker 照常 PASS 进回执）",
           r.kind == "empty" and "空的" in r, f"{r.kind}: {r}")
 
-with patch(_admin_get=lambda p, c: base.unavailable("后台读不到")):
+with patch(_admin_get=lambda p, c: base.unavailable("后台读不到"),
+           _own_get=lambda p, c: {"pendingReview": 0, "pendingQuota": 0}):
     r = base.list_dashboard_todos.invoke({}, config=cfg())
     check("读不到 → unavailable（**不许**说成「你还没记过待办」）",
           r.kind == "unavailable", f"{r.kind}: {r}")
 
-with patch(_admin_get=lambda p, c: {"weird": 1}):
+with patch(_admin_get=lambda p, c: {"weird": 1},
+           _own_get=lambda p, c: {"pendingReview": 0, "pendingQuota": 0}):
     r = base.list_dashboard_todos.invoke({}, config=cfg())
     check("形态不对 → unavailable", r.kind == "unavailable", f"{r.kind}: {r}")
 
-with patch(_admin_get=lambda p, c: [todo("给猫买罐头", TOMORROW)]):
+with patch(_admin_get=lambda p, c: [todo("给猫买罐头", TOMORROW)],
+           _own_get=lambda p, c: {"pendingReview": 0, "pendingQuota": 0}):
     r = base.list_dashboard_todos.invoke({}, config=cfg())
     check("正常 → ok，给 narrator 的是渲染好的清单（一行一条）",
           r.kind == "ok" and "给猫买罐头" in r and r.meta.get("count") == 1,
           f"{r.kind}: {r.meta}")
+
+# ── 那两类计数真的进了同一帧（主人问「有没有什么事等着我处理」时它说得出来）──
+# 读的是**红点那一份汇总**（`/notifications/summary`）——不是第二份计数来源。
+_summary = {"pendingReview": 3, "pendingQuota": 1}
+_reads: list = []
+
+
+def _own_spy(p, c):
+    _reads.append(p)
+    return _summary
+
+
+with patch(_admin_get=lambda p, c: [todo("给猫买罐头", TOMORROW)], _own_get=_own_spy):
+    r = base.list_dashboard_todos.invoke({}, config=cfg())
+    check("⭐ 两类计数进同一帧（留言待审 3 条、额度重置申请 1 份）",
+          r.kind == "ok" and "留言待审 3 条" in r and "额度重置申请 1 份" in r,
+          f"{r.kind}: {r}")
+    check("  **只多一次读**、读的是红点那一份汇总（不是自己去数队列："
+          "第二份计数来源会与红点各自演化）",
+          _reads == ["/api/protected/notifications/summary"], str(_reads))
+
+with patch(_admin_get=lambda p, c: [], _own_get=lambda p, c: _summary):
+    r = base.list_dashboard_todos.invoke({}, config=cfg())
+    check("⭐ 私人清单空、但那两类有 ⇒ **不是** empty（回一句「什么都没有」正好漏掉它们）",
+          r.kind == "ok" and "留言待审 3 条" in r, f"{r.kind}: {r}")
+
+# 汇总读不到：**待办清单本身照常给**，只把那两类如实说成"没读到"——
+# 不能因为红点那份挂了就把整次读待办判失败（主人问的是待办，那是读到了的）。
+with patch(_admin_get=lambda p, c: [todo("给猫买罐头", TOMORROW)],
+           _own_get=lambda p, c: base.unavailable("汇总读不到")):
+    r = base.list_dashboard_todos.invoke({}, config=cfg())
+    check("⭐ 汇总读不到 ⇒ 待办照常给，另加一句「没读到，不确定有几条」",
+          r.kind == "ok" and "给猫买罐头" in r and "没读到" in r and "不确定有几条" in r,
+          f"{r.kind}: {r}")
+    check("  **不当成 0 条**（那会让主人听到「就这些」，而我们根本没读到）",
+          "留言待审 0" not in r and "额度重置申请 0" not in r, str(r))
+
+with patch(_admin_get=lambda p, c: [todo()], _own_get=lambda p, c: {"pendingReview": None}):
+    r = base.list_dashboard_todos.invoke({}, config=cfg())
+    check("汇总回来了但键缺失（旧后端）⇒ 也不编 0 条",
+          r.kind == "ok" and "留言待审" not in r and "额度重置申请" not in r, str(r))
 
 
 # ══════════════════════════════════════════════════════════════════

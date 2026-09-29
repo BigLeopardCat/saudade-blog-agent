@@ -902,7 +902,67 @@ def _due_hint(iso: str, today) -> str:
     return "（已过期）" if iso < now.isoformat() else ""
 
 
-def render_todo_list(rows, *, today=None) -> str:
+# 「这两类这一次**没读到**」的哨兵（见 `render_todo_pending`）。
+#
+# 为什么需要一个哨兵而不是用 `None`：`None` 要表达的其实是两种完全不同的事——
+# ① **这一类信息本次不适用**（只渲染那份私人清单的调用方，比如单测与卡面预览）；
+# ② **适用、但这一次没读到**（汇总接口挂了）。两者在下游**措辞相反**：①一个字都不印，
+# ②必须明说"没读到、不确定有几条"。合并成一个值就会让 ① 那一侧凭空多出一句
+# "没读到"（而它根本没去读），或者让 ② 静默成"没有待处理的事"——后者正是主人
+# 最需要知道有活儿等着他的时候。哨兵让这两种形态在调用点**必须写出来**。
+TODO_PENDING_UNREAD = object()
+
+
+def render_todo_pending(pending) -> str:
+    """待处理的那两类（留言待审 / 额度重置申请）→ **一行**；`None` ⇒ 空串。
+
+    **为什么这两类要在这一帧里**（20260929 用户要求「让 agent 能感知到待审核留言和
+    对话额度批准、问待办日程它能说出来」）：后台首页把它们与私人待办**并排**显示，
+    主人眼里那就是"我日程上等着我处理的事"；但它们**不是** `dashboard_todo` 表的行
+    （不落库、不进 todos，见 `frontend/src/pages/Dashboard/Home/index.tsx` 那两行的
+    注释）。它们真正的来源是同一份红点汇总（`/notifications/summary` 的
+    `pendingReview` / `pendingQuota`）——所以这一帧读的是**红点那个源**，不另造一份
+    计数（"红点与列表是两套数据源"那件事的教训：能同源就同源）。
+
+    四态，与 `_quota_pair` 同一条纪律——**读不到 ≠ 0**：
+      · `pending is None` ⇒ 空串（这一类信息本次不适用，调用方没提供）；
+      · `pending is TODO_PENDING_UNREAD` ⇒ 明说"没读到、不确定有几条"，
+        **绝不**留空（留空会被读成"没有待处理的事"）；
+      · 两类都是 0 ⇒ 空串（这时"没有"就是事实，不必占一行）；
+      · 有一类 > 0 ⇒ 只印 > 0 的那几类（印"留言待审 0 条"是噪声，且会让 narrator
+        开始念零）。
+    """
+    if pending is None:
+        return ""
+    if pending is TODO_PENDING_UNREAD:
+        return "（另有两类等你处理的待办——留言待审与额度重置申请——这一次没读到，不确定有几条）"
+    if not isinstance(pending, dict):
+        # 形态不对：**不猜**（当成"没提供"），同 `_todo_rows` 的取向。
+        return ""
+    review = _nonneg_int(pending.get("review"))
+    quota = _nonneg_int(pending.get("quota"))
+    parts = []
+    if review:
+        parts.append(f"留言待审 {review} 条")
+    if quota:
+        parts.append(f"额度重置申请 {quota} 份")
+    if not parts:
+        return ""
+    return "另有两件等着你处理（不在上面这张私人待办里）：" + "、".join(parts) + "。"
+
+
+def _nonneg_int(v) -> int:
+    """`v` → 非负整数；不是整数/读不出 ⇒ 0（**只用于"印不印这一项"**）。
+
+    不接受字符串数字：这一格的两端都是 Python 自己塞的 int（`tools.base` 从汇总里
+    取 `pendingReview`/`pendingQuota`），出现字符串说明有人在编数而不是在读。
+    """
+    if isinstance(v, bool) or not isinstance(v, int):
+        return 0
+    return v if v > 0 else 0
+
+
+def render_todo_list(rows, *, today=None, pending=None) -> str:
     """后台待办清单 → narrator 读的一行一条。
 
     **一行一条 + 字段用 ` | ` 分开**（同 tag 列表族的帧瘦身口径）：narrator 要能
@@ -910,10 +970,17 @@ def render_todo_list(rows, *, today=None) -> str:
     （拆错就把"已完成"读成"未完成"）。序号是**列表里的位次**——它只是给人读的，
     不是 id（这张列表没有稳定的行 id，见 src/routes/todos.rs 头注；任何按序号
     指认某一条的后续动作都做不到，所以 narrator 也**不该**用它指认）。
+
+    `pending` 见 `render_todo_pending`（默认 `None` = 不提供这一类信息）：
+    后台首页那两类"等着你处理"的计数（留言待审 / 额度申请），**空清单时也照印**
+    ——"一条待办都没记"与"有两件等着你"是两件同时成立的事，不能因为前者为空
+    就把后者吞掉（`list_dashboard_todos` 那一侧也正是这么分出口的）。
     """
     rows = [r for r in (rows or []) if isinstance(r, dict)]
+    tail = render_todo_pending(pending)
     if not rows:
-        return "后台首页的待办列表是空的（一条都没有）。"
+        head = "后台首页的待办列表是空的（一条都没有）。"
+        return f"{head}\n{tail}" if tail else head
     undone = sum(1 for r in rows if not r.get("done"))
     lines = [f"后台首页待办共 {len(rows)} 条（未完成 {undone} 条）："]
     for i, r in enumerate(rows, 1):
@@ -921,6 +988,8 @@ def render_todo_list(rows, *, today=None) -> str:
         when = f"排期 {due_date_cn(iso)}{_due_hint(iso, today)}" if iso else "未排期"
         lines.append(f"{i}. {clip(str(r.get('text') or ''), 60)} | {when} | "
                      f"{'已完成' if r.get('done') else '未完成'}")
+    if tail:
+        lines.append(tail)
     return "\n".join(lines)
 
 
@@ -1206,17 +1275,23 @@ def render_notice_status(username: str, uid, title: str, content: str) -> str:
 # ── 对话额度的重置申请（20260929）────────────────────────────────────────
 # 三个动作的**后果互不相同**，卡面必须分别说清（照 `_ACCOUNT_CONSEQ` 那条纪律：
 # 主人点的是「确定」，他有权在点之前看出自己同意的是什么）。三句的差异不是文风：
-#   · **批准** = 回应他的申请、把计数器清零、**不可撤销**（额度是个计数器，
+#   · **批准** = 回应他的申请、把余额恢复满、**不可撤销**（额度是个数，
 #     没有"撤回"这个概念——批完再想反悔只能等他哪天真的又用完）；
 #   · **驳回** = 他会收到一条站内通知、额度**不变**、**还可以再申请**——
 #     三个动作里唯一可逆、唯一"什么都不改变"的一件；
 #   · **主动重置** = **不需要他申请过**（这一件与前两件最容易被读混：批准是
 #     "回应他"，重置是"你替他决定"）。三者措辞互不相同是硬要求
 #     （`tests/test_chat_quota.py` 有一条断言逐句比对）。
+#
+# **措辞一律说「额度 / 余额」，不说「计数器清零」**（20260929 用户反馈「额度重置
+# 确认说的不太对，用户看到的是递减的」）：库里存的确实是**累计已用**、重置做的确实
+# 是把它置 0，但主人看的那一面是**余额**（`剩 363/500`，每聊一轮减一）——所以
+# "清零"在他读来是"把额度清掉"，与眼前那个数字**往上跳回满格**正好说反。
+# 内部判据（`chatQuotaUsed == 0`）不变；变的只是给人看的字。
 _QUOTA_CONSEQ = {
-    "approve": "（批准后他的计数器立刻清零、马上可以继续提问；**这个动作不可撤销**）",
+    "approve": "（批准后他的额度立刻恢复到上限、马上可以继续提问；**这个动作不可撤销**）",
     "reject": "（驳回后他会收到一条站内通知，额度**不变**，他还可以重新申请）",
-    "reset": "（**不需要他申请过**；清零后他马上可以继续提问，**这个动作不可撤销**）",
+    "reset": "（**不需要他申请过**；恢复满额后他马上可以继续提问，**这个动作不可撤销**）",
 }
 # 三值状态词（与 Rust `quota_request.status` 的取值域同源：0/1/2，见迁移头注）。
 _QUOTA_STATUS_CN = {0: "待处理", 1: "已批准", 2: "已驳回"}
@@ -1235,6 +1310,10 @@ def _quota_pair(row) -> str:
     判断的是"这一下会不会改变什么"，而答案取决于他**还剩**多少（见 `_reached_one` 的
     noop 判据）——`137/500` 要心算一步。判据本身仍然是 `chatQuotaUsed`（内部读数），
     这里只改给人看的字。
+
+    **措辞的单一来源是余额**（20260929 用户反馈后统一，见 `_QUOTA_CONSEQ` 上面那段）：
+    这一族（卡面 / 问句 / 回执 / 后台那句话）**一律不说「清零」**——主人眼前那个数是
+    递减的余额，"清零"与它照面时说的是反话。
     """
     used = quota_used(row)
     lim = quota_limit(row)
@@ -1273,7 +1352,7 @@ def render_quota_action(kind: str, name: str, users=None, quota_requests=None) -
         # 主动重置**不是**回应谁的申请（三件的差别里最容易被读混的一条），
         # 所以这一支**不提「申请」两个字**，理由也不印（他没有申请过，或申请
         # 与这一下无关——印出来会让主人以为自己在批那条申请）。
-        return f"**主动**把账号「{name}」{who}的对话额度清零{tail}"
+        return f"**主动**把账号「{name}」{who}的对话额度恢复满额{tail}"
     if entry is None:
         if quota_requests is not None:
             # 快照在手而里面没有他 ⇒ 如实标注：主人点确定之前就该知道"他并没有
@@ -1303,16 +1382,16 @@ def render_quota_status(kind: str, username: str, uid, limit, used) -> str:
 
     `used` = **写后重读名录**实测到的计数器（工具给不出时是 None）——这一族唯一的
     硬事实来源。三种情形分开说，**一句都不许猜**：
-      · `used == 0` ⇒ 读数确认已清零（这是绝大多数情况）；
-      · `used > 0`  ⇒ 他在这之后又聊过了（清零是真发生了，但读数已不是 0）——
-        如实报实测值，**不许**照抄"已清零"（那会是一句他自己能证伪的话）；
+      · `used == 0` ⇒ 读数确认余额已恢复满（这是绝大多数情况）；
+      · `used > 0`  ⇒ 他在这之后又聊过了（恢复是真发生了，但读数已不满）——
+        如实报实测值，**不许**照抄"已恢复"（那会是一句他自己能证伪的话）；
       · `used is None` ⇒ 端点回了成功但读不回读数：只说端点那一半，明说未复核
         （同 `_set_account_frozen` 的"未确认"取向，**不冒充已核实**）。
     """
     lim = limit if isinstance(limit, int) and limit > 0 else 0
     # 读数写**余额**（20260929b）：这一族的判据仍然是 `chatQuotaUsed`（见 `_quota_readback`），
     # 但那是一个内部判据、不是给主人看的读数。`剩 500/500` 与 `0/500` 是同一件事，
-    # 前者一眼就是"清零了"，后者要先分辨 0 是哪一栏。`used is None`（读不回读数）与
+    # 前者一眼就是"满了"，后者要先分辨 0 是哪一栏。`used is None`（读不回读数）与
     # `reject` 两支都不印这一对读数（各自只说端点那一半 / "额度没有变化"），
     # 那里把 None 当 0 只是取个确定的形状。
     _u = used if isinstance(used, int) else 0
@@ -1320,18 +1399,18 @@ def render_quota_status(kind: str, username: str, uid, limit, used) -> str:
     head = {
         "approve": f"已批准账号「{username}」（账号 id={uid}）的对话额度重置申请",
         "reject": f"已驳回账号「{username}」（账号 id={uid}）的对话额度重置申请",
-        "reset": f"已把账号「{username}」（账号 id={uid}）的对话额度清零",
+        "reset": f"已把账号「{username}」（账号 id={uid}）的对话额度恢复满额",
     }.get(kind, f"已处理账号「{username}」（账号 id={uid}）的额度重置申请")
     if kind == "reject":
         return (f"{head}：他的额度**没有变化**（驳回不改变任何额度），"
                 f"他还会收到一条站内通知，可以重新申请。")
     if used is None:
-        return (f"{head}（后台已受理，但**读不回他的计数器读数**，本次结果未复核——"
-                f"不要对外声称额度已经清零，如实说后台已受理即可）。")
+        return (f"{head}（后台已受理，但**读不回他的额度读数**，本次结果未复核——"
+                f"不要对外声称额度已经恢复，如实说后台已受理即可）。")
     if used == 0:
-        return f"{head}：他的计数器现在读数是 {pair}，马上可以继续提问了。"
-    return (f"{head}：后台已受理，复核时他的计数器读数是 **{pair}**"
-            f"——清零之后他又聊过了（这是重读到的实测值）。")
+        return f"{head}：他的额度现在读数是 {pair}，马上可以继续提问了。"
+    return (f"{head}：后台已受理，复核时他的额度读数是 **{pair}**"
+            f"——恢复满额之后他又聊过了（这是重读到的实测值）。")
 
 
 def render_quota_requests(rows) -> str:

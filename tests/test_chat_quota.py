@@ -702,7 +702,7 @@ check("  普通用户点不到它（角色过滤）",
 
 for _t, _want in zip(_Q3, ("批准账号「Alice」的额度重置申请",
                            "驳回账号「Alice」的额度重置申请",
-                           "把账号「Alice」的对话额度清零")):
+                           "把账号「Alice」的对话额度恢复满额")):
     _got = AT.receipt_action(_t, {"name": "Alice"}, {"account_name": "Alice"})
     check(f"⭐ {_t} 的台账行说的是「{_want}」", _got == _want, _got)
     _no = AT.receipt_action(_t, {}, {})

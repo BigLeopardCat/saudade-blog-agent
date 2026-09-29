@@ -3432,11 +3432,36 @@ def _todo_row_key(row: dict) -> tuple[str, str]:
             str(row.get("date") or "").strip())
 
 
+def _todo_pending(config: RunnableConfig):
+    """后台首页那两类"等着你处理"的计数（留言待审 / 额度重置申请）→ 渲染入参。
+
+    **读的是红点那一份汇总**（`/notifications/summary` 的 `pendingReview` /
+    `pendingQuota`），不另造第二份计数：前端后台首页那两行提示取的也正是它
+    （`useUnread` → `unread.pendingQuota`），同源才不会出现"红点说有 2 条、
+    agent 说没有"。这两个字段**只对能进后台的人算**（后端 `is_console_user`），
+    而本工具本身就是 `read.console` ⇒ 不存在"普通用户读到 0"的误读。
+
+    读不到 ⇒ **`A.TODO_PENDING_UNREAD` 哨兵，不是 0 也不是"没提供"**：
+    `render_todo_pending` 对这三种形态的措辞完全不同，而"没有待处理的事"在主人
+    正等着处理两件事时是一句假话——与 `_quota_pair` 的 `None ≠ 0`、
+    `load_agent_tasks` 的"`[]` 表示没有"同一族纪律。**这里绝不吞掉失败**：
+    汇总读不到不影响待办本身（那一半已经读到了），但"没读到"这件事必须说出去。
+    """
+    from agent import adminops as A
+    data = _own_get("/api/protected/notifications/summary", config)
+    if isinstance(data, ToolResult) or not isinstance(data, dict):
+        return A.TODO_PENDING_UNREAD
+    return {"review": data.get("pendingReview"), "quota": data.get("pendingQuota")}
+
+
 @tool
 def list_dashboard_todos(config: RunnableConfig) -> str:
     """查看**后台首页**的待办 / 日程列表（主人自己在后台首页那张卡里记的事）：
-    每行给出正文、排期日（写「未排期」的是没定日子那条）与是否已完成。
-    主人问"我有哪些待办 / 我日程上有什么 / 那个 xx 是不是还没做"时用它。
+    每行给出正文、排期日（写「未排期」的是没定日子那条）与是否已完成；
+    末尾还会给出**另有两类等着你处理的**计数——留言待审几条、额度重置申请几份
+    （它们与私人待办并排显示在后台首页，但不在那张名单里，不落库）。
+    主人问"我有哪些待办 / 我日程上有什么 / 有没有什么事等着我处理 /
+    那个 xx 是不是还没做"时都用它。
     这是**他自己那份私人列表**，站内公开页面上看不到；需要管理员身份。"""
     from agent import adminops as A
     data = _admin_get("/api/protected/todos", config)
@@ -3445,12 +3470,18 @@ def list_dashboard_todos(config: RunnableConfig) -> str:
     rows = _todo_rows(data)
     if rows is None:
         return unavailable("后台待办接口返回的不是列表，没法读出你的待办")
-    if not rows:
-        # 读到了、就是空的 —— 这是**事实**（`empty`，checker 照常 PASS 进回执），
-        # 不能写成 unavailable：那会把"你还没记过待办"说成"系统挂了"。
+    # 两类"等着你处理"的计数照**同一次调用**带回：主人问"日程"时他要的答案里
+    # 既有他自己记的那几条、也有系统排队等他的那两类（见 adminops 的
+    # `render_todo_pending`）。读不到汇总**不影响**待办本身（走 UNREAD 哨兵，
+    # 如实说没读到）——一条只读通道不该因为另一半读不到就整条报错。
+    pending = _todo_pending(config)
+    tail = A.render_todo_pending(pending)
+    if not rows and not tail:
+        # 读到了、就是空的、且两类都是 0 —— 这是**事实**（`empty`，checker 照常
+        # PASS 进回执），不能写成 unavailable：那会把"你还没记过待办"说成"系统挂了"。
         return empty("后台首页的待办列表现在是空的（一条都没记）。")
-    return ok(A.render_todo_list(rows), meta={"op": "dashboard_todo_list",
-                                              "count": len(rows)})
+    return ok(A.render_todo_list(rows, pending=pending),
+              meta={"op": "dashboard_todo_list", "count": len(rows)})
 
 
 @tool
@@ -3949,8 +3980,10 @@ def send_user_notice(
 # ── 管理助手写工具：对话额度的申请审核（20260929）──────────────────────────
 # 背景（三端都核过的现状）：每个**普通用户**终身 500 轮（含 embedding 检索轮），
 # 管理员不设限；用尽之后由 **Rust 侧硬拦**（agent 只负责把那一轮答成一句人设话术，
-# 见 server.py 的 `_quota_blocked_stream`），唯一恢复途径 = 管理员把计数器清零。
-# 本节的三个写工具是**代管理员**执行清零那一半，外加一件只读的申请队列。
+# 见 server.py 的 `_quota_blocked_stream`），唯一恢复途径 = 管理员把它恢复满。
+# 本节的三个写工具是**代管理员**执行"恢复满额"那一半，外加一件只读的申请队列。
+# （措辞：给主人看的话一律说**余额**，不说"计数器清零"——20260929 用户反馈，
+#  见 `agent/adminops.py` 的 `_QUOTA_CONSEQ` 上面那段。）
 #
 # 两条跨语言契约（改一侧必须改另一侧，`tests/test_chat_quota.py` 有守卫）：
 #   · `GET /api/temp-users` 每行多 `chatQuotaUsed` / `chatQuotaLimit`（0 = 不限额）
@@ -3968,7 +4001,7 @@ def send_user_notice(
 # `docs/security-boundary.md` §7⑬——⚠️ 是 **⑬**，⑫ 是令牌收回那节）。三句的共性 =
 # **再试一次也是同一个结果**，所以走 `policy_frame`（错误帧族）：checker 判 BLOCK ⇒
 # **零回执**、不进跨轮执行记忆，planner 拿到的原因码叫它"如实转述、别改参重试"。
-# 这一条同时消灭了一个具体风险：管理员重复点通过时，**绝不会**在台账里留下第二笔"已清零"。
+# 这一条同时消灭了一个具体风险：管理员重复点通过时，**绝不会**在台账里留下第二笔"已恢复"。
 # ⚠️ **三句的来源不一样**（20260929 核过源码，别把它们一律写成"后端措辞"）：
 #   前两句是 Rust 真会发的（`这条申请已经处理过了` = 认领不到 / `你已经有一份待处理的
 #   申请了` = 重复申请）；**第三句是本节自己合成的**——它在"这个 uid 在当前 pending
@@ -4117,8 +4150,8 @@ def _quota_readback(config: RunnableConfig, target_id: int, username: str, limit
 
     **这一族的复核读的是"那件被改的东西本身"**（计数器），不是"账号还在不在"：
     重读名录只是为了拿到同一个人的那一行，判据是行里的 `chatQuotaUsed`。
-    三种取值分开说（见 `adminops.render_quota_status` 头注）：0 = 已确认清零；
-    >0 = 他在这之后又聊过了（如实报实测值，**不许**照抄"已清零"）；读不出 = 未复核。
+    三种取值分开说（见 `adminops.render_quota_status` 头注）：0 = 已确认恢复满；
+    >0 = 他在这之后又聊过了（如实报实测值，**不许**照抄"已恢复"）；读不出 = 未复核。
     """
     from agent import adminops as A
     after = _user_directory(config)
@@ -4142,7 +4175,7 @@ def _review_quota_request(name, approved: bool, reason, config: RunnableConfig) 
     ⑤ 写后复核 → 出口只有 `ok` / `not_found` / `policy_frame` / `unavailable`。
 
     复核分两个方向，因为**两个方向改变的东西不同**：
-      · **批准**清零计数器 ⇒ 重读名录判 `chatQuotaUsed`（同主动重置，走
+      · **批准**恢复额度满额 ⇒ 重读名录判 `chatQuotaUsed`（同主动重置，走
         `_quota_readback`）；
       · **驳回**不改变任何额度 ⇒ 重读**待处理申请**，判"那一行已经不在了"
         （这正是服务端那次原子认领的可见效果）。用同一条读回复核去判额度在这里
@@ -4222,10 +4255,10 @@ def approve_quota_request(
     name: Annotated[str, "申请人的**账号名**（后台账号列表里看得见的那一行）"],
     config: RunnableConfig,
 ) -> str:
-    """**批准**某个用户的对话额度重置申请：他的已用轮数立刻清零，马上可以继续提问。
+    """**批准**某个用户的对话额度重置申请：他的额度立刻恢复到上限，马上可以继续提问。
     需要管理员身份，且每次都要经主人确认。
 
-    **批准不可撤销**（额度是个计数器，没有"撤回"这个概念）。申请人的账号名必须能在
+    **批准不可撤销**（额度是个数，没有"撤回"这个概念）。申请人的账号名必须能在
     后台账号列表里看到；他没有待处理的申请、或那条已经被处理过时，如实把系统给的
     原话转告主人——**不要**换个说法重试，也**不要**改用主动重置去"绕开"这句话
     （那两件事的后果不同，主人同意的是前者）。"""
@@ -4249,7 +4282,7 @@ def reject_quota_request(
 
 
 def _reset_user_quota(name, config: RunnableConfig) -> ToolResult:
-    """**主动**把某个账号的对话额度清零（不要求他申请过）。
+    """**主动**把某个账号的对话额度恢复到上限（不要求他申请过）。
 
     五段式同 `_set_account_frozen`：① 读名录 → ② 按名字解析唯一一行 → ③ 写 →
     ④ 写后重读**同一份名录**复核计数器 → ⑤ 出口只有 `ok` / `not_found` /
@@ -4291,10 +4324,10 @@ def reset_user_quota(
     name: Annotated[str, "要重置额度的**账号名**（后台账号列表里看得见的那一行）"],
     config: RunnableConfig,
 ) -> str:
-    """把某个账号的**对话额度清零**（已用轮数归零，他马上可以继续提问）。
+    """把某个账号的**对话额度恢复到上限**（他还剩的轮数变回满格，马上可以继续提问）。
 
     **不需要他申请过**——这是管理员主动给的一次重置，与"批准他的申请"是两件事
-    （想回应申请就用批准那件）。**清零不可撤销**。管理员账号本来就不限额，对他们
+    （想回应申请就用批准那件）。**恢复满额不可撤销**。管理员账号本来就不限额，对他们
     做这件事不会改变任何东西。需要管理员身份，且每次都要经主人确认。
 
     **要动的账号名必须能在后台账号列表里看到**；列表里没有这个名字就当它不存在
