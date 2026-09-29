@@ -307,7 +307,7 @@ check("★ ……但它们**仍留在注册表里**：gate 的具名工具声称
       all(n in {t.name for t in _TOOL_REGISTRY} for n in _DEAD))
 
 # ══════════════════════════════════════════════════════════════════
-print("\n④ 接线锁：Python 只对有臂的写 action；Rust 必须优先读它")
+print("\n④ 接线锁：Python 只对有臂的写 action；Rust 必须优先读它，且老表只减不增")
 
 _g = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("graph.py 的 execute_node 写了 `rcpt[\"action\"]`",
@@ -318,6 +318,21 @@ check("  且只在**有臂**时才写（无臂不写 ⇒ 那份回执仍由 Rust
 check("  且写在回执行 append 之前（写在后面＝这一行压根没落库）",
       'rcpt["action"] = act' in _g
       and _g.index('rcpt["action"] = act') < _g.index("receipts.append(rcpt)"))
+
+# ── 老表冻结（20260929）：Rust 那侧的措辞**只减不增** ─────────────────────────
+# 老表一条臂的活路径只有两条：agent 回滚到 20260928 之前送进来的回执行、以及 Python
+# 侧至今没有臂的工具（只有两件死工具）。**新工具两条都不满足**——旧 agent 里根本没有
+# 这件工具，而新工具在 Python 侧一定有臂（③ 的 `_unarmed == 两件死工具` 就是这条）。
+# 所以给新工具加一条 Rust 臂 = **永远走不到的死代码**，而它**看起来**像"两边都写了一
+# 遍、互为对账锚点"——20260929 批 G 正是照着这个错觉给 `reschedule_dashboard_todo`
+# 加过一臂（已撤：真正被钉住的是措辞本身，那在 `test_todo_schedule.py` ⑭ 里）。
+# 这段把它变成机器判据：注册表里没有臂的工具**恰好**是下面这份声明 ⇒ "新工具进注册表"
+# 会在这里现形，逼作者当场回答"这件的措辞归哪一侧"（答案永远是 Python 那一侧）。
+_NO_LEGACY_ARM = _DEAD | {
+    "reschedule_dashboard_todo",   # 20260929 批 G：冻结之后新增的第一件
+    "approve_quota_request", "reject_quota_request", "reset_user_quota",
+    "list_quota_requests",         # 额度四件（20260926）：从来没进过老表
+}
 
 _rs = _parent_repo.read(
     "src/routes/chat.rs",
@@ -343,8 +358,23 @@ if _rs is not None:
           '"device_oled_display" =>' not in _body and "legacy_exec_row(row)" in _body,
           _body[:0])
     _legacy = _fn(_rs, "legacy_exec_row")
-    check("  老表**仍在**（存量行 + 无臂工具的回落路径，删了会让历史行渲染成空）",
+    check("  老表**仍在**（回执缺 `action` 时才走它——那条路只留给回滚与两件无臂死工具；"
+          "已落库的行不走它，`execution_log.detail` 存的就是渲染后的字）",
           '"create_tag" =>' in _legacy and '"device_oled_display" =>' in _legacy)
+
+    # 臂的取值解析要认**或臂**（`"a" | "b" =>`）——只认单名会漏掉一半，而漏掉的那些
+    # 恰好会被读成"没有臂"⇒ 有人给它们加一条单名臂时判据反而不响。
+    _legacy_tools: set[str] = set()
+    for _m in re.finditer(r'((?:"[a-z_0-9]+"\s*\|\s*)*"[a-z_0-9]+")\s*=>', _legacy):
+        _legacy_tools |= set(re.findall(r'"([a-z_0-9]+)"', _m.group(1)))
+    # 臂里还有嵌套 match 的取值（`doc_type` 的 board/talk/announcement），不是工具名。
+    _legacy_tools &= set(_NAMES)
+    _no_arm = set(_NAMES) - _legacy_tools
+    check("★ 老表**只减不增**：注册表里没有臂的工具恰好是那份冻结声明"
+          "（新工具的动作词只加 Python 那侧——加臂是死代码，且让对账显得比实际更严）",
+          _no_arm == _NO_LEGACY_ARM,
+          f"声明说没有却有了臂={sorted(_NO_LEGACY_ARM - _no_arm)}；"
+          f"没有臂却不在声明里={sorted(_no_arm - _NO_LEGACY_ARM)}")
     check("  排版三件仍留在 Rust 侧（方括号归一 / 实体摘要拼接 / 列宽截断）",
           'replace(\'[\', "「")' in _body and 'row["digest"]' in _body
           and ".take(120)" in _body and ".take(300)" in _body)
