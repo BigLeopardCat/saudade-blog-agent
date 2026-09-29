@@ -2572,6 +2572,47 @@ def _instantiate_plan(skill_name: str, params: dict,
         for tool_name, tmpl in skill.plan:
             args = expand_template_args(tmpl, params, specs)
             tools.append(f"{tool_name}({json.dumps(args, ensure_ascii=False)})")
+    if (not tools and not dropped and not status and not skill.chat
+            and skill.name != "content_query"):
+        # ── 零工具轮不许"不成账"（20260929 批 G，D1）──────────────────────────
+        # 现场（trace 20260929 conv258）：主人说「简历日期排到国庆假期以后吧」，
+        # planner 选了 `article_status` 却没填 `article_id` ⇒ 写族那一支**只写
+        # `note`**（不写 `status`、不设 `param_problem`、`dropped` 也空）⇒ 本函数
+        # 返回 `tools=[]` 且记账字段全空 ⇒ `graph.route_after_planner` 只看 TOOLS
+        # 行有无 ⇒ **零工具直落 narrator** ⇒ 它对着零帧吐出空文本 ⇒ gate 判
+        # `empty_reply` ⇒ 主人收到罐头句「我刚才好像卡住了」。
+        #
+        # 而"参数不齐"这条通道**早就接好了**：`planner_node` 的同轮纠偏
+        # （`param_correct`）与确定性收口（`param_terminal`）读的都是
+        # `plan_obj["param_problem"]`，`_param_problem_plan` 就是喂这个键的现成
+        # 形状。缺的只是这些出口**没喂键**——它们的注记写得比通用话术还具体
+        # （"缺少正文（text）：…如实向主人问清"，见各 `_expand_*`），却停在了一个
+        # 没有任何消费方读的字符串里。
+        #
+        # 落点选在**整条 if/elif/else 的汇聚处**（不是各分支各加一条）：实测
+        # `instantiate_plan(技能, {})` 遍历注册表，**28 个技能**会产出这个形状
+        # （写族各 `_expand_*` 的守卫出口、article 两件、read_article、
+        # review_inbox…），一处判、全族生效。判据收窄到"记账字段全空"，
+        # 已有出口（navigate 三值 / `refused` / `_param_problem_plan` 自己）一个都
+        # 不受影响——它们本来就写着自己的 status。
+        #
+        # ⚠️ **`content_query` 硬排除**（不许顺手收进来）：它的 `plan=[]`、两个入参
+        # 都可选，"零工具"在**已有帧的收尾轮**上是**合规**的（见该分支上方那段
+        # "调用清单为空 = planner 决策无需工具（收尾轮）"的论证），而本函数不知道
+        # 有没有帧。收进来会让每一次正常的收尾轮多烧一次 LLM 纠偏。它只走
+        # `graph.planner_node` 的 Layer B（那里读得到 `has_frames`）。
+        specs = skill_param_specs(skill)
+        chk = check_skill_params(skill, params, specs)
+        if not (chk["missing"] or chk["bad"]):
+            # 规格全可选 / 参数都在却仍然零工具 ⇒ "没缺没坏"，但这一轮是真的**没有
+            # 可执行的东西**（notice_read / message_read 的目标藏在可选参数里、
+            # review_inbox 的清单没拼出来、正文是占位符被展开层挡下）。
+            # 不补这一条，纠偏日志与 trace 上会写着"缺=无 坏=无"却一件事都没办。
+            # ⚠️ 措辞**不许指认具体原因**——这一支收的是好几种处境，把"可选参数里
+            # 没有可办的对象"写死会让占位符那一档的日志说一句错原因（真原因是
+            # 展开层挡下了它，注记里写着）。原因在哪，`note` 说。
+            chk = {**chk, "bad": ["这一轮系统没能拼出一条可执行的调用"]}
+        return _param_problem_plan(skill, chk, specs, note=note or None)
     # 点名写进了不读清单的技能（20260925 批 C）：**PARAMS.tools / PARAMS.calls 只有
     # content_query 分支读**（见那条 elif 的条件）。planner 把清单写在别的技能里时，
     # 此前的结果是**静默的零执行**——`dropped` 空 ⇒ 剔空纠偏不触发、`drop_terminal`
@@ -2978,19 +3019,29 @@ def param_problem_note(skill: Skill, chk: dict, specs: dict[str, ParamSpec] | No
 
 
 def _param_problem_plan(skill: Skill, chk: dict,
-                        specs: dict[str, ParamSpec] | None = None) -> dict:
+                        specs: dict[str, ParamSpec] | None = None,
+                        note: str | None = None) -> dict:
     """参数不合格时的零工具计划（`instantiate_plan` 的几个分支共用这一份形状）。
 
     `dropped` 刻意留空、另给 `param_problem`：`dropped` 的语义是**工具可达性**
     （"你够不到这个工具"），而这里工具可达、是参数不齐——混进同一个键会让
     `_drop_correction` 把两件事讲成一件。
+
+    `note`（20260929 批 G）：给了就用它当注记，否则现算一份通用的
+    `param_problem_note`。**这个口子是必须的**——`planner_node` 的 `param_correct`
+    把 `plan_obj["note"]` 当**纠偏正文**喂回给 planner，而各写族展开函数写好的那句
+    （"缺少正文（text）：…如实向主人问清指的是哪一条（可先选 dashboard_todo_list
+    把列表读出来给他挑）"）比通用话术具体得多：用通用话术盖掉它，等于把"该填哪个
+    参数、下一步去读哪"这些**机器已知的事实**又还回给模型猜。
+    三个既有调用点（navigate 的事前校验、模板占位符、本批的零工具兜底）都不传它，
+    行为与从前逐字相同。
     """
     return {
         "skill": skill.name,
         "tools": [],
         "dropped": [],
         "param_unknown": chk.get("unknown") or [],
-        "note": param_problem_note(skill, chk, specs),
+        "note": note or param_problem_note(skill, chk, specs),
         "reply": skill.reply_contract,
         "chat": False,
         # 参数不齐是**系统已知**的处境（不是猜的）：批 3 的洞④ 豁免读这个值

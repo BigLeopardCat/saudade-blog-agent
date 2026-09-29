@@ -4116,6 +4116,81 @@ def test_drop_correction():
         G.get_llm = _orig_llm
 
 
+def test_unaccounted_zero_tool_round():
+    """「不成账」的零工具轮 → 确定性收尾，绝不直落 narrator（20260929 批 G，D1）。
+
+    形状 = 零工具 ∧ `dropped` 空 ∧ 无 `param_problem` ∧ 非 chat ∧ `status` 空。
+    缺陷本体不是"注记写得不好"：`graph.route_after_planner` 只看 TOOLS 行有无，这个形状
+    一路落到 narrator，而 narrator 面对零帧只能说空话（生产现场：15 token 空文本 ⇒
+    gate 判 `empty_reply` ⇒ 主人收到罐头句「我刚才好像卡住了」）。
+
+    源头那一层（`skills._instantiate_plan` 汇聚处的 Layer A）已让注册表里的技能**结构上
+    产不出**这个形状（派生锁在 `test_status_judgements.py` ④）。这里锁的是**尾巴上那一层**
+    （`planner_node` 的 Layer B）——它收的是 Layer A 刻意放过的 `content_query` 空参轮，
+    以及任何绕过注册表的产物。三条契约：
+
+      ① 收尾写进 `status`（消费侧读值，不读措辞）；
+      ② **不新增重决策通道**：只烧一次 LLM（零工具轮再问一次通常还是零工具，缺参那条路
+         走的是既有 `param_correct`）；
+      ③ 注记按 `has_frames` 分两支如实写——有帧时材料在手里，措辞不能把一次正常回答
+         讲成"我查不到"。
+    """
+    print("[unaccounted] 零工具轮不许直落 narrator（尾巴上的兜底）")
+    import agent.graph as G
+    from agent.graph import parse_plan, planner_node
+    from agent.principal import Principal
+
+    class _ScriptedLLM:
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    # `content_query` 空参：`plan=[]` 且两个入参都可选 ⇒ 走到尾巴时记账字段全空。
+    # **正是 Layer A 硬排除的那一个**（零工具在"已有帧的收尾轮"上合法，
+    # 而 `instantiate_plan` 不知道有没有帧）——这个分岔只能在这里按 has_frames 兜。
+    _EMPTY_CQ = ('SKILL=content_query\nPARAMS={}\nREPLY: 直接回答')
+    _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
+                             "user_id": 7, "conversation_id": 42, "stop_event": None}}
+    _orig_llm = G.get_llm
+    try:
+        # ① 无帧：主人的话里没有任何可查的东西 ⇒ 如实问清缺什么。
+        llm = _ScriptedLLM([_EMPTY_CQ])
+        G.get_llm = lambda **kw: llm
+        out = planner_node({"messages": [HumanMessage(content="今天天气怎么样呀")],
+                            "plan_rounds": 0, "executed": [], "tool_data": []}, _CFG)
+        plan = parse_plan(out["plan"])
+        check("零工具且记账字段全空 → 收尾（不再是「不知道」的空串）",
+              plan["status"] == "wrapped", plan["status"])
+        check("  只烧一次 LLM（不新增重决策通道）", len(llm.prompts) == 1,
+              f"llm_calls={len(llm.prompts)}")
+        check("  无帧那一支的注记：写明本轮零执行 + 禁止句",
+              "本轮一个工具都没有执行" in plan["note"]
+              and "不许" in plan["note"], plan["note"][:120])
+        check("  且带系统台账锚（洞④ 的豁免对它是正当的：这一轮的处境是系统给的）",
+              G._LEDGER_NOTE_PREFIX in plan["note"])
+
+        # ② 有帧：**更早几轮**取回过工具返回 ⇒ 措辞必须如实，不能讲成"我查不到"。
+        llm2 = _ScriptedLLM([_EMPTY_CQ])
+        G.get_llm = lambda **kw: llm2
+        out2 = planner_node({
+            "messages": [HumanMessage(content="再帮我看看别的"),
+                         ToolMessage(content="站内共有 3 篇文章", tool_call_id="t1",
+                                     name="list_notes")],
+            "plan_rounds": 1, "executed": [], "tool_data": []}, _CFG)
+        plan2 = parse_plan(out2["plan"])
+        check("有帧时同样收尾", plan2["status"] == "wrapped", plan2["status"])
+        check("  注记指出返回是**更早几轮**的（不把正常回答讲成「我查不到」）",
+              "更早几轮" in plan2["note"] and "可以照它们如实作答" in plan2["note"],
+              plan2["note"][:160])
+        check("  不许说「刚刚又查了一次」（同族教训：机制描述会变成模型的词汇）",
+              "不要说你刚刚又查了一次" in plan2["note"])
+    finally:
+        G.get_llm = _orig_llm
+
+
 def test_calls_in_wrong_skill_round():
     """点名写进了不读清单的技能 → 记账 + 同轮纠偏（20260925 批 C）。
 
@@ -4461,8 +4536,11 @@ def test_write_ledger_note_round():
             / "graph.py").read_text(encoding="utf-8")
     # 20260926 起是**四处**（第四处 = `param_problem` 纠偏后仍不齐的确定性收口，
     # planner_node 里那条 `param_terminal`）：它同样复用锚常量、没有手抄字面量。
-    check("四处确定性收尾路径都用了同一个锚常量（不是各写一遍字面量）",
-          _src.count("_LEDGER_NOTE_PREFIX +") == 4,
+    # 20260929 批 G 起是**五处**（第五处 = 「不成账」的零工具轮那条 Layer B 兜底）：
+    # 那一轮同样是"系统核对过的处境"（这一轮什么都没执行），洞④ 的豁免对它是正当的
+    # ——它说的站内结论同样是系统给的，不是 narrator 编的。
+    check("五处确定性收尾路径都用了同一个锚常量（不是各写一遍字面量）",
+          _src.count("_LEDGER_NOTE_PREFIX +") == 5,
           str(_src.count("_LEDGER_NOTE_PREFIX +")))
     check("锚的字面量在 graph.py 里只出现一次（= 常量定义那处，没有第二份手抄）",
           _src.count(_LEDGER_NOTE_PREFIX) == 1,
@@ -4772,9 +4850,19 @@ def test_name_target_round():
         _spec4n = parse_plan(out4n["plan"])["tools"]
         check("正文槽被填成技能名（展开层零工具）→ **重决策一次**，不再直落 narrator",
               len(llm4n.prompts) == 2, str(len(llm4n.prompts)))
-        check("  重决策文本走的是「有引号」那一支，并写明目标名字不许改写或截短",
-              "引号点名了目标" in llm4n.prompts[1] and "截短" in llm4n.prompts[1],
+        # 20260929 批 G：这一轮的纠偏文本换了来源。此前"展开层挡下占位符 ⇒ 零工具"
+        # 是一个**不成账**的计划（无 `param_problem`），于是由 `_name_write_nudge`
+        # （写域动作词那一支）接手，纠偏文本讲的是"引号点名了目标、不许改写或截短"
+        # ——那是**通用**话术。现在 Layer A 把这个形状收进 `param_problem`，
+        # 纠偏走既有的 `param_correct`，用的正是**展开层自己写好的那一句**
+        # （说清占位符是什么、正文该怎么重写）——同一件事、更具体的那一句。
+        # 契约没变（仍是"重决策一次"，见上一条），换的是那句话从哪来。
+        check("  重决策文本 = 展开层写好的那一句（指出占位符、要求重写正文）",
+              "占位符" in llm4n.prompts[1] and "重新决策" in llm4n.prompts[1],
               "纠偏文本未进提示")
+        check("  且**不是**通用话术（`_param_problem_plan` 的 note 口子真的生效了："
+              "通用那份会带「本技能参数：」的签名行）",
+              "本技能参数：" not in llm4n.prompts[1], "纠偏文本退回了通用话术")
         check("  重决策后落成一条写规格（名字由系统解析 id，交弹卡）",
               _spec4n == ['send_user_notice({"name": "boss", "content": "请以后老实一点。"})'],
               str(_spec4n))
@@ -4977,6 +5065,7 @@ def main():
                test_short_reply_and_adjacent_pairs,
                test_no_sibling_tool_name_in_user_text, test_site_guide_is_role_rendered,
                test_site_guide_covers_nav_map, test_drop_correction,
+               test_unaccounted_zero_tool_round,
                test_calls_in_wrong_skill_round,
                test_write_target_refusal_round, test_write_grounding_round,
                test_write_ledger_note_round,

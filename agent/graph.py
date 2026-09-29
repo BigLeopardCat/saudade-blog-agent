@@ -3964,6 +3964,53 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             "「站内没有这个页面/不存在」这类结论——参数不齐不代表页面不存在。"))
         return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
 
+    if (not plan_obj["tools"] and not plan_obj.get("dropped")
+            and not plan_obj.get("param_problem") and not plan_obj.get("chat")
+            and not plan_obj.get("status")):
+        # ── 「不成账」的零工具轮：尾巴上的兜底（20260929 批 G，Layer B）────────
+        # 形状 = 零工具 ∧ `dropped` 空 ∧ 无 `param_problem` ∧ 非 chat ∧ `status` 空：
+        # 计划里什么都没发生，而**没有一个记账字段说出为什么**。上游 Layer A
+        # （`skills._instantiate_plan` 的汇聚处）已让注册表里 28 个技能不再产出它，
+        # 所以落到这里的只剩两类：
+        #   ① `content_query` 的**空参**轮——它被 Layer A 刻意排除（零工具在"已有帧
+        #      的收尾轮"上合规，而 `instantiate_plan` 不知道有没有帧），但"不知道该
+        #      查什么"是真的一件没办，本层读得到 `has_frames`，正好补上这个分岔；
+        #   ② 任何**绕过注册表**的产物（手拼的夹具、将来新加的构造点）——把判据放在
+        #      尾巴上，是"新加一条造计划的路也不会漏"的那道网。
+        #
+        # **不新增重决策通道**：这里只收尾、不 `continue`。理由与
+        # `_name_write_nudge` 用 `rounds` 收窄同源——零工具轮再烧一次 LLM 通常还是
+        # 零工具（现场那次是参数压根不在主人这句话里），而"如实问清缺什么"本来
+        # 就是这一轮该有的产出。缺参那条路（Layer A）走的是**既有**的同轮纠偏，
+        # 纠不动才落到 `param_terminal`——两条通道这条批一个字都没新开。
+        #
+        # ⚠️ 必须是 **return**、不是 break：循环之后的路要读 `plan_obj["params"]`，
+        # 而 `_wrap_up_plan` 不带该键 ⇒ break 到那里必抛 KeyError('params')
+        # （20260922 实测，见上方 `_wrap_up_plan` 那段注）。
+        #
+        # 注记**按 `has_frames` 分两支如实写**：有帧时材料在手里，措辞不能把一次
+        # 正常的回答讲成"我查不到"（同 `param_terminal` 那条注的理由）。
+        logger.warning("[planner] 零工具且记账字段全空（skill=%s round=%s 有帧=%s）"
+                       "→ 确定性如实收尾", plan_obj.get("skill"), rounds, has_frames)
+        record("planner", "unaccounted_plan", skill=plan_obj.get("skill"),
+               round=rounds, frames=has_frames)
+        plan_obj = _wrap_up_plan(has_frames, note=(
+            _LEDGER_NOTE_PREFIX +
+            ("**最后一次决策轮没有执行任何工具**：系统没能把这一轮变成一件可执行的"
+             "事，所以没有新的工具返回；上面那些工具返回是**更早几轮**取回的，"
+             "可以照它们如实作答，但不要说你刚刚又查了一次。"
+             "要是按已有返回仍答不了主人这一问，就**用主人的话**把还缺的那一项"
+             "问清楚（例如「你想查的是哪一篇呀」）——别猜、别替主人挑一个。"
+             if has_frames else
+             "**本轮一个工具都没有执行**，所以你现在**没有任何工具返回可用**。"
+             "只许如实说明你需要主人补什么：**用主人的话**把缺的那项信息问一遍"
+             "（例如「你想查的是哪一篇呀」），问清就走，别猜、别替主人挑一个。")
+            + "**不许**出现「已经带你到/已经跳转/已经打开/已经办好/看过/读过/"
+            "查过/调用过工具」这类说法，也不许描述你做了哪些步骤；"
+            "**不许**把参数名（如 target）当成人话念出来，也**不许**下"
+            "「站内没有这个页面/不存在」这类结论。"))
+        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
+
     # 字面路径防推断兜底（确定性修正，保留自旧架构）：用户消息里出现 / 开头的
     # 路径且 planner 选了 navigate 时，target 必须原样用该路径——qwen 曾把
     # "/iot" 推断成"物联网平台"（语义替身）→ 计划变成跳转 /device-console/

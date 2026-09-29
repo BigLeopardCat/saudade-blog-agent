@@ -29,8 +29,8 @@ from agent.graph import (  # noqa: E402
     _FALLBACK_DOWN, _FALLBACK_GONE, _claim_issue, gate_node, parse_plan, plan_encode,
 )
 from agent.skills import (  # noqa: E402
-    PLAN_STATUS_ABSENCE_EXEMPT, PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, SKILL_MAP,
-    _param_problem_plan, instantiate_plan,
+    PLAN_STATUS_ABSENCE_EXEMPT, PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, SKILLS,
+    SKILL_MAP, _param_problem_plan, instantiate_plan,
 )
 
 FAILS: list[str] = []
@@ -227,6 +227,53 @@ for _p in (instantiate_plan("chat", {}), instantiate_plan("navigate", {"target":
     if not re.search(r"^STATUS=\w+$", plan_encode(_p), re.M):
         _miss.append(_p.get("skill", "?"))
 check("所有构造路径的 plan_encode 产物都带 STATUS 行", not _miss, str(_miss))
+
+# ══════════════════════════════════════════════════════════════════
+# ④ **注册表 × 空参扫描**：不存在「不成账」的零工具计划（20260929 批 G）
+#
+# 这一段原先是**手挑的 5 条路径**（上面那一条），而手挑的样本永远只是"我想到的那几条"
+# ——D1 那 28 个技能里一个都不在里面。缺陷本体是：计划的记账字段全空（`tools=[]` ∧
+# `dropped=[]` ∧ 无 `param_problem` ∧ 非 chat ∧ `status==""`），于是
+# `route_after_planner` 只看 TOOLS 行 ⇒ 零工具直落 narrator ⇒ 它对着零帧只能说空话。
+# 现在判据从注册表现算：**遍历每个技能、空参实例化一次**，一个都不许是这个形状。
+#
+# ⚠️ 白名单**只许 `content_query` 一条**，且理由是结构性的、不是"今天它这样"：
+# 它的 `plan=[]`、两个入参都可选，"零工具"在**已有帧的收尾轮**上是合规的
+# （见该技能分支里的既有论证），而 `instantiate_plan` 不知道有没有帧 —— 那个分岔
+# 由 `graph.planner_node` 的 Layer B 按 `has_frames` 兜。往这张白名单里加技能
+# 之前，先回答"它的零工具轮是不是一种合法的处境"；不是就别加，去喂 `param_problem`。
+_UNACCOUNTED_OK = {"content_query"}
+print("\n④ 注册表扫描：零工具 ∧ 记账字段全空 的计划不许存在（D1 的派生锁）")
+_bad_plans = []
+for _sk in SKILLS:
+    _p = instantiate_plan(_sk.name, {})
+    if (not _p.get("tools") and not _p.get("dropped") and not _p.get("param_problem")
+            and not _p.get("chat") and not _p.get("status")
+            and _sk.name not in _UNACCOUNTED_OK):
+        _bad_plans.append(_sk.name)
+check(f"注册表 {len(SKILLS)} 个技能里没有「不成账」的零工具计划",
+      not _bad_plans, f"{_bad_plans}")
+check("  白名单只有 content_query 一条（往里加技能前先回答：它的零工具轮合法吗）",
+      _UNACCOUNTED_OK == {"content_query"}, str(sorted(_UNACCOUNTED_OK)))
+# 形状判据本身要**判得动**（否则"扫出 0 条"可能只是判据哑了）：同一个函数拿两个
+# 方向的样本各过一次——一个真不成账的（手造）判得出，一个已被收进 param_problem 的
+# （`tag_delete` 空参）判不出。
+_shape = (lambda p: not p.get("tools") and not p.get("dropped")
+          and not p.get("param_problem") and not p.get("chat") and not p.get("status"))
+check("  形状判据两向都判得动（手造的认得出、已记账的认不出）",
+      _shape({"tools": [], "dropped": [], "chat": False, "status": ""}) is True
+      and _shape(instantiate_plan("tag_delete", {})) is False)
+check("  空参的 tag_delete 落成 param_missing（不再是「不成账」）",
+      instantiate_plan("tag_delete", {})["status"] == "param_missing",
+      instantiate_plan("tag_delete", {})["status"])
+# 兜底那一条（Layer B）住在 planner_node 里：这里只锁"接线在位"（形状判据 + 分两支的
+# 注记），整轮行为由 `test_skills.py` 的假 LLM 剧本锁（那里跑的是真 `planner_node`）。
+_G_SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+check("Layer B 在 planner_node 里（按不成账形状收尾，不新增重决策通道）",
+      '"unaccounted_plan"' in _G_SRC)
+check("  它的注记按 has_frames 分两支（有帧时不许把正常回答讲成查不到）",
+      "最后一次决策轮没有执行任何工具" in _G_SRC
+      and "本轮一个工具都没有执行" in _G_SRC)
 
 check("_EXECUTOR_PROMPT 里给了状态 → 口径表（否则状态只有系统看得懂、叙述照样跑偏）",
       "STATUS=" in G._EXECUTOR_PROMPT and "nav_offline" in G._EXECUTOR_PROMPT
