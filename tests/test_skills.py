@@ -3258,6 +3258,51 @@ def test_read_repeat_round():
         G.get_llm = _orig_llm
 
 
+def test_read_repeat_note():
+    """只读重复收尾的注记必须**点名本轮取到了什么**（20261001，trace 20261001T005722）。
+
+    病根：整份计划都是已取回的只读 spec ⇒ 收尾，而旧注记只说"数据在上方工具返回里"
+    ——"上方"覆盖了哪几行，一个字都没写。narrator 于是把**几轮前自己读公开帧得来的
+    旧说法**当成本轮事实（那次它把 `talkId:100` 的账号说成"同样归属 userId:1"，
+    而本轮名册只筛出 97 一行、100 从没进过本轮任何一帧）。注记因此要逐条念出本轮
+    真取到的数据行（动作行，与过程行同源），并明说"没在上面出现的本轮没查过"。
+    """
+    from agent.graph import _read_repeat_note
+
+    # 回执行不写 action 时回落 `tool_action_text`（与过程行同一份实现）——
+    # `list_admin_board` 的臂把**筛选条件**写进行里，这正是"查了一小撮"看得见的地方。
+    note = _read_repeat_note(
+        [{"tool": "list_admin_board", "args": {"keyword": "垃圾博客"}},
+         # 写族的回执不是"取回的数据"，不进这份清单
+         {"tool": "freeze_account", "args": {"name": "x"}}],
+        ['list_admin_board({"keyword": "垃圾博客"})'])
+    check("注记念出本轮取到的数据行（带筛选条件的动作行）",
+          "查看后台留言名册（关键词「垃圾博客」）" in note, note)
+    check("  写族回执不进数据行清单（冻结不是取回的数据）", "冻结" not in note, note)
+    check("  明说没出现的本轮没查过", "本轮就没有查过" in note, note)
+    check("  明说会话历史里的旧说法不算本轮事实",
+          "会话历史" in note and "不是本轮事实" in note, note)
+    check("  答不了要如实说没查到（不得硬答）", "如实说没查到" in note, note)
+
+    # 回执带 action 时用它（台账行那档已渲染定稿，别再渲染一遍）
+    acted = _read_repeat_note(
+        [{"tool": "list_admin_board", "args": {}, "action": "查看后台留言名册"}], [])
+    check("回执自带 action 时直接用它", "查看后台留言名册" in acted and acted.count("查看") == 1, acted)
+
+    # 同一件事（工具+参数归一化后同签名）只占一行；回执全读不出时退回被剔的 spec 原文
+    dup = _read_repeat_note(
+        [{"tool": "list_guestbook", "args": {}}, {"tool": "list_guestbook", "args": {}}], [])
+    check("同一件事只占一行", dup.count("查看留言板") == 1, dup)
+    fallback = _read_repeat_note([], ["get_server_status({})"])
+    check("回执读不出行时退回被剔 spec 的动作行", "查看服务器状态" in fallback, fallback)
+
+    # 上限：最多念 5 行，其余只报条数（注记进提示词，不能无限长）
+    many = _read_repeat_note([{"tool": "list_guestbook", "args": {"page": i}}
+                              for i in range(8)], [])
+    check("最多念 5 行 + 其余报条数", many.count("查看留言板") == 5 and "另有 3 件未列出" in many,
+          many)
+
+
 def test_candidate_relevance_pick():
     """检索重复拦截的候选选择（20260912 位置规则加固，9/8 跑题现场可复现）。
 
@@ -5039,7 +5084,8 @@ def main():
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message, test_planner_output_re,
                test_planner_output_json_form, test_planner_json_body_wiring,
-               test_search_retry_kind, test_trim_done_reads, test_read_repeat_round,
+               test_search_retry_kind, test_trim_done_reads, test_read_repeat_note,
+               test_read_repeat_round,
                test_candidate_relevance_pick,
                test_scan_action_intents, test_doc_anchors_and_clip,
                test_doc_title_resolution, test_doc_anchor_grounding,
