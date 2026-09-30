@@ -811,6 +811,60 @@ def _denial_hit(text: str) -> bool:
     return any(re.search(rx, text) for rx in DENIAL_FAMILY)
 
 
+# ── 写族清单的哨兵（20261001）───────────────────────────────────────────────
+# `forbid_tool_calls` 里可以写 `"@write_console"`，加载时展开成**当前**的
+# `agent.authz.TOOL_SCOPE` 里 scope 为 `write.console` 的全集。
+#
+# **为什么要有这个哨兵**：这三十几条用例问的是同一件事——"这一轮一个后台写都不许发生"
+# ——而答案此前是各自手抄一份工具名清单（长度 8–17 不等）。手抄的缺口完全跟着工具的
+# 上线时间走，20261001 实测 44 条含 `forbid_tool_calls` 的用例：
+#   `reschedule_dashboard_todo` / `approve_quota_request` / `reject_quota_request` /
+#   `reset_user_quota` **一条都没禁**（44/44 缺），`send_user_notice` 43 条没禁，
+#   `complete_dashboard_todo` 39 条、`freeze_account`/`unfreeze_account` 36 条……
+# 即**每上一个写工具，这条判据就在全部用例上集体松一寸，而没有任何东西会说话**。
+# 哨兵把清单的唯一事实源交回 `authz.TOOL_SCOPE`：新增写工具那一刻所有用例同时收紧，
+# 零人工同步（同族的教训见 `_QUERY_TOOLS_DESC` 从注册表生成那一次）。
+#
+# **纪律**：写族条目一律用哨兵，非写族条目（`rag_search`/`list_admin_notes`…）照旧
+# 逐字写——哨兵只回答"哪些是后台写工具"，不回答"这一轮该不该搜"。这条规矩由
+# `tests/test_golden_keys.py` 的锁钉住，防手抄清单长回来。
+FORBID_TOKENS: tuple[str, ...] = ("@write_console",)
+
+
+def write_console_tools() -> set:
+    """当前全集的 `write.console` 工具（唯一事实源 = `agent.authz.TOOL_SCOPE`）。"""
+    from agent.authz import SCOPE_WRITE_CONSOLE, TOOL_SCOPE
+    return {t for t, s in TOOL_SCOPE.items() if s == SCOPE_WRITE_CONSOLE}
+
+
+def expand_forbid_tokens(cases: list) -> list:
+    """把 `forbid_tool_calls` 里的哨兵就地展开成工具名，返回展开过的用例 id。
+
+    **展开成空集要抛**：那说明 `TOOL_SCOPE` 读不到或 scope 改了名——此时"不许写"
+    会静默退化成"什么都不禁"，方向与用例本意相反（同 `DENIAL_FAMILY` 那条纪律：
+    判据坏掉要响，不要静默地变松）。
+    """
+    expanded: list = []
+    for c in cases:
+        for gold in ([c.get("gold")] + [r.get("gold") for r in c.get("rounds") or []]):
+            if not isinstance(gold, dict):
+                continue
+            lst = gold.get("forbid_tool_calls")
+            if not lst or not any(t in FORBID_TOKENS for t in lst):
+                continue
+            names = sorted(write_console_tools())
+            if not names:
+                raise RuntimeError(
+                    "forbid_tool_calls 的哨兵展开了空集（authz.TOOL_SCOPE 变了？）"
+                    f"——用例 {c.get('id')}")
+            out: list = []
+            for t in lst:
+                out.extend(names if t in FORBID_TOKENS else [t])
+            gold["forbid_tool_calls"] = out
+            expanded.append(c.get("id"))
+    return expanded
+
+
 # ── golden 键的三张表（20260924）─────────────────────────────────────────────
 # 键名写错是一个**静默 no-op**：gold 是 dict，把 require_cmd_all 敲成 require_cmdall 时
 # 取值取到 None、那段断言根本不执行，而用例照样绿——判据看着在、其实不在。已经抓到一条
@@ -1425,6 +1479,12 @@ def main():
     judge_docs = judge_corpus()
 
     cases = [json.loads(line) for line in open(GOLDEN_FILE, encoding="utf-8") if line.strip()]
+    # 写族清单的哨兵（20261001）：`"@write_console"` → 当前的 write.console 全集。
+    # 展开放在**过滤之前**，`--only` 选中的那几条也一定拿到展开后的清单。
+    _expanded = expand_forbid_tokens(cases)
+    if _expanded:
+        print(f"[init] 写族哨兵 @write_console 展开：{len(_expanded)} 条用例，"
+              f"{len(write_console_tools())} 个后台写工具")
     # 全量标签表（过滤前）：回归组的"被跳过"清点要用它（见报告 regression 块与门禁）
     _ALL_TAGS = {c["id"]: (c.get("tags") or []) for c in cases}
     if args.only:
