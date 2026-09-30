@@ -297,8 +297,9 @@ class AgentState(TypedDict):
     executed: list[str]
     receipts: list[dict]
     # noop_specs: 本轮**零改动**的那些 spec 的归一化签名（`_spec_signature` 的字符串形，
-    #             20260930）——事实源是工具自己的 `meta["noop"]`（工具在"状态本来就是
-    #             目标值、一个字节都没改"时声明），execute 落这里。两个读端：
+    #             20260930）——事实源是工具**事实信封**里的 `changed`（`tools.base.fact()`
+    #             构造；"状态本来就是目标值、站内数据一个字节都没变"时 `changed=False`），
+    #             execute 按 `tools.base.is_noop` 判并落这里。两个读端：
     #               · gate 洞⑩：本轮有**非** noop 的写回执、叙述却说"这一轮什么都没改"
     #                 ⇒ 把一次真的发生了的改动说成没发生；
     #               · planner 零改动重复裁剪：同一件零改动的事再点名一次不重跑
@@ -2332,8 +2333,8 @@ def _false_negative_claim(reply: str, receipts_exist: bool) -> bool:
 # 是**兜底**：措辞只能降低概率，兑现轮说反话必须拦得住。
 #
 # 判据（两条同时成立，缺一不可）：
-#   ① **本轮有"真的改了东西"的写回执**（事实来自 execute 落下的 `noop_specs`：工具声明
-#      了 `meta["noop"]` 的那些是零改动，其余写回执都算真改动）；
+#   ① **本轮有"真的改了东西"的写回执**（事实来自 execute 落下的 `noop_specs`：工具事实
+#      信封里 `changed=False` 的那些是零改动，其余写回执都算真改动）；
 #   ② 叙述里有**带本轮作用域标记的零改动声称**（"这一轮没有可标记的 / 本轮什么都没改 /
 #      本次没有任何改动"）。
 #
@@ -2364,8 +2365,8 @@ def _has_real_change(receipts, noop_specs) -> bool:
     事实源是 execute 落下的两样东西，**不读叙述**：
       · `receipts` = checker 验收过（PASS）的执行回执；取其中**写族**那些
         （`authz.required_scope(tool)` 落在 `authz.WRITE_SCOPES` 里）；
-      · `noop_specs` = 其中工具自己声明了 `meta["noop"]` 的（状态本来就已是目标值、
-        一个字节都没改，见 AgentState 里该字段的长注）。
+      · `noop_specs` = 其中工具事实信封里 `changed=False` 的（状态本来就已是目标值、
+        站内数据一个字节都没变，见 AgentState 里该字段的长注与 `tools.base.is_noop`）。
 
     有写回执、且至少有一条不在 noop 里 ⇒ 这一轮真的改了东西。签名走 `_spec_signature`
     （与 receipts / 剪裁 / planner 的去重判据同一份归一化，别在这里另写一套）。
@@ -4481,7 +4482,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                redirected=True)
 
     # 零改动重复裁剪（20260930，见 `_trim_noop_specs` 头注）：本轮**已经执行过**、
-    # 且工具自报"状态本来就是目标值"（`meta["noop"]`）的那一件不再重跑——它不算
+    # 且工具事实信封报"零净改动"（`changed=False`）的那一件不再重跑——它不算
     # "另一件事"，而是**已经完成**。放在只读裁剪之后：那一条管"取过了"，这条管
     # "改了等于没改"，两者的事实来源不同、互不覆盖。
     trim_noop = _trim_noop_specs(plan_obj, state.get("noop_specs"))
@@ -4685,7 +4686,8 @@ def _trim_noop_specs(plan_obj: dict, noop_specs) -> tuple[dict, list[str]] | Non
     一次"可能是另一件事）；`_already_done_writes` 只在技能进白名单时生效；search 那条
     只管 content_query。
 
-    判据 = **工具自己声明的零改动证书**（`meta["noop"]`，execute 落进 `noop_specs`）。
+    判据 = **工具事实信封里的 `changed=False`**（零改动证书，execute 按
+    `tools.base.is_noop` 判并落进 `noop_specs`）。
     与上面几条的分别在于事实来源：那几条判"这件事做过没有"，这条判"做了等于没做"——
     状态**本来就已是目标值**，所以"再来一次"在语义上是**已经完成**，不是"另一件事"。
     （这正是它敢动写族的原因：会不会改由工具自己说了算，不由我们猜。）
@@ -7387,6 +7389,10 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     results: list = []
     receipts = list(state.get("receipts") or [])  # 请求内累计（与 executed 同模式）
     noop_specs = list(state.get("noop_specs") or [])  # 请求内累计的零改动签名（见 AgentState）
+    # 事实信封的读端（F1，20260930）：`tools.base.is_noop` 是**唯一**实现——它读
+    # `meta["changed"]`、兼容老键 `noop`。就地 import 是同文件里读 tools.base 的
+    # 既有姿势（tools.base 反向 import agent.adminops，模块级互相 import 会成环）。
+    from tools.base import is_noop
     blocked: list = []                            # 只含本轮受阻项（路由/reflector 用）
     prev_seen = set(state.get("blocked_seen") or [])  # 本轮之前的受阻「键」集（见下）
     tool_data = list(state.get("tool_data") or [])    # 参数引用的取值源（请求内累计）
@@ -7591,23 +7597,27 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                         # 一半回执取到空串"的经典来源——args 侧早已按同样理由
                         # 全部 str()（见上面 rcpt 的 args 构造）。
                         rcpt[k] = str(v)[:120]
-            elif (getattr(out, "meta", None) or {}).get("noop"):
-                # 写操作**短路**的回执（20260926）：工具压根没发出写请求、目标状态
-                # 本来就已经是它要的样子（收藏两件、已读两件——见 tools/base.py 里那
-                # 四处 `noop: True`）。这两族的 scope 是 `write.own`（本人作用域），
-                # **不在 AUDIT_SCOPES 里** ⇒ 上面那道闸一个 meta 键都不给它们 ⇒ Rust
-                # 只能从 args 渲染出「收藏文章 12」：一次**根本没发生的写**照样写进了
-                # 执行台账。它随下一轮 `recent_executions` 注回提示词时，主人问"你刚才
-                # 动过我收藏吗"，planner 看到的那一行就是"做过了"。
+            elif is_noop(getattr(out, "meta", None)):
+                # 写操作**零净改动**的回执（20260926 起，20260930 由事实信封统一判据）：
+                # 这一次调用没有让站内数据发生任何变化（工具压根没发出写请求，如收藏
+                # 两件、已读两件；或发了但服务端那一支是真 no-op，如冻结/待办勾完成/
+                # 改排期那三族的幂等不短路分支——见 `tools.base.is_noop`）。
+                # 这些族的 scope 是 `write.own` / `write.kv`，**不在 AUDIT_SCOPES 里**
+                # ⇒ 上面那道闸（审计域的 `_RCPT_META_KEYS` 拷贝）一个 meta 键都不给它们
+                # ⇒ Rust 只能从 args 渲染出「收藏文章 12」：一次**根本没发生的写**照样
+                # 写进了执行台账。它随下一轮 `recent_executions` 注回提示词时，主人问
+                # "你刚才动过我收藏吗"，planner 看到的那一行就是"做过了"。
                 # 这里只放 `change` 一个键，够 Rust 那四臂渲染出「本来就已收藏（未改动）」，
                 # 且**不扩 AUDIT_SCOPES**（`test_authz` 精确锁着它的成员）：`principal_role`
                 # 是审计语义——"以管理身份改了站内数据"，与"本人对自己收藏的操作"无关。
-                # 用 `elif`：审计域的短路回执仍走上面那一支（那里 `change` 本来就在
+                # 用 `elif`：审计域的零改动回执仍走上面那一支（那里 `change` 本来就在
                 # `_RCPT_META_KEYS` 里），两处不会重复也不会互相顶掉。
-                # ⚠️ **只在短路时放行，走真的写路径（`change="已收藏"`）一个字都不放**：
-                # 那一步 Rust 该照旧从 args 渲染「收藏文章 12」——写**真的发生了**，
-                # 动作词是对的；`change` 若也出现在那种行上，Rust 那四臂会改读 `change`，
-                # 于是整行只剩「已收藏」、**对象（哪一篇）没了**。
+                # ⚠️ **真有净改动的那条路径一个字都不放**：那一步 Rust 该照旧从 args
+                # 渲染「收藏文章 12」——写**真的发生了**，动作词是对的；`change` 若也出现
+                # 在那种行上，Rust 那四臂会改读 `change`，于是整行只剩「已收藏」、
+                # **对象（哪一篇）没了**。判据全靠 `changed`（不是"工具有没有走短路"）：
+                # 这正是 F1 把"净改动"变成显式事实的理由——"发过请求"与"改了东西"
+                # 在幂等不短路那三族里**不是一回事**。
                 v = (getattr(out, "meta", None) or {}).get("change")
                 if v is not None:
                     rcpt["change"] = str(v)[:120]
@@ -7629,12 +7639,13 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             if act:
                 rcpt["action"] = act
             receipts.append(rcpt)
-            # 零改动的事实（20260930）：工具自己声明 `meta["noop"]`（"状态本来就是目标
-            # 值、一个字节都没改"），execute 只**记账**、不做任何判断——判据在两处读端
-            # （gate 洞⑩ / planner 零改动重复裁剪，见 AgentState.noop_specs 的注释）。
+            # 零改动的事实（20260930 · F1）：判据是工具事实信封里的 `changed`（"状态本来
+            # 就是目标值、一个字节都没改"，`tools.base.fact()` 构造、`is_noop` 读），
+            # execute 只**记账**、不做任何判断——判据在两处读端（gate 洞⑩ / planner
+            # 零改动重复裁剪，见 AgentState.noop_specs 的注释）。
             # 签名走 `_spec_signature`：与 receipts、`_trim_done_reads` 同一份归一化，
             # 于是 `{"article_id": 23}` 与回执里的 `{"article_id": "23"}` 是同一件事。
-            if out_meta.get("noop"):
+            if is_noop(out_meta):
                 noop_specs.append(list(_spec_signature(name, rcpt["args"])))
                 record("execute", "noop", tool=name, args=rcpt["args"])
         else:

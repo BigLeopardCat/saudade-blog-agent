@@ -499,10 +499,19 @@ try:
     with patch(_user_directory=_Seq({r["id"]: r for r in DIR}, frozen_dir)):
         out = base.freeze_account.invoke({"name": "guest5"}, config=cfg())
     keys = set(out.meta or {})
-    check("冻结回执的 meta 键**全部**在 _RCPT_META_KEYS 里（多一个就进不了生产库）",
-          keys and keys <= set(_RCPT_META_KEYS), f"{sorted(keys - set(_RCPT_META_KEYS))}")
-    check("  account_id / account_name 都在白名单里（下一轮「你刚冻的是谁」靠它）",
-          "account_id" in _RCPT_META_KEYS and "account_name" in _RCPT_META_KEYS)
+    # 事实信封（F1，20260930）之后这条判据是**闭集**而不是子集：`tools.base.fact()`
+    # 只加 `changed`/`target`/`evidence`（+ 派生 `noop`），读端全在 Python 侧
+    # （`is_noop` 读 `changed`），**刻意不进** `_RCPT_META_KEYS`——进去就要同步 Rust
+    # 的 `render_exec_row`（见 tests/test_write_facts.py 第 ③ 节）。所以"多一个键"
+    # 这件事仍然要拦：白名单 ∪ 信封之外的任何键都是没登记过的兼容性债。
+    envelope_only = {"changed", "target", "evidence", "noop"}
+    extra = keys - set(_RCPT_META_KEYS) - envelope_only
+    check("冻结回执的 meta 键只有「白名单 + 事实信封」两类（多一个就是没登记的键）",
+          bool(keys) and not extra, f"多出来：{sorted(extra)}")
+    check("  account_id / account_name 照旧在白名单里，也照旧带在回执上"
+          "（下一轮「你刚冻的是谁」靠它；漏了就是**静默丢键**）",
+          {"account_id", "account_name"} <= keys
+          and {"account_id", "account_name"} <= set(_RCPT_META_KEYS))
     check("  回执里**不带 uid**（只带执行角色——那是 execute 填的，不是工具）",
           "principal_uid" not in keys and "uid" not in keys, str(sorted(keys)))
 finally:

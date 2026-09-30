@@ -90,6 +90,95 @@ def not_found(text: str, meta: dict | None = None) -> ToolResult:
     return ToolResult(text, "not_found", meta)
 
 
+# ── 写工具的**事实信封**（20260930 · F1）────────────────────────────────────
+# 写工具的 `meta` 从此统一由 `fact()` 构造，形状固定：
+#
+#   op         动作码（`tag_create` / `board_audit` / `account_freeze`…），既有键不变
+#   changed    这一下**对站内数据有没有净改动**（noop = 现状即目标 ⇒ False）
+#   target     动的是谁：`{"kind": …, "id": …, "name": …}`（kind 取闭集，见 `TGT_KINDS`）
+#   before/after  目标**状态**的短语（"待审"→"已通过"、"剩 499/500"→"恢复到上限"）
+#   evidence   写后读回复核时读到的那一句（有则填）
+#   noop       **自动**：`changed=False` 时补上（`fact()` 里一处派生，别手写）
+#   其余既有键（change / tag_id / article_id / …）原样带着
+#
+# 为什么要有它（结构动机，别读成"多加几个字段"）：
+#   · `changed` 是**唯一**能让上层判"这一下到底动没动站内数据"的字段。此前这个事实
+#     只能靠"工具有没有写 `noop: True`"反推，而 30 件写工具里只有 12 件写得出那张
+#     证书：剩下 18 件（三类目、公告增删、额度三件、待办新增、账号通知…）**从不声明**。
+#     它们一旦走了"现状即目标"那条短路，上层只能按"改了"处理 ⇒ gate 的洞⑩（真改了
+#     却说没改）会把一句**如实**的"什么都没动"判成打回。反向同理：一份"改了"的声称
+#     也失去了可核对的前提（洞③）。
+#   · `target` 把"动的是谁"从参数里解放出来：`action_text` 渲染、台账对账、将来 F2 的
+#     事实块都读它，而不是各自去 args 里按字段名猜（现在有六种猜法）。
+#
+# 三条纪律（每一条都是踩过的坑）：
+#   ① **既有键一个都不许改**：`op`/`change`/`before`/`after`/`tag_id`… 是 Python 写 /
+#      Rust 读的跨语言契约（`graph._RCPT_META_KEYS` ⇄ `src/routes/chat.rs::render_exec_row`）。
+#      `fact()` 只**加**键（`changed`/`target`/`evidence`），加出来的键**不进**
+#      `_RCPT_META_KEYS` ⇒ 不跨语言、不需要 Rust 同步。**把它们加进白名单才是破坏契约
+#      的那一步**（Rust 侧会开始读一个它没排版的键）。
+#   ② `changed=False` 必须**如实**：它是"我确实核对过现状、与目标一致"的断言，不是
+#     省事的默认值。走真写路径的工具一律 `changed=True`（写请求发出并被读回复核过），
+#     没发请求/发了但读回没变（那种走 unavailable）才 False。
+#   ③ `before`/`after` 只放**状态词**，不放句子、不复述工具返回正文里的话——它们是给
+#     结构与台账读的。拿不到精确值就如实写"存在/不存在""已删除"，**不许编**。
+TGT_KINDS = ("note", "tag", "category", "announcement", "board_comment", "todo",
+             "user", "quota_request", "notice", "message", "device", "page")
+
+
+def tgt(kind: str, ident=None, name: str = "") -> dict:
+    """事实信封里的"动的是谁"（`fact(target=…)` 的实参）。`kind` 取 `TGT_KINDS`。
+
+    闭集而非自由字符串：读端（台账渲染、F2 的事实块）要按 kind 分派，写端各造一个词
+    就是又一次"人工同步"。id 拿不到（新建类工具在写之前还没有 id）就只带 name——
+    **空的 id 不许填 0**（0 在号段里是合法值，会被读成"某个真的物件"）。"""
+    out: dict = {"kind": kind}
+    if ident is not None:
+        out["id"] = ident
+    if name:
+        out["name"] = name
+    return out
+
+
+def fact(op: str, *, changed: bool, target: dict | None = None,
+         before: str = "", after: str = "", evidence: str = "", **extra) -> dict:
+    """写工具的**事实信封**（契约与动机见上方长注）。返回给 `ok(..., meta=fact(…))`。
+
+    `extra` 是既有的那些跨语言键，**原样带上**（`fact()` 只加不改）。"""
+    env: dict = {"op": op, "changed": bool(changed)}
+    if target:
+        env["target"] = target
+    if before:
+        env["before"] = before
+    if after:
+        env["after"] = after
+    if evidence:
+        env["evidence"] = evidence
+    if not changed:
+        env["noop"] = True
+    env.update(extra)
+    return env
+
+
+def is_noop(meta) -> bool:
+    """事实信封 → "这一下对站内数据有没有**净改动**"（写工具的**唯一读端**）。
+
+    读 `changed`（F1 之后每件写工具都带，由 `fact()` 派生）；只为兼容才认老键
+    `noop`（它现在是 `changed=False` 的同义词，见 `fact()`）。
+
+    **两样都没有 ⇒ 按"改了"处理**——这是刻意的安全方向：两个读端（gate 洞⑩ 的
+    "这一轮什么都没改"假阴性、planner 的零改动重复裁剪）都只在**敢确定零改动**时
+    才动作，认不出的工具放过即可，绝不把一句诚实的叙述判成谎。所以这里是
+    `return False` 而不是抛错或返回 None。
+    """
+    if not isinstance(meta, dict):
+        return False
+    ch = meta.get("changed")
+    if isinstance(ch, bool):
+        return not ch
+    return bool(meta.get("noop"))
+
+
 # 上游故障哨兵：`_get` 失败时返回它而不是 `[]`（"故障伪装成空"的源头就在那）。
 # 工具的出口要用 `_shape(data)` 而不是 `str(data)`——理由见 _shape 的注释。
 UPSTREAM_DOWN = unavailable("服务暂时不可用，请稍后再试")
@@ -774,9 +863,11 @@ def navigate_to(
     mode = "confirm" if confirm else "direct"
     if confirm:
         return ok(f"导航已发起，等主人确认后才会跳转：{full_url}",
-                  meta={"cmd": {"kind": "navigate", "url": full_url, "mode": mode}})
+                  meta=fact("navigate", changed=True, target=tgt("page", None, p),
+                            before="当前页", after="页面已跳转", cmd={"kind": "navigate", "url": full_url, "mode": mode}))
     return ok(f"页面已跳转：{full_url}",
-              meta={"cmd": {"kind": "navigate", "url": full_url, "mode": mode}})
+              meta=fact("navigate", changed=True, target=tgt("page", None, p),
+                        before="当前页", after="页面已跳转", cmd={"kind": "navigate", "url": full_url, "mode": mode}))
 
 @tool
 def toggle_effect(
@@ -797,7 +888,9 @@ def toggle_effect(
         )
     _cn = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}[effect]
     return ok(f"特效 {_cn}({effect}) 已{'打开' if action == 'on' else '关闭'}",
-              meta={"cmd": {"kind": "effect", "effect": effect, "action": action}})
+              meta=fact("toggle_effect", changed=True, target=tgt("page", None, effect),
+                        before="原状态", after="开" if action == "on" else "关",
+                        cmd={"kind": "effect", "effect": effect, "action": action}))
 
 
 @tool
@@ -808,7 +901,9 @@ def toggle_dark_mode(
     系统按本工具的执行回执驱动前端切换；状态会持久化记忆。"""
     if mode in ("on", "off"):
         return ok(f"夜间模式已{'打开' if mode == 'on' else '关闭'}",
-                  meta={"cmd": {"kind": "darkmode", "mode": mode}})
+                  meta=fact("toggle_dark_mode", changed=True, target=tgt("page", None, "夜间模式"),
+                            before="原状态", after="开" if mode == "on" else "关",
+                            cmd={"kind": "darkmode", "mode": mode}))
     return "模式参数无效，应为 on 或 off"
 
 # ---------------------------------------------------------------------------
@@ -903,7 +998,17 @@ def device_oled_display(
     with _last_display_lock:
         prev = _last_display.get(uid)
         if prev and prev[0] == text and now - prev[1] < _DISPLAY_DEDUP_SECONDS:
-            return "该内容刚刚已下发过，无需重复下发（执行结果以设备回执为准）"
+            # `changed=False`（F1，20260930）：**这一次调用没有向设备下发任何东西**
+            # ——同样的内容 30 秒内已经发过了。在事实信封之前，这条回执与"真发了"
+            # 长得一模一样（都是同一族的 ok 帧），于是两个读端都把它当成一次真改动：
+            # gate 洞⑩ 会把 narrator 照抄回执的那句"这块内容刚刚已经在屏幕上了"判成
+            # 谎打回；planner 下一轮还会为同一件事再规划一次。这是本工具里语义最
+            # 明确的一处 `changed`——防重去重本来就是"等于没做"。
+            return ok("该内容刚刚已下发过，无需重复下发（执行结果以设备回执为准）",
+                      meta=fact("device_display", changed=False,
+                                target=tgt("device", device_id, text[:20]),
+                                before="同一内容 30 秒内已下发", after="未重复下发",
+                                text=text))
         # **下发前就占位**（不是发完再记）：占位与检查在同一把锁里，两个并发请求
         # 只有一个能过——这正是原来那版缺的一步。失败路径会在下面把它撤掉。
         _last_display[uid] = (text, now)
@@ -964,13 +1069,27 @@ def device_oled_display(
                         timeout=5,
                     )
                     if st.status_code == 200 and st.json().get("acked"):
-                        return "OLED 显示指令已下发，设备已确认执行（回执已记录）"
+                        return ok("OLED 显示指令已下发，设备已确认执行（回执已记录）",
+                                  meta=fact("device_display", changed=True,
+                                            target=tgt("device", device_id, text[:20]),
+                                            before="原屏文", after="屏幕已显示",
+                                            evidence="设备已确认执行", text=text))
                     if st.status_code == 401:
                         break  # 查询鉴权失效，不再等待
                 except Exception:
                     break  # 查询接口异常，不再等待
-            return "指令已入队下发，但设备未在 5 秒内回执确认——设备可能已断电或 MQTT 连接断开，请稍后到设备控制台确认"
-        return "OLED 显示指令已下发"
+            # 入队成功但没等到设备回执：**指令确实发出去了**（`changed=True`），
+            # 但"屏幕上到底变了没有"没被确认——措辞与 `changed` 说的是两件事，
+            # 别把后者读成"设备已显示"。
+            return ok("指令已入队下发，但设备未在 5 秒内回执确认——设备可能已断电或 MQTT 连接断开，请稍后到设备控制台确认",
+                      meta=fact("device_display", changed=True,
+                                target=tgt("device", device_id, text[:20]),
+                                before="原屏文", after="指令已入队",
+                                evidence="未收到设备回执", text=text))
+        return ok("OLED 显示指令已下发",
+                  meta=fact("device_display", changed=True,
+                            target=tgt("device", device_id, text[:20]),
+                            before="原屏文", after="指令已下发", text=text))
     except Exception as e:
         return f"指令下发失败: {e}"
     finally:
@@ -1617,8 +1736,12 @@ def create_tag(
     # （管理员要的是一个一级标签），而是"你可能想要那个子标签"——走下面的拒绝路径。
     # 给 pid 时 find_tag 已按 (level==2 且 father_id==pid) 过滤，故命中即同层。
     if hit is not None and (pid is not None or hit.level == 1):
-        return ok(A.render_tag_reuse(hit), meta={
-            "op": "tag_reuse", "tag_id": hit.id, "tag_name": hit.name, "level": hit.level})
+        # changed=False：同名同层标签已经在了，**这一下没写库**（是"复用"，不是"新建"）。
+        # 这一支是本工具最常见的结果，在事实信封之前它是一句"没声明"——上层只能按"改了"
+        # 处理（见 fact() 头注）。
+        return ok(A.render_tag_reuse(hit), meta=fact(
+            "tag_reuse", changed=False, target=tgt("tag", hit.id, hit.name),
+            after="已存在", tag_id=hit.id, tag_name=hit.name, level=hit.level))
 
     if pid is not None:
         parent = index.get(pid)
@@ -1674,8 +1797,10 @@ def create_tag(
     if got is None or got.name != name:
         return unavailable(f"创建后复核失败：标签字典里找不到 id={new_id} 且名字为「{name}」的行，"
                            f"本次改动未确认生效")
-    return ok(A.render_tag_created(got), meta={
-        "op": "tag_create", "tag_id": got.id, "tag_name": got.name, "level": got.level})
+    return ok(A.render_tag_created(got), meta=fact(
+        "tag_create", changed=True, target=tgt("tag", got.id, got.name),
+        before="不存在", after="已创建", evidence=got.label,
+        tag_id=got.id, tag_name=got.name, level=got.level))
 
 
 def _near_miss_names(want: str, cands, limit: int = 3):
@@ -1877,8 +2002,9 @@ def update_tag(
             return unavailable(f"改动请求已发出，但读回标签「{got.label}」的"
                                f"{'、'.join(mismatch)}与预期不一致，本次改动未确认生效")
         return ok(A.render_tag_moved(before_label, got.label, A.move_impact(res)),
-                  meta={"op": "tag_update", "tag_id": got.id, "tag_name": got.name,
-                        "level": got.level, "before": before_label, "after": got.label})
+                  meta=fact("tag_update", changed=True, target=tgt("tag", got.id, got.name),
+                            before=before_label, after=got.label, evidence=got.label,
+                            tag_id=got.id, tag_name=got.name, level=got.level))
 
     # 同层改名 / 改色：PUT /tagone|tagtwo/:id。**两个字段都是必填**，所以必须把
     # 当前颜色原样回传（不猜、也不许传空——传空等于把这个标签的颜色抹掉）。
@@ -1909,8 +2035,9 @@ def update_tag(
                       A.describe_color(got.color) if got.color else "（未知）"))
     before_s, after_s = A.render_change(pairs) if pairs else (hit.label, got.label)
     return ok(A.render_tag_updated(got.label, before_s, after_s),
-              meta={"op": "tag_update", "tag_id": got.id, "tag_name": got.name,
-                    "level": got.level, "before": before_s, "after": after_s})
+              meta=fact("tag_update", changed=True, target=tgt("tag", got.id, got.name),
+                        before=before_s, after=after_s, evidence=got.label,
+                        tag_id=got.id, tag_name=got.name, level=got.level))
 
 
 @tool
@@ -1956,8 +2083,9 @@ def delete_tag(
     else:
         extra = ""
     return ok(A.render_tag_deleted(hit.label, extra),
-              meta={"op": "tag_delete", "tag_id": hit.id, "tag_name": hit.name,
-                    "level": hit.level, "change": extra or "已删除"})
+              meta=fact("tag_delete", changed=True, target=tgt("tag", hit.id, hit.name),
+                        before="已存在", after="已删除", change=extra or "已删除",
+                        tag_id=hit.id, tag_name=hit.name, level=hit.level))
 
 
 def _category_index(config: RunnableConfig):
@@ -2059,7 +2187,9 @@ def create_category(
         return unavailable(f"新建请求已发出，但读回分类列表里找不到名字为「{name}」的新行，"
                            f"本次改动未确认生效")
     return ok(A.render_category_created(got),
-              meta={"op": "category_create", "category_name": got.name})
+              meta=fact("category_create", changed=True, target=tgt("category", got.id, got.name),
+                        before="不存在", after="已创建", evidence=got.name,
+                        category_name=got.name))
 
 
 @tool
@@ -2129,8 +2259,9 @@ def update_category(
         pairs.append((str(getattr(hit, attr)) or "（空）", want))
     before_s, after_s = A.render_change(pairs)
     return ok(A.render_category_updated(got.name, before_s, after_s),
-              meta={"op": "category_update", "category_name": got.name,
-                    "change": after_s})
+              meta=fact("category_update", changed=True, target=tgt("category", got.id, got.name),
+                        before=before_s, after=after_s, change=after_s,
+                        category_name=got.name))
 
 
 @tool
@@ -2161,8 +2292,9 @@ def delete_category(
     change = (f"{hit.note_count} 篇文章变成没有分类"
               if hit.note_count is not None else "")
     return ok(A.render_category_deleted(hit.name, hit.note_count),
-              meta={"op": "category_delete", "category_name": hit.name,
-                    "change": change})
+              meta=fact("category_delete", changed=True, target=tgt("category", hit.id, hit.name),
+                        before="已存在", after="已删除", change=change,
+                        category_name=hit.name))
 
 
 # ---------------------------------------------------------------------------
@@ -2289,8 +2421,10 @@ def create_announcement(
                            f"（找到 {len(fresh)} 条），本次改动未确认生效——请到后台核对")
     row = fresh[0]
     return ok(A.render_announcement_created(row),
-              meta={"op": "announcement_create", "announcement_id": row.get("id"),
-                    "announcement_title": t})
+              meta=fact("announcement_create", changed=True,
+                        target=tgt("announcement", row.get("id"), t),
+                        before="不存在", after="已发布", evidence=t,
+                        announcement_id=row.get("id"), announcement_title=t))
 
 
 @tool
@@ -2322,15 +2456,17 @@ def update_announcement(
     if len(final_c) > MAX_ANNOUNCE_BODY:
         return unavailable(f"正文过长（{len(final_c)} 字，上限 {MAX_ANNOUNCE_BODY}），未改动")
     if final_t == cur_t and final_c == cur_c.strip():
+        # changed=False ⇒ `fact()` 自动补上 `noop: True`（零改动的机器可读证书）。
+        # 20260930 之前这个键是**手写**的，而全仓只有 8 处 write.own 的短路回执记得写
+        # ——本处与 board_audit 那处是同一件事却没带：少一个键，两个读端（gate 的洞⑩、
+        # planner 的零改动裁剪）就会把"与现在一致"当成"真的改了"。现在它是从 `changed`
+        # 派生的一处实现（详见 `fact()` 头注），漏写不再可能。
         return ok(A.render_announcement_noop(hit),
-                  meta={"op": "announcement_update", "announcement_id": hit.get("id"),
-                        "announcement_title": final_t, "change": "与现在一致，无需改动",
-                        # `noop` = **零改动的机器可读证书**（20260930 补齐）：执行侧据此
-                        # 记 `noop_specs`，两个读端都用它——gate 的洞⑩（本轮有真改动却
-                        # 说"什么都没改"）与 planner 的零改动重复裁剪。此前只有 8 处
-                        # write.own 的短路回执带它，本处与 board_audit 那处**是同一件事
-                        # 却没带**：少一个键，两处读端就会把"与现在一致"当成"真的改了"。
-                        "noop": True})
+                  meta=fact("announcement_update", changed=False,
+                            target=tgt("announcement", hit.get("id"), final_t),
+                            before="与现在一致", after="与现在一致",
+                            change="与现在一致，无需改动",
+                            announcement_id=hit.get("id"), announcement_title=final_t))
 
     aid = hit.get("id")
     data = _admin_request("PUT", f"/api/protected/announcements/{aid}",
@@ -2350,9 +2486,11 @@ def update_announcement(
             or str(got.get("content") or "").strip() != final_c):
         return unavailable(f"修改请求已发出，但读回 id={aid} 的公告与预期不一致，本次改动未确认生效")
     return ok(A.render_announcement_updated(hit, got),
-              meta={"op": "announcement_update", "announcement_id": aid,
-                    "announcement_title": final_t,
-                    "change": _announce_change(cur_t, final_t, cur_c, final_c)})
+              meta=fact("announcement_update", changed=True,
+                        target=tgt("announcement", aid, final_t),
+                        before=cur_t, after=final_t, evidence=final_t,
+                        announcement_id=aid, announcement_title=final_t,
+                        change=_announce_change(cur_t, final_t, cur_c, final_c)))
 
 
 def _announce_change(cur_t: str, final_t: str, cur_c: str, final_c: str) -> str:
@@ -2397,11 +2535,12 @@ def delete_announcement(
     if aid in after:
         return unavailable(f"删除请求已发出，但读回公告列表里 id={aid}（{hit.get('title')}）还在，"
                            f"本次改动未确认生效")
+    title_now = str(hit.get("title") or "").strip()
     return ok(A.render_announcement_deleted(hit),
-              meta={"op": "announcement_delete",
-                    "announcement_id": aid,
-                    "announcement_title": str(hit.get("title") or "").strip(),
-                    "change": "已删除"})
+              meta=fact("announcement_delete", changed=True,
+                        target=tgt("announcement", aid, title_now),
+                        before="已存在", after="已删除", change="已删除",
+                        announcement_id=aid, announcement_title=title_now))
 
 
 # ---------------------------------------------------------------------------
@@ -2579,11 +2718,11 @@ def audit_board_comment(
     if hit.get("approved") == want:
         # 现状即目标：**也走 ok**（这不是失败，"现在就是这样"是事实本身）。
         return ok(A.render_board_audit_noop(hit, v),
-                  meta={"op": "board_audit", "board_id": tid,
-                        "board_author": str(hit.get("author") or ""),
-                        "change": f"与现在一致（{_board_state_cn(hit)}），无需改动",
-                        # 零改动证书，理由同 announcement_update 那一处（20260930）。
-                        "noop": True})
+                  meta=fact("board_audit", changed=False,
+                            target=tgt("board_comment", tid, str(hit.get("author") or "")),
+                            before=_board_state_cn(hit), after=_board_state_cn(hit),
+                            change=f"与现在一致（{_board_state_cn(hit)}），无需改动",
+                            board_id=tid, board_author=str(hit.get("author") or "")))
 
     # 请求体按 Rust 侧口径发：1=通过 / 0=驳回（端点内部把 0 写成 approved=2）。
     data = _admin_request("PUT", f"/api/protect/board/{tid}/audit",
@@ -2604,9 +2743,12 @@ def audit_board_comment(
                            f"「{_board_state_cn(got)}」、与预期的「{A.BOARD_VERDICT_CN[v]}」"
                            f"不一致，本次改动未确认生效")
     return ok(A.render_board_audited(hit, v),
-              meta={"op": "board_audit", "board_id": tid,
-                    "board_author": str(hit.get("author") or ""),
-                    "change": f"{_board_state_cn(hit)} → {A.BOARD_VERDICT_CN[v]}"})
+              meta=fact("board_audit", changed=True,
+                        target=tgt("board_comment", tid, str(hit.get("author") or "")),
+                        before=_board_state_cn(hit), after=A.BOARD_VERDICT_CN[v],
+                        evidence=A.BOARD_VERDICT_CN[v],
+                        board_id=tid, board_author=str(hit.get("author") or ""),
+                        change=f"{_board_state_cn(hit)} → {A.BOARD_VERDICT_CN[v]}"))
 
 
 @tool
@@ -2650,9 +2792,10 @@ def delete_board_comment(
         return unavailable(f"删除请求已发出，但读回留言列表里 {_board_label(hit)} 还在，"
                            f"本次改动未确认生效")
     return ok(A.render_board_deleted(hit),
-              meta={"op": "board_delete", "board_id": tid,
-                    "board_author": str(hit.get("author") or ""),
-                    "change": "已删除"})
+              meta=fact("board_delete", changed=True,
+                        target=tgt("board_comment", tid, str(hit.get("author") or "")),
+                        before="已存在", after="已删除", change="已删除",
+                        board_id=tid, board_author=str(hit.get("author") or "")))
 
 
 @tool
@@ -2706,8 +2849,8 @@ def set_article_status(
             A.status_cn(before.get("status")) if want_status is not None else "",
             A.top_cn(before.get("isTop")) if want_top is not None else ""]))
         return ok(f"文章 {aid}《{title}》本来就是{now_cn}，无需改动（没有发出写请求）。",
-                  meta={"op": "set_status", "article_id": aid, "before": now_cn, "after": now_cn,
-                        "noop": True})
+                  meta=fact("set_status", changed=False, target=tgt("note", aid, title),
+                            before=now_cn, after=now_cn, article_id=aid))
 
     data = _admin_post(f"/api/protected/notes/{aid}", payload, config)
     if isinstance(data, ToolResult):
@@ -2730,7 +2873,8 @@ def set_article_status(
                            f"（{(' / '.join(b for b, _ in pairs))}），本次改动未确认生效")
     before_s, after_s = A.render_change(pairs)
     return ok(A.render_status_ok(aid, title, before_s, after_s),
-              meta={"op": "set_status", "article_id": aid, "before": before_s, "after": after_s})
+              meta=fact("set_status", changed=True, target=tgt("note", aid, title),
+                        before=before_s, after=after_s, evidence=after_s, article_id=aid))
 
 
 @tool
@@ -2818,9 +2962,9 @@ def set_article_tags(
     if new == cur:
         return ok(f"文章 {aid}《{title}》的标签本来就是"
                   f"{A.render_tag_list(cur, index)}，无需改动（没有发出写请求）。",
-                  meta={"op": "set_tags", "article_id": aid,
-                        "before": A.render_tag_list(cur, index),
-                        "after": A.render_tag_list(cur, index), "noop": True})
+                  meta=fact("set_tags", changed=False, target=tgt("note", aid, title),
+                            before=A.render_tag_list(cur, index),
+                            after=A.render_tag_list(cur, index), article_id=aid))
 
     # `noteTags` 是"传了就写"，`""` = 清空 ⇒ 只有 replace（含 replace=[]）才可能产出空串；
     # add/remove 路径下 new 至少含一个元素或被上面的 new==cur 拦下。
@@ -2841,7 +2985,8 @@ def set_article_tags(
     before_s = A.render_tag_list(cur, index)
     after_s = A.render_tag_list(got, index)
     return ok(A.render_tags_ok(aid, title, before_s, after_s),
-              meta={"op": "set_tags", "article_id": aid, "before": before_s, "after": after_s})
+              meta=fact("set_tags", changed=True, target=tgt("note", aid, title),
+                        before=before_s, after=after_s, evidence=after_s, article_id=aid))
 
 
 # ---------------------------------------------------------------------------
@@ -3099,8 +3244,9 @@ def add_favorite(
     hit = _fav_row(before, aid)
     if hit is not None:
         return ok(f"文章 {aid}{_fav_title(hit)}本来就在你的收藏夹里，无需改动（没有发出写请求）。",
-                  meta={"op": "favorite_add", "article_id": aid,
-                        "change": "本来已收藏", "noop": True})
+                  meta=fact("favorite_add", changed=False, target=tgt("note", aid),
+                            before="已收藏", after="已收藏", change="本来已收藏",
+                            article_id=aid))
 
     data = _own_post("/api/protected/favorites", {"noteId": aid}, config)
     if isinstance(data, ToolResult):
@@ -3119,7 +3265,8 @@ def add_favorite(
         return unavailable(f"收藏请求已发出，但读回收藏列表里没有文章 {aid}，"
                            f"本次改动未确认生效（不要声称已收藏）")
     return ok(f"已收藏文章 {aid}{_fav_title(got)}{_fav_count(after)}。",
-              meta={"op": "favorite_add", "article_id": aid, "change": "已收藏"})
+              meta=fact("favorite_add", changed=True, target=tgt("note", aid),
+                        before="未收藏", after="已收藏", change="已收藏", article_id=aid))
 
 
 @tool
@@ -3144,8 +3291,9 @@ def remove_favorite(
     hit = _fav_row(before, aid)
     if hit is None:
         return ok(f"文章 {aid} 本来就不在你的收藏夹里，无需改动（没有发出写请求）。",
-                  meta={"op": "favorite_remove", "article_id": aid,
-                        "change": "本来就没收藏", "noop": True})
+                  meta=fact("favorite_remove", changed=False, target=tgt("note", aid),
+                            before="未收藏", after="未收藏", change="本来就没收藏",
+                            article_id=aid))
 
     data = _own_delete(f"/api/protected/favorites/{aid}", config)
     if isinstance(data, ToolResult):
@@ -3159,7 +3307,8 @@ def remove_favorite(
         return unavailable(f"取消收藏请求已发出，但读回收藏列表里文章 {aid} 还在，"
                            f"本次改动未确认生效（不要声称已取消）")
     return ok(f"已取消收藏文章 {aid}{_fav_title(hit)}{_fav_count(after)}。",
-              meta={"op": "favorite_remove", "article_id": aid, "change": "已取消收藏"})
+              meta=fact("favorite_remove", changed=True, target=tgt("note", aid),
+                        before="已收藏", after="未收藏", change="已取消收藏", article_id=aid))
 
 
 @tool
@@ -3231,14 +3380,17 @@ def read_notifications(
         if all_read:
             return ok(f"通知 {('、'.join(str(i) for i in targets))} 本来就是已读，"
                       f"无需改动（没有发出写请求）。",
-                      meta={"op": "notice_read", "change": "本来就读过", "noop": True})
+                      meta=fact("notice_read", changed=False, target=tgt("notice", targets[0] if len(targets) == 1 else None),
+                                before="已读", after="已读", change="本来就读过"))
     if want_all and not targets:
         return ok("你的通知本来就没有未读的，无需改动（没有发出写请求）。",
                   # `change` 与这句正文同源、要能**独立成句**：Rust 那边把它接在物件名
                   # 后面渲染成「站内通知本来就没有未读的（未改动）」（`render_exec_row`
                   # 的四臂），少一个「有…的」就变成「站内通知本来就没未读」这种半截话，
                   # 而这一行会经 recent_executions 注回下一轮上下文。
-                  meta={"op": "notice_read", "change": "本来就没有未读的", "noop": True})
+                  # target 不带 id：这一支治的是"整个列表本来就没有未读"，不是某一条。
+                  meta=fact("notice_read", changed=False,
+                            before="无未读", after="无未读", change="本来就没有未读的"))
 
     before_sum = _own_get("/api/protected/notifications/summary", config)
     if isinstance(before_sum, ToolResult):
@@ -3268,7 +3420,9 @@ def read_notifications(
     m_after = (after_sum or {}).get("messages")
     tail = f" / 私信 {m_after}" if isinstance(m_after, int) and not isinstance(m_after, bool) else ""
     return ok(f"已把 {marked} 条通知标记为已读（现在未读：通知 {n_after} 条{tail}）。",
-              meta={"op": "notice_read", "change": f"标记已读 {marked} 条"})
+              meta=fact("notice_read", changed=True,
+                        before=f"未读 {n_before} 条", after=f"未读 {n_after} 条",
+                        evidence=f"未读 {n_after} 条", change=f"标记已读 {marked} 条"))
 
 
 # ---------------------------------------------------------------------------
@@ -3408,12 +3562,16 @@ def read_messages(
         if all_read:
             return ok(f"信 {('、'.join(str(i) for i in targets))} 本来就是已读，"
                       f"无需改动（没有发出写请求）。",
-                      meta={"op": "message_read", "change": "本来就读过", "noop": True})
+                      meta=fact("message_read", changed=False,
+                                target=tgt("message",
+                                           targets[0] if len(targets) == 1 else None),
+                                before="已读", after="已读", change="本来就读过"))
     if want_all and not targets:
         return ok("你的收件箱本来就没有未读的信，无需改动（没有发出写请求）。",
                   # `change` 要能独立成句，理由同上面通知那半（少一个「有…的」就成了
                   # 半截话，而它会被拼在物件名后面落进跨轮执行记忆）。
-                  meta={"op": "message_read", "change": "本来就没有未读的", "noop": True})
+                  meta=fact("message_read", changed=False,
+                            before="无未读", after="无未读", change="本来就没有未读的"))
 
     n_before = _mailbox_unread(before)
     if n_before is None:
@@ -3443,7 +3601,10 @@ def read_messages(
         return unavailable(f"标记已读请求已发出，但读回信 {'、'.join(str(i) for i in still)} "
                            f"还不是已读——本次改动未确认生效，不要声称已标记")
     return ok(f"已把 {n_before - n_after} 封信标记为已读（收件箱现在未读 {n_after} 封）。",
-              meta={"op": "message_read", "change": f"标记已读 {n_before - n_after} 封"})
+              meta=fact("message_read", changed=True,
+                        before=f"未读 {n_before} 封", after=f"未读 {n_after} 封",
+                        evidence=f"未读 {n_after} 封",
+                        change=f"标记已读 {n_before - n_after} 封"))
 
 
 # ---------------------------------------------------------------------------
@@ -3606,8 +3767,10 @@ def create_dashboard_todo(
                            f"（同内容的仍是 {n_after} 条，写前 {n_before} 条）"
                            f"——本次改动未确认生效，不要声称已记下")
     return ok(A.render_todo_added(body, due),
-              meta={"op": "dashboard_todo_add", "text": body, "date": due or "",
-                    "count": len(rows_after)})
+              meta=fact("dashboard_todo_add", changed=True, target=tgt("todo", None, body),
+                        before=f"{n_before} 条同名", after=f"{n_after} 条同名",
+                        evidence=body, text=body, date=due or "",
+                        count=len(rows_after)))
 
 
 def _todo_text_hits(rows, text: str) -> list[dict]:
@@ -3697,17 +3860,17 @@ def complete_dashboard_todo(
         return unavailable(f"勾完成的请求已发出，但读回列表里这一条仍是**未完成**"
                            f"——本次改动未确认生效，不要声称已勾完成")
     # 幂等**不短路**（同冻结/解冻族）：写前已经是完成态也照发请求（服务端那个分支
-    # 是真 no-op），结论由上面这次复核给——回执按 `changed` 如实区分"刚勾的"与
-    # "本来就是"，绝不把一次什么都没做的请求叙述成一个动作。
+    # 是真 no-op），结论由上面这次复核给——`changed` 如实区分"刚勾的"与"本来就是"，
+    # 绝不把一次什么都没做的请求叙述成一个动作。本族**幂等不短路**这件事正是
+    # `changed=False ⇒ noop: True` 那条派生的用武之地：手写证书的旧写法在这里必须
+    # 内联一个 `**({"noop": True} if … else {})`，而"本来就完成"这一支就是零净变化
+    #（回执文本自己也写着「本来就是完成状态」）——不带那个键，两个读端就会把它当成
+    # "真的勾了一下"（gate 洞⑩ 会误判诚实的叙述，planner 会重跑同一件）。
     return ok(A.render_todo_done(body, changed=not before_done),
-              meta={"op": "dashboard_todo_done",
-                    "before": "已完成" if before_done else "未完成",
-                    "after": "已完成",
-                    # 零改动证书（20260930 补）：本族**幂等不短路**（照发请求、由写后复核
-                    # 定论），所以"本来就是完成态"这一支的净变化是**零**——回执文本自己
-                    # 也写着「本来就是完成状态」。不带这个键，两个读端就会把它当成"真的
-                    # 勾了一下"（gate 洞⑩ 会误判诚实的叙述，planner 会重跑同一件）。
-                    **({"noop": True} if before_done else {})})
+              meta=fact("dashboard_todo_done", changed=not before_done,
+                        target=tgt("todo", None, body),
+                        before="已完成" if before_done else "未完成",
+                        after="已完成", evidence="已完成"))
 
 
 # 「清空排期」的契约写法与它的同义词集**只有一处来源**（`agent/adminops.py`
@@ -3816,15 +3979,11 @@ def reschedule_dashboard_todo(
     # 而这一族最容易的误判正是"回执里有就等于库里有"。
     changed = before_date != (due or "")
     return ok(A.render_todo_rescheduled(body, due, changed=changed),
-              meta={"op": "dashboard_todo_reschedule",
-                    "before": A.render_todo_when(hits[0]),
-                    "after": A.render_todo_when(now_hits[0]),
-                    # 零改动证书（同勾完成那一件）：本族**幂等不短路**，"本来就排在
-                    # 这一天"这一支的净变化是**零**——回执文本自己写着「这次没有发生
-                    # 任何变更」。缺这个键，两个读端就会把它当成"真的改了一下"：
-                    # gate 洞⑩ 会把 narrator 照抄回执的那句"这一轮没改"当谎打回，
-                    # planner 会重跑同一件（`_trim_noop_specs` 认的就是它）。
-                    **({"noop": True} if not changed else {})})
+              meta=fact("dashboard_todo_reschedule", changed=changed,
+                        target=tgt("todo", None, body),
+                        before=A.render_todo_when(hits[0]),
+                        after=A.render_todo_when(now_hits[0]),
+                        evidence=A.render_todo_when(now_hits[0])))
 
 
 # ---------------------------------------------------------------------------
@@ -4099,16 +4258,13 @@ def _set_account_frozen(name, frozen: bool, config: RunnableConfig) -> ToolResul
     return ok(
         A.render_account_status(username, target_id, frozen, changed=changed,
                                 before_frozen=was_frozen),
-        meta={"op": "account_freeze" if frozen else "account_unfreeze",
-              "account_id": target_id, "account_name": username,
-              "before": "冻结" if was_frozen else ("正常" if was_frozen is False else ""),
-              "after": "冻结" if now_frozen else "正常",
-              "change": A.account_change_phrase(frozen, changed),
-              # 零改动证书（同上两件）：本族**幂等不短路**（写前已经是目标状态也照发
-              # 请求，服务端那个分支是真 no-op），"本来就是这个状态"这一支的净变化是
-              # **零**——回执文本自己写着「这次没有发生任何变更（没有重复X）」。缺这个
-              # 键，两个读端就会把它当成"真的动了一下"。
-              **({"noop": True} if not changed else {})})
+        meta=fact("account_freeze" if frozen else "account_unfreeze", changed=changed,
+                  target=tgt("user", target_id, username),
+                  before="冻结" if was_frozen else ("正常" if was_frozen is False else ""),
+                  after="冻结" if now_frozen else "正常",
+                  evidence="冻结" if now_frozen else "正常",
+                  account_id=target_id, account_name=username,
+                  change=A.account_change_phrase(frozen, changed)))
 
 
 @tool
@@ -4212,8 +4368,10 @@ def _send_user_notice(name, content, title, config: RunnableConfig) -> ToolResul
     # ④ 回执即复核判据（这一族没有第二条腿，见头注）：端点回了 code 200 ⇒
     #    服务端那次 `push_notice_checked` 插入成功。
     return ok(A.render_notice_status(username, target_id, head, body_text),
-              meta={"op": "notice_send",
-                    "account_id": target_id, "account_name": username})
+              meta=fact("notice_send", changed=True,
+                        target=tgt("user", target_id, username),
+                        before="未发送", after="已发送", evidence=head,
+                        account_id=target_id, account_name=username))
 
 
 @tool
@@ -4425,7 +4583,10 @@ def _quota_readback(config: RunnableConfig, target_id: int, username: str, limit
                            f"（账号可能已被删除），本次改动未确认生效")
     return ok(A.render_quota_status(kind, username, target_id, limit,
                                     A.quota_used(got)),
-              meta={"op": kind, "account_id": target_id, "account_name": username})
+              meta=fact(kind, changed=True, target=tgt("quota_request", target_id, username),
+                        before="已用未清零", after="已恢复到上限",
+                        evidence=f"已用 {A.quota_used(got)}",
+                        account_id=target_id, account_name=username))
 
 
 def _review_quota_request(user_id, approved: bool, reason, config: RunnableConfig) -> ToolResult:
@@ -4516,7 +4677,10 @@ def _review_quota_request(user_id, approved: bool, reason, config: RunnableConfi
         return unavailable(f"驳回请求已发出，但读回的待处理列表里**还有**账号"
                            f"「{username}」的申请，本次改动未确认生效")
     return ok(A.render_quota_status("reject", username, target_id, limit, None),
-              meta={"op": "quota_reject", "account_id": target_id, "account_name": username})
+              meta=fact("quota_reject", changed=True,
+                        target=tgt("quota_request", target_id, username),
+                        before="待处理", after="已驳回", evidence="已驳回",
+                        account_id=target_id, account_name=username))
 
 
 @tool
