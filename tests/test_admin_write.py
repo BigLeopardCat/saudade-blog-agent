@@ -573,13 +573,19 @@ with patch(_read_note=seq, _admin_post=post):
     r = base.set_article_status.invoke({"article_id": 12, "status": "public"}, config=cfg())
     check("正常路径：**只发 status**（不发 title/content/isPublic/updateTime）",
           post.calls == [("/api/protected/notes/12", {"status": "public"})], str(post.calls))
-    check("  回执 meta：op / article_id / 前后值",
-          r.meta == {"op": "set_status", "article_id": 12,
-                     "before": "私密", "after": "公开"}, str(r.meta))
+    check("  回执 meta：op / article_id / 前后值（白名单那一半逐键相等）",
+          {k: r.meta.get(k) for k in ("op", "article_id", "before", "after")}
+          == {"op": "set_status", "article_id": 12, "before": "私密", "after": "公开"},
+          str(r.meta))
     check("  人话里带《标题》与前后值（narrator 照它转述）",
           "《架构》" in r and "私密 → 公开" in r and "复核" in r, str(r))
-    check("  **标题不进 meta**（回执注入下一轮，带标题会被读成「我读过这篇」）",
-          "架构" not in json.dumps(r.meta, ensure_ascii=False), str(r.meta))
+    # F1（20260930）之后标题住在事实信封的 `target.name` 里（信封的语义是「动的是谁」）。
+    # **回执侧一个字都没变**：`target` 不在 `_RCPT_META_KEYS` 里（`execute_node` 那个拷贝
+    # 循环按白名单取值）⇒ 拷不进 detail、不会随下一轮 `recent_executions` 注回提示词。
+    # "带标题 = 我读过这篇"那条来源态纪律的落点就在这条白名单边界上，不是"meta 里没有这串字"。
+    check("  **标题不进回执**：顶层没有 title 键，标题只在 target.name 里而 target 不在白名单",
+          "title" not in r.meta and "target" not in g._RCPT_META_KEYS
+          and (r.meta.get("target") or {}).get("name") == "架构", str(r.meta))
 
 post = _Post("1")
 seq = _Seq(note(12, "架构", "private", 0), note(12, "架构", "private", 1))

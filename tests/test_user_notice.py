@@ -32,6 +32,11 @@ from agent.graph import _RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec  # noqa: E4
 from agent.principal import ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, Principal  # noqa: E402
 from agent.skills import instantiate_plan  # noqa: E402
 
+# 事实信封**只加**的那几个键（F1，20260930）：`tools.base.fact()` 构造、`is_noop` 读，
+# 刻意不进 `g._RCPT_META_KEYS`（进去就要同步 Rust 的 `render_exec_row`）——见
+# tests/test_write_facts.py 第 ③ 节。
+_ENVELOPE_ONLY = {"changed", "target", "evidence", "noop"}
+
 # ── 密钥桩（同 test_account_freeze / test_todo_schedule 的那一处）──────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**（宁可退回追问，也不发一个
 # 验不过的令牌）。本机有 .env ⇒ 本地会绿，CI 里没有 ⇒ ⑭「该弹窗」那组正例整体消失。
@@ -269,8 +274,12 @@ print("\n⑤ 回执：meta 键在白名单里、**不带 uid**，正文截断要
 try:
     out, _ = run_tool()
     keys = set(out.meta or {})
-    check("回执 meta 键全部在 _RCPT_META_KEYS 里（多一个就进不了生产库）",
-          keys and keys <= set(_RCPT_META_KEYS), str(sorted(keys - set(_RCPT_META_KEYS))))
+    # 事实信封（F1，20260930）之后的判据是**闭集**：白名单里的键 ∪ 信封那四个
+    # （`changed`/`target`/`evidence`/`noop`，`tools.base.fact()` 加、`is_noop` 读，
+    # **刻意不进** `_RCPT_META_KEYS`——进去就要同步 Rust）。"多一个键"仍然要拦。
+    extra = keys - set(_RCPT_META_KEYS) - _ENVELOPE_ONLY
+    check("回执 meta 键只有「白名单 + 事实信封」两类（多一个就是没登记的键）",
+          bool(keys) and not extra, f"多出来：{sorted(extra)}")
     check("  op=notice_send，账号名与 id 都在（跨轮「你刚给谁发了通知」靠它）",
           out.meta.get("op") == "notice_send" and out.meta.get("account_id") == 126
           and out.meta.get("account_name") == "guest5", str(out.meta))

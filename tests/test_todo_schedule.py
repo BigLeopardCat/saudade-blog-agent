@@ -59,6 +59,12 @@ from config.settings import settings  # noqa: E402
 _SAVED_SECRET = settings.jwt_secret
 settings.jwt_secret = "test-secret-for-confirm-tokens"
 
+# 事实信封**只加**的那几个键（F1，20260930）：`tools.base.fact()` 构造，读端在 Python 侧
+# （`is_noop` 读 `changed`），**刻意不进** `g._RCPT_META_KEYS`（进去就要同步 Rust 的
+# `render_exec_row`）。所以"键必须都在白名单里"这条判据现在写成一个**闭集**：
+# 白名单 ∪ 信封四个键，多出来的仍是没登记的键（见 tests/test_write_facts.py 第 ③ 节）。
+_ENVELOPE_ONLY = {"changed", "target", "evidence", "noop"}
+
 FAILS: list[str] = []
 
 
@@ -777,7 +783,9 @@ with patch(_admin_get=_Seq([todo("给猫买罐头")], [todo("给猫买罐头", d
     check("  回执 meta 是结构化回执，且 before/after 都在白名单里（漏了是静默丢键）",
           r.meta.get("op") == "dashboard_todo_done" and r.meta.get("before") == "未完成"
           and r.meta.get("after") == "已完成"
-          and set(r.meta) <= set(g._RCPT_META_KEYS), str(r.meta))
+          and set(r.meta) <= set(g._RCPT_META_KEYS) | _ENVELOPE_ONLY, str(r.meta))
+    check("  零改动的判据是信封里的 changed（F1），不是「有没有走短路」",
+          base.is_noop(r.meta) is False and r.meta.get("changed") is True, str(r.meta))
     check("  回执不留 uid、不留正文之外的私货（detail 进生产库、会被 narrator 念出来）",
           "uid" not in json.dumps(r.meta), json.dumps(r.meta, ensure_ascii=False))
 
@@ -1453,7 +1461,7 @@ with patch(_admin_get=_Seq(_ROWS_R, [todo("更新简历（国庆后）", date=_T
           r.meta.get("op") == "dashboard_todo_reschedule"
           and r.meta.get("before") == "排期 10月8日"
           and r.meta.get("after") == f"排期 {A.due_date_cn(_TOMORROW)}"
-          and set(r.meta) <= set(g._RCPT_META_KEYS), str(r.meta))
+          and set(r.meta) <= set(g._RCPT_META_KEYS) | _ENVELOPE_ONLY, str(r.meta))
     check("  回执不留 uid（detail 进生产库、会被 narrator 念出来）",
           "uid" not in json.dumps(r.meta), json.dumps(r.meta, ensure_ascii=False))
 
