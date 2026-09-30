@@ -146,6 +146,42 @@ def main() -> int:
                 _hard.append(p.name)
         check("⑦ 没有任何读取端硬取 doc[\"schema_version\"]（只许 .get）",
               not _hard, "、".join(_hard))
+
+        # ── ⑧ `events_of`：评测侧的**不落盘**读口（20260930）─────────────────
+        # 给 golden 断言"这一轮系统真的把待办台账摆上桌了"用（`planner.ledger_frame`
+        # 事件）。两条性质各自是一条锁：**读得到**（未落盘也能读——断言发生在
+        # `finish_trace` 之前）与**只给评测用**（生产路径上一个调用点都不许有，
+        # 否则就是"评测读口悄悄长进了生产链路"）。
+        _tid = "trace_io_test_events_of"
+        trace_mod.start_trace(_tid, user_id=0, thread_id="t", dir=tmp, by_day=False,
+                              name="events_of_probe")
+        trace_mod.record("planner", "ledger_frame", ids=["talkId:7"], unread=[])
+        _evs = trace_mod.events_of(_tid)
+        check("⑧ 未落盘就读得到（断言发生在 finish_trace 之前）",
+              len(_evs) == 1 and _evs[0].get("event") == "ledger_frame",
+              f"events={_evs}")
+        _evs.append({"node": "x", "event": "污染"})
+        check("⑧ 拿到的是**拷贝**（往里塞东西不影响 recorder）",
+              len(trace_mod.events_of(_tid)) == 1)
+        trace_mod.finish_trace(_tid, "test", 0.0, 0)
+        check("⑧ `finish_trace` 之后取不到（它 `_ACTIVE.pop`）——这条同时解释了"
+              "「为什么 golden 必须在收尾之前取」",
+              trace_mod.events_of(_tid) == [])
+        check("⑧ 没有这个 trace_id ⇒ 空表（不抛）",
+              trace_mod.events_of("根本没有这个 id") == [])
+        # 唯一调用方是评测侧：全仓（除定义处）引用 `events_of` 的文件只许在 eval/ 下
+        _callers = [str(p.relative_to(ROOT)) for p in
+                    sorted(list((ROOT / "agent").rglob("*.py"))
+                           + list((ROOT / "tools").rglob("*.py"))
+                           + list((ROOT / "utils").rglob("*.py"))
+                           + list((ROOT / "eval").rglob("*.py"))
+                           + list((ROOT / "tests").rglob("*.py"))
+                           + [ROOT / "server.py"])
+                    if p.name != "trace.py" and "events_of" in p.read_text(encoding="utf-8")]
+        _prod = [c for c in _callers
+                 if not (c.startswith("eval" + os.sep) or c.startswith("tests" + os.sep))]
+        check("⑧ 调用方只有评测侧（生产路径上一个调用点都没有）",
+              not _prod, "、".join(_prod) or "、".join(_callers))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
