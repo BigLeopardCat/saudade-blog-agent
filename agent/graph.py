@@ -6242,7 +6242,7 @@ def _quota_reason_excerpt(row: dict) -> str:
     return _clip(sanitize_untrusted(str(row.get("reason") or ""), 40), 40)
 
 
-def _render_quota_facts(quota: list) -> str:
+def _render_quota_facts(quota: list, reachable=None) -> str:
     """额度待处理申请的**系统事实**行（与留言那份同源同纪律，读自后台申请队列）。
 
     只印**申请人账号 + 账号 id + 他写的理由**（理由是他自己的诉求原文，经上面那条
@@ -6253,6 +6253,12 @@ def _render_quota_facts(quota: list) -> str:
     末尾那句"驳回必须给一句理由、理由不许自己编"是**真的契约**（理由会原样发给
     申请人），留下来；旧版后面那句「如实把这份清单报给主人、请他给一句理由或直接
     点名」是旧快道"把活推回主人"的形状，随 S3 一并删。
+
+    `reachable` = 名录里够得着的 uid 集合（`tools.base._reachable_uids`）——队列里
+    可以有**名录够不着**的行：超管（名录按 `is_listable_role` 过滤）与注销过的账号
+    （无外键，销号不带走申请行）。那几件"等着办"却永远办不成，行末照
+    `adminops._UNREACHABLE_NOTE` 标一句（同一句话，只此一份实现）。`None` = 没查到
+    名录 ⇒ 一条都不标（读不到 ≠ 办不了，同本族的既有纪律）。
     """
     if not quota:
         return ("对话额度重置申请**当前没有待处理的**（status=pending 为 0 条）——如实"
@@ -6260,9 +6266,17 @@ def _render_quota_facts(quota: list) -> str:
     rows = "\n".join(
         f"　　· {str(r.get('username') or '（账号已不存在）')}"
         f"（账号 id={r.get('userId')}，他写的理由：「{_quota_reason_excerpt(r) or '（没有填写理由）'}」）"
+        + A._unreachable_note(A.normalize_target_id(r.get("userId")), reachable)
         for r in quota[:5])
     more = f"\n　　· …还有 {len(quota) - 5} 件未列出" if len(quota) > 5 else ""
-    return (f"当前**待处理**（status=pending）的额度重置申请共 {len(quota)} 件：\n{rows}{more}\n"
+    # 够不着的件数另说一句：只印在行末时，模型扫一眼"共 N 件"就容易把它们算进
+    # "我这就去办"，然后办不成、再回头解释——这几件得主人自己去后台。
+    stuck = ([r for r in quota if A.normalize_target_id(r.get("userId")) not in reachable]
+             if reachable is not None else [])
+    warn = (f"\n其中 {len(stuck)} 件**不在账号名录里**（行末标着 ⚠）——额度写通道要求"
+            f"申请人在名录里，那几件 agent 办不了：如实告诉主人「这一件得您到后台处理」，"
+            f"**不要**答应去办。" if stuck else "")
+    return (f"当前**待处理**（status=pending）的额度重置申请共 {len(quota)} 件：\n{rows}{more}{warn}\n"
             f"驳回额度申请**必须给一句理由**（会原样发给申请人）——主人没说理由时"
             f"**不要自己编**：那几条就如实告诉他「要驳得您给一句理由」。")
 
@@ -6384,8 +6398,14 @@ def _ledger_fact_blocks(families: list[str], config) -> tuple[list[str], dict]:
         if readable:
             key, tag = ("talkKey", "talkId") if family == "board" else ("userId", "userId")
             meta["ids"] += [f"{tag}:{r.get(key)}" for r in rows]
-            blocks.append(_render_pending_facts(rows) if family == "board"
-                          else _render_quota_facts(rows))
+            if family == "board":
+                blocks.append(_render_pending_facts(rows))
+            else:
+                # 只有**真有额度行**时才去读那份名录（`_reachable_uids`）：它是为了标注
+                # "够不着的那几件"，没有行就没有要标的东西——零额外网络开销的纪律照旧。
+                from tools.base import _reachable_uids
+                reach = _reachable_uids(config) if rows else None
+                blocks.append(_render_quota_facts(rows, reach))
         else:
             meta["unread"].append(family)
             blocks.append(_LEDGER_UNREAD_BLOCK[family])

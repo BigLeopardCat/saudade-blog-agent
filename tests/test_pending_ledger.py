@@ -40,6 +40,7 @@ from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as g  # noqa: E402
 import tools.base as tb  # noqa: E402
+from agent import adminops as A  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.context import (_ledger_frame_wanted, _short_reply_hint,  # noqa: E402
                            _short_reply_kind)
@@ -66,15 +67,25 @@ QUOTA_PENDING = {5: {"id": 71, "userId": 5, "username": "guest5", "reason": "写
 
 
 class _Ledger:
-    """两份队列的读取桩：既当夹具，也当「读了几次」的判据（零读 = 一次都没连）。"""
+    """两份队列的读取桩：既当夹具，也当「读了几次」的判据（零读 = 一次都没连）。
 
-    def __init__(self, board=BOARD_PENDING, quota=QUOTA_PENDING):
+    第三条桩是**账号名录**（`tb._user_directory`，台账帧拿它判"这一件够不够得着"）：
+    `users=None` = 名录里什么账号都没有（这是**合法的**生产形态：额度队列可以出现
+    超管或已注销的申请人）。它单独记在 `user_reads` 里而不是并进 `reads`——`reads`
+    的三条断言读的是"两份**队列**读了没有"（零额外网络开销那条纪律），两种读数是
+    两件事，混在一起会让那些断言变得看不懂。
+    """
+
+    def __init__(self, board=BOARD_PENDING, quota=QUOTA_PENDING, users=None):
         self.board, self.quota = board, quota
+        self.users = users if users is not None else {
+            int(r["userId"]) for r in quota.values() if r.get("userId") is not None}
         self.reads: list[str] = []
+        self.user_reads: list[str] = []
         self.saved = None
 
     def install(self):
-        self.saved = (tb._board_index, tb._quota_pending_index)
+        self.saved = (tb._board_index, tb._quota_pending_index, tb._user_directory)
 
         def _board(config):
             self.reads.append("board")
@@ -84,12 +95,17 @@ class _Ledger:
             self.reads.append("quota")
             return self.quota
 
+        def _users(config):
+            self.user_reads.append("users")
+            return {u: {"id": u, "username": f"u{u}"} for u in self.users}
+
         tb._board_index, tb._quota_pending_index = _board, _quota
+        tb._user_directory = _users
         return self
 
     def uninstall(self):
         if self.saved:
-            tb._board_index, tb._quota_pending_index = self.saved
+            tb._board_index, tb._quota_pending_index, tb._user_directory = self.saved
             self.saved = None
         return self
 
@@ -422,6 +438,68 @@ finally:
 _src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("  `model_node` 把 config 传给了它（漏了 = 这一问永远算不出来）",
       "plan=_narrator_plan(state, config)," in _src)
+
+print("⑭ 名录够不着的那几件：**照印但标注**（20260930 加）")
+# 生产实证：唯一一件待处理的额度申请是 uid=1（超管）的，而 `GET /api/temp-users` 按
+# `is_listable_role` 过滤、**超管不列**（注销过的账号同样不在：quota_request 无外键，
+# 销号不带走申请行）。于是台账上摆着一行"等着办"、写通道却永远够不着它——模型每轮都
+# 挑它、每轮白跑（「无法获取当前用户身份」那次是另一个 bug，这条是**并列**的一条）。
+# 取向：行列出来（它是事实：确实有人等着），但把"agent 办不了"标在行末 + 另说一句件数；
+# 名录**读不到**时一条都不标（不知道 ≠ 办不了）。
+_lg = _Ledger(quota={1: {"id": 91, "userId": 1, "username": "sora", "reason": "想接着问"},
+                     5: {"id": 71, "userId": 5, "username": "guest5", "reason": "写长文不够用"}},
+              users={5}).install()
+try:
+    _t, _m = _frame("你看着办")
+    check("够不着的那件**仍在帧里**（有人等着是事实，不许悄悄抹掉）", "账号 id=1" in _t)
+    check("  且带上了「agent 办不了」的标注", "agent 的额度写通道办不了这一件" in _t)
+    check("  够得着的那件**不带**这句（同一族里两行各说各的）",
+          "账号 id=5" in _t and _t.count("agent 的额度写通道办不了这一件") == 1)
+    check("  另说一句件数（模型扫一眼「共 2 件」会把它算进「我这就去办」）",
+          "其中 1 件**不在账号名录里**" in _t and "得您到后台处理" in _t)
+    check("  逐条 id 的 trace 元数据照旧两件都在（标注不改 id 清单）",
+          [i for i in _m.get("ids", []) if i.startswith("userId:")] == ["userId:1", "userId:5"],
+          str(_m))
+    check("  两族队列都照常读", sorted(_lg.reads) == ["board", "quota"], str(_lg.reads))
+    check("  名录只读一次（不是为了标注就对每个 uid 各读一次）",
+          _lg.user_reads == ["users"], str(_lg.user_reads))
+finally:
+    _lg.uninstall()
+
+_lg = _Ledger().install()          # 名录**读不到**（ToolResult）
+try:
+    tb._user_directory = lambda config: tb.unavailable("后台账号列表返回 HTTP 500")
+    _t, _m = _frame("你看着办")
+    check("名录读不到 ⇒ 一条都不标（不知道 ≠ 办不了）",
+          "办不了这一件" not in _t and "不在账号名录里" not in _t)
+    check("  且照旧把队列里的件报出来（读不到名录不拖累台账）", "账号 id=5" in _t)
+finally:
+    _lg.uninstall()
+
+_lg = _Ledger().install()          # 额度 0 件 ⇒ 不必白读一次名录
+try:
+    tb._quota_pending_index = lambda config: {}
+    _t, _m = _frame("你看着办")
+    check("额度 0 件 ⇒ 一次都不读名录（零额外网络开销）",
+          _lg.user_reads == [], str(_lg.user_reads))
+finally:
+    _lg.uninstall()
+
+print("⑮ `list_quota_requests` 那一屏说同一句话（同一份实现，两处不许各写各的）")
+_lg = _Ledger(quota={1: {"id": 91, "userId": 1, "username": "sora", "reason": "想接着问",
+                         "status": 0, "used": 0, "limit": 0}}, users=set()).install()
+_saved_get = tb._admin_get
+try:
+    # 这一屏的队列走 `_admin_get`（不是 `_quota_pending_index`），所以桩要打在那一处。
+    tb._admin_get = lambda path, config=None: list(_lg.quota.values())
+    _out = str(tb.list_quota_requests.invoke({}, config=_cfg()))
+    check("申请清单里也标注了这一件（模型看得见的每一屏都说同一句）",
+          "agent 的额度写通道办不了这一件" in _out, _out[:140])
+    check("  用的是**同一份**措辞（不是第二句近义话）",
+          A._UNREACHABLE_NOTE in _out)
+finally:
+    tb._admin_get = _saved_get
+    _lg.uninstall()
 
 print()
 if FAILED:
