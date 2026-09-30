@@ -1612,6 +1612,53 @@ def test_gate_false_negative_claim():
           o4["done"] is True and not o4.get("fallback_text"), str(o4))
 
 
+def test_reply_contract_change_branches():
+    """写族回复契约的分叉判据（20260930 事故的治本侧，B1）。
+
+    **要治的病**：`notice_read` / `message_read` 的契约原文写着
+    「返回「本来就是已读」「本来就没有未读的」就说没有可标的、什么都没改」——
+    这是一句**可抄的否认句**，而成功回执的尾巴「现在未读：通知 0 条」与 no-op 的
+    读数长得一模一样（只是**读数**，一个标完之前是 1、一个本来就是 0，narrator 看到
+    的都是"0 条"）⇒ 模型在**成功**返回上套了 no-op 那一支，主人刚亲手点的「确定」
+    被告知"站内什么都没发生"（trace `20260930T192729_1`）。
+
+    修法 = 分叉判据从"返回里出现了哪句话"改成**返回里印着的那个数**，并把最容易读
+    反的那句当场点破。同族的 `favorite_add/remove` 一并加固（同样的形状、同样会读反）。
+
+    这里锁的是**正向**性质（契约里确实写着那条分叉），不写"不许出现某词"的负断言
+    ——负断言每遇一次措辞改写就假红一次（本项目的既有教训，见 `DENIAL_FAMILY`）。
+    """
+    print("[skills] 写族回复契约按「变化量」分叉")
+    from agent.skills import SKILLS
+    _by = {s.name: s for s in SKILLS}
+    # 技能 → (返回里"真改了"那一支的开头/关键词, "零改动"那一支的开头)
+    _CASES = {
+        "notice_read": ("已把", "本来就是已读"),
+        "message_read": ("已把", "本来就是已读"),
+        "favorite_add": ("已收藏", "本来就在你的收藏夹里"),
+        "favorite_remove": ("已取消收藏", "本来就不在你的收藏夹里"),
+    }
+    for name, (live, noop) in _CASES.items():
+        sk = _by.get(name)
+        check(f"{name} 在注册表里（改名时这条先红，别让下面几条空转）", sk is not None)
+        if sk is None:
+            continue
+        c = sk.reply_contract or ""
+        check(f"{name} 契约按返回原文分叉（真改了那一支的关键词在场）",
+              live in c, c[:60])
+        check(f"{name} 契约点明「零改动」那一支只按原文认（不是凭返回里的某个数）",
+              noop in c, c[:60])
+        check(f"{name} 契约含显式禁令（真改了的那次不许说成没动）",
+              "不许" in c and "说成" in c, c[-90:])
+    # 那两处"最容易读反的读数"必须被点破：成功回执尾巴写的是**改动之后**的剩余数
+    for name in ("notice_read", "message_read"):
+        sk = _by.get(name)
+        if sk is None:
+            continue
+        check(f"{name} 契约说清尾巴那个数是「改动之后」的读数",
+              "之后" in (sk.reply_contract or ""), (sk.reply_contract or "")[:80])
+
+
 def test_gate_site_absence_claim():
     """洞④：站内"没有"结论无依据（20260921，`_site_absence_claim`）。
 
@@ -4972,7 +5019,8 @@ def main():
                test_gate_cmd_prefix_meta,
                test_phantom_tool_claim, test_phantom_claim_clause_and_echo_exempt,
                test_gate_claim_holes,
-               test_gate_false_negative_claim, test_gate_site_absence_claim,
+               test_gate_false_negative_claim, test_reply_contract_change_branches,
+               test_gate_site_absence_claim,
                test_gate_confirm_claim, test_gate_ledger_denial, test_ledger_target_guard,
                test_review_inbox_calls_whitelist,
                test_gate_repeat_reply,
