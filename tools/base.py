@@ -2541,7 +2541,7 @@ def _find_board_comment_by_id(talk_id, config: RunnableConfig, index=None):
     tid = A.normalize_target_id(talk_id)
     if tid is None:
         return None, (f"「{str(talk_id or '').strip()[:40]}」不是一个留言编号，"
-                      f"本次未改动——请把待办台账里那条留言的 talkId 原样抄过来")
+                      f"本次未改动——请把系统印出来的那条留言的 talkId 原样抄过来")
     hit = index.get(tid)
     if not isinstance(hit, dict):
         return None, (f"站内没有编号为 talkId:{tid} 的留言，本次未改动"
@@ -2556,15 +2556,16 @@ def _board_state_cn(row: dict) -> str:
 @tool
 def audit_board_comment(
     talk_id: Annotated[str | int,
-                        "那条留言的 **talkId**（从待办台账里原样抄，形如 101 或 talkId:101）"],
+                        "那条留言的 **talkId**（从系统给的清单里原样抄，形如 101 或 talkId:101）"],
     verdict: Annotated[str, "复核结论：pass=通过（放行展示）/ reject=驳回（隐藏）"],
     config: RunnableConfig,
 ) -> str:
     """人工复核一条河灯留言：**通过**（放行给所有人看）或**驳回**（隐藏起来）。
-    留言按 **talkId** 指认（编号来自系统读出的待办台账）：编号认不出、或站内没有
-    这条留言时什么都不做，并如实说明原因。这一动作**不是删除**（驳回只是隐藏、留言
-    本身留着），但它**只治台账里还在等办的那一行**：那一行已经办过了就拒绝并如实说明
-    （改判已办过的留言要到后台留言管理页）。需要管理员身份，且要经主人确认才会真正生效。"""
+    留言按 **talkId** 指认：编号认不出、或站内没有这条留言时什么都不做，并如实说明原因。
+    这一动作**不是删除**（驳回只是隐藏、留言本身留着），而且它是**改判**——
+    待审的可以定通过或驳回，**已经通过的可以再驳回**（收回展示），已驳回的可以恢复
+    通过；现状已经等于目标时如实说"与现在一致"、不发请求。需要管理员身份，
+    且要经主人确认才会真正生效。"""
     from agent import adminops as A
     v = A.normalize_verdict(verdict)
     if v is None:

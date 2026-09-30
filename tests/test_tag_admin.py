@@ -1171,9 +1171,9 @@ with patch(_board_index=lambda c: bidx()):
           and "没有编号为 talkId:999 的留言" in got[1], f"{got}")
     got = _ledger_target_refusal(_plan("board_audit", {"talk_id": "15",
                                                        "verdict": "通过"}), cfg())
-    check("复核：那一行**已经不是待审**（已驳回）→ 拦下并指路后台（改判走另一处）",
-          got is not None and got[0] == "audit_board_comment"
-          and "后台留言管理页" in got[1], f"{got}")
+    check("复核：那一行已驳回、主人要**恢复通过** → 不拦（改判是主人的权利，"
+          "20260930 起两族可写集不再一致：留言族只要'这一行在现场台账里'）",
+          got is None, f"{got}")
     check("认不出的结论在**技能展开**那一层就被拒（零工具 + 具体原因）",
           _plan("board_audit", {"talk_id": "12", "verdict": "随便看看"})["tools"] == []
           and "认不出来" in _plan("board_audit", {"talk_id": "12",

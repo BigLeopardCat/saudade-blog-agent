@@ -1798,16 +1798,21 @@ def test_ledger_target_guard():
 
     旧判据是"这段字面出自主人原话"——正是它在 trace `20260929T221854` 里把模型
     从上一轮残留里取回的正确留言打死（那句原话当然不在主人这一句「全部批准」里）。
-    新判据更强、也可验证：**这个编号出自系统这一轮现场读出来的台账**，而且那一行
-    **还在等办**。系统读不到台账时一律放行（预检只允许更保守，方向同
-    `_write_target_refusal`）。
+    新判据更强、也可验证：**这个编号出自系统这一轮现场读出来的台账**。
+    系统读不到台账时一律放行（预检只允许更保守，方向同 `_write_target_refusal`）。
+
+    **两族的可写集不同（20260930 起，这是本节最要紧的一条）**：留言复核的可写集 =
+    现场留言清单里的**任意一行**（含已通过/已驳回的改判——"已通过的也能驳回"），
+    额度那两件的可写集 = 那一行的**待处理**态（申请处理过就没有"再处理一次"）。
+    此前留言族也要求"必须还在待审"，那条判据把改判挡在门外，20260930 已撤。
+    本节把这件不对称逐条钉住——**别在下一次重构里"顺手统一"两族**。
 
     两族各一：留言（`audit_board_comment` 按 `talkId`）与额度（`approve_quota_request`
     按 `userId`）。这里逐条钉住那五个出口，并钉住**两张目标表严格互斥**——
     互斥本身是结构性的：同一件工具同时被两套判据管，就会出"一边说 A 成立、
     另一边说 A 不成立"的分裂。
     """
-    print("[ledger_guard] 台账编号通道的写保护（目标必须出自现场台账且在待办态）")
+    print("[ledger_guard] 台账编号通道的写保护（目标必须出自现场台账；留言族含改判）")
     import json as _json
 
     import agent.graph as G
@@ -1879,12 +1884,15 @@ def test_ledger_target_guard():
         check("⭐ 台账里没有这个编号 ⇒ 拒绝，如实说查无此条（不许错动别人）",
               _r is not None and "没有编号为 talkId:999 的留言" in _r[1], str(_r)[:110])
         TB._board_index = lambda config: dict(PASSED)
-        _done = [("audit_board_comment", {"talk_id": 95, "verdict": "reject"})]
-        _r = _guard(_done)
-        check("⭐ 那一行**已不是待审** ⇒ 拒绝，并如实报它现在的状态"
-              "（待办台账只摆待审的；改判要回后台留言管理页）",
-              _r is not None and "「已通过」" in _r[1] and "后台留言管理页" in _r[1],
-              str(_r)[:140])
+        _revoke = [("audit_board_comment", {"talk_id": 95, "verdict": "reject"})]
+        check("⭐ 已通过的留言**要驳回 ⇒ 放行**（改判是主人的权利，20260930 新增；"
+              "兜底是人闸——审核族恒弹卡，卡面按 id 印原文/现状）",
+              _guard(_revoke) is None, str(_guard(_revoke))[:140])
+        _restore = [("audit_board_comment", {"talk_id": 95, "verdict": "pass"})]
+        check("  同一条已通过的行，结论填**通过**（=已经是这个状态）⇒ 也放行"
+              "（由工具自报 noop 证书 + `_reached_specs` 判'状态已达成 ⇒ 不弹卡'，"
+              "预检只判'这一行在不在'）",
+              _guard(_restore) is None, str(_guard(_restore))[:140])
         TB._board_index = lambda config: None
         check("⭐ 留言台账读不到 ⇒ **放行**（读不到 ≠ 没有这一条，同 `_write_target_refusal`）",
               _guard(_ok) is None, "")
