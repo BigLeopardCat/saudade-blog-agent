@@ -25,6 +25,8 @@
   ⑧ 提示词接线：{pending_ledger} 槽在模板里、渲染函数收这个参数、渲染结果里出现。
   ⑨ 尾巴：旧快道那句「读到本块……本轮零写」**必须已经消失**（本批要消灭的形状本身）。
   ⑩ 台账不再挂在短应答块里（`_short_reply_hint` 的 system_facts 形参已删）。
+  ⑪–⑮ S4 收尾两句话 / 名录够不着的那几件 / `list_quota_requests` 措辞同源。
+  ⑯ narrator 侧的台账事实（20261001 加）：提问轮拿得到，有帧/有写/闲聊轮一个字不加。
 
 用法：.venv/bin/python tests/test_pending_ledger.py
 """
@@ -36,7 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent          # 仓根
 sys.path.insert(0, str(ROOT))
 
-from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
 import agent.graph as g  # noqa: E402
 import tools.base as tb  # noqa: E402
@@ -500,6 +502,95 @@ try:
 finally:
     tb._admin_get = _saved_get
     _lg.uninstall()
+
+print("⑯ narrator 侧的台账事实：提问轮拿得到；有帧/有写/闲聊轮一个字都不加")
+# 治的是 S1 自己留下的缺口：台账只摆给了 planner（决策的那一方），可这一族人问的
+# 常常正是"后台还有哪些等着办"——模型看完台账零工具作答，narrator（真正开口的那个）
+# 就既没有工具帧也没有台账。它与 S4 第二支是同一个判据的正反两面，只在"是不是提问"
+# 那一处岔开。
+_Q = "留言板现在还有什么等着办的吗"          # 提问 + 只命中留言族
+_Q2 = "留言和额度那边现在还有什么等着办的吗"  # 提问 + 两族都命中
+
+
+def _frame_msg(name):
+    return ToolMessage(content="{}", tool_call_id="t1", name=name)
+
+
+_lg = _Ledger().install()
+try:
+    _state = _st([HumanMessage(_Q)])
+    check("判据自核：这两句都是提问、且命中该摆的那几族",
+          authz.is_question_like(_Q) and authz.is_question_like(_Q2)
+          and g._ledger_fact_note(_st([HumanMessage(_Q2)]), _cfg()).count("】") >= 1)
+    _n = g._ledger_fact_note(_state, _cfg())
+    check("提问轮 ⇒ 事实照给（此前这一轮一个字都拿不到）",
+          g._LEDGER_FACT_MARK in _n and "talkId:101" in _n, _n[:80])
+    check("  逐条带 id 与原文（与 planner 那份帧同一个渲染器）",
+          "talkId:102" in _n and "画板我已经回退掉了" in _n)
+    check("  明说这是**系统读来的**、不许说成自己动手查的", "不是你自己去查的" in _n)
+    check("  明说只许说这上面写着的（没写上的本轮没查过）", "本轮就没有查过" in _n)
+    check("  不替主人挑、不问要不要办（要问的话归收尾那两支）",
+          "要办哪几件" not in _n and "要不要" not in _n)
+    check("  这一段真的进了 narrator 的 [执行计划] 段",
+          _n in g._narrator_plan(_state, _cfg()))
+    check("  且照旧追加 `_no_popup_fact`（没有写这条事实，本段不负责）",
+          g._no_popup_fact(_state) in g._narrator_plan(_state, _cfg()))
+
+    _lg.reads.clear()
+    _framed = _st([HumanMessage(_Q), _frame_msg("list_admin_board")])
+    check("narrator 手上**已有**那一族的帧 ⇒ 一个字都不加（同一件事不两处措辞）",
+          g._ledger_fact_note(_framed, _cfg()) == "")
+    check("  且这一次**一次都没读**（帧比系统摘要更全，不为补一段去连后台）",
+          _lg.reads == [], str(_lg.reads))
+    check("  帧反查走的是那张唯一映射表（`get_moderation_status` 同样算数）",
+          g._ledger_frames_present(
+              _st([HumanMessage(_Q), _frame_msg("get_moderation_status")])) == {"board"})
+
+    _lg.reads.clear()
+    _nb = g._ledger_fact_note(_st([HumanMessage(_Q2), _frame_msg("list_admin_board")]),
+                              _cfg())
+    check("逐族判：留言那一族有帧就不给，额度那一族照给",
+          "guest5" in _nb and "talkId:101" not in _nb, _nb[:80])
+    check("  且只读没帧的那一族（有帧的那族零额外读取）",
+          _lg.reads == ["quota"], str(_lg.reads))
+
+    _lg.reads.clear()
+    check("非提问轮 ⇒ 这一段不发（S4 的「没动作就问一句」负责那一轮）",
+          g._ledger_fact_note(_st([HumanMessage(_SILENT)]), _cfg()) == ""
+          and g._ledger_closing_note(_st([HumanMessage(_SILENT)]), _cfg()) != "")
+    _lg.reads.clear()
+    check("闲聊轮 ⇒ 不发、也不读", g._ledger_fact_note(
+        _st([HumanMessage("今天天气怎么样")]), _cfg()) == "" and _lg.reads == [],
+        str(_lg.reads))
+    check("这一轮真动了手 ⇒ 不加（归「改完再询问」那一支）",
+          g._ledger_fact_note(_st([HumanMessage(_Q)], plan=_WRITE_PLAN), _cfg()) == "")
+    check("确定性收尾轮（台账核对结论已在计划里）⇒ 不加，别抢那句话",
+          g._ledger_fact_note(
+              _st([HumanMessage(_Q)],
+                  plan=_CHAT_PLAN + "\n" + g._LEDGER_NOTE_PREFIX + "站内没有这条留言"),
+              _cfg()) == "")
+    _lg.reads.clear()
+    check("config 缺省（老的单参调用/纯单测）⇒ 一个字都不加、一次都不读",
+          g._ledger_fact_note(_st([HumanMessage(_Q)]), None) == ""
+          and _lg.reads == [], str(_lg.reads))
+finally:
+    _lg.uninstall()
+
+_lg = _Ledger().install()
+try:
+    tb._board_index = lambda config: None
+    _nu = g._ledger_fact_note(_st([HumanMessage(_Q)]), _cfg())
+    check("读不到 ≠ 没有：事实段里明写「没读到、不确定」",
+          "没读到" in _nu and "没有待审" in _nu, _nu[:100])
+finally:
+    _lg.uninstall()
+
+_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+check("接线：`_narrator_plan` 收了这一段（能力有测试 ≠ 接线有测试）",
+      "ledger = _ledger_fact_note(state, config)" in _src)
+check("闸门只有一份实现（收尾那一支与事实这一段各调一次、都在这一处判）",
+      _src.count("    families = _ledger_turn_families(state, config)") == 2,
+      str(_src.count("    families = _ledger_turn_families(state, config)")))
 
 print()
 if FAILED:

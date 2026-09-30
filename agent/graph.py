@@ -2787,11 +2787,22 @@ def _narrator_plan(state, config=None) -> str:
     说法，一起给会互相拆台——前者要它"问主人要办哪几件"，后者写着"不许问要不要办"。
     有收尾那一问时就不再追加 `_no_popup_fact`：那些禁止句已经写在那一问里了。
     `config` 缺省（老的单参调用、纯单测）⇒ 不读台账、行为与从前逐字节相同。
+
+    **台账事实第二处来源**（`_ledger_fact_note`，20261001）：`_ledger_closing_note` 只在
+    "真动了手"或"没动手但要问一句"这两种结构上说话；两者都不成立、而主人这一轮**是在
+    问**的时候，narrator 此前一个字都拿不到——见那个函数的头注（它与收尾那一问是
+    同一个判据的正反两面）。两者共用 `_ledger_turn_families` 那批闸门，不会被重复给。
     """
     plan = state.get("plan", "")
     note = _ledger_closing_note(state, config)
     if note:
         return plan if note in plan else plan + "\n" + note
+    # 台账事实（20261001）：该摆台账、模型这一轮却**没有去读**那份队列时，说话的那个
+    # （narrator）手上一行字都没有。提问轮尤其如此——S4 第二支只反问不陈述，主人问
+    # "后台还有哪些等着办"的那一轮，此前是台账供给唯一漏掉的一轮。
+    ledger = _ledger_fact_note(state, config)
+    if ledger and ledger not in plan:
+        plan = plan + "\n" + ledger
     fact = _no_popup_fact(state)
     if not fact or fact in plan or _wrote_this_round(state):
         return plan
@@ -6963,11 +6974,102 @@ def _ledger_grant_families(grant: dict) -> list[str]:
     return fams
 
 
+def _ledger_turn_families(state, config) -> list[str]:
+    """这一轮 narrator 该拿到**哪几族**的台账事实（空列表 = 一个字都不给）。
+
+    与 planner 侧 `_pending_ledger_frame` 同源的开头（`_ledger_due_families`），再加
+    三道只有 narrator 才需要的闸：
+      · 这一轮**没有写**（计划里没有、回执里也没有）——真动了手归「改完再询问」那一支
+        说话：它重读台账后的口径更贴（先得说清办成了哪几件）；
+      · 不是**确定性收尾轮**（`_LEDGER_NOTE_PREFIX`）——那种计划的尾巴上，系统已经把
+        台账事实连同结论一起说完了，再叠一段就是系统自己跟自己说话；
+      · `config` 在场（缺省 = 老的单参调用/纯单测：不读台账，行为与从前逐字节相同）。
+
+    两个消费方（`_ledger_closing_note` 的第二支、`_ledger_fact_note`）共用它：这两处
+    判"该不该说、说的是哪几族"必须同进同出，各写一遍就是本仓最常见的走样。
+    """
+    if config is None:
+        return []
+    if (_write_receipts(state) or _wrote_this_round(state)
+            or _LEDGER_NOTE_PREFIX in (state.get("plan") or "")):
+        return []
+    msgs = state.get("messages") or []
+    return _ledger_due_families(_last_user_msg(msgs),
+                                _last_assistant_utterance(msgs),
+                                _principal_of(config), config)
+
+
+_LEDGER_FACT_MARK = "【台账现状】"
+
+
+def _ledger_frames_present(state) -> set:
+    """本轮 narrator 手上**已经有哪几族**的后台帧（`_QUEUE_READ_TOOLS` 那张表的反查）。
+
+    只能按**帧**算：`receipts` 只收 checker 判过 PASS 的那几件（BLOCK 的帧照样进了
+    提示词），`tool_data` 是给参数引用用的。扫 `state["messages"]` 里的 ToolMessage
+    ——那正是 `model_node` 组装 narrator 提示词时读的同一份东西，判"要不要补事实"与
+    它必须同源。
+    """
+    out: set = set()
+    for m in state.get("messages") or []:
+        if not isinstance(m, ToolMessage):
+            continue
+        fam = _QUEUE_READ_TOOLS.get(getattr(m, "name", "") or "")
+        if fam:
+            out.add(fam)
+    return out
+
+
+def _ledger_fact_note(state, config) -> str:
+    """narrator 侧的**后台队列现状**：台账事实的第二个来源（20261001）。
+
+    要治的病是结构性的、不是某一次事故：批 H 把台账摆给了**决策的那一方**——新槽
+    `{pending_ledger}` 只写在 planner 提示词里。可这一族的问题常常正好问的是"后台还有
+    哪些等着办"：模型看完台账就够作答了（零工具 `chat`），于是 narrator——**真正开口
+    的那一个**——既没有工具帧、也没有台账，只能编，或者答一句"我这边查不到"。
+    事实供给只做了一半，这是 S1 自己留下的缺口。
+
+    它与 `_ledger_closing_note` 的第二支是**同一个判据的正反两面**（同一批闸门
+    `_ledger_turn_families`、同一个族清单、同一个渲染器 `_ledger_fact_blocks`），只在
+    `is_question_like` 那一处岔开：主人这句是提问 ⇒ 不反问他"要办哪几件"（那支的话），
+    但**事实照给**（这一段）；不是提问 ⇒ 反过来。两段因此绝不同时出现。
+
+    有该族**后台帧**时一个字都不加：帧是模型自己取回来的、比系统的摘要更全（还含已
+    通过/已驳回的行），同一件事两处措辞正是本仓反复出事的形状。
+
+    措辞只写**事实**与禁止句：不替主人挑、不问要不要办（要问的话上面那两支已经问过
+    了）。事实一律**现场重读**（与 S4 同一条取向：几秒钟的偏差比"拿到一份过期台账"
+    便宜），所以块内逐字与收尾那两支同源。
+    """
+    families = _ledger_turn_families(state, config)
+    if not families:
+        return ""
+    if not authz.is_question_like(_last_user_msg(state.get("messages") or [])):
+        return ""
+    have = _ledger_frames_present(state)
+    families = [f for f in families if f not in have]
+    if not families:
+        return ""
+    blocks = _ledger_fact_blocks(families, config)[0]
+    head = (f"{_LEDGER_FACT_MARK}主人这句话落在后台的待办队列上，系统**现场重读**了"
+            "一遍，下面是它读到的现状：\n")
+    tail = ("\n这一段是**系统读来的**（不是你自己去查的）：可以直接说「后台现在有"
+            "这几件」，但**不许**说成「我刚去后台翻了一遍」这种自己动手的话。"
+            "**只许说上面写着的**——没写在上面的，本轮就没有查过（会话历史里你先前的"
+            "说法也不算数），不许拿它凑一句结论。他这句话问的若不是这件事，这一段只是"
+            "背景，不要拿它去凑话。")
+    return head + "\n".join(blocks) + tail
+
+
 def _ledger_closing_note(state, config) -> str:
     """narrator 收尾那句**系统事实**（S4）：改完再询问 / 没动作就问一句。
 
     空串 = 这一轮不加（绝大多数轮次走这一支）。两条判据全落在**结构**上（回执、
     令牌、写计划、提问判据），没有一条是对模型散文做正则。
+
+    第三面在 `_ledger_fact_note`（20261001）：**同一批闸门、同一个族清单**，只在
+    `is_question_like` 那一处岔开——主人正问着的那一轮本函数只会问回去，所以事实
+    那一半归它。两段因此互斥，谁都不会把对方的话再说一遍。
 
     两句都只写**台账里读到的**事实、一个结论都不替主人下：办哪几件、剩下要不要办
     仍然归模型和主人。
@@ -6983,7 +7085,6 @@ def _ledger_closing_note(state, config) -> str:
         return ""
     msgs = state.get("messages") or []
     wrote = _write_receipts(state)
-    plan = state.get("plan", "")
     grant = state.get("confirm_grant")
     # ① 改完再询问：主人刚点过头、系统真办了 ⇒ 重读那份队列，把剩下的念给他。
     if grant and wrote:
@@ -7007,16 +7108,15 @@ def _ledger_closing_note(state, config) -> str:
                 "问一句「这几件要不要也一起办」。**只念这份台账里的**——不许编一件他"
                 "没办的事，也不许替他把剩下的挑着办了。")
     # ② 没动作就问一句：这一轮该摆台账、模型一条写都没发、主人这句又不是提问。
-    #    `_LEDGER_NOTE_PREFIX` 那道闸是"别抢系统收尾轮的话"：确定性收尾计划（如编号
-    #    不在台账里）自己已经把事实说完了，再叠一句是系统自己跟自己说话。
-    if wrote or _wrote_this_round(state) or _LEDGER_NOTE_PREFIX in plan:
-        return ""
-    user_msg = _last_user_msg(msgs)
-    if authz.is_question_like(user_msg):
-        return ""
-    families = _ledger_due_families(user_msg, _last_assistant_utterance(msgs),
-                                    _principal_of(config), config)
+    #    闸门本体在 `_ledger_turn_families`（与 `_ledger_fact_note` 共用一份——两处
+    #    各写一遍"能不能摆"正是本仓最常见的走样：改一处漏一处）。
+    families = _ledger_turn_families(state, config)
     if not families:
+        return ""
+    #    提问轮：**不反问，但事实照给**。主人正在问的那一轮（"后台还有哪些等着办"）
+    #    恰恰最需要台账事实，而本函数只会问回去 —— 事实那一半交给 `_ledger_fact_note`，
+    #    两份用的是同一个族清单与同一个渲染器，谁都不会把对方的话再说一遍。
+    if authz.is_question_like(_last_user_msg(msgs)):
         return ""
     blocks, meta = _ledger_fact_blocks(families, config)
     head = (f"{_LEDGER_ASK_MARK}这一轮系统**一条写操作都没有执行**（主人那边不会看到"
