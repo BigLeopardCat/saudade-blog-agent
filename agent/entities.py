@@ -9,7 +9,7 @@
 
 本模块补上值：`receipt_digest()` 把数据工具返回压成一行实体摘要，随 checker 回执
 走 `__EXEC__` → Rust `render_exec_row` 拼在动作行之后落 execution_log
-（`查看留言板 — 最近3条: 1.诉「测试260905」 …`）→ 下轮作为 recent_executions 注入
+（`查看留言板 — 最近3条: 1.〔诉〕「测试260905」 …`）→ 下轮作为 recent_executions 注入
 planner 与 narrator ⇒ 指代可以**零调用直接取值**（见 graph.py 规则 6b）。
 
 纪律：
@@ -103,8 +103,14 @@ def _join(parts: list[str], max_len: int = _DIGEST_MAX) -> str:
     return "/".join(out)
 
 
-def _entry_digest(data, label: str) -> str:
-    """留言板/说说：序号 + 分类 + 内容首段（序号是"第二条"能对号的关键）。"""
+def _entry_digest(data) -> str:
+    """留言板/说说：序号 + 分类 + 内容首段（序号是"第二条"能对号的关键）。
+
+    **分类要看得见是分类**（20261001）：`cat`/`talkTitle` 是心情词（寄/忆/诉/愿），
+    裸印成 `4.诉「博主是大笨狗」` 会被读成"某人说了某话"——trace `20260930T235232`
+    里模型就回了"那条留言是访客**诉**发的"。加 〔〕 之后它与正文（「」内）在字形上
+    就分得开，与帧尾〔系统注记〕同一套标记。原文一字不改，只加了一层壳。
+    """
     rows = _rows(data)
     if not rows:
         return ""
@@ -114,7 +120,7 @@ def _entry_digest(data, label: str) -> str:
         body = _clip(r.get("content") or r.get("talkContent") or "", 18)
         if not body:
             continue
-        items.append(f"{i}.{cat}「{body}」")
+        items.append(f"{i}.〔{cat}〕「{body}」" if cat else f"{i}.「{body}」")
     return f"最近{len(rows)}条: " + _join(items) if items else ""
 
 
@@ -313,8 +319,8 @@ def _announcement_digest(data) -> str:
 # 工具名 → 摘要生成器（未列出的工具不产摘要：动作类没有"可取的值"，
 # 文本型返回（list_devices/get_weather）不做结构化解析）
 _DIGESTERS = {
-    "list_guestbook": lambda d: _entry_digest(d, "留言"),
-    "list_talks": lambda d: _entry_digest(d, "说说"),
+    "list_guestbook": _entry_digest,
+    "list_talks": _entry_digest,
     "list_categories": _category_digest,
     "list_tags": _tag_digest,
     "list_notes": lambda d: _note_digest(d, "文章列表"),

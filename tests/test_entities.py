@@ -43,7 +43,15 @@ g = receipt_digest("list_guestbook", GUESTBOOK)
 check("留言摘要含『3条』", "3条" in g, g)
 check("第 1 条 = 测试260905（顺序即返回顺序）", g.index("测试260905") < g.index("泠月喵好笨啊") < g.index("泠月喵真棒"), g)
 check("序号前缀存在（第N条对号）", g.count("1.") >= 1 and "2." in g and "3." in g, g)
-check("带分类字（诉/寄）", "诉「" in g and "寄「" in g, g)
+check("带分类字（诉/寄）", "〔诉〕「" in g and "〔寄〕「" in g, g)
+# 20261001：分类必须**看得见是分类**。裸印 `4.诉「博主是大笨狗」` 被读成"某人说了某话"
+# ——trace 20260930T235232 里模型回的就是"那条留言是访客**诉**发的"。
+check("★ 分类带 〔〕 外壳（与正文「」分开，不再被当成人名）",
+      "1.〔诉〕「测试260905」" in g, g)
+check(" 分类缺失时不硬凑一个壳出来（没有就没有）",
+      receipt_digest("list_guestbook",
+                     "[{'talkKey': 1, 'content': '无分类的留言'}]") == "最近1条: 1.「无分类的留言」",
+      receipt_digest("list_guestbook", "[{'talkKey': 1, 'content': '无分类的留言'}]"))
 t = receipt_digest("list_talks", TALKS)
 check("说说摘要含 2 条与首条内容", "2条" in t and "前端性能优化" in t, t)
 

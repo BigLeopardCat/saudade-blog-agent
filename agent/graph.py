@@ -4483,8 +4483,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             logger.info("[planner] 只读工具重复（%s）→ 收尾不重取",
                         "、".join(_tool_name(s) for s in done_specs))
             plan_obj = _wrap_up_plan(
-                True, "本轮已取回的只读数据就在上方工具返回里（同一件工具、同一份参数"
-                      "只取一次，重复调用拿回的是同一份数据），基于已有返回如实作答")
+                True, _read_repeat_note(state.get("receipts"), done_specs))
             record("planner", "intercept", reason="read_repeat", dups=done_specs,
                    redirected=False)
             return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
@@ -4614,6 +4613,46 @@ def _already_done_writes(plan_obj: dict, receipts) -> bool:
     planned = {_spec_signature(_tool_name(s), _tool_args(s)[0] or {})
                for s in plan_obj["tools"]}
     return bool(planned) and planned <= passed
+
+
+def _read_repeat_note(receipts, done_specs: list[str]) -> str:
+    """只读重复收尾的注记：**点名本轮取到的到底有哪几件**（20261001）。
+
+    要治的病（trace `20261001T005722` 实证）：整份计划都是已取回的只读 spec ⇒ 收尾，
+    而旧注记只说"本轮已取回的只读数据就在上方工具返回里"——"上方"到底覆盖了什么，
+    那句话一个字都没说。模型于是把**几轮前自己读公开帧得来的旧说法**当成本轮事实
+    （那次它把 `talkId:100` 的账号说成"同样归属 userId:1"，而本轮名册只筛出
+    `talkId:97` 一行，100 那一行**从没进过本轮任何一帧**）。
+
+    所以注记要把这一轮**真取到的数据行**逐条念出来（`rcpt["action"]` 或
+    `action_text.tool_action_text`——过程行/台账行同源的一份实现），再明说两句：
+    没在其中出现的东西本轮没有查过；会话历史里自己的说法不是本轮事实。
+
+    行集 = **本轮只读回执**（写族的回执不是"取回的数据"，剔掉；同一 (工具, 参数)
+    归一化后只占一行，与 `_trim_done_reads` 同一份签名）。回执读不出行时退回
+    `done_specs` 原文渲染。只搬事实：这几行不总结、不替模型下结论。
+    """
+    rows: list[str] = []
+    seen: set = set()
+    for r in receipts or []:
+        name = str(r.get("tool") or "")
+        if not name or authz.required_scope(name) in authz.WRITE_SCOPES:
+            continue
+        sig = _spec_signature(name, r.get("args") or {})
+        if sig in seen:
+            continue
+        seen.add(sig)
+        rows.append(r.get("action")
+                    or action_text.tool_action_text(name, r.get("args") or {}))
+    if not rows:
+        rows = [action_text.tool_action_text(_tool_name(s)) for s in done_specs]
+    listed = "、".join(rows[:5])
+    if len(rows) > 5:
+        listed += f"、另有 {len(rows) - 5} 件未列出"
+    return (f"本轮**真正取到的数据只有这些**：{listed}（同一件工具、同一份参数只取一次，"
+            "重复调用拿回的是同一份数据）。**没在上面出现的，本轮就没有查过**——"
+            "包括你自己前面几轮读到过、说过的那些：那是会话历史里的旧说法，"
+            "不是本轮事实，不许照它下结论；本轮答不了的如实说没查到。")
 
 
 def _trim_done_reads(plan_obj: dict, receipts) -> tuple[dict, list[str]] | None:
