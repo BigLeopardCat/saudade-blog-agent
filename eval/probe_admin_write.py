@@ -1888,6 +1888,26 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
                 if stuck:
                     print(f"  [INFO] 另有 {len(stuck)} 件够不着的 {stuck} 仍待处理"
                           f"——那是**预期**（agent 办不了，见台账行末的 ⚠），不是失败")
+                # 额度那半的库真值还有第二处：批准/重置的效果就是**计数器清零**。
+                # 只核"申请还在不在待处理队列"是不够的——那一行没了也可能只是被驳回了。
+                if reach is not None:
+                    try:
+                        _dir = _account_directory(uid, role)
+                    except Exception as e:  # noqa: BLE001
+                        _dir = None
+                        print(f"  [warn] 复核计数器读不到账号名录：{e}")
+                    for u, verb in quota_rows:
+                        if _dir is None or u not in reach or verb not in ("批准", "重置"):
+                            continue
+                        _row = next((r for r in _dir.values()
+                                     if int(r.get("id") or 0) == u), None)
+                        _u = (_row or {}).get("chatQuotaUsed")
+                        okc = _u == 0
+                        print(f"  [{'PASS' if okc else 'FAIL'}] 点确定 → 计数器真清零"
+                              f"（账号 id={u} 的 chatQuotaUsed={_u}，期望 0）")
+                        if not okc:
+                            rep.fails.append(f"⑰ 点了确定但账号 id={u} 的 chatQuotaUsed 仍是 "
+                                             f"{_u!r}（不是 0）= 额度那一下没落地")
 
         # 隐藏确认请求**不落用户消息**（同 ⑧）
         rows_h = history_items(uid, role, conv_id)
@@ -2071,10 +2091,50 @@ def _stage_quota_request(rep: Report, uid: int, role: str):
     if not _apply_quota_request(rep, aid, name, uid, role):
         _del_probe_account(rep, uid, role, name, tag="⑰")
         return None
+    if not _spend_one_round(rep, aid, name, uid, role):
+        # 花不掉一轮 ⇒ 这个靶子长得不像申请人（批准会被判成"已达成"、根本不弹卡）
+        # ⇒ 留着它只会让本腿每一轮都验不到东西，当场收尾。
+        _finish_staged_quota(rep, uid, role, aid, name)
+        return None
     print(f"  自造额度申请：账号 {name}（id={aid}）——本腿这一轮只碰它自己的数据")
     rep.warn(f"staging：本次跑用了一份**探针自造**的额度申请（申请人 {name} id={aid}，"
              f"经用户入口真提交，跑完即收尾）")
     return aid, name
+
+
+def _spend_one_round(rep: Report, aid: int, name: str, uid: int, role: str) -> bool:
+    """以那个账号自己的身份真跑**一轮**对话 ⇒ 它的计数器不再是 0。
+
+    为什么非跑不可（20260930 第二次实跑实测）：批准/重置的"已达成"判据是**这个人的
+    计数器本来就是 0**（`adminops._reached_one`：`used != 0` 才照弹），而新账号的
+    `chatQuotaUsed` 天然是 0 ⇒ 模型会（**正确地**）把这一件从卡上摘掉、如实回一句
+    「额度本来就是满的，没有列进这一批」。那是对的行为，但这条腿就永远验不到
+    "点确定 → 真写"——上一版自造靶子只建号 + 提交申请，正好踩在这里。
+    真跑一轮的代价 = 一次真 LLM 调用；换来的是靶子**长得像真的申请人**。
+    """
+    cid = _probe_conv(rep, aid, "user", "staging 额度靶子")
+    if cid is None:
+        return False
+    try:
+        d = stream_rust("你好", aid, "user", cid)
+        clean_end(rep, "staging 额度靶子消费一轮", d)
+    finally:
+        drop_conv(aid, "user", cid)
+    try:
+        row = next((r for r in _account_directory(uid, role).values()
+                    if int(r.get("id") or 0) == aid), None)
+    except Exception as e:  # noqa: BLE001
+        rep.fails.append(f"staging 复核靶子计数器读不到名录：{e}")
+        return False
+    used = (row or {}).get("chatQuotaUsed")
+    ok = isinstance(used, int) and used != 0
+    print(f"  [{'PASS' if ok else 'FAIL'}] 靶子账号 {name} 的计数器已不是 0"
+          f"（chatQuotaUsed={used}）——批准这一下才是真变化")
+    if not ok:
+        rep.fails.append(f"staging 靶子账号 {name}（id={aid}）跑完一轮后 chatQuotaUsed 仍是 "
+                         f"{used!r} ⇒ 这一件会被判成「额度本来就是满的」、根本不弹卡，"
+                         f"本腿的额度那半验不到（见 `_spend_one_round` 头注）")
+    return ok
 
 
 def _apply_quota_request(rep: Report, aid: int, name: str, uid: int, role: str) -> bool:
