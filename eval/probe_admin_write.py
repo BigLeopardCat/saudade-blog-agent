@@ -1592,6 +1592,23 @@ def _quota_pending_uids(uid: int, role: str) -> set[int]:
     return {int(r.get("userId") or 0) for r in _quota_pending_rows(uid, role)}
 
 
+def _reachable_uids(uid: int, role: str) -> set[int] | None:
+    """账号名录里**够得着**的 uid（`{id}`）；名录读不到返回 None。
+
+    与 agent 侧 `tools.base._reachable_uids` 同一条判据：`GET /api/temp-users` 按
+    `is_listable_role` 过滤 ⇒ **超管不列、注销过的账号也不在**。够不着的那些，额度写通道
+    按设计会（正确地）拒绝——所以"点了确定之后它还待处理"对它们来说是**预期**，不是失败。
+    判据不区分这两类的话，探针会把自己的一次正确拒绝报成红（20260930 实测：队列里唯一
+    一件待处理的正是 uid=1 的超管申请）。
+    """
+    try:
+        return {int(r.get("id")) for r in _account_directory(uid, role).values()
+                if r.get("id") is not None}
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] 读不到账号名录（够不够得着判不了，本腿对这一类不作断言）：{e}")
+        return None
+
+
 def _stage_review_proposal(rep: Report, uid: int, role: str, conv_id: int, tag: str) -> str:
     """铺垫上一轮那句话（**只发问句**，零执行零写），返回它的回复。
 
@@ -1786,6 +1803,13 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
             except ProbeError as e:
                 q_live = None
                 rep.fails.append(f"⑰ 读不到待处理的额度申请（额度那几件判不了）：{e}")
+            reach = _reachable_uids(uid, role)
+            if reach is not None:
+                _stuck = sorted(u for u, _v in quota_rows if u not in reach)
+                if _stuck:
+                    print(f"  [INFO] 卡上有 {len(_stuck)} 件够不着的额度目标 {_stuck}"
+                          f"（不在账号名录里：超管/已注销）——写通道按设计会拒绝它们，"
+                          f"本腿对这几条的判据是「仍待处理 + 如实说办不了」")
             for u, verb in quota_rows:
                 if q_live is not None:
                     oku = u in q_live
@@ -1852,11 +1876,18 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
                 rep.fails.append(f"⑰ 点确定后读不到额度申请队列（复核不了）：{e}")
             if q_after is not None:
                 left = sorted(u for u, _v in quota_rows if u in q_after)
+                # 够不着的那些**预期仍待处理**（写通道按设计拒绝）：把它们算进"真写没落地"
+                # 会把探针自己的一次正确拒绝报成红。红只留给够得着却没翻的那些。
+                stuck = [u for u in left if reach is not None and u not in reach]
+                left = [u for u in left if u not in stuck]
                 print(f"  [{'PASS' if not left else 'FAIL'}] 点确定 → 真写（额度）"
                       f"  仍待处理的 uid={left or '无'}")
                 if left:
                     rep.fails.append(f"⑰ 点了确定但 uid {left} 的申请仍是待处理"
                                      f"（回执不可信，以库为准）")
+                if stuck:
+                    print(f"  [INFO] 另有 {len(stuck)} 件够不着的 {stuck} 仍待处理"
+                          f"——那是**预期**（agent 办不了，见台账行末的 ⚠），不是失败")
 
         # 隐藏确认请求**不落用户消息**（同 ⑧）
         rows_h = history_items(uid, role, conv_id)
@@ -1891,6 +1922,8 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
         if quota_rows:
             consumed = [u for u, _v in quota_rows if q_after is not None and u not in q_after]
             intact = [u for u, _v in quota_rows if q_after is not None and u in q_after]
+            untouched = [u for u in intact if reach is not None and u not in reach]
+            intact = [u for u in intact if u not in untouched]
             if consumed:
                 qj = "、".join(f"账号 id={u} {v}" for u, v in quota_rows if u in consumed)
                 print(f"  ⚠ 本腿**不复原**：{qj}（额度申请处理过就没了那一行，"
@@ -1903,6 +1936,21 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
                       f"无需恢复。")
                 rep.warn(f"⑰ 额度那 {len(intact)} 件（{qi}）这次没落地 ⇒ 申请仍待处理、"
                          f"**没有被消费**")
+            if untouched:
+                qu = "、".join(f"账号 id={u}" for u in untouched)
+                # 这一句**不是**"没落地"：写通道根本没被允许动它（不在账号名录里）。
+                # 措辞必须与上面那两句分开——否则读日志的人会去查一次并不存在的写失败。
+                print(f"  ⚠ 如实记：{qu} 够不着（不在后台账号名录里：超管不列、注销过的"
+                      f"也不在）⇒ agent 的额度写通道办不了，本腿**没有动过它**，"
+                      f"仍待处理；要处理得主人到后台手工办。")
+                rep.warn(f"⑰ 额度那 {len(untouched)} 件（{qu}）不在账号名录里 ⇒ "
+                         f"agent 办不了（这是设计，不是这次跑出来的失败）")
+                # 软检查（只提醒，不判红）：措辞千变万化，锁死必然误报；但"答应了去办"
+                # 是这一族最坏的形态，值得在人读的时候点出来。
+                _rp = d2.get("reply") or ""
+                _honest = bool(_REFUSE_RE.search(_rp)) or "后台" in _rp
+                print(f"  [{'PASS' if _honest else 'INFO'}] ⑰ 对够不着那一件的回复"
+                      f"是否如实（含「办不了/后台」字样={_honest}）：{_rp[:120]!r}")
     finally:
         # 自造靶子的收尾**必须在这里**：判据全部读完之后（上面的库真值复核用的就是
         # 它），且任何提前 return / 异常路径上都会执行——留一份 pending 申请指向一个
