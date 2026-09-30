@@ -333,6 +333,7 @@ _NO_LEGACY_ARM = _DEAD | {
     "approve_quota_request", "reject_quota_request", "reset_user_quota",
     "list_quota_requests",         # 额度四件（20260926）：从来没进过老表
     "get_note_stats",              # 20260930 文章流量报表：冻结之后新增，动作词只在 Python 侧
+    "list_admin_board",            # 20261001 后台留言名册：同上（读 GET /api/protect/board）
 }
 
 _rs = _parent_repo.read(
@@ -507,6 +508,31 @@ else:
     check("  跳过的每一对都写明了理由（无臂 / 合成输入 / 排版附加件）",
           all(_why_not_compared(_row) for _row, _ in _pairs
               if f"{_row.get('tool')}【{_why_not_compared(_row)}】" in _skipped))
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑥ 新臂逐一钉住（冻结之后加的工具，动作词只住在 Python 这侧）")
+
+# `list_admin_board`（20261001 后台留言名册）：它是"这一轮到底翻了哪些留言"的唯一
+# 线索——**筛选条件必须出现在行里**，否则回执只说"查看后台留言名册"，而主人问的是
+# "匿名的那些是谁发的"、agent 只用关键词捞了一小撮，这种偏差在台账里看不出来。
+check("① 名册·无参：两档同字", _pre("list_admin_board") == "查看后台留言名册"
+      == _full("list_admin_board"), _full("list_admin_board"))
+check("① 名册·只看待审", _full("list_admin_board", {"status": "pending"})
+      == "查看后台留言名册（只看待审的）")
+check("① 名册·两条件都印（顺序 = 状态、关键词）",
+      _full("list_admin_board", {"status": "rejected", "keyword": "垃圾"})
+      == "查看后台留言名册（只看未通过的，关键词「垃圾」）")
+check("① 名册·关键词在 preview 档截到 24 字、full 档给全",
+      "「" + "长" * 24 + "」" in _pre("list_admin_board", {"keyword": "长" * 40})
+      and "「" + "长" * 40 + "」" in _full("list_admin_board", {"keyword": "长" * 40}))
+# ③ 那条通用不变量的具体形态：认不出的 status 不许渲染成「只看」后面跟个空
+check("① 名册·认不出的 status 不硬凑（不许出现『只看）』这种半截）",
+      _full("list_admin_board", {"status": "???", "keyword": "  "}) == "查看后台留言名册",
+      _full("list_admin_board", {"status": "???", "keyword": "  "}))
+check("① 名册·被 `$…` 引用时印的是中文来源名，不是内部工具名",
+      _pre("get_article_detail", {"doc_type": "board", "article_id": "$list_admin_board[0].talkKey"})
+      == "读取留言（上一步后台留言名册的第 1 条）",
+      _pre("get_article_detail", {"doc_type": "board", "article_id": "$list_admin_board[0].talkKey"}))
 
 print(f"\n{'全部通过' if not FAILS else f'失败 {len(FAILS)} 项'}")
 for f in FAILS:

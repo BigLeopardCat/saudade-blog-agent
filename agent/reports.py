@@ -1,4 +1,4 @@
-"""管理助手报表渲染（20260921）——**四张报表的纯函数出口**。
+"""管理助手输出渲染（20260921）——**报表与后台留言名册的纯函数出口**。
 
 ## 为什么数字在工具侧算好，而不是把 JSON 丢给模型数
 
@@ -198,20 +198,55 @@ FOCUS_NAMES = {
 }
 
 
+def account_text(r: dict) -> str:
+    """后台视图里的**发表账号**：`账号（userId:5／昵称 小猫咪／用户名 sora）`。
+
+    后台留言行（`GET /api/protect/board`）每一行都带 `userId`/`username`/`nickname`
+    ——**发留言必须登录**（`talks.rs::insert_talk` 里那道 `current_uid`），所以留空留名
+    的"匿名"留言一样溯得到是谁发的。
+
+    为什么要单独有这么一个渲染：公开视图（公开留言列表）里没有这三个字段，它透出的
+    `author` 只是留言人**自己在留名框里填的自由文本**——可以填任何字（甚至填别人的
+    昵称）、也可以留空。**它不是账号**，拿它当"是谁发的"去认人就是认错人。生产现场
+    （trace `20260930T235232`）模型正是拿着留言正文当账号名去后台名录里找，回了
+    "后台账号列表里并没有叫「博主是大笨狗」的账号"。
+
+    昵称与用户名都给（主人认人两种叫法都有），两个都空时只剩 userId（**不许留白**：
+    留白会让这一行看起来像"没有账号"，那正是公开视图的坑）。
+    """
+    uid = r.get("userId")
+    head = f"userId:{uid}" if uid is not None else "userId 读不到"
+    nick = sanitize_untrusted(str(r.get("nickname") or ""), 20)
+    uname = sanitize_untrusted(str(r.get("username") or ""), 20)
+    if not nick and not uname:
+        return f"账号（{head}）"
+    if not nick or nick == uname:
+        return f"账号（{head}／{uname or nick}）"
+    if not uname:
+        return f"账号（{head}／昵称 {nick}）"
+    return f"账号（{head}／昵称 {nick}／用户名 {uname}）"
+
+
 def _detail_line(r: dict, extra: str = "") -> str:
-    """一条留言的明细行：`talkId:<id> 时间 作者（标注）「正文」`。
+    """一条留言的明细行：`talkId:<id> 时间 账号…（标注）「正文」`。
 
     **id 带命名空间**（20260926 批 4，理由见 tools/base.py::_board_label）：这份明细
     直接进 planner/narrator 的提示词，裸 id 会被当成别的物件。
 
+    **账号与留名分开印**（20261001）：旧版这里是 `author or nickname`——留言时填的
+    自由文本会**盖住真实账号**，于是"这条是谁发的"在报表里也没答案（匿名那条更是
+    只剩一个 userId）。现在账号一律由 `account_text` 给出，留名只作为**附加的**线索
+    跟在后面（备注里写明它是留名框填的字，不是账号）。
+
     `sanitize_untrusted` 是必须的（见模块头注）：这是全链路唯一"访客可控文本进
-    prompt"的地方，命令前缀必须在这里拆掉——作者名同样是访客可控的（留言时可填）。
+    prompt"的地方，命令前缀必须在这里拆掉——留名与正文同样访客可控。
     """
-    who = sanitize_untrusted(r.get("author") or r.get("nickname") or "", 16)
-    if not who:
-        who = f"userId:{r.get('userId')}"
+    who = account_text(r)
+    sign = sanitize_untrusted(r.get("author") or "", 16)
+    if sign:
+        who += f"，留名「{sign}」"
     body = sanitize_untrusted(r.get("content") or "", 30)
-    at = _short_time(r.get("createTime"))
+    at = short_time(r.get("createTime"))
     return f"  · talkId:{r.get('talkKey')} {at} {who}（{extra}）「{body}」"
 
 
@@ -263,6 +298,10 @@ def render_moderation_status(rows: list[dict], status: str | None = None,
 
     lines.append("- 三份名单口径不同、**可以重叠**（一条 AI 驳回又还等人复批的留言会同时"
                  "出现在②③）——不要把三个数相加当总数")
+    # 一行图例买断整份报表的歧义（20261001）：明细行受字符预算所限，只在行内重复
+    # 「不是账号」划不来；说一次，整份都算数。
+    lines.append("- 明细里「账号（…）」是**真实发表账号**（发留言必须登录，留空留名的也溯得到）；"
+                 "「留名「…」」是留言时自己填的字，**不是账号**，别拿它去认人")
 
     def _detail(group: list[dict], key: str, extra_of):
         """一类名单的明细行（空名单不写"明细"二字，免得列出个空标题）。"""
@@ -321,7 +360,105 @@ def render_moderation_status(rows: list[dict], status: str | None = None,
     return _cap("\n".join(lines))
 
 
-def _short_time(raw) -> str:
+# ── 后台留言名册（20261001）─────────────────────────────────────────
+#
+# **这张名册存在的唯一理由**：公开留言接口看不到**发表账号**。它透出的 `author`
+# 是留言时在留名框里自己填的自由文本（可以填任何字、也可以留空，留空就是"匿名"），
+# 于是"这条是谁发的"在公开视图里**结构上无解**——而答案一直在后台视图里：
+# `GET /api/protect/board` 的每行都带 userId/username/nickname，且**发布强制登录**
+# （`talks.rs::insert_talk` 里那道 `current_uid`）——匿名只是没填留名，账号一样留存。
+# 生产现场（trace `20260930T235232`）：模型手上只有公开列表，于是回了一句
+# "后台账号列表里并没有叫「博主是大笨狗」的账号"——它把**留言正文**当成了账号名。
+#
+# 与报表③（`render_moderation_status`）的分工：那张按**审核状态**切三份名单、默认
+# 每份只印 5 条，回答"积压了多少、哪些被 AI 驳回了"；这一张是**逐条名册**，回答
+# "这条是谁发的、最近都说了什么"。两个问题、两张纸，刻意不合并（合并会让两边都
+# 变长，而 2400 字的报表上限就摆在那里）。
+
+# 名册的行数上限：与字符预算谁先到算谁（见 render_board_roster 的循环）。
+BOARD_ROSTER_LIMIT = 20
+
+
+def _roster_line(r: dict) -> str:
+    """名册的一行：`talkId:<id> [状态] 时间 账号（…），留名「…」「正文节选」`。
+
+    ⚠️ **账号在留名之前**——顺序就是判据：读的人先看到的是"谁发的"，留名只是附注
+    （旧版两类东西挤在一个字段里，自由文本会盖住账号）。
+    """
+    from tools.base import BOARD_APPROVED_CN        # 一处实现（tools/base.py，写路径同源）
+    state = BOARD_APPROVED_CN.get(r.get("approved"), "状态未知")
+    sign = sanitize_untrusted(r.get("author") or "", 16)
+    body = sanitize_untrusted(r.get("content") or "", 30)
+    tail = f"，留名「{sign}」（留言时自己填的，不是账号）" if sign else \
+           "，留名未填（匿名发表）"
+    return (f"- talkId:{r.get('talkKey')} [{state}] {short_time(r.get('createTime'))} "
+            f"{account_text(r)}{tail}「{body}」")
+
+
+def render_board_roster(rows: list[dict], *, approved: int | None = None,
+                        keyword: str | None = None) -> str:
+    """`GET /api/protect/board` 的返回 → **逐条名册**（含发表账号，可筛选）。
+
+    `approved` 传 0/1/2 只看某一类审核状态（调用方负责把实参归一成这三个值之一，
+    认不出的实参**传 None**——本函数不猜它想筛哪一类）；`keyword` 在正文、留名、
+    账号昵称/用户名里做不区分大小写的子串匹配。
+
+    两条纪律：
+      · **读不到 ≠ 没有**：`rows` 为空由调用方处理（那是"一条留言都没有"），本函数
+        只负责"读到了、按条件筛"——所以筛选结果为空时明说**筛掉了多少**，
+        绝不说成"站内没有"（同 gate 洞④ 的供体）。
+      · **打印实际生效的条件**：抬头逐字写出这次筛了什么，读的人（与模型）才不会
+        把"我筛过的那一类"说成"站里就这些"。
+    """
+    rows = rows or []
+    kw = (keyword or "").strip()
+    hits = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        if approved is not None and r.get("approved") != approved:
+            continue
+        if kw:
+            hay = " ".join(str(r.get(k) or "") for k in
+                           ("content", "author", "nickname", "username")).lower()
+            if kw.lower() not in hay:
+                continue
+        hits.append(r)
+
+    conds = []
+    if approved is not None:
+        from tools.base import BOARD_APPROVED_CN
+        conds.append(f"状态={BOARD_APPROVED_CN.get(approved, approved)}")
+    if kw:
+        conds.append(f"关键词「{sanitize_untrusted(kw, 20)}」")
+    cond_txt = f"；本次筛选：{'、'.join(conds)}" if conds else "；本次未筛选"
+
+    head = [
+        f"河灯留言后台名册（{_ts()}，后台共 {len(rows)} 条{cond_txt}）",
+        "- **每条留言都有真实发表账号**：放灯必须登录，留名框里填的字只是自由文本"
+        "（留空即匿名）——认人看「账号（…）」，**别拿正文或留名当账号**；"
+        "匿名的留言一样溯得到是谁发的。",
+    ]
+    if not hits:
+        head.append(f"- 按上面的条件一条都没匹配上（后台 {len(rows)} 条里筛出来的结果是空的）"
+                    "——换个关键词、或不带条件看全部。")
+        return _cap("\n".join(head))
+
+    lines = list(head)
+    for r in hits[:BOARD_ROSTER_LIMIT]:
+        line = _roster_line(r)
+        # 字符预算（与条数上限谁先到算谁）：宁可少列几行并如实说"另有 N 条"，也不要
+        # 让 _cap 把名册切成半截（半截的名单读起来像"就这些"，而它其实是被截断的）。
+        if len("\n".join(lines + [line])) > MAX_REPORT_CHARS - 200:
+            break
+        lines.append(line)
+    rest = len(hits) - (len(lines) - len(head))
+    if rest > 0:
+        lines.append(f"- 另有 {rest} 条未列出（可用 keyword 收窄，或不筛直接看全部）")
+    return _cap("\n".join(lines))
+
+
+def short_time(raw) -> str:
     """`2026-09-21 12:40:01` → `09-21 12:40`（认不出就空串）。"""
     s = str(raw or "")
     return s[5:16] if len(s) >= 16 else s[:16]
@@ -356,7 +493,7 @@ def render_user_stats(data: dict, now: datetime | None = None) -> str:
             last = u.get("lastActiveAt") or "无活动"
             lines.append(f"  · userId:{u.get('id')} {name}（{u.get('role')}）"
                          f"会话 {u.get('conversations', 0)}／消息 {u.get('messages', 0)}"
-                         f"／最近 {_short_time(last)}")
+                         f"／最近 {short_time(last)}")
     return _cap("\n".join(lines))
 
 

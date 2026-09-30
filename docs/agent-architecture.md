@@ -31,7 +31,7 @@
 > ⑤**写操作的事前同意**（秘书前置需求 ③ 的 agent 侧）——权限之后再加一道确定性判据：
 > 需确认的 scope（`CONSENT_SCOPES = {write.content}`）未获**用户本轮消息**明确确认 →
 > 产 `__ERROR__: 待确认[consent_required]` 帧、**不调用工具**；用错误帧形态是为了让 gate
-> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 38 个工具里
+> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 61 个工具里
 > 没有一个是 `write.content`，所以这条闸**空转**（等第一个写工具，声明表驱动、不用改代码）。
 > ⚠️ 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
 > annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
@@ -59,7 +59,7 @@
 
 - **React 前端**（浏览器）：看板娘 Live2D 形象 + 对话框 UI + SSE 消费 + 命令执行器。
 - **Rust 后端**（axum，端口 3000）：鉴权、记忆落库、对话编排、SSE 转发、中断清理。**记忆的唯一权威来源**。
-- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、38 个工具。**无状态**，记忆全靠请求体注入。
+- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、61 个工具。**无状态**，记忆全靠请求体注入。
 - **MySQL**：`chat_history`（消息流水）、`chat_summary`（每用户压缩摘要）。
 - **device-service**（端口 3100，独立服务）：IoT 设备（ESP32 OLED）指令下发，agent 以对话用户身份代签 JWT 调用。
 
@@ -513,7 +513,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 ---
 
-## 5. 工具系统（46 个）
+## 5. 工具系统（61 个）
 
 | 分类 | 工具 | 行为 |
 |---|---|---|
@@ -531,7 +531,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 | 特效 | `toggle_effect(effect, action)` | 返回 `EFFECT:{effect}:{action}`，前端按显式意图执行 |
 | 夜间模式 | `toggle_dark_mode(mode)` | 返回 `DARKMODE:{mode}` |
 | IoT 设备 | `list_devices`、`device_oled_display` | 代签 JWT 调 device-service；支持自动选在线设备、幂等去重 |
-| 后台只读（admin） | `list_admin_notes`、`get_server_status`、`get_service_health`、`get_moderation_status`、`get_user_stats` | **以发起人身份代调** `127.0.0.1:3000` 的受保护接口（现签 60 秒 JWT）；scope `admin.console`，进 `_HARD_SCOPES`（非 admin 结构上够不到）；`list_admin_notes` 是草稿/私密文章的**唯一可达读口** |
+| 后台只读（admin） | `list_admin_notes`、`get_server_status`、`get_service_health`、`get_moderation_status`、`get_user_stats`、`get_note_stats`、`list_admin_board` | **以发起人身份代调** `127.0.0.1:3000` 的受保护接口（现签 60 秒 JWT）；scope `admin.console`，进 `_HARD_SCOPES`（非 admin 结构上够不到）；`list_admin_notes` 是草稿/私密文章的**唯一可达读口**；`get_moderation_status` 是**审核状况报表**（按状态切三份名单），`list_admin_board` 是**逐条名册**（每条带真实发表账号——公开的 `list_guestbook` 只有留名框里填的自由文本，认人会认错，见 §6.7） |
 | 后台写（admin） | `create_tag`、`update_tag`、`delete_tag`、`create_category`、`update_category`、`delete_category`、`create_announcement`、`update_announcement`、`delete_announcement`、`audit_board_comment`、`delete_board_comment`、`set_article_status`、`set_article_tags` | scope `write.console`（`_HARD_SCOPES` + `CONSENT_SCOPES`）；**只能由写技能模板展开**——`PARAMS.calls` 名单里没有它们，越权清单在技能白名单那一步就被剥掉；三道门见 §5.3；身份/目标的地基见 §6.6 |
 | 用户自己的读（own） | `list_my_favorites`、`get_unread_summary`、`list_notifications` | scope `read.own`（三档角色都有、匿名没有）；**以本轮发起人身份读他自己的数据**（代签 60 秒 JWT 调 `/api/protected/*`，"自己读自己"由 uid 落地）；见 §5.6 |
 | 用户自己的写（own） | `add_favorite`、`remove_favorite`、`read_notifications` | scope `write.own`（**不进** `_HARD_SCOPES`、**不进** `_ALWAYS_CONFIRM_TOOLS`）；五条契约见 §5.6 |
@@ -1103,6 +1103,38 @@ flowchart TB
 - **锁**：`test_skills` 四个函数（`test_write_grounding_round` / `test_write_ledger_note_round` /
   `test_announcement_text_round` / `test_name_target_round`）+ `test_admin_write` ⑰⑱⑲⑳㉑㉒
   （⑳ 值地基 18 例含 ⑭c–⑭h 改名族，㉑ 公告正文字段标记词形）。 ㉒ 是文章问句的《标题》+ 现状（含"读不到清单仍弹窗"与两个读取器同端点）。
+
+### 6.7 读操作的账号识别（20261001，读侧）：留名不是账号
+
+§6.6 治的是**写**操作"动谁"，这一节治**读**操作"是谁发的"——同一个坑的读侧镜像，
+而它此前没有任何判据挡着。
+
+**事故**（trace `20260930T235232`）：主人问"最近那条骂人的留言是谁发的"。agent 只调了
+`list_guestbook`（**公开**留言列表），那一份里根本没有账号字段——它的 `author` 是留言人
+**自己在留名框里填的自由文本**（实测那批行：ID 100 填了 `Sora Saudade`、ID 97 留空、
+匿名那批填成 `匿名·a4c745facd3a92156`）。模型拿正文当账号名去后台名录里找，回了
+"后台账号列表里并没有叫「博主是大笨狗」的账号"——**它没说错，是它手里的表里就没有那一列**。
+
+**事实**：后端一直有答案。`GET /api/protect/board` 的 `BoardAdminDto` 每行带
+`userId`/`username`/`nickname`，而**放灯强制登录**（`talks.rs::insert_talk` 那道
+`current_uid`）⇒ 留空留名的"匿名"留言一样溯得到是谁发的。缺的不是接口，是**读它的工具**：
+当时唯一读后台留言的 `get_moderation_status` 是按审核状态切三份名单的**报表**（每份默认 5 条），
+菜单行/capability/描述通篇只讲审核状况，且明细行用 `author or nickname` 渲染——自由文本
+**盖住**了真实账号。
+
+| 装置 | 管什么 | 判据要点 |
+|---|---|---|
+| `list_admin_board` + `render_board_roster` | 后台留言**逐条名册**（含待审/未通过） | 与 `list_admin_notes` 同门（scope `admin.console` ⇒ 自动进两条点名通道与 admin 菜单）；`approved` 三态筛选 + `keyword` 在正文/留名/昵称/用户名里匹配；抬头**打印实际生效的条件**；筛出来是空的就说"按条件没匹配上（后台 N 条里）"，**绝不说成"站内没有"** |
+| `reports.account_text` | **账号**的渲染（唯一实现） | `账号（userId:5／昵称 小猫咪／用户名 sora）`；三件全空时**也印 userId**（留白会被读成"没有账号"，那正是公开视图的坑） |
+| `_roster_line` / `_detail_line` | 账号与留名的**次序就是判据** | 账号在前、留名在后，且名册行写明「留言时自己填的，不是账号」；报表明细受字符预算所限只在**图例**里说一次「账号（…）是真实发表账号；留名「…」是留言时自己填的字，不是账号」 |
+| 工具描述（三处） | 菜单层就把两条路分开 | `list_guestbook` 的 docstring 明写"⚠ 本视图看不到发表账号…要走 `list_admin_board`"；`get_moderation_status` 明写它是报表、要逐条看用名册；`list_admin_board` 明写"要回答「这条是谁发的」必须用它" |
+
+**纪律**：**读侧同名陷阱与写侧同源**——凡"主人可控的自由文本"与"系统事实"挤在同一个字段里，
+读的人一定会认错；唯一的解法是把它们**在渲染层就分开**，而不是靠描述里叮嘱一句。
+筛选结果为空与后台一条都没有是两回事（三态纪律：读不到 ≠ 没有）。
+
+- **锁**：`test_reports` ⑬（`account_text` 四态 + 名册行 + 筛选/空筛/预算 + 工具接线的 empty/unavailable 取向）、
+  `test_action_text` ⑥（动作词两档 + 认不出的 status 不许硬凑 + `$list_admin_board[N].talkKey` 的中文来源名）。
 
 ---
 

@@ -52,7 +52,9 @@ import re
 
 from agent import adminops as A          # 标签颜色/状态的既有中文词表（写工具问句共用）
 from agent.skills import NAV_MAP, _norm_id_list, _norm_true
-from tools.base import DOC_TYPE_CN       # 四个数据源的中文名词（note/talk/board/announcement）
+# 四个数据源的中文名词（note/talk/board/announcement）；留言的**状态词与筛选键**也
+# 取同一处（`tools/base.py` 是唯一实现，写路径、名册、动作行共用一份，别在这里再抄）。
+from tools.base import BOARD_APPROVED_CN, BOARD_STATUS_FILTERS, DOC_TYPE_CN
 
 _EFFECT_CN = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}
 
@@ -109,6 +111,9 @@ _REF_SOURCE_CN = {
     # 是"把《X》设为私密"的标准走法（先读列表拿 id 再写），缺了它就往过程行里
     # 打内部工具名。
     "list_admin_notes": "后台文章列表",
+    # 后台留言名册（20261001）：`$list_admin_board[N].talkKey` 是"把那条驳回/删掉"
+    # （复核与删除都按 talkId 认）的标准走法——缺了它，过程行会打出内部工具名。
+    "list_admin_board": "后台留言名册",
     # 用户自己的数据（20260923 批 6/7）：`$list_my_favorites[0].noteId` 是"取消收藏
     # 那一篇"的标准走法（先读自己的收藏夹拿 id 再撤），`$list_notifications[0].id`
     # 是"把那条公告标记已读"的走法。缺了这两个来源名，过程行会打出内部工具名。
@@ -520,6 +525,18 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         focus = {"ai_passed": "AI 直接通过的", "ai_rejected": "被 AI 驳回的",
                  "pending": "等人复批的"}.get(_raw(a.get("status")))
         return f"查看审核状况（只看{focus}）" if focus else "查看审核状况"
+    if name == "list_admin_board":
+        # 后台留言名册（20261001）。两档同字，但**筛选条件要写进这一行**：主人问
+        # "匿名的那些是谁发的"、agent 却只用关键词筛了一小撮——这种偏差只有在行里
+        # 才看得出来（同 `get_moderation_status` 的聚焦那条注）。
+        cond = []
+        st = BOARD_APPROVED_CN.get(BOARD_STATUS_FILTERS.get(_raw(a.get("status"))))
+        if st:
+            cond.append(f"只看{st}的")
+        k = _raw(a.get("keyword"))
+        if k:
+            cond.append(f"关键词「{k[:24] if preview else k}」")
+        return "查看后台留言名册（" + "，".join(cond) + "）" if cond else "查看后台留言名册"
     if name == "get_article_detail":
         # 动作词按 **doc_type** 取（20260928）：这一件工具读的是文章/说说/留言/公告
         # 四个源，此前一律说"读取文章" ⇒ 两行都把留言读成文章。
