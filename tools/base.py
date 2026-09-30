@@ -2324,7 +2324,13 @@ def update_announcement(
     if final_t == cur_t and final_c == cur_c.strip():
         return ok(A.render_announcement_noop(hit),
                   meta={"op": "announcement_update", "announcement_id": hit.get("id"),
-                        "announcement_title": final_t, "change": "与现在一致，无需改动"})
+                        "announcement_title": final_t, "change": "与现在一致，无需改动",
+                        # `noop` = **零改动的机器可读证书**（20260930 补齐）：执行侧据此
+                        # 记 `noop_specs`，两个读端都用它——gate 的洞⑩（本轮有真改动却
+                        # 说"什么都没改"）与 planner 的零改动重复裁剪。此前只有 8 处
+                        # write.own 的短路回执带它，本处与 board_audit 那处**是同一件事
+                        # 却没带**：少一个键，两处读端就会把"与现在一致"当成"真的改了"。
+                        "noop": True})
 
     aid = hit.get("id")
     data = _admin_request("PUT", f"/api/protected/announcements/{aid}",
@@ -2574,7 +2580,9 @@ def audit_board_comment(
         return ok(A.render_board_audit_noop(hit, v),
                   meta={"op": "board_audit", "board_id": tid,
                         "board_author": str(hit.get("author") or ""),
-                        "change": f"与现在一致（{_board_state_cn(hit)}），无需改动"})
+                        "change": f"与现在一致（{_board_state_cn(hit)}），无需改动",
+                        # 零改动证书，理由同 announcement_update 那一处（20260930）。
+                        "noop": True})
 
     # 请求体按 Rust 侧口径发：1=通过 / 0=驳回（端点内部把 0 写成 approved=2）。
     data = _admin_request("PUT", f"/api/protect/board/{tid}/audit",
@@ -3693,7 +3701,12 @@ def complete_dashboard_todo(
     return ok(A.render_todo_done(body, changed=not before_done),
               meta={"op": "dashboard_todo_done",
                     "before": "已完成" if before_done else "未完成",
-                    "after": "已完成"})
+                    "after": "已完成",
+                    # 零改动证书（20260930 补）：本族**幂等不短路**（照发请求、由写后复核
+                    # 定论），所以"本来就是完成态"这一支的净变化是**零**——回执文本自己
+                    # 也写着「本来就是完成状态」。不带这个键，两个读端就会把它当成"真的
+                    # 勾了一下"（gate 洞⑩ 会误判诚实的叙述，planner 会重跑同一件）。
+                    **({"noop": True} if before_done else {})})
 
 
 # 「清空排期」的契约写法与它的同义词集**只有一处来源**（`agent/adminops.py`
@@ -3800,10 +3813,17 @@ def reschedule_dashboard_todo(
     # 这里的 before/after 是**新旧排期**。**刻意不塞 text/date**——白名单外的键会被
     # 无声丢掉（`_RCPT_META_KEYS` 那条拷贝循环），看起来"记下来了"、其实一行都没落，
     # 而这一族最容易的误判正是"回执里有就等于库里有"。
-    return ok(A.render_todo_rescheduled(body, due, changed=before_date != (due or "")),
+    changed = before_date != (due or "")
+    return ok(A.render_todo_rescheduled(body, due, changed=changed),
               meta={"op": "dashboard_todo_reschedule",
                     "before": A.render_todo_when(hits[0]),
-                    "after": A.render_todo_when(now_hits[0])})
+                    "after": A.render_todo_when(now_hits[0]),
+                    # 零改动证书（同勾完成那一件）：本族**幂等不短路**，"本来就排在
+                    # 这一天"这一支的净变化是**零**——回执文本自己写着「这次没有发生
+                    # 任何变更」。缺这个键，两个读端就会把它当成"真的改了一下"：
+                    # gate 洞⑩ 会把 narrator 照抄回执的那句"这一轮没改"当谎打回，
+                    # planner 会重跑同一件（`_trim_noop_specs` 认的就是它）。
+                    **({"noop": True} if not changed else {})})
 
 
 # ---------------------------------------------------------------------------
@@ -4082,7 +4102,12 @@ def _set_account_frozen(name, frozen: bool, config: RunnableConfig) -> ToolResul
               "account_id": target_id, "account_name": username,
               "before": "冻结" if was_frozen else ("正常" if was_frozen is False else ""),
               "after": "冻结" if now_frozen else "正常",
-              "change": A.account_change_phrase(frozen, changed)})
+              "change": A.account_change_phrase(frozen, changed),
+              # 零改动证书（同上两件）：本族**幂等不短路**（写前已经是目标状态也照发
+              # 请求，服务端那个分支是真 no-op），"本来就是这个状态"这一支的净变化是
+              # **零**——回执文本自己写着「这次没有发生任何变更（没有重复X）」。缺这个
+              # 键，两个读端就会把它当成"真的动了一下"。
+              **({"noop": True} if not changed else {})})
 
 
 @tool

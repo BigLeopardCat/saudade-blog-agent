@@ -38,7 +38,7 @@ sys.path.insert(0, str(ROOT))
 from tools import base as _base  # noqa: E402  工具的返回值契约（ToolResult：str 子类 + kind）
 
 import agent.graph as g  # noqa: E402
-from agent.graph import build_graph, graph_input  # noqa: E402
+from agent.graph import build_graph, graph_input, parse_plan  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 
 FAILED: list[str] = []
@@ -91,7 +91,11 @@ class _FakeTool:
 
 
 class _FakeNoticeTool:
-    """假 read_notifications：只记账、零网络（④ 的写族用）。"""
+    """假 read_notifications：只记账、零网络（④ 的写族用）。
+
+    返回的是**真改过**那一支（4 条被标掉，`meta` 里**没有** `noop` 证书）——这条
+    分别正是 ⑥/⑥b/⑦/⑦b 四个用例唯一换的那一档。
+    """
 
     def __init__(self):
         self.name = "read_notifications"
@@ -100,6 +104,20 @@ class _FakeNoticeTool:
     def invoke(self, args):
         self.calls.append(args)
         return _base.ok("已把 4 条通知标记为已读（现在未读：通知 0 条 / 私信 0）。")
+
+
+class _FakeNoopNoticeTool(_FakeNoticeTool):
+    """假 read_notifications 的**零改动**档：`meta["noop"]` 证书在场。
+
+    文案与 `tools/base.py::read_notifications` 那条真返回逐字同源（"本来就没有未读的"
+    那一支）——`noop_specs` 这个事实通道认的就是 `meta["noop"]`，不是这句话本身。
+    """
+
+    def invoke(self, args):
+        self.calls.append(args)
+        return _base.ok("你的通知本来就没有未读的，无需改动（没有发出写请求）。",
+                        meta={"op": "notice_read", "change": "本来就没有未读的",
+                              "noop": True})
 
 
 # 两句措辞不同、但都属于"站内没有"结论的叙述——第二句刻意**不逐字重复**第一句，
@@ -275,6 +293,139 @@ check("建议措辞真按族发：写族拿「去动手」、检索族拿「去�
       and "选检索类技能" in g._replan_note("site_absence_claim_without_tool", "x"))
 check("  没写建议的族退回缺省那一份（新增 issue 不会拿到半截提示）",
       "选检索类技能" in g._replan_note("这个 issue 不存在", "x"))
+check("  洞⑩ 的否定说明**不跟着缺省那句走**（它说的是「这一轮真执行过」，"
+      "而缺省那句写的是「一个工具都没有执行」——当着 planner 的面说反话）",
+      "真的执行过" in g._replan_note("write_change_denial", "x")
+      and "一个工具都没有执行" not in g._replan_note("write_change_denial", "x"))
+
+print("\n⑥ 洞⑩ 走重规划：真改了东西却说「这一轮什么都没改」 ⇒ 打回重说（用户上线后报告）")
+# 现场（trace `20260930T192729_1`，uid=1 真主人）：主人点「确定」那一轮，
+# `read_notifications` **真执行**、回执写着「已把 1 条通知标记为已读（现在未读：通知 0 条）」，
+# narrator 却说「通知这边其实本来就没有未读的，所以这一轮没有可标记的、什么都没改」——
+# 主人刚亲手点的确定，被告知站内什么都没发生。根因是**技能回复契约**里那句可抄的否认句
+# （已同步改措辞），判据是兜底：措辞只降概率，兑现轮说反话必须拦得住。
+_LIE_NOCHANGE = "通知这边其实本来就没有未读的，所以这一轮没有可标记的、什么都没改喵。"
+_out6, _llm6, _tool6, _ev6 = _run([_PLAN_NOTICE, _PLAN_CHAT, _PLAN_CHAT],
+                                  [_LIE_NOCHANGE, _TRUTH_WRITE],
+                                  user_msg="猫咪我的未读信息全部就标记为已读",
+                                  tool_name="read_notifications",
+                                  fake=_FakeNoticeTool())
+check("脚本足够跑完这一轮", _llm6.exhausted == [], str(_llm6.exhausted))
+check("写**真的执行了**（这是本用例的前提：判定要的是「真有改动」)",
+      _tool6.calls == [{"all": True}], str(_tool6.calls))
+check("planner **真的重新决策了一次**（第 3 轮规划存在 = 不是兜底道歉收尾）",
+      len(_rounds(_llm6, 3)) == 1, f"各轮次数={[len(_rounds(_llm6, n)) for n in (1, 2, 3)]}")
+check("  打回提示给的是洞⑩ 那一族（「照回执如实说、不用再执行一次」），不是检索族",
+      bool(_rounds(_llm6, 3)) and "不需要再执行一次" in _rounds(_llm6, 3)[0]
+      and "选检索类技能" not in _rounds(_llm6, 3)[0])
+check("最终回复是重说之后那条有依据的叙述",
+      (_out6["messages"][-1].content or "").strip() == _TRUTH_WRITE,
+      repr((_out6["messages"][-1].content or "")[:40]))
+check("被否定的那句**不在**最终 state 里（不留成下一轮的范文）",
+      "没有可标记的" not in _ai_text(_out6))
+check("没有走兜底（fallback_text 为空、done 为真）",
+      not _out6.get("fallback_text") and _out6.get("done") is True)
+check("trace 里有 gate/replan 事件（判据可回溯）",
+      ("gate", "replan") in [(n, e) for n, e, _ in _ev6],
+      str([(n, e) for n, e, _ in _ev6]))
+
+print("\n⑥b 负锁：零改动的那一轮说「本来就没有」**不打回**（门要认得工具自报的 noop 证书）")
+# 与 ⑥ 只差一件事：工具返回的是**零改动**（`meta["noop"]`）。此时 narrator 说的
+# 「本来就没有未读的、没有可标的」是**真话**——门绝不能把如实说明当成谎打回，
+# 否则诚实叙述会被反复重写（这正是加 `noop_specs` 这个事实通道的全部理由）。
+_NOOP_TEXT = "主人，你的通知本来就没有未读的，所以这一轮没有可标的、什么都没改喵～"
+_out6b, _llm6b, _tool6b, _ev6b = _run([_PLAN_NOTICE, _PLAN_CHAT], [_NOOP_TEXT],
+                                      user_msg="猫咪我的未读信息全部就标记为已读",
+                                      tool_name="read_notifications",
+                                      fake=_FakeNoopNoticeTool())
+check("脚本足够跑完这一轮", _llm6b.exhausted == [], str(_llm6b.exhausted))
+check("工具真跑了（零改动也是执行过）", len(_tool6b.calls) == 1, str(_tool6b.calls))
+check("**没有**打回（零改动轮的如实说明不算改动否认）",
+      ("gate", "replan") not in [(n, e) for n, e, _ in _ev6b]
+      and ("gate", "fallback") not in [(n, e) for n, e, _ in _ev6b],
+      str([(n, e) for n, e, _ in _ev6b]))
+check("  最终回复就是那句如实说明（没被兜底换掉）",
+      (_out6b["messages"][-1].content or "").strip() == _NOOP_TEXT)
+
+print("\n⑦ 零改动重复不再重跑（用户原话：「第二轮连调三次工具」）")
+# 现场（trace `20260930T192824`）：`add_favorite(23)` 零改动返回后，planner **拿不到
+# "目标已达成"这个事实**，连规划 4 轮同一件、每轮各执行一次（每次都是零改动），
+# 12.5 秒 / 5 次 LLM 换来一个"什么都没发生"。判据 = 工具自报的 noop 证书（execute 落进
+# `noop_specs`）⇒ 同一件零改动的 spec 第二次点名不再执行。
+_out7, _llm7, _tool7, _ev7 = _run([_PLAN_NOTICE, _PLAN_NOTICE, _PLAN_CHAT],
+                                  [_NOOP_TEXT],
+                                  user_msg="猫咪我的未读信息全部就标记为已读",
+                                  tool_name="read_notifications",
+                                  fake=_FakeNoopNoticeTool())
+check("脚本足够跑完这一轮", _llm7.exhausted == [], str(_llm7.exhausted))
+check("同一件零改动的写**只执行了一次**（第 2 轮规划被确定性地剔掉了）",
+      len(_tool7.calls) == 1, f"执行了 {len(_tool7.calls)} 次：{_tool7.calls}")
+check("  拦截事件落了 trace（reason=noop_repeat，判据可回溯）",
+      ("planner", "intercept") in [(n, e) for n, e, _ in _ev7]
+      and any(e == "intercept" and d.get("reason") == "noop_repeat"
+              for n, e, d in _ev7),
+      str([(n, e, d.get("reason")) for n, e, d in _ev7 if e in ("intercept",)]))
+check("  收尾注记把「零改动」说清楚（narrator 才不会两头都敢说）",
+      "状态本来就是目标值" in (parse_plan(_out7.get("plan", ""))["note"] or ""),
+      repr((parse_plan(_out7.get("plan", ""))["note"] or "")[:60]))
+check("最终回复是那句如实说明",
+      (_out7["messages"][-1].content or "").strip() == _NOOP_TEXT)
+
+print("\n⑦b 负锁：**真改过**的同一件 spec 不受这条裁剪管辖（换的是事实，不是工具名）")
+# 与 ⑦ 只差工具返回：这次是真的标了 4 条。第二轮的同一件 spec **照旧放行**——
+# 裁剪键的是工具自己声明的"零改动"，不是"这个签名出现过"（后者会把"再来一次"
+# 这种合法的新请求一并吞掉）。
+_out7b, _llm7b, _tool7b, _ev7b = _run([_PLAN_NOTICE, _PLAN_NOTICE, _PLAN_CHAT],
+                                      [_TRUTH_WRITE],
+                                      user_msg="猫咪我的未读信息全部就标记为已读",
+                                      tool_name="read_notifications",
+                                      fake=_FakeNoticeTool())
+check("脚本足够跑完这一轮", _llm7b.exhausted == [], str(_llm7b.exhausted))
+check("真改过的那件第二轮**照旧执行**（只有零改动的才被剔）",
+      len(_tool7b.calls) == 2, f"执行了 {len(_tool7b.calls)} 次")
+
+print("\n⑧ 判据的两个零件各自可验（纯函数，不经过图）")
+# `_has_real_change` 是**前提**：有写回执、且那条回执不在 noop 里。
+_SIG = ["add_favorite", '{"article_id": "23"}']
+check("  写回执 + 不在 noop 里 ⇒ 真有改动",
+      g._has_real_change([{"tool": "add_favorite", "args": {"article_id": 23}}], []))
+check("  同一条回执但工具自报零改动 ⇒ **不算**真有改动",
+      not g._has_real_change([{"tool": "add_favorite", "args": {"article_id": 23}}], [_SIG]))
+check("  只有只读回执 ⇒ 不算真有改动（读不改变任何东西）",
+      not g._has_real_change([{"tool": "search_notes", "args": {"keyword": "x"}}], []))
+check("  `noop_specs` 缺失（老 state / 未声明）⇒ 写回执全按「真改动」从严判",
+      g._has_real_change([{"tool": "add_favorite", "args": {"article_id": 23}}], None))
+check("  谓词的**前提**真的挡在前面：没有真改动时，同一句否认不成立",
+      g._change_denial_claim("这一轮什么都没改喵", True)
+      and not g._change_denial_claim("这一轮什么都没改喵", False))
+check("  多件轮里如实说**其中一件**没改不在此列（无本轮作用域标记）",
+      not g._change_denial_claim("额度那条没有改动，留言那条已经通过了", True))
+check("  逐字段的如实报告不在此列（「颜色：这次没改」——作用域是那一格、不是整轮）",
+      not g._change_denial_claim("**颜色**：这次没改，名字和父级都已经换好了", True)
+      and not g._change_denial_claim("- **颜色**：这次没改", True)
+      and not g._change_denial_claim("这次跳转没有带动画", True))
+check("  但带量词的整轮否认照样命中（裸「改」只是被量词锚定，不是被删掉）",
+      g._change_denial_claim("这次一个字节都没改喵", True)
+      and g._change_denial_claim("这一轮什么都没改", True))
+check("  引号里转述不算 narrator 自己的声称（调用方剥引号后判）",
+      not g._change_denial_claim(g._strip_quoted_spans("留言里写着「这一轮什么都没改」"),
+                                 True))
+# `_trim_noop_specs`：签名按 `_spec_signature` 归一（与回执侧同源）。
+_P70 = {"skill": "notice_read", "tools": ["read_notifications({'all': True})"],
+        "params": {"all": True}, "note": ""}
+check("  签名在 noop 里 ⇒ 剔除",
+      g._trim_noop_specs(_P70, [list(g._spec_signature(
+          "read_notifications", {"all": True}))]) is not None)
+check("  签名不在 noop 里 ⇒ 一件都不剔（返回 None，计划原样走）",
+      g._trim_noop_specs(_P70, [list(g._spec_signature(
+          "read_notifications", {"all": False}))]) is None)
+check("  剔空之后 PARAMS 同步剔（两行不一致 = narrator 只能猜到底做了没有）",
+      (g._trim_noop_specs(
+          {"skill": "notice_read", "tools": ["read_notifications({'all': True})"],
+           "params": {"all": True, "tools": ["read_notifications",
+                                             "list_notifications"]}, "note": ""},
+          [list(g._spec_signature("read_notifications", {"all": True}))])[0]["params"]
+       .get("tools")) == ["list_notifications"])
 
 
 print()

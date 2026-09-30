@@ -296,6 +296,18 @@ class AgentState(TypedDict):
     done: bool
     executed: list[str]
     receipts: list[dict]
+    # noop_specs: 本轮**零改动**的那些 spec 的归一化签名（`_spec_signature` 的字符串形，
+    #             20260930）——事实源是工具自己的 `meta["noop"]`（工具在"状态本来就是
+    #             目标值、一个字节都没改"时声明），execute 落这里。两个读端：
+    #               · gate 洞⑩：本轮有**非** noop 的写回执、叙述却说"这一轮什么都没改"
+    #                 ⇒ 把一次真的发生了的改动说成没发生；
+    #               · planner 零改动重复裁剪：同一件零改动的事再点名一次不重跑
+    #                 （trace `20260930T192824` 实证连跑 4 轮同一件 add_favorite）。
+    #             **不放进 receipts**：回执是 Python 写 / Rust 读的跨语言契约，键集受
+    #             `_RCPT_META_KEYS` 白名单管，加一个键要同步 Rust 侧（本批零 Rust 改动）。
+    #             **必须显式声明**（理由同 fallback_text：未声明的 key 会被 LangGraph
+    #             静默丢出 updates 流 ⇒ 两个读端恒收到空表、判据静默失效）。
+    noop_specs: list[str]
     blocked: list[dict]
     blocked_seen: list[str]
     blocked_repeat: bool
@@ -2304,6 +2316,89 @@ def _false_negative_claim(reply: str, receipts_exist: bool) -> bool:
     return _clause_hits(reply, _NO_EXEC_CLAIM_RE, _NO_EXEC_EXEMPT_RE)
 
 
+# ── gate 洞⑩：有帧轮里把**真的发生了的改动**说成没发生（20260930）────────────
+# 洞③ 的镜像。洞③ 治"没做却说做了"（假阳性声称），这一条治"做了却说没做"。
+#
+# 事故实证（trace `20260930T192729_1`，uid=1 真主人）：主人点「确定」那一轮，
+# `read_notifications` **真的执行了**，回执写着「已把 **1 条**通知标记为已读（现在未读：
+# 通知 0 条 / 私信 0）」（checker PASS、frames=1），叙述却说
+# 「通知这边其实**本来就没有未读的**，所以这一轮没有可标记的、什么都没改」——
+# 主人据此以为站内什么都没发生（他刚亲手点的确定）。
+#
+# 根因在**技能回复契约**（`skills.py` 的 notice_read/message_read 把「返回「本来就是
+# 已读」「本来就没有未读的」就说没有可标的、什么都没改」摆在那里：那是一句**可抄的
+# 否认句**，而成功回执的尾巴「现在未读：通知 0 条」与 no-op 的读数长得一样）⇒ 模型套
+# 了 no-op 那一支。契约措辞已同步改（判据从"匹配返回里的字"改成"看标了几条"），本判据
+# 是**兜底**：措辞只能降低概率，兑现轮说反话必须拦得住。
+#
+# 判据（两条同时成立，缺一不可）：
+#   ① **本轮有"真的改了东西"的写回执**（事实来自 execute 落下的 `noop_specs`：工具声明
+#      了 `meta["noop"]` 的那些是零改动，其余写回执都算真改动）；
+#   ② 叙述里有**带本轮作用域标记的零改动声称**（"这一轮没有可标记的 / 本轮什么都没改 /
+#      本次没有任何改动"）。
+#
+# ② 要求作用域标记是刻意的（照 洞③ 的形态）：多件轮里如实说"额度那条没有改动"是**真话**
+# （那一件确实是 no-op、没有作用域标记），不许误伤；只有"把整轮说成零改动"才是矛盾。
+# 也不认单独的"本来就没有未读的"——那句的作用域靠上下文，宁漏勿误（契约侧已治它）。
+_NO_CHANGE_CLAIM_RE = re.compile(
+    r"(?:本轮|这轮|这一轮|本次|这次|刚才|刚刚)[^。！？\n]{0,20}(?:没有|没|未)(?:有)?"
+    r"(?:做|执行|发出|发)?[^。！？\n]{0,4}(?:任何|一点|半点|什么)?"
+    r"(?:改动|变动|变化|变更|修改|写请求|请求)"
+    # 裸「改」**必须由量词锚定**（"这次一个字节都没改"），不给它单开一支：逐字段的
+    # 如实报告里"**颜色**：这次没改"会被裸「改」整句捞走 ⇒ 把真话判成谎（20260930
+    # 全量真实 trace 复扫实测两条：`20260922T005408` / `20260922T005419`，工具真改了
+    # 标签的父级，叙述只是如实说"颜色"那一格这次没动）。
+    # 裸「动」同理不要——"这次跳转没有带动画"会被上面 `{0,4}` 那格吃成"没有带 + 动"
+    # （同一次复扫实测）。整轮的全称否认由第三支兜（"什么都没×"），它要求作用域标记
+    # 与"什么都没"同现，比放一个裸动词紧得多。
+    r"|(?:本轮|这轮|这一轮|本次|这次|刚才|刚刚)[^。！？\n]{0,20}"
+    r"(?:一个字节|一个字|一丁点|丝毫|一点|半点|任何)[^。！？\n]{0,6}改"
+    r"|(?:本轮|这轮|这一轮|本次|这次)[^。！？\n]{0,16}(?:没有|没|未)(?:有)?可[^。！？\n]{0,6}的"
+    r"|(?:本轮|这轮|这一轮|本次|这次)[^。！？\n]{0,24}什么都没(?:改|做|动|变)"
+)
+
+
+def _has_real_change(receipts, noop_specs) -> bool:
+    """本轮是否有**真的改动了东西**的写回执（洞⑩ 的前提，见 `_NO_CHANGE_CLAIM_RE`）。
+
+    事实源是 execute 落下的两样东西，**不读叙述**：
+      · `receipts` = checker 验收过（PASS）的执行回执；取其中**写族**那些
+        （`authz.required_scope(tool)` 落在 `authz.WRITE_SCOPES` 里）；
+      · `noop_specs` = 其中工具自己声明了 `meta["noop"]` 的（状态本来就已是目标值、
+        一个字节都没改，见 AgentState 里该字段的长注）。
+
+    有写回执、且至少有一条不在 noop 里 ⇒ 这一轮真的改了东西。签名走 `_spec_signature`
+    （与 receipts / 剪裁 / planner 的去重判据同一份归一化，别在这里另写一套）。
+    """
+    # `noop_specs` 里存的是 `list(_spec_signature(...))`（state 要能 JSON 序列化），
+    # 比较前还原成 tuple —— 就地拿 list 建 set 会因为不可哈希当场炸。
+    noop = {tuple(s) for s in (noop_specs or [])}
+    for r in (receipts or []):
+        if not isinstance(r, dict):
+            continue
+        name = r.get("tool")
+        if not name or authz.required_scope(name) not in authz.WRITE_SCOPES:
+            continue
+        if _spec_signature(name, r.get("args") or {}) not in noop:
+            return True
+    return False
+
+
+def _change_denial_claim(reply: str, has_real_change: bool) -> bool:
+    """有帧轮的"这一轮什么都没改"**假阴性**声称（见 _NO_CHANGE_CLAIM_RE）。
+
+    `has_real_change` 由调用方按 `receipts × noop_specs` 判（见该正则上方长注）。
+
+    豁免复用 洞③ 的 `_NO_EXEC_EXEMPT_RE`：这里要豁免的是**条件/疑问框架**
+    （"要是这一轮没有改动，我就…"）、以及"没有/没"在子句里本来就是这个意思的句子
+    ——本判据的命中本身就是否定句，用 `_STATE_ACTION_EXEMPT_RE` 那种收"没/未"的表
+    等于全豁免（洞③ 已经踩过同一个坑，见它上方那段注释）。
+    """
+    if not has_real_change:
+        return False
+    return _clause_hits(reply, _NO_CHANGE_CLAIM_RE, _NO_EXEC_EXEMPT_RE)
+
+
 # ── gate 1b：逐字复读上一轮回复（20260920）──────────────────────────────────
 # 纪律 11（"绝不把历史里自己的回复原文再输出一遍"）只是**软约束**，压不住：
 # 20260920 实证 narrator（温度 0.7）在"本轮用户消息模糊 + 上下文里摆着上轮一份
@@ -2848,7 +2943,8 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                  exec_search_evidence: bool = False,
                  has_popup: bool = False,
                  ledger: dict | None = None,
-                 receipts: list | None = None) -> tuple[str, str, str] | None:
+                 receipts: list | None = None,
+                 noop_specs: list | None = None) -> tuple[str, str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本, **被否掉的那一句**)；有据/无声称 → None。
 
@@ -2867,6 +2963,12 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
       - 任何轮：台账否认（_ledger_denial，洞⑦，20260924）——待确认的提议就在 system
         上下文里摆着，回复却说"系统里没有生成待确认的指令"；同样与帧无关。
         只判**待确认**那一半（执行台账的否认实测会误伤，见该判据上方长注）
+      - 任何轮：**改动否认**（_change_denial_claim，洞⑩，20260930）——洞⑨ 的镜像：
+        这一轮**真的改了东西**（receipts 里的写回执，且不是工具自报的 `noop`），
+        回复却说"这一轮没有可标记的 / 什么都没改"。与帧无关，故同样在这行之前；
+        事实 premise 由 `_has_real_change(receipts, noop_specs)` 给（缺 `noop_specs`
+        ⇒ 全部写回执都算真改动——那是**从严**方向，与"宁漏勿误"相反但更安全：
+        只有工具显式声明零改动的才豁免）
 
       - 零工具轮（不分技能）：操作完成声称（_STATE_ACTION_CLAIM_RE，洞①）与
         站内检索声称（_site_search_claim，洞②）——零帧 = 本轮什么都没发生，
@@ -2920,6 +3022,15 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         ledger_span = _ledger_denial_clause(_strip_quoted_spans(reply), True)
         if ledger_span:
             return ("ledger_denial", _fallback_ledger_denial(ledger), ledger_span)
+    # 洞⑩（20260930）：把**真的发生了的改动**说成没发生。同样**与帧无关**——它否认的
+    # 是本轮已经落地的事实，不是"有没有干活"，故也在 `if frames_exist: return None`
+    # 之前（有帧轮恰恰是它唯一能出事的场合：零帧轮的同类否认由洞①/洞⑨ 那两族兜）。
+    # 前提 `has_real_change` 由 receipts × noop_specs 判（见 `_has_real_change`）。
+    # 引号内是转述（留言正文里"没有改动"这种字面），照上面同样的规矩剥掉。
+    if _change_denial_claim(_strip_quoted_spans(reply),
+                            _has_real_change(receipts, noop_specs)):
+        return ("write_change_denial", _FALLBACK_WRITE_CHANGE_DENIAL,
+                _claim_clause(_strip_quoted_spans(reply), _NO_CHANGE_CLAIM_RE) or "")
     if frames_exist:
         return None  # 帧存在：声称有据（err 帧/确认帧/具名/检索族场景由 gate_node 兜）
     # 引号内是被转述的访客留言/说说正文，不算 narrator 自己的声称（20260913：
@@ -3066,6 +3177,16 @@ _FALLBACK_SYS_FETCH_CLAIM = (
     "喵呜……主人，我得纠正自己一句：这一轮系统**没有再取一次数据**，我刚才说的"
     "『系统重新拉了一遍』是我口胡的，拿它当证据更是不对的。要我现在真去取一次吗？"
     "说一声我马上让系统去取，取回来的我照原样念给你喵。")
+# 洞⑩（20260930）：**真的改了东西却说没改**——上面几条的镜像（那些治的是"没做却说
+# 做了"）。事故现场：主人点「确定」，`read_notifications` 真执行、回执写着「已把 **1 条**
+# 通知标记为已读」，narrator 却说「本来就没有未读的…什么都没改」——主人刚亲手点的确定，
+# 被告知站内什么都没发生。文案因此**反过来**：如实承认这一轮真办成了，并把"改成什么样"
+# 交给系统记录（**不替它报读数**——它瞎报的「未读 0 封」是同一族的病，见 `_FALLBACK_WRITE_DONE`
+# 的头注）。同样只否认**被否掉的那一句**，不给整轮下"什么都没发生"的断言。
+_FALLBACK_WRITE_CHANGE_DENIAL = (
+    "喵呜……主人，我得纠正自己一句：这一轮系统**是真的动手办了并复核通过了**，我刚才"
+    "那句『本来就没有』『这一轮什么都没改』说反了——回执就摆在上面，改的是什么以系统"
+    "记录为准 :犯错: 要不要我把这一轮实际改的内容按记录念一遍给你？")
 # 有帧轮的两个变体（20260921）。上面两条文案都断言行"系统没有任何工具执行"，
 # 而它们在 5c/5d 上**每一次命中都与回执矛盾**：5c 的 `_phantom_tool_claim` 在
 # `not executed` 时直接返回 None（只在真有执行的轮才可能命中）、5d/5f 整段位于
@@ -3281,6 +3402,7 @@ _REPLAN_ISSUES = frozenset({
     # "零帧轮声称表的每一族都在本表里"当锁——新网忘了挂号，离线套件当场红。
     "sys_write_claim_without_tool",      # 洞⑨：'这一轮系统真的办成了：…已标记为已读'而无帧
     "sys_fetch_claim_without_tool",      # 第三人称取数声称（'系统又重新拉了一遍'）而无帧
+    "write_change_denial",               # 洞⑩：真改了东西却说"这一轮什么都没改"（反向的假话）
 })
 
 # 打回提示里"两条出路"的措辞**按族分**：同一句"去查一遍"写给写族是**指错路**
@@ -3306,6 +3428,16 @@ _REPLAN_ADVICE = {
         "**不许**替系统声称取过数据（「系统又重新拉了一遍」）——除非本轮真的有对应的"
         "工具帧。",
     ],
+    # 洞⑩ 是上一条的**镜像**：写**真的发生了**，被说成了没发生。这里的方向不是
+    # "再去做一遍"（做了也没有用：状态已经是目标值），而是**照回执如实说**。
+    "write_change_denial": [
+        "- 这一轮**已经办成了**：回执就在上方的工具返回里（写着标了几条 / 从什么变成"
+        "什么）。照它如实报告就好，**不需要再执行一次**；",
+        "- 念的必须是回执里印出来的数与状态，**不许自己编一个读数**，也不许把主人刚"
+        "亲手确认过的事说成没发生。",
+        "**不许**出现「本来就没有」「没有可标的」「这一轮什么都没改」这类说法——"
+        "除非回执里那一件写明了**零改动**（本来就是目标状态）。",
+    ],
 }
 _REPLAN_ADVICE_DEFAULT = [
     "- 这类问题**要用工具去查**（站内有没有某篇文章/某条留言/某个说法 → 选检索类技能，"
@@ -3318,6 +3450,16 @@ _REPLAN_ADVICE_DEFAULT = [
 
 _REPLAN_NOTE_MARK = "[打回重规划]"
 
+# 「否定的原因」第二行按 issue 分：默认那份写的是"这一轮一个工具都没有执行"——那是
+# 其余各族的共同前提，**洞⑩ 恰好相反**（写真的执行过并复核通过了，被说成了没发生）。
+# 这一行走在提示词里，写反了就是当着 planner 的面说谎（而它手里正握着那份回执）。
+_REPLAN_WHY = {
+    "write_change_denial":
+        "  而**这一轮是真的执行过并复核通过了的**（回执就在你上方的工具返回里）"
+        "——那句话把已经办成的事说成了没办。",
+}
+_REPLAN_WHY_DEFAULT = "  而**这一轮一个工具都没有执行**——那条结论没有任何依据。"
+
 
 def _replan_note(issue: str, clause: str) -> str:
     """打回时给 planner 的**确定性**提示（零 LLM，见 `_REPLAN_ISSUES` 的长注）。
@@ -3328,7 +3470,8 @@ def _replan_note(issue: str, clause: str) -> str:
 
     "两条出路"那几行按 `issue` 分族取（`_REPLAN_ADVICE`，缺省 = 检索族），写族那份
     因此是**条件句**（"若主人这一轮是在要你办一件事"）：说死"主人要你办这件事"本身
-    就是在替它读意图，而这一层只该给路径、不该给结论。前四行（否定说明）各族同源。
+    就是在替它读意图，而这一层只该给路径、不该给结论。否定说明（前几行）里那句
+    "这一轮有没有执行过"也按 issue 取（`_REPLAN_WHY`）——洞⑩ 与其余各族的前提正好相反。
 
     开头的 `_REPLAN_NOTE_MARK` 是**给代码看的**：这条提示以 SystemMessage 的形式进
     消息流，而 `context._recent_tail` 只渲染 Human/AI 两种角色（SystemMessage 一律
@@ -3339,7 +3482,7 @@ def _replan_note(issue: str, clause: str) -> str:
         "**你上一轮让 narrator 说的那段话已被系统否定、不会展示给用户**。否定的原因：",
         f"- 它写下了「{clause}」这样的结论，" if clause
         else "- 它写下了本轮工具结果里根本没有的结论，",
-        "  而**这一轮一个工具都没有执行**——那条结论没有任何依据。",
+        _REPLAN_WHY.get(issue, _REPLAN_WHY_DEFAULT),
         "现在重新决策（两条出路选一条）：",
         *_REPLAN_ADVICE.get(issue, _REPLAN_ADVICE_DEFAULT),
     ])
@@ -4337,6 +4480,31 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         record("planner", "intercept", reason="read_repeat", dups=done_specs,
                redirected=True)
 
+    # 零改动重复裁剪（20260930，见 `_trim_noop_specs` 头注）：本轮**已经执行过**、
+    # 且工具自报"状态本来就是目标值"（`meta["noop"]`）的那一件不再重跑——它不算
+    # "另一件事"，而是**已经完成**。放在只读裁剪之后：那一条管"取过了"，这条管
+    # "改了等于没改"，两者的事实来源不同、互不覆盖。
+    trim_noop = _trim_noop_specs(plan_obj, state.get("noop_specs"))
+    if trim_noop is not None:
+        plan_obj, noop_done = trim_noop
+        if not plan_obj["tools"]:
+            logger.info("[planner] 零改动重复（%s）→ 收尾不重跑",
+                        "、".join(_tool_name(s) for s in noop_done))
+            plan_obj = _wrap_up_plan(
+                True, "这一件本轮已经执行过了，工具返回的是**状态本来就是目标值**"
+                      "（零改动、没有发出写请求）——所以它是**已经达成**的状态，不是"
+                      "还没做：照工具返回如实说明现在就是这个状态即可。**不许**说成"
+                      "刚改好，也不许说成没办成或被拦下了。")
+            record("planner", "intercept", reason="noop_repeat", dups=noop_done,
+                   redirected=False)
+            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
+                    "done": False}
+        logger.info("[planner] 零改动重复（%s）→ 从本轮清单剔除，只执行 %s",
+                    "、".join(_tool_name(s) for s in noop_done),
+                    "、".join(_tool_name(s) for s in plan_obj["tools"]))
+        record("planner", "intercept", reason="noop_repeat", dups=noop_done,
+               redirected=True)
+
     logger.info("[planner] skill=%s params=%s tools=%s（round %d/%d）",
                 plan_obj["skill"], plan_obj["params"], plan_obj["tools"], rounds + 1,
                 MAX_PLAN_ROUNDS)
@@ -4499,6 +4667,70 @@ def _trim_done_reads(plan_obj: dict, receipts) -> tuple[dict, list[str]] | None:
     old_note = (plan_obj.get("note") or "").strip()
     tail = (f"{why} 本轮已取回，不重复取（返回就在上方工具返回里）；"
             "其余按清单继续，全部基于已有返回如实作答")
+    fresh["note"] = f"{old_note}｜{tail}" if old_note else tail
+    return fresh, dropped
+
+
+def _trim_noop_specs(plan_obj: dict, noop_specs) -> tuple[dict, list[str]] | None:
+    """把**本轮已经执行过、且工具自报零改动**的 spec 从 TOOLS 行剔除（纯函数，20260930）。
+
+    要治的病（用户上线后报告，trace `20260930T192824` 实证）：主人说「收藏这一篇」，
+    `add_favorite(23)` 执行 → 工具如实返回「本来就在你的收藏夹里，无需改动（没有发出
+    写请求）」→ checker PASS → planner **拿不到"目标已达成"这个事实**，下一轮照着同一件
+    事再规划一次……连跑 **4 轮**（每轮各一次同一调用、每次都零改动），直到轮次上限才
+    收场。12.5 秒 / 5 次 LLM，换来一个"什么都没发生"。
+
+    既有四道去重守卫都够不着它：`EXECUTED_ONCE_SKILLS` 刻意只收**幂等技能**（教条见该
+    集合上方注释，收藏两件不在内）；`_trim_done_reads` 刻意**只动只读**（写族的"再来
+    一次"可能是另一件事）；`_already_done_writes` 只在技能进白名单时生效；search 那条
+    只管 content_query。
+
+    判据 = **工具自己声明的零改动证书**（`meta["noop"]`，execute 落进 `noop_specs`）。
+    与上面几条的分别在于事实来源：那几条判"这件事做过没有"，这条判"做了等于没做"——
+    状态**本来就已是目标值**，所以"再来一次"在语义上是**已经完成**，不是"另一件事"。
+    （这正是它敢动写族的原因：会不会改由工具自己说了算，不由我们猜。）
+
+    剔除的 spec 与 PARAMS 同步（`calls`/`tools` 两份，同 `_trim_done_reads`）；
+    一件都没剔 → None。剔空时 `tools` 为空，由调用方决定收尾——本函数不判"要不要收尾"。
+    """
+    if not (plan_obj.get("tools") and noop_specs):
+        return None
+    # `noop_specs` 里存的是 `list(_spec_signature(...))`（state 要能 JSON 序列化），
+    # 比较前还原成 tuple（就地拿 list 建 set 会因为不可哈希当场炸）。
+    noop = {tuple(s) for s in noop_specs}
+    kept, dropped, drop_sigs, drop_names = [], [], set(), set()
+    for s in plan_obj["tools"]:
+        name = _tool_name(s)
+        args, ok = _tool_args(s)
+        if ok and _spec_signature(name, args) in noop:
+            dropped.append(s)
+            drop_sigs.add(_spec_signature(name, args))
+            drop_names.add(name)
+        else:
+            kept.append(s)
+    if not dropped:
+        return None
+    fresh = dict(plan_obj)
+    fresh["tools"] = kept
+    params = dict(plan_obj.get("params") or {})
+    calls = params.get("calls")
+    if isinstance(calls, list):
+        params["calls"] = [
+            c for c in calls
+            if not (isinstance(c, dict)
+                    and _spec_signature(c.get("tool"), c.get("args") or {}) in drop_sigs)]
+    names = params.get("tools")
+    if isinstance(names, list):
+        params["tools"] = [n for n in names if n not in drop_names]
+    fresh["params"] = params
+    why = "、".join(_tool_name(s) for s in dropped)
+    old_note = (plan_obj.get("note") or "").strip()
+    # 注记必须把**这一件为什么不算数**说清楚，否则 narrator 拿到"零改动"的返回会两头
+    # 都敢说：说成"刚给你改好了"（改了这一轮没发生）或说成"被拦下了/办不了"（目标其实
+    # 已达成）。措辞只写工具返回里印着的那件事。
+    tail = (f"{why} 本轮已执行过，工具返回的是**状态本来就是目标值**"
+            "（零改动、没有发出写请求），不重复执行；照返回如实说明现在就是这个状态，"
+            "不许说成刚改好、也不许说成没办成")
     fresh["note"] = f"{old_note}｜{tail}" if old_note else tail
     return fresh, dropped
 
@@ -7148,6 +7380,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         return dict(body, messages=[], receipts=list(state.get("receipts") or []))
     results: list = []
     receipts = list(state.get("receipts") or [])  # 请求内累计（与 executed 同模式）
+    noop_specs = list(state.get("noop_specs") or [])  # 请求内累计的零改动签名（见 AgentState）
     blocked: list = []                            # 只含本轮受阻项（路由/reflector 用）
     prev_seen = set(state.get("blocked_seen") or [])  # 本轮之前的受阻「键」集（见下）
     tool_data = list(state.get("tool_data") or [])    # 参数引用的取值源（请求内累计）
@@ -7390,6 +7623,14 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             if act:
                 rcpt["action"] = act
             receipts.append(rcpt)
+            # 零改动的事实（20260930）：工具自己声明 `meta["noop"]`（"状态本来就是目标
+            # 值、一个字节都没改"），execute 只**记账**、不做任何判断——判据在两处读端
+            # （gate 洞⑩ / planner 零改动重复裁剪，见 AgentState.noop_specs 的注释）。
+            # 签名走 `_spec_signature`：与 receipts、`_trim_done_reads` 同一份归一化，
+            # 于是 `{"article_id": 23}` 与回执里的 `{"article_id": "23"}` 是同一件事。
+            if out_meta.get("noop"):
+                noop_specs.append(list(_spec_signature(name, rcpt["args"])))
+                record("execute", "noop", tool=name, args=rcpt["args"])
         else:
             blocked.append({"spec": spec, "tool": name, "reason": reason,
                             "result": str(out)[:300]})
@@ -7419,7 +7660,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     repeat = any(_blocked_key(b) in prev_seen for b in blocked)  # 同键二次受阻 = 重试已败/链断
     updates = {"messages": results,
                "executed": executed + [s for s in specs if s not in executed],
-               "receipts": receipts, "blocked": blocked,
+               "receipts": receipts, "noop_specs": noop_specs, "blocked": blocked,
                "blocked_seen": sorted(prev_seen | {_blocked_key(b) for b in blocked}),
                "blocked_repeat": repeat, "tool_data": tool_data}
     if not blocked:
@@ -7874,7 +8115,8 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     issue = _claim_issue(reply, plan["skill"], plan, bool(frames),
                          _has_exec_memory(msgs, state.get("ledger")), _exec_memory_has_search(msgs),
                          has_popup=bool(state.get("pending_confirm")),
-                         ledger=state.get("ledger"), receipts=receipts)
+                         ledger=state.get("ledger"), receipts=receipts,
+                         noop_specs=state.get("noop_specs"))
     if issue:
         i_name, i_text, i_clause = issue
         return fail(i_name, i_text, plan, len(frames), i_clause)
@@ -8274,7 +8516,8 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
     """
     return {"messages": messages, "plan": "", "plan_obj": {}, "plan_rounds": 0,
             "done": False,
-            "executed": [], "receipts": [], "blocked": [], "blocked_seen": [],
+            "executed": [], "receipts": [], "noop_specs": [],
+            "blocked": [], "blocked_seen": [],
             "blocked_repeat": False, "reflect_rounds": 0, "issues": "",
             "reflect_end": False, "tool_data": [], "fallback_text": "",
             "gate_replan": False, "task_frame": {},
