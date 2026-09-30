@@ -14,6 +14,13 @@ narrator 写下「站内并没有关于或名为且关联西顿学院的详细�
   ③ 重规划**只发生一次**：第二次仍打回时回到确定性兜底，不无限循环；
   ④ `gate_replan` 在终局路径复位（否则 `route_after_gate` 会把收尾轮又送回 planner）。
 
+20260930 补两节（同一条通道的另两个入口）：
+  ④ **洞⑨ 那族**（"这一轮系统真的办成了：…已标记为已读"而无帧）也走重规划——治的是
+     "拦住了谎，事还是没办成"。现场与判据见 `agent/graph.py::_WRITE_DONE_CLAIM_RE`。
+  ⑤ **同步锁**：零帧轮声称表（`_zero_frame_families`）的每一族都得在 `_REPLAN_ISSUES`
+     里。这两张表各写各的，20260930 之前洞⑨ 与第三人称取数那两族**上线时都漏挂了**
+     ——拦住之后直接道歉收尾，而主人那一句本来是要它动手的。
+
 用法：.venv/bin/python tests/test_gate_replan.py
 """
 
@@ -83,6 +90,18 @@ class _FakeTool:
         return _base.ok("找到 1 篇：《西顿学院小记》（正文节选）")
 
 
+class _FakeNoticeTool:
+    """假 read_notifications：只记账、零网络（④ 的写族用）。"""
+
+    def __init__(self):
+        self.name = "read_notifications"
+        self.calls: list = []
+
+    def invoke(self, args):
+        self.calls.append(args)
+        return _base.ok("已把 4 条通知标记为已读（现在未读：通知 0 条 / 私信 0）。")
+
+
 # 两句措辞不同、但都属于"站内没有"结论的叙述——第二句刻意**不逐字重复**第一句，
 # 否则先触发的会是复读闸（`repeat_prev_reply`），而它不在 `_REPLAN_ISSUES` 里，
 # 用例就测不到"重规划只发生一次"这条（会变成"复读直接兜底"的另一回事）。
@@ -95,26 +114,31 @@ _PLAN_SEARCH = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "search_notes
                 '"args": {"keyword": "西顿学院"}}]}')
 
 
-def _run(plans: list, narrations: list):
-    """跑一遍真图，返回 (最终 state, 假 LLM, 假工具, trace 事件列表)。"""
-    llm, tool, events = _ScriptedLLM(plans, narrations), _FakeTool(), []
+def _run(plans: list, narrations: list, user_msg: str = "西顿学院",
+         tool_name: str = "search_notes", fake=None):
+    """跑一遍真图，返回 (最终 state, 假 LLM, 假工具, trace 事件列表)。
+
+    `tool_name` / `fake` 让别的族复用同一台真图（④ 的写族打的是 `read_notifications`，
+    不是检索工具）——**换的只是工具**：图、gate、路由全是生产那一份。
+    """
+    llm, tool, events = _ScriptedLLM(plans, narrations), (fake or _FakeTool()), []
     orig_llm, orig_record = g.get_llm, g.record
-    orig_tool = g._TOOL_MAP.get("search_notes")
+    orig_tool = g._TOOL_MAP.get(tool_name)
     g.get_llm = lambda **kw: llm
     g.record = lambda node, event, **data: events.append((node, event, data))
-    g._TOOL_MAP["search_notes"] = tool
+    g._TOOL_MAP[tool_name] = tool
     try:
         cfg = {"configurable": {"thread_id": "t-gate-replan", "user_id": 5,
                                 "principal": Principal(uid=5),
                                 "conversation_id": 1, "stop_event": None}}
         out = build_graph().invoke(
-            graph_input([HumanMessage(content="西顿学院")]), cfg)
+            graph_input([HumanMessage(content=user_msg)]), cfg)
     finally:
         g.get_llm, g.record = orig_llm, orig_record
         if orig_tool is None:
-            g._TOOL_MAP.pop("search_notes", None)
+            g._TOOL_MAP.pop(tool_name, None)
         else:
-            g._TOOL_MAP["search_notes"] = orig_tool
+            g._TOOL_MAP[tool_name] = orig_tool
     return out, llm, tool, events
 
 
@@ -193,6 +217,64 @@ check("没有 replan 事件（这条通道只在打回时开）",
 check("提示词里不带任何打回说明", all(
     "已被系统否定" not in p for p in _llm3.planner_prompts))
 check("最终回复就是那条叙述", (_out3["messages"][-1].content or "").strip() == _TRUTH)
+
+
+print("\n④ 洞⑨ 那族也走重规划：拦住谎之后**把事办成**，而不是就此道歉收尾")
+# 现场（trace `20260930T123938`，uid=1 真主人）：主人说「我的未读信息全部就标记为
+# 已读」（一条明确的祈使写请求），planner 判 chat 零工具，narrator 回「这一轮系统真的
+# 办成了：你（id=1）的未读站内信已全部标记为已读」——那句还是**抄的**紧邻上一条真办成
+# 那轮的句式。洞⑨ 拦住了这句谎；这一段锁的是拦住之后那一步：不打回重规划的话，主人
+# 看到的是"我刚才那句是编的……要不要我真的去办一遍"——谎没了，事还是没办。
+_LIE_WRITE = ("主人，这一轮系统真的办成了：你的未读站内信已全部标记为已读，"
+              "现在未读是 **0 封**，列表清干净了喵～")
+_TRUTH_WRITE = "主人，4 条未读通知已经真的标记为已读了喵。"
+_PLAN_NOTICE = 'SKILL: notice_read\nPARAMS: {"all": true}'
+_out4, _llm4, _tool4, _ev4 = _run([_PLAN_CHAT, _PLAN_NOTICE, _PLAN_CHAT],
+                                  [_LIE_WRITE, _TRUTH_WRITE],
+                                  user_msg="猫咪我的未读信息全部就标记为已读",
+                                  tool_name="read_notifications",
+                                  fake=_FakeNoticeTool())
+check("脚本足够跑完这一轮", _llm4.exhausted == [], str(_llm4.exhausted))
+check("planner **真的重新决策了一次**（第 2 轮规划存在 = 不是道歉收尾）",
+      len(_rounds(_llm4, 2)) == 1, f"各轮次数={[len(_rounds(_llm4, n)) for n in (1, 2, 3)]}")
+check("重规划那一轮真的把写工具执行了（不是又空跑一轮）——事办成了",
+      _tool4.calls == [{"all": True}], str(_tool4.calls))
+check("  打回提示给的是**写族**的出路（去动手），不是检索族那套（去查）",
+      bool(_rounds(_llm4, 2)) and "该动手就去动手" in _rounds(_llm4, 2)[0]
+      and "选检索类技能" not in _rounds(_llm4, 2)[0],
+      (": ".join(_rounds(_llm4, 2)[0].splitlines()[-4:])[:160]
+       if _rounds(_llm4, 2) else "第 2 轮提示词不存在"))
+check("最终回复是重办之后那条有依据的叙述",
+      (_out4["messages"][-1].content or "").strip() == _TRUTH_WRITE,
+      repr((_out4["messages"][-1].content or "")[:40]))
+check("被否定的那句**不在**最终 state 里（不留成下一轮的范文）",
+      _LIE_WRITE not in _ai_text(_out4))
+check("没有走兜底（fallback_text 为空、done 为真）",
+      not _out4.get("fallback_text") and _out4.get("done") is True)
+check("trace 里有 gate/replan 事件（判据可回溯）",
+      ("gate", "replan") in [(n, e) for n, e, _ in _ev4],
+      str([(n, e) for n, e, _ in _ev4]))
+
+print("\n⑤ 同步锁：零帧轮声称表的每一族都得挂号（新加一张网忘了加 _REPLAN_ISSUES = 这里红）")
+# 两张表各写各的：`_zero_frame_families` 是"有哪些网"，`_REPLAN_ISSUES` 是"哪些网
+# 打回后值得交回 planner"。20260930 实测两族**上线时都漏挂了**（洞⑨ 与第三人称取数
+# 声称）——拦住之后一步兜底、主人看到的是一句道歉，而那句话正是要它动手的。
+# 锁成"每一族都在"而不是"两边相等"：有帧轮的族（phantom_* 等）本来就不在这张零帧表里。
+_ZF = {f.issue for f in g._zero_frame_families({}, "chat")}
+check("零帧轮声称表非空（表被改名/搬走时这条先红，别让下面那条空转）", len(_ZF) >= 5,
+      str(sorted(_ZF)))
+check("零帧轮声称表的每一族都在 _REPLAN_ISSUES 里",
+      _ZF <= set(g._REPLAN_ISSUES),
+      "漏挂：" + "、".join(sorted(_ZF - set(g._REPLAN_ISSUES))))
+check("_REPLAN_ADVICE 的键都是 _REPLAN_ISSUES 的成员（挂在非成员上 = 读不到的死代码）",
+      set(g._REPLAN_ADVICE) <= set(g._REPLAN_ISSUES),
+      "、".join(sorted(set(g._REPLAN_ADVICE) - set(g._REPLAN_ISSUES))))
+check("建议措辞真按族发：写族拿「去动手」、检索族拿「去查」（接错表 = planner 被指错路）",
+      "该动手就去动手" in g._replan_note("sys_write_claim_without_tool", "x")
+      and "选检索类技能" not in g._replan_note("sys_write_claim_without_tool", "x")
+      and "选检索类技能" in g._replan_note("site_absence_claim_without_tool", "x"))
+check("  没写建议的族退回缺省那一份（新增 issue 不会拿到半截提示）",
+      "选检索类技能" in g._replan_note("这个 issue 不存在", "x"))
 
 
 print()
