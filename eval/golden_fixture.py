@@ -20,13 +20,16 @@
 不在任何人的授权串里（生产写必须点名「库名+迁移文件」）。这条纪律有**测试机械守着**
 （`tests/test_golden_fixture.py` 的源码扫描节：本文件里出现凭据读取/写方法即判红）。
 
-## 两族夹具与本文件的分派角色（20260926）
+## 三族夹具与本文件的分派角色（20260926；20261001 加留言族）
 
-夹具现在有两族，`requires_fixture_kind` 说明是哪一族（**不写就是分类族**）：
+`requires_fixture_kind` 说明是哪一族（**不写就是分类族**）：
 
     category  `agent_fixture_category_*`  公开分类列表里读得到 ⇒ 本文件（零凭据）
     account   `agent_fixture_freeze_*`    后台账号名录里读得到 ⇒ `golden_fixture_account.py`
                                           （只读管理员身份，为什么非带不可见那边头注）
+    board     `agent_fixture_*` 的留言正文  后台留言清单里读得到 ⇒ `golden_fixture_board.py`
+                                          （同上；**待审态**是族约定——公开接口只放行
+                                          approved=1，用例要动的那一行只在后台视图里）
 
 两个跑法的夹具闸都收在本文件的 `gate()` 里（此前各写一份、靠注释维持"口径一致"）；
 本文件自己**仍然不读任何带身份的东西**——账号族那条读路径在那个模块里，这里只是按 kind
@@ -137,7 +140,7 @@ def verify(titles: list[str] | None) -> tuple[int, list[str]]:
 # 分派与本模块的零凭据纪律**不冲突**：本模块自己不读任何带身份的东西——账号族那条读路径
 # 在 `golden_fixture_account.py`（要一个只读管理员身份，理由见那边头注），这里只是按
 # `requires_fixture_kind` 挑模块。
-FIXTURE_KINDS = ("category", "account")
+FIXTURE_KINDS = ("category", "account", "board")
 
 
 def snapshot(kind: str):
@@ -150,6 +153,9 @@ def snapshot(kind: str):
     if kind == "account":
         import golden_fixture_account  # 局部导入：只在真有账号族用例时才拉那条读路径
         return golden_fixture_account.directory()
+    if kind == "board":
+        import golden_fixture_board   # 同上（待审留言公开读不到，得走后台清单那条只读路径）
+        return golden_fixture_board.board()
     if kind == "category":
         return category_titles()
     raise SystemExit(f"golden 用例声明了未知的 requires_fixture_kind={kind!r}"
@@ -157,10 +163,13 @@ def snapshot(kind: str):
 
 
 def state_of(kind: str, name: str, snap) -> str:
-    """按族判 `present` / `absent` / `wrong_state` / `unreadable`（`wrong_state` 只有账号族）。"""
+    """按族判 `present` / `absent` / `wrong_state` / `unreadable`（`wrong_state` 只有两族带身份的）。"""
     if kind == "account":
         import golden_fixture_account
         return golden_fixture_account.fixture_state(name, snap)
+    if kind == "board":
+        import golden_fixture_board
+        return golden_fixture_board.fixture_state(name, snap)
     return fixture_state(name, snap)
 
 
@@ -169,6 +178,9 @@ def skip_reason(kind: str, name: str, state: str) -> str:
     if kind == "account":
         import golden_fixture_account
         return golden_fixture_account.state_label(state, name)
+    if kind == "board":
+        import golden_fixture_board
+        return golden_fixture_board.state_label(state, name)
     if state == "absent":
         return ("夹具不在位（公开分类列表里没有它——先按授权串跑 "
                 "scripts/migration/golden_write_fixture_20260925.sql）")
