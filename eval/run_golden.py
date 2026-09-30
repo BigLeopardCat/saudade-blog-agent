@@ -848,10 +848,11 @@ GOLD_ASSERT_KEYS = frozenset({
     "require_frame_prefix", "forbid_frame_prefix", "forbid_fallback",
     # 确认卡片载荷（20260925）：从 __CONFIRM__ 帧的令牌里解出的技能/参数条数
     "require_confirm_payload",
-    # 待办台账（20260930，批 H 的两个新表面）：`planner.ledger_frame` 事件在不在、
-    # 卡片上的台账编号出不出自本轮帧。判据与实现同源（`_LEDGER_TARGET_FIELDS`），
-    # 见上面那段的理由。
-    "require_ledger_frame", "require_card_targets_from_ledger",
+    # 待办台账（20260930，批 H 的三个新表面）：`planner.ledger_frame` 事件在不在、
+    # 帧里印没印出编号、卡片上的台账编号出不出自本轮帧。后两条判据与实现同源
+    # （`_LEDGER_TARGET_FIELDS` / `_LEDGER_TAG_FAMILY`），见上面那段的理由。
+    "require_ledger_frame", "require_ledger_rows",
+    "require_card_targets_from_ledger",
     # 跨轮任务状态（20260927 批 D）：本轮的 `__TASK__` 帧写回了什么状态。见下面
     # check_gold 里那段的"为什么是末帧"。
     "require_task_state", "forbid_task_state",
@@ -1119,9 +1120,16 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
             if _tk and _tk in text:
                 fails.append("令牌原文出现在正文里（它是 10 分钟有效的写授权凭据）")
 
-    # 20260930：**台账**的两条新表面（批 H 的 S1/S2，落到 golden 上）。
+    # 20260930：**台账**的三条新表面（批 H 的 S1/S2，落到 golden 上）。
     #   require_ledger_frame —— 本轮必须真的把待办台账摆上桌（trace 有
-    #     `planner.ledger_frame` 事件，且至少印出一个编号）。
+    #     `planner.ledger_frame` 事件）。**只判"摆没摆"**，不管队列空不空：
+    #     它锁的是触发器（这句话提到了这一族 ⇒ 该去读那份队列）与"读到的东西
+    #     真的进了帧"这两件事，而这两件事**与队列里有没有行无关**——0 条时进帧的
+    #     是一句如实的"当前没有任何待审留言"，那同样是"摆上桌了"。
+    #   require_ledger_rows —— 帧里**至少印出一个编号**（有待办行才判得动）。
+    #     与上一条分开的动机：把"没人等着办"与"系统没去读"混成一条断言，
+    #     红的时候读不出是哪种——而这两种的可修性完全不同（前者要夹具，
+    #     后者是触发器/渲染链路的缺陷）。
     #   require_card_targets_from_ledger —— 卡片上每一个台账编号，都必须出自**本轮
     #     帧里印的那批**。这是批 H **撤换**的那条判据：旧判据问"目标那段字面出不出自
     #     主人原话"（`_WRITE_NAME_FIELDS` 那一路），自 S2 起**已不是契约**；新契约是
@@ -1137,8 +1145,13 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
         if not _lf_events:
             fails.append("本轮没有 planner.ledger_frame 事件 —— 待办台账**没摆上桌**"
                          "（模型手里没有可决策的目标）")
+    if gold.get("require_ledger_rows"):
+        if not _lf_events:
+            fails.append("本轮没有 planner.ledger_frame 事件 —— 待办台账**没摆上桌**，"
+                         "连「有没有等着办的行」都无从判起")
         elif not _ledger_ids:
-            fails.append(f"台账摆了但一条待办都没有（事件：{_lf_events}）")
+            fails.append(f"台账摆了但一条待办都没有（事件：{_lf_events}）"
+                         "——本键要求帧里至少印出一个编号（要有待办行才判得动）")
     if gold.get("require_card_targets_from_ledger"):
         from agent.adminops import normalize_target_id   # 编号解析的唯一实现
         from agent.graph import _LEDGER_FIELD_FAMILY, _LEDGER_TAG_FAMILY, _LEDGER_TARGET_FIELDS
