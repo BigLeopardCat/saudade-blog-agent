@@ -2377,10 +2377,15 @@ def step18_ledger_zero_write(rep: Report, uid: int, role: str) -> None:
             # 念出台账里的**一件**（id 或原文片段或作者）：S4 那句话写着「把这几件念给他听」
             # 两种 id 写法都收：`talkId:<n>` 是台账帧里印的那种（`_board_label`），
             # `#<n>` 是确认卡问句里印的那种——回话里出现哪一个都算念到了。
+            # 原文片段取 **6 字**（20260930 实测由 10 收到 6）：narrator 会**按自己的话**
+            # 引用一段而不是照抄我们的切片——那次的回复是「那一条“探针临时留言”在等您
+            # 点头处理」，正是内容的前 6 个字，判据却因为它不是前 10 个字而判红。
+            # 这条判据要的是"主人知道说的是哪一件"（相对「要不要处理」这种空问），
+            # 不是在考它抄得准不准；6 字仍能挡住"只有一件待审"式的泛泛而谈。
             owed = []
             for row in _pending_rows(uid, role):
                 t = int(row.get("talkKey") or 0)
-                owed += [f"talkId:{t}", f"#{t}", str(row.get("content") or "")[:10],
+                owed += [f"talkId:{t}", f"#{t}", str(row.get("content") or "")[:6],
                          str(row.get("author") or "")]
             hit = next((w for w in owed if w and w in rp), "")
             print(f"  [{'PASS' if hit else 'FAIL'}] ⑱ 回复里念出了台账里的那几件"
