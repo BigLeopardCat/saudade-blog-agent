@@ -169,6 +169,82 @@ for _c in _cases:
 check("含写工具的清单不许手抄（要写 `@write_console`）", not _hand,
       "；".join(_hand[:5]))
 
+print("\n⑥ 事实前提要落笔，前提变了要响（20261001）")
+# 病根不是"哨兵写错了"，是**没有人问过那个问题**：`note_traffic_denied_visitor` 断言
+# "访客拿不到阅读量"，而八分钟后另一个提交把阅读量挂上了公开列表帧 ⇒ 模型如实按公开
+# 数据排了个榜，判据把它判成幻觉。本节的锁只做两件事：**逼着写**（①）与**写完就能自动
+# 验**（④⑤）——第二件是关键：前提是否还成立，从此在秒级套件里就能回答，不必等夜间跑完
+# 一条一条读回复。
+_rg_root = ROOT
+_want = []          # 必须有 premise_absent 的用例：判据是"在断言做不到"
+for _c in _cases:
+    _golds = [r["gold"] for r in rg.iter_rounds(_c)]
+    if any(g.get("require_denial") for g in _golds):
+        _want.append(_c["id"])
+_missing = [i for i in _want if not any(c["id"] == i and c.get("premise_absent")
+                                        for c in _cases)]
+check(f"断言『做不到』的用例（{len(_want)} 条）都落了笔（premise_absent）",
+      not _missing, "；".join(_missing))
+_bad_role, _bad_fact, _bad_name, _bad_why = [], [], [], []
+from agent.tasks import step_tool_enum  # noqa: E402
+from tools.base import _TOOL_REGISTRY  # noqa: E402
+_registry = {t.name for t in _TOOL_REGISTRY}
+for _c in _cases:
+    _pa = _c.get("premise_absent")
+    if not isinstance(_pa, dict):
+        continue
+    _cid = _c.get("id")
+    if _pa.get("role") not in rg.PREMISE_ROLES:
+        _bad_role.append(f"{_cid}: {_pa.get('role')!r}")
+    if len(str(_pa.get("fact") or "").strip()) < 6:
+        _bad_fact.append(_cid)
+    _sup = _pa.get("suppliers")
+    if not isinstance(_sup, list):
+        _bad_name.append(f"{_cid}: suppliers 不是 list")
+        continue
+    for _t in _sup:
+        if _t in rg.FORBID_TOKENS or _t in _registry:
+            continue
+        _bad_name.append(f"{_cid}: {_t!r}")
+    if not _sup and len(str(_pa.get("why") or "").strip()) < 12:
+        _bad_why.append(_cid)
+    # 同一个角色在用例里有两处（context.role 与 premise_absent.role）——两处都要写时
+    # 必须同值，否则哨兵问的是另一个身份的可达面（判据在别人手里的老毛病）。
+    _ctx_role = (_c.get("context") or {}).get("role")
+    _decl = rg.premise_role(_pa)
+    if _ctx_role and _decl and _ctx_role != _decl:
+        _bad_role.append(f"{_cid}: context.role={_ctx_role} vs premise={_decl}")
+check("role 合法（visitor/user/admin/superadmin）且与 context.role 一致",
+      not _bad_role, "；".join(_bad_role))
+check("fact 是一句真话（≥6 字）", not _bad_fact, "；".join(_bad_fact))
+check("suppliers 里每个名字都是真工具名或哨兵（拼错 = 哨兵永不响）",
+      not _bad_name, "；".join(_bad_name))
+check("suppliers 为空的必须写 why（哨兵判不了，要说明为什么没有清单）",
+      not _bad_why, "；".join(_bad_why))
+
+_kept, _skipped, _rows = rg.check_premises(json.loads(json.dumps(_cases)))
+check("★ 现有语料的事实前提一条都没变（变了会在这里红，不必等夜间）",
+      not _skipped, "；".join(_skipped))
+# 判据的判据：这两条探针证明哨兵**真的会响**。没有它们，"全部 ok" 与"哨兵坏了恒 ok"
+# 长得一模一样——同族教训见 tests/test_confirm.py 的变异锁。
+_probe_hist = [{"id": "note_traffic_denied_visitor",
+                "premise_absent": {"fact": "文章阅读/点赞/收藏的计数与排行", "role": "visitor",
+                                   "suppliers": ["get_note_stats", "list_notes",
+                                                 "get_article_detail", "search_notes",
+                                                 "get_top_notes"]}}]
+_, _s2, _r2 = rg.check_premises(_probe_hist)
+check("历史回归：`note_traffic` 那次的声明喂进来，哨兵当场响（list_notes 是公开工具）",
+      _s2 == ["note_traffic_denied_visitor"] and "list_notes" in _r2[0]["hit"],
+      f"{_s2} / {_r2[0]['hit'][:4]}")
+_probe_reach = [{"id": "self-check",
+                 "premise_absent": {"fact": "探针", "role": "admin",
+                                    "suppliers": ["get_server_status"]}}]
+_, _s3, _r3 = rg.check_premises(_probe_reach)
+check("管理员能取的服务器状态工具，被声明成『管理员拿不到』时也当场响",
+      _s3 == ["self-check"], f"{_s3} / {_r3[0]['hit']}")
+check("哨兵对管理员-角色判可达、对访客判不可达（同一件工具，两个答案）",
+      "get_user_stats" in step_tool_enum("admin") and "get_user_stats" not in step_tool_enum(None))
+
 print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
