@@ -145,6 +145,30 @@ _ghost_gold = [c.get("id") for c in _cases if c.get("rounds") and c.get("gold")]
 check("多轮用例不写顶层 gold（有 rounds 时它一个读者都没有）", not _ghost_gold,
       "；".join(_ghost_gold))
 
+print("\n⑤ 写族清单一律用哨兵，不许手抄（20261001）")
+# 20261001 实测的现状：44 条含 `forbid_tool_calls` 的用例各自手抄一份后台写工具清单，
+# **没有一条是完整的**——缺口完全跟着工具的上线时间走（额度三件与新待办工具 44/44 条
+# 没禁、`send_user_notice` 43/44 没禁、`freeze_account` 36/44 没禁）。判据因此**每上
+# 一个写工具就集体松一寸**，而没有任何东西会说话。哨兵 `@write_console` 把清单的唯一
+# 事实源交回 `authz.TOOL_SCOPE`。这两条锁防的是"手抄清单长回来"：谁再往清单里写一个
+# 具体写工具名，这里当场红，不必等到某个新工具上线后判据静默变松。
+_wc = rg.write_console_tools()
+check("authz.TOOL_SCOPE 里读得到后台写工具（哨兵的单一事实源）", len(_wc) >= 10,
+      f"{len(_wc)} 个")
+_probe = [{"id": "self-check", "gold": {"forbid_tool_calls": ["@write_console"]}}]
+rg.expand_forbid_tokens(_probe)
+check("哨兵展开成完整全集（不是把 token 当字面量比）",
+      len(_probe[0]["gold"]["forbid_tool_calls"]) == len(_wc),
+      f"展开 {len(_probe[0]['gold']['forbid_tool_calls'])} 个 vs 全集 {len(_wc)} 个")
+_hand = []
+for _c in _cases:
+    for _r in rg.iter_rounds(_c):
+        _bad = [t for t in (_r["gold"].get("forbid_tool_calls") or []) if t in _wc]
+        if _bad:
+            _hand.append(f"{_c.get('id')}: {_bad[:3]}")
+check("含写工具的清单不许手抄（要写 `@write_console`）", not _hand,
+      "；".join(_hand[:5]))
+
 print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
