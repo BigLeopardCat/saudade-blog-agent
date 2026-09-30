@@ -62,7 +62,11 @@
     **跑完不复原**（审核端点只有 通过/驳回 两态，没有"退回待审"）。结论为「放行」时默认
     **不点**（会让那条留言立刻对全体访客可见），要验那一段得再给 `--allow-board-publish`；
     同一张卡上的**额度**那一半另有一颗 `--allow-quota-review`（动的是别人的额度），
-    不给就整张卡都不点——卡的每一条都要有它这一族的授权。
+    不给就整张卡都不点——卡的每一条都要有它这一族的授权。额度那半另有
+    `--allow-quota-stage`：队列里真实等着的那几件可能**名录够不着**（超管/已注销的账号，
+    20260930 实测唯一一件正是 uid=1 的），那种靶子**验不出**这条链——写通道会（正确地）
+    拒绝它。给这颗开关就自造一个够得着的靶子（一次性账号 + 它自己的申请），本腿于是动的是
+    探针自己的数据，跑完必删。
   * **⑱ = 零写腿**（不需要任何写授权，给了 `--uid` 就跑）：同一句话，但**从不点确定**。
     它验的是删掉确定性车道之后**唯一**的兜底不许变成静默——弹了卡就"没签字写不动"（库真值
     一个字节不变），没弹卡则系统那句收尾事实（`_ledger_closing_note` 的第二支）必须让
@@ -102,7 +106,8 @@ langgraph 在节点执行完之后才抛 KeyError）——腿⑧ 当时只核库
   .venv/bin/python eval/probe_admin_write.py --uid <uid> --allow-write          # 含草稿来回
   .venv/bin/python eval/probe_admin_write.py --uid <uid> --allow-write --allow-tag-delete
   # ⑰（真写腿）逐颗开关：--allow-board-audit 才会跑；结论为放行时还要 --allow-board-publish
-  # （动留言）、卡上带额度那几件时还要 --allow-quota-review（动别人的额度）
+  # （动留言）、卡上带额度那几件时还要 --allow-quota-review（动别人的额度）；
+  # 队列里那些够不着（超管/已注销）时加 --allow-quota-stage 自造一个够得着的靶子
   .venv/bin/python eval/probe_admin_write.py --uid <uid> --allow-write --allow-board-audit
   # 只想验 ⑱/⑰、不愿放开其余九条写腿（草稿/标签/分类/公告）：加 --only-board
   #（这时 ⑰ 只看它自己那几颗开关，其余腿逐条打印「没验」）
@@ -1567,15 +1572,24 @@ def _split_card_specs(specs: list[dict]) -> tuple[list[dict], list[dict], list[d
     return board, quota, other
 
 
-def _quota_pending_uids(uid: int, role: str) -> set[int]:
-    """**待处理**的额度申请（`{uid}`）——与 agent `_quota_pending_index` 同一个后端接口。
+def _quota_pending_rows(uid: int, role: str) -> list[dict]:
+    """**待处理**的额度申请行——与 agent `_quota_pending_index` 同一个后端接口。
 
-    判据用它而不是工具自述：点确定之后这一行必须**不再待处理**（库真值）。
+    `_quota_pending_uids` 与"自造靶子的收尾"都从这一份读（读接口只此一处）：
+    前者只要 uid，后者还要**行 id**（驳回要按行认领）。
     """
     rows = backend_get("/api/protected/quota/requests?status=pending", uid, role)
     if not isinstance(rows, list):
         raise ProbeError(f"额度申请列表形状不对（{type(rows).__name__}，不是数组）")
-    return {int(r.get("userId") or 0) for r in rows if isinstance(r, dict)}
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _quota_pending_uids(uid: int, role: str) -> set[int]:
+    """**待处理**的额度申请（`{uid}`）。
+
+    判据用它而不是工具自述：点确定之后这一行必须**不再待处理**（库真值）。
+    """
+    return {int(r.get("userId") or 0) for r in _quota_pending_rows(uid, role)}
 
 
 def _stage_review_proposal(rep: Report, uid: int, role: str, conv_id: int, tag: str) -> str:
@@ -1632,7 +1646,7 @@ def _trace_events(msg: str, name: str, within_s: int = 300) -> list[dict]:
 
 
 def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = False,
-                       allow_quota: bool = False) -> None:
+                       allow_quota: bool = False, allow_quota_stage: bool = False) -> None:
     """⑰ 授权式短应答 → 台账按 id 进帧 → 弹卡（目标出自台账）→ 点确定 → 真写（不复原）。
 
     靶子是**真实待审留言**（不是探针造的）⇒ 单独一颗 `--allow-board-audit`：跑一次就真把
@@ -1641,7 +1655,13 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
     各自一颗，而不是悄悄放宽或静默豁免）。**额度族同此**：同一张卡上的另一半动的是别人的
     对话额度（批准把余额恢复满、且不可撤销；驳回会给他发一条站内通知），所以它另有一颗
     `--allow-quota-review`——不给就整张卡都不点（卡的每一条都要有它这一族的授权）。
+
+    `--allow-quota-stage`：额度那半**自造一个够得着的靶子**（一次性普通账号 + 用它自己的
+    身份提交一份申请）。为什么必须自造：队列里真实等着的那几件可能**名录够不着**（超管 /
+    已注销的账号，20260930 实测唯一一件正是 uid=1 的超管申请），那种靶子**验不出**这条链
+    ——写通道按设计会（正确地）拒绝它。自造之后本腿动的是探针自己的数据，不再动真人额度。
     """
+    quota_stage = None
     print("\n⑰ 授权式短应答 → 台账按 id 进帧 → 弹卡 → 点确定"
           "（--allow-write + --allow-board-audit）")
     # `_QUOTA_VERB` 是**卡面动词的同一份实现**（工具名 → approve/reject/reset → 中文动词），
@@ -1663,6 +1683,12 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
     try:
         _stage_review_proposal(rep, uid, role, conv_id, "⑰")
 
+        # 额度那半的靶子：**在那一轮之前**造好（台账是那一轮读的）。没有它的话，卡上
+        # 那一半只能取到真人队列里的行——而队列里够得着的可能一件都没有。
+        if allow_quota_stage:
+            quota_stage = _stage_quota_request(rep, uid, role)
+            if quota_stage is None:
+                rep.warn("⑰ 额度靶子没造出来 ⇒ 本腿只验留言那半")
 
         # 授权式短应答：主人把"做哪一件"也交出去了 ⇒ 台账两族都摆上桌，挑哪几件归模型
         d = stream_rust("小猫咪按你想法来吧", uid, role, conv_id)
@@ -1878,6 +1904,11 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
                 rep.warn(f"⑰ 额度那 {len(intact)} 件（{qi}）这次没落地 ⇒ 申请仍待处理、"
                          f"**没有被消费**")
     finally:
+        # 自造靶子的收尾**必须在这里**：判据全部读完之后（上面的库真值复核用的就是
+        # 它），且任何提前 return / 异常路径上都会执行——留一份 pending 申请指向一个
+        # 不存在的账号，正是本腿要避免的那张"够不着的菜"。
+        if quota_stage:
+            _finish_staged_quota(rep, uid, role, quota_stage[0], quota_stage[1])
         _drop_conv(rep, uid, role, conv_id, "⑰")
 
 
@@ -1964,6 +1995,88 @@ def _stage_pending_comment(rep: Report, uid: int, role: str) -> int | None:
         _del_board_comment(rep, uid, role, tid, "staging 重试前清理")
     rep.warn("staging 两次都没造出待审留言（AI 每次都没判存疑）——⑰/⑱ 这一轮没跑")
     return None
+
+
+_QUOTA_STAGE_REASON = "探针临时申请（验证复核链路，跑完即删）"
+
+
+def _stage_quota_request(rep: Report, uid: int, role: str):
+    """自造一份**够得着**的待处理额度申请 → `(申请人 uid, 账号名)`；造不出返回 None。
+
+    为什么要造：队列里等着的那几件可能**名录够不着**——20260930 实测唯一一件正是
+    uid=1（超管）的，而 `GET /api/temp-users` 按 `is_listable_role` 过滤、超管不列，
+    额度写通道按设计办不了它。拿那种靶子验"点确定 → 库真值真翻"是**验不出来**的：
+    只会得到一句**正确**的拒绝（帧里现在也如实标着"agent 办不了这一件"）。
+
+    所以自建一个一次性**普通账号**、用它自己的身份提交申请（`POST /api/protected/quota/apply`
+    是用户入口，与真人在页面上点那颗按钮走的是同一个 handler）：得到一个够得着的靶子，
+    而全程只碰探针自己的数据——**不碰任何真人的额度**（本腿原来动的是别人的申请）。
+
+    代价如实记：`quota_request` 无外键（见 entity 头注 ③），删号**不带走**申请行。
+    所以收尾时若这一行还挂着 pending，探针会以管理员身份把它**驳回**掉
+    （`_finish_staged_quota`）——只留一行已终态的记录，pending 队列干净。
+    """
+    name = f"agent_fixture_probe_q{int(time.time()) % 1000000}"
+    aid = _new_probe_account(rep, uid, role, name, tag="⑰")
+    if aid is None:
+        return None
+    if not _apply_quota_request(rep, aid, name, uid, role):
+        _del_probe_account(rep, uid, role, name, tag="⑰")
+        return None
+    print(f"  自造额度申请：账号 {name}（id={aid}）——本腿这一轮只碰它自己的数据")
+    rep.warn(f"staging：本次跑用了一份**探针自造**的额度申请（申请人 {name} id={aid}，"
+             f"经用户入口真提交，跑完即收尾）")
+    return aid, name
+
+
+def _apply_quota_request(rep: Report, aid: int, name: str, uid: int, role: str) -> bool:
+    """以**那个新账号自己的身份**提交额度申请，并确认它真的进了待处理队列。"""
+    try:
+        backend_send("POST", "/api/protected/quota/apply",
+                     {"reason": _QUOTA_STAGE_REASON}, aid, "user")
+    except Exception as e:  # noqa: BLE001
+        rep.fails.append(f"staging 提交额度申请失败（uid={aid}）：{e}")
+        print(f"  [FAIL] 提交额度申请失败：{e}")
+        return False
+    try:
+        pending = _quota_pending_uids(uid, role)
+    except ProbeError as e:
+        rep.fails.append(f"staging 提交后读不到待处理队列（靶子没法用）：{e}")
+        return False
+    if aid not in pending:
+        rep.fails.append(f"staging 提交的申请没出现在待处理队列里（uid={aid}）")
+        print(f"  [FAIL] 提交成功但队列里没有它（现场={sorted(pending)}）")
+        return False
+    print(f"  [PASS] 额度申请已进待处理队列（uid={aid} 账号 {name}）")
+    return True
+
+
+def _finish_staged_quota(rep: Report, uid: int, role: str, aid: int, name: str) -> None:
+    """自造靶子的收尾：**先把申请收到终态、再删号**（顺序不能反）。
+
+    反过来的话申请行会以 pending 的姿态指向一个已经不存在的账号——那正是本腿要
+    避免的那种"够不着的菜"（台账摆着、永远办不成）。收到终态用**驳回**：批准会顺带
+    清零额度、还发一条站内通知给一个即将被删的账号，都是无意义的副作用。
+    收尾是**探针自己的清理**，不参与 ⑰ 的判据（判据在收尾之前就已经读完了）。
+    """
+    try:
+        rows = _quota_pending_rows(uid, role)
+    except ProbeError as e:
+        rep.fails.append(f"staging 收尾读不到队列：{e}（请手工处理 uid={aid} 那条申请）")
+        return
+    row = next((r for r in rows if int(r.get("userId") or 0) == aid), None)
+    if row is None:
+        print(f"  自造靶子的申请已不在待处理队列（{aid}）——无需收尾")
+    else:
+        try:
+            backend_send("POST", f"/api/protected/quota/requests/{int(row.get('id'))}/review",
+                         {"approved": False, "reason": "探针收尾：靶子账号即将删除"}, uid, role)
+            print(f"  [PASS] staging 收尾：已驳回自造申请（账号 {name} id={aid}）")
+        except Exception as e:  # noqa: BLE001
+            rep.fails.append(f"staging 收尾驳回申请失败（uid={aid}）：{e}（请手工处理）")
+    _del_probe_account(rep, uid, role, name, tag="⑰")
+    print(f"  ⚠ 如实记：quota_request 无外键，删号不带走那一行——"
+          f"它会留下一行已终态的记录（指向已删的账号 {aid}）")
 
 
 def step18_ledger_zero_write(rep: Report, uid: int, role: str) -> None:
@@ -2258,8 +2371,13 @@ def _raw_get_code(path: str, token: str) -> tuple:
         return e.code, str((body or {}).get("message") or "")
 
 
-def _new_probe_account(rep: Report, uid: int, role: str, name: str):
-    """自建一次性靶子账号 → 它的 id；失败返回 None。"""
+def _new_probe_account(rep: Report, uid: int, role: str, name: str, tag: str = "⑲"):
+    """自建一次性靶子账号 → 它的 id；失败返回 None。
+
+    `tag` 是**报错时点名的腿**（⑲ 账号冻结 / ⑰ 额度靶子）：写死成 ⑲ 的话，⑰ 那边
+    建号失败会报成 ⑲ 的失败，读报告的人会去查错的一节。新账号一律 role=user
+    （`create_temp_user` 写死的那一条），所以它是**名录列得出来的**——⑰ 要的正是这种。
+    """
     try:
         backend_send("POST", "/api/temp-users",
                      {"username": name, "password": _ACCOUNT_PROBE_PASSWORD}, uid, role)
@@ -2268,14 +2386,14 @@ def _new_probe_account(rep: Report, uid: int, role: str, name: str):
             raise ProbeError("建号接口回了成功，但名录里读不到它")
         aid = int(row["id"])
     except Exception as e:  # noqa: BLE001
-        rep.fails.append(f"⑲ 自建靶子账号失败：{e}")
+        rep.fails.append(f"{tag} 自建靶子账号失败：{e}")
         print(f"  [FAIL] 自建靶子账号失败：{e}")
         return None
     print(f"  靶子账号：{name}（id={aid}，role={row.get('role')}，status={row.get('status')}）")
     return aid
 
 
-def _del_probe_account(rep: Report, uid: int, role: str, name: str) -> None:
+def _del_probe_account(rep: Report, uid: int, role: str, name: str, tag: str = "⑲") -> None:
     """删掉靶子账号（**不复原**——它是一次性的）。删不掉就点名，让人能手工清。"""
     try:
         row = _account_directory(uid, role).get(name)
@@ -2287,9 +2405,9 @@ def _del_probe_account(rep: Report, uid: int, role: str, name: str) -> None:
         print(f"  已删除靶子账号 {name}" if left is None
               else f"  ⚠ 靶子账号 {name} 仍在名录里（id={left.get('id')}）")
         if left is not None:
-            rep.fails.append(f"⑲ 靶子账号 {name}（id={left.get('id')}）没删掉——请手工清")
+            rep.fails.append(f"{tag} 靶子账号 {name}（id={left.get('id')}）没删掉——请手工清")
     except Exception as e:  # noqa: BLE001
-        rep.fails.append(f"⑲ 删除靶子账号 {name} 失败：{e}（请手工清，别留一个探针账号）")
+        rep.fails.append(f"{tag} 删除靶子账号 {name} 失败：{e}（请手工清，别留一个探针账号）")
 
 
 def _acct_popup(rep: Report, uid: int, role: str, conv: int, intent: str, tag: str,
@@ -2461,6 +2579,11 @@ def main() -> int:
                     help="允许 ⑰ 点确定办掉同一张卡上的**额度**那几件（批准会把那个账号的"
                          "额度恢复到上限且不可撤销；驳回会给他发一条站内通知）。"
                          "不给出时整张卡都不点——卡的每一条都要有它这一族的授权")
+    ap.add_argument("--allow-quota-stage", action="store_true",
+                    help="允许为 ⑰ 造第二个靶子：一次性普通账号 + 用它自己的身份提交一份额度"
+                         "申请（队列里真实等着的那几件可能**名录够不着**——超管/已注销的账号，"
+                         "那种靶子验不出这条链）。跑完必删：还待处理就先驳回、再销号。要真验到"
+                         "「点确定 → 真写」还得同时给 --allow-quota-review（点击那一半归它管）")
     ap.add_argument("--allow-board-stage", action="store_true",
                     help="允许为 ⑰⑱ 造前提：经生产入口发一条一次性留言（AI 判存疑 ⇒ 进待审、"
                          "从不公开），跑完删除。只在台账 0 条待审时造")
@@ -2579,7 +2702,8 @@ def main() -> int:
             if args.allow_board_audit and (args.only_board or args.allow_write):
                 step17_auth_review(rep, args.uid, "admin",
                                    allow_publish=args.allow_board_publish,
-                                   allow_quota=args.allow_quota_review)
+                                   allow_quota=args.allow_quota_review,
+                                   allow_quota_stage=args.allow_quota_stage)
             else:
                 print("\n[skip] ⑰ 授权式短应答那条腿：未给 --allow-board-audit"
                       + ("" if args.only_board else "（或未给 --allow-write）")
