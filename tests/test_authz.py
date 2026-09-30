@@ -13,6 +13,7 @@
   3. **失败取向**：身份不明（role=None）与未声明工具一律**拒绝**，绝不默认放行。
 """
 import inspect
+import re
 import sys
 from pathlib import Path
 
@@ -20,6 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统�
 sys.path.insert(0, str(ROOT))
 
 from agent import authz  # noqa: E402
+from agent import context  # noqa: E402  ⑨h 用：短应答判据的剥壳口径
+from agent import decisions  # noqa: E402  ⑨h 用：导航快道的剥壳口径
 from agent.graph import execute_node  # noqa: E402
 from agent.prompts import audience_block  # noqa: E402
 from agent.principal import (ADMIN_ROLES, KNOWN_ROLES, ROLE_ADMIN,  # noqa: E402
@@ -685,6 +688,71 @@ check("一律弹窗的工具每个都登记了文案（漏登记会静默退回�
 check("文章族措辞没被覆盖掉（按 scope 取的那三张原样生效）",
       "哪一篇" in authz.consent_frame("set_article_status", p(ROLE_ADMIN))
       and "自己" in authz.consent_frame(_OWN_ADD, p(ROLE_USER)))
+
+print("⑨h 句首称呼壳对判据透明（20260930 同族第 4 例：主人开口就叫「小猫咪」）")
+# 第二层壳，**不是系统加的、是主人的说话习惯**：人设让它叫「小猫咪/泠月喵」，主人就真
+# 这么叫——全量生产语料 1110 条消息里 **252 条（22.7%）** 以称呼开头。底下判据全是
+# 句首锚定/整串相等型，称呼一在就恒不命中。实测翻正 6 条（同意闸）+ 8 条（弹窗分叉，
+# 全是「小猫咪！」这种只叫名字的轮次），其中 5 条是「小猫咪把…收藏了」——那 5 轮 trace
+# 里主人随后都点了「确定」把收藏办成了，即**此前是判据判不出、拿弹窗问一次**。
+# 称呼表只有一份（`authz._VOCATIVE_RE`）：导航快道与短应答里各内联过一份，都不含裸
+# 「猫咪」，同一句话在三处口径不同。
+_VOC_SAMPLES = [
+    ("add_favorite", "小猫咪把这篇文章收藏了"),
+    ("add_favorite", "小猫咪把我当前在读的文章收藏了"),
+    ("add_favorite", "猫咪，把这篇文章收藏了"),
+    ("read_notifications", "猫咪我的未读信息全部就标记为已读"),
+    ("read_notifications", "小猫咪把未读通知标记为已读"),
+    ("set_article_status", "小猫咪，把文章 12 设为私密"),
+    ("create_tag", "小猫咪，新建一个标签叫 Python，用粉色"),
+    ("set_article_status", "小猫咪，如果我把文章 12 设为私密呢"),
+    ("read_notifications", "猫咪，我有几条未读"),
+]
+_VOC_ADDR = re.compile(r"^\s*(?:(?:小|大|傻|臭|笨|乖)?(?:猫咪|猫猫)|泠月喵|泠月|喵喵|喵|主人)"
+                       r"(?:\s*[，,、:：!！~～。.…]+\s*|\s+)?")
+_vdiff = []
+for _tool, _t in _VOC_SAMPLES:
+    _s = _VOC_ADDR.sub("", _t, count=1)          # 剥称呼后的同一句话——判据必须给出同一结论
+    for _name, _f in (("consent", lambda x: authz.consent_granted(p(ROLE_ADMIN), _tool, x)),
+                      ("question", authz.is_question_like),
+                      ("console", authz._console_command)):
+        if _f(_t) != _f(_s):
+            _vdiff.append(f"{_name}:{_t}")
+check(f"带称呼与不带称呼判定一致（{len(_VOC_SAMPLES)} 条 × 3 个判据）", not _vdiff,
+      f"不一致: {_vdiff}")
+check("带称呼的明确命令**确实**判成命令（不是两边都 False 的假透明）",
+      authz.consent_granted(p(ROLE_ADMIN), "add_favorite", "小猫咪把这篇文章收藏了")
+      and authz.consent_granted(p(ROLE_ADMIN), "read_notifications",
+                                "猫咪我的未读信息全部就标记为已读")
+      and authz.consent_granted(p(ROLE_ADMIN), "set_article_status",
+                                "小猫咪，把文章 12 设为私密"))
+check("带称呼的提问/假设/陈述**照旧**不是命令（剥壳不放宽任何一关）",
+      not authz.consent_granted(p(ROLE_ADMIN), "read_notifications", "猫咪，我有几条未读")
+      and not authz.consent_granted(p(ROLE_ADMIN), "add_favorite",
+                                    "小猫咪，如果我把这篇收藏了呢")
+      and not authz.consent_granted(p(ROLE_ADMIN), "read_notifications",
+                                    "小猫咪，我已经把通知标记为已读")
+      and not authz.consent_granted(p(ROLE_ADMIN), "add_favorite",
+                                    "小猫咪，我收藏了哪些文章"))
+check("带称呼的假设仍判成提问（弹窗不许对着假设弹）",
+      authz.is_question_like("小猫咪，如果我把文章 12 设为私密呢"))
+check("只叫名字的轮次按『无从判断不弹窗』走（剥完为空 ⇒ 提问）",
+      authz.is_question_like("小猫咪！") and authz.is_question_like("小猫咪")
+      and not authz.is_question_like("小猫咪，把文章 12 设为私密"))
+check("剥称呼只剥**开头**一处（句中/别处的名字不动）",
+      authz._strip_address_shell("小猫咪，把 小猫咪 这篇收藏")
+      == "把 小猫咪 这篇收藏"
+      and authz._strip_address_shell("把文章 12 收藏") == "把文章 12 收藏")
+check("裸「猫咪」也算称呼（老表只有「小猫咪」——三处口径不同是这次的修因）",
+      authz._strip_address_shell("猫咪去留言板") == "去留言板")
+check("导航快道吃的是同一份剥壳（`decisions._bare`，表不再内联第二份）",
+      decisions._bare("小猫咪带我去留言板") == "带我去留言板"
+      and bool(decisions._NAV_VERB_RE.match(decisions._bare("猫咪带我去留言板")))
+      and "小猫咪" not in decisions._NAV_VERB_RE.pattern)
+check("短应答判据吃的是同一份剥壳（`context._SHORT_LEAD_RE` 里不再有称呼）",
+      context._short_reply_kind("猫咪，好") == "pos"
+      and context._short_reply_kind("小猫咪！") == ""
+      and "小猫咪" not in context._SHORT_LEAD_RE.pattern)
 
 print("⑨b 接线：闸在调用之前，拒绝说得出原因，叙述侧封得住")
 check("execute 在调用前算确认", "consent_missing = (authz.requires_consent" in graph_src)

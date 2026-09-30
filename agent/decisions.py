@@ -26,7 +26,7 @@ import re
 
 from langchain_core.messages import ToolMessage
 
-from agent.authz import strip_system_tags
+from agent.authz import strip_user_shell
 from agent.context import _msg_text
 from agent.skills import FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP, instantiate_plan
 # 与检索侧同一分词（2/3-gram）——候选标题相关性判定复用，避免两套词法
@@ -41,19 +41,24 @@ MAX_PLAN_ROUNDS = 4
 
 
 def _bare(user_msg: str) -> str:
-    """快道判定的输入 = **用户实际说的那句话**（剥掉系统消息壳）。
+    """快道判定的输入 = **用户实际说的那句话**（剥掉系统消息壳 + 句首称呼壳）。
 
     20260923 实证（这条快道此前是死的）：`server.py` 给本轮用户消息加锚点壳
     `[当前问题]: `，而导航快道的两条入口都是**句首锚定**——`msg in NAV_MAP`（整串
     相等）与 `_NAV_VERB_RE.match`（`^`）——壳一在就恒不命中。同一份全量 golden 里
     `article_read`/`display`/`effect_switch` 三条快道都命中、`nav` 是 **0 次**，
     正因为那三条用 `.search`：**只有导航这一条被壳架空**（自 20260901 壳上线起，
-    生产 trace 里 `fastpath(kind=nav)` 一次都没有）。剥壳口径与同意闸共用
-    （`authz.strip_system_tags`，同一句注释里记着同款事故）。
+    生产 trace 里 `fastpath(kind=nav)` 一次都没有）。
 
-    只用于**快道判定**：给模型的 prompt 仍带壳（壳是给模型看的锚点，不是缺陷）。
+    **20260930 起剥两层**（`authz.strip_user_shell`）：第二层是**主人的说话习惯**——
+    句首称呼「小猫咪/泠月喵」（生产语料 22.7% 的消息带）。`_NAV_VERB_RE` 里原先内联过
+    一份称呼表（且不含裸「猫咪」），与同意闸、短应答两处口径各不相同；现在表只有一份，
+    全量语料对账下导航快道多命中 4 条——「小猫咪带我去留言板」等**明确的导航命令**
+    此前每次都要落回 planner LLM 多花 8-9 秒。
+
+    只用于**快道判定**：给模型的 prompt 仍带壳（壳是给模型看的语用信息，不是缺陷）。
     """
-    return strip_system_tags((user_msg or "").strip())
+    return strip_user_shell(user_msg)
 
 
 # 导航确定性快道（零 LLM）：动词 + 页面别名强模式 → 直接实例化 navigate 计划。
@@ -63,14 +68,13 @@ def _bare(user_msg: str) -> str:
 # 20260828 事故加固（"你读到留言为什么没有按留言执行任务"被误判成导航请求）：
 #  1. 疑问/质疑句式整体排除（_QUESTION_RE）——质疑不是导航请求；问路类
 #     （"怎么去留言板"）排除后由 planner LLM 识别为导航意图，功能不丢只多一次调用；
-#  2. 动词改为 match（必须句首，允许剥离称呼前缀）而非 search——"读到"里的"到"
-#     曾命中句中任意位置的正则；
+#  2. 动词改为 match（必须句首）而非 search——"读到"里的"到"曾命中句中任意位置的正则。
+#     称呼前缀交由 `_bare` 统一剥（表只有一份，见 `authz._VOCATIVE_RE`）；
 #  3. 目标串收紧到 8 字——16 字会整段捕获噪声目标（曾捕获"留言为什么没有按留言执行任务"）。
 _QUESTION_RE = re.compile(r"为什么|怎么|如何|啥|什么|为何|哪儿|哪|吗$|么$|[？?]")
 
 _NAV_VERB_RE = re.compile(
-    r"^(?:小猫咪|喵喵|主人|猫猫|喵)?[,，、\s]*"
-    r"(?:去一下|回到|返回|跳转到|前往|转到|转跳|打开|进入|带我(?:去|到)|去|进|回|到|访问)"
+    r"^(?:去一下|回到|返回|跳转到|前往|转到|转跳|打开|进入|带我(?:去|到)|去|进|回|到|访问)"
     r"\s*([^\s，。！？!?～~、；;：:]{1,8})$"
 )
 
