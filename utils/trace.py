@@ -289,6 +289,25 @@ def set_reply(reply: str) -> None:
         rec.set_reply(reply)
 
 
+def events_of(trace_id: str) -> list:
+    """这次请求**已记录**的事件序列（未落盘也可读；无此 trace_id ⇒ 空表）。
+
+    给**评测侧**一个不依赖落盘的读口：golden 要在判据里断言"某一轮系统真的把
+    `planner.ledger_frame` 摆上桌了/摆的是哪几个 id"（见 `eval/run_golden.py`
+    的 `require_ledger_frame` 与 `require_card_targets_from_ledger`）。**读文件
+    不能替代它**：trace 的 json 是 `finish_trace` 才写的，而断言发生在跑完之后、
+    `--only` 单例跑法里也没有"照路径回读"的稳定前提；更要紧的是落盘那份**已经过
+    `reply` / `tool_result_text` 的截断**，拿它当判据等于让判据跟着截断漂移。
+
+    只读、不改 recorder 状态（调用方拿到的是**拷贝**，往里面塞东西不会污染落盘——
+    浅拷贝足够：断言只读 `event`/`ids` 这类标量键，不往 `events[]` 的嵌套结构里写）。
+    **只为评测而存在**：生产侧没有任何调用点，`tests/test_trace_io.py` 的源码锁盯着
+    "生产节点不许调它"这条（能力存在 ≠ 该在生产路径上用它）。
+    """
+    rec = _ACTIVE.get(trace_id)
+    return list(rec.events) if rec is not None else []
+
+
 def finish_trace(trace_id: str, end_reason: str, duration_s: float, frames: int = 0) -> str | None:
     """请求收尾：补收尾元数据并落盘（event_stream finally，所有退出路径）。
 

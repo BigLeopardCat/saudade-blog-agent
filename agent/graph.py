@@ -6147,6 +6147,14 @@ _LEDGER_TARGET_FIELDS = {
 # 新字段的后果是那一族静默少问一句（方向安全，但看起来像"模型没问"）。
 _LEDGER_FIELD_FAMILY = {"talk_id": "board", "user_id": "quota"}
 
+# 台账帧里**印出来的编号前缀** → 族名（`talkId:101` / `用户 id=3` 这串东西的 `talkId`）。
+# 渲染端（`_ledger_fact_blocks`）与读端（golden 的"卡片上的编号出不出自本轮台账"
+# 断言）共用**这一张表**：两边各写一份前缀字面量，前缀一改就变成"卡片编号一个都对
+# 不上"的**假红**——而假红比不判更坏，它会让人去改本来没错的代码。
+_LEDGER_TAG_FAMILY = {"talkId": "board", "userId": "quota"}
+# 反向只在渲染端用（族名 → 前缀），由上面那张表派生——不写第二张（同源纪律）。
+_LEDGER_FAMILY_TAG = {v: k for k, v in _LEDGER_TAG_FAMILY.items()}
+
 
 def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
     """台账编号通道的**目标预检**：这个编号确实出自现场台账、且那一行还在等办吗？
@@ -6515,8 +6523,8 @@ def _ledger_fact_blocks(families: list[str], config) -> tuple[list[str], dict]:
         meta[family] = len(rows) if readable else 0
         meta["rows"][family] = len(rows) if readable else 0
         if readable:
-            key, tag = ("talkKey", "talkId") if family == "board" else ("userId", "userId")
-            meta["ids"] += [f"{tag}:{r.get(key)}" for r in rows]
+            key = "talkKey" if family == "board" else "userId"
+            meta["ids"] += [f"{_LEDGER_FAMILY_TAG[family]}:{r.get(key)}" for r in rows]
             if family == "board":
                 blocks.append(_render_pending_facts(rows))
             else:

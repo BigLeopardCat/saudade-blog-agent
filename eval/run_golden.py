@@ -278,7 +278,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
                     "exec_rows": [], "exec_tools": [], "tool_rounds": 0,
                     "trace": None, "resets": 0, "resets_reasons": [],
                     "confirm_tokens": [], "confirm_payloads": [],
-                    "task_frames": [],
+                    "task_frames": [], "ledger_frames": [],
                     "error": "确认令牌验签失败（零执行）—— 用例里的令牌/uid/会话不自洽"}
     trace_id = None
     t_trace0 = time.monotonic()
@@ -334,6 +334,16 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         ).result()
     t.join()
     loop.close()
+    # 台账帧的**帧事实**（20260930）：`planner.ledger_frame` 事件是"这一轮系统到底把
+    # 待审队列摆上桌没有、摆的是哪几条"的唯一权威记录——planner 的输入消息**不进
+    # trace**（只记首轮 context 且各字段截断），所以离开这个事件，"台账真的进了帧"
+    # 在评测与生产上都无法复核。必须在 `finish_case` **之前**取：那一步会
+    # `_ACTIVE.pop`（`utils.trace.events_of` 读的就是那个注册表）。
+    ledger_frames: list[dict] = []
+    if trace_id:
+        from utils import trace as _trace
+        ledger_frames = [dict(e) for e in _trace.events_of(trace_id)
+                         if e.get("node") == "planner" and e.get("event") == "ledger_frame"]
     # trace 收尾（生产侧这一步在 event_stream 的 finally 里；golden 没有那层壳）
     trace_path = golden_trace.finish_case(trace_id, time.monotonic() - t_trace0,
                                           len(frames))
@@ -452,6 +462,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             "confirm_tokens": confirm_tokens,
             "confirm_payloads": confirm_payloads,
             "task_frames": task_frames,
+            "ledger_frames": ledger_frames,
             "resets": resets, "resets_reasons": resets_reasons, "error": error}
 
 
@@ -837,6 +848,10 @@ GOLD_ASSERT_KEYS = frozenset({
     "require_frame_prefix", "forbid_frame_prefix", "forbid_fallback",
     # 确认卡片载荷（20260925）：从 __CONFIRM__ 帧的令牌里解出的技能/参数条数
     "require_confirm_payload",
+    # 待办台账（20260930，批 H 的两个新表面）：`planner.ledger_frame` 事件在不在、
+    # 卡片上的台账编号出不出自本轮帧。判据与实现同源（`_LEDGER_TARGET_FIELDS`），
+    # 见上面那段的理由。
+    "require_ledger_frame", "require_card_targets_from_ledger",
     # 跨轮任务状态（20260927 批 D）：本轮的 `__TASK__` 帧写回了什么状态。见下面
     # check_gold 里那段的"为什么是末帧"。
     "require_task_state", "forbid_task_state",
@@ -1103,6 +1118,59 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
         for _tk in (result.get("confirm_tokens") or []):
             if _tk and _tk in text:
                 fails.append("令牌原文出现在正文里（它是 10 分钟有效的写授权凭据）")
+
+    # 20260930：**台账**的两条新表面（批 H 的 S1/S2，落到 golden 上）。
+    #   require_ledger_frame —— 本轮必须真的把待办台账摆上桌（trace 有
+    #     `planner.ledger_frame` 事件，且至少印出一个编号）。
+    #   require_card_targets_from_ledger —— 卡片上每一个台账编号，都必须出自**本轮
+    #     帧里印的那批**。这是批 H **撤换**的那条判据：旧判据问"目标那段字面出不出自
+    #     主人原话"（`_WRITE_NAME_FIELDS` 那一路），自 S2 起**已不是契约**；新契约是
+    #     "编号出自现场台账"——它比后者强（可验证、编不出来），也正是「你看着办」这句
+    #     话能成立的前提。旧判据与新判据不是"更严/更松"，是**判的东西换了**，所以这里
+    #     是新键、不去改旧用例的旧断言。
+    # 目标字段**不在这里手写**：取 `agent/graph.py::_LEDGER_TARGET_FIELDS`（写保护用的
+    # 同一张表，含"为什么删除留言不在表里"那条边界）。手写一份就是"两处判据各自漂移"
+    # 的老坑（同 `test_golden_keys` 要治的那类）。
+    _lf_events = result.get("ledger_frames") or []
+    _ledger_ids = [str(i) for e in _lf_events for i in (e.get("ids") or [])]
+    if gold.get("require_ledger_frame"):
+        if not _lf_events:
+            fails.append("本轮没有 planner.ledger_frame 事件 —— 待办台账**没摆上桌**"
+                         "（模型手里没有可决策的目标）")
+        elif not _ledger_ids:
+            fails.append(f"台账摆了但一条待办都没有（事件：{_lf_events}）")
+    if gold.get("require_card_targets_from_ledger"):
+        from agent.adminops import normalize_target_id   # 编号解析的唯一实现
+        from agent.graph import _LEDGER_FIELD_FAMILY, _LEDGER_TAG_FAMILY, _LEDGER_TARGET_FIELDS
+        _byfam: dict = {}
+        for _e in _lf_events:
+            for _raw in (_e.get("ids") or []):
+                _s = str(_raw)
+                _fam = _LEDGER_TAG_FAMILY.get(_s.partition(":")[0])
+                _tid = normalize_target_id(_s)
+                if _fam and _tid is not None:
+                    _byfam.setdefault(_fam, set()).add(int(_tid))
+        _seen, _bad = 0, []
+        for _p in (result.get("confirm_payloads") or []):
+            for _sp in (_p or {}).get("specs") or []:
+                _tool = str((_sp or {}).get("tool") or "")
+                _field = _LEDGER_TARGET_FIELDS.get(_tool)
+                if not _field:
+                    continue
+                _seen += 1
+                _val = ((_sp or {}).get("args") or {}).get(_field)
+                _tid = normalize_target_id(_val)
+                _fam = _LEDGER_FIELD_FAMILY.get(_field, "")
+                if _tid is None or int(_tid) not in _byfam.get(_fam, set()):
+                    _bad.append(f"{_tool}.{_field}={_val!r}")
+        if not _seen:
+            # 一张卡上**一个**按台账编号的目标都没有 ⇒ 这条断言无从判起。判红而不是
+            # 放过：它意味着用例声称"卡片按编号认目标"而实际形态变了（例如卡没弹、
+            # 或模型改用了名字通道）——那种情况下绿的是空气。
+            fails.append("卡片里没有一件按台账编号的目标（本键无从判起 ⇒ 判红）")
+        if _bad:
+            fails.append(f"卡片上的台账编号不来自本轮帧：{_bad}"
+                         f"（本轮帧里印的编号：{_ledger_ids}）")
 
     # 20260927 批 D：**跨轮任务状态**断言（`__TASK__` 帧，见 run_one 里那段）。
     #   require_task_state —— 本轮**末帧**的 state 必须是其中之一（且至少有一帧）
@@ -1519,6 +1587,11 @@ def main():
                         "commands": r["commands"], "tool_calls": r["tool_calls"],
                         "exec_tools": r["exec_tools"], "resets": r["resets"],
                         "confirm_payloads": r.get("confirm_payloads") or [],
+                        # 台账帧（20260930）：这一轮**系统摆上桌的那几条编号**。红了要
+                        # 一眼看出"卡片上的编号出不出自这份清单"，不然只能重新跑一遍。
+                        "ledger": [{"ids": e.get("ids") or [], "rows": e.get("rows") or {},
+                                    "unread": e.get("unread") or [], "chars": e.get("chars")}
+                                   for e in (r.get("ledger_frames") or [])],
                         "error": r["error"], "trace": r.get("trace")}
                        for r in (result.get("rounds") or [])],
             # 这一轮的 trace 路径（20260922）：红了照着读，别再靠复采样猜方差
