@@ -837,13 +837,29 @@ def write_console_tools() -> set:
     return {t for t, s in TOOL_SCOPE.items() if s == SCOPE_WRITE_CONSOLE}
 
 
-def expand_forbid_tokens(cases: list) -> list:
-    """把 `forbid_tool_calls` 里的哨兵就地展开成工具名，返回展开过的用例 id。
+def expand_token_list(lst: list) -> list:
+    """把一份工具名清单里的哨兵就地展开成**当前**的工具名（两处共用的唯一实现）。
 
     **展开成空集要抛**：那说明 `TOOL_SCOPE` 读不到或 scope 改了名——此时"不许写"
     会静默退化成"什么都不禁"，方向与用例本意相反（同 `DENIAL_FAMILY` 那条纪律：
     判据坏掉要响，不要静默地变松）。
+
+    现在有两个消费者：判据侧（`forbid_tool_calls`）与前提侧（`premise_absent.suppliers`）。
+    两处问的是同一件事——"后台写工具是哪几个"——所以共用这一份实现，谁也别手抄。
     """
+    if not any(t in FORBID_TOKENS for t in lst):
+        return list(lst)
+    names = sorted(write_console_tools())
+    if not names:
+        raise RuntimeError("工具名清单里的哨兵展开了空集（authz.TOOL_SCOPE 变了？）")
+    out: list = []
+    for t in lst:
+        out.extend(names if t in FORBID_TOKENS else [t])
+    return out
+
+
+def expand_forbid_tokens(cases: list) -> list:
+    """把 `forbid_tool_calls` 里的哨兵就地展开，返回展开过的用例 id。"""
     expanded: list = []
     for c in cases:
         for gold in ([c.get("gold")] + [r.get("gold") for r in c.get("rounds") or []]):
@@ -852,17 +868,87 @@ def expand_forbid_tokens(cases: list) -> list:
             lst = gold.get("forbid_tool_calls")
             if not lst or not any(t in FORBID_TOKENS for t in lst):
                 continue
-            names = sorted(write_console_tools())
-            if not names:
-                raise RuntimeError(
-                    "forbid_tool_calls 的哨兵展开了空集（authz.TOOL_SCOPE 变了？）"
-                    f"——用例 {c.get('id')}")
-            out: list = []
-            for t in lst:
-                out.extend(names if t in FORBID_TOKENS else [t])
-            gold["forbid_tool_calls"] = out
+            try:
+                gold["forbid_tool_calls"] = expand_token_list(lst)
+            except RuntimeError as e:
+                raise RuntimeError(f"{e}——用例 {c.get('id')}") from None
             expanded.append(c.get("id"))
     return expanded
+
+
+# ── 事实前提的哨兵（20261001）───────────────────────────────────────────────
+# 判据的前提住在别人手里，两类，守卫程度原本差一个数量级：
+#   · **身份前提**（"这个 uid 存在且是活的某角色"）——有守卫（`eval/identity_preflight.py`
+#     的三态 + 未评估 + 退出码 3），见上面那段。
+#   · **事实前提**（"这件信息这个角色拿不到"）——**一个守卫都没有**，而且比身份脆得多：
+#     它依赖**产品面**，产品面天天在变。实证：`note_traffic_denied_visitor` 的负断言
+#     写下 8 分钟后，另一个提交就把阅读/点赞/收藏挂上了公开列表帧 ⇒ 模型如实按公开数据
+#     排了个榜，判据把它判成**幻觉**（假红，且最贵的那种：它指着模型说错话）。
+#
+# 现在给事实前提补上同一条出口，判据只有一句：
+#   **"这件事实拿不到" ⟺ 供给它的那些工具，对这个角色一条都到不了。**
+# 前半句（谁供给它）由用例作者落笔声明（`premise_absent.suppliers`，机器猜不出来）；
+# 后半句（到不到得了）由这里算——用 `agent.tasks.step_tool_enum(role)`，那是既有的
+# "**这个身份真能执行到的工具名**"（可见技能模板 ∪ 数据工具点名白名单），不是为评测
+# 新造的第二份判据。任一供给工具变得可达 ⇒ 前提已变 ⇒ 该用例**未评估**（摘用例 +
+# 退出码 3），而不是拿一条过期的期望去判模型胡说。
+#
+# **方向的代价写在明处**：声明少了 ⇒ 漏（与今天一样），声明多了 ⇒ 假"未评估"。
+# 所以清单只要求"写下来"，不要求写全——写全写不全都是人判断，哨兵只负责让**写过的
+# 那部分**不再需要人记得。清单为空的（"站内根本没有这个能力"这类）哨兵判不了，如实
+# 记成"人写的前提，未自动核验"，不假装它被核过。
+PREMISE_ROLES: tuple[str, ...] = ("visitor", "user", "admin", "superadmin")
+
+
+def reachable_tools(role: str | None) -> set:
+    """这个身份**事实上取得到**的工具名（唯一来源 = `agent.tasks.step_tool_enum`）。
+
+    `role=None` = 匿名访客。它取得到公开读面——这是产品上的事实（影子模式下访客
+    天天在调公开读工具），**不是**权限模型的判据：`authz.check()` 对未知角色一律
+    拒绝，那是"该不该给"，这里问的是"取不取得到"，两者在匿名访客这一格上并不重合。
+    """
+    from agent.tasks import step_tool_enum
+    return set(step_tool_enum(role))
+
+
+def premise_role(pa: dict) -> str | None:
+    """声明里的角色名 → 判据用的角色名（`visitor` = 匿名访客 = `None`）。"""
+    role = (pa.get("role") or "").strip()
+    return None if role == "visitor" else role
+
+
+def check_premises(cases: list) -> tuple:
+    """逐条核验事实前提，返回 (留下的用例, 未评估的 id, 逐条结论)。
+
+    结论分两栏，**都不静默**：`state="changed"` 是"供给面变了 ⇒ 这条没被评估"，
+    `state="unchecked"` 是"清单为空、哨兵判不了（人写的前提）"——后者照跑，但也在
+    `[premise]` 那行里报出来，免得读的人以为"没报错 = 核过了"。
+    """
+    kept: list = []
+    skipped: list = []
+    rows: list = []
+    for c in cases:
+        pa = c.get("premise_absent")
+        if not isinstance(pa, dict):
+            kept.append(c)
+            continue
+        role = premise_role(pa)
+        tools = expand_token_list(list(pa.get("suppliers") or []))
+        if not tools:
+            rows.append({"id": c.get("id"), "state": "unchecked", "role": role,
+                         "fact": pa.get("fact"), "hit": [], "why": pa.get("why")})
+            kept.append(c)
+            continue
+        reach = reachable_tools(role)
+        hit = sorted(t for t in tools if t in reach)
+        rows.append({"id": c.get("id"), "state": "changed" if hit else "ok",
+                     "role": role, "fact": pa.get("fact"), "hit": hit,
+                     "why": pa.get("why")})
+        if hit:
+            skipped.append(c["id"])
+        else:
+            kept.append(c)
+    return kept, skipped, rows
 
 
 # ── golden 键的三张表（20260924）─────────────────────────────────────────────
@@ -1558,6 +1644,27 @@ def main():
                 if c.get(_marker):
                     c.setdefault("context", {})["user_id"] = int(_real_uid)
 
+    # 事实前提的核验（20261001，头注见 `check_premises` 上面那段）：**排在身份之后**，
+    # 因为身份是更外面的一层——uid 都不在位时，讨论"这个角色取不取得到那件事实"没有
+    # 意义。两类未评估共用同一条出口（摘用例 + 进 skipped_ids + 退出码 3），但各自
+    # 单列一栏：读报告的人要能一眼分清"没身份"与"供给面变了"。
+    cases, _premise_skipped, _premise_rows = check_premises(cases)
+    skip_ids += _premise_skipped
+    _premise_bad = bool(_premise_skipped)
+    _premise_unchecked = [r["id"] for r in _premise_rows if r["state"] == "unchecked"]
+    for _r in _premise_rows:
+        if _r["state"] == "changed":
+            print(f"[premise] ⚠ {_r['id']}：前提已变——「{_r['fact']}」现在能由 "
+                  f"{'、'.join(_r['hit'][:4])} 取得（role={_r['role'] or 'visitor'}）"
+                  f" ⇒ 本条**未评估**（改判据或改供给面清单，见报告 premise_checks）")
+    if _premise_bad:
+        print(f"[premise] ⇒ {len(_premise_skipped)} 条用例本轮**未评估**：{_premise_skipped}")
+    if _premise_unchecked:
+        # 「没报错」不等于「核过了」：清单为空的那些哨兵判不了（站内根本没有这个能力），
+        # 如实报出来，别让读的人以为它们被自动核验过。
+        print(f"[premise] {len(_premise_unchecked)} 条前提清单为空（哨兵判不了，人写的前提）："
+              f"{_premise_unchecked}")
+
     # 真写用例的两道闸（20260925）——**顺序刻意如此**：先问"谁有权触发真写"，再看前置
     # 条件在不在。两道都不会被静默豁免（都进 skipped_ids，都打印）。
     #
@@ -1832,6 +1939,11 @@ def main():
         # 在位检查的原始结论（每条身份通道一行：env/uid/role/state/detail）。落进报告
         # 是为了事后能回答"这一轮的前置当时到底是什么状态"——日志会轮转，报告不会。
         "identity_preflight": _preflight_rows,
+        # 事实前提的另一半（20261001）：`skipped_premise_ids` 是"供给面变了 ⇒ 没评"，
+        # `premise_checks` 是逐条结论（含 `unchecked` 那批——清单为空、哨兵判不了，
+        # 它们照跑，但别读成"核过了"）。与身份那两栏同源的纪律：**未评估要单列**。
+        "skipped_premise_ids": _premise_skipped,
+        "premise_checks": _premise_rows,
         "latency_s": {
             "count": len(latencies),
             "min": round(_pct(latencies, 0), 1),
@@ -1882,7 +1994,7 @@ def main():
     # 时导出「判据 vs 模型实际输出」对照单。复审规则：假失败当轮修判据，真 FAIL
     # 才允许挂着（否则门禁失去区分度）。
     review_path = ""
-    if failed or _reg_flaked or _precondition_bad:
+    if failed or _reg_flaked or _precondition_bad or _premise_bad:
         review_path = f"eval/report/review_{ts_str}.md"
         case_by_id = {c["id"]: c for c in cases}
         with open(review_path, "w", encoding="utf-8") as f:
@@ -1903,6 +2015,25 @@ def main():
                             for r in _preflight_rows
                             if r["state"] == identity_preflight.UNUSABLE)
                         + "\n> 先修前置再读下面任何一条红——模型那半这轮根本没被测到。\n\n")
+            # 事实前提变了（20261001）排在与身份同一节区：它同样是"模型那半没被测到"，
+            # 但修法完全不同——不是去修环境，而是**改判据**（前提真没了 ⇒ 像
+            # `note_traffic_denied_visitor` 那样改成供给侧断言）**或改清单**
+            # （供给面只是扩了、对该角色仍到不了）。
+            if _premise_bad:
+                f.write("> ⚠ **事实前提已变，{n} 条用例本轮未评估（退出码 3）**："
+                        .format(n=len(_premise_skipped))
+                        + "、".join(f"`{i}`" for i in _premise_skipped)
+                        + "\n> 明细：\n"
+                        + "".join(
+                            f">   · `{r['id']}`：原以为拿不到的「{r['fact']}」，"
+                            f"现在 {('、'.join(r['hit'][:4]))} 取得到"
+                            f"（role={r['role'] or 'visitor'}）\n"
+                            for r in _premise_rows if r["state"] == "changed")
+                        + "> 这两条路都行，但**必须选一条**：① 前提真没了 ⇒ 改判据（照"
+                          "`note_traffic_denied_visitor` 那次：反编造从形状换成供给，"
+                          "断言「排行出自本轮真读过的帧」）；② 只是清单没跟上 ⇒ 改"
+                          "`premise_absent.suppliers`。**别把它读成模型退化**——"
+                          "这一轮这些用例根本没跑。\n\n")
             # 回归组红单列在最前：这些不是"允许波动"的能力题，门禁已按硬判退出码 1
             if _reg_bad:
                 f.write("> ⚠ **回归组（regression）FAIL，本轮不得放行**："
@@ -2000,14 +2131,25 @@ def main():
     # `--min-pass-rate` 放宽。理由只有一句：这些用例这一轮**没被评估**，而退出码 0
     # 会被读成"这一轮没问题"——空分母那次（退出码 2）就是同一条纪律的另一个现场。
     # 上面已把逐条 `[precondition]` 打过，这里只是让退出码也说出来。
-    if _precondition_bad:
+    if _precondition_bad or _premise_bad:
         # 后端把「账号不存在 / 被冻结 / 令牌已被收回」三种原因压成同一个 401（刻意的，
         # 见 identity_preflight 头注），所以这行只能把**三种修法**都列出来——20261001
         # 实测：只知道"不可用"会先去猜"是不是被冻结了"，而真因是账号被删。
-        print(f"⚠ 身份前置不可用（{_identity_skipped} 未评估）⇒ 退出码 3："
-              "账号已被删 ⇒ 跑 scripts/migration/test_accounts_restore_20261001.sql 重建；"
-              "被冻结 ⇒ 解冻；改过密码 ⇒ 轮换口令；uid 角色不符 ⇒ 换一个角色相符的 uid。"
-              "修好后重跑，别把它读成通过率")
+        #
+        # 两类未评估共用退出码 3（它们的语义是同一条：**这一轮的这几条没被测到**），
+        # 但话分开说：身份那半修环境，事实那半修判据——混成一句会让人拿着"改判据"
+        # 的办法去修一个被冻结的账号。
+        if _precondition_bad:
+            print(f"⚠ 身份前置不可用（{len(_identity_skipped)} 未评估）⇒ 退出码 3："
+                  "账号已被删 ⇒ 跑 scripts/migration/test_accounts_restore_20261001.sql 重建；"
+                  "被冻结 ⇒ 解冻；改过密码 ⇒ 轮换口令；uid 角色不符 ⇒ 换一个角色相符的 uid。"
+                  "修好后重跑，别把它读成通过率")
+        if _premise_bad:
+            print(f"⚠ 事实前提已变（{len(_premise_skipped)} 未评估）⇒ 退出码 3："
+                  f"{_premise_skipped} —— 这**不是**模型退化，是这些用例的前提没了。"
+                  "逐条见报告 `premise_checks` 与复审单；修法二选一："
+                  "① 前提真没了 ⇒ 把判据从'拿不到'改成供给侧断言；"
+                  "② 只是清单没跟上 ⇒ 改用例的 premise_absent.suppliers")
         sys.exit(3)
     if failed == 0:
         sys.exit(0)
