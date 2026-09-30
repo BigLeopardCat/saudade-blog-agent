@@ -3978,8 +3978,32 @@ def _find_user_by_id(user_id, config, index=None):
                       f"本次未改动——请把待办台账里那个申请人的账号 id 原样抄过来")
     row = index.get(uid)
     if not isinstance(row, dict):
-        return None, f"后台账号列表里没有编号为 id={uid} 的账号，本次未改动"
+        # ⚠️ 这句话要**说准名录是什么**（20260930）：名录只列 `authz::is_listable_role`
+        #    的账号——**超管不在里面**（账号族那道"按名字解析必须经过列表"的既有防线），
+        #    注销过的账号同样不在。而额度队列是另一份数据：超管自己提交的申请照样在
+        #    `?status=pending` 里列着。于是"队列里有这一行"与"名录里有这个人"可以是
+        #    **两件事**，此时说一句光秃秃的「没有这个账号」会让人以为账号不存在。
+        return None, (f"后台账号名录里没有编号为 id={uid} 的账号（名录不列超管账号、"
+                      f"注销过的账号也不在），本次未改动")
     return row, None
+
+
+def _reachable_uids(config: RunnableConfig):
+    """后台**够得着**的账号 id 集合（读不到名录 → `None`，含义是"不知道"）。
+
+    为什么单独立一条：额度写通道要求申请人在名录里（`_find_user_by_id`），而队列里
+    可以出现名录够不着的人——**超管**（名录按 `is_listable_role` 过滤，超管不列）与
+    **注销过的账号**（`quota_request` 无外键，销号不带走申请行）。这种行"等着办"却
+    永远办不成：工具会如实拒绝，但只拒绝不标注，模型每轮都会去挑它、每轮白跑一次。
+
+    所以读队列的地方顺手标一句"这一件 agent 办不了"——标的是**事实**（谁够得着），
+    不是替模型作决定：模型仍可以选择把它报给主人。读不到名录 ⇒ `None` ⇒ 什么都不标
+    （同"读不到 ≠ 没有"：不知道就别说话）。
+    """
+    idx = _user_directory(config)
+    if isinstance(idx, ToolResult):
+        return None
+    return {uid for uid in idx if isinstance(uid, int)}
 
 
 # 冻结/解冻每个方向的**结局句**——工具自己发音时用（回执）。卡面问句用的是
@@ -4350,7 +4374,10 @@ def list_quota_requests(
     if not rows:
         return empty("现在没有待处理的额度重置申请（一条都没有）" if q == "pending"
                      else "额度重置申请的记录是空的（一条都没有）")
-    return ok(A.render_quota_requests(rows), meta={"count": len(rows), "status": q})
+    # 名录里够不着的行（超管 / 已注销）**照印但标注**——这一屏的用途正是"挑一件来办"，
+    # 不标的话模型每次都挑到那一件、每次都白跑（见 `_reachable_uids`）。
+    return ok(A.render_quota_requests(rows, _reachable_uids(config)),
+              meta={"count": len(rows), "status": q})
 
 
 def _quota_readback(config: RunnableConfig, target_id: int, username: str, limit, kind: str):

@@ -1592,7 +1592,20 @@ def render_quota_status(kind: str, username: str, uid, limit, used) -> str:
             f"——恢复满额之后他又聊过了（这是重读到的实测值）。")
 
 
-def render_quota_requests(rows) -> str:
+# 「这一件 agent 办不了」那一句**只此一份**：额度台账帧（`graph._render_quota_facts`）
+# 与 `list_quota_requests` 的清单（本函数）指的必须是**同一件事、同一句话**——两处各写
+# 一遍，改一处就会漂移成两种说法（本仓反复吃过这个形状的亏）。`None`/uid 取不出 ⇒ 空串。
+_UNREACHABLE_NOTE = "（⚠ 这个编号不在后台账号名录里——超管账号不列进名录、注销过的账号也不在；**agent 的额度写通道办不了这一件**，得你到后台处理）"
+
+
+def _unreachable_note(uid, reachable) -> str:
+    """这一行够不够得着 → 空串 / `_UNREACHABLE_NOTE`。`reachable` 为 None 时不调用。"""
+    if uid is None or reachable is None or uid in reachable:
+        return ""
+    return _UNREACHABLE_NOTE
+
+
+def render_quota_requests(rows, reachable=None) -> str:
     """额度重置申请队列 → 给 planner 看的清单。
 
     这一屏的价值全在**申请人的账号 id、名字与他的用量**（20260929 批 H · S2 改）：
@@ -1607,6 +1620,11 @@ def render_quota_requests(rows) -> str:
     印出来的 uid 不是"要求模型相信它"：写之前由 `graph._ledger_target_refusal`
     对着**现场台账**再校验一次（id 必须真实存在且仍在待办态），所以印错/抄错
     不会变成一次错写，只会变成一次如实收尾。
+
+    `reachable` = 名录里够得着的 uid 集合（`tools.base._reachable_uids`）；`None` =
+    没查/读不到 ⇒ **一条都不标**。够不着的那几件照样印（它们是**事实**：有人确实在
+    等着），只是行末多一句"agent 办不了"——队列里可以出现超管（名录不列超管）与
+    注销过的账号（无外键，销号不带走申请行），那几件只有后台办得成。
     """
     lines = [f"额度重置申请共 {len(rows)} 条："]
     for r in rows:
@@ -1631,7 +1649,8 @@ def render_quota_requests(rows) -> str:
         # 命名空间"的取向——宁可少印一格，不印一个假编号）。
         uid = normalize_target_id(r.get("userId"))
         head = f"- 「{who}」" + (f"（账号 id={uid}）" if uid is not None else "") \
-            + (f"（昵称 {nick}）" if nick else "")
+            + (f"（昵称 {nick}）" if nick else "") \
+            + (_unreachable_note(uid, reachable) if reachable is not None else "")
         rest = [f"现在 {pair}"]
         if st:
             rest.append(f"[{st}]")
