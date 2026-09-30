@@ -550,11 +550,13 @@ from agent.skills import (_CALLABLE_QUERY_TOOLS, _CALLABLE_QUERY_TOOLS_ORDER,
 from agent.graph import _CONTENT_TOOLS, _tools_desc  # noqa: E402
 from agent.principal import ADMIN_ROLES  # noqa: E402
 
-NEW = ["get_server_status", "get_service_health", "get_moderation_status", "get_user_stats"]
-# 「结构性不可达」是**分角色**的（20260924 起）：这台四个报表工具都声明为
+# 20260930 追加第五件 get_note_stats（文章流量报表：阅读/点赞/收藏三张榜）。
+NEW = ["get_server_status", "get_service_health", "get_moderation_status", "get_user_stats",
+       "get_note_stats"]
+# 「结构性不可达」是**分角色**的（20260924 起）：这台五个报表工具都声明为
 # admin.console ⇒ 访客/未知身份结构上点不到，管理员则可经 calls 直接点名
 # （与 list_admin_notes 同批放开，见 tests/test_skills.test_admin_console_role_channel）。
-check("四个新工具都不在**访客**点名白名单（role=None 结构上点不到）",
+check("五个新工具都不在**访客**点名白名单（role=None 结构上点不到）",
       all(n not in _EXPLICIT_TOOLS and n not in callable_query_tools(None) for n in NEW))
 check("也不在访客可调用清单顺序表里（公开那半是角色无关常量）",
       all(n not in _CALLABLE_QUERY_TOOLS_ORDER for n in NEW))
@@ -572,21 +574,23 @@ check("scope 全是 admin.console",
       str({n: authz.TOOL_SCOPE.get(n) for n in NEW}))
 for name, tools in [("ops_report", ["get_server_status", "get_service_health"]),
                     ("moderation_report", ["get_moderation_status"]),
-                    ("user_report", ["get_user_stats"])]:
+                    ("user_report", ["get_user_stats"]),
+                    ("traffic_report", ["get_note_stats"])]:
     sk = SKILL_MAP.get(name)
     check(f"技能 {name} 在位且计划就是这几个工具",
           sk is not None and [t for t, _ in sk.plan] == tools, str(sk and sk.plan))
     # 判据是**管理员族**（20260926 起含超级管理员）：写死 {"admin"} 的那天，
-    # uid=1 提权后看不见这三张报表技能，而那条错法是静默的
+    # uid=1 提权后看不见这几张报表技能，而那条错法是静默的
     check(f"技能 {name} 对管理员族（admin + superadmin）可见",
           sk is not None and sk.roles == ADMIN_ROLES, str(sk and sk.roles))
 
-check("非 admin 的 planner 上下文里看不到这三个技能",
+check("非 admin 的 planner 上下文里看不到这四张报表技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
           and n not in build_planner_context("secretary")
-          for n in ("ops_report", "moderation_report", "user_report")))
+          for n in ("ops_report", "moderation_report", "user_report", "traffic_report")))
 check("admin 的 planner 上下文里能看到",
-      all(n in build_planner_context("admin") for n in ("ops_report", "moderation_report", "user_report")))
+      all(n in build_planner_context("admin")
+          for n in ("ops_report", "moderation_report", "user_report", "traffic_report")))
 check("既有公开技能对非 admin 仍然可见（别把过滤写宽了）",
       all(n in build_planner_context("user") for n in ("chat", "content_query", "navigate")))
 

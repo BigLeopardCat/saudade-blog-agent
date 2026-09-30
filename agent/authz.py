@@ -181,6 +181,9 @@ TOOL_SCOPE: dict[str, str] = {
     "get_service_health": SCOPE_ADMIN_CONSOLE,
     "get_moderation_status": SCOPE_ADMIN_CONSOLE,
     "get_user_stats": SCOPE_ADMIN_CONSOLE,
+    # 文章流量报表（20260930）：与上面三张同门——数据在 `protected_routes` 后面
+    # （Rust `auth_guard` 只放 admin 进来），agent 以发起人身份代调。
+    "get_note_stats": SCOPE_ADMIN_CONSOLE,
     # 管理助手（20260921 第二轮）：后台**写**。<动作>.<对象> 与 admin.console
     # 成对：一个是这道门的读方向，一个是写方向。
     #   `list_admin_notes` 取 admin.console 而不是 read.any——它读的是**后台**

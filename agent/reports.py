@@ -358,3 +358,121 @@ def render_user_stats(data: dict, now: datetime | None = None) -> str:
                          f"会话 {u.get('conversations', 0)}／消息 {u.get('messages', 0)}"
                          f"／最近 {_short_time(last)}")
     return _cap("\n".join(lines))
+
+
+# ── 报表 ⑤：文章流量（20260930）────────────────────────────────────
+# 数据源 = `GET /api/protected/stats/notes`（`src/routes/note_stats.rs`），口径三条
+# 全在那个文件的模块头注里：只算**当前可见**的文章、三个榜**数组顺序即名次**（后端
+# 没有 rank 字段，序号由这里按下标印）、`daily` 已补零成定长 30 天。
+#
+# 为什么要在这里把"第 N 名"印出来：主人问的是"排名前几的文章都排第几"——位置就是
+# 答案本身。把数组丢给 narrator 让它自己数下标，等于把"数数"这件会出错的事交给它
+# （与"数字在工具侧算好"同一条纪律，见模块头注）。
+
+# 榜单长度 = Rust `note_stats::TOP_N`（**同值契约**，tests/test_note_stats.py 直接
+# 读父仓源码对账）。它决定报表里那句"下列前 N 名"怎么写，改一侧必须同步另一侧。
+_RANK_TOP = 10
+
+# 一行的三个计数：键名（跨语言契约）→ 中文量词。顺序 = 报表里的展示顺序。
+_COUNT_WORDS = (("views", "阅读"), ("likes", "点赞"), ("favorites", "收藏"))
+
+# 合计那三个数是**另一套键名**（`totalViews` …），不能与行内的共用一份：
+# 拿行里的键去取合计会一个也取不到——而它静默（`data.get` 返回 None），
+# 报表上就只剩一句"本次没读到合计值"（首版就这么写错过一次）。
+_TOTAL_WORDS = (("totalViews", "阅读"), ("totalLikes", "点赞"), ("totalFavorites", "收藏"))
+
+
+def _count_int(v) -> int | None:
+    """一个计数 → int；**认不出就是 None**（调用方据此整段不印，绝不印成 0）。
+
+    报表里印出来的每个数都会被 narrator 当成事实转述，所以"没有这个数"与
+    "这个数是 0"必须分得开（同 `notes.rs` 的 `Option` + `skip_serializing_if`）。
+    `bool` 显式排除：它是 `int` 的子类，`True` 会被放行成 1。
+    """
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return int(v)
+
+
+def _counts_text(row: dict, first: str = "") -> str:
+    """一行的三个计数 → `阅读 120／点赞 8／收藏 2`（认不出的那些整个不出现）。
+
+    `first` 是这一行的榜按哪个数排（那个数排到最前）——读的人（与看板娘）先看到的
+    是排序依据，"第 3 名"后面紧跟的数就是它的名次依据。
+    """
+    keys = [k for k, _ in _COUNT_WORDS]
+    if first in keys:
+        keys.remove(first)
+        keys.insert(0, first)
+    words = dict(_COUNT_WORDS)
+    parts = []
+    for k in keys:
+        n = _count_int(row.get(k))
+        if n is not None:
+            parts.append(f"{words[k]} {n}")
+    return "／".join(parts)
+
+
+def _rank_block(head: str, rows: list | None, metric: str) -> list[str]:
+    """一个榜 → 行列表。`rows` 的顺序就是名次（后端已排好，这里只按下标编号）。
+
+    **榜名的量词要进每一行**（`阅读榜` 的行里第一项也是"阅读 N"）：同一篇文章在
+    两个榜上的名次可以不同，只印数字不印维度，看的人会把两个榜串成一串。
+
+    ⚠️ `rows is None`（键不在/是 null）与 `rows == []` 是**两件事**，话必须分开：
+    前者是"这一项这次没读到"（老后端 / 报表被裁），后者是"真的没人读过"。
+    把前者说成后者，就是替站内下一个**"没有"的结论**（gate 洞④ 的供体）。
+    """
+    word = dict(_COUNT_WORDS)[metric]
+    if rows is None:
+        return [f"- {head}：本次没读到（后台没有返回这一项）"]
+    if not rows:
+        return [f"- {head}：全站没有任何文章有{word}记录"]
+    # 后端最多给 TOP_N 行：正好给满时**不能**说成"全站就这些"（可能有第 11 名没给）
+    scope = (f"下列前 {len(rows)} 名，报表最多只列到这里"
+             if len(rows) >= _RANK_TOP else f"全站共 {len(rows)} 篇有{word}记录")
+    lines = [f"- {head}（按{word}量倒序，{scope}）:"]
+    for i, r in enumerate(rows, 1):
+        title = sanitize_untrusted(str((r or {}).get("title") or ""), 40) or "（无标题）"
+        counts = _counts_text(r or {}, first=metric)
+        tail = f" {counts}" if counts else ""
+        lines.append(f"  · 第 {i} 名 《{title}》（noteId {r.get('noteId')}）{tail}")
+    return lines
+
+
+def render_note_stats(data: dict, now: datetime | None = None) -> str:
+    """`GET /api/protected/stats/notes` 的返回 → 文章流量报表。
+
+    ⚠️ 三个总数（`totalViews`/`totalLikes`/`totalFavorites`）一律用服务端算好的聚合值，
+    不要拿榜上的行去加：榜只有前 10，加起来只会比真值小。
+    """
+    data = data or {}
+    totals = [(w, _count_int(data.get(k))) for k, w in _TOTAL_WORDS]
+    lines = [f"文章流量报表（{_ts(now)}，生成于 {data.get('generatedAt') or '未知'}）",
+             "- 全站合计（只算当前可见文章）："
+             + ("、".join(f"{w} {n}" for w, n in totals if n is not None)
+                or "本次没读到合计值")]
+    lines += _rank_block("阅读榜", data.get("topViewed"), "views")
+    lines += _rank_block("点赞榜", data.get("topLiked"), "likes")
+    lines += _rank_block("收藏榜", data.get("topFavorited"), "favorites")
+
+    # `daily` 同样三态：没读到 / 读到但全是零 / 读到且有数（见 `_rank_block` 注）
+    daily = data.get("daily")
+    hit = [d for d in (daily or [])
+           if isinstance(d, dict) and ((_count_int(d.get("views")) or 0)
+                                       or (_count_int(d.get("likes")) or 0))]
+    if daily is None:
+        lines.append("- 近 30 天趋势：本次没读到（后台没有返回这一项）")
+    elif not hit:
+        lines.append("- 近 30 天趋势：这 30 天里没有任何阅读或点赞记录")
+    else:
+        shown = hit[-7:]
+        days = "；".join((d.get("date") or "?") + " " + _counts_text(d) for d in shown)
+        prefix = f"…（更早还有 {len(hit) - len(shown)} 天）" if len(hit) > len(shown) else ""
+        lines.append(f"- 近 30 天趋势（只列有记录的日子，共 {len(hit)} 天）: {prefix}{days}")
+
+    # 名次口径作为**事实**写进帧里（"哪张榜的第几名"是这张报表的结构，不是修辞）：
+    # 三张榜各自独立排名，序号之间没有关系。怎么转述是技能 reply_contract 的事。
+    lines.append("- 名次口径：阅读/点赞/收藏三张榜各自独立排名（同一篇文章在两张榜上"
+                 "的名次可以不同）")
+    return _cap("\n".join(lines))
