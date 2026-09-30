@@ -218,7 +218,7 @@ sequenceDiagram
     Note over A: needs_summary 轮并行独立摘要调用<br/>（输入=原始历史，与回复解耦）
     A->>L: LangGraph 图执行：planner ⇄ execute（≤4 轮，execute 内 checker 逐 spec 验收）<br/>→ reflector（重复受阻 ≤2 轮复盘）→ model → gate
     L-->>A: planner 决策文本 / execute 工具帧 + checker 回执<br/>model 叙述 token（零工具）
-    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / 过程帧 __PROCESS__ / __RESET__（gate fallback）/<br/>__SUMMARY__ / __EXEC__（checker 回执，\_\_END\_\_ 前到达；Rust 收到即落库） / 终结标记）
+    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / 过程帧 __PROCESS__ / __RESET__（gate fallback）/<br/>__SUMMARY__ / __EXEC__（checker 回执，**每批 execute 即发**；Rust 收到即落库） / 终结标记）
     R-->>B: 逐帧转发（X-Accel-Buffering: no；__EXEC__ 只收不转）
     B->>B: 文本帧上屏 + 口型驱动；命令帧进 cmdText
     Note over R: 流结束后
@@ -287,7 +287,8 @@ planner LLM，见 §6.5）。执行用 `stream(stream_mode=["messages", "updates
   `DARKMODE:`（夜间）——**这是工具结果**，由前端执行。
 - "updates" 通道：planner 节点更新 → **规划过程帧**（🧭 规划中/计划，计划含执行清单时追加
   🛠 正在调用工具…）；**execute 节点更新 → checker 验收回执**（`receipts` 累计语义，末批即本
-  请求全量——producer 在流收尾、`None` 哨兵前发 `__EXEC__:` 帧给 Rust 落库，见 §4.1/§3.2⑤）；
+  请求全量——**但 producer 每见到一个 execute update 就立刻发一帧 `__EXEC__:`，载荷是本次
+  请求内"还没发过"的那几条**，不再攒到流尾；见 §4.1/§3.2⑤）；
   gate 节点更新 → 判定收尾（通过 → done=True + ✓ 质检通过；fallback → 发 `__RESET__` + ✗ 质检
   打回帧，并以 fallback 如实文本作最终回复，见 §6.5 gate/__RESET__）。
 - **决策-执行-复盘循环**：planner 决策（给调用清单）→ execute 逐 spec 执行 + checker 验收 →
@@ -363,7 +364,7 @@ flowchart TB
         W1[用户消息] -->|prepare_chat 立即落库| T1[(chat_history role=user)]
         W2[assistant 回复] -->|转发终结帧之前 save_assistant_reply<br/>（tokio::spawn 分离写入）| T1
         W3[独立摘要调用] -->|__SUMMARY__ 帧 / new_summary| T2[(chat_summary<br/>每会话一条)]
-        W4[checker 验收 PASS 回执] -->|__EXEC__ 帧<br/>__END__ 前到达即落库| T3[(execution_log<br/>渲染定稿 detail)]
+        W4[checker 验收 PASS 回执] -->|每个 execute update 一帧 __EXEC__<br/>收到即落库（不等 __END__）| T3[(execution_log<br/>渲染定稿 detail)]
     end
     subgraph Compress[记忆如何压缩]
         C1[needs_summary 触发<br/>count>20 且 %10==0/1] --> C2[_summarize_dialogue 独立任务调用<br/>输入=原始历史+旧摘要]
@@ -391,9 +392,15 @@ flowchart TB
   - 流式路径从 `__SUMMARY__` 帧取独立摘要（见 4.3），**回复本身不含任何 SUMMARY 行**；
   - 存 `(role="assistant", content=回复全文)`；
   - **空回复不存库**（`if !reply.is_empty()`），这是"卡死"表象的来源之一——前端靠 §3.2⑦ 的兜底感知。
-- **动作执行回执**（20260904）：execute 内 checker 判 PASS 的 spec 累计为 receipts → producer 流
-  收尾发 `__EXEC__:` 帧（`__END__` 之前）→ Rust 渲染定稿（动作词 + 「」内容，写时一次、读时零
-  映射）插入 `execution_log`。**独立于回复文本与 __RESET__**：被 gate fallback 否定叙述的那轮，
+- **动作执行回执**（20260904；20261001 改增量即发）：execute 内 checker 判 PASS 的 spec 累计为
+  receipts → **producer 每见到一个 execute update 就发一帧 `__EXEC__:`**（载荷 = 本次请求内
+  尚未发出的那几条；`__CMD__`/`__PENDING__`/`__TASK__` 三条兄弟帧从上线起就是这个纪律）→
+  Rust 渲染定稿（动作词 + 「」内容，写时一次、读时零映射）插入 `execution_log`。
+  **为什么不能再攒到流尾**：20261001 02:45 那次，确认轮已经真跑完 `create_announcement`（公告
+  id=23 落库），客户端在收尾前断开 ⇒ 流尾那行永远发不出去 ⇒ Rust 既没写 `execution_log`、
+  也没跑 `close_pending_actions`，待办仍挂 pending ⇒ 下一轮 planner 重新弹卡、02:47 又写一次
+  （id=24）——主人看到的是"两条同名公告"。Rust 侧本就支持增量（`chat.rs` 在 JSON 解析之前拦帧、
+  `tokio::spawn` 把落库摘出生成器生命周期，20260920 起即"收到即写"），是 Python 侧没跟上。**独立于回复文本与 __RESET__**：被 gate fallback 否定叙述的那轮，
   其已验收执行照样落库（回执是已发生事实）；断连/中断（DiscardAbortedExchange）也只弃残缺叙述，
   不删 execution_log 行。执行记忆与 chat_history 的语义分界：历史回答"聊了什么"，execution_log
   回答"做了什么"——后者经 `recent_executions=` 注入后让"质疑上轮执行"有系统确认事实可依，不再
