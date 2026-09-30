@@ -4448,9 +4448,13 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 # 拦下并给出与检索无关的"不得读无关文章顶替"注记）。
                 logger.info("[planner] 数据工具重复拦截（%s）→ 直接收尾",
                             "、".join(dups))
+                # 注记走与 `_trim_done_reads` 收尾同一条（20261001）：**"取过了"必须
+                # 带上宾语**。旧文案只说"该数据工具本轮已执行过"，不说取到的是哪几
+                # 行，读的人拿会话历史里的旧印象补空——这正是 `20261001T005722` 那次
+                # 把没查过的 `talkId:100` 一并断言的成因。
                 plan_obj = _wrap_up_plan(
-                    True, "该数据工具本轮已执行过（数据已在上方工具返回里），"
-                          "基于已有返回如实作答，不重复调用。" + _no_popup_fact(state))
+                    True, _read_repeat_note(state.get("receipts"), dups)
+                    + _no_popup_fact(state))
                 record("planner", "intercept", reason=kind, dups=dups, redirected=False)
                 return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                         "done": False}
@@ -4460,7 +4464,9 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 logger.info("[planner] 检索重复拦截（%s），无可读候选 → 如实收尾列候选",
                             "、".join(dups) if dups else "rag_search 变体 ≥2 次")
                 plan_obj = _wrap_up_plan(
-                    True, "检索重复且候选无法确定目标（不得读无关文章顶替）")
+                    True, _read_repeat_note(state.get("receipts"), dups)
+                    + "检索重复且候选无法确定目标（不得读无关文章顶替，"
+                      "更不得把'没检索到'说成'站内没有'）。")
             else:
                 logger.info("[planner] 检索重复拦截（%s）→ 改读候选 %s",
                             "、".join(dups) if dups else "rag_search 变体 ≥2 次",
