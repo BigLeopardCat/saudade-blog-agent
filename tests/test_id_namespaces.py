@@ -204,6 +204,16 @@ finally:
 
 check("公开留言帧里是 `talkId` 而不是上游字段名 `talkKey`",
       "'talkId': 96" in _frame and "talkKey" not in _frame, _frame[:120])
+# 同一节纪律的第二个字面：上游字段 `author` 装的是**留言人自己填的留名**（自由文本，
+# 可留空=匿名），字段名却叫 author。trace 20261001T005722 实证：公开帧里的
+# `'author': 'Sora Saudade'` 被讲成"那条留言的账号是 sora"——而留名是人能随便填的字。
+check("★ 公开帧里是 `留名` 而不是上游字段名 `author`（留名不是账号）",
+      "'留名': '小舟'" in _frame and "'author'" not in _frame, _frame[:160])
+check(" 说说帧同理（两个视图共用一个上游 DTO，改名不能只改一个）",
+      "'author'" not in str(_B._board_text_keys([{"author": "x"}]))
+      and _B._board_text_keys([{"author": "x"}]) == [{"留名": "x"}])
+check(" 只改键名不动值，非 dict 元素原样透出（注记串不能被当行拆）",
+      _B._board_text_keys([{"author": ""}, "〔系统注记〕…"]) == [{"留名": ""}, "〔系统注记〕…"])
 check("  **递归**改名：包了一层的响应也不会漏（漏掉的那处又变成两个名字）",
       "noteId" in str(_B._label_id_keys({"data": {"records": [{"noteKey": 7}]}}))
       and "noteKey" not in str(_B._label_id_keys({"data": {"records": [{"noteKey": 7}]}})))
@@ -218,6 +228,9 @@ check("帧仍然 `literal_eval` 得动（注记在 list **里面**，不是拼�
       isinstance(_note, list) and isinstance(_note[0], dict), str(type(_note)))
 check("注记确实在帧里（narrator 读的是全文，边界要有出处）",
       any("已通过审核" in str(x) for x in _note), str(_note)[-90:])
+check(" 注记里写明「留名不是账号」并给出认人的正路（帧自己要说清它是什么）",
+      any("不是账号" in str(x) and "list_admin_board" in str(x) for x in _note),
+      str(_note)[-140:])
 check("注记**不占下标**：`[0]` 仍是第一条留言",
       isinstance(_note[0], dict) and _note[0].get("talkId") == 96)
 _rows_kept = [x for x in _note if isinstance(x, dict)]
