@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from agent import sections
 from agent.authz import (SCOPE_READ_OWN,  # 帧预算按 scope 分族（见 _frame_view）
                          required_scope,
-                         strip_system_tags)  # 消息壳剥除（见下方 _short_reply_kind 注释）
+                         strip_user_shell)  # 两层壳剥除（见下方 _short_reply_kind 注释）
 
 # ---------------------------------------------------------------------------
 # 消息/上下文工具
@@ -352,7 +352,10 @@ _SHORT_MAX = 12  # 去标点空白后的长度上限——超过就不是"短应
 # 只剥**结尾**的喵：句中/句首的喵是别的意思（`_SHORT_LEAD_RE` 已在句首剥过一道）。
 _SHORT_TAIL_TIC_RE = re.compile(r"(?:喵呜|喵)+$")
 _PUNCT_ONLY_RE = re.compile(r"[\s，。！？~～、；：,.!?…·\-—_/\\|]+")
-_SHORT_LEAD_RE = re.compile(r"^(那|那就|就|我|咱|我们|你|小猫咪|泠月|喵|，|,|、)+")
+# 句首虚词表。**称呼不在这里**（小猫咪/泠月/喵 20260930 已收进 `authz._VOCATIVE_RE`）：
+# 称呼是跨判据共用的东西，内联在这张表里就是第二份定义（这一处与导航快道、同意闸
+# 三份口径各不相同，都不含裸「猫咪」）。全量语料对账：换成共用剥法后本判据**0 条变化**。
+_SHORT_LEAD_RE = re.compile(r"^(那|那就|就|我|咱|我们|你|，|,|、)+")
 _SHORT_POS = frozenset({
     "要", "要的", "要啊", "好", "好的", "好啊", "好呀", "好吧", "嗯", "嗯嗯", "嗯好",
     "行", "行吧", "可以", "可以呀", "对", "对的", "对呀", "是", "是的",
@@ -430,13 +433,14 @@ _FOLLOWUP_TAIL = 320
 
 
 def _short_core(text: str) -> str:
-    """消息 → 剥掉外壳后的核心串（系统消息壳 + 标点 + 句首称呼/虚词 + 结尾喵尾缀）。
+    """消息 → 剥掉外壳后的核心串（系统消息壳 + 句首称呼 + 标点 + 句首虚词 + 结尾喵尾缀）。
 
     **单一来源**：`_short_reply_kind` 的分类判据与 `_looks_like_followup` 的形态判据
     都在这同一份剥离结果上判。写两遍的下场是"同一句话，分类认得出、承接判不出"
-    （或反过来）——同一族外壳（消息壳 / 喵尾缀 / 结尾语气词）历史上已经架空过三处判据。
+    （或反过来）——同一族外壳（消息壳 / 称呼 / 喵尾缀 / 结尾语气词）历史上已经架空过
+    四处判据，20260930 起两层壳（系统锚点 + 句首称呼）统一走 `authz.strip_user_shell`。
     """
-    core = _SHORT_LEAD_RE.sub("", _PUNCT_ONLY_RE.sub("", strip_system_tags(text or ""))).strip()
+    core = _SHORT_LEAD_RE.sub("", _PUNCT_ONLY_RE.sub("", strip_user_shell(text or ""))).strip()
     return _SHORT_TAIL_TIC_RE.sub("", core)
 
 

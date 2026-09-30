@@ -498,6 +498,48 @@ def _strip_system_tags(text: str) -> str:
 strip_system_tags = _strip_system_tags
 
 
+# ── 句首**称呼壳**（20260930，同族第 4 例）────────────────────────────────────
+# 第二层壳，**不是系统加的、是主人的说话习惯**：人设让它叫「小猫咪/泠月喵」，主人就
+# 真的这么叫——生产语料 1110 条消息里 **252 条（22.7%）** 以称呼开头。
+#
+# 它架空判据的机制与系统壳一模一样：底下全是句首锚定（句首把/将、句首动词）或整串相等
+# 型，称呼一在就恒不命中。实测（同一份语料 1110 条，剥与不剥逐条对账）：
+#
+#   · 同意闸 `_own_command` **6 条翻正**——5 条是「小猫咪把这篇文章收藏了」/「小猫咪把
+#     我当前在读的文章收藏了」（这 5 轮 trace 里主人随后都点了「确定」把收藏办成了
+#     ⇒ 此前是判据判不出、弹窗问一次），1 条是「猫咪我的未读信息全部就标记为已读」
+#     （洞⑨ 那句事故原文）。
+#   · 弹窗分叉 `is_question_like` 8 条翻正——全是「小猫咪！」「小猫咪」这种**只叫名字**
+#     的轮次：剥完为空 ⇒ 按"无从判断时不弹"走，方向与全表一致（叫名字不是意图）。
+#   · 后台写判据 `_console_command`、短应答 `_short_reply_kind`、导航快道：**0 条变化**
+#     （导航快道的老表已内联认「小猫咪」，本判据多认的是裸「猫咪」——语料里还没有这种
+#     说法，属可预期的加宽；「猫咪带我去留言板」实测命中）。
+#
+# 剥壳**不放宽判据**：剥完仍要过 提问/假设/打听/陈述/骨架 五关——主人写「小猫咪，把文章
+# 12 设为私密」本来就是在下命令，不构成放宽；而「小猫咪，如果我把文章 12 设为私密呢」
+# 剥完照样被假设关拦下。
+#
+# ⚠️ **称呼表只有这一份**：`decisions._NAV_VERB_RE` 与 `context._SHORT_LEAD_RE` 里各内联过
+# 一份（都不含裸「猫咪」，于是同一句话在两处口径不同）——20260930 一并收进来，全部改走
+# `strip_user_shell`。再加称呼只改这里。
+_VOCATIVE_RE = re.compile(
+    r"^\s*(?:(?:小|大|傻|臭|笨|乖)?(?:猫咪|猫猫)|泠月喵|泠月|喵喵|喵|主人)"
+    r"(?:\s*[，,、:：!！~～。.…]+\s*|\s+)?")
+
+
+def _strip_address_shell(text: str) -> str:
+    """剥掉消息开头的称呼壳（见 `_VOCATIVE_RE`）。只剥**开头**一处，句中不动。"""
+    return _VOCATIVE_RE.sub("", text or "", count=1)
+
+
+def strip_user_shell(text: str) -> str:
+    """判据入口的**唯一**剥壳定义：系统锚点壳 + 句首称呼壳 → **用户实际说的那句话**。
+
+    只用于**判定**，不碰给模型的 prompt（两层壳都是给模型看的语用信息，不是缺陷）。
+    """
+    return _strip_address_shell(_strip_system_tags((text or "").strip()))
+
+
 def _console_command(msg: str, tool: str | None = None) -> bool:
     """本轮消息是不是一条明确的后台写命令（确定性、无 LLM）。
 
@@ -505,7 +547,7 @@ def _console_command(msg: str, tool: str | None = None) -> bool:
     `_ARTICLE_WRITE_TOOLS` 的目标校验管（那里比"这句话里有没有这个动作词"更硬）。
     签名统一成两参只是为了 `consent_granted` 的那一处调用（见它自己的注释）。
     """
-    text = _strip_system_tags((msg or "").strip())
+    text = strip_user_shell(msg)          # 系统壳 + 称呼壳：判据看到的是主人实际说的那句
     if not text:
         return False
     if _CONSOLE_QUESTION_RE.search(text) or _CONSOLE_HYPOTHESIS_RE.search(text):
@@ -524,7 +566,7 @@ def is_question_like(msg: str) -> bool:
     → 弹窗问一次；判出来是提问/假设 → 绝不能弹（用户只是在问，弹一个"确定/取消"
     等于把提问读成了意图）。空消息保守按提问走（无从判断时不弹）。
     """
-    text = _strip_system_tags((msg or "").strip())
+    text = strip_user_shell(msg)          # 系统壳 + 称呼壳：判据看到的是主人实际说的那句
     if not text:
         return True
     return bool(_CONSOLE_QUESTION_RE.search(text) or _CONSOLE_HYPOTHESIS_RE.search(text)
@@ -633,6 +675,17 @@ _OWN_REMOVE_RE = re.compile(
 # 已读族：动词**必须与「已读」连用**才成立——「把通知标记一下」不是标记已读，
 # 而"通知"这个词本身到处都是，只认"标记"会与闲聊撞车。
 _OWN_READ_VERB = r"(?:标记|标注|标为|标成|设为|设置|置为|改为|改成|转为)"
+# 动词起首分支的两个**槽**（20260930，词形族加宽而不是逐个补写法）：
+#   · 名词槽 = 物件的各种叫法。批 8（20260923）已证"叫法收不全 ⇒ 最自然的说法漏判"；
+#     这一版补上「未读信息/未读消息/未读数/信息」——生产原文「猫咪我的未读信息全部就
+#     标记为已读」正是栽在"未读信息"不在表里（而且它那轮 planner 判了 chat、零工具，
+#     见 `_WRITE_DONE_CLAIM_RE` 的洞⑨）。
+#   · 副词槽 = 动词与物件之间的口语插入（就/也/再/先/都/给我/帮我）。原判据只认"都"。
+# 加宽面**逐条对过全量语料**（1110 条生产消息）：只有这一句话从 False 翻 True（两个读族
+# 工具各算一次，落点在同一条消息上）——没有一个提问/陈述被读成命令。
+_OWN_READ_NOUN = (r"(?:所有|全部|全|都|未读的?|未读通知|未读信息|未读消息|未读数"
+                  r"|通知|公告|站内信|私信|信件|消息|信息)")
+_OWN_READ_ADV = r"(?:就|也|再|先|都|给我|帮我)"
 _OWN_READ_RE = re.compile(
     rf"^(?:{_OWN_POLITE})?(?:把|将)[^\n。！？!?；;，,]{{0,24}}?{_OWN_READ_VERB}"
     r"[^\n。！？!?；;，,]{0,6}?已读"
@@ -645,11 +698,15 @@ _OWN_READ_RE = re.compile(
     # 只取所有格，不含「已经/刚」那类时间副词——带时间副词的句子是**陈述现状**，
     # 由上面的 _OWN_STATEMENT_RE 管，别在这里放进来）。
     rf"|^(?:{_OWN_POLITE})?(?:(?:我|咱|俺)(?:的)?\s*)?"
-    # ⚠️ 这一行必须是 **rf** 串：`{{0,3}}` 在 rf 里才折叠成量词 `{0,3}`，写成普通 r 串
-    # 就变成"字面量 {0,3}"（永远匹配不上）⇒ 整支动词起首分支恒不命中（本批改这句时
+    # ⚠️ 这一行必须是 **rf** 串：`{{0,4}}` 在 rf 里才折叠成量词 `{0,4}`，写成普通 r 串
+    # 就变成"字面量 {0,4}"（永远匹配不上）⇒ 整支动词起首分支恒不命中（本批改这句时
     # 真踩过一次：只有「把…」那支还能过）。
-    rf"(?:(?:所有|全部|全|都|未读的?|未读通知|通知|公告|站内信|私信|信件|消息)\s*){{0,3}}"
-    r"(?:都\s*)?" + _OWN_READ_VERB + r"[^\n。！？!?；;，,]{0,6}?已读"
+    rf"(?:{_OWN_READ_NOUN}\s*){{0,4}}"
+    # 动词前的**副词槽**（20260930）：口语里"未读信息**全部就**标记已读""**也**标成已读"
+    # 极常见，而原判据只放"都"一个 ⇒ 一句明确的命令落回弹窗。这一槽**不碰骨架**：
+    # 后面仍必须紧跟 `_OWN_READ_VERB` + 六字内的"已读"，陈述句照样进不来。
+    rf"(?:{_OWN_READ_ADV}\s*){{0,2}}"
+    + _OWN_READ_VERB + r"[^\n。！？!?；;，,]{0,6}?已读"
 )
 
 _OWN_FAMILY_RE: dict[str, re.Pattern] = {
@@ -672,7 +729,7 @@ def _own_command(msg: str, tool: str | None = None) -> bool:
     family = _OWN_TOOL_FAMILY.get(tool or "")
     if family is None:
         return False
-    text = _strip_system_tags((msg or "").strip())
+    text = strip_user_shell(msg)          # 系统壳 + 称呼壳：判据看到的是主人实际说的那句
     if not text:
         return False
     if _CONSOLE_QUESTION_RE.search(text) or _CONSOLE_HYPOTHESIS_RE.search(text):

@@ -1085,6 +1085,11 @@ NEW_CASES = {
     "own_messages_not_logged_in": {"require_tool_calls_any": ["list_my_messages",
                                                              "get_unread_summary"]},
     "own_message_read_not_logged_in": {"require_tool_calls": ["read_messages"]},
+    # 句首称呼壳（20260930，同族第 4 例）：同一句话带上「小猫咪」前缀，此前同意闸
+    # 判不出命令 ⇒ 落回弹窗 ⇒ 这条用例会变成"走确认弹窗、零调用"（性质悄悄变了而
+    # 用例本身不报错，正是这段注释开头那条纪律说的形态）。生产 trace 里这句出现过
+    # 4 次、主人每次都在弹窗上点了确定 ⇒ 真行为就是"能直执行"。
+    "own_favorite_add_vocative_not_logged_in": {"require_tool_calls": ["add_favorite"]},
 }
 for _cid, _want in NEW_CASES.items():
     _c = _by_id.get(_cid)
@@ -1111,6 +1116,9 @@ check("输入形态判据仍是「命令式 ⇒ 免弹窗直执行」（改了 a
       authz.consent_granted(Principal(uid=7, role="user"), "add_favorite", "收藏这篇文章")
       and authz.consent_granted(Principal(uid=7, role="user"),
                                 "read_notifications", "把通知都标记成已读"))
+check("  带句首称呼的命令同样免弹窗（否则上面那条新用例会在弹窗上停住、零调用）",
+      authz.consent_granted(Principal(uid=7, role="user"), "add_favorite",
+                            "小猫咪把我当前在读的文章收藏了"))
 check("两条提问形态仍是「提问 ⇒ 不弹窗」（否则用例会落进确认弹窗、测的不是同一条链路）",
       authz.is_question_like("我有哪些未读通知？"))
 
