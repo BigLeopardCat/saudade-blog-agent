@@ -987,11 +987,15 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         emitted: set = set()
         is_chat_skill = False
         # 跨轮执行记忆（20260904 C3）：checker 验收回执累计（execute update 是
-        # 累计语义——末批即本次请求全量），流收尾时 __EXEC__ 帧发 Rust 落库
+        # 累计语义——末批即本次请求全量）
         exec_rows: list = []
         # 完成帧 diff 起点（20260905 issue5）：receipts 全量累计，已发条数起点
         # 之后为新增回执（同一 update 内顺序与执行顺序一致）
         receipt_sent = 0
+        # __EXEC__ 已发条数（20261001，见流尾那条注释）：与 receipt_sent 同源同值，
+        # 但**刻意分开记**——前者管过程行、后者管落库帧，将来谁改了自己的去重口径
+        # 都不会把另一个带偏（"一处实现两处用，改一处忘一处"正是本仓的老形状）。
+        exec_sent = 0
         # 动作事实块（20260927 D3，`agent/factblock.py`）：命令族/写族的事实**由系统
         # 印**——在 narrator 产文本之前就把那几行发给主人（用户可见正文 = 系统事实块
         # + 模型包装）。`fact_sent` 是已印出的行（增量去重，跨 replan 重发要用），
@@ -1187,7 +1191,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     # 内容）；BLOCK 受阻项发 ✗ 行——真实执行失败不再显示"完成"
                     if ex_upd.get("receipts"):
                         rows = ex_upd["receipts"]
-                        exec_rows = rows  # 全量（流收尾 __EXEC__ 用）
+                        exec_rows = rows              # 全量累计（末批即本次请求全量）
+                        new_rows = rows[exec_sent:]   # 本次请求内**还没发过**的回执
                         for i in range(receipt_sent, len(rows)):
                             r = rows[i]
                             # 完成行仍走**过程行那档**（默认 preview=True）：主人看到的
@@ -1213,6 +1218,24 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                     queue.put("__CMD__:" + json.dumps(cmd, ensure_ascii=False)),
                                     loop).result()
                         receipt_sent = len(rows)
+                        # ★ __EXEC__ **增量即发**（20261001）。此前它攒到流尾、与
+                        # `__CMD__`/`__PENDING__`/`__TASK__` 三条"收到即发"的兄弟帧
+                        # 不同纪律，代价是一次真实事故：确认轮 `create_announcement`
+                        # 真跑（公告 id=23 落库）后客户端断开 ⇒ 收尾那行 `__EXEC__`
+                        # 永远发不出去 ⇒ Rust 的 `execution_log` 没写、`close_pending
+                        # _actions` 没跑 ⇒ 待办**仍挂在 pending** ⇒ 下一轮 planner 看到
+                        # "系统账上还等着点头" ⇒ 重新弹卡 ⇒ 02:47 又写一次（id=24）。
+                        # 两个用户可见后果（两条同名公告、模型重复弹卡）是同一件事。
+                        # 时机上这一刻是安全的：execute update 到达 = 该轮工具**已经
+                        # 跑完**且 checker 已验收（receipts 只收 PASS），发出去的就是
+                        # 已发生事实；Rust 侧本就是"收到即落库"（`chat.rs` 在 JSON 解析
+                        # 之前拦帧 + `tokio::spawn` 摘出生成器生命周期），**天生支持
+                        # 增量帧**——从 20260920 起它就在等这一天，是 Python 侧没跟上。
+                        if new_rows:
+                            exec_sent = len(rows)
+                            asyncio.run_coroutine_threadsafe(
+                                queue.put("__EXEC__:" + json.dumps(new_rows, ensure_ascii=False)),
+                                loop).result()
                         # 动作族事实块（D3）：紧随 `__CMD__` 之后发（命令是机器读的，
                         # 块是给人读的），仍早于 narrator 的任何文本。
                         emit_facts(rows)
@@ -1312,12 +1335,16 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     loop).result()
         except Exception as e:                      # noqa: BLE001 —— 结算失败不影响本轮
             logger.warning("[producer] 任务结算失败（不影响本轮回复）：%s", e)
-        # 跨轮执行记忆帧（20260904 C3）：checker 验收回执（本次请求全部行）随流
-        # 尾发出，Rust 收帧落库 execution_log（读取侧限最近 8 条）。放 None 之前
-        # ——event_stream 收到即裸转发，Rust 在 __END__ 前解析完即可
-        if exec_rows:
+        # 跨轮执行记忆帧（20260904 C3）：checker 验收回执发 Rust 落库 execution_log
+        # （读取侧限最近 8 条）。
+        # ⚠️ 20261001 起回执**在 execute update 里就已经增量发完**（见上），这里
+        # 正常恒为空——留着这一行是兜"回执到了、本循环却没走到那段"的残余：那一刻
+        # 断连就再也没有第二个发帧点，而**执行是已发生事实**，宁可多发一次空数组
+        # 也不赌。判据用 `exec_sent`（已发条数）而不是 `exec_rows`（累计），
+        # 否则每轮都会把发过的重发一遍、execution_log 里同一件事落两行。
+        if exec_sent < len(exec_rows):
             asyncio.run_coroutine_threadsafe(
-                queue.put("__EXEC__:" + json.dumps(exec_rows, ensure_ascii=False)),
+                queue.put("__EXEC__:" + json.dumps(exec_rows[exec_sent:], ensure_ascii=False)),
                 loop).result()
         asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
     except AgentCancelled:
