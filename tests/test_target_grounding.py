@@ -185,8 +185,11 @@ _POPUPS = {
         ("create_announcement", {"title": "今晚维护", "content": "今晚 23 点开始维护，预计一小时"}),
     "admin_announcement_delete_popup":
         ("delete_announcement", {"title": "公告"}),
-    "admin_board_audit_popup":
-        ("audit_board_comment", {"quote": "泠月喵真棒！"}),
+    # `admin_board_audit_popup` **撤出本表**（20260930 批 H）：复核那件的目标改成台账
+    # 编号（`_ledger_target_refusal`），名字通道的表里已经没有它 ⇒ 留在这里也只是
+    # 每跑一次都恒过的一条空断言（函数见工具名不在 `_WRITE_NAME_FIELDS` 里就直接放行）。
+    # 它现在有两处真判据：离线那半边在 `test_tag_admin.py` ⑪（台账里在/不在/已复核
+    # 三态），端到端那半边是 golden 的 `admin_board_audit_reviewed_refusal`。
     "admin_board_delete_popup":
         ("delete_board_comment", {"quote": "泠月喵好笨啊"}),
     "admin_tag_create_invented_name_popup":
@@ -197,7 +200,7 @@ _POPUPS = {
 _cases = {c["id"]: c for c in (
     json.loads(ln) for ln in
     (ROOT / "eval/golden/basic.jsonl").read_text(encoding="utf-8").splitlines() if ln.strip())}
-check("12 条弹卡用例都在（用例文件改名/被删时这里要跟着改）",
+check("11 条弹卡用例都在（用例文件改名/被删时这里要跟着改）",
       all(cid in _cases for cid in _POPUPS),
       "；".join(sorted(set(_POPUPS) - set(_cases))))
 for cid, (tool, args) in _POPUPS.items():
