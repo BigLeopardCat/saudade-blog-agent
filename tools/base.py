@@ -252,6 +252,25 @@ _FRAME_ID_KEYS = {
 }
 
 
+def _board_text_keys(rows: list) -> list:
+    """公开留言/说说行：把上游的 `author` 改名成 `留名`（**只改键名，不动值**）。
+
+    理由与 `_FRAME_ID_KEYS` 同一条纪律——**帧里同一个字面只以一种身份露面**：
+    上游这个字段装的是留言人**自己在留名框里填的字**（自由文本，可留空=匿名），
+    字段名却叫 `author`，读的人（与模型）会直接把它当"发表账号"。trace
+    `20261001T005722` 实证：那条留言的公开行是 `'author': 'Sora Saudade'`，
+    模型据此讲成"ID 100 的账号是 sora"——而**留名是人能随便填的字**，账号只有
+    后台名册（放灯必须登录）才有。改名后帧自己会说清它是什么；要认人走
+    `list_admin_board`。
+    """
+    out = []
+    for r in rows:
+        if isinstance(r, dict) and "author" in r:
+            r = {("留名" if k == "author" else k): v for k, v in r.items()}
+        out.append(r)
+    return out
+
+
 def _rows_with_note(rows: list, note: str) -> list:
     """列表帧尾补一条**系统注记**（给模型读的边界事实）。
 
@@ -703,9 +722,13 @@ def list_guestbook() -> str:
         # 读帧的人（planner 与 narrator）都要看得见这条边界：上游恒按 Approved=1 过滤，
         # "列表里没有"不是"这条不存在"。不写这一句，帧就只在**数量**上沉默，而
         # "站内没有这条留言"这个结论会被当成列表给的事实（20260928 现场那条就是）。
+        data = _board_text_keys(data)
         data = _rows_with_note(
             data, "本列表只含**已通过审核**的留言（与留言板页面一致）；"
-                  "待审/被驳回的留言不在这里，查无此条不等于不存在")
+                  "待审/被驳回的留言不在这里，查无此条不等于不存在。"
+                  "每行的「留名」是留言人**自己填的字**（自由文本，可留空=匿名），"
+                  "**不是账号**——别拿它认人；要知道「这条是谁发的」走后台名册 "
+                  "list_admin_board（放灯必须登录，那里逐条带真实账号）")
     return _shape(data)
 
 # ---------------------------------------------------------------------------
@@ -723,9 +746,11 @@ def list_talks() -> str:
     """
     data = _get("/talk")
     if isinstance(data, list):
+        data = _board_text_keys(data)
         data = _rows_with_note(
             data, "本列表只含**已通过审核**的说说；待审/被驳回的不在这里，"
-                  "查无此条不等于不存在")
+                  "查无此条不等于不存在。每行的「留名」是发表人**自己填的字**"
+                  "（自由文本，可留空=匿名），**不是账号**——别拿它认人")
     return _shape(data)
 
 # ---------------------------------------------------------------------------

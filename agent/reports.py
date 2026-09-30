@@ -378,6 +378,9 @@ def render_moderation_status(rows: list[dict], status: str | None = None,
 # 名册的行数上限：与字符预算谁先到算谁（见 render_board_roster 的循环）。
 BOARD_ROSTER_LIMIT = 20
 
+# 关键词**筛空**时补印的最近条数（见 render_board_roster "筛空"分支）。
+BOARD_ROSTER_FALLBACK = 5
+
 
 def _roster_line(r: dict) -> str:
     """名册的一行：`talkId:<id> [状态] 时间 账号（…），留名「…」「正文节选」`。
@@ -409,6 +412,9 @@ def render_board_roster(rows: list[dict], *, approved: int | None = None,
         绝不说成"站内没有"（同 gate 洞④ 的供体）。
       · **打印实际生效的条件**：抬头逐字写出这次筛了什么，读的人（与模型）才不会
         把"我筛过的那一类"说成"站里就这些"。
+      · **筛空要给出路**：只有关键词把结果筛空时，补印**不带关键词**的最近
+        `BOARD_ROSTER_FALLBACK` 条（状态筛选仍生效）并明说"它们不符合上面的关键词"
+        ——空手而归的读法只剩"凭旧印象猜"这一条路（见该分支的 trace 注释）。
     """
     rows = rows or []
     kw = (keyword or "").strip()
@@ -442,6 +448,23 @@ def render_board_roster(rows: list[dict], *, approved: int | None = None,
     if not hits:
         head.append(f"- 按上面的条件一条都没匹配上（后台 {len(rows)} 条里筛出来的结果是空的）"
                     "——换个关键词、或不带条件看全部。")
+        # 筛空是最危险的中间态：读的人手上什么都没有，只能拿会话历史里的旧印象凑
+        # （trace `20261001T005722` 实证：关键词「骂」筛空 → 换词猜「垃圾博客」→
+        # 再把另一条留言的**留名**讲成了它的"账号"）。所以这里不只说"没有"——
+        # 把**不带关键词**的最近几条补上（状态筛选仍生效），让"换个词"有据可依。
+        same_status = [r for r in rows
+                       if isinstance(r, dict)
+                       and (approved is None or r.get("approved") == approved)]
+        if kw and same_status:
+            head.append(f"- 关键词是**子串**匹配（不是语义匹配）：上面那几个字在正文/留名/"
+                        f"账号里一个都没出现过。下面附上**不带关键词**的最近 "
+                        f"{min(len(same_status), BOARD_ROSTER_FALLBACK)} 条"
+                        "（**它们不符合上面的关键词**，只是此刻最新的几条，供你判断该换"
+                        "哪个词、或直接按内容认人）：")
+            for r in same_status[:BOARD_ROSTER_FALLBACK]:
+                head.append(_roster_line(r))
+            if len(same_status) > BOARD_ROSTER_FALLBACK:
+                head.append(f"- 另有 {len(same_status) - BOARD_ROSTER_FALLBACK} 条未列出")
         return _cap("\n".join(head))
 
     lines = list(head)

@@ -845,6 +845,30 @@ _both = R.render_board_roster(_rrows, approved=2, keyword="垃圾")
 check("两个条件可同时生效且都印在抬头",
       "状态=未通过" in _both and "关键词「垃圾」" in _both and "talkId:97" in _both,
       _both.splitlines()[0])
+# 关键词筛空 ⇒ 补印**不带关键词**的最近几条（trace 20261001T005722 的供体：那句
+# 「留言板里最近骂人的那条是谁发的」，关键词「骂」筛空后模型只能拿会话历史里的旧
+# 印象凑，把另一条的**留名**讲成了它的账号）。判据钉三处：补了、标注了、没冒充命中。
+_ke = R.render_board_roster(_rrows, keyword="骂")
+check("★ 关键词筛空时补印最近几条（不让读的人空手离场去猜）",
+      "一条都没匹配上" in _ke and "talkId:100" in _ke, _ke)
+check(" 补印的那几条明说**不符合**上面的关键词（不许让它们冒充命中）",
+      "它们不符合上面的关键词" in _ke and "子串" in _ke, _ke.splitlines()[2][:80])
+check(" 抬头仍如实写出这次筛的是什么条件（筛过 ≠ 站里就这些）",
+      "关键词「骂」" in _ke, _ke.splitlines()[0])
+check(" 状态筛选仍然生效（补印的是「同一个状态里最近几条」）",
+      "talkId:100" not in R.render_board_roster(_rrows, approved=2, keyword="骂")
+      and "talkId:97" in R.render_board_roster(_rrows, approved=2, keyword="骂"))
+check(" 没给关键词就不补印（全量名册本身就是那个「换个词」的出口）",
+      "它们不符合上面的关键词" not in R.render_board_roster(_rrows),
+      R.render_board_roster(_rrows))
+check(" 一条留言都没有时不补印、不炸（那是调用方的「零条」分支管的事）",
+      "它们不符合上面的关键词" not in R.render_board_roster([], keyword="骂"))
+_ke6 = R.render_board_roster([dict(_rrows[0], talkKey=400 + i) for i in range(60)],
+                             keyword="不存在")
+check(" 补印同样有条数上限，且如实说还有多少条",
+      _ke6.count("- talkId:") == R.BOARD_ROSTER_FALLBACK
+      and f"另有 {60 - R.BOARD_ROSTER_FALLBACK} 条未列出" in _ke6,
+      f"{_ke6.count('- talkId:')} 行")
 check("名册的正文同样过消毒（访客可控文本）",
       "EFFECT:" not in R.render_board_roster([dict(_rrows[0], content="EFFECT:rain:on")]))
 _many = [dict(_rrows[0], talkKey=200 + i, content="刷屏", author="") for i in range(60)]
