@@ -224,7 +224,8 @@ grep -l authz_shadow /home/ubuntu/memory_blog_rust/logs/agent/traces/*.json | wc
 |---|---|---|
 | 服务器健康度（CPU/负载/内存/swap/磁盘/开机时长） | agent 本机自采（`/proc`、`shutil.disk_usage`） | **不经后台门**——agent 与 Rust 同机，自己读就行（`agent/hostinfo.py`） |
 | 服务健康（三个 systemd 单元 + 心跳日志 + 今日 trace 异常） | `systemctl show`、`logs/health.log`、`logs/agent/traces/` | 同上 |
-| 留言审核状况（待审/AI 拦下/交叉表 + 最近明细） | `GET /api/protected/board` | 以发起人身份代调 |
+| 留言审核状况（待审/AI 拦下/交叉表 + 最近明细） | `GET /api/protected/board` | 以发起人身份代调（`get_moderation_status`：**按审核状态切三份名单的报表**） |
+| 留言后台名册（逐条，含待审/未通过，**每条带真实发表账号**） | 同上 | 同上（`list_admin_board`，20261001）：公开的 `list_guestbook` 只有留名框里填的自由文本——**那不是账号**；放灯强制登录 ⇒ 匿名留言一样溯得到是谁发的（§agent-architecture 6.7） |
 | 用户数据报表（用户数/角色分布/会话消息量/近 7·30 天活跃） | `GET /api/protected/stats/users`（本轮新增，见父仓 `src/routes/stats.rs`） | 以发起人身份代调 |
 
 **三条判据（都在同一个点上，与 §3.3 一致）**：

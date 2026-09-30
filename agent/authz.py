@@ -193,6 +193,14 @@ TOOL_SCOPE: dict[str, str] = {
     #   CONSENT_SCOPES（每次要命令式确认）。secretary 刻意不给——后台写与
     #   admin.console 同域，Rust 那道门也只认 admin。
     "list_admin_notes": SCOPE_ADMIN_CONSOLE,
+    # 后台**留言名册**（20261001）：与 `list_admin_notes` 完全同门——读的是
+    # `GET /api/protect/board`（Rust `auth_guard` 之后），一样是"后台只读面"。
+    #   它补的是一个**结构性缺口**：公开留言接口看不到发表账号（那里透出的
+    #   `author` 是留言人自己填的自由文本，留空即匿名），于是"这条是谁发的"在
+    #   公开视图里无解；而后台视图的每一行都带 userId/username/nickname，且放灯
+    #   强制登录 ⇒ 匿名留言同样溯得到。取 admin.console 而不是 read.public：
+    #   账号信息是对外不公开的后台事实，越权读到的后果与读草稿文章同级。
+    "list_admin_board": SCOPE_ADMIN_CONSOLE,
     "create_tag": SCOPE_WRITE_CONSOLE,
     "set_article_status": SCOPE_WRITE_CONSOLE,
     "set_article_tags": SCOPE_WRITE_CONSOLE,

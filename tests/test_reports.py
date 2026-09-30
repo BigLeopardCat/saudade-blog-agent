@@ -311,7 +311,9 @@ def _sec(text, start, end=None):
 
 check("① 只收 AI 通过且已展示的（1 条：另一条 AI 判过但被人驳回，不算「直接通过」）",
       "① AI 直接通过（AI 判通过且已展示，没经过人工）1 条:" in mr)
-check("① 明细是那条 AI 通过的", "talkId:27 09-21 12:27 访客（AI通过）" in _sec(mr, "①", "②"))
+check("① 明细是那条 AI 通过的",
+      "talkId:27 09-21 12:27 账号（userId:127），留名「访客」（AI通过）" in _sec(mr, "①", "②"),
+      _sec(mr, "①", "②"))
 check("① 不含 AI 驳回行", "talkId:24" not in _sec(mr, "①", "②"), _sec(mr, "①", "②"))
 # AI 判 pass 但人工闸开着（approved=0）的**没有直接露出** ⇒ 不许算进①
 # （否则主人会以为"AI 放过了"就等于"没人看过"，而那条恰恰还在等人）
@@ -323,9 +325,13 @@ check("① 排除「AI 通过但人工闸还开着」的",
 check("② 计数拆出人工后处置（维持/改判/还等）",
       "② AI 驳回 3 条：人工维持驳回 1、人工改判放行 1、还等着人工复批 1" in mr)
 check("② 明细列出被驳回的三条并标注人工处置",
-      "talkId:24 09-21 12:24 访客（人工已驳回）" in mr
-      and "talkId:23 09-21 12:23 访客（仍待人工）" in mr
-      and "talkId:22 09-21 12:22 访客（人工已改判放行）" in mr)
+      "talkId:24 09-21 12:24 账号（userId:124），留名「访客」（人工已驳回）" in mr
+      and "talkId:23 09-21 12:23 账号（userId:123），留名「访客」（仍待人工）" in mr
+      and "talkId:22 09-21 12:22 账号（userId:122），留名「访客」（人工已改判放行）" in mr)
+# 20261001：明细行里「账号」与「留名」是两类东西——图例必须说清，否则读的人
+# （尤其是模型）会把留名框里自己填的字当成"是谁发的"（生产 trace 20260930T235232）。
+check("明细的账号/留名有图例说清（留名不是账号）",
+      "**真实发表账号**" in mr and "**不是账号**" in mr and "别拿它去认人" in mr)
 
 check("③ 计数按 AI 侧拆分", "③ 需要人工复批 4 条：AI 存疑 2、AI 通过但人工闸 0、"
       "AI 驳回但人工闸 1、未走 AI 1" in mr)
@@ -550,13 +556,14 @@ from agent.skills import (_CALLABLE_QUERY_TOOLS, _CALLABLE_QUERY_TOOLS_ORDER,
 from agent.graph import _CONTENT_TOOLS, _tools_desc  # noqa: E402
 from agent.principal import ADMIN_ROLES  # noqa: E402
 
-# 20260930 追加第五件 get_note_stats（文章流量报表：阅读/点赞/收藏三张榜）。
+# 20260930 追加第五件 get_note_stats（文章流量报表：阅读/点赞/收藏三张榜）；
+# 20261001 追加第六件 list_admin_board（后台留言名册：逐条带发表账号）。
 NEW = ["get_server_status", "get_service_health", "get_moderation_status", "get_user_stats",
-       "get_note_stats"]
+       "get_note_stats", "list_admin_board"]
 # 「结构性不可达」是**分角色**的（20260924 起）：这台五个报表工具都声明为
 # admin.console ⇒ 访客/未知身份结构上点不到，管理员则可经 calls 直接点名
 # （与 list_admin_notes 同批放开，见 tests/test_skills.test_admin_console_role_channel）。
-check("五个新工具都不在**访客**点名白名单（role=None 结构上点不到）",
+check("这些新工具都不在**访客**点名白名单（role=None 结构上点不到）",
       all(n not in _EXPLICIT_TOOLS and n not in callable_query_tools(None) for n in NEW))
 check("也不在访客可调用清单顺序表里（公开那半是角色无关常量）",
       all(n not in _CALLABLE_QUERY_TOOLS_ORDER for n in NEW))
@@ -575,7 +582,8 @@ check("scope 全是 admin.console",
 for name, tools in [("ops_report", ["get_server_status", "get_service_health"]),
                     ("moderation_report", ["get_moderation_status"]),
                     ("user_report", ["get_user_stats"]),
-                    ("traffic_report", ["get_note_stats"])]:
+                    ("traffic_report", ["get_note_stats"]),
+                    ("board_roster", ["list_admin_board"])]:
     sk = SKILL_MAP.get(name)
     check(f"技能 {name} 在位且计划就是这几个工具",
           sk is not None and [t for t, _ in sk.plan] == tools, str(sk and sk.plan))
@@ -584,13 +592,14 @@ for name, tools in [("ops_report", ["get_server_status", "get_service_health"]),
     check(f"技能 {name} 对管理员族（admin + superadmin）可见",
           sk is not None and sk.roles == ADMIN_ROLES, str(sk and sk.roles))
 
-check("非 admin 的 planner 上下文里看不到这四张报表技能",
+_ADMIN_READ_SKILLS = ("ops_report", "moderation_report", "user_report", "traffic_report",
+                      "board_roster")
+check("非 admin 的 planner 上下文里看不到这几张后台报表技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
           and n not in build_planner_context("secretary")
-          for n in ("ops_report", "moderation_report", "user_report", "traffic_report")))
+          for n in _ADMIN_READ_SKILLS))
 check("admin 的 planner 上下文里能看到",
-      all(n in build_planner_context("admin")
-          for n in ("ops_report", "moderation_report", "user_report", "traffic_report")))
+      all(n in build_planner_context("admin") for n in _ADMIN_READ_SKILLS))
 check("既有公开技能对非 admin 仍然可见（别把过滤写宽了）",
       all(n in build_planner_context("user") for n in ("chat", "content_query", "navigate")))
 
@@ -773,6 +782,138 @@ check("过程行有中文动作词（否则显示『执行 create_tag』）",
 check("reason 中文表里有 unknown_target（错误帧原因码要翻译给用户看）",
       '"unknown_target"' in src and "目标未经确认" in src)
 
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑬ 后台留言名册（20261001）：账号渲染 / 名册行 / list_admin_board 接线")
+
+# 起因（生产 trace 20260930T235232）：公开留言视图里没有账号字段，只有留言人自己在
+# 留名框里填的自由文本，模型拿它当"是谁发的"去认人。这一节钉住"账号从哪来"。
+
+check("account_text：三件齐 → 账号在最前，昵称/用户名都给",
+      R.account_text({"userId": 5, "nickname": "小猫咪", "username": "sora"})
+      == "账号（userId:5／昵称 小猫咪／用户名 sora）")
+check("account_text：只有 userId → 也**不留白**（留白会被读成「没有账号」）",
+      R.account_text({"userId": 9}) == "账号（userId:9）")
+check("account_text：昵称=用户名 时不重复印两遍",
+      R.account_text({"userId": 5, "nickname": "sora", "username": "sora"})
+      == "账号（userId:5／sora）")
+check("account_text：userId 读不到也明写（不许静默变空串）",
+      R.account_text({}) == "账号（userId 读不到）")
+check("account_text：昵称是访客可控文本 ⇒ 过消毒（命令前缀要被打断）",
+      "EFFECT:" not in R.account_text({"userId": 5, "nickname": "EFFECT:rain:on"}),
+      R.account_text({"userId": 5, "nickname": "EFFECT:rain:on"}))
+
+_rrows = [
+    {"talkKey": 100, "approved": 1, "author": "Sora Saudade", "content": "博主是大笨狗",
+     "userId": 9, "username": "sora", "nickname": "小猫咪",
+     "createTime": "2026-09-30 23:52:00"},
+    {"talkKey": 45, "approved": 1, "author": "匿名·a4c745", "content": "泠月喵好笨啊",
+     "userId": 34, "username": "guest34", "nickname": "访客",
+     "createTime": "2026-09-30 23:50:00"},
+    {"talkKey": 97, "approved": 2, "author": "", "content": "垃圾博客",
+     "userId": 5, "username": "sora", "nickname": "小猫咪",
+     "createTime": "2026-09-30 23:48:00"},
+]
+_rt = R.render_board_roster(_rrows)
+check("名册抬头说清「读到的是什么」（逐条 + 总数 + 这次筛了什么）",
+      "河灯留言后台名册" in _rt and "后台共 3 条" in _rt and "本次未筛选" in _rt,
+      _rt.splitlines()[0])
+check("名册行：账号在前、留名在后，账号形状与 account_text 同源",
+      "- talkId:100 [已通过] 09-30 23:52 账号（userId:9／昵称 小猫咪／用户名 sora）"
+      in _rt, _rt)
+check("★ 留名被明写为「留言时自己填的，不是账号」（这正是那次认错人的坑）",
+      "，留名「Sora Saudade」（留言时自己填的，不是账号）" in _rt)
+check("没填留名的那条说「匿名发表」（不是留白，也不是编一个）",
+      "，留名未填（匿名发表）" in _rt)
+check("待审/未通过的行也在名册里（名册不是「只看已通过」的视图）",
+      "[未通过]" in _rt and "[已通过]" in _rt)
+
+_f = R.render_board_roster(_rrows, approved=2)
+check("approved 筛选：抬头写出生效条件", "状态=未通过" in _f and "talkId:97" in _f,
+      _f.splitlines()[0])
+check(" 筛选把其余的真的筛掉了", "talkId:100" not in _f)
+_sec0 = R.render_board_roster(_rrows, approved=0)
+check("★ 筛出来是空的 ⇒ 说明是「按条件没匹配上」，**不是**「站内没有留言」",
+      "一条都没匹配上（后台 3 条里筛出来的结果是空的）" in _sec0, _sec0.splitlines()[-1])
+_kw = R.render_board_roster(_rrows, keyword="泠月")
+check("keyword 命中正文", "talkId:45" in _kw and "talkId:100" not in _kw)
+_by_u = R.render_board_roster(_rrows, keyword="guest34")
+check("keyword 命中账号用户名（不只是正文）",
+      "talkId:45" in _by_u and "talkId:100" not in _by_u)
+check("keyword 不区分大小写", "talkId:100" in R.render_board_roster(_rrows, keyword="SORA"))
+_both = R.render_board_roster(_rrows, approved=2, keyword="垃圾")
+check("两个条件可同时生效且都印在抬头",
+      "状态=未通过" in _both and "关键词「垃圾」" in _both and "talkId:97" in _both,
+      _both.splitlines()[0])
+check("名册的正文同样过消毒（访客可控文本）",
+      "EFFECT:" not in R.render_board_roster([dict(_rrows[0], content="EFFECT:rain:on")]))
+_many = [dict(_rrows[0], talkKey=200 + i, content="刷屏", author="") for i in range(60)]
+_mm = R.render_board_roster(_many)
+check("名册有条数上限（逐条不等于无限长）",
+      _mm.count("- talkId:") == R.BOARD_ROSTER_LIMIT, str(_mm.count("- talkId:")))
+check(" 超出的部分如实说「另有 N 条未列出」（不静默丢）",
+      f"另有 {60 - R.BOARD_ROSTER_LIMIT} 条未列出" in _mm, _mm.splitlines()[-1])
+# 短行照样会被字符预算先截（两条上限谁先到算谁）——预算内不该出现半截名单。
+_long = [dict(_rrows[0], talkKey=300 + i, content="正" * 30, author="留" * 16)
+         for i in range(60)]
+_lm = R.render_board_roster(_long)
+check(" 行很长时字符预算先生效（仍如实说还有多少条）",
+      _lm.count("- talkId:") < R.BOARD_ROSTER_LIMIT and "另有" in _lm
+      and len(_lm) <= R.MAX_REPORT_CHARS, f"{_lm.count('- talkId:')} 行 / {len(_lm)} 字")
+
+_rc = _Client(_Resp(200, {"code": 200, "data": _rrows}))
+base._client = _rc
+_out = base.list_admin_board.invoke({}, config=_cfg(7))
+check("list_admin_board：走后台接口（不是公开那个）",
+      _rc.calls and "/api/protect/board" in _rc.calls[0][0],
+      _rc.calls[0][0] if _rc.calls else "")   # 只印 URL——请求头里是当场签的令牌
+check(" list_admin_board：拿到行就渲染成名册（不是 JSON dump）",
+      _out.kind == "ok" and "河灯留言后台名册" in _out, f"{_out.kind}: {str(_out)[:60]}")
+check(" 回执 meta 带 count（跨轮取值用）", _out.meta.get("count") == 3, str(_out.meta))
+_c2 = _Client(_Resp(200, {"code": 200, "data": _rrows}))
+base._client = _c2
+_st = base.list_admin_board.invoke({"status": "pending"}, config=_cfg(7))
+check(" status=pending 被翻成 approved=0 再交给渲染（不是把英文字符串直接比）",
+      "状态=待审" in _st and "一条都没匹配上" in _st, str(_st)[:80])
+# 同族工具栽过的地方（roadmap 批 5）：臆造取值被**静默降级**成另一份数据，
+# 叙述照样说成"这些是被驳回的"。现在这道门由**函数签名的闭集**把着——这一节钉住它，
+# 因为放宽成 `str` 会**静默**把那个洞重新打开（工具内部没有任何兜底代码）。
+_c5 = _Client(_Resp(200, {"code": 200, "data": _rrows}))
+base._client = _c5
+try:
+    base.list_admin_board.invoke({"status": "ai_rejected"}, config=_cfg(7))
+    _raised = False
+except Exception as e:                      # langchain 的参数校验（Literal 落空）
+    _raised = "ai_rejected" in str(e)
+check("★ 认不出的 status 在进工具之前就被拒（闭集挡住了它，不是工具内部兜底）",
+      _raised, "" if _raised else "没抛 = 闭集被放宽了？")
+check(" 被拒时没有发出请求（不是先读了后台再说认不出）", not _c5.calls)
+# 两套取值不能混用：隔壁报表的 ai_rejected 不是这里的值。这一条读的是**模型真正
+# 拿到的那份 schema**（`args` 就是原生工具调用的入参定义），不是 Python 注解。
+_st = base.list_admin_board.args.get("status", {})
+_enum = {e for branch in _st.get("anyOf", []) for e in branch.get("enum", [])}
+check("★ status 在 schema 里仍是闭集枚举（放宽成 str 会让「认不出就静默不筛」重现）",
+      _enum == {"pending", "passed", "rejected"}, str(_st))
+check(" 隔壁报表那套取值**不在**这个枚举里（混用会被 schema 直接挡下）",
+      "ai_rejected" not in _enum and "ai_passed" not in _enum)
+check(" 技能参数说明里点明了与隔壁报表不是一套（原生档模型看的是这份）",
+      "不是同一套" in SKILL_MAP["board_roster"].inputs["status"],
+      SKILL_MAP["board_roster"].inputs["status"])
+_menu_line = next((ln for ln in _tools_desc("admin").splitlines()
+                   if ln.startswith("- list_admin_board(")), "")
+check(" 菜单行也写了同一句提醒（文字档模型选工具时看的就是它）",
+      "不是同一套取值" in _menu_line, _menu_line)
+_c3 = _Client(_Resp(200, {"code": 200, "data": []}))
+base._client = _c3
+_e = base.list_admin_board.invoke({}, config=_cfg(7))
+check("★ 零条 ⇒ empty（是事实），且措辞里没有「站内没有留言」这种越界结论",
+      _e.kind == "empty" and "还没有任何留言" in _e, f"{_e.kind}: {_e}")
+_c4 = _Client(_Resp(401, {"code": 401}))
+base._client = _c4
+_u = base.list_admin_board.invoke({}, config=_cfg(7, role="user"))
+check("读不到（无权）⇒ unavailable（不是「一条都没有」）",
+      _u.kind == "unavailable" and "无权" in _u, f"{_u.kind}: {_u}")
+base._client = real_client
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

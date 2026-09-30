@@ -685,6 +685,10 @@ def list_guestbook() -> str:
     它可能还在待审、或者被驳回了。要说"站内没有这条留言"，前提是**没有任何号段**
     能对上；手上的 id 在列表里查无此条时，正确的说法是"这条不在公开列表里（未通过
     审核或已删除），后台管理视图里能看到"，**不要**据此反推"站内没有"。
+    ⚠ **本视图看不到发表账号**：每行里的 `author` 是留言人自己在留名框里填的
+    **自由文本**（可以填任何字、也可以留空——留空就是匿名），**不是账号**，
+    拿它或正文去认人会认错。要回答"这条留言是谁发的"，走后台名册
+    `list_admin_board`（放灯必须登录，那里每条都有真实账号，匿名也溯得到）。
     留言板页面 /guestbook 叫「河灯集」（留言簿）：页面下方有留言输入框（提示语
     「此刻想说的话…」），在框里写好内容即可放灯；留名框在输入框旁，默认预填
     当前登录账号昵称，清空留名或点「匿名」则以无名/匿名身份放灯——无需注册或
@@ -1348,6 +1352,10 @@ def get_moderation_status(
     ① AI 直接通过的 ② AI 驳回的（并说明人工是维持驳回、改判放行还是仍在等）
     ③ 需要人工复批的（并说明是 AI 存疑还是 AI 通过后才等人看）。
     追问"把被驳回的/等人复批的都列出来"时用 status 参数聚焦某一类（列得更多）。
+    明细里的「账号（…）」是**真实发表账号**（放灯必须登录，匿名留言一样有账号），
+    「留名」只是留言人自己填的自由文本——要认人看账号。
+    ⚠ 这是**审核状况报表**（按状态切三份名单，默认每份只印 5 条）；要"逐条看每条
+    是谁发的/最近都说了什么"，用后台名册 `list_admin_board`（不分切、行数更多）。
     需要管理员身份（读的是后台留言管理视图）。"""
     from agent import reports as R
     data = _admin_get("/api/protect/board", config)
@@ -1360,6 +1368,50 @@ def get_moderation_status(
     except Exception as exc:
         logger.exception("render_moderation_status failed")
         return unavailable(f"整理审核状况失败: {exc}")
+
+
+@tool
+def list_admin_board(
+    config: RunnableConfig,
+    status: Annotated[Literal["pending", "passed", "rejected"] | None,
+                      "只看某一类：pending=待审 / passed=已通过 / rejected=未通过（已驳回）；"
+                      "不填就是全部（注意与审核状况报表 get_moderation_status 的 "
+                      "ai_passed|ai_rejected|pending 不是同一套取值，别混用）"] = None,
+    keyword: Annotated[str | None,
+                       "按关键词过滤（在正文、留名、账号昵称/用户名里做子串匹配）；"
+                       "只在留言很多、要定位某一条时填"] = None,
+) -> str:
+    """查看河灯留言的**后台名册**：逐条给出 talkId、审核状态、时间、**发表账号**
+    （userId/昵称/用户名）、留言时自己填的留名、正文节选。**待审与未通过的留言也在
+    这里**（公开留言板列表只含已通过的）。
+
+    ⚠ **要回答「这条留言是谁发的」必须用它**：公开留言板视图里那个"作者"是留言人
+    自己在留名框里填的**自由文本**（可以填任何字、也可以留空——留空就是匿名），
+    它**不是账号**，拿正文或留名去认人会认错。放灯必须登录，所以后台名册里每条
+    留言都有真实账号，**匿名留言一样溯得到是谁发的**。
+    可选 status 只看某一类审核状态，可选 keyword 按关键词收窄。需要管理员身份。"""
+    from agent import reports as R
+    data = _admin_get("/api/protect/board", config)
+    if isinstance(data, ToolResult):
+        return data
+    rows = data if isinstance(data, list) else []
+    if not rows:
+        return empty("河灯留言板目前还没有任何留言（后台名册也是空的）")
+    # 认不出的筛选值由**函数签名的闭集**挡在门外（`Literal[...]` → langchain 在调进
+    # 本函数之前就 ArgValidationError，execute 把它包成 `__ERROR__` 帧，原因码
+    # `args_parse`）。这正是批 5 给 `get_moderation_status.status` 补的那一课：以前
+    # 是散文里的取值，臆造值落回**混合视图**而叙述照样说成"这些是被驳回的"——答错且
+    # 无声（见 docs/toolcall-stability-roadmap.md 批 5）。所以此处**不写**手写兜底：
+    # 再写一层只是死代码，真判据是那句注解（`test_reports` ⑬ 钉着它不许放宽成 str）。
+    #   另注：隔壁那张报表的取值是 ai_passed|ai_rejected|pending，与本工具
+    # pending|passed|rejected **不是同一套**——注解与菜单行都写明了两套不能混用。
+    approved = BOARD_STATUS_FILTERS.get(str(status)) if status is not None else None
+    try:
+        return ok(R.render_board_roster(rows, approved=approved, keyword=keyword),
+                  meta={"count": len(rows)})
+    except Exception as exc:
+        logger.exception("render_board_roster failed")
+        return unavailable(f"整理后台留言名册失败: {exc}")
 
 
 @tool
@@ -2643,6 +2695,10 @@ def delete_announcement(
 # （把候选连同作者/时间/原文列出来让他指认），绝不按"最新的那条"猜。
 BOARD_APPROVED_CN = {0: "待审", 1: "已通过", 2: "未通过"}
 
+# 后台名册（`list_admin_board`）的 status 实参 → approved 值。**只有三态、没有
+# "全部"**：不填就是不筛（多一个 `all` 就多一个会填错的值，而空着本来就是同一个意思）。
+BOARD_STATUS_FILTERS = {"pending": 0, "passed": 1, "rejected": 2}
+
 
 def _board_index(config: RunnableConfig) -> dict[int, dict] | None:
     """读后台留言清单 → `{talkKey: 行}`；读不到返回 None（≠"没有留言"，同 _tag_index）。
@@ -2846,13 +2902,18 @@ def delete_board_comment(
     （"系统没有删除被驳回留言的通道"）是编的，见 `reports.render_moderation_status`
     末尾那条"处置"注记。
 
-    ⚠️ **为什么删除不跟审核一起改成按 `talkId`**（20260929 批 H · S2 的选择，不是
-    漏改）：审核治的是"台账里等着办的那一行"，而**待办台账只摆待审**（approved=0）
-    的行——已通过/已驳回的留言在台账帧里**根本不出现**。它们的 talkId 全站只有一处
-    读得到（审核状况报表的明细行），而且那份报表**每类只列前 `MAX_LIST_DETAIL` 条**
-    （5 条；主人点名某一类时才放宽到 20）⇒ "删掉那条三个月前已通过的老留言"改成只认
-    id 就**可能连编号都拿不到**。那是本仓反复警告的「静默降级」形状。所以删除保留
-    正文片段通道：主人本来就只认那句话本身，而删除是一条"取不回来"的动作，让他抄
+    ⚠️ **为什么删除不跟审核一起改成按 `talkId`**（20260929 批 H · S2 的选择，
+    **20261001 补注：理由变了，结论没变，待主人拍板**）：当初的理由是"已通过/已驳回
+    留言的 talkId 全站只有一处读得到（审核状况报表的明细行），而那份报表每类只列前
+    `MAX_LIST_DETAIL` 条（5 条；点名某一类才放宽到 20）"⇒ 只认 id 就可能连编号都拿
+    不到。**后台留言名册（`list_admin_board`）落地后，这句不再成立**——名册逐条给
+    talkId、还能按关键词收窄。留下来的理由只剩两条，都还成立：① 主人指认删除时手里
+    拿的本来就是那句话本身，让他抄一小段比让他报编号更接近他真实说的话；② 这条链
+    （按原话指认 + 卡面印原文）已经端到端验过，而改 id 要连带动弹确认卡面与探针。
+    所以**维持现状**，但"只有一处读得到 id"这条论据已作废——别再用它论证什么。
+    审核那条（`audit_board_comment`）治的则是"台账里等着办的那一行"，而**待办台账
+    只摆待审**（approved=0）的行，id 由系统现摆，所以它按 id 认。
+    保留正文片段通道的另一半理由：删除是一条"取不回来"的动作，让他抄
     一句原话（而不是报一个他自己也认不出的编号）在这条路上反而更稳。"""
     from agent import adminops as A
     hit, err = _find_board_comment(quote, config)
@@ -4891,6 +4952,9 @@ _TOOL_REGISTRY = [
     get_user_stats,
     # 文章流量报表（20260930）：同 admin.console（读的是后台统计面）
     get_note_stats,
+    # 后台**留言名册**（20261001）：同 admin.console，读的是 `GET /api/protect/board`
+    # （逐条含发表账号）——与公开的 list_guestbook 是两套视图，别混用
+    list_admin_board,
     # 管理助手后台写（20260921 第二轮）：list_admin_notes=admin.console，
     # 写工具=write.console，见"管理助手写工具"节头注
     list_admin_notes,

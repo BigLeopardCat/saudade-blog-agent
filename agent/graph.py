@@ -802,6 +802,12 @@ _TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 doc
                       "逐条印着「第 N 名」，含全站合计与近 30 天趋势）",
     "get_moderation_status": "仅管理员：河灯留言审核状况（AI 通过/驳回/待人工复批），"
                              "可选 status=ai_passed|ai_rejected|pending 只看某一类",
+    # 名册与上面那张报表的分工写进说明里：不写的话，问"这条是谁发的"时模型会去点
+    # 报表（那张按状态切三份名单、每份默认只印 5 条），拿到的是另一张纸。
+    "list_admin_board": "仅管理员：河灯留言后台名册（逐条，含待审/未通过），"
+                        "每条带**发表账号**——匿名留言也溯得到是谁发的；"
+                        "可选 status=pending|passed|rejected、keyword=关键词"
+                        "（**注意与上面那张报表的 status 不是同一套取值**）",
     "get_server_status": "仅管理员：服务器状态报表（CPU/内存/磁盘/负载）",
     "get_service_health": "仅管理员：服务健康报表（服务是否正常/异常告警/日志与心跳）",
 }
@@ -1872,6 +1878,9 @@ _CONTENT_TOOLS = frozenset({
     # **三个写工具刻意不进这个集合**：本集合的语义是"跑过 ⇒ 检索/读取声称有据"，
     # 塞写工具会让"建了个标签"变成"我检索过"的证据（5d/5f 的判据是内容域帧）。
     "list_admin_notes",
+    # 后台留言名册（20261001）：跑过它 = "我手上就是全站留言逐条的账号与状态"，
+    # 缺了它，"站里没有骂人的留言""匿名的那条是别人发的"这类站内结论会被读成洞④。
+    "list_admin_board",
     # 用户自己的数据（20260923）：跑过 = "我手上就是你自己那份收藏/通知"，
     # 与上面四族同一条道理——缺了它们，"你还没有未读通知"这句站内结论就没有帧。
     "list_my_favorites", "get_unread_summary", "list_notifications",
@@ -6982,7 +6991,8 @@ def _ledger_closing_note(state, config) -> str:
             "任何一条写成已经办了的。")
 
 
-_QUEUE_READ_TOOLS = {"get_moderation_status": "board", "list_quota_requests": "quota"}
+_QUEUE_READ_TOOLS = {"get_moderation_status": "board", "list_admin_board": "board",
+                     "list_quota_requests": "quota"}
 
 def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                    config) -> dict | None:
