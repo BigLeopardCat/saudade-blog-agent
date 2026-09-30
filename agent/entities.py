@@ -408,6 +408,41 @@ def _user_stats_digest(text: str) -> str:
     return "用户数据: " + "；".join(parts)
 
 
+def _note_traffic_digest(text: str) -> str:
+    """文章流量报表 → 一行实体摘要（20260930）。
+
+    为什么值得单列一条：主人问"哪几篇最火"时，答案里**必须带标题**——而工具帧不跨轮
+    持久化，下一轮问"刚才第一名那篇有多少赞"就只能靠这一行（rule 6b 同一条道理：
+    能照抄摘要作答就别重跑报表）。所以摘要把**榜首的标题与它的数**带上，不只是合计。
+
+    三处口径与报表渲染同源（`agent/reports.py::render_note_stats`）：
+      · 合计只取"全站合计"那一行的数（榜上的行加起来只会比真值小）；
+      · 榜首 = 各榜的第一行（`第 1 名`），抽不到就是没有榜（那时退化成只有合计）；
+      · 抽不出任何东西 → 空串（退化为只有动作行，不编）。
+    """
+    parts = []
+    views = _find(text, r"全站合计[^\n]*?阅读 (\d+)")
+    likes = _find(text, r"全站合计[^\n]*?点赞 (\d+)")
+    if views is not None:
+        parts.append(f"阅读合计 {views}" + (f"、点赞 {likes}" if likes is not None else ""))
+    # 每个榜首**只在自己那张榜的块里找**：榜上的行同时带着三个数（点赞榜第一行里
+    # 也有"阅读 40"），不按块切就会把点赞榜第一名报成"阅读榜首"——一个看起来完全
+    # 正常的假事实（首版就是这么写的，被这条注释挡下）。
+    for label in ("阅读", "点赞", "收藏"):
+        block = re.search(rf"^- {label}榜（[^\n]*\n(?P<rows>(?:  · [^\n]*\n?)*)",
+                          text or "", re.M)
+        if not block:
+            continue
+        first = re.search(r"第 1 名 《(?P<title>[^》]{1,40})》（noteId \d+）(?P<tail>[^\n]*)",
+                          block.group("rows"))
+        if not first:
+            continue
+        # 数从**这一行的尾巴**里取（`阅读 120／点赞 8／…`）；取不到就只给标题
+        n = _find(first.group("tail"), rf"{label} (\d+)") or ""
+        parts.append(f"{label}榜首《{first.group('title')}》{n}")
+    return "文章流量: " + "；".join(parts) if parts else ""
+
+
 def _notice_read_digest(text: str) -> str:
     """标记已读的回执摘要（20260923 批 7）。
 
@@ -434,6 +469,7 @@ _TEXT_DIGESTERS = {
     "get_service_health": _service_health_digest,
     "get_moderation_status": _moderation_digest,
     "get_user_stats": _user_stats_digest,
+    "get_note_stats": _note_traffic_digest,
     "read_notifications": _notice_read_digest,
 }
 

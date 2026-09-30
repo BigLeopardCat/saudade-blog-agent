@@ -900,10 +900,11 @@ check("未确认 + 反问确认 → 放行（正解不许被吞）",
 print("⑩ 管理助手 admin.console（20260921）：硬拦 + 身份过滤双层")
 # 这一批是"纯新增能力"：历史流量里一条都没有 ⇒ 没有 shadow 观测期可谈，硬拦。
 # 三层结构，本节点验后两层（第一层"结构性不可达"在 tests/test_reports.py ⑪）：
-#   ② 身份：非 admin 的 planner 上下文里看不到这三个技能 ⇒ 选不出来；
+#   ② 身份：非 admin 的 planner 上下文里看不到这四张报表技能 ⇒ 选不出来；
 #   ③ 判据：execute 前的 authz.check + enforcing(scope) 硬拦。
-ADMIN_TOOLS = ["get_server_status", "get_service_health", "get_moderation_status", "get_user_stats"]
-ADMIN_SKILLS = ["ops_report", "moderation_report", "user_report"]
+ADMIN_TOOLS = ["get_server_status", "get_service_health", "get_moderation_status", "get_user_stats",
+               "get_note_stats"]
+ADMIN_SKILLS = ["ops_report", "moderation_report", "user_report", "traffic_report"]
 
 check("admin.console 是硬拦（不随 authz_enforce 走）",
       authz.enforcing(authz.SCOPE_ADMIN_CONSOLE) is True and settings.authz_enforce is False,

@@ -332,6 +332,7 @@ _NO_LEGACY_ARM = _DEAD | {
     "reschedule_dashboard_todo",   # 20260929 批 G：冻结之后新增的第一件
     "approve_quota_request", "reject_quota_request", "reset_user_quota",
     "list_quota_requests",         # 额度四件（20260926）：从来没进过老表
+    "get_note_stats",              # 20260930 文章流量报表：冻结之后新增，动作词只在 Python 侧
 }
 
 _rs = _parent_repo.read(

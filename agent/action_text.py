@@ -85,6 +85,8 @@ _NOARG_VERB = {
     "get_server_status": "查看服务器状态",
     "get_service_health": "查看服务健康",
     "get_user_stats": "查看用户统计",
+    # 文章流量报表（20260930）：同族（admin.console，技能模板展开）
+    "get_note_stats": "查看文章流量报表",
     # 后台文章列表（20260921 第二轮，**读**）：无参，同上面几个报表工具——
     # planner 点不到名（不在 _EXPLICIT_TOOLS），由 admin_notes 技能模板展开。
     "list_admin_notes": "查看后台文章列表",

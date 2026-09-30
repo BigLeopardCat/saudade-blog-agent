@@ -329,7 +329,31 @@ def _get(path: str, *, not_found_text: str = "") -> dict | list | ToolResult:
 # **两条下游契约不许动**：`agent/entities.py::_note_digest`（跨轮实体摘要）与
 # `agent/decisions.py::_candidate_detail_plan`（候选改读闸的 `literal_eval`）都只读
 # `noteKey`/`noteTitle`——瘦身保留这两个键，两处照常工作。
+#
+# 20260930 追加：三个计数（阅读/点赞/收藏）**原样带上**（`_note_counts`）。它们的
+# 字节数很小（`"views":120,` 十几字节），但"这篇多少赞、哪篇看得人多"全靠它们——
+# 卡片上早就有了，此前看板娘读列表却看不见，主人问"哪篇最火"只能靠猜。
 _NOTE_SLIM_KEYS = ("noteKey", "noteTitle", "status", "isTop")
+
+# 三张表各一个数，键名与 Rust 两侧同名同义（列表接口 `attach_stats` / 单篇读数
+# `GET /notes/:id/stats`）。**缺键 ≠ 0**：读不到就整个键不出现，绝不补 0
+# （`notes.rs` 的 `Option` + `skip_serializing_if` 是同一个取向，两边别各走一套）。
+_NOTE_COUNT_KEYS = ("views", "likes", "favorites")
+
+
+def _note_counts(row) -> dict:
+    """行里的三个计数 → **只带真实存在的那些键**（认不出/缺键 ⇒ 不带）。
+
+    `bool` 显式排除：它是 `int` 的子类，`True` 会被 `isinstance(v, int)` 放行成 1。
+    非数（字符串、None、脏值）一律当"没有这个数"——把 `"120"` 转成 120 属于编数。
+    """
+    out = {}
+    for k in _NOTE_COUNT_KEYS:
+        v = row.get(k)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        out[k] = int(v)
+    return out
 
 
 def _public_tag_index():
@@ -359,13 +383,15 @@ def _slim_note_rows(rows):
     out = []
     for r in rows:
         tag_txt = A.render_tag_list(r.get("noteTags"), index)
-        out.append({
+        slim = {
             "noteKey": r.get("noteKey"),
             "noteTitle": r.get("noteTitle") or "",
             "status": r.get("status") or "",
             "isTop": r.get("isTop") or 0,
             "tags": "" if tag_txt == "（无标签）" else tag_txt,
-        })
+        }
+        slim.update(_note_counts(r))
+        out.append(slim)
     return out
 
 
@@ -458,6 +484,28 @@ def _note_row_with_tag_names(row):
     return out
 
 
+def _note_public_counts(article_id) -> dict:
+    """单篇文章的公共读数（阅读/点赞/收藏），**读不到就是空 dict**。
+
+    为什么要单独一次请求（20260930）：详情端点 `GET /notes/:id` 刻意**不挂**这三个数
+    （见 `src/routes/note_stats.rs` 模块头注——那个端点被本工具频繁读取，挂数等于
+    给阅读量灌水），公开的 `GET /notes/:id/stats` 才是它们的出口，而**读它不计数**
+    （计数是另一个 `POST /view`，由前端在读者真的打开文章时调）。
+
+    三处刻意的取值取向：
+      · **`liked` 丢掉**：它是"当前访客点过没有"，本工具以服务身份读、没有访客身份，
+        带上它只会是恒 false 的**假事实**（"这篇没人点赞"读起来像真的）。
+      · **失败一律返回空 dict**（不返回 0、不返回错误）：草稿/私密文章在这个公开端点
+        上就是 404（它按"读者能不能打开"判），而看板娘读草稿是**正当**的——那时
+        "读不到读数"与"还没有人读"必须分得开，前者是**键不出现**。
+      · 值走 `_note_counts` 的那一套（缺键 ≠ 0、不把字符串转成数）。
+    """
+    data = _get(f"/notes/{article_id}/stats")
+    if not isinstance(data, dict):
+        return {}
+    return _note_counts(data)
+
+
 # 文档类型 → 中文物件名（**唯一一份**；server.py 的过程行与 Rust 的回执行都按它说话）。
 # 为什么值得单列一张：`get_article_detail` 是四个数据源共用的一件工具，读的是
 # 留言/说说/公告/文章——而动作词一度恒为"读取**文章**"（Rust `render_exec_row`
@@ -491,6 +539,11 @@ def get_article_detail(
     标签：返回里的 `tags` 是**中文标签名**（如「编程 / Python」，含层级）；`noteTags`
     是内部 id 串，**回答"这篇有什么标签"要用 `tags`**，别把 id 念给访客。
 
+    读数（20260930）：note 的返回里会带 `views`/`likes`/`favorites` 三个计数
+    （阅读/点赞/收藏，与文章卡片上那一排同源）。**这三个键可能一个都不出现**——
+    那是"这次没读到数"（草稿文章在公开读数端点上就是查无此篇），不是"三个都是 0"；
+    键在、值是 0 才是真的 0。
+
     **查无此篇不是故障**（20260924）：id 不存在时返回的是"站内没有这篇文章"这句
     事实（kind=not_found），并且**点明 id 的来路**——通知/留言板里的 id 是留言 id，
     与文章 id 不是同一套（trace `20260924T030031` 实证：planner 把通知链接里的留言
@@ -504,6 +557,9 @@ def get_article_detail(
             "按标题找文章用 search_notes 或 rag_search；读留言/说说用 list_guestbook / list_talks。"))
         if isinstance(data, dict):
             data = _note_row_with_tag_names(data)
+            counts = _note_public_counts(article_id)
+            if counts:
+                data = {**data, **counts}
         if not section or not isinstance(data, dict):
             return _shape(data)          # 故障（unavailable）与查无此篇（not_found）原样透出，都不伪装成空
         return _read_section(data, article_id, section)
@@ -1322,6 +1378,30 @@ def get_user_stats(config: RunnableConfig) -> str:
     except Exception as exc:
         logger.exception("render_user_stats failed")
         return unavailable(f"整理用户报表失败: {exc}")
+
+
+@tool
+def get_note_stats(config: RunnableConfig) -> str:
+    """查看文章**流量**报表（全站口径）：阅读量/点赞量/收藏量的合计、三张排行榜
+    （阅读榜、点赞榜、收藏榜，各取前 10，**报表里逐条印着「第 N 名」**）、
+    以及最近 30 天的日趋势。
+
+    用来回答"哪几篇最火 / 阅读量最高的是哪篇、排第几 / 这篇排第几 / 最近有人看吗"。
+    只算**当前可见**的文章（草稿与私密不计入，连带它们的历史阅读量）。
+    这是**全站排行**：问**某一篇**有多少阅读/点赞/收藏，用 get_article_detail
+    （它逐篇带这三个数），别用本工具去猜单篇。
+    需要管理员身份。"""
+    from agent import reports as R
+    data = _admin_get("/api/protected/stats/notes", config)
+    if isinstance(data, ToolResult):
+        return data
+    if not data:
+        return empty("后台没有返回文章流量数据")
+    try:
+        return ok(R.render_note_stats(data))
+    except Exception as exc:
+        logger.exception("render_note_stats failed")
+        return unavailable(f"整理文章流量报表失败: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -4809,6 +4889,8 @@ _TOOL_REGISTRY = [
     get_service_health,
     get_moderation_status,
     get_user_stats,
+    # 文章流量报表（20260930）：同 admin.console（读的是后台统计面）
+    get_note_stats,
     # 管理助手后台写（20260921 第二轮）：list_admin_notes=admin.console，
     # 写工具=write.console，见"管理助手写工具"节头注
     list_admin_notes,

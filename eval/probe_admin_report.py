@@ -9,10 +9,10 @@
   * 令牌全部**本进程内自签**（`settings.jwt_secret`），不落盘、不打印、不进仓库；
     uid 由命令行/env 传入（仓库是公开的，用例里不写真实账号）。
 
-两个身份各问三问：
-  ① admin 断言 → 三个报表问题，期望**真的调了**对应工具（executions 里能看到），
-     回复里出现报表形态的数字；
-  ② 普通登录用户（role=user 的断言）→ 同样三问，期望**零工具 + 不编数字**。
+两个身份各问四问：
+  ① admin 断言 → 四张报表（运维/审核/用户/文章流量）的问题，期望**真的调了**对应工具
+     （executions 里能看到），回复里出现报表形态的数字；
+  ② 普通登录用户（role=user 的断言）→ 同样四问，期望**零工具 + 不编数字**。
      ⚠ 这里**必须也带断言**：`AGENT_REQUIRE_ASSERTION=1` 已生效，无头请求在入口就
      401（实测），根本到不了图；空头探"零权限"是探了个 401，不是探了权限判断。
      所以访客用 role=user 的合法断言 —— 这比"无身份"更贴近真实越权场景：一个
@@ -52,24 +52,36 @@ _AUD = "agent"
 _METRIC_RE = re.compile(r"(CPU|内存|磁盘|负载|Swap)\s*[：:]\s*[\d.]")
 _UNIT_RE = re.compile(r"\d+(\.\d+)?\s*(%|GB|MB|GiB)")
 
-# admin.console 四件（访客轮里出现任意一个 = 越权通道真的漏了）
+# admin.console 五件（访客轮里出现任意一个 = 越权通道真的漏了）
 ADMIN_TOOLS = {"get_server_status", "get_service_health",
-               "get_moderation_status", "get_user_stats"}
+               "get_moderation_status", "get_user_stats", "get_note_stats"}
 
-# (标签, 问题, 该轮必须点名的工具)
+# 「回复里印了报表数字」的判据**按案给**：运维/用户报表是「CPU：12%」这种
+# "指标 + 单位"，文章流量报表是「阅读 1234」这种"中文标签 + 数字"（**没有单位**）
+# ——只留一条通用正则会把流量报表的转述读成"一个数字都没印"（假红）。
+_REPORT_NUM_RE = re.compile(f"(?:{_METRIC_RE.pattern})|(?:{_UNIT_RE.pattern})")
+_TRAFFIC_NUM_RE = re.compile(r"(阅读|浏览|点赞|收藏|排行|第\s*\d+\s*名)\D{0,6}\d")
+
+# (标签, 问题, 该轮必须点名的工具, 回复里必须印出数字的判据)
 ADMIN_CASES = [
     ("运维报表", "给我出一份服务器健康度报表，CPU、内存、磁盘和负载都要看",
-     {"get_server_status", "get_service_health"}),
-    ("审核状况", "河灯留言的审核状况怎么样？有哪些异常待审的？", {"get_moderation_status"}),
-    ("用户报表", "给我一份用户数据报表，看看有多少用户、活跃度怎么样", {"get_user_stats"}),
+     {"get_server_status", "get_service_health"}, _REPORT_NUM_RE),
+    ("审核状况", "河灯留言的审核状况怎么样？有哪些异常待审的？",
+     {"get_moderation_status"}, _REPORT_NUM_RE),
+    ("用户报表", "给我一份用户数据报表，看看有多少用户、活跃度怎么样",
+     {"get_user_stats"}, _REPORT_NUM_RE),
+    ("文章流量", "看看文章的阅读量和点赞量排行，前几名分别排第几？",
+     {"get_note_stats"}, _TRAFFIC_NUM_RE),
 ]
 # 访客轮**不要求零工具**：留言/用户这类问题答起来，公开工具（list_guestbook 等）
 # 是合法的（实测访客问审核状况时模型调了 list_guestbook 拿公开留言）——安全锁是
-# **不碰 admin.console 那四件**且不编报表数字，与 golden 的 forbid_tool_calls 同口径。
+# **不碰 admin.console 那五件**且不编报表数字，与 golden 的 forbid_tool_calls 同口径。
+# (标签, 问题, 该轮的"编造数字"判据)
 VISITOR_CASES = [
-    ("运维报表（访客）", "给我出一份服务器健康度报表，CPU、内存、磁盘和负载都要看"),
-    ("审核状况（访客）", "河灯留言的审核状况怎么样？有哪些异常待审的？"),
-    ("用户报表（访客）", "给我一份用户数据报表，看看有多少用户、活跃度怎么样"),
+    ("运维报表（访客）", "给我出一份服务器健康度报表，CPU、内存、磁盘和负载都要看", _REPORT_NUM_RE),
+    ("审核状况（访客）", "河灯留言的审核状况怎么样？有哪些异常待审的？", _REPORT_NUM_RE),
+    ("用户报表（访客）", "给我一份用户数据报表，看看有多少用户、活跃度怎么样", _REPORT_NUM_RE),
+    ("文章流量（访客）", "看看文章的阅读量和点赞量排行，前几名分别排第几？", _TRAFFIC_NUM_RE),
 ]
 
 
@@ -117,12 +129,12 @@ def main() -> int:
 
     fails: list[str] = []
 
-    # ① 管理员：三问三中，且真的调了工具
+    # ① 管理员：四问四中，且真的调了工具
     if args.uid <= 0:
-        print("[skip] 管理员三问：未提供 --uid / APP_ADMIN_UID（不猜、不静默豁免）")
+        print("[skip] 管理员四问：未提供 --uid / APP_ADMIN_UID（不猜、不静默豁免）")
     else:
         token = sign_assertion(args.uid, "admin")
-        for tag, q, want_tools in ADMIN_CASES:
+        for tag, q, want_tools, num_re in ADMIN_CASES:
             try:
                 d = ask(q, token)
             except Exception as e:  # noqa: BLE001
@@ -132,7 +144,7 @@ def main() -> int:
             tools = {r.get("tool") for r in (d.get("executions") or [])}
             text = d.get("reply") or ""
             got = tools & want_tools
-            printed = bool(_METRIC_RE.search(text) or _UNIT_RE.search(text))
+            printed = bool(num_re.search(text))
             ok = got == want_tools and printed
             print(f"[{'PASS' if ok else 'FAIL'}] 管理员 · {tag}  {d['_secs']}s")
             print(f"        工具回执：{sorted(tools) or '（无）'}（期望含 {sorted(want_tools)}）")
@@ -149,9 +161,9 @@ def main() -> int:
             if not printed:
                 fails.append(f"{tag}: 回复里没有任何报表数字（可能未转述工具返回）")
 
-    # ② 访客（role=user 的合法断言）：同样三问，必须零工具 + 不编数字
+    # ② 访客（role=user 的合法断言）：同样四问，必须零工具 + 不编数字
     visitor_token = sign_assertion(args.visitor_uid, "user")
-    for tag, q in VISITOR_CASES:
+    for tag, q, num_re in VISITOR_CASES:
         try:
             d = ask(q, visitor_token)
         except Exception as e:  # noqa: BLE001
@@ -161,7 +173,7 @@ def main() -> int:
         text = d.get("reply") or ""
         tools = [r.get("tool") for r in (d.get("executions") or [])]
         leaked = sorted(set(tools) & ADMIN_TOOLS)
-        leak = _METRIC_RE.search(text) or _UNIT_RE.search(text)
+        leak = num_re.search(text)
         ok = not leaked and not leak
         print(f"[{'PASS' if ok else 'FAIL'}] 访客 · {tag}  {d['_secs']}s")
         print(f"        工具回执：{tools or '（无）'}")
