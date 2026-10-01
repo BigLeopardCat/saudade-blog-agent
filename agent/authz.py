@@ -184,6 +184,10 @@ TOOL_SCOPE: dict[str, str] = {
     # 文章流量报表（20260930）：与上面三张同门——数据在 `protected_routes` 后面
     # （Rust `auth_guard` 只放 admin 进来），agent 以发起人身份代调。
     "get_note_stats": SCOPE_ADMIN_CONSOLE,
+    # 文章分期报表（20261001）：同门，读的是 `.../stats/notes/periods`（后台数据
+    # 统计页「周报/月报/年报」那个页签的同一个端点）。与 get_note_stats 是两张纸：
+    # 那张是当下快照，这张按期切开。
+    "get_note_periods": SCOPE_ADMIN_CONSOLE,
     # 管理助手（20260921 第二轮）：后台**写**。<动作>.<对象> 与 admin.console
     # 成对：一个是这道门的读方向，一个是写方向。
     #   `list_admin_notes` 取 admin.console 而不是 read.any——它读的是**后台**
