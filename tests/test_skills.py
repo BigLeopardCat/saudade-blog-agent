@@ -774,6 +774,40 @@ def test_explicit_tools():
     check("合法点名 → dropped 为空（无误报）",
           p["tools"] == ['list_talks({})'] and p["dropped"] == [], f"p={p}")
 
+    # 跨通道折叠（20261001）：模型会把同一件读**两条通道各写一遍**。实测
+    #（trace 20261001T105116）`tools: [list_quota_requests, get_moderation_status]`
+    # 与 `calls: [{同一对工具, {status: pending}}]` 同时出现 ⇒ 2 件读展开成 4 条调用，
+    # 主人看到的是"最后一次调用了大量工具，莫名其妙"，而那两条无参读的返回还整段
+    # 盖住了带参那条。折叠只在**工具名粒度**上做：无参点名被同一工具的带参调用覆盖。
+    # （role=admin：那两个后台读工具在两个通道里都是**按角色**放的，
+    #   取证那一轮的主人正是管理员档）
+    p = instantiate_plan("content_query", {
+        "tools": ["list_quota_requests", "get_moderation_status"],
+        "calls": [{"tool": "list_quota_requests", "args": {"status": "pending"}},
+                  {"tool": "get_moderation_status", "args": {"status": "pending"}}]},
+        "admin")
+    check("⭐⭐ 同一工具两条通道都写了 → 只留**带参那条**（2 件读不再变 4 条调用）",
+          p["tools"] == ['list_quota_requests({"status": "pending"})',
+                         'get_moderation_status({"status": "pending"})'],
+          f"tools={p['tools']}")
+    check("  折叠**不算剔除**（不是「够不到/参数错」，不该触发纠偏重决策）",
+          p["dropped"] == [], f"dropped={p['dropped']}")
+    # 负锁：折叠只在**工具名**粒度——参数不同的两条 calls 是各自独立的读，一条都不许动
+    p = instantiate_plan("content_query", {"calls": [
+        {"tool": "search_notes", "args": {"keyword": "架构"}},
+        {"tool": "search_notes", "args": {"keyword": "ESP32"}}]})
+    check("⭐ 同工具**不同参数**的两条调用一条不动（那是两次独立的读）",
+          p["tools"] == ['search_notes({"keyword": "架构"})',
+                         'search_notes({"keyword": "ESP32"})'],
+          f"tools={p['tools']}")
+    # 负锁：带参条目**全被剔掉**时，那条无参点名必须留下（否则主人这一问会连读都没读）
+    p = instantiate_plan("content_query", {"tools": ["list_talks"], "calls": [
+        {"tool": "list_talks", "args": "不是对象"}]})
+    check("⭐ 带参那条因参数不合法被剔 ⇒ 无参点名**照旧留下**"
+          "（折叠的前提是那条带参调用真的成立）",
+          p["tools"] == ['list_talks({})'] and p["dropped"] == ["list_talks（args 非对象）"],
+          f"tools={p['tools']} dropped={p['dropped']}")
+
 
 def test_planner_tool_menu():
     """planner 菜单由白名单 + 注册表生成（20260913）：手写菜单曾漏列 6 个数据工具，
