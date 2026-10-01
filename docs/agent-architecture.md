@@ -167,20 +167,25 @@ flowchart TB
 ├── docs/                      # 本文档 + eval-observability.md + secretary.md（秘书框架与前置需求）+ 问题记录.md（踩坑史）
 └── .env.example / pyproject.toml / uv.lock / .github/workflows/eval.yml（CI 评测门禁）
 
-宿主仓库 Saudade-Blog（接口适配层，路径相对其根目录）：
-Saudade-Blog/frontend/public/live2d-widgets/
-├── autoload.js                # ★ 前端入口加载器（约 270 行）：脚本注入、initWidget 上游加载、错误上报——20260902 瘦身，对话核心已拆出
-├── chat-stream.js             # ★ 对话主战场（20260902 拆分，体积最大）：SSE 流式消费 + 命令解析与执行
-│                              #   （导航白名单 BLOG_ROUTES、cmdText、idleTimer 计时器、EFFECT、discardTurn/discard 实测集中于此）
-├── chat-engine.js             # 对话引擎子模块（sendMessage / discardTurn 等）
-├── chat-core.js               # 对话核心子模块（COMMAND_LINE_RE / cleanAgentText 等）
-├── chat-render.js             # 渲染清洗子模块（__chatRenderMarkdown / cleanAgentText 等）
-├── waifu.css                  # 看板娘与对话框样式（#waifu 高度锁死等关键防御）
-├── waifu-tips.20260830.js     # 上游库（压缩）：initWidget、模型加载、quit/toggle 收起机制
-├── waifu-tips.json            # 提示语配置
-└── chunk/index.20260830.js + index2.20260830.js   # 模块图（级联重命名作 cache-bust，见 §8）
+前端（看板娘 + 对话面板）—— **20261001 起住在本仓**（`frontend/`，以 MIT 分发，见
+`frontend/LICENSE`；本仓其余部分是 Apache-2.0）：
+frontend/public/live2d-widgets/
+├── boot.js                    # ★ 加载器（254 行）：拼 ?v=VER 载入子模块、看板娘显隐/拖拽/工具条
+├── renderer.js                # ★ 渲染层（459 行）：pixi.js + pixi-live2d-display 驱动模型、参数注入与口型
+├── chat-stream.js             # ★ 对话主战场（2268 行）：SSE 流式消费 + 命令解析与执行
+│                              #   （导航白名单 BLOG_ROUTES、cmdText、idleTimer 计时器、EFFECT、discardTurn 集中于此）
+├── chat-engine.js             # 对话引擎子模块（1363 行：sendMessage / discardTurn 等）
+├── chat-session.js            # 会话抽屉 UI（685 行：rail / 列表列 / 命名 / 置顶 / 搜索）
+├── chat-core.js               # 对话核心子模块（226 行：COMMAND_LINE_RE / cleanAgentText 等）
+├── chat-render.js             # 渲染清洗子模块（244 行：__chatRenderMarkdown / cleanAgentText 等）
+├── widget.css                 # 看板娘与对话框样式（2012 行：#waifu 高度锁死等关键防御）
+└── lingyue-toggle.png
+frontend/public/live2d_model/  # agent_2 模型（moc3 / model3.json / cdi3 / physics3 / 2048 贴图）
 
-Saudade-Blog/frontend/src/components/Live2dAgent/index.tsx   # 注入 autoload.js（含缓存版本号 ?v=20260902a）
+宿主仓库 Saudade-Blog（接口适配层，路径相对其根目录）：
+Saudade-Blog/frontend/widget.lock.json        # 钉住本仓某个提交 sha（+ 两棵子树的 tree sha 作强判据）
+Saudade-Blog/frontend/scripts/fetch-widget.mjs# `npm run fetch:widget`：按 pin 稀疏检出上面那两棵树
+Saudade-Blog/frontend/src/components/Live2dAgent/index.tsx   # 注入 boot.js（含缓存版本号 ?v=VER）
 
 Saudade-Blog/src/routes/chat.rs             # Rust 侧：prepare_chat（记忆读写）+ 流式转发 + 中断清理
 Saudade-Blog/src/routes/monitor.rs          # 前端错误上报端点（logs/frontend/monitor.log）

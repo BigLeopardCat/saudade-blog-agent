@@ -14,6 +14,18 @@
 
 **覆盖范围**：20260928 建立，回溯到 20260925（建立前一周）。更早的变更去 `git log`。
 
+## 20261002
+
+- **前端（看板娘 + 对话面板）搬进本仓**：`frontend/` 下那两棵树（`live2d-widgets/` 与
+  `live2d_model/`，共 14 个文件）从博客仓移到这里，**以 MIT 分发**（`frontend/LICENSE`；
+  本仓其余部分是 Apache-2.0）。博客仓不再持有源码，改为按 `frontend/widget.lock.json` 钉住的
+  提交号在构建前稀疏检出、落到**完全相同的路径**（`npm run fetch:widget`）⇒ nginx 的缓存块、
+  仓库外的设备控制台、按路径读文件的测试与 Rust 的 `include_str!` 全部零改动。
+- **跨端守卫改读本仓**：`tests/test_reset_scope.py` 的"前端认同一份 scope 字面"此前读父仓那份，
+  现在读本仓 `frontend/public/live2d-widgets/chat-stream.js`（走 `_parent_repo` 在本机回落到兄弟
+  目录、在 CI 落空 ⇒ 本机绿 CI 红）。CI 的父仓稀疏锥随之从两条收回到 `src/routes` 一条。
+- **无 agent 行为变更**（说什么/做什么/弹不弹卡都没动）——本条记的是归属与判据的搬家。
+
 ## 20261001
 
 - **一条用例被判红 2.5 小时，红的是判据自己**：`admin_board_audit_reviewed_refusal` 重判。

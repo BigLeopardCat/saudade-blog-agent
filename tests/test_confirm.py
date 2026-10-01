@@ -946,9 +946,9 @@ if _rs is not None:
           "重放判据仍是那一条 CAS）",
           "ClaimedAt" in _rs and "rows_affected == 1" in _rs)
 # 前端那一半（取消判据只有 `'no'` / 挑选值进隐藏请求 / 重建时不写死两枚）**不在这里**：
-# `frontend/public/live2d-widgets/chat-stream.js` 落在 CI 稀疏锥（`src/routes`）之外，
-# `_parent_repo.read` 在 CI 里会红（这正是 `test_ci_suite_list.py` ⑦ 判据的作用）。
-# 它由父仓自己的 `frontend/tests/confirm-pick.test.mjs` 锁（`npm test`，源码级扫法）。
+# 20261001 起 `frontend/public/live2d-widgets/chat-stream.js` 就住在**本仓**（本地可直接读），
+# 但 JS 那一侧的判据已经有主——父仓的 `frontend/tests/confirm-pick.test.mjs`（`npm test`，
+# 源码级扫法）。不在本文件里再抄一份：两处断言同一份字面，改协议时会同时红两次、定位反而慢。
 # **两侧都要跑**：Python 侧判"协议字段接得上"，前端侧判"点击语义没被旧判据吞掉"。
 
 print()

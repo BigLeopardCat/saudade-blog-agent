@@ -28,7 +28,7 @@
 
   · `parse_reset` 的行为（golden 读侧的唯一实现，纯函数）；
   · `server.py` 两个调用点的 scope 各归各（源码锚定 + 顺序断言）；
-  · 前端读的是**同一份字面**（跨端守卫，父仓源码；跑不到时按 `_parent_repo` 的三分支）。
+  · 前端读的是**同一份字面**（跨端守卫，20261001 起读本仓 `frontend/` 下那份）。
 """
 import re
 import sys
@@ -37,8 +37,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
-
-import _parent_repo  # noqa: E402
 
 from run_golden import parse_reset  # noqa: E402
 
@@ -107,23 +105,21 @@ def test_server_call_sites():
 # ── ③ 前端读同一份字面（跨端守卫）────────────────────────────────────────────
 def test_frontend_reads_same_scope():
     print("\n[跨端] 前端解析的是同一份 scope 字面")
-    s = _parent_repo.read(
-        "frontend/public/live2d-widgets/chat-stream.js",
-        why="`__RESET__:<scope>:<理由>` 的 scope 三端必须认同一份字面：前端按它决定"
-            "清不清 programCmds（命令缓冲），与 server 发的 scope 对不上就会"
-            "两个方向的病各犯一半（该清的没清 / 该留的清了）")
-    if s is None:
-        return
-    check("前端只认 all / text 两个取值", bool(re.search(r"\(all\|text\)", s)),
-          repr(re.findall(r"\([a-z|]+\):", s)[:5]))
+    # 读的是**本仓**这份（20261001 起 `frontend/` 随看板娘一起从博客仓搬进来、按 MIT 分发）。
+    # 以前这里走 `_parent_repo.read(..., "frontend/public/live2d-widgets/chat-stream.js")`：
+    # 搬完之后父仓已经没有那个文件了，而 `_parent_repo.parent_root()` 在本机会回落到兄弟
+    # 目录、CI 上则落了空 ⇒ **本机绿、CI 红**（正是这条守卫要防的那种失效，见文件头注）。
+    src = (ROOT / "frontend/public/live2d-widgets/chat-stream.js").read_text(encoding="utf-8")
+    check("前端只认 all / text 两个取值", bool(re.search(r"\(all\|text\)", src)),
+          repr(re.findall(r"\([a-z|]+\):", src)[:5]))
     check("缺 scope 段时默认 all（与 Python 侧同一侧）",
-          "const scope = mScope ? mScope[1] : 'all';" in s)
+          "const scope = mScope ? mScope[1] : 'all';" in src)
     check("只有 scope=all 才清命令缓冲",
-          "if (scope !== 'text') programCmds = [];" in s)
+          "if (scope !== 'text') programCmds = [];" in src)
     # 反向锁：除声明（`let programCmds = []`）之外，全文件清空这个缓冲只许出现一次
     # （就是上面那条带 scope 的）。多出来的一处必然是"又写了个无条件清"——
     # 而它长得完全正常，上面那三条正则一条都抓不住。
-    clears = len(re.findall(r"(?<!let )programCmds = \[\]", s))
+    clears = len(re.findall(r"(?<!let )programCmds = \[\]", src))
     check(f"除声明外清空命令缓冲只出现一次（实得 {clears}）", clears == 1, str(clears))
 
 
