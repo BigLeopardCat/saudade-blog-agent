@@ -4237,6 +4237,30 @@ def test_unaccounted_zero_tool_round():
               plan2["note"][:160])
         check("  不许说「刚刚又查了一次」（同族教训：机制描述会变成模型的词汇）",
               "不要说你刚刚又查了一次" in plan2["note"])
+
+        # ③ 末轮落成 chat、而本回合**已经有帧**（20261001）：`plan_encode` 会按 `chat`
+        #    派生出 `answer_only`，而 narrator 的图例把这一档读成「本轮本来就不需要工具
+        #    → 直接回答就行」——**在有帧的轮次上那是句假话**，而且正邀请它脱离帧作答。
+        #    现场（trace `20261001T094445_1_rb7f5dae`，主人问「猫咪目前有什么待办吗」）：
+        #    本回合 round 0 真读过待办清单与审核队列，round 1 落成 chat ⇒ narrator 交出
+        #    248 字，**逐字复读了三轮之前那一轮的回复**（LCS=248/248），其中「待审 0 条」
+        #    与它自己刚取回的帧「待审 1 条」当场矛盾。见 `planner_node` 那段长注与
+        #    `_CARRY_NOTE`。
+        llm3 = _ScriptedLLM(['SKILL=chat\nPARAMS={}\nREPLY: 直接回答'])
+        G.get_llm = lambda **kw: llm3
+        out3 = planner_node({
+            "messages": [HumanMessage(content="猫咪目前有什么待办吗"),
+                         ToolMessage(content="后台待办：给多肉浇水", tool_call_id="t1",
+                                     name="list_dashboard_todos")],
+            "plan_rounds": 1, "executed": [], "tool_data": []}, _CFG)
+        plan3 = parse_plan(out3["plan"])
+        check("末轮 chat + 本回合已有工具帧 → STATUS 不再是 answer_only（那是句假话）",
+              plan3["status"] == "wrapped", plan3["status"])
+        check("  且附了收尾纪律：照帧重答、别把更早那一轮整段抄过来",
+              "照上面的工具返回" in plan3["note"]
+              and "整段抄过来" in plan3["note"], plan3["note"][:160])
+        check("  纪律里不含系统的内部说法（写给 narrator 的机制描述会变成它的词汇）",
+              "STATUS" not in plan3["note"] and "answer_only" not in plan3["note"])
     finally:
         G.get_llm = _orig_llm
 

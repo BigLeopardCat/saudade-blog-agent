@@ -2632,6 +2632,19 @@ _EXEC_SEARCH_TRACE_RE = re.compile(r"站内检索「|搜索「")
 # 也会被放过（换的是"真结论不再被吞"）；注记里已用禁止句约束它，洞①/②/5c/5d 照旧生效。
 _LEDGER_NOTE_PREFIX = "【系统台账核对】"
 
+# 收尾轮附给 narrator 的那一句（`planner_node` 末尾"末轮落成 chat 但本回合已有工具帧"
+# 那一支，见那里的长注）。**写的是纪律、不是机制描述**：这一族（写给 narrator 的机制
+# 描述会变成它的词汇）已经踩过——描述"系统会先弹确认框"就换来一句"请留意确认弹窗"。
+# 所以这里只有"先做什么 / 不许什么"，一句系统内部的话都没有。
+# 第①条刻意**不**写成"不许重复"：主人连问两次同一件事、答案确实一样时，照帧重答本来就
+# 会与上一轮相同——要禁的是"不看返回、把上一轮整段抄过来"这个动作，不是结果的巧合。
+_CARRY_NOTE = (
+    "【收尾轮】这一回合的工具返回是**更早几轮**取回的，本轮只是收尾："
+    "先照上面的工具返回与执行回执把主人这一问重答一遍再出口"
+    "（答案与更早某一轮恰好相同没关系，但不许不看返回就把那一轮的话整段抄过来"
+    "——相隔越远，越容易抄到已经变了的事实）；"
+    "也不许说你这一轮又新查了一次。")
+
 
 def _exec_memory_has_search(msgs: list) -> bool:
     """跨轮回执行记忆里是否留下过检索类动作（见 _EXEC_SEARCH_TRACE_RE）。"""
@@ -4560,6 +4573,28 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                     "、".join(_tool_name(s) for s in plan_obj["tools"]))
         record("planner", "intercept", reason="noop_repeat", dups=noop_done,
                redirected=True)
+
+    # ── 收尾轮的口径如实化（20261001）───────────────────────────────────────
+    # 形状：本回合**已经有工具帧**（更早几轮执行过），而**最后一轮决策选了 chat**。
+    # `plan_encode` 按 `chat` 派生出 `STATUS=answer_only`，而 narrator 的图例把这一档
+    # 读成「本轮本来就不需要工具 → 直接回答就行」——**在有帧的轮次上这句话是假的**，
+    # 而且它正邀请 narrator 脱离帧作答。现场（trace `20261001T094445_1_rb7f5dae`，主人
+    # 问「猫咪目前有什么待办吗」）：本回合 round 0 真读过待办清单与审核队列，round 1
+    # 落成 chat ⇒ narrator 交出 248 字，**逐字复读了三轮之前那一轮的回复**（LCS=248/248），
+    # 其中「待审 0 条」与它自己刚取回的帧「待审 1 条」当场矛盾。
+    # 判据是**结构**（有帧 ∧ chat ∧ 零工具），不是措辞：这样的轮次处境是"收尾"——
+    # `wrapped` 的图例正是「只用已有记录作答，不许再声称新动作」，比"本来就不需要工具"
+    # 准。复用 `wrapped` 而不新造值：`PLAN_STATUS_VALUES` 每一格都有消费方，多一格就是
+    # 多一套判据（与任务登记轮借用它同源）。只在 status 还是**派生**出来的 answer_only
+    # 时改（`plan_encode` 的派生注写着"别把派生当判据入口"）——构造点显式给过值的一律不动。
+    if (has_frames and not plan_obj["tools"] and plan_obj.get("chat")
+            and plan_obj.get("note") in (None, "")
+            and (plan_obj.get("status") or "answer_only") == "answer_only"):
+        plan_obj["status"] = "wrapped"
+        plan_obj["note"] = _CARRY_NOTE
+        logger.info("[planner] 末轮落成 chat 但本回合已有工具帧 → STATUS 改判为 wrapped"
+                    "（附收尾纪律：照帧重答，别整段抄更早那一轮）")
+        record("planner", "wrap_status", round=rounds, frames=has_frames)
 
     logger.info("[planner] skill=%s params=%s tools=%s（round %d/%d）",
                 plan_obj["skill"], plan_obj["params"], plan_obj["tools"], rounds + 1,
