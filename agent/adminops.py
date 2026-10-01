@@ -2139,6 +2139,18 @@ def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
 # （note_index / board_index / users / todos / favorites / notifications / messages
 # / 标签字典 / 公告清单）——各读各的必然出现"卡说已达成、工具却照写"的分裂。
 #
+# **判据要看这一下真正消耗掉的那件事**（20261001 加，代价见下）：写分两种——
+# ① **改一个值**（收藏、冻结、置顶、排期…）：消耗的是"那个值现在还不是目标值"，
+#    判据就是拿现状值比目标值；
+# ② **处理队列里的一行**（批准/驳回额度申请、复核留言…）：消耗的是**那一行本身**
+#    （服务端按 `WHERE status=0` 认领），判据只能是"那一行还在不在待办态"。
+# 把 ② 按 ① 判会得出一个**看起来对、其实把门锁死**的结论：批准曾经拿"计数器就是 0"
+# 当已达成（那是这个动作**顺带产生的效果**，不是它消耗的东西），于是「满额账号交了
+# 一份申请」被判成没什么可办的 ⇒ 不弹卡、零调用，而那一行**还挂在待处理态**；
+# 主人再说一次判据还是同一句 ⇒ **这条申请永远没有通道能办**（trace
+# `20261001T105116` 实证，用户报"不作为会一直挂起"）。队列型的判据因此一律问
+# "那一行还在吗"，且**快照读不到时照弹**——读不到当成"没有那一行"就是同一个洞。
+#
 # 现状话术的**一条硬要求**：只写状态、不写动作完成式。判据说"现在就是这个样子"，
 # 说成「已完成 / 已收藏 / 已标记」就会被读成"系统替我做过了一次"（那正是这一族的
 # 另一半病）。词表见下面各族返回的那几句与 tests/test_idem_noop.py 的负断言。
@@ -2258,10 +2270,38 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
         # 「已冻结」——后者在气泡里读起来像"系统刚替你冻了一次"。
         return (f"账号「{name}」（账号 id={row.get('id')}）"
                 f"现在就是{'冻结' if want else '正常'}状态")
-    if tool in ("approve_quota_request", "reset_user_quota"):
-        # 对话额度（20260929）：两个动作的**效果是同一个**（计数器清零），所以"已达成"
-        # 的判据也同一条 = **这个人的计数器本来就是 0**（没有可清零的东西）。
-        # 驳回不在此列（它不改变额度，判据是另一件事，见下一支）。
+    if tool in ("approve_quota_request", "reject_quota_request"):
+        # 批准与驳回（20261001 修，同一条判据）：这两件**消耗的都是"一条待处理的申请"**
+        # （服务端按 `WHERE status=0` 认领那一行），与**计数器的当前值无关**。
+        # 此前批准与主动重置共用"计数器本来就是 0"那条判据，于是「一个满额账号交了
+        # 一份申请」被判成已达成 ⇒ 不弹卡、零调用，而那条申请**仍挂在待处理态**；
+        # 主人再说一次，判据还是同一句 ⇒ **永远没有通道能办它**（trace
+        # `20261001T105116` 实证：回执明说"这一轮没有做任何改动"，后台那一行还挂着
+        # 待处理；用户报「请求要么拒绝要么通过，不作为会一直挂起」）。
+        # 判据的正解是**那一行还在不在**：一条待处理的申请只有批或驳才会消失。
+        # 所以——快照读不到 ⇒ 判不了 ⇒ 照弹；他在申请里 ⇒ 正是要办的那一次 ⇒ 照弹；
+        # 不在 ⇒ 才如实说"没有待处理的额度申请"（fail-open 的方向永远是弹卡）。
+        users = s.get("users")
+        reqs = s.get("quota_requests")
+        if not isinstance(users, dict) or not users or not isinstance(reqs, dict):
+            return None
+        row, name = _quota_target_row(tool, a, users)
+        if row is None:
+            return None                      # 名录里没这一行 ⇒ 工具的拒绝路，不是已达成
+        try:
+            uid = int(row.get("id"))
+        except (TypeError, ValueError):
+            return None
+        if uid in reqs:
+            return None                      # 有申请 ⇒ 照弹
+        if not name:
+            name = f"账号 id={uid}"
+        return f"账号「{name}」现在没有待处理的额度申请"
+    if tool == "reset_user_quota":
+        # 主动重置（20260929）：这个动作**不需要他申请过**（站内没有"列全部账号"的
+        # 读工具，它是唯一能在"没人申请"时动额度的一条），效果是直接把计数器清零
+        # ⇒ "已达成"的判据是**计数器本来就是 0**（没有可清零的东西）。
+        # 与上面那两支分开：批/驳消耗的是申请行，这一支消耗的是"用掉的轮数"。
         users = s.get("users")
         if not isinstance(users, dict) or not users:
             return None                      # 名录读不到 ⇒ 判不了（同冻结族）
@@ -2284,26 +2324,6 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
         # 与「0/500 轮」说的是同一件事，但前者一眼就是"满的"，后者要先想一下 0 是哪一栏。
         return (f"账号「{name}」（账号 id={row.get('id')}）的额度本来就是满的"
                 f"（剩 {lim}/{lim} 轮，没有用掉任何一轮）")
-    if tool == "reject_quota_request":
-        # 驳回（20260929）：不改变额度，所以判据**不是**用量，而是"他现在有没有
-        # 待处理的申请"——没有的话这一下会被服务端拒（`该账号没有待处理的额度申请`），
-        # 那是一条要如实说清的失败，不是"已达成"。快照读不到 ⇒ 判不了，照弹。
-        users = s.get("users")
-        reqs = s.get("quota_requests")
-        if not isinstance(users, dict) or not users or not isinstance(reqs, dict):
-            return None
-        row, name = _quota_target_row(tool, a, users)
-        if row is None:
-            return None
-        try:
-            uid = int(row.get("id"))
-        except (TypeError, ValueError):
-            return None
-        if uid in reqs:
-            return None                      # 有申请 ⇒ 正是要办的那一次，照弹
-        if not name:
-            name = f"账号 id={uid}"
-        return f"账号「{name}」现在没有待处理的额度申请"
     if tool == "complete_dashboard_todo":
         text = str(a.get("text") or "").strip()
         row, _n, have, _total = _todo_face_row(s.get("todos"), text)
