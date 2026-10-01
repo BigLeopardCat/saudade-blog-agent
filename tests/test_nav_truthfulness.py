@@ -26,8 +26,16 @@
 
    20260926 批 2 起（命令与事实分离）：连线命令从工具帧搬到了**回执行**的 `cmd`
    字段，工具帧只剩「页面已跳转：<url>」这样给人看的事实。所以"帧里有同一个载荷"
-   改判成"**回执里有同一条命令**"——本文件的四组用例就是那四处判据的回归锁，
+   改判成"**回执里有同一条命令**"——本文件前四组用例就是那四处判据的回归锁，
    夹具一并换成结构化形（夹具不换，判据就是哑的：它照样会绿）。
+
+③ **做了、但还没做完就说做完了**（trace 20261001T230706，主人报「声称转跳完成是在
+   转跳前完成…等了一会出现转跳完成文本才转跳」）：整页目标（`/device-console/`）由
+   nginx 直服、不在 React 路由表里，SPA 桥不接管 ⇒ 只能整页装载；而整页装载掐断本轮
+   SSE、Rust 在终止帧才落库 ⇒ **必须等回复说完才能跳**（提前跳 = 这一轮回复从对话里
+   消失）。所以时序不改、改字：这类目标说"即将跳转"，站内页照旧说"已跳转"（那类是
+   桥当场换路由、陈述与动作同一时刻）。第五、六组用例锁这两向，外加"回执里的 cmd
+   一字不动"。
 """
 import sys
 from pathlib import Path
@@ -266,6 +274,74 @@ def test_cmd_prefix_fallback_truthful():
           hit2 is not None and hit2[1] == _FALLBACK_CMD_PREFIX)
 
 
+def test_whole_page_target_not_claimed_as_done():
+    """③ **还没跳就别说跳完了**（trace 20261001T230706，主人报「声称转跳完成是在转跳前完成」）。
+
+    现场：t≈3.226 执行 `navigate_to("/device-console/")`，t≈3.236 系统印出
+    「页面已跳转：…」，而页面在 t≈9.412（回复写完、Rust 落库）才真的动——中间 6 秒
+    主人盯着一句**说它已经做了那件它还没做的事**的系统事实。
+
+    时序不是缺陷、是硬约束：整页目标（不在 React 路由表里 ⇒ SPA 桥不接管）只能整页
+    装载，而整页装载掐断本轮 SSE、Rust 在终止帧才落库、断连的残缺回复被 Drop guard
+    清掉 ⇒ 提前跳 = 这一轮回复从对话里消失。所以改的是**字**：这类目标说"即将跳转"。
+
+    三向锁：① 整页目标不许出现"已跳转"、必须带 URL（rule 6 取值锚点）；② 站内页
+    （SPA 桥当场换路由，陈述与动作同一时刻）**照旧**说"已跳转"——放宽不许扩散；
+    ③ 清单自洽：整页集合必须是合法导航路径的子集，且回执里的 cmd 一字不动
+    （机器侧仍然只有一种形状，措辞只影响给人看的那一半）。
+    """
+    print("[whole-page] 整页目标不许说「已跳转」")
+    from tools.base import _NAV_EXACT_PATHS, _NAV_WHOLE_PAGE_PATHS, navigate_to
+
+    check("整页集合非空且 ⊆ 合法路径（写错一个字符就是永远命不中的死分支）",
+          bool(_NAV_WHOLE_PAGE_PATHS) and _NAV_WHOLE_PAGE_PATHS <= set(_NAV_EXACT_PATHS),
+          str(sorted(_NAV_WHOLE_PAGE_PATHS)))
+
+    # 前面那轮真跑过的两个目标：一个整页、一个站内（t=3.226 的现场参数原样）
+    for p in sorted(_NAV_WHOLE_PAGE_PATHS):
+        r = navigate_to.invoke({"path": p, "confirm": False})
+        check(f"整页目标 {p} 说的是「即将跳转」，不是「已跳转」",
+              str(r).startswith("页面即将跳转：") and "已跳转" not in str(r),
+              str(r))
+        check("  留住人类可读 URL（rule 6 的取值锚点）",
+              f"https://saudade.site{p}" in str(r))
+        check("  回执里的 cmd 与站内页**同形**（机器读的那一半一个字不改）",
+              r.meta.get("cmd") == {"kind": "navigate",
+                                    "url": f"https://saudade.site{p}",
+                                    "mode": "direct"},
+              str(r.meta.get("cmd")))
+
+    r_spa = navigate_to.invoke({"path": "/talk", "confirm": False})
+    check("站内页（SPA 当场换路由）照旧说「页面已跳转」——放宽不许扩散",
+          str(r_spa) == "页面已跳转：https://saudade.site/talk", str(r_spa))
+    r_cfm = navigate_to.invoke({"path": "/talk", "confirm": True})
+    check("确认式照旧说「等主人确认」——三态各有各的字，不共用",
+          "等主人确认" in str(r_cfm) and "已跳转" not in str(r_cfm), str(r_cfm))
+
+
+def test_whole_page_wording_wired_into_fact_block():
+    """③ 的接线锁：改的是**工具返回文本**，而主人读到的第 4 行是事实块（`action_facts`
+    逐字取 `receipt["result"]`）⇒ 这里验一次"工具改一个字，气泡里那行跟着变"。
+
+    为什么值得一条测试：事实块是**照抄**，不改写——所以"字"只要在工具那一层对了，
+    下游三处（模型帧 / 事实块 / 落库回复）自动一致；反之如果哪天有人把措辞搬到
+    `factblock` 里二次渲染，这条会红。
+    """
+    print("[whole-page] 工具的字 → 事实块（照抄、不改写）")
+    from agent.factblock import action_facts, render_fact_block
+    from tools.base import navigate_to
+
+    r0 = navigate_to.invoke({"path": "/device-console/", "confirm": False})
+    # 回执的形状照 execute 的实产：工具帧文本 + 顶层 cmd（`family_of` 靠它认命令族）
+    receipt = {"skill": "navigate", "tool": "navigate_to", "result": str(r0),
+               "cmd": r0.meta.get("cmd")}
+    facts = action_facts([receipt])
+    check("事实块逐字取回执的 result（不改写、不二次渲染）",
+          facts == [receipt["result"]] and "已跳转" not in facts[0], str(facts))
+    check("  整块渲染后仍是同一句（只加说话人标记）",
+          "页面即将跳转" in render_fact_block(facts))
+
+
 def test_gate_wiring_for_prefix_text():
     """接线锁：gate 真的把回执传给了 `_claim_issue`（漏传是静默的）。"""
     print("[cmd_prefix] gate → _claim_issue 的回执接线（结构锁）")
@@ -329,6 +405,8 @@ def main():
     for fn in (test_param_problem_corrected_in_round,
                test_gate_nav_arrival_without_nav_frame,
                test_cmd_prefix_fallback_truthful,
+               test_whole_page_target_not_claimed_as_done,
+               test_whole_page_wording_wired_into_fact_block,
                test_gate_wiring_for_prefix_text,
                test_cmd_frame_wiring):
         fn()

@@ -2404,7 +2404,7 @@ def test_execute_node():
     out = _run(['navigate_to({"path": "/device-console/", "confirm": false})'])
     msgs = out["messages"]
     check("清单工具 → 照单执行（事实帧 + execute_0）",
-          msgs and msgs[-1].content == "页面已跳转：https://saudade.site/device-console/"
+          msgs and msgs[-1].content == "页面即将跳转：https://saudade.site/device-console/（本条回复说完再跳）"
           and msgs[-1].name == "navigate_to" and msgs[-1].tool_call_id == "execute_0"
           # 连线命令（旧 AUTO_NAVIGATE:/NAVIGATE:）已搬进回执的 cmd 字段——帧里没有它，
           # server 从回执取 cmd 发 __CMD__ 帧，前端照它执行
@@ -2423,12 +2423,14 @@ def test_execute_node():
     out3 = _run([])
     check("空清单 → 零帧零调用", out3["messages"] == [], str(out3))
     # 双工具清单按序执行 → 两帧 idx 递增、参数分别生效（AUTO 直跳 + NAVIGATE 确认式）
+    # 直跳那件挑的是**整页目标**（/device-console/）⇒ 帧上的字是"即将跳转"：那类要等
+    # 回复说完才生效（见 tools/base.py::_NAV_WHOLE_PAGE_PATHS，字的判据在 test_nav_truthfulness）
     out4 = _run(['navigate_to({"path": "/device-console/", "confirm": false})',
                  'navigate_to({"path": "/guestbook", "confirm": true})'])
     ids = [m.tool_call_id for m in out4["messages"]]
     check("双工具按序 → execute_0/execute_1 + 直跳/确认两态",
           len(out4["messages"]) == 2 and ids == ["execute_0", "execute_1"]
-          and out4["messages"][0].content == "页面已跳转：https://saudade.site/device-console/"
+          and out4["messages"][0].content == "页面即将跳转：https://saudade.site/device-console/（本条回复说完再跳）"
           and out4["messages"][1].content
           == "导航已发起，等主人确认后才会跳转：https://saudade.site/guestbook"
           and [r["cmd"]["mode"] for r in out4["receipts"]] == ["direct", "confirm"],
@@ -2855,7 +2857,7 @@ def test_execute_receipts_and_route():
     check("PASS → receipts 含验收行", len(out["receipts"]) == 1
           and out["receipts"][0]["tool"] == "navigate_to"
           and out["receipts"][0]["skill"] == "navigate"
-          and out["receipts"][0]["result"] == "页面已跳转：https://saudade.site/device-console/"
+          and out["receipts"][0]["result"] == "页面即将跳转：https://saudade.site/device-console/（本条回复说完再跳）"
           and out["receipts"][0]["cmd"] == {"kind": "navigate",
                                             "url": "https://saudade.site/device-console/",
                                             "mode": "direct"}
