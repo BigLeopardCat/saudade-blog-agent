@@ -36,24 +36,30 @@
   .venv/bin/python eval/run_golden.py --limit 3     # 前 3 条（调试）
   .venv/bin/python eval/run_golden.py --only nav_friends_down
   .venv/bin/python eval/run_golden.py --only rag_python_is,rag_arch_components  # 多选（链路诊断）
-  .venv/bin/python eval/run_golden.py --min-pass-rate 0.9 --skip-ids device_query  # CI 口径
+  .venv/bin/python eval/run_golden.py --min-pass-rate 0.9 --skip-ids device_query  # 显式点估计口径
   # 真写用例（夹具先在位，见 scripts/migration/golden_write_fixture_20260925.sql）：
   GOLDEN_ADMIN_UID=721 GOLDEN_ALLOW_REAL_WRITE=1 \
     .venv/bin/python eval/run_golden.py --only golden_write_category_delete_exec
-退出码：0=达到 --min-pass-rate（默认 1.0，即全过）1=低于门禁 / 回归组红
+退出码：0=两层门禁都过（硬层 0 红 + 采样层 Wilson 95% 下界 ≥ 档位）
+        1=硬层红（回归组）或采样层下界低于档位
         2=一条用例都没剩下（空分母："没评"不是"通过"）
-        3=身份前置不可用（真身份用例**未评估**——同样"没评"，不受 --min-pass-rate 放宽）
+        3=身份/事实前提不可用（这批用例**未评估**——同样"没评"，不受任何档位放宽）
 
-**`--min-pass-rate` 的确切语义**（20260924 写清——此前只在文档里含糊带过，实际有四层）：
-  1. 它管的是**本轮实际跑了的那些用例**的通过率，不是全语料的。`--only` / `--limit` /
+**落地指标**（20261001 起；判据住在 `eval/landing_gate.py`，这里只接线）：
+  **硬层** = 离线套件 / 真链路探针 / 回归组 / 前提与身份前置 ⇒ **0 红**，不给百分比
+  （这一层的红没有频率含义：它说的是"存在一条能走通的路"）。**采样层** = 其余能力题 ⇒
+  **Wilson 95% 下界 ≥ 档位**（当前 0.85、目标 0.95、连三夜达档抬 0.05）。为什么点估计
+  不算数、为什么确定性层不设 99%，见 `landing_gate` 头注（附 27 次全量历史算出的分布）。
+
+**`--min-pass-rate` 的确切语义**（20260924 写清四层；20261001 起它退成**显式覆盖**）：
+  1. **不传**（默认）⇒ 走上面的两层门禁（Wilson 口径）。夜间那条路不传它。
+  2. **显式传** ⇒ 按**点估计**判（老口径），给 `--only` 的小样本调试跑与 A/B 用——那种
+     场合成不了统计（n=4 时 Wilson 下界只有 0.51，判它没有意义）。**两种口径不会同时生效**。
+  3. 它管的是**本轮实际跑了的那些用例**的通过率，不是全语料的。`--only` / `--limit` /
      `--skip-ids` / 未设 uid 而跳过的用例**都改变分母**——所以"通过率达标"在非全量跑里
      读起来要打折扣（报告里的 `full_run` 字段就是给这件事用的）。
-  2. 它是**一个比率**，不是"每条都不许红"。0.9 意味着 10% 的用例可以是红的而门禁照样绿
-     ——失败清单仍逐条打印、报告里逐条有名，但退出码是 0。
-  3. **回归组（tags 含 regression）另按硬判 100%，不受它放宽**——先判回归组，红了直接
-     退出码 1，与通过率高低无关。
-  4. 默认值是 1.0，而 `scripts/nightly_regression.sh` **不带参数调用**它 ⇒ 夜间那道门禁
-     实际是"一条都不许红"。
+  4. **回归组（tags 含 regression）任何时候都另按硬判 100%**，不受它放宽——先判回归组，
+     红了直接退出码 1，与通过率高低无关。
 20260924 起判据以**首跑红后复跑一次**的终判为准，复跑绿的那批记进 regression.flaked_ids
 并单列打印（放行但必须有人看——首跑红/复跑绿两条都在报告与复审单里，不许静默宽恕）。
 ⚠ 复跑只对**回归组**做（能力题本来就按比率放宽），所以 flake 统计是**单向**的：只重跑
@@ -93,6 +99,8 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
 import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
 import identity_preflight  # 同目录：真身份通道的前置在位检查（20260926）
+import landing_gate  # 同目录：落地判定（两层门禁 / 慢性红榜，20261001）
+from landing_gate import wilson_ci  # noqa: F401 —— 再导出（唯一实现在 landing_gate）
 import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
 from utils import trace as trace_mod  # trace 工具返回留多长（run_case 里放开，见其注释）
 
@@ -1598,28 +1606,9 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
     return fails
 
 
-def wilson_ci(passed: int, total: int, z: float = 1.96) -> list:
-    """通过率的 Wilson 95% 置信区间（20260924）。
-
-    **为什么不是 passed/total 一个数**：110 条里 110 绿，写进报告是「通过率 1.000」——
-    读它的人会当成「这个系统不会错」。可 n=110 时「零失败」的 95% 上界仍有约 2.7%
-    （rule of three：3/n），换成下界就是真通过率最低可能只有 ~0.966。区间把这句话写进
-    数字里，比在文档里补一句"注意样本量"难绕过去。同理，按 tag 分组的那些 n=2、n=3 的
-    小组，单看百分比毫无意义——它们**只有**区间有意义（1 条用例的组，无论红绿，
-    95% 区间都覆盖 0.2~1.0）。
-
-    取 Wilson 而不是正态近似（Wald）：Wald 在 p 接近 0/1 时会给出越界或零宽区间
-    （p=1.0 时宽为 0，正是本仓最常见的形态），Wilson 不会。z=1.96 即 95%。
-
-    返回 `[下界, 上界]`，各四舍五入到 4 位。
-    """
-    if total <= 0:
-        return [0.0, 0.0]
-    p = passed / total
-    d = 1 + z * z / total
-    center = (p + z * z / (2 * total)) / d
-    half = z * ((p * (1 - p) / total + z * z / (4 * total * total)) ** 0.5) / d
-    return [round(max(0.0, center - half), 4), round(min(1.0, center + half), 4)]
+# `wilson_ci` 已搬到 `landing_gate`（20261001）：它现在是**门禁判据**的一员，两份实现
+# 迟早不一致。本文件顶部 `from landing_gate import wilson_ci` 再导出，`golden_full_run`
+# / `baseline_group` 的 `from run_golden import wilson_ci` 一个字不用改。
 
 
 def by_tag_stats(results: list, tags_map: dict) -> dict:
@@ -1690,11 +1679,12 @@ def main():
     ap.add_argument("--only", default="", help="只跑指定 id（逗号分隔可多选；诊断链路时按'用例形状'挑几条）")
     ap.add_argument("--skip-ids", default="",
                     help="跳过指定 id（逗号分隔；用于环境不可达的用例，如 CI 无 device-service）")
-    ap.add_argument("--min-pass-rate", type=float, default=1.0,
-                    help="通过率门禁（默认 1.0=全过）。它管的是**本轮跑了的用例**的比率，"
-                         "不是全语料（跳过会改分母，见报告 full_run）；回归组另按硬判 100%%，"
-                         "不受它放宽；nightly 不带参数调用 ⇒ 夜间实际是「一条都不许红」。"
-                         "四层语义见文件头 docstring。")
+    ap.add_argument("--min-pass-rate", type=float, default=None,
+                    help="**显式覆盖**成点估计口径（老语义）。不传 ⇒ 走两层门禁：硬层 0 红 +"
+                         "采样层 Wilson 95%% 下界 ≥ 档位（档位/目标见 eval/landing_gate.py）。"
+                         "点估计口径只给小样本调试跑与 A/B 用（n 太小时 Wilson 判不了），"
+                         "它管的是**本轮跑了的用例**的比率，不是全语料（跳过会改分母，见报告"
+                         " full_run）；回归组任何时候都另按硬判 100%%。四层语义见文件头 docstring。")
     ap.add_argument("--no-trace", action="store_true",
                     help="不落 golden trace（默认落 logs/agent/golden_traces/<run>/；"
                          "显式关掉只用于省盘/极速冒烟）")
@@ -1953,7 +1943,8 @@ def main():
     #             （cases[].rerun / regression.flaked_ids / failed_first_run）、
     #             进汇总打印、进复审单——复跑才绿的用例恰恰最该有人看（要么判据太脆，
     #             要么概率性幻觉）。
-    # **只重跑回归组**：能力题本来就按 --min-pass-rate 放宽，不需要第二条判据。
+    # **只重跑回归组**：能力题本来就按采样层档位放宽（Wilson 下界自带复跑要解决的问题
+    # ——它本来就是统计量），不需要第二条判据。
     # 复跑的 trace 用 `<case>__rerun` 名（同名词条会覆盖首跑那份，而"首跑为什么红"
     # 正是复跑要回答的问题）。
     _case_by_id = {c["id"]: c for c in cases}
@@ -2056,6 +2047,9 @@ def main():
     _reg_flaked = [r["id"] for r in _reg if not r["ok"] and r.get("final_ok")]
     # 被 --skip-ids/--only 摘掉的回归用例：组内分母随之变小，如实报出来（不许静默豁免）
     _reg_skipped = [s for s in skip_ids if "regression" in _ALL_TAGS.get(s, [])]
+    # 落地判定（20261001）：判据住在 `landing_gate`，这里只**接线**（不在本文件里重算
+    # 一遍阈值/区间——那是第二份判据）。终判口径与上面回归组一致（复跑过就以复跑为准）。
+    _landing = landing_gate.verdict(results, _reg_bad)
     # 第一条真正落盘的 trace（用例顺序 = 跑的顺序，取第一条即为目录的实证）：
     # 没开 trace、或全程一条都没写成功 ⇒ None（报告里如实写 None，不假装有目录）。
     _first_trace = next((r.get("trace") for r in results if r.get("trace")), None)
@@ -2139,6 +2133,9 @@ def main():
             "flaked_ids": _reg_flaked,
             "skipped_ids": _reg_skipped,
         },
+        # 落地判定（20261001）：两层门禁的结论 + 距目标的差距。**判据在 `landing_gate`**，
+        # 这一格只是它落盘的样子（阈值/区间/样本量规则都在那边，见其头注）。
+        "landing": _landing,
         # golden trace（20260922）：这一轮跑落下的目录（None=没开或一条都没写成功）。
         # 报告里带它 = 红条能直接指着 trace 读（planner 决策/被剔清单/gate 打回原因）。
         # 从**实际落盘的路径**反推目录，不在这里再拼一次路径（少一处能拼错的地方）。
@@ -2170,6 +2167,12 @@ def main():
                        if failed != failed_first else "")
                     + "。逐条判定并勾选（假失败当轮修判据，"
                       "真 FAIL 允许挂着并在下方写原因）：\n\n")
+            # 落地判定排在最长的那一节之前（20261001）：复审单上「这一夜算不算事故」以前
+            # 要人自己从 FAIL 数里推；现在直接印出来——**低于档位**才叫事故，**高于档位但
+            # 差目标还远**是"还在爬坡"（那批红照样要逐条判，但它不是当夜的事故）。
+            f.write(f"> **落地判定**：{landing_gate.describe(_landing)}\n"
+                    f"> 慢性红榜（按贡献的红次数排的优化工单）："
+                    f"`.venv/bin/python eval/landing_gate.py --red-rank`\n\n")
             # 身份前置不满足（20260926）排最前：它会让**别的**用例跟着变红，先看这一条，
             # 否则复审单上每条红都像是在说模型坏了。
             if _precondition_bad:
@@ -2205,7 +2208,7 @@ def main():
                 f.write("> ⚠ **回归组（regression）FAIL，本轮不得放行**："
                         + "、".join(f"`{i}`" for i in _reg_bad)
                         + f"\n> 回归组要求 100% 通过（{len(_reg) - len(_reg_bad)}/{len(_reg)}），"
-                          "不受 `--min-pass-rate` 放宽；假失败当轮修判据，真 FAIL 当轮修行为。\n\n")
+                          "不受任何档位放宽；假失败当轮修判据，真 FAIL 当轮修行为。\n\n")
             # 复跑才绿的那批（20260924）：门禁放行了，但它们是最可疑的一族
             if _reg_flaked:
                 f.write("> ⚠ **复跑才绿的回归用例（首跑红、复跑绿，已按方差放行）**："
@@ -2213,11 +2216,21 @@ def main():
                         + "\n> 一条用例两次结论不同，只有两种解释：判据太脆（该修判据），"
                           "或行为本身是概率性的（该修行为）。参照下方首跑失败项与两份 trace"
                           "（首跑 / 复跑）逐条定性——不要把这一节当成「已经过了」。\n\n")
+            # 慢性红榜（20261001）：每条红后面印它的**历史红率**，让归类从"猜"变成"读"。
+            # 以前复审单只有这一轮的字面，判"真 FAIL 还是假失败"全靠当场读判据；而"这条
+            # 历史上红过几次"恰恰是最省事也最容易被忽略的证据（27 次全量历史，秒级读出）。
+            _chronic = landing_gate.chronic_map()
             for r in results:
                 if r["ok"] and not r.get("rerun"):
                     continue
                 case = case_by_id.get(r["id"], {})
                 f.write(f"## {r['id']}\n\n")
+                _k_n = _chronic.get(r["id"])
+                f.write("- 历史（全量跑的终判口径）："
+                        + (f"**红 {_k_n[0]}/{_k_n[1]} 次 = {_k_n[0] / _k_n[1]:.0%}**"
+                           "（慢性红 ⇒ 先怀疑判据或行为，别当偶发）" if _k_n
+                           else "**从未红过**（首次 ⇒ 更可能是这一轮的新变化）")
+                        + "；完整红榜 `.venv/bin/python eval/landing_gate.py --red-rank`\n")
                 f.write(f"- 失败项：{r['fails'] or ('error: ' + str(r['error']))}\n")
                 f.write(f"- 打回：{r['resets']}（原因 {r['resets_reasons'] or '无'}）\n")
                 f.write(f"- 首跑 trace: {r.get('trace')}\n")
@@ -2254,7 +2267,7 @@ def main():
     # 回归组单列（20260921）：能力题允许波动，回归题不许——组内一条红即整轮红
     # （20260924 起：红先复跑一次再定论，复跑绿的那批单独点名，见上面重跑一节）
     print(f"回归组: {len(_reg) - len(_reg_bad)}/{len(_reg)}"
-          + (f"  ⚠ 红：{_reg_bad}（回归组要求 100%，不受 --min-pass-rate 放宽）" if _reg_bad else "")
+          + (f"  ⚠ 红：{_reg_bad}（回归组要求 100%，不受任何档位放宽）" if _reg_bad else "")
           + (f"  ⚠ 复跑才绿：{_reg_flaked}（首跑红，已按方差放行——逐条见复审单）"
              if _reg_flaked else "")
           + (f"  ⚠ 被跳过：{_reg_skipped}（组内分母随之变小）" if _reg_skipped else ""))
@@ -2274,12 +2287,24 @@ def main():
             print(f"trace 清理: 删掉 {len(_pruned)} 个旧目录（{_pruned[0]} … {_pruned[-1]}）")
     if review_path:
         print(f"复审单: {review_path}")
-    # 门禁（20260920）：本机默认 1.0（全过）；CI 北美 runner 跨网链路按通过率判
-    # （20260921 起分两层：回归组硬判 100%，其余按 --min-pass-rate）
+    # 门禁（20260920 起；20261001 改为**两层**：硬层 0 红 + 采样层 Wilson 下界 ≥ 档位，
+    # 判据在 `landing_gate`）。点估计那一行照旧打印——它是"这一夜手气如何"的读数，
+    # 只是不再单独充当门禁。
     pass_rate = (len(cases) - failed) / len(cases) if cases else 0.0
     _lo, _hi = report["pass_rate_ci95"]
     print(f"通过率: {pass_rate:.3f}（Wilson 95% 区间 {_lo:.3f}–{_hi:.3f}；"
-          f"门禁 {args.min_pass_rate:.3f}，跳过 {len(skip_ids)} 条）")
+          f"跳过 {len(skip_ids)} 条）")
+    print(f"落地判定: {landing_gate.describe(_landing)}")
+    # 档位该不该抬（20261001）：抬档要"连 N 夜达档"这个证据，所以在这里读一次历史
+    # （只读最近 N 份全量，倒着读、够了就停）。**只提示，不自动改常数**——改动常数的
+    # 那一下要有人负责（`landing_gate.ENTRY` 是唯一取值处）。
+    if _is_full_run:
+        _hint = landing_gate.raise_hint()
+        if _hint["ready"]:
+            print(f"  ★ {_hint['reason']}（改 `eval/landing_gate.py` 的 ENTRY）")
+    if args.min_pass_rate is not None:
+        print(f"  ⚠ 显式传了 --min-pass-rate {args.min_pass_rate:.3f} ⇒ 本轮按**点估计**口径判"
+              f"（两层门禁本轮不生效；夜间的门禁不传它）")
     # 按 tag 的弱项（20260924）：只列 n≥3 的组，避免 n=1 的组刷屏（那种组的区间
     # 覆盖 0.2–1.0，列出来只会淹没真信号）。全绿时这行不打。
     _weak = [(t, b) for t, b in report["by_tag"].items()
@@ -2293,8 +2318,8 @@ def main():
         print(f"⚠ 回归组有 {len(_reg_flaked)} 条**首跑红、复跑绿**：{_reg_flaked}"
               f" —— 门禁按方差放行，但首跑红已记入报告（failed_first_run={failed_first}）"
               f"与复审单：{review_path or REPORT_FILE}")
-    # 身份前置不满足（20260926）：**排在通过率判定之前**，与回归组硬判同源、不受
-    # `--min-pass-rate` 放宽。理由只有一句：这些用例这一轮**没被评估**，而退出码 0
+    # 身份前置不满足（20260926）：**排在采样层判定之前**，与回归组硬判同源、不受任何
+    # 档位放宽。理由只有一句：这些用例这一轮**没被评估**，而退出码 0
     # 会被读成"这一轮没问题"——空分母那次（退出码 2）就是同一条纪律的另一个现场。
     # 上面已把逐条 `[precondition]` 打过，这里只是让退出码也说出来。
     if _precondition_bad or _premise_bad:
@@ -2323,11 +2348,50 @@ def main():
         print(f"回归组 FAIL（{len(_reg) - len(_reg_bad)}/{len(_reg)}）：{_reg_bad}"
               f" → 退出码 1（回归组要求 100%，不按通过率放行）")
         sys.exit(1)
-    if pass_rate >= args.min_pass_rate:
-        print(f"⚠ {failed} 条 FAIL，但通过率达标 → 退出码 0（逐条见上方与 {review_path or REPORT_FILE}）")
+    # 采样层（20261001）：口径二选一——显式 `--min-pass-rate` 走点估计（小样本调试跑/
+    # A/B），否则走 Wilson 下界对档位。两条路的判据都不在本文件里（见 `landing_gate`）。
+    _s = _landing["sampled"]
+    if args.min_pass_rate is not None:
+        if pass_rate >= args.min_pass_rate:
+            print(f"⚠ {failed} 条 FAIL，但点估计达标（{pass_rate:.3f} ≥ "
+                  f"{args.min_pass_rate:.3f}，显式口径）→ 退出码 0"
+                  f"（逐条见 {review_path or REPORT_FILE}）")
+            sys.exit(0)
+        print(f"通过率 {pass_rate:.3f} < 门禁 {args.min_pass_rate:.3f}"
+              f"（显式点估计口径）→ 退出码 1")
+        sys.exit(1)
+    if _s["underpowered"]:
+        # 样本不足 ⇒ **不判**（既不是过也不是红）：n=5 全绿的下界只有 0.51，拿它判红
+        # 会造出一个永远达不到的门禁；判绿则是替样本量撒谎。空分母那次（退出码 2）
+        # 是同一条纪律的另一个现场：**"没评"必须与"通过"分开**。
+        print(f"⚠ 采样层样本不足（{_s['passed']}/{_s['total']}，判 {_s['entry']} 至少要 "
+              f"{_s['min_n_for_entry']} 条）⇒ 采样层不判、不置红（点估计 {_s['point']:.3f} "
+              f"够得上地板 ⇒ 够不上「小样本整片红」那条：`point < floor` 时是退出码 1）；"
+              f"{failed} 条红逐条见 {review_path or REPORT_FILE}")
         sys.exit(0)
-    print(f"通过率 {pass_rate:.3f} < 门禁 {args.min_pass_rate:.3f} → 退出码 1")
-    sys.exit(1)
+    if _s["state"] == "collapse":
+        # 措辞分两种：样本量够时看**下界**（比历史最差的一夜还差 = 事故）；样本太少时
+        # 下界本身没有证明力，判红的依据是**点估计**都低于地板（整片红）。两者都是
+        # 退出码 1，但说错依据会把人带去查错地方——小样本塌方要么是这批用例全废、
+        # 要么是接线断了，跟"离目标还差多少"无关。
+        _why = ("红率已高过正常波动一整档（实测噪声带最差 15 红/11.7%）⇒ 这是事故，"
+                "不是爬坡没到档"
+                if _s.get("collapse_basis") == "lower" else
+                f"样本只有 {_s['total']} 条，**点估计** {_s['point']:.3f} 已低于地板"
+                f" ⇒ 小样本也整片红，不是样本量的问题")
+        print(f"采样层低于**地板** {_s['floor']}（{_s['passed']}/{_s['total']}，"
+              f"点估计 {_s['point']:.3f}，下界 {_s['lower']:.3f} 上界 {_s['upper']:.3f}）"
+              f"→ 退出码 1：{_why}（档位 {_s['entry']} / 目标 {_s['target']}）；"
+              f"逐条见 {review_path or REPORT_FILE}")
+        sys.exit(1)
+    # 到这里：采样层**没有事故**（下界在地板之上）。没到档位只报不置红——档位是爬坡台阶，
+    # 拿它当夜间报警会把"我们离目标还差多少"变成"出事了"，红就贬值了（见 landing_gate）。
+    print(f"⚠ {failed} 条 FAIL，但采样层下界 {_s['lower']:.3f} ≥ 地板 {_s['floor']}"
+          f"（{_s['state']}，档位 {_s['entry']} / 目标 {_s['target']}，"
+          f"还差 {_landing['distance_to_target']:.3f}）→ 退出码 0"
+          f"（逐条见 {review_path or REPORT_FILE}；红榜："
+          f".venv/bin/python eval/landing_gate.py --red-rank）")
+    sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -195,8 +195,8 @@ check("退出码 3 在报告字段里也留了痕（skipped_identity_ids / ident
       and '"identity_preflight": _preflight_rows' in _G)
 check("复审单里身份前置排在最前（否则每条红都像在说模型坏了）",
       _G.index("身份前置不可用") < _G.index("回归组（regression）FAIL，本轮不得放行"))
-check("退出码 3 不受 --min-pass-rate 影响（在通过率判定之前就退）",
-      _G.index("sys.exit(3)") < _G.index("if pass_rate >= args.min_pass_rate:"))
+check("退出码 3 不受门禁口径影响（在采样层判定之前就退）",
+      _G.index("sys.exit(3)") < _G.index('_s = _landing["sampled"]'))
 
 print()
 if FAILS:

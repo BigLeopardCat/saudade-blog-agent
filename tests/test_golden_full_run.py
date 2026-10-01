@@ -10,12 +10,16 @@
    而它被当成"最近一次基线"读。两类跳过的区别与那次失效现场见 `run_golden.is_full_run`
    的头注；本文件钉住四种组合（含"只有设计跳过 ⇒ 仍然是全量"这一条，它就是那次 bug）。
 
-② **夜间那道 golden 门禁不再传 `--min-pass-rate`**。默认值是 1.0 ⇒ 夜间实际是
-   "一条都不许红"，而能力题是采样方差主导的（实测同配置 5 分钟内 0↔7 条红、两夜红名
-   只有 2 条重合）⇒ 门禁每晚必红，红就没有信息。`--min-pass-rate` 的四层语义里第 3 层
-   写着"回归组（tags 含 regression，18 条）另按硬判 100%，不受它放宽"——所以夜间传一个
-   率**不会**放走回归组；本锁只要求"夜间那一行确实传了这个参数"，**不锁具体数值**
-   （数值是运维决定，理由写在脚本那一行的注释里）。
+② **夜间那道 golden 门禁用哪个口径**（20260929 立，20261001 换口径）。当年的教训是
+   "**默认值替运维做了决定**"：`--min-pass-rate` 默认 1.0 ⇒ 夜间实际是"一条都不许红"，
+   而能力题是采样方差主导的（实测同配置 5 分钟内 0↔7 条红、两夜红名只有 2 条重合）
+   ⇒ 门禁每晚必红，红就没有信息。当时的修法是"夜间显式传一个率"。
+
+   20261001 起**口径本身也换了**：点估计换成了 **Wilson 95% 下界 ≥ 档位**（判据在
+   `eval/landing_gate.py`，两层：硬层 0 红、采样层下界）。所以本锁的落点跟着变——
+   现在要钉的是**"夜间不传 `--min-pass-rate`"**：传了它就跑点估计口径，把 20 条红读成
+   "0.86 达标"。档位不用在这里重抄一个数（那就是第二份判据），只锁两条关系：
+   `ENTRY < TARGET`、且 `TARGET` 是主人定的 0.95。
 
 秒级、纯函数 + 纯文本，无网络无 LLM；由 `tests/run_all.py` 按磁盘枚举自动收。
 
@@ -87,13 +91,23 @@ _w = [c["id"] for c in _cases if c.get("needs_real_write")]
 check("golden 里有 needs_real_write 用例", bool(_w), "、".join(_w))
 
 print()
-print("④ 夜间那一道 golden 门禁必须显式传 --min-pass-rate")
+print("④ 夜间那一道 golden 门禁走 Wilson 口径（不传 --min-pass-rate）")
 _nightly = (ROOT / "scripts/nightly_regression.sh").read_text(encoding="utf-8")
 _run_line = [ln for ln in _nightly.splitlines()
              if "eval/run_golden.py" in ln and not ln.strip().startswith("#")]
-check("夜间调用 run_golden 时带了 --min-pass-rate（默认 1.0 = 一条都不许红）",
-      bool(_run_line) and all("--min-pass-rate" in ln for ln in _run_line),
+check("夜间调用 run_golden 时**没有**传 --min-pass-rate（传了就走点估计口径，"
+      "20 条红会被读成「0.86 达标」）",
+      bool(_run_line) and all("--min-pass-rate" not in ln for ln in _run_line),
       "；".join(ln.strip() for ln in _run_line) or "没找到调用行")
+
+sys.path.insert(0, str(ROOT / "eval"))
+import landing_gate  # noqa: E402
+check("档位 < 目标（相等或反了 ⇒ 抬档规则没有意义）",
+      landing_gate.ENTRY < landing_gate.TARGET,
+      f"ENTRY={landing_gate.ENTRY} TARGET={landing_gate.TARGET}")
+check("目标是主人定的 0.95", landing_gate.TARGET == 0.95, str(landing_gate.TARGET))
+check("零失败要声称 0.95 的样本数是 73（n/(n+z²) 解出来的，不是拍的）",
+      landing_gate.min_n_zero_fail(0.95) == 73, str(landing_gate.min_n_zero_fail(0.95)))
 
 print()
 if FAILED:
