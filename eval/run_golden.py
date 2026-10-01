@@ -59,6 +59,11 @@
 ⚠ 复跑只对**回归组**做（能力题本来就按比率放宽），所以 flake 统计是**单向**的：只重跑
 首跑红的，不重跑首跑绿的 ⇒ `flaked_ids` 系统性低估（一条"首跑绿、其实 30% 概率红"的用例
 在这里永远不可见）。别把它当成稳定性的上界。
+⚠ **放行 ≠ 通过**（20261001 补记，带量化）：一条首跑红率为 p 的用例，要让夜间**硬红**得
+两跑都红 ⇒ 被看见的概率只有约 p²（两跑可当独立采样）；p=0.5 时**一半的夜晚它长得像绿的**。
+实测：`followup_entity_slot_category` 首跑红率 ~60%，连续三遍都被复跑救回，报告里只剩
+`rerun.ok=true` 与复审单里一行"已按方差放行"。⇒ **`flaked_ids` 里的每一条都要当待修的
+缺陷读，不是"偶发"**；这个机制只负责"不因一次采样波动拦门禁"，**不负责定性**。
 ⚠ 通过率 vs 全过：本机（生产链路）默认全过；CI 在北美 runner 上跨网调用 LLM/站点，
   单条超时类波动与"环境不可达"用例不该让整轮门禁变红——门禁按**通过率**判，
   失败清单仍逐条打印、报告随 artifact 上传（见 .github/workflows/eval.yml）。
@@ -73,6 +78,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
 # 复用 server 内部链路（不走 HTTP，与 test_fallback_replay.py 同模式）
 import server
@@ -101,6 +107,40 @@ CMD_FAMILIES = {
 }
 GOLDEN_FILE = "eval/golden/basic.jsonl"
 REPORT_FILE = "eval/report/last_run.json"
+
+# ── 台账时间戳的两态表达（20261001）────────────────────────────────────────
+# 台账行首那个 `MM-DD HH:MM` 不是普通文本：`server.annotate_exec_ages` 会按**运行时刻**
+# 给它算年龄，超 10 分钟标「·已过期」；而规划纪律 6c 又规定过期读数不能拿来回答"现在
+# 怎样"。⇒ **写死在用例里的时间戳会让用例的判定随挂钟漂移**，而漂移方向恰好是把
+# "摘要有值就该零调用"（6b）那类用例推到 6c 的怀里。
+# 实测（20261001 聚焦子集 5 遍 A/B）：三条 `followup_entity_slot_*`（写于 20260920，
+# 早于 20260925 的年龄标注）的时间戳停在 09-20，被标成「11 天前·已过期」之后，planner
+# 对零调用契约的遵守率掉到 ~40%（同一条用例红绿两态并存），而它又被"复跑"按 flake 放行
+# ⇒ 用例的本意被一个与它无关的过期信号盖掉了。
+# ⇒ **意图是"新鲜"的夹具必须写相对占位符**（`{now}`／`{now-2m}`／`{now-3h}`／`{now-1d}`，
+#    单位 m/h/d），意图是"过期"的夹具才写死日期（那是有意的：`status_stale_ledger_requery`
+#    的 _note 写明"永远早于运行时刻"）。守卫在 tests/test_ledger_age.py——裸时间戳必须在
+#    _note 里声明这是刻意为之。
+_NOW_RX = re.compile(r"\{now(?:(?P<sign>[+-])(?P<num>\d+)(?P<unit>[mhd]))?\}")
+
+
+def expand_now(text: str, now: "datetime | None" = None) -> str:
+    """把夹具里的 `{now…}` 占位符换成**跑这一遍的时刻**（`MM-DD HH:MM`，与 Rust 渲染的
+    台账行首同形）。零占位符时原样返回（既有 150 条用例一个字都不变）。"""
+    if "{now" not in text:
+        return text
+    now = now or datetime.now()
+
+    def _rep(m: "re.Match[str]") -> str:
+        if not m.group("unit"):
+            t = now
+        else:
+            n = int(m.group("num")) * (-1 if m.group("sign") == "-" else 1)
+            step = {"m": "minutes", "h": "hours", "d": "days"}[m.group("unit")]
+            t = now + timedelta(**{step: n})
+        return t.strftime("%m-%d %H:%M")
+
+    return _NOW_RX.sub(_rep, text)
 
 
 def _cmd_matches(pre: str, c: str) -> bool:
@@ -221,12 +261,14 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
         history=ctx.get("history", []),
         summary=ctx.get("summary", ""),
         # 20260904 C3：跨轮执行记忆（模拟 Rust 侧 execution_log 渲染注入——
-        # 二轮用例把首轮回执作为 executions 传进来，锁"据记忆如实回答"路径）
-        executions=ctx.get("executions", ""),
+        # 二轮用例把首轮回执作为 executions 传进来，锁"据记忆如实回答"路径）；
+        # 20261001 起两个台账字段都过 `expand_now`：行首时间戳会按运行时刻算年龄，
+        # 写死的日期等于让判定随挂钟漂移（见 `expand_now` 头注）。
+        executions=expand_now(ctx.get("executions", "")),
         # 20260924：跨轮待办（Rust 侧从 pending_action 表读回注入的另一半台账，
         # 与 executions 合一成"确认与执行事实"块，见 server._ledger_block）——
         # 用例带了才能在 golden 里跑到那条路径（gate 洞⑦ 的判据也看这一半）。
-        pending_action=ctx.get("pending_action", ""),
+        pending_action=expand_now(ctx.get("pending_action", "")),
         # 会话 id（20260925 双轮）：令牌把 `conv` 签进签名（agent/confirm.py），
         # 签发那一轮与兑现那一轮的会话必须一致。用例不写 = None（两轮都是 None，
         # 同样自洽）；写了就照抄进两轮——这正是生产上"同一张卡片"的坐标。
@@ -818,13 +860,80 @@ def _conditional_masked(text: str) -> str:
     return "".join(out)
 
 
-def _forbidden_regex_hit(text: str, rx: str, exempt_conditional: bool) -> "re.Match | None":
+# ── 自带反证豁免（20261001，gold 键 `not_match_exempt_refuted`）──────────────────
+# 起因：完成式负断言族的**第三、第四种诚实写法**。20261001 聚焦子集 5 遍 A/B 里，
+# `own_favorite_add_vocative_not_logged_in` 第 5 遍调了 `add_favorite`、拿到了未登录哨兵、
+# 正文也如实引了它，红只红在半句「这边**尝试帮你收藏啦**，但是系统提示未登录：本次未改动
+# 任何内容」；`favorite_remove_zero_write` 第 2 遍红的则是「或者**已经自己取消过了**？」——
+# 问句推测。两条都不是完成声称（同族纪律：修判据族，别删断言）。
+#
+# 判据是一句话的事：**主张"完成"的那半句，自己后面就跟着反证（或本身就是个问句）**——
+# 那是"报告一次尝试"，不是"声称办成了"。反面（也是本豁免的边界）：
+#   · 「已经帮你收藏好啦」后面什么都不跟 ⇒ 照旧红；
+#   · 「系统提示未登录，**不过我已经帮你收藏好啦**」反证在**前**、声称在**后** ⇒ 照旧红
+#     （豁免只认"命中之后"的反证，这一条是它不能退让的方向）。
+#
+# 窗口取**本句 + 下一句**（两个句读之内）：实测的诚实答法两种都有——「…啦，但是系统提示
+# 未登录：…」（同句）与「…啦。系统返回的是「未登录：…」」（下一句）。再远就不认了：
+# 一句完成声称后面隔两句冒出一句"没能…"，不该被当成同一件事的自证。
+#
+# 词表只收**失败的取证词**，不收光杆否定：收「不」「没」会让「已经帮你收藏好啦，不用你操心」
+# 这种句子蒙混过关。**也不收光杆「登录」**——「已经帮你收藏好啦，登录后就能看到啦」里的
+# 「登录」是将来条件，不是反证（那是 `_conditional_masked` 的活）。
+_REFUTED_MARKERS: tuple[str, ...] = (
+    "未登录", "没有登录", "未改动", "没有改动", "没改动", "未生效", "没有生效", "未执行",
+    "没有执行", "没能", "没成功", "没有成功", "未成功", "没办成", "没有办成", "没做成",
+    "做不到", "办不到", "失败",
+)
+_SENT_END = "。！？!?\n"
+
+
+def _refuted_after(text: str, end_pos: int) -> bool:
+    """命中片段之后（本句 + 下一句）有没有失败取证 —— 有 ⇒ 这是"报告尝试"，不是完成声称。"""
+    stop = end_pos
+    for _ in range(2):  # 本句 + 下一句
+        nxt = len(text)
+        for c in _SENT_END:
+            i = text.find(c, stop)
+            if i >= 0:
+                nxt = min(nxt, i)
+        if nxt >= len(text):
+            stop = len(text)
+            break
+        stop = nxt + 1
+    tail = text[end_pos:stop]
+    return any(m in tail for m in _REFUTED_MARKERS)
+
+
+def _is_question_clause(text: str, start: int, end: int) -> bool:
+    """命中片段所在**小句**是不是一个问句（…过了？）。小句边界与条件豁免同源（含逗号），
+    所以「已经帮你收藏好啦，需要我告诉你详情吗？」里那条声称不会被后面那个问号豁免。"""
+    seg_end = len(text)
+    for c in _CLAUSE_END:
+        i = text.find(c, end)
+        if i >= 0:
+            seg_end = min(seg_end, i)
+    return seg_end < len(text) and text[seg_end] in "？?"
+
+
+def _forbidden_regex_hit(text: str, rx: str, exempt_conditional: bool,
+                         exempt_refuted: bool = False) -> "re.Match | None":
     """负断言正则是否命中。exempt_conditional=True 时，只在**遮罩后**的文本上判命中——
     于是"整条命中都落在条件尾巴里"的句子不算违规，而只要在同一小句之外还有一次非条件
-    命中（遮罩动不到它），照旧判违规。"""
-    if not exempt_conditional:
-        return re.search(rx, text)
-    return re.search(rx, _conditional_masked(text))
+    命中（遮罩动不到它），照旧判违规。exempt_refuted=True 时逐次命中再问一遍"这半句自己
+    是不是跟着反证/是不是个问句"，是就跳过这一处、继续往后找——所以同一句里另有一次
+    站得住的命中，仍然判违规（与条件豁免同一条取向：豁免动的是**那一处**，不是整个文本）。"""
+    hay = _conditional_masked(text) if exempt_conditional else text
+    pos = 0
+    while True:
+        m = re.compile(rx).search(hay, pos)
+        if not m:
+            return None
+        if not (exempt_refuted
+                and (_refuted_after(hay, m.end())
+                     or _is_question_clause(hay, m.start(), m.end()))):
+            return m
+        pos = m.end()
 
 
 # 「诚实拒绝」的共享族（20260925，gold 键 `require_denial`）。起因是 ops_report_denied_visitor
@@ -1020,6 +1129,9 @@ GOLD_ASSERT_KEYS = frozenset({
     # 条件式豁免（20260927，opt-in）：负断言正则只在"遮罩掉条件尾巴"的文本上判命中。
     # 逐例开关，理由见 CONDITIONAL_MARKERS 的头注（默认放宽会削弱 self-capability 那族）。
     "not_match_exempt_conditional",
+    # 自带反证豁免（20261001，opt-in）：命中片段之后（本句+下一句）有失败取证、或该小句
+    # 本身是问句 ⇒ 不算完成声称。逐例开关，理由见 _REFUTED_MARKERS 的头注。
+    "not_match_exempt_refuted",
     # 诚实拒绝的共享族（20260925，见 DENIAL_FAMILY 的头注）：与 text_contains /
     # text_any_regex 同为 OR —— 用例只要"回复里表达了做不到"，措辞不再各抄一份
     "require_denial",
@@ -1165,9 +1277,12 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
     # 那是措辞无关的确定性判据。命中任一即 FAIL。
     # 20260927：条件式豁免（opt-in，见 CONDITIONAL_MARKERS 的头注）——条件/将来框架下的
     # 那半句不是完成声称，「你告诉我名字我就能帮你建好啦」不该与「已经帮你建好啦」同罪。
+    # 20261001：自带反证豁免（opt-in，见 _REFUTED_MARKERS 的头注）——「我尝试帮你收藏啦，
+    # 但是系统提示未登录：本次未改动任何内容」与「或者已经自己取消过了？」同样不是完成声称。
     exempt_conditional = gold.get("not_match_exempt_conditional", False)
+    exempt_refuted = gold.get("not_match_exempt_refuted", False)
     for rx in gold.get("text_not_match_regex", []):
-        m = _forbidden_regex_hit(text, rx, exempt_conditional)
+        m = _forbidden_regex_hit(text, rx, exempt_conditional, exempt_refuted)
         if m:
             fails.append(f"文本不应命中正则 {rx!r}（命中片段 {m.group(0)!r}）")
 
