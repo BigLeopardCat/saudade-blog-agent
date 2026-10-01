@@ -1,3 +1,16 @@
+────────────────────────────────────────────────────────────────────────────
+本文件是**代码**的许可（MIT）。
+
+本目录下的**美术资源**——看板娘「泠月喵」的贴图与模型
+（`public/live2d_model/agent_2.2048/texture_00.png`、`agent_2.moc3`）、面板图标
+（`public/live2d-widgets/lingyue-toggle.png`）以及该角色形象设计本身——**不在 MIT 的
+授权范围内**，按 **CC BY-NC-SA 4.0** 分发（署名 · 非商业性使用 · 相同方式共享）。
+
+见 ASSETS-LICENSE.md。Spirit of the split: code is meant to be reused freely, the
+character artwork is not meant to be sold.
+
+────────────────────────────────────────────────────────────────────────────
+
 MIT License
 
 Copyright (c) 2026 BigLeopardCat

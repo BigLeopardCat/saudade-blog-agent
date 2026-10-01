@@ -6,9 +6,14 @@
 
 ## 许可
 
-**本目录以 MIT 分发**（见 [LICENSE](LICENSE)）——它要被博客仓拉过去**内嵌分发**，MIT 与博客仓的
-GPL-2.0 兼容（Apache-2.0 不兼容，所以它没有跟着本仓根目录那份 Apache-2.0 走）。
+**本目录的代码以 MIT 分发**（见 [LICENSE](LICENSE)）——它要被博客仓拉过去**内嵌分发**，MIT 与
+博客仓的 GPL-2.0 兼容（Apache-2.0 不兼容，所以它没有跟着本仓根目录那份 Apache-2.0 走）。
 本仓其余部分（Python agent）仍是 Apache-2.0。
+
+**美术资源不按 MIT**，按 **CC BY-NC-SA 4.0** 分发（署名 · 非商业性使用 · 相同方式共享）——
+见 [ASSETS-LICENSE.md](ASSETS-LICENSE.md)。一句话：**代码随便用（可商用）；形象能用、能改，
+但不能拿去卖，改完还得用同样的协议放回公共池子**。
+（"禁止作恶"是 README 里的一条社区约定，不写进协议正文——CC 不允许在协议上叠加额外限制。）
 
 **第三方**（都以 MIT 分发，但**都不在本仓内**）：
 
@@ -22,7 +27,7 @@ Cubism Core 单独拎出来说：它是专有许可，**只允许在消费端构
 git 仓库都等于那个仓在分发它。所以这里没有它，博客仓也没有它。
 
 模型与贴图（`live2d_model/agent_2.*`）与面板图标（`live2d-widgets/lingyue-toggle.png`）是本项目
-自有的美术资源，随本目录一并按 MIT 提供。
+自有的美术资源，**不是 MIT**——按 [ASSETS-LICENSE.md](ASSETS-LICENSE.md) 的 CC BY-NC-SA 4.0 分发。
 
 ## 目录
 
@@ -61,7 +66,7 @@ frontend/public/live2d_model/
 
 1. **`?v=` 缓存版本号**：nginx 对这几个路径设了 1 年 immutable，所以改了
    `boot.js` / `widget.css` / `chat-*.js` / `renderer.js` 之后**必须 bump** `boot.js` 里的
-   `VER` 常量（当前 `20261001g`），否则访客浏览器一年都不会更新。
+   `VER` 常量（当前 `20261001i`），否则访客浏览器一年都不会更新。
    同步点在**消费端**：博客仓 `Live2dAgent/index.tsx` 的 `?v=`、以及仓库外的设备控制台页面。
 2. **口型接口签名与净效果一字不能改**：`window.__setMouthOpen` / `__mouthOverride` /
    `__setMouthClose` 是 `chat-stream.js` 与渲染层之间的契约（`__setMouthClose` 的净效果是
