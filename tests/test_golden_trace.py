@@ -193,24 +193,75 @@ check("只给**用例自己声明要身份**的条目注入 uid（uid=0 哨兵�
       and '["user_id"] = int(_real_uid)' in src_run
       and '["user_id"] = int(_real_uid)' in src_full)
 
-# 用例侧契约：标记与 context.role 必须配对（role 是权限判定的唯一输入），且带标记的用例
-# 一律不得要求确认帧——弹卡轮意味着写路径可达，那条路要靠 uid=0 哨兵兜"模型跑飞真写下去"。
-# 「被拒」那类（role=user、gold 只写 forbid_tool_calls）才是这条通道的正确用法。
+# 用例侧契约：标记与 context.role 必须配对（role 是权限判定的唯一输入）；带标记的用例
+# 若要**要求确认帧**，其卡片要动的那一族工具必须全在「一律弹窗」族里。
+#
+# **20261001 收窄**：这条此前写的是"带标记 ⇒ 一律不得要求确认帧"，理由是"弹卡轮意味着
+# 写路径可达，那条路要靠 uid=0 哨兵兜模型跑飞真写下去"。**这条理由对「一律弹窗」族不
+# 成立**——那族（`authz._ALWAYS_CONFIRM_TOOLS`，审核/额度/公告都在里面）的写在**同轮
+# 结构上不可能落地**：一律弹卡，主人不签字就不执行。也就是说"要求弹卡"恰恰是安全的那
+# 一侧；真正危险的形状是**能不经卡片直接执行的写**。旧规矩是那条真意图的一个**代理**，
+# 而它在 20260930 的设计变更（`127f631`：审核族恒弹卡）之后就只剩副作用——它逼着
+# `admin_board_audit_reviewed_refusal` 这条用例去锁"不弹卡"，而设计要的正是弹卡。
+# 判据改成按族判：卡上那件（技能）的工具集合 ⊆ 「一律弹窗」族。拿不到判据（导入失败）
+# ⇒ 空集 ⇒ **一律不放行**（失败朝严格那侧，不许静默放行）。
 _MARK_ROLE = {"needs_admin_uid": "admin", "needs_user_uid": "user"}
+
+
+def _always_confirm_tools() -> frozenset:
+    """`authz._ALWAYS_CONFIRM_TOOLS`（一律弹窗族）。取不到 ⇒ 空集（判据朝严格那侧）。"""
+    try:
+        from agent.authz import _ALWAYS_CONFIRM_TOOLS
+        return frozenset(_ALWAYS_CONFIRM_TOOLS)
+    except Exception:
+        return frozenset()
+
+
+def _skill_tools(skill_name: str) -> "frozenset | None":
+    """技能 plan 里的工具名集合（`None` = 技能不存在/取不到判据）。"""
+    try:
+        from agent.skills import SKILL_MAP
+        sk = SKILL_MAP.get(skill_name)
+        if sk is None or not getattr(sk, "plan", None):
+            return None
+        return frozenset(t for t, _ in sk.plan)
+    except Exception:
+        return None
+
+
 _cases_jsonl = [json.loads(l) for l in (ROOT / "eval" / "golden" / "basic.jsonl")
                 .read_text(encoding="utf-8").splitlines() if l.strip()]
 for _c in _cases_jsonl:
     _gold = _c.get("gold") or {}
     _frames = _gold.get("require_frame_prefix") or []
+    _wants_card = any(f in ("__CONFIRM__:", "__PENDING__:") for f in _frames)
     for _m, _role in _MARK_ROLE.items():
         if not _c.get(_m):
             continue
         check(f"{_c['id']}: {_m} 与 context.role 配对",
               (_c.get("context") or {}).get("role") == _role,
               f"role={(_c.get('context') or {}).get('role')!r}")
-        check(f"{_c['id']}: 声明身份但不得要求确认帧（写面靠 uid=0 哨兵）",
-              not any(f in ("__CONFIRM__:", "__PENDING__:") for f in _frames),
-              str(_frames))
+        if not _wants_card:
+            # 不要求卡 ⇒ 这条通道的经典用法，无写路径断言（旧规矩的形状照旧放行）
+            continue
+        _pay = _gold.get("require_confirm_payload") or {}
+        _tools = _skill_tools(_pay.get("skill")) if _pay.get("skill") else None
+        _always = _always_confirm_tools()
+        check(f"{_c['id']}: 声明身份 + 要求弹卡 ⇒ 卡上那族必须全在「一律弹窗」族"
+              "（恒弹卡 ⇒ 同轮结构上写不下去；否则真身份下真写是可能的）",
+              bool(_tools) and bool(_always) and _tools <= _always,
+              f"skill={_pay.get('skill')!r} plan={sorted(_tools) if _tools else None} "
+              f"always_confirm={len(_always)} 条")
+
+# 判据自己的反向对照（这条族判定既不许恒真也不许恒假）：`board_audit` 的 plan 全在恒弹卡
+# 族里（所以上面那条对它放行），`tag_create` 不在（"同轮命令即确认"那条路是活的）——
+# 同一条判据对两个技能给出相反答案，才说明它真的在判东西。
+check("弹卡族判据的反向对照：board_audit 全在恒弹卡族、tag_create 不在",
+      bool(_skill_tools("board_audit"))
+      and _skill_tools("board_audit") <= _always_confirm_tools()
+      and not (_skill_tools("tag_create") <= _always_confirm_tools()),
+      f"board_audit={sorted(_skill_tools('board_audit') or [])} "
+      f"tag_create={sorted(_skill_tools('tag_create') or [])}")
 
 # 接线（能力有测试 ≠ 接线有测试）：通道落在跑法里不代表夜间真给身份——脚本里少了那行
 # export，夜里跑的仍是 uid=0 的虚构态，而报告里只会安静地多出几条 SKIP。两条都要在，
