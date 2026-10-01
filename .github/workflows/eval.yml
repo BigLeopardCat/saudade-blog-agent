@@ -126,3 +126,29 @@ jobs:
       # `tests/test_ci_suite_list.py` ①b 会盯着它们是否同版。
       - name: 未定义名静态扫描（ruff F821，秒级）
         run: uv run --frozen ruff check --select F821 --no-cache .
+
+  # ═ 看板娘 pin 漂移提示（20261002）════════════════════════════════════════
+  # **独立 job、只警告、恒绿**。上面那个 eval job 是门禁，这一条不是：它回答的是
+  # "这次改了看板娘前端，父仓那个 pin 跟上了没有"。
+  #
+  # 为什么值得一条守卫：本仓 `frontend/public/live2d-widgets/` 是源码，线上跑的是父仓
+  # `frontend/widget.lock.json` 里钉住的 sha 稀疏检出的**副本**。改了不 bump pin ⇒
+  # 改动永远不上线，而**没有任何东西会变红**（本地绿、CI 绿、线上照旧）。纪律在父仓
+  # lock 头注 / README / CONTRIBUTING 写了三处，但文档挡不住忘记，故补机械的。
+  #
+  # 为什么单独一个 job：它要 `fetch-depth: 0`（比 before..sha 的区间）和一枚 PAT，
+  # 两样都不该塞进门禁 job 里去拖累它；独立 job 也保证它**无论怎样都不会把主干判红**。
+  # 逻辑在 `scripts/widget_pin_drift.sh`（含"读不到父仓就明说再跳过"的三态处理）。
+  widget-pin-drift:
+    runs-on: ubuntu-latest
+    env:
+      PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
+      EVENT_NAME: ${{ github.event_name }}
+      BEFORE: ${{ github.event.before }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # 要比 before..sha 的改动区间
+      - name: 与父仓 pin 比对（漂移则 ::warning::，恒退 0）
+        run: bash scripts/widget_pin_drift.sh
