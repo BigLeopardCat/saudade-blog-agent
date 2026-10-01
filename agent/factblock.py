@@ -96,6 +96,17 @@ def is_block_family(receipt: dict) -> bool:
     return family_of(str(receipt.get("tool") or ""), bool(receipt.get("cmd"))) in BLOCK_FAMILIES
 
 
+def is_cmd_family(receipt: dict) -> bool:
+    """这一轮**真的发过**命令帧（跳转/特效/夜间）。
+
+    只给一处用：narrator 提示词里"事实块为空"时的**占位分岔**（`_NO_PRINTED_FACTS*`）。
+    命令族退出印出射程之后，占位文本若不看这一位，就会在**零命令轮**里也告诉模型
+    "跳转/特效/夜间那几种的效果……**那件事由你自己说**"——那是一张系统发的空授权，
+    模型会拿它去认领一件根本没发生的事（02:02 实证，见 `_NO_PRINTED_FACTS` 注释）。
+    """
+    return family_of(str(receipt.get("tool") or ""), bool(receipt.get("cmd"))) == FAMILY_CMD
+
+
 def action_facts(receipts: list) -> list[str]:
     """**印给主人看的**事实文本（去重、保持顺序）——只收 `BLOCK_FAMILIES`，即写族。
 

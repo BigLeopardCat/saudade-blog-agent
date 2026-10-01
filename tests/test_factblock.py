@@ -365,8 +365,8 @@ def test_graph_command_round_not_printed():
     check("  印出那一格是**占位**，且占位写的是「没有代印」不是「没有执行」",
           "本轮没有系统代印的事实" in sys_p
           and "本轮没有动作族执行" not in sys_p)
-    check("  占位里点名了「那几句话由你自己说」（否则模型以为系统还会说一遍）",
-          "那几句话由你自己说" in sys_p)
+    check("  占位里点名了「那件事由你自己说」（否则模型以为系统还会说一遍）",
+          "那件事由你自己说" in sys_p)
     check("工具帧**照给**（没被摘掉：它是 narrator 唯一的依据）",
           _FACT_LINE in sys_p and "本轮这些工具返回已由系统印给主人" not in sys_p,
           str([ln for ln in sys_p.splitlines() if _FACT_LINE in ln]))
@@ -439,6 +439,33 @@ def test_graph_no_false_positive():
     check("同时没有走兜底", not out.get("fallback_text"))
 
 
+def test_graph_zero_frame_no_authorization():
+    """**20261002 二改的锁**：零命令轮的占位**不发授权、不点族名**（02:02 实证）。
+
+    现场（trace 20261002T020256）：主人「猫咪带我去你的设计文档」（站内无此页），
+    planner 判 `chat`/`answer_only`（零帧零回执），narrator 编出「物联网平台页面已经
+    打开啦～你现在应该能看到设备控制台了」——而同一轮 `page_ctx` 的 `current_url` 是
+    首页。占位文本当时写着"跳转/特效/夜间那几种的效果……**那几句话由你自己说**"，
+    那是系统在**没有那一族回执**的轮次里发的一张空授权：模型拿着它去认领了一件根本
+    没发生的事。所以占位必须分岔（有命令族回执才点名那一族、才授权；没有就只报
+    "没有代印"）——这条锁与 `test_graph_command_round_not_printed` 是**方向相反的两半**，
+    缺一半都会退回"占位是常量、写死一句话"。
+    """
+    print("\n[真图·零命令轮] 占位不点族名、不发「由你自己说」的授权")
+    _out, llm, tool, _events = _run_graph([_PLAN_CHAT], ["站内没有这个页面呀～"])
+    check("这一轮零工具（chat 不执行任何东西）", len(tool.calls) == 0, str(tool.calls))
+    sys_p = _system_prompt(llm)
+    # 族名只许在**那一格**里查：叙述纪律第 1 条本身就写着"站内查询、跳转、特效/夜间
+    # 切换"，全提示词 grep 会恒真（那才是这条断言最容易写成哑判据的地方）。取
+    # **最后一次**出现：纪律 23 正文里也引用了这个槽名，split 第一次会切到纪律那段。
+    _slot = sys_p.rsplit("[本轮已由系统印出的事实]", 1)[1].split("当前页面上下文")[0]
+    check("那一格是占位（不是空字段）", "本轮没有系统代印的事实" in _slot)
+    check("  **一个族名都不提**（提了就是邀请它去认领一件没发生的事）",
+          all(w not in _slot for w in ("跳转", "特效", "夜间")), repr(_slot[:80]))
+    check("  **不发**「由你自己说」这条授权（那一轮没有该由它说的事）",
+          "由你自己说" not in _slot, repr(_slot[:80]))
+
+
 def test_graph_data_round_untouched():
     print("\n[真图] 数据族轮次不产生事实块（讲 JSON 人话是模型的活）")
     plan = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
@@ -465,6 +492,12 @@ def test_graph_data_round_untouched():
     sys_p = _system_prompt(llm)
     check("提示词那一格是占位文本（不是空字段）",
           "本轮没有系统代印的事实" in sys_p)
+    # 同一条分岔的另一半（20261002 二改）：这一轮有**数据族**帧、没有命令族回执 ⇒
+    # 占位**不许**点名跳转/特效/夜间、也不许发"由你自己说"的授权。
+    check("  数据轮同样不发授权、不点族名",
+          all(w not in sys_p.rsplit("[本轮已由系统印出的事实]", 1)[1]
+                  .split("当前页面上下文")[0]
+              for w in ("跳转", "特效", "夜间", "由你自己说")))
     check("  数据帧**没有**被摘掉（记录段照常给模型）",
           "本轮这些工具返回已由系统印给主人" not in sys_p)
     check("没有 model/fact_block 事件", ("model", "fact_block") not in [(n, e) for n, e, _ in events])
@@ -604,6 +637,7 @@ if __name__ == "__main__":
                test_share_one_classifier, test_action_restate_regex,
                test_graph_command_round_not_printed,
                test_graph_wiring, test_graph_no_false_positive,
+               test_graph_zero_frame_no_authorization,
                test_graph_data_round_untouched,
                test_producer_order_and_reset, test_producer_pass_round):
         fn()
