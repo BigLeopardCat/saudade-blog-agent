@@ -70,6 +70,10 @@ def main():
         "error": result["error"],
         "resets": result["resets"],
         "resets_reasons": result["resets_reasons"],
+        # 打回的形状（20261002）：`all`=重规划 / `text`=终局兜底。判据在子进程里就地跑
+        # （用的是内存里那份完整 result），这个字段是**给报告读的人**留的——`resets=1`
+        # 单看读不出"用户看到的是重查后的真回答、还是兜底道歉"。
+        "reset_scopes": result["reset_scopes"],
         "commands": result["commands"],
         "tool_calls": result["tool_calls"],
         "tool_rounds": result["tool_rounds"],
@@ -86,6 +90,7 @@ def main():
                     "text": r["text"], "frames": run_golden.redact_frames(r.get("frames")),
                     "commands": r["commands"], "tool_calls": r["tool_calls"],
                     "exec_tools": r["exec_tools"], "resets": r["resets"],
+                    "reset_scopes": r.get("reset_scopes") or [],
                     "confirm_payloads": r.get("confirm_payloads") or [],
                     "error": r["error"], "trace": r.get("trace")}
                    for r in (result.get("rounds") or [])],

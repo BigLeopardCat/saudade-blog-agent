@@ -513,11 +513,35 @@ SHAPE_CASES = [
     ("PASS", {"require_confirm_payload": {"skill": "tag_delete"}},
      {"confirm_payloads": [{"skill": "tag_delete", "specs": []}], "confirm_tokens": ["tk-1"]},
      "令牌只在控制帧里、不在正文里 ⇒ 过"),
+
+    # ── forbid_fallback 的形状（20261002）──
+    # 同一条 key、同一个 `resets` 计数，结论**相反**：判的是 `__RESET__` 的 scope
+    # （`all`=打回⇒重规划、`text`=终局兜底），不是"被打回过"这件事。三条探针缺一不可：
+    # 没有第一条，"只看计数"的老口径照样能过；没有第二条，改宽成"一律放行"也是绿的。
+    ("PASS", {"forbid_fallback": True},
+     {"resets": 1, "resets_reasons": ["叙述缺少依据，正在重新查证"],
+      "reset_scopes": ["all"], "fallback_reasons": []},
+     "打回⇒planner 重规划（scope=all）：用户看到的是重查后的真回答 ⇒ **不算兜底**，过"),
+    ("FAIL", {"forbid_fallback": True},
+     {"resets": 1, "resets_reasons": ["叙述校验未通过，已替换为如实回复"],
+      "reset_scopes": ["text"], "fallback_reasons": ["叙述校验未通过，已替换为如实回复"]},
+     "终局兜底（scope=text）：正断言命中的就是那句道歉 ⇒ 红"),
+    ("FAIL", {"forbid_fallback": True},
+     {"resets": 1, "resets_reasons": ["叙述校验未通过，已替换为如实回复"]},
+     "老归档/合成 result 没有 reset_scopes ⇒ **退回旧口径**判红（键缺了是『不知道』，"
+     "不知道就不放行——与 parse_reset 缺 scope 段取保守侧同一条取向）"),
+    ("PASS", {"forbid_fallback": True}, {}, "零 RESET ⇒ 过（用户看到的是模型写的文本）"),
 ]
 
 
 def judge_result(gold: dict, overrides: dict) -> list[str]:
-    """合成 result → `check_gold`（形状侧判据离线重放）。"""
+    """合成 result → `check_gold`（形状侧判据离线重放）。
+
+    **刻意不含 `reset_scopes` / `fallback_reasons`**（20261002）：真链路里 `run_one` 一定会
+    带上它们，而这里留空正是"老归档 / 手合成的 result"那种形状——`fallback_resets` 对这一
+    形状要**退回旧口径**（按 `resets` 计数），那条分支只有在键缺席时才走得到（见 SHAPE_CASES
+    里 `forbid_fallback` 的第三条）。要试带 scope 的那两条形状，在 overrides 里显式给。
+    """
     res = {"text": "回答", "commands": [], "tool_calls": [], "exec_rows": [],
            "exec_tools": [], "frames": [], "confirm_tokens": [], "confirm_payloads": [],
            "resets": [], "resets_reasons": [], "error": None}

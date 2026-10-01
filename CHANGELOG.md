@@ -144,6 +144,30 @@
   零覆盖，反向缺陷在 golden 里结构性看不见）与 `nav_page_state_consistent`（问"我在哪一页"⇒ 照实
   说首页、一个命令都不发）。两条都带 `forbid_fallback`：判真值的判据一旦误杀，整轮会被兜底道歉
   吞掉，而这个键正是让"通过"不能靠"道歉得恰好"。
+- **`forbid_fallback` 从此判 scope，不再判"被打回过"**（`eval/run_golden.py` 新增
+  `fallback_resets`；`tests/test_reset_scope.py` 第 ④ 组 + `tests/judge_offline_test.py` 四条形状探针）。
+  20261001 把 `__RESET__` 拆成两档之后，这个键还在数 `resets` 总数 ⇒ **`all` 那一档（gate 打回 ⇒
+  planner 重规划）被当成了终局兜底**：主人看到的其实是重查之后的真回答，判据却红，FAIL 文案还断言
+  "用户收到的是兜底道歉"这件没发生的事。04:24 那次全量跑 11 条红里有 3 条就是这么来的
+  （`capability_list_user_no_admin_leak` / `admin_capability_absent_honest` / `dark_state_consistent`
+  ——逐条读 trace：gate 抓的**都是真编造**，重规划一次之后的收尾是如实的）。现在只认 `scope=text`；
+  `reset_scopes` 缺席（老归档 / 手合成的 result）退回旧口径按计数判——键缺了是"不知道是哪种"，
+  不知道就不放行（与 `parse_reset` 对缺 scope 段取保守侧同一条取向）。
+- **25 条用例补上 `forbid_fallback`，并加了离线探针逼着新用例写**（`eval/golden/basic.jsonl`；
+  `tests/test_golden_keys.py` 第 ⑧ 组）。探针不跑模型：把 `agent.graph` 的 28 条 `_FALLBACK_*`
+  兜底/纠正文本逐条当正文喂进 `check_gold`，看这个 `gold` 会不会**整套**放行（那些文本是完整中文
+  句子，里面有"没有""抱歉""请"，照样命中 `text_contains` / `require_denial` / 负断言）。旧语料里
+  **25 条中招**（5 条在回归组），一条都没挂那个键——它们"通过"靠的是"这一轮出过事"，而这一格在
+  语料里是静默的。反向对照：从一条真实用例上摘掉该键，探针当场报出来（否则"没有中招的用例"与
+  "探针坏了恒不报"长得一模一样）。`server._RECOVERY_SENTENCE` **刻意不列进探针**：它只在
+  `/chat/stream` 的 SSE 端点与同步路径补发，而 golden 直连 producer 拿帧流，结构上到不了。
+- **断言键不再允许"表里挂着、没有一条用例在考"**（`tests/test_golden_keys.py` 第 ⑨ 组）。查全量
+  回归覆盖面时发现中间那一格没人守：§② 管"表里的键必须真被源码读到"，§③ 管"用例里的键必须拼对"，
+  而**源码读着一个键、155 条用例一条都没写过它**——两边都不响，含义是"这个判据的红从没被验证过"
+  （它绿只能说明没触发，不能说明判得对）。现有 36 个断言键逐个核过都在用（最薄的
+  `require_card_targets_from_ledger` / `require_ledger_rows` / `require_task_state` 各 1 条，三个
+  `require_ledger_*` 同住一条批 H 用例）。反向对照：从真实语料里抽掉所有用某键的用例，探针当场
+  点名它——否则"全部都用过"与"函数恒返回空"长得一模一样。
 
 ## 20261001
 

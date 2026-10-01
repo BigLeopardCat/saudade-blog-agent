@@ -92,7 +92,13 @@ def _stub_run_one(plan: dict, calls: list, tokens: dict | None = None):
                 "frames": [frame] if frame else [],
                 "exec_rows": [], "exec_tools": [], "tool_rounds": 0,
                 "trace": None, "resets": 0 if ok else 1,
-                "resets_reasons": [] if ok else ["stub 判红"], "error": None,
+                "resets_reasons": [] if ok else ["stub 判红"],
+                # 打回的形状（20261002）：真 `run_one` 每轮都带这两个键（`reset_scopes`
+                # 逐条记 scope、`fallback_reasons` 只收 scope=text 的），报告侧是照
+                # `result["reset_scopes"]` **严格读**的 ⇒ 桩少给一个键，主脚本写报告时
+                # 直接 KeyError（同上面那两个键的老教训：桩的形状必须与真函数一致）。
+                "reset_scopes": [] if ok else ["all"],
+                "fallback_reasons": [], "error": None,
                 # 真 `run_one` 的返回形状里有这两个（20260925）：桩少给一个键，
                 # 驱动侧读到的是"这一轮没弹卡"，于是所有双轮用例都红在"没令牌上"
                 # ——桩与真函数**返回形状**不一致，和签名不一致一样会骗人。
