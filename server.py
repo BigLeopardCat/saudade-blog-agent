@@ -34,7 +34,8 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 # 不属于动作措辞）。
 from agent.action_text import tool_action_text
 from agent import confirm  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
-from agent.factblock import action_facts, compose, render_fact_block  # 动作事实块（D3）
+from agent.factblock import (action_facts,  # 动作事实块（D3）
+                             compose, render_fact_block, strip_fact_lines)
 from agent import create_agent
 from agent.graph import AgentCancelled, graph_input, _cmd_wire
 from agent.principal import Principal
@@ -637,17 +638,33 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
     # （该轮回复未完成即断流），注入后模型把孤儿当待答问题（trace 实证：历史遗留
     # "谈谈你对穹妹的看法"未完成，模型整篇回复穹妹）。正常轮次严格成对
     # （user→assistant），user 后非 assistant 即孤儿，整条跳过不注入。
-    hist = req.history[-20:]
-    for i, h in enumerate(hist):
-        if h.role == "user":
-            if i + 1 >= len(hist) or hist[i + 1].role != "assistant":
-                continue  # 孤儿 user（该轮回复未入库），不注入
-            messages.append(HumanMessage(content=h.content))
+    # 事实行剥离（20261002，`agent/factblock.strip_fact_lines`）：气泡最前面那块
+    # 「〔系统〕 页面已跳转：…」是**系统**印的，却随回复一起落库 ⇒ 下一轮作为 assistant
+    # 历史回到模型眼前时就变成了"它自己说过的话"。生产实证（trace `20261001T230954`）：
+    # 那一轮只跑了 OLED 显示、一次导航都没有，narrator 却把上一轮那句「页面已跳转：
+    # …/device-console/」原样抄在本轮回复开头（主人报的"显示两行已经转跳"）。
+    # 抹完为空的轮次**整轮不注入**（它的 assistant 侧一个字都不是模型说的）：留一条空
+    # 的 assistant 会让模型把上一轮的用户问题当成待答问题——正是上面那条"孤儿 user"
+    # 注释里的坑，方向相反而已。
+    hist = [(h.role, h.content) for h in req.history[-20:]]
+    cleaned: list = []
+    for role, content in hist:
+        if role != "assistant":
+            cleaned.append((role, content))
+            continue
+        body = strip_fact_lines(content)
+        if body:
+            cleaned.append((role, body))
+    for i, (role, content) in enumerate(cleaned):
+        if role == "user":
+            if i + 1 >= len(cleaned) or cleaned[i + 1][0] != "assistant":
+                continue  # 孤儿 user（该轮回复未入库/整轮只剩事实行），不注入
+            messages.append(HumanMessage(content=content))
         else:
             # 恢复 assistant 角色（曾全部包成 HumanMessage + [assistant]: 前缀——
             # 模型会把历史当"用户说的"，多轮上下文质量打折；角色语义对齐后
             # 模型对"谁说过什么"的区分不再依赖前缀文本）
-            messages.append(AIMessage(content=h.content))
+            messages.append(AIMessage(content=content))
 
     # 多模态（20260828 单图 → 20260828s 多图）：图片 + 文字转 OpenAI content 数组
     # （qwen 实测支持，100x100 红图识别正确）。多图循环拼 content 数组，每张一个
