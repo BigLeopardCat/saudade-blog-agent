@@ -329,6 +329,43 @@ def parse_reset(text: str) -> tuple[str, str]:
     return scope, tail
 
 
+def fallback_resets(result: dict) -> list[str]:
+    """本轮**终局兜底**（`__RESET__:text`）的理由列表——`forbid_fallback` 的唯一判据。
+
+    **为什么不能只看 `resets`**（20261002 实测）：`parse_reset` 分出来的那两个 scope 对
+    "用户最终看到的是不是道歉"这个问题的答案**正好相反**：
+
+      · `text` —— 终局 fallback：叙述被 `fallback_text` 整段替换 ⇒ 正断言命中的就是
+        那句道歉，判红是对的；
+      · `all`  —— gate 打回 ⇒ **planner 重规划**：被否定的那段已经作废（前端清空、
+        Rust 清累积 reply、不进 chat_history），最终文本是**重查之后的真回答**。
+        判红不但错，FAIL 文案还会断言一件没发生的事（"用户收到的是兜底道歉"）。
+
+    20261002 全量跑实证：5 条 `forbid_fallback` 红里有 4 条是这个形状
+    （`admin_announcement_question_no_popup` / `capability_list_user_no_admin_leak` /
+    `admin_capability_absent_honest` / `dark_state_consistent`）——逐条读 trace：gate
+    抓的都是**真的编造**（`dark_state_consistent` 那条判的是"系统自动帮你切换成护眼
+    模式了"，随后 `check → pass`），重规划后收尾是如实的。真正的终局兜底只有一条
+    （`data_devices_online`）。旧口径把"打回"与"兜底"当成同一件事，是 20261001 拆
+    scope 之前的历史遗留（那句注释"`__RESET__` 会把整轮叙述换成一句兜底道歉"描述的
+    正是拆分前的行为）。
+
+    `reset_scopes` 缺席（老归档 / 手合成的 result）时**退回旧口径**（按 `resets` 计数）：
+    键缺了是"不知道是哪种"，不知道就不该放行——与 `parse_reset` 对缺 scope 段取保守
+    侧的取向一致。
+
+    返回空列表 = 用户看到的是**模型写的**文本（无论打回过几次），`forbid_fallback` 该放行。
+    """
+    scopes = result.get("reset_scopes")
+    if scopes is None:
+        return [str(r) for r in (result.get("resets_reasons") or [])] \
+            or [""] * int(result.get("resets") or 0)
+    reasons = result.get("fallback_reasons")
+    if reasons is None:  # 形状对齐得上一半（有 scopes、没有逐条理由）时按计数补位
+        return [""] * sum(1 for s in scopes if s == "text")
+    return list(reasons)
+
+
 def run_one(req: ChatRequest, principal: "Principal | None" = None,
             trace_ctx: dict | None = None, *,
             confirm_token: str = "") -> dict:
@@ -352,6 +389,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             return {"text": "", "commands": [], "tool_calls": [], "frames": [],
                     "exec_rows": [], "exec_tools": [], "tool_rounds": 0,
                     "trace": None, "resets": 0, "resets_reasons": [],
+                    "reset_scopes": [], "fallback_reasons": [],
                     "confirm_tokens": [], "confirm_payloads": [],
                     "task_frames": [], "ledger_frames": [],
                     "error": "确认令牌验签失败（零执行）—— 用例里的令牌/uid/会话不自洽"}
@@ -429,6 +467,16 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     exec_rows: list = []  # 20260904：checker 验收回执（__EXEC__ 帧，系统确认事实）
     resets = 0
     resets_reasons: list[str] = []
+    # 每条 `__RESET__` 的 scope（`all` 打回重规划 / `text` 终局兜底，见 `parse_reset`）。
+    # **计数与形状分开留**：`resets` 说"被打回过几次"（效率口径也用它），`reset_scopes`
+    # 说"用户最终看到的那段文本是不是模型写的"——后者才是 `forbid_fallback` 的判据
+    # （见 `fallback_resets`：只看计数会把"打回后重答对了"误判成"收到道歉"）。
+    reset_scopes: list[str] = []
+    # 只收 scope=text 那几条的理由（逐条对齐，理由可能为空串）——`fallback_resets`
+    # 报的就是它。混进 `resets_reasons` 里读的话，"一次打回 + 一次兜底"那轮会把打回的
+    # 理由也当成兜底的理由印进 FAIL 文案（两个列表只有在下标对齐时才同源，而
+    # `resets_reasons` 按"理由非空"决定收不收 ⇒ 对齐本来就不成立）。
+    fallback_reasons: list[str] = []
     tool_rounds = 0   # 效率基线：planner 发出 TOOLS 清单的轮数（🛠 过程帧计数）
     error = None
     # 控制帧原文（20260921）：__PROCESS__ / __RESET__ / __EXEC__ / __CONFIRM__ …
@@ -454,6 +502,9 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             _scope, _reason = parse_reset(item)
             if _scope != "text":
                 commands.clear()
+            else:
+                fallback_reasons.append(_reason)
+            reset_scopes.append(_scope)
             resets += 1
             if _reason:
                 resets_reasons.append(_reason)
@@ -545,7 +596,9 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             "confirm_payloads": confirm_payloads,
             "task_frames": task_frames,
             "ledger_frames": ledger_frames,
-            "resets": resets, "resets_reasons": resets_reasons, "error": error}
+            "resets": resets, "resets_reasons": resets_reasons,
+            "reset_scopes": reset_scopes, "fallback_reasons": fallback_reasons,
+            "error": error}
 
 
 def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
@@ -1579,11 +1632,14 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
                          f"{'/'.join(producers)} 的 {'/'.join(fields)}{hint}"
                          f" —— 取的 id 不是检索结果给的")
 
-    # 20260920：**fallback 盲区断言**（opt-in）。gate 打回（__RESET__）会把整轮
-    # 叙述换成一句人设内兜底道歉——而道歉文本**照样能命中 text_contains 正断言**
+    # 20260920：**fallback 盲区断言**（opt-in）。终局 fallback 会把整轮叙述换成一句
+    # 人设内兜底道歉——而道歉文本**照样能命中 text_contains 正断言**
     # （实测 followup_named_doc_reread：resets=1、用户收到的是兜底文本，却判 PASS），
     # 于是"用户根本没看到那段回答"这件事在 golden 里结构性不可见（76/77 那次唯一
-    # FAIL 的根因就是这么被发现的）。gold 里写了本键 ⇒ 本轮必须零 fallback。
+    # FAIL 的根因就是这么被发现的）。gold 里写了本键 ⇒ 本轮不许走终局兜底。
+    # 判据是 `fallback_resets`（**scope=text**），不是 `resets` 计数：20261001 起
+    # `__RESET__` 分了两档，`all` 那一档是"打回 ⇒ planner 重规划"，用户看到的是重查
+    # 后的真回答——把它算成兜底会**凭空造红**（20261002 全量跑 5 条红里 4 条是这么来的）。
     # 20260921：**帧级**断言（写操作确认弹窗是帧行为，golden 点不了按钮）。
     #   require_frame_prefix —— 本轮必须发出该前缀的控制帧（该弹窗时弹了窗）
     #   forbid_frame_prefix  —— 本轮不得发出（不该弹窗的轮次被锁住）
@@ -1714,10 +1770,13 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
         if s in _tf_states:
             fails.append(f"任务状态不应是 {s!r}（本轮帧：{_tf_states}）")
 
-    if gold.get("forbid_fallback") and result["resets"]:
-        fails.append(f"本轮走了 gate fallback（__RESET__×{result['resets']}："
-                     f"{result['resets_reasons']}）——用户收到的是兜底道歉，"
-                     f"正断言命中的是道歉文本，不算通过")
+    _fb = fallback_resets(result)
+    if gold.get("forbid_fallback") and _fb:
+        fails.append(f"本轮走了 gate fallback（{_fb}）——用户收到的是兜底道歉，"
+                     f"正断言命中的是道歉文本，不算通过"
+                     + (f"；本轮另有 {result['resets'] - len(_fb)} 次打回重规划"
+                        f"（scope=all，最终文本是重规划后的，不算兜底）"
+                        if result["resets"] > len(_fb) else ""))
 
     # 20260920：确定性文档锚点（方案①）——"只有标题、没有 id"的用例里，系统按站内
     # 语料把《标题》解析成真实 id 注入锚点，planner 应直接读那一篇。这条没有
@@ -2119,6 +2178,10 @@ def main():
             "fails": fails, "error": result["error"],
             "commands": result["commands"], "resets": result["resets"],
             "resets_reasons": result["resets_reasons"],
+            # 打回的形状（20261002）：`all`=重规划（用户最终看到的是重查后的真回答）、
+            # `text`=终局兜底（看到的是道歉）。`resets` 计数说"被打回过几次"，
+            # 这个说"那几次是哪一种"——红了照报告读现场时，两者缺一都读不出结论。
+            "reset_scopes": result["reset_scopes"],
             "requires_tools": requires,  # 20260902 下午：效率指标归因（工具类 vs 非工具类）
             # 效率基线（20260919）：逐例工具调用序列与规划轮数，
             # 用来对比"给/不给上下文情境"两组的绕圈与越权倾向
@@ -2135,6 +2198,7 @@ def main():
                         "text": r["text"], "frames": redact_frames(r.get("frames")),
                         "commands": r["commands"], "tool_calls": r["tool_calls"],
                         "exec_tools": r["exec_tools"], "resets": r["resets"],
+                        "reset_scopes": r.get("reset_scopes") or [],
                         "confirm_payloads": r.get("confirm_payloads") or [],
                         # 台账帧（20260930）：这一轮**系统摆上桌的那几条编号**。红了要
                         # 一眼看出"卡片上的编号出不出自这份清单"，不然只能重新跑一遍。
@@ -2180,7 +2244,8 @@ def main():
         r["rerun"] = {
             "ok": _rok, "elapsed": round(_relapsed, 1), "fails": _rfails,
             "error": _rr["error"], "resets": _rr["resets"],
-            "resets_reasons": _rr["resets_reasons"], "text": _rr["text"],
+            "resets_reasons": _rr["resets_reasons"],
+            "reset_scopes": _rr["reset_scopes"], "text": _rr["text"],
             "trace": _rr.get("trace"),
         }
         r["final_ok"] = r["ok"] or _rok

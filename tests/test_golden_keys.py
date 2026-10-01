@@ -359,6 +359,96 @@ _, _s8, _r8 = rg.check_no_popup_premises([_p5])
 check("why 太短也响（设计那一半没人能自动判，但至少要写下来）",
       _s8 == [_p5["id"]] and any("why" in h for h in _r8[0]["hit"]), f"{_s8} / {_r8[0]['hit']}")
 
+print("\n⑧ 判据不得被『兜底文本』满足（20261002）")
+# 病根与 §⑥⑦ 同族（"看着有、其实没有"），但住在**正文**上：gate 的兜底/纠正文本是完整
+# 的中文句子（「喵呜……主人，我得收回一句：这一轮系统**没有执行任何跳转**……」），它照样
+# 能命中 `text_contains` / `require_denial` / `text_not_contains`——一条用例若整套判据都能被
+# 某族兜底文本满足，那它测的就不是"模型答对了"，而是"这一轮出过事"。判据 `forbid_fallback`
+# 早就有（§⑧ 的键表里有它），问题是**只在 76 条里 80 处手写**过、没有东西逼着新用例写：
+# 实测旧语料 25 条中招（5 条在回归组），全是被这一步扫出来的。
+#
+# 探针 = 离线重放（不跑模型、不联网）：把 `agent.graph` 的每一条 `_FALLBACK_*` 当正文喂进
+# `check_gold`，看这个 `gold` 会不会**整套**放行。锁法照 §⑥⑦：逼着写（①）+ 探针真会响（③）。
+from agent import graph as _G  # noqa: E402
+
+# ⚠️ 只收 `agent.graph` 的常量，**不含** `server._RECOVERY_SENTENCE` / `PRODUCER_ERROR_TEXT`：
+# 那两条只在 `event_stream`（SSE 端点）与 `_run_agent_sync` 里补发，而 golden 直连
+# `server._run_agent_stream_to_queue`（producer）拿帧流 ⇒ 结构上到不了（见 `run_one`）。
+# 把它们列进来会逼着 25 条用例为一个到不了的输入挂键。
+_fb_texts = sorted({getattr(_G, n) for n in dir(_G)
+                    if n.startswith("_FALLBACK") and isinstance(getattr(_G, n), str)})
+
+
+def _satisfiable_by_fallback(gold: dict) -> str:
+    """这个 gold 能否被某条兜底文本**整套**满足？返回命中的那条文本（空串 = 不会）。"""
+    for t in _fb_texts:
+        res = {"text": t, "commands": [], "tool_calls": [], "exec_rows": [],
+               "exec_tools": [], "frames": [], "confirm_tokens": [], "confirm_payloads": [],
+               "task_frames": [], "ledger_frames": [], "resets": 0, "resets_reasons": [],
+               "reset_scopes": [], "fallback_reasons": [], "error": None}
+        if not rg.check_gold(gold, res, docs=None):
+            return t
+    return ""
+
+
+check(f"探针的输入非空（实得 {len(_fb_texts)} 条 _FALLBACK_*）", len(_fb_texts) >= 20,
+      str(len(_fb_texts)))
+_loose = []
+for _c in _cases:
+    for _i, _r in enumerate(rg.iter_rounds(_c), 1):
+        _g = _r["gold"]
+        if _g.get("forbid_fallback"):
+            continue
+        if _satisfiable_by_fallback(_g):
+            _loose.append(f"{_c['id']}" + (f"[r{_i}]" if _c.get("rounds") else ""))
+check("没有『能被兜底文本整套满足』却又不挂 forbid_fallback 的轮次"
+      "（挂了它，真走兜底那轮会有 __RESET__:text 让判据当场红）",
+      not _loose, "；".join(_loose))
+
+# 判据的判据：把一条**真实用例**的 `forbid_fallback` 摘掉，探针必须当场报出来。
+# 没有这一条，"全部 ok" 与 "探针坏了恒不报" 长得一模一样（同 §⑥⑦ 的变异锁纪律）。
+_p = _mut("casual_hello")
+_p["gold"].pop("forbid_fallback", None)
+check("反向对照：从真实用例上摘掉 forbid_fallback ⇒ 探针当场报出来",
+      bool(_satisfiable_by_fallback(_p["gold"])))
+
+print("\n⑨ 每个断言键都要有用例在用（防「判据词汇表里挂着一条没人考的键」）")
+# 与 §② 是**两个方向**：§② 管"表里的键必须真被源码读到"（读到 = 判据真的在跑），
+# 本节管"读到的键必须真有用例拿它判过"（有用例 = 判据真的会红）。中间那一格——
+# 源码里写着 `gold.get("X")`、表里也有 X、而**155 条用例一条都没写过 X**——两边都不响，
+# 而那一格的含义是"这个判据永远不会被判红"：它的**红**从没被验证过，绿的用例也不构成
+# 证据（绿灯只能说"没触发"，不能说"判得对"）。本节的锁法照 §⑥⑦：逼着用（①）＋
+# 探针会响（②）。守的是**新增**键：以后谁往判据里加一个键却没配用例，这里当场红。
+_used: set[str] = set()
+for _c in _cases:
+    for _r in rg.iter_rounds(_c):
+        _used |= set(_r["gold"])
+_dead = sorted(rg.GOLD_ASSERT_KEYS - _used)
+check(f"{len(rg.GOLD_ASSERT_KEYS)} 个断言键每个都至少被一轮用过", not _dead,
+      "；".join(f"{k} 没有用例" for k in _dead))
+
+
+def _unused_keys(cases: list[dict]) -> list[str]:
+    """给定语料里没有任何一轮用到的断言键（本节判据的实现，单独提出来好做反向对照）。"""
+    seen: set[str] = set()
+    for c in cases:
+        for r in rg.iter_rounds(c):
+            seen |= set(r["gold"])
+    return sorted(rg.GOLD_ASSERT_KEYS - seen)
+
+
+# 反向对照：从真实语料里**抽掉所有用某个键的用例**（= 那个键从此没有任何用例在考），
+# 探针必须当场点名它。不这么做的话，"全部都用过"与"函数恒返回空"长得一模一样
+# （同 §⑥⑦ 的变异锁纪律）。断言只钉"这个键被报出来"，不钉整张孤儿名单——名单会随
+# 加用例而变（`require_ledger_*` 三个键现在同住一条用例，抽掉它三个一起变孤儿），
+# 那属于用例侧的正常变化，不该让这条锁红。
+_PROBE_KEY = "require_ledger_rows"
+_probe_corpus = [c for c in _by_id.values()
+                 if _PROBE_KEY not in json.dumps(c, ensure_ascii=False)]
+check(f"反向对照：抽掉最后一个用 `{_PROBE_KEY}` 的用例 ⇒ 探针当场点名该键",
+      _PROBE_KEY in _unused_keys(_probe_corpus),
+      str(_unused_keys(_probe_corpus)[:5]))
+
 print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
