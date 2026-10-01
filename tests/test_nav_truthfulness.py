@@ -529,6 +529,32 @@ def test_gate_nav_present_claim_verified_against_page_ctx():
           o11.get("done") is True and o11.get("fallback_text") == _FALLBACK_NAV_NO_FRAME,
           str(o11.get("fallback_text"))[:40])
 
+    # ── ⑫ 条件句（20261002 04:02 实测误伤：那句话的前提是"一旦"）─────────────
+    # 现场（golden trace `20261002_040233/admin_announcement_question_no_popup`，
+    # `replan` 事件的 `clause` 字段**逐字**）：主人（管理员）问「把公告删掉的话，访客
+    # 那边还看得到吗？」，回复里有一句「**一旦**你在 **站点设置-公告管理**
+    # （/dashboard/announcement）里执行了删除操作」→ 判 `nav_present_claim_without_nav`
+    # 打回 → 交回 planner 重规划一次（14.68s / 705 输出 token）→ 最终答复只剩 7 个字。
+    # 病根：豁免表的**条件类**只写了「如果/若是/要是/若」，而"一旦/倘若/假如/除非"同属
+    # 条件——**假设句里出现页面名，说的不是主人此刻在哪页**。锁法照本族纪律：放行面
+    # （条件句）＋**反向对照**（同一句抽掉条件词 ⇒ 当场判假，证明这放行是那颗词给的）。
+    _cond = ("一旦你在 **站点设置-公告管理**（/dashboard/announcement）"
+             "里执行了删除操作，公告就会从列表里消失")
+    o12 = gate_node(_chat_state([_sys_msg(_page_home), human, AIMessage(content=_cond)]))
+    check("**条件句**（'一旦你…里执行了操作'是假设，不是主人现在在哪）→ 放行",
+          o12.get("done") is True and not o12.get("fallback_text"), str(o12)[:60])
+    o13 = gate_node(_chat_state([
+        _sys_msg(_page_home), human,
+        AIMessage(content=_cond.replace("一旦", ""))]))
+    check("  反向对照：抽掉条件词「一旦」⇒ 当场判假（放行是那颗词给的，"
+          "不是这句话本来就判不了）",
+          o13.get("fallback_text") == _FALLBACK_NAV_NO_FRAME,
+          str(o13.get("fallback_text"))[:40])
+    _missing_cond = [w for w in ("一旦", "倘若", "假如", "除非")
+                     if not G._NAV_PRESENT_EXEMPT_RE.search(w)]
+    check("  条件词一族齐全（一旦/倘若/假如/除非，一个都不能少——"
+          "同一类词缺一个，这一类就等于没写）", not _missing_cond, str(_missing_cond))
+
     # ── `page=` 的解析：绝对 URL / query / fragment / 尾斜杠都要归一────────
     check("绝对 URL → 站内路径（去 query/fragment/尾斜杠）",
           _live_page_path("page=https://saudade.site/device-console/#a?b=1")
