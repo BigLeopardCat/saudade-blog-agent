@@ -508,33 +508,64 @@ check("⭐ 驳回的回执行说的是'额度没有变化'、**不说'清零'**"
       and "清零" not in _s_rej, _s_rej[:100])
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⑦ 「状态已达成 ⇒ 不弹卡」：判据是**用量**（驳回那件是 pending 行）")
+# 20261001 改判：批/驳消耗的是**一条待处理的申请行**（服务端按 `WHERE status=0`
+# 认领），与计数器的当前值无关。此前批准与主动重置共用"计数器本来就是 0"这条判据
+# ⇒「一个满额账号交了一份申请」被判成已达成、不弹卡零调用，而那一行**还挂在待处理态**；
+# 主人再说一次判据还是同一句 ⇒ 永远没有通道能办它（trace `20261001T105116` 实证：
+# 回执明说"这一轮没有做任何改动"，后台那一行还挂着；用户报"请求要么拒绝要么通过，
+# 不作为会一直挂起"）。现在这两支分开：**批/驳看那一行在不在，主动重置才看用量**。
+print("\n⑦ 「状态已达成 ⇒ 不弹卡」：批/驳看**申请行**，主动重置看**用量**")
 _ap = [{"tool": "approve_quota_request", "args": {"user_id": 126}}]
-_kept, _alr = A.reached_specs(_ap, users=DIRD, quota_requests={})
-check("used=137 ⇒ **照弹**（这一下真会改变东西）", _kept == _ap and _alr == [], str(_alr))
+_kept, _alr = A.reached_specs(_ap, users=DIRD_ZERO, quota_requests=PEND)
+check("⭐ 满额账号**有一份待处理的申请** ⇒ 照弹（判的是那一行，不是计数器）",
+      _kept == _ap and _alr == [], str(_alr))
+_kept1, _alr1 = A.reached_specs(_ap, users=DIRD, quota_requests=PEND)
+check("  **用了多少轮都不影响这一支**（137 与 0 一样照弹）",
+      _kept1 == _ap and _alr1 == [], str(_alr1))
 _kept0, _alr0 = A.reached_specs(_ap, users=DIRD_ZERO, quota_requests={})
-check("⭐ used=0 ⇒ 不弹，并明说'本来就是满的'（**状态陈述**，不是'已完成'）",
-      _kept0 == [] and "本来就是满的" in _alr0[0]["why"]
-      and "已重置" not in _alr0[0]["why"], str(_alr0))
+check("⭐ 他**没有**待处理的申请 ⇒ 不弹，并如实说现状（**不再看用量**）",
+      _kept0 == [] and "现在没有待处理的额度申请" in _alr0[0]["why"], str(_alr0))
 _admin_row = {126: row(126, "Alice", role="superadmin", used=0, limit=0)}
-_, _alr_admin = A.reached_specs(_ap, users=_admin_row, quota_requests={})
-check("⭐ 不限额的管理员走**另一句**（说'额度本来就是满的'会被读成'他刚好没用过'）",
-      "不限额" in _alr_admin[0]["why"], str(_alr_admin))
-_kept_n, _alr_n = A.reached_specs(_ap, users=None, quota_requests={})
+_kept_a, _alr_admin = A.reached_specs(_ap, users=_admin_row, quota_requests={})
+check("  不限额的管理员走**同一句**（他名下有没有申请，与是不是管理员无关），"
+      "且**不再有「额度本来就是满的」这一支**（那句话现在只属于主动重置）",
+      _kept_a == [] and "现在没有待处理的额度申请" in _alr_admin[0]["why"]
+      and "满的" not in _alr_admin[0]["why"], str(_alr_admin))
+_kept_n, _alr_n = A.reached_specs(_ap, users=None, quota_requests=PEND)
 check("名录读不到 ⇒ 判不了 ⇒ **照弹**（fail-open 的方向永远是弹卡）",
       _kept_n == _ap and _alr_n == [], str(_alr_n))
+_kept_q, _alr_q = A.reached_specs(_ap, users=DIRD_ZERO, quota_requests=None)
+check("⭐ 申请快照读不到 ⇒ 判不了 ⇒ **照弹**（读不到当成「没有申请」，"
+      "就是把那次事故原样演一遍：那条路会在主人手上永远挂起）",
+      _kept_q == _ap and _alr_q == [], str(_alr_q))
 _rj = [{"tool": "reject_quota_request", "args": {"user_id": 126, "reason": "x"}}]
-_k1, _a1 = A.reached_specs(_rj, users=DIRD, quota_requests=PEND)
-check("驳回：他**有**待处理的申请 ⇒ 正是要办的那一次，照弹",
+_k1, _a1 = A.reached_specs(_rj, users=DIRD_ZERO, quota_requests=PEND)
+check("驳回：他**有**待处理的申请 ⇒ 正是要办的那一次，照弹（满额也一样）",
       _k1 == _rj and _a1 == [], str(_a1))
 _k2, _a2 = A.reached_specs(_rj, users=DIRD, quota_requests={})
 check("驳回：他**没有**待处理的申请 ⇒ 不弹，并如实说现状",
       _k2 == [] and "现在没有待处理的额度申请" in _a2[0]["why"], str(_a2))
 _k3, _a3 = A.reached_specs(_rj, users=DIRD, quota_requests=None)
 check("驳回：申请快照读不到 ⇒ 判不了 ⇒ 照弹", _k3 == _rj and _a3 == [], str(_a3))
+# 主动重置那支**不变**：它不需要对方申请过，效果就是清零 ⇒ 判据仍是"计数器本来就是 0"。
+_rs = [{"tool": "reset_user_quota", "args": {"name": "Alice"}}]
+_rs0, _rs0_alr = A.reached_specs(_rs, users=DIRD_ZERO, quota_requests={})
+check("⭐ 主动重置 used=0 ⇒ 不弹，明说'本来就是满的'（**状态陈述**，不是'已完成'）",
+      _rs0 == [] and "本来就是满的" in _rs0_alr[0]["why"], str(_rs0_alr))
+_rs1, _rs1_alr = A.reached_specs(_rs, users=DIRD, quota_requests={})
+check("  用掉过 137 轮 ⇒ 照弹（清零真会改变东西）——**这一支与申请行无关**："
+      "主动重置本来就不需要对方申请过，快照读不到也照弹",
+      _rs1 == _rs and _rs1_alr == [], str(_rs1_alr))
+_rsq, _rsq_alr = A.reached_specs(_rs, users=DIRD_ZERO, quota_requests=None)
+check("  申请快照读不到**不影响这一支**（它压根不看那一份）",
+      _rsq == [] and "本来就是满的" in _rsq_alr[0]["why"], str(_rsq_alr))
+_rsa, _rsa_alr = A.reached_specs(_rs, users=_admin_row, quota_requests={})
+check("⭐ 不限额的管理员走**另一句**（说'额度本来就是满的'会被读成'他刚好没用过'）",
+      "不限额" in _rsa_alr[0]["why"], str(_rsa_alr))
 check("已达成那几句**都不带完成式**（说成'已完成'会被读成系统替你做过了一次）",
       not any(w in _alr0[0]["why"] + _alr_admin[0]["why"] + _a2[0]["why"]
-              for w in ("已完成", "已经清零", "已重置", "已驳回")), "")
+              + _rs0_alr[0]["why"] + _rsa_alr[0]["why"]
+              for w in ("已完成", "已经清零", "已重置", "已驳回", "已批准")), "")
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑧ 工具层：五段式 + 非 200 **按族分流**（方向错了就是一句假话）")
@@ -823,12 +854,26 @@ try:
     check("  回执的 action 行说的是'批准…的额度重置申请'（台账要自明）",
           bool(r["receipts"]) and r["receipts"][0].get("action")
           == "批准账号「Alice」的额度重置申请", str(r["receipts"][:1])[:140])
-    # 已达成那一支：不弹卡，只回一句现状（**零工具**）
+    # 已达成那一支：不弹卡，只回一句现状（**零工具**）。
+    # 判据是"他名下有没有那份申请"——`pending={}` = 队列里没有他（不是"额度满"）。
     r2 = _run_exec("批准一下 Alice 的额度申请", _SPEC_A, "quota_approve",
                    users=DIRD_ZERO, pending={})
-    check("⭐ 额度本来就是满的 ⇒ **不弹卡**、零工具，只回一句现状",
+    check("⭐ 他名下**没有**待处理的申请 ⇒ 不弹卡、零工具，只回一句现状",
           _CALLS == [] and not (r2.get("pending_confirm") or {})
-          and "本来就是满的" in json.dumps(r2, ensure_ascii=False), str(r2)[:170])
+          and "现在没有待处理的额度申请" in json.dumps(r2, ensure_ascii=False),
+          str(r2)[:170])
+    # ⭐ 事故复现位（20261001）：满额 + **有一份待处理申请** ⇒ 必须弹卡。
+    # 改判之前这一格是"不弹卡、零工具"，于是那条申请永远没有人能办（trace
+    # 20261001T105116：主人说"按你想法来吧"，系统回"额度本来就是满的…没有做任何
+    # 改动"，而后台那一行还挂着 [待处理]）。
+    r3 = _run_exec("批准一下 Alice 的额度申请", _SPEC_A, "quota_approve",
+                   users=DIRD_ZERO, pending=PEND)
+    _pop3 = r3.get("pending_confirm") or {}
+    check("⭐⭐ 满额账号**有一份待处理的申请** ⇒ **照弹卡**、零调用"
+          "（不弹的话那条申请在主人手上永远挂起——本轮就是这个洞）",
+          _CALLS == [] and bool(_pop3)
+          and "本来就是满的" not in json.dumps(r3, ensure_ascii=False),
+          str(r3)[:170])
 except BaseException as e:  # noqa: BLE001
     check(f"⑪ 真实执行路径探针不炸：{type(e).__name__}: {e}", False)
 finally:

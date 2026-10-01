@@ -261,6 +261,45 @@ okai, _ = _verdict({"tool": "send_user_notice", "args": {"name": "guest5", "body
                    False, users=USERS)
 check("发通知：**永不判定「已达成」**（发一条通知没有同值这回事）", okai)
 
+# 额度族（20261001 加：此前这一族在本套件里**一条判据都没有**，而它恰好长着两个
+# 判据完全不同、却曾被写成同一个的动作——批/驳消耗"一条待处理的申请行"，
+# 主动重置才是"计数器本来就是 0"。写错的那一支让一份申请在主人手上永远挂起。）
+QREQS = {126: {"id": 900, "userId": 126, "username": "guest5", "status": 0}}
+QZERO = {126: {**USERS[126], "chatQuotaUsed": 0, "chatQuotaLimit": 500}}
+QUSED = {126: {**USERS[126], "chatQuotaUsed": 137, "chatQuotaLimit": 500}}
+QADMIN = {126: {**USERS[126], "chatQuotaUsed": 0, "chatQuotaLimit": 0}}
+_QA = {"tool": "approve_quota_request", "args": {"user_id": 126}}
+_QJ = {"tool": "reject_quota_request", "args": {"user_id": 126, "reason": "先不给"}}
+_QR = {"tool": "reset_user_quota", "args": {"name": "guest5"}}
+okj, whyj = _verdict(_QA, False, users=QZERO, quota_requests=QREQS)
+check("⭐ 批准：**满额但有份待处理的申请 → 照弹**"
+      "（判「已达成」是真缺陷——那条申请在主人手上永远挂起，"
+      "trace 20261001T105116 实证）",
+      okj and whyj == "", whyj)
+okak, whyak = _verdict(_QA, True, users=QZERO, quota_requests={})
+check("批准：他名下没有待处理的申请 → 判定「已达成」并如实说现状"
+      "（**与用量无关**：这一支问的是「还有没有那行」，不是「额度满没满」）",
+      okak and "现在没有待处理的额度申请" in whyak and "满" not in whyak, whyak)
+okal, _ = _verdict(_QA, False, users=QZERO, quota_requests=None)
+check("批准：**申请快照读不到 → 照弹**（当成「没有申请」= 把挂起那件事演一遍）", okal)
+okam, _ = _verdict(_QA, False, users=None, quota_requests=QREQS)
+check("批准：名录读不到 → **照弹**", okam)
+okan, whyan = _verdict(_QJ, True, users=QZERO, quota_requests={})
+check("驳回：他名下没有待处理的申请 → 判定「已达成」并如实说现状",
+      okan and "现在没有待处理的额度申请" in whyan, whyan)
+okao, _ = _verdict(_QJ, False, users=QZERO, quota_requests=QREQS)
+check("驳回：**有待处理申请 → 照弹**（这正是要办的那一次）", okao)
+okap, whyap = _verdict(_QR, True, users=QZERO, quota_requests={})
+check("主动重置：used=0 → 判定「已达成」（**这一支才是看计数器的**）",
+      okap and "本来就是满的" in whyap, whyap)
+okaq, _ = _verdict(_QR, False, users=QUSED, quota_requests={})
+check("主动重置：用掉过 137 轮 → **照弹**（清零真会改变东西）", okaq)
+okar, _ = _verdict(_QR, False, users=USERS, quota_requests={})
+check("主动重置：**用量读不出 → 照弹**（不许当成 0 轮）", okar)
+okas, whyas = _verdict(_QR, True, users=QADMIN, quota_requests={})
+check("主动重置：不限额的管理员 → 另说一句（不是「额度满」而是「本来就没有上限」）",
+      okas and "不限额" in whyas, whyas)
+
 # ══════════════════════════════════════════════════════════════════
 print("\n② 掏空 ⇒ 走新出口（真跑 _confirm_popup，只桩后端读）")
 
