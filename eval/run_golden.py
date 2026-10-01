@@ -43,7 +43,8 @@
 退出码：0=两层门禁都过（硬层 0 红 + 采样层 Wilson 95% 下界 ≥ 档位）
         1=硬层红（回归组）或采样层下界低于档位
         2=一条用例都没剩下（空分母："没评"不是"通过"）
-        3=身份/事实前提不可用（这批用例**未评估**——同样"没评"，不受任何档位放宽）
+        3=身份/事实/禁卡前提不可用（这三类用例**未评估**——同样"没评"，不受任何档位
+          放宽；三类各自的原因都逐条打出来，别混成一句）
 
 **落地指标**（20261001 起；判据住在 `eval/landing_gate.py`，这里只接线）：
   **硬层** = 离线套件 / 真链路探针 / 回归组 / 前提与身份前置 ⇒ **0 红**，不给百分比
@@ -1183,6 +1184,105 @@ def check_premises(cases: list) -> tuple:
     return kept, skipped, rows
 
 
+# ── "这一轮不该弹卡"的前提（20261002）────────────────────────────────────────
+# 15 条用例的 `forbid_frame_prefix` 里写着 `__CONFIRM__:`——它们断言"这一轮**没有**确认
+# 卡"。而"为什么不该有卡"这件事，和事实前提一样**住在别人手里**：住在提问判据里、住在
+# 角色权限表里、住在目标是否存在的现场里、住在设计里。20261001 已经付过一次学费：一条
+# 用例的判据被同一批设计变更推翻，红色的 2.5 小时里判的是**判据自己**（老规矩写着"已
+# 通过的留言不能驳回 ⇒ 不许弹卡"，而新设计把审核族整体改成恒弹卡）。
+#
+# 判据（与 `premise_absent` 同一个形状：**人写前提、机器算剩下的那一半**）：
+#   · `question`           —— `authz.is_question_like(本轮输入)`：提问轮结构上不弹卡
+#                              （弹窗分叉的第一道闸，见 `authz.is_question_like` 头注）
+#   · `target_absent`      —— 该轮判据里有 `require_absence`（共享族），且那个**字面目标
+#                              出自主人原话**——"查无此物 ⇒ 不弹卡"的全部依据就是它
+#   · `role_denied`        —— 点名的那几件工具，这个角色**一件都到不了**
+#                              （`reachable_tools`，与前提侧同一个 `step_tool_enum`）
+#   · `capability_boundary`—— 点名的那几件工具，这个角色**到得了**：⇒ 卡被压住不是权限
+#                              不给，而是设计/输入形态使然（navigate 恒不弹、读操作不弹、
+#                              uid 哨兵、没落点可抽）。**设计那一半机器判不了**，所以这一
+#                              类强制写 `why`，报告里标 `partial`，不假装核过。
+#
+# 角色**只有一处**：用例自己的 `context.role`（缺省 = 匿名访客）。声明里再抄一份就是
+# 第二个会漂移的地方——`premise_absent` 里的 `role` 是**声明的一部分**（"对谁拿不到"
+# 是那条断言的语义），这里不是：这里的角色由用例本身决定，抄一遍只多一个出错点。
+#
+# 前提变 ⇒ `[no-popup] ⚠` 逐条点名 + `skipped_no_popup_ids` + **退出码 3**（与身份、
+# 事实前提同一条出口：这几条这一轮**没被评估**，退出码 0 会被读成"这一轮没问题"）。
+NO_POPUP_KINDS: tuple[str, ...] = ("question", "target_absent", "role_denied",
+                                   "capability_boundary")
+# `capability_boundary` 的 `why` 下限：那半是**人写的前提**，写不写全没人能自动判，
+# 但至少要写下来（同 `premise_absent` 的"清单为空的必须写 why"）。
+_NO_POPUP_WHY_MIN = 12
+
+
+def no_popup_role(case: dict) -> str | None:
+    """判据侧的角色名：用例的 `context.role`，缺省/`visitor` ⇒ `None`（匿名访客）。"""
+    role = str((case.get("context") or {}).get("role") or "").strip()
+    return None if role in ("", "visitor") else role
+
+
+def check_no_popup_premises(cases: list) -> tuple:
+    """逐条核验"不该弹卡"的理由，返回 (留下的用例, 未评估的 id, 逐条结论)。
+
+    结论 `state="changed"` = 这个理由**现在不成立了**（该弹卡却仍写着禁卡，或该用例
+    测的已经不是原来那件事）⇒ 该用例未评估。声明本身写坏（kind 不在四类、role_denied/
+    capability_boundary 没点名工具）**也归 changed**：那是"判据坏了"，方向必须偏到
+    "未评估"那一侧——静默放行就是 `test_golden_keys` 那段注释说的"判据看着在、其实不在"。
+    """
+    kept: list = []
+    skipped: list = []
+    rows: list = []
+    for c in cases:
+        pn = c.get("premise_no_popup")
+        if not isinstance(pn, dict):
+            kept.append(c)
+            continue
+        kind = str(pn.get("kind") or "").strip()
+        role = no_popup_role(c)
+        tools = [str(t) for t in (pn.get("tools") or [])]
+        why = str(pn.get("why") or "").strip()
+        hit: list = []
+        if kind == "question":
+            from agent.authz import is_question_like
+            if not is_question_like(str(c.get("user_input") or "")):
+                hit = ["is_question_like(本轮输入)=False"]
+        elif kind == "target_absent":
+            lits: list = []
+            for gold in [r["gold"] for r in iter_rounds(c)]:
+                v = gold.get("require_absence")
+                if isinstance(v, str):
+                    lits.append(v)
+                elif isinstance(v, list):
+                    lits.extend(str(x) for x in v)
+            ui = str(c.get("user_input") or "")
+            if not lits or not any(x and x in ui for x in lits):
+                hit = ["判据里没有 require_absence（或它的字面不在主人原话里）"]
+        elif kind in ("role_denied", "capability_boundary"):
+            if not tools:
+                hit = ["声明里没点名工具"]
+            else:
+                reach = reachable_tools(role)
+                inside = sorted(t for t in tools if t in reach)
+                if kind == "role_denied":
+                    hit = inside
+                else:
+                    hit = sorted(t for t in tools if t not in reach)
+                    if not hit and len(why) < _NO_POPUP_WHY_MIN:
+                        hit = [f"capability_boundary 必须写 why（≥{_NO_POPUP_WHY_MIN} 字，"
+                               "设计那一半机器判不了）"]
+        else:
+            hit = [f"kind 不是四类之一：{kind!r}"]
+        rows.append({"id": c.get("id"), "kind": kind, "state": "changed" if hit else "ok",
+                     "role": role, "tools": tools, "hit": hit, "why": why,
+                     "partial": kind == "capability_boundary"})
+        if hit:
+            skipped.append(c.get("id"))
+        else:
+            kept.append(c)
+    return kept, skipped, rows
+
+
 # ── golden 键的三张表（20260924）─────────────────────────────────────────────
 # 键名写错是一个**静默 no-op**：gold 是 dict，把 require_cmd_all 敲成 require_cmdall 时
 # 取值取到 None、那段断言根本不执行，而用例照样绿——判据看着在、其实不在。已经抓到一条
@@ -1914,6 +2014,26 @@ def main():
         print(f"[premise] {len(_premise_unchecked)} 条前提清单为空（哨兵判不了，人写的前提）："
               f"{_premise_unchecked}")
 
+    # "这一轮不该弹卡"的前提（20261002，头注见 `check_no_popup_premises` 上面那段）：
+    # 与事实前提同一条出口（摘用例 + 进 skipped_ids + 退出码 3），单列一栏——读报告的人
+    # 要能分清"没身份 / 供给面变了 / 禁卡的理由没了"，三者的修法各不相同。
+    cases, _nopopup_skipped, _nopopup_rows = check_no_popup_premises(cases)
+    skip_ids += _nopopup_skipped
+    _nopopup_bad = bool(_nopopup_skipped)
+    for _r in _nopopup_rows:
+        if _r["state"] == "changed":
+            print(f"[no-popup] ⚠ {_r['id']}：不弹卡的理由已变（{_r['kind']}，"
+                  f"role={_r['role'] or 'visitor'}）——{_r['hit'][:3]}"
+                  " ⇒ 本条**未评估**（改判据或改声明，见报告 no_popup_checks）")
+    if _nopopup_bad:
+        print(f"[no-popup] ⇒ {len(_nopopup_skipped)} 条用例本轮**未评估**：{_nopopup_skipped}")
+    _nopopup_partial = [r["id"] for r in _nopopup_rows if r.get("partial")]
+    if _nopopup_partial:
+        # 同 premise 那条"没报错 ≠ 核过了"：capability_boundary 只核了"卡不是权限压的"
+        # 那一半，设计那一半是人写的。如实印出来。
+        print(f"[no-popup] {len(_nopopup_partial)} 条只核了「卡不是权限压的」那一半"
+              f"（设计前提是人写的）：{_nopopup_partial}")
+
     # 真写用例的两道闸（20260925）——**顺序刻意如此**：先问"谁有权触发真写"，再看前置
     # 条件在不在。两道都不会被静默豁免（都进 skipped_ids，都打印）。
     #
@@ -2197,6 +2317,11 @@ def main():
         # 它们照跑，但别读成"核过了"）。与身份那两栏同源的纪律：**未评估要单列**。
         "skipped_premise_ids": _premise_skipped,
         "premise_checks": _premise_rows,
+        # "这一轮不该弹卡"的前提（20261002）：与上两栏同源的纪律——**未评估要单列**。
+        # `no_popup_checks` 每条带 `kind` 与 `partial`（`capability_boundary` 只核了
+        # "卡不是权限压的"那一半，设计那一半是人写的，别读成"核过了"）。
+        "skipped_no_popup_ids": _nopopup_skipped,
+        "no_popup_checks": _nopopup_rows,
         "latency_s": {
             "count": len(latencies),
             "min": round(_pct(latencies, 0), 1),
@@ -2296,6 +2421,21 @@ def main():
                           "断言「排行出自本轮真读过的帧」）；② 只是清单没跟上 ⇒ 改"
                           "`premise_absent.suppliers`。**别把它读成模型退化**——"
                           "这一轮这些用例根本没跑。\n\n")
+            # 禁卡的理由没了（20261002）：修法与上面那条**相反**——不是"供给面扩了"，
+            # 而是"这条用例不再测原来那件事"，多半意味着**设计改了**（20261001 那次就是）。
+            if _nopopup_bad:
+                f.write("> ⚠ **「不该弹卡」的理由已变，{n} 条用例本轮未评估（退出码 3）**："
+                        .format(n=len(_nopopup_skipped))
+                        + "、".join(f"`{i}`" for i in _nopopup_skipped)
+                        + "\n> 明细：\n"
+                        + "".join(
+                            f">   · `{r['id']}`（{r['kind']}，role={r['role'] or 'visitor'}）："
+                            f"{'、'.join(str(h) for h in r['hit'][:3])}\n"
+                            for r in _nopopup_rows if r["state"] == "changed")
+                        + "> 修法二选一（**先查设计是不是动过**）：① 理由真没了 ⇒ 把这条用例"
+                          "改判（例如审核族 20261001 那次：「不许弹卡」改成「必须弹卡 + 卡面"
+                          "印台账编号与现状」）；② 只是声明没跟上 ⇒ 改 `premise_no_popup`。"
+                          "**别把它读成模型退化**——这一轮这些用例根本没跑。\n\n")
             # 回归组红单列在最前：这些不是"允许波动"的能力题，门禁已按硬判退出码 1
             if _reg_bad:
                 f.write("> ⚠ **回归组（regression）FAIL，本轮不得放行**："
@@ -2415,7 +2555,7 @@ def main():
     # 档位放宽。理由只有一句：这些用例这一轮**没被评估**，而退出码 0
     # 会被读成"这一轮没问题"——空分母那次（退出码 2）就是同一条纪律的另一个现场。
     # 上面已把逐条 `[precondition]` 打过，这里只是让退出码也说出来。
-    if _precondition_bad or _premise_bad:
+    if _precondition_bad or _premise_bad or _nopopup_bad:
         # 后端把「账号不存在 / 被冻结 / 令牌已被收回」三种原因压成同一个 401（刻意的，
         # 见 identity_preflight 头注），所以这行只能把**三种修法**都列出来——20261001
         # 实测：只知道"不可用"会先去猜"是不是被冻结了"，而真因是账号被删。
@@ -2434,6 +2574,14 @@ def main():
                   "逐条见报告 `premise_checks` 与复审单；修法二选一："
                   "① 前提真没了 ⇒ 把判据从'拿不到'改成供给侧断言；"
                   "② 只是清单没跟上 ⇒ 改用例的 premise_absent.suppliers")
+        if _nopopup_bad:
+            print(f"⚠ 禁卡的理由变了（{len(_nopopup_skipped)} 未评估）⇒ 退出码 3："
+                  f"{_nopopup_skipped} —— 这些用例断言'这一轮没有确认卡'，而**卡之所以不该"
+                  "出现的那条理由现在不成立了**（20261001 那次就是这条：设计把审核族"
+                  "改成恒弹卡，判据还写着'不许弹'，红色的 2.5 小时里判的是判据自己）。"
+                  "逐条见报告 `no_popup_checks`；修法二选一：① 理由真没了 ⇒ 这条用例改判"
+                  "（如'不该弹卡'改成'必须弹卡 + 卡面印了什么'）；② 只是声明没跟上 ⇒ 改"
+                  " `premise_no_popup`")
         sys.exit(3)
     if failed == 0:
         sys.exit(0)
