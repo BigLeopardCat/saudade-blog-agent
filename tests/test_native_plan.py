@@ -15,7 +15,8 @@
     必须同改本文件（= 有人复核）；
   · 数组参数的 `items` 类型从工具原始片段回查（`ids` 是 integer、标签是 string）；
   · 零调用 = 闲聊轮（`params` 给**空**，不臆造字段）、多条调用只取第一条并记账、
-    判不了就返回 None；
+    判不了就返回 None；**零调用 + `finish_reason=length` 是"判不了"而不是闲聊轮**
+    （截断与闲聊轮形状相同、含义相反，见 `test_truncated_empty_calls_is_not_chat`）；
   · 函数名满足 OpenAI 的 `^[a-zA-Z0-9_-]{1,64}$`（技能名带点/空格会让整份 tools 被拒）；
   · **两个任务伪函数（20260927 批 D：`task_hold` 登记 / `task_drop` 撤下）只在开关
     打开时多出来**——集合相等因此是"技能名 + 两个申报过的名字"，且步骤工具闭集仍不许
@@ -259,6 +260,52 @@ def test_unmappable_returns_none():
     check("args 不是对象 → None", N.tool_calls_to_plan(_Stub(), None) is None)
 
 
+def test_truncated_empty_calls_is_not_chat():
+    """零 `tool_calls` + `finish_reason=length` ⇒ **判不了**，不是闲聊轮（20261001）。
+
+    这两种形状在响应里一模一样（都是零 `tool_calls`），而含义相反：前者是"模型的话
+    被额度切断、还没走到 tool_call"，后者是"这一轮本来就不需要动作"。旧行为一律判成
+    `chat` —— 于是一次被切断的决策**静默**变成闲聊轮（零工具、narrator 手里零帧），
+    首轮尤其致命：本轮还没有任何帧，只能凭记忆或道歉收场。判据（`finish`）一直就记在
+    trace 的 `native_decision` 上，缺的只是这一格处置。
+    """
+    print("\n[决策] 截断与闲聊形状相同、含义相反 ⇒ 判不了")
+    cut = AIMessage(content="主人，我看了一下，这篇文章主要讲的是",
+                    response_metadata={"finish_reason": "length"})
+    check("零调用 + length → None（不是 chat）",
+          N.tool_calls_to_plan(cut, None) is None,
+          str(N.tool_calls_to_plan(cut, None)))
+    check("finish_reason() 读得出来（调用方据它记 native_fallback）",
+          N.finish_reason(cut) == "length", N.finish_reason(cut))
+
+    # ⚠️ **反向对照**：同一句话、同样的零调用形状，只是没被截断 ⇒ 照旧是闲聊轮。
+    # 没有这一格，上面那条可以被"凡零调用都返回 None"蒙过去——那是把**整族闲聊轮**
+    # 打成判不了（外加每条都记一次 WARNING），比原来的病更重。
+    stop = AIMessage(content="主人，这篇文章主要讲的是…",
+                     response_metadata={"finish_reason": "stop"})
+    got = N.tool_calls_to_plan(stop, None)
+    check("零调用 + stop → 照旧 chat（反向对照）",
+          got is not None and got.skill == "chat", str(got))
+    # 网关不给 `finish_reason`（老响应 / 别的档）⇒ 不能凭空判成截断（缺键 ≠ length）
+    bare = AIMessage(content="你好呀～")
+    got2 = N.tool_calls_to_plan(bare, None)
+    check("取不到 finish_reason → 照旧 chat（不猜）",
+          got2 is not None and got2.skill == "chat", str(got2))
+
+    # 只有登记/撤回时，技能位本来就不是"动作"⇒ 截断也不能把登记丢掉：
+    # "这件事又没人管了"正是任务通道要治的那一格（见 agent/tasks.py），
+    # 而 `declare` 能成立就说明那次 tool_call 是**完整**发出来的。
+    hold = AIMessage(content="", response_metadata={"finish_reason": "length"},
+                     tool_calls=[_hold_call("把剩下的两件办完")])
+    got3 = N.tool_calls_to_plan(hold, None, task_state=True)
+    check("截断 + 有效登记 ⇒ 仍给决策（登记不丢）",
+          got3 is not None and got3.declare is not None, str(got3))
+    # 开关关（默认）时 task_hold 是个未知函数名 ⇒ 上面那条的前提不存在，
+    # 这一格照旧判不了（与 test_task_hold_declaration 的取向一致）。
+    check("开关关时同上一条 → None（伪函数不存在）",
+          N.tool_calls_to_plan(hold, None) is None)
+
+
 def _hold_call(goal: str, *, steps: list | None = None, cid: str = "t") -> dict:
     return {"name": T.TASK_HOLD, "id": cid, "type": "tool_call",
             "args": {"goal": goal,
@@ -471,6 +518,7 @@ if __name__ == "__main__":
                test_single_call_maps_to_skill_params,
                test_multi_call_keeps_first_and_accounts,
                test_unmappable_returns_none,
+               test_truncated_empty_calls_is_not_chat,
                test_task_hold_declaration,
                test_role_filter_applies_at_decision_time,
                test_review_inbox_calls_channel,

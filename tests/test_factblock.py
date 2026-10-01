@@ -267,6 +267,10 @@ def test_graph_wiring():
     # 三条被它命中、三条都因为 RESET 连命令一起清而"页面没跳却说已跳"。所以断言从
     # "兜底文本是事实块"改成"正文一个字都不许动"——想改回 fallback 的人，先看
     # gate 5g 那段注释里的三条 trace。
+    # ⚠️ 那个**代价**（RESET 吞命令）20261001 起不成立了（RESET 带 scope，见
+    # `tests/test_reset_scope.py`），但这条断言**照旧**：剩下的理由是"罚得不对"，
+    # 而要不要升回 fallback 动的是闸门严重度，判据只能靠多遍 A/B——别把"前提没了"
+    # 读成"这条锁该拆"。
     check("  正文**一字未动**（不是 fallback：拿文案去换命令是这一批最贵的错）",
           not out.get("fallback_text")
           and str(out["messages"][-1].content).strip() == "已经帮你打开啦～",

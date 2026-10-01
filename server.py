@@ -1027,8 +1027,29 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             process_emitted = True
             asyncio.run_coroutine_threadsafe(queue.put(f"__PROCESS__:{text}"), loop).result()
 
-        def emit_reset(reason: str):
-            asyncio.run_coroutine_threadsafe(queue.put(f"__RESET__:{reason}"), loop).result()
+        def emit_reset(scope: str, reason: str):
+            """发一条 `__RESET__:<scope>:<理由>`。
+
+            `scope` 是三端（前端 / Rust / golden）的**机器判据**，不是措辞：
+
+              · `all`  —— 连本轮已下发的 `__CMD__` 缓冲一起作废。用在**决策被推翻**
+                的那一格（gate 打回 ⇒ planner 重规划）：新的一轮会重新决定做什么，
+                留着旧命令就是"道歉了但还是跳了"。
+              · `text` —— **只**作废叙述，命令照旧执行。用在终局 fallback：execute
+                已经跑过、checker 已 PASS，命令是**已发生的事实**，gate 否定的只是
+                narrator 的措辞（与 `__EXEC__`/`__TASK__` 同一条取向：回执是事实）。
+
+            `text` 这一档是 20261001 补的。此前只有一种 RESET，命令**无条件**跟着作废，
+            而事实块（`render_fact_block`）在 fallback 之后照旧重印"页面已跳转：…"
+            ⇒ 主人读到一句已经发生、实际却没有发生的事。代价不止于此：gate 的两条
+            声称判据（5g/5h）当时都因为"判死就等于把已生效的命令吞掉"而降级成只记不判
+            ——修掉这里，那两条的前提才重新成立（见 gate 5g/5h 的注释）。
+
+            旧帧（没有 `scope` 段）在三端都按 `all` 解析 = 今天的行为 ⇒ 前后端版本
+            错配时退化成"命令被吞"，不会退化成"道歉了还是跳了"。
+            """
+            asyncio.run_coroutine_threadsafe(
+                queue.put(f"__RESET__:{scope}:{reason}"), loop).result()
 
         def emit_facts(rows: list):
             """动作族事实块（D3）：把**还没印过**的事实行发给主人（增量、按文本去重）。
@@ -1272,7 +1293,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     #     因此不会进 chat_history 变成下一轮的范文）。
                     reason = "叙述缺少依据，正在重新查证"
                     emit_process("✗ 质检打回：" + reason, key="gate_replan")
-                    emit_reset(reason)
+                    # scope="all"：这一轮**决策被推翻**，重规划后重下的命令才是对的
+                    # ——旧命令必须一起作废（"道歉了但还是跳了"就是这一格的反面）。
+                    emit_reset("all", reason)
                     emitted.clear()
                     # 事实块跟着被 RESET 清掉了（前端清 displayText、Rust 清累积 reply）
                     # ——但那些动作**是真做过的**，重规划不改变这一点 ⇒ 立刻重印一遍：
@@ -1290,13 +1313,16 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     # 注入 fallback 文本（人设内如实回复）作为最终回复
                     reason = "叙述校验未通过，已替换为如实回复"
                     emit_process("✗ 质检打回：" + reason, key="gate_fallback")
-                    emit_reset(reason)
+                    # scope="text"：这是**终局**，planner 的决策没有被推翻——execute
+                    # 跑过、checker PASS 过，命令是已发生的事实，被否定的只有措辞。
+                    # 不这么做，事实块那句"页面已跳转：…"就是系统在说它没做的事。
+                    emit_reset("text", reason)
                     final_reply = upd["fallback_text"]
                     emitted.clear()
                     # RESET 把已经发出去的事实块也清了 ⇒ 重新拼上（D3）：块是真话、
-                    # 且是这一轮唯一有系统背书的正文（旁证：`action_restate` 这条网
-                    # 之所以不判死，正是因为它一旦走这条路，`emit_reset` 会连命令
-                    # 一起清掉——见 gate 5g 的注释）。`compose` 幂等，重复拼不上。
+                    # 且是这一轮唯一有系统背书的正文。`compose` 幂等，重复拼不上。
+                    # 与 `scope="text"` 配套之后这一段才成立：否则重印的是"跳了"、
+                    # 而命令已经没了——那正是 20261001 修掉的那个矛盾。
                     final_reply = compose(prelude, final_reply)
                     asyncio.run_coroutine_threadsafe(
                         queue.put(AIMessageChunk(content=final_reply)), loop).result()

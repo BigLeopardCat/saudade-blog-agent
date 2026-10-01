@@ -219,8 +219,36 @@ check("CI 不把凭据展开进日志（echo/printf 里不许出现变量展开�
 # 锥够不够：**机械核对**所有守卫实际读的父仓路径是否落在 `sparse-checkout` 的锥里。
 # 这是"改一处忘另一处"在这一处的形状——新加一条读别处源码的守卫，CI 会因为"文件不在"
 # 而红，而红的理由看着像"Rust 那边没改"，有人会顺手把守卫删掉。把这条接线的边界先钉死。
-_cone_m = re.search(r"sparse-checkout:\s*(\S+)", _eval_txt)
-_cone = _cone_m.group(1) if _cone_m else ""
+def _cone_patterns(txt: str) -> list[str]:
+    """把 `sparse-checkout` 的值读成**逐条模式**，两种合法写法都认（20261001）。
+
+    `actions/checkout` 这个输入收两种：单行 `sparse-checkout: a,b`，和 YAML 块标量
+    `sparse-checkout: |` + 缩进行（README 的示例就是后者）。此前只认 `\\S+` ⇒ 块标量被
+    读成字面 `|`、锥变空、这条守卫对**合法配置**判红——而那种红长得像"守卫该删"，
+    正是本文件要防的那种失效。判据自己也要有判据：下面有一条对两种写法的实例断言。
+    """
+    m = re.search(r"^([ \t]*)sparse-checkout:[ \t]*(.*)$", txt, re.M)
+    if not m:
+        return []
+    indent, first = m.group(1), m.group(2).strip()
+    if first not in ("|", "|-", "|+", ">", ">-", ">+"):
+        return [p.strip() for p in first.split(",") if p.strip()]
+    body = []
+    for ln in txt[m.end():].split("\n")[1:]:      # [1:] 吃掉本行行尾那个空元素
+        if not ln.strip():
+            continue
+        if not (ln.startswith(indent + " ") or ln.startswith(indent + "\t")):
+            break                                  # 缩进收回 = 块结束
+        body.append(ln.strip())
+    return body
+
+
+_CONE_FIXTURES = ("sparse-checkout: a,b", "sparse-checkout: |\n  a\n  b\nnext: 1\n")
+check("锥的读法两种写法都认（单行逗号 / YAML 块标量；块标量读到缩进收回为止）",
+      all(_cone_patterns(t) == ["a", "b"] for t in _CONE_FIXTURES),
+      " / ".join(f"{t!r}→{_cone_patterns(t)}" for t in _CONE_FIXTURES))
+_patterns = _cone_patterns(_eval_txt)
+_cone = ", ".join(_patterns)                       # 只给下面失败信息里的"锥=…"用
 _reads: dict[str, list[str]] = {}
 for _p in sorted((ROOT / "tests").glob("*.py")):
     for _rel in re.findall(r'_parent_repo\.read\(\s*"([^"]+)"', _p.read_text(encoding="utf-8")):
@@ -236,7 +264,7 @@ def _cone_dirs(cone: str) -> set[str]:
     return {"/".join(parts[:i]) for i in range(len(parts) + 1)}
 
 
-_covered = _cone_dirs(_cone)
+_covered = set().union(*(_cone_dirs(p) for p in _patterns)) if _patterns else _cone_dirs("")
 _outside = sorted(f"{rel}（{'+'.join(who)}）" for rel, who in _reads.items()
                   if "/".join(rel.split("/")[:-1]) not in _covered)
 check("锥里真含父仓锚（`_SENTINEL`）——锥配窄了连「父仓在哪」都认不出来",

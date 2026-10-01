@@ -299,6 +299,8 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
       · `args` 不是对象（我们的 schema 全是 object，出现别的形状说明响应不合约定）。
 
     一条都没发 ⇒ 这是**闲聊轮**，等价文本档的 `SKILL=chat`：`params` 给**空**。
+    **例外**：零 `tool_calls` 且 `finish_reason == "length"`（被额度截断）⇒ 同样返回
+    None——截断的轮次与闲聊轮形状相同而含义相反，见下面 `if not calls:` 那一格。
 
     ⚠️ **别把模型那句话塞进 `params.reply`**（20260927 一稿就是这么写的，跟着数据核
     完改掉了）：`chat` 技能在注册表里 `inputs={}`、`skill_param_specs` 也是空的，
@@ -349,8 +351,22 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
             if declare is None:
                 notes.append("task_drop_invalid")
     if not calls:
-        if declare is None and not notes and not _content_of(resp).strip():
-            return None
+        if declare is None and not notes:
+            # 截断 ≠ 闲聊（20261001）。`finish_reason == "length"` 意味着这一轮的话
+            # 被额度**切断**，而"还没说到那个 tool_call 就被切"与"这一轮本来就没有
+            # 动作"在响应里**形状完全相同**（都是零 `tool_calls`）——旧行为把后者
+            # 当成前者：静默落成 `chat`、零工具、narrator 手里零帧（首轮尤其致命，
+            # 只能凭记忆或道歉收场）。判不了就返回 None，交给调用方退回**既有的
+            # 文本解析**并留一条 `native_fallback` + WARNING ——模型也可能把契约行
+            # 写在正文里（实测会两边都写），那份正文截断了照样可能读得出决策。
+            #
+            # **刻意不重试**（别照抄 narrator 那次空内容重试）：那是**采样**失败
+            # （同一条消息再问一次就正常），这是**预算**失败——同一条消息再问一次
+            # 多半截在同一个位置，多花的只是钱。两类病两副药。
+            if finish_reason(resp) == "length":
+                return None
+            if not _content_of(resp).strip():
+                return None
         # 只有登记/撤回、或伪函数参数无效：技能位给 chat（本轮没有动作要执行），
         # `declare` 交给 planner 那一支，`notes` 让那一格在 trace 里看得见。
         return NativeDecision(skill="chat", params={}, notes=tuple(notes),

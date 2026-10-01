@@ -1036,11 +1036,15 @@ flowchart TB
   重考轮）**：done=True + `[Fallback 决定]` SystemMessage + fallback_text（人设内如实回复，不再
   是"修正要求"）——server 据此发 `__RESET__` 并以 fallback 文本替换最终回复（见下）。语义：检查
   不通过说明 narrator 不可信，重考一轮只是再给它一次编的机会，确定性文本收尾更诚实也更省。
-- **`__RESET__` 协议与历史洁净（20260903 起由 gate fallback 触发）**：gate fallback → server 发
-  `__RESET__:<原因>` 帧（旧裸 `__RESET__` 兼容）→ 前端清空已展示文本只显示最终轮；**Rust 收到
-  `__RESET__` 帧会清空已累积 reply**（chat.rs）——被 fallback 否定的 narrator 全文连同重置标记
-  不入 chat_history（否则污染历史注入形成坏 few-shot），fallback 如实文本作为最终回复入库。
-  20260903 起 `__RESET__` 只由 gate fallback 发出（无 REVISE 重考轮）。
+- **`__RESET__:<scope>:<理由>` 协议与历史洁净**：两处会发（`server.py`，都是 gate 的收尾）——
+  **gate 打回重规划**（`gate_replan`）发 `all`、**终局 fallback**（`fallback_text`）发 `text`。
+  scope 说的是**命令缓冲该不该跟着作废**：`all` = 这一轮决策已被推翻、旧命令一并作废；
+  `text` = 只是措辞被否掉，命令是 checker PASS 的**已发生事实**，照旧执行（前端据此不清
+  `programCmds`）。缺 scope 段按 `all`（保守那一侧：宁可少跳一次，也不把被否定的动作执行掉）
+  ——三端各有一份实现、字面必须一致，跨端守卫见 `tests/test_reset_scope.py`。**Rust 侧零改动**
+  （只认前缀、清空已累积的 reply）。前端清空已展示文本只显示最终轮；**Rust 收到 `__RESET__`
+  帧会清空已累积 reply**（chat.rs）——被否定的 narrator 全文连同重置标记不入 chat_history
+  （否则污染历史注入形成坏 few-shot），fallback 如实文本作为最终回复入库。
 - **执行过程行**（前端灰色可折叠轨迹）：server 发 `__PROCESS__:<步骤>` 帧（🧭 规划中/🧭 计划 /
   🛠 正在调用工具…（planner 决策含执行清单时发，execute 执行期几秒静默防"卡死"）/ 工具帧完成
   注记（导航/特效/夜间为"🛠 调用工具：…"，其余非命令类为"✅ 工具执行完成"）/ ✗ 质检打回
