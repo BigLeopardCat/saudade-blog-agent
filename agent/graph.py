@@ -94,7 +94,8 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES
                              _nav_fast_path, _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.entities import receipt_digest
-from agent.factblock import action_facts, is_block_family, render_fact_block
+from agent.factblock import (action_facts, is_block_family, is_cmd_family,
+                             render_fact_block)
 from agent.llm_usage import usage_fields
 from agent.native_plan import (bind_native, finish_reason, tool_call_names,
                                tool_calls_to_plan)
@@ -8027,13 +8028,23 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
 # 模型侧连通道都没有。model 的唯一职责：把 execute 的工具帧 + 页面上下文 +
 # 计划契约组织成给访客的最终回复（narrator）。叙述纪律见 _EXECUTOR_PROMPT。
 
-# `[本轮已由系统印出的事实]` 为空的**占位文本**（20261002 改口）。旧文案是
-# 「（本轮没有动作族执行）」——命令族退出印出射程之后，一轮**真跳了页**的对话也会落到
-# 这一格，那时它是一句**假话**（narrator 读到"什么都没执行"，要么不提、要么自相矛盾）。
-# 所以占位只说"没印"，不说"没执行"——两句在命令族轮次上恰好相反。
-_NO_PRINTED_FACTS = (
-    "（本轮没有系统代印的事实——写族的动作才由系统印；跳转/特效/夜间那几种的效果"
-    "主人当场看得见，**那几句话由你自己说**，依据见上面的工具执行记录与执行回执）"
+# `[本轮已由系统印出的事实]` 为空的**占位文本**（20261002 改口，同日二改分岔）。
+# 旧文案「（本轮没有动作族执行）」在命令族退出印出射程之后会变成**假话**：一轮**真跳了页**
+# 的对话也落到这一格，narrator 读到"什么都没执行"要么不提、要么自相矛盾。
+# 于是改口成"没印 ≠ 没执行"，并把命令族那句授权写进占位——**这又错了一次**（02:02 实证）：
+# 占位在**零命令轮**也照样出现，那句「跳转/特效/夜间那几种的效果…**那几句话由你自己说**」
+# 就成了一张系统发的**空授权**——模型拿它去认领一件没发生的事。
+# 现场（trace 20261002T020256）：主人「猫咪带我去你的设计文档」（站内无此页），planner 判
+# `chat`/`answer_only`（零帧零回执），narrator 照这句授权 + 台账里 24 分钟前那条已过期的
+# 「页面跳转「物联网平台」」，编出「物联网平台页面已经打开啦～你现在应该能看到设备控制台了」，
+# 而同一轮的 `page_ctx` 里 `current_url` 是**首页**——系统手里握着真值却没核对（闸门侧的洞
+# 另记，见 5b2）。
+# 所以占位按**本轮有没有命令族回执**分岔：有 ⇒ 效果真发生了，那件事归 narrator 说；
+# 没有 ⇒ **一个族名都不提、一句授权都不给**（不提，它就不会去找一件没发生的事）。
+_NO_PRINTED_FACTS = "（本轮没有系统代印的事实）"
+_NO_PRINTED_FACTS_CMD = (
+    "（本轮没有系统代印的事实——跳转/特效/夜间那一族**真的执行了**，效果主人当场看得见，"
+    "**那件事由你自己说**，依据见上面的工具执行记录与执行回执）"
 )
 
 _EXECUTOR_PROMPT = """\
@@ -8238,12 +8249,14 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # `is_action_family`。命令族（跳转/特效/夜间）这一族**不印**（`BLOCK_FAMILIES` 的
     # 理由：效果主人当场看得见，那句话归泠月自己交代）——如果这里照旧按"动作族"摘帧，
     # 它就会被摘掉**却又没有印出来**：主人读不到、模型也看不到，那句话**没有任何作者**，
-    # 而 `[本轮动作事实]` 还会写着"（本轮没有动作族执行）"——一轮真的跳了页的对话，
-    # 提示词里写它什么都没干。这就是"漏印"与"漏供给"的差别：印是展示策略，摘是证据。
+    # 而 `[本轮已由系统印出的事实]` 那一格还会写着"没有（动作族执行）"——一轮真的跳了页的
+    # 对话，提示词里写它什么都没干。这就是"漏印"与"漏供给"的差别：印是展示策略，摘是证据。
     _receipts = [r for r in (state.get("receipts") or []) if isinstance(r, dict)]
     _facts = action_facts(_receipts)
     _block = render_fact_block(_facts)
     _drop = {str(r.get("tool") or "") for r in _receipts if is_block_family(r)}
+    # 占位分岔用的那一位（见 `_NO_PRINTED_FACTS` 注释）：这一轮**真的发过命令帧**吗。
+    _has_cmd = any(is_cmd_family(r) for r in _receipts)
     if _facts:
         record("model", "fact_block", n=len(_facts), tools=sorted(_drop))
         logger.info("[model] 动作事实块 %d 行（族内工具 %s），叙述权收归系统",
@@ -8259,7 +8272,7 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         plan=_narrator_plan(state, config),
         tool_frames=_frame_texts(state["messages"], drop_tools=_drop),
         exec_receipts=_receipts_text(_receipts, drop_tools=_drop),
-        fact_block=_block or _NO_PRINTED_FACTS,
+        fact_block=_block or (_NO_PRINTED_FACTS_CMD if _has_cmd else _NO_PRINTED_FACTS),
         # 能力清单与 audience 同一角色源（20260921）：两处口径不同会出现
         # "管理员身份 + 清单里没有管理能力"的自相矛盾 prompt
         page_ctx=_page_ctx(state["messages"], role),
