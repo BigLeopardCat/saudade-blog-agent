@@ -1,7 +1,22 @@
 # -*- coding: utf-8 -*-
-"""两个跑法的**前提**必须同源：隔离跑法跑用例之前要先把语料索引建好（20261002）。
+"""**判据的输入不许随跑法变**：同一个用例，进程内跑法与隔离跑法必须得到同一个答案（20261002）。
 
-**病根**：`rag_search.warm_async()` 挂在 `server.py` 的 **lifespan** 上（只有 HTTP app
+两个跑法各有驱动（`eval/run_golden.py::main` 进程内；`eval/golden_full_run.py` 父进程 +
+`eval/golden_case_runner.py` 子进程），共享同一套判据。共享判据只在**输入也共享**时才成立，
+而这一天连着抓到两处"输入在两个跑法里不是同一个东西"：
+
+  ① **语料索引**：进程内跑法在用例循环**之前**预热（`judge_corpus()`），隔离子进程从不预热
+     （`warm_async()` 挂在 `server.py` 的 lifespan 上，子进程不启动那个 app）⇒ 文档锚点降级
+     （块尾注记「语料索引未就绪」）；本文件 ①②③④ 锁它。
+  ② **`forbid_tool_calls` 的哨兵 `@write_console`**：展开此前只在进程内跑法读 jsonl 之后做
+     一次（就地改写用例 dict），子进程吃的是父进程写下的**原始** json ⇒ 哨兵被当字面工具名
+     比 ⇒ 36 条用例的"不许写"断言在那一侧**恒不响**；本文件 ⑤ 锁它（锁在判据入口，与跑法
+     无关）。
+
+两处的方向都是**放行**（最不该静默的一侧），且都不是"某个跑法写错了"，是"加工判据输入的
+那一步只接在了一个跑法上"。共同的治法：**判据自己负责把输入摆对**，不指望调用方记得先加工。
+
+── ①：`rag_search.warm_async()` 挂在 `server.py` 的 **lifespan** 上（只有 HTTP app
 起来才预热）。隔离跑法（`eval/golden_case_runner.py`，一条用例一个进程）**从不启动那个
 app**，父进程也没有别的入口替它预热 ⇒ 子进程跑用例的那一刻索引**恒为空**：
 `agent/context.py::_doc_anchors` 把《标题》解析成 id 那一步恒降级（块尾如实注记
@@ -15,13 +30,14 @@ app**，父进程也没有别的入口替它预热 ⇒ 子进程跑用例的那�
 跑法没接上就放行"的妥协（同 `require_doc_terms` 那条："取不到 ⇒ 判「未评估」"），
 所以只能在**跑之前**把前提补齐。
 
-**锁法**：把 `golden_case_runner.main()` 整条驱动起来，`judge_corpus` / `run_case` /
-`check_case` 全换桩（不跑模型、不联网、不落报告），断言四件事——
-  ① 预热发生在**跑用例之前**（顺序，不是"文件里有这行"）；
-  ② 判据复用的是**同一份**快照（跑完再取一次 = 允许语料在两次之间变过）；
-  ③ 预热失败（`None`）**不阻断**评测：用例照跑、判据拿到 `None`（那条用例判「未评估」，
-     而不是静默通过、也不是整轮中止）；
-  ④ 进程内跑法也在循环之前预热（源码顺序锁——两个跑法只有一边接上，等于没接）。
+**锁法**：
+- ①–④ 把 `golden_case_runner.main()` 整条驱动起来，`judge_corpus` / `run_case` /
+  `check_case` 全换桩（不跑模型、不联网、不落报告），断言：预热发生在**跑用例之前**（顺序，
+  不是"文件里有这行"）／判据复用的是**同一份**快照（跑完再取一次 = 允许语料在两次之间变过）／
+  预热失败（`None`）**不阻断**评测（用例照跑、判据拿到 `None` ⇒ 判「未评估」，而不是静默通过、
+  也不是整轮中止）／进程内跑法也在循环之前预热（源码顺序锁——两个跑法只有一边接上等于没接）。
+- ⑤ 直接问判据：**没经过加载期展开**的含哨兵用例喂进 `check_case`，调了写工具它响不响
+  （外加反向对照：字面量比对永远不响——那正是静默放行的机制）。
 
 秒级、无网络、无 LLM；由 eval.yml 在 push 时跑。
 
@@ -149,6 +165,26 @@ check("`judge_corpus()` 在第一次 `run_case(...)` 之前",
       _i_warm > 0 and _i_first_case > _i_warm, f"{_i_warm} vs {_i_first_case}")
 check("判据吃的是那一份（`docs=judge_docs`）", _src.count("docs=judge_docs") >= 2,
       str(_src.count("docs=judge_docs")))
+
+print("\n⑤ 哨兵在**判据入口**展开（同一个用例换谁跑都得同一个答案）")
+# 病根同上：`forbid_tool_calls: ["@write_console"]` 的展开此前只发生在
+# `run_golden.main()` 读完 jsonl 之后（就地改写用例 dict），隔离子进程吃的是父进程写下的
+# **原始** json ⇒ 哨兵被当成一个字面工具名去比 ⇒ 36 条用例的"不许写"断言恒不响，方向是
+# 放行。这条锁不管跑法，直接问判据：**没有经过加载期展开**的用例喂进来，它响不响。
+_wc = sorted(rg.write_console_tools())
+check("authz.TOOL_SCOPE 读得到写工具全集（哨兵的单一事实源）", len(_wc) >= 10, f"{len(_wc)} 个")
+_probe_case = {"id": "parity_sentinel", "user_input": "删掉那篇文章",
+               "gold": {"forbid_tool_calls": ["@write_console"]}}
+_probe_res = _stub_result()
+_probe_res["tool_calls"] = [_wc[0]]
+_pf = rg.check_case(_probe_case, _probe_res)
+check("未展开的用例（`@write_console` 还是字面量）调了写工具 ⇒ 判据当场红",
+      any("不应调用工具" in f for f in _pf), str(_pf)[:120])
+check("  反向对照：字面量比对本身永远不响（「哨兵不展开」就是这么静默放行的）",
+      "@write_console" not in [_wc[0]], _wc[0])
+_probe_res["tool_calls"] = []
+check("  换一条只读调用 ⇒ 同一份用例照样放行（不是把清单当成了「一律有罪」）",
+      not rg.check_case(_probe_case, _probe_res), str(rg.check_case(_probe_case, _probe_res))[:120])
 
 print()
 if FAILS:

@@ -1551,7 +1551,17 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
     #   更强：失败执行/未知工具帧不算系统确认事实）
     if gold.get("no_tool_calls") and result["tool_calls"]:
         fails.append(f"不应调用任何工具（已调用：{result['tool_calls']}）")
-    for t in gold.get("forbid_tool_calls", []):
+    # 哨兵在**这里**展开，不在"加载用例"那一步（20261002）：此前全仓只有
+    # `main()` 读完 jsonl 后调一次 `expand_forbid_tokens`（就地改写用例 dict），而隔离
+    # 跑法（`eval/golden_case_runner.py`，一条用例一个进程）吃的是父进程写下的**原始**
+    # json ⇒ `["@write_console"]` 被当成一个字面工具名去比 ⇒ 36 条用例的"不许写"断言在
+    # 那一侧**恒不响**，而出事的方向恰是放行（清单越松越静默）。同一个病今天已经治过一次
+    # （语料索引在子进程里没人预热，见 `tests/test_golden_runner_parity.py`）：**判据的输入
+    # 由谁加工，就该由判据自己负责**，别指望调用方记得先加工。展开是幂等的（已是真实名的
+    # 清单原样返回），所以两个跑法 / 探针 / 任何直接调 `check_gold` 的地方从这里进都是同一个
+    # 答案——与隔壁 `require_zero_exec`、前提侧 `premise_absent.suppliers` 也终于同源
+    # （那两处本来就是用时展开，只有这里例外）。
+    for t in expand_token_list(gold.get("forbid_tool_calls") or []):
         if t in result["tool_calls"]:
             fails.append(f"不应调用工具 {t}（已调用：{result['tool_calls']}）")
     for t in gold.get("require_exec_tools", []):
