@@ -43,13 +43,22 @@ def main():
     # **两份** trace（同名文件会把首跑那份覆盖掉，而"首跑为什么红"正是复跑要回答的）。
     # 结果 dict 的 id 不带后缀（父进程按 id 归并）。
     suffix = sys.argv[3] if len(sys.argv) > 3 else ""
+    # 语料索引**必须在跑用例之前就绪**（20261002，锁见 tests/test_golden_runner_parity.py）：
+    # `rag_search.warm_async()` 挂在 `server.py` 的 **lifespan** 上，而本进程从不启动那个
+    # app ⇒ 跑用例的那一刻索引恒为空，planner 把《标题》解析成 id 那一步恒降级
+    # （`agent/context.py::_doc_anchors` 会如实注记「语料索引未就绪」）⇒ 模型拿不到 id、
+    # 只能去检索，撞上用例的 `forbid_tool_calls: [rag_search…]`。进程内跑法在用例循环
+    # **之前**就建好了它（`judge_corpus()`）——同一个用例两个跑法结论不同，正是本仓反复
+    # 治过的那个病。判据侧不做"这个跑法没接上就放行"的妥协，所以只能在**跑之前**把前提
+    # 补齐；顺带这一份快照就是判据要用的那一份（跑完再取一次，等于允许语料在两次之间变过）。
+    docs = run_golden.judge_corpus()
     t0 = time.time()
     result = run_golden.run_case(case, run_id=run_id, suffix=suffix)
     elapsed = time.time() - t0
     # 语料快照同进程内取一次（20260925）：`require_doc_terms` 要拿**正文**派生术语，
     # 取不到就得判「未评估」而不是静默通过——两个跑法（进程内 / 隔离）在这一点上必须
     # 给出同一个结论（判据侧不做"这个跑法没接上就放行"的妥协）。
-    fails = run_golden.check_case(case, result, docs=run_golden.judge_corpus())
+    fails = run_golden.check_case(case, result, docs=docs)
     ok = not fails and not result["error"]
     # 字段表与 run_golden.py 的 `results.append({...})` **逐字段对齐**（20260924）：两个
     # 跑法（进程内 / 隔离子进程）写出形状不同的报告，"红了照报告读现场"这条纪律就只在
