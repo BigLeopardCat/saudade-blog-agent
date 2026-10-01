@@ -2751,6 +2751,25 @@ def _instantiate_plan(skill_name: str, params: dict,
                         if vchk["unknown"]:
                             logger.warning("[skills] %s 的调用带了没人读的参数 %s（已忽略）",
                                            cname, "、".join(vchk["unknown"]))
+        # **跨通道折叠**（20261001）：模型会把同一件读**两条通道各写一遍**——
+        # 实测（trace `20261001T105116`）`tools: [list_quota_requests,
+        # get_moderation_status]` 与 `calls: [{list_quota_requests, {status:pending}},
+        # {get_moderation_status, {status:pending}}]` 同时出现 ⇒ 2 件读展开成 4 条调用
+        # （主人看到的是"最后一次调用了大量工具，莫名其妙"，而那两条无参读的返回还
+        # 整段盖住了带参那条）。无参点名被同一工具的带参调用**覆盖**：带参那次就是
+        # 同一件读收窄了条件，无参结果是它的超集，两条都发纯属重复。
+        # 折叠只在**工具名粒度**上做——参数不同的两条 calls（如两篇文章详情、
+        # 两个关键词）一条都不动，那是各自独立的读。
+        # 折叠**不写进 `dropped`**：那不是"够不到/参数错"的剔除，不该触发纠偏重决策
+        # （`_drop_correction` 认后缀选话术，这里没有话术可给）；也不会把 `picked`
+        # 剔空——`called` 非空就意味着至少有一条带参调用留下。
+        called = {t.split("(", 1)[0].strip() for t in picked if "(" in t}
+        if called:
+            folded = [t for t in picked if "(" not in t and t in called]
+            if folded:
+                picked = [t for t in picked if "(" in t or t not in called]
+                logger.warning("[skills] 无参点名 %s 已被同一工具的带参调用覆盖（剔除）",
+                               "、".join(folded))
         for t in picked:
             if "(" in t:
                 tools.append(t)
