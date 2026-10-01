@@ -1657,6 +1657,163 @@ _STATE_ACTION_EXEMPT_RE = re.compile(
 _SENT_RE = re.compile(r"[。！？!?\n]+")
 _STATE_DONE_RE = re.compile(r"已经|刚刚|方才|啦|咯|喽|好了|(?<![为除罢算])了|成功|完成|搞定")
 
+# ── gate 洞⑪：零帧轮的「主人现在在 X 页」声称 → 与**实时页面上下文**核对（20261002）──
+# 事故实证（trace `20261002T020256`，主人全程可见）：主人说「猫咪带我去你的设计文档」
+# （站内**没有**这个页面），planner 判 `chat`/`answer_only`（零帧零回执），narrator 回
+# **「主人，物联网平台页面已经打开啦～你现在应该能看到设备控制台了喵！」**——而**同一轮**
+# 的页面上下文里明明白白写着 `page=https://saudade.site/`（主人在首页）。gate 判 PASS。
+#
+# 为什么三张现成的网都没拦住（实测探针，不是推演）：
+#   · 洞① ②支**刻意**排除开合类动词（注记⑤），"页面已经打开啦"不在那张动词表里；
+#     ①支要施事前缀「帮你/给你」、③支要「把/将」——这句两样都没有；
+#   · `_NAV_ARRIVAL_RE` 是「已经?带/已经?到/已经?跳转/过去了/已经?去」，**没有"打开"**；
+#   · 5b2 被 `plan["skill"] == "navigate"` 限住，这一轮是 chat。
+# 三张网都在测**词形**，而这一轮系统手里握着**真值**，没有一条判据去核它。
+#
+# 所以这一条换方向：**不猜词形，核真值**。两步：
+#   ① 子句里出现 NAV_MAP 认得、且**窗口里**是"现在态/完成态 + 位置动词"的页面名
+#      ⇒ 这句话在声称**主人现在在那页**（"点顶部菜单就过去了"这种不带时间词的
+#      指路句不在窗口里，见 `_NAV_PRESENT_WINDOW_RE`）；
+#   ② 拿 `page=` 的实时值核对：**一致 ⇒ 放行**（"主人你现在就在留言板呀"是幂等轮的
+#      正确答案），不一致 ⇒ 判假。
+# 与词形代理的本质区别在②：**真值一致时永远放行**，于是"放宽词形"不再有代价——
+# 洞① ⑤ 那条收窄（"樱花特效已经开启啦"必须放过）将来也能照这个模子撤回。本批只做
+# **页面**这一半；特效/夜间那半要一张同形状的别名表，还没做（见 roadmap 同日的"仍未修"）。
+#
+# 四条护栏，都朝宁漏勿误伤：
+#   · **认不出就不判**：`page=` 缺失/畸形 ⇒ 整条判据不跑；子句里没有 NAV_MAP 的页面名
+#     ⇒ 不跑（所以本判据**只认系统自己那份页面表**，不认模型现编的地名）；
+#   · 子句级切分 + 自己的豁免表（`_NAV_PRESENT_EXEMPT_RE`：否定/疑问/提议/条件/引述。
+#     **不复用洞① 那张**——见那张表的注释，现场句里的"能"会被它整句豁免）；
+#   · **纯过去词 ⇒ 不是"现在在哪"**（`_NAV_PAST_ONLY_RE`："主人刚才在留言板留的那条"）；
+#   · **追述豁免**：回执在场且子句含追述时间词（"刚才已经带你到物联网平台了"）⇒ 那是
+#     **引台账**（rule 6），主人后来自己翻回首页是常事，不是编造。
+_LIVE_PAGE_RE = re.compile(r"(?:^|[;,])\s*page=([^;,\]\n]*)")
+
+
+def _norm_path(p: str) -> str:
+    """路径归一（`page=` 与 `NAV_MAP` 的值要能直接比）：去 query/fragment、去尾斜杠。"""
+    p = (p or "").strip().split("#", 1)[0].split("?", 1)[0]
+    return p.rstrip("/") if len(p) > 1 else p
+
+
+def _live_page_path(page_ctx: str) -> str | None:
+    """页面上下文里前端实时上报的当前路径；**认不出 ⇒ None = 没有真值，判据整条不跑**。
+
+    `page=` 的值由浏览器给（`window.location.href`）、Rust 原样转发（`server.py` 的
+    `_ctx_field` 只做长度清洗）⇒ 它可能是绝对 URL、相对串或空串。只认"能解成站内路径"
+    的那种；畸形一律当没有真值（**无从核对 ⇒ 不判**，而不是"判成假"）。
+    """
+    m = _LIVE_PAGE_RE.search(page_ctx or "")
+    if not m:
+        return None
+    raw = re.sub(r"^[a-zA-Z][\w+.-]*://[^/]*", "", m.group(1).strip().strip("\"'"))
+    return _norm_path(raw) if raw.startswith("/") else None
+
+
+# 「主人现在在 X 页」的**窗口判据**：在页面名前后各取一小段（§`_nav_present_claim_clause`）
+# 看这段里有没有"现在在哪/刚到哪"。三支：
+#   ① 位置谓语——**主语**（你/主人）+（现在）+ **在**（"你现在在留言板"/"主人现在就在
+#      物联网平台"）。刻意要求"在"前面是**主语**而不是"能"：`在` 当介词时（"你现在能
+#      **在物联网平台**控制 OLED"）与位置谓语同形，这一条把它分开；
+#   ② 时间标记 + 到达/开合动词（"页面**已经打开**啦"/"**现在**应该**能看到**设备控制台"）；
+#   ③ 明说"带你…"的移动句，不带时间词也算（"带你到物联网平台了"）。
+# 四处刻意的不收（都是实测出来的误伤面，不是审美）：
+#   · **"显示"**——那是 OLED 屏那一族的动词，不是页面位置；
+#   · **裸的"去/过去"**——"现在**就带你**去物联网平台"是**将来**（提议），与"已经带你
+#     到…"（完成）同形；只留"到/进/打开/开合/跳/登录/看到"，"带你过去**了**"由③支收；
+#   · **"在"前面是情态词**（"你现在**能**在物联网平台控制 OLED"）——那是介词短语，
+#     不是位置谓语；`在` 也不许是"现在/正在"里那个字（负向环视，否则"你现在"三个字
+#     自己就凑出一个"在"来）；
+#   · **窗口里有"刚才/之前/早先"这类纯过去词 ⇒ 整条不认**（20261002 补，误伤面：
+#     "主人**刚才**在留言板留的那条我看到了"——说的是主人**过去**的动作，不是他**现在**
+#     在哪页）。这一条对三支**一律**生效（见 `_claimed_paths` 的窗口检查）：它判的是
+#     **时态**，而①②③ 三支都可能被过去式的句子命中。带"已经"的**完成态**不算过去词
+#     （"主人已经在留言板了"说的是此刻的状态，该判）；"刚刚/方才"算——它们的完成态
+#     与"现在"无关，真要豁免有回执在场那条追述口径管。
+_NAV_PRESENT_WINDOW_RE = re.compile(
+    r"(?:你|您|主人|咱|本喵|泠月)[^\n。！？!?；;，,能会可不]{0,2}?"
+    r"(?:现在|已经|已|刚刚|方才|就|正)?[^\n。！？!?；;，,能会可不]{0,3}?(?<![现正])在"
+    r"|(?:现在|已经|已|刚刚|方才)[^\n。！？!?；;，,]{0,10}?"
+    r"(?:到|进|打开|开启|跳|登录|登陆|看到)"
+    r"|(?:带你|带主人)[^\n。！？!?；;，,]{0,6}?(?:了|啦|咯|喽|好了)")
+# 洞⑪ 自己的豁免表（**不复用洞① 那张**，20261002 实测）：洞① 的动词表是"帮你打开"
+# 那一族，句子里出现裸的情态词（能/会/想）多半是**能力罗列**，必须放过；而洞⑪ 要抓的
+# 现场句恰恰是「你现在应该**能**看到设备控制台了」——照抄那张表会把它整句豁免掉
+# （实测：拿 `_STATE_ACTION_EXEMPT_RE` 跑这条，返回空子句 = 漏判）。
+# 这里只留**否定 / 疑问 / 提议**三类（真值核不到的那三类："你不在留言板"是句真话，
+# 只是本判据不打算管）。
+# ⚠️ **"呢"不在这张表里**（20261002 实测）：它当语气词时常见得很（"主人，你现在在首页
+# 刷文章呢"），而它当疑问词时**根本不需要豁免**——真疑问句（"你现在在哪呢"）里没有
+# NAV_MAP 的页面名，`_claimed_paths` 本来就是空集。"吗/吧/么"留着：它们更多是真的在问
+# （"你在首页吧？"是猜测，不是断言）。
+_NAV_PRESENT_EXEMPT_RE = re.compile(
+    r"没|没有|未(?!读|知|审|阅|免)|不曾|从未|无法|不能|不用|不需要|无需|别|并不是|不是"
+    r"|可以|能够|如果|若是|要是|若|要不要|需要的话|建议|随时|待会|等下|马上|这就|接下来|准备|打算"
+    r"|你说|你问|你提到|引用|原话|么|吗|吧|[?？]")
+# 窗口半径：够装下"页面/应该/应该能"这类插入语，又不至于把隔壁子句的语气词捞进来。
+_NAV_WINDOW_PAD = 14
+# **纯过去**的时间词：窗口里出现它们 ⇒ 这句说的是过去的事，本族（"现在在 X 页"）不管。
+# 与 `_PHANTOM_PRIOR_RE`（追述豁免用的那张）**刻意分开**：那张还含"记录/历史"这类名词
+# （它要认的是"引台账"），混进来会把"主人现在在历史文章页"这种真话也放掉。
+_NAV_PAST_ONLY_RE = re.compile(r"刚才|刚刚|方才|之前|先前|早先|上回|上次|那会儿|当时")
+
+
+def _claimed_paths(clause: str) -> set:
+    """子句里"被声称主人现在所在/刚到"的页面路径集合（空集 = 不是在说位置，放行）。"""
+    out: set = set()
+    for alias, path in NAV_MAP.items():
+        if not path:
+            continue                      # 已下线的板块（友链…）：不参与位置核对
+        start = 0
+        while True:
+            i = clause.find(alias, start)
+            if i < 0:
+                break
+            start = i + 1
+            window = clause[max(0, i - _NAV_WINDOW_PAD):
+                            min(len(clause), i + len(alias) + _NAV_WINDOW_PAD)]
+            if _NAV_PAST_ONLY_RE.search(window):
+                continue                  # 说的是过去（"主人刚才在留言板…"）⇒ 不是在说现在
+            if _NAV_PRESENT_WINDOW_RE.search(window):
+                out.add(_norm_path(path))
+    return out
+
+
+def _nav_present_claim_clause(text: str, page_ctx: str,
+                              exec_memory: bool = False) -> str:
+    """零帧轮的「主人现在在 X 页」声称；返回**被否掉的子句**（"" = 放行）。
+
+    只在零帧轮跑（调用点见 `_zero_frame_families`——那张表专给"本轮什么都没发生"的
+    轮次用）⇒ 这一轮没有任何导航回执，所以"主人现在在 X 页"若是本轮动作的结果，
+    必然是编的。**但真值仍要核**：主人可能**本来就在**那一页（他自己点过去的、
+    上一轮跳的），那时这句话是真话，必须放行——只靠"零帧"判会误伤幂等轮。
+    """
+    live = _live_page_path(page_ctx)
+    if live is None:
+        return ""                        # 没有真值 ⇒ 不判（宁漏勿误伤）
+    veto = _prior_time_veto(exec_memory)
+    for s in _SENT_RE.split(text or ""):
+        for c in _CLAUSE_RE.finditer(s):
+            clause = c.group(0)
+            if _NAV_PRESENT_EXEMPT_RE.search(clause):
+                continue
+            if veto and veto(clause):
+                continue
+            claimed = _claimed_paths(clause)
+            if not claimed:
+                continue                 # 不是在说主人现在在哪
+            if live in claimed:
+                continue                 # 与主人**真在**的那页一致 ⇒ 陈述，不是编造
+            return clause
+    return ""
+
+
+def _nav_present_claim(text: str, page_ctx: str, exec_memory: bool = False) -> bool:
+    """`_nav_present_claim_clause` 的布尔壳（族表按 bool 调的那一半）。"""
+    return bool(_nav_present_claim_clause(text, page_ctx, exec_memory))
+
+
 # ── gate 洞⑨：零帧轮的**系统侧写动作**完成式声称（20260930）───────────────────
 # 事故实证（trace `20260930T123938`，主人全程可见，uid=1）：主人说「我的未读信息
 # 全部就标记为已读」（一条明确的祈使写请求），planner 判 chat（零工具，本轮 execute
@@ -2928,10 +3085,10 @@ _HONEST_GONE = ("没有", "不存在", "找不到", "无法识别", "没有找�
 class _ClaimFamily(NamedTuple):
     """零帧轮的一族声称（见 `_zero_frame_families`；为什么有这张表写在它上面）。"""
     issue: str                      # issue 码（trace 与兜底按它分族）
-    pred: Callable                  # 谓词；`needs` 非空时按 `(own, 豁免标志)` 调
+    pred: Callable                  # 谓词；`needs` 非空时按 `(own, *标志)` 调
     clause: Callable                # 取出"被否掉的那一句"（进 trace，20260921）
     fallback: str                   # 人设内兜底文案
-    needs: str = ""                 # "exec_memory" / "exec_search" / ""（不豁免）
+    needs: str | tuple = ""         # 标志名（见 `_FLAG_OF_NEEDS`）；**元组** = 要多个
     skills: tuple = ()              # 非空 = 只在这个技能上判（收窄，不是放宽）
     guard: Callable | None = None   # 额外的"此刻适不适用"（收尾轮豁免那类）
 
@@ -3001,6 +3158,15 @@ def _zero_frame_families(plan: dict, skill: str) -> list:
         _ClaimFamily("claim_without_tool",
                      _chat_tool_claim, _chat_tool_claim_clause,
                      _FALLBACK_CLAIM, skills=("chat",)),
+        # 洞⑪（20261002）：**用真值核**的那一族——"主人现在在 X 页"与页面上下文的
+        # `page=` 不符。要两个标志：`page_ctx`（真值）+ `exec_memory`（追述豁免）。
+        # 排在最后：同句同时像两族时，前面几族是更窄的词形判据，按它们记更准。
+        # ⚠️ 本族**不是"零帧轮"字面意义上的网**吗？是——它挂在零帧轮的表里，但判据
+        # 自己不读帧：它读的是**前端实时上报的位置**，所以主人后来自己翻页也不会被
+        # 误伤（一致即放行，见 `_nav_present_claim_clause`）。
+        _ClaimFamily("nav_present_claim_without_nav",
+                     _nav_present_claim, _nav_present_claim_clause,
+                     _FALLBACK_NAV_NO_FRAME, ("page_ctx", "exec_memory")),
     ]
 
 
@@ -3010,7 +3176,8 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                  has_popup: bool = False,
                  ledger: dict | None = None,
                  receipts: list | None = None,
-                 noop_specs: list | None = None) -> tuple[str, str, str] | None:
+                 noop_specs: list | None = None,
+                 page_ctx: str = "") -> tuple[str, str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本, **被否掉的那一句**)；有据/无声称 → None。
 
@@ -3105,13 +3272,21 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     # 各族按**表里的顺序**过（顺序即语义：复读要先于它夹带的声称、站内检索声称要先于
     # 站内"没有"结论）。谓词/子句/豁免/兜底文案全在表里，逐个说明也在那里。
     # 早退纪律不变：零帧轮的族**只**在这里跑——有帧轮走 `if frames_exist: return None`。
+    # 族表要用的"此刻的事实"标志（20261002 起支持元组，见 `_ClaimFamily.needs`）。
+    # `page_ctx` 是**前端实时上报**的访客位置/特效/夜间（洞⑪ 的真值来源）；它缺席时
+    # 洞⑪ 自己会放行（`_live_page_path` 认不出 ⇒ 不判），不需要在这里分岔。
+    _FLAG_OF_NEEDS = {"exec_memory": exec_memory,
+                      "exec_search": exec_search_evidence,
+                      "page_ctx": page_ctx}
     for fam in _zero_frame_families(plan, skill):
         if fam.skills and skill not in fam.skills:
             continue
         if fam.guard is not None and not fam.guard():
             continue
-        ex = exec_search_evidence if fam.needs == "exec_search" else exec_memory
-        args = (own, ex) if fam.needs else (own,)
+        # 标志按 `needs` 里写的顺序**位置传参**（洞⑪ 要 `page_ctx` + `exec_memory`）。
+        names = fam.needs if isinstance(fam.needs, tuple) else \
+            ((fam.needs,) if fam.needs else ())
+        args = (own, *(_FLAG_OF_NEEDS[n] for n in names)) if names else (own,)
         if fam.pred(*args):
             return (fam.issue, fam.fallback, fam.clause(*args) or "")
     if skill == "content_query":
@@ -3469,6 +3644,7 @@ _REPLAN_ISSUES = frozenset({
     "sys_write_claim_without_tool",      # 洞⑨：'这一轮系统真的办成了：…已标记为已读'而无帧
     "sys_fetch_claim_without_tool",      # 第三人称取数声称（'系统又重新拉了一遍'）而无帧
     "write_change_denial",               # 洞⑩：真改了东西却说"这一轮什么都没改"（反向的假话）
+    "nav_present_claim_without_nav",     # 洞⑪：'你现在能看到设备控制台了'而 page= 在首页
 })
 
 # 打回提示里"两条出路"的措辞**按族分**：同一句"去查一遍"写给写族是**指错路**
@@ -3493,6 +3669,18 @@ _REPLAN_ADVICE = {
         "- 确实不需要取（纯闲聊/解释概念）→ SKILL=chat 老实作答。",
         "**不许**替系统声称取过数据（「系统又重新拉了一遍」）——除非本轮真的有对应的"
         "工具帧。",
+    ],
+    # 洞⑪（20261002）：主人**现在在哪一页**是系统事实（页面上下文的 `page=`），
+    # 不是模型能安排的。两条出路：真的带他过去（页面站内存在）／如实说没有这个页面
+    # （站内不存在）。**都不许**声称"已经带你到了"——本轮的导航回执是空的。
+    "nav_present_claim_without_nav": [
+        "- 主人**现在在哪一页**是**系统事实**（页面上下文里的 `page=` 字段，由浏览器"
+        "实时上报），照它说就行——不是你安排的，也不是你能改口说成别处的；",
+        "- 若主人这一轮是要你**带他过去**：那个页面站内存在（首页/留言板/说说/时间轴/"
+        "关于我/物联网平台/后台）⇒ 选 navigate 技能、把目标填对；**站内没有那个名字**"
+        "⇒ 如实说站内没有这个页面，并把他真能去的那几个列给他；",
+        "**不许**出现「已经带你到了/页面已经打开了/你现在能看到 X」这类说法——"
+        "除非本轮真的有对应的导航命令回执。",
     ],
     # 洞⑩ 是上一条的**镜像**：写**真的发生了**，被说成了没发生。这里的方向不是
     # "再去做一遍"（做了也没有用：状态已经是目标值），而是**照回执如实说**。
@@ -8407,7 +8595,11 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                          _has_exec_memory(msgs, state.get("ledger")), _exec_memory_has_search(msgs),
                          has_popup=bool(state.get("pending_confirm")),
                          ledger=state.get("ledger"), receipts=receipts,
-                         noop_specs=state.get("noop_specs"))
+                         noop_specs=state.get("noop_specs"),
+                         # 洞⑪ 的真值来源：前端实时上报的访客位置（见 `_live_page_path`）。
+                         # 取法与 planner/model 同一处（`_page_ctx` 扫首条 [System: …]），
+                         # 角色只影响能力清单，判据不看那一半。
+                         page_ctx=_page_ctx(msgs, _principal_of(config).known_role))
     if issue:
         i_name, i_text, i_clause = issue
         return fail(i_name, i_text, plan, len(frames), i_clause)
