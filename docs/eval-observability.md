@@ -4,6 +4,14 @@
 > 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、[问题记录.md](问题记录.md)（事故与根因）、
 > [agent-eval-report-20260924.md](agent-eval-report-20260924.md)（20260924 覆盖面盘点、口径审查、一次全量跑的读数与逐条定性）。
 > 部署与运维细节（服务名、路径、可复制命令）属私有运行簿，不进仓库。
+> 2026-10-01 晚（**`require_zero_exec` 从"整轮零工具"收窄成"零后台写"**）：这个键 20260925 立
+> 的时候想锁的是"弹卡轮一个写都没发生"，实现却写成"planner 一个工具调用都没有"——**读也算**。
+> 存档里它的全部 6 次红都是读工具（`list_dashboard_todos`×3、`get_moderation_status`×2、
+> `list_guestbook`、`get_user_stats`、`list_tags`），而每一次 `exec` 侧都是空的：写保护从来没
+> 破过，红的一直是"接地那一次读"。收窄后它只看写（工具全集取自同一个 `authz.TOOL_SCOPE` 哨兵，
+> 与 `forbid_tool_calls` 的 `@write_console` 同源 ⇒ 新增写工具时一起收紧）；要"连读都不许"的
+> 用例用 `no_tool_calls`（8 个消费者，语义就是字面意思）。`tests/judge_offline_test.py` 的形状
+> 侧加了正向（只读 ⇒ 过）与反向（读写混着 ⇒ 照旧红）两条对照。
 > 2026-10-01（**判据的前提有两类，从今天起两类都有守卫**）：一条 golden 判据站在一个它自己
   不拥有的前提上——"这个 uid 存在且是活的某角色"（**身份前提**）或"这件信息这个角色拿不到"
   （**事实前提**）。两者原先都靠运气：身份前提 20260926 起有 `eval/identity_preflight.py`

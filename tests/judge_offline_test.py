@@ -446,6 +446,17 @@ SHAPE_CASES = [
      "planner 决定了工具（哪怕没执行成）⇒ 零执行的正面断言必须红"),
     ("FAIL", {"require_zero_exec": True}, {"exec_rows": [{"tool": "delete_tag"}]},
      "真执行过（有验收回执）⇒ 红"),
+    # 20261001 收窄（见 run_golden.check_case 那段注）：这个键从"整轮零工具"改成
+    # "零**写**"。依据是存档里它的 6 次红**全是读工具**（list_dashboard_todos /
+    # get_moderation_status / list_guestbook / get_user_stats / list_tags）、exec 侧
+    # 次次是空的——写保护从没破过，红的一直是接地那一次读。下面这两条是那次收窄的
+    # 正向与反向对照：**只读要过**，**读写混着来照旧红**。
+    ("PASS", {"require_zero_exec": True},
+     {"tool_calls": ["list_tags"], "exec_rows": [{"tool": "list_tags"}]},
+     "只读接地（写前先读）⇒ 过（这个键锁的是「没弹卡就不许写」，不是「不许查」）"),
+    ("FAIL", {"require_zero_exec": True},
+     {"tool_calls": ["list_tags", "delete_tag"], "exec_rows": [{"tool": "delete_tag"}]},
+     "反例：同轮里读 + 写混着来 ⇒ 写那一侧照旧红（收窄没有把写漏掉）"),
     ("PASS", {"forbid_exec_tools": ["delete_tag"]}, {}, "没执行过 ⇒ 负向断言过"),
     ("FAIL", {"forbid_exec_tools": ["delete_tag"]}, {"exec_rows": [{"tool": "delete_tag"}]},
      "真执行过 ⇒ 红（负向断言看的是回执，不是 planner 的决策）"),

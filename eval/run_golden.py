@@ -1012,8 +1012,9 @@ def expand_token_list(lst: list) -> list:
     会静默退化成"什么都不禁"，方向与用例本意相反（同 `DENIAL_FAMILY` 那条纪律：
     判据坏掉要响，不要静默地变松）。
 
-    现在有两个消费者：判据侧（`forbid_tool_calls`）与前提侧（`premise_absent.suppliers`）。
-    两处问的是同一件事——"后台写工具是哪几个"——所以共用这一份实现，谁也别手抄。
+    现在有三个消费者：判据侧 `forbid_tool_calls`、判据侧 `require_zero_exec`（20261001
+    收窄后按同一份写工具全集判"零写"）、前提侧 `premise_absent.suppliers`。三处问的是
+    同一件事——"后台写工具是哪几个"——所以共用这一份实现，谁也别手抄。
     """
     if not any(t in FORBID_TOKENS for t in lst):
         return list(lst)
@@ -1152,8 +1153,10 @@ GOLD_ASSERT_KEYS = frozenset({
     "require_exec_tools", "require_exec_args", "require_arg_from_result",
     # 回执**文本**（20260926，真写用例专用）：args 对了不等于"那件事真的发生了"
     "require_exec_result",
-    # 零执行（20260925 双轮）：第 1 轮"只弹卡、一个写都没发生"的**正面**断言，
-    # 与第 2 轮的 require_exec_tools 配对（`forbid_exec_tools` 是它的负向孪生）
+    # 零**写**执行（20260925 双轮，20261001 收窄）：第 1 轮"只弹卡、一个后台写都没
+    # 发生"的**正面**断言，与第 2 轮的 require_exec_tools 配对（`forbid_exec_tools`
+    # 是它的负向孪生）。**读不算**（收窄的依据见 check_case 那段注）：要"连读都不许"
+    # 的用例用 `no_tool_calls`。
     "require_zero_exec", "forbid_exec_tools",
     # 控制帧与终局
     "require_frame_prefix", "forbid_frame_prefix", "forbid_fallback",
@@ -1325,17 +1328,31 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
     for t in gold.get("require_exec_tools", []):
         if t not in result["exec_tools"]:
             fails.append(f"checker 验收回执缺少工具 {t}（exec：{result['exec_tools']}）")
-    # 20260925：**零执行**的正面断言。此前 11 条弹卡用例只有 `forbid_tool_calls`
+    # 20260925：**零写执行**的正面断言。此前 11 条弹卡用例只有 `forbid_tool_calls`
     # （点名几个不许调的工具）——那不是"一个写都没发生"：漏点一个、或将来新增一个写
-    # 工具，用例照样绿。本键断言的是**整轮零执行**：planner 侧一个工具调用都没有，
-    # 且 checker 侧一条验收回执都没有（回执只由 PASS 执行产生 ⇒ 零回执 = 没有任何
-    # 成功执行）。它与第 2 轮的 `require_exec_tools` 配对：第 1 轮零执行、第 2 轮真执行。
+    # 工具，用例照样绿。本键断言的是**这一轮一个后台写都没落地**：planner 侧没有写工具
+    # 调用，且 checker 侧没有写工具的验收回执（回执只由 PASS 执行产生 ⇒ 零回执 = 没有
+    # 任何成功执行）。它与第 2 轮的 `require_exec_tools` 配对：第 1 轮零写、第 2 轮真写。
+    #
+    # **20261001 收窄：只看写、不再把读也算进去**（这个键此前断言的是"整轮零工具"，读也
+    # 算）。依据是实测：存档里这个键的**全部 6 次红都是读工具**——`list_dashboard_todos`
+    # ×3、`get_moderation_status` ×2、`list_guestbook`、`get_user_stats`、`list_tags`，
+    # 而每一次 `exec` 侧都是空的（一个写都没发生）。也就是说它一直在红"接地那一次读"，
+    # 而写保护那一侧从来没破过：用例要锁的性质是"没弹卡就不许写"，不是"不许查"。
+    # 想真的一条工具都不许调（含读）的用例用 `no_tool_calls`（它有 8 个消费者，语义
+    # 就是字面意思）；本键从此与 `forbid_tool_calls` 的 `@write_console` 哨兵**同源**
+    # （同一份 `authz.TOOL_SCOPE`，新增写工具时一起收紧，零人工同步）。
     if gold.get("require_zero_exec"):
-        if result["tool_calls"] or result["exec_rows"]:
+        _wtools = set(expand_token_list(["@write_console"]))  # 展开成空集会抛，同 forbid 侧
+        _wcalls = [t for t in result["tool_calls"] if t in _wtools]
+        _wreceipts = [r.get("tool") for r in result["exec_rows"]
+                      if isinstance(r, dict) and r.get("tool") in _wtools]
+        if _wcalls or _wreceipts:
             fails.append(
-                "本轮应零执行（planner 未决定任何工具、checker 未验收任何执行），实际："
-                f"tool_calls={result['tool_calls']}，"
-                f"exec={[r.get('tool') for r in result['exec_rows']]}")
+                "本轮应零写执行（后台写工具一个都不许调用、也不许有验收回执），实际："
+                f"写工具的 planner 调用={_wcalls}，写回执={_wreceipts}；"
+                f"（本轮全部调用={result['tool_calls']}，"
+                f"全部回执={[r.get('tool') for r in result['exec_rows'] if isinstance(r, dict)]}）")
     # `require_exec_tools` 的负向孪生（20260925）：这些工具不得出现在**验收回执**里。
     # 与 `forbid_tool_calls` 的分工：那个看 planner 的决策，这个看真被执行过——排查
     # "决定了但没执行" 与 "真执行了" 两件事时，这两个信号必须分得开。
