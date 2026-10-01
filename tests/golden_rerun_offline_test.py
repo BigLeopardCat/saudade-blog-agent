@@ -266,8 +266,18 @@ try:
                argv_extra=["--only", "reg_a"], tmp=_tmp)
     # 注意 ⑥ 与 ⑤ 的判据不同：⑤ 的目录里从来没有基线（读回 None = 没写），
     # ⑥ 的目录里**已经有**基线，所以"没写"的判据是"读回来的还是上一轮那份"。
+    #
+    # 读**最新**那份（`archived[-1]`），不是 `archived[0]`（20261002）：这个目录里先跑过
+    # 一次全量，`archived[0]` 恒是它（文件名是秒级时间戳、按时间排序），拿它当"这一轮
+    # 自己的留档"读出来的总是 total=2。此前这条能绿，靠的是**留档被覆盖**这个缺陷——
+    # 两次跑落在同一秒时 `runs/<ts>.json` 同名，后写的把那一次覆盖掉，目录里只剩一份
+    # （恰好是这一轮的）。同一秒撞车一旦不发生（两次跑跨过秒边界），这条就红。判据要测
+    # 的是"这一轮自己那份是 total=1"，两种时序下都得成立。
+    _own = (json.load(open(r2["archived"][-1], encoding="utf-8"))
+            if r2["archived"] else None)
     check("--only 这一轮自己的留档是 total=1（它确实只跑了 1 条）",
-          r2["archived_doc"]["total"] == 1, str(r2["archived_doc"]["total"]))
+          _own is not None and _own["total"] == 1,
+          f"{(_own or {}).get('total')}（目录里 {len(r2['archived'])} 份留档）")
     check("而读回来的基线仍是 total=2（两份文件各说各话，基线归全量）",
           r2["report"]["total"] == 2, str(r2["report"]["total"]))
     _after = json.load(open(os.path.join(_tmp, "eval", "report", "last_run.json"),
