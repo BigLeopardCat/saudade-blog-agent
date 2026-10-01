@@ -1133,35 +1133,46 @@ finally:
 
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⑯ 报待办时连带报出待审留言（第二个读带 status=pending，且是后台读）")
+print("\n⑯ 报待办时连带报出后台首页上并排的两类「等着你处理」"
+      "（留言待审 + 额度重置申请，两个读都带 status=pending，且都是后台读）")
 
 from agent.skills import SKILL_MAP  # noqa: E402
 
 _todo_read = SKILL_MAP["dashboard_todo_list"]
 _tp = instantiate_plan("dashboard_todo_list", {}, role="admin")
-check("技能展开成**两个**工具：待办清单 + 留言审核状况",
+check("技能展开成**三个**工具：待办清单 + 留言审核状况 + 额度重置申请",
       _tp["tools"] == ['list_dashboard_todos({})',
-                       'get_moderation_status({"status": "pending"})'],
+                       'get_moderation_status({"status": "pending"})',
+                       'list_quota_requests({"status": "pending"})'],
       str(_tp["tools"]))
-check("第二个读**必须带 status=pending**（报表的 focus 只展开待审那一类 ⇒ 帧不膨胀；"
+check("后两个读**都必须带 status=pending**（报表的 focus 只展开待审那一类 ⇒ 帧不膨胀；"
       "不带参数的形态一次列三份名单）",
-      any("pending" in t for t in _tp["tools"] if t.startswith("get_moderation_status")))
+      any("pending" in t for t in _tp["tools"] if t.startswith("get_moderation_status"))
+      and any("pending" in t for t in _tp["tools"] if t.startswith("list_quota_requests")))
 check("它是**只读**技能（不在写名单里、清单里没有写工具）",
       "dashboard_todo_list" not in WRITE_SKILL_NAMES
       and not any(t.split("(")[0] in {"create_dashboard_todo", "complete_dashboard_todo"}
                   for t in _tp["tools"]))
-check("完成判定要求**两个**工具都返回（只等第一个 ⇒ 第二个没跑也当收尾轮）",
+check("完成判定要求**三个**工具都返回（只等前两个 ⇒ 额度那个没跑也当收尾轮，"
+      "而它正是主人报「额度重置也在日程里面，他也不查」时缺的那一路）",
       "list_dashboard_todos" in _todo_read.complete_when
-      and "get_moderation_status" in _todo_read.complete_when,
+      and "get_moderation_status" in _todo_read.complete_when
+      and "list_quota_requests" in _todo_read.complete_when,
       _todo_read.complete_when)
-check("回复契约分开写两段口径（待办逐条照抄 / 审核只报待人工复批那部分，明细不展开）",
+check("回复契约分开写**三段**口径（待办逐条照抄 / 审核只报待人工复批那部分，明细不展开 / "
+      "额度申请逐份说清，不许只念计数）",
       "逐条" in _todo_read.reply_contract
       and "待人工复批" in _todo_read.reply_contract
-      and "moderation_report" in _todo_read.reply_contract)
-check("  并写明 0 条也要说出来、读不到不许当成 0 条（两句缺一，"
+      and "moderation_report" in _todo_read.reply_contract
+      and "额度重置申请" in _todo_read.reply_contract
+      and "只念一句计数" in _todo_read.reply_contract)
+check("  审核段写明 0 条也要说出来、读不到不许当成 0 条（两句缺一，"
       "「没查」与「查了没有」在答复里就同形）",
       "0 条" in _todo_read.reply_contract and "不许**当成 0 条" in _todo_read.reply_contract)
-check("技能仍只对管理员开放（读的是后台留言管理视图；普通用户拿不到这两个读）",
+check("  额度段同一形状（0 份要说、读不到不许当 0 份）——两段的空/读不到纪律必须对称，"
+      "否则弱的那一段会变成「读不到 = 没有」的暗门",
+      "0 份" in _todo_read.reply_contract and "不许**当成 0 份" in _todo_read.reply_contract)
+check("技能仍只对管理员开放（读的是后台留言管理视图；普通用户拿不到这几个读）",
       _todo_read.roles and ROLE_ADMIN in _todo_read.roles
       and ROLE_USER not in _todo_read.roles,
       str(sorted(_todo_read.roles)))
