@@ -639,10 +639,12 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
     # "谈谈你对穹妹的看法"未完成，模型整篇回复穹妹）。正常轮次严格成对
     # （user→assistant），user 后非 assistant 即孤儿，整条跳过不注入。
     # 事实行剥离（20261002，`agent/factblock.strip_fact_lines`）：气泡最前面那块
-    # 「〔系统〕 页面已跳转：…」是**系统**印的，却随回复一起落库 ⇒ 下一轮作为 assistant
-    # 历史回到模型眼前时就变成了"它自己说过的话"。生产实证（trace `20261001T230954`）：
-    # 那一轮只跑了 OLED 显示、一次导航都没有，narrator 却把上一轮那句「页面已跳转：
-    # …/device-console/」原样抄在本轮回复开头（主人报的"显示两行已经转跳"）。
+    # 「〔系统〕 …」是**系统**印的，却随回复一起落库 ⇒ 下一轮作为 assistant 历史回到
+    # 模型眼前时就变成了"它自己说过的话"（判据是**行首标记**，与族无关；族的射程
+    # 20261002 收窄到写族，见 `agent/factblock.py` 的 `BLOCK_FAMILIES`）。生产实证
+    # （trace `20261001T230954`）：那一轮只跑了 OLED 显示、一次导航都没有，narrator 却
+    # 把上一轮那句「页面已跳转：…/device-console/」原样抄在本轮回复开头（主人报的
+    # "显示两行已经转跳"）。
     # 抹完为空的轮次**整轮不注入**（它的 assistant 侧一个字都不是模型说的）：留一条空
     # 的 assistant 会让模型把上一轮的用户问题当成待答问题——正是上面那条"孤儿 user"
     # 注释里的坑，方向相反而已。
@@ -710,9 +712,10 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
     full_reply = ""
     nav_line = ""
     exec_rows: list = []  # 跨轮执行记忆（20260904 C3）：checker 验收回执，累计语义末批即全量
-    # 动作事实块（20260927 D3）：命令族/写族的事实由系统印在正文最前面（与流式那半
-    # 同源同序，`agent/factblock.py`）。这里不流式，所以整块一次算：回执是累计语义，
-    # 末批即全量 ⇒ 每次覆盖成最新全量即可（`compose` 在末尾拼）。
+    # 动作事实块（20260927 D3）：**写族**的事实由系统印在正文最前面（与流式那半同源
+    # 同序，`agent/factblock.py`；命令族 20261002 起不印，见那边的 `BLOCK_FAMILIES`）。
+    # 这里不流式，所以整块一次算：回执是累计语义，末批即全量 ⇒ 每次覆盖成最新全量即可
+    # （`compose` 在末尾拼）。命令族纯轮次算出来是空串，`compose` 幂等地不拼。
     fact_block = ""
     for mode, data in _agent.stream(
         graph_input(messages, ledger=ledger or {}),
@@ -1069,12 +1072,16 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                 queue.put(f"__RESET__:{scope}:{reason}"), loop).result()
 
         def emit_facts(rows: list):
-            """动作族事实块（D3）：把**还没印过**的事实行发给主人（增量、按文本去重）。
+            """事实块（D3）：把**还没印过**的事实行发给主人（增量、按文本去重）。
 
             发在 execute update 里是刻意的：那一刻 execute 节点已收尾、narrator 的
             model 节点还没跑（同段代码里 `__CMD__` 帧的注释讲的是同一条时序）⇒
             主人读到的顺序恒为"事实 → 包装"。块尾留一个空行（markdown 里单换行会被
-            并进同一段，"跳转：…好，我带你过去了"会连成一句）。"""
+            并进同一段，"跳转：…好，我带你过去了"会连成一句）。
+
+            **命令族（跳转/特效/夜间）不在射程内**（20261002）：`action_facts` 只收
+            写族。那一族的效果主人当场看得见，那句话交回给泠月自己说——所以这里对
+            纯命令轮**一行都不发**（`fresh` 为空直接返回，正文从 narrator 开始）。"""
             nonlocal prelude
             fresh = [x for x in action_facts(rows) if x not in fact_sent]
             if not fresh:
@@ -1277,8 +1284,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                             asyncio.run_coroutine_threadsafe(
                                 queue.put("__EXEC__:" + json.dumps(new_rows, ensure_ascii=False)),
                                 loop).result()
-                        # 动作族事实块（D3）：紧随 `__CMD__` 之后发（命令是机器读的，
-                        # 块是给人读的），仍早于 narrator 的任何文本。
+                        # 事实块（D3）：紧随 `__CMD__` 之后发，仍早于 narrator 的任何
+                        # 文本。**命令族不发**（效果主人看得见，那句话归泠月）——
+                        # 只有写族会真有内容，纯导航轮这里是个空操作。
                         emit_facts(rows)
                     for b in ex_upd.get("blocked") or []:
                         # ✗ 行在前、✅ 行在后（本轮两列表分开到达，不混排）；

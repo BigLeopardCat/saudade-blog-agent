@@ -47,7 +47,8 @@ sys.path.insert(0, str(ROOT))
 import agent.graph as g  # noqa: E402
 from agent.factblock import (  # noqa: E402
     FACT_MARK, FAMILY_CMD, FAMILY_DATA, FAMILY_WRITE, action_facts, block_of,
-    compose, family_of, is_action_family, render_fact_block, strip_fact_lines,
+    compose, family_of, is_action_family, is_block_family, render_fact_block,
+    strip_fact_lines,
 )
 from agent.graph import build_graph, graph_input  # noqa: E402
 from agent.principal import Principal  # noqa: E402
@@ -68,6 +69,8 @@ _RCPT_CMD = {"skill": "effect", "tool": "toggle_effect", "args": {"effect": "sak
              "cmd": {"kind": "effect", "effect": "sakura", "action": "on"}, "ts": 0}
 _RCPT_WRITE = {"skill": "admin_notes", "tool": "create_tag", "args": {"name": "音乐"},
                "result": "标签「音乐」已创建", "ts": 0}
+_RCPT_WRITE2 = {"skill": "admin_notes", "tool": "update_tag", "args": {"name": "音乐"},
+                "result": "标签「音乐」已改名「歌单」", "ts": 0}
 _RCPT_DATA = {"skill": "content_query", "tool": "search_notes", "args": {"keyword": "x"},
               "result": '[{"id": 46, "title": "架构"}]', "ts": 0}
 
@@ -95,20 +98,26 @@ def test_family_of():
 
 
 def test_action_facts():
-    print("\n[取事实] 只取族内、去重、保序、跳过错误帧")
+    print("\n[取事实] 只取写族、去重、保序、跳过错误帧")
     got = action_facts([_RCPT_CMD, _RCPT_DATA, _RCPT_WRITE])
-    check("数据族不进事实块（它返回的是 JSON）",
-          got == [_RCPT_CMD["result"], _RCPT_WRITE["result"]], str(got))
+    check("命令族不进事实块（效果在主人眼前，那句话归泠月自己说）",
+          got == [_RCPT_WRITE["result"]], str(got))
+    check("  数据族也不进（它返回的是 JSON）",
+          _RCPT_DATA["result"] not in got, str(got))
+    check("  **分类没变**：命令族仍是动作族，只是不印（改的是射程不是分族）",
+          is_action_family(_RCPT_CMD) and not is_block_family(_RCPT_CMD))
+    check("纯命令轮 ⇒ 一行都不印（事实块整个不发生，正文从 narrator 开始）",
+          action_facts([_RCPT_CMD]) == [] and block_of([_RCPT_CMD]) == "")
     check("顺序＝执行顺序（receipts 是累计语义）",
-          action_facts([_RCPT_WRITE, _RCPT_CMD]) == [_RCPT_WRITE["result"], _RCPT_CMD["result"]])
+          action_facts([_RCPT_WRITE, _RCPT_WRITE2]) == [_RCPT_WRITE["result"], _RCPT_WRITE2["result"]])
     check("同一次动作重复执行只印一行（主人不该读到三行一样的话）",
-          action_facts([_RCPT_CMD, _RCPT_CMD, _RCPT_CMD]) == [_RCPT_CMD["result"]])
+          action_facts([_RCPT_WRITE, _RCPT_WRITE, _RCPT_WRITE]) == [_RCPT_WRITE["result"]])
     check("__ERROR__ 不是事实",
-          action_facts([{**_RCPT_CMD, "result": "__ERROR__: 未知工具"}]) == [])
+          action_facts([{**_RCPT_WRITE, "result": "__ERROR__: 未知工具"}]) == [])
     check("空 result 不算一行",
-          action_facts([{**_RCPT_CMD, "result": "   "}]) == [])
+          action_facts([{**_RCPT_WRITE, "result": "   "}]) == [])
     check("形状不对的项跳过，不抛",
-          action_facts([None, "x", 42, _RCPT_CMD]) == [_RCPT_CMD["result"]])
+          action_facts([None, "x", 42, _RCPT_WRITE]) == [_RCPT_WRITE["result"]])
     check("None/空列表安全", action_facts(None) == [] and action_facts([]) == [])
 
 
@@ -120,12 +129,15 @@ def test_render_and_compose():
     check("  已经盖过标记的行不重复盖（幂等）",
           render_fact_block([FACT_MARK + "x"]) == FACT_MARK + "x")
     check("块 = action_facts + render 的组合壳",
-          block_of([_RCPT_CMD]) == FACT_MARK + _RCPT_CMD["result"])
+          block_of([_RCPT_WRITE]) == FACT_MARK + _RCPT_WRITE["result"])
     # 标记只盖在**印出来的那一份**上：工具回执（模型看到的证据）一字未动——
     # `tools/base.py` 那行 result 是模型的判据（graph.py 的"无前缀中文事实"注释）
     check("回执原文一字未动（模型的证据不带标记，标记只在给人读的那份上）",
+          _RCPT_WRITE["result"] == "标签「音乐」已创建"
+          and render_fact_block(action_facts([_RCPT_WRITE])) == FACT_MARK + _RCPT_WRITE["result"])
+    check("  命令族的回执**照样一字未动**（它只是不印了，模型看到的证据不变）",
           _RCPT_CMD["result"] == "特效 樱花(sakura) 已打开"
-          and render_fact_block(action_facts([_RCPT_CMD])) == FACT_MARK + _RCPT_CMD["result"])
+          and action_facts([_RCPT_CMD]) == [])
     check("块在前、空行分隔（单换行会被 markdown 并成一句）",
           compose("事实行", "包装文字") == "事实行\n\n包装文字")
     check("正文已以块开头 ⇒ 不重复印（gate 兜底的替代文本**就是**块）",
@@ -267,8 +279,8 @@ class _ScriptedLLM:
 
 
 class _FakeTool:
-    def __init__(self, result):
-        self.name = "toggle_effect"
+    def __init__(self, result, name="toggle_effect"):
+        self.name = name
         self.result = result
         self.calls: list = []
 
@@ -279,30 +291,50 @@ class _FakeTool:
 
 _PLAN_EFFECT = 'SKILL: effect\nPARAMS: {"effect": "sakura", "action": "on"}'
 _PLAN_CHAT = "SKILL: chat\nPARAMS: {}"
-_FACT_LINE = "特效 樱花(sakura) 已打开"
-_FACT_BLOCK = FACT_MARK + _FACT_LINE   # 主人读到的那一份（带说话人标记）
+_FACT_LINE = "特效 樱花(sakura) 已打开"          # 命令族：**不印**（20261002）
+_FACT_BLOCK = FACT_MARK + _FACT_LINE
+
+# 写族（**系统印这一族**）——两笔夹具都用它，理由见 `agent/factblock.py` 的
+# `BLOCK_FAMILIES`：`add_favorite` 是写族里最轻的一件（自己的数据、不弹卡、无管理
+# 角色要求、不需要确认令牌），离线真图上跑得通；`create_tag` 走 `_ALWAYS_CONFIRM_TOOLS`
+# ⇒ 测试环境没有 jwt_secret 时它连工具都到不了（会停在 consent_required）。
+_PLAN_FAV = 'SKILL: favorite_add\nPARAMS: {"article_id": 46}'
+_FAV_MSG = "把文章 46 收藏一下"
+_FACT_WRITE_LINE = "已收藏文章 46"
+_FACT_WRITE_BLOCK = FACT_MARK + _FACT_WRITE_LINE
 
 
-def _run_graph(plans, narrations, result=None):
+def _run_graph(plans, narrations, result=None, tool_name="toggle_effect",
+               message="把樱花打开", role=None):
+    """跑一轮**真图**（不是假 producer）。两个夹具形态由 `tool_name` 决定：
+
+    · `toggle_effect`（命令族）——验"不印但帧还在"（20261002 的新契约）；
+    · `add_favorite`（写族）——验"印了、且族内帧从两个记录段摘掉"。
+    """
     llm = _ScriptedLLM(plans, narrations)
-    tool = _FakeTool(result or _base.ok(
-        _FACT_LINE, {"cmd": {"kind": "effect", "effect": "sakura", "action": "on"}}))
+    if tool_name == "toggle_effect":
+        default = _base.ok(
+            _FACT_LINE, {"cmd": {"kind": "effect", "effect": "sakura", "action": "on"}})
+    else:
+        default = _base.ok(_FACT_WRITE_LINE)
+    tool = _FakeTool(result or default, name=tool_name)
     events: list = []
-    orig_llm, orig_record, orig_tool = g.get_llm, g.record, g._TOOL_MAP.get("toggle_effect")
+    orig_llm, orig_record, orig_tool = g.get_llm, g.record, g._TOOL_MAP.get(tool_name)
     g.get_llm = lambda **kw: llm
     g.record = lambda node, event, **data: events.append((node, event, data))
-    g._TOOL_MAP["toggle_effect"] = tool
+    g._TOOL_MAP[tool_name] = tool
     try:
         cfg = {"configurable": {"thread_id": "t-factblock", "user_id": 5,
-                                "principal": Principal(uid=5),
+                                "principal": Principal(uid=5) if role is None
+                                else Principal(uid=5, role=role),
                                 "conversation_id": 1, "stop_event": None}}
-        out = build_graph().invoke(graph_input([HumanMessage(content="把樱花打开")]), cfg)
+        out = build_graph().invoke(graph_input([HumanMessage(content=message)]), cfg)
     finally:
         g.get_llm, g.record = orig_llm, orig_record
         if orig_tool is None:
-            g._TOOL_MAP.pop("toggle_effect", None)
+            g._TOOL_MAP.pop(tool_name, None)
         else:
-            g._TOOL_MAP["toggle_effect"] = orig_tool
+            g._TOOL_MAP[tool_name] = orig_tool
     return out, llm, tool, events
 
 
@@ -311,26 +343,67 @@ def _system_prompt(llm: "_ScriptedLLM") -> str:
     return str(llm.model_prompts[-1][0].content)
 
 
-def test_graph_wiring():
-    print("\n[真图] 事实块进提示词、族内帧从记录段摘掉、复述只记不判")
+def test_graph_command_round_not_printed():
+    """**20261002 的新契约**（主人拍板：命令族不印）：一轮真跳了页/开了特效的对话——
+
+    ① 系统**不印**那一行（气泡里只有泠月的话）；② 但工具帧与回执**一个字都不摘**
+    （`_drop` 由 `is_block_family` 算，不是 `is_action_family`）：那是 narrator 唯一的
+    依据，它得自己把这件事说出来；③ 那一格是**占位文本**而不是"本轮没有动作族执行"
+    ——后者在一轮真的执行过的对话里是句假话，会把 narrator 引到"什么都没干"；
+    ④ 5g（复述式声称）**不再命中这一族**：系统不印了，"那句话"就该由泠月说，
+    再罚它就是罚它去做被要求的事。
+    """
+    print("\n[真图·命令族] 不印、但帧照给；那句话归 narrator 自己说")
     out, llm, tool, events = _run_graph([_PLAN_EFFECT, _PLAN_CHAT], ["已经帮你打开啦～"])
     check("脚本足够跑完这一轮（没有靠「脚本用尽」混过去）",
           llm.exhausted == [], str(llm.exhausted))
     check("动作工具真的执行了一次", len(tool.calls) == 1, str(tool.calls))
     sys_p = _system_prompt(llm)
-    check("提示词里有 [本轮动作事实] 段与那行事实",
-          "[本轮动作事实]" in sys_p and _FACT_LINE in sys_p)
+    check("**没有** model/fact_block 事件（命令族不进印出射程）",
+          ("model", "fact_block") not in [(n, e) for n, e, _ in events],
+          str([(n, e) for n, e, _ in events]))
+    check("  印出那一格是**占位**，且占位写的是「没有代印」不是「没有执行」",
+          "本轮没有系统代印的事实" in sys_p
+          and "本轮没有动作族执行" not in sys_p)
+    check("  占位里点名了「那几句话由你自己说」（否则模型以为系统还会说一遍）",
+          "那几句话由你自己说" in sys_p)
+    check("工具帧**照给**（没被摘掉：它是 narrator 唯一的依据）",
+          _FACT_LINE in sys_p and "本轮这些工具返回已由系统印给主人" not in sys_p,
+          str([ln for ln in sys_p.splitlines() if _FACT_LINE in ln]))
+    check("  回执段的兜底句也没被触发（回执原样在提示词里）",
+          "本轮已验收的执行都已由系统印给主人" not in sys_p)
+    check("5g 不再对命令族记事件（系统不印了，那句话本就该泠月说）",
+          ("gate", "action_restate") not in [(n, e) for n, e, _ in events],
+          str([(n, e) for n, e, _ in events]))
+    check("最终回复就是 narrator 那句（没被替换）",
+          str(out["messages"][-1].content).strip() == "已经帮你打开啦～",
+          repr(str(out["messages"][-1].content)[:40]))
+
+
+def test_graph_wiring():
+    print("\n[真图·写族] 事实块进提示词、族内帧从记录段摘掉、复述只记不判")
+    out, llm, tool, events = _run_graph(
+        [_PLAN_FAV, _PLAN_CHAT], ["已经帮你收藏啦～"],
+        tool_name="add_favorite", message=_FAV_MSG)
+    check("脚本足够跑完这一轮（没有靠「脚本用尽」混过去）",
+          llm.exhausted == [], str(llm.exhausted))
+    check("写工具真的执行了一次（真回执，不是弹窗截停）",
+          len(tool.calls) == 1 and [r.get("tool") for r in out.get("receipts") or []]
+          == ["add_favorite"], str(tool.calls))
+    sys_p = _system_prompt(llm)
+    check("提示词里有 [本轮已由系统印出的事实] 段与那行事实",
+          "[本轮已由系统印出的事实]" in sys_p and _FACT_WRITE_LINE in sys_p)
     check("  系统明说那几行**已经印在气泡最前面**（否则模型会以为主人没看到、去复述）",
           "已经印在气泡最前面" in sys_p)
     check("族内事实从 [本轮工具执行记录] 摘掉了（同一份事实出现两次＝邀请复述）",
           "[本轮工具执行记录]" in sys_p
-          and "本轮动作族的工具返回已在上面的" in sys_p)
+          and "本轮这些工具返回已由系统印给主人" in sys_p)
     check("  也从 [本轮执行回执] 摘掉了",
-          "本轮已验收的执行都在上面的" in sys_p)
+          "本轮已验收的执行都已由系统印给主人" in sys_p)
     check("纪律 23 在场且写明「不限长度，只限内容」",
           "不限长度，只限内容" in sys_p)
     check("trace 有 model/fact_block 事件（判据可回溯）",
-          ("model", "fact_block") in [(n, e) for n, e, _ in events],
+          any(n == "model" and e == "fact_block" for n, e, _ in events),
           str([(n, e) for n, e, _ in events]))
     check("复述被记下来了（gate.action_restate，soft=True）",
           any(n == "gate" and e == "action_restate" and d.get("soft") is True
@@ -346,7 +419,7 @@ def test_graph_wiring():
     # 读成"这条锁该拆"。
     check("  正文**一字未动**（不是 fallback：拿文案去换命令是这一批最贵的错）",
           not out.get("fallback_text")
-          and str(out["messages"][-1].content).strip() == "已经帮你打开啦～",
+          and str(out["messages"][-1].content).strip() == "已经帮你收藏啦～",
           repr(str(out["messages"][-1].content)[:40]))
     check("  不进 _REPLAN_ISSUES（重规划会把副作用工具再跑一遍）", "action_restate" not in g._REPLAN_ISSUES)
     check("  没走重规划（gate_replan 未被置真）", not out.get("gate_replan"))
@@ -390,10 +463,10 @@ def test_graph_data_round_untouched():
         else:
             g._TOOL_MAP["search_notes"] = orig_tool
     sys_p = _system_prompt(llm)
-    check("提示词里写着「本轮没有动作族执行」（不是空字段）",
-          "（本轮没有动作族执行）" in sys_p)
+    check("提示词那一格是占位文本（不是空字段）",
+          "本轮没有系统代印的事实" in sys_p)
     check("  数据帧**没有**被摘掉（记录段照常给模型）",
-          "本轮动作族的工具返回已在上面的" not in sys_p)
+          "本轮这些工具返回已由系统印给主人" not in sys_p)
     check("没有 model/fact_block 事件", ("model", "fact_block") not in [(n, e) for n, e, _ in events])
     check("叙述照常通过（没有 action_restate）",
           ("gate", "action_restate") not in [(n, e) for n, e, _ in events]
@@ -413,10 +486,16 @@ class _FakeAgent:
             yield item
 
 
-_ROW = {"skill": "effect", "tool": "toggle_effect",
-        "args": {"effect": "sakura", "action": "on"},
-        "result": _FACT_LINE, "ts": 0,
-        "cmd": {"kind": "effect", "effect": "sakura", "action": "on"}}
+# 假 producer 用的回执行：**写族**（20261002 起只有写族会真印出块）。
+# 命令族的行仍然可以进 receipts（台账/跨轮记忆照旧），但它渲染出来是空串 ——
+# `test_producer_no_facts_for_cmd_round` 专门钉这条。
+_ROW = {"skill": "favorite_add", "tool": "add_favorite",
+        "args": {"article_id": 46},
+        "result": _FACT_WRITE_LINE, "ts": 0}
+_ROW_CMD = {"skill": "effect", "tool": "toggle_effect",
+            "args": {"effect": "sakura", "action": "on"},
+            "result": _FACT_LINE, "ts": 0,
+            "cmd": {"kind": "effect", "effect": "sakura", "action": "on"}}
 
 
 def _drain(script: list) -> list:
@@ -454,20 +533,23 @@ def test_producer_order_and_reset():
     print("\n[真 producer] 事实块先于 narrator 的文本；RESET 之后重发（不丢事实）")
     script = [
         ("updates", {"execute": {"receipts": [_ROW]}}),
-        ("messages", (AIMessageChunk(content="已经帮你打开啦～"),
+        ("messages", (AIMessageChunk(content="已经帮你收藏好啦～"),
                       {"langgraph_node": "model"})),
-        ("updates", {"model": {"messages": [AIMessage(content="已经帮你打开啦～")]}}),
-        ("updates", {"gate": {"done": True, "fallback_text": _FACT_BLOCK,
+        ("updates", {"model": {"messages": [AIMessage(content="已经帮你收藏好啦～")]}}),
+        ("updates", {"gate": {"done": True, "fallback_text": _FACT_WRITE_BLOCK,
                               "gate_replan": False}}),
     ]
     items = _drain(script)
     chunks = _ai_chunks(items)
     check("三段 AI 文本：块 → narrator（它确实先流出去了）→ 兜底替换文本",
-          chunks == [_FACT_BLOCK + "\n\n", "已经帮你打开啦～", _FACT_BLOCK], str(chunks))
+          chunks == [_FACT_WRITE_BLOCK + "\n\n", "已经帮你收藏好啦～", _FACT_WRITE_BLOCK],
+          str(chunks))
     check("事实块在 narrator 之前（主人先读事实）",
-          chunks and chunks[0] == _FACT_BLOCK + "\n\n", repr(chunks[0] if chunks else ""))
+          chunks and chunks[0] == _FACT_WRITE_BLOCK + "\n\n",
+          repr(chunks[0] if chunks else ""))
     check("兜底那一帧**没有把块印两遍**（compose 幂等：替代文本就是块）",
-          chunks[-1] == _FACT_BLOCK and chunks[-1].count(_FACT_LINE) == 1, repr(chunks[-1]))
+          chunks[-1] == _FACT_WRITE_BLOCK
+          and chunks[-1].count(_FACT_WRITE_LINE) == 1, repr(chunks[-1]))
     check("__CMD__ 帧在事实块之前（机器读的命令与给人读的事实各就各位）",
           next((i for i, x in enumerate(items) if isinstance(x, str)
                 and x.startswith("__CMD__:")), -1)
@@ -485,27 +567,42 @@ def test_producer_pass_round():
     print("\n[真 producer] 通过的一轮：块 + 包装都在，顺序不变")
     script = [
         ("updates", {"execute": {"receipts": [_ROW]}}),
-        ("messages", (AIMessageChunk(content="想换别的风格随时说～"),
+        ("messages", (AIMessageChunk(content="想收别的随时说～"),
                       {"langgraph_node": "model"})),
-        ("updates", {"model": {"messages": [AIMessage(content="想换别的风格随时说～")]}}),
+        ("updates", {"model": {"messages": [AIMessage(content="想收别的随时说～")]}}),
         ("updates", {"gate": {"done": True, "gate_replan": False}}),
     ]
     chunks = _ai_chunks(_drain(script))
     check("两段：块（带空行）+ 包装",
-          chunks == [_FACT_BLOCK + "\n\n", "想换别的风格随时说～"], str(chunks))
-    check("数据族回执不发块（只印动作族）",
+          chunks == [_FACT_WRITE_BLOCK + "\n\n", "想收别的随时说～"], str(chunks))
+    check("数据族回执不发块（只印写族）",
           _ai_chunks(_drain([
               ("updates", {"execute": {"receipts": [_RCPT_DATA]}}),
               ("messages", (AIMessageChunk(content="查到 1 篇。"),
                             {"langgraph_node": "model"})),
               ("updates", {"gate": {"done": True, "gate_replan": False}}),
           ])) == ["查到 1 篇。"])
+    check("**命令族回执也不发块**（20261002：效果主人当场看得见，那句话归泠月）",
+          _ai_chunks(_drain([
+              ("updates", {"execute": {"receipts": [_ROW_CMD]}}),
+              ("messages", (AIMessageChunk(content="这就带你过去～"),
+                            {"langgraph_node": "model"})),
+              ("updates", {"gate": {"done": True, "gate_replan": False}}),
+          ])) == ["这就带你过去～"])
+    check("  但命令帧照发（机器读的那一半不受印量影响）",
+          any(isinstance(i, str) and i.startswith("__CMD__:") for i in _drain([
+              ("updates", {"execute": {"receipts": [_ROW_CMD]}}),
+              ("messages", (AIMessageChunk(content="这就带你过去～"),
+                            {"langgraph_node": "model"})),
+              ("updates", {"gate": {"done": True, "gate_replan": False}}),
+          ])))
 
 
 if __name__ == "__main__":
     for fn in (test_family_of, test_action_facts, test_render_and_compose,
                test_strip_fact_lines, test_injection_points,
                test_share_one_classifier, test_action_restate_regex,
+               test_graph_command_round_not_printed,
                test_graph_wiring, test_graph_no_false_positive,
                test_graph_data_round_untouched,
                test_producer_order_and_reset, test_producer_pass_round):
