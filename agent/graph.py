@@ -8249,7 +8249,27 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # `with_tool_call_pairs`（20260928）：execute 造的 ToolMessage 前面没有声明过
     # 调用的 assistant——qwen 容忍这条非法序列，strict 服务商一律 400 拒（见该函数
     # docstring 的实测）。**只补形状、不动内容**：帧原文照旧是 narrator 的叙述材料。
-    resp = llm.invoke([system] + with_tool_call_pairs(state["messages"]))
+    _msgs = [system] + with_tool_call_pairs(state["messages"])
+    resp = llm.invoke(_msgs)
+    # ── 空内容重试一次（20261001）────────────────────────────────────────
+    # 上游偶发"有 completion token、内容却是空串"的响应（`usage.output` 十几到几十，
+    # 正文 `.strip()` 后为空），与提示词、帧数、轮次都无关——同一条用例换个时间再跑
+    # 就是正常回复（`eval/report/review_20261001_042903.md` 的 `nav_article_target`：
+    # 首跑 output=14 且正文空、复跑 104 正常）。空内容此前只有一个出口：gate 判
+    # `empty_reply` ⇒ `_FALLBACK_EMPTY`（"我刚才好像卡住了，没能说出话来"）——**主人
+    # 读到的是一句内容为零的道歉**，而那一轮的工具帧、执行回执、动作事实块全都好好的。
+    # 20261001 夜间实测：133 个 narrator 轮里 3 条（2.3%，output 14/13/29、input 从
+    # 6235 到 33268 都有 ⇒ 是采样本身，不是提示词长度或某类轮次）；同日生产语料
+    # 1167 份 trace / 1137 个 narrator 轮里 1 条（0.09%）。
+    # 重试一次而不是直接改判据：这是**采样失败**不是判据错误（复跑就正常），
+    # 而"再问一次模型"比"把这条判据放宽"更接近事实。仍为空 ⇒ 照旧走既有兜底
+    # （fail-open 方向不变：多花的只有一次调用）。
+    if not ((getattr(resp, "content", "") or "").strip()):
+        _rm = getattr(resp, "response_metadata", None) or {}
+        logger.warning("[model] narrator 返回空内容（usage=%s finish_reason=%s）→ 重试一次",
+                       usage_fields(resp), _rm.get("finish_reason"))
+        record("model", "llm_empty_retry", **usage_fields(resp))
+        resp = llm.invoke(_msgs)
     dur = time.monotonic() - _t0
     slow = dur > 30
     (logger.warning if slow else logger.info)(
