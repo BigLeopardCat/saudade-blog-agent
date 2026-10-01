@@ -1640,11 +1640,29 @@
       };
       repurposeHitokoto();
 
+      // 工具条按钮由 renderer.js 在**模型就绪之后**才建出来（线上实测 4.8–6.2s），
+      // 而下面两处要给它们**追加**一个"点完弹一句"的监听。旧写法是一次性
+      // `setTimeout(…, 1000)` + `if (!btn) return;`：按钮没赶上就直接放弃，而且**不报错**
+      // ——按钮 4.8–6.2s 才出现，1s 那个点几乎必然踩空；无头 Chrome 实测（CPU 节流 ×6）
+      // 两条监听**从未挂上**，不节流那次也只是约 0.2s 余量的抢跑险胜。
+      // 改成有界重试：每 200ms 看一眼，最多 15s；到点仍没有就上报一次，不装死。
+      // （title 不在这里设：它们跟着 ICONS 一起住在 renderer.js 的 TITLES 里，
+      //   按钮建出来就自带，没有这个时序问题。）
+      const bindTool = (id, onReady, tries) => {
+        tries = tries === undefined ? 75 : tries;
+        const el = document.getElementById(id);
+        if (el) { onReady(el); return; }
+        if (tries <= 0) {
+          if (typeof window.__reportError === 'function') {
+            window.__reportError({ type: 'widget_tool_bind_timeout', message: id, url: location.href });
+          }
+          return;
+        }
+        setTimeout(() => bindTool(id, onReady, tries - 1), 200);
+      };
+
       // 看板娘第3按钮（switch-model）→ 切换模型 + 弹出消息
-      setTimeout(() => {
-        const btn = document.getElementById('waifu-tool-switch-model');
-        if (!btn) return;
-        btn.title = '更换看板娘';
+      bindTool('waifu-tool-switch-model', (btn) => {
         btn.addEventListener('click', (e) => {
           // 不阻止默认行为，让库继续执行模型切换
           setTimeout(() => {
@@ -1658,13 +1676,10 @@
             saveHistory();
           }, 100);
         });
-      }, 1000);
+      });
 
       // 看板娘第4按钮（switch-texture）→ 切换皮肤 + 弹出消息
-      setTimeout(() => {
-        const btn = document.getElementById('waifu-tool-switch-texture');
-        if (!btn) return;
-        btn.title = '换装';
+      bindTool('waifu-tool-switch-texture', (btn) => {
         btn.addEventListener('click', (e) => {
           setTimeout(() => {
             const panel = document.getElementById('waifu-chat');
@@ -1677,7 +1692,7 @@
             saveHistory();
           }, 100);
         });
-      }, 1000);
+      });
 
       // 星标按钮（看板娘左侧独立容器）+ 展开特效图标
       const addStarButton = () => {

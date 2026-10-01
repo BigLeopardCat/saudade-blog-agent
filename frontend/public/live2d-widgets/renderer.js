@@ -53,7 +53,24 @@
     // circle-info：圈里一个 i —— 「关于」
     info: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM216 336l24 0 0-64-24 0c-13.3 0-24-10.7-24-24s10.7-24 24-24l48 0c13.3 0 24 10.7 24 24l0 88 8 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-80 0c-13.3 0-24-10.7-24-24s10.7-24 24-24zm40-208a32 32 0 1 1 0 64 32 32 0 1 1 0-64z"/></svg>',
     // xmark：叉 —— 「收起看板娘」
-    quit: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><path d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>',
+    quit: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><path d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>',
+  };
+  // 悬停提示（tooltip）：与 ICONS 同一把 key、同一个"这个按钮是干什么的"。
+  // ★ 为什么写在这里、而不是 chat-stream.js（它从前管着其中两条）：
+  //   按钮由本文件的 registerTools() 建出，title 便能在**建出来的那一刻**写上，
+  //   时序上不存在"抢在按钮出现之前设、设不上就永远没有"这回事。
+  //   旧写法把 switch-model / switch-texture 的 title 挂在 chat-stream 的一次性
+  //   `setTimeout(…, 1000)` + `if (!btn) return;` 上，而按钮实测 **4.8–6.2s** 才建出来
+  //   （模型加载完才 registerTools）⇒ 无头 Chrome 实测：不节流时纯属抢跑险胜（余量约
+  //   0.2s），CPU 节流 ×6 时两条 title **从未挂上**；photo / info / quit 则从来没有过提示。
+  //   回归锁：frontend/tests/live2d-widget-scope.test.mjs ④（比对 ICONS 与 TITLES 的 key 集合）。
+  //   改这里请一并改 ACTIONS——提示语说的就是 ACTIONS 里那件事。
+  const TITLES = {
+    'switch-model': '更换看板娘',    // ACTIONS: 只有一套模型，提示"没有第二套"
+    'switch-texture': '换装',        // ACTIONS: 同上，没有第二套贴图
+    photo: '拍照',                   // ACTIONS: 把画布存成 PNG 下载
+    info: '关于',                    // ACTIONS: 如实报渲染层实现来源
+    quit: '收起看板娘',              // ACTIONS: 收起（写 waifu-display 时间戳）
   };
   // 文案（上游放在 waifu-tips.json 里，本批内置；保留 $1 占位符的替换习惯）
   const MSG = {
@@ -235,6 +252,9 @@
         const span = document.createElement('span');
         span.id = 'waifu-tool-' + name;
         span.innerHTML = ICONS[name] || '';
+        // 提示与无障碍名同源：title 给鼠标，aria-label 给读屏（图标按钮没有可读文本）
+        const label = TITLES[name] || '';
+        if (label) { span.title = label; span.setAttribute('aria-label', label); }
         span.addEventListener('click', (e) => {
           e.stopPropagation();
           try { ACTIONS[name](); } catch (err) {
