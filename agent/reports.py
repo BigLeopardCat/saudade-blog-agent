@@ -636,3 +636,95 @@ def render_note_stats(data: dict, now: datetime | None = None) -> str:
     lines.append("- 名次口径：阅读/点赞/收藏三张榜各自独立排名（同一篇文章在两张榜上"
                  "的名次可以不同）")
     return _cap("\n".join(lines))
+
+
+# ── 报表 ⑥：文章分期（20261001）─────────────────────────────────────
+# 数据源 = `GET /api/protected/stats/notes/periods`（`src/routes/note_stats.rs`）。
+# 与上面那张快照报表**三条口径同源**（只算当前可见文章、名次=数组顺序、缺键 ≠ 0），
+# 多出来的是**期**这一层，于是多出两条判据：
+#
+#   · **期界**：每期是闭区间 [start, end]，必须印出来——"上周"在主人嘴里与他心里
+#     未必是同一个七天，而模型的下一步动作就是念着这一行回答他；
+#   · **`partial` 是真话的一部分**：统计功能的起点落在某一期中间时，那一期只统计了
+#     部分天数（`partial=true`）。不写它，"上线那一周只有两天数据"会被读成"那周流量
+#     掉了"——这正是本模块反复强调的"缺数 ≠ 零"，只不过量词换成了"期"。
+#
+# 以及一条**口径事实**要写进帧里：每期的合计算的是**本期全量**，而榜只列前 N 篇
+# （加起来必然比合计小）；名次是**本期阅读量**序，期与期各自独立（同一篇文章在两期
+# 里的名次没有关系）。
+_PERIOD_TOP = 5      # = Rust `note_stats::PERIOD_TOP_N`（**同值契约**，见
+                     # tests/test_note_stats.py ⑨——改一侧必须同步另一侧）
+# 粒度 → 中文纸名。**唯一一份**：动作行（`agent/action_text.py`）也从这里取——
+# 两处各抄一份的话，「行里写的是月报、帧里印的是周报」这种偏差没有任何测试能发现
+# （同 `BOARD_APPROVED_CN` 那条"别在这里再抄"的纪律）。
+_KIND_CN = {"week": "周报", "month": "月报", "year": "年报"}
+
+
+def _period_line(p: dict) -> str:
+    """一期 → `- 2026-W40（10-01 ~ 10-07）阅读 120／点赞 8／收藏 2`（+ 不完整标记）。"""
+    label = str(p.get("label") or p.get("key") or "?")
+    span = f"（{short_time(p.get('start'))} ~ {short_time(p.get('end'))}）"
+    counts = _counts_text(p, first="views") or "本次没读到合计"
+    # `partial` 只认真正的 True：认不出（老后端没这个键）就**不写**这一句，
+    # 而不是默认写"完整"——"不完整"是缺数，"完整"是一个我们没有的断言。
+    flag = "，**本期不完整**（统计起点落在本期中间，只统计了部分天数）" \
+        if p.get("partial") is True else ""
+    return f"- {label}{span}{counts}{flag}"
+
+
+def render_note_periods(data: dict, now: datetime | None = None) -> str:
+    """`GET /api/protected/stats/notes/periods` 的返回 → 分期报表。
+
+    ⚠️ 每期的合计一律用服务端算好的值，**不要拿该期的榜相加**：榜截到前 N 篇，
+    那一和只等于前 N 篇（Rust 侧为此专门不这么算，见 `note_period_report` 的注）。
+    """
+    data = data or {}
+    kind_cn = _KIND_CN.get(str(data.get("kind")), str(data.get("kind") or "分期"))
+    lines = [f"文章{kind_cn}（{_ts(now)}，生成于 {data.get('generatedAt') or '未知'}）"]
+
+    # `since` 三态：**没读到这个键**（老后端/被裁）/ 是 null（一行记录都还没有）/
+    # 有值（统计起点）。前两者的话不一样：null 是上游明说的"还没开始统计"。
+    since = data.get("since", "absent")
+    if since == "absent":
+        lines.append("- 统计起点：本次没读到（后台没有返回这一项）")
+    elif since is None:
+        lines.append("- 统计起点：站内还**一行阅读记录都没有**，所以给不出任何一期"
+                     "（这是「还没开始统计」，不是「这些期没人看」）")
+    else:
+        lines.append(f"- 统计起点（最早有记录的那天）：{since}")
+
+    periods = data.get("periods")
+    if periods is None:
+        lines.append("- 分期明细：本次没读到（后台没有返回这一项）")
+        return _cap("\n".join(lines))
+    if not isinstance(periods, list) or not periods:
+        # 与 `since is None` 分开说：这里起点是有的，只是**没有一期落在起点之后**。
+        if since not in ("absent", None):
+            lines.append(f"- 分期明细：**没有一期落在统计起点（{since}）之后**，"
+                         f"报表给不出任何一期")
+        return _cap("\n".join(lines))
+
+    lines.append(f"- 共 {len(periods)} 期，**最新的在前**：")
+    for p in periods:
+        if not isinstance(p, dict):
+            continue
+        lines.append(_period_line(p))
+        top = p.get("topNotes")
+        if top is None:
+            lines.append("    · 本期榜单：本次没读到（后台没有返回这一项）")
+            continue
+        if not top:
+            # 榜为空 ⇔ 三个合计都是 0（Rust 侧一行都不推）。这里与"没读到"分得开。
+            lines.append("    · 本期一篇被读被赞被收藏的文章都没有")
+            continue
+        lines.append(f"    · 本期阅读量前 {len(top)} 篇：")
+        for i, r in enumerate(top, 1):
+            title = sanitize_untrusted(str((r or {}).get("title") or ""), 40) or "（无标题）"
+            counts = _counts_text(r or {}, first="views")
+            tail = f" {counts}" if counts else ""
+            lines.append(f"      · 第 {i} 名 《{title}》（noteId {r.get('noteId')}）{tail}")
+
+    lines.append(f"- 口径：每期的合计是**本期全量**（榜单只列本期阅读量前 {_PERIOD_TOP} 篇，"
+                 f"把榜上的行加起来会比合计小）；名次口径是**本期阅读量**，期与期之间"
+                 f"各自独立排名（同一篇文章在两期里的名次没有关系）")
+    return _cap("\n".join(lines))

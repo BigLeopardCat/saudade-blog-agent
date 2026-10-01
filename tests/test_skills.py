@@ -1337,9 +1337,11 @@ def test_phantom_tool_claim():
     # list_quota_requests + 批准/驳回/重置三件；58 → 59 是同一天批 G 的待办改排期一件：
     # reschedule_dashboard_todo；59 → 60 是 20260930 的文章流量报表一件：
     # get_note_stats；60 → 61 是 20261001 的后台留言名册一件：list_admin_board
-    # （读 `GET /api/protect/board`，逐条带发表账号——公开的 list_guestbook 看不到）。
+    # （读 `GET /api/protect/board`，逐条带发表账号——公开的 list_guestbook 看不到）；
+    # 61 → 62 是同一天的文章分期报表一件：get_note_periods（读
+    # `GET /api/protected/stats/notes/periods`，与 get_note_stats 是两个端点两张纸）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 61 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 62 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 

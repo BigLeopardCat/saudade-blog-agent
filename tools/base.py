@@ -1248,9 +1248,10 @@ def _sign_local_jwt(uid: int, role: str | None) -> str:
     return (header + b"." + payload + b"." + sig).decode()
 
 
-def _principal_get(path: str, config: RunnableConfig,
-                   *, uid_msg: str, deny_msg: str) -> dict | list | ToolResult:
-    """以发起人身份 GET 一个"需要身份"的接口（`/api/protected/*`），返回其 data 字段。
+def _principal_get(path: str, config: RunnableConfig, *,
+                   uid_msg: str, deny_msg: str,
+                   payload: dict | None = None) -> dict | list | ToolResult:
+    """以发起人身份读一个"需要身份"的接口（`/api/protected/*`），返回其 data 字段。
 
     fail-closed 与 `_get` 同族：异常 / 非 200 / 业务码非 200 一律 unavailable，
     **绝不返回空**——"读不到"被当成"就是空的"是这批工具最坏的失败形态
@@ -1263,6 +1264,11 @@ def _principal_get(path: str, config: RunnableConfig,
     所以两句话由调用方给（`uid_msg` = 拿不到身份，`deny_msg` = 401/403）。措辞必须
     分开：收藏/通知读不到时对访客说"仅管理员可用"是错的（那是**他自己**的数据），
     反过来把后台报表说成"你未登录"更糟。
+
+    `payload` 给了就改发 **POST**（筛选条件住在请求体里的那几个读接口，如后台
+    文章检索）。读接口走 POST 是上游的形状，不是这里能选的；但**不要**因此改用
+    `_admin_post`——那条是写通道的措辞（失败时说"本次改动未确认生效"），拿它读
+    报表会在读失败时对主人说一句"没改动成功"，两句话说的不是一回事。
     """
     uid = _device_get_user_id(config)
     if uid <= 0:
@@ -1270,7 +1276,11 @@ def _principal_get(path: str, config: RunnableConfig,
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
     try:
-        resp = _client.get(f"{ADMIN_BASE}{path}", headers=headers, timeout=15)
+        if payload is None:
+            resp = _client.get(f"{ADMIN_BASE}{path}", headers=headers, timeout=15)
+        else:
+            resp = _client.post(f"{ADMIN_BASE}{path}", headers=headers,
+                                json=payload, timeout=15)
     except Exception as exc:
         logger.error("principal API call failed: %s", exc)
         return unavailable(f"接口请求失败: {exc}")
@@ -1292,6 +1302,18 @@ def _admin_get(path: str, config: RunnableConfig) -> dict | list | ToolResult:
     """后台接口（管理员读）。scope = admin.console。"""
     return _principal_get(
         path, config,
+        uid_msg="无法获取当前用户身份，后台数据不可用",
+        deny_msg="当前身份无权访问后台数据（该功能仅管理员可用）")
+
+
+def _admin_read_post(path: str, payload: dict, config: RunnableConfig):
+    """后台接口（管理员**读**，但筛选条件走请求体 ⇒ POST）。scope 同 `_admin_get`。
+
+    与 `_admin_post` 的差别只在措辞：那条是写通道（失败时说"本次改动未确认生效"），
+    这条读失败时说"后台数据不可用"——同一件事别用两句不一样的话说。
+    """
+    return _principal_get(
+        path, config, payload=payload,
         uid_msg="无法获取当前用户身份，后台数据不可用",
         deny_msg="当前身份无权访问后台数据（该功能仅管理员可用）")
 
@@ -1479,6 +1501,39 @@ def get_note_stats(config: RunnableConfig) -> str:
     except Exception as exc:
         logger.exception("render_note_stats failed")
         return unavailable(f"整理文章流量报表失败: {exc}")
+
+
+@tool
+def get_note_periods(
+    kind: Annotated[Literal["week", "month", "year"],
+                    "报表粒度：week=按周 / month=按月 / year=按年。"
+                    "**必填**——主人问「上周/这个月/今年」就按他说的那个粒度给，"
+                    "别用一个近似的档糊过去"],
+    config: RunnableConfig,
+) -> str:
+    """查看文章的**分期**报表（周报 / 月报 / 年报）：逐期给出阅读/点赞/收藏的合计，
+    以及**这一期阅读量最高的几篇**（每篇带三个数）。
+
+    与 `get_note_stats` 是两张纸，别拿一张当另一张：
+    · `get_note_stats` = **当下快照**（全站合计、三张总榜、近 30 天日趋势）；
+    · 本工具 = **按期切开**（"上周怎么样""这个月和上个月比""去年哪几篇最热"）。
+    口径与它一致：只算**当前可见**的文章。
+    期数由后端定（一周一期给一年、一月一期给一年、一年一期给五年），**不要**自己
+    指定期数；报表会写明某一期是不是**不完整**（统计功能上线那一期只统计了部分天数），
+    照它说不完整，别把"部分"读成"掉了"；报表说一行记录都还没有时，那是"还没开始
+    统计"，不是"这些期没人看"。
+    需要管理员身份。"""
+    from agent import reports as R
+    data = _admin_get(f"/api/protected/stats/notes/periods?kind={kind}", config)
+    if isinstance(data, ToolResult):
+        return data
+    if not data:
+        return empty("后台没有返回分期报表数据")
+    try:
+        return ok(R.render_note_periods(data))
+    except Exception as exc:
+        logger.exception("render_note_periods failed")
+        return unavailable(f"整理分期报表失败: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -1831,18 +1886,41 @@ def _as_article_id(value) -> int | None:
 
 
 @tool
-def list_admin_notes(config: RunnableConfig) -> str:
+def list_admin_notes(
+    config: RunnableConfig,
+    keyword: Annotated[str | None,
+                       "关键词收窄（匹配标题/正文/标签名）；只在文章很多、"
+                       "要定位某几篇时填。与公开站内搜索同一套切词口径，"
+                       "区别是**这里连草稿与私密文章一起搜**"] = None,
+) -> str:
     """查看后台文章清单：**包含未公开的草稿与私密文章**（公开接口一律看不到它们），
     每行给出 id、状态（公开/私密/草稿）、是否置顶、标签。要改某篇文章的状态或标签，
-    先用它拿到**确切的 id**。需要管理员身份。"""
+    先用它拿到**确切的 id**。
+
+    可选 keyword 按关键词收窄——**它是搜索而不是过滤**（切词匹配标题/正文/标签名，
+    口径与公开站内搜索一致），所以「按这个词没搜到」只是这一次没搜到，不等于站内
+    没有。需要管理员身份。"""
     from agent import adminops as A
-    data = _admin_get("/api/protected/notes/list", config)
+    kw = str(keyword or "").strip()
+    # 有词走检索端点（**筛选在服务端做**，口径与公开 `search_notes` 同源，见
+    # `notes.rs::search_all_notes`——两处各写一套"什么算命中"就是第二个真相源）；
+    # 没词走清单端点。两个端点回的是同一个 DTO，渲染侧不必分叉。
+    if kw:
+        data = _admin_read_post("/api/protected/notes/search", {"keyword": kw}, config)
+    else:
+        data = _admin_get("/api/protected/notes/list", config)
     if isinstance(data, ToolResult):
         return data
     notes = data if isinstance(data, list) else []
     if not notes:
+        # 筛空与"站里一篇文章都没有"是两件事（缺数 ≠ 零的老纪律）：带词时只许说
+        # "按这个词没搜到"，说成"后台没有文章"就是替站内下一个假结论。
+        if kw:
+            return empty(f"按关键词「{kw}」没有搜到文章（后台文章清单本身不是空的；"
+                         f"这是这一次的搜索结果，换个词或去掉关键词再看）")
         return empty("后台文章列表是空的（一篇文章都没有）")
-    return ok(A.render_admin_notes(notes, _tag_index(config)), meta={"count": len(notes)})
+    return ok(A.render_admin_notes(notes, _tag_index(config), keyword=kw),
+              meta={"count": len(notes), "keyword": kw or None})
 
 
 @tool
@@ -4977,6 +5055,9 @@ _TOOL_REGISTRY = [
     get_user_stats,
     # 文章流量报表（20260930）：同 admin.console（读的是后台统计面）
     get_note_stats,
+    # 文章**分期**报表（20261001）：同 admin.console，读的是 `.../stats/notes/periods`
+    # ——后台数据统计页「周报/月报/年报」那个页签的同一个端点
+    get_note_periods,
     # 后台**留言名册**（20261001）：同 admin.console，读的是 `GET /api/protect/board`
     # （逐条含发表账号）——与公开的 list_guestbook 是两套视图，别混用
     list_admin_board,

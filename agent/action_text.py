@@ -52,6 +52,9 @@ import re
 
 from agent import adminops as A          # 标签颜色/状态的既有中文词表（写工具问句共用）
 from agent.skills import NAV_MAP, _norm_id_list, _norm_true
+# 分期报表的粒度词（周报/月报/年报）：**唯一一份**在 `agent/reports.py`（帧头与
+# 动作行必须同一套字），这里只取用、不另抄。
+from agent.reports import _KIND_CN
 # 四个数据源的中文名词（note/talk/board/announcement）；留言的**状态词与筛选键**也
 # 取同一处（`tools/base.py` 是唯一实现，写路径、名册、动作行共用一份，别在这里再抄）。
 from tools.base import BOARD_APPROVED_CN, BOARD_STATUS_FILTERS, DOC_TYPE_CN
@@ -525,6 +528,13 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         focus = {"ai_passed": "AI 直接通过的", "ai_rejected": "被 AI 驳回的",
                  "pending": "等人复批的"}.get(_raw(a.get("status")))
         return f"查看审核状况（只看{focus}）" if focus else "查看审核状况"
+    if name == "get_note_periods":
+        # 分期报表（20261001）：**粒度必须印出来**——「上一周」与「上个月」是两张
+        # 不同的纸（数字全不一样），行里不写，事后从台账回看只剩"查看文章报表"，
+        # 主人问"你刚才说的是上个月吧"就无从核对（同 `get_moderation_status` 的聚焦
+        # 那条注，也同 `list_admin_board` 的筛选条件）。认不出的取值不猜，只说报表名。
+        kind_cn = _KIND_CN.get(_raw(a.get("kind")))
+        return f"查看文章{kind_cn}" if kind_cn else "查看文章分期报表"
     if name == "list_admin_board":
         # 后台留言名册（20261001）。两档同字，但**筛选条件要写进这一行**：主人问
         # "匿名的那些是谁发的"、agent 却只用关键词筛了一小撮——这种偏差只有在行里
@@ -537,6 +547,12 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         if k:
             cond.append(f"关键词「{k[:24] if preview else k}」")
         return "查看后台留言名册（" + "，".join(cond) + "）" if cond else "查看后台留言名册"
+    if name == "list_admin_notes":
+        # 无参时与 `_NOARG_VERB` 同字（那一行留在表里，两处必须一致——测试锁着）。
+        # 带关键词时**必须把词印出来**：这一行会经 recent_executions 注回下一轮，
+        # 主人问"你刚才搜的是哪个词"要有据可查（同 `list_admin_board` 那条注）。
+        k = _raw(a.get("keyword"))
+        return f"查看后台文章列表（关键词「{k[:24] if preview else k}」）" if k else "查看后台文章列表"
     if name == "get_article_detail":
         # 动作词按 **doc_type** 取（20260928）：这一件工具读的是文章/说说/留言/公告
         # 四个源，此前一律说"读取文章" ⇒ 两行都把留言读成文章。

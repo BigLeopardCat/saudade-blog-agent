@@ -334,6 +334,7 @@ _NO_LEGACY_ARM = _DEAD | {
     "list_quota_requests",         # 额度四件（20260926）：从来没进过老表
     "get_note_stats",              # 20260930 文章流量报表：冻结之后新增，动作词只在 Python 侧
     "list_admin_board",            # 20261001 后台留言名册：同上（读 GET /api/protect/board）
+    "get_note_periods",            # 20261001 文章分期报表：同上（读 stats/notes/periods）
 }
 
 _rs = _parent_repo.read(

@@ -479,14 +479,24 @@ def render_tag_list(ids, index: dict[int, TagInfo] | None, limit: int = 6) -> st
 
 # ── 渲染：后台文章列表 / 变更前后 ─────────────────────────────────────
 
-def render_admin_notes(notes, index: dict[int, TagInfo] | None, limit: int = 60) -> str:
+def render_admin_notes(notes, index: dict[int, TagInfo] | None, limit: int = 60,
+                       keyword: str = "") -> str:
     """后台文章列表（含草稿与私密）→ 给 planner 看的清单。
 
     这一屏的价值全在**id 与标题的对应**：管理员接着说"把《X》设为私密"时，
     planner 只有在这一轮真读到了 id，才有据可写（execute 层的目标校验会拦
     "没读过就写一个凭记忆的 id"）。
+
+    `keyword` 给了就改说"匹配 N 篇"（**搜索口径，不是总数**）：这张单子可能是
+    从全站文章里筛出来的一小撮，写成"后台文章共 N 篇"会让读的人把筛出来的条数
+    当成站内总量（缺数 ≠ 零的同族错误，只是方向反过来）。
     """
-    lines = [f"后台文章共 {len(notes)} 篇（含草稿/私密；「编辑修改稿」不在其中）："]
+    kw = str(keyword or "").strip()
+    if kw:
+        lines = [f"后台文章里匹配「{kw}」的共 {len(notes)} 篇"
+                 f"（含草稿/私密；「编辑修改稿」不在其中）:"]
+    else:
+        lines = [f"后台文章共 {len(notes)} 篇（含草稿/私密；「编辑修改稿」不在其中）："]
     for n in notes[:limit]:
         if not isinstance(n, dict):
             continue
@@ -503,7 +513,12 @@ def render_admin_notes(notes, index: dict[int, TagInfo] | None, limit: int = 60)
         # 锁点名要清掉的东西——同一个数字两种写法，下一步的参数就可能填错族。
         lines.append(f"- noteId={n.get('noteKey')} [{'/'.join(marks)}]《{title}》标签：{tags}")
     if len(notes) > limit:
-        lines.append(f"（另有 {len(notes) - limit} 篇未列出，可用关键词检索）")
+        rest = len(notes) - limit
+        # 尾句此前写着「可用关键词检索」而**关键词参数根本不存在**——那是一句把读的
+        # 人（和模型）指向空处的假话。现在 keyword 真在（`list_admin_notes`），两句
+        # 分开说：筛过的说"换个词/写具体些"，没筛的才提关键词这条路。
+        lines.append(f"（另有 {rest} 篇匹配「{kw}」的未列出，把关键词写具体些再看）" if kw
+                     else f"（另有 {rest} 篇未列出，可用 keyword 收窄）")
     return "\n".join(lines)
 
 

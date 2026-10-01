@@ -31,7 +31,7 @@
 > ⑤**写操作的事前同意**（秘书前置需求 ③ 的 agent 侧）——权限之后再加一道确定性判据：
 > 需确认的 scope（`CONSENT_SCOPES = {write.content}`）未获**用户本轮消息**明确确认 →
 > 产 `__ERROR__: 待确认[consent_required]` 帧、**不调用工具**；用错误帧形态是为了让 gate
-> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 61 个工具里
+> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 62 个工具里
 > 没有一个是 `write.content`，所以这条闸**空转**（等第一个写工具，声明表驱动、不用改代码）。
 > ⚠️ 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
 > annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
@@ -59,7 +59,7 @@
 
 - **React 前端**（浏览器）：看板娘 Live2D 形象 + 对话框 UI + SSE 消费 + 命令执行器。
 - **Rust 后端**（axum，端口 3000）：鉴权、记忆落库、对话编排、SSE 转发、中断清理。**记忆的唯一权威来源**。
-- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、61 个工具。**无状态**，记忆全靠请求体注入。
+- **Python Agent**（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、62 个工具。**无状态**，记忆全靠请求体注入。
 - **MySQL**：`chat_history`（消息流水）、`chat_summary`（每用户压缩摘要）。
 - **device-service**（端口 3100，独立服务）：IoT 设备（ESP32 OLED）指令下发，agent 以对话用户身份代签 JWT 调用。
 
@@ -538,7 +538,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 | 特效 | `toggle_effect(effect, action)` | 返回 `EFFECT:{effect}:{action}`，前端按显式意图执行 |
 | 夜间模式 | `toggle_dark_mode(mode)` | 返回 `DARKMODE:{mode}` |
 | IoT 设备 | `list_devices`、`device_oled_display` | 代签 JWT 调 device-service；支持自动选在线设备、幂等去重 |
-| 后台只读（admin） | `list_admin_notes`、`get_server_status`、`get_service_health`、`get_moderation_status`、`get_user_stats`、`get_note_stats`、`list_admin_board` | **以发起人身份代调** `127.0.0.1:3000` 的受保护接口（现签 60 秒 JWT）；scope `admin.console`，进 `_HARD_SCOPES`（非 admin 结构上够不到）；`list_admin_notes` 是草稿/私密文章的**唯一可达读口**；`get_moderation_status` 是**审核状况报表**（按状态切三份名单），`list_admin_board` 是**逐条名册**（每条带真实发表账号——公开的 `list_guestbook` 只有留名框里填的自由文本，认人会认错，见 §6.7） |
+| 后台只读（admin） | `list_admin_notes`、`get_server_status`、`get_service_health`、`get_moderation_status`、`get_user_stats`、`get_note_stats`、`get_note_periods`、`list_admin_board` | **以发起人身份代调** `127.0.0.1:3000` 的受保护接口（现签 60 秒 JWT）；scope `admin.console`，进 `_HARD_SCOPES`（非 admin 结构上够不到）；`list_admin_notes` 是草稿/私密文章的**唯一可达读口**；`get_note_stats` 与 `get_note_periods` 是**两张纸**（同一批统计面：前者是当下快照＋三张总榜，后者按期切开成周报/月报/年报，粒度是必填参数），`get_moderation_status` 是**审核状况报表**（按状态切三份名单），`list_admin_board` 是**逐条名册**（每条带真实发表账号——公开的 `list_guestbook` 只有留名框里填的自由文本，认人会认错，见 §6.7） |
 | 后台写（admin） | `create_tag`、`update_tag`、`delete_tag`、`create_category`、`update_category`、`delete_category`、`create_announcement`、`update_announcement`、`delete_announcement`、`audit_board_comment`、`delete_board_comment`、`set_article_status`、`set_article_tags` | scope `write.console`（`_HARD_SCOPES` + `CONSENT_SCOPES`）；**只能由写技能模板展开**——`PARAMS.calls` 名单里没有它们，越权清单在技能白名单那一步就被剥掉；三道门见 §5.3；身份/目标的地基见 §6.6 |
 | 用户自己的读（own） | `list_my_favorites`、`get_unread_summary`、`list_notifications` | scope `read.own`（三档角色都有、匿名没有）；**以本轮发起人身份读他自己的数据**（代签 60 秒 JWT 调 `/api/protected/*`，"自己读自己"由 uid 落地）；见 §5.6 |
 | 用户自己的写（own） | `add_favorite`、`remove_favorite`、`read_notifications` | scope `write.own`（**不进** `_HARD_SCOPES`、**不进** `_ALWAYS_CONFIRM_TOOLS`）；五条契约见 §5.6 |
