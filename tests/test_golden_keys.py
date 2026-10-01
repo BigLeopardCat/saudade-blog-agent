@@ -245,6 +245,120 @@ check("管理员能取的服务器状态工具，被声明成『管理员拿不�
 check("哨兵对管理员-角色判可达、对访客判不可达（同一件工具，两个答案）",
       "get_user_stats" in step_tool_enum("admin") and "get_user_stats" not in step_tool_enum(None))
 
+print("\n⑦ 『不该弹卡』的理由要落笔，理由变了要响（20261002）")
+# 上一节治的是"事实前提住在别人手里"；这一节是同一副药治**另一件前提**：15 条用例的
+# `forbid_frame_prefix` 里写着 `__CONFIRM__:`——它们在断言"这一轮**没有**确认卡"，而
+# "为什么不该有卡"同样住在别人手里（提问判据 / 角色权限表 / 目标是否存在的现场 / 设计）。
+# 20261001 那次红色 2.5 小时的实证：新设计把审核族整体改成恒弹卡，老判据还写着"不许弹"，
+# 红色的那段时间里判的是**判据自己**。锁法照 ⑥：逼着写（①）＋ 写完能自动验（②③④）。
+_no_card = [c["id"] for c in _cases
+            if any("__CONFIRM__:" in (g.get("forbid_frame_prefix") or [])
+                   for g in (r["gold"] for r in rg.iter_rounds(c)))]
+_declared_np = [c["id"] for c in _cases if c.get("premise_no_popup")]
+_missing_np = [i for i in _no_card if i not in _declared_np]
+_extra_np = [i for i in _declared_np if i not in _no_card]
+check(f"断言『没有确认卡』的用例（{len(_no_card)} 条）都落了笔（premise_no_popup）",
+      not _missing_np, "；".join(_missing_np))
+# 反面：没有禁卡断言的用例带上这个键 = 一个没有读者的声明（"看着有、其实没有"的老毛病；
+# 真出现这种情况要么是判据被删了、要么是键写错了地方——两种都该露脸）。
+check("没有多余的声明（没有禁卡断言的用例不该带 premise_no_popup）",
+      not _extra_np, "；".join(_extra_np))
+
+_bad_kind, _bad_ntools, _bad_nwhy = [], [], []
+for _c in _cases:
+    _pn = _c.get("premise_no_popup")
+    if not isinstance(_pn, dict):
+        continue
+    _cid = _c.get("id")
+    _kind = str(_pn.get("kind") or "").strip()
+    if _kind not in rg.NO_POPUP_KINDS:
+        _bad_kind.append(f"{_cid}: {_kind!r}")
+    _tl = _pn.get("tools")
+    _tl = [] if _tl is None else _tl
+    if not isinstance(_tl, list):
+        _bad_ntools.append(f"{_cid}: tools 不是 list")
+        _tl = []
+    else:
+        _bad_ntools += [f"{_cid}: {t!r}" for t in _tl
+                        if t not in rg.FORBID_TOKENS and t not in _registry]
+    # 两类"点名工具"的声明**必须**点名（哨兵核的就是这几件到不到得了）；另外两类**不许**
+    # 点名——它们的判据（提问 / `require_absence`）与工具无关，写上去是个没人读的字段。
+    if _kind in ("role_denied", "capability_boundary"):
+        if not _tl:
+            _bad_ntools.append(f"{_cid}: {_kind} 没点名工具")
+    elif _kind in ("question", "target_absent") and _tl:
+        _bad_ntools.append(f"{_cid}: {_kind} 不该点名工具（判据与工具无关）")
+    # why：capability_boundary 的"设计那一半"机器判不了 ⇒ 强制写、且要够长（哨兵同判据）；
+    # 另外三类也要求写一句（本节的 house rule，比哨兵严一档——哨兵只读 cap 的 why）。
+    _why = str(_pn.get("why") or "").strip()
+    if not _why:
+        _bad_nwhy.append(_cid)
+    elif _kind == "capability_boundary" and len(_why) < rg._NO_POPUP_WHY_MIN:
+        _bad_nwhy.append(f"{_cid}: why 只 {len(_why)} 字")
+check("kind 是四类之一", not _bad_kind, "；".join(_bad_kind))
+check("tools 是真工具名或哨兵，且『该点名的点名、不该点名的不点名』",
+      not _bad_ntools, "；".join(_bad_ntools))
+check("每条都写了 why；capability_boundary 的 why ≥ 12 字（那半机器判不了）",
+      not _bad_nwhy, "；".join(_bad_nwhy))
+
+_kept_np, _skipped_np, _rows_np = rg.check_no_popup_premises(json.loads(json.dumps(_cases)))
+check("★ 现有语料的『不该弹卡』理由一条都没变（变了会在这里红，不必等夜间）",
+      not _skipped_np, "；".join(_skipped_np))
+# 四类各自至少被用到一条：否则"四类设计"里有一格是死代码，而它对应的那类前提**没人守**。
+_kinds_used = {r["kind"] for r in _rows_np}
+check("四类各自至少一条（否则那一类前提没人守）",
+      _kinds_used == set(rg.NO_POPUP_KINDS), f"缺 {sorted(set(rg.NO_POPUP_KINDS) - _kinds_used)}")
+# `capability_boundary` 只核了"卡不是权限压的"那一半，另一半是设计——报告里标 partial，
+# 这里锁"标了 partial 的恰好是这一类"，防它被当成"全核过了"。
+_partial = {r["kind"] for r in _rows_np if r.get("partial")}
+check("只有 capability_boundary 标 partial（那半是人写的前提，不假装核过）",
+      _partial == {"capability_boundary"}, str(sorted(_partial)))
+
+# 判据的判据：下面五条探针证明哨兵**真的会响**。没有它们，"全部 ok"与"哨兵坏了恒 ok"
+# 长得一模一样——同族教训见 tests/test_confirm.py 的变异锁。探针都**从真实用例变异**而来
+# （自己造一条空壳用例只能证明哨兵会算数，证明不了这条用例的理由是承重的）。
+_by_id = {c.get("id"): c for c in _cases}
+
+
+def _mut(cid: str) -> dict:
+    return json.loads(json.dumps(_by_id[cid]))
+
+
+_p1 = _mut("admin_write_question_no_exec")
+_p1["user_input"] = "把文章 12 设为私密"
+_, _s4, _r4 = rg.check_no_popup_premises([_p1])
+check("提问那半：主人这句从疑问改成祈使 ⇒ 当场响（提问轮才不弹卡）",
+      _s4 == [_p1["id"]] and any("is_question_like" in h for h in _r4[0]["hit"]),
+      f"{_s4} / {_r4[0]['hit']}")
+
+_p2 = _mut("admin_write_denied_user")
+_p2["context"]["role"] = "admin"
+_, _s5, _r5 = rg.check_no_popup_premises([_p2])
+check("角色那半：同一件写工具，发起人从普通用户换成管理员（够得着了）⇒ 当场响",
+      _s5 == [_p2["id"]] and "set_article_status" in _r5[0]["hit"],
+      f"{_s5} / {_r5[0]['hit']}")
+
+_p3 = _mut("admin_tag_move_unresolved_target_honest")
+_p3["gold"].pop("require_absence")
+_, _s6, _r6 = rg.check_no_popup_premises([_p3])
+check("查无此物那半：抽掉判据里的 require_absence ⇒ 当场响",
+      _s6 == [_p3["id"]] and any("require_absence" in h for h in _r6[0]["hit"]),
+      f"{_s6} / {_r6[0]['hit']}")
+
+_p4 = _mut("nav_direct_no_confirm_promise")
+_p4["premise_no_popup"]["tools"] = ["navigate_to", "list_admin_notes"]
+_, _s7, _r7 = rg.check_no_popup_premises([_p4])
+check("能力边界那半：混进一件这个角色够不着的工具 ⇒ 当场响"
+      "（那就不是『设计使然』，是权限不给）",
+      _s7 == [_p4["id"]] and _r7[0]["hit"] == ["list_admin_notes"], f"{_s7} / {_r7[0]['hit']}")
+
+_p5 = _mut("nav_direct_no_confirm_promise")
+_p5["premise_no_popup"]["tools"] = ["navigate_to"]
+_p5["premise_no_popup"]["why"] = "太短"
+_, _s8, _r8 = rg.check_no_popup_premises([_p5])
+check("why 太短也响（设计那一半没人能自动判，但至少要写下来）",
+      _s8 == [_p5["id"]] and any("why" in h for h in _r8[0]["hit"]), f"{_s8} / {_r8[0]['hit']}")
+
 print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))

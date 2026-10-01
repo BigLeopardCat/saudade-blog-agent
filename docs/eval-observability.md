@@ -4,6 +4,24 @@
 > 配套文档：[agent-architecture.md](agent-architecture.md)（现状架构）、[问题记录.md](问题记录.md)（事故与根因）、
 > [agent-eval-report-20260924.md](agent-eval-report-20260924.md)（20260924 覆盖面盘点、口径审查、一次全量跑的读数与逐条定性）。
 > 部署与运维细节（服务名、路径、可复制命令）属私有运行簿，不进仓库。
+> 2026-10-02（**"这一轮不该弹卡"也是一件住在别人手里的前提**）：接着 10-01 那条线把第三类前提
+> 补上守卫。15 条用例的 `forbid_frame_prefix` 里写着 `__CONFIRM__:`——它们在断言"这一轮**没有**
+> 确认卡"，而"为什么不该有卡"同样由别人决定：提问判据（`authz.is_question_like`）、角色权限表
+> （`reachable_tools` = `tasks.step_tool_enum`）、目标是否存在的现场（判据里的 `require_absence`）、
+> 以及**设计**。10-01 那次 2.5 小时的红色就是这条前提翻面的现场（设计把审核族改成恒弹卡，老判据
+> 还写着"不许弹"，红色的那段时间判的是判据自己）。用例顶层新增 `premise_no_popup`
+> （`kind` / `tools` / `why`，四类：`question` / `target_absent` / `role_denied` /
+> `capability_boundary`），哨兵 `run_golden.check_no_popup_premises` 逐类核那半机器能算的：
+> 提问轮是不是提问、字面目标有没有真出自主人原话、点名工具对这个角色是够得着还是够不着。
+> **角色不写进声明**——它由用例自己的 `context.role` 决定，抄第二份就是第二个会漂移的地方
+> （与 `premise_absent` 刻意不同：那里 `role` 是声明语义的一部分）。`capability_boundary` 的
+> "设计那一半"机器判不了 ⇒ 强制写 `why`（≥12 字）、报告标 `partial`，不假装核过。任一条理由
+> 翻面 ⇒ 该用例**未评估**（`skipped_no_popup_ids` + 退出码 3 + 复审单一条），与身份、事实前提
+> 同一条出口。判据落 `tests/test_golden_keys.py` ⑦：逼着写（有禁卡断言的用例必须有声明，
+> 且没有声明的用例不许带这个键）、字段合法性（四类 kind / `role_denied`/`capability_boundary`
+> 必须点名工具而那两类不许点名 / why 长度）、拿全量语料跑一遍哨兵（0 条被摘）、四类各自至少
+> 一条、`partial` 只属于 `capability_boundary`，外加**五条从真实用例变异来的探针**（疑问改祈使、
+> 普通用户换成管理员、抽掉 `require_absence`、混进一件够不着的工具、why 写太短）证明它会响。
 > 2026-10-01 晚（**`require_zero_exec` 从"整轮零工具"收窄成"零后台写"**）：这个键 20260925 立
 > 的时候想锁的是"弹卡轮一个写都没发生"，实现却写成"planner 一个工具调用都没有"——**读也算**。
 > 存档里它的全部 6 次红都是读工具（`list_dashboard_todos`×3、`get_moderation_status`×2、
