@@ -913,6 +913,17 @@ _NAV_EXACT_PATHS = {
 }
 _NAV_PREFIX_PATHS = ("/category/", "/article/")
 
+# **整页目标**：不在 React 路由表里、由 nginx 直服的那几个静态页。前端的站内跳转优先
+# 交给 SPA 桥（`window.__spaNavigate`，路由换页），桥**不接管**的只剩这一类 ⇒ 只能整页
+# 装载，而整页装载会掐断本轮 SSE（Rust 在终止帧才落库、断连的残缺回复被 Drop guard
+# 清掉）⇒ 它们**必须等本条回复说完**才能跳（前端 `chat-stream.js::applyCmd` 的
+# `allowDeferred` 那一格）。事实文本因此必须说"即将跳转"：说"已跳转"就是系统在说它
+# 还没做的事。生产实证 `20261001T230706`——t≈3.2s 印出「页面已跳转：…」、t≈9.4s 页面
+# 才真的动，主人报「声称转跳完成是在转跳前完成…等了一会出现转跳完成文本才转跳」。
+# **判定同源在前端**（以桥的返回值为准），这里是它在服务端这一侧的唯一孪生；改前端
+# SPA 路由表（`src/router/spaNavigate.ts`）时对一眼，当前整站只有这一个。
+_NAV_WHOLE_PAGE_PATHS = {"/device-console/"}
+
 
 @tool
 def navigate_to(
@@ -921,7 +932,8 @@ def navigate_to(
 ) -> str:
     """导航到博客页面。页面跳转只能通过调用本工具生效：系统按本工具的执行回执直接驱动
     浏览器跳转，**正文里写任何命令文本都不会生效**（写了会被判成假装发命令、整段被替换）。
-    返回文本是给人看的事实（"页面已跳转：<url>"），不含任何命令标签。"""
+    返回文本是给人看的事实（"页面已跳转：<url>"；整页目标如 /device-console/ 是"页面即将
+    跳转：<url>（本条回复说完再跳）"——那类要等本条回复说完才生效），不含任何命令标签。"""
     p = path.strip()
     # /category/*、/article/* 要求至少带一个 id 段（/category/ 裸前缀不算有效页面）
     valid = p in _NAV_EXACT_PATHS or (p.startswith(_NAV_PREFIX_PATHS) and p.count("/") >= 2)
@@ -943,13 +955,19 @@ def navigate_to(
     # "这件事发生过"的凭据，于是"引用回执"与"假装发命令"在字面上是同一个动作——
     # 模型照抄回执就会被 gate 判成假装发命令（trace 20260926T215115 实证：真跳了、
     # 却被告知"已经被我拦下啦"）。
-    # 事实文本要**留住人类可读的 URL**（rule 6 的取值锚点），并按 mode 区分：
-    # confirm 式**还没跳**（前端等用户点确认），说成"已跳转"就是另一头失真。
+    # 事实文本要**留住人类可读的 URL**（rule 6 的取值锚点），并按 mode 与目标种类区分：
+    # confirm 式**还没跳**（前端等用户点确认），说成"已跳转"就是另一头失真；
+    # 整页目标（见 `_NAV_WHOLE_PAGE_PATHS`）同样还没跳，要等本条回复说完——站内页
+    # 由 SPA 桥当场换路由、陈述与动作同一时刻，这两类的字因此不能共用一套。
     mode = "confirm" if confirm else "direct"
     if confirm:
         return ok(f"导航已发起，等主人确认后才会跳转：{full_url}",
                   meta=fact("navigate", changed=True, target=tgt("page", None, p),
                             before="当前页", after="页面已跳转", cmd={"kind": "navigate", "url": full_url, "mode": mode}))
+    if p in _NAV_WHOLE_PAGE_PATHS:
+        return ok(f"页面即将跳转：{full_url}（本条回复说完再跳）",
+                  meta=fact("navigate", changed=True, target=tgt("page", None, p),
+                            before="当前页", after="页面即将跳转", cmd={"kind": "navigate", "url": full_url, "mode": mode}))
     return ok(f"页面已跳转：{full_url}",
               meta=fact("navigate", changed=True, target=tgt("page", None, p),
                         before="当前页", after="页面已跳转", cmd={"kind": "navigate", "url": full_url, "mode": mode}))
