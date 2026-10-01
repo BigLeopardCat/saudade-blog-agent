@@ -3781,8 +3781,32 @@ def test_short_reply_and_adjacent_pairs():
         check(f"承接块·全选式「{t}」把上一轮泠月发言交出去",
               "泠月：站内有《ESP32-S3 OBC 固件接入参考》" in _h
               and "要我把它的 OTA 章节读一遍给你讲讲吗？" in _h, _h[:60])
-        check(f"承接块·全选式「{t}」写明逐项还原且不许补项",
-              "逐项还原" in _h and "不许自己补项" in _h)
+        # 两臂的**共同纪律**（不随来源变）：不许自己补项 + 给出"当新话题"那条出口。
+        # 拆臂（20261001）改的是"目标从哪儿凑"，不是这两条。
+        check(f"承接块·全选式「{t}」不许补项、且给出新话题出口",
+              "不许自己补项" in _h and "按字面当新话题" in _h)
+    # —— 承接块分臂（20261001）——
+    # 事故：会话 319 主人先追问「额度申请呢」（上一轮泠月因此只列了额度那一件），
+    # 紧接着说「两个都通过吧」——台账里留言与额度两件都摆着，却被"只在上面那句里
+    # 逐项还原"堵死 ⇒ 零工具 ⇒ gate 判 confirm_claim_without_popup。
+    # 分臂判据 = `_ledger_frame_wanted`（与 `graph._ledger_families_due` 同一个函数），
+    # **不是**新写一份词表。
+    from agent.context import _ledger_frame_wanted  # noqa: E402
+    for t in ("都做", "两个都做", "全都要", "都办了吧"):
+        check(f"分臂判据：全选式「{t}」命中台账那一臂", _ledger_frame_wanted(t))
+        _h = _short_reply_hint(_hist_short + [HumanMessage(content=t)])
+        check(f"承接块·台账臂「{t}」把本轮系统台账列为**另一份来源**"
+              "（凑齐，而不是只在上一段里还原）",
+              "凑齐" in _h and "系统台账" in _h, _h[:80])
+        check(f"承接块·台账臂「{t}」仍先看上一轮发言（不是硬换锚点："
+              "「都做」承接的若是与台账无关的提议，照旧按上一句办）",
+              "上面那句泠月发言里提过的是其中一份" in _h, _h[:80])
+    for t in ("当然是都做", "执行这个日程", "好现在执行这个日程"):
+        check(f"分臂判据：非全选式「{t}」**不**命中台账那一臂",
+              not _ledger_frame_wanted(t))
+        _h = _short_reply_hint(_hist_short + [HumanMessage(content=t)])
+        check(f"承接块·发言臂「{t}」仍锚在上一轮发言上（逐项还原，不引台账）",
+              "逐项还原" in _h and "系统台账" not in _h, _h[:80])
     # 出口必须成对：块里既要写"该接"，也要写"不接就当新话题"——只写前者的块会把
     # 每一句短消息都往上一轮上硬接（「把樱花打开」也是短句，它是个独立命令）
     _h_new = _short_reply_hint(_hist_short + [HumanMessage(content="把樱花打开")])
