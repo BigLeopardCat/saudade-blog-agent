@@ -14,9 +14,11 @@
     transition: bottom 1s, transform 0.3s;
     width: 60px;
     height: 47px; /* 60 / (2043/1608) 图宽高比，保持不拉伸 */
-    /* 后台管理界面有 fixed 侧边栏(z-index:100) 盖住左下角，这里必须高于它，
-       否则看板娘收起后隐藏按钮不可见/不可点 */
-    z-index: 9999;
+    /* 与 #waifu 同一档（见那里关于 --z-agent 的说明）：后台管理界面有 fixed 侧边栏
+       (z-index:100) 盖住左下角，这一档必须高于它，否则看板娘收起后隐藏按钮不可见/不可点。
+       20261002 从写死的 9999 收到阶梯里 —— 9000 多那点"余量"没有实际对象，
+       副作用却是它连同 #waifu 一起盖住了宿主页面上的弹窗。 */
+    z-index: var(--z-agent, 1000);
 }
 
 #waifu-toggle.waifu-toggle-active {
@@ -42,7 +44,15 @@
     height: 300px;
     transform: translateY(-15px);
     transition: transform .3s ease-in-out, bottom .8s ease-in-out;
-  z-index: 2147483000;
+    /* 层级：走宿主页面的 z-index 阶梯，**缺省 1000**（20261002 改）。
+       原先写死 2147483000 —— 那个数不是"最高的意思"，是"比谁都大"：博客站的个人中心
+       与公告弹窗都是 antd Modal（默认 zIndexPopupBase=1000），一律被它压死，用户报
+       "个人中心打开时被 agent 对话框遮挡"。宿主页面现在只写一份阶梯
+       （博客仓 frontend/src/index.css 的 :root），`--z-agent` 是它给看板娘留的那一档；
+       页面想调，改那个变量即可，不用来这里动源码。
+       兜底值 1000：脱离本站（设备控制台这类宿主）时仍然浮在常规内容之上 ——
+       那边最高的自家浮层是 `#toast` 的 z-index:10，1000 足够。 */
+    z-index: var(--z-agent, 1000);
     /* 字号自包含：宿主页面 body 字号不接管看板娘 UI（device-console body 14px
        会让面板整体比博客页小一号，行高 1.4×14=19.6px 与博客 1.4×16=22.4px 不一致）。
        锁 15px 后任意页面渲染一致 */

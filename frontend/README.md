@@ -66,8 +66,9 @@ frontend/public/live2d_model/
 
 1. **`?v=` 缓存版本号**：nginx 对这几个路径设了 1 年 immutable，所以改了
    `boot.js` / `widget.css` / `chat-*.js` / `renderer.js` 之后**必须 bump** `boot.js` 里的
-   `VER` 常量（当前 `20261002a`），否则访客浏览器一年都不会更新。
-   同步点在**消费端**：博客仓 `Live2dAgent/index.tsx` 的 `?v=`、以及仓库外的设备控制台页面。
+   `VER` 常量（当前 `20261002b`），否则访客浏览器一年都不会更新。
+   同步点在**消费端**：博客仓 `Live2dAgent/index.tsx` 的 `?v=`、以及设备控制台页面
+   （随博客仓的 `iot/` 一起收编，见那边 `frontend/README.md` 的五个同步点表）。
 2. **口型接口签名与净效果一字不能改**：`window.__setMouthOpen` / `__mouthOverride` /
    `__setMouthClose` 是 `chat-stream.js` 与渲染层之间的契约（`__setMouthClose` 的净效果是
    "钉死在闭合"而不是字面语义）。
@@ -75,3 +76,9 @@ frontend/public/live2d_model/
    Python（本仓 `server.py`）、Rust（博客仓 `src/routes/chat.rs`）与本目录的
    `chat-stream.js` 三处共同认定，改一处必须同步另外两处。博客仓有一个测试
    （`frame_prefixes_match_frontend`）直接 `include_str!` 本目录的 `chat-stream.js` 做机械比对。
+4. **`#waifu` 的层级交给宿主页面**：`widget.css` 里是 `z-index: var(--z-agent, 1000)`
+   —— 宿主页面自己在 `:root` 定义 `--z-agent` 就能把看板娘放进它的层级阶梯
+   （博客仓定义在 `frontend/src/index.css`，个人中心 1200 / 公告 1300 都压在看板娘之上）。
+   **别再写回一个天文数字**：2147483000 那种值会让宿主页面上任何弹窗都盖不住它，
+   而"面板永远在最上层"从来不是需求（用户 20261002：“个人中心打开时被 agent 对话框遮挡”）。
+   兜底 1000 只保证"脱离本站时仍浮在常规内容之上"，不保证"最高"。
