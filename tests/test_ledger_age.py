@@ -16,6 +16,7 @@
   · 解析不了的时间戳原样留着（不猜、也不标"刚刚"）；
   · **只进注入**：gate 判据（洞⑦ 台账否认）读的 `_ledger_for_graph` 必须是原文。
 """
+import json
 import re
 import sys
 import types
@@ -24,8 +25,10 @@ from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "eval"))
 
 import server  # noqa: E402
+import run_golden as rg  # noqa: E402  （夹具占位符展开：expand_now / build_request）
 
 FAILS: list[str] = []
 
@@ -123,9 +126,62 @@ def test_prompt_wiring():
           "{page_ctx}" in src and "『已执行』行行首时间" in (ROOT / "server.py").read_text(encoding="utf-8"))
 
 
+def test_fixture_intent():
+    """台账时间戳的**两态声明**（20261001）：写死的日期 = 判定随挂钟漂移。
+
+    台账行首时间会按**运行时刻**算年龄，超 10 分钟标「·已过期」，而规划纪律 6c 又规定
+    过期读数不能拿来回答"现在怎样"——所以用例里那个时间戳是**语义的一部分**，不能随手
+    写死一个日期。20261001 实证：三条 `followup_entity_slot_*`（写于 20260920）的夹具停在
+    09-20，被标成「11 天前·已过期」后 planner 有一半的时候去重跑工具，用例红绿两态并存、
+    还被复跑按 flake 放行——它本来要锁的"摘要有值就零调用"（6b）被这条无关的过期信号盖掉。
+    判据（对台账两个字段逐条扫全量用例，两条通道都要，缺一个字段就是漏一半）：
+      · 写了 `{now…}` 占位符 ⇒ 意图"新鲜"，合格（`run_golden.expand_now` 在构造请求时展开）；
+      · 写了裸的 `MM-DD HH:MM` ⇒ 必须在 `_note` 里声明是**刻意的过期夹具**（写明
+        「永远早于运行时刻」，即 `status_stale_ledger_requery` 那种）；
+      · 两种都没有 ⇒ 无时间戳，合格。
+    反向锁：全语料至少有一条真在用 `{now…}`（否则 expand_now 是死代码，守卫也就无从谈起）。
+    """
+    print("[夹具] 台账时间戳必须声明意图（相对占位符 / 刻意过期）")
+    golden = json.loads("[" + ",".join(
+        ln for ln in (ROOT / "eval" / "golden" / "basic.jsonl")
+        .read_text(encoding="utf-8").split("\n") if ln.strip()) + "]")
+    ts_rx = re.compile(r"\d{2}-\d{2} \d{2}:\d{2}")
+    fields = ("executions", "pending_action")
+    used_placeholder: list[str] = []
+    offenders: list[str] = []
+    for case in golden:
+        for rnd in (case["rounds"] if "rounds" in case else [case]):
+            ctx = rnd.get("context", {})
+            note = rnd.get("gold", {}).get("_note", "")
+            for f in fields:
+                txt = ctx.get(f, "")
+                if not txt:
+                    continue
+                if "{now" in txt:
+                    used_placeholder.append(f"{case['id']}.{f}")
+                    continue
+                if ts_rx.search(txt) and "永远早于运行时刻" not in note:
+                    offenders.append(f"{case['id']}.{f}")
+    check("没有裸时间戳（写死的日期必须声明是刻意的过期夹具）", not offenders,
+          "、".join(offenders))
+    check("至少一条用例在用 {now…} 占位符（否则相对计时是死代码）", bool(used_placeholder),
+          "、".join(used_placeholder) or "一条都没有")
+    # 能力有测试 ≠ 接线有测试：占位符展开必须真挂在**唯一那个请求构造点**上，
+    # 否则夹具里写着 `{now…}` 而模型读到的是字面的「{now-3m}」（比过期更糟）。
+    src = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
+    check("build_request 真的把两个台账字段都过了 expand_now",
+          src.count('expand_now(ctx.get("executions"') == 1
+          and src.count('expand_now(ctx.get("pending_action"') == 1)
+    out = rg.expand_now("· {now-3m} 查看分类 — 5 个分类", datetime(2026, 10, 1, 21, 0, 0))
+    check("expand_now 展开成台账行首同形的 MM-DD HH:MM 且按偏移量倒退",
+          out == "· 10-01 20:57 查看分类 — 5 个分类", out)
+    check("零占位符的文本原样返回（既有 150 条用例零变化）",
+          rg.expand_now("· 09-01 12:00 查看服务器状态") == "· 09-01 12:00 查看服务器状态")
+
+
 def main():
     for fn in (test_annotation_semantics, test_edge_cases,
-               test_raw_ledger_stays_raw, test_prompt_wiring):
+               test_raw_ledger_stays_raw, test_prompt_wiring, test_fixture_intent):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")

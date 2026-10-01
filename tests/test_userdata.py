@@ -1100,7 +1100,14 @@ for _cid, _want in NEW_CASES.items():
     check(f"  {_cid}：断言了真调过工具（否则「需要登录」这句可以是零帧编的）",
           all(_g.get(k) == v for k, v in _want.items()))
     check(f"  {_cid}：禁 fallback（兜底道歉不算如实说）", _g.get("forbid_fallback") is True)
-    check(f"  {_cid}：正文必须指向登录", _g.get("text_any_regex") == ["登录"])
+    # 20261001：这条原先要求回复里**出现「登录」这个词**。主人当天拍板的前提是
+    # 「**必须登录才能和 agent 对话**」（`src/routes/chat.rs::prepare_chat` 无令牌直接回
+    # 合规文案、根本到不了 agent）⇒ 生产里 uid>0 恒成立、uid≤0 不可达，而那条断言在
+    # **奖励**一句生产里恒为假的话。改判「如实表达做不到」（`require_denial` = 共享的
+    # 诚实拒绝族，族里本就含「未登录」，只会放宽不会收紧）——判据换了，锁还在：
+    # 没有这条断言（也没了旧词表）的用例在这里照样红。
+    check(f"  {_cid}：正文如实表达「做不到」（诚实拒绝族，不再点名『登录』）",
+          _g.get("require_denial") is True)
     check(f"  {_cid}：有负断言（不得声称已改/不得说成空）",
           bool(_g.get("text_not_match_regex")))
     check(f"  {_cid}：匿名（无 user_id / 无 role）",
