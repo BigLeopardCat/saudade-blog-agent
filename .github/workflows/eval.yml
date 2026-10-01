@@ -57,15 +57,15 @@ jobs:
           repository: BigLeopardCat/Saudade-Blog
           token: ${{ secrets.PARENT_REPO_TOKEN }}
           path: _parent
-          # 守卫绝大多数读 `src/routes/*.rs`；`frontend/public/live2d-widgets/` 是 20261001
-          # 加的（`__RESET__:<scope>` 这条帧约定三端认同一份字面，前端那一端在
-          # `tests/test_reset_scope.py` 里读）。稀疏锥只为把面收小、把时间省掉；
-          # **锥够不够**由 `tests/test_ci_suite_list.py` ⑥ 机械核对——它扫所有
-          # `_parent_repo.read("…")` 的路径逐个判是否落在锥里，加了读别处的守卫而忘了
-          # 改这里会红，而不是"那一条在 CI 上悄悄不判"。
+          # 守卫读的全是 `src/routes/*.rs`。锥里曾有过 `frontend/public/live2d-widgets`
+          # （`__RESET__:<scope>` 那条帧约定三端认同一份字面，前端那一端在
+          # `tests/test_reset_scope.py` 里读）——20261001 看板娘前端随 MIT 分发搬进了
+          # **本仓** `frontend/`，那条守卫改成读本仓，父仓这一条锥模式随之作废。
+          # 稀疏锥只为把面收小、把时间省掉；**锥够不够**由 `tests/test_ci_suite_list.py` ⑥
+          # 机械核对——它扫所有 `_parent_repo.read("…")` 的路径逐个判是否落在锥里，
+          # 加了读别处的守卫而忘了改这里会红，而不是"那一条在 CI 上悄悄不判"。
           sparse-checkout: |
             src/routes
-            frontend/public/live2d-widgets
           fetch-depth: 1
           persist-credentials: false
 
@@ -77,7 +77,6 @@ jobs:
         run: |
           set -e
           test -f _parent/src/routes/chat.rs
-          test -f _parent/frontend/public/live2d-widgets/chat-stream.js
 
       # ⚠️ 20260928 首跑带出两条**信息性**注解（不影响本次绿）：`actions/checkout@v4` 与
       # `astral-sh/setup-uv@v5` 是针对 Node 20 的，runner 已强制它们跑在 Node 24 上。等上游

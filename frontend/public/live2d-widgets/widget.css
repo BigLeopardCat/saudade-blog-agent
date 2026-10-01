@@ -1,0 +1,2012 @@
+#waifu-toggle {
+    /* 20260903：隐藏/唤回按钮 = 趴在墙头的泠月喵贴纸（lingyue-toggle.png，
+       原始 2043px 大图压缩至 192px；图自带形状/透明圆角，故无 background-color/
+       border-radius/padding——radius 会把贴到画布底的内容角切掉；svg 手势图标隐藏）。
+       交互（20260903 用户拍板）：左下角 + 上下收起——收起态滑下墙头藏于视口外，
+       quit 看板娘后 active 从底缘爬出趴墙头（墙头线 = 视口底），点击唤回 */
+    background-image: url('lingyue-toggle.png');
+    background-size: 100% 100%;
+    bottom: -60px; /* 收起:整图滑出视口下缘(47px 高+余量)，不可见不可点 */
+    cursor: pointer;
+    display: block;
+    left: 15px;
+    position: fixed;
+    transition: bottom 1s, transform 0.3s;
+    width: 60px;
+    height: 47px; /* 60 / (2043/1608) 图宽高比，保持不拉伸 */
+    /* 后台管理界面有 fixed 侧边栏(z-index:100) 盖住左下角，这里必须高于它，
+       否则看板娘收起后隐藏按钮不可见/不可点 */
+    z-index: 9999;
+}
+
+#waifu-toggle.waifu-toggle-active {
+    bottom: 0; /* 趴墙头:贴底缘完整露出 */
+}
+
+#waifu-toggle.waifu-toggle-active:hover {
+    transform: translateY(-4px); /* 探头反馈:提示可点 */
+}
+
+#waifu-toggle svg {
+    display: none;
+}
+
+#waifu {
+    bottom: -500px;
+    left: 15px;
+    position: fixed;
+    /* 收起→展开的中间态 canvas 高度会短暂塌陷为 0（display:none 恢复/模型重载），
+       若 #waifu 高度随之塌缩，对话面板 bottom: calc(100% + 12px) 会按塌陷高度解析而
+       掉到按钮列表/收回按钮处；#live2d 恒为 300px 高，直接用固定 height 锁死，
+       任意中间态都按 300px 定位，面板与悬浮按钮永不依赖 canvas 恢复时机 */
+    height: 300px;
+    transform: translateY(-15px);
+    transition: transform .3s ease-in-out, bottom .8s ease-in-out;
+  z-index: 2147483000;
+    /* 字号自包含：宿主页面 body 字号不接管看板娘 UI（device-console body 14px
+       会让面板整体比博客页小一号，行高 1.4×14=19.6px 与博客 1.4×16=22.4px 不一致）。
+       锁 15px 后任意页面渲染一致 */
+    font-size: 15px;
+    /* 字体自包含：宿主页面 body 字体不接管看板娘 UI（device-console 等宽字体
+       曾污染收起按钮/提示气泡；博客 antd 字体栈也与之不同）。与 .msg-text
+       同一栈，保证中文/emoji 渲染一致 */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC",
+        "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+    /* 行高自包含：device-console body 的 font:14px/1.6 缩写行高会继承进
+       本容器（收起按钮/提示气泡整体变"高"）——容器级锁回 1.4 */
+    line-height: 1.4 !important;
+}
+
+#waifu.waifu-active {
+    bottom: 0;
+}
+
+#waifu.waifu-hidden {
+    display: none;
+}
+
+#waifu:hover {
+    transform: translateY(-15px);
+}
+
+#waifu-tips {
+    animation: waifu-shake 50s ease-in-out 5s infinite;
+    background-color: rgba(236, 217, 188, .5);
+    border: 1px solid rgba(224, 186, 140, .62);
+    border-radius: 12px;
+    box-shadow: 0 3px 15px 2px rgba(191, 158, 118, .2);
+    font-size: 14px;
+    line-height: 24px;
+    margin: -30px 20px;
+    min-height: 70px;
+    opacity: 0;
+    overflow: hidden;
+    padding: 5px 10px;
+    position: absolute;
+    text-overflow: ellipsis;
+    transition: opacity 1s;
+    width: 250px;
+    word-break: break-all;
+}
+
+#waifu-tips.waifu-tips-active {
+    opacity: 1;
+    transition: opacity .2s;
+}
+
+#waifu-tips span {
+    color: #0099cc;
+}
+
+#live2d {
+    cursor: grab;
+    height: 300px;
+    position: relative;
+    width: 300px;
+}
+
+#live2d:active {
+    cursor: grabbing;
+}
+
+#waifu-tool {
+    align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    opacity: 0;
+    position: absolute;
+    right: -10px;
+    top: 70px;
+    transition: opacity 1s;
+}
+
+#waifu:hover #waifu-tool {
+    opacity: 1;
+}
+
+#waifu-tool svg {
+    cursor: pointer;
+    display: block;
+    fill: #7b8c9d;
+    height: 25px;
+    transition: fill .3s;
+}
+
+#waifu-tool svg:hover {
+    fill: #0684bd; /* #34495e */
+}
+
+@keyframes waifu-shake {
+    2% {
+        transform: translate(.5px, -1.5px) rotate(-.5deg);
+    }
+    4% {
+        transform: translate(.5px, 1.5px) rotate(1.5deg);
+    }
+    6% {
+        transform: translate(1.5px, 1.5px) rotate(1.5deg);
+    }
+    8% {
+        transform: translate(2.5px, 1.5px) rotate(.5deg);
+    }
+    10% {
+        transform: translate(.5px, 2.5px) rotate(.5deg);
+    }
+    12% {
+        transform: translate(1.5px, 1.5px) rotate(.5deg);
+    }
+    14% {
+        transform: translate(.5px, .5px) rotate(.5deg);
+    }
+    16% {
+        transform: translate(-1.5px, -.5px) rotate(1.5deg);
+    }
+    18% {
+        transform: translate(.5px, .5px) rotate(1.5deg);
+    }
+    20% {
+        transform: translate(2.5px, 2.5px) rotate(1.5deg);
+    }
+    22% {
+        transform: translate(.5px, -1.5px) rotate(1.5deg);
+    }
+    24% {
+        transform: translate(-1.5px, 1.5px) rotate(-.5deg);
+    }
+    26% {
+        transform: translate(1.5px, .5px) rotate(1.5deg);
+    }
+    28% {
+        transform: translate(-.5px, -.5px) rotate(-.5deg);
+    }
+    30% {
+        transform: translate(1.5px, -.5px) rotate(-.5deg);
+    }
+    32% {
+        transform: translate(2.5px, -1.5px) rotate(1.5deg);
+    }
+    34% {
+        transform: translate(2.5px, 2.5px) rotate(-.5deg);
+    }
+    36% {
+        transform: translate(.5px, -1.5px) rotate(.5deg);
+    }
+    38% {
+        transform: translate(2.5px, -.5px) rotate(-.5deg);
+    }
+    40% {
+        transform: translate(-.5px, 2.5px) rotate(.5deg);
+    }
+    42% {
+        transform: translate(-1.5px, 2.5px) rotate(.5deg);
+    }
+    44% {
+        transform: translate(-1.5px, 1.5px) rotate(.5deg);
+    }
+    46% {
+        transform: translate(1.5px, -.5px) rotate(-.5deg);
+    }
+    48% {
+        transform: translate(2.5px, -.5px) rotate(.5deg);
+    }
+    50% {
+        transform: translate(-1.5px, 1.5px) rotate(.5deg);
+    }
+    52% {
+        transform: translate(-.5px, 1.5px) rotate(.5deg);
+    }
+    54% {
+        transform: translate(-1.5px, 1.5px) rotate(.5deg);
+    }
+    56% {
+        transform: translate(.5px, 2.5px) rotate(1.5deg);
+    }
+    58% {
+        transform: translate(2.5px, 2.5px) rotate(.5deg);
+    }
+    60% {
+        transform: translate(2.5px, -1.5px) rotate(1.5deg);
+    }
+    62% {
+        transform: translate(-1.5px, .5px) rotate(1.5deg);
+    }
+    64% {
+        transform: translate(-1.5px, 1.5px) rotate(1.5deg);
+    }
+    66% {
+        transform: translate(.5px, 2.5px) rotate(1.5deg);
+    }
+    68% {
+        transform: translate(2.5px, -1.5px) rotate(1.5deg);
+    }
+    70% {
+        transform: translate(2.5px, 2.5px) rotate(.5deg);
+    }
+    72% {
+        transform: translate(-.5px, -1.5px) rotate(1.5deg);
+    }
+    74% {
+        transform: translate(-1.5px, 2.5px) rotate(1.5deg);
+    }
+    76% {
+        transform: translate(-1.5px, 2.5px) rotate(1.5deg);
+    }
+    78% {
+        transform: translate(-1.5px, 2.5px) rotate(.5deg);
+    }
+    80% {
+        transform: translate(-1.5px, .5px) rotate(-.5deg);
+    }
+    82% {
+        transform: translate(-1.5px, .5px) rotate(-.5deg);
+    }
+    84% {
+        transform: translate(-.5px, .5px) rotate(1.5deg);
+    }
+    86% {
+        transform: translate(2.5px, 1.5px) rotate(.5deg);
+    }
+    88% {
+        transform: translate(-1.5px, .5px) rotate(1.5deg);
+    }
+    90% {
+        transform: translate(-1.5px, -.5px) rotate(-.5deg);
+    }
+    92% {
+        transform: translate(-1.5px, -1.5px) rotate(1.5deg);
+    }
+    94% {
+        transform: translate(.5px, .5px) rotate(-.5deg);
+    }
+    96% {
+        transform: translate(2.5px, -.5px) rotate(-.5deg);
+    }
+    98% {
+        transform: translate(-1.5px, -1.5px) rotate(-.5deg);
+    }
+    0%, 100% {
+        transform: translate(0, 0) rotate(0);
+    }
+}
+
+
+/* ── Chat Panel ── */
+#waifu-chat {
+  /* 20260828s：拖拽栏尺寸唯一事实源（CSS 变量）——改宽只改这一处，
+     边界线与分割线自动跟随，不再手动调位置 */
+  --drag-w: 24px;   /* 左侧拖拽栏宽度（20px → 24px 加宽 20%，用户要求） */
+  --drag-h: 24px;   /* 顶部拖拽栏高度（20px → 24px，20260831 与左侧栏 --drag-w 一致，用户要求） */
+  --drag-lw: 2px;   /* 拖拽栏边界线宽 */
+  display: none;
+  position: absolute;
+  left: 15px;
+  bottom: calc(100% + 12px); /* 悬浮在看板娘上方，随看板娘一起定位 */
+  width: 420px; /* 默认尺寸（当前默认 840px 的一半） */
+  max-width: none; /* 缩放不受屏幕限制，可自由调节 */
+  background: rgba(255,255,255,0.95);
+  /* 20260901g：外框移入 ::before 伪元素（z6）——父元素 border 永远绘制在所有
+     子元素之上，贴角的缩放把手盖不住线末端（"轮廓线顶部末端裸露"）；伪元素
+     z-index 可控：外框 z6 压过拖拽栏背景（5/4），缩放手柄 z7 再压过外框即可
+     盖住线顶端。外框职责仍统一收归容器（不拆给拖拽栏），圆角弧线由伪元素
+     border-radius 12px 承担 */
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+  z-index: 100;
+  /* 显式高度：绝对数值（不再随视口收缩，缩放把手可自由调节大小） */
+  height: 284px; /* 630px 减少 55% */
+  max-height: none;
+  overflow: hidden;
+  font-size: 15px;
+  color: #333;
+    font-family: sans-serif !important;
+    line-height: 1.4 !important;
+    box-sizing: border-box !important;
+}
+/* 20260901g：面板外框（原面板自身 border 的继承者）——inset 覆盖整块面板，
+   pointer-events:none 不拦截任何交互；z6 高于拖拽栏（5/4）保证线不被栏背景
+   压住，低于缩放手柄（7）让 TL/BR 把手能盖住线末端（用户要求：缩放按钮盖住
+   左侧外框线顶部末端） */
+#waifu-chat::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  border: 2px solid #f1948a;
+  border-radius: 12px;
+  z-index: 6;
+  pointer-events: none;
+}
+#waifu-chat *, #waifu-chat *::before, #waifu-chat *::after {
+    box-sizing: border-box !important;
+    /* 面板内唯一生效的 font-family（特异性 (1,1,0) 压过 .chat-input/.chat-send 的 (0,1,0)，
+       表单控件默认不继承字体，必须在此强制统一）。CJK 字体优先：拉丁字体（Arial/Consolas 等）
+       渲染的弯引号 U+201C/U+201D 是窄基线形态，在中文语境下视觉呈"反的"（开引号看着像闭引号）。
+       要改面板字体改这里，单独改 .chat-input 的 font-family 无效 */
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
+        "Hiragino Sans GB", sans-serif !important;
+}
+/* 20260901f：拖拽栏不再承担任何轮廓线（标准做法：边框职责归容器）——面板
+   border 提供外框、消息区/输入区 border 提供内侧 L 形镶边。左/上侧边栏一体：
+   顶栏 left:0 全宽 + 左栏全高纯背景（z-index 5/4 覆盖面板顶/左段），两栏之间
+   无任何线条；圆角由面板 border-radius + overflow:hidden 裁剪（子元素无需 radius）。 */
+.chat-drag-bar-t { position: absolute; top: 0; left: 0; right: 0; height: var(--drag-h); background: #fbf1f0; cursor: move; z-index: 5; touch-action: none; }
+.chat-drag-bar-l { position: absolute; top: 0; left: 0; bottom: 0; width: var(--drag-w); background: #fbf1f0; cursor: move; z-index: 4; touch-action: none; }
+/* 20260830：.chat-inner-border（内侧 L 形贴线）删除——用户反馈顶部横线悬在
+   面板内部（top:18px）、"没贴住边框边缘，像手动贴的"。上边框线由拖拽栏
+   自身 border 提供（贴合 0px 边缘），无需内贴线；chat-render.js 模板里的空
+   div 保留（无样式零成本）。20260830g：侧边栏内侧边缘线（原竖线位置）由
+   .chat-drag-bar-l 的 border-right 提供——同样是真实边框，贴合 rail 边缘，
+   与消息区 0px 交界处完全对齐。 */
+.chat-drag-bar-t:hover, .chat-drag-bar-l:hover { background: #f6e5e3; }
+.chat-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 24px;
+  height: 24px; /* 与顶部拖动条 .chat-drag-bar-t 同高（20260831 加厚后同步），hover 阴影区域不再超出上边框 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  color: #e74c3c;
+  z-index: 6; /* 20260901c：高于 .chat-drag-bar-t（5）——顶栏改为全宽后覆盖右上角，不提升关闭按钮会被压住点不到 */
+}
+.chat-close:hover { background: rgba(231, 76, 60, 0.12); color: #c0392b; }
+#waifu-tips { display: none !important; }
+#waifu-chat.active { display: flex; flex-direction: column; }
+.chat-messages { padding-top: 10px; }
+
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  /* 20260901f：margin 让位给左/上侧边栏（var(--drag-w/h)），自身
+     border-top/left 提供内侧 L 形镶边（与 .chat-input-area border-left
+     连成竖线；同一容器多边在拐角天然连续，零拼接）。原 padding-top 34px
+     （24 t 栏 + 10）/padding-left 28px（24 l 栏 + 4）改为 margin 让位后
+     减回 10px/4px——内容位置不变 */
+  margin: var(--drag-h) 0 0 var(--drag-w);
+  border-top: var(--drag-lw) solid #f1948a;
+  border-left: var(--drag-lw) solid #f1948a;
+  padding: 10px 16px 8px 4px;
+  scrollbar-width: thin;
+}
+/* 新消息指示条（20260828h，聊天软件标准）：翻历史时新消息不强制拉回，
+   但悬浮提示"有新消息"，点击回底；滚回底部自动消失。定位在输入区上方居中 */
+.chat-new-msg-note {
+  position: absolute;
+  left: 50%;
+  bottom: 88px; /* 20260828s：预览区 40px→20px（输入栏回落），提示条同步下移 */
+  transform: translateX(-50%);
+  z-index: 6;
+  display: none;
+  padding: 4px 16px;
+  border-radius: 999px;
+  background: rgba(241, 148, 138, 0.95); /* 主题粉色，面板为固定白底无暗色变体 */
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  user-select: none;
+  white-space: nowrap;
+}
+.chat-new-msg-note.active { display: block; }
+.chat-new-msg-note:hover { background: #e8837a; }
+.chat-msg {
+  margin-bottom: 6px;
+  line-height: 1.5;
+  word-break: break-word;
+  animation: fadeIn 0.2s ease;
+  text-align: left;
+}
+.chat-msg.user { color: #555; text-align: right; }
+.chat-msg.user .msg-label { font-weight: 600; color: #333; font-size: 12px; }
+.chat-msg.user .msg-text, .chat-msg.agent .msg-text { display: inline-block; vertical-align: top; text-align: left; max-width: 100%; white-space: normal; }
+.chat-msg.agent { color: #555; text-align: left; }
+.chat-msg.agent .msg-label { font-weight: 600; color: #e74c3c; font-size: 13px; }
+.chat-msg.error { color: #e74c3c; text-align: center; font-size: 13px; }
+
+/* 对话内内置表情包尺寸（:名字: → <img class="sticker">，class 与 src 前缀双保险）。
+   ⚠️ 选择器必须带上 `.chat-msg.agent .msg-text`：下面那条气泡内 markdown 图片规则
+   `.chat-msg.agent .msg-text img { height: auto }`（0,3,1）优先级高于原来的
+   `.chat-msg img.sticker`（0,2,1），实测把 :犯错: 按**原图**渲染成 128×116、独占好几行
+   （20260916 用户报"表情占多行 / 文本滚不到底"）——补成 4 个 class 才压得住。 */
+.chat-msg img.sticker, .chat-msg img[src^="/stickers/"],
+.chat-msg.agent .msg-text img.sticker, .chat-msg.agent .msg-text img[src^="/stickers/"] {
+  /* 3.9em ≈ 58px（面板基准 15px）= 素材原生 128×116 的**一半**。20260916 用户定：
+     1.8em（27px）太小、原始尺寸（116px，被更具体的规则意外放着）太大。 */
+  height: 3.9em; width: auto; vertical-align: middle; display: inline-block; margin: 0 2px;
+}
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* 已选图片缩放图标（20260828 修正 + 20260828s 多图）：输入栏顶部常驻留白
+   （输入栏加高的落点，缩略图 ≈ 按钮图标大小 18px，一行最多 6 张），选图后
+   JS 动态填充 .chat-img-preview-item（img + 右上角 ×，逐个移除） */
+.chat-img-preview {
+  display: flex;
+  align-items: center;
+  height: 18px; /* 20260829a：20px→18px 刚好放下缩略图，不留余量（输入栏再缩矮） */
+  margin: 0 40px 0 28px; /* 28px 对齐消息区左内边距 */
+  flex-shrink: 0;
+}
+.chat-img-preview-item {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
+}
+.chat-img-preview-item img {
+  width: 18px;
+  height: 18px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid #e8c8c4;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  display: block;
+}
+.chat-img-preview-remove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid #fff;
+  background: #e74c3c;
+  color: #fff;
+  font-size: 9px;
+  line-height: 10px;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+}
+.chat-img-preview-remove:hover { background: #c0392b; }
+/* 选图按钮（20260828 修正：放进左侧拖拽栏 .chat-drag-bar-l 内）：
+   absolute 定位在拖拽条区域内（不挤占内容宽度），事件不经过拖拽条
+   （兄弟元素，无冒泡）→ 点击与拖拽互不干扰 */
+.chat-img-btn {
+  position: absolute;
+  left: 3px; /* 20260828s：拖拽栏 24px 内 18px 图标居中 */
+  bottom: 14px;
+  z-index: 6; /* 高于拖拽栏（t=5/l=4），选图点击不被拖拽条拦截 */
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  line-height: 0;
+  border-radius: 6px;
+}
+.chat-img-btn svg { width: 18px; height: 18px; display: block; }
+.chat-img-btn:hover { background: rgba(231, 76, 60, 0.15); }
+/* 气泡内图片（多模态 20260828 改进②，20260828s 多图）：用户消息带图直接展示；
+   多图走网格横排（flex wrap 自动换行）；远端窗口无图数据渲染灰色占位块 */
+.chat-msg .msg-bubble .msg-img-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 372px; /* 2 × 180px + gap */
+  margin-bottom: 4px;
+}
+.chat-msg .msg-bubble .msg-img {
+  display: block;
+  width: 180px;
+  height: 180px;
+  border-radius: 8px;
+  border: 1px solid #eee;
+  object-fit: cover;
+  background: #fff;
+}
+.chat-msg .msg-bubble .msg-img-placeholder {
+  width: 96px;
+  height: 72px;
+  border-radius: 8px;
+  border: 1px dashed #ddd;
+  background: #f7f7f7;
+  /* 20260829d：图标在上、文字在下（flex column） */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: #999;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.chat-msg .msg-bubble .msg-img-placeholder .msg-img-expired-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+.chat-input-area {
+  position: relative;
+  display: flex;
+  flex-direction: column; /* 20260828 修正：预览区在输入框上方（输入栏加高） */
+  gap: 4px;
+  /* 右侧留 40px 给缩放把手，避免遮挡发送按钮 */
+  /* 20260901f：margin-left 让位左栏后，border-left 与 .chat-messages 的
+     border-left 连成内侧竖线（L 形镶边竖段贯穿消息区+输入区）；padding-left
+     28px→4px（margin 已让位，内容位置不变） */
+  margin-left: var(--drag-w);
+  border-left: var(--drag-lw) solid #f1948a;
+  padding: 4px 26px 12px 4px; /* 20260829a：顶部 8px→4px（输入栏再缩矮，预览区已 18px 刚好放下）；20260905f 右留 40→26px：角把手 24→14px，多余留空让回发送区 */
+  /* 20260828s→20260829a：border-top 改 ::before 伪元素——左侧拖拽栏（z3 不透明
+     背景）会盖住 border 左段导致分割线视觉断开；伪元素 z6 高于拖拽栏。
+     20260829a 修正起点：left 从 0（贯穿侧边栏）改为 var(--drag-w)（侧边栏轮廓线
+     右缘）——用户要求"分割线不贯穿侧边栏，刚好与轮廓线连上"。20260901f：
+     输入区 margin-left 让位后自身左缘即面板 x=24，::before left 改 0 与消息区
+     border-left 对齐 */
+  border-top: none;
+}
+.chat-input-area::before {
+  content: '';
+  position: absolute;
+  left: 0; /* 20260901f：输入区 margin-left 让位后自身左缘 = 面板 x=24（消息区 border-left 位置） */
+  right: 0;
+  top: -1px;
+  border-top: 1px solid #e74c3c;
+  border-top-left-radius: 2px;
+  z-index: 6;
+  pointer-events: none;
+}
+/* 拖拽图片入输入栏（20260829a）：文件悬停时虚线高亮提示可放置 */
+.chat-input-area.chat-drag-over {
+  outline: 2px dashed #e74c3c;
+  outline-offset: -3px;
+  border-radius: 8px;
+}
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+}
+.chat-input {
+  flex: 1;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 8px 12px;
+    font-size: 15px !important;
+  outline: none;
+  color: #333;
+  background: #fafafa;
+  transition: border-color 0.2s;
+  resize: none;
+    /* CJK 字体优先：拉丁字体（Arial/Consolas 等）渲染的弯引号 U+201C/U+201D 是
+       窄基线形态，在中文语境下视觉呈"反的"（开引号看着像闭引号）。CJK 字体
+       靠前才能拿到正确全角字形 */
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
+        "Hiragino Sans GB", sans-serif !important;
+    line-height: 1.4 !important;
+  min-height: 34px;  /* 20260828 修正：恢复输入框原高度（加高的是输入栏非输入框） */
+  max-height: 90px;
+  overflow-y: auto;
+}
+.chat-input:focus { border-color: #e74c3c; background: #fff; outline: none; }
+.chat-send {
+  border: none;
+  background: #e74c3c;
+  color: #fff;
+  border-radius: 8px;
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
+        "Hiragino Sans GB", sans-serif !important;
+    padding: 8px 18px !important;
+    font-size: 15px !important;
+    line-height: 1.4 !important;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+.chat-send:hover { background: #c0392b; }
+.chat-send:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 停止生成按钮：输出中发送按钮切换为停止图标（主流对话 UI 的"停止"形态），
+   红色底 + 白色圆角方块，与发送按钮同色系；min-width 固定宽度避免文字↔图标切换时布局跳动 */
+.chat-send.stop-mode { min-width: 66px; }
+.chat-stop-icon {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 2.5px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+  vertical-align: middle;
+}
+
+/* Navigation confirmation */
+.chat-nav-confirm {
+  display: none;
+  /* 20260901f：margin/border 与 .chat-messages 对齐——L 形镶边竖线在确认框
+     段不断开（流式元素左侧 24px 原被 l 栏背景盖住无需让位，现统一边框） */
+  margin-left: var(--drag-w);
+  border-left: var(--drag-lw) solid #f1948a;
+  padding: 8px 12px 10px 4px;
+  text-align: center;
+  border-top: 1px solid #eee;
+  font-size: 13px;
+  color: #555;
+}
+.chat-nav-confirm.active { display: block; }
+.chat-nav-confirm .nav-question { margin-bottom: 6px; }
+.chat-nav-btns { display: flex; gap: 8px; justify-content: center; }
+.chat-nav-btn {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 4px 18px;
+  font-size: 12px;
+  cursor: pointer;
+  background: #fff;
+  transition: all 0.2s;
+}
+.chat-nav-btn.yes { border-color: #e74c3c; color: #e74c3c; }
+.chat-nav-btn.yes:hover { background: #e74c3c; color: #fff; }
+.chat-nav-btn.no { border-color: #999; color: #999; }
+.chat-nav-btn.no:hover { background: #999; color: #fff; }
+
+/* 色块预览（20260921，颜色对话）：正文里出现的**站内色板色值**旁挂一个小色块，
+   色块由前端按 hex 画（chatMarkdown.ts::decorateColorSwatches），模型自己不画符号。
+   内阴影描边让白/浅色块在浅底与深底上都能看出边界。 */
+.chat-swatch-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.chat-swatch {
+  display: inline-block; flex: none; width: 12px; height: 12px;
+  border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18);
+}
+
+
+
+/* 用户消息气泡样式 */
+.chat-msg.user {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.chat-msg.user .msg-label {
+  font-weight: 700;
+  color: #222;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+.chat-msg.user .msg-text {
+  display: inline;
+}
+.msg-bubble {
+  display: inline-block;
+  background: #e74c3c;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 14px;
+  max-width: 560px;
+  word-break: break-word;
+  line-height: 1.4;
+  font-size: 15px;
+}
+/* 气泡内 markdown 段落（applyMsg 产出 <p>）：p 的 UA 默认 margin 1em 会把气泡
+   撑高约 30px。博客页有 tailwind preflight 全局 reset 掩盖了此问题，无 reset 的
+   页面（device-console 手写 HTML）气泡高度异常——与 agent 侧 .msg-text p 对称 */
+.msg-bubble p { margin: 0; }
+/* 气泡内 markdown 图片（20260901）：max-width 防撑破 560px 气泡；单击放大走
+   全局 md-zoom 浮层（zoomOverlay.ts 注册于 __openZoomOverlay）。
+   限定 .msg-text——用户发图 .msg-img（180×180 网格）不受影响 */
+.chat-msg.agent .msg-text img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  cursor: zoom-in;
+}
+/* Agent 消息样式 */
+.chat-msg.agent {
+  text-align: left;
+}
+.chat-msg.agent .msg-label {
+  font-weight: 600;
+  color: #e74c3c;
+  font-size: 12px;
+}
+.chat-msg.agent .msg-text {
+  color: #444;
+  font-size: 15px;
+  white-space: normal;
+}
+/* AI 生成声明（20260829g）：最后一条 agent 回答下方居中灰色斜体小字。
+   :last-child 限定 messages 容器最后一个子元素是 agent 消息时显示——
+   用户新消息追加后自动隐藏、新回复到达后自动跟随，零 JS 侵入 */
+.chat-msg.agent:last-child::after {
+  content: "本回答由AI生成，内容仅供参考，请仔细甄别";
+  display: block;
+  text-align: center;
+  font-size: 11px;
+  font-style: italic;
+  color: #999;
+  margin: 6px 0 2px;
+}
+/* ── 失败气泡重发/编辑按钮（20260829h）──
+   网络波动/空闲超时失败轮：user 消息已入库（断连清理只删残缺保留 user），
+   不重发会在下次请求被 agent "补答"——重发 = 删 DB 旧轮后走主流程 */
+.chat-msg-retry {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;   /* 提示语（.chat-retry-hint）独占一行，别挤在两个按钮中间 */
+}
+.chat-retry-btn {
+  background: none;
+  border: 1px solid #ddd;
+  color: #888;
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+  line-height: 1.6;
+}
+.chat-retry-btn:hover {
+  border-color: #999;
+  color: #333;
+}
+.chat-retry-btn:disabled {
+  opacity: .5;
+  cursor: default;
+}
+/* ── 执行过程行（agent 流式中间轨迹，灰色可折叠，类 Claude Code）──
+   展示计划/工具调用/质检打回等步骤；被打回轮次的完整文本归档为可展开子项 */
+.agent-process {
+  margin: 2px 0 8px;
+  border-left: 2px solid #ddd;
+  padding-left: 8px;
+  color: #999;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.agent-process-head {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: #999;
+}
+.agent-process-head::-webkit-details-marker { display: none; }
+.agent-process-head::before { content: '▸ '; }
+.agent-process[open] > .agent-process-head::before { content: '▾ '; }
+.agent-process-count { color: #bbb; margin-left: 2px; }
+.agent-process-body { margin-top: 2px; }
+.agent-process-line {
+  color: #999;
+  font-size: 12px;
+  padding: 1px 0;
+  word-break: break-all;
+}
+.agent-process-line.reject-empty { color: #c0392b; }
+.agent-process-reject {
+  margin: 3px 0;
+  color: #999;
+}
+.agent-process-reject > summary {
+  cursor: pointer;
+  list-style: none;
+  color: #c0392b;
+  font-size: 12px;
+  user-select: none;
+}
+.agent-process-reject > summary::-webkit-details-marker { display: none; }
+.agent-process-reject > summary::before { content: '▸ '; }
+.agent-process-reject[open] > summary::before { content: '▾ '; }
+.agent-process-reject-body {
+  margin: 2px 0 2px 12px;
+  padding: 4px 8px;
+  background: #f5f5f5;
+  border-radius: 4px;
+  color: #888;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 流式输出阶段用 pre-line 展示纯文本换行；最终 markdown 渲染完成后恢复 normal，
+   与博客 .markdown-body 一致，避免块级元素间的空白换行在对话框里显示成空行 */
+.chat-msg .msg-text.msg-streaming { white-space: pre-line; }
+/* 自动跳转被拦截时的系统提示（目标不是博客真实页面，如 agent 幻觉的 /iot） */
+.nav-skip-note { margin-top: 6px; font-size: 12px; color: #999; font-style: italic; }
+
+/* Markdown 渲染样式 */
+.chat-msg.agent .msg-text p { margin: 0 0 4px; }
+.chat-msg.agent .msg-text p:last-child { margin-bottom: 0; }
+.chat-msg.agent .msg-text a { color: #e74c3c; }
+.chat-msg.agent .msg-text ul, .chat-msg.agent .msg-text ol { margin: 2px 0 4px; padding-left: 20px; }
+.chat-msg.agent .msg-text li { margin-bottom: 2px; }
+/* 代码块：深色底 + 标签栏（20260914）。两件事一次做：
+   ① 标签栏/复制按钮由 decorateCodeBlocks 注入（见 src/utils/chatMarkdown.ts），
+      与文章页同一套；② 底色从 #f5f5f5 改深——高亮涂的是 atom-one-dark 的深色
+      主题配色（随主 CSS 全局加载，对话框也吃到），原先浅底上 params #abb2bf、
+      built_in #e6c07b、string #98c379 对比度仅 1.5-2.0:1 几乎看不见；改深底后与
+      文章页代码块一致（同 #0f172a），token 恢复可读。选择器由 .chat-msg.agent
+      放宽到 .chat-msg：用户气泡里的代码块此前完全没有样式，标签栏会落在裸 pre 上 */
+.chat-msg .msg-text pre { margin: 4px 0; padding: 8px 10px; background: #0f172a; border: 1px solid rgba(255, 255, 255, 0.08); color: #e2e8f0; border-radius: 6px; overflow-x: auto; white-space: pre; font-size: 14px; }
+.chat-msg.agent .msg-text code { background: #f5f5f5; padding: 0 3px; border-radius: 3px; font-size: 14px; }
+.chat-msg.agent .msg-text pre code { background: none; padding: 0; }
+.chat-msg .msg-text .code-block-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: 4px 0 0; padding: 3px 8px;
+  background: #1e293b; border: 1px solid rgba(255, 255, 255, 0.08); border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: #94a3b8; font-size: 12px; line-height: 1.5;
+}
+.chat-msg .msg-text .code-lang { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-msg .msg-text .code-block-head + pre { margin-top: 0; border-radius: 0 0 6px 6px; }
+.chat-msg .msg-text .code-copy {
+  flex: 0 0 auto; padding: 1px 8px;
+  background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 4px;
+  color: #cbd5e1; font-family: inherit; font-size: 12px; line-height: 1.5;
+  cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.chat-msg .msg-text .code-copy:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.chat-msg .msg-text .code-copy.copied { color: #86efac; border-color: rgba(134, 239, 172, 0.45); }
+.chat-msg.agent .msg-text h1, .chat-msg.agent .msg-text h2, .chat-msg.agent .msg-text h3, .chat-msg.agent .msg-text h4 { margin: 6px 0 4px; font-size: 16px; }
+.chat-msg.agent .msg-text h5, .chat-msg.agent .msg-text h6 { margin: 5px 0 3px; font-size: 15px; }
+.chat-msg.agent .msg-text table { border-collapse: collapse; margin: 4px 0; font-size: 14px; }
+.chat-msg.agent .msg-text th, .chat-msg.agent .msg-text td { border: 1px solid #e5e5e5; padding: 3px 8px; text-align: left; }
+.chat-msg.agent .msg-text th { background: #fafafa; font-weight: 600; }
+.chat-msg.agent .msg-text img { max-width: 100%; border-radius: 6px; margin: 4px 0; }
+.chat-msg.agent .msg-text blockquote { margin: 4px 0; padding: 2px 8px; border-left: 3px solid #f1948a; color: #888; }
+.chat-msg.agent .msg-text .katex { font-size: 1.05em; }
+/* ── 时间标签（微信式时间分组：会话间隔 >5 分钟时在新一段首条上方显示）── */
+.chat-time-divider {
+  text-align: center;
+  font-size: 11px;
+  color: #999;
+  padding: 6px 0 2px;
+  user-select: none;
+}
+/* ── 失败轮持久化提示（20260902，025943 事故修复）：刷新后仍可见的"未收到回复" ── */
+.chat-msg-failed-note {
+  text-align: center;
+  font-size: 11px;
+  color: #c9985a;
+  padding: 2px 0 6px;
+  user-select: none;
+}
+/* 刷新后同样能重发/编辑（20260927）：按钮排在提示条里、居中；`.chat-msg-retry`
+   本身是 flex 左对齐（挂在气泡里时用），这里只覆盖对齐方式 */
+.chat-msg-failed-note .chat-msg-retry {
+  justify-content: center;
+}
+.chat-retry-hint {
+  flex: 0 0 100%;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #c9985a;
+}
+
+/* ── 断流提示接在"已收到的部分"之后（20260916，agent worker 静默崩溃事故）──
+   以前断流是整段替换成"网络错误: …"，用户已经看着流出来的半截回复被抹掉、以为没生成；
+   现在只在这段正文**之后**追加一行提示（正文本身照旧入库，提示不进 items/DB）。 */
+.chat-msg .msg-text .chat-msg-err-note {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(231, 76, 60, 0.35);
+  font-size: 12px;
+  color: #e74c3c;
+}
+
+/* ── Mobile (≤768px)：对话面板适配屏幕宽度 ── */
+@media (max-width: 768px) {
+    #waifu-chat {
+        width: calc(100vw - 30px);
+        max-width: calc(100vw - 30px);
+    }
+}
+
+/* 打字指示器（静默反馈）：流进行中 >1.2s 无帧（LLM 首 token/工具执行间隙）三点跳动 */
+.chat-typing { display: none; vertical-align: bottom; margin-right: 4px; }
+.chat-typing.typing-visible { display: inline-flex; align-items: center; gap: 3px; }
+.chat-typing i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .45; animation: chatTypingBounce 1.2s infinite ease-in-out; }
+.chat-typing i:nth-child(2) { animation-delay: .15s; }
+.chat-typing i:nth-child(3) { animation-delay: .3s; }
+@keyframes chatTypingBounce { 0%, 60%, 100% { transform: translateY(0); opacity: .45; } 30% { transform: translateY(-3px); opacity: 1; } }
+
+/* emoji 渲染兜底：页面无全局字体栈（系统默认），Unicode 13+ emoji（如 🪄 U+1FA84）
+   在多数系统默认字体缺 glyph，显示为空白/豆腐块——给消息文本显式加 emoji 回退
+   （逐字符回退，汉字/拉丁仍走前列字体，无感知） */
+.chat-msg .msg-text {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ── 20260903 会话化一期：双栏（加宽）布局 + 会话列表 + 标题条 ──
+   几何不变式：
+   · 拖拽栏（--drag-w 24px）与消息区 border-left（2px #f1948a）同槽位叠线，
+     L 形内侧镶边由 messages/input-area/nav-confirm 的 border 承担（拖拽栏无 border）。
+   · conv-open：JS 把面板 inline width +260（桌面），列列表 absolute 占据
+     x ∈ [--drag-w, --drag-w+260]，y ∈ [--drag-h, bottom]；消息/输入/标题/确认
+     条的 margin-left 右移 260 → 各自的 border-left 跟着右移，在列右缘画出
+     分隔竖线（面板自身不需要 border-right）。列表列背景与拖拽栏同色连成大片，
+     顶条（全宽 #fbf1f0）之上无断差。
+   · rail（左拖拽条内的图标栏）absolute 覆层 z6：☰/＋/历 与拖拽栏互为兄弟元素
+     （同 chat-img-btn 先例），点击不触发拖动；conv-open 下列表列 z4 在其下方，
+     不遮挡。
+   · 移动端 ≤768px：JS 让位面板宽度（style.width='' 由 calc(100vw-30px) 接管），
+     列表改覆盖式（absolute inset 盖住消息区），收起靠列表头 ⟵。
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 左侧窄图标栏（覆在左拖拽栏上）── */
+.chat-rail {
+  position: absolute;
+  top: var(--drag-h);
+  left: 0;
+  width: var(--drag-w);
+  z-index: 6; /* 高于拖拽栏 t(5)/l(4) 与列表列(4)；把手 7 仍在角上可缩 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0;
+}
+.chat-rail-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: #c0392b;
+  font-size: 15px;
+  line-height: 1;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chat-rail-btn:hover { background: rgba(231, 76, 60, 0.15); }
+
+/* ── 会话列表面板（默认隐藏；.conv-open 显示）── */
+.waifu-conv-panel {
+  display: none;
+  position: absolute;
+  top: var(--drag-h);
+  bottom: 0;
+  left: var(--drag-w);
+  width: 260px; /* 与 chat-session.js CONV_WIDTH / 加宽量一致 */
+  background: #fbf1f0;
+  z-index: 4;
+  flex-direction: column;
+}
+#waifu-chat.conv-open .waifu-conv-panel { display: flex; }
+.conv-list-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 8px 6px 10px;
+  border-bottom: 1px solid rgba(241, 148, 138, 0.4);
+  flex-shrink: 0;
+}
+.conv-list-title { flex: 1; font-size: 13px; color: #8d6e63; user-select: none; }
+.conv-head-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: #c0392b;
+  font-size: 15px;
+  line-height: 1;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.conv-head-btn:hover { background: rgba(231, 76, 60, 0.15); }
+.conv-list-body { flex: 1; overflow-y: auto; padding: 6px 0; scrollbar-width: thin; }
+
+/* ── 会话行：标题（单行截断）+ 相对时间 + ⋯/删除 ── */
+.conv-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px 7px 10px;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background .15s;
+  margin: 0 4px;
+}
+.conv-row:hover { background: rgba(255, 255, 255, 0.85); }
+.conv-row.active { background: rgba(231, 76, 60, 0.13); }
+.conv-row-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+.conv-row-time { flex-shrink: 0; font-size: 10px; color: #b99990; user-select: none; }
+.conv-more {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: #b99990;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.conv-more:hover { background: rgba(231, 76, 60, 0.12); color: #c0392b; }
+.conv-list-empty { padding: 24px 10px; text-align: center; font-size: 12px; color: #b99990; }
+
+/* ── 当前会话标题条（细高一条，在顶拖拽栏之下；替代消息区顶部 L 边线）──
+   仅 #waifu-chat.show-title 显示（chat-session renderHeader 置位：登录态且会话
+   已决议——显式会话或空白态）。非 show-title 时 messages 保留原 margin/border，
+   零回归 */
+.chat-conv-title {
+  display: none;
+  flex-shrink: 0;
+  margin: var(--drag-h) 0 0 var(--drag-w);
+  border-left: var(--drag-lw) solid #f1948a;
+  border-bottom: var(--drag-lw) solid #f1948a;
+  padding: 3px 12px 4px 8px;
+  font-size: 12px;
+  color: #999;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+  background: #fff; /* 覆盖下方 messages 滚动内容穿过 title 区域的视觉 */
+}
+#waifu-chat.show-title .chat-conv-title { display: block; }
+/* 标题条自身带 border-bottom 横线 → messages 顶部横线去掉、margin-top 归零
+   （标题条已把内容区从顶条下方顶开） */
+#waifu-chat.show-title .chat-messages {
+  margin-top: 0;
+  border-top: none;
+}
+
+/* ── conv-open 双栏：消息/输入/标题/确认条 margin-left 右移出 260px 列表列 ──
+   （各自的 border-left 随 margin 右移，在列右缘画出分隔竖线） */
+#waifu-chat.conv-open .chat-messages,
+#waifu-chat.conv-open .chat-input-area,
+#waifu-chat.conv-open .chat-nav-confirm,
+#waifu-chat.conv-open .chat-conv-title {
+  margin-left: calc(var(--drag-w) + 260px);
+}
+/* 新消息指示条：双栏下消息区视觉中心右移 ~130px（260/2，拍板近似） */
+#waifu-chat.conv-open .chat-new-msg-note { left: calc(50% + 130px); }
+/* 选图按钮位于左拖拽栏底部，conv-open 时落在列表列内 → 隐藏（列表操作期不需要） */
+#waifu-chat.conv-open .chat-img-btn { display: none; }
+
+/* 移动端（≤768px）：面板宽由 CSS calc(100vw-30px) 接管（JS 置空 inline width），
+   列表降级为覆盖式——absolute inset 盖住整个消息区，收起靠列表头 ⟵ */
+@media (max-width: 768px) {
+  #waifu-chat.conv-open .waifu-conv-panel {
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 100%;
+    z-index: 8; /* 高于 rail/close(6)/消息区，整面覆盖 */
+  }
+  /* 覆盖式下列表盖住 rail 与关闭钮：进入列表时先收起（chat-session closeList
+     在移动端把面板宽度交还 CSS），退出列表即恢复 */
+  #waifu-chat.conv-open .chat-messages,
+  #waifu-chat.conv-open .chat-input-area,
+  #waifu-chat.conv-open .chat-nav-confirm,
+  #waifu-chat.conv-open .chat-conv-title {
+    margin-left: var(--drag-w); /* 列表已覆盖全面板，消息区无需右移 */
+  }
+  #waifu-chat.conv-open .chat-new-msg-note { left: 50%; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ── 20260903b UI 重构（用户实测拍板）：覆盖上方 20260903a 双栏规则 ──
+   变更点：
+   · 抽屉宽 260 → 182（--conv-w，收窄 30%）
+   · 几何推翻：conv-open 不再加宽面板/右移消息区——面板宽与消息区零位移，
+     抽屉为叠层。方向由 chat-session.js 定：conv-in（默认，面板内覆盖，
+     从 rail 右缘起盖消息区左段）/ conv-out（面板左缘距视口 ≥ 194px 时
+     向左弹出到面板外）
+   · 会话标题：从消息区顶部横条移入顶部拖拽条内（absolute 覆层，居中，
+     :empty 隐藏）——消息区不再因标题让位
+   · rail：☰ 顶 + 底部组（＋ 历）靠图片按钮往上堆叠；按钮图标 SVG 注入
+   · 列表头：去掉收起/新对话按钮（rail 已有），加搜索框（本地过滤标题）
+   · 行 ⋯：纵向菜单 [删除/置顶/重命名]（删除走红色确认条 3s 过期还原）；
+     点非列表区域自动收起（mousedown 全局监听，session.js onDocDown）
+   · 置顶行：📌 前缀 + 服务端排序（pinned 优先）
+   ══════════════════════════════════════════════════════════════════════ */
+#waifu-chat {
+  --conv-w: 182px; /* 会话抽屉宽（chat-session.js CONV_WIDTH=182 同步） */
+}
+
+/* ── 会话标题：顶部拖拽条内覆层（不占布局；空文本隐藏）── */
+.chat-conv-title {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: var(--drag-w);
+  right: 0;
+  height: var(--drag-h);
+  line-height: calc(var(--drag-h) - 2px);
+  text-align: center;
+  font-size: 12px;
+  color: #8d6e63;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 56px; /* 两端避让 rail 钮区与右上 close */
+  box-sizing: border-box;
+  pointer-events: none; /* 标题不拦截拖拽条拖动 */
+  z-index: 7;
+  user-select: none;
+}
+.chat-conv-title:empty { display: none; }
+/* 旧 show-title 语义（标题横条替代消息区顶部 L 线）已废除：标题进顶条后
+   messages 永远保持默认 margin/border，show-title 类不再有任何效果 */
+#waifu-chat.show-title .chat-conv-title { display: block; }
+#waifu-chat.show-title .chat-messages {
+  margin-top: var(--drag-h);
+  border-top: var(--drag-lw) solid #f1948a;
+}
+
+/* ── rail：☰ 顶部固定；底部组贴图片按钮上方 ── */
+.chat-rail {
+  justify-content: space-between;
+  bottom: 0; /* 撑满内容区高度，space-between 把底部组压到 rail 底 */
+  padding: 6px 0 38px; /* 底部留白 = 图片按钮(bottom 14 + 高 18)上缘之上 */
+}
+.chat-rail-bot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.chat-rail-btn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  pointer-events: none; /* svg 不拦截点击（冒泡给 button） */
+}
+
+/* ── conv-open 几何推翻：零位移，抽屉叠层 ──
+   （覆盖上方 calc(+260px) 让位群与 note/img-btn 位移规则） */
+#waifu-chat.conv-open .chat-messages,
+#waifu-chat.conv-open .chat-input-area,
+#waifu-chat.conv-open .chat-nav-confirm {
+  margin-left: var(--drag-w);
+}
+#waifu-chat.conv-open .chat-conv-title {
+  margin-left: 0;
+}
+#waifu-chat.conv-open .chat-new-msg-note { left: 50%; }
+#waifu-chat.conv-open .chat-img-btn { display: block; }
+
+/* ── 抽屉面板（叠层，z 8 盖消息内容/新消息提示，rail 在最左不受影响）── */
+.waifu-conv-panel {
+  width: var(--conv-w);
+  z-index: 8;
+}
+#waifu-chat.conv-open .waifu-conv-panel { display: flex; }
+/* conv-in（默认）：rail 右缘起覆盖消息区左段 */
+#waifu-chat.conv-in .waifu-conv-panel {
+  left: var(--drag-w);
+  right: auto;
+  top: var(--drag-h);
+  bottom: 0;
+}
+/* conv-out：面板左缘外向左弹出（chat-session 视口检测才置此 class） */
+#waifu-chat.conv-out .waifu-conv-panel {
+  left: calc(-1 * var(--conv-w));
+  right: auto;
+  top: var(--drag-h);
+  bottom: 0;
+}
+
+/* ── 列表头：标题行 + 搜索框（纵向排）── */
+.conv-list-head {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px 10px 6px;
+}
+.conv-list-title { flex: none; }
+.conv-search {
+  border: 1px solid #e8c8c4;
+  background: #fff;
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 3px 8px;
+  outline: none;
+  color: #555;
+  width: 100%;
+  box-sizing: border-box;
+  height: 24px;
+}
+.conv-search:focus { border-color: #e8a49a; }
+.conv-search::placeholder { color: #c9a8a0; }
+
+/* ── 行：标题(+置顶标)/时间/⋯ + 纵向菜单 + 删除确认条 ── */
+.conv-row {
+  position: relative; /* 菜单/确认条定位基准 */
+  padding: 0;
+}
+.conv-row-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1; /* 20260905：行内占满（自由空间归 main）→ time 的 margin-left:auto
+              才有空间可分 → 时间/⋯ 恒贴行右，长标题在自身 flex:1+min-width:0
+              内截断，不再把右列顶出去（"时间跟标题名跑"） */
+  min-width: 0;
+  padding: 7px 6px 7px 10px;
+}
+.conv-row.pinned .conv-row-title::before { content: '📌 '; }
+.conv-row-time {
+  flex-shrink: 0;
+  margin-left: auto; /* 时间贴行右（more 之前） */
+}
+/* 起点标记（20260918 A 方案·用户拍板）：跨天会话在活动时间后补"· 9-5 起"。
+   比活动时间更小更淡——读作"这个会话开了多久"，不是第二个时间。长会话标题是
+   首条消息的旧标题、时间却是当前，不标起点极易被读成"旧会话被刷新成最新" */
+.conv-row-since { font-size: 9px; color: #cbb6b0; }
+.conv-more { flex-shrink: 0; }
+.conv-row.menu-open .conv-more {
+  background: rgba(231, 76, 60, 0.12);
+  color: #c0392b;
+}
+/* 纵向菜单：⋯ 点击弹出（行内 absolute；下部行由 JS 置 menu-up 向上弹） */
+.conv-row-menu {
+  display: none;
+  position: absolute;
+  right: 6px;
+  top: calc(100% + 2px);
+  z-index: 12;
+  background: #fff;
+  border: 1px solid #f0d5d1;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(120, 60, 50, 0.14);
+  padding: 4px;
+  min-width: 96px;
+  flex-direction: column;
+}
+.conv-row.menu-open .conv-row-menu { display: flex; }
+.conv-row.menu-up .conv-row-menu {
+  top: auto;
+  bottom: calc(100% + 2px);
+}
+.conv-menu-item {
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+  color: #555;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.conv-menu-item:hover { background: #fdf3f2; color: #c0392b; }
+.conv-menu-item.danger { color: #e74c3c; }
+.conv-menu-item.danger:hover { background: #fdecea; }
+/* 删除确认条（armDelete 后替换行内容，3s 过期还原；20260905 拆两半：
+   左 橘红「确定删除」= 真删 / 右 白「取消」= 还原） */
+.conv-row-confirm {
+  display: none;
+  flex: 1;
+}
+.conv-row.del-confirm .conv-row-main { display: none; }
+/* 20260905：确认条 flex:1 撑满整行——此前为横向 flex 子项被 shrink 压到 70px，
+   文字越界被行 overflow:hidden 裁成半截（"删除确认条不完整/怪异"），row 内仅剩
+   该子项时须占满行宽。两半按钮各自 flex:1 均分行宽，行 overflow:hidden 圆角收边 */
+.conv-row.del-confirm .conv-row-confirm { display: flex; }
+.conv-row.del-confirm { border-radius: 8px; overflow: hidden; }
+.conv-row-confirm button {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  padding: 7px 0;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.conv-confirm-del { background: #e74c3c; color: #fff; }
+.conv-confirm-del:hover { background: #c0392b; }
+.conv-confirm-cancel { background: #fff; color: #666; }
+.conv-confirm-cancel:hover { background: #fdf3f2; }
+.conv-confirm-del + .conv-confirm-cancel { border-left: 1px solid #f5d5cf; }
+/* 重命名输入框（行内替代标题） */
+.conv-rename-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #555;
+  border: 1px solid #e8b0a8;
+  border-radius: 6px;
+  padding: 2px 6px;
+  outline: none;
+  background: #fff;
+  height: 22px;
+}
+.conv-rename-input:focus { border-color: #e74c3c; }
+.conv-row.renaming .conv-row-time { display: none; }
+
+/* 移动端：恒 conv-in 面板内覆盖（覆盖上方 20260903a 媒体块整段——
+   抽屉盖到 rail 右缘为止，rail ☰ 始终可点收起；宽度让满余量） */
+@media (max-width: 768px) {
+  #waifu-chat.conv-in .waifu-conv-panel,
+  #waifu-chat.conv-out .waifu-conv-panel {
+    left: var(--drag-w);
+    right: 0;
+    width: auto;
+    top: 0;
+    bottom: 0;
+  }
+  #waifu-chat.conv-open .chat-messages,
+  #waifu-chat.conv-open .chat-input-area,
+  #waifu-chat.conv-open .chat-nav-confirm,
+  #waifu-chat.conv-open .chat-conv-title {
+    margin-left: var(--drag-w);
+  }
+  #waifu-chat.conv-open .chat-new-msg-note { left: 50%; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ── 20260903c 第二轮实测修正（用户拍板）──
+   · 标题落位：20260903b 把 .chat-conv-title 改顶条绝对覆层时未清掉
+     20260903a 遗留 margin/border/background —— 覆层被 margin-top
+     (var(--drag-h)=24px) 整体顶进消息区（"标题写在会话窗口里面 34px"），
+     白底+描边在窗口内拉出横带（"缺口"）。统一清零。
+   · rail 空区 pointer-events:none：rail 撑满左条（bottom:0）后整块盖住
+     下方图片按钮（同 z6、DOM 在后）→ 图钮失效；放行空区点击，按钮区恢复。
+     rail 图标 16 → 18px（历史会话图标略微放大）
+   · conv-out 语义重定义：旧"抽屉定位到面板左缘外"被 #waifu-chat
+     overflow:hidden 整体裁切 → 屏幕中段直接打不开。新几何：chat-session.js
+     把面板左移 182 + 加宽 182，本块把内容布局右移 var(--conv-w) →
+     消息区/rail/拖拽栏视口原位不动，左 182 列 = 会话侧边栏真窗格
+     （拖拽栏不动，向左开拓出侧边栏区域）
+   · conv-in 保留：面板左缘距视口 <186px / 移动端 → rail 右缘起覆盖兜底
+   · ⋯ 菜单：项图标化（flex 图标+文字），默认向下展开（JS 仅贴底翻上）
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 1) 标题：清除 20260903a 遗留（margin-top 顶进消息区 / 白底 / 描边） */
+.chat-conv-title {
+  margin: 0;
+  border: none;
+  background: transparent;
+}
+
+/* 2) rail 空区放行点击（图片按钮复活；空区点击落回左拖拽栏可拖动） */
+.chat-rail { pointer-events: none; }
+.chat-rail-btn { pointer-events: auto; }
+.chat-rail-btn svg { width: 18px; height: 18px; } /* 16 → 18 略微放大 */
+
+/* 3) conv-out：面板已左移+加宽（JS），内容整体右移 var(--conv-w) */
+#waifu-chat.conv-out .chat-drag-bar-l { left: var(--conv-w); }
+#waifu-chat.conv-out .chat-rail { left: var(--conv-w); }
+#waifu-chat.conv-out .chat-messages,
+#waifu-chat.conv-out .chat-input-area,
+#waifu-chat.conv-out .chat-nav-confirm {
+  margin-left: calc(var(--conv-w) + var(--drag-w));
+}
+#waifu-chat.conv-out .chat-img-btn { left: calc(var(--conv-w) + 3px); }
+#waifu-chat.conv-out .chat-conv-title {
+  left: calc(var(--conv-w) + var(--drag-w)); /* 标题中心仍落在消息区上方 */
+}
+#waifu-chat.conv-out .chat-new-msg-note {
+  left: calc(50% + (var(--conv-w) + var(--drag-w)) / 2); /* 消息区视觉中心 */
+}
+
+/* conv-out 抽屉列：面板最左 0..182（覆 20260903b left:-182 面板外弹出式，
+   后者被 overflow:hidden 裁切不可见） */
+#waifu-chat.conv-out .waifu-conv-panel {
+  left: 0;
+  right: auto;
+  width: var(--conv-w);
+  top: var(--drag-h);
+  bottom: 0;
+}
+
+/* 4) 菜单项图标化：图标 + 文字（图标尺寸 14px，颜色随用户 SVG fill） */
+.conv-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.conv-menu-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: block;
+}
+.conv-row-menu { min-width: 118px; } /* 容纳 删除书签 + 图标 */
+
+/* 移动端防御：JS 移动端恒 conv-in（不会置 conv-out），此处仅兜底——
+   若出现 conv-out 仍整面覆盖（盖到 rail 右缘为止） */
+@media (max-width: 768px) {
+  #waifu-chat.conv-in .waifu-conv-panel,
+  #waifu-chat.conv-out .waifu-conv-panel {
+    left: var(--drag-w);
+    right: 0;
+    width: auto;
+    top: 0;
+    bottom: 0;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   ── 20260903d 第三轮实测修正（用户拍板）──
+   · 标题竖中心：calc line-height 半行距令 CJK 视觉偏高 → flex 双向居中 +
+     line-height:1 精确光学居中（水平仍按既有覆层规则；:empty 隐藏不受
+     影响——(0,2,0) 特异性胜过 flex display）
+   · 侧边栏形态反转：rail 回最外缘 x0..24 原位（盖掉 C 轮 conv-out 的
+     rail/拖拽栏左移 var(--conv-w) 规则）。conv-out 语义改为"面板右扩
+     182"（JS 只改 style.width，left 恒不动）→ [拖拽栏|列表列 x24..206|
+     消息区]。消息区 margin calc(conv+drag)=206 数值不变仍成立；标题/
+     note 的 conv-out 覆层 left 规则同值继续有效
+   · rail 按钮自上而下顺排（☰ → ＋ 历，不再 space-between 贴底堆）
+   · 历史图标 18 → 20px（时钟 glyph 视觉小，和其他图标差不多大）
+   · 置顶行前缀：📌 emoji → 书签 SVG span（与菜单"加入书签"同 ICON_PIN）
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 1) 标题：顶条内 flex 双向居中（无半行距偏高问题） */
+.chat-conv-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+/* 2) conv-out 右扩几何：rail/拖拽栏恒左缘 0（最外），列表列 x24..206 */
+#waifu-chat.conv-out .chat-drag-bar-l { left: 0; }
+#waifu-chat.conv-out .chat-rail { left: 0; }
+#waifu-chat.conv-out .chat-img-btn { left: 3px; }
+#waifu-chat.conv-out .waifu-conv-panel {
+  left: var(--drag-w); /* rail 右缘起真列（覆 C 轮 left:0 整列贴最左） */
+  right: auto;
+  width: var(--conv-w);
+  top: var(--drag-h);
+  bottom: 0;
+}
+
+/* 3) rail 按钮顺排：☰ 顶 → ＋ 历 紧跟其下（弃 space-between 底部堆叠） */
+.chat-rail {
+  justify-content: flex-start;
+  padding: 6px 0; /* 弃 38px 底部留白（底部组不再贴底） */
+}
+#conv-history-btn svg { width: 20px; height: 20px; } /* 时钟 glyph 视觉小 → 放大 */
+
+/* 4) 置顶行前缀 = 书签 SVG（弃 📌 emoji；与菜单"加入书签"同图标同色 #202425） */
+.conv-row.pinned .conv-row-title::before { content: none; }
+.conv-row-pin {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+.conv-row-pin svg { width: 12px; height: 12px; display: block; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   ── 20260903e 修正（用户反馈）──
+   · 会话列表面板补内框线：conv-open 下抽屉列无自己的 border-top/left——
+     conv-out 展开后 y=24 横线只画在消息区（x206 起），抽屉列 x24..206 上缘
+     无横线 = "拖拽框轮廓线断了"；rail 与抽屉交界 x24 也无竖线 = "左拖拽框
+     内侧补轮廓线"。给面板补 border-top/left（与消息区同款 #f1948a 2px），
+     横线 x24..602 连续、竖线 x24 自 y24 通底；conv-in 覆盖消息区时其自身的
+     border-left/top 被盖住，另补 border-right 在 x206 收边
+   · rail 按钮起点下移一个图标：☰ 距顶条 6px 太贴 → 30px（= 按钮 22 + gap2
+     + 原 padding 6），整列顺排随之平移
+   · 搜索命中定位闪烁 .msg-hit（内容搜索后自动滚动+环形高亮）
+   · 置顶行前缀书签 12 → 14px（与菜单图标视觉同大，字形已随 viewBox 放大）
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 1) 抽屉列补线（抽屉 bg #fbf1f0 与拖拽栏同色，线条由 border 提供） */
+#waifu-chat.conv-open .waifu-conv-panel {
+  border-top: var(--drag-lw) solid #f1948a;
+  border-left: var(--drag-lw) solid #f1948a;
+}
+#waifu-chat.conv-in .waifu-conv-panel {
+  border-right: var(--drag-lw) solid #f1948a; /* 覆盖式下右缘收边（消息区 border-left 被盖） */
+}
+
+/* 2) rail 按钮起点下移一图标：padding-top 6 → 30px（= 图标 22 + gap 2 + 原 6） */
+.chat-rail { padding-top: 30px; }
+
+/* 3) 内容搜索命中定位：scrollIntoView 居中 + 环形闪烁（JS 2s 后摘除） */
+.chat-msg.msg-hit { animation: chatMsgHit 1.8s ease-out; }
+@keyframes chatMsgHit {
+  0%, 25% { box-shadow: inset 0 0 0 2px #e74c3c, 0 0 12px rgba(231, 76, 60, 0.35); }
+  100% { box-shadow: inset 0 0 0 2px transparent, 0 0 0 transparent; }
+}
+
+/* 4) 置顶前缀书签：12 → 14px（字形 viewBox 放大后与菜单图标同视觉） */
+.conv-row-pin svg { width: 14px; height: 14px; }
+
+/* ── 20260903f：搜索态命中轮次行（列表 = 消息行而非会话行）── */
+.conv-hit-row { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid #f0e2de; }
+.conv-hit-row:hover { background: #fdf3f0; }
+.conv-hit-meta {
+  font-size: 11px; color: #a99b94; margin-bottom: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.conv-hit-text {
+  font-size: 12.5px; color: #4a4a4a; line-height: 1.5; word-break: break-all;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* 20260919（用户拍板）：命中轮次自身的时间挂在引文前，比正文更小更淡——读作
+   "这句是什么时候说的"。行上（.conv-hit-meta）的时间才是会话最后活动时间，
+   与会话行同一语义；两者混用会让人以为"点开的历史会话被刷成了当前时间" */
+.conv-hit-at { font-size: 11px; color: #b9a9a2; }
+
+/* ── 20260905f：四角缩放纯隐形热区（chat-stream.js conv-resize-handle）──
+   20260905 曾有橙色三角 hover 淡入提示，用户反馈遮挡四角正常按钮功能 →
+   热区无任何图形（JS 侧无 innerHTML、背景透明），仅光标变缩放提示拖拽 */
+.conv-resize-handle { opacity: 0; }
+
+/* ── 20260905f：会话列表列右缘拖拽调宽（chat-session.js .conv-sizer）──
+   热区 = 抽屉右缘 7px 隐形竖条（left calc(drag-w + conv-w) 随 --conv-w 移动），
+   仅 conv-open 且桌面显示；hover 浅红提示 + col-resize。conv-in/out 共用：
+   抽屉宽与消息区 margin 均吃 var(--conv-w)，改一个变量两侧同动 */
+.conv-sizer {
+  position: absolute;
+  left: calc(var(--drag-w) + var(--conv-w) - 3px);
+  top: var(--drag-h);
+  bottom: 0;
+  width: 7px;
+  z-index: 30;
+  cursor: col-resize;
+  touch-action: none;
+  display: none;
+}
+#waifu-chat.conv-open .conv-sizer { display: block; }
+.conv-sizer:hover { background: rgba(231, 76, 60, 0.16); }
+/* 移动端：抽屉恒全宽 overlay（width:auto 盖到 right:0），无列边界可拖 */
+@media (max-width: 768px) {
+  #waifu-chat.conv-open .conv-sizer { display: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   写操作确认卡片（20260921d）：从输入区上方的常驻条搬进**对话流**
+   ══════════════════════════════════════════════════════════════════════
+   用户动线是"读问句 → 点按钮 → 看结果"：卡片是 .chat-messages 的末位子节点，
+   夹在问句气泡与结果气泡之间（chat-stream.js showAsk 负责挂到末位）。
+   按钮族仍复用"泠月喵建议跳转到"那套（.chat-nav-btn），观感一致。
+   选择器用两个 id（#waifu-chat #chat-ask）压过上方 conv-open/conv-out 给
+   .chat-nav-confirm 加的 margin-left 位移群——卡片是消息区的子节点，它自己
+   不再需要让位给抽屉（消息区已经让过），否则抽屉一开卡片就被推到画面外。 */
+#waifu-chat #chat-ask {
+  display: none;
+  margin: 2px 0 10px;
+  padding: 9px 12px 10px;
+  border: 1px solid #f6cfc9;
+  border-left: 3px solid #f1948a;
+  border-radius: 10px;
+  background: #fff8f7;
+  text-align: left;
+  border-top: 1px solid #f6cfc9; /* 复位常驻条的 border-top */
+  font-size: 13px;
+  color: #555;
+  animation: fadeIn 0.2s ease;
+}
+#waifu-chat #chat-ask.active { display: block; }
+#waifu-chat #chat-ask .nav-question { margin-bottom: 8px; }
+/* 问句走 markdown 渲染（chat-stream.js setAskQuestion）：applyMsg 产出 <p>，UA 默认
+   1em 段间距会把卡片撑高约 26px（同 .msg-bubble p 那条）。多段之间留 6px 才不糊成
+   一块——卡片的问句可能带「不可撤销：…」那种成段说明。 */
+/* 这里**不能**再留 `white-space: pre-line`（20260925 跟着 markdown 改造一起撤）：
+   它是给旧 textContent 问句里的 `\n` 用的，而 markdown 管线（博客同款 unified +
+   @bytemd/plugin-breaks）已经自己把换行渲染掉了——单换行成 `<br>\n`、空行成
+   `</p>\n<p>`。pre-line 会把 HTML 里那些**标记之间的换行**再当一次换行渲染：
+   实测两段问句卡片高 60.6px → 42.4px（多出一条空行），单换行则 `<br>` 与换行
+   各断一次（行距翻倍）。 */
+#waifu-chat #chat-ask .nav-question p { margin: 0; }
+#waifu-chat #chat-ask .nav-question p + p { margin-top: 6px; }
+/* 「上一次没发出去」重试注记（回滚时追加的纯文本行，不进 markdown 渲染） */
+#waifu-chat #chat-ask .chat-ask-retry-note { color: #999; font-size: 12px; margin-top: 2px; }
+#waifu-chat #chat-ask .chat-nav-btns { justify-content: flex-start; }
+/* 已确认/已取消：按钮换成一行灰字，卡片留在对话流里当记录（能回看自己确认过什么） */
+#waifu-chat #chat-ask .chat-ask-note { color: #999; font-size: 12px; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ── 20261001 手账（washi）皮 ──
+   公告卡 / 个人中心 / 首页首屏三处已换这套皮，对话面板跟上：淡彩纸底 +
+   一条和纸胶带 + 1px 和纸线描边 + 圆角 16 + 渐变胶囊按钮。
+
+   三条要知道的：
+   · 配色值来自站内令牌 `--washi-*`（frontend/src/index.css）。**每个 var() 都带
+     兜底字面量**：本面板也会被 device-console（nginx 直服的静态页，不加载
+     index.css）引到，那里令牌不存在 —— 兜底即浅色档。
+   · 深色档靠 `.washiDark`（index.css 的深色令牌选择器列表认这个类名）。面板挂在
+     document.body 下，App 的 `.frontDark` **不是它的祖先**，所以由 chat-stream.js
+     在 darkmode-change 时把类名挂到面板自己身上。
+   · 追加块，全靠"同特异度后写者赢"压过上面那 1600 行 —— 别把这段往文件中间搬
+     （本仓已踩过三次，门禁 frontend/tests/sass-media-shadow.test.mjs）。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 面板本体 ── */
+#waifu-chat {
+  background-color: var(--washi-paper, #fffdfa);
+  /* 纸上的两团淡彩：左上一点粉、右下一点天青 */
+  background-image: radial-gradient(120% 90% at 4% 0%, rgba(255, 158, 201, 0.2), rgba(255, 158, 201, 0) 62%), radial-gradient(110% 85% at 100% 100%, rgba(143, 211, 234, 0.16), rgba(143, 211, 234, 0) 58%);
+  border-radius: 16px;
+  box-shadow: var(--washi-shadow-lg, 0 22px 54px rgba(120, 90, 140, 0.22));
+  color: var(--washi-ink, #4a3550);
+}
+
+/* 外框（::before）从 2px 珊瑚红换成 1px 和纸线，圆角跟着面板走 */
+#waifu-chat::before {
+  border: 1px solid var(--washi-line, rgba(198, 152, 192, 0.42));
+  border-radius: 16px;
+}
+
+/* 顶上那条和纸胶带 20261001 已删（批 D 第 4 条「胶带去掉」）——原 `#waifu-chat::after`
+   在此处画一条 160×26 的旋转粉带。它同时是顶栏与顶边框的"第二张皮"，删掉后顶边只剩
+   下面那个统一外框，与其余三边同源。 */
+
+/* 拖拽栏：不透明米色 → 半透明和纸胶带色，纸的淡彩透上来 */
+.chat-drag-bar-t,
+.chat-drag-bar-l { background: var(--washi-tape-2, rgba(214, 226, 255, 0.8)); }
+.chat-drag-bar-t:hover,
+.chat-drag-bar-l:hover { background: var(--washi-tape, rgba(255, 222, 238, 0.86)); }
+
+/* 关闭钮：方角红字 → 和纸圆钮（与公告卡 / 个人中心同一个形态）。
+   × 是 90° 旋转对称的，转起来看不出来，所以这里用放大而不是旋转。 */
+.chat-close {
+  border-radius: 50%;
+  background: var(--washi-tape-2, rgba(214, 226, 255, 0.8));
+  color: var(--washi-ink-2, #7c6584);
+  transition: background-color 220ms ease, color 220ms ease, transform 220ms ease;
+}
+.chat-close:hover {
+  background: var(--washi-tape, rgba(255, 222, 238, 0.86));
+  color: var(--washi-pink-deep, #d94f9a);
+  transform: scale(1.12);
+}
+
+/* 内侧 L 形镶边（消息区 / 输入区 / 确认条三段连成竖线）与两者之间的横线 */
+.chat-messages,
+.chat-input-area,
+.chat-nav-confirm { border-left-color: var(--washi-line, rgba(198, 152, 192, 0.42)); }
+.chat-messages { border-top-color: var(--washi-line, rgba(198, 152, 192, 0.42)); }
+.chat-input-area::before { border-top-color: var(--washi-line, rgba(198, 152, 192, 0.42)); }
+.chat-nav-confirm { border-top-color: var(--washi-line-2, rgba(198, 152, 192, 0.22)); }
+
+/* 有新消息提示条：珊瑚红 → 手账渐变（深色档是粉白那支，字色见下面的 .washiDark 段） */
+.chat-new-msg-note {
+  background: var(--washi-grad-soft, linear-gradient(100deg, #ff9ec9 0%, #b06ee8 100%));
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(176, 110, 232, 0.28);
+}
+.chat-new-msg-note:hover { background: var(--washi-grad-soft, linear-gradient(100deg, #ff9ec9 0%, #b06ee8 100%)); filter: brightness(1.06); }
+
+/* ── 输入区 ── */
+.chat-input {
+  border-color: var(--washi-line, rgba(198, 152, 192, 0.42));
+  background: var(--washi-paper-2, #fff6fa);
+  color: var(--washi-ink, #4a3550);
+}
+.chat-input::placeholder { color: var(--washi-ink-3, #a08ba8); }
+.chat-input:focus {
+  border-color: var(--washi-pink-deep, #d94f9a);
+  background: var(--washi-paper, #fffdfa);
+}
+
+/* 发送按钮：珊瑚红方块 → 渐变胶囊（公告卡「我知道了」同一支 --washi-grad）。
+   ⚠️ hover 那条必须**重写 background-image**：antd 那句 `.chat-send:hover
+   { background: #c0392b }`（0,2,0）里的 `background` 是简写，会把我们的
+   background-image 一并重置（简写隐含 background-image:none），而它的特异度
+   比下面这条 `.chat-send`（0,1,0）高 —— 只在 `.chat-send` 上写一次的话，
+   鼠标一放上去渐变就没了。 */
+.chat-send {
+  background-color: transparent;
+  background-image: var(--washi-grad, linear-gradient(100deg, #ff7fc0 0%, #b06ee8 52%, #63b8e8 100%));
+  color: #fff;
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(176, 110, 232, 0.32);
+  transition: filter 0.2s, transform 0.2s, box-shadow 0.2s;
+}
+.chat-send:hover {
+  background-color: transparent;
+  background-image: var(--washi-grad, linear-gradient(100deg, #ff7fc0 0%, #b06ee8 52%, #63b8e8 100%));
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(176, 110, 232, 0.42);
+}
+.chat-send:disabled { background-image: none; background-color: var(--washi-line, rgba(198, 152, 192, 0.42)); box-shadow: none; transform: none; filter: none; }
+.chat-send.stop-mode { border-radius: 999px; }
+
+/* ── 对话流 ── */
+.chat-msg.user,
+.chat-msg.agent .msg-text { color: var(--washi-ink, #4a3550); }
+.chat-msg.user .msg-label { color: var(--washi-ink-2, #7c6584); }
+.chat-msg.agent .msg-label { color: var(--washi-pink-deep, #d94f9a); }
+/* 用户气泡：珊瑚红 → 同一支手账渐变。深色档那支是粉白，字色见下 */
+#waifu-chat .msg-bubble {
+  background-color: transparent;
+  background-image: var(--washi-grad, linear-gradient(100deg, #ff7fc0 0%, #b06ee8 52%, #63b8e8 100%));
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(176, 110, 232, 0.24);
+}
+.chat-msg.error { color: #c0392b; }
+/* 「本回答由AI生成」小字 / 执行过程行 / 重试按钮：灰阶换成墨色阶 */
+.chat-msg.agent:last-child::after { color: var(--washi-ink-3, #a08ba8); }
+.agent-process,
+.agent-process-head,
+.agent-process-line { color: var(--washi-ink-3, #a08ba8); }
+.agent-process { border-left-color: var(--washi-line, rgba(198, 152, 192, 0.42)); }
+.agent-process-count { color: var(--washi-ink-3, #a08ba8); }
+.chat-retry-btn { border-color: var(--washi-line, rgba(198, 152, 192, 0.42)); color: var(--washi-ink-2, #7c6584); }
+.chat-retry-btn:hover { border-color: var(--washi-pink-deep, #d94f9a); color: var(--washi-pink-deep, #d94f9a); }
+
+/* ── 确认卡片（跳转确认 / 写操作确认，同一个按钮族）── */
+#waifu-chat #chat-ask {
+  border-color: var(--washi-line, rgba(198, 152, 192, 0.42));
+  border-left-color: var(--washi-pink, #ff9ec9);
+  background: var(--washi-paper-2, #fff6fa);
+  color: var(--washi-ink-2, #7c6584);
+}
+#waifu-chat #chat-ask .chat-ask-retry-note,
+#waifu-chat #chat-ask .chat-ask-note { color: var(--washi-ink-3, #a08ba8); }
+.chat-nav-btn {
+  border-color: var(--washi-line, rgba(198, 152, 192, 0.42));
+  background: var(--washi-paper, #fffdfa);
+  color: var(--washi-ink-2, #7c6584);
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+}
+.chat-nav-btn.yes { border-color: var(--washi-pink-deep, #d94f9a); color: var(--washi-pink-deep, #d94f9a); }
+.chat-nav-btn.yes:hover { background: var(--washi-pink-deep, #d94f9a); color: #fff; }
+.chat-nav-btn.no { border-color: var(--washi-line, rgba(198, 152, 192, 0.42)); color: var(--washi-ink-3, #a08ba8); }
+.chat-nav-btn.no:hover { background: var(--washi-ink-3, #a08ba8); color: #fff; }
+
+/* ── 会话抽屉（历史会话面板）与左侧图标栏 ── */
+.waifu-conv-panel { background: var(--washi-paper-2, #fff6fa); }
+.conv-list-head { border-bottom-color: var(--washi-line-2, rgba(198, 152, 192, 0.22)); }
+.conv-list-title { color: var(--washi-ink-2, #7c6584); }
+.conv-search {
+  border-color: var(--washi-line, rgba(198, 152, 192, 0.42));
+  background: var(--washi-paper, #fffdfa);
+  color: var(--washi-ink, #4a3550);
+}
+.conv-search:focus { border-color: var(--washi-pink-deep, #d94f9a); }
+.conv-search::placeholder { color: var(--washi-ink-3, #a08ba8); }
+.conv-row:hover { background: var(--washi-tape-2, rgba(214, 226, 255, 0.8)); }
+.conv-row.active { background: var(--washi-tape, rgba(255, 222, 238, 0.86)); }
+.conv-row-title { color: var(--washi-ink, #4a3550); }
+.conv-row-time,
+.conv-row-since { color: var(--washi-ink-3, #a08ba8); }
+.conv-more { color: var(--washi-ink-3, #a08ba8); }
+.chat-img-btn:hover { background: var(--washi-tape, rgba(255, 222, 238, 0.86)); }
+/* 删除确认条：珊瑚红 → 站内既有的危险色（#c0392b / 夜间 #ff9d8a 那一族）。
+   这一条**刻意不换成手账粉**：它是不可逆动作，红了才读得出是危险。 */
+.conv-confirm-del { background: #c0392b; color: #fff; }
+.conv-confirm-del:hover { background: #a33f30; }
+.conv-confirm-cancel { background: var(--washi-paper, #fffdfa); color: var(--washi-ink-2, #7c6584); }
+.conv-confirm-cancel:hover { background: var(--washi-tape-2, rgba(214, 226, 255, 0.8)); }
+.conv-confirm-del + .conv-confirm-cancel { border-left-color: var(--washi-line, rgba(198, 152, 192, 0.42)); }
+.conv-rename-input {
+  color: var(--washi-ink, #4a3550);
+  border-color: var(--washi-line, rgba(198, 152, 192, 0.42));
+  background: var(--washi-paper, #fffdfa);
+}
+.conv-rename-input:focus { border-color: var(--washi-pink-deep, #d94f9a); }
+.conv-more:hover,
+.conv-row.menu-open .conv-more { background: var(--washi-tape, rgba(255, 222, 238, 0.86)); color: var(--washi-pink-deep, #d94f9a); }
+.chat-rail-btn,
+.conv-head-btn { color: var(--washi-ink-2, #7c6584); }
+.chat-rail-btn:hover,
+.conv-head-btn:hover { background: var(--washi-tape, rgba(255, 222, 238, 0.86)); color: var(--washi-pink-deep, #d94f9a); }
+.conv-row-menu { background: var(--washi-paper, #fffdfa); border-color: var(--washi-line, rgba(198, 152, 192, 0.42)); }
+/* 图标是 chat-session.js / chat-render.js 注入的**行内 fill 字面量**（#203042 等），
+   深色面板上等于隐形。表现属性（fill="..."）按作者级 0 特异度参与层叠，任何 CSS
+   声明都能盖过 —— 统一改成 currentColor，让图标跟着各自按钮的 color 走。 */
+#waifu-chat svg path { fill: currentColor; }
+
+/* ── 深色档：只有"用字面量定死、令牌管不到"的那几处需要在这里翻一遍 ── */
+#waifu-chat.washiDark .chat-send,
+#waifu-chat.washiDark .msg-bubble,
+#waifu-chat.washiDark .chat-new-msg-note {
+  /* 夜间 --washi-grad 是**粉白**那支（#ffb3d9→#ffe3f1→#cbb6ff），白字在中段
+     #ffe3f1 上只有 1.2:1。翻成深紫褐后约 9:1。 */
+  color: #40263f;
+}
+#waifu-chat.washiDark .chat-send { box-shadow: 0 6px 18px rgba(255, 179, 217, 0.26); }
+#waifu-chat.washiDark .chat-send:hover { box-shadow: 0 10px 24px rgba(255, 179, 217, 0.38); }
+#waifu-chat.washiDark .msg-bubble { box-shadow: 0 4px 14px rgba(255, 179, 217, 0.18); }
+#waifu-chat.washiDark .chat-msg.error { color: #ff9d8a; }
+/* 停止图标是**白色**方块，压在渐变胶囊上；夜间那支渐变本身是粉白的
+   （#ffb3d9→#cbb6ff），白方块在上面几乎看不见 ⇒ 翻成深紫褐 */
+#waifu-chat.washiDark .chat-stop-icon { background: #40263f; }
+#waifu-chat.washiDark .conv-confirm-del { background: #a33f30; }
+#waifu-chat.washiDark .conv-confirm-del:hover { background: #c0392b; }
+#waifu-chat.washiDark .chat-nav-btn.yes:hover,
+#waifu-chat.washiDark .chat-nav-btn.no:hover { color: #241d31; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ── 20261001 批 D：胶带撤掉 / 标题进签 / 四条边框收成一个 ──
+   三条需求（同一条消息里提的）与三处改法：
+
+   ①「胶带去掉」——`#waifu-chat::after` 已在上方删除（连带减少动效档里那条
+     `transform: none`）。它当初的活是"给顶边一个手账标志"，但代价是顶边
+     多出一张与其余三边不同源的皮（见 ③）。
+
+   ②「顶部的标题字体加粗用符合风格的容器包裹」——原来顶条里是一段裸字
+     （12px / 400 字重 / 棕色 #8d6e63，压在蓝紫拖拽栏上）。现在真容器
+     = `.chat-conv-title-tag`（chat-render.js 模板里的内层 span），
+     和纸小签形态，与首页「文章」纸签、后台卡片标题同一族。**外壳
+     `.chat-conv-title` 的几何一个字没动**（它的 conv-out / conv-in 覆层
+     规则全部继续有效），只是把 `:empty` 隐藏与省略号一起移到签上。
+
+   ③「上下侧边框在现有的形状上合并为一体，而不是分段组装」——改前面板上
+     同时存在**两套边框**：
+       外圈 = `#waifu-chat::before`（1px 和纸线，四边齐全）
+       内圈 = `.chat-messages` 的 border-top/left + `.chat-input-area` 的
+              border-left + `.chat-nav-confirm` 的 border-left（一条 24px
+              内缩的开口矩形，由四个元素的四条边拼出来）
+     再叠上顶/左两条**不透明**拖拽栏色带——于是顶边读到的是"色带"、右边
+     读到的是"线"、中间还悬着一条 L。同一条边在四个高度上是四样东西，
+     这就是"分段组装"。
+     改法：**只留外圈那一圈线**，内圈整个撤掉；拖拽栏从"实心色带"降级为
+     "向内淡出的水洗"（渐变到透明 ⇒ 没有硬边缘，就不再读作边框）。
+     于是一圈走下来是同一条线、同一种颜色。
+
+   ⚠️ 追加块纪律：本段落在 washi 皮之后、减少动效档之前。减少动效档**必须**
+   仍是文件最后一个块（同特异度后写者赢，落在它后面会把它整个压掉）。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ⓪ 外框线：唯一那圈线必须**看得见**。
+   `--washi-line` 是 rgba(198,152,192,0.42)——压在纸面上已经偏淡，再压在
+   水洗过的顶/左两段上（淡紫压淡粉）就基本消失了，实测顶左角的圆角整条读
+   不出来（"边界合并"变成了"边界没了"）。所以外框单独用一个更实的一支。
+   令牌就近定义在 `#waifu-chat` / `#waifu-chat.washiDark` 两处（不是 :root）——
+   面板挂在 document.body 下，`.frontDark` 不是它的祖先，深色档认的是面板
+   自己身上那个 `.washiDark`（chat-stream.js 在 darkmode-change 时挂）；
+   写成 :root 一处反倒会在 html 层就被替换成浅色字面量（本仓踩过）。 */
+#waifu-chat::before {
+  border-color: var(--chat-frame-line, rgba(146, 96, 148, 0.55));
+}
+#waifu-chat { --chat-frame-line: rgba(146, 96, 148, 0.55); }
+#waifu-chat.washiDark { --chat-frame-line: rgba(226, 186, 222, 0.42); }
+
+/* ① 拖拽栏：实心色带 → 向内淡出的水洗。
+   顶上那条 24px 的实心蓝紫（--washi-tape-2 是偏蓝的一支，压在粉紫纸面上
+   本就有点跳）一旦"淡出"，顶边就只剩外框那一条线，与另外三边同款。
+   hover 用水洗**变浓**（渐变提前收口）而不是换色——不引入第二个色值，
+   深浅跟着令牌走，深浅色两档自动成立。 */
+.chat-drag-bar-t {
+  background: linear-gradient(to bottom, var(--washi-tape, rgba(255, 222, 238, 0.86)) 0%, rgba(255, 222, 238, 0) 100%);
+}
+.chat-drag-bar-l {
+  background: linear-gradient(to right, var(--washi-tape, rgba(255, 222, 238, 0.86)) 0%, rgba(255, 222, 238, 0) 100%);
+}
+.chat-drag-bar-t:hover {
+  background: linear-gradient(to bottom, var(--washi-tape, rgba(255, 222, 238, 0.86)) 0%, rgba(255, 222, 238, 0) 62%);
+}
+.chat-drag-bar-l:hover {
+  background: linear-gradient(to right, var(--washi-tape, rgba(255, 222, 238, 0.86)) 0%, rgba(255, 222, 238, 0) 62%);
+}
+
+/* 关闭钮的静息底色跟着顶栏一起换：它原先取 `--washi-tape-2`（偏蓝那支），
+   与旧顶栏同源；顶栏换成粉之后这颗蓝圆钮就落单了。改成同一支粉。 */
+.chat-close { background: var(--washi-tape, rgba(255, 222, 238, 0.86)); }
+
+/* ② 标题签 —— 顶条内的和纸小签（左侧一道渐变书脊 + 纸面 + 1px 和纸线）。
+   尺寸受 `--drag-h: 24px` 约束：12px 字 + 上下各 3px + 1px 边框 = 20px，
+   由外壳的 align-items:center 光学居中。 */
+.chat-conv-title {
+  overflow: visible; /* 外壳不再负责裁剪：签自己有 max-width + 省略号，
+                        外壳留着 overflow:hidden 会把签的投影一起切掉 */
+}
+.chat-conv-title-tag {
+  position: relative;
+  display: inline-block;
+  min-width: 0; /* flex 子项的收缩下限，缺了 max-width 不生效 */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 10px 3px 11px;
+  border: 1px solid var(--washi-line, rgba(198, 152, 192, 0.42));
+  border-radius: 7px;
+  background: var(--washi-paper-2, #fff6fa);
+  color: var(--washi-ink, #4a3550);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  box-shadow: 0 3px 9px -7px rgba(120, 90, 140, 1);
+}
+/* 左侧书脊：3px 渐变细条，和纸皮里"标题签"的家常形（首页「文章」标签
+   的顶边渐变是同一个意思，只是那条横着、这条竖着） */
+.chat-conv-title-tag::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  bottom: 3px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--washi-grad, linear-gradient(100deg, #ff7fc0 0%, #b06ee8 52%, #63b8e8 100%));
+}
+/* 空文本时连外壳一起让位（旧规则挂在 .chat-conv-title:empty 上，文本搬进
+   签之后外壳永不为空 ⇒ 隐藏判据一并搬到签上） */
+.chat-conv-title-tag:empty { display: none; }
+
+/* ③ 内圈边框整个撤掉：剩下的唯一一圈是 `#waifu-chat::before`。
+   `show-title` 是 20260903b 之后就不再置位的死类，但它那条 (1,2,0) 的
+   `.chat-messages` 规则会带回过 border-top，所以按同样的特异度覆盖掉。 */
+.chat-messages,
+#waifu-chat.show-title .chat-messages {
+  border-top: none;
+  border-left: none;
+}
+.chat-input-area,
+.chat-nav-confirm { border-left: none; }
+
+/* 消息区 / 输入区之间那条分隔线也一并撤掉。它原先的落点是消息区那条
+   内圈竖线（左端接上去才成立）；竖线没了，它就成了一条起点悬空、右端
+   顶到外框的横线——纸面上多一条只在半边画的线，还是"分段组装"那股味。
+   **左端也不能改通到面板左缘**：rail 的底部组（＋ / 历）正好压在
+   y≈206..246，而这条线在 y≈207，通栏就会横穿两个按钮。
+   输入区自身有圆角带边框的输入框，边界本来就看得出来。 */
+.chat-input-area::before { border-top: none; }
+
+/* 会话抽屉（`.waifu-conv-panel`）的边线同族收拾干净。
+   它身上那三条 2px 珊瑚红是 20260903e 打的补丁——当年消息区有一条内圈横线
+   和一条内圈竖线，抽屉一展开，那两条线在抽屉列上"断了"，于是给抽屉补了
+   border-top/left 接上。现在内圈整个撤了，**接的对象没有了**：抽屉上缘那条
+   横线会变成一条横跨 182px 就断掉的线，左缘那条竖线同理——比不画更糟。
+   颜色也还是换皮前的珊瑚红。
+   改法：上下与左交还给外框（那是唯一那圈线），只在抽屉右缘留一条和纸线
+   —— 它对着消息区，conv-in（覆盖式，x=24..206）与 conv-out（真窗格，同区间）
+   都成立。抽屉底色（--washi-paper-2 #fff6fa）与面板纸（#fffdfa）几乎同色，
+   没有这条线就分不出两栏。 */
+#waifu-chat.conv-open .waifu-conv-panel {
+  border-top: none;
+  border-left: none;
+}
+#waifu-chat.conv-in .waifu-conv-panel,
+#waifu-chat.conv-out .waifu-conv-panel {
+  border-right: 1px solid var(--washi-line, rgba(198, 152, 192, 0.42));
+}
+
+/* 减少动效档：钮不抬、关闭钮不放大。**必须留在文件末尾**（同选择器
+   同特异度后写者赢，落在上面那些规则之前会被整个静默压掉）。 */
+@media (prefers-reduced-motion: reduce) {
+  .chat-send,
+  .chat-send:hover,
+  .chat-close,
+  .chat-close:hover { transition: none; }
+  .chat-send:hover,
+  .chat-close:hover { transform: none; }
+}
