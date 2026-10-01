@@ -254,6 +254,30 @@ def build_principal(case: dict) -> "Principal":
                      source="golden")
 
 
+def parse_reset(text: str) -> tuple[str, str]:
+    """`__RESET__:<scope>:<理由>` → `(scope, 理由)`。
+
+    `scope` 是三端（前端 / Rust / golden）**一致**的机器判据，语义见
+    `server.py::emit_reset` 的头注：
+
+      · `all`  —— 决策被推翻（gate 打回 ⇒ planner 重规划）⇒ 连本轮 `__CMD__`
+        缓冲一起作废：新的一轮会重新决定做什么；
+      · `text` —— 终局 fallback ⇒ 只作废叙述，命令照旧执行（execute 跑过、
+        checker PASS 过，它是**已发生的事实**）。
+
+    **缺 scope 段（旧帧 / 还没升级的那一端）一律按 `all`**：缺省取保守的那一侧
+    ——三端版本错配时退化成"命令被吞"，而不是"道歉了但还是跳了"。
+
+    单独抽成函数是为了让这条契约能被判：它是跨三端的字面约定，散在 `run_one`
+    几千行里就只能靠读代码核。
+    """
+    rest = text.removeprefix("__RESET__").lstrip(":")
+    scope, _sep, tail = rest.partition(":")
+    if scope not in ("all", "text"):
+        return "all", rest
+    return scope, tail
+
+
 def run_one(req: ChatRequest, principal: "Principal | None" = None,
             trace_ctx: dict | None = None, *,
             confirm_token: str = "") -> dict:
@@ -369,13 +393,19 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     task_frames: list[dict] = []
     for item in frames:
         if isinstance(item, str) and item.startswith("__RESET__"):
-            final_text = ""  # REVISE/兜底轮作废 → 清空（与前端最终显示一致）
-            commands.clear()  # 被作废轮的命令帧同样作废（前端 RESET 清空 cmdText 后不执行）
+            final_text = ""  # 作废轮 → 清空（与前端最终显示一致）
             tool_calls.clear()  # 被作废轮的工具调用不算数（断言的是最终采纳轮的执行）
+            # 帧形 `__RESET__:<scope>:<理由>`（20261001，见 `parse_reset` 头注）。
+            # `text`（终局 fallback）**不清 commands**：命令是 checker PASS 的已发生
+            # 事实，gate 否定的只有措辞。此前无条件清 —— 后果是 `require_cmd_*` 断言
+            # 转红、而 `forbid_cmd_*` 那一族**空转变绿**（同下面 `__CMD__` 分支头注里
+            # 描述的那种"不报错的失效"）。
+            _scope, _reason = parse_reset(item)
+            if _scope != "text":
+                commands.clear()
             resets += 1
-            reason = item.removeprefix("__RESET__").lstrip(":")
-            if reason:
-                resets_reasons.append(reason)
+            if _reason:
+                resets_reasons.append(_reason)
         elif isinstance(item, str) and item.startswith("__EXEC__:"):
             # 20260904 C3：跨轮执行记忆帧（__RESET__ 不清——回执是已发生事实，
             # gate fallback 只否定叙述文本不否定执行）
@@ -395,7 +425,8 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             # `forbid_cmd_contains` ×6 **空转变绿**——整族"模型不许假装发命令"的护栏
             # 从此不再测任何东西；同时下面 `elif item.startswith("__")` 的兜底会把
             # `__CMD__:` 无声吞进 `control_frames`，看都看不出来。
-            # `__RESET__` 那一支已经 `commands.clear()`（被打回那一轮的坏命令照样作废）。
+            # `__RESET__` 那一支按 `scope` 决定清不清 `commands`（见上：`all` 清、
+            # `text` 不清——终局 fallback 里命令是已发生的事实）。
             try:
                 _cmd = json.loads(item[len("__CMD__:"):])
                 _wire = _cmd_wire(_cmd) if isinstance(_cmd, dict) else ""

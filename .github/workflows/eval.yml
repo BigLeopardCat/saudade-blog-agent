@@ -57,18 +57,27 @@ jobs:
           repository: BigLeopardCat/Saudade-Blog
           token: ${{ secrets.PARENT_REPO_TOKEN }}
           path: _parent
-          # 守卫只读 `src/routes/chat.rs`（多数）与 `src/routes/talks.rs` 这两处。稀疏锥只为把
-          # 面收小、把时间省掉；**锥够不够**由 `tests/test_ci_suite_list.py` ⑥ 机械核对——它扫
-          # 所有 `_parent_repo.read("…")` 的路径逐个判是否落在锥里，加了读别处的守卫而忘了改这里
-          # 会红，而不是"那一条在 CI 上悄悄不判"。
-          sparse-checkout: src/routes
+          # 守卫绝大多数读 `src/routes/*.rs`；`frontend/public/live2d-widgets/` 是 20261001
+          # 加的（`__RESET__:<scope>` 这条帧约定三端认同一份字面，前端那一端在
+          # `tests/test_reset_scope.py` 里读）。稀疏锥只为把面收小、把时间省掉；
+          # **锥够不够**由 `tests/test_ci_suite_list.py` ⑥ 机械核对——它扫所有
+          # `_parent_repo.read("…")` 的路径逐个判是否落在锥里，加了读别处的守卫而忘了
+          # 改这里会红，而不是"那一条在 CI 上悄悄不判"。
+          sparse-checkout: |
+            src/routes
+            frontend/public/live2d-widgets
           fetch-depth: 1
           persist-credentials: false
 
-      - name: 父仓落位自检（锚 src/routes/chat.rs）
+      - name: 父仓落位自检（锚 + 每一条锥模式都真拉到）
         # 凭据权限不对时上一步就失败了；这一条兜的是"拉下来了但稀疏锥配错"——空目录/错目录会
-        # 让守卫**假绿**（`tests/_parent_repo.py` 头注里那两条边界之一）。
-        run: test -f _parent/src/routes/chat.rs
+        # 让守卫**假绿**（`tests/_parent_repo.py` 头注里那两条边界之一）。**锥里每一条模式都要
+        # 探一次**：`_parent_repo.read` 遇到"文件不在"是按三态走的（本机单跑会打 ⏭ 继续），
+        # 锥漏掉一条模式的表现因此是"那条守卫悄悄不判"，只有在这里才看得见。
+        run: |
+          set -e
+          test -f _parent/src/routes/chat.rs
+          test -f _parent/frontend/public/live2d-widgets/chat-stream.js
 
       # ⚠️ 20260928 首跑带出两条**信息性**注解（不影响本次绿）：`actions/checkout@v4` 与
       # `astral-sh/setup-uv@v5` 是针对 Node 20 的，runner 已强制它们跑在 Node 24 上。等上游
