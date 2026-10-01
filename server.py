@@ -1006,6 +1006,27 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         # 最终回复正文（trace 落盘用）：updates 的 model 帧里取最后一条
         # AIMessage；gate fallback 时覆盖为 fallback 文本
         final_reply = ""
+        # 帧流口径的正文（20261002）：这一轮**真正推给前端**的叙述增量，按入队顺序。
+        # 为什么要两份：正文在这里原本只有一个来路（`updates` 重建），而主人真正读到
+        # 的是另一个来路（`messages` 通道那些 AIMessageChunk）。两个来路只要有一天不
+        # 一致，trace 就会**如实写下一个主人从没读过的正文**——20261002 那轮现场
+        # （`logs/agent/traces/20261002/20261002T065409_1_r7abb37e.json`）正是如此：
+        # `gate/pass` 说最后一条 AIMessage 内容非空、`frames=15` 里至少 8 个是叙述帧
+        # （主人读到过正文），而 `stream_end` 的 reply 是空串。
+        # 治法与"两处口径"这个家族一贯的做法一致：**留一份证据、让分歧响**——
+        # `streamed_parts` 是帧流那一份，收尾时与重建那一份对照（见流尾 reply_mismatch）。
+        streamed_parts: list = []
+        # 这一轮的 `messages` 通道里，model 节点的正文帧**到过这里吗**。它决定收尾时
+        # 拿哪一份当准（见流尾）：到过 ⇒ 帧流那份就是主人读到的；从没到过 ⇒ 帧流那份
+        # 是残缺的（`settings.llm_streaming` 关掉时 model 不走 chunk，正文只在
+        # `updates` 里），此时以重建那份为准，且**不报**分歧（那是这一档的正常形状）。
+        saw_model_chunk = False
+        # `updates` 通道里见过 `model` 那一项吗。与 `saw_model_chunk` 配成一对判据：
+        # **正文帧到了、重建却没见着**才是异常（H2 那一支）；而"没有 model 帧"本身
+        # 不是——弹卡轮与幂等轮（`pending_confirm` / `noop_note`）由 execute 直接
+        # 路由到 END，narrator 结构上就不跑，正文由系统给（`confirm_text`）。两者
+        # 混为一谈就会让这些轮次的 trace 里多一条恒假的告警。
+        saw_model_update = False
         process_emitted = False
         emitted: set = set()
         is_chat_skill = False
@@ -1067,9 +1088,29 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
 
             旧帧（没有 `scope` 段）在三端都按 `all` 解析 = 今天的行为 ⇒ 前后端版本
             错配时退化成"命令被吞"，不会退化成"道歉了还是跳了"。
+
+            帧流正文的账**在这一格清**（20261002）：三端收 `__RESET__` 都会丢掉已展示
+            的正文（前端清 displayText、Rust 清累积 reply），`streamed_parts` 是"主人
+            读到了什么"的账，它必须跟着一起清。清在函数里而不是各调用点（三个调用点、
+            将来还会有第四个）：`emitted` 那组 key 也在调用点清，可它漏清的**症状当场
+            看得见**（该重发的过程行被去重吞掉，像卡住）；这一处漏清只会让 trace 里
+            多出一段已被作废的话——**看不见**，所以不能指望调用点记得。
             """
+            streamed_parts.clear()
             asyncio.run_coroutine_threadsafe(
                 queue.put(f"__RESET__:{scope}:{reason}"), loop).result()
+
+        def emit_text(text: str):
+            """用户可见正文的**唯一出口**（20261002）：发帧 + 记帧流账。
+
+            本函数之前，"正文入队"散在四处（事实块 / 确认问句 / 幂等说明 / fallback
+            替换），记账要写在四处才不漏——而"一处实现两处用，改一处忘一处"正是本仓
+            的老形状。现在发起者是它一个，账也只在这里记（`messages` 通道那些 model
+            增量帧不经它：那是 token 级流，只补记一份，见那里的注释）。
+            """
+            streamed_parts.append(text)
+            asyncio.run_coroutine_threadsafe(
+                queue.put(AIMessageChunk(content=text)), loop).result()
 
         def emit_facts(rows: list):
             """事实块（D3）：把**还没印过**的事实行发给主人（增量、按文本去重）。
@@ -1089,9 +1130,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             fact_sent.extend(fresh)
             prelude = render_fact_block(fact_sent)
             record("producer", "fact_block", n=len(fresh), total=len(fact_sent))
-            asyncio.run_coroutine_threadsafe(
-                queue.put(AIMessageChunk(content=render_fact_block(fresh) + "\n\n")),
-                loop).result()
+            emit_text(render_fact_block(fresh) + "\n\n")
 
         for mode, data in _agent.stream(
             graph_input(messages, confirm_grant=confirm_grant,
@@ -1114,6 +1153,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         # 20260903：model 零工具（不 bind_tools），不再有 tool_calls
                         # 占位帧；"🛠 正在调用工具…"占位改由 planner updates 分支
                         # 在计划含执行清单时发（execute 执行期间几秒静默，防"卡死"）
+                        # 帧流账（20261002）：这一条正是主人读到的正文，逐 delta 记。
+                        # 不变量：**只给真入队的那些记**——过滤条件改了而记账没跟着改，
+                        # 这一份就变成"我们以为主人读到的"，与它要防的错同形。
+                        saw_model_chunk = True
+                        streamed_parts.append(str(chunk.content))
                         asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
                 elif isinstance(chunk, ToolMessage) and chunk.content:
                     # 工具结果帧转发前端展示（命令帧解析/正文展示）。过程行不在
@@ -1126,10 +1170,42 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                 # 最终回复正文收集（trace 落盘）：model 节点的完整 AIMessage
                 # （20260903 拓扑：model 只走一次收尾叙述轮，天然是最终轮）
                 model_upd = data.get("model")
-                if model_upd and model_upd.get("messages"):
-                    _m = model_upd["messages"][-1]
-                    if isinstance(_m, AIMessage) and not _m.tool_calls and _m.content:
+                if model_upd is not None:
+                    # 见过 model 帧（决定收尾是否报"正文帧到了、重建却没见着"那一格，
+                    # 见流尾 `reply_update_missing`）。
+                    saw_model_update = True
+                    _msgs = model_upd.get("messages") or []
+                    _m = _msgs[-1] if _msgs else None
+                    if isinstance(_m, AIMessage) and _m.content:
+                        # 20261002：**去掉了 `not _m.tool_calls` 这条一票否决**。
+                        # 它是从"narrator 零工具、结构上发不出 tool_calls"这条不变量
+                        # 顺手写下的，但那条不变量保证的是**我们没给它工具**，不等于
+                        # 服务端不会回一个 tool_call；而那一票否决的代价是：内容被丢掉
+                        # 之后没有任何一处会喊——gate 照旧 PASS（它只看内容非空），
+                        # 主人照旧读到了那段正文（帧流照发），只有 trace 悄悄写成空。
+                        # 正文是不是主人读到的，与"这条消息还带了什么"无关 ⇒ 只认内容。
                         final_reply = str(_m.content)
+                        if getattr(_m, "tool_calls", None):
+                            # 零工具节点收到 tool_calls = 不变量被打破（服务端回了个我们
+                            # 没声明的东西）。正文照收，但必须留痕：它还会被
+                            # `with_tool_call_pairs` 当成"声明过的调用"写进下一轮的对话
+                            # （严格的服务端会因此 400），值得下一次现场自己说话。
+                            logger.warning("[stream] narrator 回了 tool_calls（零工具节点不该有）"
+                                           " n=%d tool_calls=%s",
+                                           len(_m.tool_calls),
+                                           [c.get("name") for c in _m.tool_calls])
+                            record("producer", "narrator_tool_calls",
+                                   n=len(_m.tool_calls),
+                                   names=[str(c.get("name") or "") for c in _m.tool_calls])
+                    else:
+                        # 接住了 model 帧、却没接住正文：把**形状**记下来（是 AI 消息吗、
+                        # 带没带工具调用、内容多长）。下一份空 reply 的 trace 因此能直接
+                        # 读出是哪一种，不必再靠逐帧数数反推。
+                        record("producer", "reply_capture_skipped",
+                               is_ai=isinstance(_m, AIMessage),
+                               tool_calls=len(getattr(_m, "tool_calls", None) or []),
+                               content_len=len(str(getattr(_m, "content", "") or "")),
+                               n_msgs=len(_msgs))
                 # 计划（planner 是 invoke 非流式——messages 通道不会有其 chunk，
                 # 规划占位帧在此发：所有技能都有"规划中"第一阶段反馈）
                 planner_upd = data.get("planner")
@@ -1214,8 +1290,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                         text = str(ex_upd.get("confirm_text") or "")
                         if text:
                             final_reply = text
-                            asyncio.run_coroutine_threadsafe(
-                                queue.put(AIMessageChunk(content=text)), loop).result()
+                            emit_text(text)
                     # 状态已达成 ⇒ 不弹卡那一支（20260926）：execute 判出"这一批里没有
                     # 一件需要动"（目标现在就已经是它要的样子）时写 `noop_note`，图直接
                     # 路由到 END（route_after_execute，与上面 pending_confirm 同款出口）
@@ -1232,8 +1307,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                             # 走 AI 帧的理由与 confirm_text 逐字相同：Rust 照常落库，
                             # 主人切走再回来还看得见这段如实的话（它不是过程行）。
                             final_reply = text
-                            asyncio.run_coroutine_threadsafe(
-                                queue.put(AIMessageChunk(content=text)), loop).result()
+                            emit_text(text)
                     # 过程行以 checker 验收为准（20260905 issue5）：✅ 完成帧只对
                     # 新增 PASS 回执发（receipts 累计，diff 起点后为新增，带实际
                     # 内容）；BLOCK 受阻项发 ✗ 行——真实执行失败不再显示"完成"
@@ -1313,11 +1387,18 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     #   · 前端 RESET：把已经流出去的那段无依据叙述清掉（用户看不到它）；
                     #   · emitted 清空：新的一轮 planner/model 会重新发"🧭 规划中…"与
                     #     "🛠 正在调用工具…"，否则被同 key 去重吞掉、看起来像卡住；
-                    #   · final_reply 不在这里赋值——重规划后的 model 轮会照常覆盖它
-                    #     （Rust 收到 __RESET__ 也会清掉已累积的 reply，被否定的那段
-                    #     因此不会进 chat_history 变成下一轮的范文）。
+                    #   · final_reply 清空——重规划后的 model 轮会重新赋值它。此前
+                    #     这里靠"下一轮会覆盖"，20261002 起改成主动清：被否定的那段
+                    #     三端都已作废（前端 displayText / Rust 累积 reply / 帧流账），
+                    #     重建这份不跟着清的话，恰恰是**它**会在下一轮没被接住时
+                    #     变成 trace 里那段"主人从没读到的话"。
                     reason = "叙述缺少依据，正在重新查证"
                     emit_process("✗ 质检打回：" + reason, key="gate_replan")
+                    # 被否定的那段正文作废（20261002）：三端都清（前端 displayText、
+                    # Rust 累积 reply、这里 `emit_reset` 里的帧流账），重建的那份也
+                    # 必须跟着清——重规划后的 model 轮会重新赋值。不清的话，一旦那一轮
+                    # 没被接住，trace 会把**一段已被作废的正文**记成主人读到的。
+                    final_reply = ""
                     # scope="all"：这一轮**决策被推翻**，重规划后重下的命令才是对的
                     # ——旧命令必须一起作废（"道歉了但还是跳了"就是这一格的反面）。
                     emit_reset("all", reason)
@@ -1349,8 +1430,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     # 与 `scope="text"` 配套之后这一段才成立：否则重印的是"跳了"、
                     # 而命令已经没了——那正是 20261001 修掉的那个矛盾。
                     final_reply = compose(prelude, final_reply)
-                    asyncio.run_coroutine_threadsafe(
-                        queue.put(AIMessageChunk(content=final_reply)), loop).result()
+                    emit_text(final_reply)
                 else:
                     # 检查通过收尾（gate 恒 done=True）；chat 快道无执行可查，
                     # 不发（见 is_chat_skill）
@@ -1363,7 +1443,46 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         # **含事实块**（D3）：trace 的 reply 是"主人读到了什么"，而这一批起主人读到
         # 的第一段是系统印的那几行（gate fallback 那支在上面已经拼过了，compose 幂等）。
         # 反面：不加这块，trace 里就查不出"这一轮主人到底看到了什么事实"。
-        record("producer", "stream_end", reply=compose(prelude, final_reply))
+        #
+        # 两份正文对照（20261002）：`emitted` 是帧流那份（真正发给前端的），
+        # `recorded` 是 `updates` 重建那份（此前唯一落 trace 的）。两者本该逐字相同，
+        # 而 20261002 那轮现场证明它们可以不同、且**谁都没喊**——主人读到正文、
+        # 而 trace 写空。两条处置：
+        #   ① 取值：model 正文帧到过（`saw_model_chunk`）⇒ 以**帧流那份**为准（那是
+        #      主人读到的定义）；没到过（`settings.llm_streaming` 关掉那一档，正文
+        #      只在重建里）⇒ 退回重建那份。两份都空 ⇒ 空（同旧行为）。
+        #   ② 分歧要响：只要正文帧到过、帧流那份非空、而两份的**空白归一化**后不同，
+        #      记一条 `reply_mismatch` + WARNING（归一化是为了躲开帧边界带来的换行
+        #      ——`event_stream` 会给命令帧后的第一个叙述帧前插一个 `\n`，那不叫分歧）。
+        #      归一化比较是判"内容"不是判"排版"，同 20260928 起的既有取向。
+        emitted_reply = compose(prelude, "".join(streamed_parts))
+        recorded_reply = compose(prelude, final_reply)
+        # 已知并**刻意留着**的一处不在账内：`event_stream` 的空输出兜底
+        # `_RECOVERY_SENTENCE`（整轮一个帧都没发时消费端补发的那句）。它发生在队列
+        # 耗尽之后——producer 走到这一行时它还没发出，且它的**前提**是"整轮零帧"，
+        # 那一刻 reply 为空恰是实情（模型确实什么都没说）。要把它并进账就得让消费端
+        # 回写 producer 的账，代价大于收益；等真出现过"主人读到兜底句、而 trace 空"
+        # 的现场再动（本批的两份对照已经把同类分歧变成可见事件，这一处若发生也查得到）。
+
+        if saw_model_chunk and not saw_model_update:
+            # H2 那一支：正文帧推给主人了，重建那条来路却**整项没到**（不是"到了但没
+            # 接住"——那是 `reply_capture_skipped`）。落盘仍取帧流那份（下面那条），
+            # 这一格负责让下一次现场自己说出"是这一支"，不必再靠逐帧数数反推。
+            record("producer", "reply_update_missing", parts=len(streamed_parts))
+
+        def _flat(x: str) -> str:
+            return " ".join((x or "").split())
+
+        if saw_model_chunk and _flat(emitted_reply) and _flat(emitted_reply) != _flat(recorded_reply):
+            logger.warning("[stream] trace 正文与帧流不一致：帧流 %d 字 / 重建 %d 字"
+                           "（落盘取帧流那份）emitted=%r recorded=%r",
+                           len(emitted_reply), len(recorded_reply),
+                           emitted_reply[:80], recorded_reply[:80])
+            record("producer", "reply_mismatch",
+                   emitted_len=len(emitted_reply), recorded_len=len(recorded_reply),
+                   emitted_head=emitted_reply[:80], recorded_head=recorded_reply[:80])
+        record("producer", "stream_end", reply=emitted_reply if saw_model_chunk
+               else (recorded_reply or emitted_reply))
         # 任务结算（20260927 批 D）：**由系统按回执结算，模型说了不算**（同
         # execution_log 的纪律）。判据是"某一步声明的工具这一轮真的 PASS 执行过"
         # （`tasks.advance_by_receipts`），推进一步发一帧 `__TASK__` 回写 cursor/state，
