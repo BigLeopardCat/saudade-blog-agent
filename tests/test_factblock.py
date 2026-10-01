@@ -46,8 +46,8 @@ sys.path.insert(0, str(ROOT))
 
 import agent.graph as g  # noqa: E402
 from agent.factblock import (  # noqa: E402
-    FAMILY_CMD, FAMILY_DATA, FAMILY_WRITE, action_facts, block_of, compose,
-    family_of, is_action_family, render_fact_block,
+    FACT_MARK, FAMILY_CMD, FAMILY_DATA, FAMILY_WRITE, action_facts, block_of,
+    compose, family_of, is_action_family, render_fact_block, strip_fact_lines,
 )
 from agent.graph import build_graph, graph_input  # noqa: E402
 from agent.principal import Principal  # noqa: E402
@@ -113,12 +113,19 @@ def test_action_facts():
 
 
 def test_render_and_compose():
-    print("\n[渲染/拼接] 原样印、一行一条；块在前、幂等")
-    check("渲染不改写一个字（改动就是伪造）",
+    print("\n[渲染/拼接] 事实一字不改、行首盖说话人标记；块在前、幂等")
+    check("渲染**不改事实一个字**，只盖行首标记（说话人，不是标签）",
           render_fact_block(["页面已跳转：https://a/b", "特效 樱花(sakura) 已打开"])
-          == "页面已跳转：https://a/b\n特效 樱花(sakura) 已打开")
+          == FACT_MARK + "页面已跳转：https://a/b\n" + FACT_MARK + "特效 樱花(sakura) 已打开")
+    check("  已经盖过标记的行不重复盖（幂等）",
+          render_fact_block([FACT_MARK + "x"]) == FACT_MARK + "x")
     check("块 = action_facts + render 的组合壳",
-          block_of([_RCPT_CMD]) == _RCPT_CMD["result"])
+          block_of([_RCPT_CMD]) == FACT_MARK + _RCPT_CMD["result"])
+    # 标记只盖在**印出来的那一份**上：工具回执（模型看到的证据）一字未动——
+    # `tools/base.py` 那行 result 是模型的判据（graph.py 的"无前缀中文事实"注释）
+    check("回执原文一字未动（模型的证据不带标记，标记只在给人读的那份上）",
+          _RCPT_CMD["result"] == "特效 樱花(sakura) 已打开"
+          and render_fact_block(action_facts([_RCPT_CMD])) == FACT_MARK + _RCPT_CMD["result"])
     check("块在前、空行分隔（单换行会被 markdown 并成一句）",
           compose("事实行", "包装文字") == "事实行\n\n包装文字")
     check("正文已以块开头 ⇒ 不重复印（gate 兜底的替代文本**就是**块）",
@@ -128,6 +135,70 @@ def test_render_and_compose():
     check("没有块 ⇒ 正文原样（闲聊/数据轮零影响）", compose("", "闲聊") == "闲聊")
     check("正文为空 ⇒ 只剩块", compose("事实行", "") == "事实行")
     check("全空 ⇒ 空串", compose("", "") == "")
+
+
+def test_strip_fact_lines():
+    print("\n[剥离] 系统印的事实行不进模型语境（按行首标记，不靠形状猜）")
+    block = render_fact_block(["页面已跳转：https://a/b", "特效 樱花(sakura) 已打开"])
+    check("整段都是事实行 ⇒ 抹成空串（调用方据此整轮跳过）",
+          strip_fact_lines(block) == "")
+    check("  纯事实行**不残留空行**（会变成一条空的 assistant）",
+          strip_fact_lines(block + "\n\n") == "")
+    check("事实行 + 泠月的包装 ⇒ 只剩包装（块在前）",
+          strip_fact_lines(block + "\n\n要我读一下这篇吗？") == "要我读一下这篇吗？")
+    check("包装在块中间也照抹（块不总在最前：RESET 重印/兜底那两条来路）",
+          strip_fact_lines("前半句\n" + FACT_MARK + "页面已跳转：https://a/b\n后半句")
+          == "前半句\n后半句")
+    check("没有标记的行一个字不动（闲聊/数据轮零影响）",
+          strip_fact_lines("已经帮你打开啦～\n页面已跳转：https://a/b")
+          == "已经帮你打开啦～\n页面已跳转：https://a/b")
+    check("空/None 安全", strip_fact_lines("") == "" and strip_fact_lines(None) == "")
+    # 反向哨兵：**模型自己写**的"页面已跳转：…"（无标记）留在原地——剥离只认标记，
+    # 这就是标记存在的理由（按形状猜"哪句像系统印的"会把模型的真话也抹掉）
+    check("无标记的同形句不被误抹（判据是标记，不是这行长得像事实）",
+          strip_fact_lines("页面已跳转：https://a/b") == "页面已跳转：https://a/b")
+
+
+def test_injection_points():
+    """接线：三处模型可见的读点都真的过了一遍剥离（能力有测试 ≠ 接线有测试）。"""
+    print("\n[接线] 历史注入点与 planner 读点都剥离（生产实证 20261001T230954）")
+    block = render_fact_block(["页面已跳转：https://saudade.site/device-console/"])
+    from agent.context import _last_assistant_utterance, _recent_tail
+
+    tail = _recent_tail([HumanMessage(content="猫咪我们去物联网平台"),
+                         AIMessage(content=block + "\n\n控制台就在眼前啦～")])
+    check("_recent_tail 的「泠月：」那半不带事实行（节选是范文，抄过去的就是这行）",
+          "页面已跳转" not in tail and "控制台就在眼前啦" in tail, tail[-80:])
+    tail2 = _recent_tail([HumanMessage(content="在物联网设备上对我说些什么"),
+                          AIMessage(content=block)])
+    check("  整条回复只有事实行 ⇒ 该轮「泠月：」是（未及回复），不是那行事实",
+          "页面已跳转" not in tail2, tail2[-80:])
+    check("_last_assistant_utterance 同样的剥离",
+          _last_assistant_utterance([HumanMessage(content="嗯"),
+                                     AIMessage(content=block + "\n\n还要做什么？")])
+          == "还要做什么？")
+    check("  最近一条**只有**事实行 ⇒ 给空、**不往前捞**一条更早的发言当上一句"
+          "（20260923 事故的形状：拿历史里的旧事项当此刻的应答对象）",
+          _last_assistant_utterance([HumanMessage(content="甲"),
+                                     AIMessage(content="要我把 OTA 章节读一遍吗？"),
+                                     HumanMessage(content="嗯"),
+                                     AIMessage(content=block)]) == "")
+
+    import server  # 只在用到时 import（server import 会拉起 FastAPI 应用）
+    hist = [server.HistoryItem(role="user", content="猫咪我们去物联网平台"),
+            server.HistoryItem(role="assistant", content=block + "\n\n控制台就在眼前啦～"),
+            server.HistoryItem(role="user", content="在物联网设备上对我说些什么"),
+            server.HistoryItem(role="assistant", content=block)]
+    msgs = server._build_messages(server.ChatRequest(message="现在呢", history=hist))
+    ai = [str(m.content) for m in msgs if isinstance(m, AIMessage)]
+    check("_build_messages 注入的 assistant 历史里没有事实行",
+          ai and all("页面已跳转" not in a for a in ai), str(ai))
+    check("  只有事实行的那一轮**整轮不注入**（留一条空的 assistant 会让模型"
+          "把上一轮的用户问题当待答问题——孤儿 user 的镜像）",
+          len(ai) == 1 and "控制台就在眼前啦" in ai[0], str(ai))
+    check("  它的 user 侧也一起不注入（成对，不留孤儿）",
+          all("在物联网设备上对我说些什么" not in str(m.content) for m in msgs if isinstance(m, HumanMessage)),
+          str([str(m.content)[:20] for m in msgs if isinstance(m, HumanMessage)]))
 
 
 def test_share_one_classifier():
@@ -158,7 +229,8 @@ _RESTATE_PASS = [
     "要不要我帮你把夜间模式也关掉呢？",         # 提议（豁免：要不要/呢/？）
     "要是跳过去了，应该能直接看到留言板",        # 假设（豁免：要是）
     "这一轮什么都没做，因为还没确认",           # 否定（豁免：没）
-    "页面已跳转：https://saudade.site/talk",  # 系统块原文**不是**模型的话（喂给判据的是叙述）
+    "页面已跳转：https://saudade.site/talk",  # 系统块原文**不是**模型的话（判据扫的是叙述，
+    FACT_MARK + "页面已跳转：https://saudade.site/talk",  # 20261002 起它带说话人标记）
 ]
 
 
@@ -208,6 +280,7 @@ class _FakeTool:
 _PLAN_EFFECT = 'SKILL: effect\nPARAMS: {"effect": "sakura", "action": "on"}'
 _PLAN_CHAT = "SKILL: chat\nPARAMS: {}"
 _FACT_LINE = "特效 樱花(sakura) 已打开"
+_FACT_BLOCK = FACT_MARK + _FACT_LINE   # 主人读到的那一份（带说话人标记）
 
 
 def _run_graph(plans, narrations, result=None):
@@ -384,17 +457,17 @@ def test_producer_order_and_reset():
         ("messages", (AIMessageChunk(content="已经帮你打开啦～"),
                       {"langgraph_node": "model"})),
         ("updates", {"model": {"messages": [AIMessage(content="已经帮你打开啦～")]}}),
-        ("updates", {"gate": {"done": True, "fallback_text": _FACT_LINE,
+        ("updates", {"gate": {"done": True, "fallback_text": _FACT_BLOCK,
                               "gate_replan": False}}),
     ]
     items = _drain(script)
     chunks = _ai_chunks(items)
     check("三段 AI 文本：块 → narrator（它确实先流出去了）→ 兜底替换文本",
-          chunks == [_FACT_LINE + "\n\n", "已经帮你打开啦～", _FACT_LINE], str(chunks))
+          chunks == [_FACT_BLOCK + "\n\n", "已经帮你打开啦～", _FACT_BLOCK], str(chunks))
     check("事实块在 narrator 之前（主人先读事实）",
-          chunks and chunks[0] == _FACT_LINE + "\n\n", repr(chunks[0] if chunks else ""))
+          chunks and chunks[0] == _FACT_BLOCK + "\n\n", repr(chunks[0] if chunks else ""))
     check("兜底那一帧**没有把块印两遍**（compose 幂等：替代文本就是块）",
-          chunks[-1] == _FACT_LINE and chunks[-1].count(_FACT_LINE) == 1, repr(chunks[-1]))
+          chunks[-1] == _FACT_BLOCK and chunks[-1].count(_FACT_LINE) == 1, repr(chunks[-1]))
     check("__CMD__ 帧在事实块之前（机器读的命令与给人读的事实各就各位）",
           next((i for i, x in enumerate(items) if isinstance(x, str)
                 and x.startswith("__CMD__:")), -1)
@@ -419,7 +492,7 @@ def test_producer_pass_round():
     ]
     chunks = _ai_chunks(_drain(script))
     check("两段：块（带空行）+ 包装",
-          chunks == [_FACT_LINE + "\n\n", "想换别的风格随时说～"], str(chunks))
+          chunks == [_FACT_BLOCK + "\n\n", "想换别的风格随时说～"], str(chunks))
     check("数据族回执不发块（只印动作族）",
           _ai_chunks(_drain([
               ("updates", {"execute": {"receipts": [_RCPT_DATA]}}),
@@ -431,6 +504,7 @@ def test_producer_pass_round():
 
 if __name__ == "__main__":
     for fn in (test_family_of, test_action_facts, test_render_and_compose,
+               test_strip_fact_lines, test_injection_points,
                test_share_one_classifier, test_action_restate_regex,
                test_graph_wiring, test_graph_no_false_positive,
                test_graph_data_round_untouched,

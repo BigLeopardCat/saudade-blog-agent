@@ -19,6 +19,7 @@ from agent import sections
 from agent.authz import (SCOPE_READ_OWN,  # 帧预算按 scope 分族（见 _frame_view）
                          required_scope,
                          strip_user_shell)  # 两层壳剥除（见下方 _short_reply_kind 注释）
+from agent.factblock import strip_fact_lines  # 系统事实行不进模型语境（见 _recent_tail）
 
 # ---------------------------------------------------------------------------
 # 消息/上下文工具
@@ -293,6 +294,10 @@ def _recent_tail(messages: list, max_turns: int = 4, per: int = 160) -> str:
     for m in messages:
         if isinstance(m, (HumanMessage, AIMessage)):
             text = (_msg_text(m) or "").strip()
+            if isinstance(m, AIMessage):
+                # 系统印的事实行不是泠月的话（20261002，与 `server.py::_build_messages`
+                # 同一个剥离）：节选是**范文**，抄过去的正是这一行的形状。
+                text = strip_fact_lines(text)
             if not text or (isinstance(m, HumanMessage) and text.startswith("[System:")):
                 continue
             if isinstance(m, HumanMessage):
@@ -331,9 +336,16 @@ def _last_assistant_utterance(messages: list) -> str:
                 seen_current = True
             continue
         if isinstance(m, AIMessage):
-            text = (_msg_text(m) or "").strip()
+            raw = (_msg_text(m) or "").strip()
+            text = strip_fact_lines(raw)
             if text:
                 return text
+            if raw:
+                # 有内容、但内容**全是系统印的事实行**（这一轮没有泠月自己的措辞）：
+                # 停在最近这一条并给空——"没有可承接的上一句"是如实的那一侧。往前再
+                # 捞一条更早的发言当"上一句"，就是 20260923 那类事故的形状（拿历史里
+                # 的旧事项当主人此刻的应答对象）。
+                return ""
     return ""
 
 

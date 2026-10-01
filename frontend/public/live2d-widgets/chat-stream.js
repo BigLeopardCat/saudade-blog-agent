@@ -913,22 +913,32 @@
         // BLOG_ROUTES 白名单 + 同源校验保留（纵深防御：帧里也可能带出一个幻觉 URL，
         // 而 agent 侧的 navigate 技能模板只解析 NAV_MAP，理论上到不了这里）。
         // contentSpan 为 null 时（catch 异常路径，错误气泡已提示）跳过注记插入。
-        const execAgentCommands = (cmds, contentSpan) => {
-            // 取**最后一条**导航命令：多轮里靠前的命令可能属于被作废的轮次
-            // （`__RESET__` 已清缓冲，这里再取最后一条是双保险）。
-            let navCmd = null;
-            for (const c of (cmds || [])) {
-              if (c && c.kind === 'navigate' && c.url) navCmd = c;
-            }
-            if (navCmd) {
-              let navUrl = String(navCmd.url).replace(/[，。,.?!；;]+$/, '');
+        //
+        // **20261002 重写：命令到达即执行**（此前一律攒到流尾）。
+        // 现场（主人报）：系统 t≈3.2s 就印出"页面已跳转：…"，而页面在流结束
+        // （t≈9.4s）才真的动——主人读到"跳好了"之后还要再等几秒。根因不是跳转慢，
+        // 是**陈述与动作分了家**：事实行走 `emit_facts`（execute 收尾即发），命令却
+        // 攒在 `programCmds` 里等流尾。所以把两者合到同一时刻——能当场跳的当场跳。
+        // 唯一跳不了的是**整页目标**（`/device-console/`、跨域 /api）：它们会掐断
+        // SSE，回复随之丢失（Rust 在终止帧才落库）⇒ 只有这一类仍旧等流尾。
+        // 特效/夜间模式改的是当前页面的状态、不掐流，同样当场执行。
+        //
+        // 本轮已经带主人去过的地址（同一条只跳一次：多轮里 round0/round1 可能选出
+        // 同一个目标，此前靠"取最后一条"压住，现在按到达顺序执行，得显式去重）。
+        let jumpedUrl = null;
+        // 处置**单条**命令。返回 true = 已处置（跳了/开合了/按白名单取消了）；
+        // 返回 false = 只能等流尾（整页跳转，见上）。
+        const applyCmd = (c, contentSpan, allowDeferred) => {
+            if (!c || typeof c !== 'object' || c.__done) return true;
+            if (c.kind === 'navigate' && c.url) {
+              let navUrl = String(c.url).replace(/[，。,.?!；;]+$/, '');
               if (navUrl.startsWith('//')) navUrl = 'https:' + navUrl;       // 协议相对 → 补全 scheme
               // 相对路径 /talk → 站点根。**必须用 `location.origin`，不能写死域名**：
               // 下面 hostOk 校验的是"同源"，写死本站域名会让**任何其他部署**上 agent 的
               // 跳转命令一律被判成跨域取消 —— 功能整个失效，且只在别人机器上复现
               // （20261001 开源前准备发现）。
               else if (!/^https?:/i.test(navUrl)) navUrl = window.location.origin + navUrl;
-              const isDirect = navCmd.mode !== 'confirm';
+              const isDirect = c.mode !== 'confirm';
               // 防呆：自动整页跳转前校验目标是博客真实路由。agent 可能幻觉出不存在的
               // 页面（如 /iot），跳过去会丢失整站布局与聊天面板（曾导致"文本框卡死"）。
               // 不在白名单内的目标取消跳转，并在对话框追加系统提示。
@@ -945,20 +955,27 @@
                 if (!navOk || !hostOk) {
                   console.warn('[agent] 已取消跳转到非博客页面: ' + navUrl);
                   if (contentSpan) contentSpan.insertAdjacentHTML('beforeend', '<div class="nav-skip-note">（系统：该地址不是博客页面，已取消自动跳转）</div>');
-                } else {
-                  // 20260926：站内跳转优先交给 SPA 桥（src/router/spaNavigate.ts）——路由换页，
-                  // 对话面板/看板娘/输入框里没发出去的半句话都留在原地（面板挂在 #root 之外，
-                  // 整页重载会把它整个重建）。桥只接管「同源 + 白名单 + 不是 /api、不是
-                  // /device-console/」；其余（跨域、nginx 直服的 /device-console/）它返回 false
-                  // ⇒ 照旧整页跳转，下面那两行 sessionStorage 标记也只在这种时候才需要。
-                  if (!(window.__spaNavigate && window.__spaNavigate(navUrl))) {
-                    sessionStorage.setItem('chat_open', '1');  // 跳转后默认打开对话框并滚动到底部
-                    sessionStorage.setItem('chat_nav_slide', '1');  // 站内转跳：跳过滑入动画（forceSlideInFromBottom）
-                    // 20260828a：备份块已删除——本轮由 finishRound 的 saveHistory 落缓存，
-                    // 新页面 DB 权威拉取（/api/chat/history），localStorage 仅游客/离线兜底
-                    window.location.href = navUrl;
-                  }
+                  c.__done = true;
+                  return true;
                 }
+                if (navUrl === jumpedUrl) { c.__done = true; return true; }  // 本轮已经跳过这个地址
+                // 20260926：站内跳转优先交给 SPA 桥（src/router/spaNavigate.ts）——路由换页，
+                // 对话面板/看板娘/输入框里没发出去的半句话都留在原地（面板挂在 #root 之外，
+                // 整页重载会把它整个重建）。桥接管 ⇒ **当场跳**：系统在同一时刻印出
+                // "页面已跳转：…"，陈述与动作由此同时发生（20261002 那一格）。
+                if (window.__spaNavigate && window.__spaNavigate(navUrl)) {
+                  jumpedUrl = navUrl; c.__done = true; return true;
+                }
+                // 桥不接管（nginx 直服的 /device-console/，或跨域 /api）⇒ 只剩整页装载
+                // 一条路，而它会掐断 SSE、本轮回复随之丢失（Rust 在终止帧才落库，
+                // 断连的残缺回复会被 Drop guard 清掉）⇒ 这类**只能等流尾**。
+                if (!allowDeferred) return false;
+                sessionStorage.setItem('chat_open', '1');  // 跳转后默认打开对话框并滚动到底部
+                sessionStorage.setItem('chat_nav_slide', '1');  // 站内转跳：跳过滑入动画（forceSlideInFromBottom）
+                // 20260828a：备份块已删除——本轮由 finishRound 的 saveHistory 落缓存，
+                // 新页面 DB 权威拉取（/api/chat/history），localStorage 仅游客/离线兜底
+                window.location.href = navUrl;
+                jumpedUrl = navUrl; c.__done = true; return true;
               } else {
                 // 20260926 暂时停用导航确认卡（用户：「不要弹出泠月喵建议转跳XXX，暂时注释掉」；
                 // 「agent 回复文本就有超链接根本用不着弹窗，而且有些询问意图被默认转跳会有
@@ -971,23 +988,38 @@
                 // navConfirm.classList.add('active');
                 console.warn('[nav] 确认式跳转已停用（不弹卡、不跳转）');
               }
+              c.__done = true;
+              return true;
             }
             // 特效/夜间模式：同样只认程序帧（批 2）。旧版这里有一条 `EFFECT:\s*(\w+)`
             // 的正则和一条"伪工具调用签名"兜底（`toggle_effect(effect="sakura", …)`）——
             // 后者是**模型在正文里表演调用工具时照样执行**，正是批 2 要废除的那条通道。
+            // 这一族改的是当前页面的状态、不掐流 ⇒ 到达即执行（与导航同一时刻的理由）。
+            if (c.kind === 'effect') {
+              // effect: sakura/rain/snow，action: on/off（agent 侧已按枚举校验过）
+              toggleEffect(String(c.effect || ''), c.action === 'off' ? 'off' : 'on');
+              c.__done = true;
+              return true;
+            }
+            if (c.kind === 'darkmode') {
+              // 通过对话让 agent 调节同样代表访客意愿：开夜间任何时段都记，关夜间只在夜间
+              // 窗口内记（见 markVisitorChoice），自动切换据此让位；
+              // animate=true 触发与手动点击切换按钮相同的日月过渡动画
+              const on = c.mode !== 'off';
+              markVisitorChoice(on);
+              applyDarkMode(on, true);
+              c.__done = true;
+              return true;
+            }
+            c.__done = true;   // 未知种类：认过就算处置，别在流尾再试一遍
+            return true;
+        };
+        // 流尾兜底：把**只能等流尾**的命令（整页跳转）跑掉；其余都是幂等空转
+        // （`__done` 已标记）。三处调用点（正常收尾 / `__ERROR__` / 断流兜底）
+        // 共用这一份——单条失败不拖垮其余，故逐条 try。
+        const execAgentCommands = (cmds, contentSpan) => {
             for (const c of (cmds || [])) {
-              if (!c) continue;
-              if (c.kind === 'effect') {
-                // effect: sakura/rain/snow，action: on/off（agent 侧已按枚举校验过）
-                toggleEffect(String(c.effect || ''), c.action === 'off' ? 'off' : 'on');
-              } else if (c.kind === 'darkmode') {
-                // 通过对话让 agent 调节同样代表访客意愿：开夜间任何时段都记，关夜间只在夜间
-                // 窗口内记（见 markVisitorChoice），自动切换据此让位；
-                // animate=true 触发与手动点击切换按钮相同的日月过渡动画
-                const on = c.mode !== 'off';
-                markVisitorChoice(on);
-                applyDarkMode(on, true);
-              }
+              try { applyCmd(c, contentSpan, true); } catch (e) { /* 单条失败不影响其余 */ }
             }
         };
         // 20260828a：agent 回复保存统一走 saveHistory（唯一写者，含变更检测），
@@ -1285,6 +1317,11 @@
                 }
                 cmdText = '';
                 displayText = '';
+                // 20261002 边界（命令到达即执行之后才有这一格）：`scope=all` 清的是
+                // **还没跑的命令**。已经当场跑掉的那些（SPA 跳转/特效/夜间）撤不回来
+                // ——页面已经换了、樱花已经落了。如实记在这里，别再指望它兜"道歉了
+                // 但还是跳了"：那一格的防线现在在服务端（`emit_reset` 的 scope 选择）
+                // 与 planner 的重新决策上，前端只保证"不重复跑第二次"。
                 // 只有决策被推翻时才清命令缓冲（20261001 改口，此前无条件清）。
                 // 旧写法把"gate 否定了整轮"与"这一轮没做过任何事"当成同一件事，
                 // 而终局 fallback 里 execute 已经跑过、checker 已 PASS —— 命令被吞掉
@@ -1302,7 +1339,12 @@
               if (text.startsWith('__CMD__:')) {
                 let cmd = null;
                 try { cmd = JSON.parse(text.slice('__CMD__:'.length)); } catch (e) {}
-                if (cmd && typeof cmd === 'object') programCmds.push(cmd);
+                if (cmd && typeof cmd === 'object') {
+                  programCmds.push(cmd);
+                  // 到达即执行（20261002，见 applyCmd 头注）：能当场做的（SPA 跳转、
+                  // 特效、夜间）立刻做掉；整页目标返回 false、留在缓冲里等流尾。
+                  try { applyCmd(cmd, contentSpan, false); } catch (e) { /* 流尾那一趟还会再试 */ }
+                }
                 continue;
               }
               // 命令行与展示文本分流：命令行不渲染（含模型幻觉输出的变形命令如 SNOW_EFFECT:）

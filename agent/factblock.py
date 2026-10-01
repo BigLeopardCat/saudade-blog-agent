@@ -23,7 +23,10 @@
 - 只收 **checker PASS** 的回执（失败执行/`__ERROR__` 帧从来进不了 receipts）——
   这是本模块敢自称"事实"的全部依据，别在别处另接一份数据源；
 - 块与 narrator 的关系是**分工不是去重**：模型被要求不复述（见 `_EXECUTOR_PROMPT`
-  的纪律 23），但即便它复述了，用户读到的仍是系统那句（两块并存，事实以系统为准）。
+  的纪律 23），但即便它复述了，用户读到的仍是系统那句（两块并存，事实以系统为准）；
+- **块只给主人看，不给模型看**（20261002 补）：正文进库、进历史，下一轮它就成了模型
+  "自己说过的话"。实测被原样抄进下一轮开头（见 `strip_fact_lines`），所以注入点在
+  **行首标记**上做确定性剥离——模型的证据是工具回执与执行台账，不是这段印出来的字。
 
 **跨模块**：`eval/narrator_facts_share.py` 读 trace 做同一套分族（trace 里
 `execute.call` 事件带 `cmd` 与 `name`）——两边分类必须一致，所以族的判据只有这里
@@ -39,6 +42,14 @@ FAMILY_WRITE = "write"    # 写族：后台写工具（result 是 adminops.rende
 FAMILY_DATA = "data"      # 数据族：返回是 JSON，讲人话是模型的活（D3 不碰）
 
 ACTION_FAMILIES = (FAMILY_CMD, FAMILY_WRITE)
+
+# 事实行的**说话人标记**：盖在每一行行首，进用户可见的正文（`render_fact_block`），
+# 但**绝不进模型可见的历史**（`strip_fact_lines` 在注入点抹掉）。它有两个用途，缺一
+# 不可：① 对主人如实署名——这句话是系统印的，不是泠月的措辞；② 给"剥离"一个**确定性
+# 判据**（按形状猜"哪句像系统写的"必然漏；gate 5g 的豁免至今也只是"这个形状只有系统
+# 会写"的**假设**——标记把假设变成可判的事实）。改这个常量要连着 `tests/test_factblock.py`
+# 与 golden 里的事实行断言一起改。
+FACT_MARK = "〔系统〕 "
 
 # 写族工具的命名族。**不追求穷举**：分不出来的落 data，那是保守方向（把写算成
 # data 只会让"能收归系统的比例"被低估，不会把数据族的 JSON 甩给用户）。
@@ -78,8 +89,40 @@ def action_facts(receipts: list) -> list[str]:
 
 
 def render_fact_block(lines: list) -> str:
-    """事实块正文：一行一条、原样（不改写、不加标签——改动就是伪造）。"""
-    return "\n".join(str(x).strip() for x in lines if str(x).strip())
+    """事实块正文：一行一条、行首盖**说话人标记**（`FACT_MARK`），事实文本一字不改。
+
+    **标记不是标签，是说话人**（20261002 补）：这句话此前没有任何署名，读者（主人
+    **和下一轮的模型**）只能按"气泡里的话都是泠月说的"去归属——而它恰恰不是泠月说的。
+    "不改写、不加标签"防的是**改动事实本身**（把 URL 抹掉、把"已创建"说成"已提交"），
+    盖一个"这句来自系统"的说话人标记不在此列：它一个字都没动。而且标记正是
+    `strip_fact_lines` 敢做**确定性**剥离的前提（按形状猜"哪句像系统印的"必然漏）。
+    """
+    out = []
+    for x in lines:
+        s = str(x).strip()
+        if not s:
+            continue
+        out.append(s if s.startswith(FACT_MARK) else FACT_MARK + s)
+    return "\n".join(out)
+
+
+def strip_fact_lines(text: str) -> str:
+    """把系统印的事实行从**模型可见的文本**里抹掉（历史注入用，20261002）。
+
+    为什么必须抹（生产实证 `20261001T230954`）：事实块随回复一起落库，下一轮作为
+    assistant 历史回到模型眼前时就变成了"**它自己说过的话**"——那一轮只跑了
+    `device_oled_display`、一次导航都没有，narrator 却把上一轮那句
+    「页面已跳转：https://saudade.site/device-console/」**原样抄在了本轮回复的开头**，
+    主人连着两个气泡读到同一句"已经跳到某个 URL"（用户报的"显示两行已经转跳"）。
+    系统印的话不该变成模型的范文；同一批 `__RESET__:<scope>` 的取舍也是这条纪律
+    （作废的叙述不让它留在历史里当先例）。
+
+    **只认行首标记**（`render_fact_block` 是唯一盖章处）。抹完若整段为空 ⇒ 返回空串，
+    调用方据此把这一轮整个跳过（一条空的 assistant 会让模型把上一轮的用户问题当成
+    待答问题——与"孤儿 user"同一个坑，见 `server.py::_build_messages`）。
+    """
+    keep = [ln for ln in str(text or "").splitlines() if not ln.lstrip().startswith(FACT_MARK)]
+    return "\n".join(keep).strip()
 
 
 def block_of(receipts: list) -> str:
