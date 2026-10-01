@@ -2000,6 +2000,32 @@
   border-right: 1px solid var(--washi-line, rgba(198, 152, 192, 0.42));
 }
 
+/* ④ 行内代码与表头的底 —— 气泡里唯一还在"硬编码浅色"的两处（20261002 修）。
+   事故形态（用户报「白日看不出高亮、夜间糊住文字」）：`.chat-msg.agent
+   .msg-text code` 的 `background: #f5f5f5` 是一条**写死字面量**的规则，
+   而它的邻居（气泡 .msg-bubble、面板、发送钮）全都跟着 `.washiDark` 翻色
+   ⇒ 夜间档就成了一块**浅色芯片压在浅色字上**：实测字色 --washi-ink
+   #f3e8f6 压在 #f5f5f5 上是 **1.09:1**，等于字没了。白日的毛病反过来——
+   #f5f5f5 压在纸面 #fffdfa 上只有 **1.07:1**，读不出"这是一段代码"。
+   两档都错，只是错的方向相反。
+
+   改法与上面 `--chat-frame-line` 同一套：**令牌就近定义在 `#waifu-chat` /
+   `#waifu-chat.washiDark` 两处**（不是 :root —— 面板挂在 document.body 下，
+   `.frontDark` 不是它的祖先，深色档认的是面板自己身上那个 `.washiDark`；
+   写 :root 反倒会在 html 层就被替换成浅色字面量），消费规则追加在
+   :850 那条之后（同特异度 (0,3,1)、后写者赢）。浅档取淡紫（比 #f5f5f5
+   深一档，压得住纸面），深档取**深一档的紫**——方向与浅档**相反**，
+   因为夜间那一侧要的是"字浮在底上"，不是"底浮在纸上"。 */
+#waifu-chat { --chat-code-bg: rgba(185, 167, 245, 0.40); }
+#waifu-chat.washiDark { --chat-code-bg: rgba(203, 182, 255, 0.20); }
+#waifu-chat { --chat-head-bg: rgba(185, 167, 245, 0.26); }
+#waifu-chat.washiDark { --chat-head-bg: rgba(203, 182, 255, 0.14); }
+.chat-msg.agent .msg-text code { background: var(--chat-code-bg, #f5f5f5); }
+.chat-msg.agent .msg-text th { background: var(--chat-head-bg, #fafafa); }
+/* 表格线同理：深档里 #e5e5e5 是一条白线。同族里**没动的**有
+   `.msg-text td/th` 的边框色与 `.msg-text blockquote` 的 #888 字色——
+   它们不挡读（后者在深底上是"偏暗但看得见"），要单独一批再收。 */
+
 /* 减少动效档：钮不抬、关闭钮不放大。**必须留在文件末尾**（同选择器
    同特异度后写者赢，落在上面那些规则之前会被整个静默压掉）。 */
 @media (prefers-reduced-motion: reduce) {
