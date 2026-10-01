@@ -181,6 +181,21 @@
   **0 处**（没有哪句该抓的从此抓不到了）。三条不动的边界：真值一致仍放行；`page=` 取不到仍
   整条不跑；反向对照——把「一旦」抽掉当场判假（放行是那颗词给的，不是这句本来就判不了）。
 
+- **trace 的 `reply` 改成"主人真读到的那份"**（`server.py::_run_agent_stream_to_queue`；
+  `tests/test_trace_reply_source.py`）。病根是正文有**两个来路**而只有一处被维护：帧流
+  （`messages` 通道那些 `AIMessageChunk`，主人读到的就是它）与重建（`updates` 通道 model 项的
+  `messages[-1]`，trace 落的是它）。20261002 06:54 那轮两份不一致、且谁都没喊——`gate/pass`
+  说最后一条 AIMessage 内容非空、`frames=15` 里 8 个以上是叙述帧，而 `stream_end` 的 reply
+  是空串（trace 记下了一段主人从没读过的正文）。差口在重建侧那句 `not _m.tool_calls`：它来自
+  "narrator 零工具"这条不变量，而那条保证的是**我们没给它工具**，不等于服务端不会回一个；
+  一回了，内容被丢掉、gate 照旧 PASS（只看内容非空）、帧流照旧发（主人照旧读到）。现在
+  **捕获侧只认内容**（是不是主人读到的，与"这条消息还带了什么"无关），**落盘侧以帧流那份为
+  准**，两份不一致记 `producer.reply_mismatch` + WARNING；接不住/整项没到两种形状各自留
+  `reply_capture_skipped` / `reply_update_missing`；`__RESET__` 时帧流账跟三端一起清，被否定
+  的那段不再进 trace。**读侧的注意**：`eval/trace_metrics.py` 拿"reply 非空"当"这份读到信号"、
+  `eval/llm_judge.py` 判"有没有编材料"用的也是这段正文——这一批起它们读的才是主人读过的那份，
+  **跨这条线比读数不成立**（空回复的计数会掉，那不是"变好了"，是原来数的是 trace 的谎）。
+
 ## 20261001
 
 - **一条用例被判红 2.5 小时，红的是判据自己**：`admin_board_audit_reviewed_refusal` 重判。
