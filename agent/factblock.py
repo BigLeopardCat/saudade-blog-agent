@@ -16,6 +16,12 @@
 - **数据族**（其余）：`result` 是 JSON，模型现在干的事恰恰是"把 JSON 讲成人话"——
   砍掉它等于把 JSON 甩给用户，比现在还差。**刻意不收**。
 
+**但"分族"与"印不印"是两件事**（20261002 主人拍板）：**命令族不再印给主人看**
+（`BLOCK_FAMILIES = (write,)`）。分族口径仍是两族（量化脚本按它算），射程收窄的只是
+这一侧：跳转/特效/夜间的效果就发生在主人眼前的页面上，他当场看得见，而那句话本该由
+泠月自己交代——系统插一行"公告"会把回答变成机房播报。写族继续印（他看不见标签被创建）。
+详见 `BLOCK_FAMILIES` 的注释。
+
 **边界（如实记）**：
 
 - 块里是**回执的 result 文本**，而回执在 agent 侧已截断（`result` `[:200]`，见
@@ -43,6 +49,16 @@ FAMILY_DATA = "data"      # 数据族：返回是 JSON，讲人话是模型的�
 
 ACTION_FAMILIES = (FAMILY_CMD, FAMILY_WRITE)
 
+# **印给主人看的那一半**（20261002 主人拍板）：只有写族。
+# 命令族（跳转/特效/夜间）的效果就发生在主人眼前的页面上——他**当场看得见**，系统再播报
+# 一遍「〔系统〕 页面已跳转：…」是多余的；更要紧的是那句话本该由泠月自己交代，系统插一行
+# "公告"会把回答变成机房播报（现场：整页目标那行还带着"（本条回复说完再跳）"，主人读到的
+# 是一句**系统在解释自己的时序**，而不是 agent 在回答）。
+# **事实供给一个字没少**：模型照旧拿到工具帧、执行台账照旧落 `execution_log`（跨轮问
+# "刚才真跳了吗"仍有据可查）、命令帧照旧驱动浏览器——少掉的只是"系统在气泡里说话"。
+# 写族**必须留着**：主人看不见标签被创建、公告被发出，那是他唯一的确定性事实来源。
+BLOCK_FAMILIES = (FAMILY_WRITE,)
+
 # 事实行的**说话人标记**：盖在每一行行首，进用户可见的正文（`render_fact_block`），
 # 但**绝不进模型可见的历史**（`strip_fact_lines` 在注入点抹掉）。它有两个用途，缺一
 # 不可：① 对主人如实署名——这句话是系统印的，不是泠月的措辞；② 给"剥离"一个**确定性
@@ -66,19 +82,32 @@ def family_of(tool: str, has_cmd: bool) -> str:
 
 
 def is_action_family(receipt: dict) -> bool:
+    """动作族（**分类概念**：有回执、结果是人话）——不等于"会印给主人看"。"""
     return family_of(str(receipt.get("tool") or ""), bool(receipt.get("cmd"))) in ACTION_FAMILIES
 
 
+def is_block_family(receipt: dict) -> bool:
+    """会不会进**用户可见**的事实块（= `BLOCK_FAMILIES`，理由见那个常量）。
+
+    分族与"印不印"是两件事，所以两个判据都留着：`eval/narrator_facts_share.py` 的量化
+    口径按**分族**算（"这一轮有几个动作"与"气泡里印了几行"不是一个数），事实块按这个
+    算。合成一个的话，改印量会顺手改掉一个评测指标的含义。
+    """
+    return family_of(str(receipt.get("tool") or ""), bool(receipt.get("cmd"))) in BLOCK_FAMILIES
+
+
 def action_facts(receipts: list) -> list[str]:
-    """动作族回执的**事实文本**（去重、保持顺序）。
+    """**印给主人看的**事实文本（去重、保持顺序）——只收 `BLOCK_FAMILIES`，即写族。
 
     顺序 = 执行顺序（receipts 是累计语义），所以调用方直接拼接即可。
     去重是必要的而不是好看：同一轮的重复调用（同一次导航跑三遍，实测有）在
     用户可见文本里没有第二次的意义，而没有它主人在气泡里会读到三行一模一样的话。
+    命令族（跳转/特效/夜间）不在这里——效果主人当场看得见，那句话交给泠月自己说
+    （见 `BLOCK_FAMILIES`）。
     """
     out: list[str] = []
     for r in receipts or []:
-        if not isinstance(r, dict) or not is_action_family(r):
+        if not isinstance(r, dict) or not is_block_family(r):
             continue
         text = str(r.get("result") or "").strip()
         if not text or text.startswith("__ERROR__"):

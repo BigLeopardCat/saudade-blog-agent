@@ -1091,19 +1091,22 @@ def _frame_texts(messages: list, limit: int = 5, per: int = 300,
     (预算, 字段上限)**——见 `_frame_view` 与 `_OWN_DATA_FRAME_PER` 的注释：
     "计数 + 明细"的帧里明细就是答案本体，按 300 字切只能看一条。
 
-    `drop_tools`（20260927 D3）：动作族的帧**从这里摘掉**——它们只出现在
-    `[本轮动作事实]` 那一段（那里写明"系统已印、你不要复述"）。同一份事实在提示词
-    里出现两次，第二次出现天然是在邀请模型复述它（这就是动作轮 75%–82% 的字都在
-    复述的来源）。摘掉后可能一条不剩：那时**不能**回落到"本轮尚无工具执行"——那
-    是句假话（本轮明明执行了），改成指回事实块。
+    `drop_tools`（20260927 D3）：**被系统印出来的那一族**（写族，见
+    `agent/factblock.py` 的 `BLOCK_FAMILIES`）的帧**从这里摘掉**——它们只出现在
+    `[本轮已由系统印出的事实]` 那一段（那里写明"系统已印、你不要复述"）。同一份事实
+    在提示词里出现两次，第二次出现天然是在邀请模型复述它（这就是动作轮 75%–82% 的
+    字都在复述的来源）。摘掉后可能一条不剩：那时**不能**回落到"本轮尚无工具执行"——
+    那是句假话（本轮明明执行了），改成指回事实块。
+    **命令族（跳转/特效/夜间）不在 `drop_tools` 里**（20261002）：那一族不印，帧是
+    narrator 唯一的依据（纪律 23 ② 半要求它自己把这件事说出来）。
     """
     frames = [m for m in messages if isinstance(m, ToolMessage)]
     if drop_tools:
         frames = [m for m in frames
                   if (getattr(m, "name", "") or "") not in drop_tools]
         if not frames:
-            return ("（本轮动作族的工具返回已在上面的 [本轮动作事实] 里给出——"
-                    "那是系统印给主人的原文，本条不作重复）")
+            return ("（本轮这些工具返回已由系统印给主人（见上面的 [本轮已由系统印出的事实]）——"
+                    "那是原文，本条不作重复）")
     if not frames:
         return "（本轮尚无工具执行）"
     parts = []
@@ -1219,15 +1222,17 @@ def _receipts_text(receipts: list, drop_tools: set | None = None) -> str:
     narrator 描述"实际显示了什么/跳转到哪"以回执为准（帧可能只含 ack 不含
     参数，回执的 args 是文案注入后值，含实际屏文）。空 → 本轮无已验收执行。
 
-    `drop_tools`（20260927 D3）：动作族的回执只进 `[本轮动作事实]`（理由与
-    `_frame_texts` 同）；全被摘掉时同样**不许**回落到"本轮没有已验收的执行"。
+    `drop_tools`（20260927 D3）：**被系统印出的那一族**（写族）的回执只进
+    `[本轮已由系统印出的事实]`（理由与 `_frame_texts` 同）；全被摘掉时同样**不许**
+    回落到"本轮没有已验收的执行"。命令族不在 `drop_tools` 里（20261002，同
+    `_frame_texts`）。
     """
     if drop_tools:
         receipts = [r for r in receipts
                     if str((r or {}).get("tool") or "") not in drop_tools]
         if not receipts:
-            return ("（本轮已验收的执行都在上面的 [本轮动作事实] 里——"
-                    "系统已印原文，本条不作重复）")
+            return ("（本轮已验收的执行都已由系统印给主人（见上面的 [本轮已由系统印出的事实]）——"
+                    "原文在那边，本条不作重复）")
     if not receipts:
         return "（本轮没有已验收的执行）"
     lines = []

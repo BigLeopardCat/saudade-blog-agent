@@ -319,27 +319,37 @@ def test_whole_page_target_not_claimed_as_done():
           "等主人确认" in str(r_cfm) and "已跳转" not in str(r_cfm), str(r_cfm))
 
 
-def test_whole_page_wording_wired_into_fact_block():
-    """③ 的接线锁：改的是**工具返回文本**，而主人读到的第 4 行是事实块（`action_facts`
-    逐字取 `receipt["result"]`）⇒ 这里验一次"工具改一个字，气泡里那行跟着变"。
+def test_nav_family_not_printed_into_fact_block():
+    """接线锁：**命令族不进用户可见事实块**（20261002 主人拍板）——跳转的交代归泠月自己说。
 
-    为什么值得一条测试：事实块是**照抄**，不改写——所以"字"只要在工具那一层对了，
-    下游三处（模型帧 / 事实块 / 落库回复）自动一致；反之如果哪天有人把措辞搬到
-    `factblock` 里二次渲染，这条会红。
+    主人原话：「不要显示〔系统〕 页面即将跳转：https://saudade.site/device-console/
+    （本条回复说完再跳）显示，**到了后让agent自己回答**」。那份"（本条回复说完再跳）"
+    是**系统在解释自己的时序**，读起来像机房播报而不是回应。
+
+    但**事实供给一个字不能少**，所以这条是反向断言（正断言"没印"很容易写成"没供给"）：
+    ① 工具帧文本照旧（模型看到的证据不变，narrator 才答得出"带你过去了"）；
+    ② 分族仍是命令族（`is_action_family` 为真——`eval/narrator_facts_share.py` 的量化
+       口径按分族算，"这一轮有几个动作"与"气泡里印了几行"不是一个数）；
+    ③ 只有 `is_block_family` 为假（过滤发生在出口，不在分类）。
     """
-    print("[whole-page] 工具的字 → 事实块（照抄、不改写）")
-    from agent.factblock import action_facts, render_fact_block
+    print("[whole-page] 命令族不进事实块（交代归 narrator）")
+    from agent.factblock import (
+        action_facts, block_of, is_action_family, is_block_family,
+    )
     from tools.base import navigate_to
 
     r0 = navigate_to.invoke({"path": "/device-console/", "confirm": False})
     # 回执的形状照 execute 的实产：工具帧文本 + 顶层 cmd（`family_of` 靠它认命令族）
     receipt = {"skill": "navigate", "tool": "navigate_to", "result": str(r0),
                "cmd": r0.meta.get("cmd")}
-    facts = action_facts([receipt])
-    check("事实块逐字取回执的 result（不改写、不二次渲染）",
-          facts == [receipt["result"]] and "已跳转" not in facts[0], str(facts))
-    check("  整块渲染后仍是同一句（只加说话人标记）",
-          "页面即将跳转" in render_fact_block(facts))
+    check("工具帧文本仍是那句（模型看到的证据不变，别把过滤挪进工具）",
+          str(receipt["result"]).startswith("页面即将跳转："), str(receipt["result"]))
+    check("  分族**仍是命令族**（量化口径按分族算，改印量不许顺手改掉它的含义）",
+          is_action_family(receipt), "is_action_family 应为真")
+    check("  但**不进**用户可见事实块（气泡里不再有〔系统〕那一行）",
+          not is_block_family(receipt) and action_facts([receipt]) == []
+          and block_of([receipt]) == "",
+          str(action_facts([receipt])))
 
 
 def test_gate_wiring_for_prefix_text():
@@ -406,7 +416,7 @@ def main():
                test_gate_nav_arrival_without_nav_frame,
                test_cmd_prefix_fallback_truthful,
                test_whole_page_target_not_claimed_as_done,
-               test_whole_page_wording_wired_into_fact_block,
+               test_nav_family_not_printed_into_fact_block,
                test_gate_wiring_for_prefix_text,
                test_cmd_frame_wiring):
         fn()
