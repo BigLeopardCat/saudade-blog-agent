@@ -4050,11 +4050,15 @@ def test_site_guide_is_role_rendered():
     from agent.context import site_guide
     from agent.skills import SKILLS, visible_skills
     guest, admin = site_guide(None), site_guide("admin")
-    # ① 每个"有 capability 且对某角色可见"的技能，其能力行必须出现在该角色的清单里
+    # ① 每个"有 capability 且对某角色可见"的技能，其能力行必须出现在该角色的清单里。
+    # 20261002 起三个角色各核一遍（原为 None/admin 两档）：`user` 与匿名今天同集，但
+    # "今天同集"不是契约——哪天 user 多了一格而渲染没跟上，这里就该红。这也是**能力否定**那
+    # 一族能有的确定性判据：核**清单**（与 `visible_skills` 逐条对齐），不核**回复**
+    # （判据分不出诚实的与胡说的"做不到"，见 tests/test_capability_truth.py 头注）。
     for s in SKILLS:
         if not s.capability:
             continue
-        for role, text in ((None, guest), ("admin", admin)):
+        for role, text in ((None, guest), ("user", site_guide("user")), ("admin", admin)):
             if s in visible_skills(role):
                 assert s.capability in text, f"清单缺 {s.name} 的能力行（role={role}）"
             else:
