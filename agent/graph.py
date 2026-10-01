@@ -1814,6 +1814,144 @@ def _nav_present_claim(text: str, page_ctx: str, exec_memory: bool = False) -> b
     return bool(_nav_present_claim_clause(text, page_ctx, exec_memory))
 
 
+# ── 洞⑪ 的第二半：零帧轮的**特效/夜间模式状态**声称 → 与实时上报核对（20261002）──
+# 与页面那半**同一个洞、同一个形状**（核真值，不猜词形）：页面那半的真值是 `page=`，
+# 这半的真值是同一条系统上下文里的 `current_effects=` / `current_darkmode=`（浏览器
+# 实时上报、`server.py` 原样注入）。
+#
+# 为什么值这一条（而不是把词形表加宽）：洞① ⑤ 当年**刻意**把开合类动词（"樱花特效
+# 已经开启啦"）排除在②支之外，理由是它有一个**合法的幂等轮**——主人要开的特效本来
+# 就开着，零工具轮叙述"已经开启啦"是真话。词形判据分不开"真话"与"编造"这两者，
+# 真值核得开：**开着 ⇒ 一致 ⇒ 放行；没开 ⇒ 判假**。这正是"真值判据让放宽词形不再有
+# 代价"的用处（页面那半的注记里预告过这一笔）。
+#
+# 三条护栏（照抄页面那半的取向，宁漏勿误伤）：
+#   · **认不出就不判**：`current_effects=` / `current_darkmode=` 缺失、或取值不认识
+#     ⇒ 那一族整条不跑（"无从核对"≠"判成假"）。注意 `server.py` 把空值兜成 `none`/
+#     `off`——那是**真值**（一个特效都没开 / 没开夜间），与"字段缺失"是两回事，只认后者
+#     为 None；
+#   · 子句级切分 + **共用页面那半的豁免表**（`_NAV_PRESENT_EXEMPT_RE`：否定/疑问/提议/
+#     条件/引述）。同一个族、同一类句子——"我可以帮你打开樱花特效"是**能力罗列**，
+#     必须放过（这也正是洞① 那张表不能复用的原因，见它的注记）；
+#   · **完成态**：窗口里得有 `_STATE_DONE_RE` 认的完成标记（"把樱花特效打开"是提议/
+#     指路，"樱花特效已经打开啦"才是声称）。
+#   ⚠️ **刻意不比页面那半多一条"纯过去词否决"**：位置判的是"主人**现在**在哪"（"你
+#   刚才在留言板"说的不是现在），而特效的"刚刚打开了"断言的**就是当下的状态**——
+#   真话假话都要判。真要豁免有"回执在场 + 追述时间词"那条口径管（同洞①/⑧）。
+_LIVE_EFFECTS_RE = re.compile(r"(?:^|[;,])\s*current_effects=([^;\]\n]*)")
+_LIVE_DARKMODE_RE = re.compile(r"(?:^|[;,])\s*current_darkmode=([^;\]\n]*)")
+# 开合两个方向的动词表。**只看词形，不看主语**——"我/系统/后台"当主语都不改变
+# "这个状态变了"这个声称。刻意不收裸的"开/关"单字（"开关"是名词、"关心"是别的词），
+# 也不收裸的"切换"（没有方向："换成樱花"/"换成日间"得看宾语，见 `_effect_state_claims`
+# 的窗口取法——本族宁漏勿误伤，方向不明就不认）。
+_EFFECT_ON_VERB_RE = re.compile(r"打开|开启|开好|开上|启用|点亮|亮了|开了|开啦|开咯|开喽")
+_EFFECT_OFF_VERB_RE = re.compile(r"关掉|关闭|关上|关好|关了|关啦|关咯|关喽|撤掉|撤下")
+
+
+def _live_effects(page_ctx: str) -> set | None:
+    """页面上下文里前端实时上报的**开着的特效 id 集合**；取不到 ⇒ None（整族不判）。
+
+    `none`/空串是**真值**（前端 `__effectStateList` 为空时的上报）——它能判假，
+    "字段缺席"不能。`（无）` 是探针夹具的写法，同 `none` 处理。
+    """
+    m = _LIVE_EFFECTS_RE.search(page_ctx or "")
+    if not m:
+        return None
+    raw = m.group(1).strip().strip("\"'")
+    if not raw or raw in ("none", "（无）", "-"):
+        return set()
+    # 只认站内真实的特效 id（`_EFFECT_ALIASES` 的取值域 = effects.js 那三件）。值里
+    # **一个都不认识** ⇒ 这份上报核不了（前端报的是我们不建模的东西/脏值）⇒ 返回 None
+    # "不判"，别拿它当"这些都没开"⇒ 那会把"樱花打开啦"判成假（本族的取向是宁漏勿误伤）。
+    ids = {e.strip() for e in raw.split(",") if e.strip() and e.strip() != "none"}
+    ids &= set(_EFFECT_ALIASES.values())
+    return ids or None
+
+
+def _live_darkmode(page_ctx: str) -> bool | None:
+    """页面上下文里前端实时上报的**夜间模式**状态；取不到/取值不认识 ⇒ None（不判）。"""
+    m = _LIVE_DARKMODE_RE.search(page_ctx or "")
+    if not m:
+        return None
+    raw = m.group(1).strip().strip("\"'").lower()
+    if raw in ("on", "true", "1"):
+        return True
+    if raw in ("off", "false", "0"):
+        return False
+    return None
+
+
+def _effect_state_claims(clause: str) -> list:
+    """子句里"被声称的特效/夜间状态"列表：`[(对象, 声称开着?)]`。
+
+    对象 = 特效 id（`sakura`/`rain`/`snow`）或 `"darkmode"`；空列表 = 这句不是在说状态。
+    **以动词为锚**（不是以别名/词形为锚）：动词窗口（±`_NAV_WINDOW_PAD`）里必须有完成态，
+    再取窗口内**离动词最近**的那个对象——"外面下雨了，我把樱花特效关掉了"里的宾语是
+    樱花，不是前头那个"雨"（别名表里有单字"雨/雪"，按别名扫会把两者一起算成声称）。
+    长别名优先由 `_EFFECT_ALIASES` 的取值本身兜住（"雪花"与"雪"归同一个 id，取哪个都对）。
+    """
+    out: list = []
+    for verb_re, on in ((_EFFECT_ON_VERB_RE, True), (_EFFECT_OFF_VERB_RE, False)):
+        for m in verb_re.finditer(clause):
+            j = m.start()
+            window = clause[max(0, j - _NAV_WINDOW_PAD):
+                            min(len(clause), m.end() + _NAV_WINDOW_PAD)]
+            if not _STATE_DONE_RE.search(window):
+                continue                       # 没有完成态 ⇒ 提议/指路，不是声称
+            best, best_d = None, None
+            rel = j - max(0, j - _NAV_WINDOW_PAD)   # 动词在 window 里的位置
+            for alias, obj in (list(_EFFECT_ALIASES.items())
+                               + [(a, "darkmode") for a in _DARKMODE_ALIASES]):
+                start = 0
+                while True:
+                    k = window.find(alias, start)
+                    if k < 0:
+                        break
+                    start = k + 1
+                    d = abs(k - rel)
+                    if best_d is None or d < best_d:
+                        best, best_d = obj, d
+            if best is not None:
+                out.append((best, on))
+    return out
+
+
+def _effect_state_claim_clause(text: str, page_ctx: str,
+                               exec_memory: bool = False) -> str:
+    """零帧轮的「特效/夜间已经打开了/关掉了」声称；返回**被否掉的子句**（"" = 放行）。
+
+    与 `_nav_present_claim_clause` 同一副骨架（零帧轮 ⇒ 本轮没有任何开合回执 ⇒ 声称
+    的状态若是本轮动作的结果，必然是编的；**但真值仍要核**：状态可能本来就是目标值）。
+    """
+    effects = _live_effects(page_ctx)
+    dark = _live_darkmode(page_ctx)
+    if effects is None and dark is None:
+        return ""                            # 两族都没有真值 ⇒ 不判（宁漏勿误伤）
+    veto = _prior_time_veto(exec_memory)
+    for s in _SENT_RE.split(text or ""):
+        for c in _CLAUSE_RE.finditer(s):
+            clause = c.group(0)
+            if _NAV_PRESENT_EXEMPT_RE.search(clause):
+                continue
+            if veto and veto(clause):
+                continue
+            for obj, on in _effect_state_claims(clause):
+                if obj == "darkmode":
+                    if dark is None or dark is on:
+                        continue             # 没真值 / 与真值一致 ⇒ 放行
+                    return clause
+                if effects is None or (obj in effects) is on:
+                    continue
+                return clause
+    return ""
+
+
+def _effect_state_claim(text: str, page_ctx: str,
+                        exec_memory: bool = False) -> bool:
+    """`_effect_state_claim_clause` 的布尔壳（族表按 bool 调的那一半）。"""
+    return bool(_effect_state_claim_clause(text, page_ctx, exec_memory))
+
+
 # ── gate 洞⑨：零帧轮的**系统侧写动作**完成式声称（20260930）───────────────────
 # 事故实证（trace `20260930T123938`，主人全程可见，uid=1）：主人说「我的未读信息
 # 全部就标记为已读」（一条明确的祈使写请求），planner 判 chat（零工具，本轮 execute
@@ -3167,6 +3305,12 @@ def _zero_frame_families(plan: dict, skill: str) -> list:
         _ClaimFamily("nav_present_claim_without_nav",
                      _nav_present_claim, _nav_present_claim_clause,
                      _FALLBACK_NAV_NO_FRAME, ("page_ctx", "exec_memory")),
+        # 洞⑪ 的第二半（20261002，同日）：特效/夜间的**状态**声称与实时上报不符
+        # （"樱花特效已经打开啦"而 `current_effects=none`）。同族真值判据、同一组标志；
+        # 排在页面那半之后（句子同时像两者时按页面记——位置是更常出事的那个）。
+        _ClaimFamily("effect_state_claim_without_cmd",
+                     _effect_state_claim, _effect_state_claim_clause,
+                     _FALLBACK_EFFECT_NO_FRAME, ("page_ctx", "exec_memory")),
     ]
 
 
@@ -3543,6 +3687,16 @@ _FALLBACK_NAV_NO_FRAME = (
     "喵呜……主人，我得收回一句：这一轮系统**没有执行任何跳转**（我手上没有跳转"
     "回执），页面不会因为我那句话动一下，别信我上一条的『已经带你到…』。你想去哪个"
     "页面、或者想看哪一篇文章，把名字告诉我，我就让系统带你过去～")
+# 洞⑪ 特效/夜间那半的兜底（20261002）。同 `_FALLBACK_NAV_NO_FRAME` 的写法：只否定
+# **被点名的那件事**（特效/夜间这一轮没被开合过），不说"站里没有这个特效"、不请主人
+# "再试一次"——把状态的权威指回**页面上下文里那个实时字段**（`current_effects=` /
+# `current_darkmode=`，由浏览器上报，不随我这句话改变）。**不许**顺手替他把当前状态
+# 念一遍：那是另一处可编的读数，要念得由叙述侧照字段念。
+_FALLBACK_EFFECT_NO_FRAME = (
+    "喵呜……主人，我得收回一句：这一轮系统**没有执行任何特效/夜间模式的开合**"
+    "（我手上没有对应的回执），页面上现在是开着还是关着，以页面上下文里实时上报的"
+    "状态为准，别信我上一条那句『已经帮你打开了/关掉了』。真要开关的话说一声，"
+    "我立刻安排喵～")
 # 动作族**实体**的"办好了"声称、而本轮没有那个实体的回执（20260927，见 gate_node 5h
 # 与 `_unsupported_deed_claims`）。与 `_FALLBACK_NAV_NO_FRAME` 同族写法（不许拿一句
 # 新假话换旧假话）：不否认整轮、不说"站里没这东西"、不请主人"再试一次"——只把
@@ -3645,6 +3799,7 @@ _REPLAN_ISSUES = frozenset({
     "sys_fetch_claim_without_tool",      # 第三人称取数声称（'系统又重新拉了一遍'）而无帧
     "write_change_denial",               # 洞⑩：真改了东西却说"这一轮什么都没改"（反向的假话）
     "nav_present_claim_without_nav",     # 洞⑪：'你现在能看到设备控制台了'而 page= 在首页
+    "effect_state_claim_without_cmd",    # 洞⑪ 第二半：'樱花特效已经打开啦'而 current_effects=none
 })
 
 # 打回提示里"两条出路"的措辞**按族分**：同一句"去查一遍"写给写族是**指错路**
@@ -3681,6 +3836,19 @@ _REPLAN_ADVICE = {
         "⇒ 如实说站内没有这个页面，并把他真能去的那几个列给他；",
         "**不许**出现「已经带你到了/页面已经打开了/你现在能看到 X」这类说法——"
         "除非本轮真的有对应的导航命令回执。",
+    ],
+    # 洞⑪ 第二半（20261002）：特效/夜间**现在开着还是关着**同样是系统事实（页面上下文
+    # 的 `current_effects=` / `current_darkmode=`，浏览器实时上报）。与上一条的两处不同：
+    # ① 幂等轮**常见**（主人要开的特效本来就开着 ⇒ 如实说"现在就是开着的"是对的，别去
+    # 执行第二次）；② 真值一致时如实念字段是**允许**的，本判据只在"与字段不符"时才拦。
+    "effect_state_claim_without_cmd": [
+        "- 主人**现在开着什么特效、页面是不是夜间模式**是**系统事实**（页面上下文里的"
+        "`current_effects=` / `current_darkmode=` 字段由浏览器实时上报），照它说就行；",
+        "- 若主人这一轮是要你**开关某个特效/夜间模式**：该动手就去动手——选对应技能、"
+        "把开或关写进调用清单；**状态本来就是目标值**（幂等）⇒ 照实说「现在就是开着的」"
+        "就好，不必再执行一次，也**不许**说成「我刚给你打开的」；",
+        "**不许**出现「已经打开了/已经关掉了/已经帮你开启」这类说法——"
+        "除非本轮真的有对应的开合回执。",
     ],
     # 洞⑩ 是上一条的**镜像**：写**真的发生了**，被说成了没发生。这里的方向不是
     # "再去做一遍"（做了也没有用：状态已经是目标值），而是**照回执如实说**。
