@@ -49,7 +49,7 @@ import agent.graph as G  # noqa: E402
 from agent.graph import (  # noqa: E402
     _FALLBACK_CMD_PREFIX, _FALLBACK_CMD_PREFIX_DONE, _FALLBACK_NAV_NO_FRAME,
     _cmd_prefix_corroborated, _cmd_prefix_fallback_text, _cmd_wire, _cmd_wires,
-    _claim_issue, gate_node, parse_plan, plan_encode, planner_node,
+    _claim_issue, _live_page_path, gate_node, parse_plan, plan_encode, planner_node,
 )
 from agent.principal import Principal  # noqa: E402
 from agent.skills import instantiate_plan  # noqa: E402
@@ -76,6 +76,30 @@ D1_NAV_CMD = {"kind": "navigate", "url": "https://saudade.site/article/46", "mod
 def _nav_receipt(cmd=D1_NAV_CMD):
     """checker PASS 后落到 state["receipts"] 的那一行（命令在 cmd 字段里）。"""
     return {"skill": "navigate", "tool": "navigate_to", "cmd": cmd}
+
+
+# ── D4 洞⑪ 现场（trace 20261002T020256，逐字）──────────────────────────────
+# 主人「猫咪带我去你的设计文档」（站内**没有**这个页面）→ planner 选 chat/answer_only
+# （零帧零回执）→ narrator 回下面这句 → gate 判 PASS。**真值就在同一轮**：page_ctx 的
+# `page=` 是首页（`https://saudade.site/`）。三张现成的网都在测词形（见 graph.py 洞⑪
+# 头注），没有一条去核它。
+D4_REPLY = "主人，物联网平台页面已经打开啦～你现在应该能看到设备控制台了喵！"
+D4_PAGE_CTX = ("user_id=1, page=https://saudade.site/, title=Saudade Blog; "
+               "current_effects=none; current_darkmode=on")
+
+
+def _sys_msg(ctx=D4_PAGE_CTX):
+    """`_build_messages` 写进消息流的那条 `[System: …]`（`_page_ctx` 的取值处）。"""
+    return HumanMessage(content=f"[System: {ctx}]")
+
+
+def _chat_state(msgs, **kw):
+    """零帧 chat 轮的 gate 输入（洞⑪ 的判据只跑在零帧族里）。`gate_replan=True`
+    = 重规划那次已经用掉 ⇒ 打回走确定性兜底，断言能直接读到兜底文本。"""
+    st = {"plan": plan_encode(instantiate_plan("chat", {})), "messages": msgs,
+          "done": False, "plan_rounds": 2, "gate_replan": True}
+    st.update(kw)
+    return st
 
 
 def _cfg():
@@ -411,12 +435,118 @@ def test_cmd_frame_wiring():
           i_cmd > 0 and i_catch > i_cmd)
 
 
+def test_gate_nav_present_claim_verified_against_page_ctx():
+    """④ 洞⑪（20261002 02:02）：零帧轮的「主人现在在 X 页」→ 与 page= **真值**核对。
+
+    这一族与前三条的关系：①②③ 判的都是**词形**（"已经带你跳到"长什么样），本族判的是
+    **真值**（前端实时上报的位置）。所以它的回归锁必须**双向**：
+      · 反例面：真值说主人在首页，回复却说"你现在能看到设备控制台了" ⇒ 判假；
+      · 正例面：真值**就是**那一页（主人自己点过去的）⇒ 同一句话必须放行。
+    只锁反例面的话，"把词形放得足够宽"也能让测试变绿——那正是这一族要离开的路。
+    """
+    print("[洞⑪] '主人现在在 X 页' 与 page= 真值核对（20261002 02:02 现场）")
+    human = HumanMessage(content="猫咪带我去你的设计文档")
+
+    # ── 反例（现场）：真值 = 首页，回复说"能看到设备控制台了" ⇒ 判假 ────────
+    st = _chat_state([_sys_msg(), human, AIMessage(content=D4_REPLY)])
+    o = gate_node(st)
+    check("现场句（page=首页 / 回复称已在设备控制台）→ 兜底",
+          o.get("done") is True and o.get("fallback_text") == _FALLBACK_NAV_NO_FRAME,
+          str(o.get("fallback_text"))[:40])
+    iss = _claim_issue(D4_REPLY, "chat", parse_plan(st["plan"]), False,
+                       page_ctx=D4_PAGE_CTX)
+    check("  issue = nav_present_claim_without_nav（分族记，能按族统计）",
+          bool(iss) and iss[0] == "nav_present_claim_without_nav",
+          str(iss and iss[0]))
+    check("  被否掉的子句 = 那一句（进 trace；不是整段也不是空）",
+          bool(iss) and "设备控制台" in iss[2] and "首页" not in iss[2],
+          str(iss and iss[2])[:60])
+
+    # ── 重规划通道：第一次打回交回 planner（不是直接兜底），且提示带两条出路 ──
+    o2 = gate_node(_chat_state([_sys_msg(), human, AIMessage(content=D4_REPLY)],
+                               gate_replan=False))
+    check("首次打回 → 交回 planner 重规划一次（gate_replan=True、done=False）",
+          o2.get("gate_replan") is True and o2.get("done") is False, str(o2.get("done")))
+    _note = "".join(str(getattr(m, "content", "")) for m in (o2.get("messages") or []))
+    check("  提示里点明'主人现在在哪一页'是系统事实（不是模型能安排的）",
+          "系统事实" in _note and "page=" in _note, _note[:60])
+    check("  提示里的禁止句在（不许说'页面已经打开了'）",
+          "页面已经打开了" in _note)
+
+    # ── 正例面：真值一致 ⇒ 同一句话放行（幂等轮的正确答案）──────────────
+    o3 = gate_node(_chat_state([
+        _sys_msg("user_id=1, page=https://saudade.site/guestbook; current_effects=none"),
+        human, AIMessage(content="主人，您现在就在留言板呀～")]))
+    check("真值 = 留言板 + 回复'您现在就在留言板' → 放行（幂等轮不误伤）",
+          o3.get("done") is True and not o3.get("fallback_text"), str(o3)[:60])
+
+    # ── 没有真值 ⇒ 整条判据不跑（宁漏勿误伤）────────────────────────────
+    o4 = gate_node(_chat_state([human, AIMessage(content=D4_REPLY)]))
+    check("页面上下文缺席（无 [System:] 那条）→ 不判，放行",
+          o4.get("done") is True and not o4.get("fallback_text"), str(o4)[:60])
+    o5 = gate_node(_chat_state([
+        _sys_msg("user_id=1, page=about:blank; current_darkmode=off"),
+        human, AIMessage(content=D4_REPLY)]))
+    check("`page=` 解不出站内路径（about:blank）→ 不判，放行（无从核对 ≠ 判假）",
+          o5.get("done") is True and not o5.get("fallback_text"), str(o5)[:60])
+
+    # ── 三处刻意不收（实测出来的误伤面，改词形时别把它们放进来）──────────
+    _page_home = "user_id=1, page=/, current_effects=none"
+    o6 = gate_node(_chat_state([
+        _sys_msg(_page_home), human,
+        AIMessage(content="物联网平台在 /device-console/，点顶部菜单就过去了")]))
+    check("**指路句**（未来式、在教路怎么走）→ 放行",
+          o6.get("done") is True and not o6.get("fallback_text"), str(o6)[:60])
+    o7 = gate_node(_chat_state([
+        _sys_msg(_page_home), human,
+        AIMessage(content="你现在能在物联网平台控制 OLED 屏幕")]))
+    check("**介词短语**（'在物联网平台控制 X' 不是位置谓语）→ 放行",
+          o7.get("done") is True and not o7.get("fallback_text"), str(o7)[:60])
+    o8 = gate_node(_chat_state(
+        [_sys_msg(_page_home), human, AIMessage(content="刚才已经带你到物联网平台了")],
+        ledger={"executions": [{"detail": "跳转「/device-console/」"}]}))
+    check("**追述**（回执在场 + 追述时间词 = 引台账）→ 放行",
+          o8.get("done") is True and not o8.get("fallback_text"), str(o8)[:60])
+
+    # ── 再三处（都是标定电池里实测出来的翻车点，改这张表/这个词形先看这里）──
+    o9 = gate_node(_chat_state([
+        _sys_msg(_page_home), human,
+        AIMessage(content="主人刚才在留言板留的那条话我看到了")]))
+    check("**过去式**（说的是主人**过去**在哪）→ 放行：本族只管'现在在哪'，"
+          "判时态靠窗口里的纯过去词（`_NAV_PAST_ONLY_RE`），不靠回执在场那条追述豁免",
+          o9.get("done") is True and not o9.get("fallback_text"), str(o9)[:60])
+    o10 = gate_node(_chat_state([
+        _sys_msg(_page_home), human,
+        AIMessage(content="主人，你不在留言板呀，你在首页")]))
+    check("**否定位置**（'你不在留言板'是句真话）→ 放行（`不` 划出了位置谓语的间隙，"
+          "否则'你**不**在X'会被读成'你在X'）",
+          o10.get("done") is True and not o10.get("fallback_text"), str(o10)[:60])
+    o11 = gate_node(_chat_state([
+        _sys_msg("user_id=1, page=https://saudade.site/guestbook; current_darkmode=off"),
+        human, AIMessage(content="主人，你现在在首页刷文章呢")]))
+    check("**陈述句里的语气词「呢」**（宿主真值=留言板）→ 兜底：'呢'不在豁免表里"
+          "（它当疑问词时本来就不需要豁免——那种句子里没有页面名）",
+          o11.get("done") is True and o11.get("fallback_text") == _FALLBACK_NAV_NO_FRAME,
+          str(o11.get("fallback_text"))[:40])
+
+    # ── `page=` 的解析：绝对 URL / query / fragment / 尾斜杠都要归一────────
+    check("绝对 URL → 站内路径（去 query/fragment/尾斜杠）",
+          _live_page_path("page=https://saudade.site/device-console/#a?b=1")
+          == "/device-console")
+    check("相对路径与根路径都认（/ 仍是 /）",
+          _live_page_path("page=/guestbook") == "/guestbook"
+          and _live_page_path("page=/") == "/")
+    check("畸形/缺席 ⇒ None（调用方据此不判）",
+          _live_page_path("（无）") is None and _live_page_path("page=") is None)
+
+
 def main():
     for fn in (test_param_problem_corrected_in_round,
                test_gate_nav_arrival_without_nav_frame,
                test_cmd_prefix_fallback_truthful,
                test_whole_page_target_not_claimed_as_done,
                test_nav_family_not_printed_into_fact_block,
+               test_gate_nav_present_claim_verified_against_page_ctx,
                test_gate_wiring_for_prefix_text,
                test_cmd_frame_wiring):
         fn()
