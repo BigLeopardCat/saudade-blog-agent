@@ -80,6 +80,7 @@ from agent import authz
 from agent import confirm
 from agent import refs
 from agent import sections
+from agent.stickers import repair_sticker_tokens
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _doc_anchors, _frame_texts, _has_frames,
                            _last_assistant_utterance, _last_user_msg,
@@ -8765,6 +8766,18 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                        usage_fields(resp), _rm.get("finish_reason"))
         record("model", "llm_empty_retry", **usage_fields(resp))
         resp = llm.invoke(_msgs)
+    # ── 贴纸残记号修补（20261002）────────────────────────────────────────
+    # 模型偶尔把 `:头疼:` 写成 `:头疼`（少了收尾冒号）：前端两处渲染器都按
+    # `:([^:\s]{1,12}):` 匹配，缺尾冒号结构上匹配不上，而"未命中就原样保留成文本"
+    # 是既定设计 ⇒ 主人读到一段裸露的 `:头疼`。这里**只补已知名字的收尾冒号**
+    # （规则与边界见 `agent/stickers.py`：只认 ASCII 开场、只在词边界、跳过代码），
+    # 替换后 gate 与流式两条路读到的都是补好的那一份。
+    _raw = getattr(resp, "content", "") or ""
+    _fixed = repair_sticker_tokens(_raw)
+    if _fixed != _raw:
+        logger.info("[model] 贴纸残记号补全（%d 处）", _fixed.count(":") - _raw.count(":"))
+        record("model", "sticker_repair", fixed=_fixed.count(":") - _raw.count(":"))
+        resp.content = _fixed
     dur = time.monotonic() - _t0
     slow = dur > 30
     (logger.warning if slow else logger.info)(

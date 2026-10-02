@@ -16,6 +16,21 @@
 
 ## 20261002
 
+- **贴纸残记号补全：`:头疼` → `:头疼:`**（新增 `agent/stickers.py::repair_sticker_tokens`，
+  接线在 `agent/graph.py::model_node` 拿到 narrator 回复之后）。模型偶尔只写开头冒号——
+  实测 `logs/agent/traces/20261002/` 的 `20261002T211008_5_r97d4db1.json`（「…麻烦呢～
+  :头疼\n\n虽然…」）与 `20261002T212117_5_r8eb7dfd.json`（`:生气\n\n`），而同会话上一轮
+  写的是完整的 `:震惊:`。两个渲染器（站内 markdown 插件 `frontend/src/utils/stickers.ts`、
+  看板娘 fallback `frontend/public/live2d-widgets/chat-render.js`）都用同一条
+  `/:([^:\s]{1,12}):/g`，缺收尾冒号结构上匹配不上，而"未命中就原样保留成文本"是既定设计
+  ⇒ 主人读到一段裸露的 `:头疼`。修补只做这一件事，边界宁漏勿误伤：**只补登记在册的 8 个
+  名字**、**只认 ASCII 冒号开场**（全角冒号大量是句读，"原因：头疼"补了会变成贴纸图）、
+  **名字后必须是空白/标点/行尾**（`:头疼啊` 是词不是记号）、**跳过围栏代码块与行内代码**
+  （渲染器也不在代码里替换）、幂等。留 `model/sticker_repair` 事件便于回扫；提示词里同批补了
+  "前后各一个英文冒号，一个都不能少"。**读侧的注意**：名字清单仍是三处同源（agent
+  `STICKER_NAMES` + 前端两处字面量），本批把其中两处做成了机器核对
+  （`tests/test_sticker_repair.py` ④，CI 的父仓稀疏锥为此加了 `frontend/src/utils`）；
+  第三处（`prompts.py::STICKER_GUIDE` 的散文）仍靠人眼。
 - **变更账号身份下放给管理员，agent 可代理执行：新增写能力 `set_account_role`（技能
   `account_set_role`）**（`tools/base.py` 新工具、`agent/skills.py` 新技能、`agent/authz.py`
   三处声明、`agent/graph.py` 四处登记、`agent/action_text.py` 词根与过程行、`agent/adminops.py`
