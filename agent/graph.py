@@ -5493,6 +5493,16 @@ _WRITE_NAME_FIELDS = {
     # 目标是申请人；与 `send_user_notice` 的 content 同理，**不收进**
     # `_WRITE_VALUE_FIELDS`，那一层靠弹卡给人眼看。）
     "reset_user_quota": ("name", None),
+    # 变更身份（20261002 批 J）：目标同样是**账号名**，与冻结族同一个通道、同一份
+    # 台账（`_write_target_refusal` 的 `is_user` 那一支）。第二个字段（父标签）恒 None。
+    # ⚠️ `role`（要改成的那一档）**刻意不进 `_WRITE_VALUE_FIELDS`**，理由与
+    # `send_user_notice.content` / `reject_quota_request.reason` 同族，但这里还多一层：
+    # 那一层的判据是**逐字子串**（`_grounded_value`），而这个值在进 spec 之前已被
+    # `skills._expand_write_skill` 归一成代号（主人说的「杂鱼」→ `zako`）——登记进去
+    # 等于让"主人原话里有「zako」"变成写的前置，**恰好把别名通道关死**（主人说中文、
+    # 工具收代号，逐字永远对不上）。所以这一格由**弹卡**兜（`_ALWAYS_CONFIRM_TOOLS`，
+    # 卡面印「从什么身份 → 什么身份」，见 `adminops.render_account_role`）。
+    "set_account_role": ("name", None),
     # 待办「勾完成」（20260927）：目标 = 后台首页待办列表里**那一行的正文**。与留言
     # 族的 `quote` 同形（主人嘴里说的就是那一段字），台账却不在站内字典里——它在
     # `list_dashboard_todos` 那个后台接口里 ⇒ `_write_target_refusal` 必须多分派一支
@@ -5765,7 +5775,12 @@ _NAME_TARGET_TOOLS = ("update_tag", "delete_tag", "update_category",
                       # 改排期（20260929 批 G）同族：卡面同样要逐字印出那一行的正文
                       # （它同时也是"现在是几号"那一格的查询键）。⚠️ 同待办族不走近失
                       # 校正——它走的是引用式唯一命中（`_todo_reference_rows`）。
-                      "reschedule_dashboard_todo")
+                      "reschedule_dashboard_todo",
+                      # 变更身份（20261002 批 J）同族：卡面要印出账号名（连同 id 与
+                      # 当前身份），而"后台账号列表里没有叫「X」的账号"里的 X 也得是
+                      # 主人说的那个字——两处都要求名字**原样**。⚠️ 它的另一个参数
+                      # `role` 不走这一格：那是"要改成什么"，不是"改谁"。
+                      "set_account_role")
 
 # "另一个操作数"的标记词：紧跟在它后面的那段引号**不是**目标，而是父标签
 # （挪到…下面）或新名字（改名叫…）。语序本身就是主人给的标记——20260922 实测另一跑
@@ -5857,6 +5872,12 @@ _FREEZE_TOOLS = ("freeze_account", "unfreeze_account")
 # 互冻 / 超管谁都不能冻），对"把 Alice 的额度清零"一句都不适用——并进去会让合法的
 # 额度操作被回一句**说错政策**的"这事办不成"（同 `_ACCOUNT_TOOLS` 长注里那两个方向）。
 _QUOTA_TOOLS = ("approve_quota_request", "reject_quota_request", "reset_user_quota")
+# 变更身份一件（20261002 批 J）。单列一个元组是为了 `_lexicon` 那条分派有名字可用
+# （同 `_NOTICE_TOOLS`）。⚠️ **不进 `_FREEZE_TOOLS`**：冻结政策那三条（不能冻自己 /
+# 管理员之间不可互冻 / 超管谁都不能冻）对"把 Alice 改成杂鱼"一句都不适用——并进去
+# 会让一次合法的变更被回一句**说错政策**的"这事办不成"。这一件的政策在**后端**
+# （`src/authz.rs::check_role_change`，唯一实现），agent 侧一个字都不预检。
+_ROLE_TOOLS = ("set_account_role",)
 # 账号管理一族的**全体**（20260926 第十一轮加发通知）：**目标都在后台账号名录里**，
 # 所以"名字在不在名录里"这一层判据（词表分派、目标预检的名录分派、弹窗惰性读名录）
 # 三处都该按这一份走。⚠️ 与 `_FREEZE_TOOLS` 分开是**硬要求**，别合成一个：
@@ -5865,7 +5886,7 @@ _QUOTA_TOOLS = ("approve_quota_request", "reject_quota_request", "reset_user_quo
 # 去，会让"给自己发通知""给另一个管理员发通知"（两件都合法）被回一句**说错政策**的
 # "这事办不成"。两个方向都是"长得像诚实拒绝的错话"：漏进 ⇒ 账号名被拿去查标签
 # （`_write_target_refusal` 掉进 else 分支），多进 ⇒ 合法的事被假政策拦住。
-_ACCOUNT_TOOLS = _FREEZE_TOOLS + ("send_user_notice",) + _QUOTA_TOOLS
+_ACCOUNT_TOOLS = _FREEZE_TOOLS + ("send_user_notice",) + _QUOTA_TOOLS + _ROLE_TOOLS
 # 发通知单独的词表（同 `_lexicon` 的按工具分派）。**另起一份而不是往 `_ACCOUNT_MARKS`
 # 里加**：那张表是冻结族的动作词表，把"通知"加进去会让「别通知他账号的事」这类句子里
 # 冒出一个被认作"有出处"的名字——那是对冻结族的**放宽**（少拦一次）。
@@ -5903,9 +5924,30 @@ _QUOTA_MARKS = _ACCOUNT_MARKS + ("批准", "通过", "驳回", "拒绝", "重置
 # "申请人"是这一族独有的——三条技能参数的描述写的是「申请人的账号名（后台账号列表里
 # 看得见的那一行）」，而它正是"模板里的占位符被抄进参数"那一族事故的形状。
 _QUOTA_GENERIC = _ACCOUNT_GENERIC + ("申请人", "申请人账号名", "申请人的账号名")
+# 变更身份那一族的词表（20261002 批 J）。**另起一份**，与上面两条同一条纪律：
+# 往 `_ACCOUNT_MARKS`（冻结族）里加"降成/解除"这类词，会让「把账号 X 的封停解除一下」
+# 之类的句子在**冻结族**上多认出一个名字 ⇒ 对冻结族是**放宽**（少拦一次）。
+#
+# 这一族的名词多两个：目标既可以点着**账号**说（「把账号 guest5 改成杂鱼」），也可以
+# 点着**身份**说（「把 guest5 的身份改成普通用户」）——只认账号名的话，后一种语序
+# 在免引号抽取里连"这句话里点过名"都判不出来（`_name_like` 为假 ⇒ 目标出处那一门
+# 整门不介入，静默放宽；同 `_QUOTA_NOUNS` 加"额度"那条论证）。
+# 动作词 = 账号族那三族 + 这一族的动词（改成/降成/解除…）。冻结族那三族一个都不能少：
+# 主人说「把账号 guest5 删掉」时同样是"点了名的"，这一门只回答"这个名字有没有出处"。
+_ROLE_NOUNS = _ACCOUNT_NOUNS + ("身份", "权限")
+_ROLE_MARKS = _ACCOUNT_MARKS + (
+    "改成", "改为", "设成", "设为", "变更为", "变更", "调成", "调为", "转成",
+    "变成", "降成", "降为", "升成", "升为", "提升为", "提升成", "恢复成", "恢复为",
+    "解除", "撤了", "撤销", "撤掉")
+# 泛称：planner 从**参数描述**里抄下来的那些字面（同 `_ACCOUNT_GENERIC` 的长注）。
+# 这一族独有的 = 参数描述与技能描述里的"身份"那一批——「角色」「身份」「权限」正是
+# `inputs` 里写的字（`role=要改成什么身份`），实测同族会被抄成 `role="身份"`。
+_ROLE_GENERIC = _ACCOUNT_GENERIC + (
+    "身份", "权限", "角色", "身份名", "目标身份", "新身份", "权限身份")
 _ACCOUNT_LEXICON = (_ACCOUNT_NOUNS, _ACCOUNT_MARKS, _ACCOUNT_GENERIC)
 _NOTICE_LEXICON = (_ACCOUNT_NOUNS, _NOTICE_MARKS, _ACCOUNT_GENERIC)
 _QUOTA_LEXICON = (_QUOTA_NOUNS, _QUOTA_MARKS, _QUOTA_GENERIC)
+_ROLE_LEXICON = (_ROLE_NOUNS, _ROLE_MARKS, _ROLE_GENERIC)
 
 
 def _lexicon(tool: str | None):
@@ -5916,6 +5958,8 @@ def _lexicon(tool: str | None):
         return _NOTICE_LEXICON
     if tool in _QUOTA_TOOLS:
         return _QUOTA_LEXICON
+    if tool in _ROLE_TOOLS:
+        return _ROLE_LEXICON
     return _DEFAULT_LEXICON
 
 

@@ -1700,15 +1700,20 @@ def _admin_post(path: str, payload: dict, config: RunnableConfig):
     return _admin_request("POST", path, payload, config)
 
 
-def _admin_status_post(path: str, payload: dict, config: RunnableConfig):
-    """冻结/解冻专用的 POST：把**非 200 业务码无条件读成"后台规则拒绝"**。
+def _policy_post(path: str, payload: dict, config: RunnableConfig):
+    """**政策拒绝族**专用的 POST：把**非 200 业务码无条件读成"后台规则拒绝"**。
+
+    今天有两个消费方：账号冻结/解冻（`/api/temp-users/{id}/status`）与变更身份
+    （`/api/temp-users/{id}/role`）。命名从 `_admin_status_post` 改成现在这个
+    （20261002）就是为了这件事——第二个消费方进来之后，"status"这个名字说的是
+    它的第一个用户，而不是它的判据。
 
     为什么不能直接用 `_admin_request`：那条（= `_principal_request`）对**任何**
     `code != 200` 都返回 `unavailable("接口报错: …")` ⇒ 后端的政策拒绝（「不能冻结
     超级管理员账号」这类）被归成**服务不可用** ⇒ 过程行显示「服务不可用」、planner
     收到"稍后再试"的指引 ⇒ 它照着这句话重试，而这条请求**永远不会**成功。
-    这个端点的非 200 只有三族（政策拒绝 / 客户不存在 / 角色未登记），**没有一族是
-    "服务不可用"**，所以无条件按政策拒绝出口是对的，也比按消息字符串匹配稳。
+    这两个端点的非 200 只有政策拒绝一族（外加客户不存在 / 角色未登记），**没有一族
+    是"服务不可用"**，所以无条件按政策拒绝出口是对的，也比按消息字符串匹配稳。
 
     文案**逐字转述后端原话、不二次改写**：政策会变，agent 侧任何复述都会在政策
     变更那天变成假话（那几句已登记为跨语言契约，见 docs/security-boundary.md §7⑫）。
@@ -1753,7 +1758,7 @@ def _admin_todo_post(path: str, payload: dict, config: RunnableConfig, default_m
     `code != 200` 都返回 `unavailable("接口报错: …")` ⇒ 后端的"查无此条 / 有多条
     同名"被归成**服务不可用** ⇒ 过程行显示「服务不可用」、planner 收到"稍后再试"
     的指引 ⇒ 它照着这句话**重试同一条**，而这条请求**永远不会**成功（与
-    `_admin_status_post` 头注里那条一模一样的坑）。这些端点的非 200 只有两族
+    `_policy_post` 头注里那条一模一样的坑）。这些端点的非 200 只有两族
     （查无此条 / 多条同名）+ 存储故障，**没有一族是"目标不存在之外的服务不可用"
     值得重试**，所以一律走 `not_found`：planner 拿到这个原因码才会去读列表、
     换一个正文，或如实告诉主人"列表里没有这一条"。
@@ -1763,7 +1768,7 @@ def _admin_todo_post(path: str, payload: dict, config: RunnableConfig, default_m
     （第三个副本必然会慢慢分叉，而分叉的那一份在"后端换了判据"那天静默说错话）。
     `default_msg` = 后端没给 message 时的兜底话术（各端点指向的东西不同）。
 
-    文案**逐字转述后端原话**（同 `_admin_status_post`）：定位判据在服务端，agent
+    文案**逐字转述后端原话**（同 `_policy_post`）：定位判据在服务端，agent
     侧任何改写都会在判据变更那天变成假话。
     """
     uid = _device_get_user_id(config)
@@ -1790,7 +1795,7 @@ def _admin_todo_post(path: str, payload: dict, config: RunnableConfig, default_m
         # ⚠️ 必须包成 `ToolResult`（`not_found` 就是），**不是**裸字符串：调用方的
         # 失败判据是 `isinstance(data, ToolResult)`，裸传会被当成"成功返回的 data"
         # 接着往下走写后复核，最后报成「请求已发出…本次改动未确认生效」——一句假话
-        # （这条请求根本没改任何东西，它被定位判据挡下了）。同 `_admin_status_post`。
+        # （这条请求根本没改任何东西，它被定位判据挡下了）。同 `_policy_post`。
         logger.warning("admin todo post %s refused: %s", path, body.get("message"))
         return not_found(str(body.get("message") or default_msg))
     return body.get("data")
@@ -1813,7 +1818,7 @@ def _admin_notice_post(target_id: int, title: str, content: str, config: Runnabl
       · **其余一律 unavailable**（含存储故障「通知发送失败，请稍后再试」、以及任何
         我们没见过的措辞）⇒ 明说"未确认"，不替后端断言一个我们并不知道的原因。
 
-    方向刻意与 `_admin_status_post`（冻结族，非 200 **无条件**读成政策拒绝）不同：
+    方向刻意与 `_policy_post`（冻结族，非 200 **无条件**读成政策拒绝）不同：
     那一族的非 200 **没有一族是"服务不可用"**，所以无条件按政策拒绝出口是对的；这一族
     有真·存储故障，一律按目标类出口会把"库写失败"说成"没这个账号"——一句假话，而且
     收件人是**别人**，说错方向的代价比冻结族更高（冻错方向还有读回复核兜着，这条没有）。
@@ -4268,12 +4273,15 @@ def reschedule_dashboard_todo(
 
 
 # ---------------------------------------------------------------------------
-# 管理助手写工具：账号管理（冻结 / 解冻 / 发通知）（20260926）
+# 管理助手写工具：账号管理（冻结 / 解冻 / 变更身份 / 发通知）（20260926，20261002 加第三件）
 # ---------------------------------------------------------------------------
-# 三件共用"目标 = 后台账号列表里的**账号名**"这条唯一通道（`_user_directory` /
-# `_find_named_user`），差别在**动的是什么**：冻结族动的是对方的登录能力、发通知
-# 动的是"发给对方的一段话"。下面四条是冻结族独有的事实，发通知那件只在 ①② 上同族
-# （它也走名录、也只按名字），③④ 是它自己的（见 `_send_user_notice` 头注）。
+# 四件共用"目标 = 后台账号列表里的**账号名**"这条唯一通道（`_user_directory` /
+# `_find_named_user`），差别在**动的是什么**：冻结族动的是对方的登录能力、变更身份动的是
+# "他在哪一档"、发通知动的是"发给对方的一段话"。下面四条是冻结族独有的事实，发通知那件
+# 只在 ①② 上同族（它也走名录、也只按名字），③④ 是它自己的（见 `_send_user_notice` 头注）。
+# 变更身份与冻结族同族但**只在 ①②④ 上**：③ 那条"方向写进工具名"对它不成立（它的方向
+# 是**参数取值**，不是一次翻转——工具名 `set_account_role` 一个，身份由 `role` 定），
+# 所以它另外补了一条：卡面必须印出"从什么身份 → 什么身份"（见 adminops 的 `_ROLE_*`）。
 #
 # 与标签/分类/公告/留言同一套纪律（名字通道 + fail-closed + 读回复核），四件**这一族
 # 独有**的事实决定了实现的形状：
@@ -4288,7 +4296,9 @@ def reschedule_dashboard_todo(
 #      的"工具 ⊆ 技能 plan"判据**看不见**这次翻转（工具名没变）⇒ 卡上写「冻结」、
 #      实际执行解冻，且无人可见（先例：add_favorite / remove_favorite 也是这样一对）；
 #   ④ 拒绝的形态是**后端的政策**，不是"目标不存在"⇒ 走 `policy_frame`
-#      （`__ERROR__` + 原因码族），见 `_admin_status_post` 与 agent/adminops.py。
+#      （`__ERROR__` + 原因码族），见 `_policy_post` 与 agent/adminops.py。
+#      **这一条对变更身份格外要紧**：能改谁、能改成什么，agent 侧一个字都不判
+#      （用户拍板：政策只有一份实现），理由写在 `_set_account_role` 头注里。
 
 def _user_directory(config: RunnableConfig) -> dict[int, dict] | ToolResult:
     """读后台**账号名录** → `{uid: 行}`；读不到 → `ToolResult`（失败，不是 None）。
@@ -4506,10 +4516,10 @@ def _set_account_frozen(name, frozen: bool, config: RunnableConfig) -> ToolResul
     # ③ 写。**幂等不短路**：目标已经是目标状态时照样发请求（后端那一支是真 no-op），
     #    结论由下面的复核给——短路成 ok 会让回执把一次"没发生的事"读成一个动作
     #    （"刚冻结的"与"本来就是冻结的"对主人是两句不同的话）。
-    data = _admin_status_post(f"/api/temp-users/{target_id}/status",
+    data = _policy_post(f"/api/temp-users/{target_id}/status",
                               {"frozen": frozen}, config)
     if isinstance(data, ToolResult):
-        # 政策拒绝（自己 / 超管 / 同级管理员）就走这一支：`_admin_status_post` 已经
+        # 政策拒绝（自己 / 超管 / 同级管理员）就走这一支：`_policy_post` 已经
         # 把后端的原话包成了 `policy_refused` 帧（checker BLOCK ⇒ 零回执 ⇒ 不进
         # 跨轮执行记忆），这里原样往外传，不改写一个字。
         return data
@@ -4575,6 +4585,107 @@ def unfreeze_account(
     （不要用账号编号，也不要自己拼一个名字）。超级管理员的账号谁都解冻不了——
     撞上时如实转告系统给的原话，不要换个说法重试。"""
     return _set_account_frozen(name, False, config)
+
+
+def _set_account_role(name, role, config: RunnableConfig) -> ToolResult:
+    """变更一个账号的身份（20261002：下放给管理员 + agent 代理）。
+
+    五段式同 `_set_account_frozen`：① 读名录 → ② 按名字解析出唯一一行 → ③ 写 →
+    ④ 写后重读**同一份名录**复核 → ⑤ 出口只有 `ok` / `not_found` / `policy_frame` /
+    `unavailable`。
+
+    **这一处刻意不写第二份权限表**（用户拍板）。能改谁、能改成什么，全由后端
+    `authz::check_role_change` 一项判据说了算，agent 只负责转述它的原话——理由是
+    **政策只有一份实现**，而"更保守地预检一遍"在这件事上已经栽过一次：冻结预检
+    （`graph._freeze_policy_refusal`）曾把"管理员冻杂鱼"拦成一句**说错政策**的
+    「管理员之间不能互相冻结」。同族论证见 `_policy_post` 头注。
+    所以这里连"目标身份认不认得出"都不判：认不出的身份交给后端回「站内没有这个身份」
+    （一句真话），agent 侧预判只会得到一句**像诚实拒绝的错话**。
+
+    **幂等不短路**（同冻结那一支）：目标已经是目标身份时照样发请求，结论由复核给。
+    """
+    from agent import adminops as A
+    want = str(name or "").strip()
+    if not want:
+        return unavailable("没给出要改的账号名，本次未改动——请让主人说清是哪个账号")
+    new_role = str(role or "").strip()
+    if not new_role:
+        return unavailable("没给出要改成什么身份，本次未改动——请让主人说清改成哪个身份")
+
+    # ① 写前读：既拿复核基线，也让"名字不存在"在**发请求之前**就响亮地报出来
+    before_index = _user_directory(config)
+    if isinstance(before_index, ToolResult):
+        return _pre_read_fail(before_index, "后台账号名录")
+    row, err = _find_named_user(want, config, index=before_index)
+    if err:
+        return not_found(err)
+    target_id = int(row.get("id"))
+    username = str(row.get("username") or want)
+    was_role = str(row.get("role") or "").strip()
+
+    # ②' 身份归一：把"杂鱼/普通用户/zako"这类说法翻成后端认的身份码。
+    #     翻不出**不在这里拒**（同头注那条"不写第二份政策表"）：原样把它交给后端，
+    #     让后端回一句『站内没有这个身份』——那是政策的原话，而 agent 自己编一句
+    #     「认不出这个身份」会是**另一句话**，且它与政策漂移时无人发现。
+    sent_role = A.normalize_role(new_role) or new_role
+
+    # ③ 写。方向由**参数字面**决定（技能展开层已经把它归一过一次；这里再归一一次
+    #    是为了让直接调用本工具的路径也拿到同一个值）。
+    data = _policy_post(f"/api/temp-users/{target_id}/role",
+                        {"role": sent_role}, config)
+    if isinstance(data, ToolResult):
+        # 政策拒绝（自己 / 超管 / 越档 / 身份不存在…）走这一支：`_policy_post` 已经
+        # 把后端的原话包成了 `policy_refused` 帧，这里原样往外传，不改写一个字。
+        return data
+
+    # ④ 写后复核：重读**同一份名录**按 id 找回那一行。四种情形一律 unavailable
+    #    （"…本次改动未确认生效"），**不许说成功**：读不回 / 那一行不见了（并发删号）/
+    #    那一行没有身份字段 / 身份仍是旧值。
+    after_index = _user_directory(config)
+    if isinstance(after_index, ToolResult):
+        return unavailable(f"改动请求已发出，但读不回后台账号名录（{after_index}），"
+                           f"本次改动未确认生效")
+    got = after_index.get(target_id)
+    if not isinstance(got, dict):
+        return unavailable(f"改动请求已发出，但读回的名录里找不到 id={target_id} 那一行"
+                           f"（账号可能已被删除），本次改动未确认生效")
+    raw_now = got.get("role")
+    now_role = str(raw_now or "").strip()
+    if not now_role:
+        return unavailable(f"改动请求已发出，但读回的账号「{username}」没有身份字段，"
+                           f"无法确认，本次改动未确认生效")
+    if now_role != sent_role:
+        return unavailable(f"变更身份的请求已发出，但读回账号「{username}」的身份仍是"
+                           f"「{A.role_cn(now_role)}」，本次改动未确认生效")
+
+    changed = (was_role != sent_role)
+    return ok(
+        A.render_account_role_status(username, target_id, sent_role,
+                                     before_role=was_role, changed=changed),
+        meta=fact("account_set_role", changed=changed,
+                  target=tgt("user", target_id, username),
+                  before=A.role_cn(was_role) if was_role else "",
+                  after=A.role_cn(sent_role),
+                  evidence=A.role_cn(now_role),
+                  account_id=target_id, account_name=username,
+                  change=A.account_role_change_phrase(sent_role, changed)))
+
+
+@tool
+def set_account_role(
+    name: Annotated[str, "要改身份的那个后台账号的**账号名**（后台账号列表里看得见的那一行）"],
+    role: Annotated[str, "要改成什么身份（照抄主人说的那个说法，例如「杂鱼」「普通用户」；"
+                         "英文码 zako / user 也认）——**能改成哪几档由系统判定**，不要自己挑"],
+    config: RunnableConfig,
+) -> str:
+    """变更一个后台账号的权限身份（例如把普通用户设成杂鱼、或把杂鱼改回普通用户）。
+    **改完他当场被踢下线**（所有已登录的会话立刻失效），需要重新登录一次。需要管理员
+    身份，且每次都要经主人确认。
+
+    **只按账号名指认**：要动的账号名必须能在后台账号列表里看到，列表里没有这个名字
+    就当它不存在（不要用账号编号，也不要自己拼一个名字）。能改谁、能改成什么由系统
+    判定**并给出原话**——被拒时如实把那句话转告主人，**不要**换个身份或换个账号重试。"""
+    return _set_account_role(name, role, config)
 
 
 # 通知的标题/正文上限与**服务端同一处口径**（`src/routes/notice.rs` 的 `TITLE_MAX` /
@@ -4733,7 +4844,7 @@ def _admin_quota_post(path: str, payload: dict, config: RunnableConfig):
         路径走不到：agent 发 POST 之前已经先读过 pending 列表、没有行就自己早退了
         （见 `_review_quota_request` ③）。真要接住它，得先想清"再试一次有意义吗"。
 
-    方向刻意与 `_admin_status_post`（冻结族，非 200 **无条件**读成政策拒绝）不同：
+    方向刻意与 `_policy_post`（冻结族，非 200 **无条件**读成政策拒绝）不同：
     那一族的非 200 没有一族是"服务不可用"，所以无条件按政策出口是对的；这一族有
     真·存储故障，一律按政策/目标出口会把"库写失败"说成"没这个申请"——一句假话，
     而且后果是**额度没有清零而主人以为清了**。按消息字符串匹配有代价（后端改字就
@@ -4774,7 +4885,7 @@ def _admin_quota_post(path: str, payload: dict, config: RunnableConfig):
                 # 失败判据是 `isinstance(data, ToolResult)`，裸传会被当成"成功返回的
                 # data"接着往下走写后复核，最后报成「已受理…未确认生效」——一句假话
                 # （这条请求根本没改任何东西，它是被状态判据挡下的）。同
-                # `_admin_status_post` 里那段一模一样的警告。
+                # `_policy_post` 里那段一模一样的警告。
                 return ToolResult(A.policy_frame(msg))
         return unavailable(f"后台拒绝了这次额度操作（{msg or '没有给出原因'}）{_NO_SUCCESS_TAIL}")
     return body.get("data")
@@ -5145,6 +5256,10 @@ _TOOL_REGISTRY = [
     # 方向写进工具名，确认卡与回执才不可能与真正执行的方向相反。
     freeze_account,
     unfreeze_account,
+    # 变更账号身份（20261002）：write.console，目标=同一个账号名录里的**账号名**，
+    # 见"管理助手写工具：变更账号身份"节头注。**agent 侧不写第二份权限表**——
+    # 能改谁、能改成什么全由后端 `authz::check_role_change` 判，agent 原话转述。
+    set_account_role,
     # 给单个账号发站内通知（20260926）：write.console，目标=同一个账号名录里的名字，
     # 动的却是"发给对方的一段话"（发出后没有撤回的通道）⇒ 同样进「一律弹窗」族，
     # 卡面必须印出**正文全文**由主人核对。见 `_send_user_notice` 头注。

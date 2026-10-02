@@ -1373,9 +1373,11 @@ def test_phantom_tool_claim():
     # get_note_stats；60 → 61 是 20261001 的后台留言名册一件：list_admin_board
     # （读 `GET /api/protect/board`，逐条带发表账号——公开的 list_guestbook 看不到）；
     # 61 → 62 是同一天的文章分期报表一件：get_note_periods（读
-    # `GET /api/protected/stats/notes/periods`，与 get_note_stats 是两个端点两张纸）。
+    # `GET /api/protected/stats/notes/periods`，与 get_note_stats 是两个端点两张纸）；
+    # 62 → 63 是 20261002 批 J 的变更账号身份一件：set_account_role（与冻结族同门——
+    # 读同一份后台账号名录、按名字指认，但后果是**换档**而非关掉）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 62 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 63 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 

@@ -175,7 +175,7 @@ requires_consent(principal, tool)         # 只看 scope 是否在 CONSENT_SCOPE
 
 ```bash
 # trace 里的 shadow 拒绝事件（一轮一文件，见 docs/eval-observability.md）
-grep -l authz_shadow /home/ubuntu/memory_blog_rust/logs/agent/traces/*.json | wc -l
+grep -l authz_shadow /home/ubuntu/Saudade-Blog/logs/agent/traces/*.json | wc -l
 ```
 
 判据读法：**拒绝只应来自"身份不明"**（Rust 还没发 role 的过渡期，`reason=unknown_role`）。
@@ -558,6 +558,39 @@ scope `write.console`，技能 `board_audit` / `board_delete`）。这一族的�
 阻塞点不在代码：复跑要真写（一次性标签/分类/公告 + 指定草稿文章的置顶往返），其中 `--allow-tag-delete`
 会触发**不可回滚**的全表 `prune_note_tags`，属生产写操作，必须由主人逐字授权后才能跑。
 20260922 探针侧的两处盲区（见 §5.5 上方）已在离线修好，重跑时 ⑧⑨⑩ 才第一次真正走到该走的路。
+
+### 5.7 管理助手：账号管理四族（20260926 起，含 20261002 的变更身份）
+
+写面里唯一**靶子是"人"而不是内容**的一段（后台账号名录 = `tools.base._user_directory`，
+按**账号名**唯一命中，**不开 uid 通道**）。四个技能共用五段式（读名录 → 按名字解析唯一命中 →
+写 → **写后重读同一份名录按 id 复核** → 出口只有 `ok`/`not_found`/`policy_frame`/`unavailable`）：
+
+| 技能（工具） | 做什么 | 落点 | 关键约束 |
+|---|---|---|---|
+| `account_freeze` / `account_unfreeze`（`freeze_account` / `unfreeze_account`） | 关掉 / 恢复一个账号的登录能力 | `POST /api/temp-users/:id/status` | 解冻**换不回被踢的会话**（代次只增不减）；`_FREEZE_ALLOWED_TARGETS` 含 `zako`——**agent 侧不做权限预检**（见下） |
+| `notice_send`（`send_user_notice`） | 给单个账号发一条站内通知 | `POST /api/temp-users/:id/notice` | 正文由模型**整理**、卡面印全文；站内没有删除已发通知的通道（发出去收不回） |
+| `quota_approve` / `quota_reject` / `quota_reset` | 对话额度：批准 / 驳回 / 主动重置 | `POST /api/protected/quota/requests/:rid/review`；重置走 `POST /api/temp-users/:id/quota-reset` | 批准 = 再给 500 轮；驳回要带**必填理由**（会作为站内通知发给申请人） |
+| `account_set_role`（`set_account_role`，**20261002 批 J**） | 变更一个后台账号的**权限身份**（例如把普通用户改成杂鱼） | `POST /api/temp-users/:id/role` | 后果是**换档**而非关掉：降成杂鱼 = 他以后什么站内操作都做不了、只能闲聊，升回普通用户 = 把能力还给他，两种都会**当场踢下线**、重登后才是新身份 |
+
+三条同族纪律：
+
+1. **一律弹卡**（`authz._ALWAYS_CONFIRM_TOOLS`）：动的都不是主人的东西，且目标由模型从名录
+   解析 ⇒ 结构性关闭"同轮命令即确认"这条捷径。变更身份的卡面必须印全「账号名 + id + 现在
+   是什么身份 → 要改成什么身份」（`adminops.render_account_role`）。
+2. **拒绝话术逐字转述、策略只有一份**：允许/拒绝全由后端 `src/authz.rs` 说了算（冻结
+   `check_freeze`、变更身份 `check_role_change`），agent 侧**不写第二份权限表**——连
+   "这个目标能不能改、能改成哪几档"都不预检。理由是有教训的：冻结刚上线时 agent 侧
+   自己判了一遍（更保守），结果对着合法请求回了一句**说错政策**的话。非 200 一律读成
+   `policy_frame`，文案逐字转述后端原话（见 `docs/security-boundary.md` §7⑫c–f）。
+   **变更身份不能复用冻结那份目标白名单**（`_FREEZE_TOOLS` / `_FREEZE_ALLOWED_TARGETS`）：
+   冻结是"关掉"、变更是"换档"，把合法变更拦成假政策正是上面那个坑的翻版。
+3. **写后复核按 id 重读同一份名录**：不一致（读回不是目标身份 / 名录读不到 / 命中变了）一律
+   `unavailable("…本次改动未确认生效")`，绝不按"请求发出去了"算成功。
+
+**验证**：`tests/test_account_role.py` ⑬ 节（五段式、四种复核不一致、政策拒绝逐字、
+一律弹卡、meta 白名单、reached_specs 三态、authz 声明与行为一致）；同族的
+`test_account_freeze.py`。**20261002 批 J 尚未跑真链路**（需主人配合用一个真管理账号
+改一次真普通账号）——本批不含任何生产库写操作，权限面变化全在代码里。
 
 ## 6. 分阶段建议
 

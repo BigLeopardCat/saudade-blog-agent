@@ -88,7 +88,7 @@ class _Resp:
 
 class _Client:
     """桩 httpx 客户端：GET 与 POST 都记下来（`_user_directory` 走 GET、
-    `_admin_status_post` 走 POST——两条通道的形态断言都要能写）。"""
+    `_policy_post` 走 POST——两条通道的形态断言都要能写）。"""
 
     def __init__(self, get=None, post=None, exc=None):
         self.get_ret, self.post_ret, self.exc = get, post, exc
