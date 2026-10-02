@@ -9,7 +9,7 @@
 | 数 | 回答 | 取值 | 置红吗 |
 |---|---|---|---|
 | `FLOOR` **地板** | 出事故了吗 | **0.78** | **是**——低于它当夜红 |
-| `ENTRY` **档位** | 我们爬到哪一级了 | **0.85** → 逐级抬到 `TARGET` | 否，只报 |
+| `ENTRY` **档位** | 我们爬到哪一级了 | **0.90** → 逐级抬到 `TARGET` | 否，只报 |
 | `TARGET` **目标** | 项目要落地到哪 | **0.95** | —— |
 
 **为什么地板不是目标**：夜间那道红必须保持"事故"语义（红了就有人看），而**能力题的
@@ -57,6 +57,37 @@
 改动**前**跑 N 遍、改动**后**跑 N 遍，比两边的下界——**不倒退才落地**（`TOL` 内容差）。
 逐条上升的用例逐条点名（聚合没退化 ≠ 没有一条变坏）。
 
+## 企业落地的三条补充判据（20261003，主人拍板口径）
+
+上面那三个数回答"整体爬到哪了"，但**整体下界会被分母摊平、看不见形状**。20261003 实测：
+全站下界 0.916，而 `multi_step` 面 0.690、`todo` 面 0.734、`account` 面 0.758——"5 条用例
+全崩"的整条技能面，在 151 条的分母里只值 3.3 分。企业落地看的恰恰不是平均分，是**最弱面**。
+所以补三条（`--readiness` 打印；判据自测见 `tests/test_landing_gate.py` 第 ⑦ 节）：
+
+| 判据 | 回答 | 怎么算 | 阈值 |
+|---|---|---|---|
+| **总下界** | 最近 N 夜是否**夜夜达档** | 每夜取采样层 Wilson 下界 | 全部 ≥ `ENTRY` ⇒ 绿 |
+| **技能面下界** | 最弱的那一面有多弱 | **跨夜聚合**每个 tag 的轮次后再算下界 | < `FLOOR` ⇒ ❌；`FLOOR`–`DOMAIN_HINT` ⇒ ◐ |
+| **用户可见兜底** | 有多少轮**用户真的收到了那句道歉** | `fallback_resets` 的 **scope=text** 占比 | ≥ `HARM_HINT` ⇒ 黄；≥ `HARM_FLOOR` ⇒ 事故 |
+
+三条各有几处**必须记住的口径**：
+
+- **面判据必须跨夜聚合**。单夜每个面只有 3–5 条用例，4/4 的 Wilson 下界是 **0.51**——
+  没有一点证明力（`verdict()` 里那个 `domains` 块因此只"记录最弱几面"、不下判）。跨夜之后
+  一个面才有几十轮，下界才开始说话。所以 `DOMAIN_MIN_ROUNDS`（20 轮）是一条**准入线**：
+  不够的面标 `judged=False`，只列出来不判。
+- **`fallback_resets` 的 scope 是这条判据的全部要害**。同一个 gate 打回，`scope=all` 表示
+  planner 被交回重规划、用户最终看到了真回答（**不算伤害**）；只有 `scope=text` 表示整轮被
+  兜底道歉吞掉（用户收到的是"我没能说出话来"）。拿 `resets` 计数当判据会把"重规划成功"也
+  算成伤害，这是本仓 `saudade-agent-gate-replan` 那条记忆的同族坑。实测 21 次全量档：
+  740 轮里 12 轮 = **1.62%**（黄区），最差单夜 6/151 = 4.0% —— **还没到 5% 的事故线**，
+  所以 `HARM_FLOOR` 抓的是"gate 整片误伤"，不是正常波动（与 `FLOOR` 同一条取向）。
+- **这三条不并入夜间退出码**（除 harm 事故外）。夜里的红保持"当夜事故"语义（`FLOOR` 的
+  collapse、`HARM_FLOOR` 的整片误伤），而"面低于地板"是**持续状态**、不是某夜事件：它一旦
+  成立就会夜夜成立，变成一道每晚必红的闸——同 §"为什么目标不能当门禁"。它出现在
+  `--readiness` 的 `ready` 判定里（`ready=❌`），由人按周看，不叫醒人。**升成门禁的条件**：
+  等 `ready` 连续多周稳定 ✅ 之后，再把它并进退出码才有意义（否则只是噪声的来源换了地方）。
+
 ## 优化工单从哪来
 
 `--red-rank` 把全量历史按"**贡献的红次数**"排序打印。20261001 实测：红最集中的 36 条
@@ -73,7 +104,10 @@ import sys
 
 # ── 三个数（唯一取值处；夜间、报告、复审单都从这里读，不在各处重抄）────────────────
 FLOOR = 0.78          # 地板：采样层下界低于它 ⇒ 当夜置红（事故闸，不是目标）
-ENTRY = 0.85          # 当前档位：达档只记，不置红；连 RAISE_NIGHTS 夜达档 ⇒ 抬档
+ENTRY = 0.90          # 当前档位：达档只记，不置红；连 RAISE_NIGHTS 夜达档 ⇒ 抬档
+                      # 20261003 从 0.85 抬到 0.90：三夜采样层下界 [0.8662, 0.885,
+                      # 0.8946] 夜夜 ≥ 0.85 ⇒ 按 RAISE_STEP 抬一档（主人当天点头）。
+                      # **地板不动**（0.78 是事故闸，与档位语义不同）；下一档是 TARGET。
 TARGET = 0.95         # 落地目标（主人定的整体线）
 RAISE_STEP = 0.05     # 抬档步长
 RAISE_NIGHTS = 3      # 连几夜达档才抬档（单夜达标是运气，连三夜才是水平）
@@ -82,6 +116,23 @@ AB_TOL = 0.005        # A/B：下界回退不超过这个量算"在噪声内"（
 
 RUNS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report", "runs")
 FULL_RUN_MIN_CASES = 100   # 「全量跑」的判据（`--only` 的调试跑不进红榜：分母不可比）
+
+# ── 企业落地的三条补充口径（20261003，主人拍板）────────────────────────────
+# 上面那三个数回答的是"整体爬到哪里了"，它**看不见形状**：20261003 实测全站下界
+# 0.916，而 `multi_step` 面 0.690 / `todo` 面 0.734 / `account` 面 0.758 —— 一个
+# "5 条用例全崩"的面在 151 条的分母里只值 3.3 分。企业落地看的不是平均分，是**最弱面**。
+# 三条各管一件（与 FLOOR/ENTRY/TARGET 同规：只有事故置红）：
+#   · `DOMAIN_HINT` 技能面下界低于它 ⇒ 记"短板面"（黄，打印出来；不置红）
+#   · `HARM_*`     用户**真的看到**那句兜底道歉的轮次占比（判据是 `fallback_resets`
+#                  的 scope=text，不是 `resets` 计数）——这是唯一直接伤害体验的一类
+#   · `READY_NIGHTS` 面判据要跨几夜聚合（每晚每面只有 3–5 条，单夜下界没有证明力）
+DOMAIN_HINT = 0.90      # 技能面下界 ≥ 它算健康；< FLOOR 算事故（只在 readiness 里判）
+DOMAIN_MIN_ROUNDS = 20  # 一个面至少这么多轮次才判下界（跨夜聚合的窗口里）
+HARM_HINT = 0.01        # 用户可见兜底占比 ≥ 它 ⇒ 记黄
+HARM_FLOOR = 0.05       # ≥ 它 ⇒ **事故**（当夜置红）。实测 21 夜里最差一夜 6/151=4.0%
+                        # 仍在黄区 ⇒ 这条闸只抓"gate 整片误伤"，不抓正常波动（同 FLOOR 的取向）
+READY_NIGHTS = 5        # 企业落地判据看最近几夜
+
 
 
 def wilson_ci(passed: int, total: int, z: float = Z95) -> list:
@@ -115,13 +166,168 @@ def min_n_zero_fail(target: float, z: float = Z95) -> int:
     """**零失败**时，要声称"下界 ≥ target"所需的最小样本数。
 
     p=1 时下界退化成 `n/(n+z²)`（见 `wilson_ci`），解 `n ≥ target·z²/(1-target)`：
-    target=0.95 ⇒ **73**，0.85 ⇒ 22，0.78 ⇒ 14。
+    target=0.95 ⇒ **73**，0.90 ⇒ 35，0.85 ⇒ 22，0.78 ⇒ 14。
 
     这个数比"rule of three"给的 60 大——两者问的不是同一件事（那个说的是"失败率上界
     <5%"，这个说的是"通过率下界 >95%"）。写在门禁旁边，是因为**n≈146 看起来很大，让人
     忘了"零失败"这句话本身也要靠样本量撑**：一次 `--only 5 条` 的全绿什么也证明不了。
     """
     return int(math.ceil(target * z * z / (1 - target)))
+
+
+def fallback_resets(result: dict) -> list[str]:
+    """本轮**终局兜底**（`__RESET__:text`）的理由列表——`forbid_fallback` 的唯一判据。
+
+    **为什么不能只看 `resets`**（20261002 实测）：`parse_reset` 分出来的那两个 scope 对
+    "用户最终看到的是不是道歉"这个问题的答案**正好相反**：
+
+      · `text` —— 终局 fallback：叙述被 `fallback_text` 整段替换 ⇒ 正断言命中的就是
+        那句道歉，判红是对的；
+      · `all`  —— gate 打回 ⇒ **planner 重规划**：被否定的那段已经作废（前端清空、
+        Rust 清累积 reply、不进 chat_history），最终文本是**重查之后的真回答**。
+        判红不但错，FAIL 文案还会断言一件没发生的事（"用户收到的是兜底道歉"）。
+
+    20261002 全量跑实证：5 条 `forbid_fallback` 红里有 4 条是这个形状
+    （`admin_announcement_question_no_popup` / `capability_list_user_no_admin_leak` /
+    `admin_capability_absent_honest` / `dark_state_consistent`）——逐条读 trace：gate
+    抓的都是**真的编造**（`dark_state_consistent` 那条判的是"系统自动帮你切换成护眼
+    模式了"，随后 `check → pass`），重规划后收尾是如实的。真正的终局兜底只有一条
+    （`data_devices_online`）。旧口径把"打回"与"兜底"当成同一件事，是 20261001 拆
+    scope 之前的历史遗留（那句注释"`__RESET__` 会把整轮叙述换成一句兜底道歉"描述的
+    正是拆分前的行为）。
+
+    `reset_scopes` 缺席（老归档 / 手合成的 result）时**退回旧口径**（按 `resets` 计数）：
+    键缺了是"不知道是哪种"，不知道就不该放行——与 `parse_reset` 对缺 scope 段取保守
+    侧的取向一致。
+
+    返回空列表 = 用户看到的是**模型写的**文本（无论打回过几次），`forbid_fallback` 该放行。
+    """
+    scopes = result.get("reset_scopes")
+    if scopes is None:
+        return [str(r) for r in (result.get("resets_reasons") or [])] \
+            or [""] * int(result.get("resets") or 0)
+    reasons = result.get("fallback_reasons")
+    if reasons is None:  # 形状对齐得上一半（有 scopes、没有逐条理由）时按计数补位
+        return [""] * sum(1 for s in scopes if s == "text")
+    return list(reasons)
+
+def harm_stats(cases: list, *, floor: float = HARM_FLOOR, hint: float = HARM_HINT) -> dict:
+    """用户可见兜底：本轮有多少轮**用户真的收到了那句道歉**（企业落地的第三条）。
+
+    **判据是 `fallback_resets`（scope=text），不是 `resets` 计数**——打回后 planner
+    重规划答对了的那些轮，用户看到的是**真回答**（20261001 拆 scope 的直接产物）。
+    这里再说一遍是因为指标名一旦叫"伤害"，误用成计数就会把"打回"报成"道歉"，而两者
+    对体验的意思正好相反。
+
+    实测（21 次全量 / 2960 轮）：`resets>0` 28 轮，其中真道歉 27 轮 = **0.91%**；最差的
+    一夜 6/151 = 4.0%。所以 `HARM_FLOOR=5%` 是**事故闸**（gate 整片误伤那种），不是
+    爬坡线——正常波动全落在黄区。
+    """
+    total = len(cases)
+    ids = [c.get("id") for c in cases if fallback_resets(c)]
+    rate = len(ids) / total if total else 0.0
+    state = "incident" if rate >= floor else ("hint" if rate >= hint else "ok")
+    return {"rounds": total, "hit": len(ids), "ids": ids, "rate": round(rate, 4),
+            "ci95": wilson_ci(len(ids), total), "state": state,
+            "floor": floor, "hint": hint,
+            "criterion": f"用户收到兜底道歉（scope=text）的轮次占比 < {hint} 记绿"
+                         f"、< {floor} 记黄、≥ {floor} 置红"}
+
+
+def domain_rates(cases: list, *, hint: float = DOMAIN_HINT, floor: float = FLOOR,
+                 min_rounds: int = DOMAIN_MIN_ROUNDS) -> list:
+    """把采样层按 tag 拆成**技能面**，各算 Wilson 95% 下界（企业落地的第二条）。
+
+    与 `run_golden.by_tag_stats` 的分工：那个是**单夜报告**的分组读数，这个是**跨夜
+    聚合**的面判据。区别不是重复而是证明力——每晚每个面只有 3–5 条用例，`4/4` 的下界
+    只有 0.51，单夜判面就是把噪声当结论。所以面判据住在 `readiness()`（把最近 N 夜的
+    同名 tag 并起来，`multi_step` 于是有 ~25 条），不住 `verdict()`。
+
+    · 只收**非回归组**（与 `verdict` 的采样层是同一个总体 ⇒ 面读数与总读数可比）；
+    · 一条用例可挂多个 tag ⇒ 各面轮次之和 > 总数，这是刻意的（一条多步链同时属于
+      `multi_step` 与 `20260927`，两个面都该看见它）；
+    · `rounds < min_rounds` 的面 `judged=False`（不判、也不算短板）——小面要么干净、
+      要么出声，就是不假装判过（同 `underpowered` 的取向）。
+
+    返回按**下界升序**（最弱的排前面 = 工单顺序），每项含 `tag/rounds/passed/point/
+    ci95/lower/upper/judged/floor_ok/hint_ok`。
+    """
+    buckets: dict = {}
+    for c in cases:
+        if "regression" in (c.get("tags") or []):
+            continue
+        for tag in set(c.get("tags") or []):
+            b = buckets.setdefault(tag, {"rounds": 0, "red": 0})
+            b["rounds"] += 1
+            if not _final_ok(c):
+                b["red"] += 1
+    rows = []
+    for tag, b in buckets.items():
+        n, k = b["rounds"], b["red"]
+        ci = wilson_ci(n - k, n)
+        rows.append({"tag": tag, "rounds": n, "red": k, "passed": n - k,
+                     "point": round((n - k) / n, 4) if n else 0.0,
+                     "ci95": ci, "lower": ci[0], "upper": ci[1],
+                     "judged": n >= min_rounds,
+                     "floor_ok": ci[0] >= floor, "hint_ok": ci[0] >= hint})
+    rows.sort(key=lambda r: (r["lower"], r["tag"]))
+    return rows
+
+
+def readiness(runs_dir: str = RUNS_DIR, *, nights: int = READY_NIGHTS,
+              min_cases: int = FULL_RUN_MIN_CASES, entry: float = ENTRY,
+              target: float = TARGET, domain_hint: float = DOMAIN_HINT,
+              harm_floor: float = HARM_FLOOR, harm_hint: float = HARM_HINT) -> dict:
+    """**企业落地判据**：三条同时成立才叫"能落地"（跨夜聚合；每晚单独判不住）。
+
+    | 条 | 判据 | 为什么是它 |
+    |---|---|---|
+    | `overall` | 最近 N 夜**每一夜**下界 ≥ 档位（`strong`：≥ 目标） | 单夜达标是运气，夜夜才是水平（同 `raise_hint`） |
+    | `domains` | 每个判定得了的**技能面**下界 ≥ 地板，`strong` 要 ≥ 0.90 | 总分是平均数，会把一个面全崩摊平（20261003：multi_step 0.690 vs 全站 0.916） |
+    | `harm` | 用户收到兜底道歉的轮次占比 < 5%，`strong` 要 < 1% | 唯一直接伤害体验的一类；且它是**用户可见面**，不是判据技术细节 |
+
+    `ready` = 三条的 `ok` 全真；`strong` = 三条都够到 hint/target 级。**这两个都不置红**
+    ——夜里那道红仍是 `FLOOR` 的事故语义（红线一响就得有人看，20260929 纪律）。这里给的是
+    "离企业落地还差什么"的读数与工单，不是第四道闸。
+    """
+    reps = full_reports(runs_dir, limit=nights, min_cases=min_cases)
+    cases: list = []
+    lows: list = []
+    for rep in reps:
+        cases.extend(rep.get("cases") or [])
+        land = rep.get("landing") or verdict(rep.get("cases") or [],
+                                             (rep.get("regression") or {}).get("failed_ids") or [])
+        lows.append(land["sampled"]["lower"])
+    doms = domain_rates(cases, hint=domain_hint)
+    judged = [r for r in doms if r["judged"]]
+    weak = [r for r in judged if not r["floor_ok"]]
+    hint_only = [r for r in judged if r["floor_ok"] and not r["hint_ok"]]
+    harm = harm_stats(cases, floor=harm_floor, hint=harm_hint)
+    enough = len(reps) >= nights
+    criteria = [
+        {"key": "overall", "name": f"总下界（最近 {nights} 夜每夜）",
+         "ok": enough and bool(lows) and all(lo >= entry for lo in lows),
+         "strong": enough and bool(lows) and all(lo >= target for lo in lows),
+         "detail": f"下界 {['%.3f' % x for x in lows]}，档位 {entry} / 目标 {target}"
+                   + ("" if enough else f"（全量历史只有 {len(reps)} 夜，不够 {nights} 夜）")},
+        {"key": "domains", "name": "技能面下界（跨夜聚合）",
+         "ok": bool(judged) and not weak,
+         "strong": bool(judged) and not weak and not hint_only,
+         "detail": f"判定 {len(judged)} 个面；低于地板 {len(weak)} 个"
+                   + (f"（{[ (r['tag'], r['lower']) for r in weak ]}）" if weak else "")
+                   + f"；{FLOOR}–{domain_hint} 之间 {len(hint_only)} 个"
+                   + (f"（{[ (r['tag'], r['lower']) for r in hint_only ]}）" if hint_only else "")},
+        {"key": "harm", "name": "用户可见兜底（用户真收到道歉）",
+         "ok": harm["rate"] < harm_floor,
+         "strong": harm["rate"] < harm_hint,
+         "detail": f"{harm['hit']}/{harm['rounds']} 轮 = {harm['rate']:.2%}"
+                   f"（黄 ≥{harm_hint:.0%}、红 ≥{harm_floor:.0%}）"
+                   + (f"；最频繁：{harm['ids'][:5]}" if harm["ids"] else "")},
+    ]
+    return {"nights": len(reps), "nights_wanted": nights, "ready": all(c["ok"] for c in criteria),
+            "strong": all(c["strong"] for c in criteria), "criteria": criteria,
+            "domains": doms, "weak_domains": weak, "hint_domains": hint_only,
+            "harm": harm, "lows": lows, "cases": len(cases)}
 
 
 def _final_ok(case: dict) -> bool:
@@ -182,6 +388,10 @@ def verdict(cases: list, regression_failed_ids: list, *,
         state, basis = "pass", ""
     else:
         state, basis = "below_entry", ""
+    # 企业落地的后两条在这里只**记录**：面判据要跨夜聚合才有证明力（单夜每面 3–5 条，
+    # `4/4` 的下界 0.51 全是噪声），所以最弱面的**判决**住在 `readiness()`；用户可见兜底
+    # 是逐轮事实、单夜可判，所以它带着 `state`（`incident` 由 run_golden 置红）。
+    doms = [r for r in domain_rates(cases, min_rounds=3) if r["rounds"] >= 3]
     return {
         "hard": {
             # 硬层这一格只装"golden 报告里看得见的"那半（回归组）；离线套件与探针在
@@ -200,6 +410,13 @@ def verdict(cases: list, regression_failed_ids: list, *,
         "distance_to_target": round(max(0.0, target - lower), 4),
         "raise_ready": state in ("pass", "at_target"),
         "floor": floor, "entry": entry, "target": target,
+        # 企业落地的后两条（20261003）：面只记录（判决在 readiness），伤害单夜可判。
+        "domains": {
+            "weakest": doms[:5],
+            "note": "单夜每面只有 3–5 条用例，下界没有证明力 ⇒ 这里只记录最弱的几面，"
+                    "面判据（< 地板 = 事故）住在 `readiness()` 的跨夜聚合里",
+        },
+        "harm": harm_stats(cases),
     }
 
 
@@ -216,9 +433,14 @@ def describe(v: dict) -> str:
         word = (f"小样本但点估计 {s['point']:.3f} 已低于地板 {s['floor']} ⇒ 事故"
                 if s.get("collapse_basis") == "point"
                 else f"下界低于地板 {s['floor']} ⇒ 事故")
+    hm = v.get("harm") or {}
+    tail = ""
+    if hm.get("hit"):
+        tail = (f"；用户可见兜底 {hm['hit']}/{hm['rounds']} 轮 = {hm['rate']:.2%}"
+                f"（黄 ≥{hm['hint']:.0%} / 红 ≥{hm['floor']:.0%}）")
     return (f"{head}；采样层 {mark} {s['passed']}/{s['total']}"
             f"（点估计 {s['point']:.3f}，下界 {s['lower']:.3f}）{word}；"
-            f"档位 {s['entry']} / 目标 {s['target']}（还差 {v['distance_to_target']:.3f}）")
+            f"档位 {s['entry']} / 目标 {s['target']}（还差 {v['distance_to_target']:.3f}）{tail}")
 
 
 def ab_compare(before: list, after: list, *, tol: float = AB_TOL, z: float = Z95) -> dict:
@@ -389,6 +611,9 @@ def main() -> int:
     ap.add_argument("--red-rank", action="store_true",
                     help="打印慢性红榜（按贡献的红次数排序 = 优化工单）")
     ap.add_argument("--raise-hint", action="store_true", help="档位该不该抬（看最近 N 夜）")
+    ap.add_argument("--readiness", action="store_true",
+                    help="企业落地判据（三条：总下界夜夜达档 / 无面低于地板 / 无用户可见兜底事故）")
+    ap.add_argument("--nights", type=int, default=READY_NIGHTS, help="readiness 看最近几夜")
     ap.add_argument("--ab", nargs=2, metavar=("BEFORE", "AFTER"),
                     help="A/B 落地判据：各给一个 glob（如 'runs/*_before.json'）")
     ap.add_argument("--runs", default=RUNS_DIR, help="历史报告目录")
@@ -429,6 +654,38 @@ def main() -> int:
     if args.raise_hint:
         h = raise_hint(args.runs)
         print(f"# 档位 {h['entry']} / 目标 {h['target']}：{h['reason']}")
+        return 0
+
+    if args.readiness:
+        r = readiness(args.runs, nights=args.nights, min_cases=args.min_cases)
+        if args.json:
+            print(json.dumps(r, ensure_ascii=False, indent=1))
+            return 0
+        print(f"# 企业落地判据（最近 {r['nights']}/{r['nights_wanted']} 夜，"
+              f"{r['cases']} 条用例）")
+        print(f"# ready={'✅ 三条都成立' if r['ready'] else '❌ 还没到'}；"
+              f"strong（够到 hint/target 级）={'✅' if r['strong'] else '❌'}\n")
+        for c in r["criteria"]:
+            mark = "✅" if c["ok"] else "❌"
+            star = " ★" if c["strong"] else ""
+            print(f"  {mark} {c['name']}{star}")
+            print(f"      {c['detail']}")
+        weak = [d for d in r["domains"] if d["judged"]]
+        if weak:
+            print(f"\n# 技能面下界（判定 {len(weak)} 个，升序）：")
+            for d in weak[:12]:
+                flag = ("❌" if not d["floor_ok"] else ("◐" if not d["hint_ok"] else "✅"))
+                print(f"  {flag} {d['tag']:<20} {d['passed']:>3}/{d['rounds']:<4}"
+                      f" = {d['point']:.3f}  下界 {d['lower']:.3f}"
+                      f"  区间 [{d['ci95'][0]:.2f}, {d['ci95'][1]:.2f}]")
+        skipped = len(r["domains"]) - len(weak)
+        if skipped:
+            print(f"  （另有 {skipped} 个面轮次 < {DOMAIN_MIN_ROUNDS}，不判）")
+        print(f"\n# 读法：❌面 = 下界 < 地板 {FLOOR}（这个面按企业标准不达标）；"
+              f"◐面 = {FLOOR}–{DOMAIN_HINT} 之间。")
+        print("# 这三条**就是「能不能落地」的判据**，但**不并入夜间退出码**：面判据要跨夜聚合，"
+              "而夜里那道红是 `FLOOR` 的事故语义（每晚必红就不叫事故了）。"
+              "什么时候把它升成门禁，见模块头注。")
         return 0
 
     if not args.red_rank:
