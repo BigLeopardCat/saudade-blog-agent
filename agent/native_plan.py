@@ -406,9 +406,16 @@ def bind_native(llm: object, role: str | None, *, task_state: bool = False) -> o
     · `task_state=True` 时 schema 里多一个 `task_hold`（见 `build_tool_schema` 的注）：
       开关默认 off ⇒ 这一格与它的消费方（planner 的任务登记支）一起不存在，
       线上行为逐字节不变。
+    · schema 为空时**不 bind**（20261002）：OpenAI 兼容网关对 `tools: []` 没有一致语义
+      （有的 400，有的直接拒 `tool_choice="auto"`）。今天这一支不可达——`chat` 技能
+      对任何角色可见，schema 恒非空；留着是防"将来有人把 chat 也收掉"（比如给杂鱼
+      加了更窄的可见性规则）而没人发现。不 bind = planner 拿不到 tool_calls，
+      按既有的"零调用"路径走，不新增分支。
     """
-    return llm.bind_tools(build_tool_schema(role, task_state=task_state),
-                          tool_choice="auto", parallel_tool_calls=False)
+    schema = build_tool_schema(role, task_state=task_state)
+    if not schema:
+        return llm
+    return llm.bind_tools(schema, tool_choice="auto", parallel_tool_calls=False)
 
 
 def tool_call_names(decision: NativeDecision) -> str:

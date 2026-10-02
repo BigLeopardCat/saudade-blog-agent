@@ -147,8 +147,9 @@ from tools.base import _TODO_TEXT_LIMIT
 # 真正的硬闸在工具与服务端那两道。
 from tools.base import (_NOTICE_CONTENT_LIMIT, _NOTICE_TITLE_LIMIT, _QUOTA_NOTE_LIMIT)
 from agent.refs import is_ref  # 参数引用 $tool[0].field（20260919，见 instantiate_plan）
-from agent.principal import ADMIN_ROLES  # 技能可见性按角色过滤（20260921 管理助手；
-                             # 20260926 起是**管理员族**，超管同权）
+from agent.principal import ADMIN_ROLES, CHAT_ONLY_ROLES  # 技能可见性按角色过滤
+                             # （20260921 管理助手；20260926 起是**管理员族**，超管同权；
+                             #  20261002 加 CHAT_ONLY_ROLES 的否决支，见 visible_skills）
 # 管理读工具清单从 authz 的 scope 表**派生**（20260924）：哪些工具是"后台读面"
 # 是安全边界的事实，边界定义在 authz（`SCOPE_ADMIN_CONSOLE` = Rust auth_guard 后面的
 # 只读接口），这里只消费它——手抄一份名单必然与边界漂移。authz 只依赖 principal，
@@ -3620,12 +3621,23 @@ def visible_skills(role: str | None, include_system: bool = False) -> list[Skill
     `include_system=True` 才带上系统专用技能（`_SYSTEM_ONLY_SKILLS`：article_id 是
     current_url 解析的系统数据，planner 无参可填、narrator 也不该对外介绍）。
     `role=None`（身份不明/单测）→ 只剩公开技能，失败取向往保守一侧倒（同 authz）。
+
+    **只准闲聊族**（20261002，`CHAT_ONLY_ROLES`：杂鱼）走的是**否决支**而不是给
+    `Skill.roles` 加值：公开技能（chat / content_query / navigate / …）的 `roles`
+    是**空集**，而上面那条判据是"空集 = 对任何角色可见"（`s.roles and …`）——给杂鱼
+    配 `roles` 根本拦不住它们。判据用 `s.chat`（Skill 自己的字段，全仓只有 chat 技能
+    为真）而不是 `s.name == "chat"` 字面量：名字会漂，字段不会。
+
+    ⚠️ 这是**软**约束（它管的是"模型看到的菜单"，而 `instantiate_plan` 不校验可见性、
+    authz 在生产 shadow 档下只记账不拦）。硬保证在 graph.planner_node 的短路。
     """
     out = []
     for s in SKILLS:
         if s.name in _SYSTEM_ONLY_SKILLS and not include_system:
             continue
         if s.name in _IOT_ONLY_SKILLS and not IOT_ENABLED:
+            continue
+        if role in CHAT_ONLY_ROLES and not s.chat:
             continue
         if s.roles and role not in s.roles:
             continue

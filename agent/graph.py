@@ -99,9 +99,9 @@ from agent.factblock import (action_facts, is_block_family, is_cmd_family,
 from agent.llm_usage import usage_fields
 from agent.native_plan import (bind_native, finish_reason, tool_call_names,
                                tool_calls_to_plan)
-from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY,
-                             ROLE_SUPERADMIN, ROLE_USER,
-                             UNKNOWN as UNKNOWN_PRINCIPAL)
+from agent.principal import (CHAT_ONLY_ROLES, KNOWN_ROLES, ROLE_ADMIN,
+                             ROLE_SECRETARY, ROLE_SUPERADMIN, ROLE_USER,
+                             ROLE_ZAKO, UNKNOWN as UNKNOWN_PRINCIPAL)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
@@ -4027,6 +4027,13 @@ def _pending_intents(state: AgentState) -> list[dict]:
             if not _intent_done(i, state.get("executed") or [])]
 
 
+# 杂鱼轮的收尾注记（20261002）。**必须带 note**：`_terminal_plan` 不带 note 时的默认
+# 那句是"……且无任何工具执行记录：如实告知暂时无法确认/无法回答"——杂鱼本来就没有工具，
+# 照那句说会变成"我没法回答"，而这一轮该做的是**照常闲聊**。note 是 verbatim 覆盖。
+_ZAKO_PLAN_NOTE = ("（本轮对话者是杂鱼：按本轮的对话者口径直接回话即可——"
+                   "这一轮没有任何工具，也不需要工具。）")
+
+
 def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """职责（唯一决策点）：选技能 + 填参数 + 给调用清单 → 实例化为计划 → state.plan。
 
@@ -4085,6 +4092,24 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # （`_freeze_policy_refusal`）。同一个 config 读两次是同一个对象，取一次更省。
     principal = _principal_of(config)
     role = principal.known_role
+    # 杂鱼（20261002）：**零工具身份**的结构保证就在这一支——planner 一次都不跑，
+    # 因此连下面那几条确定性快道（导航/显示/读文章/特效切换）也一并绕过（它们照样
+    # 会产出 TOOLS 行），`execute` 节点在本请求里**一次都不会被进入**。
+    #
+    # 为什么短路而不只靠"技能不可见"：`visible_skills` 管的是**模型看到的菜单**，
+    # 而 planner 是 LLM——它点名一个已不可见但仍在 `SKILL_MAP` 里的技能时，
+    # `instantiate_plan` 不做角色校验；即便走到 execute，authz 在 shadow 档下
+    # （`not allowed and not enforcing`，见 execute_node）**只记账不拦**，工具真的会跑。
+    # 只有"决策根本不发生"才是确定的。顺带的红利：每轮省下 ~22.5k 输入 tokens。
+    #
+    # 位置在 MAX_PLAN_ROUNDS 与所有快道**之前**；放在确认轮分支之后是安全的——
+    # 杂鱼产生不了一张确认卡，`confirm_grant` 对它恒不存在。
+    if role in CHAT_ONLY_ROLES:
+        plan_obj = _wrap_up_plan(False, reason="本轮为杂鱼身份（零工具）",
+                                 note=_ZAKO_PLAN_NOTE)
+        record("planner", "zako_shortcut", round=rounds)
+        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
+
     page_ctx = _page_ctx(state["messages"], role)
     has_frames = _has_frames(state["messages"])
     doc_anchors = _doc_anchors(state["messages"])
@@ -7034,9 +7059,14 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
 # 角色名一律用 `principal` 里的常量（跨语言契约，与 Rust `src/authz.rs` 同名同义）：
 # 这里写过一次字面量，就会在下一个人改常量时留下一个静默失效的比较。
 _FREEZE_ALLOWED_TARGETS = {
-    ROLE_SUPERADMIN: {ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER},
-    ROLE_ADMIN: {ROLE_SECRETARY, ROLE_USER},
+    ROLE_SUPERADMIN: {ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, ROLE_ZAKO},
+    ROLE_ADMIN: {ROLE_SECRETARY, ROLE_USER, ROLE_ZAKO},
 }
+# ⚠️ 新增角色时必须同步这两行（20261002 杂鱼）：判据是
+# `op_role in 表 and target_role in KNOWN_ROLES`——`KNOWN_ROLES` 里有的角色而表里
+# 没有，后果不是"多拦一下"，而是**把一个后端本来会 Ok 的操作提前拒掉，并回一句说错
+# 政策的话**（管理员冻杂鱼会被答成"管理员之间不能互相冻结"）。这正是下一条 docstring
+# 写的反面："预检只允许更保守"说的是**别漏拦**，不是**可以乱拦并且说错理由**。
 
 
 def _freeze_policy_refusal(plan_obj: dict, config,

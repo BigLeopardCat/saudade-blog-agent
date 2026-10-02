@@ -529,7 +529,11 @@ check("write.own 属于需确认 scope（写要有一句明确的命令）",
 check("write.own **不**进 _HARD_SCOPES（自己账号里的写，真流量里本来就有）",
       authz.SCOPE_WRITE_OWN not in authz._HARD_SCOPES)
 check("write.own 的能力三档角色都有（角色轴在这件事上没有信息量）",
-      all(authz.SCOPE_WRITE_OWN in authz.scopes_for(r) for r in KNOWN_ROLES))
+      # 显式列这三档而不是遍历 `KNOWN_ROLES`（20261002）：杂鱼是**刻意的零授予**，
+      # 用 `all(... for r in KNOWN_ROLES)` 会把"杂鱼不该有工具"这条产品意图写成
+      # "它也该有 write.own"。判据要表达的是"三档网站用户角色在这件事上同权"。
+      all(authz.SCOPE_WRITE_OWN in authz.scopes_for(r)
+          for r in (ROLE_USER, ROLE_SECRETARY, ROLE_ADMIN)))
 check("write.own 的确认语是**函数**（与 write.console 同族），不是词表",
       callable(authz._CONSENT_PATTERNS[authz.SCOPE_WRITE_OWN]))
 check("未获确认的说明写清了『写的是用户自己账号里的状态』",
