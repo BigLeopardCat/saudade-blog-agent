@@ -16,6 +16,38 @@
 
 ## 20261003
 
+- **写弹卡用例开真身份通道：两条挂夹具、一条断言收紧**（判据，20261003）：`admin_todo_done_popup`
+  与 `account_unfreeze_popup` 不再跑在 uid=0，改为真管理员身份（`needs_admin_uid`）+ 一条夹具
+  （新增族 `requires_fixture_kind: "todo"`，账号族那半复用既有的 `agent_fixture_freeze_a`）。uid=0
+  时管理员域台账读不到，目标预检 **fail-open**、卡面按设计退化成只印正文——"这一跳真的落到了
+  台账那一行"从来没被端到端验过。现在：
+  - 夹具在位检查多了**第四族** `eval/golden_fixture_todo.py`（与账号/留言族同形：自签一枚**只读**
+    管理员令牌打一次 GET，源码扫描锁"只有 GET"，`.post`/`.put`/`/item`/`/done`/`/date` 全列禁止项）；
+    `eval/golden_fixture.py::FIXTURE_KINDS` 加 `todo`，**三处分派**（`snapshot`/`state_of`/`skip_reason`）
+    各一条——漏掉中间那条不是"少判一次"，而是拿分类族判据去判待办族（静默跳过），有锁盯着。
+  - `admin_todo_done_popup` 的断言从"只念正文"收紧成**整张卡面**：`（排期 11月30日，现在：未完成）`
+    这对括号只在真读到台账里**唯一**那一行时才印（同名多条印的是另一句），日子是台账真值、退化卡面
+    没有它、模型也编不出——它就是这次移动身份要拿到的证据。
+  - 夹具约定**三名同源**：那份 SQL 的 `due_date` ↔ `golden_fixture_todo.EXPECT_DATE` ↔ 用例断言；
+    排期对不上时用例**响亮跳过**（`wrong_state`，理由直说前提过期），而不是红成"模型没按台账念"。
+- **`account_freeze_popup` 刻意继续跑 uid=0**（不是漏改）：解冻那半要的正是"建出来就是冻结态"这个
+  前提；冻结那半若挂同一个夹具，会撞上「状态已达成 ⇒ 掏空、不弹卡」（`adminops.reached_specs`），
+  用例要的那张卡根本不存在 ⇒ 红。两半的分工与理由写进用例 `_note`。
+- **两条哨兵此前"写了没人跑"，已接进夜间**：`golden_fixture_board.py --verify`（20261001 就位）
+  与新的 `golden_fixture_todo.py --verify` 从未被任何入口调用过——夜间只接了分类族与账号族
+  两条（`scripts/nightly_regression.sh`），一条没人执行的哨兵等于没有。两条已排在账号族那条
+  之后（同需 `GOLDEN_ADMIN_UID` 去读管理员域只读接口，并排会恒报"读不到"）。**非门禁**，
+  退出码语义与另两族逐字相同。
+- **两条待落地（都是生产库写，需点名「库名+迁移文件」）**：① 新文件
+  `scripts/migration/golden_fixture_todo_20261003.sql`——在 721（`agent_test_admin_721`，golden 的
+  管理员身份）名下插一条未完成、排期 2026-11-30 的待办夹具；**没落之前 `admin_todo_done_popup`
+  每一跑都是 `[skip]`**，跳过理由里点着这份 SQL。② `scripts/migration/golden_fixture_account_20260926.sql`
+  的 §② 需**重跑一次**复位段（见下一条）。
+- **现场状态（只读核实）**：`agent_fixture_freeze_a`（id=730）眼下是 `status=0`（正常）。这一族
+  的约定是"跑之前必须是冻结态"，而那条用例做的是**解冻**且不复位 ⇒ 这是**用过的常态**
+  （用例跑过一次，还没重新建靶），不是坏掉：今天 `account_unfreeze_exec` 与 `admin_notice_user_popup`
+  被夹具闸判 `wrong_state` 摘掉（打印 `[skip]` 并点着复位段，不是模型问题）。要让它们跑，
+  就得先跑上面 ② 那段复位。
 - **负断言正则补"提述 ≠ 声称"豁免（正则肢）**：全量归档复扫（876 份 `eval/report/runs` +
   163 个 `golden_traces` run）里被判红的负正则命中 **31 条、逐条复核真阳性 0 条**——全部是
   "提到了那句话"而不是"声称做了那件事"。新增 **opt-in** `gold` 键 `not_match_exempt_mention`

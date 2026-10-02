@@ -116,6 +116,16 @@ export GOLDEN_USER_UID=722
 # 退出码语义与分类族逐字相同：0 干净 / 1 有未声明的残留 / 2 读不到名录（**无法确认**）。
 # **非门禁**，同分类族那条。
 $PY eval/golden_fixture_account.py --verify >> "$LOG" 2>&1 || echo "[$TS] 账号夹具有残留或读不到后台账号名录（非门禁，见上面的 [fixture-leftover]/[fixture-check-failed] 行）" >> "$LOG"
+# 20261003 起：**留言族与待办族两条哨兵也进夜间**——这两族此前是"写了没人跑"
+# （`golden_fixture_board.py` 20261001 就位、`golden_fixture_todo.py` 20261003 就位，
+# 而夜间只接了分类族与账号族两条）。一条没人执行的哨兵等于没有，而这两族的夹具恰恰
+# 都是**常驻**的（用例只弹卡/只审一条，都不删它，见两边模块的 `leftovers` 头注）：
+# 夹具被谁清掉、被改坏，都只能靠它讲。
+# 位置同账号族那条（都要上面那个 `GOLDEN_ADMIN_UID` 去读管理员域只读接口，并排会恒报
+# "读不到"）。退出码语义与另两族逐字相同：0 干净 / 1 有未声明的残留 / 2 读不到（**无法确认**，
+# 不是"没有"）。**非门禁**，同前两条。
+$PY eval/golden_fixture_board.py --verify >> "$LOG" 2>&1 || echo "[$TS] 留言夹具有残留或读不到后台留言清单（非门禁，见上面的 [fixture-leftover]/[fixture-check-failed] 行）" >> "$LOG"
+$PY eval/golden_fixture_todo.py --verify >> "$LOG" 2>&1 || echo "[$TS] 待办夹具有残留或读不到后台待办列表（非门禁，见上面的 [fixture-leftover]/[fixture-check-failed] 行）" >> "$LOG"
 # 20260926 起：**令牌收回/账号冻结探针每日进夜间（用户点名授权）**，位置刻意在 golden 之前。
 #
 # 为什么每日跑它：这一整套判据（冻结立即作废令牌、改密码作废旧代次、向量图谱与河灯两处

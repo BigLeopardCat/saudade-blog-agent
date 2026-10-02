@@ -20,7 +20,7 @@
 不在任何人的授权串里（生产写必须点名「库名+迁移文件」）。这条纪律有**测试机械守着**
 （`tests/test_golden_fixture.py` 的源码扫描节：本文件里出现凭据读取/写方法即判红）。
 
-## 三族夹具与本文件的分派角色（20260926；20261001 加留言族）
+## 四族夹具与本文件的分派角色（20260926；20261001 加留言族；20261003 加待办族）
 
 `requires_fixture_kind` 说明是哪一族（**不写就是分类族**）：
 
@@ -30,6 +30,10 @@
     board     `agent_fixture_*` 的留言正文  后台留言清单里读得到 ⇒ `golden_fixture_board.py`
                                           （同上；**待审态**是族约定——公开接口只放行
                                           approved=1，用例要动的那一行只在后台视图里）
+    todo      `agent_fixture_*` 的待办正文  后台首页那份待办列表里读得到 ⇒ `golden_fixture_todo.py`
+                                          （同上；**未完成且恰好一条**是族约定——已完成会
+                                          撞上"状态已达成 ⇒ 不弹卡"，同名多条则歧义即零写，
+                                          两种都让用例要的卡根本不存在）
 
 两个跑法的夹具闸都收在本文件的 `gate()` 里（此前各写一份、靠注释维持"口径一致"）；
 本文件自己**仍然不读任何带身份的东西**——账号族那条读路径在那个模块里，这里只是按 kind
@@ -140,7 +144,7 @@ def verify(titles: list[str] | None) -> tuple[int, list[str]]:
 # 分派与本模块的零凭据纪律**不冲突**：本模块自己不读任何带身份的东西——账号族那条读路径
 # 在 `golden_fixture_account.py`（要一个只读管理员身份，理由见那边头注），这里只是按
 # `requires_fixture_kind` 挑模块。
-FIXTURE_KINDS = ("category", "account", "board")
+FIXTURE_KINDS = ("category", "account", "board", "todo")
 
 
 def snapshot(kind: str):
@@ -156,6 +160,9 @@ def snapshot(kind: str):
     if kind == "board":
         import golden_fixture_board   # 同上（待审留言公开读不到，得走后台清单那条只读路径）
         return golden_fixture_board.board()
+    if kind == "todo":
+        import golden_fixture_todo    # 同上（待办列表也是管理员域接口，公开读不到）
+        return golden_fixture_todo.todo_rows()
     if kind == "category":
         return category_titles()
     raise SystemExit(f"golden 用例声明了未知的 requires_fixture_kind={kind!r}"
@@ -163,13 +170,16 @@ def snapshot(kind: str):
 
 
 def state_of(kind: str, name: str, snap) -> str:
-    """按族判 `present` / `absent` / `wrong_state` / `unreadable`（`wrong_state` 只有两族带身份的）。"""
+    """按族判 `present` / `absent` / `wrong_state` / `unreadable`（`wrong_state` 只有带身份的那三族带）。"""
     if kind == "account":
         import golden_fixture_account
         return golden_fixture_account.fixture_state(name, snap)
     if kind == "board":
         import golden_fixture_board
         return golden_fixture_board.fixture_state(name, snap)
+    if kind == "todo":
+        import golden_fixture_todo
+        return golden_fixture_todo.fixture_state(name, snap)
     return fixture_state(name, snap)
 
 
@@ -181,6 +191,9 @@ def skip_reason(kind: str, name: str, state: str) -> str:
     if kind == "board":
         import golden_fixture_board
         return golden_fixture_board.state_label(state, name)
+    if kind == "todo":
+        import golden_fixture_todo
+        return golden_fixture_todo.state_label(state, name)
     if state == "absent":
         return ("夹具不在位（公开分类列表里没有它——先按授权串跑 "
                 "scripts/migration/golden_write_fixture_20260925.sql）")
