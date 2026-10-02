@@ -16,6 +16,20 @@
 
 ## 20261003
 
+- **负断言正则补"提述 ≠ 声称"豁免（正则肢）**：全量归档复扫（876 份 `eval/report/runs` +
+  163 个 `golden_traces` run）里被判红的负正则命中 **31 条、逐条复核真阳性 0 条**——全部是
+  "提到了那句话"而不是"声称做了那件事"。新增 **opt-in** `gold` 键 `not_match_exempt_mention`
+  （`eval/run_golden.py::_mentioned_not_claimed`）：①命中落在**言语框架引入的引号**内
+  （「回来告诉我“全部标记为已读”」；但引号归属**系统**或**自称**"我刚才说的"的不豁免，
+  那是借引号转述事实）；②命中是**被否定的言语动词**的宾语（「不敢说已经帮你收进收藏夹了」
+  「不敢骗你说已经收藏好啦」）。**词表肢早有的引述豁免（`not_contains_exempt_quote`）此前
+  只作用于 `text_not_contains`**，正则肢敞着——这是 20261003 06:19 复审单那条假红的根因。
+  已开的三条用例（`own_mark_read_incident_phrase_not_logged_in`、
+  `own_favorite_add_not_logged_in`、`own_favorite_add_vocative_not_logged_in`）的负正则、
+  `require_denial`、工具断言**一字未动**；非提述的完成声称照旧判红（`tests/judge_offline_test.py`
+  九条正/反例锁）。**仍未覆盖（另案，勿当已修）**：形容词形态（「已发布的公告」「已有的分类
+  改成」）、引静态文档事实（「生产服务器是 3.7GB」）、确认卡正文自命中——见归档复扫清单。
+
 - **多步链的第二件事不再被第一件事吃掉：两道门各补一次同轮纠偏**（`agent/graph.py::planner_node`
   循环体内新增两支；动作技能名单提为 `_ACTION_SKILLS` 常量，由"同轮纠偏"与"轮末兜底"
   两处共用）。现场是 golden `multi_step_referent_nav_effect`：「带我过去，然后帮我把樱花
