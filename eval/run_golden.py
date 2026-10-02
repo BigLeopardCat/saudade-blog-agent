@@ -49,7 +49,7 @@
 **落地指标**（20261001 起；判据住在 `eval/landing_gate.py`，这里只接线）：
   **硬层** = 离线套件 / 真链路探针 / 回归组 / 前提与身份前置 ⇒ **0 红**，不给百分比
   （这一层的红没有频率含义：它说的是"存在一条能走通的路"）。**采样层** = 其余能力题 ⇒
-  **Wilson 95% 下界 ≥ 档位**（当前 0.85、目标 0.95、连三夜达档抬 0.05）。为什么点估计
+  **Wilson 95% 下界 ≥ 档位**（当前 0.90、目标 0.95、连三夜达档抬 0.05）。为什么点估计
   不算数、为什么确定性层不设 99%，见 `landing_gate` 头注（附 27 次全量历史算出的分布）。
 
 **`--min-pass-rate` 的确切语义**（20260924 写清四层；20261001 起它退成**显式覆盖**）：
@@ -102,7 +102,7 @@ import report_archive  # 同目录：留档文件名（秒级 ts 同秒撞车 �
 import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
 import identity_preflight  # 同目录：真身份通道的前置在位检查（20260926）
 import landing_gate  # 同目录：落地判定（两层门禁 / 慢性红榜，20261001）
-from landing_gate import wilson_ci  # noqa: F401 —— 再导出（唯一实现在 landing_gate）
+from landing_gate import fallback_resets, wilson_ci  # noqa: F401 —— 再导出（唯一实现在 landing_gate）
 import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
 from utils import trace as trace_mod  # trace 工具返回留多长（run_case 里放开，见其注释）
 
@@ -330,43 +330,9 @@ def parse_reset(text: str) -> tuple[str, str]:
     return scope, tail
 
 
-def fallback_resets(result: dict) -> list[str]:
-    """本轮**终局兜底**（`__RESET__:text`）的理由列表——`forbid_fallback` 的唯一判据。
-
-    **为什么不能只看 `resets`**（20261002 实测）：`parse_reset` 分出来的那两个 scope 对
-    "用户最终看到的是不是道歉"这个问题的答案**正好相反**：
-
-      · `text` —— 终局 fallback：叙述被 `fallback_text` 整段替换 ⇒ 正断言命中的就是
-        那句道歉，判红是对的；
-      · `all`  —— gate 打回 ⇒ **planner 重规划**：被否定的那段已经作废（前端清空、
-        Rust 清累积 reply、不进 chat_history），最终文本是**重查之后的真回答**。
-        判红不但错，FAIL 文案还会断言一件没发生的事（"用户收到的是兜底道歉"）。
-
-    20261002 全量跑实证：5 条 `forbid_fallback` 红里有 4 条是这个形状
-    （`admin_announcement_question_no_popup` / `capability_list_user_no_admin_leak` /
-    `admin_capability_absent_honest` / `dark_state_consistent`）——逐条读 trace：gate
-    抓的都是**真的编造**（`dark_state_consistent` 那条判的是"系统自动帮你切换成护眼
-    模式了"，随后 `check → pass`），重规划后收尾是如实的。真正的终局兜底只有一条
-    （`data_devices_online`）。旧口径把"打回"与"兜底"当成同一件事，是 20261001 拆
-    scope 之前的历史遗留（那句注释"`__RESET__` 会把整轮叙述换成一句兜底道歉"描述的
-    正是拆分前的行为）。
-
-    `reset_scopes` 缺席（老归档 / 手合成的 result）时**退回旧口径**（按 `resets` 计数）：
-    键缺了是"不知道是哪种"，不知道就不该放行——与 `parse_reset` 对缺 scope 段取保守
-    侧的取向一致。
-
-    返回空列表 = 用户看到的是**模型写的**文本（无论打回过几次），`forbid_fallback` 该放行。
-    """
-    scopes = result.get("reset_scopes")
-    if scopes is None:
-        return [str(r) for r in (result.get("resets_reasons") or [])] \
-            or [""] * int(result.get("resets") or 0)
-    reasons = result.get("fallback_reasons")
-    if reasons is None:  # 形状对齐得上一半（有 scopes、没有逐条理由）时按计数补位
-        return [""] * sum(1 for s in scopes if s == "text")
-    return list(reasons)
 
 
+# `fallback_resets` 已搬到 `landing_gate`（判据的唯一实现处），本模块顶部再导出。
 def run_one(req: ChatRequest, principal: "Principal | None" = None,
             trace_ctx: dict | None = None, *,
             confirm_token: str = "") -> dict:
@@ -1872,6 +1838,11 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
 # `wilson_ci` 已搬到 `landing_gate`（20261001）：它现在是**门禁判据**的一员，两份实现
 # 迟早不一致。本文件顶部 `from landing_gate import wilson_ci` 再导出，`golden_full_run`
 # / `baseline_group` 的 `from run_golden import wilson_ci` 一个字不用改。
+#
+# `fallback_resets` 同理搬了过去（20261003）：它是"用户最终看到的是不是道歉"的**唯一**
+# 判据，`forbid_fallback` 与新的「用户可见兜底」指标都要用它——两个消费方分居两个文件，
+# 再抄一份就是第三份。`tests/test_reset_scope.py` 的 `from run_golden import
+# fallback_resets` 照样能用（再导出）。
 
 
 def by_tag_stats(results: list, tags_map: dict) -> dict:
@@ -2690,6 +2661,15 @@ def main():
               f"够得上地板 ⇒ 够不上「小样本整片红」那条：`point < floor` 时是退出码 1）；"
               f"{failed} 条红逐条见 {review_path or REPORT_FILE}")
         sys.exit(0)
+    # 企业落地的第二条（20261003）：**用户真收到那句兜底道歉**是有轮次占比的伤害，
+    # 单夜可判，所以它在这里能当事故闸。判据是 `fallback_resets`（scope=text），
+    # 打回后重规划答对了的轮次不算（那才是它跟 `resets` 计数的区别）。
+    _h = _landing["harm"]
+    if _h["state"] == "incident":
+        print(f"用户可见兜底 {_h['hit']}/{_h['rounds']} 轮（{_h['rate']:.1%} ≥ 事故线 "
+              f"{_h['floor']:.0%}）：用户收到的是那句兜底道歉 ⇒ 退出码 1（这是事故，不是"
+              f"爬坡没到档）；用例 {_h['ids'][:5]}，逐条见 {review_path or REPORT_FILE}")
+        sys.exit(1)
     if _s["state"] == "collapse":
         # 措辞分两种：样本量够时看**下界**（比历史最差的一夜还差 = 事故）；样本太少时
         # 下界本身没有证明力，判红的依据是**点估计**都低于地板（整片红）。两者都是
@@ -2712,6 +2692,14 @@ def main():
           f"还差 {_landing['distance_to_target']:.3f}）→ 退出码 0"
           f"（逐条见 {review_path or REPORT_FILE}；红榜："
           f".venv/bin/python eval/landing_gate.py --red-rank）")
+    # 企业落地的另两条：**只报不置红**（面判据要跨夜聚合才有证明力，判决在 readiness）。
+    print(f"  · 用户可见兜底（scope=text）{_h['hit']}/{_h['rounds']} 轮 = {_h['rate']:.2%}"
+          f"（黄 ≥{_h['hint']:.0%}、红 ≥{_h['floor']:.0%}）")
+    _dw = _landing["domains"]["weakest"]
+    if _dw:
+        print("  · 本轮最弱的技能面：" + "、".join(
+            f"{r['tag']} {r['passed']}/{r['rounds']}=%.2f" % r["point"] for r in _dw[:3])
+            + "（单夜小面没有证明力；面判据见 `.venv/bin/python eval/landing_gate.py --readiness`）")
     sys.exit(0)
 
 
