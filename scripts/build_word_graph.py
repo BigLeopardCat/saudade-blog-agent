@@ -8,7 +8,9 @@
 
 产物（三份，见 docs/word-graph.md）：
   1. frontend/public/graph/graph-<sha1前12>.js    展示数据（export default {...}）
-  2. frontend/public/graph/manifest.json          指针（前端靠它发现带 hash 的文件名）
+  2. frontend/public/graph/manifest.json          指针（前端靠它发现带 hash 的文件名
+                                                    + `site` = 产物归属站点，前端据此
+                                                    判断这件展品该不该在本站注册）
   3. data/word_graph/{index.json,vectors.f32,...} agent 查询用（裸 float32，不进 git）
 
 为什么产物是 .js 而不是 .json：nginx 的「带 hash 长缓存」location 扩展名白名单是
@@ -731,6 +733,13 @@ def spearman(x: list[float], y: list[float]) -> float:
 
 # ---------------------------------------------------------------- 产出
 
+def origin_of(url: str) -> str:
+    """`https://host:port/xxx` → `https://host:port`（取 scheme+host+port，去掉路径）。
+    产物归属站点写进 manifest 前要过这一道：带路径或尾斜杠的地址在前端没法直接比。"""
+    m = re.match(r"^(https?://[^/]+)", url.strip())
+    return (m.group(1) if m else url.strip()).rstrip("/")
+
+
 def _artifact_body(payload: dict) -> str:
     """写盘内容 = 前缀 + JSON + 换行。manifest 的 bytes 必须按**这个**长度算——
     只算 JSON blob 会少 16 字节（'export default ' 15 + '\\n'），
@@ -740,7 +749,7 @@ def _artifact_body(payload: dict) -> str:
 
 
 def write_artifacts(payload: dict, nodes: np.ndarray, words: list[str], transform: dict,
-                    out_frontend: Path, out_agent: Path, dry: bool) -> dict:
+                    out_frontend: Path, out_agent: Path, dry: bool, site: str) -> dict:
     blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     build_id = hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
     payload["v"] = build_id
@@ -748,16 +757,20 @@ def write_artifacts(payload: dict, nodes: np.ndarray, words: list[str], transfor
     fname = f"graph-{build_id}.js"
     nbytes = len(body.encode("utf-8"))
     if dry:
-        return {"build_id": build_id, "file": fname, "bytes": nbytes, "dry": True}
+        return {"build_id": build_id, "file": fname, "bytes": nbytes, "dry": True, "site": site}
 
     gdir = out_frontend / "graph"
     gdir.mkdir(parents=True, exist_ok=True)
     (gdir / fname).write_text(body, encoding="utf-8")
     (gdir / "manifest.json").write_text(
         json.dumps({"v": build_id, "file": fname, "bytes": nbytes,
+                    # site = 产物的**归属站点**：前端构建期拿它跟本站地址比，不是本站就
+                    # 不注册这件展品（第三方 clone 部署时，别人的文章不该被画到他的首页
+                    # 上）。判定见 frontend/vite.config.ts 的 GRAPH_OWNERSHIP。
+                    "site": site,
                     # built 一并透出（前端展示柜的「向量数据库更新时间」角标读它）：
                     # 产物 blob 里本来就有，但前端拿它要先把整个 100KB+ 的 graph-*.js
-                    # 下下来，manifest 只有 100 字节、还能 no-store 命中。值同源，
+                    # 下下来，manifest 只有一百多字节、还能 no-store 命中。值同源，
                     # 不另取 time.time()——否则两个时间戳会差几毫秒、对不上账。
                     "built": payload["built"]},
                    ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -790,7 +803,14 @@ def _write_f32(path: Path, mat: np.ndarray) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--api-base", default="https://saudade.site/api/public")
+    # ⚠️ 默认值**必须是本机**（20261002 改；原来是作者的线上站点）。默认指向别人的站，
+    #    意味着 fork 出去的人不传参数跑一次，就把**原作者的文章**建成谱、还提交进自己
+    #    的仓。宁可默认连不上、报错让他显式指定，也不要静默去抓别人的语料。
+    ap.add_argument("--api-base", default="http://localhost:3000/api/public",
+                    help="公开接口基址（从哪个站点拉语料）——填**你自己的**站点，别指向别人的")
+    ap.add_argument("--site", default="",
+                    help="产物的归属站点，写进 manifest（前端据此判断展品该不该注册）；"
+                         "缺省取 --api-base 的 origin")
     ap.add_argument("--max-nodes", type=int, default=400)
     ap.add_argument("--exclude-ids", default=",".join(str(i) for i in EXCLUDE_IDS_DEFAULT))
     ap.add_argument("--min-chars", type=int, default=MIN_CHARS_DEFAULT)
@@ -825,12 +845,15 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="不算 embedding、不写产物，只看词表")
     args = ap.parse_args()
 
+    # 产物归属站点（写进 manifest）。缺省从语料来源推 —— 从哪拉的语料，产物就属于哪。
+    site = args.site.strip().rstrip("/") or origin_of(args.api_base)
+
     t0 = time.time()
     blocklist = load_blocklist()
     allow = frozenset(load_allowlist())
     n_ud = load_userdict()      # 必须先于任何 pseg.cut（见其 docstring）
     log(f"① 拉取语料 {args.api_base}（黑名单 {len(blocklist)} 词 / 允许清单 {len(allow)} 词"
-        f" / 用户词典 {n_ud} 词）")
+        f" / 用户词典 {n_ud} 词）；产物归属站点 site={site}")
     arts = fetch_articles(args.api_base)
     exclude = {int(x) for x in args.exclude_ids.split(",") if x.strip()}
     docs, dropped = select_articles(arts, exclude, args.min_chars)
@@ -954,7 +977,7 @@ def main() -> None:
             "len_sim_rho": round(rho, 4), "n_nodes": len(nodes)},
     }
     info = write_artifacts(payload, sim_vecs, words, transform, Path(args.out_frontend),
-                           Path(args.out_agent), args.dry_run)
+                           Path(args.out_agent), args.dry_run, site)
     report = {
         "ts": ts, "build_id": info["build_id"], "bytes": info["bytes"],
         "articles": [d["id"] for d in docs], "n_nodes": len(nodes), "n_edges": len(edges),
