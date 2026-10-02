@@ -555,6 +555,43 @@ def test_gate_nav_present_claim_verified_against_page_ctx():
     check("  条件词一族齐全（一旦/倘若/假如/除非，一个都不能少——"
           "同一类词缺一个，这一类就等于没写）", not _missing_cond, str(_missing_cond))
 
+    # ── ⑬ 裸「已」的名词化（20261003 族 3 复扫：5 例打回里 4 例是这一个字造的）────
+    # 打回原句（`replan` 事件的 clause 字段逐字，golden `capability_list_user_no_admin_leak`
+    # 三个 run 三次同一句 + `admin_capability_absent_honest` 一次）：能力清单里的
+    # 「标记为**已读**（需要你先**登录**哦）」与「他所有**已登录**的会话会立刻失效」——
+    # 窗口判据把 **已读/已登录** 这个复合词里的"已"当成了完成态标记，又逮到后面那个
+    # 10 字内的"登录"，于是"清单里列了一条能力"被读成"主人现在在登录页"。与
+    # `_STATE_ACTION_EXEMPT_RE` 里裸「未」的收窄同一条道理（未读/未知/未审/未阅/未免）。
+    # 锁法照本族纪律：放行面（四句现场）＋反向对照（真完成态必须照旧判假）。
+    _cap_lines = (
+        "或者帮你标记站内通知/私信为已读（需要你先登录哦）",
+        "他所有已登录的会话会立刻失效",
+        "* **通知管理**：把你收到的站内信或通知标记为已读（需要你登录账号才行喵）",
+        "* **消息管理**：把你收到的站内通知或私信标记为已读（同样需登录）",
+    )
+    for _t in _cap_lines:
+        o = gate_node(_chat_state(
+            [_sys_msg(_page_home), human, AIMessage(content=_t)]))
+        check(f"**能力清单**（已读/已登录 是名词不是完成态）→ 放行：{_t[:22]}",
+              o.get("done") is True and not o.get("fallback_text"),
+              str(o.get("fallback_text"))[:40])
+    o14 = gate_node(_chat_state([
+        _sys_msg(_page_home), human,
+        AIMessage(content="主人，留言板页面已经打开啦～你现在应该能看到那些留言了喵")]))
+    check("  反向对照：真完成态（已经 + 位置动词）照旧判假（收窄只放名词化的那六个）",
+          o14.get("fallback_text") == _FALLBACK_NAV_NO_FRAME,
+          str(o14.get("fallback_text"))[:40])
+    # 逐词判别锁：每个名词化的「已+X」后面**紧跟一个位置动词**时都不许命中
+    # （不加 `X看到` 的话这条会假绿——裸词本来就没有位置动词可匹配，
+    #   这正是"判'没有'要构造出能命中的形态"那条纪律）。反向：真完成态必须命中。
+    _still_wide = [w for w in ("已读", "已登录", "已登陆", "已知", "已审", "已阅", "已免")
+                   if G._NAV_PRESENT_WINDOW_RE.search(w + "看到")]
+    check("  收窄面齐全（已读/已登录/已登陆/已知/已审/已阅/已免 —— 各加一个位置动词后"
+          "一个都不许命中）", not _still_wide, str(_still_wide))
+    check("  反向：真完成态「已经登录」「已经打开」照旧命中（收窄只吃名词化的那六个）",
+          bool(G._NAV_PRESENT_WINDOW_RE.search("已经登录"))
+          and bool(G._NAV_PRESENT_WINDOW_RE.search("已经打开")))
+
     # ── `page=` 的解析：绝对 URL / query / fragment / 尾斜杠都要归一────────
     check("绝对 URL → 站内路径（去 query/fragment/尾斜杠）",
           _live_page_path("page=https://saudade.site/device-console/#a?b=1")

@@ -1669,7 +1669,13 @@ _STATE_ACTION_EXEMPT_RE = re.compile(
 # exec_memory_none_honest 的高频措辞「**为了**确认清楚，我现在重新帮你把…显示一下，
 # 稍等哦～」被「为了」的"了"当成了完成态 → 洞①误伤（探针 40 跑 1 中，属真实复现）。
 _SENT_RE = re.compile(r"[。！？!?\n]+")
-_STATE_DONE_RE = re.compile(r"已经|刚刚|方才|啦|咯|喽|好了|(?<![为除罢算])了|成功|完成|搞定")
+# 20261003 收窄：「已经**存在**/**有**」是**定语**（"一个已经存在的标签"），不是动作的
+# 完成态——族 3 复扫抓到能力清单「- 帮你把某篇已有文章**加上或去掉**一个已经存在的
+# 标签」被读成"我已经帮你加上标签了"（施事前缀 帮你 + 动词 加上 + 同句"已经"）⇒ 整轮
+# 兜底。定语里的"已经"与动作无关，同 `_STATE_ACTION_EXEMPT_RE` 裸「未」那条一样的
+# 局部收窄：只放掉"已经 + 存在/有"这一对，`已经发布/已经加上` 这些真完成态一个不少。
+_STATE_DONE_RE = re.compile(
+    r"已经(?!(?:存在|有))|刚刚|方才|啦|咯|喽|好了|(?<![为除罢算])了|成功|完成|搞定")
 
 # ── gate 洞⑪：零帧轮的「主人现在在 X 页」声称 → 与**实时页面上下文**核对（20261002）──
 # 事故实证（trace `20261002T020256`，主人全程可见）：主人说「猫咪带我去你的设计文档」
@@ -1745,10 +1751,17 @@ def _live_page_path(page_ctx: str) -> str | None:
 #     **时态**，而①②③ 三支都可能被过去式的句子命中。带"已经"的**完成态**不算过去词
 #     （"主人已经在留言板了"说的是此刻的状态，该判）；"刚刚/方才"算——它们的完成态
 #     与"现在"无关，真要豁免有回执在场那条追述口径管。
+# ⚠️ **裸「已」20261003 收窄成 `已(?!读|登录|登陆|知|审|阅|免)`**（与 `_STATE_ACTION_EXEMPT_RE`
+# 里裸「未」的收窄同一条道理、同一份词表）：此前它把**名词/状态词**「已读」「已登录」
+# （「标记为**已读**（需要你先**登录**哦）」"他所有**已登录**的会话会立刻失效"）里的
+# "已"当成完成态标记，于是"标记为已读（需要你先登录）"这种**能力清单**被读成"主人现在
+# 在登录页"。族 3 复扫里 5 例 `nav_present_claim_without_nav` 有 4 例是这一个字造的，
+# 而且集中在 golden `capability_list_user_no_admin_leak`（三个 run 三次同一句）。
+# 收窄只放掉这六个名词化的词，`已经/N 秒前已/已到/已打开` 这些真完成态一个不少。
 _NAV_PRESENT_WINDOW_RE = re.compile(
     r"(?:你|您|主人|咱|本喵|泠月)[^\n。！？!?；;，,能会可不]{0,2}?"
     r"(?:现在|已经|已|刚刚|方才|就|正)?[^\n。！？!?；;，,能会可不]{0,3}?(?<![现正])在"
-    r"|(?:现在|已经|已|刚刚|方才)[^\n。！？!?；;，,]{0,10}?"
+    r"|(?:现在|已经|已(?!读|登录|登陆|知|审|阅|免)|刚刚|方才)[^\n。！？!?；;，,]{0,10}?"
     r"(?:到|进|打开|开启|跳|登录|登陆|看到)"
     r"|(?:带你|带主人)[^\n。！？!?；;，,]{0,6}?(?:了|啦|咯|喽|好了)")
 # 洞⑪ 自己的豁免表（**不复用洞① 那张**，20261002 实测）：洞① 的动词表是"帮你打开"
@@ -2246,7 +2259,13 @@ _CMD_PREFIX_PAYLOAD_RE = re.compile(
 # 机制/元讨论语境标记（同句出现 ⇒ 那句话在**讲命令机制**，不是在发命令）
 _CMD_META_RE = re.compile(
     r"系统|命令|前缀|正则|协议|帧|机制|实现|代码|文档|校验|核对|拦截|拦下|剔除|过滤"
-    r"|白名单|提示词|cleanAgentText")
+    r"|白名单|提示词|cleanAgentText"
+    # 20261003 补（族 3 全量 trace 复扫，5 例兜底无一例外全是误伤）：
+    # 现场句里模型讲的是"这种**指令标签**不能写进正文""**输出**这种文本会误导人"
+    # "伪工具调用**格式**表演执行"——这些话都在**介绍**前缀长什么样，一张词表却
+    # 只认"命令/系统/机制"。判据的**两个条件必须都在**才有豁免，缺的这半张词表
+    # 让"引号里 + 讲机制"的正当回复落进兜底道歉（用户收到的道歉本身还是假话）。
+    r"|指令|标签|文本|字面|格式|写法|举例|例子|示例|引用|输出|伪工具")
 
 
 def _cmd_prefix_directive(text: str) -> bool:
@@ -2259,15 +2278,22 @@ def _cmd_prefix_directive(text: str) -> bool:
     （rag_arch_check / followup_named_doc_reread，后者还被判 PASS——正断言恰好
     能被道歉文本命中，见 golden `forbid_fallback` 断言）。
 
-    判定：出现处**必须同时**满足 ①落在引号或内联代码区内 ②所在句子含机制词，
+    判定：出现处**必须同时**满足 ①落在引号 / 内联代码区 / 括号内 ②所在句子含机制词，
     才算"提及"放行；任一不满足即仍判违规——两种需要继续拦的形态：裸写在正文里
     （"我这就打开 `EFFECT:x`"的裸形式）、代码区内但在讲**要做的事**而不是机制
     （"稍等～ `EFFECT:sakura:on`"）。副作用是这类字符串不再被前端当命令执行：
     前端 `execAgentCommands` 的正文兜底同步跳过引号/代码区（chat-core.js
-    stripMentionSpans），两侧口径必须一致，否则放行的提及会在页面上真的生效。"""
+    stripMentionSpans），两侧口径必须一致，否则放行的提及会在页面上真的生效。
+
+    20261003 补 ①（族 3 复扫）：**括号**此前不算"提及区"，于是"直接让我输出命令
+    前缀文本（比如 EFFECT:）是不对的"这句**句内**就有机制词、例子也明明在括号里，
+    却因为括号不算区被判违规——它的兄弟形态更常见："回执里写着 navigate_to 把路径
+    打开了（AUTO_NAVIGATE:https://…）"（线上 prod trace 一例）。括号是中文里
+    "举例/括注"最常用的标记，与引号、内联代码是同一件事，口径补齐。"""
     for m in _CMD_PREFIX_RE.finditer(text):
         i = m.start()
-        if not (_inside_quote(text, i) or _inside_code_span(text, i)):
+        if not (_inside_quote(text, i) or _inside_code_span(text, i)
+                or _inside_paren_example(text, i)):
             return True
         if not _CMD_META_RE.search(_sentence_of(text, i)):
             return True
@@ -2281,7 +2307,8 @@ def _cmd_prefix_hit(text: str) -> str:
     含前缀的那一句本身就是给人看的证据，比子句更完整（"我这就打开 EFFECT:x"）。"""
     for m in _CMD_PREFIX_RE.finditer(text):
         i = m.start()
-        if not (_inside_quote(text, i) or _inside_code_span(text, i)):
+        if not (_inside_quote(text, i) or _inside_code_span(text, i)
+                or _inside_paren_example(text, i)):
             return _sentence_of(text, i)
         if not _CMD_META_RE.search(_sentence_of(text, i)):
             return _sentence_of(text, i)
@@ -2390,6 +2417,25 @@ def _inside_code_span(text: str, pos: int) -> bool:
 def _inside_quote(text: str, pos: int) -> bool:
     """pos 处是否落在引号区内（转述他人内容不算自称调用）。"""
     return any(s <= pos < e for s, e in _quoted_spans(text))
+
+
+# 括号区（中文全角/英文半角都认，不跨行）。20261003 把它并进"提及区"，**但只认举例用法**：
+# 括号在中文里干两件截然不同的事——① **举例/括注说明**（"（比如 EFFECT:）"）
+# 是在讲这个字符串长什么样 = 提及；② **括注回执原文**（"（AUTO_NAVIGATE:https://…）"）
+# 是把系统真发过的命令原样抄进正文 = 确凿的正文命令文本。只按"在括号里"一刀切放行，
+# ②就漏了（`tests/test_nav_truthfulness.py::test_cmd_prefix_fallback_truthful` 用
+# 20260926 线上原句钉着它必须被抓，且 D2 起那段兜底会据回执如实说明"页面已经开到…"）。
+# 所以判据取括号**里**有没有举例词：有 ⇒ 举例，放行；没有 ⇒ 抄命令，照旧判违规。
+_PAREN_SPAN_RE = re.compile(r"[（(][^（()）\n]*[)）]")
+_PAREN_EXAMPLE_RE = re.compile(r"比如|例如|像是|像|举例|示例|例子|譬如|如：|如:")
+
+
+def _inside_paren_example(text: str, pos: int) -> bool:
+    """pos 处是否落在**举例用**的括号内（举例说明 ≠ 发命令）。"""
+    for m in _PAREN_SPAN_RE.finditer(text):
+        if m.start() <= pos < m.end():
+            return bool(_PAREN_EXAMPLE_RE.search(m.group(0)))
+    return False
 
 
 _SENT_BREAK = "。！？；\n!?;"
@@ -2922,13 +2968,27 @@ _CAPABILITY_NEG_RE = re.compile(
     r"(?:没有|暂无|没|无)(?:权限|功能|接口|入口|办法|能力|按钮|开关)"
     r"(?=[，,。；;！!？?～~\s]|$|(?:能|可以|可|直接)?"
     r"(?:去|来|帮|做|操作|执行|更改|改动|改|修改|调整|设置"
-    r"|删除|删|添加|加|创建|建|写入|写|调用|访问|登录|查看|查|看|发布|处理|完成))")
+    # 20261003：补 搜索|搜|检索|读取|读 —— 现场句「我这边现在还没有办法**直接搜索**
+    # 全站文章里的具体关键词呢」是标标准准的能力否定，可动词表里只有"查/看"没有"搜索"，
+    # 于是它落了空 ⇒ 被读成"站内没有这个内容"⇒ 兜底道歉（族 3 复扫 1 例）。
+    r"|删除|删|添加|加|创建|建|写入|写|调用|访问|登录|查看|查|看|发布|处理|完成"
+    r"|搜索|搜|检索|读取|读))")
+# **工具非调用**陈述（20261003 加）："这一轮**没有调用任何工具**去读留言板"说的是
+# **本轮自己没动过手**（一句大实话），不是对站内内容下"没有"结论。可它与洞④ 的三件套
+# 同子句凑齐（「没有」+「站里」+「留言」）⇒ 一句自陈被判成凭空结论，整轮换成兜底道歉
+# （线上 prod trace `20260929T020640` 一例）。这里只放"否定 + 调用/使用 + 工具"这一次，
+# 同子句里另有一次"否定 + 内容名词"照旧命中（与 `_CAPABILITY_NEG_RE` 同一套"逐次判定"）。
+_TOOL_NONUSE_RE = re.compile(
+    r"(?:没有|没|未|未曾|不曾|无)(?:调用|使用|动用|运行|执行)"
+    r"(?:任何|过)?(?:工具|检索|搜索|查询)")
 
 
 def _absence_span(clause: str):
-    """本子句里**算存在性结论**的那一次否定（跳过能力否定那几次）。无 → None。"""
+    """本子句里**算存在性结论**的那一次否定（跳过能力否定/工具非调用那几次）。无 → None。"""
     for m in _ABSENCE_RE.finditer(clause):
         if _CAPABILITY_NEG_RE.match(clause, m.start()):
+            continue
+        if _TOOL_NONUSE_RE.match(clause, m.start()):
             continue
         return m
     return None
@@ -2987,6 +3047,7 @@ def _site_absence_claim_clause(text: str, search_evidence: bool = False) -> str 
                 and _CONTENT_NOUN_RE.search(clause)
                 and _lead
                 and not _CAPABILITY_NEG_RE.search(clauses[i + 1], 0, _lead.end())
+                and not _TOOL_NONUSE_RE.search(clauses[i + 1], 0, _lead.end())
                 and not _ABSENCE_EXEMPT_RE.search(clauses[i + 1])):
             # 跨子句桥形态：把**结论那两句**一起交出去（前子句给对象、后子句给否定）
             return clause + clauses[i + 1]
