@@ -29,18 +29,31 @@ from dataclasses import dataclass
 # admin —— 管理员，后台全权（middleware.rs auth_guard 认它和超管两个）
 # secretary —— 秘书：可以读他人数据、可以代博主做写操作，但进不了后台管理面
 # user —— 普通访客/体验账号：只能读公开内容、操作自己的设备与自己的页面
+# zako —— 杂鱼（20261002）：**零工具**身份，只闲聊（口吻是与别人完全不同的一档）。
+#         它不是"权限还没配"的普通角色，而是"结构上不可能调用工具"的结论——见
+#         下面的 CHAT_ONLY_ROLES
 ROLE_SUPERADMIN = "superadmin"
 ROLE_ADMIN = "admin"
 ROLE_SECRETARY = "secretary"
 ROLE_USER = "user"
+ROLE_ZAKO = "zako"
 
-KNOWN_ROLES = (ROLE_SUPERADMIN, ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER)
+KNOWN_ROLES = (ROLE_SUPERADMIN, ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, ROLE_ZAKO)
 
 # "管理员族"：能进后台管理面的那几个角色。**判据只有这一处**——技能可见性、planner
 # 的人设分档、管理工具菜单都从它派生，不许在别处写 `role == ROLE_ADMIN` 这种字面量
 # 比较（写一次就漏超管一次，而漏了是**静默**的：超管提权后 agent 眼里零权限 +
 # 拿到访客的人设，博主自己反而用不了管理助手）。
 ADMIN_ROLES = frozenset({ROLE_ADMIN, ROLE_SUPERADMIN})
+
+# "只准闲聊族"（20261002，目前只有杂鱼）。**判据只此一处**，三条派生：
+#   ① skills.visible_skills —— 只剩 `chat`（`s.chat` 为真的那个技能），planner 菜单 /
+#      native schema / narrator 能力清单三处同源跟随；
+#   ② prompts.audience_block —— 走 AUDIENCE_ZAKO 那一档口吻；
+#   ③ graph.planner_node —— 顶部短路，连 planner LLM 都不调（**这一条才是硬保证**：
+#      技能可见性约束的是"模型看到的菜单"，而 instantiate_plan 不校验可见性、authz 在
+#      shadow 档下只记账不拦，只有短路让 execute 节点在本请求里一次都不会被进入）。
+CHAT_ONLY_ROLES = frozenset({ROLE_ZAKO})
 
 # 身份来源（审计字段，不做判据）
 SOURCE_ASSERTION = "assertion"  # Rust 签名断言（权威）

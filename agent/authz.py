@@ -30,7 +30,7 @@ import re
 from dataclasses import dataclass
 
 from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY,
-                            ROLE_SUPERADMIN, ROLE_USER, Principal)
+                            ROLE_SUPERADMIN, ROLE_USER, ROLE_ZAKO, Principal)
 
 # ── scope 词汇表 ─────────────────────────────────────────────────────
 # 命名 = <动作>.<对象>。对象轴现在只有「谁的」这一维（public / own / any），
@@ -116,6 +116,11 @@ _ROLE_SCOPES: dict[str, frozenset[str]] = {
     # "更多 scope"，而是策略上的豁免（谁能被冻/被改身份），那个只在 Rust 侧实现一次
     # （src/authz.rs 的账号管理策略），agent 侧不复制。
     ROLE_SUPERADMIN: ALL_SCOPES,
+    # 杂鱼（20261002）：**零授予**。这一格不是"还没配"，是结论——杂鱼按设计不调用
+    # 任何工具（能力边界真正的硬保证在 graph.planner_node 的短路，见 CHAT_ONLY_ROLES）。
+    # 写出来是为了让"这是刻意的零"可见，而不是靠 `_ROLE_SCOPES.get(role, 空集)` 的
+    # 兜底——兜底与刻意长一样，出问题时没人分得清是漏配还是设计。
+    ROLE_ZAKO: frozenset(),
 }
 
 # ── 工具 → 所需 scope（**完备性是硬要求**：见 tests/test_authz.py）───────────

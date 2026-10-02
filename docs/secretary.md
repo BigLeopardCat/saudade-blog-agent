@@ -49,7 +49,8 @@ Principal(uid=7, role="secretary", source="assertion")
   - `source="body"`：回退信任请求体（`AGENT_REQUIRE_ASSERTION=0` 时的旧路径）——
     **这条路径上 role 恒为 `None`**，绝不因为"读不到角色"而默认授予。
 - 取不到 principal（老调用方、直调图的单测）→ `UNKNOWN`（uid=0、role=None）。
-- 角色名与取值域：`admin` / `secretary` / `user`，两侧同名（`agent/principal.py` ↔ `src/authz.rs`）。
+- 角色名与取值域：`admin` / `secretary` / `user` / `zako`，两侧同名（`agent/principal.py` ↔ `src/authz.rs`）。
+  （`zako` = 杂鱼，20261002 新增；见 §3.6）
 
 ### 3.2 范围：scope manifest（`agent/authz.py`）
 
@@ -61,6 +62,7 @@ scope 词汇表（`<动作>.<对象>`）：`read.public` / `read.own` / `read.an
 | `user`（访客/体验号） | read.public、read.own、write.page、write.device | **= 今天的行为**（设备归属由 device-service 按 uid 校验，是既有事实） |
 | `secretary` | 上面全部 + read.any、write.content | 新增档：能读他人数据、能代写；**进不了后台管理面** |
 | `admin`（博主） | 全部 | = 今天的行为 |
+| `zako`（杂鱼） | **无**（空集） | 20261002 新增：**零工具**身份。这一格不是"还没配"，是结论——它的能力边界真正的硬保证在 `graph.planner_node` 的短路（见 §3.6），零 scope 只是第三道 |
 
 工具级的 `TOOL_SCOPE`（注册表里的工具一个不漏，**完备性由 `tests/test_authz.py` 在 CI 层锁死**：
 新增工具忘了声明会红，不靠运行时宽容）。这里**刻意不写件数**——工具数每加一件就要来改一次
@@ -180,6 +182,36 @@ grep -l authz_shadow /home/ubuntu/memory_blog_rust/logs/agent/traces/*.json | wc
 若出现 `reason=denied`（角色已认、scope 未授予），说明既有角色撞上了授予表——那要么是
 授予表配错了（改表），要么是真越权（保持拒绝）。**这就是打开 `AGENT_AUTHZ_ENFORCE` 前
 必须拿到的那份证据。**
+
+### 3.6 零工具身份：`zako`（杂鱼，20261002）
+
+**产品语义一句话**：和杂鱼对话时 agent **拒绝调用任何工具**，只用「雌小鬼」的口吻闲聊
+（喊对方"杂鱼"、得意地挖苦，但按拍板的**轻度**档：不涉脏话、家人、外貌）。
+
+**"零工具"是四层收口，而只有一层是硬的**——这份表要照着读，别把前三条当成保证：
+
+| 层 | 落点 | 拦什么 | 硬度 |
+|---|---|---|---|
+| ① 技能可见性 | `skills.visible_skills`（`role in CHAT_ONLY_ROLES and not s.chat`） | planner 菜单 / native schema / narrator 能力清单三处**同源**只剩 `chat` | **软**：`instantiate_plan` 不校验可见性，LLM 点名不可见技能照样成行 |
+| ② native schema | `native_plan.build_tool_schema` | native 档模型只点得出 `chat` | **软**：只对 native 档生效，而默认档是 `text` |
+| ③ authz 空 scope | `authz._ROLE_SCOPES[ROLE_ZAKO] = frozenset()` | 执行前的 `authz.check` | **软**：`execute_node` 在 shadow 档下（`not allowed and not enforcing`）**只记账不拦**，而 `zako` 会拿到的那些 scope 没有一个在 `_HARD_SCOPES` |
+| ④ planner 短路 | `graph.planner_node` 顶部 | 结构上不产出 TOOLS 行 ⇒ `execute` **永不被进入** | **硬**（确定性、无 LLM、无配置开关） |
+
+失效链（不加 ④ 就会真发生）：planner 点名一个已不可见但仍在 `SKILL_MAP` 里的技能 →
+`execute` → authz 判 deny → shadow 下**照 invoke**。所以"前三层兜住了"是错的。
+
+- **两条反直觉的核验结论**（都写进了 `tests/test_zako_role.py`）：
+  - `build_tool_schema("zako")` **不是空数组**——`chat` 技能对任何角色可见、且它不按
+    `plan` 过滤 ⇒ 数组恒为 `[chat]`。**反过来不能把 chat 也摘掉**（那才会产出 `tools: []`）。
+  - 口吻**只能**放 `prompts.audience_block` 的第三支（走既有的 `{audience}` 槽）：
+    放 `BLOG_PERSONA_PROMPT` 会打到所有角色，给 `_EXECUTOR_PROMPT` 加 format 槽位会
+    让 `tests/test_prompt_prefix.py` 立刻 KeyError。
+- **连带**：`graph._FREEZE_ALLOWED_TARGETS` 两行都要含 `ROLE_ZAKO`——不加则管理员冻
+  杂鱼会被 agent **提前拒**并回一句**说错政策**的话（"管理员之间不能互相冻结"），
+  而后端 `check_freeze` 本来是 `Ok`。
+- **账号怎么来**：后台建普通账号 → 跑 `scripts/migration/zako_role_20261002.sql` 升角色。
+  杂鱼**会出现在后台账号列表里**（`is_listable_role` 的判据是"已知角色且非超管"），
+  这正是设计：博主看得见它、能冻它、能改它的身份。
 
 ## 4. 布线图（一次带角色的对话）
 
@@ -568,7 +600,7 @@ scope `write.console`，技能 `board_audit` / `board_delete`）。这一族的�
 
 - `nickname` 留空是**有意的**：`auth.rs:112` 的 profile 逻辑是 `if nickname.is_empty() { username }`
   ⇒ 空串自动回落到账号名，不会显示成空白。
-- 两个角色名都是**跨语言契约**：Rust 侧 `src/authz.rs` 的 `KNOWN_ROLES`（`admin`/`secretary`/`user`，
+- 两个角色名都是**跨语言契约**：Rust 侧 `src/authz.rs` 的 `KNOWN_ROLES`（`admin`/`secretary`/`user`/`zako`，
   大小写敏感、无旧别名）与 agent 侧 `agent/authz.py` 的授予表必须一致，改一侧须同步另一侧 + 两侧单测。
 - **助手为什么是 `secretary` 而不是 `admin`**：`secretary` 在 agent 侧拿到
   `read.public/own/any` + `write.page/device/content`，**唯独没有 `admin.console`**；Rust 侧
