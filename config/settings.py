@@ -134,6 +134,16 @@ class Settings(BaseSettings):
     # 与博客共用 JWT_SECRET：agent 以对话用户身份签发 JWT 调用 device-service
     jwt_secret: str = ""
     device_service_url: str = "http://127.0.0.1:3100"
+    # 物联网平台（EMQX + device-service + 静态控制台）是**可选件**：三块源码收在
+    # 博客仓 `iot/`，装不装由部署者决定。**出厂默认关**——克隆下来直接部署的人没有
+    # 这个平台，agent 却照样指路、narrator 照样介绍，就是系统在说假话。
+    # 关掉时的四道收口（页面侧的收口在部署侧：nginx 不 include、Rust sitemap 不列）：
+    #   ① `skills.NAV_MAP` 里那十个别名映射为 None，注记是「未部署」而非「已下线」；
+    #   ② 提示词不介绍这个入口（`skills._nav_map_lines`）与不作为"真实页面"参照；
+    #   ③ `tools.base` 的路径白名单不收 `/device-console/`；
+    #   ④ `device_display`/`device_query` 两个技能在 `visible_skills` 里不可见。
+    # ⚠️ 各项的判据都读**这一个值**（`IOT_ENABLED`），别再各写各的环境变量名。
+    iot_enabled: bool = False
 
     # ── 管理助手：以发起人身份代调后台（20260921）─────────────────────
     # agent 管理助手要读后台数据（留言审核视图、全站用户统计），而 /api/protected/*

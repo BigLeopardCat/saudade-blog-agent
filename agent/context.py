@@ -20,6 +20,9 @@ from agent.authz import (SCOPE_READ_OWN,  # 帧预算按 scope 分族（见 _fra
                          required_scope,
                          strip_user_shell)  # 两层壳剥除（见下方 _short_reply_kind 注释）
 from agent.factblock import strip_fact_lines  # 系统事实行不进模型语境（见 _recent_tail）
+# IoT 开关：与 `skills._IOT_*` 同源。`tools/base.py` 是开关值进入 agent 的唯一入口
+# （它读 `config.settings.iot_enabled`），这里只转发、不重新判断。
+from tools.base import IOT_ENABLED as _IOT_ENABLED
 
 # ---------------------------------------------------------------------------
 # 消息/上下文工具
@@ -69,11 +72,22 @@ _GUESTBOOK_URL_RE = re.compile(r"/(?:guestbook|he)\b")
 # 页面上下文（planner 与 model 均可见，模型只转述），与 GUESTBOOK_GUIDE 同构。
 # 板块路径与 NAV_MAP（skills.py 单一事实来源）保持一致，新增板块须同步此处与
 # test_skills 断言。
+# 物联网平台那一段随开关走（20261002，`IOT_ENABLED`，见 skills.py 与博客仓 `iot/`）：
+#   · 装了就照旧列进板块清单——它是真实存在的页面，清单必须覆盖它（否则
+#     `test_site_guide_covers_nav_map` 的覆盖断言会红，而它红得对：清单漏了活路径）；
+#   · 没装就**连"未部署"这句一起写上**，而不是整段不写。理由是**留白会被填**：
+#     narrator 手上有大量"博客 + 设备"的先验，问它"有没有物联网平台"时，清单里
+#     一个字都没有 ≠ 它会说没有——这正是当初把板块做成注入事实的动因（见上注）。
+_SITE_GUIDE_IOT = (
+    "物联网平台控制台（/device-console/）；"
+    if _IOT_ENABLED else
+    "物联网平台（本站**未部署**这个可选件，站内没有该页面，被问起就如实说没有）；"
+)
 _SITE_GUIDE_HEAD = (
     "【站内板块与技能清单】（系统注入的事实——介绍「博客有哪些板块/功能」或"
     "「你能做什么」时以此为准完整转述）站内板块：首页；文章（/article/<id> 单篇）；"
     "留言板=「河灯集」（/guestbook）；说说（/talk）；归档/时间轴（/times）；"
-    "关于我（/about）；物联网平台控制台（/device-console/）；登录（/login）与"
+    "关于我（/about）；" + _SITE_GUIDE_IOT + "登录（/login）与"
     "后台管理（/dashboard）仅博主使用。"
 )
 # 非技能类的能力（多模态看图等）：注册表里没有对应技能，只能手写；保持极短，

@@ -28,7 +28,8 @@ from langchain_core.messages import ToolMessage
 
 from agent.authz import strip_user_shell
 from agent.context import _msg_text
-from agent.skills import FUZZY_NAV_RULES, NAV_MAP, SKILL_MAP, instantiate_plan
+from agent.skills import (IOT_ENABLED, NAV_MAP, SKILL_MAP, fuzzy_nav_hit,
+                          instantiate_plan)
 # 与检索侧同一分词（2/3-gram）——候选标题相关性判定复用，避免两套词法
 from rag.search import tokenize as _rag_tokenize
 
@@ -216,12 +217,12 @@ def _nav_fast_path(user_msg: str) -> dict | None:
             t = m.group(1)
             if t in NAV_MAP or t.startswith("/"):
                 target = t
-            else:
-                fuzzy = next(
-                    (p for kws, p in FUZZY_NAV_RULES if any(kw in t for kw in kws)), None
-                )
-                if fuzzy:
-                    target = t
+            elif fuzzy_nav_hit(t)[0]:
+                # 命中即交给 `instantiate_plan` 定夺——**不要在这里判"路径是不是
+                # 空的"**：命中而路径为 None（IoT 平台没装）也是一次确定的识别，
+                # 该走"未部署"话术；写成 `if fuzzy:` 会把它吞成"快道没命中"，
+                # 于是这句话落到 planner LLM 手里，而它手上根本没有这个入口。
+                target = t
     if target is None:
         return None
     plan_obj = instantiate_plan("navigate", {"target": target})
@@ -251,6 +252,12 @@ def _display_fast_path(user_msg: str) -> dict | None:
     内容由 execute 节点创作（PARAMS 不填 text，见 _create_display_text）——屏幕
     文案不进 planner 文本通道，杜绝"指令原文残缺片段上屏"。
     """
+    # 平台没装（`IOT_ENABLED=0`）就没有屏幕可写：本快道整条不命中，交回 planner LLM。
+    # **快道不负责骗人**——它要在这里硬答一句"本站没有接入设备"，就得在这里自己
+    # 判一次开关，那就是第二处判据（`skills` 里 `_IOT_OFF_NOTE` 是给 navigate 用的）。
+    # 交回 planner 后，`visible_skills` 已经把 device_display 摘掉了，planner 选不到它。
+    if not IOT_ENABLED:
+        return None
     msg = _bare(user_msg)
     if _QUESTION_RE.search(msg) or _NEGATION_RE.search(msg):
         return None
