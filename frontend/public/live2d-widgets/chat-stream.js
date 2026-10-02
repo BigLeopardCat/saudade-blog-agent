@@ -1119,6 +1119,28 @@
             throw new Error((d && d.error) || ('服务响应异常（' + resp.status + '），请稍后再试'));
           }
           if (!resp.body) throw new Error('浏览器不支持流式响应');
+          // 内容类型兜底（20261002）：**HTTP 200 不等于成功**。服务端有几条早退路径
+          // （agent 不可达 / 上游非 2xx / 请求体过大 / 会话创建失败 / 访客合规告知）
+          // 会以 `200 + application/json` 返回，而这里的失败判据只有 `!resp.ok`
+          // ⇒ 全部当作成功：读一个没有 `\n\n` 的 JSON body、一帧都切不出来，一路走到
+          // 下面"空回复"那一支静默收场（气泡删掉、只留用户自己那句话，**零提示**）。
+          // 实测事故：20261002 08:37:54 / 08:39:30 agent 不可用期间两次对话，
+          // rust.log 记 `status=200`、agent 侧连 trace 都没有（请求没到 agent）。
+          // Rust 侧已改为发 `__ERROR__` 帧（首道防线，见 src/routes/chat.rs
+          // `early_exit_response`）；这一道不依赖服务端自觉——**将来又有人加一条
+          // JSON 出口，也不会再静默**。
+          // 注入式 200（nginx 把未知路径兜成 index.html）同样在这里被拦下。
+          const ctype = String(resp.headers.get('content-type') || '');
+          if (ctype.indexOf('text/event-stream') < 0) {
+            const raw = await resp.text();
+            let d = null;
+            try { d = JSON.parse(raw); } catch (e) { /* 非 JSON（HTML 错误页等）走兜底话术 */ }
+            const said = d && (d.error || d.reply);
+            const ctErr = new Error(said ? String(said) : '服务没有返回流式响应，这一轮没有生成回复，请稍后再试');
+            // userText = "这句话是服务端说的，别套「网络错误: 」前缀"（同 __ERROR__ 帧口径）
+            ctErr.userText = ctErr.message;
+            throw ctErr;
+          }
 
           // 创建 live 气泡并注册到 live[roundId]（广播端按 roundId 定位；收尾
           // 转正时补 data-mid 并移出 live）。不经过 appendMsg（避免空消息进缓存）。
