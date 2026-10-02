@@ -203,6 +203,44 @@
   一毫秒、`O_EXCL` 创建即占位（不是"先问在不在再打开"，那有两次系统调用之间的空档）。
   **读侧的注意**：20261002 之前的留档仍是 15 字符旧名，两种形状共存且**排序仍单调**（新名是同秒
   旧名后缀的延长）；判"哪份最新"一律按文件名排序，别按 mtime。
+- **新增身份「杂鱼」（`zako`）：整轮零工具，口吻另起一档**（`agent/principal.py` 新增
+  `CHAT_ONLY_ROLES`；`agent/graph.py::planner_node` 顶部短路；`agent/prompts.py::AUDIENCE_ZAKO`；
+  跨语言契约 `KNOWN_ROLES` 从四档变五档，Rust 侧 `src/authz.rs` 同步）。这是**唯一一个不许碰
+  任何工具**的身份：不回执、不检索、不导航、不写任何东西，只按雌小鬼口吻（得意 + 轻度嘲笑，
+  不涉脏话/家人/外貌）说话，称呼一律"杂鱼"。
+  **"零工具"四层收口里只有一层是硬的**，另三层别当成保证：① 技能可见性（`visible_skills`）只
+  约束模型看到的菜单，`instantiate_plan` 不校验可见性；② native schema 只对 native 档生效，
+  而默认档是 text；③ authz 空 scope 在生产 shadow 档下**只记账不拦**（`graph.py` 在
+  `not allowed and not enforcing` 时 continue）。硬保证是 planner 节点顶部的短路——确定性、
+  无 LLM、无配置开关，`execute` 永不进入。口吻走既有的 `{audience}` 槽位，**没有新增
+  `_EXECUTOR_PROMPT` 的 format 槽**（加了会让 `tests/test_prompt_prefix.py` 的 narrator 对
+  当场 KeyError）。`_FREEZE_ALLOWED_TARGETS` 两行必须同补 zako，**否则管理员冻结杂鱼会被
+  预检提前拒掉并回一句说错政策的话**（后端本来是 Ok）。判据 `tests/test_zako_role.py`（七组，
+  含"user 反向对照"与"get_llm 桩没被调用"）。
+  **读侧的注意**：zako 是正经角色，会出现在后台账号列表里（`is_listable_role` 的判据是
+  "已知角色且非超管"）——那是设计，不是身份泄漏；另外它**不是**"未登记身份"（后台不会显示成未知档）。
+- **流式接口失败不再伪装成成功：`200 + JSON` 改成 `__ERROR__` 帧**（Rust 侧
+  `src/routes/chat.rs::early_exit_response`，在父仓；前端 `frontend/public/live2d-widgets/chat-stream.js`
+  内容类型兜底，在本仓）。事故形状：agent 不可用时 Rust 的早退路径返回
+  `Json(ChatResponse{success:false,error:…})`——axum 的 `Json` 默认 **HTTP 200**——而流式客户端
+  唯一的失败判据是 `if (!resp.ok)` ⇒ 全部当作成功：照常建气泡、去读一个不含 `\n\n` 的 JSON body
+  （一帧都切不出来）、按"空回复"**静默收场**。主人读到的就是"我那句话进了对话框，然后什么都没有"；
+  服务端 `rust.log` 里它与一次成功完全同形（`status=200`），agent 侧连 trace 都没有（请求根本没到
+  agent）。生产实证：20261002 08:37:54 与 08:39:30 两次，各自在 agent `/health` 连续失败的窗口内。
+  两道防线：① Rust 早退改发 SSE 帧（`__ERROR__` 帧走前端现成的错误气泡 + 重发；有正文的早退——
+  访客合规告知——当一条普通回复发出去再 `__END__`）；② 前端不依赖服务端自觉，`content-type`
+  不是 `text/event-stream` 就如实报错（顺带拦住 nginx 把未知路径兜成 `index.html` 的那种 200）。
+  **两条例外必须保持 JSON + 状态码**：`404 conversation_not_found` 与 `409 confirm_already_used`
+  ——前端按状态码特判它们（还原输入 / 结算确认卡），改成 SSE 等于把那两段打成死代码。
+  判据：父仓 chat.rs 的 5 条单测（形态 + 例外 + 可切帧）+ `frontend/tests/chat-non-sse-fallback.test.mjs`。
+  **harness 的连带**：手搓的 SSE 桩自此必须带 `content-type`（`frontend/tests/stubs/sse.mjs`），
+  否则会被判成"不是流"——三支套件当场红，且红的位置离真因很远。
+- **uvicorn 从 2 个 worker 提到 4 个**（运维改动，unit 在仓库外、不进 git）。同步点只有一处但要命：
+  父仓 `scripts/healthcheck.sh` 的 `EXPECT_WORKERS`——不跟着改，探针会**每分钟**报一次
+  「worker 数 4 ≠ 2」，真事故从此淹在噪声里。旧口径「4 workers 在 3.7GB 下会被杀」是早年 OOM
+  记忆的产物：20261002 实测每 worker 常驻 135–150MB、生产合计仅 ~0.48GB ⇒ 加两个约 +270MB，可行。
+  "本机不 build"的纪律不变（那才是真会 OOM 的那件事）。实测数据与容量建议见父仓
+  `docs/deployment-and-ops.md` 的《资源画像与容量》一节。
 
 ## 20261001
 

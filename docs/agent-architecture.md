@@ -73,7 +73,7 @@ flowchart TB
     subgraph Server[生产服务器 3.7GB 内存]
         NGX[nginx :443/:80]
         RUST[Rust 后端 axum :3000<br/>鉴权·记忆·编排·SSE 转发]
-        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 35 工具 · 2 workers]
+        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 35 工具 · 4 workers]
         MYSQL[(MySQL<br/>chat_history / chat_summary)]
         DEV[device-service :3100<br/>ESP32 OLED 指令下发]
     end
@@ -1247,8 +1247,33 @@ flowchart TB
   改动 commit → push `cn_sora_blog` → GitHub Actions 云端构建 → R2 → 服务器脚本部署。
 - **Rust**：同上走 CI；本地自检 `RUSTFLAGS="-D warnings" cargo check`（⚠️ CI 目前**未**启用 -D warnings——
   deploy.yml 无 RUSTFLAGS，warning 不挂 CI，属本机纪律）。
-- **2 workers**：4 workers 在 3.7GB 内存下周期性被杀；16 线程 executor 已调优。
+- **4 workers**（20261002 起）：旧口径「4 workers 在 3.7GB 下会被杀」是早年 OOM 记忆的产物，
+  实测每 worker 常驻 135–150MB、生产合计仅 ~0.48GB ⇒ 可行。16 线程 executor 照旧。
+  实测数据见 `../../docs/deployment-and-ops.md` 的《资源画像与容量》一节。
 - **改 SSE 协议三端同步**：Python 帧格式、Rust 转发、前端解析（`\n\n` 分隔 + JSON 编码 + 终结标记约定）。
+
+### 9.1 资源画像（20261002 实测）
+
+**agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个**。三个数记住就够了：
+
+| 项 | 实测 | 含义 |
+|---|---|---|
+| 常驻内存 | master ~23 MiB + **每个 worker ~130 MiB**（4 workers ⇒ cgroup 口径 ~461 MiB，全机生产合计 ~576 MiB） | 加 worker 的成本是**线性、可预测**的：一个 worker ≈ 130 MiB |
+| CPU | 长期 idle（4 vCPU 机器 load < 0.5）；16 线程 executor 未跑满 | **对话慢不是本机 CPU 的事**，单轮 p90 22s 里绝大部分是外部 LLM 时间 |
+| 并发 | `/health`：4 workers 795 req/s@conc8、1174 req/s@conc32（2 workers 时是 499 / 784） | worker 数决定的是**并发上限**，不是单轮速度 |
+
+**对话侧的负载画像**（近 45 轮，token 字段自 20261001 起才记录；耗时样本更大 n≈450）：
+
+- 耗时：mean 10.7s / **p50 9.6s / p90 22.3s** / max 28.5s（大样本口径 p50 6.8s / p90 17.0s）。
+- 每轮 prompt tokens：mean **71.7k**（p90 114k，其中 ~38% 命中 cache read）——比想象中大，
+  因为既有长系统提示 + 规则，又有 RAG/上下文注入；planner 1.60 次/轮（单次 ~37k）、
+  narrator 0.89 次/轮（单次 ~12k）。输出每轮仅 ~345 tokens。
+- **推论：这个 agent 是"输入重、输出轻"型**——成本与延迟主要由 prompt 体积驱动，
+  所以 `[问题记录]` 里那些"瘦身帧/去重上下文"的改动，省的既是钱也是延迟。
+
+> 机器规格、各服务内存、磁盘画像、升级建议与复现命令全在宿主的
+> [docs/deployment-and-ops.md](../../docs/deployment-and-ops.md) §8《资源画像与容量》——
+> **那份是唯一事实源**，本节只保留与 agent 直接相关的那几行，避免两处漂移。
 
 ---
 
