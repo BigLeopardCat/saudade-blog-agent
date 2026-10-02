@@ -64,8 +64,12 @@ jobs:
           # 稀疏锥只为把面收小、把时间省掉；**锥够不够**由 `tests/test_ci_suite_list.py` ⑥
           # 机械核对——它扫所有 `_parent_repo.read("…")` 的路径逐个判是否落在锥里，
           # 加了读别处的守卫而忘了改这里会红，而不是"那一条在 CI 上悄悄不判"。
+          # 20261002 加 `frontend/src/utils`：`tests/test_sticker_repair.py` 要拿父仓那份
+          # 贴纸清单（`stickers.ts::STICKERS`）与 agent 侧 `agent/stickers.py::STICKER_NAMES`
+          # 逐字核对——"名字清单三处同步"是这套契约里唯一能机器化的那一处。
           sparse-checkout: |
             src/routes
+            frontend/src/utils
           fetch-depth: 1
           persist-credentials: false
 
@@ -77,6 +81,7 @@ jobs:
         run: |
           set -e
           test -f _parent/src/routes/chat.rs
+          test -f _parent/frontend/src/utils/stickers.ts
 
       # ⚠️ 20260928 首跑带出两条**信息性**注解（不影响本次绿）：`actions/checkout@v4` 与
       # `astral-sh/setup-uv@v5` 是针对 Node 20 的，runner 已强制它们跑在 Node 24 上。等上游

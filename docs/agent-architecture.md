@@ -1018,6 +1018,11 @@ flowchart TB
   live2d-widgets/chat-render.js，**增删必须三处同步**）由前端渲染成贴纸图；纪律 = 只在氛围性
   情绪（被夸害羞/安慰/祝贺分享成功等）出现时引用、每轮最多一个、完成任务/查到结果等中性服务
   确认不带表情（装饰例行回复即机械堆砌）、绝不编造表外名字（未命中渲染为原样文本）。
+  **20261002 起出口有一道确定性修补**（`agent/stickers.py::repair_sticker_tokens`，接线在
+  `model_node` 拿到回复之后）：模型偶尔只写开头冒号（实测 `:头疼` / `:生气`，两个渲染器都
+  匹配不上 ⇒ 主人读到裸露的半截记号），这里按"只补已知名字的收尾冒号、只在词边界、跳过代码"
+  补全并留 `model/sticker_repair` 事件；表外名字、全角开场、词中的名字一个字都不动
+  （判据 `tests/test_sticker_repair.py`，含三处清单同步的机器核对）。
   `enable_thinking=False`（20260831 起：长上下文思考链爆炸——46.8s/79.1s/105.8s 慢调用实证，
   golden 全量回归把关）。
 - **gate = 唯一确定性检查**（graph.py `gate_node`，取代旧 reflector 的 9 确定性闸 + LLM 质检 +

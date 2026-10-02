@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """20260904 sticker smoke：情绪输入 → 观察 :名字: 引用（频率/位置/堆砌/编造外名）+ 中性输入 → 观察不用。"""
 import json
+import pathlib
 import re
 import sys
 import time
 import urllib.request
 
-KNOWN = ["头疼", "委屈", "害羞", "比耶", "犯错", "生气", "贴贴", "震惊"]
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from agent.stickers import STICKER_NAMES  # noqa: E402
+
+# 名字清单只有一份（`agent/stickers.py`，与前端两处清单三处同步）——这里别再抄第二份
+KNOWN = list(STICKER_NAMES)
 MARKER = re.compile(r":([^:\s]{1,12}):")
 
 CASES = [
