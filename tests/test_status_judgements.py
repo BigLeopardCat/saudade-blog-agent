@@ -26,11 +26,12 @@ from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 import agent.graph as G  # noqa: E402
 from agent.decisions import _wrap_up_plan  # noqa: E402
 from agent.graph import (  # noqa: E402
-    _FALLBACK_DOWN, _FALLBACK_GONE, _claim_issue, gate_node, parse_plan, plan_encode,
+    _FALLBACK_DOWN, _FALLBACK_GONE, _FALLBACK_UNDEPLOYED, _claim_issue, gate_node,
+    parse_plan, plan_encode,
 )
 from agent.skills import (  # noqa: E402
     PLAN_STATUS_ABSENCE_EXEMPT, PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, SKILLS,
-    SKILL_MAP, _param_problem_plan, instantiate_plan,
+    SKILL_MAP, _IOT_OFF_NOTE, _param_problem_plan, instantiate_plan,
 )
 
 FAILS: list[str] = []
@@ -68,13 +69,26 @@ _pp = _param_problem_plan(SKILL_MAP["navigate"],
                           {"fixed": [], "unknown": [], "missing": ["target"], "bad": []})
 check("`_param_problem_plan`（**另一条**构造路径）→ param_missing",
       _pp["status"] == "param_missing", _pp["status"])
-check("闭集恰好八值、无重名", len(PLAN_STATUS_VALUES) == 8
-      and len(set(PLAN_STATUS_VALUES)) == 8, str(PLAN_STATUS_VALUES))
+check("闭集恰好九值、无重名", len(PLAN_STATUS_VALUES) == 9
+      and len(set(PLAN_STATUS_VALUES)) == 9, str(PLAN_STATUS_VALUES))
 check("每个构造出的值都在闭集里（拼错一个词 = 判据静默失效）",
       all(v in PLAN_STATUS_VALUES for v in
           (_nav_status("友链"), _nav_status("/iot"), _nav_status("量子对撞机车间"),
            _nav_status(), _nav_status("留言板"), instantiate_plan("chat", {})["status"],
            _wrap_up_plan(True)["status"], _pp["status"])), str(PLAN_STATUS_VALUES))
+
+# IoT 未部署（nav_iot_off）这一档本期新加，而它**只有在开关关掉时**才构造得出来
+# （本套件按 run_all 的钉子跑在"装了"那一档 ⇒ `物联网平台` 是正常跳转）。
+# 所以这里不实例化，改用**系统自己那段注记**拼一份计划文本——顺带把
+# `parse_plan` 的兼容派生也验了：那段注记里含叮嘱"不要说「已下线」"，
+# 派生必须先认「未部署」，否则会把它派生成"页面下线了"（见 graph.py 那段注释）。
+_IOT_TXT = ("SKILL=navigate\nPARAMS={}\nTOOLS: （无）\n"
+            f"NOTE: {_IOT_OFF_NOTE}\nREPLY: x")
+check("IoT 未部署注记 → 兼容派生认 nav_iot_off（**不是** nav_offline）",
+      parse_plan(_IOT_TXT)["status"] == "nav_iot_off", parse_plan(_IOT_TXT)["status"])
+check("  · 这条判据咬得住：注记里确实含「已下线」三个字（顺序反了就派生错）",
+      "已下线" in _IOT_OFF_NOTE,
+      "注记措辞改了的话这条要跟着改——它是防顺序反的地雷，不是文案断言")
 
 # ══════════════════════════════════════════════════════════════════
 print("\n② gate 第 4 节：按状态选如实文案（不是按注记里有没有那六个字）")
@@ -125,6 +139,23 @@ check("target_unreachable + 说成已经到了 → 兜底文案选**不存在**�
 o = _gate(_gone, "那个板块已经下线了。")
 check("  ★ target_unreachable 下说「已下线」也不够（不许拿一句假话换另一句）",
       _fb(o) == _FALLBACK_GONE, str(_fb(o))[:30])
+
+# IoT 未部署：真相是"本站从来没装这个可选件"——与"已下线"是两回事，兜底文案分开
+# （20261002 洞⑫）。`STATUS=` 明写出来，走的是与上面同一支判据（不看注记措辞）。
+_iot = _IOT_TXT.replace("SKILL=navigate", "SKILL=navigate\nSTATUS=nav_iot_off")
+o = _gate(_iot, "物联网平台在本站没有部署喵，那是可选件。")
+check("nav_iot_off + 如实说「没有部署」→ 放行（无兜底文案）",
+      o.get("done") is True and not _fb(o), str(_fb(o))[:30])
+o = _gate(_iot, "物联网平台已经带你到啦～")
+check("nav_iot_off + 说成已经到了 → 兜底文案选**未部署**那一份",
+      _fb(o) == _FALLBACK_UNDEPLOYED, str(_fb(o))[:30])
+o = _gate(_iot, "那个板块已经下线了。")
+check("  ★ nav_iot_off 下说「已下线」**不算如实**（那暗示曾经有过）",
+      _fb(o) == _FALLBACK_UNDEPLOYED, str(_fb(o))[:30])
+check("  · 两份兜底文案必须不同（混用会让访客去问站主为什么撤掉它）",
+      _FALLBACK_UNDEPLOYED != _FALLBACK_DOWN and _FALLBACK_UNDEPLOYED != _FALLBACK_GONE)
+check("  · 未部署那份兜底里**不许**出现「下线」（那是另一档的说法）",
+      "下线" not in _FALLBACK_UNDEPLOYED, _FALLBACK_UNDEPLOYED[:40])
 
 # ── 反向锁：措辞一模一样、状态不是导航注记轮 ⇒ 判据**不许**动 ───────────────
 # 本套件的核心断言：只做正向的话，旧实现（grep 措辞）同样会通过。

@@ -42,8 +42,14 @@ LOGS_DIR = os.path.join(BLOG_ROOT, "logs")
 TRACES_DIR = os.path.join(LOGS_DIR, "agent", "traces")
 HEALTH_LOG = os.path.join(LOGS_DIR, "health.log")
 
-# 三个 systemd 服务（本机就是生产机，见 CLAUDE.md §2）
-SERVICES = ("saudade-rust", "saudade-agent", "saudade-device")
+# systemd 服务（本机就是生产机，见 CLAUDE.md §2）。`saudade-device` 属物联网平台
+# 那一套（可选件）：没装就没有这个 unit，列出来只会得到一行"不存在/未运行"的**假故障**
+# ——服务健康报告上说一个从来不存在的 unit 挂了，比不列它糟得多。
+# 判据仍是开关那一处（`tools/base.IOT_ENABLED` 读 `config.settings.iot_enabled`）。
+from tools.base import IOT_ENABLED as _IOT_ENABLED
+
+SERVICES = (("saudade-rust", "saudade-agent")
+            + (("saudade-device",) if _IOT_ENABLED else ()))
 
 # systemctl 子进程超时（秒）——一条 systemctl 卡死不该拖垮整轮对话
 _SYSTEMCTL_TIMEOUT = 3.0

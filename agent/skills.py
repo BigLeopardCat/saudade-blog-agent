@@ -38,7 +38,47 @@ _NEAR_MISS_CONTRACT = (
 # ---------------------------------------------------------------------------
 # 导航映射表（业务唯一数据源）
 # ---------------------------------------------------------------------------
-# 页面别名（用户口语）→ 真实路径；None 表示该别名对应页面已下线，不得导航。
+# IoT 开关与入口路径与工具层**同源**：路径字面量的唯一出处是 `tools/base.py`
+# （那里的白名单要按同一个开关收口），开关值本身出自 `config/settings.py` 的
+# `iot_enabled`。这里只做转发，不重新判断。
+from tools.base import IOT_ENABLED, IOT_NAV_PATH
+
+# IoT 入口的全部别名——**只此一处**。开关关掉时它们在 NAV_MAP 里映射为 None，
+# 但**语义与"已下线"不同**（友链是曾经有过、现在撤了；IoT 是本站从来没装），
+# 所以注记的话术要分开，见 `_IOT_OFF_NOTE` 与 navigate 分支的 `nav_iot_off`。
+# 大写变体是刻意的：用户口语常见，且不能让模型自己把 IOT 推断成"物联网"——
+# 曾见推断失败导致 planner 选 chat 快道、模型裸输出路径文本还声称已打开。
+_IOT_NAV_ALIASES: tuple[str, ...] = (
+    "物联网平台", "物联网控制台", "设备控制台",
+    "IOT控制台", "IoT控制台", "iot控制台",
+    "IOT平台", "IoT平台", "iot平台",
+    "物联网",
+)
+# "本站未部署"的注记（planner 看得到，narrator 转述）。**别写成"已下线"**：
+# 那暗示站主撤掉过一个页面，而真相是这个可选件根本没装。
+_IOT_OFF_NOTE = (
+    "物联网平台在本站**未部署**（可选件，源码在博客仓 iot/ 目录）：如实告知访客"
+    "本站没有这个页面、不调用任何工具，**不要说「已下线」**（那暗示曾经有过）"
+)
+# 站里真实可去的页面：**两种排法、同一份名单**，IoT 那半随同一个开关走。
+# 斜杠版给 navigate 注记那句"可参照真实页面（…）"；顿号版给 gate 的兜底文案。
+# 收成一份的动因（20261002）：`graph.py` 的两段 `_FALLBACK_*` 原先各自手写了一遍页面
+# 清单，其中两段把"物联网平台"写了进去——平台没装时，**gate 的兜底成了全站唯一还在
+# 推荐那个入口的地方**（正文都被拦下来了，兜底自己却在列它）。
+_NAV_REF_HINT = ("首页/留言板/说说/时间轴/关于我/登录"
+                 + ("/物联网平台" if IOT_ENABLED else "") + "/后台各面板")
+_NAV_REAL_PAGES = ("首页、留言板、说说、时间轴、关于我、登录、管理后台"
+                   + ("、物联网平台" if IOT_ENABLED else ""))
+
+
+def _iot_alias_entries() -> dict[str, str | None]:
+    """IoT 那十个别名的 NAV_MAP 条目：装了指路，没装映射为 None（如实告知）。"""
+    return {alias: (IOT_NAV_PATH if IOT_ENABLED else None)
+            for alias in _IOT_NAV_ALIASES}
+
+
+# 页面别名（用户口语）→ 真实路径；None 表示该别名对应页面已下线（或本站未部署，
+# 两者的话术在 instantiate_plan 的 navigate 分支里分开），不得导航。
 # 别名映射的唯一事实来源（路径白名单 = base.py 同源导入的 NAV_VALID_PATHS，
 # 见下方"白名单路径"注释）。
 NAV_MAP: dict[str, str | None] = {
@@ -57,18 +97,7 @@ NAV_MAP: dict[str, str | None] = {
     "登录": "/login",
     "后台": "/dashboard",
     "管理后台": "/dashboard",
-    "物联网平台": "/device-console/",
-    "物联网控制台": "/device-console/",
-    "设备控制台": "/device-console/",
-    # IOT/IoT 大小写变体（用户口语常见；不依赖模型把 IOT 推断成"物联网"——
-    # 曾见推断失败导致 planner 选 chat 快道、模型裸输出路径文本还声称已打开）
-    "IOT控制台": "/device-console/",
-    "IoT控制台": "/device-console/",
-    "iot控制台": "/device-console/",
-    "IOT平台": "/device-console/",
-    "IoT平台": "/device-console/",
-    "iot平台": "/device-console/",
-    "物联网": "/device-console/",
+    **_iot_alias_entries(),
     "友链": None,          # 已下线：如实告知，不导航
     "友情链接": None,
     "友链板块": None,
@@ -434,7 +463,11 @@ def render_tool_marks(text: str, role: str | None) -> str:
 # 命中即等同映射命中——识别不依赖模型在 PARAMS 里自觉推断（曾见推断失败
 # 降级 chat 快道、裸输出路径文本还声称已打开）。顺序敏感：宽词（设备/管理）
 # 归设备域在前，避免被后续规则截胡。
-FUZZY_NAV_RULES: list[tuple[tuple[str, ...], str]] = [
+# 值可以是 None（**只有当开关关掉时**）：那表示"命中了规则，但那个页面本站没有"，
+# 与"一条规则都没命中"是两回事——前者要如实说未部署，后者才是"无法识别"。
+# 用 `if path:` 一把撸会把前者吞成后者（旧 `_nav_fast_path` 就是这么写的），
+# 所以取用一律走下面的 `fuzzy_nav_hit()`。
+FUZZY_NAV_RULES: list[tuple[tuple[str, ...], str | None]] = [
     # 后台面板（20260926）**必须排在最前**：宽规则（"后台"/"管理"）与公开页
     # 「说说」→/talk 都在其后，而 "去后台的笔记" 同时含"后台"与"笔记"、
     # 「说说管理」同时含"说说"——顺序反了就被先命中的宽规则截胡成 /dashboard 主页
@@ -446,7 +479,8 @@ FUZZY_NAV_RULES: list[tuple[tuple[str, ...], str]] = [
     (("图库", "相册"), "/dashboard/albums"),
     (("公告", "公告管理"), "/dashboard/announcement"),
     (("数据板", "后台数据"), "/dashboard/analytics"),
-    (("物联网", "IOT", "iot", "IoT", "设备控制", "设备管理", "设备面板", "设备平台", "设备"), "/device-console/"),
+    (("物联网", "IOT", "iot", "IoT", "设备控制", "设备管理", "设备面板", "设备平台", "设备"),
+     IOT_NAV_PATH if IOT_ENABLED else None),
     (("留言", "留个言", "河灯", "河灯集"), "/guestbook"),
     (("说说", "碎语", "动态"), "/talk"),
     (("时间轴", "归档", "时间线"), "/times"),
@@ -455,6 +489,22 @@ FUZZY_NAV_RULES: list[tuple[tuple[str, ...], str]] = [
     (("后台", "管理"), "/dashboard"),
     (("首页", "主页"), "/"),
 ]
+
+
+def fuzzy_nav_hit(text: str) -> tuple[bool, str | None]:
+    """口语模糊归一的**唯一入口**：返回 `(是否命中, 路径)`。
+
+    命中而路径为 None = 命中的页面本站没有（当前只有 IoT 平台这一种）⇒ 调用方
+    走"未部署"话术；`(False, None)` 才是"无法识别"。两个消费点（`instantiate_plan`
+    的 navigate 分支与 `decisions._nav_fast_path`）都从这里取，别再各写一遍 `next(...)`：
+    20261002 之前两处都写成 `if fuzzy:`，命中-None 的那一格在两处**都被静默降级成
+    "无法识别"**，而正确的话是"本站未部署"——同一份规则、同一个错法写了两遍，
+    正是"判据只能有一处"要避免的形状。
+    """
+    for kws, path in FUZZY_NAV_RULES:
+        if any(kw in text for kw in kws):
+            return True, path
+    return False, None
 
 
 @dataclass
@@ -498,12 +548,18 @@ class Skill:
 SKILLS: list[Skill] = [
     Skill(
         name="navigate",
-        capability="跳转到站内任意板块（首页/留言板/说说/时间轴/关于我/物联网控制台…）",
+        # IoT 关掉时，能力的说法与参数的取值示例都要跟着收——**能力行是能力的上界**
+        # （`_SITE_GUIDE_CLOSING` 那句"清单之外的动作一律不许承诺"），介绍一个本站
+        # 没有的页面等于让 narrator 拿系统数据去撒一个系统自己的谎。
+        capability=("跳转到站内任意板块（首页/留言板/说说/时间轴/关于我"
+                    + ("/物联网控制台" if IOT_ENABLED else "") + "…）"),
         description="用户要求前往/去/回/回到/返回/打开/跳转/访问/进入/转到某个页面时使用。",
         inputs={
-            "target": "页面别名（从导航映射表取值）：首页/留言板/说说/时间轴/关于我/登录/物联网平台等；"
-                      "后台各面板：后台（=后台主页）/后台笔记/后台说说/后台图库/后台公告/"
-                      "后台用户管理/后台数据板/后台站点设置（面板名不带「后台」也可，除主页与说说）",
+            "target": "页面别名（从导航映射表取值）：首页/留言板/说说/时间轴/关于我/登录"
+                      + ("/物联网平台" if IOT_ENABLED else "") +
+                      "等；后台各面板：后台（=后台主页）/后台笔记/后台说说/后台图库/"
+                      "后台公告/后台用户管理/后台数据板/后台站点设置"
+                      "（面板名不带「后台」也可，除主页与说说）",
         },
         # target 必填（20260925）：target 由本技能自己的代码消费（查 NAV_MAP），
         # 模板里的 `$path` 是死代码（`path` 由本分支从 NAV_MAP 算出）⇒ 派生出不来，
@@ -523,12 +579,16 @@ SKILLS: list[Skill] = [
         complete_when="navigate_to 的执行回执带导航命令（有回执 = 跳转已由系统下发）",
         reply_contract=(
             "跳转由系统执行（命令在 navigate_to 的**执行回执**里，正文里没有）：有回执 = 跳转已由系统下发"
-            "（站内页当场换路由；整页目标如 /device-console/ 在**本条回复说完后**跳，那时候说"
-            "「已经在跳了/马上过去」是如实的，说「已经打开了」不是），"
-            "可以简短确认，**不得**说「点确定我就过去」「请确认后我再跳」之类需要访客再操作的话"
-            "（没有确认框这回事，那种话是空承诺）；不得在正文输出任何命令前缀文本；"
-            "**推荐某个页面时不要调用本技能**——直接在正文里给出 Markdown 链接即可；"
-            "正文里是否再附链接属风格问题，不影响跳转，非必需"
+            # 整页目标只有 IoT 控制台那一个（`_NAV_WHOLE_PAGE_PATHS`）⇒ 关掉时这半句
+            # 整段不出现：教 narrator"整页目标要等回复说完"而站内一个整页目标都没有，
+            # 只会让它把这套说法套到普通跳转上（那时候说"马上过去"就是假的）。
+            + (("（站内页当场换路由；整页目标如 /device-console/ 在**本条回复说完后**跳，那时候说"
+                "「已经在跳了/马上过去」是如实的，说「已经打开了」不是），")
+               if IOT_ENABLED else "（站内页当场换路由），")
+            + ("可以简短确认，**不得**说「点确定我就过去」「请确认后我再跳」之类需要访客再操作的话"
+               "（没有确认框这回事，那种话是空承诺）；不得在正文输出任何命令前缀文本；"
+               "**推荐某个页面时不要调用本技能**——直接在正文里给出 Markdown 链接即可；"
+               "正文里是否再附链接属风格问题，不影响跳转，非必需")
         ),
     ),
     Skill(
@@ -2547,6 +2607,10 @@ def _expand_todo_reschedule_skill(skill, params: dict) -> tuple[list[str], str]:
 #   param_missing      参数不齐（缺参/值归不了）——`_param_problem_plan`
 #   target_unreachable 目标页不存在（navigate 白名单外路径）
 #   nav_offline        目标页已下线（NAV_MAP 显式标记）
+#   nav_iot_off        物联网平台**本站未部署**（可选件没装，20261002）——与
+#                      `nav_offline` 分开的理由是**话术不同**：一个是"曾经有过、撤了"，
+#                      一个是"从来没有、可选件没装"。混用一个值的后果在 gate 那一侧：
+#                      它按值选兜底文案，"未部署"会被套上"确实已经下线了"
 #   nav_unresolved     导航目标认不出来（NAV_MAP 与模糊归一都没命中）
 #   refused            明确拒绝/办不成（写技能的 fail-closed 出口）
 #   wrapped            确定性收尾轮（轮次上限/复盘终局/剔空收尾）
@@ -2554,12 +2618,13 @@ def _expand_todo_reschedule_skill(skill, params: dict) -> tuple[list[str], str]:
 # （跨轮执行记忆的落库字段，记的是"那次执行的结果"）；这里是计划字典内部的键
 # `plan["status"]`，记的是"这一轮计划自身的处境"。同名不同物，注释里点破。
 PLAN_STATUS_VALUES = ("executed", "answer_only", "param_missing",
-                      "target_unreachable", "nav_offline", "nav_unresolved",
-                      "refused", "wrapped")
+                      "target_unreachable", "nav_offline", "nav_iot_off",
+                      "nav_unresolved", "refused", "wrapped")
 # gate 的两处判据读这几个值（`graph.gate_node` 第 4 节选如实文案、
 # `graph._claim_issue` 的站内"没有"豁免）。*_NAV_NOTE 是"零工具的 navigate 注记轮"
 # 这一个集合——旧判据就是它，判的是措辞；现在判的是这里的值。
-PLAN_STATUS_NAV_NOTE = ("nav_offline", "target_unreachable", "nav_unresolved")
+PLAN_STATUS_NAV_NOTE = ("nav_offline", "nav_iot_off",
+                        "target_unreachable", "nav_unresolved")
 PLAN_STATUS_ABSENCE_EXEMPT = PLAN_STATUS_NAV_NOTE + ("param_missing", "refused")
 
 
@@ -2646,9 +2711,17 @@ def _instantiate_plan(skill_name: str, params: dict,
         target = (params.get("target") or "").strip()
         mapped = NAV_MAP.get(target)
         if target in NAV_MAP and mapped is None:
-            # 映射表显式标记为已下线（友链等）：不调用工具、如实告知
-            note = f"导航目标「{target}」已下线：如实告知访客，不调用任何工具"
-            status = "nav_offline"
+            # 映射表标记为不可导航，**两种处境的话术不同**（判据是同一条：
+            # 这个别名归 `_IOT_NAV_ALIASES` 还是别的）：
+            #   · IoT 关掉：本站从来没装这个平台 ⇒ "未部署"
+            #   · 友链等：曾经有过、后来撤了 ⇒ "已下线"
+            # 说反了的代价是具体的：把"没装"说成"已下线"，访客会去问站主为什么撤掉。
+            if target in _IOT_NAV_ALIASES:
+                note = _IOT_OFF_NOTE
+                status = "nav_iot_off"
+            else:
+                note = f"导航目标「{target}」已下线：如实告知访客，不调用任何工具"
+                status = "nav_offline"
         elif mapped:
             args = {"path": mapped, "confirm": False}
             tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
@@ -2662,27 +2735,34 @@ def _instantiate_plan(skill_name: str, params: dict,
                 args = {"path": target, "confirm": False}
                 tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
                 note = f"目标页: {target}（字面路径，白名单校验通过）"
+            elif not IOT_ENABLED and target.rstrip("/") == IOT_NAV_PATH.rstrip("/"):
+                # 字面写出 IoT 路径而平台没装：白名单已经收掉了它，落到下面那支的话
+                # 话术会变成"站内不存在这个页面"——不算错，但这不是"不存在"，是"没装"。
+                # 判据仍是开关那一处，不是路径白名单（白名单是它的结果，不是它的源）。
+                note = _IOT_OFF_NOTE
+                status = "nav_iot_off"
             else:
                 note = (
                     f"导航目标「{target}」不存在：如实告知没有该页面，不调用任何工具，"
-                    f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/物联网平台/后台各面板）给出建议（文本链接即可）"
+                    f"可参照真实页面（{_NAV_REF_HINT}）给出建议（文本链接即可）"
                 )
                 status = "target_unreachable"
         else:
             # 不在映射表：先试口语模糊归一（关键词规则，确定性），
             # 命中即等同映射命中；仍不命中才"无法识别、如实告知"
-            fuzzy_hit = next(
-                (path for kws, path in FUZZY_NAV_RULES if any(kw in target for kw in kws)),
-                None,
-            )
-            if fuzzy_hit:
+            hit, fuzzy_hit = fuzzy_nav_hit(target)
+            if hit and fuzzy_hit:
                 args = {"path": fuzzy_hit, "confirm": False}
                 tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
                 note = f"目标页: {target}（口语模糊归一）→ {fuzzy_hit}"
+            elif hit:
+                # 命中了规则、但那个页面本站没有（当前只有 IoT 这一种）：
+                note = _IOT_OFF_NOTE
+                status = "nav_iot_off"
             else:
                 note = (
                     f"无法识别导航目标「{target}」：如实告知没有该页面，不调用任何工具，"
-                    f"可参照真实页面（首页/留言板/说说/时间轴/关于我/登录/物联网平台/后台各面板）给出建议（文本链接即可）"
+                    f"可参照真实页面（{_NAV_REF_HINT}）给出建议（文本链接即可）"
                 )
                 status = "nav_unresolved"
     elif skill.name == "read_article":
@@ -3492,6 +3572,12 @@ def _nav_map_lines() -> str:
     dash_paths = {p for _, p in DASHBOARD_PANELS}
     plain, dash = [], []
     for alias, path in NAV_MAP.items():
+        # IoT 别名在开关关掉时**整条不出现**（不是写成"已下线"）：提示词里出现的
+        # 每一个入口都是 planner 可以照着去填 target 的候选，写"→（已下线）"等于
+        # 把"本站有这个页面"这件事再讲一遍——`navigate` 那一支的未部署话术是给
+        # 用户**主动问起**时用的，不是给 planner 当备选清单用的。
+        if not IOT_ENABLED and alias in _IOT_NAV_ALIASES:
+            continue
         line = f"{alias}→{path}" if path else f"{alias}→（已下线，如实告知）"
         (dash if path in dash_paths else plain).append(line)
     return ("、".join(plain)
@@ -3513,6 +3599,16 @@ _NAV_MAP_LINES = _nav_map_lines()
 # 收成一条名单的理由同 `visible_skills` 自己：可见性判据只能有一处，两处必然漂移。
 _SYSTEM_ONLY_SKILLS = frozenset({"read_article"})
 
+# 物联网平台**没装**时一并不可见的两件（20261002）：`device_display`（让 ESP32
+# 屏幕显示文字）与 `device_query`（有哪些设备/在线状态）。平台没装 ⇒ 没有设备可
+# 列、没有屏幕可写，留着它们就是两份"能做"的承诺（`capability` 会原样进 narrator
+# 的能力清单，planner 也会照选）。收在 `visible_skills` 这一处，理由同上一行：
+# **可见性判据只能有一处**——planner 注入、native 档的 tools schema、narrator 的
+# 能力清单三处都从它派生。
+# ⚠️ 只影响**可见性**，不动工具注册表：`tools/base.py` 里那两个工具照旧注册着
+# （`_TOOL_MAP`、authz 的写操作判定、gate 的具名工具声称核对都还引用它们）。
+_IOT_ONLY_SKILLS = frozenset({"device_display", "device_query"})
+
 
 def visible_skills(role: str | None, include_system: bool = False) -> list[Skill]:
     """按角色过滤的技能列表——**角色可见性判据只有这一处**（20260921）。
@@ -3528,6 +3624,8 @@ def visible_skills(role: str | None, include_system: bool = False) -> list[Skill
     out = []
     for s in SKILLS:
         if s.name in _SYSTEM_ONLY_SKILLS and not include_system:
+            continue
+        if s.name in _IOT_ONLY_SKILLS and not IOT_ENABLED:
             continue
         if s.roles and role not in s.roles:
             continue

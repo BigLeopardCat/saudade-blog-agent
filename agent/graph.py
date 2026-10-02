@@ -108,10 +108,12 @@ from agent.skills import (DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
                           DROP_SUFFIX_SKILL_NO_CALLS,
                           FUZZY_NAV_RULES, NAV_MAP, PLAN_STATUS_ABSENCE_EXEMPT,
                           PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, SKILL_MAP,
-                          _WRITE_NAME_TARGET_SKILLS, arg_type_short,
-                          build_planner_context, callable_query_tools,
-                          instantiate_plan, param_problem_note,
-                          skill_param_specs, visible_skills)
+                          _NAV_REAL_PAGES, _NAV_REF_HINT,
+                          _WRITE_NAME_TARGET_SKILLS,
+                          arg_type_short, build_planner_context,
+                          callable_query_tools, instantiate_plan,
+                          param_problem_note, skill_param_specs,
+                          visible_skills)
 # 任务登记（20260927 批 D）：登记帧的构造与那一轮给 narrator 的注记/纠偏都在
 # `agent/tasks.py`——本模块只决定"什么时候用它"（见 planner 的那一支）。
 from agent.tasks import (TASK_DONE_NOTE, declaration_note, declaration_nudge,
@@ -1357,7 +1359,12 @@ def parse_plan(raw: str) -> dict:
         elif skill == "chat":
             status = "answer_only"
         elif skill == "navigate" and "不调用任何工具" in note:
-            if "已下线" in note:
+            # ⚠️ "未部署" 必须排在 "已下线" **之前**：`_IOT_OFF_NOTE` 里那句叮嘱
+            # （"不要说「已下线」"）本身含"已下线"三个字，先判它就会把"IoT 没装"
+            # 派生成"页面下线了"——正是这两个值分开要防的那件事，从这里漏回来。
+            if "未部署" in note:
+                status = "nav_iot_off"
+            elif "已下线" in note:
                 status = "nav_offline"
             elif "无法识别" in note:
                 status = "nav_unresolved"
@@ -3226,6 +3233,11 @@ def _ledger_denial(text: str, has_pending: bool) -> bool:
 # note 文本配套，见 gate_node）。
 _HONEST_DOWN = ("下线", "下架", "无法访问", "没有了")
 _HONEST_GONE = ("没有", "不存在", "找不到", "无法识别", "没有找到")
+# "本站未部署"那一档的如实词表 = `_HONEST_GONE` + 这档自己的说法。**必须多这几个词**：
+# 注记（`skills._IOT_OFF_NOTE`）教给 narrator 的就是"如实说本站没有/未部署/没装"，
+# 而"未部署"三个字里没有"没有"——只挂 `_HONEST_GONE` 会把一句完全如实的回答判成
+# 不诚实，然后拿兜底文案把它顶掉（误伤的代价是整轮回复被替换）。
+_HONEST_UNDEPLOYED = _HONEST_GONE + ("未部署", "没装", "没有装", "未接入")
 
 
 class _ClaimFamily(NamedTuple):
@@ -3682,11 +3694,18 @@ _FALLBACK_POLICY = (
     "它说成已经办好了。要动别的账号的话说一声，我按规则再来一次喵。")
 _FALLBACK_DOWN = (
     "喵呜……那个板块确实已经下线了，刚才说得好像还能去一样，是我不好。现在站里"
-    "能逛的真实页面是：首页、留言板、说说、时间轴、关于我～要去哪边嘛？")
+    f"能逛的真实页面是：{_NAV_REAL_PAGES}～要去哪边嘛？")
 _FALLBACK_GONE = (
     "喵呜……主人，那个页面我在站里确认过是不存在的，刚才不该说得像真的一样。"
-    "站里真实能去的页面有：首页、留言板、说说、时间轴、关于我、登录、管理后台、"
-    "物联网平台。要不要我带你逛逛？")
+    f"站里真实能去的页面有：{_NAV_REAL_PAGES}。要不要我带你逛逛？")
+# 洞⑫（20261002）：物联网平台**本站未部署**（可选件没装，`IOT_ENABLED=0`）。与
+# `_FALLBACK_DOWN` 分开的**唯一理由是话术**：一个是"曾经有过、后来撤了"，一个是
+# "从来没有、没装过"——把后者说成"已经下线了"，访客会去问站主为什么撤掉它。
+# 页面清单同样走 `_NAV_REAL_PAGES`（那份清单自己就跟着开关收口）。
+_FALLBACK_UNDEPLOYED = (
+    "喵呜……主人，物联网平台在**本站没有部署**（它是可选件，这个站没装），刚才"
+    "说得好像站里有一样，是我不好。站里真实能去的页面有："
+    f"{_NAV_REAL_PAGES}。要不要我带你逛逛？")
 # 有帧、但**帧里没有导航命令**却声称已到达（20260926，见 gate_node 5b2）。与
 # `_FALLBACK_GONE` 的区别是**不许说"那个页面不存在"**：这一轮根本没查过页面在不在
 # （缺的往往是参数，比如没说去哪一篇），把"系统没跳"讲成"页面不存在"是拿一句新
@@ -3839,8 +3858,10 @@ _REPLAN_ADVICE = {
     "nav_present_claim_without_nav": [
         "- 主人**现在在哪一页**是**系统事实**（页面上下文里的 `page=` 字段，由浏览器"
         "实时上报），照它说就行——不是你安排的，也不是你能改口说成别处的；",
-        "- 若主人这一轮是要你**带他过去**：那个页面站内存在（首页/留言板/说说/时间轴/"
-        "关于我/物联网平台/后台）⇒ 选 navigate 技能、把目标填对；**站内没有那个名字**"
+        # 页面清单走 `_NAV_REF_HINT`（与注记、兜底文案同源）：IoT 关掉时这份
+        # "站内存在"的名单必须跟着收，否则这条纠偏话术本身会教 planner 去指一个 404。
+        f"- 若主人这一轮是要你**带他过去**：那个页面站内存在（{_NAV_REF_HINT}）"
+        "⇒ 选 navigate 技能、把目标填对；**站内没有那个名字**"
         "⇒ 如实说站内没有这个页面，并把他真能去的那几个列给他；",
         "**不许**出现「已经带你到了/页面已经打开了/你现在能看到 X」这类说法——"
         "除非本轮真的有对应的导航命令回执。",
@@ -8561,6 +8582,8 @@ _EXECUTOR_PROMPT = """\
   param_missing      缺参数，这一轮什么都没执行 → 如实说没办成、问清缺的那项；
   target_unreachable 目标页站内不存在 → 如实说没有该页面；
   nav_offline        目标页**已下线**（与"不存在"不是一回事，别讲反）；
+  nav_iot_off        物联网平台**本站未部署**（可选件没装）→ 如实说站里没有它，
+                     **别说"已下线"**（那暗示曾经有过）；
   nav_unresolved     认不出要去的目标 → 如实说没听懂要去哪；
   refused            系统按规则拒绝了这次操作 → 逐字转述后台给的理由；
   wrapped            轮次/预算收尾 → 只用已有记录作答，不许再声称新动作。
@@ -8800,6 +8823,11 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             if plan["status"] == "nav_offline":
                 honest = any(k in reply for k in _HONEST_DOWN)
                 fb = _FALLBACK_DOWN
+            elif plan["status"] == "nav_iot_off":
+                # "没有/不存在/未部署"都是如实的（`_HONEST_UNDEPLOYED`），
+                # **"下线"不算**——那说的是另一种处境（曾经有过），见该词表上的注。
+                honest = any(k in reply for k in _HONEST_UNDEPLOYED)
+                fb = _FALLBACK_UNDEPLOYED
             else:
                 honest = any(k in reply for k in _HONEST_GONE)
                 fb = _FALLBACK_GONE

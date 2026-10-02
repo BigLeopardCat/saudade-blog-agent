@@ -24,6 +24,12 @@ from langchain_core.tools import tool
 # 透传 device-service → cmd payload → ESP32 cmd/ack 回执，四端日志可对账
 from utils.logging import get_trace_id
 
+# 配置（pydantic-settings 负责 .env 加载；`os.getenv` 读不到 .env）。
+# 20261002 提到模块顶部：导航白名单（下方 `_NAV_EXACT_PATHS`）要按 `iot_enabled`
+# 收口，那是模块级常量，必须在这里就能读到。`config` 只依赖 os/pydantic-settings，
+# 不反向依赖本模块 ⇒ 无环。
+from config import settings as _settings
+
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://saudade.site/api/public"
@@ -776,7 +782,13 @@ def get_social_links() -> str:
 @tool
 def get_site_map() -> str:
     """返回博客功能结构图，用于引导用户了解博客有哪些功能及其位置。"""
-    return """
+    # IoT 那行随开关走：没装平台却把它列进"功能结构图"，就是让 narrator 照着一份
+    # 系统自己给的假清单介绍一个 404（同 NAV_MAP 那十个别名，见文件顶部 IOT_ENABLED）。
+    iot_line = (
+        f"\n- 物联网控制台 ({IOT_NAV_PATH}) — 管理访客自己的 IoT 设备"
+        "（ESP32 OLED 屏幕显示等），需登录"
+    ) if IOT_ENABLED else ""
+    return f"""
 博客功能结构：
 - 首页 (/) — 展示置顶文章、最新文章列表、个人简介
 - 归档 (/times) — 按时间轴归档展示所有文章
@@ -786,8 +798,7 @@ def get_site_map() -> str:
   写内容即可放灯；留名框默认预填昵称、可匿名，无需注册邮箱
 - 关于我 (/about) — 个人介绍
 - 文章详情 (/article/:id) — 查看文章全文，支持 Mermaid 图表
-- 后台管理 (/dashboard) — 登录后可管理文章、分类、标签、公告等
-- 物联网控制台 (/device-console) — 管理访客自己的 IoT 设备（ESP32 OLED 屏幕显示等），需登录
+- 后台管理 (/dashboard) — 登录后可管理文章、分类、标签、公告等{iot_line}
 """
 
 # ---------------------------------------------------------------------------
@@ -904,12 +915,22 @@ def get_weather(
 # 的两侧覆盖断言锁住同源）。**不放开 `/dashboard/` 前缀**：前缀放行等于让模型
 # 自己拼子路径，而前端 /dashboard 下没有通配子路由——猜出来的路径渲染的是一片
 # 空白（不是 NotFound 页），比"拒绝并回真实清单"糟得多。
+# 物联网控制台是**可选件**（`IOT_ENABLED`，见 config/settings.py 与博客仓 `iot/`
+# 目录）。关掉时那个页面在部署侧就不存在了（nginx 不 include、Rust sitemap 不列），
+# 白名单必须同步收口：**放行一个 404 的后果不是"跳过去发现没有"，而是 navigate_to
+# 照常回一句「页面已跳转」——系统替一个不存在的页面背书**，而访客看到的是 SPA
+# 兜底渲染出来的空白页。
+# 路径字面量只此一处：skills.py 的 NAV_MAP 从这里的 `_NAV_EXACT_PATHS` 同源取名，
+# 别在别处再写一遍 `/device-console/`。
+IOT_ENABLED: bool = _settings.iot_enabled
+IOT_NAV_PATH = "/device-console/"
+
 _NAV_EXACT_PATHS = {
     "/", "/about", "/guestbook", "/talk", "/times", "/login", "/dashboard",
     "/dashboard/notes", "/dashboard/comments", "/dashboard/albums",
     "/dashboard/announcement", "/dashboard/users", "/dashboard/analytics",
     "/dashboard/usercontrol",
-    "/device-console/",
+    *({IOT_NAV_PATH} if IOT_ENABLED else set()),
 }
 _NAV_PREFIX_PATHS = ("/category/", "/article/")
 
@@ -922,7 +943,7 @@ _NAV_PREFIX_PATHS = ("/category/", "/article/")
 # 才真的动，主人报「声称转跳完成是在转跳前完成…等了一会出现转跳完成文本才转跳」。
 # **判定同源在前端**（以桥的返回值为准），这里是它在服务端这一侧的唯一孪生；改前端
 # SPA 路由表（`src/router/spaNavigate.ts`）时对一眼，当前整站只有这一个。
-_NAV_WHOLE_PAGE_PATHS = {"/device-console/"}
+_NAV_WHOLE_PAGE_PATHS = {IOT_NAV_PATH} if IOT_ENABLED else set()
 
 
 @tool
@@ -1013,9 +1034,7 @@ def toggle_dark_mode(
 # IoT 设备（ESP32 OLED 屏幕显示等，经 device-service 下发）
 # ---------------------------------------------------------------------------
 
-# 从 settings 读取（pydantic-settings 负责 .env 加载；os.getenv 读不到 .env）
-from config import settings as _settings
-
+# 从 settings 读取（模块顶部已 import，见那里的说明）
 DEVICE_SERVICE_URL = _settings.device_service_url
 JWT_SECRET = _settings.jwt_secret
 
@@ -1385,8 +1404,8 @@ def get_server_status() -> str:
 
 @tool
 def get_service_health() -> str:
-    """查看服务健康：三个 systemd 服务（saudade-rust / saudade-agent / saudade-device）
-    的状态、重启次数与启动时刻，心跳探针近 24 小时的 WARN/FAIL，今日对话的轮数、
+    """查看服务健康：本机 systemd 服务（Rust 后端、Python agent，装了物联网平台时
+    还有 device-service）的状态、重启次数与启动时刻，心跳探针近 24 小时的 WARN/FAIL，今日对话的轮数、
     异常收尾与质检拦截，以及存活日志的体积。读的是本机的 systemctl 与 logs/ 目录。"""
     from agent import hostinfo as H
     from agent import reports as R

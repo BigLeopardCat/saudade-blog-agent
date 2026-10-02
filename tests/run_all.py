@@ -48,10 +48,17 @@ TESTS = ROOT / "tests"
 # 那个登记伪函数。其余（模型名、超时）不影响离线套件的形状判据，不钉。
 #
 # 另有一项不是"取值"而是"环境"：`SAUDADE_IGNORE_ENV_FILE=1` ⇒ 子进程**整份 .env 不读**
-# （`config/settings.py` 的 model_config）。上面那两项漏了还能靠人眼从 ⚠️ 那行看出来，
+# （`config/settings.py` 的 model_config）。上面那几项漏了还能靠人眼从 ⚠️ 那行看出来，
 # 而 .env 漏了是**静默**的：判据照样绿，只是绿的理由变成了"这台机器有产线密钥"。
+#
+# `IOT_ENABLED=1`（20261002）：物联网平台是可选件，出厂默认**关**。离线套件里几十条
+# 判据写的是"装了的样子"——`物联网平台 → /device-console/`、`navigate_to("/device-console/")`
+# 是整页目标、`device_display`/`device_query` 在能力清单里、`get_service_health` 数三个
+# 服务。不钉住的话，它们全会按"没装"那一档跑，然后集体红——而红的原因不是代码坏了，
+# 是**判据与档位错配**。钉成 1 = "既有判据跑在装了的那一档"，关掉那一档另有
+# `tests/test_iot_switch.py` 专门验（它自己在子进程里把开关设成 0）。
 _PINNED = {"PLANNER_ENGINE": "text", "AGENT_TASK_STATE": "0",
-           "SAUDADE_IGNORE_ENV_FILE": "1"}
+           "SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
 
 
 def suites(keyword: str = "") -> list[pathlib.Path]:
@@ -90,7 +97,8 @@ def _ambient_note(env: dict) -> str:
     return (f"本机生效档位 {'、'.join(f'{k}={v}' for k, v in diff.items())}"
             f"（产线取值）与出厂档不同 ⇒ 本次运行**整份 .env 都不读**、一律按出厂档跑"
             f"（{'、'.join(f'{k}={v}' for k, v in live.items())}），与产线行为不同；"
-            f"单跑某个套件时请带上 `SAUDADE_IGNORE_ENV_FILE=1` 与这两个值")
+            f"单跑某个套件时请带上 `SAUDADE_IGNORE_ENV_FILE=1` 与 "
+            f"{'、'.join(f'{k}={v}' for k, v in _PINNED.items() if k != 'SAUDADE_IGNORE_ENV_FILE')}")
 
 
 def main() -> int:

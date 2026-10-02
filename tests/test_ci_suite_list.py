@@ -117,7 +117,8 @@ check("枚举 == 磁盘（漏在磁盘上的文件就是「从不运行」的那
 check("枚举结果非空且覆盖多套（不是把 glob 换成了空名单）", len(_enum) >= 10, f"{len(_enum)} 套")
 check("出厂档钉子还在（判据不跟运维取值走）",
       run_all._PINNED.get("PLANNER_ENGINE") == "text"
-      and run_all._PINNED.get("AGENT_TASK_STATE") == "0", str(run_all._PINNED))
+      and run_all._PINNED.get("AGENT_TASK_STATE") == "0"
+      and run_all._PINNED.get("IOT_ENABLED") == "1", str(run_all._PINNED))
 
 print("\n④b 出厂环境：离线套件**不读 .env**（20260928）")
 # 为什么这一条和上面几条并列：CI 绿、本机绿，而**绿的理由不同**是同一族失效——
@@ -136,15 +137,48 @@ _PROBE = ("import json,sys;sys.path.insert(0,%r);"
           "d=json.loads(%r);"
           "print(json.dumps(sorted(k for k, v in d.items() "
           "if str(getattr(settings, k)) != v)))")
+# 第二支探针（见 `_pinned_effective`）：只回报三个**钉子档位**的实际生效值。
+_TAKE = ("import json,sys;sys.path.insert(0,%r);"
+         "from config.settings import settings;"
+         "print(json.dumps({'planner_engine': str(settings.planner_engine),"
+         " 'agent_task_state': bool(settings.agent_task_state),"
+         " 'iot_enabled': bool(settings.iot_enabled)}))")
 
 
 def _mismatch(ignore: bool) -> list[str] | None:
-    """子进程里 settings 与**声明的默认值**不同的字段名；子进程没跑成就 None。"""
+    """子进程里 settings 与**声明的默认值**不同的字段名；子进程没跑成就 None。
+
+    ⚠️ 入口自己钉住的键（`run_all._PINNED`）**先从探测 env 里摘掉**（20261002）：
+    run_all 对子进程是 `env.update(_PINNED)` 无条件覆盖，所以"这台机器上设没设它"
+    对套件毫无影响——留在 env 里只会让下面那条判据把**入口自己声明的档位**误报成
+    机器泄漏（`IOT_ENABLED=1` 与出厂默认 `False` 不同，正是这么撞上的）。
+    入口那几档有没有真的生效，由紧接着的第二支探针单独验：两件事分开验，各自的
+    失法才认得出——一个是"机器漏进来了"，另一个是"钉了却没生效"。
+    """
     env = dict(os.environ)
     env.pop("SAUDADE_IGNORE_ENV_FILE", None)
+    for k in run_all._PINNED:
+        env.pop(k, None)
     if ignore:
         env["SAUDADE_IGNORE_ENV_FILE"] = "1"
     out = subprocess.run([sys.executable, "-c", _PROBE % (str(ROOT), json.dumps(_DEFAULTS))],
+                         cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=120)
+    if out.returncode != 0:
+        return None
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def _pinned_effective() -> dict | None:
+    """把 run_all 那份 env 原样喂给子进程，回报那几个档位的**实际生效值**。
+
+    与 `_mismatch` 是互补的两半：那支把钉子摘掉验"机器没漏进来"，这支把钉子装上
+    验"钉了真的生效"。后者的失法是**静默**的——字段名拼错、被 .env 盖掉、pydantic
+    的前缀/别名配置一改，套件就以为自己在 A 档跑、其实在 B 档跑，判据照样全绿
+    （同族教训见 `langgraph-future-annotations-config-injection`）。
+    """
+    env = dict(os.environ)
+    env.update(run_all._PINNED)
+    out = subprocess.run([sys.executable, "-c", _TAKE % str(ROOT)],
                          cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=120)
     if out.returncode != 0:
         return None
@@ -164,6 +198,15 @@ if (ROOT / ".env").exists():
           bool(_ambient), f"本机偏离的字段={_ambient}")
 else:
     print("  ⏭  没有 .env（CI 就这样）⇒ 这一半无从对照；机制那半已在上一条验过")
+
+# 另一半：钉了要真的生效（上一条把钉子摘掉了才验得干净）。逐值核对三个钉子档位。
+_eff = _pinned_effective()
+check("⭐⭐ 入口钉住的档位**真的生效**（钉了不生效 ⇒ 套件按另一档跑，且静默）",
+      _eff is not None
+      and _eff["planner_engine"] == run_all._PINNED["PLANNER_ENGINE"]
+      and _eff["agent_task_state"] == (run_all._PINNED["AGENT_TASK_STATE"] == "1")
+      and _eff["iot_enabled"] == (run_all._PINNED["IOT_ENABLED"] == "1"),
+      f"实际生效={_eff}；声明={run_all._PINNED}")
 
 print("\n⑤ 三态守卫（tests/_parent_repo.py）本机行为")
 sys.path.insert(0, str(ROOT / "tests"))
