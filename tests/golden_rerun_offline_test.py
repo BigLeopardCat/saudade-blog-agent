@@ -24,6 +24,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import types
 from pathlib import Path
 
@@ -294,11 +295,13 @@ try:
     # 「这一轮自己的那份」能被读到，前提是**两份都在**：留档名此前是秒级 ts，全量跑与
     # `--only` 跑落在同一秒就同名，先跑那份被覆盖（20261002 修，见 eval/report_archive.py）。
     # 这条断言此前只在"没撞车"那半时序里绿——现在两种时序都得两份。
+    # 期望名**按本机钟面算**（戳是本地时间，CI 是 UTC ⇒ 写死字符串会在那边红，20261002 实测）。
+    _base = time.strftime("%Y%m%d_%H%M%S", time.localtime(_FROZEN_TS))
     _stems = [os.path.basename(x)[: -len(".json")] for x in r2["archived"]]
     check("两次跑被钉在同一毫秒，留档仍各占一个（第二个顺延一毫秒，两份都在）",
           len(_stems) == 2
-          and _stems[0] == "20251002_085320_125" and _stems[1] == "20251002_085320_126",
-          f"{_stems}")
+          and _stems[0] == f"{_base}_125" and _stems[1] == f"{_base}_126",
+          f"{_stems}（期望 {_base}_125 / {_base}_126）")
     check("--only 这一轮自己的留档是 total=1（它确实只跑了 1 条）",
           _own is not None and _own["total"] == 1,
           f"{(_own or {}).get('total')}（目录里 {len(r2['archived'])} 份留档）")
