@@ -14,10 +14,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import report_archive  # noqa: E402  同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
 from rag.search import get_index, search  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
@@ -141,11 +142,14 @@ def main() -> None:
     if kf:
         print("  已知 FAIL（词法表征局限，非回归）：" + "、".join(f"{i} rank={k}" for i, k in kf))
 
-    ts = time.strftime("%Y%m%d-%H%M%S")
+    # 留档名走 report_archive（20261002）：与 golden 的两个跑法**同一个目录、同一份实现**
+    # ——名字此前是秒级 ts（这里还多一个 `-` 的分隔符差异），同一秒的两份 report 会互相覆盖。
     REPORT_RUNS.mkdir(parents=True, exist_ok=True)
-    payload = {"ts": ts, "corpus": corpus, "queries": len(QUERIES), "runs": [rep]}
-    (REPORT_RUNS / f"{ts}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=1))
-    print(f"\n报告: eval/report/runs/{ts}.json")
+    with report_archive.open_archive(REPORT_RUNS) as (out, f):
+        ts = Path(out).stem
+        payload = {"ts": ts, "corpus": corpus, "queries": len(QUERIES), "runs": [rep]}
+        json.dump(payload, f, ensure_ascii=False, indent=1)
+    print(f"\n报告: {out}")
 
 
 if __name__ == "__main__":

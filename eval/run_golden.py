@@ -98,6 +98,7 @@ from agent.principal import Principal  # 管理助手用例的调用者身份（
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
 import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
+import report_archive  # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
 import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
 import identity_preflight  # 同目录：真身份通道的前置在位检查（20260926）
 import landing_gate  # 同目录：落地判定（两层门禁 / 慢性红榜，20261001）
@@ -2273,9 +2274,10 @@ def main():
         print(f"[rerun] 终判 {len(cases) - failed}/{len(cases)}（首跑红 {failed_first} 条，"
               f"其中 {failed_first - failed} 条复跑绿）")
 
-    # 报告：last_run.json 供工具读取（每次覆盖）；runs/<ts>.json 全量留档（防覆盖丢历史，
-    # 基线对比查旧档用）。eval/report/ 整体 gitignore，baseline_*.json 例外进 git（见 .gitignore）。
-    ts_str = time.strftime("%Y%m%d_%H%M%S")
+    # 报告：last_run.json 供工具读取（每次覆盖）；runs/<ts>.json 全量留档（基线对比查旧档用）。
+    # eval/report/ 整体 gitignore，baseline_*.json 例外进 git（见 .gitignore）。
+    # 留档名由 report_archive 在**写的那一刻**取（20261002）：原来那句注释写着"防覆盖丢
+    # 历史"，而秒级 ts 让同一秒的两次跑同名互相覆盖——注释与行为恰好是反的（见模块头注）。
     os.makedirs("eval/report", exist_ok=True)
     os.makedirs("eval/report/runs", exist_ok=True)
     # 耗时基线（20260829，RAG 动工前置）：全量用例耗时分布 P50/P95——
@@ -2442,7 +2444,10 @@ def main():
     if _is_full_run:
         with open(REPORT_FILE, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=1)
-    with open(f"eval/report/runs/{ts_str}.json", "w", encoding="utf-8") as f:
+    # 留档名在**写的那一刻**取（`O_EXCL` 占位，见 report_archive 头注）：既不占着空文件
+    # 等，也没有"两个跑法都查过、都说这个名字没人用"的空档。复审单与留档同名成对。
+    with report_archive.open_archive("eval/report/runs") as (archive, f):
+        ts_str = os.path.splitext(os.path.basename(archive))[0]
         json.dump(report, f, ensure_ascii=False, indent=1)
 
     # 20260912：FAIL 复审导出——夜间回归连红而假失败/真 FAIL 混在一起无人复审
@@ -2581,7 +2586,7 @@ def main():
           + (f"  ⚠ 被跳过：{_reg_skipped}（组内分母随之变小）" if _reg_skipped else ""))
     print(f"报告: {REPORT_FILE}" if _is_full_run
           else f"报告: （**非全量跑**，未覆盖 {REPORT_FILE}）")
-    print(f"留档: eval/report/runs/{ts_str}.json")
+    print(f"留档: {archive}")
     # golden trace 目录（20260922）：跑完收一个口——目录名是时间戳，只留最近 N 次
     # （一次全量上百份 × 每次一跑，不清理就是又一个只会长胖的目录）。**只删
     # `%Y%m%d_%H%M%S` 形状的目录**，根目录下别的东西一概不碰（见 golden_trace.prune）。

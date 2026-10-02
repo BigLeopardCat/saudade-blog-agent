@@ -3,6 +3,8 @@
 180s 超时 SIGABRT（faulthandler 栈）再 SIGKILL——防 LLM/HTTP 悬挂污染后续用例。
 用法（仓库根 cwd）: nohup .venv/bin/python eval/golden_full_run.py
 报告: eval/report/runs/<ts>.json **并更新 eval/report/last_run.json**
+（`<ts>` = `YYYYMMDD_HHMMSS_mmm`，20261002 起毫秒级：秒级会让同秒两次跑同名覆盖，
+ 见 eval/report_archive.py）
 （20260924 起 last_run.json 的语义 = 最近一次**全量**跑；run_golden.py 那边同样只在
  full_run 时写它，两边不打架——此前注释写着"双写不冲突"，实际是 run_golden 每次调试跑
  都会覆盖它，最后一次 `--only <单条>` 就把它写成了 total=1）
@@ -15,6 +17,7 @@ failed_first_run）与汇总打印。复跑的 trace 用 `<case>__rerun` 名，�
 import io, json, os, signal, subprocess, sys, time
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
 sys.path.insert(0, "eval")
+import report_archive   # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
 
 CASES = [json.loads(l) for l in open("eval/golden/basic.jsonl", encoding="utf-8") if l.strip()]
 # 需要**真实身份**的用例（管理员读后台 20260921；普通用户被拒那条 20260924）：口径与
@@ -195,14 +198,16 @@ print(f"回归组: {len(_REG) - len(_reg_bad)}/{len(_REG)}"
       + (f"  ⚠ 复跑才绿：{_reg_flaked}（首跑红，已按方差放行——首跑/复跑两条都在报告里）"
          if _reg_flaked else ""))
 
-ts = time.strftime("%Y%m%d_%H%M%S")
 # 指标口径与 run_golden.py **共用同一份实现**（20260924）：Wilson 区间与按 tag 分组都
 # 从那边导入，不在这里抄第二份——两份判据/两份统计必然会漂移（build_request 那条
 # "字段表只留一处"的教训是同一个道理，只是那次漂移的是请求体、这次会是数字）。
 from run_golden import wilson_ci, by_tag_stats           # noqa: E402
 from run_golden import _planner_engine                   # noqa: E402
 _TAGS_MAP = {r["id"]: r["tags"] for r in results}
-report = {"ts": ts, "corpus": "full", "total": len(CASES), "passed": len(CASES) - failed,
+# `ts`（= 留档文件名那串戳）在**写的那一刻**由 report_archive 给出（见文件末尾）——
+# 这里先留空位，写之前补上：名字与报告里那一格因此恒成对，中间也无需预告一个可能
+# 被顺延的戳。
+report = {"ts": "", "corpus": "full", "total": len(CASES), "passed": len(CASES) - failed,
           # 接口层档位（20260927 主线批 A）：与 run_golden.py 同名字段同来源（那个函数
           # 是 planner_node 自己用的那一个）。子进程是父进程 spawn 的、继承同一份 env，
           # 在父进程里问一次就等于问所有子进程。
@@ -235,14 +240,19 @@ report = {"ts": ts, "corpus": "full", "total": len(CASES), "passed": len(CASES) 
           # 这一轮的 trace 目录（20260922）：run_id 是本进程定的，子进程都落在它下面
           "trace_run": GOLDEN_RUN,
           "cases": results}
-with open(f"eval/report/runs/{ts}.json", "w", encoding="utf-8") as f:
+# 留档名在**写的那一刻**取（`O_EXCL` 占位，见 eval/report_archive.py 头注）：秒级 ts 会让
+# 同一秒的两次跑（本跑法 + 一次 `--only` 调试跑）同名互相覆盖。`ts` 跟着文件名走（报告
+# 里那一格与文件名成对，读的人不用换算）。
+with report_archive.open_archive("eval/report/runs") as (archive, f):
+    ts = os.path.splitext(os.path.basename(archive))[0]
+    report["ts"] = ts
     json.dump(report, f, ensure_ascii=False, indent=1)
 # `last_run.json` 的语义（20260924 定）：**最近一次全量跑**。这个跑法就是全量跑，
 # 所以由它写（run_golden.py 那边加了 full_run 判据，非全量不再覆盖——此前一次
 # `--only <单条>` 的调试跑会把它写成 total=1）。
 with open("eval/report/last_run.json", "w", encoding="utf-8") as f:
     json.dump(report, f, ensure_ascii=False, indent=1)
-print(f"报告: eval/report/runs/{ts}.json（并更新 eval/report/last_run.json）")
+print(f"报告: {archive}（并更新 eval/report/last_run.json）")
 _lo, _hi = report["pass_rate_ci95"]
 print(f"通过率: {report['pass_rate']:.3f}（Wilson 95% 区间 {_lo:.3f}–{_hi:.3f}）")
 _weak = [(t, b) for t, b in report["by_tag"].items()
