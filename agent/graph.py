@@ -180,6 +180,12 @@ REFLECT_MAX_ROUNDS = 2
 SNAPSHOT_SKILLS = frozenset({"ops_report", "moderation_report", "user_report",
                              "admin_notes"})
 
+# 动作技能（20261003 提为常量）：这些技能的工具是**显式 on/off / 目标确定**的动作，
+# 一轮里同一件事只该发生一次，重复执行不会带来新结果——planner 的"动作重复防护"
+# 两处（同轮纠偏、轮末兜底）共用这一份名单，别再各写一遍（漏一处 = 两处判据分叉）。
+_ACTION_SKILLS = ("navigate", "effect", "darkmode", "device_display", "device_query",
+                  "read_article")
+
 # 后台写技能（20260921 第二轮）：**不是**快照型——见 planner 里的重复规划防护。
 # 20260921 第三轮评估（新写技能 tag_update/tag_delete/category_* 要不要进来）→ **不进**。
 # 判据是"同一件事已经做过"的正确性而不是省一轮：这三族里"再做一次"是**正常请求**
@@ -4685,6 +4691,79 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             correction = nudge
             continue
 
+        # 动作重复纠偏（20261003）：非首轮 planner 又规划了**已执行过**的动作技能，
+        # 而意图清单里还有没做完的动作。只"不放行收尾"不够——轮末那条兜底拦得住
+        # 收尾、拦不住它原地重选同一个技能，于是轮次被同一件事耗光、第二件事照样丢
+        # （扫 `logs/agent/golden_traces/` 全量 4174 份：golden
+        # `multi_step_referent_nav_effect` 那句「带我过去，然后帮我把樱花打开」有过
+        # 连选 2 次 / 3 次 / 4 次 navigate 的同形轮次，零 EFFECT 帧）。走既有同轮纠偏
+        # 通道（`correction`，只此一次）
+        # 把**机器能保证的事实**讲给它：上一轮执行了什么、清单里还剩什么——决策权
+        # 仍归 planner。
+        # 仍重复 ⇒ 轮末兜底照原样放行（动作幂等无害），不夺它的判断。
+        # 位置在剔空纠偏**之前**：两条互斥（这条要 tools 非空，那条要 tools 空），
+        # 但剔空那条以 `break` 收尾，排在它后面的代码永远到不了。
+        if (not correction and has_frames and plan_obj["tools"]
+                and plan_obj["skill"] in _ACTION_SKILLS):
+            _frames = {getattr(m, "name", "") or "" for m in state["messages"]
+                       if isinstance(m, ToolMessage)}
+            _planned = {_tool_name(s) for s in plan_obj["tools"]}
+            _left = _pending_intents(state)
+            if _planned and _planned <= _frames and _left:
+                correction = (
+                    "你上一轮已经执行过 " + "、".join(sorted(_planned)) +
+                    "，工具返回就在上方——**重复执行不会有新结果，只会把轮次耗光**。"
+                    "主人那句话里还有这些动作**没做完**："
+                    + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
+                    + "。本轮把没做完的那一件做掉，**不要**再重做刚刚执行过的动作。")
+                correction_kind = "动作重复"
+                record("planner", "action_repeat_correct", planned=sorted(_planned),
+                       pending=[i["key"] for i in _left], round=rounds)
+                logger.warning("[planner] 动作重复（%s）且意图清单仍有未完成项（%s）"
+                               "→ 纠偏重决策一次：%s",
+                               "、".join(sorted(_planned)),
+                               "、".join(i["key"] for i in _left), correction[:120])
+                # 与上面两条纠偏同路：`continue` 让 `{correction}` 槽重新渲染一次
+                # （`for _attempt` 只跑两轮，第二次进来 `not correction` 为假 ⇒ 只纠一次）。
+                continue
+
+        # 收尾丢意图纠偏（20261003）：planner 在这一轮**零工具**（等于自己宣布收尾），
+        # 而意图清单里还留着**一次都没被规划过**的动作。每轮都注入的 intent_hints
+        # 明明把它标着"**未完成**"，它却收尾了 ⇒ 收尾注记只会写"本轮只是收尾"，
+        # 与那件事相关的工具返回一条都没有，narrator 手里只剩主人的原话 —— 于是
+        # 如实答成"没帮你做"（它没有别的可说）。主人要的却是把它做掉。
+        # 现场（golden `multi_step_referent_nav_effect`，20260927_035120 那次失败）：
+        # 第 0 轮 navigate 成功，第 1 轮 planner 直接 `SKILL=chat` 收尾、零 EFFECT 帧，
+        # 回复落成"樱花特效这边没有执行记录"。同族的另一半（planner 原地重选**已执行
+        # 过**的动作技能、把轮次耗光）在上一支 `action_repeat_correct` 里收口。
+        #
+        # 判据为什么用 `has_frames`：首轮零工具轮是另一族（`test_unaccounted_zero_tool_round`
+        # 明写"不新增重决策通道"，零工具轮再问一次通常还是零工具）；有帧之后的零工具
+        # 才是"看过返回、决定收尾"，那才轮得到"清单里还有没做过的事吗"这一问。
+        # 判据为什么用 `not dropped`：剔空（下面那一支）说的是"你点错通道了"，与这条
+        # 互斥，且它有自己的纠偏文本与记账，不能被我这条截胡。
+        #
+        # 不会把"已经被拒过的动作"再推它重试一次：上过计划的动作（哪怕被拒）spec 都
+        # 进了 `executed`，`_intent_done` 会把它标成已完成 ⇒ 留在清单里的只能是
+        # **从没被规划过**的那些。
+        if (not correction and has_frames and not plan_obj["tools"]
+                and not plan_obj.get("dropped")):
+            _left = _pending_intents(state)
+            if _left:
+                correction = (
+                    "你这一轮**没有排任何工具**（等于宣布收尾），但主人那句话里还有这些"
+                    "动作**一次都没有被执行过**："
+                    + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
+                    + "。你手里没有与它们相关的任何工具返回。本轮先把没做过的做掉"
+                    "（一轮一件），再谈收尾。")
+                correction_kind = "收尾丢意图"
+                record("planner", "wrapup_intent_correct",
+                       pending=[i["key"] for i in _left], round=rounds)
+                logger.warning("[planner] 零工具收尾但意图清单仍有未规划项（%s）"
+                               "→ 纠偏重决策一次：%s",
+                               "、".join(i["key"] for i in _left), correction[:120])
+                continue
+
         # 剔空纠偏（见上方长注）：只有"点名的全被剔除、本轮一个工具都不剩"才重决策；
         # 已经纠偏过一次、或清单非空、或根本没点名 → 到此为止。
         if correction or plan_obj["tools"] or not plan_obj.get("dropped"):
@@ -4827,9 +4906,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 全部工具名都已在帧中出现 → 上一轮已执行，本轮强制收尾不重复执行
     # （动作一次决策即完成，多轮只应发生在 content_query 检索链路——知识型
     # 轮次允许同名检索工具重复（换关键词再搜是合法多轮）。
-    if has_frames and plan_obj["tools"] and plan_obj["skill"] in (
-            "navigate", "effect", "darkmode", "device_display", "device_query",
-            "read_article"):
+    if has_frames and plan_obj["tools"] and plan_obj["skill"] in _ACTION_SKILLS:
         frame_names = {getattr(m, "name", "") or "" for m in state["messages"]
                        if isinstance(m, ToolMessage)}
         planned_names = {_tool_name(s) for s in plan_obj["tools"]}
@@ -4848,6 +4925,11 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             logger.info("[planner] 动作重复（%s）但意图清单仍有未完成项（%s）→ 不收尾",
                         "、".join(sorted(planned_names)),
                         "、".join(i["key"] for i in pending))
+            # 同轮纠偏（上方 `action_repeat_correct`）已经拦过一道；这里是它没拦住
+            # 时的兜底。也记一笔，让"纠偏到底有没有生效"在 trace 里读得出来
+            # （只打日志 = trace 里看不见，A/B 只能靠猜）。
+            record("planner", "action_repeat_hold", planned=sorted(planned_names),
+                   pending=[i["key"] for i in pending], round=rounds)
 
     # 快照型报表技能重复规划防护（20260921，与上一条同源、判据不同）：本轮
     # 已 **checker PASS** 过的报表工具再规划一遍，拿回的是同一份快照 —— 直接收尾。

@@ -4208,6 +4208,142 @@ def test_drop_correction():
         G.get_llm = _orig_llm
 
 
+def test_multi_step_intent_correction():
+    """多步链第二件事丢失（20261003）：两道门都只"拦"不"引"，各补一次同轮纠偏。
+
+    现场是 golden `multi_step_referent_nav_effect`：「带我过去，然后帮我把樱花打开」
+    （扫 `logs/agent/golden_traces/` 全量 4174 份，这一句的同形失败有两种形状，同一
+    个病根——planner 一轮只做一件事，第二件事**再没有任何一轮会去规划它**）：
+
+      * **门一 · 原地重选**：planner 连选 2 次 / 3 次 / 4 次 navigate，零 EFFECT 帧，
+        轮次（MAX_PLAN_ROUNDS=4）被同一件事耗光；
+      * **门二 · 直接收尾**：第 0 轮 navigate 成功，第 1 轮 planner 就 `SKILL=chat`
+        （零工具）收尾，零 EFFECT 帧，回复落成"樱花特效这边没有执行记录"
+        （`20260927_035120` 那次，baseline 5 跑 1 败栽在这里）。
+
+    两种形状下既有判据都判得对、也都**只拦住收尾**：门一有轮末那条"动作已执行过但
+    清单未尽 → 不收尾"，门二则连判据都没有（轮末几条都要求 `plan_obj["tools"]` 非空，
+    而收尾轮恰恰是零工具）。共同缺口是"没人告诉它该改道了"。
+
+    契约（两条门共用同一条纠偏通道，都是**每轮只此一次**）：
+      ① 门一：重复规划**已执行过**的动作技能 ∧ 清单仍有未完成意图 ⇒ 纠偏一次；
+      ② 门二：零工具收尾 ∧ 清单里还有**一次都没被规划过**的动作 ⇒ 纠偏一次
+         （首轮零工具轮不在此列——那是另一族，`test_unaccounted_zero_tool_round`
+         明写"不新增重决策通道"；剔空那一支有自己的纠偏文本，不在这条里截胡）；
+      ③ 两处纠偏都只写机器能保证的事实（已执行过什么 / 还剩什么），**不替它选技能**；
+      ④ **只纠一次**：第二次再重复就照原样放行（动作幂等无害），不夺它的判断。
+    """
+    print("[multi_step] 第二件事丢失的两道门 ⇒ 各补一次同轮纠偏（不夺决策权）")
+    import agent.graph as G
+    from agent.graph import parse_plan, planner_node
+    from agent.principal import Principal
+
+    class _ScriptedLLM:
+        def __init__(self, replies):
+            self.replies, self.prompts = list(replies), []
+
+        def invoke(self, prompt):
+            self.prompts.append(prompt)
+            return AIMessage(content=self.replies.pop(0))
+
+    _NAV = ('SKILL=navigate\nPARAMS={"target": "首页"}\nREPLY: 好的，带你去首页')
+    _CHAT = 'SKILL=chat\nPARAMS={}\nREPLY: 已经带你过去了'
+    _EFF = ('SKILL=effect\nPARAMS={"effect": "sakura", "action": "on"}\n'
+            "REPLY: 樱花给你开上了")
+    # 第二轮 planner 看到的现场：主人那句含两件动作的话 + 上一轮 navigate 的工具帧。
+    _MSGS = [HumanMessage(content="带我过去，然后帮我把樱花打开"),
+             AIMessage(content=_NAV),
+             ToolMessage(content="已跳转到首页", tool_call_id="execute_0",
+                         name="navigate_to")]
+    _STATE = {"messages": list(_MSGS), "plan_rounds": 1,
+              "executed": ['navigate_to({"path": "/"})'], "tool_data": []}
+    _CFG = {"configurable": {"principal": Principal(uid=7, role="user"),
+                             "user_id": 7, "conversation_id": 42, "stop_event": None}}
+
+    _orig_llm, _orig_record = G.get_llm, G.record
+    _events: list = []
+    try:
+        G.record = lambda *a, **k: _events.append((a, k))  # noqa: ARG005
+
+        # ① 门一：重复规划 navigate（帧里已有）⇒ 同轮纠偏，planner 改道去 effect。
+        llm = _ScriptedLLM([_NAV, _EFF])
+        G.get_llm = lambda **kw: llm
+        out = planner_node(dict(_STATE), _CFG)
+        check("门一·重复规划已执行过的动作技能 ⇒ 同轮纠偏一次（不是就此放行）",
+              len(llm.prompts) == 2, f"llm_calls={len(llm.prompts)}")
+        check("  第二版决策真的改了道（navigate → effect）",
+              "SKILL=effect" in out["plan"], out["plan"].splitlines()[0])
+        check("  纠偏文本讲的是机器能保证的两件事（已执行过 / 还剩什么）",
+              "重复执行不会有新结果" in llm.prompts[1]
+              and "effect:sakura=on" in llm.prompts[1])
+        check("  首决策那次不带纠偏（缺省语，不无谓干扰）",
+              "无纠偏提示" in llm.prompts[0]
+              and "无纠偏提示" not in llm.prompts[1])
+        check("  纠偏落 trace（判据读得到，不靠猜）",
+              any(a[:2] == ("planner", "action_repeat_correct") for a, _ in _events),
+              str([a[1] for a, _ in _events]))
+
+        # ② 门一：纠偏过后**仍然**重复 ⇒ 不再纠（只此一次）：放行原计划，它下一轮
+        #    仍在清单未尽时被兜底拦住（只记账，不改计划）。
+        _events.clear()
+        llm2 = _ScriptedLLM([_NAV, _NAV])
+        G.get_llm = lambda **kw: llm2
+        out2 = planner_node(dict(_STATE), _CFG)
+        plan2 = parse_plan(out2["plan"])
+        check("只纠一次：第二次再重复就照原样放行（动作幂等，不夺它的判断）",
+              len(llm2.prompts) == 2 and plan2["skill"] == "navigate"
+              and bool(plan2["tools"]),
+              f"llm_calls={len(llm2.prompts)} skill={plan2['skill']} tools={plan2['tools']}")
+        check("  兜底那一步在 trace 里读得到（`action_repeat_hold`）",
+              any(a[:2] == ("planner", "action_repeat_hold") for a, _ in _events),
+              str([a[1] for a, _ in _events]))
+
+        # ③ 门二：planner 零工具收尾（chat）而清单里还有**从没被规划过**的 effect
+        #    ⇒ 同轮纠偏，把它拉回来做掉那一件（正是 golden 那次失败的形状）。
+        _events.clear()
+        llm3 = _ScriptedLLM([_CHAT, _EFF])
+        G.get_llm = lambda **kw: llm3
+        out3 = planner_node(dict(_STATE), _CFG)
+        check("门二·零工具收尾但清单里还有没做过的动作 ⇒ 同轮纠偏一次",
+              len(llm3.prompts) == 2, f"llm_calls={len(llm3.prompts)}")
+        check("  第二版决策真的把丢下的那一件捡起来了",
+              "SKILL=effect" in out3["plan"], out3["plan"].splitlines()[0])
+        check("  纠偏说的是机器能保证的事实（没排工具 / 一次都没执行过 / 还剩什么）",
+              "没有排任何工具" in llm3.prompts[1]
+              and "一次都没有被执行过" in llm3.prompts[1]
+              and "effect:sakura=on" in llm3.prompts[1])
+        check("  纠偏落 trace（`wrapup_intent_correct`）",
+              any(a[:2] == ("planner", "wrapup_intent_correct") for a, _ in _events),
+              str([a[1] for a, _ in _events]))
+
+        # ④ 反向：清单里没有未完成动作时**两道门都不纠**——门一那条重复走已有的
+        #    去重收尾（零额外 token），门二的收尾也照旧。
+        _done = dict(_STATE)
+        _done["messages"] = [
+            HumanMessage(content="带我过去"),
+            AIMessage(content=_NAV),
+            ToolMessage(content="已跳转到首页", tool_call_id="execute_0",
+                        name="navigate_to")]
+        llm4 = _ScriptedLLM([_NAV])
+        G.get_llm = lambda **kw: llm4
+        planner_node(_done, _CFG)
+        check("清单里没有未完成动作 ⇒ 不纠偏（零额外 token）",
+              len(llm4.prompts) == 1, f"llm_calls={len(llm4.prompts)}")
+
+        # ⑤ 反向：那一件事**已经上过计划**（哪怕被拒，spec 都进了 `executed`）
+        #    ⇒ `_intent_done` 判它已完成、不留在清单里 ⇒ 收尾轮不会被推着重做一遍。
+        _attempted = dict(_STATE)
+        _attempted["executed"] = _STATE["executed"] + [
+            'toggle_effect({"effect": "sakura", "action": "on"})']
+        llm5 = _ScriptedLLM([_CHAT])
+        G.get_llm = lambda **kw: llm5
+        planner_node(_attempted, _CFG)
+        check("做过的动作不会再被推着重做（`executed` 里有过就算做过）",
+              len(llm5.prompts) == 1, f"llm_calls={len(llm5.prompts)}")
+    finally:
+        G.get_llm, G.record = _orig_llm, _orig_record
+
+
 def test_unaccounted_zero_tool_round():
     """「不成账」的零工具轮 → 确定性收尾，绝不直落 narrator（20260929 批 G，D1）。
 
@@ -5189,6 +5325,7 @@ def main():
                test_short_reply_and_adjacent_pairs,
                test_no_sibling_tool_name_in_user_text, test_site_guide_is_role_rendered,
                test_site_guide_covers_nav_map, test_drop_correction,
+               test_multi_step_intent_correction,
                test_unaccounted_zero_tool_round,
                test_calls_in_wrong_skill_round,
                test_write_target_refusal_round, test_write_grounding_round,
