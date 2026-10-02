@@ -33,6 +33,7 @@ sys.path.insert(0, str(EVAL))
 sys.path.insert(0, str(ROOT))
 
 import golden_trace          # noqa: E402
+import report_archive        # noqa: E402
 import run_golden as rg      # noqa: E402
 
 FAILS: list[str] = []
@@ -255,6 +256,21 @@ check("非全量仍留档 runs/<ts>.json", len(r["archived"]) == 1 and r["archiv
 
 print("\n⑥ 同一目录先全量、后 --only：基线必须还是全量那一份")
 _tmp = tempfile.mkdtemp(prefix="golden_rerun_base_")
+# **把撞车钉出来**（20261002）：真实时钟下这两次跑相隔几十毫秒，撞不上——而缺陷的条件
+# 恰恰是"两次跑落在同一刻"。只把"取时刻"这一处钉死（命名、`O_EXCL` 占位、写盘都是真
+# 实现），两次跑就落在同一个毫秒上：留档名必须各占一个，先跑那份不许被覆盖。
+_real_open = report_archive.open_archive
+_frozen_calls: list = []
+_FROZEN_TS = 1759366400.125      # 任意一个带毫秒的整秒
+
+
+def _frozen_open(dirpath, *, ext=".json", now=None):
+    _frozen_calls.append(1)
+    return _real_open(dirpath, ext=ext,
+                      now=_FROZEN_TS if len(_frozen_calls) <= 2 else now)
+
+
+report_archive.open_archive = _frozen_open
 try:
     r1 = drive([mkcase("reg_a", ["regression"]), mkcase("reg_b", ["regression"])],
                {"reg_a": [GREEN], "reg_b": [GREEN]}, tmp=_tmp)
@@ -275,6 +291,14 @@ try:
     # 的是"这一轮自己那份是 total=1"，两种时序下都得成立。
     _own = (json.load(open(r2["archived"][-1], encoding="utf-8"))
             if r2["archived"] else None)
+    # 「这一轮自己的那份」能被读到，前提是**两份都在**：留档名此前是秒级 ts，全量跑与
+    # `--only` 跑落在同一秒就同名，先跑那份被覆盖（20261002 修，见 eval/report_archive.py）。
+    # 这条断言此前只在"没撞车"那半时序里绿——现在两种时序都得两份。
+    _stems = [os.path.basename(x)[: -len(".json")] for x in r2["archived"]]
+    check("两次跑被钉在同一毫秒，留档仍各占一个（第二个顺延一毫秒，两份都在）",
+          len(_stems) == 2
+          and _stems[0] == "20251002_085320_125" and _stems[1] == "20251002_085320_126",
+          f"{_stems}")
     check("--only 这一轮自己的留档是 total=1（它确实只跑了 1 条）",
           _own is not None and _own["total"] == 1,
           f"{(_own or {}).get('total')}（目录里 {len(r2['archived'])} 份留档）")
@@ -286,6 +310,7 @@ try:
           _after["total"] == 2 and _after["full_run"] is True,
           str({k: _after[k] for k in ("total", "full_run")}))
 finally:
+    report_archive.open_archive = _real_open
     shutil.rmtree(_tmp, ignore_errors=True)
 
 print("\n⑦ 双轮用例：第 2 轮的令牌只能来自第 1 轮的控制帧（20260925）")
