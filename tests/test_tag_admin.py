@@ -597,6 +597,10 @@ _MIN_PARAMS = {
     # 一旦写成一个真账号，将来谁把这条用例改成真跑就成了生产写。
     "account_freeze": {"name": "probe_target_1"},
     "account_unfreeze": {"name": "probe_target_1"},
+    # 变更身份（20261002 批 J）：与冻结族同一条名字通道（`_find_named_user` 对后台
+    # 名录解析），多一个必填的 `role`。⚠️ 名字同样必须**明显是假的**（同上那条纪律）；
+    # `role` 填的是**人话**（展开器负责归一成代号 zako / user 再落进 spec）。
+    "account_set_role": {"name": "probe_target_1", "role": "杂鱼"},
     # 勾完成待办（20260926 第十轮）：同族（目标也是自由文本）但另一个展开函数。
     # 正文写成一条**明显是假的**事（同上面那条纪律：将来谁把这条改成真跑，也只是
     # 一次"列表里没有这一条"的零写，不会动到主人的真待办）。
@@ -651,6 +655,7 @@ _EXPECT_TOOL = {
     "quota_approve": "approve_quota_request",
     "quota_reject": "reject_quota_request",
     "quota_reset": "reset_user_quota",
+    "account_set_role": "set_account_role",
     # 变更集（20260929 批 F）：期望值是**列表**——它的 `plan` 是"允许出现的工具全集"
     # 而不是固定序列，展开结果由 `params.specs` 逐条决定（下面那条判据按形状取值）。
     "review_inbox": ["audit_board_comment", "approve_quota_request"],

@@ -1402,6 +1402,108 @@ def render_account_status(username: str, uid, frozen: bool, changed: bool = True
             f"（后台已复核：名录里这个账号现在就是{account_state_cn(frozen)}状态）")
 
 
+# ── 变更账号身份（20261002：下放给管理员 + agent 代理）───────────────────
+# 与冻结族**同一族**（目标都是后台名录里的一个账号名、都要印 id 与现状），但有三处
+# 与它刻意不同形，都是"这两件事不是一件事"的直接后果：
+#   ① **卡面必须印出"从什么身份 → 什么身份"**。冻结只动一个开关（现状是二选一，
+#      印出来就够），而身份是五档里的一个值——只印目标身份的话，主人核对不了
+#      "他原来是管理员吗"（那正是这一下最需要他看的一格）；
+#   ② **后果句随目标身份变**（改成杂鱼与改回普通用户是两种晚年）。
+#      写成一句通用的「会改身份」等于没说——他要判断的是"把这个人改成杂鱼到底
+#      意味着什么"；
+#   ③ 措辞里**不写**任何权限档位的规则（"管理员只能改两档"那类）——那是后端
+#      `authz::check_role_change` 的话，agent 侧复述一遍就会在政策变更那天变成假话
+#      （同 `_policy_post` 那条"逐字转述后端原话"的纪律）。
+ROLE_CN = {"superadmin": "超级管理员", "admin": "管理员", "secretary": "秘书",
+           "user": "普通用户", "zako": "杂鱼"}
+# 说法 → 身份码。**五档都认**，包括 superadmin：认出来之后由后端按政策拒
+# （「超级管理员身份不能在这里指派」是一句**真话**，而"认不出这个身份"是一句错话）。
+# 只认这两档的写法**不是**这里的判据——那是 `authz::check_role_change` 的事。
+_ROLE_ALIASES = {
+    "superadmin": "superadmin", "超级管理员": "superadmin", "超管": "superadmin",
+    "admin": "admin", "管理员": "admin", "管理员账号": "admin",
+    "secretary": "secretary", "秘书": "secretary", "小编": "secretary",
+    "user": "user", "普通用户": "user", "普通账号": "user", "普通": "user",
+    "zako": "zako", "杂鱼": "zako", "杂鱼酱": "zako",
+}
+# 目标身份的**后果句**。这一格与 `_ACCOUNT_CONSEQ`（冻结族）同一条纪律：差异要落在
+# **后果**上，不能只换动词——「会改成杂鱼」与「会改成普通用户」读起来是同一个动作的
+# 两个方向，而真正的区别是"他还能不能使唤 agent"。
+_ROLE_CONSEQ_TAIL = "他当前所有登录会话立刻失效，必须重新登录一次"
+_ROLE_CONSEQ = {
+    "zako": "他当场被踢下线；再登录进来就是**杂鱼**了——和泠月喵说话时对方只会闲聊，"
+            "任何站内操作都不会替他做",
+    "user": "他当场被踢下线；再登录进来就恢复成普通访客的权限"
+            "（能干的事与刚注册时一样）",
+}
+_ROLE_CONSEQ_OTHER = "他当场被踢下线，再登录进来就是新的身份了"
+
+
+def role_cn(role) -> str:
+    """身份码 → 人话。**未登记的身份原样回显**（不编一个中文名）：卡面要如实，
+    而"认不出的编码"正是最该让主人看见的东西。"""
+    key = str(role or "").strip()
+    return ROLE_CN.get(key, key or "未知身份")
+
+
+def normalize_role(value) -> str | None:
+    """主人/模型给的身份说法 → 身份码；认不出 → **None**（调用方零工具 + 如实问）。
+
+    两份词表合一（英文码与中文名）：后台名录里的 `role` 是英文码，而技能描述与主人
+    的话都是中文——只认一份会让另一份在展开层被当成"认不出来"（一句错话：站内明明
+    有这个身份）。
+    """
+    key = str(value or "").strip().strip("「」\"'")
+    if not key:
+        return None
+    return _ROLE_ALIASES.get(key) or _ROLE_ALIASES.get(key.lower())
+
+
+def render_account_role(username: str, to_role, users=None) -> str:
+    """`把账号「guest5」（账号 id=126，现在：普通用户）的身份改成**杂鱼**（…后果…）`
+    ——**卡面、问句、跨轮待办的目标**共用这一行。
+
+    `users` 三态与 `render_account_action` 逐字同源（读不到就少说，**不因此不弹窗**）：
+    快照在手但名字不在 → 只印名字 + 「后台账号列表里没有叫这个名字的账号」，且
+    **不再报后果**（做不成的事说后果只会误导）；快照读不到 → 只印名字 + 后果。
+
+    **现状那一格取自名录**（不是取模型填的值）：模型填的 `from` 是它自己说的，
+    而卡面要印的是**后台此刻的事实**——两者不一致时主人该看见的是后者。
+    """
+    want = normalize_role(to_role)
+    shown = role_cn(want) if want else str(to_role or "").strip() or "（没有给出身份）"
+    head = f"把账号「{username}」的身份改成**{shown}**"
+    row = _account_row(users, username)
+    if users and row is None:
+        return f"{head}（后台账号列表里没有叫这个名字的账号）"
+    where = ""
+    if row is not None:
+        where = f"账号 id={row.get('id')}，现在：{role_cn(row.get('role'))}。"
+    conseq = _ROLE_CONSEQ.get(want or "", _ROLE_CONSEQ_OTHER)
+    return f"{head}（{where}{conseq}；{_ROLE_CONSEQ_TAIL}）"
+
+
+def account_role_change_phrase(to_role, changed: bool) -> str:
+    """回执的 `change` 摘要：**必须区分"刚改的"与"本来就是"**（同冻结族那条）。"""
+    label = role_cn(to_role)
+    if not changed:
+        return f"身份本来就是{label}，本次未发生变更"
+    return f"已改为{label}"
+
+
+def render_account_role_status(username: str, uid, to_role, before_role=None,
+                               changed: bool = True) -> str:
+    """变更身份成功后的回执行（工具 side 用；与卡面同源同事实）。"""
+    label = role_cn(to_role)
+    if not changed:
+        return (f"账号「{username}」（账号 id={uid}）**本来就是{label}身份**，"
+                f"这次没有发生任何变更（没有重复变更）")
+    conseq = _ROLE_CONSEQ.get(str(to_role or "").strip(), _ROLE_CONSEQ_OTHER)
+    return (f"已把账号「{username}」（账号 id={uid}）的身份从"
+            f"「{role_cn(before_role)}」改为「{label}」：{conseq}；{_ROLE_CONSEQ_TAIL}"
+            f"（后台已复核：名录里这个账号现在就是{label}身份）")
+
+
 # ── 给单个账号发通知（20260926）─────────────────────────────────────────
 # 这一族的卡面有**一条硬要求**（不是文风问题）：正文**全文**印出来。理由是这件事的
 # 性质——正文由模型按主人的意思**整理**（用户拍板的方向，见 `_send_user_notice` 头注），
@@ -1982,6 +2084,13 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         # 写进卡面，给不起只印名字（**不因此不弹窗**，同全表取向）。
         return render_account_action(str(a.get("name") or "").strip() or "（没有给出账号名）",
                                      tool == "freeze_account", users)
+    if tool == "set_account_role":
+        # 变更身份（20261002）：同走账号名录（`users`），但卡面**必须**印出"现在
+        # 是什么身份"（见 `_ROLE_*` 那段头注①）——只印目标身份，主人核对不了
+        # "他原来是不是管理员"。刻意与冻结卡不同形：冻的是"一个开关"，改的是
+        # "他在哪一档"（后果句也跟着目标身份走）。
+        return render_account_role(str(a.get("name") or "").strip() or "（没有给出账号名）",
+                                   a.get("role"), users)
     if tool == "send_user_notice":
         # 发通知（20260926）：与冻结族同走账号名录（`users`），但**卡面必须印出正文
         # 全文**——见 `render_notice_action` 头注那条硬要求。刻意与冻结卡不同形：
@@ -2270,6 +2379,25 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
         # 「已冻结」——后者在气泡里读起来像"系统刚替你冻了一次"。
         return (f"账号「{name}」（账号 id={row.get('id')}）"
                 f"现在就是{'冻结' if want else '正常'}状态")
+    if tool == "set_account_role":
+        # 变更身份（20261002）：判据与上面冻结那一支同形——**现状取自名录**，
+        # 读不出/名字不在/身份认不出/本来就是目标身份以外，一律判"没达成"照弹卡。
+        # 目标身份认不出（模型填了个不存在的身份）⇒ 判不了 ⇒ 照弹：那会走工具的
+        # 零写出口（后端"站内没有这个身份"原话），不是"已达成"。
+        users = s.get("users")
+        if not isinstance(users, dict) or not users:
+            return None
+        name = str(a.get("name") or "").strip()
+        row = _account_row(users, name)
+        if row is None:
+            return None
+        want = normalize_role(a.get("role"))
+        if want is None:
+            return None
+        if str(row.get("role") or "").strip() != want:
+            return None
+        return (f"账号「{name}」（账号 id={row.get('id')}）"
+                f"现在的身份本来就是{role_cn(want)}")
     if tool in ("approve_quota_request", "reject_quota_request"):
         # 批准与驳回（20261001 修，同一条判据）：这两件**消耗的都是"一条待处理的申请"**
         # （服务端按 `WHERE status=0` 认领那一行），与**计数器的当前值无关**。

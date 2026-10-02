@@ -181,6 +181,11 @@ WRITE_CLAIM_ROOTS = {
     "reset_user_quota": r"重置|恢复额度|额度恢复",
     "freeze_account": r"冻结|封号|封掉",
     "unfreeze_account": r"解冻|解封",
+    # 变更身份（20261002 批 J）：词根覆盖"改成/改为/设成/降成/恢复成"这一族
+    # （技能描述里的动词与主人常说的都在里头）——洞⑨ 那条消费者（`test_write_done_claim.py`
+    # 的同步锁）会检查每个 write scope 工具都在这张表上，漏了当场红。
+    # ⚠️ 与冻结族**必须不同形**：改的是"他在哪一档"，不是"开/关"。
+    "set_account_role": r"改成|改为|设为|设成|变更为|变更|调成|转成|降成|降为|升成|提升为|恢复成",
     "send_user_notice": r"发(?:送|了)?(?:站内)?通知|通知了",
     "create_tag": r"新建|创建|建好|添加|加上|加了",
     "update_tag": r"修改|改名|改成|更新|重命名",
@@ -584,6 +589,25 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         # 带上 `change`（"状态本来就是冻结，本次未发生变更"这类）：幂等/未变更的那一次
         # 只写「冻结账号「X」」，跨轮记忆里就成了一次真动作。
         return f"{verb}「{acct}」：{change}" if change else f"{verb}「{acct}」"
+    if name == "set_account_role":
+        # 变更身份（20261002 批 J）。同账号族两条纪律（只报账号名、**不报 uid**），
+        # 外加这一族独有的一条：**方向必须写进这一行**——同一件工具既能降成杂鱼、
+        # 也能升回普通用户，台账行上只写「改了账号「X」的身份」跨轮读回来是一团
+        # 说不清的雾（主人下轮问"你把他改成什么了"），所以目标那一档一律印出来。
+        # 那一档取自回执 meta 的 `after`（= 工具写后重读名录得到的**事实**，不是
+        # 模型填的值）；`after` 缺失时退回参数原样（preview 档也走这条路）。
+        role_cn = _m(m, "after") or _leaf(a.get("role"))
+        if preview:
+            acct = _leaf(a.get("name"))
+            head = f"变更账号「{acct}」的身份" if acct else "变更账号身份"
+            return f"{head}为「{role_cn}」" if role_cn else head
+        acct = _m(m, "account_name") or _leaf(a.get("name"))
+        head = f"变更账号「{acct}」的身份" if acct else "变更账号身份"
+        head = f"{head}为「{role_cn}」" if role_cn else head
+        change = _m(m, "change")
+        # 同冻结族：带上 `change`（"身份本来就是杂鱼，本次未发生变更"），否则幂等的
+        # 那一次在跨轮记忆里就成了一次真动作。
+        return f"{head}：{change}" if change else head
     if name == "send_user_notice":
         # 与冻结族同一条纪律：只报**账号名**、**不报 uid**、**不报正文**（正文是主人
         # 刚在确认卡上核对过的那段话，两行里再抄一遍会让卡片上面的字和下面的字看起来

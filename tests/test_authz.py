@@ -220,7 +220,11 @@ CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), 
 # 相等"，而错格子的代价更隐蔽：勾错了看得见（列表上多一个勾），日子改错了**没有任何
 # 痕迹**，主人要等到那天没被提醒才发现。同族的 `create_dashboard_todo` /
 # `complete_dashboard_todo` 已在名单里，这一条不与它们分家。
-check("需确认的工具恰好是二十六个（二十二个后台写 + 四个用户自己的写）",
+# 20261002 到二十七个：批 J 的 `set_account_role`（变更一个后台账号的身份）。与冻结族
+# 同一条理由——它动的**不是主人的东西**，而后果比冻结更"换档"：降成杂鱼 = 那个账号以后
+# 什么站内操作都做不了、只能闲聊，升回普通用户 = 把能力还给他。用户拍板"每次都弹卡"，
+# 卡面必须印全「从哪个身份 → 到哪个身份」（详见 authz 里 `_ALWAYS_CONFIRM_TOOLS` 的注）。
+check("需确认的工具恰好是二十七个（二十三个后台写 + 四个用户自己的写）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
                         "create_announcement", "update_announcement",
@@ -232,6 +236,7 @@ check("需确认的工具恰好是二十六个（二十二个后台写 + 四个�
                         "send_user_notice",
                         "approve_quota_request", "reject_quota_request",
                         "reset_user_quota",
+                        "set_account_role",
                         "set_article_status", "set_article_tags",
                         "add_favorite", "remove_favorite", "read_notifications",
                         "read_messages"},

@@ -696,7 +696,7 @@ for name, tool, args in [("admin_notes", "list_admin_notes", {}),
     check(f"技能 {name} 在位、对管理员族可见、计划首项是 {tool}",
           sk is not None and sk.roles == ADMIN_ROLES
           and [t for t, _ in sk.plan] == [tool], str(sk and (sk.roles, sk.plan)))
-check("写技能名单 = 二十七个**技能**名（instantiate_plan 缺参守卫按它分支；"
+check("写技能名单 = 二十八个**技能**名（instantiate_plan 缺参守卫按它分支；"
       "注意它与工具名不是一套字面量，混用会让守卫静默不生效）",
       WRITE_SKILL_NAMES == frozenset({"tag_create", "tag_update", "tag_delete",
                                       "category_create", "category_update",
@@ -764,7 +764,14 @@ check("写技能名单 = 二十七个**技能**名（instantiate_plan 缺参守�
                                       # 它进这份名单是被**派生锁**逼的（这个技能的
                                       # plan 里全是写工具，目录设计锁 test_account_freeze
                                       # 第 ⑯ 条钉着），不是"想让 planner 选它"
-                                      "review_inbox"})
+                                      "review_inbox",
+                                      # 变更账号身份（20261002 批 J）：与冻结族逐条同形
+                                      # （技能名 account_set_role ≠ 工具名
+                                      # set_account_role，目标是后台名录里的账号名）
+                                      # ——漏在这份名单外同样落进尾部"未知的写技能"
+                                      # 兜底：零工具、零写、还不报错（test_account_role
+                                      # 的展开断言钉着）
+                                      "account_set_role"})
       and WRITE_SKILL_NAMES <= set(SKILL_MAP), str(sorted(WRITE_SKILL_NAMES)))
 check("非 admin 的 planner 上下文里看不到这四个技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
