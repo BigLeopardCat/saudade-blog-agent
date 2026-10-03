@@ -163,7 +163,7 @@ flowchart TB
 │   ├── trace.py               # 对话 trace 落盘（logs/agent/traces/，节点事件 + 分段耗时 + 退出原因）
 │   ├── helpers.py             # 通用工具函数
 │   └── tts.py                 # edge-tts 语音合成（预留，TTS 未启用）
-├── eval/                      # 评测：eval/golden/basic.jsonl（155 条）+ run_golden.py（L2 真实 LLM 端到端）
+├── eval/                      # 评测：eval/golden/basic.jsonl（156 条）+ run_golden.py（L2 真实 LLM 端到端）
 │   │                          #       + golden_case_runner.py / golden_full_run.py（进程隔离跑法）
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
