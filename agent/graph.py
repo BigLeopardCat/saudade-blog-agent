@@ -2429,6 +2429,28 @@ def _strip_quoted_spans(text: str) -> str:
     return _QUOTED_SPAN_RE.sub("", text)
 
 
+def _quotes_dropped_but_named_kept(text: str) -> str:
+    """**洞⑫ 专用**的引号处理：引号里的**能力名**要留着，引号里的**整句否认**才剥。
+
+    为什么不能照搬 `_strip_quoted_spans`：洞⑫ 的判据要同时看见"动词"和"对象"两半，
+    而生产里那句话恰恰把**两半都写进引号**——
+
+        系统这边没有提供「直接删除一个标签」的能力
+
+    （golden `admin_write_intent_tag_remove_popup` 20261003_180024 那条红的原话）。
+    整段剥掉以后它变成「系统这边没有提供的能力」⇒ 判据瞪着眼看不见，**放宽形状也
+    白搭**（这一条是 20261003 收窄后实测踩到的：光加谓词槽仍然打不到这句）。
+
+    判据（一句否认，主语是"我/系统"）与（转述别人说的话）写得出来分得开：
+    **否定词在不在引号里**。`留言里有人写「站内没有删除留言的通道」`——否定词在引号
+    内 ⇒ 那是**别人**的话，剥掉（这正是 `_strip_quoted_spans` 当初要防的误伤）；
+    `没有提供「直接删除一个标签」的能力`——否定词在引号**外**、引号里只是个能力名
+    ⇒ 留下。取这个保守侧：引号里带否定词就整段剥，宁漏勿误伤。
+    """
+    return _QUOTED_SPAN_RE.sub(
+        lambda m: "" if re.search(_CAP_FAIL_LEAD, m.group(0)) else m.group(0), text)
+
+
 # 内联代码区（含 ``` 围栏；先配对短跨度即天然吃掉围栏内容，见 20260920 元讨论豁免）
 _CODE_SPAN_RE = re.compile(r"`[^`]*`", re.S)
 
@@ -3056,6 +3078,15 @@ _CAP_FAIL_NOUN = r"(?:权限|功能|通道|入口|接口|办法|能力|按钮|�
 # 判据片段里不许跨标点（跨过去就成另一句话了），但**要收 markdown 的 `**`/引号**——
 # 回复里那些字是加粗标记，不是断句。
 _CAP_FAIL_GAP = r"[^，,。；;！!？?、\n\s]"
+# **给予义谓词槽**（20261003 补）：否定词与动词之间常再插一个"给"字——「没有**提供**
+# 「直接删除一个标签」的能力」。它不改变"这件事做不到"的语义，只是把话说完整；而原来
+# 甲支 ≤4 字 / 乙支 ≤3 字的塞词窗口恰好容不下它（这句插了 5 字），于是整句从判据底下
+# 漏过去——`admin_write_intent_tag_remove_popup` 慢性红（12/35 = 34%）给出的就是这句。
+# 槽是**可选**的（不给也行，原判据一字不动），前面再留 ≤2 字塞词（「没有向你提供…」）。
+# 全量 1082 份有回复的 trace 复扫：原形状命中 1 组、加槽后新增 **0** 组；再按超管身份过
+# 同一份语料（"最坏情况"上界）也新增 0 组（见 `tests/test_capability_denial.py` 头注）。
+# 放宽动的是闸门行为，故俟主人点名后才落地。
+_CAP_FAIL_GIVE = "(?:" + _CAP_FAIL_GAP + r"{0,2}(?:提供|给出|支持|开放))?"
 _CAP_FAIL_SCOPE_RE = re.compile(r"批量|全部|所有|一次性|同时|自动|定时|连续|一起|整批")
 
 
@@ -3075,11 +3106,11 @@ def _capability_denial_verbs(skill) -> str:
 def _capability_denied(clause: str, verbs: str, objects: tuple) -> bool:
     """这一子句是不是"这件能力做不到"的否定（形状 + （动词,对象）同源 + 无范围词）。"""
     objs = "|".join(re.escape(o) for o in objects)
-    # 形状甲「没有办法直接搜索全站文章」：否定 + 能力名词 +（塞词）动词 +（塞词）对象
-    a = (rf"{_CAP_FAIL_LEAD}{_CAP_FAIL_GAP}{{0,4}}{_CAP_FAIL_NOUN}"
+    # 形状甲「没有办法直接搜索全站文章」：否定 +（给予义谓词）+ 能力名词 +（塞词）动词 +（塞词）对象
+    a = (rf"{_CAP_FAIL_LEAD}{_CAP_FAIL_GIVE}{_CAP_FAIL_GAP}{{0,4}}{_CAP_FAIL_NOUN}"
          rf"{_CAP_FAIL_GAP}{{0,8}}(?:{verbs}){_CAP_FAIL_GAP}{{0,8}}(?:{objs})")
-    # 形状乙「没有删除被驳回留言的通道」：否定 +（塞词）动词 +（塞词）对象 +（的）能力名词
-    b = (rf"{_CAP_FAIL_LEAD}{_CAP_FAIL_GAP}{{0,3}}(?:{verbs})"
+    # 形状乙「没有删除被驳回留言的通道」：否定 +（给予义谓词）+（塞词）动词 +（塞词）对象 +（的）能力名词
+    b = (rf"{_CAP_FAIL_LEAD}{_CAP_FAIL_GIVE}{_CAP_FAIL_GAP}{{0,3}}(?:{verbs})"
          rf"{_CAP_FAIL_GAP}{{0,6}}(?:{objs}){_CAP_FAIL_GAP}{{0,4}}{_CAP_FAIL_NOUN}")
     for rx in (a, b):
         for m in re.finditer(rx, clause):
@@ -3439,6 +3470,7 @@ class _ClaimFamily(NamedTuple):
     needs: str | tuple = ""         # 标志名（见 `_FLAG_OF_NEEDS`）；**元组** = 要多个
     skills: tuple = ()              # 非空 = 只在这个技能上判（收窄，不是放宽）
     guard: Callable | None = None   # 额外的"此刻适不适用"（收尾轮豁免那类）
+    name_quotes: bool = False       # 谓词看引号里的**能力名**（洞⑫ 专用，见那族的注）
 
 
 def _zero_frame_families(plan: dict, skill: str, role: str | None = None) -> list:
@@ -3536,7 +3568,8 @@ def _zero_frame_families(plan: dict, skill: str, role: str | None = None) -> lis
                      lambda text: _capability_absent_claim(text, role),
                      lambda text: _capability_absent_clause(text, role),
                      _FALLBACK_CAPABILITY_ABSENT,
-                     guard=lambda: not _absence_exempt),
+                     guard=lambda: not _absence_exempt,
+                     name_quotes=True),
         # 洞④：站内"没有"结论无依据。豁免比上面两族宽（跨轮回执里有检索痕迹即
         # 放行）——这里说的是**结论**不是动作。
         _ClaimFamily("site_absence_claim_without_tool",
@@ -3685,9 +3718,12 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         if fam.guard is not None and not fam.guard():
             continue
         # 标志按 `needs` 里写的顺序**位置传参**（洞⑪ 要 `page_ctx` + `exec_memory`）。
+        # 判据吃的文本**默认是剥过引号的 `own`**；`name_quotes` 那一族换一份"留着能力名"
+        # 的文本（洞⑫ 的两半都可能长在引号里，见 `_quotes_dropped_but_named_kept`）。
         names = fam.needs if isinstance(fam.needs, tuple) else \
             ((fam.needs,) if fam.needs else ())
-        args = (own, *(_FLAG_OF_NEEDS[n] for n in names)) if names else (own,)
+        text = _quotes_dropped_but_named_kept(reply) if fam.name_quotes else own
+        args = (text, *(_FLAG_OF_NEEDS[n] for n in names)) if names else (text,)
         if fam.pred(*args):
             return (fam.issue, fam.fallback, fam.clause(*args) or "")
     if skill == "content_query":
@@ -9417,7 +9453,9 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     #      `refused` 那一档说的是"这次这个动作被身份防线拒了"，此时"我没有这个权限"是实话。
     if (plan.get("status") not in PLAN_STATUS_ABSENCE_EXEMPT
             and _LEDGER_NOTE_PREFIX not in (plan.get("note") or "")):
-        clause5f2 = _capability_absent_clause(_strip_quoted_spans(reply),
+        # 引号处理与零帧那半**同一条规则**（`_quotes_dropped_but_named_kept`）：本族的两半
+        # 常常一起长在引号里，照 `_strip_quoted_spans` 整段剥掉就是把这句话剥没了。
+        clause5f2 = _capability_absent_clause(_quotes_dropped_but_named_kept(reply),
                                               _principal_of(config).known_role)
         if clause5f2:
             logger.info("[gate] 有帧轮把注册表里有的能力说成『站内没有』｜子句=%s → fallback",
