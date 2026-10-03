@@ -641,8 +641,11 @@ submitted → running → succeeded / failed / cancelled
   `_RCPT_META_KEYS` 那一族——因为那套循环会对值做 `str(v)[:120]`，dict 会被**字符串化**。
   即"契约成立"依赖"绕过某个拷贝循环"，是**隐式契约**，下一个人一定会踩
   （现场注释在 `agent/graph.py:5842`，定义在 `:198`）。
-- **版本号手动同步三处**（父仓 + 设备控制台）：`Live2dAgent/index.tsx` 的 `?v=`、
-  `autoload.js` 的 `VER` 常量、设备控制台页面里对 autoload 的 `?v=` 引用。漏一处 = 浏览器
+- **版本号手动同步**（父仓 + 设备控制台 + 本仓文档，**当前五处**）：源头是 `boot.js` 的 `VER`
+  常量（所有子模块 URL 都拼 `?v=VER`），另四处跟着它——`Live2dAgent/index.tsx` 的 `?v=`、
+  前端套件里手抄的那份字面量、设备控制台页面的 `?v=` 引用、以及本仓 `frontend/README.md`
+  记的当前值。**清单的唯一事实源是宿主仓 `frontend/README.md` 的《改这里的文件要 bump 版本号》**
+  （这条写的是"三处"时那份脚本还叫 `autoload.js`，20261001 拆分后已扩到五处）。漏一处 = 浏览器
   一年 immutable 缓存里跑旧脚本（**版本号同步不写进提交信息**，见 §8）。
 - **判据靠词表 + 事后围堵**：`_EFFECT_ALIASES` / `NAV_MAP` / `_CONSOLE_VERBS` / `DENIAL_FAMILY`
   这一族动作词表，加上 gate 那串原因码。它们各自都挡过真实事故，但每一条的本质都是

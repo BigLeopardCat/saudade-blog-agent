@@ -215,22 +215,33 @@ grep -l authz_shadow /home/ubuntu/Saudade-Blog/logs/agent/traces/*.json | wc -l
 
 ## 4. 布线图（一次带角色的对话）
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as 浏览器
+    participant R as Rust /api/chat/stream
+    participant DB as MySQL
+    participant A as agent /chat/stream
+    participant G as graph.execute_node
+
+    B->>R: 请求（JWT）
+    R->>R: auth_jwt::auth_uid → uid
+    R->>DB: user::Entity::find_by_id(uid) → role
+    Note over R,DB: 角色查 DB，不是读 token 里的
+    R->>A: X-Agent-Assertion: {sub: uid, role, aud:"agent", exp:+60s}
+    A->>A: _verify_assertion_claims → {uid, role}
+    A->>A: _resolve_principal → Principal(uid, role, source="assertion")
+    A->>G: config.configurable.principal
+    G->>G: authz.check(principal, tool)
+    alt 放行
+        G-->>A: tool.invoke
+    else 拒绝
+        G-->>A: __ERROR__[scope_denied]
+    end
 ```
-浏览器 ──JWT──▶ Rust /api/chat/stream
-                    │ auth_jwt::auth_uid → uid
-                    │ user::Entity::find_by_id(uid) → role   ← 查 DB，非读 token
-                    ▼
-        X-Agent-Assertion: {sub: uid, role, aud:"agent", exp:+60s}
-                    ▼
-              agent /chat/stream
-                    │ _verify_assertion_claims → {uid, role}
-                    │ _resolve_principal → Principal(uid, role, source="assertion")
-                    ▼
-        config.configurable.principal ──▶ graph.execute_node
-                                              │ authz.check(principal, tool)
-                                              ▼
-                                   放行 → tool.invoke ／ 拒绝 → __ERROR__[scope_denied]
-```
+
+> 这张图原来是手画的字符图（箭头是靠空格对齐的），中文注释一进去就错位；
+> 换成 mermaid 后顺序与分支都由渲染器算。
 
 ## 5. 前置需求（还差什么才能真的上线一个秘书）
 

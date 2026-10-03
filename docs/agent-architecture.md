@@ -31,7 +31,7 @@
 > ⑤写操作的事前同意（秘书前置需求 ③ 的 agent 侧）——权限之后再加一道确定性判据：
 > 需确认的 scope（`CONSENT_SCOPES = {write.content}`）未获用户本轮消息明确确认 →
 > 产 `__ERROR__: 待确认[consent_required]` 帧、不调用工具；用错误帧形态是为了让 gate
-> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 62 个工具里
+> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 63 个工具里
 > 没有一个是 `write.content`，所以这条闸空转（等第一个写工具，声明表驱动、不用改代码）。
 > 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
 > annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
@@ -59,7 +59,7 @@
 
 - React 前端（浏览器）：看板娘 Live2D 形象 + 对话框 UI + SSE 消费 + 命令执行器。
 - Rust 后端（axum，端口 3000）：鉴权、记忆落库、对话编排、SSE 转发、中断清理。**记忆的唯一权威来源**。
-- Python Agent（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、62 个工具。无状态，记忆全靠请求体注入。
+- Python Agent（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、63 个工具。无状态，记忆全靠请求体注入。
 - MySQL：`chat_history`（消息流水）、`chat_summary`（每用户压缩摘要）。
 - device-service（端口 3100，独立服务）：IoT 设备（ESP32 OLED）指令下发，agent 以对话用户身份代签 JWT 调用。
 
@@ -67,13 +67,13 @@
 flowchart TB
     subgraph Browser[浏览器]
         UI[React SPA<br/>Live2D 看板娘 + 对话框]
-        AJS[autoload.js<br/>SSE 消费/命令执行/本地历史]
+        AJS[boot.js + chat-*.js<br/>SSE 消费/命令执行/本地历史]
     end
 
     subgraph Server[生产服务器 3.7GB 内存]
         NGX[nginx :443/:80]
         RUST[Rust 后端 axum :3000<br/>鉴权·记忆·编排·SSE 转发]
-        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 35 工具 · 4 workers]
+        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 63 工具 · 4 workers]
         MYSQL[(MySQL<br/>chat_history / chat_summary)]
         DEV[device-service :3100<br/>ESP32 OLED 指令下发]
     end
@@ -121,18 +121,24 @@ flowchart TB
 本仓库（saudade-blog-agent）    # ★ Python Agent（独立 git 仓库，推送即 CI 评测门禁 + 部署；线上改动重启 systemd 服务生效）
 ├── server.py                  # FastAPI 入口：/chat、/chat/stream、/health；trace_id 中间件；流式编排
 ├── agent/
-│   ├── graph.py               # ★ 手写 LangGraph 图（1427 行，20260912 拆分后）：State/契约/声称闸 + planner(唯一决策) ⇄ execute(确定性执行) → (reflector) → model(零工具叙述) → gate(确定性检查) + 条件边路由
-│   ├── decisions.py           # ★ 确定性决策层（522 行，零 LLM）：快道（当前文章读取/特效切换/导航/屏幕显示）+ 动作意图扫描（intent_hints 原料）+ 检索候选裁决（标题相关性）+ 终局计划（轮次上限/复盘终局/拦截收尾）——被 graph.py 节点调用，反向外移函数按原名 re-export
-│   ├── context.py             # 上下文组装（209 行，纯函数叶子层）：消息文本提取（多模态兼容）/page_ctx/页面操作指南（GUESTBOOK_GUIDE、SITE_GUIDE）/工具帧摘要/checker 回执摘要
+│   ├── graph.py               # ★ 手写 LangGraph 图（9729 行）：State/契约/声称闸 + planner(唯一决策) ⇄ execute(确定性执行) → (reflector) → model(零工具叙述) → gate(确定性检查) + 条件边路由
+│   ├── decisions.py           # ★ 确定性决策层（621 行，零 LLM）：快道（当前文章读取/特效切换/导航/屏幕显示）+ 动作意图扫描（intent_hints 原料）+ 检索候选裁决（标题相关性）+ 终局计划（轮次上限/复盘终局/拦截收尾）——被 graph.py 节点调用，反向外移函数按原名 re-export
+│   ├── context.py             # 上下文组装（1260 行，纯函数叶子层）：消息文本提取（多模态兼容）/page_ctx/页面操作指南（GUESTBOOK_GUIDE、SITE_GUIDE）/工具帧摘要/checker 回执摘要
 │   ├── agent.py               # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
 │   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
 │   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，秘书类功能地基（docs/secretary.md）
 │   ├── authz.py               # ★ 权限模型（20260920）：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
-│   ├── skills.py              # ★ 技能注册表：20 技能静态定义（12 只读/动作 + 8 写技能，写技能带 roles=admin）+ NAV_MAP 导航映射（业务唯一数据源）
+│   ├── skills.py              # ★ 技能注册表：44 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）+ NAV_MAP 导航映射（业务唯一数据源）
 │   ├── adminops.py            # ★ 后台写操作域（20260921-22）：标签/分类索引与**名字→id 解析**（find_tag/find_category）+ 移动/降级校验（move_verdict）+ 确认卡文本 + 色名映射；能算的不交给 LLM
 │   ├── refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用（20260919）：递归遍历 + 五个错误码——解不出的引用必须响亮（20260922 改递归）
 │   ├── confirm.py             # ★ 待确认令牌（20260921）：无状态 HMAC（TTL 600s，2 worker 安全）；不落库、不落用户消息
 │   ├── entities.py            # ★ 执行回执实体摘要（20260920）：压成一行供跨轮取值；digest 是 Python 写 / Rust 读的跨语言契约
+│   ├── native_plan.py         # ★ native tool calls 接线层（20260927 新主线）：planner 输出从"五行文本契约"换成 API 的 tools/tool_calls，格式由服务端与 schema 保证
+│   ├── tasks.py               # ★ 会话级任务状态（20260927 批 D）：未完成的意图跨轮不丢（agent_task 表 + 模型登记 + 系统确定性结算）
+│   ├── action_text.py         # ★ 一次执行 → 一行中文动作的跨语言渲染唯一实现（过程行 / 执行台账行两档）
+│   ├── factblock.py           # ★ 动作族轮次的"系统事实块"（roadmap D3）：事实由系统印、模型只写包装；射程只有命令族 + 写族
+│   ├── stickers.py            # 贴纸残记号的确定性修补（20261002）：把只写了开头冒号的 `:头疼` 补回 `:名字:`
+│   ├── llm_usage.py           # 一次 LLM 调用的 token 用量提取（trace 用量字段的唯一来源，喂 token_cost_report）
 │   ├── sections.py            # ★ 超长文章分节（20260920）：索引切片 / 帧按整节取舍 / `section=` 按节取回，三处共用一套节边界
 │   ├── moderator.py           # 侧任务·审核：不可信输入围栏 + 输出白名单 + fail-open
 │   ├── summarizer.py          # 侧任务·摘要：fail-empty
@@ -145,7 +151,7 @@ flowchart TB
 │   │                          #   检索只定位（候选 type/id/标题/分），解读走 get_article_detail 全文
 │   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
 ├── tools/
-│   ├── base.py                # 35 个 @tool 工具（含 rag_search / get_article_detail 泛化 doc_type）+ _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重 + trace_id 透传 device-service
+│   ├── base.py                # 63 个 @tool 工具（含 rag_search / get_article_detail 泛化 doc_type）+ _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重 + trace_id 透传 device-service
 │   └── __init__.py
 ├── models/
 │   ├── llm.py                 # get_llm 工厂：provider 三选一（qwen/deepseek/openai）；enable_thinking 走 extra_body
@@ -157,7 +163,7 @@ flowchart TB
 │   ├── trace.py               # 对话 trace 落盘（logs/agent/traces/，节点事件 + 分段耗时 + 退出原因）
 │   ├── helpers.py             # 通用工具函数
 │   └── tts.py                 # edge-tts 语音合成（预留，TTS 未启用）
-├── eval/                      # 评测：eval/golden/basic.jsonl（66 条）+ run_golden.py（L2 真实 LLM 端到端）
+├── eval/                      # 评测：eval/golden/basic.jsonl（155 条）+ run_golden.py（L2 真实 LLM 端到端）
 │   │                          #       + golden_case_runner.py / golden_full_run.py（进程隔离跑法）
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
@@ -171,14 +177,14 @@ flowchart TB
 `frontend/LICENSE`；本仓其余部分是 Apache-2.0）：
 frontend/public/live2d-widgets/
 ├── boot.js                    # ★ 加载器（254 行）：拼 ?v=VER 载入子模块、看板娘显隐/拖拽/工具条
-├── renderer.js                # ★ 渲染层（459 行）：pixi.js + pixi-live2d-display 驱动模型、参数注入与口型
-├── chat-stream.js             # ★ 对话主战场（2268 行）：SSE 流式消费 + 命令解析与执行
+├── renderer.js                # ★ 渲染层（511 行）：pixi.js + pixi-live2d-display 驱动模型、参数注入与口型
+├── chat-stream.js             # ★ 对话主战场（2347 行）：SSE 流式消费 + 命令解析与执行
 │                              #   （导航白名单 BLOG_ROUTES、cmdText、idleTimer 计时器、EFFECT、discardTurn 集中于此）
 ├── chat-engine.js             # 对话引擎子模块（1363 行：sendMessage / discardTurn 等）
 ├── chat-session.js            # 会话抽屉 UI（685 行：rail / 列表列 / 命名 / 置顶 / 搜索）
 ├── chat-core.js               # 对话核心子模块（226 行：COMMAND_LINE_RE / cleanAgentText 等）
 ├── chat-render.js             # 渲染清洗子模块（244 行：__chatRenderMarkdown / cleanAgentText 等）
-├── widget.css                 # 看板娘与对话框样式（2012 行：#waifu 高度锁死等关键防御）
+├── widget.css                 # 看板娘与对话框样式（2072 行：#waifu 高度锁死等关键防御）
 └── lingyue-toggle.png
 frontend/public/live2d_model/  # agent_2 模型（moc3 / model3.json / cdi3 / physics3 / 2048 贴图）
 
@@ -202,7 +208,7 @@ Saudade-Blog/src/entity/chat_summary.rs     # 摘要表实体
 ```mermaid
 sequenceDiagram
     autonumber
-    participant B as 浏览器 autoload.js
+    participant B as 浏览器 boot.js / chat-stream.js
     participant N as nginx
     participant R as Rust :3000
     participant A as Agent :8010
@@ -223,21 +229,21 @@ sequenceDiagram
     Note over A: needs_summary 轮并行独立摘要调用<br/>（输入=原始历史，与回复解耦）
     A->>L: LangGraph 图执行：planner ⇄ execute（≤4 轮，execute 内 checker 逐 spec 验收）<br/>→ reflector（重复受阻 ≤2 轮复盘）→ model → gate
     L-->>A: planner 决策文本 / execute 工具帧 + checker 回执<br/>model 叙述 token（零工具）
-    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / 过程帧 __PROCESS__ / __RESET__（gate fallback）/<br/>__SUMMARY__ / __EXEC__（checker 回执，**每批 execute 即发**；Rust 收到即落库） / 终结标记）
+    A-->>R: SSE 帧（JSON 编码文本 / 命令帧 / 过程帧 __PROCESS__ / __RESET__（gate fallback）/<br/>__SUMMARY__ / __EXEC__（checker 回执，「每批 execute 即发」；Rust 收到即落库） / 终结标记）
     R-->>B: 逐帧转发（X-Accel-Buffering: no；__EXEC__ 只收不转）
-    B->>B: 文本帧上屏 + 口型驱动；命令帧进 cmdText
+    B->>B: 文本帧上屏 + 口型驱动；程序帧（__CMD__）进 programCmds 缓冲并「到达即执行」
     Note over R: 流结束后
     R->>DB: INSERT chat_history(assistant 回复)
     R->>DB: upsert chat_summary（__SUMMARY__ 帧，无则保留旧摘要）
     R->>DB: INSERT execution_log（__EXEC__ 帧渲染定稿，断连也不清）
     R-->>B: __NAV_END__ / __END__ 终结
-    B->>B: 结束解析：导航/特效/夜间模式执行
+    B->>B: 收尾：只剩整页目标（/device-console/、跨域）在流尾兜底执行
     B->>B: localStorage 追加本轮完整文本（≤50 条）
 ```
 
 ### 3.2 分段详解
 
-① 前端发起（前端脚本 `sendMessage`，20260902 起代码在 chat-* 子模块，autoload.js 只留加载）
+① 前端发起（前端脚本 `sendMessage`，20260902 起代码在 chat-* 子模块，入口 `boot.js` 只留加载）
 
 请求体携带 5 个字段：`message`、`current_url`（当前页面，供 agent 判断语境）、`page_title`、
 `current_effects`（`window.__effectStateList` 实时特效状态，如 `sakura,rain`）、`current_darkmode`（`on|off`）；
@@ -342,7 +348,8 @@ flowchart LR
 ⑦ 前端消费（chat-stream.js/chat-engine.js，20260902 拆分后代码在 chat-* 子模块）
 
 - 文本帧：`textContent` 直写（流式阶段 pre-line 换行）→ 300ms 口型翻转（`__mouthOverride`）。
-- 命令帧：按 `COMMAND_LINE_RE` 匹配进 `cmdText`（不显示），流结束统一解析执行（§6.2）。
+- 程序帧：`__CMD__:<json>` 进独立的 `programCmds` 缓冲（**不进** displayText/cmdText），
+  站内跳转/特效/夜间**到达即执行**，整页目标留到流尾兜底（§6.2）。
 - 终结：完整文本（cmdText + 文本）→ `cleanAgentText` 剔除命令行与 SUMMARY 残留（防御性——正常已不会出现，防注入诱导）→ markdown 渲染
   （复用博客 `__chatRenderMarkdown`）→ localStorage 追加（≤50 条）。
 - 双计时器（idleTimer 60s 空闲 / 300s 总时长；20260830 从 45s 调到 60s——45s 曾误杀慢生成 118s/146.9s），
@@ -525,7 +532,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 ---
 
-## 5. 工具系统（61 个）
+## 5. 工具系统（63 个）
 
 | 分类 | 工具 | 行为 |
 |---|---|---|
@@ -548,9 +555,11 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 | 用户自己的读（own） | `list_my_favorites`、`get_unread_summary`、`list_notifications` | scope `read.own`（三档角色都有、匿名没有）；以本轮发起人身份读他自己的数据（代签 60 秒 JWT 调 `/api/protected/*`，"自己读自己"由 uid 落地）；见 §5.6 |
 | 用户自己的写（own） | `add_favorite`、`remove_favorite`、`read_notifications` | scope `write.own`（不进 `_HARD_SCOPES`、不进 `_ALWAYS_CONFIRM_TOOLS`）；五条契约见 §5.6 |
 
-**工具 → 命令 → 前端执行**是核心交互模式：工具返回带前缀的命令字符串，Python 识别后作为独立 SSE 帧
-转发，前端解析执行。命令不由模型写进正文：正文里的命令会被 `cleanAgentText` 当幻觉剔除
-（除非命中 §6.2 的兜底解析）。
+**工具 → 回执 → 程序帧 → 前端执行**是核心交互模式（20260926 批 2 起，命令与事实分离）：
+工具返回的**文本**是给人看的事实，命令本体走 `ToolResult.meta["cmd"]` → checker PASS 后落**回执行**
+的 `rcpt["cmd"]` → Python 逐条发 `__CMD__:<json>` 帧 → Rust 原样转发 → 前端执行。
+命令不由模型写进正文：正文里的命令会被 `cleanAgentText` 当幻觉剔除，**没有任何兜底解析**
+（原正文兜底已于 20260926 删除，见 §6.2）。
 
 ### 5.1 IoT 工具细节（device_oled_display）
 
@@ -761,30 +770,31 @@ golden 只锁"未登录"形态（三条：收藏 / 问未读 / 标记已读）�
 `current_effects` / `current_darkmode` 由前端实时上报（用户可能手动开关过、夜间自动切换过），
 prompt 明确要求 agent 以 System 上下文为准、不依赖调用记忆，状态一致时不重复调工具。
 
-### 6.2 前端命令执行器（autoload.js）
+### 6.2 前端命令执行器（chat-stream.js）
 
-流结束后对 `cmdText + displayText` 全文本解析，命令行优先、正文兜底：
+**命令的来源只有一处：程序帧**（20260926 批 2 起，命令与事实分离）。`__CMD__:<json>` 帧到达前端后：
 
 ```mermaid
 flowchart TB
-    A[全文本] --> B{cmdText 有命令行?}
-    B -->|是| C[逐行锚定 ^AUTO_NAVIGATE/NAVIGATE:<br/>支持相对路径与格式漂移<br/>直接跳 or 确认框]
-    B -->|否| D[正文兜底]
-    D --> D1["markdown 链接 [文](URL) 确认式"]
-    D --> D2[中文命令+裸 URL 确认式]
-    C --> E{直接跳?}
-    E -->|是| F{白名单 BLOG_ROUTES<br/>+ 同源 host 校验}
-    F -->|通过| G[set chat_open + location.href]
-    F -->|不通过| H[取消 + 追加系统提示]
-    E -->|否| I[弹确认框]
+    F["__CMD__:<json> 帧<br/>（checker PASS 的指令回执）"] --> Q["进 programCmds 缓冲<br/>（不进 displayText / cmdText）"]
+    Q --> W{"这条命令能当场做吗?"}
+    W -->|"站内跳转 / 特效 / 夜间<br/>（SPA 桥接管）"| IMM["帧到达那一刻立即执行<br/>与系统印「页面已跳转：…」同一时刻"]
+    W -->|"整页目标：跨域 /device-console/<br/>（整页跳转会掐断 SSE，本轮回复丢失）"| TAIL["留到流尾 execAgentCommands 兜底<br/>每条带 __done 标记，同一条不执行两次"]
+    IMM --> R1{"导航? 过白名单 BLOG_ROUTES<br/>+ 同源 host 校验"}
+    R1 -->|通过| GO["window.__spaNavigate 优先<br/>返回 false 才整页 location.href"]
+    R1 -->|不通过| NO["取消跳转 + 追加一条系统注记"]
 ```
 
-- 导航白名单 `BLOG_ROUTES`：`/`、`/about`、`/friends`、`/guestbook`、`/talk`、`/times`、`/login`、`/dashboard*`、`/category/*`、`/article/*`、`/device-console/`——幻觉的 `/iot` 之类被拦截（曾导致整站布局丢失、文本框卡死）。历史遗留：commit 30bfba1 声称"白名单 /friends 替换为 /guestbook"，但 autoload.js 白名单实际未改（agent 改动不进博客 git，靠手动落盘，该次只落了 prompts.py/tools/base.py）——2026-08-23 文档核对时发现前端白名单仍只有 `/friends`，而 agent 侧（prompt、site_map、navigate_to 示例）已统一为 `/guestbook`，且 `/friends` 路由本身 301 到 `/guestbook`，导致 agent 跳 /guestbook 被白名单拦截。已修复：白名单两者并留（新老地址都放行）。
+- **正文里写的命令一律不执行**（用户拍板"废除，只认程序帧"）：`execAgentCommands` 里原来那套正文兜底扫描
+  （特效正则 / 伪工具调用签名 `toggle_effect(...)` / markdown 链接与中文动词）**已整体删除**，
+  `frontend/tests/agent-cmd-program-only.test.mjs` 用源码锁钉住"不许加回来"。
+  正文里出现的 `EFFECT:sakura:on` / `AUTO_NAVIGATE:…` 只会被 `COMMAND_RE` 收进 `cmdText`
+  （**只隐藏、不执行**），gate 还会把它判成 `cmd_prefix` 打回（正文要进 chat_history）。
+
+- 导航白名单 `BLOG_ROUTES`：`/`、`/about`、`/friends`、`/guestbook`、`/talk`、`/times`、`/login`、`/dashboard*`、`/category/*`、`/article/*`、`/device-console/`——幻觉的 `/iot` 之类被拦截（曾导致整站布局丢失、文本框卡死）。历史遗留：commit 30bfba1 声称"白名单 /friends 替换为 /guestbook"，但前端白名单实际未改（当时那份脚本叫 `autoload.js`，20261001 起已拆成 `boot.js` + `chat-*.js`；agent 改动不进博客 git，靠手动落盘，该次只落了 prompts.py/tools/base.py）——2026-08-23 文档核对时发现前端白名单仍只有 `/friends`，而 agent 侧（prompt、site_map、navigate_to 示例）已统一为 `/guestbook`，且 `/friends` 路由本身 301 到 `/guestbook`，导致 agent 跳 /guestbook 被白名单拦截。已修复：白名单两者并留（新老地址都放行）。
 - 同源校验：`new URL(navUrl).host === location.host`，跨域降级为确认式（堵 `https://evil.com/talk`）。
-- 特效：`EFFECT:name[:action]`（容忍格式漂移，`\w+` 不匹配中文）；兜底：正文里的
-  `toggle_effect(effect="sakura", action="on")` 工具调用签名也能解析执行（模型"表演调用"时救场）。
-- 夜间：`DARKMODE:on|off` + 正文 `toggle_dark_mode(mode="on")` 兜底；执行同时标 `darkModeUserChoice`
-  （对话调节=访客意愿，23:00-6:00 自动切换让位）。
+- 特效 `EFFECT:name[:action]` 与夜间 `DARKMODE:on|off` 同样**只从程序帧来**（容忍格式漂移，
+  `\w+` 不匹配中文）；夜间执行同时标 `darkModeUserChoice`（对话调节=访客意愿，23:00-6:00 自动切换让位）。
 
 ### 6.3 "显示"类请求的保障链（20260828 影子系统事故后重构；20260903 起并入 planner 全权）
 
@@ -1217,20 +1227,20 @@ flowchart TB
   上传 GPU，下一帧必然绘制）齐备才用 WAAPI 滑入（`fill:'backwards'`，不受"插入 DOM+加类同帧"样式合并影响）；
   25s 兜底。避免空画布滑完角色凭空弹出。
 - 收起状态：quit 工具写 `waifu-display` 24h 标记 → 上游 initWidget 只建收回按钮不建看板娘；
-  autoload.js 初始化前一律清除该标记（刷新/返回=重新访问，看板娘恢复默认展示；SPA 内路由切换不重跑不受影响）。
+  `boot.js` 初始化前一律清除该标记（刷新/返回=重新访问，看板娘恢复默认展示；SPA 内路由切换不重跑不受影响）。
 - 高度锁死：`#waifu { height: 300px }`（与 `#live2d` 同高）——display:none 恢复中间态 canvas 高度塌陷为 0 时，
   `min-height` 兜不住 `bottom:calc(100%+12px)` 的对话面板与悬浮按钮错位（2026-08-19 修复不彻底 → 08-22 改固定高度）。
 - 口型/动作：`__setMouthOpen`/`__mouthOverride` + `model.update` 挂钩（loadParameters 之后注入 ParamSpeak/
   ParamMouthOpenY/Tail/耳朵/头发/眨眼），流式输出 300ms 口型翻转。
-- 缓存版本号：改前端脚本必须同步 bump 手工点：`index.tsx` 注入 autoload.js 的 `?v=`、
-  autoload.js 内 `VER` 常量、以及仓库外 IoT 控制台页直引的 `?v=`（三处同值，当前值以
-  autoload.js 的 `VER` 为准，不在此文档写死）；waifu.css 的 `?v=` 由 `VER` 常量自动拼接，
-  不算手动点。nginx 对 `/live2d-widgets/` 等目录 1 年 immutable 缓存，`?v=` 换 query
-  即换缓存条目——不 bump 访客会一直跑旧脚本。
-- 模块图级联重命名（waifu-tips）：waifu-tips.js 无 `?v=`（autoload.js 裸名加载），改上游模块必须整体
-  重命名模块图——`waifu-tips.20260830.js` 动态导入 `chunk/index.20260830.js` + `chunk/index2.20260830.js`，
-  两 chunk 静态导入回 `waifu-tips.20260830.js`（ES module identity，改一处会把模块实例拆成两份）；
-  新名即 cache-bust（20260830 的 getHitAreasCount null 守卫修复即用此方式越过 immutable 缓存）。
+- 缓存版本号：nginx 对 `/live2d-widgets/` 等目录设了 **1 年 immutable**，不换 URL 访客永远拿旧的。
+  `boot.js` 里有个 `VER` 常量，所有子模块 URL 都拼 `?v=VER`，改任何子模块都要把 `VER` 加一档。
+  **`VER` 有五个同步点，清单的唯一事实源在宿主仓 `frontend/README.md` 的《改这里的文件要 bump 版本号》**
+  （本文不另抄一份——两份清单迟早会漂）。`widget.css` 的 `?v=` 由 `VER` 自动拼接，不算手动点；
+  版本号是部署细节，**不进 commit message**。
+- 渲染层 20261001 起换成自研：原先的 `waifu-tips.*.js` + `chunk/index*.js` 上游模块图
+  （当年因 ES module identity 问题必须"整体级联换名"来 cache-bust）已整套删除，
+  现在由 `renderer.js`（pixi.js + pixi-live2d-display）承接，`waifu-tips.json` 的文案内置。
+  也就是说"改上游模块要整图重命名"这条老纪律**不再适用**，只留 `VER` 一条缓存路径。
 
 ---
 
@@ -1246,8 +1256,9 @@ flowchart TB
   日志：`logs/agent/agent.log`（服务标准输出/错误 append）+ `logs/agent/traces/`（对话 trace，
   路径由 settings.py `trace_dir` 配置）；20260925 起按天分目录（`traces/<YYYYMMDD>/`），
   枚举由 `eval/trace_files.py` 单点负责，保留期由 `eval/trace_retention.py` 执行
-  （>24h 压缩、>30 天删，接在夜间脚本里）。注意系统级 logrotate 那份 `rotate 14` 对这类
-  "文件名唯一"的产物从来无效（详见 [问题记录.md](问题记录.md) §4.7），那份配置正在等摘除。
+  （>24h 压缩、>30 天删，接在夜间脚本里）。系统级 logrotate 那份 `rotate 14` 对这类
+  "文件名唯一"的产物从来无效（详见 [问题记录.md](问题记录.md) §4.7）——**那一段已于 20260925 整块删除**
+  （备份 `/etc/logrotate.d/saudade.bak.20260925`），别再照旧配置找它。
 - 前端：部署一律走 CI——本机不构建（20260830 OOM 事故：3.7GB 内存下本地 `vite build` 拖垮整机）。
   改动 commit → push `cn_sora_blog` → GitHub Actions 云端构建 → R2 → 服务器脚本部署。
 - Rust：同上走 CI；本地自检 `RUSTFLAGS="-D warnings" cargo check`（CI 目前未启用 -D warnings——
@@ -1301,7 +1312,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 4. 线程池挂起：LLM API 无响应时任务占用线程 120s，16 线程下短时间 16 次对话即占满——超时参数是生命线。
 5. MemorySaver 陷阱：别恢复"线程复用"——DB 注入已承担全部连续性。
 6. `enable_thinking` 只能走 extra_body（Qwen 自有参数，model_kwargs 不收）。
-7. 本仓库与宿主仓库独立维护：agent 代码位于独立 git 仓库（remote: `BigLeopardCat/saudade-blog-agent`，物理上嵌套于博客项目中并被其 gitignore）。两仓库各自 push 各自 CI：agent 改动只在 agent 仓库提交（宿主仓库 git status 不会显示 agent 目录改动，勿误提交）。改完代码记得 `git add -A && git commit && git push`——否则服务器重建会丢改动。
+7. 本仓库与宿主仓库独立维护：agent 代码位于独立 git 仓库（remote: `BigLeopardCat/saudade-blog-agent`，物理上嵌套于博客项目中并被其 gitignore）。两仓库各自 push 各自 CI：agent 改动只在 agent 仓库提交（宿主仓库 git status 不会显示 agent 目录改动，勿误提交）。改完代码记得提交推送——否则服务器重建会丢改动。⚠️ **提交时逐文件点名 `git add <文件>`，不要 `git add -A` / `git commit -a`**（见宿主仓 CONTRIBUTING.md §4《改代码时的几条硬约束》）：工作区里常年挂着别的批次/会话的在途改动，一把梭会把它们一起发布。
 8. 写给模型的举例里不许出现具体取值（20260922 实测，写面）：技能描述/规则里的举例名会被 planner
    当成默认值抄进参数——主人说「加个二级标签，名字叫 Rust 异步」时它填 `title="Rust",
    parent_tag="异步"`（把名字后半个词当父标签），或直接抄描述里的示例名（`title="Python"`）⇒ **弹窗问的是
