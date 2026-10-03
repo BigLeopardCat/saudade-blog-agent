@@ -332,6 +332,8 @@ _INT_PARAMS = {
 _CHOICE_PARAMS = {"layout": ("--layout", ("umap", "semantic", "pca"))}
 _STR_PARAMS = {"api_base": ("--api-base", 200), "site": ("--site", 200),
                "exclude_ids": ("--exclude-ids", 500)}
+# 空串**有语义**的字符串参数（其余的空串一律当"没填"、回落到默认值）。见 resolve_params。
+_KEEP_EMPTY_STR = frozenset({"exclude_ids"})
 _FLAG_PARAMS = {"refresh": "--refresh", "force": "--force", "dry_run": "--dry-run"}
 # 开关的真值集。**不能只写 `if raw.get(key)`**：这个值来自网页表单，字符串
 # "false" 在 Python 里是真的 —— 页面上没勾的框反而会把 `--refresh` 打开，而
@@ -375,8 +377,15 @@ def resolve_params(raw: dict | None) -> dict:
         v = str(raw[key]).strip()
         if len(v) > limit:
             raise ValueError(f"{key} 太长（上限 {limit} 字符）")
-        # exclude_ids 的空串**是有意义的值**（＝一个都不排除，见 20261003 修的静默 bug），
-        # 所以这里保留空串、只在 None 时回落到默认
+        # 三个字符串参数里**只有 exclude_ids 的空串是有意义的值**（＝一个都不排除，
+        # 见 20261003 修的静默 bug）。api_base / site 的空串是"没填"，必须**保留默认值**
+        # 而不是把它擦成空串：`server.py::GraphRebuildRequest` 拿 `""` 当缺省值，
+        # 于是页面留空 ⇒ 这里原样收下 `""` ⇒ `--api-base ""` 进 argv ⇒
+        # 脚本拼出 `/notes?pageSize=1000`（没有 scheme）当场 `ValueError: unknown url
+        # type`（20261004 用户点重建时实际踩到，run 20261004T001407）。
+        # 判据：空串对这两项没有第三种语义，折叠掉不会丢信息。
+        if not v and key not in _KEEP_EMPTY_STR:
+            continue
         out[key] = v
     for key in _FLAG_PARAMS:
         out[key] = _as_flag(raw.get(key))
