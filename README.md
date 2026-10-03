@@ -17,21 +17,34 @@
 
 ## 架构
 
-```text
-浏览器 Live2D 对话面板
-        │ SSE
-        ▼
-Rust 后端：鉴权、MySQL 记忆、SSE 转发、身份断言
-        │ HTTP
-        ▼
-Python Agent :8010
-        │
-        ├─ planner：唯一的正常路径决策者
-        ├─ execute：按计划确定性执行工具
-        ├─ planner：读取工具帧，继续、修正或收尾
-        ├─ reflector：重复受阻时的受限诊断
-        ├─ model：零工具 narrator，只组织最终回复
-        └─ gate：确定性事实/声称校验，失败直接 fallback
+```mermaid
+flowchart TB
+    subgraph Caller["调用方"]
+        FE["浏览器 Live2D 对话面板<br/>（或宿主后端）"]
+        RUST["Rust 后端 :3000<br/>鉴权 · MySQL 记忆 · SSE 转发 · 身份断言"]
+    end
+
+    subgraph Agent["Python Agent :8010（FastAPI，图执行，自身无状态）"]
+        PL["planner<br/>唯一的正常路径决策者<br/>选技能 · 填参数 · 产出调用清单"]
+        EX["execute<br/>按计划确定性执行工具<br/>逐 spec 过 checker 验收"]
+        RF["reflector<br/>同一执行项重复受阻时的受限诊断"]
+        MD["model<br/>零工具 narrator，只组织最终回复"]
+        GT["gate<br/>确定性事实/声称校验，失败直接 fallback"]
+    end
+
+    TOOLS["工具层<br/>博客 api/public · api/protected · RAG · IoT device-service"]
+
+    FE -->|"SSE"| RUST
+    RUST -->|"HTTP（附身份断言）"| PL
+    PL -->|"调用清单"| EX
+    EX -->|"读取工具帧，继续 / 修正 / 收尾"| PL
+    EX -->|"同一项重复受阻"| RF
+    RF -->|"回 planner"| PL
+    PL -->|"收尾轮（清单为空）"| MD
+    EX -->|"调用"| TOOLS
+    TOOLS -->|"工具帧 + 回执"| PL
+    MD --> GT
+    GT -->|"帧 + 最终回复"| RUST
 ```
 
 正常任务的主循环是：
@@ -41,6 +54,33 @@ planner → execute → planner → ... → model → gate → END
 ```
 
 只有同一执行项重复受阻时才进入 `reflector`。第一次受阻回到 planner，允许基于真实错误帧修正参数；重复受阻才升级诊断，避免每个普通参数错误都启动额外 LLM 复盘。
+
+一轮对话里这几个节点怎么接力：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant P as planner
+    participant E as execute
+    participant T as 工具层
+    participant R as reflector
+    participant M as model
+    participant G as gate
+
+    P->>P: 先判确定性快道（零 LLM）；未命中才调 LLM 决策
+    P->>E: 调用清单（逐条「工具名(json 参数)」）
+    E->>T: 字面执行
+    T-->>E: 工具帧
+    E->>E: checker 逐 spec 判 PASS / BLOCK
+    Note over E: PASS 才算系统确认事实，产回执（__EXEC__ 帧每批即发）
+    E-->>P: 受阻首现 → 回 planner，允许改参重试
+    Note over E,R: 同一 spec 重复受阻才升级到 reflector（≤2 轮）
+    R-->>P: ISSUE（回 planner 重规划）/ wrap_up（不必再问）
+    P->>M: 收尾轮（调用清单为空）
+    M->>G: 叙述文本
+    G->>G: 查命令前缀 / 无据声称 / 编造链接 / 到达声称
+    Note over G: 命中 → 发 __RESET__，用 fallback 如实文本替换整轮叙述（无重考轮）
+```
 
 ## 关键设计
 
@@ -140,25 +180,32 @@ gate 失败时生成确定性 fallback，减少再次幻觉的机会。回复不
 saudade-blog-agent/
 ├── server.py              FastAPI 入口、SSE 编排、输入限制、并发和取消
 ├── agent/
-│   ├── graph.py           LangGraph 状态、节点和条件边
+│   ├── graph.py           LangGraph 状态、节点和条件边（含声称闸与回执驱动循环）
 │   ├── decisions.py       零 LLM 确定性决策和快道
 │   ├── context.py         上下文、工具帧和回执组装
 │   ├── skills.py          技能注册表、计划模板和业务映射
+│   ├── native_plan.py     native tool calls 计划通道
 │   ├── authz.py           scope 权限模型
+│   ├── principal.py       调用者身份（uid/role/source）的唯一构造点
 │   ├── confirm.py         无状态 HMAC 确认令牌
 │   ├── adminops.py        后台目标解析、写操作确认文案和回执摘要
 │   ├── refs.py            结构化参数引用
+│   ├── sections.py        超长文章分节（索引 / 帧 / 按节取回三处共用）
+│   ├── entities.py        执行回执实体摘要
+│   ├── tasks.py           跨轮任务状态
+│   ├── hostinfo.py        本机运维读数（只读 /proc、systemctl、日志）
+│   ├── prompts.py         人设与叙述规则
 │   ├── moderator.py       留言 AI 审核侧任务
 │   ├── summarizer.py      对话摘要侧任务
-│   └── entities.py        执行回执实体摘要
-├── tools/base.py          48 个工具、工具注册表和 ToolResult 契约
+│   └── …                  其余模块见目录（action_text / factblock / stickers / llm_usage / agent / memory 等）
+├── tools/base.py          63 个工具、工具注册表和 ToolResult 契约
 ├── rag/search.py          BM25 内存倒排检索
 ├── eval/                  检索评测、golden 评测、trace 分析与跨源对账
 ├── tests/                 秒级离线回归测试
 └── docs/                  架构、评测可观测性和问题记录
 ```
 
-技能注册表当前有 29 个技能，覆盖：导航、页面特效、夜间模式、设备显示与查询、内容检索、文章读取、运维和审核报表、后台文章/标签/分类/公告/留言管理、收藏和通知处理、闲聊等。
+技能注册表当前有 44 个技能，覆盖：导航、页面特效、夜间模式、设备显示与查询、内容检索、文章读取、运维和审核报表、后台文章/标签/分类/公告/留言管理、收藏和通知处理、闲聊等。
 
 ## 可靠性边界
 
@@ -191,7 +238,7 @@ uv sync
 # L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
 .venv/bin/python eval/recall_eval.py
 
-# L2 真实 LLM 任务评测：148 条 golden（其中 3 条会真写生产库，默认不跑、需显式放行），约 25 分钟，按需运行
+# L2 真实 LLM 任务评测：155 条 golden（其中 4 条会真写生产库，默认不跑、需显式放行），约 25 分钟，按需运行
 .venv/bin/python eval/run_golden.py
 .venv/bin/python eval/run_golden.py --only <id>,<id>   # 只跑指定用例
 .venv/bin/python eval/golden_full_run.py               # 全量跑（与 run_golden 共用判据）
