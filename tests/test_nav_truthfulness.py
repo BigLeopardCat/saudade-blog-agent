@@ -543,13 +543,25 @@ def test_gate_nav_present_claim_verified_against_page_ctx():
     o12 = gate_node(_chat_state([_sys_msg(_page_home), human, AIMessage(content=_cond)]))
     check("**条件句**（'一旦你…里执行了操作'是假设，不是主人现在在哪）→ 放行",
           o12.get("done") is True and not o12.get("fallback_text"), str(o12)[:60])
+    #  反向对照（20261003 改写）：原来这里跑 `_cond.replace("一旦", "")`，期望"抽掉条件词
+    #  当场判假"。**结构性收窄之后这句不再判**（理由见 §⑭）：它的形状是「你**在**X里执行了
+    #  操作」——正是 ①支 一直在误读的**介词短语**，句子在讲"删一下会怎样"、不在讲主人此刻
+    #  在哪页，本来就不该由本族管。条件词表仍是第二层防线（②③支与带时间标记的句子照样会
+    #  落进去），所以反向对照改用**真位置谓语**那句话：同一句加条件词 ⇒ 放行，抽掉 ⇒ 判假
+    #  ——"放行是那颗词给的"这条性质不变。
+    _pos_claim = "假如主人现在就在设备控制台了，那屏幕上应该能看到设备列表"
     o13 = gate_node(_chat_state([
+        _sys_msg(_page_home), human, AIMessage(content=_pos_claim)]))
+    check("  反向对照（真位置谓语 + 条件词）⇒ 放行",
+          o13.get("done") is True and not o13.get("fallback_text"),
+          str(o13)[:60])
+    o13b = gate_node(_chat_state([
         _sys_msg(_page_home), human,
-        AIMessage(content=_cond.replace("一旦", ""))]))
-    check("  反向对照：抽掉条件词「一旦」⇒ 当场判假（放行是那颗词给的，"
+        AIMessage(content=_pos_claim.replace("假如", ""))]))
+    check("  反向对照：抽掉条件词「假如」⇒ 当场判假（放行是那颗词给的，"
           "不是这句话本来就判不了）",
-          o13.get("fallback_text") == _FALLBACK_NAV_NO_FRAME,
-          str(o13.get("fallback_text"))[:40])
+          o13b.get("fallback_text") == _FALLBACK_NAV_NO_FRAME,
+          str(o13b.get("fallback_text"))[:40])
     _missing_cond = [w for w in ("一旦", "倘若", "假如", "除非")
                      if not G._NAV_PRESENT_EXEMPT_RE.search(w)]
     check("  条件词一族齐全（一旦/倘若/假如/除非，一个都不能少——"
@@ -591,6 +603,47 @@ def test_gate_nav_present_claim_verified_against_page_ctx():
     check("  反向：真完成态「已经登录」「已经打开」照旧命中（收窄只吃名词化的那六个）",
           bool(G._NAV_PRESENT_WINDOW_RE.search("已经登录"))
           and bool(G._NAV_PRESENT_WINDOW_RE.search("已经打开")))
+
+    # ── ⑭ 时间标记由可选改必填 + 「出现在」不再顶时间标记（20261003 全语料复扫）─────
+    # 依据：672 份有回复+上下文的 trace 全量复扫，本族共 16 命中，逐条看下来——
+    #   · 真阳性 5 条：4 条是「已经带你跳到…」（都带 navigate 回执、都在有帧轮，本族本来
+    #     就不跑）＋ 1 条就是上面那条 D4 现场句；
+    #   · 假阳性 11 条，**全部**是 ①支 把介词短语读成位置谓语（"得你**自己**在后台编辑器里
+    #     动笔"/"或者你**直接**在后台操作也行"/"只能陪**你**在聊天框里说说话"/"**主人**自己
+    #     钉在首页的哦"）或 ②支把"**出现在**"里的"现在"当成时间标记（"它会出现在公开的河灯
+    #     集里被访客看到"）。其中 4 条落在**零帧轮**（本族真会跑的那些轮）——判错的代价是
+    #     整轮诚实回复被兜底吞掉（trace 20260922T161456 / 20260922T184041 /
+    #     20260930T013256 / 20261001T202823）。锁法：现场原句逐条放行 + 反向（真位置谓语
+    #     照旧判假）+ 逐支词形锁（下面三条，比子串锁抗重构）。
+    _fp_nav = (
+        # ①支：介词短语（主语与"在"之间夹的是状语，不是时间词）
+        ("得你自己在后台编辑器里动笔", "20260922T184041"),
+        ("不在我的能力范围内——那得你自己在后台编辑器里动笔", "20260922T161456"),
+        ("得你自己在后台的用户管理里看", "20260923T122000"),
+        ("或者你在后台标签管理页直接能看到每个标签的文章数", "20260921T182557"),
+        ("得你在后台核对一下", "20260921T183544"),
+        ("或者你直接在后台操作也行", "20260930T013256"),
+        ("只能陪你在聊天框里说说话", "20261001T202823"),
+        # ②支：出现在（"现在"是"出现"的宾语尾巴，不是时间标记）
+        ("但它会出现在公开的河灯集里被访客看到", "20261001T024303"),
+    )
+    for _t, _tr in _fp_nav:
+        check(f"**介词短语/出现在** ⇒ 放行（生产现场 {_tr}）：{_t[:20]}",
+              not G._claim_issue(_t, "chat", {"skill": "chat", "note": "", "status": ""},
+                                 False, page_ctx=_page_home),
+              str(G._claim_issue(_t, "chat", {"skill": "chat", "note": "", "status": ""},
+                                 False, page_ctx=_page_home)))
+    # 逐支词形锁：①支 要**时间标记**（"你现在在首页刷文章"有、纯介词短语没有）；
+    # ②支 的"现在"不许被"出现/呈现/体现/表现/显现"吃掉，真时间词照旧。
+    check("  ①支：`_claimed_paths` 对介词短语给空集、对带时间标记的位置句给非空",
+          G._claimed_paths("得你自己在后台编辑器里动笔") == set()
+          and G._claimed_paths("你直接在后台操作也行") == set()
+          and bool(G._claimed_paths("主人，你现在在首页刷文章呢")))
+    check("  ②支：「出现在…看到」不许命中（那个「现在」被「出现」吃掉了）",
+          not G._NAV_PRESENT_WINDOW_RE.search("出现在公开的河灯集里被访客看到"))
+    check("  ②支反向：真时间标记「现在」+ 位置动词照旧命中",
+          bool(G._NAV_PRESENT_WINDOW_RE.search("你现在应该能看到设备控制台"))
+          and bool(G._NAV_PRESENT_WINDOW_RE.search("现在应该能看到设备控制台")))
 
     # ── `page=` 的解析：绝对 URL / query / fragment / 尾斜杠都要归一────────
     check("绝对 URL → 站内路径（去 query/fragment/尾斜杠）",
