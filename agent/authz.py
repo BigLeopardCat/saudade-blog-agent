@@ -794,6 +794,69 @@ def _own_command(msg: str, tool: str | None = None) -> bool:
 _CONSENT_PATTERNS[SCOPE_WRITE_OWN] = _own_command
 
 
+# ── 「在问我自己那份数据」的问句判据（20261003）─────────────────────────────
+# 方向与上面那一族**相反**：`_own_command` 判"这句是不是一条写命令"（判错的代价是多问一次
+# 点击），这条判"这句是不是在问**我自己账号里的数据**"（判错的代价是让 planner 白跑一轮）。
+# 消费方只有一个：`graph.gate_node` 第 4 节（零帧 chat 轮）。
+#
+# 现场（uid=1 会话 320，trace `20261003T194144`）：主人问「我有哪些未读通知呀」，planner 落
+# chat 零工具，narrator 回了一段**关于上一轮话题（翻日志 / worker respawn）的真话**——每一句
+# 都经得起核，于是 gate 的判据族（全是"这句话真不真"型）全绿放行，主人只能下一轮自己纠错。
+#
+# **为什么不写"回复与问句的主题交集为空"那条通用判据**：全量回放 uid>0 的零帧放行轮，大段
+# 合法闲聊（「小猫咪你会做蛋糕吗」「我刚刚说要，是要什么」「小猫咪按你想法来吧」）与问句的
+# 字符 bigram 覆盖率**就是 0.00** ⇒ 拿主题交集当判据等于把闲聊全判死。所以这里不碰"主题"，
+# 只判**前置条件**：主人问的是自己那份数据（站内为它备了专门的无参取数工具），而这一轮
+# 一个字节都没取。判据只管打回去重规划一次，**不替 planner 选技能**（与 `_REPLAN_*` 同纪律）。
+#
+# 五步（每一步都被全量语料量过，成对表见 `tests/test_authz.py`）：
+#   ① 剥壳（`strip_user_shell`）：判据看到的是主人实际说的那句；
+#   ② 能力问句排除——「你能发私信吗」「你可以单独把一个消息标记已读吗」问的是"能不能"，
+#      如实回答"不能"就是**对的出路**，打回去只会换个说法（同族取舍见洞⑫）；
+#   ③ 写命令排除——「我的未读信息全部就标记为已读」归写侧（洞⑨ `sys_write_claim_without_tool`），
+#      这里放它过去等于替另一族的现场抢答；
+#   ④ 必须是问句——`is_question_like` **认不出**「我有哪些未读通知呀」（它认 吗/呢/怎么，
+#      不认"呀"），所以必须并上现成的量词型打听表 `_OWN_INQUIRY_RE`（哪些/几条）：少了这一步
+#      **漏掉的正是事故原句本身**；
+#   ⑤ 物件要是自己那份——私信/站内信/信箱/未读/红点 自带"我的"语义，直判；提醒/通知/公告/
+#      消息/信息/收藏 是通用词（「站内最近有什么公告吗？」是**公开面**，golden 有专条），
+#      必须同时出现自指（我/咱/俺/自己）。
+#
+# 射程（落码前先量，全量 1106 份 trace 回放）：uid>0 的零帧放行轮 299 轮里命中 **2**——
+# 一条就是上面那次事故的原句；另一条是 20260923 的纠正轮「不应该是私信内容吗要看吗」（回复
+# 本身没说错话，但"去查私有收件箱"确实是更对的出路）。golden 155 条命中 2 条，**两条都是
+# uid=0 的 not_logged_in 用例** ⇒ 由调用侧的 `uid > 0` 守卫排除，默认跑 0 次开火。
+_OWN_SELF_RE = re.compile(r"我|咱|俺|自己")
+_OWN_PERSONAL_OBJECT_RE = re.compile(r"未读|红点|信箱|私信|站内信")
+_OWN_BROAD_OBJECT_RE = re.compile(r"提醒|通知|公告|消息|信息|收藏")
+# 能力问句：前一支（能不能/可不可以…）**独自成问**，不要求句尾有"吗"——生产原话
+# 「能不能替我发个公告」整句没有"吗"；后一支要求句尾问号/语气词，中间允许 20 字
+# ——「你可以单独把一个消息标记已读吗」中间隔了 11 个字。
+_OWN_CAPABILITY_RE = re.compile(
+    r"能不能|可不可以|能否|会不会|行不行"
+    r"|(?:能|可以|会|支持)[^。！？!?；;\n]{0,20}?(?:吗|嘛|么|？|\?)")
+
+
+def is_own_read_question(msg: str) -> bool:
+    """这句是**在问我自己账号里的数据**吗（未读通知 / 站内信 / 私信 / 收藏…）？
+
+    只回答"这是不是一个**该去取数**的问句"，不回答"该取哪一份"——落到哪个技能由 planner 定
+    （同 `_replan_note` 的纪律：这一层只给路径、不给结论）。空消息 → False（无从句可判）。
+    """
+    text = strip_user_shell(msg)
+    if not text:
+        return False
+    if _OWN_CAPABILITY_RE.search(text):            # ② 能力问句：如实答"不能"就是出路
+        return False
+    if any(_own_command(text, tool) for tool in _OWN_TOOL_FAMILY):   # ③ 写命令归写侧
+        return False
+    if not (is_question_like(text) or _OWN_INQUIRY_RE.search(text)):  # ④ 问句（含量词型打听）
+        return False
+    if _OWN_PERSONAL_OBJECT_RE.search(text):       # ⑤ 自带"我的"语义的物件
+        return True
+    return bool(_OWN_BROAD_OBJECT_RE.search(text) and _OWN_SELF_RE.search(text))
+
+
 def scopes_for(role: str | None) -> frozenset[str]:
     """角色 → 授予的 scope 集。未知角色（含 None）→ 空集。"""
     return _ROLE_SCOPES.get(role or "", frozenset())

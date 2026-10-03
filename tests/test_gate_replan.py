@@ -106,6 +106,26 @@ class _FakeNoticeTool:
         return _base.ok("已把 4 条通知标记为已读（现在未读：通知 0 条 / 私信 0）。")
 
 
+class _FakeOwnReadTool:
+    """假 get_unread_summary：只记账、零网络（⑥ 的取数族用）。
+
+    真工具以发起人身份读他自己的那一份（`scope=read.own`，未登录时工具层如实说
+    "读不到"）——这里换掉它就是**为了零网络**：判据本身与工具无关，它只认"这一轮
+    到底有没有一张帧"。
+
+    它**不接受参数**（无参只读），所以记下来的是空参数表——⑥ 里"别给取数工具编参数"
+    那条建议正是照它写的。
+    """
+
+    def __init__(self):
+        self.name = "get_unread_summary"
+        self.calls: list = []
+
+    def invoke(self, args):
+        self.calls.append(args)
+        return _base.ok("你的未读：通知 2 条 / 私信 0 条。")
+
+
 class _FakeNoopNoticeTool(_FakeNoticeTool):
     """假 read_notifications 的**零改动**档：`meta["noop"]` 证书在场。
 
@@ -133,11 +153,13 @@ _PLAN_SEARCH = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "search_notes
 
 
 def _run(plans: list, narrations: list, user_msg: str = "西顿学院",
-         tool_name: str = "search_notes", fake=None):
+         tool_name: str = "search_notes", fake=None, uid: int = 5):
     """跑一遍真图，返回 (最终 state, 假 LLM, 假工具, trace 事件列表)。
 
     `tool_name` / `fake` 让别的族复用同一台真图（④ 的写族打的是 `read_notifications`，
     不是检索工具）——**换的只是工具**：图、gate、路由全是生产那一份。
+    `uid` 同理（⑥ 的守卫用例要 `uid=0` 的未登录档：那是 golden 里那两条
+    `own_*_not_logged_in` 的身份，判据在该档下必须不开火）。
     """
     llm, tool, events = _ScriptedLLM(plans, narrations), (fake or _FakeTool()), []
     orig_llm, orig_record = g.get_llm, g.record
@@ -146,8 +168,8 @@ def _run(plans: list, narrations: list, user_msg: str = "西顿学院",
     g.record = lambda node, event, **data: events.append((node, event, data))
     g._TOOL_MAP[tool_name] = tool
     try:
-        cfg = {"configurable": {"thread_id": "t-gate-replan", "user_id": 5,
-                                "principal": Principal(uid=5),
+        cfg = {"configurable": {"thread_id": "t-gate-replan", "user_id": uid,
+                                "principal": Principal(uid=uid),
                                 "conversation_id": 1, "stop_event": None}}
         out = build_graph().invoke(
             graph_input([HumanMessage(content=user_msg)]), cfg)
@@ -427,6 +449,87 @@ check("  剔空之后 PARAMS 同步剔（两行不一致 = narrator 只能猜到
           [list(g._spec_signature("read_notifications", {"all": True}))])[0]["params"]
        .get("tools")) == ["list_notifications"])
 
+
+print("\n⑥ 零帧纯作答轮 + 主人在问**自己那份数据** → 打回重规划（20261003 补的那半）")
+# 现场（uid=1 会话 320，trace `20261003T194144`；下面两段取自那份 trace 原文的**开头**）：
+# 主人问「我有哪些未读通知呀」，planner 落 chat 零工具，narrator 回了一段**关于上一轮话题
+# （翻服务日志 / worker respawn）的真话**。上面每一族问的都是"这句话真不真"——那段话字字
+# 属实，于是原先直接 gate PASS（zero_frame=True）。这一节锁的就是补上的那半：**这轮答的是
+# 不是主人刚问的那件事**（判据与射程数据见 `agent/authz.py::is_own_read_question` 的头注）。
+_LIE_OWN = ("主人，这一轮我得跟你说实话喵——我手上没有“翻原始日志文件”的工具，"
+            "journalctl / rust.log / agent.log 的原文我这轮取不到，所以没法把这次 "
+            "respawn 的具体堆栈贴给你看。")
+_TRUTH_OWN = "主人，你现在有 2 条未读通知喵～（私信 0 条）"
+_PLAN_OWN = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "get_unread_summary", '
+             '"args": {}}]}')
+_out6, _llm6, _tool6, _ev6 = _run([_PLAN_CHAT, _PLAN_OWN, _PLAN_CHAT],
+                                  [_LIE_OWN, _TRUTH_OWN],
+                                  user_msg="小猫咪！我有哪些未读通知呀",
+                                  tool_name="get_unread_summary",
+                                  fake=_FakeOwnReadTool())
+check("脚本足够跑完这一轮", _llm6.exhausted == [], str(_llm6.exhausted))
+check("planner **真的重新决策了一次**（不是直接兜底道歉）",
+      len(_rounds(_llm6, 2)) == 1, f"各轮次数={[len(_rounds(_llm6, n)) for n in (1, 2, 3)]}")
+check("重规划那一轮真的把取数工具执行了（不是又空跑一轮）",
+      _tool6.calls == [{}], str(_tool6.calls))
+check("打回提示给的是**取数族**的出路（这几个工具不需要参数），不是检索族那套",
+      bool(_rounds(_llm6, 2)) and "不需要参数" in _rounds(_llm6, 2)[0]
+      and "选检索类技能" not in _rounds(_llm6, 2)[0],
+      (": ".join(_rounds(_llm6, 2)[0].splitlines()[-4:])[:160]
+       if _rounds(_llm6, 2) else "第 2 轮提示词不存在"))
+check("最终回复是重查之后那条有依据的叙述",
+      (_out6["messages"][-1].content or "").strip() == _TRUTH_OWN,
+      repr((_out6["messages"][-1].content or "")[:40]))
+check("被否定的那段**不在**最终 state 里（不留成下一轮的范文）",
+      _LIE_OWN not in _ai_text(_out6))
+check("没有走兜底（fallback_text 为空、done 为真）",
+      not _out6.get("fallback_text") and _out6.get("done") is True)
+check("trace 里 replan 的 issue 就是本族（判据可回溯）",
+      any(d.get("issue") == "own_read_question_without_tool"
+          for _n, e, d in _ev6 if e == "replan"),
+      str([(e, d.get("issue")) for _n, e, d in _ev6 if e in ("replan", "fallback")]))
+
+print("\n⑥b 守卫：这些轮**不许**开火（开火了就是把本来对的回答换成兜底）")
+_NEUTRAL = "嗯嗯，这个我知道喵～"
+
+
+def _no_fire(user_msg: str, uid: int = 5):
+    """跑一轮 chat/answer_only（触发形状与⑥完全一致，只换消息或 uid），返回 (事件名, state)。"""
+    _o, _l, _t, _e = _run([_PLAN_CHAT], [_NEUTRAL], user_msg=user_msg, uid=uid)
+    return [e for _n, e, _d in _e], _o
+
+
+_e, _o = _no_fire("我有哪些未读通知？", uid=0)
+check("uid=0（未登录）：「读不到你自己的数据」本身就是如实的答案 ⇒ 不开火",
+      "replan" not in _e and "fallback" not in _e, str(_e))
+check("  且那一轮照常 PASS 收尾（golden 的 `own_*_not_logged_in` 两条正是这一档）",
+      not _o.get("fallback_text") and (_o["messages"][-1].content or "") == _NEUTRAL)
+for _msg, _why in [("你可以单独把一个消息标记已读吗", "能力问句：如实答「不能」就是出路"),
+                   ("猫咪我的未读信息全部就标记为已读", "写命令：归洞⑨（写侧那族）"),
+                   ("站内最近有什么公告吗？", "公开面（golden `data_announcements` 同形）"),
+                   ("读取站内通知读不到吗", "「通知」是通用词、句里没有自指"),
+                   ("小猫咪你会做蛋糕吗", "闲聊")]:
+    _e, _o = _no_fire(_msg)
+    check(f"不开火：{_msg}（{_why}）",
+          "replan" not in _e and "fallback" not in _e, str(_e))
+
+print("\n⑥c 源码锁：开火点在零帧块里，三张表都挂了号，兜底文案不许带读数")
+_GSRC_OWN = Path(g.__file__).read_text(encoding="utf-8")
+_OWN_CALL = "authz.is_own_read_question(_last_user_msg(msgs))"
+check("判据接在 gate 里（源码里认得出这个调用点）", _OWN_CALL in _GSRC_OWN)
+check("  且排在 `if not frames:` **之后**（有帧 = 这一轮真取过数了，不该被这条拦）",
+      _GSRC_OWN.index("if not frames:") < _GSRC_OWN.index(_OWN_CALL))
+check("家族在 `_REPLAN_ISSUES` / `_REPLAN_ADVICE` / `_REPLAN_WHY` 三张表里都挂了号",
+      "own_read_question_without_tool" in g._REPLAN_ISSUES
+      and "own_read_question_without_tool" in g._REPLAN_ADVICE
+      and "own_read_question_without_tool" in g._REPLAN_WHY)
+check("  否定说明**不跟缺省那句走**（缺省写的是「那条结论没有任何依据」，"
+      "而本族的前提是「句句属实但答错了题」）",
+      "没有去取" in g._replan_note("own_read_question_without_tool", "x")
+      and "没有任何依据" not in g._replan_note("own_read_question_without_tool", "x"))
+check("兜底文案如实说「没去取」，且**不含任何读数**（走到兜底时一个字节都没取到）",
+      "没有去取你自己的数据" in g._FALLBACK_OWN_READ
+      and not any(k in g._FALLBACK_OWN_READ for k in ("0 条", "0 封", "没有未读")))
 
 print()
 if FAILED:
