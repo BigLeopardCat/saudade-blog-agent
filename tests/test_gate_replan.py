@@ -506,12 +506,16 @@ check("  且那一轮照常 PASS 收尾（golden 的 `own_*_not_logged_in` 两�
       not _o.get("fallback_text") and (_o["messages"][-1].content or "") == _NEUTRAL)
 for _msg, _why in [("你可以单独把一个消息标记已读吗", "能力问句：如实答「不能」就是出路"),
                    ("猫咪我的未读信息全部就标记为已读", "写命令：归洞⑨（写侧那族）"),
-                   ("站内最近有什么公告吗？", "公开面（golden `data_announcements` 同形）"),
                    ("读取站内通知读不到吗", "「通知」是通用词、句里没有自指"),
                    ("小猫咪你会做蛋糕吗", "闲聊")]:
     _e, _o = _no_fire(_msg)
     check(f"不开火：{_msg}（{_why}）",
           "replan" not in _e and "fallback" not in _e, str(_e))
+# 原先这张表里还有一条「站内最近有什么公告吗？」（golden `data_announcements` 同形）——20261004
+# 公开面那一族（⑥d/⑥e）上线后它**改成开火了**：uid>0 的主人问站内的公告而这一轮零工具，
+# 站里明明备着 `get_announcements` ⇒ 打回重规划才是对的（这里 `_no_fire` 用的 `_PLAN_CHAT`
+# 第二次仍落 chat，于是那轮会走到兜底——那是脚本写死的结果，不是判据错）。它现在锁在 ⑥e
+# 的**真阳性**一行；本族（私有面）对它的判定没变，仍是不开火。
 
 print("\n⑥c 源码锁：开火点在零帧块里，三张表都挂了号，兜底文案不许带读数")
 _GSRC_OWN = Path(g.__file__).read_text(encoding="utf-8")
@@ -530,6 +534,117 @@ check("  否定说明**不跟缺省那句走**（缺省写的是「那条结论�
 check("兜底文案如实说「没去取」，且**不含任何读数**（走到兜底时一个字节都没取到）",
       "没有去取你自己的数据" in g._FALLBACK_OWN_READ
       and not any(k in g._FALLBACK_OWN_READ for k in ("0 条", "0 封", "没有未读")))
+
+
+print("\n⑥d 零帧纯作答轮 + 主人在问**站内语料** → 打回重规划（20261004 补的公开面孪生族）")
+# 现场（生产 trace `20261002T195955_9_r8d7`）：主人问「博客有哪些文章呢」，planner 落 chat、
+# 零工具、零帧，narrator 回「我这边**没有工具**可以帮你查具体的文章标题和链接」。上面各族的
+# 判据问的都是"这句话真不真"——那句"没有工具"**字字属实**（当轮确实一次检索都没跑），于是
+# 原先直接 gate PASS。这一节锁的是补上的那半：站里明明备着 `rag_search`/`search_notes`/
+# `list_notes`，"零检索就去下结论"本身就不该放行（判据与射程数据见
+# `agent/authz.py::is_site_corpus_question` 的头注）。
+_LIE_SITE = ("主人，我这边**没有工具**可以帮你查具体的文章标题和链接喵～"
+             "你要是想找哪篇，直接跟我说标题我看看记不记得。")
+_TRUTH_SITE = "主人，站内一共有 3 篇文章喵：《西顿学院小记》《Docker 部署笔记》《测试文章 TEST8》。"
+_PLAN_SITE = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
+              '"args": {"keyword": "文章"}}]}')
+_out6d, _llm6d, _tool6d, _ev6d = _run([_PLAN_CHAT, _PLAN_SITE, _PLAN_CHAT],
+                                      [_LIE_SITE, _TRUTH_SITE],
+                                      user_msg="博客有哪些文章呢")
+check("脚本足够跑完这一轮", _llm6d.exhausted == [], str(_llm6d.exhausted))
+check("planner **真的重新决策了一次**（不是直接兜底道歉）",
+      len(_rounds(_llm6d, 2)) == 1,
+      f"各轮次数={[len(_rounds(_llm6d, n)) for n in (1, 2, 3)]}")
+check("重规划那一轮真的把检索工具执行了（不是又空跑一轮）",
+      _tool6d.calls == [{"keyword": "文章"}], str(_tool6d.calls))
+check("打回提示给的是**检索族**的出路（去查），不是取数族那套（去取本人的数）",
+      bool(_rounds(_llm6d, 2)) and "检索类技能" in _rounds(_llm6d, 2)[0]
+      and "不需要参数" not in _rounds(_llm6d, 2)[0],
+      (": ".join(_rounds(_llm6d, 2)[0].splitlines()[-5:])[:180]
+       if _rounds(_llm6d, 2) else "第 2 轮提示词不存在"))
+check("最终回复是重查之后那条有依据的叙述",
+      (_out6d["messages"][-1].content or "").strip() == _TRUTH_SITE,
+      repr((_out6d["messages"][-1].content or "")[:40]))
+check("被否定的那段**不在**最终 state 里（不留成下一轮的范文）",
+      _LIE_SITE not in _ai_text(_out6d))
+check("没有走兜底（fallback_text 为空、done 为真）",
+      not _out6d.get("fallback_text") and _out6d.get("done") is True)
+check("trace 里 replan 的 issue 就是本族（判据可回溯；别与取数族记混）",
+      any(d.get("issue") == "site_corpus_question_without_tool"
+          for _n, e, d in _ev6d if e == "replan"),
+      str([(e, d.get("issue")) for _n, e, d in _ev6d if e in ("replan", "fallback")]))
+
+print("\n⑥e 守卫：这些轮**不许**开本族（尤其是跨轮取值那条现在绿的 golden）")
+# 与 ⑥b 同一台真图、同一触发形状（chat/answer_only + 零帧），只换消息或 uid。
+
+
+def _issues(user_msg: str, uid: int = 5) -> tuple[list, dict]:
+    """跑一轮 chat/answer_only，返回 (replan 事件里出现的 issue 列表, 最终 state)。"""
+    _o, _l, _t, _e = _run([_PLAN_CHAT], [_NEUTRAL], user_msg=user_msg, uid=uid)
+    return [d.get("issue") for _n, e, d in _e if e == "replan"], _o
+
+
+_SITE_ISSUE = "site_corpus_question_without_tool"
+for _msg, _why in [("编程那个分类下面有几篇文章？",
+                    "★ 指代/取值型：按 rule 6b 照抄跨轮摘要，零工具才对"
+                    "（golden `followup_entity_slot_category` 原句，现在判绿）"),
+                   ("那个分类下面有几篇文章？",
+                    "同上（golden `followup_entity_slot_ambiguous`）"),
+                   ("你能编辑文章吗", "能力问句：如实答「不能」就是出路"),
+                   ("你用哪些工具读文章", "元问句：问的是「你有什么」，不是「给我一份数据」"),
+                   ("好猫猫，亲一个", "闲聊"),
+                   ("小猫咪你会做蛋糕吗", "闲聊（与站内语料无关）")]:
+    _is, _o = _issues(_msg)
+    check(f"不开本族：{_msg}（{_why}）", _SITE_ISSUE not in _is, str(_is))
+# uid=0（身份没传进来）：站里有没有文章这个问题本身答不了不是重点——这一档下
+# 「读不到」是系统侧的如实告知，打回去只会换个说法（与 ⑥b 同源）。
+_is0, _o0 = _issues("博客有哪些文章呢", uid=0)
+check("uid=0（身份缺失）：本族不开火（同 ⑥b 的身份守卫）",
+      _SITE_ISSUE not in _is0, str(_is0))
+check("  且那一轮照常 PASS 收尾（没有变成兜底）",
+      not _o0.get("fallback_text") and (_o0["messages"][-1].content or "") == _NEUTRAL)
+# 「我有哪些未读通知呀」会被**取数族**接走——本族必须让路（同一句两边都开火，第一次打回
+# 会指向两个方向，`_replan_note` 只能选一条）。这一条锁的是"两面互斥"在 gate 里也成立。
+_is_own, _o_own = _issues("我有哪些未读通知呀")
+check("自指数据归取数族：同一句只有 `own_read_question_without_tool` 开火，本族让路",
+      _is_own == ["own_read_question_without_tool"], str(_is_own))
+# 真阳性一侧：**清单型**站内问句也算（不是只有"某篇文章里写了什么"才算）——站里的公告
+# 备着 `get_announcements`，uid>0 的主人问了而这一轮零工具，同样该打回。golden
+# `data_announcements`（uid=0）与这条不同形：那一档被判据的身份守卫排除（见 ⑥e 上一行）。
+_is_ann, _o_ann = _issues("站内最近有什么公告吗？")
+check("真阳性：站内公开数据（公告）而这一轮零工具 ⇒ 开本族",
+      _is_ann == [_SITE_ISSUE], str(_is_ann))
+check("  且打回建议里点名了**清单型**的出路（公告/分类/标签这类走对应数据工具），"
+      "不是只指检索一条路",
+      any("公告" in a for a in g._REPLAN_ADVICE[_SITE_ISSUE]),
+      str(g._REPLAN_ADVICE[_SITE_ISSUE])[:120])
+
+print("\n⑥f 源码锁：开火点在零帧块里、三张表都挂了号、兜底与否定说明都是本族自己的")
+_GSRC_SITE = Path(g.__file__).read_text(encoding="utf-8")
+_SITE_CALL = "authz.is_site_corpus_question(_last_user_msg(msgs))"
+check("判据接在 gate 里（源码里认得出这个调用点）", _SITE_CALL in _GSRC_SITE)
+check("  且排在 `if not frames:` **之后**（有帧 = 这一轮真查过了，不该被这条拦）",
+      _GSRC_SITE.index("if not frames:") < _GSRC_SITE.index(_SITE_CALL))
+check("  且排在取数族那条**之后**（同一句两族都能认时，先到先得的是取数族）",
+      _GSRC_SITE.index("authz.is_own_read_question(_last_user_msg(msgs))")
+      < _GSRC_SITE.index(_SITE_CALL))
+check("家族在 `_REPLAN_ISSUES` / `_REPLAN_ADVICE` / `_REPLAN_WHY` 三张表里都挂了号",
+      _SITE_ISSUE in g._REPLAN_ISSUES
+      and _SITE_ISSUE in g._REPLAN_ADVICE
+      and _SITE_ISSUE in g._REPLAN_WHY)
+check("  否定说明**不跟缺省那句走**（缺省说「一个工具都没有执行」，本族的前提是"
+      "「查都没查过 / 拿世界知识顶上」）",
+      "一次检索都没有跑" in g._replan_note(_SITE_ISSUE, "x")
+      and "没有任何依据" not in g._replan_note(_SITE_ISSUE, "x"))
+check("  打回建议给**两条出口**（真问站内内容 → 检索；其实延续上一轮摘要 → 照抄），"
+      "而不是只指一条路白烧一轮",
+      any("检索" in a for a in g._REPLAN_ADVICE[_SITE_ISSUE])
+      and any("照抄" in a for a in g._REPLAN_ADVICE[_SITE_ISSUE]))
+check("兜底文案如实说「没去站内查过」，且**不含任何可抄的结论句**"
+      "（走到兜底时一个字节都没查到）",
+      "没有去站内查过" in g._FALLBACK_SITE_CORPUS
+      and not any(k in g._FALLBACK_SITE_CORPUS
+                  for k in ("站内没有", "没有相关", "我这边没有工具")))
 
 print()
 if FAILED:

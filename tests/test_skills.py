@@ -1419,9 +1419,11 @@ def test_phantom_tool_claim():
     # 61 → 62 是同一天的文章分期报表一件：get_note_periods（读
     # `GET /api/protected/stats/notes/periods`，与 get_note_stats 是两个端点两张纸）；
     # 62 → 63 是 20261002 批 J 的变更账号身份一件：set_account_role（与冻结族同门——
-    # 读同一份后台账号名录、按名字指认，但后果是**换档**而非关掉）。
+    # 读同一份后台账号名录、按名字指认，但后果是**换档**而非关掉）；63 → 65 是
+    # 20261004 内容风控下放的禁言/解禁两件：account_mute / account_unmute
+    # （名字是 Rust 路由注释里先定死的契约，**不是** mute_account 那种语序）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 63 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 65 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 
@@ -5306,6 +5308,29 @@ def test_name_target_round():
         check("  重决策后落成一条写规格（名字由系统解析 id，交弹卡）",
               _spec4n == ['send_user_notice({"name": "boss", "content": "请以后老实一点。"})'],
               str(_spec4n))
+
+        # ④a5 禁言族**刻意不进**这张表（20261004 内容风控下放时考虑过、否掉了）——
+        #     与冻结族同款决定（冻结族 20260926 上线时也没进）。理由：这一族的动作词
+        #     （冻结/解冻/禁言/解禁）不像"删掉/改名"那样自带祈使形态，「禁言」两个字同样
+        #     出现在**读**意图里（「看看禁言名单」「他被禁言了吗」），而这两句一个字都不
+        #     是要动数据。命中的代价不是零：纠偏文本会告诉 planner「主人这句话里带着改动
+        #     站内数据的动作词」（对那两句是**假话**），它转而排一条写规格、展开层再以
+        #     "缺账号名"零工具收场 ⇒ 主人问"名单"却得到"要动哪个账号？"。
+        #     收益侧由 gate 顶上（下一条锁）：这族真正的防线是**零帧写声称判据**，
+        #     而它已经收了禁言/解禁的词根 —— 所以这里的"不命中"是有代价可控的决定，
+        #     不是漏配。谁日后往主表里加这三个词，本检查当场红。
+        check("  禁言族的动作词刻意不在纠偏表里（与冻结族一致：这些词在读意图里同样出现）",
+              all(G._name_write_verbs(_s) == [] for _s in (
+                  "把账号「boss」禁言掉", "给 guest5 禁言三天", "解禁 guest5",
+                  "帮账号「boss」解除禁言", "冻结 guest5", "给 guest5 解冻",
+                  "看看禁言名单", "他被禁言了吗", "站内禁用了哪些插件",
+                  "禁止转载的文章有哪些")),
+              str(G._name_write_verbs("把账号「boss」禁言掉")))
+        check("  而它在零帧写声称判据里挂了号（这才是这族的防线，不是纠偏）",
+              "禁言" in G._WRITE_DONE_CLAIM_RE.pattern
+              and "解禁" in G._WRITE_DONE_CLAIM_RE.pattern
+              and "冻结" in G._WRITE_DONE_CLAIM_RE.pattern,
+              "写声称词根缺禁言族")
 
         # ④b 提问句 / 闲聊结构上不纠偏（多问一次就是白烧一轮 + 诱导乱写）
         for _label, _q in (("疑问句（问影响）", "把标签 Rust 挪到「嵌入式」下面会有什么影响？"),

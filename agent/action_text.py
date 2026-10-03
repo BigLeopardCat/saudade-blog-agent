@@ -181,6 +181,14 @@ WRITE_CLAIM_ROOTS = {
     "reset_user_quota": r"重置|恢复额度|额度恢复",
     "freeze_account": r"冻结|封号|封掉",
     "unfreeze_account": r"解冻|解封",
+    # 禁言两件（20261002）。与冻结族**必须不同形**（禁言不踢人下线），词根也各是各的：
+    # 「禁言」收的是模型自己的说法（「我已经把他禁言了」），而系统措辞是
+    # `receipt_action` 那一行「禁言账号「X」」——两者都会被模型照抄，所以两边都收。
+    # 解禁方向刻意**不**写成只认「解禁」：主人与模型都常说「解除禁言」，而这个词里
+    # 含「禁言」二字 ⇒ 两个工具的词根天然有交集，这是**有意**的——零帧轮里说
+    # 「已解除禁言」和说「已禁言」都是"声称做了一件本轮的写"，判据只关心这件事。
+    "account_mute": r"禁言|封口",
+    "account_unmute": r"解禁|解除禁言|撤销禁言|恢复发言",
     # 变更身份（20261002 批 J）：词根覆盖"改成/改为/设成/降成/恢复成"这一族
     # （技能描述里的动词与主人常说的都在里头）——洞⑨ 那条消费者（`test_write_done_claim.py`
     # 的同步锁）会检查每个 write scope 工具都在这张表上，漏了当场红。
@@ -588,6 +596,27 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         change = _m(m, "change")
         # 带上 `change`（"状态本来就是冻结，本次未发生变更"这类）：幂等/未变更的那一次
         # 只写「冻结账号「X」」，跨轮记忆里就成了一次真动作。
+        return f"{verb}「{acct}」：{change}" if change else f"{verb}「{acct}」"
+    if name in ("account_mute", "account_unmute"):
+        # 禁言 / 解禁（20261002）。同账号族两条纪律（只报**账号名**、**不报 uid**），
+        # 外加两处这一族独有的：
+        #   · **方向必须写进行内**（两个工具一个禁一个解，只写「动了账号「X」」读不出
+        #     是哪一边）；
+        #   · 禁言方向**要报期限**：那一格是跨轮记忆里"他当时被关了多久"的唯一来源
+        #     ——主人下轮问"你把他关了多久"，没有这一格就只剩一句"禁了"。
+        #     期限取自回执 meta 的 `change`（= 工具写后重读得到的事实，不是模型填的值），
+        #     与 `before`/`after` 一起构成"从什么状态到什么状态"。
+        # ⚠️ 措辞**绝不复用冻结族的"踢下线"**：禁言不 bump `token_version`。
+        acct = _m(m, "account_name") or _leaf(a.get("name"))
+        verb = "禁言账号" if name == "account_mute" else "解除账号禁言"
+        if preview:
+            return f"{verb}「{acct}」" if acct else verb
+        if not acct:
+            return verb
+        change = _m(m, "change")
+        # 期限住在 `change` 里（`adminops.account_mute_change_phrase` 拼的
+        # 「已禁言（至 2026-10-04 12:00）」），所以两个方向共用同一条尾巴：
+        # 解禁方向那半句是「已解除禁言 / 本来就没有被禁言，本次未发生变更」。
         return f"{verb}「{acct}」：{change}" if change else f"{verb}「{acct}」"
     if name == "set_account_role":
         # 变更身份（20261002 批 J）。同账号族两条纪律（只报账号名、**不报 uid**），

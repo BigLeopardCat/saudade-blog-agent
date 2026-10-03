@@ -633,6 +633,12 @@ _MIN_PARAMS = {
         {"tool": "audit_board_comment", "args": {"talk_id": 12, "verdict": "pass"}},
         {"tool": "approve_quota_request", "args": {"user_id": 90000001}},
     ]},
+    # 禁言 / 解除禁言（20261004 内容风控下放）：名字通道的又一件，且**只有禁言方向**
+    # 多一个可选参数 `hours`（不填 = 永久；解禁填了也会被丢掉，见展开器那一段）。
+    # ⚠️ 名字必须**明显是假的**（同上那条纪律）；这里的 `hours` 填人话「三天」而不是
+    # 72，正是要锁**归一发生在确定性层**（进 spec 的必须是归一后的小时数）。
+    "mute_account": {"name": "probe_target_1", "hours": "三天"},
+    "unmute_account": {"name": "probe_target_1"},
 }
 _EXPECT_TOOL = {
     "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
@@ -656,6 +662,9 @@ _EXPECT_TOOL = {
     "quota_reject": "reject_quota_request",
     "quota_reset": "reset_user_quota",
     "account_set_role": "set_account_role",
+    # 技能名与工具名不是一套字面量（技能 mute_account / 工具 account_mute）——
+    # 名字是后端路由注释里先定的契约，别按冻结族的语序"改顺"。
+    "mute_account": "account_mute", "unmute_account": "account_unmute",
     # 变更集（20260929 批 F）：期望值是**列表**——它的 `plan` 是"允许出现的工具全集"
     # 而不是固定序列，展开结果由 `params.specs` 逐条决定（下面那条判据按形状取值）。
     "review_inbox": ["audit_board_comment", "approve_quota_request"],

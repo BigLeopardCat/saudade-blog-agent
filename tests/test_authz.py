@@ -224,7 +224,10 @@ CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), 
 # 同一条理由——它动的**不是主人的东西**，而后果比冻结更"换档"：降成杂鱼 = 那个账号以后
 # 什么站内操作都做不了、只能闲聊，升回普通用户 = 把能力还给他。用户拍板"每次都弹卡"，
 # 卡面必须印全「从哪个身份 → 到哪个身份」（详见 authz 里 `_ALWAYS_CONFIRM_TOOLS` 的注）。
-check("需确认的工具恰好是二十七个（二十三个后台写 + 四个用户自己的写）",
+# 20261002 到二十九个：内容风控下放的禁言两件（`account_mute` / `account_unmute`）。
+# 与冻结族同一条理由，但后果是它的**反面**（禁言不踢人下线，只是让他发不出评论与留言）
+# ⇒ 名额进得来，措辞一个字都不许共用（详见 authz 里那两条 why 与 `adminops._MUTE_*`）。
+check("需确认的工具恰好是二十九个（二十五个后台写 + 四个用户自己的写）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
                         "create_announcement", "update_announcement",
@@ -237,6 +240,7 @@ check("需确认的工具恰好是二十七个（二十三个后台写 + 四个�
                         "approve_quota_request", "reject_quota_request",
                         "reset_user_quota",
                         "set_account_role",
+                        "account_mute", "account_unmute",
                         "set_article_status", "set_article_tags",
                         "add_favorite", "remove_favorite", "read_notifications",
                         "read_messages"},
@@ -1086,6 +1090,48 @@ check("称呼壳对这条判据透明（带不带你叫它，判定一致）",
 _ORQ_SAME = [t for t in _ORQ_TRUE
              if any(authz._own_command(t, tool) for tool in authz._OWN_TOOL_FAMILY)]
 check("两侧互斥：判成「问」的句子不会被写侧同时判成命令", not _ORQ_SAME, str(_ORQ_SAME))
+
+print("⑨j 「话题落在站内语料上却零检索」的问句判据（20261004，gate 第 4c 节的输入）")
+# 现场（生产 trace `20261002T195955_9_r8d7`）：主人问「博客有哪些文章呢」，planner 落 chat、
+# 零工具、零帧，narrator 回「我这边**没有工具**可以帮你查具体的文章标题和链接」——站里备着
+# `rag_search`/`search_notes`/`list_notes`。判据只判"该不该去检索一次"，不管落到哪个技能。
+# 射程（全量 1110 份 trace 回放）：uid>0 的零帧放行轮 300 轮命中 **1**（就是那条原句）。
+# ⚠️ 下面这张表里**必须**留着 `followup_entity_slot_category` 的原句当反例——它与"真的要
+# 检索"字面完全同形（top1 都是 10.33），少一道「指代型」守卫就会直接打红一条现在绿的用例。
+_SCQ_TRUE = [
+    "博客有哪些文章呢",                          # ★ 事故原句
+    "站内有没有写 ESP32 的文章？",               # golden `multi_step_search_then_read_top` 同句
+    "有没有 Docker 部署博客的教程？",            # golden `rag_noise_docker`
+    "小猫咪，测试文章 TEST8 里画的是什么呀",       # golden `rag_test4_cover`
+    "站内有讲量子力学的文章吗",                   # 语料里没有 ⇒ **照开火**：该查一次再如实说没有
+]
+_SCQ_FALSE = [
+    ("编程那个分类下面有几篇文章？", "指代/取值型：按 rule 6b 照抄跨轮摘要，零工具才对"
+                                    "（golden `followup_entity_slot_category` 原句，现在判绿）"),
+    ("那个分类下面有几篇文章？", "同上（golden `followup_entity_slot_ambiguous`）"),
+    ("我有哪些未读通知呀", "自指数据：归 `is_own_read_question` 那一族"),
+    ("读取站内通知读不到吗", "自指数据（上一轮的读取结果，不是站内语料）"),
+    ("你能编辑文章吗", "能力问句：如实答「不能」就是出路"),
+    ("你用哪些工具读文章", "元问句：问的是「你有什么」，不是「给我一份数据」"),
+    ("好猫猫，亲一个", "闲聊"),
+    ("把这篇文章收藏了", "写命令：归写侧"),
+    ("", "空消息"),
+]
+_SCQ_MISS = [t for t in _SCQ_TRUE if not authz.is_site_corpus_question(t)]
+check(f"站内语料问句判成「该去检索」（{len(_SCQ_TRUE)} 条）", not _SCQ_MISS, f"漏判: {_SCQ_MISS}")
+_SCQ_BAD = [f"{t}（{why}）" for t, why in _SCQ_FALSE if authz.is_site_corpus_question(t)]
+check(f"不该去检索的句子放行（{len(_SCQ_FALSE)} 条）", not _SCQ_BAD, f"误判: {_SCQ_BAD}")
+# 与私有面那一族互斥：同一句不许两边都开火（都开火只会让第一次打回指向两个方向）。
+_SCQ_BOTH = [t for t in _SCQ_TRUE if authz.is_own_read_question(t)]
+check("两面互斥：判成「站内语料」的句子不会被私有面同时判成「我自己那份」",
+      not _SCQ_BOTH, str(_SCQ_BOTH))
+# 称呼壳透明（同 ⑨i）：判据入口只剥一次壳。
+_SCQ_VOC = [(t, authz.is_site_corpus_question(t),
+             authz.is_site_corpus_question("小猫咪，" + t))
+            for t in ("博客有哪些文章呢",)]
+check("称呼壳对这条判据透明（带不带你叫它，判定一致）",
+      all(a == b for _t, a, b in _SCQ_VOC),
+      str([t for t, a, b in _SCQ_VOC if a != b]))
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

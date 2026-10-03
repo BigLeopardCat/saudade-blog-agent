@@ -665,9 +665,14 @@ try:
     out, cli = run_tool("reset_user_quota", {"name": "Alice"})
 finally:
     base._device_get_user_id = _saved_uid
+# 20261004 改口（主人拍板）：措辞从「未登录…（需要先登录博客账号）」改成陈述系统这一
+# 侧（`tools/base._NO_IDENTITY_WRITE`）。判据跟着改，并且**留一条反向锁**：不许把原因
+# 说成"要登录"——和 agent 对话本身就必须登录，uid<=0 只能是身份没传进来。
 check("⭐ 身份不明（uid<=0）⇒ unavailable + 零 POST（同 `_principal_request` 那条）",
       kind(out) == "unavailable" and posts(cli) == []
-      and "未登录" in str(out), f"{kind(out)} {str(out)[:70]}")
+      and "没有携带当前用户身份" in str(out), f"{kind(out)} {str(out)[:70]}")
+check("⭐ 身份不明时**不说成『未登录』**（不给主人派活去登录）",
+      not any(w in str(out) for w in ("登录", "登陆", "/login")), str(out)[:70])
 
 # 名录读不到：零写（按名字定位是**唯一**的定位方式，读不到就没有落点）
 out, cli = run_tool("reset_user_quota", {"name": "Alice"},

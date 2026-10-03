@@ -264,6 +264,15 @@ TOOL_SCOPE: dict[str, str] = {
     # （用户拍板：政策只有一份实现，在 `src/authz.rs::check_role_change`），
     # 所以这里给的是一道"能不能进这扇门"的 scope，不是一个权限矩阵。
     "set_account_role": SCOPE_WRITE_CONSOLE,
+    # 第十四轮（20261002 内容风控下放）：禁言 / 解除禁言一个后台账号。同门
+    # （write.console）——`POST /api/temp-users/:id/mute` 也挂在 `auth_guard` 之后，
+    # 动的是**第三方的发言能力**（他照常登录浏览，只是发不出评论与留言）。
+    # 与冻结族的两处结构差别要留意：①后端**只写 `muted_until` 一列**，绝不改
+    # `status`、绝不 bump `token_version`（所以后果话术两族不通用，见 authz 上方
+    # `_ALWAYS_CONFIRM_TOOLS` 那条与 `adminops._MUTE_*`）；②方向在**工具名**里
+    # （`account_mute` / `account_unmute`），不是参数。
+    "account_mute": SCOPE_WRITE_CONSOLE,
+    "account_unmute": SCOPE_WRITE_CONSOLE,
     # 第十一轮（20260926）：给**单个账号**发站内通知。同门（write.console）——
     # `POST /api/temp-users/:id/notice` 也在 `auth_guard` 之后。它与公告族是同一件
     # 事的两种影响面：公告是**对全体访客**说的话（announcements.rs 逐行展开），
@@ -389,6 +398,17 @@ _ALWAYS_CONFIRM_TOOLS = frozenset({
     # 命令式措辞（「把 guest5 改成杂鱼」）在这件事上判得出来，但判得出来不等于该免问
     # ——与冻结族同一条理由：漏判的代价落在**别人**身上，且改错了要再改一次才能复原。
     "set_account_role",
+    # 20261002 补**禁言 / 解除禁言**（内容风控下放给 agent）。进表的理由与冻结族
+    # 同源——动的**不是主人的东西**：后果落在**第三方的发言能力**上（留言与评论是
+    # 站内唯一对所有人可见的输出口，被他这么一说就发出去了，而且没有撤回通道）。
+    # 命令式措辞（「把 guest5 禁言」「给他禁三天」）在这件事上判得出来，但**判得出来
+    # 不等于该免问**（同冻结族那条：漏判的代价不是"多做一件小事"，是**堵住一个活人
+    # 的嘴**，而且他本人只能从"评论发不出去"里察觉）。顺带一提，这也是"管理员之间
+    # 不可互相禁言 / 超管谁都不能禁"那两条后端规则的**人眼复核点**：卡面把账号名、
+    # 现状与期限印出来，主人点确定前能核对"是不是那个人、关多久"。
+    # ⚠️ **后果句一个字节都不许复用冻结族**（禁言不踢人下线）：见 `adminops._MUTE_*`
+    #    那段头注与被 `tests/test_account_mute.py` 钉住的那条断言。
+    "account_mute", "account_unmute",
 })
 
 # 每个需确认的 scope 配一张**确认语表**：用户的**本轮消息**命中才算确认。
@@ -857,6 +877,86 @@ def is_own_read_question(msg: str) -> bool:
     return bool(_OWN_BROAD_OBJECT_RE.search(text) and _OWN_SELF_RE.search(text))
 
 
+# ── 「话题落在站内语料上，却零检索」的问句判据（20261004）──────────────────────
+# 与 `is_own_read_question` 互补：那条问"是不是在问我**自己账号**里的数据"（私有面），
+# 这条问"是不是在问**站内语料**里的东西"（公开面：文章 / 教程 / 文档 / 专栏 / 归档…）。
+# 消费方同样只有一个：`graph.gate_node` 第 4 节（零帧 chat 轮）。
+#
+# 现场（生产 trace `20261002T195955_9_r8d7`）：主人问「博客有哪些文章呢」，planner 落 chat、
+# 零工具、零帧，narrator 回「**我这边没有工具可以帮你查具体的文章标题和链接**，毕竟我只是个
+# 负责陪聊的看板娘」——站里明明备着 `rag_search` / `search_notes` / `list_notes`。gate 的
+# 判据族全是"这句话真不真"型（它还真没撒谎：**手上**确实没有帧），于是零帧放行。
+#
+# **为什么不能写成通用形态**（"BM25 有候选就开火"）：全量回放 uid>0 的零帧放行轮 **300** 轮，
+# 通用形态开火 **211** 轮——大段合法闲聊（「好猫猫，亲一个」「去给我炒两个菜」）与语料本来
+# 就有 2-gram 重叠，分不开。阈值臂（top1≥8）开火 22 轮，逐条看多为写命令 / 能力问句 / 元讨论。
+# 所以判据收成**站内指称臂**：主人**明说**了"站内/博客里/你的文章/专栏…"才算。
+#
+# 六步（每一步都被全量语料量过，成对表见 `tests/test_authz.py`）：
+#   ① 剥壳（`strip_user_shell`）：判据看到的是主人实际说的那句；
+#   ② 能力问句排除——同 `is_own_read_question` 第 ②（如实答"不能"就是对的出路）；
+#   ③ 元问句排除——「你用哪些工具读文章」问的是"你有什么"，不是"给我一份数据"，
+#      打回去只会换个说法；
+#   ④ 自指数据排除——通知/私信/收藏…是 `is_own_read_question` 的现场，别抢那一族的活；
+#   ⑤ 指代型排除——「那个分类下面有几篇文章」按 rule 6b 该**照抄跨轮执行摘要的取值**、
+#      零工具才是对的（去检索反而绕远）。golden `followup_entity_slot_category` /
+#      `_ambiguous` 正是这一条：它们与"真的要检索"字面完全同形（top1 都是 10.33），
+#      少了这道守卫就直接打红一条现在绿的用例；
+#   ⑥ 站内指称 + 必须成问（含量词型打听）+ 语料确有候选（`rag.search` 的 BM25 命中，
+#      `_CLIFF_RATIO` 已在内）。
+#
+# 射程（落码前先量，全量 1110 份 trace 回放）：uid>0 的零帧放行轮 300 轮里命中 **1**
+# ——就是上面那次事故的原句；未加 ④⑤ 两道守卫时是 4 轮（另一条是跨轮取值、一条是自指数据）。
+# golden 156 条命中 14 条：12 条要求工具调用（有帧 ⇒ gate 第 4 节结构上摸不到），
+# `admin_notes_console_list`（needs_admin_uid，uid>0 但必跑 `list_admin_notes` ⇒ 有帧），
+# `admin_user_list_denied_visitor`（context 不写 uid ⇒ uid=0 ⇒ 被调用侧的 `uid > 0` 排除；
+# 它是**诚实拒绝**用例，站里没有它能查的名录，本就该零工具）。词面上的命中面比"只有检索
+# 用例"宽（含公告/分类/标签/置顶这类**清单型**站内数据），这正是调用侧 `uid > 0` 之外
+# 还要靠"有帧就不开火"兜住的原因。
+_SITE_DEIXIS_RE = re.compile(
+    r"站内|站里|站上|博客里|博客中|你博客|本博客|你的博客|你的文章|你写的|你发的"
+    r"|专栏|归档|技术文档|你的文档|这篇|那篇|哪篇|文章|教程|文档|笔记")
+# 元问句（问"你怎么读 / 你有什么工具"）：不是"要一份数据"，打回去只会换个说法
+_SITE_META_RE = re.compile(
+    r"工具|函数|接口|API|调用|技能|插件"
+    r"|你(?:是|会|能)?(?:怎么|如何|用哪|用什么|拿什么)")
+# 自指数据（私有面）：归 `is_own_read_question`，这里放行
+_SITE_OWNDATA_RE = re.compile(r"未读|红点|信箱|私信|站内信|通知|收藏|我的消息|我的留言")
+# 指代型（rule 6b 取值指代）：照抄跨轮执行摘要才是对的出路
+_SITE_DEICTIC_RE = re.compile(
+    r"那个|这个|那一?篇|这一?篇|那篇|这篇|那条|这条|它|上面|刚刚|刚才|上次")
+
+
+def is_site_corpus_question(msg: str) -> bool:
+    """这句是**在问站内语料里的东西**（文章 / 教程 / 文档 / 专栏…）吗？
+
+    只回答"这是不是一个**该去检索一次**的问句"，不回答"该检索什么"——落到哪个技能由 planner
+    定（同 `is_own_read_question` 与 `_replan_note` 的纪律：这一层只给路径、不给结论）。
+    空消息 → False。语料候选由 `rag.search` 判（**惰性导入**：别让 authz 的模块加载
+    去背语料索引的构建代价，也被测试挡在门外时仍可单独用）。
+    """
+    text = strip_user_shell(msg)
+    if not text:
+        return False
+    if _OWN_CAPABILITY_RE.search(text):                       # ② 能力问句：答"不能"就是出路
+        return False
+    if _SITE_META_RE.search(text):                            # ③ 元问句
+        return False
+    if _SITE_OWNDATA_RE.search(text) or is_own_read_question(msg):
+        return False                                          # ④ 自指数据归另一族
+    if _SITE_DEICTIC_RE.search(text):                         # ⑤ 指代型：照抄跨轮摘要 (rule 6b)
+        return False
+    if not (is_question_like(text) or _OWN_INQUIRY_RE.search(text)):   # ⑥a 必须成问
+        return False
+    if not _SITE_DEIXIS_RE.search(text):                      # ⑥b 站内指称
+        return False
+    from rag.search import search as _rag_search              # ⑥c 语料确有候选
+    try:
+        return bool(_rag_search(msg))
+    except Exception:                                         # 索引没热起来/坏了 → fail-closed
+        return False
+
+
 def scopes_for(role: str | None) -> frozenset[str]:
     """角色 → 授予的 scope 集。未知角色（含 None）→ 空集。"""
     return _ROLE_SCOPES.get(role or "", frozenset())
@@ -1109,6 +1209,25 @@ _CONSENT_WHY_TOOL = {
         "请把**账号名以及「从哪个身份 → 到哪个身份」**都说全地念给主人看"
         "（卡面上还有它的 id 与当前身份，让他核对是不是那个人、这一下是收权还是还权），"
         "然后等他点确认——**这一轮到这里就够了：不要替他换一个账号，也不要换个说法重试**"),
+    # 禁言两件的 why 与冻结族**必须不同形**，差异点落在**后果**上而不是动词上——
+    # 而这一族的后果恰好是冻结族的**反面**：禁言不踢人下线（Rust `set_user_muted`
+    # 只写 `muted_until` 一列、不 bump `token_version`），他照常登录、浏览、跟 agent
+    # 对话，只是**发不出评论与留言**。照着冻结族那两句抄过来（"会话全部失效 / 要重新
+    # 登录"）就是一句假话，当事人会以为自己被封号了（「消息壳架空判据」那一族坑）。
+    # 禁言方向多一格**期限**：主人点确定前唯一能发现"我让关三天、卡上却是永久"的地方。
+    "account_mute": (
+        "会让那个账号**发不出评论与留言**（他**照常登录、浏览文章、跟你对话**——"
+        "禁言不动登录，卡面上印着他现在的状态与**这次要禁多久**）",
+        "请把**账号名与这次禁言的期限**一字不改地念给主人看（卡面上还有它的 id 与"
+        "当前状态，让他核对是不是那个人、关多久），然后等他点确认——"
+        "**这一轮到这里就够了：不要替他换一个账号，也不要换个说法重试**；"
+        "**不要**说成「他会掉线 / 登录不了」"),
+    "account_unmute": (
+        "会解除那个账号的禁言（他**重新能发布评论与留言**；"
+        "他的登录从来没有被影响过——禁言只挡发言）",
+        "请把**账号名一字不改**地念给主人看（卡面上还有它的 id 与当前状态，"
+        "让他核对是不是那个人），然后等他点确认——**这一轮到这里就够了："
+        "不要说成「放他回来 / 他的账号回来了」，也不要换个说法重试**"),
     # 发通知的 why 与前三族**必须不同形**，差异点同样落在**后果**上：公告族是"全站
     # 访客都会看到"，冻结族是"当场踢下线"，这一条是"**只给这一个人**看、但**发出去
     # 就收不回**（站内没有删除已发通知的功能）"。措辞里刻意**不写**「全站可见」

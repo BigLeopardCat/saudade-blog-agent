@@ -1402,7 +1402,221 @@ def render_account_status(username: str, uid, frozen: bool, changed: bool = True
             f"（后台已复核：名录里这个账号现在就是{account_state_cn(frozen)}状态）")
 
 
-# ── 变更账号身份（20261002：下放给管理员 + agent 代理）───────────────────
+# ── 禁言 / 解除禁言（20261002 内容风控下放给 agent）──────────────────────
+# 与冻结族**同一条名字通道**（目标 = 后台名录里的账号名、都要印 id 与现状），但有一条
+# **硬要求**：后果句**一个字都不许复用冻结族**。禁言从不 bump `token_version`
+# （Rust `set_user_muted` 头注），"会话已全部失效 / 需要重新登录"那两句话搬过来就是
+# 彻头彻尾的假话——当事人会以为自己被踢下线了，而真相是他照常登录浏览、只是发不出
+# 评论与留言（这正是「消息壳架空判据」那一族坑：**壳**先说了假话，判据再好也白搭）。
+# Rust 侧 `mute_change_body` 为同一件事单独写了一份正文，两侧纪律同源；
+# tests/test_account_mute.py 用「不许出现 失效/重新登录」把这条钉死。
+#
+# 第二处独有：**期限必须印在卡上**。冻结是一个开关（现状二选一，印出来就够），
+# 禁言还多一个"到什么时候"——主人签的若是「永久」，而他想的是"关他三天"，这一格就是
+# 他唯一能发现的地方（`_MUTE_SPAN_*` 由同一份归一结果渲染，卡面与实际写下去的期限
+# 同源）。
+MUTE_FOREVER = "9999-12-31 23:59:59"   # 与 Rust `authz::MUTE_FOREVER` 同源（跨语言契约）
+_MUTE_STATE_CN = {True: "禁言中", False: "正常"}
+_MUTE_CONSEQ = {
+    True: "他照常登录、浏览文章、与你对话，只是发不出评论与留言",
+    False: "他马上能重新发布评论与留言",
+}
+# 回执行里的结局句（与冻结族的 `_ACCOUNT_DONE` 刻意不同形，理由见本节头注）。
+# tools/base.py 的 `_set_account_muted` **不另抄一份**：它调 `render_account_mute_status`
+# 渲染回执，措辞只有这一处（两处各写一遍，改一处必然漏另一处）。
+_MUTE_DONE_PHRASE = {
+    True: "他**仍然可以正常登录、浏览文章、与你对话**，只是暂时发不出评论与留言",
+    False: "他现在**可以正常发布评论与留言**了",
+}
+
+
+def mute_state_cn(muted) -> str:
+    """现算的 `muted` → 人话状态词。**读不出（None）不当成"正常"**（同
+    `account_state_cn` 那条纪律：把"没读到"说成事实是最坏的错法）。"""
+    if muted is None:
+        return "状态未知"
+    return _MUTE_STATE_CN[bool(muted)]
+
+
+def mute_until_raw(row) -> str:
+    """名录行里 `mutedUntil` 的原样串；键缺席 / 为 null / 读不出 → **空串**。
+
+    ⚠️ 空串**不是**"现在没被禁言"——那是 `muted` 那一格的判据（到期后值还留着）。
+    这一格的唯一用途是区分"这一次刚写下的值"与"库里本来就有的值"（`_set_account_muted`
+    的 `changed` 判据，与 Rust 的 no-op 判据 `muted_until.is_none()` 同源）。
+    """
+    try:
+        value = row.get("mutedUntil")
+    except AttributeError:
+        return ""
+    return str(value).strip() if value else ""
+
+
+def mute_until_cn(until_raw) -> str:
+    """期限串 → 人话（`永久` / `至 2026-10-04 12:00`）。哨兵比较与 Rust
+    `mute_until_text` 的 `until >= mute_forever_at()` 同义（同格式串的比较）。"""
+    raw = str(until_raw or "").strip()
+    if not raw:
+        return "期限未读到"
+    if raw >= MUTE_FOREVER:
+        return "永久"
+    return f"至 {raw[:16]}"
+
+
+def mute_span_cn(hours) -> str:
+    """归一后的小时数 → 卡面上那一格（`永久` / `24 小时`）。"""
+    return "永久" if hours is None else f"{int(hours)} 小时"
+
+
+def _cn_number(text: str) -> int | None:
+    """纯中文整数（`一`/`三`/`十`/`十五`/`二十`/`二十三`）→ int；认不出 → None。
+
+    **只认 0–99 的整数**，形态刻意收窄到"十位各一次"：禁言时长是"几个小时/几天"，
+    不存在「三小时半」这种输入，而多认一位就多一处能算错的地方——算错的代价落在
+    真人账号上（即使卡面还会让他核对，也不该把"算得对不对"变成他的活）。
+
+    为什么值得为中文数字单独写一段：`三天` 是中文里最常见的说法之一，不收它 ⇒
+    主人说「禁他三天」得到的是"要禁多久？"的追问，而**它本来是一句完全清楚的话**。
+    宁可为常见形态多算一段，也不让最常见的那句话掉进"认不出"。
+    """
+    digits = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+              "六": 6, "七": 7, "八": 8, "九": 9}
+    if not text or any(ch not in digits and ch != "十" for ch in text):
+        return None
+    if "十" not in text:
+        return digits[text] if len(text) == 1 else None
+    if text.count("十") != 1:
+        return None                      # 「十十」「二十三十」这类一律不猜
+    head, _, tail = text.partition("十")
+    if head and len(head) != 1:
+        return None                      # 「一二十三」不猜
+    if tail and len(tail) != 1:
+        return None
+    tens = digits[head] if head else 1
+    ones = digits[tail] if tail else 0
+    return tens * 10 + ones
+
+
+def normalize_mute_hours(value) -> tuple[bool, int | None]:
+    """主人/模型给的禁言时长 → `(认得出吗, 小时数)`；`None` = **永久**。
+
+    认得出来的四种：**没给**（None / 空串）⇒ 永久（与后端 `{hours: null}` 同义，
+    卡面会把"永久"印出来让他核对）；**「永久」这类说法** ⇒ 永久；正整数（含数字串）
+    ⇒ 那么多小时；**带单位的常见写法**（`3天` / `72小时` / `24h` / `三天` / `两个小时`）
+    ⇒ 换算成小时（阿拉伯数字与中文数字各一条，见 `_cn_number`；**光一个中文数字不带
+    单位不算**——「三」是小时还是天没人知道，那种歧义必须问回去）。
+
+    **认不出的字面一律 `(False, None)`**：调用方必须零写并如实问，**绝不许静默按
+    永久办**——把「禁他三天」办成永久禁言，而卡面与实际写下去的值同源（都走这一份
+    归一），两边都看不出来（同 `normalize_role` 那条"认不出 ≠ 自己挑一个顶上"）。
+    """
+    if value is None:
+        return True, None
+    if isinstance(value, bool):          # bool 是 int 的子类，先挡掉
+        return True, None
+    if isinstance(value, int):
+        return (True, value) if value > 0 else (True, None)
+    text = str(value).strip().strip("「」\"'")
+    if not text:
+        return True, None
+    if text in ("永久", "永久禁言", "长期", "无限期", "一直"):
+        return True, None
+    m = re.fullmatch(r"(\d+)\s*(?:小时|个小时|钟头|h|H|hour|hours)", text)
+    if m:
+        return (True, int(m.group(1))) if int(m.group(1)) > 0 else (True, None)
+    m = re.fullmatch(r"(\d+)\s*(?:天|日|d|D|day|days)", text)
+    if m:
+        return (True, int(m.group(1)) * 24) if int(m.group(1)) > 0 else (True, None)
+    # 中文数字只在**带单位**时认（`三天` / `两个小时`）：光一个「三」说的是小时还是天
+    # 没人知道，那种歧义必须问回去（同"认不出"那一支），绝不替主人挑一个量纲。
+    m = re.fullmatch(r"([一二三四五六七八九十两]+)\s*(?:天|日)", text)
+    if m:
+        n = _cn_number(m.group(1))
+        return (True, n * 24) if n else (False, None)
+    m = re.fullmatch(r"([一二三四五六七八九十两]+)\s*(?:小时|个小时|钟头)", text)
+    if m:
+        n = _cn_number(m.group(1))
+        return (True, n) if n else (False, None)
+    try:
+        n = int(text)
+    except ValueError:
+        return False, None
+    return (True, n) if n > 0 else (True, None)
+
+
+def _row_muted(row):
+    """名录行 → 现在是否禁言（True/False/None）。判据 = 后端现算的 `muted` 字段，
+    与 `tools.base._account_muted` 逐字同源（两处判据分叉 ⇒ 卡面说"现在禁言中"、
+    工具侧却按"正常"复核，`reached_specs` 头注警告的正是这个形态）。"""
+    try:
+        value = row.get("muted")
+    except AttributeError:
+        return None
+    if value is None:
+        return None
+    return bool(value)
+
+
+def render_account_mute_action(username: str, muted: bool, hours=None, users=None) -> str:
+    """`禁言账号「guest5」（账号 id=126，现在：正常。他照常登录、浏览文章、与你对话，
+    只是发不出评论与留言；本次 **永久**…）`——**卡面、问句、跨轮待办的目标**共用这一行。
+
+    `users` 三态与 `render_account_action` 逐字同源（读不到就少说，**不因此不弹窗**）：
+    快照在手、名字不在 → 只印名字 +「后台账号列表里没有叫这个名字的账号」，且
+    **不再报后果**（一件做不成的事的后果说了只会误导）；快照读不到 → 只印名字 + 后果。
+
+    **期限只在禁言方向印**（解禁没有期限这回事）：那一格是主人核对"我让关三天、
+    卡上是不是写着三天"的唯一地方（见本节头注第二处）。
+    """
+    row = _account_row(users, username)
+    if users and row is None:
+        if muted:
+            return f"禁言账号「{username}」（后台账号列表里没有叫这个名字的账号）"
+        return f"解除账号「{username}」的禁言（后台账号列表里没有叫这个名字的账号）"
+    where = ""
+    if row is not None:
+        where = f"账号 id={row.get('id')}，现在：{mute_state_cn(_row_muted(row))}。"
+    if muted:
+        ok_hours, span = normalize_mute_hours(hours)
+        tail = (f"本次禁言 **{mute_span_cn(span)}**"
+                if ok_hours else "**没听懂要禁多久**")
+        return (f"禁言账号「{username}」（{where}{_MUTE_CONSEQ[True]}；"
+                f"{tail}——要提前解除，再单独说一次解禁）")
+    return (f"解除账号「{username}」的禁言（{where}"
+            f"{_MUTE_CONSEQ[False]}）")
+
+
+def account_mute_change_phrase(muted: bool, changed: bool, until_raw=None) -> str:
+    """回执的 `change` 摘要：**必须区分"刚改的"与"本来就是"**（同冻结族那条）。
+
+    禁言方向那一格带上期限：同一行里"已禁言"与"已禁言（至 10-04 12:00）"对主人是
+    两句不同的话（后者能核对他要的那个时长）。
+    """
+    if muted:
+        if not changed:
+            return "状态本来就是禁言中，本次未发生变更"
+        return f"已禁言（{mute_until_cn(until_raw)}）"
+    if not changed:
+        return "本来就没有被禁言，本次未发生变更"
+    return "已解除禁言"
+
+
+def render_account_mute_status(username: str, uid, muted: bool, until_raw=None,
+                               changed: bool = True, before_muted=None) -> str:
+    """禁言/解禁成功后的回执行（工具 side 用；与卡面同源同事实）。"""
+    if not changed:
+        # 只可能是解禁方向（Rust 对"库里本来就没值"那一支是真 no-op）。
+        return (f"账号「{username}」（账号 id={uid}）**本来就没有被禁言**，"
+                f"这次没有发生任何变更（没有重复解除）")
+    if muted:
+        return (f"已禁言账号「{username}」（账号 id={uid}）：{_MUTE_DONE_PHRASE[True]}；"
+                f"本次期限 **{mute_until_cn(until_raw)}**"
+                f"（后台已复核：名录里这个账号现在就是禁言中）")
+    return (f"已解除账号「{username}」（账号 id={uid}）的禁言：{_MUTE_DONE_PHRASE[False]}"
+            f"（后台已复核：名录里这个账号现在没有被禁言）")
+
+
+
 # 与冻结族**同一族**（目标都是后台名录里的一个账号名、都要印 id 与现状），但有三处
 # 与它刻意不同形，都是"这两件事不是一件事"的直接后果：
 #   ① **卡面必须印出"从什么身份 → 什么身份"**。冻结只动一个开关（现状是二选一，
@@ -2084,6 +2298,15 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         # 写进卡面，给不起只印名字（**不因此不弹窗**，同全表取向）。
         return render_account_action(str(a.get("name") or "").strip() or "（没有给出账号名）",
                                      tool == "freeze_account", users)
+    if tool in ("account_mute", "account_unmute"):
+        # 禁言 / 解禁（20261002）：同走账号名录（`users`）印 id 与现状，措辞与冻结卡
+        # **刻意不同形**（照常登录、只是发不出评论与留言），且禁言方向多印一格期限
+        # ——理由见本节上方 `_MUTE_*` 那段头注的两条硬要求。
+        # ⚠️ 工具名 `account_mute` / `account_unmute` 是后端先定的契约
+        # （src/routes/mod.rs 那条路由的注），**别**照着冻结族的语序"改顺"成
+        # `mute_account`——改名会让这条分支静默不命中（卡片退化成裸工具名）。
+        return render_account_mute_action(str(a.get("name") or "").strip() or "（没有给出账号名）",
+                                          tool == "account_mute", a.get("hours"), users)
     if tool == "set_account_role":
         # 变更身份（20261002）：同走账号名录（`users`），但卡面**必须**印出"现在
         # 是什么身份"（见 `_ROLE_*` 那段头注①）——只印目标身份，主人核对不了
@@ -2379,6 +2602,33 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
         # 「已冻结」——后者在气泡里读起来像"系统刚替你冻了一次"。
         return (f"账号「{name}」（账号 id={row.get('id')}）"
                 f"现在就是{'冻结' if want else '正常'}状态")
+    if tool in ("account_mute", "account_unmute"):
+        # 禁言 / 解禁（20261002）：判据与冻结那一支同形（**现状取自名录**，读不出/
+        # 名字不在 ⇒ 判不了 ⇒ 照弹卡），但读的是**现算的 `muted`**——Rust
+        # `is_muted` 到期即为假，所以"禁言期已过"这一格自然回到"照弹"（那正是要办的事）。
+        # 解禁方向那句状态词**不带「已」**（同冻结族那条硬要求：「现在没有被禁言」，
+        # 不写「已解除」——后者在气泡里读起来像"系统刚替你解了一次"）。
+        # ⚠️ **只有解禁方向做幂等短路**（"现在就是没被禁言 ⇒ 这一下什么也不会发生"，
+        # 与 Rust 的 no-op 判据同源=库里没值）。**禁言方向刻意不短路**：对已在禁言期的
+        # 账号再禁一次是**有意义的操作**（改时长 / 转永久，Rust 头注明说 no-op 属发起方
+        # 但禁言方向不适用）——短路掉，主人说「改成永久禁言」会被回一句"现在就是禁言中"
+        # 而那一列一个字节都没动。
+        users = s.get("users")
+        if not isinstance(users, dict) or not users:
+            return None
+        name = str(a.get("name") or "").strip()
+        row = _account_row(users, name)
+        if row is None:
+            return None                      # 名录里没这个名字 ⇒ 工具的拒绝路，不是已达成
+        muted = _row_muted(row)
+        if muted is None:
+            return None                      # 读不出（不许当成"正常"）
+        if tool == "account_mute":
+            return None
+        if muted:
+            return None                      # 解禁才叫已达成，其余照弹
+        return (f"账号「{name}」（账号 id={row.get('id')}）"
+                f"现在没有被禁言")
     if tool == "set_account_role":
         # 变更身份（20261002）：判据与上面冻结那一支同形——**现状取自名录**，
         # 读不出/名字不在/身份认不出/本来就是目标身份以外，一律判"没达成"照弹卡。
