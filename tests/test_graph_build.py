@@ -163,15 +163,22 @@ try:
 finally:
     gb.mem_available_mb = _real_mem
 
-check("内存读数取不到（None）时不拿『读不出来』冒充『内存不够』（不拒）",
-      (gb.preflight("rebuild") or {}).get("reason") != "low_memory")
+# ⚠️ 这条原来**没有桩**（直接拿真机的读数去跑 preflight），于是它判的其实是"这台机器
+# 此刻内存够不够"——20261004 阈值从 700 调低时当场红了一次才露出来。判据得把读数钉死。
+try:
+    gb.mem_available_mb = lambda: None
+    check("★ 内存读数取不到（None）时不拿『读不出来』冒充『内存不够』（不拒）",
+          (gb.preflight("rebuild") or {}).get("reason") != "low_memory",
+          gb.preflight("rebuild"))
+finally:
+    gb.mem_available_mb = _real_mem
 # 阈值必须**卡在实测峰值之上、又不高到把门焊死**。20261003 实测：一次真实重建（400 节点
 # / 12 篇文章 / UMAP，笼子 MemoryMax=1000M）峰值 RSS 552MB、30 秒、换页 0 次。低于它大概率
-# OOM；高出一倍多就等于门常年关着——原来那个 1200 正是这么来的（本机可用内存常在 900MB
-# 上下，于是"腾一腾再来"根本腾不到，用户点了两次都只拿到一句"内存不够"）。
+# OOM；高出一倍多就等于门常年关着——原来那个 1200 正是这么来的，而 700 也在第二次修正时
+# 当场撞线（本机 MemAvailable 实测在 699–1070MB 之间晃，"腾一腾再来"腾不到）。
 # 改动这个数要连着那次测量一起改（出处写在 `rag/graph_build.py` 的常量注释里）。
-check("内存门槛落在『实测峰值 552MB ~ 它的一倍』之间",
-      552 <= gb.MEM_MIN_MB <= 552 * 2, gb.MEM_MIN_MB)
+check("内存门槛落在『实测峰值 552MB ~ 它的 1.5 倍』之间（大了就是把门焊死）",
+      552 <= gb.MEM_MIN_MB <= 552 * 1.5, gb.MEM_MIN_MB)
 _env_before = os.environ.get(gb.MEM_ENV)
 try:
     os.environ[gb.MEM_ENV] = "900"
