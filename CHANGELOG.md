@@ -42,6 +42,19 @@
   回归锁 `tests/test_authz.py` 第 ⑨i（成对表 + 剥壳透明 + 与 `_own_command` 互斥）与
   `tests/test_gate_replan.py` 第 ⑥/⑥b/⑥c（事故夹具端到端、五条守卫、源码锁）。
 
+- **新增 golden 用例 `own_unread_logged_in`：把那句问话的**登录态**那一面钉住（判据，20261003）**：
+  上一条判据（`own_read_question_without_tool`）在 golden 上**0 次开火**——因为语料里那两句
+  同义问话（`own_unread_not_logged_in` / `own_messages_not_logged_in`）**都是 uid=0**，而
+  判据按设计要求 `uid > 0`。也就是说：**判据管的那一面在语料里没有用例**，事故现场那句话
+  没有任何 golden 用例看着它。新用例 `own_unread_logged_in`（`needs_user_uid: true`，问的
+  就是事故原话「我有哪些未读通知呀」）断言 `require_tool_calls_any:
+  [get_unread_summary, list_notifications]`（两件都算对：一件连正文一起给、一件是清单，
+  选哪个是口径不是对错）+ `forbid_fallback` + `nonempty` + `forbid_frame_prefix:
+  [__CONFIRM__:]`（只读取数不该弹卡；`premise_no_popup.kind = capability_boundary`）。
+  **故意不抄兄弟那两条「读不到 ≠ 空」负断言**：登录态下「你没有未读」可能是**真的**（本来
+  就 0 条），照抄会把正确行为判红。这条**默认跑响亮跳过**（不设 `GOLDEN_USER_UID`），
+  **分母不变**（155 → 156 的计数锁、`docs/agent-architecture.md` 的条数已同步）。
+
 - **复读判据的比对面从"紧邻一轮"扩到最近 5 轮 + 新增「整段抄写变体」档（判据，20261003）**：
   现场是 uid=1 会话 320 的 19:41 那一轮——用户问「我有哪些未读通知呀」，planner 落成 chat
   零工具，narrator 把**上 2 轮**那份"我没有翻日志的工具"的答案搬了过来（两条回复整体重合
