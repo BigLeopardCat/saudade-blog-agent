@@ -35,6 +35,12 @@ eval/cache/
 # 图谱查询产物（vectors.f32 1.4MB，由 scripts/build_word_graph.py 可重生成）
 data/word_graph/
 
+# 建图任务的本机状态（20261003）：lock / state.json / <ts>.log，全是**运行时**产物
+# （见 rag/graph_build.py）。它对站点没有任何价值、只对这台机器有意义，不入库。
+# ⚠️ 与**父仓**的 logs/ 不是一回事：那边是站点运维日志（rust/agent/traces，
+# logrotate 管轮转）；这份是后台重建任务的临时现场。
+logs/
+
 # 改代码前的本地备份（如 graph.py 拆分前的全量副本；内容等价于 git 历史，不进库）
 agent/*.bak_*
 *.bak_*
