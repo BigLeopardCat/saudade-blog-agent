@@ -92,7 +92,6 @@ import server
 from server import ChatRequest, _build_messages, _run_agent_stream_to_queue
 from agent import create_agent
 from agent.graph import _cmd_wire  # 连线命令帧 → 连线形（见 __CMD__ 分支的长注）
-from agent.graph import _planner_engine  # 接口层档位（报告要记，见 report 里那一格）
 from agent import confirm  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 from langchain_core.messages import AIMessageChunk, ToolMessage
@@ -107,6 +106,12 @@ import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的
 from utils import trace as trace_mod  # trace 工具返回留多长（run_case 里放开，见其注释）
 
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
+
+# 接口层（报告里的 `engine` 那一格，见 report 的注）：20261004 起只剩 native
+# tool calls 一条路（文本契约档连同 `PLANNER_ENGINE` 拨盘一起删了）。**定义成常量
+# 而不是从 settings 里读**——没有第二个取值可拨，"读配置"是个假动作，会让读者以为
+# 它可变。`golden_full_run.py` 从这里 import，防止两处各写一遍字面量。
+INTERFACE_LAYER = "native"
 # 导航命令帧族：AUTO_NAVIGATE 与 NAVIGATE 同属"导航已执行"，断言时视为一族
 # （golden 里 require/forbid "NAVIGATE:" 时 AUTO_NAVIGATE 帧同样计入/计入禁止）
 CMD_FAMILIES = {
@@ -2567,11 +2572,13 @@ def main():
         # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
         # 旧基线不可比是预期（变更即新基线），快照字段用于对账变更内容
         "corpus": corpus,
-        # 接口层档位（20260927 主线批 A）：planner 可以走文本契约或 native tool calls，
-        # **两份报告都记这一格才可比**——"同一套用例在两档下各跑一遍"的对照表，第一列
-        # 就是它。取值走 `agent.graph._planner_engine`（`planner_node` 用的同一个函数），
-        # 不在这里重写一遍归一化：那是第二份判据，迟早与真的那个不一致。
-        "engine": _planner_engine(),
+        # 接口层（20260927 主线批 A）：planner 走 native tool calls——20261004 起
+        # **只剩这一条**（文本契约档连同 `PLANNER_ENGINE` 拨盘一起删了，见
+        # config/settings.py 那段注），所以这里记的是一个常量，不再去 settings 里问
+        # 一个没有第二个取值的键。**键必须保留**：`eval/baseline_group.py` 按它把
+        # 不同档的报告分开归档 ⇒ 存量 text 报告与新 native 报告因此自动分堆（那正是
+        # 换档的信号）。`golden_full_run.py` 引用同一个常量，防两处各写一遍。
+        "engine": INTERFACE_LAYER,
         "total": len(cases), "passed": len(cases) - failed, "failed": failed,
         # 首跑红数（20260924）：failed 是**复跑后的终判**，这个字段留着首跑口径 ——
         # 两者不等时差额就是"被复跑吸收掉的红斑"（不许静默：flaked_ids 逐条点名）

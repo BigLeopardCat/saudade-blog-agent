@@ -248,9 +248,9 @@ _prompt = g._render_planner_prompt(
 check("渲染结果里出现台账（talkId）", "talkId:101" in _prompt)
 check("  且渲染函数**必须有**这个形参（漏传即 TypeError）", "pending_ledger" in
       g._render_planner_prompt.__code__.co_varnames)
-# 影子档（`_planner_engine == "shadow"`）走的是同一个 `_prompt_args`：影子两侧比的必须
-# 是"同一个提问"，缺了这一格就成了"两个不同的提问"（见 `_render_planner_prompt` 头注）。
-check("  `planner_node` 把它算进 `_prompt_args`（两档共用同一份提问）",
+# `planner_node` 里只有一处渲染调用（`_prompt_args` 一次算好、一次渲染）：缺了这一格
+# 就是"问模型的那个问题里没有台账"（见 `_render_planner_prompt` 头注）。
+check("  `planner_node` 把它算进 `_prompt_args`",
       "pending_ledger=ledger_frame" in
       (ROOT / "agent" / "graph.py").read_text(encoding="utf-8"))
 

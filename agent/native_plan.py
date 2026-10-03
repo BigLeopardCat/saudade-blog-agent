@@ -81,6 +81,11 @@ class NativeDecision:
     finish_reason: str = ""          # `length` = 被额度截断（"预算够不够"的判据）
     raw_tool_calls: tuple = field(default_factory=tuple)
     declare: dict | None = None      # 归一化后的任务登记（无 → None）
+    # 一个函数都没点、正文却非空（20261004）：**这不是一个决策**，只是"没做出决策"。
+    # 它的 `skill` 仍是 `chat`（下游要用一个合法技能名把这一轮走完），但调用方必须先
+    # 拿这个标记去走一次纠偏——见 `planner_node` 的"零调用"那一格与
+    # `_PLANNER_OUTPUT_CONTRACT_NATIVE` 第 7 条。
+    undecided: bool = False
 
 
 def _items_schema(sp: ParamSpec) -> dict:
@@ -292,15 +297,23 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
                        task_state: bool = False) -> NativeDecision | None:
     """一次 `tool_calls` 返回 → `NativeDecision`；**判不了就返回 None**（调用方兜底）。
 
-    None 的三种来源（都交给调用方退回既有的文本解析路径，**不猜**）：
+    None 的五个来源（全是"没给出可用决定"，调用方一律走确定性收尾，**不猜**）：
       · `invalid_tool_calls` 非空 —— 参数被截断或不是合法 JSON（思考链吃光
         max_tokens 时 `finish_reason=length`，arguments 会断在半截）；
       · 模型点了不在本轮 schema 里的函数名；
-      · `args` 不是对象（我们的 schema 全是 object，出现别的形状说明响应不合约定）。
+      · `args` 不是对象（我们的 schema 全是 object，出现别的形状说明响应不合约定）；
+      · 零 `tool_calls` 且 `finish_reason == "length"`（被额度截断）；
+      · 零 `tool_calls` 且正文也空（既没决策也没话说）。
 
-    一条都没发 ⇒ 这是**闲聊轮**，等价文本档的 `SKILL=chat`：`params` 给**空**。
-    **例外**：零 `tool_calls` 且 `finish_reason == "length"`（被额度截断）⇒ 同样返回
-    None——截断的轮次与闲聊轮形状相同而含义相反，见下面 `if not calls:` 那一格。
+    一条都没发、正文却有 ⇒ 返回 `chat`，但**打上 `undecided`**（20261004）：零调用
+    不是闲聊的代名词，只是"这一轮没做出决策"。调用方（`planner_node`）见它就先用
+    纠偏通道把契约第 7 条（"闲聊也要显式点 `chat`"）讲一次重决策——第二次仍这样才
+    认成 `chat`。理由：实测 384 份 trace 里 42 次零帧零调用轮，一半是封号/驳回/
+    标记已读/导航这类真动作请求（"一个函数都不点"从来没被追过责）。
+    `params` 恒给**空**。
+
+    ⚠️ 只有登记/撤回、或伪函数参数无效时（`declare` 非空或有 `notes`）**不打**
+    `undecided`：那一轮模型是明确表达过意图的（"剩下的记下来"），只是没有动作要做。
 
     ⚠️ **别把模型那句话塞进 `params.reply`**（20260927 一稿就是这么写的，跟着数据核
     完改掉了）：`chat` 技能在注册表里 `inputs={}`、`skill_param_specs` 也是空的，
@@ -351,14 +364,14 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
             if declare is None:
                 notes.append("task_drop_invalid")
     if not calls:
+        undecided = False
         if declare is None and not notes:
             # 截断 ≠ 闲聊（20261001）。`finish_reason == "length"` 意味着这一轮的话
             # 被额度**切断**，而"还没说到那个 tool_call 就被切"与"这一轮本来就没有
             # 动作"在响应里**形状完全相同**（都是零 `tool_calls`）——旧行为把后者
             # 当成前者：静默落成 `chat`、零工具、narrator 手里零帧（首轮尤其致命，
-            # 只能凭记忆或道歉收场）。判不了就返回 None，交给调用方退回**既有的
-            # 文本解析**并留一条 `native_fallback` + WARNING ——模型也可能把契约行
-            # 写在正文里（实测会两边都写），那份正文截断了照样可能读得出决策。
+            # 只能凭记忆或道歉收场）。截断**不做决定**：返回 None，交给调用方走
+            # 确定性收尾（`planner_node` 的 `native_fallback` 截断轨）。
             #
             # **刻意不重试**（别照抄 narrator 那次空内容重试）：那是**采样**失败
             # （同一条消息再问一次就正常），这是**预算**失败——同一条消息再问一次
@@ -367,10 +380,18 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
                 return None
             if not _content_of(resp).strip():
                 return None
+            # 正文非空却一个函数都没点（20261004）：**零调用不是一个决策**。
+            # 契约第 7 条明说"闲聊也要显式点 `chat`"，这中间的缝是"什么都不点
+            # 就交卷"——实测 384 份 trace 里 42 次零帧零调用轮，其中一半是
+            # 封号/驳回/标记已读/导航这类真动作请求，全被这里静默落成 chat。
+            # 仍然给 `chat`（下游要用一个合法技能名走完这一轮），但打上
+            # `undecided` ⇒ 调用方**先纠偏一次**，模型改口点了函数就走那条；
+            # 第二次仍这样才认（见 planner_node"零调用"那一格）。
+            undecided = True
         # 只有登记/撤回、或伪函数参数无效：技能位给 chat（本轮没有动作要执行），
         # `declare` 交给 planner 那一支，`notes` 让那一格在 trace 里看得见。
         return NativeDecision(skill="chat", params={}, notes=tuple(notes),
-                              declare=declare, **base)
+                              declare=declare, undecided=undecided, **base)
     head = calls[0] if isinstance(calls[0], dict) else {}
     name = str(head.get("name") or "")
     if name not in {s.name for s in visible_skills(role)}:

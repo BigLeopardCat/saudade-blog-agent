@@ -133,7 +133,7 @@ flowchart TB
 │   ├── refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用（20260919）：递归遍历 + 五个错误码——解不出的引用必须响亮（20260922 改递归）
 │   ├── confirm.py             # ★ 待确认令牌（20260921）：无状态 HMAC（TTL 600s，2 worker 安全）；不落库、不落用户消息
 │   ├── entities.py            # ★ 执行回执实体摘要（20260920）：压成一行供跨轮取值；digest 是 Python 写 / Rust 读的跨语言契约
-│   ├── native_plan.py         # ★ native tool calls 接线层（20260927 新主线）：planner 输出从"五行文本契约"换成 API 的 tools/tool_calls，格式由服务端与 schema 保证
+│   ├── native_plan.py         # ★ native tool calls 接线层（20260927 新主线；20261004 起**唯一**接口层）：planner 输出就是 API 的 tools/tool_calls，格式由服务端与 schema 保证；零调用不再等于闲聊（先纠偏一次）
 │   ├── tasks.py               # ★ 会话级任务状态（20260927 批 D）：未完成的意图跨轮不丢（agent_task 表 + 模型登记 + 系统确定性结算）
 │   ├── action_text.py         # ★ 一次执行 → 一行中文动作的跨语言渲染唯一实现（过程行 / 执行台账行两档）
 │   ├── factblock.py           # ★ 动作族轮次的"系统事实块"（roadmap D3）：事实由系统印、模型只写包装；射程只有命令族 + 写族
@@ -863,9 +863,13 @@ flowchart TB
 
 固定流程任务（导航/特效/暗色/设备显示/设备查询/content_query 内容查询/read_article 当前文章）落地为
 技能注册表（agent/skills.py，业务唯一数据源）：每个技能是静态定义——触发条件、参数 schema、
-固定工具序列模板、回复契约。planner 只从注册表选技能 + 填参数（结构化输出 `SKILL: <名>` +
-`PARAMS: <JSON>`），不再自由写执行步骤；`instantiate_plan` 把参数实例化为计划文本
-（`SKILL=/PARAMS=/TOOLS: /NOTE: /REPLY:` 五行契约）写入 `state.plan`。TOOLS 行 = "执行清单"
+固定工具序列模板、回复契约。planner 只从注册表选技能 + 填参数，不再自由写执行步骤。
+**20261004 起接口层是 native tool calls 单通道**：planner 的"选技能 + 填参数"就是一次
+**工具调用**（函数名 = 技能名、args = 参数），格式由 API 的 `tools` schema 保证；曾经那条
+"输出五行文本、服务端正则抠"的文本档（`PLANNER_ENGINE=text`）连同其解析器**已删**。
+`instantiate_plan` 随后把参数实例化为**内部计划文本**（`SKILL=/PARAMS=/TOOLS: /NOTE: /REPLY:`
+五行契约）写入 `state.plan`——这份内部协议 `execute`/`gate`/路由都读，**与接口层选哪一档无关**，
+保持不变。TOOLS 行 = "执行清单"
 而非旧"允许名单"——execute 把它当命令逐条执行，"点名了却不调用"的自由 20260903 已从执行层移除。
 **值里不许长分隔符**（20260929）：TOOLS 行是 `"; ".join(specs)` 拼的、`parse_plan` 用
 `split(";")` 读回 ⇒ `plan_encode` 把每条 spec 里的 `;` 转义成 JSON 的 `\u003b`（读回仍是
@@ -971,10 +975,15 @@ flowchart TB
   未识别别名 → 如实说没有。改页面入口只改这一处。
 - **planner = 唯一决策者**（graph.py `planner_node`）：注入完整技能表（build_planner_context，
   read_article 不可见——系统快道专用，planner 无参可填）+ 可规划查询工具描述 + 页面上下文 +
-  历史工具帧摘要 + 轮次信息；低温度快决策（0.2 / max_tokens=400 / 30s；`enable_thinking=False`
-  ——"选技能+填参数"是结构化分类任务，思考链纯浪费，20260830 实测 13.4s → 2-4s）；输出解析
-  容错（`_loads_tolerant`：单引号/尾逗号/注释/markdown 围栏逐项修正），解析失败按 chat 技能
-  兜底。每轮读 execute 返回的工具帧决定下一轮：质疑轮 → content_query 验证；err 帧 → 修正参数
+  历史工具帧摘要 + 轮次信息；低温度快决策（temperature 0.2）。**20261004 起接口层是 native
+  tool calls 单通道**：预算取 `settings.planner_native_*`（`max_tokens=1200` / `timeout=60s` /
+  `enable_thinking`，见 `config/settings.py` 的注——思考链会先吃额度，沿用文本档的 400/30s 会让
+  arguments 断在半截），输出格式由绑上的 `tools` schema 保证 ⇒ **没有"解析失败按 chat 兜底"
+  这条了**。零调用也不再等于闲聊：一个函数都没点且正文非空 ⇒ 走既有 correction 通道**纠偏一次**
+  （trace `planner.no_call_nudge`），第二次仍零调用才认成 `chat`（`planner.no_call_accepted`，
+  状态仍是 `answer_only`）；`decided is None` 另分截断轨（`finish=length` → 确定性收尾，
+  不纠偏）与形态轨（读不出 → 纠偏一次后确定性收尾），事件 `native_fallback.disposition`。
+  每轮读 execute 返回的工具帧决定下一轮：质疑轮 → content_query 验证；err 帧 → 修正参数
   重试一次或如实收尾；动作技能已执行 → 去重强制收尾（非首轮再规划动作且工具名都已出现在帧中时，
   动作一次决策即完成，多轮只发生在 content_query 检索链路）。字面路径防推断确定性修正：planner
   选 navigate 且用户消息含 / 开头路径时，target 强制用字面路径（qwen 曾把 /iot 推断成"物联网平台"

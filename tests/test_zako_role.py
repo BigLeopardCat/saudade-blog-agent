@@ -31,6 +31,7 @@ from agent.graph import (  # noqa: E402
     route_after_planner,
 )
 from agent.native_plan import build_tool_schema  # noqa: E402
+from _native_stub import bind_tools_stub, native_reply  # noqa: E402
 from agent.principal import (  # noqa: E402
     CHAT_ONLY_ROLES, KNOWN_ROLES, ROLE_ADMIN, ROLE_SUPERADMIN, ROLE_USER, ROLE_ZAKO,
     Principal,
@@ -64,14 +65,16 @@ def _state(msg=_MSG):
 
 
 class _ScriptedLLM:
-    """照 tests/test_skills.py 的 `_ScriptedLLM`：按顺序吐回复。"""
+    """按顺序吐回复；夹具文本走 native 桩翻成 tool_calls（见 _native_stub）。"""
+
+    bind_tools = bind_tools_stub
 
     def __init__(self, replies):
         self.replies, self.prompts = list(replies), []
 
     def invoke(self, prompt):
         self.prompts.append(prompt)
-        return AIMessage(content=self.replies.pop(0))
+        return native_reply(self.replies.pop(0))
 
 
 # ══════════════════════════════════════════════════════════════════

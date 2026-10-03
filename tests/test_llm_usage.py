@@ -32,7 +32,6 @@ from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 import agent.graph as G  # noqa: E402
 from agent.llm_usage import usage_fields  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
 FAILS: list[str] = []
@@ -44,7 +43,7 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-_MSG = "帮我把樱花打开"          # 不命中任何快道（同 test_planner_engine 的那句）
+_MSG = "帮我把樱花打开"          # 不命中任何快道（同 test_native_wiring 的那句）
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
 # 端点实测的形状（20260927 探针：13 tok 的短提问也带 input_token_details）
@@ -139,59 +138,60 @@ def test_no_usage_returns_empty_and_never_raises():
               "input_tokens": True, "output_tokens": 1})) == {"output": 1})
 
 
-# ── ② 接线：planner（text / native 两档）──────────────────────────────────
+# ── ② 接线：planner ───────────────────────────────────────────────────────
 def _patch_llm(reply):
-    """按 max_tokens 区分两只 LLM（文本档 400 / native 档取 settings 的值）。
+    """planner 那只 LLM 的假桩：**只有一只**。
 
-    用预算而不是调用序区分，是因为影子档会构造两只、顺序不可依赖。
+    20261004 前这里按 `max_tokens==400` 分辨两只（文本档 400 / native 档取 settings
+    的值，影子档会同时构造两只、顺序不可依赖）。接口层只剩 native 之后
+    （`settings.planner_engine` 已删）没有第二只可分辨。
     """
     made: dict[str, _FakeLLM] = {}
 
     def _fake_get_llm(**kw):
         llm = _FakeLLM([reply])
         llm.kw = kw
-        made["text" if kw.get("max_tokens") == 400 else "native"] = llm
+        made["planner"] = llm
         return llm
 
     return _fake_get_llm, made
 
 
-_TEXT_REPLY = ('SKILL=effect\nPARAMS={"effect": "sakura", "action": "on"}\n'
-               "TOOLS: toggle_effect\nNOTE: （无）\nREPLY: 已经打开樱花啦")
+# planner 的"有效决策"形状：正文空 + 一个工具调用（native 单通道，20261004）。
+# 正文非空且零调用 = `undecided` ⇒ 走一次纠偏，把 `_FakeLLM` 的单条脚本用光而炸。
+_PLANNER_REPLY = AIMessage(content="", tool_calls=[
+    {"name": "effect", "args": {"effect": "sakura", "action": "on"},
+     "id": "c1", "type": "tool_call"}])
 
 
-def _run_planner(engine: str, reply: AIMessage):
-    rec = _new_trace(f"t_usage_{engine}")
+def _run_planner(reply: AIMessage):
+    rec = _new_trace("t_usage_planner")
     fake, made = _patch_llm(reply)
-    old_engine, old_get = settings.planner_engine, G.get_llm
-    settings.planner_engine, G.get_llm = engine, fake
+    old_get = G.get_llm
+    G.get_llm = fake
     try:
         G.planner_node({"messages": [HumanMessage(content=_MSG)], "plan_rounds": 0,
                         "executed": [], "tool_data": []}, _CFG)
     finally:
-        settings.planner_engine, G.get_llm = old_engine, old_get
+        G.get_llm = old_get
     return rec, made
 
 
-def test_planner_records_usage_both_engines():
-    print("\n[接线] planner：两档的 llm_done 都带用量")
-    for engine, reply in (
-            ("text", AIMessage(content=_TEXT_REPLY, usage_metadata=dict(_REAL))),
-            ("native", AIMessage(content="", usage_metadata=dict(_REAL), tool_calls=[
-                {"name": "effect", "args": {"effect": "sakura", "action": "on"},
-                 "id": "c1", "type": "tool_call"}]))):
-        rec, made = _run_planner(engine, reply)
-        check(f"[{engine}] 假 LLM 确实被调用过（没被快道截走）",
-              sum(len(m.prompts) for m in made.values()) == 1, str(sorted(made)))
-        ev = _events(rec, "planner", "llm_done")
-        check(f"[{engine}] llm_done 带 input/output/cache_read",
-              len(ev) == 1 and ev[0].get("input") == 25200
-              and ev[0].get("output") == 96 and ev[0].get("cache_read") == 17588,
-              str(ev))
-        check(f"[{engine}] 原有字段没被挤掉（duration_s/engine/frames_chars）",
-              ev and ev[0].get("engine") == engine
-              and isinstance(ev[0].get("duration_s"), float)
-              and "frames_chars" in ev[0], str(sorted(ev[0])) if ev else "无事件")
+def test_planner_records_usage():
+    print("\n[接线] planner：llm_done 带用量")
+    rec, made = _run_planner(AIMessage(content="", usage_metadata=dict(_REAL),
+                                       tool_calls=list(_PLANNER_REPLY.tool_calls)))
+    check("假 LLM 确实被调用过（没被快道截走）",
+          sum(len(m.prompts) for m in made.values()) == 1, str(sorted(made)))
+    ev = _events(rec, "planner", "llm_done")
+    check("llm_done 带 input/output/cache_read",
+          len(ev) == 1 and ev[0].get("input") == 25200
+          and ev[0].get("output") == 96 and ev[0].get("cache_read") == 17588,
+          str(ev))
+    check("原有字段没被挤掉（duration_s/engine/frames_chars）",
+          ev and ev[0].get("engine") == "native"
+          and isinstance(ev[0].get("duration_s"), float)
+          and "frames_chars" in ev[0], str(sorted(ev[0])) if ev else "无事件")
 
 
 # ── ③ 接线：narrator / 屏幕文案 / 复盘 ────────────────────────────────────
@@ -281,7 +281,7 @@ def test_reflector_records_usage():
 
 def test_no_usage_does_not_break_any_site():
     print("\n[接线] 端点不回用量 → 三条路照常跑完，trace 里只是少一格")
-    rec, made = _run_planner("text", AIMessage(content=_TEXT_REPLY))
+    rec, made = _run_planner(_PLANNER_REPLY)
     ev = _events(rec, "planner", "llm_done")
     check("planner：没有用量也落 llm_done（duration_s 仍在）",
           len(ev) == 1 and isinstance(ev[0].get("duration_s"), float)
@@ -292,7 +292,7 @@ if __name__ == "__main__":
     for fn in (test_shape_langchain_and_raw,
                test_cache_read_absent_is_not_zero,
                test_no_usage_returns_empty_and_never_raises,
-               test_planner_records_usage_both_engines,
+               test_planner_records_usage,
                test_narrator_records_usage,
                test_display_text_records_usage,
                test_display_text_failure_path_still_quiet,

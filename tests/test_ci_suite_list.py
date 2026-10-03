@@ -116,9 +116,14 @@ check("枚举 == 磁盘（漏在磁盘上的文件就是「从不运行」的那
       _disk == _enum, f"只在磁盘：{sorted(_disk - _enum)}；只在枚举：{sorted(_enum - _disk)}")
 check("枚举结果非空且覆盖多套（不是把 glob 换成了空名单）", len(_enum) >= 10, f"{len(_enum)} 套")
 check("出厂档钉子还在（判据不跟运维取值走）",
-      run_all._PINNED.get("PLANNER_ENGINE") == "text"
-      and run_all._PINNED.get("AGENT_TASK_STATE") == "0"
+      run_all._PINNED.get("AGENT_TASK_STATE") == "0"
       and run_all._PINNED.get("IOT_ENABLED") == "1", str(run_all._PINNED))
+from config.settings import Settings  # noqa: E402  （默认值从声明取，不手抄一份）
+check("接口层没有第二个档可钉（`PLANNER_ENGINE` 已删，20261004）",
+      "PLANNER_ENGINE" not in run_all._PINNED
+      and "planner_engine" not in Settings.model_fields,
+      f"钉子={run_all._PINNED}；字段里有 planner_engine="
+      f"{'planner_engine' in Settings.model_fields}")
 
 print("\n④b 出厂环境：离线套件**不读 .env**（20260928）")
 # 为什么这一条和上面几条并列：CI 绿、本机绿，而**绿的理由不同**是同一族失效——
@@ -137,11 +142,10 @@ _PROBE = ("import json,sys;sys.path.insert(0,%r);"
           "d=json.loads(%r);"
           "print(json.dumps(sorted(k for k, v in d.items() "
           "if str(getattr(settings, k)) != v)))")
-# 第二支探针（见 `_pinned_effective`）：只回报三个**钉子档位**的实际生效值。
+# 第二支探针（见 `_pinned_effective`）：只回报**钉子档位**的实际生效值。
 _TAKE = ("import json,sys;sys.path.insert(0,%r);"
          "from config.settings import settings;"
-         "print(json.dumps({'planner_engine': str(settings.planner_engine),"
-         " 'agent_task_state': bool(settings.agent_task_state),"
+         "print(json.dumps({'agent_task_state': bool(settings.agent_task_state),"
          " 'iot_enabled': bool(settings.iot_enabled)}))")
 
 
@@ -185,7 +189,7 @@ def _pinned_effective() -> dict | None:
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
-from config.settings import Settings  # noqa: E402  （默认值从声明取，不手抄一份）
+# （`Settings` 的 import 在 ④ 那一节已做——上面那条"接口层没有第二个档"要用它。）
 
 # 全字段比较（不挑三个）：但凡 `.env` 能改的东西都在这条判据的作用范围内。
 _DEFAULTS = {k: str(f.default) for k, f in Settings.model_fields.items()}
@@ -203,7 +207,6 @@ else:
 _eff = _pinned_effective()
 check("⭐⭐ 入口钉住的档位**真的生效**（钉了不生效 ⇒ 套件按另一档跑，且静默）",
       _eff is not None
-      and _eff["planner_engine"] == run_all._PINNED["PLANNER_ENGINE"]
       and _eff["agent_task_state"] == (run_all._PINNED["AGENT_TASK_STATE"] == "1")
       and _eff["iot_enabled"] == (run_all._PINNED["IOT_ENABLED"] == "1"),
       f"实际生效={_eff}；声明={run_all._PINNED}")

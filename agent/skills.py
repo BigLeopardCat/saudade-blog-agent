@@ -3954,8 +3954,13 @@ def build_planner_context(role: str | None = None, *, slim: bool = False) -> str
     技能因此选不出来。传 None（未知身份/老路径/单测）等价于"只有公开技能"——
     失败取向往保守一侧倒，与本仓 authz 的取向一致。
 
-    `slim=True`（20260927，**只给 native 档用**）：去掉每条技能的**触发条件/参数/
-    完成判定**三行，只留技能名与它的固定工具序列。理由是这三样在同一轮的 `tools`
+    `slim=True`（20260927）：去掉每条技能的**触发条件/参数/完成判定**三行，只留技能名
+    与它的固定工具序列。**20261004 起它是唯一的渲染形态**（`_render_planner_prompt` 的
+    `slim_skills` 默认 True、`planner_node` 也只传这一个值）——那时删掉了文本契约档，
+    而"同一份技能表下发两份形态"是 native 独有的处境。`slim=False` 那一支**只剩测试在
+    用**（`tests/test_slim_skills.py` 拿它当对照臂：判据①要求"删掉的必须是 schema 里
+    逐字有的"，没有完整那一份就无从比）。**它不是第二个拨盘**：别再给它接任何生产开关。
+    理由是这三样在同一轮的 `tools`
     里逐字重复出现（schema 的 `description` = `s.description` + `完成判定：` +
     `complete_when`，`properties` = 同一份 `skill_param_specs`），而**同一事实写两遍
     是有代价的**：native 档下面临的是两份形态不同的同一张表（散文 vs JSON Schema），

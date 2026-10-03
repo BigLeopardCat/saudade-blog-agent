@@ -35,7 +35,7 @@ class Settings(BaseSettings):
         # 跟着它走，同一份代码在本机与 CI 上的结论会不同——而那正是 20260928 实测到的形状：
         # `tests/test_confirm.py` 的弹窗矩阵只有在 `JWT_SECRET` 非空时签得出令牌
         # ⇒ **本机恒绿、CI 恒红**，红得与代码一个字都没关系。判据钉代码形状，不钉这台机器
-        # 恰好装了什么。要按别的档跑，自己显式构造（如 `test_planner_engine.py` 传参）。
+        # 恰好装了什么。要按别的档跑，自己显式构造（如 `test_llm_usage.py` 传参）。
         env_file=None if os.environ.get("SAUDADE_IGNORE_ENV_FILE") else ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
@@ -97,15 +97,14 @@ class Settings(BaseSettings):
     authz_enforce: bool = False
 
     # ── planner 接口层（20260927 新主线第一批）───────────────────────
-    # 取值 `text`（默认，历史行为：渲染文本菜单 → 模型写五行文本 → 正则抠）
-    # / `native`（API 的 tools 字段 + tool_calls 返回，见 agent/native_plan.py）
-    # / `shadow`（两条路都跑一遍、只比对不改变行为；**只给离线/调试用**）。
-    # 默认 `text` 是刻意的：上线后线上行为逐字节不变，回滚也只是把这个值改回来
-    # ——不需要回滚代码。`shadow` 写进生产 .env 会让每轮 planner 多一次 LLM 调用。
-    planner_engine: str = "text"
-    # native 档是否开思考。**单独一个开关是刻意的**：它是三个待拍板项之一
-    # （"开思考的预算"），要能单独开关才产得出对照数据；而文本档恒关思考
-    # （`graph.py` 那行 enable_thinking=False 是实测拍出来的，别跟着这个值走）。
+    # **接口只有一种：native tool calls**（API 的 `tools` 字段 + `tool_calls` 返回，
+    # 见 agent/native_plan.py）。20261004 把"文本契约"那一档连同它的解析器整族删掉
+    # ——全量 384 份 trace 里那条兜底路径 `native_fallback` 命中 **0** 次，即删掉它
+    # 不改变任何一轮生产对话的形状；留着一个从不被走到的分支只会让"模型没做出决策"
+    # 与"响应不可解析"混成同一个归宿。所以**没有** `planner_engine` 这个拨盘了：
+    # 别再加快关回来，多一档就是多一条没人验证的通路。
+    # native 是否开思考。**单独一个开关是刻意的**：它是三个待拍板项之一
+    # （"开思考的预算"），要能单独开关才产得出对照数据。
     planner_native_thinking: bool = True
     # native 档的预算。**不能沿用文本档的 400**：模型开思考时思考链先吃掉额度，
     # tool_call 的 arguments 会被截断在中途（finish_reason=length，JSON 都不完整）。

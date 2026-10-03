@@ -40,6 +40,7 @@ from tools import base as _base  # noqa: E402  工具的返回值契约（ToolRe
 import agent.graph as g  # noqa: E402
 from agent.graph import build_graph, graph_input, parse_plan  # noqa: E402
 from agent.principal import Principal  # noqa: E402
+from _native_stub import bind_tools_stub, native_reply  # noqa: E402
 
 FAILED: list[str] = []
 
@@ -56,6 +57,8 @@ def check(name: str, ok: bool, extra: str = "") -> None:
 # 这条分流判据一变（比如将来 planner 也传消息列表），下面的用例会立刻红——这正是
 # 想要的：假 LLM 分不清节点时，"planner 被调了几次"的断言就会静默失去意义。
 class _ScriptedLLM:
+    bind_tools = bind_tools_stub      # `bind_native` 要用（见 _native_stub 头注）
+
     def __init__(self, plans: list, narrations: list):
         self.plans, self.narrations = list(plans), list(narrations)
         self.planner_prompts: list[str] = []
@@ -74,8 +77,10 @@ class _ScriptedLLM:
         self.planner_prompts.append(prompt)
         if not self.plans:
             self.exhausted.append("planner")
-            return AIMessage(content=_PLAN_CHAT)
-        return AIMessage(content=self.plans.pop(0))
+            return native_reply(_PLAN_CHAT)
+        # 夹具里的 `SKILL=/PARAMS=` 文本 → native tool_calls（20261004 接口层单通道，
+        # 见 `tests/_native_stub.py`）。判据仍在 `agent/native_plan.py`。
+        return native_reply(self.plans.pop(0))
 
 
 class _FakeTool:

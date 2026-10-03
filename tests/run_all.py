@@ -16,10 +16,11 @@ README 正文），加一个套件要改三处，漏一处就变成"看着在跑
 不在这里，见 eval/ 与 README「测试与评测」。
 
 **离线套件一律按"出厂档"跑**：`config/settings.py` 读 `.env`，而本机 `.env` 就是产线那份
-（20260927 起 `PLANNER_ENGINE=native`）——不钉的话，"离线判据"会跟着**产线今天选了哪一档**
-变，同一份代码在换档那天红一片（实测：换档后 4 个套件红，`PLANNER_ENGINE=text` 立刻全绿）。
+——不钉的话，"离线判据"会跟着**产线今天选了哪一档**变，同一份代码在产线改配置那天红一片
+（实测过一次：换接口层档位后 4 个套件红，把那一项钉回默认值立刻全绿）。
 判据必须钉在代码的形状上，不能钉在运维的取值上。
-需要按别的档跑的用例自己显式构造（如 `test_planner_engine.py` 直接调函数、走参数而不是 env）。
+（20261004：接口层只剩 native 一条、`PLANNER_ENGINE` 拨盘已删 ⇒ 那项钉子连同这个隐患
+一起没了；假 LLM 桩现在自带 `bind_tools`，见 `tests/_native_stub.py`。）
 
 20260928 起这个钉子从"钉两项"扩到**整个 .env 都不读**（`SAUDADE_IGNORE_ENV_FILE=1`，见
 `config/settings.py` 的 model_config）：只钉两项不够——凡是**值本身**会影响判据形状的取值
@@ -42,10 +43,10 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TESTS = ROOT / "tests"
 
-# 钉成"出厂默认值"的两项能力开关（= `config/settings.py` 的默认档）。只钉**会影响离线
-# 判据**的那些：`PLANNER_ENGINE` 决定 planner 走文本契约还是 tools 数组（假 LLM 桩没有
-# `bind_tools`，native 档直接 AttributeError），`AGENT_TASK_STATE` 决定 schema 里多不多
-# 那个登记伪函数。其余（模型名、超时）不影响离线套件的形状判据，不钉。
+# 钉成"出厂默认值"的能力开关（= `config/settings.py` 的默认档）。只钉**会影响离线判据**
+# 的那些：`AGENT_TASK_STATE` 决定 schema 里多不多那个登记伪函数。其余（模型名、超时）不
+# 影响离线套件的形状判据，不钉。
+# （20261004 删掉了 `PLANNER_ENGINE` 那一钉：接口层只剩 native 一条，没有第二个取值可钉。）
 #
 # 另有一项不是"取值"而是"环境"：`SAUDADE_IGNORE_ENV_FILE=1` ⇒ 子进程**整份 .env 不读**
 # （`config/settings.py` 的 model_config）。上面那几项漏了还能靠人眼从 ⚠️ 那行看出来，
@@ -57,7 +58,7 @@ TESTS = ROOT / "tests"
 # 服务。不钉住的话，它们全会按"没装"那一档跑，然后集体红——而红的原因不是代码坏了，
 # 是**判据与档位错配**。钉成 1 = "既有判据跑在装了的那一档"，关掉那一档另有
 # `tests/test_iot_switch.py` 专门验（它自己在子进程里把开关设成 0）。
-_PINNED = {"PLANNER_ENGINE": "text", "AGENT_TASK_STATE": "0",
+_PINNED = {"AGENT_TASK_STATE": "0",
            "SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
 
 
@@ -76,9 +77,9 @@ def suites(keyword: str = "") -> list[pathlib.Path]:
 def _ambient_note(env: dict) -> str:
     """本机**实际生效**的档位与出厂档不同时，返回一行给人看的说明（否则空串）。
 
-    为什么在本进程里 import `config.settings`：`PLANNER_ENGINE` 通常不在 shell 环境里，
-    而是躺在 `.env`（产线那份）——只看 `os.environ` 会得出"没有差异"的假结论，而那恰恰
-    是这套钉子要防的那一格。settings 读进来即是**本机实际生效值**。
+    为什么在本进程里 import `config.settings`：产线取值通常不在 shell 环境里，而是躺在
+    `.env`（产线那份）——只看 `os.environ` 会得出"没有差异"的假结论，而那恰恰是这套钉子
+    要防的那一格。settings 读进来即是**本机实际生效值**。
     读不进来（依赖缺失/校验失败）就**不猜**，直接说"读不到"，不静默当作没差异。
 
     ⚠️ 只对**真设置项**做这个比较：`SAUDADE_IGNORE_ENV_FILE` 是"环境开关"不是设置项
@@ -87,8 +88,7 @@ def _ambient_note(env: dict) -> str:
     """
     try:
         from config.settings import settings  # noqa: PLC0415  （只在需要时报这一行说明）
-        live = {"PLANNER_ENGINE": str(getattr(settings, "planner_engine", "")),
-                "AGENT_TASK_STATE": "1" if getattr(settings, "agent_task_state", False) else "0"}
+        live = {"AGENT_TASK_STATE": "1" if getattr(settings, "agent_task_state", False) else "0"}
     except Exception as e:  # pragma: no cover - 依赖缺失时也把话说清楚
         return f"读不到本机档位（{type(e).__name__}: {e}）——本次一律按出厂档跑"
     diff = {k: live[k] for k in live if live[k].strip() != _PINNED[k]}

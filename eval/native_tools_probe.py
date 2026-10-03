@@ -16,8 +16,8 @@
   ② 由此暴露的设计缺口：native 档必须换掉规则 7（否则测的是"提示词与 schema 谁赢"，
      不是"接口层换没换"）⇒ `agent/graph.py` 的 `{output_contract}` 槽就是这么来的。
 
-现在**渲染真提示词**再发（`_render_planner_prompt(contract=…_NATIVE)`）——与
-`planner_node` 走的是**同一个**渲染入口，不再有第二份手工拼装。**这是"能力有测试 ≠
+现在**渲染真提示词**再发（`_render_planner_prompt(...)`，契约槽恒 `_PLANNER_OUTPUT_CONTRACT_NATIVE`）
+——与 `planner_node` 走的是**同一个**渲染入口，不再有第二份手工拼装。**这是"能力有测试 ≠
 接线有测试"的又一例**：探针跑绿了，但它验的不是线上那条路。
 
 ## 它要回答什么（1A 的放行条件，不是"顺手测一下"）
@@ -121,8 +121,7 @@ def _real_prompt(user_msg: str) -> str:
         tool_results=_frame_texts([]),
         ref_hints=ref_hints([]),
         reflector_feedback="（本决策轮无复盘建议）",
-        correction="（本决策轮无纠偏提示）",
-        contract=_PLANNER_OUTPUT_CONTRACT_NATIVE)
+        correction="（本决策轮无纠偏提示）")
 
 
 def _once(client: OpenAI, model: str, tools: list[dict], prompt: str,

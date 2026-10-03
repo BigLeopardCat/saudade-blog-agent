@@ -9,6 +9,30 @@
 > 现状说明见 `docs/agent-architecture.md`；方向史见 `docs/toolcall-stability-roadmap.md`。
 > 本文是**交接件**，不是现状说明，也不替代上一份的方向清单。
 
+> **20261004 追记（本文写作时的"两档并行"已结束，先读这段再看下面）**
+>
+> 接口层**只剩 native tool calls 一条路**：`settings.planner_engine` 这个拨盘、
+> `_PLANNER_OUTPUT_CONTRACT_TEXT`、text 兜底解析器（`extract_plan_fields` /
+> `_PLANNER_OUTPUT_RE`）、`shadow` 档全部**已删**。因此本文中一切"两档对照"
+> （§1.5–1.7、§7 第 2/3/4 项）都是**历史测量记录**，其结论照读，但"档"这个自变量
+> 已不存在，别再照它去拨任何开关。删除依据：全量 384 份 trace 里
+> `planner.native_fallback` = **0** ⇒ 文本兜底在生产**从未被走到过**，删它不改变任何
+> 一轮对话的形状。
+>
+> **删分支**：`freeze/text-plan-protocol` 与 `widget/pos-20261003` 已于 20261004 删除
+> （本地 + 远端；删前复核两者独有提交均为 0，最后一份完整文本形态就在被删的
+> `freeze/text-plan-protocol` 上，回滚只能 `git revert` + restart）。§3 第 3 项与
+> §7 第 1 项据此作废。`verify/20260921-agent-review` 保留（54 个从未合并的独有提交，另议）。
+>
+> **决策层改了一格（本批的另一半）**：`_PLANNER_OUTPUT_CONTRACT_NATIVE` 规则 7 原来
+> **明文许可**「可以不调用任何函数、直接给正文」——那是一条合法的"什么都不点就交卷"
+> 退路。实测 431 次 native 决策里 90 次 `finish=stop`（零调用），其中 **42 次是零帧轮**
+> （靶子；另 48 次在已有帧之后，是合法收尾轮）。现在改为：闲聊也必须**显式**点 `chat`，
+> 「一个函数都不点 = 没有做出决策」⇒ 走既有 `correction` 通道**纠偏一次**
+> （trace 记 `planner.no_call_nudge`）；第二次仍零调用才认成 `chat`
+> （`planner.no_call_accepted`，**状态仍是 `answer_only`，绝不改成 `wrapped`**——那是
+> 零帧声称判据的开火前提）。`decided is None` 的两条确定性出口见 §1.3 追记。
+
 ---
 
 ## 0. 一句话
@@ -28,6 +52,12 @@
 | API 请求 | `ChatOpenAI(model/api_key/base_url/temperature/max_tokens/streaming/verbose/timeout/extra_body)`——**无 `tools`、无 `tool_choice`** | `models/llm.py:11-47` |
 | 工具怎么给模型 | 工具 schema 派生后**渲染成文本菜单**，插进提示词 | `_tools_desc` / `_menu_arg_signature`，`_PLANNER_PROMPT.format(tools_desc=…)`（`agent/graph.py:2935`） |
 | 模型怎么表达 | **自由文本**，系统用正则抠 `SKILL=` / `PARAMS=` / `TOOLS:` | `extract_plan_fields` / `_PLANNER_OUTPUT_RE` / `parse_plan` |
+
+> ⚠️ **20261004**：上表是**切换前**的形态，留作对照。第三行那两个正则解析器
+> （`extract_plan_fields` / `_PLANNER_OUTPUT_RE`）已删——它们只服务"native 判不了
+> 就退回文本"这条兜底，而该兜底从未被走到过。第四行的 `parse_plan` **保留**：
+> 它是**内部计划文本协议**（`plan_encode` ↔ `parse_plan`）的读侧，`execute` / `gate` /
+> 路由全读它，与接口层选哪一档无关。
 | 谁发起调用 | **Python**，逐条确定性执行 | `out = tool.invoke(args)`（`agent/graph.py:5785`） |
 
 佐证一：全仓 `bind_tools` 只出现在**注释**里（`agent/graph.py:11` / `:6049` / `:6209`、
@@ -141,6 +171,12 @@ function calling（`tool_choice=auto` / 强制指定 / 函数侧 `strict`），�
 
 ### 1.5 `native` 档首次真机联通（20260927，n=2，**不是对照结论**）
 
+> **20261004**：这一节记录的"拨到 native 档"这个动作已不存在（拨盘整个删了）。
+> 保留下来的两个事实仍然有效且是删文本层的依据：**①真网关接受这份 `tools`**；
+> **②零调用的轮次与"显式点 chat"的轮次在 trace 里是两格**。第三条（单步耗时）只是
+> 当年成组对照的前提。下面"零调用记空串"那一句，本批起多了一层语义：零调用不再是
+> 有效决策，会先被纠偏一次（见 §1.3 追记 / 本文开头 20261004 追记）。
+
 `PLANNER_ENGINE=native` 在本机对真实网关跑通 2 条（`eff_on_sakura` /
 `multi_step_effect_then_nav`，2/2）。**这不是"native 更好"的证据**（n=2，且换档即换采样），
 它的意义只有一个：**接口层这一刀在真网关上是通的**，`tools` 字段与思考档不冲突。
@@ -167,7 +203,7 @@ trace 里能直接读到的三件事：
 |---|---|---|
 | `pass_rate` | 逐条"几次里绿几次"的合计 + Wilson 区间（复用 `baseline_group.aggregate`） | 三个待拍板项都要 |
 | `planner_round_s` | **planner 决策轮**这一腿（trace 的 `planner/llm_done.duration_s`）p50/max | 开思考预算、是否换 max |
-| `fallback_rate` | native 档"判不了、退回文本解析"的比例 = `native_fallback /(native_decision + native_fallback)`；**text 档记 `null`**（概念不存在 ≠ 量到 0） | 技能模板去留、开思考预算 |
+| `fallback_rate` | `native_fallback /(native_decision + native_fallback)`；**text 档记 `null`**（概念不存在 ≠ 量到 0）。⚠️ **20261004 起事件键保留、语义变了**：「退回文本解析」这个含义已随文本层一起不存在（该兜底在生产 **0 次**），`native_fallback` 现在指**"native 未给出可用决定"**，并用新的 `disposition` 字段分三格：`retry`（形态坏、纠偏一次）、`truncated_wrapup`（`finish=length`，预算失败）、`unparseable_wrapup`（两次都读不出）。键名不改是因为 `dial_matrix` 的指标与 `tests/test_dial_matrix.py` 都按它读数 | 技能模板去留、开思考预算 |
 | `tool_call_completeness` | 1 − `finish_reason=length` 占比（截断 = arguments 断在半截 JSON，是静默失败） | 是否换 max、thinking 预算够不够 |
 
 **判读纪律（看数之前先定好，免得事后挑一个好看的说法）**：
@@ -378,8 +414,11 @@ multi_step_missing_param_asks,multi_step_search_then_read_top \
 1. **冻结的是架构演进，不是运维。** 线上仍跑这套形态；bug 照修、安全补丁照打、
    事故照查。**不写清这一条，分支会烂在线上。**
 2. **冻结必须留下结论文档**（即本文 §2）。没有它，"冻结"三个月后就是一堆没人敢动的代码。
-3. **git 上可指认**——只读分支 **`freeze/text-plan-protocol`** （指向本文所在提交；
-   `main` 从这一点起是新主线）。该分支**不再接受改动**，新工作一律走 `main`。
+3. **git 上可指认**——~~只读分支 **`freeze/text-plan-protocol`**~~。**20261004 该分支已删**
+   （本地 + 远端；同时删掉的还有 `widget/pos-20261003`。删前复核：两者独有提交均为 0，
+   内容全部已在 `main` 血缘里）。文本层的最后一份完整形态曾在这条分支上，现在只能靠
+   `git revert` 往回找——主人已拍板不要。`verify/20260921-agent-review` 保留（54 个从未
+   合并的独有提交，另议）。**新工作一律走 `main`。**
 4. **冻结不等于停止取证。** 冻结期间线上出的每一条事故仍然是新主线的输入，
    照旧落 trace、照旧复扫。
 
@@ -503,7 +542,8 @@ submitted → running → succeeded / failed / cancelled
 - `eval/corpus_invariants.py` 的 **I6**（写端 vs 消费端对账：无 id 的登记 / 拿不到会话的
   登记 / 注入了却没人管 / 被纠偏次数）+ `tests/test_corpus_invariants.py`（这个脚本
   此前**一条测试都没有**）；
-- `tests/run_all.py` 起钉住出厂档（`PLANNER_ENGINE=text`、`AGENT_TASK_STATE=0`）：
+- `tests/run_all.py` 起钉住出厂档（当时是 `PLANNER_ENGINE=text`、`AGENT_TASK_STATE=0`；
+  **20261004 起 `PLANNER_ENGINE` 这一项已删**——拨盘不存在了，只钉 `AGENT_TASK_STATE` 等三项）：
   离线判据不许跟着产线 `.env` 今天选了哪一档变（实测换档当天 4 个套件红，钉住后 47/47）。
   20260928 扩到**整份 `.env` 不读**（`SAUDADE_IGNORE_ENV_FILE=1`）：只钉两项挡不住
   "值本身影响判据形状"的那一类——实测 `test_confirm.py` 的弹窗矩阵靠本机 `.env` 里的
@@ -551,9 +591,12 @@ submitted → running → succeeded / failed / cancelled
 同族前例 `_freeze_policy_refusal` 不许扩）。注记文本 `TASK_DONE_NOTE` 里**刻意不出现
 "撤下/取消"这些词**——它是递给 narrator 的措辞，用「撤下」去否定撤下等于把词喂到它嘴边。
 
-**开关位置的诚实边界**：生产 `.env` 的 `AGENT_TASK_STATE` **仍是关的** ⇒ 写侧不可达、
-上面这条失败在生产**今天不可达**；flag-on 跑这条用例是**将来开启该功能的前置门禁**，
-不是线上现状。§7 第 7 行据此仍未改判——只是"先修工具描述再复测"这一步已做完。
+**开关位置的诚实边界（20261004 更正，原文写于 20260927）**：原文写「生产 `.env` 的
+`AGENT_TASK_STATE` **仍是关的**」——**这一句今天不成立**。`.env` 自 20261002 起就是
+**开的**（`/health` 实测 `dials.agent_task_state=true`）。改判不影响上文的技术结论，
+只是"线上不可达"这个前提没了；实际观测是**开着但零流量**：全量 384 份 trace 里
+`task_inject` 283 次全是 `n=0`，`task_declare` / `task_advance` / `task_drop_settled`
+一次都没有（详见 §7 第 7 行与 ADR-0002）。
 
 ### 6.10 出口两种形状，调用方只认一种（20260927 生产事故，已修）
 
@@ -594,13 +637,13 @@ submitted → running → succeeded / failed / cancelled
 
 | # | 事项 | 需要的判据 |
 |---|---|---|
-| 1 | ~~冻结的只读分支名称~~ | **已定：`freeze/text-plan-protocol`**（见 §3） |
+| 1 | ~~冻结的只读分支名称~~ | **已定：`freeze/text-plan-protocol`**；**20261004 该分支与 `widget/pos-20261003` 一并删除**（本地 + 远端，独有提交均为 0），详见 §3 第 3 项 |
 | 2 | 技能模板层去留 | **已有对照数据（§1.7＋§1.9）：本批仍不支持现在删**。native 档没有任何一项指标超过 `text`（区间全重叠），而模板层现在同时是**写工具的唯一入口**与**参数必填的闸**（`skills.py:1425`）。§1.7 里"不思考档多一条发明参数的路"那条理由**已随 §1.8 的修复消失**（§1.9：五档 `missing_param` 全 3/3）⇒ 原来挂的前置是**批 D（多步）**，而 §1.3 三追记已证：那 4 条多步用例**与批 D 无关**且开关两态同分 ⇒ **这条前置不成立**。删模板层仍然没有数据支持（native 档没有任何一项指标超过 `text`，区间全重叠），要动它得先有"native 明显更好"的证据 |
 | 3 | planner 开思考的预算 | **本批数据不支持开**（口径已按 §1.9 修正）。原文的理由是"发明参数调写工具 5/6→0/6"，而那 5 条红是**校正器缺陷**（§1.8），修后与档无关地一起消失 ⇒ 那条理由**不成立**。剩下的对照：max 档上思考与不思考**逐条完全相同**（都 12/12，计划效率也逐字相同 24/21/9），而思考贵 4.6 倍（planner p50 5.97 vs 1.29s）；flash 档上 7/12 vs 6/12（区间重叠，等于没差别，且都低于 `text`）⇒ **若切 native，默认不思考**；要开思考得有批 D 之后的新证据。`max_tokens=1200` 仍然够用（完整率 96.2–100%） |
 | 4 | 换 max 的判据 | **仍不支持"换 max 更好"**：两个 max 档 12/12 与 `text` 的区间重叠（§1.9 读法 3）⇒ 构不成更好。但 §1.9 给出了**新指向**：两个 max 档在这组多步用例上是唯一**没有自身失败形态**的档（12/12），不思考 max 还是全场最快（planner p50 1.29s、用例 p50 6.65s、完整率 100%、零 fallback）⇒ **若切 native，首选 `native-nothink-max`**。两处代价要说清：① `QWEN_MODEL` 是**全链路**开关（narrator 也换，成本不止 planner）；② 这只是"下一批的默认候选"，不是"更好"的证明 —— 批 D 之后复测再定 |
-| 5 | 新旧并行的方式 | **已定：成组对照测量**（`eval/dial_matrix.py`，§1.6–1.7：同组用例 × 5 档 × 3 次、同刻交错、跑前探针核档、跑后对账 `engine`）。影子档退回离线调试用途（不写生产 `.env`，见 §3） |
+| 5 | 新旧并行的方式 | ~~**已定：成组对照测量**（`eval/dial_matrix.py`，§1.6–1.7…），影子档退回离线调试用途~~。**20261004 结束**：新旧并行从"暂时"变成"永久"那一半——文本档与影子档**整个删了**，`eval/dial_matrix.py` 的 `text` 维与档位探针同步移除（历史报告 `eval/report/baseline_*_dial_matrix*.json` 留档不动）。`authz` 里那个同名 `shadow`（`AGENT_AUTHZ_ENFORCE`）与它无关，**别一起删** |
 | 6 | 任务行的落库形态 | **已定：新建 `agent_task` 表**（`scripts/migration/agent_task_20260927.sql`，已点名并执行；形态与偏差见 §6.7）。与 `pending_action` 分表的理由有两条可判定的依据，写在迁移头注里 |
-| 7 | **打开 `AGENT_TASK_STATE` 的时机** | **仍待拍板，但判据换过了**。原先挂的验收集（§1.2 那 4 条 `multi_step`）已证无效（§1.3 三追记：单轮 + 无会话 id，开关两态同分）。现在的判据是 §6.8 的两轮探针：**读→认→结算** 这段链路**两态都通**（开关只管**写侧**——模型能不能登记；注入与结算侧**常开**，因为行的存在本身以写侧为前提）。所以"开"**不会**让那条链路从坏变好，它换来的只是"模型愿意登记时会多一行持久状态"，代价是 schema 多一个工具、多一条 `__TASK__` 写路径。**当前证据不支持把生产档打开**：轮 1 里模型从没主动登记过（§1.3 三追记的 4 条 + §6.8 的探针共 5 次真跑，`task_declare` 0 次），而 §6.8 那条"做完之后又撤下"的观察说明它对这个工具的用法还没吃准。**建议**：先按 §6.8 那条观察修提示词/工具描述，再用多轮用例（缺参数挂起 → 主人回答 → 结算）复测；在那之前保持 off，线上行为不变。**20260927 进展**：那一步已做完——工具描述拆成两个、加了「完成 > 撤下」闸、补了多轮用例 `task_state_resume_settle` 锁住（§6.9，flag-on 4/4）。**结论仍是 off**：① 那条观察暴露的是"模型对这个工具的用法还没吃准"，修的是**系统的兜底**（闸），不是**模型的意愿**——`task_declare` 仍 0 次自发登记；② 缺参数挂起那半（`input_required` → 主人回答 → 结算）**还没有多轮用例覆盖**；③ 闸有一支已知残余（同请求内先撤下后执行，§6.9）。 |
+| 7 | **打开 `AGENT_TASK_STATE` 的时机** | ~~仍待拍板~~（**尾部 20261004 追记：已于 20261002 打开，零流量**）。原先挂的验收集（§1.2 那 4 条 `multi_step`）已证无效（§1.3 三追记：单轮 + 无会话 id，开关两态同分）。现在的判据是 §6.8 的两轮探针：**读→认→结算** 这段链路**两态都通**（开关只管**写侧**——模型能不能登记；注入与结算侧**常开**，因为行的存在本身以写侧为前提）。所以"开"**不会**让那条链路从坏变好，它换来的只是"模型愿意登记时会多一行持久状态"，代价是 schema 多一个工具、多一条 `__TASK__` 写路径。**当前证据不支持把生产档打开**：轮 1 里模型从没主动登记过（§1.3 三追记的 4 条 + §6.8 的探针共 5 次真跑，`task_declare` 0 次），而 §6.8 那条"做完之后又撤下"的观察说明它对这个工具的用法还没吃准。**建议**：先按 §6.8 那条观察修提示词/工具描述，再用多轮用例（缺参数挂起 → 主人回答 → 结算）复测；在那之前保持 off，线上行为不变。**20260927 进展**：那一步已做完——工具描述拆成两个、加了「完成 > 撤下」闸、补了多轮用例 `task_state_resume_settle` 锁住（§6.9，flag-on 4/4）。**结论仍是 off**：① 那条观察暴露的是"模型对这个工具的用法还没吃准"，修的是**系统的兜底**（闸），不是**模型的意愿**——`task_declare` 仍 0 次自发登记；② 缺参数挂起那半（`input_required` → 主人回答 → 结算）**还没有多轮用例覆盖**；③ 闸有一支已知残余（同请求内先撤下后执行，§6.9）。**20261004 追记（这条待拍板已不再悬空）**：`.env` 自 **20261002 起就是开的**（`/health` `dials.agent_task_state=true`），所以"什么时候开"已不是待决项；实际形态是**开着的、零流量**——全量 384 份 trace 里 `task_inject` 283 次全 `n=0`，`task_declare` 自发登记仍是 **0 次**。机制侧按 ADR-0002 是完整的：意图由模型声明（`task_hold`/`task_drop`），**完成只认回执**（`advance_by_receipts`），模型**没有**写 `cursor`/`state` 的通道 ⇒ 主人问的「不能标记非 chat task 完成」今天已成立且比预期硬。但它**治不了**本批那个病：出问题的轮次 planner 选的是 `chat`，**没有非 chat 意图可供登记**——见 §7 之后本批的决策层修复与本文开头的 20261004 追记 |
 
 ---
 
