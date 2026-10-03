@@ -1039,5 +1039,53 @@ _bad_rename_neg = [t for t in _RENAME_NEG
 check(f"提到改名/打听改名不是命令（{len(_RENAME_NEG)} 条）", not _bad_rename_neg,
       f"误判: {_bad_rename_neg}")
 
+print("⑨i 「在问我自己那份数据」的问句判据（20261003，gate 第 4b 节的输入）")
+# 现场（uid=1 会话 320，trace `20261003T194144`）：主人问「我有哪些未读通知呀」，planner 落
+# chat 零工具，narrator 回了一段关于上一轮话题的**真话** ⇒ gate 的判据族（全是"这句话真不
+# 真"型）全绿放行。这条判据补的是那半：**这轮答的是不是主人刚问的那件事**——只判"该不该
+# 去取数"，不管落到哪个技能（那是 planner 的事，同 `_replan_note` 的纪律）。
+# 射程由全量语料定（见 `authz.is_own_read_question` 头注）：uid>0 的零帧放行轮 299 轮命中
+# 2 条（一条是上面那次事故原句，一条是 20260923 的纠正轮）。下面这张成对表就是它的一部分。
+_ORQ_TRUE = [
+    "小猫咪！我有哪些未读通知呀",        # 事故原句（称呼壳 + 量词型打听，两处都是坑）
+    "我有哪些未读通知？",                # golden `own_unread_not_logged_in` 同一句
+    "我信箱里有谁给我写过信？",          # golden `own_messages_not_logged_in` 同一句
+    "我还有几条没读的消息呢",            # 量词型打听（问句表认不出，靠 `_OWN_INQUIRY_RE`）
+    "我的收藏里有哪些文章",
+    "我有哪些私信",
+    "未读通知有多少条",                  # 无"我"：未读/通知自带自指（personal 档）
+]
+_ORQ_FALSE = [
+    ("你能发私信吗", "能力问句：如实答「不能」就是出路"),
+    ("你可以单独把一个消息标记已读吗", "能力问句（中间隔 11 字）"),
+    ("确定不能走系统通知吗", "能力问句（「不能…吗」）"),
+    ("会不会有人给我发私信", "能力/假设问句：归假设那一支"),
+    ("能不能替我发个公告", "能力问句 + 写意图（整句没有「吗」）"),
+    ("猫咪我的未读信息全部就标记为已读", "写命令：归写侧（洞⑨ 那族）"),
+    ("把通知都标记成已读", "写命令"),
+    ("站内最近有什么公告吗？", "公开面：golden `data_announcements` 同形，不是我自己那份"),
+    ("读取站内通知读不到吗", "「通知」是通用词、句里没有自指"),
+    ("给xinguan什么的用户发个测试通知", "写意图，且问的是别人的数据"),
+    ("小猫咪你会做蛋糕吗", "闲聊"),
+    ("小猫咪按你想法来吧", "闲聊"),
+    ("", "空消息"),
+]
+_ORQ_MISS = [t for t in _ORQ_TRUE if not authz.is_own_read_question(t)]
+check(f"问自己数据的问句判成「该去取数」（{len(_ORQ_TRUE)} 条）", not _ORQ_MISS,
+      f"漏判: {_ORQ_MISS}")
+_ORQ_BAD = [f"{t}（{why}）" for t, why in _ORQ_FALSE if authz.is_own_read_question(t)]
+check(f"不该去取数的句子放行（{len(_ORQ_FALSE)} 条）", not _ORQ_BAD, f"误判: {_ORQ_BAD}")
+# 称呼壳透明（同 ⑨h 第 4 例）：判据入口只剥一次壳，带不带「小猫咪」必须同结论。
+_ORQ_VOC = [(t, authz.is_own_read_question(t), authz.is_own_read_question("小猫咪，" + t))
+            for t in ("我有哪些未读通知呀", "我的收藏里有哪些文章")]
+check("称呼壳对这条判据透明（带不带你叫它，判定一致）",
+      all(a == b for _t, a, b in _ORQ_VOC),
+      str([t for t, a, b in _ORQ_VOC if a != b]))
+# 与**写侧**同源但方向相反：同一句话在两侧的结论必须互斥（否则一句写命令会被读成问句，
+# 白白打回一轮，或者反过来——写请求被这条路放过去）。
+_ORQ_SAME = [t for t in _ORQ_TRUE
+             if any(authz._own_command(t, tool) for tool in authz._OWN_TOOL_FAMILY)]
+check("两侧互斥：判成「问」的句子不会被写侧同时判成命令", not _ORQ_SAME, str(_ORQ_SAME))
+
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
