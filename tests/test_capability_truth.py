@@ -76,9 +76,17 @@ _SK = {s.name: s for s in S.SKILLS}
 _del = _SK["board_delete"]
 check("board_delete 的技能描述里写着「待审与被驳回的留言同样删得掉」",
       "待审与被驳回的留言同样删得掉" in _del.description)
-check("  回复契约里禁止那句假否定（「没有删除被驳回留言的通道」）",
-      "没有删除被驳回留言的通道" in _del.reply_contract
-      and "删得掉" in _del.reply_contract)
+# 20261003 改口径（与 gate 洞⑫ 同一批）：**契约里不再留那句可抄的假否定**。
+# 此前这里锁的是"契约里写着『绝不说「没有删除被驳回留言的通道」』"——初衷是禁止，
+# 写法却是把**那句假话的全文**摆进模型读得到的上下文里（同族的教训：契约里不许出现
+# 可抄的否认句）。现在换成**正向义务**：写明"删留言就是你自己能做的"、并明写"不许把
+# 主人打发去后台手动处理"。硬判据那一半搬去了 gate（洞⑫，`tests/test_capability_denial.py`）
+# ——它按 `visible_skills(role)` 判，比词形锁结实得多。
+check("  回复契约里**不再出现**那句可抄的假否定（模型照着抄的就是它）",
+      "没有删除被驳回留言的通道" not in _del.reply_contract)
+check("  换成**正向**义务：写明删得掉、且不许把主人打发去后台手动处理",
+      "删留言就是你自己能做的" in _del.reply_contract
+      and "打发去后台手动处理" in _del.reply_contract)
 check("  回复契约里写着**不要让他报编号**（写通道不认编号，报了也做不成）",
       "不要让他报编号" in _del.reply_contract)
 check("  回复契约里写着多条要一条一段原话（不许承诺一次删多条）",
