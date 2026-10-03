@@ -171,8 +171,11 @@ print("\n④ 12 条弹卡用例：意图正确的 spec 一律原样通过（不�
 _POPUPS = {
     "admin_write_natural_confirm_popup":
         ("create_tag", {"title": "秋日随笔", "parent_tag": "", "color": "#eb2f96"}),
+    # 20261004 改靶：golden 那条的前提（文章 1＋摄影）生产里双假（`get_article_detail(1)`
+    # not_found、「摄影」noteCount 0）⇒ 换成 note 23 +「Python」。表里的值必须与
+    # `basic.jsonl` 的原话同步——它是**从原话读出来的正解**，不同步这条锁就成了空断言。
     "admin_write_intent_tag_remove_popup":
-        ("set_article_tags", {"article_id": 1, "remove": ["摄影"], "add": []}),
+        ("set_article_tags", {"article_id": 23, "remove": ["Python"], "add": []}),
     "admin_write_intent_named_target_only":
         ("set_article_status", {"article_id": 999999, "status": "private"}),
     "admin_tag_move_popup":
