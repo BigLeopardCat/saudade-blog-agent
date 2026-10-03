@@ -61,7 +61,9 @@ _VOLB.update(page_ctx="页面B：/dashboard", tool_results="get_article_detail �
 
 
 def _planner_pair():
-    kw = dict(user_msg="帮我把樱花打开", contract=G._PLANNER_OUTPUT_CONTRACT_TEXT)
+    # 契约槽不显式传：20261004 起只有 native 一份（`_PLANNER_OUTPUT_CONTRACT_TEXT`
+    # 连同文本档一起删了），默认值就是生产那一份。
+    kw = dict(user_msg="帮我把樱花打开")
     return (G._render_planner_prompt("admin", **kw, **_VOLA),
             G._render_planner_prompt("admin", **kw, **_VOLB))
 
@@ -88,8 +90,12 @@ def test_planner_prefix_covers_rules():
     last_rule = a.index("6c. 现时状态类询问")
     check("整段判定规则正文都在稳定前缀里（含最后一条 6c）",
           last_rule < n, f"6c 在 {last_rule}，前缀只到 {n}")
-    check("稳定前缀 ≥ 30,000 字（菜单 20,387 + 规则 10,108 的量级）",
-          n >= 30000, f"lcp={n}")
+    # 门槛按**生产形态**取：20261004 起 planner 只有 native 一条路，`slim_skills`
+    # 恒真（技能描述/参数/完成判定那三行与 tools schema 重复，已不再进提示词），
+    # 菜单段因此从 20,387 掉到 8,595——再拿旧的 30,000 判就是拿一个**不存在**的
+    # 档位当基线。实测前缀 19,312（到第一个易变块 `page_ctx` 为止）。
+    check("稳定前缀 ≥ 18,000 字（slim 菜单 8,595 + 规则正文 ~10,700 的量级）",
+          n >= 18000, f"lcp={n}")
     # 反向：易变块**必须排在规则正文之后**（这才说明缓存前缀里没有它们）。
     # 比的是"块值的位置 > 规则最后一条的位置"，不是"块值的位置 > 前缀长度"——
     # 后者会被两组取值恰好相同的前缀字符（如都以"页面"开头）多算两个字符。
@@ -137,7 +143,7 @@ def test_direction_words_match_real_positions():
     a, _b = _planner_pair()
     rules_at = a.index("判定规则：")
     # 规则正文区间：从「判定规则：」到 `{output_contract}` 那一版正文开头
-    rules = a[rules_at:a.index(G._PLANNER_OUTPUT_CONTRACT_TEXT)]
+    rules = a[rules_at:a.index(G._PLANNER_OUTPUT_CONTRACT_NATIVE)]
     hits = 0
     for word, header in _BLOCKS.items():
         if "\n" + header not in a:            # 表头本身改了 ⇒ 这条判据要跟着改

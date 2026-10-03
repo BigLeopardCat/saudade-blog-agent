@@ -77,8 +77,9 @@ out = {
 print(json.dumps(out, ensure_ascii=False))
 """
 
-_PINS = {"PLANNER_ENGINE": "text", "AGENT_TASK_STATE": "0",
-         "SAUDADE_IGNORE_ENV_FILE": "1"}
+# （20261004 去掉了 `PLANNER_ENGINE` 那一钉：接口层只剩 native、拨盘已删。
+# 本套件只读 skills/tools 的声明，与接口层无关。）
+_PINS = {"AGENT_TASK_STATE": "0", "SAUDADE_IGNORE_ENV_FILE": "1"}
 
 
 def probe(iot_on: bool) -> dict:

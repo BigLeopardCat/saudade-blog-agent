@@ -50,7 +50,10 @@ def wire(r: dict) -> str:
     return json.dumps(r, ensure_ascii=False, separators=(",", ":"))
 
 
-DIAL_KEYS = {"planner_engine", "planner_native_thinking", "agent_task_state",
+# 20261004：`planner_engine` 那一格删掉了（接口层只剩 native 一条，没有第二个取值可拨
+# ⇒ 一格恒定的"档位"是噪声，见 server.health 的注）。**这个集合是钉死的**：少一格要有人
+# 解释，多一格更要。
+DIAL_KEYS = {"planner_native_thinking", "agent_task_state",
              "llm_provider", "llm_model"}
 
 print("① 存活探针那半**逐字不变**（scripts/healthcheck.sh 按子串判活）")
@@ -63,7 +66,7 @@ try:
           '"agent_ready":true' in body, body[:80])
     check("顶层键 = status / agent_ready / dials（多一个少一个都要有人解释）",
           set(r) == {"status", "agent_ready", "dials"}, sorted(r))
-    check("dials 是一个对象、键集恰好那五个",
+    check("dials 是一个对象、键集恰好那四个",
           isinstance(r["dials"], dict) and set(r["dials"]) == DIAL_KEYS,
           sorted(r.get("dials") or []))
 finally:
@@ -73,8 +76,7 @@ check("图没建好时 agent_ready 仍是 false（不是恒 true）",
 
 print()
 print("② 取自**本进程的内存单例**，不是重新解析 .env")
-_marks = {"planner_engine": "SENTINEL_ENGINE", "planner_native_thinking": True,
-          "agent_task_state": True}
+_marks = {"planner_native_thinking": True, "agent_task_state": True}
 _saved = {k: getattr(settings, k) for k in _marks}
 _saved_prov = settings.llm_provider
 try:

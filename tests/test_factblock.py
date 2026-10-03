@@ -32,11 +32,10 @@ import sys
 import threading
 from pathlib import Path
 
-# 出厂档钉子（与 `tests/run_all.py` 的 `_PINNED` 同值）：本机 `.env` 是产线那份
-# （20260927 起 `PLANNER_ENGINE=native`），而假 LLM 桩没有 `bind_tools` ⇒ 单跑本套件
-# 会在 planner 里 AttributeError。**必须在 import `agent.graph` 之前设**（settings 在
-# 那一刻构造）。run_all 下是同值覆盖，等于没设。
-os.environ.setdefault("PLANNER_ENGINE", "text")
+# 出厂档钉子（与 `tests/run_all.py` 的 `_PINNED` 同值）。**必须在 import `agent.graph`
+# 之前设**（settings 在那一刻构造）。
+# （20261004 去掉了 `PLANNER_ENGINE` 那一钉：接口层只剩 native 一条、拨盘已删，桩自带
+# `bind_tools`——见 `tests/_native_stub.py`。）
 os.environ.setdefault("AGENT_TASK_STATE", "0")
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
@@ -52,6 +51,7 @@ from agent.factblock import (  # noqa: E402
 )
 from agent.graph import build_graph, graph_input  # noqa: E402
 from agent.principal import Principal  # noqa: E402
+from _native_stub import bind_tools_stub, native_reply  # noqa: E402
 from tools import base as _base  # noqa: E402
 
 FAILS: list[str] = []
@@ -258,7 +258,13 @@ def test_action_restate_regex():
 
 # ── ③ 真图：提示词接线 + 兜底替代文本 ──────────────────────────────────────
 class _ScriptedLLM:
-    """按入参形态分流 planner / model（同 `test_gate_replan.py` 的理由）。"""
+    """按入参形态分流 planner / model（同 `test_gate_replan.py` 的理由）。
+
+    planner 那一支走 `_native_stub.native_reply`：夹具里的 `SKILL=/PARAMS=` 文本被翻成
+    native tool_calls（20261004 接口层单通道），判据仍在 `agent/native_plan.py` 里。
+    """
+
+    bind_tools = bind_tools_stub        # `bind_native` 要用（见 _native_stub）
 
     def __init__(self, plans: list, narrations: list):
         self.plans, self.narrations = list(plans), list(narrations)
@@ -274,8 +280,8 @@ class _ScriptedLLM:
             return AIMessage(content=self.narrations.pop(0))
         if not self.plans:
             self.exhausted.append("planner")
-            return AIMessage(content="SKILL: chat\nPARAMS: {}")
-        return AIMessage(content=self.plans.pop(0))
+            return native_reply("SKILL: chat\nPARAMS: {}")
+        return native_reply(self.plans.pop(0))
 
 
 class _FakeTool:

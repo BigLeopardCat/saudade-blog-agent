@@ -153,8 +153,9 @@ def main() -> int:
     G.ensure_agent()
 
     flag = bool(getattr(settings, "agent_task_state", False))
-    print(f"[档位] AGENT_TASK_STATE={'1（开）' if flag else '0（关）'}  "
-          f"PLANNER_ENGINE={getattr(settings, 'planner_engine', '?')}")
+    # 接口层不打了：20261004 起只有 native 一条（`PLANNER_ENGINE` 拨盘已删），
+    # 每跑一次都印同一个常量只是噪声。
+    print(f"[档位] AGENT_TASK_STATE={'1（开）' if flag else '0（关）'}")
     print(f"[会话] 探针合成会话 id={PROBE_CONV}（走内部链路，不落库）")
 
     run_id = f"taskprobe_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -239,8 +240,7 @@ def main() -> int:
     bad = [c for c in checks if not c["ok"]]
     with open(path, "w", encoding="utf-8") as f:
         f.write(f"# 会话级任务状态两轮探针 {run_id}\n\n")
-        f.write(f"- 档位：`AGENT_TASK_STATE={'1' if flag else '0'}`"
-                f"／`PLANNER_ENGINE={getattr(settings, 'planner_engine', '?')}`\n")
+        f.write(f"- 档位：`AGENT_TASK_STATE={'1' if flag else '0'}`\n")
         f.write(f"- 轮 1 登记来源：**{'模型自己登记' if declared_by_model else '手工等价载荷（模型本轮没登记）'}**\n")
         f.write(f"- 轮 1 `{d1:.1f}s` / 轮 2 `{d2:.1f}s`\n")
         f.write(f"- 载荷：`{json.dumps(payload, ensure_ascii=False)}`\n\n")

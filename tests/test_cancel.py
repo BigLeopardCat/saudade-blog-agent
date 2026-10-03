@@ -31,6 +31,7 @@ import agent.graph as g
 from agent.graph import AgentCancelled, execute_node, gate_node, model_node, planner_node, reflector_node
 from agent.skills import instantiate_plan
 from agent.graph import plan_encode
+from _native_stub import bind_tools_stub, native_reply
 
 
 FAILS: list[str] = []
@@ -147,11 +148,12 @@ def test_cancel_during_blocking_llm():
         触发确定性纠偏/收尾（见 test_skills.test_drop_correction）——那会把计划
         改写掉，这条用例就测不到"取消不打断 LLM 调用"这件事了。"""
 
+        bind_tools = bind_tools_stub      # planner 先 bind_native 再 invoke（见 _native_stub）
+
         def invoke(self, *a, **kw):
             ev.set()
-            return type("R", (), {
-                "content": 'SKILL=content_query\nPARAMS={"calls": [{"tool": "search_notes",'
-                           ' "args": {"keyword": "取消"}}]}'})()
+            return native_reply('SKILL=content_query\nPARAMS={"calls": [{"tool": "search_notes",'
+                                ' "args": {"keyword": "取消"}}]}')
 
     orig_llm = g.get_llm
     g.get_llm = lambda **kw: _LLMCancelMidway()

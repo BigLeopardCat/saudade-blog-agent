@@ -36,15 +36,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
 
-from agent.graph import (_PLANNER_OUTPUT_RE, REFLECT_MAX_ROUNDS, _article_fast_path,
+from agent.graph import (REFLECT_MAX_ROUNDS, _article_fast_path,
                          _check_spec, _display_fast_path, _effect_switch_fast_path,
-                         _nav_fast_path, _parse_params, _plan_skill, _scan_action_intents,
+                         _nav_fast_path, _plan_skill, _scan_action_intents,
                          _wrap_up_plan,
-                         execute_node, extract_plan_fields, gate_node,
+                         execute_node, gate_node,
                          plan_encode, plan_state, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
 from agent.skills import (NAV_MAP, NAV_VALID_PATHS, SKILL_MAP, instantiate_plan,
                           visible_skills)
+# 假 planner LLM 的共享桩：把夹具里现成的 `SKILL=/PARAMS=` 文本翻成 tool_calls
+# （20261004 起接口层只剩 native tool calls，桩缺 `bind_tools` 会 AttributeError）。
+from _native_stub import bind_tools_stub, native_reply  # noqa: E402
 
 
 FAILS = []
@@ -247,9 +250,6 @@ def test_parse_tolerance():
     check("坏输入 → chat 兜底", parsed["skill"] == "chat" and parsed["chat"], str(parsed))
     parsed = parse_plan("SKILL=navigate\nPARAMS: 不是JSON")
     check("PARAMS 坏 JSON → 空参数兜底", parsed["params"] == {} and parsed["skill"] == "navigate", str(parsed))
-    check("_parse_params 正常提取",
-          _parse_params("PARAMS: {\"target\": \"物联网平台\"}") == {"target": "物联网平台"},
-          str(_parse_params("PARAMS: {\"target\": \"物联网平台\"}")))
 
 
 def test_summary_protocol_removed():
@@ -3199,100 +3199,15 @@ def test_gate_fallback_message():
 
 
 
-def test_planner_output_re():
-    print("[plan] planner 输出正则")
-    for raw, want in [
-        ("SKILL: navigate\nPARAMS: {...}", "navigate"),
-        ("SKILL =effect", "effect"),
-        ("SKILL:chat", "chat"),
-        ("其他内容", None),
-    ]:
-        m = _PLANNER_OUTPUT_RE.search(raw)
-        got = m.group(1) if m else None
-        check(f"regex {raw[:20]!r} → {want}", got == want, f"got={got}")
+# （20261004 删掉三条：`_PLANNER_OUTPUT_RE` / `_parse_params` / `extract_plan_fields`
+# 随"文本契约档"整族删除。它们锁的是**从 planner 自由文本里抠技能名**这件事——包括
+# `test_planner_output_json_form` 与 `test_planner_json_body_wiring` 那两条真机实证
+# 的 JSON 漂移（40 次采样里 5 次模型改用 JSON 对象回答 ⇒ 静默落成 chat）。
+# 那类漂移在 native 通道里**结构上不可能**：技能名是 tools schema 里函数的名字，
+# 由运行时校验，不是从正文里正则抠出来的。文本层的最后一份形态留在已删的分支
+# `freeze/text-plan-protocol` 上，回滚 = `git revert` + restart。）
 
 
-def test_planner_output_json_form():
-    """planner 把答复写成 JSON 对象时也要读出技能名（20260926 真机实证）。
-
-    背景：契约是两行纯文本（`SKILL:` + `PARAMS:`），但 40 次采样里 5 次模型改用
-    一个 JSON 对象回答。旧解析只认顶格键 ⇒ 那些轮次静默落成 chat，主人收到
-    「我做不到」（能力明明在），而 trace 里与"闲聊"长得一模一样。
-    """
-    print("[plan] planner 输出的 JSON 对象形态（容错解析）")
-    _P = '{"name": "guest5", "content": "请补齐资料"}'
-    for raw, want_skill, want_name in [
-        # 契约行（老路径不回归）
-        (f"SKILL: notice_send\nPARAMS: {_P}", "notice_send", "guest5"),
-        (f"SKILL=account_freeze\nPARAMS: {_P}", "account_freeze", "guest5"),
-        # 一个 JSON 对象（真机采到的形态：键带引号、可跨行）
-        ('{"SKILL": "notice_send", "PARAMS": {"name": "guest5", "content": "请补齐资料"}}',
-         "notice_send", "guest5"),
-        ('{\n  "SKILL": "notice_send",\n  "PARAMS": {\n    "name": "guest5",\n'
-         '    "content": "请补齐资料"\n  }\n}', "notice_send", "guest5"),
-        # 小写键 + markdown 围栏（模型偶尔两种都带上）
-        ('```json\n{"skill": "notice_send", "params": {"name": "guest5"}}\n```',
-         "notice_send", "guest5"),
-        # 方括号键位（真机采到过 `[SKILL] x` + `[PARAMS] {…}`）
-        ('[SKILL] notice_send\n[PARAMS] {"name": "guest5"}', "notice_send", "guest5"),
-    ]:
-        skill, params = extract_plan_fields(raw)
-        check(f"形态 {raw[:38]!r} → {want_skill}",
-              skill == want_skill and params.get("name") == want_name,
-              f"got skill={skill} params={params}")
-    # 反向：真散文（没有技能名）仍按 chat 兜底——"拿不到技能名"才是真漂移，
-    # 容错不许把"模型没做决策"读成"模型选了某个技能"
-    for raw in ["我理解您希望向特定账号发送通知，但请先告诉我收件人的账号名。",
-                "完全不是计划格式", ""]:
-        skill, params = extract_plan_fields(raw)
-        check(f"散文/空输出 {raw[:16]!r} → 给不出技能名（调用方落 chat）",
-              skill is None and params == {}, f"got skill={skill} params={params}")
-    # 契约行仍在（parse_plan 读的是系统自己写的契约，两处输入不同、判据也不同）
-    check("契约行解析不受影响", _PLANNER_OUTPUT_RE.search("SKILL: navigate") is not None)
-
-
-def test_planner_json_body_wiring():
-    """接线探针：模型给 JSON 对象时，planner_node 真的落到那个技能上。
-
-    上面那条是纯函数单测（**能力有测试 ≠ 接线有测试**，见 CLAUDE.md 里 langgraph
-    `config` 注入那次静默失效的教训）：这里把 planner_node 真跑一遍，确认"解析出来
-    的技能名"确实走进了计划（旧代码在这一层把 JSON 形态解析成了 chat）。
-    """
-    print("[plan] planner_node 收到 JSON 对象形态 → 落到技能上（接线探针）")
-    import agent.graph as G
-    from agent.graph import parse_plan, planner_node
-    from agent.principal import Principal
-
-    class _ScriptedLLM:
-        def __init__(self, replies):
-            self.replies, self.prompts = list(replies), []
-
-        def invoke(self, prompt):
-            self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
-
-    _msg = "给账号「agent_fixture_freeze_a」发个通知：这是投递测试，请查收。"
-    _cfg = {"configurable": {"principal": Principal(uid=721, role="admin"),
-                             "user_id": 721, "conversation_id": 7, "stop_event": None}}
-    llm = _ScriptedLLM(['{"SKILL": "notice_send",\n "PARAMS": {"name": "agent_fixture_freeze_a",'
-                        ' "content": "这是投递测试，请查收。"}}'])
-    orig = G.get_llm
-    try:
-        G.get_llm = lambda **kw: llm
-        out = planner_node({"messages": [HumanMessage(content=_msg)],
-                            "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
-    finally:
-        G.get_llm = orig
-    plan = parse_plan(out["plan"])
-    check("JSON 对象形态 → 计划落在 notice_send（不是 chat）",
-          plan["skill"] == "notice_send", plan["skill"])
-    _spec = " ".join(plan["tools"])
-    check("  收件人名字逐字来自主人那句话（不是模型自己编的）",
-          "send_user_notice" in _spec and "agent_fixture_freeze_a" in _spec, _spec[:160])
-    check("  正文原样落进参数（这句是模型整理的、允许整理但不许编事实）",
-          "投递测试" in _spec, _spec[:160])
-    check("  只叫了 planner 一次 LLM（解析成功就不该触发剔空纠偏）",
-          len(llm.prompts) == 1, str(len(llm.prompts)))
 
 
 def test_search_retry_kind():
@@ -3419,9 +3334,11 @@ def test_read_repeat_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
+        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
+            return native_reply(self.replies.pop(0))
 
     _cfg = {"configurable": {"principal": Principal(uid=721, role="admin"),
                              "user_id": 721, "conversation_id": 42, "stop_event": None}}
@@ -4336,9 +4253,11 @@ def test_drop_correction():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
+        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
+            return native_reply(self.replies.pop(0))
 
     # 剧本里的被剔工具用 `navigate_to`（**动作工具**：谁都不能经 calls 点名，
     # 它对任何角色都结构性地不可点名，包括管理员——写/动作工具只由技能模板展开）。
@@ -4426,9 +4345,11 @@ def test_multi_step_intent_correction():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
+        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
+            return native_reply(self.replies.pop(0))
 
     _NAV = ('SKILL=navigate\nPARAMS={"target": "首页"}\nREPLY: 好的，带你去首页')
     _CHAT = 'SKILL=chat\nPARAMS={}\nREPLY: 已经带你过去了'
@@ -4556,9 +4477,11 @@ def test_unaccounted_zero_tool_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
+        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
+            return native_reply(self.replies.pop(0))
 
     # `content_query` 空参：`plan=[]` 且两个入参都可选 ⇒ 走到尾巴时记账字段全空。
     # **正是 Layer A 硬排除的那一个**（零工具在"已有帧的收尾轮"上合法，
@@ -4679,9 +4602,11 @@ def test_calls_in_wrong_skill_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
+        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
+            return native_reply(self.replies.pop(0))
 
     _WRONG = ('SKILL=chat\nPARAMS={"calls": [{"tool": "list_notes", "args": {"limit": 5}}]}\n'
               "REPLY: 我查查")
@@ -4741,9 +4666,11 @@ def test_write_target_refusal_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
+        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
+            return native_reply(self.replies.pop(0))
 
     _WRITE = ('SKILL=tag_update\n'
               'PARAMS={"name": "绝对不存在的标签名xyz", "parent_tag": "编程"}\n'
@@ -4838,9 +4765,11 @@ def test_write_grounding_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
+        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
+            return native_reply(self.replies.pop(0))
 
     class _Row(dict):
         pass
@@ -5020,9 +4949,11 @@ def test_announcement_text_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
+        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
+            return native_reply(self.replies.pop(0))
 
     _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}
@@ -5124,9 +5055,11 @@ def test_name_target_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
+        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
+            return native_reply(self.replies.pop(0))
 
     _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}
@@ -5434,9 +5367,11 @@ def test_write_intent_never_expressed_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
+        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return AIMessage(content=self.replies.pop(0))
+            return native_reply(self.replies.pop(0))
 
     _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}
@@ -5522,8 +5457,7 @@ def main():
                test_execute_node, test_refs, test_write_ref_loud, test_todo_contract,
                test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
-               test_gate_fallback_message, test_planner_output_re,
-               test_planner_output_json_form, test_planner_json_body_wiring,
+               test_gate_fallback_message,
                test_search_retry_kind, test_trim_done_reads, test_read_repeat_note,
                test_read_repeat_round,
                test_candidate_relevance_pick,

@@ -7,8 +7,12 @@
 单跑一次的结论会与另一次相反（§1.4 实测：同一组 4 条在 6 次跑里出现过 3/4、4/4、2/4）。
 所以本脚本只做一件事：**把"档"变成自变量，其余全部固定**。
 
-**档的表示**＝三个环境变量（`PLANNER_ENGINE` / `PLANNER_NATIVE_THINKING` / `QWEN_MODEL`），
-每个 (档, 第 i 次) 起一个独立子进程（环境变量按档注入 ⇒ 不共享 settings 单例）。
+**档的表示**＝环境变量（`PLANNER_NATIVE_THINKING` / `QWEN_MODEL` / 换服务商那两档另加
+`LLM_PROVIDER`+模型名），每个 (档, 第 i 次) 起一个独立子进程（环境变量按档注入 ⇒ 不共享
+settings 单例）。
+⚠️ **`PLANNER_ENGINE` 这一维 20261004 删掉了**：接口层只剩 native tool calls 一条，
+"text 档"这个自变量已不存在（全量 384 份 trace 里那条兜底路径命中 0 次，见
+`docs/native-toolcalls-mainline.md`）。剩下的档比的是**思考预算 / 型号 / 服务商**。
 ⚠️ `QWEN_MODEL` 是**全链路**的模型（planner 与 narrator 共用一个默认值），所以"换 max"
 这一档量到的是**整链路换模型**的效果与耗时——这正是"是否换 max"这个决定在运维上的含义
 （没有 per-node 模型开关，也别为了做对照临时加一个）。
@@ -27,10 +31,13 @@ HTTP 错误码 / 连接超时 / 两类协议非法消息），报成一列 `跑�
   · `planner_round_s`  **planner 决策轮**这一腿的耗时（trace 里 `planner/llm_done` 的
                  `duration_s`）。刻意不用端到端：端到端混着 narrator 与检索，换模型时那两段
                  也在变，分不清是谁的账 ⇒ **两个都给**，标签写清楚谁含什么
-  · `fallback_rate`  native 档决策轮里"判不了、退回文本解析"的比例
-                 （`native_fallback / (native_decision + native_fallback)`）；
-                 text 档没有这个概念，如实记 `null`——**0 与 null 不是一回事**
-                 （0 = 量到了、没发生；null = 这一档没有这个概念）
+  · `fallback_rate`  决策轮里"没给出可用决定"的比例
+                 （`native_fallback / (native_decision + native_fallback)`）。
+                 20261004 起语义收窄：**不再有"退回文本解析"这一步**，`native_fallback`
+                 现在指的是响应不可用（截断 / 形态坏 / 空正文）时走的确定性收尾，按
+                 `disposition` 分三档（`retry` / `truncated_wrapup` / `unparseable_wrapup`）。
+                 口径不变，故与历史报告仍可比。**没有决策轮时报 `null` 不报 0**——
+                 **0 与 null 不是一回事**（0 = 量到了、没发生；null = 这一跑没量到）
   · `tool_call_completeness`  1 − `finish_reason=length` 的比例。截断是静默失败
                  （arguments 断在半截 JSON），`length` 占比正是"预算够不够"的答案
   · `tokens`     逐节点 token 与**前缀缓存命中率**（`cache_read/input`，`input` 含命中那
@@ -39,11 +46,13 @@ HTTP 错误码 / 连接超时 / 两类协议非法消息），报成一列 `跑�
                  抹掉。命中率只对上报了缓存字段的调用算，`cache_seen` 与 `calls` 一起进
                  报告——分母被缩小这件事必须看得见；`cache_read` 缺席算 **null**，不是 0
 
-**两道自检**（本脚本自己也要有判据，否则"档没拨过去"会伪装成"这个档更慢/更差"）：
-  · 前置探针：每个档先起一个只读子进程打印 `settings` 解析结果，断言 engine/thinking/model
-     与档的声明相等 —— 证明环境变量真的到了 settings 那一层；
-  · 收尾对账：报告里的 `engine` 字段（跑法自己记的）必须等于档声明的 engine。
-两道都对不上就抛，不产出报告。
+**一道自检**（本脚本自己也要有判据，否则"档没拨过去"会伪装成"这个档更慢/更差"）：
+  · 前置探针：每个档先起一个只读子进程打印 `settings` 解析结果，断言 thinking / model /
+     provider 与档的声明相等 —— 证明环境变量真的到了 settings 那一层。
+对不上就抛，不产出报告。
+⚠️（20261004）原来还有**第二道**"报告里的 `engine` 必须等于档声明的 engine"。删掉它是因为
+自变量没了：接口层只剩 native 一条（见模块头注），拿常量比常量不算判据。报告里那一格仍
+照记（取自跑法自己写的值），现在它是"子进程真跑的是这版代码"的存证。
 
 用法（仓库根 cwd）：
   .venv/bin/python eval/dial_matrix.py --label multi_step_plus_control --runs 3 \\
@@ -80,27 +89,24 @@ if getattr(sys.stdout, "encoding", "").lower() not in ("utf-8", "utf8"):
 
 PY = ".venv/bin/python"
 
-# 五个档（20260927）。**顺序是输出表的行序**，别乱动：报告要能横向比。
-# `text` 第一行＝生产现状，其余四行是它的候选替代（同一套用例、同一份语料）。
-# `engine` 是期望值（报告里那一格必须等于它）；没有 QWEN_MODEL 的档＝跟随 `.env` 默认，
-# 观察到的实际模型照实记进报告（"flash 到底解析成什么"本身就是要存档的事实）。
+# 四个档（20260927，20261004 去掉 text 档）。**顺序是输出表的行序**，别乱动：报告要
+# 能横向比。第一行 `native-nothink-flash` ＝**生产现状**，其余三行是它的候选替代。
+# **没有 `engine` 键了**：接口层只有 native 一条，自检拿什么去比"拨过去了没"？（原来
+# 那一格比的是 `settings.planner_engine`，那个键已经删了，见模块头注。）
+# 没有 QWEN_MODEL 的档＝跟随 `.env` 默认，观察到的实际模型照实记进报告
+# （"flash 到底解析成什么"本身就是要存档的事实）；`model` 仍保留，因为它是**要验的
+# 期望值**（`preflight` 拿它跟探针看到的实值比）。
 DIALS: dict[str, dict] = {
-    "text":                 {"env": {"PLANNER_ENGINE": "text"},
-                             "engine": "text", "model": None},
-    "native-think-flash":   {"env": {"PLANNER_ENGINE": "native",
-                                     "PLANNER_NATIVE_THINKING": "true"},
-                             "engine": "native", "model": None},
-    "native-nothink-flash": {"env": {"PLANNER_ENGINE": "native",
-                                     "PLANNER_NATIVE_THINKING": "false"},
-                             "engine": "native", "model": None},
-    "native-think-max":     {"env": {"PLANNER_ENGINE": "native",
-                                     "PLANNER_NATIVE_THINKING": "true",
+    "native-nothink-flash": {"env": {"PLANNER_NATIVE_THINKING": "false"},
+                             "model": None},
+    "native-think-flash":   {"env": {"PLANNER_NATIVE_THINKING": "true"},
+                             "model": None},
+    "native-think-max":     {"env": {"PLANNER_NATIVE_THINKING": "true",
                                      "QWEN_MODEL": "qwen3.8-max"},
-                             "engine": "native", "model": "qwen3.8-max"},
-    "native-nothink-max":   {"env": {"PLANNER_ENGINE": "native",
-                                     "PLANNER_NATIVE_THINKING": "false",
+                             "model": "qwen3.8-max"},
+    "native-nothink-max":   {"env": {"PLANNER_NATIVE_THINKING": "false",
                                      "QWEN_MODEL": "qwen3.8-max"},
-                             "engine": "native", "model": "qwen3.8-max"},
+                             "model": "qwen3.8-max"},
     # 换**服务商**（20260928）：与上面四档不同轴——那四档换的是引擎/思考/型号，
     # 这一档换的是 endpoint + key + 模型族。加它是因为"换模型"也是候选替代之一
     # （生产档 = native + 不思考 + flash），而换服务商的决定必须与 qwen 档落在
@@ -127,11 +133,10 @@ DIALS: dict[str, dict] = {
     #      ⇒ 这一档比的是"服务商"，因此必须选**能力面对齐**的型号；拿思考型号去比，
     #      量到的是推理开销不是服务商差异（qwen 侧同轴的那一档是 `native-think-flash`）。
     "native-nothink-deepseek": {
-                            "env": {"PLANNER_ENGINE": "native",
-                                    "PLANNER_NATIVE_THINKING": "false",
+                            "env": {"PLANNER_NATIVE_THINKING": "false",
                                     "LLM_PROVIDER": "deepseek",
                                     "DEEPSEEK_MODEL": "deepseek-chat"},
-                            "engine": "native", "provider": "deepseek",
+                            "provider": "deepseek",
                             "model": "deepseek-chat"},
 }
 
@@ -193,9 +198,10 @@ def provider_error_stats(reports: list) -> dict:
             "messages": messages, "quality_messages": quality}
 
 # 前置探针：只读 settings，不连库不发请求。打印的键名与 settings 字段同名，便于对照。
+# （20261004 去掉 `engine` 那一格：`settings.planner_engine` 已删，接口层没有可拨的档。
+# 剩下的三格全是**真的按档注入过环境变量**、值得验"拨过去了没"的值。）
 _PROBE = ("import json;from config.settings import settings;"
-          "print(json.dumps({'engine': settings.planner_engine,"
-          "'thinking': settings.planner_native_thinking,"
+          "print(json.dumps({'thinking': settings.planner_native_thinking,"
           "'provider': settings.llm_provider,"
           "'model': settings.active_llm_model}))")
 
@@ -221,9 +227,6 @@ def preflight(dial: str, spec: dict, timeout: int = 120) -> dict:
     if proc.returncode != 0:
         raise RuntimeError(f"[{dial}] 探针跑不起来：{(proc.stderr or '')[-300:]}")
     got = json.loads(proc.stdout.strip().splitlines()[-1])
-    want_engine = spec["engine"]
-    if got["engine"] != want_engine:
-        raise RuntimeError(f"[{dial}] engine 没拨过去：settings={got['engine']} 期望={want_engine}")
     want_think = spec["env"].get("PLANNER_NATIVE_THINKING")
     if want_think is not None and bool(got["thinking"]) is not (want_think == "true"):
         raise RuntimeError(f"[{dial}] thinking 没拨过去：settings={got['thinking']} "
@@ -352,11 +355,10 @@ def run_once(dial: str, spec: dict, ids: list[str], timeout: int) -> tuple[str, 
     with open(m.group(1), encoding="utf-8") as f:
         rep = json.load(f)
     rep["_wall_s"] = round(time.time() - t0, 1)
-    # 收尾对账：报告自己记的 engine 必须等于本档声明（"档没拨过去"伪装成"这档更差"的入口）
-    got_engine = str(rep.get("engine") or "unknown")
-    if got_engine != spec["engine"]:
-        raise RuntimeError(f"[{dial}] 报告记的 engine={got_engine} 与档声明 {spec['engine']} 不符"
-                           f"（{m.group(1)}）")
+    # 原来这里有一道"报告记的 engine 必须等于本档声明"的对账。**20261004 删掉了**：
+    # 接口层只剩 native 一条，档声明里没有 `engine` 可对——留着就是拿常量比常量。
+    # （`preflight` 那三道（thinking / model / provider）仍是真对账，它们才是有第二个
+    # 取值的轴。）
     return m.group(1), rep
 
 
@@ -379,7 +381,9 @@ def summarize(dial: str, spec: dict, acc: dict) -> dict:
     dur = [v for m in nmeta for v in m["planner_round_s_raw"]]
     pe = acc["plan_eff"]
     return {
-        "env": spec["env"], "engine": spec["engine"],
+        # `engine` 取自**被跑的那份报告自己记的**，不是从档声明抄的：接口层只剩
+        # native 一条（20261004），这一格现在是"子进程真的跑的是这版代码"的存证。
+        "env": spec["env"], "engine": str(reports[0][1].get("engine") or "unknown"),
         "observed": acc["observed"],                       # 探针看到的 settings 实值
         "runs": agg["runs"], "case_runs": agg["case_runs"], "case_passed": agg["case_passed"],
         "pass_rate": agg["pass_rate"], "pass_rate_ci95": agg["pass_rate_ci95"],
@@ -430,7 +434,8 @@ def main() -> int:
     for dial in dials:
         print(f"\n=== 档 {dial}  env={DIALS[dial]['env']}", flush=True)
         got = preflight(dial, DIALS[dial])
-        print(f"  探针：engine={got['engine']} thinking={got['thinking']} model={got['model']}",
+        print(f"  探针：thinking={got['thinking']} provider={got.get('provider')} "
+              f"model={got['model']}",
               flush=True)
         acc[dial] = {"observed": got, "reports": [], "nmetrics": [], "elapsed": [], "plan_eff": []}
 

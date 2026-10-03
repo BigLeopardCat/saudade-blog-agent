@@ -16,6 +16,40 @@
 
 ## 20261004
 
+- **planner 接口层收成单通道：文本规划档整个删掉，`native tool calls` 成为唯一的路（行为，
+  20261004）**：`PLANNER_ENGINE` 这个拨盘连它的影子档（`shadow`）一起删除——`settings.planner_
+  engine`、`_planner_engine()`、`/health` 的 `planner_engine` dial（dials 5 → 4）、
+  `_PLANNER_OUTPUT_CONTRACT_TEXT`、以及只服务"native 判不了就退回文本"那套正则解析器
+  （`extract_plan_fields` / `_PLANNER_OUTPUT_RE` / `_parse_params`）。删的依据是量出来的：
+  全量 384 份 trace（0927–1004）里**退回文本兜底 0 次命中** ⇒ 删它不改变任何一轮对话的形状。
+  同一批把 `slim_skills` 固定为真（生产形态），`authz` 里那个**同名**的 `shadow`
+  （`AGENT_AUTHZ_ENFORCE`）与它无关、原样保留。**内部计划文本协议一分未动**
+  （`plan_encode`/`parse_plan`/`_loads_tolerant`/`_parse_todo`——`execute`/`gate`/路由都读它）。
+  两条只读分支 `freeze/text-plan-protocol` 与 `widget/pos-20261003` 一并删除（本地 + 远端；
+  删前复核独有提交均为 0）。要回滚只能 `git revert` + 重启，主人已拍板。
+
+- **「一个函数都不点」从合法决策降级为无效决策：零调用不再等于闲聊（行为，20261004）**：
+  病根不在闸门，在决策层的一行默认值——native 契约规则 7 原来**明文许可**「只想闲聊、或如实
+  说明查不到时，**可以不调用任何函数**、直接给正文」，而 `tool_calls_to_plan` 把"零调用"直接
+  判成闲聊。实测 431 次 native 决策里 90 次 `finish=stop`（零调用，20.9%），切掉已有帧之后的
+  48 次合法收尾轮，**剩下 42 次是零帧轮**——里面真动作请求占一半（封号/驳回/标记已读/带我去/
+  有哪些收藏）。后果已落地：零帧零调用**且**回复带"办成了/查过"措辞的 trace 21 份，闸门只拦下
+  1 份（chat 轮的第一人称读取声称是刻意豁免的，闸门是事后打地鼠）。三处改法：① 契约规则 7
+  改成「闲聊、纯文字问答**也要显式点 `chat`**；**一个函数都不点 = 这一轮没有做出决策**」；
+  ② 零调用 + 正文非空 ⇒ 返回的 chat 决定带 `undecided=True`；③ `planner_node` 对
+  `undecided` 且**本轮尚无工具帧**的情形走既有 correction 通道**纠偏一次**（trace
+  `planner.no_call_nudge`），第二次仍零调用才认成 `chat`（`planner.no_call_accepted`，带
+  `finish`/`text_len` 供全量复扫盯残余）。**认成闲聊时状态仍是 `answer_only`，绝不改成
+  `wrapped`**——那是零帧声称判据的开火前提。已有帧之后的零调用不纠偏（合法收尾轮不受打扰）。
+  同时把 `decided is None` 的归宿拆成两轨、不再混为一谈：`finish=length` 走截断轨（预算失败，
+  确定性收尾、**不**纠偏），其余读不出来的走形态轨（纠偏一次后确定性收尾）；两类都落到既有的
+  `native_fallback` 事件上（键名保留，旧含义"退回文本"作废），新增 `disposition` 字段区分
+  `retry` / `truncated_wrapup` / `unparseable_wrapup`。**task 状态本批只登记不改**：`/health`
+  `agent_task_state=true`（20261002 起），但全量 trace 里 `task_inject` 283 次全 `n=0`、
+  `task_declare` 自发登记 0 次——出问题的轮次 planner 选的是 `chat`，**没有非 chat 意图可供
+  登记**，所以"让 planner 建 task"到不了这个病；「不能标记非 chat task 完成」今天已成立
+  且更硬（模型根本没有写 `cursor`/`state` 的通道，完成只认回执）。
+
 - **「站内语料却零检索」这条判据的现场被读错了：它在生产里其实一次都不开火（判据，20261004）**：
   上一批落码时把现场写成「生产 trace `20261002T195955`：planner 落 chat、零工具、零帧，
   narrator 回『我这边没有工具可以帮你查文章标题和链接』」。全量复扫（384 份 trace、92 轮

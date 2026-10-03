@@ -18,16 +18,16 @@
   ②b **规划契约两档都渲染、且只住在正文**：这一层是 ① 的反面纪律，也是本批 A/B 实测
      逼出来的——"必须怎么做"的话随描述搬进 `tools[].description` 后遵守率掉到 0/5
      （描述归 schema、契约归正文）。同族的哨兵是"别把契约再抄回 description"。
-  ③ **接线**：真跑 `planner_node`，native 档发出去的那份提示词是 slim 的、text 档是完整的。
+  ③ **接线**：真跑 `planner_node`，发出去的那份提示词确实是 slim 的。
      "能力有测试 ≠ 接线有测试"是这个仓反复吃过亏的洞（探针绿了、线上那条路没接上）。
 
 ⚠️ `slim` **只影响渲染**，不影响任何判据：谁能选（`visible_skills`）、参数怎么校验
 （`skill_param_specs` / `check_skill_params`）、白名单怎么剔（`instantiate_plan`）都不看
 这段文本。所以本文件断言的是**文本形状与信息不丢**，不是权限、也不是行为。
 
-⚠️ 单跑本文件（`.venv/bin/python tests/test_slim_skills.py`）时，`settings.planner_engine`
-取的是**本机 `.env` 的值**（产线那份，20260927 起是 native）。接线那一段自己显式设档位，
-不依赖环境——见 `tests/run_all.py` 头注的"出厂档"钉子。
+⚠️ 20261004 起**没有档位可设**：接口层只剩 native tool calls 一条（文本契约档连同
+`settings.planner_engine` 一起删了），此前"两档各自拿到该拿的那份"的对照节随之报废。
+接线那一段现在只有一臂：**slim 就是生产形态**。
 """
 import json
 import sys
@@ -44,7 +44,6 @@ from agent.native_plan import build_tool_schema  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 from agent.skills import (build_planner_context, render_tool_marks,  # noqa: E402
                           skill_param_specs, visible_skills)
-from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
 FAILS: list[str] = []
@@ -254,16 +253,14 @@ def test_slim_only_changes_rendering_not_judgements():
           b == build_planner_context("admin", slim=False) and a != b)
 
 
-# ── ③ 接线：真跑 planner_node，两档各自拿到该拿的那份 ──────────────────────
-_MSG = "帮我把樱花打开"   # 不命中任何快道（见 tests/test_planner_engine.py 头注）
+# ── ③ 接线：真跑 planner_node，发出去的那份确实是 slim ────────────────────
+_MSG = "帮我把樱花打开"   # 不命中任何快道
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
-_TEXT_REPLY = ('SKILL=effect\nPARAMS={"effect": "sakura", "action": "on"}\n'
-               "TOOLS: toggle_effect\nNOTE: （无）\nREPLY: 已经打开樱花啦")
 
 
 class _FakeLLM:
-    """按 `max_tokens` 区分文本档（400）与 native 档（settings 值）；记录提示词。"""
+    """记录提示词与 bind 进来的 schema。"""
 
     def __init__(self, reply):
         self.reply = reply
@@ -280,92 +277,48 @@ class _FakeLLM:
         return self.reply
 
 
-def _patch_llm(native_reply):
-    made: dict[str, _FakeLLM] = {}
+def _run_planner(reply):
+    """真跑一次 `planner_node`，回 `(出参, 假 LLM)`。
 
-    def _fake_get_llm(**kw):
-        llm = _FakeLLM(_TEXT_REPLY if kw.get("max_tokens") == 400 else native_reply)
-        llm.kw = kw
-        made["text" if kw.get("max_tokens") == 400 else "native"] = llm
-        return llm
-
-    return _fake_get_llm, made
-
-
-def _run_planner(engine: str, native_reply):
-    rec = trace_mod.start_trace(f"t_slim_{engine}", 7, "th", {}, dir=tempfile.mkdtemp(),
-                                by_day=False)
-    fake, made = _patch_llm(native_reply)
-    old_engine, old_get = settings.planner_engine, G.get_llm
-    settings.planner_engine, G.get_llm = engine, fake
+    ⚠️ 20261004 起**没有档位可设**：接口层只剩 native 一条（文本契约档连同
+    `settings.planner_engine` 一起删了）。原来这里靠 `max_tokens==400` 分辨"文本档那只
+    LLM"，现在只有一只。
+    """
+    trace_mod.start_trace("t_slim_wiring", 7, "th", {}, dir=tempfile.mkdtemp(), by_day=False)
+    llm = _FakeLLM(reply)
+    old_get = G.get_llm
+    G.get_llm = lambda **kw: llm           # noqa: ARG005
     try:
         out = G.planner_node({"messages": [HumanMessage(content=_MSG)], "plan_rounds": 0,
                               "executed": [], "tool_data": []}, _CFG)
     finally:
-        settings.planner_engine, G.get_llm = old_engine, old_get
-    return out, made, rec
+        G.get_llm = old_get
+    return out, llm
 
 
-def test_wiring_native_gets_slim_and_text_gets_full():
-    print("\n[接线] 真跑 planner_node：native 发 slim、text 发完整")
-    native_reply = AIMessage(content="", tool_calls=[
+def test_wiring_planner_really_sends_the_slim_block():
+    print("\n[接线] 真跑 planner_node：发出去的就是 slim 那份，且 schema 照旧绑着")
+    reply = AIMessage(content="", tool_calls=[
         {"name": "effect", "args": {"effect": "sakura", "action": "on"},
          "id": "c1", "type": "tool_call"}])
 
-    out_n, made_n, _ = _run_planner("native", native_reply)
-    p_n = made_n.get("native")
-    check("native 那只 LLM 确实被调用过（否则下面的断言都是空转）",
-          p_n is not None and len(p_n.prompts) == 1)
-    prompt_n = p_n.prompts[0]
-    check("native 提示词是 slim 版（指向 schema 的那句在场）",
-          "见本轮 tools 里同名函数的 schema" in prompt_n)
-    check("native 提示词里没有技能描述行（与 schema 重复的那一份已去）",
-          not any(f"- {s.name}：{render_tool_marks(s.description, 'admin')}" in prompt_n
+    out, llm = _run_planner(reply)
+    check("那只 LLM 确实被调用过（否则下面的断言都是空转）", len(llm.prompts) == 1)
+    prompt = llm.prompts[0]
+    check("提示词是 slim 版（指向 schema 的那句在场）",
+          "见本轮 tools 里同名函数的 schema" in prompt)
+    check("提示词里没有技能描述行（与 schema 重复的那一份已去）",
+          not any(f"- {s.name}：{render_tool_marks(s.description, 'admin')}" in prompt
                   for s in visible_skills("admin")))
-    check("native 提示词里也没有参数行/完成判定行",
-          "  参数：" not in prompt_n and "  完成判定：" not in prompt_n)
-    check("native 仍带着 schema 里没有的那两样（NAV 表 / 兜底段）",
-          _KEEP["导航映射表表头"] in prompt_n and _KEEP["能力边界兜底段"] in prompt_n)
-    check("native 的 tools 数组照旧绑上（slim 不碰 schema）",
-          {t["function"]["name"] for t in (p_n.bound or {}).get("tools") or []}
+    check("也没有参数行/完成判定行",
+          "  参数：" not in prompt and "  完成判定：" not in prompt)
+    check("仍带着 schema 里没有的那两样（NAV 表 / 兜底段）",
+          _KEEP["导航映射表表头"] in prompt and _KEEP["能力边界兜底段"] in prompt)
+    check("tools 数组照旧绑上（slim 不碰 schema）",
+          {t["function"]["name"] for t in (llm.bound or {}).get("tools") or []}
           == {s.name for s in visible_skills("admin")})
     check("计划仍从那次工具调用产出（slim 不改行为）",
-          "SKILL=effect" in out_n["plan"], out_n["plan"].splitlines()[0])
-
-    out_t, made_t, _ = _run_planner("text", None)
-    p_t = made_t.get("text")
-    check("text 那只 LLM 确实被调用过", p_t is not None and len(p_t.prompts) == 1)
-    prompt_t = p_t.prompts[0]
-    check("text 档仍是完整菜单（逐条技能描述行都在）",
-          all(f"- {s.name}：{render_tool_marks(s.description, 'admin')}" in prompt_t
-              for s in visible_skills("admin")))
-    check("text 档不带 slim 的那句表头（两档不混写）",
-          "见本轮 tools 里同名函数的 schema" not in prompt_t)
-    check("text 档照样跑出计划", "SKILL=effect" in out_t["plan"])
-
-
-def test_wiring_shadow_renders_each_side_in_its_production_shape():
-    """影子档：native 侧 slim、主路侧完整——比的是两个接口层的**实际形态**。"""
-    print("\n[接线] shadow：两侧各按生产形态渲染（不是被抹平成一个变量）")
-    fake, made = _patch_llm(AIMessage(content="", tool_calls=[
-        {"name": "effect", "args": {"effect": "sakura", "action": "on"},
-         "id": "c1", "type": "tool_call"}]))
-    trace_mod.start_trace("t_slim_shadow", 7, "th", {}, dir=tempfile.mkdtemp(),
-                          by_day=False)
-    old_engine, old_get = settings.planner_engine, G.get_llm
-    settings.planner_engine, G.get_llm = "shadow", fake
-    try:
-        out = G.planner_node({"messages": [HumanMessage(content=_MSG)], "plan_rounds": 0,
-                             "executed": [], "tool_data": []}, _CFG)
-    finally:
-        settings.planner_engine, G.get_llm = old_engine, old_get
-    check("两只 LLM 都被调用过", len(made["text"].prompts) == 1
-          and len(made["native"].prompts) == 1)
-    check("影子（native）那份是 slim",
-          "见本轮 tools 里同名函数的 schema" in made["native"].prompts[0])
-    check("主路（text）那份是完整菜单",
-          "可用技能（只能从以下技能中选择一个" in made["text"].prompts[0])
-    check("行为没变：计划仍来自 text 那一版", "SKILL=effect" in out["plan"])
+          "SKILL=effect" in out["plan"], out["plan"].splitlines()[0])
 
 
 if __name__ == "__main__":
@@ -377,8 +330,7 @@ if __name__ == "__main__":
                test_planner_contract_lives_only_in_the_prose_block,
                test_content_query_pairs_the_two_sources_from_one_place,
                test_slim_only_changes_rendering_not_judgements,
-               test_wiring_native_gets_slim_and_text_gets_full,
-               test_wiring_shadow_renders_each_side_in_its_production_shape):
+               test_wiring_planner_really_sends_the_slim_block):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
     sys.exit(1 if FAILS else 0)

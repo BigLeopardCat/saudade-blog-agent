@@ -53,7 +53,9 @@ def acc_of(nmetrics: list[dict], cases: list[dict], extra: dict | None = None) -
            "plan_efficiency": {"tool_calls_total": 3, "tool_rounds_total": 2,
                                "cases_multi_tool_rounds": 1},
            "cases": cases}
-    acc = {"observed": {"engine": "native", "thinking": False, "model": "qwen3.8-flash"},
+    # `observed` = 前置探针看到的 settings 实值。20261004 起探针不报 `engine` 了
+    # （接口层只剩 native，`settings.planner_engine` 已删）。
+    acc = {"observed": {"thinking": False, "provider": "qwen", "model": "qwen3.8-flash"},
            "reports": [("/tmp/r1.json", rep)], "nmetrics": nmetrics,
            "elapsed": [c["elapsed"] for c in cases], "plan_eff": [rep["plan_efficiency"]]}
     if extra:
@@ -95,7 +97,7 @@ with tempfile.TemporaryDirectory() as tmp:
         planner("llm_done", duration_s=2.0, engine="native"),
         planner("native_decision", skill="navigate", finish="stop"),
         planner("native_decision", skill="chat", finish="length"),      # 截断
-        planner("native_fallback", finish="stop"),                      # 判不了、退回文本
+        planner("native_fallback", finish="stop"),                      # 没给出可用决定
     ])
     m_native = dm.trace_metrics(tmp)
     check("native 形：决策 2 次、回退 1 次",
@@ -138,9 +140,12 @@ with tempfile.TemporaryDirectory() as tmp:
         dm.trace_root = _real
 
 print("\n④ DIALS 自洽：一档一处声明")
-check("每档声明的 engine 与它注入的环境变量一致",
-      all(sp["env"].get("PLANNER_ENGINE", "text") == sp["engine"] for sp in dm.DIALS.values()),
-      str({k: (v["engine"], v["env"]) for k, v in dm.DIALS.items()}))
+check("没有 `engine` 这一维了（`PLANNER_ENGINE` 拨盘已删，20261004）",
+      all("PLANNER_ENGINE" not in sp["env"] and "engine" not in sp for sp in dm.DIALS.values()),
+      str({k: v["env"] for k, v in dm.DIALS.items()}))
+check("每档都钉了 `PLANNER_NATIVE_THINKING`（它是剩下的三个轴之一，漏了这档就不成立）",
+      all("PLANNER_NATIVE_THINKING" in sp["env"] for sp in dm.DIALS.values()),
+      str({k: v["env"] for k, v in dm.DIALS.items()}))
 check("声明的 model 与**本档所选服务商**的型号变量一致（没声明型号的档声明 None）",
       all(sp["model"] == sp["env"].get(
               {"qwen": "QWEN_MODEL", "deepseek": "DEEPSEEK_MODEL"}[sp.get("provider", "qwen")])
@@ -150,10 +155,8 @@ check("声明的 model 与**本档所选服务商**的型号变量一致（没�
 check("声明了 provider 的档，注入的环境变量与它一致（换服务商那一档的自检）",
       all(sp["env"].get("LLM_PROVIDER") == sp["provider"]
           for sp in dm.DIALS.values() if sp.get("provider")))
-check("text 档存在且不吃 native 开关",
-      "text" in dm.DIALS and "PLANNER_NATIVE_THINKING" not in dm.DIALS["text"]["env"])
-check("五个 native 档齐（思考 on/off × flash/max + 换服务商那一档）",
-      sorted(k for k in dm.DIALS if k != "text") ==
+check("五个档齐（思考 on/off × flash/max + 换服务商那一档），且没有 text 档",
+      sorted(dm.DIALS) ==
       ["native-nothink-deepseek", "native-nothink-flash", "native-nothink-max",
        "native-think-flash", "native-think-max"],
       str(list(dm.DIALS)))
@@ -180,13 +183,17 @@ check("完整率 = 1 − 1/3", d["native"]["tool_call_completeness"] == round(2 
 check("探针观察值原样进报告（「档到底拨成什么」要留档）",
       d["observed"]["model"] == "qwen3.8-flash")
 
-ACC_TEXT = acc_of([m_text], [case("m1", True, 9.0)])
-d_text = dm.summarize("text", dm.DIALS["text"], ACC_TEXT)
-check("text 档（无 native 事件）的两个比率是 None 而不是 0——概念不存在 ≠ 量到 0",
-      d_text["native"]["fallback_rate"] is None
-      and d_text["native"]["tool_call_completeness"] is None, str(d_text["native"]))
-check("同一格 planner 耗时才在 text 档也照常出数（不是整块空）",
-      d_text["planner_round_s"]["n"] == 2, str(d_text["planner_round_s"]))
+# 没有决策轮的 trace（`m_text` 里只有 `llm_done`，没有 native_* 事件）⇒ 两个比率是
+# None 而不是 0：**没量到 ≠ 量到 0**（20261004 前这条用 text 档做样本，那档已删，
+# 换成"这一跑没采到决策事件"这个与档位无关的形状——判据本身没变）。
+_DIAL_NODEC = "native-nothink-flash"
+ACC_NODEC = acc_of([m_text], [case("m1", True, 9.0)])
+d_nodec = dm.summarize(_DIAL_NODEC, dm.DIALS[_DIAL_NODEC], ACC_NODEC)
+check("没采到决策事件的两个比率是 None 而不是 0——没量到 ≠ 量到 0",
+      d_nodec["native"]["fallback_rate"] is None
+      and d_nodec["native"]["tool_call_completeness"] is None, str(d_nodec["native"]))
+check("同一格 planner 耗时照常出数（不是整块空）",
+      d_nodec["planner_round_s"]["n"] == 2, str(d_nodec["planner_round_s"]))
 
 print("\n⑥ 跑不成 ≠ 跑得差：provider/协议错误单独分堆")
 _REAL_400 = ("[第 1 轮] error: Error code: 400 - {'error': {'message': \"Messages with role "

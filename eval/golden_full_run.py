@@ -202,16 +202,15 @@ print(f"回归组: {len(_REG) - len(_reg_bad)}/{len(_REG)}"
 # 从那边导入，不在这里抄第二份——两份判据/两份统计必然会漂移（build_request 那条
 # "字段表只留一处"的教训是同一个道理，只是那次漂移的是请求体、这次会是数字）。
 from run_golden import wilson_ci, by_tag_stats           # noqa: E402
-from run_golden import _planner_engine                   # noqa: E402
+from run_golden import INTERFACE_LAYER                   # noqa: E402
 _TAGS_MAP = {r["id"]: r["tags"] for r in results}
 # `ts`（= 留档文件名那串戳）在**写的那一刻**由 report_archive 给出（见文件末尾）——
 # 这里先留空位，写之前补上：名字与报告里那一格因此恒成对，中间也无需预告一个可能
 # 被顺延的戳。
 report = {"ts": "", "corpus": "full", "total": len(CASES), "passed": len(CASES) - failed,
-          # 接口层档位（20260927 主线批 A）：与 run_golden.py 同名字段同来源（那个函数
-          # 是 planner_node 自己用的那一个）。子进程是父进程 spawn 的、继承同一份 env，
-          # 在父进程里问一次就等于问所有子进程。
-          "engine": _planner_engine(),
+          # 接口层（20260927 主线批 A）：与 run_golden.py 同名字段同来源（那个常量
+          # 是两处唯一的一份）。20261004 起只剩 native，见那边的注。
+          "engine": INTERFACE_LAYER,
           "failed": failed, "latency_s": [r["elapsed"] for r in results],
           # 通过率（20260924 补）：这个跑法此前**没有** pass_rate 字段——只打印了
           # "N/M 通过"，报告里只有 passed/total 两个原子数，读的人要自己除。

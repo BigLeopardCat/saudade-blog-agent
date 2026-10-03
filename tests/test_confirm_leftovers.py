@@ -35,6 +35,7 @@ from agent.graph import (  # noqa: E402
     route_after_execute,
 )
 from agent.skills import instantiate_plan  # noqa: E402
+from _native_stub import bind_tools_stub, native_reply  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -139,14 +140,16 @@ check("  弹卡轮仍 END（本轮不执行任何东西）",
 
 
 class _ScriptedLLM:
-    """照 tests/test_skills.py 的 `_ScriptedLLM`：按顺序吐回复、留 prompt 供断言。"""
+    """按顺序吐回复、留 prompt 供断言；夹具文本走 native 桩翻成 tool_calls（见 _native_stub）。"""
+
+    bind_tools = bind_tools_stub
 
     def __init__(self, replies):
         self.replies, self.prompts = list(replies), []
 
     def invoke(self, prompt):
         self.prompts.append(prompt)
-        return AIMessage(content=self.replies.pop(0))
+        return native_reply(self.replies.pop(0))
 
 
 _orig_llm = G.get_llm
