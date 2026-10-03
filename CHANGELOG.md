@@ -33,6 +33,16 @@
   五族**有"有帧轮那一副面孔"；洞⑪ 两族是**故意**没有（依据是请求期快照，有帧轮里命令回执
   已把页面/状态改掉 ⇒ 快照过期），`sys_fetch_claim_without_tool` 是缺口（未建、无生产实例）。
 
+- **写能力登记表互锁（判据，20261003）**：新增 `tests/test_registry_sync.py`。本仓最大的系统性
+  风险不是某条判据写错，而是**同一件事要在多处手工登记**（20260928 审计点出 94 处），漏一处
+  **不报错**、只在线上表现成"有这个能力却没有入口/契约/判据"。这套把写能力那条链上**没锁的
+  几格**钉住：工具柜 ↔ 作用域表双射、每件 write scope 工具都能被某个技能的计划调到、技能计划
+  引用的工具名真实存在、每个技能都有非空 `complete_when`/`reply_contract`、`_NAME_TARGET_TOOLS`
+  ⊆ `_WRITE_NAME_FIELDS`、`_ALWAYS_CONFIRM_TOOLS` ⊆ write scope，外加一份**例外账本**（`chat`/
+  `content_query` 没有计划、`read_article` 没有 capability、`navigate` 模板里的 `$path` 是死代码）
+  双向断言：新增同类留白要么改账本、要么改代码，**不许静默多出来**。全部是现状成立的不变量，
+  **不改任何行为**；判据口径是"变了没有"而非"判谁有罪"。
+
 - **写弹卡用例开真身份通道：两条挂夹具、一条断言收紧**（判据，20261003）：`admin_todo_done_popup`
   与 `account_unfreeze_popup` 不再跑在 uid=0，改为真管理员身份（`needs_admin_uid`）+ 一条夹具
   （新增族 `requires_fixture_kind: "todo"`，账号族那半复用既有的 `agent_fixture_freeze_a`）。uid=0
