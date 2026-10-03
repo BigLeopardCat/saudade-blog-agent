@@ -65,11 +65,65 @@ REQUIREMENTS = ROOT / "scripts" / "requirements-graph.txt"
 
 # 环形缓冲只留最后这么多行给页面看（完整日志在 <ts>.log 里，页面给的是路径）
 TAIL_LINES = 400
-# 起建图前的内存闸。脚本自己要下/解 umap+numba+scipy（解压 ≈470MB 磁盘）并把
-# 语料嵌进 numpy/UMAP，本机常驻服务已占 ~0.48GB（agent 4 worker）+ Rust。
-# 1200MB 是"还能跑完一次建图且不至于把整机拖到 OOM"的经验线；低于它**拒绝启动**
-# 并把当前值报出来（用户能自己关掉别的服务再来一次），不做"试试看"。
-MEM_MIN_MB = 1200
+# 起建图前的内存闸：低于它**拒绝启动**并把当前值报出来，不做"试试看"。
+#
+# **这个数不是拍的，是量出来的**（20261003 纠正：原来写 1200MB 纯属估高，本机可用内存
+# 常在 900MB 上下 ⇒ 门永远关着，"腾一腾再来"根本腾不到）。实测口径与结果：
+#   `systemd-run --user --scope -p MemoryMax=1000M -p MemorySwapMax=1536M` 里跑一整次
+#   真实重建（400 节点 / 12 篇文章 / UMAP），**峰值 RSS 552MB**（含 uv 那一层），
+#   30 秒跑完，换页 0 次 ⇒ 1000MB 的笼子都没碰到。700 = 552 × ~1.27 的余量。
+#
+# ⚠️ 这个数与**节点数**正相关（UMAP/numba 的中间量按点数长）。默认上限是 400 节点；
+# 把 `--max-nodes` 提到 2000 的站点要自己重新量一遍再抬这个数——量法同上（笼子设小，
+# OOM 只死那个 scope，不会拖垮整机）。可用内存读的是 `/proc/meminfo` 的 MemAvailable，
+# 换页空间**不计入**（真跑起来全靠 swap 会把这台机器拖到没反应，那正是 2026-08 那次
+# OOM 的形状，宁可拒绝）。
+# 紧急放行（主人自己承担风险，例如明确知道机器上还有可回收的页缓存）：
+#   `GRAPH_BUILD_MEM_MIN_MB=500` 写进 agent 的 .env —— 非正数/非整数一律回落默认值。
+MEM_MIN_MB = 700
+MEM_ENV = "GRAPH_BUILD_MEM_MIN_MB"
+
+
+def mem_min_mb() -> int:
+    """内存闸的阈值。环境变量只在能解析成正整数时才认——写坏了回落默认值，
+    不让一个错别字把重建功能整条锁死（同 `CHAT_QUOTA_LIMIT` 那条口径）。"""
+    raw = os.environ.get(MEM_ENV, "").strip()
+    if raw:
+        try:
+            v = int(float(raw))
+        except ValueError:
+            v = 0
+        if v > 0:
+            return v
+    return MEM_MIN_MB
+
+
+# `uv` 只装在用户目录时（`~/.local/bin/uv`）**systemd 服务里 `shutil.which` 找不到它**：
+# 单元文件没有 `Environment=PATH=`，system 服务的默认 PATH 只有
+# /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin —— 不含 ~/.local/bin。
+# 症状是"uv 明明装着，页面却报找不到 uv 命令"（20261003 实踩）。所以除了 PATH，
+# 再按这张表找一遍；找不到时把**找过的地方**一起报给用户，别只说"没有"。
+UV_FALLBACKS = ("~/.local/bin/uv", "~/.cargo/bin/uv", "/usr/local/bin/uv", "/snap/bin/uv")
+_UV_PATH: str | None = None
+
+
+def find_uv() -> str | None:
+    """解析 uv 的**绝对路径**（找到一次就记住）。找不到返回 None。"""
+    global _UV_PATH
+    if _UV_PATH:
+        return _UV_PATH
+    found = shutil.which("uv")
+    if not found:
+        for cand in UV_FALLBACKS:
+            p = Path(cand).expanduser()
+            if p.is_file() and os.access(p, os.X_OK):
+                found = str(p)
+                break
+    if found:
+        _UV_PATH = found
+        logger.info("[graph_build] uv = %s（PATH 里%s）", found,
+                    "有" if shutil.which("uv") else "没有，走回落表")
+    return found
 # 取消：先 SIGTERM 整个进程组，宽限期内没退再 SIGKILL
 CANCEL_GRACE = 5.0
 # 语料来源缺省值：走回环直连 Rust（不绕 nginx）。**读的是 settings 那一项**——
@@ -240,19 +294,24 @@ def mem_available_mb() -> int | None:
 
 def preflight(mode: str) -> dict | None:
     """起任务前的确定性检查。返回 None = 可以起；否则返回给调用方的拒因。"""
-    if shutil.which("uv") is None:
+    if find_uv() is None:
+        tried = "、".join(("PATH", *UV_FALLBACKS))
         return {"ok": False, "reason": "uv_missing",
-                "error": "找不到 uv 命令——建图依赖（umap/numba/scipy）刻意不进生产 venv，"
-                         "重建要靠 `uv run --no-project` 现装。装好 uv（或改用本机已有环境）再试。"}
+                "error": f"找不到 uv（找过：{tried}）——建图依赖（umap/numba/scipy）刻意不进"
+                         f"生产 venv，重建要靠 `uv run --no-project` 现装。"
+                         f"装好 uv（或把它的路径加进上面那张回落表）再试。"}
     if not BUILD_SCRIPT.exists() or not REQUIREMENTS.exists():
         return {"ok": False, "reason": "script_missing",
                 "error": f"建图脚本或依赖清单不在：{BUILD_SCRIPT} / {REQUIREMENTS}"}
     avail = mem_available_mb()
-    if avail is not None and avail < MEM_MIN_MB:
+    need = mem_min_mb()
+    if avail is not None and avail < need:
+        extra = "" if need == MEM_MIN_MB else f"（当前阈值来自 {MEM_ENV}={need}）"
         return {"ok": False, "reason": "low_memory",
-                "error": f"可用内存 {avail}MB，低于本次任务的最低要求 {MEM_MIN_MB}MB"
-                         f"（建图要起 umap/numba，本机还常驻着 4 个 agent worker）。"
-                         f"腾出内存后再试——**不建议硬上**：这台机器 OOM 会拖垮整站。"}
+                "error": f"可用内存 {avail}MB，低于本次任务的最低要求 {need}MB{extra}。"
+                         f"这个阈值是实测线（400 节点的一次真实重建峰值 552MB，取 ~1.27 倍余量），"
+                         f"不是拍的；换页空间不计入。腾出内存后再试——**不建议硬上**："
+                         f"这台机器 OOM 会拖垮整站。"}
     return None
 
 
@@ -321,7 +380,10 @@ def resolve_params(raw: dict | None) -> dict:
 
 
 def _build_argv(params: dict, mode: str) -> list[str]:
-    base = ["uv", "run", "--no-project", "--python", "3.12",
+    # uv 用**绝对路径**（`find_uv`）：服务里的 PATH 没有 ~/.local/bin，写裸 `uv` 会在
+    # Popen 那一刻才炸 FileNotFoundError，而那时锁已经拿了、状态已经置成 running。
+    # 顺带一个好处：页面 `<details>` 里展示的 argv 会带上真实路径，排障一眼看得出用的哪个 uv。
+    base = [find_uv() or "uv", "run", "--no-project", "--python", "3.12",
             "--with-requirements", str(REQUIREMENTS)]
     if mode == "precheck":
         # 只验"依赖装不装得起来"（首次会下 470MB，页面要提示这一点）
@@ -400,6 +462,15 @@ def _run(run_id: str, argv: list[str], mode: str, log_path: Path) -> None:
     started = time.time()
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    # uv 要靠 HOME 找缓存（`~/.cache/uv`，那 470MB 依赖就在里面）与解释器目录；PATH 里
+    # 补上 uv 所在目录，uv 自己再 shell out 找东西时不会二次踩同一个坑。systemd 给
+    # User= 的服务设 HOME/LOGNAME（SetLoginEnvironment 默认开），但这里是**显式兜底**：
+    # 少了 HOME，uv 会当成长得像 root 的环境去 /root/.cache 重建一份缓存——症状是
+    # "头一次跑完，第二次又从头下 470MB"。
+    env.setdefault("HOME", str(Path.home()))
+    uv_bin = find_uv()
+    if uv_bin:                              # 相对名（"uv"）不进 PATH，`.` 当目录只会添乱
+        env["PATH"] = str(Path(uv_bin).parent) + os.pathsep + env.get("PATH", "").lstrip(os.pathsep)
     try:
         proc = subprocess.Popen(                       # noqa: S603 —— argv 由白名单拼出
             argv, cwd=str(ROOT), env=env, text=True, bufsize=1,
@@ -563,7 +634,7 @@ def status() -> dict:
             if _tail:
                 st["tail"] = list(_tail)
     st["mem_available_mb"] = mem_available_mb()
-    st["mem_min_mb"] = MEM_MIN_MB
+    st["mem_min_mb"] = mem_min_mb()
     st["running"] = st["status"] == "running"
     return st
 
