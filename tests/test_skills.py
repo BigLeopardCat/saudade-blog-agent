@@ -558,6 +558,31 @@ def test_fast_path_shell_transparency():
     # 用户自己写的方括号注记同样剥掉——他本来就是在下命令（与同意闸同一取证）
     check("用户自写注记「[求助] 去留言板」同样进快道", _nav_fast_path("[求助] 去留言板") is not None)
 
+    # ── 20261003 补：**第二层壳**（句首称呼「小猫咪/猫咪/泠月喵」）。
+    # 上面只喂了系统锚点壳，而称呼壳是**主人的说话习惯**、走的是另一条通道：全量生产
+    # 语料 1110 条消息里 252 条（22.7%）以称呼开头，`_VOCATIVE_RE` 之外的三处判据都
+    # 因此恒不命中过（导航快道/同意闸/短应答，见 `authz.strip_user_shell` 注）。判据必须
+    # 对**两层**都透明，而"透明"的判据是逐字相同的结论，不是"都不命中"（那是恒不命中
+    # 那个病本身）——所以最后一条专门断言带称呼的导航命令**确实**命中。
+    from agent.context import _ledger_frame_wanted, _short_reply_kind
+    V = "小猫咪，"
+    for _nm, _f, _s in [
+        ("导航快道", _nav_fast_path, "带我去留言板"),
+        ("显示快道", _display_fast_path, "在屏幕上显示你好"),
+        ("特效切换快道", lambda m: _effect_switch_fast_path(m, "sakura"), "把樱花换成下雨"),
+        ("文章读取快道",
+         lambda m: _article_fast_path(m, "current_url=https://saudade.site/article/12"),
+         "我正在读这篇"),
+        ("动作意图扫描", lambda m: [i["key"] for i in _scan_action_intents(m)], "去留言板"),
+        ("短应答判据", _short_reply_kind, "好"),
+        ("待办台账全选式", _ledger_frame_wanted, "你看着办"),
+    ]:
+        check(f"{_nm}对句首称呼壳透明（「{_s}」带不带称呼同一结论）",
+              _f(_s) == _f(V + _s), f"裸={_f(_s)!r} 带称呼={_f(V + _s)!r}")
+    check("带称呼的导航命令**确实**命中（不是两边都 None 的假透明）",
+          _nav_fast_path(V + "带我去留言板") is not None
+          and _nav_fast_path("猫咪带我去留言板") is not None)
+
 
 def test_display_fast_path():
     """显示意图确定性快道（零 LLM，20260828 影子系统重构）：屏幕名词+写/显示动词
