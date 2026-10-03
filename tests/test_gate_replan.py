@@ -153,13 +153,18 @@ _PLAN_SEARCH = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "search_notes
 
 
 def _run(plans: list, narrations: list, user_msg: str = "西顿学院",
-         tool_name: str = "search_notes", fake=None, uid: int = 5):
+         tool_name: str = "search_notes", fake=None, uid: int = 5,
+         role: str | None = None):
     """跑一遍真图，返回 (最终 state, 假 LLM, 假工具, trace 事件列表)。
 
     `tool_name` / `fake` 让别的族复用同一台真图（④ 的写族打的是 `read_notifications`，
     不是检索工具）——**换的只是工具**：图、gate、路由全是生产那一份。
     `uid` 同理（⑥ 的守卫用例要 `uid=0` 的未登录档：那是 golden 里那两条
     `own_*_not_logged_in` 的身份，判据在该档下必须不开火）。
+    `role` 是**另一根轴**（20261004 补）：生产里 uid 与角色不是一回事（角色来自 Rust 的
+    签名断言），而 `CHAT_ONLY_ROLES`（杂鱼）走的是一条**短路**——它不是"权限少一点的
+    普通角色"，`planner_node` 连 LLM 都不调、计划直接是 `wrapped`。只按 uid 造身份
+    会把杂鱼当成普通访客测，测出来的结论正相反（见 ⑥e 末尾那条对照）。
     """
     llm, tool, events = _ScriptedLLM(plans, narrations), (fake or _FakeTool()), []
     orig_llm, orig_record = g.get_llm, g.record
@@ -169,7 +174,7 @@ def _run(plans: list, narrations: list, user_msg: str = "西顿学院",
     g._TOOL_MAP[tool_name] = tool
     try:
         cfg = {"configurable": {"thread_id": "t-gate-replan", "user_id": uid,
-                                "principal": Principal(uid=uid),
+                                "principal": Principal(uid=uid, role=role),
                                 "conversation_id": 1, "stop_event": None}}
         out = build_graph().invoke(
             graph_input([HumanMessage(content=user_msg)]), cfg)
@@ -537,12 +542,18 @@ check("兜底文案如实说「没去取」，且**不含任何读数**（走到
 
 
 print("\n⑥d 零帧纯作答轮 + 主人在问**站内语料** → 打回重规划（20261004 补的公开面孪生族）")
-# 现场（生产 trace `20261002T195955_9_r8d7`）：主人问「博客有哪些文章呢」，planner 落 chat、
-# 零工具、零帧，narrator 回「我这边**没有工具**可以帮你查具体的文章标题和链接」。上面各族的
-# 判据问的都是"这句话真不真"——那句"没有工具"**字字属实**（当轮确实一次检索都没跑），于是
-# 原先直接 gate PASS。这一节锁的是补上的那半：站里明明备着 `rag_search`/`search_notes`/
-# `list_notes`，"零检索就去下结论"本身就不该放行（判据与射程数据见
+# 要治的形状：主人问站内有些什么，narrator 回「我这边**没有工具**可以帮你查具体的文章标题和
+# 链接」。上面各族的判据问的都是"这句话真不真"——那句"没有工具"**字字属实**（当轮确实一次
+# 检索都没跑），于是原先直接 gate PASS。这一节锁的是补上的那半：站里明明备着 `rag_search`/
+# `search_notes`/`list_notes`，"零检索就去下结论"本身就不该放行（判据与射程数据见
 # `agent/authz.py::is_site_corpus_question` 的头注）。
+#
+# ⚠️ 这一节原先把这个形状的出处写成「生产 trace `20261002T195955_9_r8d7`：planner 落 chat、
+# 零工具、零帧」——**那句话是错的**（20261004 复扫时更正，同一条更正也写在 authz.py 的头注里）：
+# 那条 trace 的 uid=9 是**杂鱼**，planner 在 `zako_shortcut` 就短路了（trace 里没有 `decision`
+# 事件），计划是 `wrapped`，对那个身份"手上没有工具"本来就是事实。所以**不要**再拿那条 trace
+# 当本族的现场；本族真正的现场是下面 ⑥d 这一台（uid=5，普通身份，narrator 声称没有工具而
+# 站里备着检索工具），以及 ⑥e 末尾那条杂鱼对照锁（同一个句子、换身份 ⇒ 必须放行）。
 _LIE_SITE = ("主人，我这边**没有工具**可以帮你查具体的文章标题和链接喵～"
              "你要是想找哪篇，直接跟我说标题我看看记不记得。")
 _TRUTH_SITE = "主人，站内一共有 3 篇文章喵：《西顿学院小记》《Docker 部署笔记》《测试文章 TEST8》。"
@@ -578,9 +589,9 @@ print("\n⑥e 守卫：这些轮**不许**开本族（尤其是跨轮取值那�
 # 与 ⑥b 同一台真图、同一触发形状（chat/answer_only + 零帧），只换消息或 uid。
 
 
-def _issues(user_msg: str, uid: int = 5) -> tuple[list, dict]:
+def _issues(user_msg: str, uid: int = 5, role: str | None = None) -> tuple[list, dict]:
     """跑一轮 chat/answer_only，返回 (replan 事件里出现的 issue 列表, 最终 state)。"""
-    _o, _l, _t, _e = _run([_PLAN_CHAT], [_NEUTRAL], user_msg=user_msg, uid=uid)
+    _o, _l, _t, _e = _run([_PLAN_CHAT], [_NEUTRAL], user_msg=user_msg, uid=uid, role=role)
     return [d.get("issue") for _n, e, d in _e if e == "replan"], _o
 
 
@@ -618,6 +629,34 @@ check("  且打回建议里点名了**清单型**的出路（公告/分类/标�
       "不是只指检索一条路",
       any("公告" in a for a in g._REPLAN_ADVICE[_SITE_ISSUE]),
       str(g._REPLAN_ADVICE[_SITE_ISSUE])[:120])
+# ★ 杂鱼对照锁（20261004，全量 trace 复扫时补）：**同一句话、换身份，结论必须相反**。
+# 生产 trace `20261002T195955_9_r8d7` 的主人（uid=9）问的正是「博客有哪些文章呢」，而它
+# 是**杂鱼**——`CHAT_ONLY_ROLES` 在 `planner_node` 顶部短路（连 LLM 都不调），计划直接是
+# `wrapped`。对那个身份说"我这边没有工具"**本来就是事实**（它结构上零工具），所以那条
+# 回复不是缺陷、gate 放行也是对的。这条锁有两个作用：
+#   ① 挡住"把守卫从 `status == answer_only` 放宽成只判 `plan['chat']`"这类改动——
+#      那样会告诉一个**永远做不到**的主人"站里备着 rag_search"，打回重规划到一个它
+#      走不通的出路，最后落在那句兜底上；
+#   ② 挡住"按 uid 造身份"的测法——生产里 uid 与角色是两根轴（角色来自 Rust 的签名断言），
+#      只按 uid 造身份会把杂鱼当普通访客，测出来的结论正好是反的。
+_zo, _zl, _zt, _ze = _run([_PLAN_CHAT], [_NEUTRAL], user_msg="博客有哪些文章呢",
+                          uid=9, role="zako")
+_zako_issues = [d.get("issue") for _n, e, d in _ze if e == "replan"]
+check("★ 杂鱼身份：同一句「博客有哪些文章呢」**不开**本族（计划是 wrapped，不是纯作答轮）",
+      _zako_issues == [], str(_zako_issues))
+check("  且那一轮的 planner 是**短路**的（事件里只有 zako_shortcut、没有 decision）"
+      "——守卫靠的正是这一点，不是「碰巧没命中」",
+      any(e == "zako_shortcut" for _n, e, _d in _ze)
+      and not any(e == "decision" for _n, e, _d in _ze),
+      str([e for _n, e, _d in _ze]))
+check("  且照常 PASS 收尾（没变成兜底、也没凭空多出一轮）",
+      not _zo.get("fallback_text") and not _zako_issues)
+_zu, _zul, _zut, _zue = _run([_PLAN_CHAT], [_NEUTRAL], user_msg="博客有哪些文章呢",
+                             uid=9, role="user")
+check("  对照：**同一个 uid、只把角色换成普通访客** ⇒ 当场开本族"
+      "（这一对才是这条锁的承重点：结论由角色决定，不由 uid 决定）",
+      [d.get("issue") for _n, e, d in _zue if e == "replan"] == [_SITE_ISSUE],
+      str([d.get("issue") for _n, e, d in _zue if e == "replan"]))
 
 print("\n⑥f 源码锁：开火点在零帧块里、三张表都挂了号、兜底与否定说明都是本族自己的")
 _GSRC_SITE = Path(g.__file__).read_text(encoding="utf-8")
