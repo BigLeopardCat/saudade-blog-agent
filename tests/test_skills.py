@@ -2452,6 +2452,120 @@ def test_gate_repeat_reply():
     check("用户点名换回 → pass（gate 传了本轮用户消息）",
           o5["done"] is True and not o5.get("fallback_text"), str(o5)[:60])
 
+    # ══════════════════════════════════════════════════════════════════
+    # 20261003 加：比对面扩到**最近 N 轮** + 「整段抄写变体」档
+    #
+    # 现场（uid=1 会话 320，19:41）：用户问「我有哪些未读通知呀」，planner 落成 chat 零
+    # 工具，narrator 把**上 2 轮**那份"我没有翻日志的工具"的答案搬了过来——整体重合
+    # 87.9%、最长连续块 568 字。上面两条老限制同时把它放过去：① 只比紧邻那一条
+    # （本轮与紧邻那条的相似度仅 9.7%）；② 只看最长连续块，门槛 max(200, 60%×967)=580
+    # 比 568 大 12 个字。下面这组锁的就是这两条各自被补上。
+    # ══════════════════════════════════════════════════════════════════
+    import difflib as _dl
+
+    from agent.graph import (_REPEAT_COVER, _REPEAT_FAR_COVER, _REPEAT_FAR_RUN,
+                             _REPEAT_RECENT_N, _repeat_far, _repeat_reason,
+                             _recent_ai_replies)
+
+    # ── 比对面：从近到远、带上限、首轮空 ─────────────────────────────────
+    # 形状同真实注入：当前用户消息（第四问）之前是历史，之后是本轮回复。
+    _hist3 = [HumanMessage(content="[System: user_id=1]"),
+              HumanMessage(content="第一问"), AIMessage(content="答一"),
+              HumanMessage(content="第二问"), AIMessage(content="答二"),
+              HumanMessage(content="第三问"), AIMessage(content="答三"),
+              HumanMessage(content="第四问"), AIMessage(content="答四（本轮）")]
+    check("  `_recent_ai_replies` 从近到远",
+          _recent_ai_replies(_hist3) == ["答三", "答二", "答一"],
+          str(_recent_ai_replies(_hist3)))
+    check("  `_prev_ai_reply` 仍是最近那一条（老判据与它的单测入口不变）",
+          _prev_ai_reply(_hist3) == "答三", _prev_ai_reply(_hist3))
+    check("  n 上限生效", _recent_ai_replies(_hist3, 2) == ["答三", "答二"],
+          str(_recent_ai_replies(_hist3, 2)))
+    check("  首轮无对比对象 → 空列表",
+          _recent_ai_replies([HumanMessage(content="[System: x]"),
+                              HumanMessage(content="你好"), AIMessage(content="本轮")]) == [])
+    check("  比对面真的扩了（≥2；只扩到 1 等于没改）", _REPEAT_RECENT_N >= 2,
+          str(_REPEAT_RECENT_N))
+    check("  新档比老档更严（下限更高，另加整体重合率）",
+          _REPEAT_FAR_RUN > _REPEAT_MIN_RUN and _REPEAT_FAR_COVER > _REPEAT_COVER,
+          f"run {_REPEAT_FAR_RUN}/{_REPEAT_MIN_RUN}，cover {_REPEAT_FAR_COVER}/{_REPEAT_COVER}")
+
+    # ── 夹具：照生产那一对的形状造 ───────────────────────────────────────
+    # 两段逐字相同的正文，中间各夹一句自己新写的 ⇒ 逐字重合被切成两半，最长块
+    # 只比老门槛小一点点——这正是 568 vs 580 的形状。每句带编号（互不相同），
+    # 免得凭空多出别的长块。
+    def _seg(tag, n):
+        return "".join(f"第{tag}段第{i}句：同一件事的第{i}个侧面，措辞一字不改地照抄。"
+                       for i in range(1, n + 1))
+
+    _A, _B2, _OTHER = _seg("甲", 16), _seg("乙", 12), _seg("丁", 12)
+    _old_reply = _A + "（这一句是本轮新写的，把整段逐字重合切成两半。）" + _B2
+    _old_prev = _A + _seg("丙", 6) + _B2
+    _sm = _dl.SequenceMatcher(None, _old_reply, _old_prev)
+    _blk = max(m.size for m in _sm.get_matching_blocks())
+    _thr = max(200, int(len(_old_reply) * 0.6))
+    check("  夹具与生产那一对同形：老档差一点点没够上、整体重合却 ≥0.75",
+          _thr > _blk >= _REPEAT_FAR_RUN and _sm.ratio() >= _REPEAT_FAR_COVER,
+          f"最长块 {_blk} < 门槛 {_thr}，整体重合 {_sm.ratio():.3f}")
+    check("  老档判不出（生产里漏掉它的**直接原因**，锁住防回退）",
+          _repeat_of_prev_reply(_old_reply, _old_prev) is False,
+          f"块 {_blk} / 门槛 {_thr}")
+    check("  新档判得出（整段抄写变体）", _repeat_far(_old_reply, _old_prev) is True, "")
+    _hit2 = _repeat_reason(_old_reply, [_OTHER, _old_prev])
+    check("  总入口在**距离 2** 上命中，并报出档位与距离",
+          _hit2 is not None and _hit2[0] == "far" and _hit2[1] == 2 and _hit2[2] == _old_prev,
+          str(_hit2)[:60] if _hit2 else "None")
+    check("  紧邻那条（距离 1）与它无关时不会误判",
+          _repeat_reason(_old_reply, [_OTHER, _old_prev])[1] == 2, "")
+
+    # ── 反向：新档不许误伤"模板复用"与"引用同一段工具返回" ────────────────
+    # 确认卡这类**整段相同**的模板：真红现场是 259 字的卡（两轮一字不改）。老门槛
+    # max(200, 60%×259)=200 会当场误伤 —— 这正是新档**不能**照搬老门槛的原因。
+    _card = ("好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
+             "**给账号「niuniu」（账号 id=5）放行额度重置申请**\n\n"
+             "点「确定」我就去办；点「取消」就当没说过，或者直接告诉我改成别的。\n"
+             "这条卡片文案两轮一字不改——模板复用不是复读。"
+             "真正要钉住的是'整段相同但不够长'这一档：生产里那两张卡是 259 字，"
+             "老门槛 max(200, 60%×259)=200 会当场误伤，新档的 300 字下限正好把它放行。")
+    check("  夹具形状：这张卡在 200~299 字之间（否则钉不住这一档）",
+          200 <= len(_card) < _REPEAT_FAR_RUN, f"{len(_card)} 字")
+    check("  同一张确认卡在距离 2 上整段相同 → 不判（模板复用）",
+          _repeat_reason(_card, [_OTHER, _card]) is None, "")
+    _quote = "MQTT 协议定义：设备通过 mqtts://saudade.site:8883 建立长连接，上报遥测并接收指令下发。" * 3
+    _fresh2 = "喵～主人，这轮的结论是这样的：" + _quote + "以上就是新的查证结果。" * 30
+    check("  长答案里引用上轮同一段工具返回（150 字级）→ 距离 2 上也不判",
+          _repeat_reason(_fresh2, [_OTHER, _quote + "上轮别的内容"]) is None,
+          f"本轮 {len(_fresh2)} 字，重合 {len(_quote)} 字")
+
+    # ── gate 集成：距离 2 ────────────────────────────────────────────────
+    def _st2(reply, older, newer, user="我有哪些未读通知呀"):
+        return {"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+                "plan_rounds": 1, "receipts": [],
+                "messages": [HumanMessage(content="[System: user_id=1]"),
+                             HumanMessage(content="第一问"), AIMessage(content=older),
+                             HumanMessage(content="第二问"), AIMessage(content=newer),
+                             HumanMessage(content=user), AIMessage(content=reply)]}
+
+    o6 = gate_node(_st2(_old_reply, _old_prev, _OTHER))
+    check("  距离 2 抄更早那条 → gate fallback(repeat_prev_reply)",
+          o6["done"] is True and o6.get("fallback_text") == _FALLBACK_REPEAT,
+          str(o6.get("fallback_text", ""))[:40])
+    o7 = gate_node(_st2("喵～主人，这轮换个话题：未读通知我这就去数，先把窗口给你。",
+                        _old_prev, _OTHER))
+    check("  距离 2 但本轮是新内容 → pass", o7["done"] is True and not o7.get("fallback_text"),
+          str(o7)[:60])
+    o8 = gate_node(_st2(_old_reply, _old_prev, _OTHER, user="重新说一遍，flowchart 换回 graph"))
+    check("  重做豁免在距离 ≥2 上同样生效",
+          o8["done"] is True and not o8.get("fallback_text"), str(o8)[:60])
+
+    # ── 接线锁：gate 1b 走的是新入口（不是又接回单条那条老路）──────────────
+    _GSRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+    check("  gate 1b 调的是 `_repeat_reason` + `_recent_ai_replies`",
+          "_repeat_reason(reply, _recent_ai_replies(msgs)" in _GSRC)
+    check("  兜底文案不再说死「上一轮」（现在可能是更早的轮次）",
+          "之前说过" in _FALLBACK_REPEAT and "上一轮" not in _FALLBACK_REPEAT,
+          _FALLBACK_REPEAT[:24])
+
 
 def test_execute_node():
     """execute 确定性执行（20260903 planner 全权）：执行器无自由意志、无授权分支
