@@ -74,10 +74,10 @@ from trace_files import iter_trace_files  # noqa: E402
 from trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
 
 # ── CLI 默认路径（读者函数一律把路径当参数收，模块常量只给 CLI 与自测用）──────
-TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
-AGENT_LOG_DIR = "/home/ubuntu/memory_blog_rust/logs/agent"
-MONITOR_DIR = "/home/ubuntu/memory_blog_rust/logs/frontend"
-HEALTH_LOG = "/home/ubuntu/memory_blog_rust/logs/health.log"
+TRACE_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
+AGENT_LOG_DIR = "/home/ubuntu/Saudade-Blog/logs/agent"
+MONITOR_DIR = "/home/ubuntu/Saudade-Blog/logs/frontend"
+HEALTH_LOG = "/home/ubuntu/Saudade-Blog/logs/health.log"
 REPORT_DIR = "eval/report"
 
 TS_FMT = "%Y-%m-%d %H:%M:%S"

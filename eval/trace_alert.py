@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from trace_files import iter_trace_files, parse_trace_name  # noqa: E402
 from trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
 
-TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
+TRACE_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
 
 # R1 用户侧：质疑/纠错信号（单独的「？」「？？？」是 9/8 现场的原始形态；
 # 「老是」等抱怨词收进——「你老是读什么 git」需要触发）

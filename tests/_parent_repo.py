@@ -33,7 +33,7 @@ def parent_root() -> pathlib.Path | None:
     """父仓根目录；找不到（或那个目录里没有 Rust 源码锚）返回 None。
 
     查找顺序：env `SAUDADE_PARENT_REPO` → agent 仓的**兄弟目录**（本机的常规布局：
-    `memory_blog_rust/saudade-blog-agent`）。**env 是排他的**：设了它就只认它——它是
+    `Saudade-Blog/saudade-blog-agent`）。**env 是排他的**：设了它就只认它——它是
     "父仓在这里"的显式声明，指着 A 却在 B 里找到了，等于守卫在断言一个**不是你要的那个**
     仓库（那比"跳过"更坏：假绿）。
     """

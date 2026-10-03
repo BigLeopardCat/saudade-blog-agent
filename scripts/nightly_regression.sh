@@ -37,7 +37,7 @@
 # 就先只读探一次，明确不可用 ⇒ 这批**未评估** + **退出码 3**（"没评"不是"通过率"），
 # 读不到 ⇒ 只警告照跑（"不知道"不等于"不可用"）。
 set -u
-cd /home/ubuntu/memory_blog_rust/saudade-blog-agent
+cd /home/ubuntu/Saudade-Blog/saudade-blog-agent
 PY=.venv/bin/python
 LOG="$HOME/agent_regression.log"
 MARK="$HOME/agent_regression.failed"
@@ -148,7 +148,7 @@ $PY eval/golden_fixture_todo.py --verify >> "$LOG" 2>&1 || echo "[$TS] 待办夹
 #
 # **门禁**（与 golden 同级）：它红了说明这套安全判据当天不成立，比能力题红严重得多。
 # 探针在父仓（不是本仓）、只用标准库 ⇒ 用系统 python3 跑，不引本仓 venv。
-PROBE=/home/ubuntu/memory_blog_rust/scripts/probe_token_revoke.py
+PROBE=/home/ubuntu/Saudade-Blog/scripts/probe_token_revoke.py
 echo "--- 令牌收回/冻结 真链路探针 (写生产库: 只建删 probe_revoke_* 靶子账号, 门禁) ---" >> "$LOG"
 if [ ! -f "$PROBE" ]; then
   fail=1

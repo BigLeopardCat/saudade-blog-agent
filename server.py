@@ -1,7 +1,7 @@
 """FastAPI server wrapping the LangChain agent for production deployment.
 
 Run with:
-    cd /home/ubuntu/memory_blog_rust/saudade-blog-agent
+    cd /home/ubuntu/Saudade-Blog/saudade-blog-agent
     .venv/bin/uvicorn server:app --host 127.0.0.1 --port 8010 --workers 2
 """
 

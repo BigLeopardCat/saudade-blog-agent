@@ -44,7 +44,7 @@ from agent.factblock import (  # noqa: E402
     FAMILY_CMD, FAMILY_DATA, FAMILY_WRITE, family_of,
 )
 
-TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
+TRACE_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
 
 # 完成式/动作族词：出现它 + 与工具返回有 2-gram 重合 ⇒ 计入上界（改写型复述）
 _COMPLETION_RE = re.compile(
