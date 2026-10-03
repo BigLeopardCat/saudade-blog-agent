@@ -2106,6 +2106,101 @@ async def graph_query(req: GraphQueryRequest):
                                       req.q, wordgraph.TOP_K_DEFAULT)
 
 
+# ---------------------------------------------------------------------------
+# /graph/rebuild* — 向量图谱重建任务（20261003 用户第 2 条）
+# ---------------------------------------------------------------------------
+#
+# 三个端点：起任务 / 查状态 / 取消。**身份走既有的身份断言，权限走 authz 的
+# `admin.console`**（与后台报表族同一道门）。`admin.console` 在 `_HARD_SCOPES` 里
+# ⇒ `enforcing()` 对它恒 True，不吃 shadow 开关：这道闸不是灰度中的新能力，而是
+# "只有管理员能重建整站图谱"这一条结论。
+#
+# 为什么判据是 `authz.holds` 而不是 `check(principal, tool)`：见 `holds` 的 docstring
+# （工具表必须与工具注册表一一对应，端点级能力不往里塞假工具名）。
+
+
+class GraphRebuildRequest(BaseModel):
+    """重建参数。字段名与 `rag/graph_build.py::resolve_params` 的白名单一一对应
+    ——**多传的字段会被忽略、不该存在的东西由那边的白名单挡**（表单是外部输入，
+    不直接拼 argv）。
+
+    `exclude_ids` 的三态是有意的：`None` = 没填 ⇒ 用脚本自己的默认排除；
+    `""` = 明确"一个都不排除"；`"9,10"` = 点名排除。三者的语义在
+    `resolve_exclude_ids` 里各有一条回归锁（20261003 修的静默 bug 就在这）。
+    """
+
+    mode: str = Field(default="rebuild")          # rebuild | precheck
+    api_base: str = Field(default="", max_length=200)
+    # 产物归属站点：后台页面传**浏览器自己的 origin**（缺省时前端会填），
+    # 见 rag/graph_build.py 头注——从 api_base 推会推出 127.0.0.1。
+    site: str = Field(default="", max_length=200)
+    max_nodes: int | None = None
+    min_chars: int | None = None
+    exclude_ids: str | None = None
+    layout: str = Field(default="")
+    refresh: bool = False
+    force: bool = False
+    dry_run: bool = False
+    # 发起人 uid（身份断言核对与日志留痕用，与 /review 同款）
+    uid: int = Field(default=0, ge=0)
+
+
+def _require_console(request: Request, uid: int) -> Principal:
+    """后台端点共用的一道门：身份由断言定，权限由 `admin.console` 定。
+
+    403（不是 200+ok=false）：权限失败与"忙/内存不够"是两类事——前者是这个人不行，
+    后者是这台机器此刻不行。混成同一个返回体，前端就只能靠 reason 字符串猜，而
+    上游 Rust 日志里也看不出"有人在试探后台接口"。
+    """
+    from agent import authz
+    principal = _resolve_principal(request, uid)
+    if not authz.holds(principal, authz.SCOPE_ADMIN_CONSOLE):
+        logger.warning("[graph] 拒绝后台建图请求：%s（需要 %s）",
+                       principal, authz.SCOPE_ADMIN_CONSOLE)
+        raise HTTPException(403, "需要管理员权限")
+    return principal
+
+
+@app.post("/graph/rebuild")
+async def graph_rebuild(request: Request, req: GraphRebuildRequest):
+    """起一次重建 / 环境预检。**非阻塞**：起完立刻返回，进度靠 `/graph/rebuild/status` 轮。
+
+    返回体 `{ok, reason?, error?, run_id?, state?}`——
+    `ok=false` 的三种拒因（busy / low_memory / uv_missing）各自要不同的处置建议，
+    所以 reason 是给页面分支用的、error 是给人看的原话。
+    """
+    from rag import graph_build
+    _require_console(request, req.uid)
+    params = req.model_dump(exclude={"uid", "mode"})
+    loop = asyncio.get_running_loop()
+    res = await _submit_with_context(loop, graph_build.start, params, req.mode)
+    if not res.get("ok"):
+        logger.info("[graph] 起任务被拒：mode=%s reason=%s", req.mode, res.get("reason"))
+    return res
+
+
+@app.get("/graph/rebuild/status")
+async def graph_rebuild_status(request: Request, uid: int = 0):
+    """当前任务状态（含日志尾部与最后一次成功的摘要）。pages 每 ~1.5s 轮一次。"""
+    from rag import graph_build
+    _require_console(request, uid)
+    loop = asyncio.get_running_loop()
+    return await _submit_with_context(loop, graph_build.status)
+
+
+@app.post("/graph/rebuild/cancel")
+async def graph_rebuild_cancel(request: Request, req: GraphRebuildRequest):
+    """取消当前任务（SIGTERM 整个进程组 → 宽限期后 SIGKILL）。
+
+    **取消可能落在另一个 worker 上**（起任务的是 A、点取消的请求被 nginx 派给 B），
+    所以它一切从盘上的 state/lock 取，不看内存——见 `rag/graph_build.cancel`。
+    """
+    from rag import graph_build
+    _require_console(request, req.uid)
+    loop = asyncio.get_running_loop()
+    return await _submit_with_context(loop, graph_build.cancel)
+
+
 @app.get("/health")
 async def health():
     """存活探针 + **这一进程实际在跑的档位**（20260929 补 dials）。

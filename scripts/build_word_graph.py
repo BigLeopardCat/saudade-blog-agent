@@ -7,11 +7,18 @@
           `--layout pca` 是纯 PCA。三者的离线 A/B 见 layout_umap 的注释。）
 
 产物（三份，见 docs/word-graph.md）：
-  1. frontend/public/graph/graph-<sha1前12>.js    展示数据（export default {...}）
-  2. frontend/public/graph/manifest.json          指针（前端靠它发现带 hash 的文件名
-                                                    + `site` = 产物归属站点，前端据此
-                                                    判断这件展品该不该在本站注册）
+  1. <web>/graph-<sha1前12>.js    展示数据（export default {...}）
+  2. <web>/manifest.json          指针（前端靠它发现带 hash 的文件名
+                                  + `site` = 产物归属站点，浏览器**运行期**据此判断这件
+                                  展品该不该在本站画出来）
   3. data/word_graph/{index.json,vectors.f32,...} agent 查询用（裸 float32，不进 git）
+
+`<web>` 缺省是 `frontend/public/graph`（提交进仓、随下个部署进 dist）；**`--out-web`
+给了就写成服务端自己的目录**（`data/word_graph/web/`，由 Rust 的产物接口直接供出去，
+见 docs/word-graph.md 的《重建》一节）——服务端重建不能依赖"再跑一次 vite build"。
+
+节点大小 = **文章热度**（`h`，见 `HEAT_W` / `fetch_heat`），不是 tf-idf 重要度：
+`n` 仍留在产物里给检索相关度用（`locate.ts`），**热度不参与搜索排序**。
 
 为什么产物是 .js 而不是 .json：nginx 的「带 hash 长缓存」location 扩展名白名单是
 (js|css|woff2?|mp4|webm|jpe?g|png|webp)，**没有 json**——带 hash 的 .json 一样会落进
@@ -23,8 +30,13 @@ umap/numba 版本一起保证与 20260917 那次建图同环境，换版本会�
   uv run --no-project --python 3.12 --with-requirements scripts/requirements-graph.txt \
       python3 scripts/build_word_graph.py --dry-run
 
-重建流程：改词表/黑名单 → 重跑 → 人工过目 vocab 报告 → 提交 frontend/public/graph/*
-→ 同步 data/word_graph/* → sudo systemctl restart saudade-agent
+重建流程（两条路，产物是同一份）：
+  · **本站开发**：改词表/黑名单 → 重跑（缺省 `--out-frontend`）→ 人工过目 vocab 报告
+    → 提交 frontend/public/graph/* 与 data/word_graph/*（后者不进 git）
+    → sudo systemctl restart saudade-agent；
+  · **任何站点自助**（20261003 起，后台「向量图谱」页签走这条）：服务端带
+    `--out-web <agent>/data/word_graph/web --out-agent <agent>/data/word_graph` 起一次
+    子进程，产物**不落父仓、不需重新部署**，由 `GET /api/public/graph/*` 供出去。
 """
 from __future__ import annotations
 
@@ -167,6 +179,47 @@ def fetch_articles(api_base: str) -> list[dict]:
     return arts
 
 
+# ---------------------------------------------------------------- 热度
+
+# 热度权重（20261003 用户第 2 条：节点大小改由**文章热度**决定）。就是下面这一块常量，
+# 要调只调这里：浏览最廉价（点开就 +1），讨论最贵（要打字），点赞/收藏居中。
+# 每个读数都先 log1p 再乘权重 —— 一篇爆款不该把其余文章全压成一个点。
+HEAT_W = {"views": 1.0, "likes": 3.0, "favorites": 3.0, "comments": 4.0}
+
+
+def fetch_heat(api_base: str, docs: list[dict]) -> tuple[dict[int, float | None], dict[int, float], list[int]]:
+    """逐篇读公开读数（`GET /api/public/notes/:id/stats`）算热度，归一到 0..1。
+
+    返回 `(原始分, 归一值, 读数缺失的 id 列表)`。
+
+    三条口径：
+
+    · **取不到读数不是错误**：那篇照常进图（热度记 0），但 id 进第三个返回值，日志与
+      报告里单独列。理由同 `note_stats` 的 `liked`："接口没给"与"读数真的是 0"
+      是两件事，报告里混成一句就没法复查了。
+    · **四个读数必须齐全**，缺一个就整篇算"取不到"——不拿 0 顶替（那等于把"没读到"
+      写成"没人看"）。
+    · 全站都是 0（刚迁移过来、还没人访问）时不做除法，直接全 0；前端有地板值兜底
+      （`engine.ts` 的 `heatOf`），图不会塌成一个点。
+    """
+    raw: dict[int, float | None] = {}
+    for d in docs:
+        try:
+            s = http_json(f"{api_base}/notes/{d['id']}/stats") or {}
+        except Exception as e:                      # 一篇读不到不该断掉整次建图
+            log(f"  ! 读数失败 id={d['id']}: {e}")
+            raw[d["id"]] = None
+            continue
+        datum = s.get("data") or {}
+        if any(k not in datum for k in HEAT_W):
+            raw[d["id"]] = None
+            continue
+        raw[d["id"]] = sum(w * math.log1p(max(int(datum[k]), 0)) for k, w in HEAT_W.items())
+    top = max((v for v in raw.values() if v is not None), default=0.0)
+    norm = {i: (0.0 if (v is None or top <= 0) else v / top) for i, v in raw.items()}
+    return raw, norm, [i for i, v in raw.items() if v is None]
+
+
 # 公式段：块级 $$…$$ 与行内 $…$（行内不跨行，防止正文里一个孤立的 $ 一路吞到下一个 $）
 MATH_SPAN_RE = re.compile(r"\$\$.*?\$\$|\$[^$\n]{1,600}?\$", re.S)
 
@@ -199,13 +252,44 @@ def clean_markdown(md: str) -> str:
     return s
 
 
+def resolve_exclude_ids(raw: str | None) -> set[int]:
+    """`--exclude-ids` 的取值 → 要排除的 id 集合。
+
+    · `None`（**没传**这个参数）⇒ 本站默认的那三篇垃圾短文；
+    · 空串 / 只有逗号 ⇒ **一个都不排除**（这是明确的意图，不是"没传"）；
+    · 出现不是整数的词 ⇒ 报错，**不静默跳过**（跳过等于让人以为已经排除了）。
+
+    20261003 之前这个判断写在 `select_articles` 里、写成
+    `a["id"] in exclude_ids or a["id"] in EXCLUDE_IDS_DEFAULT`，于是连空串也照样排除
+    那三个 id —— 别人 clone 过去建图时，同号的文章被静默丢掉（回归锁见
+    `tests/test_word_graph_build.py`）。"""
+    if raw is None:
+        return set(EXCLUDE_IDS_DEFAULT)
+    out = set()
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if not tok.lstrip("-").isdigit():
+            raise ValueError(f"不是文章 id：{tok!r}（要一串逗号分隔的数字，或用空串表示不排除）")
+        out.add(int(tok))
+    return out
+
+
 def select_articles(arts: list[dict], exclude_ids: set[int], min_chars: int) -> tuple[list[dict], list[str]]:
+    """`exclude_ids` 就是**全部**要排除的 id —— 这里不再叠一份 `EXCLUDE_IDS_DEFAULT`。
+
+    20261003 修：原来写的是 `a["id"] in exclude_ids or a["id"] in EXCLUDE_IDS_DEFAULT`，
+    于是那三个默认 id（9/10/11，本站的三篇垃圾短文）**永远被排除**，连
+    `--exclude-ids ""`（"一个都不排除"）也排除——别人 clone 过去建图时，同号的
+    文章会被静默丢掉，而日志只会说"排除 3 篇"。默认值现在由 `main()` 在
+    **没传这个参数时**填进去（`--exclude-ids ""` = 真的不排除）。"""
     kept, dropped = [], []
     for a in arts:
         clean = clean_markdown(a["content"])
         a["clean"] = clean
         reason = None
-        if a["id"] in exclude_ids or a["id"] in EXCLUDE_IDS_DEFAULT:
+        if a["id"] in exclude_ids:
             reason = "exclude_id"
         elif len(clean) < min_chars:
             reason = f"too_short({len(clean)})"
@@ -749,7 +833,8 @@ def _artifact_body(payload: dict) -> str:
 
 
 def write_artifacts(payload: dict, nodes: np.ndarray, words: list[str], transform: dict,
-                    out_frontend: Path, out_agent: Path, dry: bool, site: str) -> dict:
+                    gdir: Path, out_agent: Path, dry: bool, site: str) -> dict:
+    """`gdir` 是展示产物的目录（由调用方决定：`--out-web` 或 `<out-frontend>/graph`）。"""
     blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     build_id = hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
     payload["v"] = build_id
@@ -759,14 +844,15 @@ def write_artifacts(payload: dict, nodes: np.ndarray, words: list[str], transfor
     if dry:
         return {"build_id": build_id, "file": fname, "bytes": nbytes, "dry": True, "site": site}
 
-    gdir = out_frontend / "graph"
     gdir.mkdir(parents=True, exist_ok=True)
     (gdir / fname).write_text(body, encoding="utf-8")
     (gdir / "manifest.json").write_text(
         json.dumps({"v": build_id, "file": fname, "bytes": nbytes,
-                    # site = 产物的**归属站点**：前端构建期拿它跟本站地址比，不是本站就
-                    # 不注册这件展品（第三方 clone 部署时，别人的文章不该被画到他的首页
-                    # 上）。判定见 frontend/vite.config.ts 的 GRAPH_OWNERSHIP。
+                    # site = 产物的**归属站点**：浏览器**运行期**拿它跟本站 origin 比，
+                    # 不是本站就不画（第三方 clone 时，别人的文章不该被画到他的首页上）。
+                    # 判定在 frontend/src/components/WordGraphExhibit/loader.ts —— 20261003
+                    # 从"构建期写死"挪到运行期：构建期那道闸对"迁移后自己重建成功"的站点
+                    # 永远关着门（`import.meta.env` 在构建时就烧死了），那正是别人用不了的一半原因。
                     "site": site,
                     # built 一并透出（前端展示柜的「向量数据库更新时间」角标读它）：
                     # 产物 blob 里本来就有，但前端拿它要先把整个 100KB+ 的 graph-*.js
@@ -812,7 +898,10 @@ def main() -> None:
                     help="产物的归属站点，写进 manifest（前端据此判断展品该不该注册）；"
                          "缺省取 --api-base 的 origin")
     ap.add_argument("--max-nodes", type=int, default=400)
-    ap.add_argument("--exclude-ids", default=",".join(str(i) for i in EXCLUDE_IDS_DEFAULT))
+    ap.add_argument("--exclude-ids", default=None,
+                    help="逗号分隔的文章 id，明确排除（默认排除本站那三篇垃圾短文 "
+                         f"{sorted(EXCLUDE_IDS_DEFAULT)}）。**传空串 = 一个都不排除**"
+                         "——别人 clone 过去时先用它把默认值清掉")
     ap.add_argument("--min-chars", type=int, default=MIN_CHARS_DEFAULT)
     ap.add_argument("--alpha", type=float, default=0.3, help="软白化指数（实测噪声级，见 project_3d）")
     ap.add_argument("--gamma", type=float, default=1.0, help="尾部压缩指数（<1 才压缩）")
@@ -840,6 +929,13 @@ def main() -> None:
     ap.add_argument("--layout-iters", type=int, default=400)
     ap.add_argument("--out-frontend", default=str(REPO_PARENT / "frontend" / "public"))
     ap.add_argument("--out-agent", default=str(REPO_AGENT / "data" / "word_graph"))
+    # 展示数据（graph-*.js + manifest.json）写到哪。**给了 --out-web 就不碰
+    # frontend/public**：服务端重建走这条（产物由 Rust 直接供，见 docs/word-graph.md），
+    # 因为它不能依赖"再跑一次 vite build 把 public/ 拷进 dist/"——那次构建之后
+    # 还会被下一次部署的 dist 差集清理换回仓库里的旧版（静默回退成旧图）。
+    ap.add_argument("--out-web", default="",
+                    help="展示产物的目录；给了就写这里、**不碰 frontend/public**"
+                         "（服务端重建用；缺省仍是 <out-frontend>/graph）")
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--force", action="store_true", help="质量门不过也照出产物")
     ap.add_argument("--dry-run", action="store_true", help="不算 embedding、不写产物，只看词表")
@@ -855,13 +951,27 @@ def main() -> None:
     log(f"① 拉取语料 {args.api_base}（黑名单 {len(blocklist)} 词 / 允许清单 {len(allow)} 词"
         f" / 用户词典 {n_ud} 词）；产物归属站点 site={site}")
     arts = fetch_articles(args.api_base)
-    exclude = {int(x) for x in args.exclude_ids.split(",") if x.strip()}
+    try:
+        exclude = resolve_exclude_ids(args.exclude_ids)
+    except ValueError as e:
+        sys.exit(f"✗ --exclude-ids：{e}")
     docs, dropped = select_articles(arts, exclude, args.min_chars)
     log(f"  公开文章 {len(arts)} 篇 → 保留 {len(docs)} 篇 / 排除 {len(dropped)} 篇")
     for line in dropped:
         log(line)
     if not docs:
         sys.exit("✗ 没有可用文章")
+
+    log(f"①b 文章热度（公开读数，权重 {HEAT_W}）")
+    _heat_raw, heat, heat_missing = fetch_heat(args.api_base, docs)
+    if heat_missing:
+        log(f"  ⚠ 读数取不到 {len(heat_missing)} 篇（热度按 0 建图，不中断）："
+            f"{heat_missing[:8]}{'…' if len(heat_missing) > 8 else ''}")
+    if heat and not any(heat.values()):
+        log("  ⚠ 全站热度都是 0（新站/刚迁移）—— 图上所有节点会一样大，"
+            "前端的地板值会兜住，但先确认读数接口是不是没通")
+    _hot = sorted(heat.items(), key=lambda kv: -kv[1])[:5]
+    log("  热度 top5：" + " / ".join(f"#{i}={v:.3f}" for i, v in _hot))
 
     log(f"② 抽词选词（jieba + 词性/长度/停用词闸，上限 {args.max_nodes}）")
     words, meta = select_vocab(docs, args.max_nodes, blocklist, allow)
@@ -959,10 +1069,16 @@ def main() -> None:
     log("⑦ 词→文章归属")
     attr = attribute(words, docs, meta)
     display = [display_form(w, docs) for w in words]
+    # 节点热度 = 主/次归属文章的热度加权（主 0.75 / 次 0.25，两个常量与 `HEAT_W` 一样
+    # 只在这里出现一次）。一个词只被一篇文章用到时 a==a2 ⇒ 权重和仍是 1，不必特判。
+    # `n`（tf-idf 重要度）**留着不动**：局部检索（`locate.ts` 的相关度打分）继续用它，
+    # 热度**不该影响搜索排序**——否则热门文章的词会垄断任何一次查询。
+    heat_of = {d["id"]: heat.get(d["id"], 0.0) for d in docs}
     nodes = [{
         "i": i, "w": display[i],
         "x": round(float(p[i, 0]), 4), "y": round(float(p[i, 1]), 4), "z": round(float(p[i, 2]), 4),
         "n": round(float(importance[i] / max(importance.max(), 1e-9)), 4),
+        "h": round(0.75 * heat_of[docs[attr[i][0]]["id"]] + 0.25 * heat_of[docs[attr[i][1]]["id"]], 4),
         "a": attr[i][0], "a2": attr[i][1],
     } for i in range(len(words))]
 
@@ -970,13 +1086,21 @@ def main() -> None:
         "model": EMBED_MODEL, "dim": EMBED_DIM, "built": time.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
         "articles": [{
             "id": d["id"], "t": d["title"], "g": d["tags"], "c": d["cat"],
+            # hv = 这篇的热度（0..1）。节点大小看的是它（加权到自己的主/次文章上），
+            # 展品读数卡也显示它 —— 前端不必再打一次 stats 接口。
+            "hv": round(heat_of[d["id"]], 4),
         } for d in docs],
         "nodes": nodes, "edges": edges, "stats": {**pmeta, **emeta, **lmeta,
             "fidelity": round(fid, 4), "fidelity_raw": round(fid_raw, 4),
             "fidelity_k": {f"k{k}": round(v, 4) for k, v in fid_k.items()},
-            "len_sim_rho": round(rho, 4), "n_nodes": len(nodes)},
+            "len_sim_rho": round(rho, 4), "n_nodes": len(nodes),
+            # 热度口径随产物一起存下来，报告里能原样复算（不给"热度"这种复合量留
+            # "大概是什么比例"的模糊空间）
+            "heat_w": HEAT_W, "heat_missing": heat_missing},
     }
-    info = write_artifacts(payload, sim_vecs, words, transform, Path(args.out_frontend),
+    gdir = (Path(args.out_web).expanduser() if args.out_web.strip()
+            else Path(args.out_frontend) / "graph")
+    info = write_artifacts(payload, sim_vecs, words, transform, gdir,
                            Path(args.out_agent), args.dry_run, site)
     report = {
         "ts": ts, "build_id": info["build_id"], "bytes": info["bytes"],
@@ -986,7 +1110,7 @@ def main() -> None:
     }
     (REPORT_DIR / f"{ts}_build.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
-    log(f"⑦ 产物：{Path(args.out_frontend) / 'graph' / info['file']}（{info['bytes'] / 1024:.1f}KB）"
+    log(f"⑦ 产物：{gdir / info['file']}（{info['bytes'] / 1024:.1f}KB）"
         f" + manifest.json + {Path(args.out_agent)}/（{len(words)}×{EMBED_DIM}）")
     log(f"完成，用时 {time.time() - t0:.1f}s")
 

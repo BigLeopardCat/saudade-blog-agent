@@ -892,6 +892,23 @@ def check(principal: Principal | None, tool: str) -> Decision:
     return Decision(False, REASON_DENIED, scope, tool)
 
 
+def holds(principal: Principal | None, scope: str) -> bool:
+    """这个 principal 有没有这个 scope —— **给"工具之外的能力"用**（20261003）。
+
+    为什么不是 `check()`：那张表是「工具 → scope」（`TOOL_SCOPE` 的键必须与
+    `_TOOL_REGISTRY` 一一对应，`tests/test_authz.py` 的完备性断言盯着它）。后台的
+    「重建向量图谱」是一个**端点级**能力（一次长任务 + 轮询，不是一轮对话里的一次
+    工具调用），它没有工具条目、也不该有——为它往 `TOOL_SCOPE` 里塞一个假工具名，
+    等于把"工具注册表"这张表变成"工具 + 端点"的杂表，而完备性断言正是靠"键即工具"
+    这条性质在守漏项。
+
+    所以这里只做**授予表查询**那一半（`scopes_for`，唯一事实源不变），决策的形态
+    照旧：身份不明（role=None / 不认识）⇒ 零权限，从不默认放行。
+    """
+    role = principal.known_role if principal else None
+    return role is not None and scope in scopes_for(role)
+
+
 def enforcing(scope: str | None = None) -> bool:
     """这个 scope 是否真的拦（默认 False = shadow：只算不拦）。
 
