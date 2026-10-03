@@ -19,6 +19,7 @@
 """
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -108,6 +109,33 @@ check("预检模式不跑建图脚本，只 import 三个依赖",
 check("语料地址来自 settings 那一项（不是模块里另写的第二份常量）",
       "def default_api_base" in (ROOT / "rag" / "graph_build.py").read_text(encoding="utf-8")
       and gb.default_api_base() == gb.resolve_params({})["api_base"])
+
+# ★ 20261004 线上真实踩到的洞：`server.py::GraphRebuildRequest` 把 `api_base` 的缺省值
+# 写成 `""`，`model_dump()` 会把**没填的字段也实打实生成出来** ⇒ 页面留空时这里收到的是
+# 一个**显式的空串**，而原来的 `_STR_PARAMS` 循环照单全收 ⇒ 默认值被擦成 `""` ⇒
+# argv 里 `--api-base ""` ⇒ 脚本拼出 `/notes?pageSize=1000` 当场
+# `ValueError: unknown url type`（run 20261004T001407，exit 1）。
+# 判据两条，缺一不可：**值对不对**（回落默认值）与**形状对不对**（绝对 URL）。
+_URL_RE = re.compile(r"^https?://[^\s/]+")
+from config.settings import settings as _settings  # noqa: E402
+check("默认语料地址 == settings.graph_api_base（真从那一项取，不是同义反复）",
+      gb.resolve_params({})["api_base"] == _settings.graph_api_base,
+      f'{gb.resolve_params({})["api_base"]!r} vs {_settings.graph_api_base!r}')
+check("★ 空串 api_base ＝『没填』⇒ 保留默认值（不是擦成空串）",
+      gb.resolve_params({"api_base": ""})["api_base"] == gb.default_api_base(),
+      repr(gb.resolve_params({"api_base": ""})["api_base"]))
+check("★ 空白串同理（表单里敲了几个空格也算没填）",
+      gb.resolve_params({"api_base": "   "})["api_base"] == gb.default_api_base())
+check("★ argv 里 --api-base 后面永远是个**绝对 URL**——脚本拿它拼 `/notes?...`，"
+      "空串会当场 ValueError",
+      bool(_URL_RE.match(argv[argv.index("--api-base") + 1])),
+      repr(argv[argv.index("--api-base") + 1]))
+check("填了的地址原样带过去（空串折叠不许把用户填的值也吃掉）",
+      gb.resolve_params({"api_base": " https://blog.example.com/api/public "})["api_base"]
+      == "https://blog.example.com/api/public")
+check("site 的空串同样是『没填』（它本来就不进 argv，这条防的是将来有人给它加第三条语义）",
+      gb.resolve_params({"site": ""})["site"] == ""
+      and "--site" not in gb._build_argv(gb.resolve_params({"site": ""}), "rebuild"))
 
 
 # ─────────────────────────────────────────────────────────── ② 起任务前的闸
