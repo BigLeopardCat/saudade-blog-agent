@@ -1092,14 +1092,19 @@ _ORQ_SAME = [t for t in _ORQ_TRUE
 check("两侧互斥：判成「问」的句子不会被写侧同时判成命令", not _ORQ_SAME, str(_ORQ_SAME))
 
 print("⑨j 「话题落在站内语料上却零检索」的问句判据（20261004，gate 第 4c 节的输入）")
-# 现场（生产 trace `20261002T195955_9_r8d7`）：主人问「博客有哪些文章呢」，planner 落 chat、
-# 零工具、零帧，narrator 回「我这边**没有工具**可以帮你查具体的文章标题和链接」——站里备着
-# `rag_search`/`search_notes`/`list_notes`。判据只判"该不该去检索一次"，不管落到哪个技能。
-# 射程（全量 1110 份 trace 回放）：uid>0 的零帧放行轮 300 轮命中 **1**（就是那条原句）。
+# 要治的形状：主人问站内有些什么，narrator 回「我这边**没有工具**可以帮你查具体的文章标题和
+# 链接」——站里备着 `rag_search`/`search_notes`/`list_notes`。判据只判"该不该去检索一次"，
+# 不管落到哪个技能。
+# 射程（两遍，都是量出来的）：判据词面在 uid>0 的零帧放行轮上命中 **1**（就是下面那句）；
+# 而 **gate 里真正的射程是 0** ——那一条是**杂鱼**（uid=9），计划 status 是 `wrapped`，
+# 被调用侧 `status == "answer_only"` 守卫结构性排除。⚠️ 上线前这条判据的现场被写成
+# "杂鱼轮上 planner 偷懒没检索"，**那是读出来的误判**（更正说明见 `agent/authz.py` 的头注与
+# `tests/test_gate_replan.py` ⑥d/⑥e）：引用 trace 当现场必须连**走的哪条路径**一起核。
 # ⚠️ 下面这张表里**必须**留着 `followup_entity_slot_category` 的原句当反例——它与"真的要
 # 检索"字面完全同形（top1 都是 10.33），少一道「指代型」守卫就会直接打红一条现在绿的用例。
 _SCQ_TRUE = [
-    "博客有哪些文章呢",                          # ★ 事故原句
+    "博客有哪些文章呢",                          # ★ 现场原句（**注意：生产里问这句的是杂鱼**——
+                                                 #   本表判的是**判据词面**，不是"gate 会开火"）
     "站内有没有写 ESP32 的文章？",               # golden `multi_step_search_then_read_top` 同句
     "有没有 Docker 部署博客的教程？",            # golden `rag_noise_docker`
     "小猫咪，测试文章 TEST8 里画的是什么呀",       # golden `rag_test4_cover`
