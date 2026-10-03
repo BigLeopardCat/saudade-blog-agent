@@ -46,7 +46,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 两个产物根。日志根是生产落点（与 settings.trace_dir 同址），报告根在仓库里
 # （`eval/report/` 被 gitignore，是 run artifacts 不是源码）。
-DEFAULT_LOGS_ROOT = "/home/ubuntu/memory_blog_rust/logs"
+DEFAULT_LOGS_ROOT = "/home/ubuntu/Saudade-Blog/logs"
 DEFAULT_REPORT_ROOT = os.path.join(REPO, "eval", "report")
 
 # ── 保留期常量（**唯一的数在这里**，`artifact_retention.py` 与夜间脚本都不复述） ──

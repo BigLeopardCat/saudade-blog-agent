@@ -99,7 +99,7 @@ from agent.graph import _cmd_wire  # noqa: E402
 from agent.skills import (PLAN_STATUS_VALUES, SKILL_MAP,  # noqa: E402
                           arg_enum, skill_param_specs, tool_arg_schemas)
 
-TRACE_DIR = "/home/ubuntu/memory_blog_rust/logs/agent/traces"
+TRACE_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report")
 
 # 连线命令前缀（回复侧判据那三根正则同族，但这里判的是**终稿正文**里有没有它）

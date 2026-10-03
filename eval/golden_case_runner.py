@@ -14,8 +14,8 @@ import time
 # 自动 dump 全线程栈到 stderr 后退出，主脚本 communicate 即可拿到卡死点
 faulthandler.enable()
 
-sys.path.insert(0, "/home/ubuntu/memory_blog_rust/saudade-blog-agent")
-sys.path.insert(0, "/home/ubuntu/memory_blog_rust/saudade-blog-agent/eval")
+sys.path.insert(0, "/home/ubuntu/Saudade-Blog/saudade-blog-agent")
+sys.path.insert(0, "/home/ubuntu/Saudade-Blog/saudade-blog-agent/eval")
 
 import run_golden
 import golden_trace

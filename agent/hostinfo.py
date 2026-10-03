@@ -37,7 +37,7 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 # 博客仓库根（日志、trace 都在这下面）。与 settings.trace_dir 的部署约定一致。
-BLOG_ROOT = "/home/ubuntu/memory_blog_rust"
+BLOG_ROOT = "/home/ubuntu/Saudade-Blog"
 LOGS_DIR = os.path.join(BLOG_ROOT, "logs")
 TRACES_DIR = os.path.join(LOGS_DIR, "agent", "traces")
 HEALTH_LOG = os.path.join(LOGS_DIR, "health.log")
