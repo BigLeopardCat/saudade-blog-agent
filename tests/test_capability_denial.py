@@ -34,6 +34,13 @@
      （打回口径必须避开洞④ 的**检索味**建议——主人要的是"删"，让他再搜一遍是错的下一步）；
   ⑥ 兜底文案只否认**被点名的那件事**（不许说成"这件事已经办了"——它这一轮什么都没做）。
 
+两条判据**在诞生后各修过一次**（20261003，都是"生产原话打不到"）：
+  · ④b **给予义谓词槽**——「没有**提供**「直接删除一个标签」的能力」的「提供」原来不在
+    任何一条形状的窗口里；
+  · ④c **引号规则**——只加槽还是打不到，因为那句话把动词与对象**一起写进了引号**，而
+    声称闸的通用预处理 `_strip_quoted_spans` 会把引号内容整段删掉。
+两处都要按**生产原话**（连标点带引号）验，只拿裸句试会得到"已经修好了"的错觉。
+
 用法：.venv/bin/python tests/test_capability_denial.py
 """
 import re
@@ -76,6 +83,13 @@ POS = [
     ("系统没有新建标签的能力", "admin"),
     ("抱歉，站内没有删除分类这个功能", "admin"),
     ("我这个身份没有办法把文章设成置顶", "admin"),
+    # 现场 ③（20261003 落地）：否定词与动词之间插了**给予义谓词**「提供」——
+    # `admin_write_intent_tag_remove_popup` 慢性红（12/35 = 34%）给出的正是这一句
+    ("系统这边没有提供「直接删除一个标签」的能力", "admin"),
+    # 同一个槽的其余词形（给出/开放）与"槽前还有塞词"的位置
+    ("系统这边没有给出删除标签的能力", "admin"),
+    ("系统没有开放删除标签的接口", "admin"),
+    ("很抱歉，我没有给你删除留言的通道", "admin"),
 ]
 for t, role in POS:
     check(f"必判（{role}）：{t[:26]}…", judge(t, role), t)
@@ -85,8 +99,11 @@ print("\n② 负例：**说真话的那几类** —— 一律放行（零帧轮�
 
 NEG = [
     # 卡片正面印着的那句实话（notice_send 的确认卡；20260926 那条 golden 的 `_note`
-    # 记着它曾经自命中一条断言）——"删除"属删类技能、"通知"属发通知技能，凑不成一对
+    # 记着它曾经自命中一条断言）——"删除"属删类技能、"通知"属发通知技能，凑不成一对。
+    # 加过「提供」槽的词形也要照样放行（槽只让匹配往前多吃两字，同源那半边判的是**同一次**
+    # 命中的整段文本，所以两张守网（同源 / 范围词）都不受新槽影响）
     ("站内没有删除已发通知的功能", "admin"),
+    ("站内没有提供删除已发通知的功能", "admin"),
     # 能力清单里真的没有的（`admin_capability_absent_honest` 的现场）
     ("我的能力清单里没有「发邮件」这一项", "user"),
     ("站内没有查看登录 IP 的能力", "admin"),
@@ -95,6 +112,7 @@ NEG = [
     ("发布公告是博客主人 Sora 的专属权限", "user"),
     # 站内确实做不到的那件事：范围词
     ("站内没有批量删除留言的功能", "admin"),
+    ("站内没有提供批量删除留言的功能", "admin"),
     ("没有一次性清空所有留言的通道", "admin"),
     # 裸"文章"不是 article_status 的对象（"发布新文章"站内真的没有：没有写正文的通道）
     ("站内没有发布新文章的功能", "admin"),
@@ -104,21 +122,22 @@ NEG = [
 for t, role in NEG:
     check(f"放行（{role}）：{t[:26]}…", not judge(t, role), t)
 
-# ⚠️ **已知漏（20261003 实测，刻意不断言）**：下面这句**不是**"放行是对的"，而是"现在的
-# 形状还打不到"，所以既不进正例也不进负例——写进负例等于把已知漏固化成"正确行为"。
+# ── 本族最近一次放宽（20261003，主人点名后落地）：**给予义谓词槽** `_CAP_FAIL_GIVE` ──
 #
-#     「系统这边没有提供「直接删除一个标签」的能力」（golden
-#      `admin_write_intent_tag_remove_popup`，慢性红 12/35 = 34%，是当前最红的一条）
+# 起因是 golden `admin_write_intent_tag_remove_popup` 慢性红 12/35 = 34%（当前最红一条）
+# 里那句：「系统这边**没有提供**「直接删除一个标签」的**能力**」——事实相反，`tag_delete`
+# 就在管理员的能力清单里。它从判据底下漏过去纯属**形状**：乙支要求否定词后 ≤3 字就接动词，
+# 而这句在否定词与动词之间插了「提供「直接」5 个字。
 #
-# 事实相反：`tag_delete` 就在管理员的能力清单里。差在形状——乙支要求否定词后 ≤3 个字
-# 就接动词，而这句插了「提供「直接」5 个字（`_CAP_FAIL_LEAD` 后面没有"提供/给出"这一槽）。
-# 同日全量复扫（672 份有回复的 trace，uid 按 1=超管、其余=普通用户映射）：现行形状命中
-# **1 条**（本族诞生现场 `20260928T032411`），给乙支加一个可选的「提供|给出|支持|开放」
-# 槽后新增命中 **0 条** ⇒ 放宽的误伤面在生产语料上为零。它已经挂在 `_REPLAN_ISSUES`
-# 里、`_REPLAN_ADVICE` 那一段也**已经**按写族写好（"该动手就去动手"）⇒ 一旦放宽射程，
-# 这一轮会走"打回重规划一次"（而不是兜底吞掉整轮）。
-# **放宽射程动的是闸门行为（多打回一类），按本仓纪律要拍板 + 多遍 A/B，不由顺手改。**
-# 真要放宽时：把上面那句移进 ① 正例、把这条注释删掉。
+# 落地前按"动闸门要拍板 + 多遍 A/B"的纪律挂了一轮（正例里那句就是当时的**已知漏**）。
+# 复扫口径与结果（1082 份有回复的 trace；uid=1 记超管、其余记普通用户，与本族运行时同一
+# 份 `visible_skills` 判据）：原形状命中 1 组、放宽后**新增 0 组**；再按**超管身份**过一遍
+# 同一份语料（"最坏情况"上界，把所有管理能力都放开）也**新增 0 组** ⇒ 生产误伤面为零。
+# 放宽后的行为是"打回重规划一次"而非兜底吞轮：本族早在 `_REPLAN_ISSUES` 里、
+# `_REPLAN_ADVICE` 那段也已按写族写好（"该动手就去动手"，不是洞④ 的检索味建议）。
+#
+# 下面的负例里那些"带「提供」槽"的条目就是这次放宽的**反向对照**：新槽只让匹配往前多
+# 吃两字，同源（动词/对象必须属于同一件能力）与范围词两张守网**都不受影响**。
 
 # ══════════════════════════════════════════════════════════════════
 print("\n③ 角色锁：同一句话，按角色两种结局（依据只能是 `visible_skills`）")
@@ -144,6 +163,78 @@ check("  board_delete 的动词里**不含**发通知的词根（这就是 ② �
       not re.search(r"发|通知", _V["board_delete"]), _V["board_delete"])
 check("  `content_query` 走显式表（它的 plan 里没有写工具可借）",
       _V["content_query"] == S.CAPABILITY_DENIAL_VERBS["content_query"])
+
+# ══════════════════════════════════════════════════════════════════
+print("\n④b 给予义谓词槽（20261003 放宽）：两副形状**都要**接，不许只补一半")
+
+_DENIED_SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+_AT = _DENIED_SRC.index("def _capability_denied(")
+_SHAPES = _DENIED_SRC[_AT:_DENIED_SRC.index("\ndef ", _AT + 10)]
+check("新槽定义在场，且是**可选**的（不给也接老形状）",
+      "_CAP_FAIL_GIVE" in _DENIED_SRC and "_CAP_FAIL_GIVE = " in _DENIED_SRC
+      and G._CAP_FAIL_GIVE.endswith(")?"), G._CAP_FAIL_GIVE)
+check("  两种词形（提供/给出/支持/开放）都在槽里",
+      all(w in G._CAP_FAIL_GIVE for w in ("提供", "给出", "支持", "开放")), G._CAP_FAIL_GIVE)
+check("  甲支接了槽（`_CAP_FAIL_LEAD` 与名词之间）",
+      "{_CAP_FAIL_LEAD}{_CAP_FAIL_GIVE}{_CAP_FAIL_GAP}{{0,4}}{_CAP_FAIL_NOUN}" in _SHAPES)
+check("  乙支也接了槽（缺少它 = 这次放宽要修的那句仍然漏）",
+      "{_CAP_FAIL_LEAD}{_CAP_FAIL_GIVE}{_CAP_FAIL_GAP}{{0,3}}" in _SHAPES)
+# 行为锁：拿**定义**（不是仓内现成的常量）重算一遍，防"定义了却忘了接"
+from agent.skills import CAPABILITY_DENIAL_OBJECTS  # noqa: E402
+
+_V_TAG = G._capability_denial_verbs(S.SKILL_MAP["tag_delete"])
+check("  重算（用 `_CAP_FAIL_GIVE` 现算的正则）仍判那句原话",
+      G._capability_denied("系统这边没有提供「直接删除一个标签」的能力",
+                           _V_TAG, CAPABILITY_DENIAL_OBJECTS["tag_delete"]))
+check("  同一次命中里，槽前塞词 ≤2 字（「没有向你提供…」也要接得住）",
+      G._capability_denied("我们没有向你提供删除标签的能力",
+                           _V_TAG, CAPABILITY_DENIAL_OBJECTS["tag_delete"]))
+check("  槽**不是**万能前缀：别的动词不会因为前置了「提供」就被认成能力否定",
+      not G._capability_denied("我们没有提供摄影小贴士的说明",
+                               _V_TAG, CAPABILITY_DENIAL_OBJECTS["tag_delete"]))
+
+# ══════════════════════════════════════════════════════════════════
+print("\n④c 引号规则（20261003 第二处修补）：能力名在引号里要**留着**，转述整句要**剥掉**")
+
+# 这一处是 ④b 落地后**实测踩出来**的：光加谓词槽仍然打不到那句原话——因为生产里的写法
+# 把动词与对象**一起写进了引号**，而声称闸的通用预处理 `_strip_quoted_spans` 会把整段
+# 引号内容**删掉**，那句话于是变成「系统这边没有提供的能力」。洞⑫ 专用一份引号处理。
+_RAW = "系统这边没有提供「直接删除一个标签」的能力"
+check("  引号里的能力名**留着**（两半都在引号里）",
+      "直接删除一个标签" in G._quotes_dropped_but_named_kept(_RAW))
+check("  通用预处理仍会把它剥掉（这就是它打不到的原因，锁住防回退）",
+      "删除" not in G._strip_quoted_spans(_RAW))
+check("  转述整句**仍要剥掉**（否定词在引号里 = 那是别人的话，不是它的声称）",
+      "没有删除留言的通道" not in G._quotes_dropped_but_named_kept(
+          "留言里有人写「站内没有删除留言的通道」。"))
+check("  引号外还有否定词时照旧判（引号规则不是一刀切放行）",
+      G._capability_absent_claim(
+          G._quotes_dropped_but_named_kept("系统这边没有提供「直接删除一个标签」的能力"),
+          "admin"))
+# 端到端：**诞生现场那份 trace 的原话**（20261003_180024 那条慢性红）
+_REAL = ("主人，这件事我做不到喵呜……\n\n系统这边没有提供「直接删除一个标签」的能力"
+         "——现有的标签操作只支持**新建、改名、改颜色、换父级、一级↔二级互转**，"
+         "唯独没有「删掉某个标签」这一项。")
+_R = G._claim_issue(_REAL, "chat", _PLAN, False, role="admin")
+check("  端到端（零帧）：真红那一句现在判得出来，原因码是洞⑫",
+      bool(_R) and _R[0] == "capability_absent_though_registered", str(_R)[:60])
+check("  端到端（零帧）：同一句换成普通用户 ⇒ 放行（tag_delete 对他不可见 = 实话）",
+      G._claim_issue(_REAL, "chat", _PLAN, False, role="user") is None)
+check("  端到端（零帧）：转述别人那句整句否认 ⇒ 放行",
+      G._claim_issue("留言里有人写「站内没有删除留言的通道」。",
+                     "chat", _PLAN, False, role="admin") is None)
+# 接线锁：零帧族要挂 `name_quotes=True`，有帧那一半（5f2）要用同一个 helper——
+# 漏一处就是"补了一半"（本族的两副面孔必须同规则）。
+check("  零帧族挂了 `name_quotes=True`",
+      re.search(r'_ClaimFamily\("capability_absent_though_registered".{0,400}?'
+                r'name_quotes=True', _DENIED_SRC, re.S) is not None)
+_A5F2 = _DENIED_SRC.index("# 5f2.")
+check("  有帧那一半（5f2）用的是同一个 helper（不是通用剥引号）",
+      "_capability_absent_clause(_quotes_dropped_but_named_kept(reply)" in
+      _DENIED_SRC[_A5F2:_A5F2 + 4000])
+check("  `_ClaimFamily` 真的加了这一格、且循环里真的按它换文本",
+      "name_quotes" in _DENIED_SRC[: _DENIED_SRC.index("def _zero_frame_families(")]
+      and "if fam.name_quotes else own" in _DENIED_SRC)
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑤ 接线锁：族在表里、排在洞④ 之前、role 真的传下来了、且挂号重规划")
@@ -198,8 +289,10 @@ check("  且**不在** `if not (executed_names & _CONTENT_TOOLS)` 里面"
       _SRC.index("if not (executed_names & _CONTENT_TOOLS):") < _A4)
 check("  有帧那一半吃同一份收尾轮豁免（与零帧同源同值）",
       "PLAN_STATUS_ABSENCE_EXEMPT" in _A4B and "_LEDGER_NOTE_PREFIX" in _A4B)
-check("  有帧那一半先把转述剥掉再判（引号里是访客说的话，不算它的声称）",
-      "_strip_quoted_spans(reply)" in _A4B)
+# 引号处理：这一半与零帧**同一条规则**（`_quotes_dropped_but_named_kept`，接线锁在 ④c），
+# 转述那句的**行为**锁在下一节（⑥ 的 `_O4`：引号里只有别人的否定 ⇒ 放行）。
+# （这里原来挂的是子串 `_strip_quoted_spans(reply)`——它一直绿，可绿的是它**下面**十几行
+#  5f3 那处 `_false_negative_claim`；5f2 换成新 helper 之后，那条断言锁的东西就不在场了。）
 
 # 行为锁（比子串锁抗重构）：走完整判据链，原因码是新的那个，不是洞④
 _R = G._claim_issue("系统这边没有删除被驳回留言的通道，这一步只能你自己进后台处理。",
@@ -257,6 +350,15 @@ _O3 = G.gate_node(dict(_ST, gate_replan=False),
                   {"configurable": {"principal": Principal(uid=722, role="user")}})
 check("  对照：同一个有帧轮换成普通用户 ⇒ 放行（那句对他是实话）",
       _O3.get("done") is True and not _O3.get("fallback_text"), str(_O3)[:60])
+# 反向之二：**转述**。同一个有帧轮、同一个管理员身份，否定词只长在引号里
+# （那是留言里别人写的话，不是它的声称）⇒ 放行。这条锁的是"引号规则不是一刀切放行"
+# 在**有帧那一半**也成立——零帧那一半的同一情形锁在 ④c 的端到端里。
+_O4 = G.gate_node(dict(_ST, gate_replan=False, messages=list(_ST["messages"][:-1]) + [
+    G.AIMessage(content="留言里有人写「站内没有删除被驳回留言的通道」，"
+                        "我这边可以直接帮你删掉。")]),
+    _CFG)
+check("  对照：转述别人的整句否认（否定词在引号里）⇒ 放行，不当成它的声称",
+      _O4.get("done") is True and not _O4.get("fallback_text"), str(_O4)[:60])
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑦ 兜底文案只否认被点名的那件事（不许说成「已经办了」）")
