@@ -105,7 +105,8 @@ from agent.principal import (CHAT_ONLY_ROLES, KNOWN_ROLES, ROLE_ADMIN,
                              ROLE_ZAKO, UNKNOWN as UNKNOWN_PRINCIPAL)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
-from agent.skills import (DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
+from agent.skills import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
+                          DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
                           DROP_SUFFIX_SKILL_NO_CALLS,
                           FUZZY_NAV_RULES, NAV_MAP, PLAN_STATUS_ABSENCE_EXEMPT,
                           PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, SKILL_MAP,
@@ -2993,6 +2994,104 @@ def _absence_span(clause: str):
         return m
     return None
 
+# ── 洞⑫（20261003）：**把注册表里有的能力说成站内没有** ───────────────────────
+# 两处现场：① trace `20260928T032411`——管理员要删一条被驳回的留言，回复写
+# 「系统这边没有删除被驳回留言的通道……这一步只能你自己进后台手动处理」，而
+# `board_delete` 就在能力清单里（`tests/test_capability_truth.py` 头注记着这件事，
+# 当时只治了"把事实放到模型读得到的地方"，**没有判据**）；② 20261003 复扫那一例
+# 「我这边现在还没有办法直接搜索全站文章里的具体关键词呢」——站内明明有检索
+# （`content_query` 的能力行写着"查站内内容"）。那一例当时按假红修的是**洞④**
+# 的动词表（把它认成能力否定、不再当"站内没有这个内容"判），而**放行不等于这句话
+# 是对的**：它照样让主人白跑一趟。本族治的正是这一层。
+#
+# 与前几族的分别（为什么它单开一族）：那些族问的是"**这一轮**做过没有"，依据在帧里；
+# 本族问的是"**这件能力**站内有没有"，依据在**技能注册表**里
+# （`visible_skills(role)`）——所以它是零帧族表里唯一带角色的一族。同一句话
+# 「站内没有删除留言的通道」：普通用户说是**实话**（board_delete 对他不可见），
+# 管理员说才是假话。
+#
+# 判据 = 子句同时满足两件：
+#   ① 是**能力否定**的形状——「否定词 +（能力名词…动词）」或「否定词 + 动词 … 对象 … 能力名词」；
+#   ② 那个（动词，对象）对**落在同一件可见能力上**：动词取自该技能 `plan` 里各工具的
+#      `action_text.WRITE_CLAIM_ROOTS`（写技能）/ `skills.CAPABILITY_DENIAL_VERBS`
+#      （读技能），对象取自 `skills.CAPABILITY_DENIAL_OBJECTS`。
+# ②的两半同源是防误伤的承重件：「站内没有删除**已发通知**的功能」是一句**实话**
+# （站内确实没有撤回已发通知的通道，它逐字印在 `notice_send` 的确认卡面上——20260926
+# 那条 golden 用例的 `_note` 记着它曾经自命中一条断言），而"删除"属删类技能、
+# "通知"属发通知技能，凑不成一对 ⇒ 不判。
+#
+# 三条边界如实记（都是"宁漏勿误伤"那一侧）：
+#   · **范围词**会把动作变成另一件事（「没有**批量**删除留言的功能」是实话——站内
+#     只能一条一条删）⇒ 动词与对象之间出现 `_CAP_FAIL_SCOPE_RE` 的词就不判；
+#   · 不在 `CAPABILITY_DENIAL_OBJECTS` 里的能力，判据**不认识** ⇒ 放行（表是点名的）；
+#   · **两副面孔都要挂**：零帧那一半在 `_zero_frame_families` 里（零帧轮整族只按表过
+#     一道），有帧那一半在 `gate_node` 的 5f2（第 4 节整族挂在 `if not frames:` 下面，
+#     而 `frames` 是 turn-scoped——本族唯一一次生产命中正是"跑了别的工具、最后一轮
+#     零工具"的那种轮次，只挂零帧那半等于**恰好漏掉它诞生那一轮**）。
+_CAP_FAIL_LEAD = r"(?:没有|暂无|没|无|不存在|不支持|不提供|不在|不具备)"
+_CAP_FAIL_NOUN = r"(?:权限|功能|通道|入口|接口|办法|能力|按钮|开关|路子|途径)"
+# 判据片段里不许跨标点（跨过去就成另一句话了），但**要收 markdown 的 `**`/引号**——
+# 回复里那些字是加粗标记，不是断句。
+_CAP_FAIL_GAP = r"[^，,。；;！!？?、\n\s]"
+_CAP_FAIL_SCOPE_RE = re.compile(r"批量|全部|所有|一次性|同时|自动|定时|连续|一起|整批")
+
+
+def _capability_denial_verbs(skill) -> str:
+    """技能在能力否定判据里的动词正则（写技能从 `WRITE_CLAIM_ROOTS` 派生）。
+
+    写技能的动词只认**自己 `plan` 里那些工具**的词根——跨技能取全部词根会把
+    "删除"借给发通知那件（正是 ② 要防的那种串台）。
+    """
+    verbs = [action_text.WRITE_CLAIM_ROOTS[t] for t, _ in skill.plan
+             if t in action_text.WRITE_CLAIM_ROOTS]
+    if verbs:
+        return "|".join(f"(?:{v})" for v in verbs)
+    return CAPABILITY_DENIAL_VERBS.get(skill.name, "")
+
+
+def _capability_denied(clause: str, verbs: str, objects: tuple) -> bool:
+    """这一子句是不是"这件能力做不到"的否定（形状 + （动词,对象）同源 + 无范围词）。"""
+    objs = "|".join(re.escape(o) for o in objects)
+    # 形状甲「没有办法直接搜索全站文章」：否定 + 能力名词 +（塞词）动词 +（塞词）对象
+    a = (rf"{_CAP_FAIL_LEAD}{_CAP_FAIL_GAP}{{0,4}}{_CAP_FAIL_NOUN}"
+         rf"{_CAP_FAIL_GAP}{{0,8}}(?:{verbs}){_CAP_FAIL_GAP}{{0,8}}(?:{objs})")
+    # 形状乙「没有删除被驳回留言的通道」：否定 +（塞词）动词 +（塞词）对象 +（的）能力名词
+    b = (rf"{_CAP_FAIL_LEAD}{_CAP_FAIL_GAP}{{0,3}}(?:{verbs})"
+         rf"{_CAP_FAIL_GAP}{{0,6}}(?:{objs}){_CAP_FAIL_GAP}{{0,4}}{_CAP_FAIL_NOUN}")
+    for rx in (a, b):
+        for m in re.finditer(rx, clause):
+            if not _CAP_FAIL_SCOPE_RE.search(m.group(0)):
+                return True
+    return False
+
+
+def _capability_absent_hit(text: str, role: str | None) -> tuple[str, str] | None:
+    """命中 → (技能名, 那一子句)；无 → None（判据见上面长注）。"""
+    if not text:
+        return None
+    visible = {s.name for s in visible_skills(role)}
+    for clause_m in _CLAUSE_RE.finditer(text):
+        clause = clause_m.group(0)
+        for name, objs in CAPABILITY_DENIAL_OBJECTS.items():
+            if name not in visible:
+                continue
+            skill = SKILL_MAP.get(name)
+            verbs = _capability_denial_verbs(skill) if skill else ""
+            if verbs and _capability_denied(clause, verbs, objs):
+                return name, clause
+    return None
+
+
+def _capability_absent_claim(text: str, role: str | None) -> bool:
+    """站内**有**这件能力，回复却说没有（gate 洞⑫，见上面长注）。"""
+    return _capability_absent_hit(text, role) is not None
+
+
+def _capability_absent_clause(text: str, role: str | None) -> str:
+    hit = _capability_absent_hit(text, role)
+    return hit[1] if hit else ""
+
+
 # 跨轮回执行记忆里的"检索类动作"痕迹（Rust render_exec_row 定稿措辞：rag_search →
 # "站内检索「…」"、search_notes → "搜索「…」"）——有它即视为站内结论有据
 _EXEC_SEARCH_TRACE_RE = re.compile(r"站内检索「|搜索「")
@@ -3319,7 +3418,7 @@ class _ClaimFamily(NamedTuple):
     guard: Callable | None = None   # 额外的"此刻适不适用"（收尾轮豁免那类）
 
 
-def _zero_frame_families(plan: dict, skill: str) -> list:
+def _zero_frame_families(plan: dict, skill: str, role: str | None = None) -> list:
     """零帧轮要按顺序过的声称族（**顺序即语义**，别按字母序/重要性重排）。
 
     **为什么是一张表**（20260928 架构规范化 ③）：此前这五族是**一段一段手抄**的
@@ -3340,6 +3439,11 @@ def _zero_frame_families(plan: dict, skill: str) -> list:
     之后才走到这里）。有帧轮的同族判据在 `gate_node` 那一侧，两张表刻意分开：
     零帧轮是"本轮什么都没发生"，有帧轮是"本轮发生了别的"，同一个洞的两副面孔
     （洞②/洞④ 的混合轮形态就是有帧那一副）。
+
+    `role` 只有洞⑫ 用（`capability_absent_though_registered`，见其长注）：那一族问的是
+    "这件能力**站内**有没有"，而答案是随角色变的 —— 依据只能是 `visible_skills(role)`
+    那一处判据。默认 `None` = 身份不明 ⇒ `visible_skills(None)` 只剩公开技能 ⇒
+    管理能力**不判**（宁漏勿误伤那一侧；gate 的调用点恒传真身份）。
     """
     _note = plan.get("note") or ""
     # 站内"没有"结论的两类收尾轮豁免（见洞④ 长注）：目标不可达（NAV_MAP 的确定性
@@ -3373,6 +3477,22 @@ def _zero_frame_families(plan: dict, skill: str) -> list:
         _ClaimFamily("sys_fetch_claim_without_tool",
                      _sys_fetch_claim, _sys_fetch_claim_clause,
                      _FALLBACK_SYS_FETCH_CLAIM),
+        # 洞⑫（20261003）：**注册表里明明有的能力，被说成"站内没有"**。它问的不是
+        # "这一轮做过没有"（上面几族问的是那个），而是"**这件能力**站内有没有"——
+        # 依据在技能注册表（`visible_skills(role)`）里，所以它是本表里唯一带角色的一族。
+        # 排在洞④ **之前**：同一句「系统这边没有删除被驳回留言的通道」两族都像，而
+        # 洞④ 只会按"结论无依据"记、给出的打回口径是**检索味**的（"再去查一遍"）——
+        # 主人要的是**删**，让他再去搜一遍是错的下一步（同 20260930 写族那次的教训）。
+        # 仍在洞②（检索声称）之后：那句话如果自称"我查过了"，按谎称检索更准。
+        # 豁免与洞④ 同一份（`_absence_exempt`）：`refused` 那一档说的是"这次这个动作
+        # 被身份防线拒了"，此时"我没有这个权限"是**实话**，不该判。
+        # ⚠️ 这一族有**两副面孔**：这一份管零帧轮，有帧轮那一半在 `gate_node` 的 5f2
+        # （判据同一个函数，理由见那里的长注——本族唯一一次生产命中的是有帧轮）。
+        _ClaimFamily("capability_absent_though_registered",
+                     lambda text: _capability_absent_claim(text, role),
+                     lambda text: _capability_absent_clause(text, role),
+                     _FALLBACK_CAPABILITY_ABSENT,
+                     guard=lambda: not _absence_exempt),
         # 洞④：站内"没有"结论无依据。豁免比上面两族宽（跨轮回执里有检索痕迹即
         # 放行）——这里说的是**结论**不是动作。
         _ClaimFamily("site_absence_claim_without_tool",
@@ -3409,7 +3529,8 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                  ledger: dict | None = None,
                  receipts: list | None = None,
                  noop_specs: list | None = None,
-                 page_ctx: str = "") -> tuple[str, str, str] | None:
+                 page_ctx: str = "",
+                 role: str | None = None) -> tuple[str, str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本, **被否掉的那一句**)；有据/无声称 → None。
 
@@ -3446,6 +3567,10 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         依据豁免比洞①/② 宽（跨轮回执里有检索痕迹即放行），因为这里说的是结论不是动作。
         收尾轮豁免两类（20260922 补第二类）：navigate 注记轮（NAV_MAP 的确定性事实）与
         带 `_LEDGER_NOTE_PREFIX` 的确定性收尾轮（站内台账的核对结果，见该常量长注）
+      - 零工具轮（除两类收尾轮）：**有这件能力却说成"站内没有"**（洞⑫，20261003，
+        `capability_absent_though_registered`）——依据不在帧里也不在本轮做过什么，
+        在**技能注册表**里（`visible_skills(role)`，故这是唯一要 `role` 的一族）。
+        与洞④ 一样吃 `_absence_exempt`（那些收尾轮里"没有这条通道"可能是实话）
       - 零工具轮（不分技能）：**第三人称系统取数声称**（_CHAT_SYS_FETCH_CLAIM_RE，
         20260928）——上面两族的射程都只到"我"这个主语，而叙述里还有第二种施事：
         "刚才**系统**重新拉了一次留言板，返回的最近 21 条里已经没有 97 了"（trace
@@ -3510,7 +3635,7 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     _FLAG_OF_NEEDS = {"exec_memory": exec_memory,
                       "exec_search": exec_search_evidence,
                       "page_ctx": page_ctx}
-    for fam in _zero_frame_families(plan, skill):
+    for fam in _zero_frame_families(plan, skill, role):
         if fam.skills and skill not in fam.skills:
             continue
         if fam.guard is not None and not fam.guard():
@@ -3675,6 +3800,15 @@ _FALLBACK_SEARCH_CLAIM_FRAMED = (
     "喵呜……主人，我得说实话：这一轮我确实动手做了些事，但**站内的内容我一条都没"
     "查过**——我说的『翻了一遍/检索了一圈』是嘴上跑火车。要不要我现在认认真真查"
     "一遍再回答你？这次每一条都带真实来源喵。")
+# 洞⑫（20261003）：把**注册表里明明有**的能力说成"站内没有"。同前面几条的纪律，只
+# 否认被点名的那一件事，别的一概不说（尤其**不许**说成"这件事已经办了"——它这一轮
+# 恰恰什么都没做）。被否掉那句最坏的后果不是"说错话"，是**劝退**：主人听到「站内没有
+# 删除驳回留言的通道，你自己进后台手动弄吧」就真的自己动手了，而这件事我这边就能办。
+# 所以文案的落点是"这件事我有办法"，并把他真正能走的那条路（让我办／让我查）递回去。
+_FALLBACK_CAPABILITY_ABSENT = (
+    "喵呜……主人，我得收回一句：我刚才说『站内没有这个通道/功能』，那是我口胡的"
+    "——**这件事我这边有办法办**，用不着你自己去后台手动来 :犯错: 要不要我现在就"
+    "动手？该确认的会真的弹窗给你，办没办成一律以系统记录为准喵。")
 _FALLBACK_SITE_ABSENCE = (
     "喵呜……主人，我得收回一句：这一轮我其实**没有去站里查过**，却说成了『站内没有"
     "…』——站里到底有没有，我没核实过就不能下结论 :犯错: 要我现在认认真真检索一遍"
@@ -3895,6 +4029,7 @@ _REPLAN_ISSUES = frozenset({
     "write_change_denial",               # 洞⑩：真改了东西却说"这一轮什么都没改"（反向的假话）
     "nav_present_claim_without_nav",     # 洞⑪：'你现在能看到设备控制台了'而 page= 在首页
     "effect_state_claim_without_cmd",    # 洞⑪ 第二半：'樱花特效已经打开啦'而 current_effects=none
+    "capability_absent_though_registered",  # 洞⑫：'站内没有删除留言的通道'而技能表里就有
 })
 
 # 打回提示里"两条出路"的措辞**按族分**：同一句"去查一遍"写给写族是**指错路**
@@ -3947,6 +4082,22 @@ _REPLAN_ADVICE = {
         "**不许**出现「已经打开了/已经关掉了/已经帮你开启」这类说法——"
         "除非本轮真的有对应的开合回执。",
     ],
+    # 洞⑫（20261003）：被否掉的是**一句关于"站内有没有这件能力"的结论**。它与上面几族
+    # 有一处根本不同：前面几族的依据是"这一轮有没有工具帧"，本族**不在帧里**——能力有没有
+    # 住在技能表里，而 narrator 连技能表都看不到（它那句"没有"是顺口编的）。所以两条出路
+    # 都是**去做**（办事/查内容），措辞照 `sys_write_claim_without_tool` 那份写成**条件句**
+    # ——说死"主人要你办这件事"就是替 planner 读意图，这一层只给路径、不给结论。
+    "capability_absent_though_registered": [
+        "- 若主人这一轮是在**要你办一件事**（删除/审核/发布/改名/发通知/改额度…）："
+        "该动手就去动手——选出能做这件事的技能，把对应的写工具连参数写进调用清单；"
+        "目标只能取**系统帧里印出来的** id / 名字，**不许自己编一个**；",
+        "- 若主人是在**问站内有没有某样东西**：选检索类技能真的去查，并真的把检索工具"
+        "写进调用清单，查到什么就如实转述什么；",
+        "- 确实办不了（**这一件**办不了 / 查无此物 / 主人没给够信息）→ 如实说清是哪一件、"
+        "为什么，并问清缺什么；",
+        "**不许**把「站内没有…」这种**大结论**说出口——**这件能力站内是有的**"
+        "（不然系统不会把它摆在你面前）；纯闲聊的轮次照常 SKILL=chat 老实作答。",
+    ],
     # 洞⑩ 是上一条的**镜像**：写**真的发生了**，被说成了没发生。这里的方向不是
     # "再去做一遍"（做了也没有用：状态已经是目标值），而是**照回执如实说**。
     "write_change_denial": [
@@ -3973,6 +4124,12 @@ _REPLAN_NOTE_MARK = "[打回重规划]"
 # 其余各族的共同前提，**洞⑩ 恰好相反**（写真的执行过并复核通过了，被说成了没发生）。
 # 这一行走在提示词里，写反了就是当着 planner 的面说谎（而它手里正握着那份回执）。
 _REPLAN_WHY = {
+    # 洞⑫ 的前提与其余各族**不同**：那些句子的病是"没有依据"，这一句的病是"依据就在
+    # 技能表里、而且说的正相反"。写反了会让 planner 以为"再去查一次就有依据了"，
+    # 而它要回答的是"这件**能力**有没有"——那句判断本身是错的，不是缺证据。
+    "capability_absent_though_registered":
+        "  而**这件能力站内是有的**（技能表里摆着，narrator 看都没看过那份表）"
+        "——它那句「没有」是顺口编的，主人照着这句话会自己跑去后台手动弄。",
     "write_change_denial":
         "  而**这一轮是真的执行过并复核通过了的**（回执就在你上方的工具返回里）"
         "——那句话把已经办成的事说成了没办。",
@@ -9028,7 +9185,10 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                          # 洞⑪ 的真值来源：前端实时上报的访客位置（见 `_live_page_path`）。
                          # 取法与 planner/model 同一处（`_page_ctx` 扫首条 [System: …]），
                          # 角色只影响能力清单，判据不看那一半。
-                         page_ctx=_page_ctx(msgs, _principal_of(config).known_role))
+                         page_ctx=_page_ctx(msgs, _principal_of(config).known_role),
+                         # 洞⑫ 的真值来源：**本轮调用者的角色**（决定技能表里有什么）。
+                         # 与 `page_ctx` 取同一处身份，别再各算一份。
+                         role=_principal_of(config).known_role)
     if issue:
         i_name, i_text, i_clause = issue
         return fail(i_name, i_text, plan, len(frames), i_clause)
@@ -9189,6 +9349,40 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                    executed=sorted(n for n in executed_names if n))
             return fail("site_absence_claim", _FALLBACK_SITE_ABSENCE,
                                     plan, len(frames))
+
+    # 5f2. 洞⑫（20261003）：**有帧轮的那一副面孔**——这一轮跑了别的工具（典型：审核
+    #      状态、留言清单），narrator 顺手把它读成"站内没有删除留言的通道"，把主人
+    #      打发去后台手动处理。判据与零帧那族**同一份**（`_capability_absent_claim`），
+    #      依据也一样：不在帧里，在技能注册表里（`visible_skills(role)`）。
+    #
+    #      ⚠️ 为什么零帧族表那一份之外还必须挂这一份：本族在真实语料上**唯一一次**
+    #      命中就是有帧轮。trace `20260928T032411`（就是本判据的诞生现场）里
+    #      `get_moderation_status` 真跑了、planner 最后一轮落 chat 零工具，而 `frames`
+    #      是 **turn-scoped**（合并本轮所有轮次的帧）⇒ 第 4 节整族挂在 `if not frames:`
+    #      下面，那一轮**进不去**——同 5b2 记的那个"拿 not frames 当判据"的坑。
+    #      30 天 1082 份生产 trace 的复扫：本判据全量只命中这一份，就是它；**零帧那半
+    #      在全量真实语料上一次都没响过**（写在这里免得下一个人以为有帧这一半是冗余）。
+    #
+    #      位置在 5d/5f 那一块**之后**（与零帧族表的顺序相反，理由分两处看：零帧表里
+    #      本族排在洞④ 之前，是因为洞④ 的打回建议是检索味的、对"要删一条留言"的主人是
+    #      指错路；而这一侧的 5d/5f 是**更窄的词形判据**——自称检索过、对站内内容下结论
+    #      ——同句两族都像时按更窄的记，与全仓"窄的在前"一致）。另一处刻意的选择：
+    #      本块**不在** `if not (executed_names & _CONTENT_TOOLS)` 里面——事故那一轮跑的
+    #      `get_moderation_status` 正是内容类工具，放进去就又是一条"写了不跑"的哑判据。
+    #      豁免与零帧那半**同源同值**（`PLAN_STATUS_ABSENCE_EXEMPT` + 台账注记前缀）：
+    #      `refused` 那一档说的是"这次这个动作被身份防线拒了"，此时"我没有这个权限"是实话。
+    if (plan.get("status") not in PLAN_STATUS_ABSENCE_EXEMPT
+            and _LEDGER_NOTE_PREFIX not in (plan.get("note") or "")):
+        clause5f2 = _capability_absent_clause(_strip_quoted_spans(reply),
+                                              _principal_of(config).known_role)
+        if clause5f2:
+            logger.info("[gate] 有帧轮把注册表里有的能力说成『站内没有』｜子句=%s → fallback",
+                        _clip_clause(clause5f2))
+            record("gate", "capability_absent_though_registered",
+                   clause=_clip_clause(clause5f2),
+                   executed=sorted(n for n in executed_names if n))
+            return fail("capability_absent_though_registered",
+                        _FALLBACK_CAPABILITY_ABSENT, plan, len(frames), clause5f2)
 
     # 5e. 假阴性声称（20260920 洞③）：本轮**真执行过**（有已验证回执）却宣称"本轮
     #     没有执行任何工具/回执为空"——与 5c/5d 反向，把"查了但没有结果"讲成"没查"，
