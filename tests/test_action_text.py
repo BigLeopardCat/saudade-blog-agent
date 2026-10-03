@@ -336,6 +336,7 @@ _NO_LEGACY_ARM = _DEAD | {
     "list_admin_board",            # 20261001 后台留言名册：同上（读 GET /api/protect/board）
     "get_note_periods",            # 20261001 文章分期报表：同上（读 stats/notes/periods）
     "set_account_role",            # 20261002 批 J 变更账号身份：冻结之后新增，动作词只在 Python 侧
+    "account_mute", "account_unmute",  # 20261002 内容风控下放：同上，动作词只在 Python 侧
 }
 
 _rs = _parent_repo.read(

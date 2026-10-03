@@ -1300,7 +1300,8 @@ def _principal_get(path: str, config: RunnableConfig, *,
     同一条 `/api/protected` 前缀、同一套判据），差别只在**读不到时该说的话**——
     所以两句话由调用方给（`uid_msg` = 拿不到身份，`deny_msg` = 401/403）。措辞必须
     分开：收藏/通知读不到时对访客说"仅管理员可用"是错的（那是**他自己**的数据），
-    反过来把后台报表说成"你未登录"更糟。
+    反过来把后台报表说成"你没携带身份"更糟（两条通道的 uid_msg 都不是"没登录"——
+    见 `_NO_IDENTITY_READ` 的头注：和 agent 对话本身就要求登录，uid<=0 只能是身份没传进来）。
 
     `payload` 给了就改发 **POST**（筛选条件住在请求体里的那几个读接口，如后台
     文章检索）。读接口走 POST 是上游的形状，不是这里能选的；但**不要**因此改用
@@ -1358,19 +1359,25 @@ def _admin_read_post(path: str, payload: dict, config: RunnableConfig):
 def _own_get(path: str, config: RunnableConfig) -> dict | list | ToolResult:
     """用户**自己**的数据（收藏 / 通知 / 未读汇总）。scope = read.own（全角色）。
 
-    uid<=0 = 访客没登录。这里刻意不返回 empty()（"你的收藏是空的"是编造——我们
-    根本没读到）也不返回 ok()（读不到不是事实），而是 unavailable + 如实措辞；
-    与既有的 `list_devices`（"无法获取当前用户身份，设备列表不可用"）同一取向。
+    uid<=0 = **这一轮没带上身份**。这里刻意不返回 empty()（"你的收藏是空的"是编造
+    ——我们根本没读到）也不返回 ok()（读不到不是事实），而是 unavailable + 如实
+    措辞；与既有的 `list_devices`（"无法获取当前用户身份，设备列表不可用"）同一取向。
+
+    **20261004 改口（主人拍板）**：这里原先写的是「未登录：…（需要先登录博客账号）」。
+    那句话建立在一个**到不了的前提**上——和 agent 对话本身就必须登录（uid>0 恒成立，
+    见 `docs/` 的身份链），所以 uid<=0 只可能是**身份没传进来**这种系统异常，而不是
+    "访客没登录"。这时叫主人去登录既没用又误导（他明明登录着）。措辞改成陈述
+    **系统这一侧的事实**（"没携带身份"），不再给用户派活。真正要守的东西一个字没变：
+    读不到就说读不到，**绝不说成"没有"**。
 
     已知的粗糙处（记下来，别当成没想到）：这条走 kind=unavailable ⇒ checker 判
-    BLOCK ⇒ 过程行按 `_REASON_CN["unavailable"]` 显示「服务不可用」。对"你没登录"
-    来说这个词不准确（访客看的是过程行，最终回复由 narrator 按帧里的实话写）。
-    改它要动原因码族（`_check_spec` + `_REASON_CN`），留给"未登录"这条 golden
-    用例跑出实际观感后再定。
+    BLOCK ⇒ 过程行按 `_REASON_CN["unavailable"]` 显示「服务不可用」。对"没带上身份"
+    来说这个词不准确（看的是过程行，最终回复由 narrator 按帧里的实话写）。
+    改它要动原因码族（`_check_spec` + `_REASON_CN`），留给这类用例跑出实际观感后再定。
     """
     return _principal_get(
         path, config,
-        uid_msg="未登录：读不到你自己的数据（需要先登录博客账号）",
+        uid_msg=_NO_IDENTITY_READ,
         deny_msg="当前身份无权读取该数据")
 
 
@@ -1639,10 +1646,19 @@ def _principal_request(method: str, path: str, payload, config: RunnableConfig,
 # 写操作失败路径的固定尾句：下游 narrator 靠它如实告知"别声称已改好"。
 _NO_SUCCESS_TAIL = "（本次改动未确认生效，不要声称已改好）"
 
-# 没登录时写通道的固定措辞（**只此一处**：`_own_request` 的 uid_msg 与写工具入口
-# 的哨兵共用它——写工具的第一件事是"写前读"，那一步走的是读通道，读不到时说的是
+# 没带上身份时两条通道的固定措辞（**各只此一处**：`_own_get` 的 uid_msg 与写工具
+# 入口的哨兵共用它们——写工具的第一件事是"写前读"，那一步走的是读通道，读不到时说的是
 # "读不到你自己的数据"，对一次写命令来说那句话不完整：用户要知道的是"没给你改"）。
-_NO_LOGIN_WRITE = "未登录：本次未改动任何内容（需要先登录博客账号）"
+#
+# **20261004 改口（主人拍板）**：原先把这两句写成「未登录：…（需要先登录博客账号）」，
+# 现在改成陈述系统这一侧的事实。理由是那个前提**在生产里到不了**——和 agent 对话
+# 本身就必须登录（uid>0 恒成立），uid<=0 只可能是身份没传进来这种系统异常；
+# 这时让主人"先去登录"既没用又误导（他明明登录着）。narrator 纪律第 20 条
+# （`agent/graph.py`）原先照着这两句教模型输出"需要先登录博客账号"，同批一起改口——
+# **帧是唯一事实源，纪律与帧必须同源**，只改一处就会漂回旧措辞。
+# 不变的那条最要紧：读不到就说读不到、没改就说没改，**绝不说成"没有"/"已经好了"**。
+_NO_IDENTITY_READ = "没有携带当前用户身份：读不到你自己的数据"
+_NO_IDENTITY_WRITE = "没有携带当前用户身份：本次未改动任何内容"
 
 
 def _own_write_guard(config: RunnableConfig) -> ToolResult | None:
@@ -1651,7 +1667,7 @@ def _own_write_guard(config: RunnableConfig) -> ToolResult | None:
     写操作最不该做的就是在没身份时猜"写给谁"（"我以为给谁写了"比"没写成"坏得多）。
     """
     if _device_get_user_id(config) <= 0:
-        return unavailable(_NO_LOGIN_WRITE)
+        return unavailable(_NO_IDENTITY_WRITE)
     return None
 
 
@@ -1680,7 +1696,7 @@ def _own_request(method: str, path: str, payload, config: RunnableConfig):
     return _principal_request(
         method, path, payload, config,
         label="",
-        uid_msg=_NO_LOGIN_WRITE,
+        uid_msg=_NO_IDENTITY_WRITE,
         deny_msg="当前身份无权改动该数据，本次未改动任何内容",
         tail=_NO_SUCCESS_TAIL)
 
@@ -1723,7 +1739,7 @@ def _policy_post(path: str, payload: dict, config: RunnableConfig):
     if uid <= 0:
         # 身份不明时一个请求都不发（同 `_principal_request`）：写操作最不该做的
         # 就是在没身份时猜。
-        return unavailable("未登录：本次未改动任何内容（需要先登录博客账号）")
+        return unavailable(_NO_IDENTITY_WRITE)
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
     try:
@@ -1774,7 +1790,7 @@ def _admin_todo_post(path: str, payload: dict, config: RunnableConfig, default_m
     uid = _device_get_user_id(config)
     if uid <= 0:
         # 身份不明时一个请求都不发（同 `_principal_request`）。
-        return unavailable(_NO_LOGIN_WRITE)
+        return unavailable(_NO_IDENTITY_WRITE)
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
     try:
@@ -1830,7 +1846,7 @@ def _admin_notice_post(target_id: int, title: str, content: str, config: Runnabl
     uid = _device_get_user_id(config)
     if uid <= 0:
         # 身份不明时一个请求都不发（同 `_principal_request`）。
-        return unavailable(_NO_LOGIN_WRITE)
+        return unavailable(_NO_IDENTITY_WRITE)
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
     try:
@@ -3301,7 +3317,7 @@ def set_article_tags(
 @tool
 def list_my_favorites(config: RunnableConfig) -> str:
     """列出**当前登录用户自己**收藏的文章（返回 noteId / title / status / createdAt）。
-    访客问"我收藏了哪些文章""我的收藏夹里有什么"时用。未登录时如实告知读不到。
+    访客问"我收藏了哪些文章""我的收藏夹里有什么"时用。没携带身份时如实告知读不到。
     注意：这条读的是**用户自己的**收藏夹，不是全站文章列表（那是 list_notes）。"""
     data = _own_get("/api/protected/favorites", config)
     return _shape(data)
@@ -3343,11 +3359,11 @@ def get_unread_summary(config: RunnableConfig) -> str:
     ——问"是什么"**不必**再调 list_notifications（未读条目连同正文就在这次返回里）。
     **通知正文里往往就是答案本体**（如留言审核的驳回理由写在 content 里）：访客追问
     "那是什么内容/理由是什么"时先看这里，别绕去查别的接口，更不许说"读不到内容"。
-    未登录时如实告知读不到。"""
+    没携带身份时如实告知读不到。"""
     data = _own_get("/api/protected/notifications/summary", config)
     if isinstance(data, ToolResult):
         # 计数都没读到：原样透出（fail-closed），**不做任何"连带"**——
-        # 计数读不到时再补一次列表调用，只会让"未登录"变成一次多余的请求
+        # 计数读不到时再补一次列表调用，只会让"没携带身份"变成一次多余的请求
         return data
     if not isinstance(data, dict):
         return _shape(data)
@@ -3388,7 +3404,7 @@ def list_notifications(config: RunnableConfig) -> str:
     content / link / isRead / createdAt，按时间倒序，最多 100 条）。
     type=announcement 的是站内公告（发布时按用户展开），其余是系统通知（如留言审核
     结果）。访客问"有什么未读的公告/通知""最新的一条通知说了什么"时用。
-    未登录时如实告知读不到；**这条不含私信**（私信未读只在 get_unread_summary 的
+    没携带身份时如实告知读不到；**这条不含私信**（私信未读只在 get_unread_summary 的
     messages 里计数，本站没有"读自己的私信列表"的 agent 工具）。"""
     data = _own_get("/api/protected/notifications", config)
     return _shape(data)
@@ -3516,7 +3532,7 @@ def add_favorite(
 ) -> str:
     """把一篇文章收藏进**当前登录用户自己**的收藏夹（幂等：已收藏过就如实说本来就有，
     不会重复收藏）。收藏只有他自己看得见，**不改变文章的公开状态**。
-    未登录时如实告知，一个请求都不发。"""
+    没携带身份时如实告知，一个请求都不发。"""
     aid = _as_article_id(article_id)
     if aid is None:
         return unavailable(f"文章 id「{article_id}」不合法，未改动")
@@ -3563,7 +3579,7 @@ def remove_favorite(
 ) -> str:
     """把一篇文章从**当前登录用户自己**的收藏夹里去掉（本来就没收藏过就如实说，
     不当成出错——同一个按钮点两次不该报错）。只动他自己的收藏夹，不改文章本身。
-    未登录时如实告知，一个请求都不发。"""
+    没携带身份时如实告知，一个请求都不发。"""
     aid = _as_article_id(article_id)
     if aid is None:
         return unavailable(f"文章 id「{article_id}」不合法，未改动")
@@ -3612,7 +3628,7 @@ def read_notifications(
     站内信之和**：只标一部分时它不变，把通知全标完也还要信那边也没有未读才会消失），
     所以只有用户明确说了要标记才用。
     既要不了 id 也没说"全部"时**什么都不动**，如实问清是哪几条。
-    未登录时如实告知，一个请求都不发。
+    没携带身份时如实告知，一个请求都不发。
 
     ⚠️ 形参名 `all` 是对外（planner / 技能参数）的 JSON 键，**本函数体内不得再调用
     内置 `all()`** —— 它已被同名形参遮蔽（20260923 实测：`all(...)` 直接
@@ -3781,7 +3797,7 @@ def list_my_messages(config: RunnableConfig) -> str:
     访客问"我的信箱里有什么""谁给我写过信""我发出去的信"时用。
     ⚠️ 站内信与**河灯留言**是两回事：留言在公开页面上、谁都看得见（那是
     list_guestbook）；站内信是一对一写的信，只有收发双方看得见。
-    未登录时如实告知读不到。"""
+    没携带身份时如实告知读不到。"""
     data = _own_get("/api/protected/messages", config)
     return _shape(data)
 
@@ -3802,7 +3818,7 @@ def read_messages(
     所以只有用户明确说了要标记才用。
     既能要不到 id 也没说"全部"时**什么都不动**，如实问清是哪几封。
     只动**收到的**信——发出去的信别人读没读改不了。
-    未登录时如实告知，一个请求都不发。
+    没携带身份时如实告知，一个请求都不发。
 
     ⚠️ 与 read_notifications 同一个坑：形参名 `all` 遮蔽内置 `all()`，本函数体内
     不得再调用内置 `all(...)`（要判"全都没读"用显式循环）。
@@ -4379,6 +4395,27 @@ def _account_frozen(row) -> bool | None:
         return None
 
 
+def _account_muted(row) -> bool | None:
+    """名录里那一行"**现在**是不是处于禁言期" → True/False；读不出 → **None**。
+
+    判据 = 后端**现算**的 `muted` 字段（Rust `authz::is_muted(muted_until, now)`：
+    到期那一刻自然为假，没有定时任务去清那一列）。**不要**拿 `mutedUntil` 自己在
+    agent 侧算一次——两套钟面/两处判据必然分叉，而这一格的消费方是弹卡幂等
+    （"现在就是禁言中 ⇒ 不重复弹卡"）：判错的方向是**把一次真实的禁言当成已达成**
+    ⇒ 不弹卡 ⇒ 主人永远办不成这件事（同 `_account_frozen` 那条方向）。
+
+    `None` **不是 False**：键缺席或为 null 都算"读不出"（同「缺键绝不编 0」那条纪律
+    ——把"没读到"读成"没被禁言"，写后复核就会把一次失败的禁言判成功）。
+    """
+    try:
+        value = row.get("muted")
+    except AttributeError:
+        return None
+    if value is None:
+        return None
+    return bool(value)
+
+
 def _find_named_user(name, config, index=None):
     """按**账号名**在后台账号名录里找一个账号 → `(行, None)` 或 `(None, 拒绝文本)`。
 
@@ -4585,6 +4622,140 @@ def unfreeze_account(
     （不要用账号编号，也不要自己拼一个名字）。超级管理员的账号谁都解冻不了——
     撞上时如实转告系统给的原话，不要换个说法重试。"""
     return _set_account_frozen(name, False, config)
+
+
+def _set_account_muted(name, muted: bool, hours, config: RunnableConfig) -> ToolResult:
+    """禁言/解除禁言的公共实现（两个 @tool 只是方向不同的薄壳，见本节头注③）。
+
+    照 `_set_account_frozen` 的五段式：① 读名录 → ② 解析出唯一一行 → ③ 写 →
+    ④ 写后重读**同一份名录**复核 → ⑤ 出口只有 `ok` / `not_found` / `policy_frame` /
+    `unavailable`，绝不 `return ""`。
+
+    与冻结族的三处差异（都是"禁言不是冻结"的直接后果）：
+      · **多一个时长参数 `hours`**（冻结没有时长这个概念）：`None` ⇒ 永久，与后端
+        `{hours: null}` 同义；认不出的字面**零写并如实问**，绝不静默按永久办
+        ——那会把「禁他三天」办成「永久禁言」，而且办完谁也看不出来；
+      · **写后复核的读数不是 `status` 而是现算的 `muted`**（`_account_muted`）；
+      · **`changed` 的判据带上 `mutedUntil`**：对一个已在禁言期的账号再禁一次是
+        **有意义的操作**（改时长/转永久，Rust 侧明确不做 no-op），只比布尔会把
+        "把三天改成永久"读成"本来就是禁言中、本次未发生变更"（一句错话）。
+
+    措辞（卡面与回执行）全在 adminops 那一份：本节**绝不复用冻结族的 `_ACCOUNT_DONE`**
+    ——它写着"所有登录会话已经全部失效"，而禁言从不 bump `token_version`（Rust
+    `set_user_muted` 头注），照抄过来是一句假话（同「消息壳架空判据」那族坑）。
+    """
+    from agent import adminops as A
+    want = str(name or "").strip()
+    if not want:
+        return unavailable("没给出要动的账号名，本次未改动——请让主人说清是哪个账号")
+    ok_hours, hours_n = A.normalize_mute_hours(hours)
+    if not ok_hours:
+        # 出口用 `not_found`（目标类失败）而不是 `unavailable`：后者的过程行是
+        # 「服务不可用」、planner 收到的指引是"稍后再试"，而这条请求**永远不会**因为
+        # 重试而成功；`not_found` 的指引恰好是这件事该做的——换个值、或如实问主人
+        # 禁多久（措辞本身把这一步说清了）。主路径其实到不了这里：技能展开层对
+        # 认不出的时长就零工具 + 问清了（同 `account_set_role` 的"认不出的身份"）。
+        return not_found(
+            f"「{str(hours or '').strip()[:40]}」不是一个能认下的禁言时长，本次未改动"
+            f"——请让主人说清禁多久（几个小时，或者说「永久」）")
+
+    # ① 写前读：既拿复核基线，也让"查无此名"在发请求之前就响亮地报出来。
+    before_index = _user_directory(config)
+    if isinstance(before_index, ToolResult):
+        return _pre_read_fail(before_index, "后台账号名录")
+    # ② 解析：唯一命中才继续（重名 ⇒ not_found，零写——选错就是禁了另一个活人）。
+    row, err = _find_named_user(want, config, index=before_index)
+    if err:
+        return not_found(err)
+    target_id = int(row.get("id"))
+    username = str(row.get("username") or want)
+    was_muted = _account_muted(row)
+    before_until = A.mute_until_raw(row)
+
+    # ③ 写。**幂等不短路**：后端对"本来就是没被禁言"的解禁方向才是真 no-op，禁言
+    #    方向永远不是——短路掉就分不出"刚禁的"与"本来就禁着"（同冻结族那条）。
+    data = _policy_post(f"/api/temp-users/{target_id}/mute",
+                        {"muted": muted, "hours": hours_n if muted else None}, config)
+    if isinstance(data, ToolResult):
+        # 政策拒绝（自己 / 超管 / 同级管理员）走这一支：`_policy_post` 已经把后端的
+        # 原话包成 `policy_refused` 帧，这里原样往外传，不改写一个字。
+        return data
+
+    # ④ 写后复核：重读**同一份名录**按 id 找回那一行。三种情形一律 unavailable
+    #    （"…本次改动未确认生效"），**不许说成功**。
+    after_index = _user_directory(config)
+    if isinstance(after_index, ToolResult):
+        return unavailable(f"改动请求已发出，但读不回后台账号名录（{after_index}），"
+                           f"本次改动未确认生效")
+    got = after_index.get(target_id)
+    if not isinstance(got, dict):
+        return unavailable(f"改动请求已发出，但读回的名录里找不到 id={target_id} 那一行"
+                           f"（账号可能已被删除），本次改动未确认生效")
+    now_muted = _account_muted(got)
+    if now_muted is None:
+        return unavailable(f"改动请求已发出，但读回的账号「{username}」没有禁言字段，"
+                           f"无法确认，本次改动未确认生效")
+    if now_muted != muted:
+        verb = "禁言" if muted else "解除禁言"
+        state = "禁言中" if now_muted else "正常"
+        return unavailable(f"{verb}请求已发出，但读回账号「{username}」仍是「{state}」，"
+                           f"本次改动未确认生效")
+
+    after_until = A.mute_until_raw(got)
+    if muted:
+        # 禁言方向：期限变了（含"首次禁言"）就是一次真变更——同长度的再次禁言也会
+        # 得到一个更晚的时刻，那是真事（他确实又被禁了 N 小时），照实报"已禁言"。
+        changed = (was_muted, before_until) != (now_muted, after_until)
+    else:
+        # 解禁方向的判据与后端 no-op 同源（Rust 用的是 `muted_until is None`）：
+        # 库里本来就没留值 ⇒ 这一次什么都没发生；留过值（哪怕是已过期的残留）
+        # ⇒ 这一下把它清掉了，是真变更。
+        changed = before_until != ""
+    return ok(
+        A.render_account_mute_status(username, target_id, muted,
+                                     until_raw=after_until, changed=changed,
+                                     before_muted=was_muted),
+        meta=fact("account_mute" if muted else "account_unmute", changed=changed,
+                  target=tgt("user", target_id, username),
+                  before=("禁言中" if was_muted else
+                          ("正常" if was_muted is False else "")),
+                  after="禁言中" if now_muted else "正常",
+                  evidence="禁言中" if now_muted else "正常",
+                  account_id=target_id, account_name=username,
+                  change=A.account_mute_change_phrase(muted, changed,
+                                                      until_raw=after_until)))
+
+
+@tool
+def account_mute(
+    name: Annotated[str, "要禁言的那个后台账号的**账号名**（后台账号列表里看得见的那一行）"],
+    config: RunnableConfig,
+    hours: Annotated[int | None, "禁言时长（小时）。主人没给时长就**不要填**（不填=永久）"] = None,
+) -> str:
+    """禁言一个后台账号：他**照常登录、浏览文章、跟你对话**，只是发不出评论与留言。
+    与冻结是两件事——禁言**不会**让他掉线，也不会让他的会话失效。需要管理员身份，
+    且每次都要经主人确认。
+
+    `hours` 是禁言时长（小时）；**不填 = 永久**（解禁要再单独说一次）。
+    **要动的账号名必须能在后台账号列表里看到**；列表里没有这个名字就当它不存在
+    （不要用账号编号，也不要自己拼一个名字）。管理员之间不能互相禁言，超级管理员
+    谁的账号都禁不了——撞上这两条时，如实把系统给的原话转告主人，不要换个说法重试。"""
+    return _set_account_muted(name, True, hours, config)
+
+
+@tool
+def account_unmute(
+    name: Annotated[str, "要解除禁言的那个后台账号的**账号名**（后台账号列表里看得见的那一行）"],
+    config: RunnableConfig,
+) -> str:
+    """解除一个账号的禁言：他重新可以发布评论与留言。**与冻结/解冻无关**
+    （禁言从不影响登录，所以解禁也不会"让他回来"——他本来就在）。需要管理员身份，
+    且每次都要经主人确认。
+
+    **要动的账号名必须能在后台账号列表里看到**；列表里没有这个名字就当它不存在
+    （不要用账号编号，也不要自己拼一个名字）。超级管理员的账号谁都解禁不了——
+    撞上时如实转告系统给的原话，不要换个说法重试。"""
+    return _set_account_muted(name, False, None, config)
 
 
 def _set_account_role(name, role, config: RunnableConfig) -> ToolResult:
@@ -4857,7 +5028,7 @@ def _admin_quota_post(path: str, payload: dict, config: RunnableConfig):
     uid = _device_get_user_id(config)
     if uid <= 0:
         # 身份不明时一个请求都不发（同 `_principal_request`）。
-        return unavailable(_NO_LOGIN_WRITE)
+        return unavailable(_NO_IDENTITY_WRITE)
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
     try:
@@ -5260,6 +5431,14 @@ _TOOL_REGISTRY = [
     # 见"管理助手写工具：变更账号身份"节头注。**agent 侧不写第二份权限表**——
     # 能改谁、能改成什么全由后端 `authz::check_role_change` 判，agent 原话转述。
     set_account_role,
+    # 禁言 / 解除禁言（20261002 内容风控下放给 agent）：write.console，目标=同一个账号
+    # 名录里的**账号名**。工具名 `account_mute` / `account_unmute` 是**后端先定的**
+    # 契约（src/routes/mod.rs 那条路由的注里点名要 agent 用这两个名字），不是我们挑的
+    # ⇒ 别"顺手统一"成 freeze_account 那种语序。
+    # ⚠️ 后果与冻结族**完全不同**（照常登录、只是发不出评论与留言）：两族的措辞
+    #    一个字都不许互相复用，见 `_MUTE_DONE` 上方那条注。
+    account_mute,
+    account_unmute,
     # 给单个账号发站内通知（20260926）：write.console，目标=同一个账号名录里的名字，
     # 动的却是"发给对方的一段话"（发出后没有撤回的通道）⇒ 同样进「一律弹窗」族，
     # 卡面必须印出**正文全文**由主人核对。见 `_send_user_notice` 头注。

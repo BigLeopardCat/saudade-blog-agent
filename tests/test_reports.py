@@ -696,7 +696,7 @@ for name, tool, args in [("admin_notes", "list_admin_notes", {}),
     check(f"技能 {name} 在位、对管理员族可见、计划首项是 {tool}",
           sk is not None and sk.roles == ADMIN_ROLES
           and [t for t, _ in sk.plan] == [tool], str(sk and (sk.roles, sk.plan)))
-check("写技能名单 = 二十八个**技能**名（instantiate_plan 缺参守卫按它分支；"
+check("写技能名单 = 三十个**技能**名（instantiate_plan 缺参守卫按它分支；"
       "注意它与工具名不是一套字面量，混用会让守卫静默不生效）",
       WRITE_SKILL_NAMES == frozenset({"tag_create", "tag_update", "tag_delete",
                                       "category_create", "category_update",
@@ -771,7 +771,15 @@ check("写技能名单 = 二十八个**技能**名（instantiate_plan 缺参守�
                                       # ——漏在这份名单外同样落进尾部"未知的写技能"
                                       # 兜底：零工具、零写、还不报错（test_account_role
                                       # 的展开断言钉着）
-                                      "account_set_role"})
+                                      "account_set_role",
+                                      # 禁言 / 解除禁言（20261004 内容风控下放）：与冻结族
+                                      # 同形（技能名 mute_account / unmute_account ≠ 工具名
+                                      # account_mute / account_unmute——**后端路由注释里
+                                      # 先定的契约**），且多一个归一参数 `hours`
+                                      # （只有禁言方向有；认不出就零工具 + 追问）。
+                                      # 漏在这份名单外的后果与上面几族逐条相同：
+                                      # 落进尾部"未知的写技能"兜底 → 零工具零写还不报错
+                                      "mute_account", "unmute_account"})
       and WRITE_SKILL_NAMES <= set(SKILL_MAP), str(sorted(WRITE_SKILL_NAMES)))
 check("非 admin 的 planner 上下文里看不到这四个技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
