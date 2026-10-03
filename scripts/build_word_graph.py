@@ -925,7 +925,11 @@ def main() -> None:
                     help="UMAP min_dist：越小邻域越紧、点越容易叠在一起（见 layout_umap 的扫描表）")
     ap.add_argument("--umap-seed", type=int, default=42, help="UMAP 随机种子（固定 ⇒ 同输入同产物）")
     ap.add_argument("--layout", choices=("umap", "semantic", "pca"), default="umap",
-                    help="semantic=PCA 初值 + 语义弹簧松弛（默认，线长才携带语义）；pca=纯线性投影")
+                    # 这句原来把 semantic 写成"默认"——20260917 换成 umap 之后没跟着改，
+                    # 于是 `--help` 与代码互相打脸。三者的差别要写全，别只写"哪个是默认"。
+                    help="umap（默认）=近邻保真最好，要 umap/numba 那套重依赖；"
+                         "semantic=PCA 初值 + 语义弹簧松弛（只用 numpy/jieba，线长携带语义）；"
+                         "pca=纯线性投影")
     ap.add_argument("--layout-iters", type=int, default=400)
     ap.add_argument("--out-frontend", default=str(REPO_PARENT / "frontend" / "public"))
     ap.add_argument("--out-agent", default=str(REPO_AGENT / "data" / "word_graph"))

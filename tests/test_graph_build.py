@@ -113,14 +113,45 @@ check("语料地址来自 settings 那一项（不是模块里另写的第二份
 # ─────────────────────────────────────────────────────────── ② 起任务前的闸
 print("\n② 三道闸：uv / 脚本 / 内存——**拒绝并给原话**，不试")
 
-_real_which, _real_mem = shutil.which, gb.mem_available_mb
+_real_which, _real_mem, _real_fb = shutil.which, gb.mem_available_mb, gb.UV_FALLBACKS
 try:
+    # 20261003 起 uv 有**两处**查找（PATH + 回落表）：只堵 PATH 已经不等于"没有 uv"。
+    # 这条判据自己踩过这个坑——本机 uv 就装在 `~/.local/bin`，而 systemd 服务默认 PATH
+    # 不含用户目录，所以"服务里找不到 uv"的真实成因恰恰是回落表在兜（见 `find_uv`）。
     shutil.which = lambda _n: None
+    gb.UV_FALLBACKS = ()
+    gb._UV_PATH = None
     r = gb.preflight("rebuild")
     check("没有 uv ⇒ 拒绝，且说的是『装了 uv 再来』而不是空话",
           bool(r) and r["reason"] == "uv_missing" and "uv" in r["error"], r)
+    check("★ 拒绝文案里写明**找过哪些地方**（不然用户只能猜该往哪装）",
+          bool(r) and "PATH" in r["error"] and "uv_missing" == (r or {}).get("reason"),
+          r and r["error"])
 finally:
-    shutil.which = _real_which
+    shutil.which, gb.UV_FALLBACKS, gb._UV_PATH = _real_which, _real_fb, None
+
+# 正向回归（这条就是 20261003 那个 bug 本体）：uv **不在 PATH**、只在回落目录里，
+# 也必须找得到，而且返回的是**绝对路径**——写裸 `uv` 会在 Popen 那一刻才炸。
+_real_fb, _real_which, _real_mem2 = gb.UV_FALLBACKS, shutil.which, gb.mem_available_mb
+try:
+    shutil.which = lambda _n: None
+    gb._UV_PATH = None
+    fake_dir = Path(tempfile.mkdtemp())
+    fake = fake_dir / "uv"                                 # 绝对路径 ⇒ 不碰真的 ~（回落表用 ~ 展开）
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+    gb.UV_FALLBACKS = (str(fake),)
+    got = gb.find_uv()
+    check("★ uv 只在回落目录（服务 PATH 看不到它）时照样找得到，且给绝对路径",
+          got == str(fake), got)
+    # 内存那条**必须一起钉死**：不钉的话这条会在"机器刚好紧张"时红成 uv 的问题，
+    # 判据就变成了在量这台机器当时的负载。
+    gb.mem_available_mb = lambda: 99999
+    check("★ 找到了就不再拒绝（preflight 放行，拦路的是内存那条，不是 uv）",
+          (gb.preflight("rebuild") or {}).get("reason") != "uv_missing")
+finally:
+    gb.UV_FALLBACKS, shutil.which, gb.mem_available_mb, gb._UV_PATH = (
+        _real_fb, _real_which, _real_mem2, None)
 
 try:
     gb.mem_available_mb = lambda: 300
@@ -134,7 +165,27 @@ finally:
 
 check("内存读数取不到（None）时不拿『读不出来』冒充『内存不够』（不拒）",
       (gb.preflight("rebuild") or {}).get("reason") != "low_memory")
-check("门槛是个说得出口的数（不是随手写的 1）", gb.MEM_MIN_MB >= 512, gb.MEM_MIN_MB)
+# 阈值必须**卡在实测峰值之上、又不高到把门焊死**。20261003 实测：一次真实重建（400 节点
+# / 12 篇文章 / UMAP，笼子 MemoryMax=1000M）峰值 RSS 552MB、30 秒、换页 0 次。低于它大概率
+# OOM；高出一倍多就等于门常年关着——原来那个 1200 正是这么来的（本机可用内存常在 900MB
+# 上下，于是"腾一腾再来"根本腾不到，用户点了两次都只拿到一句"内存不够"）。
+# 改动这个数要连着那次测量一起改（出处写在 `rag/graph_build.py` 的常量注释里）。
+check("内存门槛落在『实测峰值 552MB ~ 它的一倍』之间",
+      552 <= gb.MEM_MIN_MB <= 552 * 2, gb.MEM_MIN_MB)
+_env_before = os.environ.get(gb.MEM_ENV)
+try:
+    os.environ[gb.MEM_ENV] = "900"
+    check("阈值可以用环境变量放行（确有把握时主人自己抬/降）", gb.mem_min_mb() == 900,
+          gb.mem_min_mb())
+    for bad in ("abc", "", "0", "-1"):
+        os.environ[gb.MEM_ENV] = bad
+        check(f"★ 阈值写坏了（{bad!r}）回落默认值——一个错别字不能把重建功能锁死",
+              gb.mem_min_mb() == gb.MEM_MIN_MB, gb.mem_min_mb())
+finally:
+    if _env_before is None:
+        os.environ.pop(gb.MEM_ENV, None)
+    else:
+        os.environ[gb.MEM_ENV] = _env_before
 
 
 # ─────────────────────────────────────────────────────────── ③ 锁与状态
