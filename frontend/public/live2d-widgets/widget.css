@@ -35,21 +35,28 @@
 
 #waifu {
     bottom: -500px;
-    /* 20261003：初始位置右移「看板娘板块」宽度的一半。板块 = #live2d 的 300px，
-       半宽 150px，故 15 → 165。**跟着动的是整块**：#live2d / #waifu-tips /
+    /* 20261003：初始位置右移「看板娘板块」宽度的一半（15 + 板块半宽 150 = 165），
+       随后按用户第 1 条「稍微左移一点下移一点」再收 20px ⇒ 145。
+       板块 = #live2d 的 300px。**跟着动的是整块**：#live2d / #waifu-tips /
        #waifu-tool 都是它内部的 relative/absolute 子元素，对话面板也挂在它上面。
        #waifu-toggle（收起态那枚贴纸）**不动**——它只在与本元素互斥的收起态出现，
        语义是"贴左下角的唤回按钮"，不是看板娘本体。
-       窄屏回落到原来的 15px：300px 板块 + 150px 位移需要 ≥480px 才不会顶出右缘
-       （165 + 300 + 15 的右边距），见本文件末尾那条 @media。 */
-    left: 165px;
+       "下移"不在这里：横向只有 left 一个旋钮，纵向归下面那条 transform（见它的注释）。
+       窄屏回落到原来的 15px：145 + 板块 300 + 对称的 15px 右边距 = 460px，窄于它
+       就会顶出右缘（本档仍按文件末尾那条 `max-width: 479px` 回落，留 20px 余量）。 */
+    left: 145px;
     position: fixed;
     /* 收起→展开的中间态 canvas 高度会短暂塌陷为 0（display:none 恢复/模型重载），
        若 #waifu 高度随之塌缩，对话面板 bottom: calc(100% + 12px) 会按塌陷高度解析而
        掉到按钮列表/收回按钮处；#live2d 恒为 300px 高，直接用固定 height 锁死，
        任意中间态都按 300px 定位，面板与悬浮按钮永不依赖 canvas 恢复时机 */
     height: 300px;
-    transform: translateY(-15px);
+    /* 竖直位置：整块抬 5px。20261003 用户第 1 条「下移一点」= 把抬升量从 -15 收到
+       -5（下移 10px）。**不能再往下压**：`bottom: 0`（waifu-active）是贴平视口下缘
+       的落点，正数 translateY 会连人带脚切掉。
+       ⚠️ 与下面 `#waifu:hover` 那一行**必须同值**——现状是刻意的"hover 不抬升"，
+       只改一处就会让鼠标一移上去整块跳一下。 */
+    transform: translateY(-5px);
     transition: transform .3s ease-in-out, bottom .8s ease-in-out;
     /* 层级：走宿主页面的 z-index 阶梯，**缺省 1000**（20261002 改）。
        原先写死 2147483000 —— 那个数不是"最高的意思"，是"比谁都大"：博客站的个人中心
@@ -84,7 +91,9 @@
 }
 
 #waifu:hover {
-    transform: translateY(-15px);
+    /* 与基态**同值** = 刻意的「hover 不抬升」（看板娘这一块贴着视口下缘，抬一下
+       反而像在抖）。改上面那条 transform 时这里一起改，否则鼠标一移上去就跳。 */
+    transform: translateY(-5px);
 }
 
 #waifu-tips {
@@ -2043,8 +2052,8 @@
    `.msg-text td/th` 的边框色与 `.msg-text blockquote` 的 #888 字色——
    它们不挡读（后者在深底上是"偏暗但看得见"），要单独一批再收。 */
 
-/* 窄屏回落：看板娘初始位置右移半宽的规则（见文件头 #waifu 的 left: 165px）。
-   300px 的板块 + 165 的左边距 = 右缘 465px，再加与左边对称的 15px 右边距，
+/* 窄屏回落：看板娘初始位置右移半宽的规则（见文件头 #waifu 的 left: 145px）。
+   300px 的板块 + 145 的左边距 = 右缘 445px，再加与左边对称的 15px 右边距，
    需要视口 ≥480px 才放得下；窄于这个宽度仍然贴左 15px（改前的位置）。
    只收 #waifu 一条——#waifu-toggle 本来就恒在 15px，无需回落。 */
 @media (max-width: 479px) {
