@@ -18,6 +18,7 @@ import io, json, os, signal, subprocess, sys, time
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
 sys.path.insert(0, "eval")
 import report_archive   # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
+import golden_trace     # 同目录：trace 开关 + 靠 trace 才判得动的 gold 键（见下面的闸）
 
 CASES = [json.loads(l) for l in open("eval/golden/basic.jsonl", encoding="utf-8") if l.strip()]
 # 需要**真实身份**的用例（管理员读后台 20260921；普通用户被拒那条 20260924）：口径与
@@ -67,13 +68,34 @@ if any(c.get("requires_fixture") for c in CASES):
     _SKIPPED_IDS += _DROPPED
     for _ln in _LINES:
         print(_ln, flush=True)
+# trace 闸（20261004）：`require_ledger_*` 三条读的是 `planner.ledger_frame` **trace
+# 事件**，而 `GOLDEN_NO_TRACE=1` 下 `start_case()` 返回 None ⇒ 那几条**必然报红**，红的
+# 话却是「待办台账没摆上桌」（关于模型的一句断言）。口径与上面三道闸逐字一致：**摘用例
+# + 进 skipped_ids**；那几条是**未评估**，不是"过"也不是"模型退化"（20261004 早上 4 次
+# `--only` 重跑就是这么被误判的）。键表只此一份，在 `golden_trace`，判据侧共用。
+_TRACE_SKIPPED: list[str] = []
+if not golden_trace.enabled():
+    _TRACE_SKIPPED = [c["id"] for c in CASES if golden_trace.trace_derived_keys(c)]
+    if _TRACE_SKIPPED:
+        _drop = set(_TRACE_SKIPPED)
+        CASES = [c for c in CASES if c["id"] not in _drop]
+        _SKIPPED_IDS += _TRACE_SKIPPED
+        for _cid in _TRACE_SKIPPED:
+            print(f"[skip] {_cid}: SKIP (判据要读 planner.ledger_frame trace 事件，"
+                  f"而 {golden_trace.ENV_OFF} 关着 trace —— 未评估，不是模型退化)",
+                  flush=True)
 # 空分母（20260925）：全部被摘掉时**不许往下走**——本脚本的收尾统计会对空序列取
 # min()/P50（ValueError），构造报告时还会除零；就算不炸，打印出来的也是"0/0 通过 = 100%"
-# 那种静默的绿，而这一轮什么都没评。口径与 run_golden.py 逐字一致：退出码 2。
+# 那种静默的绿，而这一轮什么都没评。口径与 run_golden.py 一致：退出码 2；**前提类闸**
+# （trace 关着）造成空分母时报 3（同 run_golden.py 的判据），因为那是"前提不可用"而不是
+# "你自己把用例摘光了"。
 if not CASES:
-    print("[full] ⚠ 一条用例都没剩下（被身份闸 / 真写闸 / 夹具闸摘干净了）—— 这一轮"
-          "**没有评测任何东西**：空分母不是一个通过率，退出码 2（不是 0）", flush=True)
-    sys.exit(2)
+    _code = 3 if _TRACE_SKIPPED else 2
+    print("[full] ⚠ 一条用例都没剩下（被身份闸 / 真写闸 / 夹具闸 / trace 闸摘干净了）"
+          f"—— 这一轮**没有评测任何东西**：空分母不是一个通过率，退出码 {_code}（不是 0）"
+          + ("；其中 trace 关着是主因（那几条用例的判据要读 trace 事件）"
+             if _TRACE_SKIPPED else ""), flush=True)
+    sys.exit(_code)
 RUNNER = "eval/golden_case_runner.py"
 TMPDIR = "/tmp/golden_cases"
 TIMEOUT = 180
@@ -81,7 +103,6 @@ os.makedirs(TMPDIR, exist_ok=True)
 
 # golden trace（20260922）：run_id 在**父进程**定一次，子进程经环境变量继承 ⇒ 整个 run 落
 # 同一个目录（子进程各自 resolve 就会把一次全量散成上百个目录）。GOLDEN_NO_TRACE=1 整体关。
-import golden_trace
 _TRACE_ON = golden_trace.enabled()
 GOLDEN_RUN = golden_trace.resolve_run_id() if _TRACE_ON else None
 if GOLDEN_RUN:
@@ -223,6 +244,9 @@ report = {"ts": "", "corpus": "full", "total": len(CASES), "passed": len(CASES) 
           "skipped_ids": list(_SKIPPED_IDS),
           # 其中「按设计不跑」的那批单列（口径同 run_golden.py）：真写用例默认不跑。
           "skipped_real_write_ids": list(_WRITE_SKIPPED),
+          # 其中「trace 关着 ⇒ 判据没有证据链」的那批单列（口径同 run_golden.py 的
+          # `skipped_trace_ids`）：它们是**未评估**，不是"过"，也不是模型退化。
+          "skipped_trace_ids": list(_TRACE_SKIPPED),
           # 首跑红数（20260924）：failed 是复跑后的终判，这个留着首跑口径（差额=被吸收的红斑）
           "failed_first_run": failed_first,
           # 回归组块（20260924）：与 run_golden.py 同名字段——留档反查（golden_trace.
