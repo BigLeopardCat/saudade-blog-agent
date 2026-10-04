@@ -247,6 +247,24 @@ CLASSES = [
         rule=None,
     ),
     dict(
+        key="golden-run-archive-react",
+        label="第二条臂（`GOLDEN_ARM=react`）每轮 golden 跑的留档",
+        root=DEFAULT_REPORT_ROOT,
+        patterns=["runs_react/**"],
+        status="open",
+        owner=None,
+        owner_ref=None,
+        retention="未接管（与 golden-traces 必须一起设计——与 `runs/` 同一条理由）",
+        why="20261004 起第二条臂的留档落在这里（`eval/golden_arm.py::reports_dir`）。"
+            "**为什么不并进 `runs/`**：文件名不许带臂名（那会破坏「文件名顺序 = 时间顺序」"
+            "这条全仓不变量），两臂混在一个目录里就只能靠读 JSON 分辨谁是谁，而"
+            "`golden_trace.prune` 反查「那一晚红没红」时是按目录扫的。"
+            "**为什么与 `runs/` 同处置**：它同样是 `golden_trace.prune` 的判据源"
+            "（每条留档都带 `trace` 路径），单独清同样会让窗口外的 trace 变成「证据不足」"
+            "永久保留。明确登记为未接管，免得盘点时被当成「刚冒出来的空目录」顺手清掉。",
+        rule=None,
+    ),
+    dict(
         key="wordgraph-builds",
         label="词图构建中间产物",
         root=DEFAULT_REPORT_ROOT,

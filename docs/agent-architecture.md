@@ -136,7 +136,7 @@ flowchart TB
 │   ├── native_plan.py         # ★ native tool calls 接线层（20260927 新主线；20261004 起**唯一**接口层）：planner 输出就是 API 的 tools/tool_calls，格式由服务端与 schema 保证；零调用不再等于闲聊（先纠偏一次）
 │   ├── tasks.py               # ★ 会话级任务状态（20260927 批 D）：未完成的意图跨轮不丢（agent_task 表 + 模型登记 + 系统确定性结算）
 │   ├── action_text.py         # ★ 一次执行 → 一行中文动作的跨语言渲染唯一实现（过程行 / 执行台账行两档）
-│   ├── factblock.py           # ★ 动作族轮次的"系统事实块"（roadmap D3）：事实由系统印、模型只写包装；射程只有命令族 + 写族
+│   ├── factblock.py           # ★ 动作族分族（命令族+写族，量化口径与 narrator_facts_share 同源）＋历史事实行剥离；**系统代印 20261005 起停用**（BLOCK_FAMILIES 空集）
 │   ├── stickers.py            # 贴纸残记号的确定性修补（20261002）：把只写了开头冒号的 `:头疼` 补回 `:名字:`
 │   ├── llm_usage.py           # 一次 LLM 调用的 token 用量提取（trace 用量字段的唯一来源，喂 token_cost_report）
 │   ├── sections.py            # ★ 超长文章分节（20260920）：索引切片 / 帧按整节取舍 / `section=` 按节取回，三处共用一套节边界
