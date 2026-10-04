@@ -173,8 +173,8 @@ flowchart TB
 ├── docs/                      # 本文档 + eval-observability.md + secretary.md（秘书框架与前置需求）+ 问题记录.md（踩坑史）
 └── .env.example / pyproject.toml / uv.lock / .github/workflows/eval.yml（CI 评测门禁）
 
-前端（看板娘 + 对话面板）—— **20261001 起住在本仓**（`frontend/`，以 MIT 分发，见
-`frontend/LICENSE`；本仓其余部分是 Apache-2.0）：
+前端（看板娘 + 对话面板）—— **20261001 起住在本仓**（`frontend/`，与本仓同以 MIT 分发，见
+`frontend/LICENSE`）：
 frontend/public/live2d-widgets/
 ├── boot.js                    # ★ 加载器（254 行）：拼 ?v=VER 载入子模块、看板娘显隐/拖拽/工具条
 ├── renderer.js                # ★ 渲染层（511 行）：pixi.js + pixi-live2d-display 驱动模型、参数注入与口型

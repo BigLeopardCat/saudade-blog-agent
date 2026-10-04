@@ -16,6 +16,10 @@
 
 ## 20261004
 
+- **整仓许可由 Apache-2.0 改为 MIT**：仓根 `LICENSE` 换成 MIT 全文（版权人 `BigLeopardCat`），
+  `pyproject.toml` 的 `license` 字段同步。此前是「仓根 Apache-2.0 + `frontend/` 单独 MIT」的
+  拆分，而那个拆分本身只是因为 Apache-2.0 与博客仓的 GPL-2.0 不兼容；整仓一份 MIT 之后拆分
+  取消。`frontend/` 的代码许可没有变化，美术资源仍是 CC BY-NC-SA 4.0（见 `frontend/LICENSE`）。
 - **planner 接口层收成单通道：文本规划档整个删掉，`native tool calls` 成为唯一的路（行为，
   20261004）**：`PLANNER_ENGINE` 这个拨盘连它的影子档（`shadow`）一起删除——`settings.planner_
   engine`、`_planner_engine()`、`/health` 的 `planner_engine` dial（dials 5 → 4）、
