@@ -2070,6 +2070,54 @@
    只收 #waifu 一条——#waifu-toggle 本来就恒在 15px，无需回落。 */
 @media (max-width: 479px) {
   #waifu { left: 15px; }
+
+  /* ── 手机档整块缩到半尺寸、贴到左缘（20261005，用户报「手机上盖住大半个正文与表格」）──
+     症状（390×844 实测，修前）：300×300 的板块落在 x15..315，**角色本体的墨迹**就有
+     165×278px（视口 x84..249、y558..836，20791 个非背景像素）⇒ 正压在正文栏中间，
+     占掉三分之一屏高。板子本身不透明所以正文在它底下根本点不到。
+
+     ⚠️ **不能对 #waifu 本身做 transform/缩放**，两个硬理由：
+       ① `#waifu-chat` 是它的**子节点**（chat-engine.js 用 insertAdjacentHTML 挂在
+          #waifu 上），缩 #waifu 就把对话面板一起缩了；
+       ② 祖先一旦有 transform 就变成 `position:fixed` 后代的包含块，而 `#waifu-chat`
+          的 `bottom: calc(100% + 12px)` 是相对**未被 transform 的** 300px 盒解析的
+          ⇒ 把缩放加在祖先上，面板会按老几何飘到屏幕外。
+     所以缩放只加在 `#waifu-canvas`（纯包装层，只有一个 canvas 后代、没有 fixed 后代），
+     300px 的布局盒原样保留 ⇒ #waifu-chat 的定位基准一个字都没变。
+
+     `translateX(-34px)` 是**实测值不是拍脑袋**：角色墨迹在盒内的横向范围是 x∈[69,234]，
+     scale(.5) 后是 [34.5,117]，减掉 34.5 让墨迹左缘贴住盒左缘 ⇒ 视口 x15..98。
+     `transform-origin: left bottom` 让它一边缩一边贴住盒底，纵向落在视口 y698..837。 */
+  #waifu-canvas {
+    transform: translateX(-34px) scale(.5);
+    transform-origin: left bottom;
+  }
+  /* 工具条跟着缩小的角色重锚（原 `right:-10px` 锚的是 300px 盒的右缘，缩完就飘在空处）。
+     x88 起、贴住角色右缘外侧（角色墨迹到 x98，工具条落在 x103..134）；
+     y120 让六个钮（6×25 + 5×5 = 175px）从上往下排完落在 y659..834，不出盒底。
+     `#waifu-tips` **不用管**：本仓这条 `display: none !important`（:408），
+     提示语整个走对话面板，移动端没有第二条气泡要重新定位。 */
+  #waifu-tool {
+    right: auto;
+    left: 88px;
+    top: 120px;
+  }
+  /* 缩完之后 300×300 的盒子里**只剩左下角**那点墨迹是有内容的，其余全透。
+     不关掉命中测试的话，正文在那 300×300 的矩形内一律点不到（移动端尤其致命：
+     手指落在空白处 = 一次被吞掉的点击）。做法 = 容器不吃事件、把子节点逐个放行。
+     放行的四个里：
+       · `#waifu-canvas` / `#waifu-tool` 是外形本体与按钮；
+       · `#waifu-tool-star-box` 是 chat-stream.js 追加的特效钮（`position:absolute`
+         挂在 #waifu 上，不属于上面两棵子树）；
+       · `#waifu-chat` 是对话面板（`display:none` 直到展开，放行不影响常态）。
+     `pointer-events` 是可继承属性：子节点从放行的这层重新拿到 `auto`，
+     `#live2d` 因此仍是 mousedown 的 event.target —— setupDrag 那条
+     `ev.target !== #live2d` 的门（renderer.js:286）在手机档照样放行。 */
+  #waifu { pointer-events: none; }
+  #waifu-canvas,
+  #waifu-tool,
+  #waifu-tool-star-box,
+  #waifu-chat { pointer-events: auto; }
 }
 
 /* 减少动效档：钮不抬、关闭钮不放大。**必须留在文件末尾**（同选择器
