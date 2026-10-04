@@ -2495,6 +2495,13 @@ def main():
                         "ledger": [{"ids": e.get("ids") or [], "rows": e.get("rows") or {},
                                     "unread": e.get("unread") or [], "chars": e.get("chars")}
                                    for e in (r.get("ledger_frames") or [])],
+                        # 任务状态帧（20261004）：`__TASK__` 在解析时被抽进 `task_frames`，
+                        # **不进 `frames`**（实测 934 份归档里 `frames` 只有 __CONFIRM__/
+                        # __PENDING__）⇒ 报告里原本读不到它。留档是为了"这条臂到底发不发得出
+                        # 任务帧"能被**实证**（`eval/arm_capability.py` 的见证者要它：
+                        # 没有这一格，那一族就只能靠正向兄弟武装，本臂永远无法自证）。
+                        "task_frames": [{"id": f.get("id"), "state": f.get("state")}
+                                        for f in (r.get("task_frames") or [])],
                         "error": r["error"], "trace": r.get("trace")}
                        for r in (result.get("rounds") or [])],
             # 这一轮的 trace 路径（20260922）：红了照着读，别再靠复采样猜方差
