@@ -28,9 +28,16 @@
   ③ **回执按生产形状**（`tool/args/result/ts` + PASS 行的 `cmd`）——`__EXEC__`/`__CMD__`
      两条帧、以及那 131 条 `*/cmd_*` 断言的全部输入。
 
-**这一版明确不做的**（都是 `docs` 里 P3–P6 的活，别当成已经做完了）：
-  · 确认卡 / 同意闸（P3）⇒ `pending_confirm`/`__CONFIRM__`/`__PENDING__` 一次都不发，
-    语料里 `write` 类用例**不在**第一批可比子集里；
+**写操作确认卡（P3，20261005）**：写 spec 卡在同意闸上时——`SkillExecutor` 判
+「需要同意 ∧ 这一轮没获同意」⇒ **不执行**、记进 `ledger.pending`（判据与
+`graph.execute_node` 的 `consent_missing` 逐字同款，见 `_consent_missing`），臂随即
+调 **`graph._confirm_popup` 本身**（不抄第二份排序/快照/滤空逻辑）拿到
+`pending_confirm` / `pending_action` / `confirm_text`（或"状态已达成"那支的
+`noop_text`/`noop_note`），原样交回 producer ⇒ `__CONFIRM__`/`__PENDING__` 两条控制帧
+由生产那半发。弹卡轮**到此为止**（与 `route_after_execute` → END 同义），正文由
+producer 用 `confirm_text` 发**一次**——臂这边一个字节的正文都不补，补了就是两遍。
+
+**这一版明确不做的**（都是 `docs` 里 P4–P6 的活，别当成已经做完了）：
   · 闸门谓词（P4）⇒ `gate.fallback_text`/`gate_replan` 恒不发，`forbid_fallback`
     在 react 臂上**不可证伪**（这正是 P0 要给它的合成正控）;
   · 跨轮执行记忆 + task 行（P5）⇒ 不发 `task_frame`、不读不写台账族；
@@ -59,7 +66,8 @@ from langchain_core.tools import StructuredTool
 from agent.context import (_doc_anchors, _frame_texts, _last_assistant_utterance,
                            _last_user_msg, _page_ctx, _recent_tail, _short_reply_hint)
 from agent.decisions import _intent_hints
-from agent.graph import _pending_ledger_frame, _principal_of, _render_planner_prompt
+from agent.graph import (_confirm_popup, _pending_ledger_frame, _principal_of,
+                         _render_planner_prompt)
 from agent.native_plan import build_tool_schema
 from agent.prompts import BLOG_ASSISTANT_PROMPT, audience_block
 from agent.react_line import RunLedger, SkillExecutor, build_agent
@@ -119,13 +127,19 @@ class ReactGoldenArm:
         user_msg = _last_user_msg(messages)
 
         ledger = RunLedger()
-        executor = SkillExecutor(_real_tools(config), ledger, role=role, principal=principal)
+        # 同意闸的两个输入（P3）：主人这一轮的原话 + "刚在卡上点过确定"的凭据。两者
+        # 都从**生产给的那一份**里取（`state["confirm_grant"]` 由 `graph_input` 装、
+        # `user_msg` 与 planner 读的同一句）——不另设来源，否则弹卡判据会与执行判据分家。
+        grant = (state or {}).get("confirm_grant")
+        executor = SkillExecutor(_real_tools(config), ledger, role=role,
+                                 principal=principal, user_msg=user_msg, grant=grant)
         agent, ledger = build_agent(
             _llm(), _skill_menu(role),
             system_prompt=_system_prompt(messages, role, principal, config, user_msg),
             budget=BUDGET, executor=executor, ledger=ledger, name="react_arm")
 
         sent_calls = 0
+        last_plan: dict = {}
         try:
             # 内层只看得到本轮那一句（理由见模块头注的最后一条口径偏差）。
             for step in agent.stream({"messages": [HumanMessage(content=user_msg)]},
@@ -136,12 +150,27 @@ class ReactGoldenArm:
                     if node == "tools":
                         sent_calls = yield from self._on_tools(
                             executor, ledger, sent_calls)
+                        # 写操作卡在同意闸上 ⇒ 这一轮到此为止（P3）。位置与生产同源：
+                        # `graph.execute_node` 是"逐 spec 循环**之前**判一次"，本线
+                        # 是"这一批工具轮跑完、模型再决策之前"判一次——两者都保证
+                        # **一张卡不带任何半截执行**。
+                        popup = self._pending_popup(ledger, executor, state, last_plan,
+                                                    messages, principal, user_msg, config)
+                        if popup is not None:
+                            yield from self._on_popup(popup, ledger)
+                            return   # 与 graph 的 `route_after_execute` → END 同义
                         continue
                     for m in msgs:
                         if not isinstance(m, AIMessage):
                             continue
                         if node == "model":
-                            yield from self._on_model(m, role)
+                            # 这一轮点名的技能（`plan_obj`）：`_plan_skill` 只读它，
+                            # 而令牌里签的技能名就是它——取不到 ⇒ 空串 ⇒ `sign` 拒绝
+                            # 签发 ⇒ 卡弹不出来。所以按"最近一次有效计划"记着。
+                            plan = _plan_of(m.tool_calls, role) if m.tool_calls else {}
+                            if plan:
+                                last_plan = plan
+                            yield from self._on_model(m, role, plan)
                         elif _is_convergence_node(node):
                             # 收敛中间件注入的**确定性收尾**（`ConvergenceMiddleware._stop`
                             # 返回 `{"jump_to": "end", "messages": [AIMessage(收尾正文)]}`）。
@@ -162,10 +191,14 @@ class ReactGoldenArm:
             yield from self._crash_tail(ledger, e)
 
     # ── 帧合成 ───────────────────────────────────────────────────────
-    def _on_model(self, m: AIMessage, role: str | None) -> Iterator[tuple[str, Any]]:
-        """内层的一次模型轮：要么是**决策**（带 tool_calls），要么是**最终答复**。"""
+    def _on_model(self, m: AIMessage, role: str | None,
+                  plan: dict | None = None) -> Iterator[tuple[str, Any]]:
+        """内层的一次模型轮：要么是**决策**（带 tool_calls），要么是**最终答复**。
+
+        `plan` 由调用方算好传进来（`_plan_of`，同一份 `plan_obj` 还要给弹卡那一路用
+        ——`_plan_skill` 只读它）。这里再算一遍就是两份实现，改一处漏一处。
+        """
         if m.tool_calls:
-            plan = _plan_of(m.tool_calls, role)
             if plan:
                 yield ("updates", {"planner": {"plan_obj": plan}})
             return
@@ -210,6 +243,55 @@ class ReactGoldenArm:
             "receipts": list(ledger.receipts),
             "blocked": [_blocked_row(b) for b in ledger.blocked]}})
         return len(executor.calls)
+
+    # ── 弹卡（P3） ────────────────────────────────────────────────────────
+    def _pending_popup(self, ledger: RunLedger, executor: SkillExecutor,
+                       state: dict, plan_obj: dict, messages: list, principal: Any,
+                       user_msg: str, config: dict | None) -> dict | None:
+        """同意闸上攒下的写 spec → 生产的确认卡（`graph._confirm_popup`，**同一个资产**）。
+
+        「触发逻辑照搬」在这里的实现方式是**直接调用它**，不是抄一份：那里面的排序
+        （免弹窗的三条前提 → 硬权限 → 参数/`$ref` → 文章目标有据 → 惰性快照 →
+        `reached_specs` 滤空）改一处漏一处就是一条新漂移源，而它恰好是本仓最常见的
+        那种缺陷。它能被这么用的理由是它只读 state 的四个键；`_popup_state` 按那四个
+        键拼一份最小 state。`config` 原样透传：它要做 tag/cat/board/note/users/todos…
+        那一串**惰性读**，配置缺了会静默退化成"读不到 ⇒ 只印名字"（方向安全，但读数
+        会与生产不同，所以不自己另拼一份 config）。
+
+        返回 `None` = 这批不该弹卡（主人这句是提问、参数里还挂着 `$ref`、目标不在
+        主人原话里……都是 `_confirm_popup` 里的 `continue`）。此时这批 spec **既没
+        执行也没卡**，与生产同形——生产那一轮它们会走逐 spec 的 `consent_frame` 错误帧。
+        判过即清 `pending`：同一批 spec 不该被两张卡问两遍。
+        """
+        if not ledger.pending:
+            return None
+        specs = [str(p.get("spec") or "") for p in ledger.pending]
+        ledger.pending.clear()
+        return _confirm_popup(_popup_state(state, plan_obj, ledger, messages, executor),
+                              specs, principal, user_msg, config)
+
+    def _on_popup(self, popup: dict, ledger: RunLedger) -> Iterator[tuple[str, Any]]:
+        """弹卡轮 / 零改动轮的帧（与 `graph.execute_node` 返回的那一格**同形状**）。
+
+        正文**不在这儿发**：producer 自己读 `confirm_text` / `noop_text` 去 `emit_text`
+        ——那是用户可见正文的"唯一出口"。这里再补一条 messages 帧会让同一段正文**入队
+        两次**（`run_golden` 把两种帧都拼进 `text`）；生产那一轮根本到不了 model 节点，
+        所以那边的正文只有一份。同理不发 `model` update：那一格在生产的弹卡轮里不存在。
+        """
+        kind = str(popup.get("kind") or "")
+        if kind not in ("confirm", "noop"):
+            # 认不出的判别键 = 生产端与消费端漂移，**响亮失败**（同 `execute_node` 那条）：
+            # 宁可这一轮如实收尾，也不拿一个来路不明的 dict 当弹卡批次发出去。
+            logger.error("[react_arm] 确认出口的判别键认不出（kind=%r，键=%s）→ 按零改动收尾",
+                         kind, sorted(popup))
+            yield ("updates", {"execute": {
+                "noop_text": "这一步现在没有需要改动的地方，我就没有动手。",
+                "noop_note": f"确认出口判别键认不出（{kind or '空'}），本轮零改动",
+                "messages": [], "receipts": list(ledger.receipts)}})
+            return
+        body = {k: v for k, v in popup.items() if k != "kind"}
+        yield ("updates", {"execute": dict(body, messages=[],
+                                           receipts=list(ledger.receipts))})
 
     def _crash_tail(self, ledger: RunLedger, err: Exception
                     ) -> Iterator[tuple[str, Any]]:
@@ -372,6 +454,29 @@ def _plan_of(tool_calls: list, role: str | None) -> dict:
     return {"skill": "|".join(str(p.get("skill") or "") for p in plans),
             "tools": [t for p in plans for t in (p.get("tools") or [])],
             "note": "", "reply": "", "status": ""}
+
+
+def _popup_state(state: dict, plan_obj: dict, ledger: RunLedger, messages: list,
+                 executor: SkillExecutor) -> dict:
+    """喂给 `graph._confirm_popup` 的最小 state（它读的四个键，见 `_pending_popup`）。
+
+    `messages` 必须带上**本轮已执行工具的真结果**：`_target_evidence`（"文章 id 有据"
+    那条判据）从 `ToolMessage` 里找材料，喂空的会让文章族写操作的目标判据恒假 ⇒ 卡弹不
+    出来——方向是**假阴性**，恰好是"评测里做不到生产做得到的事"，而报告上看起来像
+    "这臂不会弹卡"。`executor.calls` 就是这一轮的逐次真调用（工具名 + 结果原文）。
+    """
+    calls = list(getattr(executor, "calls", []) or [])
+    extra = [ToolMessage(content=str(c.get("result") or ""),
+                         name=str(c.get("tool") or ""),
+                         tool_call_id=f"popup_{i}") for i, c in enumerate(calls)]
+    return {
+        "messages": list(messages or []) + extra,
+        # `_plan_skill` 只读这一格，而令牌里签的技能名就是它：空 ⇒ `sign` 拒绝签发
+        # ⇒ 卡弹不出来（所以 `stream` 里按"最近一次有效计划"记着，见那里的注）。
+        "plan_obj": dict(plan_obj or {}),
+        "receipts": list(ledger.receipts),
+        "confirm_grant": (state or {}).get("confirm_grant"),
+    }
 
 
 def _blocked_row(b: dict) -> dict:

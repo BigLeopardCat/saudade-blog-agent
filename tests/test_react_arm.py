@@ -73,10 +73,14 @@ class _Boom(_Scripted):
         raise RuntimeError("模拟内层炸了")
 
 
-def _call(name: str, **args) -> AIMessage:
-    """一次决策轮：**带一句正文**（「让我先看看」）——它绝不许上 messages 通道。"""
+def _call(skill: str, **args) -> AIMessage:
+    """一次决策轮：**带一句正文**（「让我先看看」）——它绝不许上 messages 通道。
+
+    第一个形参叫 `skill` 而不是 `name`：写技能的参数**恰好就叫 `name`**（标签族/
+    账号族都是），撞名会让 `_call("tag_delete", name="大笨狗")` 直接 TypeError。
+    """
     return AIMessage(content="让我先看看", tool_calls=[
-        {"name": name, "args": args, "id": f"call_{name}", "type": "tool_call"}])
+        {"name": skill, "args": args, "id": f"call_{skill}", "type": "tool_call"}])
 
 
 NAV_CMD = {"kind": "navigate", "url": "/", "mode": "direct"}
@@ -88,7 +92,8 @@ def _nav_tool(**kw):
     return _Res(f"页面已跳转：{kw.get('path')}", meta={"cmd": dict(NAV_CMD)})
 
 
-def _run(script: list, tools: dict, *, principal=None, model=None) -> list:
+def _run(script: list, tools: dict, *, principal=None, model=None,
+         msg: str = "带我去首页", grant=None) -> list:
     """跑一次 `arm.stream`，收下全部 `(mode, data)` 二元组。"""
     R._llm = lambda: (model or _Scripted(messages=iter(script),
                                          ai_message_chunk=iter([])))
@@ -96,7 +101,10 @@ def _run(script: list, tools: dict, *, principal=None, model=None) -> list:
     R._real_tools = lambda *a, **k: dict(tools)
     R._system_prompt = lambda *a, **k: "你是测试用助手。"
     cfg = {"configurable": {"principal": principal}} if principal else {}
-    return list(R.build().stream({"messages": [HumanMessage(content="带我去首页")]}, cfg))
+    state = {"messages": [HumanMessage(content=msg)]}
+    if grant is not None:
+        state["confirm_grant"] = grant
+    return list(R.build().stream(state, cfg))
 
 
 def _chunks(frames: list) -> list:
@@ -110,6 +118,16 @@ def _ups(frames: list) -> list:
 
 def _node(frames: list, node: str) -> dict:
     return next((u[node] for u in _ups(frames) if node in u), {})
+
+
+def _last_node(frames: list, node: str) -> dict:
+    """**最后**一格该节点的 update。
+
+    弹卡轮会有两格 `execute`：工具轮那一格（这一批没有新调用 ⇒ 空 receipts，本线既有
+    形状）与弹卡那一格。判"弹没弹卡"必须读后者——读第一格恒为假，是**判据自己写错**。
+    """
+    hits = [u[node] for u in _ups(frames) if node in u]
+    return hits[-1] if hits else {}
 
 
 # ── ① 帧契约 ─────────────────────────────────────────────────────────
@@ -298,6 +316,97 @@ try:
 except Exception as e:  # noqa: BLE001
     check("菜单占位体被调用时抛错", "占位体" in str(e))
 print("   技能菜单：user=%d 个" % len(_menu))
+
+# ── ⑥ 同意闸 + 确认卡（P3） ───────────────────────────────────────────
+# 病：同意闸那两条判据（`requires_consent` / `consent_granted`）本线此前**一处都没接**
+# ⇒ 模型点到写工具就**真的执行**（golden 的工具是真的，uid=0 只是让写工具自己早退）。
+# 生产在 `graph.execute_node` 里判两道（逐 spec 的 `consent_missing` + 逐 spec 循环
+# **之前**的 `_confirm_popup`），命中就一件都不执行、改弹一张卡。这一节锁的就是这两件：
+# **零执行**与**卡是真的**（帧形状、令牌里的技能名、正文只发一遍）。
+print("\n⑥ 同意闸：写操作没获同意 ⇒ 零执行 + 弹卡（且正文只发一遍）")
+import agent.confirm as _confirm  # noqa: E402
+import tools.base as _tb  # noqa: E402
+from config.settings import settings as _settings  # noqa: E402
+
+W_MSG = "标签「大笨狗」我不想要了，删掉吧"   # 有意向、判不成命令 ⇒ 该弹卡
+W_CMD = "帮我删掉标签「大笨狗」"             # 明确命令 ⇒ 免弹窗直执行
+# 身份必须是**有权的管理员**（uid=0 是 golden 的形状）：`tag_delete` 展开成
+# `delete_tag`（`write.console`，硬 scope）——换个无权的身份，卡在权限那一道就
+# `continue` 掉了，弹不出来（那时红的是权限闸，不是同意闸，测的就不是这一节）。
+ADMIN0 = Principal(uid=0, role="admin")
+_oi, _os = _tb._tag_index, _settings.jwt_secret
+# 字典读不到 ⇒ 问句退化成「只有名字」（golden 的 uid=0 正是这一态，见该用例的 _note）
+_tb._tag_index = lambda *a, **k: None
+# 密钥空 ⇒ `confirm.sign` 拒签 ⇒ 卡压根弹不出来。锁死成有密钥，这条验的才是弹卡本身。
+_settings.jwt_secret = "test-secret-react-arm"
+try:
+    RAN.clear()
+    _pf = _run([_call("tag_delete", name="大笨狗"), AIMessage(content="已经帮你删掉啦")],
+               {"delete_tag": _nav_tool}, principal=ADMIN0, msg=W_MSG)
+    _pex = _last_node(_pf, "execute")
+    _pc = _pex.get("pending_confirm") or {}
+    check("**写工具一次都没跑**（同意闸的全部意义）", RAN == [], str(RAN))
+    check("`pending_confirm` 上了 execute 那一格（producer 靠它发 `__CONFIRM__`）",
+          bool(_pc), str(sorted(_pex))[:120])
+    check("卡面带问句/按钮/令牌/到期时刻（producer 逐格读，缺一格前端就是残卡）",
+          all(_pc.get(k) for k in ("q", "opts", "token", "exp")), str(sorted(_pc)))
+    check("令牌里签的技能是 `tag_delete`（`_plan_skill` 读 `plan_obj`，空串 ⇒ 拒签 ⇒ 无卡）",
+          (_confirm.inspect(str(_pc.get("token") or "")) or {}).get("skill") == "tag_delete",
+          str(_confirm.inspect(str(_pc.get("token") or "")))[:100])
+    check("`pending_action` 也在（`__PENDING__` 那条帧的输入；`require_frame_prefix` 要两条都发）",
+          bool((_pex.get("pending_action") or {}).get("task_id")))
+    check("`confirm_text` 是给主人看的正文（producer 据它 `emit_text`）",
+          "大笨狗" in str(_pex.get("confirm_text") or ""), str(_pex.get("confirm_text"))[:70])
+    check("**零执行**：receipts 与 blocked 都空（「等确认」不是「执行失败」）",
+          not _pex.get("receipts") and not _pex.get("blocked"))
+    check("**臂自己不补正文**（补一条 messages 帧 = producer 的 `emit_text` 变成第二遍）",
+          _chunks(_pf) == [], repr(_chunks(_pf))[:80])
+    check("弹卡轮没有 model update（与 graph 同：那一轮到不了 model 节点）",
+          not _node(_pf, "model"))
+    check("**轮次到此为止**：脚本第二句（「已经帮你删掉啦」）一个字都没上正文",
+          "删掉啦" not in "".join(str(c.content) for c in _chunks(_pf)))
+
+    print("\n⑥b 明确命令 / 已点过确定 ⇒ 放行直执行（闸只拦「没获同意」那一类）")
+    RAN.clear()
+    _gf = _run([_call("tag_delete", name="大笨狗")], {"delete_tag": _nav_tool},
+               principal=ADMIN0, msg=W_CMD)
+    check("命令形态 ⇒ 工具真的执行了", len(RAN) == 1, str(RAN))
+    check("且**不弹卡**（同一条判据的另一面）",
+          not _last_node(_gf, "execute").get("pending_confirm"))
+    RAN.clear()
+    _gf2 = _run([_call("tag_delete", name="大笨狗")], {"delete_tag": _nav_tool},
+                principal=ADMIN0, msg=W_MSG, grant={"skill": "tag_delete"})
+    check("主人刚在卡上点过确定（`confirm_grant` 在场）⇒ 这句不是命令也放行",
+          len(RAN) == 1 and not _last_node(_gf2, "execute").get("pending_confirm"), str(RAN))
+
+    print("\n⑥c 提问轮：**不许弹卡**（把提问读成意图 = 凭空造一次授权）")
+    RAN.clear()
+    _qf = _run([_call("tag_delete", name="大笨狗"), AIMessage(content="删了就没了，你确认下")],
+               {"delete_tag": _nav_tool}, principal=ADMIN0,
+               msg="把标签「大笨狗」删掉会怎么样？")
+    check("提问轮同样零执行（写工具一次都没跑）", RAN == [], str(RAN))
+    check("提问轮**不弹卡**（`_confirm_popup` 第一道闸就在判这个）",
+          not _last_node(_qf, "execute").get("pending_confirm"),
+          str(sorted(_last_node(_qf, "execute")))[:100])
+finally:
+    _tb._tag_index, _settings.jwt_secret = _oi, _os
+
+print("\n⑥d 接线锁：几处照着抄就会漂的地方")
+_line_src2 = (ROOT / "agent" / "react_line.py").read_text(encoding="utf-8")
+check("同意闸用的是**生产那三条判据本身**（需要同意 ∧ 无 grant ∧ 无命令语），不另立一套",
+      "authz.requires_consent(self.principal, name)" in _line_src2
+      and "not self.grant" in _line_src2
+      and "authz.consent_granted(self.principal, name, self.user_msg)" in _line_src2)
+check("**整批先判**（命中即一个都不跑）——读工具与写工具混排时不能跑一半",
+      "missing = [s for s in specs if self._consent_missing(s)]" in _line_src2)
+check("弹卡调的是 `graph._confirm_popup` **本身**（抄第二份排序/快照/滤空 = 两条漂移源）",
+      "from agent.graph import" in _arm_src and _arm_src.count("_confirm_popup(") == 1)
+_onpop = _arm_src.split("def _on_popup")[1].split("def _crash_tail")[0]
+check("弹卡轮**不自己发正文**（补一条 messages 帧 = 正文入队两遍）",
+      "AIMessageChunk" not in _onpop)
+check("待确认的 spec **不进 `calls`/`blocked`**（进 calls 会让 `forbid_tool_calls: [\"@write_console\"]`"
+      "当场转红，而那族的本意正是「一件写工具都没碰」）",
+      "self.calls.append" not in _line_src2.split("if missing:")[1].split("outs: list[str] = []")[0])
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
