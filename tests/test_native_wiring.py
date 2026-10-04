@@ -16,6 +16,14 @@ tool calls 一条路，没有第二档可比。
   · **零调用 ≠ 闲聊**（本批的靶子）：一个函数都没点、正文却非空 ⇒ 走既有纠偏通道
     **一次**（`no_call_nudge`），第二次仍零调用才认成 `chat`（`no_call_accepted`）；
   · **已有帧之后的零调用不纠偏**：那是合法的收尾轮（实测 48 次），重复打扰是净损失；
+  · **该取数却点了 `chat` 也不认**（20261004 第二批）：`chat` 的语义是"这一轮不需要
+    任何站内数据"，而主人问的偏偏是站内 / 他自己账号里查得到的东西 ⇒ 同样走那条
+    一次性纠偏（`data_question_no_tool`），第二次仍点 `chat` 才记
+    `data_question_still_no_tool` 放行。判据是 `authz` 里那两条已拿全量语料量过的窄
+    判据（`is_own_read_question` / `is_site_corpus_question`），此前只有 `gate_node`
+    一个消费方——**这是"判据前移"，不是新判据**：闸门那两条原样留着当兜底。
+    三条反锁：`has_frames`（有帧的收尾轮）、`uid <= 0`（零工具身份）、以及不带站内
+    指称的闲聊句（`chat` 在那里是**对的**）；
   · **截断 ≠ 闲聊**：`finish_reason=="length"` 走截断轨（`disposition="truncated_wrapup"`），
     直接确定性收尾、不发 `no_call_nudge`——那是预算失败不是采样失败；
   · **认成 chat 时仍是 `answer_only`**：**绝不改成 `wrapped`**——`answer_only` 才是那几条
@@ -94,8 +102,9 @@ def _call(name: str = "effect", args: dict | None = None) -> AIMessage:
          "id": "c1", "type": "tool_call"}])
 
 
-def _run(replies, *, state_over: dict | None = None) -> tuple[dict, dict, _FakeLLM]:
-    """跑一次 `planner_node`，回 `(出参, trace, 假 LLM)`。"""
+def _run(replies, *, state_over: dict | None = None,
+         cfg: dict | None = None) -> tuple[dict, dict, _FakeLLM]:
+    """跑一次 `planner_node`，回 `(出参, trace, 假 LLM)`。`cfg` 只给身份类用例换调用者。"""
     rec = trace_mod.start_trace("t_native", 7, "th", {}, dir=tempfile.mkdtemp(), by_day=False)
     llm = _FakeLLM(replies)
 
@@ -108,7 +117,7 @@ def _run(replies, *, state_over: dict | None = None) -> tuple[dict, dict, _FakeL
     st.update(state_over or {})
     old_get, G.get_llm = G.get_llm, _get
     try:
-        out = G.planner_node(st, _CFG)
+        out = G.planner_node(st, cfg or _CFG)
     finally:
         G.get_llm = old_get
     return out, rec, llm
@@ -220,6 +229,95 @@ def test_zero_call_with_frames_is_not_nudged():
     check("计划仍是 chat", "SKILL=chat" in out["plan"], out["plan"].splitlines()[0])
 
 
+# ── ②′ 该取数却点 `chat`：判据前移到决策层（20261004 第二批）────────────────
+# 这句命中 `authz.is_own_read_question`（"我都有哪些收藏" = 自己账号里的私有数据），
+# 且**不命中任何快道**。带上 `state_over` 换掉默认消息即可（`_run` 先铺默认再 update）。
+_MSG_OWN_DATA = "小猫咪我都有哪些收藏"
+# 语义上正确的落点：`content_query` 点名无参只读工具 `list_my_favorites`（见 skills.py
+# 的 `_EXPLICIT_TOOLS_ORDER`——"我收藏了哪些文章"正是那一族被加进菜单的理由）。
+_READ_ARGS = {"tools": ["list_my_favorites"]}
+
+
+def _chat() -> AIMessage:
+    """**显式**点 `chat`：契约第 7 条要求的形态，`undecided` 为假。
+
+    这正是本批要抓的残余：契约改动把"什么都不点"变成了"点 `chat`"，而纠偏只看
+    `undecided` ⇒ 洞没有消失，只是**挪了一格**（探针实测，读计数：同 60 格数据型轮里
+    「一个都不点」8 格 → 2 格，而显式 `chat` 4 格 → 6 格；总量 12/60 → 8/60）。
+    明细见 `docs/zero-call-residual.md` §3.1。
+    """
+    return AIMessage(content="", response_metadata={"finish_reason": "stop"}, tool_calls=[
+        {"name": "chat", "args": {}, "id": "c0", "type": "tool_call"}])
+
+
+def test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool():
+    print("\n[该取数却点 chat] 纠偏一次、第二次落到真工具（`data_question_no_tool` 恰一条）")
+    out, rec, llm = _run([_chat(), _call("content_query", _READ_ARGS)],
+                         state_over={"messages": [HumanMessage(content=_MSG_OWN_DATA)]})
+    check("LLM 被问了两次（一版决策 + 一次纠偏）", len(llm.prompts) == 2, str(len(llm.prompts)))
+    check("纠偏提示讲的是「主人在问站内/你自己的数据」这个事实",
+          "系统判定" in llm.prompts[1] and "站内" in llm.prompts[1])
+    nud = _events(rec, "data_question_no_tool")
+    check("`data_question_no_tool` 恰一条（不是 `no_call_nudge`：那是零调用那一格）",
+          len(nud) == 1 and not _events(rec, "no_call_nudge"), str(nud))
+    check("★ 纠偏后落到真工具上（`SKILL=content_query` + 点名的只读工具）",
+          "SKILL=content_query" in out["plan"] and "list_my_favorites" in out["plan"],
+          out["plan"].splitlines()[:2])
+    check("★ 没有 `no_call_accepted`（那是「认成零调用」的账，不许串台）",
+          not _events(rec, "no_call_accepted"))
+    check("也没有 `data_question_still_no_tool`（纠偏成功了）",
+          not _events(rec, "data_question_still_no_tool"))
+
+
+def test_chat_still_on_a_data_question_is_released_not_nudged_twice():
+    print("\n[该取数却点 chat·第二次] 不救第二遍：记账放行，闸门仍是兜底")
+    out, rec, llm = _run([_chat()],
+                         state_over={"messages": [HumanMessage(content=_MSG_OWN_DATA)]})
+    check("★ 只纠偏一次就放行（不再多花一次 LLM）", len(llm.prompts) == 2, str(len(llm.prompts)))
+    still = _events(rec, "data_question_still_no_tool")
+    check("`data_question_still_no_tool` 恰一条（供全量 trace 复扫盯残余）",
+          len(still) == 1, str(still))
+    check("计划仍是 chat/answer_only、零工具（**绝不改成 wrapped**：那是把闸门卸掉）",
+          _plan_obj(out).get("status") == "answer_only"
+          and _plan_obj(out).get("chat") is True and _plan_obj(out)["tools"] == [],
+          str(_plan_obj(out).get("status")))
+
+
+def test_chat_without_a_data_question_is_not_nudged():
+    print("\n[该取数却点 chat·反锁 ①] 闲聊句点 chat 是**对的**，不许打扰")
+    out, rec, llm = _run([_chat()],
+                         state_over={"messages": [HumanMessage(content=_MSG_NO_INTENT)]})
+    check("一次都不多问", len(llm.prompts) == 1, str(len(llm.prompts)))
+    check("★ `data_question_no_tool` 与 `no_call_nudge` 都缺席",
+          not _events(rec, "data_question_no_tool") and not _events(rec, "no_call_nudge"))
+    check("计划就是 chat/answer_only、零工具",
+          _plan_obj(out).get("status") == "answer_only" and _plan_obj(out)["tools"] == [],
+          str(_plan_obj(out).get("status")))
+
+
+def test_chat_on_a_data_question_with_frames_is_not_nudged():
+    print("\n[该取数却点 chat·反锁 ②] 已有工具帧之后 = 合法收尾轮，不打扰")
+    frames = [HumanMessage(content=_MSG_OWN_DATA),
+              ToolMessage(content="收藏夹里共有 3 篇", tool_call_id="c1")]
+    out, rec, llm = _run([_chat()], state_over={"messages": frames})
+    check("一次都不多问", len(llm.prompts) == 1, str(len(llm.prompts)))
+    check("★ 不纠偏（`data_question_no_tool` 缺席）",
+          not _events(rec, "data_question_no_tool"))
+    check("也不记 `data_question_still_no_tool`（它不是「纠偏后被放行」那一格）",
+          not _events(rec, "data_question_still_no_tool"))
+    check("计划仍是 chat", "SKILL=chat" in out["plan"], out["plan"].splitlines()[0])
+
+
+def test_chat_on_a_data_question_without_a_uid_is_not_nudged():
+    print("\n[该取数却点 chat·反锁 ③] uid<=0（零工具身份）不催它取数")
+    cfg = {"configurable": {"principal": Principal(uid=0, role="visitor"),
+                            "user_id": 0, "conversation_id": 42, "stop_event": None}}
+    _out, rec, llm = _run([_chat()], state_over={
+        "messages": [HumanMessage(content=_MSG_OWN_DATA)]}, cfg=cfg)
+    check("★ 不催（它本来就没有那条取数通道，催了只会换个说法）",
+          not _events(rec, "data_question_no_tool"), str(len(llm.prompts)))
+
+
 # ── ③ 截断轨：`finish=length` 不是闲聊 ─────────────────────────────────────
 def test_truncated_output_goes_to_the_truncation_track():
     print("\n[截断] finish=length → 确定性收尾，且**不**发零调用纠偏（两种病不混）")
@@ -276,6 +374,11 @@ if __name__ == "__main__":
                test_zero_call_is_nudged_once_then_accepted_as_chat,
                test_zero_call_then_a_real_tool_call_lands_on_the_skill,
                test_zero_call_with_frames_is_not_nudged,
+               test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool,
+               test_chat_still_on_a_data_question_is_released_not_nudged_twice,
+               test_chat_without_a_data_question_is_not_nudged,
+               test_chat_on_a_data_question_with_frames_is_not_nudged,
+               test_chat_on_a_data_question_without_a_uid_is_not_nudged,
                test_truncated_output_goes_to_the_truncation_track,
                test_unparseable_output_is_nudged_once_then_wrapped,
                test_contract_no_longer_licenses_an_empty_decision):

@@ -999,6 +999,31 @@ _NO_CALL_NUDGE = (
     "它不需要参数）；确实没有动作要做就点 `chat`。"
 )
 
+# ── "主人问的是站内/他自己账号里查得到的东西，却点 `chat`"：同样纠偏一次（20261004）
+# 这是上一条的**兄弟格，不是同一条**：契约改完之后模型很少再"一个都不点"了，改成
+# **显式点 `chat`**——两格在结果上完全一样（零工具、零帧、narrator 手里没数据），
+# 但 `undecided` 只标前者，纠偏看不见后者。定点探针实测（`eval/zero_call_residual_
+# probe.py`，24 句×3 轮×两臂交替，读**计数**不读百分数——分母只有 60）：数据型零工具
+# **12/60→8/60** 那一降里，「一个都不点」**8 格→2 格**、显式 `chat` **4 格→6 格**——
+# 总量没有它看起来的那么多，**洞没有消失，它挪了一格**。明细见
+# `docs/zero-call-residual.md` §3.1。
+#
+# 判据不在这里重写：用的是 `authz` 里那两条已经拿全量语料量过的窄判据
+# （`is_own_read_question` / `is_site_corpus_question`；射程、四道排除项的来历见各自
+# 头注）。它们此前**只有 `gate_node` 一个消费方**，于是这一类轮次要等 narrator 把整段
+# 话写完（实测 `20261004T015927` 那次叙述是 4.4s 的模型调用）、再由闸门打回重规划——
+# 用户先看到一句错话、再被改口。**决策层判得出来的事不该留给闸门**；闸门那两条原样
+# 留着当兜底（判据前移不等于闸门撤防）。
+#
+# 文本与 `_NO_CALL_NUDGE` 同纪律：只说机器能保证的事实（判据命中、本轮零工具零结果），
+# 不替 planner 选技能、不列举可能的工具。
+_DATA_QUESTION_NUDGE = (
+    "**系统判定：主人这一句问的是站内 / 你账号里查得到的东西**，而这一轮点的是 `chat`"
+    "（`chat` 的语义是「这一轮不需要任何站内数据」）。系统只知道一件事：本轮零工具、"
+    "零结果，什么都没取到。\n"
+    "请重新给一次决策：要查就点对应的函数。"
+)
+
 # 上一版的响应**读不出决策**（旧行为是"退回文本解析"，20261004 那条路已删）：只说
 # 机器能看到的事实（这一版没有可读的决策），不猜它想干什么、也不列举可能的技能。
 # 与 `_NO_CALL_NUDGE` 分开是因为两种病不同：那条是"什么都没点"（响应是合法的、只是
@@ -4786,32 +4811,72 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                calls=tool_call_names(decided), finish=decided.finish_reason,
                **({"note": native_note} if native_note else {}))
 
-        # ── 零调用（20261004）：不作为决策认下来 ──────────────────────────────
-        # `tool_calls_to_plan` 对"一个函数都没点、正文却非空"返回的是 `chat` + 打上
-        # `undecided` 的决策（见那里的注与 `_NO_CALL_NUDGE` 的头注：42 次零帧零调用
-        # 轮里一半是真动作请求）。这里先走既有纠偏通道**一次**，把契约第 7 条再讲
-        # 一遍（只讲机器保证的事实，不替它选技能）。第二次仍零调用 ⇒ 认成 chat，
-        # 记 `no_call_accepted` 供全量 trace 复扫盯残余。
+        # ── 零工具决策不是决策（20261004）：两格走同一条一次性纠偏通道 ──────────
+        # 共同点：**这一轮一个工具都不会跑**，而系统判得出来本该跑。两条都不替模型
+        # 选技能，只讲机器能保证的事实。
         #
-        # **`has_frames` 为真时不纠偏**：已有工具帧之后的零调用是合法的收尾轮
-        # （实测 48 次），而且那条路已由下面的"收尾丢意图"纠偏管着——重复打扰是净损失。
+        # ① `undecided` = 一个函数都没点、正文却非空（`tool_calls_to_plan` 给的状态，
+        #    见那里的注与 `_NO_CALL_NUDGE` 的头注：42 次零帧零调用轮里一半是真动作
+        #    请求）。② 点的是 `chat`（= 声明"这一轮不需要任何站内数据"），而主人问的
+        #    恰恰是**站内 / 他自己账号里查得到**的东西——判据是 `authz` 里那两条已
+        #    拿全量语料量过的窄判据（`is_own_read_question` / `is_site_corpus_question`）。
+        #    它们此前只有 `gate_node` 一个消费方 ⇒ 这一类轮次要等 narrator 把整段话
+        #    写完、再由闸门打回重规划（实测 `20261004T015927`：那次叙述 4.4s）——
+        #    用户先看到一句错话、再被改口。**决策层判得出来的事不该留给闸门**：闸门
+        #    那两条原样留着当兜底（判据前移 ≠ 闸门撤防）。
+        #
+        # **`has_frames` 为真时两格都不纠偏**：已有工具帧之后的零调用/收尾 chat 是
+        # 合法的收尾轮（实测 48 次），那条路已由下面的"收尾丢意图"纠偏管着——重复
+        # 打扰是净损失。
         # **绝不改成 `wrapped`**：`answer_only` 才是下面那几条零帧声称判据（
         # `_write_done_claim` / `_state_action_claim` / `own_read_question_without_tool`）
         # 的开火前提，换成 wrapped 等于把闸门悄悄卸掉。
-        if (decided is not None and decided.undecided and not has_frames):
+        # "点了 `chat` 但没点任何真函数"：`tool_call_names` 对零调用回**空串**、对显式
+        # 点 `chat` 回 `"chat"`（两者必须可分辨，见那个函数的注）——所以这里不能写成
+        # `not tool_call_names(...)`（那是零调用那一格，已被 `undecided` 罩着）。
+        # `declare`/`notes` 非空时**不打**这个纠偏：那一轮模型明确表达过意图
+        # （"剩下的记下来"），催它点工具是跟任务通道对着干。
+        _calls = tool_call_names(decided) if decided is not None else ""
+        _explicit_chat = bool(decided is not None and decided.skill == "chat"
+                              and _calls and set(_calls.split(",")) == {"chat"}
+                              and not decided.declare and not decided.notes)
+        _asks_data = bool(_explicit_chat and not has_frames
+                          and int(getattr(principal, "uid", 0) or 0) > 0
+                          and (authz.is_own_read_question(user_msg)
+                               or authz.is_site_corpus_question(user_msg)))
+        if decided is not None and not has_frames and (
+                decided.undecided or _asks_data):
             if not correction:
-                correction = _NO_CALL_NUDGE
-                correction_kind = "零调用"
-                record("planner", "no_call_nudge", round=rounds,
-                       finish=decided.finish_reason, text_len=len(raw))
-                logger.warning("[planner] 零调用（finish=%s，正文 %d 字）→ 纠偏重决策"
-                               "一次（round %d/%d）", decided.finish_reason, len(raw),
-                               rounds + 1, MAX_PLAN_ROUNDS)
+                correction = _DATA_QUESTION_NUDGE if _asks_data else _NO_CALL_NUDGE
+                correction_kind = "该取数却零工具" if _asks_data else "零调用"
+                record("planner",
+                       "data_question_no_tool" if _asks_data else "no_call_nudge",
+                       round=rounds, finish=decided.finish_reason, text_len=len(raw))
+                logger.warning(
+                    "[planner] %s → 纠偏重决策一次（round %d/%d）",
+                    "主人在问站内/自己的数据却零工具" if _asks_data
+                    else f"零调用（finish={decided.finish_reason}，正文 {len(raw)} 字）",
+                    rounds + 1, MAX_PLAN_ROUNDS)
                 continue
-            record("planner", "no_call_accepted", round=rounds,
-                   finish=decided.finish_reason, text_len=len(raw))
-            logger.warning("[planner] 纠偏后仍然零调用 → 认成 chat（round %d/%d）",
-                           rounds + 1, MAX_PLAN_ROUNDS)
+            if decided.undecided:
+                # `via` 把"被哪一条纠偏催过"带上：纠偏后从"点 chat"退回"什么都不点"
+                # 也算这个问句没落到工具上（复扫时别把它读成普通的零调用认账）。
+                record("planner", "no_call_accepted", round=rounds,
+                       via=("data_question" if correction == _DATA_QUESTION_NUDGE
+                            else "no_call"),
+                       finish=decided.finish_reason, text_len=len(raw))
+                logger.warning("[planner] 纠偏后仍然零调用 → 认成 chat（round %d/%d）",
+                               rounds + 1, MAX_PLAN_ROUNDS)
+            elif correction == _DATA_QUESTION_NUDGE:
+                # 纠偏后仍然点 `chat`：**不在这里救第二遍**（闸门那两条判据还在，
+                # 而且它们带"只重规划一次"的节流）。记一笔供全量 trace 复扫盯残余。
+                # 判 `correction` 是不是**这一条**纠偏：若本轮先前已被别的由头纠偏过
+                # （如"收尾丢意图"），这里记 `still_no_tool` 就等于替那条纠偏背锅。
+                record("planner", "data_question_still_no_tool", round=rounds,
+                       finish=decided.finish_reason)
+                logger.warning("[planner] 纠偏后仍然点 chat（主人在问站内/自己的数据）"
+                               "→ 交给 narrator 与闸门（round %d/%d）",
+                               rounds + 1, MAX_PLAN_ROUNDS)
 
         # ── 任务登记（20260927 批 D，见 agent/tasks.py 头注）────────────────────
         # 模型这一轮明确说"还有一件事没做完/做不下去"时，把它等级成会话级任务行
