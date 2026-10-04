@@ -18,6 +18,20 @@ import io, json, os, signal, subprocess, sys, time
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
 sys.path.insert(0, "eval")
 import report_archive   # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
+import golden_trace     # 同目录：trace 开关 + 靠 trace 才判得动的 gold 键（见下面的闸）
+import golden_arm       # 同目录：选臂/分栏（20261004，见 eval/golden_arm.py 头注）
+
+# 这一轮跑哪条臂：在**起第一个子进程之前**解析并响亮失败——臂名拼错要当轮炸掉，
+# 不能跑完 18 分钟才发现报告落错了栏。子进程经环境变量继承（本脚本不穿 argv 管道），
+# 而 `GOLDEN_ARM` 是环境变量，天然传得下去（这正是选 env 不选 `--arm` 的理由）。
+_ARM = golden_arm.arm_name()
+# 留档目录按臂分：arm 名只进目录、不进文件名（文件名序 = 时间序是全仓不变量，
+# 见 eval/report_archive.py）。`open_archive` **不建目录**（它只管取独占名），所以这里建。
+_REPORTS_DIR = golden_arm.reports_dir(_ARM)
+os.makedirs(_REPORTS_DIR, exist_ok=True)
+# 跑的是哪条臂要**在日志第一行**看得见：两臂的输出格式一模一样，事后翻日志区分不了
+# 是哪一条跑的（子进程读的是同一份代码、同一套判据，只有 `GOLDEN_ARM` 不同）。
+print(f"[full] arm={_ARM}（engine={golden_arm.engine_for(_ARM)}，留档 {_REPORTS_DIR}/）", flush=True)
 
 CASES = [json.loads(l) for l in open("eval/golden/basic.jsonl", encoding="utf-8") if l.strip()]
 # 需要**真实身份**的用例（管理员读后台 20260921；普通用户被拒那条 20260924）：口径与
@@ -67,13 +81,34 @@ if any(c.get("requires_fixture") for c in CASES):
     _SKIPPED_IDS += _DROPPED
     for _ln in _LINES:
         print(_ln, flush=True)
+# trace 闸（20261004）：`require_ledger_*` 三条读的是 `planner.ledger_frame` **trace
+# 事件**，而 `GOLDEN_NO_TRACE=1` 下 `start_case()` 返回 None ⇒ 那几条**必然报红**，红的
+# 话却是「待办台账没摆上桌」（关于模型的一句断言）。口径与上面三道闸逐字一致：**摘用例
+# + 进 skipped_ids**；那几条是**未评估**，不是"过"也不是"模型退化"（20261004 早上 4 次
+# `--only` 重跑就是这么被误判的）。键表只此一份，在 `golden_trace`，判据侧共用。
+_TRACE_SKIPPED: list[str] = []
+if not golden_trace.enabled():
+    _TRACE_SKIPPED = [c["id"] for c in CASES if golden_trace.trace_derived_keys(c)]
+    if _TRACE_SKIPPED:
+        _drop = set(_TRACE_SKIPPED)
+        CASES = [c for c in CASES if c["id"] not in _drop]
+        _SKIPPED_IDS += _TRACE_SKIPPED
+        for _cid in _TRACE_SKIPPED:
+            print(f"[skip] {_cid}: SKIP (判据要读 planner.ledger_frame trace 事件，"
+                  f"而 {golden_trace.ENV_OFF} 关着 trace —— 未评估，不是模型退化)",
+                  flush=True)
 # 空分母（20260925）：全部被摘掉时**不许往下走**——本脚本的收尾统计会对空序列取
 # min()/P50（ValueError），构造报告时还会除零；就算不炸，打印出来的也是"0/0 通过 = 100%"
-# 那种静默的绿，而这一轮什么都没评。口径与 run_golden.py 逐字一致：退出码 2。
+# 那种静默的绿，而这一轮什么都没评。口径与 run_golden.py 一致：退出码 2；**前提类闸**
+# （trace 关着）造成空分母时报 3（同 run_golden.py 的判据），因为那是"前提不可用"而不是
+# "你自己把用例摘光了"。
 if not CASES:
-    print("[full] ⚠ 一条用例都没剩下（被身份闸 / 真写闸 / 夹具闸摘干净了）—— 这一轮"
-          "**没有评测任何东西**：空分母不是一个通过率，退出码 2（不是 0）", flush=True)
-    sys.exit(2)
+    _code = 3 if _TRACE_SKIPPED else 2
+    print("[full] ⚠ 一条用例都没剩下（被身份闸 / 真写闸 / 夹具闸 / trace 闸摘干净了）"
+          f"—— 这一轮**没有评测任何东西**：空分母不是一个通过率，退出码 {_code}（不是 0）"
+          + ("；其中 trace 关着是主因（那几条用例的判据要读 trace 事件）"
+             if _TRACE_SKIPPED else ""), flush=True)
+    sys.exit(_code)
 RUNNER = "eval/golden_case_runner.py"
 TMPDIR = "/tmp/golden_cases"
 TIMEOUT = 180
@@ -81,7 +116,6 @@ os.makedirs(TMPDIR, exist_ok=True)
 
 # golden trace（20260922）：run_id 在**父进程**定一次，子进程经环境变量继承 ⇒ 整个 run 落
 # 同一个目录（子进程各自 resolve 就会把一次全量散成上百个目录）。GOLDEN_NO_TRACE=1 整体关。
-import golden_trace
 _TRACE_ON = golden_trace.enabled()
 GOLDEN_RUN = golden_trace.resolve_run_id() if _TRACE_ON else None
 if GOLDEN_RUN:
@@ -101,7 +135,11 @@ def spawn_case(case: dict, suffix: str = "") -> dict:
     """
     cid = case["id"]
     json.dump(case, open(f"{TMPDIR}/{cid}.json", "w", encoding="utf-8"), ensure_ascii=False)
-    argv = [".venv/bin/python", RUNNER, f"{TMPDIR}/{cid}.json", "eval/report/runs"]
+    # 解释器用 `sys.executable`（20261004）：此前写死 `".venv/bin/python"`，而 venv 只在主仓
+    # ——在 worktree 里跑评测时那条路径**不存在**，子进程根本起不来（或更坏：起得来但用的是
+    # 主仓的 venv ⇒ editable 的 `.pth` 把主仓钉在 `sys.path` 上）。父进程用什么解释器，子进程
+    # 就用什么，跑的是哪棵树不带歧义。
+    argv = [sys.executable, RUNNER, f"{TMPDIR}/{cid}.json", _REPORTS_DIR]
     if suffix:
         argv.append(suffix)
     t0 = time.time()
@@ -202,15 +240,15 @@ print(f"回归组: {len(_REG) - len(_reg_bad)}/{len(_REG)}"
 # 从那边导入，不在这里抄第二份——两份判据/两份统计必然会漂移（build_request 那条
 # "字段表只留一处"的教训是同一个道理，只是那次漂移的是请求体、这次会是数字）。
 from run_golden import wilson_ci, by_tag_stats           # noqa: E402
-from run_golden import INTERFACE_LAYER                   # noqa: E402
 _TAGS_MAP = {r["id"]: r["tags"] for r in results}
 # `ts`（= 留档文件名那串戳）在**写的那一刻**由 report_archive 给出（见文件末尾）——
 # 这里先留空位，写之前补上：名字与报告里那一格因此恒成对，中间也无需预告一个可能
 # 被顺延的戳。
 report = {"ts": "", "corpus": "full", "total": len(CASES), "passed": len(CASES) - failed,
-          # 接口层（20260927 主线批 A）：与 run_golden.py 同名字段同来源（那个常量
-          # 是两处唯一的一份）。20261004 起只剩 native，见那边的注。
-          "engine": INTERFACE_LAYER,
+          # 接口层（20260927 主线批 A）：与 run_golden.py 同名字段**同源**（`engine_for`
+          # 是唯一实现）。20261004 起这一格还承载"哪条臂"：graph 臂仍逐字 `"native"`
+          # （历史基线与它同档），试验臂是 `"native+<臂>"`。见 eval/golden_arm.py。
+          "engine": golden_arm.engine_for(_ARM),
           "failed": failed, "latency_s": [r["elapsed"] for r in results],
           # 通过率（20260924 补）：这个跑法此前**没有** pass_rate 字段——只打印了
           # "N/M 通过"，报告里只有 passed/total 两个原子数，读的人要自己除。
@@ -223,6 +261,9 @@ report = {"ts": "", "corpus": "full", "total": len(CASES), "passed": len(CASES) 
           "skipped_ids": list(_SKIPPED_IDS),
           # 其中「按设计不跑」的那批单列（口径同 run_golden.py）：真写用例默认不跑。
           "skipped_real_write_ids": list(_WRITE_SKIPPED),
+          # 其中「trace 关着 ⇒ 判据没有证据链」的那批单列（口径同 run_golden.py 的
+          # `skipped_trace_ids`）：它们是**未评估**，不是"过"，也不是模型退化。
+          "skipped_trace_ids": list(_TRACE_SKIPPED),
           # 首跑红数（20260924）：failed 是复跑后的终判，这个留着首跑口径（差额=被吸收的红斑）
           "failed_first_run": failed_first,
           # 回归组块（20260924）：与 run_golden.py 同名字段——留档反查（golden_trace.
@@ -242,16 +283,22 @@ report = {"ts": "", "corpus": "full", "total": len(CASES), "passed": len(CASES) 
 # 留档名在**写的那一刻**取（`O_EXCL` 占位，见 eval/report_archive.py 头注）：秒级 ts 会让
 # 同一秒的两次跑（本跑法 + 一次 `--only` 调试跑）同名互相覆盖。`ts` 跟着文件名走（报告
 # 里那一格与文件名成对，读的人不用换算）。
-with report_archive.open_archive("eval/report/runs") as (archive, f):
+with report_archive.open_archive(_REPORTS_DIR) as (archive, f):
     ts = os.path.splitext(os.path.basename(archive))[0]
     report["ts"] = ts
     json.dump(report, f, ensure_ascii=False, indent=1)
 # `last_run.json` 的语义（20260924 定）：**最近一次全量跑**。这个跑法就是全量跑，
 # 所以由它写（run_golden.py 那边加了 full_run 判据，非全量不再覆盖——此前一次
 # `--only <单条>` 的调试跑会把它写成 total=1）。
-with open("eval/report/last_run.json", "w", encoding="utf-8") as f:
-    json.dump(report, f, ensure_ascii=False, indent=1)
-print(f"报告: {archive}（并更新 eval/report/last_run.json）")
+# **20261004 再加一道同源的闸**：只有 graph 臂能当基线（`is_baseline_arm`）。试验臂的
+# 全量跑覆盖它 = 把"最近一次基线"悄悄换成另一套循环的读数——报告字段一模一样，
+# 读的人从数字上分辨不出来（那正是这个坑最贵的地方）。
+_BASELINE = golden_arm.is_baseline_arm(_ARM)
+if _BASELINE:
+    with open("eval/report/last_run.json", "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=1)
+print(f"报告: {archive}" + ("（并更新 eval/report/last_run.json）" if _BASELINE
+                          else f"（arm={_ARM} **不是基线臂**，未覆盖 eval/report/last_run.json）"))
 _lo, _hi = report["pass_rate_ci95"]
 print(f"通过率: {report['pass_rate']:.3f}（Wilson 95% 区间 {_lo:.3f}–{_hi:.3f}）")
 _weak = [(t, b) for t, b in report["by_tag"].items()

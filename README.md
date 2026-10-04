@@ -311,4 +311,7 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 
 ## 许可
 
-Apache-2.0
+MIT，全文见 [LICENSE](LICENSE)。
+
+`frontend/` 下的**美术资源**（「泠月喵」的模型、贴图、面板图标与形象设计）不在 MIT 的授权
+范围内，按 CC BY-NC-SA 4.0 分发，见 [frontend/ASSETS-LICENSE.md](frontend/ASSETS-LICENSE.md)。

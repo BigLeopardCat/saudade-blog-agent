@@ -4615,7 +4615,12 @@ def test_calls_in_wrong_skill_round():
               "REPLY: 这是最近的几篇")
     _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}
-    _STATE = {"messages": [HumanMessage(content="最近有哪些文章呀")],
+    # ⚠️ 这一句**刻意不是**数据型问句（原先写的是「最近有哪些文章呀」，20261004 改）：
+    # 那句会命中 `authz.is_site_corpus_question`，于是第一次 `SKILL=chat` 零工具会被
+    # **上一层**的 `data_question_no_tool` 纠偏接走（见 `graph.planner_node`），
+    # 第二次提示词里进的是那条纠偏文本而**不是** `_drop_correction` —— 本节要验的
+    # "写错了地方"就看不见了（用例红得有理，但红的原因不是它要验的那条路）。
+    _STATE = {"messages": [HumanMessage(content="帮我看看天气吧")],
               "plan_rounds": 0, "executed": [], "tool_data": []}
     _orig = G.get_llm
     try:

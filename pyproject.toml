@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "泠月喵看板娘 AI 对话 Agent：LangGraph 技能注册表 + 模板质检 + 评测驱动的对话系统"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "Apache-2.0"
+license = "MIT"
 # 依赖一律 `==` 钉死（20260928）：这里声明的版本 = 生产 `.venv` 里实际在跑的版本。
 # 之前全是 `>=`，`uv.lock` 与声明的下限可以差出好几十个版本都"合法"（lock 停在 8 月，
 # 而 pyproject 只说"不早于"），装机的人拿到什么版本全看当天 PyPI——判据钉在运维取值上

@@ -16,6 +16,52 @@
 
 ## 20261004
 
+- **golden 现在能给第二条臂打分：`GOLDEN_ARM`（缺省 graph），报告与留档分栏（评测，20261004）**：
+  「ReAct 能不能到 95%」此前**没有读数**——两条跑法都把 `server._agent = create_agent()`
+  写死在一处、`engine` 是常量，第二条臂没有入口。现在选臂走环境变量（子进程天然继承，
+  逐例子进程的跑法不必穿 argv 管道），建臂收在 `eval/golden_arm.py`；**graph 臂的 `engine`
+  仍逐字 `native`**（`baseline_group.py` 按它归档历史基线），试验臂是 `native+<臂>` 并另写
+  `eval/report/runs_<臂>/`（**臂名只进目录、不进文件名**——文件名序 = 时间序是全仓不变量），
+  `eval/report/last_run.json` 只由 graph 臂写（试验臂覆盖它 = 基线悄悄换主人）。臂名拼错、
+  或试验臂模块不在本树时**响亮失败，绝不静默退回 graph**（那会产出一份看着像第二条臂的假
+  读数）。顺带修掉两处会让"在 worktree 里跑本分支的臂"变成"跑主仓的图"的前置：
+  `golden_case_runner.py` 原先把主仓绝对路径插在 `PYTHONPATH` 前面、`golden_full_run.py`
+  写死 `.venv/bin/python`（worktree 没有 venv）。**graph 臂的行为逐字节不变。**
+
+- **关掉 trace 时那三条台账判据不再报成「模型没做」——按「前提不可用」处置（判据，20261004）**：
+  `require_ledger_frame` / `require_ledger_rows` / `require_card_targets_from_ledger` 读的是
+  `planner.ledger_frame` **trace 事件**（planner 的输入消息不进 trace），而 `--no-trace` /
+  `GOLDEN_NO_TRACE=1` 下 `start_case()` 回 `None` ⇒ `ledger_frames` 恒空 ⇒ 这三条**必然报红**，
+  红的那句话却是「待办台账没摆上桌」——一句关于**模型**的断言，而真相是这一轮没有那条证据链。
+  今早 4 次 `--only` 重跑就是这么被读成在途缺陷的（留档 12 次里带该失败的那几次 `trace` 全为
+  `None`，一一对应；开着 trace 重跑即 PASS）。现在按仓里既有的「前提不可用」纪律处置：判据侧
+  写成 `[未评估]`、跑法侧**摘用例 + 进 `skipped_ids` + 退出码 3**（两个跑法同口径），报告新增
+  `skipped_trace_ids` / `trace_checks`。**未评估 ≠ 通过**：trace 开着而帧真的缺时照旧红。
+
+- **整仓许可由 Apache-2.0 改为 MIT**：仓根 `LICENSE` 换成 MIT 全文（版权人 `BigLeopardCat`），
+  `pyproject.toml` 的 `license` 字段同步。此前是「仓根 Apache-2.0 + `frontend/` 单独 MIT」的
+  拆分，而那个拆分本身只是因为 Apache-2.0 与博客仓的 GPL-2.0 不兼容；整仓一份 MIT 之后拆分
+  取消。`frontend/` 的代码许可没有变化，美术资源仍是 CC BY-NC-SA 4.0（见 `frontend/LICENSE`）。
+
+- **闸门那两条窄判据前移到决策层：主人在问站内/自己那份数据而这一轮点了 `chat`，改由 planner
+  先纠偏一次（判据，20261004）**：起因是**残余换了形状**——契约改成「闲聊也要显式点 `chat`」
+  之后零调用确实少了，但定点探针（20 句数据型 + 4 句闲聊对照组 × 3 轮 × 两臂交替）读到：
+  数据型零工具率 **20.0% → 13.3%**，其中「一个函数都不点」从 8 格压到 2 格，而**「显式点
+  `chat`」从 4 格涨到 6 格**——纠偏对后者是盲的（`undecided` 只为"一个都没点"置位）。
+  本批把闸门第 4 节那两条判据（`authz.is_own_read_question` / `is_site_corpus_question`）
+  在 `planner_node` 里复用一次：点了 `chat`、零工具、本轮零帧、主人问的正是那两条判据认得的
+  问句 ⇒ 走既有 correction 通道纠偏一次（记 `planner.data_question_no_tool`），第二次仍点
+  `chat` 才记 `planner.data_question_still_no_tool` 放行（**绝不改成 `wrapped`**——那是零帧
+  声称判据的开火前提）。**闸门那两条一个字没改，仍是兜底**（判据前移 ≠ 撤防）；反锁与零调用
+  那一格同源：已有帧不纠偏、`uid<=0` 不纠偏。
+  ⚠️ **射程按量到的说，别读成"残余治好了"**：探针 72 次数据型决策开火 **0** 次——那两条判据
+  覆盖的是带"我的 / 站内"指称的问句，而真会掉进零工具的是**指代型**（「这篇」「这段」）、
+  **写命令**（「给他驳回请求」）与**含糊短应答**（「嗯，看看吧」），它们的排除守卫是拿全量 300
+  轮零帧放行轮量出来的、拆了会把现在绿的跨轮取值用例打成新红。全量 1058 份 trace 里这两族
+  合计**只有 1 轮**。所以这条改动买到的是"省掉一次会被丢弃的 narrator 叙述（实测 4.4s）+
+  主人不必先看到一句错话再看它改口"，**不是**零工具率下降。两套读数、被否掉的方案
+  （让所有显式 chat 都纠偏＝几乎每句闲聊都多一次 LLM 调用）与残余真实的落点见
+  `docs/zero-call-residual.md`。
 - **planner 接口层收成单通道：文本规划档整个删掉，`native tool calls` 成为唯一的路（行为，
   20261004）**：`PLANNER_ENGINE` 这个拨盘连它的影子档（`shadow`）一起删除——`settings.planner_
   engine`、`_planner_engine()`、`/health` 的 `planner_engine` dial（dials 5 → 4）、

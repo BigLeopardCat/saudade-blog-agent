@@ -90,7 +90,11 @@ STREAM_END_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*?tid=(.*?) \| \[stream\] end "
     r"reason=(\S+) duration=([\d.]+)s frames=(\d+)")
 DUMP_FAILED_RE = re.compile(r"trace dump failed trace_id=(\S+)")
-# `2026-09-24 00:00:44.731 ERROR [monitor] type=fetch_fail uid=guest url=… msg=… stack=`
+# `2026-09-24 00:00:44.731 ERROR [monitor] type=fetch_fail uid=guest url=… msg=… stack=… ua=… webgl=… dup=…`
+# 尾部三个字段是 20261004 加的（`ua` 服务端从请求头取、`webgl` 是探针结果、`dup` 是同
+# 窗口内重复计数）。**新增字段一律追加在行尾**——这里按位置截取 type/uid，把新字段插在
+# 中间会把 uid 的截法连坐（`uid=guest ua=…` 会被当成 uid 的值）。下面的 alternation 里
+# 也把新键名一并列上：万一将来有人去解析 `stack=`，缺一个终止符就会把它吞进去。
 MON_HEAD_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:[.,]\d+)? \S+ \[monitor\] ")
 # 前端上报里"只在失败分支出现"的两个 type（前者是弹窗链路，后者是消息流 DOM 清理）
 MON_FAILURE_TYPES = ("confirm_card", "orphan_dom_drop")
@@ -208,7 +212,16 @@ def read_stream_ends(log_dir: str) -> dict:
 
 
 def read_monitor(monitor_dir: str) -> dict:
-    """读 monitor.log 及其轮转归档。**只当线索**：type/uid 都是匿名可写的原样插值。"""
+    """读 monitor.log 及其轮转归档。**只当线索、不当证据**。
+
+    20261004 修正措辞：说「type/uid 都是匿名可写的原样插值」已经不准了——同一批改动
+    （Rust `src/routes/monitor.rs`）之后，落盘行是服务端**拼**的：换行被剥掉、`type`
+    收敛成闭集（白名单外的取值一律记 `other`）、`uid` 是服务端从令牌解析出来的
+    `guest`/数字。所以整行伪造这条路已经堵上。
+    **但它仍不是证据**：`msg` / `url` / `ua` 依旧是客户端自述的文本，一条类型真实的
+    上报完全可以带着假内容。判据要用这里的东西**去找**（定位到那一刻、那一类），
+    不要拿它**证明**。
+    """
     paths = sorted(glob.glob(os.path.join(monitor_dir, "monitor.log*")))
     events, raw = [], 0
     for line in _iter_lines(paths):
@@ -220,10 +233,11 @@ def read_monitor(monitor_dir: str) -> dict:
         if ts is None:
             continue
         rest = line[m.end():]
-        # type= / uid= 的值都用"到下一个已知字段为止"的非贪婪截法：`type` 是原样插值的，
-        # 里面可以有空格（甚至伪造出别的字段名）——这里不校验，把原文照抄进报告即可。
-        t = re.search(r"type=(.*?)(?: uid=| url=| msg=| stack=|$)", rest)
-        u = re.search(r"uid=(.*?)(?: url=| msg=| stack=| type=|$)", rest)
+        # type= / uid= 的值都用"到下一个已知字段为止"的非贪婪截法。历史原因：`type` 曾经
+        # 是原样插值的（值里能有空格、甚至伪造出别的字段名）。现在服务端收敛成闭集了，
+        # 但**截法不动**——它对老日志仍然必要，且改了只会让归档数据换一种解析结果。
+        t = re.search(r"type=(.*?)(?: uid=| url=| msg=| stack=| ua=| webgl=| dup=|$)", rest)
+        u = re.search(r"uid=(.*?)(?: url=| msg=| stack=| type=| ua=| webgl=| dup=|$)", rest)
         events.append({"ts": ts, "type": (t.group(1) if t else "").strip(),
                        "uid": (u.group(1) if u else "").strip(), "line": line[:300],
                        "msg": (FLOW_MSG_RE.search(rest).group(1).strip()
