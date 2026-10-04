@@ -73,7 +73,7 @@ from langchain_core.tools import StructuredTool
 
 from agent.context import (_doc_anchors, _frame_texts, _last_assistant_utterance,
                            _last_user_msg, _page_ctx, _recent_tail, _short_reply_hint)
-from agent.decisions import _intent_hints
+from agent.decisions import _article_fast_path, _intent_hints
 from agent.graph import (NARRATOR_DISCIPLINE, _confirm_popup, _pending_ledger_frame,
                          _principal_of, _render_planner_prompt)
 from agent.native_plan import build_tool_schema
@@ -98,6 +98,22 @@ _CONVERGENCE_NODE_PREFIX = "ConvergenceMiddleware"
 def _is_convergence_node(node: object) -> bool:
     """这个 update 是不是收敛中间件发的那一格（见 `stream` 的接线注）。"""
     return str(node).startswith(_CONVERGENCE_NODE_PREFIX)
+
+
+def _tool_frame(i: int, c: dict) -> ToolMessage:
+    """一次已发生调用 → 工具帧（`messages` 通道那一条 ToolMessage）。
+
+    单独成函数只为**一处措辞**：文章读取快道（`ReactGoldenArm.stream`）要把它喂给
+    模型（系统提示的 `tool_results`），`_on_tools` 要把它发给用户/报告——两处各自
+    拼一份字符串，改一处漏一处就是一条新漂移源。
+
+    `tool_call_id` 用 `react_{下标}`：内层 `create_agent` 自己发的 ToolMessage 有它
+    自己的 id，这里不需要与任何 AIMessage 的 tool_calls 对上（golden 只读 `name` 与
+    `content`），造一个稳定的即可。
+    """
+    return ToolMessage(content=str(c.get("result") or ""),
+                       name=str(c.get("tool") or ""),
+                       tool_call_id=f"react_{i}")
 
 
 def _inner_message(messages: list, user_msg: str) -> HumanMessage:
@@ -168,12 +184,42 @@ class ReactGoldenArm:
         grant = (state or {}).get("confirm_grant")
         executor = SkillExecutor(_real_tools(config), ledger, role=role,
                                  principal=principal, user_msg=user_msg, grant=grant)
+
+        # ── 当前文章读取快道（20261005，照搬 planner 的 `_article_fast_path`）──────
+        # 生产在 planner 的首轮、**任何 LLM 之前**判它（`graph.py:4601` 的
+        # `rounds == 0 and not has_frames`）：主人当前页是文章详情页且这句引用了
+        # "这篇/我正在读"，系统就**强制**读那篇（article_id 从 current_url 解析，
+        # 不过模型的手）——那是"零工具却声称读过了"在结构上不可能的那一格。
+        #
+        # 本线此前没有它，代价实测过（20261005）：`todo_multi_step_serial`（「我正在读
+        # 这篇架构文章，顺便带我去留言板看看」）react **6/6 红**、graph 6/47（13%）。
+        # 红的形态是**只做后半件**（导航去留言板）、前半件被静默丢掉。把"先读再走"
+        # 留给模型自己记，就是让它猜；生产早就不猜了。
+        #
+        # **顺序与生产同源**：读发生在内层循环**开始之前**。这也正是它的守卫——
+        # 生产那条是 `rounds == 0 and not has_frames`，本线没有"轮"这个坐标，
+        # 等价物就是"进循环之前只判一次"（进循环后再判＝生产注里写的那个死循环陷阱）。
+        fast_plan = _article_fast_path(user_msg, _page_ctx(messages, role))
+        if fast_plan:
+            logger.info("[react_arm] 文章读取快道命中，强制读 article_id=%s（零 LLM）",
+                        (fast_plan.get("params") or {}).get("article_id"))
+            executor.run("read_article", dict(fast_plan.get("params") or {}))
+        # 这一次读的工具帧要同时喂两处：模型（系统提示的 `tool_results`）与用户/报告
+        # （`messages` 通道的 ToolMessage）。**只构造一次**：同一份 ToolMessage 对象
+        # 喂两边，措辞才不会两处各说各的（`_on_tools` 也用同一个 `_tool_frame`）。
+        fast_frames = [_tool_frame(i, c) for i, c in enumerate(executor.calls)]
+
         agent, ledger = build_agent(
             _llm(), _skill_menu(role),
-            system_prompt=_system_prompt(messages, role, principal, config, user_msg),
+            system_prompt=_system_prompt(messages, role, principal, config, user_msg,
+                                         fast_frames=fast_frames),
             budget=BUDGET, executor=executor, ledger=ledger, name="react_arm")
 
-        sent_calls = 0
+        # 快道的帧在这里补发（内层循环里那次 `tools` 节点只发**增量**）：位置与生产
+        # 同源——execute 的帧先到，narrator 的正文后到。
+        sent_calls = len(executor.calls)
+        if fast_frames:
+            yield from self._on_tools(executor, ledger, 0)
         last_plan: dict = {}
         try:
             # 内层只看得到本轮那一句（理由见模块头注的最后一条口径偏差）——但那一句
@@ -270,9 +316,7 @@ class ReactGoldenArm:
         """
         new = executor.calls[sent_calls:]
         for i, c in enumerate(new, start=sent_calls):
-            yield ("messages", (ToolMessage(content=str(c.get("result") or ""),
-                                            name=str(c.get("tool") or ""),
-                                            tool_call_id=f"react_{i}"), {}))
+            yield ("messages", (_tool_frame(i, c), {}))
         # 回执是**累计语义**（生产 execute_node 每次交的都是请求内全部 PASS 行，
         # producer 靠 `receipt_sent` 下标算增量）⇒ 这里也必须给全量。
         yield ("updates", {"execute": {
@@ -410,7 +454,8 @@ def _real_tools(config: dict | None = None) -> dict[str, Any]:
 
 
 def _system_prompt(messages: list, role: str | None, principal: Any,
-                   config: dict | None, user_msg: str) -> str:
+                   config: dict | None, user_msg: str,
+                   fast_frames: list | None = None) -> str:
     """系统提示 = 判断器提示词（生产的唯一渲染入口）+ 人设 + **叙述纪律** + 循环说明。
 
     **为什么拼这几块**：本线一个模型既做决策又写正文（没有独立 narrator 节点）。
@@ -450,7 +495,12 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
         # 工具帧与引用提示都走各自 helper 的**空输入**取值（`（本轮尚无工具执行）` /
         # `无从引用`）——不手写这两句话：helper 的措辞改了这个适配器要跟着改，是同一份
         # 漂移源。工具结果本身在消息流里（ToolMessage），模型看得见。
-        tool_results=_frame_texts([]), ref_hints=ref_hints([]),
+        #
+        # 例外是**当前文章读取快道**（`fast_frames`，20261005）：那一次读取发生在
+        # 内层循环**开始之前**，消息流里不会有它的 ToolMessage，所以它的结果必须由
+        # 这一格交给模型——渲染仍走 `_frame_texts`（`get_article_detail` 是全文帧，
+        # 那里有放宽的截断预算），不手写摘要。
+        tool_results=_frame_texts(list(fast_frames or [])), ref_hints=ref_hints([]),
         pending_ledger=ledger_frame or "（本轮没有去读待办台账）",
         reflector_feedback="（本决策轮无复盘建议）",
         correction="（本决策轮无纠偏提示）")
