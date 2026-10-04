@@ -221,6 +221,13 @@ class ReactGoldenArm:
         if fast_frames:
             yield from self._on_tools(executor, ledger, 0)
         last_plan: dict = {}
+        # 收尾候选（20261005）：模型给出一条**不带工具调用**的答复 ≠ 这一轮就此结束
+        # ——`ConvergenceMiddleware.after_model` 可能把它**打回**（零工具收尾但主人的
+        # 那句话里还有没做过的动作 ⇒ 纠偏重决策一次）。既然可能被打回，就**不许当场
+        # 发帧**：`run_one` 的 `text` 是 messages 通道上每一条分片的拼接，先发的那条
+        # 草稿会与真正的最终答复**连在一起**交给判据与主人（"消息壳架空判据"那一族）。
+        # 所以零工具答复先扣在这里，**循环结束才发**；被打回时由后一条覆盖。
+        pending_final: AIMessage | None = None
         try:
             # 内层只看得到本轮那一句（理由见模块头注的最后一条口径偏差）——但那一句
             # **带着它的多模态部件**（见 `_inner_message`：按文本重建会把图片丢掉）。
@@ -246,10 +253,14 @@ class ReactGoldenArm:
                         if not isinstance(m, AIMessage):
                             continue
                         if node == "model":
+                            if not m.tool_calls:
+                                # 零工具 = 收尾候选：**扣着不发**（见 `pending_final` 的注）。
+                                pending_final = m
+                                continue
                             # 这一轮点名的技能（`plan_obj`）：`_plan_skill` 只读它，
                             # 而令牌里签的技能名就是它——取不到 ⇒ 空串 ⇒ `sign` 拒绝
                             # 签发 ⇒ 卡弹不出来。所以按"最近一次有效计划"记着。
-                            plan = _plan_of(m.tool_calls, role) if m.tool_calls else {}
+                            plan = _plan_of(m.tool_calls, role)
                             if plan:
                                 last_plan = plan
                             yield from self._on_model(m, role, plan)
@@ -263,7 +274,14 @@ class ReactGoldenArm:
                             # "模型没说"还是"适配器没转发"。这不是边角：撞预算与"同一个调用
                             # 重试两次"是本线**唯一**的两条收尾路径（`ConvergenceMiddleware`
                             # 的全部判据都在这里），丢掉它 = 那两类运行全部记成"什么都没说"。
+                            # 确定性收尾取代任何扣着的草稿：那一条才是这一轮的事实。
+                            pending_final = None
                             yield from self._on_wrap_up(m)
+            # 循环正常走完 ⇒ 扣着的收尾候选就是**最终答复**（只有它没被打回才会走到
+            # 这里；打回过的那条已被后一条覆盖）。位置在循环**之后**是有意的：
+            # `run_one` 的 `text` 按帧序拼接，草稿若先发就会与最终答复连成一串。
+            if pending_final is not None:
+                yield from self._on_model(pending_final, role, {})
         except Exception as e:  # noqa: BLE001 —— 内层炸了也要给主人一句诚实的话
             # 不把异常放走：golden 一条用例炸掉会让整轮跑丢一条读数，而"这臂办不成事"
             # 与"这臂崩了"在报告里必须**长得不一样**。所以照样产一条收尾正文（确定性、

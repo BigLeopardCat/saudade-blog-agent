@@ -59,12 +59,12 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain.agents.middleware.types import AgentState
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import NotRequired
 
 from agent import authz
-from agent.decisions import _doc_title
+from agent.decisions import _doc_title, _intent_done, _scan_action_intents
 from agent.entities import receipt_digest
 from agent.graph import _VERDICT_PASS, _check_spec, _tool_args, _tool_name
 from agent.principal import UNKNOWN as _UNKNOWN_PRINCIPAL
@@ -91,6 +91,28 @@ def spec_signature(tool: str, args: dict | None) -> str:
     except Exception:  # noqa: BLE001 —— 参数里有不可序列化的东西：降级成字面量
         body = _WS_RE.sub(" ", str(args))
     return f"{tool}::{body}"
+
+
+def attempted_specs(ledger: RunLedger) -> list[str]:
+    """这一次运行**尝试过**的调用 → 生产 `state["executed"]` 那种 spec 串。
+
+    形态必须与生产 planner 的 `TOOLS:` 行同构（`工具名({"k": "v"})`）：消费它的是
+    **生产的意图清单判据**（`agent.decisions._intent_done`，逐字同一份），它按
+    `'"键"' in s` / `'"值"' in s` 认参数——自己另发明一种串会让它恒判"没做过"，
+    纠偏环于是对着已经办完的事喊"你还没做"。
+
+    PASS 与 BLOCK **都算**：生产侧的口径是"上过计划的动作（哪怕被拒）spec 都进了
+    `executed`"，被拒过再推它重试一次是另一种病（同一个动作原地打转）。同意闸上
+    攒下的 `ledger.pending` **不算**——那些一次都没执行（见 `RunLedger.pending`）。
+    """
+    out: list[str] = []
+    for r in (*ledger.receipts, *ledger.blocked):
+        try:
+            args = json.dumps(r.get("args") or {}, ensure_ascii=False)
+        except Exception:  # noqa: BLE001 —— 参数里有不可序列化的东西：降级成空集
+            args = "{}"
+        out.append(f"{r.get('tool') or ''}({args})")
+    return out
 
 
 class RunLedger:
@@ -449,7 +471,7 @@ class ReactLineState(AgentState):
 
 
 class ConvergenceMiddleware(AgentMiddleware):
-    """轮次预算 + 同工具同参无进展 ⇒ 确定性收尾（跳 `end`，不抛异常）。
+    """轮次预算 + 同工具同参无进展 + **收尾丢意图纠偏** ⇒ 确定性收尾（跳 `end`，不抛异常）。
 
     与 `langchain.agents.middleware.ModelCallLimitMiddleware` 的分工：那个是**通用**的
     轮数上限，收尾正文是英文机器句（`Model call limits exceeded: ...`），直接进回复
@@ -460,14 +482,20 @@ class ConvergenceMiddleware(AgentMiddleware):
     state_schema = ReactLineState
 
     def __init__(self, ledger: RunLedger, *, budget: int = 6,
-                 repeat_limit: int = 1) -> None:
+                 repeat_limit: int = 1, user_msg: str = "") -> None:
         """budget：允许的**模型轮数**（生产 `MAX_PLAN_ROUNDS=4`，这里放宽到 6 是因为
         自由 ReAct 一轮里可能并发多条调用，步子比 planner 碎）；repeat_limit：同一个
-        签名允许执行的次数，超过即判无进展。"""
+        签名允许执行的次数，超过即判无进展。`user_msg` 是主人这一轮的**原话**
+        ——收尾丢意图纠偏（见 `_intent_correction`）要拿它扫动作意图，缺省空串等于
+        这条判据不生效（fail-safe：拿不准就不拦）。"""
         super().__init__()
         self.ledger = ledger
         self.budget = budget
         self.repeat_limit = repeat_limit
+        self.user_msg = user_msg
+        # 纠偏**只此一次**（生产同一支的注：「只纠一次」——`for _attempt` 只跑两轮）。
+        # 一次运行一个中间件实例，所以实例属性就是"这一次运行"的范围。
+        self._corrected = False
 
     def _stop(self, reason: str) -> dict[str, Any]:
         """跳 `end`：注入一条确定性收尾，并把台账写回 state（审计用）。"""
@@ -496,9 +524,9 @@ class ConvergenceMiddleware(AgentMiddleware):
                             runtime: Any) -> dict[str, Any] | None:
         return self.before_model(state, runtime)
 
-    @hook_config(can_jump_to=["end"])
+    @hook_config(can_jump_to=["model", "end"])
     def after_model(self, state: ReactLineState, runtime: Any) -> dict[str, Any] | None:
-        """**只管无进展**：模型这一轮点的每个签名都执行过了 ⇒ 收尾，**不执行这次重复**。
+        """**无进展 ⇒ 收尾**；**零工具收尾但意图清单还有没做过的 ⇒ 打回模型重决策一次**。
 
         判在这里（而不是 `before_model`）是因为判据的对象是"模型**刚提出**的这一轮"：
         等下一轮开始时最后一条是 ToolMessage、看不到它想点什么了。跳 `end` 时这次
@@ -511,11 +539,57 @@ class ConvergenceMiddleware(AgentMiddleware):
         msgs = list(state.get("messages") or [])
         last = msgs[-1] if msgs else None
         calls = list(getattr(last, "tool_calls", None) or [])
-        if calls and all(self.ledger.executed.get(
-                spec_signature(str(c.get("name") or ""), c.get("args") or {}), 0)
-                >= self.repeat_limit for c in calls):
-            return self._stop("no_progress")
-        return None
+        if calls:
+            if all(self.ledger.executed.get(
+                    spec_signature(str(c.get("name") or ""), c.get("args") or {}), 0)
+                    >= self.repeat_limit for c in calls):
+                return self._stop("no_progress")
+            return None
+        # 零工具轮 = 模型**自己宣布收尾**（ReAct 里没有别的含义）。往下问一句：
+        # 主人那句话里的动作，是不是还有一次都没做过的？
+        return self._intent_correction()
+
+    def _intent_correction(self) -> dict[str, Any] | None:
+        """收尾丢意图纠偏——照搬 `graph.py:5229` 那一支（20261005）。
+
+        **病**（生产 20261003 立此判据的现场，golden `multi_step_referent_nav_effect`）：
+        模型看过工具返回、决定收尾，可主人那句话里还有**一次都没被规划过**的动作。
+        提示词里那份意图清单明明标着"**未完成**"，它却收尾了 ⇒ 与那件事相关的工具
+        返回一条都没有，收尾正文只剩主人的原话可依据，于是如实答成"没帮你做"。
+        主人要的却是把它做掉。react 臂的零调用尾巴（`rag_noise_mysql` 3/6、
+        `multi_turn_correction` 2/6）同形。
+
+        **判据的三条守卫，都是从生产那一支逐条搬的**：
+          · `has_frames`（这里＝台账里已有 PASS 或 BLOCK 行）：首轮零工具轮是另一族
+            ——没看过任何返回就收尾，再问一次通常还是零工具（`test_unaccounted_zero_tool_round`
+            明写"不新增重决策通道"）。看过返回之后的零工具才是"决定收尾"。
+          · 台账空 / `user_msg` 空 ⇒ 不判（fail-safe：拿不准就不拦，绝不凭一个读不到
+            的字段把这一轮改道）。
+          · `_corrected` ⇒ 只纠一次。纠第二次是把"它坚持不做"读成"它没听懂"，
+            而生产那一支同样只跑两轮。
+
+        **已被拒过的动作不会再被推一次**：上过计划的 spec（哪怕 BLOCK）都进了
+        `attempted_specs` ⇒ `_intent_done` 判它已完成，留在清单里的只能是**从没被
+        规划过**的那些。
+        """
+        if self._corrected or not self.user_msg:
+            return None
+        if not (self.ledger.receipts or self.ledger.blocked):
+            return None
+        left = [i for i in _scan_action_intents(self.user_msg)
+                if not _intent_done(i, attempted_specs(self.ledger))]
+        if not left:
+            return None
+        self._corrected = True
+        pending = "、".join(f"{i['label']}（{i['key']}）" for i in left)
+        logger.warning("[react_line] 零工具收尾但意图清单仍有未规划项（%s）→ 纠偏重决策一次",
+                       "、".join(i["key"] for i in left))
+        # 措辞照抄生产那一支（`graph.py:5233`）：同一件资产在两臂上说同一句话，
+        # 将来复核"哪一臂的读数变了"时才不会被措辞差污染。
+        return {"jump_to": "model", "messages": [HumanMessage(content=(
+            "你这一轮**没有排任何工具**（等于宣布收尾），但主人那句话里还有这些"
+            f"动作**一次都没有被执行过**：{pending}。你手里没有与它们相关的任何"
+            "工具返回。本轮先把没做过的做掉（一轮一件），再谈收尾。"))]}
 
     async def aafter_model(self, state: ReactLineState,
                            runtime: Any) -> dict[str, Any] | None:
@@ -541,7 +615,8 @@ def wrap_up_text(ledger: RunLedger, reason: str) -> str:
 def build_agent(model: Any, tools: list[BaseTool], *, system_prompt: str,
                 budget: int = 6, repeat_limit: int = 1, skill: str = "",
                 executor: SkillExecutor | None = None, ledger: RunLedger | None = None,
-                principal: Any = None, name: str = "react_line"):
+                principal: Any = None, name: str = "react_line",
+                user_msg: str = ""):
     """建一个带收敛判据与回执台账的 `create_agent`。
 
     返回 `(agent, ledger)`：`ledger` 是这一次运行的台账，跑完从它读回执与停止原因。
@@ -554,12 +629,15 @@ def build_agent(model: Any, tools: list[BaseTool], *, system_prompt: str,
 
     ledger = ledger or RunLedger()
     # 主人原话给**工具级**那扇门的字面路径兜底用；技能级那扇自带（在 `executor` 上）。
-    # 缺省从 executor 取，两处同源，不另设第二个来源。
-    msg = getattr(executor, "user_msg", "") or ""
+    # 缺省从 executor 取，两处同源，不另设第二个来源；`user_msg` 是给**没有 executor**
+    # 的调用方（离线单测）留的那条路——两处都必须落在同一句话上，否则收尾丢意图纠偏
+    # 会对着另一句话扫意图。
+    msg = user_msg or getattr(executor, "user_msg", "") or ""
     wrapped = wrap_tools_with_receipts(tools, ledger, skill=skill, executor=executor,
                                        principal=principal, user_msg=msg)
     agent = create_agent(model=model, tools=wrapped, system_prompt=system_prompt,
                          middleware=[ConvergenceMiddleware(
-                             ledger, budget=budget, repeat_limit=repeat_limit)],
+                             ledger, budget=budget, repeat_limit=repeat_limit,
+                             user_msg=msg)],
                          name=name)
     return agent, ledger
