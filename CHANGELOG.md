@@ -16,6 +16,18 @@
 
 ## 20261005
 
+- **第二条臂接上同意闸与写操作确认卡（判据，20261005；只动评测线适配器，生产行为零变化）**：
+  ReAct 线此前**只有权限闸、没有同意闸**——模型点到写工具就真的执行（`graph.execute_node`
+  里那两道"需要同意 ∧ 这一轮没获同意 ⇒ 不执行"本线一处都没接）。现在判据与生产**逐字同源**
+  （`authz.requires_consent` ∧ 无 `confirm_grant` ∧ 无命令语），命中即**整批一个都不跑**、
+  登记进待确认；弹卡调的是 **`graph._confirm_popup` 本身**（不抄第二份排序/惰性快照/
+  `reached_specs` 滤空），拿到的 `pending_confirm`/`pending_action`/`confirm_text`
+  （或"状态已达成"那支的 `noop_text`/`noop_note`）原样交给生产那半 ⇒ `__CONFIRM__` /
+  `__PENDING__` 两条控制帧、以及那张卡的问句正文，都由既有出口发**一次**。语料里
+  ~17 条 `write` 类用例（`admin_*_popup` / `account_*_popup`）从此可获得真实读数。
+  与生产同形的两处细节：弹卡轮**不发正文帧**（补一条就是 `emit_text` 之外的第二遍）、
+  **不发 `model` update**（那一轮到不了 narrator 节点）。
+
 - **第二条臂的收尾正文不再被丢掉（判据，20261005；只动评测线适配器，生产行为零变化）**：
   `agent/react_arm.py` 此前只把 `node == "model"` 的 `AIMessage` 当正文，而收敛判据
   （`ConvergenceMiddleware`）注入的确定性收尾挂在**中间件自己的节点名下**

@@ -121,6 +121,12 @@ class RunLedger:
         self.executed: Counter[str] = Counter()   # 签名 → 执行次数
         self.stop_reason: str = ""                # budget / no_progress / ""（自然收尾）
         self.wrap_up: str = ""                    # 确定性收尾正文（跳 end 时注入）
+        # 待确认的写 spec（P3，20261005）：同意闸上"有意向、这一轮没获同意"的那些
+        # ——**一个都没执行**，等着主人点一下确定。与 `blocked` 分开：blocked 的语义
+        # 是"执行了、验收没过"（系统确认的事实），这一格是"压根没执行"（拒绝执行
+        # 才是诚实；把它记成受阻会让回执看起来像"试过了但失败了"）。臂读它去调
+        # `graph._confirm_popup` 弹卡（同一个资产，不抄第二份），判过即清。
+        self.pending: list[dict] = []
 
     # ── 判据 ────────────────────────────────────────────────────────────
     def seen(self, sig: str) -> bool:
@@ -194,10 +200,18 @@ class SkillExecutor:
     """
 
     def __init__(self, tools_by_name: dict[str, Any], ledger: RunLedger, *,
-                 role: str = "admin", principal: Any = None) -> None:
+                 role: str = "admin", principal: Any = None,
+                 user_msg: str = "", grant: Any = None) -> None:
         self.tools = tools_by_name
         self.ledger = ledger
         self.role = role
+        # 主人这一轮的原话与"刚点过确定"的凭据（P3，20261005）：同意闸的两个输入。
+        # 缺省分别是空串与 `None` ⇒ **判成"没获同意"**（fail-closed 的方向与权限闸
+        # 一致：不确定就问一句，绝不确定地执行）。离线 A/B 的桩工具没有一个落在
+        # `CONSENT_SCOPES` 里（`authz.requires_consent` 查的是生产那张工具→scope 表），
+        # 所以不传它们时行为与从前一字不差。
+        self.user_msg = user_msg
+        self.grant = grant
         # 调用者身份（P1，20261004）：`None` = 身份不明。判据是 `authz.check` 的
         # 那一处——**fail-closed**：身份不明 ⇒ 零权限（`REASON_UNKNOWN_ROLE`），
         # 从不"默认放行"。离线 A/B（工具全是桩、不碰库不碰设备）不传它，行为
@@ -228,6 +242,36 @@ class SkillExecutor:
             reply = str(plan.get("reply") or plan.get("note") or "")
             self.ledger.replies.append({"skill": skill, "reply": reply[:200]})
             return f"{reply}\n{RECEIPT_HEAD} {skill}：本技能没有要执行的工具（纯应答）。", 0
+
+        # ── 同意闸（P3，20261005）：写操作**整批先判、一件都不执行** ──────────────
+        # 生产这边的分工是两道、都在 `graph.execute_node`：① `_confirm_popup` 在**逐
+        # spec 循环之前**判一次，命中就整批回 `pending_confirm`（"一次点击确认的是
+        # 一整批，不该以执行一半为代价"——读工具也一样不跑）；② 没命中的那些，进循环
+        # 后逐条还有 `consent_missing`（graph.py:8717）。两道合起来的效果是一句话：
+        # **未获同意的写 spec 在生产里从不执行**——要么变成一张卡，要么变成一条
+        # `__ERROR__: 待确认[…]` 帧。
+        # 本线此前两道都没有，于是模型点到写工具就**真的执行**（golden 的工具是真的，
+        # 只是 uid=0 时写工具自己会早退）。这一格补的是"不执行"那一半，方向与生产
+        # 一致：**整批**（这一份 plan 展开出的全部 spec）先判，命中即一个都不跑。
+        # 弹不弹卡**不在这层判**——臂拿 `ledger.pending` 去调 `graph._confirm_popup`。
+        missing = [s for s in specs if self._consent_missing(s)]
+        if missing:
+            outs = []
+            for spec in missing:
+                name = _tool_name(spec)
+                args, args_ok = _tool_args(spec)
+                self.ledger.pending.append({"tool": name, "args": args,
+                                            "spec": spec, "skill": skill})
+                # 正文用**生产同源**的同意帧（`_check_spec` 认得出它，所以"
+                # 这一轮没执行"对模型是读得到的、不是静默）。**不进 `self.calls`、
+                # 不进 `ledger.blocked`**：前者会让 `tool_calls` 记上一次"调用"
+                # （golden 的 `forbid_tool_calls: ["@write_console"]` 当场转红，而
+                # 那一族的本意正是"这一轮一件写工具都没碰"），后者会把"等确认"
+                # 记成"执行失败"。
+                outs.append(f"[{name}] {authz.consent_frame(name, self.principal)}")
+            logger.info("[react_line] 写操作未判成命令 → 不执行、登记待确认: %s",
+                        [p["tool"] for p in self.ledger.pending])
+            return "\n".join(outs), 0
 
         outs: list[str] = []
         tool_data: list[dict] = []
@@ -268,6 +312,21 @@ class SkillExecutor:
             self.calls.append({"tool": name, "args": args, "result": text,
                                "kind": kind, "verdict": verdict})
         return "\n".join(outs), len(specs)
+
+    def _consent_missing(self, spec: str) -> bool:
+        """这条 spec 是不是"写操作、这一轮没获同意"。
+
+        判据与 `graph.execute_node` 的 `consent_missing`（graph.py:8717）**逐字同款**
+        ——`requires_consent` ∧ 没有 `confirm_grant`（主人刚在卡上点过确定）∧ 这句里
+        没有对该技能的明确命令。改成别的写法会让两臂比的不是同一件事：
+          · 比生产**宽**（多判成"要问一句"）⇒ 生产里会直执行的写，这里静默不执行；
+          · 比生产**严**（放行了本该问的）⇒ 评测里做得出生产做不出的写。
+        两条偏差各自的读数都是假的，所以这里只 import 生产那一份判据，不另立。
+        """
+        name = _tool_name(spec)
+        return (authz.requires_consent(self.principal, name)
+                and not self.grant
+                and not authz.consent_granted(self.principal, name, self.user_msg))
 
 
 def wrap_tools_with_receipts(tools: list[BaseTool], ledger: RunLedger,
