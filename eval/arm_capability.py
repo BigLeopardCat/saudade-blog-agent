@@ -375,7 +375,8 @@ def main() -> int:
     ap.add_argument("--uid", type=int, default=1, help="正控用的 uid（默认 1）")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
     ap.add_argument("--print-skip-ids", action="store_true",
-                    help="打印**不可证伪**的用例 id（逗号分隔，直接喂 --skip-ids）")
+                    help="打印**不可证伪**的用例 id（逗号分隔，直接喂 --skip-ids）；"
+                         "与 --probe 同用时建臂会往 stdout 先打几行日志 ⇒ 清单是**最后一行**")
     ap.add_argument("--report-out", default="", help="把 JSON 也写一份到该路径")
     a = ap.parse_args()
 
