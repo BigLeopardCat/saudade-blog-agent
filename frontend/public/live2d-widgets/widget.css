@@ -1849,10 +1849,22 @@
 .conv-rename-input:focus { border-color: var(--washi-pink-deep, #d94f9a); }
 .conv-more:hover,
 .conv-row.menu-open .conv-more { background: var(--washi-tape, rgba(255, 222, 238, 0.86)); color: var(--washi-pink-deep, #d94f9a); }
+/* ⚠️ `.chat-img-btn` 必须在这两组的名单里（20261005）——它是一颗 `<button>` 而**自己
+   没有 `color`**。表单控件的 UA 样式表给 button 定的是 `color: buttontext`，那是**元素上
+   的具名值、不是继承值**，于是 `#waifu-chat` 的 `color: var(--washi-ink)` 根本传不下来，
+   它恒解析成黑。下面那条 `#waifu-chat svg path { fill: currentColor }` 本意是"让图标跟着
+   各自按钮的 color 走"，遇上这颗就跟着**黑**走了：白日黑图标压在粉纸上看不出问题，
+   夜里黑图标压在深紫纸面等于隐形（用户 20261005 报的就是这一个）。面板里其余带 svg 的
+   按钮（.chat-rail-btn / .conv-head-btn / .conv-more …）都各自声明了 color，只有它漏了。
+   **别图省事写成 `#waifu-chat button { color: inherit }`**：那个特异度 (1,0,1) 会压过
+   这里 .chat-rail-btn 的 (0,1,0)，把整条 rail 的图标色一起改掉——漏的是"某一颗没人给它
+   定色"，不是"button 这个标签没人管"。 */
 .chat-rail-btn,
-.conv-head-btn { color: var(--washi-ink-2, #7c6584); }
+.conv-head-btn,
+.chat-img-btn { color: var(--washi-ink-2, #7c6584); }
 .chat-rail-btn:hover,
-.conv-head-btn:hover { background: var(--washi-tape, rgba(255, 222, 238, 0.86)); color: var(--washi-pink-deep, #d94f9a); }
+.conv-head-btn:hover,
+.chat-img-btn:hover { background: var(--washi-tape, rgba(255, 222, 238, 0.86)); color: var(--washi-pink-deep, #d94f9a); }
 .conv-row-menu { background: var(--washi-paper, #fffdfa); border-color: var(--washi-line, rgba(198, 152, 192, 0.42)); }
 /* 图标是 chat-session.js / chat-render.js 注入的**行内 fill 字面量**（#203042 等），
    深色面板上等于隐形。表现属性（fill="..."）按作者级 0 特异度参与层叠，任何 CSS
