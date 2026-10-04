@@ -712,10 +712,10 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
     full_reply = ""
     nav_line = ""
     exec_rows: list = []  # 跨轮执行记忆（20260904 C3）：checker 验收回执，累计语义末批即全量
-    # 动作事实块（20260927 D3）：**写族**的事实由系统印在正文最前面（与流式那半同源
-    # 同序，`agent/factblock.py`；命令族 20261002 起不印，见那边的 `BLOCK_FAMILIES`）。
-    # 这里不流式，所以整块一次算：回执是累计语义，末批即全量 ⇒ 每次覆盖成最新全量即可
-    # （`compose` 在末尾拼）。命令族纯轮次算出来是空串，`compose` 幂等地不拼。
+    # 动作事实块（20260927 D3）：系统代印事实那一批**已整体歇业**（20261005；射程
+    # `BLOCK_FAMILIES` 空集 ⇒ `action_facts` 恒空 ⇒ 这里恒为空串、`compose` 恒等）。
+    # 接线原样留着：与流式那半同源同序（`agent/factblock.py`），恢复只需改那一个常量；
+    # 回执是累计语义、末批即全量，所以真要恢复也是每次覆盖成最新全量即可。
     fact_block = ""
     for mode, data in _agent.stream(
         graph_input(messages, ledger=ledger or {}),
@@ -1120,9 +1120,12 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             主人读到的顺序恒为"事实 → 包装"。块尾留一个空行（markdown 里单换行会被
             并进同一段，"跳转：…好，我带你过去了"会连成一句）。
 
-            **命令族（跳转/特效/夜间）不在射程内**（20261002）：`action_facts` 只收
-            写族。那一族的效果主人当场看得见，那句话交回给泠月自己说——所以这里对
-            纯命令轮**一行都不发**（`fresh` 为空直接返回，正文从 narrator 开始）。"""
+            **射程 20261005 起为空**（`agent/factblock.py` 的 `BLOCK_FAMILIES`：命令族
+            20261002 退出、写族 20261005 退出）⇒ `action_facts` 恒返回空表、这里
+            **一行都不发**（`fresh` 为空直接返回，正文从 narrator 开始），`prelude`
+            恒为空串、下游 `compose` 恒为恒等。这段接线**原样留着**：它是那次回退的
+            唯一开关（改 `BLOCK_FAMILIES` 一个常量就恢复），而删掉它意味着"系统还会不会
+            代印"这件事在代码里再也看不见。"""
             nonlocal prelude
             fresh = [x for x in action_facts(rows) if x not in fact_sent]
             if not fresh:

@@ -98,26 +98,30 @@ def test_family_of():
 
 
 def test_action_facts():
-    print("\n[取事实] 只取写族、去重、保序、跳过错误帧")
-    got = action_facts([_RCPT_CMD, _RCPT_DATA, _RCPT_WRITE])
-    check("命令族不进事实块（效果在主人眼前，那句话归泠月自己说）",
-          got == [_RCPT_WRITE["result"]], str(got))
-    check("  数据族也不进（它返回的是 JSON）",
-          _RCPT_DATA["result"] not in got, str(got))
-    check("  **分类没变**：命令族仍是动作族，只是不印（改的是射程不是分族）",
-          is_action_family(_RCPT_CMD) and not is_block_family(_RCPT_CMD))
-    check("纯命令轮 ⇒ 一行都不印（事实块整个不发生，正文从 narrator 开始）",
+    """**20261005 的新契约**（主人拍板：写族也退出印出）＝射程空集。
+
+    这一节此前判的是"只取写族、去重、保序"——那些规则**一条都没有被推翻**，只是
+    输入集空了。所以判据改成两半：① 三个族**都不进**（每族一条，缺一族就会漏掉一次
+    收窄）；② **反向对照**——分类没有跟着缩水（`is_action_family` 仍认命令族与写族），
+    否则"不印"会退化成"认不出"，而认不出会让 `graph.model_node` 的占位分岔与
+    `narrator_facts_share` 的量化口径一起失真（两处都按分类算，不按印量算）。
+    """
+    print("\n[取事实] 射程空集：三个族都不再代印；但**分类没缩水**（判据仍按族算）")
+    check("写族不再进事实块（20261005：系统不再抢话，写操作也归泠月交代）",
+          action_facts([_RCPT_WRITE]) == [] and block_of([_RCPT_WRITE]) == "")
+    check("命令族不进（20261002 起，效果在主人眼前）",
           action_facts([_RCPT_CMD]) == [] and block_of([_RCPT_CMD]) == "")
-    check("顺序＝执行顺序（receipts 是累计语义）",
-          action_facts([_RCPT_WRITE, _RCPT_WRITE2]) == [_RCPT_WRITE["result"], _RCPT_WRITE2["result"]])
-    check("同一次动作重复执行只印一行（主人不该读到三行一样的话）",
-          action_facts([_RCPT_WRITE, _RCPT_WRITE, _RCPT_WRITE]) == [_RCPT_WRITE["result"]])
-    check("__ERROR__ 不是事实",
-          action_facts([{**_RCPT_WRITE, "result": "__ERROR__: 未知工具"}]) == [])
-    check("空 result 不算一行",
-          action_facts([{**_RCPT_WRITE, "result": "   "}]) == [])
-    check("形状不对的项跳过，不抛",
-          action_facts([None, "x", 42, _RCPT_WRITE]) == [_RCPT_WRITE["result"]])
+    check("数据族不进（返回的 JSON，讲人话是模型的活）",
+          _RCPT_DATA["result"] not in action_facts([_RCPT_DATA]))
+    check("三族混在一起也一行都不出（改前那份实现必须把写族那一行进出来）",
+          action_facts([_RCPT_CMD, _RCPT_DATA, _RCPT_WRITE, _RCPT_WRITE2]) == [])
+    # 反向对照：**分类仍在**（这是本节唯一能红的地方——把 `is_action_family` 一并改空
+    # 的话，下面这条与 `graph.model_node` 的占位分岔都会静默失真）
+    check("分类没缩水：命令族与写族仍算动作族（数据族不是）",
+          is_action_family(_RCPT_CMD) and is_action_family(_RCPT_WRITE)
+          and not is_action_family(_RCPT_DATA))
+    check("  而 `is_block_family`（印不印）对它们全部为假——两件事没有合并",
+          not any(is_block_family(r) for r in (_RCPT_CMD, _RCPT_WRITE, _RCPT_DATA)))
     check("None/空列表安全", action_facts(None) == [] and action_facts([]) == [])
 
 
@@ -128,16 +132,22 @@ def test_render_and_compose():
           == FACT_MARK + "页面已跳转：https://a/b\n" + FACT_MARK + "特效 樱花(sakura) 已打开")
     check("  已经盖过标记的行不重复盖（幂等）",
           render_fact_block([FACT_MARK + "x"]) == FACT_MARK + "x")
-    check("块 = action_facts + render 的组合壳",
-          block_of([_RCPT_WRITE]) == FACT_MARK + _RCPT_WRITE["result"])
+    check("块 = action_facts + render 的组合壳（射程空集 ⇒ 组合壳也为空）",
+          block_of([_RCPT_WRITE]) == "")
     # 标记只盖在**印出来的那一份**上：工具回执（模型看到的证据）一字未动——
-    # `tools/base.py` 那行 result 是模型的判据（graph.py 的"无前缀中文事实"注释）
-    check("回执原文一字未动（模型的证据不带标记，标记只在给人读的那份上）",
+    # `tools/base.py` 那行 result 是模型的判据（graph.py 的"无前缀中文事实"注释）。
+    # 射程空集之后这条**更重要**了：回执是 narrator 交代动作的唯一依据（见
+    # `graph.model_node` 的"摘除面必须与印出面同宽"），它必须原样、不带任何标记。
+    check("回执原文一字未动（模型的证据不带标记）",
           _RCPT_WRITE["result"] == "标签「音乐」已创建"
-          and render_fact_block(action_facts([_RCPT_WRITE])) == FACT_MARK + _RCPT_WRITE["result"])
+          and FACT_MARK not in _RCPT_WRITE["result"])
     check("  命令族的回执**照样一字未动**（它只是不印了，模型看到的证据不变）",
           _RCPT_CMD["result"] == "特效 樱花(sakura) 已打开"
           and action_facts([_RCPT_CMD]) == [])
+    # 渲染器本身**没坏**（它是那次回退的一行开关，不能跟着射程一起废掉）：
+    # 反向对照——手工喂两行，它照旧盖标记、照旧幂等。
+    check("反向对照：渲染器仍然能盖标记（射程空了，机器没坏）",
+          render_fact_block(["x", FACT_MARK + "y"]) == FACT_MARK + "x\n" + FACT_MARK + "y")
     check("块在前、空行分隔（单换行会被 markdown 并成一句）",
           compose("事实行", "包装文字") == "事实行\n\n包装文字")
     check("正文已以块开头 ⇒ 不重复印（gate 兜底的替代文本**就是**块）",
@@ -350,13 +360,13 @@ def _system_prompt(llm: "_ScriptedLLM") -> str:
 
 
 def test_graph_command_round_not_printed():
-    """**20261002 的新契约**（主人拍板：命令族不印）：一轮真跳了页/开了特效的对话——
+    """**命令族不印**（20261002 立、20261005 扩到全体）：一轮真跳了页/开了特效的对话——
 
     ① 系统**不印**那一行（气泡里只有泠月的话）；② 但工具帧与回执**一个字都不摘**
-    （`_drop` 由 `is_block_family` 算，不是 `is_action_family`）：那是 narrator 唯一的
+    （`_drop` 由 `is_block_family` 算，射程空集 ⇒ 一个字都不摘）：那是 narrator 唯一的
     依据，它得自己把这件事说出来；③ 那一格是**占位文本**而不是"本轮没有动作族执行"
     ——后者在一轮真的执行过的对话里是句假话，会把 narrator 引到"什么都没干"；
-    ④ 5g（复述式声称）**不再命中这一族**：系统不印了，"那句话"就该由泠月说，
+    ④ 5g（复述式声称）**不再命中任何族**：系统不印了，"那句话"就该由泠月说，
     再罚它就是罚它去做被要求的事。
     """
     print("\n[真图·命令族] 不印、但帧照给；那句话归 narrator 自己说")
@@ -372,7 +382,7 @@ def test_graph_command_round_not_printed():
           "本轮没有系统代印的事实" in sys_p
           and "本轮没有动作族执行" not in sys_p)
     check("  占位里点名了「那件事由你自己说」（否则模型以为系统还会说一遍）",
-          "那件事由你自己说" in sys_p)
+          "那几件事全由你自己说" in sys_p)
     check("工具帧**照给**（没被摘掉：它是 narrator 唯一的依据）",
           _FACT_LINE in sys_p and "本轮这些工具返回已由系统印给主人" not in sys_p,
           str([ln for ln in sys_p.splitlines() if _FACT_LINE in ln]))
@@ -387,7 +397,16 @@ def test_graph_command_round_not_printed():
 
 
 def test_graph_wiring():
-    print("\n[真图·写族] 事实块进提示词、族内帧从记录段摘掉、复述只记不判")
+    """**写族退出印出**（20261005，主人拍板）——这一节是那次改动的**主锁**。
+
+    改前：写族的帧与回执**被摘掉**（`_drop` 非空）而系统替它印 —— 那套的前提是
+    "主人已经读到了"。改后：系统一个字都不印 ⇒ **一个字都不许摘**，否则 narrator
+    既读不到、主人也读不到，那件事**没有任何作者**。所以本节的四条判据是：
+    ① 没有任何 `fact_block` 事件；② 写族的工具帧与回执**原样在提示词里**；
+    ③ 两段"已由系统印给主人"的兜底句**不许出现**（它们是"摘光了"的标记）；
+    ④ 复述不再记 `action_restate`（现在它说的就是本该它说的那句）。
+    """
+    print("\n[真图·写族] 系统不再代印 ⇒ 帧与回执一个字都不摘（那是它唯一的依据）")
     out, llm, tool, events = _run_graph(
         [_PLAN_FAV, _PLAN_CHAT], ["已经帮你收藏啦～"],
         tool_name="add_favorite", message=_FAV_MSG)
@@ -397,23 +416,25 @@ def test_graph_wiring():
           len(tool.calls) == 1 and [r.get("tool") for r in out.get("receipts") or []]
           == ["add_favorite"], str(tool.calls))
     sys_p = _system_prompt(llm)
-    check("提示词里有 [本轮已由系统印出的事实] 段与那行事实",
-          "[本轮已由系统印出的事实]" in sys_p and _FACT_WRITE_LINE in sys_p)
-    check("  系统明说那几行**已经印在气泡最前面**（否则模型会以为主人没看到、去复述）",
-          "已经印在气泡最前面" in sys_p)
-    check("族内事实从 [本轮工具执行记录] 摘掉了（同一份事实出现两次＝邀请复述）",
-          "[本轮工具执行记录]" in sys_p
-          and "本轮这些工具返回已由系统印给主人" in sys_p)
-    check("  也从 [本轮执行回执] 摘掉了",
-          "本轮已验收的执行都已由系统印给主人" in sys_p)
+    check("**没有** model/fact_block 事件（写族也不代印了）",
+          ("model", "fact_block") not in [(n, e) for n, e, _ in events],
+          str([(n, e) for n, e, _ in events]))
+    check("那一格是占位、且**点名了写操作也归它交代**（不提它就会以为系统替它说了）",
+          "[本轮系统代印的事实]" in sys_p
+          and "本轮没有系统代印的事实" in sys_p
+          and "写操作" in sys_p)
+    check("**写族的工具帧原样在提示词里**（改前这里是被摘掉的那一格）",
+          _FACT_WRITE_LINE in sys_p
+          and "本轮这些工具返回已由系统印给主人" not in sys_p,
+          str([ln for ln in sys_p.splitlines() if _FACT_WRITE_LINE in ln]))
+    check("**写族的回执原样在提示词里**（两段兜底句都不许出现）",
+          "本轮已验收的执行都已由系统印给主人" not in sys_p)
+    check("  回执段里能看到那个写工具名（narrator 靠它交代「改了哪一件」）",
+          "add_favorite" in sys_p)
     check("纪律 23 在场且写明「不限长度，只限内容」",
           "不限长度，只限内容" in sys_p)
-    check("trace 有 model/fact_block 事件（判据可回溯）",
-          any(n == "model" and e == "fact_block" for n, e, _ in events),
-          str([(n, e) for n, e, _ in events]))
-    check("复述被记下来了（gate.action_restate，soft=True）",
-          any(n == "gate" and e == "action_restate" and d.get("soft") is True
-              for n, e, d in events),
+    check("复述不再记 gate.action_restate（它说的就是本该它说的那句话）",
+          ("gate", "action_restate") not in [(n, e) for n, e, _ in events],
           str([(n, e) for n, e, _ in events]))
     # **这一节是 20260927 实测改口的锁**：这条网原先是 fallback，跑动作族 golden 时
     # 三条被它命中、三条都因为 RESET 连命令一起清而"页面没跳却说已跳"。所以断言从
@@ -464,7 +485,7 @@ def test_graph_zero_frame_no_authorization():
     # 族名只许在**那一格**里查：叙述纪律第 1 条本身就写着"站内查询、跳转、特效/夜间
     # 切换"，全提示词 grep 会恒真（那才是这条断言最容易写成哑判据的地方）。取
     # **最后一次**出现：纪律 23 正文里也引用了这个槽名，split 第一次会切到纪律那段。
-    _slot = sys_p.rsplit("[本轮已由系统印出的事实]", 1)[1].split("当前页面上下文")[0]
+    _slot = sys_p.rsplit("[本轮系统代印的事实]", 1)[1].split("当前页面上下文")[0]
     check("那一格是占位（不是空字段）", "本轮没有系统代印的事实" in _slot)
     check("  **一个族名都不提**（提了就是邀请它去认领一件没发生的事）",
           all(w not in _slot for w in ("跳转", "特效", "夜间")), repr(_slot[:80]))
@@ -498,12 +519,12 @@ def test_graph_data_round_untouched():
     sys_p = _system_prompt(llm)
     check("提示词那一格是占位文本（不是空字段）",
           "本轮没有系统代印的事实" in sys_p)
-    # 同一条分岔的另一半（20261002 二改）：这一轮有**数据族**帧、没有命令族回执 ⇒
-    # 占位**不许**点名跳转/特效/夜间、也不许发"由你自己说"的授权。
+    # 同一条分岔的另一半（20261002 二改、20261005 判据扩到动作族）：这一轮有**数据族**帧、
+    # 没有任何动作族回执 ⇒ 占位**不许**点名跳转/特效/夜间/写操作、也不许发"由你自己说"的授权。
     check("  数据轮同样不发授权、不点族名",
-          all(w not in sys_p.rsplit("[本轮已由系统印出的事实]", 1)[1]
+          all(w not in sys_p.rsplit("[本轮系统代印的事实]", 1)[1]
                   .split("当前页面上下文")[0]
-              for w in ("跳转", "特效", "夜间", "由你自己说")))
+              for w in ("跳转", "特效", "夜间", "写操作", "由你自己说")))
     check("  数据帧**没有**被摘掉（记录段照常给模型）",
           "本轮这些工具返回已由系统印给主人" not in sys_p)
     check("没有 model/fact_block 事件", ("model", "fact_block") not in [(n, e) for n, e, _ in events])
@@ -569,32 +590,33 @@ def _ai_chunks(items: list) -> list:
 
 
 def test_producer_order_and_reset():
-    print("\n[真 producer] 事实块先于 narrator 的文本；RESET 之后重发（不丢事实）")
+    print("\n[真 producer] 射程空集：一行都不代印；RESET 与兜底替换照旧")
     script = [
         ("updates", {"execute": {"receipts": [_ROW]}}),
         ("messages", (AIMessageChunk(content="已经帮你收藏好啦～"),
                       {"langgraph_node": "model"})),
         ("updates", {"model": {"messages": [AIMessage(content="已经帮你收藏好啦～")]}}),
-        ("updates", {"gate": {"done": True, "fallback_text": _FACT_WRITE_BLOCK,
+        ("updates", {"gate": {"done": True, "fallback_text": "这一轮什么都没办成。",
                               "gate_replan": False}}),
     ]
     items = _drain(script)
     chunks = _ai_chunks(items)
-    check("三段 AI 文本：块 → narrator（它确实先流出去了）→ 兜底替换文本",
-          chunks == [_FACT_WRITE_BLOCK + "\n\n", "已经帮你收藏好啦～", _FACT_WRITE_BLOCK],
-          str(chunks))
-    check("事实块在 narrator 之前（主人先读事实）",
-          chunks and chunks[0] == _FACT_WRITE_BLOCK + "\n\n",
-          repr(chunks[0] if chunks else ""))
-    check("兜底那一帧**没有把块印两遍**（compose 幂等：替代文本就是块）",
-          chunks[-1] == _FACT_WRITE_BLOCK
-          and chunks[-1].count(_FACT_WRITE_LINE) == 1, repr(chunks[-1]))
-    check("__CMD__ 帧在事实块之前（机器读的命令与给人读的事实各就各位）",
-          next((i for i, x in enumerate(items) if isinstance(x, str)
-                and x.startswith("__CMD__:")), -1)
-          < next((i for i, x in enumerate(items)
-                  if isinstance(x, AIMessageChunk)), -1),
-          str(items))
+    check("两段 AI 文本：narrator 正文 → 兜底替换文本；**前面没有块**",
+          chunks == ["已经帮你收藏好啦～", "这一轮什么都没办成。"], str(chunks))
+    check("**写族回执不再产生任何代印帧**（改前这里是 `〔系统〕 已收藏文章 46`）",
+          not any(isinstance(c, str) and FACT_MARK in c for c in _ai_chunks(
+              _drain([("updates", {"execute": {"receipts": [_ROW]}}),
+                      ("messages", (AIMessageChunk(content="包装"),
+                                    {"langgraph_node": "model"}))]))),
+          str(_ai_chunks(_drain([("updates", {"execute": {"receipts": [_ROW]}}),
+                                 ("messages", (AIMessageChunk(content="包装"),
+                                               {"langgraph_node": "model"}))]))))
+    check("__CMD__ 帧照发（机器读的那一半与印不印无关）",
+          any(isinstance(x, str) and x.startswith("__CMD__:") for x in _drain([
+              ("updates", {"execute": {"receipts": [_ROW_CMD]}}),
+              ("messages", (AIMessageChunk(content="这就带你过去～"),
+                            {"langgraph_node": "model"}))])),
+          str(_drain([("updates", {"execute": {"receipts": [_ROW_CMD]}})])))
     _reset = next(i for i, x in enumerate(items) if isinstance(x, str)
                   and x.startswith("__RESET__"))
     _last_ai = max(i for i, x in enumerate(items) if isinstance(x, AIMessageChunk))
@@ -603,7 +625,7 @@ def test_producer_order_and_reset():
 
 
 def test_producer_pass_round():
-    print("\n[真 producer] 通过的一轮：块 + 包装都在，顺序不变")
+    print("\n[真 producer] 通过的一轮：正文就是 narrator 那一句（没有块可拼）")
     script = [
         ("updates", {"execute": {"receipts": [_ROW]}}),
         ("messages", (AIMessageChunk(content="想收别的随时说～"),
@@ -612,16 +634,16 @@ def test_producer_pass_round():
         ("updates", {"gate": {"done": True, "gate_replan": False}}),
     ]
     chunks = _ai_chunks(_drain(script))
-    check("两段：块（带空行）+ 包装",
-          chunks == [_FACT_WRITE_BLOCK + "\n\n", "想收别的随时说～"], str(chunks))
-    check("数据族回执不发块（只印写族）",
+    check("只有一段正文（写族轮：改前这里前面还有一段事实块）",
+          chunks == ["想收别的随时说～"], str(chunks))
+    check("数据族回执同样不发块",
           _ai_chunks(_drain([
               ("updates", {"execute": {"receipts": [_RCPT_DATA]}}),
               ("messages", (AIMessageChunk(content="查到 1 篇。"),
                             {"langgraph_node": "model"})),
               ("updates", {"gate": {"done": True, "gate_replan": False}}),
           ])) == ["查到 1 篇。"])
-    check("**命令族回执也不发块**（20261002：效果主人当场看得见，那句话归泠月）",
+    check("命令族回执也不发块（效果主人当场看得见，那句话归泠月）",
           _ai_chunks(_drain([
               ("updates", {"execute": {"receipts": [_ROW_CMD]}}),
               ("messages", (AIMessageChunk(content="这就带你过去～"),
