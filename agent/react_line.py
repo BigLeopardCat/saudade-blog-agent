@@ -53,6 +53,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from collections import Counter
 from typing import Any
 
@@ -62,7 +63,11 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import NotRequired
 
+from agent import authz
+from agent.decisions import _doc_title
+from agent.entities import receipt_digest
 from agent.graph import _VERDICT_PASS, _check_spec, _tool_args, _tool_name
+from agent.principal import UNKNOWN as _UNKNOWN_PRINCIPAL
 
 logger = logging.getLogger(__name__)
 
@@ -92,9 +97,12 @@ class RunLedger:
     """一次 agent 运行（一次 `invoke`）的工具台账。
 
     与生产 `AgentState.receipts` 同一份语义（checker PASS 的才是事实，BLOCK 的进
-    `blocked` 并带原因码），但**键集更小**：这里不落 execution_log、不跨语言读，
-    所以只留 `tool/args/result/kind/reason/ts`，不搬 `digest`/`cmd`/`principal_role`
-    那一套 Python 写 / Rust 读的契约键（搬了就得同时改 Rust 侧，而这条线还没上线）。
+    `blocked` 并带原因码）。键集与生产回执**对齐到 golden 需要的那一格为止**
+    （20261004 P2）：`tool/args/result/kind/ts` 恒有，PASS 行另带 `cmd`/`digest`/
+    `title`（producer 据 `cmd` 发 `__CMD__` 帧、Rust 据 `digest`/`title` 渲染跨轮
+    记忆行）；**没有搬**的是审计那几格（`principal_role` 与 `_RCPT_META_KEYS`
+    白名单）——那批只服务于后台审计，golden 一个断言都不读，搬了是给 Rust 侧
+    平添一条没验证的通路。
 
     ⚠️ **一次运行一个实例**：它活在 Python 对象里，不是 graph state。`create_agent`
     的每次 `invoke` 都该配一个新的 `build_agent(...)`（本线唯一的用法就是这样）。
@@ -134,18 +142,37 @@ class RunLedger:
 
 
 def _verdict_of(name: str, args: dict, args_ok: bool, text: str, skill: str,
-                kind: str, meta: dict, ledger: RunLedger) -> str:
-    """跑生产 checker、记台账、返回给模型看的那一行回执。"""
+                kind: str, meta: dict, ledger: RunLedger) -> tuple[str, str]:
+    """跑生产 checker、记台账、返回 `(给模型看的那一行回执, verdict)`。"""
     verdict, reason = _check_spec(name, args, args_ok, text, skill, kind, meta)
     receipt = {"skill": skill, "tool": name,
                "args": {k: str(v)[:200] for k, v in (args or {}).items()},
-               "result": text[:200], "kind": kind}
+               "result": text[:200], "kind": kind, "ts": time.time()}
     if verdict == _VERDICT_PASS:
+        # ⚠️ 这一段的字节数关乎"golden 能不能给第二条臂打分"（20261004 P2）：生产
+        # `execute_node` 的 PASS 回执（graph.py 的 `if verdict == _VERDICT_PASS` 支）
+        # 还带四个**跨语言契约键**，producer 与 Rust 各读一部分——
+        #   · `cmd`：命令族（跳转/特效/夜间）的连线命令，producer 据它发 `__CMD__`
+        #     帧（`require/forbid_cmd_*` 118+13 条断言的全部输入）；
+        #   · `digest` / `title`：跨轮执行记忆的实体锚点（Rust `render_exec_row` 读）。
+        # 本线此前刻意只留 tool/args/result/kind——理由是"还没上线，不搬跨语言契约"
+        # （见 `RunLedger` 的注，那条理由对**生产**仍然成立，`principal_role` 那几格
+        # 也仍然没搬）。但 golden 臂要按生产形状产 `__EXEC__`/`__CMD__`，缺了这两个
+        # 键，那一整族断言会**空转成绿**——正是 P0 要防的假通过。
+        cmd = (meta or {}).get("cmd")
+        if isinstance(cmd, dict):
+            receipt["cmd"] = cmd
+        digest = receipt_digest(name, text)
+        if digest:
+            receipt["digest"] = digest
+        if name == "get_article_detail":
+            receipt["title"] = _doc_title(text)
         ledger.receipts.append(receipt)
-        return f"{RECEIPT_HEAD} {name} 已执行，结果已验收（{kind}）。"
+        return f"{RECEIPT_HEAD} {name} 已执行，结果已验收（{kind}）。", verdict
     receipt["reason"] = reason
     ledger.blocked.append(receipt)
-    return f"{RECEIPT_HEAD} {name} **未生效**（{reason}）。换参数或换工具，别原样重试。"
+    return (f"{RECEIPT_HEAD} {name} **未生效**（{reason}）。换参数或换工具，别原样重试。",
+            verdict)
 
 
 class SkillExecutor:
@@ -167,10 +194,22 @@ class SkillExecutor:
     """
 
     def __init__(self, tools_by_name: dict[str, Any], ledger: RunLedger, *,
-                 role: str = "admin") -> None:
+                 role: str = "admin", principal: Any = None) -> None:
         self.tools = tools_by_name
         self.ledger = ledger
         self.role = role
+        # 调用者身份（P1，20261004）：`None` = 身份不明。判据是 `authz.check` 的
+        # 那一处——**fail-closed**：身份不明 ⇒ 零权限（`REASON_UNKNOWN_ROLE`），
+        # 从不"默认放行"。离线 A/B（工具全是桩、不碰库不碰设备）不传它，行为
+        # 与从前一字不差；golden 臂必须传，否则模型点到越权工具会**真的执行**，
+        # 而生产在 `graph.execute_node` 里会拦——那是"评测里能做出生产做不出的写"。
+        self.principal = principal
+        # 逐次调用留痕（真工具名 + 结果原文 + verdict，PASS/BLOCK 都算"调用过"）。
+        # `ledger.receipts`/`ledger.blocked` 分两列表且各自只收一类，**顺序与配对
+        # 都丢了**——golden 的 `require_zero_exec`/`require_tool_calls` 要的是
+        # "这一轮调用过哪些真工具"，必须另记一份。**一直在追加、不重置**：
+        # 一次 `run()` 可能被包装层逐技能调用多次，重置会把前一轮的调用抹掉。
+        self.calls: list[dict] = []
 
     def run(self, skill: str, params: dict) -> tuple[str, int]:
         """→ `(给模型看的正文, 真正执行了几个工具)`。
@@ -201,8 +240,18 @@ class SkillExecutor:
                 if ref_err:
                     args_ok, text = False, ref_err
             fn = self.tools.get(name)
+            # 权限判据（P1，20261004）：**在执行之前**，与参数引用解析同层——确定性、
+            # 无 LLM、无一例外。生产在 `graph.execute_node` 里做的是同一件事
+            # （`authz.check` + `authz.enforcing(decision.scope)` → `denial_frame`），
+            # 本线此前**没有**这一道。拒绝的形态也要同源：产 `__ERROR__: 权限不足[…]`
+            # 帧，`_check_spec` 认得出它（`authz.scope_error_reason`）并判 BLOCK，
+            # 于是受阻链路（blocked 回执 + 原因码）照旧成立。
+            decision = authz.check(self.principal, name)
             if not args_ok or fn is None:
                 text = text or f"__ERROR__: 工具 {name} 不在本轮可执行清单里"
+            elif not decision.allowed and authz.enforcing(decision.scope):
+                text = authz.denial_frame(decision, self.principal)
+                logger.info("[react_line] 权限拒绝，不执行: %s → %s", name, decision)
             else:
                 try:
                     res = fn(**args)
@@ -213,13 +262,17 @@ class SkillExecutor:
                     logger.info("[react_line] 工具 %s 抛错：%s", name, e)
             tool_data.append({"tool": name, "result": text[:2000]})
             outs.append(f"[{name}] {text}")
-            outs.append(_verdict_of(name, args, args_ok, text, skill, kind, meta, self.ledger))
+            line, verdict = _verdict_of(name, args, args_ok, text, skill, kind, meta,
+                                        self.ledger)
+            outs.append(line)
+            self.calls.append({"tool": name, "args": args, "result": text,
+                               "kind": kind, "verdict": verdict})
         return "\n".join(outs), len(specs)
 
 
 def wrap_tools_with_receipts(tools: list[BaseTool], ledger: RunLedger,
                              skill: str = "", executor: SkillExecutor | None = None,
-                             ) -> list[BaseTool]:
+                             principal: Any = None) -> list[BaseTool]:
     """把每个工具包成"执行 + 立刻验收 + 记台账 + 附一行回执"的同名工具。
 
     包装层**不改工具本身**（`description` / `args_schema` 逐字保留）：模型看到的菜单
@@ -231,8 +284,14 @@ def wrap_tools_with_receipts(tools: list[BaseTool], ledger: RunLedger,
 
     `executor` 给定时交给它执行（技能级回执，见 `SkillExecutor`）；不给就是**工具级**
     （直接调工具自己、`_check_spec` 拿到的 name 就是工具名）。两个口径都产同一种台账。
+
+    **两条入口都要过权限闸**（P1）：`executor` 那条在 `SkillExecutor.run` 里判；这一条
+    原本没有——那是"两扇门只锁了一扇"（`executor is None` 时调用点直接落到工具本体上）。
+    判据与生产 `graph.execute_node` 逐字同一条（`not allowed and authz.enforcing(scope)`），
+    `principal` 缺省按**身份不明**（`authz.UNKNOWN`）算，fail-closed。
     """
     out: list[BaseTool] = []
+    who = principal if principal is not None else _UNKNOWN_PRINCIPAL
     for t in tools:
         inner = getattr(t, "func", None)
 
@@ -248,14 +307,22 @@ def wrap_tools_with_receipts(tools: list[BaseTool], ledger: RunLedger,
                     ledger.record(sig)
                 return text
             else:
-                try:
-                    res = _inner(**kwargs)
-                    raw, kind = str(res), str(getattr(res, "kind", "ok") or "ok")
-                    meta = getattr(res, "meta", None) or {}
-                except Exception as e:  # noqa: BLE001 —— 见上面长注：异常必须变成数据
-                    raw, kind, meta = f"__ERROR__ {type(e).__name__}: {e}", "ok", {}
-                    logger.info("[react_line] 工具 %s 抛错：%s", _t.name, e)
-                line = _verdict_of(_t.name, kwargs, True, raw, skill, kind, meta, ledger)
+                decision = authz.check(who, _t.name)
+                if not decision.allowed and authz.enforcing(decision.scope):
+                    raw, kind, meta = authz.denial_frame(decision, who), "ok", {}
+                    logger.info("[react_line] 权限拒绝，不执行: %s → %s",
+                                _t.name, decision)
+                else:
+                    try:
+                        res = _inner(**kwargs)
+                        raw = str(res)
+                        kind = str(getattr(res, "kind", "ok") or "ok")
+                        meta = getattr(res, "meta", None) or {}
+                    except Exception as e:  # noqa: BLE001 —— 见上面长注：异常必须变成数据
+                        raw, kind, meta = f"__ERROR__ {type(e).__name__}: {e}", "ok", {}
+                        logger.info("[react_line] 工具 %s 抛错：%s", _t.name, e)
+                line, _v = _verdict_of(_t.name, kwargs, True, raw, skill, kind, meta,
+                                       ledger)
                 text = f"{raw}\n{line}"
             ledger.record(sig)
             return text
@@ -366,18 +433,20 @@ def wrap_up_text(ledger: RunLedger, reason: str) -> str:
 def build_agent(model: Any, tools: list[BaseTool], *, system_prompt: str,
                 budget: int = 6, repeat_limit: int = 1, skill: str = "",
                 executor: SkillExecutor | None = None, ledger: RunLedger | None = None,
-                name: str = "react_line"):
+                principal: Any = None, name: str = "react_line"):
     """建一个带收敛判据与回执台账的 `create_agent`。
 
     返回 `(agent, ledger)`：`ledger` 是这一次运行的台账，跑完从它读回执与停止原因。
     `executor` 给定时工具调用按**技能**展开（见 `SkillExecutor`），不给就是工具级。
     `ledger` 可由调用方给（技能展开那一路必须与 executor 共用**同一个**台账，
-    否则技能回执与技能签名会记到两本账上）。
+    否则技能回执与技能签名会记到两本账上）。`principal` 是**工具级**那一路的身份
+    （技能级那一路的身份在 `executor` 上）；不给按身份不明算，硬 scope 的工具会被拒。
     """
     from langchain.agents import create_agent
 
     ledger = ledger or RunLedger()
-    wrapped = wrap_tools_with_receipts(tools, ledger, skill=skill, executor=executor)
+    wrapped = wrap_tools_with_receipts(tools, ledger, skill=skill, executor=executor,
+                                       principal=principal)
     agent = create_agent(model=model, tools=wrapped, system_prompt=system_prompt,
                          middleware=[ConvergenceMiddleware(
                              ledger, budget=budget, repeat_limit=repeat_limit)],

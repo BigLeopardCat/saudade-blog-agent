@@ -16,6 +16,23 @@
 
 ## 20261004
 
+- **第二条臂能按生产的帧契约产帧了（评测，20261004；只动试验线与评测壳，生产行为零变化）**：
+  `GOLDEN_ARM=react` 只解决了"选到哪条臂"，臂本身此前产不出 golden 读的那几类帧。新增
+  `agent/react_arm.py`（薄外层适配器，装在 `server._agent` 上，生产者逐字节不改）：
+  只把**最终答复**放上 `messages` 通道（中间推理上了正文通道 = 每一条 `text_*` 断言被污染
+  而报告看不出来）；`ToolMessage` 用**真工具名**重建（转发内层的技能名会让 `require_zero_exec`
+  恒绿、`require_tool_calls` 恒红，两族一起失真的方向还相反）；`execute` 回执补齐 PASS 行的
+  `cmd`/`digest`/`title`（缺 `cmd` ⇒ `__CMD__` 帧一条不发，那一族断言整族空转）。内层异常
+  产**确定性的诚实收尾**而不是把异常放走（放走 = 整条读数丢掉，而"崩了"与"办不成"在报告里
+  必须长得不一样）。
+- **权限闸接进试验线的两条入口（判据，20261004）**：`SkillExecutor.run` 与
+  `wrap_tools_with_receipts` 的工具级分支，判据字面与 `graph.execute_node` **同一条**
+  （`not allowed and authz.enforcing(scope)`，缺省 fail-closed）；此前工具级那条分支
+  **没有闸**——两扇门只锁一扇。被拒的调用**也记进 `executed`**，于是反复被拒由"无进展"
+  收尾，而不是把轮次预算烧在同一个拒绝上。硬 scope（`admin.console` / `write.console`）
+  之外的实际拦截仍随 `AGENT_AUTHZ_ENFORCE`（影子期不拦，两臂同此）。**golden 臂必须先有
+  这一道**：那里跑的是真工具，无闸能做出 graph 会拦的写。
+
 - **golden 现在能给第二条臂打分：`GOLDEN_ARM`（缺省 graph），报告与留档分栏（评测，20261004）**：
   「ReAct 能不能到 95%」此前**没有读数**——两条跑法都把 `server._agent = create_agent()`
   写死在一处、`engine` 是常量，第二条臂没有入口。现在选臂走环境变量（子进程天然继承，
