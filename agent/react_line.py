@@ -234,13 +234,50 @@ class SkillExecutor:
         from agent.refs import resolve_args
         from agent.skills import instantiate_plan
 
+        # ── 字面路径防推断兜底（20261005，照搬 `graph.py:5364` 的 planner 兜底）──
+        # 主人原话里出现 `/` 开头的路径时，导航目标**必须原样用那个路径**。模型会把
+        # "/iot" 推断成"物联网平台"（**语义替身**）→ 目标变成 /device-console/、真跳
+        # 过去、还回一句「已经在路上」——等于**系统替一个主人没要的页面背书**。
+        #
+        # **工具层的白名单拦不住这一格**（`tools/base.py` 的 `_NAV_EXACT_PATHS`）：
+        # 它判的是"路径合不合法"，而 `/device-console/` 合法；被换掉的是**目标本身**，
+        # 只有对着主人原话才看得出来。修正**不是放行**——字面路径照样要过白名单，
+        # 白名单外 ⇒ `instantiate_plan` 给「不存在」注记 + 零工具 ⇒ 如实告知。
+        # 实证：golden `nav_nonexistent` react 臂 **6/6 红**、graph 6/47（13%）。
+        #
+        # 正则**比 `graph.py` 那处紧一格**（那里是 `/[A-Za-z0-9_\-./]+`）：`/` 前面
+        # 不许是 `:`、`/`、字母数字或下划线。松的那版会把**整条 URL** 吞成一个路径
+        # （`https://saudade.site/article/22` → `//saudade.site/article/22`），也会把
+        # `12/25 号`、`价格 3/4` 里的 `/25`、`/4` 当成主人点名的路径——一旦被当成
+        # 字面路径就会强制改目标、然后被判「不存在」。窄的是**"主人确实点名了一个
+        # 站内路径"**这个意思，宽的不是。
+        if skill == "navigate":
+            lit = re.search(r"(?<![:/\w])/[A-Za-z0-9_\-./]+", self.user_msg or "")
+            if lit and (params or {}).get("target") != lit.group(0):
+                logger.info("[react_line] 字面路径修正：主人原话含 %s，模型目标 %r → 强制用字面路径",
+                            lit.group(0), (params or {}).get("target"))
+                params = {**(params or {}), "target": lit.group(0)}
+
         plan = instantiate_plan(skill, dict(params or {}), self.role)
         specs = [str(s) for s in (plan.get("tools") or [])]
         if not specs:
             # 纯应答技能：没有工具要跑。留痕放 `ledger.replies`，**不进 receipts**
             # ——receipts 的语义是"系统确认的事实"（见 RunLedger 的注）。
-            reply = str(plan.get("reply") or plan.get("note") or "")
+            note = str(plan.get("note") or "")
+            reply = note or str(plan.get("reply") or "")
             self.ledger.replies.append({"skill": skill, "reply": reply[:200]})
+            # **注记优先于回复契约**（20261005）：零工具而 `note` 非空，说明这一轮
+            # 「为什么不执行」本身就是事实（navigate 的三个出口 / 参数缺失）。此前
+            # 取的是 `reply`＝`skill.reply_contract`，那是**给模型看的约束文本**、
+            # 不是结果——模型拿到「跳转由系统执行…可以简短确认」却不知道注记说了
+            # 「不存在」，于是自己编一句「马上带你过去…页面就会跳过去」（实证：
+            # `nav_nonexistent` 修字面路径后 6/6 仍红，但已从"真跳错页"变成
+            # "零调用 + 声称要跳"——同族，更假）。生产侧拦这一格的是 **gate 谓词**
+            # （`graph.py:9531` 按 `plan["status"]` 选 `_FALLBACK_GONE` 兜底），本线
+            # 还没有 gate，所以在这一层就把它交到模型手里。
+            if note:
+                return (f"{note}\n{RECEIPT_HEAD} {skill}：本技能**没有执行任何工具**"
+                        f"（status={plan.get('status') or '?'}）。"), 0
             return f"{reply}\n{RECEIPT_HEAD} {skill}：本技能没有要执行的工具（纯应答）。", 0
 
         # ── 同意闸（P3，20261005）：写操作**整批先判、一件都不执行** ──────────────
@@ -331,7 +368,8 @@ class SkillExecutor:
 
 def wrap_tools_with_receipts(tools: list[BaseTool], ledger: RunLedger,
                              skill: str = "", executor: SkillExecutor | None = None,
-                             principal: Any = None) -> list[BaseTool]:
+                             principal: Any = None,
+                             user_msg: str = "") -> list[BaseTool]:
     """把每个工具包成"执行 + 立刻验收 + 记台账 + 附一行回执"的同名工具。
 
     包装层**不改工具本身**（`description` / `args_schema` 逐字保留）：模型看到的菜单
@@ -355,6 +393,17 @@ def wrap_tools_with_receipts(tools: list[BaseTool], ledger: RunLedger,
         inner = getattr(t, "func", None)
 
         def _body(_inner=inner, _t=t, **kwargs):
+            # 字面路径防推断兜底（工具级那一扇门，20261005；技能级那扇在
+            # `SkillExecutor.run` 里同样一处）：**两扇门都要锁**，否则绕开技能那扇
+            # 就能替身导航（同一份教训见下面的权限闸注）。修正要在算签名**之前**——
+            # 签名是"实际执行了什么"的摘要，用未修正的参数算会让台账与事实对不上。
+            if _t.name == "navigate_to" and user_msg:
+                lit = re.search(r"(?<![:/\w])/[A-Za-z0-9_\-./]+", user_msg)
+                if lit and kwargs.get("path") != lit.group(0):
+                    logger.info("[react_line] 字面路径修正（工具级）：主人原话含 %s，"
+                                "模型目标 %r → 强制用字面路径",
+                                lit.group(0), kwargs.get("path"))
+                    kwargs = {**kwargs, "path": lit.group(0)}
             sig = spec_signature(_t.name, kwargs)
             if executor is not None:
                 text, n_tools = executor.run(_t.name, kwargs)
@@ -504,8 +553,11 @@ def build_agent(model: Any, tools: list[BaseTool], *, system_prompt: str,
     from langchain.agents import create_agent
 
     ledger = ledger or RunLedger()
+    # 主人原话给**工具级**那扇门的字面路径兜底用；技能级那扇自带（在 `executor` 上）。
+    # 缺省从 executor 取，两处同源，不另设第二个来源。
+    msg = getattr(executor, "user_msg", "") or ""
     wrapped = wrap_tools_with_receipts(tools, ledger, skill=skill, executor=executor,
-                                       principal=principal)
+                                       principal=principal, user_msg=msg)
     agent = create_agent(model=model, tools=wrapped, system_prompt=system_prompt,
                          middleware=[ConvergenceMiddleware(
                              ledger, budget=budget, repeat_limit=repeat_limit)],
