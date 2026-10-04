@@ -73,6 +73,16 @@ logger = logging.getLogger(__name__)
 
 ARM_NAME = "react"
 
+# 收敛中间件在 `stream(..., stream_mode="updates")` 里的**节点名前缀**。它注入的收尾
+# 正文挂在这两个名字下面（`.before_model` / `.after_model`），**不叫 "model"**——
+# 20261005 实测，别凭"应该是 model"去猜。
+_CONVERGENCE_NODE_PREFIX = "ConvergenceMiddleware"
+
+
+def _is_convergence_node(node: object) -> bool:
+    """这个 update 是不是收敛中间件发的那一格（见 `stream` 的接线注）。"""
+    return str(node).startswith(_CONVERGENCE_NODE_PREFIX)
+
 # 模型决策轮上限。生产 `MAX_PLAN_ROUNDS=4`；这里放宽到 6 是本线既有的取值
 # （`react_line.ConvergenceMiddleware` 的注：一轮里可能并发多条调用，步子比 planner 碎），
 # 离线 A/B 用的也是 6 ⇒ 与既有读数可比。
@@ -109,7 +119,7 @@ class ReactGoldenArm:
         user_msg = _last_user_msg(messages)
 
         ledger = RunLedger()
-        executor = SkillExecutor(_real_tools(), ledger, role=role, principal=principal)
+        executor = SkillExecutor(_real_tools(config), ledger, role=role, principal=principal)
         agent, ledger = build_agent(
             _llm(), _skill_menu(role),
             system_prompt=_system_prompt(messages, role, principal, config, user_msg),
@@ -122,12 +132,27 @@ class ReactGoldenArm:
                                      {"recursion_limit": REC_LIMIT},
                                      stream_mode="updates"):
                 for node, upd in (step or {}).items():
-                    for m in list((upd or {}).get("messages") or []):
-                        if node == "model" and isinstance(m, AIMessage):
+                    msgs = list((upd or {}).get("messages") or [])
+                    if node == "tools":
+                        sent_calls = yield from self._on_tools(
+                            executor, ledger, sent_calls)
+                        continue
+                    for m in msgs:
+                        if not isinstance(m, AIMessage):
+                            continue
+                        if node == "model":
                             yield from self._on_model(m, role)
-                        elif node == "tools":
-                            sent_calls = yield from self._on_tools(
-                                executor, ledger, sent_calls)
+                        elif _is_convergence_node(node):
+                            # 收敛中间件注入的**确定性收尾**（`ConvergenceMiddleware._stop`
+                            # 返回 `{"jump_to": "end", "messages": [AIMessage(收尾正文)]}`）。
+                            # 它挂在中间件自己的节点名下（`ConvergenceMiddleware.after_model`
+                            # / `.before_model`），**不叫 "model"** —— 20261005 实测（脚本化假
+                            # 模型跑 `build_agent` 的原始 update 流）：只认 "model" 会把这条
+                            # 正文**静默丢掉**，用户拿到的是**空回复**，而报告里看不出是
+                            # "模型没说"还是"适配器没转发"。这不是边角：撞预算与"同一个调用
+                            # 重试两次"是本线**唯一**的两条收尾路径（`ConvergenceMiddleware`
+                            # 的全部判据都在这里），丢掉它 = 那两类运行全部记成"什么都没说"。
+                            yield from self._on_wrap_up(m)
         except Exception as e:  # noqa: BLE001 —— 内层炸了也要给主人一句诚实的话
             # 不把异常放走：golden 一条用例炸掉会让整轮跑丢一条读数，而"这臂办不成事"
             # 与"这臂崩了"在报告里必须**长得不一样**。所以照样产一条收尾正文（确定性、
@@ -149,6 +174,20 @@ class ReactGoldenArm:
             # 空收尾（模型给了个空消息）：不发 messages 帧。`nonempty` 断言会因此红——
             # 那是**真的**（主人确实没读到东西），不该由适配器补一段话来掩盖。
             yield ("updates", {"model": {"messages": [m]}})
+            return
+        yield ("messages", (AIMessageChunk(content=text), {"langgraph_node": "model"}))
+        yield ("updates", {"model": {"messages": [m]}})
+
+    def _on_wrap_up(self, m: AIMessage) -> Iterator[tuple[str, Any]]:
+        """收敛中间件的确定性收尾 → 用户可见正文（见 `stream` 里那段注）。
+
+        与 `_on_model` 分开只为一条判据：这一条**永远是最终答复**——中间件只在跳 `end`
+        时注入它。所以即使它真带了工具调用也**不许**按决策轮处理（那会凭空多发一份
+        `plan_obj`，而生产那一轮根本不会执行）。正文为空时不发帧：`nonempty` 断言因此
+        红，那是**真的**（同 `_on_model` 的空收尾那条注）。
+        """
+        text = str(m.content or "")
+        if not text:
             return
         yield ("messages", (AIMessageChunk(content=text), {"langgraph_node": "model"}))
         yield ("updates", {"model": {"messages": [m]}})
@@ -230,7 +269,7 @@ def _skill_menu(role: str | None) -> list[StructuredTool]:
     return out
 
 
-def _real_tools() -> dict[str, Any]:
+def _real_tools(config: dict | None = None) -> dict[str, Any]:
     """真工具名 → 可调用体。**必须是纯函数签名（`**kwargs`）**：
 
     `SkillExecutor` 是 `fn(**args)` 调的，而 `BaseTool.__call__` 的第一个位置参数是
@@ -238,8 +277,18 @@ def _real_tools() -> dict[str, Any]:
     症状是**被包装层兜成错误帧**（不炸图），看起来像"每个工具都 BLOCK error_frame"
     ——判据在开火，其实是适配器写错了。这里统一走 `.invoke(单个 dict)`，与生产
     `graph.execute_node` 的调用形态一致。
+
+    ⚠️ **`config` 必须透传**（20261005 修）：生产方式（`server.py:975`）把
+    `configurable.user_id` / `principal` / `conversation_id` 注进 config，声明了
+    `config: RunnableConfig` 的工具（`list_devices`、`list_my_messages`、所有
+    `_device_get_user_id` 的消费方）全部从那里读身份。不传 ⇒ 那些工具**永远**看到
+    uid=0，无论请求带没带身份 —— 症状是"带真身份的用例集体红"，而红的原因住在适配器里，
+    报告上却长得像模型不会用工具（这是**假阴性**，与能力台账要防的假阳性是同一个病的
+    两面）。golden 的 127 条可比子集里没有带身份的用例（那一族要 `GOLDEN_*_UID`），
+    所以这一条今天不改变任何读数——它修的是"带身份那一族接入时不会凭空红一片"。
     """
-    return {t.name: (lambda _t=t, **kw: _t.invoke(kw)) for t in get_all_tools()}
+    cfg = dict(config or {})
+    return {t.name: (lambda _t=t, **kw: _t.invoke(kw, config=cfg)) for t in get_all_tools()}
 
 
 def _system_prompt(messages: list, role: str | None, principal: Any,
