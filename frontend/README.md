@@ -6,9 +6,8 @@
 
 ## 许可
 
-**本目录的代码以 MIT 分发**（见 [LICENSE](LICENSE)）——它要被博客仓拉过去内嵌分发，MIT 与
-博客仓的 GPL-2.0 兼容（Apache-2.0 不兼容，所以它没有跟着本仓根目录那份 Apache-2.0 走）。
-本仓其余部分（Python agent）仍是 Apache-2.0。
+**本目录的代码以 MIT 分发**（见 [LICENSE](LICENSE)），与本仓其余部分同一份许可——它要被
+博客仓拉过去内嵌分发，MIT 与博客仓的 GPL-2.0 兼容。
 
 **美术资源不按 MIT**，按 CC BY-NC-SA 4.0 分发（署名 · 非商业性使用 · 相同方式共享）——
 见 [ASSETS-LICENSE.md](ASSETS-LICENSE.md)。代码随便用（可商用）；形象能用、能改，

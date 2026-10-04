@@ -6,6 +6,7 @@ SIGABRT 注册 faulthandler：主脚本超时先发 SIGABRT 拿全线程栈（�
 """
 import faulthandler
 import json
+import os
 import signal
 import sys
 import time
@@ -14,8 +15,14 @@ import time
 # 自动 dump 全线程栈到 stderr 后退出，主脚本 communicate 即可拿到卡死点
 faulthandler.enable()
 
-sys.path.insert(0, "/home/ubuntu/Saudade-Blog/saudade-blog-agent")
-sys.path.insert(0, "/home/ubuntu/Saudade-Blog/saudade-blog-agent/eval")
+# 仓根按**本文件的位置**算（20261004）：此前这里是写死的主仓绝对路径
+# （`/home/ubuntu/Saudade-Blog/saudade-blog-agent`），而它排在 `PYTHONPATH=$PWD` **前面** ⇒
+# 在 worktree 里跑评测时，本文件 import 到的恒是**主仓**的 `run_golden`/`server`
+# ⇒ 第二条臂（react）的模块**永远看不见**，「在 worktree 里跑本分支的臂」会静默变成
+# 「跑主仓的图」——一份看着像第二条臂的假读数。按本文件位置算，跑的是哪棵树就 import 哪棵树。
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "eval"))
 
 import run_golden
 import golden_trace

@@ -472,12 +472,24 @@ _LIE_OWN = ("主人，这一轮我得跟你说实话喵——我手上没有“�
 _TRUTH_OWN = "主人，你现在有 2 条未读通知喵～（私信 0 条）"
 _PLAN_OWN = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "get_unread_summary", '
              '"args": {}}]}')
-_out6, _llm6, _tool6, _ev6 = _run([_PLAN_CHAT, _PLAN_OWN, _PLAN_CHAT],
+# ⚠️ **本节的脚本于 20261004 改过一处（`_PLAN_CHAT` 写了两遍）**，别改回去：判据已经
+# **前移到决策层**（`graph.planner_node` 的 `data_question_no_tool` 纠偏，同 `agent/authz.py`
+# 那两条窄判据），所以"planner 第一次落 chat 零工具"这一版现在会被 planner 自己拦下重决策
+# ——再喂一次 `_PLAN_OWN`，工具就在第 1 轮执行掉了，gate 根本看不到零帧轮（零帧那一节的
+# 前提消失，本节会退化成"没被测到"）。故意让它**第二次仍然点 chat**，这一节才仍然是
+# **闸门兜底**那一层的用例：前一道防线（planner 纠偏一次）判断失败时，闸门照样接得住。
+# 决策层那一步的成功路径锁在 `tests/test_native_wiring.py`
+# （`test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool`）。
+_out6, _llm6, _tool6, _ev6 = _run([_PLAN_CHAT, _PLAN_CHAT, _PLAN_OWN, _PLAN_CHAT],
                                   [_LIE_OWN, _TRUTH_OWN],
                                   user_msg="小猫咪！我有哪些未读通知呀",
                                   tool_name="get_unread_summary",
                                   fake=_FakeOwnReadTool())
 check("脚本足够跑完这一轮", _llm6.exhausted == [], str(_llm6.exhausted))
+check("★ 前一道防线确实开了火（planner 记了 `data_question_no_tool`）——"
+      "本节测的是它判断失败之后的闸门兜底，少了这一条，本节可能压根没走到被验的形状",
+      [e for _n, e, _d in _ev6 if e == "data_question_no_tool"] == ["data_question_no_tool"],
+      str([(e) for _n, e, _d in _ev6 if e.startswith("data_question")]))
 check("planner **真的重新决策了一次**（不是直接兜底道歉）",
       len(_rounds(_llm6, 2)) == 1, f"各轮次数={[len(_rounds(_llm6, n)) for n in (1, 2, 3)]}")
 check("重规划那一轮真的把取数工具执行了（不是又空跑一轮）",
@@ -564,10 +576,16 @@ _LIE_SITE = ("主人，我这边**没有工具**可以帮你查具体的文章�
 _TRUTH_SITE = "主人，站内一共有 3 篇文章喵：《西顿学院小记》《Docker 部署笔记》《测试文章 TEST8》。"
 _PLAN_SITE = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
               '"args": {"keyword": "文章"}}]}')
-_out6d, _llm6d, _tool6d, _ev6d = _run([_PLAN_CHAT, _PLAN_SITE, _PLAN_CHAT],
+# ⚠️ 同 ⑥：`_PLAN_CHAT` 写两遍是**刻意的**（判据前移之后，第一次落 chat 会被 planner
+# 自己的 `data_question_no_tool` 纠偏接走，gate 就看不到零帧轮了）——本节锁的仍是
+# **闸门兜底**那一层。
+_out6d, _llm6d, _tool6d, _ev6d = _run([_PLAN_CHAT, _PLAN_CHAT, _PLAN_SITE, _PLAN_CHAT],
                                       [_LIE_SITE, _TRUTH_SITE],
                                       user_msg="博客有哪些文章呢")
 check("脚本足够跑完这一轮", _llm6d.exhausted == [], str(_llm6d.exhausted))
+check("★ 前一道防线确实开了火（planner 记了 `data_question_no_tool`）",
+      [e for _n, e, _d in _ev6d if e == "data_question_no_tool"] == ["data_question_no_tool"],
+      str([e for _n, e, _d in _ev6d if e.startswith("data_question")]))
 check("planner **真的重新决策了一次**（不是直接兜底道歉）",
       len(_rounds(_llm6d, 2)) == 1,
       f"各轮次数={[len(_rounds(_llm6d, n)) for n in (1, 2, 3)]}")

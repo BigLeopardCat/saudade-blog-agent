@@ -60,6 +60,37 @@ def enabled() -> bool:
     return os.environ.get(ENV_OFF, "").strip().lower() not in ("1", "true", "yes")
 
 
+# ── 靠 trace 事件才判得动的 gold 键（20261004）───────────────────────────────
+# `require_ledger_*` 三条读的是 `planner.ledger_frame` **trace 事件**（planner 的输入
+# 消息不进 trace，离开这个事件，"台账到底进没进帧"在评测与生产上都无法复核——长注在
+# `run_golden.check_gold` 那一节）。而 `enabled()` 为假时 `start_case()` 返回 None ⇒
+# `run_one` 的 `ledger_frames` **恒为 `[]`** ⇒ 这三条**必然报红**，红的话却是
+# 「待办台账没摆上桌」——一句关于模型的话，而真相是这一轮根本没有那条证据链。
+#
+# 20261004 早上就是照这个形状误判的：4 次 `--only` 重跑全红在 `ledger_frame`，被当成
+# 在途缺陷追了一轮；归档 12 次里，带 `ledger` 失败的那几次**全部** `trace=None`，一一对应。
+#
+# 键表住在这里（而不是判据文件里）：**两个跑法都要按"未评估"处理**，各自再抄一份就是
+# "两处判据各自漂移"的老坑（同 `first_gold` 那条）。
+TRACE_DERIVED_GOLD_KEYS = ("require_ledger_frame", "require_ledger_rows",
+                           "require_card_targets_from_ledger")
+
+
+def trace_derived_keys(case: dict) -> list:
+    """这条用例（**多轮也算**）里靠 trace 事件才判得动的 gold 键。
+
+    轮次取法与 `run_golden.iter_rounds` 同源（单轮用例字段在顶层，多轮写在 `rounds` 里）
+    ——这里只读 `gold` 一格，故不复用那个归一化器（它会连带构造 context，代价不对等）。
+    """
+    rounds = case.get("rounds") or [case]
+    keys: list = []
+    for r in rounds:
+        for k in TRACE_DERIVED_GOLD_KEYS:
+            if k in (r.get("gold") or {}) and k not in keys:
+                keys.append(k)
+    return keys
+
+
 def resolve_run_id(explicit: str | None = None) -> str:
     """run_id：显式参数 > 环境变量（进程隔离跑法由父进程给）> 当前时刻。"""
     rid = (explicit or os.environ.get(ENV_RUN) or "").strip()

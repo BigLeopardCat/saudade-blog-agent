@@ -173,8 +173,8 @@ flowchart TB
 ├── docs/                      # 本文档 + eval-observability.md + secretary.md（秘书框架与前置需求）+ 问题记录.md（踩坑史）
 └── .env.example / pyproject.toml / uv.lock / .github/workflows/eval.yml（CI 评测门禁）
 
-前端（看板娘 + 对话面板）—— **20261001 起住在本仓**（`frontend/`，以 MIT 分发，见
-`frontend/LICENSE`；本仓其余部分是 Apache-2.0）：
+前端（看板娘 + 对话面板）—— **20261001 起住在本仓**（`frontend/`，与本仓同以 MIT 分发，见
+`frontend/LICENSE`）：
 frontend/public/live2d-widgets/
 ├── boot.js                    # ★ 加载器（254 行）：拼 ?v=VER 载入子模块、看板娘显隐/拖拽/工具条
 ├── renderer.js                # ★ 渲染层（511 行）：pixi.js + pixi-live2d-display 驱动模型、参数注入与口型
@@ -981,7 +981,12 @@ flowchart TB
   arguments 断在半截），输出格式由绑上的 `tools` schema 保证 ⇒ **没有"解析失败按 chat 兜底"
   这条了**。零调用也不再等于闲聊：一个函数都没点且正文非空 ⇒ 走既有 correction 通道**纠偏一次**
   （trace `planner.no_call_nudge`），第二次仍零调用才认成 `chat`（`planner.no_call_accepted`，
-  状态仍是 `answer_only`）；`decided is None` 另分截断轨（`finish=length` → 确定性收尾，
+  状态仍是 `answer_only`）。同一通道还有第二格（20261004 判据前移）：**点了 `chat`（= 声明
+  "这一轮不需要任何站内数据"）而主人问的正是站内 / 他自己账号里查得到的问句**（复用
+  `authz` 那两条窄判据）⇒ 同样纠偏一次（`planner.data_question_no_tool`），第二次仍点 `chat`
+  才记 `planner.data_question_still_no_tool` 放行；闸门第 4 节那两条原样留着当**兜底**。
+  ⚠️ 这一格的射程很小（探针 72 次数据型决策开火 0 次、全量语料合计 1 轮），读数与残余真实
+  落点见 `docs/zero-call-residual.md`。`decided is None` 另分截断轨（`finish=length` → 确定性收尾，
   不纠偏）与形态轨（读不出 → 纠偏一次后确定性收尾），事件 `native_fallback.disposition`。
   每轮读 execute 返回的工具帧决定下一轮：质疑轮 → content_query 验证；err 帧 → 修正参数
   重试一次或如实收尾；动作技能已执行 → 去重强制收尾（非首轮再规划动作且工具名都已出现在帧中时，

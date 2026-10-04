@@ -43,8 +43,9 @@
 退出码：0=两层门禁都过（硬层 0 红 + 采样层 Wilson 95% 下界 ≥ 档位）
         1=硬层红（回归组）或采样层下界低于档位
         2=一条用例都没剩下（空分母："没评"不是"通过"）
-        3=身份/事实/禁卡前提不可用（这三类用例**未评估**——同样"没评"，不受任何档位
-          放宽；三类各自的原因都逐条打出来，别混成一句）
+        3=身份/事实/禁卡/无 trace 前提不可用（这四类用例**未评估**——同样"没评"，不受
+          任何档位放宽；四类各自的原因都逐条打出来，别混成一句。**无 trace** 那一类
+          = `--no-trace` 关掉了 `require_ledger_*` 唯一的证据链，见 `check_trace_premises`）
 
 **落地指标**（20261001 起；判据住在 `eval/landing_gate.py`，这里只接线）：
   **硬层** = 离线套件 / 真链路探针 / 回归组 / 前提与身份前置 ⇒ **0 红**，不给百分比
@@ -90,7 +91,8 @@ from datetime import datetime, timedelta
 # 复用 server 内部链路（不走 HTTP，与 test_fallback_replay.py 同模式）
 import server
 from server import ChatRequest, _build_messages, _run_agent_stream_to_queue
-from agent import create_agent
+# `agent.create_agent` 的引用搬去了 eval/golden_arm.py（选臂那一层）：本文件不再直接建图，
+# 只调 `ensure_agent()` —— 建哪条臂是可拨的，直接 import 会把"只有一条臂"写死在调用点。
 from agent.graph import _cmd_wire  # 连线命令帧 → 连线形（见 __CMD__ 分支的长注）
 from agent import confirm  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
@@ -98,6 +100,7 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 
 import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
 import report_archive  # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
+import golden_arm  # 同目录：选臂/建臂/分栏（graph 与试验线跑同一套语料，20261004）
 import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
 import identity_preflight  # 同目录：真身份通道的前置在位检查（20260926）
 import landing_gate  # 同目录：落地判定（两层门禁 / 慢性红榜，20261001）
@@ -108,10 +111,10 @@ from utils import trace as trace_mod  # trace 工具返回留多长（run_case �
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
 
 # 接口层（报告里的 `engine` 那一格，见 report 的注）：20261004 起只剩 native
-# tool calls 一条路（文本契约档连同 `PLANNER_ENGINE` 拨盘一起删了）。**定义成常量
-# 而不是从 settings 里读**——没有第二个取值可拨，"读配置"是个假动作，会让读者以为
-# 它可变。`golden_full_run.py` 从这里 import，防止两处各写一遍字面量。
-INTERFACE_LAYER = "native"
+# tool calls 一条路（文本契约档连同 `PLANNER_ENGINE` 拨盘一起删了）。**字面量搬去
+# `eval/golden_arm.py`**（那一格现在按臂派生：graph 逐字 `native`，试验臂 `native+<臂>`）
+# ——这里只做**再导出**，值仍只有一份；`engine_for` 是唯一的派生实现。
+from golden_arm import INTERFACE_LAYER  # noqa: E402,F401  （再导出，见上）
 # 导航命令帧族：AUTO_NAVIGATE 与 NAVIGATE 同属"导航已执行"，断言时视为一族
 # （golden 里 require/forbid "NAVIGATE:" 时 AUTO_NAVIGATE 帧同样计入/计入禁止）
 CMD_FAMILIES = {
@@ -167,8 +170,14 @@ def _cmd_matches(pre: str, c: str) -> bool:
 def ensure_agent() -> None:
     if server._agent is None:
         t0 = time.time()
-        server._agent = create_agent()
-        print(f"[init] 编译图构建完成：{time.time() - t0:.1f}s")
+        # 装哪条臂由 `GOLDEN_ARM` 定（缺省 graph，见 eval/golden_arm.py）：graph 走的仍是
+        # `agent.create_agent()`（逐字不变），但试验臂得**先有个入口**才能被打分——
+        # 「ReAct 能不能到 95%」此前**没有读数**，缺的就是这一行。
+        # **`server.py:309` 的 lifespan 不经过这里**（那是生产，恒 create_agent），
+        # 所以选臂只影响评测，不影响线上。
+        _arm = golden_arm.arm_name()
+        server._agent = golden_arm.build_agent(_arm)
+        print(f"[init] 编译图构建完成（arm={_arm}）：{time.time() - t0:.1f}s")
 
 
 def iter_rounds(case: dict) -> list[dict]:
@@ -1528,6 +1537,32 @@ def check_no_popup_premises(cases: list) -> tuple:
     return kept, skipped, rows
 
 
+# ── "没有 trace 就判不了"的前提（20261004）──────────────────────────────────
+# 与上面两条前提同一个形状、同一个出口（**摘用例 + 进 skipped_ids + 退出码 3**），理由
+# 却是最直白的一条：`require_ledger_*` 三条判据读的是 `planner.ledger_frame` **trace
+# 事件**，而 `--no-trace` / `GOLDEN_NO_TRACE=1` 下 `start_case()` 返回 None ⇒ 那三条
+# **必然报红**，红的话却是「待办台账没摆上桌」——一句关于模型的断言。
+#
+# 20261004 早上就是这么被误判成本轮的在途缺陷的（4 次 `--only` 重跑全红在 `ledger_frame`）。
+# 证据：归档 12 次里，带该失败的那几次 **trace 全部为 None**，一一对应；这次带 trace 重跑
+# 直接 PASS。"没评"与"红"必须分开——同身份/事实/禁卡三条前置的纪律。
+def check_trace_premises(cases: list) -> tuple:
+    """trace 关着时，靠 trace 判的用例**未评估** → (留下的用例, 未评估的 id, 逐条结论)。"""
+    if golden_trace.enabled():
+        return cases, [], []
+    kept: list = []
+    skipped: list = []
+    rows: list = []
+    for c in cases:
+        keys = golden_trace.trace_derived_keys(c)
+        if not keys:
+            kept.append(c)
+            continue
+        skipped.append(c.get("id"))
+        rows.append({"id": c.get("id"), "state": "trace_off", "keys": keys})
+    return kept, skipped, rows
+
+
 # ── golden 键的三张表（20260924）─────────────────────────────────────────────
 # 键名写错是一个**静默 no-op**：gold 是 dict，把 require_cmd_all 敲成 require_cmdall 时
 # 取值取到 None、那段断言根本不执行，而用例照样绿——判据看着在、其实不在。已经抓到一条
@@ -1925,18 +1960,29 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
     # 的老坑（同 `test_golden_keys` 要治的那类）。
     _lf_events = result.get("ledger_frames") or []
     _ledger_ids = [str(i) for e in _lf_events for i in (e.get("ids") or [])]
-    if gold.get("require_ledger_frame"):
+    # **trace 关着 ⇒ 这三条一条都判不了**（证据链根本不存在，键表与长注见
+    # `golden_trace.TRACE_DERIVED_GOLD_KEYS`）：`enabled()` 假 ⇒ `start_case()` 回 None
+    # ⇒ `run_one` 的 `ledger_frames` 恒 `[]`。此时**绝不许**报成"台账没摆上桌"——那是
+    # 关于模型的一句话，而这一轮系统压根没记这件事（20261004 早上 4 次误判就是这个）。
+    # 「未评估 ≠ 通过」照旧：这条断言算红，但红的是跑法，不是模型。
+    _lf_off = bool(not golden_trace.enabled()
+                   and [k for k in golden_trace.TRACE_DERIVED_GOLD_KEYS if k in gold])
+    if _lf_off:
+        fails.append("[未评估] 本轮关着 trace（--no-trace / GOLDEN_NO_TRACE=1）⇒ "
+                     "planner.ledger_frame 事件不存在 ⇒ 台账那几条判据全都判不了"
+                     "（未评估 ≠ 通过；要判就开着 trace 跑）")
+    if gold.get("require_ledger_frame") and not _lf_off:
         if not _lf_events:
             fails.append("本轮没有 planner.ledger_frame 事件 —— 待办台账**没摆上桌**"
                          "（模型手里没有可决策的目标）")
-    if gold.get("require_ledger_rows"):
+    if gold.get("require_ledger_rows") and not _lf_off:
         if not _lf_events:
             fails.append("本轮没有 planner.ledger_frame 事件 —— 待办台账**没摆上桌**，"
                          "连「有没有等着办的行」都无从判起")
         elif not _ledger_ids:
             fails.append(f"台账摆了但一条待办都没有（事件：{_lf_events}）"
                          "——本键要求帧里至少印出一个编号（要有待办行才判得动）")
-    if gold.get("require_card_targets_from_ledger"):
+    if gold.get("require_card_targets_from_ledger") and not _lf_off:
         from agent.adminops import normalize_target_id   # 编号解析的唯一实现
         from agent.graph import _LEDGER_FIELD_FAMILY, _LEDGER_TAG_FAMILY, _LEDGER_TARGET_FIELDS
         _byfam: dict = {}
@@ -2176,6 +2222,9 @@ def main():
 
     if args.no_trace:
         os.environ[golden_trace.ENV_OFF] = "1"
+    # 这一轮跑哪条臂（20261004）：在**开跑之前**解析一次并响亮失败——臂名拼错要当轮炸掉，
+    # 不能跑完 18 分钟再发现报告落错了栏（`ensure_agent` 内部也调它，两处同源）。
+    _ARM = golden_arm.arm_name()
     # trace run_id 在**开跑时**定（报告文件名仍是收尾时刻，两者语义不同：trace 目录要能
     # 被进程隔离跑法的父子进程共享，只能在开跑前定下来）
     run_id = golden_trace.resolve_run_id(args.trace_run_id or None)
@@ -2319,6 +2368,19 @@ def main():
         print(f"[no-popup] {len(_nopopup_partial)} 条只核了「卡不是权限压的」那一半"
               f"（设计前提是人写的）：{_nopopup_partial}")
 
+    # "没有 trace 就判不了"的前提（20261004，头注见 `check_trace_premises` 上面那段）：
+    # 与上面三条同一条出口（摘用例 + 进 skipped_ids + 退出码 3）。排在最后是因为它是
+    # **跑法的选择**（--no-trace）造成的，不是语料/设计/身份那些更外面的事实。
+    cases, _trace_skipped, _trace_rows = check_trace_premises(cases)
+    skip_ids += _trace_skipped
+    _trace_bad = bool(_trace_skipped)
+    for _r in _trace_rows:
+        print(f"[trace] ⚠ {_r['id']}：判据要读 planner.ledger_frame 事件，而这一轮"
+              f"**trace 关着**（{'、'.join(_r['keys'])}） ⇒ 本条**未评估**"
+              "（未评估 ≠ 通过；要判就开着 trace 跑——别把它读成模型退化）")
+    if _trace_bad:
+        print(f"[trace] ⇒ {len(_trace_skipped)} 条用例本轮**未评估**：{_trace_skipped}")
+
     # 真写用例的两道闸（20260925）——**顺序刻意如此**：先问"谁有权触发真写"，再看前置
     # 条件在不在。两道都不会被静默豁免（都进 skipped_ids，都打印）。
     #
@@ -2363,11 +2425,13 @@ def main():
         # 身份前置不可用时**优先报 3**（20260926）：`--only <一条要真身份的用例>` 配一个
         # 不可用的 uid，用例会被摘光落到这里；只报 2 的话「前置条件坏了」这件事就没了
         # （2 说的是"你自己把用例摘光了"），而它恰恰是唯一可行动的那条信息。
-        _code = 3 if _precondition_bad else 2
+        _code = 3 if (_precondition_bad or _trace_bad) else 2
         print("[run] ⚠ 一条用例都没剩下（被 --only / --skip-ids / 身份闸 / 真写闸 / 夹具闸"
-              "摘干净了）—— 这一轮**没有评测任何东西**：空分母不是一个通过率，"
+              "/ trace 闸摘干净了）—— 这一轮**没有评测任何东西**：空分母不是一个通过率，"
               f"退出码 {_code}（不是 0）"
-              + ("；其中身份前置不可用是主因，先修前置" if _precondition_bad else ""))
+              + ("；其中身份前置不可用是主因，先修前置" if _precondition_bad else "")
+              + ("；其中 trace 关着是主因（那几条用例的判据要读 trace 事件）"
+                 if _trace_bad and not _precondition_bad else ""))
         sys.exit(_code)
     print(f"[run] {len(cases)} 条 golden 样本（真实 LLM，约 {len(cases) * 30}s）\n")
 
@@ -2494,7 +2558,11 @@ def main():
     # 留档名由 report_archive 在**写的那一刻**取（20261002）：原来那句注释写着"防覆盖丢
     # 历史"，而秒级 ts 让同一秒的两次跑同名互相覆盖——注释与行为恰好是反的（见模块头注）。
     os.makedirs("eval/report", exist_ok=True)
-    os.makedirs("eval/report/runs", exist_ok=True)
+    # 留档目录**按臂分**（20261004）：两条臂的报告混在一个目录里，"哪份是谁跑的"就只能靠
+    # 报告正文的 engine 反推，而 `ls | tail` 挑最新那份这种读法当场失效。臂名只进目录、
+    # **不进文件名**——文件名序 = 时间序是全仓不变量（见 eval/report_archive.py 头注）。
+    _REPORTS_DIR = golden_arm.reports_dir(_ARM)
+    os.makedirs(_REPORTS_DIR, exist_ok=True)
     # 耗时基线（20260829，RAG 动工前置）：全量用例耗时分布 P50/P95——
     # "RAG 拖慢"成为可检测回归的基准（对比 baseline_*.json 存档）。
     # trace 落盘（logs/traces/）提供逐请求分段耗时，这里是评测集的整体基线。
@@ -2578,7 +2646,10 @@ def main():
         # 一个没有第二个取值的键。**键必须保留**：`eval/baseline_group.py` 按它把
         # 不同档的报告分开归档 ⇒ 存量 text 报告与新 native 报告因此自动分堆（那正是
         # 换档的信号）。`golden_full_run.py` 引用同一个常量，防两处各写一遍。
-        "engine": INTERFACE_LAYER,
+        # **20261004 起这一格还承载"哪条臂"**：graph 臂仍是逐字 `"native"`（历史基线与
+        # 它同档，见 eval/golden_arm.py 头注），试验臂是 `"native+<臂>"`。臂名不另开字段
+        # ——多一个"臂"字段就有了两处真值，而读的人一定会去比它和 engine 谁对。
+        "engine": golden_arm.engine_for(_ARM),
         "total": len(cases), "passed": len(cases) - failed, "failed": failed,
         # 首跑红数（20260924）：failed 是**复跑后的终判**，这个字段留着首跑口径 ——
         # 两者不等时差额就是"被复跑吸收掉的红斑"（不许静默：flaked_ids 逐条点名）
@@ -2616,6 +2687,10 @@ def main():
         # "卡不是权限压的"那一半，设计那一半是人写的，别读成"核过了"）。
         "skipped_no_popup_ids": _nopopup_skipped,
         "no_popup_checks": _nopopup_rows,
+        # "没有 trace 就判不了"的前提（20261004）：同源纪律——**未评估要单列**。
+        # `trace_checks` 每条带 `keys`（这一条是哪几条判据要 trace），空列表=这一轮全判得了。
+        "skipped_trace_ids": _trace_skipped,
+        "trace_checks": _trace_rows,
         "latency_s": {
             "count": len(latencies),
             "min": round(_pct(latencies, 0), 1),
@@ -2658,12 +2733,15 @@ def main():
     # `last_run.json` **只在全量跑时写**（20260924）：它被当成"最近一次基线"读，
     # 而一次 `--only <单条>` 的调试跑曾把它覆盖成 total=1（读的人会以为语料没了）。
     # 非全量的那一轮仍然留档在 `runs/<ts>.json`——归档不缺，缺的是"别动基线"。
-    if _is_full_run:
+    # **20261004 再加一条同源的判据**：只有 graph 臂能当基线（`is_baseline_arm`）——
+    # 试验臂的全量跑覆盖它 = 把基线悄悄换成另一套循环的读数，而报告长得一模一样。
+    if _is_full_run and golden_arm.is_baseline_arm(_ARM):
         with open(REPORT_FILE, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=1)
     # 留档名在**写的那一刻**取（`O_EXCL` 占位，见 report_archive 头注）：既不占着空文件
     # 等，也没有"两个跑法都查过、都说这个名字没人用"的空档。复审单与留档同名成对。
-    with report_archive.open_archive("eval/report/runs") as (archive, f):
+    # 目录按臂分（`_REPORTS_DIR`）——臂名不进文件名，见那里的注。
+    with report_archive.open_archive(_REPORTS_DIR) as (archive, f):
         ts_str = os.path.splitext(os.path.basename(archive))[0]
         json.dump(report, f, ensure_ascii=False, indent=1)
 
@@ -2801,8 +2879,12 @@ def main():
           + (f"  ⚠ 复跑才绿：{_reg_flaked}（首跑红，已按方差放行——逐条见复审单）"
              if _reg_flaked else "")
           + (f"  ⚠ 被跳过：{_reg_skipped}（组内分母随之变小）" if _reg_skipped else ""))
-    print(f"报告: {REPORT_FILE}" if _is_full_run
-          else f"报告: （**非全量跑**，未覆盖 {REPORT_FILE}）")
+    if _is_full_run and golden_arm.is_baseline_arm(_ARM):
+        print(f"报告: {REPORT_FILE}")
+    elif _is_full_run:
+        print(f"报告: （arm={_ARM} **不是基线臂**，未覆盖 {REPORT_FILE}——基线只由 graph 臂写）")
+    else:
+        print(f"报告: （**非全量跑**，未覆盖 {REPORT_FILE}）")
     print(f"留档: {archive}")
     # golden trace 目录（20260922）：跑完收一个口——目录名是时间戳，只留最近 N 次
     # （一次全量上百份 × 每次一跑，不清理就是又一个只会长胖的目录）。**只删
@@ -2852,7 +2934,7 @@ def main():
     # 档位放宽。理由只有一句：这些用例这一轮**没被评估**，而退出码 0
     # 会被读成"这一轮没问题"——空分母那次（退出码 2）就是同一条纪律的另一个现场。
     # 上面已把逐条 `[precondition]` 打过，这里只是让退出码也说出来。
-    if _precondition_bad or _premise_bad or _nopopup_bad:
+    if _precondition_bad or _premise_bad or _nopopup_bad or _trace_bad:
         # 后端把「账号不存在 / 被冻结 / 令牌已被收回」三种原因压成同一个 401（刻意的，
         # 见 identity_preflight 头注），所以这行只能把**三种修法**都列出来——20261001
         # 实测：只知道"不可用"会先去猜"是不是被冻结了"，而真因是账号被删。
@@ -2879,6 +2961,12 @@ def main():
                   "逐条见报告 `no_popup_checks`；修法二选一：① 理由真没了 ⇒ 这条用例改判"
                   "（如'不该弹卡'改成'必须弹卡 + 卡面印了什么'）；② 只是声明没跟上 ⇒ 改"
                   " `premise_no_popup`")
+        if _trace_bad:
+            print(f"⚠ trace 关着（{len(_trace_skipped)} 未评估）⇒ 退出码 3："
+                  f"{_trace_skipped} —— 这些用例的判据要读 planner.ledger_frame **trace "
+                  "事件**，而这一轮 `--no-trace` / `GOLDEN_NO_TRACE=1` 把它关了 ⇒ 那几条"
+                  "一条都判不了。**这不是模型退化**（20261004 早上 4 次 `--only` 重跑就是"
+                  "这么被误判成'待办台账没摆上桌'的）。去掉那个开关重跑即可")
         sys.exit(3)
     if failed == 0:
         sys.exit(0)
