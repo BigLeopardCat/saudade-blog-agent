@@ -92,7 +92,8 @@ def _run(script: list, tools: dict, *, principal=None, model=None) -> list:
     """跑一次 `arm.stream`，收下全部 `(mode, data)` 二元组。"""
     R._llm = lambda: (model or _Scripted(messages=iter(script),
                                          ai_message_chunk=iter([])))
-    R._real_tools = lambda: dict(tools)
+    # 签名收 `config`：`_real_tools` 现在要把它透传给工具（见该函数的注）。收下但不用。
+    R._real_tools = lambda *a, **k: dict(tools)
     R._system_prompt = lambda *a, **k: "你是测试用助手。"
     cfg = {"configurable": {"principal": principal}} if principal else {}
     return list(R.build().stream({"messages": [HumanMessage(content="带我去首页")]}, cfg))
@@ -245,11 +246,45 @@ check("零执行时收尾**如实说零执行**（不许出现「办成了」的
 check("异常也产了一帧 model update（trace 的 final_reply 不从空）",
       bool(_node(_boom, "model")))
 
-# ── ⑤ 接线锁 ─────────────────────────────────────────────────────────
+# ── ④b 收敛中间件的收尾必须被转发（20261005 修的真洞）──────────────────
+# 病：中间件注入的确定性收尾挂在 `ConvergenceMiddleware.after_model` /
+# `.before_model` 的节点名下（**不叫 "model"**），而适配器只认 "model" ⇒ 那条正文
+# **静默丢掉**，用户拿到**空回复**。这不是边角——撞预算与"同一个调用重试两次"是本线
+# **唯一**的两条收尾路径。首轮真链路（127 条）实测：34 条红里 **16 条是空回复**。
+print("\n④b 收敛中间件的收尾要上 messages 通道（丢掉 = 空回复，而报告看不出为什么）")
+RAN.clear()
+_no_prog = _run([_call("navigate", target="首页"),      # 第 1 轮：正常执行
+                 _call("navigate", target="首页")],     # 第 2 轮：同一个签名 ⇒ 判无进展
+                {"navigate_to": _nav_tool}, principal=UNKNOWN)
+_np_text = "".join(str(c.content) for c in _chunks(_no_prog) if isinstance(c, AIMessageChunk))
+check("无进展收尾**进了用户可见正文**（修前这里是空串）", bool(_np_text.strip()), repr(_np_text))
+check("收尾说的是「没进展」那一句（措辞来自 `wrap_up_text`，不自己拼）",
+      "没进展" in _np_text, repr(_np_text[:60]))
+check("**重复的那一次没有执行**（无进展判据的全部意义）", len(RAN) == 1, str(RAN))
+check("收尾也产了一帧 model update（trace 的 final_reply 不从空）",
+      bool(_node(_no_prog, "model")))
+
+_ob = R.BUDGET
+try:
+    R.BUDGET = 1                       # 撞预算 ⇒ `before_model` 那条路（另一个节点名）
+    _over = _run([_call("navigate", target="首页")], {"navigate_to": _nav_tool},
+                 principal=UNKNOWN)
+finally:
+    R.BUDGET = _ob
+_ov_text = "".join(str(c.content) for c in _chunks(_over) if isinstance(c, AIMessageChunk))
+check("撞预算的收尾同样上正文（`before_model` 那条分支也认）", bool(_ov_text.strip()),
+      repr(_ov_text))
+check("两条收尾走的是**同一个转发口**（`_on_wrap_up` 只此一处，不与 `_on_model` 混）",
+      _arm_src.count("def _on_wrap_up") == 1)
+
+
+
 print("\n⑤ 接线锁：几处「照着抄就会漂」的地方")
-check("真工具走 `.invoke(单个 dict)`（直接 `fn(**args)` 会把 StructuredTool 的第一参数"
-      "当 tool_input ⇒ 每个工具都 BLOCK error_frame 的假读数）",
-      "_t.invoke(kw)" in _arm_src)
+check("真工具走 `.invoke(单个 dict, config=请求的 config)` —— 两种写错各有**一个假读数**："
+      "省掉单个 dict（`fn(**args)`）会把 StructuredTool 的第一参数当 tool_input ⇒ 每个工具都 "
+      "BLOCK error_frame；省掉 config ⇒ `configurable.user_id` 恒空 ⇒ 身份类工具永远看到 "
+      "uid=0，带真身份的用例集体红而红的原因住在适配器里",
+      "_t.invoke(kw, config=" in _arm_src)
 check("技能菜单的占位体**响亮失败**（静默返回空文本 = 整轮看起来跑通、其实零执行）",
       "占位体被直接调用" in _arm_src)
 check("`parallel_tool_calls` 的口径偏差写在文件里（读读数的人得知道步子更碎）",
