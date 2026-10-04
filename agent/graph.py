@@ -96,7 +96,7 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES
                              _nav_fast_path, _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.entities import receipt_digest
-from agent.factblock import (action_facts, is_block_family, is_cmd_family,
+from agent.factblock import (action_facts, is_action_family, is_block_family,
                              render_fact_block)
 from agent.llm_usage import usage_fields
 from agent.native_plan import (bind_native, finish_reason, tool_call_names,
@@ -9094,19 +9094,40 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
 # 「页面跳转「物联网平台」」，编出「物联网平台页面已经打开啦～你现在应该能看到设备控制台了」，
 # 而同一轮的 `page_ctx` 里 `current_url` 是**首页**——系统手里握着真值却没核对（闸门侧的洞
 # 另记，见 5b2）。
-# 所以占位按**本轮有没有命令族回执**分岔：有 ⇒ 效果真发生了，那件事归 narrator 说；
+# 所以占位按**本轮有没有动作族回执**分岔：有 ⇒ 效果真发生了，那件事归 narrator 说；
 # 没有 ⇒ **一个族名都不提、一句授权都不给**（不提，它就不会去找一件没发生的事）。
+#
+# **20261005 起分岔的判据从「有没有命令族回执」扩到「有没有动作族回执」**（命令族 + 写族）：
+# 写族也退出印出射程（`agent/factblock.py` 的 `BLOCK_FAMILIES` 空集）⇒ 一轮真建了标签的对话
+# 同样落进这一格，只按命令族分岔的话它会读到"没有代印的事实"却看不出"这件事该由我说"。
+# 判据仍用**回执**（`is_action_family`）而不是"印了几行"——回执在，事情就真发生了；
+# 这是 02:02 那次空授权的分界线，别退回"占位是常量"。
 _NO_PRINTED_FACTS = "（本轮没有系统代印的事实）"
-_NO_PRINTED_FACTS_CMD = (
-    "（本轮没有系统代印的事实——跳转/特效/夜间那一族**真的执行了**，效果主人当场看得见，"
-    "**那件事由你自己说**，依据见上面的工具执行记录与执行回执）"
+_NO_PRINTED_FACTS_ACTION = (
+    "（本轮没有系统代印的事实——**跳转/特效/夜间/写操作这几族真的执行了**，"
+    "**那几件事全由你自己说**：效果主人当场看得见，写操作留下的东西他当场看不见、"
+    "更得靠你交代清楚（改了哪一篇、从什么变成什么、还是没改动）；"
+    "依据见上面的工具执行记录与执行回执）"
 )
 
-_EXECUTOR_PROMPT = """\
+# ── narrator 系统提示词的三段（20261005 拆开，第二条臂共用叙述纪律）──────
+# 拆的理由：叙述纪律（下面那 23 条）是**一份**共享资产，而原生 ReAct 线
+# （`agent/react_arm.py`）此前**一条都没接**——它的模型于是不知道"读不到 ≠ 空"、
+# 不知道"不许叫主人去登录"（纪律 20），golden 的 `own_*` 族因此整族慢性红。
+# 抄第二份纪律就是抄一个漂移源（本仓的既有裁决，见 prompts.py 关于 audience 的注），
+# 所以在这里按**逐字节**切一刀：`_EXECUTOR_PROMPT` 仍是这三段的拼接结果，
+# 生产行为零变化（`tests/test_react_narrator_assets.py` 拿拼前算出的哈希钉住它）。
+_EXECUTOR_HEAD = """\
 {persona}
 
 {audience}
 
+"""
+
+# 叙述纪律（规则 1–23）。**第二条臂读它时要带一段"立场改写"**：规则 1 说的是
+# "你没有任何可以直接调用的工具"，那是 narrator（零工具节点）的立场，与 ReAct 循环
+# 相反；其余各条（不许编造、读不到 ≠ 空、不许派主人去登录…）一个字都不放宽。
+NARRATOR_DISCIPLINE = """\
 叙述纪律（你是回复者，不是执行者）：
 1. 你没有任何可以直接调用的工具。站内查询、跳转、特效/夜间切换、设备操作都
    由系统在下面的执行计划中完成——你只负责把"工具执行记录"里的返回组织成回复。
@@ -9250,6 +9271,9 @@ _EXECUTOR_PROMPT = """\
     在②这半它照常适用——**这是主人读到那句事实的唯一来源**。）
 
 [执行计划]（系统决策结果——本轮执行了什么、按什么契约回复）：
+"""
+
+_EXECUTOR_PROMPT = _EXECUTOR_HEAD + NARRATOR_DISCIPLINE + """\
 {plan}
 
 计划首行的 `STATUS=` 是**系统填的**本轮处境（20260926 批 3），照它决定口径。
@@ -9274,7 +9298,8 @@ _EXECUTOR_PROMPT = """\
 如实转述的依据；为空 = 本轮没有已验收的执行）：
 {exec_receipts}
 
-[本轮已由系统印出的事实]（**已经印在气泡最前面**，主人一定会读到；这些行不再由你说）：
+[本轮系统代印的事实]（20261005 起系统**不再代印任何一行**，这一格恒为占位——该不该
+由你交代、交代哪几族，看下面那一句；这一行本身不点名任何族，见 `_NO_PRINTED_FACTS` 注）：
 {fact_block}
 
 当前页面上下文（前端实时上报的访客位置/特效/夜间模式，以此为准）：
@@ -9304,23 +9329,22 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 与称呼/口径按角色变。未知角色 → 访客那段（fail-closed：宁可把主人当访客，
     # 也不把访客当主人——后者会用主人的口径去答权限相关的事）。
     role = _principal_of(config).known_role
-    # 动作族事实块（20260927 D3，roadmap §D3）：**写族**的回执由系统印，模型只写包装。
-    # 三处一起做才成立：
-    #   ① 块进提示词（模型知道主人已经看到这几行，才不会去复述、也不会说"我没执行"）；
-    #   ② 同一份事实**从两个记录段里摘掉**（摘掉的不是事实，是"第二次出现的邀请"）；
-    #   ③ 块由 producer 发在 narrator 之前（`server.py`），用户先读事实再读包装。
-    # **⚠️ 摘除面必须与印出面同宽**（20261002）：`_drop` 由 `is_block_family` 算，不是
-    # `is_action_family`。命令族（跳转/特效/夜间）这一族**不印**（`BLOCK_FAMILIES` 的
-    # 理由：效果主人当场看得见，那句话归泠月自己交代）——如果这里照旧按"动作族"摘帧，
-    # 它就会被摘掉**却又没有印出来**：主人读不到、模型也看不到，那句话**没有任何作者**，
-    # 而 `[本轮已由系统印出的事实]` 那一格还会写着"没有（动作族执行）"——一轮真的跳了页的
-    # 对话，提示词里写它什么都没干。这就是"漏印"与"漏供给"的差别：印是展示策略，摘是证据。
+    # 动作族事实块（20260927 D3，roadmap §D3）：系统代印事实、模型只写包装——**这一批已
+    # 整体歇业**（20261005，`BLOCK_FAMILIES` 空集：写族也退出印出射程）。剩下的是它的骨架，
+    # 以及一条**必须继续保持的不变量**：
+    # **⚠️ 摘除面必须与印出面同宽**。`_drop` 由 `is_block_family` 算，不是 `is_action_family`。
+    # 印出面为空 ⇒ 这里**一个字都不摘**：工具帧与回执是 narrator 交代动作的**唯一依据**，
+    # 摘掉它们等于把那句话的作者拿掉（主人读不到、模型也看不到 ⇒ 那件事**没有任何作者**）。
+    # 这条纪律在 20261002（命令族退出）与 20261005（写族退出）上各救过一次：两次的错法都是
+    # "按动作族摘帧、却只印一半"——印是展示策略，摘是证据，两者同宽才安全。
     _receipts = [r for r in (state.get("receipts") or []) if isinstance(r, dict)]
     _facts = action_facts(_receipts)
     _block = render_fact_block(_facts)
     _drop = {str(r.get("tool") or "") for r in _receipts if is_block_family(r)}
-    # 占位分岔用的那一位（见 `_NO_PRINTED_FACTS` 注释）：这一轮**真的发过命令帧**吗。
-    _has_cmd = any(is_cmd_family(r) for r in _receipts)
+    # 占位分岔用的那一位（见 `_NO_PRINTED_FACTS` 注释）：这一轮**真有动作族回执**吗
+    # （命令族 + 写族）。**20261005 起不再看"有没有命令帧"**——写族也退出印出射程之后，
+    # 两种轮次都要落进"那件事由你自己说"那一句，判据必须是"真的执行了动作"。
+    _has_action = any(is_action_family(r) for r in _receipts)
     if _facts:
         record("model", "fact_block", n=len(_facts), tools=sorted(_drop))
         logger.info("[model] 动作事实块 %d 行（族内工具 %s），叙述权收归系统",
@@ -9336,7 +9360,7 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         plan=_narrator_plan(state, config),
         tool_frames=_frame_texts(state["messages"], drop_tools=_drop),
         exec_receipts=_receipts_text(_receipts, drop_tools=_drop),
-        fact_block=_block or (_NO_PRINTED_FACTS_CMD if _has_cmd else _NO_PRINTED_FACTS),
+        fact_block=_block or (_NO_PRINTED_FACTS_ACTION if _has_action else _NO_PRINTED_FACTS),
         # 能力清单与 audience 同一角色源（20260921）：两处口径不同会出现
         # "管理员身份 + 清单里没有管理能力"的自相矛盾 prompt
         page_ctx=_page_ctx(state["messages"], role),
@@ -9750,12 +9774,15 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     #     这一批只写包装。它若仍作完成式声称（"标签建好啦"），这一条**只记不判**——
     #     落 `gate.action_restate` 事件 + 一行 info，正文照常放行。
     #
-    #     ⚠️ **射程 20261002 自动收窄到写族**（命令族不再印，见 `agent/factblock.py`
-    #     的 `BLOCK_FAMILIES`）：判据挂在 `_action_block` 非空上，而它由
-    #     `action_facts`（只收写族）渲染 ⇒ 跳转/特效/夜间那一族**不再有 `action_restate`
-    #     事件**，叙述它们也不判。这不是漏，是**主人要的**：命令族那几句话系统的播报
-    #     撤销后**归泠月自己交代**（纪律 23 ② 半），再罚它就是罚它去做被要求的事。
-    #     那一族的无据声称由下面 5h（实体锚定，要求"没有那个实体的回执"）管。
+    #     ⚠️ **射程 20261002 收窄到写族、20261005 收成空集**（`agent/factblock.py` 的
+    #     `BLOCK_FAMILIES`）：判据挂在 `_action_block` 非空上，而它由 `action_facts`
+    #     渲染 ⇒ 现在**一个族都不印，这一条恒不触发**（`action_restate` 事件从此不再产生）。
+    #     这不是漏，是**主人要的**：系统不再抢话，动作族那几句话**全归泠月自己交代**
+    #     （纪律 23 ② 半）——它说了本该它说的话，再罚它就是罚它去做被要求的事。
+    #     **判据与守卫原样留着**（不删）：它判的是"系统印过的那句话又说一遍"，印出面
+    #     重建的那天它自动复活；删掉会把"印不印"从可配置变成从代码里消失。
+    #     **别把这一段读成"现在在生效"**——它的输入恒为空。
+    #     无据的完成式声称由下面 5h（实体锚定，要求"没有那个实体的回执"）管，那一条照旧生效。
     #
     #     **为什么不是 fallback（20260927 实测改口）**：D3 落地前拿 19 条动作族 golden
     #     实跑，`eff_off_sakura` / `dark_off` / `nav_article_target` 三条被这条网命中，三条
@@ -9776,9 +9803,10 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     #     落在提示词（`_EXECUTOR_PROMPT` 纪律 23）上，这里只提供**达没达标的数据**：
     #     纪律 23 上线首测 19 轮里 3 轮复述（16%），值不值得升，看这条事件的累计计数再定。
     #
-    #     **只在"真有事实被印出来"时生效**（射程＝写族，与 `agent/factblock.py` 的
-    #     印出口径同源；**不是**分族口径——分族仍是命令族+写族）：数据族的 JSON 讲成人话
-    #     本就是模型的活，那条路上它说的"查到了/没有"由别的网管（5d/5f），不归这里。
+    #     **只在"真有事实被印出来"时生效**（射程＝`BLOCK_FAMILIES`，与 `agent/factblock.py`
+    #     的印出口径同源；**不是**分族口径——分族仍是命令族+写族；该集 20261005 起为空）：
+    #     数据族的 JSON 讲成人话本就是模型的活，那条路上它说的"查到了/没有"由别的网管
+    #     （5d/5f），不归这里。
     #     **也不进 `_REPLAN_ISSUES`**：重规划会把这些工具**再执行一遍**（这些族都有
     #     副作用，而回执已证明它们成功执行过）。
     _action_block = render_fact_block(action_facts(receipts))
