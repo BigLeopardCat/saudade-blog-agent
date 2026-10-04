@@ -37,12 +37,19 @@
 由生产那半发。弹卡轮**到此为止**（与 `route_after_execute` → END 同义），正文由
 producer 用 `confirm_text` 发**一次**——臂这边一个字节的正文都不补，补了就是两遍。
 
+**narrator 资产（P6 前半，20261005）**：系统提示从生产的 narrator 资产里接了两份
+**逐字共用**的（见 `_system_prompt`）——`NARRATOR_DISCIPLINE`（纪律 1–23，含"读不到 ≠ 空"
+与"不许派主人去登录"那两条）与 `STICKER_GUIDE`（8 个贴纸名的唯一名字表）。接之前
+`own_*`（模型如实说读不到、却又多派一句"你先去登录"）与 `sticker_*` 两族整族慢性红。
+纪律是 narrator（零工具节点）的口径，所以前面加了一段立场改写（`_DISCIPLINE_STANCE`，
+同 `audience_block` 的手法：只换指称、实质一条不放宽）。
+
 **这一版明确不做的**（都是 `docs` 里 P4–P6 的活，别当成已经做完了）：
   · 闸门谓词（P4）⇒ `gate.fallback_text`/`gate_replan` 恒不发，`forbid_fallback`
     在 react 臂上**不可证伪**（这正是 P0 要给它的合成正控）;
   · 跨轮执行记忆 + task 行（P5）⇒ 不发 `task_frame`、不读不写台账族；
-  · narrator 独立资产（P6）⇒ 收尾由**同一个模型**写，系统提示是"判断器提示词 + 人设/
-    叙述纪律"拼的（见 `_system_prompt`）。
+  · narrator 的**独立节点**与动作事实块（P6 后半）⇒ 收尾仍由**同一个模型**写，
+    `factblock.render_fact_block` 那一格还没接（叙述权没有收归系统）。
 
 **已知口径偏差**（读第一批读数时必须带着看）：
   · `parallel_tool_calls` 没有钉住——`create_agent` 自己 bind_tools，生产 planner 是
@@ -50,9 +57,10 @@ producer 用 `confirm_text` 发**一次**——臂这边一个字节的正文都
     一轮多条调用（合并成一份 `plan_obj`、逐条发 `execute`），所以偏差表现为"步子更碎"，
     不会丢调用；
   · 内层只看得到 `[HumanMessage(本轮用户消息)]`（与被测的 graph planner 信息面同源：
-    page_ctx / recent_tail / doc_anchors 都在系统提示里）。**不能**把整条生产消息流塞进去
-    ——`ConvergenceMiddleware` 数的是 state 里 `AIMessage` 的条数，历史轮次的 AI 消息会
-    把轮数预算吃光（多轮用例会第一轮就"预算用满"收尾，读数看着像"这臂什么都办不成"）。
+    page_ctx / recent_tail / doc_anchors 都在系统提示里）。文本按 `_last_user_msg` 取末
+    500 字，**非文本部件（图片）原样带着**（见 `_inner_message`）。**不能**把整条生产
+    消息流塞进去——`ConvergenceMiddleware` 数的是 state 里 `AIMessage` 的条数，历史轮次的
+    AI 消息会把轮数预算吃光（多轮用例会第一轮就"预算用满"收尾，读数看着像"这臂什么都办不成"）。
 """
 from __future__ import annotations
 
@@ -66,10 +74,10 @@ from langchain_core.tools import StructuredTool
 from agent.context import (_doc_anchors, _frame_texts, _last_assistant_utterance,
                            _last_user_msg, _page_ctx, _recent_tail, _short_reply_hint)
 from agent.decisions import _intent_hints
-from agent.graph import (_confirm_popup, _pending_ledger_frame, _principal_of,
-                         _render_planner_prompt)
+from agent.graph import (NARRATOR_DISCIPLINE, _confirm_popup, _pending_ledger_frame,
+                         _principal_of, _render_planner_prompt)
 from agent.native_plan import build_tool_schema
-from agent.prompts import BLOG_ASSISTANT_PROMPT, audience_block
+from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import RunLedger, SkillExecutor, build_agent
 from agent.refs import ref_hints
 from agent.skills import instantiate_plan
@@ -90,6 +98,33 @@ _CONVERGENCE_NODE_PREFIX = "ConvergenceMiddleware"
 def _is_convergence_node(node: object) -> bool:
     """这个 update 是不是收敛中间件发的那一格（见 `stream` 的接线注）。"""
     return str(node).startswith(_CONVERGENCE_NODE_PREFIX)
+
+
+def _inner_message(messages: list, user_msg: str) -> HumanMessage:
+    """内层循环看到的那**一条**用户消息：文本仍取 `user_msg`（末 500 字的口径），
+    **但把多模态部件（图片）原样带过去**。
+
+    病（20261005 实测，`image_color_red`/`image_two_colors` 两条慢性红）：主人发的消息
+    `content` 是 `[{"type":"text",…},{"type":"image_url",…}]`，而本适配器此前写的是
+    `HumanMessage(content=user_msg)`——**按文本重建等于把图整段丢掉**，模型看不见图，
+    自然答不出"这张图是什么颜色"，还会顺手去调 `get_blog_info`（那条用例 `no_tool_calls`
+    也跟着红）。生产 narrator 读的是**原消息**，所以这是本层自己要修的口径差。
+
+    只补回**非文本部件**、文本仍用 `user_msg`：`[System: …]` 那半已被 `page_ctx`
+    提取进系统提示，再塞一遍是重复注入——那会让**每一条**用例的提示词都变，读数就从
+    "修了图片这一件事"变成"什么都变了"（一次只动一个变量）。
+    """
+    last = next((m for m in reversed(messages or [])
+                 if isinstance(m, HumanMessage)), None)
+    content = getattr(last, "content", None)
+    if not isinstance(content, list):
+        return HumanMessage(content=user_msg)
+    extra = [p for p in content
+             if isinstance(p, dict) and p.get("type") not in ("text", "input_text")]
+    if not extra:
+        return HumanMessage(content=user_msg)
+    return HumanMessage(content=[{"type": "text", "text": user_msg}] + extra)
+
 
 # 模型决策轮上限。生产 `MAX_PLAN_ROUNDS=4`；这里放宽到 6 是本线既有的取值
 # （`react_line.ConvergenceMiddleware` 的注：一轮里可能并发多条调用，步子比 planner 碎），
@@ -141,8 +176,9 @@ class ReactGoldenArm:
         sent_calls = 0
         last_plan: dict = {}
         try:
-            # 内层只看得到本轮那一句（理由见模块头注的最后一条口径偏差）。
-            for step in agent.stream({"messages": [HumanMessage(content=user_msg)]},
+            # 内层只看得到本轮那一句（理由见模块头注的最后一条口径偏差）——但那一句
+            # **带着它的多模态部件**（见 `_inner_message`：按文本重建会把图片丢掉）。
+            for step in agent.stream({"messages": [_inner_message(messages, user_msg)]},
                                      {"recursion_limit": REC_LIMIT},
                                      stream_mode="updates"):
                 for node, upd in (step or {}).items():
@@ -375,14 +411,25 @@ def _real_tools(config: dict | None = None) -> dict[str, Any]:
 
 def _system_prompt(messages: list, role: str | None, principal: Any,
                    config: dict | None, user_msg: str) -> str:
-    """系统提示 = 判断器提示词（生产的唯一渲染入口）+ 人设/叙述纪律 + 循环说明。
+    """系统提示 = 判断器提示词（生产的唯一渲染入口）+ 人设 + **叙述纪律** + 循环说明。
 
-    **为什么拼这三块**：本线一个模型既做决策又写正文（P6 之前没有独立的 narrator 资产）。
+    **为什么拼这几块**：本线一个模型既做决策又写正文（没有独立 narrator 节点）。
     · 第一块就是 planner 逐字那份（`_render_planner_prompt`，"唯一入口"）——技能表、
       规则、输出契约全在里面，**照着抄第二份就是抄一个漂移源**；
     · 第二块是 `BLOG_ASSISTANT_PROMPT`（人设 + 叙述边界 + 诚实底线，narrator 用的同一份
       资产）。没有它，收尾正文是"规划器口吻"的、且没有任何反幻觉纪律；
-    · 第三块是循环机制（怎么终止）。**这三块都不是新造的资产**，第三块只有三五句。
+    · 第三块是 `NARRATOR_DISCIPLINE`（20261005 起，**与生产 narrator 逐字同一份**，
+      `graph._EXECUTOR_PROMPT` 的纪律段）。此前一条都没接，代价实测可数：`own_*` 族
+      整族慢性红——模型如实说了"读不到"，却**又多派了一句"你先去登录"**，而纪律 20
+      明令禁止（生产的账不许算在主人头上）。同族还有"读不到 ≠ 空"那几条；
+    · 第四块是 `STICKER_GUIDE`（情绪贴纸的**唯一**名字表）。不接它，`:害羞:` 这些
+      记号结构上产不出来（`sticker_*` 用例整族恒红），而语料只认这 8 个名字；
+    · 第五块是循环机制（怎么终止），只有三五句。
+
+    **纪律块要带立场改写**（`_DISCIPLINE_STANCE`）：那份纪律是 narrator（零工具节点）
+    的立场——第 1 条写着"你没有任何可以直接调用的工具"。本循环正好相反，所以紧挨着它
+    前面放一段"哪几句按本循环读、其余一个字不放宽"。**不改写就是自相矛盾的提示词**，
+    而矛盾提示词的失效方式是不定向的。
     """
     try:
         ledger_frame, _meta = _pending_ledger_frame(
@@ -408,11 +455,60 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
         reflector_feedback="（本决策轮无复盘建议）",
         correction="（本决策轮无纠偏提示）")
     return "\n\n".join([planner, BLOG_ASSISTANT_PROMPT or "", audience_block(role),
+                        _DISCIPLINE_STANCE, NARRATOR_DISCIPLINE, STICKER_GUIDE,
                         _CLOSING_RULES])
 
 
+# 叙述纪律的**立场改写**（20261005）。同 `audience_block` 的手法：纪律文本只有一份，
+# 变的只是"对谁、在哪个循环里读"——这里改的是**循环立场**那一维。
+#
+# 为什么必须有它：`NARRATOR_DISCIPLINE` 开篇就是"你是回复者，不是执行者""你没有任何
+# 可以直接调用的工具。站内查询、跳转…都由系统在下面的执行计划中完成"。本线的模型
+# **既是决策者也是回复者**，工具就在它手里——原样照读会得到一份自相矛盾的提示词
+# （前面给的技能表说"调它"，紧接着说"你没有工具"）。
+#
+# **为什么是"逐条点名作废"而不是一句"你有工具"**（20261005 实测）：头一版只写了
+# "你有工具、自己调用"，结果**工具调用整体掉了三格**——`guestboard_talk_double_source`
+# /`after_offer_then_look_up` 变成"一个工具都没调"，`own_favorite_add_not_logged_in`
+# 变成"没调 add_favorite"。对得上号的正是那几条**前提为假**的纪律：纪律 3 前半
+# （"本轮尚无工具执行 ⇒ 如实说无法确认，或建议稍后再问"）在本循环里是"还没开始查"，
+# 却被读成"答不了"；纪律 18（"要动站内数据的操作由系统自己走确认流程、确认框一个字
+# 别提"）让模型**根本不碰写工具**。泛泛的一句"你有工具"压不住紧跟着的 23 条正文，
+# 所以这里把作废的**条号与首句逐字点名**（模型对"第 3 条前半作废"这种指认比对话语
+# 敏感得多），并**只作废前提为假的那半句**——同一号纪律里前提仍成立的那半（空结果
+# ≠ 没执行、只按回执说结果）照旧生效。
+#
+# 边界写死：只改写**立场**，一条实质纪律都不放宽——尤其 20（读不到 ≠ 空 / 不许派主人
+# 去登录）与"只按回执说结果"。
+_DISCIPLINE_STANCE = """\
+叙述纪律的读法（本循环的立场改写——纪律**原文**在后面，一字未改）：
+下面那份纪律是生产 narrator 节点的（那个节点零工具、只负责把系统的执行记录说成人话）。
+本循环里你**既是决策者也是回复者**，工具就在你手上。因此先按下面五条**作废/换指称**，
+**其余各条（含同号纪律的后半句）一个字都不放宽**：
+
+· **纪律 1 作废**（「你没有任何可以直接调用的工具…由系统在下面的执行计划中完成」）：
+  你**有**工具，就是本文档前面技能表里那些，要做事就**自己调用**；纪律里说的
+  「执行计划」在本循环里 = 你的技能表。
+· **纪律 3 的前半句作废**（「工具执行记录为本轮尚无工具执行时…站内问题如实说明无法
+  确认，或建议用户稍后再问」）：本循环里"还没有工具记录"只说明你**还没开始查**——
+  想回答就先调工具，**不许**用"无法确认"收尾。**后半句（空结果 ≠ 没执行）照旧生效**。
+· **纪律 9 作废**（「回复遵循计划 REPLY 行的契约组织」）：本循环没有计划行，信息够了
+  就直接写最终答复。
+· **纪律 18 的前半句作废**（「要动站内数据的操作由系统自己走确认流程」）：写操作
+  **你要自己调工具**——同意闸会在你真动手之前拦下并弹卡（那一轮轮不到你说话，与本条
+  同理）。**后半句照旧生效**：只按回执说结果，绝不说"已经发起/已经办好了"。
+· **纪律 23 作废**（它按「本轮已由系统印出的事实」那一格分岔，本循环没有那一格）：
+  写族的结果**归你说**，按它 ② 那半执行——照回执原话说，不作完成式陈述。
+· 纪律里凡说「工具执行记录 / 本轮执行回执」→ 你自己这一轮调用工具后拿到的真实返回
+  （就在消息流里）。
+
+其余全部照旧生效：不许编造、**读不到 ≠ 空**、只按回执说结果、不许把还没动手讲成已经
+办好、不许给主人派「你先去登录」这类活……**这些一条都不放宽**。"""
+
+
 # 收尾说明（模块私有，三五句）：把"这个循环里你怎么结束"讲清楚。**不写叙述纪律**
-# ——那件事由上面的 BLOG_ASSISTANT_PROMPT 负责，这里只讲机制。
+# ——那件事由上面的 `NARRATOR_DISCIPLINE` 负责（纪律前还有 `_DISCIPLINE_STANCE`），
+# 这里只讲机制。
 _CLOSING_RULES = """\
 循环机制（你既是决策者也是回复者，同一条消息流里两者同体）：
 1. 要做事就**直接调用技能工具**（上面的技能表就是你的全部本领）；系统会立刻执行并把
