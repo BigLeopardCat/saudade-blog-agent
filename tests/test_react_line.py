@@ -15,7 +15,12 @@
   · **回执台账**：checker PASS 进 `ledger.receipts`、BLOCK 进 `ledger.blocked` 带原因码，
     且工具返回文本末尾**附了一行回执**（模型看得见，这是治"同一步反复重试"的燃料）；
   · **自然收尾不受打扰**：模型自己给出无 tool_calls 的回复 ⇒ 零收尾注入、`stop_reason`
-    为空（判据不许把"正常答完"也当成"卡住"）。
+    为空（判据不许把"正常答完"也当成"卡住"）；
+  · **权限闸**（P1，20261004）：判据字面与 `graph.execute_node` **同一条**
+    （`not allowed and authz.enforcing(scope)`），**两条入口都有**（技能级
+    `SkillExecutor.run` 与工具级 `wrap_tools_with_receipts`）——只锁一扇门是这条的
+    原始病；被拒的调用**也记进 `executed`**，于是反复被拒由"无进展"收尾，而不是把
+    轮次预算全烧在同一个拒绝上。
 
 ⚠️ 用例里的模型是**脚本化的假模型**（`_Scripted`）：它不看提示词、不看工具菜单，只按
 脚本吐 `AIMessage`。所以本文件证明的是**接线**，不是"模型会不会用工具"——后者只有
@@ -33,6 +38,8 @@ from langchain_core.language_models.fake_chat_models import (  # noqa: E402
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 from langchain_core.tools import StructuredTool  # noqa: E402
 
+from agent import authz  # noqa: E402
+from agent.principal import Principal  # noqa: E402
 from agent.react_line import (  # noqa: E402
     ConvergenceMiddleware,
     RunLedger,
@@ -41,6 +48,12 @@ from agent.react_line import (  # noqa: E402
     spec_signature,
     wrap_tools_with_receipts,
 )
+
+# 用例里的动作是**管理动作**（`freeze_account`，硬 scope `admin.console`）。20261004 起
+# 本线接了权限闸（P1，与 `graph.execute_node` 同一条判据）⇒ 「工具真的被执行了」这句话
+# 必须**带上是谁在调**才成立：不给身份 = 身份不明 = 硬 scope 一律拒（fail-closed）。
+# 所以这里显式给一个管理员，而不是让用例退化成"匿名也能封号"。
+ADMIN = Principal(uid=1, role="superadmin")
 
 FAILS: list[str] = []
 
@@ -53,6 +66,12 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 
 _UID_SCHEMA = {"type": "object", "properties": {"uid": {"type": "integer"}},
                "required": ["uid"]}
+
+
+def authz_deny(principal, tool: str) -> bool:
+    """这个身份调这个工具**会不会被闸拦下**（判据字面与 `graph.execute_node` 同一条）。"""
+    d = authz.check(principal, tool)
+    return not d.allowed and authz.enforcing(d.scope)
 
 
 def _stub(name: str, body) -> StructuredTool:
@@ -76,6 +95,7 @@ def _call(name: str, **args) -> AIMessage:
 
 def _run(script: list, tools: list, **kw) -> tuple[dict, RunLedger]:
     model = _Scripted(messages=iter(script), ai_message_chunk=iter([]))
+    kw.setdefault("principal", ADMIN)
     agent, ledger = build_agent(model, tools, system_prompt="你是测试用助手。", **kw)
     state = agent.invoke({"messages": [HumanMessage(content="动手吧")]}, {"recursion_limit": 25})
     return state, ledger
@@ -209,6 +229,25 @@ def main() -> int:  # noqa: C901
                   led, role="admin").run("navigate", {"target": "首页"})
     check("navigate_to 缺 cmd ⇒ BLOCK cmd_shape", led.block_reasons() == ["cmd_shape"],
           str(led.block_reasons()))
+
+    # ── ⑪ 权限闸（P1）：无身份 ⇒ 硬 scope 不执行，且**照样收敛** ─────────────
+    print("\n⑪ 权限闸：身份不明不执行，且不把预算烧在反复被拒上")
+    _ran: list = []
+    _guarded = _stub("freeze_account", lambda uid: _ran.append(uid) or f"已冻结 {uid}")
+    state, led = _run([_call("freeze_account", uid=12), AIMessage(content="好")], [_guarded],
+                      principal=Principal(uid=0, role=None))
+    check("**工具一次都没真的跑**（fail-closed）", _ran == [], str(_ran))
+    check("记的是受阻、不是事实",
+          not led.receipts and len(led.blocked) == 1, f"blocked={led.block_reasons()}")
+    check("受阻带原因码（`_check_spec` 认得权限帧 ⇒ 走同一条受阻链路）",
+          led.block_reasons() == ["unknown_role"], str(led.block_reasons()))
+    state, led = _run([_call("freeze_account", uid=12) for _ in range(20)], [_guarded],
+                      principal=Principal(uid=0, role=None))
+    check("反复被拒也判无进展收尾（**拒过的调用也要记进 executed**，"
+          "否则预算全烧在同一个拒绝上）", led.stop_reason == "no_progress", led.stop_reason)
+    check("普通用户同样越不过硬 scope",
+          authz_deny(Principal(uid=7, role="user"), "freeze_account"))
+    check("管理员则放行（闸不是「一律拦」）", not authz_deny(ADMIN, "freeze_account"))
 
     print(f"\n{'=' * 60}")
     if FAILS:
