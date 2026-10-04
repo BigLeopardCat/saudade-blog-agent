@@ -23,6 +23,11 @@
      `golden_full_run.py` 隔离子进程）都对首跑红的回归用例复跑一次，复跑绿记进
      `regression.flaked_ids` + `failed_first_run` 后仍照常出声（复跑必须落**另一个**
      trace 名，否则首跑那份证据被覆盖）。
+     同日再锁**关掉 trace 时那三条台账判据的处置**（20261004）：`require_ledger_*` 读的是
+     `planner.ledger_frame` trace 事件，`--no-trace` 下**必然报红**而红的是**跑法**——
+     判据侧要写成 `[未评估]`、跑法侧要摘用例 + 进 `skipped_ids` + 退出码 3；键表与语料
+     **双向**绑定（表里少一个键 = 那条用例照旧被误判成模型退化，多一个 = 摘用例范围
+     悄悄扩大）。
      同日再锁**身份通道**的接线：`needs_admin_uid` / `needs_user_uid` 两条表在两个跑法
      里都在、未设环境变量就响亮 SKIP（并进 `skipped_ids`）、只给用例自己声明的条目注入
      uid；外加用例侧契约（标记与 `context.role` 配对；带标记的用例不得要求确认帧——
@@ -354,6 +359,87 @@ check("GOLDEN_NO_TRACE=1 → 不落盘", golden_trace.start_case(off_run, "x") i
       and golden_trace.finish_case(None, 0.1) is None
       and not os.path.exists(os.path.join(root, off_run)))
 os.environ.pop(golden_trace.ENV_OFF, None)
+
+# ── 关掉 trace 时那三条台账判据的处置（20261004）─────────────────────────────
+# 现场：`--only <台账用例> --no-trace` 重跑，红在「待办台账**没摆上桌**（模型手里没有可
+# 决策的目标）」——一句**关于模型**的断言；而真相是这一轮压根没有那条证据链
+# （`start_case()` 回 None ⇒ `run_one` 的 `ledger_frames` 恒 `[]`）。红的是**跑法**。
+#
+# 两条出口都要锁死，缺一条就重演：判据侧把"判不了"写成 `[未评估]`（**未评估 ≠ 通过**），
+# 跑法侧摘用例 + 进 `skipped_ids` + 退出码 3。键表与语料**双向**绑定——表里少一个键 ⇒
+# 那条用例照旧被误判成模型退化；多一个键 ⇒ 摘用例的范围悄悄扩大。
+import run_golden as rg      # 局部导入：它拉 server/agent（重），本套件其余部分不必付这笔钱
+
+
+def _case(cid: str, **gold) -> dict:
+    return {"id": cid, "gold": gold}
+
+
+_MULTI = {"id": "multi", "rounds": [{"gold": {"require_ledger_frame": True}},
+                                    {"gold": {"require_ledger_frame": True,
+                                              "require_ledger_rows": True}}]}
+
+check("trace_derived_keys：单轮用例认得出那条键",
+      golden_trace.trace_derived_keys(_case("a", require_ledger_frame=True))
+      == ["require_ledger_frame"])
+check("多轮用例（键写在 rounds 里）同样认得出，且**不重复**",
+      sorted(golden_trace.trace_derived_keys(_MULTI))
+      == ["require_ledger_frame", "require_ledger_rows"])
+check("与台账无关的用例返回空表（处置范围不扩大）",
+      golden_trace.trace_derived_keys(
+          _case("b", require_cmd_prefixes=["AUTO_NAVIGATE"], nonempty=True)) == [])
+
+# 语料 × 键表双向绑定：语料是判据的输入，键表是摘用例的依据——两边各漂各的就是"漏诊"。
+_CORPUS = [json.loads(l) for l in open(ROOT / "eval" / "golden" / "basic.jsonl",
+                                       encoding="utf-8") if l.strip()]
+_LEDGER_CASES = sorted(c["id"] for c in _CORPUS if golden_trace.trace_derived_keys(c))
+_CORPUS_KEYS = {k for c in _CORPUS for k in golden_trace.trace_derived_keys(c)}
+check("键表与语料**双向**相等（少一个 = 漏诊；多一个 = 摘用例范围悄悄扩大）",
+      _CORPUS_KEYS == set(golden_trace.TRACE_DERIVED_GOLD_KEYS), str(sorted(_CORPUS_KEYS)))
+check("带这几条键的用例确实只有那两条（语料增删要同步这一行）",
+      _LEDGER_CASES == ["admin_board_audit_reviewed_refusal",
+                        "board_audit_from_ledger_exec"], str(_LEDGER_CASES))
+
+# 判据的入参形状照 `test_golden_keys.py` 那份最小结果（`check_gold` 有几处是直接下标取的，
+# 少一个键就抛 KeyError——那是"探针自己坏了"，不是判据在说话）。
+def _res(**over) -> dict:
+    res = {"text": "在的", "commands": [], "tool_calls": [], "exec_rows": [],
+           "exec_tools": [], "frames": [], "confirm_tokens": [], "confirm_payloads": [],
+           "task_frames": [], "ledger_frames": [], "resets": 0, "resets_reasons": [],
+           "reset_scopes": [], "fallback_reasons": [], "error": None}
+    res.update(over)
+    return res
+
+
+os.environ[golden_trace.ENV_OFF] = "1"
+try:
+    _kept, _skipped, _rows = rg.check_trace_premises(
+        [_case("led", require_ledger_frame=True), _case("plain", nonempty=True)])
+    _off_fails = rg.check_gold({"require_ledger_frame": True}, _res())
+finally:
+    os.environ.pop(golden_trace.ENV_OFF, None)
+check("trace 关着：台账用例被摘成「未评估」，无关用例照跑",
+      [c["id"] for c in _kept] == ["plain"] and _skipped == ["led"]
+      and _rows[0]["keys"] == ["require_ledger_frame"], str(_rows))
+check("判据侧报的是「未评估」，**不是**「待办台账没摆上桌」",
+      any("未评估" in f for f in _off_fails)
+      and not any("没摆上桌" in f for f in _off_fails), str(_off_fails))
+_on_fails = rg.check_gold({"require_ledger_frame": True}, _res())
+check("trace 开着、帧真的缺 ⇒ 照旧红（修的是跑法，不是把这条判据放走）",
+      any("没摆上桌" in f for f in _on_fails)
+      and not any("未评估" in f for f in _on_fails), str(_on_fails))
+
+check("两个跑法都接上了这条闸（判据只有一处实现，接线各自一段）",
+      "check_trace_premises(cases)" in src_run
+      and "golden_trace.trace_derived_keys(c)" in src_full)
+check("未评估要进 skipped_ids 且单列一个报告字段（否则看着像被静默豁免）",
+      "skip_ids += _trace_skipped" in src_run and "_SKIPPED_IDS += _TRACE_SKIPPED" in src_full
+      and '"skipped_trace_ids"' in src_run and '"skipped_trace_ids"' in src_full)
+check("空分母的退出码：前提类闸报 3 而不是 2（两个跑法同口径）",
+      "_code = 3 if (_precondition_bad or _trace_bad) else 2" in src_run
+      and "_code = 3 if _TRACE_SKIPPED else 2" in src_full)
+check("退出码 3 那一组真的带上了 trace 这一类（只在打印里说是不够的）",
+      "or _trace_bad" in src_run)
 
 # 收尾：还原 settings、清临时目录（本套件自己造的东西自己清）
 settings.trace_dir = PROD_DIR

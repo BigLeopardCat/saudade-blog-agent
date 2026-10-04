@@ -16,6 +16,16 @@
 
 ## 20261004
 
+- **关掉 trace 时那三条台账判据不再报成「模型没做」——按「前提不可用」处置（判据，20261004）**：
+  `require_ledger_frame` / `require_ledger_rows` / `require_card_targets_from_ledger` 读的是
+  `planner.ledger_frame` **trace 事件**（planner 的输入消息不进 trace），而 `--no-trace` /
+  `GOLDEN_NO_TRACE=1` 下 `start_case()` 回 `None` ⇒ `ledger_frames` 恒空 ⇒ 这三条**必然报红**，
+  红的那句话却是「待办台账没摆上桌」——一句关于**模型**的断言，而真相是这一轮没有那条证据链。
+  今早 4 次 `--only` 重跑就是这么被读成在途缺陷的（留档 12 次里带该失败的那几次 `trace` 全为
+  `None`，一一对应；开着 trace 重跑即 PASS）。现在按仓里既有的「前提不可用」纪律处置：判据侧
+  写成 `[未评估]`、跑法侧**摘用例 + 进 `skipped_ids` + 退出码 3**（两个跑法同口径），报告新增
+  `skipped_trace_ids` / `trace_checks`。**未评估 ≠ 通过**：trace 开着而帧真的缺时照旧红。
+
 - **闸门那两条窄判据前移到决策层：主人在问站内/自己那份数据而这一轮点了 `chat`，改由 planner
   先纠偏一次（判据，20261004）**：起因是**残余换了形状**——契约改成「闲聊也要显式点 `chat`」
   之后零调用确实少了，但定点探针（20 句数据型 + 4 句闲聊对照组 × 3 轮 × 两臂交替）读到：
