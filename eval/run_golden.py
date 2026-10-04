@@ -91,7 +91,8 @@ from datetime import datetime, timedelta
 # 复用 server 内部链路（不走 HTTP，与 test_fallback_replay.py 同模式）
 import server
 from server import ChatRequest, _build_messages, _run_agent_stream_to_queue
-from agent import create_agent
+# `agent.create_agent` 的引用搬去了 eval/golden_arm.py（选臂那一层）：本文件不再直接建图，
+# 只调 `ensure_agent()` —— 建哪条臂是可拨的，直接 import 会把"只有一条臂"写死在调用点。
 from agent.graph import _cmd_wire  # 连线命令帧 → 连线形（见 __CMD__ 分支的长注）
 from agent import confirm  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
@@ -99,6 +100,7 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 
 import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
 import report_archive  # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
+import golden_arm  # 同目录：选臂/建臂/分栏（graph 与试验线跑同一套语料，20261004）
 import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
 import identity_preflight  # 同目录：真身份通道的前置在位检查（20260926）
 import landing_gate  # 同目录：落地判定（两层门禁 / 慢性红榜，20261001）
@@ -109,10 +111,10 @@ from utils import trace as trace_mod  # trace 工具返回留多长（run_case �
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
 
 # 接口层（报告里的 `engine` 那一格，见 report 的注）：20261004 起只剩 native
-# tool calls 一条路（文本契约档连同 `PLANNER_ENGINE` 拨盘一起删了）。**定义成常量
-# 而不是从 settings 里读**——没有第二个取值可拨，"读配置"是个假动作，会让读者以为
-# 它可变。`golden_full_run.py` 从这里 import，防止两处各写一遍字面量。
-INTERFACE_LAYER = "native"
+# tool calls 一条路（文本契约档连同 `PLANNER_ENGINE` 拨盘一起删了）。**字面量搬去
+# `eval/golden_arm.py`**（那一格现在按臂派生：graph 逐字 `native`，试验臂 `native+<臂>`）
+# ——这里只做**再导出**，值仍只有一份；`engine_for` 是唯一的派生实现。
+from golden_arm import INTERFACE_LAYER  # noqa: E402,F401  （再导出，见上）
 # 导航命令帧族：AUTO_NAVIGATE 与 NAVIGATE 同属"导航已执行"，断言时视为一族
 # （golden 里 require/forbid "NAVIGATE:" 时 AUTO_NAVIGATE 帧同样计入/计入禁止）
 CMD_FAMILIES = {
@@ -168,8 +170,14 @@ def _cmd_matches(pre: str, c: str) -> bool:
 def ensure_agent() -> None:
     if server._agent is None:
         t0 = time.time()
-        server._agent = create_agent()
-        print(f"[init] 编译图构建完成：{time.time() - t0:.1f}s")
+        # 装哪条臂由 `GOLDEN_ARM` 定（缺省 graph，见 eval/golden_arm.py）：graph 走的仍是
+        # `agent.create_agent()`（逐字不变），但试验臂得**先有个入口**才能被打分——
+        # 「ReAct 能不能到 95%」此前**没有读数**，缺的就是这一行。
+        # **`server.py:309` 的 lifespan 不经过这里**（那是生产，恒 create_agent），
+        # 所以选臂只影响评测，不影响线上。
+        _arm = golden_arm.arm_name()
+        server._agent = golden_arm.build_agent(_arm)
+        print(f"[init] 编译图构建完成（arm={_arm}）：{time.time() - t0:.1f}s")
 
 
 def iter_rounds(case: dict) -> list[dict]:
@@ -2214,6 +2222,9 @@ def main():
 
     if args.no_trace:
         os.environ[golden_trace.ENV_OFF] = "1"
+    # 这一轮跑哪条臂（20261004）：在**开跑之前**解析一次并响亮失败——臂名拼错要当轮炸掉，
+    # 不能跑完 18 分钟再发现报告落错了栏（`ensure_agent` 内部也调它，两处同源）。
+    _ARM = golden_arm.arm_name()
     # trace run_id 在**开跑时**定（报告文件名仍是收尾时刻，两者语义不同：trace 目录要能
     # 被进程隔离跑法的父子进程共享，只能在开跑前定下来）
     run_id = golden_trace.resolve_run_id(args.trace_run_id or None)
@@ -2547,7 +2558,11 @@ def main():
     # 留档名由 report_archive 在**写的那一刻**取（20261002）：原来那句注释写着"防覆盖丢
     # 历史"，而秒级 ts 让同一秒的两次跑同名互相覆盖——注释与行为恰好是反的（见模块头注）。
     os.makedirs("eval/report", exist_ok=True)
-    os.makedirs("eval/report/runs", exist_ok=True)
+    # 留档目录**按臂分**（20261004）：两条臂的报告混在一个目录里，"哪份是谁跑的"就只能靠
+    # 报告正文的 engine 反推，而 `ls | tail` 挑最新那份这种读法当场失效。臂名只进目录、
+    # **不进文件名**——文件名序 = 时间序是全仓不变量（见 eval/report_archive.py 头注）。
+    _REPORTS_DIR = golden_arm.reports_dir(_ARM)
+    os.makedirs(_REPORTS_DIR, exist_ok=True)
     # 耗时基线（20260829，RAG 动工前置）：全量用例耗时分布 P50/P95——
     # "RAG 拖慢"成为可检测回归的基准（对比 baseline_*.json 存档）。
     # trace 落盘（logs/traces/）提供逐请求分段耗时，这里是评测集的整体基线。
@@ -2631,7 +2646,10 @@ def main():
         # 一个没有第二个取值的键。**键必须保留**：`eval/baseline_group.py` 按它把
         # 不同档的报告分开归档 ⇒ 存量 text 报告与新 native 报告因此自动分堆（那正是
         # 换档的信号）。`golden_full_run.py` 引用同一个常量，防两处各写一遍。
-        "engine": INTERFACE_LAYER,
+        # **20261004 起这一格还承载"哪条臂"**：graph 臂仍是逐字 `"native"`（历史基线与
+        # 它同档，见 eval/golden_arm.py 头注），试验臂是 `"native+<臂>"`。臂名不另开字段
+        # ——多一个"臂"字段就有了两处真值，而读的人一定会去比它和 engine 谁对。
+        "engine": golden_arm.engine_for(_ARM),
         "total": len(cases), "passed": len(cases) - failed, "failed": failed,
         # 首跑红数（20260924）：failed 是**复跑后的终判**，这个字段留着首跑口径 ——
         # 两者不等时差额就是"被复跑吸收掉的红斑"（不许静默：flaked_ids 逐条点名）
@@ -2715,12 +2733,15 @@ def main():
     # `last_run.json` **只在全量跑时写**（20260924）：它被当成"最近一次基线"读，
     # 而一次 `--only <单条>` 的调试跑曾把它覆盖成 total=1（读的人会以为语料没了）。
     # 非全量的那一轮仍然留档在 `runs/<ts>.json`——归档不缺，缺的是"别动基线"。
-    if _is_full_run:
+    # **20261004 再加一条同源的判据**：只有 graph 臂能当基线（`is_baseline_arm`）——
+    # 试验臂的全量跑覆盖它 = 把基线悄悄换成另一套循环的读数，而报告长得一模一样。
+    if _is_full_run and golden_arm.is_baseline_arm(_ARM):
         with open(REPORT_FILE, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=1)
     # 留档名在**写的那一刻**取（`O_EXCL` 占位，见 report_archive 头注）：既不占着空文件
     # 等，也没有"两个跑法都查过、都说这个名字没人用"的空档。复审单与留档同名成对。
-    with report_archive.open_archive("eval/report/runs") as (archive, f):
+    # 目录按臂分（`_REPORTS_DIR`）——臂名不进文件名，见那里的注。
+    with report_archive.open_archive(_REPORTS_DIR) as (archive, f):
         ts_str = os.path.splitext(os.path.basename(archive))[0]
         json.dump(report, f, ensure_ascii=False, indent=1)
 
@@ -2858,8 +2879,12 @@ def main():
           + (f"  ⚠ 复跑才绿：{_reg_flaked}（首跑红，已按方差放行——逐条见复审单）"
              if _reg_flaked else "")
           + (f"  ⚠ 被跳过：{_reg_skipped}（组内分母随之变小）" if _reg_skipped else ""))
-    print(f"报告: {REPORT_FILE}" if _is_full_run
-          else f"报告: （**非全量跑**，未覆盖 {REPORT_FILE}）")
+    if _is_full_run and golden_arm.is_baseline_arm(_ARM):
+        print(f"报告: {REPORT_FILE}")
+    elif _is_full_run:
+        print(f"报告: （arm={_ARM} **不是基线臂**，未覆盖 {REPORT_FILE}——基线只由 graph 臂写）")
+    else:
+        print(f"报告: （**非全量跑**，未覆盖 {REPORT_FILE}）")
     print(f"留档: {archive}")
     # golden trace 目录（20260922）：跑完收一个口——目录名是时间戳，只留最近 N 次
     # （一次全量上百份 × 每次一跑，不清理就是又一个只会长胖的目录）。**只删
