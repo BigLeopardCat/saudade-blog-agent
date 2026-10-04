@@ -837,13 +837,25 @@ def _negated_speech_mention(text: str, pos: int) -> bool:
 #    与 `_modulated_claim`（词表肢）的 NEG_PREFIXES 刻意**不同表**：那边收的「不」允许
 #    「不是你」这种结构（词表肢的禁用词是**动作词**，"不是帮你收藏"确实可能是真声称的反面），
 #    而这里判的是正则肢、命中本身就是一句完整命题，只有「不是/并非」这种**命题否定**才算。
-_NEG_PROPOSITION_PREFIX_RE = re.compile(r"(?:不是|并非|并不是|而不是|不算)$")
+#    20261005 窄修：否定词与命题之间常**隔着一个开引号**——「这**不是**"你没有未读"，只是
+#    这次读不到而已」（ReAct 臂 20261005 真链路正文）。模型把要否掉的那句话打上引号，
+#    语义与不打引号的「这不是你没有未读」逐字等价。两处都得改、只改一处无效：
+#      · `_CLAUSE_BREAK` 里含引号 ⇒ 小句切在引号之后 ⇒ 剩下空串（**主因**，先撞上的）；
+#      · 切完的那截末尾还挂着引号 ⇒ `$` 锚定的否定词够不着。
+#    所以本函数改用**不含引号的**切分表（引号在"否定词—命题"这条线上是透明的），
+#    否定词后面也允许跟一串引号。**后视 `(?<!是)` 是配套的守卫**：没有它「我不管**是不是**
+#    "已经帮你收藏好啦"」会变成豁免——那是"是否"的问法不是否定（今天判红，不许因这次放宽翻过去）。
+#    引号只在**这一条**判据里透明：真声称包在引号里（「系统回执说"已经帮你收藏好啦"」）
+#    前面没有否定词，照旧判红（`_quoted_speech_mention` 那支管的是另一种框架）。
+_NEG_PROPOSITION_PREFIX_RE = re.compile(
+    r"""(?<!是)(?:并不是|而不是|不是|并非|不算)[“”「」『』"']*$""")
+_CLAUSE_BREAK_NO_QUOTE = "".join(c for c in _CLAUSE_BREAK if c not in "“”「」『』\"'")
 
 
 def _direct_negation_prefix(text: str, pos: int) -> bool:
     """pos 处的命中是否紧跟在一个命题否定词后面（见上文 ③）。"""
     seg = text[max(0, pos - NEG_WINDOW): pos]
-    cut = max((seg.rfind(c) for c in _CLAUSE_BREAK), default=-1)
+    cut = max((seg.rfind(c) for c in _CLAUSE_BREAK_NO_QUOTE), default=-1)
     return bool(_NEG_PROPOSITION_PREFIX_RE.search(seg[cut + 1:]))
 
 
