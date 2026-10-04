@@ -19,6 +19,19 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_bufferin
 sys.path.insert(0, "eval")
 import report_archive   # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
 import golden_trace     # 同目录：trace 开关 + 靠 trace 才判得动的 gold 键（见下面的闸）
+import golden_arm       # 同目录：选臂/分栏（20261004，见 eval/golden_arm.py 头注）
+
+# 这一轮跑哪条臂：在**起第一个子进程之前**解析并响亮失败——臂名拼错要当轮炸掉，
+# 不能跑完 18 分钟才发现报告落错了栏。子进程经环境变量继承（本脚本不穿 argv 管道），
+# 而 `GOLDEN_ARM` 是环境变量，天然传得下去（这正是选 env 不选 `--arm` 的理由）。
+_ARM = golden_arm.arm_name()
+# 留档目录按臂分：arm 名只进目录、不进文件名（文件名序 = 时间序是全仓不变量，
+# 见 eval/report_archive.py）。`open_archive` **不建目录**（它只管取独占名），所以这里建。
+_REPORTS_DIR = golden_arm.reports_dir(_ARM)
+os.makedirs(_REPORTS_DIR, exist_ok=True)
+# 跑的是哪条臂要**在日志第一行**看得见：两臂的输出格式一模一样，事后翻日志区分不了
+# 是哪一条跑的（子进程读的是同一份代码、同一套判据，只有 `GOLDEN_ARM` 不同）。
+print(f"[full] arm={_ARM}（engine={golden_arm.engine_for(_ARM)}，留档 {_REPORTS_DIR}/）", flush=True)
 
 CASES = [json.loads(l) for l in open("eval/golden/basic.jsonl", encoding="utf-8") if l.strip()]
 # 需要**真实身份**的用例（管理员读后台 20260921；普通用户被拒那条 20260924）：口径与
@@ -122,7 +135,11 @@ def spawn_case(case: dict, suffix: str = "") -> dict:
     """
     cid = case["id"]
     json.dump(case, open(f"{TMPDIR}/{cid}.json", "w", encoding="utf-8"), ensure_ascii=False)
-    argv = [".venv/bin/python", RUNNER, f"{TMPDIR}/{cid}.json", "eval/report/runs"]
+    # 解释器用 `sys.executable`（20261004）：此前写死 `".venv/bin/python"`，而 venv 只在主仓
+    # ——在 worktree 里跑评测时那条路径**不存在**，子进程根本起不来（或更坏：起得来但用的是
+    # 主仓的 venv ⇒ editable 的 `.pth` 把主仓钉在 `sys.path` 上）。父进程用什么解释器，子进程
+    # 就用什么，跑的是哪棵树不带歧义。
+    argv = [sys.executable, RUNNER, f"{TMPDIR}/{cid}.json", _REPORTS_DIR]
     if suffix:
         argv.append(suffix)
     t0 = time.time()
@@ -223,15 +240,15 @@ print(f"回归组: {len(_REG) - len(_reg_bad)}/{len(_REG)}"
 # 从那边导入，不在这里抄第二份——两份判据/两份统计必然会漂移（build_request 那条
 # "字段表只留一处"的教训是同一个道理，只是那次漂移的是请求体、这次会是数字）。
 from run_golden import wilson_ci, by_tag_stats           # noqa: E402
-from run_golden import INTERFACE_LAYER                   # noqa: E402
 _TAGS_MAP = {r["id"]: r["tags"] for r in results}
 # `ts`（= 留档文件名那串戳）在**写的那一刻**由 report_archive 给出（见文件末尾）——
 # 这里先留空位，写之前补上：名字与报告里那一格因此恒成对，中间也无需预告一个可能
 # 被顺延的戳。
 report = {"ts": "", "corpus": "full", "total": len(CASES), "passed": len(CASES) - failed,
-          # 接口层（20260927 主线批 A）：与 run_golden.py 同名字段同来源（那个常量
-          # 是两处唯一的一份）。20261004 起只剩 native，见那边的注。
-          "engine": INTERFACE_LAYER,
+          # 接口层（20260927 主线批 A）：与 run_golden.py 同名字段**同源**（`engine_for`
+          # 是唯一实现）。20261004 起这一格还承载"哪条臂"：graph 臂仍逐字 `"native"`
+          # （历史基线与它同档），试验臂是 `"native+<臂>"`。见 eval/golden_arm.py。
+          "engine": golden_arm.engine_for(_ARM),
           "failed": failed, "latency_s": [r["elapsed"] for r in results],
           # 通过率（20260924 补）：这个跑法此前**没有** pass_rate 字段——只打印了
           # "N/M 通过"，报告里只有 passed/total 两个原子数，读的人要自己除。
@@ -266,16 +283,22 @@ report = {"ts": "", "corpus": "full", "total": len(CASES), "passed": len(CASES) 
 # 留档名在**写的那一刻**取（`O_EXCL` 占位，见 eval/report_archive.py 头注）：秒级 ts 会让
 # 同一秒的两次跑（本跑法 + 一次 `--only` 调试跑）同名互相覆盖。`ts` 跟着文件名走（报告
 # 里那一格与文件名成对，读的人不用换算）。
-with report_archive.open_archive("eval/report/runs") as (archive, f):
+with report_archive.open_archive(_REPORTS_DIR) as (archive, f):
     ts = os.path.splitext(os.path.basename(archive))[0]
     report["ts"] = ts
     json.dump(report, f, ensure_ascii=False, indent=1)
 # `last_run.json` 的语义（20260924 定）：**最近一次全量跑**。这个跑法就是全量跑，
 # 所以由它写（run_golden.py 那边加了 full_run 判据，非全量不再覆盖——此前一次
 # `--only <单条>` 的调试跑会把它写成 total=1）。
-with open("eval/report/last_run.json", "w", encoding="utf-8") as f:
-    json.dump(report, f, ensure_ascii=False, indent=1)
-print(f"报告: {archive}（并更新 eval/report/last_run.json）")
+# **20261004 再加一道同源的闸**：只有 graph 臂能当基线（`is_baseline_arm`）。试验臂的
+# 全量跑覆盖它 = 把"最近一次基线"悄悄换成另一套循环的读数——报告字段一模一样，
+# 读的人从数字上分辨不出来（那正是这个坑最贵的地方）。
+_BASELINE = golden_arm.is_baseline_arm(_ARM)
+if _BASELINE:
+    with open("eval/report/last_run.json", "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=1)
+print(f"报告: {archive}" + ("（并更新 eval/report/last_run.json）" if _BASELINE
+                          else f"（arm={_ARM} **不是基线臂**，未覆盖 eval/report/last_run.json）"))
 _lo, _hi = report["pass_rate_ci95"]
 print(f"通过率: {report['pass_rate']:.3f}（Wilson 95% 区间 {_lo:.3f}–{_hi:.3f}）")
 _weak = [(t, b) for t, b in report["by_tag"].items()

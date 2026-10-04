@@ -16,6 +16,18 @@
 
 ## 20261004
 
+- **golden 现在能给第二条臂打分：`GOLDEN_ARM`（缺省 graph），报告与留档分栏（评测，20261004）**：
+  「ReAct 能不能到 95%」此前**没有读数**——两条跑法都把 `server._agent = create_agent()`
+  写死在一处、`engine` 是常量，第二条臂没有入口。现在选臂走环境变量（子进程天然继承，
+  逐例子进程的跑法不必穿 argv 管道），建臂收在 `eval/golden_arm.py`；**graph 臂的 `engine`
+  仍逐字 `native`**（`baseline_group.py` 按它归档历史基线），试验臂是 `native+<臂>` 并另写
+  `eval/report/runs_<臂>/`（**臂名只进目录、不进文件名**——文件名序 = 时间序是全仓不变量），
+  `eval/report/last_run.json` 只由 graph 臂写（试验臂覆盖它 = 基线悄悄换主人）。臂名拼错、
+  或试验臂模块不在本树时**响亮失败，绝不静默退回 graph**（那会产出一份看着像第二条臂的假
+  读数）。顺带修掉两处会让"在 worktree 里跑本分支的臂"变成"跑主仓的图"的前置：
+  `golden_case_runner.py` 原先把主仓绝对路径插在 `PYTHONPATH` 前面、`golden_full_run.py`
+  写死 `.venv/bin/python`（worktree 没有 venv）。**graph 臂的行为逐字节不变。**
+
 - **关掉 trace 时那三条台账判据不再报成「模型没做」——按「前提不可用」处置（判据，20261004）**：
   `require_ledger_frame` / `require_ledger_rows` / `require_card_targets_from_ledger` 读的是
   `planner.ledger_frame` **trace 事件**（planner 的输入消息不进 trace），而 `--no-trace` /
