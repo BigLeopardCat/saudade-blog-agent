@@ -408,5 +408,24 @@ check("待确认的 spec **不进 `calls`/`blocked`**（进 calls 会让 `forbid
       "当场转红，而那族的本意正是「一件写工具都没碰」）",
       "self.calls.append" not in _line_src2.split("if missing:")[1].split("outs: list[str] = []")[0])
 
+# ── ⑦ 收尾候选先扣着：被纠偏打回的草稿不许上 messages 通道（20261005）────────
+# 零工具答复**不再等于**这一轮就此结束——`ConvergenceMiddleware.after_model` 可能把它
+# 打回（意图清单里还有没做过的动作）。既然可能被打回，就**不许当场发帧**：`run_one` 的
+# `text` 是 messages 通道上每条分片的拼接，草稿会与真正的最终答复连成一串交给判据与主人。
+print("\n⑦ 被纠偏打回的草稿不许上 messages 通道（收尾候选先扣着）")
+RAN.clear()
+_draft = _run([_call("navigate", target="首页"),          # 第 1 轮：做了别的动作（有帧）
+               AIMessage(content="草稿：樱花已经帮你打开啦"),  # 第 2 轮：零工具收尾 → 被打回
+               AIMessage(content="最终答复：这一件我没做成")],  # 第 3 轮：补做后的最终答复
+              {"navigate_to": _nav_tool}, principal=UNKNOWN, msg="把樱花特效打开")
+_dtxt = "".join(str(c.content) for c in _chunks(_draft) if isinstance(c, AIMessageChunk))
+check("最终答复进了 messages 通道", "最终答复" in _dtxt, repr(_dtxt))
+check("**被打回的草稿一个字都没上**（否则判据读到的是两段拼接）",
+      "草稿" not in _dtxt, repr(_dtxt))
+_mupd = _last_node(_draft, "model")
+check("model update 的末条是最终答复（`final_reply` 落库的那一格同源）",
+      str((_mupd.get("messages") or [])[-1].content) == "最终答复：这一件我没做成",
+      str((_mupd.get("messages") or [])[-1].content))
+
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

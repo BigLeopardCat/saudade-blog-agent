@@ -88,16 +88,35 @@ class _Scripted(GenericFakeChatModel):
         return self
 
 
+class _Cmd(str):
+    """带连线命令的工具返回（`str` 子类 + `kind`/`meta`，同 `tools.base.ToolResult`）。
+
+    动作类工具（`toggle_effect` 等）在 `_check_spec` 里有一条**命令契约**判据：没有
+    `meta["cmd"]`（kind 对得上）一律 BLOCK `cmd_shape`。桩不带它就测不到"真的办成了"
+    这一步，只会看到一条受阻回执。
+    """
+
+    def __new__(cls, text: str, kind: str = "effect"):
+        o = super().__new__(cls, text)
+        o.kind = "ok"
+        o.meta = {"cmd": {"kind": kind, "effect": "sakura", "action": "on",
+                          "url": "/", "mode": "direct"}}
+        return o
+
+
 def _call(name: str, **args) -> AIMessage:
     return AIMessage(content="", tool_calls=[
         {"name": name, "args": args, "id": f"call_{name}_{len(args)}", "type": "tool_call"}])
 
 
-def _run(script: list, tools: list, **kw) -> tuple[dict, RunLedger]:
+def _run(script: list, tools: list, *, msg: str = "动手吧", **kw) -> tuple[dict, RunLedger]:
     model = _Scripted(messages=iter(script), ai_message_chunk=iter([]))
     kw.setdefault("principal", ADMIN)
+    # 主人原话**两个去处**：给模型看的那条消息，与收尾丢意图纠偏扫意图的那一句。
+    # 缺省「动手吧」扫不出任何动作意图 ⇒ 既有用例的行为一字不变。
+    kw.setdefault("user_msg", msg)
     agent, ledger = build_agent(model, tools, system_prompt="你是测试用助手。", **kw)
-    state = agent.invoke({"messages": [HumanMessage(content="动手吧")]}, {"recursion_limit": 25})
+    state = agent.invoke({"messages": [HumanMessage(content=msg)]}, {"recursion_limit": 25})
     return state, ledger
 
 
@@ -248,6 +267,49 @@ def main() -> int:  # noqa: C901
     check("普通用户同样越不过硬 scope",
           authz_deny(Principal(uid=7, role="user"), "freeze_account"))
     check("管理员则放行（闸不是「一律拦」）", not authz_deny(ADMIN, "freeze_account"))
+
+    # ── ⑫ 收尾丢意图纠偏（20261005，照搬 graph.py:5229 那一支）─────────────────
+    print("\n⑫ 零工具收尾但意图清单还有没做过的 ⇒ 打回重决策一次")
+    _EFF_SCHEMA = {"type": "object",
+                   "properties": {"effect": {"type": "string"},
+                                  "action": {"type": "string"}}}
+    _eff = StructuredTool(
+        name="toggle_effect", description="特效桩", args_schema=_EFF_SCHEMA,
+        func=lambda **kw: _Cmd(f"特效 {kw.get('effect')}={kw.get('action')}"))
+    # 主人原话是一件**扫描器认得出的真动作**（别名「樱花」+ 动作动词「打开」）。
+    # 剧本：第 1 轮做了**别的**动作（有帧了）→ 第 2 轮零工具收尾（删掉意图）→
+    # 被纠偏后第 3 轮补做 → 第 4 轮正常收尾。
+    _script = [_call("toggle_effect", effect="rain", action="off"),
+               AIMessage(content="樱花已经帮你打开了"),
+               _call("toggle_effect", effect="sakura", action="on"),
+               AIMessage(content="这次真的做完了")]
+    state, led = _run(_script, [_eff], user_msg="把樱花特效打开")
+    _sys = [str(m.content) for m in state["messages"]
+            if isinstance(m, HumanMessage) and "没有排任何工具" in str(m.content)]
+    check("纠偏真的注入了（一条纠正消息）", len(_sys) == 1, str(_sys)[:120])
+    check("纠正文本点名了漏掉的那一件（effect:sakura=on）",
+          bool(_sys) and "effect:sakura=on" in _sys[0])
+    check("被纠偏后那件真的做了（台账里有 sakura=on）",
+          any(r["args"].get("effect") == "sakura" for r in led.receipts),
+          str([r["args"] for r in led.receipts]))
+    check("**只纠一次**（第 4 轮零工具收尾不再打回）",
+          sum(1 for m in state["messages"]
+              if isinstance(m, HumanMessage) and "没有排任何工具" in str(m.content)) == 1)
+
+    print("\n⑫b 首轮零工具收尾**不纠**（没看过任何返回，再问一次还是零工具）")
+    state, led = _run([AIMessage(content="樱花已经帮你打开了")], [_eff],
+                      user_msg="把樱花特效打开")
+    check("零帧 ⇒ 不注入纠偏",
+          not any(isinstance(m, HumanMessage) and "没有排任何工具" in str(m.content)
+                  for m in state["messages"]))
+
+    print("\n⑫c 意图已做掉 ⇒ 不收尾也纠（判据是「清单里还有没做过的」）")
+    state, led = _run([_call("toggle_effect", effect="sakura", action="on"),
+                       AIMessage(content="开好啦")], [_eff], user_msg="把樱花特效打开")
+    check("做完了就正常收尾（没有纠正消息）",
+          not any(isinstance(m, HumanMessage) and "没有排任何工具" in str(m.content)
+                  for m in state["messages"]))
+    check("停因仍是自然收尾", led.stop_reason == "", led.stop_reason)
 
     print(f"\n{'=' * 60}")
     if FAILS:
