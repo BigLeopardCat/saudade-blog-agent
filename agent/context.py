@@ -235,6 +235,28 @@ def _last_user_msg(messages: list) -> str:
     return ""
 
 
+def _turn_has_image(messages: list) -> bool:
+    """当前这一轮的 HumanMessage 里**有没有图**（20261006）。
+
+    与 `_msg_text` 的分歧正是本函数存在的理由：`_msg_text` 只把 `type == "text"` 的
+    块拼出来（图块故意丢掉，见它的注），所以"这一轮带没带图"这件事在文本侧**看不见**。
+    服务端注入的形态是 `[{"type":"image_url",…}, {"type":"text","text":"[当前问题]: …"}]`
+    （server.py `_build_messages`；golden 的多模态用例走同一个构造点）——但这里**按块类型
+    判、不按块序判**：上游把图块挪到 text 之后、或将来加别的视觉块类型时，判据不该跟着塌。
+
+    只认最近一条 HumanMessage：多轮循环里后面会跟 ToolMessage/`[当前问题]` 锚点，
+    "这一轮"的定义与 `_last_user_msg` 保持一致。
+    """
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            content = getattr(m, "content", "")
+            if not isinstance(content, list):
+                return False
+            return any(isinstance(c, dict) and c.get("type") == "image_url"
+                       for c in content)
+    return False
+
+
 def _prev_user_msg(messages: list) -> str:
     """倒数**第二条** HumanMessage 的文本（20260927）。
 

@@ -97,10 +97,29 @@ check("「恰是整句的子串」**不算**出处（本轮要拿掉的那条假
 check("名词前的同指语序也算出处（`大笨狗那个标签`，否则如实追问会自相矛盾）",
       _msg_grounded_name("大笨狗", "大笨狗那个标签我不想要了，删掉吧")
       and not _msg_grounded_name("删掉吧", "大笨狗那个标签我不想要了，删掉吧"))
-check("指代型（这句里连目标槽位都没有）⇒ 本门不介入（`_name_like` 假）",
+# 20261006 改判：P 语序（名字在名词**前**）原来在 `_name_like` 这一门就被挡掉，于是
+# 「泠月喵，把jingbao这个用户降级为杂鱼」+ planner 填了另一个名字时，整条校正通道
+# **根本没进过门**（生产 trace `20261006T023655` 的 message 逐字）。上一行（本表第 97
+# 条）早就在 `_msg_grounded_name` 里认这个语序了——两处口径不一致才是那次事故的一半。
+# 现在 `_name_like` 收 P，判据是**剥掉处置词与同指限定词后还剩东西**
+# （"把那个"剥剩"那个"∈指代表 ⇒ 仍是纯指代）。账号族的名词（用户/账号）要传该族的
+# `lex`（默认那份只有标签/分类）——门里就是这么调的（`_target_grounding_refusal`）。
+_ACC = g._lexicon("freeze_account")
+check("纯指代（剥完只剩指代词）⇒ 本门不介入（`_name_like` 假）",
       not _name_like("把那个标签删掉吧")
-      and not _name_like("大笨狗那个标签删掉吧")   # 无槽位无引号 ⇒ 与指代同判（同款语序）
+      and not _name_like("把那个用户降级为杂鱼", _ACC)
+      and not _name_like("把 那个 用户 降级", _ACC)
+      and not _name_like("把那些标签都删了吧"))
+check("P 语序（名字在名词前）⇒ 本门**介入**（与第 97 条的 `_msg_grounded_name` 同口径）",
+      _name_like("大笨狗那个标签删掉吧")
+      and _name_like("泠月喵，把jingbao这个用户降级为杂鱼", _ACC)
+      # 夹空白的写法也要认（空白不是句读；拉丁账号名两侧常带空格）
+      and _name_like("把 jingbao 这个用户降级为杂鱼", _ACC)
       and _name_like(_M))
+check("  出处判定同步：`jingbao` 有据、planner 那个 `niuniu` 无据（现场那对取值）",
+      _msg_grounded_name("jingbao", "泠月喵，把jingbao这个用户降级为杂鱼", lex=_ACC)
+      and _msg_grounded_name("jingbao", "把 jingbao 这个用户降级为杂鱼", lex=_ACC)
+      and not _msg_grounded_name("niuniu", "泠月喵，把jingbao这个用户降级为杂鱼", lex=_ACC))
 
 print("\n② 真 planner 采样值的校正（20260924 现场）")
 _SENT = "标签「大笨狗」我不想要了，删掉吧"
@@ -232,8 +251,13 @@ check("判据读的是主人原话本身（四个抽取器，全部由名词/引
       {"_msg_quote_spans", "_msg_name_slot", "_bare_target_name", "_msg_pre_noun_runs"}
       <= _names_in(_msg_grounded_name),
       str(sorted(_names_in(_msg_grounded_name))))
-check("指代型仍不介入（P 不参与 `_name_like`：`把那个标签删掉吧` 判假）",
-      "_msg_pre_noun_runs" not in _names_in(_name_like))
+check("P 以**剥过**的形态参与 `_name_like`（裸的 `_msg_pre_noun_runs` 仍不参与）",
+      "_pre_noun_names" in _names_in(_name_like)
+      and "_msg_pre_noun_runs" not in _names_in(_name_like))
+check("  剥的规矩住在 `_pre_noun_names` 里（判据与取值同源，改一端会被抓住）",
+      "_PRE_NOUN_LEAD_RE" in _names_in(g._pre_noun_names)
+      and "_PRE_NOUN_TAIL_RE" in _names_in(g._pre_noun_names)
+      and "_DEICTIC_WORDS" in _names_in(g._pre_noun_names))
 
 print("\n⑥ 值通道的指代（20260927：代词是原话的子串 ⇒ 来源态判据被上游校正器自满足）")
 # 现场（档位对照 trace 20260927T041139，native 不思考档）：原话

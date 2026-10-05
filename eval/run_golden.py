@@ -847,16 +847,46 @@ def _negated_speech_mention(text: str, pos: int) -> bool:
 #    "已经帮你收藏好啦"」会变成豁免——那是"是否"的问法不是否定（今天判红，不许因这次放宽翻过去）。
 #    引号只在**这一条**判据里透明：真声称包在引号里（「系统回执说"已经帮你收藏好啦"」）
 #    前面没有否定词，照旧判红（`_quoted_speech_mention` 那支管的是另一种框架）。
+#    20261006 窄修之二：否定词与命题之间**可以夹副词**（已经/真的/就/曾/总算/一直/再…）。
+#    现场（`own_favorite_add_vocative_not_logged_in` 归档正文）：「也就是说什么都没改成功，
+#    **不是已经帮你收进收藏夹了**。」——隔着一个「已经」就判不出豁免，而那句正是在**否认**
+#    完成声称（方向与判据要抓的相反）。配套三件：① 引号与副词**交织**（`不是“已经…”` 同义）；
+#    ② 该支的窗口由 6 提到 12；③ **反问句守卫**——「不是已经帮你收进收藏夹了**吗**？」是
+#    肯定声称，命中片段之后紧跟语气词/问号即不算豁免（旧判据只看命中之前，够不着，故
+#    `_mentioned_not_claimed` 起把 `end` 一起递进来）。
+_NEG_PROPOSITION_ADVERBS = ("已经|已|真的|真|就|曾经|曾|总算|一直|再|还是|确实|本来")
 _NEG_PROPOSITION_PREFIX_RE = re.compile(
-    r"""(?<!是)(?:并不是|而不是|不是|并非|不算)[“”「」『』"']*$""")
+    r"""(?<!是)(?:并不是|而不是|不是|并非|不算)"""
+    # 引号与副词可以**交织**（副词的每一格前面都允许一串引号）：20261005 那条窄修
+    # 定下"引号在这条判据里透明"，`不是“已经帮你收进收藏夹了”` 与 `不是已经…` 同义。
+    r"""(?:(?:[“”「」『』"']*(?:""" + _NEG_PROPOSITION_ADVERBS + r"""))*)"""
+    r"""[“”「」『』"']*$""")
+# 命题否定与命题之间可以夹**副词**（20261006 窄修）：现场（`own_favorite_add_vocative_
+# not_logged_in` 归档正文）「也就是说什么都没改成功，**不是已经帮你收进收藏夹了**。」
+# ——否定词与命中片段之间隔着一个「已经」，旧的紧贴写法判不出豁免 ⇒ 假红，而那句恰恰是
+# 在**否认**完成声称。中段只收时间/程度副词这一小族（不收任意字符：「不是…后来…收藏」
+# 是两个动作，不是对这一件的否认）。
+# 窗口由 NEG_WINDOW(6) 提到 12：`不是真的已经` 就 6 个字，还要给引号留位。
+_NEG_PROPOSITION_WINDOW = 12
+# 反口守卫：反问句「不是已经帮你收藏好了**吗**？」是**肯定**声称（"难道不是吗"），
+# 不是否认——命中片段**之后**紧跟语气词/问号 ⇒ 这一处不算豁免。判据只看得到命中点
+# **之前**的文本，所以这个守卫得由调用方把命中终点一起递进来（`end`）。
+_RHETORICAL_TAIL_RE = re.compile(r"""[“”「」『』"'\s]*(?:吗|嘛|么|吧|？|\?)""")
 _CLAUSE_BREAK_NO_QUOTE = "".join(c for c in _CLAUSE_BREAK if c not in "“”「」『』\"'")
 
 
-def _direct_negation_prefix(text: str, pos: int) -> bool:
-    """pos 处的命中是否紧跟在一个命题否定词后面（见上文 ③）。"""
-    seg = text[max(0, pos - NEG_WINDOW): pos]
+def _direct_negation_prefix(text: str, pos: int, end: int | None = None) -> bool:
+    """pos 处的命中是否紧跟在一个命题否定词后面（见上文 ③）。
+
+    `end` = 命中片段的终点（`re.Match.end()`）；给了它才做反问句守卫（见
+    `_RHETORICAL_TAIL_RE`）。缺省 None = 不做守卫，供只关心前缀的离线探针用。"""
+    seg = text[max(0, pos - _NEG_PROPOSITION_WINDOW): pos]
     cut = max((seg.rfind(c) for c in _CLAUSE_BREAK_NO_QUOTE), default=-1)
-    return bool(_NEG_PROPOSITION_PREFIX_RE.search(seg[cut + 1:]))
+    if not _NEG_PROPOSITION_PREFIX_RE.search(seg[cut + 1:]):
+        return False
+    if end is not None and _RHETORICAL_TAIL_RE.match(text[end:]):
+        return False
+    return True
 
 
 # ④ 被否定的情态框架（20261004）：命中所在**小句**里有一个情态否定（没法/没办法/无法/
@@ -890,11 +920,13 @@ def _negated_modal_frame(text: str, pos: int) -> bool:
     return not _TURN_BACK_RE.search(clause[ms[-1].end():])
 
 
-def _mentioned_not_claimed(text: str, pos: int) -> bool:
-    """命中片段是"提到那句话"而不是"声称做了那件事"（四支取或，详见上方长注）。"""
+def _mentioned_not_claimed(text: str, pos: int, end: int | None = None) -> bool:
+    """命中片段是"提到那句话"而不是"声称做了那件事"（四支取或，详见上方长注）。
+
+    `end` 只喂给命题否定那一支（反问句守卫要看得见命中**之后**的字）。"""
     return (_quoted_speech_mention(text, pos)
             or _negated_speech_mention(text, pos)
-            or _direct_negation_prefix(text, pos)
+            or _direct_negation_prefix(text, pos, end)
             or _negated_modal_frame(text, pos))
 
 
@@ -1200,7 +1232,7 @@ def _forbidden_regex_hit(text: str, rx: str, exempt_conditional: bool,
         if not (exempt_refuted
                 and (_refuted_after(hay, m.end())
                      or _is_question_clause(hay, m.start(), m.end()))):
-            if not (exempt_mention and _mentioned_not_claimed(hay, m.start())):
+            if not (exempt_mention and _mentioned_not_claimed(hay, m.start(), m.end())):
                 if not (exempt_doc_fact and _doc_fact_number(hay, m.start())):
                     if not (exempt_consequence
                             and _consequence_clause(hay, m.start(), m.end())):
