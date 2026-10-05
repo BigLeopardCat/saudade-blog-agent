@@ -71,6 +71,7 @@
 | [0003](adr-0003-single-skill-table-in-native-mode.md) | native 档一轮只发一份技能表（技能块去重） | 已采纳 |
 | [0004](adr-0004-cross-language-guard-in-ci.md) | 跨语言守卫在 CI 里真跑——父仓以只读凭据稀疏 checkout | 已采纳 |
 | [0005](adr-0005-multimodal-retrieval-deferred.md) | 多模态检索：方向认可，现在不做（等图片规模与查询形态） | **已搁置** |
+| [0006](adr-0006-permission-rules-deferred.md) | 权限规则集（(action, resource, effect) +「总是允许」）：方向认可，现在不做 | **已搁置** |
 
 ## 相关的、但不算 ADR 的文档
 
