@@ -1,0 +1,10 @@
+# 关掉空白 issue：两个模板各带一组必须回答的问题（判据在哪、触发条件是什么），
+# 而这个仓里"为什么不做"和"怎么做"的信息量一样大——空白 issue 最常缺的就是这两样。
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题（**不要**开公开 issue）
+    url: https://github.com/BigLeopardCat/saudade-blog-agent/blob/main/SECURITY.md
+    about: 本仓是 public 仓库，公开 issue 等于公开利用方式。按 SECURITY.md 走私密报告通道。
+  - name: 我先想读代码，不知道从哪问起
+    url: https://github.com/BigLeopardCat/saudade-blog-agent/blob/main/CONTRIBUTING.md
+    about: 参与方式、本仓最特别的那条规矩（判据），以及能/不能在本机跑什么。

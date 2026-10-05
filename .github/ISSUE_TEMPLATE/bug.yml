@@ -1,0 +1,65 @@
+name: 报告一个 bug
+description: 行为不对、判据该红却绿了、或者某条链路静默失效
+title: "bug: "
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        这个仓最贵的一类 bug 是**「看着在跑、其实没跑」**——开关拨了没生效、
+        守卫静默跳过、判据恒真。如果你遇到的是这一种，请尤其把"你怎么发现它没生效的"
+        写清楚：那通常是这次报告里最有价值的部分。
+
+        **安全问题不要在这里报**（本仓是 public 仓库），见 SECURITY.md。
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 实际看到的行为。有原话就贴原话，别转述。
+      placeholder: |
+        agent 回了「…」（trace 20261005T…）
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 你期望什么，为什么
+      description: 期望的依据是什么——文档写了、判据断言过、还是别的类似场景是这样的？
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 怎么复现
+      description: 最小步骤。跑过哪些命令、输入了什么、看了哪个文件/trace id。
+      placeholder: |
+        1. `.venv/bin/python tests/run_all.py` → 第 NN 套红，输出是「…」
+        2. 或者：对话里输入「…」，读 trace 的 planner 段
+    validations:
+      required: true
+  - type: dropdown
+    id: side
+    attributes:
+      label: 问题在哪一侧
+      options:
+        - 本仓（Python agent）
+        - 不确定
+        - 宿主后端 / 前端（在另一个仓）
+    validations:
+      required: true
+  - type: textarea
+    id: silent
+    attributes:
+      label: 它是"静默"的吗
+      description: |
+        有没有东西**本该**告诉你它坏了、但没有？比如：判据全绿、日志没有报错、
+        守卫跳过时没有任何提示。这种信息比错误本身更值钱。
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: 提交号
+      description: `git rev-parse --short HEAD`
+    validations:
+      required: false

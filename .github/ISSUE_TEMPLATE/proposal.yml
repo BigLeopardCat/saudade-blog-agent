@@ -1,0 +1,67 @@
+name: 提议一个改动 / 一个方向
+description: 新能力、行为调整、或者"这个以后该做但现在不做"
+title: "proposal: "
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        本仓当前处于 **feature freeze**：只接受稳定性、安全性、可观测性和回归测试方向的
+        改动（见 ROADMAP.md）。所以一条提议最有用的部分往往不是"做什么"，
+        而是**它让哪一种真实发生过的坏结果变得不可能**。
+
+        「以后要做但现在不做」也是一种提议——那种情况下请把**触发条件**写出来。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决什么问题
+      description: 描述现状里真实存在的那件坏事（有 trace id / 事故记录更好），而不是先描述方案。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你打算怎么做
+      description: |
+        改哪些文件、动哪条链路。若改动会碰到行为契约（工具返回、SSE 帧、提示词前缀、
+        跨语言字面），请点名。
+    validations:
+      required: true
+  - type: textarea
+    id: judge
+    attributes:
+      label: 判据：哪一行会变红
+      description: |
+        本仓的规矩是每个行为改动都要带一条判据，而且这条判据必须能抓住"它其实没生效"。
+        请写：改坏了什么、哪条断言会红。**"加个测试"不算答案。**
+      placeholder: |
+        判据：<套件> 的 <第几条>
+        打桩检查：把 <函数> 改成恒真返回，这条必须变红
+    validations:
+      required: true
+  - type: dropdown
+    id: when
+    attributes:
+      label: 什么时候做
+      options:
+        - 现在就该做（条件已满足）
+        - 以后做——我把触发条件写在下面
+        - 只是提一下，不打算现在做
+    validations:
+      required: true
+  - type: textarea
+    id: trigger
+    attributes:
+      label: 触发条件（上面选"以后做"时必填）
+      description: |
+        必须是**可观测**的。"以后有需要再做"不是触发条件——它永远不会到期。
+        好例子：「语料 >100 篇」「站内图片 ≥1000 张」「某条读数连续 N 次为 0」。
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你考虑过的其它做法，以及为什么不选
+      description: 这一格能让后来的人不用把同样的调研重做一遍——包括你自己三个月后。
+    validations:
+      required: false
