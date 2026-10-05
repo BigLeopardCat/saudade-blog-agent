@@ -3423,13 +3423,41 @@ def _no_popup_fact(state) -> str:
 
     `pending_confirm` 在场时返回空串：那种轮次本来就到不了这里（`route_after_execute`
     见它就 END），留着这一道是为了将来拓扑若变，这句话仍然不可能说错。
+
+    **尾巴按 `plan_obj["refusal"]` 选支**（20261006，产出物见 planner 里那处赋值）：
+    确定性拒绝轮里，上面那段 note 已经把**具体结论**写全了（卡在哪件工具、缺哪一类
+    东西、能不能请他换说法）。此时再给通用三分，两段规则会在 narrator 手里打架
+    （policy / ledger_id 那一支写着"别请他换个说法重试"，通用三分却写着"缺目标就问清
+    那个目标"）。所以有 `refusal` 时只留三段中的**事实段**（没有写操作、不许说等着点头），
+    尾巴换成"**只许照上面那条结论说**"：policy / ledger_id ⇒ 连澄清问题都不许问；
+    其余 ⇒ 只许问结论里点名的那一项，不许重新去猜系统已经查过的部分。
+    缺这个键 = 不是拒绝轮 ⇒ 逐字节保持原样（通用三分今天锁着一大批用例）。
     """
     if state.get("pending_confirm"):
         return ""
-    return (
+    fact = (
         "**另有一条本轮的系统事实要照实说**：本轮**一个写操作都没提出来**、更没有"
         "执行，主人那边也不会看到任何待确认的卡片。所以**禁止**说任何"
-        "「系统正等着主人点一下」「你说一声我就去办」之类的话。主人这一轮要办的事，"
+        "「系统正等着主人点一下」「你说一声我就去办」之类的话。")
+    refusal = (state.get("plan_obj") or {}).get("refusal") or {}
+    source = refusal.get("source") if isinstance(refusal, dict) else None
+    if source == "policy":
+        return fact + (
+            "上面那段系统结论**就是全部**——它讲的是后端的账号管理规则不认这次的目标，"
+            "**不是**信息缺失。所以**不许**再问主人任何一个澄清问题（不许问办哪一件、"
+            "也不许请他把话换个说法重讲），把结论原样转告就够了。")
+    if source == "ledger_id":
+        return fact + (
+            "上面那段系统结论**就是全部**——它讲的是系统现场查过待办台账、上面没有这样"
+            "一行等着办。所以**不许**再问主人任何一个澄清问题（既不许问办哪一件、也不"
+            "许请他把话换个说法重讲），把查到的状态如实转告就够了。")
+    if source:
+        return fact + (
+            "上面那段系统结论**就是全部**：系统已经核对过、并把结果写在那里了。"
+            "如果它点名了缺的那一项（哪一条、哪一篇），就**只问那一项**——"
+            "**不许**重新去猜或重新追问系统已经查过的部分；它说不用问的，一个字都不许问。")
+    return fact + (
+        "主人这一轮要办的事，"
         "如果站内**根本没有对应的能力**（没有这个工具、没有这条通道），就**直接说"
         "做不到**，再告诉他你能做的替代是什么；如果只是缺一个**目标**（办哪一条、"
         "哪一篇），就问清那个目标——只许问**信息**，不许问「要不要办」。")
@@ -5151,6 +5179,13 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                         subject = "后端的账号管理规则（预检只判它确定知道的那两种）"
         if refusal:
             wtool, why = refusal
+            # 拒绝**来源**（`quote`/`value`/`grounding`/`ledger`/`ledger_id`/`policy`）：
+            # 既是 trace 的取值，也是本轮的**结构化产出物**（`wrap["refusal"]`，见下方赋值处）。
+            # 提到这里算一次，trace 与产出物共用同一个字面。
+            refusal_source = ("quote" if quote_refuse else "value" if value_refuse
+                              else "grounding" if grounded_refuse
+                              else "ledger_id" if ledger_refuse
+                              else "policy" if policy_refuse else "ledger")
             # 值/目标名被拒时补一句：那个字面是**系统自己的参数值**，不是主人点名的名字
             # （20260922 探针 ⑤ 实测：如实答复里出现了"站内并没有叫「音乐」的现成
             # 标签"——系统查的是占位文字「标签名」，叙述把两者画了等号 = 假话）。
@@ -5178,10 +5213,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 logger.warning("[planner] 写操作参数解不出「主人这句话」里的来源（%s）：%s"
                                " → 确定性如实收尾", wtool, why)
             record("planner", "write_target_unresolved", tool=wtool,
-                   source=("quote" if quote_refuse else "value" if value_refuse
-                           else "grounding" if grounded_refuse
-                           else "ledger_id" if ledger_refuse
-                           else "policy" if policy_refuse else "ledger"),
+                   source=refusal_source,
                    reason=why[:160], round=rounds)
             # 文案结构（20261005）：**"没做"与"原因"必须是一句**。此前是两个独立的
             # 句子（"…没有改动（本轮一个工具都没有执行）。系统核对过 X，结果是：Y。"），
@@ -5208,6 +5240,24 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 "**照原样转述**、来源说'系统'就行——但也**不许**反过来把它说成"
                 "'我自己猜的/脑补的'。）"
                 + value_tail))
+            # ── 结构化产出物（20261006）─────────────────────────────────────
+            # 拒绝这件事此前只活在一段**散文**里（上面那段 note）与一条 trace 里；下游
+            # 谁都读不到"系统这一轮到底卡在哪一件工具、卡在哪一类东西上"。于是
+            # `_no_popup_fact` 只能给一段**通用的三分**（没有能力/缺目标/别问要不要办），
+            # 它与上面这段具体结论**并排**写给 narrator——两条规则打架的地方（policy /
+            # ledger_id 这一支明明写着「**别请他换个说法重试**」，通用三分却写着
+            # 「如果只是缺一个目标，就问清那个目标」）由模型自己挑，等于把一条已经查清的
+            # 事实重新交给采样。
+            #
+            # 键挂在 **plan_obj** 上而不是新加一个 AgentState 字段：`plan_obj` 已在
+            # AgentState 里声明、由 `plan_state` 一次写两态（见那个函数的长注），挂它零成本；
+            # 新字段则要同时在 AgentState 声明 + graph_input 初值 + 每个构造点补默认值——
+            # 正是 `plan_state` 存在的理由要消掉的那种人工同步。
+            #
+            # ⚠️ **缺键 ≠ "没有拒绝"的对立取值**：`{"missing": "none"}` 这种"编一个值出来"
+            # 是明令禁止的——键不在场就是"本轮不是确定性拒绝轮"，读端按缺席处理。
+            plan_obj["refusal"] = {"tool": wtool, "source": refusal_source,
+                                   "missing": "target"}
             # ⚠️ 这里必须是 **return**，不是 break：决策循环之后的收尾路径会读
             # `plan_obj["params"]`（只有 instantiate_plan 的产物才有这个键），
             # 而 `_wrap_up_plan` 不带它 ⇒ break 到那里必抛 KeyError('params')
