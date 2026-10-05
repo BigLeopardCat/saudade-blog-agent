@@ -145,6 +145,28 @@ _ghost_gold = [c.get("id") for c in _cases if c.get("rounds") and c.get("gold")]
 check("多轮用例不写顶层 gold（有 rounds 时它一个读者都没有）", not _ghost_gold,
       "；".join(_ghost_gold))
 
+# 夹具那套用例（`eval/fixtures/golden_smoke.jsonl`，20261006）走**同一套**拼写校验：
+# 判据表只有一份，两边一个字都不差（这里若各写一份规则，夹具那套的拼写错误就没人发现）。
+# 它**不进**上面那几条计数/前提/哨兵断言——那些钉的是维护者那套用例的形状（158 条、
+# premise_absent 的落笔、手抄写工具清单），与夹具无关。
+_FIX_FILE = ROOT / "eval/fixtures/golden_smoke.jsonl"
+check("夹具用例文件在（README/CONTRIBUTING 都指着它，删了就是文档在说谎）",
+      _FIX_FILE.is_file(), str(_FIX_FILE))
+_fix_cases = [json.loads(ln) for ln in
+              _FIX_FILE.read_text(encoding="utf-8").splitlines() if ln.strip()] \
+    if _FIX_FILE.is_file() else []
+_fix_unknown = [f"{c.get('id')}: gold.{k}"
+                for c in _fix_cases for k in (c.get("gold") or {})
+                if k not in KNOWN | rg.GOLD_COMMENT_KEYS]
+_fix_no_assert = [c.get("id") for c in _fix_cases
+                  if not (set(c.get("gold") or {}) & rg.GOLD_ASSERT_KEYS)]
+_fix_ids = [c.get("id") for c in _fix_cases]
+check("夹具用例没有拼错的 gold 键", not _fix_unknown, "；".join(_fix_unknown))
+check("夹具用例每条都至少带一个断言键（只有注释的用例等于没判）",
+      not _fix_no_assert, "；".join(_fix_no_assert))
+check("夹具用例 id 不重复", bool(_fix_ids) and len(_fix_ids) == len(set(_fix_ids)),
+      str(_fix_ids))
+
 print("\n⑤ 写族清单一律用哨兵，不许手抄（20261001）")
 # 20261001 实测的现状：44 条含 `forbid_tool_calls` 的用例各自手抄一份后台写工具清单，
 # **没有一条是完整的**——缺口完全跟着工具的上线时间走（额度三件与新待办工具 44/44 条

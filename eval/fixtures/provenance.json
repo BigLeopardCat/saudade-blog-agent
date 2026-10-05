@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "declared_for": {
+    "api_base": "http://127.0.0.1:8099/api/public（eval/fixtures/serve.py 的桩；端口随 --port 走）",
+    "note": "这份用例（golden_smoke.jsonl）的期望锚在**本目录 corpus/ 那三篇编出来的文章**上：smoke_rag_drip 要的「蓄水桶/毛管」只在那篇滴灌记录里，smoke_search_radio 要的「中波」只在收音机那篇里，require_doc_terms 申报的 note:1 也是这里的第 1 篇。语料一换，判据就对不上——而红的样子与「模型退化」一模一样。这就是出处闸要拦的那件事。"
+  },
+  "anchors": [
+    {"title": "露台番茄的滴灌改装记录", "why": "corpus/01 —— smoke_rag_drip 的期望目标（note:1，require_doc_terms 也申报它）"},
+    {"title": "旧收音机的中波改造笔记", "why": "corpus/02 —— smoke_search_radio 的期望目标（「中波」这个词只在这一篇里）"},
+    {"title": "河堤夜跑的配速表整理", "why": "corpus/03 —— 与上面两篇毫不相干：挡的是「语料只是长得像」这种情况"}
+  ],
+  "min_present": 2,
+  "_how": "判据的唯一实现在 eval/corpus_provenance.py::check_corpus_premises（比对时去掉标题里全部空白再比，锚点取标题的子串即算命中）；声明住在**用例文件旁边**（provenance.json）这条契约由 provenance_path_for 保证，也就是 --golden 换成谁，闸就按谁旁边那份声明判。这份夹具声明与它的一致性由 tests/test_golden_fixture_corpus.py 离线守着——**别把 corpus/ 的文件名或标题改了却不改这里**，那会让闸判成 foreign、整轮未评估（这正是它该有的反应）。"
+}
