@@ -8349,6 +8349,89 @@ def _ledger_closing_note(state, config) -> str:
 _QUEUE_READ_TOOLS = {"get_moderation_status": "board", "list_admin_board": "board",
                      "list_quota_requests": "quota"}
 
+# ── 「疑问词在内容里，还是主人在问？」（20261006，与 `_confirm_popup` 同一批）──────
+#
+# 这一组判据只服务 `_confirm_popup` 的**那一个否决位**，别处不用（`authz.is_question_like`
+# 本体、三张正则、`_INQUIRY_NOUNS` 一个字都没动——它们的语义被 test_authz ⑨e 逐条锁着）。
+#
+# **为什么必须存在**：`_ALWAYS_CONFIRM_TOOLS`（17 个）在 `consent_granted` 里恒 False
+# ⇒ 弹卡是它们**唯一**的执行路径，而 `_confirm_popup` 的第一句用 `is_question_like`
+# 一票否决。于是"这句话像提问"误判一次，代价不是"少问一次"，是**这条写能力没有任何入口**
+# （20260924T234402：一份公告连着四轮没有执行途径）。那个现场的词根（裸名词「要求/注意」）
+# 20260925 已句式化修掉，但**同一条死路在别的词位上活着**——本判据是它的结构化解法：
+# 不再靠"词表恰好不误判"，而是问「这个疑问词**住在哪**」。
+#
+# 两条独立信号，任一成立即认定"疑问词是内容"：
+#   ① 主人开口下了令（命令骨架在场）——「帮我发个公告，说说这次活动有什么注意事项」；
+#      疑问词在**后半句**，是主人要写进站内的那一段话，不是在问系统。
+#   ② 疑问词整个落在**引号内容**里（挖空引号后不再判提问）——「正文写「今晚几点睡？」」。
+# 硬否决（不受这两条影响，永远按"主人在问"处理）：
+#   · 假设句（`authz._CONSOLE_HYPOTHESIS_RE`，句首的如果/假如/请问/问一下…）
+#     ——「如果我把文章 12 设为私密的话」有骨架也不能弹；
+#   · **谓词位**问后果（下面的 `_INQUIRY_PREDICATE_RE`）——「把标签 Rust 挪到…会有什么影响？」
+#     有骨架（把…）也不能弹，这正是 `admin_tag_move_question_no_popup` 锁的那条；
+#   · **句尾疑问**（下面的 `_TAIL_QUESTION_RE`）——「把公告「今晚不许熬夜！」删掉**好吗**」。
+#     句首有骨架（把…），但整句收在"好吗"上 ⇒ 主人在**征求同意**，不是在下令。没有这一条
+#     就是本判据唯一会"多弹"的形态（"把提问读成意图"是用户拍板明确不许的）。
+#     ⚠️ 已知代价：**没写引号**的正文里带疑问句、又正好收在句尾（「帮我发个公告，正文写：
+#     今晚几点睡？」——没有后半截）会被这一条连坐否决。这是**刻意**的：该形态今天同样被
+#     否决（改动前后一致 ⇒ 不构成本批引入的回归），而放宽它需要的"正文引导词"判据
+#     （正文/内容/理由/写/说…）在本批没有语料支撑，宁可先不动。
+#
+# ⚠️ 命令骨架**刻意与 `authz._CONSOLE_ORDER_RE` 分开写**（不是复用）：那张表服务的是
+# **同意闸**（判"这句算不算命令"，判错的代价是多一次点击），本表服务**弹窗分叉**
+# （判"这句是不是在问"，判错的代价是少一条入口）。两支判据的错向相反，共用一张表
+# 会把它们互相绑架——同 `_CONSOLE_INQUIRY_RE` / `_CONSOLE_INQUIRY_BROAD_RE` 分开写的理由。
+# 本表比 authz 那张多收「替我 / 给我」（主人最常用的委托说法之一，authz 那张没登记）。
+_ORDER_FRAME_RE = re.compile(
+    r"^\s*(?:请|帮我|帮忙|麻烦|记得|替我|给我)\s*\S"
+    r"|(?:^|[。！!；;\n，,])\s*(?:请|帮我|帮忙|麻烦|记得|替我|给我)?\s*(?:把|将|给)")
+
+# 谓词位（**以动作为主语**）的问后果：`_INQUIRY_NOUNS` 在 authz 那边管的是「的X」「什么X」
+# 的名词位，这里要的是「会有什么影响 / 会怎样」的谓词位——两者刻意不共享（方向不同）。
+_INQUIRY_PREDICATE_RE = re.compile(
+    r"会(?:有)?(?:什么|啥|哪些)?(?:影响|后果|风险|结果|变化)"
+    r"|有何影响|有什么影响|什么影响|什么后果|影响是(?:什么|啥)"
+    r"|会怎样|会怎么样|会如何|风险(?:是什么|多大|有哪些)|后果(?:是什么|有哪些)")
+
+# 句尾疑问（**位置判据**）：整句收在一个问号或疑问语气词上 ⇒ 主人在问，不是在吩咐。
+# 这一条是"命令骨架"的必要补丁：「把公告 X 删掉**好吗**」句首有骨架（把…），光看骨架
+# 会把它读成命令——而它是主人**在问系统要不要办**，用户拍板明确不许弹卡（弹一个
+# 确定/取消 = 把提问读成意图）。注意"吧"不在表里：「帮我把 X 删了吧」是吩咐，不是问。
+_TAIL_QUESTION_RE = re.compile(
+    r"[？?]\s*$|(?:吗|呢|么|好吗|行吗|可以吗|对不对|是不是|要不要)\s*[。！!]?\s*$")
+
+
+def _question_words_are_content(user_msg) -> bool:
+    """`is_question_like` 判真，但疑问词**整个落在引号内容里**（「正文写「今晚几点睡？」」）。
+
+    挖空成对的引号段（`_QUOTE_SPAN_RE`）之后不再判提问 ⇒ 疑问词是主人要写进站内的**内容**。
+    引号不成对 ⇒ 挖不掉 ⇒ 判 False（**fail-closed**：宁可当成"主人在问"而不弹卡）。
+    """
+    if not authz.is_question_like(user_msg):
+        return False
+    blanked = _QUOTE_SPAN_RE.sub(" ", str(user_msg or ""))
+    return not authz.is_question_like(blanked)
+
+
+def _question_words_are_prose(user_msg) -> bool:
+    """`is_question_like` 判真时：这次的疑问词到底是**内容**，还是主人在问？
+
+    只见 `_confirm_popup`。返回 True = "疑问词在内容里"（照常弹卡）；False = "主人在问"
+    （照旧否决）。两条硬否决先走，见上面那段长注。
+    """
+    text = authz.strip_user_shell(user_msg)   # 与 is_question_like 看同一句话（剥系统壳+称呼壳）
+    if authz._CONSOLE_HYPOTHESIS_RE.search(text):   # 假设句：永远是假设
+        return False
+    if _INQUIRY_PREDICATE_RE.search(text):          # 问后果：真的在问
+        return False
+    if _TAIL_QUESTION_RE.search(text):              # 句尾收在问号/疑问语气词上：主人在问
+        return False
+    if _ORDER_FRAME_RE.search(text):                # 主人在下令 ⟹ 后半句是内容
+        return True
+    return _question_words_are_content(user_msg)    # 或：疑问词全在引号里
+
+
 def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                    config) -> dict | None:
     """本轮要不要弹"写操作确认框"？要就返回 `pending_confirm` 的 state 增量。
@@ -8386,7 +8469,14 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     那一族的形状）。
     """
     grant = state.get("confirm_grant")
-    if grant or authz.is_question_like(user_msg):
+    if grant:
+        return None
+    # 「像提问」是**有前提的**否决（20261006，见上面 `_question_words_are_prose` 的长注）：
+    # 判真时还要问一句"疑问词住在哪"——主人下了令、而疑问词只是他要写进站内的那段话
+    # （「帮我发个公告，说说这次活动有什么注意事项」），就不该据此关掉整条入口。
+    # 恒弹卡族的弹卡是**唯一**入口，这里的 False 换来的是一次点击，不是一次静默失败。
+    _q = authz.is_question_like(user_msg)
+    if _q and not _question_words_are_prose(user_msg):
         return None
     picks: list = []
     for spec in specs:
@@ -8399,7 +8489,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         # 拣的名字、模型自己概括的片段）→ 不许一句话直接写，退回弹窗：问句里会把
         # 系统解析到的目标写清楚（标签名/分类名/公告标题/留言原文），由主人点一下确定。
         # 这是**加一次点击**，不是砍能力——名字原样说出口的常见路径一行没变。
-        if args_ok and authz.consent_granted(principal, name, user_msg) \
+        if not _q and args_ok and authz.consent_granted(principal, name, user_msg) \
                 and _ident_grounded(name, args, user_msg):
             continue  # 明确命令 + 目标地基都在：直接执行，不弹窗
         decision = authz.check(principal, name)
