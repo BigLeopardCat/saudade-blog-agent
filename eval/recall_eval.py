@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import report_archive  # noqa: E402  同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
-from rag.search import get_index, search  # noqa: E402
+from rag.search import get_index, last_route, search  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 REPORT_RUNS = ROOT / "report" / "runs"
@@ -77,10 +77,47 @@ QUERIES: list[dict] = [
 ]
 
 
+# ── 本次生效档位（20261005）──────────────────────────────────────────
+# 两臂 A/B（`RAG_HYBRID_ENABLED=0` vs `=1`，见 docs/rag-design.md §9）**唯一能回答
+# "开关真开了没"的就是这两行**：两份报告的指标若不是同一档位跑出来的，那些小数点的
+# 差异读不出任何东西。所以既报**配置档**（本进程内存里的开关与凭据——不重新解析
+# `.env`：.env 改完不重启不生效，那正是本仓"push ≠ 生效"的同族坑），也报**实测档**
+# （检索自己记下来的本轮路线，见 rag/search.py 的 last_route）。两者不一致本身就是
+# 结论：配置写着 hybrid 而实测全 lexical ⇒ 先修接线，别去调参。
+_BASELINE_LEXICAL = "rag.search (lexical 2/3-gram BM25, chunk 级文档聚合 + 相对断崖)"
+_BASELINE_HYBRID = "rag.search (hybrid: 2/3-gram BM25 + 向量 RRF 融合)"
+
+
+def configured_dial() -> str:
+    """本进程**内存里**的档位（不读 .env：那正是"文件里写的"与"进程里跑的"之分）。"""
+    from config.settings import settings
+    if not settings.rag_hybrid_enabled:
+        return "lexical（RAG_HYBRID_ENABLED 未开）"
+    from rag.vector_index import degraded_reason
+    why = degraded_reason()
+    return (f"hybrid（EMBEDDING_MODEL={settings.embedding_model}）" if why is None
+            else f"lexical（开关开着但向量路不可用：{why}）")
+
+
+def hybrid_switch_on() -> bool:
+    """开关本身的取值（不看凭据/索引）。比 `configured_dial()` 的字符串稳——
+    用字符串前缀判"开没开"会把"开着但凭据缺"当成没开，恰好漏掉要报警的那一格。"""
+    from config.settings import settings
+    return bool(settings.rag_hybrid_enabled)
+
+
+def routes_text(modes: dict) -> str:
+    """`{'hybrid': N}` → `"hybrid×N"`（报告里存 dict，打印要人读得懂）。"""
+    return "、".join(f"{k}×{v}" for k, v in sorted(modes.items()))
+
+
 def evaluate(idx, show: bool) -> dict:
     results = []
+    modes: dict[str, int] = {}          # 实测路线计数（不是配置，是这批 query 真走过的路）
     for q in QUERIES:
         hits = search(q["query"], top_k=5)
+        mode = last_route()["mode"]
+        modes[mode] = modes.get(mode, 0) + 1
         hit_keys = [f"{h['type']}:{h['id']}" for h in hits]
         rank = next((i + 1 for i, h in enumerate(hit_keys) if h in q["expected"]), None)
         results.append({
@@ -104,7 +141,11 @@ def evaluate(idx, show: bool) -> dict:
     # 浪费的上游（十篇语料 × top_k=8 曾几乎倒回整个语料库）
     mean_n = sum(len(r["hits"]) for r in results) / len(results) if results else 0
     mean_n_pos = sum(len(r["hits"]) for r in positive) / len(positive) if positive else 0
-    return {"baseline": "rag.search (lexical 2/3-gram BM25, chunk 级文档聚合 + 相对断崖)", "n": len(results),
+    # 档位名按**实测**取：混着跑（部分查询融合、部分降级）时不冒认 hybrid——
+    # 那种报告最容易被读成"混合检索的效果"，实际是两条路的指标混在一起。
+    return {"baseline": (_BASELINE_HYBRID if modes.get("hybrid") == len(results)
+                         else _BASELINE_LEXICAL),
+            "routes": modes, "n": len(results),
             "recall@1": round(r1, 4), "recall@3": round(r3, 4), "recall@5": round(r5, 4),
             "MRR": round(mrr, 4), "noise_hit_rate": round(noise_hit, 4),
             "mean_candidates": round(mean_n, 2), "mean_candidates_positive": round(mean_n_pos, 2),
@@ -130,9 +171,17 @@ def main() -> None:
     idx.build()
     docs = idx._docs
     print(f"语料：{len(docs)} 文档（全部 note——20260901 检索池净化，talk/board/announcement 不再入池）")
+    dial = configured_dial()
+    print(f"档位（配置）：{dial}")
 
     rep = evaluate(idx, args.show)
     print(f"\n== {rep['baseline']} ==")
+    # 开关开着、实测却不是每条都融合 ⇒ 这一跑**量不出混合检索的效果**，先修接线。
+    # 这行是"两臂 A/B"的守门人：没有它，一次"开关没拨上"的词法跑会被当成混合臂存档。
+    _mismatch = hybrid_switch_on() and rep["routes"].get("hybrid", 0) < rep["n"]
+    print(f"  档位（实测）：{routes_text(rep['routes'])}"
+          + ("   ⚠️ 开关开着但并非每条都融合 ⇒ 先查接线（凭据/索引/对齐），别读指标"
+             if _mismatch else ""))
     print(f"  recall@1={rep['recall@1']:.2f} recall@3={rep['recall@3']:.2f} "
           f"recall@5={rep['recall@5']:.2f} MRR={rep['MRR']:.2f} noise_hit={rep['noise_hit_rate']:.2f}")
     print(f"  平均候选={rep['mean_candidates']:.2f}（正例 {rep['mean_candidates_positive']:.2f}）")
