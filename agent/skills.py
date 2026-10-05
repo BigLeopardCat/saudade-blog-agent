@@ -2922,6 +2922,57 @@ PLAN_STATUS_NAV_NOTE = ("nav_offline", "nav_iot_off",
 PLAN_STATUS_ABSENCE_EXEMPT = PLAN_STATUS_NAV_NOTE + ("param_missing", "refused")
 
 
+# 参数名别名层（20261005）：**同一个语义槽在不同技能里叫法不同**。
+#
+# 现场（`announcement_update_zero_write`，历史 33 次里 5 次）：planner 发
+# `{"name": "维护通知", "new_title": "维护通知2"}`，而本技能的合法参数是
+# `title`/`new_title`/`content` ⇒ `title` 落进 missing ⇒ 写族的纠偏注记只说"缺少公告
+# 标题（title）"、**一个字都没提它写的那个 `name`**（`param_unknown` 只进日志与 trace，
+# 不进注记）⇒ planner 看不出"我填的值其实就在手上"，下一轮直接回落 `skill=chat`，
+# 回复成「主人，我这边没有看到执行记录喵～」——**连"去按标题查一次"这个动作都没发生**。
+#
+# 根因不是"模型笨"，是**参数名没有归一层**：tag/category 族与账号族一律叫 `name`
+# （`skill_param_specs` 实测：tag_update/tag_delete/category_update/category_delete/
+# account_freeze/account_unfreeze/account_set_role/mute_account/unmute_account/
+# quota_reset/notice_send），公告族却叫 `title`。planner 从多数派学来的名字撞在公告上。
+#
+# 语义与既有的"取值别名层"同构（`adminops._VERDICT_ALIASES`）。
+_PARAM_ALIASES = {"title": ("name",)}
+
+
+def _param_alias_fix(skill: Skill, params: dict) -> tuple[dict, list[tuple[str, str]]]:
+    """把 planner 用错的参数名搬到本技能真正的槽上，返回 `(新 params, 搬迁清单)`。
+
+    规则（三条同时成立才搬）：
+      ① `src ∈ params` 且 **`src ∉ specs`**——本技能根本不收这个名字；
+      ② `dst ∈ specs`——本技能确有这个槽；
+      ③ `params.get(dst)` 是 None/空串——**已有值不覆盖**（`new_title` 那类"改成什么"
+         与它相邻，双写打架时宁可不猜）。
+
+    ①就是护栏：`name` 在 11 个技能里是**合法**字段 ⇒ 规则对它们不触发；尤其
+    `notice_send` **同时**有 `name`（收件人）与 `title`（通知标题），正是这条把它挡在
+    门外——否则收件人会被搬去当标题，那是**写操作**上的静默错值。
+    触发面因此收敛到 `title ∈ specs` 且 `name ∉ specs` 的那 5 个技能：
+    tag_create / category_create / announcement_create / announcement_update /
+    announcement_delete——语义一致（都是"目标/新建项的名字"）。
+
+    **纯函数**（不改入参、不读全局、可离线单测）。命中由 `planner_node` record，
+    **不许静默**——"悄悄归一"正是本仓那些事故的形状（见 `_drop_correction` 的整段理由）。
+    """
+    specs = skill_param_specs(skill)
+    out = dict(params)
+    moved: list[tuple[str, str]] = []
+    for dst, srcs in _PARAM_ALIASES.items():
+        if dst not in specs or out.get(dst) not in (None, ""):
+            continue
+        for src in srcs:
+            if src in out and src not in specs:
+                out[dst] = out.pop(src)
+                moved.append((src, dst))
+                break
+    return out, moved
+
+
 def instantiate_plan(skill_name: str, params: dict,
                      role: str | None = None) -> dict:
     """公开入口：`_instantiate_plan` 的产物 + **统一补齐 `param_unknown`**。
@@ -2941,12 +2992,20 @@ def instantiate_plan(skill_name: str, params: dict,
     specs]` 就是 `check_skill_params` 的 `unknown`，所以已经填过的那两条分支取值不变。
     **只记账不阻断**（既有语义：工具照常执行，planner_node 打 WARNING + trace 事件）。
     """
-    plan = _instantiate_plan(skill_name, params, role)
-    if isinstance(params, dict) and isinstance(plan, dict):
+    # 参数名归一（20261005）**必须早于 `_instantiate_plan`**：写族展开、
+    # `check_skill_params` 都在那里面读 `params.get("title")`，晚一步搬就等于没搬
+    # （`title` 照旧 missing、零工具照旧发生）。搬完再算 `param_unknown`——被搬走的
+    # 那个名字已经在正确的槽上，不该再报"没人读"。
+    fixed, moved = (_param_alias_fix(SKILL_MAP.get(skill_name) or SKILL_MAP["chat"], params)
+                    if isinstance(params, dict) else (params, []))
+    plan = _instantiate_plan(skill_name, fixed, role)
+    if isinstance(fixed, dict) and isinstance(plan, dict):
         sk = SKILL_MAP.get(plan.get("skill"))
         if sk is not None:
             specs = skill_param_specs(sk)     # 与两个分支读的是同一份规格
-            plan["param_unknown"] = [n for n in params if n not in specs]
+            plan["param_unknown"] = [n for n in fixed if n not in specs]
+        if moved:
+            plan["param_alias"] = [{"src": s, "dst": d} for s, d in moved]
     return plan
 
 

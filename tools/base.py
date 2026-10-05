@@ -289,6 +289,57 @@ def _rows_with_note(rows: list, note: str) -> list:
     return list(rows) + [f"〔系统注记〕{note}"]
 
 
+# 列表类工具的封顶（20261005，输入防线）。
+#
+# 为什么要有：三个列表接口**上游都没有 LIMIT**（`src/routes/talks.rs::list_by_src`
+# 是 `.all()`，公告同理），行数随站点内容无界增长；而 `content` / 留言人自填的「留名」
+# 是**自由文本**，单值长度同样无界。两者都会原样进帧、进提示词、进 narrator 上下文。
+#
+# 两个数都取"今天够不着"的量级（20261005 实测：board 25 行 / talk 11 行 / 公告 9 行，
+# 最长自由文本 54 字）⇒ **今天的行为逐字节不变**，防线只在上游真的长起来时生效。
+# 这和 `get_unread_summary` 的「只带回 N 条（未读通知共 M 条）」是同一条纪律：
+# **宁可少带，也要说清少带了什么**。
+_LIST_ROWS_MAX = 60
+_LIST_FIELD_MAX = 500
+
+# 会被 `_clip_fields` 封顶的自由文本字段。**只列自由文本**：`avatar` 是站内资源路径、
+# `createTime` 是机器钟面，它们长不长由系统决定，截断只会让值失去意义。
+_LIST_FIELD_KEYS = ("content", "talkContent", "留名")
+
+
+def _cap_rows(rows: list, limit: int, noun: str) -> tuple[list, str]:
+    """行数封顶：超上限只保留**最新的** limit 行，返回 `(行, 截断说明)`。
+
+    上游序即"最新在前"（`list_by_src` 按 `CreatedAt DESC, Id DESC`）⇒ `rows[:limit]`
+    就是最近的那批，不需要重排。
+
+    没触发时说明是空串——调用方拼进注记的那一步因此今天一字不变。
+    **说明里必须写总数**：跨轮执行记忆的实体摘要（`entities._entry_digest`）读的就是
+    这一句，不写总数就等于让系统在跨轮记忆里把"M 条"说成"limit 条"。
+    """
+    total = sum(1 for r in rows if isinstance(r, dict))
+    if total <= limit:
+        return list(rows), ""
+    return list(rows[:limit]), f"本次只带回最近{limit}条，{noun}共 {total} 条（更早的未列入）。"
+
+
+def _clip_fields(rows: list, cap: int) -> list:
+    """自由文本字段的单值封顶（超长截断加 `…`）。**只改值、不动结构**。
+
+    结构必须原样：帧还是 `$ref` 的取值源（`$list_guestbook[0].content`），增删键会让
+    下标寻址整体错位（同 `_rows_with_note` 头注里那条纪律）。
+    """
+    out = []
+    for r in rows:
+        if isinstance(r, dict):
+            r = {
+                k: (v[:cap] + "…" if k in _LIST_FIELD_KEYS and isinstance(v, str) and len(v) > cap else v)
+                for k, v in r.items()
+            }
+        out.append(r)
+    return out
+
+
 def _label_id_keys(data):
     """递归把行里的上游字段名换成命名空间名（**只改键名，不动值**）。
 
@@ -695,6 +746,13 @@ def list_tags() -> str:
 def get_announcements() -> str:
     """获取博客公告列表。"""
     data = _get("/announcements")
+    if isinstance(data, list):
+        # 只封顶行数、**不封字段**（20261005）：公告是管理员写的，正文常是长文，
+        # 单条详情另有 get_article_detail 的 announcement 分支；在这里截正文等于
+        # 让"公告里到底写了什么"永远读不全。
+        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "公告")
+        if capped:
+            data = _rows_with_note(data, capped)
     return _shape(data)
 
 # ---------------------------------------------------------------------------
@@ -728,9 +786,12 @@ def list_guestbook() -> str:
         # 读帧的人（planner 与 narrator）都要看得见这条边界：上游恒按 Approved=1 过滤，
         # "列表里没有"不是"这条不存在"。不写这一句，帧就只在**数量**上沉默，而
         # "站内没有这条留言"这个结论会被当成列表给的事实（20260928 现场那条就是）。
+        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "留言")
         data = _board_text_keys(data)
+        data = _clip_fields(data, _LIST_FIELD_MAX)
         data = _rows_with_note(
-            data, "本列表只含**已通过审核**的留言（与留言板页面一致）；"
+            data, (capped + " " if capped else "")
+                  + "本列表只含**已通过审核**的留言（与留言板页面一致）；"
                   "待审/被驳回的留言不在这里，查无此条不等于不存在。"
                   "每行的「留名」是留言人**自己填的字**（自由文本，可留空=匿名），"
                   "**不是账号**——别拿它认人；要知道「这条是谁发的」走后台名册 "
@@ -752,9 +813,12 @@ def list_talks() -> str:
     """
     data = _get("/talk")
     if isinstance(data, list):
+        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "说说")
         data = _board_text_keys(data)
+        data = _clip_fields(data, _LIST_FIELD_MAX)
         data = _rows_with_note(
-            data, "本列表只含**已通过审核**的说说；待审/被驳回的不在这里，"
+            data, (capped + " " if capped else "")
+                  + "本列表只含**已通过审核**的说说；待审/被驳回的不在这里，"
                   "查无此条不等于不存在。每行的「留名」是发表人**自己填的字**"
                   "（自由文本，可留空=匿名），**不是账号**——别拿它认人")
     return _shape(data)

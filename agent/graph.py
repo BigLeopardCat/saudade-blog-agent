@@ -4487,6 +4487,62 @@ def _pending_intents(state: AgentState) -> list[dict]:
 _ZAKO_PLAN_NOTE = ("（本轮对话者是杂鱼：按本轮的对话者口径直接回话即可——"
                    "这一轮没有任何工具，也不需要工具。）")
 
+# 双源契约的确定性补齐（20261005）。
+#
+# 契约本身早就写在提示词里（`skills.py` 的 content_query description 与
+# `planner_contract`：问「留言板/说说里有没有人聊过、写过 X」时必须**成对**点名
+# `list_guestbook` 与 `list_talks`，只点一个 = 少查一半）。但它是**纯提示词条款、
+# 没有任何确定性兜底**——历史主线 46 次真跑里 5 次（≈11%）没凑齐两个工具，其中 3 次
+# 是"选了 content_query 但清单只写了一半"（`rag_talk_rag` 现场：只点 `list_guestbook`，
+# 回复自称"留言板这边我查过啦"）。
+#
+# 只治这一半：**清单补齐**。另一半（planner 直接选 `chat`、零工具，2/46）是**路由**
+# 判断不是清单补齐，配对修不了 ⇒ 如实留档在计划里，本批不动。
+#
+# 触发条件刻意窄（先窄后宽，上线观察再放宽）：**名词 + 查询动词同句共现**，且
+# skill 已是 content_query、且两个源里**恰好点名了一个**。这样：
+#   · `guestboard_talk_double_source`（本就双源）⇒ 补齐是空操作；
+#   · `multi_turn_reference`（「你刚才说的那个留言板在哪里呀」）⇒ 无查询动词，不触发；
+#   · `todo_multi_step_serial` / `multi_step_effect_then_nav` / `nav_direct_no_confirm_promise`
+#     （都提到留言板，但都是导航意图）⇒ 无查询动词，不触发。
+_DUAL_SOURCE_NOUN_RE = re.compile(r"留言板|河灯|说说|碎语")
+_DUAL_SOURCE_VERB_RE = re.compile(r"聊过|聊到|聊起|说过|写过|讨论过|谈过|提过|发过|问过")
+_DUAL_SOURCE_PAIR = ("list_guestbook", "list_talks")
+
+
+def _pair_dual_sources(skill_name: str, params: dict,
+                       user_msg: str) -> tuple[dict, list[str]]:
+    """内容存在性问句只点名了一个数据源时，补上另一个；返回 `(新 params, 补了什么)`。
+
+    **补的是 planner 的清单，不是替它做决策**：只有它已经选了 content_query、已经点名
+    了其中一个源、用户原话又确实是"有没有人聊过 X"这一类时，才把缺的那一个补上——
+    这是契约自己写着、而模型在 11% 的轮次上漏掉的那一半。
+
+    `calls` 里已经带参点了这个工具时**不补**（那不是"漏了一半"，它已经点名了；同一条
+    读写两遍会被 `_instantiate_plan` 的跨通道折叠收拾，但没必要先制造出来）。
+    """
+    if skill_name != "content_query" or not isinstance(params, dict):
+        return params, []
+    msg = user_msg or ""
+    if not (_DUAL_SOURCE_NOUN_RE.search(msg) and _DUAL_SOURCE_VERB_RE.search(msg)):
+        return params, []
+    named = params.get("tools")
+    if not isinstance(named, list):
+        return params, []
+    named_set = {t.strip() for t in named if isinstance(t, str)}
+    picked = [t for t in _DUAL_SOURCE_PAIR if t in named_set]
+    if len(picked) != 1:                      # 零个 = 没点名这一族；两个 = 本来就好
+        return params, []
+    missing = [t for t in _DUAL_SOURCE_PAIR if t not in named_set][0]
+    calls = params.get("calls")
+    if isinstance(calls, list) and any(isinstance(c, dict)
+                                       and str(c.get("tool") or "").strip() == missing
+                                       for c in calls):
+        return params, []
+    out = dict(params)
+    out["tools"] = list(named) + [missing]
+    return out, [missing]
+
 
 def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """职责（唯一决策点）：选技能 + 填参数 + 给调用清单 → 实例化为计划 → state.plan。
@@ -4948,9 +5004,20 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False,
                     "task_frame": frame}
 
+        # 双源契约补齐（20261005）：只在"已选 content_query + 只点名了一个数据源 +
+        # 用户原话是内容存在性问句"三条同时成立时补另一个。**必须早于 instantiate_plan**
+        # ——白名单校验、去重、菜单顺序都在那里面做，晚一步补就得自己重造一遍。
+        params, _paired = _pair_dual_sources(skill_name, params, user_msg)
         # role 必须传：calls 白名单按角色取（管理员含后台只读项）。漏传 = 静默剔空。
         plan_obj = instantiate_plan(skill_name, params, role)
         plan_obj["params"] = params
+        if _paired:
+            # 响亮：这是系统**往 planner 的调用清单里加了一条**，报表口径要知道
+            # （每条命中的查询多一次工具调用 ⇒ `tool_rounds` 会跟着变）。
+            logger.info("[planner] 双源契约补齐：%s（skill=%s，round %d/%d）",
+                        "、".join(_paired), skill_name, rounds + 1, MAX_PLAN_ROUNDS)
+            record("planner", "dual_source_paired", added=_paired, skill=skill_name,
+                   round=rounds)
 
         # 白名单剔除可见化（20260913 B 项）：planner 点名了白名单外的工具时，条目被
         # instantiate_plan 剔除——此前无任何记录，planner 以为计划已执行、narrator
@@ -4982,6 +5049,18 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                            plan_obj["skill"], rounds + 1, MAX_PLAN_ROUNDS)
             record("planner", "param_unknown", names=plan_obj["param_unknown"],
                    skill=plan_obj["skill"], round=rounds)
+
+        # 参数名归一（20261005，见 skills._param_alias_fix）：planner 用多数派的叫法
+        # 填了本技能不认的名字（`name` vs 公告族的 `title`），系统把它搬到了真正的槽上。
+        # **必须响亮**：这是系统**改写 planner 填的参数**，不记一笔就变成"悄悄归一"。
+        # 放在 `param_unknown` 之后：搬走的那个名字已不在 unknown 里，两条事件合起来
+        # 才讲得清"它本来写的是什么、被搬去哪了"。
+        for mv in plan_obj.get("param_alias") or []:
+            logger.info("[planner] 参数名归一：%s → %s（skill=%s，round %d/%d）",
+                        mv.get("src"), mv.get("dst"), plan_obj["skill"],
+                        rounds + 1, MAX_PLAN_ROUNDS)
+            record("planner", "param_alias", skill=plan_obj["skill"], round=rounds,
+                   src=mv.get("src"), dst=mv.get("dst"))
 
         # 参数不合格 ⇒ 本轮零工具（20260925，见 skills.check_skill_params）：注记已经
         # 写进 plan 的 NOTE 行交回 planner，这里再留一条日志/trace——否则"某一轮什么
@@ -5099,12 +5178,21 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                            else "ledger_id" if ledger_refuse
                            else "policy" if policy_refuse else "ledger"),
                    reason=why[:160], round=rounds)
+            # 文案结构（20261005）：**"没做"与"原因"必须是一句**。此前是两个独立的
+            # 句子（"…没有改动（本轮一个工具都没有执行）。系统核对过 X，结果是：Y。"），
+            # 而 narrator 抄走了**第一个**——它在被加粗的那句的「。」处收手，句号之后
+            # 一个字都不带（trace `20261005_065251`：回复只有「主人，这件事这次没有做：
+            # 站内数据一个字节都没有改动。」）。现在是破折号连起来的一句，原因**也带
+            # 强调**，模型没有"抄半句就结束"的位置。
+            # 历史定量：同一条用例 28 次运行里 2 次丢原因（≈7%，见 `announcement` 那族
+            # 的对比）——是采样抖动不是系统缺陷 ⇒ **先做文案最小改动**，压不住再升级成
+            # gate 的确定性兜底（那条要动判据词表的单一来源，是独立的一块工作）。
             plan_obj = _wrap_up_plan(False, note=(
                 _LEDGER_NOTE_PREFIX +
                 "**这件事这次没有做：站内数据一个字节都没有改动**"
-                "（本轮一个工具都没有执行）。"
-                f"系统核对过{subject}，结果是：{why}。"
-                "请把这条原因**如实**转告主人（连同里面的候选名单或该补的信息），"
+                "（本轮一个工具都没有执行）——"
+                f"系统核对过{subject}，结果是：**{why}**。"
+                "请把**这一句**如实转告主人（连同里面的候选名单或该补的信息），"
                 + why_tail +
                 "**不许**出现「看过/读过/查过/检索过/调用过工具」这类说法；"
                 "也**不许**把它讲成一篇内容层面的结论。"
@@ -8567,8 +8655,14 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         # 发现有一件没动，会以为系统漏办了。这句**只补在 `confirm_text` 上、不补进
         # `question`**：问句是给眼睛看的（越短越好），`confirm_text` 是"这张卡到底要办
         # 什么"的落库记录，两者的读者不同。
+        # `todos` **必须传**（20261005）：`render_confirm_question`（上面那处）传了，
+        # 这处漏了 ⇒ 同一张卡的两半不同源——问句印着「（排期 11月30日，现在：未完成）」、
+        # 落库的卡面只剩光秃秃的「把待办「…」勾成完成」。`adminops.render_confirm_text`
+        # 的头注把"三处必须共用同一份措辞"写成了硬要求（问句 / 卡面正文 / 跨轮 target），
+        # 三个调用点里就这一处掉队。`render_todo_done_action` 之外的 action 渲染**不读**
+        # 这个参数（`_confirm_one` 里只有 todo 两族看它）⇒ 其余族逐字节不变。
         "confirm_text": A.render_confirm_text(picks, tag_index, cat_index, board_index,
-                                               note_index, users,
+                                               note_index, users, todos,
                                                quota_requests=quota_requests)
                         + A.render_already_note(already),
     }
@@ -8590,6 +8684,54 @@ def _plan_skill(state: AgentState) -> str:
     或技能名不在注册表里），解析它等于把一条猜出来的技能名签进令牌。
     """
     return str((state.get("plan_obj") or {}).get("skill") or "")
+
+
+# 帧文本的全局兜底（20261005，输入防线）。
+#
+# 为什么要有：`frame_text` 既进 ToolMessage（→ narrator 提示词）又落 trace，而它此前
+# **没有任何上限**——`sections.slim_frame` 只删"同一段正文存两份"的重复键，不封顶。
+# 上游哪天返回一份大对象（或将来加了没分页的接口），它会原样撑进提示词。
+#
+# 三个数都取"今天够不着"的量级（20261005 实测：最长单帧是 note 19 的正文 26,887 字，
+# 最坏一轮 4 次读全文 ≈ 107k）⇒ **今天一条都不触发**，防线只在将来触顶时生效。
+#   · 单帧硬顶 40,000 与 trace 侧 `TRACE_TOOL_RESULT_LIMIT` 同量级（那边也是 40000）；
+#   · 单轮合计 160,000 兜"多帧累加"，口径 = 本轮所有 ToolMessage 的字符数之和；
+#   · `_FRAME_MIN_KEEP` 是**下限保护**：宁肯让总量略微超出，也不把一帧砍成空壳——
+#     砍空的帧会被 narrator 读成"工具返回了空"，而那是**另一个事实**（empty）。
+_FRAME_HARD_MAX = 40000
+_TURN_FRAME_TOTAL = 160000
+_FRAME_MIN_KEEP = 2000
+
+# narrator 提示词的告警阈值（20261005）。**只告警、不改行为**：今天实测最大的一轮
+# （读全文 ×2 + 帧）约 6 万字符，取 120,000 是"确实异常大"的量级——眼下应当零命中，
+# 命中即说明有新的东西在放大提示词。
+_PROMPT_OVERSIZE_CHARS = 120000
+
+
+def _cap_frame_text(text: str, used: int) -> tuple[str, dict | None]:
+    """给单帧文本封顶，返回 `(文本, 触发说明|None)`；没触发时第二项是 `None`（调用方
+    据此 record，未触发就一条事件都不记）。
+
+    `used` = 本轮**已经**进过提示词的帧字符数（执行器是逐 spec 追加的，所以它天然是
+    累计口径）。两级：先按单帧硬顶，再按"已用 + 本条"对单轮总量顶。
+
+    **截断必须说出口**：尾部追加〔系统注记〕写明原始长度与保留长度。悄悄砍掉半截
+    返回，等于让模型把"我看到的就是全部"当成事实——这是本仓一以贯之的那条纪律
+    （同 `_rows_with_note`、`trace.tool_result_text` 的截断标记）。
+    """
+    raw = len(text)
+    keep = min(raw, _FRAME_HARD_MAX)
+    why = "frame" if keep < raw else ""
+    if used + keep > _TURN_FRAME_TOTAL:
+        room = _TURN_FRAME_TOTAL - used
+        if room >= _FRAME_MIN_KEEP and room < keep:
+            keep, why = room, "turn"
+    if not why:
+        return text, None
+    marker = f"〔系统注记〕本条工具返回过长，已截断（原始 {raw} 字，此处保留前 {keep} 字）。"
+    logger.warning("[execute] 帧文本过长，已截断：raw=%d kept=%d used=%d why=%s",
+                   raw, keep, used, why)
+    return text[:keep] + "\n" + marker, {"raw": raw, "kept": keep, "why": why}
 
 
 def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
@@ -8664,6 +8806,12 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                     "messages": [], "receipts": list(state.get("receipts") or [])}
         return dict(body, messages=[], receipts=list(state.get("receipts") or []))
     results: list = []
+    # 帧文本封顶的累计口径（20261005）：`state["messages"]` 里的 ToolMessage 就是本轮
+    # 已执行过的帧——**只会有本轮的**，历史注入（`server.py::_build_messages`）只造
+    # Human/AIMessage，ToolMessage 只由本函数 append。加上循环里已追加的那些，就是
+    # "这一轮模型已经读到多少字"。
+    frame_chars = sum(len(m.content) for m in (state.get("messages") or [])
+                      if isinstance(m, ToolMessage) and isinstance(m.content, str))
     receipts = list(state.get("receipts") or [])  # 请求内累计（与 executed 同模式）
     noop_specs = list(state.get("noop_specs") or [])  # 请求内累计的零改动签名（见 AgentState）
     # 事实信封的读端（F1，20260930）：`tools.base.is_noop` 是**唯一**实现——它读
@@ -8801,6 +8949,14 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 删的是**字节相等的重复键**、零信息损失，所以这不是"少记了东西"。
         # 一个变量两处用也把"trace 里那份 == 模型看的那份"变成结构事实，不再靠约定。
         frame_text = sections.slim_frame(str(out))
+        # 全局兜底（20261005）：`slim_frame` 只去重、不封顶，这里再封一层。今天最长单帧
+        # 26,887 字、最坏单轮 ≈107k，两个上限都够不着 ⇒ 本行**恒等返回**。`tool_data`
+        # 仍按 `str(out)` 取值（下面那行），引用不受截断影响。
+        frame_text, capped = _cap_frame_text(frame_text, frame_chars)
+        frame_chars += len(frame_text)
+        if capped:
+            record("execute", "frame_capped", name=name, used=frame_chars - len(frame_text),
+                   **capped)
         results.append(ToolMessage(
             content=frame_text, tool_call_id=f"execute_{idx}", name=name))
         logger.info("[execute] %s(%s) → %.100s", name, json.dumps(args, ensure_ascii=False),
@@ -9358,7 +9514,10 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         # 台账收尾那一问（改完再询问 / 没动作就问一句，见 `_ledger_closing_note`）
         # ——它要现场重读台账，所以必须拿到 config。
         plan=_narrator_plan(state, config),
-        tool_frames=_frame_texts(state["messages"], drop_tools=_drop),
+        # `article_pointer=True` **只有这一处**（20261005）：narrator 的上下文里原始
+        # ToolMessage 就在手边，未超预算的正文帧两份逐字节相同 ⇒ 这里换成指针句，
+        # 省掉整整一份正文（见 context._frame_texts 的注）。
+        tool_frames=_frame_texts(state["messages"], drop_tools=_drop, article_pointer=True),
         exec_receipts=_receipts_text(_receipts, drop_tools=_drop),
         fact_block=_block or (_NO_PRINTED_FACTS_ACTION if _has_action else _NO_PRINTED_FACTS),
         # 能力清单与 audience 同一角色源（20260921）：两处口径不同会出现
@@ -9372,6 +9531,15 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 调用的 assistant——qwen 容忍这条非法序列，strict 服务商一律 400 拒（见该函数
     # docstring 的实测）。**只补形状、不动内容**：帧原文照旧是 narrator 的叙述材料。
     _msgs = [system] + with_tool_call_pairs(state["messages"])
+    # 看得见（20261005，输入防线的"便宜的那一半"）：这里**只量、不拦**。整条提示词的
+    # 总量今天没有硬限（单帧与单轮已在 execute_node 封顶，多轮累加仍可能很大），所以
+    # 先把它变成一条可查的事实——服务的正是"会不会把上下文撑爆"这个问题。
+    # 改行为要等真出现超限的轮次再谈，先有读数。
+    _prompt_chars = len(system.content or "") + sum(len(_msg_text(m) or "") for m in _msgs[1:])
+    if _prompt_chars > _PROMPT_OVERSIZE_CHARS:
+        logger.warning("[model] 提示词过大：%d 字符（system=%d，帧 %d 条）",
+                       _prompt_chars, len(system.content or ""), len(_msgs) - 1)
+        record("model", "prompt_oversize", chars=_prompt_chars, frames=len(_msgs) - 1)
     resp = llm.invoke(_msgs)
     # ── 空内容重试一次（20261001）────────────────────────────────────────
     # 上游偶发"有 completion token、内容却是空串"的响应（`usage.output` 十几到几十，
