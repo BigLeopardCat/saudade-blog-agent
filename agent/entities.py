@@ -104,6 +104,8 @@ def _join(parts: list[str], max_len: int = _DIGEST_MAX) -> str:
 
 
 _NOTE_TOTAL_RE = re.compile(r"共 (\d+) 条")
+# "第 61-120 条"——`_cap_rows` 在 offset>0（取回更早的那一页）时写进注记的号段。
+_NOTE_RANGE_RE = re.compile(r"第 (\d+)-(\d+) 条")
 
 
 def _note_total(data) -> int:
@@ -125,6 +127,25 @@ def _note_total(data) -> int:
     return 0
 
 
+def _note_range(data) -> tuple[int, int] | None:
+    """从帧尾的〔系统注记〕里读"第 A-B 条"（取回更早那一页时的号段）。没有则 None。
+
+    为什么摘要也要读它：`offset > 0` 时手上这 60 行**不是最近的那批**（是第 61-120 条），
+    而 `_entry_digest` 原来只会按 `len(rows)` 说"最近 60 条"——那会让跨轮执行记忆把
+    "翻页拉回来的那一页"错说成"最新的一页"，正是本仓最不能忍的那类假话（系统自己说的，
+    比模型编还坏，同 `_note_total` 的理由）。注记里的号段是唯一能区分两者的信息。
+    """
+    if not isinstance(data, list):
+        return None
+    for x in data:
+        if isinstance(x, dict):
+            continue
+        m = _NOTE_RANGE_RE.search(str(x))
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    return None
+
+
 def _entry_digest(data) -> str:
     """留言板/说说：序号 + 分类 + 内容首段（序号是"第二条"能对号的关键）。
 
@@ -144,8 +165,15 @@ def _entry_digest(data) -> str:
             continue
         items.append(f"{i}.〔{cat}〕「{body}」" if cat else f"{i}.「{body}」")
     total = _note_total(data)
+    span = _note_range(data)
     # 只在本轮**真的**被裁过（总数 > 手上条数）时才改口径，否则输出与从前逐字节相同。
-    head = f"最近{len(rows)}条/共{total}条" if total > len(rows) else f"最近{len(rows)}条"
+    if span:
+        # 取回更早那一页 ⇒ 手上这批**不是**最新的，绝不能说"最近 N 条"（见 `_note_range`）。
+        head = f"第{span[0]}-{span[1]}条/共{total}条"
+    elif total > len(rows):
+        head = f"最近{len(rows)}条/共{total}条"
+    else:
+        head = f"最近{len(rows)}条"
     return f"{head}: " + _join(items) if items else ""
 
 
