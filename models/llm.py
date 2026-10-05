@@ -25,6 +25,10 @@ def get_llm(**kwargs) -> ChatOpenAI:
     # enable_thinking=False 强制关闭（图内四个调用均显式关闭：20260830 planner/
     # reflector、20260831 executor——慢调用实证，见 agent-architecture §7）
     thinking = kwargs.pop("enable_thinking", settings.llm_enable_thinking)
+    # 种子同 enable_thinking 一档：**0/缺席都表示"不设"**（settings.llm_seed 默认 0），
+    # 只有非零才落到 params。绝不能写 `"seed": None`——那会把一个显式 null 发到
+    # OpenAI 兼容端点上（不是所有服务商都容忍），而"不设"本来就是这里的默认语义。
+    seed = kwargs.pop("seed", settings.llm_seed)
     params = {
         "model": kwargs.pop("model", settings.active_llm_model),
         "api_key": kwargs.pop("api_key", settings.active_llm_api_key),
@@ -44,4 +48,6 @@ def get_llm(**kwargs) -> ChatOpenAI:
     # 覆写、与总开关无关（思维链经 reasoning_content 返回，历史有混入正文风险）
     if settings.llm_provider.lower() == "qwen":
         params["extra_body"] = {"enable_thinking": bool(thinking)}
+    if seed:                       # 0/空 ⇒ 不设，见上面的注
+        params["seed"] = int(seed)
     return ChatOpenAI(**params)

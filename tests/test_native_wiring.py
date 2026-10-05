@@ -368,6 +368,26 @@ def test_contract_no_longer_licenses_an_empty_decision():
     check("仍是规则 7（改契约不该改规则编号）", n.startswith("7. "))
 
 
+# ── ⑬ 路由确定性：规划温度必须**从 settings 读**，不许再有写死的字面量 ───────
+# 为什么值得单独钉一条：planner 的 `temperature` 曾经是**写死的 0.2**，而它同时
+# 是"路由确定性"这枚旋钮和调优实验的因子——一旦有人把 `settings.planner_temperature`
+# 换回字面量，改设置**静默无效**（本仓吃过这个亏：`from __future__ import annotations`
+# 让 config 注入静默失效那一类洞）。所以这里钉的不是"0.0 这个值"（调优实验结论若指向
+# 别的值就该改默认，那条不该被测试挡住），而是**"planner 读的是设置"这条接线**。
+def test_planner_temperature_comes_from_settings():
+    print("\n[接线] 规划温度取 settings.planner_temperature（不是写死的字面量）")
+    old = settings.planner_temperature
+    settings.planner_temperature = 0.37      # 一个绝不会与字面量撞车的哨兵值
+    try:
+        _out, _rec, llm = _run([_call()])
+    finally:
+        settings.planner_temperature = old
+    check("planner 把哨兵值原样传给了 get_llm",
+          llm.kw.get("temperature") == 0.37, str(llm.kw.get("temperature")))
+    check("默认值是 0.0（确定性那一档，20261006）",
+          old == 0.0, str(old))
+
+
 if __name__ == "__main__":
     for fn in (test_binds_schema_and_takes_the_tool_call_as_the_plan,
                test_multi_call_takes_first_and_accounts,
@@ -381,7 +401,8 @@ if __name__ == "__main__":
                test_chat_on_a_data_question_without_a_uid_is_not_nudged,
                test_truncated_output_goes_to_the_truncation_track,
                test_unparseable_output_is_nudged_once_then_wrapped,
-               test_contract_no_longer_licenses_an_empty_decision):
+               test_contract_no_longer_licenses_an_empty_decision,
+               test_planner_temperature_comes_from_settings):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
     sys.exit(1 if FAILS else 0)
