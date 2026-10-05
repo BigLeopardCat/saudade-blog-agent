@@ -708,7 +708,7 @@ def rag_search(
     list_guestbook / list_talks / get_announcements 数据工具，不要用本工具检索。
     """
     try:
-        from rag.search import search
+        from rag.search import last_route, search
         # 「索引不可用」与「没命中」必须分开（20260917 审计指出）：`search()` 两种情况
         # 都返回 []，此前一律包成 empty("检索无结果") —— 语料拉取失败时会被 checker
         # 记成"检索过、确实没有"的**事实**，正是我上轮给 HTTP 工具修掉的那类问题。
@@ -721,11 +721,19 @@ def rag_search(
         # 8 候选 ≈ 400-600 字——候选选择信息不丢失且体积可控，模型与反射器视野
         # 一致（此前 JSON 全文被 _build_trace 截断 [:100]，反射器只见 top-1 候选，
         # 误判"读了不存在的文档"，见问题记录 1.26）
-        return "\n".join(
+        text = "\n".join(
             f"{i + 1}. type={h['type']} id={h['id']} score={h['score']} "
             f"title={h['title'][:24]}" + (f" 命中节={h['sections'][0][:12]}" if h["sections"] else "")
             for i, h in enumerate(hits)
         )
+        # 走了哪条路**只进 meta**（20261005）：混合与纯词法的出口文本长得一模一样，
+        # 这是"开关拨了却一次没融合"唯一能被看见的地方。文本逐字不变——下游的
+        # `_RAG_ROW_RE` 与 gate 只认那串行，meta 不进提示词、也不影响判决。
+        route = last_route()
+        return ok(text, meta={"rag_mode": route["mode"],          # hybrid | lexical | degraded
+                              "rag_reason": route["reason"],      # degraded 时的原因码
+                              "vector_hits": route["vectors"],    # 向量路贡献了几条候选
+                              "vector_missing": route["missing"]})
     except Exception as exc:
         logger.error("rag_search failed: %s", exc)
         return unavailable(f"检索服务不可用（{type(exc).__name__}）")

@@ -53,8 +53,12 @@ def wire(r: dict) -> str:
 # 20261004：`planner_engine` 那一格删掉了（接口层只剩 native 一条，没有第二个取值可拨
 # ⇒ 一格恒定的"档位"是噪声，见 server.health 的注）。**这个集合是钉死的**：少一格要有人
 # 解释，多一格更要。
+# 20261005：加向量路三格（`rag_hybrid_enabled` / `rag_hybrid_active` / `vector_missing`）。
+# 「开关开着」与「真的在融合」是两件事——后者还要凭据齐、盘上有索引、且索引与语料对齐，
+# 所以两格都要（只有一格的话，"拨了但一次没生效"永远看不见）。
 DIAL_KEYS = {"planner_native_thinking", "agent_task_state",
-             "llm_provider", "llm_model"}
+             "llm_provider", "llm_model",
+             "rag_hybrid_enabled", "rag_hybrid_active", "vector_missing"}
 
 print("① 存活探针那半**逐字不变**（scripts/healthcheck.sh 按子串判活）")
 _old_agent = server._agent
@@ -120,14 +124,40 @@ try:
     settings.llm_provider = "qwen"                 # 让 active_llm_* 打到那份被注入的 key 上
     _body = json.dumps(call(), ensure_ascii=False)
     check("返回体里不含任何密钥取值", SENTINEL not in _body)
-    check("每个档位值都是短标量（str/bool）——长串意味着有人把整个对象挂上去了",
-          all(isinstance(v, (str, bool)) and len(str(v)) <= 64
-              for v in call()["dials"].values()),
-          json.dumps(call()["dials"], ensure_ascii=False))
+    # int 只放行 `vector_missing`（一个计数，20261005）：它是这一格里唯一的"数量"，
+    # 其余仍必须是 str/bool。放宽成"任何标量"会把"整个对象挂上去了"也放进来。
+    _d = call()["dials"]
+    check("每个档位值都是短标量（str/bool；只有 vector_missing 是计数）——"
+          "长串意味着有人把整个对象挂上去了",
+          all((isinstance(v, (str, bool)) or (k == "vector_missing" and isinstance(v, int)))
+              and len(str(v)) <= 64 for k, v in _d.items()),
+          json.dumps(_d, ensure_ascii=False))
 finally:
     for k, v in _saved_keys.items():
         setattr(settings, k, v)
     settings.llm_provider = _saved_provider
+
+print()
+print("④ 向量路三格：**开关开着**与**真的在融合**必须是两件事")
+_saved_rag = {k: getattr(settings, k) for k in
+              ("rag_hybrid_enabled", "embedding_api_key", "embedding_model")}
+try:
+    settings.rag_hybrid_enabled = True
+    settings.embedding_api_key = ""                # 拨了开关、没配凭据：最常见的"以为开了"
+    settings.embedding_model = ""
+    _d = call()["dials"]
+    check("开关开着但凭据缺 ⇒ enabled=True 而 active=False"
+          "（两格回同一件事就等于没有第二格）",
+          _d["rag_hybrid_enabled"] is True and _d["rag_hybrid_active"] is False,
+          json.dumps(_d, ensure_ascii=False))
+    settings.rag_hybrid_enabled = False
+    _d = call()["dials"]
+    check("关掉开关 ⇒ 两格都是 False（.env 写着 1 而进程里是关的，/health 要说得出来）",
+          _d["rag_hybrid_enabled"] is False and _d["rag_hybrid_active"] is False,
+          json.dumps(_d, ensure_ascii=False))
+finally:
+    for k, v in _saved_rag.items():
+        setattr(settings, k, v)
 
 print()
 if FAILED:

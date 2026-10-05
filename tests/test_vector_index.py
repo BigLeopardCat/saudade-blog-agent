@@ -440,6 +440,177 @@ check("run_all 把 RAG_HYBRID_ENABLED 钉成 0（产线 .env 开了也不许影�
       "否则离线套件会去打真 embedding 端点）",
       run_all._PINNED.get("RAG_HYBRID_ENABLED") == "0", str(run_all._PINNED))
 
+# ══════════════════════════════════════════════════════════════════════
+print("\n⑬ 检索层接线：两路都在场才融合，缺一路**逐字节**退回词法")
+
+from array import array as _array  # noqa: E402
+
+import rag.search as SR  # noqa: E402
+
+DOCS = [
+    {"type": "note", "id": 11, "title": "甲篇", "content": "甲乙共同出现的内容"},
+    {"type": "note", "id": 12, "title": "乙篇", "content": "甲乙也出现在这里"},
+    {"type": "note", "id": 14, "title": "丁篇", "content": "只有向量路才够得着的内容"},
+]
+Q = "甲乙"
+
+
+class _Idx(SR.RagIndex):
+    """离线索引：语料直接喂进去（本套件的纪律：不打任何网络）。"""
+
+    def _fetch_corpus(self):
+        return [dict(d) for d in DOCS]
+
+
+def _chunks_of(docs):
+    """与 `RagIndex.build()` 逐字同形的切片（指纹要能对上，否则根本对不齐）。"""
+    return [{**d, "section": c["section"], "text": c["text"]}
+            for d in docs for c in SR.chunk_note(d["title"], d["content"])]
+
+
+def stub_search(texts, space):
+    """让"向量相似度"由**标记**决定（不靠哈希的运气）：丁篇与查询同向，其余正交。"""
+    SENT.append(list(texts))
+    return [[1.0, 0.0] if ("丁篇" in t or t == Q) else [0.0, 1.0] for t in texts]
+
+
+class _HoldWarm:
+    """按住向量预热锁：让后台补建线程在断言期间一次都起不来。
+
+    为什么必须有：`build()` 会踢一脚后台预热（见下面的接线断言），而它是**真会改盘上
+    产物**的（补 missing 那条、写 manifest）——不按住的话，断言变成了"它跑得比我快还是
+    慢"。按住 ≠ 造一个假状态：`warm_async` 抢不到锁就返回，这正是"另一个 worker 正在
+    建"的既有语义。
+    """
+
+    def __enter__(self):
+        V._warm_lock.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        V._warm_lock.release()
+
+
+_src_build = ((ROOT / "rag" / "search.py").read_text(encoding="utf-8")
+              .split("def build(", 1)[1].split("def _fetch_corpus", 1)[0])   # 只看**这个函数体**
+check("`build()` 里确实踢了一脚向量预热（不踢的话盘上那份索引永远等不到人来建）",
+      "warm_vectors(chunks)" in _src_build)
+
+V._embed_texts = stub_search
+CHx = _chunks_of(DOCS)
+stx = fresh("search")
+stx.update(CHx, space())                       # 向量索引与这批 chunk 对齐
+idx = _Idx()
+with _HoldWarm():
+    idx.build()                                # build 只踢一脚后台，不自己联网
+
+lex = idx._lexical_ranked(Q, 8)
+check("词法路：甲乙两篇命中、丁篇不在（否则下面'融合把它带进来'是空断言）",
+      lex is not None and {h["id"] for h in lex} == {11, 12},
+      str(lex and [h["id"] for h in lex]))
+
+fused = idx.search(Q, 8)
+_r = SR.last_route()
+check("两路都在场 ⇒ 走融合（mode=hybrid，无原因码）",
+      _r["mode"] == "hybrid" and _r["reason"] is None, str(_r))
+check("只在向量路出现的丁篇进了最终结果（融合是并集，不是交集）",
+      14 in {h["id"] for h in fused}, str([h["id"] for h in fused]))
+check("向量路确实贡献了 1 条候选", _r["vectors"] == 1, str(_r))
+check("融合分落在 0.0x 那一档（不是把 BM25 原分混着加进来）",
+      max(h["score"] for h in fused) < 0.1, str([h["score"] for h in fused]))
+
+# ── 矩阵：把关掉 / 跑不起来 / 跑了没结果，三种"没融合"分开验 ──
+_n = len(SENT)
+S.rag_hybrid_enabled = False
+off = idx.search(Q, 8)
+check("开关 OFF ⇒ 与词法路**完全相等**（逐字节：原分、原断崖、原候选数）", off == lex,
+      str(off))
+check("开关 OFF ⇒ 一次嵌入调用都没发出去（关了的开关不许偷偷花钱）",
+      len(SENT) == _n, f"{len(SENT) - _n} 次")
+check("开关 OFF ⇒ 路线如实报 lexical / 无原因码（关着是设定，不是降级）",
+      SR.last_route() == {"mode": "lexical", "reason": None, "vectors": 0, "missing": 0},
+      str(SR.last_route()))
+S.rag_hybrid_enabled = True
+
+S.embedding_api_key = ""
+_a = idx.search(Q, 8)
+check("开关 ON 但凭据缺 ⇒ 逐字节 == 词法，且原因码 = missing_credentials",
+      _a == lex and SR.last_route()["reason"] == "missing_credentials", str(SR.last_route()))
+check("……档位是 degraded（凭据没配是故障，不是'一项没找到'）",
+      SR.last_route()["mode"] == "degraded", str(SR.last_route()))
+S.embedding_api_key = "sk-test-not-a-real-key"
+
+S.rag_vector_dir = str(TMP / "search-empty")
+V._store = V.VectorStore(TMP / "search-empty")
+with _HoldWarm():                      # 等价于"另一个 worker 正在建"：warm_async 立刻返回
+    _b = idx.search(Q, 8)
+    _rb = SR.last_route()
+check("盘上还没有索引 ⇒ 逐字节 == 词法，原因码 = warming",
+      _b == lex and _rb["reason"] == "warming", str(_rb))
+
+S.rag_vector_dir = str(TMP / "search")
+V._store = stx
+_real_eq = SR.embed_query
+SR.embed_query = lambda q: None                # 查询嵌不出来（超时/限流/维度不符）
+try:
+    _c = idx.search(Q, 8)
+    _rc = SR.last_route()
+finally:
+    SR.embed_query = _real_eq
+check("查询嵌不出来 ⇒ 逐字节 == 词法，原因码 = query_embed_failed（本轮降级、下轮照常）",
+      _c == lex and _rc["reason"] == "query_embed_failed", str(_rc))
+
+
+class _FakeStore:
+    """视图行数与语料不等（真装在装载时已被不变式②挡住，这里是"万一"那层防线）。"""
+
+    def load(self):
+        return True
+
+    def view_for(self, fp):
+        return V.VectorView([_array("f", [1.0, 0.0])], 2)
+
+    def missing(self):
+        return []
+
+
+_real_store = SR.get_store
+SR.get_store = lambda: _FakeStore()
+try:
+    _d = idx.search(Q, 8)
+    _rd = SR.last_route()
+finally:
+    SR.get_store = _real_store
+check("视图行数 != chunk 数 ⇒ 逐字节 == 词法、原因码 = stale_view（宁可少一路，不可错位打分）",
+      _d == lex and _rd["reason"] == "stale_view", str(_rd))
+
+check("坏掉的都恢复之后自己回到 hybrid（不是一次降级就永久）",
+      idx.search(Q, 8) == fused and SR.last_route()["mode"] == "hybrid",
+      str(SR.last_route()))
+
+# 部分失败：一条 chunk 嵌失败（占零向量）——索引仍可用，但这件事要被看见
+def flaky_mark(texts, sp):
+    SENT.append(list(texts))
+    return [None if "甲篇" in t
+            else ([1.0, 0.0] if ("丁篇" in t or t == Q) else [0.0, 1.0]) for t in texts]
+
+
+stm = fresh("search-miss")
+V._embed_texts = flaky_mark
+stm.update(CHx, space())
+V._embed_texts = stub_search
+idx2 = _Idx()
+with _HoldWarm():           # 按住：否则后台那条会把 missing 补成 0，断言变成抢跑比赛
+    idx2.build()
+    _h = idx2.search(Q, 8)
+check("部分嵌入失败 ⇒ 仍然融合，且路线里带着 missing 计数（部分索引也要能被看见）",
+      SR.last_route()["mode"] == "hybrid" and SR.last_route()["missing"] == 1,
+      str(SR.last_route()))
+check("嵌失败的那篇仍由词法路兜住（不是整篇消失）",
+      {h["id"] for h in _h} == {11, 12, 14}, str([h["id"] for h in _h]))
+
+S.rag_hybrid_enabled = False                   # 交还出厂档，后面的用例不背这个前提
+
 shutil.rmtree(TMP, ignore_errors=True)
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
