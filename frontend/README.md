@@ -33,13 +33,13 @@ git 仓库都等于那个仓在分发它。所以这里没有它，博客仓也�
 ```
 frontend/public/live2d-widgets/
   boot.js          加载器（254 行）：拼 ?v=VER 载入下面几个模块，管理看板娘的显隐/拖拽/工具条
-  renderer.js      渲染层（459 行）：pixi.js + pixi-live2d-display 驱动模型、参数注入、口型
-  chat-stream.js   对话主链路（2268 行）：SSE 帧协议、命令执行、渲染调度
-  chat-engine.js   对话状态机（1363 行）：会话三态、历史拉取、滚动、缓存
+  renderer.js      渲染层（511 行）：pixi.js + pixi-live2d-display 驱动模型、参数注入、口型
+  chat-stream.js   对话主链路（2448 行）：SSE 帧协议、命令执行、渲染调度
+  chat-engine.js   对话状态机（1368 行）：会话三态、历史拉取、滚动、缓存
   chat-session.js  会话抽屉 UI（685 行）：rail / 列表列 / 命名 / 置顶 / 搜索
   chat-core.js     加载期与网络层公共件（226 行）
-  chat-render.js   markdown 渲染与增强（244 行）
-  widget.css       看板娘与面板样式（2012 行）
+  chat-render.js   markdown 渲染与增强（255 行）
+  widget.css       看板娘与面板样式（2166 行）
   lingyue-toggle.png
 frontend/public/live2d_model/
   agent_2.model3.json / .moc3 / .cdi3.json / .physics3.json / 2048/texture_00.png
@@ -65,7 +65,7 @@ frontend/public/live2d_model/
 
 1. `?v=` 缓存版本号：nginx 对这几个路径设了 1 年 immutable，所以改了
    `boot.js` / `widget.css` / `chat-*.js` / `renderer.js` 之后**必须 bump** `boot.js` 里的
-   `VER` 常量（当前 `20261005b`），否则访客浏览器一年都不会更新。
+   `VER` 常量（当前 `20261006a`），否则访客浏览器一年都不会更新。
    同步点在消费端：博客仓 `Live2dAgent/index.tsx` 的 `?v=`、以及设备控制台页面
    （随博客仓的 `iot/` 一起收编，见那边 `frontend/README.md` 的五个同步点表）。
 2. **口型接口签名与净效果一字不能改**：`window.__setMouthOpen` / `__mouthOverride` /

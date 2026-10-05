@@ -188,6 +188,18 @@
         <div class="chat-nav-confirm chat-ask chat-keep" id="chat-ask">
           <div class="nav-question" id="chat-ask-text"></div>
           <div class="chat-nav-btns" id="chat-ask-btns"></div>
+          <!-- 改口输入行（20261006，配合卡上的「其他（我来说）」）：点了那枚按钮就地
+               露出这一行，主人打完字回车，那一轮按**普通新轮**重新规划——此前要改口
+               得先点「取消」再在下面重述一遍。默认 display:none，靠 .active 类
+               显形（**刻意不用 hidden 属性**：.chat-ask-other{display:flex} 是作者
+               样式，会盖过浏览器默认表的 [hidden]{display:none}，届时输入行恒可见
+               而状态位却是"藏着"——同族静默失效本仓记过多次）。
+               注：本段住在 JS 模板串里，注释正文里不能出现反引号。 -->
+          <div class="chat-ask-other" id="chat-ask-other">
+            <input class="chat-ask-other-input" id="chat-ask-other-input" type="text"
+                   placeholder="改成什么？直接说就行" autocomplete="off">
+            <button class="chat-nav-btn yes" id="chat-ask-other-send" type="button">就这样说</button>
+          </div>
         </div>
       </div>
       <div class="chat-new-msg-note" id="chat-new-msg-note"><span>↓ 有新消息</span></div>

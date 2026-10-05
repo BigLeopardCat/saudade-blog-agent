@@ -94,7 +94,7 @@
   // ★ 版本号：nginx 对 live2d-widgets 目录 immutable 缓存 1 年，子模块变更只 bump
   // 这里一处（所有子模块 URL 统一拼 ?v=VER；Live2dAgent/index.tsx 的 boot.js 引用
   // 也需同步 bump——否则浏览器不会重新请求本入口）
-  const VER = '20261005b';
+  const VER = '20261006a';
 
   function loadExternalResource(url, type) {
     return new Promise((resolve, reject) => {

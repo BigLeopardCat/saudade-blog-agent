@@ -33,10 +33,15 @@
       const askBox = document.getElementById('chat-ask');
       const askQuestion = document.getElementById('chat-ask-text');
       const askBtns = document.getElementById('chat-ask-btns');
+      // 卡片里的「改口」输入行（20261006）：卡上「其他（我来说）」那枚按钮点开后
+      // 就地打字（见 chat-stream.js 的 revealAskOther / submitAskOther）。
+      const askOther = document.getElementById('chat-ask-other');
+      const askOtherInput = document.getElementById('chat-ask-other-input');
+      const askOtherSend = document.getElementById('chat-ask-other-send');
 
       // 交互层（chat-stream）经 ctx.dom 访问的 DOM
       ctx.dom = { waifu, chatPanel, messages, input, sendBtn, navConfirm, navQuestion,
-                  askBox, askQuestion, askBtns,
+                  askBox, askQuestion, askBtns, askOther, askOtherInput, askOtherSend,
                   newMsgNote: document.getElementById('chat-new-msg-note') };
 
       // 滚动语义（聊天软件标准，20260828h）：

@@ -48,7 +48,8 @@
       } catch (e) { /* 归位失败不该影响收尾 */ }
     };
     const { messages, input, sendBtn, navConfirm, navQuestion, chatPanel,
-            askBox, askQuestion, askBtns } = ctx.dom;
+            askBox, askQuestion, askBtns,
+            askOther, askOtherInput, askOtherSend } = ctx.dom;
     const scrollToBottom = engine.scrollToBottom;
     const broadcast = engine.broadcast;
     // ── 通用询问卡片（20260921，写操作确认）────────────────────────────────
@@ -162,11 +163,23 @@
       if (!k) return;
       try { localStorage.removeItem(k); } catch (e) {}
     };
+    // 改口输入行的收起（20261006）。放在 askSettle 之前定义：askSettle 要调它，
+    // 而"结算"这条路径上有五个出口，谁都不该自己记得收这一行。
+    const hideAskOther = () => {
+      if (!askOther) return;
+      askOther.classList.remove('active');
+      if (askOtherInput) askOtherInput.value = '';
+    };
     const askSettle = (note, state, result) => {   // 按钮换成一行灰字（卡片留在流里当记录）
       if (askTimer) { clearTimeout(askTimer); askTimer = null; }   // 有结论了就不再倒计时
       // 有结论 = 这张卡到此为止 ⇒ 存档一并作废（见 dropAsk）。少了这一句，刷新之后
       // 一张已经"已过期/已取消/已用过"的卡片会原样回来，而且又是可点的。
       dropAsk(askConvId);
+      // 改口输入行同时收起（20261006）：卡片一旦有结论，再留一个输入框就是"还在这儿
+      // 等你改口"的假象——而这一跳已经不作数了（该说的话请到下面输入框里说）。
+      // 收起**必须**和结算绑在一起、不能只靠调用点各自记得：结算有五个出口
+      // （ok/unknown/expired/cancel/amend），漏一处就留下一个能打字但不作数的框。
+      hideAskOther();
       askBtns.innerHTML = '';
       const el = document.createElement('div');
       el.className = 'chat-ask-note';
@@ -238,6 +251,59 @@
       ctx.state.pendingAsk = null;
       if (shown) askSettle('已取消', undefined, 'cancel');
       else if (askBtns) askBtns.innerHTML = '';
+    };
+    // ── 改口（20261006）：卡上那枚「其他（我来说）」────────────────────────
+    // 用户原话："弹窗是否用改给个 other 选项输入框，而不是点了否再重新输入会话。"
+    // 此前要改口得先点「取消」、再到下面输入框重述一遍：多一步之外，卡片还会先写上
+    // 「已取消」——读起来像"这件事被否了"，而他其实只是想把它说成别的。
+    //
+    // 这一跳**不碰令牌**：提交出去的是**普通新轮**（非 silent、不带 confirmToken/
+    // confirmPick）。于是"一次点头只兑现一次"那条不变量原样成立——令牌没人认领，
+    // 自然到期作废，服务端依旧零状态。planner 照常从零重新规划，而上一轮那张卡
+    // 说了什么**在历史里**（`confirm_text` 走 AI 帧就是为了落库，见 server.py 那段
+    // 注释），指代接得上。
+    //
+    // **顺序是判据**（见 handleAskChoice 里 `other` 那一支）：`other` 不是 `yes` 也
+    // 不是 `pick:<i>`，一旦漏进隐藏确认请求，服务端 `confirm.narrow` 会 fail-closed
+    // 拒掉——卡片结算了、屏幕上一切正常、其实一个字节都没执行。本仓最贵的失效形态。
+    const revealAskOther = () => {
+      if (!askOther) {
+        // 模板缺节点不能静默：用户看到的是"点了按钮什么都没发生"
+        reportConfirm('模板里没有 #chat-ask-other 节点，「其他（我来说）」无处可输入');
+        return;
+      }
+      askOther.classList.add('active');
+      if (askOtherInput) { try { askOtherInput.focus(); } catch (e) {} }
+      scrollToBottom(messages, true);
+    };
+    const submitAskOther = () => {
+      const ask = ctx.state.pendingAsk;
+      if (!ask || !askOtherInput) return;
+      const text = String(askOtherInput.value || '').trim();
+      if (!text) return;          // 空提交什么都不做：卡片保持可点，确定/取消都还在
+      // 忙判据与 handleAskChoice、sendMessage 里的那几处**同源**，且必须**先于结算**：
+      // 反过来的顺序（先结算、再发现发不出去）就是"卡片说改了、系统里什么都没有"。
+      if (ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length) {
+        reportConfirm('在卡片里改口时此刻有轮次在跑（本窗发送中/别的窗口回复中）'
+                      + '——卡片保留，待收尾后再提交');
+        return;
+      }
+      // 到这里才结算，且先摘待办再结算：不摘的话下面 sendMessage 的
+      // `if (!silent && ctx.state.pendingAsk) hideAsk()` 会再结算一次（两次结论）。
+      // 结论用 amend 而不是 cancel——对账读的就是"取消了几次 / 改口了几次"。
+      // click 这一跳报在**这里**而不是点开输入框那一刻（那一支的注释写了理由）：
+      // 一次提交 = 一跳 click + 一跳 settle，跳数配平才不会被读成"点了没结论"。
+      ctx.state.pendingAsk = null;
+      reportAskStage('click', { id: String(ask.id || ''), value: 'other' });
+      askSettle('这次不算，按你说的来', undefined, 'amend');
+      // 非 silent ⇒ 走**普通发言**那条路（用户气泡、落库、广播、命令执行全都一样）。
+      // sendMessage 读的是主输入框（`input.value`），所以先把话回填进去——「重发」
+      // 那条路径用的也是这一手（见 restoreAndCleanup）。代价：主输入框里若正压着
+      // 半句草稿，会被这一轮带走（它随后被清空）；与重发路径逐字同款，不为此另造
+      // 一条只给卡片用的发送通道（那会让"用户发言"有两条实现，早晚漂）。
+      input.value = text;
+      resizeInput();
+      sendMessage();
     };
     // 问句渲染（20260925）：与气泡走同一套 markdown 管线（applyMsg → renderMarkdown
     // + 渲染后增强）。此前是 `textContent`，问句里的 `**全部**`、列表、行内代码会被
@@ -317,11 +383,20 @@
       askBox.dataset.askId = String(ask.id || '');   // 埋点用（非凭据，见 askIdOf）
       setAskQuestion(ask.q);
       askBtns.innerHTML = '';
+      // 重建 = 这是一张**新**卡（令牌换了，或上一次发出去被打回）⇒ 改口输入行回到
+      // 收起态、不留上一张卡打了一半的字。注意上面那条"已就位就提前返回"的判据
+      // 管着另一半：同一张卡被 reconcile/自愈重新调到这里时**不会**执行到这一行，
+      // 所以已经点开、正打着字的输入行不会被 DOM 重建吞掉。
+      hideAskOther();
       (ask.opts || []).forEach((op) => {
         const b = document.createElement('button');
         b.type = 'button';
-        // 复用导航确认框的按钮样式（.chat-nav-btn yes/no），观感与它完全一致
-        b.className = 'chat-nav-btn ' + (op.value === 'no' ? 'no' : 'yes');
+        // 复用导航确认框的按钮样式（.chat-nav-btn yes/no），观感与它完全一致。
+        // 三档（20261006）：取消=no（灰）、其他（我来说）=other（按 no 那档的观感，
+        // 它不是"同意"）、其余=yes（主色）。少了 other 这一档，「其他」会被画成
+        // 主按钮——卡上同时出现两枚"看起来都是同意"的红按钮。
+        b.className = 'chat-nav-btn '
+                      + (op.value === 'no' ? 'no' : (op.value === 'other' ? 'other' : 'yes'));
         b.textContent = op.label || '确定';
         b.setAttribute('data-ask-value', op.value || 'yes');
         askBtns.appendChild(b);
@@ -2270,6 +2345,19 @@
       const handleAskChoice = (value) => {
         const ask = ctx.state.pendingAsk;
         if (!ask) return;
+        // **卡片内改口（20261006）**：不结算、不发任何请求，只把输入行露出来，卡片
+        // 保持 live（主人还能改主意去点确定或取消）。必须排在下面那两个出口**之前**
+        // ——`other` 既不是 `'no'` 也不是 `yes`/`pick:<i>`，漏下去就会被当成一次确认：
+        // 服务端 `confirm.narrow` 对认不出的取值 fail-closed（零执行），而卡片已经
+        // 写成「确认中…」⇒ 屏幕上看不出异常、系统里一个字节都没动。
+        // **这一支刻意不报 click**：点开输入框不是"对这张卡做了结论"，真正的点击是
+        // 提交那一刻（submitAskOther 里报）。这里报一条会变成 click=2/settle=1，
+        // 而对账把"点了却没有任何结论"读成线索（eval/trace_reconcile.py）——一条
+        // 由正常操作造出来的假线索，比不报更难查。
+        if (value === 'other') {
+          revealAskOther();
+          return;
+        }
         // 链路第三跳：用户**真的点了**（此前只有被忙守卫挡下才留痕，"点了但什么都没
         // 发生"与"压根没点"在日志里分不开）。放在最前面：这一次点击本身就是事实。
         reportAskStage('click', { id: String(ask.id || ''), value });
@@ -2320,6 +2408,19 @@
         if (!btn) return;
         handleAskChoice(btn.getAttribute('data-ask-value'));
       });
+      // 改口输入行上的两枚触发点（20261006）：按钮与回车。它们**不在** askBtns 里
+      // （是卡片里的兄弟节点），所以直接绑、不走上面那条委托。
+      // 回车那一支带 IME 判据：中文输入法合成中按回车是"选字"，不是"提交"——
+      // 少了这一条，打「改成写公告」会在选第一个词的时候把半截拼音发出去。
+      if (askOtherSend) askOtherSend.addEventListener('click', () => submitAskOther());
+      if (askOtherInput) {
+        askOtherInput.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter') return;
+          if (e.isComposing || e.keyCode === 229) return;   // 合成中：这一下是选字
+          e.preventDefault();
+          submitAskOther();
+        });
+      }
       // 自愈钩子（20260923）：每次 reconcileDOM 收尾调一次 syncAsk——DOM 被整段
       // 重建（拉历史/切会话回来/未来的新清理逻辑）之后，只要待办还在，卡片就在
       // 下一次 reconcile 自动回到消息流末位。注册走引擎既有的 setConvUI（多处注册
