@@ -793,6 +793,11 @@ _TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 doc
                           "$<工具名>[<序号>].<字段>，见规则 3b）",
     "list_notes": "分页列文章",
     "get_weather": "查天气（location：城市名，缺省北京）",
+    # 这三条**不许**写"要取更早的用 offset=N"（20261005 实测）：写了之后 planner 会在
+    # **每一轮**都显式带上 `offset=0`（一次 4 条调用里两条是它），既多跑一遍同一次读取，
+    # 又撞上"带参调用覆盖无参点名"的剔重路径。取回方式改写进**帧尾注记**——只在列表真的
+    # 被封顶时出现，见 `tools/base.py::_cap_rows` 的 offset 分支。这是本仓一贯的
+    # "按需披露"：菜单不预告用不上的参数，需要它的那一刻由系统注记当面说。
     "list_guestbook": "无参直取：留言板（河灯集）列表",
     "list_talks": "无参直取：说说（动态/碎语）列表",
     "get_announcements": "无参直取：博客公告列表",
@@ -8715,9 +8720,17 @@ def _cap_frame_text(text: str, used: int) -> tuple[str, dict | None]:
     `used` = 本轮**已经**进过提示词的帧字符数（执行器是逐 spec 追加的，所以它天然是
     累计口径）。两级：先按单帧硬顶，再按"已用 + 本条"对单轮总量顶。
 
-    **截断必须说出口**：尾部追加〔系统注记〕写明原始长度与保留长度。悄悄砍掉半截
-    返回，等于让模型把"我看到的就是全部"当成事实——这是本仓一以贯之的那条纪律
-    （同 `_rows_with_note`、`trace.tool_result_text` 的截断标记）。
+    **截断必须说出口**：中间插一条〔系统注记〕写明原始长度、两头各留多少、中间省了
+    多少。悄悄砍掉半截返回，等于让模型把"我看到的就是全部"当成事实——这是本仓一以
+    贯之的那条纪律（同 `_rows_with_note`、`trace.tool_result_text` 的截断标记）。
+
+    **为什么是头尾各半而不是只留头部**（20261005 修）：帧的**尾巴**上住着事实，不只是
+    收尾的括号。`_rows_with_note` 把 `〔系统注记〕本次只带回最近 60 条，留言共 137 条`
+    追加成列表的最后一个元素，`get_article_detail` 的帧末也常是尾部小节的正文；只留
+    头部时，封顶一触发就把这条总数注记整条切掉，而 `entities._note_total` 正是读它报
+    总数的 ⇒ **跨轮实体摘要会把"共 137 条"说错**（切口自己把注记吞了，是"截断必须说
+    出口"这条纪律在另一个方向上的反面）。注记放**中间**而不是尾部，是因为它标记的正是
+    缺口的位置：两头都在、中间没了。
     """
     raw = len(text)
     keep = min(raw, _FRAME_HARD_MAX)
@@ -8728,10 +8741,19 @@ def _cap_frame_text(text: str, used: int) -> tuple[str, dict | None]:
             keep, why = room, "turn"
     if not why:
         return text, None
-    marker = f"〔系统注记〕本条工具返回过长，已截断（原始 {raw} 字，此处保留前 {keep} 字）。"
-    logger.warning("[execute] 帧文本过长，已截断：raw=%d kept=%d used=%d why=%s",
-                   raw, keep, used, why)
-    return text[:keep] + "\n" + marker, {"raw": raw, "kept": keep, "why": why}
+    head = (keep + 1) // 2          # 奇数时头部多留 1 字
+    tail = keep - head
+    omitted = raw - head - tail
+    marker = (f"〔系统注记〕本条工具返回过长，已截断（原始 {raw} 字，保留开头 {head} 字"
+              f"与结尾 {tail} 字，省略中间 {omitted} 字）。")
+    logger.warning("[execute] 帧文本过长，已截断：raw=%d kept=%d head=%d tail=%d used=%d why=%s",
+                   raw, keep, head, tail, used, why)
+    info = {"raw": raw, "kept": keep, "why": why, "head": head, "tail": tail, "omitted": omitted}
+    if tail <= 0:
+        # 常量取值使 keep >= _FRAME_MIN_KEEP 恒成立，所以这条分支今天走不到；留着是因为
+        # `text[-0:]` 会**静默退化成全文**（截断变成没截断），比截错更难查。
+        return text[:head] + "\n" + marker, info
+    return text[:head] + "\n" + marker + "\n" + text[-tail:], info
 
 
 def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
@@ -9576,8 +9598,14 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     slow = dur > 30
     (logger.warning if slow else logger.info)(
         "[model] LLM %s（narrator）耗时=%.1fs", "慢调用" if slow else "完成", dur)
+    # `prompt_chars`（20261005）：把**调用前**量到的字符数与 provider **调用后**报的实测
+    # token 放进同一条事件。两者此前从不出现在一起（字符数只在 >_PROMPT_OVERSIZE_CHARS
+    # 时才单独记一条 `prompt_oversize`），于是既算不出字符/token 比，也无法回头校准那个
+    # 阈值——它今天是拍出来的，不是量出来的。**不能拿 token 顶替字符数**：provider 的
+    # usage 只有响应之后才有，调用前唯一的信号就是字符数；所以是两个都记，互补而非取舍。
+    # 重试那一支也成立：`_prompt_chars` 量的是 `_msgs`，重试用的是同一份 `_msgs`。
     record("model", "llm_done", duration_s=round(dur, 2),
-           **usage_fields(resp), **({"slow": True} if slow else {}))
+           prompt_chars=_prompt_chars, **usage_fields(resp), **({"slow": True} if slow else {}))
     return {"messages": [resp]}
 
 

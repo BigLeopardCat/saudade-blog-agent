@@ -307,7 +307,7 @@ _LIST_FIELD_MAX = 500
 _LIST_FIELD_KEYS = ("content", "talkContent", "留名")
 
 
-def _cap_rows(rows: list, limit: int, noun: str) -> tuple[list, str]:
+def _cap_rows(rows: list, limit: int, noun: str, offset: int = 0) -> tuple[list, str]:
     """行数封顶：超上限只保留**最新的** limit 行，返回 `(行, 截断说明)`。
 
     上游序即"最新在前"（`list_by_src` 按 `CreatedAt DESC, Id DESC`）⇒ `rows[:limit]`
@@ -316,11 +316,36 @@ def _cap_rows(rows: list, limit: int, noun: str) -> tuple[list, str]:
     没触发时说明是空串——调用方拼进注记的那一步因此今天一字不变。
     **说明里必须写总数**：跨轮执行记忆的实体摘要（`entities._entry_digest`）读的就是
     这一句，不写总数就等于让系统在跨轮记忆里把"M 条"说成"limit 条"。
+
+    `offset > 0` = **取回更早的**（20261005）：上游三个列表接口都没有 limit/offset，
+    完整列表在本地，所以分页在 Python 侧做（`rows[start:start + limit]`）。没有这一步，
+    封顶就只说了"还有更早的"而没说"怎么取"——planner 手上没有任何取回手段。
+    号段写进注记（`第 A-B 条`）而不是让调用方自己算，是因为**同一条注记同时喂给
+    `entities._note_range`**：跨轮摘要据它说"第 61-120 条"，不会把"取回来的这一页"
+    错说成"最近的一页"。
+
+    两个分支的**「共 N 条」子串**必须一字不差地留着（`entities._note_total` 的正则是
+    `共 (\\d+) 条`），口径一漂，跨轮摘要的总数就跟着漂。
     """
     total = sum(1 for r in rows if isinstance(r, dict))
-    if total <= limit:
-        return list(rows), ""
-    return list(rows[:limit]), f"本次只带回最近{limit}条，{noun}共 {total} 条（更早的未列入）。"
+    if offset <= 0:
+        # 今天的行为**逐字节不变**（除了把"更早的未列入"换成可取回的写法）。
+        if total <= limit:
+            return list(rows), ""
+        return list(rows[:limit]), (
+            f"本次只带回最近{limit}条，{noun}共 {total} 条"
+            f"（更早的还有；要取更早的，带上 offset={limit} 再调一次）。")
+    start = max(0, offset)
+    window = list(rows[start:start + limit])
+    if not window:
+        # ⚠ 这里返回**空列表**是安全的，因为调用方紧接着会 `_rows_with_note` 挂上注记
+        # ⇒ 出口帧非空、`kind` 仍是 `ok`。若哪个调用方把注记去掉，裸 `[]` 会被 checker
+        # 判成 `empty_result` 并拒绝进跨轮执行记忆——那是另一个事实，别让它悄悄发生。
+        return [], f"offset={start} 已超出范围：{noun}共 {total} 条，没有更早的了。"
+    end = start + len(window)
+    tail = ("（已到末尾，没有更早的了）。" if end >= total
+            else f"（更早的还有；要取更早的，带上 offset={end} 再调一次）。")
+    return window, f"本次带回第 {start + 1}-{end} 条，{noun}共 {total} 条{tail}"
 
 
 def _clip_fields(rows: list, cap: int) -> list:
@@ -743,14 +768,19 @@ def list_tags() -> str:
 # ---------------------------------------------------------------------------
 
 @tool
-def get_announcements() -> str:
-    """获取博客公告列表。"""
+def get_announcements(
+    offset: Annotated[int, "（可选）跳过最新的多少条，用于取回更早的公告；默认 0"] = 0,
+) -> str:
+    """获取博客公告列表（默认带回最新的那批，注记里写明一共多少条）。
+
+    列表比一次能带的多时，只带回最新的一批；帧尾注记会写明一共多少条、**以及**
+    取回更早那一页要填的 `offset`——照注记写的填即可，不必自己猜。"""
     data = _get("/announcements")
     if isinstance(data, list):
         # 只封顶行数、**不封字段**（20261005）：公告是管理员写的，正文常是长文，
         # 单条详情另有 get_article_detail 的 announcement 分支；在这里截正文等于
         # 让"公告里到底写了什么"永远读不全。
-        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "公告")
+        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "公告", offset)
         if capped:
             data = _rows_with_note(data, capped)
     return _shape(data)
@@ -760,8 +790,13 @@ def get_announcements() -> str:
 # ---------------------------------------------------------------------------
 
 @tool
-def list_guestbook() -> str:
-    """获取留言板（河灯留言）列表。
+def list_guestbook(
+    offset: Annotated[int, "（可选）跳过最新的多少条，用于取回更早的留言；默认 0"] = 0,
+) -> str:
+    """获取留言板（河灯留言）列表（默认带回最新的那批，注记里写明一共多少条）。
+
+    留言比一次能带的多时，只带回最新的一批；帧尾注记会写明一共多少条、**以及**
+    取回更早那一页要填的 `offset`——照注记写的填即可，不必自己猜。
 
     ⚠ **只列已通过审核的留言**（上游 `talks.rs::list_by_src` 恒 `filter(Approved=1)`，
     与留言板页面看到的完全一致）。所以"列表里没有"**不等于"这条留言不存在"**——
@@ -786,7 +821,7 @@ def list_guestbook() -> str:
         # 读帧的人（planner 与 narrator）都要看得见这条边界：上游恒按 Approved=1 过滤，
         # "列表里没有"不是"这条不存在"。不写这一句，帧就只在**数量**上沉默，而
         # "站内没有这条留言"这个结论会被当成列表给的事实（20260928 现场那条就是）。
-        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "留言")
+        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "留言", offset)
         data = _board_text_keys(data)
         data = _clip_fields(data, _LIST_FIELD_MAX)
         data = _rows_with_note(
@@ -803,8 +838,13 @@ def list_guestbook() -> str:
 # ---------------------------------------------------------------------------
 
 @tool
-def list_talks() -> str:
-    """获取说说（动态/碎语）列表。
+def list_talks(
+    offset: Annotated[int, "（可选）跳过最新的多少条，用于取回更早的说说；默认 0"] = 0,
+) -> str:
+    """获取说说（动态/碎语）列表（默认带回最新的那批，注记里写明一共多少条）。
+
+    说说比一次能带的多时，只带回最新的一批；帧尾注记会写明一共多少条、**以及**
+    取回更早那一页要填的 `offset`——照注记写的填即可，不必自己猜。
 
     ⚠ **只列已通过审核的**（同上游过滤器）：列表里没有**不等于**这条不存在，别据此
     下"站内没有"的结论（理由同 list_guestbook）。
@@ -813,7 +853,7 @@ def list_talks() -> str:
     """
     data = _get("/talk")
     if isinstance(data, list):
-        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "说说")
+        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "说说", offset)
         data = _board_text_keys(data)
         data = _clip_fields(data, _LIST_FIELD_MAX)
         data = _rows_with_note(

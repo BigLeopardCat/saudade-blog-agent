@@ -4,13 +4,18 @@
 被测 = 20261005 那一批"无界输入变有界"的改动：
 
   · `tools/base.py::_cap_rows` / `_clip_fields`（列表类工具的行数/字段封顶）
-  · `agent/entities.py::_note_total`（跨轮摘要必须跟着说真话）
-  · `agent/graph.py::_cap_frame_text`（帧文本的单帧硬顶 + 单轮总量顶）
+    ＋ `_cap_rows(offset=…)`（**取回更早的那一页**，20261005 收口）
+  · `agent/entities.py::_note_total` / `_note_range`（跨轮摘要必须跟着说真话）
+  · `agent/graph.py::_cap_frame_text`（帧文本的单帧硬顶 + 单轮总量顶，**头尾各半**）
   · `agent/context.py::_frame_texts(article_pointer=…)`（正文不再投喂两遍）
 
 判据的核心不是"封顶生效了"，而是**没到上限时一个字节都不变**——三个上限的取值都是
 "今天够不着"的量级（20261005 实测：board 25 行 / talk 11 行 / 公告 9 行，最长单帧
 26,887 字）⇒ 防线必须是**潜伏**的。所以每条都成对写：触顶长什么样、不触顶长什么样。
+
+20261005 收口那批加的两条判据同样是"成对"的：① 截断后**帧尾**的内容还在不在
+（只留头部时列表帧尾的『共 N 条』会整条消失，而跨轮摘要正是读它）；② 取回的那一页
+会不会被说成"最近 N 条"（会的话跨轮记忆就把第 61 条当成最新的了）。
 """
 import ast
 import sys
@@ -86,6 +91,45 @@ check("工具出口：注记仍带着那条既有的审核边界事实（没被�
 check("工具出口：行序未变 ⇒ `$ref` 下标（第 0 行）仍是最新那条",
       dict_rows[0]["talkId"] == 1000, str(dict_rows[0])[:60])
 
+# 取回更早的那一页（offset>0，20261005）：光说"还有更早的"不够，得**能取回来**
+rows3, note3 = base._cap_rows(_board_rows(200), base._LIST_ROWS_MAX, "留言", 60)
+check("offset=60 ⇒ 带回第 61-120 条（**不是**最新那批）",
+      [r["talkKey"] for r in rows3] == [1000 - i for i in range(60, 120)], str(len(rows3)))
+check("注记写明号段、总数与下一个 offset",
+      "第 61-120 条" in note3 and "共 200 条" in note3 and "offset=120" in note3, note3)
+check("★ 号段与总数都从**同一条注记**读得出（跨轮摘要靠它认这是哪一页）",
+      entities._note_total(base._rows_with_note(rows3, note3)) == 200
+      and entities._note_range(base._rows_with_note(rows3, note3)) == (61, 120),
+      str(entities._note_range(base._rows_with_note(rows3, note3))))
+
+rows4, note4 = base._cap_rows(_board_rows(200), base._LIST_ROWS_MAX, "留言", 180)
+check("翻到末页 ⇒ 明写『已到末尾』（不让 planner 继续空转）",
+      len(rows4) == 20 and "已到末尾" in note4 and "共 200 条" in note4, note4)
+
+rows5, note5 = base._cap_rows(_board_rows(25), base._LIST_ROWS_MAX, "留言", 500)
+check("★ offset 超范围 ⇒ 零行 + 说明里仍带总数（**绝不静默给空**）",
+      rows5 == [] and "共 25 条" in note5 and "超出范围" in note5, note5)
+
+base._get = lambda path, **kw: _board_rows(200)
+try:
+    off_out = _parse(base.list_guestbook.invoke({"offset": 60}))
+finally:
+    base._get = _real_get
+off_rows = [r for r in off_out if isinstance(r, dict)]
+check("★ 新形参真的接到了纯函数（工具出口第一行 = 第 61 条）",
+      len(off_rows) == 60 and off_rows[0]["talkId"] == 940, str(off_rows[0])[:40])
+
+base._get = lambda path, **kw: _board_rows(200)
+try:
+    far_out = base.list_guestbook.invoke({"offset": 5000})
+finally:
+    base._get = _real_get
+far_parsed = _parse(far_out)
+check("★ offset 超范围时出口帧**非空**（只有那条注记 ⇒ `kind` 仍是 ok，"
+      "裸 `[]` 会被 checker 判 empty_result 并拒绝进跨轮执行记忆）",
+      len([r for r in far_parsed if isinstance(r, dict)]) == 0 and len(far_parsed) == 1
+      and "共 200 条" in far_parsed[0], str(far_parsed)[:70])
+
 # ── ② 字段封顶 ───────────────────────────────────────────────────────────────
 print("② 自由文本字段封顶：只改值、不动结构")
 
@@ -135,17 +179,33 @@ check("★ 没被裁过时摘要口径不变（仍是『最近25条』，一个�
       entities.receipt_digest("list_guestbook", repr(uncapped))[:30])
 check("没有注记时 `_note_total` 安静地给 0（不猜）",
       entities._note_total(uncapped) == 0)
+check("没有号段时 `_note_range` 安静地给 None（不猜）",
+      entities._note_range(uncapped) is None)
+
+dig_off = entities.receipt_digest("list_guestbook", repr(base._rows_with_note(rows3, note3)))
+check("★ 翻页拉回来的那一页**绝不说成『最近 N 条』**（否则跨轮记忆把第 61 条当最新）",
+      "第61-120条/共200条" in dig_off and "最近" not in dig_off, dig_off[:50])
 
 # ── ④⑤ 帧文本封顶 ───────────────────────────────────────────────────────────
 print("④⑤ 帧文本封顶：单帧硬顶 + 单轮总量顶，且截断必须写出来")
 
-big = "甲" * (_FRAME_HARD_MAX + 5000)
+big = "甲" * (_FRAME_HARD_MAX + 5000) + "尾部哨兵"
+raw_len = len(big)
 capped, info = _cap_frame_text(big, 0)
 check(f"单帧超 {_FRAME_HARD_MAX} ⇒ 截到硬顶", info and info["kept"] == _FRAME_HARD_MAX
       and info["why"] == "frame", str(info))
-check("截断处带〔系统注记〕，写明原始长度与保留长度",
-      "已截断" in capped and f"原始 {len(big)} 字" in capped
-      and f"保留前 {_FRAME_HARD_MAX} 字" in capped, capped[-60:])
+check("头尾各半（奇数时头部多 1 字），省掉的就是中间那段",
+      info["head"] + info["tail"] == info["kept"] and info["head"] - info["tail"] <= 1
+      and info["omitted"] == raw_len - info["kept"], str(info))
+check("截断处带〔系统注记〕，写明原始长度与两头各留多少",
+      "已截断" in capped and f"原始 {raw_len} 字" in capped
+      and f"保留开头 {info['head']} 字" in capped
+      and f"结尾 {info['tail']} 字" in capped, capped[len(capped) // 2 - 40:][:90])
+check("★ **帧尾的内容在截断后仍逐字在场**（这是本改动的全部理由：列表帧的"
+      "『共 N 条』就住在尾巴上，只留头部会把它整条切掉）",
+      capped.endswith("尾部哨兵") and capped.startswith(big[:info["head"]]), capped[-20:])
+check("★ 注记落在**中间**——它标记的是缺口的位置，不在尾部",
+      "已截断" not in capped[-12:], capped[-14:])
 
 small = "乙" * 1000
 same, info2 = _cap_frame_text(small, 0)
