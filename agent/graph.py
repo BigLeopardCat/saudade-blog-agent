@@ -4913,7 +4913,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 预算取 settings 的 native 三项（见 config/settings.py 的注）：思考链会先把额度
     # 吃掉，沿用文本档的 400/30s 会让 arguments 断在半截（finish_reason=length）。
     llm = bind_native(get_llm(
-        temperature=0.2,
+        temperature=settings.planner_temperature,
         max_tokens=settings.planner_native_max_tokens,
         timeout=settings.planner_native_timeout,
         enable_thinking=settings.planner_native_thinking), role,
