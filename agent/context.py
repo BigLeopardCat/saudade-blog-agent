@@ -108,6 +108,32 @@ _SITE_GUIDE_TAIL = "看访客发来的图片并描述内容/颜色。"
 _SITE_GUIDE_CLOSING = ("介绍能力时按此完整列出，不要遗漏；反过来，**清单之外的动作一律"
                        "不许承诺**——做不到就直接说做不到，别用「我可以…」试探。")
 
+# 留言驳回后的可见性（20261005）：一条**站内事实**，长期缺供的那一格。
+#
+# 现场（`admin_board_question_no_popup`「把留言驳回了，作者自己还能看到吗？」）：51 次
+# 历史 trace 里这条用例的回答**什么说法都有**——「站内文档里没有查到」占多数、「作者
+# 本人是看不到的」（`20261003_040257` 等）、「只有你自己在后台能看到」、少数才答对。
+# **两个方向都在编**，说明模型手上根本没有这条事实。
+#
+# 为什么不能只靠 `GUESTBOOK_GUIDE`：它由 `_GUESTBOOK_URL_RE`（/guestbook|/he）在**留言板
+# 的 URL 上**注入，而问这条问题的是**后台里的管理员**（current_url=/dashboard）——恰恰是
+# "回不了"的那一类。所以写进 `site_guide()`：它经 `_attach_page_guide` **每轮无条件**
+# 追加进 `_page_ctx`，而 `_page_ctx` 正是 planner 与 narrator **共用**的那份页面上下文。
+#
+# **单独成句、挂在能力清单之外**：混进上面 `base/admin` 的枚举会让"能不能做"的边界跟着
+# 漂（那一段有 `_SITE_GUIDE_CLOSING` 与 `tests/test_capability_truth.py` 管着）。
+#
+# 措辞只覆盖**留言**（不写公告）：公告族没有"我的河灯"这个作者侧出口，把它们并进同
+# 一句会让模型对着公告问题也照念一遍 —— 那正是"供给一句话、答错另一件事"。
+# 事实依据逐字核对过：`src/routes/talks.rs:116-117`（公开列表只放行 approved=1，
+# 「我的河灯」返回本人全部状态）、`Dashboard/BoardManage/index.tsx:320`（驳回 tooltip
+# 「不公开展示，仅发布者在灯影集『我的河灯』可见」）、`adminops.py` 的「现在：未通过」。
+_SITE_GUIDE_BOARD_FACT = (
+    "另一条站内事实（被问「留言被驳回后作者自己还看得到吗」时以此为准）：留言被驳回 ="
+    "只对**访客**隐藏，**留言的作者本人**在「我的河灯」里**仍然看得到**那条（显示为未通过）；"
+    "后台的「待审(0)」与「未通过(2)」是两回事——驳回不是删除。"
+)
+
 
 def _dashboard_clause() -> str:
     """/dashboard 各面板的板块短语（**从 skills.DASHBOARD_PANELS 渲染**，20260926）。
@@ -145,7 +171,12 @@ def site_guide(role: str | None = None) -> str:
     out = _SITE_GUIDE_HEAD + "后台面板：" + _dashboard_clause() + "。" + f"你能做的：{caps}"
     if admin:
         out += _ADMIN_GUIDE_HEAD + "；".join(admin) + "。"
-    return out + _SITE_GUIDE_CLOSING
+    # 站内事实**单独成句**挂在能力清单之后、收束句之前（20261005, A5）：不进上面那两段
+    # 枚举——`_SITE_GUIDE_CLOSING` 与 `test_capability_truth.py` 管的是"能不能做"的边界，
+    # 掺进一句"事实"会让那条边界跟着漂。仍在收束句**之前**是因为既有两处锁死
+    # `site_guide(...).endswith(_SITE_GUIDE_CLOSING)`（`test_capability_truth.py:180`、
+    # `test_skills.py:4186`）——清单的收束句必须真的是最后一句。
+    return out + "\n" + _SITE_GUIDE_BOARD_FACT + "\n" + _SITE_GUIDE_CLOSING
 
 
 # 无角色渲染（模块级常量）：既有导入点与 test_skills 的板块覆盖断言仍以此为准。
@@ -1094,7 +1125,7 @@ def _compact_list_frame(text: str, budget: int,
 
 
 def _frame_texts(messages: list, limit: int = 5, per: int = 300,
-                 drop_tools: set | None = None) -> str:
+                 drop_tools: set | None = None, article_pointer: bool = False) -> str:
     """最近的工具返回摘要（planner 下一轮决策依据 / narrator 叙述依据）。
 
     只取最近 limit 条。截断策略按帧型：普通帧（检索候选/列表）截 per 字符
@@ -1137,7 +1168,24 @@ def _frame_texts(messages: list, limit: int = 5, per: int = 300,
         elif text.startswith("__ERROR__"):
             parts.append(f"工具 {name} 返回错误: {text}")
         elif name == "get_article_detail" and len(text) <= _DETAIL_FRAME_PER:
-            parts.append(f"工具 {name} 返回: {text}")
+            # 不给正文的第二次露面（20261005）：未超预算时这一格的 `text` 与
+            # `state["messages"]` 里那条原始 ToolMessage **逐字节相同**，而 narrator
+            # 两条都拿得到 ⇒ 同一份正文在它的提示词里出现两遍（实测 note 19 一篇
+            # 26,887 字 ≈ 53,800 字符）。删掉这里那份**零信息损失**——指针指向的那条
+            # 消息就是原文。**只有 narrator 传 True**：planner / reflector / 第二条臂
+            # 的上下文里原始帧不在手（或语义不同），动了它们就是真丢材料。
+            #
+            # 指针句必须写"与本记录同等效力"：`NARRATOR_DISCIPLINE` 第 2 条要求叙述
+            # 只能来自工具执行记录，不这么写会把它读成"系统说正文不可用"而不敢引用。
+            #
+            # 超预算那一支（下面）**一个字节都不动**：那时两份内容**不同**（这里是
+            # `sections.frame_excerpt` 的按节节选、原始帧是全文），删掉就真少了东西。
+            if article_pointer:
+                parts.append(
+                    f"工具 {name} 返回：正文全文已随本条工具返回下发（原文 {len(text)} 字，"
+                    f"未截断，与本记录同等效力）；此处不复述，引用正文请以那条消息为准。")
+            else:
+                parts.append(f"工具 {name} 返回: {text}")
         elif name == "get_article_detail":
             # 20260920：超长文章改**按小节**取舍（sections.frame_excerpt），不再逐字硬截。
             # 旧实现（`text[:20000]`）的问题是**无声**——正文在一句话中间断掉，模型

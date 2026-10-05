@@ -103,6 +103,28 @@ def _join(parts: list[str], max_len: int = _DIGEST_MAX) -> str:
     return "/".join(out)
 
 
+_NOTE_TOTAL_RE = re.compile(r"共 (\d+) 条")
+
+
+def _note_total(data) -> int:
+    """从帧尾的〔系统注记〕里读"共 N 条"（列表工具封顶时写进去的总数）。没有则 0。
+
+    为什么摘要要读它：`tools/base.py::_cap_rows` 按上限裁行之后，`len(rows)` 只剩
+    上限条数，而摘要这条要说的恰恰是**站点里一共多少条**。不读总数就等于让系统在
+    跨轮执行记忆里把 137 条说成 60 条——那是**系统自己**说假话，比模型编还坏。
+    注记是**非 dict 尾元素**（同 `_rows` 的过滤口径），所以这里显式跳过 dict 找字符串。
+    """
+    if not isinstance(data, list):
+        return 0
+    for x in data:
+        if isinstance(x, dict):
+            continue
+        m = _NOTE_TOTAL_RE.search(str(x))
+        if m:
+            return int(m.group(1))
+    return 0
+
+
 def _entry_digest(data) -> str:
     """留言板/说说：序号 + 分类 + 内容首段（序号是"第二条"能对号的关键）。
 
@@ -121,7 +143,10 @@ def _entry_digest(data) -> str:
         if not body:
             continue
         items.append(f"{i}.〔{cat}〕「{body}」" if cat else f"{i}.「{body}」")
-    return f"最近{len(rows)}条: " + _join(items) if items else ""
+    total = _note_total(data)
+    # 只在本轮**真的**被裁过（总数 > 手上条数）时才改口径，否则输出与从前逐字节相同。
+    head = f"最近{len(rows)}条/共{total}条" if total > len(rows) else f"最近{len(rows)}条"
+    return f"{head}: " + _join(items) if items else ""
 
 
 def _category_digest(data) -> str:

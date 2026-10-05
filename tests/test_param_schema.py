@@ -570,6 +570,57 @@ def test_wiring():
           f"{sig} / {p['tools']}")
 
 
+def test_param_name_alias_layer():
+    print("\n[参数名归一] 多数派叫法撞在少数派技能上时，搬到真正的槽（有护栏）")
+    # 现场（20261005 `announcement_update_zero_write`，历史 33 次里 5 次）：planner 发
+    # `{"name": …}`，公告族收的是 `title` ⇒ `title` 落进 missing ⇒ 零工具 ⇒ 回落 chat。
+    # 根因是 tag/category/账号族一律叫 `name`、公告族叫 `title`，而系统只把 `name`
+    # 记进 `param_unknown`（不进纠偏注记）⇒ planner 看不出值就在手上。
+    p = S.instantiate_plan("announcement_update", {"name": "维护通知", "new_title": "维护通知2"})
+    check("★ 公告族的 `name` 被搬到 `title`，工具真的展开出来了",
+          p["tools"] == ['update_announcement({"title": "维护通知", "new_title": "维护通知2"})'],
+          str(p["tools"]))
+    check("  搬迁记账（不许静默——系统改写了 planner 填的参数）",
+          p["param_alias"] == [{"src": "name", "dst": "title"}], str(p.get("param_alias")))
+    check("  搬走的名字**不再**报「没人读」",
+          p["param_unknown"] == [], str(p["param_unknown"]))
+    for sk, params in (("announcement_delete", {"name": "维护通知"}),
+                       ("announcement_create", {"name": "新公告", "content": "x"}),
+                       ("tag_create", {"name": "新标签"}),
+                       ("category_create", {"name": "新分类"})):
+        q = S.instantiate_plan(sk, params)
+        check(f"  {sk}：同样归一", q["tools"] != [] and q.get("param_alias"), str(q["tools"]))
+
+    # ── 护栏：`src ∉ specs` ────────────────────────────────────────────────
+    # `name` 在 11 个技能里是**合法**字段（tag_update/tag_delete/category_update/
+    # category_delete/account_freeze/account_unfreeze/account_set_role/mute_account/
+    # unmute_account/quota_reset 以及下面这条 notice_send）⇒ 规则对它们一律不触发。
+    p = S.instantiate_plan("notice_send", {"name": "guest5", "title": "你好", "content": "x"})
+    check("★★ 反例锁：`send_user_notice` 的 `name`（收件人）**不许**被搬去当标题",
+          p.get("param_alias") in (None, []) and
+          'send_user_notice({"name": "guest5"' in (p["tools"][0] if p["tools"] else ""),
+          str(p["tools"]))
+    p = S.instantiate_plan("tag_update", {"name": "老标签", "new_title": "新标签"})
+    check("  反例锁：`update_tag` 的 `name` 是本技能的合法字段 ⇒ 不搬",
+          p.get("param_alias") in (None, []) and p["tools"] != [], str(p["tools"]))
+
+    # ── 护栏：dst 已有值不覆盖 ─────────────────────────────────────────────
+    p = S.instantiate_plan("announcement_update", {"name": "另一个", "title": "已有的标题"})
+    check("★ `title` 已有值 ⇒ 不动它，`name` 照旧进 param_unknown（双写不猜）",
+          p.get("param_alias") in (None, []) and p["param_unknown"] == ["name"],
+          f'{p.get("param_alias")} / {p["param_unknown"]}')
+    p = S.instantiate_plan("announcement_update", {"name": "A", "title": "", "new_title": "B"})
+    check("  空串等同没填（沿用 pydantic 那套「空串缺省值」口径）",
+          p["tools"] == ['update_announcement({"title": "A", "new_title": "B"})'],
+          str(p["tools"]))
+
+    # ── 纯函数、入参不被就地改写 ───────────────────────────────────────────
+    params = {"name": "维护通知"}
+    S.instantiate_plan("announcement_update", params)
+    check("归一**不改调用方的 dict**（返回的是新对象）", params == {"name": "维护通知"},
+          str(params))
+
+
 def main():
     for fn in (test_specs_derive_from_tool_schema,
                test_declared_exceptions_are_the_known_three,
@@ -583,6 +634,7 @@ def main():
                test_enum_closure_zeroes_tools_before_pydantic,
                test_alias_normalized_params_stay_open,
                test_param_unknown_is_filled_by_every_branch,
+               test_param_name_alias_layer,
                test_wiring):
         fn()
     if FAILS:

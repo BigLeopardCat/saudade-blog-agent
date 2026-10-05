@@ -239,6 +239,57 @@ def test_content_query_pairs_the_two_sources_from_one_place():
           full.count("成对") == 1, f"命中 {full.count('成对')} 次")
 
 
+def test_dual_source_pairing_is_deterministic():
+    """成对点名那条契约的**另一半**：确定性兜底（20261005）。
+
+    契约（prompt）管不住 11% 的轮次——历史主线 46 次真跑里 5 次没凑齐两个工具，其中
+    3 次是"选了 content_query 但清单只写了一半"（trace `20260927_225533` /
+    `20261003_210132` / `20261005_065251`，缺的都是 `list_talks`）。这里钉住兜底：
+    **意图门控 + 恰好点名一个**才补，别的一律不碰。
+    """
+    print("\n[契约·兜底] 只点名一个数据源时确定性补齐（意图门控，先窄后宽）")
+    P = G._pair_dual_sources
+    prod = "留言板里有人聊过 RAG 的本质吗？"          # golden `rag_talk_rag` 原话
+
+    _, added = P("content_query", {"tools": ["list_guestbook"]}, prod)
+    check("★ 只点名 list_guestbook ⇒ 补上 list_talks", added == ["list_talks"], str(added))
+    _, added = P("content_query", {"tools": ["list_talks"]}, prod.replace("留言板", "说说"))
+    check("  方向对称：只点名 list_talks ⇒ 补上 list_guestbook",
+          added == ["list_guestbook"], str(added))
+    out, added = P("content_query", {"tools": ["list_guestbook"]}, prod)
+    check("  补的是**新对象**里的清单（不改调用方的 dict）",
+          out["tools"] == ["list_guestbook", "list_talks"], str(out["tools"]))
+
+    # ── 不触发面（每一条都是语料里真实存在的原话）──────────────────────────
+    for m in ("小猫咪有没有关于这方面的留言",      # 没点名数据源（也不含「留言板」）
+              "你刚才说的那个留言板在哪里呀",       # 导航意图，无查询动词
+              "我正在读这篇架构文章，顺便带我去留言板看看",
+              "把樱花打开，然后带我去留言板",
+              "带我去留言板"):
+        _, a = P("content_query", {"tools": ["list_guestbook"]}, m)
+        check(f"  不触发：{m}", a == [], str(a))
+    _, a = P("content_query", {"tools": ["list_guestbook", "list_talks"]}, prod)
+    check("  不触发：本来就点了两个（补齐是空操作）", a == [], str(a))
+    _, a = P("content_query", {"tools": ["search_notes"]}, prod)
+    check("  不触发：一个数据源都没点名（零个 ≠ 漏一个）", a == [], str(a))
+    _, a = P("chat", {"tools": ["list_guestbook"]}, prod)
+    check("  不触发：技能不是 content_query（路由判断不归这里管）", a == [], str(a))
+    _, a = P("content_query",
+             {"tools": ["list_guestbook"],
+              "calls": [{"tool": "list_talks", "args": {}}]}, prod)
+    check("  不触发：缺的那个已在 calls 里带参点名过（不算漏一半）", a == [], str(a))
+
+    # ── 接线：真跑 planner_node，补齐要落到计划文本上 ──────────────────────
+    reply = AIMessage(content="", tool_calls=[
+        {"name": "content_query", "args": {"tools": ["list_guestbook"]},
+         "id": "c1", "type": "tool_call"}])
+    out, _ = _run_planner(reply, msg=prod)
+    specs = G.parse_plan(out["plan"]).get("tools") or []
+    check("★ 接线：planner 只点一个 ⇒ 计划里两个工具都在",
+          len(specs) == 2 and specs[0].startswith("list_guestbook(")
+          and specs[1].startswith("list_talks("), str(specs))
+
+
 def test_slim_only_changes_rendering_not_judgements():
     """slim 只影响渲染：可选集合与参数规格一个字都不受影响。"""
     print("\n[边界] slim 不碰判据（谁能选 / 参数规格 / schema 本身）")
@@ -277,7 +328,7 @@ class _FakeLLM:
         return self.reply
 
 
-def _run_planner(reply):
+def _run_planner(reply, msg: str = _MSG):
     """真跑一次 `planner_node`，回 `(出参, 假 LLM)`。
 
     ⚠️ 20261004 起**没有档位可设**：接口层只剩 native 一条（文本契约档连同
@@ -289,7 +340,7 @@ def _run_planner(reply):
     old_get = G.get_llm
     G.get_llm = lambda **kw: llm           # noqa: ARG005
     try:
-        out = G.planner_node({"messages": [HumanMessage(content=_MSG)], "plan_rounds": 0,
+        out = G.planner_node({"messages": [HumanMessage(content=msg)], "plan_rounds": 0,
                               "executed": [], "tool_data": []}, _CFG)
     finally:
         G.get_llm = old_get
@@ -329,6 +380,7 @@ if __name__ == "__main__":
                test_planner_contract_is_rendered_in_both_arms,
                test_planner_contract_lives_only_in_the_prose_block,
                test_content_query_pairs_the_two_sources_from_one_place,
+               test_dual_source_pairing_is_deterministic,
                test_slim_only_changes_rendering_not_judgements,
                test_wiring_planner_really_sends_the_slim_block):
         fn()
