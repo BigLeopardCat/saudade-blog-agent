@@ -80,9 +80,15 @@ _eval_code = "\n".join(ln for ln in _eval.splitlines() if not ln.lstrip().starts
 check("CI 的 lint 步骤从项目环境取 ruff（uv run --frozen ruff）",
       "uv run --frozen ruff" in _eval_code and "uvx ruff" not in _eval_code)
 _pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-_m = re.search(r'^dev\s*=\s*\[\s*"ruff==([0-9.]+)"\s*\]', _pyproject, re.M)
+# 判据 = "dev 分组里钉着 ruff 的版本"，**不是**"dev 分组里只有 ruff"。
+# 20261005 前这里写的是 `^dev\s*=\s*\[\s*"ruff==…"\s*\]`——它顺手把"唯一一项"也判了进去，
+# 于是给 dev 组加第二个包（那天加的是第二条臂要的 langchain）就会让这条红，
+# 而它红的时候说的却是"没找到 dev = [\"ruff==X\"]"，与真因（数组多了一项）差着一层。
+# 现在按**分组体**取：先切出 [dependency-groups] 这一节，再在里面找 ruff 的钉死项。
+_dg = re.search(r'^\[dependency-groups\](?P<body>.*?)(?=^\[|\Z)', _pyproject, re.M | re.S)
+_m = re.search(r'"ruff==([0-9.]+)"', _dg.group("body")) if _dg else None
 check("pyproject 的 [dependency-groups] dev 钉了 ruff 版本",
-      _m is not None, _m.group(1) if _m else '没找到 dev = ["ruff==X"]')
+      _m is not None, _m.group(1) if _m else "dependency-groups 里没有钉死的 ruff==")
 if _m:
     _pin = _m.group(1)
     # 本机命令散在文档里写的是 `uvx ruff@X`（隔离环境，不碰产线 venv）：**必须同版**。
