@@ -4881,6 +4881,33 @@ def test_write_grounding_round():
               "没有能指认" in _n3 and "原话" in _n3, _n3[:160])
         check("  零执行 + 禁止句齐备",
               "一个字节都没有改动" in _n3 and "不许" in _n3)
+        # ③ 结构化产出物（20261006）：拒绝这件事不能只活在一段散文里。此前
+        #    `_no_popup_fact` 对每一轮都给**通用三分**（没有能力/缺目标/别问要不要办），
+        #    它与上面那段具体结论并排写给 narrator——两条规则打架的地方（policy /
+        #    ledger_id 明明写着"别请他换个说法重试"）由模型自己挑。现在拒绝的理由
+        #    进 `plan_obj["refusal"]`，`_no_popup_fact` 按 `source` 换掉那三分。
+        #    来源这一格**如实反映是哪条通道拒的**：这一句走的是**片段通道**
+        #    （`quote_refuse`，留言族没有标题、只能按正文片段指认），所以是 `quote`
+        #    而不是 `grounding`——两者的话术不同、给 narrator 的出口也不同。
+        _ref = (out3.get("plan_obj") or {}).get("refusal")
+        check("拒绝轮的 plan_obj 带结构化 refusal（工具/来源/缺什么）",
+              _ref == {"tool": "delete_board_comment", "source": "quote",
+                       "missing": "target"}, str(_ref))
+        _f_ref = G._no_popup_fact(out3)
+        check("  有 refusal ⇒ 尾巴改成「照上面那条结论说」，不再给通用三分",
+              "就是全部" in _f_ref and "只问那一项" in _f_ref
+              and "直接说做不到" not in _f_ref and "就问清那个目标" not in _f_ref,
+              _f_ref[-120:])
+        check("  事实段（没有写操作 / 不许说等着点头）一个字都不许少",
+              "一个写操作都没提出来" in _f_ref and "待确认的卡片" in _f_ref)
+        # 反向：**缺键就是"不是拒绝轮"**，逐字节回到旧文本（这套通用三分今天锁着一大批
+        # 用例，不能被这次改动悄悄换掉）
+        _no_ref = {"plan": plan3, "plan_obj": {k: v for k, v in out3["plan_obj"].items()
+                                               if k != "refusal"}}
+        _f_plain = G._no_popup_fact(_no_ref)
+        check("  没有 refusal 的轮次照旧通用三分（缺键 ≠ 编一个默认值出来）",
+              "直接说做不到" in _f_plain and "就问清那个目标" in _f_plain
+              and "就是全部" not in _f_plain, _f_plain[-120:])
     finally:
         G.get_llm, TB._board_index = _orig_llm, _orig_board
 
