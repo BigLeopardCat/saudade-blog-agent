@@ -5077,6 +5077,16 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             native_note = "；".join(decided.notes)
         record("planner", "native_decision", skill=skill_name, round=rounds,
                calls=tool_call_names(decided), finish=decided.finish_reason,
+               # **臂的身份证**（20261006）：调参实验要能回答"这份 trace 是哪一组
+               # 旋钮跑出来的"，而此前 planner 的参数在 trace 里**一个字都没有**——
+               # 换臂跑完一堆报告，谁也说不清哪份对应哪臂（种子若是塞错位置被服务商
+               # 静默忽略，读数还会很好看）。记在 LLM 响应这条事件上：它就是那次调用
+               # 的产物。四条都是**读设置**，与 `get_llm` 的实际入参同源。
+               provider=settings.llm_provider,
+               model=str(getattr(settings, "active_llm_model", "") or ""),
+               temp=settings.planner_temperature,
+               seed=settings.llm_seed,
+               thinking=bool(settings.planner_native_thinking),
                **({"note": native_note} if native_note else {}))
 
         # 主人明说"不要调用任何工具" ⇒ 这一轮的计划降成 `chat`（见 `_forbids_tools`

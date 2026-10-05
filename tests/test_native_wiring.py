@@ -388,6 +388,27 @@ def test_planner_temperature_comes_from_settings():
           old == 0.0, str(old))
 
 
+# ── ⑭ 臂的身份证：trace 里必须能读出这次是哪组旋钮跑的 ───────────────────
+# 为什么值得钉：调参实验的全部意义是"逐臂比较"，而在此之前 planner 的温度/种子/
+# 模型在 trace 里**一个字都没有**——一堆报告跑完，谁也说不清哪份对应哪臂。
+def test_decision_event_carries_the_arm_identity():
+    print("\n[接线] native_decision 带臂的身份证（provider/model/temp/seed/thinking）")
+    _out, rec, _llm = _run([_call()])
+    nd = _events(rec, "native_decision")
+    check("恰好一条", len(nd) == 1, str(nd))
+    e = nd[0] if nd else {}
+    check("温度那一格 == planner_temperature（与 get_llm 同源）",
+          e.get("temp") == settings.planner_temperature, str(e.get("temp")))
+    check("种子那一格 == llm_seed",
+          e.get("seed") == settings.llm_seed, str(e.get("seed")))
+    check("provider 与 model 都在",
+          e.get("provider") == settings.llm_provider
+          and e.get("model") == settings.active_llm_model,
+          f"{e.get('provider')}/{e.get('model')}")
+    check("thinking 那一格在（native 三项的第三项）",
+          e.get("thinking") == settings.planner_native_thinking, str(e.get("thinking")))
+
+
 if __name__ == "__main__":
     for fn in (test_binds_schema_and_takes_the_tool_call_as_the_plan,
                test_multi_call_takes_first_and_accounts,
@@ -402,7 +423,8 @@ if __name__ == "__main__":
                test_truncated_output_goes_to_the_truncation_track,
                test_unparseable_output_is_nudged_once_then_wrapped,
                test_contract_no_longer_licenses_an_empty_decision,
-               test_planner_temperature_comes_from_settings):
+               test_planner_temperature_comes_from_settings,
+               test_decision_event_carries_the_arm_identity):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
     sys.exit(1 if FAILS else 0)
