@@ -144,6 +144,20 @@ r2 = st.update(CH, space())
 check("语料没变 ⇒ 不再打一次 API（对齐短路）",
       r2.get("skipped") == "aligned" and len(SENT) == n, f"skipped={r2.get('skipped')}")
 
+# 20261005 线上实测抓出来的：短路条件里比的是 **chunk 槽位数**还是**唯一文本数**，
+# 只在"语料里有重复文本"时才分得开——上面那批（正文互不相同）两种写法都过。
+# 线上 322 槽位 / 265 唯一 ⇒ 写成唯一数时条件恒假，短路从未生效（每次刷新全量重写
+# 1.1MB、代数 +1）。所以判据必须用**重复文本**的语料：空正文小节就是天然的重复源
+# （chunk 文本 = 标题 + 正文，正文为空时同篇诸节逐字相同）。
+CHD = CH + [C(2, "B", "标题二", "正文丙")]        # 与 CH[2] 的 chunk 文本逐字相同
+std = fresh("dup")
+std.update(CHD, space())
+n = len(SENT)
+rd = std.update(CHD, space())
+check("语料里有**重复 chunk 文本**时，对齐短路仍然生效（槽位数 ≠ 唯一文本数）",
+      rd.get("skipped") == "aligned" and len(SENT) == n,
+      f"skipped={rd.get('skipped')} 唯一文本={len(set(_order(CHD)))} 槽位={len(CHD)}")
+
 CH2 = [dict(c) for c in CH]
 CH2[1]["text"] = "正文乙改"
 r3 = st.update(CH2, space())
@@ -409,6 +423,8 @@ check("关了开关：degraded_reason() 是 None（关着是设定，不是降�
 _before = V.route_status()
 check("关了开关：route_status 说清楚了（enabled=False / active=False）",
       _before["enabled"] is False and _before["active"] is False, str(_before))
+check("关了开关：state=off（与「开着但坏了」分得开——混成一个词，故障就被淹掉）",
+      _before["state"] == "off", str(_before))
 
 S.rag_hybrid_enabled = True
 S.embedding_api_key = ""
