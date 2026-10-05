@@ -14,12 +14,13 @@ run_golden.py 逐字一致，复跑也走独立子进程）：复跑仍红=真 F
 必须响——首跑红与复跑绿两条都进报告（cases[].rerun / regression.flaked_ids /
 failed_first_run）与汇总打印。复跑的 trace 用 `<case>__rerun` 名，首跑那份不被覆盖。
 """
-import io, json, os, signal, subprocess, sys, time
+import argparse, io, json, os, signal, subprocess, sys, time
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
 sys.path.insert(0, "eval")
 import report_archive   # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
 import golden_trace     # 同目录：trace 开关 + 靠 trace 才判得动的 gold 键（见下面的闸）
 import golden_arm       # 同目录：选臂/分栏（20261004，见 eval/golden_arm.py 头注）
+import corpus_provenance  # 同目录：语料出处闸（与 run_golden.py 共用同一个判据）
 
 # 这一轮跑哪条臂：在**起第一个子进程之前**解析并响亮失败——臂名拼错要当轮炸掉，
 # 不能跑完 18 分钟才发现报告落错了栏。子进程经环境变量继承（本脚本不穿 argv 管道），
@@ -33,7 +34,14 @@ os.makedirs(_REPORTS_DIR, exist_ok=True)
 # 是哪一条跑的（子进程读的是同一份代码、同一套判据，只有 `GOLDEN_ARM` 不同）。
 print(f"[full] arm={_ARM}（engine={golden_arm.engine_for(_ARM)}，留档 {_REPORTS_DIR}/）", flush=True)
 
-CASES = [json.loads(l) for l in open("eval/golden/basic.jsonl", encoding="utf-8") if l.strip()]
+# 用例文件可换（20261006，与 run_golden.py 的 `--golden` 同义）：出处声明必须住在它旁边
+# （同目录的 provenance.json），所以两个跑法都从**用例文件路径**推出处声明。
+_ap = argparse.ArgumentParser(description="全量 golden（逐条独立子进程）")
+_ap.add_argument("--golden", default="eval/golden/basic.jsonl",
+                 help="换一份用例文件（默认 eval/golden/basic.jsonl）；出处声明要在同目录")
+_ARGS = _ap.parse_args()
+_PROV_FILE = corpus_provenance.provenance_path_for(_ARGS.golden)
+CASES = [json.loads(l) for l in open(_ARGS.golden, encoding="utf-8") if l.strip()]
 # 需要**真实身份**的用例（管理员读后台 20260921；普通用户被拒那条 20260924）：口径与
 # run_golden.py 逐字一致——两条通道（GOLDEN_ADMIN_UID / GOLDEN_USER_UID），未设就明确
 # 跳过并打印（如实计入分母变化，不静默豁免）。
@@ -97,17 +105,38 @@ if not golden_trace.enabled():
             print(f"[skip] {_cid}: SKIP (判据要读 planner.ledger_frame trace 事件，"
                   f"而 {golden_trace.ENV_OFF} 关着 trace —— 未评估，不是模型退化)",
                   flush=True)
+# 语料出处闸（20261006，判据与文案在 eval/corpus_provenance.py，与 run_golden.py 共用
+# 同一个函数）：这一轮评的是不是**原来那块地**。**排在起第一个子进程之前**是本跑法特有
+# 的理由——它一次摘光全部用例，而一次全量要烧约 18 分钟；闸放在跑完之后等于让那 18 分钟
+# 白跑（run_golden.py 那边逐条在进程内跑，代价没这么集中，但两边的判据与退出码一字不差）。
+_CORPUS_BAD = False
+_CORPUS_SNAP = corpus_provenance.snapshot_docs()
+_CORPUS_STATE, _CORPUS_DETAIL, _CORPUS_ROW = corpus_provenance.check_corpus_premises(
+    _CORPUS_SNAP, _PROV_FILE)
+if _CORPUS_STATE == corpus_provenance.CORPUS_PROV_FOREIGN:
+    _CORPUS_BAD = True
+    _SKIPPED_IDS += [c["id"] for c in CASES]
+    _n_corpus = len(CASES)          # 先记下来：下面 `CASES` 就被清空了
+    CASES = []
+for _line in corpus_provenance.report_lines(_CORPUS_STATE, _CORPUS_DETAIL, _CORPUS_ROW):
+    print(_line, flush=True)
+if _CORPUS_BAD:
+    print(f"[corpus-premise] ⇒ {_n_corpus} 条用例**全部未评估**（未评估 ≠ 通过；退出码 3）",
+          flush=True)
 # 空分母（20260925）：全部被摘掉时**不许往下走**——本脚本的收尾统计会对空序列取
 # min()/P50（ValueError），构造报告时还会除零；就算不炸，打印出来的也是"0/0 通过 = 100%"
 # 那种静默的绿，而这一轮什么都没评。口径与 run_golden.py 一致：退出码 2；**前提类闸**
-# （trace 关着）造成空分母时报 3（同 run_golden.py 的判据），因为那是"前提不可用"而不是
-# "你自己把用例摘光了"。
+# （trace 关着 / 语料不是这一份）造成空分母时报 3（同 run_golden.py 的判据），因为那是
+# "前提不可用"而不是"你自己把用例摘光了"。
 if not CASES:
-    _code = 3 if _TRACE_SKIPPED else 2
-    print("[full] ⚠ 一条用例都没剩下（被身份闸 / 真写闸 / 夹具闸 / trace 闸摘干净了）"
-          f"—— 这一轮**没有评测任何东西**：空分母不是一个通过率，退出码 {_code}（不是 0）"
+    _code = 3 if (_TRACE_SKIPPED or _CORPUS_BAD) else 2
+    print("[full] ⚠ 一条用例都没剩下（被身份闸 / 真写闸 / 夹具闸 / trace 闸 / 语料出处闸"
+          f"摘干净了）—— 这一轮**没有评测任何东西**：空分母不是一个通过率，退出码 {_code}"
+          "（不是 0）"
+          + ("；其中**语料不是这套 golden 的那一份**是主因（[corpus-premise] 那几行有"
+             "锚点对账）" if _CORPUS_BAD else "")
           + ("；其中 trace 关着是主因（那几条用例的判据要读 trace 事件）"
-             if _TRACE_SKIPPED else ""), flush=True)
+             if _TRACE_SKIPPED and not _CORPUS_BAD else ""), flush=True)
     sys.exit(_code)
 RUNNER = "eval/golden_case_runner.py"
 TMPDIR = "/tmp/golden_cases"
@@ -245,6 +274,10 @@ _TAGS_MAP = {r["id"]: r["tags"] for r in results}
 # 这里先留空位，写之前补上：名字与报告里那一格因此恒成对，中间也无需预告一个可能
 # 被顺延的戳。
 report = {"ts": "", "corpus": "full", "total": len(CASES), "passed": len(CASES) - failed,
+          # 语料出处对账（20261006）：与 run_golden.py 同名字段同源——这一轮的语料到底
+          # 是不是这套 golden 的那一份（锚点命中几篇、语料多少篇）。两个跑法的报告形状
+          # 一致，读的人不必先问"这是哪个跑法写的"。
+          "corpus_provenance": _CORPUS_ROW,
           # 接口层（20260927 主线批 A）：与 run_golden.py 同名字段**同源**（`engine_for`
           # 是唯一实现）。20261004 起这一格还承载"哪条臂"：graph 臂仍逐字 `"native"`
           # （历史基线与它同档），试验臂是 `"native+<臂>"`。见 eval/golden_arm.py。

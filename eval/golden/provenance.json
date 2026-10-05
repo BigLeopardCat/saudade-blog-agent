@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "declared_for": {
+    "api_base": "https://saudade.site/api/public",
+    "note": "这份 golden（basic.jsonl）的每一条期望都锚在**这个站点**的文章上：require_doc_terms 的术语表从这些正文里派生，检索用例期望命中的也是这几篇。换一份语料去跑，判据一定对不上——而红的样子与「模型退化」一模一样，读的人会去改一个根本没坏的模型。"
+  },
+  "anchors": [
+    {"title": "ESP32-S3-OBC固件接入参考", "why": "note:14 —— 多篇聚合用例申报了它（require_doc_terms，strict）"},
+    {"title": "IoT 设备接入物联网平台指南", "why": "note:22 —— 与上一篇成对，聚合用例两条 require_exec_args 的另一半"},
+    {"title": "ESP32-S3 OTA 问题与解决记录", "why": "note:12 —— 检索族用例的期望命中目标"},
+    {"title": "Saudade Blog AI Agent（泠月喵）架构文档", "why": "note:19 —— 站内被问得最多的一篇，多条用例的结果落在它身上"},
+    {"title": "Git从入门到入土", "why": "note:16 —— 与 IoT 一族毫不相干：挡的是「语料只是长得像」这种情况"}
+  ],
+  "min_present": 3,
+  "_how": "判据的唯一实现在 eval/corpus_provenance.py::check_corpus_premises（比对时去掉标题里全部空白再比，锚点取标题的子串即算命中）；声明住在**用例文件旁边**（provenance.json）这条契约由那个模块的 provenance_path_for 保证。这份声明本身由 tests/test_golden_corpus_provenance.py 离线守着。改这里等于改「这一轮评的是哪块地」，动手前先想清楚。"
+}
