@@ -161,6 +161,38 @@ class Settings(BaseSettings):
     # 迁移到新机器时若 Rust 不在 3000，改这一项。
     graph_api_base: str = "http://127.0.0.1:3000/api/public"
 
+    # ── 向量 + RRF 混合检索（20261005）───────────────────────────────
+    # 检索有两路：词法（`rag/search.py` 的 BM25，恒在）与向量（本块配置的
+    # embedding 端点）。**开关只有这一个值**（`rag_hybrid_enabled`）：关掉 = 逐字节
+    # 退回今天的纯词法输出（含 BM25 原分与相对断崖），不是"少一路、分数换个尺度"。
+    # 语料小的时候词法基线本身就打满（22 query 实证），要开多半是为了"语料长大 /
+    # 语义型 query 变多"，所以**出厂默认关**——按文章规模自己拨，与 `iot_enabled`
+    # / `agent_task_state` 同一条纪律。
+    #
+    # 向量模型**独立配置、供应商不进代码**：任何 OpenAI 兼容的 embeddings 端点都行。
+    # 用聚合平台的话，把 `QWEN_BASE_URL` / `QWEN_API_KEY` 的值**复制**过来一份：
+    #   EMBEDDING_BASE_URL=<与 QWEN_BASE_URL 同值>
+    #   EMBEDDING_API_KEY=<与 QWEN_API_KEY 同值>
+    #   EMBEDDING_MODEL=<聚合平台上的 embedding 模型名，如 text-embedding-v4>
+    # ⚠️ 刻意**不**回落 `active_llm_*`（20260927 的教训，见 rag/wordgraph.py:169）：
+    # 跟着 active provider 走，切到一个没有 embeddings 端点的 provider 就会哑掉，
+    # 而且哑得没有声音。独立一份 = 换对话模型不会顺带打断向量路。
+    # 代价是换聚合平台要改两处，这是"独立配置"的必然代价，不替它们做隐式绑定。
+    rag_hybrid_enabled: bool = False       # RAG_HYBRID_ENABLED=1/true/yes/on
+    embedding_api_key: str = ""            # EMBEDDING_API_KEY
+    embedding_base_url: str = ""           # EMBEDDING_BASE_URL（留空 = SDK 默认端点）
+    embedding_model: str = ""              # EMBEDDING_MODEL（留空 = 未配置，向量路不可用）
+    # 0 = **不向 API 传 `dimensions`**，以返回向量的长度为准（不同供应商支持度不一，
+    # 传了可能 400）。想要固定维度才填，填了则校验返回长度必须一致。
+    embedding_dim: int = 0                 # EMBEDDING_DIM
+    embedding_batch_size: int = 10         # EMBEDDING_BATCH_SIZE（聚合平台单请求上限）
+    embedding_timeout: float = 15.0        # EMBEDDING_TIMEOUT（查询向量在热路径上，别设大）
+    # 查询向量的内存 LRU。**只进内存不落盘**：查询串是访客可控的无界输入，落盘会长成
+    # 一个没人清理的文件。语料侧的缓存是另一回事（内容寻址、落 data/rag_vectors/）。
+    embedding_query_cache: int = 256       # EMBEDDING_QUERY_CACHE
+    rrf_k: int = 60                        # RRF_K（标准常量；k 越大对低排名越宽容）
+    rag_vector_dir: str = "data/rag_vectors"   # RAG_VECTOR_DIR
+
     # ── Logging ─────────────────────────────────────────────────────
     log_level: str = "INFO"
 
@@ -192,6 +224,17 @@ class Settings(BaseSettings):
     def is_api_key_configured(self) -> bool:
         key = self.active_llm_api_key
         return bool(key) and key != "your-api-key-here"
+
+    @property
+    def embedding_configured(self) -> bool:
+        """向量路**凭据**是否齐（key 与 model 都非空）。
+
+        只判"配置齐没齐"，不判"向量库建好没建好"——后者是运行时状态，判据在
+        `rag/vector_index.py::degraded_reason()`。两件事分开，是因为它们各自的
+        处置不同：配置缺 = 这个部署从来没打算开向量路；库没建好 = 正在建 / 建挂了。
+        """
+        key = self.embedding_api_key.strip()
+        return bool(key) and key != "your-api-key-here" and bool(self.embedding_model.strip())
 
 
 settings = Settings()

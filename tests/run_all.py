@@ -58,7 +58,14 @@ TESTS = ROOT / "tests"
 # 服务。不钉住的话，它们全会按"没装"那一档跑，然后集体红——而红的原因不是代码坏了，
 # 是**判据与档位错配**。钉成 1 = "既有判据跑在装了的那一档"，关掉那一档另有
 # `tests/test_iot_switch.py` 专门验（它自己在子进程里把开关设成 0）。
-_PINNED = {"AGENT_TASK_STATE": "0",
+#
+# `RAG_HYBRID_ENABLED=0`（20261005）：混合检索同样是**可选件**，而出厂默认是关的
+# （`config/settings.py` 那段注）。不钉的话有个很隐蔽的后果——产线 `.env` 一开这个
+# 开关，本机跑离线套件就跟着走混合档：① 判据绿的理由变成"这台机器装了哪份 .env"
+# （与 `SAUDADE_IGNORE_ENV_FILE` 那一条同族）；② 更要命的是**会去打真 embedding
+# 端点**——离线套件的纪律是"秒级、无网络、无 LLM"，这一条破了不只是慢，是它在
+# 本机花的钱/CI 上的必然超时。要验混合档的套件自己在子进程/构造 Settings 里开。
+_PINNED = {"AGENT_TASK_STATE": "0", "RAG_HYBRID_ENABLED": "0",
            "SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
 
 
