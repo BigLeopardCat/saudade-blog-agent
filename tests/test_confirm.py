@@ -228,6 +228,19 @@ check("公告原句弹得出卡（裸名词「要求/注意」不是疑问锚）
       and _popup("小猫咪替我发个公告，要求全体用户今晚务必早睡！", PLAN_ANN) is not None
       and _popup("帮我发个公告，提醒大家注意身体", PLAN_ANN) is not None
       and _popup("[当前问题]: 帮我发个公告说明今晚更新，注意提前保存", PLAN_ANN) is not None)
+# 同一条死路的**另外两个词位**（20261006 实测：20260925 把裸**名词**句式化了，裸**短语**
+# 与引号里的问号漏在表里 ⇒ 同一条死路换了词复发）。判据的收窄在 `graph._question_words_
+# are_prose`（否决位改成"有前提的否决"），这里是它的**行为面**锁：
+check("疑问词住在**引号内容**里 ⇒ 不是主人在问，卡照弹",
+      _popup("帮我发个公告，正文写「今晚几点睡？」", PLAN_ANN) is not None)
+check("疑问词住在**后半句的补充正文**里（命令骨架在前）⇒ 同样是内容，卡照弹",
+      _popup("帮我发个公告，说说这次活动有什么注意事项", PLAN_ANN) is not None
+      and _popup("帮我发个公告，告诉大家站内有多少新功能", PLAN_ANN) is not None)
+check("真在问的照旧不弹——句尾收在疑问语气词上时，**哪怕句首有命令骨架**",
+      _popup("帮我发个公告好吗", PLAN_ANN) is None
+      and _popup("帮我把公告发出去行吗", PLAN_ANN) is None)
+check("  但句尾的「吧 / 了」是吩咐不是问（别把语气词一律当问号）",
+      _popup("帮我发个公告吧", PLAN_ANN) is not None)
 check("同一张表没被收窄过头：真提问照样不弹",
       _popup("公告的标题和正文要怎么写", PLAN_ANN) is None
       and _popup("发公告有什么注意事项", PLAN_ANN) is None
