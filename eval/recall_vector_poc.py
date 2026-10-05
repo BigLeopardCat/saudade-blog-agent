@@ -7,6 +7,8 @@
   → 文档级聚合取最高分 chunk——与 BM25 的"chunk 打分 → 文档最高分聚合"完全同构，
   两路只在打分维度上不同，指标对比公平
 - RRF：k=60 标准常量，按两路各自排名融合（k 大对低排名宽容，适合召回场景）
+  ——**用线上那份实现**（`rag/vector_index.rrf_fuse`，20261005 收口；此前这里另有一份，
+  两份公式同源实现各写各的，等于"评测的融合"与"线上的融合"不是同一件事）
 - 纯 Python 点积（零 numpy 依赖：语料 ~60 chunk × 1024 维，单查询全库点积微秒级；
   生产化后同样够用，不必引入依赖）
 - embedding 落盘缓存 eval/cache/vector_poc.json（文本 md5 为键，语料变化自动重算；
@@ -30,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import settings  # noqa: E402
 from rag.search import get_index  # noqa: E402
+from rag.vector_index import rrf_fuse  # noqa: E402  （20261005 收口：融合只有这一份实现）
 from recall_eval import QUERIES  # noqa: E402  (同目录，评测集单一数据源)
 
 ROOT = Path(__file__).resolve().parent
@@ -127,27 +130,9 @@ def vec_search(query_vec: list[float], chunks: list[dict], chunk_vecs: list[list
     return ranked
 
 
-def rrf_fuse(lex: list[dict], vec: list[dict], top_k: int) -> list[dict]:
-    """RRF 融合（k=60）：同文档两路排名各贡献 1/(k+rank)，降序取 top_k。"""
-    score: dict[tuple[str, str], float] = {}
-    info: dict[tuple[str, str], dict] = {}
-    for ranked in (lex, vec):
-        for rank, d in enumerate(ranked, 1):
-            key = (d["type"], d["id"])
-            score[key] = score.get(key, 0.0) + 1.0 / (RRF_K + rank)
-            agg = info.get(key)
-            if agg is None:
-                info[key] = {"type": d["type"], "id": d["id"], "title": d["title"],
-                             "sections": list(d.get("sections", []))}
-            else:
-                for s in d.get("sections", []):
-                    if s not in agg["sections"]:
-                        agg["sections"].append(s)
-    ranked = [dict(info[k], score=score[k])
-              for k in sorted(score, key=lambda k: -score[k])][:top_k]
-    for r in ranked:
-        r["score"] = round(r["score"], 4)
-    return ranked
+# 20261005：这里原本有**第二份** `rrf_fuse` 实现，已删——同一套公式写两遍就是两份行为
+# （RRF 常量、并列时的稳定序、sections 截取口径各写各的），而这份 PoC 的结论正是拿来给
+# "线上要不要融合"当依据的。现在统一用 `rag.vector_index.rrf_fuse(lex, vec, RRF_K, TOP_N)`。
 
 
 def evaluate(route: str, hits_fn, show: bool) -> dict:
@@ -207,7 +192,8 @@ def main() -> None:
                     for q, v in zip(QUERIES, query_vecs)}
 
     # ── RRF 融合 ──
-    rrf_by_query = {q["query"]: rrf_fuse(lex_by_query[q["query"]], vec_by_query[q["query"]], TOP_N)
+    rrf_by_query = {q["query"]: rrf_fuse(lex_by_query[q["query"]], vec_by_query[q["query"]],
+                                         RRF_K, TOP_N)
                     for q in QUERIES}
 
     print("\n== 三路指标并排（21 条 query，与 recall_eval 同集）==")

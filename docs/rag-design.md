@@ -16,6 +16,13 @@
 > 收尾），execute 确定性执行。"检索管定位、解读管精读"的行为纪律与 §3 技术选型（索引粒度/
 > 评分/语料可见性）不变，检索实现仍直接测线上 rag/search.py。
 
+> 20261005 变更注：**向量 + RRF 混合检索已落地**（`rag/vector_index.py` +
+> `rag/search.py` 的编排层），但**出厂默认关**（`RAG_HYBRID_ENABLED`）——关掉即本文
+> 正文描述的纯词法形态，逐字节不变。触发条件（语料长大 / BEIR 对比显示词法掉点）没达到，
+> 所以交付的是能力与开关，不是换主力。另：向量模型的端点/密钥**独立配置**，与对话模型
+> 无关（供应商不进代码）。完整落地形态、增量索引口径与"想拿公开数据集量效果"的注意事项见
+> **§9**；§3/§8 里"向量留作升级预案"的表述以 §9 为准。
+
 > 定位变更（20260901/20260902，正文保留为历史设计记录）：本文正文描述的是
 > 20260830 的 rag_query 技能两段式设计——20260901 定位重构后已废除（见
 > [问题记录 1.32](问题记录.md) 前置部分与 `agent-architecture.md` §6.5）：
@@ -65,7 +72,7 @@
 
 | 决策 | 选择 | 理由与备选 |
 |---|---|---|
-| 检索算法 | 词法 2/3-gram 子串匹配 + BM25 | 检索 eval 实证 recall@1=1.00 **打满当前语料**（当时 34 文档含说说/留言；20260901 净化后仅收公开文章，现 10 篇＝20260912 实测）。纯 2-gram BM25 只有 0.43（gram 太碎、idf 失效）；词法基线先上（红牌清单"先 top-k 基线"），向量留作 L1 BEIR 基准的对比项 |
+| 检索算法 | 词法 2/3-gram 子串匹配 + BM25 | 检索 eval 实证 recall@1=1.00 **打满当前语料**（当时 34 文档含说说/留言；20260901 净化后仅收公开文章，现 10 篇＝20260912 实测）。纯 2-gram BM25 只有 0.43（gram 太碎、idf 失效）；词法基线先上（红牌清单"先 top-k 基线"），向量 + RRF 20261005 已按开关落地（默认关，见 §9）|
 | 中文分词 | CJK 连续段拆 2/3-gram（子串匹配近似） | 不引 jieba/词向量——3.7GB 机器不跑本地 embedding；2/3-gram 覆盖 2 字词与 3 字词的共现，混合语料（中文博客+英文技术词）按 `[一-鿿]+|[a-zA-Z0-9_\.]+` 分型 |
 | 存储 | 内存倒排索引（纯 Python dict） | 语料规模小（全量重建 <100ms），不做增量；线程安全（锁 + 原子替换），重建失败沿用旧索引。不引 sqlite-vec/向量服务（万级语料才需要考虑） |
 | 语料源 | Rust 公开 API（/api/public/*） | agent 保持无 DB 依赖架构；可见性过滤由 Rust 层保证（is_public=1 AND status!='draft'，talk/board approved=1）——与前台严格一致，**draft/private 不进语料** |
@@ -139,5 +146,74 @@ QUERIES 已常态化）。仍开放的行：
 
 | 优先级 | 项 | 触发条件 / 现状 |
 |---|---|---|
-| P1 | 向量 + RRF 升级：双路召回 BM25 + 向量，RRF 融合 | 语料 >100 篇或 BEIR 基准对比显示词法掉点。RRF 起的是融合作用、本身不产生召回——升级必须两路同时落地。20260831 POC（eval/recall_vector_poc.py，结论：暂不切换）：当时 22 query/32 文档语料下唯一差异是 1 条困难用例（rag_eval_system 词法 rank4 → 向量/RRF rank2，未到 rank1，agentic RAG 下 rank2 完全可用）；当前语料向量收益更小，维持 BM25 主路，向量作为升级预案 |
+| P1 | 向量 + RRF 升级：双路召回 BM25 + 向量，RRF 融合 | **已落地（20261005，开关控制）**，见 §9。原触发条件（语料 >100 篇或 BEIR 基准对比显示词法掉点）至今未达到——20260831 POC 在 22 query/32 文档下三路几乎打平，唯一差异是 1 条困难用例（rag_eval_system 词法 rank4 → 向量/RRF rank2，未到 rank1，agentic RAG 下 rank2 完全可用）。所以这次落地的是**能力 + 开关**（`RAG_HYBRID_ENABLED`，出厂默认关），不是"换主力"：写多读少的个人博客本来就要等语料长大，届时拨一下开关即可，不必再改代码 |
 | P2 | 超长文档按节读取：get_article_detail 扩展 section 参数，单篇超长按"文章X第Y节"精读，不全文注入 | 单篇 >4k token（当前最长架构文档 2-3k 可控）；检索候选 sections 已带回命中节，落点现成 |
+
+## 9. 向量 + RRF 混合检索（20261005）与检索评测数据集选型
+
+### 9.1 落地形态
+
+- **开关**：`RAG_HYBRID_ENABLED`（`config/settings.py`，出厂默认**关**）。关 = 逐字节同
+  从前（BM25 原分、原相对断崖、原候选数）；开 = 词法 + 向量双路召回、RRF 融合重排。
+  语料规模与 query 类型自己拨——本仓语料目前 10 篇，词法已经打满，开着也量不出收益。
+- **向量模型独立配置**：`EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL`
+  （+ `EMBEDDING_DIM` / `EMBEDDING_BATCH_SIZE` / `RRF_K`）。供应商不进代码——任何
+  OpenAI 兼容的 embeddings 端点都行；用聚合平台就把 `QWEN_BASE_URL`/`QWEN_API_KEY`
+  的值复制一份过去（**两份值，换平台要改两处**；代码不做隐式绑定，那正是"独立配置"的代价）。
+- **索引与增量**（`rag/vector_index.py`）：自研 f32 文件 + manifest（零新增依赖，
+  生产 venv 仍是那 11 个钉死的包）。内容寻址（键 = 模型+端点+请求维度+文本的摘要）
+  ⇒ **只有真正变了的 chunk 会重新调 API**：改一节只嵌那一节，删文章 0 次调用，
+  换模型/换端点/换维度整库失效重嵌。只有 embedding 调用是增量的；拉语料、BM25 重建、
+  每 worker 读盘建视图仍是全量（几十篇语料，为 200KB 做行级 patch 是拿正确性换不存在的性能）。
+- **三条硬规则**（`rag/search.py` 的 `search()`，每条对应一种静默的错法）：
+  ① 只有两路都在场才融合——单路 RRF 与 BM25 不是同一套分数语义，混着回下游，
+  `decisions.py` 的「只允许越读越高分」闸会跨轮比两套量级；② 不在 RRF 分数空间里
+  再造断崖（0.25 照搬到 ≈0.016 的融合分上等于清空候选）；③ 向量侧绝不进 `build()`
+  （那是懒刷新热路径，"快且不联网"是评测依赖的性质），也不拿对不上语料的向量融合。
+- **可观测**：`/health` 的 dials 有 `rag_hybrid_enabled` / `rag_hybrid_active` /
+  `vector_missing`（**开关开着 ≠ 真的在融合**——后者还要凭据齐、盘上有索引、索引与语料
+  对齐）；`rag_search` 工具把本轮实际路线（hybrid/lexical/degraded + 原因码）放进
+  `ToolResult.meta`，出口文本逐字不变。降级一律有名有姓（missing_credentials /
+  warming / no_vectors / stale_view / query_embed_failed / vector_missing），不静默。
+
+### 9.2 想拿公开数据集量"我的检索好不好"？先说清楚它量不了
+
+公开检索集的语料动辄十万到百万级、query 数千到数万条、指标是 nDCG@10——它们量的是
+**检索器/嵌入模型的通用能力**，不是"你这个 10 篇语料的站内搜索"。在 10 篇语料上唯一有
+意义的基线是 `eval/recall_eval.py` 那 21 条（评测即线上实现）。公开集的正确用法有三个：
+（a）横向量嵌入模型（同一个数据集上换模型，比 nDCG）；（b）标定 RRF 参数（k、各路剪枝深度）；
+（c）验证融合实现本身有没有写对。**别拿它的绝对值当自己站点的分数。**
+
+**C-MTEB 的中文检索子集**（BEIR 格式：`corpus` / `queries` / `qrels` 三件，评测取 nDCG@10）：
+
+| 数据集 | 测试 query 数 | 类型 |
+|---|---|---|
+| T2Retrieval | 24,832 | 通用网页段落（最大、最像"技术博客"） |
+| DuRetrieval | 4,000 | 通用（百度问答式） |
+| EcomRetrieval | 1,000 | 电商 |
+| MedicalRetrieval | 1,000 | 医学 |
+| CovidRetrieval / CmedqaRetrieval / MMarcoRetrieval / VideoRetrieval | 各 1k–10k | 领域检索 |
+
+下载（ModelScope，parquet）：
+
+```bash
+uv run --no-project --with modelscope modelscope download \
+    --dataset C-MTEB/T2Retrieval --local_dir ./data
+uv run --no-project --with modelscope modelscope download \
+    --dataset C-MTEB/T2Retrieval-qrels --local_dir ./qrels
+```
+
+现成工具（同样走 `uv run --no-project --with ...`，**绝不进产线 venv**）：
+
+- `ranx`：RRF 及 20 余种融合算法、nDCG/MRR/Recall 多档、`Qrels`/`Run`/`evaluate`/`compare`，
+  还有 `optimize_fusion`（直接搜融合权重/参数）；
+- `pytrec_eval`：TREC 官方实现的指标；
+- `ir_datasets`：一行加载 BEIR / MIRACL / mMARCO-zh 等；
+- BEIR 官方脚本（仓库自带 `beir` 评测入口）。
+
+**最贴合本仓语料的路线（下一步，尚未做）**：拿现有 21 条 query 当锚点，从自己的文章里
+合成 100–200 条 query + qrels，算 nDCG——这是唯一能回答"换成向量之后**我的**检索变好没有"
+的办法。合成 query 必须人过一眼，否则是自证（模型出的题它自己必然答得上）。
+
+⚠️ 上面这些数据集与 numpy/ranx 一律在隔离环境里跑（同 `rag/graph_build.py` 的范式）：
+本机 `.venv` **就是产线 venv**，多装一个包就等于给线上多一个依赖。
