@@ -715,13 +715,26 @@ def degraded_reason() -> str | None:
 
 
 def route_status() -> dict:
-    """给 tool meta / `/health` dials 用的一行事实（不含任何 key/URL）。"""
+    """给 tool meta / `/health` dials 用的一行事实（不含任何 key/URL）。
+
+    `state` 是**把 enabled/active 的两格合成一句话**，因为那两格最要命的组合——
+    `enabled=true, active=false, missing=0`——自己读不出病因（20261005 现场实证：
+    首建那 6 秒里就是这个组合，人看到的第一反应是"全就绪却不生效"）。取值与
+    `degraded_reason()` 同一套词，另加两个非故障值：`off`（开关没开）、`active`。
+    注意 `vector_missing` 与 `active=true` 并存是**对的**：部分 chunk 没嵌出来，
+    索引仍可用（融合照跑），这一格报的是"还有什么不干净"。
+    """
     st = get_store()
     st.load()
     view = st.view()
     reason = degraded_reason()
+    if not _settings.rag_hybrid_enabled:
+        state = "off"
+    else:
+        state = reason or "active"
     return {"enabled": bool(_settings.rag_hybrid_enabled),
             "active": bool(is_enabled() and view is not None),
+            "state": state,
             "reason": reason,
             "vectors": 0 if view is None else len(view),
             "missing": len(st.missing())}
