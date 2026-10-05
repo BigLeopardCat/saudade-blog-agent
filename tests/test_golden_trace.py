@@ -435,11 +435,19 @@ check("两个跑法都接上了这条闸（判据只有一处实现，接线各�
 check("未评估要进 skipped_ids 且单列一个报告字段（否则看着像被静默豁免）",
       "skip_ids += _trace_skipped" in src_run and "_SKIPPED_IDS += _TRACE_SKIPPED" in src_full
       and '"skipped_trace_ids"' in src_run and '"skipped_trace_ids"' in src_full)
+# 判的是**成员资格**，不是那一行的全文（20261006 改）：此前钉的是整串字面量
+# （`_code = 3 if (_precondition_bad or _trace_bad) else 2`），于是**又有**一条前提族
+# 挤进同一个退出码组（语料出处闸，`_corpus_bad`）时，这条锁红在一个跟 trace 无关的
+# 地方——红的是"组里多了一个成员"，而它要守的其实是"trace 还在组里、而且这一组报 3"。
+# 改成抓 `_code = 3 if (…) else 2` 的括号内、断言 trace 那一项在里面：新增成员不再误伤，
+# 把 trace 从组里**摘出去**（或把 3 改回 2）仍然会红。
+_m3_run = re.search(r"^\s*_code = 3 if \((?P<grp>[^)]*)\) else 2", src_run, re.M)
+_m3_full = re.search(r"^\s*_code = 3 if \((?P<grp>[^)]*)\) else 2", src_full, re.M)
 check("空分母的退出码：前提类闸报 3 而不是 2（两个跑法同口径）",
-      "_code = 3 if (_precondition_bad or _trace_bad) else 2" in src_run
-      and "_code = 3 if _TRACE_SKIPPED else 2" in src_full)
-check("退出码 3 那一组真的带上了 trace 这一类（只在打印里说是不够的）",
-      "or _trace_bad" in src_run)
+      bool(_m3_run) and "_trace_bad" in _m3_run.group("grp")
+      and bool(_m3_full) and "_TRACE_SKIPPED" in _m3_full.group("grp"),
+      f"run={_m3_run.group('grp') if _m3_run else '没找到那一行'}；"
+      f"full={_m3_full.group('grp') if _m3_full else '没找到那一行'}")
 
 # 收尾：还原 settings、清临时目录（本套件自己造的东西自己清）
 settings.trace_dir = PROD_DIR

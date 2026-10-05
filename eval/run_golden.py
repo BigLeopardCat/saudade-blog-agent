@@ -1609,6 +1609,21 @@ def check_trace_premises(cases: list) -> tuple:
     return kept, skipped, rows
 
 
+# ── "这一轮的语料是不是这套 golden 的那一份"（20261006）─────────────────────
+# 判据本体、三态语义与**为什么空语料只能算 unknown** 都在 `eval/corpus_provenance.py`
+# 的模块头注里（那个文件被本文件与 `golden_full_run.py` 共用——闸的实现只有一处）。
+# 这里只留两件读本文件的顺序时必须知道的事：
+#   · **它摘的是全部用例**（其余四条前提各摘"要那个前提的那几条"）⇒ 它的出口不是
+#     `main()` 末尾那组 `if _precondition_bad or …`（那里够不着），而是**空分母那一支**
+#     （全摘光 ⇒ `not cases`）：那里把退出码置 3 并说清原因。别在末尾再加一条够不着的分支；
+#   · 它排在四条前提**之后**：四条各自的具体诊断先出，这条全局结论收尾。
+from corpus_provenance import (  # noqa: E402,F401 —— 再导出（唯一实现在 corpus_provenance）
+    CORPUS_PROV_FOREIGN, CORPUS_PROV_OK, CORPUS_PROV_UNKNOWN, CORPUS_PROVENANCE_FILE,
+    check_corpus_premises, load_corpus_provenance, provenance_path_for,
+    report_lines as corpus_report_lines, snapshot_docs as corpus_snapshot_docs,
+)
+
+
 # ── golden 键的三张表（20260924）─────────────────────────────────────────────
 # 键名写错是一个**静默 no-op**：gold 是 dict，把 require_cmd_all 敲成 require_cmdall 时
 # 取值取到 None、那段断言根本不执行，而用例照样绿——判据看着在、其实不在。已经抓到一条
@@ -1694,18 +1709,10 @@ def judge_corpus() -> "list | None":
     与 `corpus_check.presence_check` 同一份语料（同一进程同一索引），但不依赖它的
     返回值：那边只给计数与哈希，判据要的是**含正文的文档列表**。
     取不到**不抛**——评测要继续跑，只是带 `require_doc_terms` 的用例会红成「未评估」。
+    **取数只有一处**（`corpus_provenance.snapshot_docs`，出处闸那边也用它）；
+    这里只是外面那层打印。
     """
-    try:
-        from rag.search import get_index
-        idx = get_index()
-        snap = idx.docs_snapshot()
-        if not snap:
-            idx.build()
-            snap = idx.docs_snapshot()
-    except Exception as e:
-        print(f"[corpus] 判据语料快照取不到（{type(e).__name__}: {e}）——"
-              f"带 require_doc_terms 的用例本轮判「未评估」")
-        return None
+    snap = corpus_snapshot_docs()
     if not snap:
         print("[corpus] 判据语料快照为空——带 require_doc_terms 的用例本轮判「未评估」")
         return None
@@ -2264,6 +2271,11 @@ def main():
                          f"——判红那次的 planner 决策只在它里面）")
     ap.add_argument("--trace-run-id", default="",
                     help="指定 trace run_id（进程隔离跑法由父进程给，让所有子进程落同一目录）")
+    ap.add_argument("--golden", default=GOLDEN_FILE,
+                    help="换一份用例文件（默认 eval/golden/basic.jsonl）。**出处声明必须住在"
+                         "用例文件旁边**（同目录的 provenance.json，见 eval/corpus_provenance.py"
+                         " 的 provenance_path_for）——换一份没有声明的用例 = 那套用例锚在哪块地"
+                         "上没人说得清，闸只会报「判不了」；自包含夹具见 eval/fixtures/README.md")
     args = ap.parse_args()
 
     if args.no_trace:
@@ -2293,7 +2305,10 @@ def main():
     # 的用例会红成「未评估」，那是事实，不是故障。
     judge_docs = judge_corpus()
 
-    cases = [json.loads(line) for line in open(GOLDEN_FILE, encoding="utf-8") if line.strip()]
+    # 语料出处声明跟着**用例文件**走（20261006）：`--golden eval/fixtures/golden_smoke.jsonl`
+    # ⇒ 读 `eval/fixtures/provenance.json`。默认那份算出来与 CORPUS_PROVENANCE_FILE 同指一处。
+    _prov_file = provenance_path_for(args.golden)
+    cases = [json.loads(line) for line in open(args.golden, encoding="utf-8") if line.strip()]
     # 写族清单的哨兵（20261001）：`"@write_console"` → 当前的 write.console 全集。
     # 展开放在**过滤之前**，`--only` 选中的那几条也一定拿到展开后的清单。
     _expanded = expand_forbid_tokens(cases)
@@ -2427,6 +2442,23 @@ def main():
     if _trace_bad:
         print(f"[trace] ⇒ {len(_trace_skipped)} 条用例本轮**未评估**：{_trace_skipped}")
 
+    # 语料出处的前提（20261006，头注见 `check_corpus_premises` 上面那段）：**排在最后**，
+    # 因为它与上面四条不是一类——那四条各自摘"要那个前提的那几条"，这一条摘的是**全部**
+    # （判据整体锚在语料上）。放最后，前面四条的具体诊断先出，这条全局结论收尾。
+    _corpus_state, _corpus_detail, _corpus_row = check_corpus_premises(judge_docs, _prov_file)
+    _corpus_bad = _corpus_state == CORPUS_PROV_FOREIGN
+    if _corpus_bad:
+        _corpus_skipped = [c.get("id") for c in cases]
+        skip_ids += _corpus_skipped
+        cases = []
+    # 文案与 golden_full_run.py 共用（`corpus_provenance.report_lines`）：同一件事
+    # 两个跑法各写一份措辞，早晚会有一个跑法说漏最要紧的那句"这不是模型退化"。
+    for _line in corpus_report_lines(_corpus_state, _corpus_detail, _corpus_row):
+        print(_line)
+    if _corpus_bad:
+        print(f"[corpus-premise] ⇒ {len(_corpus_skipped)} 条用例**全部未评估**"
+              "（未评估 ≠ 通过；退出码 3）")
+
     # 真写用例的两道闸（20260925）——**顺序刻意如此**：先问"谁有权触发真写"，再看前置
     # 条件在不在。两道都不会被静默豁免（都进 skipped_ids，都打印）。
     #
@@ -2471,10 +2503,12 @@ def main():
         # 身份前置不可用时**优先报 3**（20260926）：`--only <一条要真身份的用例>` 配一个
         # 不可用的 uid，用例会被摘光落到这里；只报 2 的话「前置条件坏了」这件事就没了
         # （2 说的是"你自己把用例摘光了"），而它恰恰是唯一可行动的那条信息。
-        _code = 3 if (_precondition_bad or _trace_bad) else 2
+        _code = 3 if (_precondition_bad or _trace_bad or _corpus_bad) else 2
         print("[run] ⚠ 一条用例都没剩下（被 --only / --skip-ids / 身份闸 / 真写闸 / 夹具闸"
-              "/ trace 闸摘干净了）—— 这一轮**没有评测任何东西**：空分母不是一个通过率，"
-              f"退出码 {_code}（不是 0）"
+              "/ trace 闸 / 语料出处闸摘干净了）—— 这一轮**没有评测任何东西**："
+              f"空分母不是一个通过率，退出码 {_code}（不是 0）"
+              + ("；其中**语料不是这套 golden 的那一份**是主因（[corpus-premise] 那行"
+                 "有锚点对账，修法见那三行）" if _corpus_bad else "")
               + ("；其中身份前置不可用是主因，先修前置" if _precondition_bad else "")
               + ("；其中 trace 关着是主因（那几条用例的判据要读 trace 事件）"
                  if _trace_bad and not _precondition_bad else ""))
@@ -2744,6 +2778,10 @@ def main():
         # `trace_checks` 每条带 `keys`（这一条是哪几条判据要 trace），空列表=这一轮全判得了。
         "skipped_trace_ids": _trace_skipped,
         "trace_checks": _trace_rows,
+        # 语料出处的前提（20261006）：快照对声明锚点的结论。落进报告是为了事后能回答
+        # "这一轮判据脚下那块地是不是原来那块"——判 ok 的时候它尤其重要，因为那时
+        # **没有任何别的痕迹**（判 foreign 则根本走不到这里，见那段头注）。
+        "corpus_provenance": _corpus_row,
         "latency_s": {
             "count": len(latencies),
             "min": round(_pct(latencies, 0), 1),
