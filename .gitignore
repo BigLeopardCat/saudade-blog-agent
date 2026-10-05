@@ -35,6 +35,11 @@ eval/cache/
 # 图谱查询产物（vectors.f32 1.4MB，由 scripts/build_word_graph.py 可重生成）
 data/word_graph/
 
+# 混合检索的向量索引（cache.f32 数百 KB + manifest/cache 的 json，由
+# rag/vector_index.py 按语料增量重建）。与图谱产物同理：可重生成、对本机之外没有意义，
+# 且换 embedding 模型就会整库失效 ⇒ 入库只会留一份过期垃圾。
+data/rag_vectors/
+
 # 建图任务的本机状态（20261003）：lock / state.json / <ts>.log，全是**运行时**产物
 # （见 rag/graph_build.py）。它对站点没有任何价值、只对这台机器有意义，不入库。
 # ⚠️ 与**父仓**的 logs/ 不是一回事：那边是站点运维日志（rust/agent/traces，
