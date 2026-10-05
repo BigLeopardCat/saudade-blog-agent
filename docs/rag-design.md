@@ -5,7 +5,7 @@
 > 精读全文后作答。
 > 本文是 RAG 管线的设计记录：架构 → 选型 → 实现 → 工作流 → 问题与解决 → 评测 → 升级预案。
 > 正文为 20260830 初稿的历史形态，机制现状以文首各变更注为准；检索现状另见 rag/search.py
-> 头注释（查询侧停用词剔除/同义扩展）与 eval/recall_eval.py（21 条 queries 基线）。
+> 头注释（查询侧停用词剔除/同义扩展）与 eval/recall_eval.py（22 条 queries 基线）。
 
 > 20260903 架构变更注（planner 全权，正文保留为历史设计记录）：20260903 起
 > **自由 ReAct 与 reflector 已废除**，执行链为 planner ⇄ execute → model → gate（见
@@ -72,7 +72,7 @@
 
 | 决策 | 选择 | 理由与备选 |
 |---|---|---|
-| 检索算法 | 词法 2/3-gram 子串匹配 + BM25 | 检索 eval 实证 recall@1=1.00 **打满当前语料**（当时 34 文档含说说/留言；20260901 净化后仅收公开文章，现 10 篇＝20260912 实测）。纯 2-gram BM25 只有 0.43（gram 太碎、idf 失效）；词法基线先上（红牌清单"先 top-k 基线"），向量 + RRF 20261005 已按开关落地（默认关，见 §9）|
+| 检索算法 | 词法 2/3-gram 子串匹配 + BM25 | 检索 eval 实证 recall@1=1.00 **打满当前语料**（当时 34 文档含说说/留言；20260901 净化后仅收公开文章，现 12 篇＝20261005 实测）。纯 2-gram BM25 只有 0.43（gram 太碎、idf 失效）；词法基线先上（红牌清单"先 top-k 基线"），向量 + RRF 20261005 已按开关落地（默认关，见 §9）|
 | 中文分词 | CJK 连续段拆 2/3-gram（子串匹配近似） | 不引 jieba/词向量——3.7GB 机器不跑本地 embedding；2/3-gram 覆盖 2 字词与 3 字词的共现，混合语料（中文博客+英文技术词）按 `[一-鿿]+|[a-zA-Z0-9_\.]+` 分型 |
 | 存储 | 内存倒排索引（纯 Python dict） | 语料规模小（全量重建 <100ms），不做增量；线程安全（锁 + 原子替换），重建失败沿用旧索引。不引 sqlite-vec/向量服务（万级语料才需要考虑） |
 | 语料源 | Rust 公开 API（/api/public/*） | agent 保持无 DB 依赖架构；可见性过滤由 Rust 层保证（is_public=1 AND status!='draft'，talk/board approved=1）——与前台严格一致，**draft/private 不进语料** |
@@ -115,10 +115,14 @@ RagIndex
 ## 6. 评测体系（评测驱动，先立验证再动工）
 
 - L1 检索 eval（eval/recall_eval.py）：**直接 import 线上 rag/search.py 的 search()**
-  ——评测即线上实现，不另写模拟实现（防"评测绿、线上烂"）。21 条 queries 与 golden
-  rag_* 用例同源出题（12 条 recall 正例 + 9 条噪声，20260901 语料净化后调整口径），
-  报告 recall@1/@3/@5 + MRR + noise_hit_rate → eval/report/runs/。
-  实证：词法基线 recall@1=1.00、MRR=1.00、12 条 recall 正例全部 rank=1。
+  ——评测即线上实现，不另写模拟实现（防"评测绿、线上烂"）。22 条 queries 与 golden
+  rag_* 用例同源出题（13 条 recall 正例 + 9 条噪声：20260901 语料净化后 12+9，
+  20260920 回流 rag_arch_ports_real 成 13+9），报告 recall@1/@3/@5 + MRR +
+  noise_hit_rate + **mean_candidates** + 本次生效档位 → eval/report/runs/。
+  实证：词法基线 recall@1=0.92（13 条正例里 1 条是点名留档的已知 FAIL
+  `rag_arch_ports_real`，rank=2）、recall@3=1.00、MRR=0.96、平均候选 3.36
+  （top_k=5；20261005 实测，语料 12 篇）。**基线是这三个数加这条 known_fail，
+  不是"全 1.00"**——照旧口径读会把已知 FAIL 当成回归。
 - L2 端到端 golden（现 22 条 rag_* 用例）：recall 正例（从文章出题，断言知识词命中）+
   noise 组（语料外问题，断言诚实拒答），与导航/特效等用例同池，全量 golden 66 条
   （20260905 判据改写后 66/66、0 resets 基线，留档 eval/report/runs/20260905_195300.json）。
@@ -155,7 +159,7 @@ QUERIES 已常态化）。仍开放的行：
 
 - **开关**：`RAG_HYBRID_ENABLED`（`config/settings.py`，出厂默认**关**）。关 = 逐字节同
   从前（BM25 原分、原相对断崖、原候选数）；开 = 词法 + 向量双路召回、RRF 融合重排。
-  语料规模与 query 类型自己拨——本仓语料目前 10 篇，词法已经打满，开着也量不出收益。
+  语料规模与 query 类型自己拨——本仓语料目前 12 篇，词法已经打满，开着也量不出收益。
 - **向量模型独立配置**：`EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL`
   （+ `EMBEDDING_DIM` / `EMBEDDING_BATCH_SIZE` / `RRF_K`）。供应商不进代码——任何
   OpenAI 兼容的 embeddings 端点都行；用聚合平台就把 `QWEN_BASE_URL`/`QWEN_API_KEY`
@@ -179,8 +183,8 @@ QUERIES 已常态化）。仍开放的行：
 ### 9.2 想拿公开数据集量"我的检索好不好"？先说清楚它量不了
 
 公开检索集的语料动辄十万到百万级、query 数千到数万条、指标是 nDCG@10——它们量的是
-**检索器/嵌入模型的通用能力**，不是"你这个 10 篇语料的站内搜索"。在 10 篇语料上唯一有
-意义的基线是 `eval/recall_eval.py` 那 21 条（评测即线上实现）。公开集的正确用法有三个：
+**检索器/嵌入模型的通用能力**，不是"你这个十来篇语料的站内搜索"。在这点语料上唯一有
+意义的基线是 `eval/recall_eval.py` 那 22 条（评测即线上实现）。公开集的正确用法有三个：
 （a）横向量嵌入模型（同一个数据集上换模型，比 nDCG）；（b）标定 RRF 参数（k、各路剪枝深度）；
 （c）验证融合实现本身有没有写对。**别拿它的绝对值当自己站点的分数。**
 
@@ -211,7 +215,7 @@ uv run --no-project --with modelscope modelscope download \
 - `ir_datasets`：一行加载 BEIR / MIRACL / mMARCO-zh 等；
 - BEIR 官方脚本（仓库自带 `beir` 评测入口）。
 
-**最贴合本仓语料的路线（下一步，尚未做）**：拿现有 21 条 query 当锚点，从自己的文章里
+**最贴合本仓语料的路线（下一步，尚未做）**：拿现有 22 条 query 当锚点，从自己的文章里
 合成 100–200 条 query + qrels，算 nDCG——这是唯一能回答"换成向量之后**我的**检索变好没有"
 的办法。合成 query 必须人过一眼，否则是自证（模型出的题它自己必然答得上）。
 
