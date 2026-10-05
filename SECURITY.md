@@ -25,8 +25,9 @@
 ## 本仓特有的攻击面
 
 按"这个仓自己写了什么"排，不是通用清单。设计边界见
-[docs/security-boundary.md](docs/security-boundary.md)、
-[docs/agent-architecture.md](docs/agent-architecture.md)。
+[docs/agent-architecture.md](docs/agent-architecture.md)（本仓，公开）。
+更细的《信任边界与加固》（谁信谁、限额在哪、已知缺口、可复现验证命令）
+在**宿主后端那个仓**里，不在本仓、也读不到——具体部署坐标不该公开。
 
 | 面 | 关心什么 |
 |---|---|

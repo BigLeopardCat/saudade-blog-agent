@@ -129,8 +129,9 @@ CI 跑的就是这两条（`.github/workflows/eval.yml`）。两点要知道：
 不要在 issue / PR / 提交信息里贴 API key、JWT、真实用户 id、生产路径或任何凭据。
 本仓是 **public** 仓库。安全问题请走私密渠道，见 [SECURITY.md](SECURITY.md)。
 
-本仓有一个 trust boundary 值得先读一遍：[docs/security-boundary.md](docs/security-boundary.md)
-（谁信谁、限额在哪、已知缺口、可复现验证命令）。
+本仓有一个 trust boundary 值得先读一遍：[docs/agent-architecture.md](docs/agent-architecture.md)
+（架构与各条防线的位置）。更细的那份《信任边界与加固》在**宿主后端那个仓**里、
+不在本仓，因此外部贡献者读不到——这不是疏漏，那台机器上的具体坐标本来就不该公开。
 
 ## 8. 行为准则
 
