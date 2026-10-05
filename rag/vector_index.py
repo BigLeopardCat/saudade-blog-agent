@@ -465,8 +465,15 @@ class VectorStore:
             self.load()          # 先按盘上的现状装载一次（签名没变就是几百字节的早退）
             m = _read_json(self.manifest_path) or {}
             if (m.get("fingerprint") == fp and not m.get("missing")
-                    and int(m.get("count", -1)) == len(set(keys))
+                    and int(m.get("count", -1)) == len(keys)
                     and self.view_for(fp) is not None):
+                # ⚠️ 这一格比的必须是 `len(keys)`（= 按 **chunk 槽位** 数的，与不变式②
+                # 和上面写 manifest 的那处同一个口径）。20261005 线上实测：这里原写
+                # `len(set(keys))`（唯一键数），而本仓语料有 322 个槽位、265 个唯一文本
+                # ⇒ 条件**恒假**，短路一次都没生效过：每次 build() 都全量重写 1.1MB、
+                # 代数 +1、四个 worker 跟着换视图——正是下面那段注释说要避免的事。
+                # （重复文本来自空正文小节：chunk 文本 = 标题+正文，正文为空时同篇诸节
+                # 逐字相同。测试语料全是互不相同的正文，所以这条一直没被抓住。）
                 # 盘上已经就是这批 chunk ⇒ 什么都不写。**不做这一步的后果**：每个
                 # worker 每 REFRESH_TTL 都重写一遍文件、代数 +1，四个 worker 互相
                 # 看着对方换视图，日志里刷满"新嵌 0 / 复用 60"这种零信息量的行。
