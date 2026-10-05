@@ -53,12 +53,14 @@ def wire(r: dict) -> str:
 # 20261004：`planner_engine` 那一格删掉了（接口层只剩 native 一条，没有第二个取值可拨
 # ⇒ 一格恒定的"档位"是噪声，见 server.health 的注）。**这个集合是钉死的**：少一格要有人
 # 解释，多一格更要。
-# 20261005：加向量路三格（`rag_hybrid_enabled` / `rag_hybrid_active` / `vector_missing`）。
-# 「开关开着」与「真的在融合」是两件事——后者还要凭据齐、盘上有索引、且索引与语料对齐，
-# 所以两格都要（只有一格的话，"拨了但一次没生效"永远看不见）。
+# 20261005：加向量路四格（`rag_hybrid_enabled` / `rag_hybrid_active` / `rag_state` /
+# `vector_missing`）。「开关开着」与「真的在融合」是两件事——后者还要凭据齐、盘上有索引、
+# 且索引与语料对齐，所以两格都要（只有一格的话，"拨了但一次没生效"永远看不见）。
+# `rag_state` 是第四格、也是**唯一一格能读出病因的**：线上首建那 6 秒的真实组合是
+# `enabled=true / active=false / missing=0`，两个布尔加一个计数拼不出"还在建"这个意思。
 DIAL_KEYS = {"planner_native_thinking", "agent_task_state",
              "llm_provider", "llm_model",
-             "rag_hybrid_enabled", "rag_hybrid_active", "vector_missing"}
+             "rag_hybrid_enabled", "rag_hybrid_active", "rag_state", "vector_missing"}
 
 print("① 存活探针那半**逐字不变**（scripts/healthcheck.sh 按子串判活）")
 _old_agent = server._agent
@@ -138,7 +140,7 @@ finally:
     settings.llm_provider = _saved_provider
 
 print()
-print("④ 向量路三格：**开关开着**与**真的在融合**必须是两件事")
+print("④ 向量路四格：**开关开着**、**真的在融合**、**为什么没融合**是三件事")
 _saved_rag = {k: getattr(settings, k) for k in
               ("rag_hybrid_enabled", "embedding_api_key", "embedding_model")}
 try:
@@ -150,11 +152,20 @@ try:
           "（两格回同一件事就等于没有第二格）",
           _d["rag_hybrid_enabled"] is True and _d["rag_hybrid_active"] is False,
           json.dumps(_d, ensure_ascii=False))
+    # 第三格是**病因**：上面那个组合自己读不出"凭据缺"还是"还在建"还是"索引对不上"。
+    check("同一情形下 rag_state 点名 missing_credentials（不是留给读的人去猜）",
+          _d["rag_state"] == "missing_credentials", _d["rag_state"])
     settings.rag_hybrid_enabled = False
     _d = call()["dials"]
     check("关掉开关 ⇒ 两格都是 False（.env 写着 1 而进程里是关的，/health 要说得出来）",
           _d["rag_hybrid_enabled"] is False and _d["rag_hybrid_active"] is False,
           json.dumps(_d, ensure_ascii=False))
+    # 关着的时候**不许**报成故障（"没开"与"坏了"混成一个词，故障就会被淹掉）
+    check("关掉开关 ⇒ rag_state=off（关着是设定，不是降级）",
+          _d["rag_state"] == "off", _d["rag_state"])
+    check("rag_state 恒是短字符串（不是 None/bool——这一格的意义就是给前两格兜底）",
+          isinstance(_d["rag_state"], str) and 0 < len(_d["rag_state"]) <= 64,
+          repr(_d["rag_state"]))
 finally:
     for k, v in _saved_rag.items():
         setattr(settings, k, v)

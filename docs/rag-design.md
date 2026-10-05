@@ -175,8 +175,12 @@ QUERIES 已常态化）。仍开放的行：
   再造断崖（0.25 照搬到 ≈0.016 的融合分上等于清空候选）；③ 向量侧绝不进 `build()`
   （那是懒刷新热路径，"快且不联网"是评测依赖的性质），也不拿对不上语料的向量融合。
 - **可观测**：`/health` 的 dials 有 `rag_hybrid_enabled` / `rag_hybrid_active` /
-  `vector_missing`（**开关开着 ≠ 真的在融合**——后者还要凭据齐、盘上有索引、索引与语料
-  对齐）；`rag_search` 工具把本轮实际路线（hybrid/lexical/degraded + 原因码）放进
+  `rag_state` / `vector_missing`（**开关开着 ≠ 真的在融合**——后者还要凭据齐、盘上有索引、
+  索引与语料对齐）。`rag_state` 是把前两格合成一句话的那一格：线上首建那 6 秒的真实组合
+  `enabled=true / active=false / missing=0` 自己读不出病因（当时第一反应是"全就绪却不
+  生效"，实为 `warming`），所以病因必须由机器点名——取值 = `off` / `active` /
+  `missing_credentials` / `warming` / `vector_missing` / 装载或写入错误码；
+  `rag_search` 工具把本轮实际路线（hybrid/lexical/degraded + 原因码）放进
   `ToolResult.meta`，出口文本逐字不变。降级一律有名有姓（missing_credentials /
   warming / no_vectors / stale_view / query_embed_failed / vector_missing），不静默。
 

@@ -2231,17 +2231,19 @@ async def health():
         _model = settings.active_llm_model
     except Exception:                               # noqa: BLE001
         _model = f"<认不出 provider={getattr(settings, 'llm_provider', '')!r}>"
-    # 向量路的三格（20261005）：**开关开着 ≠ 真的在融合**——它还要凭据齐、盘上有索引、
-    # 且索引与这批语料对齐。这三件事各自会在别的 worker、别的时间变，只有回**本进程
+    # 向量路的四格（20261005）：**开关开着 ≠ 真的在融合**——它还要凭据齐、盘上有索引、
+    # 且索引与这批语料对齐。这几件事各自会在别的 worker、别的时间变，只有回**本进程
     # 实际取到的状态**才算数（同这一块的立项理由）。取不到就不猜：按"没在跑"报，
     # 但开关那一格照 settings 回，免得把一个坏掉的盘点成"开关没开"。
+    # `rag_state` 是给前两格兜底的一句话：`enabled=true / active=false / missing=0`
+    # 这个组合（开关已开、首建还在跑）自己读不出病因——现场实证见 route_status 的注。
     try:
         from rag.vector_index import route_status
         _rag = route_status()
     except Exception as exc:                        # noqa: BLE001
         logger.warning("/health 读向量档位失败（%s）——按未生效报", exc)
         _rag = {"enabled": bool(getattr(settings, "rag_hybrid_enabled", False)),
-                "active": False, "missing": 0}
+                "active": False, "missing": 0, "state": "unknown"}
     return {
         "status": "ok",
         "agent_ready": _agent is not None,
@@ -2257,6 +2259,7 @@ async def health():
             # 只回档位名与计数，**不回 model/key/URL**（这一块的纪律见上面那段注）。
             "rag_hybrid_enabled": bool(_rag["enabled"]),
             "rag_hybrid_active": bool(_rag["active"]),
+            "rag_state": str(_rag.get("state") or "unknown"),
             "vector_missing": int(_rag["missing"]),
         },
     }
