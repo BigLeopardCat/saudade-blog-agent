@@ -15,7 +15,7 @@ import re
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from agent import sections
+from rag import sections
 from agent.authz import (SCOPE_READ_OWN,  # 帧预算按 scope 分族（见 _frame_view）
                          required_scope,
                          strip_user_shell)  # 两层壳剥除（见下方 _short_reply_kind 注释）

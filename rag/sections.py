@@ -1,6 +1,17 @@
 # -*- coding: utf-8 -*-
 """文章分节（20260920）：把 markdown 正文按标题切成小节——**一个实现，三处共用**。
 
+**为什么住在 `rag/` 而不是 `agent/`**（20261005 从 `agent/sections.py` 搬来）：消费者
+有三处，其中两处在 agent 层**下面**（`rag/search.py` 索引切片、`tools/base.py` 按节
+取回），第三处才是渲染侧 `agent/context.py`。原先它住在 `agent` 包里，于是**导入一个
+纯字符串函数要先跑 `agent/__init__.py`** → `agent.agent` → `agent.graph`（9826 行 +
+langgraph），实测冷启动 **1.69 秒**（其中 `agent.graph` 占 1.71s 累计）——离线工具
+（`eval/recall_eval.py`、`eval/frame_budget.py`、任何只想要词法检索的入口）每次冷启动
+都在为一件不相干的事付这笔钱，两处调用点还各自写了"惰性导入：别让 tools 层启动即拉
+agent 包"来把它藏起来。`rag` 是三处里最低的一层（`agent/decisions.py`、`agent/context.py`、
+`tools/base.py` 都已经在 import `rag.search`），所以中立落点选这里——**导入它不再拉起
+任何东西**（本模块只 import `re`）。
+
 为什么需要它（"超长文章"问题的正解）：
 
 1. **渲染侧（agent/context.py `_frame_texts`）**：`get_article_detail` 的全文帧按字符
