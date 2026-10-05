@@ -9094,6 +9094,30 @@ _FRAME_MIN_KEEP = 2000
 # 命中即说明有新的东西在放大提示词。
 _PROMPT_OVERSIZE_CHARS = 120000
 
+# 零工具 narrator 回了 tool_calls 时的**纠正指令**（20261006）。
+#
+# 为什么需要它：narrator 结构上不 bind_tools，但**"不 bind"不等于"不会回工具调用"**——
+# HTTP 那一层照旧可以把 `tool_calls` 放进响应，而它回的东西没人拦。两副面孔都是坏的：
+#   ① 正文为空、只有一条 tool_call（`golden_traces/20261006_045036/admin_write_denied_user.json`
+#      的 `reply_capture_skipped {is_ai:true, tool_calls:1, content_len:0}`）⇒ 上面那次
+#      "同消息重试"**必然复现**同一条（同输入、同采样），gate 判 `empty_reply`，主人读到
+#      一句零内容的道歉；
+#   ② 只有开场白、正文被截成前言（`golden_traces/20261006_040340/rag_git_svn.json`：写了
+#      "让我帮你找找看～"再发 `search_notes`）——这一份 gate 反而判 **PASS**，
+#      等于把一句内容为零的承诺当成功交付。
+# 成因是上下文里的**仿写**：`with_tool_call_pairs` 为满足 strict 服务商的配对要求，在消息
+# 序列里补了 `assistant(tool_calls=…)`（见该函数 docstring），零工具的 narrator 于是照着
+# 历史的样子发起了工具调用。
+#
+# **只纠正、不动上面那次同消息重试的语义**——那一条有 `tests/test_narrator_empty_retry.py`
+# ⑤ 逐字锁着"重试必须是同一次采样"（理由：判据要能拿复跑当对照）。纠正仍失败 ⇒ 退回原来
+# 那份正文，照旧交 gate，fail-open 方向不变。
+_NARRATOR_NO_TOOLCALL_NUDGE = (
+    "【系统纠正】你这一轮**没有任何工具**：调用工具在这里不会被执行，只会让这一轮作废。"
+    "把你手上已有的东西**直接用自然语言写完**——工具帧/执行回执/动作事实块里有什么就照它们说结果，"
+    "没有拿到就说清没拿到什么。**不要输出任何工具调用**；也不要只写「我这就去查」这类开场白就收尾。"
+)
+
 
 def _cap_frame_text(text: str, used: int) -> tuple[str, dict | None]:
     """给单帧文本封顶，返回 `(文本, 触发说明|None)`；没触发时第二项是 `None`（调用方
@@ -9964,6 +9988,29 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                        usage_fields(resp), _rm.get("finish_reason"))
         record("model", "llm_empty_retry", **usage_fields(resp))
         resp = llm.invoke(_msgs)
+    # ── 零工具节点回了 tool_calls（20261006）──────────────────────────────
+    # 成因与两副面孔见 `_NARRATOR_NO_TOOLCALL_NUDGE` 的注：一条是"正文为空 + 一条 tool_call"
+    # （同消息重试必然复现 ⇒ 兜底道歉），另一条是"只有开场白 + 一条 tool_call"
+    # （gate 判 PASS ⇒ 内容为零却当成功交付）。这里**加一次带纠正的调用**，不是改上面那次
+    # 同消息重试的语义（那一条被离线锁逐字钉着）。纠正后仍带 tool_calls 或仍为空
+    # ⇒ 退回纠正前那份正文，照旧交 gate：这一步只可能变好，不会把原本能过的轮次弄坏。
+    if getattr(resp, "tool_calls", None):
+        _bad = resp
+        _names = [str((c or {}).get("name")) for c in (_bad.tool_calls or [])]
+        logger.warning("[model] narrator 回了 tool_calls（零工具节点不该有）n=%d names=%s"
+                       " → 带纠正重问一次", len(_names), _names)
+        record("model", "llm_toolcall_correct", n=len(_names), names=_names,
+               **usage_fields(_bad))
+        _corr = llm.invoke(_msgs + [SystemMessage(content=_NARRATOR_NO_TOOLCALL_NUDGE)])
+        if getattr(_corr, "tool_calls", None) or not ((getattr(_corr, "content", "") or "").strip()):
+            logger.warning("[model] 纠正后仍不可用（tool_calls=%d，正文 %d 字）"
+                           " → 保留纠正前那份正文",
+                           len(getattr(_corr, "tool_calls", None) or []),
+                           len(str(getattr(_corr, "content", "") or "")))
+            record("model", "llm_toolcall_correct_failed", **usage_fields(_corr))
+            resp = _bad
+        else:
+            resp = _corr
     # ── 贴纸残记号修补（20261002）────────────────────────────────────────
     # 模型偶尔把 `:头疼:` 写成 `:头疼`（少了收尾冒号）：前端两处渲染器都按
     # `:([^:\s]{1,12}):` 匹配，缺尾冒号结构上匹配不上，而"未命中就原样保留成文本"
