@@ -247,6 +247,11 @@ uv sync
 .venv/bin/python eval/run_golden.py --only <id>,<id>   # 只跑指定用例
 .venv/bin/python eval/golden_full_run.py               # 全量跑（与 run_golden 共用判据）
 
+# L2 换成自包含夹具（自带语料、桩服务与用例；出处声明跟着用例文件走）——见 eval/fixtures/README.md
+.venv/bin/python eval/fixtures/serve.py --port 8099
+BLOG_API_BASE=http://127.0.0.1:8099/api/public \
+    .venv/bin/python eval/run_golden.py --golden eval/fixtures/golden_smoke.jsonl
+
 # L3 跨源对账（零 LLM、零网络、只读）：trace ↔ agent.log ↔ 前端上报
 .venv/bin/python eval/trace_reconcile.py --days 1
 
@@ -256,8 +261,9 @@ uv sync
 .venv/bin/python eval/artifact_retention.py --apply  # 真删（夜间脚本已接）
 ```
 
-三点要知道：
+几点要知道：
 
+- **L2 的判据锚在维护者的语料上**：`eval/golden/basic.jsonl` 的期望（`require_doc_terms` 的术语表、检索用例的命中目标）是从默认站点那几篇文章的正文里派生的 ⇒ 对着**自己**的博客跑必然对不上，而**红的样子与“模型退化”一模一样**。启动时有一条语料出处闸先判这件事（对不上 ⇒ 全部用例**未评估** + 退出码 3，并明说“这不是模型退化”）；想在自己的部署上跑端到端，用 `eval/fixtures/` 的自包含夹具（自带语料、桩服务与用例，跑法见那里的 README）。
 - L0 适合 CI（秒级、无外部依赖），push 即拦截；L2 依赖真实模型和外部服务，不进普通 push 门禁——它由 `scripts/nightly_regression.sh` 在夜间跑，联动 L1 与 L3，任一门禁项失败会在磁盘上留一个标记文件由心跳探针带出来。
 - golden 分两类判：带 `regression` 标签的回归组硬判 100%，能力题按通过率。平均数会把两类红混在一起，严重度不同，所以分开。
 - 有几条用例需要“真实身份”（要以某个 uid 真调上游），由环境变量给出（见下一节）；未设时它们**响亮地跳过并计入报告**，不静默豁免。
