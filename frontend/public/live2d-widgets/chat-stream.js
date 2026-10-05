@@ -266,6 +266,13 @@
     // **顺序是判据**（见 handleAskChoice 里 `other` 那一支）：`other` 不是 `yes` 也
     // 不是 `pick:<i>`，一旦漏进隐藏确认请求，服务端 `confirm.narrow` 会 fail-closed
     // 拒掉——卡片结算了、屏幕上一切正常、其实一个字节都没执行。本仓最贵的失效形态。
+    //
+    // 这里只有**开输入框**那一半（只碰工厂层看得见的东西）。提交那一半
+    // （submitAskOther）住在 init 里、紧挨着 handleAskChoice：它要调 resizeInput 与
+    // sendMessage，而这两个是 init 的局部 const——工厂层调它们就是 20260921d 那次
+    // `Uncaught ReferenceError: sendMessage is not defined`（点确定什么都没发生、
+    // 界面也没有任何提示）。父仓 `frontend/tests/live2d-widget-scope.test.mjs` 的
+    // 作用域洞扫描盯着这条线，别把 submitAskOther 挪回工厂层。
     const revealAskOther = () => {
       if (!askOther) {
         // 模板缺节点不能静默：用户看到的是"点了按钮什么都没发生"
@@ -275,35 +282,6 @@
       askOther.classList.add('active');
       if (askOtherInput) { try { askOtherInput.focus(); } catch (e) {} }
       scrollToBottom(messages, true);
-    };
-    const submitAskOther = () => {
-      const ask = ctx.state.pendingAsk;
-      if (!ask || !askOtherInput) return;
-      const text = String(askOtherInput.value || '').trim();
-      if (!text) return;          // 空提交什么都不做：卡片保持可点，确定/取消都还在
-      // 忙判据与 handleAskChoice、sendMessage 里的那几处**同源**，且必须**先于结算**：
-      // 反过来的顺序（先结算、再发现发不出去）就是"卡片说改了、系统里什么都没有"。
-      if (ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length) {
-        reportConfirm('在卡片里改口时此刻有轮次在跑（本窗发送中/别的窗口回复中）'
-                      + '——卡片保留，待收尾后再提交');
-        return;
-      }
-      // 到这里才结算，且先摘待办再结算：不摘的话下面 sendMessage 的
-      // `if (!silent && ctx.state.pendingAsk) hideAsk()` 会再结算一次（两次结论）。
-      // 结论用 amend 而不是 cancel——对账读的就是"取消了几次 / 改口了几次"。
-      // click 这一跳报在**这里**而不是点开输入框那一刻（那一支的注释写了理由）：
-      // 一次提交 = 一跳 click + 一跳 settle，跳数配平才不会被读成"点了没结论"。
-      ctx.state.pendingAsk = null;
-      reportAskStage('click', { id: String(ask.id || ''), value: 'other' });
-      askSettle('这次不算，按你说的来', undefined, 'amend');
-      // 非 silent ⇒ 走**普通发言**那条路（用户气泡、落库、广播、命令执行全都一样）。
-      // sendMessage 读的是主输入框（`input.value`），所以先把话回填进去——「重发」
-      // 那条路径用的也是这一手（见 restoreAndCleanup）。代价：主输入框里若正压着
-      // 半句草稿，会被这一轮带走（它随后被清空）；与重发路径逐字同款，不为此另造
-      // 一条只给卡片用的发送通道（那会让"用户发言"有两条实现，早晚漂）。
-      input.value = text;
-      resizeInput();
-      sendMessage();
     };
     // 问句渲染（20260925）：与气泡走同一套 markdown 管线（applyMsg → renderMarkdown
     // + 渲染后增强）。此前是 `textContent`，问句里的 `**全部**`、列表、行内代码会被
@@ -2338,6 +2316,44 @@
         });
       }
 
+      // 改口的**提交**那一半（20261006）：与 handleAskChoice 同层（init 内），因为它
+      // 要调 resizeInput 与 sendMessage——那两个是 init 的局部 const，从工厂层调它们
+      // 正是 20260921d 的 ReferenceError（见工厂层 revealAskOther 的注释）。
+      // **位置在 handleAskChoice 之前**：父仓 `live2d-widget-scope.test.mjs` 另有一条
+      // 判据，取「处置函数声明 → 按钮委托绑定」之间的源码段，要求段内最后一个 return
+      // 出现在「确认中…」那次结算之前。把本函数塞进那一段会让它扫到这里的 return，
+      // 读成"卡片写了确认中却不发请求"——判据没错，是位置不对。
+      // （写这段注释时别把判据取界的两个锚点原文抄进来：那条判据按**首次出现**定位，
+      //   注释里抄一遍就成了它认的那个起点，它扫的正是本注释自己那个空段。）
+      const submitAskOther = () => {
+        const ask = ctx.state.pendingAsk;
+        if (!ask || !askOtherInput) return;
+        const text = String(askOtherInput.value || '').trim();
+        if (!text) return;          // 空提交什么都不做：卡片保持可点，确定/取消都还在
+        // 忙判据与 handleAskChoice、sendMessage 里的那几处**同源**，且必须**先于结算**：
+        // 反过来的顺序（先结算、再发现发不出去）就是"卡片说改了、系统里什么都没有"。
+        if (ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length) {
+          reportConfirm('在卡片里改口时此刻有轮次在跑（本窗发送中/别的窗口回复中）'
+                        + '——卡片保留，待收尾后再提交');
+          return;
+        }
+        // 到这里才结算，且先摘待办再结算：不摘的话下面 sendMessage 的
+        // `if (!silent && ctx.state.pendingAsk) hideAsk()` 会再结算一次（两次结论）。
+        // 结论用 amend 而不是 cancel——对账读的就是"取消了几次 / 改口了几次"。
+        // click 这一跳报在**这里**而不是点开输入框那一刻（那一支的注释写了理由）：
+        // 一次提交 = 一跳 click + 一跳 settle，跳数配平才不会被读成"点了没结论"。
+        ctx.state.pendingAsk = null;
+        reportAskStage('click', { id: String(ask.id || ''), value: 'other' });
+        askSettle('这次不算，按你说的来', undefined, 'amend');
+        // 非 silent ⇒ 走**普通发言**那条路（用户气泡、落库、广播、命令执行全都一样）。
+        // sendMessage 读的是主输入框（`input.value`），所以先把话回填进去——「重发」
+        // 那条路径用的也是这一手（见 restoreAndCleanup）。代价：主输入框里若正压着
+        // 半句草稿，会被这一轮带走（它随后被清空）；与重发路径逐字同款，不为此另造
+        // 一条只给卡片用的发送通道（那会让"用户发言"有两条实现，早晚漂）。
+        input.value = text;
+        resizeInput();
+        sendMessage();
+      };
       // ── 通用询问卡片（20260921）：agent 需要用户输入（写操作授权/二次确认）时弹 ──
       // 按钮按帧里的 opts 动态生成（本轮固定 确定/取消；将来接别的用途不用改协议）。
       // 事件用委托——按钮是动态建的。处置函数定义在此处（init 内层）而不是模块
