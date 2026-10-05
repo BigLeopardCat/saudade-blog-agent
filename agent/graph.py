@@ -80,7 +80,7 @@ from agent import adminops as A
 from agent import authz
 from agent import confirm
 from agent import refs
-from agent import sections
+from rag import sections
 from agent.stickers import repair_sticker_tokens
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _doc_anchors, _frame_texts, _has_frames,

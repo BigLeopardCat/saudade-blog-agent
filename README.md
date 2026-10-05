@@ -190,7 +190,6 @@ saudade-blog-agent/
 │   ├── confirm.py         无状态 HMAC 确认令牌
 │   ├── adminops.py        后台目标解析、写操作确认文案和回执摘要
 │   ├── refs.py            结构化参数引用
-│   ├── sections.py        超长文章分节（索引 / 帧 / 按节取回三处共用）
 │   ├── entities.py        执行回执实体摘要
 │   ├── tasks.py           跨轮任务状态
 │   ├── hostinfo.py        本机运维读数（只读 /proc、systemctl、日志）
@@ -200,6 +199,7 @@ saudade-blog-agent/
 │   └── …                  其余模块见目录（action_text / factblock / stickers / llm_usage / agent / memory 等）
 ├── tools/base.py          63 个工具、工具注册表和 ToolResult 契约
 ├── rag/search.py          BM25 内存倒排检索
+├── rag/sections.py        超长文章分节（索引 / 帧 / 按节取回三处共用；纯函数）
 ├── eval/                  检索评测、golden 评测、trace 分析与跨源对账
 ├── tests/                 秒级离线回归测试
 └── docs/                  架构、评测可观测性和问题记录

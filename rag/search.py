@@ -45,6 +45,7 @@ import threading
 import time
 
 from config.settings import settings
+from rag.sections import split as split_sections
 from rag.vector_index import (
     corpus_fingerprint,
     degraded_reason,
@@ -128,15 +129,14 @@ def tokenize(text: str) -> list[str]:
 def chunk_note(title: str, content: str) -> list[dict]:
     """markdown 标题切 chunk；短文（<2000 字符）不切。返回 [{section, text}]。
 
-    20260920 起**只是 agent/sections.py 的转发**（多出的 `level` 键被下面的
+    20260920 起**只是 rag/sections.py 的转发**（多出的 `level` 键被下面的
     `{**d, "section":…, "text":…}` 展开丢弃，索引行为逐字不变）：索引切片、候选里
     的 `sections`、按节取回（get_article_detail(section=…)）必须是**同一套边界**，
     各写一份的下场是"改了一边忘了另一边"——同一篇文章在检索里是 §9、在取回时
     找不到 §9。切分规则与短文短路语义全部保留（含 <2000 不切、只认 1-3 级）。
     """
-    from agent.sections import split
     return [{"section": c["section"], "text": c["text"]}
-            for c in split(content, title, shortcut=True)]
+            for c in split_sections(content, title, shortcut=True)]
 
 
 # ── 本轮实际走了哪条路（20261005）────────────────────────────────────

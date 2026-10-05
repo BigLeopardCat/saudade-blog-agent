@@ -40,7 +40,7 @@
 > ⑥两条侧任务收成模块（`agent/moderator.py` / `agent/summarizer.py`，此前是 `server.py`
 > 里的内联适配层、零测试、不可信文本裸插值）：各自带不可信输入围栏 + 输出白名单 + 明确
 > 失败取向（审核 fail-open、摘要 fail-empty），`tests/test_side_tasks.py`（48 项）进 CI 门禁。
-> ⑦超长文章分节渲染与按节取回（新增 `agent/sections.py`，见 §5.2）——全文帧不再逐字
+> ⑦超长文章分节渲染与按节取回（`rag/sections.py`，20261005 从 `agent/` 搬到 `rag/`，见 §5.2）——全文帧不再逐字
 > 无声硬截断；`get_article_detail(section=…)` 提供取回手段；索引/渲染/取回三处共用同一套
 > 节边界。回归锁 = `tests/test_sections.py`（68 项）。
 > 上上版：2026-09-19（20260919 参数引用：§6.5 新增 `$<工具>[<序号>].<字段>` 参数绑定——
@@ -139,7 +139,6 @@ flowchart TB
 │   ├── factblock.py           # ★ 动作族分族（命令族+写族，量化口径与 narrator_facts_share 同源）＋历史事实行剥离；**系统代印 20261005 起停用**（BLOCK_FAMILIES 空集）
 │   ├── stickers.py            # 贴纸残记号的确定性修补（20261002）：把只写了开头冒号的 `:头疼` 补回 `:名字:`
 │   ├── llm_usage.py           # 一次 LLM 调用的 token 用量提取（trace 用量字段的唯一来源，喂 token_cost_report）
-│   ├── sections.py            # ★ 超长文章分节（20260920）：索引切片 / 帧按整节取舍 / `section=` 按节取回，三处共用一套节边界
 │   ├── moderator.py           # 侧任务·审核：不可信输入围栏 + 输出白名单 + fail-open
 │   ├── summarizer.py          # 侧任务·摘要：fail-empty
 │   ├── hostinfo.py            # 本机运维读数（只读 /proc、systemctl、日志）——get_server_status / get_service_health 的数据源
@@ -149,6 +148,9 @@ flowchart TB
 ├── rag/                       # ★ RAG 检索管线（20260830）：词法 2/3-gram BM25 内存倒排 + 10 分钟懒刷新，
 │   │                          #   语料=线上可见文章（20260901 净化：说说/留言/公告移出检索池，走数据工具直查）；
 │   │                          #   检索只定位（候选 type/id/标题/分），解读走 get_article_detail 全文
+│   ├── sections.py            # ★ 超长文章分节（20260920；20261005 从 agent/ 搬来）：索引切片 / 帧按整节取舍
+│   │                          #   / `section=` 按节取回，三处共用一套节边界。**纯函数（只 import re）**——
+│   │                          #   住这里是为了让下面两层的消费者导入它时不必拉起 langgraph
 │   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
 ├── tools/
 │   ├── base.py                # 63 个 @tool 工具（含 rag_search / get_article_detail 泛化 doc_type）+ _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重 + trace_id 透传 device-service
@@ -578,7 +580,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 "文档里没写"。旧实现还有两个更隐蔽的坑：repr 里换行是字面 `\n`（52834 字里真换行 0 个），
 按 `^#{1,3}` 切节会切出 0 节——"按小节告诉模型缺了什么"这件事在 repr 上根本做不出来。
 
-`agent/sections.py`（纯函数，无 IO 无 LLM）一条实现、三处共用：
+`rag/sections.py`（纯函数，无 IO 无 LLM）一条实现、三处共用：
 
 | 消费方 | 用途 |
 |---|---|

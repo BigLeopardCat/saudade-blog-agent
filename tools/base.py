@@ -30,6 +30,12 @@ from utils.logging import get_trace_id
 # 不反向依赖本模块 ⇒ 无环。
 from config import settings as _settings
 
+# 文章分节（20261005 从 `agent/sections.py` 搬到 `rag/`，见该模块头注）：纯函数、只 import `re`，
+# 三处共用（本模块的按节取回 / `rag/search.py` 的索引切片 / `agent/context.py` 的帧节选）。
+# **提到模块顶部**——它原先住在 `agent` 包里，只能写成函数内惰性导入（"别让 tools 层启动即拉
+# agent 包"），而那个包一导就是 langgraph 全家（实测冷启动 1.69s）。
+from rag import sections as _text_sections
+
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://saudade.site/api/public"
@@ -546,15 +552,14 @@ def _read_section(data: dict, article_id, want: str) -> ToolResult:
     取不到小节时**不返回空**：把候选小节名列出来才是可行动的（模型改一次指称即可），
     说"没找到"而不给候选，等于让它再赌一次。
     """
-    from agent.sections import candidates, pick     # 惰性：别让 tools 层启动即拉 agent 包
     content = data.get("noteContent") or data.get("content") or ""
     title = data.get("noteTitle") or data.get("title") or ""
-    hit = pick(content, want, title)
+    hit = _text_sections.pick(content, want, title)
     if hit is None:
         return ok(str({
             "noteKey": article_id, "noteTitle": title, "readSection": str(want),
             "sectionText": "",
-            "availableSections": candidates(content, want, title)[:40],
+            "availableSections": _text_sections.candidates(content, want, title)[:40],
             "note": "该文章没有标题匹配此指称的小节（本节未读到任何内容）；"
                     "可用小节见 availableSections，请照其中的名字或编号重试。",
         }))

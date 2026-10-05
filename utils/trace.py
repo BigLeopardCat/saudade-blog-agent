@@ -56,7 +56,7 @@ TRACE_DIR = settings.trace_dir
 # 档位数值来自 20260925 golden 那一批**不受限**的实测（641 份 trace 的 call 事件）：
 #   get_article_detail 最大 40000（撞到 golden 的上限，是唯一撞的）、list_guestbook 4335、
 #   list_talks 2254、list_notes 1107、list_tags 993、get_service_health 617，其余 ≤ 700。
-# 于是：正文单列 8000（再长就该按小节读——`agent/sections.py` 机制既有），
+# 于是：正文单列 8000（再长就该按小节读——`rag/sections.py` 机制既有），
 # 默认 4000 覆盖除正文外的全部实测最大。体积代价：约 33 份/天、每份最坏几 KB
 # ⇒ 一年 100MB 量级（20260925 实测：27 天 3.7MB；磁盘余 9.1G）。
 #

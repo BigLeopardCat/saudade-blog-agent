@@ -18,7 +18,7 @@ r"""单帧预算哨兵：`agent/context.py::_DETAIL_FRAME_PER` 今天还装得�
 ## 判据
 
 对站内每篇可见文章，按**与 `execute_node` 造帧完全相同的那两步**算帧长：
-`tools.base._note_row_with_tag_names(row)` → `agent.sections.slim_frame(str(row))`。
+`tools.base._note_row_with_tag_names(row)` → `rag.sections.slim_frame(str(row))`。
 两个函数都是直接 import 的真实现（这里不重写一份"大概一样"的算法——那正是
 本仓反复踩的"两侧各写一份、改了一边忘了另一边"）。然后与预算逐篇比：超了就是超了。
 
@@ -37,7 +37,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from agent import sections                                    # noqa: E402
+from rag import sections                                      # noqa: E402
 from agent.context import _DETAIL_FRAME_PER                    # noqa: E402
 from tools.base import _get, _note_row_with_tag_names          # noqa: E402
 from utils import trace as trace_mod                           # noqa: E402

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""超长文章处理（agent/sections.py）的回归锁（20260920）。
+"""超长文章处理（rag/sections.py）的回归锁（20260920）。
 
 被锁住的问题：`get_article_detail` 的全文帧按字符上限**硬截断**，而且**无声**——
 实测站内最长文章 note 19 = 25,445 字（帧 repr 52,834 字），上限 20,000 意味着
@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
 
-from agent import sections                       # noqa: E402
+from rag import sections                         # noqa: E402
 from agent.context import (_DETAIL_FRAME_PER, _compact_list_frame,  # noqa: E402
                            _frame_texts)
 from agent.decisions import _doc_title           # noqa: E402
@@ -245,8 +245,10 @@ check("去重没有动 `_shape`（那是引用取值源，必须保持原样）"
       "slim_frame" not in (ROOT / "tools" / "base.py").read_text(encoding="utf-8"))
 check("trace 记录帧体量 frames_chars", "frames_chars=len(frames_txt)" in g_src)
 rag_src = (ROOT / "rag" / "search.py").read_text(encoding="utf-8")
+# 20261005：`sections.py` 从 `agent/` 搬到 `rag/`（分层，见该模块头注）⇒ 这里锁的
+# import 路径跟着改；判据本身（"索引切分只是转发、不再各写一份"）一字不变。
 check("索引切分只是转发（不再各写一份）",
-      "from agent.sections import split" in rag_src and "def chunk_note" in rag_src)
+      "from rag.sections import split" in rag_src and "def chunk_note" in rag_src)
 
 print("⑧ 列表帧的紧凑渲染（20260921：一行一条 + 整行取舍 + 共几条）")
 # 被锁住的问题：普通帧此前是 `text[:300]` **裸切**——列表帧（dict repr）在**一行中间**

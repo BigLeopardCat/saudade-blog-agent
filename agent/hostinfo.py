@@ -4,7 +4,7 @@ agent 与 Rust/device-service 同机部署，所以"服务器健康度"不需要
 读 `/proc`、`shutil.disk_usage`、`systemctl`、日志文件就够了。这也让运维报表
 **不经过**后台那道门（不消耗发起人的身份），与审核/用户报表的通道是两回事。
 
-分层理由（与 `agent/sections.py`、`agent/entities.py` 同一手法）：把「真去读 /proc、
+分层理由（与 `rag/sections.py`、`agent/entities.py` 同一手法）：把「真去读 /proc、
 跑 systemctl、tail 日志」和「把这些数字组织成人话」分开。前者只有真机上才有意义，
 后者可以喂构造数据单测——而报表最容易错的恰恰是后者（百分比、单位、边界、截断），
 不是前者。所以本模块的函数分两族：`read_*` 碰系统，`parse_*` / `render_*` 只碰数据。
