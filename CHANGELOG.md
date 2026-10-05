@@ -307,6 +307,22 @@
   `prompt_oversize`，两者从不同框，所以既算不出字符/token 比，也无法回头校准那个阈值。
   **不是拿 token 顶替字符数**：usage 只有响应之后才有，调用前唯一的信号就是字符数。
 
+- **命名文档族撤掉整族检索禁令，牙齿改挂正断言（判据，20261005；agent 行为不变）**：
+  `followup_named_doc_no_search` / `_reread` / `_title_only_id` 三条此前都写着
+  `forbid_tool_calls: ["rag_search", "search_notes"]`（不许再为话题搜一遍），而回扫语料
+  给出的判据是**这条禁令从来没有抓到过它自己写下的那个目标**：图臂 164 个样本里 29 次违规
+  （17.7%），**29/29 同时也把该读的那一篇读了**；`title_only_id` 的 12 次违规里每一次读的
+  都是钉住的那篇（id=14），检索词也都是话题词。同轮"读了那篇 + 顺手搜一下话题"在语料里是
+  常态（34 条用例、738 次出现，见 `dep_search_read_graph` / `multi_step_search_then_read_top`），
+  于是这条禁令在结构上只剩假红——**判据成了硬币**。改法（用户点名）：`no_search` 撤禁令、
+  换成 `require_exec_tools: ["get_article_detail"]` + `require_exec_args`（`article_id == 19`）
+  的正断言，锁的是"真去看过那篇"而不是"不许搜"；`title_only_id` 只留 `list_notes` 在禁令里
+  （它锁的是真缺陷：去猜下标、把分页第一条当成用户点名的那篇）；`reread` 保留原有的
+  `require_exec_tools` 半边、禁令整条删除。三条各跑 3 遍共 9/9 通过，且**绿的那几次模型
+  照旧搜了**（`no_search`/`reread` 都调了 `rag_search` + `search_notes`，同时读了 19）
+  ⇒ 撤禁令一个字没改行为，只是把假红变绿。语料与分母未动
+  （`test_golden_keys.py` / `test_golden_family_policy.py` 全绿）。
+
 ## 20261004
 
 - **第二条臂能按生产的帧契约产帧了（评测，20261004；只动试验线与评测壳，生产行为零变化）**：
