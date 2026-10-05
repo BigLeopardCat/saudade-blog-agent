@@ -168,9 +168,16 @@ if p:
     check("  问句里把颜色**名 + 值**都给全（点确定前看得见自己同意了什么）",
           "粉色" in q and "#eb2f96" in q, q)
     check("  问句点名标签名", "测试标签" in q, q)
-    check("  选项恰是两个（确定/取消），确定是 primary",
-          [o["value"] for o in p["pending_confirm"]["opts"]] == ["yes", "no"]
-          and p["pending_confirm"]["opts"][0]["kind"] == "primary")
+    # 三枚（20261006）：确定 / 其他（我来说）/ 取消。「其他」是卡内改口的入口——
+    # 点它不结算、不发请求，前端就地开输入框，提交出去的是**普通新轮**（见
+    # chat-render.js 的 .chat-ask-other 与 chat-stream.js 的 handleAskChoice）。
+    check("  选项三枚（确定 / 其他（我来说）/ 取消），确定是 primary、取消恒在末位",
+          [o["value"] for o in p["pending_confirm"]["opts"]] == ["yes", "other", "no"]
+          and p["pending_confirm"]["opts"][0]["kind"] == "primary"
+          and p["pending_confirm"]["opts"][-1]["value"] == "no")
+    _oth = p["pending_confirm"]["opts"][1]
+    check("  「其他（我来说）」是 default 档、字面逐字（它不是同意，别画成主按钮）",
+          _oth["kind"] == "default" and _oth["label"] == "其他（我来说）", str(_oth))
     check("  回复正文（confirm_text）是确定性中文、且**不说已完成**",
           p["confirm_text"] and "已完成" not in p["confirm_text"]
           and "确认" in p["confirm_text"])
@@ -914,8 +921,8 @@ check("令牌签发→验签往返（批 H **不改**令牌格式、不改版本
       isinstance(_pay, dict) and _pay.get("v") == confirm._VERSION
       and _pay.get("specs") == _grant_specs, str(_pay)[:80])
 _opts = A.confirm_opts(len(_grant_specs))
-check("卡面 N+1 枚按钮：全部办 + 逐条「只办第 i 件」+ 取消",
-      [o["value"] for o in _opts] == ["yes", "pick:0", "pick:1", "no"],
+check("卡面 N+2 枚按钮：全部办 + 逐条「只办第 i 件」+ 其他（我来说）+ 取消",
+      [o["value"] for o in _opts] == ["yes", "pick:0", "pick:1", "other", "no"],
       str([o["value"] for o in _opts]))
 check("  「全部办」写着件数（主人点之前看得见自己要同意几件）",
       f"{len(_grant_specs)} 件" in _opts[0]["label"])
@@ -925,9 +932,11 @@ for _i in (0, 1):
           _err == "" and (_narrowed or {}).get("specs") == [_grant_specs[_i]],
           f"{_err} {str(_narrowed)[:60]}")
 check("问句里点名的按钮与卡面按钮同一套字面（不一致 = 问句指着一个不存在的按钮）",
-      all(o["label"].startswith("只办第") for o in _opts[1:-1])
+      all(o["label"].startswith("只办第") for o in _opts[1:-2])
       and "只办第" in A.render_confirm_question(_grant_specs)
       and "全部办" in A.render_confirm_question(_grant_specs))
+check("  「其他（我来说）」恒紧挨在「取消」前面（两种卡面同一位置）",
+      _opts[-2]["value"] == "other" and A.confirm_opts(1)[-2]["value"] == "other")
 check("  多件问句里**逐条编号**（编号就是按钮指的那个下标）",
       "1. " in A.render_action_lines(_grant_specs)
       and "2. " in A.render_action_lines(_grant_specs))
@@ -938,9 +947,17 @@ for _bad_pick in ("pick:9", "pick:99", "2", "pick:-1", "pick:", "全部"):
 _n3, _e3 = confirm.narrow(_pay, "")
 check("  空选择 = 全部办（旧客户端不发 confirm_pick 时逐字兼容）",
       _n3 is not None and len(_n3["specs"]) == 2 and _e3 == "")
-check("  单件仍是旧的两枚（确定/取消），字面一个字节没动",
-      [o["label"] for o in A.confirm_opts(1)] == ["确定", "取消"]
+# 20261006：「其他（我来说）」加进来之后，单件卡是**三枚**了（原文写的是"仍是旧的两枚
+# ——字面一个字节没动"，那句话现在不成立，如实改掉，别留一句会骗人的注释）。
+# 加的是**入口**不是**权限**：可点的动词仍是「确定」，问句的字面照旧一个字没动。
+check("  单件三枚（确定 / 其他（我来说）/ 取消），问句字面仍逐字未变",
+      [o["label"] for o in A.confirm_opts(1)] == ["确定", "其他（我来说）", "取消"]
       and A.render_confirm_question(_grant_specs[:1]).endswith("点「确定」我就去办。"))
+# 这张网是给"顺手把 other 也塞进确认请求"准备的：它不是选择记号，服务端必须
+# fail-closed（零执行）。前端把这一支拦在发请求之前（见 chat-stream.js 的顺序判据）。
+_n4, _e4 = confirm.narrow(_pay, "other")
+check("  「其他」不是选择记号 ⇒ fail-closed（它永不该走确认请求）",
+      _n4 is None and bool(_e4), _e4)
 settings.jwt_secret = _SAVED_SECRET
 
 print("\n  · 跨语言守卫：Rust 那半得真的接上（本机父仓在兄弟目录，找不到会响亮跳过）")

@@ -1664,6 +1664,28 @@
 #waifu-chat #chat-ask .chat-nav-btns { justify-content: flex-start; }
 /* 已确认/已取消：按钮换成一行灰字，卡片留在对话流里当记录（能回看自己确认过什么） */
 #waifu-chat #chat-ask .chat-ask-note { color: #999; font-size: 12px; }
+/* 「其他（我来说）」点开后的输入行（20261006）。默认收起，靠 .active 显形——
+   **不要用 `hidden` 属性**：这里的 `display:flex` 是作者样式，会盖过浏览器默认表的
+   `[hidden]{display:none}`（同特异性下作者样式恒胜），结果就是"状态位写着藏着、
+   屏幕上却一直开着"。收起由 chat-stream.js 的 hideAskOther 统一负责（结算的五个
+   出口都经过它）。 */
+#waifu-chat #chat-ask .chat-ask-other { display: none; gap: 8px; margin-top: 8px; align-items: center; }
+#waifu-chat #chat-ask .chat-ask-other.active { display: flex; }
+#waifu-chat #chat-ask .chat-ask-other-input {
+  flex: 1 1 auto; min-width: 0;              /* min-width:0：grid/flex 子项默认按 min-content 定尺，长占位符会把行顶宽 */
+  padding: 5px 9px;
+  border: 1px solid #f6cfc9;
+  border-radius: 8px;
+  background: #fff;
+  color: #555;
+  font-size: 13px;
+  font-family: inherit;
+}
+#waifu-chat #chat-ask .chat-ask-other-input:focus { outline: none; border-color: #f1948a; }
+#waifu-chat #chat-ask .chat-ask-other-input::placeholder { color: #c9b8b5; }
+/* 「其他」这枚按钮按 no 那档的观感（灰）：它不是同意，是"我要说别的"。 */
+.chat-nav-btn.other { border-color: #999; color: #999; }
+.chat-nav-btn.other:hover { background: #999; color: #fff; }
 
 /* ══════════════════════════════════════════════════════════════════════════
    ── 20261001 手账（washi）皮 ──
@@ -1815,6 +1837,16 @@
 .chat-nav-btn.yes:hover { background: var(--washi-pink-deep, #d94f9a); color: #fff; }
 .chat-nav-btn.no { border-color: var(--washi-line, rgba(198, 152, 192, 0.42)); color: var(--washi-ink-3, #a08ba8); }
 .chat-nav-btn.no:hover { background: var(--washi-ink-3, #a08ba8); color: #fff; }
+.chat-nav-btn.other { border-color: var(--washi-line, rgba(198, 152, 192, 0.42)); color: var(--washi-ink-3, #a08ba8); }
+.chat-nav-btn.other:hover { background: var(--washi-ink-3, #a08ba8); color: #fff; }
+/* 改口输入行（20261006）：与本块其它控件同源（和纸线描边 + 淡纸底 + 令牌色） */
+#waifu-chat #chat-ask .chat-ask-other-input {
+  border-color: var(--washi-line, rgba(198, 152, 192, 0.42));
+  background: var(--washi-paper, #fffdfa);
+  color: var(--washi-ink, #4a3550);
+}
+#waifu-chat #chat-ask .chat-ask-other-input:focus { border-color: var(--washi-pink-deep, #d94f9a); }
+#waifu-chat #chat-ask .chat-ask-other-input::placeholder { color: var(--washi-ink-3, #a08ba8); }
 
 /* ── 会话抽屉（历史会话面板）与左侧图标栏 ── */
 .waifu-conv-panel { background: var(--washi-paper-2, #fff6fa); }
@@ -1889,7 +1921,9 @@
 #waifu-chat.washiDark .conv-confirm-del { background: #a33f30; }
 #waifu-chat.washiDark .conv-confirm-del:hover { background: #c0392b; }
 #waifu-chat.washiDark .chat-nav-btn.yes:hover,
-#waifu-chat.washiDark .chat-nav-btn.no:hover { color: #241d31; }
+#waifu-chat.washiDark .chat-nav-btn.no:hover,
+/* 「其他」与「取消」同色（20261006）：hover 底也是 --washi-ink-3 ⇒ 同一个翻转 */
+#waifu-chat.washiDark .chat-nav-btn.other:hover { color: #241d31; }
 
 /* ══════════════════════════════════════════════════════════════════════════
    ── 20261001 批 D：胶带撤掉 / 标题进签 / 四条边框收成一个 ──

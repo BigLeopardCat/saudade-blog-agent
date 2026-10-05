@@ -2374,16 +2374,25 @@ def confirm_opts(count: int) -> list:
     `render_confirm_question` 里写的「只办第 N 件」是**同一套**，改一处必须改另一处
     （两侧不一致时，问句指的那个按钮在卡上根本不存在）。
 
-    单件仍返回**旧的两枚**（确定/取消）——既有卡片的字面与 `tests/test_confirm.py`
-    的锁都按它写的，本批不动。
+    **「其他（我来说）」（20261006）**：每张卡都多这一枚，位置恒在「取消」**前面**。
+    点它**不结算、不发任何请求**——前端就地露出卡片里的输入框，主人打完字回车，
+    那一轮按**普通新轮**重新规划（见 `chat-stream.js::handleAskChoice` 的 `other` 支）。
+    它的 `value` 是 `"other"`，而 `"other"` **永远不会**被当作 `confirm_pick` 发出去：
+    非 `""`/`"yes"`/`"pick:<i>"` 的取值在 `confirm.narrow` 是 fail-closed（零执行），
+    所以这条拦截必须留在发请求之前——插错位置就会变成"卡片结算了、看着在跑、
+    其实一个字节都没执行"。
+
+    单件 = 确定 / 其他 / 取消，多件 = 全部办 / 只办第 N 件… / 其他 / 取消
+    （`tests/test_confirm.py` 两处按钮形态的锁按这份写）。
     """
     n = int(count or 0)
     if n <= 1:
-        return [{"label": "确定", "value": "yes", "kind": "primary"},
-                {"label": "取消", "value": "no", "kind": "default"}]
-    opts = [{"label": f"全部办（{n} 件）", "value": "yes", "kind": "primary"}]
-    opts += [{"label": f"只办第 {i} 件", "value": f"pick:{i - 1}", "kind": "default"}
-             for i in range(1, n + 1)]
+        opts = [{"label": "确定", "value": "yes", "kind": "primary"}]
+    else:
+        opts = [{"label": f"全部办（{n} 件）", "value": "yes", "kind": "primary"}]
+        opts += [{"label": f"只办第 {i} 件", "value": f"pick:{i - 1}", "kind": "default"}
+                 for i in range(1, n + 1)]
+    opts.append({"label": "其他（我来说）", "value": "other", "kind": "default"})
     opts.append({"label": "取消", "value": "no", "kind": "default"})
     return opts
 
