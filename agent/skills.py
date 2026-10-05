@@ -3872,7 +3872,8 @@ def check_call_args(tool_name: str, args: dict) -> dict:
     用的是**同一个** `tool_arg_schemas()`（单一来源）：必填没给、值归不了 → 这条例目
     被剔除（调用方把原因拼进 `dropped` 后缀）；只多写了系统不认识的参数 → **只剔掉
     那个参数**、调用照常（pydantic 本来就忽略多余字段，剔掉它只是让"已忽略"这件事
-    在 trace 里留痕而不是静默）。
+    在 trace 里留痕而不是静默）；把某个可选参数显式填成**它自己的默认值** → 同样剔掉，
+    理由见下面那一支（"两条通道合成同一个字形"，20261005）。
     """
     schemas = tool_arg_schemas()
     entry = schemas.get(tool_name)
@@ -3901,6 +3902,22 @@ def check_call_args(tool_name: str, args: dict) -> dict:
             why = _bad_choice(name, got, arg_enum(props[name]))
             if why:
                 bad.append(why)
+            elif "default" in props[name] and got == props[name]["default"]:
+                # **显式填了默认值本身**的参数也不落进实参（20261005）。执行侧与"没填"
+                # 逐字等价（pydantic 会补上同一个默认值），但它会让**渲染出的 spec 不
+                # 同一个字形**——而跨轮的重复调用拦截（`graph._search_retry_kind`）比的
+                # 正是 spec 字面量。实测（trace `20261005T194519`）：第 0 轮 planner 走
+                # 无参点名通道（渲染成 `list_talks({})`）、第 1 轮改走 calls 通道并顺手
+                # 填了默认的 `offset: 0`（渲染成 `list_talks({"offset": 0})`）⇒ 同一件读
+                # 被判成两件，白跑一轮 planner + 多打一次上游接口，直到第 2 轮才拦下。
+                # 这与上面"没给值的可选参数不落进实参"是同一条道理：判据是**这次调用
+                # 实际要什么**，不是"模型写了哪些键"——两条通道因此在同一个字形上合流。
+                # 比较用 `==` 不做类型判据：`got` 已被 `_coerce_value` 按 schema 归一，
+                # 与同一份 schema 的默认值同类，`True == 1` 那种跨类相等在这条路上无害
+                # （落到默认值本身，执行结果一字不差）。
+                # 不记 `unknown`（它不是没人读的参数）、不记 `bad`（更不是错），也不打
+                # 日志：这是模型的常规写法，逐条告警只会把真问题淹掉。
+                continue
             else:
                 out[name] = got
         else:

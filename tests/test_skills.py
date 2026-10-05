@@ -748,10 +748,13 @@ def test_explicit_tools():
     p = instantiate_plan("content_query", {"tools": ["list_guestbook", "list_guestbook"]})
     check("重复点名 → 去重", p["tools"] == ['list_guestbook({})'], f"tools={p['tools']}")
     # calls 参数逐字保留（execute literal_eval 还原，白名单校验不吞参数）
+    # 这里刻意用**非默认**的 doc_type：填成默认值（"note"）的那一格会被剔掉
+    # （20261005，为让两条通道渲染成同一个 spec，判据见 test_param_schema 的 ⑤b），
+    # 那条规则不在本套件判，本套件判的是"给的值别被吞掉"。
     p = instantiate_plan("content_query", {"calls": [
-        {"tool": "get_article_detail", "args": {"article_id": 21, "doc_type": "note"}}]})
+        {"tool": "get_article_detail", "args": {"article_id": 21, "doc_type": "talk"}}]})
     check("calls 带参调用 → spec 逐字展开",
-          p["tools"] == ['get_article_detail({"article_id": 21, "doc_type": "note"})'],
+          p["tools"] == ['get_article_detail({"article_id": 21, "doc_type": "talk"})'],
           f"tools={p['tools']}")
     # plan 往返：TOOLS 行解析后工具名保持（execute 依赖）
     obj = instantiate_plan("content_query", {"tools": ["list_guestbook", "list_talks"]})
@@ -3363,6 +3366,13 @@ def test_read_repeat_round():
         check("  只问 planner 一次", len(llm.prompts) == 1)
 
         # ② 换写法：同一篇的 spec 只在 JSON 类型上不同（旧判据拿原文比较，判不出）
+        # 已执行/已回执那一侧写的都是**渲染后的形态**（`{"article_id": 46}`，无
+        # doc_type）——那是生产里真实会留下的形状：显式填的默认值 `doc_type: "note"`
+        # 在 `instantiate_plan` 就被剔掉了（20261005，见 test_param_schema 的 ⑤b）。
+        # 本用例因此同时压住两件事：类型归一（计划侧写字符串 "46"、回执侧写数字 46）
+        # 与默认值剔除（计划文本里写了 `doc_type: "note"`，仍与不带它的已执行 spec 认成同一件）。
+        # 夹具写成"回执里还留着 doc_type"是**旧渲染**的形态，会与计划侧对不上——
+        # 那是夹具过期，不是判据变松。
         cq = ('SKILL=content_query\n'
               'PARAMS={"calls": [{"tool": "get_article_detail", '
               '"args": {"article_id": "46", "doc_type": "note"}}]}\n'
@@ -3374,10 +3384,10 @@ def test_read_repeat_round():
                          ToolMessage(content="{'noteTitle': 'x'}", tool_call_id="execute_0",
                                      name="get_article_detail")],
             "plan_rounds": 1,
-            "executed": ['get_article_detail({"article_id": 46, "doc_type": "note"})'],
+            "executed": ['get_article_detail({"article_id": 46})'],
             "tool_data": [],
             "receipts": [{"skill": "content_query", "tool": "get_article_detail",
-                          "args": {"article_id": "46", "doc_type": "note"},
+                          "args": {"article_id": "46"},
                           "result": "{'noteTitle': 'x'}"}],
         }, _cfg)
         plan2 = parse_plan(out2["plan"])
