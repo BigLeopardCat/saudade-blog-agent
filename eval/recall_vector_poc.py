@@ -196,7 +196,7 @@ def main() -> None:
                                          RRF_K, TOP_N)
                     for q in QUERIES}
 
-    print("\n== 三路指标并排（21 条 query，与 recall_eval 同集）==")
+    print("\n== 三路指标并排（与 recall_eval 同集，条数以那边为准）==")
     routes = {"lexical (BM25 2/3-gram)": lex_by_query,
               "vector (text-embedding-v4)": vec_by_query,
               "RRF (k=60)": rrf_by_query}
