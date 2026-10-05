@@ -592,7 +592,7 @@ scope `write.console`，技能 `board_audit` / `board_delete`）。这一族的�
    `check_freeze`、变更身份 `check_role_change`），agent 侧**不写第二份权限表**——连
    "这个目标能不能改、能改成哪几档"都不预检。理由是有教训的：冻结刚上线时 agent 侧
    自己判了一遍（更保守），结果对着合法请求回了一句**说错政策**的话。非 200 一律读成
-   `policy_frame`，文案逐字转述后端原话（见 `docs/security-boundary.md` §7⑫c–f）。
+   `policy_frame`，文案逐字转述后端原话（见**父仓** `docs/security-boundary.md` §7⑫c–f）。
    **变更身份不能复用冻结那份目标白名单**（`_FREEZE_TOOLS` / `_FREEZE_ALLOWED_TARGETS`）：
    冻结是"关掉"、变更是"换档"，把合法变更拦成假政策正是上面那个坑的翻版。
 3. **写后复核按 id 重读同一份名录**：不一致（读回不是目标身份 / 名录读不到 / 命中变了）一律
