@@ -38,7 +38,25 @@ from rag import sections as _text_sections
 
 logger = logging.getLogger(__name__)
 
-API_BASE = "https://saudade.site/api/public"
+# 工具出口的基址：所有公开读接口（文章/分类/标签/留言板/站内搜索/知识库）与 **RAG 语料**
+# （`rag/search.py::_fetch_corpus` 也走 `_get`）都以它为前缀。
+# 出厂默认是本站域名；**自己部署必须改** ——配置项是 `config/settings.py` 的 `blog_api_base`，
+# 那里写了为什么"不改就等于 agent 答的是别人的文章"。
+# 20261006 之前这里是一个写死的字面量：只读工具指向谁的库，全由这一行决定。
+API_BASE = _settings.blog_api_base
+
+# 站点根：导航事实文本里那个绝对 URL 由它拼出（`f"{SITE_BASE}{path}"`）。
+# **从 API_BASE 反推，不另立配置项**——公开接口与站点本来就同源（生产即如此），
+# 两个值一旦分家，"忘了同步"的症状是**导航 URL 指向别人的站**：前端那条同源校验
+# 会把它拦下（见 CLAUDE.md §3 导航链路），于是跳转静默失败、模型却照常说"已跳转"。
+# 反推不出来（值没写成 `http(s)://…`）就退回只写路径：相对路径对 SPA 桥仍然有效，
+# 只是事实文本里少了那个绝对锚点，总好过指向一个不属于你的域。
+def _site_base(api_base: str) -> str:
+    m = re.match(r"^(https?://[^/]+)", api_base or "")
+    return m.group(1).rstrip("/") if m else ""
+
+
+SITE_BASE = _site_base(API_BASE)
 
 # ── 工具返回值的结构化"两类"（20260916 加固）──
 # 背景：工具失败时返回的是**人话字符串**，与正常内容同型；`_get` 更是把所有上游故障
@@ -1086,7 +1104,7 @@ def navigate_to(
             f"/dashboard/analytics（后台数据板）、/dashboard/usercontrol（后台站点设置）。"
             f"请用有效路径重新调用 navigate_to。"
         )
-    full_url = f"https://saudade.site{p}"
+    full_url = f"{SITE_BASE}{p}"
     # 命令与事实分离（20260926）：**连线命令搬进回执**（`meta["cmd"]` → 回执行
     # `rcpt["cmd"]` → server 发 `__CMD__` 帧 → 前端执行），返回文本只剩**给人看的
     # 事实**。为什么必须搬：同一根字符串此前既是发给浏览器的命令、又是模型唯一看得见的

@@ -288,6 +288,7 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | `LLM_PROVIDER` | `qwen` | 选 `qwen` / `deepseek` / `openai`，各家的 key/base_url/model 各自独立 |
 | `QWEN_API_KEY` / `QWEN_BASE_URL` / `QWEN_MODEL` | — | 当前生产提供方的三项（其余提供方同名同形） |
 | `LLM_TIMEOUT` | `120` | 单次 LLM 调用超时（秒） |
+| `BLOG_API_BASE` | `https://saudade.site/api/public` | **自己部署必改**：所有只读工具与 RAG 语料的取数地址，导航链接的站点根也由它反推。不改的话工具查的是维护者的博客（接口通、返回真，只是不是你的） |
 | `JWT_SECRET` | — | 与 Rust 侧共用，服务间身份断言与短时效 JWT 的签名键 |
 | `AGENT_ADMIN_BASE` | `http://127.0.0.1:3000` | 管理读接口的上游地址 |
 | `DEVICE_SERVICE_URL` | `http://127.0.0.1:3100` | IoT 设备服务地址 |
