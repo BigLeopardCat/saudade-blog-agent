@@ -16,8 +16,10 @@ license = "MIT"
 #   · `langgraph` / `langchain-core` / `pydantic` —— 直接被 import（planner 图、消息类型、
 #     请求体校验），却只作传递依赖存在：上游哪天换实现，本仓会以"运行时 ImportError"
 #     的方式知道，而不是装依赖时就知道。
-#   · `langchain` —— 声明了但**全仓零 import**（只用它的 langchain-core / langchain-openai /
-#     langgraph 三个子包，实测这三个都不需要 meta 包）。已删。
+#   · `langchain` —— 20260928 按"全仓零 import"删过一次（当时的实测是真的）；20261004
+#     第二条臂（`agent/react_line.py`）在顶层把它 import 回来了（`langchain.agents.
+#     middleware` 是 langchain 1.x 的 create_agent 家族，langchain-core 里没有），而这行
+#     没跟着回来 ⇒ 见下面 dev 组那一组的注释。
 #   · `starlette` —— 生产代码不 import 它，但它**是**断连中断机制的行为依赖：
 #     `StreamingResponse` 的 task_group / `listen_for_disconnect` / `asyncio.CancelledError`
 #     传播这套语义直接决定"用户离开后 agent 还执不执行"，而这一族语义跨大版本会变
@@ -38,13 +40,21 @@ dependencies = [
 ]
 
 # 开发工具单独一组：`uv sync` 默认会装它，但**不进运行时依赖**（部署包/产线 venv 只需要
-# 上面那 11 个）。目前只有 ruff——本仓的静态扫描就是它那一条 F821（见 .github/workflows/eval.yml），
-# 版本放这里 = CI 的扫描版本跟着 `uv.lock` 走，不再在 workflow 里手写 `uvx ruff@0.14.4`
-# （那正是"同一件事写两处、改一处忘另一处"的形状）。
+# 上面那 11 个）。两件：
+#   · `ruff` —— 本仓的静态扫描就是它那一条 F821（见 .github/workflows/eval.yml），
+#     版本放这里 = CI 的扫描版本跟着 `uv.lock` 走，不再在 workflow 里手写 `uvx ruff@0.14.4`
+#     （那正是"同一件事写两处、改一处忘另一处"的形状）。
+#   · `langchain` —— 第二条臂（`agent/react_line.py`）的**顶层** import，只有实验线与它的
+#     单测用得到，生产链路一个字都不碰 ⇒ 归 dev 组而不是运行时依赖。**这行是补票**：
+#     20260928 按"全仓零 import"删过它（当时的实测是真的），20261004 那条臂又 import 回来，
+#     而 CI 的 `uv sync --frozen` 只装 `uv.lock` 里有的东西 ⇒ `test_react_arm` /
+#     `test_react_line` / `test_react_narrator_assets` 在 CI 里从那天起**恒红**，
+#     本机却一直是绿的（产线 venv 里还留着删依赖之前的那份 1.3.11）。版本钉在产线
+#     实际在跑的那个上，`uv.lock` 才是"CI 装什么"的唯一事实源。
 # ⚠️ 本机 `.venv` 是**产线 venv**，不许 `uv sync` ⇒ 本机跑静态扫描仍用隔离的
 # `uvx ruff@0.14.4 check …`（与这里同版；升版 = 改这一行 + `uv lock`，本机命令一起改）。
 [dependency-groups]
-dev = ["ruff==0.14.4"]
+dev = ["langchain==1.3.11", "ruff==0.14.4"]
 
 [project.urls]
 Homepage = "https://github.com/BigLeopardCat/saudade-blog-agent"
