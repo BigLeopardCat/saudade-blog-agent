@@ -19,6 +19,8 @@
   · 缺/坏 ⇒ 零工具 + 只说事实的注记（**不许**出现"站内没有/查不到"这类台账话术）；
   · 参数引用（`$tool[N].field`）**原样透传**，永不因类型判据被判不合格；
   · 没给值的可选参数**不落进实参**（显式 null 会覆盖工具默认值、被 pydantic 判非法）；
+    显式填成**默认值本身**的同样不落进实参（20261005：执行侧等价，但渲染出的 spec
+    会与无参通道分成两个字形，跨轮的重复调用拦截就此失效——见 ⑤b）；
   · `content_query.calls` 的条目走同一套校验，原因经 `dropped` 后缀**分两种话术**
     回到 planner（"args 非对象" ≠ "参数不合格"）；
   · **闭集参数（enum）的单一来源是工具类型上的 `Literal[...]`**（20260926 批 5）：
@@ -229,8 +231,10 @@ def test_coercion_and_null_args():
     print("\n[归一] 无损归一照做；没值的可选参数不落进实参")
     p = S.instantiate_plan("content_query", {"calls": [
         {"tool": "get_article_detail", "args": {"article_id": "96", "doc_type": "note"}}]})
+    # `doc_type: "note"` 恰是工具的默认值 ⇒ 20261005 起被剔掉（判据与理由见 ⑤b 那一节）。
+    # 这条要看的是 **article_id 的归一**，实参里少了那半边不影响它——别把它当成回归。
     check('article_id "96" → 96（与 pydantic 宽松模式同解，省一次 __ERROR__ 帧）',
-          p["tools"] == ['get_article_detail({"article_id": 96, "doc_type": "note"})'],
+          p["tools"] == ['get_article_detail({"article_id": 96})'],
           str(p["tools"]))
 
     # 空的可选参数：工具默认值必须能接管（显式 null 会覆盖它、被 pydantic 判非法）
@@ -331,6 +335,57 @@ def test_call_args_dropped_with_typed_reasons():
         check("  两种话术都不说「你够不到这个工具」（那是假的）",
               "够不到" not in msg, msg[:80])
         check("  都要求重决策、都禁止声称执行过", "重新决策" in msg and "调用过" in msg, "")
+
+
+# ── ⑤b 显式填的默认值 = 没填：两条通道必须在同一个字形上合流（20261005）──────
+def test_explicit_defaults_render_as_absent():
+    """为什么值得单钉一条：**这件事只在跨轮才显形**。
+
+    trace `20261005T194519` 实测——问"留言板多少条"，第 0 轮 planner 走无参点名通道
+    （`list_talks` → 渲染成 `list_talks({})`），第 1 轮改走 calls 通道并顺手写了
+    `{"offset": 0}`（默认值本身）⇒ 渲染成 `list_talks({"offset": 0})`。跨轮的重复调用
+    拦截（`graph._search_retry_kind`）比的是 **spec 字面量**，于是同一件读被判成两件：
+    白跑一轮 planner + 多打一次上游接口，直到第 2 轮才被拦下。单跑本套件看不出来
+    （它不跑图），单跑一轮对话也看不出来（第 0 轮的字形是对的）——只有"两条通道写在
+    两轮里"才露头，所以判据必须**两条通道对比着断言**，不能只看其中一条。
+    """
+    print("\n[调用清单] 显式填默认值 ⇒ 与不填渲染成同一个 spec（跨轮重复拦截的判据前提）")
+    # 两条通道、同一件读：无参点名 vs 带参（值恰是默认值）
+    p_tools = S.instantiate_plan("content_query", {"tools": ["list_talks"]})
+    p_calls = S.instantiate_plan("content_query",
+                                 {"calls": [{"tool": "list_talks", "args": {"offset": 0}}]})
+    check("带参填了默认值 offset=0 ⇒ 渲染成 `list_talks({})`",
+          p_calls["tools"] == ["list_talks({})"], str(p_calls["tools"]))
+    check("  **与无参点名通道逐字相同**（这才是跨轮去重判据能咬住的前提）",
+          p_calls["tools"] == p_tools["tools"], f'{p_tools["tools"]} vs {p_calls["tools"]}')
+    check("  默认值被剔掉不是「参数被拒」：不进 dropped/param_unknown",
+          p_calls["dropped"] == [] and p_calls["param_unknown"] == [],
+          f'dropped={p_calls["dropped"]} unknown={p_calls["param_unknown"]}')
+
+    # 反控（判据必须能判出**不该剔**）：非默认值一个都不许被碰
+    p_off = S.instantiate_plan("content_query",
+                               {"calls": [{"tool": "list_talks", "args": {"offset": 60}}]})
+    check("反控：offset=60（非默认值）⇒ 原样留在实参里",
+          p_off["tools"] == ['list_talks({"offset": 60})'], str(p_off["tools"]))
+    p_mix = S.instantiate_plan("content_query", {"calls": [
+        {"tool": "list_notes", "args": {"page": 1, "page_size": 20}}]})
+    check("反控：同一条调用里「默认值剔掉、非默认值留下」各判各的",
+          p_mix["tools"] == ['list_notes({"page_size": 20})'], str(p_mix["tools"]))
+    # 反控之二：**必填**参数即使填成了某个 schema 默认值也照旧在（必填没有默认值，
+    # 这条钉的是"别把判据写成按值匹配、连必填一起吞"）
+    p_req = S.instantiate_plan("content_query",
+                               {"calls": [{"tool": "search_notes", "args": {"keyword": "x"}}]})
+    check("反控：必填参数照旧落进实参（判据不是「值长得像默认值就剔」）",
+          p_req["tools"] == ['search_notes({"keyword": "x"})'], str(p_req["tools"]))
+
+    # 上面几条只保证了**字形**一致；判据有没有真的咬住是另一件事，单独验——
+    # `_search_retry_kind` 收的是"本轮计划"+"此前执行过的 spec 列表"，正是病灶那一格。
+    check("  ⇒ 跨轮重复拦截真的认出这是同一件读（第 1 轮即 data_repeat，不再白跑一轮）",
+          G._search_retry_kind({"skill": "content_query", "tools": p_calls["tools"]},
+                               p_tools["tools"]) == "data_repeat", "")
+    check("反控：offset=60 与「不带 offset」**不是**同款读（别把不同页码判成重复）",
+          G._search_retry_kind({"skill": "content_query", "tools": p_off["tools"]},
+                               p_tools["tools"]) is None, "")
 
 
 # ── ⑥ 闭集参数（20260926 批 5）：Literal 是唯一来源，判在工具层之前 ──────────
@@ -630,6 +685,7 @@ def main():
                test_param_refs_pass_through,
                test_unknown_params_are_loud_but_not_blocking,
                test_call_args_dropped_with_typed_reasons,
+               test_explicit_defaults_render_as_absent,
                test_enum_closure_derives_from_literal,
                test_enum_closure_zeroes_tools_before_pydantic,
                test_alias_normalized_params_stay_open,
