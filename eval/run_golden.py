@@ -702,7 +702,12 @@ def check_case(case: dict, run_result: dict, *, docs=None) -> list[str]:
             fails.append(f"[第 {rnd['round']} 轮] gold 的 round={label} 与轮次不符"
                          "（gold 贴错了行）")
         for f in check_gold(rnd["gold"], res, docs=docs,
-                            user_input=rnd.get("user_input") or ""):
+                            user_input=rnd.get("user_input") or "",
+                            # 台账那一行：`build_request` 用的是同一个 `expand_now`，
+                            # 所以判据比对的字符串与这一轮真发给模型的**逐字同一份**
+                            # （两处各展开一次、各漂各的，是这一族最容易犯的错）。
+                            pending_src=expand_now((rnd.get("context") or {}).get(
+                                "pending_action") or "")):
             fails.append(f"[第 {i + 1} 轮] {f}")
         if res.get("error"):
             fails.append(f"[第 {i + 1} 轮] error: {res['error']}")
@@ -1774,16 +1779,20 @@ def _squash_ws(s: str) -> str:
     return re.sub(r"\s+", "", s.replace("　", " "))
 
 
-def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "") -> list[str]:
+def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
+               pending_src: str = "") -> list[str]:
     """逐项断言 golden 期望，返回失败原因列表（空 = 通过）。
 
     `docs`：语料快照（含正文的文档列表），只有 `require_doc_terms` 用得上。跑法在
     **启动时取一次**逐例传入；`None` ⇒ 带该键的用例判「未评估」（**不是通过**）。
 
-    `user_input`：**这一轮**的主人原话（`iter_rounds` 归一出来的，多轮用例各轮不同）。
-    只有 `require_confirm_payload.args_from_input` 用得上——它判"卡片上的参数是不是
-    主人这句话里的字"。⚠️ 它不在 `gold` 里，只能在调用点传：`gold` 是**期望**，原话
-    是**输入**，混进 `gold` 会让 `GOLD_KEYS` 的"判据键"口径多出一个不是判据的键。
+    `user_input` / `pending_src`：参数出处断言的**两本账**（20261006 晚补第二本）。
+    `user_input` = **这一轮**的主人原话（`iter_rounds` 归一出来的，多轮用例各轮不同）；
+    `pending_src` = 这一轮的 `context.pending_action`，即 Rust 从 `pending_action` 表读回、
+    渲染好的那一行「· 待主人点头（还没做）: …」（**与注入进 system 上下文、与
+    `graph._ledger_pending_text` 读到的是同一根字符串**，理由见那两处长注）。
+    ⚠️ 两者都不在 `gold` 里，只能在调用点传：`gold` 是**期望**，这两样是**输入**，
+    混进 `gold` 会让 `GOLD_KEYS` 的"判据键"口径多出两个不是判据的键。
     """
     text = result["text"]
     commands = result["commands"]
@@ -2027,7 +2036,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "") -> 
     # 原文不得出现在给用户看的正文里**（它是 10 分钟有效的写授权凭据）。
     # 载荷四键：`skill`（精确相等）/ `specs`（参数条数）/ `skill_any`（族——"是哪几件
     # 事之一"这种断言，理由见下面那段注）/ `args_from_input`（20261006：参数正文必须
-    # 是主人原话的子串，理由见下面那一格的头注）。
+    # 是**主人原话或本轮台账那一行**的子串——两本账的理由见下面那一格的头注）。
     _cp = gold.get("require_confirm_payload")
     if _cp:
         _pays = [p for p in (result.get("confirm_payloads") or []) if p]
@@ -2062,18 +2071,43 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "") -> 
             # 采样（主人给几个字就是几个字）——所以它不会把一次换向判成回归。
             # ⚠️ 只对**照抄型**字段用（正文/理由/备注这类）：id、日期、枚举值天然不是
             #    原话的子串，写进这一格会假红。
+            #
+            # 20261006 晚补**第二本账**（本格的孪生这一半）。上面这一段判的是"载荷里的
+            # 字出不出自**这一轮**主人这句话"，而系统自己的规划纪律从 20260923 起就写着
+            # 「短应答先还原语义」：主人回一句「嗯」/「排期到今天」，那件事的参数**不在
+            # 他这一轮的话里**，在上一轮那张卡的台账行里（Rust `render_pending_action`
+            # 渲染、随 system 上下文注入）。只认 `user_input` 的判据会把**系统自己规定的
+            # 重提路径**判成编造——这正是 20261006 待办事故在**行为层**的同一处盲点
+            # （`graph._todo_text_fix` 那一族四道闸当天补的第二本账），不补这一半，判据层
+            # 就留着同一个形状：谁写一条"回「嗯」重提"的用例，**做对了的那一轮会红**；
+            # 更糟的是为了让那条用例变绿，人会去改行为——那等于把已经修好的洞按回去。
+            # 判据的两本账与行为侧**逐字同源**：`pending_src` 就是 `context.pending_action`
+            # （调用点用同一个 `expand_now` 展开，所以它 = 运行时 `req.pending_action`
+            # = `graph._ledger_pending_text(state["ledger"])`）。
+            #
+            # 边界（与行为侧那份边界同款，改这里之前先读）：那一行是**渲染过的行**、
+            # 不是数据通道——Rust 两级截断（参数那一格 200 字、整行 600 字）⇒ 超长正文
+            # 可能落在截断之外，那时照旧拒绝（fail-closed，方向不变）。而它里面的字只
+            # 可能来自本会话里**已过闸、且摆在主人眼前那张卡上**的那一份 `specs` ⇒
+            # 顺着它对回来的是系统自己的字，不是第二个可编造源。
             for _f in (_cp.get("args_from_input") or []):
                 _vals = [str((s.get("args") or {}).get(_f) or "") for s in _specs]
                 _src = _squash_ws(user_input)
-                if not _src:
-                    # 拿不到原话 ⇒ **判不了**，响亮跳过这一格（不是通过）。照"未评估"
+                _led = _squash_ws(pending_src)
+                if not _src and not _led:
+                    # 两本账都拿不到 ⇒ **判不了**，响亮跳过这一格（不是通过）。照"未评估"
                     # 那条纪律：判据的前提住在调用点手里，前提没到就不许静默给绿。
-                    fails.append(f"卡片参数 {_f!r} 判不了：这一轮拿不到主人原话"
-                                 "（`check_gold` 的 `user_input` 传空了）")
-                elif not _vals or not all(v and _squash_ws(v) in _src for v in _vals):
+                    fails.append(f"卡片参数 {_f!r} 判不了：这一轮既拿不到主人原话、"
+                                 "也拿不到台账那一行"
+                                 "（`check_gold` 的 `user_input` / `pending_src` 都传空了）")
+                elif not _vals or not all(
+                        v and (_squash_ws(v) in _src
+                               or (bool(_led) and _squash_ws(v) in _led))
+                        for v in _vals):
                     fails.append(
-                        f"卡片参数 {_f!r} 对不回主人这句话：载荷 {_vals!r}，"
-                        f"原话 {user_input[:40]!r}")
+                        f"卡片参数 {_f!r} 对不回主人这句话、也对不回台账那一行："
+                        f"载荷 {_vals!r}，原话 {user_input[:40]!r}，"
+                        f"台账 {pending_src[:40]!r}")
         for _tk in (result.get("confirm_tokens") or []):
             if _tk and _tk in text:
                 fails.append("令牌原文出现在正文里（它是 10 分钟有效的写授权凭据）")

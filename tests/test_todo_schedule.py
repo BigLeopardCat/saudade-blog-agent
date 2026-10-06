@@ -1957,6 +1957,44 @@ check("⭐ 拿不到主人原话 ⇒ **响亮判不了**（不是静默放行—
       "前提没到就不许给绿）",
       bool(rg.check_gold(_GOLD, _cp_result("交房租"), user_input="")))
 
+# ── 第二本账（20261006 晚，判据层的那一半）────────────────────────────────
+# 上一格判的是"载荷里的字出不出自**这一轮**主人这句话"。而系统自己的规划纪律
+# （rule 1 / rule 21）要求"短应答照 pending_action 原样重提"——那件事的正文**不在
+# 他这一轮的话里**，在上一轮那张卡的台账行里。只认 `user_input` 的判据会把系统自己
+# 规定的那条路判成编造：**行为侧**当天已经修过（`_todo_text_fix` 那一族四道闸都接了
+# `ledger_src`），**判据侧**当时没动（判据的改动要点头）——这一格就是补它的孪生。
+# 不补的后果有两条，第二条比第一条贵：① 谁写一条"回『嗯』重提"的用例，**做对的
+# 那一轮会红**；② 为了让那条用例变绿，人自然会去改行为——等于把刚修好的洞按回去。
+check("⭐ 正控：先确认这一格**本来**会红（不先亮这一条，下面那条『放行』是假的——"
+      "绿色可能只是判据根本没跑）",
+      bool(rg.check_gold(_GOLD, _cp_result(_INCIDENT_BODY), user_input="嗯")))
+check("⭐ 台账那一行在场 ⇒ **放行**：主人这一轮只说了一个「嗯」，正文照抄台账原文就是对的",
+      rg.check_gold(_GOLD, _cp_result(_INCIDENT_BODY), user_input="嗯",
+                    pending_src=_LEDGER_LINE) == [])
+check("  反向对照：台账在、但那一行里**没有**这个正文 ⇒ 仍然判红"
+      "（模型新编的走不了第二本账这个后门）",
+      bool(rg.check_gold(_GOLD, _cp_result(_HALLUCINATED), user_input="嗯",
+                         pending_src=_LEDGER_LINE)))
+check("  反向对照二：两本账都拿不到 ⇒ 照旧**响亮判不了**"
+      "（第二本账不许把『前提没到』变成静默给绿）",
+      any("判不了" in f for f in rg.check_gold(_GOLD, _cp_result(_INCIDENT_BODY),
+                                              user_input="", pending_src="")))
+check("  加第二本账**没有松掉第一本**：台账在场时，只出现在主人原话里的正文照旧放行"
+      "（两支是并列的『或』，台账不是「只有它才算数」）",
+      rg.check_gold(_GOLD, _cp_result("交房租"), user_input=_GOLD_MSG,
+                    pending_src="在后台首页的待办里加一条「买牛奶」") == [])
+# 接线锁：两本账都得由**调用点**喂进来，而喂进来的那根字符串必须与真发给模型的
+# 逐字同一份——`build_request` 与 `check_case` 各展开一次 `expand_now`，
+# 两处各漂各的正是这一族最容易犯的错（行首是 `{now…}` 占位符，展开时刻不同 ⇒
+# 同一行在两边长得不一样，判据与模型看到的东西从根上就不是一份）。
+_rgsrc = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
+check("⭐ 接线在位：`check_case` 把这一轮的 `context.pending_action` 喂给判据"
+      "（漏了它 ⇒ 第二本账恒空，上面那条『放行』测的是个没人调用的参数）",
+      'pending_src=expand_now((rnd.get("context") or {}).get(' in _rgsrc)
+check("  且判据点与请求构造点用的是**同一个** `expand_now`（两处各漂各的 ⇒ "
+      "判据比对的字符串与模型看到的那一行不是同一份）",
+      _rgsrc.count("expand_now(") >= 3 and '"pending_action") or ""))' in _rgsrc)
+
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
