@@ -265,6 +265,28 @@ CLASSES = [
         rule=None,
     ),
     dict(
+        key="golden-run-archive-matrix",
+        label="`GOLDEN_ARM=matrix` 臂（`eval/param_matrix.py` 的调参跑）每轮留档",
+        root=DEFAULT_REPORT_ROOT,
+        patterns=["runs_matrix/**"],
+        status="open",
+        owner=None,
+        owner_ref=None,
+        retention="未接管（与 golden-traces 必须一起设计——与 `runs/` 同一条理由）",
+        why="20261006 起调参档的留档落在这里（`eval/golden_arm.py::ARM_MATRIX`）。"
+            "**在此之前它落进 `runs/`**：`param_matrix` 不设 `GOLDEN_ARM` ⇒ 臂名恒 `graph` "
+            "⇒ 目录恒 `runs/`、写 `last_run.json` 的资格也开着（而它的头注写着"
+            "「不写 last_run.json」）。**实测的后果是前半截**：`landing_gate` 的 readiness / "
+            "慢性红榜按目录整扫，把温度臂、deepseek 臂的读数当成生产档的夜间读数混进窗口"
+            "（含两份 `ds-chat`，下界 0.643 / 0.635）。**后半截没发生**：那 9 份留档的 "
+            "`full_run` 全是 `False`（有 env 跳过）⇒ 写基线那道闸虽然开着、一次都没响，"
+            "`last_run.json` 仍是生产档上一次全量跑写的。别把「没响」记成「设计对了」。"
+            "**为什么与 `runs/` 同处置**："
+            "它同样是 `golden_trace.prune` 的判据源（每条留档都带 `trace` 路径），"
+            "单独清同样会让窗口外的 trace 变成「证据不足」永久保留。",
+        rule=None,
+    ),
+    dict(
         key="wordgraph-builds",
         label="词图构建中间产物",
         root=DEFAULT_REPORT_ROOT,

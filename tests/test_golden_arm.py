@@ -108,6 +108,19 @@ check("**臂名只进目录、不进文件名**（文件名序 = 时间序是全
       or ga.reports_dir(ga.ARM_REACT) != ga.reports_dir(ga.ARM_GRAPH))
 check("能当基线的只有 graph 臂（`last_run.json` 的写入资格）",
       ga.is_baseline_arm(ga.ARM_GRAPH) and not ga.is_baseline_arm(ga.ARM_REACT))
+# `matrix` 臂（20261006）：`eval/param_matrix.py` 跑的是**同一套循环、另一套旋钮**，
+# 但归档身份必须与生产档分开——它此前落进 `runs/`，被 `landing_gate` 的 readiness /
+# 慢性红榜整目录扫进窗口（实测：最近 12 份"全量"里 9 份是它），而写 `last_run.json`
+# 的资格也开着（param_matrix 头注却写着"不写 last_run.json"）。**资格开着 ≠ 真发生过**：
+# 那 9 份的 `full_run` 全 False ⇒ 那道闸一次都没响。这三条是让那句头注**变成真的**
+# ——判据要靠结构立着，不靠"恰好没开火"。
+check("matrix 臂另开目录（生产档那个 `runs/` 只留生产档的读数）",
+      ga.reports_dir(ga.ARM_MATRIX) == "eval/report/runs_matrix"
+      and ga.reports_dir(ga.ARM_MATRIX) != ga.reports_dir(ga.ARM_GRAPH))
+check("matrix 臂**不能**当基线（它覆盖 `last_run.json` = 把基线悄悄换成调参档的读数）",
+      not ga.is_baseline_arm(ga.ARM_MATRIX))
+check("matrix 臂的 engine 仍以 native 开头（它改良自哪一层看得出）",
+      ga.engine_for(ga.ARM_MATRIX) == "native+matrix", repr(ga.engine_for(ga.ARM_MATRIX)))
 
 print("\n③ 建臂路由：graph 走 create_agent；别的臂**要么建起来、要么响亮失败**（不回退）")
 _agent_mod = sys.modules["agent"]
@@ -122,6 +135,9 @@ except RuntimeError as e:
           "回退" in str(e))
 check("上面那次失败**没有**去建 graph（静默退回 = 一份看着像第二条臂的假读数）",
       CALLS == ["create_agent"])
+check("matrix 臂与 graph **同一份实现**（它换的是旋钮不是循环 ⇒ 不许去找 `agent.matrix_arm`）",
+      (CALLS.clear(), ga.build_agent(ga.ARM_MATRIX) is _SENTINEL)[1]
+      and CALLS == ["create_agent"], str(CALLS))
 # 试验臂的**模块名约定**（`agent.<臂>_arm`）本身是接线的一部分：改名会让主线那份壳
 # 认不出试验分支的实现，而症状是上面那条 RuntimeError（响亮，可查）。这里锁住约定文字，
 # 免得日后"顺手"把模块挪个位置、判定却仍写着旧名。
