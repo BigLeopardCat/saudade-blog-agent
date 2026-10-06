@@ -666,6 +666,12 @@ submitted → running → succeeded / failed / cancelled
 
 ## 7. 待拍板 / 待实测
 
+> ⚠️ **下表的第 2–4 行会引 `text` 做对照。那个 `text` 是 20260927/0928 那批的对照臂读数，
+> 该档 20261004 已连同拨盘一起删除**（`settings.planner_engine`、影子档、`extract_plan_fields`；
+> 见本文件开头追记与 `CHANGELOG.md:532-540`）。**读作"当时那个档跑了多少"，不是"今天还能拨的档"**——
+> `eval/dial_matrix.py` 的四档里没有它，`tests/test_ci_suite_list.py:128` 还钉着它不存在。
+> 同理：**内部计划文本协议**（`plan_encode`/`parse_plan`）与这个档**不是一回事**，它**一分未动**。
+
 | # | 事项 | 需要的判据 |
 |---|---|---|
 | 1 | ~~冻结的只读分支名称~~ | **已定：`freeze/text-plan-protocol`**；**20261004 该分支与 `widget/pos-20261003` 一并删除**（本地 + 远端，独有提交均为 0），详见 §3 第 3 项 |
