@@ -1658,6 +1658,252 @@ finally:
     else:
         g._TOOL_MAP["reschedule_dashboard_todo"] = _saved_rsch
 
+# ══════════════════════════════════════════════════════════════════
+# ⑲ 待办正文的**出处**：planner 不许替主人编那一件事（20261006 事故）
+#
+# **现场**（trace `20261006T093633`，uid=1 超管，主人原话见 `_INCIDENT_MSG`）：主人在
+# 第一句里就把两件事连编号带标点写得清清楚楚，planner 选了 `dashboard_todo_add`、
+# 格式合法、正文却是**另一件事**——「给晶宝恢复身份后跟进功能测试是否恢复正常」，
+# 那句话来自**更早的上下文**，这句话里一个字都没有。卡片照弹，主人照着这张卡签字，
+# 系统就会把一件他从没说过的事记进他的待办清单。
+#
+# **为什么跑了这么多轮全量回归都没抓到**（三层各漏一格，缺一层都不该漏）：
+#   ① `_WRITE_NAME_FIELDS` 登记了 `complete_dashboard_todo` / `reschedule_dashboard_todo`
+#      （`⑰`/`⑱` 那两条），**没有** `create_dashboard_todo`——"加一条"的目标不是站内
+#      既有台账里的一行，"名字通道"与"台账通道"都天然不覆盖它；
+#   ② 这件技能的 `planner_contract` 是空的，提示词正文里没有一个字提醒模型"照抄"；
+#   ③ golden `admin_todo_add_popup` 的 `_note` **明写**不做正文逐字断言（理由：参数
+#      由 planner 采样填），于是这一格在评测层**没有任何判据**。
+#   实测命中率：同一条输入连跑 12 次，只有 3 次把正文关联对（25%）。
+#
+# 修法（`graph.py::_todo_text_fix`）：与 `⑰`/`⑱` 同一条纪律——**主人自己标出来的那
+# 一段才是正文**。三态，边界在"绝不替他编"：
+#   · 有据不动：planner 填的正文能在主人这句话里找到 → 一个字不改；
+#   · 无据 + 主人标了标记 → 校正成标记后那一段（`todo_text_correct`），TOOLS 行重建；
+#   · 无据 + 没标记 → 零工具 + 如实请他把那件事原样再说一次（不许猜一件顶上）。
+print("\n⑲ 待办正文的出处闸：主人标出来的那一段才是正文（20261006 事故）")
+
+import agent.skills as _S  # noqa: E402
+from _native_stub import bind_tools_stub, native_reply  # noqa: E402
+
+_skill_map = _S.SKILL_MAP
+# 接线判据读的是**源码字面**（同 `test_plan_channel` 钉 `plan_encode` 调用点那条）：
+# 这几句是"这道闸到底有没有被 `planner_node` 用上"的唯一可离线断言的东西——
+# 换成调用计数就得跑整流，而这里要锁的恰恰是"链上有没有这一步"。
+_graph_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+
+
+class _ScriptedLLM:
+    """按脚本吐计划、留提示词（同 `test_confirm_leftovers` 那台）。"""
+
+    bind_tools = bind_tools_stub
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+
+    def invoke(self, prompt):
+        return native_reply(self.replies.pop(0))
+
+
+def _planner_cfg():
+    """uid=1 超管 + 那条事故 trace 的会话号（`planner_node` 只从 config 取身份与会话）。"""
+    return {"configurable": {"user_id": 1, "principal": Principal(uid=1, role="superadmin"),
+                             "conversation_id": 324, "stop_event": None}}
+
+
+_INCIDENT_MSG = ("闺女，给我加一条今天的待办，1.agent开发：探讨引入JEV等决策模式的修改面"
+                 "和后续评估升级。2.后台面板移动端适配是灾难级别的，亟待优化。")
+_INCIDENT_BODY = ("1.agent开发：探讨引入JEV等决策模式的修改面和后续评估升级。"
+                  "2.后台面板移动端适配是灾难级别的，亟待优化。")
+# 逐字取自那条 trace 的 `planner/decision` 事件——**不许改写**：判据就是照着它定的。
+_HALLUCINATED = "给晶宝恢复身份后跟进功能测试是否恢复正常"
+
+# ⭐ **接线在位**是本节其余全部断言的前提（同 `⑰` 的第一条）：抽取器/校正器写好了却
+# 没接进 `planner_node` 的 fixer 链，下面每一条都会静默变成测一个没人调用的函数。
+# 三条一起判：调用点在链上、拒绝来源有独立取值、`value_tail` 认得它（漏了最后一条则
+# 拒绝轮的叙述会把"系统自己的参数值"说成"主人点名的名字"）。
+check("⭐ `_todo_text_fix` 已接进 planner 的 fixer 链（漏接线 ⇒ 本节其余全部空转）",
+      "todo_refuse = _todo_text_fix(" in _graph_src)
+check("⭐ 拒绝来源有独立取值 `todo_text`（与其他五类出处分得开：报表要能按它计数）",
+      '"todo_text" if todo_refuse' in _graph_src)
+check("  且它进了 `value_tail` 的那一组（否则拒绝轮的叙述会把系统自己的参数值"
+      "说成主人点名的名字）",
+      "(value_refuse or grounded_refuse or todo_refuse)" in _graph_src)
+
+# ── 抽取器本身：抽不出就是 `None`，**从不编造** ────────────────────────────
+for _msg, _want, _why in [
+        (_INCIDENT_MSG, _INCIDENT_BODY, "整句：编号连标点原样带走（一个字节都不许整理）"),
+        ("帮我记一条待办：明天交房租，别忘了", "明天交房租，别忘了", "标记后紧跟冒号"),
+        ("记一下，明天要买牛奶", "明天要买牛奶", "标记后紧跟逗号"),
+        ("帮我在待办里加一条「把上周那篇配图换掉」", "把上周那篇配图换掉", "引号段整体"),
+        # ⚠️ 这一条是**收紧过的**：放成"任意 ≤8 字 + 逗号"时它会被抽出「具体是什么
+        #    我到时候再说」——那**是主人的原话**（出处闸放行），却根本不是一件事。
+        #    出处闸只回答"是不是他说的字"，回答不了"这是不是那件事"。
+        ("安排一下下周要办的事，具体是什么我到时候再说", None, "标记后面的尾巴不是那件事"),
+        ("我对下个月有点想法，先记下来", None, "没有标记"),
+        ("记录一下，下周三体检", None, "近似但不是标记（标记表是**闭集**）"),
+]:
+    check(f"抽取：{_why} → {_want!r}", g._msg_todo_text(_msg) == _want,
+          repr(g._msg_todo_text(_msg)))
+
+# ── 三态（用真的校正器，不重写判据）────────────────────────────────────────
+def _add_plan(text):
+    """planner 那一份计划体的形状（`params` 与 TOOLS 行两态都要在）。"""
+    obj = instantiate_plan("dashboard_todo_add", {"text": text}, "admin")
+    obj["params"] = {"text": text}
+    return obj
+
+
+def _add_gate(plan_obj, user_msg):
+    """真校正器 + 捕获 trace 事件（不重写判据：`record` 换成记账的那个）。"""
+    _ev: list = []
+    _saved_rec = g.record
+    g.record = lambda node, event, **data: _ev.append((node, event, data))
+    try:
+        ref = g._todo_text_fix(plan_obj, user_msg, "admin")
+    finally:
+        g.record = _saved_rec
+    got = (g._tool_args((plan_obj.get("tools") or [""])[0])[0] or {}).get("text")
+    return ref, got, plan_obj, _ev
+
+
+_ref_g, _got_g, _p_g, _ev_g = _add_gate(_add_plan(_HALLUCINATED), _INCIDENT_MSG)
+check("无据 + 主人标了标记 ⇒ 校正成主人标的那一段（**不拒绝**：那件事他真的说了）",
+      _ref_g is None and _got_g == _INCIDENT_BODY, repr(_got_g))
+check("  TOOLS 行**同步重建**（弹卡印的与 execute 执行的是同一份参数，不是两处各算一遍）",
+      _p_g.get("tools") == [f'create_dashboard_todo({json.dumps({"text": _INCIDENT_BODY}, ensure_ascii=False)})'],
+      str(_p_g.get("tools")))
+check("  `params` 也同步（弹卡载荷读的是它）",
+      (_p_g.get("params") or {}).get("text") == _INCIDENT_BODY,
+      str(_p_g.get("params")))
+check("  校正事件进 trace（否则「系统改写了 planner 填的正文」在事后只能靠肉眼看文本）",
+      [e[1] for e in _ev_g] == ["todo_text_correct"]
+      and _ev_g[0][2].get("used") == _INCIDENT_BODY
+      and _ev_g[0][2].get("got") == _HALLUCINATED, str(_ev_g))
+
+_ref_ok, _got_ok, _p_ok, _ev_ok = _add_gate(_add_plan(_INCIDENT_BODY), _INCIDENT_MSG)
+check("**有据不动**：planner 填的就是主人那一段 ⇒ 一个字节不改、不拒绝",
+      _ref_ok is None and _got_ok == _INCIDENT_BODY
+      and _p_ok.get("tools") == [f'create_dashboard_todo({json.dumps({"text": _INCIDENT_BODY}, ensure_ascii=False)})']
+      and _ev_ok == [], repr(_got_ok))
+
+_ref_no, _got_no, _p_no, _ = _add_gate(_add_plan(_HALLUCINATED), "我对下个月有点想法，先记下来")
+check("无据 + 主人**没**标标记 ⇒ 零写 + 如实追问（绝不猜一件顶上）",
+      isinstance(_ref_no, str) and "原样再说一次" in _ref_no, str(_ref_no))
+check("  说明里**原样印出**系统填的那个字面（主人要能看出系统编了什么）",
+      isinstance(_ref_no, str) and _HALLUCINATED in _ref_no)
+check("  空正文归展开层（`_expand_todo_skill` 那条「缺少正文」），**不**在这里抢答",
+      g._msg_todo_text("加一条待办") is None
+      and g._todo_text_fix(_add_plan(""), "加一条待办", "admin") is None)
+
+# ── 不动边界：这几格只要动一下，就是"系统改别人的活"──────────────────────
+_p_multi = _add_plan(_HALLUCINATED)
+_p_multi["tools"] = _p_multi["tools"] + ["list_dashboard_todos({})"]
+check("多 spec ⇒ 退回下一道门（`_todo_text_fix` 只管**单条加待办**这一格）",
+      g._todo_text_fix(_p_multi, _INCIDENT_MSG, "admin") is None
+      and _p_multi.get("tools")[0] != f'create_dashboard_todo({json.dumps({"text": _INCIDENT_BODY}, ensure_ascii=False)})')
+_p_ref = _add_plan("$tool[0].text")
+check("带 `$ref` 的参数不校正（那是**上一轮工具产出**的指代，不是主人这句话里的字）",
+      g._todo_text_fix(_p_ref, _INCIDENT_MSG, "admin") is None)
+_p_other = instantiate_plan("dashboard_todo_done", {"text": _HALLUCINATED}, "admin")
+_p_other["params"] = {"text": _HALLUCINATED}
+check("别的工具（勾完成/改排期走的是 `⑰` 那条台账通道）⇒ 本闸一个字都不动",
+      g._todo_text_fix(_p_other, _INCIDENT_MSG, "admin") is None
+      and (_p_other.get("params") or {}).get("text") == _HALLUCINATED)
+_p_cs = _add_plan(_HALLUCINATED)
+_p_cs["skill"] = "review_inbox"      # 变更集族：params 是 `{"calls": [...]}`，没有 `text` 槽
+_p_cs["params"] = {"calls": [{"tool": "create_dashboard_todo",
+                              "args": {"text": _HALLUCINATED}}]}
+check("⭐ 变更集那一族不碰：单条 `calls` 里出现同一件工具时，只按工具名判会往 "
+      "`{\"calls\": …}` 里塞一个没人读的 `text` 并拿它重建整份计划（丢的是一批裁决）"
+      "——所以技能名也要判",
+      g._todo_text_fix(_p_cs, _INCIDENT_MSG, "admin") is None
+      and _p_cs.get("params") == {"calls": [{"tool": "create_dashboard_todo",
+                                             "args": {"text": _HALLUCINATED}}]},
+      str(_p_cs.get("params")))
+check("  「加一条」**不**进 `_WRITE_NAME_FIELDS`：它的正文不在任何站内台账里，"
+      "登记上去等于让台账通道去查一本查不到的书（它只会回一句「没有」= 假话）",
+      "create_dashboard_todo" not in g._WRITE_NAME_FIELDS)
+
+# ── 端到端（真 `planner_node` + 桩 LLM）：拒绝真的落到"零工具零帧"──────────
+_saved_llm = g.get_llm
+try:
+    _llm = _ScriptedLLM([f'SKILL: dashboard_todo_add\nPARAMS: '
+                         f'{json.dumps({"text": _HALLUCINATED}, ensure_ascii=False)}'])
+    g.get_llm = lambda **kw: _llm                                     # noqa: ARG005
+    _out = g.planner_node({"messages": [HumanMessage(content="我对下个月有点想法，先记下来")],
+                           "plan_rounds": 0, "done": False}, _planner_cfg())
+    _po = _out.get("plan_obj") or {}
+    check("端到端：planner 编了正文而主人没标标记 ⇒ 本轮**零工具**（一个写都不发）",
+          _po.get("tools") == [], str(_po.get("tools")))
+    check("  结构化产出物带 `source=todo_text`（下游 `_no_popup_fact` 按它选支，"
+          "不必再猜这一段散文在说什么）",
+          (_po.get("refusal") or {}).get("source") == "todo_text",
+          str(_po.get("refusal")))
+
+    _llm2 = _ScriptedLLM([f'SKILL: dashboard_todo_add\nPARAMS: '
+                          f'{json.dumps({"text": _HALLUCINATED}, ensure_ascii=False)}'])
+    g.get_llm = lambda **kw: _llm2                                    # noqa: ARG005
+    _out2 = g.planner_node({"messages": [HumanMessage(content=_INCIDENT_MSG)],
+                            "plan_rounds": 0, "done": False}, _planner_cfg())
+    _po2 = _out2.get("plan_obj") or {}
+    check("端到端：主人标了标记 ⇒ **不拒绝**，照常走弹卡（那件事他说了，只差抄对）",
+          _po2.get("refusal") is None and _po2.get("tools") == [
+              f'create_dashboard_todo({json.dumps({"text": _INCIDENT_BODY}, ensure_ascii=False)})'],
+          str(_po2.get("tools")))
+finally:
+    g.get_llm = _saved_llm
+
+# ── 契约在位：描述与参数说明里那句"照抄"不许被后来的改动挤掉──────────────
+_add_skill = _skill_map.get("dashboard_todo_add")
+check("技能描述仍写着「照抄主人说的」与「不许润色」（提示词正文那一层是**唯一**"
+      "还在提醒模型照抄的地方——这一句掉了，校正器就变成事后补漏）",
+      _add_skill is not None and "照抄主人说的" in _add_skill.description
+      and "不许润色" in _add_skill.description)
+check("  参数说明同款（`text` 那一格写的是「原样，不要改写」）",
+      _add_skill is not None and "原样" in str(_add_skill.inputs.get("text"))
+      and "改写" in str(_add_skill.inputs.get("text")),
+      str(_add_skill and _add_skill.inputs.get("text")))
+
+# ── 评测层那一格（这才是「全量回归跑了这么多轮没发现」的答案）────────────────
+# golden `admin_todo_add_popup` 现在带 `require_confirm_payload.args_from_input: ["text"]`：
+# 载荷里那一格必须是**主人这句话的子串**。这一节的最后三条就是它的**判据的判据**——
+# 一条判据不加反向对照就等于没加（本仓纪律）：喂一个编出来的正文必须当场红、
+# 喂一个主人原话里的片段必须放行、拿不到原话时必须**响亮判不了**（不是静默给绿）。
+sys.path.insert(0, str(ROOT / "eval"))
+import run_golden as rg  # noqa: E402
+
+_GOLD = {"require_confirm_payload": {"skill": "dashboard_todo_add",
+                                     "args_from_input": ["text"]}}
+
+
+def _cp_result(text):
+    """一条 `__CONFIRM__` 帧的解析结果（形状照 `run_one` 的产物，只留判据要读的键）。"""
+    return {"text": "好呀，这一步要动到站内数据，我先跟你确认一下：", "commands": [],
+            "tool_calls": [], "exec_rows": [], "exec_tools": [],
+            "frames": [], "confirm_tokens": ["tok"], "resets": 0, "resets_resets": [],
+            "resets_reasons": [], "reset_scopes": [], "fallback_reasons": [], "error": None,
+            "confirm_payloads": [{"skill": "dashboard_todo_add",
+                                  "specs": [{"tool": "create_dashboard_todo",
+                                             "args": {"text": text}}]}]}
+
+
+_GOLD_MSG = "帮我记一条待办：明天交房租，别忘了"
+check("⭐ 反向对照：编出来的正文（`20261006` 那条 trace 的原话）⇒ 判据**当场红**"
+      "（不红的话这一格等于没加）",
+      bool(rg.check_gold(_GOLD, _cp_result(_HALLUCINATED), user_input=_GOLD_MSG)),
+      str(rg.check_gold(_GOLD, _cp_result(_HALLUCINATED), user_input=_GOLD_MSG)))
+check("  主人原话里的片段 ⇒ 放行（不锁措辞、不锁采样长度：主人给几个字就是几个字）",
+      rg.check_gold(_GOLD, _cp_result("明天交房租，别忘了"), user_input=_GOLD_MSG) == []
+      and rg.check_gold(_GOLD, _cp_result("交房租"), user_input=_GOLD_MSG) == [])
+check("  空白差异不算抄错（模型抄写时换行/加全角空格 ⇒ 归一后仍是原话）；"
+      "但**标点**变了就是抄错了字，不在豁免里",
+      rg.check_gold(_GOLD, _cp_result("明天 交房租，别忘了"), user_input=_GOLD_MSG) == []
+      and bool(rg.check_gold(_GOLD, _cp_result("明天交房租 别忘了"), user_input=_GOLD_MSG)))
+check("⭐ 拿不到主人原话 ⇒ **响亮判不了**（不是静默放行——判据的前提住在调用点手里，"
+      "前提没到就不许给绿）",
+      bool(rg.check_gold(_GOLD, _cp_result("交房租"), user_input="")))
+
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))

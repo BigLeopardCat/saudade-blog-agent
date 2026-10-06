@@ -701,7 +701,8 @@ def check_case(case: dict, run_result: dict, *, docs=None) -> list[str]:
         if int(label) != int(rnd["round"]):
             fails.append(f"[第 {rnd['round']} 轮] gold 的 round={label} 与轮次不符"
                          "（gold 贴错了行）")
-        for f in check_gold(rnd["gold"], res, docs=docs):
+        for f in check_gold(rnd["gold"], res, docs=docs,
+                            user_input=rnd.get("user_input") or ""):
             fails.append(f"[第 {i + 1} 轮] {f}")
         if res.get("error"):
             fails.append(f"[第 {i + 1} 轮] error: {res['error']}")
@@ -1764,11 +1765,25 @@ def judge_corpus() -> "list | None":
     return snap
 
 
-def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
+def _squash_ws(s: str) -> str:
+    """空白归一（`require_confirm_payload.args_from_input` 比子串前用）。
+
+    只归空白、**不动标点**：主人原话与参数值之间的差异只允许是排版上的（模型抄写时
+    换行/加空格），标点变了就是抄错了字。全角空格一并归一——中文正文里它和空格等价。
+    """
+    return re.sub(r"\s+", "", s.replace("　", " "))
+
+
+def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "") -> list[str]:
     """逐项断言 golden 期望，返回失败原因列表（空 = 通过）。
 
     `docs`：语料快照（含正文的文档列表），只有 `require_doc_terms` 用得上。跑法在
     **启动时取一次**逐例传入；`None` ⇒ 带该键的用例判「未评估」（**不是通过**）。
+
+    `user_input`：**这一轮**的主人原话（`iter_rounds` 归一出来的，多轮用例各轮不同）。
+    只有 `require_confirm_payload.args_from_input` 用得上——它判"卡片上的参数是不是
+    主人这句话里的字"。⚠️ 它不在 `gold` 里，只能在调用点传：`gold` 是**期望**，原话
+    是**输入**，混进 `gold` 会让 `GOLD_KEYS` 的"判据键"口径多出一个不是判据的键。
     """
     text = result["text"]
     commands = result["commands"]
@@ -2010,8 +2025,9 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
     # `__CONFIRM__` 帧里的令牌解出（`confirm.inspect`：只解 base64、不验签；评测读它
     # 不构成授权判据，见 agent/confirm.py 里那条警告）。顺带锁一条安全不变量：**令牌
     # 原文不得出现在给用户看的正文里**（它是 10 分钟有效的写授权凭据）。
-    # 载荷三键（20260926 补第三键）：`skill`（精确相等）/ `specs`（参数条数）/
-    # `skill_any`（族——"是哪几件事之一"这种断言，理由见下面那段注）。
+    # 载荷四键：`skill`（精确相等）/ `specs`（参数条数）/ `skill_any`（族——"是哪几件
+    # 事之一"这种断言，理由见下面那段注）/ `args_from_input`（20261006：参数正文必须
+    # 是主人原话的子串，理由见下面那一格的头注）。
     _cp = gold.get("require_confirm_payload")
     if _cp:
         _pays = [p for p in (result.get("confirm_payloads") or []) if p]
@@ -2033,6 +2049,31 @@ def check_gold(gold: dict, result: dict, *, docs=None) -> list[str]:
                              f"载荷 {_pay.get('skill')!r}")
             if "specs" in _cp and len(_specs) != _cp["specs"]:
                 fails.append(f"卡片参数条数不符：期望 {_cp['specs']}，载荷 {len(_specs)}")
+            # 20261006：**参数正文的出处**。这条判据是 20261006 待办事故的直接产物：
+            # 那一天 planner 把「加一条今天的待办，1.…」的正文填成了**上一轮上下文里**
+            # 的另一件事（trace `20261006T093633`），卡片照样弹、格式完全合法、`skill`
+            # 与 `specs` 两条断言全绿——因为**这两条判据没有一个字看参数本身**。
+            # 那一格在评测层的判据此前是**空的**（`admin_todo_add_popup` 的 `_note`
+            # 明写不做正文断言，理由是"参数由 planner 采样填"，于是全量回归跑了多少轮
+            # 都看不见它）。
+            #
+            # 写法是**正断言**：这一格里点名的字段，其值必须是**主人这句话的子串**
+            # （空白归一后比）。它只拦"正文对不回主人原话"这一种错法，不锁措辞、不锁
+            # 采样（主人给几个字就是几个字）——所以它不会把一次换向判成回归。
+            # ⚠️ 只对**照抄型**字段用（正文/理由/备注这类）：id、日期、枚举值天然不是
+            #    原话的子串，写进这一格会假红。
+            for _f in (_cp.get("args_from_input") or []):
+                _vals = [str((s.get("args") or {}).get(_f) or "") for s in _specs]
+                _src = _squash_ws(user_input)
+                if not _src:
+                    # 拿不到原话 ⇒ **判不了**，响亮跳过这一格（不是通过）。照"未评估"
+                    # 那条纪律：判据的前提住在调用点手里，前提没到就不许静默给绿。
+                    fails.append(f"卡片参数 {_f!r} 判不了：这一轮拿不到主人原话"
+                                 "（`check_gold` 的 `user_input` 传空了）")
+                elif not _vals or not all(v and _squash_ws(v) in _src for v in _vals):
+                    fails.append(
+                        f"卡片参数 {_f!r} 对不回主人这句话：载荷 {_vals!r}，"
+                        f"原话 {user_input[:40]!r}")
         for _tk in (result.get("confirm_tokens") or []):
             if _tk and _tk in text:
                 fails.append("令牌原文出现在正文里（它是 10 分钟有效的写授权凭据）")

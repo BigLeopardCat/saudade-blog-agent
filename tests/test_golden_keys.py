@@ -119,6 +119,27 @@ for case in _cases:
             if k not in KNOWN | rg.GOLD_COMMENT_KEYS:
                 _unknown.append(f"{case.get('id')}: rounds[{i}].gold.{k}")
 check("没有拼错的 gold 键（拼错 = 那段断言静默不执行）", not _unknown, "；".join(_unknown))
+
+# ⚠️ **顶层键拼对、子键拼错**是同一种失效的下一层：`require_confirm_payload` 的值是个
+# dict，`{"skil": ...}` / `{"arg_from_input": [...]}` 一样是"看着有判据、其实一个断言都
+# 没跑"。20261006 加第四键 `args_from_input` 时补上这道——它下一次被骗的概率不比顶层低
+# （那张卡是本仓断言键最集中的一格）。
+_CPSUB_GET = re.compile(r"""\b_cp\.get\(\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1""")
+_CPSUB_IN = re.compile(r"""(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s+in\s+_cp\b""")
+# 动态取子键（`_cp.get(k)`）与顶层那条同一个理由：反射扫不到。
+_CPSUB_DYN = re.compile(r"""\b_cp\.get\(\s*[^"'\s)]""")
+_cp_src = _src["eval/run_golden.py"]
+_impl = ({m.group(2) for m in _CPSUB_GET.finditer(_cp_src)}
+         | {m.group(2) for m in _CPSUB_IN.finditer(_cp_src)})
+check("`require_confirm_payload` 的子键都是字面量（动态取键 ⇒ 下面这条扫不到）",
+      not _CPSUB_DYN.search(_cp_src))
+check(f"源码实现的子键（{sorted(_impl)}）四个都在（少一个 = 那条断言被删了）",
+      _impl == {"skill", "specs", "skill_any", "args_from_input"}, str(sorted(_impl)))
+_cp_bad = [f"{c.get('id')}: {k}" for c in _cases for k in
+           ((c.get("gold") or {}).get("require_confirm_payload") or {})
+           if k not in _impl]
+check("用例里的每个载荷子键都有实现（拼错 = 那段断言静默不执行）", not _cp_bad,
+      "；".join(_cp_bad))
 # 单独点名 `note`：它是抓到的第一例（`_note` 少一个下划线）。后来人若复制粘贴了那一行，
 # 报错里直接给出正解。
 check("没有裸 `note`（注释键是 `_note`；写成 `note` 等于这条注释不存在）",

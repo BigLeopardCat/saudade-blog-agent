@@ -5347,6 +5347,11 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 写参数里的**名字值**（新名字 / 标签名列表 / 父标签）同理（②防线续五，见
         # `_name_arg_fix` 上方长注）：新建的名字天然不在字典里，只能来自主人这句话。
         value_refuse = _name_arg_fix(plan_obj, user_msg, role)
+        # 待办正文（20261006，见 `_todo_text_fix` 上方长注）：它是写面里**唯一一格
+        # 目标没有台账可核**的自由文本，此前既不在名字通道也不在台账通道里。
+        # 放在值地基**之后**：两者按工具名互斥（那边收的是新名字/标签名/父标签），
+        # 排在这里只是让"值那一族"读起来仍是一段。
+        todo_refuse = _todo_text_fix(plan_obj, user_msg, role)
         # 目标名的**来源态**（20260924 治本，见 `_target_grounding_refusal` 上方长注）：
         # 校正（`_name_target_fix`）之后这个字面若仍**取不出处**，就是"主人没说过这个
         # 名字"——零写 + 如实追问。排在台账预检**之前**是刻意的：它不读台账，台账读不到
@@ -5367,6 +5372,9 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         elif value_refuse:
             refusal = value_refuse
             subject = "主人这句话本身（要写进站内的名字只能来自这里）"
+        elif todo_refuse:
+            refusal = (_tool_name((plan_obj.get("tools") or ["?"])[0]), todo_refuse)
+            subject = "主人这句话本身（待办的正文只能是主人说出口的那件事）"
         elif grounded_refuse:
             refusal = grounded_refuse
             subject = "主人这句话本身（目标名只能来自主人说出口的那几个字）"
@@ -5396,13 +5404,14 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 既是 trace 的取值，也是本轮的**结构化产出物**（`wrap["refusal"]`，见下方赋值处）。
             # 提到这里算一次，trace 与产出物共用同一个字面。
             refusal_source = ("quote" if quote_refuse else "value" if value_refuse
+                              else "todo_text" if todo_refuse
                               else "grounding" if grounded_refuse
                               else "ledger_id" if ledger_refuse
                               else "policy" if policy_refuse else "ledger")
             # 值/目标名被拒时补一句：那个字面是**系统自己的参数值**，不是主人点名的名字
             # （20260922 探针 ⑤ 实测：如实答复里出现了"站内并没有叫「音乐」的现成
             # 标签"——系统查的是占位文字「标签名」，叙述把两者画了等号 = 假话）。
-            value_tail = ("" if not (value_refuse or grounded_refuse) else
+            value_tail = ("" if not (value_refuse or grounded_refuse or todo_refuse) else
                           "系统要填进参数的那个字面是**系统自己的参数值**，"
                           "不是主人点名的名字——转述它时**原样引述**，"
                           "绝不许把它说成主人说的那个名字。")
@@ -6678,6 +6687,116 @@ def _announcement_text_fix(plan_obj: dict, user_msg,
     fresh["params"] = params
     plan_obj.clear()
     plan_obj.update(fresh)
+
+
+# ── 待办正文：主人说出口的那件事本身（②防线续六，20261006）───────────────────
+# 现场（trace `20261006T093633`，会话 324，uid=1）：主人说「闺女，给我加一条今天的
+# 待办，1.agent开发：探讨引入JEV等决策模式的修改面和后续评估升级。2.后台面板移动端
+# 适配是灾难级别的，亟待优化。」，planner 技能选对了（`dashboard_todo_add`），
+# **正文却是编的**——「给晶宝恢复身份后跟进功能测试是否恢复正常」，那是它从上一轮的
+# 执行台账里顺手抓的一件毫不相干的事。同一条输入连跑 12 次：**只 3 次抄的是主人那句
+# 话**，另 9 次编出了完全不相干的待办（「站内信功能上线」「留言板增加「只看未通过」」
+# 「修复留言板图片上传功能」…）。这条用例的原话换成不含历史的合成输入照样复现 ⇒
+# 不是"串了上文"，是这一格**根本没有出处闸**。
+#
+# 为什么独独漏了它：`_WRITE_NAME_FIELDS` 收了 `complete_dashboard_todo` /
+# `reschedule_dashboard_todo`（那两件的正文是**要动的那一条**，由现场台账核），
+# 唯独没收 `create_dashboard_todo`——它的正文是"要新建的那件事"，**台账里当然没有**，
+# 于是既进不了名字通道、也进不了台账通道，成了写面里**唯一一格没有地基的自由文本**。
+# 而这一格的语义恰恰是最硬的：技能 `description` 与工具参数说明都写着「**照抄主人说
+# 的，不许润色、补细节或改写法**」——它**没有**"由你组织措辞"那一档（对比：公告正文、
+# 站内通知正文都明确允许 planner 组织措辞，所以那两格只校正、不拒绝，见
+# `_announcement_text_fix`）。
+#
+# 判据与 `_board_quote_fix` 同源：**主人这句话是唯一的出处**。三态——
+#   · **有据**（正文是主人原话里的子串）→ 不动（"有据不动"，同 §1.40 那道取值闸）；
+#   · **无据、但主人自己把正文标出来了**（「待办：X」/「记一下，X」/「加一条「X」」）
+#     → 校正成那一段（抽取优先于校验，同 `_name_arg_fix`）；
+#   · **都没有** → 零写 + 如实追问。绝不让编出来的正文进确认卡：卡上那句"要记的事"
+#     长得和主人真正说的事一模一样，主人点一下它就落库了——**弹卡是确认，不是校对**。
+#
+# 边界（刻意不做的事）：**空正文不在这里拒**——那是展开层"缺了就不写"的地盘
+# （`_expand_todo_skill`，`tests/test_todo_schedule.py` ④ 锁着），两处各拒一次会让
+# 同一条缺口在 trace 里长成两条。`date` 参数同理不在这一层：它由
+# `adminops.normalize_due_date` 三态归一、认不出就零写，是**已经有的**另一道闸。
+_TODO_TRIG = r"(?:待办|日程|记一下|记一条|记一件事|记着|记下|加一条|加一下|添加一条|安排一下)"
+# ① 标记 + 分隔符 + 正文。分隔符**要么紧贴标记**（「记一下，明天要买牛奶」），
+#    **要么前面那一小段以名词「待办/日程」收尾**（「加一条今天的待办，1.agent…」）。
+#    这条收敛是实证逼出来的：放成"任意 ≤8 字 + 逗号"之后，
+#    「安排一下下周要办的事，具体是什么我到时候再说」会抽出正文
+#    「具体是什么我到时候再说」——那**是主人的原话**（所以出处闸放行），却根本不是
+#    一件事。出处闸只回答"是不是他说的字"，回答不了"这是不是那件事"，
+#    所以能收紧的形态必须在这里收紧。
+_TODO_BODY_RE = re.compile(
+    _TODO_TRIG + r"[：:，,]\s*([^「『“\"].*)"
+    r"|" + _TODO_TRIG + r"[^：:，,。；;「『“\"]{0,8}(?:待办|日程)[：:，,]\s*([^「『“\"].*)",
+    re.S)
+# ② 标记之后的**引号段**本身就是正文（「帮我在待办里加一条「把上周那篇配图换掉」」）
+_TODO_QUOTE_RE = re.compile(
+    _TODO_TRIG + r"[^：:，,。；;「『“\"]{0,8}[「『“\"]([^」』”\"]+)[」』”\"]", re.S)
+
+
+def _msg_todo_text(user_msg) -> str | None:
+    """主人原话里**他自己标出来的**待办正文；没有标记 → `None`。
+
+    标记式抽取（同 `_msg_marked_field` 的选择）：它**从不编造**——抽不出就是 `None`，
+    宁可退回"如实追问"那一态。固有代价是标记之后若还跟着别的指示（"待办：交房租，
+    另外把标签也改一下"），那一截会被一并当成正文；卡面印得出来，主人点取消即可。
+    """
+    text = str(user_msg or "")
+    m = _TODO_BODY_RE.search(text) or _TODO_QUOTE_RE.search(text)
+    if not m:
+        return None
+    body = next((g for g in m.groups() if g), "").strip()
+    return body.strip("「」『』“”\"'").strip() or None
+
+
+def _todo_text_fix(plan_obj: dict, user_msg, role: str | None = None) -> str | None:
+    """`create_dashboard_todo` 的 `text` 校正到主人说出口的那件事。返回拒绝原因或 `None`。
+
+    只治**新建**这一件：`complete` / `reschedule` 的正文是"要动的那一条"（现场台账核），
+    归 `_WRITE_NAME_FIELDS` 那条通道，两处按工具名严格互斥，不会撞在同一件工具上。
+
+    `role` 仅透传给 `instantiate_plan`（重建计划时 calls 白名单按角色取）。
+    """
+    # ⚠️ 技能名也要判：下面那一步会拿 `plan_obj["skill"]` 重走 `instantiate_plan`，
+    # 而**变更集族**（`review_inbox`）的 `params` 是 `{"calls": [...]}`、`text` 根本
+    # 不是它的槽——单条 `calls` 里若出现 `create_dashboard_todo`，只按工具名判会往
+    # 那份参数里塞一个没人读的 `text`、并用它重建整份计划（丢掉的是一批裁决）。
+    if plan_obj.get("skill") != "dashboard_todo_add":
+        return None
+    tools = plan_obj.get("tools") or []
+    if len(tools) != 1:
+        return None                  # 多 spec 时不猜（"哪一条是主人说的那件事"不唯一）
+    name = _tool_name(tools[0])
+    if name != "create_dashboard_todo":
+        return None
+    args, args_ok = _tool_args(tools[0])
+    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+        return None                  # 带 `$tool[N].field` 引用：取值不由这句话决定
+    got = str(args.get("text") or "").strip()
+    sq_got = _squash_spaces(got)
+    if sq_got and sq_got in _squash_spaces(user_msg):
+        return None                  # 有据不动
+    want = _msg_todo_text(user_msg)
+    if want and _squash_spaces(want) != sq_got:
+        logger.info("[planner] 待办正文校正（主人标出来的那一段）：%r → %r",
+                    got[:40], want[:40])
+        record("planner", "todo_text_correct", got=got[:60], used=want[:60])
+        # 重走 `instantiate_plan`：TOOLS 行与**注记**都从校正后的参数重新生成
+        # （同 `_announcement_text_fix`：只改 spec 字符串的话，注记里还是那个错值）。
+        params = dict(plan_obj.get("params") or {})
+        params["text"] = want
+        fresh = instantiate_plan(plan_obj.get("skill") or "chat", params, role)
+        fresh["params"] = params
+        plan_obj.clear()
+        plan_obj.update(fresh)
+        return None
+    if not sq_got:
+        return None                  # 空正文归展开层（见上方边界注）
+    return (f"系统给这条待办填的正文是「{got}」，它**对不回主人这句话**——待办的正文"
+            "只能是主人说出口的那件事本身，系统不替主人编一件。"
+            "本次没有改动任何内容；请主人把要记的那件事原样再说一次即可，系统照着记。")
 
 
 # ── 名字通道的目标名：主人引号里的那一段才是它（②防线续二）──────────────────
