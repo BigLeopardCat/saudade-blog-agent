@@ -18,7 +18,9 @@ helper。于是这条前提**住在模型够不着的地方**，它只能去抓�
   · `agent/skills.py` —— 技能面（角色可见性、plan 里的工具名真的可执行、**不进**
     角色无关的常量菜单、七件写技能各自点名了它）；
   · 接线锁 —— scope 是 `admin.console`、**不在**「一律弹窗」族（它是只读）、
-    过程行动作词两档一致。
+    过程行动作词两档一致；
+  · ⑥（20261007 补）—— 回落句**也**长在名录这一侧：这是"契约句挪到它脚下"那一半的
+    回归锁，此前只锁在七件写技能那一侧（④）。
 
 为什么主断言落在 **kind / 角色可见性 / 名单集合** 上而不是文本：这一件的失败面是"模型
 找不到那份名录、于是要么不做要么编一个"——断"文本里有没有「账号」"是假绿，换一句措辞
@@ -283,6 +285,36 @@ check("⑤-3 过程行/台账行都有中文动作词（缺了会显示内部工
       and at._NOARG_VERB.get("list_accounts") == "查看后台账号名录")
 check("⑤-4 引用来源名也在（`$list_accounts[…]` 出现时不许打出内部工具名）",
       at._REF_SOURCE_CN.get("list_accounts") == "后台账号名录")
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑥ 名录**这一侧**也自己写着那句话（20261007：回落句长在「它脚下」）")
+
+# ④ 锁的是**七条写技能**那一侧（"名录读不到 ≠ 不能办"长在下一步该去的地方）。
+# 20261007 的 A/B 实测：那半边只买到**一半**遵守率——`account_unmute_popup` 的
+# trace 里 planner 第 1 轮仍原地再点一次 `account_roster`（契约它**看得见**：
+# `build_planner_context` 每轮把全部可见技能的契约都渲染给 planner），差别在
+# **站在哪个技能上**——回落句长在"下一步该去"的技能旁边，而模型卡在"上一步"。
+# 所以同一句话必须**也**长在名录这一侧（`account_roster.planner_contract`）。
+# 下面这条锁的就是它：删掉那一句 ⇒ 本套件红（而不是等哪次跑分掉了才发现）。
+_r_norm = (_roster.planner_contract or "").replace("**", "")
+check("⑥-1 名录技能自己声明了 planner_contract（此前它没有——那正是 20261007 前半段的洞）",
+      bool((_roster.planner_contract or "").strip()), (_roster.planner_contract or "<空>")[:60])
+check("⑥-2 它把本技能**限定成核对手段**、并明说不是写操作的前置"
+      "（④ 那条断言判的是写技能那一半，这一半此前无人守）",
+      "只做核对" in _r_norm and "不是任何写操作的前置条件" in _r_norm, _r_norm[:80])
+check("⑥-3 回落句两半都在：读不到**不是**办不了 + 别再点一次本技能"
+      "（前者是 uid=0 哨兵那三条件例的判据依据，后者治的是同键二次受阻 → wrap_up 那条死路）",
+      "办不了" in _r_norm and "不要再点一次本技能" in _r_norm)
+check("⑥-4 它没有被写成一条「读不到就什么都别做」的禁令——"
+      "必须同时给出**该走哪条路**（改选写技能走确认卡）",
+      "写技能" in _r_norm and "确认卡" in _r_norm, _r_norm[-60:])
+check("⑥-5 与七条写技能的契约**不是同一串**（名录这一侧说的是「本技能只做核对」，"
+      "两边逐字相同就说明有一侧抄错了对象）",
+      all(_roster.planner_contract != c for c in _contracts))
+check("⑥-6 契约没有抄回它自己的描述/参数说明里（同 ④-9 的不变量，两侧一起守）",
+      bool(_roster.planner_contract)          # 空串会让 `"" in 描述` 恒真——那一条由 ⑥-1 判
+      and _roster.planner_contract not in _roster.description
+      and all(_roster.planner_contract not in str(v) for v in _roster.inputs.values()))
 
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
