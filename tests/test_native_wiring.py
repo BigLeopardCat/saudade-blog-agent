@@ -45,6 +45,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa
 import agent.graph as G  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 from agent.skills import visible_skills  # noqa: E402
+from agent.tasks import TASK_DROP, TASK_HOLD  # noqa: E402
 from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
@@ -132,6 +133,21 @@ def _events(rec, name: str) -> list[dict]:
     return [e for e in rec.events if e.get("node") == "planner" and e.get("event") == name]
 
 
+def _expected_schema_names(role: str) -> set[str]:
+    """`planner_node` 该绑的名字集合 = 可见技能 ∪（开档时的两个伪函数）。
+
+    ⚠️ 20261007：原写法是"与 `visible_skills(role)` **全等**"，那句话只在
+    `AGENT_TASK_STATE=0` 下成立——`tests/run_all.py` 把这一档钉成 0，所以 CI 与夜间
+    **从来看不到**；而产线 `.env` 自 20261002 起是**开**的 ⇒ 本机裸跑这套直接红（实测）。
+    口径与 `tests/test_native_plan.py` ① 同一句：**多出来的只准是那两个申报过的伪函数**
+    （名字取 `agent/tasks.py` 的常量，不硬编码），多别的一律红——"不扩权"没被放松。
+    """
+    names = {s.name for s in visible_skills(role)}
+    if settings.agent_task_state:
+        names |= {TASK_HOLD, TASK_DROP}
+    return names
+
+
 # ── ① 单通道接线：schema / 预算 / 提示词 / 计划来源 ─────────────────────────
 def test_binds_schema_and_takes_the_tool_call_as_the_plan():
     print("\n[接线] 预算取 native 那一组、schema 与 visible_skills 同源、计划来自工具调用")
@@ -144,7 +160,9 @@ def test_binds_schema_and_takes_the_tool_call_as_the_plan():
           str({k: v for k, v in llm.kw.items() if k != "temperature"}))
     names = {t["function"]["name"] for t in (llm.bound or {}).get("tools") or []}
     check("绑的 schema 与 visible_skills(admin) 名字集合相等（不扩权是结构性的）",
-          names == {s.name for s in visible_skills("admin")}, str(len(names)))
+          names == _expected_schema_names("admin"),
+          f"n={len(names)} 多={sorted(names - _expected_schema_names('admin'))}"
+          f" 少={sorted(_expected_schema_names('admin') - names)}")
     check("tool_choice=auto + parallel_tool_calls=False",
           (llm.bound or {}).get("tool_choice") == "auto"
           and (llm.bound or {}).get("parallel_tool_calls") is False,
