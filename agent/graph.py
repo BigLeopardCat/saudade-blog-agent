@@ -9376,6 +9376,27 @@ def _cap_frame_text(text: str, used: int) -> tuple[str, dict | None]:
     return text[:head] + "\n" + marker + "\n" + text[-tail:], info
 
 
+def _frame_id(messages: list, idx: int) -> str:
+    """工具帧的配对 id：**同一请求内全局唯一**，不是"本轮的位次"（20261006）。
+
+    服务商靠它把 `assistant.tool_calls[].id` 与 `role:"tool"` 消息配起来，同一个请求里
+    出现两次就是**非法序列**。原先这里写死 `f"execute_{idx}"`（`idx` = 本轮 spec 的
+    下标，逐轮从 0 重新数），而 planner 那一腿**不往 messages 里写任何东西**（它是
+    `llm.invoke(渲染好的字符串)`，见 `context.with_tool_call_pairs` 头注）⇒ 第 2 轮的帧
+    紧挨着第 1 轮 ⇒ 那个补形状的函数把两轮并进**同一条** assistant ⇒ 一条消息里躺着
+    两个 `execute_0`。服务商原话（`eval/report/baseline_20260928_provider_ab.json`）：
+    `Duplicate value for 'tool_call_id' of execute_0 in message[3]`——deepseek 一律 400，
+    qwen 端点容忍，所以生产里从没暴露过。**这不是服务商挑剔，是我们发的序列不合协议。**
+
+    基数取"消息里已有的帧数"而**不是** `plan_rounds`：唯一性于是只依赖本图自身的一条
+    性质——**帧只增不减**（历史注入只造 Human/AIMessage，ToolMessage 只由 `execute_node`
+    append；本图的返回一律走 `add_messages` 的追加语义），不依赖"每轮 planner 恰好对上
+    一次 execute"这条路由约定。纯函数：不读全局、不改入参。
+    """
+    base = sum(1 for m in (messages or []) if isinstance(m, ToolMessage))
+    return f"execute_{base + idx}"
+
+
 def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """确定性执行 planner 调用清单：逐条 literal_eval 参数 → _TOOL_MAP 调用 →
     ToolMessage 帧（含 __ERROR__ 错误帧）→ 逐 spec checker 验收（PASS 回执 /
@@ -9600,7 +9621,8 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             record("execute", "frame_capped", name=name, used=frame_chars - len(frame_text),
                    **capped)
         results.append(ToolMessage(
-            content=frame_text, tool_call_id=f"execute_{idx}", name=name))
+            content=frame_text, tool_call_id=_frame_id(state.get("messages"), idx),
+            name=name))
         logger.info("[execute] %s(%s) → %.100s", name, json.dumps(args, ensure_ascii=False),
                     str(out))
         # 结构化返回值入 tool_data（引用取值源）：帧文本是给人看的（还截断），

@@ -1004,7 +1004,9 @@ flowchart TB
 - execute = 确定性执行节点（graph.py `execute_node`，取代旧 tools_node）：TOOLS 行 spec
   （`<工具名>(<json 参数>)`，参数由 instantiate_plan 以 json.dumps 落盘在 spec 里）逐条照单
   执行——参数解析先 json.loads 再 ast.literal_eval（JSON 的 true/false/null 不是 Python
-  字面量，20260903 单测抓出），产出 ToolMessage 帧（tool_call_id=execute_N）回 planner；未知
+  字面量，20260903 单测抓出），产出 ToolMessage 帧（tool_call_id=execute_N，**N 在请求内单调**
+  ——`_frame_id` 以"消息里已有的帧数"为基数，20261006 前是"本轮 spec 的下标"、逐轮从 0 重编，
+  两轮的帧并进同一条 assistant 就是重复 id ⇒ 严格服务商整轮 400，见问题记录 1.50）回 planner；未知
   工具/参数解析失败 → `__ERROR__` 帧（planner 据错误修正参数或如实收尾，不炸图）。无自由
   意志、无授权检查分支：清单经 instantiate_plan 白名单校验生成，越权工具在 skills 白名单即被
   剥，到不了 execute。执行前做断连检查（写操作绝不发生在用户已离开之后，20260827 实测教训
