@@ -287,27 +287,42 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 
 ## 环境变量
 
-配置分两处：`config/settings.py`（pydantic-settings，字段名的全大写即变量名，读 `.env`）与 `server.py` 直接读的几个进程变量。常用项：
+配置分两处，**而这两处的取值来源不是同一份文件**——这是本节最要紧的一件事：
+
+**A. `config/settings.py`（pydantic-settings）**：字段名的全大写即变量名，读 `.env`。
+**你写进 `.env` 的都会生效。** 全部字段就列在 [.env.example](.env.example) 里（那个文件是这一份的镜像，两边的分节一一对应）。常用项：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `LLM_PROVIDER` | `qwen` | 选 `qwen` / `deepseek` / `openai`，各家的 key/base_url/model 各自独立 |
-| `QWEN_API_KEY` / `QWEN_BASE_URL` / `QWEN_MODEL` | — | 当前生产提供方的三项（其余提供方同名同形） |
+| `QWEN_API_KEY` / `QWEN_BASE_URL` / `QWEN_MODEL` | — | 当前生产提供方的三项（其余提供方同名同形）。**`QWEN_BASE_URL` 自己部署必须显式设**：端点形状（百炼公开端点 / 业务空间专属端点 / 聚合平台地址）见 `.env.example` |
 | `LLM_TIMEOUT` | `120` | 单次 LLM 调用超时（秒） |
-| `BLOG_API_BASE` | `https://saudade.site/api/public` | **自己部署必改**：所有只读工具与 RAG 语料的取数地址，导航链接的站点根也由它反推。不改的话工具查的是维护者的博客（接口通、返回真，只是不是你的） |
+| `BLOG_API_BASE` | 部署方自己的站点（`.env` 未设时落到代码默认值） | **自己部署必改**：所有只读工具与 RAG 语料的取数地址，导航链接的站点根也由它反推。不改的话工具查的是维护者的博客（接口通、返回真，只是不是你的） |
 | `JWT_SECRET` | — | 与 Rust 侧共用，服务间身份断言与短时效 JWT 的签名键 |
 | `AGENT_ADMIN_BASE` | `http://127.0.0.1:3000` | 管理读接口的上游地址 |
 | `DEVICE_SERVICE_URL` | `http://127.0.0.1:3100` | IoT 设备服务地址 |
-| `TRACE_DIR` | 部署方的日志目录 | 对话 trace 落盘目录（默认值绑定部署环境，自建部署须覆盖）。**20260925 起写进 `<TRACE_DIR>/<YYYYMMDD>/`**：枚举由 `eval/trace_files.py` 单点负责（四种读取端共用），保留期由 `eval/trace_retention.py` 执行（>24h 压缩、>30 天删；默认只列不删，`--apply` 才动手） |
-| `TRACE_TOOL_RESULT_LIMIT` | 不设 | trace 里工具返回留多长（字符）。不设 = 按工具分档（正文 8000／其余 4000／`rag_search` 全文）；设了就全局覆盖（≤0 = 全文）。golden 轮设为 40000 供评审员取材料。任何截断都带标记 |
+| `IOT_ENABLED` | 不设（= 未部署） | IoT 平台是可选件，**不设变量 = 没装**；装了置 `1` |
+| `TRACE_DIR` | 部署环境的绝对路径（**自建部署须覆盖**） | 对话 trace 落盘目录。**20260925 起写进 `<TRACE_DIR>/<YYYYMMDD>/`**：枚举由 `eval/trace_files.py` 单点负责（四种读取端共用），保留期由 `eval/trace_retention.py` 执行（>24h 压缩、>30 天删；默认只列不删，`--apply` 才动手） |
 | `AGENT_REQUIRE_ASSERTION` | `0` | 置 1 时缺失身份断言的请求直接拒绝（默认只记 WARNING，便于滚动上线） |
 | `AUTHZ_ENFORCE` | `0` | 权限模型的强制开关 |
-| `AGENT_RECURSION_LIMIT` | `30` | 图递归上界，防止幻觉重试循环烧满流式总时长 |
-| `AGENT_MAX_BODY_BYTES` | `12 MiB` | 请求体上限，超限 413 |
-| `AGENT_MAX_CONCURRENT` | `8` | 每 worker 的流式并发闸，超限 503 |
-| `GOLDEN_ADMIN_UID` / `GOLDEN_USER_UID` | — | 只给 golden 里“需要真身份”的用例用；未设则那些用例响亮跳过 |
+| `PLANNER_TEMPERATURE` | `0.0` | 规划温度（调优实验可逐臂拨）。**"它能治路由抖动"已被 A/B 证伪**，别拿它当调参理由 |
+| `PLANNER_NATIVE_THINKING` / `_MAX_TOKENS` / `_TIMEOUT` / `_SLOW_S` | `true` / `1200` / `60` / `30` | native 档的四个旋钮，各自的取舍见 `settings.py` 的注 |
+| `AGENT_TASK_STATE` | 不设（= off） | 会话级未完成意图的登记/注入开关 |
+| `RAG_HYBRID_ENABLED`、`EMBEDDING_*`、`RRF_K` | 不设（= 纯词法） | 向量 + RRF 混合检索，可选件 |
 
-流式超时（空闲 120s / 总时长 300s）当前是 `server.py` 里的常量，不通过环境变量调。
+**B. `server.py` 直接读进程环境的常量**：这四个**写进 `.env` 一点作用都没有**——`.env` 只喂给 pydantic-settings 的 `Settings` 对象，**不会进 `os.environ`**（systemd unit 里也没有 `EnvironmentFile=`）。
+要配就得走 systemd 的 `Environment=`、或启动前 `export`。判据是它们**不报错、只是不生效**：默认值恰好就是多数人想要的那个，所以只有在你真想改的时候才会发现改了没用。
+
+| 变量 | 默认 | 说明 | 改它 |
+|---|---|---|---|
+| `AGENT_RECURSION_LIMIT` | `30` | 图递归上界，防止幻觉重试循环烧满流式总时长 | systemd `Environment=` |
+| `AGENT_MAX_BODY_BYTES` | `12 MiB` | 请求体上限，超限 413 | 同上 |
+| `AGENT_MAX_CONCURRENT` | `8` | 每 worker 的流式并发闸，超限 503 | 同上 |
+| `AGENT_MAX_REVIEW` | `4` | 侧任务（审核/摘要）的并发闸 | 同上 |
+
+流式超时（空闲 120s / 总时长 300s）也是 `server.py` 里的常量，**同样不通过环境变量调**（两者都不在 A、B 两表里）。
+
+`GOLDEN_ADMIN_UID` / `GOLDEN_USER_UID` 只给 golden 里“需要真身份”的用例用（未设则那些用例响亮跳过）；`TRACE_TOOL_RESULT_LIMIT` 控制 trace 里工具返回留多长（不设 = 按工具分档）；`SAUDADE_IGNORE_ENV_FILE=1` 让**整份 `.env` 不读**（离线套件用，见 `settings.py` 的注）。这三个都是**进程变量，同样不走 `.env`**。
 
 ## 后续维护方向
 
