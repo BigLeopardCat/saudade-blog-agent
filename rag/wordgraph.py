@@ -3,12 +3,25 @@
 产物由 ``scripts/build_word_graph.py`` 写到 ``data/word_graph/``：
 
 ===============  ==========================================================
-index.json       词表 + build_id + 模型名 + 维度 + strip_top
+index.json       词表 + build_id + **空间（模型 / 端点）** + 维度 + strip_top
 vectors.f32      L2 归一化后的节点向量（count × dim，小端 float32 行主序）
 mean.f32         训练集均值（dim）
 dirs.f32         被剔除的主方向（strip_top × dim）——**可能是 0 字节**
 ===============  ==========================================================
 
+**用哪个 embedding 模型/端点不在这里决定**（20261007）：`rag/embed_space.py` 解析
+（配了 `EMBEDDING_*` 就用它、没配回落 `QWEN_*` + `text-embedding-v4`），与建图脚本
+`scripts/build_word_graph.py` 读的是**同一条规则**。两侧解出的空间不一致时，查询向量
+会落在另一片空间里 —— 症状同样是"搜 X 结果飞到一个视觉上离 X 很远的角落"，
+**而且不报错**。所以产物里记着它自己的空间，`_load()` 拿它当场对一次：不符就
+
+* 记**一条** WARNING（每个 `build_id` 只记一次，不刷日志），
+* `query_words` 返回 `{"ok": false, "reason": "space_mismatch"}` —— 在**花掉那次
+  embedding 调用之前**就返回，
+
+调用方（Rust → 前端）照既有降级链路退回本地关键词匹配。**处置只有一句**：去后台
+「站点设置 → 向量图谱」重建一次（新产物会带上新空间）。老产物没有 `base_url` 这一格
+——那一格缺就不判（只在这一格上 fail-open；模型名那格老产物也有）。
 **20260916e：弃权闸已拆除。** 曾用文章级 BM25 判"图里认不认得这句话"当闸
 （词法零 API 成本），它比不判更糟：`物联网`/`单片机`/`IOT`/`嵌入式` 这类
 **显然在域内**的查询被拦成空返回，而向量侧本来给的是 设备 / 遥测 / 传感器 /
@@ -45,20 +58,33 @@ logger = logging.getLogger(__name__)
 
 GRAPH_DIR = Path(__file__).resolve().parent.parent / "data" / "word_graph"
 
-EMBED_MODEL = "text-embedding-v4"
 # 查询串上限。与 Rust 侧的长度闸一致（防匿名刷 embedding 费用）
 QUERY_MAX = 64
 TOP_K_DEFAULT = 8
 TOP_K_MAX = 20
+# 查询是热路径：5s。**别换成 EMBEDDING_TIMEOUT（15s）**——Rust 的 `AGENT_TIMEOUT = 6s`
+# 压在它后面（src/routes/graph.rs），改成 15s 等于让上游先超时、静默退化成本地匹配。
 EMBED_TIMEOUT = 5.0
 
 _lock = threading.Lock()
 _client = None
-# 进程级缓存。uvicorn 起 2 个 worker，各自持有一份（1.4MB × 2，可接受）
+_space = None                      # 进程内解析一次（settings 运行期不会变）
+# 进程级缓存。uvicorn 起 4 个 worker，各自持有一份（1.4MB × 4，可接受）
 _cache: dict = {
     "build_id": None, "dim": 0, "count": 0,
     "words": [], "vecs": None, "mean": None, "dirs": [],
+    "mismatch": None,              # 产物空间与当场解析出的空间不符时的说明（否则 None）
 }
+
+
+def space_now():
+    """当前进程该用的 embedding 空间（两端同一条规则，见 `rag/embed_space.py`）。"""
+    global _space
+    if _space is None:
+        from config import settings
+        from rag.embed_space import space_of
+        _space = space_of(settings)
+    return _space
 
 
 # ---------------------------------------------------------------- 载入产物
@@ -79,6 +105,24 @@ def _read_f32(path: Path) -> array.array:
     if sys.byteorder != "little":
         a.byteswap()
     return a
+
+
+def _space_mismatch(idx: dict) -> str | None:
+    """产物记的空间与当场解析出的空间不符时的说明；相符/判不了 ⇒ None。
+
+    只比**模型名**与**端点**：维度不比——产物记的是**实测**维度，而配置里的 `dim` 是
+    **请求**维度（0 = 没传 dimensions）。真维度对不上时 `transform_query` 会返回 None
+    （`dim_mismatch`），那里才是它的判据。
+    """
+    space = space_now()
+    model = str(idx.get("model") or "").strip()
+    if model and model != space.model:
+        return f"产物是 {model} 建的，当前配置的是 {space.model}"
+    base = str(idx.get("base_url") or "").strip().rstrip("/")
+    # 老产物没有 base_url 这一格 ⇒ 这一格不判（只在这里 fail-open；模型名那格老产物也有）
+    if base and base != space.base_url.rstrip("/"):
+        return f"产物建立在 {base}，当前配置的是 {space.base_url}"
+    return None
 
 
 def _load() -> bool:
@@ -110,11 +154,21 @@ def _load() -> bool:
     dirs = [flat[k * dim:(k + 1) * dim] for k in range(strip)]
     dirs = [d for d in dirs if len(d) == dim]
 
+    mismatch = _space_mismatch(idx)
+    if mismatch:
+        # 每个 build_id 只记一次（_load 在 build_id 不变时早退，天然只打一遍）。
+        # 这条 WARNING 是**明着降级**的告警：图谱检索会退回本地关键词匹配，
+        # 处置是去后台「站点设置 → 向量图谱」重建一次。
+        logger.warning("[wordgraph] 产物与当前的 embedding 空间不一致（%s）"
+                       "——图谱检索将退回本地关键词匹配，重建一次即可", mismatch)
+
     with _lock:
         _cache.update(build_id=idx.get("build_id"), dim=dim, count=len(words),
-                      words=list(words), vecs=vecs, mean=mean, dirs=dirs)
-    logger.info("[wordgraph] 载入产物 %s：%d 词 × %d 维（剔除主方向 %d 个）",
-                idx.get("build_id"), len(words), dim, len(dirs))
+                      words=list(words), vecs=vecs, mean=mean, dirs=dirs,
+                      mismatch=mismatch)
+    logger.info("[wordgraph] 载入产物 %s：%d 词 × %d 维（剔除主方向 %d 个，%s）",
+                idx.get("build_id"), len(words), dim, len(dirs),
+                f"空间 {idx.get('model')}" if not mismatch else f"空间不符：{mismatch}")
     return True
 
 
@@ -122,8 +176,13 @@ def status() -> dict:
     """给部署后自查用（不对外暴露成端点）。"""
     if not _load():
         return {"ok": False, "reason": "artifact_missing", "dir": str(GRAPH_DIR)}
-    return {"ok": True, "build_id": _cache["build_id"], "count": _cache["count"],
-            "dim": _cache["dim"], "strip_top": len(_cache["dirs"])}
+    space = space_now()
+    out = {"ok": True, "build_id": _cache["build_id"], "count": _cache["count"],
+           "dim": _cache["dim"], "strip_top": len(_cache["dirs"]),
+           "space": f"{space.source}:{space.model}"}
+    if _cache["mismatch"]:
+        out["space_mismatch"] = _cache["mismatch"]
+    return out
 
 
 # ---------------------------------------------------------------- 查询变换
@@ -167,19 +226,31 @@ def _cosines(q: list[float], vecs: array.array, count: int, dim: int) -> list[fl
 
 
 def _embed_one(text: str) -> list[float] | None:
-    """查询串 → 向量。**显式用 qwen 的 key/base_url**：settings 的 active provider
-    可能是 deepseek（没有 embeddings 端点），跟着 active 走会在切 provider 时哑掉。"""
+    """查询串 → 向量。**用解析出来的 embedding 空间**（见 `rag/embed_space.py`）：
+    配了 `EMBEDDING_*` 就用它，否则回落 `QWEN_*` + `text-embedding-v4`——与建图脚本
+    同一条规则。刻意**不**跟着 `settings.active_llm_*` 走：对话 provider 可能没有
+    embeddings 端点（deepseek 就没有），跟着它走会在切 provider 时哑掉。
+
+    `dimensions` 与建图侧同口径：**只在显式配了 `EMBEDDING_DIM > 0` 时才传**
+    （`rag/vector_index.py::_embed_raw` 也是这么做的）。
+    """
     global _client
-    from config import settings
-    if not settings.qwen_api_key:
-        logger.warning("[wordgraph] 没有 QWEN_API_KEY，无法做向量查询")
+    space = space_now()
+    from rag.embed_space import missing_config
+    if (why := missing_config(space)):
+        # 与建图脚本同一句话（`rag/embed_space.py::missing_config`）：同一件事在终端与
+        # 日志里必须说成一件，而且要说清缺的是哪一格。
+        logger.warning("[wordgraph] 没有可用的 embedding 配置（%s），无法做向量查询", why)
         return None
     try:
         if _client is None:
             from openai import OpenAI
-            _client = OpenAI(api_key=settings.qwen_api_key,
-                             base_url=settings.qwen_base_url, timeout=EMBED_TIMEOUT)
-        resp = _client.embeddings.create(model=EMBED_MODEL, input=[text])
+            _client = OpenAI(api_key=space.api_key,
+                             base_url=space.base_url, timeout=EMBED_TIMEOUT)
+        kwargs: dict = {"model": space.model, "input": [text]}
+        if space.dim > 0:
+            kwargs["dimensions"] = space.dim
+        resp = _client.embeddings.create(**kwargs)
         return list(resp.data[0].embedding)
     except Exception:
         logger.exception("[wordgraph] embedding 调用失败")
@@ -197,10 +268,14 @@ def warm() -> None:
         if not _load():
             logger.info("[wordgraph] 无产物，跳过预热")
             return
+        if _cache["mismatch"]:
+            logger.info("[wordgraph] 空间不符（%s），跳过预热——查了也会被拒",
+                        _cache["mismatch"])
+            return
         t0 = time.perf_counter()
         ok = _embed_one("预热") is not None
-        logger.info("[wordgraph] 预热%s，%.0fms", "完成" if ok else "失败",
-                    (time.perf_counter() - t0) * 1000)
+        logger.info("[wordgraph] 预热%s（%s），%.0fms", "完成" if ok else "失败",
+                    space_now().describe(), (time.perf_counter() - t0) * 1000)
     except Exception:
         logger.exception("[wordgraph] 预热异常（不影响主链路）")
 
@@ -212,7 +287,9 @@ def query_words(q: str, top_k: int = TOP_K_DEFAULT) -> dict:
     返回 {ok, reason?, build_id, words:[{w,s}], ms}
 
     reason 全部是**故障**语义（empty_query / artifact_missing / embed_failed /
-    dim_mismatch），调用方一律按"服务不可用"处理 → 前端降级到本地关键词匹配。
+    dim_mismatch / space_mismatch），调用方一律按"服务不可用"处理 → 前端降级到本地
+    关键词匹配。（`space_mismatch` = 产物不是当前 embedding 空间建的，见模块头注；
+    它在**花掉那次 embedding 调用之前**返回。）
     20260916e 拆掉弃权闸后不再有"结论式弃权"（`no_match`）：域外查询照样走
     embedding，返回的就是最近的那几个词——判断"相不相关"交回给访客，不由一个
     词法部件代判（理由见模块顶部）。
@@ -223,6 +300,9 @@ def query_words(q: str, top_k: int = TOP_K_DEFAULT) -> dict:
         return {"ok": False, "reason": "empty_query", "words": []}
     if not _load():
         return {"ok": False, "reason": "artifact_missing", "words": []}
+    if _cache["mismatch"]:
+        # 先于 _embed_one：一次调用都别花，也别拿另一片空间的向量去查这张图
+        return {"ok": False, "reason": "space_mismatch", "words": []}
 
     dim = _cache["dim"]
     count = _cache["count"]

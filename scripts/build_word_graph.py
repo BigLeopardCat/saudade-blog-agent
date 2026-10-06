@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """文章向量空间知识图谱 · 离线建图脚本（20260915）
 
-做什么：公开文章 → jieba 抽词 → text-embedding-v4 向量化 → **UMAP 三维布局**
+做什么：公开文章 → jieba 抽词 → embedding 向量化 → **UMAP 三维布局**
         → 1024 维 kNN 连边 → 产出前端展示数据 + agent 查询用向量。
+        **用哪个模型/端点/维度不在这里决定**：`rag/embed_space.py`（两端唯一事实源）
+        解析 —— 配了 `EMBEDDING_*` 就用它、没配回落 `QWEN_*` + `text-embedding-v4`。
+        与图谱检索侧（`rag/wordgraph.py`）读的是同一份规则；两边一旦解出不同的空间，
+        查询向量就落在别处，而图不报错、只是默默不对。
         （20260917 起默认布局是 UMAP；`--layout semantic` 保留旧的 PCA+弹簧，
           `--layout pca` 是纯 PCA。三者的离线 A/B 见 layout_umap 的注释。）
 
@@ -29,6 +33,13 @@ uv 按需建临时环境——缓存 + 硬链接，多环境不重复占盘（`-
 umap/numba 版本一起保证与 20260917 那次建图同环境，换版本会让重出图不可比）：
   uv run --no-project --python 3.12 --with-requirements scripts/requirements-graph.txt \
       python3 scripts/build_word_graph.py --dry-run
+
+**还差一份可用的 embedding 配置**（`--dry-run` 不查，真跑才查）：`EMBEDDING_API_KEY`
++ `EMBEDDING_MODEL` 配了就认（与 agent 的向量检索同一份），没配则回落 `QWEN_API_KEY` /
+`QWEN_BASE_URL`（旧口径）。两者都没有 ⇒ 在 ③ 那一步停下并说清"两处都缺"，不会带着
+半个词表往下跑。这几项**写在 systemd 单元里而不是 `.env` 里也照样认**（进程环境优先，
+与 pydantic-settings 的优先级一致）——后台的建图任务是整份透传子进程环境的，
+不这样兜一层的话，"配在单元里"那条路会让建图与查询解出两个空间。
 
 重建流程（两条路，产物是同一份）：
   · **本站开发**：改词表/黑名单 → 重跑（缺省 `--out-frontend`）→ 人工过目 vocab 报告
@@ -64,9 +75,15 @@ BLOCKLIST_FILE = Path(__file__).resolve().parent / "graph_blocklist.txt"
 USERDICT_FILE = Path(__file__).resolve().parent / "graph_userdict.txt"   # jieba 切分/词性白名单
 ALLOW_FILE = Path(__file__).resolve().parent / "graph_allow.txt"         # 绕过词配额的主题词
 
-EMBED_MODEL = "text-embedding-v4"
-EMBED_DIM = 1024
-BATCH = 10                      # 百炼 text-embedding 单请求 input 上限 10 条
+# 图谱两端（本脚本 + `rag/wordgraph.py`）共用一份 embedding 空间解析规则。那个模块
+# **只用标准库**（本脚本跑在 `--no-project` 的隔离环境里、没有 pydantic，import 不进
+# `config.settings`），所以两边都 import 得动它 —— 这是"共用一个事实源"的前提。
+# 原先这里钉着 `EMBED_MODEL/EMBED_DIM/BATCH` 三个常量，模型名在本文件、查询侧、
+# 缓存键三处各存一份：换模型时它们会各自漂，而漂的后果（查询向量落在另一个空间）
+# 不报错、只是图默默变得不对。
+sys.path.insert(0, str(REPO_AGENT))
+from rag.embed_space import (BUILD_TIMEOUT, Space, cache_payload,  # noqa: E402
+                             missing_config, read_cache, resolve)
 
 # 垃圾文章（近乎空的测试文，20260915 实测正文 0/8/122 字）
 EXCLUDE_IDS_DEFAULT = {9, 10, 11}
@@ -125,7 +142,16 @@ def log(msg: str) -> None:
 # ---------------------------------------------------------------- HTTP / 配置
 
 def load_env() -> dict[str, str]:
-    """读 agent 的 .env（脚本不 import agent 模块，保持可独立运行）。"""
+    """读 agent 的 `.env`，**再叠一层进程环境**（后者优先，与 pydantic-settings 一致）。
+
+    叠这一层是为了让"配置写在 systemd 单元的 `Environment=` 里"的部署也解出**同一个**
+    embedding 空间（`rag/graph_build.py` 起的建图子进程是整份透传 `os.environ` 的，
+    所以这一层在服务端重建那条路上真的起作用）。只读 `.env` 的话，那类部署会出现
+    "查询侧认 `EMBEDDING_*`、建图侧回落 `QWEN_*`"——两个空间，而谁都不报错。
+
+    只 import 了 `rag/embed_space.py` 这一个标准库级的模块（见文件上方那段注释），
+    agent 那些模块在 `--no-project` 里根本导不进来，脚本仍是可独立运行的。
+    """
     env: dict[str, str] = {}
     p = REPO_AGENT / ".env"
     if p.exists():
@@ -135,6 +161,7 @@ def load_env() -> dict[str, str]:
                 continue
             k, v = line.split("=", 1)
             env[k.strip()] = v.strip().strip('"').strip("'")
+    env.update(os.environ)
     return env
 
 
@@ -462,53 +489,73 @@ def md5(text: str) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest()
 
 
-def embed_words(words: list[str], qwen_key: str, qwen_base: str,
+def embed_words(words: list[str], space: Space, env: dict,
                 refresh: bool) -> np.ndarray:
-    """带 md5 缓存的批量 embedding；任何缺失都直接失败，绝不静默缺向量。"""
+    """带 md5 缓存的批量 embedding；任何缺失都直接失败，绝不静默缺向量。
+
+    缓存按**空间**记账（`rag/embed_space.py`）：换模型/端点时旧缓存整份作废、重新
+    嵌一遍，而不是把两代向量混进同一张图——后者不报错，只是图默默变得不对，而且
+    症状是"搜 X 结果飞到一个视觉上离 X 很远的角落"，几乎不可能从产物里看出来。
+    """
     CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    cache: dict[str, list[float]] = {}
-    if CACHE_FILE.exists():
-        try:
-            cache = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            cache = {}
+    cache = read_cache(CACHE_FILE, space, env, log=log)
 
     keys = [md5(w) for w in words]
     fresh = [w for w, k in zip(words, keys) if refresh or k not in cache]
     hits = len(words) - len(fresh)
     if fresh:
         log(f"  embedding 新增 {len(fresh)} 条（缓存命中 {hits} 条）")
-        url = f"{qwen_base.rstrip('/')}/embeddings"
-        headers = {"Authorization": f"Bearer {qwen_key}"}
+        url = f"{space.base_url.rstrip('/')}/embeddings"
+        headers = {"Authorization": f"Bearer {space.api_key}"}
         got: list[list[float]] = []
-        for i in range(0, len(fresh), BATCH):
-            batch = fresh[i:i + BATCH]
-            vecs = _embed_batch(url, headers, batch)
+        for i in range(0, len(fresh), space.batch):
+            batch = fresh[i:i + space.batch]
+            vecs = _embed_batch(space, url, headers, batch)
             if len(vecs) != len(batch):
                 log(f"  批量 {len(batch)} 条返回 {len(vecs)} 条，降级逐条")
                 vecs = []
                 for t in batch:
-                    vecs.extend(_embed_batch(url, headers, [t], retries=3))
+                    vecs.extend(_embed_batch(space, url, headers, [t], retries=3))
             got.extend(vecs)
             for t, v in zip(batch, vecs):
                 cache[md5(t)] = [round(x, 6) for x in v]
-            CACHE_FILE.write_text(json.dumps(cache), encoding="utf-8")
-            log(f"    {min(i + BATCH, len(fresh))}/{len(fresh)}")
+            CACHE_FILE.write_text(json.dumps(cache_payload(space, cache)), encoding="utf-8")
+            log(f"    {min(i + space.batch, len(fresh))}/{len(fresh)}")
+        _check_same_dim(got, space)
     missing = [w for w, k in zip(words, keys) if k not in cache]
     if missing:
         sys.exit(f"✗ 有 {len(missing)} 个词没有向量（样例：{missing[:5]}）——拒绝产出不完整的图")
     return np.asarray([cache[k] for k in keys], dtype=np.float64)
 
 
-def _embed_batch(url: str, headers: dict, batch: list[str], retries: int = 3) -> list[list[float]]:
+def _check_same_dim(got: list[list[float]], space: Space) -> None:
+    """本批所有向量的维度必须一致，否则拒绝往下走。
+
+    `dim == 0`（不向 API 传 `dimensions`）时**维度是服务端说了算**的，所以这里不是走形式：
+    服务端换过默认维度、或某批被别的东西应答了，都会让 `vectors.f32` 与 `index.json` 里的
+    维度对不上——那种产物到查询侧才炸，而那时图已经上线了。
+    """
+    if not got:                    # 一个都没回来 ⇒ 交给下面那条"缺向量"的报错，别抢它的词
+        return
+    dims = {len(v) for v in got}
+    if len(dims) != 1:
+        sys.exit(f"✗ 返回向量的维度不一致：{sorted(dims)}——拒绝产出不完整的图")
+    dim = dims.pop()
+    if space.dim and dim != space.dim:
+        sys.exit(f"✗ 返回 {dim} 维，但配置的是 {space.dim} 维（EMBEDDING_DIM）——"
+                 f"要么改配置，要么把它设回 0（=不传 dimensions）")
+
+
+def _embed_batch(space: Space, url: str, headers: dict, batch: list[str],
+                 retries: int = 3) -> list[list[float]]:
     """单批 embedding，失败指数退避重试（1s/3s/9s）。"""
+    payload = {"model": space.model, "input": batch, "encoding_format": "float"}
+    if space.dim:                  # 0 = 不传（不同供应商支持度不一，传了可能 400）
+        payload["dimensions"] = space.dim
     last: Exception | None = None
     for attempt in range(retries):
         try:
-            resp = http_json(url, {
-                "model": EMBED_MODEL, "input": batch,
-                "dimensions": EMBED_DIM, "encoding_format": "float",
-            }, headers=headers, timeout=30)
+            resp = http_json(url, payload, headers=headers, timeout=BUILD_TIMEOUT)
             data = sorted(resp["data"], key=lambda v: v.get("index", 0))
             return [v["embedding"] for v in data]
         except Exception as e:                     # noqa: BLE001
@@ -833,8 +880,12 @@ def _artifact_body(payload: dict) -> str:
 
 
 def write_artifacts(payload: dict, nodes: np.ndarray, words: list[str], transform: dict,
-                    gdir: Path, out_agent: Path, dry: bool, site: str) -> dict:
-    """`gdir` 是展示产物的目录（由调用方决定：`--out-web` 或 `<out-frontend>/graph`）。"""
+                    gdir: Path, out_agent: Path, dry: bool, site: str, space: Space) -> dict:
+    """`gdir` 是展示产物的目录（由调用方决定：`--out-web` 或 `<out-frontend>/graph`）。
+
+    `space` 用来往**私有** `index.json` 里记下这片空间（模型 + 端点）：图谱检索侧拿它
+    跟当场解析出来的空间比，不一致就明着降级，而不是拿另一片空间的向量去查这张图。
+    """
     blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     build_id = hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
     payload["v"] = build_id
@@ -870,7 +921,11 @@ def write_artifacts(payload: dict, nodes: np.ndarray, words: list[str], transfor
     adir.mkdir(parents=True, exist_ok=True)
     nrm = np.maximum(np.linalg.norm(nodes, axis=1, keepdims=True), 1e-12)
     (adir / "index.json").write_text(json.dumps({
-        "build_id": build_id, "model": EMBED_MODEL, "dim": EMBED_DIM,
+        "build_id": build_id, "model": payload["model"], "dim": payload["dim"],
+        # base_url 只进这份**私有**产物（`data/word_graph/`，不出公开路由）：
+        # 检索侧靠它判"这张图是不是当前这片空间建的"。公开 payload 里不加——
+        # 前端只用 model/dim，把端点写进浏览器下载的产物没有收益、只有暴露面。
+        "base_url": space.base_url,
         "count": len(words), "built": payload["built"],
         "strip_top": int(transform["dirs"].shape[0]), "words": words,
     }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -998,13 +1053,17 @@ def main() -> None:
         return
 
     env = load_env()
-    key = env.get("QWEN_API_KEY", "")
-    base = env.get("QWEN_BASE_URL", "")
-    if not key or not base:
-        sys.exit("✗ .env 缺 QWEN_API_KEY / QWEN_BASE_URL")
-    log(f"③ embedding（{EMBED_MODEL} / {EMBED_DIM} 维）")
+    space = resolve(env)
+    # 缺哪一格由 `rag/embed_space.py::missing_config` 说（两端同一句话，见那里）
+    if (why := missing_config(space)):
+        sys.exit(f"✗ 没有可用的 embedding 配置：{why}——"
+                 f"图谱检索用的是同一份配置，别只配一处")
+    log(f"③ embedding {space.describe()}")
     t = time.time()
-    vecs = embed_words(words, key, base, args.refresh)
+    vecs = embed_words(words, space, env, args.refresh)
+    # 产物里记的维度取**实测值**：`EMBEDDING_DIM=0` 时维度由服务端定，写配置里的那个数
+    # （旧版写死 1024）只是碰巧对；查询侧会拿它当校验和，写错会比不写更坏。
+    embed_dim = int(vecs.shape[1])
     log(f"  向量就绪 {vecs.shape}，耗时 {time.time() - t:.1f}s")
 
     log("④ PCA 投影（UMAP 布局下只用于连边/查询变换；三维坐标由 UMAP 出）")
@@ -1087,7 +1146,8 @@ def main() -> None:
     } for i in range(len(words))]
 
     payload = {
-        "model": EMBED_MODEL, "dim": EMBED_DIM, "built": time.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+        "model": space.model, "dim": embed_dim,
+        "built": time.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
         "articles": [{
             "id": d["id"], "t": d["title"], "g": d["tags"], "c": d["cat"],
             # hv = 这篇的热度（0..1）。节点大小看的是它（加权到自己的主/次文章上），
@@ -1105,7 +1165,7 @@ def main() -> None:
     gdir = (Path(args.out_web).expanduser() if args.out_web.strip()
             else Path(args.out_frontend) / "graph")
     info = write_artifacts(payload, sim_vecs, words, transform, gdir,
-                           Path(args.out_agent), args.dry_run, site)
+                           Path(args.out_agent), args.dry_run, site, space)
     report = {
         "ts": ts, "build_id": info["build_id"], "bytes": info["bytes"],
         "articles": [d["id"] for d in docs], "n_nodes": len(nodes), "n_edges": len(edges),
@@ -1115,7 +1175,7 @@ def main() -> None:
     (REPORT_DIR / f"{ts}_build.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     log(f"⑦ 产物：{gdir / info['file']}（{info['bytes'] / 1024:.1f}KB）"
-        f" + manifest.json + {Path(args.out_agent)}/（{len(words)}×{EMBED_DIM}）")
+        f" + manifest.json + {Path(args.out_agent)}/（{len(words)}×{embed_dim}）")
     log(f"完成，用时 {time.time() - t0:.1f}s")
 
 
