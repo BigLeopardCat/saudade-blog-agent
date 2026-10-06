@@ -223,13 +223,21 @@ def _override_for(role: str | None, skill_name: str, param: str) -> dict | None:
     return out
 
 
-def build_tool_schema(role: str | None, *, task_state: bool = False) -> list[dict]:
+def build_tool_schema(role: str | None, *, task_state: bool = False,
+                      deny: frozenset[str] | set[str] | None = None) -> list[dict]:
     """本轮这个身份能选的技能 → OpenAI `tools` 数组。
 
     **来源只有一处**：`visible_skills(role)` × `skill_param_specs(skill)`——与渲染
     planner 菜单（`build_planner_context`）用的是同一张表。因此"模型能选的"恒等于
     "今天这个身份本来就能选的"：管理员技能在 `role != "admin"` 时结构上选不出来，
     不需要在这里再判一次角色。
+
+    **`deny` 是"这一轮不许再选"的技能名集合**（20261007，1d）——来源是上一轮的受阻项里
+    "改参数重试无效"那一族（`block_reasons.denied_skills`）。它**不扩权**（只会更小），
+    也不是第二份可见性名单：它只在"上一轮同一个技能刚失败过"时才非空，无阻碍轮**传空集
+    ⇒ schema 逐字节不变**。语义上是"模型没有可再点的东西"，不是"提示它别点"——同一条
+    禁令写进提示词的那两版都被 A/B 否掉了（见 `docs/问题记录.md` §1.55 的 1b）。
+    `chat` 永不进这个集合（见 `block_reasons._NEVER_DENY`），调用方那一侧保证。
 
     `complete_when` 拼进 description：它在文本档里本来就只进提示词、**没有强制点**
     （没有任何代码读它），搬进 description 是等价的，且比原来离决策更近。
@@ -243,6 +251,8 @@ def build_tool_schema(role: str | None, *, task_state: bool = False) -> list[dic
     """
     tools: list[dict] = []
     for skill in visible_skills(role):
+        if deny and skill.name in deny:
+            continue
         specs = skill_param_specs(skill)
         props: dict[str, dict] = {}
         required: list[str] = []
@@ -415,7 +425,8 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
                           declare=declare, **base)
 
 
-def bind_native(llm: object, role: str | None, *, task_state: bool = False) -> object:
+def bind_native(llm: object, role: str | None, *, task_state: bool = False,
+                deny: frozenset[str] | set[str] | None = None) -> object:
     """把 LLM 绑上本轮的 schema。**`tool_choice` 固定 `auto`、`parallel_tool_calls=False`**。
 
     · `auto` 而不是 `required`：强制会把闲聊轮也逼成一次假技能调用（模型明明该答
@@ -431,9 +442,10 @@ def bind_native(llm: object, role: str | None, *, task_state: bool = False) -> o
       （有的 400，有的直接拒 `tool_choice="auto"`）。今天这一支不可达——`chat` 技能
       对任何角色可见，schema 恒非空；留着是防"将来有人把 chat 也收掉"（比如给杂鱼
       加了更窄的可见性规则）而没人发现。不 bind = planner 拿不到 tool_calls，
-      按既有的"零调用"路径走，不新增分支。
+      按既有的"零调用"路径走，不新增分支。`deny` 交上来时这一支同样兜着（`chat`
+      不进 deny，故仍不可达）。
     """
-    schema = build_tool_schema(role, task_state=task_state)
+    schema = build_tool_schema(role, task_state=task_state, deny=deny)
     if not schema:
         return llm
     return llm.bind_tools(schema, tool_choice="auto", parallel_tool_calls=False)
