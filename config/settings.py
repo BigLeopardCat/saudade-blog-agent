@@ -77,16 +77,25 @@ class Settings(BaseSettings):
     llm_seed: int = 0
 
     # ── Agent ───────────────────────────────────────────────────────
+    # ⚠️ 20261007 删掉两个**从未被读到**的字段：`agent_max_iterations` 与
+    # `agent_early_stopping_method`（原 `AGENT_MAX_ITERATIONS` / `AGENT_EARLY_STOPPING`）。
+    # 它们是 LangGraph 旧 `AgentExecutor` 时代的旋钮；20260903 换成手写图 + planner 全权后
+    # 就没有任何调用点了（`git grep agent_max_iterations` 零命中），而它们**照旧被
+    # `.env.example` 与 README 列成可用项**——用户写进去、什么都不发生，且不报错。
+    # 这是本仓最贵的一类坏法：**装饰性配置**（同族四次：R2 的 `--keep`、logrotate 的
+    # `rotate 14`、`logs/archive/`、`eval/report/runs/`）。留着一个恒无效的旋钮比没有更坏，
+    # 因为它看起来是对的。`AGENT_EARLY_STOPPING` 那一条还多一层：键名与字段名不匹配
+    # （字段名是 `..._method`），**连 pydantic 都收不到它**。
+    # 真要限轮次，那个旋钮是 `AGENT_RECURSION_LIMIT`（**读进程环境，不读 .env**，
+    # 见 server.py:89 与 README《环境变量》那一节）。
     agent_verbose: bool = True
-    agent_max_iterations: int = 10
-    agent_early_stopping_method: str = "generate"
 
     # ── TTS (Text-to-Speech) ───────────────────────────────────────
     tts_enabled: bool = False
     tts_voice: str = "zh-CN-XiaoyiNeural"
 
-    # ── Memory ──────────────────────────────────────────────────────
-    memory_session_key: str = "default"
+    # 20261007：`memory_session_key` 同样删除。会话隔离 20260903 起由 `conversation_id`
+    # 承担（每请求独立 thread_id，历史/摘要按会话独立），那个"记忆桶名"没有任何读取方。
 
     # ── 服务间身份断言（20260917）────────────────────────────────────
     # Rust 用 jwt_secret 签 `X-Agent-Assertion: {sub: uid, aud: "agent", exp:+60s}`，
