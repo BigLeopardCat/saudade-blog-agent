@@ -6632,6 +6632,12 @@ def _announcement_text_fix(plan_obj: dict, user_msg,
                           role: str | None = None) -> None:
     """公告的 `title`/`content` 校正到主人写下的原话（就地改；无标记/多 spec 不动）。
 
+    ⚠️ 只治**主人明确给出原文**的那一种情形（标记「标题叫「X」」「正文写：…」⇒
+    一字不改地照录，planner 的转写让位）。**没有标记时一个字都不碰**——20261006 起
+    公告正文允许由 planner 按主人的意思组织措辞（「发个公告祝大家国庆快乐，以你的
+    口吻」这种只给意思的），那一档的措辞本来就是它的活，判据也判不了措辞，
+    复核点是确认卡上的**正文全文**（`adminops.render_confirm_question` 一格不截）。
+
     · create：`title` 认「标题叫「X」」标记，`content` 认「正文写：…」标记；
     · update/delete：`title` 是**要动的那条**的身份，只认**唯一一段引号**
       （改公告那句话里常有两段引号——旧标题与新标题，指向谁并不唯一）。

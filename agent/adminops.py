@@ -2194,9 +2194,18 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         # 公告按**标题**指认（用户从来只说标题；公告没有 id 稳定指称）。
         # 弹窗里必须带上正文预览：主人是一眼扫过就点确定的，只写「发布公告「维护通知」」
         # 等于让他签一份没看过的公告——而这段文字会直接对全体访客说出去。
+        # **一格都不截**（20261006 修，与待办卡 20260926 那条同因）：这里原先是
+        # `clip(content, 60)`，而 `clip` 是**回执字段**的收口工具（Rust 侧 detail 列宽
+        # 有限），用在卡面上就是拿列宽的尺子量主人要核对的那句话。公告这一格尤其不能截
+        # ——20261006 起正文**允许由模型按主人的意思成文**（只给了意思的那种），
+        # 判据判不了措辞，主人的签字就是这一族唯一的人眼复核点；卡面只给前 60 字
+        # 等于让他在看不见的那半句上签字（真机 trace `20261001T024530` 的卡面实见
+        # 截断省略号）。正文上限本来就是 2000 字（`MAX_ANNOUNCE_BODY`），且通知族的
+        # 卡早就印全文（`render_notice_action`，`tests/test_user_notice.py` ⑪ 锁着）
+        # ——两族同一件事，判据必须一致。
         title = str(a.get("title") or "").strip() or "（未命名）"
         if tool == "create_announcement":
-            body = clip(str(a.get("content") or ""), 60)
+            body = str(a.get("content") or "").strip() or "（没有写正文）"
             return f"发布公告「{title}」，正文：{body}"
         if tool == "update_announcement":
             bits = []
@@ -2204,7 +2213,7 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
             if new_title:
                 bits.append(f"标题改为「{new_title}」")
             if str(a.get("content") or "").strip():
-                bits.append(f"正文改为：{clip(str(a.get('content')), 60)}")
+                bits.append(f"正文改为：{str(a.get('content')).strip()}")
             body = "、".join(bits) if bits else "（没说要改什么）"
             return f"修改公告「{title}」：{body}"
         # 删公告：真删、没有回收站，且访客首页立刻看不到。

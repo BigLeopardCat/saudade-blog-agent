@@ -1399,6 +1399,81 @@ check("  最左匹配落在**主人标的那个**标记上（正文本里再出�
       _pl_new["params"].get("content") == "探针内容：今晚 23 点维护（本条由探针自动发出）",
       str(_pl_new["params"].get("content"))[:90])
 
+print("\n㉓ 公告正文：谁成文（两种情形）+ 卡面必须印全文（20261006 改口径）")
+# 动机与现场取证见 `docs/问题记录.md` 1.47 的《同类未治》：公告正文**分两种情形**——
+# 主人明确给了原文（「正文写：…」）⇒ 一字不改地照录；只给了意思（「以你的口吻发个
+# 公告祝大家国庆快乐」）⇒ 由 planner 按他的意思成文、**可以润色**。旧口径把这**两种
+# 一起禁**了（技能描述「不许替他润色……他给几个字就写几个字」+ 展开层「原样透传、一个
+# 字都不改」+ 工具注「不要自己加戏或改写」+ 阻断文案「一个字都不要改、也不要替他润色」），
+# 现场代价是 trace `20261001T061023`：主人点名要"以你的口吻"，模型照旧只回声一句
+# 「祝大家国庆节快乐！」，主人下一句就是「太干巴了，而且我要求以你的身份」。
+#
+# 这一节只锁**契约层**的两件事（措辞归谁有明文；卡面印全文）——行为侧的多遍取证
+# 记在问题记录里，这里不重复跑 LLM。
+#   ① 「照录」与「只给意思 ⇒ 可由你成文」**两个分支**在给模型看的四处载体里都有明文
+#      （同一件事实写四份，是这一族最容易各漂各的地方）；
+#   ② 卡面印**全文**——正文改由模型成文之后判据判不了措辞，主人的签字是这一族**唯一**
+#      的人眼复核点（与待办卡 20260926「一格都不截」同因）。
+import agent.skills as _S  # noqa: E402
+from tools import base as _B  # noqa: E402
+
+_ann = _S.SKILL_MAP["announcement_create"]
+_ANN_CARRIERS = {
+    "技能描述": _ann.description,
+    "技能 inputs.content": str(_ann.inputs.get("content") or ""),
+    "工具 docstring": str(_B.create_announcement.description or ""),
+    "工具 content 注解": str(_B.create_announcement.args_schema.model_json_schema()
+                             ["properties"]["content"]["description"]),
+}
+_ANN_OLD = ("不许替他润色", "不要自己加戏", "原样透传", "他给几个字就写几个字")
+check("前置：四处载体都非空（取空 ⇒ 下面几条是空转）",
+      all(v.strip() for v in _ANN_CARRIERS.values()),
+      str([k for k, v in _ANN_CARRIERS.items() if not v.strip()]))
+check("旧口径那几句禁令在四处载体里都消失了"
+      "（留一句 = 模型照旧只回声主人那几个词）",
+      not [k for k, v in _ANN_CARRIERS.items() if any(p in v for p in _ANN_OLD)],
+      str([(k, p) for k, v in _ANN_CARRIERS.items() for p in _ANN_OLD if p in v]))
+check("「主人给了原文 ⇒ 照录」在四处都有明文",
+      all("照录" in v for v in _ANN_CARRIERS.values()),
+      str([k for k, v in _ANN_CARRIERS.items() if "照录" not in v]))
+check("「只给了意思 ⇒ 由你成文（可以润色）」在四处都有明文",
+      all(("组织措辞" in v or "成文" in v) for v in _ANN_CARRIERS.values()),
+      str([k for k, v in _ANN_CARRIERS.items()
+           if "组织措辞" not in v and "成文" not in v]))
+_authz_ann = authz._CONSENT_WHY_TOOL["create_announcement"][1]
+check("阻断文案管的是「卡面要念全」（它是被拦下那一轮的话，不是正文该照抄）",
+      "全文" in _authz_ann and "不要再改内容" in _authz_ann
+      and "一个字都不要改" not in _authz_ann, _authz_ann)
+
+# ── 展开层：原样放行成文的正文；空正文照旧零工具追问 ─────────────────────
+from agent.skills import _expand_write_skill  # noqa: E402
+
+_LONG_ANN = "本次维护安排如下：" + "请提前做好准备" * 12 + "——结束标记"
+check("前置：这条正文真的比 60 字长（否则下面几条是空转）",
+      len(_LONG_ANN) > 60, str(len(_LONG_ANN)))
+_specs_a, _note_a = _expand_write_skill(_ann, {"title": "维护通知", "content": _LONG_ANN})
+check("展开层原样放行（不因正文与主人原话不同就拦——那一档本来就是模型成文）",
+      len(_specs_a) == 1 and _LONG_ANN in str(_specs_a[0]), str(_specs_a)[:120])
+check("  注记写明「正文全文会印在确认卡上由主人核对」（复核点是卡面，不是措辞）",
+      "确认卡" in _note_a and "全文" in _note_a, _note_a)
+_specs_e, _note_e = _expand_write_skill(_ann, {"title": "维护通知", "content": ""})
+check("正文为空 ⇒ 零工具 + 追问（「槽位空着不许往下走」与「可以润色」是两件事）",
+      _specs_e == [] and "问清" in _note_e, _note_e)
+
+# ── 卡面：一格都不截（与待办卡 20260926 那条同因）─────────────────────────
+_qc = A.render_confirm_question([{"tool": "create_announcement",
+                                  "args": {"title": "维护通知", "content": _LONG_ANN}}])
+check("发布公告的**卡面**：长正文一字不落（此前裁成 60 字 + 省略号）",
+      _LONG_ANN in _qc and "…" not in _qc, _qc[-40:])
+check("  卡面写的是「正文：」而不是只报个标题（只写标题 = 让主人盲签一份没看过的公告）",
+      f"发布公告「维护通知」，正文：{_LONG_ANN}" in _qc, _qc[:60])
+_qu = A.render_confirm_question([{"tool": "update_announcement",
+                                  "args": {"title": "维护通知", "content": _LONG_ANN}}])
+check("改公告的卡面同样是全文", _LONG_ANN in _qu and "…" not in _qu, _qu[-40:])
+check("正文为空时卡面如实写「（没有写正文）」（不是把 None 印出来）",
+      "（没有写正文）" in A.render_confirm_question(
+          [{"tool": "create_announcement", "args": {"title": "维护通知"}}]))
+
 print("\n㉒ 文章确认框写《标题》与当前状态（20260922 第七轮：全写面唯一的盲签）")
 # 事故形态：标签/分类/公告/留言的问句都写了**名字**，只有文章这一类一直只有内部
 # 编号（「修改文章 46」）——主人没法从这句话里认出"是不是我说的那篇"，而点确定
