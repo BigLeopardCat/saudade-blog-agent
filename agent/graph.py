@@ -83,6 +83,7 @@ from agent import refs
 from rag import sections
 from agent.stickers import repair_sticker_tokens
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
+                           BLOCKED_ROWS_EMPTY, blocked_rows,
                            _doc_anchors, _frame_texts, _has_frames,
                            _last_assistant_utterance, _last_user_msg,
                            _ledger_frame_wanted,
@@ -271,8 +272,9 @@ class AgentState(TypedDict):
     - receipts:    checker 验收 PASS 的累计回执（请求内累计，与 executed 同
                    模式）——系统确认过的执行事实 [{skill,tool,args,result,ts}]，
                    是 reflector 输入与跨轮执行记忆（__EXEC__ 帧）的原料。
-    - blocked:     本轮 execute 的 BLOCK 受阻项（[{spec,tool,reason,result}]，
-                   只含本轮——路由判断与 reflector 输入用）。
+    - blocked:     本轮 execute 的 BLOCK 受阻项（[{spec,tool,reason,skill,result}]，
+                   只含本轮——路由判断与 reflector 输入用；`skill` 20261007 补，
+                   渲染进 planner 的 `{blocked_rows}` 槽，见 context.blocked_rows）。
     - blocked_seen: 请求内累计受阻**键**「工具::原因码」（blocked 的累计集，repeat
                    判定用；20260925 前是 spec 原文，见 execute_node 里收窄的理由）。
     - blocked_repeat: 本轮受阻项里是否有此前已受阻过的键（= 同一个工具同一个原因
@@ -692,6 +694,8 @@ _PLANNER_PROMPT = """\
 
 {tool_results}
 
+{blocked_rows}
+
 本轮已执行工具的**可引用字段**（参数引用的取值来源，见规则 3b——字段名照抄，
 路径只能从这里列出的键名前缀往下写，不许臆造）：
 {ref_hints}
@@ -735,6 +739,7 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
                            recent_context: str, short_reply_hint: str, tool_results: str,
                            pending_ledger: str,
                            ref_hints: str, reflector_feedback: str, correction: str,
+                           blocked_rows: str = BLOCKED_ROWS_EMPTY,
                            contract: str = _PLANNER_OUTPUT_CONTRACT_NATIVE,
                            slim_skills: bool = True) -> str:
     """渲染 planner 提示词（纯函数）。**唯一入口**。
@@ -744,12 +749,17 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
     `.format(...)` 就是留两份漂移源）。影子档 20261004 随文本档一起删掉了，本函数
     仍留作**唯一**的渲染点：调用方只传**已经算好的**值，本函数不读 state、不碰库。
 
-    两个默认值都只有一种生产取值（接口层只剩 native 一条，20261004）：
+    三个默认值：
     · `contract` 默认 `_PLANNER_OUTPUT_CONTRACT_NATIVE`——**留成参数是为了测试能
       往里塞别的文本做对照**（如 `test_prompt_prefix` 判规则顺序），不是生产拨盘；
     · `slim_skills`（20260927）= 技能块去掉与 `tools` schema 逐字重复的三行（判据与
       不删清单见 `skills.build_planner_context`）——native 档恒 True；传 False 只有
-      离线对照在跑。
+      离线对照在跑；
+    · `blocked_rows`（20261007）= 本轮受阻项的**类型化**呈现（原因码 ← checker、
+      技能名 ← 计划；渲染见 `agent/context.py::blocked_rows`，类型表见
+      `agent/block_reasons.py`）。`planner_node` 每轮都传，默认值是缺省语——留给
+      不建模受阻状态的离线探针/对照臂（`eval/native_tools_probe.py`、
+      `agent/react_arm.py`）与既有单测。
     """
     return _PLANNER_PROMPT.format(
         # 技能表按本轮角色过滤（20260921）：管理助手那三个技能只对 admin 列出，
@@ -765,6 +775,7 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
         short_reply_hint=short_reply_hint,
         pending_ledger=pending_ledger,
         tool_results=tool_results,
+        blocked_rows=blocked_rows,
         ref_hints=ref_hints,
         reflector_feedback=reflector_feedback,
         correction=correction,
@@ -5006,6 +5017,11 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 # 就只能凭记忆，等于把已经拿到手的事实又收回去。
                 pending_ledger=ledger_frame or "（本轮没有去读待办台账）",
                 tool_results=frames_txt,
+                # 受阻项**每一轮都给**（同台账）：它是 checker 判出来的**类型**，
+                # 不是叙述。此前 planner 只能从错误帧那句话里猜是哪一种失败，于是
+                # 把"服务这一轮给不出数据"当成"你参数写错了"、原地重点一次同一个
+                # 调用 ⇒ 同键二次受阻 ⇒ 收尾，主人那件完全能办的事没有入口（§1.55）。
+                blocked_rows=blocked_rows(state.get("blocked") or []),
                 # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
                 # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
                 ref_hints=ref_hints(state.get("tool_data") or []),
@@ -9766,7 +9782,12 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 noop_specs.append(list(_spec_signature(name, rcpt["args"])))
                 record("execute", "noop", tool=name, args=rcpt["args"])
         else:
+            # `skill`（20261007）是**类型接上线**的一半：`record` 那一行本来就有它，
+            # 但传回 planner 的这条记录此前只有工具名——于是"哪个技能被卡住"这个信息
+            # 在 planner 侧丢失，只剩"哪个工具失败了"。planner 选的是**技能**，
+            # 这一格必须跟着走（渲染见 `context.blocked_rows`）。
             blocked.append({"spec": spec, "tool": name, "reason": reason,
+                            "skill": plan["skill"],
                             "result": str(out)[:300]})
         record("execute", "check", tool=name, verdict=verdict, reason=reason,
                skill=plan["skill"])
@@ -9876,7 +9897,7 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
 
     plan_txt = (state.get("plan") or "")[:400]
     blocked_txt = "\n".join(
-        f"- {b.get('spec', '')} | reason={b.get('reason', '')}"
+        f"- skill={b.get('skill', '')} | {b.get('spec', '')} | reason={b.get('reason', '')}"
         f" | result={str(b.get('result', ''))[:150]}"
         for b in blocked[:6])[:600] or "（空）"
     facts = (_frame_texts(state["messages"]) + "\n"
