@@ -1718,6 +1718,62 @@ def render_account_role_status(username: str, uid, to_role, before_role=None,
             f"（后台已复核：名录里这个账号现在就是{label}身份）")
 
 
+# ── 读后台账号名录（20261006）───────────────────────────────────────────
+# 为什么单立一份"读"：`account_freeze` / `account_unfreeze` / `account_set_role` /
+# `mute_account` / `unmute_account` / `notice_send` / `quota_reset` 这七件**写**技能的
+# 参数契约都写着「账号名**必须能在后台账号列表里看到**」，而在 20261006 之前**没有任何
+# 一个技能读得出那份列表**——`_user_directory` 是写工具内部的私有 helper
+# （`GET /api/temp-users`），planner 看不见它。于是"先确认这个账号存在"这条前提
+# **住在模型够不着的地方**，它只能去抓一个近邻：trace `20261006T082437` 里主人说
+# 「给本本恢复身份」，planner 点了 `admin_notes`（**文章**清单）、关键词还传了空串
+# = 要整张后台清单——它保住的是 `list_admin_notes` 描述教的那条动作（"要改某篇文章…
+# 先用它拿到**确切的 id**"），只是把领域换成了账号。同族的先例是 `article_status` /
+# `article_tags`：那两件的描述里**点名**了 `admin_notes`，文章族就从来没出过这个错。
+# 这一屏的价值全在**账号名怎么写**：写通道只按名字指认（没有按 id 的通道，见
+# tools/base.py 那一族的头注），差一个字就是"后台没有这个账号"。所以账号名印在最前、
+# 加「」，且**不印昵称**——不是漏了：`/api/temp-users` 就没有这个字段（Rust 的
+# `TempUserInfo`），后台账号列表页看的也是同一份。主人用昵称称呼时，planner 只能拿
+# 它当名字去比，比不中就走 `_find_named_user` 那条"后台没有这个账号 + 名字最接近的
+# 候选"的路——而不是在这里替它编一个昵称，也不该拿昵称去反推账号名。
+_ROSTER_TAIL = ("（上面印的是**账号名**：写操作按它指认，**一个字都不能差**；"
+                "超级管理员的账号不在这份名单里）")
+
+
+def render_account_roster(rows) -> str:
+    """后台账号名录快照 → 给 planner 看的清单（**纯渲染**，IO 与拼装在 tools/base.py）。
+
+    `rows` = `/api/temp-users` 的原样数组（`_user_directory` 的产物）。**空数组是一个
+    事实**（后端确实一个都没给），照实说"一个都没有"。**读不到不走这里**：那时
+    `_user_directory` 已经返回 `unavailable`，调用方原样透传，绝不喂进本函数渲染成
+    "零个账号"——「缺键绝不编 0」，"读不到"与"没有"是两件事。
+    """
+    items = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("username") or "").strip()
+        if not name:
+            continue  # 没有账号名的行对写通道零用处（写通道只按名字指认）
+        uid = normalize_target_id(row.get("id"))
+        # **不印 `账号 id=None`**：那看起来像一个编号，模型会照着抄（同
+        # `render_quota_requests` 里 uid 那一格的取舍）。
+        gap = f"（账号 id={uid}）" if uid is not None else "（读不到账号 id）"
+        items.append((
+            float(uid) if uid is not None else float("inf"),
+            f"- 「{name}」{gap}身份={role_cn(row.get('role'))}，"
+            f"账号状态={account_state_cn(_row_frozen(row))}，"
+            f"禁言状态={mute_state_cn(_row_muted(row))}"))
+    # **按 id 升序**：同一份名录在两轮之间要逐字节相同。后端给的顺序不保证稳定，而这份
+    # 文本要进 planner 上下文——本仓刚量过"输入里任何逐轮/逐分钟变的东西都会让对照失效"
+    # （见 docs/param-tuning-20261006.md 里 `page_ctx` 台账年龄串那条）。
+    items.sort(key=lambda it: it[0])
+    body = "\n".join(line for _, line in items)
+    if not body:
+        return f"后台账号名录：**后台一个账号都没有**。{_ROSTER_TAIL}"
+    return (f"后台账号名录：共 {len(items)} 个账号（按账号 id 升序）：\n"
+            f"{body}\n{_ROSTER_TAIL}")
+
+
 # ── 给单个账号发通知（20260926）─────────────────────────────────────────
 # 这一族的卡面有**一条硬要求**（不是文风问题）：正文**全文**印出来。理由是这件事的
 # 性质——正文由模型按主人的意思**整理**（用户拍板的方向，见 `_send_user_notice` 头注），

@@ -105,6 +105,10 @@ _NOARG_VERB = {
     "list_my_messages": "查看站内信",
     # 后台首页待办 / 日程（20260926）：读的那件（写的那件另有臂，正文要进这行）
     "list_dashboard_todos": "查看待办列表",
+    # 后台账号名录（20261006）：无参，同 `list_admin_notes` 那一格——**不在**
+    # _EXPLICIT_TOOLS 里（planner 点不到名，只由 `account_roster` 技能模板展开），
+    # 但过程行渲染走的是同一张表，缺了就显示"执行 list_accounts"。
+    "list_accounts": "查看后台账号名录",
 }
 
 _REF_SOURCE_CN = {
@@ -122,6 +126,10 @@ _REF_SOURCE_CN = {
     # 是"把那条公告标记已读"的走法。缺了这两个来源名，过程行会打出内部工具名。
     "list_my_favorites": "收藏列表",
     "list_notifications": "通知列表",
+    # 后台账号名录（20261006）：`$list_accounts[N]` 现在还写不出可用的字段引用（返回是
+    # 一段文本+meta 里的账号名列表），但**来源名要留着**——缺了它，任何一处写成
+    # `$list_accounts[…]` 的过程行都会打出内部工具名（同上面两条的注）。
+    "list_accounts": "后台账号名录",
 }
 
 # ── 写能力的**动作词根**（gate 零帧声称网的词源，20260930）──────────────────
@@ -566,6 +574,13 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         # 主人问"你刚才搜的是哪个词"要有据可查（同 `list_admin_board` 那条注）。
         k = _raw(a.get("keyword"))
         return f"查看后台文章列表（关键词「{k[:24] if preview else k}」）" if k else "查看后台文章列表"
+    if name == "list_accounts":
+        # 后台账号名录（20261006）：无参、两档同字，与 `_NOARG_VERB` 那一格逐字一致
+        # （同 `list_admin_notes` 那条"两处必须一致"的注）。**「后台账号」四个字要留住**：
+        # 这一行会经 recent_executions 注回下一轮，是"我核对过名录"的唯一凭据；写成
+        # 泛泛的"查看账号列表"会和"查看我的收藏/站内通知"那几行混成一片（同
+        # `list_my_messages` 与 `list_notifications` 必须分开措辞那条）。
+        return "查看后台账号名录"
     if name == "get_article_detail":
         # 动作词按 **doc_type** 取（20260928）：这一件工具读的是文章/说说/留言/公告
         # 四个源，此前一律说"读取文章" ⇒ 两行都把留言读成文章。

@@ -337,6 +337,8 @@ _NO_LEGACY_ARM = _DEAD | {
     "get_note_periods",            # 20261001 文章分期报表：同上（读 stats/notes/periods）
     "set_account_role",            # 20261002 批 J 变更账号身份：冻结之后新增，动作词只在 Python 侧
     "account_mute", "account_unmute",  # 20261002 内容风控下放：同上，动作词只在 Python 侧
+    "list_accounts",               # 20261006 后台账号名录：同上（账号写族那句"账号名必须
+                                   # 能在后台账号列表里看到"的读入口，读 GET /api/temp-users）
 }
 
 _rs = _parent_repo.read(

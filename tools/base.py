@@ -4517,6 +4517,36 @@ def _user_directory(config: RunnableConfig) -> dict[int, dict] | ToolResult:
     return out
 
 
+@tool
+def list_accounts(config: RunnableConfig) -> str:
+    """查看**后台账号名录**：每个账号一行，给出**账号名**、账号 id、身份（超级管理员/
+    管理员/秘书/普通用户/杂鱼）、是否已冻结、是否禁言中。超级管理员的账号不在这份
+    名单里。
+
+    **要冻结/解冻某个账号、改某个账号的身份、给他禁言、给他发站内通知、重置他的对话
+    额度之前，先用它确认那个账号存在、并拿到它的**账号名**。**那一族写工具只按
+    **账号名**指认目标（没有编号通道），名字差一个字就是「后台没有这个账号」。
+
+    只列出**账号名**，不列昵称：后台接口里就没有昵称这个字段，而主人用昵称称呼时
+    应当如实说明找不到、或请他给账号名，不要拿昵称去猜。需要管理员身份。"""
+    from agent import adminops as A
+    rows = _user_directory(config)
+    if isinstance(rows, ToolResult):
+        # **原样透传失败**：读不到名录 ≠ 名录是空的。渲染成"一个账号都没有"会让下一步
+        # 的零写看起来是有依据的（同 `_find_named_user` 那条 fail-closed）。
+        return rows
+    listed = [r for r in (rows or {}).values() if isinstance(r, dict)]
+    if not listed:
+        # 空名录是**事实**（后端确实一个都没给），照实说、照常进回执（同
+        # `list_admin_notes` 的"后台文章列表是空的"那一支）。**读不到不走这里**——
+        # 上面已经原样透传了 `unavailable`。
+        return empty(A.render_account_roster([]))
+    return ok(A.render_account_roster(listed),
+              meta={"count": len(listed),
+                    "usernames": [str(r.get("username") or "").strip()
+                                  for r in listed]})
+
+
 def _account_frozen(row) -> bool | None:
     """名录里那一行"是不是冻结状态" → True/False；读不出这个字段 → **None**。
 
@@ -5557,6 +5587,11 @@ _TOOL_REGISTRY = [
     create_dashboard_todo,
     complete_dashboard_todo,
     reschedule_dashboard_todo,
+    # 后台**账号名录**（20261006）：admin.console，只读。给下面那一整族账号写工具
+    # （冻结/身份/禁言/通知/额度）提供它们契约里那句「账号名必须能在后台账号列表里
+    # 看到」的入口——在那之前这句话**没有对应的技能**，planner 只能去抓 `list_admin_notes`
+    # 这个近邻（trace `20261006T082437` 实证）。见 `list_accounts` 的 docstring。
+    list_accounts,
     # 冻结 / 解冻账号（20260926）：write.console，目标=后台账号列表里的**账号名**，
     # 见"管理助手写工具：冻结 / 解冻账号"节头注。两个工具而不是一个带方向的参数：
     # 方向写进工具名，确认卡与回执才不可能与真正执行的方向相反。
