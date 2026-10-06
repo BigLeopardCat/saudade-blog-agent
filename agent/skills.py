@@ -1308,15 +1308,19 @@ SKILLS: list[Skill] = [
         capability="代发站内公告（全站访客在首页都能看到）",
         description=(
             "博主（管理员）要求**发一条站内公告**时使用（如「发个公告说〈要发的话〉」——"
-            "〈…〉是占位符，正文照抄主人原话）。"
+            "〈…〉是占位符）。"
             "参数 title=公告标题，content=公告正文。"
-            "**正文只写用户说过的内容**——公告是对全体访客说的话，"
-            "不许替他润色、补细节或编造（他给几个字就写几个字）。"
+            "**正文分两种情况，先看清主人给了哪一种**：他**明确给出原文**"
+            "（「标题叫「X」」「正文写：…」这类）时**照录**，一个字的改动都算改了他的意思；"
+            "他**只给了意思**（「发个公告祝大家国庆快乐，以你的口吻」）时，"
+            "由你**按他的意思组织措辞**成一句得体的公告——可以润色、可以补一句得体的话，"
+            "不必逐字照搬他说的那几个词。"
+            "两种情况下都**不许编一件他没让你说的事**。"
             "正文缺失时不要自己编一句凑上：缺参数就直接问主人。"
             "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真发出去由系统弹确认框问主人（公告内容会显示在确认框里），你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
         ),
-        inputs={"title": "公告标题（用户说的那句）",
-                "content": "公告正文（用户说的内容，原样，不要改写）"},
+        inputs={"title": "公告标题（用户说的那句，或按他的意思起一个）",
+                "content": "公告正文（他明确给了原文就照录，只给了意思则由你按他的意思成文）"},
         plan=[("create_announcement", {"title": "$title", "content": "$content"})],
         complete_when="create_announcement 返回了已发布",
         reply_contract=(
@@ -2473,8 +2477,16 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
         return [_spec(tool_name, args)], "、".join(bits)
 
     if name.startswith("announcement_"):
-        # 公告（20260922 第五轮）：目标按**标题**指认。正文**原样透传、一个字都不改**
-        # ——它是对全体访客说的话，替主人润色等于替他发言。这里只做"空/非空"的判断。
+        # 公告（20260922 第五轮）：目标按**标题**指认。正文**原样透传**——这一层只做
+        # "空/非空"的判断，一个字都不改。
+        # ⚠️ "正文该由谁成文"（20261006 改口径）：**两种情形分开**——主人明确给了原文
+        # （「正文写：…」）⇒ 照录，一个字的改动都算改了他的意思（由
+        # `graph._announcement_text_fix` 校正回原话）；只给了意思（「发个公告祝大家
+        # 国庆快乐，以你的口吻」）⇒ **由 planner 按他的意思组织措辞**，这一层原样放行。
+        # 这里原先写的是"正文原样透传、一个字都不改……替主人润色等于替他发言"，
+        # 那句话**把只给意思的那种也一起禁了**：现场代价见 trace `20261001T061023`
+        # ——主人点名要"以你的口吻"，模型照旧只回声一句「祝大家国庆节快乐！」，
+        # 主人下一句就是「太干巴了，而且我要求以你的身份」。
         title = _write_arg(params.get("title"))
         if not title:
             return [], (f"{name} 缺少公告标题（title）：不调用任何工具，"
@@ -2485,11 +2497,12 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
         if name == "announcement_create":
             content = _write_arg(params.get("content"))
             if not content:
-                # **绝不替用户补正文**：公告是主人的原话，编一句就是替他发声。
+                # **槽位空着就不许往下走**：正文由 planner 成文（可以润色），但不能是空。
                 return [], ("announcement_create 缺少公告正文（content）：不调用任何工具，"
-                            "如实向主人问清公告要写什么（原文照录，不要自己编）")
+                            "如实向主人问清公告要写什么")
             return [_spec("create_announcement", {"title": title, "content": content})], (
-                f"发布公告「{title}」（正文照录主人的原话）")
+                f"发布公告「{title}」（正文**全文**会印在确认卡上由主人核对，"
+                "他点了确定才真发出）")
         new_title = _write_arg(params.get("new_title"))
         content = _write_arg(params.get("content"))
         if not new_title and not content:
@@ -2502,7 +2515,7 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
             bits.append(f"改名为「{new_title}」")
         if content:
             args["content"] = content
-            bits.append("正文改成主人给的那段")
+            bits.append("改正文")
         return [_spec("update_announcement", args)], f"修改公告「{title}」：{'、'.join(bits)}"
 
     if name == "board_audit":
