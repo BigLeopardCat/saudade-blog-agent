@@ -3493,10 +3493,19 @@ _CONFIRM_CLAIM_RE = re.compile(
     re.S)
 # 豁免（同子句内生效，见 `_clause_hit`）：将来时描述（"系统会走确认流程——点确定我就
 # 去办"）、否定（"没有弹确认框"多数形态因语序本就命中不了，这里再兜一层）、
-# 转述（"你说点确定""你说的'等你点确认'"）。
+# 转述（"你说点确定""你说的'等你点确认'"）、
+# **否认"有这回事"**（20261006 实测的假红，见下）。
 _CONFIRM_EXEMPT_RE = re.compile(
     r"(?:会|将|之后|届时|到时候|未来|下次)"      # 将来时 ⇒ 说的是"到时候会弹"，不是"现在正等着"
     r"|(?:没有?|未|不会|别|不必|不用)\s*(?:弹|发|等|点)"
+    # 否认"这件事存在"（20261006）：洞⑥ 与洞⑦ 是**同一件事实的两面**——洞⑥ 抓
+    # "在等确认"的**声称**，洞⑦ 抓"系统里没有这条待确认指令"的**否认**。同一句话
+    # 不可能既是声称又是否认，所以两者撞在同一个子句上时必须**让给洞⑦**：它手里
+    # 有台账真值、判得对；本族没有任何真值，只能看词形。现场（trace
+    # `20261006T165231`）：主人连问两轮之后 narrator 写下的自我纠正
+    # 「所以不存在"等你点确认"这回事」被判成声称，一句**真话**整段换成了
+    # `_FALLBACK_CONFIRM_CLAIM`（系统自称"我刚才那句是句空话"——比原文更假）。
+    r"|(?:不存在|并不存在|没有)\s*[^。；\n]{0,12}(?:这回事|这码事|一回事|这件事|那回事)"
     r"|(?:你|主人|他|她|访客)\s*(?:说|问|提到|指的是|那句)"
     # 转述他人/站内内容的词（留言、说说、公告、访客原话里都可能出现"点确定"这种字面）
     r"|(?:写|标|照抄|引述|转述|转告|复述)(?:着|的是|的|了)?"
@@ -5333,10 +5342,16 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 写操作的目标按名字解不出来 → 不弹窗、不执行，直接确定性如实收尾
         # （见 _write_target_refusal 上方长注：名字通道下"解不出来"必须响亮，
         # 而"响亮"的最省事形态就是**根本不问那一句**）。
+        # 这一族出处闸的**第二本账**（20261006，见 `_ledger_pending_text` 长注）：
+        # 系统自己的规则要求"短应答时照 pending_action 原样重新提交"，那个参数只在
+        # 台账那一行里 ⇒ 只认 `user_msg` 的闸会把系统规定的重提路径判成编造。
+        # 算一次、往下传：三处用的是同一份原文。
+        ledger_src = _ledger_pending_text(state.get("ledger"))
         # 先过片段地基（20260922 ②防线）：留言的 quote 校正到主人引号里那段原话
         # （或在没有可指认的片段时确定性拒绝）——**必须在目标预检之前**，否则预检
         # 判的是 planner 那个被截短/被概括错的片段。
-        quote_refuse = _board_quote_fix(plan_obj, user_msg, rounds, role)
+        quote_refuse = _board_quote_fix(plan_obj, user_msg, rounds, role,
+                                        ledger_src=ledger_src)
         # 公告的 title/content 同样有"主人自己标出来的原话"通道（20260922 ②防线续）：
         # 没有可拒绝的形态（公告一律弹窗、主人签字前看得见），只做校正。
         _announcement_text_fix(plan_obj, user_msg, role)
@@ -5345,13 +5360,14 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 另一个名字（"站内没有叫「绝对」的标签"）。
         _name_target_fix(plan_obj, user_msg, role)
         # 写参数里的**名字值**（新名字 / 标签名列表 / 父标签）同理（②防线续五，见
-        # `_name_arg_fix` 上方长注）：新建的名字天然不在字典里，只能来自主人这句话。
-        value_refuse = _name_arg_fix(plan_obj, user_msg, role)
+        # `_name_arg_fix` 上方长注）：新建的名字天然不在字典里，只能来自主人这句话
+        # ——或者台账那一行（主人回「嗯」重提上一轮那张卡时）。
+        value_refuse = _name_arg_fix(plan_obj, user_msg, role, ledger_src=ledger_src)
         # 待办正文（20261006，见 `_todo_text_fix` 上方长注）：它是写面里**唯一一格
         # 目标没有台账可核**的自由文本，此前既不在名字通道也不在台账通道里。
         # 放在值地基**之后**：两者按工具名互斥（那边收的是新名字/标签名/父标签），
         # 排在这里只是让"值那一族"读起来仍是一段。
-        todo_refuse = _todo_text_fix(plan_obj, user_msg, role)
+        todo_refuse = _todo_text_fix(plan_obj, user_msg, role, ledger_src=ledger_src)
         # 目标名的**来源态**（20260924 治本，见 `_target_grounding_refusal` 上方长注）：
         # 校正（`_name_target_fix`）之后这个字面若仍**取不出处**，就是"主人没说过这个
         # 名字"——零写 + 如实追问。排在台账预检**之前**是刻意的：它不读台账，台账读不到
@@ -6507,7 +6523,7 @@ def _msg_quote_spans(user_msg) -> list[str]:
 
 
 def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0,
-                     role: str | None = None) -> str | None:
+                     role: str | None = None, ledger_src: str = "") -> str | None:
     """`delete_board_comment` 的 `quote` 校正到主人引号里那段原话。返回拒绝原因或 None。
 
     单 spec 时校正/拒绝；**零工具**时补参（见下）。两者与 `_write_target_refusal`
@@ -6521,7 +6537,14 @@ def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0,
     `role` 只是往下透传给 `instantiate_plan`（重建计划时 calls 白名单要按角色取）。
     本函数重建的总是留言删除技能、参数由它自己构造，角色在此不影响结果；带上它是
     为了让"重建整个 planner 计划"的每一处都拿到同一个 role——漏传是静默的。
+
+    `ledger_src` = 系统台账那一行「待主人点头（还没做）」的原文（第二本账，见
+    `_ledger_pending_text` 长注）。删留言这一族**在 `_ALWAYS_CONFIRM_TOOLS` 里**
+    ⇒ 一定会有 pending 行：主人回一句「嗯」重提上一轮那张卡时，`quote` 只存在于
+    台账那一行（他这一轮一个字都没说）——只认 `user_msg` 就必然落到下面那句
+    "主人这句话里没有能指认那条留言的正文片段"，与待办正文那一格是**同一个病**。
     """
+    sq_ledger = _squash_spaces(ledger_src)
     tools = plan_obj.get("tools") or []
     skill = plan_obj.get("skill") or "chat"
     if not tools:
@@ -6585,8 +6608,11 @@ def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0,
             plan_obj.clear()
             plan_obj.update(fresh)
         return None
-    if sq_quote and sq_quote in msg:
-        return None  # 没引号但原话里确实有这段 → 保持既有行为（不再加码）
+    if sq_quote and (sq_quote in msg or (sq_ledger and sq_quote in sq_ledger)):
+        # 没引号但**这一轮的原话**里确实有这段 → 保持既有行为（不再加码）；
+        # 或者它出现在系统台账那一行里 = 上一轮那张卡上写的就是这个片段
+        # （主人这一轮只回了「嗯」）——出处是系统自己的待办行，不是模型新编的。
+        return None
     why = (f"主人这句话里没有能指认那条留言的**正文片段**"
            f"（系统记下的片段是「{quote}」，在主人原话里找不到）"
            if quote else "主人这句话里没有给出那条留言的正文片段")
@@ -6757,13 +6783,22 @@ def _msg_todo_text(user_msg) -> str | None:
     return body.strip("「」『』“”\"'").strip() or None
 
 
-def _todo_text_fix(plan_obj: dict, user_msg, role: str | None = None) -> str | None:
+def _todo_text_fix(plan_obj: dict, user_msg, role: str | None = None,
+                   ledger_src: str = "") -> str | None:
     """`create_dashboard_todo` 的 `text` 校正到主人说出口的那件事。返回拒绝原因或 `None`。
 
     只治**新建**这一件：`complete` / `reschedule` 的正文是"要动的那一条"（现场台账核），
     归 `_WRITE_NAME_FIELDS` 那条通道，两处按工具名严格互斥，不会撞在同一件工具上。
 
     `role` 仅透传给 `instantiate_plan`（重建计划时 calls 白名单按角色取）。
+
+    `ledger_src` = 系统台账那一行「待主人点头（还没做）」的原文（**第二本账**，见
+    `_ledger_pending_text` 长注）。`create_dashboard_todo` 在 `_ALWAYS_CONFIRM_TOOLS`
+    里 ⇒ 每次弹卡都落一行 pending：主人回一句「排期到今天」、或干脆回一句「嗯」时，
+    "那件事"的正文只存在于**台账那一行**（系统自己把它摆进了 planner 的上下文，
+    planner 规则 1 也明确要求"照 pending_action 原样重新提交"）。只认 `user_msg`
+    这一个来源的判据会把系统自己规定的重提路径判成编造——20261006 生产事故正是这样：
+    零写、卡收回、那一行永远 pending，主人再说什么都会撞同一堵墙。
     """
     # ⚠️ 技能名也要判：下面那一步会拿 `plan_obj["skill"]` 重走 `instantiate_plan`，
     # 而**变更集族**（`review_inbox`）的 `params` 是 `{"calls": [...]}`、`text` 根本
@@ -6784,6 +6819,13 @@ def _todo_text_fix(plan_obj: dict, user_msg, role: str | None = None) -> str | N
     sq_got = _squash_spaces(got)
     if sq_got and sq_got in _squash_spaces(user_msg):
         return None                  # 有据不动
+    sq_ledger = _squash_spaces(ledger_src)
+    if sq_got and sq_ledger and sq_got in sq_ledger:
+        # 有据不动（第二本账）：这句话不是他这一轮说的，是**上一轮那张卡上写着的**
+        # 那一条——他回一句「排期到今天」或「嗯」，正文照抄台账原文就是对的。
+        # 记一笔：事后要能分辨"这一轮为什么没判它编造"（这条闸的误判都是静默的）。
+        record("planner", "todo_text_from_ledger", text=sq_got[:60])
+        return None
     want = _msg_todo_text(user_msg)
     if want and _squash_spaces(want) != sq_got:
         logger.info("[planner] 待办正文校正（主人标出来的那一段）：%r → %r",
@@ -6800,8 +6842,8 @@ def _todo_text_fix(plan_obj: dict, user_msg, role: str | None = None) -> str | N
         return None
     if not sq_got:
         return None                  # 空正文归展开层（见上方边界注）
-    return (f"系统给这条待办填的正文是「{got}」，它**对不回主人这句话**——待办的正文"
-            "只能是主人说出口的那件事本身，系统不替主人编一件。"
+    return (f"系统给这条待办填的正文是「{got}」，它**对不回主人这句话、也不在系统记着的"
+            "那条待办里**——待办的正文只能是主人说出口的那件事本身，系统不替主人编一件。"
             "本次没有改动任何内容；请主人把要记的那件事原样再说一次即可，系统照着记。")
 
 
@@ -7551,26 +7593,62 @@ def _parent_marked_span(user_msg) -> str:
     return hits[0] if len(hits) == 1 else ""
 
 
-def _grounded_value(val, sq_msg: str) -> bool:
-    """这个值在主人原话里逐字有据吗？泛称/描述里的措辞与**指代**都**不算**有据。
+def _ledger_pending_text(ledger) -> str:
+    """系统台账里那一行「待主人点头（还没做）」的原文（没有则空串）。
+
+    它是**出处闸的第二本账**，也是这一族里唯一一处"写参数的出处不在主人这一轮的话里、
+    却仍然是系统事实"的地方。理由（20261006 生产事故，连撞两轮）：
+    planner 的规则从 20260923 起就写着"短应答先还原语义"——主人回一句「嗯」或
+    「排期到今天」，那件事的**目标/正文/参数**就在上一轮那张卡的台账行里，系统自己
+    把它摆进了 system 上下文（Rust `render_pending_action` 渲染：动作行原文 + `参数`
+    那一格是**落库的 args JSON 原文**）。而这一族的出处闸只认 `user_msg` ⇒ 把系统
+    **自己规定的重提路径**判成编造：零写、卡收回、那一行永远 pending，主人下一句不管
+    说什么都会再撞一次（trace `20261006T165209` / `T165231`：第二轮的自我纠正
+    「所以不存在"等你点确认"这回事」还反过来被 gate 判成"声称在等确认"）。
+
+    边界（改这一族之前先读）：
+      · 这是**渲染过的行**，不是数据通道——Rust 侧两级截断（参数那一格 200 字、
+        整行 600 字，`PENDING_ARGS_INLINE_MAX` / `PENDING_INLINE_MAX`）。超长正文可能
+        落在截断之外 ⇒ 那时照旧拒绝（fail-closed，与加这本账之前一模一样）。
+      · 台账里出现过的字，只可能来自本会话里**已过闸、且摆在主人眼前那张卡上**的那一份
+        `specs`（弹窗那一刻的载荷）⇒ 顺着它对回来的是系统自己的字，不是模型新编的。
+      · 它**不是**"有一处出处就放行"的兜底：`user_msg` 那一支照旧先判，本账只在它
+        判不了时补位，`_squash_spaces` 归一与它同款。
+    """
+    if not isinstance(ledger, dict):
+        return ""
+    return str(ledger.get("pending") or "")
+
+
+def _grounded_value(val, sq_msg: str, sq_ledger: str = "") -> bool:
+    """这个值在主人原话（或系统台账那一行）里逐字有据吗？泛称/描述里的措辞与**指代**
+    都**不算**有据。
 
     指代那一族的判据是**形状**（封闭类词表），不是"在不在原话里"——正因为它一定在
     原话里，逐字子串那条地基对它是失效的（现场与论证见 `_DEICTIC_WORDS` 长注）。
+    这两条脏判据对第二本账同样成立（台账里也全是"指代/泛称"形态的散字），故一律先判。
+
+    `sq_ledger` = `_squash_spaces(_ledger_pending_text(...))`，**必须由调用方归一后传**
+    （它的理由、边界与为什么不许省见 `_ledger_pending_text` 的长注）。
     """
     v = _squash_spaces(val)
     if not v or v in _GENERIC_VALUE_WORDS or v in _DEICTIC_WORDS:
         return False
-    return v in sq_msg
+    return v in sq_msg or (bool(sq_ledger) and v in sq_ledger)
 
 
 def _name_arg_fix(plan_obj: dict, user_msg,
-                  role: str | None = None) -> tuple[str, str] | None:
+                  role: str | None = None,
+                  ledger_src: str = "") -> tuple[str, str] | None:
     """写参数里的名字值校正到主人的原话（就地改）；校正不了则返回 `(工具名, 原因)`。
 
     只管**值**字段（`_WRITE_VALUE_FIELDS`）与 `parent_tag`——目标字段是
     `_name_target_fix` 的地盘，两者分工不重叠。
 
     `role` 仅透传给 `instantiate_plan`（重建计划时 calls 白名单按角色取）。
+    `ledger_src` = 系统台账那一行「待主人点头（还没做）」的原文（第二本账，见
+    `_ledger_pending_text` 长注）：主人回一句「嗯」重提上一轮那张卡上的事时，值就在
+    那一行里——只认 `user_msg` 会把系统自己规定的重提路径判成编造（零写 + 卡收回）。
     """
     tools = plan_obj.get("tools") or []
     if len(tools) != 1:
@@ -7585,6 +7663,7 @@ def _name_arg_fix(plan_obj: dict, user_msg,
         return None
     msg = str(user_msg or "")
     sq = _squash_spaces(msg)
+    sq_ledger = _squash_spaces(ledger_src)   # 第二本账（见 `_ledger_pending_text`）
     named = _msg_named_value(msg)
     # 主人这句话里有没有"改名"意图（`改名叫/改成/改为/换成…`，含口语的"改个名"）。
     # 只给下面那条"新名字 == 目标自己"的判据当闸用：没有改名意图时，同名 new_title
@@ -7605,7 +7684,7 @@ def _name_arg_fix(plan_obj: dict, user_msg,
             continue
         if isinstance(cur, (list, tuple)):
             vals = [str(v) for v in cur]
-            bad = [v for v in vals if not _grounded_value(v, sq)]
+            bad = [v for v in vals if not _grounded_value(v, sq, sq_ledger)]
             if not bad:
                 continue
             pool = [s for s in cand_spans
@@ -7638,11 +7717,11 @@ def _name_arg_fix(plan_obj: dict, user_msg,
             # （只在主人这句话里**有改名意图**时才判——移动类命令里 planner 顺手带上
             # 同名 new_title 是无害冗余，不能因此把一次真移动拦掉。）
             selfsame.append(got)
-        elif not _grounded_value(got, sq):
+        elif not _grounded_value(got, sq, sq_ledger):
             unresolved.append(got)
 
     pv = str(args.get(pkey) or "").strip() if pkey else ""
-    if pkey == "parent_tag" and pv and not _grounded_value(pv, sq):
+    if pkey == "parent_tag" and pv and not _grounded_value(pv, sq, sq_ledger):
         pcand = _parent_marked_span(msg)
         if pcand and _squash_spaces(pcand) != _squash_spaces(pv):
             fixed[pkey] = pcand
