@@ -44,6 +44,8 @@ from agent.native_plan import build_tool_schema  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 from agent.skills import (build_planner_context, render_tool_marks,  # noqa: E402
                           skill_param_specs, visible_skills)
+from agent.tasks import TASK_DROP, TASK_HOLD  # noqa: E402
+from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
 FAILS: list[str] = []
@@ -69,6 +71,21 @@ def _schema_desc(role) -> dict[str, str]:
     """`build_tool_schema(role)` → {技能名: description}。"""
     return {t["function"]["name"]: t["function"].get("description", "")
             for t in build_tool_schema(role)}
+
+
+def _expected_schema_names(role: str) -> set[str]:
+    """`planner_node` 该绑的名字集合 = 可见技能 ∪（开档时的两个伪函数）。
+
+    ⚠️ 20261007：原写法是"与 `visible_skills(role)` **全等**"，那句话只在
+    `AGENT_TASK_STATE=0` 下成立——`tests/run_all.py` 把这一档钉成 0，所以 CI 与夜间
+    **从来看不到**；而产线 `.env` 自 20261002 起是**开**的 ⇒ 本机裸跑这套直接红（实测）。
+    口径与 `tests/test_native_plan.py` ① 同一句：**多出来的只准是那两个申报过的伪函数**
+    （名字取 `agent/tasks.py` 的常量，不硬编码），多别的一律红——"不扩权"没被放松。
+    """
+    names = {s.name for s in visible_skills(role)}
+    if settings.agent_task_state:
+        names |= {TASK_HOLD, TASK_DROP}
+    return names
 
 
 # ── ① 删掉的三行必须在 schema 里逐字找得到（"能删"的全部依据）──────────────
@@ -367,7 +384,7 @@ def test_wiring_planner_really_sends_the_slim_block():
           _KEEP["导航映射表表头"] in prompt and _KEEP["能力边界兜底段"] in prompt)
     check("tools 数组照旧绑上（slim 不碰 schema）",
           {t["function"]["name"] for t in (llm.bound or {}).get("tools") or []}
-          == {s.name for s in visible_skills("admin")})
+          == _expected_schema_names("admin"))
     check("计划仍从那次工具调用产出（slim 不改行为）",
           "SKILL=effect" in out["plan"], out["plan"].splitlines()[0])
 
