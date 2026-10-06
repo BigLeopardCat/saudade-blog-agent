@@ -35,6 +35,18 @@
 
 不写 `last_run.json`、不碰 `eval/golden/**`、不动 `TARGET/FLOOR/ENTRY`、不动分母。
 判据的变更仍归 `eval/run_golden.py` 那一条路，本模块只**调旋钮、读数**。
+
+⚠️ 上面那一条（不写 `last_run.json`）**在 20261006 之前是句空话**：本模块当时不给子进程
+设 `GOLDEN_ARM`，于是 `golden_arm.arm_name()` 恒为 `graph` ⇒ `reports_dir` 恒为
+`eval/report/runs`（每一遍都落进**生产档那个目录**）、`is_baseline_arm` 为真
+（写 `last_run.json` 的资格是开着的）。**实测的后果只有前半截**：那 9 遍留档确实混进了
+生产档目录，`landing_gate` 的 readiness / 慢性红榜按目录整扫 ⇒ 把温度臂、deepseek 臂的
+读数（含两份 `ds-chat`，下界 0.643 / 0.635）**当成生产档的夜间读数**收进窗口。
+后半截**没真的发生**：`last_run.json` 一次都没被覆盖——那 9 份报告的 `full_run` 全是
+`False`（有 env 跳过 ⇒ `run_golden.is_full_run` 假，而写基线还有那道闸），**闸开着、
+恰好没响**。别把"没响"读成"设计对了"：它与本仓今天另外两处是同一个形状。
+现在本模块跑的是 `matrix` 臂（`golden_arm.ARM_MATRIX`：自己的目录
+`eval/report/runs_matrix`、没有基线资格），那句话才**变成真的**。
 """
 import argparse
 import glob
@@ -46,8 +58,13 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import golden_arm  # noqa: E402  （臂名/目录的**单一事实源**，别在这里再写一遍）
+
 ROOT = Path(__file__).resolve().parent.parent
-RUNS_DIR = ROOT / "eval" / "report" / "runs"
+# 留档目录与"能不能当基线"**同源**取（`golden_arm`）：本模块是 `matrix` 臂 ⇒ 目录是
+# `eval/report/runs_matrix`，与生产档的 `runs/` 分开。
+RUNS_DIR = ROOT / golden_arm.reports_dir(golden_arm.ARM_MATRIX)
 MATRIX = ROOT / "eval" / "report" / "param_matrix.jsonl"
 TRACE_ROOT = Path("/home/ubuntu/Saudade-Blog/logs/agent/golden_traces")
 
@@ -123,6 +140,10 @@ def _env_for(arm: str) -> dict:
             env.pop(k, None)
     env.update(IDENTITY_ENV)
     env.update(ARM_SPECS[arm]["env"])
+    # ⚠️ **必须在上面那个 `GOLDEN_` 清除循环之后**（它也清 `GOLDEN_ARM`——那是刻意的：
+    # 外层壳里若设着别的臂，不许渗进来）。这一句就是"调参档不写 last_run.json、
+    # 也不落进生产档那个目录"的实现处：臂名不同 ⇒ `is_baseline_arm` 假、目录另开。
+    env[golden_arm.ENV_ARM] = golden_arm.ARM_MATRIX
     return env
 
 

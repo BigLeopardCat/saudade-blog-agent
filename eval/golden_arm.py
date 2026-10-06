@@ -31,7 +31,22 @@ import os
 
 ARM_GRAPH = "graph"
 ARM_REACT = "react"
-KNOWN_ARMS = (ARM_GRAPH, ARM_REACT)
+# `matrix`（20261006）：**同一套循环、另一套旋钮**的留档身份——`eval/param_matrix.py` 逐臂
+# 改的是 PLANNER_TEMPERATURE / PLANNER_NATIVE_THINKING / 模型名，循环一个字没动（所以
+# `build_agent` 与 graph 臂同源）。它之所以要是**一条臂**，是因为"臂"在本模块里管的是
+# **归档身份**：此前 matrix 的每一遍都落进 `eval/report/runs/`（= graph 臂那个目录，
+# 因为它没设 `GOLDEN_ARM` ⇒ 臂名恒 `graph`）。后果**实测**过：20261006 那天 `runs/`
+# 里落进 9 份调参档留档，`landing_gate` 只按 `len(cases) >= min_cases` 收全量
+# ⇒ 它的"最近 5 夜 / 最近 N 次全量"窗口**整段是调参档**（含两份 `ds-chat`，下界
+# 0.643 / 0.635），readiness 与慢性红榜都跟着改口径。已把这 9 份挪进 `runs_matrix/`
+# （见 `问题记录.md` 里那次规范化）。
+#
+# `last_run.json` 那一条**要说准确**：写入资格当时确实对 matrix 开着
+# （`is_baseline_arm` 只看臂名），但**它一次都没被覆盖**——那 9 份报告的 `full_run`
+# 全是 `False`（有 env 跳过 ⇒ `run_golden.is_full_run` 假）⇒ 闸开着、恰好没响。
+# 这跟本仓今天另外两处是同一个形状：**判据看着在，其实靠运气在**。
+ARM_MATRIX = "matrix"
+KNOWN_ARMS = (ARM_GRAPH, ARM_REACT, ARM_MATRIX)
 ENV_ARM = "GOLDEN_ARM"
 
 # 接口层（报告里 `engine` 那一格的地基，20260927 批 A）：20261004 起只剩 native tool calls
@@ -76,9 +91,10 @@ def build_agent(arm: str | None = None):
 
     graph 臂走 `agent.create_agent()`（与 `run_golden.ensure_agent` 原来那一行同源，行为
     逐字节不变）；其余臂走 `agent.<臂>_arm.build()`，模块不在本树就**响亮失败**。
+    `matrix` 臂与 graph **同一份实现**（它换的是旋钮不是循环，见 `ARM_MATRIX` 的注）。
     """
     arm = arm or arm_name()
-    if arm == ARM_GRAPH:
+    if arm in (ARM_GRAPH, ARM_MATRIX):
         from agent import create_agent
         return create_agent()
     try:
