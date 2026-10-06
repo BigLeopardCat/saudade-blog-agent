@@ -338,12 +338,17 @@ print("\n⑧ 第二本账：系统台账那一行「待主人点头（还没做�
 #   ③ 脏判据（泛称/指代）对第二本账**同样生效**——它是先判的，不因为"台账里有"就放行。
 from agent.graph import _board_quote_fix, _ledger_pending_text  # noqa: E402
 
-check("接线：三道闸都吃 `ledger_src`，`planner_node` 一次算好往下传（漏传＝静默回旧行为）",
+_GSRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+check("接线：**四道**闸都吃 `ledger_src`，`planner_node` 一次算好往下传（漏传＝静默回旧行为）",
       "ledger_src" in inspect.signature(_name_arg_fix).parameters
       and "ledger_src" in inspect.signature(_board_quote_fix).parameters
       and "ledger_src" in inspect.signature(g._todo_text_fix).parameters
-      and "ledger_src = _ledger_pending_text(state.get(\"ledger\"))"
-      in (ROOT / "agent" / "graph.py").read_text(encoding="utf-8"))
+      # 第四道（20261006 补）：它此前躲过这一撞靠 `_name_like` 早退——是运气，不是设计。
+      and "ledger_src" in inspect.signature(g._target_grounding_refusal).parameters
+      and "ledger_src = _ledger_pending_text(state.get(\"ledger\"))" in _GSRC)
+check("  目标名那道闸的**调用点**也真的传了（只改签名不接线＝一行都没生效）",
+      "grounded_refuse = _target_grounding_refusal(plan_obj, user_msg," in _GSRC
+      and "ledger_src=ledger_src)" in _GSRC)
 check("台账取用只认那一个键（`ledger` 缺席/不是 dict ⇒ 空串，不是异常、更不是 None 串）",
       _ledger_pending_text(None) == "" and _ledger_pending_text({}) == ""
       and _ledger_pending_text({"pending": None}) == ""
@@ -395,6 +400,39 @@ check("  主人自己加引号给的片段照旧优先（引号通道一个字�
                        "删掉「今天天气真好」那条", 0, "admin") is None
       and _args_of(_plan("delete_board_comment", {"quote": "天气"},
                          skill="board_delete")).get("quote") == "天气")
+
+# ── 目标名那一族（第四道闸）──────────────────────────────────────────────
+# 它此前**没进碰撞面**是运气：早退条件 `_name_like(msg, lex)` 在纯「嗯」上为假
+# （一处名字都没标出来）⇒ 整门不介入。可重提那句话里**只要带一个名字状的词**，
+# 早退就不成立，而卡上那个目标名对不回目标位置 ⇒ 零写 + 卡收回，与待办那次同一个病灶。
+_LED_T = ('删除标签「%s」；动作 delete_tag；参数 '
+          '[{"args":{"name":"%s"},"tool":"delete_tag"}]；状态 awaiting（等主人点头，尚未执行）'
+          % (_TAG, _TAG))
+_RE_MSG = "嗯，「别的」那个先留着，就按你说的办"   # 带引号段 ⇒ `_name_like` 为真
+check("  目标名那一族：这句话里带了个别的名字 ⇒ 早退不成立（所以它此前是**运气**）",
+      g._name_like(_RE_MSG) is True)
+check("目标名那一族：台账里记着这个目标名 ⇒ 放行（此前会判成「主人没说过这个名字」）",
+      g._target_grounding_refusal(_plan("delete_tag", {"name": _TAG}), _RE_MSG,
+                                  ledger_src=_LED_T) is None)
+check("  反向对照：台账缺席 ⇒ 仍然拒（这一支不能因为加了第二本账就松掉）",
+      g._target_grounding_refusal(_plan("delete_tag", {"name": _TAG}), _RE_MSG) is not None)
+check("  反向对照二：台账在、但里面没有这个目标名（模型新编的）⇒ 仍然拒",
+      g._target_grounding_refusal(_plan("delete_tag", {"name": "AI Agent"}), _RE_MSG,
+                                  ledger_src=_LED_T) is not None)
+check("  主人这句话里取不出处**且**台账里也没有 ⇒ 拒（两本账都不认才拒）",
+      g._target_grounding_refusal(_plan("delete_tag", {"name": _TAG}),
+                                  "删掉「别的」那个",
+                                  ledger_src="删掉河灯集里的那条留言「别的」") is not None)
+check("  早退那一条**照旧保留**（纯「嗯」= 一处名字都没标出来 ⇒ 本门不介入）："
+      "它是刻意的设计，不是靠它躲过碰撞——上面那条带名字的句子才是原来会撞的形态",
+      g._name_like("嗯") is False
+      and g._target_grounding_refusal(_plan("delete_tag", {"name": _TAG}), "嗯") is None)
+check("  主人这句话里**位置槽位**取得出处时照旧放行（加第二本账不改变原判据）",
+      g._target_grounding_refusal(_plan("delete_tag", {"name": _TAG}),
+                                  "把「%s」这个标签删掉" % _TAG) is None)
+check("  第二本账走的是 `_grounded_value` 的同一句 ⇒ 脏判据（泛称/指代）对它同样生效",
+      g._grounded_value("标签", "", _LED_T) is False
+      and g._grounded_value(_TAG, "", _LED_T) is True)
 
 print()
 

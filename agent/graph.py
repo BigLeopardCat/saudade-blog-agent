@@ -5374,7 +5374,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 时它仍然生效（台账那条路读不到就放行，见 `_write_target_refusal` 的边界注）。
         # ⚠️ 必须在 `_name_arg_fix` **之后**——那一步可能就地重建 plan（`plan_obj.clear()
         # + update(fresh)`），在它之前判的是重建前的旧参数。
-        grounded_refuse = _target_grounding_refusal(plan_obj, user_msg)
+        # 第二本账同前（20261006）：此前它躲过"重提"这一撞靠的是 `_name_like` 早退
+        # ——那是运气，不是设计（重提那句话里带一个名字状的词就不成立了）。
+        grounded_refuse = _target_grounding_refusal(plan_obj, user_msg,
+                                                   ledger_src=ledger_src)
         # 这句要**如实说出系统查的是哪本台账**：待办族查的是后台首页那张待办清单
         # （`_find_todo_row`），名单里漏了它，主人会以为系统翻错了地方（20260927
         # 加待办那一支时同步补上）。
@@ -7789,7 +7792,8 @@ def _ident_grounded(name: str, args: dict, user_msg) -> bool:
     return True
 
 
-def _target_grounding_refusal(plan_obj: dict, user_msg) -> tuple[str, str] | None:
+def _target_grounding_refusal(plan_obj: dict, user_msg,
+                              ledger_src: str = "") -> tuple[str, str] | None:
     """写操作的目标名**能不能由主人这句话取出来**？取不出 ⇒ `(工具名, 拒绝说明)`。
 
     与 `_write_target_refusal` 的分工是"**这是不是主人说的字**" vs "站内有没有这个字"：
@@ -7799,6 +7803,15 @@ def _target_grounding_refusal(plan_obj: dict, user_msg) -> tuple[str, str] | Non
     名词前的同指段（"大笨狗那个标签"）。
     「恰是整句话的子串」**不算**出处——那是一条假通道（20260924 治本：动作短语
     `删掉吧` 与泛称 `标签` 都从它漏过去，现场见 `_owner_target_span` 规则④长注）。
+
+    **第二本账（20261006，见 `_ledger_pending_text` 长注）**：主人回一句「嗯」重提上一轮
+    那张卡上的事时，目标名就在「· 待主人点头（还没做）: …」那一行里。此前本门躲过这一撞
+    **纯属运气**——它的早退条件 `_name_like(msg, lex)` 在「嗯」上为假（一处名字都没标出来），
+    于是整门不介入；可重提那句话里**只要带一个名字状的词**（"嗯，小狗那个先留着"），
+    早退就不再成立，而那个目标名对不回目标位置 ⇒ 零写 + 卡收回，与 `_todo_text_fix`
+    那次事故是同一个病灶。现在补上台账那一支：**主人这句话里取不出处，但能从那一行里
+    原样取出来 ⇒ 不算编造**。脏判据（泛称/指代）对两本账同时生效（走 `_grounded_value`
+    的同一句）。
 
     为什么这一层要独立存在：目标名字段此前只有两态（尽力校正 → 原值留着），校正不动的
     错值直接进弹卡，而弹卡文案里印着那个名字**是唯一的防线**；值字段早有三态（定不了
@@ -7818,6 +7831,7 @@ def _target_grounding_refusal(plan_obj: dict, user_msg) -> tuple[str, str] | Non
     if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
         return None
     msg = str(user_msg or "")
+    sq_ledger = _squash_spaces(ledger_src)   # 第二本账（见 `_ledger_pending_text`）
     lex = _lexicon(name)          # 词表按工具取（账号族的名词是"账号/用户"，见 _lexicon）
     if not _name_like(msg, lex):
         return None  # 指代型（"那个标签"）：一处名字都没标出来，本门不介入
@@ -7828,6 +7842,12 @@ def _target_grounding_refusal(plan_obj: dict, user_msg) -> tuple[str, str] | Non
             continue
         got = str(args.get(key) or "").strip()
         if not got or _msg_grounded_name(got, msg, spans, lex):
+            continue
+        # 主人这句话里取不出处 ⇒ 再看系统台账那一行（第二本账）。这里**只查台账那一本**
+        # （`sq_msg` 传空串）：主人这一半的口径是上面那个**位置槽位**抽取器，不是逐字
+        # 子串——拿 `_grounded_value(got, sq, ...)` 会把 20260924 治本时点名封掉的
+        # "恰是整句话的子串"那条假通道又放回来。
+        if _grounded_value(got, "", sq_ledger):
             continue
         if spans:
             tail = "主人这句话里点名的名字只有 " + \
