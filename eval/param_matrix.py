@@ -81,11 +81,20 @@ ARM_SPECS: dict[str, dict] = {
         "why": "线上是关着思考跑的（native 三项之一，settings 注里写明是待拍板项）。"
                "开它买的是「分类更准」，付的是 max_tokens 1200 里思考链先吃掉一截。",
     },
-    "deepseek": {
-        "title": "换模型：DeepSeek（LLM_PROVIDER=deepseek）",
+    "ds-chat": {
+        "title": "换模型：DeepSeek（LLM_PROVIDER=deepseek，deepseek-chat）",
+        "env": {"LLM_PROVIDER": "deepseek", "DEEPSEEK_MODEL": "deepseek-chat"},
+        "why": "跨模型那一格。**模型名不能省**：settings 里配的 `deepseek-flash` "
+               "是推理模型，一跑就 400 `The reasoning_content in the thinking mode "
+               "must be passed back to the API`——本仓的 `with_tool_call_pairs` 只回填 "
+               "tool_calls 的配对，不回填 reasoning_content，所以那条是**代码层不兼容**"
+               "（预检实测 0/2），不是旋钮能拨的。改用非推理的 deepseek-chat。",
+    },
+    "ds-flash": {
+        "title": "换模型：DeepSeek 推理档（deepseek-flash，**已知不可跑**）",
         "env": {"LLM_PROVIDER": "deepseek"},
-        "why": "跨模型那一格。**只在 DeepSeek 的 key 活着时才有读数**——"
-               "20260927 那次中断里唯一活着的就是它，之后是否续期要现验。",
+        "why": "留在这里是当**负控**：它每次都会以同一个 400 立刻失败。谁要是把"
+               "「换个模型」当成纯配置动作，跑这个臂是最快的反例。",
     },
 }
 
@@ -96,7 +105,8 @@ def _env_for(arm: str) -> dict:
     env = dict(os.environ)
     env.pop("SAUDADE_IGNORE_ENV_FILE", None)      # 真链路**绝不能**带这一条
     for k in list(env):                            # 别让外层壳的旋钮渗进臂里
-        if k.startswith(("PLANNER_", "LLM_PROVIDER", "LLM_SEED", "GOLDEN_")):
+        if k.startswith(("PLANNER_", "LLM_PROVIDER", "LLM_SEED", "GOLDEN_")) \
+                or k.endswith("_MODEL"):
             env.pop(k, None)
     env.update(IDENTITY_ENV)
     env.update(ARM_SPECS[arm]["env"])
@@ -166,7 +176,7 @@ def _round0_by_case(trace_dir: str) -> dict[str, tuple]:
     return out
 
 
-def _route_stats(trace_dirs: list[str]) -> dict:
+def _route_stats(trace_dirs: list[str], coarse: bool = False) -> dict:
     """逐用例跨运行的 round 0 决策：**成对分歧率** + 不稳用例数。
 
     用成对分歧率而不是"出现过几种分支"是刻意的：后者**随窗口里跑几遍而单调变大**，
@@ -175,10 +185,30 @@ def _route_stats(trace_dirs: list[str]) -> dict:
     """
     per_run = [_round0_by_case(td) for td in trace_dirs if td]
     per_run = [p for p in per_run if p]
+    # **丢掉退化的窗口成员**（`--only` / `--limit` / 跑挂了的半截轮）：只求交集的话，
+    # 一个只跑了 9 条的窗口成员能把整窗交集打到 0——那时这张表会显示"分歧 0 对"，
+    # 看着像"完全确定"，实际是**没有任何一条可比**。这条是实测踩到的：8 跑窗口里
+    # 混进一份 total=9 与一份无 trace_dir 的，交集从 149 掉到 0。
+    # 口径：留下用例数与最大者同量级的（≥50%），丢掉的**列出来**、不静默。
+    n_max = max(len(p) for p in per_run)
+    kept = [p for p in per_run if len(p) * 2 >= n_max]
+    dropped = [len(p) for p in per_run if len(p) * 2 < n_max]
+    if coarse:
+        # **技能级口径**：只比 round 0 落到哪个技能，不比"这一轮是怎么表达的"。
+        # 这条口径是为一个实测到的假信号加的——两个臂里都有大量用例在
+        # `chat|stop|空`（一个函数都没点）与 `chat|tool_calls|chat`（显式点了 chat）
+        # 之间翻，**落点是同一个 chat**，用户可见行为也相同（区别只是前者会多挨
+        # 一次 `no_call_nudge` 纠偏、多花一轮 LLM）。不劈开这两层，那张"路由不稳"
+        # 的表里一半是记账差异，会让人以为模型的决策在乱跳。
+        # ⚠️ 归一化必须作用在**过滤后**的 `kept` 上：早先写成归一化 `per_run`，
+        # 退化的 9 条成员又回来了，交集被打到 9 —— 与上面那条同一个坑，换个位置又踩。
+        per_run = [{k: (v[0],) for k, v in p.items()} for p in kept]
+    else:
+        per_run = kept
     if len(per_run) < 2:
-        return {"runs": len(per_run), "note": "不足两遍，算不出分歧率",
+        return {"runs": len(per_run), "note": "不足两遍可比的全量，算不出分歧率",
                 "pairs": 0, "disagree_pairs": 0, "rate": None, "unstable": None,
-                "cases": 0}
+                "cases": 0, "dropped": dropped}
     cases = set.intersection(*[set(p) for p in per_run])
     pairs = dis = 0
     unstable = []
@@ -191,10 +221,22 @@ def _route_stats(trace_dirs: list[str]) -> dict:
         pairs += n_pair
         dis += d
         if d:
-            unstable.append((c, sorted({p[c][0] for p in per_run}), d))
+            branches = sorted({p[c] for p in per_run})
+            if coarse:
+                unstable.append((c, [b[0] for b in branches], d))
+                continue
+            # 技能名相同时**分支要看得见区别**：`chat/stop/空` 与 `chat/tool_calls/chat`
+            # 是两种不同的决策形状（前者"一个函数都没点"、后者"显式点了 chat"），
+            # 只打技能名会显示成 `['chat'] 分歧 1 对`——看着像自相矛盾。
+            if len({b[0] for b in branches}) == 1:
+                shown = [f"{b[0]}|{b[1]}|{b[2] or '—'}" for b in branches]
+            else:
+                shown = [b[0] for b in branches]
+            unstable.append((c, shown, d))
     return {"runs": len(per_run), "cases": len(cases), "pairs": pairs,
             "disagree_pairs": dis, "rate": (dis / pairs) if pairs else None,
-            "unstable": len(unstable), "unstable_list": unstable}
+            "unstable": len(unstable), "unstable_list": unstable,
+            "dropped": dropped}
 
 
 # ── 跑 ──────────────────────────────────────────────────────────────────
@@ -204,9 +246,19 @@ def run(arms: list[str], reps: int) -> int:
             print(f"未知臂 {a}；可选：{', '.join(ARM_SPECS)}")
             return 2
     py = str(ROOT / ".venv" / "bin" / "python")
+    # 遍号**接着已有的行往下数**：分几次调用补跑时，`rep` 才有"第几遍"的含义
+    # （否则第二次调用又从 1 开始，表里两行都叫"第 1 遍"）。
+    seen = Counter()
+    if MATRIX.exists():
+        for l in MATRIX.read_text(encoding="utf-8").splitlines():
+            if l.strip():
+                try:
+                    seen[json.loads(l)["arm"]] += 1
+                except Exception:
+                    pass
     n = 0
     for arm in arms:
-        for rep in range(1, reps + 1):
+        for rep in range(seen[arm] + 1, seen[arm] + reps + 1):
             print(_arm_banner(arm, rep, reps), flush=True)
             before = set(glob.glob(str(RUNS_DIR / "*.json")))
             t0 = time.time()
@@ -241,16 +293,28 @@ def report(only: list[str] | None = None) -> int:
         return 1
 
     print("# 参数矩阵读数\n")
+    print("「形态级」= round 0 的 (技能, finish, 点了什么) 三者全比；「技能级」只比落到哪个技能。"
+          "两个都要看：差在形态级、平在技能级的那些是记账差异（`chat|stop|空` vs "
+          "`chat|tool_calls|chat`，落点同一个 chat），不是决策乱跳。\n")
     print("| 臂 | 遍 | 采样层红数（逐遍） | 均值 | 下界（逐遍） | 硬层 | "
-          "路由成对分歧率 | 不稳用例 | p50/p95 | 工具调用合计 |")
+          "形态级分歧 | 技能级分歧 | p50/p95 | 工具调用合计 |")
     print("|---|---|---|---|---|---|---|---|---|---|")
     detail = []
     for arm, rs in by.items():
         rs = sorted(rs, key=lambda r: (r.get("rep") or 0))
+        # **只拿全量轮进表**：`--only` / `--limit` 的半截轮分母不同（实测混进一份
+        # total=9 的，红数会显示成 1，看着像 1/9 —— 与 134 分母的数根本不是一回事）。
+        # 门槛取 100：两个合法分母是 119 与 134，都比它大；半截轮都比它小。
+        partial = [r for r in rs if (r.get("sampled_total") or 0) < 100]
+        rs = [r for r in rs if (r.get("sampled_total") or 0) >= 100]
+        if not rs:
+            print(f"| `{arm}` | 0 | —— 没有全量轮（{len(partial)} 份半截轮已排除）|")
+            continue
         reds = [len(r.get("red_ids") or []) for r in rs if "error" not in r]
         lows = [r.get("sampled_lower") for r in rs if r.get("sampled_lower") is not None]
         tds = [str(TRACE_ROOT / r["trace_run"]) for r in rs if r.get("trace_run")]
         st = _route_stats(tds)
+        st_coarse = _route_stats(tds, coarse=True)
         hard = all(r.get("hard_ok") for r in rs) and all(
             not r.get("regression_failed_ids") for r in rs)
         mean = (sum(reds) / len(reds)) if reds else None
@@ -259,15 +323,21 @@ def report(only: list[str] | None = None) -> int:
         tc = [r.get("tool_calls_total") for r in rs if r.get("tool_calls_total") is not None]
         rate = st.get("rate")
         flag = "" if len(rs) >= 2 else " ⚠️单遍"
+        if partial:
+            flag += f"（另有 {len(partial)} 份半截轮已排除）"
+        if st.get("dropped"):
+            flag += f"（路由窗口丢掉退化成员 {st['dropped']}）"
         rate_txt = "—" if rate is None else (
-            f"{rate:.1%} ({st['disagree_pairs']}/{st['pairs']})")
+            f"{rate:.1%} ({st['unstable']}/{st['cases']})")
+        cr = st_coarse.get("rate")
+        crate_txt = "—" if cr is None else (
+            f"{cr:.1%} ({st_coarse['unstable']}/{st_coarse['cases']})")
         lat_txt = f"{min(p50):.1f}/{max(p95):.1f}" if p50 and p95 else "—"
         mean_txt = "—" if mean is None else f"{mean:.2f}"
         print(f"| `{arm}`{flag} | {len(rs)} | "
               f"{' / '.join(map(str, reds)) or '—'} | {mean_txt} | "
               f"{' / '.join(f'{x:.4f}' for x in lows) or '—'} | "
-              f"{'✅' if hard else '❌'} | {rate_txt} | "
-              f"{st.get('unstable') or '—'}/{st.get('cases') or '—'} | "
+              f"{'✅' if hard else '❌'} | {rate_txt} | {crate_txt} | "
               f"{lat_txt} | "
               f"{' / '.join(map(str, tc)) or '—'} |")
         detail.append((arm, rs, st))
@@ -290,13 +360,14 @@ def report(only: list[str] | None = None) -> int:
         for c, branches, d in sorted(us, key=lambda x: -x[2])[:12]:
             print(f"    · `{c}` 分支={branches} 分歧 {d} 对")
 
-    # A/B 逐条点名：任何两臂之间，**逐用例**红→绿 / 绿→红（不许只看均值）
-    arms_list = list(by)
-    if len(arms_list) == 2:
-        a, b = arms_list
-        red = {x: Counter(c for r in by[x] for c in (r.get("red_ids") or []))
+    # A/B 逐条点名：**逐用例**红→绿 / 绿→红（不许只看均值——聚合没退化 ≠ 没有一条变坏）。
+    # 用**过滤后**的全量轮点名（半截轮的红名单与全量轮的不是一回事）。
+    full = {arm: rs for arm, rs, _st in detail}
+    if len(full) == 2:
+        a, b = list(full)
+        red = {x: Counter(c for r in full[x] for c in (r.get("red_ids") or []))
                for x in (a, b)}
-        print(f"\n## 逐条点名 `{a}` → `{b}`\n")
+        print(f"\n## 逐条点名 `{a}` → `{b}`（只看全量轮）\n")
         rose = sorted(set(red[b]) - set(red[a]))
         fell = sorted(set(red[a]) - set(red[b]))
         both = sorted(set(red[a]) & set(red[b]))
