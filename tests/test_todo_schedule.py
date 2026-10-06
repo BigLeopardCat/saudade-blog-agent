@@ -1854,6 +1854,59 @@ try:
 finally:
     g.get_llm = _saved_llm
 
+# ── 第二本账：短应答重提交上一轮那张卡上的事（20261006 16:51 那个循环）──────────
+# 现场（生产 trace `20261006T165209` / `T165231`）：主人 16:51 让系统记一条待办，
+# 卡弹出来了；他接着回「排期到今天」、再回一句「嗯」——两轮都被**本闸**判成针对
+# "编造"（正文对不回**这一轮**的话）⇒ 零写、卡收回，那一行永远 pending，而 narrator
+# 只能重复上一轮卡上那句「点「确定」我就去办」⇒ gate 洞⑥ 再把它换成一句自我纠正。
+# 根因不是那句拒绝文案，是**出处只有一本账**：系统自己的规则（planner rule 1 /
+# rule 21）要求"照 pending_action 原样重新提交"，而那个正文只活在台账那一行里
+# （Rust `render_pending_action` 渲染：动作行原文 + `参数` 那一格是落库的 args JSON）。
+# 这一段钉的就是"那一行进得来"：台账在场 ⇒ 放行；台账缺席/里面没有这个值 ⇒ 照旧拒。
+_LEDGER_LINE = ("在后台首页的待办里加一条「" + _INCIDENT_BODY + "」，排期 未排期"
+                "（那是你自己那份列表，加完随时能改能删）；动作 create_dashboard_todo"
+                "（技能 dashboard_todo_add）；参数 "
+                + json.dumps([{"args": {"text": _INCIDENT_BODY},
+                               "tool": "create_dashboard_todo"}], ensure_ascii=False)
+                + "；提出于 10-06 16:51；状态 awaiting（等主人点头，尚未执行）")
+
+
+def _cid(ledger=None):
+    """真 `planner_node` 跑一轮短应答（脚本化 LLM：planner 照台账那一行重提交）——
+    返回 `(plan_obj, trace 事件名列表)`。"""
+    _saved_llm2, _saved_rec2 = g.get_llm, g.record
+    _ev2: list = []
+    _llm = _ScriptedLLM([f'SKILL: dashboard_todo_add\nPARAMS: '
+                         f'{json.dumps({"text": _INCIDENT_BODY}, ensure_ascii=False)}'])
+    g.get_llm = lambda **kw: _llm                                         # noqa: ARG005
+    g.record = lambda node, event, **data: _ev2.append((node, event, data))
+    try:
+        st = {"messages": [HumanMessage(content="嗯")], "plan_rounds": 0, "done": False}
+        if ledger is not None:
+            st["ledger"] = ledger
+        return (g.planner_node(st, _planner_cfg()).get("plan_obj") or {},
+                [e[1] for e in _ev2])
+    finally:
+        g.get_llm, g.record = _saved_llm2, _saved_rec2
+
+
+_po_led, _ev_led = _cid({"pending": _LEDGER_LINE})
+check("⭐ 短应答重提交：台账那一行在场 ⇒ **不拒绝**（正文照抄台账原文就是对的）",
+      _po_led.get("refusal") is None
+      and _po_led.get("tools") == [
+          f'create_dashboard_todo({json.dumps({"text": _INCIDENT_BODY}, ensure_ascii=False)})'],
+      str(_po_led.get("tools")))
+check("  且留痕（事后要能分辨「这一轮为什么没判它编造」——这条闸的误判都是静默的）",
+      "todo_text_from_ledger" in _ev_led, str(_ev_led))
+_po_nol, _ = _cid()
+check("反向对照：台账缺席（旧调用点/无待办）⇒ 照旧零写追问（一个字都不许松）",
+      (_po_nol.get("refusal") or {}).get("source") == "todo_text"
+      and _po_nol.get("tools") == [], str(_po_nol.get("refusal")))
+_po_oth, _ = _cid({"pending": "在后台首页的待办里加一条「买牛奶」；动作 create_dashboard_todo"})
+check("反向对照二：台账在、但那一行里**没有**这个正文 ⇒ 仍然拒（模型新编的走不了后门）",
+      (_po_oth.get("refusal") or {}).get("source") == "todo_text",
+      str(_po_oth.get("refusal")))
+
 # ── 契约在位：描述与参数说明里那句"照抄"不许被后来的改动挤掉──────────────
 _add_skill = _skill_map.get("dashboard_todo_add")
 check("技能描述仍写着「照抄主人说的」与「不许润色」（提示词正文那一层是**唯一**"

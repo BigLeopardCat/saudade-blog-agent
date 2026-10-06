@@ -328,7 +328,76 @@ check("  去掉引号段 ≠ 去掉标点（只摘引号里那一段，别的字
       g._msg_without_quotes("把「简历」那条挪到 10 月 8 号").replace(" ", "")
       == "把那条挪到10月8号")
 
+print("\n⑧ 第二本账：系统台账那一行「待主人点头（还没做）」（20261006 事故）")
+# 出处闸**只认主人这一轮的话**，而 planner 的规则从 20260923 起就写着"短应答先还原
+# 语义"（主人回「嗯」「排期到今天」，那件事的参数在上一轮那张卡的台账行里）——
+# 两条规则对着同一件事给出相反判定。生产 trace `20261006T165209` / `T165231`：零写、
+# 卡收回、那一行永远 pending，主人再说什么都撞同一堵墙。这一节钉第二本账：
+#   ① 台账**在** ⇒ 放行（三种闸各自的形态）；
+#   ② 台账**不在**（或那行里没有这个值）⇒ 一个字都不许松（反向对照，缺了它这节等于没测）；
+#   ③ 脏判据（泛称/指代）对第二本账**同样生效**——它是先判的，不因为"台账里有"就放行。
+from agent.graph import _board_quote_fix, _ledger_pending_text  # noqa: E402
+
+check("接线：三道闸都吃 `ledger_src`，`planner_node` 一次算好往下传（漏传＝静默回旧行为）",
+      "ledger_src" in inspect.signature(_name_arg_fix).parameters
+      and "ledger_src" in inspect.signature(_board_quote_fix).parameters
+      and "ledger_src" in inspect.signature(g._todo_text_fix).parameters
+      and "ledger_src = _ledger_pending_text(state.get(\"ledger\"))"
+      in (ROOT / "agent" / "graph.py").read_text(encoding="utf-8"))
+check("台账取用只认那一个键（`ledger` 缺席/不是 dict ⇒ 空串，不是异常、更不是 None 串）",
+      _ledger_pending_text(None) == "" and _ledger_pending_text({}) == ""
+      and _ledger_pending_text({"pending": None}) == ""
+      and _ledger_pending_text({"pending": "X"}) == "X"
+      and _ledger_pending_text({"executions": "Y"}) == "")
+
+_TAG = "探针色_20261006"
+_LED = ('新建标签「%s」；动作 create_tag；参数 '
+        '[{"args":{"title":"%s"},"tool":"create_tag"}]；状态 awaiting（等主人点头，尚未执行）'
+        % (_TAG, _TAG))
+check("值那一族：`嗯` + 台账里记着这个新名字 ⇒ 放行（上一轮那张卡上就是它）",
+      _name_arg_fix(_plan("create_tag", {"title": _TAG}), "嗯", role="admin",
+                    ledger_src=_LED) is None)
+check("  反向对照：台账缺席 ⇒ 仍然拒（这一支不能因为加了第二本账就松掉）",
+      _name_arg_fix(_plan("create_tag", {"title": _TAG}), "嗯", role="admin") is not None)
+check("  反向对照二：台账在、但里面**没有**这个值（模型新编的）⇒ 仍然拒",
+      _name_arg_fix(_plan("create_tag", {"title": "AI Agent"}), "嗯", role="admin",
+                    ledger_src=_LED) is not None)
+check("  **故意**的宽边界：台账那一行是**渲染过的行**，骨架里的字（如 `awaiting`）"
+      "也落在「逐字出现」里 ⇒ 本判据放行——它是行内的字符串判据，不是字段级对照。"
+      "代价可接受的理由写在这里：那个值会进弹卡由主人过目（写面没有静默路）",
+      _grounded_value("awaiting", "嗯", _LED) is True
+      and _grounded_value("created_at_不存在", "嗯", _LED) is False)
+check("  脏判据先判且对第二本账同样生效：指代词即使在台账里出现也不算有据",
+      _grounded_value("它", "把它换成那个", "改名叫 它") is False
+      and _grounded_value("标签", "标签", "标签") is False)
+check("  `user_msg` 那一支照旧先成立（有第二本账也不改变原判据）；"
+      "⚠️ 这个函数的 `sq_msg` 契约是**已归一**的（`_squash_spaces`）——"
+      "传原话进去会静默判否，调用点一律先归一",
+      _grounded_value("AI Agent", g._squash_spaces("给我建个新标签 AI Agent"), "") is True
+      and _grounded_value("AI Agent", "给我建个新标签 AI Agent", "") is False)
+
+_Q = "今天天气真好"
+_PB = _plan("delete_board_comment", {"quote": _Q}, skill="board_delete")
+_LED_B = ('删掉河灯集里的那条留言「%s」；动作 delete_board_comment；参数 '
+          '[{"args":{"quote":"%s"},"tool":"delete_board_comment"}]；状态 awaiting'
+          % (_Q, _Q))
+check("留言那一族：`嗯` + 台账里记着那个片段 ⇒ 放行",
+      _board_quote_fix(dict(_PB), "嗯", 0, "admin", ledger_src=_LED_B) is None)
+check("  反向对照：台账缺席 ⇒ 仍然拒（这一族是 %s 里的工具，一定会有 pending 行）"
+      % "`_ALWAYS_CONFIRM_TOOLS`",
+      _board_quote_fix(dict(_PB), "嗯", 0, "admin") is not None)
+check("  反向对照二：台账行里没有这个片段 ⇒ 仍然拒",
+      _board_quote_fix(dict(_PB), "嗯", 0, "admin",
+                       ledger_src="删掉河灯集里的那条留言「别的什么」") is not None)
+check("  主人自己加引号给的片段照旧优先（引号通道一个字不变）",
+      _board_quote_fix(_plan("delete_board_comment", {"quote": "天气"},
+                             skill="board_delete"),
+                       "删掉「今天天气真好」那条", 0, "admin") is None
+      and _args_of(_plan("delete_board_comment", {"quote": "天气"},
+                         skill="board_delete")).get("quote") == "天气")
+
 print()
+
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
     sys.exit(1)
