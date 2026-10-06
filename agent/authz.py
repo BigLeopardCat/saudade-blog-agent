@@ -292,6 +292,16 @@ TOOL_SCOPE: dict[str, str] = {
     "approve_quota_request": SCOPE_WRITE_CONSOLE,
     "reject_quota_request": SCOPE_WRITE_CONSOLE,
     "reset_user_quota": SCOPE_WRITE_CONSOLE,
+    # 第十三轮（20261006）：读**后台账号名录**。取 admin.console——它读的就是
+    # `GET /api/temp-users`，与上面冻结/通知/额度那一整族**同一道门、同一个端点**
+    # （那几件写工具内部的 `_user_directory` 调的就是它），Rust 侧仍是 `auth_guard`
+    # 只认 admin。
+    #   它为什么必须存在：那一族**写**技能的参数契约都写着「账号名必须能在后台账号
+    #   列表里看到」，而在本轮之前**没有任何一个技能读得出那份列表**——planner 够不着
+    #   这条前提，只能去抓一个近邻（trace `20261006T082437`：主人说「给本本恢复身份」，
+    #   planner 点了 `list_admin_notes` = 文章清单）。读侧取 admin.console 而不是
+    #   read.any 的理由与 `list_admin_notes` 逐字相同：它读的是**后台**视图。
+    "list_accounts": SCOPE_ADMIN_CONSOLE,
 }
 
 

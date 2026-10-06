@@ -1424,9 +1424,12 @@ def test_phantom_tool_claim():
     # 62 → 63 是 20261002 批 J 的变更账号身份一件：set_account_role（与冻结族同门——
     # 读同一份后台账号名录、按名字指认，但后果是**换档**而非关掉）；63 → 65 是
     # 20261004 内容风控下放的禁言/解禁两件：account_mute / account_unmute
-    # （名字是 Rust 路由注释里先定死的契约，**不是** mute_account 那种语序）。
+    # （名字是 Rust 路由注释里先定死的契约，**不是** mute_account 那种语序）；
+    # 65 → 66 是 20261006 的后台账号名录一件：list_accounts（读
+    # `GET /api/temp-users`——那一族账号**写**技能的参数契约都写着"账号名必须能在
+    # 后台账号列表里看到"，而这件是那句话的唯一读入口）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 65 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 66 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 
