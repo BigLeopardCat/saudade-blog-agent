@@ -4085,10 +4085,14 @@ def test_short_reply_and_adjacent_pairs():
     # `output_contract`（20260927 主线批 A）是**唯一按接口层档位取值**的占位符：
     # 文本档代入"两行纯文本"契约、native 档代入"用工具调用表达决定"。它进这个集合
     # 是刻意的——提示词里多一个注入点必须有人复核（这条断言就是这个作用）。
-    check("planner 模板占位符集合与注入点一致（短应答块、台账块、剔空纠偏块、输出契约已接入）",
+    # `blocked_rows`（20261007）= 本轮受阻项的**类型化**呈现（原因码 ← checker、
+    # 技能名 ← 计划；类型表 `agent/block_reasons.py`，接线锁在
+    # `tests/test_block_reasons.py`）——它按设计让这一条**先红**、再有人复核后加进来。
+    check("planner 模板占位符集合与注入点一致（短应答块、台账块、受阻项块、剔空纠偏块、输出契约已接入）",
           fields == {"skills_context", "tools_desc", "page_ctx", "intent_hints", "doc_anchors",
                      "round_info", "recent_context", "short_reply_hint", "pending_ledger",
-                     "tool_results", "ref_hints", "reflector_feedback", "correction",
+                     "tool_results", "blocked_rows",
+                     "ref_hints", "reflector_feedback", "correction",
                      "max_rounds", "user_msg", "output_contract"},
           f"fields={sorted(fields)}")
     check("planner 模板：短应答块在节选之后、工具结果之前",
