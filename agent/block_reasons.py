@@ -79,3 +79,45 @@ def block_reason_type(code: object) -> tuple[str, bool]:
     key = str(code or "")
     cn, retry = REASONS.get(key, _FALLBACK)
     return (cn or key or "执行受阻", retry)
+
+
+# 永不禁用的技能：`chat` 是"这一轮不需要站内数据"的表达，**不是**一件会受阻的能力，
+# 它也从不出现在受阻项里。这条是**防御**：禁用它等于把"如实收尾"这条路也堵死——
+# 而"换不了路就如实说"正是这一格想留给 planner 的出口。
+_NEVER_DENY = frozenset({"chat"})
+
+
+def denied_skills(blocked: list | None) -> set[str]:
+    """上一轮受阻项里，**这一轮不该再出现在技能菜单里**的技能名（20261007，1d）。
+
+    就是 §1.55 的 1b 末尾写下、1c 结尾点名"未做、需先点头"的那条**菜单层摘工具**
+    （主人当时口头叫它"1B"）——本仓的编号顺位给了它 `1d`。
+
+    判据只取"**改参数重试无效**"那一族（`block_reason_type(...)[1] is False`）：
+    参数写错、引用越界、目标 id 找不到这些**正是重试的用法**，把它们也从菜单里摘掉
+    等于顺手堵掉一条合法路径。
+
+    为什么要在菜单层做（而不是再写一句"别重试"）：同一条禁令此前写过两版、都被 A/B
+    否掉——**它没有把"原地重试"变成"改选"，只把"原地重试"变成了"当场放弃"**（见
+    `docs/问题记录.md` §1.55 的 1b）。摘掉菜单不一样：模型**没有可再点的东西**，
+    只能改选或如实作答。这是这一格与那两版的全部区别，也是它值得单独 A/B 的理由。
+
+    这一族里唯一"看着像不该禁"的是 `consent_required`（未获主人确认）——写操作的正确
+    下一步**不是**换技能，而是把确认卡抬起来，而卡是从**计划里的写 spec** 生成的
+    （`graph._confirm_popup` 收 `plan["tools"]`），摘了技能岂不是连卡一起摘了？
+    核过之后不成立：弹卡与执行用的是**同一条用户消息**判的，且判在**执行之前**
+    （`execute_node` 先 `_confirm_popup`、命中就一个工具都不执行）。所以能走到
+    `consent_required` 那次 BLOCK 的，必然是**这一轮卡没抬起来**（判成提问/假设、
+    或目标无据）——而下一轮还是同一条消息，卡照样抬不起来。**禁它不会丢卡**。
+
+    返回**空集**是常态（无阻碍轮、或障碍属可救族）；调用方据此决定要不要动菜单——
+    空集时 schema 逐字节不变。
+    """
+    out: set[str] = set()
+    for b in blocked or []:
+        if not isinstance(b, dict):
+            continue
+        name = str(b.get("skill") or "").strip()
+        if name and name not in _NEVER_DENY and not block_reason_type(b.get("reason"))[1]:
+            out.add(name)
+    return out

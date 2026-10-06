@@ -80,6 +80,7 @@ from agent import adminops as A
 from agent import authz
 from agent import confirm
 from agent import refs
+from agent.block_reasons import denied_skills
 from rag import sections
 from agent.stickers import repair_sticker_tokens
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
@@ -741,7 +742,8 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
                            ref_hints: str, reflector_feedback: str, correction: str,
                            blocked_rows: str = BLOCKED_ROWS_EMPTY,
                            contract: str = _PLANNER_OUTPUT_CONTRACT_NATIVE,
-                           slim_skills: bool = True) -> str:
+                           slim_skills: bool = True,
+                           deny: frozenset[str] | set[str] | None = None) -> str:
     """渲染 planner 提示词（纯函数）。**唯一入口**。
 
     20260927 从 `planner_node` 里抽出来，是为影子档服务的（影子**必须**拿同一个提示词
@@ -760,11 +762,15 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
       `agent/block_reasons.py`）。`planner_node` 每轮都传，默认值是缺省语——留给
       不建模受阻状态的离线探针/对照臂（`eval/native_tools_probe.py`、
       `agent/react_arm.py`）与既有单测。
+    · `deny`（20261007，1d）= 这一轮**不许再选的技能名**（见 `block_reasons.denied_skills`）
+      ——同一集合还要交给 `bind_native` 摘掉 schema 那一半，两处都是菜单（摘一半留一半
+      等于没摘）。空集/None 时渲染逐字节不变。
     """
     return _PLANNER_PROMPT.format(
         # 技能表按本轮角色过滤（20260921）：管理助手那三个技能只对 admin 列出，
         # 其余角色看不到 ⇒ 选不出来。用 known_role（未知角色 → None → 只列公开技能）
-        skills_context=build_planner_context(role, slim=slim_skills),
+        # 再减去本轮禁选的那几个（1d）：与 tools schema 同一个集合，见 build_planner_context。
+        skills_context=build_planner_context(role, slim=slim_skills, deny=deny),
         # 菜单与 calls 白名单同源同角色（20260924）：菜单列了而白名单没有
         # ⇒ planner 照菜单点名、条目被剔空、白跑一轮（见 _tools_desc 注）。
         tools_desc=_tools_desc_cached(role),
@@ -1077,6 +1083,20 @@ _PLANNER_UNPARSEABLE_NUDGE = (
     "arguments 必须是 JSON 对象；只写正文不算决策）。\n"
     "请重新给一次：点一个本轮 tools 里确实存在的技能函数并按它的 schema 填参数；"
     "只是想闲聊、问候或纯文字问答就点 `chat`。"
+)
+
+# **例外通道**（不是常态，只是防"模型报了一个本轮不在菜单里的名字"时这一轮空转）：
+# 菜单层禁用（1d）是**结构性**的——`denied_skills` 那一族已经从 tools schema 与技能菜单
+# 里摘掉了。但网关若不遵守 schema、模型照旧报出那个名字，`tool_calls_to_plan` 的校验
+# （`visible_skills`）会**放行**它（那件事只是"这一轮禁选"，不是"没权限"）。这一条就是
+# 那条缝：报出禁用项 ⇒ 当作"原地重试"再纠偏一次；纠完仍报 ⇒ 照旧放行（下游 `blocked_repeat`
+# 那条既有守卫兜着，不在这里新造死路）。**每一次走到这里都记账**（`menu_denied_used`）——
+# 它同时是"这个机制到底是不是结构性的"的唯一证据：常态为 0 才说明摘菜单真的够用。
+_MENU_DENIED_NUDGE = (
+    "**你这一轮回了一个本轮不可选的技能**——它上一轮已经失败过，且失败原因不是参数问题，"
+    "重试它不会有别的结果，所以系统这一轮把它从菜单里摘掉了。\n"
+    "请换一个不需要它、也能推进主人那件事的技能；确实没有可换的路时，点 `chat` 如实说明"
+    "此刻办不了。"
 )
 
 
@@ -4932,12 +4952,29 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 不可解析"（`None`）两条不同的病共用一条出路。
     # 预算取 settings 的 native 三项（见 config/settings.py 的注）：思考链会先把额度
     # 吃掉，沿用文本档的 400/30s 会让 arguments 断在半截（finish_reason=length）。
+    # ── 菜单禁用（20261007，1d）─────────────────────────────────────────────
+    # 上一轮受阻、且原因是"**改参数重试无效**"那一族的技能，这一轮**从菜单里摘掉**。
+    # 为什么不在提示词里再说一句"别重试"：那句话写过两版、都被 A/B 否掉——它没有把
+    # "原地重试"变成"改选"，只把"原地重试"变成了"当场放弃"（`docs/问题记录.md` §1.55
+    # 的 1b）。摘掉菜单是另一件事：模型**没有可再点的东西**，只能改选或如实作答。
+    # 空集是常态（无受阻轮、或受阻属可救族）⇒ schema 逐字节不变，无成本的默认态。
+    #
+    # ⚠️ 技能名在 planner 提示词里**一共两处**，这一格摘的是**自动生成**的那张表
+    # （`{skills_context}`）；判定规则 1 里**手写**的「- 技能名：什么时候用它」那几句
+    # **刻意留着**（见 tests/test_menu_deny.py 那条点名两处的用例）。留着不是漏了：
+    # 那是散文式的"这技能是干什么用的"，不是可点的菜单；可点的只有 tools schema，
+    # 而 schema 那一半同样被摘了。它带来的缝（模型照着手写那句去报禁用项）由下面
+    # `menu_denied_used` 那条一次性纠偏兜着——20261007 的 12 跑 A/B 里这条缝
+    # **一次都没被踩过**（46 个受阻轮、报出禁用项 0 次）。
+    deny = denied_skills(state.get("blocked") or [])
+    if deny:
+        record("planner", "menu_denied", round=rounds, skills=sorted(deny))
     llm = bind_native(get_llm(
         temperature=settings.planner_temperature,
         max_tokens=settings.planner_native_max_tokens,
         timeout=settings.planner_native_timeout,
         enable_thinking=settings.planner_native_thinking), role,
-        task_state=bool(getattr(settings, "agent_task_state", False)))
+        task_state=bool(getattr(settings, "agent_task_state", False)), deny=deny)
     round_info = (
         f"当前决策：第 {rounds + 1}/{MAX_PLAN_ROUNDS} 轮。"
         + ("本轮已有工具执行帧（见下方结果），决策据此收敛。" if has_frames
@@ -5022,6 +5059,9 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 # 把"服务这一轮给不出数据"当成"你参数写错了"、原地重点一次同一个
                 # 调用 ⇒ 同键二次受阻 ⇒ 收尾，主人那件完全能办的事没有入口（§1.55）。
                 blocked_rows=blocked_rows(state.get("blocked") or []),
+                # 菜单禁用（1d）：与 tools schema 收同一个集合（见上面那段），摘掉这一轮
+                # 不该再选的技能行。空集 ⇒ 这一段渲染逐字节不变。
+                deny=deny,
                 # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
                 # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
                 ref_hints=ref_hints(state.get("tool_data") or []),
@@ -5125,6 +5165,17 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                            "（原本点是 %s，round %d/%d）",
                            skill_name, rounds + 1, MAX_PLAN_ROUNDS)
             skill_name, params = "chat", {}
+
+        # ── 菜单禁用（20261007，1d）：模型报了本轮已被摘掉的技能 ─────────────────
+        # 常态为 0（摘菜单是结构性的）；走到这里说明网关/模型绕过了 schema。见
+        # `_MENU_DENIED_NUDGE` 的注：**无条件记账**（这一格是"机制是否结构性"的唯一
+        # 证据），纠偏一次，第二次仍报则放行给既有的 `blocked_repeat` 守卫。
+        if skill_name in deny:
+            record("planner", "menu_denied_used", skill=skill_name, round=rounds,
+                   denied=sorted(deny), corrected=bool(correction))
+            if not correction:
+                correction, correction_kind = _MENU_DENIED_NUDGE, "菜单禁用"
+                continue
 
         # ── 零工具决策不是决策（20261004）：两格走同一条一次性纠偏通道 ──────────
         # 共同点：**这一轮一个工具都不会跑**，而系统判得出来本该跑。两条都不替模型

@@ -4176,7 +4176,8 @@ def _skill_plan_seq(s) -> str:
     return " → ".join(f"{t}({json.dumps(a, ensure_ascii=False)})" for t, a in s.plan)
 
 
-def build_planner_context(role: str | None = None, *, slim: bool = False) -> str:
+def build_planner_context(role: str | None = None, *, slim: bool = False,
+                          deny: frozenset[str] | set[str] | None = None) -> str:
     """planner 注入：技能表（触发条件 + 参数 + 工具序列 + 完成判定）+ 导航映射表。
 
     read_article 不列出——系统快道专用（article_id 是 current_url 解析的系统数据，
@@ -4206,6 +4207,18 @@ def build_planner_context(role: str | None = None, *, slim: bool = False) -> str
     ⚠️ `slim` **只影响渲染，不影响任何判据**：谁能选（`visible_skills`）、参数怎么
     校验（`skill_param_specs` / `check_skill_params`）都不看这段文本。
 
+    `deny`（20261007，1d）= **这一轮不许再选的技能名**（来源见
+    `agent/block_reasons.py::denied_skills`：上一轮受阻、且原因是"改参数重试无效"
+    那一族）。它与 native 档的 `tools` schema 收的是**同一个集合**——"菜单"横跨
+    两处（这张自动生成的技能表 + `tools` schema），只摘一处等于没摘（提示词里还列着，
+    模型照着名字点，只是 schema 里没有那个函数了）。**传空集/None 时渲染逐字节不变**，
+    无阻碍轮一分钱不花。
+    ⚠️ planner 提示词的**判定规则 1** 里还有一份**手写**的「- 技能名：什么时候用它」，
+    那一份**刻意不摘**（它不是可点的菜单，只是"这技能干什么用"；真正的闸是 schema）。
+    两处一张表、一处散文，各自的取义见 `tests/test_menu_deny.py` 里那条点名用例。
+    ⚠️ 它**不是第二份可见性名单**（那件事仍只在 `visible_skills` 一处判）：它只在
+    "上一轮同一个技能刚失败过"时才非空，是**状态**不是**权限**。
+
     **规划契约（`planner_contract`）两档都渲染**（20260927 实测逼出来的规则）：slim 的
     第一版只留"技能名 + 工具序列"，把 `content_query` 的成对点名（"留言板/说说有没有人
     聊过写过 X"必须同时点 `list_guestbook` 与 `list_talks`）随描述一起交给了 schema 里的
@@ -4219,6 +4232,8 @@ def build_planner_context(role: str | None = None, *, slim: bool = False) -> str
              if slim else
              "可用技能（只能从以下技能中选择一个，不得自创步骤或自由编写执行计划）："]
     for s in visible_skills(role):
+        if deny and s.name in deny:
+            continue
         # 契约行**只算一次**，两档共用（各写一份必然漂）。措辞在 slim 档下是这一段里
         # 唯一的"必须怎么做"，放在最显眼的地方（紧跟技能名/描述之后）。
         contract = f"  契约：{s.planner_contract}" if s.planner_contract else ""
