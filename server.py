@@ -897,6 +897,18 @@ _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败"
               # ⇒ 过程行显示「服务不可用」，用户读成"系统挂了"，而真问题是"你要标的
               # 那条不存在"（trace `20260923T130033_9` 用户原话："显示服务不可用"）
               "target_not_found": "目标不存在",
+              # 目标与主人点名的不是同一篇（adminops.target_error_reason 的第二条，
+              # 20260921 第三轮）——漏了同样会原样打英文码。
+              "target_mismatch": "目标与主人点名的不是同一篇",
+              # 待确认（authz.REASON_CONSENT，写操作没获本轮确认）
+              "consent_required": "未获主人确认",
+              # 授权拒绝三码（authz 的 Decision.reason，20261007 补）：**此前没有中文**，
+              # 过程行会把 `denied` / `no_manifest` / `unknown_role` 原样打给访客——
+              # 与 20260921 之前 `unavailable` 那次的形态一模一样。20261007 加这张表的
+              # 判据（tests/test_block_reasons.py 要求两侧键集合相等）时一并补上。
+              "denied": "身份权限不足",
+              "no_manifest": "工具未声明权限范围",
+              "unknown_role": "身份不明",
               # 后台规则拒绝（账号冻结/解冻，20260926）：后端那三条策略（不能冻自己 /
               # 不能冻超管 / 管理员之间不可互冻）与 agent 侧预检都走这个码。
               # 漏了这行不会静默——它会原样打出英文码 `policy_refused` 给访客看。

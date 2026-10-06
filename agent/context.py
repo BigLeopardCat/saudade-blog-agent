@@ -20,6 +20,7 @@ from agent.authz import (SCOPE_READ_OWN,  # 帧预算按 scope 分族（见 _fra
                          required_scope,
                          strip_user_shell)  # 两层壳剥除（见下方 _short_reply_kind 注释）
 from agent.factblock import strip_fact_lines  # 系统事实行不进模型语境（见 _recent_tail）
+from agent.block_reasons import block_reason_type  # 受阻原因码 → 类型（见 blocked_rows）
 # IoT 开关：与 `skills._IOT_*` 同源。`tools/base.py` 是开关值进入 agent 的唯一入口
 # （它读 `config.settings.iot_enabled`），这里只转发、不重新判断。
 from tools.base import IOT_ENABLED as _IOT_ENABLED
@@ -1394,4 +1395,59 @@ def _receipts_text(receipts: list, drop_tools: set | None = None) -> str:
             # 同 _frame_texts：空结果标注"已执行"，否则 `→ []` 会被读成"没执行"
             res = "（已执行，结果为空）"
         lines.append(f"- {r['tool']} args={args_txt} → {res}")
+    return "\n".join(lines)
+
+
+# 没有受阻项时那一格的值（`_render_planner_prompt` 的形参默认值也用这一个常量：
+# 两处必须逐字一致，否则"没受阻"与"没接上"又会分不清）。
+BLOCKED_ROWS_EMPTY = ""
+
+# 表头也只在**真有受阻项**时才付：它含「受阻项」三个字，写死在模板里等于每一轮
+# 都把"受阻"这个概念摆在 planner 眼前（20261007 实测：正是这 33 token 让一个无关用例
+# 的 planner 提示词每轮多付一次）。模板里那一格现在**只有** `{blocked_rows}`。
+_BLOCKED_ROWS_HEADER = "本轮工具调用的**受阻项**（系统 checker 的验收结论，和上面的工具帧说的是同一轮）："
+
+# 有受阻项时**才**付那段前言——它是提示词里最贵的一格（模板每轮都发，前言只在这
+# 一轮真有受阻项时才出现），所以不把它写死在模板里：见 `blocked_rows` 的注。
+_BLOCKED_ROWS_PREAMBLE = """\
+这些调用**没有成功**、因此不产生任何事实（不要说成"看过了/查过了/已经办好了"）。
+每条的"原因"与"能不能靠改参数救回来"是系统按**原因码**判的，不是猜测。
+**不可重试 ≠ 你要办的事不存在**——换一条不依赖它的路、或如实告诉主人此刻办不了，
+都是合格的决策；而原地再点一次同一个调用不是。"""
+
+
+def blocked_rows(blocked: list | None) -> str:
+    """本轮受阻项的**类型化**呈现（20261007）——planner 的 `{blocked_rows}` 槽。
+
+    在这一块之前，`_check_spec` 判出来的那个**原因码**只喂给了 reflector：planner
+    只能从错误帧的**那句话**里猜"刚才发生了什么"，而"服务这一轮给不出数据"与"你参数
+    写错了"在帧文本里长得一模一样 ⇒ 它把 `unavailable` 当成参数错、原地再点一次同一个
+    调用；键是「工具::原因码」⇒ 同键二次受阻 ⇒ reflector ⇒ `wrap_up` ⇒ 主人那件
+    **完全能办**的事整条没有入口（现场见 `docs/问题记录.md` §1.55）。
+
+    这一块只做一件事：把 blocked 项里**已经有的**类型渲染出来——原因码（← checker）、
+    技能名（← execute 从计划里读的 `plan["skill"]`）、以及"改参数重试有没有意义"
+    （判据在 `agent/block_reasons.py` 的类型表，**不是这里现编的**）。硬编码的只剩
+    措辞与截断长度，类型判断一律不在这里重做。
+
+    **缺省语**与其它槽同形：没有受阻项时也要有一句——否则 planner 分不清"这一轮没
+    受阻"与"这一块没接上"（同 `_receipts_text` 里"空结果也要标注已执行"的理由）。
+    **那段前言只在真有受阻项时才付**（它是这一格最贵的部分，而模板每一轮都要发；
+    写死在模板里等于每一轮都替一件没发生的事付费）。
+    """
+    items = [b for b in (blocked or []) if isinstance(b, dict)]
+    if not items:
+        return BLOCKED_ROWS_EMPTY
+    lines = [_BLOCKED_ROWS_HEADER, _BLOCKED_ROWS_PREAMBLE]
+    for b in items[:6]:  # 同 _receipts_text：同轮多 spec 时最多 6 条，防稀释
+        cn, retry = block_reason_type(b.get("reason"))
+        spec = " ".join(str(b.get("spec") or b.get("tool") or "").split())[:120]
+        skill = str(b.get("skill") or "").strip() or "（未标注）"
+        res = " ".join(str(b.get("result") or "").split())[:80]
+        tail = ("改对参数再试一次仍可能成功" if retry else
+                "**改参数重试无效**（不是你没填对，重试同一个调用不会有别的结果）")
+        line = f"· 技能={skill}｜调用={spec}｜原因={cn}：{tail}"
+        if res:
+            line += f"｜工具返回={res}"
+        lines.append(line)
     return "\n".join(lines)
