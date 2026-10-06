@@ -81,20 +81,33 @@ ARM_SPECS: dict[str, dict] = {
         "why": "线上是关着思考跑的（native 三项之一，settings 注里写明是待拍板项）。"
                "开它买的是「分类更准」，付的是 max_tokens 1200 里思考链先吃掉一截。",
     },
+    "ali-ds": {
+        "title": "换模型：DeepSeek（阿里 API + QWEN_MODEL=deepseek-v4.1-flash）",
+        "env": {"QWEN_MODEL": "deepseek-v4.1-flash"},
+        "why": "跨模型那一格**正确的走法**（主人 20261006 指正）：阿里那套 API 的同一个 "
+               "base_url/key 上就有 deepseek 档，换的只是**模型名**——不用切 `LLM_PROVIDER`。"
+               "下面 `ds-chat` / `ds-flash` 两条走的是 DeepSeek **官方端点**（`DEEPSEEK_BASE_URL`），"
+               "那是另一条通路（官方推理档要求回传 `reasoning_content`，本仓的回填器不填 ⇒ 必 400）。"
+               "**那两条读数不能拿来回答「这个栈换 deepseek 行不行」**——型号对、通路不对。",
+    },
     "ds-chat": {
-        "title": "换模型：DeepSeek（LLM_PROVIDER=deepseek，deepseek-chat）",
+        "title": "换模型：DeepSeek（**官方端点**，LLM_PROVIDER=deepseek，deepseek-chat）",
         "env": {"LLM_PROVIDER": "deepseek", "DEEPSEEK_MODEL": "deepseek-chat"},
-        "why": "跨模型那一格。**模型名不能省**：settings 里配的 `deepseek-flash` "
+        "why": "⚠️ 走的是 DeepSeek 官方端点、**不是**本栈换 deepseek 的走法（见 `ali-ds`）。"
+               "留着是当负控的反面：同一个模型名换到官方通路上会成片地红。"
+               "**模型名不能省**：settings 里配的 `deepseek-flash` "
                "是推理模型，一跑就 400 `The reasoning_content in the thinking mode "
                "must be passed back to the API`——本仓的 `with_tool_call_pairs` 只回填 "
                "tool_calls 的配对，不回填 reasoning_content，所以那条是**代码层不兼容**"
                "（预检实测 0/2），不是旋钮能拨的。改用非推理的 deepseek-chat。",
     },
     "ds-flash": {
-        "title": "换模型：DeepSeek 推理档（deepseek-flash，**已知不可跑**）",
+        "title": "换模型：DeepSeek 推理档（**官方端点**，deepseek-flash，已知不可跑）",
         "env": {"LLM_PROVIDER": "deepseek"},
         "why": "留在这里是当**负控**：它每次都会以同一个 400 立刻失败。谁要是把"
-               "「换个模型」当成纯配置动作，跑这个臂是最快的反例。",
+               "「换个模型」当成纯配置动作，跑这个臂是最快的反例。"
+               "⚠️ 这个 400 是**官方端点**的回填契约，不是「deepseek 换不了」——"
+               "走阿里 API 换模型名的那条路见 `ali-ds`。",
     },
 }
 

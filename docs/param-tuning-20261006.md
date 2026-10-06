@@ -35,8 +35,16 @@
 | `t0.0` | `PLANNER_TEMPERATURE=0.0` | 确定性档（本批设为默认） |
 | `t0.2` | `PLANNER_TEMPERATURE=0.2` | 回退臂：逐字节复现 20261006 之前的写死值 |
 | `think` | `PLANNER_NATIVE_THINKING=1` | 规划开思考买"分类更准"的代价 |
-| `ds-chat` | `LLM_PROVIDER=deepseek` + `DEEPSEEK_MODEL=deepseek-chat` | 跨模型那一格 |
-| `ds-flash` | `LLM_PROVIDER=deepseek` | **负控**：已知跑不了（见 §五） |
+| `ali-ds` | `QWEN_MODEL=deepseek-v4.1-flash`（其余全不动） | 跨模型那一格**正确的走法**（主人 20261006 指正）：阿里那套 API 的同一个 `base_url`/key 上就有 deepseek 档，换的只是**模型名** |
+| `ds-chat` | `LLM_PROVIDER=deepseek` + `DEEPSEEK_MODEL=deepseek-chat` | ⚠️ **官方端点**，不是本栈换 deepseek 的走法——留作"型号对、通路不对"的对照（见 §五） |
+| `ds-flash` | `LLM_PROVIDER=deepseek` | ⚠️ **官方端点**的**负控**：已知跑不了（见 §五） |
+
+> ⚠️ **`ds-chat` / `ds-flash` 两条读数不能回答「这个栈换 deepseek 行不行」**——它们走的是
+> DeepSeek **官方端点**（`DEEPSEEK_BASE_URL`），那是另一条通路。**回答那一格的是 `ali-ds`**。
+
+> ⚠️ **本表里没有 `text` 那一档，也不可能有**：接口层的 `planner_engine` 拨盘 20261004 已删
+> （`config/settings.py:104-110`、`eval/dial_matrix.py:13-15`、源码锁 `tests/test_ci_suite_list.py:128`）。
+> 任何地方再出现「text 档」的读数，都是 **20260927 那批的历史对照**，不是可拨的档位。
 
 ## 三、温度 A/B：结论是**中性**
 
@@ -142,16 +150,53 @@ The `reasoning_content` in the thinking mode must be passed back to the API.
 - 跨模型那一格改由 `ds-chat`（`deepseek-chat`，非推理档）承担；3 条预检 1.000。
 - **要真上推理档**，得先让 `with_tool_call_pairs` 回填 `reasoning_content`——
   那是一处独立的代码改动，不在本批。
+- ⚠️ **但这一节**（和上面那个 400）**只说明「DeepSeek 官方端点」这条通路不通**，
+  **不说明"这个栈换不了 deepseek"**。主人 20261006 指正的走法是**在阿里那套 API 上换模型名**
+  （`QWEN_MODEL=deepseek-v4.1-flash`，同一个 `base_url`/key、不切 `LLM_PROVIDER`）——
+  臂 `ali-ds`，读数见 §六。
 
-## 六、`think` 与 `ds-chat` 两臂
+## 六、`think` 与跨模型两臂（读数已到齐；`ali-ds` 除外）
 
 线上是**关着思考**跑的（`planner_native_thinking` 是 native 三项里的待拍板项）。
 `think` 买的是"分类更准"，付的是 `max_tokens=1200` 里思考链先吃掉一截——
-**这是一个有明确代价的假设，不是"免费变好"**。两臂各两遍（交替）正在跑，
-读数出来后追加到本节。
+**这是一个有明确代价的假设，不是"免费变好"**。
 
-> 跑法：`.venv/bin/python eval/param_matrix.py --arms think ds-chat --reps 1`（两遍交替）
+| 臂 | 逐遍 | 采样层红数 | 点估计 | 下界 | 硬层 | resets | p50 / p95 秒 | 工具调用 |
+|---|---|---|---|---|---|---|---|---|
+| `think` | rep1 | 7/134 | 0.9552 | 0.9058 | **❌**（回归组 `followup_entity_slot_ambiguous`） | 1 | 14.8 / 47.1 | 179 |
+| `think` | rep2 | 8/134 | 0.9403 | 0.8866 | ✅ | 4 | 16.9 / 42.8 | 191 |
+| `ds-chat` | rep1 | **41/134** | 0.7239 | 0.6427 | **❌** | 3 | **2.9 / 8.4** | 163 |
+| `ds-chat` | rep2 | **43/134** | 0.7164 | 0.6349 | **❌** | 4 | **2.9 / 8.5** | 162 |
+| （对照）`live` | rep1 | 10/134 | 0.9254 | 0.8681 | ✅ | 0 | 6.3 / 18.6 | 202 |
+
+**怎么念**：
+
+- **`think` 不是免费的，而且两遍里一遍硬层红。** planner 端到端 p50 从生产的 ≈6.3s 抬到
+  **14.8 / 16.9s**（2.4–2.7 倍）、p95 到 47s；rep2 的下界 0.8866 **低于入口档**（`below_entry`）。
+  以 n=2/臂 的检定力，7 vs 8 这条分差**不足以定论"更差"**——但 §1.9 那批旧数据（max 档上
+  思考与不思考**逐条完全相同**、思考只贵 4.6 倍）已经不支持开它。**结论：维持生产关思考。**
+- **`ds-chat` 是本批唯一一条 `collapse`**：42 条红、两遍几乎逐字相同（41 vs 43），红集覆盖
+  `rag_*` 整族。**它快（p50 2.9s，不到生产的一半）——快是因为它不干活**：工具调用总数
+  162/163 vs 生产 202，检索族成片零工具。这正是 §四末那段"**最低分歧＝最差臂**"的又一次现身。
+  ⚠️ 但它**不能**回答「这个栈换 deepseek 行不行」——见 §五末与下条。
+
+### `ali-ds`：跨模型那一格**正确的走法**（本次**未取得全量读数**）
+
+主人 20261006 指正：**DeepSeek 不需要切 `LLM_PROVIDER`**——阿里那套 API 的**同一个
+`base_url`/key 上就有 deepseek 档**，换的只是模型名（`QWEN_MODEL=deepseek-v4.1-flash`）。
+上面两条 `ds-*` 走的是 DeepSeek **官方端点**：**型号对、通路不对**，它们连着 §五那个 400
+只说明官方端点的契约与本仓不兼容。
+
+- 预检（`--limit 8`）：**8/8 PASS、resets 0、p50 4.6s** ⇒ **通道本身是通的**。
+- **全量读数本批没拿到**：那轮 `ali-ds` 只写出 2 份 trace（14:14:07、14:14:11）就停了。
+  内核查到两次 **OOM**（`14:11:30` node；`14:27:14` python `MainThread`，anon-rss 1.67GB），
+  外加会话结束把外层 shell 一并收走。**这是 3.7GB 机器上的环境事故，不是模型通路的问题**
+  ——预检 8/8 走的就是同一条路。
+- 所以跨模型那一格的结论**只有一句：待跑**。要引它，先拿 `ali-ds` 的全量读数。
+
+> 跑法：`.venv/bin/python eval/param_matrix.py --arms think ali-ds --reps 1`
 > 读数：`eval/report/param_matrix.jsonl`；看表：`--report`
+> ⚠️ 一轮 ≈20–25 分钟；别与 04:00 夜跑并发，也别连开两轮（`/tmp/golden_cases` 会互踩）。
 
 ## 七、本批**没做**的事
 
@@ -160,3 +205,7 @@ The `reasoning_content` in the thinking mode must be passed back to the API.
   （设 seed 等于换一条采样通路，服务商侧的对齐/批处理都可能变，没有 A/B 不该设成默认）。
   它留在配置里是**为了本实验**——`LLM_SEED` 可逐臂拨，和温度分开成两个因子。
 - 没修残留抖动。**归因已被证伪的那一条不许再引用**（§四）。
+- **没拿到 `ali-ds` 的全量读数**（OOM 中断，只有预检 8/8）⇒ **跨模型那一格本批没有结论**，
+  见 §六末。别拿 `ds-chat` 的 42 条红代它答这一格。
+- 没动内部计划文本协议（`plan_encode` / `parse_plan`）——**那一层不在本报告的射程里**，
+  与接口层的 `planner_engine` 拨盘是**两回事**（后者 20261004 已删）。
