@@ -22,6 +22,16 @@
 它**不**写 `last_run.json`、不碰 `eval/golden/**`、不动 `TARGET/FLOOR/ENTRY`、不动分母。
 判据的变更仍只归 `eval/run_golden.py` 一条路；本模块只**拨旋钮、读数**。
 
+> ⚠️ **上面那半句（不写 `last_run.json`）在本报告成稿时是句空话**（20261006 晚已修，
+> 见 `docs/问题记录.md` §1.52）。当时本模块**不给子进程设 `GOLDEN_ARM`** ⇒ 臂名恒 `graph`
+> ⇒ 留档写进**生产档那个目录** `eval/report/runs/`，`landing_gate` 的 readiness / 慢性红榜
+> 按目录整扫，把这批调参读数**当成生产档夜间读数**收进窗口（最近 12 份"全量"里 9 份是调参跑、
+> 最近 5 夜窗口 100% 是调参跑）。**本报告的结论不受影响**（每个数字都从
+> `param_matrix.jsonl` 逐臂读的，没走窗口），但当时**引这张榜排的红榜口径是脏的**。
+> 现在调参档跑的是 `matrix` 臂，留档落 `eval/report/runs_matrix/`，那句话才**变成真的**。
+> 顺带一条准确的记录：那 9 份留档的 `full_run` 全是 `False` ⇒ **`last_run.json` 一次都没被
+> 覆盖**（闸开着、恰好没响）——"没响"不等于"设计对了"。
+
 每个臂必须带 `GOLDEN_ADMIN_UID=721 GOLDEN_USER_UID=722`（`IDENTITY_ENV`）——不带
 就只有 138/119 的分母，与历史读数不可比。`_env_for` 会**先剥掉外层壳里的
 `PLANNER_*` / `LLM_PROVIDER` / `LLM_SEED` / `GOLDEN_*` / `*_MODEL`** 再铺臂的覆盖：
@@ -122,9 +132,11 @@ t0.2 rep2: rag_git_svn, repeat_ask_no_verbatim, admin_tag_move_question_no_popup
            admin_tag_create_ambiguous_target_no_write
 ```
 
-- **`admin_tag_move_question_no_popup` 4/4 红**——它不是噪声。这条同时是
-  `landing_gate --red-rank` 榜上的 3/10。它在"温度"这个因子上**完全不动**，
-  说明它的病灶在别处，与采样无关。
+- **`admin_tag_move_question_no_popup` 4/4 红**——它不是噪声（4/4 是**本实验自己**的读数，
+  不依赖任何窗口）。它在"温度"这个因子上**完全不动**，说明它的病灶在别处，与采样无关。
+  > 成稿时这里还引了一句「同时是 `landing_gate --red-rank` 榜上的 3/10」——**那个排名作废**：
+  > 它算在**被调参档污染的窗口**上（见 §一的 ⚠️）。清干净之后同一批红条目排在
+  > `8/62`（并列名次也变了）。要引排名，用清干净之后的榜重算一次。
 - 除它以外**每一条红都只出现在 2/4 或 1/4 遍里**，且几乎没有跨臂交集。
   这正是"单跑读数不可判读"的样本：**红数在 4–7 之间晃，红的身份每次都不一样**。
   想按条目做 A/B，2 遍远远不够——至少 6–8 遍起。
