@@ -209,15 +209,22 @@ class Settings(BaseSettings):
     # 语义型 query 变多"，所以**出厂默认关**——按文章规模自己拨，与 `iot_enabled`
     # / `agent_task_state` 同一条纪律。
     #
+    # ⚠️ 这一组**不只是混合检索的配置**：站首页那件「文章向量空间图谱」也用它
+    # （20261007 起，建图 `scripts/build_word_graph.py` 与图谱检索 `rag/wordgraph.py`
+    # 共用 `rag/embed_space.py` 一条解析规则）。配了就两处一起换、没配则两处一起
+    # 回落 `QWEN_*` + `text-embedding-v4`。**换模型/端点之后要重建一次图谱**
+    # （后台「站点设置 → 向量图谱」）：旧图是另一片空间建的，检索侧会以
+    # `space_mismatch` 明着降级（日志一条 WARNING + 前端退回本地关键词匹配）。
+    #
     # 向量模型**独立配置、供应商不进代码**：任何 OpenAI 兼容的 embeddings 端点都行。
     # 用聚合平台的话，把 `QWEN_BASE_URL` / `QWEN_API_KEY` 的值**复制**过来一份：
     #   EMBEDDING_BASE_URL=<与 QWEN_BASE_URL 同值>
     #   EMBEDDING_API_KEY=<与 QWEN_API_KEY 同值>
     #   EMBEDDING_MODEL=<聚合平台上的 embedding 模型名，如 text-embedding-v4>
-    # ⚠️ 刻意**不**回落 `active_llm_*`（20260927 的教训，见 rag/wordgraph.py:169）：
-    # 跟着 active provider 走，切到一个没有 embeddings 端点的 provider 就会哑掉，
-    # 而且哑得没有声音。独立一份 = 换对话模型不会顺带打断向量路。
-    # 代价是换聚合平台要改两处，这是"独立配置"的必然代价，不替它们做隐式绑定。
+    # ⚠️ 刻意**不**回落 `active_llm_*`（20260927 的教训，见 rag/wordgraph.py 的
+    # `_embed_one`）：跟着 active provider 走，切到一个没有 embeddings 端点的 provider
+    # 就会哑掉，而且哑得没有声音。独立一份 = 换对话模型不会顺带打断向量路。
+    # 两处向量消费面（RAG 检索 + 图谱）现在共用这一处，不必再改两遍。
     rag_hybrid_enabled: bool = False       # RAG_HYBRID_ENABLED=1/true/yes/on
     embedding_api_key: str = ""            # EMBEDDING_API_KEY
     embedding_base_url: str = ""           # EMBEDDING_BASE_URL（留空 = SDK 默认端点）

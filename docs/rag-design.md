@@ -163,7 +163,13 @@ QUERIES 已常态化）。仍开放的行：
 - **向量模型独立配置**：`EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL`
   （+ `EMBEDDING_DIM` / `EMBEDDING_BATCH_SIZE` / `RRF_K`）。供应商不进代码——任何
   OpenAI 兼容的 embeddings 端点都行；用聚合平台就把 `QWEN_BASE_URL`/`QWEN_API_KEY`
-  的值复制一份过去（**两份值，换平台要改两处**；代码不做隐式绑定，那正是"独立配置"的代价）。
+  的值复制一份过去（代码不做隐式绑定，那正是"独立配置"的代价）。
+  **20261007 起这一组不再只归检索**：首页「文章向量空间图谱」的建图
+  （`scripts/build_word_graph.py`）与图谱检索（`rag/wordgraph.py`）共用 `rag/embed_space.py`
+  同一条解析规则——**配了 `EMBEDDING_*` 就用它，没配回落 `QWEN_*` + `text-embedding-v4`**
+  （所以只配 `QWEN_*` 的老部署行为逐字不变）。图上记着自己那片空间（模型 + 端点），
+  查的东西对不上就 `space_mismatch` 明着降级（零 embedding 调用），处置是重建一次图谱
+  ——**换 `EMBEDDING_*` 的模型或端点之后必须重建**。
 - **索引与增量**（`rag/vector_index.py`）：自研 f32 文件 + manifest（零新增依赖，
   生产 venv 仍是那 11 个钉死的包）。内容寻址（键 = 模型+端点+请求维度+文本的摘要）
   ⇒ **只有真正变了的 chunk 会重新调 API**：改一节只嵌那一节，删文章 0 次调用，
