@@ -72,6 +72,7 @@
 | [0004](adr-0004-cross-language-guard-in-ci.md) | 跨语言守卫在 CI 里真跑——父仓以只读凭据稀疏 checkout | 已采纳 |
 | [0005](adr-0005-multimodal-retrieval-deferred.md) | 多模态检索：方向认可，现在不做（等图片规模与查询形态） | **已搁置** |
 | [0006](adr-0006-permission-rules-deferred.md) | 权限规则集（(action, resource, effect) +「总是允许」）：方向认可，现在不做 | **已搁置** |
+| [0007](adr-0007-unavailable-retry-not-fixed-in-prompt-layer.md) | `unavailable` 的那次原地重试不在提示词层治（试过两版、A/B 否掉） | **已搁置** |
 
 ## 相关的、但不算 ADR 的文档
 
