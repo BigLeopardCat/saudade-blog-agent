@@ -1312,6 +1312,60 @@ def with_tool_call_pairs(messages: list) -> list:
     return out
 
 
+def strict_wire_issues(messages: list) -> list[str]:
+    """这套序列原样发给**严格**服务商**会不合规吗**？返回人话说明（空列表 = 合规）。
+
+    **为什么要有这一层**（20261006）：`tool_call_id` 的重复让 deepseek 整轮 400
+    （原话 `Duplicate value for 'tool_call_id' of execute_0 in message[3]`），而
+    qwen 端点容忍 ⇒ **生产一直绿**，这个洞在库里躺了 8 天，跨 100+ 次全量回归没被发现
+    （事故与四个判据为什么全都看不见它，见 `问题记录.md` 1.50）。根因是"合法性只由
+    服务商来告诉我们"——**发出去之前没有任何一道我们自己的闸**。这一层就是那道闸：
+    把服务商的拒收理由，变成我们这边一条**零成本、离线可测**的读数。
+
+    判据（每条都对应一家严格服务商真的拒过的形态）：
+
+      a. 同一条 assistant 里**重复声明**同一个 id（= 20261006 那次 400 的原文形态）；
+      b. 同一个 id 出现在**两条帧**上（同样过不了"id 唯一"这一关）；
+      c. 一条帧的 id 没有被它**前面**任何一条 assistant 声明过
+         （`role:"tool"` 不许凭空出现，见 `with_tool_call_pairs` 头注的实测）；
+      d. 一条**非末尾**的 assistant 声明了 id 却没有任何帧回应
+         （末尾那条是"等模型接着调"的正常形态，不算）。
+
+    只看这四种**形状**，不判内容、不判顺序、不判风格。
+
+    **只报不修**（刻意的）：唯一的修法在**发帧的源头**——`execute_node` 用
+    `graph._frame_id(messages, idx)` 铸 id（20261006）。在这一层"顺手把重复的 id 改掉"
+    会有两个后果：① 同一个规则出现**第二份实现**（本仓反复吃过的那类坑："接线有测试
+    ≠ 判据有测试"，两份口径迟早各漂各的）；② 真回归发生时被就地抹平，读数变成绿的
+    ——而这一层的全部价值就是让回归**响**。调用方只记日志与 trace，绝不改序列。
+
+    纯函数：不修改入参，也不依赖调用顺序（同一个列表跑两遍结果相同）。
+    """
+    msgs = list(messages or [])
+    n = len(msgs)
+    decl_at: list[tuple[int, str]] = []      # (下标, id) —— 每条声明
+    frame_at: list[tuple[int, str]] = []     # (下标, id) —— 每条帧
+    issues: list[str] = []
+    for i, m in enumerate(msgs):
+        ids = [str((tc or {}).get("id") or "") for tc in (getattr(m, "tool_calls", None) or [])]
+        if ids:
+            for k in sorted({k for k in ids if ids.count(k) > 1}):
+                issues.append(f"a: 第 {i} 条 assistant 重复声明 id「{k}」")
+            decl_at.extend((i, k) for k in ids)
+        if isinstance(m, ToolMessage):
+            frame_at.append((i, str(getattr(m, "tool_call_id", "") or "")))
+    _fr = [k for _i, k in frame_at]
+    for k in sorted({k for k in _fr if _fr.count(k) > 1}):
+        issues.append(f"b: id「{k}」出现在两条以上的帧上")
+    for i, k in frame_at:
+        if not any(j < i and kk == k for j, kk in decl_at):
+            issues.append(f"c: 第 {i} 条帧的 id「{k}」前面没有 assistant 声明过")
+    for i, k in decl_at:
+        if i != n - 1 and not any(j > i and kk == k for j, kk in frame_at):
+            issues.append(f"d: 第 {i} 条 assistant 声明了 id「{k}」却没有帧回应")
+    return issues
+
+
 def _receipts_text(receipts: list, drop_tools: set | None = None) -> str:
     """checker 验收回执摘要（narrator 同轮如实转述依据，20260904）。
 

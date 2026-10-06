@@ -88,7 +88,7 @@ from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _ledger_frame_wanted,
                            _msg_text, _page_ctx, _prev_user_msg, _receipts_text,
                            _recent_tail, _short_reply_hint, _turn_has_image,
-                           with_tool_call_pairs)
+                           strict_wire_issues, with_tool_call_pairs)
 from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES,
                              _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
@@ -10215,6 +10215,16 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 调用的 assistant——qwen 容忍这条非法序列，strict 服务商一律 400 拒（见该函数
     # docstring 的实测）。**只补形状、不动内容**：帧原文照旧是 narrator 的叙述材料。
     _msgs = [system] + with_tool_call_pairs(state["messages"])
+    # 出站合规绊线（20261006，见 `context.strict_wire_issues` 头注）：`tool_call_id`
+    # 重复那次让 deepseek 整轮 400，而 qwen 端点容忍 ⇒ **生产一直绿**，洞在库里躺了
+    # 8 天。修在源头（`execute_node::_frame_id`）之后，这一层是**回归绊线**——只记
+    # 日志与 trace，**绝不改序列**（在这一层顺手改掉重复 id = 同一规则的第二份实现，
+    # 且真回归会被就地抹平成绿的，绊线也就白设了）。
+    _wire_bad = strict_wire_issues(_msgs)
+    if _wire_bad:
+        logger.error("[model] 出站序列不合严格服务商协议（%d 处）：%s",
+                     len(_wire_bad), "；".join(_wire_bad[:3]))
+        record("model", "wire_illegal", issues=_wire_bad[:5], frames=len(_msgs) - 1)
     # 看得见（20261005，输入防线的"便宜的那一半"）：这里**只量、不拦**。整条提示词的
     # 总量今天没有硬限（单帧与单轮已在 execute_node 封顶，多轮累加仍可能很大），所以
     # 先把它变成一条可查的事实——服务的正是"会不会把上下文撑爆"这个问题。

@@ -186,6 +186,60 @@ check("接线：帧的 id 由 `_frame_id` 出（写回 `execute_{idx}` 会被这
 check("  旧的逐轮位次写法在源码里已经不存在",
       'tool_call_id=f"execute_{idx}"' not in _SRC)
 
+print("\n⑥ 出站合规绊线：发出去之前自己先量一遍（20261006）")
+# 这一节治的是"合法性只由服务商来告诉我们"：`tool_call_id` 的重复让 deepseek 整轮 400，
+# 而 qwen 容忍 ⇒ 生产一直绿、洞躺了 8 天。`strict_wire_issues` 把服务商的拒收理由变成
+# 我们这边一条**零成本、离线可测**的读数；它**只报不修**（修在 `_frame_id`）。
+from agent.context import strict_wire_issues  # noqa: E402
+
+check("★ 正控（修前口径）：两轮的帧并进一条 assistant ⇒ 绊线必须亮",
+      any(s.startswith("a:") for s in strict_wire_issues(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD))),
+      str(strict_wire_issues(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD))[:1]))
+check("修后的真序列：一处不合规都没有（两条修一起才对得上）",
+      strict_wire_issues(_WIRE) == [], str(strict_wire_issues(_WIRE)))
+check("  same-round 并行帧那组也合规", strict_wire_issues(
+    with_tool_call_pairs(_PREV + _R3)) == [],
+    str(strict_wire_issues(with_tool_call_pairs(_PREV + _R3))))
+check("原本就合法的序列（③ 那组）合规", strict_wire_issues(legal) == [],
+      str(strict_wire_issues(legal)))
+
+check("b: 同一个 id 出现在两条帧上 → 亮",
+      any(s.startswith("b:") for s in strict_wire_issues(
+          [HumanMessage(content="x"), frame("a", 0), frame("b", 0)])),
+      str(strict_wire_issues([HumanMessage(content="x"), frame("a", 0), frame("b", 0)])))
+check("c: 帧前面没有 assistant 声明过 → 亮（`role:\"tool\"` 不许凭空出现）",
+      any(s.startswith("c:") for s in strict_wire_issues(
+          [HumanMessage(content="x"), frame("a", 0)])),
+      str(strict_wire_issues([HumanMessage(content="x"), frame("a", 0)])))
+check("d: 非末尾的 assistant 声明了 id 却没有帧回应 → 亮",
+      any(s.startswith("d:") for s in strict_wire_issues(
+          [HumanMessage(content="x"),
+           AIMessage(content="", tool_calls=[{"name": "a", "args": {}, "id": "execute_0",
+                                             "type": "tool_call"}]),
+           HumanMessage(content="还在吗")])),
+      str(strict_wire_issues(
+          [HumanMessage(content="x"),
+           AIMessage(content="", tool_calls=[{"name": "a", "args": {}, "id": "execute_0",
+                                             "type": "tool_call"}]),
+           HumanMessage(content="还在吗")])))
+check("  例外：**末尾**那条 assistant 声明着调用是正常形态（等模型接着调）→ 不亮",
+      strict_wire_issues(
+          [HumanMessage(content="x"),
+           AIMessage(content="", tool_calls=[{"name": "a", "args": {}, "id": "execute_0",
+                                             "type": "tool_call"}])]) == [])
+check("纯函数：量一遍不改入参（形状也不改）",
+      (lambda s: (strict_wire_issues(s), s == _WIRE)[1])(_WIRE) and
+      len(strict_wire_issues([])) == 0)
+
+_SRC2 = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+check("接线：narrator 出站前真的量了一遍（这一句被删掉，绊线就成了装饰）",
+      "_wire_bad = strict_wire_issues(_msgs)" in _SRC2)
+check("  量在 `with_tool_call_pairs` **之后**（量的是真正发出去的那份）",
+      _SRC2.index("_msgs = [system] + with_tool_call_pairs(state[\"messages\"])")
+      < _SRC2.index("_wire_bad = strict_wire_issues(_msgs)"))
+check("  只报不修：这一层不许出现对 id 的就地改写",
+      "wire_illegal" in _SRC2 and "_frame_id(_msgs" not in _SRC2)
+
 print()
 if FAILED:
     print(f"❌ {len(FAILED)} 项未通过：")
