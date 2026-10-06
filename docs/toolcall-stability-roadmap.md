@@ -730,3 +730,41 @@ tool calls；`skill_schema.py` 那条老路**不必做了**，但 **D5（id 类�
 **勘误（同批）**：此前一次复扫记的"1106 份 trace 里只有 22 份带 `input.message`"是**假的**
 ——glob 只匹配了 `*.json`，漏掉 `.json.gz` 那 726 份（转轮留档的扩展名）。真实是 **1105/1106**。
 凡按"语料很小"下的结论都要重算。
+
+### 附七：工具帧的配对 id 是"请求内身份"而不是"本轮位次"（20261006，P1/P3 方向的第六次加固）
+
+**洞**：`execute_node` 造的 `ToolMessage.tool_call_id` 原先是 `f"execute_{idx}"`——`idx` 是
+**本轮 spec 的下标**（`for idx, spec in enumerate(specs)`），**逐轮从 0 重编**。而 planner 那一腿
+是 `llm.invoke(渲染好的字符串)`、**不往 `messages` 里写任何东西** ⇒ 第 2 轮的帧**紧挨着**第 1 轮
+⇒ 出口补形状的 `with_tool_call_pairs` 按"连续多条 = 一轮并行调用"把它们并进**同一条** assistant
+⇒ 一条里躺着两个 `execute_0`。服务商原话逐字在仓库里（`eval/report/baseline_20260928_provider_ab.json`）：
+`Duplicate value for 'tool_call_id' of execute_0 in message[3]`。**deepseek 一律 400，
+qwen 端点容忍 ⇒ 生产用 qwen，生产绿。**
+
+**四个判据全都看不见它**（这才是"跑了这么多天全量回归没发现"的原因）：
+
+| 判据 | 为什么恒绿 |
+|---|---|
+| 服务商这一层 | qwen 容忍非法序列；换严格服务商才会整轮 400 |
+| **配对判据**（`with_tool_call_pairs` 的语义） | 它验的是"每条帧的 id **被前面那条 assistant 声明过**"——**重复 id 照样满足**。修前口径实测 `配对成立吗: True`。它验"**配得上**"，服务商要的是"**配得唯一**"，**这是两条判据** |
+| 重试机制 | narrator 对空回复有一次盲重试，400 混在"重试"叙述里看着像服务商抖动 |
+| 用例分母 | 现有测试每次只喂**一轮**帧——而重复只在**跨轮**出现 |
+
+**修法**：`agent/graph.py::_frame_id(messages, idx)`，基数取**消息里已有的帧数**
+（`sum(1 for m in messages if isinstance(m, ToolMessage))`）⇒ 跨轮单调；同一轮的并行帧仍靠 `idx`
+分开（base 对整轮是常量）。**基数不用 `plan_rounds`**：这样唯一性只依赖"**帧只增不减**"这条本图
+自身的性质（历史注入只造 Human/AI、ToolMessage 只由 `execute_node` append、本图返回一律走
+`add_messages` 追加语义），不依赖"每轮 planner 恰好对上一次 execute"这条路由约定。
+修在**发帧的源头**而不是 `with_tool_call_pairs` 里——补形状函数保持"只补形状、不动内容"的纯度
+（test ④ 的帧对象 identity 断言就是钉这条的）。
+
+**规模（别当边角场景）**：近三天 trace 27 轮里 **11 轮（41%）** 有 ≥2 次产出工具帧的决策
+⇒ 修前若上严格服务商（`ali-ds` 臂 `QWEN_MODEL=deepseek-v4.1-flash`），**近一半轮次整轮 400**。
+
+**判据**：`tests/test_tool_call_pairs.py` ⑤，含 ★ **正控**（修前口径喂进去必须红出重复 id
+——这一条不红，修后那条绿就是假的）。另有真链路探针跑**真 `execute_node`** 两轮验
+`execute_0`/`execute_1`。写这种判据要**两侧各数各的**（一个 id 本来就该出现两次：assistant
+声明一次 + 帧自己一次），加起来数会把每一对合法配对读成重复 ⇒ **恒红**。
+
+**同族核过、不受影响**：`agent/react_arm.py` 的 `react_{i}` / `popup_{i}` 不喂给任何服务商
+（只供报告读 `name`/`content`）。
