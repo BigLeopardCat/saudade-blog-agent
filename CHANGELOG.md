@@ -159,6 +159,18 @@
   不可能既是声称又是否认 ⇒ 撞车时让给洞⑦（它手上有台账真值）。`_CONFIRM_EXEMPT_RE` 补否认族
   一条（`不存在/并不存在/没有 … 这回事`）；`tests/test_skills.py` 的洞⑥ 用例表把这句话与
   「系统里没有……这回事」都放进"放"的一列，原样保留「点「确定」我就去办」那句真声称继续判红。
+- **工具帧的配对 id 从"本轮位次"改成"请求内唯一"：多轮轮次不再给服务商发非法序列（行为，20261006）**：
+  `execute_node` 造的 `ToolMessage.tool_call_id` 原先是 `f"execute_{idx}"`，`idx` 是**本轮 spec 的
+  下标**（逐轮从 0 重编），而 planner 那一腿**不往 messages 里写东西** ⇒ 第 2 轮的帧紧挨着第 1 轮
+  ⇒ 出口补形状的 `with_tool_call_pairs` 把两轮并进**同一条** assistant ⇒ 一条里躺着两个
+  `execute_0`。服务商原话逐字躺在 `eval/report/baseline_20260928_provider_ab.json`：
+  `Duplicate value for 'tool_call_id' of execute_0 in message[3]`——deepseek 一律 400，qwen 容忍，
+  所以生产里从没暴露过（**这不是服务商挑剔，是我们发的序列不合协议**）。现在 `_frame_id`
+  以"消息里已有的帧数"为基数编号（`execute_0`、`execute_1`…跨轮单调），同一轮的多条并行帧仍靠
+  `idx` 分开。实测占比：近三天 trace 27 轮里 **11 轮（41%）** 有 ≥2 次产出工具帧的决策——
+  修前上线，这些轮次在严格服务商上**整轮 400**。**判据**：`tests/test_tool_call_pairs.py` ⑤，
+  含**正控**（修前口径喂进去必须红出重复 id——这一条不红，修后那条绿就是假的）。
+
 ## 20261005
 
 - **显式填的默认值 = 没填：跨轮的"这件读过了"不再漏判（行为，20261005）**：`content_query`

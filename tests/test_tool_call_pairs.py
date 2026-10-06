@@ -102,6 +102,90 @@ check("空列表不炸", with_tool_call_pairs([]) == [])
 check("末尾是帧时也收尾（循环后必须 flush 一次）",
       len(with_tool_call_pairs([HumanMessage(content="x"), frame("t", 0)])) == 3)
 
+print("\n⑤ 跨轮唯一性：id 是**请求内**的身份，不是本轮位次（20261006）")
+# 这一节治的是"形状函数的输入"：`task_id` 一旦在同一请求里重复，服务商就拒收整条
+# 序列（`Duplicate value for 'tool_call_id' of execute_0`，原话见 graph.py::_frame_id）。
+# 上面四节全部照样通过——它们每次只喂**一轮**的帧，而这正是它在生产里藏了 8 天的原因：
+# 判据（以及 qwen 端点）都只看一轮。
+from langchain_core.messages import ToolMessage as _TM  # noqa: E402
+
+from agent.graph import _frame_id  # noqa: E402
+
+
+def dup_ids(msgs: list) -> list[str]:
+    """一条序列里重复的配对 id。
+
+    **两侧各数各的**（不是把两处加起来）：一个 id 本来就该出现两次——一次在
+    assistant 的 `tool_calls` 里，一次在那条帧自己的 `tool_call_id` 上。加起来数会把
+    **每一对合法配对**都读成重复，这条判据就成了恒红。
+    """
+    declared: dict[str, int] = {}
+    framed: dict[str, int] = {}
+    for m in msgs:
+        for tc in (getattr(m, "tool_calls", None) or []):
+            k = str(tc.get("id"))
+            declared[k] = declared.get(k, 0) + 1
+        if isinstance(m, _TM):
+            k = str(getattr(m, "tool_call_id", "") or "")
+            framed[k] = framed.get(k, 0) + 1
+    return sorted(k for k in set(declared) | set(framed)
+                  if declared.get(k, 0) > 1 or framed.get(k, 0) > 1)
+
+
+def round_frames(prev: list, tools: list[str], old: bool = False) -> list:
+    """一轮 execute 产出的帧。`old=True` 复刻修前口径（逐轮从 0 数）。"""
+    out = []
+    for i, t in enumerate(tools):
+        fid = f"execute_{i}" if old else _frame_id(prev, i)
+        out.append(_TM(content=f"{t} 已完成", tool_call_id=fid, name=t))
+    return out
+
+
+# 修前现场：两轮各一条（第 2 轮是 planner 受阻后重决策，最常见）。
+_PREV = [HumanMessage(content="帮我删掉标签「大笨狗」")]
+_R1_OLD = round_frames(_PREV, ["list_tags"], old=True)
+_R2_OLD = round_frames(_PREV + _R1_OLD, ["list_tags"], old=True)
+check("★ 正控（修前口径）：两轮并进一条 assistant 后**确实**出现重复 id"
+      "——这条不红，下面那条绿就是假的",
+      dup_ids(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD)) == ["execute_0"],
+      str(dup_ids(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD))))
+
+_R1 = round_frames(_PREV, ["list_tags"])
+_R2 = round_frames(_PREV + _R1, ["delete_tag"])
+_WIRE = with_tool_call_pairs(_PREV + _R1 + _R2)
+check("修后：同一条序列喂进去，一个重复都没有",
+      dup_ids(_WIRE) == [], str(dup_ids(_WIRE)))
+check("  两轮的帧仍并进同一条 assistant（补形状的语义没变，只换 id）",
+      [type(m).__name__ for m in _WIRE] ==
+      ["HumanMessage", "AIMessage", "ToolMessage", "ToolMessage"],
+      str([type(m).__name__ for m in _WIRE]))
+check("  配对仍然成立：每条帧的 id 都被它前面那条 assistant 声明过",
+      [str(tc["id"]) for tc in _WIRE[1].tool_calls] ==
+      [str(getattr(m, "tool_call_id", "")) for m in _WIRE[2:]],
+      str([tc["id"] for tc in _WIRE[1].tool_calls]))
+check("  id 单调可读（第 2 轮接着第 1 轮往下数，不回退）",
+      [str(getattr(m, "tool_call_id", "")) for m in _R1 + _R2] ==
+      ["execute_0", "execute_1"],
+      str([getattr(m, "tool_call_id", "") for m in _R1 + _R2]))
+
+# 同一轮里多条并行帧：base 对整轮是常量、靠 idx 分开（别把 base 也当成逐帧累加）。
+_R3 = round_frames(_PREV + _R1 + _R2, ["a", "b", "c"])
+check("同一轮 3 条并行帧互不相同，且接在已有帧之后",
+      [str(getattr(m, "tool_call_id", "")) for m in _R3] ==
+      ["execute_2", "execute_3", "execute_4"],
+      str([getattr(m, "tool_call_id", "") for m in _R3]))
+check("入参不被改动（纯函数；`state[\"messages\"]` 是别人的）",
+      _frame_id(_PREV + _R1, 0) == "execute_1" and len(_PREV) == 1)
+check("空/无帧序列不炸", _frame_id([], 0) == "execute_0"
+      and _frame_id(None, 2) == "execute_2")
+
+# 生产端的接线：`execute_node` 必须**调**这个函数，不能把 `execute_{idx}` 写回来。
+_SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+check("接线：帧的 id 由 `_frame_id` 出（写回 `execute_{idx}` 会被这条抓住）",
+      "tool_call_id=_frame_id(state.get(\"messages\"), idx)" in _SRC)
+check("  旧的逐轮位次写法在源码里已经不存在",
+      'tool_call_id=f"execute_{idx}"' not in _SRC)
+
 print()
 if FAILED:
     print(f"❌ {len(FAILED)} 项未通过：")
