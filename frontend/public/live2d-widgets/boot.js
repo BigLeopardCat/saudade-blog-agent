@@ -94,7 +94,10 @@
   // ★ 版本号：nginx 对 live2d-widgets 目录 immutable 缓存 1 年，子模块变更只 bump
   // 这里一处（所有子模块 URL 统一拼 ?v=VER；Live2dAgent/index.tsx 的 boot.js 引用
   // 也需同步 bump——否则浏览器不会重新请求本入口）
-  const VER = '20261006a';
+  // 20261008a = 「新增四枚表情包」那一轮（chat-render.js 的 fallback 内联清单从 8 名
+  // 加到 12 名）。文件在 live2d-widgets 下 ⇒ 必须 bump；不 bump 访客吃 1 年缓存，
+  // 看板娘对话里这四枚仍然只显示成文本。五个同步点见 frontend/README.md。
+  const VER = '20261008a';
 
   function loadExternalResource(url, type) {
     return new Promise((resolve, reject) => {

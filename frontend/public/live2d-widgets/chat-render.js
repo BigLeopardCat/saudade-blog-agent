@@ -101,12 +101,14 @@
         }
       } catch(e) {}
       const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      // 内置表情包清单（20260903：与 src/utils/stickers.ts 的 STICKERS 同步，增删两处改）。
-      // 仅命中才替换，未知 :名字: 保留原样。
+      // 内置表情包清单（20260903：与 src/utils/stickers.ts 的 STICKERS 同步，增删两处改；
+      // 20261008 追加四枚）。仅命中才替换，未知 :名字: 保留原样。
       const STICKERS = {
         头疼: '/stickers/touteng.png', 委屈: '/stickers/weiqu.png', 害羞: '/stickers/haixiu.png',
         比耶: '/stickers/biye.png', 犯错: '/stickers/fancuo.png', 生气: '/stickers/shengqi.png',
         贴贴: '/stickers/tietie.png', 震惊: '/stickers/zhenjing.png',
+        困困: '/stickers/kunkun.png', 躺平: '/stickers/tangping.png',
+        嫌弃: '/stickers/xianqi.png', 比心: '/stickers/bixin.png',
       };
       const escInline = (s) => {
         s = esc(s);

@@ -39,7 +39,7 @@ producer 用 `confirm_text` 发**一次**——臂这边一个字节的正文都
 
 **narrator 资产（P6 前半，20261005）**：系统提示从生产的 narrator 资产里接了两份
 **逐字共用**的（见 `_system_prompt`）——`NARRATOR_DISCIPLINE`（纪律 1–23，含"读不到 ≠ 空"
-与"不许派主人去登录"那两条）与 `STICKER_GUIDE`（8 个贴纸名的唯一名字表）。接之前
+与"不许派主人去登录"那两条）与 `STICKER_GUIDE`（12 个贴纸名的唯一名字表）。接之前
 `own_*`（模型如实说读不到、却又多派一句"你先去登录"）与 `sticker_*` 两族整族慢性红。
 纪律是 narrator（零工具节点）的口径，所以前面加了一段立场改写（`_DISCIPLINE_STANCE`，
 同 `audience_block` 的手法：只换指称、实质一条不放宽）。
@@ -488,7 +488,7 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
       整族慢性红——模型如实说了"读不到"，却**又多派了一句"你先去登录"**，而纪律 20
       明令禁止（生产的账不许算在主人头上）。同族还有"读不到 ≠ 空"那几条；
     · 第四块是 `STICKER_GUIDE`（情绪贴纸的**唯一**名字表）。不接它，`:害羞:` 这些
-      记号结构上产不出来（`sticker_*` 用例整族恒红），而语料只认这 8 个名字；
+      记号结构上产不出来（`sticker_*` 用例整族恒红），而语料只认这 12 个名字；
     · 第五块是循环机制（怎么终止），只有三五句。
 
     **纪律块要带立场改写**（`_DISCIPLINE_STANCE`）：那份纪律是 narrator（零工具节点）

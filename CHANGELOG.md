@@ -14,6 +14,27 @@
 
 **覆盖范围**：20260928 建立，回溯到 20260925（建立前一周）。更早的变更去 `git log`。
 
+## 20261008
+
+- **表情包增至 12 枚（困困/躺平/嫌弃/比心）并三处同步**：主人给了四张新素材，按存量同一档处理
+  （长边 128px、8-bit RGBA 透明底原样保留、单张 31–33KB）后放进父仓 `frontend/public/stickers/`。
+  **跨语言契约**：名字清单是三处同源——父仓 `src/utils/stickers.ts::STICKERS`（权威）、本仓
+  `frontend/public/live2d-widgets/chat-render.js` 的内联副本、本仓 `agent/stickers.py::STICKER_NAMES`
+  （`tests/test_sticker_repair.py` ④ 逐字核对前两处）；第 4 处是写给模型的散文表
+  `agent/prompts.py::STICKER_GUIDE`——**它没有机器核对，却是模型唯一的信息来源**（不写进去，
+  这四枚在对话里结构上产不出来）。四条语义都配了与既有同档的护栏：困困＝困倦/想睡（深夜陪聊自己
+  先犯困）；躺平＝放松/瘫着不想动、摆烂式自嘲（**绝不用于敷衍访客的请求**）；嫌弃＝俏皮嫌弃/
+  受不了/吐槽（**假**嫌弃，绝不用于真贬低访客）；比心＝喜欢/感谢/亲昵（被夸、道谢、示好）。
+  **判据**：`eval/golden/basic.jsonl` 的 `sticker_praise_shy` 把 `text_contains` 从 8 个名字放宽到
+  12 个——那条是 **OR 语义**，只会更宽；不补的代价是主人说「我最喜欢你了」时模型改答 `:比心:`，
+  而断言只列旧 8 名 ⇒ 慢性红。
+  **两个安静失效点（都已处理）**：① `chat-render.js` 住本仓、父仓按 `frontend/widget.lock.json`
+  的 pin 取用 ⇒ **不换 pin 就永远不上线，且父仓 CI 照绿**（那笔在父仓）；② nginx 对
+  `/live2d-widgets/` 设了 1 年 immutable ⇒ `VER` 必须 bump（`20261006a` → `20261008a`，五个同步点
+  见 `frontend/README.md`），不 bump 访客一年内拿的还是旧脚本、对话里这四枚只显示成文本。
+  **本仓不生效的那半**：站内四条渲染路径由父仓改动即刻可用；`stickers.py`/`prompts.py` 这两处
+  要 **restart agent** 才进生产（重启加载工作区，时机由主人定）。
+
 ## 20261007
 
 - **跨轮取值补上缺的那一格，并给它配一条反面纪律（行为 + 判据，20261007）**：真链路上"上一轮
