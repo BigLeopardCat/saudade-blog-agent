@@ -10,7 +10,7 @@
      （chat 链路 uid>0 恒成立），"没携带身份"只可能是系统这一侧出了异常，叫主人去登录
      既没用又误导——把系统的账算在他头上。生产 narrator 有纪律 20 明令禁止，而本臂
      **一条纪律都没接**。
-  ② `sticker_praise_shy` 慢性红：语料只认 8 个贴纸名（`:害羞:` …），而名字表的唯一
+  ② `sticker_praise_shy` 慢性红：语料只认 12 个贴纸名（`:害羞:` …），而名字表的唯一
      来源是 `agent/prompts.STICKER_GUIDE`——不接进系统提示，那些记号**结构上产不出来**。
   ③ `image_color_red` / `image_two_colors` 慢性红：主人消息是 `[{"type":"text"},{"type":
      "image_url"}]`，而适配器此前写死 `HumanMessage(content=user_msg)`——**按文本重建

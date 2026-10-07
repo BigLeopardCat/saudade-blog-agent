@@ -425,7 +425,7 @@ def _drift_md(corpus_keys, cases_file, cases, orphan, generic, misbound, thin,
     L.append("")
     L.append(f"扫描范围 = 标签含 {'/'.join(_SCOPE_TAGS)} 或带 `require_doc_terms` 的用例。"
              "范围外那些用例的正断言判的是**别的数据源**，不是这份 RAG 快照：贴纸名"
-             "（8 个 `:名字:` 是 prompts 里的名单）、页面特效/夜间开关、`recent_executions` "
+             "（12 个 `:名字:` 是 prompts 里的名单）、页面特效/夜间开关、`recent_executions` "
              "执行记忆、当前文章正文、工具返回本身（`cq_*` 类走 `search_notes` 读库、"
              "时间/设备类走 IoT 接口——库里有没有这个词与 RAG 索引快照是两件事）。"
              "拿 ORPHAN/GENERIC 去判它们只会刷一屏噪音（首次上线实测 38 条全是此类），"
