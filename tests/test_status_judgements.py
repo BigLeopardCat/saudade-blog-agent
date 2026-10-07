@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
-from agent.decisions import _wrap_up_plan  # noqa: E402
+from agent.decisions import _terminal_plan, _wrap_up_plan  # noqa: E402
 from agent.graph import (  # noqa: E402
     _FALLBACK_DOWN, _FALLBACK_GONE, _FALLBACK_UNDEPLOYED, _claim_issue, gate_node,
     parse_plan, plan_encode,
@@ -316,6 +316,31 @@ check("_EXECUTOR_PROMPT 里给了状态 → 口径表（否则状态只有系统
 check("豁免集 ⊇ 导航注记集（窄了会让如实转告被拦）",
       set(PLAN_STATUS_NAV_NOTE) <= set(PLAN_STATUS_ABSENCE_EXEMPT),
       f"{PLAN_STATUS_NAV_NOTE} ⊄ {PLAN_STATUS_ABSENCE_EXEMPT}")
+
+# ══════════════════════════════════════════════════════════════════
+print("\n⑤ 收尾轮的文案必须如实，且要给得出正向锚点（20261008）")
+# 为什么单列：收尾轮的 plan 里 TOOLS 行是空的，而收尾原因若写成"轮次用满"这类**预算**
+# 陈述，narrator 会把它读成"我这一轮调不动任何工具"。实测两次（trace `20261008T014608`
+# 与 `20261008T023239`，后者手里明明有三个工具帧）写出「本喵这一轮没有任何工具可用，
+# 站内跳转、文章定位统统调不动」，还把主人推去自己点通知里的链接。所以两样都要锁：
+# ① 说出口的原因必须是**当时那件事**；② 注记里要有一句可以直接照抄的真话（正向锚点）
+# ——只给"不许说做不到"的禁令等于新增一句可抄的错话。
+_WRAP_DEFAULT = _wrap_up_plan(True)["note"]
+# ⚠️ 传给 `_terminal_plan` 的 reason **刻意不含**下面要断言的那几个字——否则断言是被
+# 自己传进去的字符串满足的，把锚点整句删掉它照样绿（红基线实测踩到过一次）。
+_TERMINAL_NOTE = _terminal_plan(True, "收尾原因（测试用）")["note"]
+check("默认收尾原因仍是轮次上限（`reason` 这个参数真的被消费，不是摆设）",
+      "轮次上限" in _WRAP_DEFAULT, _WRAP_DEFAULT[:40])
+check("★ 传了 reason 就不许再出现「轮次上限」（否则等于没传）",
+      "轮次上限" not in _wrap_up_plan(True, reason="本轮的动作已经执行过")["note"])
+check("★ 正向锚点：「已经执行过…上面列出的工具调用」在注记里（narrator 可照抄的真话）",
+      "已经执行过" in _TERMINAL_NOTE and "上面列出的工具调用" in _TERMINAL_NOTE,
+      _TERMINAL_NOTE[:60])
+# 接线锁（源码级）：两处"原因不是轮次用满"的收尾调用点都必须显式传 reason——
+# 少传一处就是一条会说反话的路径，而它在 trace 里长得和正常收尾一模一样。
+for _mark, _what in (("不重复执行", "动作已做过"), ("规划这一步没有跑完", "规划没跑成")):
+    check(f"  {_what} 那一处收尾**带着自己的原因**（不是默认文案）",
+          _mark in _G_SRC, _mark)
 
 print(f"\n{'全部通过' if not FAILS else f'失败 {len(FAILS)} 项'}")
 for f in FAILS:
