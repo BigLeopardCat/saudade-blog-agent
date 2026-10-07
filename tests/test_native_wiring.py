@@ -247,6 +247,98 @@ def test_zero_call_with_frames_is_not_nudged():
     check("计划仍是 chat", "SKILL=chat" in out["plan"], out["plan"].splitlines()[0])
 
 
+# ── ②″ 零调用 + **写形态**的请求：话术用写形态那一份（20261008）─────────────
+# 这一格（零调用 + 正文非空）此前一律用通用话术 `_NO_CALL_NUDGE`，而
+# `_name_write_nudge` 的零工具形态本来就是为它写的——调用点在循环末尾，够不到。
+# 现场（golden `capability_absent_after_card_in_history`，**同一句话**）：
+# `20261007_074615` 走到写形态话术 ⇒ 第二轮排出写规格并弹卡；`20261008_010948`
+# 走通用话术 ⇒ 第二轮仍零调用、认成 chat ⇒ 判据红。本用例钉住的就是"哪一份话术"。
+# 负控（**同批**）：上一节那句「你好呀～」（无写域动作词）必须仍走通用话术。
+_MSG_WRITE_SHAPE = "给他发个通知，让他以后老实一点，不然就永久冻结"
+
+
+def test_zero_call_on_a_write_request_uses_the_write_shaped_nudge():
+    print("\n[零调用·写形态] 话术是写形态那一份，且它真的把写规格找回来了")
+    st = {"messages": [HumanMessage(content=_MSG_WRITE_SHAPE)]}
+    out, rec, llm = _run([_zero_call(),
+                          _call("notice_send", {"name": "probe_x", "content": "老实一点"})],
+                         state_over=st)
+    check("LLM 被问了两次（一版响应 + 一次纠偏）", len(llm.prompts) == 2,
+          str(len(llm.prompts)))
+    check("★ 第二次的提示词是**写形态**那一份（不是「一个函数都没有点」那句）",
+          ("改动站内的数据" in llm.prompts[1] or "用引号点名了目标" in llm.prompts[1])
+          and "一个函数都没有点" not in llm.prompts[1])
+    nudge = _events(rec, "no_call_nudge")
+    check("记账仍是格的名字 `no_call_nudge`（复扫口径不破）+ `nudge=name_write`",
+          len(nudge) == 1 and nudge[0].get("nudge") == "name_write"
+          and nudge[0].get("verbs"), str(nudge))
+    check("★ 纠偏真的找回写规格（计划落在 notice_send）",
+          "SKILL=notice_send" in out["plan"], out["plan"].splitlines()[0])
+    check("没有 `no_call_accepted`（催动成功就不记「认了」）",
+          not _events(rec, "no_call_accepted"))
+
+
+# ── ②‴ 菜单摘项之后「当场放弃」：把那一支收口（20261008）────────────────────
+# 现场（golden `account_unmute_popup`）：round0 planner 点 `account_roster`（读）→
+# `list_accounts` 回"账号列表不可用" → checker 判 BLOCK（`unavailable` = 改参数重试无效
+# 那一族）⇒ 该技能这一轮**从菜单里摘掉**。round1 的两种落法：4/6 跑改选 `unmute_account`
+# （弹卡 ✅）、2/6 跑**点 `chat`、零工具收尾** ⇒ narrator 手里只有一条失败帧，只能如实说
+# "办不了"（判据红）。这一格此前没有任何纠偏够得到：`_name_write_nudge` 的零工具形态只认
+# 首轮、且它的动作词表**刻意不含**禁言/解禁。本用例钉的就是新加的那条通道。
+#
+# 用的正是那一族的动作词形态（引号点名 + 族别动作词）——判定条件是**各自独立**的三道：
+# 有摘项（`blocked`）/ 原话里点了名 / 非提问；下面两条负控分别掐掉其中一道。
+_MSG_DENY_WRITE = "账号「probe_target_1」解禁吧"
+_BLOCKED_ROSTER = [{"skill": "account_roster", "reason": "unavailable"}]
+_FRAMES_AFTER_BLOCK = [HumanMessage(content=_MSG_DENY_WRITE),
+                       ToolMessage(content="服务不可用：账号列表这一轮读不到",
+                                   tool_call_id="c1")]
+
+
+def test_giveup_after_a_menu_denied_prerequisite_is_nudged_once():
+    print("\n[菜单摘项·放弃] 被摘之后零工具收尾 → 纠偏一次，且它真的改选了写技能")
+    out, rec, llm = _run([_chat(), _call("unmute_account", {"name": "probe_target_1"})],
+                         state_over={"messages": _FRAMES_AFTER_BLOCK,
+                                     "blocked": _BLOCKED_ROSTER, "plan_rounds": 1})
+    check("LLM 被问了两次（一版放弃响应 + 一次纠偏）", len(llm.prompts) == 2,
+          str(len(llm.prompts)))
+    check("★ 第二次的提示词是「摘项之后放弃」那一份",
+          "不等于主人这件事办不了" in llm.prompts[1], llm.prompts[1][-200:])
+    corr = _events(rec, "deny_giveup_correct")
+    check("★ `deny_giveup_correct` 恰一条、记了摘掉的技能与命中的族别词",
+          len(corr) == 1 and corr[0].get("denied") == ["account_roster"]
+          and "解禁" in (corr[0].get("marks") or []), str(corr))
+    check("★ `menu_denied_used` **缺席**——它的常态为 0 是「摘菜单是结构性的」的唯一证据",
+          not _events(rec, "menu_denied_used"))
+    check("★ 纠偏真的找回写规格（计划落在 unmute_account）",
+          "SKILL=unmute_account" in out["plan"], out["plan"].splitlines()[0])
+    check("`menu_denied` 照常记一笔（摘菜单这件事本身仍留痕）",
+          len(_events(rec, "menu_denied")) == 1)
+
+
+def test_giveup_nudge_needs_a_deny():
+    print("\n[菜单摘项·反锁] 本轮没有摘项 ⇒ 同样的零工具收尾一次都不打扰")
+    out, rec, llm = _run([_chat()],
+                         state_over={"messages": _FRAMES_AFTER_BLOCK,
+                                     "blocked": [], "plan_rounds": 1})
+    check("确实走到了 LLM 决策轮、且只问了一次", len(llm.prompts) == 1, str(len(llm.prompts)))
+    check("★ `deny_giveup_correct` 缺席", not _events(rec, "deny_giveup_correct"))
+    check("计划仍是 chat", "SKILL=chat" in out["plan"], out["plan"].splitlines()[0])
+
+
+def test_giveup_nudge_needs_a_named_target():
+    print("\n[菜单摘项·反锁] 原话里没点名的写请求 ⇒ 不纠（「把那个账号冻结掉」是如实拒绝）")
+    frames = [HumanMessage(content="把那个账号冻结掉"),
+              ToolMessage(content="服务不可用：账号列表这一轮读不到", tool_call_id="c1")]
+    out, rec, llm = _run([_chat()],
+                         state_over={"messages": frames,
+                                     "blocked": _BLOCKED_ROSTER, "plan_rounds": 1})
+    check("只问了一次", len(llm.prompts) == 1, str(len(llm.prompts)))
+    check("★ `deny_giveup_correct` 缺席（无名可抄 ⇒ 纠偏只会把它往乱写推）",
+          not _events(rec, "deny_giveup_correct"))
+    check("计划仍是 chat", "SKILL=chat" in out["plan"], out["plan"].splitlines()[0])
+
+
 # ── ②′ 该取数却点 `chat`：判据前移到决策层（20261004 第二批）────────────────
 # 这句命中 `authz.is_own_read_question`（"我都有哪些收藏" = 自己账号里的私有数据），
 # 且**不命中任何快道**。带上 `state_over` 换掉默认消息即可（`_run` 先铺默认再 update）。
@@ -433,6 +525,10 @@ if __name__ == "__main__":
                test_zero_call_is_nudged_once_then_accepted_as_chat,
                test_zero_call_then_a_real_tool_call_lands_on_the_skill,
                test_zero_call_with_frames_is_not_nudged,
+               test_zero_call_on_a_write_request_uses_the_write_shaped_nudge,
+               test_giveup_after_a_menu_denied_prerequisite_is_nudged_once,
+               test_giveup_nudge_needs_a_deny,
+               test_giveup_nudge_needs_a_named_target,
                test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool,
                test_chat_still_on_a_data_question_is_released_not_nudged_twice,
                test_chat_without_a_data_question_is_not_nudged,

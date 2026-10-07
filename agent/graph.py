@@ -1111,6 +1111,30 @@ _MENU_DENIED_NUDGE = (
     "此刻办不了。"
 )
 
+# **同一件事的另一半**（20261008）：上一轮被摘掉某技能之后，planner 不是"报出那个名字"，
+# 而是**直接点 `chat` 收尾**——"原地重试"被治成"当场放弃"。`_MENU_DENIED_NUDGE` 只管前
+# 半（它那句"你这一轮回了一个本轮不可选的技能"对点 chat 的形态是**假话**：它并没有报出
+# 那个名字），所以这一条另写、另记账（`deny_giveup_correct`）——`menu_denied_used` 常态为 0
+# 是"摘菜单真的是结构性的"的唯一证据，不能被这条污染。
+#
+# 现场与读数（golden `account_unmute_popup`，uid=0 哨兵）：round0 planner 点 `account_roster`
+# → `list_accounts` 回"账号列表不可用" → checker BLOCK（`unavailable` = 改参数重试无效那一族）
+# ⇒ 该技能这一轮从菜单里摘掉；round1 有 4/6 跑改选了 `unmute_account`（弹卡 ✅）、2/6 跑
+# **点 `chat` 零工具收尾** ⇒ narrator 手里只有一条失败帧，只能如实说"办不了"（判据红）。
+# 全量 trace 上这不是账号族独有的形状：124 个"菜单有摘项"的轮次里 **62 个**在同一轮零工具
+# 收尾（其中 25 个明确点 `chat`）——所以这一段不写死账号族，只要求"主人这句话是一件
+# **点了名的写请求**"（纯读轮次的"办不了"是真的，`article_status`/`device_query` 那些轮次
+# 一个都不该被这条碰到）。
+_MENU_DENIED_GIVEUP_NUDGE = (
+    "**你这一轮没有排任何调用就收尾了**，而主人这句话是一件**点了名的写请求**"
+    "（目标的名字就在他的原话里），它**一次都没有被排进过规格**。\n"
+    "上一轮那一步之所以被系统从菜单里摘掉，是因为它**重试也不会有别的结果**"
+    "——那是**那一步**读不到，**不等于主人这件事办不了**。换一条不需要它的路，"
+    "把这件事的写操作规格排出来：技能名 + 参数，名字类的字段照主人原话原样抄，"
+    "id 由系统解析。\n"
+    "确实一条可换的路都没有时，才点 `chat` 如实说明此刻办不了。"
+)
+
 
 # ── "主人点名了目标，你却没写工具规格"：确定性纠偏一次（②防线续二）──────────
 # 实测（20260922 golden `admin_tag_move_unresolved_target_honest` 八跑）：同一条
@@ -1256,6 +1280,51 @@ def _name_write_nudge(plan_obj: dict, user_msg, rounds: int,
         "（反过来：如果主人这句话本来就不是要改动站内数据的请求——只是提问、闲聊，"
         "或是要你解释/整理某段内容——那保持你现在的决定即可，不必强行凑一个写操作。）"
     )
+
+
+def _write_family_marks(text) -> list[str]:
+    """这句话里命中的**各写族动作词**（`_WRITE_FAMILY_MARKS`，去重、保序无关）。
+
+    与 `_name_write_verbs` 同一份纪律：判据与日志必须同源（trace 里记的那几个词，
+    就是判据当时认出来的那几个），各算一遍必然漂移。
+    """
+    t = str(text or "")
+    return sorted({m for m in _WRITE_FAMILY_MARKS if m in t})
+
+
+def _deny_giveup_nudge(deny, plan_obj: dict, user_msg, rounds: int,
+                       role: str | None, has_frames: bool) -> str | None:
+    """菜单被摘之后"当场放弃"→ 纠偏提示文本（见 `_MENU_DENIED_GIVEUP_NUDGE` 的长注）。
+
+    与 `_name_write_nudge` 是**同一件事的两半**，但**触发形态互补**、判据必须各自独立：
+      - `_name_write_nudge` 的零工具那一支只认**首轮**（`rounds == 0`，`continue` 又把它
+        钉死在"本轮第一次决策"）——本条的现场恰恰是**第 2 轮**（读被 BLOCK 之后）；
+      - `_name_write_nudge` 等的是**写域动作词表**（`_name_write_verbs`），而账号族那两件
+        （禁言/解禁、冻结/解冻）**刻意不在那张表里**（理由见那张表的长注：这些词同样出现在
+        读意图里）⇒ 本条另立一张**并集表** `_WRITE_FAMILY_MARKS`（只收各写族自己的动作词，
+        不收"通知"这类会出现在读意图里的名词）。
+
+    除动作词外，另有两道收窄，都为了"不把纯读轮次的如实拒绝纠偏成硬凑一次写"：
+      - **点名通道**：原话里得真有一个目标的名字（引号段，或"名词标记→名字→动作标记"
+        那个免引号窗口）——「看看禁言名单都有谁」没有名字，结构上命不中；
+      - **提问形态**：`authz.is_question_like` 命中即不纠（「他被禁言了吗」是问句）。
+    """
+    # 这一轮菜单里没有摘项 ⇒ 不是本条要治的形状（空集是常态，零成本）。
+    if not deny or not has_frames:
+        return None
+    if plan_obj["tools"] or plan_obj.get("dropped"):
+        return None
+    text = str(user_msg or "")
+    if authz.is_question_like(text):
+        return None
+    if not (_name_write_verbs(text) or _write_family_marks(text)):
+        return None
+    if not (_msg_quote_spans(text) or _msg_name_slot(text)):
+        return None
+    # 角色判据只走 visible_skills 这一处（同 _drop_correction / _name_write_nudge）。
+    if not any(s.name in _WRITE_NAME_TARGET_SKILLS for s in visible_skills(role)):
+        return None
+    return _MENU_DENIED_GIVEUP_NUDGE
 
 
 # ---------------------------------------------------------------------------
@@ -5379,6 +5448,37 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 and not _tools_off and not _img_turn
                 and (decided.undecided or _asks_data)):
             if not correction:
+                # **写形态优先**（20261008）：这一格（零调用 + 正文非空）此前一律用
+                # 通用话术 `_NO_CALL_NUDGE`，而 `_name_write_nudge` 的**零工具形态**
+                # 本来就是为这一格写的——但它的调用点在循环末尾（下面那段
+                # "写形态的请求却零工具"），而这一支已经 `continue` 走了，结构上够不到
+                # （与剔空纠偏那条 `break` 同一种"排在前面的出口让后面的代码永远到不了"）。
+                # 两句都只说机器能保证的事实，信息量不同：通用那句只讲"你什么都没点"，
+                # 写形态那句还讲"主人这句话在要求改动站内数据、目标名字就在他原话里"。
+                # 依据（golden `capability_absent_after_card_in_history`，同一句话）：
+                # `20261007_074615` 走到写形态话术 ⇒ 第二轮排出写规格并弹卡；
+                # `20261008_010948` 走通用话术 ⇒ 第二轮仍零调用、认成 chat ⇒ 判据红。
+                # **只对这一格**：显式点 `chat` 的那一格（`_asks_data`）与循环末尾各处
+                # 已各自接上 `_name_write_nudge`，不在这里重复。
+                _write_shape_nudge = (
+                    _name_write_nudge({"tools": [], "dropped": None}, user_msg,
+                                      rounds, role) if decided.undecided else None)
+                if _write_shape_nudge:
+                    correction, correction_kind = _write_shape_nudge, "写形态零调用"
+                    # 事件名仍是**格**的名字（`no_call_nudge`；`zero_call_residual_probe`
+                    # 那一类复扫按它数"被催过几轮"），话术由 `nudge=` 区分。
+                    record("planner", "no_call_nudge", round=rounds,
+                           finish=decided.finish_reason, text_len=len(raw),
+                           nudge="name_write", via="no_call",
+                           spans=_msg_quote_spans(user_msg)[:3],
+                           verbs=_name_write_verbs(user_msg)[:3])
+                    logger.warning(
+                        "[planner] 零调用 + 写形态的请求 → 用写形态话术纠偏"
+                        "（动作词=%s，引号点名=%s，正文 %d 字，round %d/%d）",
+                        "、".join(_name_write_verbs(user_msg)[:3]),
+                        "、".join(_msg_quote_spans(user_msg)[:3]) or "无",
+                        len(raw), rounds + 1, MAX_PLAN_ROUNDS)
+                    continue
                 correction = _DATA_QUESTION_NUDGE if _asks_data else _NO_CALL_NUDGE
                 correction_kind = "该取数却零工具" if _asks_data else "零调用"
                 record("planner",
@@ -5393,9 +5493,12 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             if decided.undecided:
                 # `via` 把"被哪一条纠偏催过"带上：纠偏后从"点 chat"退回"什么都不点"
                 # 也算这个问句没落到工具上（复扫时别把它读成普通的零调用认账）。
+                # `via` = **试过哪一句话术**（第三档 20261008 起：写形态话术也走这一格，
+                # 别把它读成普通的零调用认账——复扫时"催过而没催动"的分布要看这个键）。
                 record("planner", "no_call_accepted", round=rounds,
                        via=("data_question" if correction == _DATA_QUESTION_NUDGE
-                            else "no_call"),
+                            else ("name_write" if correction_kind == "写形态零调用"
+                                  else "no_call")),
                        finish=decided.finish_reason, text_len=len(raw))
                 logger.warning("[planner] 纠偏后仍然零调用 → 认成 chat（round %d/%d）",
                                rounds + 1, MAX_PLAN_ROUNDS)
@@ -5847,6 +5950,30 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 logger.warning("[planner] 零工具收尾但意图清单仍有未规划项（%s）"
                                "→ 纠偏重决策一次：%s",
                                "、".join(i["key"] for i in _left), correction[:120])
+                continue
+
+        # 菜单被摘之后"当场放弃"纠偏（20261008，见 `_MENU_DENIED_GIVEUP_NUDGE` 的长注）：
+        # 上一轮受阻、该技能这一轮从菜单里摘掉，模型没有改选，而是**零工具收尾**——
+        # narrator 手里只有一条失败帧，只能如实说"办不了"，而主人那件事其实有别的入口。
+        # 排在**收尾丢意图之后**：那一条手里有更具体的东西（"清单里还剩哪几件"），
+        # 该由它先说；本条只兜它够不到的形态（账号族写请求的意图不在
+        # `_scan_action_intents` 的射程里 ⇒ `_pending_intents` 对它们是空的）。
+        # 与剔空纠偏互斥（本条要求 `not dropped`），故放在它前面不影响它。
+        # `correction` 的既有语义 = 同一轮只纠一次，这里同样只用这一条通道。
+        if not correction:
+            _giveup = _deny_giveup_nudge(deny, plan_obj, user_msg, rounds, role, has_frames)
+            if _giveup:
+                _verbs = _name_write_verbs(user_msg)
+                _marks = _write_family_marks(user_msg)
+                correction = _giveup
+                correction_kind = "菜单摘项后放弃"
+                record("planner", "deny_giveup_correct", round=rounds,
+                       denied=sorted(deny), verbs=_verbs[:3], marks=_marks[:3])
+                logger.warning("[planner] 菜单已摘该项却零工具收尾 → 纠偏重决策一次"
+                               "（摘掉=%s，动作词=%s，族别词=%s）",
+                               "、".join(sorted(deny)),
+                               "、".join(_verbs[:3]) or "无",
+                               "、".join(_marks[:3]) or "无")
                 continue
 
         # 剔空纠偏（见上方长注）：只有"点名的全被剔除、本轮一个工具都不剩"才重决策；
@@ -7293,6 +7420,14 @@ _ROLE_LEXICON = (_ROLE_NOUNS, _ROLE_MARKS, _ROLE_GENERIC)
 # 这一门只回答"这个名字有没有出处"。
 _MUTE_MARKS = _ACCOUNT_MARKS + ("禁言", "解禁", "解除禁言", "禁掉", "禁了", "封口")
 _MUTE_LEXICON = (_ACCOUNT_NOUNS, _MUTE_MARKS, _ACCOUNT_GENERIC)
+# 各写族动作词的**并集**（20261008，供 `_deny_giveup_nudge` 判"这句话是不是一件点了名的
+# 写请求"）。与上面那五张表的关系是**纯读**：这里只取各表自己的动作词，一处都不改它们
+# （改了就是同时对五个族放宽，见 `_MUTE_MARKS` 上方那条"另起一份"的纪律）。
+# 为什么不能直接用 `_name_write_verbs`：那张表**刻意不含**禁言/解禁/冻结/解冻（那些词
+# 同样出现在读意图里）——而"菜单被摘之后当场放弃"的现场（`account_unmute_popup`）用的
+# 恰恰就是「账号「X」解禁吧」。误命中的代价由调用方那两道收窄（点名通道 + 非提问）兜着。
+_WRITE_FAMILY_MARKS = (
+    _ACCOUNT_MARKS + _MUTE_MARKS + _NOTICE_MARKS + _QUOTA_MARKS + _ROLE_MARKS)
 
 
 def _lexicon(tool: str | None):
