@@ -144,5 +144,55 @@ check("narrator 叙述纪律 15（指代不唯一先追问）在位", "15. 指�
 check("纪律 15 要求点名候选（不是笼统反问）", "追问要**点名候选**" in src)
 check("纪律 15 含反面（带序号/已点名 → 直接答，不反问）", "就是多此一举" in src)
 
+print("⑦ 后台文章清单也有摘要了（20261007：跨轮取值通道缺的那一格）")
+# 生产实证（trace 20261007T191440 → 20261007T191543）：19:14 真调了后台文章清单、
+# 照帧答"共 21 篇"；下一轮用户只说句闲聊（零工具，planner 判得对），narrator 却**主动
+# 撤回了自己那句话**——因为回执行里**只有动作、没有数**，那个数只活在它上一轮的散文里，
+# 而"零帧不得声称"的诚实纪律于是只能让它否认自己。这一条锁的是"数真的进得了台账"。
+# 样本**用真渲染器产出**（不手写文本）：两侧形状一旦漂开，这里就红。
+from agent.adminops import render_admin_notes  # noqa: E402
+
+
+def _an(i: int, status: str, title: str, tags: str = "5") -> dict:
+    return {"noteKey": i, "noteTitle": title, "status": status,
+            "isTop": 0, "noteTags": tags}
+
+
+_NOTES = [_an(54, "public", "我，管理员！"),
+          _an(46, "public", "文章向量空间图谱项目文档", ""),
+          _an(23, "public", "Python asyncio 异步并发"),
+          _an(21, "private", "关于欧洲AI产业落后中美", ""),
+          _an(20, "draft", "第一次评估")]
+_dig = receipt_digest("list_admin_notes", render_admin_notes(_NOTES, None))
+check("抽出了总数（动作行之外真的有了数）", "共 5 篇" in _dig, _dig)
+check("带状态分布（公开 3 / 私密 1 / 草稿 1）", "公开 3 / 私密 1 / 草稿 1" in _dig, _dig)
+check("摘要 ≤150 字", 0 < len(_dig) <= 150, f"{len(_dig)} 字")
+_kw = receipt_digest("list_admin_notes",
+                     render_admin_notes([_NOTES[2]], None, keyword="Python"))
+# 渲染器自己的头注写明了：带词的那支是**搜索口径**，不是站内总量。摘要是跨轮取值的
+# 来源，把"匹配 N 篇"写成"共 N 篇"，下轮问"后台一共几篇"就会拿一次搜索的条数作答。
+check("带 keyword 的那支说『匹配』不说『共』（搜索条数 ≠ 站内总量）",
+      "匹配 1 篇" in _kw and "共 1 篇" not in _kw, _kw)
+_td = receipt_digest("list_admin_notes", render_admin_notes(_NOTES, None, limit=2))
+check("清单被截断时不报状态分布（那是前 N 条的分布，不是全量）",
+      "共 5 篇" in _td and "（公开" not in _td, _td)
+_ud = receipt_digest("list_admin_notes", render_admin_notes([_an(1, "weird", "x", "")], None))
+check("状态认不出时不报分布（三项之和 ≠ 总数 ⇒ 不拿局部冒充全量）",
+      "共 1 篇" in _ud and "（公开" not in _ud, _ud)
+check("头行读不出来时照旧空摘要（退化为只有动作行，绝不猜）",
+      receipt_digest("list_admin_notes", "这是一段没有头行的话") == "")
+
+print("⑦b 叙述纪律：『本轮没查』不等于『撤回上一轮』（同一现场的另一半）")
+# 两半缺一不可：数据面补了摘要，纪律面还得允许它把上一轮的读数当成有据的。
+_psrc = (ROOT / "agent/prompts.py").read_text(encoding="utf-8")
+check("来源清单把『上一轮自己照帧说出口的读数』算作有据",
+      "上一轮你自己照帧说出口的那些读数" in _psrc)
+check("明写『本轮没有工具返回、不构成撤回上一轮那句话的理由』",
+      "不构成撤回上一轮那句话的理由" in _psrc)
+check("明写不许主动翻旧账（没被问到不动自己的旧账）",
+      "不要主动去复盘或修正自己的旧账" in _psrc)
+check("被问到/被质疑时照旧核对（这条纪律没把真相询问吃掉）",
+      "被问到或被质疑时照旧逐条核对" in _psrc)
+
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

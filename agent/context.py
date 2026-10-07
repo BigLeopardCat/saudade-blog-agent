@@ -358,6 +358,18 @@ def _clip_mid(text: str, head: int = _TAIL_HEAD, tail: int = 160) -> str:
     return text[:head] + " …" + keep + "… " + text[start:]
 
 
+# 记忆型指代 ⇒ 节选窗口放宽（20261008）。默认窗口只有最近 4 轮，而"刚才那个分类数
+# ——「编程」下面有几篇来着"这类**取值指代**所指的那个值常常更早：实测用例
+# `long_hist_value_no_requery` 里值在第 5 组问答的泠月发言中，默认窗口把它挡在外面，
+# planner 看不见就只能"重新读一遍更稳"（重跑 list_categories ⇒ 红）。命中这些词 ⇒
+# 窗口放宽到 `_RECALL_TURNS` 轮，**只在真有指代的轮次**付这份 token，其余轮次逐字节不变。
+_RECALL_TURNS = 10
+_RECALL_RE = re.compile(
+    r"刚才|刚刚|刚说|刚讲|刚提|刚发|刚问|上面(?:说|提|讲|给|那)|上述|前述|"
+    r"前面(?:说|提|讲|给|那)|先前|之前(?:说|提|讲|给|那)|上一条|上一?轮|你刚|来着"
+)
+
+
 def _recent_tail(messages: list, max_turns: int = 4, per: int = 160) -> str:
     """最近几轮对话节选——**一问一答成对**渲染（planner 语境补丁，20260903 起）。
 
@@ -369,7 +381,15 @@ def _recent_tail(messages: list, max_turns: int = 4, per: int = 160) -> str:
     （[System:…] 开头的人类消息，planner 已有 page_ctx）与当前这条用户消息
     （它是决策对象，不是上下文）。逐条 _clip_mid 截断防超长输入稀释决策
     （头尾取样 + 中段锚点打捞，20260919 起；纯尾部截断会丢文档名）。
+
+    `max_turns` 是**下限**：当前消息命中记忆型指代（`_RECALL_RE`）时放宽到
+    `_RECALL_TURNS` 轮——"刚才那个值"常常落在紧邻四轮之外，窗口不给就只能重查
+    （放宽的那一版另换一句抬头，点明值可能在更早轮次里；"最近一轮"那个标记照旧，
+    因为催促/质疑轮的指代对象确实就是紧邻那条）。
     """
+    recall = False
+    if max_turns < _RECALL_TURNS and _RECALL_RE.search(_last_user_msg(messages)):
+        max_turns, recall = _RECALL_TURNS, True
     turns: list[dict] = []
     for m in messages:
         if isinstance(m, (HumanMessage, AIMessage)):
@@ -399,9 +419,16 @@ def _recent_tail(messages: list, max_turns: int = 4, per: int = 160) -> str:
         ai = _clip_mid(t["a"].replace("\n", " "), tail=per) if t["a"] else "（未及回复）"
         mark = "　← 当前这条消息就是对这句的回应" if ago == 1 else ""
         lines.append(f"[上{ago}轮] 用户：{user}\n　　　　 泠月：{ai}{mark}")
-    return ("最近对话节选（**一问一答成对**，最近一轮在最后——判断'催促/质疑/"
-            "短应答'所指：目标通常就在紧邻的那条泠月发言里）：\n"
-            + "\n".join(lines))
+    head = ("最近对话节选（**一问一答成对**，最近一轮在最后——判断'催促/质疑/"
+            "短应答'所指：目标通常就在紧邻的那条泠月发言里）")
+    if recall:
+        # 放宽的那一版必须点明"值可能在更早轮次"：否则"最近一轮"那个标记会把
+        # 取值指代（"刚才那个分类数"）错指到紧邻那条上——实测红的那一轮正是
+        # 照着紧邻那条（夜间模式）找，找不到值就去重跑了一遍工具。
+        head += ("——**本句话带记忆型指代（「刚才/上面/之前…」）**：它要的那个值"
+                 "可能就在更早的某一轮里，逐轮往上找，找到就照抄（规则 6b），"
+                 "**不要**为了取值把同一个工具再跑一遍")
+    return head + "：\n" + "\n".join(lines)
 
 
 def _last_assistant_utterance(messages: list) -> str:
