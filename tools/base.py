@@ -1081,6 +1081,64 @@ _NAV_PREFIX_PATHS = ("/category/", "/article/")
 _NAV_WHOLE_PAGE_PATHS = {IOT_NAV_PATH} if IOT_ENABLED else set()
 
 
+def nav_pure_path(p: str) -> str:
+    """导航目标 → **页面路径**部分（丢掉 `?…` 与 `#…`）。
+
+    站内"停在某一条内容上"用的是**同一个页面 + 定位参数**（全部形态见下面
+    `_ITEM_POSITION_FORMS`；事实句 `agent.context._item_link_fact()` 从它渲染）。
+    前端那条链本来就这么认——SPA 桥按 `pathname+search+hash` 换路由，
+    `chat-stream.js` 的 `BLOG_ROUTES` 只拿 `new URL(url).pathname` 比对。
+    """
+    return str(p or "").split("?", 1)[0].split("#", 1)[0]
+
+
+def nav_path_valid(p: str) -> bool:
+    """这个导航目标是不是站内真实页面。**白名单的单一事实来源就在这个函数里**
+    （`_NAV_EXACT_PATHS` / `_NAV_PREFIX_PATHS` 是它的两个输入）。
+
+    校验只看**路径**（`nav_pure_path`）。此前两处都拿**整串**比对，于是刚写进说明书的
+    两个位置形态里有一个当场被自己的白名单拒掉：`/article/<id>?cid=<cid>` 靠前缀那支
+    侥幸放行，而 `/guestbook?lid=<talkId>` 两头都不沾（`/guestbook` 是**精确**路径，
+    带上 query 后 `p in 表` 为假）⇒ 系统一边教模型填那个形态、一边回它"导航路径无效"。
+    这是"说明书 / 实现 / 执行器三份口径"的老路，两处各写一遍同一个条件就会再走一遍。
+
+    调用方两处（别再加第三处）：`navigate_to`（工具层）、`instantiate_plan`（展开层）。
+    """
+    pure = nav_pure_path(p)
+    return (pure in _NAV_EXACT_PATHS
+            or (pure.startswith(_NAV_PREFIX_PATHS) and pure.count("/") >= 2))
+
+
+# ---------------------------------------------------------------------------
+# 站内"停在**某一条**内容上"的全部形态（20261008，**表**而不是句子）
+# ---------------------------------------------------------------------------
+# **为什么是一张表**：这件事在站内散着至少四份知识，而每一份只知道自己那个子集——
+#   · 前端搜索结果跳转 `frontend/src/frontHome/Head/aggregate.ts::hitTarget`：四类全有
+#     （note 是裸页面 `/article/<id>`；talk `?tk=` / board `?lid=` / comment `?cid=`）；
+#   · Rust 的站内通知（`src/routes/talks.rs:515`、`src/routes/comments.rs:286`）：只会
+#     带 board / comment 两种；
+#   · agent 的站内事实句（`agent/context.py` 那条 item-link 事实）：此前手写两种、还写着
+#     「站内**只有两个**形态」——**一句可抄的假话**（同族纪律：契约里不许出现可抄的错句）；
+#   · 本文件的白名单（`nav_path_valid`）：原来看整串，三种形态**一个都过不去**。
+# 生产实证（trace `20261008T024742`「带我去看看我已经通过的留言」）：planner 拿不到定位
+# 形态 ⇒ 反复调 `list_guestbook` ⇒ 去重收尾 ⇒ narrator 编「马上带你过去啦」⇒ 门判红。
+#
+# 所以事实句**从这张表渲染**（不再手写条数与措辞）：加一类形态 = 加一行，条数与措辞
+# 自动跟上。`tests/test_item_position_guide.py` 逐行断言三件事：① 形态串**真的**过
+# 白名单（那是"教了模型一个跳不动的形态"的锁）、② 形态串逐字进了事实句、③ 事实句里
+# 不再出现手写的条数。
+_ITEM_POSITION_FORMS: tuple[tuple[str, str, str], ...] = (
+    # (形态名, 完整形态（教给模型的字面）, 取值从哪里来)
+    ("评论", "/article/<文章 id>?cid=<评论 id>",
+     "`cid` = 那条评论的 id（站内通知那一行的 `link` 里带着它）"),
+    ("河灯留言", "/guestbook?lid=<留言 id>",
+     "`lid` = 那条留言的 `talkId`（审核结果通知里就是它；含**待审/未通过**的灯——"
+     "公开池里没有那几条，先在「我的河灯」里找）"),
+    ("说说", "/talk?tk=<说说 id>",
+     "`tk` = 那条说说的 `talkId`（说说列表帧里的那一列）"),
+)
+
+
 @tool
 def navigate_to(
     path: Annotated[str, "Page path to navigate to, e.g. / /times /category/tech /article/3 /talk /guestbook /about /dashboard/notes"],
@@ -1091,9 +1149,9 @@ def navigate_to(
     返回文本是给人看的事实（"页面已跳转：<url>"；整页目标如 /device-console/ 是"页面即将
     跳转：<url>（本条回复说完再跳）"——那类要等本条回复说完才生效），不含任何命令标签。"""
     p = path.strip()
-    # /category/*、/article/* 要求至少带一个 id 段（/category/ 裸前缀不算有效页面）
-    valid = p in _NAV_EXACT_PATHS or (p.startswith(_NAV_PREFIX_PATHS) and p.count("/") >= 2)
-    if not valid:
+    # 白名单校验（`nav_path_valid`：只看路径，`?…` 定位参数随页面一起放行；
+    # /category/*、/article/* 要求至少带一个 id 段，裸前缀不算有效页面）
+    if not nav_path_valid(p):
         # 拒绝时把真实约束回给模型，让它用有效路径重新调用（而不是返回错误命令让前端执行）
         return (
             f"导航路径无效: {p!r}。博客真实存在的页面: /（首页）、/about、/guestbook、/talk、"
@@ -1120,7 +1178,7 @@ def navigate_to(
         return ok(f"导航已发起，等主人确认后才会跳转：{full_url}",
                   meta=fact("navigate", changed=True, target=tgt("page", None, p),
                             before="当前页", after="页面已跳转", cmd={"kind": "navigate", "url": full_url, "mode": mode}))
-    if p in _NAV_WHOLE_PAGE_PATHS:
+    if nav_pure_path(p) in _NAV_WHOLE_PAGE_PATHS:
         return ok(f"页面即将跳转：{full_url}（本条回复说完再跳）",
                   meta=fact("navigate", changed=True, target=tgt("page", None, p),
                             before="当前页", after="页面即将跳转", cmd={"kind": "navigate", "url": full_url, "mode": mode}))
