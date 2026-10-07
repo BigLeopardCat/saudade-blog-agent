@@ -353,3 +353,6 @@ MIT，全文见 [LICENSE](LICENSE)。
 
 `frontend/` 下的**美术资源**（「泠月喵」的模型、贴图、面板图标与形象设计）不在 MIT 的授权
 范围内，按 CC BY-NC-SA 4.0 分发，见 [frontend/ASSETS-LICENSE.md](frontend/ASSETS-LICENSE.md)。
+角色的**原始 `.psd`**（分层源文件）同属这份协议，作为
+[v20261007 发布附件](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v20261007)
+分发、不在仓里（那 19 MiB 不该进每个人的 clone 历史）。
