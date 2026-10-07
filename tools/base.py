@@ -4288,8 +4288,8 @@ def create_dashboard_todo(
     if raw_date and due is None:
         # 认不出来就不挑一个顶上（见 adminops.normalize_due_date 头注）：错一天的
         # 日程会静静地躺在后台日历的错误格子里，主人不翻到那天根本不会发现。
-        return unavailable(f"认不出排期日「{raw_date}」（只认 年-月-日 / 年/月/日 / X月X日 / "
-                           f"今天·明天·后天），本次未改动——请向主人问清是哪一天")
+        return unavailable(f"认不出排期日「{raw_date}」（只认 {A.DUE_DATE_FORMS_CN}），"
+                           f"本次未改动——请向主人问清是哪一天")
 
     # 写前先读（同族纪律）：① 拿"加之前有几条"当复核基线 ② 满员时不发注定被拒的请求
     before = _admin_get("/api/protected/todos", config)
@@ -4472,9 +4472,8 @@ def reschedule_dashboard_todo(
             # 认不出来就不挑一个顶上（同 create_dashboard_todo）：错一天的日程会静静地
             # 躺在后台日历的错误格子里，而**改排期**比新增更容易被主人信任——他刚说过
             # 一个日子，看见"改好了"就以为系统听懂了他的说法。
-            return unavailable(f"认不出排期日「{raw_date}」（只认 年-月-日 / 年/月/日 / "
-                               f"X月X日 / 今天·明天·后天；清空排期填"
-                               f"「{A._TODO_CLEAR_WORD}」），"
+            return unavailable(f"认不出排期日「{raw_date}」（只认 {A.DUE_DATE_FORMS_CN}；"
+                               f"清空排期填「{A._TODO_CLEAR_WORD}」），"
                                f"本次未改动——请向主人问清是哪一天")
 
     # 写前先读（同族纪律）：① 在**发出请求之前**就认出是哪一条——查无此条/有多条时

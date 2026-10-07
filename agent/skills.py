@@ -3000,8 +3000,8 @@ def _expand_todo_skill(skill, params: dict) -> tuple[list[str], str]:
     raw = _write_arg(params.get("date"))
     due = A.normalize_due_date(raw) if raw else None
     if raw and due is None:
-        return [], (f"dashboard_todo_add 的排期日「{raw}」认不出来（只认 年-月-日 / "
-                    "年/月/日 / X月X日 / 今天·明天·后天）：不调用任何工具，"
+        return [], (f"dashboard_todo_add 的排期日「{raw}」认不出来"
+                    f"（只认 {A.DUE_DATE_FORMS_CN}）：不调用任何工具，"
                     "如实向主人问清是哪一天——**不许**自己挑一个日子顶上")
     args: dict = {"text": text}
     if due:
@@ -3076,8 +3076,8 @@ def _expand_todo_reschedule_skill(skill, params: dict) -> tuple[list[str], str]:
                 f"（只动排期，正文与完成标记都不动）")
     due = A.normalize_due_date(raw)
     if due is None:
-        return [], (f"dashboard_todo_reschedule 的排期日「{raw}」认不出来（只认 年-月-日 / "
-                    f"年/月/日 / X月X日 / 今天·明天·后天；清空排期填"
+        return [], (f"dashboard_todo_reschedule 的排期日「{raw}」认不出来"
+                    f"（只认 {A.DUE_DATE_FORMS_CN}；清空排期填"
                     f"「{A._TODO_CLEAR_WORD}」）：不调用任何工具，"
                     "如实向主人问清是哪一天——**不许**自己挑一个日子顶上")
     return ([f"reschedule_dashboard_todo("
