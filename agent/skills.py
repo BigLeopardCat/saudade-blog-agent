@@ -138,7 +138,9 @@ del _panel, _panel_path
 
 # 白名单路径（单一事实来源 = 工具层 navigate_to 的校验常量，避免双源漂移；
 # /category/*、/article/* 为前缀匹配，需至少带一个 id 段）
-from tools.base import _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS
+# 20261008：判据本身也收进工具层一个函数（`nav_path_valid`）——这一层与工具层
+# **各写一遍同一个条件**，此前正是它让"带定位参数的路径"两处口径分岔（见该函数头注）。
+from tools.base import _NAV_EXACT_PATHS, nav_path_valid
 # 待办正文上限：**只此一处**（tools/base.py，与 Rust `MAX_TEXT_CHARS` 同源）。
 # 展开层挡住超长只是为了"零写 + 说清原因"，真正的判据在工具与服务端那两道。
 from tools.base import _TODO_TEXT_LIMIT
@@ -644,11 +646,24 @@ SKILLS: list[Skill] = [
                     + ("/物联网控制台" if IOT_ENABLED else "") + "…）"),
         description="用户要求前往/去/回/回到/返回/打开/跳转/访问/进入/转到某个页面时使用。",
         inputs={
+            # target 的两格：**别名**（查 NAV_MAP）与**字面路径**（下方的
+            # `elif target.startswith("/")` 分支，走白名单预校验）。20261008 之前
+            # 这里只写了"别名"，而字面路径分支一直都在——参数说明书与实现不一致，
+            # 模型只能自己猜，实测猜出来的是 `/article/54#comment`（主人报"转跳评论
+            # 位置"那一轮）：文章对了、位置是编的。
+            # **位置形态的"知识"不写在这儿**：它进的是 planner 每轮的页面上下文
+            # （`context._item_link_fact()`），是"站内事实"；这里只补
+            # "这一格能填什么"，两处各说各的那一半。
             "target": "页面别名（从导航映射表取值）：首页/留言板/说说/时间轴/关于我/登录"
                       + ("/物联网平台" if IOT_ENABLED else "") +
                       "等；后台各面板：后台（=后台主页）/后台笔记/后台说说/后台图库/"
                       "后台公告/后台用户管理/后台数据板/后台站点设置"
-                      "（面板名不带「后台」也可，除主页与说说）",
+                      "（面板名不带「后台」也可，除主页与说说）"
+                      "；也可以直接填站内字面路径（`/`、`/article/<文章 id>`、"
+                      "`/category/<路径名>`）；要把页面停在**某一条**内容上填"
+                      "`/article/<文章 id>?cid=<评论 id>`（某条评论）或"
+                      "`/guestbook?lid=<留言 id>`（某条河灯留言）"
+                      "——两个形态都照抄站内通知里那条链接",
         },
         # target 必填（20260925）：target 由本技能自己的代码消费（查 NAV_MAP），
         # 模板里的 `$path` 是死代码（`path` 由本分支从 NAV_MAP 算出）⇒ 派生出不来，
@@ -3257,7 +3272,7 @@ def _instantiate_plan(skill_name: str, params: dict,
             # 直接给"不存在"注记、零工具——不让模型拿着无效路径自行发挥（行为不稳，
             # 可能替身跳真实页/出确认帧）；白名单内直用路径。语义推断同样是禁止项
             # （把 /iot 猜成 /device-console/ 属于替身导航）。
-            if target in NAV_VALID_PATHS or (target.startswith(_NAV_PREFIX_PATHS) and target.count("/") >= 2):
+            if nav_path_valid(target):
                 args = {"path": target, "confirm": False}
                 tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
                 note = f"目标页: {target}（字面路径，白名单校验通过）"
