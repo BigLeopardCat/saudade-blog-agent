@@ -854,6 +854,7 @@ def list_guestbook(
         # "站内没有这条留言"这个结论会被当成列表给的事实（20260928 现场那条就是）。
         data, capped = _cap_rows(data, _LIST_ROWS_MAX, "留言", offset)
         data = _board_text_keys(data)
+        data = _drop_dead_mine(data)
         data = _clip_fields(data, _LIST_FIELD_MAX)
         data = _rows_with_note(
             data, (capped + " " if capped else "")
@@ -861,7 +862,60 @@ def list_guestbook(
                   "待审/被驳回的留言不在这里，查无此条不等于不存在。"
                   "每行的「留名」是留言人**自己填的字**（自由文本，可留空=匿名），"
                   "**不是账号**——别拿它认人；要知道「这条是谁发的」走后台名册 "
-                  "list_admin_board（放灯必须登录，那里逐条带真实账号）")
+                  "list_admin_board（放灯必须登录，那里逐条带真实账号）。"
+                  "**本列表也不带「哪条是你自己放的」**——「我自己放过的灯（含待审/"
+                  "未通过）」是另一条通道：`list_my_board`")
+    return _shape(data)
+
+
+# 公开池里的 `mine` 字段是**恒假的**（20261008 删）：上游 `talk_embed` 按
+# `uid.map(|u| t.user_id == u).unwrap_or(false)` 算它，而本工具的 `_get("/board")`
+# **不带令牌** ⇒ 上游永远拿不到 uid ⇒ 每一行都是 `mine: false`（连用户自己刚放的那盏
+# 也是）。一个看着像"这条是不是我的"、结构上却答不了这个问题的字段，比没有这个字段
+# 更坏——trace `20261008T024742` 里主人问「带我去看看我已经通过的留言」，模型正是在
+# 这份"全 false"的帧上打转（`list_guestbook` 空转 → 收尾）。
+#
+# 为什么是**删字段**而不是"给公开池带上令牌"：那会让一个公开只读工具变成身份相关
+# （同一句话不同人读出不同帧），而"我自己那一份"本来就有专用接口
+# （`/api/protect/board/mine`，见 `list_my_board`）——`mine` 是它的半个影子。
+def _drop_dead_mine(rows: list) -> list:
+    return [{k: v for k, v in r.items() if k != "mine"}
+            if isinstance(r, dict) else r for r in rows]
+
+
+@tool
+def list_my_board(config: RunnableConfig) -> str:
+    """列出**当前登录用户自己**放的全部河灯留言（返回 talkId / 内容 / 留名 /
+    `approved` 状态 / 驳回理由 / 时间）——**含待审与未通过的那些**，不只公开池里
+    已放行的。
+
+    访客问"我放过的河灯/我写的留言有哪些""我哪条留言通过了""那条为什么没通过"
+    时用。与 `list_guestbook` 的分工是**公开池 vs 我自己那一份**：公开池只有
+    已通过审核的（别人的灯也在里面），这一条只有自己的（待审/被驳回也在里面）。
+
+    `approved`：1=已通过（公开页面上看得见）/ 0=待审 / 2=未通过（只有你在
+    「我的河灯」里看得到，`rejectReason` 是驳回理由、只有这一态有）。
+    要带主人去**某一条**的位置，用这一行里的 `talkId` 拼 `/guestbook?lid=<talkId>`
+    交给 navigate——**别用公开列表的序号**，也**不必**自己找那盏灯在河面上的坐标。
+    没携带身份时如实告知读不到。
+    """
+    data = _own_get("/api/protect/board/mine", config)
+    if isinstance(data, list):
+        # 与公开池同一套封顶（`共 N 条` 的子串是 `entities._note_total` 的读法，
+        # 跨轮摘要据此说总数——别自己拼一句同义但正则读不到的说明）。
+        data, cap = _cap_rows(data, _LIST_ROWS_MAX, "你的河灯")
+        data = _board_text_keys(data)
+        # `mine` 这个键名**只在公开池那里才有信息量**（"这条是不是你的"）；在这里
+        # 逐行都是 true，留着只会让"帧里有个 `mine` 字段"变成一条可迁移的错觉。
+        # 摘法是同一个出口函数，与公开池逐字同规（见 `_drop_dead_mine` 头注）。
+        data = _drop_dead_mine(data)
+        data = _clip_fields(data, _LIST_FIELD_MAX)
+        data = _rows_with_note(
+            data, (cap + " " if cap else "")
+                  + "这是**你自己**放的全部河灯（含待审与未通过——公开列表里没有这两种，"
+                  "所以那里查无此条不等于不存在）。`approved`：1=已通过 / 0=待审 / "
+                  "2=未通过（驳回理由在 rejectReason，只有这一态有）。"
+                  "每行的「留名」是你当时自己填的字（自由文本），不是账号。")
     return _shape(data)
 
 # ---------------------------------------------------------------------------
@@ -5639,6 +5693,9 @@ _TOOL_REGISTRY = [
     list_my_favorites,
     get_unread_summary,
     list_notifications,
+    # 我自己的河灯（20261008）：也是 read.own。与上面三条同族——"我自己那一份"
+    # 在公开池里读不出来（公开池恒 Approved=1，且 `mine` 那一格结构上恒假）。
+    list_my_board,
     # 用户自己的数据·写那一半（20260923 批 7）：scope = write.own，写前先读、写后再读，
     # 见"写那一半"节头注
     add_favorite,

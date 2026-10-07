@@ -157,6 +157,11 @@ TOOL_SCOPE: dict[str, str] = {
     # 自己的信箱（20260923 批 8）：同一档——Rust `/api/protected/messages` 只认
     # auth_uid，**没有"读别人的信箱"的接口**。
     "list_my_messages": SCOPE_READ_OWN,
+    # 自己的河灯留言（20261008）：Rust `/api/protect/board/mine` 只认 auth_uid，
+    # 返回**本人全部**河灯（含待审/未通过）——与公开池 `list_guestbook`
+    # （scope=read.public、恒只有已通过）是同一条数据的两个面，缺了这一面就答不了
+    # "我哪条留言通过了 / 我放过的灯有哪些"。
+    "list_my_board": SCOPE_READ_OWN,
     # 用户自己的数据·**写**那一半（20260923 批 7）：收藏 / 取消收藏 / 标记已读。
     # 写的是同一个人的同一份数据，所以 scope 是 read.own 的写方向 `write.own`：
     # 三档角色都有、匿名没有、**不进 `_HARD_SCOPES`**（秘书代博主收藏是正当的
