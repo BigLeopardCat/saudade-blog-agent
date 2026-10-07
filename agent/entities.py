@@ -177,6 +177,40 @@ def _entry_digest(data) -> str:
     return f"{head}: " + _join(items) if items else ""
 
 
+# 审核态 → 中文（与后台「我的河灯」页签的标签、复核用语同源：上游 `talks.rs` 的
+# 口径是 1=通过 / 0=待审 / 2=未通过）。**读不出就写"状态未知"**，不许兜成"待审"
+# ——那会把"这一格没读到"说成一条审核结论，正是本仓最不能忍的那类假话。
+_BOARD_STATE_WORD = {1: "通过", 0: "待审", 2: "未通过"}
+
+
+def _my_board_digest(data) -> str:
+    """我的河灯（20261008）：`talkId` + 状态 + 分类 + 内容首段。
+
+    比 `_entry_digest` 多两样，两样都是这条通道**独有**的：
+      · **状态**（通过/待审/未通过）——这条通道存在的全部理由就是它（公开池只有
+        已通过态，"我哪条留言通过了"在那边读不出来）；
+      · **`talkId`**——`/guestbook?lid=<talkId>` 这个位置形态的取值就是它（见
+        `agent/context.py::_item_link_fact()`）；摘要里带上，下一轮
+        「带我去那条」才不用重查一遍。
+    """
+    rows = _rows(data)
+    if not rows:
+        return ""
+    items = []
+    for i, r in enumerate(rows[:_ITEM_MAX], 1):
+        state = _BOARD_STATE_WORD.get(r.get("approved"), "状态未知")
+        body = _clip(r.get("content") or r.get("talkContent") or "", 18)
+        if not body:
+            continue
+        tid = r.get("talkId")
+        head = f"{i}.talkId:{tid}" if isinstance(tid, int) else f"{i}."
+        cat = _clip(r.get("cat") or r.get("talkTitle") or "", 4)
+        items.append(f"{head}[{state}]" + (f"〔{cat}〕" if cat else "") + f"「{body}」")
+    total = _note_total(data)
+    head = f"最近{len(rows)}条/共{total}条" if total > len(rows) else f"最近{len(rows)}条"
+    return f"我的河灯 {head}: " + _join(items) if items else ""
+
+
 def _category_digest(data) -> str:
     rows = _rows(data)
     if not rows:
@@ -387,6 +421,10 @@ _DIGESTERS = {
     # 站内信（20260923 批 8）：`{inbox, outbox, unread}` 形态，不是"行列表"，
     # 所以进不了 `_rows` 那族摘要器
     "list_my_messages": _mailbox_digest,
+    # 我自己的河灯（20261008）：与公开池 `list_guestbook` 共用 `_entry_digest` 会丢掉
+    # 两样这条通道独有的东西——**状态**与 **`talkId`**，而"我哪条通过了""带我去那条"
+    # 要的正是它们（见 `_my_board_digest`）。
+    "list_my_board": _my_board_digest,
 }
 
 

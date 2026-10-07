@@ -51,7 +51,16 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 
 
 READ_TOOLS = ["list_my_favorites", "get_unread_summary", "list_notifications",
-              "list_my_messages"]
+              "list_my_messages", "list_my_board"]
+
+# 「我自己的河灯」（20261008）：与上面四条同族（`_own_get` / read.own / 零请求的
+# 未登录分支），但它不是"原样透出"——帧要经 `_board_text_keys`（`author`→`留名`）、
+# 摘掉恒假的 `mine`、按 `_clip_fields` 封顶、尾巴挂一条系统注记。所以它不进下面那个
+# `CASES` 循环（那条契约对它不成立），单列在 ②c。
+BOARD_MINE = [{"talkKey": 109, "talkTitle": "", "content": "今天的月亮很好看",
+               "cat": "诉", "v": 3, "author": "Sora", "nickname": None,
+               "avatar": None, "mine": True, "approved": 1, "rejectReason": None,
+               "createTime": "2026-10-01 12:00:00", "updateTime": "2026-10-01 12:00:00"}]
 
 # 三个端点的返回样本（形态抄自 src/routes/profile.rs 的 FavoriteDto /
 # UnreadDto / NotificationListDto，字段名一个不差——它们是 Python↔Rust 的契约）
@@ -223,6 +232,56 @@ try:
     out = base.list_my_favorites.invoke({}, config=cfg(7))
     check("收藏为空 → 原样透出 '[]'（不是 unavailable、不是『暂无收藏』这种人话）",
           out == "[]" and not getattr(out, "kind", ""), f"{getattr(out, 'kind', '')}: {out}")
+finally:
+    base._client = real_client
+
+
+# ══════════════════════════════════════════════════════════════════
+print("\n②c 我自己的河灯（20261008）：读得到『我哪条通过了』，帧里带 `talkId`")
+
+# 动机（主人报的现场）：问「带我去看看我已经通过的留言」时，公开池 `list_guestbook`
+# 恒 `Approved=1` ⇒ **"我哪条通过了"这个问题在那边结构上问不出来**；而公开池每行的
+# `mine` 是上游按"有没有 uid"算的，本工具的 `_get("/board")` 不带令牌 ⇒ 那一格恒假。
+# 于是模型只能空转（trace `20261008T024742`：`list_guestbook` 连点两次 → 重复拦截 →
+# 收尾轮编出"已经带你过去了"）。这一条补的正是那个缺掉的读通道。
+try:
+    c = _Client(_Resp(200, {"code": 200, "data": BOARD_MINE}))
+    base._client = c
+    out = base.list_my_board.invoke({}, config=cfg(7))
+    check("打的是「我的河灯」那个端点（不是公开池的 /board）",
+          c.calls and c.calls[0][0].endswith("/api/protect/board/mine"), str(c.calls))
+    check("★ 帧里 id 是 `talkId`（`/guestbook?lid=` 要填的正是它）",
+          "'talkId': 109" in out and "talkKey" not in out, out[:120])
+    check("★ 审核态原样在（0/1/2 三态是这条通道存在的理由）", "'approved': 1" in out)
+    check("驳回理由那一格原样在（approved=2 时才有值）", "rejectReason" in out)
+    check("留名按公开池同规改名（`author`→`留名`，措辞不许让 planner 读成账号）",
+          "'留名': 'Sora'" in out and "'author'" not in out, out[:120])
+    check("★ 恒假的 `mine` 被摘掉（留着就是系统在说『这条不是你的』这种假话）",
+          "'mine'" not in out)
+    check("帧尾有系统注记，写明它含待审/未通过（公开池里没有这两种）",
+          "〔系统注记〕" in out and "待审" in out)
+
+    c = _Client(_Resp(200, {"code": 200, "data": BOARD_MINE}))
+    base._client = c
+    out = base.list_my_board.invoke({}, config=cfg(0))
+    check("未登录 → kind=unavailable 且**零请求**（读不到 ≠ 是空的）",
+          out.kind == "unavailable" and c.calls == [], f"{getattr(out, 'kind', '')}: {out}")
+    check("未登录的措辞里没有『管理员』、也不给主人派活",
+          "管理员" not in str(out) and "登录" not in str(out), str(out))
+
+    # 空是事实：注记照挂、没有 dict 行（摘要器因此不产摘要，退化成"无摘要"）
+    c = _Client(_Resp(200, {"code": 200, "data": []}))
+    base._client = c
+    out = base.list_my_board.invoke({}, config=cfg(7))
+    check("一条都没有 → 帧仍是结构化文本（不塌成 unavailable，也不编『暂无』这种人话）",
+          "〔系统注记〕" in out and not getattr(out, "kind", ""), f"{out[:60]}")
+    check("  ↑ 空列表下摘要器不产摘要（没有值可取，不是把 0 编成一条）",
+          receipt_digest("list_my_board", out) == "")
+
+    # 摘掉 `mine` 是**逐行**的（公开池那一半也走同一个出口），别只对本人那一份生效
+    check("摘 `mine` 对公开池的行同样生效（同一个出口函数）",
+          "'mine'" not in base._shape(base._drop_dead_mine(
+              [{"talkId": 1, "mine": False}])))
 finally:
     base._client = real_client
 

@@ -1428,8 +1428,11 @@ def test_phantom_tool_claim():
     # 65 → 66 是 20261006 的后台账号名录一件：list_accounts（读
     # `GET /api/temp-users`——那一族账号**写**技能的参数契约都写着"账号名必须能在
     # 后台账号列表里看到"，而这件是那句话的唯一读入口）。
+    # 66 → 67 是 20261008 的我自己的河灯一件：list_my_board（读
+    # `GET /api/protect/board/mine`——公开池恒 Approved=1，且那几行的 `mine`
+    # 结构上恒假，"我哪条留言通过了"只有这件读得出来）。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 66 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 67 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 

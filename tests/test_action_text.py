@@ -339,6 +339,8 @@ _NO_LEGACY_ARM = _DEAD | {
     "account_mute", "account_unmute",  # 20261002 内容风控下放：同上，动作词只在 Python 侧
     "list_accounts",               # 20261006 后台账号名录：同上（账号写族那句"账号名必须
                                    # 能在后台账号列表里看到"的读入口，读 GET /api/temp-users）
+    "list_my_board",               # 20261008 我自己的河灯：同上（读 GET /api/protect/board/mine；
+                                   # 措辞刻意与公开池的"查看留言板"分开，见 action_text 里那条注）
 }
 
 _rs = _parent_repo.read(

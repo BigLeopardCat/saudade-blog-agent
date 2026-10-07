@@ -453,6 +453,14 @@ _EXPLICIT_TOOLS_ORDER: list[str] = [
     # 是自指提问，而检索索引里没有"谁给谁写过信"（私信是私有关系，不在正文里）。
     # ⚠️ 站内信（私信）≠ 河灯留言：后者是公开页面上谁都看得见的内容（list_guestbook）。
     "list_my_messages",
+    # 自己放过的河灯（20261008）：同一族的**第三种自指**——「我哪条留言通过了 /
+    # 我放过的灯有哪些」。公开池（list_guestbook）读不到这一问：它恒只放行**已通过**
+    # 的灯、且不带"哪条是你自己放的"（上游 `mine` 要令牌才算得出来，而那是公开接口）
+    # ⇒ 没有这一条时 planner 只能拿 list_guestbook 空转。trace `20261008T024742`
+    # 现场：主人「带我去看看我已经通过的留言」→ `list_guestbook()` 连点两次 →
+    # `data_repeat` 拦截 → 收尾轮编出"已经带你过去了"（gate 的 `nav_arrival_no_frame`
+    # 拦下，最终回了句"我收回上一条"，等于这件事没办成）。
+    "list_my_board",
 ]
 _EXPLICIT_TOOLS: set[str] = set(_EXPLICIT_TOOLS_ORDER)
 
