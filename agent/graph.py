@@ -5302,7 +5302,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
             # 有帧就基于帧收尾（narrator 仍能正常叙述），无帧走 chat 诚实答复。
             logger.warning("[planner] LLM 异常，兜底收尾计划: %s", e)
-            plan_obj = _wrap_up_plan(has_frames)
+            # 原因如实（同 dedupe 那一处）：这是**规划这一步没跑成**，不是轮次用满
+            # ——默认文案会说成「已达规划轮次上限（4）」，而 narrator 会照着它组织回复。
+            plan_obj = _wrap_up_plan(
+                has_frames, reason="本轮规划这一步没有跑完（服务抖动），不再新增调用")
             return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
         # 20260830：慢调用监控——打 WARN（正常 <5s，慢=服务端排队/长思考，
         # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）。
@@ -6131,7 +6134,13 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             if not pending:
                 logger.info("[planner] 动作已执行（%s），去重收尾",
                             "、".join(sorted(planned_names)))
-                plan_obj = _wrap_up_plan(True)
+                # 收尾原因**必须如实**（`_wrap_up_plan` 头注那条规则，20260912 立的）：
+                # 这里走的是"这一轮的动作已经做过、不重复做"，与轮次上限毫无关系——
+                # 沿用默认文案会告诉 narrator「已达规划轮次上限（4）」，而它真的照这句
+                # 话去组织回复（trace `20261008T023239`：同一轮已经跑过文章详情/跳转/
+                # 未读汇总三个工具，回复却说「本喵这一轮没有任何工具可用」）。
+                plan_obj = _wrap_up_plan(
+                    True, reason="本轮该做的动作**已经执行过**（见上方工具返回），不重复执行")
                 return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                         "done": False}
             logger.info("[planner] 动作重复（%s）但意图清单仍有未完成项（%s）→ 不收尾",
