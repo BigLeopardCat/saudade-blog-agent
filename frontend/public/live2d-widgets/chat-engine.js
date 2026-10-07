@@ -54,6 +54,18 @@
       // 之前只做"不在底部就不滚"，导致翻过历史后新对话永远不可见——补上指示条。
       let userAtBottom = true;
       let newMsgPending = false;
+      // 程序化写入的「身份证」（20261008）：下一枚 scroll 事件若是我们自己写 scrollTop
+      // 招来的，就不许拿它去判「主人滚走了」。**为什么必须分来源**：scroll 事件不是写完
+      // 就派发的（要等下一个渲染机会），而它送到时读到的 scrollHeight 可能已经被新内容
+      // 顶高了 60px 以上——60px 就是本文件那条阈值 ⇒ 一次自己招来的事件被读成「主人翻上去
+      // 读历史了」⇒ userAtBottom 翻成 false 且**再也翻不回来**（真人滚一下才有新事件）
+      // ⇒ pin() 静默早退、scrollToBottom 只亮提示条 ⇒ 症状＝「新消息来了窗口不跟着往下
+      // 滚」，而且连提示条都没亮。线上探针实测（20261008，访客身份）：写入 261 被浏览器
+      // 夹成 78（＝当刻的 max），23ms 后事件送到时 scrollHeight 已涨到 335 ⇒ 距底 74 ≥ 60
+      // ⇒ 此后写入 0 次、事件 0 次。生产里顶高那一下＝网络分片 / 贴纸图片晚 900ms 到位
+      // （102px）/ markdown 增强长高——全都不小于 60px。
+      let selfScroll = false;
+      const setTop = (el, v) => { selfScroll = true; el.scrollTop = v; };
       const newMsgNote = ctx.dom.newMsgNote;
       const showNewMsgNote = () => {
         if (newMsgPending) return;
@@ -70,9 +82,17 @@
       }
       try {
         messages.addEventListener('scroll', () => {
+          // 自己招来的那一跳不代表主人离开了底部（见 selfScroll 的注释）
+          if (selfScroll) { selfScroll = false; return; }
           userAtBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 60;
           if (userAtBottom) hideNewMsgNote();
         }, { passive: true });
+        // 真人手势一到就作废那张「身份证」：万一某次程序化写入没招来 scroll 事件
+        // （值被夹成原值就没有事件），身份证会挂在那儿把**下一枚真事件**吃掉一次。
+        // 手势清票把那个窗口压到两次事件之间，而且清票后紧接着就是真事件。
+        ['wheel', 'touchstart', 'touchmove', 'keydown', 'pointerdown'].forEach((t) => {
+          messages.addEventListener(t, () => { selfScroll = false; }, { passive: true });
+        });
       } catch(e) {/* ignore */}
       // 消息内图片单击放大（20260901）：复用文章页 zoomOverlay——React 全局注册
       // window.__openZoomOverlay（App.tsx 副作用 import），样式在全局 App.sass；
@@ -104,7 +124,7 @@
           requestAnimationFrame(() => {
             if (!force && !userAtBottom) { showNewMsgNote(); return; }
             hideNewMsgNote();
-            el.scrollTop = el.scrollHeight;
+            setTop(el, el.scrollHeight);
           });
         });
       };
@@ -118,10 +138,22 @@
       // 用户上翻读历史（userAtBottom=false）自动不打扰，恢复"有新消息"指示条语义。
       try {
         if (typeof ResizeObserver !== 'undefined' && messages) {
+          let pinnedHeight = 0; // 上一次钉底时的内容高度：用来判「内容真长高了没有」
           const pin = () => {
-            if (!userAtBottom) return; // 用户在历史区：不拽走
+            const h = messages.scrollHeight;
+            if (!userAtBottom) {
+              // 用户在历史区：不拽走，但**必须把「有新消息」亮起来**（20261008）。
+              // 此前这里是静默 return，而流式期间真正在跑的就是这条 pin（不是
+              // scrollToBottom）⇒「停摆」这件事既没有滚动、也没有提示条，主人能看到的
+              // 只有"新消息不滚了"这一个现象（线上探针实测：全程 0 次写入、提示条 0 次亮起）。
+              // 只有内容真长高才亮：窗口 resize 同样会敲 pin，那种情况不报「有新消息」。
+              if (h > pinnedHeight) showNewMsgNote();
+              pinnedHeight = h;
+              return;
+            }
+            pinnedHeight = h;
             hideNewMsgNote();
-            messages.scrollTop = messages.scrollHeight;
+            setTop(messages, h);
           };
           // ① 容器本身：覆盖 hidden→visible 首帧这类"容器自己变了"的情况
           new ResizeObserver(pin).observe(messages);
@@ -325,6 +357,9 @@
           const mr = m.getBoundingClientRect();
           const er = el.getBoundingClientRect();
           if (!mr.height) return;
+          // 这里**故意不走 setTop**（20261008）：定位命中是把主人送到历史里某一条，
+          // 本来就该离开底部 ⇒ 由此产生的 scroll 事件理应把 userAtBottom 翻成 false，
+          // 之后来的新消息才不会又把主人拽回底（那才是 20260828f 那个诉求）。
           m.scrollTop += (er.top + er.height / 2) - (mr.top + mr.height / 2);
         };
         place();
