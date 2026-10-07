@@ -3276,8 +3276,14 @@ def set_article_status(
         payload["status"] = want_status
     if want_top is not None:
         payload["isTop"] = want_top
-    # ★ 刻意**不发** title/content（会触发 from_editor 分支：重定向 + 级联删修改稿）、
+    # ★ 刻意**不发** title/content（会触发 from_editor 分支：重定向 + 级联删修改稿
+    #   + **署名回填**——`update_note` 里 `should_backfill_author(NULL, from_editor)`）、
     #   不发 isPublic（由 status 联动）、不发 updateTime（Rust 自己写 updated_at）。
+    #   ⚠️ 最后那半句是 20261007 补的：署名回填原先**不看 from_editor**，于是这条元数据
+    #   路（以及 `set_article_tags` 那条）只要碰上 `user_id` 为 NULL 的老文章，就会把
+    #   **操作者**记成文章作者。生产实证 = 文章 23 被评测身份 uid 721 这样记上，而且
+    #   「只在为空时补写」让它再也改不回来。所以这条"不发 title/content"现在同时是
+    #   署名判据的前提——别把它当成单纯的"少触发一个分支"。
 
     # 已经就是目标值 → **不发这个请求**。`update_note` 无条件刷新 updated_at，
     # 一次空改动会把文章顶到列表最前（纯副作用、无收益）。
@@ -3407,6 +3413,9 @@ def set_article_tags(
 
     # `noteTags` 是"传了就写"，`""` = 清空 ⇒ 只有 replace（含 replace=[]）才可能产出空串；
     # add/remove 路径下 new 至少含一个元素或被上面的 new==cur 拦下。
+    # ⚠️ 与 `set_article_status` 同一条纪律：**不发 title/content**（元数据写不是"发布"，
+    #    不该触发 `update_note` 的 `from_editor` 分支——含**署名回填**；20261007 那起
+    #    "文章 23 被记成 uid 721" 正是这一条路，说明见那边那段注释）。
     data = _admin_post(f"/api/protected/notes/{aid}", {"noteTags": A.join_tag_ids(new)}, config)
     if isinstance(data, ToolResult):
         return data

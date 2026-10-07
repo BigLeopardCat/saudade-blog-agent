@@ -571,6 +571,12 @@ post = _Post("1")
 seq = _Seq(note(12, "架构", "private", 0), note(12, "架构", "public", 0))
 with patch(_read_note=seq, _admin_post=post):
     r = base.set_article_status.invoke({"article_id": 12, "status": "public"}, config=cfg())
+    # 载荷里**有没有 title/content** 不只是"少触发一个分支"：Rust 侧 `update_note` 用它
+    # 算 `from_editor`，而 `from_editor` 同时判**草稿重定向 / 级联删修改稿 / 署名回填**
+    # （`should_backfill_author(user_id IS NULL, from_editor)`）。20261007 那起"文章 23
+    # 被记成 uid 721"就是元数据写撞上 `user_id` 为 NULL 的老文章：署名回填当时**不看**
+    # `from_editor`，写标签的人被记成了作者，而"只在为空时补写"让它再也改不回来。
+    # 所以下面这条断言现在同时是**跨仓署名契约**的守卫（Rust 侧已同步收紧判据）。
     check("正常路径：**只发 status**（不发 title/content/isPublic/updateTime）",
           post.calls == [("/api/protected/notes/12", {"status": "public"})], str(post.calls))
     check("  回执 meta：op / article_id / 前后值（白名单那一半逐键相等）",

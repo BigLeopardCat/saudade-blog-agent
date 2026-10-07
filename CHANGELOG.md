@@ -233,6 +233,28 @@
   `task_declare` >0）与完整读数见 `docs/adr/adr-0002-task-state-model-declared-intent.md` 文末
   《20261007 去留复核》。
 
+- **元数据写不再把操作者记成文章作者（跨语言契约，20261007；Rust 侧 `src/routes/notes.rs`，
+  本仓只改注释与一条判据描述）**：主人报「文章 23《Python asyncio 异步并发》为什么是 721 用户
+  了」。根因在 Rust 侧 `update_note` 的署名回填——它原先只判 `user_id IS NULL`、**不判这一笔
+  是不是"发布"**，于是**任何**一次写都会把**写的人**记成作者，而 20261001 那份迁移写明的契约
+  是「只有**发布**那条路径写这一列」。撞上的是本仓：20261007 08:26:52 评测跑以 uid 721
+  （`GOLDEN_ADMIN_UID`，评测专用管理员）执行 `set_article_tags(article_id=23)` ⇒
+  `POST /api/protected/notes/23`；那一行当时 `user_id` 为 NULL（20261001 迁移**零回填**，
+  之前发布的老文章一律 NULL）⇒ 被记成 `agent_test_admin_721`。`update_note` 的「只在为空时
+  补写」（本意 = 别人编辑不该改署名）又把误记**固化**了：主人 18:26/20:11 三次在后台编辑器里
+  保存都动不了它 ⇒「无论怎么提交都是 721」。**修法**（父仓）= 回填加 `from_editor`
+  （`payload.title`/`content` 至少一个，即"从编辑器提交的完整发布"），并抽成纯函数
+  `should_backfill_author` 配单测。**本仓要知道的那一条**：`set_article_status` /
+  `set_article_tags` **刻意不发 title/content** 现在**同时是署名判据的前提**（不只是"少触发
+  一个分支"）——漏发一次就复现这个 bug，所以 `tests/test_admin_write.py` 那条断言从"顺带
+  检查载荷"升格成跨仓契约守卫；两处注释同步写明。站内数据（文章 23 那一行、以及 721/722
+  名下同族的行）由迁移 `note_author_meta_write_fix_20261007.sql` 还原成 NULL（= 未记录 ⇒
+  回退站点级署名）；脚本幂等（flag `note_author_meta_write_fix_20261007`，重跑是空操作），
+  已按主人点头执行。**语料口径同步**：`eval/golden/basic.jsonl` 四个写用例的 `_note` 原先记着
+  「18:26 那次保存把 `user_id` 从 NULL 补成 721」，与全天写记录不符——四次写
+  `/api/protected/notes/23` 里只有 08:26:52 那次身份是评测管理员，其余三次读到的原值已非
+  NULL 故**没动它**（判据是「键在不在场」）；只改散文，断言部分一个字节没动。
+
 ## 20261006
 
 - **写参数的出处闸：planner 不再替主人编一件待办（行为 + 判据，20261006）**：主人一句话里带
