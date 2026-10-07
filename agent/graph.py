@@ -95,7 +95,8 @@ from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES
                              _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
                              _effect_switch_fast_path, _intent_done, _intent_hints,
-                             _nav_fast_path, _scan_action_intents, _search_terms,
+                             _nav_fast_path, _referent_nav_fast_path,
+                             _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
 from agent.entities import receipt_digest
 from agent.factblock import (action_facts, is_action_family, is_block_family,
@@ -1951,6 +1952,42 @@ def _nav_present_claim(text: str, page_ctx: str, exec_memory: bool = False) -> b
     return bool(_nav_present_claim_clause(text, page_ctx, exec_memory))
 
 
+def _nav_no_frame_clause(text: str, skill: str, exec_memory: bool = False) -> str:
+    """本轮**没有任何导航命令**时，"带你过去/已经带你到"声称的子句；"" = 放行。
+
+    与零帧族表里那几族的分工：本函数**不读帧、也不读回执**（它只回答"这句话里有没有
+    这一族词形"），"这一轮到底有没有导航命令"由调用点（`_claim_issue`）先判——射程
+    那一格因此只写在两处注释里，不会散成第二个判据。
+
+    `exec_memory` 那一格与洞①/② 共用同一条**追述豁免**（`_prior_time_veto`）：
+    "刚才已经带你跳过去了"在带跨轮回执的轮次里是 rule 6 的据实转述，不是本轮的空手
+    声称——把它判掉，代价是整轮回复被兜底顶掉，而兜底那句反过来还会否认一件真发生过
+    的事（同族误伤见 `_state_action_claim` 的长注）。豁免是**子句级**的：逗号另一侧
+    的"页面这就过去"照判。
+
+    两臂射程与两层豁免的来历见 `_NAV_COMMIT_RE` 上方那段长注。**如实措辞豁免的残留**
+    如实记在这里：宽完成式那臂是**整回复级**豁免（原 5b2 的口径），所以一句
+    "站内搜'设计文档'没有命中，不过马上带你去那一篇"仍可能溜过①②支——现场那句里
+    没有这些词，当场拦得住。要不要把豁免收窄到子句级，等有第二例现场再定（收紧的
+    代价落在 navigate 注记轮那一边，那里最不能误伤）。
+    """
+    if skill == "navigate" and any(k in text for k in _HONEST_GONE + _HONEST_DOWN):
+        return ""                       # 原 5b2 的如实豁免（只喂宽完成式那一臂的口径）
+    veto = _prior_time_veto(exec_memory)
+    for s in _SENT_RE.split(text or ""):
+        for c in _CLAUSE_RE.finditer(s):
+            clause = c.group(0)
+            if _NAV_COMMIT_EXEMPT_RE.search(clause):
+                continue
+            if veto and veto(clause):
+                continue                # 追述时间词 = 引回执（rule 6），同洞①/②
+            if _NAV_COMMIT_RE.search(clause):
+                return clause
+            if skill == "navigate" and _NAV_ARRIVAL_RE.search(clause):
+                return clause
+    return ""
+
+
 # ── 洞⑪ 的第二半：零帧轮的**特效/夜间模式状态**声称 → 与实时上报核对（20261002）──
 # 与页面那半**同一个洞、同一个形状**（核真值，不猜词形）：页面那半的真值是 `page=`，
 # 这半的真值是同一条系统上下文里的 `current_effects=` / `current_darkmode=`（浏览器
@@ -2419,6 +2456,53 @@ def _cmd_prefix_hit(text: str) -> str:
 # NAVIGATE: 后回复"已经带您到文章页"，用户视角即幻觉）。仅 navigate 技能轮启用。
 _NAV_ARRIVAL_RE = re.compile(
     r"(已经?带|已经?到|已经?跳转|跳转成功|成功[^\n。，,]*?(跳|转)|过去了|已经?去)")
+# ── 洞⑭ 承诺式/完成式"带你过去"声称，而这一轮**一条导航命令都没有**（20261007）──
+# 现场（trace 20261007T232014，主人三字「带我过去」）：planner 两次 `finish=stop`
+# （零工具，第二次还是 `_NO_CALL_NUDGE` 之后的）⇒ 计划 = chat/answer_only ⇒ narrator
+# 写出「好嘞妈妈～马上带你去我的设计文档那一篇（《…架构文档》，/article/19），页面这
+# 就过去喵！」——这一轮**一条导航命令都没有**，页面不会动一下。三处缺口合起来才漏掉它：
+#   ① 承诺式的施事是**模型/页面**，不是"我调用了工具" ⇒ 零帧族表里的
+#      `claim_without_tool`（只认第一人称**工具调用**声称）看不见它；
+#   ② 原 5b2（`nav_arrival_no_frame`）的入口写死在 `plan["skill"] == "navigate"` 上
+#      ——这一轮计划是 chat，整条判据**根本没跑**；
+#   ③ 就算跑到，`_NAV_ARRIVAL_RE` 只认**完成式**（已经?带/已经?到/过去了…），而
+#      "马上带你…／页面这就过去"是**承诺式**，一个词都不匹配。
+# 判据因此改挂在"**这一轮有没有导航命令**"上（技能无关；凭据同批 2 的规矩——只认
+# 已验收回执，帧原文里早就没有命令了），词形补上承诺式那半。
+#
+# 这是**同一形状的第二例**：上一例是 20261002T020256（主人「猫咪带我去你的设计文档」，
+# 站内没有这个页面），那一轮的回声是「物联网平台页面已经打开啦」——它被洞⑪ 那一族
+# 拦住了，而拦住它的**不是**这一族（该族那时同样被 skill 限住，注释写在洞⑪ 的起因里）。
+# 两例的差别正是本族不可省的理由：洞⑪ 核的是**现在的位置**（要求句中带上 NAV_MAP 里
+# 的页面名），而今晚这句说的是**将来**、且宾语是一篇文章的标题（《…架构文档》）——
+# 真值族在这句话上**无从核对**，只有"这一轮有没有导航命令"这一条问得出来。
+#
+# 两臂的射程**刻意不同**（不是冗余，是两套代价；别在下一版里抹平）：
+#   · ①②支（承诺式）+ ③支（**窄**完成式：已经/成功 + 带你 + 移动动词）——**任何技能**
+#     都判。词形都要求施事与动词紧挨着，误伤面小。
+#   · 宽的 `_NAV_ARRIVAL_RE`（"已经到"/"过去了"，不要求施事）**仍只在 navigate 轮**判：
+#     它在 navigate 轮里跑了一年（D1 现场锁在 `tests/test_nav_truthfulness.py`），
+#     而"已经到这一步了/时间过去了"在没有导航的 chat 轮里是正常的比喻说法——放宽
+#     射程的代价是整轮回复被兜底顶掉。
+#   · **如实措辞豁免也分两层**：宽完成式那臂吃**整回复级**的 `_HONEST_GONE/_HONEST_DOWN`
+#     （原 5b2 的口径原样保留，navigate 注记轮"站内没有这个页面/已下线"的答复由系统
+#     注记教出来，最不能误伤）；承诺式与新完成式那两臂只吃**子句级**豁免——一句
+#     "马上带你过去"配不配"没有"都不改变"页面不会动"这个事实。残留在代码里如实记着
+#     （见 `_nav_no_frame_clause`）。
+_NAV_COMMIT_RE = re.compile(
+    r"(?:马上|这就|立刻就|立刻|现在就|即刻|立马)[^。！？\n，,]{0,8}?(?:带你|带您|把您?带)"
+    r"|页面[^。！？\n，,]{0,8}?(?:这就|马上|立刻|现在就)[^。！？\n，,]{0,6}?(?:过去|跳|转)"
+    r"|(?:已经|成功)[^。！？\n，,]{0,6}?(?:带你|带您)(?:去|到|过去|跳|转)"
+)
+# 子句级豁免：疑问/提议/条件/能力罗列/元讨论/否定/引述。**"马上/这就"不在这里**——
+# 它们在 `_NAV_PRESENT_EXEMPT_RE`（洞⑪）里是"说的是将来、不是现在"的豁免词，而在这
+# 一族里恰恰是**承诺的标记**：同一个词在两族里的含义相反，别把那张表抄过来。
+_NAV_COMMIT_EXEMPT_RE = re.compile(
+    r"没|没有|未|无法|不能|不用|不需要|别|并不是|不是"
+    r"|可以|能够|能帮|如果|若是|要是|若|一旦|假如|除非|要不要|要不|需要的话|建议"
+    r"|随时|待会|等下|接下来|准备|打算|你说|你问|你提到|引用|原话"
+    r"|能力|功能|技能|工具|机制|白名单|系统支持|板块"
+    r"|吗|吧|么|[?？]")
 # ── 具名工具声称核对（20260913 C 项："有帧"≠"你点名的工具执行过"）────────────
 # 15:51 实证：planner 第 3 轮点名 get_social_links（越权被白名单剥掉、execute 没
 # 执行、无该工具的帧），本轮 frames=2（rag_search/get_article_detail）→ 旧判据
@@ -3821,7 +3905,8 @@ def _zero_frame_families(plan: dict, skill: str, role: str | None = None) -> lis
         守卫写"本轮无 nav/effect 回执"。
         ⚠️ **别把这一格读成"有帧轮的同类声称已经有人管"**（20261003 实测：直接调
         `_unsupported_deed_claims` 喂本轮回执 + 串台原句，结论见 roadmap 同日④）：
-        5b/5b2 只判**这一轮有没有导航发生过**，不判**跳到的是哪一页**——
+        5b/5b2（后者 20261007 迁成洞⑭）只判**这一轮有没有导航发生过**，
+        不判**跳到的是哪一页**——
         「真跳了留言板却说成时间轴」在那儿是**空集**（`_ACTION_ENTITY_VOCAB` 只收
         特效×{sakura,rain,snow} 与夜间，没有任何页面实体）；特效那一半**被 5h 看见**
         （喂"真开樱花、说成雪花"命中 `('雪花特效', …)`），只是本轮有命令族回执时
@@ -3930,7 +4015,8 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                  receipts: list | None = None,
                  noop_specs: list | None = None,
                  page_ctx: str = "",
-                 role: str | None = None) -> tuple[str, str, str] | None:
+                 role: str | None = None,
+                 nav_errored: bool = False) -> tuple[str, str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本, **被否掉的那一句**)；有据/无声称 → None。
 
@@ -3955,6 +4041,15 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         事实 premise 由 `_has_real_change(receipts, noop_specs)` 给（缺 `noop_specs`
         ⇒ 全部写回执都算真改动——那是**从严**方向，与"宁漏勿误"相反但更安全：
         只有工具显式声明零改动的才豁免）
+      - 任何轮：**导航承诺/完成**（_nav_no_frame_clause，洞⑭，20261007）——"马上带你
+        过去／页面这就过去／已经带你到了"这类声称，前提是**这一轮压根没碰导航**
+        （既无 NAVIGATE:/AUTO_NAVIGATE: 回执，也没有 `navigate_to` 的 `__ERROR__` 帧
+        ——`nav_errored`。碰了而失败的轮次归 5a 的 `err_frame_claim`）。
+        与帧无关（它否认的是"本轮真执行过
+        跳转"这个系统事实），故同样在这行之前；**技能无关**——原 5b2 把它写死在
+        `skill == "navigate"` 上，20261007 那轮计划落 chat ⇒ 整条判据一次都没跑。
+        射程两臂（承诺式 = 全技能／完成式 = 只 navigate）与两层豁免见 `_NAV_COMMIT_RE`
+        上方长注；事实前提由 `_cmd_wires(receipts)` 给
 
       - 零工具轮（不分技能）：操作完成声称（_STATE_ACTION_CLAIM_RE，洞①）与
         站内检索声称（_site_search_claim，洞②）——零帧 = 本轮什么都没发生，
@@ -4021,6 +4116,32 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                             _has_real_change(receipts, noop_specs)):
         return ("write_change_denial", _FALLBACK_WRITE_CHANGE_DENIAL,
                 _claim_clause(_strip_quoted_spans(reply), _NO_CHANGE_CLAIM_RE) or "")
+    # 洞⑭（20261007）：**这一轮压根没跳成**（已验收回执里既无 NAVIGATE: 也无
+    # AUTO_NAVIGATE:，导航工具也没报过错），回复却说"马上带你过去／已经带你到了"
+    # → 页面不会动。与帧无关（它否认的是"本轮真执行过跳转"这个系统事实），故同样在
+    # `if frames_exist` 之前；**技能无关**——原 5b2 写死在 `skill == "navigate"` 上，
+    # 20261007 那轮计划落 chat ⇒ 整条判据一次都没跑。
+    # **射程上界 = "跳失败"就不判**：`navigate_to` 回了 __ERROR__ 帧（如 `路径无效`）
+    # 的轮次归 5a 的 `err_frame_claim`——那一族的兜底按原因码分，比本族那句"页面不会动"
+    # 准得多；把它抢过来就是拿粗话术盖掉细话术（`test_skills` 的"err 帧 + 完成式声称"
+    # 锁住的正是这条边界）。判据是**帧**不是"有没有 navigate_to 的帧名"：帧只说明工具
+    # 跑过，跳没跳成看的是回执（批 2 的分工），`test_nav_truthfulness` 那条"只有事实帧、
+    # 回执里没有命令 → 仍判"就是这条边界另一侧的哨兵。`nav_errored` 由 gate_node 算
+    # （那里才有 `frames`），本函数只消费。
+    # **导航注记轮**（`plan["status"] ∈ PLAN_STATUS_NAV_NOTE`：已下线/未部署/目标不存在）
+    # 同理不进本族——那一轮的如实文案由 gate 第 4 节的 `not_honest` 按状态逐档选
+    # （`_FALLBACK_DOWN`/`_FALLBACK_GONE`/`_FALLBACK_UNDEPLOYED`，用的是**页面**的
+    # 真相），本族那句"没有执行任何跳转"在那三档里都太粗。
+    # ⚠️ **不放进 `_REPLAN_ISSUES`**：交回 planner 要用 `_replan_note`，那条提示写的是
+    # "这一轮一个工具都没有执行"——有帧时是假话（同原 5b2 的理由，见 `_REPLAN_ISSUES` 的注）。
+    # 判据只认**已验收回执**里的命令（批 2 起帧原文里没有命令了，grep 帧文本是哑判据）。
+    if (not nav_errored and plan.get("status") not in PLAN_STATUS_NAV_NOTE
+            and not [w for w in _cmd_wires(receipts)
+                     if w.startswith(("NAVIGATE:", "AUTO_NAVIGATE:"))]):
+        _nav_clause = _nav_no_frame_clause(_strip_quoted_spans(reply), skill,
+                                           exec_memory)
+        if _nav_clause:
+            return ("nav_arrival_no_frame", _FALLBACK_NAV_NO_FRAME, _nav_clause)
     if frames_exist:
         return None  # 帧存在：声称有据（err 帧/确认帧/具名/检索族场景由 gate_node 兜）
     # 引号内是被转述的访客留言/说说正文，不算 narrator 自己的声称（20260913：
@@ -4331,7 +4452,8 @@ _FALLBACK_UNDEPLOYED = (
     "喵呜……主人，物联网平台在**本站没有部署**（它是可选件，这个站没装），刚才"
     "说得好像站里有一样，是我不好。站里真实能去的页面有："
     f"{_NAV_REAL_PAGES}。要不要我带你逛逛？")
-# 有帧、但**帧里没有导航命令**却声称已到达（20260926，见 gate_node 5b2）。与
+# 有帧、但**本轮没有跳成**却声称已到达（20260926，见 `_claim_issue` 的洞⑭；
+# 20261007 前的老家是 gate_node 5b2，判据的射程与凭据都在那次搬迁里改过）。与
 # `_FALLBACK_GONE` 的区别是**不许说"那个页面不存在"**：这一轮根本没查过页面在不在
 # （缺的往往是参数，比如没说去哪一篇），把"系统没跳"讲成"页面不存在"是拿一句新
 # 假话换一句旧假话。文案只否认"跳过去了"这件事本身，然后把该问的问清。
@@ -4930,6 +5052,17 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             logger.info("[planner] 导航快道命中（零 LLM）: %s", nav["tools"])
             record("planner", "fastpath", kind="nav", tools=nav["tools"], round=rounds)
             return {**plan_state(nav), "plan_rounds": rounds + 1, "done": False}
+
+        # 指代型导航快道（零 LLM，20261007）：上一轮的导航快道只管"目标写在本句里"
+        # 那一种；"带我过去"这一种的目标住在**上一轮那句话**里（泠月自己刚给出的那条
+        # 站内链接），两条快道的入口条件互斥、顺序无关。唯一性（上一轮恰好一条站内
+        # 链接）是守卫，见 `_referent_nav_fast_path` 的长注。
+        referent = _referent_nav_fast_path(user_msg,
+                                           _last_assistant_utterance(state["messages"]))
+        if referent is not None:
+            record("planner", "fastpath", kind="referent_nav",
+                   tools=referent["tools"], round=rounds)
+            return {**plan_state(referent), "plan_rounds": rounds + 1, "done": False}
 
         # 显示意图确定性快道（零 LLM）：屏幕类名词+写/显示动词强模式 →
         # device_display 计划（内容由 execute 创作，PARAMS 不填 text）。
@@ -10022,7 +10155,7 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
 # `chat`/`answer_only`（零帧零回执），narrator 照这句授权 + 台账里 24 分钟前那条已过期的
 # 「页面跳转「物联网平台」」，编出「物联网平台页面已经打开啦～你现在应该能看到设备控制台了」，
 # 而同一轮的 `page_ctx` 里 `current_url` 是**首页**——系统手里握着真值却没核对（闸门侧的洞
-# 另记，见 5b2）。
+# 另记，见洞⑭）。
 # 所以占位按**本轮有没有动作族回执**分岔：有 ⇒ 效果真发生了，那件事归 narrator 说；
 # 没有 ⇒ **一个族名都不提、一句授权都不给**（不提，它就不会去找一件没发生的事）。
 #
@@ -10484,11 +10617,25 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     receipts = [r for r in (state.get("receipts") or []) if isinstance(r, dict)]
     # ── 2. 命令前缀文本（任何轮次，正文出现命令帧前缀 = 假装发命令）─────────
     # ── 3. 编造资源 URL（任何轮次，工具返回/用户消息中不存在的 /api 或图片）──
+    # 本轮**导航工具报过错**吗（洞⑭ 的射程上界，20261007）：`navigate_to` 的
+    # `__ERROR__` 帧（如 `路径无效`）。碰了而失败的轮次归 5a 的 `err_frame_claim`
+    # ——它的兜底按原因码分（同意闸/目标无据/政策拒绝），比本族那句"没有执行任何跳转"
+    # 准得多；把它抢过来就是拿粗话术盖细话术（`test_skills` 的"err 帧 + 完成式声称"、
+    # `test_nav_truthfulness` 的"只有事实帧没有回执"两条锁住的正是一进一出的边界）。
+    # **不按"有没有 navigate_to 的帧"判**：帧只说明工具跑过，跳没跳成看的是**回执**
+    # （批 2 的分工）——拿帧名当"碰过"会把"有事实帧但回执里没命令"那条哨兵放跑。
+    # 算在这里而不是 `_claim_issue` 里，因为只有本节点手上有 `frames`。
+    nav_errored = any(
+        str(getattr(f, "name", "") or "").startswith("navigate_to")
+        and str(getattr(f, "content", "")).lstrip().startswith("__ERROR__")
+        for f in frames
+    )
     issue = _claim_issue(reply, plan["skill"], plan, bool(frames),
                          _has_exec_memory(msgs, state.get("ledger")), _exec_memory_has_search(msgs),
                          has_popup=bool(state.get("pending_confirm")),
                          ledger=state.get("ledger"), receipts=receipts,
                          noop_specs=state.get("noop_specs"),
+                         nav_errored=nav_errored,
                          # 洞⑪ 的真值来源：前端实时上报的访客位置（见 `_live_page_path`）。
                          # 取法与 planner/model 同一处（`_page_ctx` 扫首条 [System: …]），
                          # 角色只影响能力清单，判据不看那一半。
@@ -10631,30 +10778,14 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             logger.info("[gate] NAVIGATE 确认帧 + 到达声称 → fallback")
             return fail("nav_pending_claim", _FALLBACK_NAV_PENDING, plan,
                                     len(frames), _claim_clause(reply, _NAV_ARRIVAL_RE))
-    # 5b2. 导航**到达声称**，而这一轮的帧里根本没有导航命令（20260926）→ 页面没动。
-    #     判据的关键在"这一轮"：`frames` 是 turn-scoped（合并本轮所有轮次的帧），
-    #     所以**不能拿 `not frames` 当判据**——D1 现场（trace 20260926T212945）里
-    #     round 0 读过一次文章列表 ⇒ frames=1，而第 4 节整族挂在 `if not frames:`
-    #     下面、navigate 那一轮实际零工具（PARAMS 缺 target 被系统置空）⇒ 唯一覆盖
-    #     这一类的判据被跳过，narrator 对着上一轮的列表帧编出"已经带你跳到《…》啦"
-    #     （页面根本没动）。零帧那半由第 4 节覆盖（navigate 的零工具注记恒含
-    #     「不调用任何工具」那句、是它唯一的入口，见 skills.instantiate_plan），
-    #     这里补的是**有帧但帧里没有导航命令**那半。
-    #     ⚠️ 不放进 `_REPLAN_ISSUES`：回 planner 重规划要用 `_replan_note`，而那条
-    #     提示写的是"这一轮一个工具都没有执行"——它有帧时是假话（同族教训：写给
-    #     narrator/planner 的机制描述会被照抄）。
-    #     判据同样改读**回执**（批 2）：`nav_wires`/`auto_nav_wires` 一起空 = 这一轮
-    #     一条导航命令都没执行过。⚠️ 这一处若漏改，症状是**反向**的：帧里无前缀后
-    #     `"AUTO_NAVIGATE:" not in tool_text` 恒真 ⇒ **每一次成功的导航**都被假判成
-    #     "没跳却说跳了"、整段换成道歉——在全新的输入集合上复现原来那个 bug，而
-    #     `nav_arrival_no_frame` 不在 `_REPLAN_ISSUES` 里 ⇒ 打回即终局。
-    if (plan["skill"] == "navigate"
-            and not nav_wires and not auto_nav_wires
-            and _NAV_ARRIVAL_RE.search(reply)
-            and not any(k in reply for k in _HONEST_GONE + _HONEST_DOWN)):
-        logger.info("[gate] navigate 本轮无任何导航帧却声称已到达 → fallback")
-        return fail("nav_arrival_no_frame", _FALLBACK_NAV_NO_FRAME, plan,
-                    len(frames), _claim_clause(reply, _NAV_ARRIVAL_RE))
+    # 5b2. 导航**到达/承诺声称**而本轮没有任何导航命令 —— **20261007 迁到
+    #     `_claim_issue` 的洞⑭ 那一块了**（issue 名 `nav_arrival_no_frame` 不变）。
+    #     为什么搬：原来的判据写死 `plan["skill"] == "navigate"`，而 20261007T232014
+    #     那轮的计划是 chat ⇒ 整条判据一次都没跑（narrator 于是写下"马上带你去…
+    #     页面这就过去喵"而本轮一条导航命令都没有）。新家读的仍是**回执**（批 2 起
+    #     帧原文里没有命令了），且不再挑技能；宽完成式那一臂的射程与整回复级如实
+    #     豁免照旧（见 `_nav_no_frame_clause`），D1 现场与"如实措辞放行"两条回归
+    #     用例（`tests/test_nav_truthfulness.py`）一字未改地锁着它。
     # 5c. 具名工具声称（20260913 C 项）：有帧 ≠ 帧里有那个工具——回复第一人称
     #     完成式点名"我调用了 X"而 X 本轮没执行（越权被剥/被跳过）= 编造调用
     #     （15:51 实证句："这次我用专门的社交链接查询工具（get_social_links）调了一次"）

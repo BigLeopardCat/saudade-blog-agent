@@ -245,6 +245,109 @@ def test_gate_nav_arrival_without_nav_frame():
     check("没有到达声称 → 放行", not o4.get("fallback_text"), str(o4)[:80])
 
 
+# ── ④ 指代型导航（20261007T232014）：目标住在**上一轮那句话**里 ────────────────
+# 主人上一轮拿到《…架构文档》的直达链接（`/article/19`），接着只说了三个字「带我过去」。
+# 计划落到 chat/answer_only（planner 两次零调用），narrator 于是写下
+# 「马上带你去我的设计文档那一篇…页面这就过去喵！」——本轮**一条导航命令都没有**。
+# 两处修：判据（承诺式，现家 `_nav_no_frame_clause`；原 5b2 写死 skill==navigate
+# ⇒ 这一轮整条判据一次都没跑）与能力（指代型导航快道，零 LLM 把上一轮那条唯一
+# 站内链接做成 navigate 计划）。
+_PREV_WITH_LINK = ("找到啦妈妈～我的设计文档就是这一篇：\n"
+                   "**《Saudade Blog AI Agent（泠月喵）架构文档》**，是置顶的公开文章。\n"
+                   "直达链接在这儿，点标题就能过去："
+                   "[Saudade Blog AI Agent（泠月喵）架构文档](https://saudade.site/article/19)\n"
+                   "（站内搜“设计文档”没有命中——那几篇带“文档”字样的里，讲我这套 agent 的"
+                   "就是上面这篇架构文档。）")
+_D3_LIE = ("好嘞妈妈～马上带你去我的设计文档那一篇（《Saudade Blog AI Agent（泠月喵）"
+           "架构文档》，/article/19），页面这就过去喵！")
+
+
+def test_nav_promise_claim_without_nav_command():
+    """④ 判据侧：这一轮压根没跳成，回复却承诺"马上带你过去" ⇒ fallback（技能无关）。"""
+    print("[洞⑭] 承诺式导航声称 × 任何技能/任何计划")
+    chat = plan_encode(instantiate_plan("chat", {}))
+    r = _claim_issue(_D3_LIE, "chat", parse_plan(chat), False, receipts=[])
+    check("chat 计划 + 零帧 + 承诺式 → 判 nav_arrival_no_frame（原 5b2 在这里整条不跑）",
+          bool(r) and r[0] == "nav_arrival_no_frame", str(r and r[0]))
+    check("  兜底文案只否认『跳过去了』+ 把该问的问清（同 D1 那一档）",
+          r and r[1] == _FALLBACK_NAV_NO_FRAME, str(r and r[1])[:40])
+    check("  被否掉的那句进 trace（复盘要看的就是这句原话）",
+          bool(r and r[2]) and "马上带你" in r[2], str(r and r[2])[:40])
+
+    # 导航注记轮（已下线/未部署/目标不存在）不进本族：那三档的如实文案由 gate 第 4 节
+    # 按 status 逐档选——拿本族那句"没有执行任何跳转"盖上去就是拿粗话术盖细话术。
+    down = parse_plan(plan_encode(instantiate_plan("navigate", {"target": "友链"})))
+    r2 = _claim_issue("已经带你到友链页面啦～", "navigate", down, False, receipts=[])
+    check("  导航注记轮（status=nav_offline）不归本族（归第 4 节选『下线』那份）",
+          r2 is None, str(r2 and r2[0]))
+
+    # 碰了而失败（navigate_to 的 __ERROR__ 帧）也不归本族：归 5a 的 err_frame_claim。
+    r3 = _claim_issue("已经跳转成功了，页面马上就好！", "navigate", parse_plan(chat), True,
+                      receipts=[], nav_errored=True)
+    check("  导航工具报过错的轮次不归本族（归 5a，兜底按原因码分）",
+          r3 is None or r3[0] != "nav_arrival_no_frame", str(r3 and r3[0]))
+
+    # 追述豁免：带跨轮回执时"刚才已经带你跳过去了"是 rule 6 的据实转述（同洞①/②），
+    # 豁免是**子句级**的——逗号另一侧那句照判。
+    r4 = _claim_issue("刚才已经带你跳到那一篇啦。", "chat", parse_plan(chat), False,
+                      exec_memory=True, receipts=[])
+    check("  回执在场 + 追述时间词 → 放行（不许把真事说成没做）", r4 is None, str(r4))
+    r5 = _claim_issue("刚才查了目录，页面这就过去。", "chat", parse_plan(chat), False,
+                      exec_memory=True, receipts=[])
+    check("  豁免只吃带时间词的那半句（另一半照判）",
+          bool(r5) and r5[0] == "nav_arrival_no_frame", str(r5 and r5[0]))
+
+    # 如实/疑问/提议/能力罗列/引述照旧放行（洞⑭ 的豁免表）
+    for text, why in (("站内没有这个页面，我没法带你过去呀～", "如实"),
+                      ("要不要我带你过去呀？", "提议"),
+                      ("我可以带你过去，只要你点一下确认。", "情态"),
+                      ("这个技能就是带你过去看文章。", "能力罗列"),
+                      ("你说“马上带你过去”，我照做了。", "引述")):
+        rr = _claim_issue(text, "chat", parse_plan(chat), False, receipts=[])
+        check(f"  {why} → 放行", rr is None, str(rr and rr[0]))
+
+
+def test_referent_nav_fast_path():
+    """④ 能力侧：无目标的移动祈使 + 上一轮唯一一条站内链接 ⇒ 零 LLM 实例化 navigate。"""
+    print("[referent_nav] 指代型导航快道（零 LLM）")
+    nav_pre = AIMessage(content=_PREV_WITH_LINK)
+    _orig = G.get_llm
+    try:
+        llm = _ScriptedLLM([])           # 一个都不该被消费（消费了会 IndexError）
+        G.get_llm = lambda **kw: llm     # noqa: ARG005
+        out = planner_node({"messages": [nav_pre, HumanMessage(content="带我过去")],
+                            "plan_rounds": 0}, _cfg())
+        plan = parse_plan(out["plan"])
+        check("命中：直接实例化 navigate 到上一轮那条链接",
+              plan["tools"] == ['navigate_to({"path": "/article/19", "confirm": false})'],
+              str(plan["tools"]))
+        check("  零 LLM（快道没把问题退回模型）", len(llm.prompts) == 0,
+              str(len(llm.prompts)))
+
+        # 唯一性是守卫：上一轮两条站内链接 ⇒ 指代不唯一 ⇒ 回落 planner LLM（追问）
+        llm2 = _ScriptedLLM(["SKILL=chat\nREPLY: 你想去哪一篇呀？"])
+        G.get_llm = lambda **kw: llm2    # noqa: ARG005
+        two = AIMessage(content=_PREV_WITH_LINK + "\n另外还有 [图谱那篇]"
+                        "(https://saudade.site/article/46) 也提过。")
+        out2 = planner_node({"messages": [two, HumanMessage(content="带我过去")],
+                             "plan_rounds": 0}, _cfg())
+        check("  上一轮两条站内链接 → 不猜（交回 planner）", len(llm2.prompts) == 1,
+              str(len(llm2.prompts)))
+        check("  且这一次没有凭空跳转", not parse_plan(out2["plan"])["tools"],
+              str(parse_plan(out2["plan"])["tools"]))
+
+        # 目标写在本句里的（"去找 X 带我过去"）不许被本快道抢走：它的目标是"找"的结果，
+        # 而上一轮那条链接是别的东西（231947 那轮就会把主人送到首页去）。
+        llm3 = _ScriptedLLM(["SKILL=content_query\nPARAMS={\"calls\": []}\nREPLY: 先找找"])
+        G.get_llm = lambda **kw: llm3    # noqa: ARG005
+        planner_node({"messages": [nav_pre, HumanMessage(content="去找你的设计文档带我过去")],
+                      "plan_rounds": 0}, _cfg())
+        check("  句里还有别的意图 → 不命中（交回 planner）", len(llm3.prompts) == 1,
+              str(len(llm3.prompts)))
+    finally:
+        G.get_llm = _orig
+
+
 def test_cmd_prefix_fallback_truthful():
     """③ 做了却说没做：命令前缀的兜底文案按**回执**对账（D2 现场）。"""
     print("[cmd_prefix] 前缀被打回时的如实兜底（回执里真有那串命令）")
@@ -662,6 +765,8 @@ def test_gate_nav_present_claim_verified_against_page_ctx():
 def main():
     for fn in (test_param_problem_corrected_in_round,
                test_gate_nav_arrival_without_nav_frame,
+               test_nav_promise_claim_without_nav_command,
+               test_referent_nav_fast_path,
                test_cmd_prefix_fallback_truthful,
                test_whole_page_target_not_claimed_as_done,
                test_nav_family_not_printed_into_fact_block,

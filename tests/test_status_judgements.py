@@ -168,8 +168,12 @@ o = _gate(_WORDING, "站内没有这个页面喵。")
 check("  ★ 兼容派生那条也真能驱动判据（不是只往字典里填了个字段）",
       _fb(o) == _FALLBACK_DOWN, str(_fb(o))[:30])
 
+# 反向锁的回答**不许**是导航到达声称（20261007 起）：那一类另有洞⑭ 管
+# （前提 = 本轮压根没碰导航，与 status 无关），拿它当夹具测的就不再是第 4 节了。
+# 下面这句两样都不沾——没有如实词（第 4 节若跑就会打回）、也没有到达声称（洞⑭ 不判）。
+_NOT_CLAIMING = "那个板块我平时不怎么去喵。"
 o = _gate(_WORDING.replace("SKILL=navigate", "SKILL=navigate\nSTATUS=wrapped"),
-          "已经带你到友链啦～")
+          _NOT_CLAIMING)
 check("★ 措辞一字不差、状态是 wrapped ⇒ **不判**（判据真的搬走了）",
       o.get("done") is True and not _fb(o), str(_fb(o))[:30])
 
@@ -181,7 +185,7 @@ check("★ 措辞在、状态是 answer_only ⇒ 也不判（status 是白名单
 # 派生也认不出来（注记不带系统那三条固定前缀）⇒ 空串 ⇒ 整条跳过。
 # 宁可漏判也不误伤：这条判据是**白名单式**的，读不到就当作"这一轮不归我管"。
 o = _gate("SKILL=navigate\nPARAMS={}\nTOOLS: （无）\nNOTE: 目标页: 友链\nREPLY: x",
-          "已经带你到友链啦～")
+          _NOT_CLAIMING)          # 同上：到达声称那一类归洞⑭，这里测的是第 4 节的 status
 check("status 派生也认不出（空串）⇒ 第 4 节整条跳过，不凭空判",
       o.get("done") is True and not _fb(o), str(_fb(o))[:30])
 
