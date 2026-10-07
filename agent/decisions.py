@@ -32,6 +32,9 @@ from agent.skills import (IOT_ENABLED, NAV_MAP, SKILL_MAP, fuzzy_nav_hit,
                           instantiate_plan)
 # 与检索侧同一分词（2/3-gram）——候选标题相关性判定复用，避免两套词法
 from rag.search import tokenize as _rag_tokenize
+# 站点根（指代型导航快道要判"上一轮那条链接是不是**站内**的"）。与导航事实文本
+# 用的同一处（`tools.base.SITE_BASE`），别再写一份域名。
+from tools.base import SITE_BASE
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +230,96 @@ def _nav_fast_path(user_msg: str) -> dict | None:
         return None
     plan_obj = instantiate_plan("navigate", {"target": target})
     plan_obj["params"] = {"target": target}
+    return plan_obj
+
+
+# ── 指代型导航快道（20261007）：**目标不在本句里，住在上一轮那句话里** ─────────────
+#
+# 现场（trace 20261007T232014，主人三字「带我过去」）：上一轮泠月自己刚给出
+# 《Saudade Blog AI Agent（泠月喵）架构文档》的直达链接 `/article/19`，主人接着只说了
+# 一句无目标的移动祈使 —— planner LLM **两次** `finish=stop`（零工具调用，第二轮还是
+# 一次 `_NO_CALL_NUDGE` 之后的），落成 chat/answer_only；narrator 于是写出
+#   「好嘞妈妈～马上带你去我的设计文档那一篇（《…架构文档》，/article/19），页面这就过去喵！」
+# 而这一轮**一条导航命令都没有**（`receipts` 里既无 NAVIGATE: 也无 AUTO_NAVIGATE:）
+# ⇒ 页面不会动一下。同一个会话里还有更早的一轮同族现场（231947「去找你的设计文档带我过去」：
+# 检索做了、移动那半没做）。
+#
+# **为什么不是"再给模型一点上下文"**：指代物在这一轮的 planner 上下文里出现了**三次**
+# ——`recent_tail` 里上一轮那句带链接的原话、`doc_anchors` 的那一行 `noteId=19`、
+# 连 `short_reply` 提示都点名"当前消息形态上像是在承接上一轮——先读它、再判"。它照样
+# 没动手。缺的不是信息，是**通道**：
+#   · `navigate` 的 target 是必填参数（`required_params=("target",)`），而这句话里
+#     没有 target 可填 ⇒ 模型面对"要填参数、参数却住在上一轮"的技能，选择了不点任何工具；
+#   · `_nav_fast_path` 的强模式要求目标写在本句里（`^动词 + 1–8 字目标$`），指代型
+#     **结构上不可能命中**（它连"带我过去"这个最自然的说法都不收——`带我(?:去|到)` 后面
+#     那个字是"过"）。
+#
+# 修法与 `_article_fast_path` 同族：指代物出自**系统数据**（上一轮回复里那条站内链接是
+# 系统渲染过、落在库里、又原样取回来的），零 LLM 解析出唯一目标；**唯一性就是守卫**
+# （同 rule 6b 的取值指代口径：指代不唯一时正确出路是追问，不是替他挑一条）。
+# 三条入口条件缺一不可：
+#   ① **整句**就是无目标的移动祈使（带我过去／带我过去吧／我们过去吧…）：句里还夹着
+#      别的意图时**不命中**——"去找你的设计文档带我过去"那轮的目标是"找"的结果、不是
+#      上一轮那条链接（那一轮的上一轮回复里恰好挂着首页链接，命中就会把主人送到首页去）；
+#   ② 上一轮回复里**恰好一条**站内链接（两条及以上 ⇒ 交回 planner LLM 追问）；
+#   ③ 那条链接能实例化成**真会跳**的计划（白名单说了算）——跳不了就整条回落，
+#      不抢 planner 的决策权（"这条链接我跳不了"由它去如实说）。
+_REFERENT_NAV_RE = re.compile(
+    r"^(?:好|好的|嗯|嗯嗯|行|那|那就|这个|麻烦|请|快|赶紧|你|小猫咪|猫咪|泠月喵|宝贝)*[，,、\s]*"
+    r"(?:带我(?:去|到|过去)|把我带(?:去|到|过去)|我们(?:俩|一起)?过去|咱们(?:一起)?过去)"
+    r"(?:吧|呀|啊|啦|嘛|呗|哦)?[，,、\s]*(?:看看|瞅瞅|瞧瞧)?[！!。.～~]*$"
+)
+# markdown 链接目标（`](…)`）与裸绝对 URL 两形。**只认这两形**：上一轮那条文章链接就是
+# 前者，站外链接靠主机名挡在 `_in_site_link_paths` 里。
+_MD_LINK_TARGET_RE = re.compile(r"\]\(\s*<?([^)>\s]+)")
+_ABS_URL_RE = re.compile(r"https?://[^\s)\]，。、；;！!？?\"'」』]+")
+
+
+def _in_site_link_paths(text: str) -> list:
+    """一段文本里的**站内**链接路径清单（去重，保持出现顺序）。
+
+    归一化到"路径"这一层再比：`https://saudade.site/article/19` 与 `(/article/19)`
+    是同一条目标，不归一化就会被当成两条、把唯一性守卫顶掉。查询串/锚点剥掉，
+    **尾斜杠保留**（`/device-console/` 与 `/device-console` 在白名单里是两个值）。
+    认不出站点根（`SITE_BASE` 为空）时**不收绝对 URL**——不猜。
+    """
+    out: list = []
+    keys: set = set()
+    for c in _MD_LINK_TARGET_RE.findall(text or "") + _ABS_URL_RE.findall(text or ""):
+        c = c.strip().strip("“”「」『』").rstrip("，。、；;！!？?～~")
+        if c.startswith("http"):
+            if not SITE_BASE or not c.startswith(SITE_BASE):
+                continue                      # 站外（或站点根配不出来）⇒ 不是导航目标
+            c = c[len(SITE_BASE):] or "/"
+        if not c.startswith("/"):
+            continue
+        c = c.split("#", 1)[0].split("?", 1)[0]
+        key = c.rstrip("/") or "/"
+        if key in keys:
+            continue
+        keys.add(key)
+        out.append(c)
+    return out
+
+
+def _referent_nav_fast_path(user_msg: str, prev_reply: str) -> dict | None:
+    """指代型导航快道：无目标的移动祈使 + 上一轮回复里唯一一条站内链接 → navigate 计划
+    （零 LLM）。返回带 params 的 plan dict，或 None 落回 planner LLM。三条入口条件的
+    来历见上面那段长注。"""
+    msg = _bare(user_msg).strip(" \t，。！？!?～~、；;：:")
+    if _QUESTION_RE.search(msg) or _NEGATION_RE.search(msg):
+        return None                            # 问路/否定不是"带我过去"
+    if not _REFERENT_NAV_RE.match(msg):
+        return None
+    paths = _in_site_link_paths(prev_reply)
+    if len(paths) != 1:
+        return None                            # 指代不唯一（或没有指代物）⇒ 交回 planner
+    target = paths[0]
+    plan_obj = instantiate_plan("navigate", {"target": target})
+    if not plan_obj.get("tools"):
+        return None                            # 跳不了（白名单外/已下线/未部署）⇒ 交回 planner
+    plan_obj["params"] = {"target": target}
+    logger.info("[planner] 指代型导航快道命中（零 LLM）：%s（上一轮唯一站内链接）", target)
     return plan_obj
 
 
