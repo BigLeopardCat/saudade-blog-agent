@@ -168,6 +168,36 @@ check("繁体/别名同族不作两套（後天=后天、今日=今天）",
 check("不带年份的「9月27日」按**当年**解释（是一条规则，不是猜）",
       A.normalize_due_date("9月27日", today=TODAY) == TOMORROW
       and A.normalize_due_date("9-27", today=TODAY) == TOMORROW)
+# 20261008：日位写「号」**与「日」同义**。此前不认，而 `skills.py` 里那条技能的
+# 能力文案自己举的例句就是「把〈…〉挪到 10 月 8 号」⇒ 主人明明说了日子，助手反问
+# 「你说是哪一天」。修的是日位那个同义字，不是放宽"什么算日期"。
+check("★「X月X号」与「X月X日」同义（口语里「号」比「日」更常说）",
+      A.normalize_due_date("9月27号", today=TODAY) == TOMORROW
+      and A.normalize_due_date("9 月 27 号", today=TODAY) == TOMORROW)
+check("★ 带年份的那一支同样认「号」（2026年9月27号 / 2026-9-27号）",
+      A.normalize_due_date("2026年9月27号", today=TODAY) == TOMORROW
+      and A.normalize_due_date("2026-9-27号", today=TODAY) == TOMORROW)
+check("★ 裸的「27号」仍不认（「按当月」是另一条规则，别在日位同义字里顺手扩）",
+      A.normalize_due_date("27号", today=TODAY) is None
+      and A.normalize_due_date("3号楼", today=TODAY) is None
+      and A.normalize_due_date("5号窗口", today=TODAY) is None)
+# 「认哪些写法」这句人话只许住在 `adminops.DUE_DATE_FORMS_CN` 一处：四处报错文案此前
+# 各抄一份，且已经漂了（抄的那份不含「号」）。这里扫源码文本——任何**别的**地方再出现
+# 这句话的字面（`年-月-日` 是它独有的那一截）就是一个新副本
+# （同族锁：`tools/base._ITEM_POSITION_FORMS`）。
+# ⚠️ 探针本身要能响：`DUE_FORM_MARK` 必须**真的**在 adminops 里出现，否则这条断言
+# 恒绿而没有任何东西守着（"看着有、其实没有"）。
+DUE_FORM_MARK = "年-月-日"
+_forms_srcs = sorted((ROOT / "agent").glob("*.py")) + sorted((ROOT / "tools").glob("*.py"))
+check("★ 探针的锚点真的住在 adminops 里（锚点写错 ⇒ 下面那条恒绿）",
+      A.DUE_DATE_FORMS_CN.count(DUE_FORM_MARK) == 1
+      and DUE_FORM_MARK in (ROOT / "agent" / "adminops.py").read_text(encoding="utf-8"))
+_forms_copies = [f"{_src.name}×{_src.read_text(encoding='utf-8').count(DUE_FORM_MARK)}"
+                 for _src in _forms_srcs
+                 if _src.name != "adminops.py"
+                 and DUE_FORM_MARK in _src.read_text(encoding="utf-8")]
+check("★『认哪些写法』那句人话没有第二个副本（漂了就与真正认的面不一致）",
+      not _forms_copies, "；".join(_forms_copies))
 
 for bad, why in [("下周三", "相对周几（今天是周几才算得出，翻不出来就别猜）"),
                  ("周五", "同上"),
