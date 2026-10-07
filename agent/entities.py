@@ -523,6 +523,47 @@ def _notice_read_digest(text: str) -> str:
     return "；".join(parts)
 
 
+def _admin_notes_digest(text: str) -> str:
+    """后台文章清单的摘要（20261007）。
+
+    这一条补的是**跨轮取值通道的一格**：`list_admin_notes` 此前没有摘要，回执行于是
+    只剩动作「查看后台文章列表」，**那个数只活在 narrator 上一轮的散文里**。生产实证
+    （trace `20261007T191440` → `20261007T191543`）：19:14 真查到「后台文章共 21 篇」、
+    也照实说了；下一轮用户只说了句闲聊，narrator 却**主动撤回**自己那句话（原话里带着
+    "这一轮系统没有查过文章列表，我手上也没有那个数字"）——不是幻觉，是**系统事实里
+    没有那个数**，于是"零帧不得声称"的诚实纪律只能让它否认自己的散文。数补进台账行，
+    规则 6b 才有东西可抄。
+
+    两支**必须分开说**（`render_admin_notes` 自己那段注写明了为什么）：带 keyword 的
+    那支是**搜索口径**（"匹配 N 篇"），不是站内总量。摘要是跨轮取值的来源，把搜索条数
+    写成总量，就是"看着有据的错数"。同理，清单被截断（行尾有「另有 N 篇未列出」）时
+    **不报状态分布**——那是前 `limit` 条的分布。
+    """
+    m = _ADMIN_NOTES_HEAD_RE.search(text or "")
+    if not m:
+        return ""
+    n, kw = m.group("n"), m.group("kw")
+    head = (f"后台文章列表（按「{kw}」筛） — 匹配 {n} 篇" if kw
+            else f"后台文章列表 — 共 {n} 篇")
+    out = head
+    if "未列出" not in (text or ""):
+        rows = _ADMIN_NOTES_ROW_RE.findall(text or "")
+        counts = [(s, sum(1 for r in rows if s in r)) for s in ("公开", "私密", "草稿")]
+        # 只有"每一行都认得出状态、且行数就是总数"时才敢报分布（认不出的状态、
+        # 少列的行都会让三项之和 ≠ 总数 ⇒ 报出来就是拿局部冒充全量）。
+        if len(rows) == int(n) and sum(c for _, c in counts) == len(rows):
+            out += "（" + " / ".join(f"{s} {c}" for s, c in counts) + "）"
+    return out
+
+
+# 头行的两种形态（`render_admin_notes`）：无词「后台文章共 21 篇」、带词
+# 「后台文章里匹配「x」的共 3 篇」。两条都认，且**把 keyword 记下来**（下游要分开说）。
+_ADMIN_NOTES_HEAD_RE = re.compile(
+    r"后台文章(?:里匹配「(?P<kw>[^」]*)」的)?共\s*(?P<n>\d+)\s*篇")
+# 行形态：`- noteId=54 [公开/置顶]《…》标签：…`（状态在方括号里，可能带"置顶"）。
+_ADMIN_NOTES_ROW_RE = re.compile(r"^- noteId=\d+ \[([^\]]*)\]", re.M)
+
+
 _TEXT_DIGESTERS = {
     "get_server_status": _server_status_digest,
     "get_service_health": _service_health_digest,
@@ -530,6 +571,8 @@ _TEXT_DIGESTERS = {
     "get_user_stats": _user_stats_digest,
     "get_note_stats": _note_traffic_digest,
     "read_notifications": _notice_read_digest,
+    # 后台文章清单（20261007）：管理员读后台的取值此前**没有任何跨轮来源**
+    "list_admin_notes": _admin_notes_digest,
 }
 
 
