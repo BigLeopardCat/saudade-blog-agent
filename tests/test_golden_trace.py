@@ -236,27 +236,45 @@ def _skill_tools(skill_name: str) -> "frozenset | None":
 
 _cases_jsonl = [json.loads(l) for l in (ROOT / "eval" / "golden" / "basic.jsonl")
                 .read_text(encoding="utf-8").splitlines() if l.strip()]
+import run_golden as rg        # 局部导入：本节的卡断言要按轮取（rg.iter_rounds），
+                               # 与本文件末尾那次导入同一份模块（重复 import 不重复付出代价）
 for _c in _cases_jsonl:
-    _gold = _c.get("gold") or {}
-    _frames = _gold.get("require_frame_prefix") or []
-    _wants_card = any(f in ("__CONFIRM__:", "__PENDING__:") for f in _frames)
     for _m, _role in _MARK_ROLE.items():
         if not _c.get(_m):
             continue
         check(f"{_c['id']}: {_m} 与 context.role 配对",
               (_c.get("context") or {}).get("role") == _role,
               f"role={(_c.get('context') or {}).get('role')!r}")
-        if not _wants_card:
-            # 不要求卡 ⇒ 这条通道的经典用法，无写路径断言（旧规矩的形状照旧放行）
+        if _c.get("needs_real_write"):
+            # 豁免：这几条**故意真写**（要主人的显式开关 `GOLDEN_ALLOW_REAL_WRITE=1` 才跑，
+            # 默认被摘掉）——本条不变量禁的正是"没人看着时真写"，对它们是反向的。
+            # 判据同样要求它们声明身份 + 角色配对（上面那句照跑）。
             continue
-        _pay = _gold.get("require_confirm_payload") or {}
-        _tools = _skill_tools(_pay.get("skill")) if _pay.get("skill") else None
-        _always = _always_confirm_tools()
-        check(f"{_c['id']}: 声明身份 + 要求弹卡 ⇒ 卡上那族必须全在「一律弹窗」族"
-              "（恒弹卡 ⇒ 同轮结构上写不下去；否则真身份下真写是可能的）",
-              bool(_tools) and bool(_always) and _tools <= _always,
-              f"skill={_pay.get('skill')!r} plan={sorted(_tools) if _tools else None} "
-              f"always_confirm={len(_always)} 条")
+        # **卡在哪一轮要**：20261007 补洞。此前只读顶层 `gold`，而多轮用例的判据全在
+        # `rounds` 里 ⇒ 凡是多轮用例，对这条不变量等于**不存在**（"看着有、其实没有"
+        # 的老毛病，同一族）。洞里的实例：`mt2_short_yes_resubmits_card` 带着
+        # `needs_admin_uid` + 逐轮要求 `tag_create` 的卡进来，一句都没被拦。
+        for _r in rg.iter_rounds(_c):
+            _gold = _r.get("gold") or {}
+            _frames = _gold.get("require_frame_prefix") or []
+            if not any(f in ("__CONFIRM__:", "__PENDING__:") for f in _frames):
+                # 不要求卡 ⇒ 这条通道的经典用法，无写路径断言（旧规矩的形状照旧放行）
+                continue
+            _pay = _gold.get("require_confirm_payload") or {}
+            _skills = list(_pay.get("skill_any") or
+                           ([_pay["skill"]] if _pay.get("skill") else []))
+            _tools: set = set()
+            for _s in _skills:
+                # 技能取不到 ⇒ 空集 ⇒ 断言不放行（与 `_always_confirm_tools` 同一条纪律：
+                # 拿不到判据时朝严格那侧倒）
+                _tools |= set(_skill_tools(_s) or ())
+            _always = _always_confirm_tools()
+            check(f"{_c['id']}（第 {_r.get('round', '?')} 轮）: 声明身份 + 要求弹卡 ⇒ "
+                  "卡上那族必须全在「一律弹窗」族"
+                  "（恒弹卡 ⇒ 同轮结构上写不下去；否则真身份下真写是可能的）",
+                  bool(_tools) and bool(_always) and _tools <= _always,
+                  f"skills={_skills!r} plan={sorted(_tools) or None} "
+                  f"always_confirm={len(_always)} 条")
 
 # 判据自己的反向对照（这条族判定既不许恒真也不许恒假）：`board_audit` 的 plan 全在恒弹卡
 # 族里（所以上面那条对它放行），`tag_create` 不在（"同轮命令即确认"那条路是活的）——
