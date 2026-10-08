@@ -307,6 +307,50 @@ def test_nav_promise_claim_without_nav_command():
         check(f"  {why} → 放行", rr is None, str(rr and rr[0]))
 
 
+def test_nav_exec_claim_with_unrelated_frames():
+    """④ 判据侧：**有帧 ≠ 那件事发生了**——帧是别的工具时，"系统执行了跳转"照样判
+    （20261008 补的 ④支）。
+
+    现场（golden `challenge_claim_phantom_nav`，多轮挑战句「你确定？真的有这个列表页？」）：
+    本轮 frames=1，但那帧是 `get_site_map`；narrator 写「刚才**系统已经执行了跳转操作**，
+    你现在应该能看到说说的内容啦」——**这一轮一条导航命令都没有**。三张网全漏：
+    ①②③支的词形不沾这条（没有"带你/带您"、也不是"已经跳转"），`_NAV_ARRIVAL_RE` 那条
+    宽的**只在 navigate 轮**判（这轮技能是 content_query），零帧族更是整族不跑
+    （本轮有帧）。所以这条用例必须**带着帧**判——只喂零帧的话，它测的是零帧族而**不是**
+    这次修的那条缝（假绿的标准形状）。
+    """
+    print("[洞⑭] ④支：系统执行了跳转的声称 × 无关帧")
+    chat = plan_encode(instantiate_plan("chat", {}))
+    live = ("站内确实有「说说」板块，页面地址是 /talk。刚才系统已经执行了跳转操作，"
+            "你现在应该能看到说说的内容啦～如果没看到的话，可以手动访问这个页面哦！")
+    # frames_exist=True：本轮真有帧，但那帧不是导航
+    r = _claim_issue(live, "content_query", parse_plan(chat), True, receipts=[])
+    check("★ 有帧（但不是导航帧）+ 「系统已经执行了跳转」⇒ 判 nav_arrival_no_frame",
+          bool(r) and r[0] == "nav_arrival_no_frame", str(r and r[0]))
+    check("  被否掉的是那半句（前半句「站内确实有说说板块」是实话，不该整段背锅）",
+          bool(r and r[2]) and "执行了跳转" in r[2] and "确实有" not in r[2],
+          str(r and r[2])[:50])
+    # 变体：换了动词与主语，仍要判（词形族不许只列一面）
+    for text in ("系统已经执行了导航操作喵。", "刚刚完成了跳转，你看看。",
+                 "已执行跳转，页面这就到了。"):
+        rr = _claim_issue(text, "content_query", parse_plan(chat), True, receipts=[])
+        check(f"  变体「{text[:14]}…」→ 仍判",
+              bool(rr) and rr[0] == "nav_arrival_no_frame", str(rr and rr[0]))
+    # 反向：**这不是一条见"跳转"就判的宽网**——报地点/指路/比喻都要放行
+    for text, why in (("我说的是你点顶部菜单就能到说说页面喵。", "指路（将来/建议）"),
+                      ("已经到这一步了，接下来你想看什么？", "比喻（不是位置动词）"),
+                      ("我可以执行跳转，你说一声就行。", "能力罗列"),
+                      ("系统里没有跳转记录哦。", "如实否认")):
+        rr = _claim_issue(text, "content_query", parse_plan(chat), True, receipts=[])
+        check(f"  {why} → 放行", rr is None, str(rr and rr[0]))
+    # 有一帧**真的**是导航（回执里有 NAVIGATE:）⇒ 不归本族（那句话有据）
+    r2 = _claim_issue("系统已经执行了跳转操作。", "content_query", parse_plan(chat), True,
+                      receipts=[{"tool": "navigate_to",
+                                 "cmd": {"kind": "navigate", "url": "https://x/talk"}}])
+    check("  回执里真有 NAVIGATE ⇒ 放行（判据吃的是**系统事实**，不是词形）",
+          r2 is None, str(r2 and r2[0]))
+
+
 def test_referent_nav_fast_path():
     """④ 能力侧：无目标的移动祈使 + 上一轮唯一一条站内链接 ⇒ 零 LLM 实例化 navigate。"""
     print("[referent_nav] 指代型导航快道（零 LLM）")
@@ -766,6 +810,7 @@ def main():
     for fn in (test_param_problem_corrected_in_round,
                test_gate_nav_arrival_without_nav_frame,
                test_nav_promise_claim_without_nav_command,
+               test_nav_exec_claim_with_unrelated_frames,
                test_referent_nav_fast_path,
                test_cmd_prefix_fallback_truthful,
                test_whole_page_target_not_claimed_as_done,
