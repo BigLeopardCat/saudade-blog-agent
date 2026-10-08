@@ -6892,6 +6892,39 @@ def _squash_spaces(text) -> str:
     return re.sub(r"\s+", "", str(text or ""))
 
 
+# 键盘噪声归一（20261008）。主人**打出来的字**与站内字典里的字，只要读起来是同一个词，
+# 就不该被判成"主人没说过这个名字"——出处闸（`_grounded_value`）此前是**逐字**子串，
+# 连大小写差一格都认不出。现场（trace `20261008T075023`）：主人打的是
+# 「把git，代码版本管理挂上去」，planner 填的却是站内的**正字**「Git」（标签字典里
+# id=10006 就叫 `Git`，`find_tag` 是完全相等匹配 ⇒ 填 `git` 反而写不进去），
+# 逐字比一次判它"没出处" ⇒ 整条写被零执行拦下，而给主人的理由
+# （「主人这句话里没有能对上「Git」这个参数值的名字」）在他看来**是假话**：
+# 那三个字母就在他这句话里，只是小写。
+#
+# 两个形态是同一类转写噪声（与 `_squash_spaces` 已在做的"换行/空格抹平"同源：
+# 全角空格 U+3000 早就被 `\s` 吃掉了，只有全角**字母数字**漏在外面）：
+#   · ASCII 大小写：`git` / `Git`；
+#   · 全角 ASCII：中文输入法的全角态打出的 `Ｇｉｔ`。
+# **只归一"比不比得上"，绝不改值**：这一格的正确写法是**站内字典那一份**，
+# 把 `Git` 改写成主人打的 `git` 不是校正、是写不进去（校正型只该用在
+# "主人写下的原文就是权威"的那些格子，如 `_name_target_fix`）。
+# 用显式映射而不是 `unicodedata.normalize("NFKC")`：NFKC 还会顺手改 `①`／`㎡`／`㈱`
+# 这类与"同一个词的不同打法"毫无关系的字形——那是凭空扩权，不是归一。
+_FULLWIDTH_ASCII_MAP = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}
+
+
+def _fold_typing(text) -> str:
+    """键盘噪声归一（**比较用**的后半段）：全角 ASCII→半角 + `casefold`（见上方长注）。
+
+    **不去空白**：本函数的调用契约是"传进来的串已经 `_squash_spaces` 过"——那条契约
+    由 `_grounded_value` 的 `sq_msg` / `sq_ledger` 两个入参守着（测试里有一条专门钉
+    它：传没归一的原话进去会**静默判否**）。这里替它代劳等于把那条锁拆掉。
+    键必须是**码位整数**：`str.translate` 收到字典时只认 `__getitem__(int)`，
+    拿 `chr(c)` 当键不会报错、而是**一个字符都不换**（20261008 实测踩过）。
+    """
+    return str(text).translate(_FULLWIDTH_ASCII_MAP).casefold()
+
+
 def _msg_quote_spans(user_msg) -> list[str]:
     """主人原话里带引号的片段（按出现顺序，去空白后非空）。"""
     out = []
@@ -8018,11 +8051,16 @@ def _grounded_value(val, sq_msg: str, sq_ledger: str = "") -> bool:
 
     `sq_ledger` = `_squash_spaces(_ledger_pending_text(...))`，**必须由调用方归一后传**
     （它的理由、边界与为什么不许省见 `_ledger_pending_text` 的长注）。
+
+    比对的归一从 20261008 起多一道 `_fold_typing`（全角 ASCII→半角 + casefold），
+    **不是**裸子串——大小写/全角差一格不算"主人没说过"（现场与边界见 `_fold_typing`
+    上方长注）。脏判据那两句仍在**去空白**那一层判（词表是中文字面，与键盘噪声无关）。
     """
     v = _squash_spaces(val)
     if not v or v in _GENERIC_VALUE_WORDS or v in _DEICTIC_WORDS:
         return False
-    return v in sq_msg or (bool(sq_ledger) and v in sq_ledger)
+    v = _fold_typing(v)
+    return v in _fold_typing(sq_msg) or (bool(sq_ledger) and v in _fold_typing(sq_ledger))
 
 
 def _name_arg_fix(plan_obj: dict, user_msg,
