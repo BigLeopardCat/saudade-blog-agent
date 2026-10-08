@@ -920,6 +920,47 @@ _LOGIN_PROBES: tuple[tuple[bool, str, str], ...] = (
 )
 
 
+# ── 待办改排期的**方向锁**（20261008，本条自己吐出来的假绿）───────────────────────
+# 现场（run `20261008_045349`）：这条判成绿，而那一轮弹的卡是**反方向**的——
+# 「把待办「agent_fixture_todo_pending_a（评测夹具，勿手改）」的**排期改成未排期**（现在：
+# 排期 11月30日）」：主人要的是"挪到某天"，卡问的是"清掉排期"。旧断言只锁到「…的排期改成」
+# 这半句 + 「弹了卡」+ 「参数出自主人原话」——改成日子与改成「未排期」在这些断言下**同分**，
+# 于是"反方向"这一整格在评测层是空的（同 `admin_todo_add_popup` 的 `_note` 明写不做正文断言
+# 那一类盲点，只是这次那条用例自己的 `text_any_regex` 已经是能长牙的形态）。
+# 补法不是加密措辞，是**锁方向**：正断言钉住那一格**是个日子**、负断言钉住**不许是清空词**。
+#
+# 三张卡（真/假/复现）都由**生产渲染器**拼，不手抄字符串：`adminops.render_todo_reschedule_action`
+# 是弹卡那一行的唯一出处，清空词也取生产契约常量 `adminops._TODO_CLEAR_WORD`——
+# 渲染器换措辞、契约换清空词，这组锁当场红（手抄一张卡就又是"判据与生产各养一份"）。
+RESCHEDULE_CASE = "admin_todo_reschedule_popup"
+RESCHEDULE_TITLE = "agent_fixture_todo_pending_a（评测夹具，勿手改）"
+RESCHEDULE_DAY = "2026-12-15"      # 只做"是个日子"的形状样本，不锁具体哪天（见该用例 `_note`）
+
+
+def _reschedule_result(card_line: str, user_input: str) -> dict:
+    """这条用例的一轮**合成结果**：弹卡三件事齐备（控制帧 / 令牌 / 可读载荷）、零执行。
+
+    载荷按真链路的形状写（`specs[].args` 那一层不能省——`args_from_input` 读的就是
+    `s["args"][field]`）；`user_input` 是主人原话（那半句正文的出处分账）。
+    """
+    return {"text": f"好呀～这一步要动到站内数据，我先跟你确认一下：\n\n**{card_line}**\n\n"
+                    f"点「确定」我就去记下来。",
+            "commands": [], "tool_calls": [], "exec_rows": [], "exec_tools": [],
+            "frames": ['__CONFIRM__:{"token":"tk_eval"}', "__PENDING__:把这条待办的排期改一下"],
+            "confirm_tokens": ["tk_eval"],
+            "confirm_payloads": [{"skill": "dashboard_todo_reschedule",
+                                  "specs": [{"args": {"text": RESCHEDULE_TITLE,
+                                                      "due_date": RESCHEDULE_DAY}}]}],
+            "resets": [], "resets_reasons": [], "reset_scopes": [], "error": None,
+            "_user_input": user_input}
+
+
+def _judge_reschedule(gold: dict, card_line: str) -> list[str]:
+    res = _reschedule_result(card_line, f"把待办「{RESCHEDULE_TITLE}」的排期改成12月15日")
+    ui = res.pop("_user_input")
+    return rg.check_gold(gold, res, user_input=ui)
+
+
 def main() -> int:
     bad = 0
     for row in CASES:
@@ -1056,6 +1097,59 @@ def main() -> int:
         bad += 0 if ok else 1
         print(f"{'✓' if ok else '✗ 不符'} [login] {desc}\n"
               f"    期望 {'判红' if want_red else '放行'} / 实得 {'判红' if got else '放行'}")
+    # ── 待办改排期的**方向锁**（20261008，本条自己吐出来的假绿）───────────────────
+    # 五件一起锁：① 两张生产卡的形状确实是两个方向（前提，坏了下面都没有意义）；
+    # ② 真卡整条零红（新断言不许把做对的那一轮判红）；③ 假绿现场那种卡**必须**红在
+    # 正断言的"不是日子"与负断言的"是清空词"上；④ 负断言的清空词取自生产契约常量；
+    # ⑤ 反向锁：把那条负断言从副本里拿掉 ⇒ 这一条红消失（证明红是它给的，
+    #    不是别的断言顺带开火——同拆 key 那套纪律）。
+    print("\n── 待办改排期的方向锁（20261008）")
+    gold = GOLD.get(RESCHEDULE_CASE)
+    if gold is None:
+        bad += 1
+        print(f"✗ [{RESCHEDULE_CASE}] 用例不在（改名要一起改这里）")
+    else:
+        from agent import adminops as A
+
+        true_line = A.render_todo_reschedule_action(RESCHEDULE_TITLE, RESCHEDULE_DAY)
+        false_line = A.render_todo_reschedule_action(RESCHEDULE_TITLE, A._TODO_CLEAR_WORD)
+        ok = (A.todo_due_phrase(RESCHEDULE_DAY) in true_line
+              and A._TODO_CLEAR_WORD in false_line
+              and A.todo_due_phrase(RESCHEDULE_DAY) not in false_line)
+        bad += 0 if ok else 1
+        print(f"{'✓' if ok else '✗ 不符'} [方向锁] 生产渲染器的两张卡是两个方向"
+              f"（日子那格 = `todo_due_phrase({RESCHEDULE_DAY})` = "
+              f"{A.todo_due_phrase(RESCHEDULE_DAY)!r}）\n    真={true_line}\n    假={false_line}")
+
+        tf = _judge_reschedule(gold, true_line)
+        bad += 0 if not tf else 1
+        print(f"{'✓' if not tf else '✗ 不符'} [方向锁] 真卡（改成某个日子）整条零红 {tf}")
+
+        ff = _judge_reschedule(gold, false_line)
+        pos_hit = [f for f in ff if f.startswith("文本缺少任一关键词") and "排期改成" in f]
+        neg_hit = [f for f in ff if f.startswith("文本不应命中正则") and "排期改成未排期" in f]
+        ok = bool(pos_hit) and bool(neg_hit)
+        bad += 0 if ok else 1
+        print(f"{'✓' if ok else '✗ 不符'} [方向锁] 假绿卡（改成清空词）红在方向的两条上："
+              f"正断言未命中={bool(pos_hit)} / 负断言命中={bool(neg_hit)}\n"
+              f"    红名单 {ff}")
+
+        words = A._TODO_CLEAR_WORD
+        neg_rx = " ".join(gold.get("text_not_match_regex") or [])
+        ok = words in neg_rx
+        bad += 0 if ok else 1
+        print(f"{'✓' if ok else '✗ 不符'} [方向锁] 负断言的词表取自生产契约清空词 {words!r}"
+              f"（渲染器/契约换词 ⇒ 这里当场红）")
+
+        drop = json.loads(json.dumps(gold, ensure_ascii=False))
+        drop["text_not_match_regex"] = [x for x in (drop.get("text_not_match_regex") or [])
+                                        if "未排期" not in x]
+        dff = _judge_reschedule(drop, false_line)
+        ok = not [f for f in dff if f.startswith("文本不应命中正则")]
+        bad += 0 if ok else 1
+        print(f"{'✓' if ok else '✗ 不符'} [方向锁] 反向锁：拿掉那条负断言 ⇒ 这一格的红消失"
+              f"（剩下的红 {dff}）")
+
     print(f"\n=== {'全部符合预期' if bad == 0 else f'{bad} 项不符'} ===")
     return 1 if bad else 0
 
