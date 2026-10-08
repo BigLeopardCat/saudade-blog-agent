@@ -68,6 +68,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import re
@@ -393,8 +394,115 @@ def same_goal(a: Any, b: Any) -> bool:
     return bool(fa) and fa == fb
 
 
-def intents_to_declarations(intents: Any, *, role: str | None, acted_skills: Any = (),
-                            receipts: Any = (), skip_goals: Any = ()) -> list[dict]:
+# ── goal 的出处对账（20261009）────────────────────────────────────────────
+# 现场（判据侧 `require_task_goal_per_intent` 连跑三遍全红的那条）：
+#   主人：「想建个新分类叫「临江仙」，文章 23 的标签也想换成「Rust」」
+#   模型交的清单里，第二件的 goal 写成「把文章 **2** 的标签换成「Rust」」。
+# 错号**只活在 goal 里**——自动登记的步骤是模板推的裸工具名（`[{"label": t, "tool": t}]`，
+# 不带实参），所以"文章 2"既不进台账的步骤、也不进任何一处能被后续校验的地方；而
+# **下一轮 planner 读台账那一行，就是拿它当目标**（`render_open_tasks`）。一个抄错的号
+# 因此能独自活到下一轮，并被当成主人的话复述出去。
+#
+# 契约本身早就写着「取主人原话里的说法」（`intents_prop_schema` 的 goal 描述），缺的是
+# **判据**。本块补的这条判据只认一件事：**goal 里的数字，必须在主人说过的话里出现过**。
+# 只认数字、不认命名实体——名字对不对是自然语言问题（同义词、简称、省略），拿词表去判
+# 正是"每遇新词形必假红"的老路（同一段论证见 ADR-0002《依据》）；而数字是 goal 里唯一
+# 机器可判的部分，也恰好就是出错的那几个字。
+_NUM_RE = re.compile(r"\d+")
+# 主人原话切"一段事"：按句读切，**不切顿号**——「文章 23、19 的标签」是一件事，
+# 切了会把一个目标劈成两个候选段。
+_SEG_SPLIT_RE = re.compile(r"[，,。；;！!？?\n]+")
+# 比对骨架里要抹掉的字符：引号与空白（同一段话被抄两遍时，引号体例未必一致）。
+_SKEL_DROP_RE = re.compile(r"[「」『』“”\"'‘’\s]+")
+# 相似度地板。定得松（0.5）是刻意的：这一路的产出**永远是主人自己的那段话**（逐字），
+# 不是模型新编的句子——判错的最坏结果是"登记了一件主人确实说过的事、但落到了相邻那一段"，
+# 而不判（放行错号）的最坏结果是"错号活到下一轮被当成主人原话读回来"。
+_GOAL_MATCH_MIN = 0.5
+
+
+def _goal_skeleton(text: Any) -> str:
+    """比对骨架：抹引号/空白，数字**整体换成一个 `#`**。
+
+    数字必须抹掉才比得出来：要判的正是"号对不对"，把号留在骨架里，「文章 2」与
+    「文章 23」的相似度会被那几个字符拉低到看不出它们是同一件事——而它们本来就是同一
+    件事，只是抄错了一个数。
+    """
+    return _NUM_RE.sub("#", _SKEL_DROP_RE.sub("", str(text or "")))
+
+
+def _bump(audit: dict | None, key: str, n: int = 1) -> None:
+    """给调用方的读数累加一格（`audit` 为 None 时什么都不做，纯函数可脱开读数用）。"""
+    if audit is not None:
+        audit[key] = int(audit.get(key) or 0) + n
+
+
+def _note_raw(audit: dict | None, key: str, raw: Any, limit: int = 3) -> None:
+    """把**改写/丢弃前的那句 goal 原文**记进读数（截断、最多 `limit` 条）。
+
+    为什么非记不可（20261009 第一次复核的教训）：只记计数时，"`dropped: 1`"有两种完全
+    相反的读法——"模型编了一个号，拦得对"与"模型写的是对的，是这道闸过火了"，而 trace
+    里**看不出是哪一种**（同族教训：`task_auto` 的 `conv` 那个读数就是为分两种读法才加的）。
+    原文一进 trace，下一次读的人一眼分得开，也不必靠复现去猜。
+    """
+    if audit is None:
+        return
+    got = audit.get(key)
+    if not isinstance(got, list):
+        got = []
+        audit[key] = got
+    if len(got) < limit:
+        got.append(re.sub(r"\s+", " ", str(raw or "")).strip()[:60])
+
+
+def reconcile_goal(goal: Any, sources: Any) -> str | None:
+    """goal 里的数字必须有出处；对不上就退回主人原话里最接近的那一段（纯函数）。
+
+    三个出口：
+      · goal 里**没有数字** ⇒ 原样返回（绝大多数 goal——没有可对账的东西）；
+      · goal 的数字**全都**在 `sources` 里出现过 ⇒ 原样返回。**跨轮是合法的**：主人上一轮
+        说过的 id，模型从台账/历史里取回来复述，是**合法重提**而不是编造（同族先例＝
+        《写参数的出处分两族》第一族"站内台账里的值也算出处"）——所以出处取**所有**来源
+        的并集，不是只看本轮那一句；
+      · 否则（有数字在主人说过的话里找不到）⇒ 退回**主人原话的一段**：按 `sources` 的顺序
+        逐份找（调用方保证 `sources[0]` 是本轮那句话、其余按时间倒序）与 goal 骨架最相似的
+        那一段，相似度过 `_GOAL_MATCH_MIN` 就用**那一段逐字**当 goal；一份里一段都够不着
+        ⇒ 返回 `None`：**这件事不登记**（比登记一个来历不明的号好——那个号下一轮会被
+        planner 当成主人的原话读回来）。
+
+    调用方拿 `audit` 收两类读数（`goal_retraced` / `goal_dropped`），只给 trace 看。
+    形参 `sources` **没有默认值**是刻意的：忘传 = 静默放弃对账，那正是本仓最恨的一类
+    失败（"缺键当 0"）——调用方必须交代"主人这一轮/最近说过什么"。
+    """
+    text = re.sub(r"\s+", " ", str(goal or "")).strip()
+    if not text:
+        return None
+    nums = _NUM_RE.findall(text)
+    if not nums:
+        return text
+    src = [str(s or "") for s in (sources or ())]
+    known: set[str] = set()
+    for s in src:
+        known.update(_NUM_RE.findall(s))
+    if set(nums) <= known:
+        return text
+    skel = _goal_skeleton(text)
+    for s in src:                     # 逐来源找：先在最新那份原话里找，找不到才往前翻
+        best: tuple[float, str] | None = None
+        for seg in _SEG_SPLIT_RE.split(s):
+            seg = seg.strip()
+            if len(seg) < 2:
+                continue
+            ratio = difflib.SequenceMatcher(None, skel, _goal_skeleton(seg)).ratio()
+            if ratio >= _GOAL_MATCH_MIN and (best is None or ratio > best[0]):
+                best = (ratio, seg)
+        if best:
+            return re.sub(r"\s+", " ", best[1]).strip()[:GOAL_COL_MAX]
+    return None
+
+
+def intents_to_declarations(intents: Any, *, role: str | None, sources: Any,
+                            acted_skills: Any = (), receipts: Any = (),
+                            skip_goals: Any = (), audit: dict | None = None) -> list[dict]:
     """意图清单 − 本轮已经办了的 ⇒ 要自动登记的声明（纯函数，20261008 批 ②）。
 
     这是「在规划阶段就给写好对应状态」里**确定性**的那一半：模型只负责说出
@@ -418,6 +526,12 @@ def intents_to_declarations(intents: Any, *, role: str | None, acted_skills: Any
     没有工具的行只会永远挂在台账里（`advance_by_receipts` 见无可结算的步骤直接返回
     None），那比不登记更坏。跳过是**静默的**：调用方拿"清单件数 − 产出件数"就知道有
     几件被跳过（那是给 trace 用的读数，不是这里的返回值）。
+
+    **第四条规则——出处对账（20261009）**：`goal` 里的数字必须在 `sources`（主人说过的话，
+    本轮那句在最前）里出现过；对不上就退回主人原话里最接近的那一段，一段都够不着就**不登记**
+    这一件（见 `reconcile_goal`。上面三条规则是"这件事已经办过了"，这一条是"这件事的目标
+    里有一个号是它编的"——两族完全不同，所以对账排在三条**之后**：被前三条排除的件本来
+    就不登记，先对账它们只会往 `audit` 里灌噪声）。
     """
     acted = {str(s) for s in (acted_skills or ()) if s}
     done_tools = {str((r or {}).get("tool") or "")
@@ -436,20 +550,35 @@ def intents_to_declarations(intents: Any, *, role: str | None, acted_skills: Any
             continue
         if set(tools) <= done_tools:
             continue
+        # ④ 出处对账（20261009）：这一件的 goal 里那些号得是主人说过的（本轮那句，或更早
+        #    轮次里说过的话——跨轮复述是合法重提，判据在 `reconcile_goal`）。
+        goal = reconcile_goal(it["goal"], sources)
+        if goal is None:
+            _bump(audit, "goal_dropped")
+            _note_raw(audit, "dropped_goals", it["goal"])
+            continue
+        if any(same_goal(goal, g) for g in skipped):
+            # 改写成主人原话那一段之后，恰好与**显式登记**过的那件同目标：同一件事只许有
+            # 一行（幂等键按 goal 指纹算），仍然不登记。上面那条判的是改写**前**的文本，
+            # 改写后的文本可能不同 ⇒ 这里必须再判一次。
+            continue
+        if re.sub(r"\s+", "", goal) != re.sub(r"\s+", "", it["goal"]):
+            _bump(audit, "goal_retraced")
+            _note_raw(audit, "retraced_goals", it["goal"])
         # 走**同一个归一器**（不在这里另造形状）：截断、列宽、state 的推导都只有一处。
         # label 用工具名——自动登记这一路没有"人话标签"的来源，而任何现成的渲染器
         # （`action_text.tool_action_text`）拿到的都是**未解析的模板实参**
         # （`{"name": "$name"}` ⇒ 「解冻账号「上一步返回」」），写进去比不写更坏。
         decl = normalize_declaration(
-            {"goal": it["goal"], "steps": [{"label": t, "tool": t} for t in tools]})
+            {"goal": goal, "steps": [{"label": t, "tool": t} for t in tools]})
         if decl:
             out.append(decl)
     return out
 
 
-def intent_frames(intents: Any, *, role: str | None, conversation_id: Any,
+def intent_frames(intents: Any, *, role: str | None, conversation_id: Any, sources: Any,
                   acted_skills: Any = (), receipts: Any = (),
-                  skip_goals: Any = ()) -> list[dict]:
+                  skip_goals: Any = (), audit: dict | None = None) -> list[dict]:
     """意图清单 → 本轮要发的 `__TASK__` 载荷列表（② 的**唯一入口**）。
 
     调用方（`graph.planner_node` 的薄壳）只做两件事：把 `decided.intents` 递进来、
@@ -460,14 +589,18 @@ def intent_frames(intents: Any, *, role: str | None, conversation_id: Any,
 
     空清单、`role` 为 None、清单里一件都推不出步骤 ⇒ 返回 `[]`（**静默**，由调用方
     决定要不要记一笔读数）。
+
+    `sources`/`audit` 只是**原样转交**给 `intents_to_declarations`（出处对账与它的读数，
+    见那里的第四条规则）——本函数仍然是那一路的**唯一入口**：会话 id 的守卫、对账、
+    步骤推导、载荷渲染都只在这一条链上，别处不许另拼一份。
     """
     if not isinstance(conversation_id, int):
         return []
     return [frame_payload(d, conversation_id)
-            for d in intents_to_declarations(intents, role=role,
+            for d in intents_to_declarations(intents, role=role, sources=sources,
                                              acted_skills=acted_skills,
                                              receipts=receipts,
-                                             skip_goals=skip_goals)]
+                                             skip_goals=skip_goals, audit=audit)]
 
 
 def normalize_declaration(args: Any) -> dict | None:
