@@ -442,6 +442,28 @@ check("  但带量词的整轮否认照样命中（裸「改」只是被量词�
 check("  引号里转述不算 narrator 自己的声称（调用方剥引号后判）",
       not g._change_denial_claim(g._strip_quoted_spans("留言里写着「这一轮什么都没改」"),
                                  True))
+# 20261008 补的词形（现场 trace `20261008T083153_1`）：模型换的说法是「**操作**」——
+# 上面四支的名词表收 改动/变动/请求/改，洞③（`_NO_EXEC_CLAIM_RE`）那一侧只收「工具/
+# 回执是空的」⇒ 那一整句从**两族判据中间**漏过去，一次真写成功被说成"什么都没做"。
+check("  量词锚定的整轮否认「没有执行任何操作」照样命中（两族名词表中间那个词）",
+      g._change_denial_claim(
+          "主人，这一轮系统**没有执行任何操作**——我这边没看到这次批准的执行记录，"
+          "所以 niuniu 的额度申请还没批、什么都没改。", True)
+      and g._change_denial_claim("本轮没做任何动作", True)
+      and g._change_denial_claim("这次没有进行任何操作", True))
+check("  「任何/一点/半点」是这一支的必要条件：**具体某类动作**的如实说明不在此列"
+      "（只跑了检索的一轮里「没有执行删除操作」是真话）",
+      not g._change_denial_claim("这一轮没有执行删除操作，只读了那一篇", True)
+      and not g._change_denial_claim("这次没有做冻结动作", True))
+check("  条件/疑问框架照旧豁免（不是声称）",
+      not g._change_denial_claim("要是本轮没有执行任何操作，我就再说一遍", True)
+      and not g._change_denial_claim("这一轮没有执行任何操作吗", True))
+# ⚠️ **已知缺口，本次没治、也不是本次引入**（20261008 现场记）：疑问式「有没有…？」落在
+# 哪个子句里都挡住豁免——`_CLAUSE_RE` 按标点切分、标点本身不属于子句，豁免表里那条
+# `[?？]` 实际够不着，整句只剩 `没有` 能命中判据。实测**旧四支同病**：
+# 「这一轮有没有什么改动？」在没有⑤这一支时就已经命中（`没有` + "什么" + `改动`）。
+# 补法是往 `_NO_EXEC_EXEMPT_RE` 加 `有没有`（`是不是` 已在表里，两者同类），
+# 但那是**判据改动**，未获点头前不动——这一行只把证据留在现场。
 # `_trim_noop_specs`：签名按 `_spec_signature` 归一（与回执侧同源）。
 _P70 = {"skill": "notice_read", "tools": ["read_notifications({'all': True})"],
         "params": {"all": True}, "note": ""}
