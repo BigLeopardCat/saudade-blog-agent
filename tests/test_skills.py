@@ -417,6 +417,39 @@ def test_nav_fast_path():
               _nav_fast_path(msg) is None, str(_nav_fast_path(msg)))
 
 
+def test_nav_fast_path_item_referent_guard():
+    """快道必须**让行**「某一条内容」——那是位置，不是版块页（20261008）。
+
+    现场：`_NAV_VERB_RE` 从「带我去**看看那条留言**」里抠出目标 `看看那条留言`，
+    `fuzzy_nav_hit` 只看关键词（"留言" ∈ t）⇒ 归一成**版块页** `/guestbook`；而快道
+    是确定性回答（零 LLM，决策权已经不在 planner 手上）⇒ 主人看到"意图明显是去那条
+    留言、第一次却带到了留言板"（trace `20261008T023344` 那族连着七步落空）。
+
+    两向都要锁，缺一向都测不出这个守卫：**指代形状必须让行**（否则就是这次的病），
+    **版块形状必须照旧命中**（否则一个写宽了的守卫会把"带我去留言板"也推给 LLM，
+    白丢一次确定性识别——而且这病是静默的，快道不命中在 trace 里跟"没写快道"一样）。
+    """
+    print("[nav_fast_path] 指代型目标让行（`某一条` ≠ `版块页`）")
+    # ① 让行：指示代词 + 量词 + 内容名词 ⇒ None（交回 planner LLM 填定位形态）
+    # 前四条是**真会中招的格子**（模糊表里有对应关键词：留言/说说/笔记/公告），去掉
+    # 守卫它们当场变红——这一组才是守卫生效的证明（实测过一遍变异）。后三条是现场原句
+    # 与近亲，今天靠"抠出的目标超 8 字窗口"或"关键词不在模糊表里"侥幸不中招，留着是
+    # 防有人把那些关键词加进 `FUZZY_NAV_RULES`（那时它们才真会中招）。
+    for msg in ["去那条留言", "去那条说说", "去那篇笔记", "带我去看那条公告",
+                "带我去看看那条留言",          # 现场原句（golden nav_board_position_from_notice）
+                "带我去看看我已经通过的留言",     # 现场另一句（trace 20261008T024742）
+                "带我去那篇我昨天写的文章", "带我去看看那条评论"]:
+        check(f"★ 指代某一条「{msg}」→ 让行（不是版块页）",
+              _nav_fast_path(msg) is None, str(_nav_fast_path(msg)))
+    # ② 照旧命中：没有指示代词的版块说法（守卫不许误伤这一族）
+    for msg, path in [("带我去留言板", "/guestbook"), ("带我去看看留言板", "/guestbook"),
+                      ("去说说", "/talk"), ("带我去看看我的留言", "/guestbook")]:
+        p = _nav_fast_path(msg)
+        check(f"  版块形状「{msg}」→ 照旧命中 {path}",
+              bool(p) and f'"path": "{path}"' in p["tools"][0],
+              f"tools={p and p['tools']}")
+
+
 def test_dashboard_nav_expansion():
     """后台各面板可以成为导航目标（20260926）。
 
@@ -5505,7 +5538,8 @@ def main():
     for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip,
                test_plan_skill_line_contract, test_parse_tolerance,
-               test_nav_fast_path, test_dashboard_nav_expansion,
+               test_nav_fast_path, test_nav_fast_path_item_referent_guard,
+               test_dashboard_nav_expansion,
                test_fast_path_shell_transparency,
                test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
                test_explicit_tools, test_planner_tool_menu, test_admin_console_role_channel,
