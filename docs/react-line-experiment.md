@@ -131,7 +131,7 @@ PYTHONPATH=$PWD .venv/bin/python eval/experiments/react_line_ab.py \  # 定点 A
     --rounds 3 --arms planner,react_assets,react_line --out /tmp/react_line_ab.json
 ```
 
-**陷阱（都踩过）**：
+**陷阱（都在实测里撞到过，已写进上面的跑法）**：
 
 - **`PYTHONPATH` 必须指到本分支**：`.venv` 的 editable `.pth` 把主仓钉在 `sys.path` 上，
   不指就**静默**用到主仓那份代码，实验看起来"跑了"其实没跑本分支。

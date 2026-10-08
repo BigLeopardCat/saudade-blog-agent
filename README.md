@@ -167,7 +167,7 @@ gate 失败时生成确定性 fallback，减少再次幻觉的机会。回复不
 | `__SUMMARY__:<json>` | 裸帧 | 独立摘要结果，必须在 `__END__` 之前到达 |
 | `__END__` / `__NAV_END__` / `__ERROR__:<json>` | 终止帧 | 见终止帧即停止解析并收尾 |
 
-两个反复踩过的坑，写在这里当护栏：
+两条护栏，各由一次真实故障定位得出——写在这里，是因为它们**不报错**：
 
 - **`__PENDING__` / `__EXEC__` 的 `data: ` 前缀不能省**。Rust 的 SSE 解析是 `strip_prefix(b"data: ")`，裸 yield 的帧 payload 是空的、会被静默丢弃——`__EXEC__` 上线首轮就因此从未到达落库分支，而链路两端都以为对方有问题。
 - **落库帧要先于终止帧发出**。Rust 见到 `__END__` 就停止解析循环，排在它后面的帧一律读不到。断连同样如此：客户端一见 `__END__` 就断开，所以回复的落库是从生成器生命周期里摘出来单独跑的。
@@ -202,7 +202,7 @@ saudade-blog-agent/
 ├── rag/sections.py        超长文章分节（索引 / 帧 / 按节取回三处共用；纯函数）
 ├── eval/                  检索评测、golden 评测、trace 分析与跨源对账
 ├── tests/                 秒级离线回归测试（按磁盘枚举，加套件不用改 CI）
-├── docs/                  架构、评测可观测性、问题记录
+├── docs/                  架构（现状）、问题记录（事故：现象→根因→修复→回归锁）、评测与可观测性
 │   └── adr/               架构决策记录：当时的取舍，含"决定不做某事"
 ├── CONTRIBUTING.md        参与方式、本仓的判据规矩、能/不能在本机跑什么
 ├── ROADMAP.md             现在做什么 / 什么在等触发条件 / 什么明确不做
@@ -281,7 +281,7 @@ BLOG_API_BASE=http://127.0.0.1:8099/api/public \
 trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`、
 `eval/golden_trace.py::prune`），表里 `rule=None` 各指一处。
 
-这条规矩的由来：同一族坑踩过四次（R2 的保留数、logrotate 的 `rotate 14`、`logs/archive/`、
+这条规矩的由来：同一形状的问题出现过四次（R2 的保留数、logrotate 的 `rotate 14`、`logs/archive/`、
 `eval/report/runs/`），形态都是**「策略写了，但没有任何东西在执行它」**——装饰性配置比没有配置
 更坏，因为它看起来是对的。
 
