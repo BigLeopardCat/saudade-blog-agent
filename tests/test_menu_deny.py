@@ -199,9 +199,16 @@ check("`planner_node` 从**上一轮受阻项**算 deny",
       'deny = denied_skills(state.get("blocked") or [])' in _GRAPH_SRC)
 check("算 deny 在用它之前（顺序错了就是 UnboundLocalError 或静默用上一轮的值）",
       "deny=deny" in _GRAPH_SRC[_GRAPH_SRC.index("deny = denied_skills("):])
+# 20261008 批 ②：这一格的锚点随那次重构挪了形——原来那行把 `task_state=` 的表达式
+# 内联在调用里，现在先算进 `_task_state`（"只交清单"那一格要**重绑一次** llm，两处
+# 必须取同一个值，见 `graph.py` 的 `deny_pseudo` 那一段）。断言本身**不变**：`deny`
+# 真的交给了 `bind_native`，且交的是算出来的那个集合——只是从"逐字比对整行"改成
+# "在这一次调用的窗口里找"，后者不会因为多一个形参就假红。新加的 `deny_pseudo`
+# 那一路另有判据（`tests/test_native_plan.py` ①b）。
+_bind_at = _GRAPH_SRC.index("llm = bind_native(")
 check("把 deny 交给了 bind_native（schema 那一半）",
-      "task_state=bool(getattr(settings, \"agent_task_state\", False)), deny=deny)"
-      in _GRAPH_SRC)
+      "deny=deny" in _GRAPH_SRC[_bind_at:_bind_at + 300],
+      repr(_GRAPH_SRC[_bind_at:_bind_at + 300]))
 check("把 deny 交给了渲染（提示词那一半）",
       "deny=deny," in _GRAPH_SRC.split("_prompt_args = dict(", 1)[1]
       .split("_render_planner_prompt(**_prompt_args)", 1)[0])

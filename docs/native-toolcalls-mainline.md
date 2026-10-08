@@ -664,6 +664,69 @@ submitted → running → succeeded / failed / cancelled
 
 ---
 
+### 6.11 意图清单的第二个出口：`intents` 挂在每个技能上（20261008，批 ② 续）
+
+**现场（两条互为否定的真跑）**：批 ② 的口径是「模型在规划输出里列出**这一句主人话里要办的每一
+件事**，系统减去本轮已办的、把剩下的确定性登记成跨轮任务」。它的出口原本只有一个：伪函数
+`task_intents`。真链路上这条只成功了一半——golden 用例 `followup_short_all_two_picks`（一句话
+里两件事）两跑：21:38 模型**交了清单**、这一轮什么都没办（得靠 `_INTENTS_ONLY_NUDGE` 再请一
+次）；22:01 **同一句 prompt、同一份 schema、`temp=0.0`**，模型直接点了技能、清单为空。
+
+**这不是随机噪声，是结构性互斥**：native 档 `parallel_tool_calls=False`，一轮里模型**只能发一
+条调用**——「交清单」（伪函数）与「点技能」（真工具）在同一轮里只有一种可能。选清单 ⇒ 这一轮零
+动作；选技能 ⇒ 剩下的那件事**没人记**，正是本批要治的病。两跑各命中互斥的一侧，所以「两次读数
+不同」这件事本身不是方差，是**二选一**。
+
+**修法（出口二）**：`AGENT_TASK_STATE` 开档时，**每个技能函数**多一格可选参数 `intents`。它用
+`tasks.intents_prop_schema` 造形状，与伪函数 `task_intents` 那一格**同源**（只差描述文案，测试
+按 items 逐字对拍）。`native_plan.tool_calls_to_plan` 在解释 args 之前把它 `pop` 掉 ⇒ **它绝不
+进 `params`、绝不进 TOOLS 行、绝不进 `tool_call_names`**，只喂归一化器；记账 `task_intents_field:
+<name>`（填了但收不下 ⇒ `task_intents_field_invalid`）。原 `task_intents_inline:<name>` 的含义
+随之收窄为「清单来自**另一条**调用」。
+
+「多填无害」是有判据保证的，不是措辞客气——**三条排除规则**（与判据侧
+`require_task_goal_per_intent` **同源**）：`skill ∈ acted_skills`、模板工具全在回执里、
+`goal ∈ skip_goals`（`same_goal`）。⇒ 本轮**真正办掉的那件会自动出局**，所以文案敢写「含你这一
+轮正要办的那件」。这条性质也是它便宜的原因：不需要模型判断"该不该列"。
+
+**两处配套（都不是判据）**：
+
+- **golden 用例补 `conversation_id`**：`tasks.intent_frames` 对「`conversation_id` 不是 int」的
+  一轮**返回 `[]`**（守卫本身是对的——没有会话就没处挂任务行），而生产恒有整数 id
+  （`src/routes/chat.rs` 转发前 `resolve_conversation_id(..., create=true)`）。用例不写 ⇒ 机制
+  **结构性地跑不到**，而 `frames: 0` 与「推不出步骤」在 trace 里长得一模一样。`basic.jsonl` 的
+  `followup_short_all_two_picks` 的 context 因此补了 `"conversation_id": 20261027`（唯二带
+  `require_task_goal_per_intent` 的另一条 `mt2_*` 本来就有整数 id）。**修的是用例与生产的不一致，
+  不是判据**：分母、断言、期望红绿全不变。
+- **trace 补记会话 id**：`planner.task_auto` 事件加一个 `conv` 字段，把上面两种「0 帧」在 trace
+  里分开（改之前只能靠翻源码猜是哪一种）。
+
+**真链路读数**（`GOLDEN_ARM=matrix`，两条靶连跑三次）：**6/6 通过**（此前 0/2）。其中 **5 次走新
+字段通道**（一轮内既交清单又办一件）、1 次走「先列后办 + 纠偏」，`resets` 全 0。
+
+**成本（如实记）**：planner 的 `tools` JSON **30241 → 51302 字符**（Δ 21061 ≈ **7.6k 输入
+tokens / 次 planner 调用**，仅开档时）。重复轮几乎全吃 cache（某轮 36627 token 里 35840 命中
+⇒ 边际成本远低于这个上限）。把那段长解释从 schema 挪进 planner 提示词一次可省 ~5.5k，**刻意不
+做**——现在的文案是本跑验证过能用的，缩短要再赌一次合规。**拨盘今天在本机是开的**，但来源不是
+`.env`（仍 `0`）而是 systemd drop-in（`/health` `dials.agent_task_state=true`）——**两个真值源
+不一致**这件事另挂待拍板；另外产线生效的是**工作区**，上一次重启早于本节的落盘时间 ⇒ **新出口
+此刻还没在产线上跑**。见 ADR-0002《20261008 追记》。
+
+**三条诚实边界**：
+
+- **inline 通道下，上卡的那件不建任务行**——卡就是它的载体。卡被取消/过期时那件没有
+  `agent_task` 兜底。判据侧本来就是这么定义射程的（`state="cancelled"` 不算登记），**这不是漏
+  项，是没额外补行**。
+- **sink 是覆盖语义**：`task_sink[:] = frames` ⇒ **最后一次非空决策覆盖前一次**（实测
+  `20261008_222340` 第二版又填了 `intents` 但只填剩下的 ⇒ 最终登记是上一版的**子集**，上卡那件
+  由卡承载）。代价同上一条。
+- **伪函数现在是三个**（`task_hold` / `task_drop` / `task_intents`）**加一个字段**（每个技能上的
+  `intents`）。§6.7 那张表写于 20260927，只讲前两个；`tests/test_native_plan.py` 的
+  `pseudo_tool_schemas` 与两条接线套件（`test_native_wiring` / `test_slim_skills`）的
+  `_expected_schema_names` 都已按三个认。
+
+---
+
 ## 7. 待拍板 / 待实测
 
 > ⚠️ **下表的第 2–4 行会引 `text` 做对照。那个 `text` 是 20260927/0928 那批的对照臂读数，

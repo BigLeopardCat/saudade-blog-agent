@@ -666,7 +666,17 @@ def _looks_like_followup(core: str) -> bool:
     return len(core) <= _SHORT_MAX or bool(_SHORT_LEAD_CONT_RE.match(core))
 
 
-def _short_reply_hint(messages: list) -> str:
+_INTENTS_BREAKDOWN = (
+    "**「逐项」不等于「同一轮全办」**：一轮只发得出一条调用、一张确认卡也只装得下"
+    "同一个本领的一件事。所以两件以上时，**在你点技能的那次调用里顺手把 `intents` "
+    "那一格填上**（逐件写 goal + skill，含你这一轮正要办的那件；也可以单独调一次 "
+    "`task_intents`，但那样这一轮就没有动作了、系统会再请你办一件），这一轮只办"
+    "最靠前那一件——其余的交由系统登记成跨轮任务、下一轮接着办。"
+    "**漏列的那件下一轮谁都不记得**——宁可先列上，也别让它凭空消失。"
+)
+
+
+def _short_reply_hint(messages: list, *, task_state: bool = False) -> str:
     """短应答提示块（planner 模板 {short_reply_hint}）。
 
     四种出口：三类短应答（pos/neg/auth）给各自的动作指令；**形态上像承接但认不出类别**
@@ -682,6 +692,10 @@ def _short_reply_hint(messages: list) -> str:
     只有"认得出是短应答"的轮次才拿得到台账，主人说「全部批准」这种**认不出类别**的
     授权话就整块丢了（生产实证 trace 20260929T221854）；② 台账是**系统事实**，
     该在所有轮次同一个位置出现，不该是某一个分类分支的附注。
+
+    `task_state=True` 时（`AGENT_TASK_STATE`，20261008 批 ②）两个"逐项还原"出口后面
+    各追加一句 `_INTENTS_BREAKDOWN`：把「其余那几件填进 `intents` 格」写在同一句回落里
+    （理由见那条常量的注）。默认 `False` ⇒ 文本逐字节不变，非生产调用方与判据都不用改。
     """
     user_msg = _last_user_msg(messages)
     kind = _short_reply_kind(user_msg)
@@ -729,12 +743,14 @@ def _short_reply_hint(messages: list) -> str:
                     "我就去办」——这句话要成立，前提是这一轮真的列出了调用（系统据此"
                     "弹卡）；**不许自己补项**，也不许把哪儿都没有的事加进来。"
                     "② 若它是一句独立的新请求 / 新问题 → 按字面当新话题，"
-                    "**不要**硬接上面那句。")
+                    "**不要**硬接上面那句。"
+                    + (_INTENTS_BREAKDOWN if task_state else ""))
         return (f"当前消息「{user_msg}」不算系统认得的短应答，但形态上像是在承接上一轮"
                 f"——先读它、再判：\n　　泠月：{ai}\n"
                 "判定：① 若它是在回应上面那句（含**全选式**：「都做 / 全都要 / 两个都做 / "
                 "一起」）→ 把上面那句里**真的列过**的事项逐项还原成动作（一项不少；"
                 "**不许自己补项**，也不许把上面没提过的事加进来）；"
+                + (_INTENTS_BREAKDOWN if task_state else "") +
                 "② 若它是一句独立的新请求 / 新问题 → 按字面当新话题，**不要**硬接上面那句。")
     if not last:
         return (f"当前消息「{user_msg}」是短应答，但本会话此前没有泠月的发言可承接"

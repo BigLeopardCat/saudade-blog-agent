@@ -458,7 +458,86 @@ def test_declaration_nudge_offers_both_paths():
           "task_drop" in T.TASK_HOLD_DESC and "自动结算" in T.TASK_DROP_DESC)
 
 
-# ── ⑦ 结构锁 ────────────────────────────────────────────────────────────
+# ── ⑦ 意图清单 → 自动登记（20261008 批 ②）────────────────────────────────
+# 这一段的判据对着的是**同一个洞的两半**：判据侧（`eval/run_golden.py` 的
+# `require_task_goal_per_intent`）判"没上卡的每一件都要有登记"，机制侧就得"没上卡的
+# 每一件都登记"——所以下面每一条排除规则都要在**两侧**找得到，单看一侧不算数。
+def test_normalize_intents_drops_items_not_whole_list():
+    print("\n[意图] 逐项归一：坏的单项丢掉，好的照收（枚举的价值在别漏）")
+    got = T.normalize_intents({"intents": [
+        {"goal": "  解冻账号 probe_target_1 ", "skill": "account_unfreeze"},
+        {"goal": "   ", "skill": "account_unfreeze"},          # 没目标 ⇒ 丢
+        {"goal": "查一下留言板", "skill": "站外技能"},           # 够不着 ⇒ 丢
+        {"goal": "聊两句", "skill": "chat"},                    # 闲聊不是要办的事 ⇒ 丢
+        "不是对象",                                              # 形状坏 ⇒ 丢
+        {"goal": "把那条待办勾完成", "skill": "dashboard_todo_done"},
+    ]}, "admin")
+    check("只留下两件好的（五条坏的各按各的理由丢，不整份作废）",
+          [i["skill"] for i in got] == ["account_unfreeze", "dashboard_todo_done"], str(got))
+    check("goal 抹掉首尾空白（幂等键/指纹都拿它算）", got[0]["goal"] == "解冻账号 probe_target_1")
+    check("非字典/非清单一律空", T.normalize_intents(None, "admin") == []
+          and T.normalize_intents({"intents": "两件"}, "admin") == [])
+    many = T.normalize_intents(
+        {"intents": [{"goal": f"第{i}件", "skill": "favorite_add"} for i in range(20)]}, "admin")
+    check(f"超过上限只收前 {T.TASK_MAX_INTENTS} 件（截断在这里，不靠模型自觉）",
+          len(many) == T.TASK_MAX_INTENTS
+          and T.TASK_MAX_INTENTS == 6)
+
+
+def test_intents_to_declarations_excludes_what_this_round_already_did():
+    print("\n[意图] 三条排除规则：办了的不登记、刚做完的不登记、已显式登记的不登记")
+    ints = [{"goal": "解冻账号 probe_target_1", "skill": "account_unfreeze"},
+            {"goal": "把那条待办勾完成", "skill": "dashboard_todo_done"}]
+    both = T.intents_to_declarations(ints, role="admin")
+    check("一条都没排除时两件都登记，步骤取技能模板的工具",
+          [d["goal"] for d in both] == [i["goal"] for i in ints]
+          and [s["tool"] for s in both[0]["steps"]]
+          == [t for t, _ in T.SKILL_MAP["account_unfreeze"].plan
+              if t in set(T.step_tool_enum("admin"))],
+          str([s["tool"] for s in both[0]["steps"]]))
+    check("自动登记的规则是 state=running、不问主人（步骤都在模板里了，没有未知项）",
+          all(d["state"] == "running" and not d["pending_question"] for d in both))
+    one = T.intents_to_declarations(ints, role="admin", acted_skills={"account_unfreeze"})
+    check("① 本轮办了的（上了卡的）那件不登记（与判据侧同一条规则）",
+          [d["goal"] for d in one] == [ints[1]["goal"]], str([d["goal"] for d in one]))
+    done = [{"tool": t} for t, _ in T.SKILL_MAP["dashboard_todo_done"].plan]
+    keep = T.intents_to_declarations(ints, role="admin", receipts=done)
+    check("② 模板工具全在回执里 ⇒ 这件事刚做完，不登记（否则长出永远结算不掉的行）",
+          [d["goal"] for d in keep] == [ints[0]["goal"]], str([d["goal"] for d in keep]))
+    setk = T.intents_to_declarations(ints, role="admin",
+                                     skip_goals=["解冻账号probe_target_1！"])
+    check("③ 同一轮 `task_hold` 已显式登记过的那件（指纹同源、标点空白不算差异）",
+          [d["goal"] for d in setk] == [ints[1]["goal"]], str([d["goal"] for d in setk]))
+    none = T.intents_to_declarations(
+        [{"goal": "查一下留言板", "skill": "content_query"}], role="admin")
+    check("推不出步骤的技能（content_query 模板没有工具）静默跳过——登记无工具的行"
+          "只会永远挂着", none == [])
+    check("角色够不着模板工具时同样跳过（普通身份没有后台工具）",
+          T.intents_to_declarations(
+              [{"goal": "看看后台待办", "skill": "dashboard_todo_done"}], role=None) == []
+          and T.intents_to_declarations(
+              [{"goal": "看看后台待办", "skill": "dashboard_todo_done"}], role="admin") != [])
+
+
+def test_intent_frames_is_the_single_entry():
+    print("\n[意图] intent_frames = ② 的唯一入口（取会话 id 这一步在它里面判）")
+    ints = [{"goal": "把那条待办勾完成", "skill": "dashboard_todo_done"}]
+    frames = T.intent_frames(ints, role="admin", conversation_id=7)
+    check("载荷形状 = frame_payload 的（跨语言契约只有一处实现）",
+          list(frames[0]) == list(T.frame_payload(
+              T.normalize_declaration({"goal": "x", "steps": [{"tool": "toggle_effect"}]}), 7)))
+    check("task_id 由会话 + goal 指纹派生（同会话同目标恒等 ⇒ Rust upsert 认同一行）",
+          frames[0]["task_id"] == T.task_id_for(
+              T.idempotency_key_for(7, "把那条待办勾完成")))
+    check("拿不到会话 id 就一条都不发（幂等键里含着会话，退化成 0 会串会话）",
+          T.intent_frames(ints, role="admin", conversation_id=None) == []
+          and T.intent_frames(ints, role="admin", conversation_id="7") == [])
+    check("空清单/None 一律空（绝大多数轮次的常态）",
+          T.intent_frames([], role="admin", conversation_id=7) == []
+          and T.intent_frames(None, role="admin", conversation_id=7) == [])
+
+
+# ── ⑧ 结构锁 ────────────────────────────────────────────────────────────
 def test_module_does_not_import_graph():
     print("\n[结构] tasks 不许 import agent.graph（会成环）")
     tree = ast.parse((ROOT / "agent" / "tasks.py").read_text(encoding="utf-8"))
@@ -469,12 +548,12 @@ def test_module_does_not_import_graph():
         if isinstance(node, ast.Import):
             hits += [a.name for a in node.names if a.name.startswith("agent.graph")]
     check("没有 agent.graph 的 import", not hits, str(hits))
-    check("两个伪函数名都不与任何技能重名（重名会让 trace 分不清是技能还是任务）",
+    check("三个伪函数名都不与任何技能重名（重名会让 trace 分不清是技能还是任务）",
           all(fn not in {s.name for s in T.visible_skills(r)}
-              for fn in (T.TASK_HOLD, T.TASK_DROP) for r in (None, "admin")))
-    check("伪函数只有这两个（多一个就要多一套判据，schema 集合由这里钉住）",
+              for fn in (T.TASK_HOLD, T.TASK_DROP, T.TASK_INTENTS) for r in (None, "admin")))
+    check("伪函数只有这三个（多一个就要多一套判据，schema 集合由这里钉住）",
           [s["function"]["name"] for s in T.pseudo_tool_schemas(None)]
-          == [T.TASK_HOLD, T.TASK_DROP])
+          == [T.TASK_HOLD, T.TASK_DROP, T.TASK_INTENTS])
     check("task_hold 的 steps 在**服务端**就不许为空（minItems=1 是形状那一半的锁）",
           (T.task_hold_schema(None)["function"]["parameters"]["properties"]["steps"]
            .get("minItems") == 1))
@@ -512,6 +591,9 @@ if __name__ == "__main__":
                test_render_open_tasks,
                test_declaration_note_is_single_line,
                test_declaration_nudge_offers_both_paths,
+               test_normalize_intents_drops_items_not_whole_list,
+               test_intents_to_declarations_excludes_what_this_round_already_did,
+               test_intent_frames_is_the_single_entry,
                test_module_does_not_import_graph):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))

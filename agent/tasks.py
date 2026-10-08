@@ -12,7 +12,7 @@
 `decisions.py::_scan_action_intents` 只认**具名别名**（`_EFFECT_ALIASES` 里有"樱花/
 大雨"才会扫出 effect 意图），而本族失败的第二步宾语恰恰是**未具名指称**（「开启一个
 特效」）——扫描器结构上看不见它。能看见的只有理解语义的模型，所以登记的入口是模型
-（native 档的两个伪函数：登记 `task_hold`、撤下 `task_drop`）。
+（native 档的三个伪函数：意图清单 `task_intents`、登记 `task_hold`、撤下 `task_drop`）。
 这不违反"服务端记录不许模型自报"那条纪律：
 那条管的是**已发生的事实**（由 checker 回执认定，模型说了不算）；而"主人一共要几件事、
 还差哪一步"只存在于 planner 的决策里，没有任何下游能推导出来。
@@ -29,6 +29,14 @@
   agent 结算：**确定性**——本轮回执里有该步骤声明的工具 ⇒ `advance_by_receipts` 推进
              游标，全部推进完 ⇒ `succeeded`，由 producer 发 `__TASK__` 回写。
              模型不参与结算：它说自己做完了不算数（同 `execution_log` 的纪律）。
+
+**② 自动登记（20261008）**：`task_hold` 是**自愿的**，实测"主人一句话里两件事、模型只
+办一件"时它 0 次被想起（`20261007` 读数 0/979）——那件没被办的于是谁都不记得。② 把
+这一格拆成两半：模型只**枚举**（`task_intents`：这句话里有哪几件事，**不论本轮办不办**），
+**登记由系统做**（`intents_to_declarations` 减掉本轮已办的，步骤从技能模板推）。
+`intent_frames` 是这一路的唯一入口（planner 调它、判据侧的
+`require_task_goal_per_intent` 对着同一份清单判），**排除规则两处同源**——见那两个函数
+的 docstring。
 
 **已知缺口（如实记，不装作没有）**：
   · 结算判据是**工具粒度**（不看参数）：同一步骤声明的工具本轮被执行过就算推进——
@@ -65,7 +73,7 @@ import json
 import re
 from typing import Any
 
-from agent.skills import callable_query_tools, visible_skills
+from agent.skills import SKILL_MAP, callable_query_tools, visible_skills
 
 # 模型侧的两个伪函数名（**20260927 拆成两个**，理由见 `TASK_DROP` 上方那段）。
 # 它们**不是技能**（技能表 `SKILLS` 里没有它们，`instantiate_plan` 也不认）——只在
@@ -88,6 +96,41 @@ TASK_HOLD = "task_hold"
 # `normalize_declaration`），想撤下只能显式点 `task_drop`。
 TASK_DROP = "task_drop"
 
+# 第三个伪函数：**意图清单**（20261008 批 ②）。主人一句话里点了 N 件事、这一轮只办了
+# 其中一件时，把"这句话里要办的每一件事"逐件说出来，系统据此把**没办的那几件**确定性
+# 登记成跨轮任务。
+#
+# **为什么不能靠 `task_hold` 顶这一格**（这是本函数存在的全部理由）：`task_hold` 由模型
+# **自己判断"这件事我这一轮做不完"**再调用——它是自愿的、且只覆盖模型**想起来**要说的
+# 那几件。实测的代价有两处：① 开档 5 天 979 份 trace 里 `planner.task_declare` **0 次**
+# （ADR-0002《20261007 去留复核》）；② 20261008 的两条 golden（「两个都做」/「临江仙 +
+# 文章 23 的标签」）里，另一件事**零帧、凭空消失**——不是办少了一件，是**谁都不记得它**。
+# 所以清单这一格必须**在规划阶段被要求**（主人点名的「在规划阶段就给写好对应状态」），
+# 而不是等模型自愿想起来。
+#
+# 与 `task_hold` 的分工（都是伪函数，都只在本开关打开时进 schema）：
+#   `task_intents` 说"主人这句话里一共有几件事"（**不论本轮办不办**，是**枚举**）；
+#   `task_hold`   说"这件事剩下的步骤是什么"（**带步骤与工具**，是**计划**）。
+# 系统拿枚举减去"本轮已经办了的那些"，剩下的自动登记（步骤由技能模板推，见
+# `intents_to_declarations`）——模型因此**不用**为没办的那几件编步骤。
+#
+# **清单有两个出口**（20261008 补，第二个出口的动机见 `intents_prop_schema`）：
+#   ① 单独一次 `task_intents` 调用 —— 这一轮只交清单、先不动手（下一拍再点技能）；
+#   ② 点技能的那次调用上多带一格 `intents` 字段 —— 一回说完"办这件 + 还有那几件"。
+# 之所以两个都留：`parallel_tool_calls=False` 让"单独交清单"的一轮**必然零动作**，
+# 得靠 `planner` 那一格催一次（`_INTENTS_ONLY_NUDGE`），多花一个来回；而实测里
+# 模型有时就是想先列后办。两条路殊途同归（都进 `normalize_intents`），没有第二条
+# 登记链。
+TASK_INTENTS = "task_intents"
+
+# 意图清单那一格的**键名**（20261008 批 ② 的第二个出口）。
+#
+# 同一个键、两种到达方式：伪函数 `task_intents` 的参数（"这一轮不动手，先把清单交了"），
+# 与**每个技能函数上的同名字段**（"一边动手一边交"）。归一器只有一处
+# （`normalize_intents`），所以键名也只能有一处——两处各写一个字面量，改名时必然
+# 一半新一半旧，而那一半的失效是**静默**的（模型填了，没人读）。
+INTENTS_ARG = "intents"
+
 # 六态状态机里"还没完结"的三态（与 Rust `TASK_OPEN_STATES` 同集合，两侧都在判：
 # 读侧过滤在 SQL 里，这里是注入前的防御）。
 TASK_OPEN_STATES = ("submitted", "running", "input_required")
@@ -95,6 +138,9 @@ TASK_OPEN_STATES = ("submitted", "running", "input_required")
 # 一次登记最多收几步：`steps` 是给下一轮 planner 看的"还剩什么"，不是计划书。
 # 超过上限只收前几步（截断发生在 `normalize_declaration`，不靠模型自觉）。
 TASK_MAX_STEPS = 8
+
+# 一次意图清单最多收几件（同上：这是给系统用的枚举，不是计划书；多出来的不登记）。
+TASK_MAX_INTENTS = 6
 GOAL_COL_MAX = 300          # = 迁移里的 varchar(300)（`goal` / `pending_question` 同列宽）
 LABEL_MAX = 80
 TOOL_MAX = 64
@@ -118,6 +164,18 @@ TASK_DROP_DESC = (
     "goal 写你当初登记时那件事的说法（对得上才撤得掉同一行）。"
     "⚠️ 你自己把它做完了**不要**用它：做完由系统按执行回执自动结算，"
     "撤下只会让系统以为主人不要这件事了。"
+)
+
+TASK_INTENTS_DESC = (
+    "把主人**这一句话里要办的每一件事**逐件列出来（**不管这一轮办不办**）。"
+    "**一句话里有两件以上要动手做的事时，必须调它**；只有一件事时不要用。"
+    "每件写 goal（主人原话里那件事的说法，别加工）与 skill（你打算用哪个本领办它，"
+    "填上面那些本领名之一）。"
+    "⚠️ **只列要动手做的事**：纯闲聊不用列；一件事里有几件不同本领的，就列几件。"
+    "⚠️ 列全比列准重要：系统拿它减去你这一轮真办了的，把**剩下的**记成跨轮任务——"
+    "漏列的那件下一轮谁都不记得，主人会以为你要办。"
+    "⚠️ 它**不代替**动作：这一轮该点的技能照常点、该执行的照常执行，"
+    "它只是让系统知道你这一轮没办的那几件是什么。"
 )
 
 
@@ -211,13 +269,205 @@ def task_drop_schema() -> dict:
     }
 
 
+def task_intents_schema() -> dict:
+    """`task_intents`（意图清单）的 OpenAI function schema。
+
+    `skill` **不写 `enum`**（与 `task_hold` 的 `tool` 不同）：那格的闭集是**全部可见
+    技能名**（25+ 个、每个几十字符），塞进 schema 的代价落在**每一次 planner 调用**上；
+    而这里的 `skill` 只是"打算用哪个本领"，写错/写了个够不着的名字由归一器挡掉
+    （`normalize_intents` 只收本角色可见的技能名），不影响这一轮的动作。
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": TASK_INTENTS,
+            "description": TASK_INTENTS_DESC,
+            "parameters": {
+                "type": "object",
+                "properties": {INTENTS_ARG: intents_prop_schema(
+                    "主人这一句话里要办的每一件事（含你这一轮正要办的那件）")},
+                "required": [INTENTS_ARG],
+            },
+        },
+    }
+
+
+# 挂在技能函数上的那一格用的描述（出口二；出口一用伪函数自己的描述，见
+# `task_intents_schema`）。同一份 schema 会出现在**每一个**技能函数上，所以只有
+# 这两句、且**不点技能名**——文案的代价是每次 planner 调用乘技能数。
+INTENTS_FIELD_DESC = (
+    "**这一句主人话里要办的每一件事**（含你这一轮正要办的那件，逐件写 goal + skill）。"
+    "只有一件事就**别填**。系统拿它减去你这一轮办了的，把**剩下的**记成跨轮任务"
+    "——漏掉的那件下一轮谁都不记得，主人会以为你要办。"
+)
+
+
+def intents_prop_schema(description: str) -> dict:
+    """意图清单那一格的**属性** schema —— 唯一来源（两个出口共用，见 `INTENTS_ARG`）。
+
+    出口一：伪函数 `task_intents` 的参数（独立一条调用，这一轮不动手）；
+    出口二：**每一个技能函数上的可选同名字段**——`native_plan.build_tool_schema` 打开
+    任务状态时把它挂到每个技能上，`tool_calls_to_plan` 从动作调用的参数里摘出来。
+
+    为什么需要出口二（20261008 实测，本函数存在的全部理由）：生产模型在
+    `parallel_tool_calls=False` 下**一条轮次只发得出一条调用**，于是"交清单"与"点技能"
+    在同一轮里**结构性互斥**——同一句 prompt、同一份 schema、`temp=0.0` 的两跑，一次
+    先交清单（`mix2` 的 `20261008_213818`）、一次直接点技能（`20261008_220155`），
+    全凭采样；而只交清单那一轮"一件都没办"，只点技能那一轮"另外那件谁都不记得"。
+    挂在动作调用上的一格让两者**不再竞争**：一次调用同时说出"这一轮办这件"与
+    "这句话里还有那几件"。排除规则也让它便宜——本轮办的那件按 `acted_skills` 自动
+    出局（同 `intents_to_declarations`），所以**多填不会长出多余的行**，只有漏填有代价。
+
+    形状（`goal` + `skill`、没有 `enum`）的理由同 `task_intents_schema`：闭集是全部
+    可见技能名，写进 schema 的代价落在**每一次** planner 调用上；写错的名字由
+    `normalize_intents` 挡掉，不影响这一轮的动作。
+    """
+    return {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+            "type": "object",
+            "properties": {
+                "goal": {"type": "string",
+                         "description": "这件事的一句话目标（取主人原话里的说法）"},
+                "skill": {"type": "string",
+                          "description": "办这件事要用的本领名（技能名）"},
+            },
+            "required": ["goal", "skill"],
+        },
+        "description": description,
+    }
+
+
 def pseudo_tool_schemas(role: str | None) -> list[dict]:
-    """本开关打开时，`tools` 数组末尾追加的**全部伪函数**（登记 + 撤下）。
+    """本开关打开时，`tools` 数组末尾追加的**全部伪函数**（登记 + 撤下 + 意图清单）。
 
     单一入口：`build_tool_schema` 只调它，名字集合的断言（`tests/test_native_plan.py`）
-    也只认它——两个伪函数的形状若各写一处，"开档只多两个名字"这条判据就会漂移。
+    也只认它——三个伪函数的形状若各写一处，"开档只多这几个名字"这条判据就会漂移。
     """
-    return [task_hold_schema(role), task_drop_schema()]
+    return [task_hold_schema(role), task_drop_schema(), task_intents_schema()]
+
+
+def normalize_intents(args: Any, role: str | None) -> list[dict]:
+    """模型给的 `task_intents` 参数 → 归一化意图清单 `[{"goal", "skill"}]`。
+
+    逐项判、判不了的**单项丢掉**（不整份作废）：清单的价值在"别漏"，为一件写坏的
+    而丢掉整份枚举，换来的是"这一轮所有没收到的意图全都不登记"——那正是本批要治的病。
+
+    三条归一：
+      · `goal` 空白 ⇒ 丢（没有目标就没有这件事）；
+      · `skill` 不在**本角色可见技能**里、或是 `chat` ⇒ 丢（推不出步骤，见
+        `intents_to_declarations`：登记要带机器可读的 `tool`，够不着的本领给不出）；
+      · 超过 `TASK_MAX_INTENTS` 只收前几件（截断在这里，不靠模型自觉）。
+    `skill` 用 `visible_skills(role)` 判**而不是** `SKILL_MAP`：这与 planner 菜单、
+    native schema、"这一轮能选什么"是同一张表（同源），够不着的本领在这里就被挡住，
+    而不是等到 execute 才炸。
+    """
+    if not isinstance(args, dict):
+        return []
+    raw = args.get(INTENTS_ARG)
+    if not isinstance(raw, list):
+        return []
+    allowed = {s.name for s in visible_skills(role)}
+    out: list[dict] = []
+    for one in raw[:TASK_MAX_INTENTS]:
+        if not isinstance(one, dict):
+            continue
+        goal = re.sub(r"\s+", " ", str(one.get("goal") or "")).strip()[:GOAL_COL_MAX]
+        skill = str(one.get("skill") or "").strip()
+        if not goal or skill not in allowed or skill == "chat":
+            continue
+        out.append({"goal": goal, "skill": skill})
+    return out
+
+
+def same_goal(a: Any, b: Any) -> bool:
+    """两个 goal 说的是不是**同一件事**（判据 = `_goal_fingerprint`，与幂等键同源）。
+
+    只有一个消费方（② 的 `skip_goals`：模型这一轮已经用 `task_hold` 明确登记过的那件，
+    别再按意图清单自动登记一次）——但它是"同一件事"这句话在本仓的**唯一**判据，
+    所以放在这里由幂等键的同一份指纹定义，别在调用处另写一个 `==`（那会把标点/空白
+    算成两件事，同一件事于是长出两行）。
+    """
+    fa, fb = _goal_fingerprint(str(a or "")), _goal_fingerprint(str(b or ""))
+    return bool(fa) and fa == fb
+
+
+def intents_to_declarations(intents: Any, *, role: str | None, acted_skills: Any = (),
+                            receipts: Any = (), skip_goals: Any = ()) -> list[dict]:
+    """意图清单 − 本轮已经办了的 ⇒ 要自动登记的声明（纯函数，20261008 批 ②）。
+
+    这是「在规划阶段就给写好对应状态」里**确定性**的那一半：模型只负责说出
+    "这句话里有哪几件事"，**登记本身不让它做**——步骤从技能模板推
+    （`Skill.plan` 的工具名，逐个过 `step_tool_enum(role)` 的闭集），目标取它写的
+    `goal`，`state="running"`、不问主人。于是"漏登记"这件事从模型的行为里消失了。
+
+    排除规则（三条，每条都对应一个**已经发生的事实**，不是猜）：
+      · `skill ∈ acted_skills` ⇒ 这件事这一轮**办了**（上了卡或真执行了）。卡一次只装
+        得下一个技能，所以这是"没上卡的那几件"的正确定义——与判据侧
+        `require_task_goal_per_intent` 的排除**同一条规则**（两处必须同源：判据说
+        "没上卡的都要有登记"，机制就得"没上卡的都登记"；各写一份迟早一边松一边紧）；
+      · 该技能模板的工具**这一轮全在回执里** ⇒ 这件事这一轮已经做完了（模型把一件
+        刚做完的事也列进清单是常有的事，登记它就等于长出一行永远结算不掉的未完成）；
+      · `goal ∈ skip_goals`（`same_goal` 判）⇒ **同一轮里模型已经用 `task_hold` 明确
+        登记过它了**。两条通道说的是同一件事，而幂等键按 goal 指纹算——两份措辞不同
+        的 goal 会算出两个 task_id、长出两行同义的未完成（那正是本仓"同一件事只许有
+        一行"的判据要拦的形态）。显式登记优先：它带着模型写的步骤，比从模板推的更准。
+
+    给不出步骤的（技能没有动作工具、或模板工具全不在本角色的闭集里）**跳过**——登记一行
+    没有工具的行只会永远挂在台账里（`advance_by_receipts` 见无可结算的步骤直接返回
+    None），那比不登记更坏。跳过是**静默的**：调用方拿"清单件数 − 产出件数"就知道有
+    几件被跳过（那是给 trace 用的读数，不是这里的返回值）。
+    """
+    acted = {str(s) for s in (acted_skills or ()) if s}
+    done_tools = {str((r or {}).get("tool") or "")
+                  for r in (receipts or ()) if isinstance(r, dict)}
+    skipped = [g for g in (skip_goals or ()) if str(g or "").strip()]
+    allowed = set(step_tool_enum(role))
+    out: list[dict] = []
+    for it in normalize_intents({"intents": list(intents or ())}, role):
+        if it["skill"] in acted:
+            continue
+        if any(same_goal(it["goal"], g) for g in skipped):
+            continue
+        skill = SKILL_MAP.get(it["skill"])
+        tools = [str(t) for t, _tmpl in (getattr(skill, "plan", None) or ()) if t in allowed]
+        if not tools:
+            continue
+        if set(tools) <= done_tools:
+            continue
+        # 走**同一个归一器**（不在这里另造形状）：截断、列宽、state 的推导都只有一处。
+        # label 用工具名——自动登记这一路没有"人话标签"的来源，而任何现成的渲染器
+        # （`action_text.tool_action_text`）拿到的都是**未解析的模板实参**
+        # （`{"name": "$name"}` ⇒ 「解冻账号「上一步返回」」），写进去比不写更坏。
+        decl = normalize_declaration(
+            {"goal": it["goal"], "steps": [{"label": t, "tool": t} for t in tools]})
+        if decl:
+            out.append(decl)
+    return out
+
+
+def intent_frames(intents: Any, *, role: str | None, conversation_id: Any,
+                  acted_skills: Any = (), receipts: Any = (),
+                  skip_goals: Any = ()) -> list[dict]:
+    """意图清单 → 本轮要发的 `__TASK__` 载荷列表（② 的**唯一入口**）。
+
+    调用方（`graph.planner_node` 的薄壳）只做两件事：把 `decided.intents` 递进来、
+    把结果拼进本轮的 updates。**取会话 id 这一步在这里判**（`isinstance(..., int)`，
+    与显式登记那支同一条：幂等键里含着会话，退化成 0 会让不同会话里同一句话算出同一个
+    `task_id`）——取不到就一条都不发：登记这一格丢的只是"下一轮还记得"，
+    而错会话是"串了同一件事"（Rust 侧 upsert 只按 task_id+uid 找行）。
+
+    空清单、`role` 为 None、清单里一件都推不出步骤 ⇒ 返回 `[]`（**静默**，由调用方
+    决定要不要记一笔读数）。
+    """
+    if not isinstance(conversation_id, int):
+        return []
+    return [frame_payload(d, conversation_id)
+            for d in intents_to_declarations(intents, role=role,
+                                             acted_skills=acted_skills,
+                                             receipts=receipts,
+                                             skip_goals=skip_goals)]
 
 
 def normalize_declaration(args: Any) -> dict | None:
@@ -484,6 +734,20 @@ def _safe(s: Any) -> str:
     return re.sub(r"[\r\n\[\];=]+", " ", str(s if s is not None else "")).strip()
 
 
+def _step_line(i: int, s: Any) -> str:
+    """一步渲染成 `序号. 标签（工具名）`。
+
+    标签与工具名相同时**不再重复印一遍**（20261008 批 ②）：自动登记的步骤
+    （`intents_to_declarations`）没有"人话标签"的来源，label 就是工具名——老写法会印出
+    `complete_dashboard_todo（complete_dashboard_todo）`。`normalize_declaration` 在模型
+    漏写 label 时走的是同一条兜底（label 落到工具名上），所以这一格本来就存在，改这里
+    对那一族同样成立：信息量为零的重复，去掉不改变任何事实。
+    """
+    label = _safe((s or {}).get("label") or (s or {}).get("tool") or "?")
+    tool = _safe((s or {}).get("tool")) if isinstance(s, dict) else ""
+    return f"{i + 1}. {label}" + (f"（{tool}）" if tool and tool != label else "")
+
+
 def render_open_tasks(raw: Any, limit: int = 3) -> str:
     """未完结任务 → planner 上下文里的一段文本；没有 → 空串（调用方据此不注入）。
 
@@ -507,11 +771,7 @@ def render_open_tasks(raw: Any, limit: int = 3) -> str:
         lines.append(head)
         rest = steps[cursor:]
         if rest:
-            todo = "；".join(
-                f"{i + 1}. {_safe((s or {}).get('label') or (s or {}).get('tool') or '?')}"
-                + (f"（{_safe((s or {}).get('tool'))}）"
-                   if isinstance(s, dict) and s.get("tool") else "")
-                for i, s in enumerate(rest))
+            todo = "；".join(_step_line(i, s) for i, s in enumerate(rest))
             lines.append(f"  还剩：{todo}")
         q = _safe(r.get("pending_question"))
         if q:

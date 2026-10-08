@@ -45,7 +45,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa
 import agent.graph as G  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 from agent.skills import visible_skills  # noqa: E402
-from agent.tasks import TASK_DROP, TASK_HOLD  # noqa: E402
+from agent.tasks import TASK_DROP, TASK_HOLD, TASK_INTENTS  # noqa: E402
 from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
@@ -139,12 +139,12 @@ def _expected_schema_names(role: str) -> set[str]:
     ⚠️ 20261007：原写法是"与 `visible_skills(role)` **全等**"，那句话只在
     `AGENT_TASK_STATE=0` 下成立——`tests/run_all.py` 把这一档钉成 0，所以 CI 与夜间
     **从来看不到**；而产线 `.env` 自 20261002 起是**开**的 ⇒ 本机裸跑这套直接红（实测）。
-    口径与 `tests/test_native_plan.py` ① 同一句：**多出来的只准是那两个申报过的伪函数**
+    口径与 `tests/test_native_plan.py` ① 同一句：**多出来的只准是那三个申报过的伪函数**
     （名字取 `agent/tasks.py` 的常量，不硬编码），多别的一律红——"不扩权"没被放松。
     """
     names = {s.name for s in visible_skills(role)}
     if settings.agent_task_state:
-        names |= {TASK_HOLD, TASK_DROP}
+        names |= {TASK_HOLD, TASK_DROP, TASK_INTENTS}
     return names
 
 

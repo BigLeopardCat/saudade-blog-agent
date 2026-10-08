@@ -681,6 +681,11 @@ CASES = [
 # 而是帧与回执——不合成 result 就一条都验不到，而它们恰恰是"第 1 轮零写、第 2 轮真写"
 # 这条双轮语义的判据本身。
 # gold 写成字面量（不取 basic.jsonl）：这里锁的是判据，不该随用例文件一起漂。
+# `require_task_goal_per_intent` 的七条探针共用的意图清单，见那份 gold 的注。
+_TWO_INTENTS = [
+    {"skill": "account_unfreeze", "goal": "解冻"},
+    {"skill": "dashboard_todo_done", "goal": "多肉浇水"},
+]
 SHAPE_CASES = [
     # (期望, gold, result 覆盖项, 说明)
     ("PASS", {"require_zero_exec": True}, {},
@@ -774,6 +779,55 @@ SHAPE_CASES = [
      "老归档/合成 result 没有 reset_scopes ⇒ **退回旧口径**判红（键缺了是『不知道』，"
      "不知道就不放行——与 parse_reset 缺 scope 段取保守侧同一条取向）"),
     ("PASS", {"forbid_fallback": True}, {}, "零 RESET ⇒ 过（用户看到的是模型写的文本）"),
+
+    # ── 任务登记的 **goal 粒度**（20261008 批 ①）──
+    # 用例来自 `followup_short_all_two_picks` 的真实形状：主人「两个都做」指上一轮列的
+    # 两件事（① 解冻账号「probe_target_1」② 把待办「给多肉浇水」勾成完成），而**一张卡
+    # 只装得下一件**。下面这七条的次序就是这条键的论证：
+    #   ① 今天的真实形状（一件上卡、零任务帧）**必须判红**——这是红基线，改键之前它连
+    #      "该红"都判不出来（state 粒度的键在这形状上是空转的：没有帧 = 没发生过）；
+    #   ② 另一件被登记 ⇒ 绿；
+    #   ③④ **反硬币**：卡认领哪一件，要求就跟着换。写死"第 2 件必须登记"的判据在 ③ 上
+    #      会假红（那一次采样先提的就是第 2 件）——把这条钉住，防后来人改回去；
+    #   ⑤ 只把**卡上那件**登记一遍不算数（剩下的仍是没人记得）；
+    #   ⑥ 没有卡片载荷 ⇒ 每一项都按未认领算（不许因为"读不到卡"就静默放行）；
+    #   ⑦ 空白归一（任务 goal 是模型写的自由文本，句中空格不该决定成败）。
+    ("FAIL", {"require_task_goal_per_intent": _TWO_INTENTS},
+     {"confirm_payloads": [{"skill": "account_unfreeze", "specs": [{"tool": "unfreeze_account"}]}]},
+     "红基线＝今天的真实形状：①上了卡、②没有任何任务登记（零 __TASK__ 帧）⇒ 红"),
+    ("PASS", {"require_task_goal_per_intent": _TWO_INTENTS},
+     {"confirm_payloads": [{"skill": "account_unfreeze", "specs": [{"tool": "unfreeze_account"}]}],
+      "task_frames": [{"task_id": "at_1", "state": "running",
+                       "goal": "把后台首页待办里那条「给多肉浇水」勾成完成"}]},
+     "没上卡的那件（②）登记成任务 ⇒ 绿"),
+    ("PASS", {"require_task_goal_per_intent": _TWO_INTENTS},
+     {"confirm_payloads": [{"skill": "dashboard_todo_done", "specs": [{"tool": "done_todo"}]}],
+      "task_frames": [{"task_id": "at_1", "state": "running",
+                       "goal": "把账号「probe_target_1」解冻"}]},
+     "反硬币：这次采样先提的是② ⇒ 要判的变成①，①登记了就绿（写死一件的判据在这里假红）"),
+    ("FAIL", {"require_task_goal_per_intent": _TWO_INTENTS},
+     {"confirm_payloads": [{"skill": "dashboard_todo_done", "specs": [{"tool": "done_todo"}]}],
+      "task_frames": [{"task_id": "at_1", "state": "running",
+                       "goal": "把后台首页待办里那条「给多肉浇水」勾成完成"}]},
+     "反硬币的另一半：卡认领②、登记的却也是② ⇒ ①仍然凭空消失 ⇒ 红"),
+    ("FAIL", {"require_task_goal_per_intent": _TWO_INTENTS},
+     {"confirm_payloads": [{"skill": "account_unfreeze", "specs": [{"tool": "unfreeze_account"}]}],
+      "task_frames": [{"task_id": "at_1", "state": "running",
+                       "goal": "解冻账号「probe_target_1」"}]},
+     "只把卡上那件又登记了一遍 ⇒ 不算数（要的是**没上卡**那件的登记）⇒ 红"),
+    ("FAIL", {"require_task_goal_per_intent": _TWO_INTENTS}, {},
+     "没有卡片载荷 ⇒ 每一项都算未认领、一条都不能少 ⇒ 红（读不到卡不等于没事）"),
+    ("PASS", {"require_task_goal_per_intent": _TWO_INTENTS},
+     {"confirm_payloads": [{"skill": "account_unfreeze", "specs": [{"tool": "unfreeze_account"}]}],
+      "task_frames": [{"task_id": "at_1", "state": "running",
+                       "goal": "把待办「给多肉浇水」\n勾成　　完成"}]},
+     "空白归一后仍命中（模型写的 goal 里换行/全角空格不该决定成败）⇒ 绿"),
+    ("FAIL", {"require_task_goal_per_intent": _TWO_INTENTS},
+     {"confirm_payloads": [{"skill": "account_unfreeze", "specs": [{"tool": "unfreeze_account"}]}],
+      "task_frames": [{"task_id": "at_1", "state": "cancelled",
+                       "goal": "把后台首页待办里那条「给多肉浇水」勾成完成"}]},
+     "**撤下**不是登记：`task_drop` 的帧把原来的 goal 抄了下来，只比 goal 会把"
+     "「这件事不办了」读成「记着呢」⇒ 红（`state=cancelled` 一律不算）"),
 ]
 
 
