@@ -1,8 +1,15 @@
 # -*- coding: utf-8 -*-
-""""这一轮的语料是不是这套 golden 的那一份"（20261006）。
+"""两件"地还是不是那块地"的事。
+
+**（甲）这一轮的语料是不是这套 golden 的那一份**（20261006）。
 
 前面四条前提闸（身份 / 事实 / 禁卡 / trace）问的都是"这一轮的环境、供给、设计还在不在"。
 这一条问得更外面一层：**判据脚下这块地，还是原来那块吗**。
+
+**（乙）判据点名的那件实体还在不在**（20261009）：同一块地上最直白的那个问题——
+"这条判据锚的那篇文章还在公开面上吗"。实证、判据两半与三态语义见下面
+`check_entity_premises` 上面那段。两条共用**同一次**语料快照（`snapshot_docs()`）：
+都是"拿声明里的字面去公开语料里找"，各取一次就是第二个会漂移的地方。
 
 这个仓是公开的，而 golden 的每一条期望都锚在**某一个站点**的文章上：`require_doc_terms`
 的术语表从那些正文里派生、检索用例期望命中的就是那几篇、id 与标题只在那个库里对得上。
@@ -108,6 +115,11 @@ def _norm_title(t: str) -> str:
     return re.sub(r"\s+", "", t or "").casefold()
 
 
+# 公开别名（20261009）：`run_golden.check_entity_premises` 也按标题问"那件实体还在不在场"
+# ——同一个归一化只许有一处，两处归一化就是第二个会漂移的判据（同族教训见模块头注）。
+norm_title = _norm_title
+
+
 def check_corpus_premises(docs, provenance_file: "str | None" = None) -> tuple:
     """语料出处前提 ⇒ `(state, detail, row)`；`docs` = `snapshot_docs()` 的快照。
 
@@ -149,6 +161,126 @@ def check_corpus_premises(docs, provenance_file: "str | None" = None) -> tuple:
             f"语料里命中 {len(row['present'])}/{len(anchors)} 个申报锚点（需要 {need} 个）；"
             f"对不上的 {len(row['missing'])} 个：{row['missing']}；当前语料 {len(docs)} 篇",
             row)
+
+
+# ── "判据点名的那件实体还在不在"（20261009）──────────────────────────────────
+# 上面那条问的是"这一轮评的是哪块地"；这一条问的是同一块地上**最直白的那句**：
+# **这条判据点名的那个东西，还在不在**。
+#
+# 一手证据：`rag_test4_cover`（「小猫咪，测试文章 TEST8 里画的是什么呀」，
+# `require_tool_calls:[get_article_detail]`）从 20261008 13:56 起恒红。**红的不是模型**
+# ——站主在 06:44:46 把 note 13（标题 TEST8）改成了 `status='private'`，模型此后每次
+# **如实**答"站内没有 TEST8"，判据把它读成"没去读文章"。偶发的"绿"还是**假绿**：模型答
+# 「站内**没有叫** TEST8 的测试文章」，恰好绕开了词表 `[没找到/找不到/没有这个]`，又顺手
+# 套了个别的 `get_article_detail` ⇒ 判据此刻在**奖励乱读一篇、惩罚诚实回答**。
+#
+# 判据两半（同 `run_golden.premise_absent` 的纪律：**人写前提、机器算剩下那一半**）：
+#   人写：用例里落笔 `premise_entity`——"这条判据锚在这件东西在场"；
+#   机器：拿**标题**去**公开语料快照**（本模块的 `snapshot_docs()`，与语料出处闸同一个
+#         取数口）里找。在场 ⇒ 照跑；不在 ⇒ **未评估**（摘用例 + 进 skipped_ids + 退出码 3）。
+#
+# 为什么锚"公开语料快照"而不是另开一个探针：那**正是工具出口那一侧的同一份真相**——
+# `rag.search._fetch_corpus` 与 `tools/base._get` 读的是同一个公开接口，一篇被改成 private
+# 在两边同时消失。另开一个探针只会造出第二份会各自漂移的判据（同本模块头注那条）。
+#
+# ⚠ **"快照取不到或为空"归 unknown（照跑），不归 changed**——同语料那条纪律：
+# `tools/base._get` 把连不上/5xx/坏 JSON 一律吞成 `UPSTREAM_DOWN`（不抛），"接口不通"与
+# "这篇文章真的没了"在读数上长得一模一样。不知道就不动；硬判"实体没了"等于把一次网络
+# 故障说成站主删了文章。它同时是离线 `--only` 那条路的安全阀（那时语料本就取不到）。
+ENTITY_KINDS: tuple[str, ...] = ("note_visible",)
+# 声明里必须写 why 的下限（同 `run_golden` 的 `premise_no_popup.capability_boundary`）：
+# 那一半是"为什么这条判据要求这件东西在场"，机器判不了，但至少要写下来。
+ENTITY_WHY_MIN = 8
+# 锚可以是**标题**也可以是 **note id**，两者只写一个（都写了按 id 核，见下面那个 `if`）：
+#   title   —— 判据（或主人那句话）**按标题**点名那篇文章时的形状；
+#   note_id —— 判据**按 id** 点名时的形状（`require_exec_args: article_id`、或
+#              用例把文章 id 写在 `context.current_url` 里 ⇒ `get_article_detail(<id>)`）。
+# ⚠ 这里的 id 与语料出处闸"不许拿 id 当锚点"那条**不矛盾**：那条说的是**跨站点**认不出
+# 同一块地（别人的库 id 完全另排）；这一条问的是**同一块地内部**"这件东西还在不在"，
+# 而 id 正是工具出口与 `current_url` 用的那个坐标——按 id 核比按标题核更稳（改名不误伤）。
+# 键名就一个（`note_id`）：多一个别名就是第二个会漂移的读法。
+
+
+def check_entity_premises(cases: list, docs) -> tuple:
+    """逐条核验"判据点名的实体还在不在"，返回 (留下的用例, 未评估的 id, 逐条结论)。
+
+    结论 `state="changed"` = 那件东西**已经不在公开面上了**（被改成 private / 删了 /
+    改了名）⇒ 该用例未评估。声明本身写坏（kind 不在 `ENTITY_KINDS`、锚一个都没写、why 太短）
+    **也归 changed**：那是"判据坏了"，方向必须偏到"未评估"那一侧（静默放行就是
+    `run_golden` 那段注释说的"判据看着在、其实不在"）。
+
+    锚两种写法二选一（见上面 `ENTITY_KINDS` 那段）：`note_id` 优先（精确、改名不误伤），
+    给了 id 就**只**按 id 核；没给才按 `title` 去语料里找。
+
+    `docs` = `snapshot_docs()` 的快照，**由调用方取一次、与语料出处闸共用**：两处问的是
+    同一份数据，各取一次就是第二个会漂移的地方。
+    """
+    kept: list = []
+    skipped: list = []
+    rows: list = []
+    for c in cases:
+        pe = c.get("premise_entity")
+        if not isinstance(pe, dict):
+            kept.append(c)
+            continue
+        kind = str(pe.get("kind") or "").strip()
+        title = str(pe.get("title") or "").strip()
+        nid = pe.get("note_id")
+        why = str(pe.get("why") or "").strip()
+        row = {"id": c.get("id"), "kind": kind, "state": "ok",
+               "title": title, "note_id": nid, "hit": [], "why": why}
+        if kind not in ENTITY_KINDS:
+            row["hit"] = [f"kind 不是 {'/'.join(ENTITY_KINDS)} 之一：{kind!r}"]
+        elif not title and nid is None:
+            row["hit"] = ["声明里没写锚点（title 或 note_id 二选一）"]
+        elif len(why) < ENTITY_WHY_MIN:
+            row["hit"] = [f"必须写 why（≥{ENTITY_WHY_MIN} 字——为什么这条判据要求它在场，"
+                          "机器判不了那一半）"]
+        elif not docs:
+            # 快照取不到/为空 ⇒ **判不了**，照跑（见上面那条 ⚠）。这一栏要单列：
+            # "没报错"不等于"核过了"（同 `premise_absent` 的 unchecked 那栏）。
+            row["state"] = "unknown"
+            rows.append(row)
+            kept.append(c)
+            continue
+        elif nid is not None:
+            if not any(str(d.get("id")) == str(nid) for d in docs):
+                row["hit"] = [f"公开语料里没有 id={nid} 的文章"]
+        else:
+            nt = norm_title(title)
+            if not any(nt and nt in norm_title(d.get("title")) for d in docs):
+                row["hit"] = [f"公开语料里没有标题含「{title}」的文章"]
+        if row["hit"]:
+            row["state"] = "changed"
+            skipped.append(c.get("id"))
+        else:
+            kept.append(c)
+        rows.append(row)
+    return kept, skipped, rows
+
+
+def entity_report_lines(rows: list, skipped: list) -> list:
+    """把实体前提的结论翻成要打的那几行（两个跑法共用；各写一份措辞早晚会漏那句话）。"""
+    lines: list = []
+    for r in rows:
+        if r.get("state") == "changed":
+            _anchor = r.get("title") or f"note_id={r.get('note_id')}"
+            lines.append(
+                f"[entity] ⚠ {r['id']}：判据点名的那件东西**已不在公开面上**"
+                f"（{r['kind']}「{_anchor}」——{(r.get('hit') or [])[:2]}）"
+                " ⇒ 本条**未评估**（**这不是模型退化**：站主把文章改成 private、删了、"
+                "或改了名，判据都会这样红——改锚到一件还在的实体，或改判据，"
+                "见报告 entity_checks）")
+    if skipped:
+        lines.append(f"[entity] ⇒ {len(skipped)} 条用例本轮**未评估**：{skipped}")
+    unknown = [r["id"] for r in rows if r.get("state") == "unknown"]
+    if unknown:
+        # 「没报错」不等于「核过了」：快照取不到的那些，哨兵判不了。**照跑**那一句必须
+        # 在行上（同语料闸 unknown 那行）：不说的话，读的人会把"这一栏没红"读成"核过了"。
+        lines.append(f"[entity] {len(unknown)} 条实体前提判不了"
+                     f"（公开语料快照取不到或为空）——**照跑**；这一栏没红不等于核过了："
+                     f"{unknown}")
+    return lines
 
 
 def report_lines(state: str, detail: str, row: dict) -> list:

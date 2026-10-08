@@ -123,14 +123,26 @@ for _line in corpus_provenance.report_lines(_CORPUS_STATE, _CORPUS_DETAIL, _CORP
 if _CORPUS_BAD:
     print(f"[corpus-premise] ⇒ {_n_corpus} 条用例**全部未评估**（未评估 ≠ 通过；退出码 3）",
           flush=True)
+# 实体前提闸（20261009）：判据点名的那件东西还在不在公开面上（实证与三态见
+# `corpus_provenance.check_entity_premises` 头注）。**与语料闸共用同一个快照**
+# （`_CORPUS_SNAP`），各取一次就是第二个漂移点。也排在起子进程之前：它摘掉的那几条
+# 在子进程里只会红成一句"模型没去读那篇文章"（关于模型的假红），白烧一次 LLM。
+_ENTITY_BAD = False
+CASES, _ENTITY_SKIPPED, _ENTITY_ROWS = corpus_provenance.check_entity_premises(
+    CASES, _CORPUS_SNAP)
+_SKIPPED_IDS += _ENTITY_SKIPPED
+_ENTITY_BAD = bool(_ENTITY_SKIPPED)
+for _line in corpus_provenance.entity_report_lines(_ENTITY_ROWS, _ENTITY_SKIPPED):
+    print(_line, flush=True)
 # 空分母（20260925）：全部被摘掉时**不许往下走**——本脚本的收尾统计会对空序列取
 # min()/P50（ValueError），构造报告时还会除零；就算不炸，打印出来的也是"0/0 通过 = 100%"
 # 那种静默的绿，而这一轮什么都没评。口径与 run_golden.py 一致：退出码 2；**前提类闸**
 # （trace 关着 / 语料不是这一份）造成空分母时报 3（同 run_golden.py 的判据），因为那是
 # "前提不可用"而不是"你自己把用例摘光了"。
 if not CASES:
-    _code = 3 if (_TRACE_SKIPPED or _CORPUS_BAD) else 2
-    print("[full] ⚠ 一条用例都没剩下（被身份闸 / 真写闸 / 夹具闸 / trace 闸 / 语料出处闸"
+    _code = 3 if (_TRACE_SKIPPED or _CORPUS_BAD or _ENTITY_BAD) else 2
+    print("[full] ⚠ 一条用例都没剩下（被身份闸 / 真写闸 / 夹具闸 / trace 闸 / 实体闸 / "
+          "语料出处闸"
           f"摘干净了）—— 这一轮**没有评测任何东西**：空分母不是一个通过率，退出码 {_code}"
           "（不是 0）"
           + ("；其中**语料不是这套 golden 的那一份**是主因（[corpus-premise] 那几行有"
@@ -297,6 +309,10 @@ report = {"ts": "", "corpus": "full", "total": len(CASES), "passed": len(CASES) 
           # 其中「trace 关着 ⇒ 判据没有证据链」的那批单列（口径同 run_golden.py 的
           # `skipped_trace_ids`）：它们是**未评估**，不是"过"，也不是模型退化。
           "skipped_trace_ids": list(_TRACE_SKIPPED),
+          # 其中「判据点名的实体已不在公开面上」的那批单列（口径同 run_golden.py 的
+          # `skipped_entity_ids`）：同源纪律——**未评估要单列**。
+          "skipped_entity_ids": list(_ENTITY_SKIPPED),
+          "entity_checks": _ENTITY_ROWS,
           # 首跑红数（20260924）：failed 是复跑后的终判，这个留着首跑口径（差额=被吸收的红斑）
           "failed_first_run": failed_first,
           # 回归组块（20260924）：与 run_golden.py 同名字段——留档反查（golden_trace.
