@@ -25,6 +25,9 @@
     不另写一套"工具名在不在回执里"）；**零回执时一律放行**——方向单一，真撤下不受影响；
   · `render_open_tasks` 只渲染未完结态 + 抹掉能破坏 `[System: …]` 框架的字符；
   · 注记与纠偏文本**单行**（会被写进计划契约的 `NOTE:` 行）；
+  · **goal 的出处对账**（20261009，`reconcile_goal`）：goal 里的数字必须在主人说过的
+    话里出现过（本轮那句或更早轮次——跨轮复述合法），对不上就退回主人原话里最接近的
+    那一段；一段都够不着 ⇒ 这一件**不登记**。`sources` 是**必填**关键字；
   · 本模块**不许 import `agent.graph`**（graph 是消费方，反向会成环）。
 """
 import ast
@@ -48,6 +51,13 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 
 DEF = {"goal": "带我过去后开启一个特效",
        "steps": [{"label": "开启特效", "tool": "toggle_effect"}]}
+
+# 主人那句话（出处对账的输入）。形参 `sources` **必填**——忘传 = 静默放弃对账，那正是
+# 本仓最恨的一类失败（"缺键当 0"），所以这一份在每个调用点都要显式给。
+SRC = ("解冻账号 probe_target_1，顺便把那条待办勾完成",)
+# 现场那句（逐字抄自 golden `mix2_two_writes_one_breath_card_only`）。第二件的号是
+# `23`，而真链路里模型写过 `文章 2` —— 出处对账治的就是这一个字。
+MIX2 = "想建个新分类叫「临江仙」，文章 23 的标签也想换成「Rust」"
 
 
 # ── ① 归一化：模型给的形状 → 系统认的声明 ────────────────────────────────
@@ -488,7 +498,7 @@ def test_intents_to_declarations_excludes_what_this_round_already_did():
     print("\n[意图] 三条排除规则：办了的不登记、刚做完的不登记、已显式登记的不登记")
     ints = [{"goal": "解冻账号 probe_target_1", "skill": "account_unfreeze"},
             {"goal": "把那条待办勾完成", "skill": "dashboard_todo_done"}]
-    both = T.intents_to_declarations(ints, role="admin")
+    both = T.intents_to_declarations(ints, role="admin", sources=SRC)
     check("一条都没排除时两件都登记，步骤取技能模板的工具",
           [d["goal"] for d in both] == [i["goal"] for i in ints]
           and [s["tool"] for s in both[0]["steps"]]
@@ -497,32 +507,35 @@ def test_intents_to_declarations_excludes_what_this_round_already_did():
           str([s["tool"] for s in both[0]["steps"]]))
     check("自动登记的规则是 state=running、不问主人（步骤都在模板里了，没有未知项）",
           all(d["state"] == "running" and not d["pending_question"] for d in both))
-    one = T.intents_to_declarations(ints, role="admin", acted_skills={"account_unfreeze"})
+    one = T.intents_to_declarations(ints, role="admin", sources=SRC,
+                                    acted_skills={"account_unfreeze"})
     check("① 本轮办了的（上了卡的）那件不登记（与判据侧同一条规则）",
           [d["goal"] for d in one] == [ints[1]["goal"]], str([d["goal"] for d in one]))
     done = [{"tool": t} for t, _ in T.SKILL_MAP["dashboard_todo_done"].plan]
-    keep = T.intents_to_declarations(ints, role="admin", receipts=done)
+    keep = T.intents_to_declarations(ints, role="admin", sources=SRC, receipts=done)
     check("② 模板工具全在回执里 ⇒ 这件事刚做完，不登记（否则长出永远结算不掉的行）",
           [d["goal"] for d in keep] == [ints[0]["goal"]], str([d["goal"] for d in keep]))
-    setk = T.intents_to_declarations(ints, role="admin",
+    setk = T.intents_to_declarations(ints, role="admin", sources=SRC,
                                      skip_goals=["解冻账号probe_target_1！"])
     check("③ 同一轮 `task_hold` 已显式登记过的那件（指纹同源、标点空白不算差异）",
           [d["goal"] for d in setk] == [ints[1]["goal"]], str([d["goal"] for d in setk]))
     none = T.intents_to_declarations(
-        [{"goal": "查一下留言板", "skill": "content_query"}], role="admin")
+        [{"goal": "查一下留言板", "skill": "content_query"}], role="admin", sources=SRC)
     check("推不出步骤的技能（content_query 模板没有工具）静默跳过——登记无工具的行"
           "只会永远挂着", none == [])
     check("角色够不着模板工具时同样跳过（普通身份没有后台工具）",
           T.intents_to_declarations(
-              [{"goal": "看看后台待办", "skill": "dashboard_todo_done"}], role=None) == []
+              [{"goal": "看看后台待办", "skill": "dashboard_todo_done"}], role=None,
+              sources=SRC) == []
           and T.intents_to_declarations(
-              [{"goal": "看看后台待办", "skill": "dashboard_todo_done"}], role="admin") != [])
+              [{"goal": "看看后台待办", "skill": "dashboard_todo_done"}], role="admin",
+              sources=SRC) != [])
 
 
 def test_intent_frames_is_the_single_entry():
     print("\n[意图] intent_frames = ② 的唯一入口（取会话 id 这一步在它里面判）")
     ints = [{"goal": "把那条待办勾完成", "skill": "dashboard_todo_done"}]
-    frames = T.intent_frames(ints, role="admin", conversation_id=7)
+    frames = T.intent_frames(ints, role="admin", conversation_id=7, sources=SRC)
     check("载荷形状 = frame_payload 的（跨语言契约只有一处实现）",
           list(frames[0]) == list(T.frame_payload(
               T.normalize_declaration({"goal": "x", "steps": [{"tool": "toggle_effect"}]}), 7)))
@@ -530,11 +543,78 @@ def test_intent_frames_is_the_single_entry():
           frames[0]["task_id"] == T.task_id_for(
               T.idempotency_key_for(7, "把那条待办勾完成")))
     check("拿不到会话 id 就一条都不发（幂等键里含着会话，退化成 0 会串会话）",
-          T.intent_frames(ints, role="admin", conversation_id=None) == []
-          and T.intent_frames(ints, role="admin", conversation_id="7") == [])
+          T.intent_frames(ints, role="admin", conversation_id=None, sources=SRC) == []
+          and T.intent_frames(ints, role="admin", conversation_id="7", sources=SRC) == [])
     check("空清单/None 一律空（绝大多数轮次的常态）",
-          T.intent_frames([], role="admin", conversation_id=7) == []
-          and T.intent_frames(None, role="admin", conversation_id=7) == [])
+          T.intent_frames([], role="admin", conversation_id=7, sources=SRC) == []
+          and T.intent_frames(None, role="admin", conversation_id=7, sources=SRC) == [])
+    try:
+        T.intent_frames(ints, role="admin", conversation_id=7)
+        missing_src = False
+    except TypeError:
+        missing_src = True                 # kwonly 无默认值 ⇒ 缺参数是 TypeError
+    check("`sources` 必填（忘传 = 静默放弃对账——缺键当 0 是本仓最恨的一类失败；"
+          "宁可直接炸）", missing_src)
+
+
+# ── ⑨ goal 的出处对账（20261009）────────────────────────────────────────
+def test_reconcile_goal_requires_provenance():
+    print("\n[对账] goal 里的数字必须有出处：对不上就退回主人原话里那一段")
+    check("goal 里没有数字 ⇒ 原样放行（绝大多数 goal 没有可对账的东西）",
+          T.reconcile_goal("把那条待办勾完成", (MIX2,)) == "把那条待办勾完成")
+    check("数字在主人**这一句**里 ⇒ 原样放行（号是对的）",
+          T.reconcile_goal("把文章 23 的标签换成「Rust」", (MIX2,))
+          == "把文章 23 的标签换成「Rust」")
+    check("**号抄错了 ⇒ 退回主人原话里那一段（逐字）**——现场那条：2 vs 23",
+          T.reconcile_goal("把文章 2 的标签换成「Rust」", (MIX2,))
+          == "文章 23 的标签也想换成「Rust」",
+          str(T.reconcile_goal("把文章 2 的标签换成「Rust」", (MIX2,))))
+    check("跨轮**合法重提**：号在更早那一轮的主人话里 ⇒ 放行（模型从台账/历史里取回来"
+          "复述，不是编造）",
+          T.reconcile_goal("把账号 9 的额度重置", ("给账号 9 重置额度", "今天天气真好"))
+          == "把账号 9 的额度重置")
+    check("对不上、主人那几段里一段都不像 ⇒ **None**（这一件不登记：那个号下一轮会被"
+          "planner 当主人的原话读回来）",
+          T.reconcile_goal("把文章 2 关掉", ("帮我把樱花打开",)) is None)
+    check("退回的那一段超列宽按列宽截断（台账那一列不许被撑破）",
+          len(T.reconcile_goal("把文章 2 换成" + "甲" * 400,
+                               ("文章 23 " + "甲" * 400,)) or "") <= T.GOAL_COL_MAX)
+    check("空 goal ⇒ None（没有目标就没有这件事）",
+          T.reconcile_goal("   ", (MIX2,)) is None)
+
+
+def test_intents_reconcile_wired_and_counted():
+    print("\n[对账] 整条清单过一遍：改写的改写、丢的丢，读数只记**将要登记**的那几件")
+    ints = [{"goal": "建个分类叫「临江仙」", "skill": "category_create"},
+            {"goal": "把文章 2 的标签换成「Rust」", "skill": "article_tags"}]
+    audit: dict = {}
+    got = T.intents_to_declarations(ints, role="admin", sources=(MIX2,), audit=audit)
+    check("号对的那件不动、号错的那件按主人原话改写 ⇒ 两件都登记",
+          [d["goal"] for d in got]
+          == ["建个分类叫「临江仙」", "文章 23 的标签也想换成「Rust」"]
+          and audit.get("goal_retraced") == 1, f"{[d['goal'] for d in got]} {audit}")
+    check("读数里留**改写前**的原文（只记计数的话，「改写 1 件」分不出拦得对与拦过火"
+          "——两种读法要的处置正好相反）",
+          audit.get("retraced_goals") == ["把文章 2 的标签换成「Rust」"], str(audit))
+    audit2: dict = {}
+    got2 = T.intents_to_declarations(ints, role="admin", sources=("帮我把樱花打开",),
+                                     audit=audit2)
+    check("出处里没有那个号、又退不回 ⇒ 只登记能对上的那件，另一件进 `goal_dropped`",
+          [d["goal"] for d in got2] == ["建个分类叫「临江仙」"]
+          and audit2.get("goal_dropped") == 1
+          and audit2.get("dropped_goals") == ["把文章 2 的标签换成「Rust」"],
+          f"{[d['goal'] for d in got2]} {audit2}")
+    audit3: dict = {}
+    T.intents_to_declarations(ints[:1] + [ints[1]], role="admin",
+                              sources=("帮我把樱花打开",),
+                              acted_skills={"article_tags"}, audit=audit3)
+    check("对账排在三条排除规则**之后**：本轮已经办了的那件不进读数（否则读数里混进"
+          "一堆「其实办过了」的件，等于没读数）", audit3 == {}, str(audit3))
+    check("正控：`sources` 给的是主人这句 ⇒ 同一个 goal 不会被动（两种输入两样结论，"
+          "说明这一路真的在看 sources，不是恒改写）",
+          T.reconcile_goal(ints[1]["goal"], (MIX2,)) != ints[1]["goal"]
+          and T.reconcile_goal(ints[1]["goal"], ("文章 2 的标签换一下",))
+          == ints[1]["goal"])
 
 
 # ── ⑧ 结构锁 ────────────────────────────────────────────────────────────
@@ -594,6 +674,8 @@ if __name__ == "__main__":
                test_normalize_intents_drops_items_not_whole_list,
                test_intents_to_declarations_excludes_what_this_round_already_did,
                test_intent_frames_is_the_single_entry,
+               test_reconcile_goal_requires_provenance,
+               test_intents_reconcile_wired_and_counted,
                test_module_does_not_import_graph):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
