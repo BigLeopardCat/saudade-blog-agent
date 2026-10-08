@@ -1,13 +1,15 @@
 # ADR-0002：未完成的意图由模型声明，完成由回执认定
 
 - **状态**：已采纳（20260927，批 D）／**拨盘 20261007 关闭**——产线 `.env` 的
-  `AGENT_TASK_STATE` 已由 `1` 改回 `0`（**机制与表都保留**，只关写侧拨盘）。
+  `AGENT_TASK_STATE` 当天由 `1` 改回 `0`（**机制与表都保留**，只关写侧拨盘）。
   依据与复核触发条件见文末《20261007 去留复核》。**20261008 本决策的"声明"那一半加了一个新
-  出口**（每个技能上的 `intents` 字段，见文末《20261008 追记》）。**同日拨盘又被打开过一次**
-  ——不是改 `.env`（仍写着 `0`），而是加了 systemd drop-in
-  `/etc/systemd/system/saudade-agent.service.d/override.conf`（`Environment=AGENT_TASK_STATE=1`，
-  20261008 18:35 落盘、20:29 重启生效）；回执 `/health` 的 `dials.agent_task_state=true`。
-  ⇒ **`.env` 与 drop-in 这两个真值源现在不一致**，进程内取值以 drop-in 为准（**1**）。
+  出口**（每个技能上的 `intents` 字段，见文末《20261008 追记》）。**同日拨盘又被打开**
+  ——`.env` 第 36 行改回 `1`（mtime 20261008 20:29:37，服务 20:29:43 重启 ⇒ 生效；
+  `/health` `dials.agent_task_state=true`）。当天 18:35 还曾另加一个 systemd drop-in
+  （`/etc/systemd/system/saudade-agent.service.d/override.conf`，`Environment=AGENT_TASK_STATE=1`）
+  做同一个开关——两处**取值一致**，但各存一份，且**进程环境优先于 dotenv**（实测）⇒ 它是能
+  静默压过 `.env` 的影子来源；22:45 已退役并备份到 `/home/ubuntu/etc-backup-20261008/`，
+  **现在只剩 `.env` 一处真值源**。
 - **背景文档**：`docs/native-toolcalls-mainline.md`（主线交接）、`docs/adr/adr-0001-*.md`
 - **迁移**：`scripts/migration/agent_task_20260927.sql`（表 `agent_task`，已执行；头注含三端契约与 20260927 补记）
 - **影响范围**：`agent/tasks.py`（新）、`agent/native_plan.py`、`agent/graph.py`、`server.py`、
@@ -164,12 +166,16 @@ agent 有两个"跨轮记不住"的缺口，形状完全不同，此前只补了
 分界，只给**声明**这一侧补一个出口。**本文的读数全部在命令行 `AGENT_TASK_STATE=1` 下取得**
 （`GOLDEN_ARM=matrix`，离线 harness，不经过产线进程）。
 
-**拨盘状态（与上一条《20261007 去留复核》的"关"不同）**：20261008 18:35 起本机多了 systemd
-drop-in `.../saudade-agent.service.d/override.conf`（`Environment=AGENT_TASK_STATE=1`），20:29
-重启生效 ⇒ **进程内是开的**（`/health` `dials.agent_task_state=true`），而 `.env` 仍写着 `0`。
-**两个真值源不一致这件事本身挂着待拍板**（把 drop-in 删掉回退，或把 `.env` 改成 1 让两处同源），
-**不是本追记能裁的**。另一个必须一起读的事实：**产线生效的是工作区**——上一次重启（20:29:43）
-早于本追记所记代码的落盘时间（22:09–22:25）⇒ **新出口此刻并未在产线上跑**，要它生效得再重启。
+**拨盘状态（与上一条《20261007 去留复核》的"关"不同）**：20261008 18:35 本机多了 systemd
+drop-in `.../saudade-agent.service.d/override.conf`（`Environment=AGENT_TASK_STATE=1`）；
+20:29:37 `.env` 第 36 行也从 `0` 改回 `1`，20:29:43 重启 ⇒ **进程内是开的**
+（`/health` `dials.agent_task_state=true`）。**两个真值源各存一份、取值一致**，但**进程环境优先于
+dotenv**（实测：把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop-in 是会**静默压过** `.env`
+的影子来源，两处同源只是巧合。22:45 已把 drop-in 退役（备份
+`/home/ubuntu/etc-backup-20261008/saudade-agent-override.conf.retired-20261008`），**此后只有
+`.env` 一处**；取值没变，行为不变。另一个必须一起读的事实：**产线生效的是工作区**——上一次重启
+（20:29:43）早于本追记所记代码的落盘时间（22:09–22:25）⇒ **新出口此刻并未在产线上跑**，
+要它生效得再重启。
 
 **动机（一线故障形状）**：《背景》那一族的现场是「带我过去后开启一个特效」而第二步从未被规划。
 20261007 的复核结论是"先关拨盘、机制留"，理由之一是**模型不主动登记**。批 ② 换了个问法：不
