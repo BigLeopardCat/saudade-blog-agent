@@ -492,6 +492,140 @@ check(f"反向对照：抽掉最后一个用 `{_PROBE_KEY}` 的用例 ⇒ 探针
       _PROBE_KEY in _unused_keys(_probe_corpus),
       str(_unused_keys(_probe_corpus)[:5]))
 
+print("\n⑩ 判据锚在一篇文章上，就要说清『那篇还在不在』（20261009）")
+# 病根同 §⑥⑦（"前提住在别人手里"），但住得**更深一层**：前面几节问的是"这一轮的环境、
+# 供给、设计还在不在"，这一节问的是 **`eval/corpus_provenance.py` 模块头注里写的那句**——
+# **判据脚下那块地上，判据点名的那个东西还在不在**。
+#
+# 一手证据（那条用例现在还挂在语料里当活标本）：`rag_test4_cover` 断言"读了 TEST8 并答出
+# 它写了什么"，而站主 20261008 06:44 把 note 13（标题 TEST8）改成了 private ⇒ 模型此后每次
+# **如实**答"站内没有 TEST8"，判据把它读成"没去读文章"，从 13:56 起恒红。偶发的绿还是**假绿**：
+# 回复绕开词表（"站内**没有叫** TEST8 的…"）+ 顺手套了别的 `get_article_detail` ⇒ 判据此刻在
+# **奖励乱读一篇、惩罚诚实回答**。这不是模型退化，红的是判据自己。
+#
+# 锁法照 §⑥⑦：逼着写（①）＋ 形状校验（②③④）＋ 哨兵真的会响（⑤ 的一组探针）。
+#
+# ⚠ **已知开口，不是漏项**：`premise_entity` 的第二个形状是"判据按 **id** 点名"（
+# `require_exec_args: {arg: article_id, equals: N}` 那 5 条：aggregate_two_docs_compare /
+# followup_named_doc_no_search / followup_named_doc_title_only_id / …）。机制已经在位
+# （`note_id` 锚，见下面那条探针），缺的只是**用例侧逐条落笔**——那 5 条里 3 条是
+# regression 组，本轮不动它们（改的是用例，与这几条锁分开走）。
+_want_ent: list[str] = []      # **必须**落笔：判据要求"真去读了文章"这个动作
+_may_ent: set[str] = set()     # **可以**落笔：判据提到"某篇文章"的其它形状（不逼、但不许算多余）
+_art_keys = ("require_tool_calls", "require_exec_tools", "require_tool_calls_any")
+for _c in _cases:
+    _w = False
+    for _r in rg.iter_rounds(_c):
+        _g = _r["gold"]
+        if "get_article_detail" in (_g.get("require_tool_calls") or []):
+            _w = True
+        if any("get_article_detail" in json.dumps({k: _g[k]}, ensure_ascii=False)
+               for k in _art_keys if k in _g):
+            _may_ent.add(_c["id"])
+        for _a in (_g.get("require_exec_args") or []):
+            if isinstance(_a, dict) and _a.get("arg") == "article_id":
+                _may_ent.add(_c["id"])
+    if _w:
+        _want_ent.append(_c["id"])
+_may_ent |= set(_want_ent)
+_declared_ent = [c["id"] for c in _cases if c.get("premise_entity")]
+check(f"判据要求『真去读了文章』的用例（{len(_want_ent)} 条）都落了笔（premise_entity）",
+      not [i for i in _want_ent if i not in _declared_ent],
+      "；".join(i for i in _want_ent if i not in _declared_ent))
+# 反面同 §⑦：声明与判据无关就是"看着有、其实没有"。这里用的集合比①**宽一档**——
+# 按 id 点名的那族（`require_exec_args.article_id`）今天没落笔，但**落了也对**，
+# 不该被这条判成多余（那是把"补覆盖"罚成红，同 §⑦ 的 `_extra` 是两回事）。
+check("没有多余的声明（判据不碰文章的用例不该带 premise_entity）",
+      not [i for i in _declared_ent if i not in _may_ent],
+      "；".join(i for i in _declared_ent if i not in _may_ent))
+
+_bad_ekind, _bad_anchor, _bad_ewhy = [], [], []
+for _c in _cases:
+    _pe = _c.get("premise_entity")
+    if not isinstance(_pe, dict):
+        continue
+    _cid = _c.get("id")
+    if str(_pe.get("kind") or "").strip() not in rg.ENTITY_KINDS:
+        _bad_ekind.append(f"{_cid}: {_pe.get('kind')!r}")
+    _t = str(_pe.get("title") or "").strip()
+    _i = _pe.get("note_id")
+    # 锚点**二选一**：两个都不写 ⇒ 哨兵无从开口（会判 changed，但那是"声明坏了"）；都写
+    # 也不算错（模块按 id 核，改名不误伤），所以只拦"一个都没有"。
+    if not _t and _i is None:
+        _bad_anchor.append(f"{_cid}: 没写 title/note_id")
+    if _i is not None and not str(_i).strip().isdigit():
+        _bad_anchor.append(f"{_cid}: note_id={_i!r} 不是数字")
+    if len(str(_pe.get("why") or "").strip()) < rg.ENTITY_WHY_MIN:
+        _bad_ewhy.append(_cid)
+check("kind 是声明表里的那一类", not _bad_ekind, "；".join(_bad_ekind))
+check("锚点写了且是标题或数字 id（一个都不写 = 哨兵无从开口）",
+      not _bad_anchor, "；".join(_bad_anchor))
+check(f"每条都写了 why 且 ≥ {rg.ENTITY_WHY_MIN} 字（为什么这条判据要求它在场，"
+      "机器判不了那一半）", not _bad_ewhy, "；".join(_bad_ewhy))
+
+# ⑤ 判据的判据：下面这一组探针证明哨兵**真的会响**。整节**离线**——语料快照是**夹具**
+# （`docs` 就是那个列表），不是真去取数：本套件进 CI、必须秒级且无网。
+# 夹具里放 **id=19**（`todo_multi_step_serial` 真读的那篇），**不放** TEST8 —— 后者正是
+# 那次事故里已经消失的那件东西，把它当"在场"等于把这条判据的前提写反。
+_DOCS = [
+    {"id": 19, "title": "Saudade Blog AI Agent（泠月喵）架构文档", "content": ""},
+    {"id": 22, "title": "IoT 设备接入物联网平台指南", "content": ""},
+]
+_kept_ent, _skip_ent, _rows_ent = rg.check_entity_premises(
+    json.loads(json.dumps(_cases)), _DOCS)
+check("★ 现有语料里**只有**那件已知死锚被判未评估（正是 TEST8 那次事故），别的一条没变",
+      _skip_ent == ["rag_test4_cover"], f"{_skip_ent}")
+check("未评估的那条在报告里留下 `changed` 一行（事后翻报告能看出这一轮少评了谁）",
+      [r["id"] for r in _rows_ent if r["state"] == "changed"] == ["rag_test4_cover"],
+      str([(r["id"], r["state"]) for r in _rows_ent]))
+# 探针都从**真实用例变异**而来（自己造空壳只能证明哨兵会算数，证明不了这条用例的锚是承重的）。
+_p6 = _mut("todo_multi_step_serial")
+_p6["premise_entity"]["note_id"] = 999
+_, _s9, _r9 = rg.check_entity_premises([_p6], _DOCS)
+check("id 锚：note_id 改成语料里没有的一篇 ⇒ 当场响（未评估，不是判模型没读）",
+      _s9 == [_p6["id"]] and any("id=999" in h for h in _r9[0]["hit"]), f"{_s9} / {_r9[0]['hit']}")
+
+_p7 = _mut("rag_test4_cover")
+_, _s10, _r10 = rg.check_entity_premises([_p7], _DOCS)
+check("标题锚：夹具语料里没有 TEST8 ⇒ 当场响（同那次事故的形状，离线复现）",
+      _s10 == [_p7["id"]] and any("TEST8" in h for h in _r10[0]["hit"]), f"{_s10} / {_r10[0]['hit']}")
+# 改名不误伤：标题末尾被加了后缀仍算命中（与语料出处闸的锚点同一条口径，`_norm_title`）。
+_p7b = _mut("rag_test4_cover")
+_p7b["premise_entity"]["title"] = "TEST8"
+_, _s10b, _ = rg.check_entity_premises(
+    [_p7b], [{"id": 13, "title": "TEST8（旧试验记录）", "content": ""}])
+check("锚点容忍标题末尾被加后缀（逐字节比会把一个『看起来一模一样』的标题判死）",
+      not _s10b, str(_s10b))
+
+_p8 = _mut("todo_multi_step_serial")
+_p8["premise_entity"]["kind"] = "note_private"
+_, _s11, _r11 = rg.check_entity_premises([_p8], _DOCS)
+check("kind 写错（不在声明表里）⇒ 当场响（声明坏了也要偏到未评估那一侧）",
+      _s11 == [_p8["id"]] and any("kind" in h for h in _r11[0]["hit"]), f"{_s11} / {_r11[0]['hit']}")
+
+_p9 = _mut("todo_multi_step_serial")
+_p9["premise_entity"]["why"] = "太短"
+_, _s12, _r12 = rg.check_entity_premises([_p9], _DOCS)
+check("why 太短也响（『为什么要它在场』机器判不了，但至少要写下来）",
+      _s12 == [_p9["id"]] and any("why" in h for h in _r12[0]["hit"]), f"{_s12} / {_r12[0]['hit']}")
+
+_p10 = _mut("todo_multi_step_serial")
+_p10["premise_entity"].pop("note_id")
+_p10["premise_entity"].pop("title", None)
+_, _s13, _r13 = rg.check_entity_premises([_p10], _DOCS)
+check("锚点一个都没写 ⇒ 当场响（否则这条声明是个没有读者的字段）",
+      _s13 == [_p10["id"]] and any("锚点" in h for h in _r13[0]["hit"]), f"{_s13} / {_r13[0]['hit']}")
+
+# ⚠ 这一条是**离线 `--only` 的安全阀**，也是本族最容易写反的一格：快照取不到（接口不通 /
+# `BLOG_API_BASE` 指错）**不许**判成"实体没了"——那会把一次网络故障说成站主删了文章，
+# 与"语料为空归 unknown"是同一条纪律（`tools/base._get` 把连不上/5xx 一律吞成
+# `UPSTREAM_DOWN`，不抛 ⇒ 两种成因的读数一模一样）。
+_, _s14, _r14 = rg.check_entity_premises(json.loads(json.dumps(_cases)), None)
+check("快照取不到 ⇒ 全部 unknown、**一条都不摘**（照跑；不知道就不动）",
+      not _s14 and all(r["state"] == "unknown" for r in _r14) and bool(_r14), f"{_s14}")
+check("unknown 那批**不在** changed 名单里（别让『判不了』混进『已不在场』）",
+      not [r for r in _r14 if r["state"] == "changed"])
+
 print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))

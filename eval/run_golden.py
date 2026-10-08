@@ -1731,6 +1731,15 @@ def check_trace_premises(cases: list) -> tuple:
     return kept, skipped, rows
 
 
+# ── "判据点名的那件实体还在不在"（20261009）────────────────────────────────
+# 前面五条前提问的是环境/供给/设计/跑法/语料，独独漏掉最直白的一句：**这条判据点名的
+# 那个东西，还在不在**。一手证据、判据两半、为什么锚公开语料快照、以及"快照取不到归
+# unknown 不归 changed"那条纪律，全在 `eval/corpus_provenance.py` 的模块头注里——
+# **实现只有一处**（那个文件被本文件与 `golden_full_run.py` 共用，与语料出处闸同一个
+# 理由：两个跑法各写一份措辞，早晚会有一个说漏最要紧的那句"这不是模型退化"）。
+# 与下面那条语料闸一起，从 `corpus_provenance` 再导出（import 语句在语料闸那段末尾）。
+
+
 # ── "这一轮的语料是不是这套 golden 的那一份"（20261006）─────────────────────
 # 判据本体、三态语义与**为什么空语料只能算 unknown** 都在 `eval/corpus_provenance.py`
 # 的模块头注里（那个文件被本文件与 `golden_full_run.py` 共用——闸的实现只有一处）。
@@ -1741,7 +1750,9 @@ def check_trace_premises(cases: list) -> tuple:
 #   · 它排在四条前提**之后**：四条各自的具体诊断先出，这条全局结论收尾。
 from corpus_provenance import (  # noqa: E402,F401 —— 再导出（唯一实现在 corpus_provenance）
     CORPUS_PROV_FOREIGN, CORPUS_PROV_OK, CORPUS_PROV_UNKNOWN, CORPUS_PROVENANCE_FILE,
-    check_corpus_premises, load_corpus_provenance, provenance_path_for,
+    ENTITY_KINDS, ENTITY_WHY_MIN, check_corpus_premises, check_entity_premises,
+    entity_report_lines,
+    load_corpus_provenance, provenance_path_for,
     report_lines as corpus_report_lines, snapshot_docs as corpus_snapshot_docs,
 )
 
@@ -2697,6 +2708,16 @@ def main():
     if _trace_bad:
         print(f"[trace] ⇒ {len(_trace_skipped)} 条用例本轮**未评估**：{_trace_skipped}")
 
+    # "判据点名的那件实体还在不在"的前提（20261009，头注见 `check_entity_premises` 上面
+    # 那段）：与上面四条同一条出口（摘用例 + 进 skipped_ids + 退出码 3）。**排在语料出处闸
+    # 之前**：它也是逐条族，而那一条是"摘光全部"的全局闸（排在它后面就没有逐条诊断可打）。
+    # 取数**只有一处**：与语料出处闸共用同一个 `judge_docs` 快照（各取一次＝第二个漂移点）。
+    cases, _entity_skipped, _entity_rows = check_entity_premises(cases, judge_docs)
+    skip_ids += _entity_skipped
+    _entity_bad = bool(_entity_skipped)
+    for _line in entity_report_lines(_entity_rows, _entity_skipped):
+        print(_line)
+
     # 语料出处的前提（20261006，头注见 `check_corpus_premises` 上面那段）：**排在最后**，
     # 因为它与上面四条不是一类——那四条各自摘"要那个前提的那几条"，这一条摘的是**全部**
     # （判据整体锚在语料上）。放最后，前面四条的具体诊断先出，这条全局结论收尾。
@@ -2758,9 +2779,9 @@ def main():
         # 身份前置不可用时**优先报 3**（20260926）：`--only <一条要真身份的用例>` 配一个
         # 不可用的 uid，用例会被摘光落到这里；只报 2 的话「前置条件坏了」这件事就没了
         # （2 说的是"你自己把用例摘光了"），而它恰恰是唯一可行动的那条信息。
-        _code = 3 if (_precondition_bad or _trace_bad or _corpus_bad) else 2
+        _code = 3 if (_precondition_bad or _trace_bad or _corpus_bad or _entity_bad) else 2
         print("[run] ⚠ 一条用例都没剩下（被 --only / --skip-ids / 身份闸 / 真写闸 / 夹具闸"
-              "/ trace 闸 / 语料出处闸摘干净了）—— 这一轮**没有评测任何东西**："
+              "/ trace 闸 / 实体闸 / 语料出处闸摘干净了）—— 这一轮**没有评测任何东西**："
               f"空分母不是一个通过率，退出码 {_code}（不是 0）"
               + ("；其中**语料不是这套 golden 的那一份**是主因（[corpus-premise] 那行"
                  "有锚点对账，修法见那三行）" if _corpus_bad else "")
@@ -3033,6 +3054,12 @@ def main():
         # `trace_checks` 每条带 `keys`（这一条是哪几条判据要 trace），空列表=这一轮全判得了。
         "skipped_trace_ids": _trace_skipped,
         "trace_checks": _trace_rows,
+        # "判据点名的实体还在不在场"的前提（20261009）：同源纪律——**未评估要单列**。
+        # `entity_checks` 每条带 `kind` 与锚点（`title` 或 `note_id`，判据锚在哪件东西上），
+        # `state="unknown"`
+        # 那批是快照取不到、哨兵判不了（照跑，但别读成"核过了"）。
+        "skipped_entity_ids": _entity_skipped,
+        "entity_checks": _entity_rows,
         # 语料出处的前提（20261006）：快照对声明锚点的结论。落进报告是为了事后能回答
         # "这一轮判据脚下那块地是不是原来那块"——判 ok 的时候它尤其重要，因为那时
         # **没有任何别的痕迹**（判 foreign 则根本走不到这里，见那段头注）。
@@ -3280,7 +3307,7 @@ def main():
     # 档位放宽。理由只有一句：这些用例这一轮**没被评估**，而退出码 0
     # 会被读成"这一轮没问题"——空分母那次（退出码 2）就是同一条纪律的另一个现场。
     # 上面已把逐条 `[precondition]` 打过，这里只是让退出码也说出来。
-    if _precondition_bad or _premise_bad or _nopopup_bad or _trace_bad:
+    if _precondition_bad or _premise_bad or _nopopup_bad or _trace_bad or _entity_bad:
         # 后端把「账号不存在 / 被冻结 / 令牌已被收回」三种原因压成同一个 401（刻意的，
         # 见 identity_preflight 头注），所以这行只能把**三种修法**都列出来——20261001
         # 实测：只知道"不可用"会先去猜"是不是被冻结了"，而真因是账号被删。
@@ -3313,6 +3340,14 @@ def main():
                   "事件**，而这一轮 `--no-trace` / `GOLDEN_NO_TRACE=1` 把它关了 ⇒ 那几条"
                   "一条都判不了。**这不是模型退化**（20261004 早上 4 次 `--only` 重跑就是"
                   "这么被误判成'待办台账没摆上桌'的）。去掉那个开关重跑即可")
+        if _entity_bad:
+            print(f"⚠ 判据点名的实体已不在公开面上（{len(_entity_skipped)} 未评估）"
+                  f"⇒ 退出码 3：{_entity_skipped} —— 这些用例的判据锚在某篇文章上，而那篇"
+                  "**已经不在公开面上了**（改成 private / 删了 / 改了名）。**这不是模型"
+                  "退化**：模型如实说'站内没有它'，判据却把它读成'没去读'——判的是判据自己。"
+                  "逐条见报告 `entity_checks`；修法二选一：① 换锚到一件还在的实体（连带把"
+                  "词表式负断言换成形态锁）；② 这条用例测的事真的没了 ⇒ 退役它（分母变了"
+                  "要写在明处）")
         sys.exit(3)
     if failed == 0:
         sys.exit(0)

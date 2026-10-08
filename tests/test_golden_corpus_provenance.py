@@ -223,6 +223,49 @@ check("ok 时**不打任何一行**（干净的轮次不该多出噪音）",
       cp.report_lines(*cp.check_corpus_premises(_docs(*REAL_ANCHORS))) == [])
 
 # ══════════════════════════════════════════════════════════════════
+print("\n⑧ 实体前提闸（20261009）：同一处实现、两个跑法都接线、措辞不许读反")
+# 与 ⑥ 同一条纪律：闸的实现只有一处，两个跑法共用。用例侧"该不该落笔"的锁在
+# `tests/test_golden_keys.py` 第 ⑩ 节（那边才有用例文件），这里锁**接线**。
+check("判据本体只有一份（两个跑法里都没有第二份定义）",
+      "def check_entity_premises" not in _RG and "def check_entity_premises" not in _FR)
+check("两个跑法都调它",
+      "check_entity_premises(" in _RG and "check_entity_premises(" in _FR)
+check("两个跑法都把结论翻成人能读的那几行（各写一份措辞早晚会漏掉那句话）",
+      "entity_report_lines(" in _RG and "entity_report_lines(" in _FR)
+# 与语料闸**共用同一次快照**：各取一次就是第二个会漂移的地方（写成两个 snapshot_docs()
+# 调用 ⇒ 这里当场红）。
+check("全量跑法里实体闸复用**语料闸那份快照**（不许再取一次）",
+      _FR.count("corpus_provenance.snapshot_docs()") == 1)
+_idx_ent = _FR.index("check_entity_premises(")
+check("全量跑法里实体闸也在主循环**之前**（它摘掉的那几条否则会白烧一次 LLM）",
+      _idx_ent < _idx_loop, f"{_idx_ent} < {_idx_loop}")
+check("两个跑法都把它并进 skipped_ids（未评估要单列，不许静默豁免）",
+      "_SKIPPED_IDS += _ENTITY_SKIPPED" in _FR and "skip_ids += _entity_skipped" in _RG)
+_check_pair = (("run_golden.py", _RG, "skipped_entity_ids", "entity_checks"),
+               ("golden_full_run.py", _FR, "skipped_entity_ids", "entity_checks"))
+for _name, _src, _k1, _k2 in _check_pair:
+    check(f"{_name}：报告里单列未评估的那几条 + 逐条结论",
+          f'"{_k1}":' in _src and f'"{_k2}":' in _src)
+
+_DOC19 = [{"id": 19, "title": "Saudade Blog AI Agent（泠月喵）架构文档", "content": ""}]
+_ent_cases = [{"id": "self-check", "premise_entity": {
+    "kind": "note_visible", "note_id": 19, "why": "探针：这条判据锚在文章 19 上"}}]
+_kept, _skipped, _rows = cp.check_entity_premises(_ent_cases, _DOC19)
+check("在场 ⇒ 照跑、不打任何一行（干净的轮次不该多出噪音）",
+      not _skipped and cp.entity_report_lines(_rows, _skipped) == [])
+_, _skipped2, _rows2 = cp.check_entity_premises(_ent_cases, [])
+_unknown_lines = "\n".join(cp.entity_report_lines(_rows2, _skipped2))
+check("快照取不到 ⇒ 判不了、**照跑**，且要打一行说清（『没报错』≠『核过了』）",
+      not _skipped2 and _rows2[0]["state"] == "unknown"
+      and "判不了" in _unknown_lines and "照跑" in _unknown_lines)
+_, _skipped3, _rows3 = cp.check_entity_premises(_ent_cases, [{"id": 7, "title": "别的"}])
+_changed_lines = "\n".join(cp.entity_report_lines(_rows3, _skipped3))
+check("不在场 ⇒ 未评估，且那一行**明写「这不是模型退化」**（读报告的人最容易读反的一句）",
+      _skipped3 == ["self-check"] and "这不是模型退化" in _changed_lines)
+check("不在场那行给出两条出路（换锚 / 退役），并指向报告字段",
+      "改锚" in _changed_lines and "entity_checks" in _changed_lines)
+
+# ══════════════════════════════════════════════════════════════════
 print()
 if FAILS:
     print(f"❌ {len(FAILS)} 项未过：")
