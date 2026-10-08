@@ -2985,6 +2985,88 @@ def test_write_ref_loud():
               ensure_ascii=False))
 
 
+def test_tag_create_batch():
+    """`tag_create` 一次建**多个**标签（20261008 批）。
+
+    现场：主人说「建两个编程下的这俩二级标签吧」，连着两轮 planner 都只填了
+    `title=Git`，第二张卡与第一张**逐字相同**（trace `20261008T065806` /
+    `20261008T065826`），主人说「两个你漏了」也没用——因为**契约层根本表达不出
+    "两个"**：`title` 是单数槽位、模板恒一条 spec、`_expand_write_skill` 恒返回
+    一条。漏掉的名字在系统里不留任何痕迹。
+
+    现在 `titles`（数组）与 `title` 合并成 N 条同形 spec，N≥2 时下游的现成多 spec
+    通道（确认卡「全部办」/「只办第 N 件」、逐条执行、逐条回执）自动接上。这一节锁
+    三件事：**展开成几条**、**每条的名字与共用参数**、**负例不许静默**。
+    """
+    print("[tag_create_batch] 一次点名多个新标签 → 一名一条 spec（不再只建第一个）")
+    from agent import adminops as _A
+
+    obj = instantiate_plan("tag_create", {"titles": ["Git", "SVN"], "parent_tag": "编程"})
+    check("两个名字 → 两条 create_tag spec（顺序照主人说的）",
+          obj["tools"] == ['create_tag({"title": "Git", "parent_tag": "编程"})',
+                           'create_tag({"title": "SVN", "parent_tag": "编程"})'],
+          str(obj["tools"]))
+    check("  父标签**整批共用**（主人说「在编程下面」只说了一次）",
+          all("编程" in t for t in obj["tools"]), str(obj["tools"]))
+    check("  注记把这批的名字与件数都写出来（narrator 与执行记忆照它说）",
+          "「Git」" in obj["note"] and "「SVN」" in obj["note"]
+          and "共 2 个" in obj["note"], obj["note"])
+
+    obj = instantiate_plan("tag_create", {"titles": ["Git", "SVN"], "color": "粉色"})
+    check("颜色也整批共用（点名的色归一成色值，两条都是它）",
+          all('"color": "#eb2f96"' in t for t in obj["tools"]), str(obj["tools"]))
+
+    obj = instantiate_plan("tag_create", {"title": "Git", "titles": ["Git", "SVN"]})
+    check("`title` 与 `titles` 同时有值：合并**去重保序**（Git 只出现一次）",
+          obj["tools"] == ['create_tag({"title": "Git"})', 'create_tag({"title": "SVN"})'],
+          str(obj["tools"]))
+
+    obj = instantiate_plan("tag_create", {"titles": "Git"})
+    check("`titles` 写成单个字符串也认（同一个意思的另一种写法，不白烧一轮）",
+          obj["tools"] == ['create_tag({"title": "Git"})'], str(obj["tools"]))
+
+    obj = instantiate_plan("tag_create", {"titles": [" Git ", "", "Git", "SVN"]})
+    check("数组里的空白项/重复项剔掉，名字两头的空格去掉",
+          obj["tools"] == ['create_tag({"title": "Git"})', 'create_tag({"title": "SVN"})'],
+          str(obj["tools"]))
+
+    obj = instantiate_plan("tag_create", {"titles": [{"title": "Git"}, {"name": "SVN"}, {"x": 1}]})
+    check("对象元素认得出 title/name 就取出来；认不出的**不当成标签名**"
+          "（`{'x': 1}` 变成标签名比少建一个糟得多）",
+          obj["tools"] == ['create_tag({"title": "Git"})', 'create_tag({"title": "SVN"})'],
+          str(obj["tools"]))
+
+    obj = instantiate_plan("tag_create", {"title": "Redis"})
+    check("**老语料零变化**：只给 title 时仍是一条 spec、注记仍是单数写法",
+          obj["tools"] == ['create_tag({"title": "Redis"})']
+          and "「Redis」" in obj["note"] and "共 " not in obj["note"], obj["note"])
+
+    for desc, params in (("`titles` 是空数组", {"titles": []}),
+                         ("两格都没给", {}),
+                         ("只给了空白", {"titles": ["  ", ""]})):
+        obj = instantiate_plan("tag_create", params)
+        check(f"{desc} → 零工具 + 注定为「参数不齐」（交给 planner 去问清，绝不猜一个名字）",
+              obj["tools"] == [] and obj.get("status") == "param_missing", str(obj)[:100])
+
+    obj = instantiate_plan("tag_create", {"titles": ["$titles"]})
+    check("数组里抄了**模板记号** → 零工具（不许印出一张写着记号的卡："
+          "主人一点，站里就多一个叫 $titles 的标签）",
+          obj["tools"] == [] and obj.get("status") == "param_missing", str(obj)[:100])
+
+    # 卡面这一层是"一批"给人看的地方：名字逐条印、多件时换「全部办」那一套措辞。
+    card = _A.render_confirm_text([
+        {"tool": "create_tag", "args": {"title": "Git", "parent_tag": "编程"}},
+        {"tool": "create_tag", "args": {"title": "SVN", "parent_tag": "编程"}}])
+    check("卡面把两个名字都印出来（主人核对的就是这一行，少一个名字等于让他盲签）",
+          "Git" in card and "SVN" in card, card[:160])
+    check("  多件时用多件措辞（「全部办」/「只办第 N 件」），不是单件的「确定」",
+          "全部办" in card and "只办第 N 件" in card and "点「确定」" not in card,
+          card[:200])
+    check("  单件时仍是单件措辞（老语料的话术一个字节没变）",
+          "点「确定」" in _A.render_confirm_text(
+              [{"tool": "create_tag", "args": {"title": "Git"}}]))
+
+
 def test_todo_contract():
     """TODO 行契约（20260904 最小契约）：可选第 6 行、插在 REPLY 前（REPLY 的
     DOTALL 解析假设它是末行，追加在后会被吞）；TODO 是"声明"不是"执行指令"——
@@ -5562,7 +5644,8 @@ def main():
                test_gate_confirm_claim, test_gate_ledger_denial, test_ledger_target_guard,
                test_review_inbox_calls_whitelist,
                test_gate_repeat_reply,
-               test_execute_node, test_refs, test_write_ref_loud, test_todo_contract,
+               test_execute_node, test_refs, test_write_ref_loud,
+               test_tag_create_batch, test_todo_contract,
                test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message,

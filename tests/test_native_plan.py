@@ -132,16 +132,45 @@ def test_params_mirror_skill_param_specs():
 
 
 def test_override_table_is_closed():
-    print("\n[同源] 覆盖表只有申报过的三格")
+    print("\n[同源] 覆盖表只有申报过的几格")
     # 钉成字面量：加一格必须同改这里（= 有人复核这一格为什么推不出形状）
     # 20260929 批 H 加的第三格 `review_inbox.calls`：与 `content_query.calls` 同一个
     # 理由（逐条调用的**工具名由模型写**，模板给不出映射）——两份 `calls` 的 items
     # 形状因此必须逐字同构，见 `test_review_inbox_calls_shape`。
-    check("_SCHEMA_OVERRIDES 的键集合恰为 content_query 两格 + review_inbox 一格",
+    # 20261008 加的第四格 `tag_create.titles`：技能模板一个名字一条 spec
+    # （`{"title": "$title"}`），数组那一格配不到工具参数 ⇒ 不覆盖就会被兜底成
+    # `string`，而它装的是一批名字（见 agent/native_plan.py 那一格的注）。
+    check("_SCHEMA_OVERRIDES 的键集合恰为 content_query 两格 + review_inbox 一格"
+          " + tag_create 一格",
           set(N._SCHEMA_OVERRIDES) == {("content_query", "tools"),
                                        ("content_query", "calls"),
-                                       ("review_inbox", "calls")},
+                                       ("review_inbox", "calls"),
+                                       ("tag_create", "titles")},
           str(sorted(N._SCHEMA_OVERRIDES)))
+
+
+def test_tag_create_titles_is_array_of_strings():
+    print("\n[同源] tag_create.titles 声明成字符串数组（一次办多个名字的入口）")
+    fns = _by_name("admin")
+    sk = fns.get("tag_create")
+    check("admin 有 tag_create 这一格", sk is not None, str(sorted(fns))[:60])
+    check("公开身份看不到它（写技能只在管理员菜单里）", "tag_create" not in _by_name(None))
+    if sk is None:
+        return
+    props = sk["parameters"]["properties"]
+    t = props.get("titles") or {}
+    check("titles.type == array", t.get("type") == "array", str(t))
+    check("titles.items.type == string",
+          (t.get("items") or {}).get("type") == "string",
+          str((t.get("items") or {}).get("type")))
+    # 单数槽位一个字节没变：老语料（"建一个 X 标签"）走的还是这条
+    check("title 仍是 string 且必填（老语料零变化）",
+          (props.get("title") or {}).get("type") == "string"
+          and "title" in (sk["parameters"].get("required") or []),
+          str(props.get("title")))
+    check("titles 不是必填（单数槽位本来就能表达「只建一个」）",
+          "titles" not in (sk["parameters"].get("required") or []),
+          str(sk["parameters"].get("required")))
 
 
 def test_override_enums_follow_role():
@@ -512,6 +541,7 @@ if __name__ == "__main__":
                test_params_mirror_skill_param_specs,
                test_override_table_is_closed,
                test_override_enums_follow_role,
+               test_tag_create_titles_is_array_of_strings,
                test_array_items_come_from_tool_schema,
                test_no_call_is_plain_chat,
                test_explicit_chat_call_params_pass_through,
