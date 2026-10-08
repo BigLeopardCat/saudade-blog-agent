@@ -1581,6 +1581,120 @@ check("代调令牌**不带 ver**（无 ver 的那一支是刻意保留的，不
 check("代调令牌不带 aud（Rust 用 Validation::default()，多个 aud 会验签失败）",
       "aud" not in _payload, f"{sorted(_payload)}")
 
+print("\n㉔ 一次建多个标签：整批一起问（20261008：弹卡整轮生效，快道那几件不许被静默丢下）")
+
+# 病：`execute_node` 一见 `pending_confirm` 就**一个工具都不执行**（整轮 all-or-nothing），
+# 而 `_confirm_popup` 里走了"同轮命令即确认"快道的那几件是 `continue` 掉的——它们既
+# 不在 `picks` 里、也不在那张签名令牌的 `specs` 里 ⇒ 主人点了「确定」，它们**这一轮
+# 谁都没执行、下一轮也没有任何通道会再办**。而主人那句话是命令式
+# （「确认创建标签 Rust，另外一个也建上」）：一条也没办的写被夹在一张只问一半的卡里，
+# 正是本批 `tag_create.titles` 要根治的"漏掉的名字不留痕迹"——一次建多个标签把它从
+# "理论上的形状"变成了常见形状（`titles` 一次展开好几个 spec）。
+# 处方：整批一致——这一批里只要有一件要问，**整批一起问**（并保 TOOLS 行顺序）。
+# 方向与本文件其它每一处一致：宁可多问一次，也不静默丢一次主人点名的写。
+
+
+def _popup_batch(specs, msg, skill="tag_create", uid=7):
+    """跑一次多 spec 的 `_confirm_popup`（真判据 + 真签发，假的是标签字典与后端）。"""
+    specs = list(specs)
+    return g._confirm_popup(
+        {**g.plan_state({"skill": skill, "params": {}, "tools": specs,
+                         "note": "", "reply": "直接回答"})},
+        specs, Principal(uid=uid, role=ROLE_ADMIN), msg,
+        {"configurable": {"user_id": uid, "conversation_id": 42}})
+
+
+def _spec_title(spec):
+    """令牌 specs 里一件的标题（结构是 {tool, args}，与卡面渲染读的是同一份）。"""
+    return ((spec or {}).get("args") or {}).get("title")
+
+
+def _token_specs(result):
+    """解出卡上那张令牌签下的 `specs`（**只在测试里**解载荷，不验签——验签是 confirm 的事）。"""
+    tok = (result or {}).get("pending_confirm", {}).get("token", "")
+    part = tok.split(".")[0]
+    if not part:
+        return []
+    pad = part + "=" * (-len(part) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(pad).decode()).get("specs") or []
+    except Exception:
+        return []
+
+
+# 标签树里只有 `编程 / Asyncio`：Rust 与 SVN 都是**站里没有的**（不踩"状态已达成"那条出口）。
+with patch(_tag_index=lambda config: A.build_tag_index(
+        [{"tagKey": 2, "title": "编程", "level": 1}],
+        [{"tagKey": 10000, "title": "Asyncio", "level": 2,
+          "fatherTag": "编程", "fatherKey": 2}])):
+    SPEC_RUST = 'create_tag({"title": "Rust"})'
+    SPEC_SVN = 'create_tag({"title": "SVN"})'
+    _P = Principal(uid=7, role=ROLE_ADMIN)
+    _MSG_BOTH = "确认创建标签 Rust 和 SVN"
+    check("  前提：这一句话对两件都判成命令（否则下面测的不是「整批一致」）",
+          all(authz.consent_granted(_P, "create_tag", _MSG_BOTH) is True
+              for _ in (SPEC_RUST, SPEC_SVN)))
+
+    r_both = _popup_batch([SPEC_RUST, SPEC_SVN], _MSG_BOTH)
+    check("两件都落地基 → **不弹卡**（一句命令一次点击都不多，既有形态一字未动）",
+          r_both is None, str(r_both)[:80])
+
+    # 混批：Rust 在主人话里（走免弹窗快道），SVN 不在 ⇒ 只有 SVN 要问。
+    _MSG_MIX = "确认创建标签 Rust，另外一个也建上"
+    check("  前提：这一句话只给 Rust 落地基（SVN 没落地基 ⇒ 它才是要问的那一件）",
+          g._ident_grounded("create_tag", {"title": "Rust"}, _MSG_MIX) is True
+          and g._ident_grounded("create_tag", {"title": "SVN"}, _MSG_MIX) is False)
+
+    r_mix = _popup_batch([SPEC_RUST, SPEC_SVN], _MSG_MIX)
+    _q_mix = (r_mix or {}).get("pending_confirm", {}).get("q", "")
+    check("混批 → 弹卡（走快道那件本来就不该单独执行：弹卡是整轮的）",
+          isinstance(r_mix, dict) and "pending_confirm" in (r_mix or {}), str(r_mix)[:80])
+    check("  卡面把**快道那件也列上**（修前只列 SVN ⇒ 主人点「确定」它照样一条都没办）",
+          "Rust" in _q_mix and "SVN" in _q_mix, _q_mix[:120])
+    _tok_specs = _token_specs(r_mix)
+    check("  而且**令牌签的就是两件**（只列在卡面上不算——点「确定」执行的是 specs）",
+          [_spec_title(s) for s in _tok_specs] == ["Rust", "SVN"], str(_tok_specs)[:160])
+    check("  编号两端同源：卡面顺序 = 令牌顺序 = TOOLS 行顺序（「只办第 N 件」才指得准）",
+          "Rust" in _q_mix and "SVN" in _q_mix
+          and _q_mix.index("Rust") < _q_mix.index("SVN")
+          and [o["value"] for o in r_mix["pending_confirm"]["opts"]
+               if str(o["value"]).startswith("pick:")] == ["pick:0", "pick:1"],
+          str([o["value"] for o in r_mix["pending_confirm"]["opts"]]))
+
+    # 顺序锁：**第一件**才是要问的那一件时，合并后顺序不许倒过来（并进 picks 的入口
+    # 是"快道在别的出口 continue 了"，最容易被写成 `picks + fast` 而不排序）。
+    r_ord = _popup_batch([SPEC_RUST, SPEC_SVN], "确认创建标签 SVN，另外一个也建上")
+    _q_ord = (r_ord or {}).get("pending_confirm", {}).get("q", "")
+    _ord_titles = [_spec_title(s) for s in _token_specs(r_ord)]
+    check("第一件要问、第二件走快道 → 合并后**仍是 TOOLS 行顺序**（不是「先问的排前面」）",
+          _ord_titles == ["Rust", "SVN"], str(_ord_titles)[:120])
+    check("  对应地，问句里 Rust 也排在 SVN 前（渲染与令牌同源）",
+          "Rust" in _q_ord and "SVN" in _q_ord
+          and _q_ord.index("Rust") < _q_ord.index("SVN"), _q_ord[:120])
+
+    # 这一笔要**看得见**：合并改变了"这一轮会不会执行"，事后只能靠 trace 分辨
+    # （整批走快道时不合并、tokens 逐字相同，两条路的卡面长得一样）。
+    _seen: list = []
+    _saved_rec = g.record
+    try:
+        g.record = lambda *a, **k: _seen.append((a, k))
+        _popup_batch([SPEC_RUST, SPEC_SVN], _MSG_MIX)     # 混批：该记一笔
+        _popup_batch([SPEC_RUST, SPEC_SVN], _MSG_BOTH)    # 整批走快道（不弹卡）：不该记
+    finally:
+        g.record = _saved_rec
+    _merged = [1 for a, _ in _seen if a[:2] == ("confirm", "batch_fastpath_merged")]
+    check("  合并记一笔 trace（`batch_fastpath_merged`），整批走快道那一次**不记**",
+          len(_merged) == 1, str([a[:2] for a, _ in _seen])[:120])
+
+    # 反例：被**别的原因**跳过的 spec 一件都不并进来。参数解析不了的那件自有下游
+    # 出路（execute 产 `__ERROR__` 帧退回 planner），把它塞进卡里等于让主人去批准
+    # 一件系统根本没读懂的事；而"有 picks 才合并"这条也让它落回原有的错误帧链路
+    # （picks 空 ⇒ 不弹卡 ⇒ 整轮照常执行，坏的那件照常报错）。
+    r_bad = _popup_batch([SPEC_RUST, 'create_tag(not-json)'], _MSG_MIX)
+    check("参数解析不了的 spec 不进卡（picks 空 ⇒ 照旧不弹，走既有的错误帧链路）",
+          r_bad is None, str(r_bad)[:80])
+
+
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
