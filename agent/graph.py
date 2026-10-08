@@ -9390,7 +9390,8 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     if _q and not _question_words_are_prose(user_msg):
         return None
     picks: list = []
-    for spec in specs:
+    fast: list = []          # [(TOOLS 行位次, 条目)]——走了"同轮命令即确认"快道的那几件
+    for idx, spec in enumerate(specs):
         name = _tool_name(spec)
         if not authz.requires_consent(principal, name):
             continue
@@ -9402,6 +9403,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         # 这是**加一次点击**，不是砍能力——名字原样说出口的常见路径一行没变。
         if not _q and args_ok and authz.consent_granted(principal, name, user_msg) \
                 and _ident_grounded(name, args, user_msg):
+            fast.append((idx, {"tool": name, "args": args}))
             continue  # 明确命令 + 目标地基都在：直接执行，不弹窗
         decision = authz.check(principal, name)
         if not decision.allowed and authz.enforcing(decision.scope):
@@ -9422,7 +9424,27 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                 or not A.target_named(args.get("article_id"),
                                       A.user_named_article_ids(user_msg))):
             continue
-        picks.append({"tool": name, "args": args})
+        picks.append((idx, {"tool": name, "args": args}))
+    # ── 整批一致（20261008）：这一批里只要有一件要问，就**整批一起问** ──────────
+    # 病（本批的 `tag_create` 一次建多个标签把它从"理论上的形状"变成了常见形状）：
+    # 弹卡是**整轮**的（`execute_node` 一见 `pending_confirm` 就一个工具都不执行），
+    # 而快道那几件**不在 `picks` 里** ⇒ 它们在**这一轮谁都没执行**、且不在这一批的
+    # 令牌里 ⇒ 主人点了「确定」之后，它们**没有任何一条通道会再被办**。而主人那句话
+    # 是命令式（"把 Git 建了，另外一个也建上"）——一条也没办的写被夹在一张只问一半的
+    # 卡里，正是这一批要根治的那种"漏掉的名字不留痕迹"。
+    # 判据的方向与本文件其它每一处一致：**宁可多问一次，也不静默丢一次主人点名的写**。
+    # 只有**混批**才受影响（整批都走快道 ⇒ `picks` 空 ⇒ 这里不介入，一句命令一次
+    # 点击都不多的既有形态一字未动）；被**别的**原因 `continue` 掉的（权限硬拦 /
+    # 参数没解析出来 / 挂着 $ref / 文章目标对不上）**一件都不并进来**——那几族各有
+    # 自己的下游链路，并进来等于把别处的病换一个地方发。
+    if picks and fast:
+        record("confirm", "batch_fastpath_merged",
+               fast=[str(e.get("tool") or "") for _, e in fast],
+               picks=[str(e.get("tool") or "") for _, e in picks])
+        logger.info("[confirm] 这一批里有一件要弹卡，另 %d 件走了免弹窗快道 → "
+                    "整批一起问（否则它们这一轮谁都不会执行）", len(fast))
+        picks = sorted(picks + fast, key=lambda p: p[0])
+    picks = [p for _, p in picks]
     if not picks:
         return None
     # 问句要把父标签**名字**写出来（20260921）：只写「新建二级标签「Rust」」时
