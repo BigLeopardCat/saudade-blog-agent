@@ -576,13 +576,22 @@ def _admin_notes_digest(text: str) -> str:
     那支是**搜索口径**（"匹配 N 篇"），不是站内总量。摘要是跨轮取值的来源，把搜索条数
     写成总量，就是"看着有据的错数"。同理，清单被截断（行尾有「另有 N 篇未列出」）时
     **不报状态分布**——那是前 `limit` 条的分布。
+
+    分类筛（20261009）照同一条纪律：**只按分类筛时数的是"该分类下"的条数，不是站内
+    总量** ⇒ 措辞写成「该分类下 N 篇」，与无筛那支的「共 N 篇」分开；两样筛都在时仍按
+    关键词那支说「匹配 N 篇」（分类限定写在同一条串里）。
     """
     m = _ADMIN_NOTES_HEAD_RE.search(text or "")
     if not m:
         return ""
-    n, kw = m.group("n"), m.group("kw")
-    head = (f"后台文章列表（按「{kw}」筛） — 匹配 {n} 篇" if kw
-            else f"后台文章列表 — 共 {n} 篇")
+    n, kw, cat = m.group("n"), m.group("kw"), m.group("cat")
+    if kw:
+        where = f"分类「{cat}」，按「{kw}」筛" if cat else f"按「{kw}」筛"
+        head = f"后台文章列表（{where}） — 匹配 {n} 篇"
+    elif cat:
+        head = f"后台文章列表（分类「{cat}」） — 该分类下 {n} 篇"
+    else:
+        head = f"后台文章列表 — 共 {n} 篇"
     out = head
     if "未列出" not in (text or ""):
         rows = _ADMIN_NOTES_ROW_RE.findall(text or "")
@@ -594,11 +603,15 @@ def _admin_notes_digest(text: str) -> str:
     return out
 
 
-# 头行的两种形态（`render_admin_notes`）：无词「后台文章共 21 篇」、带词
-# 「后台文章里匹配「x」的共 3 篇」。两条都认，且**把 keyword 记下来**（下游要分开说）。
+# 头行的四种形态（`render_admin_notes`）：无筛「后台文章共 21 篇」、带词
+# 「后台文章里匹配「x」的共 3 篇」、按分类「后台文章里「测试」分类下共 6 篇」、
+# 两样都筛「后台文章里「测试」分类下匹配「x」的共 2 篇」。四种都认，且**把 keyword
+# 与分类名都记下来**（下游要分开说：搜索条数 / 分类内条数 都不是站内总量）。
 _ADMIN_NOTES_HEAD_RE = re.compile(
-    r"后台文章(?:里匹配「(?P<kw>[^」]*)」的)?共\s*(?P<n>\d+)\s*篇")
-# 行形态：`- noteId=54 [公开/置顶]《…》标签：…`（状态在方括号里，可能带"置顶"）。
+    r"后台文章(?:里(?:「(?P<cat>[^」]*)」分类下)?(?:匹配「(?P<kw>[^」]*)」的)?)?"
+    r"共\s*(?P<n>\d+)\s*篇")
+# 行形态：`- noteId=54 [公开/置顶]《…》标签：… ｜分类：…`（状态在方括号里，可能带
+# "置顶"；分类是行尾的一格，只取方括号那一节 ⇒ 后加的分类名不影响本正则）。
 _ADMIN_NOTES_ROW_RE = re.compile(r"^- noteId=\d+ \[([^\]]*)\]", re.M)
 
 

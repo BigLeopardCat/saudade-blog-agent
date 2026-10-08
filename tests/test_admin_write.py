@@ -1695,6 +1695,151 @@ with patch(_tag_index=lambda config: A.build_tag_index(
           r_bad is None, str(r_bad)[:80])
 
 
+# ══════════════════════════════════════════════════════════════════
+print("\n㉕ 按分类查文章清单（20261009：站内一直有，agent 这一侧此前没有入口）")
+# 现场（生产 trace `20261008T234509`）：主人要「把「测试」分类下的文章全部转成私密」，
+# 模型手上只有 `list_admin_notes(keyword="测试")`——那是**搜索**（切词匹配标题/正文/
+# 标签名），搜出来的是标题带"测试"的 8 篇，与"归在「测试」分类下"是两回事。它如实说
+# 没有那份清单、并把「你去后台笔记页按分类筛一遍」这个**本可自动完成**的步骤退给了
+# 主人。而站内这个筛选一直在：后台笔记页就是走 `/api/protected/notes/search` 的
+# `categories` 字段筛的（`frontend/src/pages/Dashboard/Notes/AllNotes/index.tsx`）。
+# 缺的两处都在 agent 侧：① 工具参数没暴露；② 行里连分类名都不印（`categoryTitle`
+# 早就在 DTO 里）。这一节把两处都锁住，**外加三条"不许把读不到说成没有"**。
+
+# —— 渲染：每行末尾印分类（键缺席 = 这一路没带分类信息 ⇒ 不印那一格，缺键不编）——
+from agent.entities import receipt_digest  # noqa: E402  （跨语言契约：写侧压摘要）
+
+_N_TEST = {**note(12, "架构文档"), "categoryTitle": "测试"}
+_N_NULL = {**note(21, "关于欧洲AI"), "categoryTitle": None}
+_N_NOKEY = note(19, "Saudade Blog AI Agent（泠月喵）架构文档", "public", 0, "1")
+_r = A.render_admin_notes([_N_TEST, _N_NULL, _N_NOKEY], IDX)
+check("分类名进得了行尾（数据本来就在 DTO 里，只是没印）",
+      "- noteId=12 [私密]《架构文档》标签：（无标签） ｜分类：测试" in _r, _r)
+check("键在但为空 = 这篇文章真的没有分类 ⇒ 印「（无）」",
+      "｜分类：（无）" in _r, _r)
+check("**键缺席 ⇒ 不印这一格**（别的调用方/旧形载荷不带分类信息，不许编一个出来）",
+      _r.count("｜分类：") == 2, _r)
+check("老形一条没动（新格是行尾追加，`标签：` 前缀逐字不变）",
+      "- noteId=19 [公开]《Saudade Blog AI Agent（泠月喵）架构文档》标签：Python\n" in _r
+      + "\n" and "｜分类：" not in _r.split("noteId=19")[1], _r)
+
+_r2 = A.render_admin_notes([_N_TEST], IDX, category="测试")
+check("按分类筛的头行明写分类（不许让它读成站内总量）",
+      _r2.startswith("后台文章里「测试」分类下共 1 篇"), _r2)
+_r3 = A.render_admin_notes([_N_TEST], IDX, keyword="测试", category="测试")
+check("两样都筛时两个限定都在头行",
+      _r3.startswith("后台文章里「测试」分类下匹配「测试」的共 1 篇"), _r3)
+_d_cat = receipt_digest("list_admin_notes", A.render_admin_notes([_N_TEST], IDX,
+                                                                category="测试"))
+check("摘要照同一条口径分流：按分类的数说「该分类下 N 篇」，不说「共 N 篇」",
+      "分类「测试」" in _d_cat and "该分类下 1 篇" in _d_cat and "共 1 篇" not in _d_cat,
+      _d_cat)
+check("两样都筛时仍按搜索口径说「匹配」（限定写进同一条串）",
+      "匹配 1 篇" in receipt_digest("list_admin_notes", _r3), _r3)
+
+# —— 提示词文本锁（判据只能锁文本，不可以锁"模型会怎么做"）——
+# 20261009 探针实测：3 遍里 1 遍给 category 填了占位词「未确认分类」（那不是站内任何
+# 一个分类 ⇒ 工具回"没有这个分类"，白烧一轮，而主人看到的是"没有"）。占位词这类坑
+# 本仓有过先例（20260922 tag_create：描述里的〈…〉被当成了真名字）⇒ 契约里必须有一句
+# 明写的禁令。同一句话在工具参数描述里也有一份（planner 两处都看得到）。
+from agent.skills import SKILLS as _SK  # noqa: E402
+_AN = next(s for s in _SK if s.name == "admin_notes")
+check("planner 契约里明写「不许填占位词」（契约 + 参数表两处都写，模型两处都看得到）",
+      "占位词" in _AN.planner_contract and "未确认分类" in _AN.planner_contract
+      and "占位词" in _AN.inputs["category"],
+      _AN.inputs["category"][-40:])
+
+# —— 工具：分类名先在本字典上认，认不出就是「读不到」，绝不用空结果冒充「没有」——
+_CATS = [{"categoryKey": 9, "categoryTitle": "测试", "pathName": "测试", "noteCount": 0},
+         {"categoryKey": 13, "categoryTitle": "编程笔记", "pathName": "编程笔记",
+          "noteCount": 8}]
+_CATIDX = A.build_category_index(_CATS)
+_NOTE_ROW = {"noteKey": 9, "noteTitle": "test 测试111111111", "status": "private",
+             "isTop": 0, "noteTags": "", "categoryTitle": "测试"}
+
+with patch(_category_index=lambda c: _CATIDX, _tag_index=lambda c: IDX):
+    post = _Post([_NOTE_ROW])
+    with patch(_admin_read_post=post):
+        r = base.list_admin_notes.invoke({"category": " 测试 "}, config=cfg())
+    check("按分类筛走检索端点、分类名（去空白后）原样发给服务端",
+          [c[0] for c in post.calls] == ["/api/protected/notes/search"]
+          and post.calls[0][1] == {"categories": "测试"}, str(post.calls))
+    check("清单照常渲染，且这一行带分类名", "｜分类：测试" in r, str(r))
+
+    post = _Post([_NOTE_ROW])
+    with patch(_admin_read_post=post):
+        base.list_admin_notes.invoke({"category": "测试", "keyword": "111111"}, config=cfg())
+    check("分类与关键词可以同时给（两个键一起发）",
+          post.calls[0][1] == {"categories": "测试", "keyword": "111111"}, str(post.calls))
+
+    # ① 认不出的分类名：**零请求** + 措辞是「没有这个分类」，不是「该分类下没有文章」
+    post = _Post([_NOTE_ROW])
+    with patch(_admin_read_post=post):
+        r = base.list_admin_notes.invoke({"category": "编程笔记集"}, config=cfg())
+    check("站内没有这个分类 → unavailable 且**一个请求都不发**",
+          r.kind == "unavailable" and post.calls == [], f"{r.kind}: {r} / {post.calls}")
+    check("  措辞说的是「没有叫…的分类」，绝不许说成「该分类下没有文章」",
+          "没有叫「编程笔记集」的分类" in r and "分类下没有文章" not in r, str(r))
+    check("  近失候选点名给出来（当一次可核对的追问，不替主人认定）",
+          "编程笔记" in str(r) and "完整名字" in str(r), str(r))
+
+    post = _Post([_NOTE_ROW])
+    with patch(_admin_read_post=post,
+               _category_index=lambda c: A.build_category_index(
+                   [{"categoryKey": 9, "categoryTitle": "测试", "noteCount": 1},
+                    {"categoryKey": 10, "categoryTitle": "测试", "noteCount": 2}])):
+        r = base.list_admin_notes.invoke({"category": "测试"}, config=cfg())
+    check("同名两个分类 → unavailable 且零请求（分类名没有唯一约束，重名是真会出现的）",
+          r.kind == "unavailable" and post.calls == [] and "无法确定" in r,
+          f"{r.kind}: {r}")
+
+    # ② 分类在、篇数也是 0 ⇒ 这才是「该分类下没有文章」，用 empty
+    post = _Post([])
+    with patch(_admin_read_post=post):
+        r = base.list_admin_notes.invoke({"category": "测试"}, config=cfg())
+    check("名册 0 篇 + 筛出来空 → empty「该分类下没有文章（篇数 0）」",
+          r.kind == "empty" and "分类下没有文章" in r and "篇数 0" in r, f"{r.kind}: {r}")
+
+    # ③ 名册说 N≥1、筛出来却空 ⇒ 这是「这一次没读到」，不是「没有」（缺数 ≠ 零）
+    post = _Post([])
+    with patch(_admin_read_post=post,
+               _category_index=lambda c: A.build_category_index(
+                   [{"categoryKey": 9, "categoryTitle": "测试", "noteCount": 6}])):
+        r = base.list_admin_notes.invoke({"category": "测试"}, config=cfg())
+    check("名册 6 篇却筛出空 → unavailable（明写「不是该分类下没有文章」，是没读到）",
+          r.kind == "unavailable" and "写着 6 篇" in r and "这一次没读到" in r
+          and "这不是「该分类下没有文章」" in r, f"{r.kind}: {r}")
+
+    # ④ 影子行（编辑修改稿）不是文章：清单端点滤了、检索端点只在「公开文章」页签滤
+    post = _Post([_NOTE_ROW,
+                  {**_NOTE_ROW, "noteKey": 46, "draftOf": 9, "noteTitle": "编辑修改稿"},
+                  {"noteKey": 47, "noteTitle": "没有 draftOf 键的行", "status": "public",
+                   "isTop": 0, "noteTags": ""}])
+    with patch(_admin_read_post=post):
+        r = base.list_admin_notes.invoke({"category": "测试"}, config=cfg())
+    check("draftOf 非空（编辑修改稿）不进清单——头行那句「不在其中」才是真话",
+          "noteId=46" not in r, str(r))
+    check("**键缺席的行留着**（没带这个信息 ⇒ 不拿它当「不是影子行」的反面）",
+          "noteId=47" in r, str(r))
+
+    # ⑤ 没给任何筛 → 照旧走清单端点（老路径逐字不变）
+    class _Get:
+        def __init__(self, ret):
+            self.ret = ret
+            self.paths: list[str] = []
+
+        def __call__(self, path, config):
+            self.paths.append(path)
+            return self.ret
+
+    get = _Get([_NOTE_ROW])
+    with patch(_admin_get=get):
+        r = base.list_admin_notes.invoke({}, config=cfg())
+    check("两个筛都不给 → 仍走清单端点 `/notes/list`",
+          get.paths == ["/api/protected/notes/list"] and "后台文章共 1 篇" in r,
+          f"{get.paths} / {r}")
+
+
 settings.jwt_secret = _SAVED_SECRET   # 收尾：把这个全局单例还原成进来时的样子
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))

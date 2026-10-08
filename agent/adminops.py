@@ -480,20 +480,29 @@ def render_tag_list(ids, index: dict[int, TagInfo] | None, limit: int = 6) -> st
 # ── 渲染：后台文章列表 / 变更前后 ─────────────────────────────────────
 
 def render_admin_notes(notes, index: dict[int, TagInfo] | None, limit: int = 60,
-                       keyword: str = "") -> str:
+                       keyword: str = "", category: str = "") -> str:
     """后台文章列表（含草稿与私密）→ 给 planner 看的清单。
 
     这一屏的价值全在**id 与标题的对应**：管理员接着说"把《X》设为私密"时，
     planner 只有在这一轮真读到了 id，才有据可写（execute 层的目标校验会拦
     "没读过就写一个凭记忆的 id"）。
 
-    `keyword` 给了就改说"匹配 N 篇"（**搜索口径，不是总数**）：这张单子可能是
-    从全站文章里筛出来的一小撮，写成"后台文章共 N 篇"会让读的人把筛出来的条数
-    当成站内总量（缺数 ≠ 零的同族错误，只是方向反过来）。
+    `keyword` / `category` 给了就改说"匹配 N 篇"/「X」分类下共 N 篇（**筛过的口径，
+    不是总数**）：这张单子可能是从全站文章里筛出来的一小撮，写成"后台文章共 N 篇"
+    会让读的人把筛出来的条数当成站内总量（缺数 ≠ 零的同族错误，只是方向反过来）。
+
+    **每行末尾印分类名**（20261009）：`categoryTitle` 本来就在 DTO 里（Rust
+    `NoteDto`），只是这一屏此前没印 ⇒ 模型就算把整张清单读回来，也**看不出哪几篇
+    归在某个分类下**（生产现场 trace `20261008T234509`：主人要"把「测试」分类下的
+    文章全部转私密"，模型只能按 keyword 搜出标题带"测试"的 8 篇，然后如实说手上
+    没有那份清单）。键在不在场照旧是判据：**键缺席 = 这一路没带分类信息 ⇒ 不印那一格**
+    （缺键不编），键在但为空 = 这篇文章真的没有分类 ⇒ 印「（无）」。
     """
     kw = str(keyword or "").strip()
-    if kw:
-        lines = [f"后台文章里匹配「{kw}」的共 {len(notes)} 篇"
+    cat = str(category or "").strip()
+    sel = (f"「{cat}」分类下" if cat else "") + (f"匹配「{kw}」的" if kw else "")
+    if sel:
+        lines = [f"后台文章里{sel}共 {len(notes)} 篇"
                  f"（含草稿/私密；「编辑修改稿」不在其中）:"]
     else:
         lines = [f"后台文章共 {len(notes)} 篇（含草稿/私密；「编辑修改稿」不在其中）："]
@@ -507,18 +516,26 @@ def render_admin_notes(notes, index: dict[int, TagInfo] | None, limit: int = 60,
         if normalize_top(n.get("isTop")) == 1:
             marks.append("置顶")
         tags = render_tag_list(n.get("noteTags"), index)
+        # 分类只在**键在场**时才印：后台那两个端点回的是同一个 DTO，键恒在
+        # ⇒ 键缺席只可能来自别的调用方（测试夹具/旧形载荷），那时不印这一格
+        # （`cname` 为空串 ⟺ 键缺席，所以判它就够）。
+        cname = "" if "categoryTitle" not in n else (
+            str(n.get("categoryTitle") or "").strip() or "（无）")
+        cat_txt = f" ｜分类：{cname}" if cname else ""
         # 命名空间名（`noteId=`）而不是裸 `id=`：这一屏是 **planner 的取值来源**，
         # 而它在别处看到的同族 id 都叫 `noteId`（帧出口统一改名，见
         # `tools/base.py::_FRAME_ID_KEYS`）。旧形 ` id=` 正是 id_namespaces 那批
         # 锁点名要清掉的东西——同一个数字两种写法，下一步的参数就可能填错族。
-        lines.append(f"- noteId={n.get('noteKey')} [{'/'.join(marks)}]《{title}》标签：{tags}")
+        lines.append(f"- noteId={n.get('noteKey')} [{'/'.join(marks)}]《{title}》"
+                     f"标签：{tags}{cat_txt}")
     if len(notes) > limit:
         rest = len(notes) - limit
         # 尾句此前写着「可用关键词检索」而**关键词参数根本不存在**——那是一句把读的
         # 人（和模型）指向空处的假话。现在 keyword 真在（`list_admin_notes`），两句
         # 分开说：筛过的说"换个词/写具体些"，没筛的才提关键词这条路。
         lines.append(f"（另有 {rest} 篇匹配「{kw}」的未列出，把关键词写具体些再看）" if kw
-                     else f"（另有 {rest} 篇未列出，可用 keyword 收窄）")
+                     else (f"（另有 {rest} 篇「{cat}」分类下的未列出）" if cat
+                           else f"（另有 {rest} 篇未列出，可用 keyword 收窄）"))
     return "\n".join(lines)
 
 
