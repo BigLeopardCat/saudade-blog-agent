@@ -3103,6 +3103,100 @@ def _has_real_change(receipts, noop_specs) -> bool:
     return False
 
 
+# ── 账甲：**本轮状态**的一处合成（20261008）────────────────────────────────
+# 为什么要有这个类（这是它的全部理由，别把它当"顺手封装的工具函数"）：
+# 「这一轮到底做了什么」在 20261008 之前**不是一个对象**——六个地方各算一份前提，
+# 连基准都不一样：
+#   · `_wrote_this_round`(4118)  看**计划**里有没有写；
+#   · `_write_receipts`(9464)    看**回执**里有没有写；
+#   · `_has_real_change`(3080)   看回执 × noop_specs（**真改了东西**吗）；
+#   · `_no_popup_fact`(3953)     看 `pending_confirm` + 计划 —— 于是它能对 narrator 说
+#     "本轮**一个写操作都没提出来**"，而同一轮的判据侧按回执判"这件事**办成了**"。
+#     `_narrator_plan` 的 docstring 自己记着这个不对称（"两个判据不是一回事"），
+#     也就是说**供给侧与判据侧可以互相矛盾**——只是此前没人把它们摆在一起看。
+#   · 洞⑥ `_confirm_claim`(3852) 抓"还在等你点确定"**没有任何状态前提**（纯结构：
+#     真弹卡的轮到不了 gate）；
+#   · 5e `false_negative_claim` 只看 `bool(receipts)`。
+# 现场（trace `20261008T083153_1`）：确认兑现轮里 `approve_quota_request` **真 PASS**
+# （回执「剩 500/500」），判据侧一切正常，narrator 却把办成的事说成"还在待处理队列里"。
+# **账不在一处，对账就无从谈起**——所以先把账合成一处。
+#
+# 范式照 `server._ledger_block`(501) ↔ `server._ledger_for_graph`(536)：同一个来源，
+# 两处消费；那头注写着"两个来源各算各的必然对不上"。这里同样只算一次：
+# narrator（`_round_fact_note`）与 gate（`_claim_issue` 的 `facts` 形参）读**同一个对象**。
+#
+# 全部复用现成单一实现，**绝不在这里另写一套**：`_spec_signature`（归一化只有一份）、
+# `authz.is_write`（写族判据只有一份）、`_has_real_change`（"真改了东西"只有一份）、
+# `parse_plan`（计划文本只有一份解析器）。
+class RoundFacts(NamedTuple):
+    """账甲：本轮（请求内）状态。字段逐个对应上面"今天谁在算"的那六处之一。"""
+    granted: bool            # `confirm_grant` 在场：主人刚点过头的那一兑现轮
+    planned_writes: tuple    # 计划里的写 spec 工具名（`_wrote_this_round` 的同源）
+    ok_writes: tuple         # checker PASS 的写回执工具名 ⇒ 系统**真办了**这几件
+    noop_writes: tuple       # 其中工具自报 `changed=False` 的（站内本来就是目标值）
+    changed: bool            # 有非 noop 的写回执 ⇒ **真的改了东西**（洞⑩ 的前提）
+    blocked_writes: tuple    # 本轮受阻的写 spec 工具名（决定"能不能说整轮"）
+    popup: bool              # 本轮弹了确认卡（那种轮次到不了 narrator/gate）
+    ledger_pending: bool     # 台账里有一行**真在等**主人点头（`ledger["pending"]` 原文非空）
+    awaiting_owner: bool     # ↑ 而且这一轮一件都没办成 ⇒"在等你点头"是**真话**的那一档
+
+
+def _plan_tool_specs(raw) -> list:
+    """计划里的调用清单，**容两种形态**：契约文本（`state["plan"]` 的真实形态，
+    `plan_encode` 写过一次再从 state 读回来的那种）与已经解析好的 plan_obj
+    （纯单测的合成 state 里有 `{"plan": parse_plan(...)}` 这种写法）。
+
+    `_round_facts` 要无条件跑（`_no_popup_fact` 现在先问账甲再决定说不说），
+    所以这里不能像从前那样默认"调用方一定给的是字符串"——那会让一条**判据**因为
+    一个**测试夹具的形状**而抛 TypeError（20261008 实测：`test_skills` 当场 rc=1）。
+    """
+    if isinstance(raw, dict):
+        return list(raw.get("tools") or [])
+    if isinstance(raw, str) and raw:
+        return list(parse_plan(raw)["tools"])
+    return []
+
+
+def _round_facts(state) -> RoundFacts:
+    """账甲合成：纯读 state，无副作用；narrator 与 gate 各调一次、读同一份形状。
+
+    `receipts` / `noop_specs` / `blocked` / `pending_confirm` / `confirm_grant` / `ledger` /
+    `plan` 都在 `state` 里（都在 `AgentState` 显式声明过，20261008 前就有），本函数
+    只是**把散在六处的那种算法收拢到一处**，不改任何一种算法的语义。
+    """
+    receipts = [r for r in (state.get("receipts") or []) if isinstance(r, dict)]
+    noop = {tuple(s) for s in (state.get("noop_specs") or [])}
+    ok: list[str] = []
+    noop_w: list[str] = []
+    for r in receipts:
+        name = str(r.get("tool") or "")
+        if not authz.is_write(name):
+            continue
+        # 归一化与 receipts / 剪裁 / planner 去重同一份（`_spec_signature`），别另写。
+        (noop_w if _spec_signature(name, r.get("args") or {}) in noop else ok).append(name)
+    planned = tuple(
+        n for n in (_tool_name(s) for s in _plan_tool_specs(state.get("plan")))
+        if n and authz.is_write(n))
+    blocked_w = tuple(
+        str(b.get("tool") or "") for b in (state.get("blocked") or [])
+        if isinstance(b, dict) and authz.is_write(str(b.get("tool") or "")))
+    popup = bool(state.get("pending_confirm"))
+    ledger_pending = bool(str((state.get("ledger") or {}).get("pending") or "").strip())
+    return RoundFacts(
+        granted=bool(state.get("confirm_grant")),
+        planned_writes=planned,
+        ok_writes=tuple(ok),
+        noop_writes=tuple(noop_w),
+        # 「真改了东西」仍由 `_has_real_change` 一处判（它收的是 receipts×noop_specs，
+        # 与我上面那两列的算法同源；这里只是把它的结论搬进来，不复制它的判据）。
+        changed=_has_real_change(receipts, state.get("noop_specs")),
+        blocked_writes=blocked_w,
+        popup=popup,
+        ledger_pending=ledger_pending,
+        awaiting_owner=ledger_pending and not ok and not popup,
+    )
+
+
 def _change_denial_claim(reply: str, has_real_change: bool) -> bool:
     """有帧轮的"这一轮什么都没改"**假阴性**声称（见 _NO_CHANGE_CLAIM_RE）。
 
@@ -3760,7 +3854,103 @@ def _confirm_claim(text: str) -> bool:
     return bool(_confirm_claim_clause(text))
 
 
-def _no_popup_fact(state) -> str:
+# ── gate 洞⑮：**已经办成了却说还在等**（20261008，洞⑥ 的镜像）───────────────
+# 洞⑥ 抓"还没开始却在等你点确定"；这一条抓它的镜像——**系统这一轮真办成了**，回复却说
+# "还在待处理队列里／刚才那次确认没落地"。两者是**同一件事实（账甲）的两面**，所以读同一份
+# 前提、住在同一处（判定顺序见 `_claim_issue`）。
+#
+# 现场（trace `20261008T083153_1`）：主人点「确定」批准 niuniu 的额度重置，
+# `approve_quota_request` **真 PASS**（回执「剩 500/500」），gate `frames=1` 未打回，
+# narrator 写下「他的申请**还在待处理队列里**（账号「niuniu」id=5，剩 **451/500** 轮）……
+# **刚才那次确认没落地**。要不要我再走一遍？」——451 是**卡面快照**里的旧数（那条合成消息
+# 是"点确定之前"的，见 `_CONFIRM_ROUND_NOTE`）。整段里"这一轮系统没有执行任何操作"那句
+# 已被洞⑩ 第 ⑤ 支接住，但**"还在待处理队列里／没落地"这一半今天没有网**：grep 过全部
+# 判据常量，`待处理|队列|还没|等着|等主人` 只出现在注释与 golden 的 `_note` 里。
+# 判据侧实测：整段命中 `write_change_denial`、**剥掉 ⑤ 支那句后单独判 = None**
+# （那条红基线见 `tests/test_round_facts.py`）。
+#
+# **前提是状态，不是词形**（这是与洞⑥ 最大的差别：洞⑥ 的前提是"真弹卡轮到不了 gate"这个
+# 拓扑事实，没有状态可读）：`RoundFacts.ok_writes` 非空 = 本轮回执里**有写办成了**。再加两道
+# "这一轮确实干净"的闸，把误伤面压到零：
+#   · `not ledger_pending`：台账里**真有一行在等**时不判——那一轮里"还有一件等着你点头"
+#     是**真话**（判它就是把真话判成谎；宁漏勿误）；
+#   · `not blocked_writes`：本轮有受阻的写时不判——"那篇的置顶还没落地"在"一件办成、
+#     另一件受阻"的轮次里同样是**真话**。
+# 三条同时成立的那一档里，"整轮还没落地／还在队列里"在状态上**必假**。
+#
+# 词形刻意收得很窄，两组各有一个"看起来像但不判"的近邻（写在这里防后来人顺手放宽）：
+#   · 甲组**只收队列名词与审批流**（待处理队列／待确认／还没批下来）。不收计数的说法
+#     「留言板**还有 5 条**待处理」——那是访客看得见的**审核队列**，是真话；也不收
+#     「评论 B 还在待审」这种**指向某一条**的说法（同 `not blocked_writes` 那条的取向）。
+#   · 乙组**必须整轮作用域锚定**（本轮/这轮/刚才…）或全称量词，动词只收
+#     **落地/办成/办妥/生效/走完/推完**——不收裸「执行/办/做」：洞③ 的注释早划过这条界
+#     （"本轮没有执行**删除**操作"这类具体某类动作的如实说明不许误伤）。
+#   · 提议式（"要不要我再走一遍"）**不在本族里**。它只有长在"还没落地"那段话后面才假，
+#     而假话本体已被甲/乙两组接住（gate 按**整条回复**兜底，接住一句就够）；单独一句
+#     "要是你不满意，要不要我再走一遍"是**正常的礼貌收尾**（连系统的兜底文案
+#     `_FALLBACK_CONFIRM_CLAIM` 自己都这么写），判它等于把真话判成谎。**别补上。**
+#
+# ⚠️ **noop 轮不在本族射程内**（前提是 `ok_writes`，工具自报 `changed=False` 的那些不进这一列）：
+# 那一档里"没有实际改动"本来就有几分真，判它风险大于收益。这是**刻意留的缺口**。
+_ROUND_NOT_LANDED_RE = re.compile(
+    # 甲组：队列类 / 审批流（不要求作用域锚定——说的就是系统那份队列，前提已保证它空）
+    r"(?:还|仍|依然|一直)(?:在|挂在|躺在)[^。！？\n]{0,8}"
+    r"(?:待处理队列|待办队列|待确认队列|待处理列表|待办列表|待确认|等待确认|等你确认|等你点)"
+    r"|(?:还|仍|依然)?没(?:有)?(?:批下来|审批完)"
+    # 乙组：落地类（**必须**整轮作用域锚定或全称量词，形态照 洞⑩ ②）
+    r"|(?:本轮|这轮|这一轮|本次|这次|刚才|刚刚)[^。！？\n]{0,20}(?:还没|没有|没|未)(?:有)?"
+    r"[^。！？\n]{0,8}(?:落地|办成|办妥|生效|走完|推完)"
+    r"|(?:一个|一件|一样|一项|一点)都(?:没|没有|未)[^。！？\n]{0,8}"
+    r"(?:落地|办成|办妥|生效|走完|推完)"
+    r"|(?:全|通通|统统)都?(?:没|没有|未)[^。！？\n]{0,8}(?:落地|办成|办妥|生效|走完|推完)",
+    re.S)
+# 豁免与洞⑥ 同一份（条件/疑问/转述/将来/否定那个框架），不另立一张表——两族判的是
+# 同一类"关于这一轮办没办成"的话，该放行的框架完全一样。
+_ROUND_NOT_LANDED_EXEMPT_RE = _CONFIRM_EXEMPT_RE
+
+
+def _round_not_landed_clause(text: str) -> str:
+    """洞⑮ 的子句（trace 用）；没有则空串。不剥引号——理由同 `_confirm_claim_clause`
+    （转述豁免由豁免表里的"写着/留言/原话"那族承担）。"""
+    return _clause_hit(text, _ROUND_NOT_LANDED_RE, _ROUND_NOT_LANDED_EXEMPT_RE) or ""
+
+
+def _round_not_landed_claim(reply: str, facts) -> bool:
+    """洞⑮：本轮回执里**有写办成了**（且台账没有真在等的行、本轮无受阻写），
+    回复却说"还在待处理队列里／还没落地"。前提见上面那段长注。"""
+    if facts is None or not facts.ok_writes:
+        return False
+    if facts.ledger_pending or facts.blocked_writes:
+        return False
+    return bool(_round_not_landed_clause(reply))
+
+
+def _fallback_round_not_landed(facts, receipts) -> str:
+    """洞⑮ 的兜底：**纠正 + 把回执原文摆出来**。
+
+    与 `_fallback_ledger_denial` 同一条取向（那条也是按请求拼）：被否掉的恰恰是"办没办成"，
+    兜底只认错而不摆事实，主人还得再问一遍才拿得到真相——而他刚刚亲手点过确定。
+    摆的是回执里 `result` 的**原文**（系统自己写的那句中文，如「已批准账号「niuniu」…他的
+    额度现在读数是 剩 500/500」），不二次加工：这正是打掉"剩 451/500"那个幻觉的凭据。
+    """
+    lines = []
+    for r in (receipts or []):
+        if not isinstance(r, dict) or not authz.is_write(str(r.get("tool") or "")):
+            continue
+        res = " ".join(str(r.get("result") or "").split())[:160]
+        if res:
+            lines.append("· " + res)
+    tail = ("。系统记录是：\n" + "\n".join(lines)) if lines else ""
+    # ⚠️ 措辞里**不复述**被判掉的那句话（不许出现「还没落地」「待处理队列」这类字面）：
+    # 兜底文本会作为 `last_ai` 进下一轮的上下文（`context._recent_tail` 渲染 AI 消息），
+    # 而复述一遍就是把那个说法又教给它一次（"写给 narrator 的机制描述会变成它的词汇"）。
+    # 只说"我刚才那句说反了" + 摆事实，够主人对上号了。
+    return ("喵呜……主人，我得纠正自己一句：这一轮系统**是真的执行了**、回执写着它"
+            "**已经做成了**——我刚才那句说反了" + tail +
+            "。以系统记录为准，别信我上一句的措辞 :犯错:")
+
+
+def _no_popup_fact(state, facts=None) -> str:
     """本轮没有写操作时的注记尾巴：把"没有确认框、也没有待确认的动作"写成系统事实。
 
     为什么要有（20260926 洞⑥ 的供给侧）：gate 那一侧只能**事后**抓"没弹框却说弹了"
@@ -3797,6 +3987,17 @@ def _no_popup_fact(state) -> str:
     `pending_confirm` 在场时返回空串：那种轮次本来就到不了这里（`route_after_execute`
     见它就 END），留着这一道是为了将来拓扑若变，这句话仍然不可能说错。
 
+    **20261008 起加两道账甲闸**（`facts`，缺省按 `_round_facts(state)` 现推）：
+      · 回执里**有写**（`ok_writes` / `noop_writes`）⇒ 返回空串。本段的"事实"是
+        "一个写操作都没提出来、更没有执行"，那一档里它是**假话**（详见
+        `_round_fact_note` ② 那条缝）；
+      · 台账里**真有一行在等**（`ledger_pending`）⇒ 换成另一档说法。原句禁的是
+        "系统正等着主人点一下"，而那一档里上面 `_ledger_block` 摆着的表格确实挂着
+        一行在等——禁句与台账事实**直接打架**，narrator 怎么选都错一句。
+        所以那一档改成"**没有新的**写操作 + 台账里那一行仍原样在等"。
+    两档都不命中时逐字节是今天的样子（`test_pending_ledger` / `test_confirm` /
+    `test_skills` 三套按这个文本比对，别动那段字符串）。
+
     **尾巴按 `plan_obj["refusal"]` 选支**（20261006，产出物见 planner 里那处赋值）：
     确定性拒绝轮里，上面那段 note 已经把**具体结论**写全了（卡在哪件工具、缺哪一类
     东西、能不能请他换说法）。此时再给通用三分，两段规则会在 narrator 手里打架
@@ -3808,6 +4009,23 @@ def _no_popup_fact(state) -> str:
     """
     if state.get("pending_confirm"):
         return ""
+    # 账甲那道闸（20261008，见 `_round_fact_note` ②）：本段"事实"两个字说的是
+    # **本轮一个写操作都没提出来、更没有执行**——回执里躺着复核通过的写时，这句话
+    # 本身就是假的（供给侧与判据侧同源之后，两侧不可能再对着同一轮说反话）。
+    f = facts if facts is not None else _round_facts(state)
+    if f.ok_writes or f.noop_writes:
+        return ""
+    if f.ledger_pending:
+        # 台账里**真有一行在等**时按新档说（20261008）：原句禁的是"系统正等着主人
+        # 点一下"，而这一档里那**不是谎话**——上面 `_ledger_block` 注入的表格里确实
+        # 挂着一行等主人点头。两句话长在同一轮里，narrator 只能二选一，于是要么
+        # 违反禁句、要么把台账里那行说成不存在。所以这一档改说事实：**没有新的**。
+        return (
+            "**另有一条本轮的系统事实要照实说**：本轮**没有新的写操作**提出来、"
+            "也没有执行，主人那边**不会看到新的确认卡片**——但**上面台账里那一行"
+            "仍原样在等**（那是**之前**挂上的，不是这一轮提的）。要提它就照表格如实"
+            "说它在等：**不许**说成「我刚提的/我刚发起的」，也**不许**说成「系统里"
+            "没有这回事」。")
     fact = (
         "**另有一条本轮的系统事实要照实说**：本轮**一个写操作都没提出来**、更没有"
         "执行，主人那边也不会看到任何待确认的卡片。所以**禁止**说任何"
@@ -3861,19 +4079,57 @@ _CONFIRM_ROUND_NOTE = (
 )
 
 
-def _confirm_round_note(state) -> str:
-    """确认兑现轮（`confirm_grant` 在场）注给 narrator 的那条事实，见上面长注。"""
-    return _CONFIRM_ROUND_NOTE if state.get("confirm_grant") else ""
+def _round_fact_note(state, facts=None) -> str:
+    """**账甲**里"这一轮的写到底怎么了"那条事实，按轮注给 narrator（20261008 扩面）。
+
+    三个支按顺序接，第一个命中就返回：
+
+    ① `confirm_grant` 在场（`_CONFIRM_ROUND_NOTE`，20261008 早先那版）——这一轮的
+       "当前消息"是**点确定之前**的卡面快照，先得把这件事说破，否则后面几条都会被读反；
+    ② **回执里有写、而计划里没有**（`facts.ok_writes` / `noop_writes` 非空且
+       `planned_writes` 为空）：这是供给侧与判据侧**唯一真会打架**的那条缝——
+       `parse_plan` 说"这一轮没提写操作"（于是 `_no_popup_fact` 会照事实的口气说
+       "一个写操作都没提出来、更没有执行"），回执里却躺着一件复核通过的写。
+       两个来源各算各的，必然对不上（`server._ledger_block` 头注那条教训）。
+       **只在这条缝上补**：计划里有写的常规轮不补——回执就在明面上，narrator 读得到，
+       多注一句只是白烧 token，而"写给 narrator 的机制描述会变成它的词汇"。
+    ③ 其余（含 `noop_writes` 单独在场）→ 空串。
+
+    `facts` 缺省（老的单参调用、纯单测）⇒ 自己按 `_round_facts(state)` 现推，与
+    `gate_node` 传进来的那一份同源。
+    """
+    if state.get("confirm_grant"):
+        return _CONFIRM_ROUND_NOTE
+    f = facts if facts is not None else _round_facts(state)
+    if not (f.ok_writes or f.noop_writes) or f.planned_writes:
+        return ""
+    if f.ok_writes:
+        return (
+            "**账甲事实（本轮）**：这一轮**有写操作已经执行并复核通过**（"
+            + "、".join(f.ok_writes[:3]) + "…见 [执行回执] 那格）。所以**禁止**说"
+            "「这一轮没有执行任何操作」「什么都没改」「还在等着办」这类话——回执说"
+            "做成了就照它说做成了，读数一律念回执里印的那个，**不许**念别处的旧数。")
+    return (
+        "**账甲事实（本轮）**：这一轮**有写操作执行成功、但站内本来就是目标值**（"
+        + "、".join(f.noop_writes[:3]) + "，工具自己报了零改动）。照实说「现在就是…」"
+        "就好——**不许**说成「我刚给你改的」，也**不许**说成「什么都没做」。")
 
 
-def _wrote_this_round(state) -> bool:
-    """本轮计划里有没有写操作（真动手了 / 正等主人点头）。
+def _wrote_this_round(state, facts=None) -> bool:
+    """本轮**写没写**（真动手了 / 正等主人点头）。
 
     判据走 `authz.is_write`（scope 声明表是唯一事实源，不另立工具名表），与
     `_name_write_nudge` 第二种形态同一处口径。
+
+    20261008 起读**账甲**（`_round_facts`）：计划里有写 **或** 回执里真有写，都算
+    "这一轮在写"。此前只看**计划**，于是"计划没写、回执却有写"那一条缝上，这里
+    返回 False ⇒ `_no_popup_fact` 会把"一个写操作都没提出来"当事实说给 narrator
+    （正是 `_round_fact_note` ② 那条缝的供给端）。两个来源的合成只有一处（账甲），
+    别在这里另写一份 OR——`_ledger_turn_families` 那边同一个语义已经写着 OR，
+    正是"各写一遍"的现场。
     """
-    return any(authz.is_write(_tool_name(s))
-               for s in parse_plan(state.get("plan", ""))["tools"])
+    f = facts if facts is not None else _round_facts(state)
+    return bool(f.planned_writes or f.ok_writes or f.noop_writes)
 
 
 def _narrator_plan(state, config=None) -> str:
@@ -3898,16 +4154,22 @@ def _narrator_plan(state, config=None) -> str:
     问**的时候，narrator 此前一个字都拿不到——见那个函数的头注（它与收尾那一问是
     同一个判据的正反两面）。两者共用 `_ledger_turn_families` 那批闸门，不会被重复给。
 
-    **第三处是"这一轮的消息本身是什么"**（`_confirm_round_note`，20261008）：确认兑现轮
-    的当前消息是**点确定之前**的卡面快照，不点破它，narrator 会拿快照里的旧读数当现状
-    （现场：写成功了却回"什么都没改"）。它排在最前面给——后面几条讲的都是"这一轮做没做"，
-    快照认错了，那几条会跟着被读反。
+    **第三处是"这一轮的消息本身是什么 / 这一轮的写到底怎么了"**（`_round_fact_note`，
+    20261008）：确认兑现轮的当前消息是**点确定之前**的卡面快照，不点破它，narrator 会拿
+    快照里的旧读数当现状（现场：写成功了却回"什么都没改"）。它排在最前面给——后面几条
+    讲的都是"这一轮做没做"，快照认错了，那几条会跟着被读反。同日扩面还有第二支：
+    **回执里有写、计划里没有**那条缝上，此前 `_no_popup_fact` 会照着计划说"一个写操作都
+    没提出来"（假话），这一支把它顶掉。
     """
     plan = state.get("plan", "")
-    # 确认兑现轮那条事实**最先接**（20261008，见 `_CONFIRM_ROUND_NOTE`）：它讲的是这一轮
-    # 的消息本身是什么，其余几条讲的都是"这一轮做没做"，把快照当现状会一并把后面几条
-    # 读反。它不是台账事实、不读 config ⇒ 老的单参调用（纯单测）行为不变。
-    _cnote = _confirm_round_note(state)
+    # 账甲（20261008）：**这一处**本轮状态，本函数里三条注记共用同一份
+    # （`_round_fact_note` / `_no_popup_fact` / `_wrote_this_round`）——与 gate 侧
+    # `_claim_issue` 读的是同一个合成函数，两侧不可能对同一轮算出不一样的形状。
+    facts = _round_facts(state)
+    # 写事实那条**最先接**（20261008，见 `_round_fact_note`）：它讲的是这一轮的消息
+    # 本身是什么 / 这一轮的写到底怎么了，其余几条讲的都是"这一轮做没做"，认错了会
+    # 一并把后面几条读反。它不是台账事实、不读 config ⇒ 老的单参调用（纯单测）行为不变。
+    _cnote = _round_fact_note(state, facts)
     if _cnote:
         plan = plan + "\n" + _cnote
     note = _ledger_closing_note(state, config)
@@ -3919,8 +4181,8 @@ def _narrator_plan(state, config=None) -> str:
     ledger = _ledger_fact_note(state, config)
     if ledger and ledger not in plan:
         plan = plan + "\n" + ledger
-    fact = _no_popup_fact(state)
-    if not fact or fact in plan or _wrote_this_round(state):
+    fact = _no_popup_fact(state, facts)
+    if not fact or fact in plan or _wrote_this_round(state, facts):
         return plan
     return plan + "\n" + fact
 
@@ -4163,7 +4425,8 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
                  noop_specs: list | None = None,
                  page_ctx: str = "",
                  role: str | None = None,
-                 nav_errored: bool = False) -> tuple[str, str, str] | None:
+                 nav_errored: bool = False,
+                 facts: "RoundFacts | None" = None) -> tuple[str, str, str] | None:
     """声称闸判定（gate 确定性兜底，20260902 事故族）：回复含声称但轨迹无工具
     支撑 → 返回 (issue, 人设内 fallback 文本, **被否掉的那一句**)；有据/无声称 → None。
 
@@ -4188,6 +4451,13 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         事实 premise 由 `_has_real_change(receipts, noop_specs)` 给（缺 `noop_specs`
         ⇒ 全部写回执都算真改动——那是**从严**方向，与"宁漏勿误"相反但更安全：
         只有工具显式声明零改动的才豁免）
+      - 任何轮：**未落地声称**（_round_not_landed_claim，洞⑮，20261008）——洞⑩ 的
+        **镜像**：这一轮回执里**有写办成了**（`RoundFacts.ok_writes` 非空，且台账里
+        没有真在等的行、本轮无受阻写），回复却说"还在待处理队列里／刚才那次确认
+        没落地"。与帧无关（它否认的是本轮已落地的回执事实），故同样在这行之前；
+        事实 premise 由**账甲** `_round_facts(state)` 给（narrator 与 gate 共读的
+        那一份，见 `RoundFacts`），本函数只在没传 `facts=` 时按老形参现推一份
+        （纯单测路径）。停在洞⑩ 之后、洞⑭ 之前——顺序即语义，理由见下面那一行
       - 任何轮：**导航承诺/完成**（_nav_no_frame_clause，洞⑭，20261007）——"马上带你
         过去／页面这就过去／已经带你到了"这类声称，前提是**这一轮压根没碰导航**
         （既无 NAVIGATE:/AUTO_NAVIGATE: 回执，也没有 `navigate_to` 的 `__ERROR__` 帧
@@ -4228,6 +4498,16 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
         声称、NAVIGATE: 确认帧 + 到达声称、具名工具声称（5c）、**站内检索声称
         与内容类帧族不符**（5d，洞②的混合轮形态）——见 gate_node
     """
+    # 账甲（20261008）：narrator 与 gate 共读的**那一处**本轮状态。`gate_node` 传
+    # 真实那一条（它手上有 state）；老调用（纯单测）没传 ⇒ 按它已经显式给的那几个
+    # 形参现推一份 —— 语义与传 state 时**同源**（都走 `_round_facts`），所以同一份
+    # 输入下两条路算出的形状必然一致。`blocked` 没有形参可推 ⇒ 那一列推出来是空，
+    # 于是洞⑮ 的"本轮有受阻写就不判"这道闸在纯单测路径上**不生效**——生产路径
+    # （gate_node）带上它，单测要验那一档就在 `facts=` 里显式给。
+    if facts is None:
+        facts = _round_facts({"receipts": receipts or [],
+                              "noop_specs": noop_specs,
+                              "ledger": ledger or {}})
     hit = _cmd_prefix_hit(reply)
     if hit:
         # 兜底文案按**这一轮有没有真的执行过那条命令**分两种（20260926，见
@@ -4259,10 +4539,23 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     # 之前（有帧轮恰恰是它唯一能出事的场合：零帧轮的同类否认由洞①/洞⑨ 那两族兜）。
     # 前提 `has_real_change` 由 receipts × noop_specs 判（见 `_has_real_change`）。
     # 引号内是转述（留言正文里"没有改动"这种字面），照上面同样的规矩剥掉。
-    if _change_denial_claim(_strip_quoted_spans(reply),
-                            _has_real_change(receipts, noop_specs)):
+    # （20261008）前提读**账甲**那一列：`facts.changed` 就是
+    # `_has_real_change(state 的 receipts×noop_specs)` 的同一个值（见 `_round_facts`），
+    # 给 `facts=` 的调用方与老形参路径算出的是**同一个布尔**——这里只是把"谁在算"
+    # 从本函数挪到账甲那一处，判定语义一个字节都没变。
+    if _change_denial_claim(_strip_quoted_spans(reply), facts.changed):
         return ("write_change_denial", _FALLBACK_WRITE_CHANGE_DENIAL,
                 _claim_clause(_strip_quoted_spans(reply), _NO_CHANGE_CLAIM_RE) or "")
+    # 洞⑮（20261008）：**这一轮真办成了**，回复却说"还在待处理队列里／刚才那次确认
+    # 没落地"（洞⑥ 的镜像；词形、前提、刻意不收的三样见 `_ROUND_NOT_LANDED_RE` 上方长注）。
+    # 与帧无关（它否认的是本轮已落地的回执事实），故同样在 `if frames_exist` 之前。
+    # **排在洞⑩ 之后**是刻意的：两族的前提是同一件事的两个方向（⑩ 说"什么都没改"、
+    # ⑮ 说"还没落地"），同一段回复里若两句都在，保留今天已经在跑的那个 issue 名，
+    # 免得无谓地挪动 `_replan_note` 的分族行为（`_REPLAN_ISSUES` 里 ⑮ 另挂号，
+    # 见那一处注）。引号内是转述（留言正文里"还没落地"这种字面），照上面规矩剥掉。
+    if _round_not_landed_claim(_strip_quoted_spans(reply), facts):
+        return ("round_not_landed", _fallback_round_not_landed(facts, receipts),
+                _round_not_landed_clause(_strip_quoted_spans(reply)) or "")
     # 洞⑭（20261007）：**这一轮压根没跳成**（已验收回执里既无 NAVIGATE: 也无
     # AUTO_NAVIGATE:，导航工具也没报过错），回复却说"马上带你过去／已经带你到了"
     # → 页面不会动。与帧无关（它否认的是"本轮真执行过跳转"这个系统事实），故同样在
@@ -4736,6 +5029,11 @@ _REPLAN_ISSUES = frozenset({
     # 但它**不能吃默认那条建议**——见 `_REPLAN_ADVICE` 里自备的那份（默认那份让 planner
     # "选检索类技能"，而站内没有按名字翻名册的读工具，那是把它指向一条走不通的路）。
     "ledger_absence_claim_without_tool",
+    # 20261008 补一族（gate 洞⑮）：洞⑩ 的**镜像**——写真的办成了，却报成"还在待处理
+    # 队列里/还没落地"。挂号理由与 ⑩ 同向：被否掉的是"比事实更坏的那种说法"（事实是
+    # 已经办好了，把它说成没办会诱使主人再点一次），而正确出路是**照回执如实说**，
+    # 出力与 ⑩ 逐字相同 ⇒ 建议/原因两条都直接指向 ⑩ 那两份（见下方别名）。
+    "round_not_landed",
 })
 
 # 打回提示里"两条出路"的措辞**按族分**：同一句"去查一遍"写给写族是**指错路**
@@ -4903,6 +5201,13 @@ _REPLAN_WHY = {
         "那段话不是这个问题的答案。",
 }
 _REPLAN_WHY_DEFAULT = "  而**这一轮一个工具都没有执行**——那条结论没有任何依据。"
+
+# 洞⑮ 与洞⑩ 是**同一件事实的两个方向**（一个把办成的说成"什么都没改"、一个说成
+# "还没落地"），planner 被叫回来要办的事、以及"该怎么如实说"逐字相同 ⇒ 两处**指向
+# 那两条，不抄第二份**（抄一份就多一处会各自漂移的副本；`_REPLAN_ADVICE` 上方那条
+# "键必须是 `_REPLAN_ISSUES` 成员"的锁照旧满足——别名也是键）。
+_REPLAN_ADVICE["round_not_landed"] = _REPLAN_ADVICE["write_change_denial"]
+_REPLAN_WHY["round_not_landed"] = _REPLAN_WHY["write_change_denial"]
 
 
 def _replan_note(issue: str, clause: str) -> str:
@@ -10977,6 +11282,12 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                          ledger=state.get("ledger"), receipts=receipts,
                          noop_specs=state.get("noop_specs"),
                          nav_errored=nav_errored,
+                         # 账甲（20261008）：**那一处**本轮状态（`RoundFacts`）。
+                         # 与 narrator 侧 `_round_fact_note` 读的是同一个合成函数
+                         # ⇒ 两边不可能对同一轮算出不一样的"办成了没有"。
+                         # 传 state（不是 receipts）是因为这一列还要 `blocked` 与
+                         # `plan`（`_claim_issue` 的老形参里没有这两样）。
+                         facts=_round_facts(state),
                          # 洞⑪ 的真值来源：前端实时上报的访客位置（见 `_live_page_path`）。
                          # 取法与 planner/model 同一处（`_page_ctx` 扫首条 [System: …]），
                          # 角色只影响能力清单，判据不看那一半。
