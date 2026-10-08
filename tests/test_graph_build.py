@@ -144,7 +144,7 @@ print("\n② 三道闸：uv / 脚本 / 内存——**拒绝并给原话**，不�
 _real_which, _real_mem, _real_fb = shutil.which, gb.mem_available_mb, gb.UV_FALLBACKS
 try:
     # 20261003 起 uv 有**两处**查找（PATH + 回落表）：只堵 PATH 已经不等于"没有 uv"。
-    # 这条判据自己踩过这个坑——本机 uv 就装在 `~/.local/bin`，而 systemd 服务默认 PATH
+    # 这条判据自己就出过这个错——本机 uv 就装在 `~/.local/bin`，而 systemd 服务默认 PATH
     # 不含用户目录，所以"服务里找不到 uv"的真实成因恰恰是回落表在兜（见 `find_uv`）。
     shutil.which = lambda _n: None
     gb.UV_FALLBACKS = ()

@@ -168,7 +168,7 @@ def provider_error_stats(reports: list) -> dict:
 
     读的是 `reports` 里原始报告那份（`cases` 是 list、`fails` 是字符串列表）；`summarize`
     另有一份经过 `aggregate` 的按 id 合并版（`cases` 是 dict），**这里不吃那个形状**——
-    两个形状同名不同义，混用会静默数错（已踩过一次）。
+    两个形状同名不同义，混用会静默数错（实测出过一次）。
 
     `case_runs` = 用例次数（一次采样算一次，与 `aggregate` 的分母同源）；
     `broken_runs` = 其中**至少有一条** provider/协议错误的采样数——它才是"这一跑没跑成"；

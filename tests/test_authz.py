@@ -157,7 +157,7 @@ check("回退信任 body 的分支不给角色（role=None）",
 check("角色只来自断言（不读 body 里的任何角色字段）",
       'payload.get("role")' in server_src and "req.role" not in server_src)
 
-print("⑧ 图节点真的收得到 config（**20260920 实测踩过的坑，别再踩**）")
+print("⑧ 图节点真的收得到 config（**20260920 实测过的陷阱，别重蹈**）")
 # 背景：`from __future__ import annotations` 会把注解变成字符串，而 langgraph 用
 # **对象比较**判断第二个参数是不是 config —— 比对不上 => 节点被当成只收 state 调用
 # => config 静默取 None => `_stopped()` 恒 False（断连中断在节点内失效）、

@@ -141,7 +141,7 @@ def not_found(text: str, meta: dict | None = None) -> ToolResult:
 #   · `target` 把"动的是谁"从参数里解放出来：`action_text` 渲染、台账对账、将来 F2 的
 #     事实块都读它，而不是各自去 args 里按字段名猜（现在有六种猜法）。
 #
-# 三条纪律（每一条都是踩过的坑）：
+# 三条纪律（每一条都由一次真实故障换来）：
 #   ① **既有键一个都不许改**：`op`/`change`/`before`/`after`/`tag_id`… 是 Python 写 /
 #      Rust 读的跨语言契约（`graph._RCPT_META_KEYS` ⇄ `src/routes/chat.rs::render_exec_row`）。
 #      `fact()` 只**加**键（`changed`/`target`/`evidence`），加出来的键**不进**
@@ -246,7 +246,7 @@ UPSTREAM_DOWN = unavailable("服务暂时不可用，请稍后再试")
 
 def _shape(data) -> str:
     """`_get` 结果的统一出口。**别写 `str(data)`**：`str()` 作用在 str 子类上会退化成
-    普通 str（CPython 行为），kind 标记就丢了——20260916 加 kind 时踩过这个坑，
+    普通 str（CPython 行为），kind 标记就丢了——20260916 加 kind 时出过这个错，
     单测里有一条专门盯"经 .invoke() 透传后标记仍在"。
 
     出口另做一件事：**把行里的上游字段名换成命名空间名**（见 `_FRAME_ID_KEYS`）。

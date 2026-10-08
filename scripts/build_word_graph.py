@@ -1104,7 +1104,7 @@ def main() -> None:
     elen = [float(np.linalg.norm(p[a] - p[b])) for a, b, _ in edges]
     sims = [s for _, _, s in edges]
     # 方向不能搞反：这里算的是 spearman(线长, 相似度)，「越相似线越短」⇒ **负值才正确**。
-    # （20260915 踩过：写成 spearman(-len, sim) 再按「应为负」读，会把结论整个读反。）
+    # （20260915 实测记一笔：写成 spearman(-len, sim) 再按「应为负」读，会把结论整个读反。）
     rho = spearman(elen, sims)
     fid_k = {k: fidelity(sim_vecs, p, kk=k) for k in (5, 10, 20)}
     log(f"  近邻保真度 k=5/10/20 = {fid_k[5]:.3f} / {fid_k[10]:.3f} / {fid_k[20]:.3f}"
