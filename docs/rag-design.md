@@ -135,7 +135,7 @@ RagIndex
 |---|---|---|
 | 中文检索零命中 | CJK unigram 被 `len>=2` 过滤 | 拆 2/3-gram，recall 0.79→1.00 |
 | 纯 2-gram BM25 只有 0.43 | gram 太碎、idf 失效 | 2/3-gram 混合 + 词法基线定论；向量留 BEIR 对比 |
-| 语料构建三坑 | status 实际是 'public'；talkKey serde 改名；列表接口空正文 | 排除 'draft'；talkKey 字段；note 逐篇拉详情 |
+| 语料构建三处问题 | status 实际是 'public'；talkKey serde 改名；列表接口空正文 | 排除 'draft'；talkKey 字段；note 逐篇拉详情 |
 | 长文刷屏 top-k | chunk 级评分违背文档级候选语义 | 文档级聚合（最高分 chunk + sections） |
 | 模型只检索不读全文 | 两段序列依赖无强制 | TOOLS 行两段式 + reflector 检查点强制 |
 | talk 候选无法读全文 | get_article_detail 只支持 note | 泛化 doc_type，从列表接口按 key 过滤 |

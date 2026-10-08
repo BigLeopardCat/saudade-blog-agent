@@ -460,7 +460,7 @@ multi_step_missing_param_asks,multi_step_search_then_read_top \
 **第一原则：只换接口层与目标状态，保留全部防线。** 防线是两个月里最值钱的资产，
 不许连带一起扔。
 
-### 保留（企业级资产，不是野路子）
+### 保留（经生产检验的防线）
 
 - 确定性执行层（`execute_node`）与 checker 验收（`_check_spec` / `receipts`）；
 - 跨语言契约：`__EXEC__` / `__CMD__` 帧、回执行结构、`digest` 实体摘要；
@@ -468,7 +468,7 @@ multi_step_missing_param_asks,multi_step_search_then_read_top \
 - 写身份防线（来源态判据 / 目标有据 / 目标点名一致）；
 - trace 落盘 + golden + `eval/corpus_invariants.py` 不变量 + 夜间回归；
 - 安全边界与角色隔离（authz scope、`visible_skills`）；
-- 落库顺序契约、断连中断、超时兜底这些踩过坑才有的东西。
+- 落库顺序契约、断连中断、超时兜底——这些是线上事故逼出来的，别处买不到。
 
 ### 替换 / 新增
 
@@ -806,7 +806,7 @@ dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop
 
 ---
 
-## 9. 附录：野路子与欠债
+## 9. 附录：可独立清理项（已收口 / 仍在）
 
 规范化不等于大改造——下面这些可以独立清理，先清"防自己人"那一类。
 
