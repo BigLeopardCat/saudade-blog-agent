@@ -18,10 +18,11 @@
     判不了就返回 None；**零调用 + `finish_reason=length` 是"判不了"而不是闲聊轮**
     （截断与闲聊轮形状相同、含义相反，见 `test_truncated_empty_calls_is_not_chat`）；
   · 函数名满足 OpenAI 的 `^[a-zA-Z0-9_-]{1,64}$`（技能名带点/空格会让整份 tools 被拒）；
-  · **两个任务伪函数（20260927 批 D：`task_hold` 登记 / `task_drop` 撤下）只在开关
-    打开时多出来**——集合相等因此是"技能名 + 两个申报过的名字"，且步骤工具闭集仍不许
-    点出够不到的工具；开关关闭（默认）时它们与其它未知函数名一视同仁 ⇒ 决策层返回 None；
-    **空 steps 的 task_hold 是无效登记**（不是撤下，那条路 20260927 已拆掉）；
+  · **三个任务伪函数（20260927 批 D 的 `task_hold` 登记 / `task_drop` 撤下；20261008
+    批 ② 的 `task_intents` 意图清单）只在开关打开时多出来**——集合相等因此是"技能名 +
+    三个申报过的名字"，且步骤工具闭集仍不许点出够不到的工具；开关关闭（默认）时它们
+    与其它未知函数名一视同仁 ⇒ 决策层返回 None；**空 steps 的 task_hold 是无效登记**
+    （不是撤下，那条路 20260927 已拆掉）；
   · 本模块**不许 import `agent.graph`**（graph 是消费方，反向会成环）。
 """
 import ast
@@ -63,21 +64,31 @@ def test_name_set_equals_visible_skills():
     # 管理员与公开身份**必须不同**——否则说明角色过滤整条失效，集合相等也照样成立
     check("admin 的技能严格多于公开身份",
           set(_by_name("admin")) > set(_by_name(None)))
-    # 登记伪函数（20260927 批 D）**只在开关打开时**多出来这一个名字：集合相等
-    # 因此是"技能名 + 一个申报过的名字"，把多出来的那一格钉成字面量（多别的一律红）。
+    # 登记伪函数（20260927 批 D）**只在开关打开时**多出来这几个名字：集合相等
+    # 因此是"技能名 + 申报过的那几个名字"，把多出来的每一格钉成字面量（多别的一律红）。
     for role in (None, "admin"):
         got = {t["function"]["name"] for t in
                N.build_tool_schema(role, task_state=True)}
-        want = {s.name for s in S.visible_skills(role)} | {T.TASK_HOLD, T.TASK_DROP}
-        check(f"role={role!r} 开任务状态后只多这两个伪函数", got == want,
+        want = ({s.name for s in S.visible_skills(role)}
+                | {T.TASK_HOLD, T.TASK_DROP, T.TASK_INTENTS})
+        check(f"role={role!r} 开任务状态后只多这三个伪函数", got == want,
               f"多={sorted(got - want)} 少={sorted(want - got)}")
-    check("开关关（默认）时 schema 里两个伪函数都没有",
-          not ({T.TASK_HOLD, T.TASK_DROP} & set(_by_name("admin"))))
-    hold = N.build_tool_schema(None, task_state=True)[-2]["function"]
-    drop = N.build_tool_schema(None, task_state=True)[-1]["function"]
-    check("两个伪函数排在最后（不参与技能顺序/菜单）",
-          [hold["name"], drop["name"]] == [T.TASK_HOLD, T.TASK_DROP],
-          f"{hold['name']},{drop['name']}")
+    check("开关关（默认）时 schema 里伪函数一个都没有",
+          not ({T.TASK_HOLD, T.TASK_DROP, T.TASK_INTENTS} & set(_by_name("admin"))))
+    hold = N.build_tool_schema(None, task_state=True)[-3]["function"]
+    drop = N.build_tool_schema(None, task_state=True)[-2]["function"]
+    ints = N.build_tool_schema(None, task_state=True)[-1]["function"]
+    check("三个伪函数排在最后（不参与技能顺序/菜单）",
+          [hold["name"], drop["name"], ints["name"]]
+          == [T.TASK_HOLD, T.TASK_DROP, T.TASK_INTENTS],
+          f"{hold['name']},{drop['name']},{ints['name']}")
+    check("task_intents 只收 intents 一格，每项 = goal + skill（无枚举：闭集是"
+          "全部可见技能名，写进 schema 的代价落在每次 planner 调用上）",
+          list(ints["parameters"]["properties"]) == ["intents"]
+          and list(ints["parameters"]["properties"]["intents"]["items"]
+                   ["properties"]) == ["goal", "skill"]
+          and "enum" not in ints["parameters"]["properties"]["intents"]["items"]
+          ["properties"]["skill"])
     check("task_drop 只有 goal 一格（可空的 steps 会把老歧义请回来）",
           list(drop["parameters"]["properties"]) == ["goal"]
           and drop["parameters"].get("required") == ["goal"])
@@ -90,7 +101,7 @@ def test_name_set_equals_visible_skills():
     check("闭集里的名字**每一个都真的在注册表里**（闭集不许点出够不到的东西）",
           set(enum.get("enum") or []) <= registry,
           str(sorted(set(enum.get("enum") or []) - registry)))
-    adm = N.build_tool_schema("admin", task_state=True)[-2]["function"]
+    adm = N.build_tool_schema("admin", task_state=True)[-3]["function"]
     check("admin 的闭集严格大于公开身份（按角色展开，不是常量）",
           set(adm["parameters"]["properties"]["steps"]["items"]["properties"]["tool"]["enum"])
           > set(enum.get("enum") or []))
@@ -101,6 +112,132 @@ def test_function_names_are_openai_safe():
     print("\n[不扩权] 函数名满足 OpenAI 的命名约束")
     bad = [n for n in _by_name("admin") if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", n)]
     check("全部技能名匹配 ^[a-zA-Z0-9_-]{1,64}$", not bad, str(bad))
+
+
+# ── ①b `deny_pseudo`：只减不增的同一条规则（20261008 批 ②）─────────────────
+def test_deny_pseudo_removes_only_named_pseudo():
+    print("\n[不扩权] deny_pseudo 只摘点名的伪函数，技能一格不动")
+
+    def _names(**kw):
+        return [t["function"]["name"] for t in N.build_tool_schema("admin", **kw)]
+
+    full = _names(task_state=True)
+    one = _names(task_state=True, deny_pseudo={T.TASK_INTENTS})
+    check("摘掉 task_intents 之后它就没了", T.TASK_INTENTS not in one, str(one[-4:]))
+    check("另外两个伪函数原样还在（不是整批摘掉）",
+          {T.TASK_HOLD, T.TASK_DROP} <= set(one))
+    check("**只少这一个**（技能一个不动，顺序也没变）",
+          one == [n for n in full if n != T.TASK_INTENTS],
+          f"len {len(one)} vs {len(full)}")
+    # 空集必须与不传**逐字节相同**：无受阻轮是常态，这一格不能有成本。
+    check("空集 / None ⇒ schema 逐字节不变",
+          N.build_tool_schema("admin", task_state=True, deny_pseudo=set())
+          == N.build_tool_schema("admin", task_state=True)
+          == N.build_tool_schema("admin", task_state=True, deny_pseudo=None))
+    # 开关关时它不该有任何效果（伪函数本来就不在 schema 里）
+    check("task_state=False 时 deny_pseudo 是空操作",
+          _names(deny_pseudo={T.TASK_INTENTS}) == _names())
+    # 与技能版 `deny` 互不干扰：两个集合走的是两条路
+    check("deny 与 deny_pseudo 可以同时生效",
+          T.TASK_INTENTS not in _names(task_state=True, deny={"chat"},
+                                       deny_pseudo={T.TASK_INTENTS})
+          and "chat" not in _names(task_state=True, deny={"chat"},
+                                   deny_pseudo={T.TASK_INTENTS}))
+    # 真函数名写进 deny_pseudo **不该**摘掉技能（它只认伪函数那一批）
+    check("deny_pseudo 里写真技能名不影响 schema（它只作用于伪函数）",
+          _names(task_state=True, deny_pseudo={"chat"}) == full)
+
+
+# ── ①c 意图清单的第二个出口：挂在每个技能上的可选 `intents` ────────────────
+def test_intents_field_on_every_skill():
+    """意图清单挂在**每个技能函数**上的那一格（20261008 批 ②，见 `intents_prop_schema`）。
+
+    为什么有这一格：`parallel_tool_calls=False` 让"单独交清单"与"点技能"在同一轮里
+    **互斥**，同一句 prompt 的两跑可以一次交清单、一次直接点技能（全凭采样）。挂在动作
+    调用上的一格让两者不再竞争。三条契约各钉一格：**只在开档时出现**、**永远可选**、
+    **与关档逐字节差这一格**。
+    """
+    print("\n[不扩权] 意图清单那一格挂在每个技能上：开档才有、永远可选")
+    off = _by_name("admin")
+    check("开关关（默认）时一个技能都没有这格（关档 = 今天的行为）",
+          all(T.INTENTS_ARG not in f["parameters"]["properties"] for f in off.values()))
+
+    on = {t["function"]["name"]: t["function"]
+          for t in N.build_tool_schema("admin", task_state=True)}
+    skills = [s.name for s in S.visible_skills("admin")]
+    miss = [n for n in skills if T.INTENTS_ARG not in on[n]["parameters"]["properties"]]
+    check(f"开档时 {len(skills)} 个技能**每一个**都有它（漏一个 = 在那个技能上说不出口）",
+          not miss, str(miss))
+    req = [n for n in skills if T.INTENTS_ARG in (on[n]["parameters"].get("required") or [])]
+    check("永远**不是必填**（不填就是今天的行为，不能逼模型为它多写一个字）",
+          not req, str(req))
+    # 负控：除那一格之外，开档与关档**逐字节**相同 —— 新格不许顺手改编任何既有参数
+    diffs = []
+    for n, f in off.items():
+        a = dict(f["parameters"]["properties"])
+        b = dict(on[n]["parameters"]["properties"])
+        b.pop(T.INTENTS_ARG, None)
+        if a != b or (f["parameters"].get("required") or []) \
+                != (on[n]["parameters"].get("required") or []):
+            diffs.append(n)
+    check("除新增那一格之外与关档逐字节相同（没顺手改编既有参数/必填）", not diffs, str(diffs))
+    # 唯一来源：与伪函数 `task_intents` 的 `intents` 参数除描述外逐字节同形 ——
+    # 两处各写一份 items 必然漂移，而漂移的那一半是"模型按 A 填、归一器按 B 读"
+    field = on["chat"]["parameters"]["properties"][T.INTENTS_ARG]
+    pseudo = on[T.TASK_INTENTS]["parameters"]["properties"][T.INTENTS_ARG]
+    check("与伪函数那一格同源（items 逐字节相同，只有描述不同）",
+          {k: v for k, v in field.items() if k != "description"}
+          == {k: v for k, v in pseudo.items() if k != "description"},
+          f"{sorted(field)}")
+    check("描述按出口分（挂在技能上那句讲「顺手填」，伪函数那句讲「这一轮要办的每件事」）",
+          field["description"] != pseudo["description"]
+          and field["description"] == T.INTENTS_FIELD_DESC,
+          field["description"][:40])
+
+
+def test_intents_field_inlined_with_action():
+    """动作调用上那一格真的被读走：**进 `decided.intents`、不进 `params`**。
+
+    后半句和前半句一样要紧：`params` 是技能的真实参数，多一个键会一路漏到 `PARAMS=`
+    计划文本与 `execute` 的参数校验里（那一格在关档下本来就是"没人读的参数"告警的形状）。
+    """
+    print("\n[登记] 动作 + 同一格 intents：一回说完「办这件 + 还有那几件」")
+    two = [{"goal": "建个新分类叫「临江仙」", "skill": "category_create"},
+           {"goal": "把文章 23 的标签整体换成「Rust」", "skill": "article_tags"}]
+    msg = AIMessage(content="", tool_calls=[{
+        "name": "category_create", "id": "c", "type": "tool_call",
+        "args": {"name": "临江仙", T.INTENTS_ARG: two}}])
+    got = N.tool_calls_to_plan(msg, "admin", task_state=True)
+    check("技能照常判出来（这一格不抢技能位）",
+          got is not None and got.skill == "category_create", str(got))
+    check("**params 里没有那一格**（其余参数逐字不变）",
+          got is not None and got.params == {"name": "临江仙"}, str(got and got.params))
+    check("两件都归一化进 intents（含本轮正要办的那件——排除由 acted_skills 做，不在这里）",
+          got is not None and [i["skill"] for i in got.intents]
+          == ["category_create", "article_tags"], str(got and got.intents))
+    check("记账 task_intents_field:<技能名>（与「多来了一条调用」分得开）",
+          got is not None and got.notes == ("task_intents_field:category_create",),
+          str(got and got.notes))
+    check("原始函数名如实只有技能那一条（清单不是一次调用）",
+          got is not None and N.tool_call_names(got) == "category_create",
+          repr(got and N.tool_call_names(got)))
+
+    # 填了但一件都收不下（技能名写错/够不着）⇒ 记账，不静默
+    bad = AIMessage(content="", tool_calls=[{
+        "name": "category_create", "id": "c", "type": "tool_call",
+        "args": {"name": "临江仙",
+                 T.INTENTS_ARG: [{"goal": "办那个", "skill": "没有这个本领"}]}}])
+    got = N.tool_calls_to_plan(bad, "admin", task_state=True)
+    check("技能照旧，intents 空、记一笔 task_intents_field_invalid",
+          got is not None and got.skill == "category_create" and got.intents == ()
+          and got.notes == ("task_intents_field_invalid",), str(got and got.notes))
+
+    # 开关关（默认）：schema 里没有这一格 ⇒ 模型照旧不会填；万一填了，
+    # 它与"没人读的参数"同样处理（既有的 param_unknown 路），这里只钉**不炸、技能照旧**
+    off = N.tool_calls_to_plan(msg, "admin")
+    check("关档时同一条调用：技能照常，intents 空（那一格不存在）",
+          off is not None and off.skill == "category_create" and off.intents == (),
+          str(off))
 
 
 # ── ② 参数逐项同源 ───────────────────────────────────────────────────────
@@ -538,6 +675,9 @@ def test_module_does_not_import_graph():
 if __name__ == "__main__":
     for fn in (test_name_set_equals_visible_skills,
                test_function_names_are_openai_safe,
+               test_deny_pseudo_removes_only_named_pseudo,
+               test_intents_field_on_every_skill,
+               test_intents_field_inlined_with_action,
                test_params_mirror_skill_param_specs,
                test_override_table_is_closed,
                test_override_enums_follow_role,

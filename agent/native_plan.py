@@ -50,10 +50,15 @@ from agent.skills import (
     visible_skills,
 )
 from agent.tasks import (
+    INTENTS_ARG,
+    INTENTS_FIELD_DESC,
     TASK_DROP,
     TASK_HOLD,
+    TASK_INTENTS,
+    intents_prop_schema,
     normalize_declaration,
     normalize_drop,
+    normalize_intents,
     pseudo_tool_schemas,
 )
 
@@ -81,6 +86,12 @@ class NativeDecision:
     finish_reason: str = ""          # `length` = 被额度截断（"预算够不够"的判据）
     raw_tool_calls: tuple = field(default_factory=tuple)
     declare: dict | None = None      # 归一化后的任务登记（无 → None）
+    # 归一化后的**意图清单**（20261008 批 ②，`agent/tasks.py::TASK_INTENTS`）：主人这一句
+    # 话里要办的每一件事 `[{"goal", "skill"}]`（含这一轮正要办的那件）。与 `declare`
+    # 并列而**不是**它的替代：`declare` 是"剩下的步骤与工具"（模型写的计划），
+    # `intents` 只是枚举——系统拿它减去本轮办了的，把剩下的自动登记（步骤由技能模板推）。
+    # 空元组 = 模型没给（这是常态，只有多件事的一句话才该给）。
+    intents: tuple[dict, ...] = ()
     # 一个函数都没点、正文却非空（20261004）：**这不是一个决策**，只是"没做出决策"。
     # 它的 `skill` 仍是 `chat`（下游要用一个合法技能名把这一轮走完），但调用方必须先
     # 拿这个标记去走一次纠偏——见 `planner_node` 的"零调用"那一格与
@@ -236,7 +247,8 @@ def _override_for(role: str | None, skill_name: str, param: str) -> dict | None:
 
 
 def build_tool_schema(role: str | None, *, task_state: bool = False,
-                      deny: frozenset[str] | set[str] | None = None) -> list[dict]:
+                      deny: frozenset[str] | set[str] | None = None,
+                      deny_pseudo: frozenset[str] | set[str] | None = None) -> list[dict]:
     """本轮这个身份能选的技能 → OpenAI `tools` 数组。
 
     **来源只有一处**：`visible_skills(role)` × `skill_param_specs(skill)`——与渲染
@@ -260,6 +272,24 @@ def build_tool_schema(role: str | None, *, task_state: bool = False,
     断言写的是"技能名集合 + 申报过的伪函数"（见 `tests/test_native_plan.py` ①）。
     **这不是扩权**：它们不是技能、不执行任何工具、也没有第二个消费方，只是让模型能把
     "剩下的步骤"说出来、把"不做了"说清楚；能不能真做，仍然由技能通道与下游全部防线决定。
+
+    `task_state=True` 时**每个技能函数还会多一格可选参数 `intents`**（意图清单的第二
+    个出口，见 `agent/tasks.py::intents_prop_schema`）：`parallel_tool_calls=False` 让
+    "单独交清单"与"点技能"在**同一轮**里互斥，挂在动作调用上的一格让两者一次说完。
+    它**不进 `required`**、也不改 `params`（`tool_calls_to_plan` 摘走它再归一化），
+    所以"模型不填"这条路径与本参数不存在时**逐字节相同**。
+
+    **`deny_pseudo` 是同一个 `deny` 的伪函数版**（20261008 批 ②，见 `graph.py` 里
+    "只交意图清单"那一格）：语义、代价、空集不变性**逐条同 `deny`**，只有一处不同——
+    它的来源不是"上一轮失败过"，而是"**这一轮回的正是它**"。实测依据（两条 golden
+    真链路）：生产模型在 `parallel_tool_calls=False` 下**一条轮次只发得出一条调用**，
+    所以"交清单"与"点技能"在同一轮里互斥——模型交了清单那一轮就零动作，而 `deepseek`
+    那一次（`20261008_213818` 的 `mix2_two_writes_one_breath_card_only`）：纠偏重决策
+    后的输出与上一版**逐字节相同**（`planner.llm_done` 的 `input` 29048→29130、
+    `output` 75→75，`native_decision.calls` 两次都是孤零零的 `task_intents`）。
+    纯话术纠不动一个它本来就想交的答案，所以这一格也走 1d 那条
+    验证过的路：**把选项从 schema 里摘掉**，而不是再劝一次（同 §1.55 的 1b 结论）。
+    `task_hold` / `task_drop` 同理可摘，只是今天没有触发它们的现场。
     """
     tools: list[dict] = []
     for skill in visible_skills(role):
@@ -272,6 +302,13 @@ def build_tool_schema(role: str | None, *, task_state: bool = False,
             props[name] = _override_for(role, skill.name, name) or _param_schema(sp)
             if sp.required:
                 required.append(name)
+        # 意图清单的**第二个出口**（20261008，见 `tasks.intents_prop_schema`）：每个
+        # 技能函数多带一格**可选**的 `intents`。**不进 `required`**——它是"一句话里
+        # 有两件以上时才填"，填不填都不影响这一轮的动作决策（模型不填 = 今天的行为）。
+        # 挂在每一个技能上而不是只挂写技能：要办的两件可以都不是写（"查一下 X 再顺手
+        # 把它置顶"），而"哪几件"这件事与技能是不是写无关。
+        if task_state:
+            props[INTENTS_ARG] = intents_prop_schema(INTENTS_FIELD_DESC)
         # 描述里的工具枚举标记**必须在这里展开**（20260927 修）：技能描述里写着
         # `__无参只读工具清单__` 这类占位（见 skills.py 的 `_EXPLICIT_TOOLS_MARK`），
         # 角色相关的展开此前只发生在文本菜单那一路（`skills.py:2813`）⇒ native 档把
@@ -288,7 +325,11 @@ def build_tool_schema(role: str | None, *, task_state: bool = False,
             fn["parameters"]["required"] = required
         tools.append({"type": "function", "function": fn})
     if task_state:
-        tools.extend(pseudo_tool_schemas(role))
+        # 名字从 schema 自己身上读（`s["function"]["name"]`），不另立一份伪函数名表：
+        # 摘的是同一批对象，"名单"与"形状"必须是同一处事实源（同 `pseudo_tool_schemas`
+        # 头注那条）。
+        tools.extend(s for s in pseudo_tool_schemas(role)
+                     if not (deny_pseudo and s["function"]["name"] in deny_pseudo))
     return tools
 
 
@@ -347,11 +388,18 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
 
     content 也空 ⇒ 返回 None，由调用方走既有收尾（`_wrap_up_plan`），不在这里编一句话。
 
-    `task_state=True` 时先摘出两个伪函数的调用（20260927 批 D）：**它们不参与技能选择**，
-    而是单独归一化成 `declare`，剩下的调用照旧走本函数原有的"取第一条"逻辑。两种组合
-    都成立且都要支持——只登记（`skill="chat"`、`declare` 非空）、登记 + 一个动作调用
-    （"这一轮做掉第一步，同时把剩下的记下来"，这正是多步目标该有的形态）。
-    `task_state=False`（开关 off）时这两个名字与其它未知函数名一视同仁 ⇒ 返回 None，
+    `task_state=True` 时先摘出**三个伪函数**的调用（登记/撤下：20260927 批 D；意图清单：
+    20261008 批 ②）：**它们不参与技能选择**，而是单独归一化成 `declare` / `intents`，
+    剩下的调用照旧走本函数原有的"取第一条"逻辑。组合都成立且都要支持——只登记
+    （`skill="chat"`、`declare` 非空）、登记 + 一个动作调用（"这一轮做掉第一步，同时把
+    剩下的记下来"，这正是多步目标该有的形态）、一句话多件事时"动作 + 意图清单"。
+
+    意图清单还有**第二个出口**：动作调用自己的参数里那一格 `intents`（`build_tool_schema`
+    打开任务状态时挂在每个技能上，见 `agent/tasks.py::intents_prop_schema`）。它**在
+    取到第一条调用之后**摘、摘完再归一化——因为 `params` 是这个技能的真实参数，多一个
+    键会一路漏到 `PARAMS=` 与 `execute`。两条出口合并（顺序：独立调用在前、字段在后），
+    下游看到的是同一份 `intents`。
+    `task_state=False`（开关 off）时这三个名字与其它未知函数名一视同仁 ⇒ 返回 None，
     任务通道在 schema 上就不存在（`build_tool_schema` 不追加它们）。
 
     **两个伪函数同轮出现时取登记、把撤下记账丢掉**（`task_drop_ignored`）：两条意图
@@ -364,12 +412,20 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
     calls = list(getattr(resp, "tool_calls", None) or ())
     base = {"finish_reason": finish_reason(resp), "raw_tool_calls": tuple(calls)}
     declare: dict | None = None
+    intents: tuple[dict, ...] = ()
     notes: list[str] = []
     if task_state:
-        rest, holds, drops = [], [], []
+        rest, holds, drops, ints = [], [], [], []
         for c in calls:
             nm = str((c or {}).get("name") or "") if isinstance(c, dict) else ""
-            (holds if nm == TASK_HOLD else drops if nm == TASK_DROP else rest).append(c)
+            if nm == TASK_HOLD:
+                holds.append(c)
+            elif nm == TASK_DROP:
+                drops.append(c)
+            elif nm == TASK_INTENTS:
+                ints.append(c)
+            else:
+                rest.append(c)
         calls = rest
         if holds and drops:
             notes.append("task_drop_ignored")
@@ -385,9 +441,16 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
             declare = normalize_drop((drops[0] or {}).get("args"))
             if declare is None:
                 notes.append("task_drop_invalid")
+        # 意图清单（20261008 批 ②）：与登记**互不替代**，两条可以同时出现（"这一轮做一件
+        # + 把这句话里剩下那几件记下来"正是它该有的形态）。整份判无效（没给数组 /
+        # 一条都归一不出来）记一笔，不猜、也不丢掉这一轮的动作决策——同上面那条取向。
+        if ints:
+            intents = tuple(normalize_intents((ints[0] or {}).get("args"), role))
+            if not intents:
+                notes.append("task_intents_invalid")
     if not calls:
         undecided = False
-        if declare is None and not notes:
+        if declare is None and not notes and not intents:
             # 截断 ≠ 闲聊（20261001）。`finish_reason == "length"` 意味着这一轮的话
             # 被额度**切断**，而"还没说到那个 tool_call 就被切"与"这一轮本来就没有
             # 动作"在响应里**形状完全相同**（都是零 `tool_calls`）——旧行为把后者
@@ -410,10 +473,11 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
             # `undecided` ⇒ 调用方**先纠偏一次**，模型改口点了函数就走那条；
             # 第二次仍这样才认（见 planner_node"零调用"那一格）。
             undecided = True
-        # 只有登记/撤回、或伪函数参数无效：技能位给 chat（本轮没有动作要执行），
-        # `declare` 交给 planner 那一支，`notes` 让那一格在 trace 里看得见。
+        # 只有登记/撤回/意图清单、或伪函数参数无效：技能位给 chat（本轮没有动作要执行）
+        # ——`declare`/`intents` 交给 planner 那一支，`notes` 让那一格在 trace 里看得见。
         return NativeDecision(skill="chat", params={}, notes=tuple(notes),
-                              declare=declare, undecided=undecided, **base)
+                              declare=declare, intents=intents,
+                              undecided=undecided, **base)
     head = calls[0] if isinstance(calls[0], dict) else {}
     name = str(head.get("name") or "")
     if name not in {s.name for s in visible_skills(role)}:
@@ -421,6 +485,24 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
     args = head.get("args")
     if not isinstance(args, dict):
         return None
+    # 单独一条 `task_intents` 调用**和**一个动作调用同轮到达（网关忽略
+    # `parallel_tool_calls=False` 时的形态）——下面两条记账要分开，别把"字段填了"
+    # 读成"多来了一条调用"（一个是设计内的常态，一个是约定被打破的证据）。
+    _ints_from_call = bool(intents)
+    if task_state and INTENTS_ARG in args:
+        # 意图清单的**第二个出口**（见 `intents_prop_schema`）：挂在动作调用上的那一格。
+        # `pop` 而不是 `get`——它**不是**这个技能的参数，留着会跟着 `params` 一路走到
+        # `PARAMS=` 计划文本、走到 `execute` 的参数校验（多一个键要么触发"参数未知"
+        # 告警、要么被当成技能参数原样填进模板）。摘走之后，`params` 与本参数不存在时
+        # **逐字节相同**（包括模型压根没填的那条路径）。
+        inline = normalize_intents({"intents": args.pop(INTENTS_ARG)}, role)
+        # 与单独一条 `task_intents` 调用**不冲突**（网关若忽略了
+        # `parallel_tool_calls=False`，两种可以同时到）：合并、按原顺序。
+        intents = tuple(intents) + tuple(inline)
+        # 归一后为空也要记账：`task_intents_invalid` 说明模型填了清单而一件都收不下
+        # （技能名写错/写了个够不着的本领），那是"漏登记"的一条静默路径。
+        notes.append(f"{TASK_INTENTS}_field:{name}" if inline
+                     else "task_intents_field_invalid")
     if len(calls) > 1:
         # 并发调用本应由 `parallel_tool_calls=False` 挡在服务端；网关若忽略该参数，
         # 这里只取第一条、其余记账。**绝不**把多个技能拼进同一份计划——那会绕过
@@ -433,12 +515,20 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
         # 网关遵守（若常态出现，那说明该参数的约束力要重新评估）。
         notes.append(f"{TASK_HOLD if declare.get('state') != 'cancelled' else TASK_DROP}"
                      f"_inline:{name}")
+    if _ints_from_call:
+        # 同上：意图清单与动作同轮出现**正是它该有的形态**（模型一次把"这一轮做哪件 +
+        # 这句话里还有哪几件"说完），记账的理由与上面那条一样——它是网关是否遵守
+        # `parallel_tool_calls=False` 的第二个观测点。**判据是"清单来自另一条调用"
+        # 而不是"intents 非空"**：字段那一路（设计内的常态）另有 `task_intents_field`
+        # 一条，混用会让"约定被打破"这个信号恒真。
+        notes.append(f"{TASK_INTENTS}_inline:{name}")
     return NativeDecision(skill=name, params=args, notes=tuple(notes),
-                          declare=declare, **base)
+                          declare=declare, intents=intents, **base)
 
 
 def bind_native(llm: object, role: str | None, *, task_state: bool = False,
-                deny: frozenset[str] | set[str] | None = None) -> object:
+                deny: frozenset[str] | set[str] | None = None,
+                deny_pseudo: frozenset[str] | set[str] | None = None) -> object:
     """把 LLM 绑上本轮的 schema。**`tool_choice` 固定 `auto`、`parallel_tool_calls=False`**。
 
     · `auto` 而不是 `required`：强制会把闲聊轮也逼成一次假技能调用（模型明明该答
@@ -457,7 +547,8 @@ def bind_native(llm: object, role: str | None, *, task_state: bool = False,
       按既有的"零调用"路径走，不新增分支。`deny` 交上来时这一支同样兜着（`chat`
       不进 deny，故仍不可达）。
     """
-    schema = build_tool_schema(role, task_state=task_state, deny=deny)
+    schema = build_tool_schema(role, task_state=task_state, deny=deny,
+                               deny_pseudo=deny_pseudo)
     if not schema:
         return llm
     return llm.bind_tools(schema, tool_choice="auto", parallel_tool_calls=False)

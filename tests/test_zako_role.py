@@ -125,8 +125,8 @@ check_("schema 名集合 == visible_skills 名集合 == {chat}（两个方向都
 check_("**非空**（空 tools 数组在网关那边是无定义行为，见 bind_native 的那一注）",
        len(_zako_schema) == 1, str(_zako_schema))
 _ts = [t["function"]["name"] for t in build_tool_schema(ROLE_ZAKO, task_state=True)]
-check_("task_state 只多两个伪函数，不带来任何真工具（默认 off，flavor 而已）",
-       set(_ts) - set(_zako_schema) <= {"task_hold", "task_drop"}
+check_("task_state 只多那三个伪函数，不带来任何真工具（默认 off，flavor 而已）",
+       set(_ts) - set(_zako_schema) <= {"task_hold", "task_drop", "task_intents"}
        and set(_zako_schema) <= set(_ts), str(_ts))
 
 # ══════════════════════════════════════════════════════════════════

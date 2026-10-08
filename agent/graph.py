@@ -122,8 +122,9 @@ from agent.skills import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
                           visible_skills)
 # 任务登记（20260927 批 D）：登记帧的构造与那一轮给 narrator 的注记/纠偏都在
 # `agent/tasks.py`——本模块只决定"什么时候用它"（见 planner 的那一支）。
-from agent.tasks import (TASK_DONE_NOTE, declaration_note, declaration_nudge,
-                         drop_is_completion, frame_payload)
+from agent.tasks import (TASK_DONE_NOTE, TASK_INTENTS, declaration_note,
+                         declaration_nudge, drop_is_completion, frame_payload,
+                         intent_frames)
 from utils import trace as trace_mod
 from utils.trace import record
 
@@ -383,9 +384,14 @@ class AgentState(TypedDict):
     #                 `frame_payload`），server.py 的 producer 见它就发 `__TASK__:` 帧
     #                 （Rust 收到即落库、不转发前端）。**同样必须显式声明**（理由同
     #                 fallback_text：未声明的 key 会被 LangGraph 静默丢出 updates 流
-    #                 ⇒ `upd.get("task_frame")` 恒为假、登记通道静默失效——那正是本批
+    #                 ⇒ `upd.get("task_frames")` 恒为假、登记通道静默失效——那正是本批
     #                 要治的"有写无读"本身）。
-    task_frame: dict
+    #                 **20261008 批 ② 起是列表**：一轮可以同时发出多条——显式登记
+    #                 （`task_hold`）那条，加上意图清单里"没上卡的每一件"各自一条
+    #                 （`intent_frames`）。名字与评测侧从流里解析出的 `task_frames`
+    #                 同名同义（`eval/run_golden.py` 的 `require_task_goal_per_intent`
+    #                 就按它逐帧判）。
+    task_frames: list[dict]
 
 
 # ---------------------------------------------------------------------------
@@ -1031,6 +1037,27 @@ _NO_CALL_NUDGE = (
     "本轮零工具、零结果，什么都没发生。\n"
     "请重新给一次决策：要查要办就点对应的函数（闲聊、问候、纯文字问答点 `chat`，"
     "它不需要参数）；确实没有动作要做就点 `chat`。"
+)
+
+# ② 的配套纠偏（20261008）：模型**交了意图清单、这一轮却一个动作都没点**。
+# 为什么必须催：清单只解决"剩下那件谁记着"，**不解决"这一轮办哪件"**——只列不办
+# 等于把「只挑一件办」退化成「一件都没办」，主人这一轮什么都拿不到，比漏一件更坏。
+# 与 `_NO_CALL_NUDGE` 同住"零工具决策不是决策"那一格（判据同样是形态不是措辞），
+# 但**信息量不同**：那一句手里什么都没有、只能说"你什么都没点"；这一句手里有清单，
+# 可以说出"你列了 N 件、一件都没动"。一次为限（`correction` 的一次性）：第二次仍
+# 只列不办就认它——fail-open，不把轮次预算烧在催上（与"纠偏后零调用认账"同一取向）。
+#
+# **最后一句是实话、也是必需**（20261008 实测后补）：这一轮调用方已把该伪函数从
+# schema 里摘掉（`deny_pseudo`）。不告诉它，它多半照旧再报一次那个名字——而"报出
+# 不在 schema 里的函数名"在 `tool_calls_to_plan` 里等于**读不出决策**（返回 None），
+# 直接走确定性收尾，比零调用那一格更坏。两个候选出口一句话说清：点技能，或点 `chat`。
+_INTENTS_ONLY_NUDGE = (
+    "**你这一轮只交了意图清单，一个动作都没有点**——清单只用来登记「主人这句话里"
+    "一共有几件事」，它自己不执行任何东西。请补上这一轮的动作决策：点出要办的那件"
+    "对应的技能（参数照常填），该执行的照常执行；如果这句话确实没有动作要做"
+    "（纯问句/闲聊），就显式点 `chat`。清单系统已经收到了，**这一轮的工具清单里"
+    "已经没有它、不用再交一次**；这一次点技能时**也不用**再往 `intents` 那格里"
+    "填一遍——记着了。"
 )
 
 # ── 主人原话里明说"不要调用任何工具"（20261006）─────────────────────────────
@@ -5381,7 +5408,75 @@ def _pair_dual_sources(skill_name: str, params: dict,
     return out, [missing]
 
 
+def _auto_task_frames(state: AgentState, config, decided, rounds: int) -> list[dict]:
+    """这一轮的意图清单 − 已经办了的 ⇒ 自动登记的 `__TASK__` 载荷（20261008 批 ②）。
+
+    「在规划阶段就给写好对应状态」里确定性的一半：模型只**枚举**（`task_intents`，
+    或点技能那次调用上的 `intents` 字段——两个出口见 `tasks.intents_prop_schema`），
+    系统拿枚举减掉本轮真办了的，剩下的自己登记（步骤从技能模板推，见
+    `agent/tasks.py::intents_to_declarations` 的三条排除规则）。
+
+    这里只负责**取现场事实**，判据全在 tasks.py（那两处必须同源，理由写在那里）：
+      · `acted_skills` = 这一轮**派下去的那个技能**（`decided.skill`）∪ 本轮回执里
+        出现过的技能。前者才是"没上卡的那几件"的正确定义——卡一次只装得下一个技能，
+        而判据侧 `require_task_goal_per_intent` 排除的正是"本轮卡片认领的"那一个；
+      · `skip_goals` = 本轮 `task_hold` 明确登记过的那个 goal（同轮两条通道说同一件
+        事时不许长出两行，见 `tasks.same_goal`）；
+      · `receipts` 一并交给它，用来排掉"刚做完也列进清单"的那些。
+
+    模型没调 `task_intents`（绝大多数轮次）⇒ 一个字节都不产生，也不记 trace。
+    """
+    intents = list(getattr(decided, "intents", ()) or ())
+    if not intents:
+        return []
+    acted = {str(getattr(decided, "skill", "") or "")}
+    for r in (state.get("receipts") or ()):
+        if isinstance(r, dict) and r.get("skill"):
+            acted.add(str(r["skill"]))
+    acted.discard("")           # 零调用/收尾轮：`chat` 不是"办了"，空串更不是
+    acted.discard("chat")
+    decl = getattr(decided, "declare", None) or {}
+    conv = (config or {}).get("configurable", {}).get("conversation_id")
+    frames = intent_frames(
+        intents, role=_principal_of(config).known_role, conversation_id=conv,
+        acted_skills=acted, receipts=state.get("receipts") or (),
+        skip_goals=[decl.get("goal")] if isinstance(decl, dict) else [])
+    # 读数只为一件事：本批落地后要能回答"自动登记是噪声还是有用的"
+    # （`listed` 与 `frames` 的差 = 被三条排除规则挡掉/推不出步骤的件数）。
+    #
+    # `conv` **必须一起记**（20261008 这次复核的教训）：`intent_frames` 对
+    # "conversation_id 不是 int"的一轮**静默返回空**（那条守卫本身是对的——task_id
+    # 含着会话，取不到就登记出去会串会话）。于是 `listed=2, frames=0` 有两种完全
+    # 不同的读法："模型写的技能一件都推不出步骤"与"这一轮压根没有会话 id"，而 trace
+    # 里**只能看到前者**——golden 用例不带 `context.conversation_id` 时正是后者，
+    # 一条用例因此红了整整一轮也说不清红在哪。记下原始值（原样，不 transform），
+    # 让下一次读 trace 的人一眼分得开。
+    record("planner", "task_auto", round=rounds, listed=len(intents),
+           frames=len(frames), acted=sorted(acted), conv=conv,
+           goals=[str(f.get("goal") or "")[:60] for f in frames])
+    return frames
+
+
 def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
+    """planner 的**薄壳**：调决策主体，再把本轮"确定性登记"的任务帧并进返回。
+
+    为什么要有这一层（20261008 批 ②）：自动登记要在**决策点**算（那里才拿得到模型
+    这一轮的意图清单），但它属于**本轮的返回**——而 `_planner_decide` 有十几条 return
+    （收尾、纠偏、参数不齐、剔空、卡路径……），逐条补一个键等于把"登记"绑死在作者
+    记得的那几条上（漏一条 = 那一族这一轮静默不登记，且没有任何测试会红——本仓
+    "有写无读"那族事故的标准形态）。所以只留**一个**注入点：内核把载荷写进壳自己
+    持有的 `task_sink`，壳在返回前并进去。`frames` 为空（绝大多数轮次）时返回的 dict
+    逐字不变。
+    """
+    sink: list[dict] = []
+    upd = _planner_decide(state, config, task_sink=sink)
+    if sink:
+        upd["task_frames"] = list(upd.get("task_frames") or ()) + sink
+    return upd
+
+
+def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
+                    *, task_sink: list | None = None) -> dict:
     """职责（唯一决策点）：选技能 + 填参数 + 给调用清单 → 实例化为计划 → state.plan。
 
     20260903 架构裁决后的 planner 是"全权"的：知识型问题的检索定位（选
@@ -5571,12 +5666,18 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     deny = denied_skills(state.get("blocked") or [])
     if deny:
         record("planner", "menu_denied", round=rounds, skills=sorted(deny))
-    llm = bind_native(get_llm(
+    # 伪函数版的同一格（20261008 批 ②）："这一轮交过清单、零动作"时把 `task_intents`
+    # 从 schema 里摘掉，逼迫重决策那一版必须点出一个真技能（见下面那一格的长注）。
+    # 空集 ⇒ schema 逐字节不变。**基础 llm 单独留着**：重绑要走同一个客户端。
+    deny_pseudo: set[str] = set()
+    _base_llm = get_llm(
         temperature=settings.planner_temperature,
         max_tokens=settings.planner_native_max_tokens,
         timeout=settings.planner_native_timeout,
-        enable_thinking=settings.planner_native_thinking), role,
-        task_state=bool(getattr(settings, "agent_task_state", False)), deny=deny)
+        enable_thinking=settings.planner_native_thinking)
+    _task_state = bool(getattr(settings, "agent_task_state", False))
+    llm = bind_native(_base_llm, role, task_state=_task_state, deny=deny,
+                      deny_pseudo=deny_pseudo)
     round_info = (
         f"当前决策：第 {rounds + 1}/{MAX_PLAN_ROUNDS} 轮。"
         + ("本轮已有工具执行帧（见下方结果），决策据此收敛。" if has_frames
@@ -5648,7 +5749,8 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 # 短应答提示只在首轮（rounds==0）给：第二轮起本轮已有工具帧，短应答
                 # 的语义已由第一轮的规划兑现，再念一遍"把提议那件事规划出来"只会
                 # 诱导重复规划（同一件事已经执行过一次了）。
-                short_reply_hint=(_short_reply_hint(state["messages"])
+                short_reply_hint=(_short_reply_hint(state["messages"],
+                                                    task_state=_task_state)
                                   if rounds == 0
                                   else "（非首轮决策：短应答语义已在上轮兑现）"),
                 # 台账**每一轮都给**（见上面那段计算）：它是系统事实，不该只在首轮
@@ -5742,6 +5844,27 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                            "（round %d/%d）", fin or "—", rounds + 1, MAX_PLAN_ROUNDS)
             correction, correction_kind = _PLANNER_UNPARSEABLE_NUDGE, "决策不可解析"
             continue
+        # ② 自动登记（20261008）：模型枚举的意图 − 本轮办了的 ⇒ 本轮的登记帧。
+        # **注入点只此一处**（在 `decided` 之后、所有分支之前）：写进壳持有的
+        # `task_sink`，由 `planner_node` 在返回前并进 updates——`_planner_decide`
+        # 那十几条 return 因此一条都不用改（漏一条就是"那一族这一轮静默不登记"）。
+        #
+        # **只在新清单非空时覆盖**（`[:] =` 而不是 extend）：纠偏会重决策一次，而
+        # "只交清单"那一格的重决策**正是被摘掉清单逼去点技能的**（见下面 `intents_no_action`
+        # 那一格）——那一版的 `intents` 必然为空，覆盖就等于把刚刚收下的枚举当场抹掉，
+        # 整条 ② 白跑（实测形状：第一次 `frames=2`、第二次 `frames=0`）。
+        # 反过来，非空即以最新一版为准：两次都留着会发出同一个 goal 的两帧
+        # （幂等是 upsert，但那正是"同一件事两行"的形态，Rust 侧得靠 upsert 去擦）。
+        # 20261008 实测的第二种形状（`mix2` 的 `20261008_222340`）：第二版**又填了
+        # `intents` 那一格**，但只填剩下那几件 ⇒ 最终登记是第一次的**子集**，上卡那件
+        # 从登记里消失。这是对的：上了卡的那件由**卡**承载（`pending_action` 那本账），
+        # 判据侧 `require_task_goal_per_intent` 的定义也正是"上了卡的不在其中"。
+        # 代价如实记在这里：卡被取消/过期时那件没有 `agent_task` 兜底——主人是看到过
+        # 那张卡的，与"模型凭空丢掉、谁都不记得"不是一回事，所以不额外补一行。
+        if task_sink is not None:
+            _intent_frames_now = _auto_task_frames(state, config, decided, rounds)
+            if _intent_frames_now:
+                task_sink[:] = _intent_frames_now
         skill_name, params = decided.skill, decided.params
         if decided.notes:
             native_note = "；".join(decided.notes)
@@ -5826,9 +5949,50 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         #    → 判据红。**纠偏只是提前一拍，防线仍在闸门**（零帧声称那几条不撤）。
         _tools_off = _forbids_tools(user_msg)
         _img_turn = _turn_has_image(state["messages"])
+        # ③ 只交清单、一个动作都没点（20261008 批 ②）：`decided.skill == "chat"` 说明
+        #    这一轮没有任何真技能被选中（伪函数不参与技能选择），而清单非空说明模型
+        #    认下了"这句话里有 N 件事"——两件同现就是"只列不办"那一格（见
+        #    `_INTENTS_ONLY_NUDGE`）。`declare` 非空时不算（登记轮本来就零动作，
+        #    它走下面自己那条纠偏）。
+        _intents_only = bool(decided is not None and decided.intents
+                             and decided.skill == "chat" and not decided.declare)
         if (decided is not None and not has_frames
                 and not _tools_off and not _img_turn
-                and (decided.undecided or _asks_data)):
+                and (decided.undecided or _asks_data or _intents_only)):
+            if _intents_only and not correction:
+                # 排在写形态话术**之前**：这一格手里有更具体的证据（"你列了 N 件"），
+                # 而写形态那句只讲"主人这句话在要求改动站内数据"——两句**都要给**：
+                # 前者负责说清"清单不代替动作"，后者负责说清"主人这句话要动手、名字
+                # 就在他原话里"（单给前者那一版实测无效，见下）。
+                #
+                # **为什么还要摘菜单**（20261008 批 ②，真链路实测）：native 档一轮只发得出
+                # 一条调用（`parallel_tool_calls=False`），于是"交清单"与"点技能"在同一
+                # 轮里**天然互斥**——模型交了清单那一轮就零动作。而纠偏在 `for _attempt in
+                # (0, 1)` 里只有一次机会，实测（`20261008_213818` 的 `mix2_two_writes_one_
+                # breath_card_only`）**那一版重决策的输出与上一版逐字节相同**（input
+                # 29048→29130、output 75→75、两次 `native_decision.calls` 都是孤零零的
+                # `task_intents`）——纯话术纠不动一个它本来就想交的答案。所以这一格与
+                # 1d（`denied_skills`）用**同一个手法**：不是再劝一次，是把那个选项从
+                # schema 里摘掉（`deny_pseudo`，语义与代价见 `build_tool_schema` 的注）。
+                # 摘掉之后它只剩两条路：点一个真技能，或显式点 `chat`——两者都是可判的
+                # 决策，而"再交一次清单"这条空转路没了。
+                deny_pseudo.add(TASK_INTENTS)
+                llm = bind_native(_base_llm, role, task_state=_task_state, deny=deny,
+                                  deny_pseudo=deny_pseudo)
+                _auto_nudge = _name_write_nudge({"tools": [], "dropped": None},
+                                                user_msg, rounds, role)
+                correction = ((_auto_nudge + _INTENTS_ONLY_NUDGE) if _auto_nudge
+                              else _INTENTS_ONLY_NUDGE)
+                correction_kind = "清单零动作"
+                record("planner", "intents_no_action", round=rounds,
+                       n=len(decided.intents), write_shape=bool(_auto_nudge),
+                       goals=[str(i.get("goal") or "")[:60] for i in decided.intents[:3]])
+                logger.warning("[planner] 只交意图清单、零动作（%d 件，%s）→ 摘掉该伪函数"
+                               "并纠偏重决策一次：%s", len(decided.intents),
+                               "写形态" if _auto_nudge else "非写形态",
+                               "、".join(str(i.get("goal") or "")[:40]
+                                        for i in decided.intents[:3]))
+                continue
             if not correction:
                 # **写形态优先**（20261008）：这一格（零调用 + 正文非空）此前一律用
                 # 通用话术 `_NO_CALL_NUDGE`，而 `_name_write_nudge` 的**零工具形态**
@@ -5930,7 +6094,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 logger.info("[planner] 撤下改判为完成：%s（本轮回执已覆盖它剩下的步骤，"
                             "不撤、不发帧，交给流尾结算）", decl.get("goal"))
                 return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                        "done": False, "task_frame": {}}
+                        "done": False, "task_frames": []}
             if (not _cancelled and not decl.get("pending_question")
                     and not has_frames and not correction):
                 correction = declaration_nudge(decl)
@@ -5962,8 +6126,12 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                         decl.get("goal"), len(decl.get("steps") or []),
                         decl.get("state"), bool(decl.get("pending_question")),
                         frame.get("task_id") or "（未落库）")
+            # 只给**显式登记**那一帧：意图清单推出来的那几条由 `planner_node` 的薄壳
+            # 统一并进来（`task_sink`）——两条通道不必各写一遍"怎么把帧拼进 updates"。
+            # 同名的自动登记已在 `intent_frames` 的 `skip_goals` 里排掉
+            # （`tasks.same_goal` 判），所以这里不会出现两帧同一个 task_id。
             return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False,
-                    "task_frame": frame}
+                    "task_frames": [frame] if frame else []}
 
         # 双源契约补齐（20261005）：只在"已选 content_query + 只点名了一个数据源 +
         # 用户原话是内容存在性问句"三条同时成立时补另一个。**必须早于 instantiate_plan**
@@ -11806,7 +11974,7 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
             "blocked": [], "blocked_seen": [],
             "blocked_repeat": False, "reflect_rounds": 0, "issues": "",
             "reflect_end": False, "tool_data": [], "fallback_text": "",
-            "gate_replan": False, "task_frame": {},
+            "gate_replan": False, "task_frames": [],
             "pending_confirm": None, "confirm_text": "",
             "noop_text": "", "noop_note": "",
             "confirm_grant": confirm_grant, "ledger": ledger or {}}

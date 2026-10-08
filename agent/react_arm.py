@@ -47,7 +47,7 @@ producer 用 `confirm_text` 发**一次**——臂这边一个字节的正文都
 **这一版明确不做的**（都是 `docs` 里 P4–P6 的活，别当成已经做完了）：
   · 闸门谓词（P4）⇒ `gate.fallback_text`/`gate_replan` 恒不发，`forbid_fallback`
     在 react 臂上**不可证伪**（这正是 P0 要给它的合成正控）;
-  · 跨轮执行记忆 + task 行（P5）⇒ 不发 `task_frame`、不读不写台账族；
+  · 跨轮执行记忆 + task 行（P5）⇒ 不发 `task_frames`、不读不写台账族；
   · narrator 的**独立节点**（P6 后半）⇒ 收尾仍由**同一个模型**写。
     **动作事实块这一格 20261005 起不再是缺口**：生产两臂都停止代印（
     `agent/factblock.py` 的 `BLOCK_FAMILIES` 空集）⇒ "叙述权收归系统"这件事整体歇业，

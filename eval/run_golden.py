@@ -1812,6 +1812,12 @@ GOLD_ASSERT_KEYS = frozenset({
     # 跨轮任务状态（20260927 批 D）：本轮的 `__TASK__` 帧写回了什么状态。见下面
     # check_gold 里那段的"为什么是末帧"。
     "require_task_state", "forbid_task_state",
+    # 跨轮任务状态的**goal 粒度**那一半（20261008 批 ①）：一句话里点了 N 件事、
+    # 只有一件走了确认卡时，**没上卡的那几件各自有没有留下登记**（`state=cancelled`
+    # 那些帧不算——撤下不是登记）。state 粒度看不见这个（"末帧写了什么状态"与
+    # "跟踪的是哪一件事"是两回事）。判法与"为什么按卡片动态排除"见 check_gold
+    # 里那段长注。
+    "require_task_goal_per_intent",
     # 语料化（术语由申报文档运行期派生，见 eval/corpus_terms.py）
     "require_doc_terms",
 })
@@ -2289,6 +2295,55 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
     for s in gold.get("forbid_task_state", []):
         if s in _tf_states:
             fails.append(f"任务状态不应是 {s!r}（本轮帧：{_tf_states}）")
+
+    # 20261008 批 ①：**goal 粒度**的任务断言（上面那两条是 state 粒度——判的是"末帧
+    # 写了什么状态"，看不见"到底是哪一件事被跟踪"）。
+    # 动机 = 主人点名的「混合多任务执行依旧只挑一个办」：一句话里两件不同本领的写，
+    # 一张确认卡只装得下一件（令牌载荷里的 SKILL 是一个、`_confirm_grant_plan` 也只
+    # 还原得出一个技能），planner 规则同样写着"先提最靠前那一项、其余不许说成已办"
+    # ⇒ **只办一件本身是合法形态**，本条不判它（`skill_any` 那一族的存在就是为这个）。
+    # 要判的是另一件**凭空消失**：既不在卡上、也不在 `agent_task` 里，下一轮谁都不记得
+    # 它——这句话在**帧**上可判（有没有一帧 `__TASK__` 的 goal 指着它），在正文上只是
+    # 措辞。所以本键是"只挑一件"这件事的筛子，不是"必须两件一起办"的要求。
+    #
+    # 取值 = **意图清单**：每项 `{"skill": …, "goal": …}`。`skill` 与
+    # `require_confirm_payload.skill_any` 同一套取值域（"这件事若上卡会是哪个技能"），
+    # `goal` 是这件事在任务帧 `goal` 里必然出现的一段原文。
+    # 判法：**凡是没有被本轮卡片载荷认领的那几项，每一项都必须有一帧 `__TASK__` 的
+    # `goal` 命中它**。
+    #
+    # 为什么按卡片载荷**动态排除**、而不是写死"第 2 件必须登记"：先提哪一件由 planner
+    # 采样决定（同 `skill_any` 那段注），写死一件就是把采样当判据 ⇒ 换向即假红，
+    # 判据成了硬币。排除掉被认领的那一件之后**剩下的是确定的**（N 件里必有 N-1 件没上卡），
+    # 于是"剩下那几件有没有登记"这句话既判得动、换向又不误伤。
+    # 空白归一后再比（`_squash_ws`）：任务 goal 是模型写的自由文本，句中的空格不该
+    # 决定成败——同 `args_from_input` 的口径。
+    # `state="cancelled"` 的帧**不算登记**（`task_drop` 会把原来的 goal 抄进帧里，
+    # 只看 goal 会把"这件事不办了"读成"这件事记着呢"——正好与本键要问的相反）。
+    _per_intent = gold.get("require_task_goal_per_intent")
+    if _per_intent:
+        # `state="cancelled"` 的帧**不算登记**：撤下那条帧的 `goal` 与登记帧同一个形状
+        # （`tasks.drop_decl` 把原来的 goal 抄下来），只比 goal 会把「这件事不办了」
+        # 读成「这件事记着呢」——正好与本键要问的相反。
+        _tfs = [f for f in (result.get("task_frames") or [])
+                if isinstance(f, dict) and str(f.get("state") or "") != "cancelled"]
+        _goals = [_squash_ws(str(f.get("goal") or "")) for f in _tfs]
+        _carded = ""
+        for _p in (result.get("confirm_payloads") or []):
+            if isinstance(_p, dict) and _p.get("skill"):
+                _carded = str(_p["skill"])
+                break
+        for _it in _per_intent:
+            if str(_it.get("skill") or "") == _carded:
+                continue                     # 这一件上了卡 ⇒ 不在本条射程内
+            _want = _squash_ws(str(_it.get("goal") or ""))
+            if _want and any(_want in _g for _g in _goals):
+                continue
+            fails.append(
+                f"没上卡的那件事没有留下任务登记：期望有一帧 __TASK__ 的 goal 含 "
+                f"{_it.get('goal')!r}（这件事的卡片技能是 {_it.get('skill')!r}，"
+                f"本轮卡片认领的是 {_carded or '（没有卡片载荷）'}）"
+                f"；本轮帧里的 goal（撤下帧已排除）：{[f.get('goal') for f in _tfs]}")
 
     _fb = fallback_resets(result)
     if gold.get("forbid_fallback") and _fb:

@@ -1264,13 +1264,19 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     # 一起给出登记载荷（`agent/tasks.py::frame_payload`）。与弹窗那支的
                     # `__PENDING__` 同一条纪律：**收到即发、不攒到收尾**——主人可能看完
                     # 这一轮就切走/关页面，晚发等于没发（下一轮 planner 靠它认人）。
-                    # 空 dict 是常态（绝大多数轮次没有登记），`if` 天然跳过。
-                    tframe = planner_upd.get("task_frame") or {}
-                    if isinstance(tframe, dict) and tframe.get("task_id"):
-                        asyncio.run_coroutine_threadsafe(
-                            queue.put("__TASK__:" + json.dumps(tframe, ensure_ascii=False)),
-                            loop).result()
-                        declared_tasks.append((tframe, time.time()))
+                    # 空列表是常态（绝大多数轮次没有登记），循环天然跳过。
+                    # **20261008 批 ② 起是一帧一帧地发**：同一轮可以有多条（显式登记
+                    # 那条 + 意图清单里"没上卡的每一件"各一条，见
+                    # `agent/graph.py::_auto_task_frames`）。同一个 task_id 在同一请求里
+                    # 出现两次是幂等 upsert（`rows_to_settle` 按行配对，不按 id 查表
+                    # ⇒ 两行同 id 是它明确支持过的常态）。
+                    for tframe in (planner_upd.get("task_frames") or []):
+                        if isinstance(tframe, dict) and tframe.get("task_id"):
+                            asyncio.run_coroutine_threadsafe(
+                                queue.put("__TASK__:" + json.dumps(tframe,
+                                                                   ensure_ascii=False)),
+                                loop).result()
+                            declared_tasks.append((tframe, time.time()))
                 # execute 的 checker 验收回执（20260904 C3）：累计语义——每次
                 # execute update 的 receipts 都是请求内全部 PASS 行，末批即全量
                 ex_upd = data.get("execute")
