@@ -1794,6 +1794,13 @@ def test_reply_contract_change_branches():
         "message_read": ("已把", "本来就是已读"),
         "favorite_add": ("已收藏", "本来就在你的收藏夹里"),
         "favorite_remove": ("已取消收藏", "本来就不在你的收藏夹里"),
+        # 20261008 补三件（trace `20261008T083153_1`）：额度那一族的成功句与失败句
+        # 此前是**并列**写的，失败那支还正好是一句完整的可抄句 ⇒ 真批成功的一轮
+        # narrator 套了失败那支，写下「这一轮系统没有执行任何操作」（而回执写着
+        # 剩 500/500）。三件都是同一台渲染器出的字，分叉口径与上面四件相同。
+        "quota_approve": ("已批准", "没有待处理的额度申请"),
+        "quota_reject": ("已驳回", "没有待处理的额度申请"),
+        "quota_reset": ("已把账号", "额度本来就是满的"),
     }
     for name, (live, noop) in _CASES.items():
         sk = _by.get(name)
@@ -1807,6 +1814,17 @@ def test_reply_contract_change_branches():
               noop in c, c[:60])
         check(f"{name} 契约含显式禁令（真改了的那次不许说成没动）",
               "不许" in c and "说成" in c, c[-90:])
+    # 契约里那个"真改了"的头必须是**工具真会印出来的字**（20261008）：这一族的
+    # 契约一旦写成"返回里印着某句"、而那句根本不会出现，分叉判据就是空转——上面
+    # 那三条只证明"契约里有这几个字"，证明不了它们与真实返回同源。所以拿那台
+    # 渲染器把三件都渲一遍对着比：契约改字面、或渲染器改措辞，这一条当场红。
+    from agent import adminops as _A
+    for _kind, _name in (("approve", "quota_approve"), ("reject", "quota_reject"),
+                         ("reset", "quota_reset")):
+        _live = _CASES[_name][0]
+        _rendered = _A.render_quota_status(_kind, "某人", 5, 500, 0)
+        check(f"{_name} 契约里那个「真改了」的头，就是 render_quota_status 真会印的字",
+              _live in _rendered, f"{_live!r} vs {_rendered[:46]}")
     # 那两处"最容易读反的读数"必须被点破：成功回执尾巴写的是**改动之后**的剩余数
     for name in ("notice_read", "message_read"):
         sk = _by.get(name)
