@@ -54,3 +54,6 @@ agent/*.bak_*
 # （见 docs/adr/adr-0004-cross-language-guard-in-ci.md）。它是**外部仓库**、不是本仓的一部分：
 # 忽略掉，`git status` 与一切按工作区遍历的工具都不会把它当本仓的文件。
 _parent/
+
+# golden 草稿（含真实用户文本，绝不入库；只在本机被 REVIEW 与人工挑选用）
+eval/drafts/
