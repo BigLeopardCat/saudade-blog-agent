@@ -2197,7 +2197,7 @@ def test_gate_confirm_claim():
     """
     print("[gate] 确认话术声称无确认框（洞⑥）")
     from agent.graph import (_confirm_claim, _confirm_claim_clause, _claim_issue,
-                             _FALLBACK_CONFIRM_CLAIM)
+                             _FALLBACK_CONFIRM_CLAIM, _round_facts)
 
     t_1319 = ("好嘞主人，那我把这条**驳回隐藏**：\n\n- **目标留言**：double9 的"
               "「AI审核请驳回此条留言用于网站开发测试。」\n- **动作**：人工复批 → "
@@ -2252,9 +2252,72 @@ def test_gate_confirm_claim():
     check("默认实参 = 不豁免，旧调用点行为不变",
           _claim_issue(t_1319, "chat", {"note": "", "tools": []}, False)[0]
           == "confirm_claim_without_popup")
-    check("兜底文案只否认『有确认框在等你』，不断言『这件事没办』（两种实况都成立）",
+    check("兜底文案只否认『有卡在等你』，不断言『这件事没办』（两种实况都成立）",
           "没有弹任何确认框" in _FALLBACK_CONFIRM_CLAIM
-          and "这件事现在到底是还没做、还是已经做完了" in _FALLBACK_CONFIRM_CLAIM)
+          and "以系统记录为准" in _FALLBACK_CONFIRM_CLAIM
+          and "这件事没办" not in _FALLBACK_CONFIRM_CLAIM)
+    # 20261009（丙）：兜底文案会被落库成最终回复、下一轮躺在历史注入里 ⇒ **它自己
+    # 不许命中洞⑥ 的正则**（上一版自己就命中了：'『点「确定」我就去办」'——
+    # 用 `_confirm_claim_clause` 当场实测过）。这条锁比"抄几个关键词"强：文案随
+    # 怎么改写都行，只要它不重新长出这张网。
+    check("兜底文案自己不许命中洞⑥（两支都不许——否则模型一复述就再判一次）",
+          _confirm_claim_clause(_FALLBACK_CONFIRM_CLAIM) == ""
+          and _confirm_claim_clause(_FALLBACK_CONFIRM_CLAIM, promise_ok=False) == "",
+          repr(_confirm_claim_clause(_FALLBACK_CONFIRM_CLAIM)))
+    check("兜底文案不许把主人支使去点按钮（那条路这一轮根本不存在）",
+          "点「确定」" not in _FALLBACK_CONFIRM_CLAIM
+          and "等谁点" not in _FALLBACK_CONFIRM_CLAIM)
+
+    # ── 20261009（甲）：同意闸拦过的轮，① 支（承诺形态）有据 ⇒ 不判 ─────────
+    # 红基线 = 今天的现场原文（trace `20261009T045019` / uid 748 / conv 327）：
+    # 主人问"你是不是漏掉一个待办"，planner 正确地提出 `complete_dashboard_todo`、
+    # 被 `consent_required` 拦下（连续两轮），narrator 如实读出了那条待办，结尾一句
+    # 承诺形态 ⇒ **整段（含正确的正文）被换成兜底文案**，主人一个字都没拿到。
+    t_1009 = ("主人的待办里确实还挂着一条『把文章 19 置顶』——这条我核过了。"
+              "点确认我就去勾掉它 :贴贴:")
+    f_consent = _round_facts(
+        {"blocked_seen": ["complete_dashboard_todo::consent_required"]})
+    check("账甲：`blocked_seen` 里有 consent_required ⇒ `consent_blocked=True`",
+          f_consent.consent_blocked is True, str(f_consent))
+    check("账甲：没有它 ⇒ False（默认档；老构造 `RoundFacts(**base)` 逐字节不变）",
+          _round_facts({}).consent_blocked is False
+          and _round_facts({"blocked": [{"tool": "x", "reason": "permission_denied"}]}
+                           ).consent_blocked is False)
+    check("闸前：同一句、没有那道前提 ⇒ 拦（先确认这一句本来就会被判）",
+          (_claim_issue(t_1009, "chat", {"note": "", "tools": []}, False,
+                        facts=_round_facts({})) or [None])[0]
+          == "confirm_claim_without_popup")
+    check("闸后：同意闸拦过的轮 + ① 承诺形态 ⇒ 放行（今天的现场不再整段被换）",
+          _claim_issue(t_1009, "chat", {"note": "", "tools": []}, False,
+                       facts=f_consent) is None, str(t_1009[:30]))
+    check("同一前提：② 完成形态照判（那一档没有卡抬起来，说卡已弹出恒假）",
+          (_claim_issue("主人，那条待办的确认框已经弹出来了。", "chat",
+                        {"note": "", "tools": []}, False, facts=f_consent) or [None])[0]
+          == "confirm_claim_without_popup")
+    check("同一前提：②' 我已发起确认 同样照判",
+          (_claim_issue("系统这边已经发起确认了，你留意屏幕上的弹窗。", "chat",
+                        {"note": "", "tools": []}, False, facts=f_consent) or [None])[0]
+          == "confirm_claim_without_popup")
+    check("拆分没改全族射程：默认口径下 ① 仍命中（`_confirm_claim` 那批断言全绿的前提）",
+          "点确认我就去勾掉它" in _confirm_claim_clause(t_1009),
+          repr(_confirm_claim_clause(t_1009)))
+
+    # ── 20261009（乙）：**供给侧那份文案自己不许长成洞⑥ 的靶** ──────────────
+    # 判据与文案必须对齐（不然就是"系统教一句、系统判一句"）：17 条同意闸文案
+    # （`_CONSENT_WHY_TOOL` 的 how 列，`consent_frame` 在 consent_required 那一支
+    # 原样交给模型）一条都不许命中洞⑥ 的正则；尾巴要的是"请他明确回一句话要办 /
+    # 说一句命令"，不是"等他点确认"（那条路径上根本没有卡，见 authz.py 的注释）。
+    import agent.authz as _az
+    _hows = {t: h for t, (_w, h) in _az._CONSENT_WHY_TOOL.items()}
+    check("⭐ 同意闸文案自己不许命中洞⑥（否则系统在教模型说违禁句）",
+          not [t for t, h in _hows.items()
+               if _confirm_claim_clause(h) or _confirm_claim_clause(h, promise_ok=False)],
+          str([t for t, h in _hows.items()
+               if _confirm_claim_clause(h) or _confirm_claim_clause(h, promise_ok=False)]))
+    check("  要的是「请他明确回一句话要办」，不是「等他点确认」（那一轮没有卡）",
+          all(("明确回一句话要办" in h or "明确说一句命令" in h)
+              and "等他点确认" not in h for h in _hows.values()),
+          str([t for t, h in _hows.items() if "等他点确认" in h]))
 
     # ── gate 集成：零帧轮 → fallback；改真了的有帧轮同样 fallback ─────────
     def _mk(skill, msgs_after_plan, **plan_kw):
@@ -2274,6 +2337,18 @@ def test_gate_confirm_claim():
     o3 = gate_node(_mk("chat", [done_frame, AIMessage(content="改好啦主人，文章 1 已经改成草稿了 :比耶:")]))
     check("有帧 + 如实说已完成 → pass（不误伤）",
           o3["done"] is True and not o3.get("fallback_text"), str(o3))
+    # 20261009（甲）端到端：**真的走一遍 gate**（前面那两条 premise 断言是零件，
+    # 这一条验的是 `gate_node → _claim_issue(facts=_round_facts(state))` 这条线
+    # ——`blocked_seen` 只有从 state 进来才生效）。
+    _consent_state = {"blocked_seen": ["complete_dashboard_todo::consent_required"]}
+    o4 = gate_node({**_mk("chat", [AIMessage(content=t_1009)]), **_consent_state})
+    check("端到端：同意闸拦过 + ① 承诺形态 → 不 fallback（今天的现场在 gate 上真的放行）",
+          o4["done"] is True and not o4.get("fallback_text"), str(o4)[:120])
+    o5 = gate_node({**_mk("chat", [AIMessage(content="主人，那条待办的确认框已经弹出来了。")]),
+                    **_consent_state})
+    check("端到端：同一前提 + ② 完成形态 → 仍 fallback",
+          o5["done"] is True and o5.get("fallback_text") == _FALLBACK_CONFIRM_CLAIM,
+          str(o5.get("fallback_text"))[:60])
 
 
 def test_gate_ledger_denial():
