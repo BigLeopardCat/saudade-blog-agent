@@ -1788,7 +1788,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         # agent 无察觉地继续执行 ReAct 循环——实测曾见断连后仍执行
         # device_oled_display 写操作（用户只问了在线设备）。
         #
-        # 断连感知实现（20260827c 结论，两次踩坑后确认）：
+        # 断连感知实现（20260827c 结论，两轮实测后确认）：
         #   ✗ request.is_disconnected()：starlette 1.3.1 非阻塞检查（内部
         #     anyio.CancelScope 在 await 前立即取消），仅在 http.disconnect 已躺在
         #     receive 通道里时返回 True——uvicorn 通道被动读取，流式空闲期恒 False。

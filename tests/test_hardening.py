@@ -38,7 +38,7 @@ def check(name, cond, detail=""):
 def eq(got, exp, name):
     """⚠️ 参数顺序容易写反：本文件的 check 是 (name, cond, detail)，不是 (cond, name)。
     第一版写成 check(got == exp, name) 就变成了"拿名字当条件"——name 是非空字符串恒真，
-    六条断言全是空转的绿（自己踩过，留个记号）。"""
+    六条断言全是空转的绿（自己出过，留个记号）。"""
     check(name, got == exp, {"got": got, "exp": exp})
 
 
@@ -328,7 +328,7 @@ def test_user_assertion():
         eq(server._verify_user_assertion("not.a.jwt"), None, "垃圾串 → None")
         eq(server._verify_user_assertion(""), None, "空串 → None")
         # ⚠️ 断言**代码默认值**而不是运行时配置：生产 .env 已经把它开成 1（那是对的），
-        # 拿 settings 的当前值当期望会让"本机绿、CI 红"或反过来——同一条测试的第二次踩坑。
+        # 拿 settings 的当前值当期望会让"本机绿、CI 红"或反过来——同一条测试第二次犯的同一个错。
         from config.settings import Settings
         dflt = Settings.model_fields["agent_require_assertion"].default
         check("代码默认不强制断言（滚动上线的前提：Rust 未发头时不能把在途请求打成 401）",

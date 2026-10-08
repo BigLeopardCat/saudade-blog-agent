@@ -9,7 +9,7 @@
      exclude 有对应 frozen 登记项。这些由 `check_classes()` 回答；
   ② **盘上得真的都被登记了**：`audit()` 在真树上报「未登记 0 条」。**这一条是本套件的
      存在理由**——登记表的价值全在"没有例外"上，漏一个目录就等于那类产物又回到
-     "没人知道归谁"的状态（本仓同族坑踩过四次：R2 `--keep 3`、logrotate `rotate 14`、
+     "没人知道归谁"的状态（本仓同族问题出过四次：R2 `--keep 3`、logrotate `rotate 14`、
      `logs/archive/`、`eval/report/runs/`）。
 
 第 ① 项还要**反向**验一次（`_bad_class`）：只证明"真表干净"不能说明检查有效，

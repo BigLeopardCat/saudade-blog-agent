@@ -28,7 +28,7 @@
   ⑦ CLUE               不做硬判：弹窗链的逐跳记录（前端 `confirm_flow` 埋点，20260924）
        ——同一枚待办靠帧里的 id 串成 frame→card→click→sent→settle，跳数对不上即线索
 
-三条纪律（都是踩过的坑）：
+三条纪律（各由一次真实故障换来）：
   · **只在两个源覆盖范围的交集里判 ①②**：logrotate 00:00 对 `*.log` 用 copytruncate
     ⇒ 午夜必然缺行；trace 目录只留最近两周。交集之外一律记 UNCOVERED、不报缺失。
   · **tid 只从文件里的 `trace_id` 字段取、绝不切文件名**（既有 `diag_1790032810_0_…`
