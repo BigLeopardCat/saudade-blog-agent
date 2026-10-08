@@ -9508,11 +9508,30 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                 not A.target_mentioned(
                     args.get("article_id"),
                     _target_evidence(state, user_msg,
-                                     _page_ctx(state["messages"], principal.known_role)))
+                                     _page_ctx(state["messages"], principal.known_role))
+                    # **第二本账**（20261008，与 `_grounded_value` 的 `sq_ledger` 同源）：
+                    # 目标也可以住在**系统自己那行台账**里。主人回一句指代
+                    # （「对就是你说的这样」）重提上一轮那张卡上的事时，那一篇与那几个值
+                    # 都在台账行里（Rust 渲染的"动作行原文 + 落库的 args JSON 原文"）——
+                    # 值那一族 20261006 就补上了这本账，**目标这一格当时漏了**，于是
+                    # 同一条指代词在值上过得去、在目标上被拒（trace `20261008T080452`：
+                    # `write_value_unresolved` 与 `write_target_unresolved` 一起来）。
+                    # 边界与 `_ledger_pending_text` 完全相同：那是**渲染过的行**（两级
+                    # 截断 ⇒ 超长时照旧拒绝），里面出现过的字只可能来自本会话里已过闸、
+                    # 且摆在主人眼前那张卡上的那一份 specs——顺着它对回来的是系统自己的
+                    # 字，不是模型新编的。
+                    # ⚠️ **只扩这一处，不许顺手喂给执行层那道目标闸**（execute 的
+                    # `target_missing` / `target_conflict`）：那两道的判据是"这一轮读到
+                    # 过吗"，加进台账等于把"看不见的字"也当成读过，一条命令式措辞就能
+                    # 直接落写。这里扩的是**弹卡**：卡面会把那一篇（id + 标题）印出来，
+                    # 多一次点击换主人一眼核对；写闸一寸没让。
+                    + [_ledger_pending_text(state.get("ledger"))])
                 # 与用户点名不一致 → 同样不弹（20260921 第三轮）：确认框会把目标
                 # 明明白白写出来，但问的必须是**主人点的那一篇**——问错一篇再让主人
                 # 点确定，等于把误靶洗成一条已授权的写。跳过 → 由下面的循环产
                 # target_mismatch 帧，planner 按帧改回来（那条链路本就在等着）。
+                # （主人这一轮一个 id 都没点名时，这一格**不启用**——
+                # `target_named` 的空集语义，见它的 docstring。）
                 or not A.target_named(args.get("article_id"),
                                       A.user_named_article_ids(user_msg))):
             continue

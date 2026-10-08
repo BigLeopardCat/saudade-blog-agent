@@ -434,6 +434,35 @@ check("  第二本账走的是 `_grounded_value` 的同一句 ⇒ 脏判据（�
       g._grounded_value("标签", "", _LED_T) is False
       and g._grounded_value(_TAG, "", _LED_T) is True)
 
+# ── 第五处消费点：**弹卡的目标闸**（20261008 补）────────────────────────────
+# 20261006 给"值"补这本账时，**目标那一格漏了**：主人回一句指代重提上一轮卡上的事，
+# 同一条指代词在值上过得去、在目标上被拒——`_confirm_popup` 的目标闸当时只读
+# `_target_evidence`（本轮帧 + 页面上下文 + 主人原话），而那一篇只住在台账行里。
+# 现场 trace `20261008T080452`：`write_value_unresolved` 与 `write_target_unresolved`
+# 一起来 ⇒ 卡抬不起来、那一行永远 pending。
+# 它不走 `ledger_src` 参数（那是四道**出处**闸），是在 `_confirm_popup` 里直接把
+# `_ledger_pending_text(...)` 追加进证据列 ⇒ 判据分两半：台账行**能不能**当目标证据
+# （正/反/边界三条），以及**那句话真的接上线了**（只加函数不接线＝一行都没生效）。
+from agent.adminops import target_mentioned  # noqa: E402
+
+_LED_ART = ('修改文章 16 的标签：加上 Git、代码版本管理；动作 set_article_tags；参数 '
+            '[{"args":{"add":["Git","代码版本管理"],"article_id":16},'
+            '"tool":"set_article_tags"}]；状态 awaiting（等主人点头，尚未执行）')
+check("弹卡的目标闸：台账那一行里印着 id=16 ⇒ 那一篇算有据（第三本账，与值那一族同源）",
+      target_mentioned(16, [""] + [_ledger_pending_text({"pending": _LED_ART})]) is True)
+check("  反向对照：台账在、但那一行里没有这个 id ⇒ 仍然无据（有了台账≠整行放行）",
+      target_mentioned(99, [""] + [_ledger_pending_text({"pending": _LED_ART})]) is False)
+check("  反向对照二：**两端不挨数字**那条边界对台账同样成立（id=166 不许被 16 冒充）",
+      target_mentioned(16, [_ledger_pending_text(
+          {"pending": _LED_ART.replace("文章 16", "文章 166")
+                              .replace('"article_id":16', '"article_id":166')})]) is False)
+_LED_WIRE = '+ [_ledger_pending_text(state.get("ledger"))])'
+_W = _GSRC.find(_LED_WIRE)
+_TM = _GSRC.rfind("A.target_mentioned(", 0, _W) if _W > 0 else -1
+check("  接线：那一行真的并进了 `target_mentioned` 的证据列（只加函数不接线＝没生效）",
+      _W > 0 and 0 < _TM < _W and _W - _TM < 2000,
+      f"ledger_line={_W} target_mentioned={_TM}")
+
 print("\n⑨ 键盘噪声归一（20261008）：大小写 / 全角差一格**不算**「主人没说过这个名字」")
 # 现场（trace `20261008T075023`）：主人打「把git，代码版本管理挂上去」，planner 填的是
 # 站内字典的**正字**「Git」（`find_tag` 完全相等匹配 ⇒ 填 `git` 反而写不进去），
