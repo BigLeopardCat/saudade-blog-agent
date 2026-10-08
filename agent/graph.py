@@ -10119,7 +10119,20 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             out = authz.denial_frame(decision, principal)
             logger.warning("[execute] 权限拒绝，不执行: %s → %s", spec, decision)
         elif consent_missing:
-            # 与权限拒绝同族（__ERROR__ + 原因码 → blocked 链路），语义是"去问用户"
+            # 与权限拒绝同族（__ERROR__ + 原因码 → blocked 链路），语义是"去问用户"。
+            # ⚠️ **两件同缺（既有目标无据、又没获确认）时报的是这一条**，20261008 试过
+            # 把 `target_missing` 挪到它前面（现场 trace `20261008T080415` 两条事件都
+            # 落在同一轮），**又退回来了**，判据是那条 trace 自己：
+            #   · 那条 trace 里 planner 从 consent 帧走出的下一步正是 target 帧要它做的
+            #     那一步（第 1 轮就调了 `list_admin_notes`，把那篇的 id 读进帧）；
+            #   · 换序要修的那件事（"报了 consent ⇒ 技能被 `denied_skills` 摘掉 ⇒ 读了
+            #     也回不去"）**前提不成立**：`execute_node` 每轮把 `blocked` **整体替换**
+            #     （`updates["blocked"] = blocked`，不是累加），那一轮读到东西就 PASS ⇒
+            #     `blocked=[]` ⇒ 下一轮菜单原样还给它。禁令只维持一轮，而那一轮也正是
+            #     它该去读的那一轮。
+            # 所以这一格保持 20261007 的门序（先问「要不要做」，再问「哪一篇」），
+            # `tests/test_admin_write.py` 那条顺序锁照旧有效——**别只为一句更顺的帧文
+            # 再换一次**，要换得先拿出"禁令真的把人堵死过"的现场。
             out = authz.consent_frame(name, principal)
         elif target_missing:
             # 同族（__ERROR__ + 原因码），语义是"先去读、或先问哪一篇"
