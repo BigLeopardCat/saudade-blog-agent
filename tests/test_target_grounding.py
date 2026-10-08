@@ -434,6 +434,54 @@ check("  第二本账走的是 `_grounded_value` 的同一句 ⇒ 脏判据（�
       g._grounded_value("标签", "", _LED_T) is False
       and g._grounded_value(_TAG, "", _LED_T) is True)
 
+print("\n⑨ 键盘噪声归一（20261008）：大小写 / 全角差一格**不算**「主人没说过这个名字」")
+# 现场（trace `20261008T075023`）：主人打「把git，代码版本管理挂上去」，planner 填的是
+# 站内字典的**正字**「Git」（`find_tag` 完全相等匹配 ⇒ 填 `git` 反而写不进去），
+# 逐字子串认不出 `git` ⇒ 整条写零执行，而给主人的理由（"你这句话里没有能对上「Git」
+# 这个名字"）在他读来是假话——那三个字母就在他这句话里。这一节钉三件事：
+#   ① 差一格算有据（大小写、全角 ASCII），且**值一个字不改**（正字在字典那一份）；
+#   ② 不许顺手扩权：归一**只动比较**，不碰与"同一个词的不同打法"无关的字形
+#      （`①`/`㎡` 那类 NFKC 会顺手改的字，本族一个都不认）；
+#   ③ 本条**不是**放开来源：换个来路（跨轮指代）照旧拒。
+from agent.graph import _FULLWIDTH_ASCII_MAP, _fold_typing  # noqa: E402
+
+
+def _tn(text) -> str:
+    """归一全形（比较前的那一份）：去空白 + 全角 ASCII→半角 + casefold。"""
+    return _fold_typing(g._squash_spaces(text))
+
+
+_MSG_LOWER = "把git，代码版本管理挂上去"
+_TAGS_PLAN = _plan("set_article_tags",
+                   {"article_id": 16, "add": ["Git", "代码版本管理"]},
+                   skill="article_tags")
+check("★ 主人小写打、字典大写收 ⇒ 有据（现场重放：`Git` 在「把git，…」里）",
+      _grounded_value("Git", g._squash_spaces(_MSG_LOWER)) is True
+      and _grounded_value("git", g._squash_spaces("把Git，代码版本管理挂上去")) is True)
+check("  全角 ASCII 同理（中文输入法全角态打出的 `Ｇｉｔ` 是同一类转写噪声）",
+      _grounded_value("Git", g._squash_spaces("把Ｇｉｔ，代码版本管理挂上去")) is True
+      and _grounded_value("10006", g._squash_spaces("新建标签 id=１０００６")) is True)
+check("  现场重放：值那一族**不再拒绝**（校正器不介入，计划原样往下走）",
+      _name_arg_fix(_TAGS_PLAN, _MSG_LOWER, role="admin") is None)
+check("  现场重放：**值一个字没动**——正字是字典那一份，改写成主人打的 `git` 是写不进去的",
+      _args_of(_TAGS_PLAN)["add"] == ["Git", "代码版本管理"],
+      str(_args_of(_TAGS_PLAN)))
+check("  归一**只动比较**：与「同一个词的不同打法」无关的字形一个都不碰（不用 NFKC）",
+      _tn("①㎡㈱Ｇｉｔ　１") == "①㎡㈱git1"
+      and "normalize" not in _names_in(_fold_typing)
+      # 映射表只许覆盖 ASCII 全角区，且键必须是**码位整数**（拿 chr 当键会静默不换字）
+      and sorted(_FULLWIDTH_ASCII_MAP) == list(range(0xFF01, 0xFF5F)))
+check("  反向对照一：**换个来路不算有据**——跨轮指代（「重来」里一个字都没有）照旧拒",
+      _grounded_value("Git", g._squash_spaces("重来")) is False
+      and _name_arg_fix(_plan("set_article_tags",
+                              {"article_id": 16, "add": ["Git", "代码版本管理"]},
+                              skill="article_tags"), "重来", role="admin") is not None)
+check("  反向对照二：脏判据的入口没被打开（泛称/指代仍是「没出处」，全角归一改不了它）",
+      _grounded_value("标签", g._squash_spaces("把标签挂上去")) is False
+      and _grounded_value("它", g._squash_spaces("把它挂上去")) is False)
+check("  反向对照三：真没说过还是拒（归一不等于放行）",
+      _grounded_value("Axum", g._squash_spaces(_MSG_LOWER)) is False)
+
 print()
 
 if FAILED:
