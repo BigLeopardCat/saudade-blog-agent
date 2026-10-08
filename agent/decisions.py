@@ -193,6 +193,24 @@ def _effect_switch_fast_path(user_msg: str, current_effects: str) -> dict | None
     }
 
 
+# 「指代**某一条**内容」的形状：指示代词 + 量词（某一条）**且**句里点了一个内容名词。
+# 两个条件缺一不可——只有量词（"带我看看那个页面"）不判，只有名词（"带我去留言板"）也不判。
+#
+# **为什么这是个守卫而不是一次归一**（20261008）：`fuzzy_nav_hit` 只看关键词有没有出现
+# （"留言" ∈ "看看那条留言"）⇒ 把"去看**那一条**留言"归一成**版块页** `/guestbook`。
+# 而快道是**确定性**回答（零 LLM，且拿走了 planner 的决策权），下游没有翻案的机会：
+# 主人原话「意图明显是去对应评论位置，第一次带到了留言板」，trace `20261008T023344` 那族
+# 连着七步落空。这里**不猜**——某一条的 id 住在会话里（上一轮那条 `?lid=`／`?cid=` 通知、
+# 或「我的河灯」列表帧），这一层看不到任何一样 ⇒ 交回 planner LLM，由它照说明书填带定位
+# 参数的形态（形态表 `tools.base._ITEM_POSITION_FORMS`，事实句 `agent.context._item_link_fact`）。
+# ⚠️ 「评论」这个词不在这里当版块名用：站内**没有**独立的评论页（事实句里有），所以它
+# 只出现在"那一条评论"这种指代形状里——`FUZZY_NAV_RULES` 里也从来没有它（这正是隔壁
+# 「带我去看看那条评论」不中招、而"留言"这一支中招的原因）。
+_ITEM_REFERENT_RE = re.compile(
+    r"(?=[\s\S]*?(?:这|那|哪)(?:一)?(?:条|则|篇|张|封|份|个))"
+    r"(?=[\s\S]*?(?:留言|评论|说说|文章|笔记|日记|回复|帖子|动态|公告|唠嗑))")
+
+
 def _nav_fast_path(user_msg: str) -> dict | None:
     """导航快道：整句映射命中，或动词+目标强模式 + 映射/模糊归一命中 → navigate 计划。
 
@@ -218,6 +236,11 @@ def _nav_fast_path(user_msg: str) -> dict | None:
         m = _NAV_VERB_RE.match(msg)  # match 而非 search：动词必须句首，避免句中误匹配
         if m:
             t = m.group(1)
+            if _ITEM_REFERENT_RE.search(t):
+                # 目标停在**某一条**内容上，不是它所在的那个版块页（见上方 `_ITEM_REFERENT_RE`
+                # 的长注）。整句级的映射（`msg in NAV_MAP`）不会与它撞：映射键都是页面名。
+                logger.info("[planner] 导航快道让行（目标是某一条内容，不是版块页）：%s", msg)
+                return None
             if t in NAV_MAP or t.startswith("/"):
                 target = t
             elif fuzzy_nav_hit(t)[0]:
