@@ -3166,6 +3166,11 @@ class RoundFacts(NamedTuple):
     popup: bool              # 本轮弹了确认卡（那种轮次到不了 narrator/gate）
     ledger_pending: bool     # 台账里有一行**真在等**主人点头（`ledger["pending"]` 原文非空）
     awaiting_owner: bool     # ↑ 而且这一轮一件都没办成 ⇒"在等你点头"是**真话**的那一档
+    # 本轮有写被**同意闸**拦下（`authz.REASON_CONSENT`）——注意读的是 `blocked_seen`
+    # （**累积**集合，跨 execute 轮不丢）而不是 `blocked`（每轮被整体替换）。
+    # 用途只有一处：洞⑥ 的 ① 支（承诺形态）在这一档里是**有据的**，见 `_claim_issue`。
+    # 带默认值 ⇒ `RoundFacts(**base)` 这类既有构造（单测）逐字节不变。
+    consent_blocked: bool = False
 
 
 def _plan_tool_specs(raw) -> list:
@@ -3187,9 +3192,12 @@ def _plan_tool_specs(raw) -> list:
 def _round_facts(state) -> RoundFacts:
     """账甲合成：纯读 state，无副作用；narrator 与 gate 各调一次、读同一份形状。
 
-    `receipts` / `noop_specs` / `blocked` / `pending_confirm` / `confirm_grant` / `ledger` /
-    `plan` 都在 `state` 里（都在 `AgentState` 显式声明过，20261008 前就有），本函数
-    只是**把散在六处的那种算法收拢到一处**，不改任何一种算法的语义。
+    `receipts` / `noop_specs` / `blocked` / `blocked_seen` / `pending_confirm` /
+    `confirm_grant` / `ledger` / `plan` 都在 `state` 里（都在 `AgentState` 显式声明过），
+    本函数只是**把散在六处的那种算法收拢到一处**，不改任何一种算法的语义。
+    `blocked_seen`（20261009 起读）是**累积**集合、`blocked`（20261008 起读）是**本轮**
+    那一格：前者回答"这一轮里有没有被同意闸拦过"，后者回答"现在这一格还剩哪些"。
+    两者都要，但**别互相代替**——见 `RoundFacts.consent_blocked` 的注释。
     """
     receipts = [r for r in (state.get("receipts") or []) if isinstance(r, dict)]
     noop = {tuple(s) for s in (state.get("noop_specs") or [])}
@@ -3209,6 +3217,13 @@ def _round_facts(state) -> RoundFacts:
         if isinstance(b, dict) and authz.is_write(str(b.get("tool") or "")))
     popup = bool(state.get("pending_confirm"))
     ledger_pending = bool(str((state.get("ledger") or {}).get("pending") or "").strip())
+    # 同意闸拦下的写：`blocked_seen` 是**累积**集合（`execute_node` 里
+    # `prev_seen | 本轮键`），键的形状是 `_blocked_key(b)` = `f"{tool}::{reason}"`。
+    # 用 `blocked`（本轮那一格、会被替换）会漏掉"上一轮被拦、这一轮换了别的话再来一次"
+    # 那种现场——而 20261009 的现场恰恰就是**连续两轮**都被拦（见 `_claim_issue` 洞⑥）。
+    consent_blocked = any(
+        str(k).endswith("::" + authz.REASON_CONSENT)
+        for k in (state.get("blocked_seen") or []))
     return RoundFacts(
         granted=bool(state.get("confirm_grant")),
         planned_writes=planned,
@@ -3221,6 +3236,7 @@ def _round_facts(state) -> RoundFacts:
         popup=popup,
         ledger_pending=ledger_pending,
         awaiting_owner=ledger_pending and not ok and not popup,
+        consent_blocked=consent_blocked,
     )
 
 
@@ -3836,14 +3852,30 @@ def _ledger_absence_claim(text: str) -> bool:
 #     与"写给 narrator 的机制描述会变成它的词汇"同一条教训）；
 #   · 1 条是**将来时描述**（`20260922T054528`："你发给我之后…系统会走确认流程——
 #     点「确定」我就去办"），合法 ⇒ 豁免表收将来标记（会/将/之后…），见下。
-_CONFIRM_CLAIM_RE = re.compile(
-    # ① 承诺形态：点「确定」我就去办 / 点了确定就执行 / 等你点确认
+# 洞⑥ 的两支**分开定义**（20261009）：它们在同一轮里的**前提不一样**，混成一个正则
+# 就只能整族一起放行或一起判。分开之后 ① 可以带前提闸、② 任何轮次都判（见 `_claim_issue`）。
+#   ① 承诺形态（点「确定」我就去办 / 等你点确认）——说的是"接下来等着你一句话"，在
+#      **本轮确有写被同意闸拦下**（`blocked_seen` 里有 `consent_required`）的轮次里是
+#      **有据的**：那份 BLOCK 文案本身就要 narrator 请主人明确回一句话要办
+#      （`authz.py::_CONSENT_WHY_TOOL` 的 how 列），模型照着说等于**复述系统教它的话**。
+#      一手现场 `20261009T045019`（uid 748 / conv 327）：主人问"你是不是漏掉一个待办"，
+#      planner 正确地提出 `complete_dashboard_todo`、被 `consent_required` 拦下，narrator
+#      如实读出了那条待办，结尾一句"点确认我就去勾掉它"⇒ **整段（含正确的正文）被换成
+#      兜底文案**，主人一个字答案都没拿到。扫描全部 81 份在库 trace：洞⑥ 命中 3 次，
+#      其中恰好 1 次落在 `consent_required` 轮 —— 假红率 1/3。
+#   ② 完成/进行形态（确认框已经弹出来了 / 我已发起确认）——说的是"卡就在屏幕上"。
+#      这一支**任何轮次都判**，与本条前提无关：能走到 gate 就说明这一轮没抬卡
+#      （真弹卡的轮次走 `pending_confirm` 直接 END，到不了 gate），所以它恒假。
+_CONFIRM_PROMISE_PAT = (
     r"点\s*[「\"'『]?\s*(?:确定|确认)[」\"'』]?\s*(?:我|就|即|便|后)"
-    r"|(?:等|等候|等待)\s*(?:主人|你|您|访客)?\s*(?:去)?\s*(?:点|按|戳)\s*[「\"'『]?\s*(?:确定|确认)"
-    # ② 完成/进行形态：确认框已经弹出来了 / 我已发起确认 / 确认弹窗在等你
-    r"|(?:确认框|确认弹窗|弹窗)\s*(?:已经|已|就|正)?\s*(?:弹|出现|显示|在等|等着|挂)"
-    r"|(?:已经|已|我)\s*(?:经)?\s*(?:发起|走了|推送|提交)\s*了?\s*确认",
-    re.S)
+    r"|(?:等|等候|等待)\s*(?:主人|你|您|访客)?\s*(?:去)?\s*(?:点|按|戳)\s*[「\"'『]?\s*(?:确定|确认)")
+_CONFIRM_CARD_PAT = (
+    r"(?:确认框|确认弹窗|弹窗)\s*(?:已经|已|就|正)?\s*(?:弹|出现|显示|在等|等着|挂)"
+    r"|(?:已经|已|我)\s*(?:经)?\s*(?:发起|走了|推送|提交)\s*了?\s*确认")
+# 全族（默认判据入口用的就是它，与拆分前**逐字节等价**）
+_CONFIRM_CLAIM_RE = re.compile(_CONFIRM_PROMISE_PAT + "|" + _CONFIRM_CARD_PAT, re.S)
+# 只留 ②：`consent_required` 轮次里用这一支（① 有据、放行，② 恒假、照判）
+_CONFIRM_CLAIM_CARD_RE = re.compile(_CONFIRM_CARD_PAT, re.S)
 # 豁免（同子句内生效，见 `_clause_hit`）：将来时描述（"系统会走确认流程——点确定我就
 # 去办"）、否定（"没有弹确认框"多数形态因语序本就命中不了，这里再兜一层）、
 # 转述（"你说点确定""你说的'等你点确认'"）、
@@ -3866,14 +3898,18 @@ _CONFIRM_EXEMPT_RE = re.compile(
     r"|(?:如果|要是|倘若|假设)", re.S)
 
 
-def _confirm_claim_clause(text: str) -> str:
+def _confirm_claim_clause(text: str, promise_ok: bool = True) -> str:
     """确认话术声称的子句（trace 用，见 `_clause_hit`）；没有则空串。
 
     ⚠️ **不剥引号**（与 `_claim_issue` 里其它判据的做法相反）：系统的确认文案本身
     就是"点「确定」我就去办"——「确定」两个字**永远**在引号里，剥掉引号等于把这条
     判据的存在意义剥没了（写完当场实测：四条真话全判空）。转述豁免改由豁免表里的
-    "写着/留言/原话"那族承担。"""
-    return _clause_hit(text, _CONFIRM_CLAIM_RE, _CONFIRM_EXEMPT_RE) or ""
+    "写着/留言/原话"那族承担。
+    `promise_ok=True`（默认，= 拆分前的行为）判 ①② 两支；`False` 只判 ②（完成/进行
+    形态）——本轮确有写被同意闸拦下时用（见 `_claim_issue` 洞⑥ 与 `_CONFIRM_PROMISE_PAT`
+    的注释）。默认值让所有既有调用点**逐字节不变**，只有 `_claim_issue` 会传 False。"""
+    rx = _CONFIRM_CLAIM_RE if promise_ok else _CONFIRM_CLAIM_CARD_RE
+    return _clause_hit(text, rx, _CONFIRM_EXEMPT_RE) or ""
 
 
 def _confirm_claim(text: str) -> bool:
@@ -4528,9 +4564,10 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     # 账甲（20261008）：narrator 与 gate 共读的**那一处**本轮状态。`gate_node` 传
     # 真实那一条（它手上有 state）；老调用（纯单测）没传 ⇒ 按它已经显式给的那几个
     # 形参现推一份 —— 语义与传 state 时**同源**（都走 `_round_facts`），所以同一份
-    # 输入下两条路算出的形状必然一致。`blocked` 没有形参可推 ⇒ 那一列推出来是空，
-    # 于是洞⑮ 的"本轮有受阻写就不判"这道闸在纯单测路径上**不生效**——生产路径
-    # （gate_node）带上它，单测要验那一档就在 `facts=` 里显式给。
+    # 输入下两条路算出的形状必然一致。`blocked` / `blocked_seen` 没有形参可推 ⇒
+    # 那两列推出来是空，于是洞⑮ 的"本轮有受阻写就不判"与洞⑥ 的"同意闸拦过就不判 ①"
+    # 这两道闸在纯单测路径上**不生效**——生产路径（gate_node）带上它们，单测要验
+    # 那一档就在 `facts=` 里显式给（`RoundFacts.consent_blocked=True`）。
     if facts is None:
         facts = _round_facts({"receipts": receipts or [],
                               "noop_specs": noop_specs,
@@ -4549,8 +4586,14 @@ def _claim_issue(reply: str, skill: str, plan: dict, frames_exist: bool,
     # 干活"，而是"有没有在等主人点确定"，与帧无关（20260922 那两条正是**有帧**的轮
     # ——写已经执行并复核通过，回复却说在等确认）。has_popup=True 只作防御性豁免：
     # 弹窗轮本该到不了这里（route_after_execute 见 pending_confirm 直接 END）。
+    # （20261009 加前提闸）**本轮有写被同意闸拦下时，只判 ② 支**：那一档里 ① 支
+    # （"点确定我就去办 / 等你点确认"）是**有据的**——BLOCK 文案自己就要模型请主人
+    # 明确回一句话要办（`authz._CONSENT_WHY_TOOL` 的 how 列），模型照说是在复述系统
+    # 教它的话，判它就是**拿词形否掉一句真话**，与洞⑮ 的 `not blocked_writes` 同一取向
+    # （词形可以像，状态说了不算）。② 支照判：这一档里没有任何卡抬起来，说"确认框已
+    # 经弹出来了/我已发起确认"仍然**恒假**。现场与扫描读数见 `_CONFIRM_PROMISE_PAT`。
     if not has_popup:
-        span = _confirm_claim_clause(reply)
+        span = _confirm_claim_clause(reply, promise_ok=not facts.consent_blocked)
         if span:
             return ("confirm_claim_without_popup", _FALLBACK_CONFIRM_CLAIM, span)
     # 洞⑦（20260924）：台账否认——待确认的提议就摆在 system 上下文里，回复却否认
@@ -4815,12 +4858,29 @@ _FALLBACK_LEDGER_ABSENCE = (
 # 文案必须对**两种实况都成立**（判据不区分，因为判据看到的是同一句假话）：
 #   ① 什么都没做（13:19 那条：写被身份防线拦下、零帧）；
 #   ② **其实已经做完了**（20260922 那两条：写已执行并复核通过，回复却说"等确认"）。
-# 所以不写"这件事没办"，只写"没有确认框在等你 + 状态以系统记录为准"。
+# 所以不写"这件事没办"，只写"没有卡在等你 + 状态以系统记录为准"。
+#
+# 20261009 重写（丙），三条硬约束，改字之前先读这三条：
+#   1. **不许出现可抄的洞⑥ 话术**。兜底文案会被落库成这一轮的最终回复（server 以
+#      fallback 文本替换原文，见 §3 的 `__RESET__` 协议），下一轮它就躺在历史注入里
+#      ——写进去一个"点「确定」我就去办"，等于把这条判据的靶亲手放进模型嘴里（同族
+#      纪律：契约里不许出现可抄的否认句）。**也别写"没有确认框在等你"**：那句自己就
+#      命中 `_CONFIRM_CARD_PAT`（"确认框" + "在等"），且豁免表那支 `没有 + 弹/等`
+#      被中间的"确认框"隔断、豁免不了 ⇒ 模型下一轮一复述就再判一次，兜底自我循环。
+#      所以照旧用"**没有弹任何确认框**"（动词在名词前 + 紧邻否定，两道都安全）。
+#   2. **不许答非所问**。上一版是"我刚才那句是句空话 / 系统根本没有这个动作"这类
+#      自罪状——主人问的是那件事到底怎么了，整段换成"我认错"等于一个字答案都没给
+#      （现场 `20261009T045019`：主人问"你是不是漏掉一个待办"，narrator 如实读出了
+#      那条待办，只因结尾一句承诺形态被整段替换，主人什么也没拿到）。
+#   3. 因此这一版只做三件事：说清"没有卡在等你"、**把事实裁决权交回系统记录**、
+#      给主人一条**可用**的下一步（明确说一句要办什么）。**不许**说"系统正等着你点
+#      一下"（那与洞⑮ 的前提撞车，见 `_round_facts` 的 `awaiting_owner`）。
 _FALLBACK_CONFIRM_CLAIM = (
-    "喵呜……主人，我得纠正自己一句：这一轮系统**没有弹任何确认框**，也没有在等谁点"
-    "「确定」——我刚才那句『点「确定」我就去办』是句空话，系统那边根本没有这个待确认"
-    "的动作 :犯错: 这件事现在到底是还没做、还是已经做完了，一律以系统记录为准，别信"
-    "我上一条的措辞。要不要我重新走一遍？（该确认的会真的弹窗给你）")
+    "喵呜……主人，我上一条把落点说错了：这一轮站里**没有弹任何确认框**，也没有哪张卡"
+    "挂在界面上 :犯错: 至于那件事办到哪一步了，我嘴上说的不算数——以系统记录为准，"
+    "本轮回执里记着什么我就照什么说。你要是想接着办，直接明确说一句「把某某办了」"
+    "就好，不用去找什么按钮；我按你这句话重新走一遍，真到了需要你点头的时候，"
+    "系统会把卡真的弹出来。")
 # 洞⑦（20260924）：台账否认的兜底。与其它 fallback 常量不同，这条**按请求拼**——
 # 被否认的恰恰是"台账里有什么"，兜底只认错而不把台账摆出来，主人还得再问一遍才拿得到
 # 事实（判据侧已确认那块台账非空，列举必然有内容）。列举取自 server.py 注入用的那两份
@@ -4924,6 +4984,17 @@ _FALLBACK_UNDEPLOYED = (
 # `_FALLBACK_GONE` 的区别是**不许说"那个页面不存在"**：这一轮根本没查过页面在不在
 # （缺的往往是参数，比如没说去哪一篇），把"系统没跳"讲成"页面不存在"是拿一句新
 # 假话换一句旧假话。文案只否认"跳过去了"这件事本身，然后把该问的问清。
+# ⚠️ **文案里的引号声称 20261008 复核过、刻意保留**（别按"顺手的文案整备"删掉它）：
+# 本常量（与 `_FALLBACK_EFFECT_NO_FRAME` / `_FALLBACK_DEED_NO_RECEIPT` / `_FALLBACK_POLICY`）
+# 都用了**引号里复述模型那句被否掉的话**的写法。整族扫过一遍（32 条兜底文案 × 语料 149 条
+# `text_not_match_regex`，按 `(文案, 用例)` 成对）：命中 24 对，其中本族那几条落在
+# `zako_nav_request_refused` / `zako_effect_request_refused` / `nav_no_false_zero_tool_claim` /
+# `mt2_card_then_cancel_no_write[1]` ——**四条用例的 gold 都带 `forbid_fallback: true`**
+# ⇒ 只要兜底真被触发，用例**本来就红**，撞车只让"为什么红"难读，**不翻判决**。
+# 引号仍有它的用处：**指认**模型自己那句话，而不是坐实它（同一写法在 `_FALLBACK_WRITE_DONE`
+# 上被 `tests/test_write_done_claim.py` 逐条锁着，理由写在注释里："『…』里是模型自己的话，
+# 是指认不是坐实"）。所以**不改文案**；要动先按"兜底文案该不该引用被 RESET 掉的草稿"整族裁决
+# （`__RESET__` 会清掉已流出的草稿 ⇒ 主人其实没读到过那句话，这是另一档问题，与本判据无关）。
 _FALLBACK_NAV_NO_FRAME = (
     "喵呜……主人，我得收回一句：这一轮系统**没有执行任何跳转**（我手上没有跳转"
     "回执），页面不会因为我那句话动一下，别信我上一条的『已经带你到…』。你想去哪个"
