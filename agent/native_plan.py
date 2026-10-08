@@ -168,6 +168,18 @@ _SCHEMA_OVERRIDES: dict[tuple[str, str], dict] = {
         "items": _CALLS_ITEMS,
         "description": "要一次办的那几件，逐条 {tool, args}",
     },
+    # `tag_create.titles`（20261008 批）：一次新建多个标签的名字清单。同属"推不出
+    # 形状"那一族——技能模板是**一个名字一条 spec**（`{"title": "$title"}`），数组
+    # 这一格在 `_template_param_map` 里配不到任何工具参数（`create_tag` 收的是单数
+    # `title`）。不收进来它就落进 `_param_schema` 的兜底、被声明成 `string`：模型
+    # 填一个字符串**不算错**（展开层两种都收，见 `skills._write_list_arg`），但
+    # "这一格装的是一批名字"这件事，只有 array 声明说得出口——而它正是"主人一次
+    # 点了好几个新标签"能被一次办掉的入口。
+    ("tag_create", "titles"): {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "一次新建多个标签时的名字清单（只建一个就别用它，填 title）",
+    },
 }
 
 

@@ -1139,14 +1139,28 @@ SKILLS: list[Skill] = [
             "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统定：判成明确命令就直接办、判不出来才弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
         ),
         inputs={"title": "新标签的名字",
+                "titles": "（可选）**一次新建多个**标签时的名字数组（如 [\"Git\", \"SVN\"]）："
+                          "主人一口气点了好几个新标签才用它，单个标签仍填 title；"
+                          "父标签与颜色对整批共用",
                 "parent_tag": "（可选）父标签的名字，建二级标签时给（不是 id）",
                 "color": "（可选）用户点了名的颜色：中文色名或站内色板色值；没说就不填"},
         plan=[("create_tag", {"title": "$title", "parent_tag": "$parent_tag", "color": "$color"})],
         complete_when="create_tag 返回了新建或复用的标签 id",
+        # 契约写在**提示词正文**里而不是只写进 description（20261008）：native 档把
+        # description 从散文菜单里删掉（只留 schema 那一份），而"一次点名好几个新标签
+        # 时该填哪一格"是**必须怎么做**，不是"这技能是干什么用的"——同 `content_query`
+        # 成对点名那条契约的教训（理由与实测见 `build_planner_context` 的头注）。
+        planner_contract=(
+            "主人一句话点了**好几个新标签**（「建 A 和 B 两个标签」）→ 仍然只选本技能"
+            "**一次**，名字逐个填进 `titles` 数组一起交代；只填第一个、或把本技能"
+            "重复选好几遍，漏掉的名字在系统里**不留任何痕迹**（主人只能自己发现少建了）。"
+            "只建一个时照旧填 `title`"),
         reply_contract=(
             "只能按 create_tag 的实际返回作答：返回「已新建…（id=N）」就说新建好了并给出 id、层级"
             "与**颜色**（返回里给了「颜色：粉色（#eb2f96）」就把中文色名与色值都写进回复——"
             "前端据此画色块，色块本身不用你画）；"
+            "**一批里有好几个标签时逐个说、一个都不许省**：本轮台账里有几条回执就报几件，"
+            "哪一件被挡下或失败就点名说它没建成，**绝不许把没办的说成办好了**；"
             "返回「已经存在…复用」就如实说本来就有、没有重复创建（返回里带现有颜色就一并说清，"
             "与用户点名的颜色不一致时要点明这一差别）；"
             "返回失败/未确认时如实说没建成，**不得用完成式声称已创建**。"
@@ -2293,6 +2307,46 @@ def _write_arg(value) -> str:
     return str(value).strip()
 
 
+def _write_list_arg(value) -> list[str]:
+    """写技能的**数组**参数值 → 值清单（保序、去重、去空）。
+
+    与 `_write_arg` 同一套取向（不做类型强转、不吞引用、宁可少说），差在收的是数组：
+      · 单个字符串也认——文本档 planner 把 `titles: ["Git","SVN"]` 写成
+        `titles: "Git"` 是同一层意思的另一种写法，不是错误（判它错只会白烧一轮）；
+      · 对象元素里认得出 `title` / `name` 就取出那个字符串（原生档的 schema 把
+        items 收成 string，文本档收不紧——同族形态在别的槽位实测出现过）；
+      · 认不出的元素**丢掉**。它不可能是主人说的名字，而让一个 `{'a': 1}` 变成
+        标签名比少建一个糟得多；少掉的那一个在确认卡上看得到（卡面逐条印名字），
+        主人核对时就能纠正——所以这条不是静默的。
+    """
+    items = value if isinstance(value, list) else [value]
+    out: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            item = item.get("title") or item.get("name")
+        if isinstance(item, list) or isinstance(item, dict):
+            continue
+        s = _write_arg(item)
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def _tag_names(params: dict) -> list[str]:
+    """`tag_create` 的目标名字清单：`title`（单数槽位）与 `titles`（复数槽位）合并。
+
+    两个槽位**都读**、而不是二选一：老语料里"建一个"一直填 `title`，新开的 `titles`
+    只该在主人一口气点了好几个名字时出现，但两格同时有值是**合法输入**（原话里既
+    点了一个名字又列了一串）——合并去重才是主人真正说的那一批。顺序先 `title`
+    后 `titles`：TOOLS 行与卡面都按这个顺序印，主人核对时对得上自己的话。
+    """
+    out = _write_list_arg(params.get("title"))
+    for one in _write_list_arg(params.get("titles")):
+        if one not in out:
+            out.append(one)
+    return out
+
+
 _TEMPLATE_TOKEN_RE = re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -2320,11 +2374,16 @@ def _unfilled_placeholder(params: dict) -> tuple[str, str] | None:
     if not isinstance(params, dict):
         return None
     for key, val in params.items():
-        if not isinstance(val, str):
-            continue
-        tok = val.strip()
-        if tok == "$" + str(key) or _TEMPLATE_TOKEN_RE.match(tok):
-            return str(key), tok
+        # **数组元素逐项看**（20261008，`tag_create.titles` 新开的复数槽位）：元素
+        # 恰好是模板记号时的形状与单数槽位一模一样（`{"titles": ["$titles"]}`），
+        # 而下面那层写展开会把每一项都变成一次真写——只看顶层 str 会整格漏过去，
+        # 印出一张写着记号的卡，主人一点，站里就多一个叫 `$titles` 的标签。
+        for one in (val if isinstance(val, list) else [val]):
+            if not isinstance(one, str):
+                continue
+            tok = one.strip()
+            if tok == "$" + str(key) or _TEMPLATE_TOKEN_RE.match(tok):
+                return str(key), tok
     return None
 
 
@@ -2428,11 +2487,10 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
         return f"{tool_name}({json.dumps(args, ensure_ascii=False)})"
 
     if name == "tag_create":
-        title = _write_arg(params.get("title"))
-        if not title:
+        names = _tag_names(params)
+        if not names:
             return [], ("tag_create 缺少标签名（title）：不调用任何工具，"
                         "如实向主人问清要建的标签叫什么名字")
-        args = {"title": title}
         # 颜色（20260921）：点名了就**在这里解析成站内色板 hex**——确定性、且只有
         # 这一处知道色板；执行轮（含确认轮）拿到的就是色值，弹窗问句与工具参数都
         # 从同一个值渲染。点名的色认不出 → 零工具 + 注记（**绝不回落到哈希**）。
@@ -2441,17 +2499,39 @@ def _expand_write_skill(skill, params: dict) -> tuple[list[str], str]:
         if color_spec and hexval is None:
             return [], (f"color「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}）："
                         "不调用任何工具，如实向主人说明只有这几种颜色，请他挑一个")
-        if hexval:
-            args["color"] = hexval
         pname = _write_arg(params.get("parent_tag"))
-        if pname:
-            args["parent_tag"] = pname
+        # **一名一 spec**（20261008 批：主人一次点名好几个新标签时不许只建第一个）。
+        # 此前这一支恒产出一条 spec，于是"建 Git 和 SVN 两个标签"这种话在契约层就
+        # 表达不出来：planner 只能挑一个填进 title，另一个在**没有任何一层**留下痕迹
+        # ——实测连着两轮原型一模一样的一张单标签卡（trace `20261008T065806` /
+        # `20261008T065826`），主人说"两个你漏了"也没用。现在 `titles` 与 `title`
+        # 合并成 N 条同形 spec，N≥2 时下游**现成的**多 spec 通道全部自动接上：确认卡
+        # 印成清单（「全部办」/「只办第 N 件」，`render_confirm_text`）、逐条执行、
+        # 逐条回执。父标签与颜色是**整批共用**的（主人说「在编程下面建 A 和 B」时
+        # 只有一个父标签），所以循环里带着同一份值。
+        # 展开层的三条防线一个都没松：名字空 → 上面已零工具；名字已被站里占用 →
+        # `adminops.reached_specs` 把**那一条**摘掉（其余照弹卡，不是整批放行）；
+        # 名字在主人这句话里找不到出处 → `_ident_grounded` 逐 spec 判、至少一条没据
+        # 就退成弹卡给人眼看（见 graph._confirm_popup 的循环）。
+        specs: list[str] = []
+        for nm in names:
+            args = {"title": nm}
+            if hexval:
+                args["color"] = hexval
+            if pname:
+                args["parent_tag"] = pname
+            specs.append(_spec("create_tag", args))
         # 注记只写**已知事实**：父标签名是 planner 给的，它是不是真存在由工具去核，
         # 这里**不许**替它断言层级（旧注记无条件写「（一级标签）」——参数被吞掉时
         # 那句就成了一个肯定的错误事实，落进执行记忆被下一轮照念）。
         said = f"挂在父标签「{pname}」下" if pname else "一级标签（未给父标签）"
-        return [_spec("create_tag", args)], (
-            f"新建标签「{title}」（{said}）"
+        if len(names) > 1:
+            head = ("新建标签" + "、".join(f"「{n}」" for n in names)
+                    + f"（共 {len(names)} 个，{said}）")
+        else:
+            head = f"新建标签「{names[0]}」（{said}）"
+        return specs, (
+            head
             + (f"，颜色 {A.describe_color(hexval)}" if hexval else "")
             + "；同名已存在时工具会复用而不是重复建")
 
