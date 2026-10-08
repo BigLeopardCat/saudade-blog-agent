@@ -32,6 +32,16 @@ agent 包"来把它藏起来。`rag` 是三处里最低的一层（`agent/decisi
 切分规则与 20260901 起的索引完全一致：只认 `#`/`##`/`###`（1-3 级），标题行本身
 不进 `text`；首个标题之前的内容归到 `section=文章标题`（`level=0`）。**不要把
 `#{1,3}` 放宽到 4-6 级**：索引侧的 chunk 边界一变，检索分数与 golden 全部跟着漂。
+
+**父标题与它的子节是两个平级的 chunk**（`## 6. 防幻觉…` 与 `### 6.1 …` 都在列表里），
+于是**父标题自己的 `text` 常常是空串**——内容全都住在子节里。实测线上语料 10 篇
+**317 节里 47 节正文为空**（19 节的正文住在子节里、28 节是真空节；最长的一篇 25 节里 3 节，
+另一篇 178 节里 28 节）。这不是
+边角形状，是常态，两处调用点各有一条判据挡着：
+
+- `pick` 命中一个空正文的父标题时，**连带把子节并进来**（见 `_with_children`）；
+- `excerpt` 的未展开清单**不列空正文的节**——把读不出内容的节名报成"可以按它取回
+  全文"是一句兑现不了的承诺，模型照它发一次按节读取只会空手而归（见 `excerpt`）。
 """
 
 from __future__ import annotations
@@ -100,6 +110,79 @@ def _lead_num(s: str) -> str:
     return m.group(1) if m else ""
 
 
+def _is_lossy(content: str, chunks: list[dict]) -> bool:
+    """chunk 列表是不是**有损**的（正文里有标题行没能成为 chunk）。
+
+    `split` 对"标题行**紧跟着另一个标题行**"的那一个不产 chunk（`cur == []`：
+    标题前一行也是标题，中间一行正文都没有）。实测线上语料 10 篇里 15 处，
+    **全部在同一篇的代码块里**（`# <<<<<<< HEAD`、`# drop = 删除该提交` …）。
+
+    为什么这件事必须先判：**"谁是谁的子节"是靠层级推的**。丢掉的那个标题不在列表里，
+    它后面的子节就会被算到**前一个**标题头上 ⇒ "读第 4 节"会把第 5 节的内容一起端出来，
+    而且是**无声**的。有损时一律**不做任何层级推导**（只认自身正文），代价是那一篇
+    拿不到并入的好处、退回"这一节没有正文"的如实分支——过度并比比读不到更坏。
+    """
+    heads = sum(1 for ln in (content or "").split("\n") if _HEADING_RE.match(ln.strip()))
+    lead = 1 if chunks and not chunks[0].get("level") else 0   # 首个标题之前的正文
+    return len(chunks) - lead != heads
+
+
+def _child_span(chunks: list[dict], i: int, lossy: bool = False) -> tuple[int, int]:
+    """第 i 个 chunk 的**子节区** `[起, 止)`：紧跟其后、层级更深的那一段。
+
+    父标题与子节是平级 chunk（见模块头注），"属于这一节的还有什么"只能靠层级推；
+    `lossy`（见 `_is_lossy`）时返回空区间——列表不完整时这层推导不成立。
+    """
+    if lossy:
+        return i + 1, i + 1
+    lvl = int(chunks[i].get("level") or 0)
+    j = i + 1
+    while j < len(chunks) and int(chunks[j].get("level") or 0) > lvl:
+        j += 1
+    return i + 1, j
+
+
+def _is_readable(chunks: list[dict], i: int, lossy: bool = False) -> bool:
+    """这一节发一次按节读取，能不能真的拿回正文。
+
+    两种能：① 自身有正文；② 自身没正文但**子节有**（取回时会连子节一起给，见
+    `_with_children`）。两者都不满足 = 真空节（线上确有：代码块里的 `# 注释` 行被
+    当成标题，下一条注释行又把它截断 ⇒ 一串 0 字的"节"）。
+    """
+    start, end = _child_span(chunks, i, lossy)
+    return bool((chunks[i].get("text") or "").strip()) or end > start
+
+
+def readable_sections(content: str, title: str = "") -> list[str]:
+    """真的读得出来的小节名（顺序同正文）——空节的候选清单该用这个，别用全部小节。"""
+    chunks = split(content, title, shortcut=False)
+    lossy = _is_lossy(content, chunks)
+    return [c["section"] for i, c in enumerate(chunks)
+            if c["level"] and _is_readable(chunks, i, lossy)]
+
+
+def _with_children(chunks: list[dict], i: int, lossy: bool = False) -> dict:
+    """命中那一节 → 自身正文为空时，**把子节的正文并进来**（返回里 `subsections` 记下并入了谁）。
+
+    **只在自身正文为空时才并入**：父标题没有正文是常态（见模块头注，线上 317 节里
+    47 节正文为空、其中 19 节的内容住在子节里），内容全都住在 `### 6.1 …` 里。只回父标题自己的 `text` 就是一个空串，
+    而调用方是照着"命中"这件事说"读到了节选"的——模型拿到空帧、也没有任何下一步可走
+    （现场：问"第 6 节写了什么"，读回来是空的，模型只能说读不到，重试一次还是同一格）。
+    并入之后"读第 6 节"才等于人话里的读第 6 节。
+    **自身有正文时正文一字不变**：那种形状下父标题自己就是要读的东西，把子节悄悄塞
+    进来只会让每一帧无谓变长（此时 `subsections` 是空的——它记的是**并入了谁**，
+    不是"有没有子节"，调用方据此说的那句话才不会失真）。
+    """
+    base = chunks[i]
+    start, end = _child_span(chunks, i, lossy)
+    if (base.get("text") or "").strip() or end <= start:
+        return {**base, "subsections": []}
+    kids = chunks[start:end]
+    return {**base,
+            "text": "\n\n".join(render(k) for k in kids),
+            "subsections": [k["section"] for k in kids]}
+
+
 def pick(content: str, want: str, title: str = "") -> dict | None:
     """按指称取一个小节；取不到/不唯一 → None（调用方据此回"可用小节"清单）。
 
@@ -110,21 +193,28 @@ def pick(content: str, want: str, title: str = "") -> dict | None:
          时返回 None，让调用方把候选列出来，而不是赌一个。
     不唯一时给候选清单比给一个可能错的小节好：模型照清单改一次指称即可（或直接
     走 ID/编号），而赌错一次就是"读了别的节还声称读了"。
+
+    返回的 `text` 经 `_with_children` 过一道（空正文的父标题把子节并进来），
+    `subsections` = **这次并入了哪些子节名**（没并入就是空列表——它记的是"正文里
+    含了谁"，不是"有没有子节"）。调用方要用它把"这一节含哪些子节"如实说清楚，
+    否则模型不知道子节的存在，只能拿 `section=` 一个名字一个名字地试。
     """
     w = _norm(want)
     if not w:
         return None
-    chunks = [c for c in split(content, title, shortcut=False) if c["level"]]
+    all_chunks = split(content, title, shortcut=False)
+    lossy = _is_lossy(content, all_chunks)          # 有损 ⇒ 不推层级（见 _is_lossy）
+    chunks = [c for c in all_chunks if c["level"]]
     if not chunks:
         return None
-    for c in chunks:
+    for i, c in enumerate(chunks):        # ① 全称
         if _norm(c["section"]) == w:
-            return c
-    for c in chunks:                      # 编号：want 是"9"或"9."都认
+            return _with_children(chunks, i, lossy)
+    for i, c in enumerate(chunks):        # ② 编号：want 是"9"或"9."都认
         if _lead_num(c["section"]) and _lead_num(c["section"]) == _lead_num(w):
-            return c
-    hits = [c for c in chunks if w in _norm(c["section"])]
-    return hits[0] if len(hits) == 1 else None
+            return _with_children(chunks, i, lossy)
+    hits = [i for i, c in enumerate(chunks) if w in _norm(c["section"])]
+    return _with_children(chunks, hits[0], lossy) if len(hits) == 1 else None
 
 
 def candidates(content: str, want: str, title: str = "") -> list[str]:
@@ -159,7 +249,8 @@ def excerpt(content: str, cap: int, title: str = "") -> str:
 
     - 全文装得下 → 原样返回（99% 的文章走这条，行为与旧实现完全一致）；
     - 装不下 → 依次保留整节直到预算（`cap - _OUTLINE_RESERVE`），其余整节以标题
-      清单落在文末（含取回说明）；
+      清单落在文末（含取回说明）；**空正文的节不进清单**——它读不出内容，列上去
+      等于指一条死路（它的子节另有自己的条目，不会因此漏掉）；
     - 只有一节（正文没有小节结构）或首节自己就超预算 → 退回**头截断**并标注，
       此时至少要说清"截了"（旧实现的问题不是截断本身，而是截断无声）。
 
@@ -171,26 +262,34 @@ def excerpt(content: str, cap: int, title: str = "") -> str:
     chunks = split(text, title, shortcut=False)
     if len(chunks) <= 1:
         return _head_cut(text, cap, "全文无小节结构")
+    lossy = _is_lossy(text, chunks)
     budget = max(0, cap - _OUTLINE_RESERVE)
     kept: list[str] = []
-    dropped: list[str] = []
+    dropped: list[int] = []
     used = 0
-    for c in chunks:
+    for i, c in enumerate(chunks):
         piece = render(c)
         if used + len(piece) <= budget or not kept:   # 首节无论多大都保留
             kept.append(piece)
             used += len(piece)
         else:
-            dropped.append(c["section"])
+            dropped.append(i)
+    # 清单里只列**真的读得出来**的节（`_is_readable`：自身有正文，或正文在子节里）。
+    # 列一个空节就是一句兑现不了的承诺——模型照它发一次按节读取，拿回来的是"这一节
+    # 没有正文"，白花一轮；而它的子节本来就另有自己的条目，不会因此漏掉。
+    # 清单被滤成空时退回原名（宁可列空的，也不静默少说一句"还有多少节没展开"）。
+    listed = [chunks[i]["section"] for i in dropped
+              if _is_readable(chunks, i, lossy)]
+    listed = listed or [chunks[i]["section"] for i in dropped]
     if not dropped:                    # 预算恰好装下（走上面的 len<=cap 分支才正常）
         return text[:cap]
     out = "\n\n".join(kept)
-    tail = "\n\n" + outline_text(dropped)
+    tail = "\n\n" + outline_text(listed)
     room = cap - len(out)
     if len(tail) <= room:
         return out + tail
     compact = ("\n\n" + UNEXPANDED_MARK + "："
-               + " / ".join(f"§{s}" for s in dropped[:_OUTLINE_MAX_ITEMS]))
+               + " / ".join(f"§{s}" for s in listed[:_OUTLINE_MAX_ITEMS]))
     if len(compact) <= room:           # 放不下取回说明时，至少把"缺了哪几节"留下
         return out + compact
     # 预算被首节吃光，连清单都放不下：退回头截断（宁可说"截了"，也不静默丢节）

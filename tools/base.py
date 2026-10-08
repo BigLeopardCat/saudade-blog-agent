@@ -569,22 +569,45 @@ def _read_section(data: dict, article_id, want: str) -> ToolResult:
       - `noteId`/`sectionText`：planner 的"未展开小节"清单要照抄这个 id 再读一次。
     取不到小节时**不返回空**：把候选小节名列出来才是可行动的（模型改一次指称即可），
     说"没找到"而不给候选，等于让它再赌一次。
+
+    **读到了说读到了、没读到说没读到**（20261009）：判据是 `sectionText` 空不空，
+    不是 `pick` 返没返 None。`pick` 对"父标题自身没有正文"的节会把子节并进来
+    （线上语料 10 篇 317 节里有 47 节正文为空，其中 19 节的正文住在子节里），`note` 里点名并入了哪些子节；
+    **真空节**（连子节都没有——例如代码块里的 `# 注释` 行被当成标题、下一条注释行
+    又把它截断）走"这一节没有正文"那一条支。此前两种共用一个 note：模型收到空帧却
+    被告知"本节为节选读取"，只能如实说读不到，再试一次落到同一格（无路可走）。
     """
     content = data.get("noteContent") or data.get("content") or ""
     title = data.get("noteTitle") or data.get("title") or ""
     hit = _text_sections.pick(content, want, title)
-    if hit is None:
+    body = (hit["text"] if hit else "") or ""
+    if hit is not None and body.strip():
+        subs = hit.get("subsections") or []
         return ok(str({
-            "noteKey": article_id, "noteTitle": title, "readSection": str(want),
-            "sectionText": "",
-            "availableSections": _text_sections.candidates(content, want, title)[:40],
-            "note": "该文章没有标题匹配此指称的小节（本节未读到任何内容）；"
-                    "可用小节见 availableSections，请照其中的名字或编号重试。",
+            "noteKey": article_id, "noteTitle": title, "readSection": hit["section"],
+            "sectionText": hit["text"],
+            "note": (f"本节为节选读取（只含《{hit['section']}》及其子节 "
+                     + " / ".join(f"§{s}" for s in subs) + "，不含文章其他部分）。")
+                    if subs else
+                    f"本节为节选读取（只含《{hit['section']}》这一小节，不含文章其他部分）。",
         }))
+    if hit is None:
+        # 指称对不上：候选按指称过滤（最接近的那些），模型改一次名字就能再来
+        cands = _text_sections.candidates(content, want, title)[:40]
+        note = ("该文章没有标题匹配此指称的小节（本节未读到任何内容）；"
+                "可用小节见 availableSections，请照其中的名字或编号重试。")
+    else:
+        # 指称对上了，但那一节里一个字都没有：候选换成**真读得出内容**的那些
+        # （按指称过滤只会把这一个死节名还给它，等于让它原地再赌一次）
+        cands = _text_sections.readable_sections(content, title)[:40]
+        note = (f"《{hit['section']}》这一节没有正文内容（它只是一个分组标题，其下也"
+                "没有可读的内容）；请改读别的小节——availableSections 里是这篇文章"
+                "真取出得到正文的那些。")
     return ok(str({
-        "noteKey": article_id, "noteTitle": title, "readSection": hit["section"],
-        "sectionText": hit["text"],
-        "note": f"本节为节选读取（只含《{hit['section']}》这一小节，不含文章其他部分）。",
+        "noteKey": article_id, "noteTitle": title, "readSection": str(want),
+        "sectionText": "",
+        "availableSections": cands,
+        "note": note,
     }))
 
 

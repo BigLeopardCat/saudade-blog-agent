@@ -70,6 +70,38 @@ def body_of(sec: str) -> str:
 LONG = TITLE + "\n\n开头段落。" * 40 + "\n\n" + "\n\n".join(
     f"## {s}\n{body_of(s)}" for s in SEC_NAMES)
 
+# ── 20261009 空正文小节：线上真实形状（note 19 / note 16）──────────────────
+# `split` 把父标题与子节切成**两个平级的 chunk**，于是父标题自己的 `text` 常常是
+# 空串——内容全住在 `### x.y` 里。实测线上语料 10 篇 **317 节里 47 节正文为空**
+# （19 节的正文在子节里、28 节是真空节）。这不是边角：现场 trace `20261009T041136`
+# 里主人问的第 6 节就是这一族，三跑全部空手而归（模型如实说读不到，重试落到同一格）。
+NEST = (TITLE + "\n\n开头段落。\n\n"
+        + "## 5. 工具系统\n\n### 5.1 子平台\n工具正文MARK5\n\n"
+        + "## 6. 防幻觉与可靠性加固（踩坑沉淀）\n\n"
+        + "### 6.1 状态感知：以 context 为准\n子节正文MARK61\n\n"
+        + "### 6.2 执行回执\n子节正文MARK62\n\n"
+        + "## 7. LLM 与配置\n配置正文MARK7\n\n"
+        + "## 8. 真空节\n\n## 9. 部署与运维\n部署正文MARK9")
+# 有损列表：`split` 会整个丢掉"标题行紧跟另一个标题行"的那一个（`cur == []`）。
+# 线上 15 处，**全部是代码块里的 `# 注释` 行**（note 16）。丢掉的那个标题不在列表里，
+# "谁是谁的子节"就推不准了 —— 它后面的 `## 5.` 会被算到**前一个**标题头上。
+LOSSY = (TITLE + "\n\n## 3. 某节\n某正文MARK3\n\n"
+         + "# 场景：同事改了同一个文件\n\n"
+         + "# <<<<<<< HEAD\n"                    # 紧跟标题行 ⇒ split 丢掉它
+         + "## 5. 解决冲突\n\n### 5.1 处理\n处理正文MARK51")
+# 未展开清单那一支：预算用尽之后落在清单里的那一段，混着一个真空节。
+# 空节**自己装得下就说不上"未展开"**（9 个字符），所以第一节要填到"再放一个空节就
+# 刚好超"——这个长度按模块自己的常量算，别写死数字（改了 `_OUTLINE_RESERVE` 时要跟着动
+# 的是夹具，不是代码）。
+_OCAP = 1000
+_OBUDGET = _OCAP - sections._OUTLINE_RESERVE
+_HEAD0 = len(TITLE) + 1                       # 开头段那一节的实际长度（TITLE + 换行）
+_FIRST = "## 1. 第一节\n"
+_FILL = _OBUDGET - _HEAD0 - len(_FIRST) - 4   # 填到"再放一个空节(9 字)就超"
+OUTLINE_MIX = (TITLE + "\n\n" + _FIRST + "甲" * _FILL
+               + "\n\n## 2. 真空节\n\n## 3. 第三节\n" + "乙" * 300
+               + "\n\n### 3.1 子节\n" + "丙" * 300)
+
 print("① 切分：与索引同源（chunk_note 只是转发）")
 check("chunk_note 输出 == sections.split 的 section/text 投影",
       chunk_note(TITLE, LONG) == [{"section": c["section"], "text": c["text"]}
@@ -108,6 +140,60 @@ check("pick 取到的是该节正文（不含标题行）",
 check("短文（无小节结构）pick 返回 None",
       sections.pick("短正文", "1", TITLE) is None)
 
+print("②b 空正文的父标题：连子节一起给（20261009）")
+_h6 = sections.pick(NEST, "6")
+check("父标题自身正文为空 ⇒ 并入子节正文（否则就是一个空串，模型无从下手）",
+      "MARK61" in _h6["text"] and "MARK62" in _h6["text"], f"{len(_h6['text'])} 字")
+check("只并到**本节的子节区**为止（下一节 §7 的正文不许进来）",
+      "MARK7" not in _h6["text"])
+check("子节标题行也在正文里（模型看得见自己读到的是哪几节）",
+      "### 6.1 状态感知：以 context 为准" in _h6["text"])
+check("`subsections` 记下并入了谁（调用方据此如实说「含子节」）",
+      _h6["subsections"] == ["6.1 状态感知：以 context 为准", "6.2 执行回执"],
+      str(_h6["subsections"]))
+check("编号指称走同一条路（线上那三跑就是 `section=\"6\"`）",
+      sections.pick(NEST, "6")["text"] == _h6["text"])
+check("自身有正文的节**一字不变**（只回自身；`subsections` 空 = 没有并入谁）",
+      "MARK7" in sections.pick(NEST, "7")["text"]
+      and sections.pick(NEST, "7")["subsections"] == []
+      and "MARK9" not in sections.pick(NEST, "7")["text"])
+check("真空节（无正文、无子节）如实回空串 + `subsections` 空",
+      sections.pick(NEST, "8")["text"] == ""
+      and sections.pick(NEST, "8")["subsections"] == [])
+check("`readable_sections` 只列读得出来的（真空节出局，空正文的父标题进得来）",
+      sections.readable_sections(NEST, TITLE) ==
+      ["5. 工具系统", "5.1 子平台", "6. 防幻觉与可靠性加固（踩坑沉淀）",
+       "6.1 状态感知：以 context 为准", "6.2 执行回执", "7. LLM 与配置", "9. 部署与运维"],
+      str(sections.readable_sections(NEST, TITLE)))
+_fc = [c for c in sections.split(NEST, TITLE, shortcut=False) if c["level"]]
+_fi = {c["section"]: k for k, c in enumerate(_fc)}
+check("`_is_readable` 的两种能：自身有正文 / 正文在子节里；真空节两种都不是",
+      sections._is_readable(_fc, _fi["6. 防幻觉与可靠性加固（踩坑沉淀）"])
+      and sections._is_readable(_fc, _fi["7. LLM 与配置"])
+      and not sections._is_readable(_fc, _fi["8. 真空节"]))
+check("正控：结构完整的文章**不算有损**（并入照常发生）",
+      not sections._is_lossy(NEST, sections.split(NEST, TITLE, shortcut=False))
+      and not sections._is_lossy(LONG, sections.split(LONG, TITLE, shortcut=False)))
+
+print("②c 有损列表：丢过标题的文章不做层级推导（20261009）")
+_lc = sections.split(LOSSY, TITLE, shortcut=False)
+_li = {c["section"]: k for k, c in enumerate(_lc)}
+check("判得有损（正文里 6 个标题行，chunk 只有 5 个）",
+      sections._is_lossy(LOSSY, _lc))
+check("红基线：**不戴守卫**时那条走法确实越界——`# 场景：…`（L1）后面跟着被丢掉的 "
+      "`# <<<<<<< HEAD`，于是 §5/§5.1 被算成了它的子节",
+      sections._child_span(_lc, _li["场景：同事改了同一个文件"], False)[1]
+      > _li["场景：同事改了同一个文件"] + 1
+      and sections._child_span(_lc, _li["场景：同事改了同一个文件"], True)[1]
+      == _li["场景：同事改了同一个文件"] + 1)
+check("有损 ⇒ 一律不并入（宁可只回自身，也不把别人的内容端出来；"
+      "过度并入会让模型以为自己读到了这一节）",
+      "MARK51" not in sections.pick(LOSSY, "场景：同事改了同一个文件")["text"]
+      and sections.pick(LOSSY, "场景：同事改了同一个文件")["subsections"] == [])
+check("有损时 `readable_sections` 只认自身正文（不认子节那条路）",
+      "场景：同事改了同一个文件" not in sections.readable_sections(LOSSY, TITLE)
+      and "5.1 处理" in sections.readable_sections(LOSSY, TITLE))
+
 print("③ excerpt：整节取舍 + 未展开清单")
 out = sections.excerpt(LONG, CAP, TITLE)
 check("输出不越上限", len(out) <= CAP, f"{len(out)} > {CAP}")
@@ -132,6 +218,21 @@ check("单节自己就超上限 → 退回头截断（仍带标注）",
       len(out2) <= CAP and "原文共" in out2 and "无小节结构" in out2)
 check("清单最多列 12 节，超出只说数量", "另有" not in sections.outline_text(SEC_NAMES[:10]))
 check("超过 12 节时折叠计数", "另有 8 节未列出" in sections.outline_text(SEC_NAMES * 2))
+# 20261009：清单里**不列空节**——列一个读不出内容的节名，就是让模型照它去发一次
+# 按节读取、再空手回来（清单末句写的是"即可取回该节全文"，对空节兑现不了）。
+_mix = sections.excerpt(OUTLINE_MIX, _OCAP, TITLE)
+check("未展开清单不列真空节（`## 2.` 也没进正文 ⇒ 它确实是被丢掉的那一个）",
+      "§2. 真空节" not in _mix and "## 2. 真空节" not in _mix, _mix[-160:])
+check("同一段里读得出来的节照列（只滤掉空的那一个，不是把整段清单吞了）",
+      "§3. 第三节" in _mix and "§3.1 子节" in _mix, _mix[-160:])
+check("正控：清单没被滤空时**不退回原名**（§2 的位置不该冒出「另有 N 节未列出」）",
+      "另有" not in _mix, _mix[-160:])
+check("滤掉一节不改「怎么取回」那句", "get_article_detail" in _mix and "section=" in _mix)
+check("清单与 `pick` 同一把尺子：列进去的节真读得出正文",
+      all((sections.pick(OUTLINE_MIX, s) or {}).get("text", "").strip()
+          for s in ("1. 第一节", "3. 第三节", "3.1 子节")))
+check("正控：结构完整的文章清单**一字不变**（LONG 里没有空节）",
+      all(f"§{s}" in sections.excerpt(LONG, CAP, TITLE) for s in SEC_NAMES[6:]))
 
 print("④ frame_excerpt：repr 层的两个坑")
 frame = str({"noteKey": 19, "key": 19, "noteTitle": TITLE,
@@ -227,6 +328,40 @@ amb = _read_section({"noteKey": 19, "noteTitle": TITLE, "noteContent": LONG}, 19
 check("指称不唯一 → 走候选分支而不是赌一个",
       "MEM" not in ast.literal_eval(str(amb))["sectionText"] + "X"
       and ast.literal_eval(str(amb))["sectionText"] == "")
+
+print("⑥b 按节读回：读到了说读到了、没读到说没读到（20261009）")
+# 被锁住的问题（trace `20261009T041136`，note 19 §6）：`pick` 命中了一个**自身正文
+# 为空**的父标题，`_read_section` 按"命中"这件事说"本节为节选读取"，而 `sectionText`
+# 是空串 —— 模型拿到一个空帧、被告知读到了，只能如实说读不到；下一轮的 `section="6"`
+# 落到同一格（那一轮的重复还被 `data_repeat` 挡了）。判据是 `sectionText` 空不空，
+# **不是** `pick` 返没返 None。
+_nd = {"noteKey": 19, "noteTitle": TITLE, "noteContent": NEST}
+_d6 = ast.literal_eval(str(_read_section(_nd, 19, "6")))
+check("空正文的父标题：读回来的是 §6 **加上它那几个子节**的正文（不再是空串）",
+      "MARK61" in _d6["sectionText"] and "MARK62" in _d6["sectionText"]
+      and _d6["readSection"] == "6. 防幻觉与可靠性加固（踩坑沉淀）",
+      f"{len(_d6['sectionText'])} 字")
+check("note 如实说「含子节」并列名（不许谎称「只含这一小节」——那会让模型"
+      "以为子节不在手里，再点名去读一遍）",
+      "及其子节" in _d6["note"] and "§6.1 状态感知：以 context 为准" in _d6["note"],
+      _d6["note"][:60])
+check("普通小节（自身有正文、无子节）的 note **一字不变**（既有行为不破）",
+      ast.literal_eval(str(_read_section(_nd, 19, "7")))["note"]
+      == "本节为节选读取（只含《7. LLM 与配置》这一小节，不含文章其他部分）。")
+_e = ast.literal_eval(str(_read_section(_nd, 19, "8")))
+check("真空节：`sectionText` 空 ⇒ **不许**说「本节为节选读取」"
+      "（此前两种形状共用一个 note，模型收到空帧却被告知读到了）",
+      _e["sectionText"] == "" and "本节为节选读取" not in _e["note"])
+check("真空节的 note 说清它是什么，并给候选（可行动）",
+      "没有正文内容" in _e["note"]
+      and _e["availableSections"] == sections.readable_sections(NEST, TITLE),
+      _e["note"][:60])
+check("真空节的候选里没有它自己（按指称过滤只会把这个死节名原样还给它）",
+      "8. 真空节" not in _e["availableSections"], str(_e["availableSections"]))
+check("真空节仍带 noteTitle（跨轮指代锚点不因空节而丢）",
+      _doc_title(str(_read_section(_nd, 19, "8"))) == TITLE)
+check("真空节 kind 仍是 ok（有内容可读——候选清单——不是「空结果」）",
+      getattr(_read_section(_nd, 19, "8"), "kind", "ok") == "ok")
 
 print("⑦ 接线：工具签名与调用面")
 src = (ROOT / "tools" / "base.py").read_text(encoding="utf-8")
