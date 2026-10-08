@@ -910,6 +910,60 @@ check("未确认 + 反问确认 → 放行（正解不许被吞）",
       out.get("done") is True and not out.get("fallback_text"),
       str(out.get("fallback_text", ""))[:60])
 
+print("⑨f 混合轮：被挡下的是这一篇、回复说的是那一篇 ⇒ 5a 不许整轮否认（20261008）")
+# 现场 trace `20261008T064432`：主人一句「把 id 13、11、10 设为私密」，13 真写成功、
+# 11 被 `target_mismatch` 挡下（枚举漏认，那一半在 tests/test_admin_write.py ⑮ 锁住）。
+# narrator 写的收尾本已如实分列两条，5a 却只看见「__ERROR__ 在场 + 回复里有完成式声称」
+# 就把**整条回复**换成兜底，套上「有一篇我没有动」——把真发生过的那次写也一起否认了，
+# 与系统台账当场矛盾。判据收窄成"这句声称**指得到**被挡下那篇吗"，四条边界都要锁：
+# 指的是别的篇 ⇒ 放行；指的是被挡下那篇 ⇒ 照旧打回；一个 id 都没点名 ⇒ 照旧打回
+# （泛指声称正是 5a 要拦的形状）；受阻项没有 article_id ⇒ 判据不启用、行为一字不变。
+from agent import adminops as A  # noqa: E402
+
+
+def _mixed_state(reply: str, *, blocked_aid: int = 11, got: int = 11,
+                 spec: str = "", named=(13,)) -> dict:
+    """混合轮的最小状态：一篇写成功、另一篇留下 __ERROR__ 帧与一条 blocked。"""
+    return {"plan": plan_encode(instantiate_plan("article_status",
+                                                 {"article_id": 13, "status": "private"})),
+            "done": False, "plan_rounds": 1,
+            "blocked": [{"spec": spec or f'set_article_status({{"article_id": {blocked_aid},'
+                                          ' "status": "private"})',
+                         "tool": "set_article_status",
+                         "reason": A.REASON_TARGET_MISMATCH,
+                         "skill": "article_status", "result": "（略）"}],
+            "messages": [
+                HumanMessage(content="把 id 13、11、10 设为私密"),
+                ToolMessage(content=A.target_conflict_frame("set_article_status", set(named), got),
+                            tool_call_id="execute_1", name="set_article_status"),
+                AIMessage(content=reply),
+            ]}
+
+
+out = gate_node(_mixed_state("- **id 13《TEST8》**：已经成功 **公开 → 私密**\n"
+                             "- **id 11**：这一篇我不敢认，没有动，你说个名字我再试。"))
+check("回复点名的是**别的篇**（13，成功）→ 放行，不许把真发生过的那次写也否认掉",
+      out.get("done") is True and not out.get("fallback_text"),
+      str(out.get("fallback_text", ""))[:60])
+
+out = gate_node(_mixed_state("- **id 11**：已经成功 **公开 → 私密**\n"
+                             "- id 13 那篇也顺手改了。"))
+check("回复点名的是**被挡下那篇**（11）→ 照旧打回（谎称已改仍是谎称）",
+      bool(out.get("fallback_text")), str(out.get("fallback_text", ""))[:60])
+
+out = gate_node(_mixed_state("好啦～三篇都已经成功改成私密了，主人放心。"))
+check("一个 id 都没点名的**泛指**声称 → 照旧打回（这是 5a 要拦的形状，不许顺势放开）",
+      bool(out.get("fallback_text")), str(out.get("fallback_text", ""))[:60])
+
+# 受阻项没有 article_id（同意闸/政策拒绝/非文章写）⇒ 判据不启用，行为与从前一字不差
+out = gate_node(_mixed_state("已经成功改好啦～",
+                             spec='set_article_status({"status": "private"})'))
+check("受阻项没有 article_id ⇒ 收窄不启用（回复但凡有完成式声称就照旧打回）",
+      bool(out.get("fallback_text")), str(out.get("fallback_text", ""))[:60])
+
+check("反证：同一句回复，被挡下的若是**它点的那篇** ⇒ 打回（差别只在 id 对不上）",
+      bool(gate_node(_mixed_state("- **id 11**：已经成功 **公开 → 私密**。")).get("fallback_text")))
+
 print("⑩ 管理助手 admin.console（20260921）：硬拦 + 身份过滤双层")
 # 这一批是"纯新增能力"：历史流量里一条都没有 ⇒ 没有 shadow 观测期可谈，硬拦。
 # 三层结构，本节点验后两层（第一层"结构性不可达"在 tests/test_reports.py ⑪）：

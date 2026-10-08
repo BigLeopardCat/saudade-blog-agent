@@ -4521,9 +4521,9 @@ _FALLBACK_CONSENT = (
     "忽略这句就好，站上什么都没变 :害羞:")
 # 目标无据（20260921 第二轮）：不知道改哪一篇，同样不是"失败"。
 _FALLBACK_UNKNOWN_TARGET = (
-    "喵呜……主人，我**还没有动那篇文章**——我不确定你说的是哪一篇，不敢凭印象"
-    "填一个编号（改错了是要紧事）。你告诉我文章名字或编号，或者让我先把后台文章"
-    "列表读出来给你看，我再动手喵。")
+    "喵呜……主人，这一轮我**没能把话说准**——有一篇我不敢认是你点的那一篇，"
+    "所以那一篇我没有动（改错了是要紧事）。这一轮到底改成了什么，系统台账里"
+    "逐条记着，我不敢凭印象替你总结。你告诉我文章名字或编号，我按名字再来一次喵。")
 # 后台规则拒绝（20260926，账号冻结/解冻那一族）：与上面两条同族——**什么都没动**。
 # 但"再试一次"这句指引在这里是错的（政策拒绝不是抖动，重试一万次也一样），
 # 所以文案只请主人**换目标或换人**，不请他重试。
@@ -10727,6 +10727,33 @@ def _url_trusted(u: str, messages: list) -> bool:
     return bool(m and m.group(1) in trusted)
 
 
+def _blocked_article_targets(state) -> list[int]:
+    """本轮被挡下的写操作**点名到了哪几篇**（升序去重；空 = 判据不适用）。
+
+    只认 spec 参数里的 `article_id`——`state["blocked"]` 每项形如
+    {"spec","tool","reason","skill","result"}（execute_node 每轮整体重写），`spec`
+    是 TOOLS 行的字面形 `<tool>(<json>)`（解析器同 `_tool_args`）。解析不出来、或参数
+    里没有 `article_id` 的（同意闸等确认、政策拒绝、非文章类的写）一律**不计**：那几族
+    没有"点错了哪一篇"这回事，判据不该凭空启用。
+
+    用途：5a 的**混合轮收窄**（20261008），见那里的长注释。
+    """
+    out: set[int] = set()
+    for b in (state.get("blocked") or []):
+        if not isinstance(b, dict):
+            continue
+        args, ok = _tool_args(str(b.get("spec") or ""))
+        if not ok:
+            continue
+        try:
+            n = int((args or {}).get("article_id"))
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            out.add(n)
+    return sorted(out)
+
+
 def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """确定性检查节点：核对 narrator 叙述与帧事实/计划注记的一致性后收尾。
 
@@ -10911,23 +10938,47 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             # 不符、又把用户引向"再试一次"（20260920 §5.2 缺口③ 的同一个根因）。
             clause5a = _claim_clause(reply, _COMPLETION_CLAIM_RE, _WRITE_CONTENT_CLAIM_RE)
             err_text = "\n".join(str(getattr(f, "content", "")) for f in err_frames)
-            if authz.consent_error_reason(err_text):
+            # 混合轮收窄（20261008，现场 trace `20261008T064432`）：同一轮里 13 真写成功、
+            # 11 被 `target_mismatch` 挡下，narrator 如实写了 13 那一条——5a 只看见
+            # 「__ERROR__ 在场 + 回复里有完成式声称」，就把整条回复换掉、套上
+            # 「有一篇我没有动」：**把真发生过的那次写也一起否认了**。主人读到的"如实报告"
+            # 与系统台账当场矛盾，比不打回更坏（本仓既有纪律："打回"的代价是吞掉整轮叙述，
+            # 宁漏勿误伤）。
+            # 判据 = 这句完成式声称**指得到**被挡下的那些文章吗？指不到就不是在替它邀功：
+            #   · 声称所在的**子句**里点名了文章、且与被挡下的 id 无交集 ⇒ 说的是别的篇 ⇒ 放行；
+            #   · 子句里一个 id 都没点名（"两篇都改好了"）⇒ 退回看**整条回复**点名的 id，同样
+            #     无交集才放行——**泛指声称正是 5a 要拦的形状**，两处都没点名时一律照旧打回；
+            #   · 有交集、或根本没点名 ⇒ 照旧（下面按原因码分派兜底文案，一个字不动）。
+            _blocked_aids = _blocked_article_targets(state)
+            _named5a = (set(A.user_named_article_ids(clause5a))
+                        or set(A.user_named_article_ids(reply))) if _blocked_aids else set()
+            # 下面整条分派链挂在同一个 if/elif 上（**每一支都 return**）：收窄成立时
+            # 四支全都不许进——20261008 实测踩过：只把第一支改成 elif，后面几支仍是
+            # 独立的 if，收窄形同虚设（放行的轮次照样被 target 支捞走）。
+            if _blocked_aids and _named5a and not (_named5a & set(_blocked_aids)):
+                record("gate", "err_frame_claim_other_target", blocked=_blocked_aids,
+                       named=sorted(_named5a), clause=_clip_clause(clause5a))
+                logger.info("[gate] err 帧 + 完成式声称，但声称指向的是**别的篇**"
+                            "（本轮被挡下 %s，回复点名 %s）→ 不套兜底文案",
+                            _blocked_aids, sorted(_named5a))
+            elif authz.consent_error_reason(err_text):
                 logger.info("[gate] 写操作未获同意却声称已完成 → fallback(consent)")
                 return fail("err_frame_claim_consent", _FALLBACK_CONSENT,
                                         plan, len(frames), clause5a)
-            if A.target_error_reason(err_text):
+            elif A.target_error_reason(err_text):
                 logger.info("[gate] 写操作目标无据却声称已完成 → fallback(unknown_target)")
                 return fail("err_frame_claim_target", _FALLBACK_UNKNOWN_TARGET,
                                         plan, len(frames), clause5a)
-            if A.policy_error_reason(err_text):
+            elif A.policy_error_reason(err_text):
                 # 后台规则拒绝（20260926）：与上面两条同为"还没动手"，但指引不同——
                 # 政策拒绝**不许**说"再试一次"（重试一万次也一样），要换目标或换人。
                 logger.info("[gate] 写操作被后台规则拒绝却声称已完成 → fallback(policy)")
                 return fail("err_frame_claim_policy", _FALLBACK_POLICY,
                                         plan, len(frames), clause5a)
-            logger.info("[gate] 工具帧 __ERROR__ 但回复含完成式声称 → fallback")
-            return fail("err_frame_claim", _FALLBACK_ERR_CLAIM, plan, len(frames),
-                                    clause5a)
+            else:
+                logger.info("[gate] 工具帧 __ERROR__ 但回复含完成式声称 → fallback")
+                return fail("err_frame_claim", _FALLBACK_ERR_CLAIM, plan, len(frames),
+                                        clause5a)
     # 5b. 确认式导航（NAVIGATE: 帧、无 AUTO_NAVIGATE:）却回复到达声称 →
     #     页面实际未跳转（前端等确认）
     #     **20260926 起休眠**：navigate 技能恒发 confirm=false、前端确认卡停用 ⇒
