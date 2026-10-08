@@ -628,6 +628,8 @@ submitted → running → succeeded / failed / cancelled
 只是"线上不可达"这个前提没了；实际观测是**开着但零流量**：全量 384 份 trace 里
 `task_inject` 283 次全是 `n=0`，`task_declare` / `task_advance` / `task_drop_settled`
 一次都没有（详见 §7 第 7 行与 ADR-0002）。
+（**后话**：这段的"今天"是 20261004。`.env` 20261007 关过一次、20261008 又开了 —— 三段取值
+的完整沿革与"为什么只剩一处真值源"见 §6.11 末段与 ADR-0002《20261008 追记》。）
 
 ### 6.10 出口两种形状，调用方只认一种（20260927 生产事故，已修）
 
@@ -707,9 +709,15 @@ submitted → running → succeeded / failed / cancelled
 **成本（如实记）**：planner 的 `tools` JSON **30241 → 51302 字符**（Δ 21061 ≈ **7.6k 输入
 tokens / 次 planner 调用**，仅开档时）。重复轮几乎全吃 cache（某轮 36627 token 里 35840 命中
 ⇒ 边际成本远低于这个上限）。把那段长解释从 schema 挪进 planner 提示词一次可省 ~5.5k，**刻意不
-做**——现在的文案是本跑验证过能用的，缩短要再赌一次合规。**拨盘今天在本机是开的**，但来源不是
-`.env`（仍 `0`）而是 systemd drop-in（`/health` `dials.agent_task_state=true`）——**两个真值源
-不一致**这件事另挂待拍板；另外产线生效的是**工作区**，上一次重启早于本节的落盘时间 ⇒ **新出口
+做**——现在的文案是本跑验证过能用的，缩短要再赌一次合规。**拨盘今天在本机是开的**
+（`/health` `dials.agent_task_state=true`），真值源只有一处：`.env` 第 36 行
+`AGENT_TASK_STATE=1`（mtime 20261008 20:29:37，服务 20:29:43 重启 ⇒ 生效）。当天 18:35 还曾
+另加一个 systemd drop-in（`.../saudade-agent.service.d/override.conf`，
+`Environment=AGENT_TASK_STATE=1`）做同一个开关——**两处取值一致，但各存一份，且进程环境优先于
+dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop-in 是能**静默压过** `.env`
+的影子来源。22:45 已把它退役并备份到
+`/home/ubuntu/etc-backup-20261008/saudade-agent-override.conf.retired-20261008`（空目录已删），
+**此后只有 `.env` 一处**。另外产线生效的是**工作区**，上一次重启早于本节的落盘时间 ⇒ **新出口
 此刻还没在产线上跑**。见 ADR-0002《20261008 追记》。
 
 **三条诚实边界**：
