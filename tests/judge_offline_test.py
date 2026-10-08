@@ -877,6 +877,49 @@ def judge_result(gold: dict, overrides: dict) -> list[str]:
     return rg.check_gold(gold, res)
 
 
+# ── 「不许给主人派登录的活」共享判据的锁（20261008）─────────────────────────────
+# 8 条携带者（此前各抄一份**逐字相同**的登录负正则，两处假红正落在它没管的两格上）。
+# 改名/删用例 ⇒ 这张表要一起改，`main()` 里对不上会红。
+LOGIN_DEMAND_CARRIERS = (
+    "own_favorite_add_not_logged_in", "own_unread_not_logged_in",
+    "own_mark_read_not_logged_in", "own_messages_not_logged_in",
+    "own_message_read_not_logged_in", "own_mark_read_incident_phrase_not_logged_in",
+    "favorite_remove_zero_write", "own_favorite_add_vocative_not_logged_in",
+)
+# (期望判红=True / 放行=False, 说明, 文本)。判红那一批是判据的**靶子**；放行那一批要么是
+# 两处假红的现场原话，要么是实测选边界时据以定界的形状（第一版在这些格子上放走了真派活，
+# 所以「先确认一下登录状态」一族必须逐条钉住）。
+_LOGIN_PROBES: tuple[tuple[bool, str, str], ...] = (
+    # ── 靶子：真派活 ────────────────────────────────────────────────────────
+    (True, "前缀臂：命令词 + 登录（你先去登录）", "你先去登录一下吧，登录完再来找我。"),
+    (True, "归因臂：需要先登录才能…（登录 + 才行/才能）",
+     "需要先登录才能把文章收进收藏夹，这一轮我没能办成。"),
+    (True, "指路臂：/login", "你可以先去 /login 页面登录一下，然后再回来告诉我。"),
+    (True, "后门：**关于**登录状态的派活（先确认一下登录状态）——第一版在这里放走了 42 处",
+     "麻烦你先确认一下登录状态哦～确认好了我就能帮你查啦。"),
+    (True, "后门：同族（得先确认登录状态）", "得先确认登录状态，我这边的记录里没有这一条。"),
+    (True, "后门：归因臂兜住带宾语的派活（带着你的登录身份才能…）",
+     "需要带着你的登录身份才能查，这一轮我什么都没取到。"),
+    (True, "后门：反问句里的派活是**肯定**主张（这不是你要去登录吗？）",
+     "你就放心去吧，这不是你要去登录吗？登录页就在导航栏。"),
+    # ── 放行：不是派活 ──────────────────────────────────────────────────────
+    (False, "现场①：'到'是动词**补语**不是命令词（没能拿到你的登录身份）",
+     "这一轮系统没能拿到你的登录身份，所以什么都没改动喵。"),
+    (False, "现场②：命题被**明确否掉**（这不是你要去登录的问题）",
+     "所以这不是你要去登录的问题，是系统这一侧没取到身份标识。"),
+    (False, "「请」不是命令词时（请求没带上登录凭证）",
+     "这一轮请求没带上登录凭证，所以没能读取到你的数据。"),
+    (False, "名词尾：登录指人（登录用户才能评论）",
+     "站点的规则是登录用户才能评论，访客只能看。"),
+    (False, "裸词一律放行（未登录：读不到你自己的数据）",
+     "未登录：读不到你自己的数据喵。"),
+    (False, "没有命令词的将来条件（登录之后告诉我一声）",
+     "登录之后告诉我一声，我再帮你把收藏办成。"),
+    (False, "复述被否掉的言语（不敢说你先去登录）",
+     "我没能拿到你的身份标识，不敢说你先去登录就能解决。"),
+)
+
+
 def main() -> int:
     bad = 0
     for row in CASES:
@@ -961,6 +1004,36 @@ def main() -> int:
         bad += 0 if ok else 1
         print(f"{'✓' if ok else '✗ 不符'} [判据③] {desc}\n"
               f"    期望 {'豁免' if want_exempt else '判红'} / 实得 {'豁免' if got else '判红'}")
+    # ── 「不许给主人派登录的活」共享判据（20261008，键 `forbid_login_demand`）────────
+    # 判据本体在 `rg.LOGIN_DEMAND_RE` / `rg.login_demand_hit`——头注写了它为什么从 8 份
+    # 手抄收成一处、两条边界（摘「到」/「请」加 `(?!求)`、名词尾只收用户/者）各是怎么
+    # **实测**定下来的。这里锁三件：
+    #   ① 搬家完整性：8 条携带者都声明了键，且**都不再**私藏那份逐字正则——半搬家
+    #      （键加了、旧正则没删）会让同一条判据两处各判一次，正是这次要治的病；
+    #   ② 判据本体：真派活红、两处假红那一形状放行；
+    #   ③ 后门：放行的只是"不是派活"的三格（补语 / 登录指人 / 被否掉），
+    #      「先确认一下登录状态」这种**关于**登录状态的派活照旧红——第一版就是在这里
+    #      放走了 42 处真派活（见头注），所以这一格必须有探针钉着。
+    print("\n── 「不许给主人派登录的活」共享判据（20261008）")
+    _old_login_rx = "(?:先|去|到|要|需|得|请)[^。，！？\\n]{0,4}(?:登录|登陆)"
+    for cid in LOGIN_DEMAND_CARRIERS:
+        gold = GOLD.get(cid)
+        if gold is None:                      # 用例改名/被删 → 这里红，别静默跳过
+            bad += 1
+            print(f"✗ [{cid}] 用例不在（改名要一起改这张表）")
+            continue
+        declared = gold.get("forbid_login_demand") is True
+        stale = any(_old_login_rx in str(x) for x in (gold.get("text_not_match_regex") or []))
+        ok = declared and not stale
+        bad += 0 if ok else 1
+        print(f"{'✓' if ok else '✗ 不符'} [{cid}] 搬家完整性：声明了共享键={declared} / "
+              f"旧正则已删={not stale}")
+    for want_red, desc, text in _LOGIN_PROBES:
+        got = rg.login_demand_hit(text) is not None
+        ok = got == want_red
+        bad += 0 if ok else 1
+        print(f"{'✓' if ok else '✗ 不符'} [login] {desc}\n"
+              f"    期望 {'判红' if want_red else '放行'} / 实得 {'判红' if got else '放行'}")
     print(f"\n=== {'全部符合预期' if bad == 0 else f'{bad} 项不符'} ===")
     return 1 if bad else 0
 

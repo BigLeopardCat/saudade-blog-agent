@@ -63,7 +63,7 @@ ASSERT_KEYS = frozenset({
     "nonempty", "text_contains", "text_not_contains", "text_any_regex",
     "not_match_exempt_mention", "not_match_exempt_conditional", "not_match_exempt_refuted",
     "not_match_exempt_doc_fact", "not_match_exempt_consequence", "not_contains_exempt_quote",
-    "require_denial", "require_absence",
+    "require_denial", "require_absence", "forbid_login_demand",
     "require_cmd_prefixes", "require_cmd_contains", "require_cmd_all",
     "forbid_cmd_prefixes", "forbid_cmd_contains", "either_cmd_or_text",
     "require_tool_calls", "require_tool_calls_any", "no_tool_calls", "forbid_tool_calls",

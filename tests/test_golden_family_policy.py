@@ -61,6 +61,8 @@ MIN_FAMILY = 3
 USER_VISIBLE_KEYS = frozenset({
     "text_contains", "text_any_regex", "text_not_contains", "text_not_match_regex",
     "not_contains_exempt_quote", "require_denial", "require_absence",
+    # 20261008：登录派活（负向）——用户读得到的那句话本身，与 text_not_match_regex 同类。
+    "forbid_login_demand",
     "require_cmd_prefixes", "require_cmd_contains", "require_cmd_all",
     "forbid_cmd_prefixes", "forbid_cmd_contains", "either_cmd_or_text",
     "forbid_frame_prefix", "forbid_fallback",
