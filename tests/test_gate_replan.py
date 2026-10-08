@@ -482,6 +482,62 @@ check("  剔空之后 PARAMS 同步剔（两行不一致 = narrator 只能猜到
        .get("tools")) == ["list_notifications"])
 
 
+print("\n⑧c 洞⑮ 的判据零件（纯函数）：**办成了却说还在等**（20261008）")
+# 与 ⑧ 是**同一件事实的两个方向**：⑧ 那族抓"什么都没改"（洞⑩），这一族抓"还没落地"
+# （洞⑮）。现场 trace `20261008T083153_1`：`approve_quota_request` 真 PASS（回执「剩
+# 500/500」），narrator 却念着卡面快照里的旧数说"还在待处理队列里……剩 451/500"。
+# 整段里"没有执行任何操作"那一半已被 ⑧ 那一族接住，**"还在队列里／没落地"这一半当天
+# 全站无网**——`tests/test_round_facts.py` ② 把这条当红基线逐字锁着。本节只锁**零件**
+# （词形 + 三道闸 + 与洞⑩ 的优先级），端到端与供给侧在那一套件里。
+_REC_15 = [{"skill": "quota_approve", "tool": "approve_quota_request",
+            "args": {"user_id": 5}, "result": "剩 500/500", "ts": 0.0}]
+_SENT2_15 = ("我能确定的是：他的申请还在待处理队列里（账号「niuniu」id=5，剩 451/500 轮），"
+             "刚才那次确认没落地。要不要我再走一遍？")
+
+
+def _facts15(**kw):
+    base = dict(granted=False, planned_writes=(), ok_writes=("approve_quota_request",),
+                noop_writes=(), changed=True, blocked_writes=(), popup=False,
+                ledger_pending=False, awaiting_owner=False)
+    base.update(kw)
+    return g.RoundFacts(**base)
+
+
+def _gate15(text, facts=None):
+    return g._claim_issue(text, skill="quota_approve", plan={}, frames_exist=True,
+                          has_popup=False, receipts=_REC_15, noop_specs=[],
+                          page_ctx="", role="admin",
+                          **({"facts": facts} if facts is not None else {}))
+
+
+check("  正例：08:31 那第 2 句 ⇒ `round_not_landed`（**仅第 2 句**——第 1 句归洞⑩）",
+      (_gate15(_SENT2_15) or ("",))[0] == "round_not_landed")
+check("  队列类（不要求锚定）/ 锚定类 / 量词类三种形态都命中",
+      (_gate15("那笔申请还在待确认，你点一下我就去办。") or ("",))[0] == "round_not_landed"
+      and (_gate15("刚才那次确认没落地，我再等等。") or ("",))[0] == "round_not_landed"
+      and (_gate15("你交代的那几件事一个都没落地。") or ("",))[0] == "round_not_landed")
+check("  **锚定是必要条件**：同轮一件办成、另一件没过时，「那篇的置顶还没落地」是**真话**"
+      "（没有整轮作用域标记 ⇒ 放行；取向同 `not blocked_writes`）",
+      _gate15("那篇的置顶还没落地，等下我再试试。") is None
+      and _gate15("本轮那件批准还没落地。",
+                  facts=_facts15(blocked_writes=("audit_board_comment",))) is None)
+check("  `ledger_pending` 那一档（台账里**真有一行在等**）「还在等你点头」是**真话** ⇒ 放行"
+      "（两道闸与 `RoundFacts.awaiting_owner` 同源）",
+      _gate15("那件申请还在待处理队列里，等你点头。",
+              facts=_facts15(ledger_pending=True)) is None)
+check("  优先级：两族同时在场时保留**先到者**洞⑩（不改今天在跑的 issue 名与分族）",
+      (_gate15("这一轮系统没有执行任何操作，什么都没改。" + _SENT2_15) or ("",))[0]
+      == "write_change_denial")
+check("  兜底文案：认错 + 摆回执原文，且**不复述**被判掉的那句（它会进下一轮上下文）",
+      "剩 500/500" in g._fallback_round_not_landed(_facts15(), _REC_15)
+      and not any(k in g._fallback_round_not_landed(_facts15(), _REC_15)
+                  for k in ("待处理队列", "还没落地", "没有执行任何操作")))
+check("  挂号：`round_not_landed` 在 `_REPLAN_ISSUES` 里，且建议/原因**指向**洞⑩ 那两份",
+      "round_not_landed" in g._REPLAN_ISSUES
+      and g._REPLAN_ADVICE["round_not_landed"] is g._REPLAN_ADVICE["write_change_denial"]
+      and g._REPLAN_WHY["round_not_landed"] is g._REPLAN_WHY["write_change_denial"])
+
+
 print("\n⑥ 零帧纯作答轮 + 主人在问**自己那份数据** → 打回重规划（20261003 补的那半）")
 # 现场（uid=1 会话 320，trace `20261003T194144`；下面两段取自那份 trace 原文的**开头**）：
 # 主人问「我有哪些未读通知呀」，planner 落 chat 零工具，narrator 回了一段**关于上一轮话题
