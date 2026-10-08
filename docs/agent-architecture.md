@@ -2,54 +2,11 @@
 
 > 面向维护者的全链路技术文档。覆盖看板娘对话系统的每一个环节：组件拓扑、一次对话的完整时序、
 > 记忆机制（记录 / 压缩 / 存储 / 读取 / 回滚）、工具系统、防幻觉与可靠性加固、超时体系、配置与部署。
-> 最后更新：2026-09-22（20260922 标签/分类写能力补全：①写工具面从"三件"扩到"九件"
-> ——新增 `update_tag` / `delete_tag` / `create_category` / `update_category` / `delete_category`，
-> 加上既有的 `create_tag` / `set_article_status` / `set_article_tags`（+ `list_admin_notes` 读侧），
-> 工具总数 22 → 35（含后台只读与侧任务工具），见 §5 / §5.3。
-> ②父标签 id 的真通道 = 名字通道：planner 在写技能里写名字，工具在 execute 阶段用
-> `agent/adminops.py` 的 `find_tag` 对着实时标签字典确定性解析成 id；解不出（查无此名/
-> 歧义/层级不符）一律**响亮零写**，绝不猜、绝不新建。技能描述里 `$list_tags[N].tagKey` 形态的
-> 示例已删（写轮永远满足不了它），`$ref` 机制本身保留。
-> ③**解不出的引用必须响亮**：`agent/refs.py::resolve_args` 改递归（此前嵌套引用既解析不出、
-> 又会让 `_confirm_popup` 拒绝签发令牌）；写技能分支引用一律原样透传（旧行为是把
-> `"$list_tags[3].tagKey"` 静默变成 `None`、注记还肯定地写下「（一级标签）」）。
-> ④父仓新增 `POST /api/protected/tag/move`（换父级 / 一级↔二级互转，原子、可逆）——
-> **这是唯一能批量改写文章数据的在线接口**，边界见父仓 `docs/security-boundary.md`；
-> id 策略 keepId 优先、不可证明安全时回落 newId（后者要重写 `note.tags`）。
-> ⑤技能名 ≠ 工具名（分类三件：技能 `category_*` / 工具 `*_category`）——混用会产生
-> "未知工具"错误帧、整轮零弹窗；已在 `tests/test_tag_admin.py` ⑧ 用"工具名 ∈ 注册表"锁死。
-> 验证：`tests/test_tag_admin.py`（离线）+ golden 92 条（新增 4 条写类用例，不做真写）+
-> 活体探针腿 ⑪–⑮（`eval/probe_admin_write.py`，统一"读到连接关闭才算干净收尾"）。
-> 上版：2026-09-20（20260920 七项：①调用者身份与权限模型——新增 `agent/principal.py`
-> （身份的唯一构造点）+ `agent/authz.py`（scope 词汇表 / 工具→scope 声明表 / 角色→授予表 /
-> 唯一判据 `check()`），execute 在调用工具之前过判据，默认 shadow 只记不拦；角色只来自
-> Rust 侧 60 秒身份断言的 `role` 声明，**role=None 即身份不明、零权限**（不默认放行）。
-> 这是"秘书类功能"的地基，设计与前置需求见 `docs/secretary.md`。
-> ②gate 命令前缀判据补元讨论豁免（提及 ≠ 发命令，前后端两侧配套：`_cmd_prefix_directive`
-> ↔ `stripMentionSpans`）。③golden 补 `forbid_fallback` 正断言，堵住"走了兜底却判 PASS"的盲区。
-> ④RAG 供给端候选相对断崖截断（`rag/search.py` 的 `_CLIFF_RATIO=0.25`，只截断不改排序）。
-> ⑤写操作的事前同意（秘书前置需求 ③ 的 agent 侧）——权限之后再加一道确定性判据：
-> 需确认的 scope（`CONSENT_SCOPES = {write.content}`）未获用户本轮消息明确确认 →
-> 产 `__ERROR__: 待确认[consent_required]` 帧、不调用工具；用错误帧形态是为了让 gate
-> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 63 个工具里
-> 没有一个是 `write.content`，所以这条闸空转（等第一个写工具，声明表驱动、不用改代码）。
-> 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
-> annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
-> **静默失效**（无报错，只有一条没人看的 UserWarning）；详见 `docs/问题记录.md` §1.3，
-> 回归锁 = `tests/test_authz.py` 第 ⑧ 节）。
-> ⑥两条侧任务收成模块（`agent/moderator.py` / `agent/summarizer.py`，此前是 `server.py`
-> 里的内联适配层、零测试、不可信文本裸插值）：各自带不可信输入围栏 + 输出白名单 + 明确
-> 失败取向（审核 fail-open、摘要 fail-empty），`tests/test_side_tasks.py`（48 项）进 CI 门禁。
-> ⑦超长文章分节渲染与按节取回（`rag/sections.py`，20261005 从 `agent/` 搬到 `rag/`，见 §5.2）——全文帧不再逐字
-> 无声硬截断；`get_article_detail(section=…)` 提供取回手段；索引/渲染/取回三处共用同一套
-> 节边界。回归锁 = `tests/test_sections.py`（68 项）。
-> 上上版：2026-09-19（20260919 参数引用：§6.5 新增 `$<工具>[<序号>].<字段>` 参数绑定——
-> 下一步的参数取值由 execute 从结构化返回里绑，不再靠模型从 300 字截断帧里"读出来再抄"；
-> 见 `agent/refs.py`、`AgentState.tool_data`、planner 规则 3b）。
-> 更早：2026-09-03（20260903 架构裁决同步——planner 全权：§1/§3/§6.5 改为现行拓扑
-> planner ⇄ execute → model → gate；reflector（LLM 质检 + REVISE）/ 自由 ReAct / tools_node 授权
-> 执行已废除；历史机制描述均就地标注"20260903 前形态"保留为踩坑记录；§2 目录注释、§7 LLM 调用
-> 清单同步；先前 0901-0902 状态（声称闸三族/时间锚/chat-* 拆分/生产模型）内容不变）。
+>
+> **本文只写「现在是什么」** —— 每一节的陈述都是当前生产拓扑下的形态。历史上有过、现已废除的
+> 机制就地标注「<日期> 前形态」并写明**现在由谁承担**，那是为了让接手的人看懂代码里为什么没有它，
+> 不是本文的推荐读法。逐次修订的时间线在文末《§11 附录：文档修订记录》；线上故障的现象 / 根因 /
+> 修复 / 回归锁见 [问题记录.md](问题记录.md)。
 
 ---
 
@@ -98,9 +55,9 @@ flowchart TB
 一切连续性由 Rust 从 MySQL 读取后注入请求体实现。这是刻意的架构取舍——曾经 MemorySaver 线程累积导致
 长对话上下文与 worker 内存无限膨胀，最终被整体抛弃（详见 §4.6）。
 
-关键设计决策速览（每一条都是线上踩坑后的取舍，事故细节见 docs/问题记录.md）：
+关键设计决策速览（每一条都是线上事故定位后的取舍；现象 / 根因 / 修复 / 回归锁见 docs/问题记录.md）：
 
-| 决策 | 取舍 | 踩过的坑（详见对应章节） |
+| 决策 | 取舍 | 当初的问题（详见对应章节） |
 |---|---|---|
 | 记忆权威在 DB，agent 无状态 | 每请求独立 thread_id + 请求体注入 20 条历史 + 滚动摘要 | MemorySaver 线程累积 → 上下文/worker 内存无限膨胀（§4.6） |
 | SSE 帧 JSON 编码 + `\n\n` 分隔 | 文本内换行不破坏帧边界；帧协议三端同步 | 曾按行分隔被文本换行破坏（§3.2⑤） |
@@ -172,7 +129,13 @@ flowchart TB
 ├── tests/test_skills.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
 ├── tests/test_authz.py              # L0 单元级（权限模型：scope 声明完备性 + 角色授予表 + 失败取向
 │                              #   + 写操作的"人在回路"确认闸 + config 接线回归锁，秒级）
-├── docs/                      # 本文档 + eval-observability.md + secretary.md（秘书框架与前置需求）+ 问题记录.md（踩坑史）
+├── docs/                      # 本文档（现状：系统是什么）
+│   ├── 问题记录.md            #   事故：现象 → 根因 → 修复 → 回归锁
+│   ├── adr/                   #   决策记录：当时的取舍，含"决定不做某事"
+│   ├── eval-observability.md  #   评测与可观测性（L0–L3 分层）
+│   ├── rag-design.md          #   检索设计
+│   ├── native-toolcalls-mainline.md / toolcall-stability-roadmap.md  # 接口层与稳定性主线
+│   └── secretary.md + 其余专题（分节 / 多模态 / 参数调优 / 零调用残余 / lint 基线）
 └── .env.example / pyproject.toml / uv.lock / .github/workflows/eval.yml（CI 评测门禁）
 
 前端（看板娘 + 对话面板）—— **20261001 起住在本仓**（`frontend/`，与本仓同以 MIT 分发，见
@@ -598,7 +561,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 正文：
 ## 1. 系统总览
 …（§1-§6.3 整节在）
-**以下小节尚未展开**：§6.4 生成有界性 / §6.5 技能注册表 + 受限规划 / §7. LLM 与配置 / §8. 前端看板娘 / §9. 部署与运维 / §10. 已知边界与坑
+**以下小节尚未展开**：§6.4 生成有界性 / §6.5 技能注册表 + 受限规划 / §7. LLM 与配置 / §8. 前端看板娘 / §9. 部署与运维 / §10. 已知边界与限制
 （要读其中某一节：再调用一次 get_article_detail，带上本帧开头的 noteKey 与 section="<上面的小节名或编号>"，即可取回该节全文。）
 ```
 
@@ -765,7 +728,7 @@ golden 只锁"未登录"形态（三条：收藏 / 问未读 / 标记已读）�
 
 ---
 
-## 6. 防幻觉与可靠性加固（踩坑沉淀）
+## 6. 防幻觉与可靠性加固（逐条：现象 → 根因 → 修复 → 回归锁）
 
 ### 6.1 状态感知：以 context 为准
 
@@ -1119,7 +1082,7 @@ flowchart TB
   作用域 + fallback 终局语义）+ golden set 端到端 + `eval/recall_eval.py`（检索基线，直接测线上
   rag/search.py）。改技能注册表/plan 契约后必须跑。
 
-> 历史沿革（20260902 及更早，保留作踩坑记录）：本节机制由 20260825 受限规划 → 20260902 显式
+> 历史沿革（20260902 及更早，保留作问题记录）：本节机制由 20260825 受限规划 → 20260902 显式
 > 点名 + 反射层逐工具核验演进而来，20260903 已重构为上方形态。关键教训（细节见 docs/问题记录.md）：
 > - 233815「有没有关于这方面的留言」：planner 选对 content_query 但执行层零工具编造"两边都翻了/
 >   留言板 1 条「1」"——TOOLS 行空 + 执行器自由的双重真空；当时修复 = reflector 检查点 1 升级
@@ -1335,7 +1298,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 
 ---
 
-## 10. 已知边界与坑（维护必读）
+## 10. 已知边界与限制（维护必读）
 
 1. qwen 幻觉面（20260903 后形态）：执行层无自由后，幻觉不再是"假装调用了工具"（有执行必有帧），
    而是 narrator 叙述失真（正文伪命令/变形命令如 `SNOW_EFFECT:`、无据声称、编造链接）与 planner
@@ -1363,3 +1326,64 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
    参数）⇒ 占位符化后回到 36/36。**纪律：写技能描述与写规则里只写 〈名字〉/〈父标签名〉 这类占位符，
    连"反例"也不许带真名字**；判据的"取值一律从主人这句话里原样抄、完整照抄"写在 planner 规则 4b。
    回归锁 = `test_skills.test_write_desc_no_example_names`（扫写技能描述 + 规则 4b 整段）。
+
+---
+
+## 11. 附录：文档修订记录
+
+> 本文每次修订的要点，新在上。**读正文就够了** —— 这一节回答的是「某个机制是哪一批进来的、
+> 改之前长什么样」以及「这条结论当时基于哪次测量」。涉及对外行为变化的条目同时记在
+> [CHANGELOG.md](../CHANGELOG.md)。
+
+> 最后更新：2026-10-09（**文档自身的一遍整理，机制与结论一字未动**：① 原先堆在文档头部的
+> 逐版修订记录（「最后更新 / 上版 / 上上版 / 更早」）整体移到本节，头部换成一句话说明本文的
+> 读法；② §2 的 `docs/` 目录注释补全——原先只列了四份，实际已有 `adr/`
+> 与八份专题文档。）
+> 上版：2026-09-22（20260922 标签/分类写能力补全：①写工具面从"三件"扩到"九件"
+> ——新增 `update_tag` / `delete_tag` / `create_category` / `update_category` / `delete_category`，
+> 加上既有的 `create_tag` / `set_article_status` / `set_article_tags`（+ `list_admin_notes` 读侧），
+> 工具总数 22 → 35（含后台只读与侧任务工具），见 §5 / §5.3。
+> ②父标签 id 的真通道 = 名字通道：planner 在写技能里写名字，工具在 execute 阶段用
+> `agent/adminops.py` 的 `find_tag` 对着实时标签字典确定性解析成 id；解不出（查无此名/
+> 歧义/层级不符）一律**响亮零写**，绝不猜、绝不新建。技能描述里 `$list_tags[N].tagKey` 形态的
+> 示例已删（写轮永远满足不了它），`$ref` 机制本身保留。
+> ③**解不出的引用必须响亮**：`agent/refs.py::resolve_args` 改递归（此前嵌套引用既解析不出、
+> 又会让 `_confirm_popup` 拒绝签发令牌）；写技能分支引用一律原样透传（旧行为是把
+> `"$list_tags[3].tagKey"` 静默变成 `None`、注记还肯定地写下「（一级标签）」）。
+> ④父仓新增 `POST /api/protected/tag/move`（换父级 / 一级↔二级互转，原子、可逆）——
+> **这是唯一能批量改写文章数据的在线接口**，边界见父仓 `docs/security-boundary.md`；
+> id 策略 keepId 优先、不可证明安全时回落 newId（后者要重写 `note.tags`）。
+> ⑤技能名 ≠ 工具名（分类三件：技能 `category_*` / 工具 `*_category`）——混用会产生
+> "未知工具"错误帧、整轮零弹窗；已在 `tests/test_tag_admin.py` ⑧ 用"工具名 ∈ 注册表"锁死。
+> 验证：`tests/test_tag_admin.py`（离线）+ golden 92 条（新增 4 条写类用例，不做真写）+
+> 活体探针腿 ⑪–⑮（`eval/probe_admin_write.py`，统一"读到连接关闭才算干净收尾"）。
+> 上版：2026-09-20（20260920 七项：①调用者身份与权限模型——新增 `agent/principal.py`
+> （身份的唯一构造点）+ `agent/authz.py`（scope 词汇表 / 工具→scope 声明表 / 角色→授予表 /
+> 唯一判据 `check()`），execute 在调用工具之前过判据，默认 shadow 只记不拦；角色只来自
+> Rust 侧 60 秒身份断言的 `role` 声明，**role=None 即身份不明、零权限**（不默认放行）。
+> 这是"秘书类功能"的地基，设计与前置需求见 `docs/secretary.md`。
+> ②gate 命令前缀判据补元讨论豁免（提及 ≠ 发命令，前后端两侧配套：`_cmd_prefix_directive`
+> ↔ `stripMentionSpans`）。③golden 补 `forbid_fallback` 正断言，堵住"走了兜底却判 PASS"的盲区。
+> ④RAG 供给端候选相对断崖截断（`rag/search.py` 的 `_CLIFF_RATIO=0.25`，只截断不改排序）。
+> ⑤写操作的事前同意（秘书前置需求 ③ 的 agent 侧）——权限之后再加一道确定性判据：
+> 需确认的 scope（`CONSENT_SCOPES = {write.content}`）未获用户本轮消息明确确认 →
+> 产 `__ERROR__: 待确认[consent_required]` 帧、不调用工具；用错误帧形态是为了让 gate
+> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 63 个工具里
+> 没有一个是 `write.content`，所以这条闸空转（等第一个写工具，声明表驱动、不用改代码）。
+> 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
+> annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
+> **静默失效**（无报错，只有一条没人看的 UserWarning）；详见 `docs/问题记录.md` §1.3，
+> 回归锁 = `tests/test_authz.py` 第 ⑧ 节）。
+> ⑥两条侧任务收成模块（`agent/moderator.py` / `agent/summarizer.py`，此前是 `server.py`
+> 里的内联适配层、零测试、不可信文本裸插值）：各自带不可信输入围栏 + 输出白名单 + 明确
+> 失败取向（审核 fail-open、摘要 fail-empty），`tests/test_side_tasks.py`（48 项）进 CI 门禁。
+> ⑦超长文章分节渲染与按节取回（`rag/sections.py`，20261005 从 `agent/` 搬到 `rag/`，见 §5.2）——全文帧不再逐字
+> 无声硬截断；`get_article_detail(section=…)` 提供取回手段；索引/渲染/取回三处共用同一套
+> 节边界。回归锁 = `tests/test_sections.py`（68 项）。
+> 上上版：2026-09-19（20260919 参数引用：§6.5 新增 `$<工具>[<序号>].<字段>` 参数绑定——
+> 下一步的参数取值由 execute 从结构化返回里绑，不再靠模型从 300 字截断帧里"读出来再抄"；
+> 见 `agent/refs.py`、`AgentState.tool_data`、planner 规则 3b）。
+> 更早：2026-09-03（20260903 架构裁决同步——planner 全权：§1/§3/§6.5 改为现行拓扑
+> planner ⇄ execute → model → gate；reflector（LLM 质检 + REVISE）/ 自由 ReAct / tools_node 授权
+> 执行已废除；历史机制描述均就地标注"20260903 前形态"保留为问题记录；§2 目录注释、§7 LLM 调用
+> 清单同步；先前 0901-0902 状态（声称闸三族/时间锚/chat-* 拆分/生产模型）内容不变）。
