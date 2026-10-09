@@ -422,6 +422,25 @@ def _norm_pos_int(value) -> int | None:
     s = str(value).strip()
     return int(s) if s.isdigit() and int(s) > 0 else None
 
+
+def _pos_int_list(value) -> list[int]:
+    """实参 → **去重保序**的正整数列表（多篇形态用，见 `article_status.article_ids`）。
+
+    不是列表时也认单个值（`"22"` → `[22]`），认不出的一律丢掉。返回**空表**而不是
+    None：调用方那条"一个 id 都没给"的守卫读的是 `not aids`，于是"没给"与"给的东西
+    一个都认不出"走同一条零工具路径——与 `_norm_pos_int` 的 None 同义，只是外面套了
+    一层数组（20260928 那条教训：同一个语义有两种表示，两边迟早只认一种）。
+    """
+    if isinstance(value, (list, tuple)):
+        out: list[int] = []
+        for x in value:
+            n = _norm_pos_int(x)
+            if n is not None and n not in out:
+                out.append(n)
+        return out
+    n = _norm_pos_int(value)
+    return [n] if n is not None else []
+
 NAV_VALID_PATHS: set[str] = set(_NAV_EXACT_PATHS)
 
 # planner 可显式点名的无参只读工具白名单（20260902 用户拍板）：留言/说说/公告/
@@ -612,6 +631,18 @@ class Skill:
     description: str                   # 触发条件（planner 选技能用）
     inputs: dict[str, str]             # 参数名 → 提取要求（planner 填 PARAMS 用）
     plan: list[tuple[str, dict]] = field(default_factory=list)  # 固定工具序列：(工具名, 参数模板)
+    # 条件工具（20261009）：本技能的展开函数**可能**多派出去的工具名（不在 `plan` 模板
+    # 里）。第一个用它的地方是 `article_tags`——要加的标签站内还没有时，同一张卡里先
+    # `create_tag` 再 `set_article_tags`（见 `instantiate_plan` 那一段）。
+    #
+    # **为什么不是直接写进 `plan`**：`plan` 还有第二个读者——`tasks.intents_to_declarations`
+    # 从它推"这件事要做哪几步"，写进去就等于宣布每个 article_tags 任务都必然包含一次
+    # `create_tag`；而实际执行时标签已存在的那一条会被 `reached_specs` 摘掉、**永远不发
+    # 那一步的回执**，于是那一行任务在台账里推不动也结不掉（`advance_by_receipts` 必须
+    # 连续推进）——正是它自己注里写的"比不登记更坏"的僵尸行。
+    # `plan` 与 `extra_plan_tools` 因此是两件事：前者="模板一定产出哪几件"，后者="令牌
+    # 里还容得下哪几件"。`_confirm_grant_plan` 的形状检查读**两者之和**。
+    extra_plan_tools: tuple[str, ...] = ()
     # 参数必填性（20260925，见"技能参数 schema"节）。**默认从工具 args_schema 派生**，
     # 这两个元组只用来盖掉派生结果——技能参数与工具参数不是同一层，形状必填 ≠ 策略必填。
     # 例：`device_display.text` 在 pydantic 里必填，但技能在代码侧被空参调用（`decisions.py`
@@ -1204,15 +1235,36 @@ SKILLS: list[Skill] = [
             "转草稿、置顶、取消置顶）。参数 article_id=文章 id（**用户本轮点名了就直接用"
             "点名的那个，不必先读**——系统会核对是否与点名一致；没点名只说特征时必须先用 "
             "admin_notes 读回确切 id，不许凭记忆写），status=public/private/draft，"
-            "is_top=1/0（只填用户点名的那一项）。"
+            "is_top=1/0（只填用户点名的那一项）。**一句话点名的文章不止一篇时用 "
+            "`article_ids` 数组一次交代**（见 planner 契约）。"
             "写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统定：判成明确命令就直接办、判不出来才弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生；用户只是在提问或假设时不要选本技能。"
             "**仅管理员可用**"
         ),
-        inputs={"article_id": "文章 id", "status": "（可选）public/private/draft",
+        inputs={"article_id": "文章 id",
+                "article_ids": "（可选）**一次改好几篇**时的文章 id 数组（如 [22, 23]）："
+                               "这些篇要改成**同一个** status / is_top 时用它；只改一篇仍填 "
+                               "`article_id`",
+                "status": "（可选）public/private/draft",
                 "is_top": "（可选）1 置顶 / 0 取消置顶"},
         plan=[("set_article_status", {"article_id": "$article_id", "status": "$status",
                                       "is_top": "$is_top"})],
         complete_when="set_article_status 返回了改动前后的值",
+        # 与 `tag_create.titles` 同一条契约（20261009）：主人一句话点了好几篇、要改成
+        # **同一个**状态/置顶时，模型此前只能挑一篇填进 `article_id`——另外几篇在**任何
+        # 一层**都不留痕迹（trace `20261009T070704`：主人说「除了19全部取消」，planner
+        # 只发了 `set_article_status(22)`，另外两篇彻底消失，回复还说「这几件现在就已经是
+        # 你要的样子了」）。`intents` 里那三件被排除规则①按**技能粒度**减掉（`acted_skills`
+        # 收到的是"这一轮派下去的技能"，而它假定"卡装下了这个技能的全部件"）——那条件
+        # 只有在卡真装得下时成立，所以补齐的是**卡**：填 `article_ids` 让一张卡覆盖全部篇。
+        # 契约写在提示词正文里而不只写进 description，理由同 tag_create（native 档只留
+        # schema 那一份，而"一次点名好几篇该填哪一格"是**必须怎么做**）。
+        planner_contract=(
+            "主人一句话点了**好几篇文章**、要改成同一个状态/置顶（「除了 19 全部取消置顶」"
+            "「把 22 和 23 都设为私密」）→ 仍然只选本技能**一次**，id 逐个填进 `article_ids` "
+            "数组，status/is_top 填一次、对整批生效；只填第一篇、或把本技能重复选好几遍，"
+            "剩下的篇在系统里**不留任何痕迹**（主人只能自己发现漏了）。只改一篇时照旧填 "
+            "`article_id`。**两种值不同的**（「22 置顶、23 取消置顶」）不要塞进一次调用——"
+            "那一句里有两件事，照常各写一条 `intents`。"),
         reply_contract=(
             "只能按 set_article_status 的实际返回作答，并**说清改了哪一篇、从什么变成什么**"
             "（工具返回里就有「私密 → 公开」这样的前后值，照它说）；"
@@ -1229,19 +1281,33 @@ SKILLS: list[Skill] = [
             "（**用户本轮点名了就直接用点名的那个，不必先读**；没点名只说特征时必须先用 "
             "admin_notes 读回确切 id），add=要加的标签名列表，remove=要去掉的标签名列表，"
             "replace=整体替换成哪些标签名（**只有用户明确说要清空/整体换掉标签时才用 replace，"
-            "传 [] 就是清空**）。标签按名字精确匹配站内已有的标签，**不会自动新建**"
-            "（要新建先选 tag_create）。写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统定：判成明确命令就直接办、判不出来才弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
+            "传 [] 就是清空**）。加标签时，**要加的标签站内还没有的话系统会在同一张确认卡里"
+            "先建再挂**（一步走完，不必先选 tag_create 分两步办）。写操作：**必须用户本轮明确下令才会执行**；命令式措辞即便你觉得该先问一句，也**照常选本技能**——要不要真动手由系统定：判成明确命令就直接办、判不出来才弹确认框问主人，你用 chat 索要确认会让这一轮什么都不发生。**仅管理员可用**"
         ),
         inputs={"article_id": "文章 id", "add": "（可选）要加的标签名列表",
                 "remove": "（可选）要去掉的标签名列表",
-                "replace": "（可选）整体替换成这些标签名；[] 表示清空"},
+                "replace": "（可选）整体替换成这些标签名；[] 表示清空",
+                "parent_tag": "（可选）要加的标签站内还没有时，按这个名字的**一级标签**"
+                              "当父标签新建（建二级标签才给）；不给就建一级标签",
+                "color": "（可选）用户**点了名**的颜色：中文色名或站内色板色值；"
+                         "只用于**新建**的那个标签，没说就不填"},
+        # 条件工具（20261009）：`set_article_tags` 是本体，`create_tag` 是"要加的标签
+        # 站内还没有"时同一张卡里排在前面的那一步。它**不进 `plan`** 的理由见
+        # `Skill.extra_plan_tools` 的长注（会变成台账里的僵尸步骤）。
+        # `_confirm_grant_plan` 的形状检查读 plan + extra_plan_tools 之和：少声明这一条，
+        # 主人点「全部办」时整批会被判"技能与工具对不上"、一个工具都不执行。
+        extra_plan_tools=("create_tag",),
         plan=[("set_article_tags", {"article_id": "$article_id", "add": "$add",
                                     "remove": "$remove", "replace": "$replace"})],
         complete_when="set_article_tags 返回了改动前后的标签",
         reply_contract=(
-            "只能按 set_article_tags 的实际返回作答，并说清改的是哪一篇、标签从什么变成什么；"
+            "只能按 set_article_tags（以及本轮同时执行了的 create_tag）的实际返回作答，"
+            "并说清改的是哪一篇、标签从什么变成什么；"
+            "本轮若执行了 create_tag，按它的返回如实说那个标签是**新建**的还是站内本来就有的"
+            "（返回里写着「已经存在…复用」就是复用，别把它说成新建）；"
             "返回「站内没有这些标签」时如实转述并说明需要先建标签或改名字；"
-            "返回失败/未确认时如实说没改，**绝不得用完成式声称已改好，也不得说已经建了新标签**"
+            "返回失败/未确认时如实说没改，**绝不得用完成式声称已改好**，"
+            "也不得凭空说建了新标签（没收到 create_tag 的回执就不许说建了）"
         ),
         roles=ADMIN_ROLES,
     ),
@@ -3614,7 +3680,14 @@ def _instantiate_plan(skill_name: str, params: dict,
                     "status": "refused"}
         else:
             aid = _norm_pos_int(params.get("article_id"))
-            if aid is None:
+            # 多篇形态（20261009）：`article_ids` 数组 + 同一份 status/is_top。两个槽
+            # **可以同时给**（模型把第一篇写进单个槽、其余写进数组是常见形态）⇒ 合并成
+            # 一份去重保序的清单；只给单个槽时逐字节等价于旧行为。数组本身的语义是
+            # "这个动作对这几篇各来一次"（一篇一条 spec），不是"一篇文章几个 id"。
+            aids = _pos_int_list(params.get("article_ids"))
+            if aid is not None:
+                aids = [aid] + [x for x in aids if x != aid]
+            if not aids:
                 note = (f"{skill.name} 缺少文章 id（article_id）：不调用任何工具，"
                         "如实向主人问清是哪一篇文章；若不知道 id，"
                         "先选 admin_notes 技能读出后台文章清单再回来")
@@ -3631,20 +3704,34 @@ def _instantiate_plan(skill_name: str, params: dict,
                     note = ("article_status 没有指出要改什么（status / is_top）："
                             "不调用任何工具，如实向主人问清要改成什么")
                 else:
-                    args = {"article_id": aid}
+                    # **一篇一条 spec**（20261009，与 `tag_create.titles` 同一条纪律）：
+                    # N 篇 ⇒ N 条 `set_article_status`，多 spec 的现成通道全部自动接上
+                    # （卡印成清单 + 「全部办」、逐条执行、逐条回执、逐条"已是目标值"
+                    # 摘除）。N=1 时逐字节等于旧行为（键序 article_id→status→is_top 不变）。
+                    fields = {}
                     if status is not None:
-                        args["status"] = status
+                        fields["status"] = status
                     if top is not None:
-                        args["is_top"] = top
-                    tools.append(f"set_article_status({json.dumps(args, ensure_ascii=False)})")
-                    note = (f"修改文章 {aid}："
+                        fields["is_top"] = top
+                    for one in aids:
+                        tools.append("set_article_status("
+                                     + json.dumps({"article_id": one, **fields},
+                                                  ensure_ascii=False) + ")")
+                    note = (f"修改文章 {'、'.join(str(x) for x in aids)}："
                             + "、".join(filter(None, [
                                 f"状态→{A.status_cn(status)}" if status is not None else "",
                                 f"置顶→{A.top_cn(top)}" if top is not None else ""]))
                             + "（只改点名的字段）")
             else:  # article_tags
+                aid = aid if aid is not None else (aids[0] if len(aids) == 1 else None)
                 add, rm, rep = params.get("add"), params.get("remove"), params.get("replace")
-                if rep is not None and (add or rm):
+                if len(aids) > 1:
+                    # `article_ids` 只对 `article_status` 声明（本文具一件只改一篇的标签）。
+                    # 模型越界填了多篇 ⇒ **零工具 + 问清**：悄悄只改第一篇、其余不声不响，
+                    # 正是本批要治的那个病。
+                    note = (f"article_tags 一次只改**一篇**文章的标签（收到了 "
+                            f"{len(aids)} 个 id）：不调用任何工具，如实问主人这次先改哪一篇")
+                elif rep is not None and (add or rm):
                     note = ("article_tags 的 replace 与 add/remove 同时出现（一个说\"整体替换\"、"
                             "一个说\"增减\"）：不调用任何工具，如实向主人问清意图")
                 elif not add and not rm and rep is None:
@@ -3661,12 +3748,61 @@ def _instantiate_plan(skill_name: str, params: dict,
                             # replace=[] 是有语义的（清空标签），必须原样传下去；
                             # add/remove 的空列表没有语义，剔掉。
                             args[key] = items
+                    color_spec = _write_arg(params.get("color"))
+                    hexval = A.match_tag_color(color_spec) if color_spec else None
                     if not any(k in args for k in ("add", "remove", "replace")):
                         note = ("article_tags 的标签列表都是空的：不调用任何工具，"
                                 "如实向主人问清要改哪些标签")
+                    elif color_spec and hexval is None:
+                        note = (f"color「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}）："
+                                "不调用任何工具，如实向主人说明只有这几种颜色，请他挑一个")
                     else:
+                        # ── 要加的标签站内还没有 ⇒ **同一张卡里先建再挂**（20261009）──
+                        # 现场（trace `20261009T070914`，主人原话「像指明给什么挂标签，就
+                        # 一步走完建标签挂标签，意图这么明显还要问第二次拆开浪费成本就算了
+                        # 体验太差了」）：主人说「给文章 46 加上 embeding 标签」，planner 按
+                        # `article_tags` 的老契约（"不会自动新建，要新建先选 tag_create"）先
+                        # 建标签，挂标签那一步只能落到**下一轮**；而下一轮主人只回一个「要」，
+                        # 跨轮的挂标签请求在出处闸那里变成零工具收尾——一句话的意图被拆成
+                        # 两次弹卡、两次点头，第二次还落空。
+                        #
+                        # 判据与 `tag_create` 的"一名一 spec"**同源**：一个待建的名字一条
+                        # `create_tag`，排在 `set_article_tags` **之前**（execute 按序字面
+                        # 执行，先建后挂）。
+                        # ⚠️ 这个展开**不知道字典**（`instantiate_plan` 是纯函数）⇒ "这个
+                        # 名字站内到底有没有"由 `graph._drop_satisfied_tag_creates` 在
+                        # 规划轮收尾前问一次字典、把已有的那些**摘掉**（判据是**任何一层**
+                        # 有这个名字就算有）。**不能**只靠 `adminops.reached_specs` 兜：
+                        # 它只在**弹卡那一支**跑，而且 create_tag 支的判据是"同名**同层**"
+                        # ⇒ 命令式措辞走免弹窗快道时一次都不筛，而"名字在另一层"恰好是
+                        # `create_tag` 会**直接新建**（不复用）的那一格 = 库里多一条重名
+                        # 一级标签。两处判据的宽窄不同是刻意的，见那两个函数各自的注。
+                        # 只覆盖 `add`：`replace`（整体换掉）不算在内——那一步的语义里
+                        # "这些名字都该是现成的"，缺了就由 `set_article_tags` 如实回
+                        # 「站内没有这些标签」，没有"顺手替主人建一批"这回事。
+                        #
+                        # 与值地基的关系（20261009 同步改）：`add` 里的名字照旧走
+                        # `_name_arg_fix` 的"校正到主人原话 / 解不出就零写"——那张函数
+                        # 此前的 `len(tools) != 1` 早退**已拆掉**，字段取计划里所有 spec
+                        # 的并集、取值读 `params`（见 `graph._name_arg_fix` 的长注）。不
+                        # 改的话这一族改完 ≥2 条 spec 就等于把值地基整族关掉（⑤「列表值
+                        # 也是值」与摘标签两条既有锁当场红，`T070914` 那次"值没有出处"
+                        # 的如实拒绝也不再发生）。
+                        pname = _write_arg(params.get("parent_tag"))
+                        creating = list(args.get("add") or [])
+                        for nm in creating:
+                            spec = {"title": nm}
+                            if pname:
+                                spec["parent_tag"] = pname
+                            if hexval:
+                                spec["color"] = hexval
+                            tools.append(f"create_tag({json.dumps(spec, ensure_ascii=False)})")
                         tools.append(f"set_article_tags({json.dumps(args, ensure_ascii=False)})")
-                        note = f"修改文章 {aid} 的标签（只动点名的标签，其余保持不动）"
+                        # 注记必须把**两件事**都说出来：它进 NOTE 行，narrator 照它组织
+                        # 回复（卡面上那几行由 `render_action_lines` 从 specs 印，不走这里）。
+                        extra = ("（先建再挂：站内已经有的直接用，没有的先新建——"
+                                 "已存在的那几条会在弹卡前自动摘掉）") if creating else ""
+                        note = (f"修改文章 {aid} 的标签（只动点名的标签，其余保持不动）{extra}")
         if not note:
             note = f"{skill.name}：参数齐备"
     else:

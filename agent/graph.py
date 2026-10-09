@@ -6708,6 +6708,19 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
             return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
                     "done": False}
 
+        # 「先建再挂」那一步的存在性剪枝（20261009，见 `_drop_satisfied_tag_creates`）：
+        # 位置在这一段是刻意的——排在所有**可能重建计划**的校正步（`_name_arg_fix`
+        # 会 `plan_obj.clear()+update()`）**之后**、`plan_state` 编码 `plan` 文本之前。
+        # 排在拒绝分发之后是因为：被拒的那一轮不发工具，剪枝没有意义（那条路 return）。
+        # 它也**不是**判据（不拦任何东西），只是把一条注定不该跑（跑了会多建一条重名
+        # 标签）的步骤从计划里拿掉——读不到字典就一个都不摘，方向同 `reached_specs`。
+        _pruned_tags = _drop_satisfied_tag_creates(plan_obj, config)
+        if _pruned_tags:
+            record("planner", "tag_create_pruned", skill="article_tags",
+                   labels=_pruned_tags[:3], round=rounds)
+            logger.info("[planner] 要挂的标签站内已经有（%s）→ 同一张卡里那一步 "
+                        "`create_tag` 摘掉，只挂现成的", "、".join(_pruned_tags[:3]))
+
         # 参数不齐 → 同轮纠偏重决策（20260926）：与剔空纠偏**同一条通道**，因为
         # 两者是同一类事故——"计划里这一轮什么都不会执行"，而下游只有 narrator
         # 一条路。此前这一段只记日志/trace，计划照原样往下走 ⇒ `route_after_planner`
@@ -7607,7 +7620,12 @@ def _confirm_grant_plan(grant: dict) -> dict:
     # 是防**内部不一致**——签的时候用技能 A、执行的时候却被塞进工具 B，只会是
     # 某处逻辑写错了；而"写操作跑在一份没有人预期它会跑的技能名下"正是最难查的
     # 那类事故。对不上就一个工具都不执行（空清单 + 如实告知）。
+    # `extra_plan_tools` 是**条件工具**（20261009，见 `Skill.extra_plan_tools` 长注）：
+    # 展开函数在特定条件下才会多派出去的那几件（`article_tags` ⇒ `create_tag`）。
+    # 它们**不能写进 `plan`**（会被 `tasks.intents_to_declarations` 读成"每个任务都有
+    # 这一步"，标签已存在时永远等不到那条回执），所以这里读**两者之和**。
     allowed = {t for t, _ in (skill.plan if skill else [])}
+    allowed |= set(getattr(skill, "extra_plan_tools", ()) or ())
     bad = [str(s.get("tool")) for s in specs if str(s.get("tool")) not in allowed]
     if not tools or skill is None or bad:
         note = ("确认令牌里的技能/工具对不上（未执行任何操作）：如实告知主人这次确认无效，"
@@ -9037,6 +9055,64 @@ def _name_arg_fix(plan_obj: dict, user_msg,
     plan_obj.clear()
     plan_obj.update(fresh)
     return None
+
+
+def _drop_satisfied_tag_creates(plan_obj: dict, config) -> list[str]:
+    """`article_tags` 同卡「先建再挂」里，**站内已经有这个名字**的那一步摘掉（20261009）。
+
+    背景：`article_tags` 的展开器把 `add` 里**每个**名字都派成一条 `create_tag`
+    （先建再挂、一张卡一次点击，见 `skills.instantiate_plan` 那一支）。它是**纯函数**、
+    看不到标签字典，所以"这个名字站内到底有没有"只能在这里问——判据就是字典。
+
+    不摘会怎样（两条都是真缺口，不是防患于未然）：
+      · `create_tag` 的复用判据是**同名同层**（`tools.create_tag` 与
+        `adminops._reached_one` 逐字同形）：名字站内**有**、但在另一层（「Git」是
+        「编程」下的二级标签，而这一步没带 `parent_tag`）时它**不复用、直接新建**
+        ⇒ 库里多出一个重名的一级标签；
+      · 命令式措辞（「把「Git」加到文章 16」）走免弹窗快道时**连卡都没有**
+        （`_confirm_popup` 的快道在 `reached_specs` 之前返回）⇒ 静默多一条脏数据。
+        `reached_specs` 那道只能兜住"弹卡那一支 + 同层"的半边。
+
+    判据刻意**比 `reached_specs` 宽**：任何一层、同名多条也算"有"。理由与那一处不同
+    ——那边判的是"状态已经是目标值"（那时"建一级标签"就是主人要的目标，同层才对得上）；
+    这里判的是"这个名字用得上现成的"，这一步的意图从来不是"我要那个一级标签"，而是
+    "保证这个名字能挂上去"。同名多条（两个不同爸爸下的同名二级标签）也算"有"：
+    那一步真跑起来只会再建出第三条重名的，挂哪一条仍得主人自己说。
+
+    **字典读不到（None）⇒ 一个都不摘**（读不到不是"没有"）：误摘的代价是这个标签
+    建不出来、主人白说一遍；漏摘的代价是卡面上多一行「新建」，主人看得见。
+    fail-open 的方向与 `reached_specs` 同一条。
+
+    返回被摘掉的那些标签名（给 trace/日志用）。**只读** `plan_obj["tools"]`，就地改它
+    ——`plan` 文本由 `plan_state` 在收尾时一次编码，改这一处即可（同
+    `_name_arg_fix` 的重建纪律：本函数排在那一步之后，之后没人再展开一次计划）。
+    """
+    if str(plan_obj.get("skill") or "") != "article_tags":
+        return []
+    tools = list(plan_obj.get("tools") or [])
+    if not any(_tool_name(t) == "create_tag" for t in tools):
+        return []
+    try:
+        from tools.base import _tag_index
+        index = _tag_index(config)
+    except Exception:
+        index = None
+    if not isinstance(index, dict):
+        return []
+    kept: list[str] = []
+    dropped: list[str] = []
+    for spec in tools:
+        if _tool_name(spec) == "create_tag":
+            args, args_ok = _tool_args(spec)
+            name = str((args or {}).get("title") or "").strip() if args_ok else ""
+            hit, cands = A.find_tag(index, name) if name else (None, [])
+            if hit is not None or cands:
+                dropped.append((hit or cands[0]).label)
+                continue
+        kept.append(spec)
+    if dropped:
+        plan_obj["tools"] = kept
+    return dropped
 
 
 def _ident_grounded(name: str, args: dict, user_msg) -> bool:

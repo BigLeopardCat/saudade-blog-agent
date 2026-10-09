@@ -24,6 +24,7 @@
      这两句是用户点"确定"之前唯一能看到的后果）。
 """
 import contextlib
+import json
 import sys
 from pathlib import Path
 
@@ -561,7 +562,7 @@ check("白名单里已有 announcement_title / announcement_id（20260922 第五
 # admin_category_create_popup 整轮 FAIL、零弹窗、用户收到一句"未知工具"的系统报错。
 # 这类错误的形态是**参数、模板、注册表都各看一遍都看不出问题**（三处都自洽），
 # 只有把展开结果与注册表对一遍才照得出来——所以锁在这一层。
-from agent.skills import WRITE_SKILL_NAMES, instantiate_plan  # noqa: E402
+from agent.skills import SKILL_MAP, WRITE_SKILL_NAMES, instantiate_plan  # noqa: E402
 
 _REGISTERED = {t.name for t in base.get_all_tools()}
 # 每个写技能的最小合法参数（只为把模板填满，不涉及真调用）
@@ -649,7 +650,11 @@ _EXPECT_TOOL = {
     "announcement_delete": "delete_announcement",
     "board_audit": "audit_board_comment",
     "board_delete": "delete_board_comment",
-    "article_status": "set_article_status", "article_tags": "set_article_tags",
+    "article_status": "set_article_status",
+    # 挂标签（20261009）：要加的名字站内没有时**同一步先建再挂**——`add` 里每个名字
+    # 一条 `create_tag`，再接一条 `set_article_tags`（已有的那几条由 `reached_specs`
+    # 在签发前摘掉，卡面因此不会凭空多一行「新建」）。名单按列表写，同变更集那条口径。
+    "article_tags": ["create_tag", "set_article_tags"],
     "favorite_add": "add_favorite", "favorite_remove": "remove_favorite",
     "notice_read": "read_notifications",
     "message_read": "read_messages",
@@ -685,6 +690,171 @@ for skill_name, params in _MIN_PARAMS.items():
     check(f"{skill_name} 展开出的工具名都在 _TOOL_REGISTRY 里（否则 execute 只能回"
           f"「未知工具」错误帧）",
           all(n in _REGISTERED for n in names), f"{[n for n in names if n not in _REGISTERED]}")
+
+
+# ── ⑧b 挂标签一步走完：同卡「先建再挂」（20261009）────────────────────────
+# 现场（trace `20261009T070848` → `T070855` → `T070914`）：主人一句「给空间向量那篇文章
+# 加个标签embeding」被系统拆成两轮——先弹卡建标签（主人点了确定、标签真建出来 id=44），
+# 系统**再问一句**「要我把 noteId=46 打上这个标签吗？」；主人回「要」，planner 选对了
+# 技能、参数也对，却在出处闸上原地撞死（那一轮两本账都是空的）⇒ 零工具 + 一句
+# 「主人这句话里没有能对上「embeding」这个参数值的名字」。主人的原话：「意图这么明显
+# 还要问第二次拆开浪费成本就算了体验太差了」。
+# 三处一起治，本节的锁只钉**展开器那一步**（值地基在 `test_admin_write.py` ⑳b，
+# 第三本账在 `test_target_grounding.py` ⑩）：
+print("\n⑧b 挂标签一步走完：站内没有的名字先建再挂，同卡同一次点击")
+
+_it_add = instantiate_plan("article_tags", {"article_id": 46, "add": ["embeding"]})
+_it_names = [s.split("(", 1)[0] for s in _it_add["tools"]]
+check("站内没有的名字 ⇒ 先建再挂（一条 create_tag + 一条 set_article_tags）",
+      _it_names == ["create_tag", "set_article_tags"], str(_it_names))
+_it_args = [json.loads(s[s.index("(") + 1:s.rindex(")")]) for s in _it_add["tools"]]
+check("  两条 spec 的参数同源（要建的名字就是要挂的那个，不许各写一份）",
+      _it_args[0].get("title") == "embeding" and _it_args[1].get("add") == ["embeding"],
+      json.dumps(_it_args, ensure_ascii=False))
+_it_rep = instantiate_plan("article_tags", {"article_id": 46, "remove": ["摄影"]})
+check("  注记把两件事都说出来（它进 NOTE 行，narrator 照它组织回复）",
+      "新建" in _it_add["note"] and "再挂" in _it_add["note"], _it_add["note"])
+check("  只摘不建时不画蛇添足（注记不许把「摘标签」也说成要新建）",
+      "新建" not in _it_rep["note"] and [s.split("(", 1)[0] for s in _it_rep["tools"]]
+      == ["set_article_tags"], _it_rep["note"])
+
+_it_two = instantiate_plan("article_tags", {"article_id": 46, "add": ["embeding", "RAG"]})
+check("一次加两个名字 ⇒ 两条 create_tag（一名一 spec，同 `tag_create.titles` 的纪律）",
+      [s.split("(", 1)[0] for s in _it_two["tools"]]
+      == ["create_tag", "create_tag", "set_article_tags"])
+
+_kept_add, _already_add = A.reached_specs(
+    [{"tool": "create_tag", "args": _it_args[0]},
+     {"tool": "set_article_tags", "args": _it_args[1]}], index=IDX)
+check("标签站内还没有 ⇒ 两条都留着（一张卡问两件事，「全部办」一步走完）",
+      [s["tool"] for s in _kept_add] == ["create_tag", "set_article_tags"]
+      and not _already_add, str([s["tool"] for s in _kept_add]))
+
+_have = [json.loads(s[s.index("(") + 1:s.rindex(")")])
+         for s in instantiate_plan("article_tags",
+                                   {"article_id": 46, "add": ["编程"]})["tools"]]
+_kept_have, _already_have = A.reached_specs(
+    [{"tool": "create_tag", "args": _have[0]}, {"tool": "set_article_tags", "args": _have[1]}],
+    index=IDX)
+check("标签站内已经有（同名同层）⇒ 建那一条被摘掉，只剩一条**只挂**",
+      [s["tool"] for s in _kept_have] == ["set_article_tags"]
+      and len(_already_have) == 1 and "本来就在站里" in _already_have[0]["why"],
+      str([s["tool"] for s in _kept_have]) + str(_already_have))
+check("  卡面因此不会凭空多一行「新建」（已达成的现状句挂在正文末尾）",
+      "本来就在站里" in A.render_already_note(_already_have)
+      and "新建" not in A.render_confirm_question(_kept_have, IDX, None),
+      A.render_confirm_question(_kept_have, IDX, None))
+
+# 条件工具（`extra_plan_tools`）**不进 `plan`**是刻意的：`tasks.intents_to_declarations`
+# 会把 `plan` 读成"每个任务都有这一步"，而标签已存在时那一条永远等不到回执（僵尸行）。
+# 但两个读 `plan` 的判据要**照旧看得见它**，否则"加了条件工具"与"技能和工具对不上"
+# 在系统里长得一样——它们各有一条锁在别处（`test_confirm.py` ④、`test_skills.py` ②）。
+check("create_tag 不在 article_tags.plan 里（进了 plan 就变成僵尸任务步骤）",
+      "create_tag" not in [t for t, _ in SKILL_MAP["article_tags"].plan]
+      and "create_tag" in SKILL_MAP["article_tags"].extra_plan_tools)
+
+# ── ⑧b′ 「先建再挂」的存在性剪枝（20261009）──────────────────────────────
+# 三步里最后一步、也是最容易漏的一步：展开器派出的 `create_tag` 是**纯函数**的产物，
+# 它不知道这个名字站内有没有。而 `create_tag` 的复用判据是**同名同层**——
+# 名字有、但在另一层（「Git」是「编程」下的二级标签，这一步没带 parent_tag）时它
+# **不复用、直接新建** ⇒ 库里多出一个重名的一级标签；命令式措辞走免弹窗快道时
+# 连卡都没有（`reached_specs` 只在弹卡那一支跑），是静默的脏数据。
+# 判据刻意比 `reached_specs` 宽：**任何一层、同名多条都算"有"**。
+from agent.graph import _drop_satisfied_tag_creates  # noqa: E402
+
+_prune_reads = []
+
+
+def _prune(plan, index=IDX):
+    """跑一次剪枝：字典读端换成桩（顺带记下**读了几次**，惰性那一条靠它判）。"""
+    import tools.base as _b
+    _saved = _b._tag_index
+
+    def _stub(cfg):
+        _prune_reads.append(1)
+        return index
+
+    _b._tag_index = _stub
+    try:
+        plan = dict(plan, tools=list(plan.get("tools") or []))
+        _dropped = _drop_satisfied_tag_creates(plan, {})
+        return plan["tools"], _dropped
+    finally:
+        _b._tag_index = _saved
+
+
+_py = instantiate_plan("article_tags", {"article_id": 46, "add": ["Python"]})
+_py_tools, _py_drop = _prune(_py)
+check("要挂的名字站内**有**（却在另一层：Python 是「编程」下的二级标签）⇒ "
+      "建那一条摘掉，只剩「只挂」——留着它就会真在库里多建一个重名的一级标签",
+      [s.split("(", 1)[0] for s in _py_tools] == ["set_article_tags"]
+      and _py_drop == ["编程 / Python"], str([s.split("(", 1)[0] for s in _py_tools]) + str(_py_drop))
+_missing = instantiate_plan("article_tags", {"article_id": 46, "add": ["embeding"]})
+check("站内确实没有的名字 ⇒ 一条都不摘（「先建再挂」照旧一步走完）",
+      [s.split("(", 1)[0] for s in _prune(_missing)[0]]
+      == ["create_tag", "set_article_tags"] and not _prune(_missing)[1])
+_mix = instantiate_plan("article_tags", {"article_id": 46, "add": ["Python", "embeding"]})
+check("  混合批：只摘已有的那一条，缺的那一条照建（顺序与其余 spec 一字不动）",
+      [s.split("(", 1)[0] for s in _prune(_mix)[0]]
+      == ["create_tag", "set_article_tags"]
+      and json.loads(_prune(_mix)[0][0][_prune(_mix)[0][0].index("(") + 1:-1])["title"]
+      == "embeding", str(_prune(_mix)[0]))
+check("  同名多条（两个爸爸下的同名二级标签）也算「有」——那一步真跑只会再建出第三条重名",
+      _prune(instantiate_plan("article_tags", {"article_id": 46,
+                                               "add": ["Asyncio"]}))[1] != [])
+check("字典读不到（None）⇒ 一个都不摘（读不到 ≠ 没有；误摘是多问一句、漏摘只是卡面多一行）",
+      [s.split("(", 1)[0] for s in _prune(_missing, index=None)[0]]
+      == ["create_tag", "set_article_tags"])
+check("只认 `article_tags`：`tag_create` 本体的「建一级标签」不受它管"
+      "（那一步的复用判据是同名同层，同名二级**不该**拦下它）",
+      _prune({"skill": "tag_create",
+              "tools": ['create_tag({"title": "Python"})']})[0]
+      == ['create_tag({"title": "Python"})'])
+_prune_reads.clear()
+_lazy_tools, _ = _prune({"skill": "article_tags",
+                         "tools": ['set_article_tags({"article_id": 46, "add": ["编程"]})']})
+check("  没有 `create_tag` 的计划一次都不读字典（惰性：不是每条 article_tags 都多一次请求）",
+      _lazy_tools == ['set_article_tags({"article_id": 46, "add": ["编程"]})']
+      and not _prune_reads)
+# 接线锁（本仓的老规矩）：判据活在测试里、生产没调它，等于没有。
+# 决策主体在 `_planner_decide`（`planner_node` 只是薄壳，见它的 docstring）。
+import inspect  # noqa: E402
+_pnode_src = inspect.getsource(__import__("agent.graph", fromlist=["x"])._planner_decide)
+check("planner 收尾前真调了它（且排在 `_name_arg_fix` 之后——那一步会重建计划）",
+      "_drop_satisfied_tag_creates(plan_obj, config)" in _pnode_src
+      and _pnode_src.index("value_refuse = _name_arg_fix")
+      < _pnode_src.index("_drop_satisfied_tag_creates(plan_obj, config)"))
+
+
+# 同一族的另一半：`article_status` 的 `article_ids`（主人一句话点了好几篇、要改成
+# **同一个**值）。病与挂标签同源——清单里只有一件时，"剩余意图"按**技能**被判成已办
+# （`intents_to_declarations` 的 `skill ∈ acted_skills` 那条），于是只改了一篇就收尾。
+# 治法同样是"把这一件事的**全部**条目放进同一张卡"，`intents_to_declarations` 那条
+# 算术一个字不动（它与判据侧 `require_task_goal_per_intent` 同源，见它的 docstring）。
+print("\n⑧c article_status：一次点多篇 ⇒ N 条 spec、一张卡（N=1 逐字节等于旧行为）")
+_one = instantiate_plan("article_status", {"article_id": 22, "is_top": 0})
+check("单篇：与旧形态逐字节一致（键序 article_id→status→is_top 不变）",
+      _one["tools"] == ['set_article_status({"article_id": 22, "is_top": 0})'],
+      str(_one["tools"]))
+_many = instantiate_plan("article_status", {"article_ids": [22, 23], "status": "private"})
+check("多篇：一篇一条 spec（多 spec 的现成通道全部自动接上：卡印清单、逐条执行、"
+      "逐条回执、逐条「已是目标值」摘除）",
+      _many["tools"] == ['set_article_status({"article_id": 22, "status": "private"})',
+                         'set_article_status({"article_id": 23, "status": "private"})'],
+      str(_many["tools"]))
+check("  注记把**所有** id 都印出来（主人一眼看得出这一次动了几篇）",
+      "22" in _many["note"] and "23" in _many["note"], _many["note"])
+check("  `article_id` 与 `article_ids` 同时给 ⇒ 合并去重、不丢 id",
+      instantiate_plan("article_status",
+                       {"article_id": 22, "article_ids": [22, 23], "is_top": 1})["tools"]
+      == ['set_article_status({"article_id": 22, "is_top": 1})',
+          'set_article_status({"article_id": 23, "is_top": 1})'],
+      str(instantiate_plan("article_status",
+                           {"article_id": 22, "article_ids": [22, 23],
+                            "is_top": 1})["tools"]))
+check("  一个 id 都给不出 ⇒ 零工具 + 问清（不许悄悄挑一篇）",
+      not instantiate_plan("article_status",
+                           {"article_ids": [0, -1], "is_top": 1})["tools"])
 
 
 # ══════════════════════════════════════════════════════════════════

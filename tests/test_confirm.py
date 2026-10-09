@@ -312,6 +312,25 @@ check("技能内**部分**工具越界也整单拒绝（不做「挑出合法的
           {"tool": "set_article_status", "args": {"article_id": 1}}]})["tools"] == [])
 check("specs 为空 → 空清单（不猜要做什么）",
       _confirm_grant_plan({"skill": "tag_create", "specs": []})["tools"] == [])
+# 条件工具 `extra_plan_tools`（20261009）：`article_tags` 的展开函数在"要加的名字站内
+# 没有"时会多派一条 `create_tag`（先建再挂，一张卡一次点击）。它**不能**写进 `plan`
+# （会被 `tasks.intents_to_declarations` 读成"每个任务都有这一步"，标签已存在时永远
+# 等不到那条回执 ⇒ 僵尸行），所以这一关读的是**两者之和**。漏了它症状很隐蔽：卡片弹得
+# 好好的，主人点「确定」那一轮被判成"技能与工具对不上"⇒ 空清单、一个工具都不执行。
+_AT_SPECS = [{"tool": "create_tag", "args": {"title": "embeding"}},
+             {"tool": "set_article_tags", "args": {"article_id": 46, "add": ["embeding"]}}]
+check("条件工具照常过闸（article_tags 的先建再挂一条都不许被吞）",
+      _confirm_grant_plan({"skill": "article_tags", "specs": _AT_SPECS})["tools"]
+      == ['create_tag({"title": "embeding"})',
+          'set_article_tags({"article_id": 46, "add": ["embeding"]})'],
+      str(_confirm_grant_plan({"skill": "article_tags", "specs": _AT_SPECS})["tools"]))
+check("  加了条件工具不等于开了口子：越界的照旧整单拒绝",
+      _confirm_grant_plan({"skill": "article_tags", "specs": _AT_SPECS + [
+          {"tool": "delete_tag", "args": {"name": "编程"}}]})["tools"] == [])
+check("  条件工具只对**声明了它**的技能开口（别的技能带上 create_tag 照样拒）",
+      _confirm_grant_plan({"skill": "article_status", "specs": [
+          {"tool": "set_article_status", "args": {"article_id": 22, "is_top": 0}},
+          {"tool": "create_tag", "args": {"title": "embeding"}}]})["tools"] == [])
 
 print("\n⑤ 确认轮执行：两道确定性门放行、权限不放行")
 CALLS: list = []
