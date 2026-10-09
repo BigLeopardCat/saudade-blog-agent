@@ -1379,6 +1379,65 @@ _value_case("引号说不清哪一个才是值（在「编程」和「摄影」�
             "tag_create", {"title": "标签名"},
             "在「编程」和「摄影」下面都建一个", "REFUSE")
 
+print("\n⑳b 一张卡多条 spec 时值地基照旧生效（20261009 挂标签一步走完的另一半）")
+# `article_tags` 的 `add` 现在展开成「N 条 create_tag + 一条 set_article_tags」（先建
+# 再挂，一张卡一步走完）——而 `_name_arg_fix` 此前一律在 `len(tools) != 1` 处**整体
+# 早退** ⇒ 这一族的值地基等于不存在：⑤「列表值也是值」与摘标签两条既有的锁当场红，
+# `T070914` 那次"值在主人这句话里找不到来源"的如实拒绝也不再发生（工具照写、卡照弹，
+# 名字是编的这件事得靠主人自己从卡面上看出来）。现在字段取计划里**所有 spec** 的并集、
+# 取值读 `params`（展开器的输入契约，也是重建计划时唯一被读的那份）。
+_value_case("+ 多条 spec 上照样校正：抄了泛称 → 认主人引号里那一段",
+            "article_tags", {"article_id": 46, "add": ["标签名"]},
+            "给文章 46 加上「音乐」标签", {"add": ["音乐"]})
+_value_case("+ 多条 spec 上照样拒绝：主人没说过的名字（070914 那次现场）",
+            "article_tags", {"article_id": 46, "add": ["embeding"]},
+            "给这篇文章加个标签吧", "REFUSE")
+_value_case("+ 摘标签那一半同样生效（remove 与 add 同一族，别只修一半）",
+            "article_tags", {"article_id": 46, "remove": ["标签名"]},
+            "把文章 46 的「音乐」标签去掉", {"remove": ["音乐"]})
+# 反向：**派生字段不许被当成可校正的一格**。`article_tags` 的 `create_tag.title` 是从
+# `add` 派生的、不在 `params` 上；若从 spec 里读它，校正就会往 params 塞一个展开器
+# 根本不读的键——工具照执行、参数却一毫米没动，回执读起来还像改成功了。
+_value_case("+ 派生字段（create_tag.title ← add）不许被顺手改掉",
+            "article_tags", {"article_id": 46, "add": ["音乐"]},
+            "给文章 46 加上「音乐」标签", None)
+# 多 spec 上**不判 `parent_tag`**（20261009）：那一格的老口径是"父标签的名字必须出自
+# 主人这句话"，前提是**建标签本身就是主人点的那件事**。`article_tags` 上那条
+# `create_tag` 是展开器派生的**条件步骤**（"要挂的名字站内还没有，先建出来"），父标签
+# 常是主人没说、系统按字典补的一格——在这里判它"没出处"会把**整条计划一起拒**，
+# 连主人明明说出口的"挂上去"一起废掉（正是这一批要治的"一句显意图被拆成两次来回"）。
+# 放开不是没有眼睛：`_ident_grounded` 同样读 pkey ⇒ 父标签没出处那条 `create_tag`
+# 一定进不了免弹窗快道，卡面会把「挂在「X」下面」印出来由主人核对；而且多 spec 计划
+# 在本次改动**之前整段判据都不生效**（`len(tools) != 1` 早退）⇒ 这里是回到它原来的
+# 禁入面，不是新开的门。单 spec（`tag_create` 本体）逐字节不变，见下面那条反向锁。
+_value_case("+ 多 spec 上不判 parent_tag：主人没说父标签（系统补的那一格）⇒ 不拒，照挂",
+            "article_tags", {"article_id": 46, "add": ["embeding"], "parent_tag": "编程"},
+            "给文章 46 加个标签embeding", None)
+_value_case("  反向：单 spec 的 tag_create 照旧判它（建标签就是主人点的那件事，父标签得他说）",
+            "tag_create", {"title": "Redis", "parent_tag": "编程"},
+            "帮我建一个 Redis 标签", "REFUSE")
+
+# 多 spec 上的值校正**不许把参数改坏了**（20261009）：从"整段判据不生效"回到"生效"
+# 这一步，第一次跑就爆出一个真缺口——命名标记后面**并列两个名字**时，抽取段会跨过
+# 引号界碑（`Tokio」和「Axum`）。这个串危险在它**不是**编造：它与指代族相反，是原话的
+# 逐字子串 ⇒ `_value_clean` 与 `_grounded_value` 两条判据**都放行**（判据端的洞见同
+# `_DEICTIC_WORDS` 那条长注：判据是"在不在原话里"，挡不住"在原话里但不是名字"）。
+# 落到多 spec 计划上还有第二重伤害：参数被改坏后 `instantiate_plan` 会**再展开一条
+# spec**（`title` 与 `titles` 各展开一份）⇒ 主人说"建两个"，卡上/库里多出一条脏标签。
+# 抽取端判空（`_value_clean` 剥掉两端引号后还剩引号即判空）是这一处的治法，
+# 值空缺 ⇒ 下游照 planner 自己填的那个值继续判。
+_two_params = {"title": "Tokio", "titles": ["Tokio", "Axum"], "parent_tag": "编程"}
+_two_msg = "我想在「编程」下面加两个二级标签，名字叫「Tokio」和「Axum」"
+_value_case("+ 并列两个名字：命名标记那段跨了引号界碑 ⇒ 判空，值一个字不改",
+            "tag_create", _two_params, _two_msg, None)
+_two_pl = instantiate_plan("tag_create", _two_params)
+_two_pl["params"] = dict(_two_params)
+_two_tools = list(_two_pl["tools"])
+g._name_arg_fix(_two_pl, _two_msg)
+check("  而且 **spec 条数不变**（改坏的值会再展开一条：主人说建两个，变成建三个）",
+      _two_pl["tools"] == _two_tools and len(_two_pl["tools"]) == 2,
+      f"{list(_two_pl['tools'])}")
+
 _seen_v: list = []
 _saved_v = g.record
 try:
