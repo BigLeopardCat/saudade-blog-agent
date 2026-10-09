@@ -8813,6 +8813,17 @@ def _value_clean(raw: str) -> str:
     quoted = (len(text) >= 2
               and text[0] in "「『“\"'" and text[-1] in "」』”\"'")
     raw = text.strip("「」『』“”\"'").strip()
+    # 剥掉**两端**引号后段里**还剩**引号 ⇒ 这段捕获跨过了"一个名字"的边界，是把好几个
+    # 名字连成了一串（`_QUOTE_SPAN_RE` 认的四个引号族里剩下的那个就是界碑）。实测
+    # （20261009 探针）：主人说「我想在「编程」下面加两个二级标签，名字叫「Tokio」和
+    # 「Axum」」——`_NAME_VALUE_STOP` 只认标点不认引号，于是命名标记后面那段一路吃到
+    # 最后一个停顿符，判空前的原件是 `Tokio」和「Axum`；而这个段**天然通过**
+    # `_grounded_value`（它是原话的逐字子串）⇒ 一旦被写进去就是一条**真的叫这个名字
+    # 的脏标签**。判空是最安全的处置：值空缺 ⇒ 下游按"planner 自己填的那个"继续判
+    # （有据就放行、没据才零写追问），两条出路都比造一条脏数据好。
+    # 只列 `_QUOTE_SPAN_RE` 那四个族（半角单引号不在内——英文名里的 `'` 不是界碑）。
+    if any(ch in raw for ch in "「」『』“”\""):
+        return ""
     if not raw or len(raw) > 60 or raw in _GENERIC_VALUE_WORDS:
         return ""
     if any(ch in raw for ch in _NAME_VALUE_STOP):
@@ -8948,15 +8959,54 @@ def _name_arg_fix(plan_obj: dict, user_msg,
     那一行里——只认 `user_msg` 会把系统自己规定的重提路径判成编造（零写 + 卡收回）。
     """
     tools = plan_obj.get("tools") or []
-    if len(tools) != 1:
+    if not tools:
         return None
-    tool = _tool_name(tools[0])
-    vfields = _WRITE_VALUE_FIELDS.get(tool) or ()
+    # 一张卡里**多条 spec** 从 20261009 起是常态（`article_tags` 的 add 展开成
+    # 「N 条 create_tag + 1 条 set_article_tags」；`tag_create.titles` 更早就这样），
+    # 而本函数此前一律在 `len(tools) != 1` 处早退 ⇒ 那些计划上的值地基**整体失效**
+    # ——⑤「列表值也是值」与摘标签两条既有锁当场红，`070914` 那次「值在主人这句话里
+    # 找不到来源」的如实拒绝也不再发生（工具照写、卡片照弹，名字是编的这件事得靠
+    # 主人自己从卡面上看出来）。
+    # 现在：字段取计划里**所有 spec 的工具**的并集，取值改读 `params`——它是展开器的
+    # **输入契约**，也是下面重建计划时唯一被读的那一份（`instantiate_plan(skill,
+    # params)`），于是"判的是哪一格"与"写回哪一格"必然是同一格。
+    # 并集里**不由 `params` 供值的键一律跳过**：那说明那条 spec 的这个字段是展开器
+    # 从别的参数派生的（`article_tags` 里 `create_tag.title` ← `add`），改它没有写回处。
+    params = plan_obj.get("params")
+    if not isinstance(params, dict):
+        # 没有 params 的计划对象：退回老口径（多条时说不清取值来自哪一格，不在这里判
+        # ——与 `_target_grounding_refusal` / `_write_target_refusal` 的早退同一个理由）。
+        if len(tools) != 1:
+            return None
+        params = {}
+    vfields: list[str] = []
+    for spec in tools:
+        for k in (_WRITE_VALUE_FIELDS.get(_tool_name(spec)) or ()):
+            if k not in vfields:
+                vfields.append(k)
+    # 报错与留痕用的工具名 / 名字字段：取**承载值字段的第一条**（单条计划时就是它自己）
+    tool = next((_tool_name(s) for s in tools
+                 if _WRITE_VALUE_FIELDS.get(_tool_name(s))), _tool_name(tools[0]))
     tkey, pkey = _WRITE_NAME_FIELDS.get(tool) or (None, None)
     if not vfields and not pkey:
         return None
-    args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": tool, "args": args}]):
+    specs: list[dict] = []
+    for spec in tools:
+        spec_args, args_ok = _tool_args(spec)
+        if not args_ok:
+            return None
+        specs.append({"tool": _tool_name(spec), "args": spec_args})
+    if refs.has_refs(specs):
+        return None
+
+    def _cur(key: str):
+        """这一格的当前值。`params` 优先；单条计划上 `params` 缺席某键时回落到那条
+        spec 的老口径（逐字节保住既有的单工具行为）；多条时回落到 `None`——
+        展开器不读这一格，改它只会往 params 里塞一个没人读的键。"""
+        if key in params:
+            return params.get(key)
+        if len(specs) == 1:
+            return specs[0]["args"].get(key)
         return None
     msg = str(user_msg or "")
     sq = _squash_spaces(msg)
@@ -8976,7 +9026,7 @@ def _name_arg_fix(plan_obj: dict, user_msg,
     selfsame: list[str] = []
 
     for key in vfields:
-        cur = args.get(key)
+        cur = _cur(key)
         if cur in (None, "", [], {}):
             continue
         if isinstance(cur, (list, tuple)):
@@ -8999,7 +9049,7 @@ def _name_arg_fix(plan_obj: dict, user_msg,
             continue
         got = str(cur).strip()
         want = named or (cand_spans[0] if len(cand_spans) == 1 else "")
-        tgt_name = _squash_spaces(str(args.get(tkey) or "")) if tkey else ""
+        tgt_name = _squash_spaces(str(_cur(tkey) or "")) if tkey else ""
         if want and tgt_name and _squash_spaces(want) == tgt_name:
             # 抽出来的"值"就是**目标自己**：等于没抽出来（实测现场见下）——丢掉它，
             # 让下面两条判据接着说话（有正确的命名证据时优先校正，没有才追问）。
@@ -9017,7 +9067,18 @@ def _name_arg_fix(plan_obj: dict, user_msg,
         elif not _grounded_value(got, sq, sq_ledger):
             unresolved.append(got)
 
-    pv = str(args.get(pkey) or "").strip() if pkey else ""
+    # 多 spec 的计划上**不判 `parent_tag`**（20261009）：这一段的老口径是"父标签
+    # 的名字必须出自主人这句话"，它成立的前提是**建标签本身就是主人点的那件事**
+    # （`tag_create` 本体的计划）。`article_tags` 上那条 `create_tag` 是展开器派生的
+    # **条件步骤**（"要挂的名字站内还没有，先建出来"）——父标签往往主人根本没说，
+    # 是系统按字典补的一格；在这里把它判成"没出处"会**整条计划一起拒**（连主人
+    # 明明说出口的"挂上去"一起废掉），正是本批要治的那种"一句显意图被拆成两次来回"。
+    # 放开它的代价可控：这一格在**弹卡**上有眼睛——`_ident_grounded` 同样读 pkey，
+    # 父标签没出处的那条 `create_tag` 一定走不进免弹窗快道，卡面会把
+    # 「挂在「X」下面」印出来由主人核对；而且多 spec 计划在本次改动之前
+    # **整段判据都不生效**（`len(tools) != 1` 早退）⇒ 这里只是回到它原来的禁入面，
+    # 不是新开的门。单 spec 计划（`tag_create` 本体）逐字节不变。
+    pv = str(_cur(pkey) or "").strip() if (pkey and len(tools) == 1) else ""
     if pkey == "parent_tag" and pv and not _grounded_value(pv, sq, sq_ledger):
         pcand = _parent_marked_span(msg)
         if pcand and _squash_spaces(pcand) != _squash_spaces(pv):
@@ -9043,7 +9104,7 @@ def _name_arg_fix(plan_obj: dict, user_msg,
         return tool, why
     if not fixed:
         return None
-    params = dict(plan_obj.get("params") or {})
+    params = dict(params)          # 拷贝：下面要就地 update 再把整份交回展开器重建计划
     logger.info("[planner] 写参数名字值校正（%s）：%s", tool,
                 {k: str(params.get(k))[:30] for k in fixed})
     record("planner", "write_value_correct", tool=tool,

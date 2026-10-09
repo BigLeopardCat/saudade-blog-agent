@@ -274,6 +274,30 @@ check("引号 = 主人明说的字面量 ⇒ 起名叫「它」仍然合法（�
 check("真名字两端都不受影响",
       _msg_named_value("在「编程」下面建一个二级标签，名字叫「向量数据库」") == "向量数据库"
       and _value_clean("向量数据库") == "向量数据库")
+print("\n⑥b 值通道跨过引号界碑的捕获（20261009：并列两个名字时抽出一串引号碎片）")
+# 现场：主人说「我想在「编程」下面加两个二级标签，名字叫「Tokio」和「Axum」」——
+# `_NAME_VALUE_STOP` 只认标点、不认引号，命名标记后面那段一路吃到句尾，原件
+# `Tokio」和「Axum`。它与指代族**方向相反**却同样危险：代词是"在原话里但不是名字"，
+# 这一串是"在原话里、也真的没别的解释"，两个下游判据（`_value_clean` 的干净度、
+# `_grounded_value` 的逐字子串）**都放行** ⇒ 写进去就是一条真叫这个名字的脏标签
+# （多 spec 计划还会因此多展开一条 spec：建两个变建三个）。判空的代价只是"值空缺"，
+# 下游照 planner 自己填的那个值继续判（有据放行、没据才零写追问）。
+_TWO_NAMES_MSG = "我想在「编程」下面加两个二级标签，名字叫「Tokio」和「Axum」"
+check("抽取端：剥掉两端引号后段里还剩引号 ⇒ 跨了界碑，不是名字（原话实证）",
+      _msg_named_value(_TWO_NAMES_MSG) == ""
+      and _value_clean("Tokio」和「Axum") == ""
+      and _value_clean("Rust」和别的") == "")
+check("不连坐：半角单引号不是界碑（英文名里的撇号照旧）",
+      _value_clean("O'Brien") == "O'Brien")
+# 现场重放：模型给的值**本来就有据**（"Tokio" 是主人说过的），抽取器却拿着那串碎片
+# 去"校正"它（`want` 一旦非空就无条件盖上，不看现值有没有据）⇒ 判空这一处同时堵住
+# 两条路：碎片不进参数，真值也不会被它顶掉。
+_two = _plan("create_tag", {"title": "Tokio", "parent_tag": "编程"}, skill="tag_create")
+_two_params = dict(_two["params"])
+check("现场重放：planner 自己填的值原样留着（不拒、不改，更没有引号碎片）",
+      _name_arg_fix(_two, _TWO_NAMES_MSG, role="admin") is None
+      and _two["params"] == _two_params
+      and "」" not in " ".join(_two["tools"]), str(_two["tools"])[:160])
 check("判据端：指代一律不算有据（就在原话里也不算）",
       not _grounded_value("它", _DEFECT_MSG) and not _grounded_value("那些", "把那些标签删掉")
       and _grounded_value("向量数据库", "名字叫「向量数据库」"))
