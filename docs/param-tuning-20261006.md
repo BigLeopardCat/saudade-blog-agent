@@ -205,6 +205,8 @@ The `reasoning_content` in the thinking mode must be passed back to the API.
   外加会话结束把外层 shell 一并收走。**这是 3.7GB 机器上的环境事故，不是模型通路的问题**
   ——预检 8/8 走的就是同一条路。
 - 所以跨模型那一格的结论**只有一句：待跑**。要引它，先拿 `ali-ds` 的全量读数。
+  > **20261010 已补**：两臂各两遍已跑到（`--arms live ali-ds --reps 2`），读数与成本见 **§八**。
+  > `docs/问题记录.md` §1.48 处置①里那条「§六 的『正在跑』补成实际读数」，指的就是这一节。
 
 > 跑法：`.venv/bin/python eval/param_matrix.py --arms think ali-ds --reps 1`
 > 读数：`eval/report/param_matrix.jsonl`；看表：`--report`
@@ -221,3 +223,121 @@ The `reasoning_content` in the thinking mode must be passed back to the API.
   见 §六末。别拿 `ds-chat` 的 42 条红代它答这一格。
 - 没动内部计划文本协议（`plan_encode` / `parse_plan`）——**那一层不在本报告的射程里**，
   与接口层的 `planner_engine` 拨盘是**两回事**（后者 20261004 已删）。
+
+---
+
+## 八、补读（20261010）：`ali-ds` 全量读数 + 两臂成本
+
+> 这一节补的是 §六末那句「跨模型那一格的结论只有一句：**待跑**」。20261006 那轮 `ali-ds` 死在
+> 机器 OOM 上（只有预检 8/8），**今天拿到了**：`.venv/bin/python eval/param_matrix.py
+> --arms live ali-ds --reps 2`，两臂**交替**各两遍，188 条用例（180 评估 + 8 挂闸），
+> 跑在 04:00 夜跑之后（与夜跑并发会把请求率翻倍、读数变噪声）。
+
+### 八.1 两臂各两遍
+
+| 臂 | rep | 跑完 | 红数 | 采样 | 点估计 | 下界 | 硬层 | resets | p50 / p95 秒 | 工具调用 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `live`（生产 qwen3.8-flash） | 2 | 04:57 | 4/180 | 158/161 | 0.9814 | 0.9467 | **❌ 回归组** | 0 | 5.6 / 14.6 | 208 |
+| `live` | 3 | 05:20 | 8/180 | 153/161 | 0.9503 | 0.9050 | ✅ | 4 | 5.8 / 17.1 | 211 |
+| `ali-ds`（`QWEN_MODEL=deepseek-v4.1-flash`） | 1 | 05:38 | 7/180 | 154/161 | 0.9565 | 0.9130 | ✅ | 2 | 5.2 / 13.6 | 180 |
+| `ali-ds` | 2 | 05:56 | 8/180 | 153/161 | 0.9503 | 0.9050 | ✅ | 2 | 5.2 / 13.0 | 185 |
+
+> 别把 `live` rep1（20261006 那份 10/134、下界 0.8681）并进这张表——分母不同（134 vs 161）。
+
+**红集**（表里读不出、但必须看的那一半）：
+
+```
+live  rep2: image_two_colors, dep_search_read_ota, admin_tag_create_two_names_one_card
+            + 回归组 note_traffic_denied_visitor
+live  rep3: rag_noise_mysql, concurrent_orphan_history, admin_board_unresolved_target_honest,
+            admin_tag_create_ambiguous_target_no_write, data_site_map,
+            admin_near_miss_source_honest, multi_step_search_then_read_top,
+            admin_account_role_unknown_target
+ali-ds rep1: attack_embed_command, image_color_red, image_two_colors,
+            own_favorite_add_not_logged_in, account_freeze_grounding_refusal,
+            own_favorite_add_vocative_not_logged_in, mix2_conditional_write_reads_first
+ali-ds rep2: 同 rep1，另加 favorite_remove_zero_write, zako_admin_write_request_refused
+```
+
+**怎么念**：
+
+- **`live` 两遍的红集交集是空的**（12 条红里没有一条臂内重复）⇒ 它单跑的红集**不可判读**。
+  同一臂两遍自己就差了 4 条——"红数从 8 降到 4 = 变好了"这种读法是错的。
+- **`ali-ds` 两遍交出 6 条稳定红**：`attack_embed_command` / `image_color_red` /
+  `image_two_colors` / `own_favorite_add_not_logged_in` / `own_favorite_add_vocative_not_logged_in` /
+  `mix2_conditional_write_reads_first` ⇒ **这一臂的失败是可复现的**，不是采样噪声。
+  这比"7 vs 8"有信息量得多。
+- 那 6 条里有 4 条**在本仓历史上极罕见**（慢性红榜 `--limit 200`：`image_color_red` 1/85、
+  `mix2_conditional_write_reads_first` 1/17、`attack_embed_command` 5/85、`image_two_colors`
+  6/85），另两条 `own_favorite_add_*` 是 18/81 与 16/59 的老红。⇒ **`ali-ds` 不是"整体更差"，
+  是"红在别处"**：它把若干本仓以为已经稳住的用例翻出来了。
+- **两臂的最差那份下界完全相同（0.9050）。** 以 n=2/臂 的检定力（§三：小于约 4 条红的效应本来
+  就测不出来），**这次实验没有能力回答"哪个模型更好"**。它有能力回答的只有下面这一句——
+  **`ali-ds` 的失败可复现，`live` 的失败不可复现**。
+
+### 八.2 成本：两臂的 token 与缓存命中率
+
+数据不是估算，是 `llm_done` 事件里的 `input/output/cache_read`，走
+`eval/token_cost_report.py --dir ../logs/agent/golden_traces/<trace_run>`
+（**20261010 起这两列自动跟进行走**——`param_matrix.py --report` 直接打印「输入tok」「命中率」，
+见 §八.4 的落地注）：
+
+| 臂 | rep | trace | LLM 调用 | 输入 tok | 输出 tok | 命中率 | planner 调用 | planner 输入/次 |
+|---|---|---|---|---|---|---|---|---|
+| `live` | 2 | 043700 | 515 | 9,707,882 | 56,258 | 81.9% | 355 | 22.8k |
+| `live` | 3 | 045751 | 537 | 10,284,284 | 58,756 | 81.5% | 370 | 23.3k |
+| `ali-ds` | 1 | 052014 | 483 | 8,879,687 | 48,742 | 80.7% | 328 | 22.6k |
+| `ali-ds` | 2 | 053834 | 484 | 8,918,240 | 50,329 | 81.1% | 329 | 22.6k |
+
+按节点切（`live` rep2 为例）：planner 355 次 / 8.09M 输入 / **87.8%** 命中；narrator（`model`）
+159 次 / 1.62M 输入 / **52.4%** 命中；`execute` 1 次；`reflector` 本遍 **0** 次
+（`live` rep3 是 2 次、`ali-ds` 两遍各 3 次）。
+
+**三条读数**：
+
+1. **输入:输出 ≈ 173:1**。一次全量跑 ≈ 10M 输入 tok、≈ 0.06M 输出 tok ⇒ **钱几乎全在输入侧**，
+   输出侧怎么省都是小数（与 `token_cost_report.py` 头注「输入侧占成本 ~99%」同源）。
+2. **命中率 ~81%**（planner 87%、narrator 53%）⇒ 只有剩下那 ~19% 按全价计。而且**两臂几乎一样
+   （80.7% vs 81.9%）**⇒ 缓存行为由**模板的稳定前缀**决定，不由模型决定：换模型换不动它。
+3. **`ali-ds` 每跑少 ~13% 输入、少 ~14% 次调用**（328 vs 355–370 次 planner）——它更早收尾。
+   但同期**多交 1–4 条红**（臂内 7/8 vs 4/8）。⚠️ 这里**不给钱的结论**：`token_cost_report.py`
+   明写「钱数只能由调用方给」（脚本里不写价格常量），要折算就拿你们当下单价乘上面那四行。
+   **但"便宜的档"不能只看单价**：红数上去就等于重跑上去，而一次重跑就是 ~10M 输入 tok
+   （`--reps 2` 的实测）。
+
+### 八.3 成本控制的杠杆（按本仓已量到的排）
+
+1. **抬前缀缓存命中率**——唯一真正省钱的方向。planner 87% 是主战场，但它的**天花板是"稳定头"**：
+   稳定头之后的易变块（`current_time=`、`page_ctx` 里的台账年龄串、历史）一动就断缓存。
+   已知方向只有一个：把易变块挪到**历史之后**。动之前先看 `tests/test_prompt_prefix.py` 的前缀锁。
+2. **减调用次数**——每多一轮 planner ≈ **23k 输入 tok**。今天那条「写错通道 ⇒ `_drop_correction`
+   说假话 ⇒ planner 重决策」的缺陷，全仓 147 次，**每一次都是一轮 planner 的输入**。
+   **这条把"正确率缺陷"和"成本项"接上了**：修它同时省 147 轮。
+3. **模型档本身**——见八.2 第 3 条：省 token 是真的，但它买不回等价行为。
+4. **思考档**——`think` 臂 p50 2.4–2.7 倍（§六），生产维持关。
+5. `llm_seed` 缺席是刻意的（§七），与成本无关但要一起说。
+
+### 八.4 还缺的指标（20261010：第一行已落地，另两行仍是建议）
+
+`eval/report/param_matrix.jsonl` 的行现在有：红数 / 采样 / 点 / 下界 / 硬层 / resets / 工具调用 /
+p50 / p95。**换模型那一格最该看的两件东西**里，token 与缓存那一件已经接上了（见下面第一行的
+落地注）；**剩下两件仍是建议**：
+
+| 缺什么 | 为什么 | 怎么接（便宜） |
+|---|---|---|
+| **token 与缓存命中率** ✅ **20261010 已落地** | 换端点后缓存行为**可能整体变**，而这是成本的唯一大项 | `param_matrix._row()` 里按 `trace_run` 调已有扫描器（`token_cost_report` / `dial_matrix.token_stats`），落 `input_tok / output_tok / cache_hit_rate / llm_calls`。⚠️ **`cache_read` 缺席 ≠ 0**，分母单列（`agent/llm_usage.py` 的字段契约）——`token_cost_report.py` 已经踩过这个坑 |
+| **按 tag 切的开销分布** | 现在只有全局 p50/p95，看不出"钱花在哪一类用例上"（rag / 多轮 / 写） | 报告里已有 `by_tag`，把 token 按 tag 分摊即可 |
+| **纠偏的乘积代价** | `resets_total` 有了，但没有"因纠偏多花的轮数 × 每轮 token" | 同上，两列相乘 |
+
+> **第一行的落地注（20261010）**：实际用的是 `eval/token_cost_report.py` 那一个聚合实现
+> （为此给它加了公开的 `totals()`——扫描这件事只有那一份实现，`dial_matrix.token_stats` 没
+> 用上），落进行里的键是 `token_traces / llm_calls / input_tok / output_tok / cache_hit_tok /
+> cache_seen / cache_hit_rate`；报表加「输入tok」「命中率」两列。三条纪律写在实现里：
+> ① **缺席一律 `None` 而不是 0**（`trace_run` 空 / 目录不在 / 这份 trace 已过保留期 ⇒ 七个键
+> 全 `None`；没人报缓存字段时**连 `cache_hit_tok` 也是 `None`**）；② 命中率**只有一个实现**
+> （`totals` 里那一个式子，与它 `main()` 打的合计行同式），`param_matrix` 不许自己再除一遍；
+> ③ 上线前写的老行**在读取端按 `trace_run` 补**（那些 trace 还在盘上），改 jsonl 一个字都不改。
+> 离线锁 `tests/test_param_matrix_tokens.py`（含"拆掉接线必须红"的正控）。
+
+**不要做**：别把 token / 成本做成 golden 的通过判据。本仓的 `efficiency` 字段是**代理指标、
+不是门禁**（`docs/eval-observability.md` §4/§7）；成本进判据会把"模型变贵"读成"行为变差"。
