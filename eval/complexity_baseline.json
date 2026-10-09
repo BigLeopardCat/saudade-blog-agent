@@ -1,0 +1,262 @@
+{
+  "agent/action_text.py::_arm_text": {
+    "c": 188,
+    "lines": 427
+  },
+  "agent/adminops.py::_confirm_one": {
+    "c": 144,
+    "lines": 338
+  },
+  "agent/adminops.py::_reached_one": {
+    "c": 166,
+    "lines": 327
+  },
+  "agent/decisions.py::_candidate_detail_plan": {
+    "c": 51,
+    "lines": 99
+  },
+  "agent/graph.py::_claim_issue": {
+    "c": 37,
+    "lines": 208
+  },
+  "agent/graph.py::_confirm_popup": {
+    "c": 88,
+    "lines": 408
+  },
+  "agent/graph.py::_name_arg_fix": {
+    "c": 68,
+    "lines": 171
+  },
+  "agent/graph.py::_name_target_fix": {
+    "c": 35,
+    "lines": 73
+  },
+  "agent/graph.py::_planner_decide": {
+    "c": 291,
+    "lines": 1470
+  },
+  "agent/graph.py::_write_target_refusal": {
+    "c": 55,
+    "lines": 229
+  },
+  "agent/graph.py::execute_node": {
+    "c": 78,
+    "lines": 401
+  },
+  "agent/graph.py::gate_node": {
+    "c": 105,
+    "lines": 451
+  },
+  "agent/graph.py::model_node": {
+    "c": 36,
+    "lines": 152
+  },
+  "agent/native_plan.py::tool_calls_to_plan": {
+    "c": 44,
+    "lines": 168
+  },
+  "agent/react_line.py::SkillExecutor.run": {
+    "c": 33,
+    "lines": 124
+  },
+  "agent/skills.py::_expand_write_skill": {
+    "c": 97,
+    "lines": 473
+  },
+  "agent/skills.py::_instantiate_plan": {
+    "c": 135,
+    "lines": 516
+  },
+  "eval/arm_capability.py::analyze": {
+    "c": 42,
+    "lines": 85
+  },
+  "eval/corpus_terms.py::derive": {
+    "c": 31,
+    "lines": 76
+  },
+  "eval/corpus_terms.py::drift": {
+    "c": 43,
+    "lines": 96
+  },
+  "eval/dial_matrix.py::main": {
+    "c": 37,
+    "lines": 96
+  },
+  "eval/experiments/react_line_ab.py::main": {
+    "c": 38,
+    "lines": 74
+  },
+  "eval/golden_draft.py::main": {
+    "c": 42,
+    "lines": 157
+  },
+  "eval/landing_gate.py::readiness": {
+    "c": 32,
+    "lines": 54
+  },
+  "eval/native_tools_probe.py::main": {
+    "c": 46,
+    "lines": 100
+  },
+  "eval/param_matrix.py::report": {
+    "c": 65,
+    "lines": 97
+  },
+  "eval/probe_admin_write.py::main": {
+    "c": 32,
+    "lines": 175
+  },
+  "eval/probe_admin_write.py::step11_tag_admin": {
+    "c": 66,
+    "lines": 185
+  },
+  "eval/probe_admin_write.py::step16_announcement": {
+    "c": 35,
+    "lines": 85
+  },
+  "eval/probe_admin_write.py::step17_auth_review": {
+    "c": 160,
+    "lines": 316
+  },
+  "eval/probe_admin_write.py::step18_ledger_zero_write": {
+    "c": 92,
+    "lines": 216
+  },
+  "eval/probe_admin_write.py::step8_popup_write": {
+    "c": 40,
+    "lines": 101
+  },
+  "eval/recall_eval.py::evaluate": {
+    "c": 31,
+    "lines": 47
+  },
+  "eval/run_golden.py::check_gold": {
+    "c": 241,
+    "lines": 584
+  },
+  "eval/run_golden.py::check_no_popup_premises": {
+    "c": 32,
+    "lines": 59
+  },
+  "eval/run_golden.py::main": {
+    "c": 248,
+    "lines": 900
+  },
+  "eval/run_golden.py::run_one": {
+    "c": 54,
+    "lines": 233
+  },
+  "eval/task_state_probe.py::main": {
+    "c": 36,
+    "lines": 111
+  },
+  "eval/trace_alert.py::main": {
+    "c": 40,
+    "lines": 100
+  },
+  "eval/trace_reconcile.py::reconcile": {
+    "c": 72,
+    "lines": 165
+  },
+  "eval/trace_retention.py::report": {
+    "c": 31,
+    "lines": 41
+  },
+  "eval/zero_call_residual_probe.py::main": {
+    "c": 45,
+    "lines": 102
+  },
+  "rag/vector_index.py::VectorStore._update_locked": {
+    "c": 38,
+    "lines": 113
+  },
+  "scripts/build_word_graph.py::main": {
+    "c": 39,
+    "lines": 235
+  },
+  "server.py::_run_agent_stream_to_queue": {
+    "c": 84,
+    "lines": 608
+  },
+  "server.py::chat_stream": {
+    "c": 14,
+    "lines": 360
+  },
+  "server.py::chat_stream.event_stream": {
+    "c": 43,
+    "lines": 257
+  },
+  "tests/judge_offline_test.py::main": {
+    "c": 96,
+    "lines": 213
+  },
+  "tests/test_artifact_retention.py::main": {
+    "c": 38,
+    "lines": 170
+  },
+  "tests/test_landing_gate.py::test_enterprise_criteria": {
+    "c": 42,
+    "lines": 120
+  },
+  "tests/test_nav_truthfulness.py::test_gate_nav_present_claim_verified_against_page_ctx": {
+    "c": 38,
+    "lines": 246
+  },
+  "tests/test_react_line.py::main": {
+    "c": 37,
+    "lines": 199
+  },
+  "tests/test_retention_manifest.py::main": {
+    "c": 41,
+    "lines": 178
+  },
+  "tests/test_skills.py::test_admin_console_role_channel": {
+    "c": 44,
+    "lines": 150
+  },
+  "tests/test_skills.py::test_name_target_round": {
+    "c": 35,
+    "lines": 328
+  },
+  "tests/test_skills.py::test_refs": {
+    "c": 33,
+    "lines": 219
+  },
+  "tests/test_style_hygiene.py::main": {
+    "c": 47,
+    "lines": 122
+  },
+  "tests/test_trace_io.py::main": {
+    "c": 35,
+    "lines": 150
+  },
+  "tests/test_trace_retention.py::main": {
+    "c": 48,
+    "lines": 167
+  },
+  "tools/base.py::create_tag": {
+    "c": 31,
+    "lines": 112
+  },
+  "tools/base.py::device_oled_display": {
+    "c": 33,
+    "lines": 121
+  },
+  "tools/base.py::read_messages": {
+    "c": 32,
+    "lines": 104
+  },
+  "tools/base.py::read_notifications": {
+    "c": 35,
+    "lines": 111
+  },
+  "tools/base.py::set_article_status": {
+    "c": 31,
+    "lines": 82
+  },
+  "tools/base.py::update_tag": {
+    "c": 61,
+    "lines": 144
+  }
+}
