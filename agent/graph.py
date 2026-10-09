@@ -1459,6 +1459,70 @@ def _deny_giveup_nudge(deny, plan_obj: dict, user_msg, rounds: int,
     return _MENU_DENIED_GIVEUP_NUDGE
 
 
+# **同一件事的第三半**（20261009）：主人这句话是一条**写他自己数据的命令**（判据是
+# 同意闸那一条，见 `authz.is_own_write_command`），本轮**已经有工具帧**，而 planner
+# 这一轮零工具收尾、整个请求从头到尾**一件写都没排过**。
+#
+# 现场（golden `own_favorite_add_vocative_not_logged_in`，uid=0 哨兵；trace
+# `golden_traces/20261009_194123`）：原话「小猫咪把我当前在读的文章收藏了」里的
+# 「当前在读」让**文章读取快道**在 round 0 零 LLM 命中（`get_article_detail(12)`），
+# 于是模型的**第一次**决策落在 round 1：它只吐了 5 个 token（`finish=stop`、零调用）
+# 就收尾，正文写「马上帮你把这篇…收进你的收藏夹里」——`add_favorite` 一次都没被排进
+# 规格，工具层那个 uid 哨兵因此**根本没机会说话**，而"只在嘴上答应"既不是完成声称
+# （用例的负正则抓的是完成式）也不是诚实拒绝（`require_denial` 判红，`require_tool_calls`
+# 判红）。三条既有通道为什么都够不到：① 上面那一整块"零工具决策不是决策"要
+# `not has_frames`（有帧的轮次一律放行，注释里写着"合法的收尾轮"）；②
+# `_name_write_nudge` 的零工具形态只认 `rounds == 0`（`continue` 又把它钉在"本轮第一次
+# 决策"上），而这一格模型的第一次决策就是 round 1；③ 它的动作词表是**名字通道**的
+# 写技能用的，不含「收藏」（收藏按 id 走，不抄名字）。
+#
+# 两条收窄，都为"别把有帧的合法收尾轮纠成硬凑一次写"：
+#   · **整个请求还没排过任何写**（`_wrote_this_round`，读账甲）：写过的那一轮零工具
+#     收尾是合法收尾（`tests/test_native_wiring.py` 那条反锁钉着同一件事）；
+#   · 沿用既有的两道：主人明说不要工具 / 这一轮带图（同上面那两格，见 `_tools_off`
+#     `_img_turn`）。
+_WRITE_COMMAND_ZERO_CALL_NUDGE = (
+    "**主人这句话是一条写命令**（要改他自己账号里的数据），而**整个这一轮还没有排出过"
+    "任何写操作的规格**。\n"
+    "请把这件事的写操作规格排出来：技能名按它的 schema 填参数，id 由系统解析。"
+    "该不该先问主人一次、以及这一轮到底能不能办成，**由系统判定**——那不是你该预判的，"
+    "也不要只在正文里写成「这就去办」。\n"
+    "确实这一轮办不了时，照实说办不了、卡在哪一步；**不要顺手改成相反的那个操作**。"
+)
+
+
+def _write_command_nudge(plan_obj: dict, user_msg, has_frames: bool,
+                         state) -> str | None:
+    """写命令 + 已有帧 + 本轮零写 + 零工具 → 纠偏提示文本（见上方长注）。
+
+    与 `_name_write_nudge` / `_deny_giveup_nudge` 是同一条通道上的第三格，三者的触发
+    形态**互补**（这一格既不需要"动作词表命中"，也不需要"本轮菜单有摘项"）。
+    """
+    if not has_frames:
+        return None
+    if plan_obj["tools"] or plan_obj.get("dropped"):
+        return None
+    if _wrote_this_round(state):
+        return None
+    # **写规格排过、只是被系统挡下了** ⇒ 这一格不该说话（20261009 当天补的守卫）。
+    # 账甲那三列（`planned_writes` / `ok_writes` / `noop_writes`）都只记"成了的"，
+    # 于是"写被 BLOCK"与"压根没排过写"在 `_wrote_this_round` 眼里**长得一样**——
+    # 而本条那句「整个这一轮还没有排出过任何写操作的规格」对前者是**假话**，
+    # 更要紧的是「把这件事的写操作规格排出来」会把模型推向**换一个写动作顶替**：
+    # 实测（golden `own_favorite_add_vocative_not_logged_in`，20261009 十跑里一跑）
+    # `add_favorite` 被 uid 哨兵挡下 ⇒ 菜单摘掉 `favorite_add` ⇒ 模型改选了**反极性**
+    # 的 `favorite_remove`，弹出一张「取消收藏文章 12」的确认卡。归档射程（17,240 份
+    # trace）：这条通道未加守卫时会在 262 个轮次点火，其中 **234 个**是"本轮已有写被
+    # BLOCK"的形状——占了 89%，也就是说这条通道**主要**落在假话那一侧。
+    # **只认写被挡**：读前置被挡（如 `list_my_favorites` 不可用）不在守卫范围内——
+    # 那才是"规格确实还没排出来、换条路把它排出来"这一格真正要治的形状。
+    if _round_facts(state).blocked_writes:
+        return None
+    if not authz.is_own_write_command(user_msg):
+        return None
+    return _WRITE_COMMAND_ZERO_CALL_NUDGE
+
+
 # ---------------------------------------------------------------------------
 # 容错解析工具（计划文本 → 结构化）
 # ---------------------------------------------------------------------------
@@ -6981,6 +7045,21 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
                                "、".join(_marks[:3]) or "无")
                 continue
 
+        # 写命令却零工具收尾（20261009，见 `_WRITE_COMMAND_ZERO_CALL_NUDGE` 的长注）：
+        # 排在 `deny_giveup` **之后**——那一格手里有更具体的东西（"上一轮那一步被摘了"），
+        # 该由它先说；本条兜的是它够不到的形态（本轮压根没有摘项）。
+        if not correction and not _tools_off and not _img_turn:
+            _cmd_nudge = _write_command_nudge(plan_obj, user_msg, has_frames, state)
+            if _cmd_nudge:
+                correction, correction_kind = _cmd_nudge, "写命令零调用"
+                record("planner", "write_command_correct", round=rounds,
+                       finish=decided.finish_reason, text_len=len(raw),
+                       frames=has_frames)
+                logger.warning("[planner] 写命令却零工具收尾（本轮零写、已有帧）"
+                               "→ 纠偏重决策一次（round %d/%d，正文 %d 字）",
+                               rounds + 1, MAX_PLAN_ROUNDS, len(raw))
+                continue
+
         # 剔空纠偏（见上方长注）：只有"点名的全被剔除、本轮一个工具都不剩"才重决策；
         # 已经纠偏过一次、或清单非空、或根本没点名 → 到此为止。
         if correction or plan_obj["tools"] or not plan_obj.get("dropped"):
@@ -11744,8 +11823,14 @@ NARRATOR_DISCIPLINE = """\
     这轮对话），所以"没携带身份"只可能是**系统这一侧没拿到身份**这种异常，
     不是"主人没登录"。这时叫他去登录既没用又误导。逐字照帧说、**只陈述系统这一
     侧的事实**：没携带身份 → "这一轮系统没拿到你的身份，我没能读到（也什么都没
-    改）"；读不到 → "这次没读到，不敢下结论"。**不许**出现"你先去登录""需要先
-    登录博客账号"这类给主人派活的句子（那是把系统的账算在他头上）。
+    改）"；读不到 → "这次没读到，不敢下结论"。
+    **20261009 再收两层（改口只说了"不许派活"，实测模型换了两种说法，还是同一件事）**：
+    ① 讲这一格时**「登录」「登陆」这两个字一次都不许出口**，登录页的链接也不给
+    ——身份的事与"登录"无关，那两个字放在这句话里只有一种读法，就是把系统的账
+    算到主人头上。② 系统这一侧的事**不许写成条件句或前置条件**（"…才行／才能／
+    才可"、"需要…才能…"、"要先确认…"）：这一轮系统这侧怎么了，就直说这一句，
+    别加"要怎样才能怎样"那一层——那读起来是在给主人派活。两条同源：这里举过的
+    反例句会被照着改写一遍再用出来，所以只说**不许说什么形状**，不再给例句。
     同一条也管"改没改成功"：收藏/取消收藏/标记已读是否生效，**只认本轮执行回执**
     ——回执里写的是「本次改动未确认生效」时把这句如实转述，不许翻译成
     "已经帮你收藏好啦/已标记为已读"。

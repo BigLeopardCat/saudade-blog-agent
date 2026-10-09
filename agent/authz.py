@@ -895,6 +895,22 @@ def is_own_read_question(msg: str) -> bool:
     return bool(_OWN_BROAD_OBJECT_RE.search(text) and _OWN_SELF_RE.search(text))
 
 
+def is_own_write_command(msg: str) -> bool:
+    """这句是不是一条「写**我自己**账号里数据」的命令（收藏 / 取消收藏 / 标记已读）？
+
+    **不是新判据**：它就是同意闸那一条 `_own_command`（`_CONSENT_PATTERNS[SCOPE_WRITE_OWN]`）
+    的**族级形态**——`_own_command` 判的是"命令**哪一个**工具"（它必须拿到工具名，
+    见那一段的长注），而这一层的消费方是 planner 的"写命令却零调用"纠偏，问的是
+    "这句话是不是在命令我改自己的数据"，此时**还没有**工具名可给，所以对
+    `_OWN_TOOL_FAMILY` 里每个工具各判一次再取或。那张表是工具→家族的**完备映射**
+    （未登记的工具一律 False），所以这里遍历表本身，不另列名单。
+
+    与 `is_own_read_question` 是同一族的两半：那条 ③ 把写命令排除出去，这条就判它。
+    空消息 → False。
+    """
+    return any(_own_command(msg, tool) for tool in _OWN_TOOL_FAMILY)
+
+
 # ── 「话题落在站内语料上，却零检索」的问句判据（20261004）──────────────────────
 # 与 `is_own_read_question` 互补：那条问"是不是在问我**自己账号**里的数据"（私有面），
 # 这条问"是不是在问**站内语料**里的东西"（公开面：文章 / 教程 / 文档 / 专栏 / 归档…）。

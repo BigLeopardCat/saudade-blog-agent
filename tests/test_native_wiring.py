@@ -43,6 +43,8 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
+from agent import authz  # noqa: E402
+from agent.block_reasons import denied_skills  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 from agent.skills import visible_skills  # noqa: E402
 from agent.tasks import TASK_DROP, TASK_HOLD, TASK_INTENTS  # noqa: E402
@@ -339,6 +341,133 @@ def test_giveup_nudge_needs_a_named_target():
     check("计划仍是 chat", "SKILL=chat" in out["plan"], out["plan"].splitlines()[0])
 
 
+# ── ②⁗ 写命令在**已有帧之后**零工具收尾：uid 哨兵那族的 fail-open（20261009）──────
+# 现场（golden `own_favorite_add_vocative_not_logged_in`，trace `20261009_194123`）：
+# round0 被文章快道吃掉（`kind=article_read`，零 LLM）⇒ 模型第一次决策时 `rounds` 已经
+# 是 1。那条消息剥壳后是一条**写命令**（`authz.is_own_write_command` 命中 `add_favorite`
+# 族），模型却点 `chat`、零工具，收尾包装把它落成 `status='wrapped'` + 正文一句
+# 「马上帮你把这篇收进你的收藏夹里！🐾」——`add_favorite` 一次都没排出来。
+#
+# 三格既有纠偏**结构上都够不到**这一格（＝下面那条红基线要钉的东西）：
+#   · 6377 那一族「零工具决策不是决策」要求 `not has_frames`（收尾轮被刻意放过）；
+#   · `_name_write_nudge` 的零工具形态要求 `rounds == 0`，且它的动作词表是**改名通道**
+#     的表，刻意不含「收藏」（收藏按 id 走，不按名字）；
+#   · `_deny_giveup_nudge` 要求本轮有**摘项**（`deny` 非空），这一格压根没有摘项。
+_MSG_OWN_WRITE = "小猫咪把我当前在读的文章收藏了"
+_FRAMES_AFTER_READ = [HumanMessage(content=_MSG_OWN_WRITE),
+                      ToolMessage(content="文章 12《ESP32-S3 OTA 问题与解决记录》",
+                                  tool_call_id="c1")]
+
+
+def test_write_command_zero_call_after_frames_is_nudged_once():
+    print("\n[写命令·有帧] 零工具收尾 → 纠偏一次，且它真的把写规格排出来了")
+    out, rec, llm = _run([_chat(), _call("favorite_add", {"article_id": 12})],
+                         state_over={"messages": _FRAMES_AFTER_READ, "plan_rounds": 1})
+    check("LLM 被问了两次（一版收尾响应 + 一次纠偏）", len(llm.prompts) == 2,
+          str(len(llm.prompts)))
+    check("★ 第二次的提示词是「写命令却零工具」那一份",
+          "整个这一轮还没有排出过任何写操作的规格" in llm.prompts[1], llm.prompts[1][-240:])
+    corr = _events(rec, "write_command_correct")
+    check("★ `write_command_correct` 恰一条、记了「已有帧」与正文长度",
+          len(corr) == 1 and corr[0].get("frames") is True, str(corr))
+    check("  它**不是**既有那两格（`no_call_nudge` / `deny_giveup_correct` 都缺席）",
+          not _events(rec, "no_call_nudge")
+          and not _events(rec, "deny_giveup_correct"))
+    check("★ 纠偏真的排出写规格（计划落在 favorite_add + add_favorite）",
+          "SKILL=favorite_add" in out["plan"] and "add_favorite" in out["plan"],
+          out["plan"].splitlines()[:2])
+
+
+def test_write_command_nudge_needs_frames():
+    print("\n[写命令·反锁 ①] 零帧轮不归它管（那一格是「零工具决策不是决策」那一族的事）")
+    _out, rec, _llm = _run([_chat()], state_over={
+        "messages": [HumanMessage(content=_MSG_OWN_WRITE)]})
+    check("★ `write_command_correct` 缺席", not _events(rec, "write_command_correct"))
+
+
+def test_write_command_nudge_needs_a_write_command():
+    print("\n[写命令·反锁 ②] 同样零工具收尾、但原话不是写命令 ⇒ 一次都不打扰")
+    frames = [HumanMessage(content=_MSG_NO_INTENT),
+              ToolMessage(content="特效 樱花(sakura) 已打开", tool_call_id="c1")]
+    _out, rec, llm = _run([_chat()], state_over={"messages": frames, "plan_rounds": 1})
+    check("只问了一次", len(llm.prompts) == 1, str(len(llm.prompts)))
+    check("★ `write_command_correct` 缺席（它是收尾轮，不是写命令）",
+          not _events(rec, "write_command_correct"))
+
+
+def test_write_command_nudge_needs_no_write_yet():
+    print("\n[写命令·反锁 ③] 本轮已经办成过这件写 ⇒ 不纠（再说一次就是重复执行）")
+    _out, rec, llm = _run([_chat()], state_over={
+        "messages": _FRAMES_AFTER_READ, "plan_rounds": 1,
+        "receipts": [{"skill": "favorite_add", "tool": "add_favorite",
+                      "args": {"article_id": 12}, "result": "已收藏文章 12"}]})
+    check("只问了一次", len(llm.prompts) == 1, str(len(llm.prompts)))
+    check("★ `write_command_correct` 缺席（账甲说本轮有写回执）",
+          not _events(rec, "write_command_correct"))
+
+
+def test_write_command_nudge_yields_when_the_write_itself_was_blocked():
+    """**守卫**：本轮**排过**写、被系统挡下 ⇒ 这一格闭嘴（那句是假话，且推着模型换动作）。
+
+    账甲那三列只记"成了的"，于是「写被 BLOCK」与「压根没排过写」在
+    `_wrote_this_round` 眼里长得一样。这里用 `args_parse`（**可救族**）当受阻原因：
+    它不进 `denied_skills` ⇒ `_deny_giveup_nudge` 不响，于是这一轮的沉默**只能**由
+    本守卫解释（去掉守卫当场变成两次提问 + `write_command_correct`）。
+    """
+    print("\n[写命令·反锁 ⑤] 本轮写被 BLOCK（可救族）⇒ 不纠（「还没排过规格」是假话）")
+    blocked = [{"spec": "add_favorite({\"article_id\": 12})", "tool": "add_favorite",
+                "skill": "favorite_add", "reason": "args_parse", "result": "参数解析失败"}]
+    _out, rec, llm = _run([_chat()], state_over={
+        "messages": _FRAMES_AFTER_READ, "plan_rounds": 1, "blocked": blocked})
+    check("受阻原因是可救族 ⇒ 摘菜单那一格确实不响（沉默只能由本守卫解释）",
+          not denied_skills(blocked), str(blocked[0]["reason"]))
+    check("只问了一次", len(llm.prompts) == 1, str(len(llm.prompts)))
+    check("★ `write_command_correct` 缺席（写规格排过，是它被挡下）",
+          not _events(rec, "write_command_correct"))
+    check("**同一份 state 上守卫是唯一原因**（纯函数：写被挡 ⇒ None；换成读被挡 ⇒ 非 None）",
+          G._write_command_nudge({"tools": [], "dropped": None}, _MSG_OWN_WRITE, True,
+                                 {"blocked": blocked}) is None
+          and G._write_command_nudge(
+              {"tools": [], "dropped": None}, _MSG_OWN_WRITE, True,
+              {"blocked": [{"tool": "list_my_favorites", "skill": "content_query",
+                            "reason": "unavailable", "result": "服务不可用"}]}) is not None)
+
+
+def test_write_command_nudge_yields_to_tools_off():
+    print("\n[写命令·反锁 ④] 主人原话里明说不要工具 ⇒ 不纠（那一支本来就不该有工具）")
+    msg = "把通知都标记成已读，别调用工具"
+    frames = [HumanMessage(content=msg),
+              ToolMessage(content="通知 3 条", tool_call_id="c1")]
+    _out, rec, llm = _run([_chat()], state_over={"messages": frames, "plan_rounds": 1})
+    check("这一句同时满足两条前提（写命令 + 明说不要工具）——不满足就不是本用例",
+          G._forbids_tools(msg) and authz.is_own_write_command(msg), msg)
+    check("只问了一次", len(llm.prompts) == 1, str(len(llm.prompts)))
+    check("★ `write_command_correct` 缺席（`_tools_off` 在调用点挡住了）",
+          not _events(rec, "write_command_correct"))
+
+
+def test_write_command_nudge_is_the_only_channel_that_catches_it():
+    """**红基线**：这格在既有三格**结构上都够不到**（新通道不是"多此一举"）。
+
+    断言逐格证伪——`_name_write_nudge` 的零工具形态、它的名字通道、`_deny_giveup_nudge`
+    对这句话都返回 None；本句也确实是一条写命令。**将来有人把这三格改宽时这条会当场红**，
+    那就该重新问一遍"新通道还需要吗"，而不是让它静默变成重复的一格。
+    """
+    print("\n[写命令·红基线] 既有三格都对这句话返回 None（新通道确实是唯一的入口）")
+    plan_obj = {"tools": [], "dropped": None, "chat": True, "status": "answer_only"}
+    check("这句话确实是一条写命令（判据本身命中）",
+          authz.is_own_write_command(_MSG_OWN_WRITE))
+    check("★ `_name_write_nudge`（零工具形态 / `rounds=1`）→ None",
+          G._name_write_nudge(plan_obj, _MSG_OWN_WRITE, 1, "admin") is None)
+    check("★ `_name_write_nudge`（同句、首轮 `rounds=0`）→ None"
+          "（动作词表是改名通道的表，刻意不含「收藏」）",
+          G._name_write_nudge(plan_obj, _MSG_OWN_WRITE, 0, "admin") is None)
+    check("★ `_deny_giveup_nudge`（本轮无摘项）→ None",
+          G._deny_giveup_nudge([], plan_obj, _MSG_OWN_WRITE, 1, "admin", True) is None)
+    check("★ 新通道对同一格非 None（这就是它存在的理由）",
+          G._write_command_nudge(plan_obj, _MSG_OWN_WRITE, True, {}) is not None)
+
+
 # ── ②′ 该取数却点 `chat`：判据前移到决策层（20261004 第二批）────────────────
 # 这句命中 `authz.is_own_read_question`（"我都有哪些收藏" = 自己账号里的私有数据），
 # 且**不命中任何快道**。带上 `state_over` 换掉默认消息即可（`_run` 先铺默认再 update）。
@@ -529,6 +658,13 @@ if __name__ == "__main__":
                test_giveup_after_a_menu_denied_prerequisite_is_nudged_once,
                test_giveup_nudge_needs_a_deny,
                test_giveup_nudge_needs_a_named_target,
+               test_write_command_zero_call_after_frames_is_nudged_once,
+               test_write_command_nudge_needs_frames,
+               test_write_command_nudge_needs_a_write_command,
+               test_write_command_nudge_needs_no_write_yet,
+               test_write_command_nudge_yields_when_the_write_itself_was_blocked,
+               test_write_command_nudge_yields_to_tools_off,
+               test_write_command_nudge_is_the_only_channel_that_catches_it,
                test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool,
                test_chat_still_on_a_data_question_is_released_not_nudged_twice,
                test_chat_without_a_data_question_is_not_nudged,
