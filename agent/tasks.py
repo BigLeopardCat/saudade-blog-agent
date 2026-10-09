@@ -881,7 +881,7 @@ def _step_line(i: int, s: Any) -> str:
     return f"{i + 1}. {label}" + (f"（{tool}）" if tool and tool != label else "")
 
 
-def render_open_tasks(raw: Any, limit: int = 3) -> str:
+def render_open_tasks(raw: Any, limit: int = 3, with_guide: bool = True) -> str:
     """未完结任务 → planner 上下文里的一段文本；没有 → 空串（调用方据此不注入）。
 
     只渲染 `TASK_OPEN_STATES` 里的行：终态过滤的主判据在 Rust 的 SQL 里（限额是
@@ -889,12 +889,19 @@ def render_open_tasks(raw: Any, limit: int = 3) -> str:
     时效（72h）**不在这里再判一次**：那需要解析 `created_at` 的钟面格式，而解析失败
     在这里的后果是**整块静默消失**（同"trace 根只能走一个入口"那类坑）——时效的
     单执行者是 Rust 读侧，见迁移头注。
+
+    `with_guide=False` 去掉首尾那两块**给模型看的指令**、只留行本身（20261009）：
+    出处闸把这份文本当**第三本账**读（`graph._task_ledger_text`），而指令块里全是
+    祈使句的自然语言（「接着把它做完」「原样问出来」「不要撤下」）——自由文本类的写值
+    （待办正文、留言引文）一旦与其中某几个字撞上，就会被判成"有出处"。
+    本账要的是**行里那些字**（尤其 `goal`，主人上一轮说过的那件事），不是系统自己
+    写给模型的纪律。
     """
     rows = [r for r in task_rows(raw)
             if str(r.get("state") or "") in TASK_OPEN_STATES]
     if not rows:
         return ""
-    lines = [_TASK_BLOCK_HEAD]
+    lines = [_TASK_BLOCK_HEAD] if with_guide else []
     for r in rows[:max(1, int(limit or 1))]:
         steps = r.get("steps") if isinstance(r.get("steps"), list) else []
         cursor = max(0, int(r.get("cursor") or 0))
@@ -909,7 +916,8 @@ def render_open_tasks(raw: Any, limit: int = 3) -> str:
         q = _safe(r.get("pending_question"))
         if q:
             lines.append(f"  需要问主人：「{q}」")
-    lines.append(_TASK_BLOCK_TAIL)
+    if with_guide:
+        lines.append(_TASK_BLOCK_TAIL)
     return "\n".join(lines)
 
 
