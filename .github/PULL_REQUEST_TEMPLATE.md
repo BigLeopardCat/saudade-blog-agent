@@ -20,7 +20,7 @@
 
 ## 跑过的
 
-- [ ] `.venv/bin/python tests/run_all.py` —— 全绿（94 套）
+- [ ] `.venv/bin/python tests/run_all.py` —— 全绿
 - [ ] `uvx ruff@0.14.4 check --select F821 --no-cache .` —— 干净
 - [ ] 若改了 agent 的**对外行为**（说什么/做什么/什么时候弹卡）：补了 CHANGELOG 一行
 - [ ] 若改了三端契约（Python ↔ Rust ↔ 前端：帧、字段、字面）：**另一侧也改了**，
