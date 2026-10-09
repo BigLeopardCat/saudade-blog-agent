@@ -4379,7 +4379,11 @@ def test_no_sibling_tool_name_in_user_text():
     #    前不成立（前一个字符是词字符 `n`）⇒ 自己的名字不再误红，别人的名字照旧拦。
     bad = []
     for sk in SKILLS:
-        own = {spec[0] for spec in sk.plan}
+        # "自己的名字" = 模板声明的 ∪ **展开器额外发出的**（`extra_plan_tools`，
+        # 20261009 挂标签的先建后挂）。判据的本意是"契约里不许出现**它够不着**的工具名"
+        # ——`article_tags` 的契约要如实讲清"站内没有就先建"，而它现在真的会发
+        # `create_tag`，两个来源缺一都会被判成"泄漏了兄弟的名字"。
+        own = {spec[0] for spec in sk.plan} | set(sk.extra_plan_tools or ())
         if sk.name in DYNAMIC:
             own |= set(_CALLABLE_QUERY_TOOLS) | set(_EXPLICIT_TOOLS)
         for n in sorted(names - own):
