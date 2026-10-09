@@ -38,6 +38,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent          # 仓根
 sys.path.insert(0, str(ROOT))
 
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
 import agent.graph as g  # noqa: E402
@@ -250,9 +252,11 @@ check("  且渲染函数**必须有**这个形参（漏传即 TypeError）", "pe
       g._render_planner_prompt.__code__.co_varnames)
 # `planner_node` 里只有一处渲染调用（`_prompt_args` 一次算好、一次渲染）：缺了这一格
 # 就是"问模型的那个问题里没有台账"（见 `_render_planner_prompt` 头注）。
+# 刀 2（20261009）后 `_planner_decide` 拆成阶段函数、跨段量改从 ctx 上取
+# （`rounds` → `c.rounds`）⇒ 本文件的整文件文本锁先去掉那个前缀再看：
+# 判据文本与拆分之前**逐字相同**（前缀清单从 graph.py 的 AST 读，见 `_ctx_src`）。
 check("  `planner_node` 把它算进 `_prompt_args`",
-      "pending_ledger=ledger_frame" in
-      (ROOT / "agent" / "graph.py").read_text(encoding="utf-8"))
+      "pending_ledger=ledger_frame" in _ctx_src.graph_deprefixed())
 
 print("⑨ 旧快道那句尾巴必须已经消失（它是本批要消灭的形状本身）")
 # 判据落在**渲染出来的东西**上，不是源码上：要消灭的是"模型读到的那句话"，

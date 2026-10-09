@@ -33,6 +33,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
 import agent.context as ctx  # noqa: E402
 import agent.graph as g  # noqa: E402
 import server as srv  # noqa: E402
@@ -47,7 +49,10 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-_GRAPH_SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+# 刀 2（20261009）后 `_planner_decide` 拆成阶段函数、跨段量改从 ctx 上取
+# （`rounds` → `c.rounds`）⇒ 本文件的整文件文本锁先去掉那个前缀再看：
+# 判据文本与拆分之前**逐字相同**（前缀清单从 graph.py 的 AST 读，见 `_ctx_src`）。
+_GRAPH_SRC = _ctx_src.graph_deprefixed()
 
 
 # ── ① 类型表本身 ────────────────────────────────────────────────────────────

@@ -31,6 +31,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
 
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
 from agent import adminops as A  # noqa: E402
 import tools.base as base  # noqa: E402
 
@@ -845,9 +847,11 @@ check("  没有 `create_tag` 的计划一次都不读字典（惰性：不是每
       _lazy_tools == ['set_article_tags({"article_id": 46, "add": ["编程"]})']
       and not _prune_reads)
 # 接线锁（本仓的老规矩）：判据活在测试里、生产没调它，等于没有。
-# 决策主体在 `_planner_decide`（`planner_node` 只是薄壳，见它的 docstring）。
-import inspect  # noqa: E402
-_pnode_src = inspect.getsource(__import__("agent.graph", fromlist=["x"])._planner_decide)
+# 决策主体是 `_planner_decide` 与它拆出的阶段函数（`planner_node` 只是薄壳，见它的
+# docstring）⇒ 20261009 刀 2 起锚点取**整文件**的去前缀视图（`c.` 前缀还原成裸名，
+# 于是这两句的判据文本与拆分之前逐字相同）；`_planner_decide` 自己的源码片段在拆完
+# 之后已经不含这两行了。
+_pnode_src = _ctx_src.graph_deprefixed()
 check("planner 收尾前真调了它（且排在 `_name_arg_fix` 之后——那一步会重建计划）",
       "_drop_satisfied_tag_creates(plan_obj, config)" in _pnode_src
       and _pnode_src.index("value_refuse = _name_arg_fix")

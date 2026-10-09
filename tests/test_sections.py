@@ -32,6 +32,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
 
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
 from rag import sections                         # noqa: E402
 from agent.context import (_DETAIL_FRAME_PER, _compact_list_frame,  # noqa: E402
                            _frame_texts)
@@ -371,7 +373,10 @@ check("section 只对 note 生效（talk/board/announcement 走原路）",
 ctx_src = (ROOT / "agent" / "context.py").read_text(encoding="utf-8")
 check("渲染侧用 frame_excerpt", "sections.frame_excerpt(text, _DETAIL_FRAME_PER)" in ctx_src)
 check("旧的无声硬截断已移除", "原文过长仅示前" not in ctx_src)
-g_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+# 刀 2（20261009）后 `_planner_decide` 拆成阶段函数、跨段量改从 ctx 上取
+# （`rounds` → `c.rounds`）⇒ 本文件的整文件文本锁先去掉那个前缀再看：
+# 判据文本与拆分之前**逐字相同**（前缀清单从 graph.py 的 AST 读，见 `_ctx_src`）。
+g_src = _ctx_src.graph_deprefixed()
 check("planner 规则含按节补读", "超长文章按节补读" in g_src)
 check("narrator 纪律 14 在位", "14. 工具返回帧标注" in g_src)
 check("造帧侧（execute）在 ToolMessage 出口去重",
