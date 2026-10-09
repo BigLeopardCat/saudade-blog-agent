@@ -7,8 +7,8 @@
 
 | 类型 | 正文写什么 | 日期戳怎么处理 |
 |---|---|---|
-| **现状型** | 只写"**现在是什么**" | 逐版流水账收进文末《修订记录》附录，正文不写"此前…后来改成…" |
-| **记录型** | 时间线**就是内容**（事故、实验、评估，按日期） | 不动——历史描述是这份文件存在的意义 |
+| **现状型** | 只写"**现在是什么**" | 成段的逐版流水账收进文首/文末的《变更注 / 修订记录》，正文不写；**但"这条规则当初怎么来的、为什么现在是它"那句话留着**——它是这条规则的依据，不是流水账 |
+| **记录型** | 时间线**就是内容**（事故、实验、评估、交接，按日期） | 不动——历史描述是这份文件存在的意义 |
 | **方向型** | 还没做、或已搁置的**预案**，带触发条件 | 只写"在什么可观测的事实出现时重开" |
 
 ## 目录
@@ -20,7 +20,7 @@
 | [eval-observability.md](eval-observability.md) | 评测与可观测性的 L0–L3 分层口径（判据该长什么样） | 现状型 |
 | [lint-baseline.md](lint-baseline.md) | 静态检查（ruff）基线与"新代码要干净"的参照点 | 现状型 |
 | [rag-design.md](rag-design.md) | 检索设计与实现总结，§8 是触发条件驱动的升级预案 | 现状型 |
-| [native-toolcalls-mainline.md](native-toolcalls-mainline.md) | 现行主线：从文本计划协议切到 native tool calls | 现状型 |
+| [native-toolcalls-mainline.md](native-toolcalls-mainline.md) | 换主线的**交接件**：为什么换、冻结了什么、边界在哪 | 记录型 |
 | [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) | 工具调用稳定性的长期路线图，含明确"不做"清单 | 现状型 + 方向型 |
 | [react-line-experiment.md](react-line-experiment.md) | ReAct 试验线的实测：原生 tool calls 当骨架行不行 | 记录型 |
 | [zero-call-residual.md](zero-call-residual.md) | 「零调用/声称」一次没有效果的实测与残余落点 | 记录型 |
