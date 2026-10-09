@@ -2,12 +2,16 @@
 """检索 eval：recall@k / MRR（文档级，直接测线上实现 rag/search.py）。
 
 评测驱动原则：检索 eval 测的是线上检索代码（rag.search），不另写模拟实现。
-queries 与 golden RAG 用例一一对应（eval/golden/basic.jsonl 的 rag_* 条目），
+queries 与 golden 的 `rag_*` 用例**同源出题，但不是逐条对应**（20261009 核对，差三条）：
+`rag_arch_ports_real`（20260920 现场回流）与 `rag_eval_system`（1.26 事故回流）只在 L1、
+不进 golden；`rag_talk_rag` 随 20260901 检索池净化退出 L1、留在 golden（端到端仍覆盖）。
 期望命中文档按出题意图标注（note/talk 的公开 id）。
 
 用法：
   python3 eval/recall_eval.py                 # 跑线上检索，报告进 eval/report/runs/<ts>.json
   python3 eval/recall_eval.py --show          # 打印每 query 的 top-k 命中明细
+  python3 eval/recall_eval.py --holdout       # 加跑留出集（查询侧同义扩展的判据集，见 HOLDOUT）
+  python3 eval/recall_eval.py --holdout --no-expansion   # 同一进程里的对照臂（两臂交替跑）
 """
 from __future__ import annotations
 
@@ -19,7 +23,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import report_archive  # noqa: E402  同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
-from rag.search import get_index, last_route, search  # noqa: E402
+from rag.search import (  # noqa: E402
+    expansion_enabled,
+    get_index,
+    last_route,
+    search,
+    set_expansion,
+    synonyms,
+    tokenize,
+)
 
 ROOT = Path(__file__).resolve().parent
 REPORT_RUNS = ROOT / "report" / "runs"
@@ -77,6 +89,69 @@ QUERIES: list[dict] = [
 ]
 
 
+# ── 留出集（20261009）：查询侧同义扩展的**判据集** ──────────────────────
+# 为什么不并进 QUERIES：上面那 22 条是**回归集**——它们出题时挑的是"站内确实写了的主题"，
+# 而站点文档用的是站内自己的说法（JWT / 断连 / 评测）。访客嘴里是另一套（令牌 / 断线 / 测评），
+# 这套词在 22 条里**一条都没出现**（20261009 实测）⇒ 拿主集量同义扩展，跑出来的小数
+# 与「有没有加这对词」**完全无关**（扩表前后四个指标一字不差）。度量一个东西要先让它出现在题里。
+#
+# 所以这里按**访客口吻**另出一套：每条至少覆盖 `rag/search.py::_QUERY_SYNONYMS` 的一对词
+# （机械闸门 `tests/test_query_expansion.py` 会断言"词表里每一对都在标注集里被真的用到"，
+# 覆盖不住就红——防的正是"加了词、却没人拿它出过题"）。
+#
+# 期望值口径与主集一致（**全部正确答案文档**，不是"最该排第一的那篇"）：
+#   note:22 IoT 设备接入指南（JWT 签发/MQTT）、note:19 架构文档（断连中断/鉴权）、
+#   note:14 固件接入参考（JWT）、note:12 OTA 问题与解决记录。
+# 20261009 两臂实测（`--holdout` / `--holdout --no-expansion --show`，同一天同语料）：
+#   留出集整体      关臂 0.40/0.40/0.60 MRR 0.44 → 开臂 0.80/0.80/1.00 MRR 0.84
+#   主集 22 条      **四个指标一字不差**（0.92/1.00/1.00/0.96、噪声 0.89、平均候选 3.36）
+#   令牌怎么签发？   空 → note:22 —— 扩展救回来的是**零候选**（B 类：有效 token 掉到 0）
+#   接口鉴权用的令牌…  note:22 由 rank 2 升到 rank 1（期望集里 note:14 两臂都是首中 ⇒
+#                    **标量不动**，只有名次动了——这类改善只能逐条看 `--show`）
+#   断线了会怎样？    只有一篇无关文档(note:46) → note:19 居首
+#   空中升级怎么做的？ 两臂都是 rank 1（**指标不动**，只是把 note:12 拉进了 @3）
+#   页面关掉后还会继续跑吗？ rank 5 / 5 —— **与扩展无关的已知 miss**（如实留档，别记在扩展账上）
+#   这个站支持 RSS 订阅吗？ 两臂一字不差（负控：不含 key 词的查询不受影响）
+_HOLDOUT_NOTE = "留出集不入基线读数：它是扩展的判据，不是站点的检索分数。"
+
+HOLDOUT: list[dict] = [
+    {"id": "h_token_short", "query": "令牌怎么签发？",
+     "expected": ["note:22", "note:19", "note:14"]},
+    {"id": "h_token_long", "query": "接口鉴权用的令牌是怎么签发的？",
+     "expected": ["note:22", "note:19", "note:14"]},
+    {"id": "h_disconnect", "query": "断线了会怎样？", "expected": ["note:19"]},
+    {"id": "h_ota_air", "query": "空中升级怎么做的？",
+     "expected": ["note:12", "note:14", "note:22"]},
+    # 与扩展无关的两条**负控**：不含任何 key 词 ⇒ 两臂必须一字不差（证明扩展不是无差别生效）。
+    # 前一条同时是一条如实留档的 miss（真答案 note:19 排在 5），别把它的 rank 当成扩展的锅。
+    {"id": "h_page_closed", "query": "页面关掉后还会继续跑吗？", "expected": ["note:19"],
+     "known_fail": True},
+    {"id": "h_rss", "query": "这个站支持 RSS 订阅吗？", "expected": []},
+]
+
+
+def expansion_diag(idx) -> dict:
+    """词表 × 语料落点：每对词的 key / val **各有多少 gram 在语料里出现过**。
+
+    这是每对词**存在的理由**的现场证据，也是两类病因的辨识依据：
+    `0/1`（key 的词一个 gram 都不在语料里）⇒ 查询有效 token 掉到 0，检索返回**空**（B 类）；
+    `1/5`（如「空中升级」，只有「升级」落了地）⇒ 还搜得到东西，只是搜不到点 ⇒ **弱收益**样本。
+    别把这两类读成同一件事，也别指望第二类的指标会动。
+    """
+    post = getattr(idx, "_postings", {})
+
+    def land(t: str) -> tuple[int, int]:
+        gs = list(dict.fromkeys(tokenize(t.lower())))
+        return sum(1 for g in gs if g in post), len(gs)
+
+    pairs = []
+    for p in synonyms():
+        k, v = land(p["key"]), land(p["val"])
+        pairs.append({"key": p["key"], "val": p["val"],
+                      "key_landing": f"{k[0]}/{k[1]}", "val_landing": f"{v[0]}/{v[1]}"})
+    return {"enabled": expansion_enabled(), "pairs": pairs}
+
+
 # ── 本次生效档位（20261005）──────────────────────────────────────────
 # 两臂 A/B（`RAG_HYBRID_ENABLED=0` vs `=1`，见 docs/rag-design.md §9）**唯一能回答
 # "开关真开了没"的就是这两行**：两份报告的指标若不是同一档位跑出来的，那些小数点的
@@ -111,10 +186,17 @@ def routes_text(modes: dict) -> str:
     return "、".join(f"{k}×{v}" for k, v in sorted(modes.items()))
 
 
-def evaluate(idx, show: bool) -> dict:
+def evaluate(idx, show: bool, queries: list[dict] | None = None) -> dict:
+    """跑一套 query，返回指标。
+
+    `queries` 显式传入是为了让留出集与主集**走同一套度量代码**（复制一份出来的那天起，
+    两个数就再也对不上了），但**分别报告**——留出集不是基线的一部分，混进同一个小数里
+    会让"站点的检索分数"这个口径悄悄换掉。
+    """
+    queries = QUERIES if queries is None else queries
     results = []
     modes: dict[str, int] = {}          # 实测路线计数（不是配置，是这批 query 真走过的路）
-    for q in QUERIES:
+    for q in queries:
         hits = search(q["query"], top_k=5)
         mode = last_route()["mode"]
         modes[mode] = modes.get(mode, 0) + 1
@@ -156,7 +238,16 @@ def evaluate(idx, show: bool) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--show", action="store_true")
+    ap.add_argument("--no-expansion", action="store_true",
+                    help="关掉查询侧同义扩展再跑（A/B 的另一臂，与 --holdout 成对使用）")
+    ap.add_argument("--holdout", action="store_true",
+                    help="加跑留出集（访客口吻，专门覆盖同义扩展的词对）")
     args = ap.parse_args()
+
+    # 查询侧扩展开关：内存里的模块级开关，**不是 .env 拨盘**（见 rag/search.py 的
+    # _EXPANSION_ENABLED 注）——A/B 就是"同一份代码、同一批语料、同一个进程里拨这一下"。
+    if args.no_expansion:
+        set_expansion(False)
 
     # 语料在位性检查 + 基线快照（20260831）：期望命中文档不在语料 → WARN（期望过期
     # ≠ 检索退化），报告带语料快照与期望集哈希（与 run_golden 同源，见 corpus_check.py）。
@@ -173,6 +264,13 @@ def main() -> None:
     print(f"语料：{len(docs)} 文档（全部 note——20260901 检索池净化，talk/board/announcement 不再入池）")
     dial = configured_dial()
     print(f"档位（配置）：{dial}")
+
+    ediag = expansion_diag(idx)
+    print("查询扩展：" + ("关（A/B 关臂）" if not ediag["enabled"] else "开")
+          + "  " + "；".join(f"{p['key']}→{p['val']} 落点 {p['key_landing']}/{p['val_landing']}"
+                             for p in ediag["pairs"]))
+    # 词表×语料落点：`0/1` = key 的 gram 一个都不在语料里（查询有效 token 掉到 0 ⇒ 返回空）。
+    # 落点为 0 的词对是这张表的主力；`1/5` 那种（「空中升级」靠「升级」半落地）是弱收益样本。
 
     rep = evaluate(idx, args.show)
     print(f"\n== {rep['baseline']} ==")
@@ -191,12 +289,33 @@ def main() -> None:
     if kf:
         print("  已知 FAIL（词法表征局限，非回归）：" + "、".join(f"{i} rank={k}" for i, k in kf))
 
+    rep_h = None
+    if args.holdout:
+        rep_h = evaluate(idx, args.show, HOLDOUT)
+        print(f"\n== 留出集 {rep_h['n']} 条（访客口吻，覆盖同义扩展的词对）==")
+        print(f"  recall@1={rep_h['recall@1']:.2f} recall@3={rep_h['recall@3']:.2f} "
+              f"recall@5={rep_h['recall@5']:.2f} MRR={rep_h['MRR']:.2f} "
+              f"noise_hit={rep_h['noise_hit_rate']:.2f}")
+        hkf = [(r["id"], r["rank"]) for r in rep_h["results"] if r.get("known_fail")]
+        if hkf:
+            print("  已知 miss（与扩展无关，如实留档）："
+                  + "、".join(f"{i} rank={k}" for i, k in hkf))
+        print(f"  ⚠️ {_HOLDOUT_NOTE}两臂要**同一个进程里各跑一次**"
+              f"（本次是{'关' if args.no_expansion else '开'}臂），"
+              f"换臂读**计数与名次**，别只读通过率。")
+        if not args.no_expansion:
+            print("   → 对照臂：eval/recall_eval.py --holdout --no-expansion --show")
+
     # 留档名走 report_archive（20261002）：与 golden 的两个跑法**同一个目录、同一份实现**
     # ——名字此前是秒级 ts（这里还多一个 `-` 的分隔符差异），同一秒的两份 report 会互相覆盖。
     REPORT_RUNS.mkdir(parents=True, exist_ok=True)
     with report_archive.open_archive(REPORT_RUNS) as (out, f):
         ts = Path(out).stem
-        payload = {"ts": ts, "corpus": corpus, "queries": len(QUERIES), "runs": [rep]}
+        payload = {"ts": ts, "corpus": corpus, "queries": len(QUERIES), "runs": [rep],
+                   "expansion": ediag}
+        if rep_h is not None:
+            # 留出集另起一个键：`runs` 是"站点检索基线"，别把扩展的判据集混进同一个读数
+            payload["holdout"] = rep_h
         json.dump(payload, f, ensure_ascii=False, indent=1)
     print(f"\n报告: {out}")
 
