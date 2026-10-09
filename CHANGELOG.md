@@ -57,6 +57,16 @@
   **判据文本一字未改**，换的只是"从哪份源码里找那行"。没有这一步，那七个套件会因为
   "`rounds` 变成了 `c.rounds`"整族假红。
 
+- **手写文档的"计数 / 索引 / 跨仓锚点"有了判据（判据，20261010）**：12k 行手写文档此前没有
+  任何机制看着它与代码是否一致——工具/技能/golden 条数抄错、`docs/` 新加一份却没人进索引、
+  父仓按编号引用的章节被改名，三种都会**静默**发生。现在两条离线套件把它们变成判据：
+  `tests/test_docs_facts.py` 断言 README/architecture 声明的工具数 == `_TOOL_REGISTRY` 长度、
+  技能数 == `len(SKILLS)`、golden 条数 == `basic.jsonl` 行数（与 `test_golden_keys` 的同一个
+  真值）；`tests/test_docs_links.py` 断言相对 md 链接指得着、`docs/README.md` 索引与磁盘
+  `docs/*.md` **双向一致**、**父仓按编号/标题引用的那四组锚点仍在**（`问题记录.md §2.1`、
+  `secretary.md §3.4/3.6/5.2/5.3`、`agent-architecture.md`《3. 一次对话的完整链路》、
+  `toolcall-stability-roadmap.md D1–D6`）。**只锁机械可核的计数 / 索引 / 锚点，不锁措辞**。
+
 ## 20261009
 
 - **写命令不再"只在嘴上答应"；本轮写被挡下时那句纠偏也不再是假话（行为 + 判据，20261009）**：
