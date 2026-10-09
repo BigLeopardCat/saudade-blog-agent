@@ -31,6 +31,11 @@
 每跑完一遍就**追加**一行到 `eval/report/param_matrix.jsonl`（append-only：中断了
 再跑，前面那几遍的读数还在，不用重跑——与 `runs/*.json` 的 `O_EXCL` 同一条纪律）。
 
+表里除红数/下界/延迟外还有**两列用量**（「输入tok」「命中率」）：按每遍的 `trace_run`
+走 `eval/token_cost_report.py` 那**一个**聚合实现算（扫描只有一份实现），**没量到是
+`—` 不是 `0`**；本列上线前写的老行在**读取端**按 `trace_run` 补，jsonl 一个字不改。
+离线锁见 `tests/test_param_matrix_tokens.py`。
+
 ## 它**不**做什么
 
 不写 `last_run.json`、不碰 `eval/golden/**`、不动 `TARGET/FLOOR/ENTRY`、不动分母。
@@ -60,6 +65,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import golden_arm  # noqa: E402  （臂名/目录的**单一事实源**，别在这里再写一遍）
+# 用量与枚举**各只有一个实现**：本模块只**调用**它们、不自己扫 trace（`trace_files` 是
+# 枚举的唯一入口；`token_cost_report.totals` 是用量聚合的唯一入口——命中率的分母口径
+# 就在那儿，见该函数 docstring）。
+import token_cost_report  # noqa: E402
+import trace_files  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 # 留档目录与"能不能当基线"**同源**取（`golden_arm`）：本模块是 `matrix` 臂 ⇒ 目录是
@@ -159,12 +169,58 @@ def _new_report(before: set[str]) -> Path | None:
     return Path(new[-1]) if new else None
 
 
+# 用量行的键：一处定义，`_row` 与报表都从这里取（缺哪一格就是 `None`，见下）。
+_TOKEN_KEYS = ("token_traces", "llm_calls", "input_tok", "output_tok",
+               "cache_hit_tok", "cache_seen", "cache_hit_rate")
+
+
+def _token_usage(trace_run: str | None, root: Path | None = None) -> dict:
+    """一遍全量 golden 的**用量与缓存命中率**，落在这一行的 `_TOKEN_KEYS` 上。
+
+    **换模型那一格为什么必须带它**：换端点后缓存行为**可能整体变**，而缓存是成本的唯一
+    大项（输入:输出 ≈ 173:1，见 `docs/param-tuning-20261006.md` §八.2）——一张只报红数的
+    表会把"便宜了一半"和"贵了一倍"读成同一件事。
+
+    **扫描不在这里实现**：走 `token_cost_report.totals`（那是唯一的用量聚合实现），
+    本函数只做"目录在哪、有没有"这件事。**缺席 ≠ 0** 是本仓反复踩到的形状，这里按
+    `None` 表达：
+
+      · `trace_run` 为空 / 目录不存在 / 目录里一份 trace 都没有 ⇒ **全部 `None`**
+        （"这次没量到"，不是"这次用量是 0"）；
+      · 一次调用都没报缓存字段 ⇒ `cache_hit_rate` 单独是 `None`，而 `llm_calls` 照报
+        ——率的口径（分子分母各是什么、`cache_seen` 与 `llm_calls` 差在哪）见
+        `token_cost_report.totals`，别在这里重算一遍。
+    """
+    blank = {k: None for k in _TOKEN_KEYS}
+    if not trace_run:
+        return blank
+    d = (root or TRACE_ROOT) / trace_run
+    if not d.is_dir():
+        return blank
+    tot = token_cost_report.totals(list(trace_files.iter_trace_files(str(d))))
+    if not tot["calls"] and not tot["traces"]:
+        return blank          # 目录在、但里面没有可读的 trace：仍是"没量到"
+    rate = tot["hit_rate"]
+    return {
+        "token_traces": tot["traces"],
+        "llm_calls": tot["calls"],
+        "input_tok": tot["in"],
+        "output_tok": tot["out"],
+        # 没人报过缓存字段 ⇒ 命中 tok **也**是 `None`（不是 0）：那次扫描里这个数
+        # 根本没出现过，写 0 就是在说"一次都没命中"。
+        "cache_hit_tok": tot["cache"] if tot["cache_seen"] else None,
+        "cache_seen": tot["cache_seen"],
+        "cache_hit_rate": None if rate is None else round(rate, 4),
+    }
+
+
 def _row(arm: str, rep: int, rc: int, rp: Path | None) -> dict:
     spec = ARM_SPECS[arm]
     row = {"arm": arm, "title": spec["title"], "rep": rep, "rc": rc,
            "env": dict(spec["env"]), "t": time.strftime("%Y-%m-%d %H:%M:%S")}
     if rp is None:
         row["error"] = "本次没产出报告（跑挂了/被中断）"
+        row.update(_token_usage(None))   # 键齐、值全 None：没量到 ≠ 用量 0
         return row
     r = json.loads(rp.read_text(encoding="utf-8"))
     samp = (r.get("landing") or {}).get("sampled") or {}
@@ -187,6 +243,8 @@ def _row(arm: str, rep: int, rc: int, rp: Path | None) -> dict:
         "engine": r.get("engine"),
         "model": (r.get("engine"), r.get("corpus_provenance") is not None),
     })
+    # 用量/缓存：**报告已带上 trace_run 之后**才能取（上面那一块里 set 的）。
+    row.update(_token_usage(row.get("trace_run")))
     return row
 
 
@@ -224,7 +282,11 @@ def _route_stats(trace_dirs: list[str], coarse: bool = False) -> dict:
     # 看着像"完全确定"，实际是**没有任何一条可比**。这条是实测踩到的：8 跑窗口里
     # 混进一份 total=9 与一份无 trace_dir 的，交集从 149 掉到 0。
     # 口径：留下用例数与最大者同量级的（≥50%），丢掉的**列出来**、不静默。
-    n_max = max(len(p) for p in per_run)
+    # `default=0`：**一遍可比成员都没有**时（trace 目录还在、但里面的 trace 读不出
+    # planner 决策——例如已被保留期压成 gz 之外的东西，或者 `--report` 时那些 trace
+    # 早没了）不许在这里炸：这张表的意义就是"读不出就如实显示读不出"，下面的
+    # 「不足两遍可比的全量」分支接得住 0 与 1 两种情形。
+    n_max = max((len(p) for p in per_run), default=0)
     kept = [p for p in per_run if len(p) * 2 >= n_max]
     dropped = [len(p) for p in per_run if len(p) * 2 < n_max]
     if coarse:
@@ -312,6 +374,79 @@ def run(arms: list[str], reps: int) -> int:
 
 
 # ── 报表 ────────────────────────────────────────────────────────────────
+def _usage_cells(rs: list[dict]) -> tuple[str, str, str | None]:
+    """一臂的「输入tok / 命中率」两格，外加需要时冒出来的一句脚注。
+
+    三条纪律都在这里，别在别处重算：`None` 显示 `—`（**不是 0**）；命中率 = 命中 tok /
+    输入 tok（与 `token_cost_report.totals` 的合计行同式）；`cache_seen < llm_calls`
+    （有调用没报缓存字段）时那个率**偏低**——分子少算了没报的那些、分母照旧，所以要点名。
+    """
+    tin = [r.get("input_tok") for r in rs if r.get("input_tok") is not None]
+    hit = [r.get("cache_hit_rate") for r in rs
+           if r.get("cache_hit_rate") is not None]
+    partial = [r for r in rs
+               if (r.get("llm_calls") or 0) > (r.get("cache_seen") or 0)]
+    note = None
+    if partial:
+        miss = [(r.get("llm_calls") or 0) - (r.get("cache_seen") or 0) for r in partial]
+        note = (f"有 {len(partial)} 遍出现调用没报缓存字段（最多的一遍少 {max(miss)} 次；"
+                f"端点只对部分请求回该字段时就是这样）⇒ 那几遍的命中率**偏低**"
+                f"（分子只算了报了的那些，分母仍是输入 tok 总数）。")
+    return (" / ".join(f"{x / 1e6:.2f}M" for x in tin) or "—",
+            " / ".join(f"{x:.1%}" for x in hit) or "—", note)
+
+
+# 两列的口径说明（表后紧跟一行）——放常量里，免得 `report()` 被几行长句撑大。
+_USAGE_FOOTNOTE = (
+    "\n输入tok/命中率取自每遍报告 `trace_run` 指向的 trace，走"
+    "`eval/token_cost_report.py` 那**同一份**扫描器（`llm_done` 里的 "
+    "`input/output` 字段）。**`—` = 没量到，不是 0。** 命中率 = 命中 tok / 输入 tok"
+    "（与 `token_cost_report.totals` 的合计行同式）；一次调用都没报缓存字段时它是"
+    "`—` 而不是 `0.0`。⚠️ 换模型那一格**必须**连这一列一起看：换端点后缓存行为"
+    "可能整体变，而输入侧占成本 ~99%。")
+
+
+def _print_red_roll(detail: list[tuple]) -> None:
+    """「红名单逐遍」一节：同一臂两遍都红 ⇒ ×2（比均值有信息量）。"""
+    print("\n## 红名单逐遍（去重后按出现次数）\n")
+    for arm, rs, _st in detail:
+        cnt = Counter(c for r in rs for c in (r.get("red_ids") or []))
+        if cnt:
+            print(f"- `{arm}`: " + "，".join(f"{c}×{n}" for c, n in cnt.most_common()))
+        else:
+            print(f"- `{arm}`: 零红")
+
+
+def _print_route_roll(detail: list[tuple]) -> None:
+    """「路由」一节：逐臂列出跨遍换过 round 0 技能的用例（每臂最多列 12 条）。"""
+    print("\n## 路由：跨遍换过 round 0 技能的用例\n")
+    for arm, rs, st in detail:
+        us = st.get("unstable_list") or []
+        if not us:
+            print(f"- `{arm}`: ——")
+            continue
+        print(f"- `{arm}`（{st['unstable']}/{st['cases']}，成对分歧 {st['rate']:.1%}）")
+        for c, branches, d in sorted(us, key=lambda x: -x[2])[:12]:
+            print(f"    · `{c}` 分支={branches} 分歧 {d} 对")
+
+
+def _print_ab_diff(detail: list[tuple]) -> None:
+    """两臂时逐用例点名红→绿 / 绿→红（只看全量轮）。聚合没退化 ≠ 没有一条变坏。"""
+    full = {arm: rs for arm, rs, _st in detail}
+    if len(full) != 2:
+        return
+    a, b = list(full)
+    red = {x: Counter(c for r in full[x] for c in (r.get("red_ids") or []))
+           for x in (a, b)}
+    print(f"\n## 逐条点名 `{a}` → `{b}`（只看全量轮）\n")
+    fell = sorted(set(red[a]) - set(red[b]))
+    rose = sorted(set(red[b]) - set(red[a]))
+    both = sorted(set(red[a]) & set(red[b]))
+    print(f"- 只在 `{a}` 红（改后转绿）：{fell or '——'}")
+    print(f"- 只在 `{b}` 红（改后新红，**这条最要命**）：{rose or '——'}")
+    print(f"- 两边都红：{both or '——'}")
+
+
 def report(only: list[str] | None = None) -> int:
     if not MATRIX.exists():
         print("还没有读数（先跑 --arms）")
@@ -319,6 +454,10 @@ def report(only: list[str] | None = None) -> int:
     rows = [json.loads(l) for l in MATRIX.read_text(encoding="utf-8").splitlines() if l.strip()]
     by = defaultdict(list)
     for r in rows:
+        # 老行（本列上线前写的）没有用量键——**在读取端按 `trace_run` 补**，不改 jsonl：
+        # 那些 trace 还在盘上（保留 30 天），而"这一遍花了多少"是那份 trace 的纯函数。
+        if "input_tok" not in r:
+            r.update(_token_usage(r.get("trace_run")))
         if only and r["arm"] not in only:
             continue
         by[r["arm"]].append(r)
@@ -331,9 +470,10 @@ def report(only: list[str] | None = None) -> int:
           "两个都要看：差在形态级、平在技能级的那些是记账差异（`chat|stop|空` vs "
           "`chat|tool_calls|chat`，落点同一个 chat），不是决策乱跳。\n")
     print("| 臂 | 遍 | 采样层红数（逐遍） | 均值 | 下界（逐遍） | 硬层 | "
-          "形态级分歧 | 技能级分歧 | p50/p95 | 工具调用合计 |")
-    print("|---|---|---|---|---|---|---|---|---|---|")
+          "形态级分歧 | 技能级分歧 | p50/p95 | 工具调用合计 | 输入tok | 命中率 |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
     detail = []
+    cache_notes: list[str] = []
     for arm, rs in by.items():
         rs = sorted(rs, key=lambda r: (r.get("rep") or 0))
         # **只拿全量轮进表**：`--only` / `--limit` 的半截轮分母不同（实测混进一份
@@ -355,6 +495,11 @@ def report(only: list[str] | None = None) -> int:
         p50 = [r.get("p50") for r in rs if r.get("p50") is not None]
         p95 = [r.get("p95") for r in rs if r.get("p95") is not None]
         tc = [r.get("tool_calls_total") for r in rs if r.get("tool_calls_total") is not None]
+        # 用量/缓存两格 + 需要时的一句脚注，全在 `_usage_cells` 里（`None` 显示 `—`，
+        # 不是 0；命中率只有那一处式子）。
+        tin_txt, hit_txt, usage_note = _usage_cells(rs)
+        if usage_note:
+            cache_notes.append(f"`{arm}`：{usage_note}")
         rate = st.get("rate")
         flag = "" if len(rs) >= 2 else " ⚠️单遍"
         if partial:
@@ -373,41 +518,18 @@ def report(only: list[str] | None = None) -> int:
               f"{' / '.join(f'{x:.4f}' for x in lows) or '—'} | "
               f"{'✅' if hard else '❌'} | {rate_txt} | {crate_txt} | "
               f"{lat_txt} | "
-              f"{' / '.join(map(str, tc)) or '—'} |")
+              f"{' / '.join(map(str, tc)) or '—'} | {tin_txt} | {hit_txt} |")
         detail.append((arm, rs, st))
 
-    print("\n## 红名单逐遍（去重后按出现次数）\n")
-    for arm, rs, _st in detail:
-        cnt = Counter(c for r in rs for c in (r.get("red_ids") or []))
-        if cnt:
-            print(f"- `{arm}`: " + "，".join(f"{c}×{n}" for c, n in cnt.most_common()))
-        else:
-            print(f"- `{arm}`: 零红")
+    print(_USAGE_FOOTNOTE)
+    if cache_notes:
+        print("\n⚠️ 有调用**没报**缓存字段（分子少算了它们，分母照旧）：")
+        for n in cache_notes:
+            print(f"- {n}")
 
-    print("\n## 路由：跨遍换过 round 0 技能的用例\n")
-    for arm, rs, st in detail:
-        us = st.get("unstable_list") or []
-        if not us:
-            print(f"- `{arm}`: ——")
-            continue
-        print(f"- `{arm}`（{st['unstable']}/{st['cases']}，成对分歧 {st['rate']:.1%}）")
-        for c, branches, d in sorted(us, key=lambda x: -x[2])[:12]:
-            print(f"    · `{c}` 分支={branches} 分歧 {d} 对")
-
-    # A/B 逐条点名：**逐用例**红→绿 / 绿→红（不许只看均值——聚合没退化 ≠ 没有一条变坏）。
-    # 用**过滤后**的全量轮点名（半截轮的红名单与全量轮的不是一回事）。
-    full = {arm: rs for arm, rs, _st in detail}
-    if len(full) == 2:
-        a, b = list(full)
-        red = {x: Counter(c for r in full[x] for c in (r.get("red_ids") or []))
-               for x in (a, b)}
-        print(f"\n## 逐条点名 `{a}` → `{b}`（只看全量轮）\n")
-        rose = sorted(set(red[b]) - set(red[a]))
-        fell = sorted(set(red[a]) - set(red[b]))
-        both = sorted(set(red[a]) & set(red[b]))
-        print(f"- 只在 `{a}` 红（改后转绿）：{fell or '——'}")
-        print(f"- 只在 `{b}` 红（改后新红，**这条最要命**）：{rose or '——'}")
-        print(f"- 两边都红：{both or '——'}")
+    _print_red_roll(detail)
+    _print_route_roll(detail)
+    _print_ab_diff(detail)
     return 0
 
 

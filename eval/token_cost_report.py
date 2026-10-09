@@ -102,6 +102,28 @@ def _sum(agg: dict, keys: list) -> dict:
     return out
 
 
+def totals(paths: list[str]) -> dict:
+    """一遍扫完的**合计行**（给别的报告端复用：扫描这件事只有这一份实现）。
+
+    返回 `collect` 的 `traces` + 合计（`calls/unnamed/in/out/cache_seen/cache`）+
+    算好的 `hit_rate`。口径**与本模块 `main()` 打的那行合计逐字同式**（`cache/in`），
+    不许在别处另算一份。两件事**分开带出去、不许在这里合并**：
+
+      · `hit_rate` 的分母是**输入 tok 总数**（`in`），**不是**调用数；`cache_seen`
+        （报了缓存字段的调用数）只当**闸**用——它是 0 就说明这次压根没人报，率是
+        **`None`** 而不是 `0.0`。"量不到"与"命中 0 次"是两件事，写成后者会得出
+        "缓存完全没命中"这种没数据支撑的结论（`cache_read` 缺席的语义见
+        `agent/llm_usage.py`）。
+      · **有调用没报缓存字段时**（`cache_seen < calls`），分子**少算了**那一部分——
+        所以调用端要把 `calls` 与 `cache_seen` 并列摆出来，不要只报一个率。
+    """
+    got = collect(paths)
+    tot = _sum(got["rows"], list(got["rows"]))
+    tot["traces"] = got["traces"]
+    tot["hit_rate"] = (tot["cache"] / tot["in"]) if (tot["cache_seen"] and tot["in"]) else None
+    return tot
+
+
 def _row(label: str, r: dict, price: tuple | None) -> str:
     hit = (f"{r['cache'] / (r['in'] or 1) * 100:.1f}%"
            if r["cache_seen"] else "n/a")
