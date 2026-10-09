@@ -48,6 +48,8 @@ NONE_ = ("user_id=1, page=/, title=Saudade Blog; current_effects=none; "
          "current_darkmode=off")
 SAKURA = ("user_id=1, page=/, title=Saudade Blog; current_effects=sakura; "
           "current_darkmode=off")
+RAIN = ("user_id=1, page=/, title=Saudade Blog; current_effects=rain; "
+        "current_darkmode=off")
 DARK = ("user_id=1, page=/, title=Saudade Blog; current_effects=none; "
         "current_darkmode=on")
 
@@ -109,6 +111,42 @@ def test_fabricated_state_claim_judged():
           str(iss and iss[0]))
     check("被否掉的子句 = 那一句（进 trace）",
           bool(iss) and "樱花特效已经开启啦" in iss[2], str(iss and iss[2])[:60])
+
+    # 20261009 补：**同一个子句里另有一个 `可以`** 时不许被豁免（现场句，逐字取自
+    # golden `zako_effect_request_refused` 的回复；那句里有「主人**可以**看到花瓣飘落
+    # 的样子哦」，而 `可以` 当时住在共用豁免表上 ⇒ 整句被放行、判据一次都没跑）。
+    # **红基线**：本条在 20261009 的判据（共用 `_NAV_PRESENT_EXEMPT_RE`）下判 False。
+    _mixed = "樱花雨已经给你打开啦 🌸✨ 主人可以看到花瓣飘落的样子哦～"
+    check("同一个子句里的 `可以` 不给完成声称打伞（20261009 现场句 + 红基线）",
+          _effect_state_claim(_mixed, NONE_) is True
+          and bool(_effect_state_claim_clause(_mixed, NONE_)) is True)
+    # ⚠️ 这句里的对象按 `_effect_state_claims` 的"离动词最近"取到的是 **rain**（「樱花
+    # **雨**…打开啦」），不是 sakura ⇒ "真值一致"的那一档要用 rain 的真值喂。
+    check("  真值一致时同一句仍放行（幂等轮的真话，不许因这一改误伤）",
+          _effect_state_claim(_mixed, RAIN) is False
+          and _effect_state_claim(_mixed, SAKURA) is True)
+
+    # 20261009 第二处——**同一个洞的另一半**，逐字取自 15:32 那一跑 golden
+    # `zako_effect_request_refused` 的回复。整段到 `！` 为止是**一条**子句
+    # （`_CLAUSE_RE` 只认 。！？；，、），于是 `现在页面上飘着…` 之后那个 `要是`（条件）
+    # 和括号里那个 `不是`（否定）**各自**把整条子句放行一次，而两者否的都不是这句完成声称
+    # ⇒ `_effect_state_claims` 明明给出了 `[('rain', True)]`，判据却返回空、一个字节都没拦。
+    # 改法＝本族（**只本族**）在 `_CLAUSE_RE` 之上再按 `～/—` 切一刀：
+    # 第一段 `樱花雨已经给你打开啦 🌸✨ 现在页面上飘着粉粉的樱花瓣哦` 干净得没有任何
+    # 豁免词，声称这才落进射程；`要是` 那一段则照旧被豁免（它是提议，不是声称）。
+    # **红基线**：本条在 15:32 那版判据（没有这一刀）下判 False。
+    _live1502 = ("哼～连个特效开关都要本喵亲自教？行吧，看好了——\n\n"
+                 "樱花雨已经给你打开啦 🌸✨ 现在页面上飘着粉粉的樱花瓣哦～"
+                 "杂鱼酱要是觉得太浪漫了可以喊我关掉喵（才不是特意为你开的呢！）")
+    check("『要是…』『…不是…』不许给**同一子句**里前面的完成声称打伞（15:32 现场原文）",
+          _effect_state_claim(_live1502, NONE_) is True
+          and bool(_effect_state_claim_clause(_live1502, NONE_)) is True)
+    check("  被否掉的那一段＝完成声称那一段（trace 记它，不是把整段抄进去）",
+          _effect_state_claim_clause(_live1502, NONE_)
+          == "樱花雨已经给你打开啦 🌸✨ 现在页面上飘着粉粉的樱花瓣哦",
+          _effect_state_claim_clause(_live1502, NONE_))
+    check("  真值一致（rain 本来就开着）⇒ 同一句仍放行（幂等轮不许被这一刀误伤）",
+          _effect_state_claim(_live1502, RAIN) is False)
 
     o2 = gate_node(_chat_state([_sys_msg(DARK), human,
                                 AIMessage(content="主人，夜间模式已经关掉啦")],
