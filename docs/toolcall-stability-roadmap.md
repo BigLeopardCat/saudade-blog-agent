@@ -146,9 +146,9 @@ tool_use / tool_result 直接进 transcript，模型对执行结果的"转述"�
 **目标**：判据变成有语料、有基线、**只减不增**的资产。
 
 **步骤**
-1. 建 `eval/claim_corpus/<族>.jsonl`：每行 `{"text": 原句, "want": true/false, "src": trace_id, "note": 为什么}`。
+1. 建（**未建**）`eval/claim_corpus/<族>.jsonl`：每行 `{"text": 原句, "want": true/false, "src": trace_id, "note": 为什么}`。
    语料来源 = 真实 trace（`logs/agent/traces`，全量复扫脚本已有：`/tmp/rescan_state_claim.py` 的做法收编进仓）。
-2. `eval/claim_regress.py`：跑全语料 → 输出**差集**（相对基线新增误杀/新增漏判）+ 退出码。
+2. `eval/claim_regress.py`（**未建**）：跑全语料 → 输出**差集**（相对基线新增误杀/新增漏判）+ 退出码。
    基线 `eval/report/claim_baseline.json` 与 golden 基线同族管理。
 3. 改任何判据必须附差集；CI 跑（秒级，纯函数）。
 
@@ -185,7 +185,7 @@ N/M 不为 0 时必须人工签字（写进 `eval/report/review_*.md` 的复审�
 1. ~~POC（必须先做）：验证生产模型（qwen 系，OpenAI 兼容端点）对 `response_format=json_schema`
    或 function calling 的支持度与稳定性——**这是本方向的前置未知量，不验证不动手**。~~
    **20260925 已跑完并全部通过**，见下方「D4 POC 结果」；结论带两个协议设计风险，先读那个再动手。
-2. `agent/skill_schema.py`：由 `SKILLS` 注册表派生 schema（`inputs` 已是雏形），
+2. `agent/skill_schema.py`（**未建**）：由 `SKILLS` 注册表派生 schema（`inputs` 已是雏形），
    加 `required` / `enum`（如 `status ∈ {public,private,draft}`、`is_top ∈ {0,1}`）、
    加 id 类参数的来源约束（见 D5）。
    ⚠️ **20260926 补注（枚举的来源已定层，做这一步时必须照它走）**：`enum` 这半**不再

@@ -41,7 +41,7 @@ native 档一轮 planner 调用里，**同一张技能表被下发了两次**，
 `slim` 只作为渲染参数。**20261004 追记**：`slim` 的默认值已翻成 `True`，因为
 `PLANNER_ENGINE` 拨盘与文本档**已整体删除**——生产只剩 native 一条路，而 native 恒用 slim
 （`slim=False` 现在只在 `tests/test_slim_skills.py` 里当对照臂，见 `skills.build_planner_context`
-的注）。因此原来那两条"钉住默认档不变"的断言（`tests/test_planner_engine.py` 的
+的注）。因此原来那两条"钉住默认档不变"的断言（`tests/test_planner_engine.py`（**已删**）的
 "默认档不变"、`test_prompt_prefix.py` 按全量菜单取的 30,000 门槛）**都已随这次改动消失/改口径**：
 前者整套删掉，后者门槛按 slim 形态重测后下降（改的是"拿一个已不存在的档位当基线"，不是放宽判据）。
 
