@@ -37,18 +37,13 @@ flowchart TB
 
     LLM[LLM API<br/>qwen3.8-flash（生产）<br/>thinking 默认开<br/>图内调用均显式关]
 
-    UI -->|POST /api/chat/stream| NGX
-    NGX --> RUST
-    RUST -->|转发请求体| AGT
-    AGT -->|流式 SSE 帧| RUST
-    RUST -->|帧转发| NGX
-    NGX -->|SSE X-Accel-Buffering:no| UI
-    AJS -->|直连同源 API| UI
+    UI <-->|"POST /api/chat/stream ⇄ SSE 帧（X-Accel-Buffering:no）"| NGX
+    NGX <-->|"反代 ⇄ 帧转发"| RUST
+    RUST <-->|"转发请求体 ⇄ 流式 SSE 帧<br/>（工具回灌走 HTTPS api/public）"| AGT
+    AJS -->|"直连同源 API · 写 localStorage chat_history_*"| UI
     RUST <-->|sea-orm| MYSQL
     AGT -->|工具调用| LLM
-    AGT -->|HTTPS api/public| RUST
     AGT -->|代签 JWT 调 device-service| DEV
-    AJS -->|localStorage chat_history_*| UI
 ```
 
 核心设计原则：Python Agent **不持有任何对话状态**（每请求独立 thread_id、进程内 MemorySaver 形同虚设），
