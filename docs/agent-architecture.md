@@ -16,7 +16,7 @@
 
 - React 前端（浏览器）：看板娘 Live2D 形象 + 对话框 UI + SSE 消费 + 命令执行器。
 - Rust 后端（axum，端口 3000）：鉴权、记忆落库、对话编排、SSE 转发、中断清理。**记忆的唯一权威来源**。
-- Python Agent（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、63 个工具。无状态，记忆全靠请求体注入。
+- Python Agent（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、67 个工具。无状态，记忆全靠请求体注入。
 - MySQL：`chat_history`（消息流水）、`chat_summary`（每用户压缩摘要）。
 - device-service（端口 3100，独立服务）：IoT 设备（ESP32 OLED）指令下发，agent 以对话用户身份代签 JWT 调用。
 
@@ -30,7 +30,7 @@ flowchart TB
     subgraph Server[生产服务器 3.7GB 内存]
         NGX[nginx :443/:80]
         RUST[Rust 后端 axum :3000<br/>鉴权·记忆·编排·SSE 转发]
-        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 63 工具 · 4 workers]
+        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 67 工具 · 4 workers]
         MYSQL[(MySQL<br/>chat_history / chat_summary)]
         DEV[device-service :3100<br/>ESP32 OLED 指令下发]
     end
@@ -80,7 +80,7 @@ flowchart TB
 │   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
 │   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，秘书类功能地基（docs/secretary.md）
 │   ├── authz.py               # ★ 权限模型（20260920）：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
-│   ├── skills.py              # ★ 技能注册表：44 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）+ NAV_MAP 导航映射（业务唯一数据源）
+│   ├── skills.py              # ★ 技能注册表：47 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）+ NAV_MAP 导航映射（业务唯一数据源）
 │   ├── adminops.py            # ★ 后台写操作域（20260921-22）：标签/分类索引与**名字→id 解析**（find_tag/find_category）+ 移动/降级校验（move_verdict）+ 确认卡文本 + 色名映射；能算的不交给 LLM
 │   ├── refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用（20260919）：递归遍历 + 五个错误码——解不出的引用必须响亮（20260922 改递归）
 │   ├── confirm.py             # ★ 待确认令牌（20260921）：无状态 HMAC（TTL 600s，2 worker 安全）；不落库、不落用户消息
@@ -105,7 +105,7 @@ flowchart TB
 │   │                          #   住这里是为了让下面两层的消费者导入它时不必拉起 langgraph
 │   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
 ├── tools/
-│   ├── base.py                # 63 个 @tool 工具（含 rag_search / get_article_detail 泛化 doc_type）+ _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重 + trace_id 透传 device-service
+│   ├── base.py                # 67 个 @tool 工具（含 rag_search / get_article_detail 泛化 doc_type）+ _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重 + trace_id 透传 device-service
 │   └── __init__.py
 ├── models/
 │   ├── llm.py                 # get_llm 工厂：provider 三选一（qwen/deepseek/openai）；enable_thinking 走 extra_body
@@ -492,7 +492,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 ---
 
-## 5. 工具系统（63 个）
+## 5. 工具系统（67 个）
 
 | 分类 | 工具 | 行为 |
 |---|---|---|
@@ -1333,7 +1333,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > 最后更新：2026-10-09（**文档自身的一遍整理，机制与结论一字未动**：① 原先堆在文档头部的
 > 逐版修订记录（「最后更新 / 上版 / 上上版 / 更早」）整体移到本节，头部换成一句话说明本文的
 > 读法；② §2 的 `docs/` 目录注释补全——原先只列了四份，实际已有 `adr/`
-> 与八份专题文档。）
+> 与另外九份专题文档。）
 > 上版：2026-09-22（20260922 标签/分类写能力补全：①写工具面从"三件"扩到"九件"
 > ——新增 `update_tag` / `delete_tag` / `create_category` / `update_category` / `delete_category`，
 > 加上既有的 `create_tag` / `set_article_status` / `set_article_tags`（+ `list_admin_notes` 读侧），
@@ -1363,7 +1363,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > ⑤写操作的事前同意（秘书前置需求 ③ 的 agent 侧）——权限之后再加一道确定性判据：
 > 需确认的 scope（`CONSENT_SCOPES = {write.content}`）未获用户本轮消息明确确认 →
 > 产 `__ERROR__: 待确认[consent_required]` 帧、不调用工具；用错误帧形态是为了让 gate
-> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 63 个工具里
+> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 67 个工具里
 > 没有一个是 `write.content`，所以这条闸空转（等第一个写工具，声明表驱动、不用改代码）。
 > 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
 > annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
