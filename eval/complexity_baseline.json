@@ -23,6 +23,14 @@
     "c": 88,
     "lines": 408
   },
+  "agent/graph.py::_decide_late_correct": {
+    "c": 49,
+    "lines": 184
+  },
+  "agent/graph.py::_decide_zero_tool_correct": {
+    "c": 55,
+    "lines": 193
+  },
   "agent/graph.py::_finalize_dedupe": {
     "c": 49,
     "lines": 198
@@ -34,10 +42,6 @@
   "agent/graph.py::_name_target_fix": {
     "c": 35,
     "lines": 73
-  },
-  "agent/graph.py::_planner_decide": {
-    "c": 220,
-    "lines": 1134
   },
   "agent/graph.py::_write_target_refusal": {
     "c": 55,

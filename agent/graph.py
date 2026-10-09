@@ -64,6 +64,7 @@ import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Callable, Literal, NamedTuple, TypedDict
 
@@ -5975,16 +5976,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
     pre = _planner_preflight(state, config)
     if pre.early is not None:
         return pre.early
-    rounds = pre.rounds
-    resumed = pre.resumed
-    user_msg = pre.user_msg
-    intent_msg = pre.intent_msg
-    principal = pre.principal
-    role = pre.role
-    page_ctx = pre.page_ctx
-    has_frames = pre.has_frames
-    doc_anchors = pre.doc_anchors
-    ledger_frame = pre.ledger_frame
+    c = _planner_setup(state, config, pre, task_sink)
 
     # LLM 决策轮。低温度（分类不需要创造力）、小 max_tokens、短超时。
     # **接口层只剩一条路**（20261004）：决定由**工具调用**表达（`agent/native_plan.py`）。
@@ -5994,966 +5986,31 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
     # 不可解析"（`None`）两条不同的病共用一条出路。
     # 预算取 settings 的 native 三项（见 config/settings.py 的注）：思考链会先把额度
     # 吃掉，沿用文本档的 400/30s 会让 arguments 断在半截（finish_reason=length）。
-    # ── 菜单禁用（20261007，1d）─────────────────────────────────────────────
-    # 上一轮受阻、且原因是"**改参数重试无效**"那一族的技能，这一轮**从菜单里摘掉**。
-    # 为什么不在提示词里再说一句"别重试"：那句话写过两版、都被 A/B 否掉——它没有把
-    # "原地重试"变成"改选"，只把"原地重试"变成了"当场放弃"（`docs/问题记录.md` §1.55
-    # 的 1b）。摘掉菜单是另一件事：模型**没有可再点的东西**，只能改选或如实作答。
-    # 空集是常态（无受阻轮、或受阻属可救族）⇒ schema 逐字节不变，无成本的默认态。
-    #
-    # ⚠️ 技能名在 planner 提示词里**一共两处**，这一格摘的是**自动生成**的那张表
-    # （`{skills_context}`）；判定规则 1 里**手写**的「- 技能名：什么时候用它」那几句
-    # **刻意留着**（见 tests/test_menu_deny.py 那条点名两处的用例）。留着不是漏了：
-    # 那是散文式的"这技能是干什么用的"，不是可点的菜单；可点的只有 tools schema，
-    # 而 schema 那一半同样被摘了。它带来的缝（模型照着手写那句去报禁用项）由下面
-    # `menu_denied_used` 那条一次性纠偏兜着——20261007 的 12 跑 A/B 里这条缝
-    # **一次都没被踩过**（46 个受阻轮、报出禁用项 0 次）。
-    deny = denied_skills(state.get("blocked") or [])
-    if deny:
-        record("planner", "menu_denied", round=rounds, skills=sorted(deny))
-    # 伪函数版的同一格（20261008 批 ②）："这一轮交过清单、零动作"时把 `task_intents`
-    # 从 schema 里摘掉，逼迫重决策那一版必须点出一个真技能（见下面那一格的长注）。
-    # 空集 ⇒ schema 逐字节不变。**基础 llm 单独留着**：重绑要走同一个客户端。
-    deny_pseudo: set[str] = set()
-    _base_llm = get_llm(
-        temperature=settings.planner_temperature,
-        max_tokens=settings.planner_native_max_tokens,
-        timeout=settings.planner_native_timeout,
-        enable_thinking=settings.planner_native_thinking)
-    _task_state = bool(getattr(settings, "agent_task_state", False))
-    llm = bind_native(_base_llm, role, task_state=_task_state, deny=deny,
-                      deny_pseudo=deny_pseudo)
-    round_info = (
-        f"当前决策：第 {rounds + 1}/{MAX_PLAN_ROUNDS} 轮。"
-        + ("本轮已有工具执行帧（见下方结果），决策据此收敛。" if has_frames
-           else "本轮尚无工具执行，是首轮决策。"))
-    # 工具帧文本先算一次（下面 format 里要用，trace 里也要记长度）——20260920 起
-    # 落 `frames_chars`：单帧上限 20000 是拍出来的经验值，没有真实体量数据就无法
-    # 判断"该收该放"（超长文章改造后尤其要能看见节选是否生效）。
-    frames_txt = _frame_texts(state["messages"])
-
-    # ── 决策（最多两次：正常一次 + 剔空纠偏一次）─────────────────────────
-    # 20260921 22:34 生产实证（用户报："被降级了但是居然就直接结束而不是重新规划
-    # 执行"）：管理员问「小猫咪那篇文章都有什么标签呀」，planner 点名
-    # list_admin_notes——**意图是对的**（那篇是草稿，公开接口看不见，只有后台工具
-    # 读得到），但 content_query 的 calls 白名单里没有它（它属于 admin_notes **技能**）
-    # ⇒ 清单被剔空 ⇒ 旧行为把"剔空"当成"无需工具的收尾轮"（route_after_planner 见
-    # TOOLS 空即去 model）⇒ narrator 对着零工具零帧编出「我刚才查看了文章列表和读取了
-    # 文章详情」⇒ gate 打回 ⇒ 用户只看到一句"被抓包"的降级回复，**本轮就此结束**。
-    # 剔空不是"不用查"，是"点错了通道"：确定性纠偏一次——把"你点名的工具一个都没执行"
-    # 与"它属于哪个技能/为什么够不到"（机器从注册表读的）写给它看，让它重新决策
-    # （planner 仍是唯一决策者，这里不替它选技能）。两次都剔空 → 确定性如实收尾。
-    # gate 打回重规划带来的提示（20260926）：gate 把它作为一条 SystemMessage 追加在
-    # 消息流**末尾**，而 `context._recent_tail` 只渲染 Human/AI 两种角色（SystemMessage
-    # 一律跳过，是页面上下文注入时代的纪律）——所以这里必须**显式取出来**放进提示词，
-    # 否则 planner 收到"打回"却看不到原因（"能力有接线 ≠ 接线被测试"那类静默洞：
-    # 机制全套跑通，模型只是没被告知）。判据取"末尾那条正是它"：planner 一旦决策完，
-    # 消息流上就会长出新的工具帧/叙述，下一轮自然取不到 ⇒ 无需任何清理代码，它天然
-    # 是本轮专属的（清早了 planner 看不到，清晚了会拿一句过期的否定去误导第三轮）。
-    gate_note = ""
-    if state["messages"]:
-        _tail = state["messages"][-1]
-        if isinstance(_tail, SystemMessage) and str(_tail.content).startswith(_REPLAN_NOTE_MARK):
-            gate_note = str(_tail.content)
-    correction = ""
-    # 纠偏的**种类**（只给日志看）：三种纠偏共用同一个 `{correction}` 槽，日志里
-    # 只写"剔空纠偏"会把另两种讲错（20260926 起有三个来源：剔空 / 参数不齐 / 写形态零工具）。
-    correction_kind = ""
-    # 第四种来源（20260927）：确认兑现轮回来**补主人那句话里剩下的动作**。这一轮的
-    # "当前消息"是前端合成的确认句，模型照它决策只会得出"没事可做"——必须把"上一件
-    # 已经办完、这几件还没办"讲给它听（只写机器能保证的事实，不做别的暗示）。
-    if resumed:
-        _left = [i for i in _pending_intents(state)]
-        if _left:
-            correction = (
-                "这一轮的主人消息是前端合成的确认句（他刚在确认框上点了「确定」，"
-                "那件事已经执行完、回执在上方）；他真正说的那句话里还有这些动作**没做完**："
-                + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
-                + "。本轮把没做完的做掉（一轮一件），**不要**重做刚刚兑现的那次操作。")
-            correction_kind = "确认轮剩余意图"
-    if resumed and not correction:
-        # 一条都没剩 ⇒ 这一轮不该被交回 planner（`route_after_execute` 只在"还剩"
-        # 时才交回来）。真出现了就是判据漂移，如实记一笔，决策照常走 LLM 那条路。
-        logger.warning("[planner] 确认兑现轮被交回但意图清单已空（判据漂移？）")
-    # native 档的异常记账（如 native_multi_call）。**必须在循环外先声明**：循环外的
-    # `decision` 事件要读它，而它只在 native 档的某一支里被赋值——少了这一行，
-    # "某一轮走到某条提前 return 之外的路径"就会以 NameError 的形态炸在收尾上。
-    native_note = ""
     for _attempt in (0, 1):
-        _t0 = time.monotonic()
-        logger.info("[planner] LLM 调用开始（round %d/%d%s）", rounds + 1, MAX_PLAN_ROUNDS,
-                    f"，{correction_kind}纠偏" if correction else "")
-        try:
-            # 注入值先算好（`_render_planner_prompt` 只负责拼字符串，见其注）。影子档
-            # 拿的就是这一份——**同一个提问**，只有规则 7 按各自接口层取值。
-            _prompt_args = dict(
-                role=role, page_ctx=page_ctx, round_info=round_info, user_msg=user_msg,
-                intent_hints=_intent_hints(state.get("executed") or [], intent_msg),
-                doc_anchors=doc_anchors,
-                recent_context=_recent_tail(state["messages"]),
-                # 短应答提示只在首轮（rounds==0）给：第二轮起本轮已有工具帧，短应答
-                # 的语义已由第一轮的规划兑现，再念一遍"把提议那件事规划出来"只会
-                # 诱导重复规划（同一件事已经执行过一次了）。
-                short_reply_hint=(_short_reply_hint(state["messages"],
-                                                    task_state=_task_state)
-                                  if rounds == 0
-                                  else "（非首轮决策：短应答语义已在上轮兑现）"),
-                # 台账**每一轮都给**（见上面那段计算）：它是系统事实，不该只在首轮
-                # 出现——第二轮起模型往往正在决定"先读哪些再动手"，那一轮少了台账
-                # 就只能凭记忆，等于把已经拿到手的事实又收回去。
-                pending_ledger=ledger_frame or "（本轮没有去读待办台账）",
-                tool_results=frames_txt,
-                # 受阻项**每一轮都给**（同台账）：它是 checker 判出来的**类型**，
-                # 不是叙述。此前 planner 只能从错误帧那句话里猜是哪一种失败，于是
-                # 把"服务这一轮给不出数据"当成"你参数写错了"、原地重点一次同一个
-                # 调用 ⇒ 同键二次受阻 ⇒ 收尾，主人那件完全能办的事没有入口（§1.55）。
-                blocked_rows=blocked_rows(state.get("blocked") or []),
-                # 菜单禁用（1d）：与 tools schema 收同一个集合（见上面那段），摘掉这一轮
-                # 不该再选的技能行。空集 ⇒ 这一段渲染逐字节不变。
-                deny=deny,
-                # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
-                # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
-                ref_hints=ref_hints(state.get("tool_data") or []),
-                reflector_feedback=state.get("issues") or "（本决策轮无复盘建议）",
-                # 两种纠偏的来源不同、优先级也不同：剔空纠偏说的是"你这一版刚点的工具
-                # 一条都没执行"（更近、更具体），打回提示说的是"你上一版交出去的叙述被
-                # 否定了"——同一轮里两者都有时，以前者为准（后者的事实仍在那条消息里）。
-                correction=correction or gate_note or "（本决策轮无纠偏提示）")
-            # 技能块恒 slim（判据见 skills.build_planner_context）——那三行在 tools
-            # 数组里逐字都在，留着是同一份信息发两遍（20260927）。契约恒 NATIVE，
-            # 两个默认值现在都只有一种生产取值，不再显式传（见函数注）。
-            _prompt = _render_planner_prompt(**_prompt_args)
-            resp = llm.invoke(_prompt)
-        except Exception as e:
-            # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
-            # 有帧就基于帧收尾（narrator 仍能正常叙述），无帧走 chat 诚实答复。
-            logger.warning("[planner] LLM 异常，兜底收尾计划: %s", e)
-            # 原因如实（同 dedupe 那一处）：这是**规划这一步没跑成**，不是轮次用满
-            # ——默认文案会说成「已达规划轮次上限（4）」，而 narrator 会照着它组织回复。
-            plan_obj = _wrap_up_plan(
-                has_frames, reason="本轮规划这一步没有跑完（服务抖动），不再新增调用")
-            return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
-        # 20260830：慢调用监控——打 WARN（正常 <5s，慢=服务端排队/长思考，
-        # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）。
-        # 阈值走 settings（20260927）：planner 的 timeout 本就是 60s，沿用 30 会让告警
-        # 变成常态；而"放宽了也要看得见"是那一项的前提——阈值可调，不是删掉。
-        dur = time.monotonic() - _t0
-        slow_s = settings.planner_native_slow_s
-        slow = dur > slow_s
-        (logger.warning if slow else logger.info)(
-            "[planner] LLM %s 耗时=%.1fs（阈值 %.0fs）",
-            "慢调用" if slow else "完成", dur, slow_s)
-        record("planner", "llm_done", duration_s=round(dur, 2), engine="native",
-               frames_chars=len(frames_txt), corrected=bool(correction),
-               # 用量（20260927）：`cache_read/input` 是"前缀缓存有没有在生产命中"
-               # 这个问题的唯一数据源——它决定了模板重排这类改动值不值得做。
-               **usage_fields(resp),
-               **({"slow": True} if slow else {}))
-
-        raw = getattr(resp, "content", str(resp))
-        native_note = ""
-        # 决定由工具调用表达（`agent/native_plan.py::tool_calls_to_plan`）。它返回
-        # `None` = 这一版响应**没给出可用决定**（五条来源见那里的头注），与"零调用但
-        # 有正文"（返回 chat + `undecided`）是**两回事**，别再合并成一条路。
-        decided = tool_calls_to_plan(
-            resp, role, task_state=bool(getattr(settings, "agent_task_state", False)))
-        if decided is None:
-            # 判不了 ⇒ 确定性收尾，**没有第二条解析通道**（20261004 删掉文本兜底）：
-            # 全量 trace 实测那条路 0 次被走到，而它把"响应不可解析"与"模型没决策"
-            # 混成同一个归宿。两条轨分开：
-            #   · `finish_reason == "length"`：**预算**失败（不是采样失败），同一条
-            #     消息再问多半截在同一处（见 native_plan 的"刻意不重试"）⇒ 直接收尾；
-            #   · 其余（半截 arguments / 未知函数名 / args 非对象 / 空正文）：形态坏，
-            #     走既有的 `correction` 通道纠偏**一次**（同 `_drop_correction` 的一次性）。
-            # 两轨都产 `_wrap_up_plan`（借用确定性收尾轮的 `wrapped` 语义，**不新造
-            # status**：`PLAN_STATUS_VALUES` 每格都有消费方），零执行、narrator 拿到
-            # 一句诚实的话。事件键沿用 `native_fallback`（它是 dial_matrix 的
-            # `fallback_rate` 指标键，键不能改），`disposition` 把三类分开。
-            fin = finish_reason(resp)
-            if fin == "length" or correction:
-                record("planner", "native_fallback", round=rounds, finish=fin,
-                       text_len=len(raw),
-                       disposition=("truncated_wrapup" if fin == "length"
-                                    else "unparseable_wrapup"))
-                logger.error("[planner] %s → 确定性收尾（本轮零执行，round %d/%d）",
-                             "输出被额度截断" if fin == "length" else "两次都不可解析",
-                             rounds + 1, MAX_PLAN_ROUNDS)
-                plan_obj = _wrap_up_plan(
-                    has_frames,
-                    reason=("本轮模型输出被输出额度截断，没有得到可执行的决策" if fin == "length"
-                            else "本轮模型两次都没有给出可解析的决策"))
-                return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
-            record("planner", "native_fallback", round=rounds, finish=fin,
-                   text_len=len(raw), disposition="retry")
-            logger.warning("[planner] 输出不可解析（finish=%s）→ 纠偏重决策一次"
-                           "（round %d/%d）", fin or "—", rounds + 1, MAX_PLAN_ROUNDS)
-            correction, correction_kind = _PLANNER_UNPARSEABLE_NUDGE, "决策不可解析"
-            continue
-        # ② 自动登记（20261008）：模型枚举的意图 − 本轮办了的 ⇒ 本轮的登记帧。
-        # **注入点只此一处**（在 `decided` 之后、所有分支之前）：写进壳持有的
-        # `task_sink`，由 `planner_node` 在返回前并进 updates——`_planner_decide`
-        # 那十几条 return 因此一条都不用改（漏一条就是"那一族这一轮静默不登记"）。
-        #
-        # **只在新清单非空时覆盖**（`[:] =` 而不是 extend）：纠偏会重决策一次，而
-        # "只交清单"那一格的重决策**正是被摘掉清单逼去点技能的**（见下面 `intents_no_action`
-        # 那一格）——那一版的 `intents` 必然为空，覆盖就等于把刚刚收下的枚举当场抹掉，
-        # 整条 ② 白跑（实测形状：第一次 `frames=2`、第二次 `frames=0`）。
-        # 反过来，非空即以最新一版为准：两次都留着会发出同一个 goal 的两帧
-        # （幂等是 upsert，但那正是"同一件事两行"的形态，Rust 侧得靠 upsert 去擦）。
-        # 20261008 实测的第二种形状（`mix2` 的 `20261008_222340`）：第二版**又填了
-        # `intents` 那一格**，但只填剩下那几件 ⇒ 最终登记是第一次的**子集**，上卡那件
-        # 从登记里消失。这是对的：上了卡的那件由**卡**承载（`pending_action` 那本账），
-        # 判据侧 `require_task_goal_per_intent` 的定义也正是"上了卡的不在其中"。
-        # 代价如实记在这里：卡被取消/过期时那件没有 `agent_task` 兜底——主人是看到过
-        # 那张卡的，与"模型凭空丢掉、谁都不记得"不是一回事，所以不额外补一行。
-        if task_sink is not None:
-            _intent_frames_now = _auto_task_frames(state, config, decided, rounds)
-            if _intent_frames_now:
-                task_sink[:] = _intent_frames_now
-        skill_name, params = decided.skill, decided.params
-        if decided.notes:
-            native_note = "；".join(decided.notes)
-        record("planner", "native_decision", skill=skill_name, round=rounds,
-               calls=tool_call_names(decided), finish=decided.finish_reason,
-               # **臂的身份证**（20261006）：调参实验要能回答"这份 trace 是哪一组
-               # 旋钮跑出来的"，而此前 planner 的参数在 trace 里**一个字都没有**——
-               # 换臂跑完一堆报告，谁也说不清哪份对应哪臂（种子若是塞错位置被服务商
-               # 静默忽略，读数还会很好看）。记在 LLM 响应这条事件上：它就是那次调用
-               # 的产物。四条都是**读设置**，与 `get_llm` 的实际入参同源。
-               provider=settings.llm_provider,
-               model=str(getattr(settings, "active_llm_model", "") or ""),
-               temp=settings.planner_temperature,
-               seed=settings.llm_seed,
-               thinking=bool(settings.planner_native_thinking),
-               **({"note": native_note} if native_note else {}))
-
-        # 主人明说"不要调用任何工具" ⇒ 这一轮的计划降成 `chat`（见 `_forbids_tools`
-        # 上方长注：方向单一、只会减少系统能做的事，所以做成确定性覆盖）。**记在
-        # `native_decision` 之后**：那一条要如实留下模型原本选了什么的证据，这一条
-        # 记录系统覆盖了什么——两件事分别可查，别合成一条。
-        if _forbids_tools(user_msg) and skill_name != "chat":
-            record("planner", "tools_ordered_off", skill=skill_name, round=rounds,
-                   calls=tool_call_names(decided))
-            logger.warning("[planner] 主人明说不要调用工具 → 本轮计划降成 chat"
-                           "（原本点是 %s，round %d/%d）",
-                           skill_name, rounds + 1, MAX_PLAN_ROUNDS)
-            skill_name, params = "chat", {}
-
-        # ── 菜单禁用（20261007，1d）：模型报了本轮已被摘掉的技能 ─────────────────
-        # 常态为 0（摘菜单是结构性的）；走到这里说明网关/模型绕过了 schema。见
-        # `_MENU_DENIED_NUDGE` 的注：**无条件记账**（这一格是"机制是否结构性"的唯一
-        # 证据），纠偏一次，第二次仍报则放行给既有的 `blocked_repeat` 守卫。
-        if skill_name in deny:
-            record("planner", "menu_denied_used", skill=skill_name, round=rounds,
-                   denied=sorted(deny), corrected=bool(correction))
-            if not correction:
-                correction, correction_kind = _MENU_DENIED_NUDGE, "菜单禁用"
+        # 决策循环的**外壳只剩调度**（20261009 刀 2-C）：七段各是一个函数，返回
+        # `_Step`；`"next"` 往下走、`"continue"` 换下一次尝试（原 `continue`）、
+        # `"break"` 跳出循环（原那个唯一的 `break`）、`"return"` 直接返回。
+        _action = "next"
+        for _stage in (_decide_llm, _decide_zero_tool_correct, _decide_register,
+                       _decide_instantiate, _decide_write_guard, _decide_late_correct):
+            _step = _stage(c)
+            _action = _step.action
+            if _action == "next":
                 continue
-
-        # ── 零工具决策不是决策（20261004）：两格走同一条一次性纠偏通道 ──────────
-        # 共同点：**这一轮一个工具都不会跑**，而系统判得出来本该跑。两条都不替模型
-        # 选技能，只讲机器能保证的事实。
-        #
-        # ① `undecided` = 一个函数都没点、正文却非空（`tool_calls_to_plan` 给的状态，
-        #    见那里的注与 `_NO_CALL_NUDGE` 的头注：42 次零帧零调用轮里一半是真动作
-        #    请求）。② 点的是 `chat`（= 声明"这一轮不需要任何站内数据"），而主人问的
-        #    恰恰是**站内 / 他自己账号里查得到**的东西——判据是 `authz` 里那两条已
-        #    拿全量语料量过的窄判据（`is_own_read_question` / `is_site_corpus_question`）。
-        #    它们此前只有 `gate_node` 一个消费方 ⇒ 这一类轮次要等 narrator 把整段话
-        #    写完、再由闸门打回重规划（实测 `20261004T015927`：那次叙述 4.4s）——
-        #    用户先看到一句错话、再被改口。**决策层判得出来的事不该留给闸门**：闸门
-        #    那两条原样留着当兜底（判据前移 ≠ 闸门撤防）。
-        #
-        # **`has_frames` 为真时两格都不纠偏**：已有工具帧之后的零调用/收尾 chat 是
-        # 合法的收尾轮（实测 48 次），那条路已由下面的"收尾丢意图"纠偏管着——重复
-        # 打扰是净损失。
-        # **绝不改成 `wrapped`**：`answer_only` 才是下面那几条零帧声称判据（
-        # `_write_done_claim` / `_state_action_claim` / `own_read_question_without_tool`）
-        # 的开火前提，换成 wrapped 等于把闸门悄悄卸掉。
-        # "点了 `chat` 但没点任何真函数"：`tool_call_names` 对零调用回**空串**、对显式
-        # 点 `chat` 回 `"chat"`（两者必须可分辨，见那个函数的注）——所以这里不能写成
-        # `not tool_call_names(...)`（那是零调用那一格，已被 `undecided` 罩着）。
-        # `declare`/`notes` 非空时**不打**这个纠偏：那一轮模型明确表达过意图
-        # （"剩下的记下来"），催它点工具是跟任务通道对着干。
-        _calls = tool_call_names(decided) if decided is not None else ""
-        _explicit_chat = bool(decided is not None and decided.skill == "chat"
-                              and _calls and set(_calls.split(",")) == {"chat"}
-                              and not decided.declare and not decided.notes)
-        _asks_data = bool(_explicit_chat and not has_frames
-                          and int(getattr(principal, "uid", 0) or 0) > 0
-                          and (authz.is_own_read_question(user_msg)
-                               or authz.is_site_corpus_question(user_msg)))
-        # 两格"不纠偏"（20261006，都是**主人已经把这一轮限死**的情形）：
-        # ① 主人原话里明说不要调用工具（`_forbids_tools`；这一轮的计划已在上面被
-        #    覆盖成 chat）——催它点工具就是跟主人原话对着干，且会把工具真跑起来。
-        # ② 这一轮带图（`_turn_has_image`）：看着图把图里有什么讲清楚，本来就是
-        #    "零工具"的正确形态（判据 `image_two_colors` 的 `no_tool_calls` 锁的正是
-        #    这件事）。而 `_msg_text` 剥掉图块 ⇒ 文本侧的 `undecided` 与"该取数却零
-        #    工具"都读不出"这一轮有图可看"。实证 trace `20261006_022503`：
-        #    round 0 零调用 → 被催 → round 1 白调 `get_blog_info`+`list_categories`
-        #    → 判据红。**纠偏只是提前一拍，防线仍在闸门**（零帧声称那几条不撤）。
-        _tools_off = _forbids_tools(user_msg)
-        _img_turn = _turn_has_image(state["messages"])
-        # ③ 只交清单、一个动作都没点（20261008 批 ②）：`decided.skill == "chat"` 说明
-        #    这一轮没有任何真技能被选中（伪函数不参与技能选择），而清单非空说明模型
-        #    认下了"这句话里有 N 件事"——两件同现就是"只列不办"那一格（见
-        #    `_INTENTS_ONLY_NUDGE`）。`declare` 非空时不算（登记轮本来就零动作，
-        #    它走下面自己那条纠偏）。
-        _intents_only = bool(decided is not None and decided.intents
-                             and decided.skill == "chat" and not decided.declare)
-        # ④ 点了技能、清单却什么都没留下（20261009，③ 的**反方向**）：见
-        #    `_INTENTS_BACKFILL_NUDGE`。判据是**减完还剩几件**（`_intents_left_count`），
-        #    不是"清单是不是空的"——空清单只是它的两种形状之一，另一种更长见：清单里
-        #    只写着"这一轮正要办的那件"，被排除规则减完也是一件不剩（真链路实测
-        #    `20261009_032513`）。两种形状的处方一样，所以合成一个信号。
-        #    `rounds == 0` 是这一格的必要条件：枚举回答的是"主人**这句话**里有几件事"，
-        #    只该在理解这句话的那一次决策里问；执行过一轮之后的决策问的是"下一步做什么"，
-        #    那时候清单已经在（或已经错过）了。**短路顺序是有意的**：便宜的形态判据排在
-        #    前面，真要数一遍清单（`_intents_left_count`）排在最后。
-        _acted_no_intents = bool(
-            decided is not None and not decided.declare
-            and rounds == 0
-            and str(decided.skill or "") not in ("", "chat")
-            and _multi_item_shape(user_msg)
-            and _intents_left_count(state, config, decided) == 0)
-        if (decided is not None and not has_frames
-                and not _tools_off and not _img_turn
-                and (decided.undecided or _asks_data or _intents_only
-                     or _acted_no_intents)):
-            if _acted_no_intents and not correction:
-                deny_pseudo.add(TASK_INTENTS)
-                llm = bind_native(_base_llm, role, task_state=_task_state, deny=deny,
-                                  deny_pseudo=deny_pseudo)
-                correction = _INTENTS_BACKFILL_NUDGE
-                correction_kind = "点了技能清单没留下要记的"
-                # `listed` 是**这一格两种形状**的分水岭（0 = 没交，>0 = 交了但只剩它
-                # 正要办的那件）——复扫 trace 时不必再靠"回复像不像"去猜。
-                record("planner", "intents_backfill", round=rounds,
-                       skill=str(decided.skill or ""), finish=decided.finish_reason,
-                       listed=len(getattr(decided, "intents", ()) or ()),
-                       text_len=len(raw), calls=tool_call_names(decided),
-                       spans=_msg_quote_spans(user_msg)[:3])
-                logger.warning(
-                    "[planner] 点了技能、清单却没留下要记的（%s，round %d/%d，listed=%d）"
-                    "→ 摘掉清单伪函数并纠偏重决策一次：%s", decided.skill, rounds + 1,
-                    MAX_PLAN_ROUNDS, len(getattr(decided, "intents", ()) or ()),
-                    str(user_msg or "")[:60])
-                continue
-            if _intents_only and not correction:
-                # 排在写形态话术**之前**：这一格手里有更具体的证据（"你列了 N 件"），
-                # 而写形态那句只讲"主人这句话在要求改动站内数据"——两句**都要给**：
-                # 前者负责说清"清单不代替动作"，后者负责说清"主人这句话要动手、名字
-                # 就在他原话里"（单给前者那一版实测无效，见下）。
-                #
-                # **为什么还要摘菜单**（20261008 批 ②，真链路实测）：native 档一轮只发得出
-                # 一条调用（`parallel_tool_calls=False`），于是"交清单"与"点技能"在同一
-                # 轮里**天然互斥**——模型交了清单那一轮就零动作。而纠偏在 `for _attempt in
-                # (0, 1)` 里只有一次机会，实测（`20261008_213818` 的 `mix2_two_writes_one_
-                # breath_card_only`）**那一版重决策的输出与上一版逐字节相同**（input
-                # 29048→29130、output 75→75、两次 `native_decision.calls` 都是孤零零的
-                # `task_intents`）——纯话术纠不动一个它本来就想交的答案。所以这一格与
-                # 1d（`denied_skills`）用**同一个手法**：不是再劝一次，是把那个选项从
-                # schema 里摘掉（`deny_pseudo`，语义与代价见 `build_tool_schema` 的注）。
-                # 摘掉之后它只剩两条路：点一个真技能，或显式点 `chat`——两者都是可判的
-                # 决策，而"再交一次清单"这条空转路没了。
-                deny_pseudo.add(TASK_INTENTS)
-                llm = bind_native(_base_llm, role, task_state=_task_state, deny=deny,
-                                  deny_pseudo=deny_pseudo)
-                _auto_nudge = _name_write_nudge({"tools": [], "dropped": None},
-                                                user_msg, rounds, role)
-                correction = ((_auto_nudge + _INTENTS_ONLY_NUDGE) if _auto_nudge
-                              else _INTENTS_ONLY_NUDGE)
-                correction_kind = "清单零动作"
-                record("planner", "intents_no_action", round=rounds,
-                       n=len(decided.intents), write_shape=bool(_auto_nudge),
-                       goals=[str(i.get("goal") or "")[:60] for i in decided.intents[:3]])
-                logger.warning("[planner] 只交意图清单、零动作（%d 件，%s）→ 摘掉该伪函数"
-                               "并纠偏重决策一次：%s", len(decided.intents),
-                               "写形态" if _auto_nudge else "非写形态",
-                               "、".join(str(i.get("goal") or "")[:40]
-                                        for i in decided.intents[:3]))
-                continue
-            if not correction:
-                # **写形态优先**（20261008）：这一格（零调用 + 正文非空）此前一律用
-                # 通用话术 `_NO_CALL_NUDGE`，而 `_name_write_nudge` 的**零工具形态**
-                # 本来就是为这一格写的——但它的调用点在循环末尾（下面那段
-                # "写形态的请求却零工具"），而这一支已经 `continue` 走了，结构上够不到
-                # （与剔空纠偏那条 `break` 同一种"排在前面的出口让后面的代码永远到不了"）。
-                # 两句都只说机器能保证的事实，信息量不同：通用那句只讲"你什么都没点"，
-                # 写形态那句还讲"主人这句话在要求改动站内数据、目标名字就在他原话里"。
-                # 依据（golden `capability_absent_after_card_in_history`，同一句话）：
-                # `20261007_074615` 走到写形态话术 ⇒ 第二轮排出写规格并弹卡；
-                # `20261008_010948` 走通用话术 ⇒ 第二轮仍零调用、认成 chat ⇒ 判据红。
-                # **只对这一格**：显式点 `chat` 的那一格（`_asks_data`）与循环末尾各处
-                # 已各自接上 `_name_write_nudge`，不在这里重复。
-                _write_shape_nudge = (
-                    _name_write_nudge({"tools": [], "dropped": None}, user_msg,
-                                      rounds, role) if decided.undecided else None)
-                if _write_shape_nudge:
-                    correction, correction_kind = _write_shape_nudge, "写形态零调用"
-                    # 事件名仍是**格**的名字（`no_call_nudge`；`zero_call_residual_probe`
-                    # 那一类复扫按它数"被催过几轮"），话术由 `nudge=` 区分。
-                    record("planner", "no_call_nudge", round=rounds,
-                           finish=decided.finish_reason, text_len=len(raw),
-                           nudge="name_write", via="no_call",
-                           spans=_msg_quote_spans(user_msg)[:3],
-                           verbs=_name_write_verbs(user_msg)[:3])
-                    logger.warning(
-                        "[planner] 零调用 + 写形态的请求 → 用写形态话术纠偏"
-                        "（动作词=%s，引号点名=%s，正文 %d 字，round %d/%d）",
-                        "、".join(_name_write_verbs(user_msg)[:3]),
-                        "、".join(_msg_quote_spans(user_msg)[:3]) or "无",
-                        len(raw), rounds + 1, MAX_PLAN_ROUNDS)
-                    continue
-                correction = _DATA_QUESTION_NUDGE if _asks_data else _NO_CALL_NUDGE
-                correction_kind = "该取数却零工具" if _asks_data else "零调用"
-                record("planner",
-                       "data_question_no_tool" if _asks_data else "no_call_nudge",
-                       round=rounds, finish=decided.finish_reason, text_len=len(raw))
-                logger.warning(
-                    "[planner] %s → 纠偏重决策一次（round %d/%d）",
-                    "主人在问站内/自己的数据却零工具" if _asks_data
-                    else f"零调用（finish={decided.finish_reason}，正文 {len(raw)} 字）",
-                    rounds + 1, MAX_PLAN_ROUNDS)
-                continue
-            if decided.undecided:
-                # `via` 把"被哪一条纠偏催过"带上：纠偏后从"点 chat"退回"什么都不点"
-                # 也算这个问句没落到工具上（复扫时别把它读成普通的零调用认账）。
-                # `via` = **试过哪一句话术**（第三档 20261008 起：写形态话术也走这一格，
-                # 别把它读成普通的零调用认账——复扫时"催过而没催动"的分布要看这个键）。
-                record("planner", "no_call_accepted", round=rounds,
-                       via=("data_question" if correction == _DATA_QUESTION_NUDGE
-                            else ("name_write" if correction_kind == "写形态零调用"
-                                  else "no_call")),
-                       finish=decided.finish_reason, text_len=len(raw))
-                logger.warning("[planner] 纠偏后仍然零调用 → 认成 chat（round %d/%d）",
-                               rounds + 1, MAX_PLAN_ROUNDS)
-            elif correction == _DATA_QUESTION_NUDGE:
-                # 纠偏后仍然点 `chat`：**不在这里救第二遍**（闸门那两条判据还在，
-                # 而且它们带"只重规划一次"的节流）。记一笔供全量 trace 复扫盯残余。
-                # 判 `correction` 是不是**这一条**纠偏：若本轮先前已被别的由头纠偏过
-                # （如"收尾丢意图"），这里记 `still_no_tool` 就等于替那条纠偏背锅。
-                record("planner", "data_question_still_no_tool", round=rounds,
-                       finish=decided.finish_reason)
-                logger.warning("[planner] 纠偏后仍然点 chat（主人在问站内/自己的数据）"
-                               "→ 交给 narrator 与闸门（round %d/%d）",
-                               rounds + 1, MAX_PLAN_ROUNDS)
-
-        # ── 任务登记（20260927 批 D，见 agent/tasks.py 头注）────────────────────
-        # 模型这一轮明确说"还有一件事没做完/做不下去"时，把它等级成会话级任务行
-        # （跨轮不丢），本轮到此收尾：把要问主人的那一句交给 narrator 原样问出来。
-        # **判据是形态、不是措辞**（同"消息壳架空判据"那族教训）：
-        #   · 只登记、既没执行任何工具、也没有要问的问题 ⇒ 这一轮访客什么都看不到，
-        #     那是拖延不是交付 ⇒ 走既有纠偏通道（`correction`）重决策**一次**，
-        #     由模型自己选"现在就做"还是"把问题写出来"——系统不替它选（决策权不搬走）；
-        #   · **撤下不走这条纠偏**（20260927）：主人说"这件事不做了"的那一轮本来就
-        #     零工具、零问题，那是对的一轮。以前它会被上面这条一起纠偏（措辞是
-        #     "你既没做也没问"），等于逼模型对一次合法撤下再找点事做。
-        #   · 纠偏之后仍然这样 ⇒ 认它（第三条路已经没有了，继续丢只会退回"静默消失"
-        #     那个本批要治的病）；有帧或有问题 ⇒ 直接认。
-        # 登记轮用的 `status="wrapped"` 是**借用**确定性收尾轮的语义（本轮确实是
-        # 确定性层收口、不再有动作）——刻意不新造一个 status 值：`PLAN_STATUS_VALUES`
-        # 的每一格都有消费方（gate 的豁免/文案判据、corpus_invariants 的 I2），
-        # 多一格就要多一套判据，而这里要的行为与 wrapped 逐字相同（**wrapped 不在
-        # `PLAN_STATUS_ABSENCE_EXEMPT` 里** ⇒ 站的"没有"结论判据照旧拦，fail-closed）。
-        if decided is not None and decided.declare is not None:
-            decl = decided.declare
-            _cancelled = decl.get("state") == "cancelled"
-            # **完成 > 撤下**（20260927 实测加的闸，见 `tasks.drop_is_completion` 的
-            # docstring）：模型把"剩下那步我做完了"写成 `task_drop` 时（4 次采样里 3 次），
-            # 帧会写 cancelled、话术会说"已撤下"，而紧接着的流尾结算又把同一行写成
-            # succeeded——正是本批要治的病换了个入口。撤下**先过这一道**：那件事的步骤
-            # 这一轮真按回执做完了 ⇒ 撤下不成立，按"已完成"收尾、**不发撤回帧**。
-            # 放在纠偏之前：撤下轮本来就不走纠偏（见下面那句注），这一支更不该走。
-            _cfgc = (config or {}).get("configurable", {})
-            if drop_is_completion(_cfgc.get("open_tasks"), _cfgc.get("conversation_id"),
-                                  decl, state.get("receipts")):
-                plan_obj = _wrap_up_plan(has_frames, note=TASK_DONE_NOTE)
-                record("planner", "task_drop_settled", goal=decl.get("goal"),
-                       round=rounds, frames=has_frames)
-                logger.info("[planner] 撤下改判为完成：%s（本轮回执已覆盖它剩下的步骤，"
-                            "不撤、不发帧，交给流尾结算）", decl.get("goal"))
-                return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                        "done": False, "task_frames": []}
-            if (not _cancelled and not decl.get("pending_question")
-                    and not has_frames and not correction):
-                correction = declaration_nudge(decl)
-                correction_kind = "任务登记"
-                record("planner", "task_correct", goal=decl.get("goal"),
-                       steps=len(decl.get("steps") or []), round=rounds)
-                logger.warning("[planner] 只登记任务、零工具零问题 → 纠偏重决策一次：%s",
-                               decl.get("goal"))
-                continue
-            plan_obj = _wrap_up_plan(has_frames, note=declaration_note(decl, has_frames))
-            # 会话 id 只从 config 取（与 execute 的确认令牌同一来源）。**取不到就不登记**
-            # ——幂等键里含着会话，退化成 0 会让不同会话里同一句话算出同一个 task_id，
-            # 那正是"跨会话串了同一件事"的入口（Rust 侧的 upsert 只按 task_id+uid 找行）。
-            # 不登记不影响这一轮：要问的那句照样由 narrator 问出来，丢的只是"下一轮还记得"。
-            conv_id = (config or {}).get("configurable", {}).get("conversation_id")
-            frame: dict = {}
-            if isinstance(conv_id, int):
-                frame = frame_payload(decl, conv_id)
-            else:
-                logger.warning("[planner] 任务登记拿不到会话 id（config 里没有）→ 本轮"
-                               "不落库，只如实收尾：%s", decl.get("goal"))
-                record("planner", "task_declare_noconv", goal=decl.get("goal"), round=rounds)
-            record("planner", "task_declare", task_id=frame.get("task_id") or "",
-                   goal=decl.get("goal"), steps=len(decl.get("steps") or []),
-                   state=decl.get("state"), question=bool(decl.get("pending_question")),
-                   round=rounds, corrected=bool(correction), frames=has_frames)
-            logger.info("[planner] 任务%s：%s（剩 %d 步，状态 %s，问主人=%s，task_id=%s）",
-                        "撤下" if _cancelled else "登记",
-                        decl.get("goal"), len(decl.get("steps") or []),
-                        decl.get("state"), bool(decl.get("pending_question")),
-                        frame.get("task_id") or "（未落库）")
-            # 只给**显式登记**那一帧：意图清单推出来的那几条由 `planner_node` 的薄壳
-            # 统一并进来（`task_sink`）——两条通道不必各写一遍"怎么把帧拼进 updates"。
-            # 同名的自动登记已在 `intent_frames` 的 `skip_goals` 里排掉
-            # （`tasks.same_goal` 判），所以这里不会出现两帧同一个 task_id。
-            return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False,
-                    "task_frames": [frame] if frame else []}
-
-        # 双源契约补齐（20261005）：只在"已选 content_query + 只点名了一个数据源 +
-        # 用户原话是内容存在性问句"三条同时成立时补另一个。**必须早于 instantiate_plan**
-        # ——白名单校验、去重、菜单顺序都在那里面做，晚一步补就得自己重造一遍。
-        params, _paired = _pair_dual_sources(skill_name, params, user_msg)
-        # role 必须传：calls 白名单按角色取（管理员含后台只读项）。漏传 = 静默剔空。
-        plan_obj = instantiate_plan(skill_name, params, role)
-        plan_obj["params"] = params
-        if _paired:
-            # 响亮：这是系统**往 planner 的调用清单里加了一条**，报表口径要知道
-            # （每条命中的查询多一次工具调用 ⇒ `tool_rounds` 会跟着变）。
-            logger.info("[planner] 双源契约补齐：%s（skill=%s，round %d/%d）",
-                        "、".join(_paired), skill_name, rounds + 1, MAX_PLAN_ROUNDS)
-            record("planner", "dual_source_paired", added=_paired, skill=skill_name,
-                   round=rounds)
-
-        # 白名单剔除可见化（20260913 B 项）：planner 点名了白名单外的工具时，条目被
-        # instantiate_plan 剔除——此前无任何记录，planner 以为计划已执行、narrator
-        # 照计划声称"我调用了 X"，agent.log 却查无此事（15:51 trace 实证：planner
-        # 点名 get_social_links，被静默剔除后回复谎称"这次我用专门的社交链接查询工具
-        # 调了一次"）。现在剔除即 WARNING + trace 事件，排障不再靠猜。
-        if plan_obj.get("dropped"):
-            # 两类原因都走这里（20260925）：被白名单剔除、或**点名写在了不读调用清单的
-            # 技能里**（后者见 skills.py `_skill_no_calls_suffix`）。条目自带后缀区分，
-            # 日志文字不再断言"白名单剔除"——那就把第二类讲错了。
-            logger.warning("[planner] 点名了工具但本轮不会执行、无帧：%s（round %d/%d）"
-                           "——若属应支持的数据工具，检查 skills.py 白名单与菜单",
-                           "、".join(plan_obj["dropped"]), rounds + 1, MAX_PLAN_ROUNDS)
-            record("planner", "rejected_call", dropped=plan_obj["dropped"],
-                   skill=plan_obj["skill"], round=rounds)
-
-        # 没人读的参数名（20260925）：planner 在 PARAMS 里写了系统不认识的键——
-        # 此前**静默忽略**（"我以为填了、其实没人读"，与剔空白名单同族）。工具照常
-        # 执行、不做任何阻断，只把"这个键没有消费方"留进日志与 trace——它是注册表
-        # 与提示词漂移的探针（planner 写得出这个键，说明它认为自己该填）。
-        # `tools`/`calls` 出现在这里时**同时**会进上面那条 dropped（20260925 批 C）——
-        # 两个事件看的是同一件事的两面（这个键没有读者 / 点名的工具不会执行），
-        # 不要因为"重复"删掉其中一个：前者是键的探针、后者触发纠偏。
-        if plan_obj.get("param_unknown"):
-            logger.warning("[planner] PARAMS 里有没人读的参数（已忽略，不影响本轮执行）："
-                           "%s（skill=%s，round %d/%d）——若属技能该收的参数，"
-                           "检查 skills.py 该技能的 inputs/plan 模板",
-                           "、".join(plan_obj["param_unknown"]),
-                           plan_obj["skill"], rounds + 1, MAX_PLAN_ROUNDS)
-            record("planner", "param_unknown", names=plan_obj["param_unknown"],
-                   skill=plan_obj["skill"], round=rounds)
-
-        # 参数名归一（20261005，见 skills._param_alias_fix）：planner 用多数派的叫法
-        # 填了本技能不认的名字（`name` vs 公告族的 `title`），系统把它搬到了真正的槽上。
-        # **必须响亮**：这是系统**改写 planner 填的参数**，不记一笔就变成"悄悄归一"。
-        # 放在 `param_unknown` 之后：搬走的那个名字已不在 unknown 里，两条事件合起来
-        # 才讲得清"它本来写的是什么、被搬去哪了"。
-        for mv in plan_obj.get("param_alias") or []:
-            logger.info("[planner] 参数名归一：%s → %s（skill=%s，round %d/%d）",
-                        mv.get("src"), mv.get("dst"), plan_obj["skill"],
-                        rounds + 1, MAX_PLAN_ROUNDS)
-            record("planner", "param_alias", skill=plan_obj["skill"], round=rounds,
-                   src=mv.get("src"), dst=mv.get("dst"))
-
-        # 参数不合格 ⇒ 本轮零工具（20260925，见 skills.check_skill_params）：注记已经
-        # 写进 plan 的 NOTE 行交回 planner，这里再留一条日志/trace——否则"某一轮什么
-        # 都没执行"在事后只能从注记文本里看出来，而 trace 的 tools 列表是空的、
-        # 与"planner 主动决定不调工具"长得一模一样。
-        if plan_obj.get("param_problem"):
-            pp = plan_obj["param_problem"]
-            # 措辞只说**事实**（这一轮零工具），处置交给随后的纠偏/收尾两条日志：
-            # 原文案写的是"注记已交回 planner 重决策"，而那时系统根本不重决策
-            # （零工具轮不会回到 planner）——一句话把排障引向错的方向（20260926）。
-            logger.warning("[planner] PARAMS 不合格 → 零工具（skill=%s，round %d/%d）："
-                           "缺=%s 坏=%s（处置见接下来的纠偏/收尾日志）",
-                           plan_obj["skill"], rounds + 1, MAX_PLAN_ROUNDS,
-                           "、".join(pp.get("missing") or []) or "无",
-                           "、".join(pp.get("bad") or []) or "无")
-            record("planner", "param_rejected", skill=plan_obj["skill"], round=rounds,
-                   missing=pp.get("missing") or [], bad=pp.get("bad") or [])
-
-        # 「目标由系统定死」（G1，20260923）那一段**已整族删除**（20260929 批 H）：
-        # 它治的是"主人说『你看着办』、上一轮提议里读不出结论"时 planner 退回 chat
-        # 打太极。同类事故现在的治法完全不同——台账连**编号**一起摆进帧，模型自己
-        # 选目标与结论，写前 `_ledger_target_refusal` 拿现场台账校验，一律弹卡。
-
-        # 写操作的目标按名字解不出来 → 不弹窗、不执行，直接确定性如实收尾
-        # （见 _write_target_refusal 上方长注：名字通道下"解不出来"必须响亮，
-        # 而"响亮"的最省事形态就是**根本不问那一句**）。
-        # 这一族出处闸的三本账（20261006 / 20261009，见 `_ledger_pending_text` 与
-        # `_task_ledger_text` 两处长注）：① 主人这一轮的话（下面各函数内部的 `user_msg`）；
-        # ② 系统那行「待主人点头」的卡面原文（上一轮那张卡）；③ 跨轮任务台账里还挂着的行。
-        # ②③ 治的是同一件事的两个入口——**系统自己规定的重提路径**（主人回「嗯」/「要」）
-        # 会把参数留在上一轮的字里，只认 ① 的闸就成了"系统自己把自己判成编造"。
-        # 算一次、往下传：下面四个闸用的是同一份原文。
-        ledger_src = "\n".join(
-            x for x in (_ledger_pending_text(state.get("ledger")),
-                        _task_ledger_text(config)) if x)
-        # 先过片段地基（20260922 ②防线）：留言的 quote 校正到主人引号里那段原话
-        # （或在没有可指认的片段时确定性拒绝）——**必须在目标预检之前**，否则预检
-        # 判的是 planner 那个被截短/被概括错的片段。
-        quote_refuse = _board_quote_fix(plan_obj, user_msg, rounds, role,
-                                        ledger_src=ledger_src)
-        # 公告的 title/content 同样有"主人自己标出来的原话"通道（20260922 ②防线续）：
-        # 没有可拒绝的形态（公告一律弹窗、主人签字前看得见），只做校正。
-        _announcement_text_fix(plan_obj, user_msg, role)
-        # 标签/分类/公告的**目标名**同理（②防线续二）：引号里那一段就是主人点名的
-        # 那一个，planner 抄短了就校正回来——**必须在目标预检之前**，否则预检报的是
-        # 另一个名字（"站内没有叫「绝对」的标签"）。
-        _name_target_fix(plan_obj, user_msg, role)
-        # 写参数里的**名字值**（新名字 / 标签名列表 / 父标签）同理（②防线续五，见
-        # `_name_arg_fix` 上方长注）：新建的名字天然不在字典里，只能来自主人这句话
-        # ——或者台账那一行（主人回「嗯」重提上一轮那张卡时）。
-        value_refuse = _name_arg_fix(plan_obj, user_msg, role, ledger_src=ledger_src)
-        # 待办正文（20261006，见 `_todo_text_fix` 上方长注）：它是写面里**唯一一格
-        # 目标没有台账可核**的自由文本，此前既不在名字通道也不在台账通道里。
-        # 放在值地基**之后**：两者按工具名互斥（那边收的是新名字/标签名/父标签），
-        # 排在这里只是让"值那一族"读起来仍是一段。
-        todo_refuse = _todo_text_fix(plan_obj, user_msg, role, ledger_src=ledger_src)
-        # 目标名的**来源态**（20260924 治本，见 `_target_grounding_refusal` 上方长注）：
-        # 校正（`_name_target_fix`）之后这个字面若仍**取不出处**，就是"主人没说过这个
-        # 名字"——零写 + 如实追问。排在台账预检**之前**是刻意的：它不读台账，台账读不到
-        # 时它仍然生效（台账那条路读不到就放行，见 `_write_target_refusal` 的边界注）。
-        # ⚠️ 必须在 `_name_arg_fix` **之后**——那一步可能就地重建 plan（`plan_obj.clear()
-        # + update(fresh)`），在它之前判的是重建前的旧参数。
-        # 第二本账同前（20261006）：此前它躲过"重提"这一撞靠的是 `_name_like` 早退
-        # ——那是运气，不是设计（重提那句话里带一个名字状的词就不成立了）。
-        grounded_refuse = _target_grounding_refusal(plan_obj, user_msg,
-                                                   ledger_src=ledger_src)
-        # 这句要**如实说出系统查的是哪本台账**：待办族查的是后台首页那张待办清单
-        # （`_find_todo_row`），名单里漏了它，主人会以为系统翻错了地方（20260927
-        # 加待办那一支时同步补上）。
-        subject = ("站内的台账（标签/分类字典、公告清单、留言列表、"
-                   "后台待办清单）与主人这句话本身")
-        refusal = None
-        policy_refuse = False
-        ledger_refuse = False
-        if quote_refuse:
-            refusal = (_tool_name((plan_obj.get("tools") or ["?"])[0]), quote_refuse)
-        elif value_refuse:
-            refusal = value_refuse
-            subject = "主人这句话本身（要写进站内的名字只能来自这里）"
-        elif todo_refuse:
-            refusal = (_tool_name((plan_obj.get("tools") or ["?"])[0]), todo_refuse)
-            subject = "主人这句话本身（待办的正文只能是主人说出口的那件事）"
-        elif grounded_refuse:
-            refusal = grounded_refuse
-            subject = "主人这句话本身（目标名只能来自主人说出口的那几个字）"
-        else:
-            refusal = _write_target_refusal(plan_obj, config, user_msg, role)
-            if not refusal:
-                # 台账**编号**通道（20260929 批 H · S2，见 `_ledger_target_refusal`）：
-                # 审核/额度三件的目标不是"主人原话里的字面"而是"系统摆上桌的编号"，
-                # 判据因此是**现场重读台账**（真有这一行、且还在待办态）。它与上面那条
-                # 名字通道按工具名严格互斥，两处不会撞在同一件工具上。
-                refusal = _ledger_target_refusal(plan_obj, config)
-                if refusal:
-                    ledger_refuse = True
-                    subject = ("系统这一轮现场读出来的待办台账"
-                               "（后台留言审核队列 / 额度申请队列）")
-                else:
-                    # 政策门**放最后**（见 `_freeze_policy_refusal` 上方长注）：前面任一环
-                    # 拒绝时不该再花一次名录读；而且"无据"比"政策不允许"更该先开口——
-                    # 主人说的那个账号根本不存在时，"不能冻管理员"是答非所问。
-                    refusal = _freeze_policy_refusal(plan_obj, config, principal)
-                    if refusal:
-                        policy_refuse = True
-                        subject = "后端的账号管理规则（预检只判它确定知道的那两种）"
-        if refusal:
-            wtool, why = refusal
-            # 拒绝**来源**（`quote`/`value`/`grounding`/`ledger`/`ledger_id`/`policy`）：
-            # 既是 trace 的取值，也是本轮的**结构化产出物**（`wrap["refusal"]`，见下方赋值处）。
-            # 提到这里算一次，trace 与产出物共用同一个字面。
-            refusal_source = ("quote" if quote_refuse else "value" if value_refuse
-                              else "todo_text" if todo_refuse
-                              else "grounding" if grounded_refuse
-                              else "ledger_id" if ledger_refuse
-                              else "policy" if policy_refuse else "ledger")
-            # 值/目标名被拒时补一句：那个字面是**系统自己的参数值**，不是主人点名的名字
-            # （20260922 探针 ⑤ 实测：如实答复里出现了"站内并没有叫「音乐」的现成
-            # 标签"——系统查的是占位文字「标签名」，叙述把两者画了等号 = 假话）。
-            value_tail = ("" if not (value_refuse or grounded_refuse or todo_refuse) else
-                          "系统要填进参数的那个字面是**系统自己的参数值**，"
-                          "不是主人点名的名字——转述它时**原样引述**，"
-                          "绝不许把它说成主人说的那个名字。")
-            # 政策拒绝**不能**请主人"换个说法再试"：那条路是被规则堵死的，不是被
-            # 信息缺失堵死的（把它讲成"换个说法"就是把一条死路讲成一道门槛）。
-            why_tail = ("后端那条规则不认这次的目标，**别请主人换个说法重试**——"
-                        "把原话转告给他就够了，他要改主意是另一件事。"
-                        if policy_refuse else
-                        # 台账编号被拒**不是**"没听清"：台账上就没有这样一行等着办
-                        # （或那件已经办完了），换个说法也不会多出一行来。请主人
-                        # "重说一遍"会把一条已查清的事实讲成一道他没跨过的门槛。
-                        "**别请他换个说法重试**：这不是「没听清」，是系统现场查过"
-                        "台账、上面没有这样一行等着办（或那一件已经不待办了）——"
-                        "把查到的状态如实转告他就够了，他要办别的事是另一件事。"
-                        if ledger_refuse else
-                        "并问他接下来想怎么办（换个说法、或先把那个目标建出来）。")
-            if ledger_refuse:
-                logger.warning("[planner] 写操作的目标编号对不上现场待办台账（%s）：%s"
-                               " → 确定性如实收尾", wtool, why)
-            else:
-                logger.warning("[planner] 写操作参数解不出「主人这句话」里的来源（%s）：%s"
-                               " → 确定性如实收尾", wtool, why)
-            record("planner", "write_target_unresolved", tool=wtool,
-                   source=refusal_source,
-                   reason=why[:160], round=rounds)
-            # 文案结构（20261005）：**"没做"与"原因"必须是一句**。此前是两个独立的
-            # 句子（"…没有改动（本轮一个工具都没有执行）。系统核对过 X，结果是：Y。"），
-            # 而 narrator 抄走了**第一个**——它在被加粗的那句的「。」处收手，句号之后
-            # 一个字都不带（trace `20261005_065251`：回复只有「主人，这件事这次没有做：
-            # 站内数据一个字节都没有改动。」）。现在是破折号连起来的一句，原因**也带
-            # 强调**，模型没有"抄半句就结束"的位置。
-            # 历史定量：同一条用例 28 次运行里 2 次丢原因（≈7%，见 `announcement` 那族
-            # 的对比）——是采样抖动不是系统缺陷 ⇒ **先做文案最小改动**，压不住再升级成
-            # gate 的确定性兜底（那条要动判据词表的单一来源，是独立的一块工作）。
-            plan_obj = _wrap_up_plan(False, note=(
-                _LEDGER_NOTE_PREFIX +
-                "**这件事这次没有做：站内数据一个字节都没有改动**"
-                "（本轮一个工具都没有执行）——"
-                f"系统核对过{subject}，结果是：**{why}**。"
-                "请把**这一句**如实转告主人（连同里面的候选名单或该补的信息），"
-                + why_tail +
-                "**不许**出现「看过/读过/查过/检索过/调用过工具」这类说法；"
-                "也**不许**把它讲成一篇内容层面的结论。"
-                # 20260926：这条禁令禁的是"把**系统的动作**说成你自己做的"，不是"不许提系统
-                # 给过的那份结论"——现场（trace 20260926T171235）模型反向套用，对着系统
-                # 上一轮写下的核对结论答"是我自己脑补的"。把允许的说法一并给出来。
-                "（禁的是把**系统的动作**说成你做的；系统核出来的结论与候选名单"
-                "**照原样转述**、来源说'系统'就行——但也**不许**反过来把它说成"
-                "'我自己猜的/脑补的'。）"
-                + value_tail))
-            # ── 结构化产出物（20261006）─────────────────────────────────────
-            # 拒绝这件事此前只活在一段**散文**里（上面那段 note）与一条 trace 里；下游
-            # 谁都读不到"系统这一轮到底卡在哪一件工具、卡在哪一类东西上"。于是
-            # `_no_popup_fact` 只能给一段**通用的三分**（没有能力/缺目标/别问要不要办），
-            # 它与上面这段具体结论**并排**写给 narrator——两条规则打架的地方（policy /
-            # ledger_id 这一支明明写着「**别请他换个说法重试**」，通用三分却写着
-            # 「如果只是缺一个目标，就问清那个目标」）由模型自己挑，等于把一条已经查清的
-            # 事实重新交给采样。
-            #
-            # 键挂在 **plan_obj** 上而不是新加一个 AgentState 字段：`plan_obj` 已在
-            # AgentState 里声明、由 `plan_state` 一次写两态（见那个函数的长注），挂它零成本；
-            # 新字段则要同时在 AgentState 声明 + graph_input 初值 + 每个构造点补默认值——
-            # 正是 `plan_state` 存在的理由要消掉的那种人工同步。
-            #
-            # ⚠️ **缺键 ≠ "没有拒绝"的对立取值**：`{"missing": "none"}` 这种"编一个值出来"
-            # 是明令禁止的——键不在场就是"本轮不是确定性拒绝轮"，读端按缺席处理。
-            plan_obj["refusal"] = {"tool": wtool, "source": refusal_source,
-                                   "missing": "target"}
-            # ⚠️ 这里必须是 **return**，不是 break：决策循环之后的收尾路径会读
-            # `plan_obj["params"]`（只有 instantiate_plan 的产物才有这个键），
-            # 而 `_wrap_up_plan` 不带它 ⇒ break 到那里必抛 KeyError('params')
-            # （20260922 实测：正是本函数要修的那条用例把整轮打成 __ERROR__，
-            # 与 20260921 22:37 的 KeyError('model') 同一类错——"分支走通了、
-            # 收尾路径没走通"，故 test_skills 里也补了假 LLM 整轮锁）。
-            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                    "done": False}
-
-        # 「先建再挂」那一步的存在性剪枝（20261009，见 `_drop_satisfied_tag_creates`）：
-        # 位置在这一段是刻意的——排在所有**可能重建计划**的校正步（`_name_arg_fix`
-        # 会 `plan_obj.clear()+update()`）**之后**、`plan_state` 编码 `plan` 文本之前。
-        # 排在拒绝分发之后是因为：被拒的那一轮不发工具，剪枝没有意义（那条路 return）。
-        # 它也**不是**判据（不拦任何东西），只是把一条注定不该跑（跑了会多建一条重名
-        # 标签）的步骤从计划里拿掉——读不到字典就一个都不摘，方向同 `reached_specs`。
-        _pruned_tags = _drop_satisfied_tag_creates(plan_obj, config)
-        if _pruned_tags:
-            record("planner", "tag_create_pruned", skill="article_tags",
-                   labels=_pruned_tags[:3], round=rounds)
-            logger.info("[planner] 要挂的标签站内已经有（%s）→ 同一张卡里那一步 "
-                        "`create_tag` 摘掉，只挂现成的", "、".join(_pruned_tags[:3]))
-
-        # 参数不齐 → 同轮纠偏重决策（20260926）：与剔空纠偏**同一条通道**，因为
-        # 两者是同一类事故——"计划里这一轮什么都不会执行"，而下游只有 narrator
-        # 一条路。此前这一段只记日志/trace，计划照原样往下走 ⇒ `route_after_planner`
-        # 见 TOOLS 空就把零工具零帧的轮次交给 narrator，而日志却写着「注记已交回
-        # planner 重决策」——**那句话在事实上是假的**：零工具轮不会再进 planner
-        # （两条既有纠偏通道都不收它：`_name_write_nudge` 要写域动作词、
-        # `_drop_correction` 要 `dropped` 非空，而参数不齐的 plan 刻意把 dropped 留空）。
-        # 现场（trace 20260926T212945）：主人说"随便带我去一篇文章吧"，planner 选了
-        # navigate 却没填 target ⇒ 零工具直落 narrator ⇒ 它把上一轮列表帧里的第一篇
-        # 编成"已经带你跳到《文章向量空间图谱项目文档》啦"（页面根本没动）。
-        # 纠偏文本用 `param_problem_note` 写好的那份（机器可保证的事实：缺哪个参数、
-        # 本技能收哪些参数）——这里不另写一句，避免两处话术漂移。
-        # **只纠一次**（`correction` 的既有语义）：纠完仍不齐 ⇒ 循环外那条确定性收口。
-        if not correction and plan_obj.get("param_problem"):
-            pp = plan_obj["param_problem"]
-            # 话术从注册表取：`_param_problem_plan` 已把同一份写进 NOTE（plan_obj
-            # 的 note 就是它），这里只在 note 缺失时才现算一次（防御性——note 是
-            # narrator 也看得见的那一行，两处必须同源）。
-            correction = (plan_obj.get("note") or "").strip() or (
-                param_problem_note(SKILL_MAP[plan_obj["skill"]], pp,
-                                   skill_param_specs(SKILL_MAP[plan_obj["skill"]]))
-                if plan_obj.get("skill") in SKILL_MAP else "")
-            correction_kind = "参数不齐"
-            record("planner", "param_correct", skill=plan_obj["skill"], round=rounds,
-                   missing=pp.get("missing") or [], bad=pp.get("bad") or [])
-            logger.warning("[planner] 参数不齐（本轮零工具）→ 同轮纠偏重决策"
-                           "（skill=%s 缺=%s 坏=%s）：%s",
-                           plan_obj["skill"],
-                           "、".join(pp.get("missing") or []) or "无",
-                           "、".join(pp.get("bad") or []) or "无",
-                           correction[:120])
-            continue
-
-        # 写形态的请求上一条工具规格都没写（见 _name_write_nudge 上方长注）：与
-        # 剔空纠偏共用同一条重决策通道（同一轮内只纠一次，纠完仍零工具就照原样走）。
-        nudge = None if correction else _name_write_nudge(plan_obj, user_msg, rounds, role)
-        if nudge:
-            _spans = _msg_quote_spans(user_msg)
-            _verbs = _name_write_verbs(user_msg)
-            logger.warning("[planner] 写形态的请求却零工具 → 纠偏重决策（动作词=%s，"
-                           "引号点名=%s）", "、".join(_verbs[:3]),
-                           "、".join(_spans[:3]) or "无")
-            record("planner", "name_nudge", round=rounds,
-                   spans=_spans[:3], verbs=_verbs[:3])
-            correction = nudge
-            continue
-
-        # 动作重复纠偏（20261003）：非首轮 planner 又规划了**已执行过**的动作技能，
-        # 而意图清单里还有没做完的动作。只"不放行收尾"不够——轮末那条兜底拦得住
-        # 收尾、拦不住它原地重选同一个技能，于是轮次被同一件事耗光、第二件事照样丢
-        # （扫 `logs/agent/golden_traces/` 全量 4174 份：golden
-        # `multi_step_referent_nav_effect` 那句「带我过去，然后帮我把樱花打开」有过
-        # 连选 2 次 / 3 次 / 4 次 navigate 的同形轮次，零 EFFECT 帧）。走既有同轮纠偏
-        # 通道（`correction`，只此一次）
-        # 把**机器能保证的事实**讲给它：上一轮执行了什么、清单里还剩什么——决策权
-        # 仍归 planner。
-        # 仍重复 ⇒ 轮末兜底照原样放行（动作幂等无害），不夺它的判断。
-        # 位置在剔空纠偏**之前**：两条互斥（这条要 tools 非空，那条要 tools 空），
-        # 但剔空那条以 `break` 收尾，排在它后面的代码永远到不了。
-        if (not correction and has_frames and plan_obj["tools"]
-                and plan_obj["skill"] in _ACTION_SKILLS):
-            _frames = {getattr(m, "name", "") or "" for m in state["messages"]
-                       if isinstance(m, ToolMessage)}
-            _planned = {_tool_name(s) for s in plan_obj["tools"]}
-            _left = _pending_intents(state)
-            if _planned and _planned <= _frames and _left:
-                correction = (
-                    "你上一轮已经执行过 " + "、".join(sorted(_planned)) +
-                    "，工具返回就在上方——**重复执行不会有新结果，只会把轮次耗光**。"
-                    "主人那句话里还有这些动作**没做完**："
-                    + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
-                    + "。本轮把没做完的那一件做掉，**不要**再重做刚刚执行过的动作。")
-                correction_kind = "动作重复"
-                record("planner", "action_repeat_correct", planned=sorted(_planned),
-                       pending=[i["key"] for i in _left], round=rounds)
-                logger.warning("[planner] 动作重复（%s）且意图清单仍有未完成项（%s）"
-                               "→ 纠偏重决策一次：%s",
-                               "、".join(sorted(_planned)),
-                               "、".join(i["key"] for i in _left), correction[:120])
-                # 与上面两条纠偏同路：`continue` 让 `{correction}` 槽重新渲染一次
-                # （`for _attempt` 只跑两轮，第二次进来 `not correction` 为假 ⇒ 只纠一次）。
-                continue
-
-        # 收尾丢意图纠偏（20261003）：planner 在这一轮**零工具**（等于自己宣布收尾），
-        # 而意图清单里还留着**一次都没被规划过**的动作。每轮都注入的 intent_hints
-        # 明明把它标着"**未完成**"，它却收尾了 ⇒ 收尾注记只会写"本轮只是收尾"，
-        # 与那件事相关的工具返回一条都没有，narrator 手里只剩主人的原话 —— 于是
-        # 如实答成"没帮你做"（它没有别的可说）。主人要的却是把它做掉。
-        # 现场（golden `multi_step_referent_nav_effect`，20260927_035120 那次失败）：
-        # 第 0 轮 navigate 成功，第 1 轮 planner 直接 `SKILL=chat` 收尾、零 EFFECT 帧，
-        # 回复落成"樱花特效这边没有执行记录"。同族的另一半（planner 原地重选**已执行
-        # 过**的动作技能、把轮次耗光）在上一支 `action_repeat_correct` 里收口。
-        #
-        # 判据为什么用 `has_frames`：首轮零工具轮是另一族（`test_unaccounted_zero_tool_round`
-        # 明写"不新增重决策通道"，零工具轮再问一次通常还是零工具）；有帧之后的零工具
-        # 才是"看过返回、决定收尾"，那才轮得到"清单里还有没做过的事吗"这一问。
-        # 判据为什么用 `not dropped`：剔空（下面那一支）说的是"你点错通道了"，与这条
-        # 互斥，且它有自己的纠偏文本与记账，不能被我这条截胡。
-        #
-        # 不会把"已经被拒过的动作"再推它重试一次：上过计划的动作（哪怕被拒）spec 都
-        # 进了 `executed`，`_intent_done` 会把它标成已完成 ⇒ 留在清单里的只能是
-        # **从没被规划过**的那些。
-        if (not correction and has_frames and not plan_obj["tools"]
-                and not plan_obj.get("dropped")):
-            _left = _pending_intents(state)
-            if _left:
-                correction = (
-                    "你这一轮**没有排任何工具**（等于宣布收尾），但主人那句话里还有这些"
-                    "动作**一次都没有被执行过**："
-                    + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
-                    + "。你手里没有与它们相关的任何工具返回。本轮先把没做过的做掉"
-                    "（一轮一件），再谈收尾。")
-                correction_kind = "收尾丢意图"
-                record("planner", "wrapup_intent_correct",
-                       pending=[i["key"] for i in _left], round=rounds)
-                logger.warning("[planner] 零工具收尾但意图清单仍有未规划项（%s）"
-                               "→ 纠偏重决策一次：%s",
-                               "、".join(i["key"] for i in _left), correction[:120])
-                continue
-
-        # 菜单被摘之后"当场放弃"纠偏（20261008，见 `_MENU_DENIED_GIVEUP_NUDGE` 的长注）：
-        # 上一轮受阻、该技能这一轮从菜单里摘掉，模型没有改选，而是**零工具收尾**——
-        # narrator 手里只有一条失败帧，只能如实说"办不了"，而主人那件事其实有别的入口。
-        # 排在**收尾丢意图之后**：那一条手里有更具体的东西（"清单里还剩哪几件"），
-        # 该由它先说；本条只兜它够不到的形态（账号族写请求的意图不在
-        # `_scan_action_intents` 的射程里 ⇒ `_pending_intents` 对它们是空的）。
-        # 与剔空纠偏互斥（本条要求 `not dropped`），故放在它前面不影响它。
-        # `correction` 的既有语义 = 同一轮只纠一次，这里同样只用这一条通道。
-        if not correction:
-            _giveup = _deny_giveup_nudge(deny, plan_obj, user_msg, rounds, role, has_frames)
-            if _giveup:
-                _verbs = _name_write_verbs(user_msg)
-                _marks = _write_family_marks(user_msg)
-                correction = _giveup
-                correction_kind = "菜单摘项后放弃"
-                record("planner", "deny_giveup_correct", round=rounds,
-                       denied=sorted(deny), verbs=_verbs[:3], marks=_marks[:3])
-                logger.warning("[planner] 菜单已摘该项却零工具收尾 → 纠偏重决策一次"
-                               "（摘掉=%s，动作词=%s，族别词=%s）",
-                               "、".join(sorted(deny)),
-                               "、".join(_verbs[:3]) or "无",
-                               "、".join(_marks[:3]) or "无")
-                continue
-
-        # 写命令却零工具收尾（20261009，见 `_WRITE_COMMAND_ZERO_CALL_NUDGE` 的长注）：
-        # 排在 `deny_giveup` **之后**——那一格手里有更具体的东西（"上一轮那一步被摘了"），
-        # 该由它先说；本条兜的是它够不到的形态（本轮压根没有摘项）。
-        if not correction and not _tools_off and not _img_turn:
-            _cmd_nudge = _write_command_nudge(plan_obj, user_msg, has_frames, state)
-            if _cmd_nudge:
-                correction, correction_kind = _cmd_nudge, "写命令零调用"
-                record("planner", "write_command_correct", round=rounds,
-                       finish=decided.finish_reason, text_len=len(raw),
-                       frames=has_frames)
-                logger.warning("[planner] 写命令却零工具收尾（本轮零写、已有帧）"
-                               "→ 纠偏重决策一次（round %d/%d，正文 %d 字）",
-                               rounds + 1, MAX_PLAN_ROUNDS, len(raw))
-                continue
-
-        # 剔空纠偏（见上方长注）：只有"点名的全被剔除、本轮一个工具都不剩"才重决策；
-        # 已经纠偏过一次、或清单非空、或根本没点名 → 到此为止。
-        if correction or plan_obj["tools"] or not plan_obj.get("dropped"):
+            if _action == "return":
+                return _step.ret
             break
-        correction = _drop_correction(plan_obj["dropped"], role)
-        record("planner", "drop_correct", dropped=plan_obj["dropped"], round=rounds)
-        logger.warning("[planner] 点名工具全被剔除（本轮零工具）→ 剔空纠偏重决策：%s",
-                       "、".join(plan_obj["dropped"]))
+        if _action == "break":
+            break
 
-    upd = _finalize_unaccounted(plan_obj, rounds, has_frames)
+    upd = _finalize_unaccounted(c.plan_obj, c.rounds, c.has_frames)
     if upd is not None:
         return upd
-    plan_obj, upd = _finalize_dedupe(plan_obj, state, user_msg, raw, rounds, has_frames)
+    c.plan_obj, upd = _finalize_dedupe(c.plan_obj, c.state, c.user_msg, c.raw,
+                                       c.rounds, c.has_frames)
     if upd is not None:
         return upd
-    return _finalize_wrap(plan_obj, rounds, has_frames, native_note)
+    return _finalize_wrap(c.plan_obj, c.rounds, c.has_frames, c.native_note)
 
 
 class _Preflight(NamedTuple):
@@ -7139,6 +6196,1064 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
         principal=principal, role=role, page_ctx=page_ctx, has_frames=has_frames,
         doc_anchors=doc_anchors, ledger_frame=ledger_frame)
 
+
+
+@dataclass
+class _DecideCtx:
+    """决策循环的**跨段上下文**（20261009 刀 2-C 引入）。
+
+    一个调用一个实例，**不是持久运行时状态**。字段分两族：
+    - *只读*：轮次与上下文（`_planner_setup` 装配一次，各阶段只读）；
+    - *可变*：跨段活的名字（`plan_obj` / `raw` / `decided` / `correction` …）。
+    选可变 dataclass 而不是"每个阶段返回一份新记录"：本函数最贵的失效形态是"某条
+    出口少带 / 多带一格"，属性访问能在**赋值那一刻**炸出 `AttributeError`，而漏传
+    一个记录字段是静默的。
+    """
+    # ── 只读 ────────────────────────────────────────────────────────────────
+    state: AgentState
+    config: "RunnableConfig | None"
+    task_sink: "list | None"
+    rounds: int
+    user_msg: str
+    intent_msg: str
+    role: str
+    page_ctx: str
+    has_frames: bool
+    doc_anchors: tuple
+    ledger_frame: str
+    principal: object
+    round_info: str
+    frames_txt: str
+    gate_note: str
+    deny: set
+    _base_llm: object
+    _task_state: bool
+    # ── 可变：跨段活（`_planner_setup` 给初值）───────────────────────────────
+    llm: object
+    deny_pseudo: set
+    correction: str
+    correction_kind: str
+    native_note: str
+    plan_obj: "dict | None"
+    raw: "str | None"
+    decided: object
+    skill_name: str
+    params: dict
+    _tools_off: bool
+    _img_turn: bool
+
+
+class _Step(NamedTuple):
+    """阶段函数 → 调度器的**控制信号**（逐条对齐原循环里的一条控制流边）：
+    `next` 往下走 / `continue` 换下一次尝试 / `break` 跳出循环进终局 / `return`
+    直接返回 `ret`。`ret` 一律由 `_plan_update` 构造，出口形状因此有单点保证。"""
+    action: str
+    ret: "dict | None" = None
+
+
+def _planner_setup(state: AgentState, config: "RunnableConfig | None",
+                   pre: "_Preflight", task_sink: "list | None") -> "_DecideCtx":
+    """决策的**装配段**（20261009 从 `_planner_decide` 抽出，C 段）。
+
+    菜单禁用（`deny` / `deny_pseudo`）→ 绑定 native 客户端 → 轮次/帧/打回注记 →
+    确认轮补 `correction`：全部零 LLM，产出决策循环各段共用的 `_DecideCtx`。
+
+    ⚠️ `deny` 要经 `bind_native` 的 `deny=` 与 `_prompt_args` 两处漏出去（模型的菜单与
+    提示词里都不能出现受阻技能），所以它只能在这一个函数里定义一次。"""
+    rounds = pre.rounds
+    role = pre.role
+    has_frames = pre.has_frames
+    resumed = pre.resumed
+    # ── 菜单禁用（20261007，1d）─────────────────────────────────────────────
+    # 上一轮受阻、且原因是"**改参数重试无效**"那一族的技能，这一轮**从菜单里摘掉**。
+    # 为什么不在提示词里再说一句"别重试"：那句话写过两版、都被 A/B 否掉——它没有把
+    # "原地重试"变成"改选"，只把"原地重试"变成了"当场放弃"（`docs/问题记录.md` §1.55
+    # 的 1b）。摘掉菜单是另一件事：模型**没有可再点的东西**，只能改选或如实作答。
+    # 空集是常态（无受阻轮、或受阻属可救族）⇒ schema 逐字节不变，无成本的默认态。
+    #
+    # ⚠️ 技能名在 planner 提示词里**一共两处**，这一格摘的是**自动生成**的那张表
+    # （`{skills_context}`）；判定规则 1 里**手写**的「- 技能名：什么时候用它」那几句
+    # **刻意留着**（见 tests/test_menu_deny.py 那条点名两处的用例）。留着不是漏了：
+    # 那是散文式的"这技能是干什么用的"，不是可点的菜单；可点的只有 tools schema，
+    # 而 schema 那一半同样被摘了。它带来的缝（模型照着手写那句去报禁用项）由下面
+    # `menu_denied_used` 那条一次性纠偏兜着——20261007 的 12 跑 A/B 里这条缝
+    # **一次都没被踩过**（46 个受阻轮、报出禁用项 0 次）。
+    deny = denied_skills(state.get("blocked") or [])
+    if deny:
+        record("planner", "menu_denied", round=rounds, skills=sorted(deny))
+    # 伪函数版的同一格（20261008 批 ②）："这一轮交过清单、零动作"时把 `task_intents`
+    # 从 schema 里摘掉，逼迫重决策那一版必须点出一个真技能（见下面那一格的长注）。
+    # 空集 ⇒ schema 逐字节不变。**基础 llm 单独留着**：重绑要走同一个客户端。
+    deny_pseudo: set[str] = set()
+    _base_llm = get_llm(
+        temperature=settings.planner_temperature,
+        max_tokens=settings.planner_native_max_tokens,
+        timeout=settings.planner_native_timeout,
+        enable_thinking=settings.planner_native_thinking)
+    _task_state = bool(getattr(settings, "agent_task_state", False))
+    llm = bind_native(_base_llm, role, task_state=_task_state, deny=deny,
+                      deny_pseudo=deny_pseudo)
+    round_info = (
+        f"当前决策：第 {rounds + 1}/{MAX_PLAN_ROUNDS} 轮。"
+        + ("本轮已有工具执行帧（见下方结果），决策据此收敛。" if has_frames
+           else "本轮尚无工具执行，是首轮决策。"))
+    # 工具帧文本先算一次（下面 format 里要用，trace 里也要记长度）——20260920 起
+    # 落 `frames_chars`：单帧上限 20000 是拍出来的经验值，没有真实体量数据就无法
+    # 判断"该收该放"（超长文章改造后尤其要能看见节选是否生效）。
+    frames_txt = _frame_texts(state["messages"])
+
+    # ── 决策（最多两次：正常一次 + 剔空纠偏一次）─────────────────────────
+    # 20260921 22:34 生产实证（用户报："被降级了但是居然就直接结束而不是重新规划
+    # 执行"）：管理员问「小猫咪那篇文章都有什么标签呀」，planner 点名
+    # list_admin_notes——**意图是对的**（那篇是草稿，公开接口看不见，只有后台工具
+    # 读得到），但 content_query 的 calls 白名单里没有它（它属于 admin_notes **技能**）
+    # ⇒ 清单被剔空 ⇒ 旧行为把"剔空"当成"无需工具的收尾轮"（route_after_planner 见
+    # TOOLS 空即去 model）⇒ narrator 对着零工具零帧编出「我刚才查看了文章列表和读取了
+    # 文章详情」⇒ gate 打回 ⇒ 用户只看到一句"被抓包"的降级回复，**本轮就此结束**。
+    # 剔空不是"不用查"，是"点错了通道"：确定性纠偏一次——把"你点名的工具一个都没执行"
+    # 与"它属于哪个技能/为什么够不到"（机器从注册表读的）写给它看，让它重新决策
+    # （planner 仍是唯一决策者，这里不替它选技能）。两次都剔空 → 确定性如实收尾。
+    # gate 打回重规划带来的提示（20260926）：gate 把它作为一条 SystemMessage 追加在
+    # 消息流**末尾**，而 `context._recent_tail` 只渲染 Human/AI 两种角色（SystemMessage
+    # 一律跳过，是页面上下文注入时代的纪律）——所以这里必须**显式取出来**放进提示词，
+    # 否则 planner 收到"打回"却看不到原因（"能力有接线 ≠ 接线被测试"那类静默洞：
+    # 机制全套跑通，模型只是没被告知）。判据取"末尾那条正是它"：planner 一旦决策完，
+    # 消息流上就会长出新的工具帧/叙述，下一轮自然取不到 ⇒ 无需任何清理代码，它天然
+    # 是本轮专属的（清早了 planner 看不到，清晚了会拿一句过期的否定去误导第三轮）。
+    gate_note = ""
+    if state["messages"]:
+        _tail = state["messages"][-1]
+        if isinstance(_tail, SystemMessage) and str(_tail.content).startswith(_REPLAN_NOTE_MARK):
+            gate_note = str(_tail.content)
+    correction = ""
+    # 纠偏的**种类**（只给日志看）：三种纠偏共用同一个 `{correction}` 槽，日志里
+    # 只写"剔空纠偏"会把另两种讲错（20260926 起有三个来源：剔空 / 参数不齐 / 写形态零工具）。
+    correction_kind = ""
+    # 第四种来源（20260927）：确认兑现轮回来**补主人那句话里剩下的动作**。这一轮的
+    # "当前消息"是前端合成的确认句，模型照它决策只会得出"没事可做"——必须把"上一件
+    # 已经办完、这几件还没办"讲给它听（只写机器能保证的事实，不做别的暗示）。
+    if resumed:
+        _left = [i for i in _pending_intents(state)]
+        if _left:
+            correction = (
+                "这一轮的主人消息是前端合成的确认句（他刚在确认框上点了「确定」，"
+                "那件事已经执行完、回执在上方）；他真正说的那句话里还有这些动作**没做完**："
+                + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
+                + "。本轮把没做完的做掉（一轮一件），**不要**重做刚刚兑现的那次操作。")
+            correction_kind = "确认轮剩余意图"
+    if resumed and not correction:
+        # 一条都没剩 ⇒ 这一轮不该被交回 planner（`route_after_execute` 只在"还剩"
+        # 时才交回来）。真出现了就是判据漂移，如实记一笔，决策照常走 LLM 那条路。
+        logger.warning("[planner] 确认兑现轮被交回但意图清单已空（判据漂移？）")
+    # native 档的异常记账（如 native_multi_call）。**必须在循环外先声明**：循环外的
+    # `decision` 事件要读它，而它只在 native 档的某一支里被赋值——少了这一行，
+    # "某一轮走到某条提前 return 之外的路径"就会以 NameError 的形态炸在收尾上。
+    native_note = ""
+    return _DecideCtx(
+        state=state, config=config, task_sink=task_sink,
+        rounds=rounds, user_msg=pre.user_msg, intent_msg=pre.intent_msg, role=role,
+        page_ctx=pre.page_ctx, has_frames=has_frames, doc_anchors=pre.doc_anchors,
+        ledger_frame=pre.ledger_frame, principal=pre.principal, round_info=round_info,
+        frames_txt=frames_txt, gate_note=gate_note, deny=deny, _base_llm=_base_llm,
+        _task_state=_task_state, llm=llm, deny_pseudo=deny_pseudo,
+        correction=correction, correction_kind=correction_kind,
+        native_note=native_note, plan_obj=None, raw=None, decided=None,
+        skill_name="", params={}, _tools_off=False, _img_turn=False)
+
+
+def _decide_llm(c: "_DecideCtx") -> "_Step":
+    """阶段 D1：组提示词 → `invoke` → 解析。`task_sink[:]` 原位覆盖（本轮登记的
+    唯一注入点）、`_forbids_tools` 降级、菜单禁用纠偏。"""
+    _t0 = time.monotonic()
+    logger.info("[planner] LLM 调用开始（round %d/%d%s）", c.rounds + 1, MAX_PLAN_ROUNDS,
+                f"，{c.correction_kind}纠偏" if c.correction else "")
+    try:
+        # 注入值先算好（`_render_planner_prompt` 只负责拼字符串，见其注）。影子档
+        # 拿的就是这一份——**同一个提问**，只有规则 7 按各自接口层取值。
+        _prompt_args = dict(
+            role=c.role, page_ctx=c.page_ctx, round_info=c.round_info, user_msg=c.user_msg,
+            intent_hints=_intent_hints(c.state.get("executed") or [], c.intent_msg),
+            doc_anchors=c.doc_anchors,
+            recent_context=_recent_tail(c.state["messages"]),
+            # 短应答提示只在首轮（rounds==0）给：第二轮起本轮已有工具帧，短应答
+            # 的语义已由第一轮的规划兑现，再念一遍"把提议那件事规划出来"只会
+            # 诱导重复规划（同一件事已经执行过一次了）。
+            short_reply_hint=(_short_reply_hint(c.state["messages"],
+                                                task_state=c._task_state)
+                              if c.rounds == 0
+                              else "（非首轮决策：短应答语义已在上轮兑现）"),
+            # 台账**每一轮都给**（见上面那段计算）：它是系统事实，不该只在首轮
+            # 出现——第二轮起模型往往正在决定"先读哪些再动手"，那一轮少了台账
+            # 就只能凭记忆，等于把已经拿到手的事实又收回去。
+            pending_ledger=c.ledger_frame or "（本轮没有去读待办台账）",
+            tool_results=c.frames_txt,
+            # 受阻项**每一轮都给**（同台账）：它是 checker 判出来的**类型**，
+            # 不是叙述。此前 planner 只能从错误帧那句话里猜是哪一种失败，于是
+            # 把"服务这一轮给不出数据"当成"你参数写错了"、原地重点一次同一个
+            # 调用 ⇒ 同键二次受阻 ⇒ 收尾，主人那件完全能办的事没有入口（§1.55）。
+            blocked_rows=blocked_rows(c.state.get("blocked") or []),
+            # 菜单禁用（1d）：与 tools schema 收同一个集合（见上面那段），摘掉这一轮
+            # 不该再选的技能行。空集 ⇒ 这一段渲染逐字节不变。
+            deny=c.deny,
+            # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
+            # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
+            ref_hints=ref_hints(c.state.get("tool_data") or []),
+            reflector_feedback=c.state.get("issues") or "（本决策轮无复盘建议）",
+            # 两种纠偏的来源不同、优先级也不同：剔空纠偏说的是"你这一版刚点的工具
+            # 一条都没执行"（更近、更具体），打回提示说的是"你上一版交出去的叙述被
+            # 否定了"——同一轮里两者都有时，以前者为准（后者的事实仍在那条消息里）。
+            correction=c.correction or c.gate_note or "（本决策轮无纠偏提示）")
+        # 技能块恒 slim（判据见 skills.build_planner_context）——那三行在 tools
+        # 数组里逐字都在，留着是同一份信息发两遍（20260927）。契约恒 NATIVE，
+        # 两个默认值现在都只有一种生产取值，不再显式传（见函数注）。
+        _prompt = _render_planner_prompt(**_prompt_args)
+        resp = c.llm.invoke(_prompt)
+    except Exception as e:
+        # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
+        # 有帧就基于帧收尾（narrator 仍能正常叙述），无帧走 chat 诚实答复。
+        logger.warning("[planner] LLM 异常，兜底收尾计划: %s", e)
+        # 原因如实（同 dedupe 那一处）：这是**规划这一步没跑成**，不是轮次用满
+        # ——默认文案会说成「已达规划轮次上限（4）」，而 narrator 会照着它组织回复。
+        c.plan_obj = _wrap_up_plan(
+            c.has_frames, reason="本轮规划这一步没有跑完（服务抖动），不再新增调用")
+        return _Step("return", _plan_update(c.plan_obj, c.rounds))
+    # 20260830：慢调用监控——打 WARN（正常 <5s，慢=服务端排队/长思考，
+    # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）。
+    # 阈值走 settings（20260927）：planner 的 timeout 本就是 60s，沿用 30 会让告警
+    # 变成常态；而"放宽了也要看得见"是那一项的前提——阈值可调，不是删掉。
+    dur = time.monotonic() - _t0
+    slow_s = settings.planner_native_slow_s
+    slow = dur > slow_s
+    (logger.warning if slow else logger.info)(
+        "[planner] LLM %s 耗时=%.1fs（阈值 %.0fs）",
+        "慢调用" if slow else "完成", dur, slow_s)
+    record("planner", "llm_done", duration_s=round(dur, 2), engine="native",
+           frames_chars=len(c.frames_txt), corrected=bool(c.correction),
+           # 用量（20260927）：`cache_read/input` 是"前缀缓存有没有在生产命中"
+           # 这个问题的唯一数据源——它决定了模板重排这类改动值不值得做。
+           **usage_fields(resp),
+           **({"slow": True} if slow else {}))
+
+    c.raw = getattr(resp, "content", str(resp))
+    c.native_note = ""
+    # 决定由工具调用表达（`agent/native_plan.py::tool_calls_to_plan`）。它返回
+    # `None` = 这一版响应**没给出可用决定**（五条来源见那里的头注），与"零调用但
+    # 有正文"（返回 chat + `undecided`）是**两回事**，别再合并成一条路。
+    c.decided = tool_calls_to_plan(
+        resp, c.role, task_state=bool(getattr(settings, "agent_task_state", False)))
+    if c.decided is None:
+        # 判不了 ⇒ 确定性收尾，**没有第二条解析通道**（20261004 删掉文本兜底）：
+        # 全量 trace 实测那条路 0 次被走到，而它把"响应不可解析"与"模型没决策"
+        # 混成同一个归宿。两条轨分开：
+        #   · `finish_reason == "length"`：**预算**失败（不是采样失败），同一条
+        #     消息再问多半截在同一处（见 native_plan 的"刻意不重试"）⇒ 直接收尾；
+        #   · 其余（半截 arguments / 未知函数名 / args 非对象 / 空正文）：形态坏，
+        #     走既有的 `correction` 通道纠偏**一次**（同 `_drop_correction` 的一次性）。
+        # 两轨都产 `_wrap_up_plan`（借用确定性收尾轮的 `wrapped` 语义，**不新造
+        # status**：`PLAN_STATUS_VALUES` 每格都有消费方），零执行、narrator 拿到
+        # 一句诚实的话。事件键沿用 `native_fallback`（它是 dial_matrix 的
+        # `fallback_rate` 指标键，键不能改），`disposition` 把三类分开。
+        fin = finish_reason(resp)
+        if fin == "length" or c.correction:
+            record("planner", "native_fallback", round=c.rounds, finish=fin,
+                   text_len=len(c.raw),
+                   disposition=("truncated_wrapup" if fin == "length"
+                                else "unparseable_wrapup"))
+            logger.error("[planner] %s → 确定性收尾（本轮零执行，round %d/%d）",
+                         "输出被额度截断" if fin == "length" else "两次都不可解析",
+                         c.rounds + 1, MAX_PLAN_ROUNDS)
+            c.plan_obj = _wrap_up_plan(
+                c.has_frames,
+                reason=("本轮模型输出被输出额度截断，没有得到可执行的决策" if fin == "length"
+                        else "本轮模型两次都没有给出可解析的决策"))
+            return _Step("return", _plan_update(c.plan_obj, c.rounds))
+        record("planner", "native_fallback", round=c.rounds, finish=fin,
+               text_len=len(c.raw), disposition="retry")
+        logger.warning("[planner] 输出不可解析（finish=%s）→ 纠偏重决策一次"
+                       "（round %d/%d）", fin or "—", c.rounds + 1, MAX_PLAN_ROUNDS)
+        c.correction, c.correction_kind = _PLANNER_UNPARSEABLE_NUDGE, "决策不可解析"
+        return _Step("continue")
+    # ② 自动登记（20261008）：模型枚举的意图 − 本轮办了的 ⇒ 本轮的登记帧。
+    # **注入点只此一处**（在 `decided` 之后、所有分支之前）：写进壳持有的
+    # `task_sink`，由 `planner_node` 在返回前并进 updates——`_planner_decide`
+    # 那十几条 return 因此一条都不用改（漏一条就是"那一族这一轮静默不登记"）。
+    #
+    # **只在新清单非空时覆盖**（`[:] =` 而不是 extend）：纠偏会重决策一次，而
+    # "只交清单"那一格的重决策**正是被摘掉清单逼去点技能的**（见下面 `intents_no_action`
+    # 那一格）——那一版的 `intents` 必然为空，覆盖就等于把刚刚收下的枚举当场抹掉，
+    # 整条 ② 白跑（实测形状：第一次 `frames=2`、第二次 `frames=0`）。
+    # 反过来，非空即以最新一版为准：两次都留着会发出同一个 goal 的两帧
+    # （幂等是 upsert，但那正是"同一件事两行"的形态，Rust 侧得靠 upsert 去擦）。
+    # 20261008 实测的第二种形状（`mix2` 的 `20261008_222340`）：第二版**又填了
+    # `intents` 那一格**，但只填剩下那几件 ⇒ 最终登记是第一次的**子集**，上卡那件
+    # 从登记里消失。这是对的：上了卡的那件由**卡**承载（`pending_action` 那本账），
+    # 判据侧 `require_task_goal_per_intent` 的定义也正是"上了卡的不在其中"。
+    # 代价如实记在这里：卡被取消/过期时那件没有 `agent_task` 兜底——主人是看到过
+    # 那张卡的，与"模型凭空丢掉、谁都不记得"不是一回事，所以不额外补一行。
+    if c.task_sink is not None:
+        _intent_frames_now = _auto_task_frames(c.state, c.config, c.decided, c.rounds)
+        if _intent_frames_now:
+            c.task_sink[:] = _intent_frames_now
+    c.skill_name, c.params = c.decided.skill, c.decided.params
+    if c.decided.notes:
+        c.native_note = "；".join(c.decided.notes)
+    record("planner", "native_decision", skill=c.skill_name, round=c.rounds,
+           calls=tool_call_names(c.decided), finish=c.decided.finish_reason,
+           # **臂的身份证**（20261006）：调参实验要能回答"这份 trace 是哪一组
+           # 旋钮跑出来的"，而此前 planner 的参数在 trace 里**一个字都没有**——
+           # 换臂跑完一堆报告，谁也说不清哪份对应哪臂（种子若是塞错位置被服务商
+           # 静默忽略，读数还会很好看）。记在 LLM 响应这条事件上：它就是那次调用
+           # 的产物。四条都是**读设置**，与 `get_llm` 的实际入参同源。
+           provider=settings.llm_provider,
+           model=str(getattr(settings, "active_llm_model", "") or ""),
+           temp=settings.planner_temperature,
+           seed=settings.llm_seed,
+           thinking=bool(settings.planner_native_thinking),
+           **({"note": c.native_note} if c.native_note else {}))
+
+    # 主人明说"不要调用任何工具" ⇒ 这一轮的计划降成 `chat`（见 `_forbids_tools`
+    # 上方长注：方向单一、只会减少系统能做的事，所以做成确定性覆盖）。**记在
+    # `native_decision` 之后**：那一条要如实留下模型原本选了什么的证据，这一条
+    # 记录系统覆盖了什么——两件事分别可查，别合成一条。
+    if _forbids_tools(c.user_msg) and c.skill_name != "chat":
+        record("planner", "tools_ordered_off", skill=c.skill_name, round=c.rounds,
+               calls=tool_call_names(c.decided))
+        logger.warning("[planner] 主人明说不要调用工具 → 本轮计划降成 chat"
+                       "（原本点是 %s，round %d/%d）",
+                       c.skill_name, c.rounds + 1, MAX_PLAN_ROUNDS)
+        c.skill_name, c.params = "chat", {}
+
+    # ── 菜单禁用（20261007，1d）：模型报了本轮已被摘掉的技能 ─────────────────
+    # 常态为 0（摘菜单是结构性的）；走到这里说明网关/模型绕过了 schema。见
+    # `_MENU_DENIED_NUDGE` 的注：**无条件记账**（这一格是"机制是否结构性"的唯一
+    # 证据），纠偏一次，第二次仍报则放行给既有的 `blocked_repeat` 守卫。
+    if c.skill_name in c.deny:
+        record("planner", "menu_denied_used", skill=c.skill_name, round=c.rounds,
+               denied=sorted(c.deny), corrected=bool(c.correction))
+        if not c.correction:
+            c.correction, c.correction_kind = _MENU_DENIED_NUDGE, "菜单禁用"
+            return _Step("continue")
+    return _Step("next")
+
+
+def _decide_zero_tool_correct(c: "_DecideCtx") -> "_Step":
+    """阶段 D2：**零工具决策不是决策**——`undecided` / 只点名数据源 / 只交意图 /
+    交了清单却零动作，四格共用同一条一次性纠偏通道（第二轮靠 `correction`
+    非空天然拦住）。"""
+    # ── 零工具决策不是决策（20261004）：两格走同一条一次性纠偏通道 ──────────
+    # 共同点：**这一轮一个工具都不会跑**，而系统判得出来本该跑。两条都不替模型
+    # 选技能，只讲机器能保证的事实。
+    #
+    # ① `undecided` = 一个函数都没点、正文却非空（`tool_calls_to_plan` 给的状态，
+    #    见那里的注与 `_NO_CALL_NUDGE` 的头注：42 次零帧零调用轮里一半是真动作
+    #    请求）。② 点的是 `chat`（= 声明"这一轮不需要任何站内数据"），而主人问的
+    #    恰恰是**站内 / 他自己账号里查得到**的东西——判据是 `authz` 里那两条已
+    #    拿全量语料量过的窄判据（`is_own_read_question` / `is_site_corpus_question`）。
+    #    它们此前只有 `gate_node` 一个消费方 ⇒ 这一类轮次要等 narrator 把整段话
+    #    写完、再由闸门打回重规划（实测 `20261004T015927`：那次叙述 4.4s）——
+    #    用户先看到一句错话、再被改口。**决策层判得出来的事不该留给闸门**：闸门
+    #    那两条原样留着当兜底（判据前移 ≠ 闸门撤防）。
+    #
+    # **`has_frames` 为真时两格都不纠偏**：已有工具帧之后的零调用/收尾 chat 是
+    # 合法的收尾轮（实测 48 次），那条路已由下面的"收尾丢意图"纠偏管着——重复
+    # 打扰是净损失。
+    # **绝不改成 `wrapped`**：`answer_only` 才是下面那几条零帧声称判据（
+    # `_write_done_claim` / `_state_action_claim` / `own_read_question_without_tool`）
+    # 的开火前提，换成 wrapped 等于把闸门悄悄卸掉。
+    # "点了 `chat` 但没点任何真函数"：`tool_call_names` 对零调用回**空串**、对显式
+    # 点 `chat` 回 `"chat"`（两者必须可分辨，见那个函数的注）——所以这里不能写成
+    # `not tool_call_names(...)`（那是零调用那一格，已被 `undecided` 罩着）。
+    # `declare`/`notes` 非空时**不打**这个纠偏：那一轮模型明确表达过意图
+    # （"剩下的记下来"），催它点工具是跟任务通道对着干。
+    _calls = tool_call_names(c.decided) if c.decided is not None else ""
+    _explicit_chat = bool(c.decided is not None and c.decided.skill == "chat"
+                          and _calls and set(_calls.split(",")) == {"chat"}
+                          and not c.decided.declare and not c.decided.notes)
+    _asks_data = bool(_explicit_chat and not c.has_frames
+                      and int(getattr(c.principal, "uid", 0) or 0) > 0
+                      and (authz.is_own_read_question(c.user_msg)
+                           or authz.is_site_corpus_question(c.user_msg)))
+    # 两格"不纠偏"（20261006，都是**主人已经把这一轮限死**的情形）：
+    # ① 主人原话里明说不要调用工具（`_forbids_tools`；这一轮的计划已在上面被
+    #    覆盖成 chat）——催它点工具就是跟主人原话对着干，且会把工具真跑起来。
+    # ② 这一轮带图（`_turn_has_image`）：看着图把图里有什么讲清楚，本来就是
+    #    "零工具"的正确形态（判据 `image_two_colors` 的 `no_tool_calls` 锁的正是
+    #    这件事）。而 `_msg_text` 剥掉图块 ⇒ 文本侧的 `undecided` 与"该取数却零
+    #    工具"都读不出"这一轮有图可看"。实证 trace `20261006_022503`：
+    #    round 0 零调用 → 被催 → round 1 白调 `get_blog_info`+`list_categories`
+    #    → 判据红。**纠偏只是提前一拍，防线仍在闸门**（零帧声称那几条不撤）。
+    c._tools_off = _forbids_tools(c.user_msg)
+    c._img_turn = _turn_has_image(c.state["messages"])
+    # ③ 只交清单、一个动作都没点（20261008 批 ②）：`decided.skill == "chat"` 说明
+    #    这一轮没有任何真技能被选中（伪函数不参与技能选择），而清单非空说明模型
+    #    认下了"这句话里有 N 件事"——两件同现就是"只列不办"那一格（见
+    #    `_INTENTS_ONLY_NUDGE`）。`declare` 非空时不算（登记轮本来就零动作，
+    #    它走下面自己那条纠偏）。
+    _intents_only = bool(c.decided is not None and c.decided.intents
+                         and c.decided.skill == "chat" and not c.decided.declare)
+    # ④ 点了技能、清单却什么都没留下（20261009，③ 的**反方向**）：见
+    #    `_INTENTS_BACKFILL_NUDGE`。判据是**减完还剩几件**（`_intents_left_count`），
+    #    不是"清单是不是空的"——空清单只是它的两种形状之一，另一种更长见：清单里
+    #    只写着"这一轮正要办的那件"，被排除规则减完也是一件不剩（真链路实测
+    #    `20261009_032513`）。两种形状的处方一样，所以合成一个信号。
+    #    `rounds == 0` 是这一格的必要条件：枚举回答的是"主人**这句话**里有几件事"，
+    #    只该在理解这句话的那一次决策里问；执行过一轮之后的决策问的是"下一步做什么"，
+    #    那时候清单已经在（或已经错过）了。**短路顺序是有意的**：便宜的形态判据排在
+    #    前面，真要数一遍清单（`_intents_left_count`）排在最后。
+    _acted_no_intents = bool(
+        c.decided is not None and not c.decided.declare
+        and c.rounds == 0
+        and str(c.decided.skill or "") not in ("", "chat")
+        and _multi_item_shape(c.user_msg)
+        and _intents_left_count(c.state, c.config, c.decided) == 0)
+    if (c.decided is not None and not c.has_frames
+            and not c._tools_off and not c._img_turn
+            and (c.decided.undecided or _asks_data or _intents_only
+                 or _acted_no_intents)):
+        if _acted_no_intents and not c.correction:
+            c.deny_pseudo.add(TASK_INTENTS)
+            c.llm = bind_native(c._base_llm, c.role, task_state=c._task_state, deny=c.deny,
+                              deny_pseudo=c.deny_pseudo)
+            c.correction = _INTENTS_BACKFILL_NUDGE
+            c.correction_kind = "点了技能清单没留下要记的"
+            # `listed` 是**这一格两种形状**的分水岭（0 = 没交，>0 = 交了但只剩它
+            # 正要办的那件）——复扫 trace 时不必再靠"回复像不像"去猜。
+            record("planner", "intents_backfill", round=c.rounds,
+                   skill=str(c.decided.skill or ""), finish=c.decided.finish_reason,
+                   listed=len(getattr(c.decided, "intents", ()) or ()),
+                   text_len=len(c.raw), calls=tool_call_names(c.decided),
+                   spans=_msg_quote_spans(c.user_msg)[:3])
+            logger.warning(
+                "[planner] 点了技能、清单却没留下要记的（%s，round %d/%d，listed=%d）"
+                "→ 摘掉清单伪函数并纠偏重决策一次：%s", c.decided.skill, c.rounds + 1,
+                MAX_PLAN_ROUNDS, len(getattr(c.decided, "intents", ()) or ()),
+                str(c.user_msg or "")[:60])
+            return _Step("continue")
+        if _intents_only and not c.correction:
+            # 排在写形态话术**之前**：这一格手里有更具体的证据（"你列了 N 件"），
+            # 而写形态那句只讲"主人这句话在要求改动站内数据"——两句**都要给**：
+            # 前者负责说清"清单不代替动作"，后者负责说清"主人这句话要动手、名字
+            # 就在他原话里"（单给前者那一版实测无效，见下）。
+            #
+            # **为什么还要摘菜单**（20261008 批 ②，真链路实测）：native 档一轮只发得出
+            # 一条调用（`parallel_tool_calls=False`），于是"交清单"与"点技能"在同一
+            # 轮里**天然互斥**——模型交了清单那一轮就零动作。而纠偏在 `for _attempt in
+            # (0, 1)` 里只有一次机会，实测（`20261008_213818` 的 `mix2_two_writes_one_
+            # breath_card_only`）**那一版重决策的输出与上一版逐字节相同**（input
+            # 29048→29130、output 75→75、两次 `native_decision.calls` 都是孤零零的
+            # `task_intents`）——纯话术纠不动一个它本来就想交的答案。所以这一格与
+            # 1d（`denied_skills`）用**同一个手法**：不是再劝一次，是把那个选项从
+            # schema 里摘掉（`deny_pseudo`，语义与代价见 `build_tool_schema` 的注）。
+            # 摘掉之后它只剩两条路：点一个真技能，或显式点 `chat`——两者都是可判的
+            # 决策，而"再交一次清单"这条空转路没了。
+            c.deny_pseudo.add(TASK_INTENTS)
+            c.llm = bind_native(c._base_llm, c.role, task_state=c._task_state, deny=c.deny,
+                              deny_pseudo=c.deny_pseudo)
+            _auto_nudge = _name_write_nudge({"tools": [], "dropped": None},
+                                            c.user_msg, c.rounds, c.role)
+            c.correction = ((_auto_nudge + _INTENTS_ONLY_NUDGE) if _auto_nudge
+                          else _INTENTS_ONLY_NUDGE)
+            c.correction_kind = "清单零动作"
+            record("planner", "intents_no_action", round=c.rounds,
+                   n=len(c.decided.intents), write_shape=bool(_auto_nudge),
+                   goals=[str(i.get("goal") or "")[:60] for i in c.decided.intents[:3]])
+            logger.warning("[planner] 只交意图清单、零动作（%d 件，%s）→ 摘掉该伪函数"
+                           "并纠偏重决策一次：%s", len(c.decided.intents),
+                           "写形态" if _auto_nudge else "非写形态",
+                           "、".join(str(i.get("goal") or "")[:40]
+                                    for i in c.decided.intents[:3]))
+            return _Step("continue")
+        if not c.correction:
+            # **写形态优先**（20261008）：这一格（零调用 + 正文非空）此前一律用
+            # 通用话术 `_NO_CALL_NUDGE`，而 `_name_write_nudge` 的**零工具形态**
+            # 本来就是为这一格写的——但它的调用点在循环末尾（下面那段
+            # "写形态的请求却零工具"），而这一支已经 `continue` 走了，结构上够不到
+            # （与剔空纠偏那条 `break` 同一种"排在前面的出口让后面的代码永远到不了"）。
+            # 两句都只说机器能保证的事实，信息量不同：通用那句只讲"你什么都没点"，
+            # 写形态那句还讲"主人这句话在要求改动站内数据、目标名字就在他原话里"。
+            # 依据（golden `capability_absent_after_card_in_history`，同一句话）：
+            # `20261007_074615` 走到写形态话术 ⇒ 第二轮排出写规格并弹卡；
+            # `20261008_010948` 走通用话术 ⇒ 第二轮仍零调用、认成 chat ⇒ 判据红。
+            # **只对这一格**：显式点 `chat` 的那一格（`_asks_data`）与循环末尾各处
+            # 已各自接上 `_name_write_nudge`，不在这里重复。
+            _write_shape_nudge = (
+                _name_write_nudge({"tools": [], "dropped": None}, c.user_msg,
+                                  c.rounds, c.role) if c.decided.undecided else None)
+            if _write_shape_nudge:
+                c.correction, c.correction_kind = _write_shape_nudge, "写形态零调用"
+                # 事件名仍是**格**的名字（`no_call_nudge`；`zero_call_residual_probe`
+                # 那一类复扫按它数"被催过几轮"），话术由 `nudge=` 区分。
+                record("planner", "no_call_nudge", round=c.rounds,
+                       finish=c.decided.finish_reason, text_len=len(c.raw),
+                       nudge="name_write", via="no_call",
+                       spans=_msg_quote_spans(c.user_msg)[:3],
+                       verbs=_name_write_verbs(c.user_msg)[:3])
+                logger.warning(
+                    "[planner] 零调用 + 写形态的请求 → 用写形态话术纠偏"
+                    "（动作词=%s，引号点名=%s，正文 %d 字，round %d/%d）",
+                    "、".join(_name_write_verbs(c.user_msg)[:3]),
+                    "、".join(_msg_quote_spans(c.user_msg)[:3]) or "无",
+                    len(c.raw), c.rounds + 1, MAX_PLAN_ROUNDS)
+                return _Step("continue")
+            c.correction = _DATA_QUESTION_NUDGE if _asks_data else _NO_CALL_NUDGE
+            c.correction_kind = "该取数却零工具" if _asks_data else "零调用"
+            record("planner",
+                   "data_question_no_tool" if _asks_data else "no_call_nudge",
+                   round=c.rounds, finish=c.decided.finish_reason, text_len=len(c.raw))
+            logger.warning(
+                "[planner] %s → 纠偏重决策一次（round %d/%d）",
+                "主人在问站内/自己的数据却零工具" if _asks_data
+                else f"零调用（finish={c.decided.finish_reason}，正文 {len(c.raw)} 字）",
+                c.rounds + 1, MAX_PLAN_ROUNDS)
+            return _Step("continue")
+        if c.decided.undecided:
+            # `via` 把"被哪一条纠偏催过"带上：纠偏后从"点 chat"退回"什么都不点"
+            # 也算这个问句没落到工具上（复扫时别把它读成普通的零调用认账）。
+            # `via` = **试过哪一句话术**（第三档 20261008 起：写形态话术也走这一格，
+            # 别把它读成普通的零调用认账——复扫时"催过而没催动"的分布要看这个键）。
+            record("planner", "no_call_accepted", round=c.rounds,
+                   via=("data_question" if c.correction == _DATA_QUESTION_NUDGE
+                        else ("name_write" if c.correction_kind == "写形态零调用"
+                              else "no_call")),
+                   finish=c.decided.finish_reason, text_len=len(c.raw))
+            logger.warning("[planner] 纠偏后仍然零调用 → 认成 chat（round %d/%d）",
+                           c.rounds + 1, MAX_PLAN_ROUNDS)
+        elif c.correction == _DATA_QUESTION_NUDGE:
+            # 纠偏后仍然点 `chat`：**不在这里救第二遍**（闸门那两条判据还在，
+            # 而且它们带"只重规划一次"的节流）。记一笔供全量 trace 复扫盯残余。
+            # 判 `correction` 是不是**这一条**纠偏：若本轮先前已被别的由头纠偏过
+            # （如"收尾丢意图"），这里记 `still_no_tool` 就等于替那条纠偏背锅。
+            record("planner", "data_question_still_no_tool", round=c.rounds,
+                   finish=c.decided.finish_reason)
+            logger.warning("[planner] 纠偏后仍然点 chat（主人在问站内/自己的数据）"
+                           "→ 交给 narrator 与闸门（round %d/%d）",
+                           c.rounds + 1, MAX_PLAN_ROUNDS)
+    return _Step("next")
+
+
+def _decide_register(c: "_DecideCtx") -> "_Step":
+    """阶段 D3：任务登记——`frame_payload` 落库，返 `task_frames`（两处特例：`[]` 与 `[frame]`）。"""
+    # ── 任务登记（20260927 批 D，见 agent/tasks.py 头注）────────────────────
+    # 模型这一轮明确说"还有一件事没做完/做不下去"时，把它等级成会话级任务行
+    # （跨轮不丢），本轮到此收尾：把要问主人的那一句交给 narrator 原样问出来。
+    # **判据是形态、不是措辞**（同"消息壳架空判据"那族教训）：
+    #   · 只登记、既没执行任何工具、也没有要问的问题 ⇒ 这一轮访客什么都看不到，
+    #     那是拖延不是交付 ⇒ 走既有纠偏通道（`correction`）重决策**一次**，
+    #     由模型自己选"现在就做"还是"把问题写出来"——系统不替它选（决策权不搬走）；
+    #   · **撤下不走这条纠偏**（20260927）：主人说"这件事不做了"的那一轮本来就
+    #     零工具、零问题，那是对的一轮。以前它会被上面这条一起纠偏（措辞是
+    #     "你既没做也没问"），等于逼模型对一次合法撤下再找点事做。
+    #   · 纠偏之后仍然这样 ⇒ 认它（第三条路已经没有了，继续丢只会退回"静默消失"
+    #     那个本批要治的病）；有帧或有问题 ⇒ 直接认。
+    # 登记轮用的 `status="wrapped"` 是**借用**确定性收尾轮的语义（本轮确实是
+    # 确定性层收口、不再有动作）——刻意不新造一个 status 值：`PLAN_STATUS_VALUES`
+    # 的每一格都有消费方（gate 的豁免/文案判据、corpus_invariants 的 I2），
+    # 多一格就要多一套判据，而这里要的行为与 wrapped 逐字相同（**wrapped 不在
+    # `PLAN_STATUS_ABSENCE_EXEMPT` 里** ⇒ 站的"没有"结论判据照旧拦，fail-closed）。
+    if c.decided is not None and c.decided.declare is not None:
+        decl = c.decided.declare
+        _cancelled = decl.get("state") == "cancelled"
+        # **完成 > 撤下**（20260927 实测加的闸，见 `tasks.drop_is_completion` 的
+        # docstring）：模型把"剩下那步我做完了"写成 `task_drop` 时（4 次采样里 3 次），
+        # 帧会写 cancelled、话术会说"已撤下"，而紧接着的流尾结算又把同一行写成
+        # succeeded——正是本批要治的病换了个入口。撤下**先过这一道**：那件事的步骤
+        # 这一轮真按回执做完了 ⇒ 撤下不成立，按"已完成"收尾、**不发撤回帧**。
+        # 放在纠偏之前：撤下轮本来就不走纠偏（见下面那句注），这一支更不该走。
+        _cfgc = (c.config or {}).get("configurable", {})
+        if drop_is_completion(_cfgc.get("open_tasks"), _cfgc.get("conversation_id"),
+                              decl, c.state.get("receipts")):
+            c.plan_obj = _wrap_up_plan(c.has_frames, note=TASK_DONE_NOTE)
+            record("planner", "task_drop_settled", goal=decl.get("goal"),
+                   round=c.rounds, frames=c.has_frames)
+            logger.info("[planner] 撤下改判为完成：%s（本轮回执已覆盖它剩下的步骤，"
+                        "不撤、不发帧，交给流尾结算）", decl.get("goal"))
+            return _Step("return", _plan_update(c.plan_obj, c.rounds, []))
+        if (not _cancelled and not decl.get("pending_question")
+                and not c.has_frames and not c.correction):
+            c.correction = declaration_nudge(decl)
+            c.correction_kind = "任务登记"
+            record("planner", "task_correct", goal=decl.get("goal"),
+                   steps=len(decl.get("steps") or []), round=c.rounds)
+            logger.warning("[planner] 只登记任务、零工具零问题 → 纠偏重决策一次：%s",
+                           decl.get("goal"))
+            return _Step("continue")
+        c.plan_obj = _wrap_up_plan(c.has_frames, note=declaration_note(decl, c.has_frames))
+        # 会话 id 只从 config 取（与 execute 的确认令牌同一来源）。**取不到就不登记**
+        # ——幂等键里含着会话，退化成 0 会让不同会话里同一句话算出同一个 task_id，
+        # 那正是"跨会话串了同一件事"的入口（Rust 侧的 upsert 只按 task_id+uid 找行）。
+        # 不登记不影响这一轮：要问的那句照样由 narrator 问出来，丢的只是"下一轮还记得"。
+        conv_id = (c.config or {}).get("configurable", {}).get("conversation_id")
+        frame: dict = {}
+        if isinstance(conv_id, int):
+            frame = frame_payload(decl, conv_id)
+        else:
+            logger.warning("[planner] 任务登记拿不到会话 id（config 里没有）→ 本轮"
+                           "不落库，只如实收尾：%s", decl.get("goal"))
+            record("planner", "task_declare_noconv", goal=decl.get("goal"), round=c.rounds)
+        record("planner", "task_declare", task_id=frame.get("task_id") or "",
+               goal=decl.get("goal"), steps=len(decl.get("steps") or []),
+               state=decl.get("state"), question=bool(decl.get("pending_question")),
+               round=c.rounds, corrected=bool(c.correction), frames=c.has_frames)
+        logger.info("[planner] 任务%s：%s（剩 %d 步，状态 %s，问主人=%s，task_id=%s）",
+                    "撤下" if _cancelled else "登记",
+                    decl.get("goal"), len(decl.get("steps") or []),
+                    decl.get("state"), bool(decl.get("pending_question")),
+                    frame.get("task_id") or "（未落库）")
+        # 只给**显式登记**那一帧：意图清单推出来的那几条由 `planner_node` 的薄壳
+        # 统一并进来（`task_sink`）——两条通道不必各写一遍"怎么把帧拼进 updates"。
+        # 同名的自动登记已在 `intent_frames` 的 `skip_goals` 里排掉
+        # （`tasks.same_goal` 判），所以这里不会出现两帧同一个 task_id。
+        return _Step("return", _plan_update(c.plan_obj, c.rounds, [frame] if frame else []))
+    return _Step("next")
+
+
+def _decide_instantiate(c: "_DecideCtx") -> "_Step":
+    """阶段 D4：双源契约补齐 → `instantiate_plan` 实例化 → `plan_obj["params"]`。
+    本段无控制流（恒 `next`）。"""
+    # 双源契约补齐（20261005）：只在"已选 content_query + 只点名了一个数据源 +
+    # 用户原话是内容存在性问句"三条同时成立时补另一个。**必须早于 instantiate_plan**
+    # ——白名单校验、去重、菜单顺序都在那里面做，晚一步补就得自己重造一遍。
+    c.params, _paired = _pair_dual_sources(c.skill_name, c.params, c.user_msg)
+    # role 必须传：calls 白名单按角色取（管理员含后台只读项）。漏传 = 静默剔空。
+    c.plan_obj = instantiate_plan(c.skill_name, c.params, c.role)
+    c.plan_obj["params"] = c.params
+    if _paired:
+        # 响亮：这是系统**往 planner 的调用清单里加了一条**，报表口径要知道
+        # （每条命中的查询多一次工具调用 ⇒ `tool_rounds` 会跟着变）。
+        logger.info("[planner] 双源契约补齐：%s（skill=%s，round %d/%d）",
+                    "、".join(_paired), c.skill_name, c.rounds + 1, MAX_PLAN_ROUNDS)
+        record("planner", "dual_source_paired", added=_paired, skill=c.skill_name,
+               round=c.rounds)
+
+    # 白名单剔除可见化（20260913 B 项）：planner 点名了白名单外的工具时，条目被
+    # instantiate_plan 剔除——此前无任何记录，planner 以为计划已执行、narrator
+    # 照计划声称"我调用了 X"，agent.log 却查无此事（15:51 trace 实证：planner
+    # 点名 get_social_links，被静默剔除后回复谎称"这次我用专门的社交链接查询工具
+    # 调了一次"）。现在剔除即 WARNING + trace 事件，排障不再靠猜。
+    if c.plan_obj.get("dropped"):
+        # 两类原因都走这里（20260925）：被白名单剔除、或**点名写在了不读调用清单的
+        # 技能里**（后者见 skills.py `_skill_no_calls_suffix`）。条目自带后缀区分，
+        # 日志文字不再断言"白名单剔除"——那就把第二类讲错了。
+        logger.warning("[planner] 点名了工具但本轮不会执行、无帧：%s（round %d/%d）"
+                       "——若属应支持的数据工具，检查 skills.py 白名单与菜单",
+                       "、".join(c.plan_obj["dropped"]), c.rounds + 1, MAX_PLAN_ROUNDS)
+        record("planner", "rejected_call", dropped=c.plan_obj["dropped"],
+               skill=c.plan_obj["skill"], round=c.rounds)
+
+    # 没人读的参数名（20260925）：planner 在 PARAMS 里写了系统不认识的键——
+    # 此前**静默忽略**（"我以为填了、其实没人读"，与剔空白名单同族）。工具照常
+    # 执行、不做任何阻断，只把"这个键没有消费方"留进日志与 trace——它是注册表
+    # 与提示词漂移的探针（planner 写得出这个键，说明它认为自己该填）。
+    # `tools`/`calls` 出现在这里时**同时**会进上面那条 dropped（20260925 批 C）——
+    # 两个事件看的是同一件事的两面（这个键没有读者 / 点名的工具不会执行），
+    # 不要因为"重复"删掉其中一个：前者是键的探针、后者触发纠偏。
+    if c.plan_obj.get("param_unknown"):
+        logger.warning("[planner] PARAMS 里有没人读的参数（已忽略，不影响本轮执行）："
+                       "%s（skill=%s，round %d/%d）——若属技能该收的参数，"
+                       "检查 skills.py 该技能的 inputs/plan 模板",
+                       "、".join(c.plan_obj["param_unknown"]),
+                       c.plan_obj["skill"], c.rounds + 1, MAX_PLAN_ROUNDS)
+        record("planner", "param_unknown", names=c.plan_obj["param_unknown"],
+               skill=c.plan_obj["skill"], round=c.rounds)
+
+    # 参数名归一（20261005，见 skills._param_alias_fix）：planner 用多数派的叫法
+    # 填了本技能不认的名字（`name` vs 公告族的 `title`），系统把它搬到了真正的槽上。
+    # **必须响亮**：这是系统**改写 planner 填的参数**，不记一笔就变成"悄悄归一"。
+    # 放在 `param_unknown` 之后：搬走的那个名字已不在 unknown 里，两条事件合起来
+    # 才讲得清"它本来写的是什么、被搬去哪了"。
+    for mv in c.plan_obj.get("param_alias") or []:
+        logger.info("[planner] 参数名归一：%s → %s（skill=%s，round %d/%d）",
+                    mv.get("src"), mv.get("dst"), c.plan_obj["skill"],
+                    c.rounds + 1, MAX_PLAN_ROUNDS)
+        record("planner", "param_alias", skill=c.plan_obj["skill"], round=c.rounds,
+               src=mv.get("src"), dst=mv.get("dst"))
+
+    # 参数不合格 ⇒ 本轮零工具（20260925，见 skills.check_skill_params）：注记已经
+    # 写进 plan 的 NOTE 行交回 planner，这里再留一条日志/trace——否则"某一轮什么
+    # 都没执行"在事后只能从注记文本里看出来，而 trace 的 tools 列表是空的、
+    # 与"planner 主动决定不调工具"长得一模一样。
+    if c.plan_obj.get("param_problem"):
+        pp = c.plan_obj["param_problem"]
+        # 措辞只说**事实**（这一轮零工具），处置交给随后的纠偏/收尾两条日志：
+        # 原文案写的是"注记已交回 planner 重决策"，而那时系统根本不重决策
+        # （零工具轮不会回到 planner）——一句话把排障引向错的方向（20260926）。
+        logger.warning("[planner] PARAMS 不合格 → 零工具（skill=%s，round %d/%d）："
+                       "缺=%s 坏=%s（处置见接下来的纠偏/收尾日志）",
+                       c.plan_obj["skill"], c.rounds + 1, MAX_PLAN_ROUNDS,
+                       "、".join(pp.get("missing") or []) or "无",
+                       "、".join(pp.get("bad") or []) or "无")
+        record("planner", "param_rejected", skill=c.plan_obj["skill"], round=c.rounds,
+               missing=pp.get("missing") or [], bad=pp.get("bad") or [])
+    return _Step("next")
+
+
+def _decide_write_guard(c: "_DecideCtx") -> "_Step":
+    """阶段 D5：写目标拒绝链（引号 / 取值 / 待办 / 出处 / 目标 / 台账 / 策略）——
+    命中即写 `plan_obj["refusal"]` 并 `_Step("return")`（**不许 break**：收尾路径
+    要读 `params`，见段内长注）。"""
+    # 「目标由系统定死」（G1，20260923）那一段**已整族删除**（20260929 批 H）：
+    # 它治的是"主人说『你看着办』、上一轮提议里读不出结论"时 planner 退回 chat
+    # 打太极。同类事故现在的治法完全不同——台账连**编号**一起摆进帧，模型自己
+    # 选目标与结论，写前 `_ledger_target_refusal` 拿现场台账校验，一律弹卡。
+
+    # 写操作的目标按名字解不出来 → 不弹窗、不执行，直接确定性如实收尾
+    # （见 _write_target_refusal 上方长注：名字通道下"解不出来"必须响亮，
+    # 而"响亮"的最省事形态就是**根本不问那一句**）。
+    # 这一族出处闸的三本账（20261006 / 20261009，见 `_ledger_pending_text` 与
+    # `_task_ledger_text` 两处长注）：① 主人这一轮的话（下面各函数内部的 `user_msg`）；
+    # ② 系统那行「待主人点头」的卡面原文（上一轮那张卡）；③ 跨轮任务台账里还挂着的行。
+    # ②③ 治的是同一件事的两个入口——**系统自己规定的重提路径**（主人回「嗯」/「要」）
+    # 会把参数留在上一轮的字里，只认 ① 的闸就成了"系统自己把自己判成编造"。
+    # 算一次、往下传：下面四个闸用的是同一份原文。
+    ledger_src = "\n".join(
+        x for x in (_ledger_pending_text(c.state.get("ledger")),
+                    _task_ledger_text(c.config)) if x)
+    # 先过片段地基（20260922 ②防线）：留言的 quote 校正到主人引号里那段原话
+    # （或在没有可指认的片段时确定性拒绝）——**必须在目标预检之前**，否则预检
+    # 判的是 planner 那个被截短/被概括错的片段。
+    quote_refuse = _board_quote_fix(c.plan_obj, c.user_msg, c.rounds, c.role,
+                                    ledger_src=ledger_src)
+    # 公告的 title/content 同样有"主人自己标出来的原话"通道（20260922 ②防线续）：
+    # 没有可拒绝的形态（公告一律弹窗、主人签字前看得见），只做校正。
+    _announcement_text_fix(c.plan_obj, c.user_msg, c.role)
+    # 标签/分类/公告的**目标名**同理（②防线续二）：引号里那一段就是主人点名的
+    # 那一个，planner 抄短了就校正回来——**必须在目标预检之前**，否则预检报的是
+    # 另一个名字（"站内没有叫「绝对」的标签"）。
+    _name_target_fix(c.plan_obj, c.user_msg, c.role)
+    # 写参数里的**名字值**（新名字 / 标签名列表 / 父标签）同理（②防线续五，见
+    # `_name_arg_fix` 上方长注）：新建的名字天然不在字典里，只能来自主人这句话
+    # ——或者台账那一行（主人回「嗯」重提上一轮那张卡时）。
+    value_refuse = _name_arg_fix(c.plan_obj, c.user_msg, c.role, ledger_src=ledger_src)
+    # 待办正文（20261006，见 `_todo_text_fix` 上方长注）：它是写面里**唯一一格
+    # 目标没有台账可核**的自由文本，此前既不在名字通道也不在台账通道里。
+    # 放在值地基**之后**：两者按工具名互斥（那边收的是新名字/标签名/父标签），
+    # 排在这里只是让"值那一族"读起来仍是一段。
+    todo_refuse = _todo_text_fix(c.plan_obj, c.user_msg, c.role, ledger_src=ledger_src)
+    # 目标名的**来源态**（20260924 治本，见 `_target_grounding_refusal` 上方长注）：
+    # 校正（`_name_target_fix`）之后这个字面若仍**取不出处**，就是"主人没说过这个
+    # 名字"——零写 + 如实追问。排在台账预检**之前**是刻意的：它不读台账，台账读不到
+    # 时它仍然生效（台账那条路读不到就放行，见 `_write_target_refusal` 的边界注）。
+    # ⚠️ 必须在 `_name_arg_fix` **之后**——那一步可能就地重建 plan（`plan_obj.clear()
+    # + update(fresh)`），在它之前判的是重建前的旧参数。
+    # 第二本账同前（20261006）：此前它躲过"重提"这一撞靠的是 `_name_like` 早退
+    # ——那是运气，不是设计（重提那句话里带一个名字状的词就不成立了）。
+    grounded_refuse = _target_grounding_refusal(c.plan_obj, c.user_msg,
+                                               ledger_src=ledger_src)
+    # 这句要**如实说出系统查的是哪本台账**：待办族查的是后台首页那张待办清单
+    # （`_find_todo_row`），名单里漏了它，主人会以为系统翻错了地方（20260927
+    # 加待办那一支时同步补上）。
+    subject = ("站内的台账（标签/分类字典、公告清单、留言列表、"
+               "后台待办清单）与主人这句话本身")
+    refusal = None
+    policy_refuse = False
+    ledger_refuse = False
+    if quote_refuse:
+        refusal = (_tool_name((c.plan_obj.get("tools") or ["?"])[0]), quote_refuse)
+    elif value_refuse:
+        refusal = value_refuse
+        subject = "主人这句话本身（要写进站内的名字只能来自这里）"
+    elif todo_refuse:
+        refusal = (_tool_name((c.plan_obj.get("tools") or ["?"])[0]), todo_refuse)
+        subject = "主人这句话本身（待办的正文只能是主人说出口的那件事）"
+    elif grounded_refuse:
+        refusal = grounded_refuse
+        subject = "主人这句话本身（目标名只能来自主人说出口的那几个字）"
+    else:
+        refusal = _write_target_refusal(c.plan_obj, c.config, c.user_msg, c.role)
+        if not refusal:
+            # 台账**编号**通道（20260929 批 H · S2，见 `_ledger_target_refusal`）：
+            # 审核/额度三件的目标不是"主人原话里的字面"而是"系统摆上桌的编号"，
+            # 判据因此是**现场重读台账**（真有这一行、且还在待办态）。它与上面那条
+            # 名字通道按工具名严格互斥，两处不会撞在同一件工具上。
+            refusal = _ledger_target_refusal(c.plan_obj, c.config)
+            if refusal:
+                ledger_refuse = True
+                subject = ("系统这一轮现场读出来的待办台账"
+                           "（后台留言审核队列 / 额度申请队列）")
+            else:
+                # 政策门**放最后**（见 `_freeze_policy_refusal` 上方长注）：前面任一环
+                # 拒绝时不该再花一次名录读；而且"无据"比"政策不允许"更该先开口——
+                # 主人说的那个账号根本不存在时，"不能冻管理员"是答非所问。
+                refusal = _freeze_policy_refusal(c.plan_obj, c.config, c.principal)
+                if refusal:
+                    policy_refuse = True
+                    subject = "后端的账号管理规则（预检只判它确定知道的那两种）"
+    if refusal:
+        wtool, why = refusal
+        # 拒绝**来源**（`quote`/`value`/`grounding`/`ledger`/`ledger_id`/`policy`）：
+        # 既是 trace 的取值，也是本轮的**结构化产出物**（`wrap["refusal"]`，见下方赋值处）。
+        # 提到这里算一次，trace 与产出物共用同一个字面。
+        refusal_source = ("quote" if quote_refuse else "value" if value_refuse
+                          else "todo_text" if todo_refuse
+                          else "grounding" if grounded_refuse
+                          else "ledger_id" if ledger_refuse
+                          else "policy" if policy_refuse else "ledger")
+        # 值/目标名被拒时补一句：那个字面是**系统自己的参数值**，不是主人点名的名字
+        # （20260922 探针 ⑤ 实测：如实答复里出现了"站内并没有叫「音乐」的现成
+        # 标签"——系统查的是占位文字「标签名」，叙述把两者画了等号 = 假话）。
+        value_tail = ("" if not (value_refuse or grounded_refuse or todo_refuse) else
+                      "系统要填进参数的那个字面是**系统自己的参数值**，"
+                      "不是主人点名的名字——转述它时**原样引述**，"
+                      "绝不许把它说成主人说的那个名字。")
+        # 政策拒绝**不能**请主人"换个说法再试"：那条路是被规则堵死的，不是被
+        # 信息缺失堵死的（把它讲成"换个说法"就是把一条死路讲成一道门槛）。
+        why_tail = ("后端那条规则不认这次的目标，**别请主人换个说法重试**——"
+                    "把原话转告给他就够了，他要改主意是另一件事。"
+                    if policy_refuse else
+                    # 台账编号被拒**不是**"没听清"：台账上就没有这样一行等着办
+                    # （或那件已经办完了），换个说法也不会多出一行来。请主人
+                    # "重说一遍"会把一条已查清的事实讲成一道他没跨过的门槛。
+                    "**别请他换个说法重试**：这不是「没听清」，是系统现场查过"
+                    "台账、上面没有这样一行等着办（或那一件已经不待办了）——"
+                    "把查到的状态如实转告他就够了，他要办别的事是另一件事。"
+                    if ledger_refuse else
+                    "并问他接下来想怎么办（换个说法、或先把那个目标建出来）。")
+        if ledger_refuse:
+            logger.warning("[planner] 写操作的目标编号对不上现场待办台账（%s）：%s"
+                           " → 确定性如实收尾", wtool, why)
+        else:
+            logger.warning("[planner] 写操作参数解不出「主人这句话」里的来源（%s）：%s"
+                           " → 确定性如实收尾", wtool, why)
+        record("planner", "write_target_unresolved", tool=wtool,
+               source=refusal_source,
+               reason=why[:160], round=c.rounds)
+        # 文案结构（20261005）：**"没做"与"原因"必须是一句**。此前是两个独立的
+        # 句子（"…没有改动（本轮一个工具都没有执行）。系统核对过 X，结果是：Y。"），
+        # 而 narrator 抄走了**第一个**——它在被加粗的那句的「。」处收手，句号之后
+        # 一个字都不带（trace `20261005_065251`：回复只有「主人，这件事这次没有做：
+        # 站内数据一个字节都没有改动。」）。现在是破折号连起来的一句，原因**也带
+        # 强调**，模型没有"抄半句就结束"的位置。
+        # 历史定量：同一条用例 28 次运行里 2 次丢原因（≈7%，见 `announcement` 那族
+        # 的对比）——是采样抖动不是系统缺陷 ⇒ **先做文案最小改动**，压不住再升级成
+        # gate 的确定性兜底（那条要动判据词表的单一来源，是独立的一块工作）。
+        c.plan_obj = _wrap_up_plan(False, note=(
+            _LEDGER_NOTE_PREFIX +
+            "**这件事这次没有做：站内数据一个字节都没有改动**"
+            "（本轮一个工具都没有执行）——"
+            f"系统核对过{subject}，结果是：**{why}**。"
+            "请把**这一句**如实转告主人（连同里面的候选名单或该补的信息），"
+            + why_tail +
+            "**不许**出现「看过/读过/查过/检索过/调用过工具」这类说法；"
+            "也**不许**把它讲成一篇内容层面的结论。"
+            # 20260926：这条禁令禁的是"把**系统的动作**说成你自己做的"，不是"不许提系统
+            # 给过的那份结论"——现场（trace 20260926T171235）模型反向套用，对着系统
+            # 上一轮写下的核对结论答"是我自己脑补的"。把允许的说法一并给出来。
+            "（禁的是把**系统的动作**说成你做的；系统核出来的结论与候选名单"
+            "**照原样转述**、来源说'系统'就行——但也**不许**反过来把它说成"
+            "'我自己猜的/脑补的'。）"
+            + value_tail))
+        # ── 结构化产出物（20261006）─────────────────────────────────────
+        # 拒绝这件事此前只活在一段**散文**里（上面那段 note）与一条 trace 里；下游
+        # 谁都读不到"系统这一轮到底卡在哪一件工具、卡在哪一类东西上"。于是
+        # `_no_popup_fact` 只能给一段**通用的三分**（没有能力/缺目标/别问要不要办），
+        # 它与上面这段具体结论**并排**写给 narrator——两条规则打架的地方（policy /
+        # ledger_id 这一支明明写着「**别请他换个说法重试**」，通用三分却写着
+        # 「如果只是缺一个目标，就问清那个目标」）由模型自己挑，等于把一条已经查清的
+        # 事实重新交给采样。
+        #
+        # 键挂在 **plan_obj** 上而不是新加一个 AgentState 字段：`plan_obj` 已在
+        # AgentState 里声明、由 `plan_state` 一次写两态（见那个函数的长注），挂它零成本；
+        # 新字段则要同时在 AgentState 声明 + graph_input 初值 + 每个构造点补默认值——
+        # 正是 `plan_state` 存在的理由要消掉的那种人工同步。
+        #
+        # ⚠️ **缺键 ≠ "没有拒绝"的对立取值**：`{"missing": "none"}` 这种"编一个值出来"
+        # 是明令禁止的——键不在场就是"本轮不是确定性拒绝轮"，读端按缺席处理。
+        c.plan_obj["refusal"] = {"tool": wtool, "source": refusal_source,
+                               "missing": "target"}
+        # ⚠️ 这里必须是 **return**，不是 break：决策循环之后的收尾路径会读
+        # `plan_obj["params"]`（只有 instantiate_plan 的产物才有这个键），
+        # 而 `_wrap_up_plan` 不带它 ⇒ break 到那里必抛 KeyError('params')
+        # （20260922 实测：正是本函数要修的那条用例把整轮打成 __ERROR__，
+        # 与 20260921 22:37 的 KeyError('model') 同一类错——"分支走通了、
+        # 收尾路径没走通"，故 test_skills 里也补了假 LLM 整轮锁）。
+        return _Step("return", _plan_update(c.plan_obj, c.rounds))
+    return _Step("next")
+
+
+def _decide_late_correct(c: "_DecideCtx") -> "_Step":
+    """阶段 D6+D7：参数不齐 / 写形态 / 动作重复 / 收尾丢意图 / 菜单摘项放弃 /
+    写命令零调用，收在最后的剔空纠偏（全函数唯一的 `break`）。"""
+    # 「先建再挂」那一步的存在性剪枝（20261009，见 `_drop_satisfied_tag_creates`）：
+    # 位置在这一段是刻意的——排在所有**可能重建计划**的校正步（`_name_arg_fix`
+    # 会 `plan_obj.clear()+update()`）**之后**、`plan_state` 编码 `plan` 文本之前。
+    # 排在拒绝分发之后是因为：被拒的那一轮不发工具，剪枝没有意义（那条路 return）。
+    # 它也**不是**判据（不拦任何东西），只是把一条注定不该跑（跑了会多建一条重名
+    # 标签）的步骤从计划里拿掉——读不到字典就一个都不摘，方向同 `reached_specs`。
+    _pruned_tags = _drop_satisfied_tag_creates(c.plan_obj, c.config)
+    if _pruned_tags:
+        record("planner", "tag_create_pruned", skill="article_tags",
+               labels=_pruned_tags[:3], round=c.rounds)
+        logger.info("[planner] 要挂的标签站内已经有（%s）→ 同一张卡里那一步 "
+                    "`create_tag` 摘掉，只挂现成的", "、".join(_pruned_tags[:3]))
+
+    # 参数不齐 → 同轮纠偏重决策（20260926）：与剔空纠偏**同一条通道**，因为
+    # 两者是同一类事故——"计划里这一轮什么都不会执行"，而下游只有 narrator
+    # 一条路。此前这一段只记日志/trace，计划照原样往下走 ⇒ `route_after_planner`
+    # 见 TOOLS 空就把零工具零帧的轮次交给 narrator，而日志却写着「注记已交回
+    # planner 重决策」——**那句话在事实上是假的**：零工具轮不会再进 planner
+    # （两条既有纠偏通道都不收它：`_name_write_nudge` 要写域动作词、
+    # `_drop_correction` 要 `dropped` 非空，而参数不齐的 plan 刻意把 dropped 留空）。
+    # 现场（trace 20260926T212945）：主人说"随便带我去一篇文章吧"，planner 选了
+    # navigate 却没填 target ⇒ 零工具直落 narrator ⇒ 它把上一轮列表帧里的第一篇
+    # 编成"已经带你跳到《文章向量空间图谱项目文档》啦"（页面根本没动）。
+    # 纠偏文本用 `param_problem_note` 写好的那份（机器可保证的事实：缺哪个参数、
+    # 本技能收哪些参数）——这里不另写一句，避免两处话术漂移。
+    # **只纠一次**（`correction` 的既有语义）：纠完仍不齐 ⇒ 循环外那条确定性收口。
+    if not c.correction and c.plan_obj.get("param_problem"):
+        pp = c.plan_obj["param_problem"]
+        # 话术从注册表取：`_param_problem_plan` 已把同一份写进 NOTE（plan_obj
+        # 的 note 就是它），这里只在 note 缺失时才现算一次（防御性——note 是
+        # narrator 也看得见的那一行，两处必须同源）。
+        c.correction = (c.plan_obj.get("note") or "").strip() or (
+            param_problem_note(SKILL_MAP[c.plan_obj["skill"]], pp,
+                               skill_param_specs(SKILL_MAP[c.plan_obj["skill"]]))
+            if c.plan_obj.get("skill") in SKILL_MAP else "")
+        c.correction_kind = "参数不齐"
+        record("planner", "param_correct", skill=c.plan_obj["skill"], round=c.rounds,
+               missing=pp.get("missing") or [], bad=pp.get("bad") or [])
+        logger.warning("[planner] 参数不齐（本轮零工具）→ 同轮纠偏重决策"
+                       "（skill=%s 缺=%s 坏=%s）：%s",
+                       c.plan_obj["skill"],
+                       "、".join(pp.get("missing") or []) or "无",
+                       "、".join(pp.get("bad") or []) or "无",
+                       c.correction[:120])
+        return _Step("continue")
+
+    # 写形态的请求上一条工具规格都没写（见 _name_write_nudge 上方长注）：与
+    # 剔空纠偏共用同一条重决策通道（同一轮内只纠一次，纠完仍零工具就照原样走）。
+    nudge = None if c.correction else _name_write_nudge(c.plan_obj, c.user_msg, c.rounds, c.role)
+    if nudge:
+        _spans = _msg_quote_spans(c.user_msg)
+        _verbs = _name_write_verbs(c.user_msg)
+        logger.warning("[planner] 写形态的请求却零工具 → 纠偏重决策（动作词=%s，"
+                       "引号点名=%s）", "、".join(_verbs[:3]),
+                       "、".join(_spans[:3]) or "无")
+        record("planner", "name_nudge", round=c.rounds,
+               spans=_spans[:3], verbs=_verbs[:3])
+        c.correction = nudge
+        return _Step("continue")
+
+    # 动作重复纠偏（20261003）：非首轮 planner 又规划了**已执行过**的动作技能，
+    # 而意图清单里还有没做完的动作。只"不放行收尾"不够——轮末那条兜底拦得住
+    # 收尾、拦不住它原地重选同一个技能，于是轮次被同一件事耗光、第二件事照样丢
+    # （扫 `logs/agent/golden_traces/` 全量 4174 份：golden
+    # `multi_step_referent_nav_effect` 那句「带我过去，然后帮我把樱花打开」有过
+    # 连选 2 次 / 3 次 / 4 次 navigate 的同形轮次，零 EFFECT 帧）。走既有同轮纠偏
+    # 通道（`correction`，只此一次）
+    # 把**机器能保证的事实**讲给它：上一轮执行了什么、清单里还剩什么——决策权
+    # 仍归 planner。
+    # 仍重复 ⇒ 轮末兜底照原样放行（动作幂等无害），不夺它的判断。
+    # 位置在剔空纠偏**之前**：两条互斥（这条要 tools 非空，那条要 tools 空），
+    # 但剔空那条以 `break` 收尾，排在它后面的代码永远到不了。
+    if (not c.correction and c.has_frames and c.plan_obj["tools"]
+            and c.plan_obj["skill"] in _ACTION_SKILLS):
+        _frames = {getattr(m, "name", "") or "" for m in c.state["messages"]
+                   if isinstance(m, ToolMessage)}
+        _planned = {_tool_name(s) for s in c.plan_obj["tools"]}
+        _left = _pending_intents(c.state)
+        if _planned and _planned <= _frames and _left:
+            c.correction = (
+                "你上一轮已经执行过 " + "、".join(sorted(_planned)) +
+                "，工具返回就在上方——**重复执行不会有新结果，只会把轮次耗光**。"
+                "主人那句话里还有这些动作**没做完**："
+                + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
+                + "。本轮把没做完的那一件做掉，**不要**再重做刚刚执行过的动作。")
+            c.correction_kind = "动作重复"
+            record("planner", "action_repeat_correct", planned=sorted(_planned),
+                   pending=[i["key"] for i in _left], round=c.rounds)
+            logger.warning("[planner] 动作重复（%s）且意图清单仍有未完成项（%s）"
+                           "→ 纠偏重决策一次：%s",
+                           "、".join(sorted(_planned)),
+                           "、".join(i["key"] for i in _left), c.correction[:120])
+            # 与上面两条纠偏同路：`continue` 让 `{correction}` 槽重新渲染一次
+            # （`for _attempt` 只跑两轮，第二次进来 `not correction` 为假 ⇒ 只纠一次）。
+            return _Step("continue")
+
+    # 收尾丢意图纠偏（20261003）：planner 在这一轮**零工具**（等于自己宣布收尾），
+    # 而意图清单里还留着**一次都没被规划过**的动作。每轮都注入的 intent_hints
+    # 明明把它标着"**未完成**"，它却收尾了 ⇒ 收尾注记只会写"本轮只是收尾"，
+    # 与那件事相关的工具返回一条都没有，narrator 手里只剩主人的原话 —— 于是
+    # 如实答成"没帮你做"（它没有别的可说）。主人要的却是把它做掉。
+    # 现场（golden `multi_step_referent_nav_effect`，20260927_035120 那次失败）：
+    # 第 0 轮 navigate 成功，第 1 轮 planner 直接 `SKILL=chat` 收尾、零 EFFECT 帧，
+    # 回复落成"樱花特效这边没有执行记录"。同族的另一半（planner 原地重选**已执行
+    # 过**的动作技能、把轮次耗光）在上一支 `action_repeat_correct` 里收口。
+    #
+    # 判据为什么用 `has_frames`：首轮零工具轮是另一族（`test_unaccounted_zero_tool_round`
+    # 明写"不新增重决策通道"，零工具轮再问一次通常还是零工具）；有帧之后的零工具
+    # 才是"看过返回、决定收尾"，那才轮得到"清单里还有没做过的事吗"这一问。
+    # 判据为什么用 `not dropped`：剔空（下面那一支）说的是"你点错通道了"，与这条
+    # 互斥，且它有自己的纠偏文本与记账，不能被我这条截胡。
+    #
+    # 不会把"已经被拒过的动作"再推它重试一次：上过计划的动作（哪怕被拒）spec 都
+    # 进了 `executed`，`_intent_done` 会把它标成已完成 ⇒ 留在清单里的只能是
+    # **从没被规划过**的那些。
+    if (not c.correction and c.has_frames and not c.plan_obj["tools"]
+            and not c.plan_obj.get("dropped")):
+        _left = _pending_intents(c.state)
+        if _left:
+            c.correction = (
+                "你这一轮**没有排任何工具**（等于宣布收尾），但主人那句话里还有这些"
+                "动作**一次都没有被执行过**："
+                + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
+                + "。你手里没有与它们相关的任何工具返回。本轮先把没做过的做掉"
+                "（一轮一件），再谈收尾。")
+            c.correction_kind = "收尾丢意图"
+            record("planner", "wrapup_intent_correct",
+                   pending=[i["key"] for i in _left], round=c.rounds)
+            logger.warning("[planner] 零工具收尾但意图清单仍有未规划项（%s）"
+                           "→ 纠偏重决策一次：%s",
+                           "、".join(i["key"] for i in _left), c.correction[:120])
+            return _Step("continue")
+
+    # 菜单被摘之后"当场放弃"纠偏（20261008，见 `_MENU_DENIED_GIVEUP_NUDGE` 的长注）：
+    # 上一轮受阻、该技能这一轮从菜单里摘掉，模型没有改选，而是**零工具收尾**——
+    # narrator 手里只有一条失败帧，只能如实说"办不了"，而主人那件事其实有别的入口。
+    # 排在**收尾丢意图之后**：那一条手里有更具体的东西（"清单里还剩哪几件"），
+    # 该由它先说；本条只兜它够不到的形态（账号族写请求的意图不在
+    # `_scan_action_intents` 的射程里 ⇒ `_pending_intents` 对它们是空的）。
+    # 与剔空纠偏互斥（本条要求 `not dropped`），故放在它前面不影响它。
+    # `correction` 的既有语义 = 同一轮只纠一次，这里同样只用这一条通道。
+    if not c.correction:
+        _giveup = _deny_giveup_nudge(c.deny, c.plan_obj, c.user_msg, c.rounds, c.role, c.has_frames)
+        if _giveup:
+            _verbs = _name_write_verbs(c.user_msg)
+            _marks = _write_family_marks(c.user_msg)
+            c.correction = _giveup
+            c.correction_kind = "菜单摘项后放弃"
+            record("planner", "deny_giveup_correct", round=c.rounds,
+                   denied=sorted(c.deny), verbs=_verbs[:3], marks=_marks[:3])
+            logger.warning("[planner] 菜单已摘该项却零工具收尾 → 纠偏重决策一次"
+                           "（摘掉=%s，动作词=%s，族别词=%s）",
+                           "、".join(sorted(c.deny)),
+                           "、".join(_verbs[:3]) or "无",
+                           "、".join(_marks[:3]) or "无")
+            return _Step("continue")
+
+    # 写命令却零工具收尾（20261009，见 `_WRITE_COMMAND_ZERO_CALL_NUDGE` 的长注）：
+    # 排在 `deny_giveup` **之后**——那一格手里有更具体的东西（"上一轮那一步被摘了"），
+    # 该由它先说；本条兜的是它够不到的形态（本轮压根没有摘项）。
+    if not c.correction and not c._tools_off and not c._img_turn:
+        _cmd_nudge = _write_command_nudge(c.plan_obj, c.user_msg, c.has_frames, c.state)
+        if _cmd_nudge:
+            c.correction, c.correction_kind = _cmd_nudge, "写命令零调用"
+            record("planner", "write_command_correct", round=c.rounds,
+                   finish=c.decided.finish_reason, text_len=len(c.raw),
+                   frames=c.has_frames)
+            logger.warning("[planner] 写命令却零工具收尾（本轮零写、已有帧）"
+                           "→ 纠偏重决策一次（round %d/%d，正文 %d 字）",
+                           c.rounds + 1, MAX_PLAN_ROUNDS, len(c.raw))
+            return _Step("continue")
+
+    # 剔空纠偏（见上方长注）：只有"点名的全被剔除、本轮一个工具都不剩"才重决策；
+    # 已经纠偏过一次、或清单非空、或根本没点名 → 到此为止。
+    if c.correction or c.plan_obj["tools"] or not c.plan_obj.get("dropped"):
+        return _Step("break")
+    c.correction = _drop_correction(c.plan_obj["dropped"], c.role)
+    record("planner", "drop_correct", dropped=c.plan_obj["dropped"], round=c.rounds)
+    logger.warning("[planner] 点名工具全被剔除（本轮零工具）→ 剔空纠偏重决策：%s",
+                   "、".join(c.plan_obj["dropped"]))
+    return _Step("next")
 
 
 def _finalize_unaccounted(plan_obj: dict, rounds: int, has_frames: bool) -> "dict | None":

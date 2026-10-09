@@ -45,6 +45,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
 import agent.graph as g  # noqa: E402
 from agent.graph import (  # noqa: E402
     _DEICTIC_WORDS, _bare_target_name, _grounded_value, _msg_grounded_name,
@@ -362,7 +364,10 @@ print("\n⑧ 第二本账：系统台账那一行「待主人点头（还没做�
 #   ③ 脏判据（泛称/指代）对第二本账**同样生效**——它是先判的，不因为"台账里有"就放行。
 from agent.graph import _board_quote_fix, _ledger_pending_text  # noqa: E402
 
-_GSRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+# 刀 2（20261009）后 `_planner_decide` 拆成阶段函数、跨段量改从 ctx 上取
+# （`rounds` → `c.rounds`）⇒ 本文件的整文件文本锁先去掉那个前缀再看：
+# 判据文本与拆分之前**逐字相同**（前缀清单从 graph.py 的 AST 读，见 `_ctx_src`）。
+_GSRC = _ctx_src.graph_deprefixed()
 check("接线：**四道**闸都吃 `ledger_src`，`planner_node` 一次算好往下传（漏传＝静默回旧行为）",
       "ledger_src" in inspect.signature(_name_arg_fix).parameters
       and "ledger_src" in inspect.signature(_board_quote_fix).parameters
