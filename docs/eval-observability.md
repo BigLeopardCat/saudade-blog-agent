@@ -228,7 +228,7 @@
 ## 2. 评测体系：四层结构
 
 ```mermaid
-flowchart TB
+flowchart LR
     subgraph CI[CI 流水线]
         P0[push 触发] --> L0[L0 单元/组件级<br/>秒级 · 每次必跑]
         N[nightly 定时] --> L1[L1 基准级开源数据集<br/>小时级 · 离线]

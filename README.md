@@ -18,7 +18,7 @@
 ## 架构
 
 ```mermaid
-flowchart TB
+flowchart LR
     subgraph Caller["调用方"]
         FE["浏览器 Live2D 对话面板<br/>（或宿主后端）"]
         RUST["Rust 后端 :3000<br/>鉴权 · MySQL 记忆 · SSE 转发 · 身份断言"]
@@ -36,14 +36,12 @@ flowchart TB
 
     FE -->|"SSE"| RUST
     RUST -->|"HTTP（附身份断言）"| PL
-    PL -->|"调用清单"| EX
-    EX -->|"读取工具帧，继续 / 修正 / 收尾"| PL
+    PL <-->|"调用清单 ⇄ 读取工具帧，继续 / 修正 / 收尾"| EX
+    PL -->|"收尾轮（清单为空）"| MD
+    MD --> GT
     EX -->|"同一项重复受阻"| RF
     RF -->|"回 planner"| PL
-    PL -->|"收尾轮（清单为空）"| MD
-    EX -->|"调用"| TOOLS
-    TOOLS -->|"工具帧 + 回执"| PL
-    MD --> GT
+    EX <-->|"调用 ⇄ 工具帧 + 回执"| TOOLS
     GT -->|"帧 + 最终回复"| RUST
 ```
 
