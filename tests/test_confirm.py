@@ -979,6 +979,65 @@ check("  「其他」不是选择记号 ⇒ fail-closed（它永不该走确认�
       _n4 is None and bool(_e4), _e4)
 settings.jwt_secret = _SAVED_SECRET
 
+print("\n⑫b 「先建再挂」是有依赖的一组 ⇒ 只算一格（20261010，见 adminops.linked_units）")
+# 现场（生产 trace `20261010T011456`）：主人「给 test4 加个测试标签」⇒ 站内没有「测试」
+# ⇒ 展开成 `create_tag(测试)` + `set_article_tags(11, add 测试)`（20261009「同一张卡里
+# 先建再挂」）⇒ 卡面按 **spec 逐条**编号 ⇒ 主人点了「只办第 2 件」⇒ 服务端裁成一条
+# `set_article_tags` ⇒ 工具只能回「站内没有这些标签：测试——本次未改动」。
+# 批 F 的编号数 spec，而这一步**不是能单独办的事**：卡面摆了一枚点下去注定失败的按钮。
+settings.jwt_secret = _STUB_SECRET
+_pair = [{"tool": "create_tag", "args": {"title": "测试"}},
+         {"tool": "set_article_tags", "args": {"article_id": 11, "add": ["测试"]}}]
+check("依赖组并成一个单元（一格 = 一次点击能单独办的那件事）",
+      A.linked_units(_pair) == [[0, 1]], str(A.linked_units(_pair)))
+check("  ⇒ 卡面退回单件措辞、只剩三枚按钮（没有那枚点不动的「只办第 2 件」）",
+      [o["label"] for o in A.confirm_opts(len(A.linked_units(_pair)))]
+      == ["确定", "其他（我来说）", "取消"]
+      and "点「确定」" in A.render_confirm_question(_pair)
+      and "只办第" not in A.render_confirm_question(_pair))
+check("  ⇒ 那一格仍把「新建」与名字印出来（主人签字前看得见站里会多一个标签）",
+      "新建" in A.render_action_lines(_pair) and "测试" in A.render_action_lines(_pair))
+check("  ⇒ 两步连在同一格（「，并」），不是两个编号",
+      "，并" in A.render_action_lines(_pair)
+      and "2. " not in A.render_action_lines(_pair))
+_tok2 = confirm.sign(7, 42, "article_tags", _pair, A.linked_units(_pair))
+_pay2 = confirm.verify(_tok2, 7, 42)
+_ok2, _e2b = confirm.narrow(_pay2, "pick:0")
+check("  ⇒ 令牌里带着这份分组，「只办第 1 件」拿回来的就是**整组**（先建再挂一起走）",
+      isinstance(_pay2, dict) and _pay2.get("units") == [[0, 1]]
+      and _e2b == "" and (_ok2 or {}).get("specs") == _pair,
+      f"{_e2b} {str(_ok2)[:80]}")
+_bad2, _be2 = confirm.narrow(_pay2, "pick:1")
+check("  ⇒ 那一格之外没有第二格可挑（越界 fail-closed，绝不放大成整批）",
+      _bad2 is None and bool(_be2), _be2)
+check("  没有依赖的两件仍是两个单元（老卡面一个字节没变）",
+      A.linked_units(_grant_specs) == [[0], [1]]
+      and A.linked_units([{"tool": "create_tag", "args": {"title": "Git"}}]) == [[0]])
+check("  名字对不上就不并（create Git + add SVN：各走各的）",
+      A.linked_units([{"tool": "create_tag", "args": {"title": "Git"}},
+                      {"tool": "set_article_tags",
+                       "args": {"article_id": 11, "add": ["SVN"]}}]) == [[0], [1]])
+check("  只有挂、没有建（标签本来就在，那一步被 `_drop_satisfied_tag_creates` 摘掉了）"
+      " ⇒ 它自己一个单元", A.linked_units([_pair[1]]) == [[0]])
+for _bad_units in ([[0]], [[0], [0]], "x", [[]], [[0], [2]], [[True]]):
+    _n5, _e5 = confirm.narrow({**_pay2, "units": _bad_units}, "pick:0")
+    check(f"  分组读不懂（{_bad_units!r}）⇒ fail-closed 零执行，绝不猜一个更大的范围",
+          _n5 is None and bool(_e5), _e5)
+# 上面这些全是 `adminops` 那一头的契约；现场那枚死按钮的另一半在 `graph._confirm_popup`
+# 里 —— 「按哪份清单数按钮」与「按哪份清单签发」必须是**同一份**（各算一次就会出现
+# "卡面有这一格、令牌里裁不出来"）。这里直接把 graph 那个签发口调一遍，读回令牌里的分组。
+_g_token, _g_units = g._sign_confirm_picks(
+    {"plan_obj": {"skill": "article_tags"}},
+    {"configurable": {"conversation_id": 42}}, Principal(uid=7), _pair)
+_gw, _gwe = confirm.narrow(confirm.verify(_g_token, 7, 42), "pick:0")
+check("  ⇒ graph 那半签发的是同一份分组（卡面与令牌同源，不是各算一次）",
+      _g_units == [[0, 1]]
+      and (confirm.verify(_g_token, 7, 42) or {}).get("units") == [[0, 1]]
+      and len(A.confirm_opts(len(_g_units))) == 3)
+check("  ⇒ 端到端：那张令牌上「只办第 1 件」拿回的就是整组",
+      _gwe == "" and (_gw or {}).get("specs") == _pair, _gwe)
+settings.jwt_secret = _SAVED_SECRET
+
 print("\n  · 跨语言守卫：Rust 那半得真的接上（本机父仓在兄弟目录，找不到会响亮跳过）")
 _rs = _parent_repo.read(
     "src/routes/chat.rs",

@@ -10817,6 +10817,24 @@ def _question_words_are_prose(user_msg) -> bool:
     return _question_words_are_content(user_msg)    # 或：疑问词全在引号里
 
 
+def _sign_confirm_picks(state: AgentState, config, principal, picks: list):
+    """把**可独立执行的最小单元**切好、签成一张待办令牌；返回 `(token, units)`。
+
+    件数 ≠ 可独立执行的步数（见 `adminops.linked_units`）：`article_tags` 的「先建
+    再挂」里，`create_tag(X)` 与随后那条 `set_article_tags(… add X)` 是**一件事**
+    ——单独切走后半，工具只会回「站内没有这些标签：本次未改动」（20261010T011456
+    现场：主人点了卡上的「只办第 2 件」，一个注定失败的选项）。
+
+    所以单元清单必须**只算一次**：它随令牌一起签进去（`confirm.narrow` 按它裁），
+    又问句与按钮也按同一份数（`confirm_opts` 收的就是它的长度）。两处各算一次就等于
+    给"卡面有这一格、但点下去裁不出来"留了缝，正是这组改动要消掉的东西。
+    """
+    conv_id = (config or {}).get("configurable", {}).get("conversation_id")
+    units = A.linked_units(picks)
+    token = confirm.sign(principal.uid, conv_id, _plan_skill(state), picks, units)
+    return token, units
+
+
 def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                    config) -> dict | None:
     """本轮要不要弹"写操作确认框"？要就返回 `pending_confirm` 的 state 增量。
@@ -11145,8 +11163,8 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         logger.info("[execute] 写操作的状态已达成 → 不弹卡、零执行: %s", note)
         return {"kind": "noop", "noop_text": text, "noop_note": note, "messages": [],
                 "receipts": list(state.get("receipts") or [])}
-    conv_id = (config or {}).get("configurable", {}).get("conversation_id")
-    token = confirm.sign(principal.uid, conv_id, _plan_skill(state), picks)
+    # 切单元 + 签发是**一次调用**（`units` 同时供卡片按格数，见 `_sign_confirm_picks`）。
+    token, units = _sign_confirm_picks(state, config, principal, picks)
     if not token:
         # 密钥没读到 → 不弹窗（宁可走追问，也不发一个验不过的令牌）。这个兜底**必须
         # 留痕**：它一旦生效，**所有**写确认弹窗会静默消失、退回"判不成命令就追问"
@@ -11159,12 +11177,10 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         return None
     question = A.render_confirm_question(picks, tag_index, cat_index, board_index,
                                          note_index, users, todos, quota_requests)
-    # 按钮按**已签名的那一份 `picks`** 生成（20260929 批 F4）：这一批里 N ≥ 2 时给
-    # 「全部办」+ 逐条「只办第 i 件」+「取消」（`pick:<i>` 是 0 基下标，服务端
-    # `confirm.narrow` 按下标裁 —— 下标必须与刚签发的 `specs` 同一顺序，
-    # 所以这里传 `picks` 本身、不许另数一份；编号的字面在 `A.render_action_lines` 里
-    # 与卡面同源）。单件仍是旧的两枚，字面一个字节没动。
-    opts = A.confirm_opts(len(picks))
+    # 按钮按**单元**数生成（20260929 批 F4，20261010 改数单元）：≥ 2 时给「全部办」
+    # + 逐条「只办第 i 件」+「取消」（`pick:<i>` 0 基，服务端按同一份 `units` 裁）；
+    # 为 1 时仍是旧的两枚，字面一个字节没动。
+    opts = A.confirm_opts(len(units))
     expires_at = confirm.token_expiry(token)
     return {
         "kind": "confirm",

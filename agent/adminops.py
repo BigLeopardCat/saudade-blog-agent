@@ -2453,23 +2453,75 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
     return f"执行 {tool}"
 
 
-def _spec_count(specs) -> int:
-    """清单条数（读不出结构就当 0 件——调用方据此走单件那条既有分支）。"""
-    try:
-        return len(specs or [])
-    except TypeError:
-        return 0
+def linked_units(specs) -> list:
+    """一份清单切成**可独立执行的最小单元**：`[[0], [1, 2], [3]]` 这样的下标分组。
+
+    单元之间**没有依赖**；**单元内部要么一起办、要么不办**。卡面的一格、按钮的一枚
+    `pick:<i>`、令牌里的 `units` 三处共用这一份（编号只在本函数里生成一次）。
+
+    现在只有一类依赖，就是 `article_tags` 的「先建再挂」（20261009，见
+    `skills.instantiate_plan`）：主人要挂的名字站内还没有时，那一批是 `create_tag(X)`
+    紧跟 `set_article_tags(… add X)`——**后者只有在同一批里先执行前者才可能成功**
+    （工具按名字精确匹配，站内没有就拒绝、不自动新建）。批 F 的「只办第 N 件」
+    （20260929）按 **spec 逐条**编号，于是在这样一张卡上"一件事"被切成两个可挑的
+    格子（20261010T011456 现场：主人点「只办第 2 件」⇒ 服务端照下标裁成一条
+    `set_article_tags` ⇒ 工具只能回「站内没有这些标签：测试——本次未改动」）。
+    卡面把一个**注定失败**的格子摆成了选项，而判据那一刻就在手上：
+    `graph._drop_satisfied_tag_creates` 刚问过字典，名字站内没有才把 `create_tag`
+    留下 ⇒ 卡上那一行「新建」本身就是"单独挂挂不上"的凭据。
+
+    归组规则**只读结构、不问字典**：`set_article_tags` 的 `add`/`replace` 里每个名字，
+    往前找**最近的、还没被别的挂标签认领的**同名 `create_tag`，两者并成一个单元。
+    认不出的形态一律当独立单元——比"猜一个依赖"安全：多切一刀的代价是主人多点一次，
+    少切一刀的代价是卡上多一个点不动的格子。
+
+    顺序与 `specs` 同源（组内也按原序，execute 的先建后挂因此不被重排）。读不出结构
+    （None / 非列表）当 0 个单元——调用方据此走单件那条既有分支。
+    """
+    items = list(specs) if isinstance(specs, (list, tuple)) else []
+
+    def _tool(s) -> str:
+        return str(s.get("tool") or "") if isinstance(s, dict) else ""
+
+    def _args(s) -> dict:
+        a = s.get("args") if isinstance(s, dict) else None
+        return a if isinstance(a, dict) else {}
+
+    bound: dict = {}                    # create 的下标 → 它服务的那个 set 的下标
+    for j, spec in enumerate(items):
+        if _tool(spec) != "set_article_tags":
+            continue
+        a = _args(spec)
+        names = [str(x).strip() for x in
+                 (list(a.get("add") or []) + list(a.get("replace") or []))]
+        for nm in dict.fromkeys(x for x in names if x):     # 去重、保原序
+            for i in range(j - 1, -1, -1):
+                if i in bound or _tool(items[i]) != "create_tag":
+                    continue
+                if str(_args(items[i]).get("title") or "").strip() == nm:
+                    bound[i] = j
+                    break
+    units: list = []
+    seen: dict = {}
+    for i in range(len(items)):
+        key = bound.get(i, i)
+        if key not in seen:
+            seen[key] = len(units)
+            units.append([i])
+        else:
+            units[seen[key]].append(i)
+    return units
 
 
 def confirm_opts(count: int) -> list:
     """确认卡上的按钮（20260929 批 F4）。
 
-    **`count` 必须取自已签名的那份 `specs`**（`confirm.sign(...)` 的入参条数）：
-    按钮的 `value` 是 `pick:<i>`（0 基），服务端 `confirm.narrow` 就按这个下标去
-    裁签名过的清单——按钮那一侧若自己数一遍（例如拿 `picks` 之外的列表、或在过滤
-    前后各数一次），点第 2 件就会办成别的第 2 件。这里的字面与
-    `render_confirm_question` 里写的「只办第 N 件」是**同一套**，改一处必须改另一处
-    （两侧不一致时，问句指的那个按钮在卡上根本不存在）。
+    **`count` 必须是 `linked_units(已签名的那份 specs)` 的条数**（即**单元**数，
+    20261010 起；无依赖时它就等于 spec 条数）：按钮的 `value` 是 `pick:<i>`（0 基），
+    服务端 `confirm.narrow` 就按这个下标去裁签名过的 `units`——按钮那一侧若自己数
+    一遍（例如拿 `picks` 之外的列表、或数的是 spec 条数），点第 2 件就会办成别的
+    第 2 件。这里的字面与 `render_confirm_question` 里写的「只办第 N 件」是**同一套**，
+    改一处必须改另一处（两侧不一致时，问句指的那个按钮在卡上根本不存在）。
 
     **「其他（我来说）」（20261006）**：每张卡都多这一枚，位置恒在「取消」**前面**。
     点它**不结算、不发任何请求**——前端就地露出卡片里的输入框，主人打完字回车，
@@ -2504,14 +2556,18 @@ def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
     系统对同一件事的两种表述不一致时，点「确定」的人无从判断谁是真的）。
 
     **多件（20260929 批 F4）**：同一句话换成**编号列表**（`1. …；2. …`）——编号
-    是卡面上「只办第 i 件」那几枚按钮**唯一能指的东西**（按钮的 `pick:i` 取的是
-    已签名 `specs` 的那个下标），所以编号只在本函数里生成一次：按钮上的 N 与卡面
-    上的 N 必然指向同一件。若让按钮那一侧自己数一遍，主人点「只办 2」而系统执行
-    另一件这种事就只是时间问题。
+    是卡面上「只办第 i 件」那几枚按钮**唯一能指的东西**，所以编号只在本函数里生成
+    一次：按钮上的 N 与卡面上的 N 必然指向同一件。若让按钮那一侧自己数一遍，主人
+    点「只办 2」而系统执行另一件这种事就只是时间问题。
+
+    **编号数的是「单元」不是「spec」**（20261010，见 `linked_units`）：「先建再挂」那样
+    一组**有依赖**的 spec 共用一个编号（两条人话用「，并」连），因为单独切走里面任何
+    一步都可能注定失败。没有依赖时单元就是逐条 spec ⇒ 老卡面一个字节没变。
     """
-    items = [_confirm_one(s, index, cats, boards, notes, users, todos,
-                          quota_requests)
-             for s in (specs or [])]
+    specs = list(specs) if isinstance(specs, (list, tuple)) else []
+    items = ["，并".join(_confirm_one(specs[i], index, cats, boards, notes, users,
+                                      todos, quota_requests) for i in unit)
+             for unit in linked_units(specs)]
     if len(items) > 1:
         return "；".join(f"{i}. {t}" for i, t in enumerate(items, 1))
     return "；".join(items)
@@ -2529,10 +2585,12 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
     """
     acts = render_action_lines(specs, index, cats, boards, notes, users, todos,
                                quota_requests)
-    if _spec_count(specs) > 1:
+    if len(linked_units(specs)) > 1:
         # 多件（20260929 批 F4）：这一句话里必须把"能只办一件"讲出来——否则主人
         # 看到一串编号却只有一枚「确定」，他唯一能做的就是全签（盲签的反面不是
         # "问一句"，是"让他能只同意其中一件"）。按钮名与 `_confirm_opts` 同一套字面。
+        # 判据与编号同源：数的是**单元**（`linked_units`），不是 spec 条数——「先建再挂」
+        # 那一对只有一个单元，卡面因此退回单件的「确定」措辞，与 `confirm_opts` 一致。
         return (f"要办这几件事吗？\n\n{acts}\n\n"
                 f"点「全部办」我就都办；只想办其中一件，"
                 f"点「只办第 N 件」（N 就是上面的编号）。")
@@ -2550,7 +2608,7 @@ def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
                                quota_requests)
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
-    if _spec_count(specs) > 1:
+    if len(linked_units(specs)) > 1:
         return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
                 f"**{acts}**\n\n"
                 f"点「全部办」我就都办；只想办其中一件，点对应的"

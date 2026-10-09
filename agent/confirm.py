@@ -167,19 +167,23 @@ def has_refs(specs) -> bool:
 
 
 def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:
-    """把已验签的 payload 的 `specs` **收窄成其中一条**；返回 `(payload, "")` 或 `(None, 原因)`。
+    """把已验签的 `specs` **收窄成其中一个单元**；返回 `(payload, "")` 或 `(None, 原因)`。
 
     用途（20260929 批 F）：确认卡上列了 N 件时，主人可以点「全部办」，也可以只办其中
     一件——前端把那一件的**下标**带回来（形态 `pick:<i>`，0 基），这里据此把签名过的
     那一批裁成一条。**只做收窄，绝不做转发**：
 
       · 收窄是安全方向——放行范围只可能变小；`pick` 里出现任何解析不出的东西
-        （非 `pick:<数字>`、负数、越界、payload 里没有 specs）都是 `(None, 原因)`，
-        调用方据此**零执行**（fail-closed）。**绝不"读不懂就当全部办"**：那会把一次
-        针对单件的选择放大成整批执行，是这一层唯一能出的重伤。
-      · `specs` 里原有的顺序就是**签名的顺序**，也是卡片上编号的顺序（`render_action_lines`
-        按同一个列表渲染）——下标因此是两端同源的，不需要另带记号。
-      · 这个函数**不改 payload 的其他字段**（uid/conv/exp/jti/skill 原样）：它只是
+        （非 `pick:<数字>`、负数、越界、分组读不懂、payload 里没有 specs）都是
+        `(None, 原因)`，调用方据此**零执行**（fail-closed）。**绝不"读不懂就当全部办"**：
+        那会把一次针对单件的选择放大成整批执行，是这一层唯一能出的重伤。
+      · 下标指的是**单元**不是 spec（20261010）：`units` 由签发侧算好（`adminops.
+        linked_units`）随载荷签进令牌，因为"哪几条必须一起办"是**签发那一刻的结构
+        事实**——`article_tags` 的「先建再挂」里，`set_article_tags` 单独执行注定失败
+        （工具对站内没有的名字按名字精确匹配、拒绝、不自动新建）。分组读不懂一律
+        fail-closed：宁可零执行，也不猜一个更大的放行范围。
+      · 老令牌没有 `units` ⇒ 当作**逐条一单元**（与批 F 的行为逐字相同，老卡面不受影响）。
+      · 这个函数**不改 payload 的其他字段**（uid/conv/exp/jti/skill/units 原样）：它只是
         按主人的选择裁一下清单，不是重新签发。令牌仍然一次性（jti CAS 在 Rust 侧）。
     """
     raw = (pick or "").strip()
@@ -190,22 +194,54 @@ def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:
     specs = payload.get("specs")
     if not isinstance(specs, list) or not specs:
         return None, "令牌里没有可挑选的清单"
+    units = _units_of(payload, len(specs))
+    if units is None:
+        return None, "令牌里的分组读不懂"
     m = re.fullmatch(r"pick:(\d{1,3})", raw)
     if not m:
         return None, f"选择记号读不懂（{raw[:32]}）"
     idx = int(m.group(1))
-    if idx >= len(specs) or not isinstance(specs[idx], dict):
-        return None, f"选择越界（{idx} / 共 {len(specs)} 件）"
+    if idx >= len(units):
+        return None, f"选择越界（{idx} / 共 {len(units)} 件）"
+    picked = [specs[i] for i in units[idx]]
+    if not picked or not all(isinstance(s, dict) for s in picked):
+        return None, f"选择越界（{idx} / 共 {len(units)} 件）"
     out = dict(payload)
-    out["specs"] = [specs[idx]]
+    out["specs"] = picked
     return out, ""
 
 
-def sign(uid: int, conv_id, skill: str, specs: list) -> str:
+def _units_of(payload: dict, n: int) -> "list | None":
+    """载荷里的单元下标分组；**读不懂返回 None**（调用方零执行）。
+
+    缺失（老令牌 / 单件）⇒ 逐条一单元，与批 F 的行为逐字相同。给了就必须是一份
+    **恰好覆盖 0..n-1 一次**的下标分组——重复或漏项都算读不懂：那种令牌裁出来的
+    清单没人预期得到，而"没人预期的清单"正是这一层唯一能出的重伤。
+    """
+    units = payload.get("units")
+    if units is None:
+        return [[i] for i in range(n)]
+    if not isinstance(units, list) or not units:
+        return None
+    flat: list = []
+    for u in units:
+        if not isinstance(u, (list, tuple)) or not u:
+            return None
+        for k in u:
+            if not isinstance(k, int) or isinstance(k, bool) or k < 0 or k >= n:
+                return None
+            flat.append(k)
+    return units if sorted(flat) == list(range(n)) else None
+
+
+def sign(uid: int, conv_id, skill: str, specs: list, units: "list | None" = None) -> str:
     """签发待办令牌。密钥空缺 / 参数不全 → **空串**（调用方据此不弹窗）。
 
     `specs` = `[{"tool": 工具名, "args": {...}}]`，参数必须是**已实例化的具体值**
     （见 `has_refs`）。`skill` 是技能名，执行轮据此拼计划——**不靠模型回忆**。
+
+    `units` = `adminops.linked_units(specs)` 的结果：卡面编号与「只办第 N 件」的
+    按钮都按它数（见 `narrow`）。不传 ⇒ 载荷里不带这个键，读侧按逐条一单元处理。
     """
     secret = _secret()
     if not secret or not skill:
@@ -227,6 +263,8 @@ def sign(uid: int, conv_id, skill: str, specs: list) -> str:
         "skill": str(skill),
         "specs": specs or [],
     }
+    if units:
+        payload["units"] = [list(u) for u in units]
     try:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     except (TypeError, ValueError):
