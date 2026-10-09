@@ -5486,6 +5486,86 @@ def test_name_target_round():
               and G._name_write_verbs("今天天气怎么样") == [],
               str(G._name_write_verbs(_MSG_NOQ)))
 
+        # ④a3b 发布状态族的动作词（20261009 新增族）。现场（生产 trace
+        #      `20261009T132246_748`）：主人说「猫咪把test8转换为公开状态」——这是一句
+        #      命令，planner 却把这一轮排成**只读**（先读后台清单，那一行《TEST8》私密
+        #      noteId=13 就在眼前，之后又连搜三轮公开检索），最后在正文里问一句"要我现在
+        #      就办吗"：该弹卡的那一轮什么都没发生，主人得多说一句「要」。两条既有纠偏
+        #      通道都够不着它——零工具形态只认首轮（这一族现场发生在**读过一轮之后**），
+        #      剔空纠偏要 `dropped` 非空（这轮排的是读、没被剔空）⇒ 补的是这张表。
+        #      ⚠️ 只收动词形态，**不收**「公开/私密/草稿/置顶/发布」这些名词兼动词：
+        #      它们是读意图里的常客，进了表就会对着一次纯查询纠偏。
+        check("  词形族：发布状态族命中（转换为/转为/转成/设为/设成/设置成）",
+              all(G._name_write_verbs(_s) for _s in (
+                  "猫咪把test8转换为公开状态", "把文章 23 转换成草稿",
+                  "把 22 和 23 都设为私密", "这篇文章设成私密"))
+              and all(G._name_write_verbs(_s) == [] for _s in (
+                  "站内有置顶的文章吗？都有哪些？", "哪些是公开的？",
+                  "这篇文章的标签都有哪些？")),
+              str(G._name_write_verbs("猫咪把test8转换为公开状态")))
+        _READONLY_PLAN = {"tools": ['list_admin_notes({})'], "dropped": None}
+        check("  只排读工具的写形态请求 → 纠偏一次（这一族此前两条通道都不收）",
+              G._name_write_nudge(_READONLY_PLAN, "猫咪把test8转换为公开状态", 1, "admin")
+              is not None
+              and G._name_write_nudge(_READONLY_PLAN, "这篇文章为什么被设为私密了？",
+                                      1, "admin") is None,
+              "状态族的只读轮纠偏")
+        # 「先别急着动」这类**按住**的话（golden `admin_write_intent_named_target_only`
+        # 里那句真实原话）：它带着动作词，却明确不是在要你现在动手。没有这道闸，刚补的
+        # 状态族会把它纠偏成"主人在要求你改动站内数据"（对这句是**假话**），planner
+        # 顺着一排写规格 ⇒ 主人说了"先别动"却弹出确认卡。
+        check("  按住形态（「先别急着动」）不纠偏——说了别动就不该弹卡",
+              G._name_write_nudge({"tools": [], "dropped": None},
+                                  "文章 999999 那篇我想设成私密，先别急着动",
+                                  0, "admin") is None
+              and G._name_write_nudge({"tools": [], "dropped": None},
+                                      "把这个标签先别删掉", 0, "admin") is None,
+              "按住形态")
+
+        # ④a3c 挂标签族的动作词（20261009 新增族）。现场：主人原话
+        #      「把git，代码版本管理挂上去」（trace `20261008T075023`）、
+        #      「把 Git 和代码版本管理两个标签加到文章 16」（trace `20261008T080517`，
+        #      即 golden `admin_two_tags_case_variant_card` 的原话）——两句在旧表里
+        #      **一个字都不命中**（旧表只有「挂到/换到/放到」那种"到"字形态），
+        #      于是 planner 把这一轮排成只读（`list_tags`）时没人纠偏：20261009 实测
+        #      6 跑里 2 跑就这么直落 narrator，正文把标签列表念一遍、问"要我去办吗"。
+        #      判据仍是词形族，负例挑的是**真读意图**（「加了标签」不许进族——光杆
+        #      「加」刻意不收）。
+        check("  词形族：挂标签族命中（加到/加进/加上/挂上/打上/贴上）",
+              all(G._name_write_verbs(_s) for _s in (
+                  "把git，代码版本管理挂上去",
+                  "把 Git 和代码版本管理两个标签加到文章 16",
+                  "给这篇文章加上「随笔」标签", "把文章 13 打上音乐标签"))
+              and all(G._name_write_verbs(_s) == [] for _s in (
+                  "站内加了标签的文章有哪些？", "标签列表拉出来看看",
+                  "这篇文章的标签是谁给挂的？")),
+              str(G._name_write_verbs("把git，代码版本管理挂上去")))
+        check("  只排读工具的挂标签请求 → 纠偏一次（与状态族同一格）",
+              G._name_write_nudge({"tools": ['list_tags({})'], "dropped": None},
+                                  "把 Git 和代码版本管理两个标签加到文章 16",
+                                  1, "admin") is not None
+              and G._name_write_nudge({"tools": ['list_tags({})'], "dropped": None},
+                                      "站内加了标签的文章有哪些？", 1, "admin") is None,
+              "挂标签族的只读轮纠偏")
+        # 整轮走一遍（不只测纯函数）：只排读的那一版计划**真的**被纠回重决策，
+        # 第二次的提示里看得见那段话，落地的计划里**真的**有那一件写。
+        # 这条才是"20261009 那 2/6 跑（`list_tags` 读完就收尾）以后不会再发生"
+        # 的可红判据——纯函数绿只说明判据认得出那句话，说明不了它接进了 planner。
+        llm5 = _ScriptedLLM([
+            'SKILL=content_query\nPARAMS={"tools": ["list_tags"]}\nREPLY: 先看看站内有哪些标签',
+            'SKILL=article_tags\nPARAMS={"article_id": 16, "add": ["git", "代码版本管理"]}\n'
+            "REPLY: 如实回答"])
+        G.get_llm = lambda **kw: llm5
+        out5 = planner_node(
+            {"messages": [HumanMessage(
+                content="把 git 和代码版本管理两个标签加到文章 16")],
+             "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
+        _spec5 = " ".join(parse_plan(out5["plan"])["tools"])
+        check("  只排读的那一版计划被纠回重决策，落地的计划里有那一件写",
+              len(llm5.prompts) == 2 and "全是只读的" in llm5.prompts[1]
+              and "set_article_tags" in _spec5 and '"article_id": 16' in _spec5,
+              _spec5[:160])
+
         # ④a4 通知族的动作词（20260926 新增族）：这一族**不粘着目标**——「给他发个通知」
         #     是动词粘着**物件**（发+通知），目标名字另在句首，上表那些字面量一条都命不中。
         #     漏掉它 = 展开层把正文槽的占位符挡下之后，本轮零工具、**不弹卡**、直落 narrator

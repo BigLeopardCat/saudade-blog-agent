@@ -1438,6 +1438,18 @@ check("  而且 **spec 条数不变**（改坏的值会再展开一条：主人�
       _two_pl["tools"] == _two_tools and len(_two_pl["tools"]) == 2,
       f"{list(_two_pl['tools'])}")
 
+# `titles`（一名一 spec 的**多名字**槽，20261009 补进值地基）：它此前漏在
+# `_WRITE_VALUE_FIELDS` 外，而"一次填 N 个名字"恰恰是**最容易编名字**的那一格——
+# 20261009 全量探针（6 遍）里 5 遍给这一格填了站内词表里的**别的名字**
+# （`git` 那一条被填成 test8/test2/Git+SVN/架构+设计）。语义与单数的 `title` 完全
+# 一样（都是"要建的名字"，天然不在字典里、只可能出自主人原话），没有理由只收单数。
+_value_case("+ 多名字槽 titles 同族：编出来的名字照样零写（不是只收单数那一格）",
+            "tag_create", {"titles": ["Tokio", "Axum"]},
+            "我想在「编程」下面加两个二级标签", "REFUSE")
+_value_case("  反向：名字逐字在主人这句话里 ⇒ 一个字不改（正常形态不许误伤）",
+            "tag_create", {"titles": ["Tokio", "Axum"]},
+            "我想在「编程」下面加两个二级标签，名字叫「Tokio」和「Axum」", None)
+
 _seen_v: list = []
 _saved_v = g.record
 try:
@@ -1752,6 +1764,89 @@ with patch(_tag_index=lambda config: A.build_tag_index(
     r_bad = _popup_batch([SPEC_RUST, 'create_tag(not-json)'], _MSG_MIX)
     check("参数解析不了的 spec 不进卡（picks 空 ⇒ 照旧不弹，走既有的错误帧链路）",
           r_bad is None, str(r_bad)[:80])
+
+
+# ══════════════════════════════════════════════════════════════════
+print("\n㉔b 不许弹半张卡（20261009）：目标被判据拦下的那件与别人同批时，整批退回不弹卡")
+
+# 病（真链路实测，同一用例 13 次采样里 4 次踩到，而判据**全绿**）：主人说「把这两个标签
+# 加到文章〈16〉」，planner 的 id 槽却填了别的号 ⇒ `set_article_tags` 被目标那两道之一
+# `continue` 掉，而**同批的 `create_tag` 照样进 picks** ⇒ 卡照弹、卡上只剩"建标签"。
+# 主人点「全部办」，标签真建出来了——而他真正要的那一件（挂上去）**没有任何一条通道**：
+#   · 不在令牌里；
+#   · 也不在执行的路上——`execute_node` 一见 `pending_confirm` 就一个工具都不执行，
+#     `target_mismatch` / `unknown_target` 那两帧**这一轮压根不会发** ⇒ planner 永远
+#     收不到"你这个号不对"（那条链路在等着，却等不到）。
+# 这就是「干完见标签、不做挂标签」的实现体。处方：这一批里只要有写被目标判据拦下，
+# **整批退回不弹卡**，让帧链照常把 planner 拉回来改号，下一轮再弹一张完整的卡。
+# 方向与 ㉔ 一致：宁可多问一轮，也不静默丢一次主人点名的写。
+
+_MSG_TAGS = "把 git 和代码版本管理两个标签加到文章 16"
+_SP_C1 = 'create_tag({"title": "git"})'
+_SP_C2 = 'create_tag({"title": "代码版本管理"})'
+_SP_ATTACH_OK = 'set_article_tags({"article_id": 16, "add": ["git", "代码版本管理"]})'
+
+
+def _popup_tags(specs, msg=_MSG_TAGS, msgs=None):
+    """跑一次"建标签 + 挂标签"批的 `_confirm_popup`（假字典、假文章清单，零网络）。"""
+    specs = list(specs)
+    state = {**g.plan_state({"skill": "article_tags", "params": {}, "tools": specs,
+                             "note": "", "reply": "直接回答"})}
+    # `messages` 必须给：文章写的那两道判据会读它（`_target_evidence` / `_page_ctx`）。
+    state["messages"] = list(msgs or [])
+    return g._confirm_popup(
+        state, specs, Principal(uid=7, role=ROLE_ADMIN), msg,
+        {"configurable": {"user_id": 7, "conversation_id": 42}})
+
+
+with patch(_tag_index=lambda config: A.build_tag_index([], []),
+           _note_index=lambda config: None):
+    # ── 正例：号就是主人说的那个 → 卡照弹，且卡上**三件都在**（含挂标签那一步） ──
+    _ok = _popup_tags([_SP_C1, _SP_C2, _SP_ATTACH_OK])
+    _ok_specs = _token_specs(_ok)
+    check("号对得上 → 弹卡，且令牌签的就是三件（挂标签那一步在卡上）",
+          [_spec_title(s) for s in _ok_specs[:2]] == ["git", "代码版本管理"]
+          and any(s.get("tool") == "set_article_tags" for s in _ok_specs),
+          str(_ok_specs)[:200])
+
+    # ── 反例一：号没出处（模型凭印象另填一个）→ 整批不弹（修前：卡上只剩两个 create_tag） ──
+    _bad_ung = _popup_tags([_SP_C1, _SP_C2,
+                            'set_article_tags({"article_id": 99, '
+                            '"add": ["git", "代码版本管理"]})'])
+    check("号没出处 + 同批还有别的写 → **一张卡都不弹**（否则那一步从此没有任何通道）",
+          _bad_ung is None, str(_bad_ung)[:120])
+
+    # ── 反例二：号有出处但不是主人点的那一篇（mismatch）→ 同样整批不弹 ──
+    # 出处来自**本轮读过的帧**（后台清单）——这正是真链路里 planner 读完清单再填错号的形状。
+    _frames = [ToolMessage(content="- noteId=99 [公开]《别的一篇》标签：（无标签）",
+                           name="list_admin_notes", tool_call_id="t1")]
+    _bad_mm = _popup_tags([_SP_C1, _SP_C2,
+                           'set_article_tags({"article_id": 99, '
+                           '"add": ["git", "代码版本管理"]})'], msgs=_frames)
+    check("号有据、但不是主人点名的那一篇 → 也整批不弹（问错一篇＝把误靶洗成授权）",
+          _bad_mm is None, str(_bad_mm)[:120])
+
+    # ── 这一笔要看得见：卡没了是**行为**变化，事后只能靠 trace 分辨（同 ㉔ 的取向） ──
+    _seen2: list = []
+    _saved_rec2 = g.record
+    try:
+        g.record = lambda *a, **k: _seen2.append((a, k))
+        _popup_tags([_SP_C1, _SP_C2,
+                     'set_article_tags({"article_id": 99, '
+                     '"add": ["git", "代码版本管理"]})'])
+        _popup_tags([_SP_C1, _SP_C2, _SP_ATTACH_OK])       # 正常弹卡：不该记这一笔
+    finally:
+        g.record = _saved_rec2
+    _refused = [k for a, k in _seen2 if a[:2] == ("confirm", "partial_batch_refused")]
+    check("  整批退回记一笔 trace（`partial_batch_refused`），正常弹卡那一次**不记**",
+          len(_refused) == 1 and _refused[0].get("ids") == ["99"],
+          str([(a[:2], k) for a, k in _seen2])[:160])
+
+    # ── 反向对照：整批**只有**被拦下的那一件（没有别的件要问）→ 旧路径一字未动 ──
+    _only = _popup_tags(['set_article_tags({"article_id": 99, '
+                         '"add": ["git"]})'])
+    check("反向对照：整批只有被拦的那一件 → 照旧不弹（picks 空，与新分支前行为一致）",
+          _only is None, str(_only)[:120])
 
 
 # ══════════════════════════════════════════════════════════════════

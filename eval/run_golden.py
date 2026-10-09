@@ -2131,9 +2131,10 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
     # `__CONFIRM__` 帧里的令牌解出（`confirm.inspect`：只解 base64、不验签；评测读它
     # 不构成授权判据，见 agent/confirm.py 里那条警告）。顺带锁一条安全不变量：**令牌
     # 原文不得出现在给用户看的正文里**（它是 10 分钟有效的写授权凭据）。
-    # 载荷四键：`skill`（精确相等）/ `specs`（参数条数）/ `skill_any`（族——"是哪几件
+    # 载荷五键：`skill`（精确相等）/ `specs`（参数条数）/ `skill_any`（族——"是哪几件
     # 事之一"这种断言，理由见下面那段注）/ `args_from_input`（20261006：参数正文必须
-    # 是**主人原话或本轮台账那一行**的子串——两本账的理由见下面那一格的头注）。
+    # 是**主人原话或本轮台账那一行**的子串——两本账的理由见下面那一格的头注）/
+    # `specs_include`（20261009：卡上**必须真带着**这一件，见下面那一格的头注）。
     _cp = gold.get("require_confirm_payload")
     if _cp:
         _pays = [p for p in (result.get("confirm_payloads") or []) if p]
@@ -2155,6 +2156,28 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
                              f"载荷 {_pay.get('skill')!r}")
             if "specs" in _cp and len(_specs) != _cp["specs"]:
                 fails.append(f"卡片参数条数不符：期望 {_cp['specs']}，载荷 {len(_specs)}")
+            # 20261009 第五键 `specs_include`：**卡上必须真带着那一件**。`skill` 与
+            # `specs`（条数）都看不见"卡上少了哪一步"——真链路实测（同一用例 13 次采样
+            # 里 4 次）：主人说"把这两个标签加到文章〈id〉"、planner 的 id 槽填了别的号 ⇒
+            # `set_article_tags` 被目标判据摘掉，而同批的 `create_tag` 照样上卡 ⇒ 卡照弹、
+            # 卡上只剩"建标签"，**判据全绿**（两个标签名都在卡上、条数也不看总数）。
+            # 主人点了「全部办」，标签真建出来了，而他真正要的那一件从头到尾没有通道
+            # （不在令牌里，执行链也被这张卡掐死）——正是"干完见标签、不做挂标签"。
+            # 写法是逐项**子集匹配**：`tool` 相等 + `args` 里点名的键相等，没点名的键
+            # 不管（参数是 planner 采样填的，锁死全部键＝把采样当判据）。
+            for _want in (_cp.get("specs_include") or []):
+                _wt = str((_want or {}).get("tool") or "")
+                _wa = (_want or {}).get("args") or {}
+                _hit = [s for s in _specs
+                        if str(s.get("tool") or "") == _wt
+                        and all(str((s.get("args") or {}).get(k)) == str(v)
+                                for k, v in _wa.items())]
+                if not _hit:
+                    _got = [{k: s.get(k) for k in ("tool", "args")} for s in _specs]
+                    fails.append(
+                        "卡片上没有这一件："
+                        f"{json.dumps(_want, ensure_ascii=False)}（载荷里是 "
+                        f"{json.dumps(_got, ensure_ascii=False)}）")
             # 20261006：**参数正文的出处**。这条判据是 20261006 待办事故的直接产物：
             # 那一天 planner 把「加一条今天的待办，1.…」的正文填成了**上一轮上下文里**
             # 的另一件事（trace `20261006T093633`），卡片照样弹、格式完全合法、`skill`
