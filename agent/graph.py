@@ -5972,157 +5972,19 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
       - 动作技能一次决策后（工具帧已可见）planner 必须收尾——绝不重复执行；
       - 循环上限 MAX_PLAN_ROUNDS，超限强制收尾（_wrap_up_plan）。
     """
-    if _stopped(config):
-        logger.info("[planner] cancelled (client disconnected)")
-        raise AgentCancelled()
-
-    # 确认轮（20260921）：用户在确认框上点了确定——**零 LLM 直接照令牌拼计划**。
-    # 这是"隐藏确认请求"这条通道的全部意义：不花一次 planner 决策，也不给模型
-    # "重新理解一遍用户想要什么"的机会（它只该执行签名里那件事，一个字都不许改）。
-    #
-    # **只在首轮（rounds==0）走这条**：确认轮的执行若受阻，控制权会回到这里
-    # （route_after_execute 只在"无受阻"时直去 model）。那时若再照令牌拼一次
-    # 同一份清单，就是把同一件写操作**做第二遍**——所以第二轮一律转确定性收尾，
-    # 由 narrator 拿着真实回执如实说结果（这与"宁可少做也不做错"的写侧纪律一致：
-    # 令牌只授权一次执行，不是一张可反复使用的通行证）。
-    #
-    # 20260927 加第三条入口：**令牌兑现成功、但主人那句话里还有没做完的动作**时，
-    # `route_after_execute` 把控制权交回这里（见 `_pending_intents` 头注的事故）。
-    # 那一轮走**正常的 LLM 决策轮**——令牌不会重发（下面 `resumed` 分支拦住），
-    # 同意闸也不会因为 `grant` 在场而放行任何新写（`_confirm_popup` 见 grant 直接
-    # 不弹卡、`authz` 的判据不看它），所以"令牌只授权一次"这条语义一字未动。
-    grant = state.get("confirm_grant")
-    rounds = state.get("plan_rounds", 0)
-    # 受阻回环（blocked）**不算** resumed：那一支照旧确定性收尾（令牌那件事没做成，
-    # 更要紧的是别让模型在这一轮重新规划同一件写）。
-    resumed = bool(grant) and rounds > 0 and not state.get("blocked")
-    if grant and not resumed:
-        if rounds == 0:
-            plan_obj = _confirm_grant_plan(grant)
-            record("planner", "confirm_grant", skill=plan_obj["skill"], tools=plan_obj["tools"])
-        else:
-            plan_obj = _wrap_up_plan(_has_frames(state["messages"]))
-            record("planner", "confirm_wrap", rounds=rounds,
-                   reason="确认轮执行受阻，不重发清单")
-        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
-
-    user_msg = _last_user_msg(state["messages"])
-    # 意图清单的**消息来源**（20260927）：确认兑现轮读主人原话，其余轮同 `user_msg`。
-    # 下面三处共用它——提示词的 {intent_hints}、动作去重收尾的"还有未完成项"、
-    # 以及 resumed 轮的纠偏提示（{correction}）。
-    intent_msg = _intent_src(state)
-    # 角色要在**取 page_ctx 之前**定：能力清单按角色渲染（20260921——清单里不含
-    # 管理能力是 narrator 讲"我不能改后台"的"依据"，见 context.site_guide）。
-    # principal 也在这里一并取：下面写门序列里的政策预检要读它的 uid 与角色
-    # （`_freeze_policy_refusal`）。同一个 config 读两次是同一个对象，取一次更省。
-    principal = _principal_of(config)
-    role = principal.known_role
-    # 杂鱼（20261002）：**零工具身份**的结构保证就在这一支——planner 一次都不跑，
-    # 因此连下面那几条确定性快道（导航/显示/读文章/特效切换）也一并绕过（它们照样
-    # 会产出 TOOLS 行），`execute` 节点在本请求里**一次都不会被进入**。
-    #
-    # 为什么短路而不只靠"技能不可见"：`visible_skills` 管的是**模型看到的菜单**，
-    # 而 planner 是 LLM——它点名一个已不可见但仍在 `SKILL_MAP` 里的技能时，
-    # `instantiate_plan` 不做角色校验；即便走到 execute，authz 在 shadow 档下
-    # （`not allowed and not enforcing`，见 execute_node）**只记账不拦**，工具真的会跑。
-    # 只有"决策根本不发生"才是确定的。顺带的红利：每轮省下 ~22.5k 输入 tokens。
-    #
-    # 位置在 MAX_PLAN_ROUNDS 与所有快道**之前**；放在确认轮分支之后是安全的——
-    # 杂鱼产生不了一张确认卡，`confirm_grant` 对它恒不存在。
-    if role in CHAT_ONLY_ROLES:
-        plan_obj = _wrap_up_plan(False, reason="本轮为杂鱼身份（零工具）",
-                                 note=_ZAKO_PLAN_NOTE)
-        record("planner", "zako_shortcut", round=rounds)
-        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
-
-    page_ctx = _page_ctx(state["messages"], role)
-    has_frames = _has_frames(state["messages"])
-    doc_anchors = _doc_anchors(state["messages"])
-    # 待办台账帧（批 H · S1）：把"等着主人点头的那几件"按 id 摆上桌——**事实归系统、
-    # 决策归模型**。触发器在 `_ledger_families_due` 里（族名命中 / 授权式全选式 /
-    # 上一轮真读过那份队列），都不命中就一次都不读。每一轮都重读（而不是只在首轮算
-    # 一次）：它同时是写保护的现场依据，几秒钟的偏差比"拿到一份过期台账"便宜。
-    ledger_frame, ledger_meta = _pending_ledger_frame(
-        user_msg, _last_assistant_utterance(state["messages"]),
-        principal, config)
-    if rounds == 0 and ledger_frame:
-        # **可核验性**：trace 不保存 planner 的输入消息（只记首轮的 `planner.context`，
-        # 而那一格各字段都是截断的），没有这条事件，"台账到底进没进帧"在生产上没法
-        # 复核——20260929 那两轮正是靠"facts 出现过没有"这种间接证据反推的。
-        record("planner", "ledger_frame", **ledger_meta)
-    if rounds == 0:
-        # 注入上下文留痕（20260919 D）：本轮 planner 实际看到的 page_ctx /
-        # 节选 / 锚点清单落 trace——此前 trace 里没有这些，复盘"agent 到底看到
-        # 了什么"只能靠日志反推（20260919 17:18 那轮就是靠 execution_log +
-        # 逐条回复反推出来的）。只记首轮（三者不随轮次变），控体积。
-        # 节选截断**保尾**（20261008）：记忆型指代会把窗口放宽到 10 轮，超 900 字时
-        # 从头切会把最近几轮（也就是指代真正指向的那几轮）全切掉——诊断恰好瞎在
-        # 要看的那一格上。
-        _rt = _recent_tail(state["messages"])
-        if len(_rt) > 900:
-            _rt = _rt[:200] + "…（节选过长，中段略）…" + _rt[-700:]
-        record("planner", "context", page_ctx=page_ctx[:1500],
-               recent_tail=_rt,
-               short_reply=_short_reply_hint(state["messages"])[:400],
-               doc_anchors=doc_anchors[:600])
-
-    # 轮次上限 → 强制收尾（不再规划新调用；帧内容足够就让 narrator 如实作答）
-    if rounds >= MAX_PLAN_ROUNDS:
-        plan_obj = _wrap_up_plan(has_frames)
-        logger.info("[planner] 规划轮次上限(%d)，强制收尾", MAX_PLAN_ROUNDS)
-        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
-
-    # 确定性快道只在首轮（rounds==0 且本轮尚无任何工具帧）判定——execute 完成
-    # 后控制权回到 planner 时若再命中快道，会重复规划同一动作 → 死循环
-    # （设计陷阱 20260903：快道对象是"用户首条消息"，不是"每轮重新评估"）。
-    if rounds == 0 and not has_frames:
-        # 导航确定性快道（零 LLM）：命中即返回，不调用 planner LLM（耗时大头）。
-        nav = _nav_fast_path(user_msg)
-        if nav is not None:
-            logger.info("[planner] 导航快道命中（零 LLM）: %s", nav["tools"])
-            record("planner", "fastpath", kind="nav", tools=nav["tools"], round=rounds)
-            return {**plan_state(nav), "plan_rounds": rounds + 1, "done": False}
-
-        # 指代型导航快道（零 LLM，20261007）：上一轮的导航快道只管"目标写在本句里"
-        # 那一种；"带我过去"这一种的目标住在**上一轮那句话**里（泠月自己刚给出的那条
-        # 站内链接），两条快道的入口条件互斥、顺序无关。唯一性（上一轮恰好一条站内
-        # 链接）是守卫，见 `_referent_nav_fast_path` 的长注。
-        referent = _referent_nav_fast_path(user_msg,
-                                           _last_assistant_utterance(state["messages"]))
-        if referent is not None:
-            record("planner", "fastpath", kind="referent_nav",
-                   tools=referent["tools"], round=rounds)
-            return {**plan_state(referent), "plan_rounds": rounds + 1, "done": False}
-
-        # 显示意图确定性快道（零 LLM）：屏幕类名词+写/显示动词强模式 →
-        # device_display 计划（内容由 execute 创作，PARAMS 不填 text）。
-        display = _display_fast_path(user_msg)
-        if display is not None:
-            record("planner", "fastpath", kind="display", round=rounds)
-            return {**plan_state(display), "plan_rounds": rounds + 1, "done": False}
-
-        # 授权式审查快道（20260923 P2）**已整族删除**（20260929 批 H）：它替主人
-        # 从上一轮那句提议里读结论、再照着拼一张写计划——正是"系统替模型决策"的
-        # 典型。那件事现在由模型做：台账按 id 摆进帧（`{pending_ledger}`），办哪几件、
-        # 办成哪一种由它定，写之前由 `_ledger_target_refusal` 拿现场台账校验编号，
-        # 一律弹卡由主人签字。
-
-        # 当前文章读取确定性快道（零 LLM，20260901 系统性修复）：用户当前页面是
-        # 文章详情页且消息引用"这篇/我正在读"等 → read_article 计划，TOOLS 行
-        # 强制 get_article_detail(id)。ID 是系统从 current_url 解析的数据，执行被
-        # 计划模板强制、被 execute 确定性执行——零工具声称"读过了"结构上不可能。
-        article = _article_fast_path(user_msg, page_ctx)
-        if article is not None:
-            record("planner", "fastpath", kind="article_read", tools=article["tools"], round=rounds)
-            return {**plan_state(article), "plan_rounds": rounds + 1, "done": False}
-
-        # 特效切换确定性快道（零 LLM，20260904）：把 X 换成/改成 Y → 关旧开新
-        # 双 spec 同轮（planner LLM 反复丢目标效果半边，见 _effect_switch_fast_path）。
-        eff_cur = re.search(r"current_effects=([^;\]]+)", page_ctx)
-        switch = _effect_switch_fast_path(user_msg, eff_cur.group(1) if eff_cur else "")
-        if switch is not None:
-            record("planner", "fastpath", kind="effect_switch", tools=switch["tools"], round=rounds)
-            return {**plan_state(switch), "plan_rounds": rounds + 1, "done": False}
+    pre = _planner_preflight(state, config)
+    if pre.early is not None:
+        return pre.early
+    rounds = pre.rounds
+    resumed = pre.resumed
+    user_msg = pre.user_msg
+    intent_msg = pre.intent_msg
+    principal = pre.principal
+    role = pre.role
+    page_ctx = pre.page_ctx
+    has_frames = pre.has_frames
+    doc_anchors = pre.doc_anchors
+    ledger_frame = pre.ledger_frame
 
     # LLM 决策轮。低温度（分类不需要创造力）、小 max_tokens、短超时。
     # **接口层只剩一条路**（20261004）：决定由**工具调用**表达（`agent/native_plan.py`）。
@@ -7092,6 +6954,191 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
     if upd is not None:
         return upd
     return _finalize_wrap(plan_obj, rounds, has_frames, native_note)
+
+
+class _Preflight(NamedTuple):
+    """`_planner_preflight` 的产物：`early` 非空 = 决策到此为止（直接返回它）；
+    否则用其余各格往下走（都是只读上下文，装配段据此建 `_DecideCtx`）。"""
+    early: "dict | None" = None
+    rounds: int = 0
+    resumed: bool = False
+    user_msg: str = ""
+    intent_msg: str = ""
+    principal: object = None
+    role: str = ""
+    page_ctx: str = ""
+    has_frames: bool = False
+    doc_anchors: tuple = ()
+    ledger_frame: str = ""
+
+
+def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) -> "_Preflight":
+    """决策的**前置闸**（20261009 从 `_planner_decide` 抽出，B 段）。
+
+    确认轮照令牌拼计划 / 杂鱼身份零工具短路 / 上下文装配（角色、page_ctx、
+    帧、锚点、待办台账）/ 轮次上限强制收尾 / 五条确定性快道——全部是**零 LLM**
+    的确定性判定。任一条命中即 `_Preflight(early=<该轮的完整返回>)`，调用方
+    `if pre.early is not None: return pre.early`；否则用其余各格往下走。
+
+    ⚠️ `resumed` 必须带出去：装配段（`_planner_setup`）读它决定要不要补
+    `correction`（「令牌只授权一次」那条语义靠它守住）。
+    """
+    if _stopped(config):
+        logger.info("[planner] cancelled (client disconnected)")
+        raise AgentCancelled()
+
+    # 确认轮（20260921）：用户在确认框上点了确定——**零 LLM 直接照令牌拼计划**。
+    # 这是"隐藏确认请求"这条通道的全部意义：不花一次 planner 决策，也不给模型
+    # "重新理解一遍用户想要什么"的机会（它只该执行签名里那件事，一个字都不许改）。
+    #
+    # **只在首轮（rounds==0）走这条**：确认轮的执行若受阻，控制权会回到这里
+    # （route_after_execute 只在"无受阻"时直去 model）。那时若再照令牌拼一次
+    # 同一份清单，就是把同一件写操作**做第二遍**——所以第二轮一律转确定性收尾，
+    # 由 narrator 拿着真实回执如实说结果（这与"宁可少做也不做错"的写侧纪律一致：
+    # 令牌只授权一次执行，不是一张可反复使用的通行证）。
+    #
+    # 20260927 加第三条入口：**令牌兑现成功、但主人那句话里还有没做完的动作**时，
+    # `route_after_execute` 把控制权交回这里（见 `_pending_intents` 头注的事故）。
+    # 那一轮走**正常的 LLM 决策轮**——令牌不会重发（下面 `resumed` 分支拦住），
+    # 同意闸也不会因为 `grant` 在场而放行任何新写（`_confirm_popup` 见 grant 直接
+    # 不弹卡、`authz` 的判据不看它），所以"令牌只授权一次"这条语义一字未动。
+    grant = state.get("confirm_grant")
+    rounds = state.get("plan_rounds", 0)
+    # 受阻回环（blocked）**不算** resumed：那一支照旧确定性收尾（令牌那件事没做成，
+    # 更要紧的是别让模型在这一轮重新规划同一件写）。
+    resumed = bool(grant) and rounds > 0 and not state.get("blocked")
+    if grant and not resumed:
+        if rounds == 0:
+            plan_obj = _confirm_grant_plan(grant)
+            record("planner", "confirm_grant", skill=plan_obj["skill"], tools=plan_obj["tools"])
+        else:
+            plan_obj = _wrap_up_plan(_has_frames(state["messages"]))
+            record("planner", "confirm_wrap", rounds=rounds,
+                   reason="确认轮执行受阻，不重发清单")
+        return _Preflight(early=_plan_update(plan_obj, rounds))
+
+    user_msg = _last_user_msg(state["messages"])
+    # 意图清单的**消息来源**（20260927）：确认兑现轮读主人原话，其余轮同 `user_msg`。
+    # 下面三处共用它——提示词的 {intent_hints}、动作去重收尾的"还有未完成项"、
+    # 以及 resumed 轮的纠偏提示（{correction}）。
+    intent_msg = _intent_src(state)
+    # 角色要在**取 page_ctx 之前**定：能力清单按角色渲染（20260921——清单里不含
+    # 管理能力是 narrator 讲"我不能改后台"的"依据"，见 context.site_guide）。
+    # principal 也在这里一并取：下面写门序列里的政策预检要读它的 uid 与角色
+    # （`_freeze_policy_refusal`）。同一个 config 读两次是同一个对象，取一次更省。
+    principal = _principal_of(config)
+    role = principal.known_role
+    # 杂鱼（20261002）：**零工具身份**的结构保证就在这一支——planner 一次都不跑，
+    # 因此连下面那几条确定性快道（导航/显示/读文章/特效切换）也一并绕过（它们照样
+    # 会产出 TOOLS 行），`execute` 节点在本请求里**一次都不会被进入**。
+    #
+    # 为什么短路而不只靠"技能不可见"：`visible_skills` 管的是**模型看到的菜单**，
+    # 而 planner 是 LLM——它点名一个已不可见但仍在 `SKILL_MAP` 里的技能时，
+    # `instantiate_plan` 不做角色校验；即便走到 execute，authz 在 shadow 档下
+    # （`not allowed and not enforcing`，见 execute_node）**只记账不拦**，工具真的会跑。
+    # 只有"决策根本不发生"才是确定的。顺带的红利：每轮省下 ~22.5k 输入 tokens。
+    #
+    # 位置在 MAX_PLAN_ROUNDS 与所有快道**之前**；放在确认轮分支之后是安全的——
+    # 杂鱼产生不了一张确认卡，`confirm_grant` 对它恒不存在。
+    if role in CHAT_ONLY_ROLES:
+        plan_obj = _wrap_up_plan(False, reason="本轮为杂鱼身份（零工具）",
+                                 note=_ZAKO_PLAN_NOTE)
+        record("planner", "zako_shortcut", round=rounds)
+        return _Preflight(early=_plan_update(plan_obj, rounds))
+
+    page_ctx = _page_ctx(state["messages"], role)
+    has_frames = _has_frames(state["messages"])
+    doc_anchors = _doc_anchors(state["messages"])
+    # 待办台账帧（批 H · S1）：把"等着主人点头的那几件"按 id 摆上桌——**事实归系统、
+    # 决策归模型**。触发器在 `_ledger_families_due` 里（族名命中 / 授权式全选式 /
+    # 上一轮真读过那份队列），都不命中就一次都不读。每一轮都重读（而不是只在首轮算
+    # 一次）：它同时是写保护的现场依据，几秒钟的偏差比"拿到一份过期台账"便宜。
+    ledger_frame, ledger_meta = _pending_ledger_frame(
+        user_msg, _last_assistant_utterance(state["messages"]),
+        principal, config)
+    if rounds == 0 and ledger_frame:
+        # **可核验性**：trace 不保存 planner 的输入消息（只记首轮的 `planner.context`，
+        # 而那一格各字段都是截断的），没有这条事件，"台账到底进没进帧"在生产上没法
+        # 复核——20260929 那两轮正是靠"facts 出现过没有"这种间接证据反推的。
+        record("planner", "ledger_frame", **ledger_meta)
+    if rounds == 0:
+        # 注入上下文留痕（20260919 D）：本轮 planner 实际看到的 page_ctx /
+        # 节选 / 锚点清单落 trace——此前 trace 里没有这些，复盘"agent 到底看到
+        # 了什么"只能靠日志反推（20260919 17:18 那轮就是靠 execution_log +
+        # 逐条回复反推出来的）。只记首轮（三者不随轮次变），控体积。
+        # 节选截断**保尾**（20261008）：记忆型指代会把窗口放宽到 10 轮，超 900 字时
+        # 从头切会把最近几轮（也就是指代真正指向的那几轮）全切掉——诊断恰好瞎在
+        # 要看的那一格上。
+        _rt = _recent_tail(state["messages"])
+        if len(_rt) > 900:
+            _rt = _rt[:200] + "…（节选过长，中段略）…" + _rt[-700:]
+        record("planner", "context", page_ctx=page_ctx[:1500],
+               recent_tail=_rt,
+               short_reply=_short_reply_hint(state["messages"])[:400],
+               doc_anchors=doc_anchors[:600])
+
+    # 轮次上限 → 强制收尾（不再规划新调用；帧内容足够就让 narrator 如实作答）
+    if rounds >= MAX_PLAN_ROUNDS:
+        plan_obj = _wrap_up_plan(has_frames)
+        logger.info("[planner] 规划轮次上限(%d)，强制收尾", MAX_PLAN_ROUNDS)
+        return _Preflight(early=_plan_update(plan_obj, rounds))
+
+    # 确定性快道只在首轮（rounds==0 且本轮尚无任何工具帧）判定——execute 完成
+    # 后控制权回到 planner 时若再命中快道，会重复规划同一动作 → 死循环
+    # （设计陷阱 20260903：快道对象是"用户首条消息"，不是"每轮重新评估"）。
+    if rounds == 0 and not has_frames:
+        # 导航确定性快道（零 LLM）：命中即返回，不调用 planner LLM（耗时大头）。
+        nav = _nav_fast_path(user_msg)
+        if nav is not None:
+            logger.info("[planner] 导航快道命中（零 LLM）: %s", nav["tools"])
+            record("planner", "fastpath", kind="nav", tools=nav["tools"], round=rounds)
+            return _Preflight(early=_plan_update(nav, rounds))
+
+        # 指代型导航快道（零 LLM，20261007）：上一轮的导航快道只管"目标写在本句里"
+        # 那一种；"带我过去"这一种的目标住在**上一轮那句话**里（泠月自己刚给出的那条
+        # 站内链接），两条快道的入口条件互斥、顺序无关。唯一性（上一轮恰好一条站内
+        # 链接）是守卫，见 `_referent_nav_fast_path` 的长注。
+        referent = _referent_nav_fast_path(user_msg,
+                                           _last_assistant_utterance(state["messages"]))
+        if referent is not None:
+            record("planner", "fastpath", kind="referent_nav",
+                   tools=referent["tools"], round=rounds)
+            return _Preflight(early=_plan_update(referent, rounds))
+
+        # 显示意图确定性快道（零 LLM）：屏幕类名词+写/显示动词强模式 →
+        # device_display 计划（内容由 execute 创作，PARAMS 不填 text）。
+        display = _display_fast_path(user_msg)
+        if display is not None:
+            record("planner", "fastpath", kind="display", round=rounds)
+            return _Preflight(early=_plan_update(display, rounds))
+
+        # 授权式审查快道（20260923 P2）**已整族删除**（20260929 批 H）：它替主人
+        # 从上一轮那句提议里读结论、再照着拼一张写计划——正是"系统替模型决策"的
+        # 典型。那件事现在由模型做：台账按 id 摆进帧（`{pending_ledger}`），办哪几件、
+        # 办成哪一种由它定，写之前由 `_ledger_target_refusal` 拿现场台账校验编号，
+        # 一律弹卡由主人签字。
+
+        # 当前文章读取确定性快道（零 LLM，20260901 系统性修复）：用户当前页面是
+        # 文章详情页且消息引用"这篇/我正在读"等 → read_article 计划，TOOLS 行
+        # 强制 get_article_detail(id)。ID 是系统从 current_url 解析的数据，执行被
+        # 计划模板强制、被 execute 确定性执行——零工具声称"读过了"结构上不可能。
+        article = _article_fast_path(user_msg, page_ctx)
+        if article is not None:
+            record("planner", "fastpath", kind="article_read", tools=article["tools"], round=rounds)
+            return _Preflight(early=_plan_update(article, rounds))
+
+        # 特效切换确定性快道（零 LLM，20260904）：把 X 换成/改成 Y → 关旧开新
+        # 双 spec 同轮（planner LLM 反复丢目标效果半边，见 _effect_switch_fast_path）。
+        eff_cur = re.search(r"current_effects=([^;\]]+)", page_ctx)
+        switch = _effect_switch_fast_path(user_msg, eff_cur.group(1) if eff_cur else "")
+        if switch is not None:
+            record("planner", "fastpath", kind="effect_switch", tools=switch["tools"], round=rounds)
+            return _Preflight(early=_plan_update(switch, rounds))
+    return _Preflight(
+        rounds=rounds, resumed=resumed, user_msg=user_msg, intent_msg=intent_msg,
+        principal=principal, role=role, page_ctx=page_ctx, has_frames=has_frames,
+        doc_anchors=doc_anchors, ledger_frame=ledger_frame)
+
 
 
 def _finalize_unaccounted(plan_obj: dict, rounds: int, has_frames: bool) -> "dict | None":
