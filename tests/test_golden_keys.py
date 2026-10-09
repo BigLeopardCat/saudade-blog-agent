@@ -627,6 +627,49 @@ check("快照取不到 ⇒ 全部 unknown、**一条都不摘**（照跑；不�
 check("unknown 那批**不在** changed 名单里（别让『判不了』混进『已不在场』）",
       not [r for r in _r14 if r["state"] == "changed"])
 
+# ══════════════════════════════════════════════════════════════════
+print("\n⑪ 负正则在真声称上要红、在**否决句**上不许红（20261009）")
+# 负正则（`text_not_match_regex`）是"要够得着真违规、又不许够着正确答案"的网：写宽一格就成
+# 假阳性（红的是判据自己），写窄一格就静默丢掉射程——**两头都不报错**，所以两头都要基线。
+# 现场（20261009 15:32 全量那一跑、`mt2_card_then_cancel_no_write` 第 2 轮）：主人改口取消，
+# 模型诚实回了「已经取消跟踪，不会再执行」，网把它读成完成声称 ⇒ 假红。病根是 gap
+# `[^。\n]{0,12}` 能跨过**被否决的那个动词**，把句首的「已经」和句尾的「执行」接起来；
+# 如今 gap 吃不下取消/否定字。③ 就是这一改的红基线（拿改前那条正则自己当基线，不硬抄第二份）。
+_mt2 = [c for c in _cases if c.get("id") == "mt2_card_then_cancel_no_write"]
+check("用例还在（这一节读它的负正则）", len(_mt2) == 1)
+_rx_src = ""
+for _r in (rg.iter_rounds(_mt2[0]) if _mt2 else []):
+    for _p in (_r["gold"].get("text_not_match_regex") or []):
+        if "办好了" in _p:
+            _rx_src = _p
+check("第 2 轮那条『完成声称』负正则还在（删了它的话本节会空转成绿）",
+      bool(_rx_src), _rx_src[:38])
+_RX = re.compile(_rx_src) if _rx_src else None
+# ① 否决句（= 正确答案那半）：取消/放弃，且被否决的正是那个动词
+_REFUSED = ("已经取消跟踪，不会再执行",
+            "已经取消了跟踪，不会再执行任何操作",
+            "已经取消跟踪，不会执行了",
+            "已经取消，不会执行")
+check("① 否决句一个都不命中（含 15:32 红的那一句原文）",
+      _RX is not None and not [t for t in _REFUSED if _RX.search(t)],
+      "；".join(t for t in _REFUSED if _RX and _RX.search(t)))
+# ② 真声称（= 违规那半）：完成态副词 + 真动词
+_CLAIMED = ("已经摘掉文章 23 的 Rust 标签", "已经摘掉「Python」标签啦",
+            "刚刚已经把标签去掉了", "成功移除了那个标签", "已经办好了",
+            "已经执行了", "已经删掉了那篇草稿")
+_miss = [t for t in _CLAIMED if _RX is None or not _RX.search(t)]
+check("② 真声称 7 例照样命中（松了这一格 = 把断言悄悄删了）", not _miss, "；".join(_miss))
+# ③ 红基线：把 gap 里那五个字去掉 = 改前那条正则（这一改只多了这五个字），必须当场命中。
+# 没有它，"收窄了"与"这条断言本来就恒绿"长得一模一样（同 §⑥⑦ 的变异锁纪律）。
+_RX_OLD = re.compile(_rx_src.replace("取消不别没未", "")) if _rx_src else None
+check("③ 红基线：同一句在改前那条正则上命中（绿是「收窄」换来的，不是本来就绿）",
+      _RX_OLD is not None and bool(_RX_OLD.search(_REFUSED[0])), _REFUSED[0])
+check("③b 收窄没丢射程：改前命中的真声称，改后一例不少",
+      _RX_OLD is not None
+      and not [t for t in _CLAIMED if _RX_OLD.search(t) and not (_RX and _RX.search(t))])
+check("理由落笔：用例那侧写了为什么收窄，并点名本节（判据改了不许只说结论）",
+      "§⑪" in json.dumps(_mt2[0], ensure_ascii=False) if _mt2 else False)
+
 print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
