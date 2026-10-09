@@ -1038,6 +1038,42 @@ check("  ⇒ 端到端：那张令牌上「只办第 1 件」拿回的就是整�
       _gwe == "" and (_gw or {}).get("specs") == _pair, _gwe)
 settings.jwt_secret = _SAVED_SECRET
 
+print("\n⑫c 「这张卡有几格」在评测侧读得到（20261010，`confirm.units_of`）")
+# 判据（`require_confirm_payload.units`）要能说出"这张卡按几格编号"——它必须与**收窄侧**
+# 读到同一个数。判据自己再写一遍"缺席 ⇒ 逐条一单元"，就是同一份分组规则的第二实现
+# （`build_request` 的字段表漂移过一次，那是本仓写明的形状）；所以读法是这一条薄函数，
+# 它和 `narrow` 走的是同一份 `_units_of`。
+check("缺席分组 ⇒ 逐条一单元（老令牌/单件卡，与批 F 逐字相同）",
+      confirm.units_of({"specs": _grant_specs}) == [[0], [1]])
+check("  带了分组 ⇒ 就是那一份（一格两件）",
+      confirm.units_of({"specs": _pair, "units": [[0, 1]]}) == [[0, 1]])
+check("  分组读不懂 / 没有 specs ⇒ None（零执行的信号，不是「一件一件办」）",
+      confirm.units_of({"specs": _pair, "units": [[0]]}) is None
+      and confirm.units_of({"specs": [], "units": []}) is None
+      and confirm.units_of({}) is None)
+# 接线断言（同 ⑦ 的纪律："能力有测试 ≠ 接线有测试"）：收窄在**两个调用点**都要在，
+# 且都排在验签之后（先验签后收窄是这一层的安全方向：收窄只可能让放行范围变小，反过来
+# 就是"没验签就按一个没验过的记号裁"。缺了评测那一处，这条路径在 golden 里跑不到——
+# 语料里 4 条确认轮用例全是真写用例，默认 SKIP）。
+check("接线：生产的收窄在验签之后（server.chat_stream）",
+      _src.index("confirm.narrow(grant, req.confirm_pick)")
+      > _src.index("confirm.verify(req.confirm_token, principal.uid"))
+_rg_src = open("eval/run_golden.py", encoding="utf-8").read()
+check("接线：评测侧同样收窄（run_golden.run_one）——缺了它「挑一件」在语料里跑不到",
+      _rg_src.index("confirm.narrow(confirm_grant, confirm_pick)")
+      > _rg_src.index("confirm.verify(confirm_token, uid"))
+check("接线：用例轮里的记号真的接到请求上（run_case → run_one）",
+      'req.confirm_pick = rnd.get("confirm_pick")' in _rg_src
+      and "confirm_pick=req.confirm_pick" in _rg_src
+      and '"confirm_pick"' in _rg_src)
+# 「记号读不懂」那一轮的正文只有**一处字面**（server.INVALID_PICK_TEXT）：生产回复与
+# 评测断言读的是同一句话——抄第二份就是两处会各漂各的措辞。
+check("生产那一句「一件都没有办」只有一处字面，且生成器用的是它",
+      _src.count("一件都没有办") == 1
+      and "INVALID_PICK_TEXT = (" in _src
+      and "json.dumps(INVALID_PICK_TEXT" in _src
+      and "server.INVALID_PICK_TEXT" in _rg_src)
+
 print("\n  · 跨语言守卫：Rust 那半得真的接上（本机父仓在兄弟目录，找不到会响亮跳过）")
 _rs = _parent_repo.read(
     "src/routes/chat.rs",

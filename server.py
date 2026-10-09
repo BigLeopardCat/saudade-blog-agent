@@ -1618,6 +1618,13 @@ async def _invalid_confirm_stream():
     yield "data: __END__\n\n"
 
 
+# 「挑选记号读不懂」那一轮的正文（20261010 从下面的生成器里提出来——**同一句话**同时是
+# 生产回复与评测断言的对象，抄第二份就是两处会各漂各的措辞）。评测侧 `eval/run_golden.py`
+# 的这一支不进图（与生产同形：零执行零 LLM），它要断言"主人看到的是这一句"，只能读这里。
+INVALID_PICK_TEXT = ("我没看清你要办的是哪一件（这张卡上的选择记号读不出来），"
+                     "所以这次**一件都没有办**。要办的话跟我说一遍，我再问一次。")
+
+
 async def _invalid_pick_stream():
     """「只办其中一件」那个记号读不懂时的最小 SSE 流（20260929 批 F）：一句话 + 结束帧。
 
@@ -1625,10 +1632,10 @@ async def _invalid_pick_stream():
     它那段论证），**换的只有正文**：这里令牌本身是好的、失效的不是"确认"而是"选的是
     哪一件"。两句话必须分开说——把它们混成同一句，主人下次还是不知道该重点一次卡
     还是该说一遍要求；而这两条路的下一步动作确实不同。
+
+    正文住在上面的 `INVALID_PICK_TEXT`（只有一处字面）；本生成器只负责把它包成帧。
     """
-    text = ("我没看清你要办的是哪一件（这张卡上的选择记号读不出来），"
-            "所以这次**一件都没有办**。要办的话跟我说一遍，我再问一次。")
-    yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
+    yield f"data: {json.dumps(INVALID_PICK_TEXT, ensure_ascii=False)}\n\n"
     yield "data: __END__\n\n"
 
 

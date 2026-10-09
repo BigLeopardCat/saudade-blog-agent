@@ -133,8 +133,9 @@ _impl = ({m.group(2) for m in _CPSUB_GET.finditer(_cp_src)}
          | {m.group(2) for m in _CPSUB_IN.finditer(_cp_src)})
 check("`require_confirm_payload` 的子键都是字面量（动态取键 ⇒ 下面这条扫不到）",
       not _CPSUB_DYN.search(_cp_src))
-check(f"源码实现的子键（{sorted(_impl)}）五个都在（少一个 = 那条断言被删了）",
-      _impl == {"skill", "specs", "skill_any", "args_from_input", "specs_include"},
+check(f"源码实现的子键（{sorted(_impl)}）六个都在（少一个 = 那条断言被删了）",
+      _impl == {"skill", "specs", "skill_any", "args_from_input", "specs_include",
+                "units"},
       str(sorted(_impl)))
 _cp_bad = [f"{c.get('id')}: {k}" for c in _cases for k in
            ((c.get("gold") or {}).get("require_confirm_payload") or {})
@@ -149,7 +150,7 @@ _ids = [c.get("id", "?") for c in _cases]
 # 数字是**刻意钉住的**：它逼着每加/删一条用例的人在这里露一次脸（顺带重新看一眼下面
 # 几条覆盖面断言）。改它的同时要一起看 `_cases` 上游有没有别的计数（README 与
 # eval 报告里的条数是另算的，别把它们与这里对齐成"同一个数"）。
-check("用例数（186 条）", len(_ids) == 186, f"实际 {len(_ids)}")
+check("用例数（188 条）", len(_ids) == 188, f"实际 {len(_ids)}")
 check("用例 id 无重复", len(_ids) == len(set(_ids)),
       f"重复：{sorted({i for i in _ids if _ids.count(i) > 1})}")
 # 每条用例至少带一个**断言**键——只有注释的用例等于没判。这不是拼写问题，但属同一族

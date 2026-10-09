@@ -20,8 +20,8 @@
     "lines": 208
   },
   "agent/graph.py::_confirm_popup": {
-    "c": 88,
-    "lines": 408
+    "c": 87,
+    "lines": 406
   },
   "agent/graph.py::_decide_late_correct": {
     "c": 49,
@@ -140,8 +140,8 @@
     "lines": 47
   },
   "eval/run_golden.py::check_gold": {
-    "c": 241,
-    "lines": 584
+    "c": 244,
+    "lines": 601
   },
   "eval/run_golden.py::check_no_popup_premises": {
     "c": 32,
@@ -152,8 +152,8 @@
     "lines": 900
   },
   "eval/run_golden.py::run_one": {
-    "c": 54,
-    "lines": 233
+    "c": 58,
+    "lines": 259
   },
   "eval/task_state_probe.py::main": {
     "c": 36,

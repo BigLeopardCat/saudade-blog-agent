@@ -199,6 +199,10 @@ def iter_rounds(case: dict) -> list[dict]:
     ]
     ```
 
+    确认轮还可以带 `confirm_pick`（20261010，形态 `pick:<i>`，0 基）＝"主人点的不是
+    「全部办」，是卡上第 i 格"。它进 `ChatRequest.confirm_pick`，服务端在验签之后、
+    任何消费之前照同一份 `units` 裁（见 `run_one` 那一段与 `agent/confirm.narrow`）。
+
     **为什么要归一**：轮次顺序决定第 2 轮能不能拿到第 1 轮的令牌，而"顺序"这件事
     在三处都要一致（进程内跑法、隔离子进程、逐轮判据）。散着写就会出现"某个跑法按
     另一套顺序读"的漂移——`build_request` 那份字段表漂移过（见其 docstring），
@@ -212,6 +216,7 @@ def iter_rounds(case: dict) -> list[dict]:
                 "round": int(r.get("round", i)),
                 "gold": r.get("gold") or {},
                 "confirm_message": r.get("confirm_message", ""),
+                "confirm_pick": r.get("confirm_pick", ""),
                 "user_input": r.get("user_input", case.get("user_input", "")),
                 # 轮级 context 覆盖用例级（追问轮常需要补 history/executions）
                 "context": {**(case.get("context") or {}), **(r.get("context") or {})},
@@ -220,6 +225,7 @@ def iter_rounds(case: dict) -> list[dict]:
     g = case.get("gold") or {}
     return [{"round": int(g.get("round", 1)), "gold": g,
              "confirm_message": g.get("confirm_message", ""),
+             "confirm_pick": g.get("confirm_pick", ""),
              "user_input": case.get("user_input", ""),
              "context": case.get("context") or {}}]
 
@@ -353,7 +359,7 @@ def parse_reset(text: str) -> tuple[str, str]:
 # `fallback_resets` 已搬到 `landing_gate`（判据的唯一实现处），本模块顶部再导出。
 def run_one(req: ChatRequest, principal: "Principal | None" = None,
             trace_ctx: dict | None = None, *,
-            confirm_token: str = "") -> dict:
+            confirm_token: str = "", confirm_pick: str = "") -> dict:
     """跑一轮真实对话（内部链路），从帧流提取最终文本 / 命令帧 / 事件。
 
     `trace_ctx`（20260922）：`{"run": <run_id>}` 时给这一轮落一份 trace（见
@@ -365,11 +371,37 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     的接线原样走：**验签在这里**（`confirm.verify`，令牌是唯一凭据）→ 验不过就
     **零执行**、连图都不进（否则会照着 message 文本重新规划，那正是要避免的"再走
     一轮对话"）→ 验过了才把 payload 传给 `_build_messages` 与图。
+
+    `confirm_pick`（20261010）：卡上点的是**第 i 格**而不是「全部办」时的记号
+    （`pick:<i>`，0 基，`ChatRequest.confirm_pick` 一路透传）。**收窄的时机与生产逐字
+    对齐**（`server.chat_stream`）：验签之后、任何消费之前——`_build_messages` /
+    `_ledger_for_graph` / 图内 planner 读到的都必须是收窄后的那一份，否则就是
+    "卡上问一件、实际执行一批"。收窄本身只有一份实现（`confirm.narrow`，含单元分组
+    与越界/坏记号的 fail-closed）；这里只按生产的**顺序**调它。
+
+    两个出口的形态**刻意不同**：令牌验不过 = 用例自己不自洽（写错了 uid/会话/令牌），
+    所以要响亮（`error` 非空 ⇒ `check_case` 直接判红）；而"记号读不懂"是**被测行为**
+    ——生产照 `server._invalid_pick_stream()` 回一句"一件都没有办"就结束（零执行零
+    LLM），评测侧照同一句正文回一个**同形的空轮**（`error` 留空、`text` 那句），
+    判据才断言得到主人看到的是哪句话。这一支此前在 golden 里**跑不到**：收窄只住在
+    `server.chat_stream` 里，评测侧只验签。（正文只有一处字面：`server.INVALID_PICK_TEXT`。）
     """
     confirm_grant = None
     if confirm_token:
         uid = principal.uid if principal is not None else req.user_id
         confirm_grant = confirm.verify(confirm_token, uid, req.conversation_id)
+        if confirm_grant is not None and (confirm_pick or "").strip():
+            confirm_grant, pick_err = confirm.narrow(confirm_grant, confirm_pick)
+            if pick_err:
+                # 生产在这一支**连图都不进**（见 run_one 的 docstring）：这一轮没有任何
+                # 工具、没有命令、没有控制帧，只有那一句话。`resets` 也不动它——它压根
+                # 没走到 gate 那一步。
+                return {"text": server.INVALID_PICK_TEXT, "commands": [], "tool_calls": [],
+                        "frames": [], "exec_rows": [], "exec_tools": [], "tool_rounds": 0,
+                        "trace": None, "resets": 0, "resets_reasons": [],
+                        "reset_scopes": [], "fallback_reasons": [],
+                        "confirm_tokens": [], "confirm_payloads": [],
+                        "task_frames": [], "ledger_frames": [], "error": None}
         if confirm_grant is None:
             return {"text": "", "commands": [], "tool_calls": [], "frames": [],
                     "exec_rows": [], "exec_tools": [], "tool_rounds": 0,
@@ -648,6 +680,9 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
         if i > 0 and is_confirm_round:
             req.message = rnd.get("confirm_message") or "确认执行"
             req.confirm_token = prev_token
+            # 「只办第 i 件」那一格（20261010）：与令牌一起发给这一轮（生产上这两个
+            # 字段本来就是同一张卡的两个部分——卡上点了哪一格 + 那张卡的令牌）。
+            req.confirm_pick = rnd.get("confirm_pick") or ""
         # **没有令牌的续轮不发令牌、也不改写消息**（20260927 批 D 的多轮用例：第 2 轮是
         # 主人自己说的「继续吧」，走的是**普通请求**——planner 照常采样、靠注入的未完结
         # 任务上下文决定做什么）。它不需要令牌：上面那条担心的"合成命令式文本借同轮命令
@@ -657,7 +692,7 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
         t0 = time.time()
         res = run_one(req, principal,
                       trace_ctx=({"run": run_id, "case": case["id"] + suffix} if run_id else None),
-                      confirm_token=req.confirm_token)
+                      confirm_token=req.confirm_token, confirm_pick=req.confirm_pick)
         res["round"] = rnd["round"]
         res["elapsed"] = round(time.time() - t0, 1)
         res["fails"] = []
@@ -1918,7 +1953,9 @@ GOLD_COMMENT_KEYS = frozenset({"_note"})
 #                     行/顺序贴反时红在"这一轮的 gold 不是给这一轮的"，而不是红在某个
 #                     莫名其妙的断言上；
 #   `confirm_message` 第 2 轮合成消息的文案（生产上前端发的是「确认执行：<卡面摘要>」）。
-GOLD_ROUND_KEYS = frozenset({"round", "confirm_message"})
+#   `confirm_pick`    确认轮上"点的是第几格"（`pick:<i>`，0 基；20261010）。缺省空串 =
+#                     「全部办」——与旧前端不发这个字段时逐字兼容（见 `chat_stream` 的收窄段）。
+GOLD_ROUND_KEYS = frozenset({"round", "confirm_message", "confirm_pick"})
 
 
 def judge_corpus() -> "list | None":
@@ -2196,10 +2233,11 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
     # `__CONFIRM__` 帧里的令牌解出（`confirm.inspect`：只解 base64、不验签；评测读它
     # 不构成授权判据，见 agent/confirm.py 里那条警告）。顺带锁一条安全不变量：**令牌
     # 原文不得出现在给用户看的正文里**（它是 10 分钟有效的写授权凭据）。
-    # 载荷五键：`skill`（精确相等）/ `specs`（参数条数）/ `skill_any`（族——"是哪几件
+    # 载荷六键：`skill`（精确相等）/ `specs`（参数条数）/ `skill_any`（族——"是哪几件
     # 事之一"这种断言，理由见下面那段注）/ `args_from_input`（20261006：参数正文必须
     # 是**主人原话或本轮台账那一行**的子串——两本账的理由见下面那一格的头注）/
-    # `specs_include`（20261009：卡上**必须真带着**这一件，见下面那一格的头注）。
+    # `specs_include`（20261009：卡上**必须真带着**这一件，见下面那一格的头注）/
+    # `units`（20261010：卡面按**几格**编号，见下面那一格的头注）。
     _cp = gold.get("require_confirm_payload")
     if _cp:
         _pays = [p for p in (result.get("confirm_payloads") or []) if p]
@@ -2221,6 +2259,22 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
                              f"载荷 {_pay.get('skill')!r}")
             if "specs" in _cp and len(_specs) != _cp["specs"]:
                 fails.append(f"卡片参数条数不符：期望 {_cp['specs']}，载荷 {len(_specs)}")
+            # 20261010 第六键 `units`：卡面按**几格**编号（= 可独立执行的最小单元数）。
+            # `specs`（条数）看不见这一格，而它正是"先建再挂"那张卡的性质：`create_tag(X)`
+            # 与紧随的 `set_article_tags(… add X)` 是**一件事**（后者单独执行注定失败），
+            # 所以「两张 specs 一格」是**做对了**的形状，「两张 specs 两格」是缺陷
+            # （20261010T011456 现场：主人点「只办第 2 件」⇒ 服务端照下标裁成孤零零一条
+            # `set_article_tags` ⇒ 工具只能回「站内没有这些标签」）。判据必须能说出
+            # "这张卡有几格"：只数 specs 会把那一格的缺口判成绿。
+            # 读法走 `confirm.units_of`（**收窄侧同一份分组规则**，缺席 ⇒ 逐条一单元）：
+            # 判据自己再写一遍这条规则，就是在评测里养第二份会漂的契约。
+            if "units" in _cp:
+                _u = confirm.units_of(_pay)
+                if _u is None:
+                    fails.append("卡片载荷里的单元分组读不懂（老令牌没有分组时按逐条一单元算）")
+                elif len(_u) != _cp["units"]:
+                    fails.append(f"卡片单元数不符：期望 {_cp['units']} 格，"
+                                 f"载荷 {len(_u)} 格（分组 {_u}）")
             # 20261009 第五键 `specs_include`：**卡上必须真带着那一件**。`skill` 与
             # `specs`（条数）都看不见"卡上少了哪一步"——真链路实测（同一用例 13 次采样
             # 里 4 次）：主人说"把这两个标签加到文章〈id〉"、planner 的 id 槽填了别的号 ⇒

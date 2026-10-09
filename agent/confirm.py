@@ -211,6 +211,22 @@ def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:
     return out, ""
 
 
+def units_of(payload: dict) -> "list | None":
+    """载荷里的单元分组（**读侧唯一实现**：收窄与评测判据共用同一份）。
+
+    返回 `[[0, 1], [2]]` 这样的下标分组；`None` = 分组读不懂（那是零执行的信号，不是
+    "一件一件办"）。缺失（老令牌 / 单件卡）⇒ 逐条一单元——与批 F 的行为逐字相同。
+
+    为什么要有一个公开入口：`eval/run_golden.check_gold` 的 `require_confirm_payload.units`
+    判"卡面按几格编号"，它必须与执行侧**读到同一个数**——判据自己再写一遍"缺席就算逐条"
+    这条规则，就是同一份分组规则的第二实现（`build_request` 的字段表漂移过一次，见其注）。
+    """
+    specs = payload.get("specs") if isinstance(payload, dict) else None
+    if not isinstance(specs, list) or not specs:
+        return None
+    return _units_of(payload, len(specs))
+
+
 def _units_of(payload: dict, n: int) -> "list | None":
     """载荷里的单元下标分组；**读不懂返回 None**（调用方零执行）。
 
