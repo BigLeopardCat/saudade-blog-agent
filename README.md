@@ -195,19 +195,19 @@ saudade-blog-agent/
 │   ├── moderator.py       留言 AI 审核侧任务
 │   ├── summarizer.py      对话摘要侧任务
 │   └── …                  其余模块见目录（action_text / factblock / stickers / llm_usage / agent / memory 等）
-├── tools/base.py          63 个工具、工具注册表和 ToolResult 契约
+├── tools/base.py          67 个工具、工具注册表和 ToolResult 契约
 ├── rag/search.py          BM25 内存倒排检索
 ├── rag/sections.py        超长文章分节（索引 / 帧 / 按节取回三处共用；纯函数）
 ├── eval/                  检索评测、golden 评测、trace 分析与跨源对账
 ├── tests/                 秒级离线回归测试（按磁盘枚举，加套件不用改 CI）
-├── docs/                  架构（现状）、问题记录（事故：现象→根因→修复→回归锁）、评测与可观测性
+├── docs/                  13 份专题文档（架构/问题记录/评测/规划/秘书/检索…），索引见 docs/README.md
 │   └── adr/               架构决策记录：当时的取舍，含"决定不做某事"
 ├── CONTRIBUTING.md        参与方式、本仓的判据规矩、能/不能在本机跑什么
 ├── ROADMAP.md             现在做什么 / 什么在等触发条件 / 什么明确不做
 └── SECURITY.md            安全问题走私密通道（本仓是 public 仓库）
 ```
 
-技能注册表当前有 44 个技能，覆盖：导航、页面特效、夜间模式、设备显示与查询、内容检索、文章读取、运维和审核报表、后台文章/标签/分类/公告/留言管理、收藏和通知处理、闲聊等。
+技能注册表当前有 47 个技能，覆盖：导航、页面特效、夜间模式、设备显示与查询、内容检索、文章读取、运维和审核报表、后台文章/标签/分类/公告/留言管理、收藏和通知处理、闲聊等。
 
 ## 可靠性边界
 
@@ -240,7 +240,7 @@ uv sync
 # L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
 .venv/bin/python eval/recall_eval.py
 
-# L2 真实 LLM 任务评测：155 条 golden（其中 4 条会真写生产库，默认不跑、需显式放行），约 25 分钟，按需运行
+# L2 真实 LLM 任务评测：188 条 golden（其中 4 条会真写生产库，默认不跑、需显式放行），约 25 分钟，按需运行
 .venv/bin/python eval/run_golden.py
 .venv/bin/python eval/run_golden.py --only <id>,<id>   # 只跑指定用例
 .venv/bin/python eval/golden_full_run.py               # 全量跑（与 run_golden 共用判据）
