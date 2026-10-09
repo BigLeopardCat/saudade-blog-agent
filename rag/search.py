@@ -83,8 +83,7 @@ CORPUS_PAGE_MAX = 40  # 兜底上限（50×40 = 2000 篇），防服务端异常
 # 混合候选，模型在 talk 候选上硬编 talkKey 31）。说说/留言/公告是"数据读取"
 # 场景，走各自数据工具（list_talks/list_guestbook/get_announcements），不进检索池。
 
-# ── 查询侧处理（只动查询串，索引零影响；加词纪律：每加一词须全量 recall_eval
-#    21 query 复验无回归才可留）──
+# ── 查询侧处理（只动查询串，索引零影响）──
 
 # 疑问/句法功能词剔除（20260905 处置 rag_eval_system）：中文疑问句的信息在
 # 实词上，「怎么/什么/哪些」等纯句法词 df 常极小（实测「怎么」df=2 → idf 4.633，
@@ -102,15 +101,59 @@ def _clean_query(query: str) -> str:
     return query
 
 
-# 同义扩展（20260905，同日同案）：词法 2/3-gram 下 2 字同义/惯用变体零共享 gram
-# ——访客问「测评体系」与文档用词「评测」互不可见（实测 query gram 只剩体系/怎么
-# 命中）。替换出同义变体的新 gram 并入 query token 集（与原文 gram 去重后各自
-# 权重 1）。只收「替换后语义不变」的词对。
-_QUERY_SYNONYMS = {
-    "测评": "评测",  # 1.26 P0 回流用例「RAG测评体系怎么建立」期望 note:19（架构文档
-                     # 「# 评测：eval/golden…」小节措辞为「评测」）——1.27 事故族：
-                     # 语料改写措辞漂移使期望失配，检索侧用等价词对补上而不是改期望
-}
+# 同义扩展（20260905 起，20261009 扩表并加闸门）：词法 2/3-gram 下，访客用的词与语料
+# 用的词可以零共享 gram。替换出同义变体的新 gram 并入 query token 集（与原文 gram
+# 去重后各自权重 1）。只收「替换后语义不变」的词对。
+#
+# 两类病因，机制是同一个：
+#   A **措辞漂移**——语料改写过，期望没跟着改（测评/评测，1.27 事故族）；
+#   B **站内根本没这个词**——访客说中文、语料写缩写或另一种叫法（令牌/JWT、断线/断连，
+#     两词的 df 都是 0）。B 类比 A 类更狠：查询有效 token 掉到 0 ⇒ **检索直接返回空**，
+#     不是排得不好，是一条候选都没有。
+#
+# **加词纪律 = 两道闸门，管的是不同问题，缺一不可**：
+#   ① 机械闸门 `tests/test_query_expansion.py`：这一对**对不对**——val 在语料里真有落点、
+#      且带去 key 到不了的 chunk（非空操作 + 有增量），并且**必须被标注集里的某条 query
+#      真的用到**。没人用过的一对词是"看起来在治病的注释"，不是能力。
+#   ② 经验闸门 `eval/recall_eval.py`：加了**到底好不好**——主集 22 条零回归、留出集有改善。
+#      **别拿 ① 当放行标准**：①只拦"明显错/没用"，判不出收益大小（空中升级→OTA 就是
+#      过了 ① 而收益只在 @3 上）。
+_QUERY_SYNONYMS: tuple[dict, ...] = (
+    {"key": "测评", "val": "评测",
+     "why": "措辞漂移：1.26 回流用例「RAG测评体系怎么建立」期望 note:19，而那篇的小节标题"
+            "写的是「评测」。语料里 测评 df=0、评测 df=2 ⇒ 补等价词，不改期望"},
+    {"key": "令牌", "val": "JWT",
+     "why": "访客说中文、语料写缩写：令牌全站 df=0（一次都没出现），JWT 见于 note:14/19/22。"
+            "短问「令牌怎么签发？」扩展前有效 token=0 ⇒ 返回空；扩展后 rank=1"},
+    {"key": "断线", "val": "断连",
+     "why": "同上：断线 df=0、断连见于 note:19（断连中断机制那一节）。「断线了会怎样？」"
+            "扩展前只靠一个功能词命中无关文档，扩展后 rank=1"},
+    {"key": "空中升级", "val": "OTA",
+     "why": "同义变体，但 升级 本身在语料里 ⇒ 收益弱于上面两对：「空中升级怎么做的？」"
+            "扩展前后 rank 都是 1，**只把 note:12 拉进 @3**。留它是因为零回归，"
+            "不是因为它是主收益——这是个「过了闸门但收益很小」的样本，别当成常态"},
+)
+
+
+def synonyms() -> tuple[dict, ...]:
+    """词表的只读视图（判据与评测读它，不另抄一份）。"""
+    return _QUERY_SYNONYMS
+
+
+# 扩展开关（**只给 A/B 与判据用，生产恒开**）。做成模块级而不是 `.env` 拨盘，是因为它
+# 唯一的消费方是"同一进程里跑两臂"的评测：离线套件按出厂档跑、结构上只会跑一档
+# （见 tests/run_all.py 头注），做成 .env 拨盘等于让判据永远看不见另一臂。
+_EXPANSION_ENABLED = True
+
+
+def set_expansion(on: bool) -> None:
+    """开/关查询侧同义扩展。**仅 A/B 与判据使用**，生产不调用。"""
+    global _EXPANSION_ENABLED
+    _EXPANSION_ENABLED = bool(on)
+
+
+def expansion_enabled() -> bool:
+    return _EXPANSION_ENABLED
 
 
 def tokenize(text: str) -> list[str]:
@@ -293,10 +336,14 @@ class RagIndex:
         # 疑问词先剔除（句法功能词非内容；不做会稀释实词权重，实证见 _QUERY_STOPWORDS），
         # 同义扩展后仍经同一剔除路径（否则 怎么 会经替换串溜回，见 20260905 模拟）
         q_toks = [t for t in tokenize(_clean_query(query)) if t in postings]
-        for key, val in _QUERY_SYNONYMS.items():
-            if key in query:
-                q_toks += [t for t in tokenize(_clean_query(query.replace(key, val)))
-                           if t not in q_toks and t in postings]
+        # 扩展只加「语料里真有的 gram」（`t in postings`）——val 若是个语料里不存在的词，
+        # 这一对就是空操作（判据里用负控钉住：换一个空词进来，结果必须与关臂一致）。
+        if _EXPANSION_ENABLED:
+            for _pair in _QUERY_SYNONYMS:
+                if _pair["key"] in query:
+                    q_toks += [
+                        t for t in tokenize(_clean_query(query.replace(_pair["key"], _pair["val"])))
+                        if t not in q_toks and t in postings]
         if not q_toks:
             return []
         # chunk 级 BM25 打分
