@@ -5942,6 +5942,22 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     return upd
 
 
+def _plan_update(plan_obj: dict, rounds: int, task_frames: list | None = None) -> dict:
+    """决策出口的**唯一构造点**（20261009 拆 `_planner_decide` 时收口）。
+
+    `_planner_decide` 有二十几处出口，形状逐字相同：`{**plan_state(plan_obj),
+    "plan_rounds": rounds + 1, "done": False}`（其中两条另带 `task_frames`）。散着写是
+    "每加一条出口就要把这三个键再抄一遍"的手工同步——拆成阶段函数后这一点更要收紧，
+    出口形状只留这一处可改。
+    `task_frames is not None` 时才加那个键：`[]` 与 `[frame]` 两种取值都是**显式**传进来
+    的，「缺键」与「传空列表」不是一回事（见任务登记那两处特例）。
+    """
+    upd = {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
+    if task_frames is not None:
+        upd["task_frames"] = task_frames
+    return upd
+
+
 def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
                     *, task_sink: list | None = None) -> dict:
     """职责（唯一决策点）：选技能 + 填参数 + 给调用清单 → 实例化为计划 → state.plan。
@@ -7069,6 +7085,23 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
         logger.warning("[planner] 点名工具全被剔除（本轮零工具）→ 剔空纠偏重决策：%s",
                        "、".join(plan_obj["dropped"]))
 
+    upd = _finalize_unaccounted(plan_obj, rounds, has_frames)
+    if upd is not None:
+        return upd
+    plan_obj, upd = _finalize_dedupe(plan_obj, state, user_msg, raw, rounds, has_frames)
+    if upd is not None:
+        return upd
+    return _finalize_wrap(plan_obj, rounds, has_frames, native_note)
+
+
+def _finalize_unaccounted(plan_obj: dict, rounds: int, has_frames: bool) -> "dict | None":
+    """决策循环收尾后的**确定性终局**（三格：剔空 / 参数不齐 / 记账字段全空）。
+
+    三格共同点：循环走完、这一轮**一个工具都不会执行**，而系统判得出来该有一条如实的
+    收尾注记。任一格命中即返回 `_plan_update(...)`（终局），都不命中返回 `None`
+    （交 `_finalize_dedupe` 继续）。三格的形状与判据逐字保留（见函数体内各段注），
+    20261009 从 `_planner_decide` 原地抽出，行为不变。
+    """
     if plan_obj.get("dropped") and not plan_obj["tools"]:
         # 纠偏之后仍然剔空：这一轮**确实什么都查不了**。确定性如实收尾——绝不把
         # "零工具零帧"直接交给 narrator（那正是 22:34 那一轮的形态：它只能编）。
@@ -7086,7 +7119,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
             "说清缺的是什么（需要用户指明是哪一篇/需要博主身份/站内没有这项数据），"
             "并请用户补充信息。**不许**出现「看过/读过/查过/检索过/调用过工具」"
             "这类说法，也不许描述你做了哪些步骤。"))
-        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
+        return _plan_update(plan_obj, rounds)
 
     if plan_obj.get("param_problem") and not plan_obj["tools"]:
         # 纠偏之后参数仍然不齐：这一轮**确实没有可执行的计划**。确定性如实收口
@@ -7126,7 +7159,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
             "查过/调用过工具」这类说法，也不许描述你做了哪些步骤；"
             "**不许**把参数名（如 target）当成人话念出来，也**不许**下"
             "「站内没有这个页面/不存在」这类结论——参数不齐不代表页面不存在。"))
-        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
+        return _plan_update(plan_obj, rounds)
 
     if (not plan_obj["tools"] and not plan_obj.get("dropped")
             and not plan_obj.get("param_problem") and not plan_obj.get("chat")
@@ -7173,8 +7206,17 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
             "查过/调用过工具」这类说法，也不许描述你做了哪些步骤；"
             "**不许**把参数名（如 target）当成人话念出来，也**不许**下"
             "「站内没有这个页面/不存在」这类结论。"))
-        return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
+        return _plan_update(plan_obj, rounds)
 
+
+def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str, raw: str,
+                     rounds: int, has_frames: bool) -> "tuple[dict, dict | None]":
+    """字面路径修正 + TODO 提取 + 八条去重/拦截守卫。
+
+    返回 `(plan_obj, update)`：任一条守卫命中 ⇒ `update` 非空（终局）；全部落空 ⇒
+    `update=None`，`plan_obj` 是**可能已被就地修正**的那一份（字面路径修正会重建它），
+    交 `_finalize_wrap` 收尾。20261009 从 `_planner_decide` 原地抽出，行为不变。
+    """
     # 字面路径防推断兜底（确定性修正，保留自旧架构）：用户消息里出现 / 开头的
     # 路径且 planner 选了 navigate 时，target 必须原样用该路径——qwen 曾把
     # "/iot" 推断成"物联网平台"（语义替身）→ 计划变成跳转 /device-console/
@@ -7222,8 +7264,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
                 # 未读汇总三个工具，回复却说「本喵这一轮没有任何工具可用」）。
                 plan_obj = _wrap_up_plan(
                     True, reason="本轮该做的动作**已经执行过**（见上方工具返回），不重复执行")
-                return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                        "done": False}
+                return plan_obj, _plan_update(plan_obj, rounds)
             logger.info("[planner] 动作重复（%s）但意图清单仍有未完成项（%s）→ 不收尾",
                         "、".join(sorted(planned_names)),
                         "、".join(i["key"] for i in pending))
@@ -7246,8 +7287,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
             plan_obj = _wrap_up_plan(
                 True, "本轮已取回的报表数据就在上方工具返回里（快照型只读，"
                       "重复调用拿回同一份数据），基于已有返回如实作答")
-            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                    "done": False}
+            return plan_obj, _plan_update(plan_obj, rounds)
 
     # 后台写技能重复规划防护（20260921 第二轮，与上一条同源、判据**更严**）：
     # 报表是快照型只读——同工具重复 ⇒ 拿回同一份数据；**写不是**。同一工具名第二次
@@ -7265,8 +7305,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
                       "照它如实报告改的是哪一篇、从什么变成什么。"
                       "**不要**再说「正在改」，被问到时也不许否认；"
                       "若还有没改的，说清楚哪一件没做。")
-            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                    "done": False}
+            return plan_obj, _plan_update(plan_obj, rounds)
 
     # 检索重复清单拦截（20260903 golden 实证：rag_arch_ports planner 把同一
     # rag_search 原句连发 3 轮直到轮次上限——候选 id=19 已命中却从不读全文。
@@ -7302,8 +7341,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
                     True, _read_repeat_note(state.get("receipts"), dups)
                     + _no_popup_fact(state))
                 record("planner", "intercept", reason=kind, dups=dups, redirected=False)
-                return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                        "done": False}
+                return plan_obj, _plan_update(plan_obj, rounds)
             terms = _search_terms(plan_obj, executed, user_msg)
             cand = _candidate_detail_plan(state["messages"], executed, terms)
             if cand is None:
@@ -7320,8 +7358,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
                 plan_obj = cand
             record("planner", "intercept", reason=kind, dups=dups,
                    terms=sorted(terms), redirected=cand is not None)
-            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                    "done": False}
+            return plan_obj, _plan_update(plan_obj, rounds)
 
     # 只读重复执行裁剪（20260925，用户拍板"按 A 方案修"）：见 _trim_done_reads 头注。
     # 刻意放在上面四道守卫**之后**：整集合包含的那两道（动作族按帧名 / SNAPSHOT 按
@@ -7338,8 +7375,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
                 True, _read_repeat_note(state.get("receipts"), done_specs))
             record("planner", "intercept", reason="read_repeat", dups=done_specs,
                    redirected=False)
-            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                    "done": False}
+            return plan_obj, _plan_update(plan_obj, rounds)
         logger.info("[planner] 只读工具重复（%s）→ 从本轮清单剔除，只执行 %s",
                     "、".join(_tool_name(s) for s in done_specs),
                     "、".join(_tool_name(s) for s in plan_obj["tools"]))
@@ -7363,14 +7399,24 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
                       "刚改好，也不许说成没办成或被拦下了。")
             record("planner", "intercept", reason="noop_repeat", dups=noop_done,
                    redirected=False)
-            return {**plan_state(plan_obj), "plan_rounds": rounds + 1,
-                    "done": False}
+            return plan_obj, _plan_update(plan_obj, rounds)
         logger.info("[planner] 零改动重复（%s）→ 从本轮清单剔除，只执行 %s",
                     "、".join(_tool_name(s) for s in noop_done),
                     "、".join(_tool_name(s) for s in plan_obj["tools"]))
         record("planner", "intercept", reason="noop_repeat", dups=noop_done,
                redirected=True)
 
+    return plan_obj, None
+
+
+def _finalize_wrap(plan_obj: dict, rounds: int, has_frames: bool,
+                   native_note: str) -> dict:
+    """正常出口：收尾轮口径如实化 + `decision` 事件 + 返回 update。
+
+    ⚠️ 这里读 `plan_obj["params"]`（`decision` 事件那一行）——只有 `instantiate_plan`
+    的产物才有这个键，所以凡把 `plan_obj` 换成 `_wrap_up_plan` 产物的分支**必须**在
+    上游就 return（见各段那条 KeyError 注），不许落到这里。
+    """
     # ── 收尾轮的口径如实化（20261001）───────────────────────────────────────
     # 形状：本回合**已经有工具帧**（更早几轮执行过），而**最后一轮决策选了 chat**。
     # `plan_encode` 按 `chat` 派生出 `STATUS=answer_only`，而 narrator 的图例把这一档
@@ -7411,7 +7457,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
            status=plan_obj.get("status") or "",
            **({"native_note": native_note} if native_note else {}))
 
-    return {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
+    return _plan_update(plan_obj, rounds)
 
 
 # ---------------------------------------------------------------------------

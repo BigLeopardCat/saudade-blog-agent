@@ -23,6 +23,10 @@
     "c": 88,
     "lines": 408
   },
+  "agent/graph.py::_finalize_dedupe": {
+    "c": 49,
+    "lines": 198
+  },
   "agent/graph.py::_name_arg_fix": {
     "c": 68,
     "lines": 171
@@ -32,8 +36,8 @@
     "lines": 73
   },
   "agent/graph.py::_planner_decide": {
-    "c": 291,
-    "lines": 1470
+    "c": 220,
+    "lines": 1134
   },
   "agent/graph.py::_write_target_refusal": {
     "c": 55,
