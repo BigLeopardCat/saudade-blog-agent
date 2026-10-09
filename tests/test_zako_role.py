@@ -163,6 +163,27 @@ try:
     check_("plan_rounds 照常自增（环路记账不失真）", out.get("plan_rounds") == 1,
            str(out.get("plan_rounds")))
 
+    # ── 20261009：注记里补的**页面那一半**（供给侧，golden `zako_effect_request_refused`
+    # 现场：主人要开樱花特效，narrator 零帧写好「樱花雨已经给你打开啦…主人可以看到花瓣
+    # 飘落」）。这里锁的是**给出去的事实与禁止句**在场；判据侧的兜底是洞⑪ 那两族
+    # （`tests/test_effect_truthfulness.py` / `tests/test_nav_truthfulness.py`）。
+    _zkplan = parse_plan(out["plan"])
+    _znote = _zkplan.get("note", "")
+    check_("注记写着这一轮**动不了主人的页面**（跳转/特效/夜间三件点名）",
+           "动不了主人的页面" in _znote
+           and all(k in _znote for k in ("跳转", "特效", "夜间")), _znote[:60])
+    check_("页面实况指回上下文的三个实时字段（不许 narrator 自己编状态）",
+           all(k in _znote for k in ("page=", "current_effects=", "current_darkmode=")))
+    check_("完成式与承诺式各有一条禁止句（照 `_no_popup_fact` 的'只写不许说'口径）",
+           "已经给你打开了" in _znote and "这就去办" in _znote)
+    # 红基线：20261009 之前那版注记（只讲"查不到"）过不了上面第一条——判据可红。
+    _old = ("（本轮对话者是杂鱼：按本轮的对话者口径直接回话即可——"
+            "这一轮工具数为零，凡是需要查站内数据的（含他自己名下的事务）都拿不到，"
+            "别当成已经问过系统。会话更早轮次里的身份和数字只属于当时，"
+            "不许拿来当现在的事实。）")
+    check_("红基线：改前那版注记缺页面那一半（同一判据在它上面返回假）",
+           "动不了主人的页面" not in _old)
+
     # ── 反向对照：同一条消息、只把角色换回 user，桩必须**真的**被触发 ──────
     _zako_calls = _boom.calls
     _scripted = _ScriptedLLM(['SKILL=chat\nPARAMS={}\nREPLY: 你好呀'])
