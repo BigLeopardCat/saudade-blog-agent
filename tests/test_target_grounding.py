@@ -369,7 +369,11 @@ check("接线：**四道**闸都吃 `ledger_src`，`planner_node` 一次算好�
       and "ledger_src" in inspect.signature(g._todo_text_fix).parameters
       # 第四道（20261006 补）：它此前躲过这一撞靠 `_name_like` 早退——是运气，不是设计。
       and "ledger_src" in inspect.signature(g._target_grounding_refusal).parameters
-      and "ledger_src = _ledger_pending_text(state.get(\"ledger\"))" in _GSRC)
+      # 第三本账（20261009）：跨轮任务台账里还挂着的那一行也进同一份原文——与
+      # `_ledger_pending_text` 是**一次算好、往下传**的同一条纪律，不是各闸各算。
+      and "ledger_src = \"\\n\".join(" in _GSRC
+      and "_ledger_pending_text(state.get(\"ledger\"))" in _GSRC
+      and "_task_ledger_text(config)" in _GSRC)
 check("  目标名那道闸的**调用点**也真的传了（只改签名不接线＝一行都没生效）",
       "grounded_refuse = _target_grounding_refusal(plan_obj, user_msg," in _GSRC
       and "ledger_src=ledger_src)" in _GSRC)
@@ -534,6 +538,53 @@ check("  反向对照二：脏判据的入口没被打开（泛称/指代仍是�
       and _grounded_value("它", g._squash_spaces("把它挂上去")) is False)
 check("  反向对照三：真没说过还是拒（归一不等于放行）",
       _grounded_value("Axum", g._squash_spaces(_MSG_LOWER)) is False)
+
+print("\n⑩ 第三本账：跨轮任务台账（20261009 挂标签一步走完的另一半）")
+# 现场（trace `20261009T070848` → `T070855` → `T070914`）：主人一句「给空间向量那篇文章
+# 加个标签embeding」被拆成两轮——第一轮建标签（主人点确定、标签真建出来 id=44），系统
+# 自己接着问「要我把这一篇打上吗？」；主人回一个「要」，planner 选对了技能、参数也对，
+# 却在出处闸上原地撞死：`user_msg` 只有「要」，而那一轮 `has_confirm=false` ⇒ **第二本账
+# 也是空的**。于是系统**把它自己上一轮刚建好的那个名字**判成了编造
+# （`planner.write_value_unresolved values=["embeding"]`）。
+
+# 治法：台账里**还挂着的那一行**是第三个出处（`graph._task_ledger_text`）——与
+# 「系统自己规定的重提路径不许判成编造」是同一条纪律，只是那一行住在**跨轮**的
+# `agent_task` 表里（`config["configurable"]["open_tasks"]`，生产已在读：trace
+# `20261009T060520` 的 `gate.task_ledger_probe rows=1`）。
+from agent.tasks import TASK_OPEN_STATES, render_open_tasks  # noqa: E402
+
+_TASK_ROW = {"task_id": "at_probe_0001", "state": "running",
+             "goal": "给文章 46 挂上 embeding 标签", "cursor": 0, "total_steps": 2,
+             "steps": [{"tool": "create_tag", "label": "新建标签 embeding"},
+                       {"tool": "set_article_tags", "label": "把 embeding 挂到文章 46"}]}
+_CFG_TASK = {"configurable": {"open_tasks": [_TASK_ROW]}}
+_TASK_TXT = g._task_ledger_text(_CFG_TASK)
+check("台账还挂着 ⇒ 那段文本里有 goal 与剩下的步骤",
+      "embeding" in _TASK_TXT and "at_probe_0001" in _TASK_TXT, _TASK_TXT[:70])
+check("  **指令块一个字都不进**（给模型看的祈使句不许当出处——否则自由文本类的值"
+      "与其中几个字撞上就成了「有来源」）",
+      _TASK_TXT == render_open_tasks([_TASK_ROW], with_guide=False)
+      and "不要撤下" not in _TASK_TXT and "原样问出来" not in _TASK_TXT)
+check("  终态行不渲染（`succeeded` 不在 `TASK_OPEN_STATES` 里）",
+      "succeeded" not in TASK_OPEN_STATES
+      and g._task_ledger_text({"configurable": {"open_tasks": [
+          {**_TASK_ROW, "state": "succeeded"}]}}) == "")
+check("  读不到 / 形状脏 ⇒ 空串（fail-closed：回到只认前两本账的旧行为，逐字节一致）",
+      g._task_ledger_text(None) == "" and g._task_ledger_text({}) == ""
+      and g._task_ledger_text({"configurable": {"open_tasks": "不是列表"}}) == ""
+      and g._task_ledger_text({"configurable": {"open_tasks": [{"nope": 1}]}}) == "")
+
+check("★ 现场重放：主人回「要」+ 台账里记着这个名字 ⇒ **不再拒**（此前必拒、零写）",
+      _name_arg_fix(_plan("set_article_tags", {"article_id": 46, "add": ["embeding"]},
+                          skill="article_tags"),
+                    "要", role="admin", ledger_src=_TASK_TXT) is None)
+check("  反向对照：台账缺席 ⇒ 照旧拒（第三本账是补位，不是放行兜底）",
+      _name_arg_fix(_plan("set_article_tags", {"article_id": 46, "add": ["embeding"]},
+                          skill="article_tags"), "要", role="admin") is not None)
+check("  反向对照二：台账在、但那一行里**没有**这个值（模型新编的）⇒ 仍然拒",
+      _name_arg_fix(_plan("set_article_tags", {"article_id": 46, "add": ["RAG"]},
+                          skill="article_tags"),
+                    "要", role="admin", ledger_src=_TASK_TXT) is not None)
 
 print()
 

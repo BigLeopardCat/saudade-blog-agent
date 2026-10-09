@@ -124,7 +124,8 @@ from agent.skills import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
 # `agent/tasks.py`——本模块只决定"什么时候用它"（见 planner 的那一支）。
 from agent.tasks import (TASK_DONE_NOTE, TASK_INTENTS, declaration_note,
                          declaration_nudge, drop_is_completion, frame_payload,
-                         intent_frames, settled_by_receipts, task_rows)
+                         intent_frames, render_open_tasks, settled_by_receipts,
+                         task_rows)
 from utils import trace as trace_mod
 from utils.trace import record
 
@@ -6542,11 +6543,15 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
         # 写操作的目标按名字解不出来 → 不弹窗、不执行，直接确定性如实收尾
         # （见 _write_target_refusal 上方长注：名字通道下"解不出来"必须响亮，
         # 而"响亮"的最省事形态就是**根本不问那一句**）。
-        # 这一族出处闸的**第二本账**（20261006，见 `_ledger_pending_text` 长注）：
-        # 系统自己的规则要求"短应答时照 pending_action 原样重新提交"，那个参数只在
-        # 台账那一行里 ⇒ 只认 `user_msg` 的闸会把系统规定的重提路径判成编造。
-        # 算一次、往下传：三处用的是同一份原文。
-        ledger_src = _ledger_pending_text(state.get("ledger"))
+        # 这一族出处闸的三本账（20261006 / 20261009，见 `_ledger_pending_text` 与
+        # `_task_ledger_text` 两处长注）：① 主人这一轮的话（下面各函数内部的 `user_msg`）；
+        # ② 系统那行「待主人点头」的卡面原文（上一轮那张卡）；③ 跨轮任务台账里还挂着的行。
+        # ②③ 治的是同一件事的两个入口——**系统自己规定的重提路径**（主人回「嗯」/「要」）
+        # 会把参数留在上一轮的字里，只认 ① 的闸就成了"系统自己把自己判成编造"。
+        # 算一次、往下传：下面四个闸用的是同一份原文。
+        ledger_src = "\n".join(
+            x for x in (_ledger_pending_text(state.get("ledger")),
+                        _task_ledger_text(config)) if x)
         # 先过片段地基（20260922 ②防线）：留言的 quote 校正到主人引号里那段原话
         # （或在没有可指认的片段时确定性拒绝）——**必须在目标预检之前**，否则预检
         # 判的是 planner 那个被截短/被概括错的片段。
@@ -8921,6 +8926,41 @@ def _ledger_pending_text(ledger) -> str:
     if not isinstance(ledger, dict):
         return ""
     return str(ledger.get("pending") or "")
+
+
+def _task_ledger_text(config) -> str:
+    """跨轮任务台账（`agent_task` 表）里**还挂着的行**的原文 —— 出处闸的**第三本账**。
+
+    现场（trace `20261009T070848` → `T070855` → `T070914`，主人原话「给空间向量那篇
+    文章加个标签embeding」）：第一轮规划成两步——先 `tag_create`（弹卡、主人点确定、
+    标签真建出来 id=44），系统自己接着问「要我把 noteId=46 打上这个标签吗？」；下一轮
+    主人回了一个「要」，planner 选对了 `article_tags`、参数也对（`set_article_tags(46,
+    add=["embeding"])`），却在出处闸上原地撞死——`user_msg` 只有「要」两个字，而这一轮
+    `has_confirm=false` ⇒ 第二本账（上一轮那张卡的 pending 行）**也是空的**。于是
+    `planner.write_value_unresolved values=["embeding"]` → 零工具 + 一段"这个名字对不上
+    主人这句话"的如实收尾。**主人自己点的头、系统自己问的那句话，被系统自己的闸判成了
+    编造**——而且那个标签上一轮刚刚由它自己建好。
+
+    三条边界（改这一族之前先读）：
+      · 来源是**模型写的 goal**（`intents[].goal`），不是系统渲染的签名载荷——但它过
+        ④出处对账（`tasks.reconcile_goal`：goal 里的号必须出自主人说过的话，对不上就
+        退回原话、退不回就不登记），且只认**还挂着的行**（终态的 `render_open_tasks`
+        自然不渲染）。把"主人上一轮说过的那件事"接回来，与第二本账接"上一轮那张卡"
+        是同一个道理：**系统自己规定的重提路径，不许判成编造**。
+      · 渲染**复用** `tasks.render_open_tasks`（planner 提示词里那段就是它）——第二份
+        渲染器迟早与第一份漂开，而两处读的是同一批行；但取 `with_guide=False`：
+        首尾那两块**给模型看的指令**（「接着把它做完」「不要撤下」）不许当出处，
+        否则自由文本类的写值与其中几个字撞上就成了"有来源"。
+      · 读不到/形状不对 ⇒ 空串（fail-closed：回到只认前两本账的旧行为，与加本账之前
+        逐字节一致）；本账只在前面几支判不了时补位，归一由调用方 `_squash_spaces` 做。
+    """
+    rows = _open_tasks_rows(config)
+    if not rows:
+        return ""
+    try:
+        return render_open_tasks(rows, with_guide=False)
+    except Exception:                 # noqa: BLE001 —— 台账渲染失败不许阻断写通道
+        return ""
 
 
 def _grounded_value(val, sq_msg: str, sq_ledger: str = "") -> bool:
