@@ -4,8 +4,8 @@
 **为什么住在 `rag/` 而不是 `agent/`**（20261005 从 `agent/sections.py` 搬来）：消费者
 有三处，其中两处在 agent 层**下面**（`rag/search.py` 索引切片、`tools/base.py` 按节
 取回），第三处才是渲染侧 `agent/context.py`。原先它住在 `agent` 包里，于是**导入一个
-纯字符串函数要先跑 `agent/__init__.py`** → `agent.agent` → `agent.graph`（9826 行 +
-langgraph），实测冷启动 **1.69 秒**（其中 `agent.graph` 占 1.71s 累计）——离线工具
+纯字符串函数要先跑 `agent/__init__.py`** → `agent.agent` → `agent.graph`（+ langgraph，
+本仓最大的那个模块），实测冷启动 **1.69 秒**（其中 `agent.graph` 占 1.71s 累计）——离线工具
 （`eval/recall_eval.py`、`eval/frame_budget.py`、任何只想要词法检索的入口）每次冷启动
 都在为一件不相干的事付这笔钱，两处调用点还各自写了"惰性导入：别让 tools 层启动即拉
 agent 包"来把它藏起来。`rag` 是三处里最低的一层（`agent/decisions.py`、`agent/context.py`、
