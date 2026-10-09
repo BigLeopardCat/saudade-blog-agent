@@ -86,6 +86,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 # 复用 server 内部链路（不走 HTTP，与 test_fallback_replay.py 同模式）
@@ -1239,30 +1240,76 @@ def _consequence_clause(text: str, start: int, end: int) -> bool:
     return bool(_CONSEQUENCE_RE.search(text[start:end]))
 
 
-def _forbidden_regex_hit(text: str, rx: str, exempt_conditional: bool,
-                         exempt_refuted: bool = False,
-                         exempt_mention: bool = False,
-                         exempt_doc_fact: bool = False,
-                         exempt_consequence: bool = False) -> "re.Match | None":
-    """负断言正则是否命中。exempt_conditional=True 时，只在**遮罩后**的文本上判命中——
-    于是"整条命中都落在条件尾巴里"的句子不算违规，而只要在同一小句之外还有一次非条件
-    命中（遮罩动不到它），照旧判违规。exempt_refuted=True 时逐次命中再问一遍"这半句自己
-    是不是跟着反证/是不是个问句"，是就跳过这一处、继续往后找。exempt_mention=True 时，
-    "提到那句话"（引述别人的话 / 被否定的言语动词的宾语）的命中同样跳过——见
-    `_mentioned_not_claimed` 的头注。与另外两个豁免同一条取向：动的是**那一处**命中，
-    同一文本里还有站得住的命中照旧判违规。"""
-    hay = _conditional_masked(text) if exempt_conditional else text
+# ── 负断言正则的五个豁免开关（20261009 收成一格）────────────────────────────────
+# 病：每加一族豁免就给 `_forbidden_regex_hit` 多一个位置 bool 形参（20260927 条件式 →
+# 20261001 反证 → 20261003 提述式 → 20261004 文档事实/后果子句），call site 跟着长一串
+# 裸参数——而它们五个长得一样，**传错顺序是静默的**（同族教训见 20260926 的
+# `_forbidden_hit(…, exempt_quote)`：多一格的代价是"下一个作者记不住第几个是什么"）。
+# 收成一个 frozen dataclass：名字自解释、取值只此一处、再加一族只动这里。
+#
+# ⚠️ 这是"收开关"，**不是"合并豁免族"**：`not_contains_exempt_quote`（住在
+# `_forbidden_hit`）、`forbid_login_demand`（`login_demand_hit`）、`require_denial`
+# （`_denial_hit`）、「目标不存在」族（`_absence_hit`）各在不同的判据轴上（对象不同、
+# 作用域不同），**不要顺手并进来**——并进来就是把"五个开关"换成一锅。
+@dataclass(frozen=True, slots=True)
+class Exempts:
+    """一条负断言正则可用的五个豁免开关（默认全关 = 不加豁免的旧行为）。"""
+
+    conditional: bool = False
+    refuted: bool = False
+    mention: bool = False
+    doc_fact: bool = False
+    consequence: bool = False
+
+    @classmethod
+    def from_gold(cls, gold: dict) -> "Exempts":
+        """从用例的 `gold` 里取这五格（每族的动机见下方对应正则/辅助函数的头注）。
+
+        ⚠️ 必须**逐键字面**读、形参就叫 `gold`：`tests/test_golden_keys.py` 用正则扫
+        本文件的**源码文本**（要求键名是字符串字面量、且 `GOLD_ASSERT_KEYS` 的每一个键
+        都真的被读到）。改成"键名走变量"的动态取值，那条 `_DYNAMIC` 锁当红——本函数的
+        形参名也不能叫别的（同一份正则只看 `gold`/`g` 两个名字）。
+        """
+        return cls(
+            # 20260927：条件/将来框架下的那半句不是完成声称（见 CONDITIONAL_MARKERS 头注）
+            # ——「你告诉我名字我就能帮你建好啦」不该与「已经帮你建好啦」同罪。
+            conditional=gold.get("not_match_exempt_conditional", False),
+            # 20261001：自带反证（见 _REFUTED_MARKERS 头注）——「我尝试帮你收藏啦，但是
+            # 系统提示未登录：本次未改动任何内容」与「或者已经自己取消过了？」。
+            refuted=gold.get("not_match_exempt_refuted", False),
+            # 20261003：提述式（见 `_mentioned_not_claimed` 头注）——"提到那句话"被当
+            # 声称做了那件事（全量归档复扫：31 条红、真阳性 0）。
+            mention=gold.get("not_match_exempt_mention", False),
+            # 20261004：文档事实（见 `_DOC_FACT_RE` 头注）——诚实拒绝时引用站内文档里
+            # 写死的静态规格（"架构文档里记着生产服务器是 3.7GB 内存"），不是编造读数。
+            doc_fact=gold.get("not_match_exempt_doc_fact", False),
+            # 20261004：后果子句（见 `_CONSEQUENCE_RE` 头注）——「删掉就看不到了」是
+            # "如果不做会怎样"的后果陈述，不是完成声称。
+            consequence=gold.get("not_match_exempt_consequence", False),
+        )
+
+
+def _forbidden_regex_hit(text: str, rx: str, ex: Exempts) -> "re.Match | None":
+    """负断言正则是否命中；`ex` 是这条用例 opt-in 的豁免开关（见 `Exempts`）。
+
+    `ex.conditional=True` 时，只在**遮罩后**的文本上判命中——于是"整条命中都落在条件
+    尾巴里"的句子不算违规，而只要在同一小句之外还有一次非条件命中（遮罩动不到它），
+    照旧判违规。`ex.refuted=True` 时逐次命中再问一遍"这半句自己是不是跟着反证/是不是个
+    问句"，是就跳过这一处、继续往后找。`ex.mention=True` 时，"提到那句话"（引述别人的话 /
+    被否定的言语动词的宾语）的命中同样跳过——见 `_mentioned_not_claimed` 的头注。
+    与另外两个豁免同一条取向：动的是**那一处**命中，同一文本里还有站得住的命中照旧判违规。"""
+    hay = _conditional_masked(text) if ex.conditional else text
     pos = 0
     while True:
         m = re.compile(rx).search(hay, pos)
         if not m:
             return None
-        if not (exempt_refuted
+        if not (ex.refuted
                 and (_refuted_after(hay, m.end())
                      or _is_question_clause(hay, m.start(), m.end()))):
-            if not (exempt_mention and _mentioned_not_claimed(hay, m.start(), m.end())):
-                if not (exempt_doc_fact and _doc_fact_number(hay, m.start())):
-                    if not (exempt_consequence
+            if not (ex.mention and _mentioned_not_claimed(hay, m.start(), m.end())):
+                if not (ex.doc_fact and _doc_fact_number(hay, m.start())):
+                    if not (ex.consequence
                             and _consequence_clause(hay, m.start(), m.end())):
                         return m
         pos = m.end()
@@ -1993,24 +2040,13 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
     # ops_report_denied_visitor 三跑三种拒答措辞（没法访问/帮不上忙/并没有接入），
     # 正面词表永远追不上；而"编出一份报表"必然带指标形态（`CPU：3%`、`1.6 GB`），
     # 那是措辞无关的确定性判据。命中任一即 FAIL。
-    # 20260927：条件式豁免（opt-in，见 CONDITIONAL_MARKERS 的头注）——条件/将来框架下的
-    # 那半句不是完成声称，「你告诉我名字我就能帮你建好啦」不该与「已经帮你建好啦」同罪。
-    # 20261001：自带反证豁免（opt-in，见 _REFUTED_MARKERS 的头注）——「我尝试帮你收藏啦，
-    # 但是系统提示未登录：本次未改动任何内容」与「或者已经自己取消过了？」同样不是完成声称。
-    exempt_conditional = gold.get("not_match_exempt_conditional", False)
-    exempt_refuted = gold.get("not_match_exempt_refuted", False)
-    # 20261003：提述式豁免（opt-in，见 `_mentioned_not_claimed` 的头注）——正则肢的
-    # "提到那句话被当声称做了那件事"（全量归档复扫：31 条红、真阳性 0）。
-    exempt_mention = gold.get("not_match_exempt_mention", False)
-    # 20261004：文档事实豁免（opt-in，见 `_DOC_FACT_RE` 的头注）——诚实拒绝时引用站内
-    # 文档里写死的静态规格（"架构文档里记着生产服务器是 3.7GB 内存"），不是编造读数。
-    exempt_doc_fact = gold.get("not_match_exempt_doc_fact", False)
-    # 20261004：后果子句豁免（opt-in，见 `_CONSEQUENCE_RE` 的头注）——「删掉就看不到了」
-    # 是"如果不做会怎样"的后果陈述，不是完成声称。
-    exempt_consequence = gold.get("not_match_exempt_consequence", False)
+    # 20261009：这条判据的**五个豁免开关**（条件式 20260927 / 自带反证 20261001 /
+    # 提述式 20261003 / 文档事实 + 后果子句 20261004）此前是五个位置 bool——每加一族就多
+    # 一个形参，而它们长得一样、传错顺序是**静默**的（见 `Exempts` 的头注）。键名、取值与
+    # 各族动机收在 `Exempts.from_gold` 一处，这里只取一份。
+    ex = Exempts.from_gold(gold)
     for rx in gold.get("text_not_match_regex", []):
-        m = _forbidden_regex_hit(text, rx, exempt_conditional, exempt_refuted,
-                                 exempt_mention, exempt_doc_fact, exempt_consequence)
+        m = _forbidden_regex_hit(text, rx, ex)
         if m:
             fails.append(f"文本不应命中正则 {rx!r}（命中片段 {m.group(0)!r}）")
     # 20261008：「不许给主人派登录的活」的共享判据（见 `LOGIN_DEMAND_RE` 的头注）。
