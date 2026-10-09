@@ -574,6 +574,11 @@ _PLANNER_PROMPT = """\
      功能词、或名字的半个片段当成取值填进去，**弹窗就会问一个主人从没说过的
      名字**。填完逐个参数对着原话核一遍：这个值，主人真的说过吗？说过的名字
      要**完整照抄**（不许截断、不许去下划线、不许拆成两截分给两个参数）。
+   - **主人点名了文章的号码就别再自己另挑一个**：id 槽只能填主人这句话里出现的
+     那个号——没点名、只说标题或特征时才先去清单里读回确切 id。**凭印象另填一个号
+     是最坏的一种错**（20261009 实测：他自己的意图行里照抄了主人说的号，id 槽里却
+     填了另一个号；那一次系统按"目标与主人点名不一致"把**挂标签**那一步摘掉了，
+     卡上只剩"建标签"，主人点了头也办不到他要的那一件）。
    - **"要不要执行"不由你判断**：主人点名了对象与动作（"把文章〈id〉设为私密"
      "去掉「X」标签"），哪怕措辞不标准、哪怕你觉得是破坏性操作，都**照常
      输出该技能的 TOOLS**——"要不要真动手"由系统在**确认框**上问主人（执行器
@@ -1260,7 +1265,41 @@ _MENU_DENIED_GIVEUP_NUDGE = (
 _NAME_WRITE_VERBS = ("挪", "移到", "移动到", "挪到", "挂到", "换到", "放到",
                      "改名叫", "改名为", "改名", "改成", "换成",
                      "删掉", "删除", "去掉", "移除", "取消",
-                     "新建", "创建", "建立", "新增")
+                     "新建", "创建", "建立", "新增",
+                     # 发布状态这一族（20261009 补）。为什么不补不行——现场
+                     # （trace `20261009T132246_748`）：主人说「把 test8 转换为公开状态」，
+                     # planner 第一轮读到了后台清单（那一行**就是**《TEST8》私密），
+                     # 之后却连搜三轮公开检索、最后在正文里问一句"要我现在就办吗"——
+                     # 弹卡该发生的那一轮，什么都不可能发生。两条既有纠偏通道都不收它：
+                     # `_name_write_nudge` 要**这张表**里的词（「转换为」一个都不在），
+                     # `_drop_correction` 要 `dropped` 非空（这轮排的是读，没被剔空）。
+                     # 于是"主人下了命令、系统只排读"这一格没有任何人管——本表补上它。
+                     # ⚠️ 刻意只收**动词形态**（转换/转为/设为…），**不收**「公开/私密/
+                     # 草稿/置顶/发布」这些**名词兼动词**：它们是读意图里的常客
+                     # （「站内有置顶的文章吗」「哪些是公开的」），进了表就会对着一次
+                     # 纯查询纠偏、把 planner 往"排一条写规格"推（同禁言族被否掉的理由，
+                     # 见本表上方那条注）。「取消置顶」另有「取消」兜着。
+                     "转换为", "转换成", "转为", "转成", "设为", "设成", "设置成",
+                     # 挂标签这一族（20261009 补）。上面那张表里只有「挂到/换到/放到」
+                     # 这类"到"字形态，而主人最常说的恰是**"上"字形态**——「把git，
+                     # 代码版本管理挂上去」（trace `20261008T075023`）、「把 Git 和代码
+                     # 版本管理两个标签加到文章 16」（trace `20261008T080517`，
+                     # 也就是 golden `admin_two_tags_case_variant_card` 的原话）：
+                     # 两句都**一个字都不命中**这张表。后果与状态族那一条同形——
+                     # planner 把这一轮排成只读（`list_tags` 读标签字典）时，两条纠偏
+                     # 通道都够不着它，于是本轮零写规格直落 narrator：20261009 实测
+                     # 6 跑里 2 跑就这么收尾（正文把标签列表念一遍、问"要我去办吗"）。
+                     # ⚠️ 只收**粘着"到/上/进"的动词形态**，刻意**不收**光杆的「加」
+                     # 与「加了」：「站内加了标签的文章有哪些」是**读**意图，进了表就会
+                     # 对着一次纯查询纠偏（同禁言族被否掉的理由）。
+                     "加到", "加进", "加上", "挂上", "打上", "贴上")
+# 「先别急着动」这类**按住**的话：它带着动作词，却明确不是在要你现在动手。
+# 这张表的由来是 `admin_write_intent_named_target_only` 那句真实原话
+# （「文章 999999 那篇我想设成私密，先别急着动」）——上面刚给状态族添了动词，
+# 没有这道闸的话它会被纠偏成"主人在要求你改动站内数据"（对这句是**假话**），
+# planner 顺着一排写规格 = 主人说了"先别动"却弹出确认卡。只收"按住"的字面，
+# 不收泛否定（"别删"这类由 `is_question_like`/豁免族管）。
+_HOLD_MARKS_RE = re.compile(r"先别|别急|先不要|暂时别|暂时不|先不|缓一缓|等等再说|回头再说")
 # ⚠️ **禁言/解禁的动作词刻意不在这里**（20261004 内容风控下放时考虑过、否掉了）。
 # 理由与冻结族同源：这一族的动作词（冻结/解冻/禁言/解禁）都不是"自带祈使形态"的
 # 词——「禁言」两个字同样出现在**读**意图里（「看看禁言名单」「他被禁言了吗」），
@@ -1321,6 +1360,9 @@ def _name_write_nudge(plan_obj: dict, user_msg, rounds: int,
         return None
     text = str(user_msg or "")
     if authz.is_question_like(text):
+        return None
+    # 「先别急着动」这类按住的话不是"在要求你现在改动数据"（见 `_HOLD_MARKS_RE`）。
+    if _HOLD_MARKS_RE.search(text):
         return None
     if not _name_write_verbs(text):
         return None
@@ -8761,7 +8803,14 @@ _WRITE_VALUE_FIELDS = {
     # 工具名 -> 值字段（主人这句话里必须能找到来源的**值**：新名字 / 标签名列表）。
     # 与 `_WRITE_NAME_FIELDS` 分开：那个是"目标身份"（工具要查字典证明它存在），
     # 这个含**新建**的名字——它天然不在字典里，只可能来自主人的原话。
-    "create_tag": ("title",),
+    # `titles`（20261009 补）：一名一 spec 的**多名字**槽（「加两个二级标签，名字叫
+    # 「X」和「Y」」）。它此前漏在这张表外，而"多名字"恰好是**最容易编名字**的那一格
+    # ——一次要填 N 个，模型补不上来时就会拿上下文里的字凑（20261009 全量红点
+    # `admin_two_tags_case_variant_card`：`add` 被填成占位词、`titles` 同族）。
+    # 语义与 `title` 完全一样（都是"要建的名字"，天然不在字典里、只可能出自主人原话）
+    # ⇒ 没有理由只收单数那一格。值地基的多 spec 早就不是早退（见 `_name_arg_fix`
+    # 的长注），所以这里登记进去当天就生效。
+    "create_tag": ("title", "titles"),
     "create_category": ("title",),
     "update_tag": ("new_title",),
     "update_category": ("new_title",),
@@ -9161,9 +9210,10 @@ def _name_arg_fix(plan_obj: dict, user_msg,
 def _drop_satisfied_tag_creates(plan_obj: dict, config) -> list[str]:
     """`article_tags` 同卡「先建再挂」里，**站内已经有这个名字**的那一步摘掉（20261009）。
 
-    背景：`article_tags` 的展开器把 `add` 里**每个**名字都派成一条 `create_tag`
-    （先建再挂、一张卡一次点击，见 `skills.instantiate_plan` 那一支）。它是**纯函数**、
-    看不到标签字典，所以"这个名字站内到底有没有"只能在这里问——判据就是字典。
+    背景：`article_tags` 的展开器把 `add`（以及 20261009 起 `replace`）里**每个**名字
+    都派成一条 `create_tag`（先建再挂、一张卡一次点击，见 `skills.instantiate_plan`
+    那一支）。它是**纯函数**、看不到标签字典，所以"这个名字站内到底有没有"只能在这里
+    问——判据就是字典。
 
     不摘会怎样（两条都是真缺口，不是防患于未然）：
       · `create_tag` 的复用判据是**同名同层**（`tools.create_tag` 与
@@ -10459,6 +10509,10 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         return None
     picks: list = []
     fast: list = []          # [(TOOLS 行位次, 条目)]——走了"同轮命令即确认"快道的那几件
+    # [(TOOLS 行位次, 工具名, 原因, article_id)]——被**目标**那两道拦下的写（20261009）。
+    # 它们不进卡，见下面「不许弹半张卡」那一段：卡一弹，`execute_node` 这一轮就一个工具
+    # 都不执行 ⇒ 帧链也一起不发生 ⇒ 那几件**既不上卡、又没人告诉 planner 改**。
+    target_dropped: list = []
     for idx, spec in enumerate(specs):
         name = _tool_name(spec)
         if not authz.requires_consent(principal, name):
@@ -10480,8 +10534,10 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             # 参数没解析出来 / 还挂着 $ref（引用依赖的是签发那一轮的工具帧，执行轮
             # 早已不在）→ 不签发，退回既有错误帧链路让 planner 自己收拾
             continue
-        if name in _ARTICLE_WRITE_TOOLS and (
-                not A.target_mentioned(
+        if name in _ARTICLE_WRITE_TOOLS:
+            # 两道目标判据**分开记**（20261009）：往下要按"是谁拦的"决定整批还弹不弹，
+            # 合成一个布尔之后就再也分不出来了。两道的语义各自不变。
+            if not A.target_mentioned(
                     args.get("article_id"),
                     _target_evidence(state, user_msg,
                                      _page_ctx(state["messages"], principal.known_role))
@@ -10501,16 +10557,19 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                     # 过吗"，加进台账等于把"看不见的字"也当成读过，一条命令式措辞就能
                     # 直接落写。这里扩的是**弹卡**：卡面会把那一篇（id + 标题）印出来，
                     # 多一次点击换主人一眼核对；写闸一寸没让。
-                    + [_ledger_pending_text(state.get("ledger"))])
-                # 与用户点名不一致 → 同样不弹（20260921 第三轮）：确认框会把目标
-                # 明明白白写出来，但问的必须是**主人点的那一篇**——问错一篇再让主人
-                # 点确定，等于把误靶洗成一条已授权的写。跳过 → 由下面的循环产
-                # target_mismatch 帧，planner 按帧改回来（那条链路本就在等着）。
-                # （主人这一轮一个 id 都没点名时，这一格**不启用**——
-                # `target_named` 的空集语义，见它的 docstring。）
-                or not A.target_named(args.get("article_id"),
-                                      A.user_named_article_ids(user_msg))):
-            continue
+                    + [_ledger_pending_text(state.get("ledger"))]):
+                target_dropped.append((idx, name, "ungrounded", args.get("article_id")))
+                continue
+            # 与用户点名不一致 → 同样不弹（20260921 第三轮）：确认框会把目标
+            # 明明白白写出来，但问的必须是**主人点的那一篇**——问错一篇再让主人
+            # 点确定，等于把误靶洗成一条已授权的写。跳过 → 由下面的循环产
+            # target_mismatch 帧，planner 按帧改回来（那条链路本就在等着）。
+            # （主人这一轮一个 id 都没点名时，这一格**不启用**——
+            # `target_named` 的空集语义，见它的 docstring。）
+            if not A.target_named(args.get("article_id"),
+                                  A.user_named_article_ids(user_msg)):
+                target_dropped.append((idx, name, "mismatch", args.get("article_id")))
+                continue
         picks.append((idx, {"tool": name, "args": args}))
     # ── 整批一致（20261008）：这一批里只要有一件要问，就**整批一起问** ──────────
     # 病（本批的 `tag_create` 一次建多个标签把它从"理论上的形状"变成了常见形状）：
@@ -10524,6 +10583,9 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     # 点击都不多的既有形态一字未动）；被**别的**原因 `continue` 掉的（权限硬拦 /
     # 参数没解析出来 / 挂着 $ref / 文章目标对不上）**一件都不并进来**——那几族各有
     # 自己的下游链路，并进来等于把别处的病换一个地方发。
+    # （20261009 补齐那句"各有自己的下游链路"：它只在**这一轮不弹卡**时才成立。文章目标
+    # 那两族一旦与"别的件要弹卡"同批，下游链路就被这张卡掐死——见下面 `target_dropped`
+    # 那一段，那一批现在整批退回不弹卡。）
     if picks and fast:
         record("confirm", "batch_fastpath_merged",
                fast=[str(e.get("tool") or "") for _, e in fast],
@@ -10533,6 +10595,32 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         picks = sorted(picks + fast, key=lambda p: p[0])
     picks = [p for _, p in picks]
     if not picks:
+        return None
+    # ── 不许弹半张卡（20261009）：被目标拦住的那几件，**要么整批一起问、要么整批不弹**
+    # ──
+    # 病（全量实测，`admin_two_tags_case_variant_card` 13 次采样里 4 次踩到，而判据
+    # **全绿**）：主人说"把两个标签加到文章〈16〉"，planner 的 id 槽填了别的号 ⇒
+    # `set_article_tags` 被上面那两道之一 `continue` 掉，而**同批的 `create_tag` 照样
+    # 进 picks** ⇒ 卡照弹，卡上只剩"建标签"那两步。主人看到卡、点了「全部办」，
+    # 标签真建出来了——**他要的那一件（挂上去）从头到尾没有任何一条通道**：
+    #   · 卡上没它（不在令牌里）；
+    #   · 执行链也没它——`execute_node` 一见 `pending_confirm` 就**一个工具都不执行**，
+    #     target_mismatch / unknown_target 那两帧**这一轮压根不会发**；
+    #   · 于是 planner 永远收不到"你这个号不对"的帧（那条链路在等着，却等不到）。
+    # 结果正是本条用例要根治的那句话的实现体：「干完见标签、不做挂标签」。
+    # 判据方向与本文件其它每一处一致：**宁可多问一轮，也不静默丢一次主人点名的写**。
+    # 所以整批退回：这一轮不弹卡，让 execute 照常产那两帧（unknown_target /
+    # target_mismatch / consent_required），planner 按帧把号改回主人点名的那个，
+    # 下一轮再连挂标签一起弹一张完整的卡。
+    if target_dropped:
+        record("confirm", "partial_batch_refused",
+               dropped=[f"{n}:{why}" for _, n, why, _ in target_dropped],
+               picks=[str(e.get("tool") or "") for e in picks],
+               ids=[str(a) for *_, a in target_dropped])
+        logger.warning("[confirm] 这一批里有 %d 件写被目标判据拦下（%s）→ 不弹半张卡，"
+                       "退回帧链让 planner 按主人点名的目标改回来",
+                       len(target_dropped),
+                       "、".join(f"{n}({why})" for _, n, why, _ in target_dropped))
         return None
     # 问句要把父标签**名字**写出来（20260921）：只写「新建二级标签「Rust」」时
     # 用户无从核对它要挂到哪个爸爸底下，而"挂错父标签"正是本轮修的参数对调事故。

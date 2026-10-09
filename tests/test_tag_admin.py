@@ -723,6 +723,34 @@ check("一次加两个名字 ⇒ 两条 create_tag（一名一 spec，同 `tag_c
       [s.split("(", 1)[0] for s in _it_two["tools"]]
       == ["create_tag", "create_tag", "set_article_tags"])
 
+# `replace`（整体换掉）同族（20261009 扩面）：主人说「文章 23 的标签整体换成「Rust」
+# 「Tokio」」而站内没有「Tokio」时，老路是**零写 + 一句"站内没有这个标签"**——主人得
+# 再说一轮"那你建一个"，正是 ⑧b 要治的"一句话被拆成两次来回"。两格的差别只在
+# `replace` 会先把旧的全摘掉，没有道理让 `replace` 继续是那个形状。
+_it_rep2 = instantiate_plan("article_tags",
+                            {"article_id": 23, "replace": ["Rust", "Tokio"]})
+check("整体换掉（replace）也先建再换（一名一 spec，排在 set_article_tags 之前）",
+      [s.split("(", 1)[0] for s in _it_rep2["tools"]]
+      == ["create_tag", "create_tag", "set_article_tags"])
+_it_rep2_args = [json.loads(s[s.index("(") + 1:s.rindex(")")]) for s in _it_rep2["tools"]]
+check("  建的名字与 replace 里那几名逐字同源（不许各写一份）",
+      [a.get("title") for a in _it_rep2_args[:2]] == ["Rust", "Tokio"]
+      and _it_rep2_args[2].get("replace") == ["Rust", "Tokio"],
+      json.dumps(_it_rep2_args, ensure_ascii=False))
+_it_rep3 = instantiate_plan("article_tags", {"article_id": 23, "replace": []})
+check("  replace=[] 是**清空**、不是\"没有名字\"：一条 create_tag 都不派",
+      [s.split("(", 1)[0] for s in _it_rep3["tools"]] == ["set_article_tags"]
+      and json.loads(_it_rep3["tools"][0][_it_rep3["tools"][0].index("(") + 1:
+                                         _it_rep3["tools"][0].rindex(")")]).get("replace") == [])
+_it_rep4 = instantiate_plan("article_tags",
+                            {"article_id": 23, "add": ["Rust"], "replace": ["Rust", "Tokio"]})
+check("  add 与 replace 同时出现 ⇒ 仍走既有的互斥守卫（零工具、如实问清意图）",
+      _it_rep4["tools"] == [] and "问清意图" in _it_rep4["note"], _it_rep4["note"])
+_it_rep5 = instantiate_plan("article_tags", {"article_id": 23, "add": ["Rust", "Rust"]})
+check("  同一个名字在 add 里说两遍 ⇒ 仍只派一条 create_tag（建两次会撞名）",
+      [s.split("(", 1)[0] for s in _it_rep5["tools"]]
+      == ["create_tag", "set_article_tags"])
+
 _kept_add, _already_add = A.reached_specs(
     [{"tool": "create_tag", "args": _it_args[0]},
      {"tool": "set_article_tags", "args": _it_args[1]}], index=IDX)
