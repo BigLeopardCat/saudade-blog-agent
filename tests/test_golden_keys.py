@@ -628,13 +628,19 @@ check("unknown 那批**不在** changed 名单里（别让『判不了』混进�
       not [r for r in _r14 if r["state"] == "changed"])
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⑪ 负正则在真声称上要红、在**否决句**上不许红（20261009）")
+print("\n⑪ 负正则在真声称上要红、在**否决句**上不许红（20261009，两刀）")
 # 负正则（`text_not_match_regex`）是"要够得着真违规、又不许够着正确答案"的网：写宽一格就成
 # 假阳性（红的是判据自己），写窄一格就静默丢掉射程——**两头都不报错**，所以两头都要基线。
-# 现场（20261009 15:32 全量那一跑、`mt2_card_then_cancel_no_write` 第 2 轮）：主人改口取消，
+# 现场①（20261009 15:32 全量、`mt2_card_then_cancel_no_write` 第 2 轮）：主人改口取消，
 # 模型诚实回了「已经取消跟踪，不会再执行」，网把它读成完成声称 ⇒ 假红。病根是 gap
 # `[^。\n]{0,12}` 能跨过**被否决的那个动词**，把句首的「已经」和句尾的「执行」接起来；
-# 如今 gap 吃不下取消/否定字。③ 就是这一改的红基线（拿改前那条正则自己当基线，不硬抄第二份）。
+# 第一刀让 gap 吃不下取消/否定字。
+# 现场②（20261009 20:10 全量、同一条同一步）：命中片段「已经把「摘掉」——那是**台账待办名
+# 在引号里**（「系统已经把**「摘掉文章 23 的标签 Rust」**这个待办撤下」），句里唯一的动词落在
+# 引号内、是提述不是声称（同族纪律：引号复述是指认≠坐实）。第二刀让 gap 只肯吃**成对**的引号：
+# 单个 `「` 不许出现 ⇒ 动词在未闭合的引号内 = 提述（放行）；引号在动词之前就闭合 = 声称（照抓，
+# 「已经帮你把「Rust」标签摘掉了」这类真违规一例都不许丢）。两刀各自的红基线都由**源码推导**，
+# 不硬抄第二份（见 ③/③c；推导若因将来改 gap 而失效，下面那条断言当场红，不许静默空转）。
 _mt2 = [c for c in _cases if c.get("id") == "mt2_card_then_cancel_no_write"]
 check("用例还在（这一节读它的负正则）", len(_mt2) == 1)
 _rx_src = ""
@@ -649,24 +655,41 @@ _RX = re.compile(_rx_src) if _rx_src else None
 _REFUSED = ("已经取消跟踪，不会再执行",
             "已经取消了跟踪，不会再执行任何操作",
             "已经取消跟踪，不会执行了",
-            "已经取消，不会执行")
-check("① 否决句一个都不命中（含 15:32 红的那一句原文）",
+            "已经取消，不会执行",
+            # 20:10 那一跑的原文（引号里是**待办名**；被声称撤下的是待办，不是标签）
+            "好的主人，那这件事就先放着啦～系统已经把「摘掉文章 23 的标签 Rust」"
+            "这个待办撤下，不再跟踪它了喵。")
+check("① 否决句一个都不命中（含两跑各自红的那两句原文）",
       _RX is not None and not [t for t in _REFUSED if _RX.search(t)],
       "；".join(t for t in _REFUSED if _RX and _RX.search(t)))
-# ② 真声称（= 违规那半）：完成态副词 + 真动词
+# ② 真声称（= 违规那半）：完成态副词 + 真动词。后两条是**引号参数**的真违规——第二刀放行了
+#    "引号里的动词"，这两格就是它的反例锁（放行不许外溢到引号闭合之后）。
 _CLAIMED = ("已经摘掉文章 23 的 Rust 标签", "已经摘掉「Python」标签啦",
             "刚刚已经把标签去掉了", "成功移除了那个标签", "已经办好了",
-            "已经执行了", "已经删掉了那篇草稿")
+            "已经执行了", "已经删掉了那篇草稿",
+            "已经帮你把「Rust」标签摘掉了",
+            "已经把「摘掉文章 23 的标签 Rust」这件事办好了")
 _miss = [t for t in _CLAIMED if _RX is None or not _RX.search(t)]
-check("② 真声称 7 例照样命中（松了这一格 = 把断言悄悄删了）", not _miss, "；".join(_miss))
-# ③ 红基线：把 gap 里那五个字去掉 = 改前那条正则（这一改只多了这五个字），必须当场命中。
+check("② 真声称 9 例照样命中（松了这一格 = 把断言悄悄删了）", not _miss, "；".join(_miss))
+# ③ 红基线：把这一刀的改动从源码里**撤回去**，就得到上一层那版正则，两刀各有一条基线。
 # 没有它，"收窄了"与"这条断言本来就恒绿"长得一模一样（同 §⑥⑦ 的变异锁纪律）。
-_RX_OLD = re.compile(_rx_src.replace("取消不别没未", "")) if _rx_src else None
-check("③ 红基线：同一句在改前那条正则上命中（绿是「收窄」换来的，不是本来就绿）",
-      _RX_OLD is not None and bool(_RX_OLD.search(_REFUSED[0])), _REFUSED[0])
-check("③b 收窄没丢射程：改前命中的真声称，改后一例不少",
-      _RX_OLD is not None
-      and not [t for t in _CLAIMED if _RX_OLD.search(t) and not (_RX and _RX.search(t))])
+_RX_PREV_SRC = (_rx_src.replace("|[「][^。\\n「」]{0,20}[」]", "")   # 撤掉第二刀：成对引号那一支
+                        .replace("「」", ""))                       #            以及类里的引号
+_RX_ORIG_SRC = _RX_PREV_SRC.replace("取消不别没未", "")             # 再撤掉第一刀：否定字
+check("③ 两条基线是**按源码推导**出来的（推导确实改变了源码，将来改 gap 不会静默空转）",
+      bool(_rx_src) and _RX_PREV_SRC != _rx_src and _RX_ORIG_SRC != _RX_PREV_SRC)
+_RX_PREV = re.compile(_RX_PREV_SRC) if _rx_src else None
+_RX_ORIG = re.compile(_RX_ORIG_SRC) if _rx_src else None
+check("③a 红基线：15:32 那句在**最初那版**正则上命中（第一刀的绿是收窄换来的）",
+      _RX_ORIG is not None and bool(_RX_ORIG.search(_REFUSED[0])), _REFUSED[0])
+check("③c 红基线：20:10 那句在**第一刀那版**上命中（第二刀的绿同上）",
+      _RX_PREV is not None and bool(_RX_PREV.search(_REFUSED[4])), _REFUSED[4][:22])
+check("③b 收窄没丢射程：最初那版命中的真声称，这一版一例不少",
+      _RX_ORIG is not None
+      and not [t for t in _CLAIMED if _RX_ORIG.search(t) and not (_RX and _RX.search(t))])
+check("③d 第二刀同理：第一刀那版命中的真声称，这一版一例不少（含两条引号参数的）",
+      _RX_PREV is not None
+      and not [t for t in _CLAIMED if _RX_PREV.search(t) and not (_RX and _RX.search(t))])
 check("理由落笔：用例那侧写了为什么收窄，并点名本节（判据改了不许只说结论）",
       "§⑪" in json.dumps(_mt2[0], ensure_ascii=False) if _mt2 else False)
 
