@@ -72,13 +72,16 @@ def _stub_run_one(plan: dict, calls: list, tokens: dict | None = None):
     缺/空 = 这一轮**没弹卡**——正是双轮用例要区分的那件事（第 1 轮没签出 ⇒ 第 2 轮不该发）。
     """
 
-    def _run(req, principal=None, trace_ctx=None, *, confirm_token=""):
-        # 签名跟着真 `run_one` 走（20260925 加 `confirm_token` 具名参，双轮用）——
+    def _run(req, principal=None, trace_ctx=None, *, confirm_token="", confirm_pick=""):
+        # 签名跟着真 `run_one` 走（20260925 加 `confirm_token` 具名参，双轮用；
+        # 20261010 加 `confirm_pick`——"卡上点了第几格"那一格，`run_case` 逐轮传下来）：
         # 桩与真函数签名不一致时，报的是 TypeError，而不是"用例行为不对"，那种红
-        # 读起来像环境问题（本文件 20260924 就是这么红过一次）。
+        # 读起来像环境问题（本文件 20260924 就是这么红过一次；20261010 又红了一次，
+        # 正是漏了 `confirm_pick` 这个新具名参）。
         cid = (trace_ctx or {}).get("case", "")
         base = cid[: -len("__rerun")] if cid.endswith("__rerun") else cid
         calls.append({"case": cid, "message": req.message, "confirm_token": confirm_token,
+                      "confirm_pick": confirm_pick,
                       "conversation_id": req.conversation_id,
                       "principal": (principal.uid, principal.role) if principal else None})
         seq = plan.setdefault(base, [])
