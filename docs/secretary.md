@@ -643,7 +643,7 @@ scope `write.console`，技能 `board_audit` / `board_delete`）。这一族的�
 | `nickname` | 留空字符串 | 留空字符串 |
 | 口令 | 建号者当场定的**强随机**口令（≥20 字符） | 同样强随机，**必须与管理员不同** |
 
-- `nickname` 留空是**有意的**：`auth.rs:112` 的 profile 逻辑是 `if nickname.is_empty() { username }`
+- `nickname` 留空是**有意的**：`auth.rs` 的 profile 逻辑是 `if nickname.is_empty() { username }`
   ⇒ 空串自动回落到账号名，不会显示成空白。
 - 两个角色名都是**跨语言契约**：Rust 侧 `src/authz.rs` 的 `KNOWN_ROLES`（`admin`/`secretary`/`user`/`zako`，
   大小写敏感、无旧别名）与 agent 侧 `agent/authz.py` 的授予表必须一致，改一侧须同步另一侧 + 两侧单测。
@@ -659,7 +659,7 @@ scope `write.console`，技能 `board_audit` / `board_delete`）。这一族的�
 | 格式 | 说明 |
 |---|---|
 | `$argon2id$v=19$...`（PHC，含算法/参数/随机盐） | 现行格式（20260917 起）。`utils::hash_password` 产出 |
-| 无盐单轮 SHA-256 十六进制 | **旧格式，但 `verify_password` 仍认**，且**登录成功那一刻自动升级成 Argon2id**（`auth.rs:69` 的 `needs_rehash` 分支） |
+| 无盐单轮 SHA-256 十六进制 | **旧格式，但 `verify_password` 仍认**，且**登录成功那一刻自动升级成 Argon2id**（`auth.rs` 的 `needs_rehash` 分支） |
 
 - 命令行建号用第二种：MySQL 的 `SHA2('<口令>', 256)` 正好等于 `utils::encrypt_password`
   （`hex::encode`，小写十六进制）。**不要去找"生成 PHC 的一行命令"**——本机没有 argon2 CLI、

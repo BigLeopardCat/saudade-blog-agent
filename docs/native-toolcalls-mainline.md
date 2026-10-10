@@ -55,8 +55,8 @@
 
 | 环节 | 实际形态 | 位置 |
 |---|---|---|
-| API 请求 | `ChatOpenAI(model/api_key/base_url/temperature/max_tokens/streaming/verbose/timeout/extra_body)`——**无 `tools`、无 `tool_choice`** | `models/llm.py:11-47` |
-| 工具怎么给模型 | 工具 schema 派生后**渲染成文本菜单**，插进提示词 | `_tools_desc` / `_menu_arg_signature`，`_PLANNER_PROMPT.format(tools_desc=…)`（`agent/graph.py:2935`） |
+| API 请求 | `ChatOpenAI(model/api_key/base_url/temperature/max_tokens/streaming/verbose/timeout/extra_body)`——**无 `tools`、无 `tool_choice`** | `models/llm.py` |
+| 工具怎么给模型 | 工具 schema 派生后**渲染成文本菜单**，插进提示词 | `_tools_desc` / `_menu_arg_signature`，`_PLANNER_PROMPT.format(tools_desc=…)`（`agent/graph.py`） |
 | 模型怎么表达 | **自由文本**，系统用正则抠 `SKILL=` / `PARAMS=` / `TOOLS:` | `extract_plan_fields` / `_PLANNER_OUTPUT_RE` / `parse_plan` |
 
 > ⚠️ **20261004**：上表是**切换前**的形态，留作对照。第三行那两个正则解析器
@@ -64,10 +64,9 @@
 > 就退回文本"这条兜底，而该兜底从未被走到过。第四行的 `parse_plan` **保留**：
 > 它是**内部计划文本协议**（`plan_encode` ↔ `parse_plan`）的读侧，`execute` / `gate` /
 > 路由全读它，与接口层选哪一档无关。
-| 谁发起调用 | **Python**，逐条确定性执行 | `out = tool.invoke(args)`（`agent/graph.py:5785`） |
+| 谁发起调用 | **Python**，逐条确定性执行 | `out = tool.invoke(args)`（`agent/graph.py`） |
 
-佐证一：全仓 `bind_tools` 只出现在**注释**里（`agent/graph.py:11` / `:6049` / `:6209`、
-`server.py:1161`），每一处都在写"我们不用它"。**零个调用点。**
+佐证一：全仓 `bind_tools` 只出现在**注释**里（`agent/graph.py` / `server.py`），每一处都在写"我们不用它"。**零个调用点。**
 
 佐证二：生产端点对原生能力的支持度**已被本项目自己验过**——
 `eval/d4_structured_output_poc.py` 在 qwen3.8-flash 上跑 `json_schema`+`strict`、
@@ -93,8 +92,8 @@ function calling（`tool_choice=auto` / 强制指定 / 函数侧 `strict`），�
 断点是三件事叠加：
 
 1. **`TODO:` 行有写无读。** 提示词**主动教模型写它**（「多步链中间轮可另加一行：
-   `TODO: <步骤1> → <步骤2>`」，`agent/graph.py:643`，另见 `:346` / `:487`），
-   `plan_encode` 写它（`agent/graph.py:1093-1095`）、`parse_plan` 读进
+   `TODO: <步骤1> → <步骤2>`」，`agent/graph.py`），
+   `plan_encode` 写它（`agent/graph.py`）、`parse_plan` 读进
    `plan_obj["todo"]`、trace 记一条——**然后没有任何消费者**。planner 提示词的
    14 个槽位（skills_context / tools_desc / page_ctx / round_info / intent_hints /
    doc_anchors / recent_context / short_reply_hint / tool_results / ref_hints /
@@ -103,7 +102,7 @@ function calling（`tool_choice=auto` / 强制指定 / 函数侧 `strict`），�
    **这不是"模型没写"，是"系统请它写、然后把那张纸丢了"**——多步任务失败的直接形状。
 2. **意图扫描是词表型，且只认具名别名。** 收尾守卫问的是 `_scan_action_intents`
    给出的待办意图，而它遍历 `_EFFECT_ALIASES`（樱花 / 大雨 / 雪花 / rain / snow …，
-   `agent/decisions.py:124`）——**没有裸「特效」**。用户说的是「开启一个特效」，
+   `agent/decisions.py`）——**没有裸「特效」**。用户说的是「开启一个特效」，
    于是零特效意图 ⇒ `pending` 为空 ⇒ 守卫放行收尾。词表本身没错（"开个特效"不该由
    系统猜是樱花还是雪花），**错的是猜不出来时没有出口**。
 3. **缺「挂起 → 恢复」状态。** narrator 问的那句「你想开哪个？樱花、大雨还是雪花？」
@@ -291,13 +290,13 @@ eff_on_sakura,rag_ota_partition,casual_intro,data_tags \
 机制四步（都已在 trace 或一行实测里坐实）：
 
 1. 不思考档：模型直接把**写技能**点出来（`tag_create`）；思考档与 text 档都选 `chat`。
-2. 模型给的 `title` 是编的，`_name_arg_fix`（`agent/graph.py:4812`）判定它"在主人原话里
+2. 模型给的 `title` 是编的，`_name_arg_fix`（`agent/graph.py`）判定它"在主人原话里
    找不到来源"，于是拿 `named` 段替换它。
 3. 那个 `named` 段 = `_msg_named_value("…把标签换成它")` = **「它」**——改名动词
    （`_RENAME_INTENT_RE` 里的 `换成`）的**宾语位置被当成名字**，而宾语是个代词。
    实测：`_msg_named_value("给我建个新标签，然后把这篇文章的标签换成它") == "它"`。
 4. 换进去的值**天然有来源**（它就出自主人原话）⇒ 后面的来源态判据（`_grounded_value`）
-   必然通过；而 `tag_create` 那条"缺名字就不调工具"的闸（`agent/skills.py:1425`，**靠
+   必然通过；而 `tag_create` 那条"缺名字就不调工具"的闸（`agent/skills.py`，**靠
    `title` 为空触发**）也不成立——`title` 非空，只是它先是被编出来的、然后被换成了代词。
 
 **一句话：来源态判据的下游，正是那个制造"来源"的校正器——判据自己满足自己。**
@@ -539,7 +538,7 @@ submitted → running → succeeded / failed / cancelled
 
 ### 6.5 排队（跨技能多动作）
 
-今天 `agent/graph.py:420` 那条规则是："**一张确认卡只装得下同一个技能的动作**"。
+今天 `agent/graph.py` 的 `_PLANNER_PROMPT` 里那条规则是："**一张确认卡只装得下同一个技能的动作**"。
 新主线需要保留"一张卡一个技能的动作"这个安全边界，但补上**排队**：
 点完这张自动弹下一张。否则"加一条待办再把它勾完成"这类跨技能请求结构上做不到。
 
@@ -547,7 +546,7 @@ submitted → running → succeeded / failed / cancelled
 
 **"模型自述的剩余步骤"必须有消费者，否则不许写。** 今天 `TODO:` 行的形态
 （模型写、无人读）属于"记账但没人对账"——**同一个家族在这个仓里已经犯过一次**
-（`agent/skills.py:1898` 那层薄壳就是为 `param_unknown` 这条"planner 写了、没人读"
+（`agent/skills.py` 那层薄壳就是为 `param_unknown` 这条"planner 写了、没人读"
 补的），并且已经有了对账口径（`eval/corpus_invariants.py` 的 **I5 `param_unread`**）。
 新主线里这条改由任务行承担，**必须同批配上一条扫它的不变量**，否则就是第三遍。
 
@@ -778,13 +777,13 @@ dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop
 > ⚠️ **下表的第 2–4 行会引 `text` 做对照。那个 `text` 是 20260927/0928 那批的对照臂读数，
 > 该档 20261004 已连同拨盘一起删除**（`settings.planner_engine`、影子档、`extract_plan_fields`；
 > 见本文件开头追记与 `CHANGELOG.md:532-540`）。**读作"当时那个档跑了多少"，不是"今天还能拨的档"**——
-> `eval/dial_matrix.py` 的四档里没有它，`tests/test_ci_suite_list.py:128` 还钉着它不存在。
+> `eval/dial_matrix.py` 的四档里没有它，`tests/test_ci_suite_list.py` 还钉着它不存在。
 > 同理：**内部计划文本协议**（`plan_encode`/`parse_plan`）与这个档**不是一回事**，它**一分未动**。
 
 | # | 事项 | 需要的判据 |
 |---|---|---|
 | 1 | ~~冻结的只读分支名称~~ | **已定：`freeze/text-plan-protocol`**；**20261004 该分支与 `widget/pos-20261003` 一并删除**（本地 + 远端，独有提交均为 0），详见 §3 第 3 项 |
-| 2 | 技能模板层去留 | **已有对照数据（§1.7＋§1.9）：本批仍不支持现在删**。native 档没有任何一项指标超过 `text`（区间全重叠），而模板层现在同时是**写工具的唯一入口**与**参数必填的闸**（`skills.py:1425`）。§1.7 里"不思考档多一条发明参数的路"那条理由**已随 §1.8 的修复消失**（§1.9：五档 `missing_param` 全 3/3）⇒ 原来挂的前置是**批 D（多步）**，而 §1.3 三追记已证：那 4 条多步用例**与批 D 无关**且开关两态同分 ⇒ **这条前置不成立**。删模板层仍然没有数据支持（native 档没有任何一项指标超过 `text`，区间全重叠），要动它得先有"native 明显更好"的证据 |
+| 2 | 技能模板层去留 | **已有对照数据（§1.7＋§1.9）：本批仍不支持现在删**。native 档没有任何一项指标超过 `text`（区间全重叠），而模板层现在同时是**写工具的唯一入口**与**参数必填的闸**（`skills.py`）。§1.7 里"不思考档多一条发明参数的路"那条理由**已随 §1.8 的修复消失**（§1.9：五档 `missing_param` 全 3/3）⇒ 原来挂的前置是**批 D（多步）**，而 §1.3 三追记已证：那 4 条多步用例**与批 D 无关**且开关两态同分 ⇒ **这条前置不成立**。删模板层仍然没有数据支持（native 档没有任何一项指标超过 `text`，区间全重叠），要动它得先有"native 明显更好"的证据 |
 | 3 | planner 开思考的预算 | **本批数据不支持开**（口径已按 §1.9 修正）。原文的理由是"发明参数调写工具 5/6→0/6"，而那 5 条红是**校正器缺陷**（§1.8），修后与档无关地一起消失 ⇒ 那条理由**不成立**。剩下的对照：max 档上思考与不思考**逐条完全相同**（都 12/12，计划效率也逐字相同 24/21/9），而思考贵 4.6 倍（planner p50 5.97 vs 1.29s）；flash 档上 7/12 vs 6/12（区间重叠，等于没差别，且都低于 `text`）⇒ **若切 native，默认不思考**；要开思考得有批 D 之后的新证据。`max_tokens=1200` 仍然够用（完整率 96.2–100%） |
 | 4 | 换 max 的判据 | **仍不支持"换 max 更好"**：两个 max 档 12/12 与 `text` 的区间重叠（§1.9 读法 3）⇒ 构不成更好。但 §1.9 给出了**新指向**：两个 max 档在这组多步用例上是唯一**没有自身失败形态**的档（12/12），不思考 max 还是全场最快（planner p50 1.29s、用例 p50 6.65s、完整率 100%、零 fallback）⇒ **若切 native，首选 `native-nothink-max`**。两处代价要说清：① `QWEN_MODEL` 是**全链路**开关（narrator 也换，成本不止 planner）；② 这只是"下一批的默认候选"，不是"更好"的证明 —— 批 D 之后复测再定 |
 | 5 | 新旧并行的方式 | ~~**已定：成组对照测量**（`eval/dial_matrix.py`，§1.6–1.7…），影子档退回离线调试用途~~。**20261004 结束**：新旧并行从"暂时"变成"永久"那一半——文本档与影子档**整个删了**，`eval/dial_matrix.py` 的 `text` 维与档位探针同步移除（历史报告 `eval/report/baseline_*_dial_matrix*.json` 留档不动）。`authz` 里那个同名 `shadow`（`AGENT_AUTHZ_ENFORCE`）与它无关，**别一起删** |
@@ -829,7 +828,7 @@ dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop
 - **跨语言契约靠"别踩某个循环"**：`cmd` 必须是回执行的**顶层键**，不许放进
   `_RCPT_META_KEYS` 那一族——因为那套循环会对值做 `str(v)[:120]`，dict 会被**字符串化**。
   即"契约成立"依赖"绕过某个拷贝循环"，是**隐式契约**，下一个人一定会踩
-  （现场注释在 `agent/graph.py:5842`，定义在 `:198`）。
+  （`_RCPT_META_KEYS`：现场注释与定义都在 `agent/graph.py`）。
 - **版本号手动同步**（父仓 + 设备控制台 + 本仓文档，**当前五处**）：源头是 `boot.js` 的 `VER`
   常量（所有子模块 URL 都拼 `?v=VER`），另四处跟着它——`Live2dAgent/index.tsx` 的 `?v=`、
   前端套件里手抄的那份字面量、设备控制台页面的 `?v=` 引用、以及本仓 `frontend/README.md`

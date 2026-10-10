@@ -77,7 +77,7 @@ Coding agent 的稳定，恰恰来自它**没有**这个空间：它"改了文�
 **P1 动作有环境回执，"成功"由环境定义。**
 `Edit` 失败会报错、`Bash` 有 exit code、`Read` 之后才知道文件内容。模型**结构上不可能**
 "以为"自己改成功了——它没有产出一个"成功"字样的机会，成功是环境的属性。
-→ 本项目对照：**写工具已有**（`create_tag` 建后读回复核 `tools/base.py:1029`、
+→ 本项目对照：**写工具已有**（`create_tag` 建后读回复核在 `tools/base.py`、
 `set_article_status` 读回比对新值 `1104`/`1113`、文章标签读回 `1217`/`1220`）；
 **动作类工具没有**（导航/特效/夜间/屏幕显示的"回执"是命令帧，
 前端执行完**没有任何回报**——这是本项目最大的无回执盲区）。
@@ -266,7 +266,7 @@ planner 的 `timeout=30` 正好压在那条尾巴上。所以 D4 落地要么继
 
 **步骤**
 1. schema（D4）里给 id 类参数标来源：`{"x_source": "frame|ref"}`。
-2. `instantiate_plan` 侧把 `_target_evidence`（今天只用于文章写，`graph.py:165`）的思路
+2. `instantiate_plan` 侧把 `_target_evidence`（今天只用于文章写，`graph.py`）的思路
    推广到**所有** id 类参数；不在证据里 → 零工具 + 注明原因（planner 去取）。
 3. 报错码统一进 `refs.py` 的族（`ref_unknown_tool/ref_unparsed/ref_index_range/ref_path_missing/ref_not_scalar`）。
 
@@ -592,7 +592,7 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 全绿——差别不在代码在**环境**：`test_admin_write` 的 §⑰ 正例暗中依赖本机 `.env` 里的
 `settings.jwt_secret`，而 CI 没有 `.env`、该值是空串；`confirm.sign` 密钥空缺时返回空串，
 `_confirm_popup` 据此 `return None`（既有 fail-closed 兜底），于是**三条"该弹窗"的正例在 CI 里
-静默变成"没弹"**，反例却照样绿——典型的"反例恒真"假绿形态（`tests/test_confirm.py:63-66` 早就为同一个坑
+静默变成"没弹"**，反例却照样绿——典型的"反例恒真"假绿形态（`tests/test_confirm.py` 早就为同一个坑
 留过注释）。两处修：套件按成例打**密钥桩**并在收尾还原；`_confirm_popup` 的空令牌分支补
 **WARNING + trace `token_sign_failed`**（它一旦生效会静默关掉**所有**写确认弹窗、退回"判不成命令
 就追问"的死路形态，而链路上没有别的信号——fail-closed 语义不变，只是不再无声）。
