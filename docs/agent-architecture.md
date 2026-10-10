@@ -73,9 +73,9 @@ flowchart TB
 本仓库（saudade-blog-agent）    # ★ Python Agent（独立 git 仓库，推送即 CI 评测门禁 + 部署；线上改动重启 systemd 服务生效）
 ├── server.py                  # FastAPI 入口：/chat、/chat/stream、/health；trace_id 中间件；流式编排
 ├── agent/
-│   ├── graph.py               # ★ 手写 LangGraph 图（9729 行）：State/契约/声称闸 + planner(唯一决策) ⇄ execute(确定性执行) → (reflector) → model(零工具叙述) → gate(确定性检查) + 条件边路由
-│   ├── decisions.py           # ★ 确定性决策层（621 行，零 LLM）：快道（当前文章读取/特效切换/导航/屏幕显示）+ 动作意图扫描（intent_hints 原料）+ 检索候选裁决（标题相关性）+ 终局计划（轮次上限/复盘终局/拦截收尾）——被 graph.py 节点调用，反向外移函数按原名 re-export
-│   ├── context.py             # 上下文组装（1260 行，纯函数叶子层）：消息文本提取（多模态兼容）/page_ctx/页面操作指南（GUESTBOOK_GUIDE、SITE_GUIDE）/工具帧摘要/checker 回执摘要
+│   ├── graph.py               # ★ 手写 LangGraph 图：State/契约/声称闸 + planner(唯一决策) ⇄ execute(确定性执行) → (reflector) → model(零工具叙述) → gate(确定性检查) + 条件边路由
+│   ├── decisions.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取/特效切换/导航/屏幕显示）+ 动作意图扫描（intent_hints 原料）+ 检索候选裁决（标题相关性）+ 终局计划（轮次上限/复盘终局/拦截收尾）——被 graph.py 节点调用，反向外移函数按原名 re-export
+│   ├── context.py             # 上下文组装（纯函数叶子层）：消息文本提取（多模态兼容）/page_ctx/页面操作指南（GUESTBOOK_GUIDE、SITE_GUIDE）/工具帧摘要/checker 回执摘要
 │   ├── agent.py               # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
 │   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
 │   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，秘书类功能地基（docs/secretary.md）
@@ -117,7 +117,7 @@ flowchart TB
 │   ├── trace.py               # 对话 trace 落盘（logs/agent/traces/，节点事件 + 分段耗时 + 退出原因）
 │   ├── helpers.py             # 通用工具函数
 │   └── tts.py                 # edge-tts 语音合成（预留，TTS 未启用）
-├── eval/                      # 评测：eval/golden/basic.jsonl（158 条）+ run_golden.py（L2 真实 LLM 端到端）
+├── eval/                      # 评测：eval/golden/basic.jsonl（188 条）+ run_golden.py（L2 真实 LLM 端到端）
 │   │                          #       + golden_case_runner.py / golden_full_run.py（进程隔离跑法）
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
@@ -136,15 +136,15 @@ flowchart TB
 前端（看板娘 + 对话面板）—— **20261001 起住在本仓**（`frontend/`，与本仓同以 MIT 分发，见
 `frontend/LICENSE`）：
 frontend/public/live2d-widgets/
-├── boot.js                    # ★ 加载器（254 行）：拼 ?v=VER 载入子模块、看板娘显隐/拖拽/工具条
-├── renderer.js                # ★ 渲染层（511 行）：pixi.js + pixi-live2d-display 驱动模型、参数注入与口型
-├── chat-stream.js             # ★ 对话主战场（2347 行）：SSE 流式消费 + 命令解析与执行
+├── boot.js                    # ★ 加载器：拼 ?v=VER 载入子模块、看板娘显隐/拖拽/工具条
+├── renderer.js                # ★ 渲染层：pixi.js + pixi-live2d-display 驱动模型、参数注入与口型
+├── chat-stream.js             # ★ 对话主战场：SSE 流式消费 + 命令解析与执行
 │                              #   （导航白名单 BLOG_ROUTES、cmdText、idleTimer 计时器、EFFECT、discardTurn 集中于此）
-├── chat-engine.js             # 对话引擎子模块（1363 行：sendMessage / discardTurn 等）
-├── chat-session.js            # 会话抽屉 UI（685 行：rail / 列表列 / 命名 / 置顶 / 搜索）
-├── chat-core.js               # 对话核心子模块（226 行：COMMAND_LINE_RE / cleanAgentText 等）
-├── chat-render.js             # 渲染清洗子模块（244 行：__chatRenderMarkdown / cleanAgentText 等）
-├── widget.css                 # 看板娘与对话框样式（2072 行：#waifu 高度锁死等关键防御）
+├── chat-engine.js             # 对话引擎子模块（sendMessage / discardTurn 等）
+├── chat-session.js            # 会话抽屉 UI（rail / 列表列 / 命名 / 置顶 / 搜索）
+├── chat-core.js               # 对话核心子模块（COMMAND_LINE_RE / cleanAgentText 等）
+├── chat-render.js             # 渲染清洗子模块（__chatRenderMarkdown / cleanAgentText 等）
+├── widget.css                 # 看板娘与对话框样式（#waifu 高度锁死等关键防御）
 └── lingyue-toggle.png
 frontend/public/live2d_model/  # agent_2 模型（moc3 / model3.json / cdi3 / physics3 / 2048 贴图）
 
@@ -210,7 +210,7 @@ sequenceDiagram
 JWT 走 Authorization: Bearer 头（`localStorage.tokenKey`），不在 body 里。特效与夜间状态实时上报——agent 以 context 为准、不依赖自己的调用记忆
 （用户可能手动开关过）。无 token 时后端直接返回合规告知文案，不调 agent。
 
-② Rust prepare_chat（[chat.rs:180](Saudade-Blog/src/routes/chat.rs#L180)）——记忆的读与写
+② Rust `prepare_chat`（父仓 `src/routes/chat.rs`，本节以下 Rust 段均指该文件）——记忆的读与写
 
 按顺序做 6 件事：
 1. 鉴权：解析 `Bearer` JWT（HS256，`auth_jwt::verify_token`），取 `claims.sub` 为 user_id。
@@ -230,7 +230,7 @@ JWT 走 Authorization: Bearer 头（`localStorage.tokenKey`），不在 body 里
 Rust 再拼接命令行：EFFECT 追加到回复末尾、NAVIGATE/AUTO_NAVIGATE 前置到回复开头（server.py 收尾统一拼接），
 命令拼接不受摘要影响。
 
-③ Python _build_messages（server.py:129 `_build_messages`）——上下文组装
+③ Python `_build_messages`（`server.py`）——上下文组装
 
 按顺序构造消息列表（角色按 history 原始 role 注入）：
 1. System 上下文：`[System: user_id=…, page=…, title=…; current_time=…; current_effects=…; current_darkmode=…; conversation_summary: …; recent_executions: …]`
@@ -270,7 +270,7 @@ planner LLM，见 §6.5）。执行用 `stream(stream_mode=["messages", "updates
   外层 `recursion_limit=30` 仍作兜底（§6.4）。trace 分段耗时按 planner/execute/reflector/model/
   gate 五段落盘（reflector 未触发时该段无记录）。
 
-⑤ 流式帧协议（server.py:472 `event_stream`）
+⑤ 流式帧协议（`server.py` 的 `event_stream`）
 
 ```mermaid
 flowchart LR
@@ -295,9 +295,9 @@ flowchart LR
 - 空回复兜底：整轮无任何输出帧（qwen 偶发空内容）→ 补发 `_RECOVERY_SENTENCE`（人设内恢复语），
   前端不会静默"卡死"。
 - 生产者取消：客户端提前断开（abort/关页）时 `finally` 取消尚未完成的线程池生产者任务，
-  避免队列与线程空转 [server.py:622-626](../server.py#L622-L626)。
+  避免队列与线程空转（`server.py` 的 `event_stream` 收尾分支：`producer_task.cancel()`）。
 
-⑥ Rust 转发（chat.rs:471 `chat_stream_handler`，旧名 body_stream 已更名）
+⑥ Rust 转发（`chat.rs` 的 `chat_stream_handler`，旧名 body_stream 已更名）
 
 `find_frame_end` 逐帧切分 → 终端标记（`__END__`/`__NAV_END__`/`__ERROR__`）原样转发 → 文本帧 JSON 解码后
 累积进 reply 变量（供流结束存库）→ 原样转发。上游中断且未收到终结标记 → 补发
@@ -360,7 +360,7 @@ flowchart TB
 ### 4.2 记录：什么时候写、写什么
 
 - 用户消息：Rust `prepare_chat` 在转发 agent 之前就落库（chat.rs `prepare_chat` 内）——即使 agent 失败，用户消息也保留。
-- assistant 回复：流结束（收到终止标记或上游中断）后 `save_assistant_reply`（[chat.rs:323](Saudade-Blog/src/routes/chat.rs#L323)）：
+- assistant 回复：流结束（收到终止标记或上游中断）后 `save_assistant_reply`（`chat.rs`）：
   - 流式路径从 `__SUMMARY__` 帧取独立摘要（见 4.3），回复本身不含任何 SUMMARY 行；
   - 存 `(role="assistant", content=回复全文)`；
   - 空回复不存库（`if !reply.is_empty()`），这是"卡死"表象的来源之一——前端靠 §3.2⑦ 的兜底感知。
@@ -387,7 +387,7 @@ flowchart TB
 > 且摘要指令与显示强化指令共用 `<系统内部指令-仅供执行` 标记，导致显示请求被 reflector 误判
 > REVISE 白烧一轮 LLM。现方案两者一并移除，摘要由后端独立任务调用生成。
 
-触发条件（[chat.rs:255](Saudade-Blog/src/routes/chat.rs#L255)）：`total_count > 20 && (total_count % 10 == 0 || total_count % 10 == 1)`。
+触发条件（`chat.rs` 的 needs_summary 判据）：`total_count > 20 && (total_count % 10 == 0 || total_count % 10 == 1)`。
 即从第 21 条起，每 10 条触发一次（21、30、31、40、41…）。计数含 user + assistant 全部消息。
 
 独立任务调用（server.py `_summarize_dialogue`，仅 needs_summary 轮触发）：
@@ -403,7 +403,7 @@ flowchart TB
 - 流式 `/chat/stream`：agent 在 `__END__` 帧之前发 `data: __SUMMARY__:{"json字符串"}\n\n`
   ——不终止流、不进回复；Rust 循环里解析该帧存入 `summary_override`，转发终结帧之前
   连同回复一起交给 `save_assistant_reply`（`tokio::spawn` 分离写入——客户端见到 `__END__`
-  就断开也不丢，落库顺序契约见下）（[chat.rs](Saudade-Blog/src/routes/chat.rs)）。
+  就断开也不丢，落库顺序契约见下）（`chat.rs`）。
 - **落库顺序契约（20260920）**：流式路径的收尾写入一律在转发终结帧（`__END__`/`__NAV_END__`/
   `__ERROR__`）之前发起，且用 `tokio::spawn` 从生成器生命周期里摘出来；`__EXEC__` 回执
   帧收到即写（不再攒到收尾）。此前顺序相反：客户端一见 `__END__` 就断开 ⇒ 响应体 future
@@ -424,10 +424,10 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 **没有对话级"撤销/回滚"功能**（不存在"撤回上一条回复"或时间旅行恢复）。系统层面只有两类清理：
 
-1. 主动停止（POST /api/chat/discard，[chat.rs:115](Saudade-Blog/src/routes/chat.rs#L115)）：前端停止按钮
+1. 主动停止（POST /api/chat/discard，`chat.rs` 的 `discard_handler`）：前端停止按钮
    （chat-stream.js）中断流后显式调 discard 端点——全删语义：删除该条 user 消息及其后的残缺回复
    （20260828b 起支持带 `text` 原文校验防误删）。效果：被终止的对话不进记忆（不污染 history 窗口与摘要）。
-2. 中断清理（DiscardAbortedExchange Drop guard，[chat.rs:437](Saudade-Blog/src/routes/chat.rs#L437)）：
+2. 中断清理（`DiscardAbortedExchange` Drop guard，`chat.rs`）：
    客户端在流未正常收尾时被动断开（关标签页、断网——主动停止走上面的 discard 端点）→ SSE 生成器被
    取消 → `Drop` 触发 → 异步删除该条 user 消息之后产生的残缺 assistant 回复（id 单调递增；
    user 消息本体保留——20260829 起语义，"这次提问已发生"不被抹掉）。正常收尾由 `done` 原子标记关闭清理。

@@ -204,7 +204,7 @@
 
 ## 1. 定位与原则
 
-- **评测 = 离线质量门禁**（"做得好不好"）：L0 秒级套件（21 个，`tests/run_all.py` 全跑一遍；CI 侧 `.github/workflows/eval.yml` 逐个 `uv run python tests/...` + 一条 `ruff --select F821`）在 CI 里跑（push 即拦截）；L2 全量 golden 在**本机**跑（20260920 起，CI 侧跨网链路不可用，见 §4 末注）。
+- **评测 = 离线质量门禁**（"做得好不好"）：L0 秒级套件（`tests/run_all.py` 全跑一遍，**套件数与用例数以该清单为准、这里不抄**——抄一次漂一次；CI 侧 `.github/workflows/eval.yml` 逐个 `uv run python tests/...` + 一条 `ruff --select F821`）在 CI 里跑（push 即拦截）；L2 全量 golden 在**本机**跑（20260920 起，CI 侧跨网链路不可用，见 §4 末注）。
 - **可观测性 = 线上实时监控**（"现在跑得怎么样"）：trace/metrics/logs 三支柱。
 - **回放打通两者**：线上日志采样 → 离线评测 → 行为漂移检测。
 - **原则一：评测与语料解耦**。检索器质量、生成鲁棒性用开源数据集评测（与博客文章无关）；
@@ -235,7 +235,7 @@ flowchart LR
         N --> L3[L3 线上对账<br/>trace ↔ agent.log ↔ monitor.log]
     end
     subgraph LOCAL[本机（生产服务器）]
-        P1[按需手动] --> L2[L2 任务级 golden set<br/>130 条 · 约 25 分钟 · 硬门禁]
+        P1[按需手动] --> L2[L2 任务级 golden set<br/>全量 · 约 25 分钟 · 硬门禁]
         N2[04:00 nightly] --> L2
     end
     L0 -->|失败| BLOCK[阻塞合并]
