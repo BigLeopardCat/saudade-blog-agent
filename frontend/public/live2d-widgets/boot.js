@@ -94,10 +94,11 @@
   // ★ 版本号：nginx 对 live2d-widgets 目录 immutable 缓存 1 年，子模块变更只 bump
   // 这里一处（所有子模块 URL 统一拼 ?v=VER；Live2dAgent/index.tsx 的 boot.js 引用
   // 也需同步 bump——否则浏览器不会重新请求本入口）
-  // 20261008b = 「新消息不跟随滚动」那一轮（chat-engine.js 的滚动语义：程序化回底
-  // 那一跳不再被读成"主人翻上去了"）。文件在 live2d-widgets 下 ⇒ 必须 bump；不 bump
-  // 访客吃 1 年缓存，缺陷照旧。五个同步点见 frontend/README.md。
-  const VER = '20261008b';
+  // 20261011a = 「看板娘默认位置回退」那一轮（widget.css：#waifu 的 `left` 145px → 15px、
+  // `transform` translateY(-5px) → -15px，即撤销 20261003 那两次位移）。文件在
+  // live2d-widgets 下 ⇒ 必须 bump；不 bump 访客吃 1 年缓存，看板娘还停在右移后的位置。
+  // 五个同步点见 frontend/README.md。
+  const VER = '20261011a';
 
   function loadExternalResource(url, type) {
     return new Promise((resolve, reject) => {
