@@ -29,8 +29,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
-# 历史上写死在 `tools/base.py:41` 的那个值。① 拿它当"出厂档"的期望值——
-# **这一条就是"默认没变"的判据**，不是随手抄一份（改了默认值它必须红）。
+# 出厂默认值（`config/settings.py` 的 `blog_api_base`；`tools/base.py` 的 `API_BASE` 读它）。
+# ① 拿它当"出厂档"的期望值——**这一条就是"默认没变"的判据**，
+# 不是随手抄一份（改了默认值它必须红）。
 LEGACY_API_BASE = "https://saudade.site/api/public"
 
 FAILS: list[str] = []

@@ -546,7 +546,8 @@ def _console_confirm_order(text: str) -> bool:
     return not _CONSOLE_INQUIRY_TAIL_RE.search(text)
 
 
-# 系统注入的消息壳（server.py:413 给本轮用户消息加的 `[当前问题]: ` 锚点）。
+# 系统注入的消息壳（`server.py` 的 `_build_messages` 给本轮用户消息加的
+# `[当前问题]: ` 锚点）。
 #
 # 这是**系统加的外壳，不是用户的话**，而底下所有判据都是锚定的（句首把/将、句首
 # 动词、句首假设词）：带着壳一条都命不中。生产实测（20260921）——

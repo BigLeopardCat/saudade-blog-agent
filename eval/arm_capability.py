@@ -289,7 +289,7 @@ def analyze(arm: str, *, reports_pattern: str = "", probe: dict | None = None,
 
 
 # ── 合成正控 ────────────────────────────────────────────────────────────────
-_FALLBACK_MARK = "gate fallback"   # `check_gold` 那一条红的原话里的固定片段（见 run_golden.py:2042）
+_FALLBACK_MARK = "gate fallback"   # `check_gold` 那一条红的原话里的固定片段（见 run_golden.py 的 `check_gold`）
 
 
 def probe_forced_fallback(arm: str, *, uid: int = 1) -> dict:

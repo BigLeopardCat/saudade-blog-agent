@@ -188,8 +188,8 @@ class ReactGoldenArm:
                                  principal=principal, user_msg=user_msg, grant=grant)
 
         # ── 当前文章读取快道（20261005，照搬 planner 的 `_article_fast_path`）──────
-        # 生产在 planner 的首轮、**任何 LLM 之前**判它（`graph.py:4601` 的
-        # `rounds == 0 and not has_frames`）：主人当前页是文章详情页且这句引用了
+        # 生产在 planner 的首轮、**任何 LLM 之前**判它（`graph.py` 里
+        # `rounds == 0 and not has_frames` 那道判据）：主人当前页是文章详情页且这句引用了
         # "这篇/我正在读"，系统就**强制**读那篇（article_id 从 current_url 解析，
         # 不过模型的手）——那是"零工具却声称读过了"在结构上不可能的那一格。
         #

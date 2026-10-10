@@ -268,7 +268,7 @@ def main() -> int:  # noqa: C901
           authz_deny(Principal(uid=7, role="user"), "freeze_account"))
     check("管理员则放行（闸不是「一律拦」）", not authz_deny(ADMIN, "freeze_account"))
 
-    # ── ⑫ 收尾丢意图纠偏（20261005，照搬 graph.py:5229 那一支）─────────────────
+    # ── ⑫ 收尾丢意图纠偏（20261005，照搬 `graph.py` 的零工具收尾纠偏那一支）──────
     print("\n⑫ 零工具收尾但意图清单还有没做过的 ⇒ 打回重决策一次")
     _EFF_SCHEMA = {"type": "object",
                    "properties": {"effect": {"type": "string"},
