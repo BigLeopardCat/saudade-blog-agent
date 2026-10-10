@@ -4,8 +4,10 @@
 
 要回答的问题：`README.md` 与 `docs/agent-architecture.md` 里手写的
 「N 个工具 / N 个技能 / N 条 golden」是**抄**进来的，代码一长就漂——
-这三处都漂过（63→67、44→47、155→188），而没有任何判据看着它们。
+这三个数都漂过（63→67、44→47、155→188），而没有任何判据看着它们。
 `tests/test_golden_keys.py` 的 188 只锁 golden 文件自己，管不到文档。
+**20261011 又抓到第四处**：§1 目录树那行 `basic.jsonl（158 条）` 同样是手抄的，同样漂到了
+188——它一直没被抓住，是因为下面那几条正则的射程都在正文，够不到树里那行。
 
 **判据**：文档里声明的数字 == 代码里的真值。真值只有三个来源，不重写：
   - 工具数 = `len(tools.base._TOOL_REGISTRY)`
@@ -61,6 +63,10 @@ _CLAIMS: list[tuple[str, str, str, str, int]] = [
     ("agent-architecture.md", ARCH, "§2：base.py 的工具数", r"(\d+) 个 @tool 工具", N_TOOLS),
     ("agent-architecture.md", ARCH, "§5 标题：工具系统小节标题", r"## 5\. 工具系统（(\d+) 个）", N_TOOLS),
     ("agent-architecture.md", ARCH, "§11：write.content 那句话里的工具数", r"当前 (\d+) 个工具里", N_TOOLS),
+    # 第四处同类漂移（20261011 补锁）：§1 目录树里 `basic.jsonl（N 条）` 一直是手抄的，
+    # 抄进来时是 158、真值是 188，而前面那三条正则一条都盖不到它（树里那行不在它们射程内）。
+    ("agent-architecture.md", ARCH, "§1 目录树：golden 用例文件的条数",
+     r"eval/golden/basic\.jsonl（(\d+) 条）", N_GOLDEN),
 ]
 
 print("① 文档声明的数字 == 代码里的真值")
