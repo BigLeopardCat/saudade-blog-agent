@@ -258,7 +258,7 @@ class SkillExecutor:
         from agent.refs import resolve_args
         from agent.skills import instantiate_plan
 
-        # ── 字面路径防推断兜底（20261005，照搬 `graph.py:5364` 的 planner 兜底）──
+        # ── 字面路径防推断兜底（20261005，照搬 `graph.py` 的 planner 字面路径修正兜底）──
         # 主人原话里出现 `/` 开头的路径时，导航目标**必须原样用那个路径**。模型会把
         # "/iot" 推断成"物联网平台"（**语义替身**）→ 目标变成 /device-console/、真跳
         # 过去、还回一句「已经在路上」——等于**系统替一个主人没要的页面背书**。
@@ -297,7 +297,7 @@ class SkillExecutor:
             # 「不存在」，于是自己编一句「马上带你过去…页面就会跳过去」（实证：
             # `nav_nonexistent` 修字面路径后 6/6 仍红，但已从"真跳错页"变成
             # "零调用 + 声称要跳"——同族，更假）。生产侧拦这一格的是 **gate 谓词**
-            # （`graph.py:9531` 按 `plan["status"]` 选 `_FALLBACK_GONE` 兜底），本线
+            # （`graph.py` 按 `plan["status"]` 选 `_FALLBACK_GONE` 兜底），本线
             # 还没有 gate，所以在这一层就把它交到模型手里。
             if note:
                 return (f"{note}\n{RECEIPT_HEAD} {skill}：本技能**没有执行任何工具**"
@@ -308,7 +308,7 @@ class SkillExecutor:
         # 生产这边的分工是两道、都在 `graph.execute_node`：① `_confirm_popup` 在**逐
         # spec 循环之前**判一次，命中就整批回 `pending_confirm`（"一次点击确认的是
         # 一整批，不该以执行一半为代价"——读工具也一样不跑）；② 没命中的那些，进循环
-        # 后逐条还有 `consent_missing`（graph.py:8717）。两道合起来的效果是一句话：
+        # 后逐条还有 `consent_missing`（见 `graph.py` 的 `execute_node`）。两道合起来的效果是一句话：
         # **未获同意的写 spec 在生产里从不执行**——要么变成一张卡，要么变成一条
         # `__ERROR__: 待确认[…]` 帧。
         # 本线此前两道都没有，于是模型点到写工具就**真的执行**（golden 的工具是真的，
@@ -586,7 +586,7 @@ class ConvergenceMiddleware(AgentMiddleware):
         pending = "、".join(f"{i['label']}（{i['key']}）" for i in left)
         logger.warning("[react_line] 零工具收尾但意图清单仍有未规划项（%s）→ 纠偏重决策一次",
                        "、".join(i["key"] for i in left))
-        # 措辞照抄生产那一支（`graph.py:5233`）：同一件资产在两臂上说同一句话，
+        # 措辞照抄生产那一支（`graph.py` 里零工具收尾纠偏的 `c.correction`）：同一件资产在两臂上说同一句话，
         # 将来复核"哪一臂的读数变了"时才不会被措辞差污染。
         return {"jump_to": "model", "messages": [HumanMessage(content=(
             "你这一轮**没有排任何工具**（等于宣布收尾），但主人那句话里还有这些"

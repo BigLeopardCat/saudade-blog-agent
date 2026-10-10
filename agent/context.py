@@ -232,8 +232,8 @@ def site_guide(role: str | None = None) -> str:
     # 站内事实**单独成句**挂在能力清单之后、收束句之前（20261005, A5）：不进上面那两段
     # 枚举——`_SITE_GUIDE_CLOSING` 与 `test_capability_truth.py` 管的是"能不能做"的边界，
     # 掺进一句"事实"会让那条边界跟着漂。仍在收束句**之前**是因为既有两处锁死
-    # `site_guide(...).endswith(_SITE_GUIDE_CLOSING)`（`test_capability_truth.py:180`、
-    # `test_skills.py:4186`）——清单的收束句必须真的是最后一句。
+    # `site_guide(...).endswith(_SITE_GUIDE_CLOSING)`（`tests/test_capability_truth.py`、
+    # `tests/test_skills.py` 各有一条）——清单的收束句必须真的是最后一句。
     return (out + "\n" + _SITE_GUIDE_BOARD_FACT + "\n" + _item_link_fact()
             + "\n" + _SITE_GUIDE_CLOSING)
 

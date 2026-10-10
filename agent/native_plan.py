@@ -311,7 +311,7 @@ def build_tool_schema(role: str | None, *, task_state: bool = False,
             props[INTENTS_ARG] = intents_prop_schema(INTENTS_FIELD_DESC)
         # 描述里的工具枚举标记**必须在这里展开**（20260927 修）：技能描述里写着
         # `__无参只读工具清单__` 这类占位（见 skills.py 的 `_EXPLICIT_TOOLS_MARK`），
-        # 角色相关的展开此前只发生在文本菜单那一路（`skills.py:2813`）⇒ native 档把
+        # 角色相关的展开此前只发生在文本菜单那一路（`skills.py` 的 `render_tool_marks`）⇒ native 档把
         # **未展开的标记原样**发给了模型（实测 admin/None 各 1 处）。两处渲染同一份
         # 描述文本，展开器只能有一个（同"手抄第二份名单"的教训）。
         desc = render_tool_marks(skill.description, role)
