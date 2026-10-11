@@ -130,8 +130,15 @@ class RunLedger:
 
     ⚠️ **一次运行一个实例**：它活在 Python 对象里，不是 graph state。`create_agent`
     的每次 `invoke` 都该配一个新的 `build_agent(...)`（本线唯一的用法就是这样）。
-    想做成常驻服务的话，键得换成 langgraph 的 `run_id`——那是上线前必须补的一步，
-    写在 `docs/react-line-experiment.md` 的"已知缺口"里，别当成已经做完了。
+
+    **当前状态（20261012 复核）**：arm 层**已经**按调用隔离——`ReactGoldenArm.stream`
+    每次都新建 `RunLedger()` 与 `build_agent(...)`（`agent/react_arm.py`），所以它挂到
+    `server._agent` 上跑（`AGENT_ARM=react`）不会串账，那条要求**不是**上线前还欠着的
+    一步（此前这段注释把它写成"必须补的一步"，与实况不符）。隔离的判据在
+    `tests/test_react_arm.py` 的并发用例（两个 `stream()` 交替推进，两本台账互不可见）。
+    **但**这条纪律本身仍然成立：若将来把 `build_agent(...)` 提成**常驻单例**（为省一次
+    构图而共用同一个 agent 对象），就必须同时把账的键换成 langgraph 的 `run_id` 分桶
+    ——共用单例 + 一个实例账 = 两个并发请求往同一本账上写。
     """
 
     def __init__(self) -> None:

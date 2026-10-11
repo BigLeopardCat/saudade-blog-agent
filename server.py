@@ -301,13 +301,46 @@ class ChatResponse(BaseModel):
 _agent = None
 
 
+def _build_arm():
+    """按 `AGENT_ARM` 选臂（20261012 批 4）。`graph` ⇒ **逐字节就是原来那一行**。
+
+    这一层只做一件事：**按名字取一个实现了 `.stream(state, config, stream_mode)` 的对象**
+    ——`_run_agent_sync` 与 `_run_agent_stream_to_queue` 两处调用点一个字都不用改（臂那边
+    收下 `stream_mode` 只是为了签名对得上，它恒产 `messages`/`updates` 两路，见
+    `agent/react_arm.ReactGoldenArm.stream` 的 docstring）。
+
+    **不 import `eval/golden_arm.py`**：那是评测侧的选臂壳（它还管留档目录、基线臂、
+    `GOLDEN_ARM` 的名字空间），生产依赖 eval 侧就是把"跑哪条臂"与"读数往哪个目录写"
+    绑成一件——而那两件事的失效方式完全不同（前者改行为，后者只改文件位置）。这里
+    只认名字。
+
+    名字不认识 ⇒ **响亮失败拒绝启动**，不回退 `graph`：与 `eval/golden_arm.build_agent`
+    同一条理由（静默回退会得到一份"看起来是第二条臂、其实是第一条"的假读数），而放在
+    这里后果更重——生产在跑实验臂、日志里却写着一切正常。同理 `AGENT_ARM=react` 时把
+    臂名打进启动日志：**"这一轮是谁在跑"必须是日志里读得到的事实**。
+    """
+    from config.settings import settings
+    arm = (settings.agent_arm or "graph").strip().lower()
+    if arm == "graph":
+        return create_agent(), arm
+    if arm == "react":
+        # 延迟 import：臂不在选它的时候不该被加载（`agent.react_arm` 拉进整份技能表与
+        # 工具注册表）。反过来也不能"启动时都建一份挑着用"——那会让 graph 档多付一次
+        # 实验代码的 import 成本，且给"两条臂同时在进程里"留出误用的口子。
+        from agent.react_arm import build as build_react_arm
+        return build_react_arm(), arm
+    raise RuntimeError(
+        f"AGENT_ARM={arm!r} 不是已知的臂（只有 `graph` 与 `react`）——拒绝启动。"
+        "不回退 graph：静默回退会把'这一轮到底是谁在跑'从日志里抹掉。")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _agent
     setup_logging()
     logger.info("Initialising LangChain agent ...")
-    _agent = create_agent()
-    logger.info("Agent ready")
+    _agent, _arm = _build_arm()
+    logger.info("Agent ready (arm=%s)", _arm)
     # 后台预热图谱查询的 embedding 客户端（首次 TLS 建连 ~3s，不预热的话
     # 重启后第一个查询会被上游超时掐掉→静默降级）。不阻塞启动，失败也不影响
     threading.Thread(target=wordgraph.warm, name="wordgraph-warm", daemon=True).start()
