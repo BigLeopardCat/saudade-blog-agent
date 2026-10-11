@@ -16,6 +16,18 @@
 
 ## 20261012
 
+- **ReAct 臂的台账帧现在留痕了（判据修复；这一臂仍未上线）**：本线此前把待办台账**读进了
+  提示词**（`pending_ledger` 那一格）却一个字都没记进 trace，而 golden 的三条断言——
+  `require_ledger_frame` / `require_ledger_rows` / `require_card_targets_from_ledger`——读的
+  **唯一证据**就是 `planner.ledger_frame` 这个 trace 事件 ⇒ 这三条在本线上**恒假**。
+  20261012 那次全量双臂里 `admin_board_audit_reviewed_refusal` 因此报红，而**两臂那一轮的
+  行为逐字相同**（回复正文一字不差、确认卡载荷的 `skill`/`tool`/`args` 三项全同）——
+  红的是**证据通道**，不是行为。现在 `_system_prompt` 照 `graph.py` 的 planner 那一处记
+  **同款事件**（同样的 `node=planner`、同样的 `ids`/`rows` 载荷、同一条"非空才记"的条件）。
+  这与 `forbid_fallback` 是同一个病的两个方向：那边"做不到 ⇒ 纯否定断言恒真"（假绿），
+  这边"不产证据 ⇒ 要求型断言恒假"（假红）。判据 = `tests/test_react_arm.py` ⑬
+  （含负控：空帧不记；把那一行留痕摘掉即红）。**`graph` 臂行为一字未动，线上仍跑 `graph`。**
+
 - **运行期选臂开关 `AGENT_ARM`（生产路径，20261012）**：`server.py` 里那一行
   `create_agent()` 改成按 `AGENT_ARM` 选——`graph`（默认）= **还是原来那一行，逐字节不变**；
   `react` = 本分支的试验线（`agent/react_arm.py`）。**默认值必须是 `graph`**：反过来等于
