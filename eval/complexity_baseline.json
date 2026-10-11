@@ -49,7 +49,7 @@
   },
   "agent/graph.py::execute_node": {
     "c": 78,
-    "lines": 401
+    "lines": 400
   },
   "agent/graph.py::gate_node": {
     "c": 105,
@@ -90,10 +90,6 @@
   "eval/dial_matrix.py::main": {
     "c": 37,
     "lines": 96
-  },
-  "eval/experiments/react_line_ab.py::main": {
-    "c": 38,
-    "lines": 74
   },
   "eval/golden_draft.py::main": {
     "c": 42,
