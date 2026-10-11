@@ -568,5 +568,46 @@ check("判据本体一个标识符都没搬进来（`_REPLAN_ISSUES` / `_fallbac
 check("`plan_encode` **不经手**——臂手上是 `plan_obj`，塑形走 `plan_state`（唯一获准的编码方）",
       "plan_encode" not in _ARM_IDS and "plan_state" in _ARM_IDS)
 
+# ── ⑨ 离线 A/B 探针的折算表（20261011 修的三处测量偏差）────────────────────────
+# `eval/experiments/react_line_ab.py` 是"定点探针"，不在 CI（`tests/run_all.py` 只收
+# `tests/*.py`）。可它那三处偏差**每一处都静默**：子串折算白送命中、共享提示词把
+# "架构差"与"提示词不匹配"混成一个数——跑完给出的是一张看着很正常的表。探针不进
+# 门禁，它的判据就得放在门禁里。
+print("\n⑨ 离线 A/B 探针：工具名折算按结构取、反向集真的拦得住")
+import importlib.util  # noqa: E402
+
+_ab_spec = importlib.util.spec_from_file_location(
+    "react_line_ab", ROOT / "eval" / "experiments" / "react_line_ab.py")
+_ab = importlib.util.module_from_spec(_ab_spec)
+sys.modules["react_line_ab"] = _ab
+_ab_spec.loader.exec_module(_ab)
+
+# 两处**实测过的**折算（20261011）：互为子串的名字不再互相污染，条件工具不再漏
+check("`account_unfreeze` 只折算出一件工具（旧口径会把 `freeze_account` 一起白送——"
+      "互为子串，方向还正好相反）",
+      _ab._SKILL_TOOLS.get("account_unfreeze") == {"unfreeze_account"},
+      repr(sorted(_ab._SKILL_TOOLS.get("account_unfreeze") or ())))
+check("`article_tags` 折算进条件工具 `create_tag`（`extra_plan_tools`，旧口径永远漏）",
+      "create_tag" in (_ab._SKILL_TOOLS.get("article_tags") or set()),
+      repr(sorted(_ab._SKILL_TOOLS.get("article_tags") or ())))
+check("参数里的工具名按**值**精确取（同样不许子串互串）",
+      _ab._tools_in_args({"a": "unfreeze_account", "b": ["list_talks"]})
+      == {"unfreeze_account", "list_talks"},
+      repr(sorted(_ab._tools_in_args({"a": "unfreeze_account", "b": ["list_talks"]}))))
+_sc = _ab.score({"calls": 1, "tools": ["unfreeze_account"]},
+                {"freeze_account", "unfreeze_account"}, {"unfreeze_account"})
+check("反向集真的拦得住：命中族为真、定向命中为假、反向集点名",
+      _sc["matched"] and not _sc["matched_strict"]
+      and _sc["wrong_direction"] == ["unfreeze_account"], repr(_sc))
+check("反向集为空时两个口径一致（没有方向可言的句子不该被这一条改读数）",
+      _ab.score({"calls": 1, "tools": ["list_talks"]}, {"list_talks"}, set())
+      == {"called_any": True, "matched": True, "matched_strict": True, "hit": ["list_talks"],
+          "wrong_direction": []})
+check("**每句都挂了反向集那一格**（漏挂 = 那一句静默退回旧口径）",
+      all(len(s) == 3 and isinstance(s[2], set) for s in _ab.SENTS),
+      repr([len(s) for s in _ab.SENTS]))
+check("两条 ReAct 臂的提示词不再来自 planner（不再 monkeypatch `bind_native`）",
+      "_capture_prompt" not in _ab.__dict__ and "_react_prompt" in _ab.__dict__)
+
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
