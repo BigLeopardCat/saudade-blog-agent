@@ -23,6 +23,7 @@
 **真生产者**（`server._run_agent_stream_to_queue`）上跑一次——那一段**照旧零网络零 LLM**
 （模型还是 `_llm` 替身），只是不再"不 import 生产图"：那正是它要测的那条缝。
 """
+import itertools
 import sys
 from pathlib import Path
 
@@ -97,11 +98,52 @@ def _nav_tool(**kw):
     return _Res(f"页面已跳转：{kw.get('path')}", meta={"cmd": dict(NAV_CMD)})
 
 
+def _echo_text(script: object) -> str:
+    """脚本里**最后一条不带工具调用的** AIMessage 的正文（= 这一轮的收尾草稿）。
+
+    P6 起最终正文由**独立的 narrator** 写。这一整套断言验的是接线（帧形状/通道/闸门），
+    不是叙述质量 ⇒ narrator 替身做**恒等映射**：既真的走了那条新接线，又让每条既有断言
+    读到的文本还是脚本里那一句（脚本里本来就把收尾那句当最终答复写着）。
+    """
+    if not isinstance(script, (list, tuple)):
+        return ""
+    for m in reversed(script):
+        if isinstance(m, AIMessage) and not m.tool_calls:
+            return str(m.content or "")
+    return ""
+
+
+def _narrator_stub(text: str, seen: list | None = None):
+    """narrator 替身工厂：吐 `text`；给了 `seen` 就把收到的消息表记下来（P6 的判据要读它）。
+
+    `itertools.repeat` 而不是 `iter([...])`：`_narrator_call` 在"空内容/带 tool_calls"
+    时会**再问一次**，一次性迭代器第二次就 StopIteration（那是替身的缺陷，会被当成
+    臂的缺陷去查）。
+    """
+    class _Nar(_Scripted):
+        def _generate(self, messages, *a, **k):  # noqa: ANN001, ANN003
+            if seen is not None:
+                seen.append(list(messages))
+            return super()._generate(messages, *a, **k)
+
+    return _Nar(messages=itertools.repeat(AIMessage(content=text)),
+                ai_message_chunk=iter([]))
+
+
 def _run(script: list, tools: dict, *, principal=None, model=None,
-         msg: str = "带我去首页", grant=None) -> list:
-    """跑一次 `arm.stream`，收下全部 `(mode, data)` 二元组。"""
+         msg: str = "带我去首页", grant=None, narrator=None, seen=None,
+         narrator_model=None) -> list:
+    """跑一次 `arm.stream`，收下全部 `(mode, data)` 二元组。
+
+    `narrator` / `seen` / `narrator_model` 是 P6 的三个旋钮：默认是"narrator 把脚本里
+    那一句原样说出来"（既有断言因此一字不用改），要造"正文换人写"的现场才显式给。
+    """
     R._llm = lambda: (model or _Scripted(messages=iter(script),
                                          ai_message_chunk=iter([])))
+    R._narrator_llm = (
+        (lambda: narrator_model) if narrator_model is not None
+        else (lambda: _narrator_stub(
+            _echo_text(script) if narrator is None else narrator, seen)))
     # 签名收 `config`：`_real_tools` 现在要把它透传给工具（见该函数的注）。收下但不用。
     R._real_tools = lambda *a, **k: dict(tools)
     R._system_prompt = lambda *a, **k: "你是测试用助手。"
@@ -156,6 +198,7 @@ def _drive_producer(script: list, msg: str = "谢谢你", tid: str = "t-react-ga
     out: list = []
     queue: asyncio.Queue = asyncio.Queue()
     R._llm = lambda: _Scripted(messages=iter(script), ai_message_chunk=iter([]))
+    R._narrator_llm = lambda: _narrator_stub(_echo_text(script))   # P6：同上
     R._real_tools = lambda *a, **k: {}
     R._system_prompt = lambda *a, **k: "你是测试用助手。"
     arm = R.build()
@@ -568,6 +611,22 @@ check("判据本体一个标识符都没搬进来（`_REPLAN_ISSUES` / `_fallbac
 check("`plan_encode` **不经手**——臂手上是 `plan_obj`，塑形走 `plan_state`（唯一获准的编码方）",
       "plan_encode" not in _ARM_IDS and "plan_state" in _ARM_IDS)
 
+# 塑形器喂的键：**函数体里读的那七个看得见，辅助函数读的三个看不见**（20261012 补）。
+# 漏后三个**不报错**，只让闸门少开火（`.get(…, [])` 把"本线没喂"与"本轮确实没有"读成
+# 同一件事）——`_claim_issue` 洞⑥ 的 `facts.consent_blocked` 恒 False ⇒ `promise_ok=True`
+# ⇒ 那一族在本线上不判；`_blocked_article_targets` 要 `state["blocked"][i]["spec"]`。
+_led0 = RunLedger()
+_ex0 = SkillExecutor({}, _led0)
+_kst = set(R._gate_state({}, {}, _led0, [], _ex0, AIMessage(content="x"), replan=False))
+check("闸门 state 喂了**辅助函数读的那三格**（`blocked`/`blocked_seen`/`confirm_grant`）",
+      {"blocked", "blocked_seen", "confirm_grant"} <= _kst, str(sorted(_kst)))
+check("`blocked` 的键形与 producer 读的那一份同源（缺 `spec` ⇒ 文章族目标判据恒假）",
+      "spec" in R._blocked_row({"tool": "t", "reason": "r", "args": {"a": 1}}))
+_gmsgs = R._gate_state({}, {}, _led0, [], _ex0, AIMessage(content="x"), replan=False)
+check("narrator 那一支的 state **不带答复**（`reply` 缺省不放；生产 narrator 也看不到草稿）",
+      R._round_state({}, {}, _led0, [], _ex0)["messages"] == []
+      and len(_gmsgs["messages"]) == 1 and str(_gmsgs["messages"][0].content) == "x")
+
 # ── ⑨ 离线 A/B 探针的折算表（20261011 修的三处测量偏差）────────────────────────
 # `eval/experiments/react_line_ab.py` 是"定点探针"，不在 CI（`tests/run_all.py` 只收
 # `tests/*.py`）。可它那三处偏差**每一处都静默**：子串折算白送命中、共享提示词把
@@ -608,6 +667,89 @@ check("**每句都挂了反向集那一格**（漏挂 = 那一句静默退回旧
       repr([len(s) for s in _ab.SENTS]))
 check("两条 ReAct 臂的提示词不再来自 planner（不再 monkeypatch `bind_native`）",
       "_capture_prompt" not in _ab.__dict__ and "_react_prompt" in _ab.__dict__)
+
+# ── ⑩ narrator 独立节点（P6，20261012）─────────────────────────────────────────
+# 批 1 把 fallback 那条路接上了，可闸门判的**对象**还是决策模型自己写的收尾——它手上
+# 就有工具，"我调用了 X"既可能是回忆也可能是谎言。生产那个被判的模型是**零工具节点**
+# （`model_node` 不 `bind_tools`），那句话从它嘴里出来必然是声称。判错对象 ⇒ 同一份语料
+# 在两臂上量到的不是同一个量。这一节锁三件：**正文换人写**、**提示词是生产那一份**、
+# **闸门判的是它写的那段**。
+print("\n⑩ narrator 独立节点（P6）：正文换人写、提示词走生产资产、闸门判它写的那段")
+_DRAFT = "决策模型草稿：我带你过去了"
+# ⚠️ 这一句**必须是一句不带声称的闲聊**。第一版写的是"页面已经带你过去了"——那是一句
+# 零回执的到达声称，闸门**正确地**把 narrator 那段打回了（这一格当场变成 fallback 帧、
+# 正文换成兜底文本，`_ntxt` 是空的）。那不是实现错，是样本挑错了：这一节要量的是
+# "正文有没有换人写"，不是"闸门灵不灵"（后者是下面 `_g1`/`_g2` 两格的事）。
+_NARR_TEXT = "旁白写的答复：喵呜，主人在呀。"
+_seen: list = []
+RAN.clear()
+_nf = _run([AIMessage(content=_DRAFT)], {}, principal=UNKNOWN, msg="谢谢你",
+           narrator=_NARR_TEXT, seen=_seen)
+_ntxt = "".join(str(c.content) for c in _chunks(_nf) if isinstance(c, AIMessageChunk))
+check("**正文出自 narrator**（决策模型那条草稿一个字都没上 messages 通道）",
+      _ntxt == _NARR_TEXT and "草稿" not in _ntxt, repr(_ntxt))
+_nup = (_last_node(_nf, "model").get("messages") or [])
+check("model update 的末条同样是 narrator 写的那段（`final_reply` 落库同源）",
+      bool(_nup) and str(_nup[-1].content) == _NARR_TEXT,
+      repr([str(m.content) for m in _nup]))
+_nsys = str(_seen[0][0].content) if _seen else ""
+check("narrator 收到的是**生产 narrator 那一份资产**（纪律 1 原文 + `[本轮工具执行记录]`"
+      "两处都在 ⇒ 接的是 `_EXECUTOR_PROMPT` 本身，不是另拼一份）",
+      "你没有任何可以直接调用的工具" in _nsys and "[本轮工具执行记录]" in _nsys,
+      f"{len(_nsys)} 字")
+check("**立场改写（`_DISCIPLINE_STANCE`）不在 narrator 提示词里**——那是决策循环的东西；"
+      "narrator 本就是零工具节点，纪律 1 对它成立",
+      "立场改写" not in _nsys)
+check("narrator 的输入里**没有**决策模型那条草稿（生产 narrator 也看不到任何草稿；"
+      "把草稿塞进去等于把 P6 又接回去）",
+      bool(_seen) and all("草稿" not in str(m.content) for m in _seen[0][1:]))
+
+# 闸门判的是**narrator 写的那段**。两个方向都要验——只验一个方向的话，"只判草稿"的
+# 实现会在第一格全绿（草稿干净、narrator 带前缀时两种实现都打回），分辨力全在第二格。
+_g1 = _gate_frames(_run([AIMessage(content="好的，我这就带你过去。")], {},
+                        principal=UNKNOWN, msg="谢谢你",
+                        narrator="好的，我这就带你过去。\nAUTO_NAVIGATE:/guestbook"))
+check("草稿干净、**narrator 那段**带命令前缀 ⇒ 照样打回（判的对象是 narrator）",
+      bool(_g1) and bool(_g1[0].get("fallback_text")), repr(_g1))
+# 第二格的 narrator 那句**必须真的干净**：第一版写的是"好的，我这就带你过去。"——闸门
+# 把"带你过去"读成了一句零回执的到达声称（它确实拦得对，这一轮没有 `navigate_to` 回执），
+# 于是两格都红、这一格就分辨不出东西了。干净样本用一句无动作的闲聊。
+_g2 = _gate_frames(_run([AIMessage(content="AUTO_NAVIGATE:/guestbook")], {},
+                        principal=UNKNOWN, msg="谢谢你",
+                        narrator="那我们再聊聊别的吧。"))
+check("草稿带前缀、narrator 那段干净 ⇒ **不**打回（拿草稿去过闸的实现会在这里错判）",
+      not _g2, repr(_g2))
+
+_ef = _run([AIMessage(content=_DRAFT)], {}, principal=UNKNOWN, msg="谢谢你", narrator="")
+check("narrator 两次都拿不出正文 ⇒ 退回决策模型那条草稿（一条有内容的话比"
+      "「我刚才好像卡住了」诚实）",
+      "".join(str(c.content) for c in _chunks(_ef) if isinstance(c, AIMessageChunk))
+      == _DRAFT,
+      repr("".join(str(c.content) for c in _chunks(_ef))))
+
+
+class _BoomN(_Scripted):
+    def _generate(self, *a, **k):  # noqa: ANN001, ANN003
+        raise RuntimeError("模拟 narrator 炸了")
+
+
+_bf = _run([AIMessage(content=_DRAFT)], {}, principal=UNKNOWN, msg="谢谢你",
+           narrator_model=_BoomN(messages=iter([]), ai_message_chunk=iter([])))
+check("narrator 抛异常 ⇒ 退回草稿（加装的一层炸了不该把整轮答复吃掉）",
+      "".join(str(c.content) for c in _chunks(_bf) if isinstance(c, AIMessageChunk))
+      == _DRAFT,
+      repr("".join(str(c.content) for c in _chunks(_bf))))
+
+check("**narrator 用的是独立模型工厂**（`_narrator_call` 调 `_narrator_llm()`，而它是"
+      "与决策那份 `_llm()` **并列的另一个函数** —— 共用就等于把 P6 刚拆的两件事又"
+      "捏回一个模型）",
+      "def _narrator_llm()" in _arm_src and "def _llm()" in _arm_src
+      and "llm = _narrator_llm()" in _arm_src)
+check("闸门与 narrator 共用**同一份 state 塑形器**（两处各拼一份 ⇒ 迟早对同一轮"
+      "算出不一样的形状）",
+      "return _round_state(" in _arm_src and "rst = _round_state(" in _arm_src)
+check("narrator 的提示词走**唯一入口** `_narrator_prompt` 一处（第二份排版＝漂移源）",
+      _arm_src.count("_EXECUTOR_PROMPT.format") == 1)
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
