@@ -24,6 +24,7 @@
 （模型还是 `_llm` 替身），只是不再"不 import 生产图"：那正是它要测的那条缝。
 """
 import itertools
+import re
 import sys
 from pathlib import Path
 
@@ -750,6 +751,138 @@ check("闸门与 narrator 共用**同一份 state 塑形器**（两处各拼一�
       "return _round_state(" in _arm_src and "rst = _round_state(" in _arm_src)
 check("narrator 的提示词走**唯一入口** `_narrator_prompt` 一处（第二份排版＝漂移源）",
       _arm_src.count("_EXECUTOR_PROMPT.format") == 1)
+
+# ── ⑪ 并发：一个臂对象同时服务两轮（20261012 批 4）───────────────────────────
+# `AGENT_ARM=react` 时 `server._agent` 上挂的是**一个**臂对象，而 uvicorn 起 4 个 worker、
+# 每个 worker 里随时可能有第二轮在跑。台账（`RunLedger`）是 **Python 对象、不是 graph
+# state**——它是不是"每请求一份"没有任何类型能保证，只能量：两个 `stream()` **交替推进**
+# 时账串不串。
+#
+# 判据选**件数**（A 两件 / B 一件）而不是文本：共用一个台账的实现会让两边都读到
+# 两件（或都读到三件），那是这一族最典型的样子——`wrap_up_text` 里"确实办成 N 件"
+# 的 N 会直接印给主人看，而 20261004 试跑就是这么读出一句「确实办成 1 件（）」的。
+print("\n⑪ 并发：两项流水交替推进，两本台账互不可见")
+# ⚠️ 末尾那两条重复的收尾语是**余量**，不是笔误：仿真脚本是**一次性迭代器**，用光就
+# `StopIteration`（形态是 `RuntimeError: generator raised StopIteration`，看着像臂炸了，
+# 其实是替身不够用）。收尾丢意图纠偏（`ConvergenceMiddleware._intent_correction`）会
+# 在零工具收尾之后再要一条，所以脚本要留一格；留两格是因为它**只纠一次**——第二格
+# 保证"再被问一次也能答上来"，而不是让判据去猜该发几条。
+_SA = [_call("navigate", target="首页"), _call("navigate", target="设备"),
+       AIMessage(content="你要的两处我都带到了")] + [AIMessage(content="都带你去了")] * 2
+_SB = ([_call("navigate", target="留言板"), AIMessage(content="到留言板了")]
+       + [AIMessage(content="到留言板了")] * 2)
+# 工具按流分开、返回值带流标记：**回执里读得到"这一件是谁的"**，光看条数分不出
+# "两本账各自对"与"一本账记了三次又各自截断"这两种形状。`meta.cmd` 必须给（与 ① 那份
+# 桩同形）：`navigate_to` 的验收判据要求回执带命令形状，缺了它这一批会**整批 BLOCK**
+# （`cmd_shape`）——回执行还在、`receipts` 却是空的，判据会读到 0 件。
+def _nav_a(**kw):
+    return _Res(f"A:{kw.get('path')}",
+                meta={"cmd": {"kind": "navigate", "url": kw.get("path"), "mode": "direct"}})
+
+
+def _nav_b(**kw):
+    return _Res(f"B:{kw.get('path')}",
+                meta={"cmd": {"kind": "navigate", "url": kw.get("path"), "mode": "direct"}})
+
+
+_TA = {"navigate_to": _nav_a}
+_TB = {"navigate_to": _nav_b}
+
+_scripts, _toolsets = iter([_SA, _SB]), iter([_TA, _TB])
+R._llm = lambda: _Scripted(messages=iter(next(_scripts)), ai_message_chunk=iter([]))
+R._narrator_llm = lambda: _narrator_stub("好了")
+R._real_tools = lambda *a, **k: dict(next(_toolsets))
+R._system_prompt = lambda *a, **k: "你是测试用助手。"
+
+_arm_one = R.build()   # **同一个对象**服务两轮（`server._agent` 就是这个形状）
+_ga = _arm_one.stream({"messages": [HumanMessage(content="带我去首页和设备")]}, {})
+_gb = _arm_one.stream({"messages": [HumanMessage(content="带我去留言板")]}, {})
+_fa: list = []
+_fb: list = []
+while True:
+    _moved = False
+    for _g, _acc in ((_ga, _fa), (_gb, _fb)):
+        try:
+            _acc.append(next(_g))
+            _moved = True
+        except StopIteration:
+            pass
+    if not _moved:      # 两路都耗尽
+        break
+
+def _rows_of(_fr: list) -> list:
+    """这一路收到的**全部** execute 回执行（本轮分批发，末批是累计语义 ⇒ 取最长那批）。"""
+    _batches = [u["execute"].get("receipts") or [] for u in _ups(_fr) if "execute" in u]
+    return max(_batches, key=len) if _batches else []
+
+
+_ra, _rb = _rows_of(_fa), _rows_of(_fb)
+check("**两路各记各的件数**（A 两件 / B 一件；共用一个台账 ⇒ 两边都是三件或都是两件）",
+      len(_ra) == 2 and len(_rb) == 1, f"A={len(_ra)} B={len(_rb)}")
+check("**两路各记各的内容**（回执里没有对方那一件——件数对得上但内容串了是另一种坏法）",
+      all(str(r.get("result", "")).startswith("A:") for r in _ra)
+      and all(str(r.get("result", "")).startswith("B:") for r in _rb),
+      f"A={[r.get('result') for r in _ra]} B={[r.get('result') for r in _rb]}")
+check("两路都真的跑完了（不是一路提前炸掉 ⇒ 上面那两条判据恒真）",
+      bool(_rows_of(_fa)) and bool(_rows_of(_fb))
+      and any(isinstance(c, ToolMessage) for c in _chunks(_fa))
+      and any(isinstance(c, ToolMessage) for c in _chunks(_fb)),
+      f"帧数 A={len(_fa)} B={len(_fb)}")
+
+# 形状锁：上面那两条只能证明"这一次没串"，下面这条钉住**为什么**不串——
+# 台账与 agent 都是 `stream()` 的局部量。哪天有人为了省一次构图把它们提成模块级
+# 或类属性，上面那两条会红；但红的时候得知道是这个原因，而不是去查中间件的推理顺序。
+_stream_body = _arm_src.split("def stream", 1)[1].split("\n    def ", 1)[0]
+check("**台账与内层 agent 都是 `stream()` 的局部量**（提成常驻单例 ⇒ 两轮往同一本账上写；"
+      "那时键必须换成 langgraph 的 `run_id`，见 `agent/react_line.py` 的 `RunLedger` 注）",
+      _stream_body.count("ledger = RunLedger()") == 1
+      and "build_agent(" in _stream_body)
+
+# ── ⑫ 选臂那一层（`server._build_arm`，20261012 批 4）────────────────────────
+# 这一格是**唯一**碰生产路径的改动，所以它的判据就是一条：**开关不拨 = 生产行为不变**。
+# `graph` 那一支在这里**不真跑**（那会现构一遍生产图，与"离线套件秒级"的定位相冲），
+# 用源码锁钉住"它仍然就是原来那一行 `create_agent()`"；`react` 与"不认识的臂名"两支
+# 行为可测，就直接跑。
+print("\n⑫ 选臂：默认 graph、认 react、不认识的名字不许回退")
+_srv_src = (ROOT / "server.py").read_text(encoding="utf-8")
+_set_src = (ROOT / "config" / "settings.py").read_text(encoding="utf-8")
+check("**默认值必须是 `graph`**（反过来等于没人点头就把产线换掉）",
+      'agent_arm: str = "graph"' in _set_src)
+check("`graph` 那一支就是原来那一行 `create_agent()`（逐字节：本批没给它加任何参数）",
+      "return create_agent(), arm" in _srv_src
+      and _srv_src.count("_agent, _arm = _build_arm()") == 1)
+# ⚠️ 只扫**真的 import 行**：整份源码里当然有 `golden_arm` 这几个字（`_build_arm` 的
+# docstring 正文就在写"不 import 它"，逐字扫全文件会把注释判成违规——判据与它要防的
+# 东西不是一回事了）。
+_srv_imports = "\n".join(ln for ln in _srv_src.splitlines()
+                         if ln.lstrip().startswith(("import ", "from ")))
+_bad_imports = [ln for ln in _srv_imports.splitlines()
+                if re.match(r"\s*(from|import)\s+eval\b", ln) or "golden_arm" in ln]
+check("**不 import 评测侧**（`from eval…` / `import eval…` / `golden_arm` 一行都不许有；"
+      "生产不该依赖 `eval/golden_arm.py` 那层选臂壳）",
+      not _bad_imports, repr(_bad_imports)[:120])
+
+import server as _srv  # noqa: E402 —— 与 `_drive_producer` 同一处 import（模块级副作用已验过）
+from config.settings import settings as _st  # noqa: E402
+
+_orig_arm = _st.agent_arm
+try:
+    _st.agent_arm = "react"
+    _arm_obj, _arm_name = _srv._build_arm()
+    check("`AGENT_ARM=react` ⇒ 挂上第二条臂，且**臂名被交回给启动日志**"
+          "（'这一轮是谁在跑'必须是日志里读得到的事实）",
+          _arm_name == "react" and type(_arm_obj).__name__ == "ReactGoldenArm",
+          f"{_arm_name}/{type(_arm_obj).__name__}")
+    _st.agent_arm = "reactt"
+    try:
+        _srv._build_arm()
+        _boom = ""
+    except RuntimeError as e:
+        _boom = str(e)
+    check("**不认识的臂名 ⇒ 拒绝启动，不回退 graph**（静默回退会把'谁在跑'从日志里抹掉）",
+          "AGENT_ARM" in _boom and "拒绝启动" in _boom, _boom[:60])
+finally:
+    _st.agent_arm = _orig_arm
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
