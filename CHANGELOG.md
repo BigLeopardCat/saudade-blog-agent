@@ -16,6 +16,21 @@
 
 ## 20261012
 
+- **评审员在 DeepSeek 上 181/181 全废（判据修复）**：`eval/llm_judge.py` 的输出契约原本
+  **只挂在 `response_format: json_schema` 上**，而 DeepSeek 不吃这个方言（400
+  `This response_format type is unavailable now`）⇒ 每次都走纯 prompt 降级，而降级路径
+  **没有任何地方定义过字段** ⇒ 模型回三键 JSON（实测原文
+  `{"unsupported": [], "answered": false, "verdict": "ok"}`）、`parse_verdict` 抛
+  「缺字段 reason」，那一轮 181 条**全部**记成"评审失败"。它非门禁，所以夜里汇总照旧
+  `ALL PASS` —— **瞎了也没人知道**。现在方言按服务商选（DeepSeek 用
+  `{"type": "json_object"}`，其余仍走 json_schema——那个 POC 实测被强制、别顺手降级），
+  同时**把字段契约与可照抄的样例写进 `_JUDGE_SYS`**：官方 JSON Output 文档的硬要求
+  （提示词里必须出现 json 字样并给出目标格式样例），也是这里真正的教训——**提示词才是所有
+  路径的共同底座，schema 只是加成**。判据 = `tests/test_llm_judge.py` 新增两组
+  （契约住在提示词里、样例自身是合法 JSON 且键与 `parse_verdict` 逐字一致；方言按服务商且
+  大小写不敏感）＋一条接线断言（`judge_one` 交给 `bind` 的是当前方言，不是写死的那份）。
+  实测 = `--only` 3 条 **3/3 出裁决、0 出错、0 降级**（修前 0/2）。
+
 - **`enable_thinking` 在 DeepSeek 上被静默丢掉 ⇒ 整轮空回复**：`models/llm.py` 只把
   `enable_thinking` 译成 qwen 的 `extra_body`，切到 DeepSeek 后四个调用点写的
   `enable_thinking=False`（planner/narrator/moderator/summarizer）**一个字都没生效**，
