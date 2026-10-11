@@ -203,6 +203,44 @@ def test_parse_verdict_strictness():
           v["verdict"] == "ok", v["verdict"])
 
 
+def test_output_contract_lives_in_the_prompt():
+    """20261012 实测的**根因锁**：输出契约只挂在 schema 上，降级路径就没人管了。
+
+    那天 DeepSeek 不吃 `json_schema`（400 `This response_format type is unavailable now`）
+    ⇒ 走纯 prompt 降级；而 `_JUDGE_SYS` 当时只说"只输出 JSON"，四个字段的契约全在 schema 里
+    ⇒ 模型回了三键 JSON（实测原文 `{"unsupported": [], "answered": false, "verdict": "ok"}`）
+    ⇒ 181/181 抛「缺字段 reason」，而夜里汇总照旧 ALL PASS（它非门禁，瞎了也没人知道）。
+    判据 = **提示词自己得是一份完整的输出规格**：字段、json 字样、可照抄的样例三件齐全。
+    """
+    print("[contract] 输出契约住在提示词里（不靠 schema 兜）")
+    sys_prompt = llm_judge._JUDGE_SYS
+    for key in ("unsupported", "answered", "verdict", "reason"):
+        check(f"提示词点名了 {key}", key in sys_prompt)
+    check("提示词里有 json 字样（DeepSeek JSON Output 的硬要求，缺了它那个模式不生效）",
+          "json" in sys_prompt.lower())
+    sample = [ln for ln in sys_prompt.splitlines() if ln.strip().startswith('{"unsupported"')]
+    check("提示词里给了可照抄的样例（官方文档要求；光说「输出 JSON」不够）",
+          len(sample) == 1, str(len(sample)))
+    if sample:
+        parsed = json.loads(sample[0])      # 样例自己必须是**合法** JSON，否则等于没给
+        check("样例是合法 JSON，且键与 parse_verdict 要的那组逐字一致",
+              set(parsed) == {"unsupported", "answered", "verdict", "reason"}, str(sorted(parsed)))
+
+
+def test_response_format_dialect():
+    print("[format] 结构化输出的方言按服务商给（写死一种 = 另一家每次都走降级）")
+    check("deepseek ⇒ json_object（官方 JSON Output 的写法）",
+          llm_judge.response_format("deepseek") == {"type": "json_object"})
+    check("大小写不敏感（.env 里写 DeepSeek 也算）",
+          llm_judge.response_format("DeepSeek") == {"type": "json_object"})
+    qwen_fmt = llm_judge.response_format("qwen")
+    check("qwen ⇒ 仍是 json_schema（POC 实测被强制的那个，别顺手降级）",
+          qwen_fmt.get("type") == "json_schema" and qwen_fmt["json_schema"]["strict"] is True,
+          str(qwen_fmt)[:80])
+    check("不点名服务商 ⇒ 现读配置、不抛（值取决于当前档位，故不断言它）",
+          llm_judge.response_format().get("type") in ("json_object", "json_schema"))
+
+
 class _Msg:
     def __init__(self, content):
         self.content = content
@@ -215,9 +253,11 @@ class _FakeLLM:
 
     def __init__(self, text, *, bind_raises=False):
         self.text, self.bind_raises, self.binds = text, bind_raises, 0
+        self.last_kw = None
 
     def bind(self, **kw):
         self.binds += 1
+        self.last_kw = kw
         if self.bind_raises:
             raise RuntimeError("response_format 不被支持")
         return self
@@ -233,6 +273,8 @@ def test_judge_one_paths():
     v, degraded = llm_judge.judge_one("材料", llm)
     check("结构化路径正常：不降级", degraded is False and v["verdict"] == "ok")
     check("确实走了 bind（structured 不是装饰）", llm.binds == 1, str(llm.binds))
+    check("bind 拿到的是**当前服务商**的方言，不是写死 json_schema",
+          llm.last_kw == {"response_format": llm_judge.response_format()}, str(llm.last_kw))
 
     llm2 = _FakeLLM(text, bind_raises=True)
     v2, degraded2 = llm_judge.judge_one("材料", llm2)
@@ -365,6 +407,7 @@ def test_nightly_runs_the_judge():
 def main():
     for fn in (test_material_completeness, test_material_clip_is_visible,
                test_truncation_detector, test_parse_verdict_strictness,
+               test_output_contract_lives_in_the_prompt, test_response_format_dialect,
                test_judge_one_paths, test_report_and_no_gate,
                test_golden_runs_raise_the_trace_limit,
                test_nightly_runs_the_judge):

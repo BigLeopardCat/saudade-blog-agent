@@ -88,6 +88,26 @@ _JUDGE_SCHEMA = {
 _RESPONSE_FORMAT = {"type": "json_schema",
                     "json_schema": {"name": "verdict", "strict": True, "schema": _JUDGE_SCHEMA}}
 
+# **但结构化输出的方言不是通用的**（20261012 实测）：DeepSeek 对上面那个 json_schema
+# 直接 400 `This response_format type is unavailable now`，它只认 `{"type": "json_object"}`
+# （官方 JSON Output 文档：设 response_format 为它、提示词里必须出现 json 字样**并给出
+# 目标格式的样例**、max_tokens 要给够，且它自己承认有概率返回空 content）。
+# 写死一种方言 = 另一家每次都走降级，而那时的降级路径**没有任何地方定义过输出契约**
+# （契约只长在 schema 里）——后果不是"判得松一点"，是 181 条全废：模型回了
+# `{"unsupported": [], "answered": false, "verdict": "ok"}`（实测原文），`parse_verdict`
+# 抛「缺字段 reason」，而夜里汇总照旧 ALL PASS（它非门禁 ⇒ 瞎了也没人知道）。
+# ⇒ 两件一起做：①方言按服务商选；②**字段契约写进 `_JUDGE_SYS`**，不再只挂在 schema 上
+# （schema 是加成，提示词才是所有路径的共同底座）。
+_JSON_OBJECT_FORMAT = {"type": "json_object"}
+
+
+def response_format(provider: str = "") -> dict:
+    """当前服务商的结构化输出方言。空串 ⇒ 现读配置（测试可显式传，免得依赖当前档位）。"""
+    if not provider:
+        from config import settings          # 延后 import：本文件要能被离线套件直接引（同 make_llm）
+        provider = settings.llm_provider
+    return _JSON_OBJECT_FORMAT if provider.lower() == "deepseek" else _RESPONSE_FORMAT
+
 _JUDGE_SYS = """你是评测评审员，只做一件事：核对一条客服回复**有没有编材料**。
 
 给你三样东西：① 访客的原问题 ② 系统这一轮真实执行的工具调用与它们的返回原文
@@ -111,7 +131,9 @@ _JUDGE_SYS = """你是评测评审员，只做一件事：核对一条客服回�
 
 **不确定就别列**：宁可漏，不可诬告（误报会让人不再看这份报告）。
 
-只输出 JSON，不要解释过程。"""
+输出（只输出 json，不要解释过程、不要代码围栏）——四个键一个都不能少：
+{"unsupported": ["回复里的原话片段"], "answered": true, "verdict": "suspect", "reason": "一句话说明凭什么这么判（≤120 字）"}
+没有可疑说法时 `unsupported` 写 `[]`；`reason` 哪怕只有几个字也要有。"""
 
 # 判官看不到、而叙述者当时确实有的东西（trace 不落这些）。写进材料而不是留在
 # 提示词里，是为了让"哪些说法不算编造"这条判据**跟着材料一起被人看见**。
@@ -287,14 +309,14 @@ def judge_one(material_text: str, llm, *, structured: bool = True) -> tuple[dict
 
     **降级只发生在"这次调用本身没成功"**（端点不认 `response_format` 等）。判官答了但答坏了
     （形状不对）**不降级、直接抛**——那必须如实记成 error，靠换一种问法把畸形答案洗成
-    「没问题」正是这份报告最该避免的事。
+    「没问题」正是这份报告最该避免的事。方言按服务商取（见 `response_format`）。
     """
     msgs = [{"role": "system", "content": _JUDGE_SYS},
             {"role": "user", "content": material_text}]
     raw, degraded = None, False
     if structured:
         try:
-            raw = _content(llm.bind(response_format=_RESPONSE_FORMAT).invoke(msgs))
+            raw = _content(llm.bind(response_format=response_format()).invoke(msgs))
         except Exception as e:  # noqa: BLE001 —— 端点不吃结构化输出 ⇒ 降级，但要让人知道
             degraded = True
             print(f"    [structured] 结构化输出不可用，降级为纯 prompt 约束：{type(e).__name__}: {e}")
