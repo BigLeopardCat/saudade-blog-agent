@@ -21,7 +21,10 @@
     空集 ⇒ **逐字节不变**；
   · ④ `bind_native` 真的把裁剪后的 schema 交下去了（不是接了个没人用的形参）；
   · ⑤ 接线 —— `planner_node` 每轮算 `deny`、记账、传给 bind 与渲染、以及那一格
-    一次性纠偏与它的记账。
+    一次性纠偏与它的记账；
+  · ⑥ **同一轮内现摘**（20261012）—— `_sated_read_skill` 判"这一版计划里的读全是
+    本轮已取回的"、`_strip_menu` 现改 `deny` 并重绑客户端。病与处方见那两个函数的
+    头注；这一节钉的是"判据与 `_trim_done_reads` 同源"与四处收窄的负控。
 
 用法：.venv/bin/python tests/test_menu_deny.py
 """
@@ -36,6 +39,7 @@ import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
 import agent.graph as g  # noqa: E402
 import agent.native_plan as np  # noqa: E402
+from agent import authz  # noqa: E402
 from agent.block_reasons import denied_skills  # noqa: E402
 from agent.skills import SKILL_MAP, build_planner_context, visible_skills  # noqa: E402
 
@@ -230,6 +234,164 @@ check("纠偏语里**不念**任何技能名（念一遍等于把摘掉的菜单
       all(s.name not in g._MENU_DENIED_NUDGE
           for s in visible_skills(_ROLE) if s.name != "chat"),
       repr(g._MENU_DENIED_NUDGE[:80]))
+
+
+# ── ⑥ 同一轮内现摘：「这一版计划里的读全是本轮已取回的」─────────────────────
+# 病（20261012 两条生产 trace）：主人一句话里明摆着要办一件事，planner 先读名录核对，
+# 下一轮**又点同一个读技能**——数据就在上方返回里，这一版计划一个字节的新数据都拿不到。
+# 既有的 `_trim_done_reads` 拦得住"再执行一遍"，但它落在决策循环**之外**，于是这一轮
+# 以"如实收尾"结束，narrator 只能写出「这件事这一轮还没办，你再说一遍」。处方不是再劝
+# 一次（话术那条纠了两遍、产出逐字节同形），而是**把那个选项从菜单里摘掉**重决策一次。
+_RCPT = [{"skill": "account_roster", "tool": "list_accounts", "args": {}, "result": "…"}]
+_PLAN = {"skill": "account_roster", "tools": ["list_accounts({})"]}
+check("正控：读已取回 ⇒ 摘 `account_roster`（生产那两条 trace 的形状）",
+      g._sated_read_skill(_PLAN, _RCPT, _ROLE) == ("account_roster", ["list_accounts({})"]),
+      str(g._sated_read_skill(_PLAN, _RCPT, _ROLE)))
+check("负控：**还没读过** ⇒ 不摘（首触路径一步都不动；也兜住「零回执轮」）",
+      g._sated_read_skill(_PLAN, [], _ROLE) is None
+      and g._sated_read_skill(_PLAN, None, _ROLE) is None)
+check("负控：读过的是**另一份参数** ⇒ 不摘（`_trim_done_reads` 的签名判据没被绕过）",
+      g._sated_read_skill({"skill": "account_roster",
+                           "tools": ['list_accounts({"status": "frozen"})']},
+                          _RCPT, _ROLE) is None)
+check("负控：清单里还有**没读过**的件 ⇒ 不摘（「先搜到那一篇，再改它」那类两步走留在原地）",
+      g._sated_read_skill({"skill": "ops_report",
+                           "tools": ["get_server_status({})", "get_service_health({})"]},
+                          [{"tool": "get_server_status", "args": {}}], _ROLE) is None)
+check("负控：模板为空的技能不摘（`content_query` 的工具靠 PARAMS 点名，摘它=关掉整条查询通道）",
+      g._sated_read_skill({"skill": "content_query", "tools": ['search_notes({"q": "x"})']},
+                          [{"tool": "search_notes", "args": {"q": "x"}}], _ROLE) is None)
+check("负控：动作技能不摘（那一族有自己的重复通道与话术，不在这里抢）",
+      g._sated_read_skill({"skill": "device_query", "tools": ["list_devices({})"]},
+                          [{"tool": "list_devices", "args": {}}], "user") is None)
+check("负控：角色看不见的技能不摘（可见性只走 `visible_skills` 那一处，同 ⑤）",
+      g._sated_read_skill(_PLAN, _RCPT, "user") is None)
+
+# 候选集：对每个可见技能都喂一份"它的工具全已取回"的计划——既防这一节空转，也把
+# "摘技能比剔一次调用影响面大得多"这条边界钉成集合判据（写技能一个都不许进来）。
+_pair = lambda s: list(s.plan) + [(t, {}) for t in s.extra_plan_tools]  # noqa: E731
+_cand: dict = {}
+for _s in visible_skills(_ROLE):
+    if _s.chat or not _pair(_s):
+        continue
+    _got = g._sated_read_skill(
+        {"skill": _s.name,
+         "tools": [f"{t}({json.dumps(a, ensure_ascii=False)})" for t, a in _pair(_s)]},
+        [{"tool": t, "args": a} for t, a in _pair(_s)], _ROLE)
+    if _got:
+        _cand[_s.name] = _got
+check("候选集非空（≥5 个只读台账类技能）且**一个带写工具的技能都不在里头**",
+      len(_cand) >= 5
+      and not any(any(authz.is_write(t) for t, _ in _pair(SKILL_MAP[n]))
+                  for n in _cand),
+      f"{len(_cand)} 个：{'、'.join(sorted(_cand))}")
+check("生产那两条 trace 的形状（`account_roster`）在候选集里",
+      "account_roster" in _cand, "、".join(sorted(_cand)))
+check("`content_query` 与 `_ACTION_SKILLS` 两族都不在候选集里（上面逐条负控的集合版）",
+      "content_query" not in _cand and not (set(_cand) & set(g._ACTION_SKILLS)),
+      f"{sorted(set(_cand) & set(g._ACTION_SKILLS))}")
+
+# 判据同源：这条一旦自己写一份签名比较，就会出现"系统说已取回、却还把那个技能留在
+# 菜单里"（同一个事实两套判据必然漂移）。
+check("判据与 `_trim_done_reads` 同源（不自己另写一份签名比较）",
+      "_trim_done_reads(plan_obj, receipts)" in _GRAPH_SRC)
+check("纠偏语**不替主人认领意图**——这条通道也覆盖纯读轮次（主人把同一个问题再问一遍），"
+      "替他说一句他没说过的意图，就是让模型照着编；且给纯读留了 `chat` 出口",
+      "要求你改动站内的数据" not in g._SATED_READ_NUDGE
+      and "主人原话里" not in g._SATED_READ_NUDGE
+      and "点 `chat`" in g._SATED_READ_NUDGE,
+      repr(g._SATED_READ_NUDGE[:60]))
+
+
+class _FakeCtx:
+    """`_name_write_correct` / `_strip_menu` 只碰这几个字段（鸭子类型）。不用真
+    `_DecideCtx` 是为了让这一格测的是"两处出口都改到了、话术落对了"，而不是
+    "构造 ctx 的形参顺序对不对"。"""
+
+    def __init__(self, user_msg: str = "", plan: dict | None = None,
+                 receipts: list | None = None, role: str = _ROLE) -> None:
+        self.role, self._task_state, self.deny_pseudo = role, False, set()
+        self.deny = {"blocked_skill"}          # 上一轮受阻项：必须是**并集**，不能被覆盖
+        self._base_llm = _FakeLLM()
+        self.llm = "还没重绑"
+        self.user_msg, self.rounds = user_msg, 1
+        self.plan_obj = plan or _PLAN
+        self.state = {"receipts": _RCPT if receipts is None else receipts}
+        self.correction, self.correction_kind = "", ""
+
+
+_c = _FakeCtx()
+g._strip_menu(_c, "account_roster")
+check("`_strip_menu` ①并进 `deny`（不是覆盖——覆盖会把上一轮的受阻项放回菜单）",
+      _c.deny == {"blocked_skill", "account_roster"}, str(_c.deny))
+check("`_strip_menu` ②重绑了客户端，且交下去的 schema 里真没有它（schema 那一半）",
+      _c.llm is _c._base_llm and _c.llm.schema is not None
+      and "account_roster" not in _names(_c.llm.schema), f"n={len(_c.llm.schema or [])}")
+# ⚠️ 这一条读**原文**而不是 `_GRAPH_SRC`：deprefix 会把 `c.deny` 削成 `deny`，那样
+# "现读 ctx 上的字段"与"渲染前一刻被冻住的局部变量"就分不出来了。
+check("`_strip_menu` ③提示词那一半：`_decide_llm` 每次渲染读的就是 `c.deny`",
+      "deny=c.deny," in (ROOT / "agent/graph.py").read_text(encoding="utf-8")
+      .split("_prompt_args = dict(", 1)[1]
+      .split("_render_planner_prompt(**_prompt_args)", 1)[0])
+
+# `_name_write_correct` 是这两半真正的合流点（也是 `_decide_late_correct` 唯一那一次
+# 调用）——所以这里**跑真的**（记账打桩收下来），而不是只锁源码文本。
+_EVENTS: list = []
+_REC, g.record = g.record, (lambda *a, **k: _EVENTS.append((a, k)))
+try:
+    # 半 ①：有动作词 → 用话术那条的文本，但**同时**摘掉那个读技能（光有话术纠不动它）
+    _c1 = _FakeCtx(user_msg="给「demo」发个通知")
+    _r1 = g._name_write_correct(_c1)
+    check("半 ①（有动作词）：接管本轮 + 摘掉 `account_roster` + 话术是 `_name_write_nudge` 那份",
+          _r1 is True and _c1.deny == {"blocked_skill", "account_roster"}
+          and _c1.correction == g._name_write_nudge(_PLAN, _c1.user_msg, 1, _ROLE)
+          and "照主人的原话把工具规格写出来" in _c1.correction,
+          repr(_c1.correction[:50]))
+    check("半 ① 记账走 `name_nudge`，并把摘掉的那个技能一并记下（证据：这一次纠偏带没带牙）",
+          _EVENTS[-1][0][:2] == ("planner", "name_nudge")
+          and _EVENTS[-1][1].get("stripped") == ["account_roster"],
+          str(_EVENTS[-1]))
+    # 半 ②：**一个动作词都没有**（trace 20261012T044342 那句的形状）→ 只有摘选项这一招
+    _c2 = _FakeCtx(user_msg="猫咪给demo用户一条通知，以你的口吻说他被降级了，然后把降级身份执行")
+    _r2 = g._name_write_correct(_c2)
+    check("半 ②（无动作词）：接管本轮 + 摘掉 `account_roster` + 话术是 `_SATED_READ_NUDGE`",
+          _r2 is True and _c2.deny == {"blocked_skill", "account_roster"}
+          and _c2.correction == g._SATED_READ_NUDGE
+          and _c2.correction_kind == "读已取回",
+          repr(_c2.correction[:50]))
+    check("半 ② 记账另起一条事件（不复用 `name_nudge`）：两条的触发判据不同，"
+          "合成一条之后「话术那条到底命中了没有」就查不出来了",
+          _EVENTS[-1][0][:2] == ("planner", "sated_read_strip")
+          and _EVENTS[-1][1].get("skill") == "account_roster",
+          str(_EVENTS[-1]))
+    # 负控：还没读过 ⇒ 两条都不接管（首触路径一步不动）
+    _c3 = _FakeCtx(user_msg="猫咪给demo用户一条通知", receipts=[])
+    check("负控：回执为空 ⇒ 两条都不接管，`deny` 与话术一个字节没动",
+          g._name_write_correct(_c3) is False and _c3.deny == {"blocked_skill"}
+          and _c3.correction == "" and _c3.llm == "还没重绑")
+    # 负控：这一轮前面几格已经纠过一次 ⇒ **一个字都不改**。这一格是**回归锁**：
+    # 这两半合流的那次重构里，原来那句 `nudge = None if c.correction else …` 被
+    # 压成了一次调用，守卫差点跟着丢掉——丢了的话这里会把"参数不齐"那条纠偏语
+    # 覆盖成写形态那条（两句话术打架，模型只看得见后一句），而且看不出来。
+    _c4 = _FakeCtx(user_msg="给「demo」发个通知")
+    _c4.correction = "（参数不齐那条纠偏语）"
+    check("负控：本轮已纠过一次（`correction` 非空）⇒ 不接管、不覆盖、不摘菜单",
+          g._name_write_correct(_c4) is False and _c4.correction == "（参数不齐那条纠偏语）"
+          and _c4.deny == {"blocked_skill"} and _c4.llm == "还没重绑")
+finally:
+    g.record = _REC
+
+check("接线：判据只有 `_name_write_correct` 一处调 `_sated_read_skill`（定义 1 + 调用 1）"
+      "——两处各判一遍必然漂移",
+      _GRAPH_SRC.count("_sated_read_skill(") == 2)
+check("两条事件在同一个函数里、`name_nudge` 在前（顺序即优先级：有动作词就用更有指向的话术）",
+      _GRAPH_SRC.index('record("planner", "name_nudge"')
+      < _GRAPH_SRC.index('record("planner", "sated_read_strip"'))
+check("`_decide_late_correct` 里那两半合成**一次调用**，且排在动作重复那条**之前**"
+      "（动作技能留自己的通道；那函数已超复杂度预算，只许缩小）",
+      _GRAPH_SRC.count("_name_write_correct(") == 2
+      and _GRAPH_SRC.index("if _name_write_correct(c):")
+      < _GRAPH_SRC.index("动作重复纠偏（20261003）"))
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
