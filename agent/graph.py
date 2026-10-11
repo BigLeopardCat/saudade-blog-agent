@@ -1231,6 +1231,30 @@ _MENU_DENIED_GIVEUP_NUDGE = (
     "确实一条可换的路都没有时，才点 `chat` 如实说明此刻办不了。"
 )
 
+# **同一件事的第三半**（20261012）：`_name_write_nudge` 管"写形态的请求零写规格"，
+# 但它两条支的入口都是**动作词表**——「给 demo 用户一条通知，以你的口吻说他被降级为
+# 杂鱼身份了，然后把降级身份执行」这句话里**一个发送动词都没有**（是"给…一条通知"），
+# 它够不着；而现场那一版计划的形状与它第二条支**是同一个病**：读了一件事，下一轮又点
+# 同一个读技能——差别只在"话术够不着它"。
+#
+# 光换话术纠不动它：trace `20261012T005608` 里同一条 `name_nudge` 纠偏**连着两次**没能
+# 把"再点一次名录"变成"改选写技能"（第二次的产出与第一次逐字节同形），最后 `_trim_done_reads`
+# 把重复的读剔掉、这一轮以"如实收尾"结束——narrator 只能写出「这两件事这一轮都还没办」，
+# 主人要的是当场办掉、不是被再问一遍。仓里对这类"劝不动"的既有处方不是再劝一次，
+# 而是**把那个选项从菜单里摘掉**（`deny`，见 `_MENU_DENIED_NUDGE` 那一族）。
+# 所以这一条**不写新话术、只摘选项**：说清机器能保证的三件事（那份数据本轮已取回、
+# 系统不会为它再跑一次、它已被移出菜单），重选仍由 planner 自己做。
+# ⚠️ 文本里**不许出现"主人是要你写"**这类断言：这条通道也覆盖纯读轮次（主人把同一个
+# 问题再问一遍），替主人认领一个他没说过的意图就是让模型去编造（同禁言族的取舍）。
+_SATED_READ_NUDGE = (
+    "**你这一版点的那个读技能，本轮已经把数据取回来了**（同一件工具、同一份参数，"
+    "返回就在上方工具返回里）——系统不会为它再跑一次，重排也不会有第二份数据，"
+    "所以这一轮它已经从菜单里摘掉了。\n"
+    "请重新给一次决策：主人这件事**如果本来还要动手做点什么**，现在就把那一步的写规格"
+    "排出来（技能名 + 参数，要不要真动手由系统弹确认框问主人）；如果主人要的答案已经"
+    "在手里的返回里，点 `chat` 照已有返回如实作答。"
+)
+
 
 # ── "主人点名了目标，你却没写工具规格"：确定性纠偏一次（②防线续二）──────────
 # 实测（20260922 golden `admin_tag_move_unresolved_target_honest` 八跑）：同一条
@@ -1413,6 +1437,119 @@ def _name_write_nudge(plan_obj: dict, user_msg, rounds: int,
         "（反过来：如果主人这句话本来就不是要改动站内数据的请求——只是提问、闲聊，"
         "或是要你解释/整理某段内容——那保持你现在的决定即可，不必强行凑一个写操作。）"
     )
+
+
+def _sated_read_skill(plan_obj: dict, receipts, role: str | None):
+    """这一版计划**一个字节的新数据都拿不到** → 该从菜单里摘掉的技能名（纯函数，20261012）。
+
+    判据 = 「整张技能的工具全是**本轮已经取回过**的只读件」：与 `_trim_done_reads`
+    **同源**（同一份 `_spec_signature`、同一份回执、同样不动写件），差别只在后果——
+    那条负责"这次别真执行第二遍"，这条负责"**把那个选项从菜单里摘掉**，让它重决策"。
+    两条必须同源：判据一旦分家，就会出现"系统说已取回、却还把那个技能留在菜单里"。
+
+    要治的病见 `_SATED_READ_NUDGE` 头注（读了一件，下一轮又点同一个读；话术纠不动）。
+
+    ⚠️ 四处**刻意的收窄**（每一条都对应一类"本该让它读"的回合）：
+      - **只摘全部工具都已取回的**：`_trim_done_reads` 剔不干净（清单里还有没读过的件）
+        ⇒ 返回 None。这一条把「先搜到那一篇，再改它」那类**设计内**的两步走留在原地
+        （`_name_write_nudge` 的纠偏话术自己就写着"这一轮读没问题，但得有个下文"）；
+      - **模板为空的技能一律不碰**：`content_query` 的工具靠 PARAMS 点名，摘它等于把整个
+        查询通道关掉，而这一版里可能只有一件查询是重复的——那条路仍走 `_trim_done_reads`
+        的老收尾（**这是边界，不是漏**）；
+      - **动作技能不碰**（`_ACTION_SKILLS`，含 `device_query`/`read_article` 这两个只读的）：
+        那一族有自己的重复通道与话术（下面的"动作重复纠偏"），别在这里抢；
+      - **看不见该技能的角色不摘**：角色可见性只走 `visible_skills` 这一处（同
+        `_drop_correction` / `_name_write_nudge`），看不见的技能本来就不在菜单里。
+
+    返回 `(技能名, 被剔的 spec 原文)`；不命中 → None。
+    """
+    trim = _trim_done_reads(plan_obj, receipts)
+    if trim is None:
+        return None
+    fresh, dropped = trim
+    # 剔不干净 ⇒ 清单里还有要读的东西，这一版不是空转，放行。
+    if fresh["tools"]:
+        return None
+    name = str(plan_obj.get("skill") or "")
+    skill = SKILL_MAP.get(name)
+    if not skill or skill.chat or name in _ACTION_SKILLS:
+        return None
+    tools = {t for t, _ in skill.plan} | set(skill.extra_plan_tools)
+    if not tools or any(authz.is_write(t) for t in tools):
+        return None
+    if not tools <= {_tool_name(s) for s in dropped}:
+        return None
+    if name not in {s.name for s in visible_skills(role)}:
+        return None
+    return name, dropped
+
+
+def _strip_menu(c: "_DecideCtx", name: str) -> None:
+    """本轮菜单里再摘掉一个技能（20261012）。
+
+    `deny` 有**两个出口**，必须一起改，只改一处等于没摘：① 工具 schema
+    （`bind_native(deny=…)`）；② 技能菜单（`_decide_llm` 的 `_prompt_args["deny"]`
+    ⇒ `build_planner_context(deny=…)`）。`tests/test_menu_deny.py` 第五节钉的就是这条线。
+
+    模型若绕开 schema 照旧报出这个名字，`_decide_register` 的 `menu_denied_used` 那一格
+    会接住它（既有机制，这里不重复造）。
+    """
+    c.deny = set(c.deny) | {name}
+    c.llm = bind_native(c._base_llm, c.role, task_state=c._task_state,
+                        deny=c.deny, deny_pseudo=c.deny_pseudo)
+
+
+def _name_write_correct(c: "_DecideCtx") -> bool:
+    """「这一版计划里没有写规格」的两半，共用同一条一次性纠偏通道（返回是否接管本轮）。
+
+    两半的**触发判据不同、话术不同**，但病是同一个：主人那句话是要动站内数据的，而
+    planner 这一版没把写规格排出来（话术见 `_name_write_nudge` / `_SATED_READ_NUDGE`）。
+    - 半 ①：原话里有**写域动作词**（`_name_write_nudge`）；
+    - 半 ②：原话里**一个动作词都没有**，但这一版计划里的读**全是本轮已取回的**
+      （`_sated_read_skill`）——trace `20261012T044342` 那句「给 demo 用户一条通知……
+      然后把降级身份执行」正是这一半。
+
+    两半都做同一件事：把那个"再点一次也没有新数据"的技能**从菜单里摘掉**（`_strip_menu`）
+    ——半 ① 光有话术纠不动它（trace `20261012T005608`：同一条纠偏连着两次没能把"再点一次
+    名录"变成"改选写技能"），半 ② 连话术都够不着。
+
+    记账**分成两条事件**（`name_nudge` / `sated_read_strip`）：两条的判据不同，合成一条
+    之后"话术那条到底命中了没有"就查不出来了（同 `menu_denied_used` / `deny_giveup_correct`
+    分开记的理由）。
+
+    **一轮只纠一次**由本函数自己保证（`correction` 的既有语义）：`_decide_late_correct`
+    是阶段链的最后一格，前面几格（参数不齐 / 决策不可解析 / 菜单禁用 / 零工具…）都可能
+    已经把 `correction` 落下了——那种情况下这里必须**一个字都不改**，否则会把前面那条
+    纠偏语覆盖掉（两句话术打架，模型只看得见后一句）。
+    """
+    if c.correction:
+        return False
+    nudge = _name_write_nudge(c.plan_obj, c.user_msg, c.rounds, c.role)
+    sated = _sated_read_skill(c.plan_obj, c.state.get("receipts"), c.role)
+    if nudge:
+        _spans = _msg_quote_spans(c.user_msg)
+        _verbs = _name_write_verbs(c.user_msg)
+        if sated:
+            _strip_menu(c, sated[0])
+        logger.warning("[planner] 写形态的请求却没排写规格 → 纠偏重决策（动作词=%s，"
+                       "引号点名=%s，摘菜单=%s）", "、".join(_verbs[:3]),
+                       "、".join(_spans[:3]) or "无",
+                       sated[0] if sated else "无")
+        record("planner", "name_nudge", round=c.rounds,
+               spans=_spans[:3], verbs=_verbs[:3],
+               **({"stripped": [sated[0]]} if sated else {}))
+        c.correction = nudge
+        return True
+    if not sated:
+        return False
+    _strip_menu(c, sated[0])
+    logger.warning("[planner] 这一版计划里的读全是本轮已取回的（%s）→ 摘掉 %s 重决策一次",
+                   "、".join(sated[1]), sated[0])
+    record("planner", "sated_read_strip", round=c.rounds, skill=sated[0],
+           dups=sated[1], denied=sorted(c.deny))
+    c.correction = _SATED_READ_NUDGE
+    c.correction_kind = "读已取回"
+    return True
 
 
 def _write_family_marks(text) -> list[str]:
@@ -7334,18 +7471,11 @@ def _decide_late_correct(c: "_DecideCtx") -> "_Step":
                        c.correction[:120])
         return _Step("continue")
 
-    # 写形态的请求上一条工具规格都没写（见 _name_write_nudge 上方长注）：与
-    # 剔空纠偏共用同一条重决策通道（同一轮内只纠一次，纠完仍零工具就照原样走）。
-    nudge = None if c.correction else _name_write_nudge(c.plan_obj, c.user_msg, c.rounds, c.role)
-    if nudge:
-        _spans = _msg_quote_spans(c.user_msg)
-        _verbs = _name_write_verbs(c.user_msg)
-        logger.warning("[planner] 写形态的请求却零工具 → 纠偏重决策（动作词=%s，"
-                       "引号点名=%s）", "、".join(_verbs[:3]),
-                       "、".join(_spans[:3]) or "无")
-        record("planner", "name_nudge", round=c.rounds,
-               spans=_spans[:3], verbs=_verbs[:3])
-        c.correction = nudge
+    # 写形态的请求上一条工具规格都没写（头注见 `_name_write_nudge` / `_sated_read_skill`）：
+    # 与剔空纠偏共用同一条重决策通道（同一轮内只纠一次，纠完仍没有写规格就照原样走）。
+    # 两半（有动作词的 / 一个动作词都没有但"读已取回"的）都在 `_name_write_correct` 里
+    # ——抽出去是因为 `_decide_late_correct` 自己的复杂度台账**只许缩小**。
+    if _name_write_correct(c):
         return _Step("continue")
 
     # 动作重复纠偏（20261003）：非首轮 planner 又规划了**已执行过**的动作技能，
