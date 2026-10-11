@@ -16,6 +16,20 @@
 
 ## 20261012
 
+- **`enable_thinking` 在 DeepSeek 上被静默丢掉 ⇒ 整轮空回复**：`models/llm.py` 只把
+  `enable_thinking` 译成 qwen 的 `extra_body`，切到 DeepSeek 后四个调用点写的
+  `enable_thinking=False`（planner/narrator/moderator/summarizer）**一个字都没生效**，
+  而 `deepseek-flash` 默认**思考是开的**（同题 completion_tokens：开 125 / 关 1）。
+  后果不是"想多了"而是**回复为空**——多轮累积里 assistant 消息带着思考输出，回放时不带
+  `reasoning_content` ⇒ `400 The reasoning_content in the thinking mode must be passed
+  back to the API`，炸在 **narrator 那一次调用**（planner/execute 那几轮全绿：它们的消息
+  里还没有"前一条 assistant"要回放）。现在按 provider 各译各的（qwen `enable_thinking`
+  ／DeepSeek `thinking.type`），且调用方自带的 `extra_body` 是**合并**而非覆盖。
+  **同日 `.env` 的 `LLM_PROVIDER` 由 qwen 切到 deepseek**（qwen 账号级 403
+  `AccessDenied.Unpurchased`：三种模型同码、`qwen-turbo` 回 404 `model_not_found`
+  ⇒ 端点与请求都正常、被卡的是"资格"；`.env` 不进 git）。判据 =
+  `GOLDEN_ARM=matrix --only <3 条>` **3/3**（修前 1/3）。
+
 - **ReAct 臂的台账帧现在留痕了（判据修复；这一臂仍未上线）**：本线此前把待办台账**读进了
   提示词**（`pending_ledger` 那一格）却一个字都没记进 trace，而 golden 的三条断言——
   `require_ledger_frame` / `require_ledger_rows` / `require_card_targets_from_ledger`——读的
