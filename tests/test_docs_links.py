@@ -78,10 +78,10 @@ check("索引自己也提一下 adr/ 的索引",
 print("\n③ 跨仓引用锚点仍在（父仓按编号/标题引，改了会静默打断）")
 _ANCHORS = [
     ("docs/问题记录.md", r"^### 2\.1\b", "§2.1（父仓 iot-device-integration / 固件开发指南）"),
-    ("docs/secretary.md", r"^### 3\.4\b", "§3.4（父仓 security-boundary）"),
-    ("docs/secretary.md", r"^### 3\.6\b", "§3.6（父仓 security-boundary / zako_role 迁移）"),
-    ("docs/secretary.md", r"^### 5\.2\b", "§5.2（父仓 security-boundary）"),
-    ("docs/secretary.md", r"^### 5\.3\b", "§5.3（父仓 security-boundary）"),
+    ("docs/identity-and-permissions.md", r"^### 3\.4\b", "§3.4（父仓 security-boundary）"),
+    ("docs/identity-and-permissions.md", r"^### 3\.6\b", "§3.6（父仓 security-boundary / zako_role 迁移）"),
+    ("docs/identity-and-permissions.md", r"^### 5\.2\b", "§5.2（父仓 security-boundary）"),
+    ("docs/identity-and-permissions.md", r"^### 5\.3\b", "§5.3（父仓 security-boundary）"),
     ("docs/agent-architecture.md", r"^## 3\. 一次对话的完整链路\s*$", "《3. 一次对话的完整链路》（父仓 README）"),
 ] + [("docs/toolcall-stability-roadmap.md", rf"^### D{n}\b", f"D{n}（execution_log_struct 迁移）")
      for n in range(1, 7)]

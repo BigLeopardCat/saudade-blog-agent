@@ -28,7 +28,7 @@ import agent.graph as g  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import (_RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec,  # noqa: E402
                          plan_state)
-from agent.principal import ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, Principal  # noqa: E402
+from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
 from agent.skills import PLAN_STATUS_ABSENCE_EXEMPT, instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_todo_schedule 的那一处）────────────────────────────────
@@ -423,7 +423,7 @@ check("对照：空参数走原来那条「缺少账号名」的追问（两条�
 print("\n⑥ 政策预检 _freeze_policy_refusal：只拦**确定知道**的两种，其余一律放行")
 POL = {r["id"]: r for r in DIR}
 POL[1] = row(1, "boss", role=ROLE_ADMIN)          # 另一个管理员
-POL[2] = row(2, "secretary1", role=ROLE_SECRETARY)
+POL[2] = row(2, "zako1", role="zako")
 
 
 def _pol(tool, name, uid=7, role=ROLE_ADMIN, index=None):
@@ -442,8 +442,8 @@ check("② admin → admin → 拦（管理员之间不可互冻）",
       _pol("freeze_account", "boss", role=ROLE_ADMIN) is not None)
 check("  文案把**规则**写出来（管理员之间不能互相冻结 / 超管的账号谁都冻不了）",
       "管理员之间不能互相冻结" in _pol("freeze_account", "boss")[1], "")
-check("③ admin → secretary → 放行（拍板：普通管理员可以冻秘书）",
-      _pol("freeze_account", "secretary1", role=ROLE_ADMIN) is None)
+check("③ admin → zako → 放行（普通管理员可以冻杂鱼）",
+      _pol("freeze_account", "zako1", role=ROLE_ADMIN) is None)
 check("④ admin → user → 放行", _pol("freeze_account", "guest5") is None)
 check("⑤ superadmin → admin → 放行（超管谁都能冻，除了超管自己）",
       _pol("freeze_account", "boss", role="superadmin") is None)
@@ -605,7 +605,7 @@ for _t in ("freeze_account", "unfreeze_account"):
           _t in authz._CONSENT_WHY_TOOL)
     check(f"非管理员：{_t} 不放行（权限先于确认）",
           not authz.check(_P(uid=9, role=ROLE_USER), _t).allowed
-          and not authz.check(_P(uid=9, role=ROLE_SECRETARY), _t).allowed)
+          and not authz.check(_P(uid=9, role=None), _t).allowed)
 _w_freeze = authz._CONSENT_WHY_TOOL["freeze_account"][0]
 _w_thaw = authz._CONSENT_WHY_TOOL["unfreeze_account"][0]
 check("⭐ 冻结的 why ≠ 解冻的 why（同形 = 主人分不清点下去会怎样）",

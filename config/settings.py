@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     # 默认 False 是**滚动上线**需要的：Rust 还没发这个头时打开它会把在途请求打成 401。
     agent_require_assertion: bool = False
 
-    # ── 权限模型（20260920，秘书类功能地基）──────────────────────────
+    # ── 权限模型（20260920，身份与权限地基）──────────────────────────
     # False（默认）= **shadow**：execute 照算 authz 决策、把「拒绝」记进 trace，
     # 但不改变行为。先跑一段真实流量看谁会撞上授予表边界，用证据校准
     # agent/authz.py 的角色→scope 表，再打开开关——与上面的断言开关同一条

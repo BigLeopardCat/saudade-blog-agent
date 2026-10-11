@@ -1020,7 +1020,7 @@ check("scope 声明为 read.own（不是 admin.console——判据是『以谁�
       str({n: authz.required_scope(n) for n in READ_TOOLS}))
 check("三档角色都授予 read.own（角色轴在这里没有信息量）",
       all(authz.SCOPE_READ_OWN in authz._ROLE_SCOPES[r]
-          for r in (authz.ROLE_USER, authz.ROLE_SECRETARY, authz.ROLE_ADMIN)))
+          for r in (authz.ROLE_USER, authz.ROLE_ADMIN)))
 check("匿名（role=None）四处都拿不到：没有身份就没有这份数据",
       all(not authz.check(Principal(uid=0, role=None), n).allowed for n in READ_TOOLS))
 check("读工具**不进** CONSENT_SCOPES（读自己的收藏不需要当轮命令）",
@@ -1048,9 +1048,9 @@ check("三个写工具都在注册表里",
 check("scope 声明为 write.own（与后台写的 write.console 是**两个** scope）",
       all(authz.required_scope(n) == authz.SCOPE_WRITE_OWN for n in WRITE_TOOLS),
       str({n: authz.required_scope(n) for n in WRITE_TOOLS}))
-check("三档角色都授予 write.own（秘书代博主收藏自己的号也是正当的）",
+check("两档角色都授予 write.own（代博主收藏是对自己的号写状态）",
       all(authz.SCOPE_WRITE_OWN in authz._ROLE_SCOPES[r]
-          for r in (authz.ROLE_USER, authz.ROLE_SECRETARY, authz.ROLE_ADMIN)))
+          for r in (authz.ROLE_USER, authz.ROLE_ADMIN)))
 check("匿名（role=None）拿不到：没有身份就没有收藏夹",
       all(not authz.check(Principal(uid=0, role=None), n).allowed for n in WRITE_TOOLS))
 check("写工具**不进** _HARD_SCOPES（不吃 shadow，与后台写刻意分开）",

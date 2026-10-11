@@ -379,7 +379,7 @@ def _verify_user_assertion(token: str) -> int | None:
 def _verify_assertion_claims(token: str) -> dict | None:
     """验签并返回断言的声明（uid + role）；任何一步不成立返回 None。
 
-    role 是 20260920 加的（秘书类功能地基：agent 侧要知道"我代表的是谁、他能
+    role 是 20260920 加的（身份与权限地基：agent 侧要知道"我代表的是谁、他能
     让我做什么"）。**Rust 还没部署带 role 的断言时这里是 None**，由调用方按
     "身份不明"处理（agent/authz.py：零权限 + shadow 只记不拦），不做任何默认授予。
     """
@@ -411,7 +411,7 @@ def _verify_assertion_claims(token: str) -> dict | None:
 def _resolve_principal(request: Request, body_uid: int) -> Principal:
     """以签名为准解析调用者身份（uid + role），返回显式 principal（见上面注释）。
 
-    秘书类功能的地基：把"谁在说话、他能让我做什么"从到达图之前就固定下来。
+    身份与权限的地基：把"谁在说话、他能让我做什么"从到达图之前就固定下来。
     role 只认签名里的（Rust 从 DB 查、不信登录 token 里的旧角色，与
     middleware.rs 同一条纪律）——**回退信任 body 的分支里 role 恒为 None**，
     绝不因为"读不到角色"就默认授予任何权限。

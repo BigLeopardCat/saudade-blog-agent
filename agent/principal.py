@@ -1,10 +1,10 @@
-"""调用者身份（principal）——秘书类功能的地基（20260920）。
+"""调用者身份（principal）——身份与权限的地基（20260920）。
 
 背景（为什么要单独造这个类型）：
   今天 agent 从 Rust 只拿到一个**裸 uid**（server._resolve_user_id → user_id），
   它进图之前就已经丢了"这个人是谁、他能让我做什么"。于是每个工具自己想办法：
   数据工具读公开网页、设备工具拿 uid 现签一张 JWT、"谁能做什么"无处表达——
-  这正是"秘书"（以某人的名义、按授予的范围办事）落不了地的第一个卡点。
+  这就是"以某人的名义、按授予的范围办事"落不了地的第一个卡点。
 
   本模块把身份变成一个显式对象，作为**唯一构造点**：
     Principal(uid, role, source)
@@ -27,18 +27,21 @@ from dataclasses import dataclass
 #              账号管理策略一节；agent 侧只有"目标不能是超管"这半边，见
 #              graph._FREEZE_ALLOWED_TARGETS）
 # admin —— 管理员，后台全权（middleware.rs auth_guard 认它和超管两个）
-# secretary —— 秘书：可以读他人数据、可以代博主做写操作，但进不了后台管理面
 # user —— 普通访客/体验账号：只能读公开内容、操作自己的设备与自己的页面
 # zako —— 杂鱼（20261002）：**零工具**身份，只闲聊（口吻是与别人完全不同的一档）。
 #         它不是"权限还没配"的普通角色，而是"结构上不可能调用工具"的结论——见
 #         下面的 CHAT_ONLY_ROLES
+#
+# ⚠️ 曾经还有一档 `secretary`（20260920–20261011）。它撤掉了：那一档的两项独占
+# scope（read.any / write.content）一个工具都没挂上，工具集与 user **逐字节相同**
+# （31 = 31，双向差集为空），生产上也从未被使用。撤掉的方式是"从 KNOWN_ROLES 里
+# 拿掉"——于是 is_known_role 判假 ⇒ 后台列表/可指派范围同时失效，这是刻意的收口。
 ROLE_SUPERADMIN = "superadmin"
 ROLE_ADMIN = "admin"
-ROLE_SECRETARY = "secretary"
 ROLE_USER = "user"
 ROLE_ZAKO = "zako"
 
-KNOWN_ROLES = (ROLE_SUPERADMIN, ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, ROLE_ZAKO)
+KNOWN_ROLES = (ROLE_SUPERADMIN, ROLE_ADMIN, ROLE_USER, ROLE_ZAKO)
 
 # "管理员族"：能进后台管理面的那几个角色。**判据只有这一处**——技能可见性、planner
 # 的人设分档、管理工具菜单都从它派生，不许在别处写 `role == ROLE_ADMIN` 这种字面量

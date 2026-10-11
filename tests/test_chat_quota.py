@@ -40,7 +40,7 @@ import agent.graph as g  # noqa: E402
 import server  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import _RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec  # noqa: E402
-from agent.principal import ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, Principal  # noqa: E402
+from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
 from agent.skills import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_user_notice / test_account_freeze 的那一处）──────────────
@@ -402,7 +402,7 @@ check("`list_quota_requests` 是**读**（admin.console），不能与三个写�
       and not authz.requires_consent(_adm, "list_quota_requests"))
 check("非管理员不放行（权限先于确认）",
       all(not authz.check(Principal(uid=9, role=ROLE_USER), t).allowed
-          and not authz.check(Principal(uid=9, role=ROLE_SECRETARY), t).allowed
+          and not authz.check(Principal(uid=9, role=None), t).allowed
           for t in _Q3), "")
 # 前提：证明"每次都弹"不是因为那句话本身不被放行——那把尺子对「…，我说的」真会放行
 _GRANTABLE = "把文章 123 设为私密，我说的"

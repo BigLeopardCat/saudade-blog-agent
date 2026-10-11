@@ -28,7 +28,6 @@
 | 混合检索（向量 + RRF）**换主力** | 能力已落地、**开关默认关** | 语料 >100 篇，或基准对比显示词法掉点 | [docs/rag-design.md](docs/rag-design.md) §8–§9 |
 | 检索表征改进（短语巧合 × 长度归一） | 已知 FAIL 留在 eval | —— | `rag/search.py` 头注释（三类改法已实测无效，**别重复尝试同方向**） |
 | 工具调用稳定性的剩余项 | 部分落地 | 逐条写在文档里 | [docs/toolcall-stability-roadmap.md](docs/toolcall-stability-roadmap.md) |
-| 秘书类功能框架 | 框架在、不写建号代码 | 见文档 | [docs/secretary.md](docs/secretary.md) |
 
 ## 待办（已知缺口，条件已满足，缺的是人）
 

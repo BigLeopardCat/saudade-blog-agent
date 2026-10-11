@@ -16,6 +16,18 @@
 
 ## 20261011
 
+- **撤掉 `secretary` 这一档角色（跨语言契约，仅代码侧，20261011）**：`KNOWN_ROLES` 由五档
+  收成四档（`superadmin`/`admin`/`user`/`zako`），两仓同改。撤它的依据是"这一档没有能力增量"：
+  它的两项独占 scope（`read.any` / `write.content`）**各挂着 0 个工具**，工具集与 `user`
+  逐字节相同（31 = 31，双向差集为空），生产库上那唯一一个该角色账号也是 0 会话 0 消息。
+  两项 scope 一并从 `ALL_SCOPES` / `WRITE_SCOPES` / `CONSENT_SCOPES` 里摘掉——
+  **同意闸本身不动**，它剩下的两个成员是 `write.console`（后台写）与 `write.own`（收藏/
+  已读）。行为不变：未知角色的判据是"零权限、不崩"（`scopes_for()` 取不到就空集）。
+  账号侧由一条降级迁移把库里的 `role='secretary'` 改回 `user`（**先跑迁移再 push**）。
+- **文档改名换定位（20261011）**：`docs/secretary.md` → `docs/identity-and-permissions.md`，
+  **节编号一字不动**（§3.4/§3.6/§5.2/§5.3 四个跨仓锚点原样，只换文件名）；删掉纯秘书内容
+  （§1 定义、§2 改动前测绘、§5 那张"还差什么才能上线秘书"的需求表、§6 分阶段建议），
+  身份 / 权限 / 同意闸 / zako / 管理助手 / 建号那几节保留。
 - **`test_docs_facts` 补上第四处手抄数（判据，20261011）**：`docs/agent-architecture.md` §1
   目录树那行写着 `eval/golden/basic.jsonl（158 条）`，真值 188——它是同一个病（规模数手抄、
   代码一长就漂）的第四个实例，此前没红是因为原有三条正则的射程全在正文，**够不到目录树那行**。
@@ -97,7 +109,8 @@
   技能数 == `len(SKILLS)`、golden 条数 == `basic.jsonl` 行数（与 `test_golden_keys` 的同一个
   真值）；`tests/test_docs_links.py` 断言相对 md 链接指得着、`docs/README.md` 索引与磁盘
   `docs/*.md` **双向一致**、**父仓按编号/标题引用的那四组锚点仍在**（`问题记录.md §2.1`、
-  `secretary.md §3.4/3.6/5.2/5.3`、`agent-architecture.md`《3. 一次对话的完整链路》、
+  `identity-and-permissions.md §3.4/3.6/5.2/5.3`（20261011 前叫 `secretary.md`）、
+  `agent-architecture.md`《3. 一次对话的完整链路》、
   `toolcall-stability-roadmap.md D1–D6`）。**只锁机械可核的计数 / 索引 / 锚点，不锁措辞**。
 
 ## 20261009

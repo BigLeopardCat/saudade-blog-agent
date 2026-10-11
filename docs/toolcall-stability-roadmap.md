@@ -578,7 +578,7 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 **落点**：`agent/graph.py` `_board_quote_fix` / `_announcement_text_fix` / `_name_target_fix`
 （含 `_owner_target_span`、`_marked_other_operand`）/ `_ident_grounded`（免弹窗的第三个前提）/
 `_name_write_nudge`（零工具纠偏一次）+ `_LEDGER_NOTE_PREFIX`（确定性收尾的结论不被声称闸吞掉）。
-详见 `docs/agent-architecture.md` §6.6 与 `docs/secretary.md` §5.6。
+详见 `docs/agent-architecture.md` §6.6 与 `docs/identity-and-permissions.md` §5.6。
 
 **边界（不许含糊）**：地基是**子串级**——挡"主人从没说过这个名字"，挡不住"说过但指的未必是它"；
 真正的身份裁决仍在工具侧的确定性解析（唯一命中才动手，歧义零写）。这正是 D5 剩下的那半件事。

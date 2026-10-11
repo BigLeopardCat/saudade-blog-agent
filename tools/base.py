@@ -4725,7 +4725,7 @@ def _user_directory(config: RunnableConfig) -> dict[int, dict] | ToolResult:
 @tool
 def list_accounts(config: RunnableConfig) -> str:
     """查看**后台账号名录**：每个账号一行，给出**账号名**、账号 id、身份（超级管理员/
-    管理员/秘书/普通用户/杂鱼）、是否已冻结、是否禁言中。超级管理员的账号不在这份
+    管理员/普通用户/杂鱼）、是否已冻结、是否禁言中。超级管理员的账号不在这份
     名单里。
 
     **要冻结/解冻某个账号、改某个账号的身份、给他禁言、给他发站内通知、重置他的对话
