@@ -13,17 +13,44 @@ talk/board/announcement 无单条端点，从列表接口按 key 过滤（列表
   词法基线已打满当前语料）。**20261005 起词法仍是底座**：向量路（`rag/vector_index.py`）
   是可选的第二路，由 `RAG_HYBRID_ENABLED` 拨；两路都在场才 RRF 融合，否则整条退回词法，
   形状与分数语义与从前逐字节一致（见 `search()` 的三条硬规则）。
-- 存储 = 内存倒排（语料 34 文档，全量重建 <100ms，不做增量）；懒刷新（10 分钟 TTL）。
+- 存储 = 内存倒排（全量重建 <100ms，不做增量）；懒刷新（10 分钟 TTL）。**语料篇数不写在这里**
+  ——它是"会漂的量"（每发一篇文章就变），报数请读 `eval/recall_eval.py` 报告里的语料快照。
 - 返回候选 (type, id, title, section, score) 列表，不返回全文（路线 B 契约）。
 - **候选截断 = 相对断崖（20260920 批次 d 供给端）**：文档分口径不变（仍取「该文档最高
   chunk 分」，见下），排名后丢弃 score < top1×α 的候选（α=`_CLIFF_RATIO`）。动机：
-  语料 10 篇而工具默认 top_k=8 ⇒ 每次检索几乎倒回整个语料库，planner 实测很少读第 3 条
+  语料仅十来篇而工具默认 top_k=8 ⇒ 每次检索几乎倒回整个语料库，planner 实测很少读第 3 条
   以后（62 次候选驱动读里 28 次是浪费）。**尺度无关是硬要求**：绝对噪声下限已实证无可用
   阈值（20260916d/e 弃权闸三组探针分布重叠，任何绝对阈值都会误杀），故只做相对截断。
   标定（22 query：13 正 + 9 噪声，20260920 实跑 recall_eval）：α≤0.25 时 recall@1/@3
   与截断前**完全一致**（0.92/1.00，噪声 top-1 也一条不动），平均候选 5.45→3.50（top_k=8）、
   4.50→3.36（top_k=5）；**α=0.35 起开始丢多答文档**（rag_ota_* 的 note:12/14/22 被裁掉
   ⇒ recall@3 掉到 0.92）。取 0.25。
+- **断崖保底 top-K（20261011，在 α 之上再加一条结构性约束）**：断崖**只裁第 `_CLIFF_MIN_KEEP`
+  名之后的尾巴**，前 K 名（默认 3）任何情况都不动。为什么必须保底：旧形状是"整列按 top1×α
+  过滤"，它把「α 调好了」变成了对**语料当下形态**的依赖——一旦语料里出现一篇与某 query
+  同主题的强势文档，top1 抬高、floor 跟着抬高，**排在第 2/3 名的真答案被自己的断层切掉**，
+  而它和那条 query 一个字都没改。这不是假设：20261010 语料 12→13 篇（新增 note:62，
+  项目介绍文，正是这类强势文档）后，`rag_eval_system` 的 gold（note:19）在**断崖前**排第 2，
+  断崖后**整条从候选里消失**（hits 由 `['note:62','note:19','note:46']` 收成 `['note:62']`）
+  ——一条本可作答的 query 变成"检索不到"，而**没有任何判据会指认凶手是断崖**（当时是作者
+  手工比对两轮报告才定位的）。
+  20261011 同语料（13 篇）、同批 query 两形状实测：
+
+  | | 旧形状（整列过滤） | 保底 top-3 | 不截断 |
+  |---|---|---|---|
+  | recall@1 | 0.7692 | 0.7692 | 0.7692 |
+  | recall@3 / @5 | 0.9231 | **1.0000** | 1.0000 |
+  | MRR | 0.8333 | 0.8718 | — |
+  | 平均候选（top_k=5） | 3.45 | 3.77 | 4.50 |
+
+  **@1 那一格两形状相同**，别读错：丢 rank1 的那两条 query 是**语料长大带来的排序变化**
+  （note:62 在**断崖前**就排在 gold 前面），不是断崖干的——把两件事混成一件会去调 α，
+  而调 α 治不了排序。断崖**唯一**的破坏面是"把 gold 整条删掉"，保底正是冲它去的。
+  ⇒ 保底之后「断崖改变 recall@1/@3」在**结构上不可能**，20260920 那张"α≤0.25 与不截断
+  逐条一致"的**经验证书变成不变量**；锁它的地方两处：离线 `tests/test_cliff_min_keep.py`
+  （合成语料，CI 里跑）与夜间 `eval/cliff_probe.py`（真语料，有/无断崖两臂实测）。
+  ⚠️ **@1 从 0.9231 掉到 0.7692 这件事本文不解释也不假装已修**——它要动的是排序
+  （同上面"已知局限"那条，属检索表征问题），与截断无关。
 - **已知局限：短语巧合 × 长度归一（本批未修，勿重复尝试同方向）**：上述 α 调不动榜首——
   query「博客架构 前后端端口 技术栈」的 top-1 仍是《Git从入门到入土》。真因是词法检索
   本身：`.gitignore` 小节标题「主流技术栈」贡献 技术栈/技术/术栈 三个 n-gram，而这三个
@@ -70,7 +97,8 @@ GRAM = re.compile(r"[一-鿿]+|[a-zA-Z0-9_\.]+")
 REFRESH_TTL = 600.0  # 10 分钟懒刷新
 
 # ── 候选截断（20260920 批次 d 供给端，标定见模块头注释）──
-_CLIFF_RATIO = 0.25   # 相对断崖：低于 top1×0.25 的候选丢弃（α=0.35 起会丢多答文档）
+_CLIFF_RATIO = 0.25   # 相对断崖：第 _CLIFF_MIN_KEEP 名之后、低于 top1×0.25 的候选丢弃
+_CLIFF_MIN_KEEP = 3   # 保底：前 3 名永不参与断崖（20261011，理由见模块头注释"断崖保底"）
 
 # 语料拉取的翻页参数。见 _fetch_corpus 的说明：不传 page_size 会吃服务端默认 6 篇。
 CORPUS_PAGE_SIZE = 50
@@ -154,6 +182,12 @@ def set_expansion(on: bool) -> None:
 
 def expansion_enabled() -> bool:
     return _EXPANSION_ENABLED
+
+
+def cliff_config() -> dict:
+    """断崖参数的只读视图（α 与保底 K）。报告与判据读这里，不另抄一份数
+    ——抄一份的那个数会漂，而这两项正是"判据与实现同源"要保的东西。"""
+    return {"ratio": _CLIFF_RATIO, "min_keep": _CLIFF_MIN_KEEP}
 
 
 def tokenize(text: str) -> list[str]:
@@ -312,10 +346,15 @@ class RagIndex:
 
     # ── 查询 ──────────────────────────────────────────────────────
 
-    def _lexical_ranked(self, query: str, top_k: int) -> list[dict] | None:
+    def _lexical_ranked(self, query: str, top_k: int,
+                        apply_cliff: bool = True) -> list[dict] | None:
         """**词法路**（BM25）：恒跑，也是唯一的降级形态（20261005 起不叫 `search`）。
 
         返回候选列表；**索引不可用时返回 None**（区别于「没命中」的 []）。
+
+        `apply_cliff=False` 只关断崖、其余逐字节相同（同一套打分、同一个 top_k、同一个
+        扩展开关）——`eval/cliff_probe.py` 要的"有/无断崖两臂"靠它，**生产调用方不该传它**
+        （默认 True 就是唯一的线上形态）。
 
         20260917：此前两种失败都返回 []，工具层只能一律包成 empty(「检索无结果」)——
         语料拉取失败会被 checker 记成「检索过、确实没有」的**事实**（外部审计指出）。
@@ -371,11 +410,16 @@ class RagIndex:
             elif c["section"] not in agg["sections"]:
                 agg["sections"].append(c["section"])
         ranked = sorted(by_doc.values(), key=lambda x: -x["score"])
-        # 相对断崖（20260920 批次 d，标定见模块头注释）：低于 top1×α 的候选丢弃。
-        # 尺度无关是硬要求——绝对噪声下限已实证无可用阈值（20260916d/e 弃权闸），勿复引入。
-        if ranked:
+        # 相对断崖（20260920 批次 d，标定见模块头注释）：**第 _CLIFF_MIN_KEEP 名之后**、
+        # 低于 top1×α 的候选丢弃。尺度无关是硬要求——绝对噪声下限已实证无可用阈值
+        # （20260916d/e 弃权闸），勿复引入。
+        # 保底 top-K（20261011）：`ranked[:_K]` 原样保留（**不过滤**），floor 只作用在尾巴上。
+        # 这一行就是"断崖不可能改变 recall@1/@3"的**唯一实现点**——别把它写回整列过滤
+        # （那样 floor 会跟着"语料里最强的文档"漂，同主题的真答案被自己切掉，见模块头注释）。
+        if ranked and apply_cliff:
             floor = ranked[0]["score"] * _CLIFF_RATIO
-            ranked = [r for r in ranked if r["score"] >= floor]
+            ranked = ranked[:_CLIFF_MIN_KEEP] + [
+                r for r in ranked[_CLIFF_MIN_KEEP:] if r["score"] >= floor]
         ranked = ranked[:max(1, top_k)]
         for r in ranked:
             r["score"] = round(r["score"], 4)
@@ -384,8 +428,13 @@ class RagIndex:
 
     # ── 编排（20261005：词法 + 向量两路）──────────────────────────
 
-    def search(self, query: str, top_k: int = 8) -> list[dict] | None:
+    def search(self, query: str, top_k: int = 8,
+               apply_cliff: bool = True) -> list[dict] | None:
         """检索入口（编排器）：词法路恒跑；向量路在场且**与这批语料对齐**时才融合。
+
+        `apply_cliff` 透传给词法路（见 `_lexical_ranked`）：**只给两臂 A/B 用**，生产恒默认。
+        注意它只关**词法路**的断崖——向量路本来就没有断崖（`_vector_ranked` 只切 top_k），
+        所以拨到 False 时"断崖前"这个口径只在词法档下严格成立（融合档下两臂本就该几乎相同）。
 
         三条硬规则（都不是风格问题，各自对应一种静默的错法）：
 
@@ -398,7 +447,7 @@ class RagIndex:
         3. **向量侧绝不进 `build()`**（见那里的注释），也绝不拿**对不上语料**的向量融合
            ——对齐由 `view_for(指纹)` 保证，对不上就是没有，宁可少一路。
         """
-        lex = self._lexical_ranked(query, top_k)
+        lex = self._lexical_ranked(query, top_k, apply_cliff)
         if lex is None:
             _record("unavailable", None)
             return None
@@ -472,9 +521,12 @@ def get_index() -> RagIndex:
     return _index
 
 
-def search(query: str, top_k: int = 8) -> list[dict]:
-    """检索入口：返回候选列表 [{type, id, title, section, score}]，不含全文。"""
-    return get_index().search(query, top_k=top_k)
+def search(query: str, top_k: int = 8, apply_cliff: bool = True) -> list[dict]:
+    """检索入口：返回候选列表 [{type, id, title, section, score}]，不含全文。
+
+    `apply_cliff=False` 关掉词法路的相对断崖（`eval/cliff_probe.py` 的两臂用），**线上恒默认**。
+    """
+    return get_index().search(query, top_k=top_k, apply_cliff=apply_cliff)
 
 
 # ── 标题 → id 确定性解析（20260920 方案①）────────────────────────────
