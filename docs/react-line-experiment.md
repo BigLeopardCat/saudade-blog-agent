@@ -1,13 +1,22 @@
 # ReAct 试验线：原生 tool calls 当骨架，补上「什么时候停」与「谁来验收」
 
-> 分支 `exp/react-native-line`。**这条线不在生产路径上**：`server.py` / `graph.py` 里没有
-> 任何调用点，`/health` 看不出它的存在，部署与它无关。它是一次**可复现的对照实验**，
-> 外加两个真写下来的机制（`agent/react_line.py`）。读完这篇要知道：它证了什么、
-> 没证什么、真要做成产品还差哪几件。
+> **状态（20261012 复核）**：不再是"分支 `exp/react-native-line`"那种形态——那条分支是
+> `main` 的**祖先**（落后 196 个提交、无一条独有提交，是**陈旧的指针**），早已作废；
+> 两条实现（`agent/react_line.py` 的循环与 `agent/react_arm.py` 的生产帧契约适配器）
+> 都**在 `main` 上**，本轮的适配在 `feat/react-arm-adapt`。
+> **出厂仍不在生产路径上**：`AGENT_ARM` 的真值源是 `.env`、默认 `graph` ⇒ 线上跑的还是
+> 原来那条手写图、**逐字节不变**；`react` 那一档 20261012 才接进 `server.py`（拨它要重启
+> 服务，见 §四 的现状表）。入口三处：`GOLDEN_ARM=react`（评测侧选臂，`eval/golden_arm.py`）、
+> `AGENT_ARM=react`（生产侧选臂，`server._build_arm`）、两个套件。
+> 它是一次**可复现的对照实验**，外加三个真写下来的机制（收敛判据 / 工具级回执 /
+> 独立 narrator）。读完这篇要知道：它证了什么、没证什么、真要做成产品还差哪几件，
+> 以及——**这一族读数什么时候才配被引用**（§六，本轮最值钱的一条）。
 
 ## 一、它要回答的问题
 
-20261004 那次定点 A/B（三臂、同模型、同解码参数、写工具全是桩 ⇒ 零真实写）量出来：
+20261004 那次定点 A/B（三臂、同模型、同解码参数、写工具全是桩 ⇒ 零真实写）量出来
+（**同样是「P6 之前」的读数**；而且这个探针本身在当时还带着三处测量偏差，
+20261011 才修掉——见 §四 现状表最后一条）：
 
 | 臂 | 命中族（48 句） | 撞 `recursion_limit` | LLM 轮数 | 耗时 |
 |---|---|---|---|---|
@@ -78,6 +87,12 @@
 
 ## 三、结果
 
+> ⚠️ **本节两张表都是「P6 之前」的读数**（P6 = 20261012 收尾改由独立 narrator 写，见 §四
+> 现状表第 5 条）。它们记录的是那一版实现量出来的东西，**一个字都不改**——但要标明：那一版
+> 的收尾是决策模型自己写的，而闸门判的就是那一段（§四 第 4 条当时也还没接），所以它与本轮
+> 之后的**任何**读数都不可比，**不许混进同一张表**。表里的 48/48 是当场口径，不是"今天的
+> 基线"。
+
 20261004 跑的一遍（qwen3.8-flash，三臂同解码 thinking 关 / temp 0.2 / 1200 tokens，
 16 句 × 3 轮 = 48 次，写工具全是桩 ⇒ **零真实写**；三臂的图级保险丝都是
 `recursion_limit=24`，`react_line` 另有自己的 `budget=6`）：
@@ -122,28 +137,101 @@
 一句话：**同分下换骨架不划算**——ReAct 骨架省下的是"手写图的代码量"，付出的是上面这六件，
 而它们恰好是这几个月一线事故换来的东西。
 
+### 现状（20261012 复核，逐条对上面那份清单；原叙述保留，只加状态）
+
+上面那份清单是 20261004 写的，此后**每一件都被逐条处理过**——有闭合的、有实测发现
+"本来就不是缺口"的、也有仍然欠着的。逐条：
+
+| # | 现状 | 依据 |
+|---|---|---|
+| 1 | **闭合**。台账与内层 agent 都是 `stream()` 的局部量 ⇒ 每请求隔离，同一个臂对象可同时服务两轮 | 适配器提交 `37e05ef`（第二条臂按生产帧契约产帧）；判据 `tests/test_react_arm.py` ⑪ 两项流水交替推进、两本账互不可见。⚠️ 那条"必须换 `run_id` 分桶"的纪律**仍然成立**，但它管的是**将来把 `build_agent` 提成常驻单例**那一版，不是今天这一版（`agent/react_line.py` 的 `RunLedger` 注已改写） |
+| 2 | **闭合**（含 `_HARD_SCOPES` 硬拦，判据字面与 `graph.execute_node` 逐字相同） | `37e05ef`「试验线接权限闸」；判据 `tests/test_react_arm.py` ③ |
+| 3 | **闭合**（同意闸 + 写确认卡） | `da7af0f`（同意闸与写确认卡） |
+| 4 | **闭合**。20261011 直调 `graph.gate_node`（判据一条都没抄第二份）；20261012 把**判的对象**也对齐了 | `86125dd`（接闸门谓词）、`c5376b0`（P6） |
+| 5 | **大半闭合，`task_frames` 一件仍欠**。跨轮执行记忆与 `open_tasks` 已经读到（`[System: …]` 块 ⇒ `_page_ctx` ⇒ 提示词那一格，与生产 planner/model 同一通道）；narrator 20261012 拆成独立节点；事实块这一格的差**已经不是差**（`agent/factblock.py` 的 `BLOCK_FAMILIES` 是空集 ⇒ 生产两臂都停止代印，两边口径自动一致）；流式帧（`__EXEC__` / `__CMD__` / gate 帧）在 `37e05ef` 的适配器里就位。**只剩 `task_frames`（task_state 族）不发**——能力台账里这一族只有 1 条断言、且它的兄弟判据由生产那半的确定性结算满足 ⇒ 它**没有**变成 `comparable = False` 的来源，故排后 | `c5376b0`（P6 独立 narrator + 逐条核验 P5 两件不是缺口） |
+| 6 | **不变**（仍不在射程内） | — |
+| ＋ | **清单外补的一条**：收尾丢意图纠偏环（零工具收尾但主人那句话里还有一次都没规划过的动作 ⇒ 纠偏重决策一次） | `19b1601`。这是原清单没列、但生产那一侧早就有的判据 |
+| ＋ | **清单外补的第二条**：离线定点探针的三处**测量偏差**（工具名折算扫子串、族级口径把方向相反的工具算成命中、两条 ReAct 臂逐字共用 planner 的提示词） | `d9d45ad`（20261011）。探针不进 CI，所以它那三处偏差由门禁里的 `tests/test_react_arm.py` ⑨ 看着 |
+
+**这六件之外还有一件事必须单列**：即便清单全绿，这份读数也只在 §六 那道闸（`arm_capability`
+的 `comparable`）为真的时候才配被引用——20261011 之前它一直是 `False`，而那次全量读数
+（0.9216）因此**作废**。
+
 ## 五、复现
 
 ```bash
-cd <本分支 worktree>
-PYTHONPATH=$PWD .venv/bin/python tests/test_react_line.py            # 接线单测：秒级、零网络
-PYTHONPATH=$PWD .venv/bin/python eval/experiments/react_line_ab.py \  # 定点 A/B：要网络、烧 token
+cd /home/ubuntu/Saudade-Blog/saudade-blog-agent        # 就是仓根，不是另一个 worktree
+.venv/bin/python tests/test_react_line.py              # 接线单测：秒级、零网络
+.venv/bin/python tests/test_react_arm.py               # 生产帧契约 + 闸门/narrator/选臂/并发
+.venv/bin/python tests/run_all.py                      # 全套（本文件所在仓的常规入口）
+.venv/bin/python eval/experiments/react_line_ab.py \   # 定点 A/B：要网络、烧 token
     --rounds 3 --arms planner,react_assets,react_line --out /tmp/react_line_ab.json
+.venv/bin/python eval/arm_capability.py --arm react --probe   # 读数许可闸（§六），离线
 ```
 
-**陷阱（都在实测里撞到过，已写进上面的跑法）**：
+**陷阱（都在实测里撞到过）**：
 
-- **`PYTHONPATH` 必须指到本分支**：`.venv` 的 editable `.pth` 把主仓钉在 `sys.path` 上，
-  不指就**静默**用到主仓那份代码，实验看起来"跑了"其实没跑本分支。
-- 抓 planner 真提示词的办法是 monkeypatch `agent.graph.bind_native`（包一层记录
-  `.invoke(prompt)`，行为委托）——**一字不改**地拿到当轮那份提示词，而不是另写一份
-  "差不多的"（这正是 `eval/native_tools_probe.py` 首版栽过的坑）。
+- **`PYTHONPATH` 那条陷阱已经随之作废**：它针对的是"另开一个 worktree 跑实验、而
+  `.venv` 的 editable `.pth` 把主仓钉在 `sys.path` 上"那种跑法——那会**静默**用到主仓
+  那份代码，实验看起来"跑了"其实没跑分支。现在实现在仓根本体上，直接跑即可；
+  **但那条性质本身没变**：哪天又用 worktree 跑对照，`PYTHONPATH` 还得指过去。
+- 抓 planner 真提示词的办法**曾经**是 monkeypatch `agent.graph.bind_native`（包一层记录
+  `.invoke(prompt)`）——20261011 起**两条 ReAct 臂不再用 planner 那份提示词**（那是拿一份
+  它们结构上满足不了的契约考它们），各拿各的惯用提示词（`react_arm._system_prompt`）。
+  要"一字不改地拿到当轮那份"这个纪律本身仍然有效（`eval/native_tools_probe.py` 首版
+  栽过），只是对象换了。
 - ReAct 臂必须 `agent.stream(..., stream_mode="values")` 收消息：`invoke` 撞上限抛错会把
   **整轮已发生的调用一起丢掉**，把"绕太多圈被掐死"误读成"没调工具"。
 - 桩载荷**不许太贫**（只回一句"已执行"）：模型看不到内容会反复重调，撞上限率从 15%
-  虚增到 33%。
+  虚增到 33%。另外桩的返回值要带命令形状（`meta.cmd`），否则 `navigate_to` 那一批整批
+  BLOCK（`cmd_shape`）——回执行还在、`receipts` 却是空的，"办成几件"会读成 0。
 - 判工具名**不能读** `native_decision.calls`（那里只有技能名，读族的工具全在 PARAMS 里）——
-  现网臂要读计划文本的 TOOLS 行；ReAct 臂的技能要按 `SKILL→plan 模板` 折算成工具名。
-  三种口径统一折算，否则比的是三种不同的问题。
+  现网臂要读计划文本的 TOOLS 行；ReAct 臂的技能要按 `SKILL→plan 模板` **结构化**折算
+  （`Skill.plan`），**不许扫子串**：`account_unfreeze` 的模板里只出现 `unfreeze_account`，
+  扫子串会把 `freeze_account` 一起白送（方向还正好相反）。三种口径统一折算，否则比的是
+  三种不同的问题。
 - 三臂**同解码**（thinking 关 / temp 0.2 / 1200 tokens）。ReAct 臂裸用 `get_llm()` 会让
   thinking 默认开着，比出来的是解码参数不是结构。
+
+## 六、这一族读数什么时候才可读：`arm_capability` 的 `comparable`
+
+**结论先行**：这条臂的 `pass_rate` / `--ab` **只在 `arm_capability --arm react` 给出
+`comparable = True` 时才配被引用**；`False` 时它是一条"看着正常"的假读数，
+**不许引用、不许拿去和 graph 臂比**。这一节是那条闸的说明书——它比本篇其它任何一节都值钱，
+因为**它是唯一一条会否掉其它所有数字的判据**。
+
+**病在哪**：语料里有一族断言是**纯否定**的——"这一轮**没有**发命令""**没有**弹确认卡"
+"**没有**调这个工具"（`forbid_cmd_prefixes` / `forbid_cmd_contains` / `forbid_frame_prefix` /
+`forbid_exec_tools` / `forbid_task_state` / `forbid_fallback`）。一条**压根不具备那种能力**
+的臂，会让这一族**整族恒真**：不是"它做对了"，是"它做不到，所以判据问不出来"。
+20261005 那次全量读数就是现场：372 个可证伪键实例里 **138 条落在 `forbid_fallback`**，
+而那一版的臂**结构上不会发 fallback**（收尾那一路上没有 gate）⇒ 138 条白送，
+`pass_rate = 0.9216` 因此作废。
+
+**闸怎么判**（`eval/arm_capability.py`）：逐族问"**这族被武装过吗**"——语料里有**正向兄弟**
+的（`require_cmd_prefixes` ↔ `forbid_cmd_prefixes`），看兄弟那侧在归档里见没见到；
+没有兄弟的（`forbid_fallback` 是唯一一族，语料里不存在 `require_fallback`）**只能靠实证或
+合成正控**：
+
+```bash
+.venv/bin/python eval/arm_capability.py --arm react --probe
+```
+
+`--probe` 会**强制这条臂发一次兜底**，确认 `forbid_fallback` **真的会变红**——正控变红
+才是"判据接到底了"的证书；正控**也变绿**说明判据根本没接上（那才是坏事）。判定结果
+落在报告的 `comparable` 与 `comparable_ids` 两格。
+
+**消费方式**：`comparable = False` 时**首选**是拿它给出的那份 `comparable_ids` 做**同一个
+`--skip-ids`**，把两臂的分母收窄到"两边都真的可证伪"的那些用例上再对比
+`pass_rate` 与 `pass_rate_ci95`。**绝不许"子集跑 vs 全量跑"**——那是拿两种分母做差。
+（`--print-skip-ids` 取那份名单。）
+
+**本轮的结果**（20261012，`--arm react --probe`）：七族全部 `✅ armed`，
+`可证伪键实例 372/372 = 1.0`、**`comparable = True`**、不可证伪 0 条 ⇒ 这一次读数配被引用。
+两条把状态推到这里的提交：`86125dd`（把闸门谓词接上，`forbid_fallback` 从此会开火）、
+`c5376b0`（把**判的对象**也对齐——闸门判的必须是主人真会读到的那一段，即零工具 narrator
+写的正文，而不是手上有工具的决策模型的回忆）。
+
+**还没做的那一步**：这道闸判的是"**这份读数配不配被读**"，它**不判谁更好**。
+两臂的对比仍是另一件事：同一份语料、**避开 04:00 的夜间回归**、分臂跑，
+两臂读数各自先过本节的 `comparable`，再在同一条 `--skip-ids` 上比。**本轮尚未跑那次对比。**
