@@ -32,7 +32,7 @@
 | [zero-call-residual.md](zero-call-residual.md) | 「零调用/声称」一次没有效果的实测与残余落点 | 记录型 |
 | [param-tuning-20261006.md](param-tuning-20261006.md) | 旋钮 A/B 实验报告（温度 / 思考 / 跨模型 + 两臂成本） | 记录型 |
 | [agent-eval-report-20260924.md](agent-eval-report-20260924.md) | 2026-09-24 的评估报告与当时列的行为清单 | 记录型 |
-| [secretary.md](secretary.md) | 秘书类功能的框架与前置需求（缺什么、为什么） | 现状型（§1–§5、§7）+ 方向型（§6） |
+| [identity-and-permissions.md](identity-and-permissions.md) | 身份与权限：Principal / scope manifest / 同意闸 / 管理助手（原名 secretary.md） | 现状型 |
 | [multimodal-retrieval.md](multimodal-retrieval.md) | 多模态检索分阶段方案（ADR-0005 的展开，**已搁置**） | 方向型 |
 
 > 这份表**刻意不写"最后修订"日期**：手抄的日期没有判据看着（CI 是浅克隆，读不到逐文件的
@@ -53,7 +53,7 @@
 | 本仓的锚点 | 父仓引用它的地方 |
 |---|---|
 | [问题记录.md](问题记录.md) **§2.1** | `docs/iot-device-integration.md`（两处）、`iot/firmware/固件开发指南.md` |
-| [secretary.md](secretary.md) **§3.4 / §3.6 / §5.2 / §5.3** | `docs/security-boundary.md`（五处）、`scripts/migration/zako_role_20261002.sql` |
+| [identity-and-permissions.md](identity-and-permissions.md) **§3.4 / §3.6 / §5.2 / §5.3** | `docs/security-boundary.md`（五处）、`scripts/migration/zako_role_20261002.sql` |
 | [agent-architecture.md](agent-architecture.md) 的标题 **《3. 一次对话的完整链路》** | 父仓 `README.md`（按标题引） |
 | [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) 的 **D1–D6** | `scripts/migration/execution_log_struct_20260927.sql`（引 `§D2`） |
 

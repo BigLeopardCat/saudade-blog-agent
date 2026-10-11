@@ -263,8 +263,6 @@ check("非 admin → 不弹（弹了就是承诺一件做不到的事）",
       _popup("一级标签，名字叫X，使用粉色颜色",
              principal=Principal(uid=9, role="user")) is None
       and _popup("一级标签，名字叫X，使用粉色颜色",
-                 principal=Principal(uid=9, role="secretary")) is None
-      and _popup("一级标签，名字叫X，使用粉色颜色",
                  principal=Principal(uid=9, role=None)) is None)
 check("目标无据的文章写 → 不弹（弹出来的是「要不要改文章 12」，而 12 是编的）",
       _popup("《架构文档》我想改成私密", PLAN_STATUS) is None)

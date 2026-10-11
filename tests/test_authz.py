@@ -3,7 +3,7 @@
 
 被测 = agent/authz.py（scope manifest + 判据）与 agent/principal.py（身份载体）。
 
-这一层是"秘书类功能"的地基：**能力用声明表达，判据在一个确定性点上**。
+这一层是身份与权限的地基：**能力用声明表达，判据在一个确定性点上**。
 所以本测试守的不是"某个工具能不能调"，而是三条结构性质：
 
   1. **完备性**：注册表里每个工具都在 TOOL_SCOPE 里声明过（新增工具忘了声明
@@ -26,7 +26,7 @@ from agent import decisions  # noqa: E402  ⑨h 用：导航快道的剥壳口�
 from agent.graph import execute_node  # noqa: E402
 from agent.prompts import audience_block  # noqa: E402
 from agent.principal import (ADMIN_ROLES, KNOWN_ROLES, ROLE_ADMIN,  # noqa: E402
-                             ROLE_SECRETARY, ROLE_USER, SOURCE_ASSERTION,
+                             ROLE_USER, ROLE_ZAKO, SOURCE_ASSERTION,
                              SOURCE_BODY, ROLE_SUPERADMIN, UNKNOWN, Principal)
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
@@ -59,22 +59,22 @@ print("② 授予表覆盖现状（shadow 期的拒绝必须是真越权，不�
 # 排除 admin.console（20260921）与 write.console（同日第二轮）：两者都是**纯新增
 # 能力**，user 从来没有过——被拒是设计本身，不是"配错"；本检查要抓的是"把 user
 # 今天在用的工具误拒了"。（这条排除清单只服务于本检查，不改变授予表：`_ROLE_SCOPES`
-# 里 user 一档一行没动，见 ② 后面的 secretary ⊂ admin 断言。）
+# 里 user 一档一行没动，见 ② 后面的 zako ⊂ user 断言。）
 USER_TOOLS = [n for n in TOOL_NAMES
-              if authz.required_scope(n) not in (authz.SCOPE_READ_ANY, authz.SCOPE_ADMIN_CONSOLE,
+              if authz.required_scope(n) not in (authz.SCOPE_ADMIN_CONSOLE,
                                                  authz.SCOPE_WRITE_CONSOLE)]
 denied = [n for n in USER_TOOLS if not authz.check(p(ROLE_USER), n).allowed]
 check(f"user 未被拒任何现有工具（{len(USER_TOOLS)} 个）", not denied, f"误拒: {denied}")
 denied = [n for n in TOOL_NAMES if not authz.check(p(ROLE_ADMIN), n).allowed]
 check(f"admin 全放行（{len(TOOL_NAMES)} 个）", not denied, f"误拒: {denied}")
-check("secretary 覆盖 user 的全部 scope",
-      authz.scopes_for(ROLE_USER) <= authz.scopes_for(ROLE_SECRETARY))
-check("secretary ⊂ admin（秘书进不了后台管理面）",
-      authz.scopes_for(ROLE_SECRETARY) < authz.scopes_for(ROLE_ADMIN)
-      and authz.SCOPE_ADMIN_CONSOLE not in authz.scopes_for(ROLE_SECRETARY))
-check("秘书的核心增量 = read.any（读他人数据）",
-      authz.SCOPE_READ_ANY in authz.scopes_for(ROLE_SECRETARY)
-      and authz.SCOPE_READ_ANY not in authz.scopes_for(ROLE_USER))
+check("zako ⊂ user（杂鱼进不了站内操作面）",
+      authz.scopes_for(ROLE_ZAKO) < authz.scopes_for(ROLE_USER)
+      and authz.SCOPE_WRITE_OWN not in authz.scopes_for(ROLE_ZAKO))
+check("user ⊂ admin（普通用户进不了后台管理面）",
+      authz.scopes_for(ROLE_USER) < authz.scopes_for(ROLE_ADMIN)
+      and authz.SCOPE_ADMIN_CONSOLE not in authz.scopes_for(ROLE_USER))
+check("admin ⊂ superadmin（超管的增量只在对人操作那一档）",
+      authz.scopes_for(ROLE_ADMIN) <= authz.scopes_for(ROLE_SUPERADMIN))
 
 print("③ 失败取向：身份不明一律拒绝（从不默认放行）")
 d = authz.check(UNKNOWN, "list_notes")
@@ -88,21 +88,19 @@ check("未声明工具 → 拒绝（fail-closed，原因码可辨）",
       not authz.check(p(ROLE_ADMIN), "some_new_tool").allowed
       and authz.check(p(ROLE_ADMIN), "some_new_tool").reason == authz.REASON_NO_MANIFEST)
 check("授权角色调自己 scope 内的工具 → 放行", authz.check(p(ROLE_USER), "list_notes").allowed)
-check("现有工具无一要求 read.any（秘书的增量尚无消费者——这是事实，不是遗漏）",
-      not any(authz.required_scope(n) == authz.SCOPE_READ_ANY for n in TOOL_NAMES))
-# DENIED 分支（角色已认、scope 未授予）现在没有真实工具能触发（秘书用得到的都在授予表里），
-# 用临时探针条目直接测判据本身——否则这条分支要等真有越权工具才第一次被执行。
+# DENIED 分支（角色已认、scope 未授予）用临时探针条目直接测判据本身——
+# 否则这条分支要等真有越权工具才第一次被执行。
 authz.TOOL_SCOPE["_probe_console"] = authz.SCOPE_ADMIN_CONSOLE
 try:
-    d_sec = authz.check(p(ROLE_SECRETARY), "_probe_console")
+    d_zak = authz.check(p(ROLE_ZAKO), "_probe_console")
     d_adm = authz.check(p(ROLE_ADMIN), "_probe_console")
 finally:
     del authz.TOOL_SCOPE["_probe_console"]
 check("角色已认但 scope 未授予 → denied（与 unknown_role 可分辨）",
-      not d_sec.allowed and d_sec.reason == authz.REASON_DENIED, str(d_sec))
+      not d_zak.allowed and d_zak.reason == authz.REASON_DENIED, str(d_zak))
 check("同一工具对 admin 放行（拒的是权限，不是工具）", d_adm.allowed)
 check("清理干净（探针条目未残留）", "_probe_console" not in authz.TOOL_SCOPE)
-# 用一个真实存在的 write 工具验证 scope 粒度（现在没有 read.any 工具）：
+# 用一个真实存在的 write 工具验证 scope 粒度：
 check("夜间模式（write.page）：user 放行（页面是他自己的）",
       authz.check(p(ROLE_USER), "toggle_dark_mode").allowed)
 check("设备刷字（write.device）：user 放行（归属由 device-service 按 uid 校验）",
@@ -278,70 +276,68 @@ check("删留言即使写成明确命令也判不出确认（捷径结构性关�
 # 这条锁的是**别看它长得像 set_article_status 就把它挪出去**。
 check("留言审核在「一律弹窗」表里（目标由模型抄台账编号，系统判不出命令语）",
       "audit_board_comment" in authz._ALWAYS_CONFIRM_TOOLS)
-check("写站点内容属于需确认 scope", authz.SCOPE_WRITE_CONTENT in authz.CONSENT_SCOPES)
 check("后台写属于需确认 scope", authz.SCOPE_WRITE_CONSOLE in authz.CONSENT_SCOPES)
+check("写自己的私有数据属于需确认 scope", authz.SCOPE_WRITE_OWN in authz.CONSENT_SCOPES)
 check("页面/设备写不需要确认（效果就在用户眼前）",
       authz.SCOPE_WRITE_PAGE not in authz.CONSENT_SCOPES
       and authz.SCOPE_WRITE_DEVICE not in authz.CONSENT_SCOPES)
 check("server 侧写工具（若将来有）只由声明驱动，不需改函数",
       "CONSENT_SCOPES" in inspect.getsource(authz.requires_consent))
-
-# 用临时探针工具把真实分支跑一遍（现在没有 write.content 工具）
-authz.TOOL_SCOPE["_probe_post"] = authz.SCOPE_WRITE_CONTENT
+# 用注册在册的 write.own 工具把真实分支跑一遍。**不造探针条目**：write.own 的判据
+# 是按工具查家族表的（未登记的工具恒 False，fail-closed），所以判据本身就要求用真名。
+sec = p(ROLE_USER)
+check("需确认工具：无确认语 → 未获同意",
+      authz.requires_consent(sec, "add_favorite")
+      and not authz.consent_granted(sec, "add_favorite", "帮我看下这篇文章写了啥"))
+check("需确认工具：明确命令语 → 获准",
+      authz.consent_granted(sec, "add_favorite", "把文章 12 收藏一下"))
+check("确认语看的是**本轮消息**，空消息/None 一律不认",
+      not authz.consent_granted(sec, "add_favorite", "")
+      and not authz.consent_granted(sec, "add_favorite", None))
+check("普通聊到『收藏』不算确认（须是明确的命令说法）",
+      not authz.consent_granted(sec, "add_favorite", "收藏功能是怎么做的？")
+      and not authz.consent_granted(sec, "add_favorite", "你上次收藏的那篇写得不错"))
+check("确认是**按工具**判的：命令了收藏不放行取消收藏（防误靶写）",
+      authz.consent_granted(sec, "add_favorite", "把文章 12 收藏一下")
+      and not authz.consent_granted(sec, "remove_favorite", "把文章 12 收藏一下"))
+check("确认是用户的事，与 principal 无关（无声明 scope 的工具不受影响）",
+      not authz.requires_consent(sec, "list_notes")
+      and authz.consent_granted(sec, "list_notes", "把文章 12 收藏一下") is False)
+frame = authz.consent_frame("add_favorite", sec)
+check("未确认帧是 __ERROR__ 形态（checker 判 BLOCK、gate 5a 生效）",
+      frame.startswith(f"__ERROR__: 待确认[{authz.REASON_CONSENT}]"))
+check("原因码可被取回且与权限拒绝可分辨",
+      authz.consent_error_reason(frame) == authz.REASON_CONSENT
+      and authz.scope_error_reason(frame) is None)
+check("权限拒绝帧不会被误读成确认拒绝",
+      authz.consent_error_reason(authz.denial_frame(authz.check(UNKNOWN, "list_notes"), UNKNOWN)) is None)
+check("帧文案要求去问用户、不得声称完成",
+      "未执行" in frame and "确认" in frame)
+# fail-closed：需要确认的 scope 若没配确认语表，绝不默认放行
+authz.CONSENT_SCOPES  # frozenset，只读
+fake_scope = "write.probe"
+authz.TOOL_SCOPE["_probe_noconsent"] = fake_scope
+orig_patterns = authz._CONSENT_PATTERNS
+# **存原值再还原**，别写死一张集合（20260923 踩到）：这段探针此前在 finally 里
+# 硬编码一张两元素的 frozenset 还原，于是后面新增一个需确认的 scope 时，这段
+# 代码会**把新成员悄悄抹掉**——而它自己的"清理干净"断言比对的也是那张写死的
+# 集合，所以抹掉这件事在测试里完全看不出来（表现是本文件下面所有用
+# consent_granted 的段落突然全红）。还原就该还原成"进来时的样子"。
+orig_consent = authz.CONSENT_SCOPES
+authz.CONSENT_SCOPES = frozenset({fake_scope})     # 临时换一组"需确认但没配语表"
 try:
-    sec = p(ROLE_SECRETARY)
-    check("需确认工具：无确认语 → 未获同意",
-          authz.requires_consent(sec, "_probe_post")
-          and not authz.consent_granted(sec, "_probe_post", "帮我在留言板发一条：你好呀"))
-    check("需确认工具：明确确认语 → 获准",
-          authz.consent_granted(sec, "_probe_post", "确认发布"))
-    check("确认语看的是**本轮消息**，空消息/None 一律不认",
-          not authz.consent_granted(sec, "_probe_post", "")
-          and not authz.consent_granted(sec, "_probe_post", None))
-    check("普通聊到『发布』不算确认（须是明确的确认说法）",
-          not authz.consent_granted(sec, "_probe_post", "发布功能是怎么做的？")
-          and not authz.consent_granted(sec, "_probe_post", "你上次发布的那篇写得不错"))
-    check("确认是用户的事，与 principal 无关（无声明 scope 的工具不受影响）",
-          not authz.requires_consent(sec, "list_notes")
-          and authz.consent_granted(sec, "list_notes", "确认发布") is False)
-    frame = authz.consent_frame("_probe_post", sec)
-    check("未确认帧是 __ERROR__ 形态（checker 判 BLOCK、gate 5a 生效）",
-          frame.startswith(f"__ERROR__: 待确认[{authz.REASON_CONSENT}]"))
-    check("原因码可被取回且与权限拒绝可分辨",
-          authz.consent_error_reason(frame) == authz.REASON_CONSENT
-          and authz.scope_error_reason(frame) is None)
-    check("权限拒绝帧不会被误读成确认拒绝",
-          authz.consent_error_reason(authz.denial_frame(authz.check(UNKNOWN, "list_notes"), UNKNOWN)) is None)
-    check("帧文案要求去问用户、不得声称完成",
-          "未执行" in frame and "确认" in frame)
-    # fail-closed：需要确认的 scope 若没配确认语表，绝不默认放行
-    authz.CONSENT_SCOPES  # frozenset，只读
-    fake_scope = "write.probe"
-    authz.TOOL_SCOPE["_probe_noconsent"] = fake_scope
-    orig_patterns = authz._CONSENT_PATTERNS
-    # **存原值再还原**，别写死一张集合（20260923 踩到）：这段探针此前在 finally 里
-    # 硬编码 `frozenset({write.content, write.console})` 还原，于是后面新增一个需确认
-    # 的 scope 时，这段代码会**把新成员悄悄抹掉**——而它自己的"清理干净"断言比对的
-    # 也是那张写死的集合，所以抹掉这件事在测试里完全看不出来（表现是本文件下面所有
-    # 用 consent_granted 的段落突然全红）。还原就该还原成"进来时的样子"。
-    orig_consent = authz.CONSENT_SCOPES
-    authz.CONSENT_SCOPES = frozenset({fake_scope})     # 临时换一组"需确认但没配语表"
-    try:
-        check("需确认却没配确认语表 → fail-closed（不默认放行）",
-              authz.requires_consent(sec, "_probe_noconsent")
-              and not authz.consent_granted(sec, "_probe_noconsent", "确认发布"))
-    finally:
-        authz.CONSENT_SCOPES = orig_consent
-        authz._CONSENT_PATTERNS = orig_patterns
-        del authz.TOOL_SCOPE["_probe_noconsent"]
+    check("需确认却没配确认语表 → fail-closed（不默认放行）",
+          authz.requires_consent(sec, "_probe_noconsent")
+          and not authz.consent_granted(sec, "_probe_noconsent", "把文章 12 收藏一下"))
 finally:
-    del authz.TOOL_SCOPE["_probe_post"]
-check("探针条目清理干净", "_probe_post" not in authz.TOOL_SCOPE
-      and "_probe_noconsent" not in authz.TOOL_SCOPE
+    authz.CONSENT_SCOPES = orig_consent
+    authz._CONSENT_PATTERNS = orig_patterns
+    del authz.TOOL_SCOPE["_probe_noconsent"]
+check("探针条目清理干净", "_probe_noconsent" not in authz.TOOL_SCOPE
       and authz.CONSENT_SCOPES == orig_consent)
 
 print("⑨c 后台写确认语（命令式判据：判『本轮有没有明确命令』，不是第二次确认）")
-# 与 write.content 的差异：那里的判据是一个**词表式**正则（"确认发布"族），这里
+# 与 write.own 的差异（20260923）：那里的判据是一个**谓词**（按工具查家族表），这里
 # 是一条**判据函数**（_console_command）——因为后台写的命令有无数种说法，但
 # "什么算命令"是可判的：必须有动作词 + 目标 + 命令句式，且排除疑问/假设。
 # 误判方向不对称：判成"命令"= 直接动生产数据；判成"不是命令"= 多问一句。故 fail-closed。
@@ -537,12 +533,12 @@ check("write.own 属于需确认 scope（写要有一句明确的命令）",
       authz.SCOPE_WRITE_OWN in authz.CONSENT_SCOPES)
 check("write.own **不**进 _HARD_SCOPES（自己账号里的写，真流量里本来就有）",
       authz.SCOPE_WRITE_OWN not in authz._HARD_SCOPES)
-check("write.own 的能力三档角色都有（角色轴在这件事上没有信息量）",
-      # 显式列这三档而不是遍历 `KNOWN_ROLES`（20261002）：杂鱼是**刻意的零授予**，
+check("write.own 的能力两档角色都有（角色轴在这件事上没有信息量）",
+      # 显式列这两档而不是遍历 `KNOWN_ROLES`（20261002）：杂鱼是**刻意的零授予**，
       # 用 `all(... for r in KNOWN_ROLES)` 会把"杂鱼不该有工具"这条产品意图写成
-      # "它也该有 write.own"。判据要表达的是"三档网站用户角色在这件事上同权"。
+      # "它也该有 write.own"。判据要表达的是"两档网站用户角色在这件事上同权"。
       all(authz.SCOPE_WRITE_OWN in authz.scopes_for(r)
-          for r in (ROLE_USER, ROLE_SECRETARY, ROLE_ADMIN)))
+          for r in (ROLE_USER, ROLE_ADMIN)))
 check("write.own 的确认语是**函数**（与 write.console 同族），不是词表",
       callable(authz._CONSENT_PATTERNS[authz.SCOPE_WRITE_OWN]))
 check("未获确认的说明写清了『写的是用户自己账号里的状态』",
@@ -800,19 +796,19 @@ def _write_state(reply: str):
     return {"plan": plan_encode(instantiate_plan("content_query", {"calls": []})),
             "done": False, "plan_rounds": 0,
             "messages": [
-                HumanMessage(content="帮我在留言板发一条：今天天气真好"),
-                ToolMessage(content=authz.consent_frame("_probe_post", p(ROLE_SECRETARY)),
-                            tool_call_id="execute_0", name="_probe_post"),
+                HumanMessage(content="把文章 12 设为私密"),
+                ToolMessage(content=authz.consent_frame("set_article_status", p(ROLE_ADMIN)),
+                            tool_call_id="execute_0", name="set_article_status"),
                 AIMessage(content=reply),
             ]}
 
 
-out = gate_node(_write_state("已经帮你发布好啦～"))
+out = gate_node(_write_state("已经帮你设为私密啦～"))
 
-check("未确认 + 声称已发布 → fallback（用户收到的不是这句谎话）",
+check("未确认 + 声称已改好 → fallback（用户收到的不是这句谎话）",
       bool(out.get("fallback_text")), str(out.get("fallback_text", ""))[:50])
-out = gate_node(_write_state("这条还没发出去喵，要我现在发布吗？你回复「确认发布」就好啦"))
-check("未确认 + 如实说『还没发、要确认』 → 放行（不许误伤诚实收尾）",
+out = gate_node(_write_state("这篇还没改喵，要我现在把它设为私密吗？你回复「确认」就好啦"))
+check("未确认 + 如实说『还没改、要确认』 → 放行（不许误伤诚实收尾）",
       out.get("done") is True and not out.get("fallback_text"),
       str(out.get("fallback_text", ""))[:50])
 
@@ -1005,8 +1001,8 @@ for tool in ("create_tag", "set_article_status", "set_article_tags"):
     check(f"{tool} 身份不明（role=None）→ deny", not authz.check(UNKNOWN, tool).allowed)
     check(f"{tool} 普通用户 → deny（write.console 是纯新增能力）",
           not authz.check(p(ROLE_USER), tool).allowed)
-    check(f"{tool} 秘书 → deny（秘书刻意拿不到后台写）",
-          not authz.check(p(ROLE_SECRETARY), tool).allowed)
+    check(f"{tool} 杂鱼 → deny（杂鱼是刻意的零授予）",
+          not authz.check(p(ROLE_ZAKO), tool).allowed)
     check(f"{tool} 管理员 → allow", authz.check(p(ROLE_ADMIN), tool).allowed)
     check(f"{tool} 不吃 shadow（authz_enforce=False 也硬拦）",
           authz.enforcing(authz.required_scope(tool)) is True
@@ -1016,13 +1012,13 @@ for tool in ADMIN_TOOLS:
     check(f"{tool} 未声明 → deny", not authz.check(None, tool).allowed)
     check(f"{tool} 身份不明（role=None）→ deny", not authz.check(UNKNOWN, tool).allowed)
     check(f"{tool} 普通用户 → deny", not authz.check(p(ROLE_USER), tool).allowed)
-    check(f"{tool} 秘书 → deny（秘书拿不到运维面，这是刻意的）",
-          not authz.check(p(ROLE_SECRETARY), tool).allowed)
+    check(f"{tool} 杂鱼 → deny（杂鱼拿不到运维面，这是刻意的）",
+          not authz.check(p(ROLE_ZAKO), tool).allowed)
     check(f"{tool} 管理员 → allow", authz.check(p(ROLE_ADMIN), tool).allowed)
     check(f"{tool} 拒绝原因码是 scope_denied（走既有 blocked 链路）",
           authz.check(p(ROLE_USER), tool).reason == authz.REASON_DENIED)
-check("秘书一档**没有**被顺手放开（_ROLE_SCOPES 未动）",
-      not any(authz.check(p(ROLE_SECRETARY), t).allowed for t in ADMIN_TOOLS))
+check("杂鱼一档**没有**被顺手放开（_ROLE_SCOPES 未动）",
+      not any(authz.check(p(ROLE_ZAKO), t).allowed for t in ADMIN_TOOLS))
 
 # ── 超级管理员（20260926）──────────────────────────────────────────────
 # "超管有最高权限"在 agent 这一侧的落点就是**这两条**：授予与管理员一致（不新开一档）
@@ -1060,7 +1056,7 @@ _literal_admin = sorted(sk.name for sk in SKILLS
                         if sk.roles == frozenset({ROLE_ADMIN}))
 check("⭐ 没有技能的 roles 写死字面量 {admin}（超管会被静默挡在外面）",
       not _literal_admin, "；".join(_literal_admin))
-for role in (None, ROLE_USER, ROLE_SECRETARY):
+for role in (None, ROLE_USER, ROLE_ZAKO):
     ctx = build_planner_context(role)
     check(f"planner 上下文（role={role}）不含管理助手技能",
           all(n not in ctx for n in ADMIN_SKILLS))

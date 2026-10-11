@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_WRITE_CONSOLE, holds  # noqa: E402
-from agent.principal import (SOURCE_ASSERTION, ROLE_ADMIN, ROLE_SECRETARY,  # noqa: E402
+from agent.principal import (SOURCE_ASSERTION, ROLE_ADMIN,  # noqa: E402
                              ROLE_SUPERADMIN, ROLE_USER, Principal)
 from rag import graph_build as gb  # noqa: E402
 
@@ -350,9 +350,9 @@ print("\n⑥ authz.holds：端点级能力只查授予表，身份不明恒 Fals
 check("管理员与超管都有 admin.console",
       holds(Principal(1, ROLE_ADMIN, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)
       and holds(Principal(1, ROLE_SUPERADMIN, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE))
-check("★ 普通用户与秘书都没有（秘书读得了他人数据，但进不了后台）",
+check("★ 普通用户没有（后台数据面只对管理员族开放）",
       not holds(Principal(2, ROLE_USER, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)
-      and not holds(Principal(3, ROLE_SECRETARY, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE))
+      and not holds(Principal(3, "zako", SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE))
 check("★ 身份不明（role=None / 不认识的角色 / 根本没有 principal）⇒ False，从不默认放行",
       not holds(Principal(9, None, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)
       and not holds(Principal(9, "谁", SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)

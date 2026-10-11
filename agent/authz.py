@@ -1,4 +1,4 @@
-"""权限模型（scope manifest）——"秘书能做什么"的唯一事实来源（20260920）。
+"""权限模型（scope manifest）——"这个身份能做什么"的唯一事实来源（20260920）。
 
 设计取向（与全仓一致）：**能力用声明表达，判据在一个确定性点上**。
   工具清单是 `tools/base.py::_TOOL_REGISTRY`（业务唯一数据源），这里给它配一张
@@ -7,7 +7,7 @@
   （与断连检查、参数引用解析同一层：确定性、无 LLM、无一例外）。
 
 现在**默认不拦**（shadow 模式，`AGENT_AUTHZ_ENFORCE=0`）：
-  决策照算、照进 trace，但不改变行为。这是为秘书功能做的前置测绘——真实流量里
+  决策照算、照进 trace，但不改变行为。这是收口前的测绘——真实流量里
   跑一段，看"谁在什么时候被拒"，用证据校准授予表，再打开开关。理由同
   `agent_require_assertion` 的滚动上线：先观测、后收口，别拿在途请求做实验。
 
@@ -29,35 +29,33 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SECRETARY,
+from agent.principal import (KNOWN_ROLES, ROLE_ADMIN,
                             ROLE_SUPERADMIN, ROLE_USER, ROLE_ZAKO, Principal)
 
 # ── scope 词汇表 ─────────────────────────────────────────────────────
-# 命名 = <动作>.<对象>。对象轴现在只有「谁的」这一维（public / own / any），
-# 第二维（哪类资源）等真有第二个消费者再加——先够表达"秘书比访客多什么"。
+# 命名 = <动作>.<对象>。对象轴现在只有「谁的」这一维（public / own），
+# 第二维（哪类资源）等真有第二个消费者再加。
 SCOPE_READ_PUBLIC = "read.public"      # 公开内容：文章/标签/分类/留言/说说/公告/站点信息
 SCOPE_READ_OWN = "read.own"            # 自己的私有数据：自己的会话历史、自己的设备
-SCOPE_READ_ANY = "read.any"            # 他人的私有数据（秘书的核心增量）
 SCOPE_WRITE_PAGE = "write.page"        # 作用于访客自己看到的页面：导航/特效/夜间模式
 SCOPE_WRITE_DEVICE = "write.device"    # 物理世界写操作：IoT 设备（当前唯一：屏幕刷字）
-SCOPE_WRITE_CONTENT = "write.content"  # 代用户写站点内容（留言/说说/文章）——尚未有工具
 SCOPE_ADMIN_CONSOLE = "admin.console"  # 后台管理面**读**（Rust auth_guard 后面的东西）
 SCOPE_WRITE_CONSOLE = "write.console"  # 后台管理面**写**（标签/文章状态——20260921 第二轮新增）
 # 用户**自己**的私有数据写（20260923 第七轮：收藏文章、标记通知已读）。
 # 与 write.page 的区别：页面/特效写的效果就在用户眼前那一屏上（改错了立刻看得见也
-# 立刻能改回来），而收藏与已读是**落库的私有状态**（刷新还在）；与 write.content /
-# write.console 的区别：它只动**自己的**私有数据——不外显、不碰别人的东西，
-# 所以不需要后者那两道（`_HARD_SCOPES` 硬拦、`_ALWAYS_CONFIRM_TOOLS` 一律弹窗）。
+# 立刻能改回来），而收藏与已读是**落库的私有状态**（刷新还在）；与 write.console
+# 的区别：它只动**自己的**私有数据——不外显、不碰别人的东西，所以不需要后者那两道
+# （`_HARD_SCOPES` 硬拦、`_ALWAYS_CONFIRM_TOOLS` 一律弹窗）。
 SCOPE_WRITE_OWN = "write.own"
 
 ALL_SCOPES = frozenset({
-    SCOPE_READ_PUBLIC, SCOPE_READ_OWN, SCOPE_READ_ANY,
-    SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE, SCOPE_WRITE_CONTENT, SCOPE_WRITE_OWN,
+    SCOPE_READ_PUBLIC, SCOPE_READ_OWN,
+    SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE, SCOPE_WRITE_OWN,
     SCOPE_ADMIN_CONSOLE, SCOPE_WRITE_CONSOLE,
 })
 
-# 写操作：留给后续"人在回路确认"挂钩（见 docs/secretary.md 的前置需求 ③）
-WRITE_SCOPES = frozenset({SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE, SCOPE_WRITE_CONTENT,
+# 写操作：留给后续"人在回路确认"挂钩（见 docs/identity-and-permissions.md 的前置需求 ③）
+WRITE_SCOPES = frozenset({SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE,
                           SCOPE_WRITE_OWN, SCOPE_WRITE_CONSOLE})
 
 # ── 不吃 shadow 开关的 scope（20260921）────────────────────────────────
@@ -106,10 +104,6 @@ _ROLE_SCOPES: dict[str, frozenset[str]] = {
     ROLE_USER: frozenset({
         SCOPE_READ_PUBLIC, SCOPE_READ_OWN, SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE,
         SCOPE_WRITE_OWN,
-    }),
-    ROLE_SECRETARY: frozenset({
-        SCOPE_READ_PUBLIC, SCOPE_READ_OWN, SCOPE_READ_ANY,
-        SCOPE_WRITE_PAGE, SCOPE_WRITE_DEVICE, SCOPE_WRITE_CONTENT, SCOPE_WRITE_OWN,
     }),
     ROLE_ADMIN: ALL_SCOPES,
     # 超管（20260926）：管理员的**超集**。授予上不新开一档——它多出来的那部分不是
@@ -164,7 +158,7 @@ TOOL_SCOPE: dict[str, str] = {
     "list_my_board": SCOPE_READ_OWN,
     # 用户自己的数据·**写**那一半（20260923 批 7）：收藏 / 取消收藏 / 标记已读。
     # 写的是同一个人的同一份数据，所以 scope 是 read.own 的写方向 `write.own`：
-    # 三档角色都有、匿名没有、**不进 `_HARD_SCOPES`**（秘书代博主收藏是正当的
+    # 三档角色都有、匿名没有、**不进 `_HARD_SCOPES`**（代博主收藏是正当的
     # ——它写的是发起人自己的账号，不是第三方的数据）。
     # 但进 `CONSENT_SCOPES`：判据见本文件 CONSENT_SCOPES 上方那段（agent 不能
     # 自己判断"这篇值得收藏"就替用户收藏）。
@@ -185,8 +179,8 @@ TOOL_SCOPE: dict[str, str] = {
     "device_oled_display": SCOPE_WRITE_DEVICE,
     # 管理助手（20260921）：报表类只读工具，但**数据来自后台管理面**——
     # 它们读的是 Rust `auth_guard` 后面的东西（留言审核视图、全站用户统计），
-    # 以及本机的服务/磁盘/日志。scope 取 admin.console 而不是 read.any：
-    # 秘书可以读"他人数据"，但读**运维面**是博主本人的事（见 docs/secretary.md）。
+    # 以及本机的服务/磁盘/日志。scope 取 admin.console：读**运维面**是博主本人的事
+    # （见 docs/identity-and-permissions.md）。
     "get_server_status": SCOPE_ADMIN_CONSOLE,
     "get_service_health": SCOPE_ADMIN_CONSOLE,
     "get_moderation_status": SCOPE_ADMIN_CONSOLE,
@@ -200,12 +194,12 @@ TOOL_SCOPE: dict[str, str] = {
     "get_note_periods": SCOPE_ADMIN_CONSOLE,
     # 管理助手（20260921 第二轮）：后台**写**。<动作>.<对象> 与 admin.console
     # 成对：一个是这道门的读方向，一个是写方向。
-    #   `list_admin_notes` 取 admin.console 而不是 read.any——它读的是**后台**
+    #   `list_admin_notes` 取 admin.console——它读的是**后台**
     #   文章列表（含草稿/私密），与上面四个报表工具同一个门；没有它，"把草稿
     #   发布出来"这条指令在 planner 侧拿不到 id（公开接口一律滤 is_public）。
     #   三个写工具取 write.console：进 _HARD_SCOPES（不吃 shadow）+ 进
-    #   CONSENT_SCOPES（每次要命令式确认）。secretary 刻意不给——后台写与
-    #   admin.console 同域，Rust 那道门也只认 admin。
+    #   CONSENT_SCOPES（每次要命令式确认）。后台写与 admin.console 同域，
+    #   Rust 那道门只认 admin。
     "list_admin_notes": SCOPE_ADMIN_CONSOLE,
     # 后台**留言名册**（20261001）：与 `list_admin_notes` 完全同门——读的是
     # `GET /api/protect/board`（Rust `auth_guard` 之后），一样是"后台只读面"。
@@ -304,26 +298,25 @@ TOOL_SCOPE: dict[str, str] = {
     #   它为什么必须存在：那一族**写**技能的参数契约都写着「账号名必须能在后台账号
     #   列表里看到」，而在本轮之前**没有任何一个技能读得出那份列表**——planner 够不着
     #   这条前提，只能去抓一个近邻（trace `20261006T082437`：主人说「给本本恢复身份」，
-    #   planner 点了 `list_admin_notes` = 文章清单）。读侧取 admin.console 而不是
-    #   read.any 的理由与 `list_admin_notes` 逐字相同：它读的是**后台**视图。
+    #   planner 点了 `list_admin_notes` = 文章清单）。读侧取 admin.console 的理由
+    #   与 `list_admin_notes` 逐字相同：它读的是**后台**视图。
     "list_accounts": SCOPE_ADMIN_CONSOLE,
 }
 
 
-# ── 写操作的「人在回路」确认（20260920，秘书类功能前置需求 ③）────────────
+# ── 写操作的「人在回路」确认（20260920）──────────────────────────────
 # 分工：**权限**回答"这个人能不能做"，**确认**回答"这一次他到底要不要做"。
-# 只有**离开用户自己眼前**的写入才需要确认：写站点内容（留言/说说/文章）发出去
-# 就收不回、且以用户名义对他人可见，而页面/设备写操作的效果就发生在用户眼前
-# （他立刻看得见、也立刻能改回来），既有行为不动它。
+# 只有**离开了用户自己眼前**的写入才需要确认：页面/设备写操作的效果就发生在
+# 用户眼前（他立刻看得见、也立刻能改回来），所以不进这张表。
 #
-# 20260921 第二轮把 `write.console` 加进来：后台写改的是**对外可见状态**
-# （一篇文章从公开变私密，读者立刻打不开），且改完不会自动复原。
-# 20260923 第三位成员 `write.own`：它**不满足**上面那条"离开用户眼前"的措辞（收藏与
-# 已读都只在自己账号里，不外显、可逆），但满足那条措辞背后的**真判据**——"这一次到底
-# 要不要做"需要一个确定性答案。反过来说：agent 自己判断"这篇值得收藏"就替用户收藏了，
-# 是**以用户的名义往他账号里写状态**，与"写站点内容"同一类错（只是影响面小）。所以
-# 仍要一句明确的命令；判不出来时走既有弹窗（`graph._confirm_popup`），不是硬拒。
-CONSENT_SCOPES = frozenset({SCOPE_WRITE_CONTENT, SCOPE_WRITE_CONSOLE, SCOPE_WRITE_OWN})
+# `write.console`（20260921）：后台写改的是**对外可见状态**（一篇文章从公开变私密，
+# 读者立刻打不开），且改完不会自动复原。
+# `write.own`（20260923）：它**不满足**上面那条"离开用户眼前"的措辞（收藏与已读都
+# 只在自己账号里，不外显、可逆），但满足那条措辞背后的**真判据**——"这一次到底要不要做"
+# 需要一个确定性答案。反过来说：agent 自己判断"这篇值得收藏"就替用户收藏了，是**以用户
+# 的名义往他账号里写状态**，是同一类错（只是影响面小）。所以仍要一句明确的命令；
+# 判不出来时走既有弹窗（`graph._confirm_popup`），不是硬拒。
+CONSENT_SCOPES = frozenset({SCOPE_WRITE_CONSOLE, SCOPE_WRITE_OWN})
 
 # **一律弹窗**的那几个工具（20260922 第五轮，用户点名要求）：
 # 「可以代发公告，但是内容也需要**弹窗等待管理员确认**」。
@@ -434,9 +427,6 @@ _ALWAYS_CONFIRM_TOOLS = frozenset({
 # write.console 的判据要同时管"有没有命令骨架"和"是不是在提问/假设"，写成一条
 # 正则既读不懂也测不动——拆成几个具名小判据，在 `_console_command` 里组合。
 _CONSENT_PATTERNS: dict[str, object] = {
-    SCOPE_WRITE_CONTENT: re.compile(
-        r"(确认|同意|批准|就这么)(发布|发送|提交|发出去|发|写)"
-        r"|确认(就)?这样(发|写)|授权(发布|发送|提交)"),
     SCOPE_WRITE_CONSOLE: None,  # 占位，见下方 _console_command 注册
 }
 
@@ -1030,8 +1020,8 @@ def is_write(tool: str) -> bool:
 def requires_consent(principal: Principal | None, tool: str) -> bool:
     """这个工具这一次要不要"人在回路"确认（与 principal 无关：确认是用户的事）。
 
-    只看 scope 是否在 CONSENT_SCOPES ——**声明驱动**，所以将来新增一个
-    write.content 工具会自动落在闸下，不需要有人记得来改这个函数。
+    只看 scope 是否在 CONSENT_SCOPES ——**声明驱动**，所以将来新增一个取
+    需确认 scope 的工具会自动落在闸下，不需要有人记得来改这个函数。
     """
     return required_scope(tool) in CONSENT_SCOPES
 
@@ -1164,9 +1154,6 @@ def scope_error_reason(text: str) -> str | None:
 # 向用户复述**，所以必须说准这次到底要确认什么：把"隐藏一篇文章"说成"把内容发布
 # 出去"，用户会以为 agent 理解错了指令（20260921 加 write.console 时拆出来）。
 _CONSENT_WHY = {
-    SCOPE_WRITE_CONTENT: (
-        "会把内容发布到站点上（对外可见、收不回）",
-        "请把要发布的内容原样告诉用户，并请他明确回复确认（例如「确认发布」）"),
     SCOPE_WRITE_CONSOLE: (
         "会改动站点上的文章状态/标签（对外可见，且不会自动复原）",
         "请把**你打算改什么、改成什么**原样告诉用户（哪一篇、从什么变成什么），"

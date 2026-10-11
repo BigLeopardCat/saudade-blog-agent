@@ -40,7 +40,7 @@ import agent.authz as authz  # noqa: E402
 import agent.graph as g  # noqa: E402
 import agent.skills as S  # noqa: E402
 import tools.base as base  # noqa: E402
-from agent.principal import (ADMIN_ROLES, ROLE_ADMIN, ROLE_SECRETARY, ROLE_SUPERADMIN,
+from agent.principal import (ADMIN_ROLES, ROLE_ADMIN, ROLE_SUPERADMIN,
                              ROLE_USER, Principal)  # noqa: E402
 
 # `_sign_local_jwt` 要 `settings.jwt_secret`；CI 里没有 `.env` ⇒ 不桩就整段走不到
@@ -199,10 +199,10 @@ finally:
 print("\n③ 技能面：谁能选、选了执行什么（身份闸 + 可执行性）")
 
 _roster = S.SKILL_MAP.get("account_roster")
-check("③-1 技能在注册表里，roles = ADMIN_ROLES（管理员与超管，不含秘书）",
+check("③-1 技能在注册表里，roles = ADMIN_ROLES（管理员与超管）",
       _roster is not None and _roster.roles == ADMIN_ROLES, str(_roster and _roster.roles))
 for _role, _want in (("admin", True), ("superadmin", True), ("user", False),
-                     ("secretary", False), (None, False)):
+                     (None, False)):
     check(f"  可见性[{_role}] = {_want}",
           ("account_roster" in {s.name for s in S.visible_skills(_role)}) is _want)
 check("③-2 plan 里点的是**真能执行**的工具（名字打错 = 计划里那一行执行成未知工具）",
@@ -270,7 +270,7 @@ check("④-9 契约**没有**被抄回描述或参数说明里（描述归 schem
 print("\n⑤ 接线锁：权限 / 弹窗 / 过程行")
 
 check("⑤-1 scope = admin.console（与冻结/通知/额度那一族同一道门——读的本来就是同一个"
-      "端点 GET /api/temp-users；取 read.any 会让秘书也能读后台账号面）",
+      "端点 GET /api/temp-users；这条读能力只挂在 admin.console 上）",
       authz.TOOL_SCOPE.get("list_accounts") == authz.SCOPE_ADMIN_CONSOLE,
       str(authz.TOOL_SCOPE.get("list_accounts")))
 check("  且它在 ALL_SCOPES 里（否则管理员自己也会被拒）",

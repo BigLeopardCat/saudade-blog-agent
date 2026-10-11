@@ -42,7 +42,7 @@ from agent import authz  # noqa: E402
 from agent.graph import (EXECUTED_ONCE_SKILLS, SNAPSHOT_SKILLS,  # noqa: E402
                          _CONTENT_TOOLS, _already_done_writes, _check_spec,
                          execute_node, plan_state)
-from agent.principal import ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, Principal  # noqa: E402
+from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
 from agent.skills import instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
 
@@ -768,8 +768,7 @@ try:
                       "before": "私密", "after": "公开"}))
 
     # ① 身份门：非 admin（authz_enforce=False 的 shadow 下也必须硬拦）
-    for role, why in ((ROLE_USER, "普通访客"), (ROLE_SECRETARY, "秘书（后台写不给）"),
-                      (None, "身份不明")):
+    for role, why in ((ROLE_USER, "普通访客"), (None, "身份不明")):
         r = _run([SPEC_STATUS], "把文章 12 设为私密", cfg(9, role))
         frm = str(r["messages"][-1].content)
         check(f"非管理员（{why}）→ 拒绝且零调用（shadow 开关不吃硬拦 scope）",

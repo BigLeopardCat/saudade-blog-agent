@@ -1652,7 +1652,7 @@ def render_account_mute_status(username: str, uid, muted: bool, until_raw=None,
 # 与冻结族**同一族**（目标都是后台名录里的一个账号名、都要印 id 与现状），但有三处
 # 与它刻意不同形，都是"这两件事不是一件事"的直接后果：
 #   ① **卡面必须印出"从什么身份 → 什么身份"**。冻结只动一个开关（现状是二选一，
-#      印出来就够），而身份是五档里的一个值——只印目标身份的话，主人核对不了
+#      印出来就够），而身份是四档里的一个值——只印目标身份的话，主人核对不了
 #      "他原来是管理员吗"（那正是这一下最需要他看的一格）；
 #   ② **后果句随目标身份变**（改成杂鱼与改回普通用户是两种晚年）。
 #      写成一句通用的「会改身份」等于没说——他要判断的是"把这个人改成杂鱼到底
@@ -1660,15 +1660,14 @@ def render_account_mute_status(username: str, uid, muted: bool, until_raw=None,
 #   ③ 措辞里**不写**任何权限档位的规则（"管理员只能改两档"那类）——那是后端
 #      `authz::check_role_change` 的话，agent 侧复述一遍就会在政策变更那天变成假话
 #      （同 `_policy_post` 那条"逐字转述后端原话"的纪律）。
-ROLE_CN = {"superadmin": "超级管理员", "admin": "管理员", "secretary": "秘书",
+ROLE_CN = {"superadmin": "超级管理员", "admin": "管理员",
            "user": "普通用户", "zako": "杂鱼"}
-# 说法 → 身份码。**五档都认**，包括 superadmin：认出来之后由后端按政策拒
+# 说法 → 身份码。**四档都认**，包括 superadmin：认出来之后由后端按政策拒
 # （「超级管理员身份不能在这里指派」是一句**真话**，而"认不出这个身份"是一句错话）。
 # 只认这两档的写法**不是**这里的判据——那是 `authz::check_role_change` 的事。
 _ROLE_ALIASES = {
     "superadmin": "superadmin", "超级管理员": "superadmin", "超管": "superadmin",
     "admin": "admin", "管理员": "admin", "管理员账号": "admin",
-    "secretary": "secretary", "秘书": "secretary", "小编": "secretary",
     "user": "user", "普通用户": "user", "普通账号": "user", "普通": "user",
     "zako": "zako", "杂鱼": "zako", "杂鱼酱": "zako",
 }

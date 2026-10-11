@@ -78,7 +78,7 @@ flowchart TB
 │   ├── context.py             # 上下文组装（纯函数叶子层）：消息文本提取（多模态兼容）/page_ctx/页面操作指南（GUESTBOOK_GUIDE、SITE_GUIDE）/工具帧摘要/checker 回执摘要
 │   ├── agent.py               # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
 │   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
-│   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，秘书类功能地基（docs/secretary.md）
+│   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，身份与权限地基（docs/identity-and-permissions.md）
 │   ├── authz.py               # ★ 权限模型（20260920）：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
 │   ├── skills.py              # ★ 技能注册表：47 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）+ NAV_MAP 导航映射（业务唯一数据源）
 │   ├── adminops.py            # ★ 后台写操作域（20260921-22）：标签/分类索引与**名字→id 解析**（find_tag/find_category）+ 移动/降级校验（move_verdict）+ 确认卡文本 + 色名映射；能算的不交给 LLM
@@ -130,7 +130,7 @@ flowchart TB
 │   ├── eval-observability.md  #   评测与可观测性（L0–L3 分层）
 │   ├── rag-design.md          #   检索设计
 │   ├── native-toolcalls-mainline.md / toolcall-stability-roadmap.md  # 接口层与稳定性主线
-│   └── secretary.md + 其余专题（分节 / 多模态 / 参数调优 / 零调用残余 / lint 基线）
+│   └── identity-and-permissions.md + 其余专题（分节 / 多模态 / 参数调优 / 零调用残余 / lint 基线）
 └── .env.example / pyproject.toml / uv.lock / .github/workflows/eval.yml（CI 评测门禁）
 
 前端（看板娘 + 对话面板）—— **20261001 起住在本仓**（`frontend/`，与本仓同以 MIT 分发，见
@@ -1356,7 +1356,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > （身份的唯一构造点）+ `agent/authz.py`（scope 词汇表 / 工具→scope 声明表 / 角色→授予表 /
 > 唯一判据 `check()`），execute 在调用工具之前过判据，默认 shadow 只记不拦；角色只来自
 > Rust 侧 60 秒身份断言的 `role` 声明，**role=None 即身份不明、零权限**（不默认放行）。
-> 这是"秘书类功能"的地基，设计与前置需求见 `docs/secretary.md`。
+> 这是身份与权限的地基，设计与前置需求见 `docs/identity-and-permissions.md`（当时叫 `docs/secretary.md`）。
 > ②gate 命令前缀判据补元讨论豁免（提及 ≠ 发命令，前后端两侧配套：`_cmd_prefix_directive`
 > ↔ `stripMentionSpans`）。③golden 补 `forbid_fallback` 正断言，堵住"走了兜底却判 PASS"的盲区。
 > ④RAG 供给端候选相对断崖截断（`rag/search.py` 的 `_CLIFF_RATIO=0.25`，只截断不改排序）。

@@ -143,14 +143,14 @@ check("计划里指向未声明输入的占位符只有账本里那一处",
       f"多出来：{sorted(_got_dead - _DEAD_TEMPLATE_TOKENS)} / 少了：{sorted(_DEAD_TEMPLATE_TOKENS - _got_dead)}")
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⑧ 技能本身：名字唯一、角色档只有五档里有")
+print("\n⑧ 技能本身：名字唯一、角色档只有四档里有")
 
-_roles = {"user", "zako", "secretary", "admin", "superadmin"}
+_roles = {"user", "zako", "admin", "superadmin"}
 _names = [sk.name for sk in S.SKILLS]
 _dupes = sorted({n for n in _names if _names.count(n) > 1})
 check(f"{len(_names)} 个技能名唯一", not _dupes, "重名：" + ", ".join(_dupes))
 _bad_roles = sorted({r for sk in S.SKILLS for r in sk.roles} - _roles)
-check("roles 只出现已知五档", not _bad_roles, "不认识的档：" + ", ".join(_bad_roles))
+check("roles 只出现已知四档", not _bad_roles, "不认识的档：" + ", ".join(_bad_roles))
 check("  非空（否则上面两条假绿）", bool(_names))
 
 # ══════════════════════════════════════════════════════════════════

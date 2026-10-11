@@ -106,7 +106,7 @@ from agent.llm_usage import usage_fields
 from agent.native_plan import (bind_native, finish_reason, tool_call_names,
                                tool_calls_to_plan)
 from agent.principal import (CHAT_ONLY_ROLES, KNOWN_ROLES, ROLE_ADMIN,
-                             ROLE_SECRETARY, ROLE_SUPERADMIN, ROLE_USER,
+                             ROLE_SUPERADMIN, ROLE_USER,
                              ROLE_ZAKO, UNKNOWN as UNKNOWN_PRINCIPAL)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
@@ -10178,8 +10178,8 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
 # 角色名一律用 `principal` 里的常量（跨语言契约，与 Rust `src/authz.rs` 同名同义）：
 # 这里写过一次字面量，就会在下一个人改常量时留下一个静默失效的比较。
 _FREEZE_ALLOWED_TARGETS = {
-    ROLE_SUPERADMIN: {ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, ROLE_ZAKO},
-    ROLE_ADMIN: {ROLE_SECRETARY, ROLE_USER, ROLE_ZAKO},
+    ROLE_SUPERADMIN: {ROLE_ADMIN, ROLE_USER, ROLE_ZAKO},
+    ROLE_ADMIN: {ROLE_USER, ROLE_ZAKO},
 }
 # ⚠️ 新增角色时必须同步这两行（20261002 杂鱼）：判据是
 # `op_role in 表 and target_role in KNOWN_ROLES`——`KNOWN_ROLES` 里有的角色而表里
@@ -11481,7 +11481,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             if ref_err:
                 args = {}  # 参数清单本身解析没问题（args_ok 保持 True）——失败的是取值
         tool = _TOOL_MAP.get(name)
-        # 权限判据（20260920，秘书类功能地基）：唯一判据点 = 调用之前，与断连检查、
+        # 权限判据（20260920，身份与权限地基）：唯一判据点 = 调用之前，与断连检查、
         # 参数引用解析同一层（确定性、无 LLM、无一例外）。默认 shadow——
         # 只算决策、只把**拒绝**记进 trace，行为不变（先观测、后收口，见 agent/authz.py）。
         decision = authz.check(principal, name)
@@ -11490,9 +11490,8 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if not decision.allowed and not authz.enforcing(decision.scope):
             record("execute", "authz_shadow", tool=name, principal=str(principal),
                    decision=str(decision))
-        # 写操作的「人在回路」确认（20260920，秘书类前置需求 ③）：**权限判"能不能做"，
-        # 这里判"这一次用户到底要不要做"**。只对有 CONSENT_SCOPES 声明（写站点内容、
-        # 对外可见收不回）的工具生效——今天没有这类工具，所以对现有行为零影响；
+        # 写操作的「人在回路」确认（20260920）：**权限判"能不能做"，
+        # 这里判"这一次用户到底要不要做"**。只对有 CONSENT_SCOPES 声明的工具生效；
         # 一旦新增，它**自动**落在闸下（声明驱动，不靠人记得来改）。与权限判据同层：
         # 确定性、无 LLM、调用之前、fail-closed。今天不设 shadow：这一层是纯新增的
         # 保护，不存在"真流量会被它改行为"的观测需求（没有工具会命中它）。

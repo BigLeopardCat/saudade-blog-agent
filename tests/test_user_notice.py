@@ -29,7 +29,7 @@ import agent.authz as authz  # noqa: E402
 import agent.graph as g  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import _RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec  # noqa: E402
-from agent.principal import ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, Principal  # noqa: E402
+from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
 from agent.skills import instantiate_plan  # noqa: E402
 
 # 事实信封**只加**的那几个键（F1，20260930）：`tools.base.fact()` 构造、`is_noop` 读，
@@ -434,7 +434,7 @@ check("有给主人看的理由（未声明的会被弹窗层兜底成**文章�
       _t in authz._CONSENT_WHY_TOOL)
 check("非管理员不放行（权限先于确认）",
       not authz.check(Principal(uid=9, role=ROLE_USER), _t).allowed
-      and not authz.check(Principal(uid=9, role=ROLE_SECRETARY), _t).allowed)
+      and not authz.check(Principal(uid=9, role=None), _t).allowed)
 _why, _ask = authz._CONSENT_WHY_TOOL[_t]
 check("why 落在**后果**上：对方个人中心 + 删不掉（不是「会修改数据」那种空话）",
       "个人中心" in _why and "撤回" in _why, _why)

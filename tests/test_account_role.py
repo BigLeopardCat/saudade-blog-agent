@@ -37,7 +37,7 @@ import agent.graph as g  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import (_RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec,  # noqa: E402
                          plan_state)
-from agent.principal import ROLE_ADMIN, ROLE_SECRETARY, ROLE_USER, Principal  # noqa: E402
+from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
 from agent.skills import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_account_freeze 的那一处）──────────────────────────────
@@ -144,14 +144,14 @@ def _spec(want):
 
 # ══════════════════════════════════════════════════════════════════
 print("\n① 身份归一与显示：两份词表合一（主人说中文、后端收英文码）")
-check("中文 → 码：「杂鱼」→ zako、「普通用户」→ user、「秘书」→ secretary",
+check("中文 → 码：「杂鱼」→ zako、「普通用户」→ user、「管理员」→ admin",
       A.normalize_role("杂鱼") == "zako" and A.normalize_role("普通用户") == "user"
-      and A.normalize_role("秘书") == "secretary", "")
+      and A.normalize_role("管理员") == "admin", "")
 check("  英文码原样认（直接调工具的那条路径）",
       A.normalize_role("zako") == "zako" and A.normalize_role("user") == "user")
 check("  首尾引号/空白剥掉（模型常把引号一起抄进参数）",
       A.normalize_role("「杂鱼」") == "zako" and A.normalize_role(" 杂鱼 ") == "zako")
-check("  ⭐ 五档全认，**含 superadmin**——认出来交给后端按政策拒，不在这一层替它判",
+check("  ⭐ 四档全认，**含 superadmin**——认出来交给后端按政策拒，不在这一层替它判",
       A.normalize_role("超级管理员") == "superadmin"
       and A.normalize_role("管理员") == "admin")
 check("  认不出 → None（调用方零工具 + 如实问，不许自己挑一个）",
@@ -528,7 +528,7 @@ check("  有给主人看的理由（未声明的会被弹窗层兜底成一句�
       "set_account_role" in authz._CONSENT_WHY_TOOL)
 check("非管理员：不放行（权限先于确认）",
       not authz.check(Principal(uid=9, role=ROLE_USER), "set_account_role").allowed
-      and not authz.check(Principal(uid=9, role=ROLE_SECRETARY),
+      and not authz.check(Principal(uid=9, role=None),
                           "set_account_role").allowed)
 _w_role = authz._CONSENT_WHY_TOOL["set_account_role"][0]
 check("⭐ why 与冻结族**不同形**，且差异落在**后果**上（不是只换动词）",

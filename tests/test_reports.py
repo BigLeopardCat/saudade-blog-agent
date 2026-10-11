@@ -596,7 +596,6 @@ _ADMIN_READ_SKILLS = ("ops_report", "moderation_report", "user_report", "traffic
                       "board_roster")
 check("非 admin 的 planner 上下文里看不到这几张后台报表技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
-          and n not in build_planner_context("secretary")
           for n in _ADMIN_READ_SKILLS))
 check("admin 的 planner 上下文里能看到",
       all(n in build_planner_context("admin") for n in _ADMIN_READ_SKILLS))
@@ -783,7 +782,6 @@ check("写技能名单 = 三十个**技能**名（instantiate_plan 缺参守卫�
       and WRITE_SKILL_NAMES <= set(SKILL_MAP), str(sorted(WRITE_SKILL_NAMES)))
 check("非 admin 的 planner 上下文里看不到这四个技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
-          and n not in build_planner_context("secretary")
           for n in ("admin_notes", "tag_create", "article_status", "article_tags")))
 check("admin 的 planner 上下文里能看到",
       all(n in build_planner_context("admin")
