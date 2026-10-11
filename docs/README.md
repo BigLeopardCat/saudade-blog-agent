@@ -11,22 +11,28 @@
 | **记录型** | 时间线**就是内容**（事故、实验、评估、交接，按日期） | 不动——历史描述是这份文件存在的意义 |
 | **方向型** | 还没做、或已搁置的**预案**，带触发条件 | 只写"在什么可观测的事实出现时重开" |
 
+> **允许一份文档跨档，但必须在文首给一张分节地图。** 框架（现状）与路线（方向）常长在同一份
+> 文件里，切不干净时不要硬贴一个标签了事——**在文首写一行"哪几节是什么档"**，索引表那一格写
+> **主档 + 括注另一档的节号**。判据**按节走**：现状节照现状型改（该更新就更新），方向节照方向型改，
+> 记录节不动。**别因为"这份是方向型"就放过它里面的现状节，也别因为"这份是现状型"就把它的历史节
+> 重写一遍。**
+
 ## 目录
 
 | 文档 | 一句话 | 类型 |
 |---|---|---|
 | [agent-architecture.md](agent-architecture.md) | 系统现在是什么：节点拓扑、跨语言契约、目录与机制 | 现状型 |
-| [问题记录.md](问题记录.md) | 事故取证，按日期：现象 → 根因 → 修复 → 回归锁 | 记录型 |
+| [问题记录.md](问题记录.md) | 事故取证，按日期：现象 → 根因 → 修复 → 回归锁（**§2.1 例外**，见下） | 记录型（+ §2.1 跨仓契约） |
 | [eval-observability.md](eval-observability.md) | 评测与可观测性的 L0–L3 分层口径（判据该长什么样） | 现状型 |
 | [lint-baseline.md](lint-baseline.md) | 静态检查（ruff）基线与"新代码要干净"的参照点 | 现状型 |
 | [rag-design.md](rag-design.md) | 检索设计与实现总结，§8 是触发条件驱动的升级预案 | 现状型 |
 | [native-toolcalls-mainline.md](native-toolcalls-mainline.md) | 换主线的**交接件**：为什么换、冻结了什么、边界在哪 | 记录型 |
-| [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) | 工具调用稳定性的长期路线图，含明确"不做"清单 | 现状型 + 方向型 |
+| [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) | 工具调用稳定性的长期路线图，含明确"不做"清单 | 方向型（§3–§7）+ 记录型（§0–§2、附一–附七） |
 | [react-line-experiment.md](react-line-experiment.md) | ReAct 试验线的实测：原生 tool calls 当骨架行不行 | 记录型 |
 | [zero-call-residual.md](zero-call-residual.md) | 「零调用/声称」一次没有效果的实测与残余落点 | 记录型 |
 | [param-tuning-20261006.md](param-tuning-20261006.md) | 旋钮 A/B 实验报告（温度 / 思考 / 跨模型 + 两臂成本） | 记录型 |
 | [agent-eval-report-20260924.md](agent-eval-report-20260924.md) | 2026-09-24 的评估报告与当时列的行为清单 | 记录型 |
-| [secretary.md](secretary.md) | 秘书类功能的框架与前置需求（缺什么、为什么） | 现状型 + 方向型 |
+| [secretary.md](secretary.md) | 秘书类功能的框架与前置需求（缺什么、为什么） | 现状型（§1–§5、§7）+ 方向型（§6） |
 | [multimodal-retrieval.md](multimodal-retrieval.md) | 多模态检索分阶段方案（ADR-0005 的展开，**已搁置**） | 方向型 |
 
 > 这份表**刻意不写"最后修订"日期**：手抄的日期没有判据看着（CI 是浅克隆，读不到逐文件的
