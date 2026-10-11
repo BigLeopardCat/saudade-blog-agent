@@ -28,7 +28,7 @@
 | [rag-design.md](rag-design.md) | 检索设计与实现总结，§8 是触发条件驱动的升级预案 | 现状型 |
 | [native-toolcalls-mainline.md](native-toolcalls-mainline.md) | 换主线的**交接件**：为什么换、冻结了什么、边界在哪 | 记录型 |
 | [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) | 工具调用稳定性的长期路线图，含明确"不做"清单 | 方向型（§3–§7）+ 记录型（§0–§2、附一–附七） |
-| [react-line-experiment.md](react-line-experiment.md) | ReAct 试验线的实测：原生 tool calls 当骨架行不行 | 记录型 |
+| [react-line-experiment.md](react-line-experiment.md) | ReAct 试验线的实测：原生 tool calls 当骨架行不行；**§六 = 这条臂的读数许可闸**（`comparable`） | 记录型（**§四 现状表 / §六** 是现状型） |
 | [zero-call-residual.md](zero-call-residual.md) | 「零调用/声称」一次没有效果的实测与残余落点 | 记录型 |
 | [param-tuning-20261006.md](param-tuning-20261006.md) | 旋钮 A/B 实验报告（温度 / 思考 / 跨模型 + 两臂成本） | 记录型 |
 | [agent-eval-report-20260924.md](agent-eval-report-20260924.md) | 2026-09-24 的评估报告与当时列的行为清单 | 记录型 |

@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
 """ReAct 试验线：拿 `create_agent` 当骨架，把现网手写图攒下的**两件资产**装回去。
 
-**这不是生产路径**（分支 `exp/react-native-line`）：`server.py` / `graph.py` 里没有任何
-调用点，跑它的只有 `eval/experiments/react_line_ab.py` 与 `tests/test_react_line.py`。
+**出厂不是生产路径**（20261012 复核）：`AGENT_ARM` 的真值源是 `.env`、默认 `graph`
+——线上跑的还是那条手写图。`react` 那一档 20261012 才接进 `server._build_arm`（拨它要
+重启服务），而 **`graph.py` 里至今没有本模块的调用点**：生产那半是 `agent/react_arm.py`
+那个适配器在用本模块（它把循环包成生产的四条 update 帧契约），本模块自己不认识服务端。
+⚠️ 此前这里写的是"分支 `exp/react-native-line`"——那条分支是 `main` 的**祖先**（落后
+196 个提交、无一条独有提交），是**陈旧的指针**，别再按它找东西。
+离线入口三处：`eval/experiments/react_line_ab.py`、`tests/test_react_line.py`、
+`eval/arm_capability.py --arm react`。
 它存在的理由是 20261004 那次定点 A/B（见 `docs/react-line-experiment.md`）：把技能级
 schema 与真 planner 提示词装到自由 ReAct 上之后，命中率与现网打平（C′ 34/48 vs A
 31/48，噪声量级），但**收不了尾**——12/48 撞 `recursion_limit=8`。自由循环缺的从来
