@@ -48,14 +48,37 @@ producer 用 `confirm_text` 发**一次**——臂这边一个字节的正文都
 `arm_capability --arm react` 判 `comparable = False`（372 个可证伪键实例里 138 条落在
 `forbid_fallback`，全白发）⇒ 那唯一一次全量读数（`20261005_203521_332`，0.9216）
 **不可读、不许引用**。接法见 `ReactGoldenArm._gate`：**直调 `graph.gate_node`**，
-arm 侧只做两件事——按它读的七个键塑形一份最小 state（`_gate_state`），
-把返回翻成帧。判据（`_REPLAN_ISSUES` 约 20 族 / `_claim_issue` / `_fallback_result`
-/ `_replan_result`）**一条都没抄**：抄第二份就是抄一条漂移源，而它恰好是本仓最常见的缺陷。
+arm 侧只做两件事——按它读的键塑形一份最小 state（`_round_state`：函数体里七个，
+**外加辅助函数读的三个**，见那里的注），把返回翻成帧。判据（`_REPLAN_ISSUES` 约 20 族 /
+`_claim_issue` / `_fallback_result` / `_replan_result`）**一条都没抄**：抄第二份就是抄
+一条漂移源，而它恰好是本仓最常见的缺陷。
 
-**这一版明确不做的**（都是 `docs` 里 P5–P6 的活，别当成已经做完了）：
-  · 跨轮执行记忆 + task 行（P5）⇒ 不发 `task_frames`、不读不写台账族；
-  · narrator 的**独立节点**（P6 后半）⇒ 收尾仍由**同一个模型**写。
-    **动作事实块这一格 20261005 起不再是缺口**：生产两臂都停止代印（
+**narrator 独立节点（P6，20261012 已接）**：收尾不再由决策模型自己写——内层循环给出
+"没有工具调用了"那条消息（`pending_final`）之后，正文改由**独立的零工具调用**产出
+（`_narrate` / `_narrator_call`），提示词是生产 narrator 那一份
+（`graph._EXECUTOR_PROMPT`，含 `NARRATOR_DISCIPLINE` 与 `STICKER_GUIDE` 两块共享资产），
+**决策模型那条草稿不进提示词**（生产 narrator 也看不到任何草稿），只在 narrator 两次都
+拿不出正文时兜底。**闸门判的是 narrator 写出的那一段**——这正是批 1 的意义所在：同一条
+消息流里"决策模型自己写收尾"时，它手上就有工具，"我调用了 X"既可能是回忆也可能是谎言；
+生产那个被判的模型是**零工具节点**，那句话从它嘴里出来必然是声称。判的对象不同种，
+两臂就不可比（批 1 只把 fallback 那条路接上了，这一条才是把"判谁"接上）。
+**P6 是行为改动** ⇒ 本线自此与 `20261005_203521_332` 那份读数**不可比**，旧读数在
+文档里一律标注为「P6 之前」。
+
+**这一版仍然不做的**（别当成已经做完了）：
+  · `task_frames`（task_state 族）⇒ **不发**。能力台账里这一族只有 1 条断言
+    （`task_state_resume_settle`），而它的兄弟判据 `require_task_state` 由生产那半的
+    确定性结算满足（`server.py` 的 `rows_to_settle`）⇒ 这一族在本线上是 `armed` 而
+    **没有**变成 `comparable = False` 的来源（20261012 实测）。如实登记为未做。
+  · （20261012 划掉两条此前记在这里的"缺口"——**实测都不是缺口，所以一个字都没改**：
+    · `__EXEC__` **已经在发**：`_on_tools` 按生产形状产的 `receipts` 里就带着 PASS 行的
+      `cmd`，而 `__EXEC__` 是 `server._run_agent_stream_to_queue` 从 updates 里读的
+      ——挂真生产者跑过一次，帧在；
+    · 跨轮执行记忆（`recent_executions`）与 `open_tasks` **已经读到了**：
+      `server._build_messages` 把它们写进那条 `[System: …]` 块，`_page_ctx` 把整块提
+      出来，`_system_prompt` 已经把它给了 planner 提示词那一格（与生产 planner/model
+      两条腿同一个通道）。**不另写第二个渲染器**——同一份事实两个渲染器就是漂移。）
+  · **动作事实块这一格 20261005 起不再是缺口**：生产两臂都停止代印（
     `agent/factblock.py` 的 `BLOCK_FAMILIES` 空集）⇒ "叙述权收归系统"这件事整体歇业，
     本线"没接它"反而与 graph 臂口径一致了（此前它是两臂的一个真实差异）。
 
@@ -81,15 +104,20 @@ from langchain_core.messages import (AIMessage, AIMessageChunk, HumanMessage,
 from langchain_core.tools import StructuredTool
 
 from agent.context import (_doc_anchors, _frame_texts, _last_assistant_utterance,
-                           _last_user_msg, _page_ctx, _recent_tail, _short_reply_hint)
+                           _last_user_msg, _page_ctx, _recent_tail, _receipts_text,
+                           _short_reply_hint, with_tool_call_pairs)
 from agent.decisions import _article_fast_path, _intent_hints
-from agent.graph import (NARRATOR_DISCIPLINE, _confirm_popup, _pending_ledger_frame,
-                         _principal_of, _render_planner_prompt, gate_node, plan_state)
+from agent.factblock import block_of, is_action_family, is_block_family
+from agent.graph import (_EXECUTOR_PROMPT, NARRATOR_DISCIPLINE, _NARRATOR_NO_TOOLCALL_NUDGE,
+                         _NO_PRINTED_FACTS, _NO_PRINTED_FACTS_ACTION, _confirm_popup,
+                         _narrator_plan, _pending_ledger_frame, _principal_of,
+                         _render_planner_prompt, gate_node, plan_state)
 from agent.native_plan import build_tool_schema
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import RunLedger, SkillExecutor, build_agent
 from agent.refs import ref_hints
 from agent.skills import instantiate_plan
+from agent.stickers import repair_sticker_tokens
 from config.settings import settings
 from models.llm import get_llm
 from tools import get_all_tools
@@ -306,13 +334,21 @@ class ReactGoldenArm:
                                exc_info=True)
                 yield from self._crash_tail(ledger, e)
                 return
-            # 循环正常走完 ⇒ 扣着的收尾候选就是**最终答复的候选**（只有它没被打回才会走到
-            # 这里；打回过的那条已被后一条覆盖）。位置在循环**之后**是有意的：
+            # 循环正常走完 ⇒ 扣着的那条零工具消息就是**这一轮的收尾信号**（只有它没被打回
+            # 才会走到这里；打回过的那条已被后一条覆盖）。位置在循环**之后**是有意的：
             # `run_one` 的 `text` 按帧序拼接，草稿若先发就会与最终答复连成一串。
-            # 但它**先过闸门**（P4）——这就是这条臂此前那 138 条 `forbid_fallback` 恒真的洞。
+            # 它**不是**发给主人的那段正文（P6 起由 narrator 写），但它**先过闸门**（P4）
+            # ——这就是这条臂此前那 138 条 `forbid_fallback` 恒真的洞。
             if pending_final is None:
                 return
-            verdict = self._gate(pending_final, last_plan, ledger, state, messages,
+            # P6：最终答复**不由决策模型自己写**——它那条零工具消息只是"我这边够了"
+            # 的信号，正文交给独立的零工具 narrator（`_narrate`，与生产 `model_node`
+            # 同一份提示词资产）。**这一步在闸门之前**：闸门判的必须是主人真会读到的
+            # 那一段，拿决策模型的草稿去过闸 = 判的对象与生产不是同一种东西（那正是
+            # 批 1 接了闸门却仍不可比的原因）。
+            reply = self._narrate(pending_final, last_plan, ledger, state, messages,
+                                  executor, config, role)
+            verdict = self._gate(reply, last_plan, ledger, state, messages,
                                  executor, config, replan_used)
             if verdict["kind"] == "replan":
                 replan_used = True
@@ -329,8 +365,46 @@ class ReactGoldenArm:
                 yield ("updates", {"gate": {"fallback_text": verdict["text"],
                                             "done": True}})
                 return
-            yield from self._on_model(pending_final, role, {})
+            yield from self._on_model(reply, role, {})
             return
+
+    # ── narrator（P6，20261012）────────────────────────────────────────
+    def _narrate(self, draft: AIMessage, plan_obj: dict, ledger: RunLedger, state: dict,
+                 messages: list, executor: SkillExecutor, config: dict | None,
+                 role: str | None) -> AIMessage:
+        """最终答复由**独立的零工具 narrator** 写（模块头注里那条 P6 缺口的闭合点）。
+
+        **为什么必须独立**（这才是批 1 的意义）：闸门判的是**叙述的声称**与执行事实对不对
+        得上，而生产那个被判的对象有一个结构性质——它是**零工具节点**（`model_node` 不
+        `bind_tools`），"我调用了 X"这句话从它嘴里出来必然是声称，不可能是事实。本线此前
+        是**同一条消息流里决策模型自己写收尾**：它手上就有工具，同一句话既可能是回忆也可能
+        是谎言，判据判的东西就与生产不是同一种了。拆开之后三件事各归各位：决策模型只决定
+        "够了没有"，narrator 只负责说，闸门只判后者——两臂才第一次可比。
+
+        **草稿（`draft`）不进提示词**（与生产同形）：生产 narrator 看不到任何"草稿"，它读的
+        是计划契约与工具帧。本线把决策模型那条零工具消息当作"这一轮到此为止"的信号，
+        正文**重写**——这就是"叙述权收归 narrator"。草稿只在 narrator 两次都拿不出可用正文
+        时兜底（`_narrator_call` 返回 None），理由见那里的注。
+
+        异常**吞掉退回草稿**：narrator 是加装的一层，它自己炸了不该把主人这一轮的答复整条
+        吃掉（与 `_gate` 的兜底同一条理由，方向也一样——宁可拿一条没经过 narrator 资产的
+        话，也不给主人一句"卡住了"）。
+        """
+        rst = _round_state(state, plan_obj, ledger, messages, executor)
+        receipts = [r for r in rst["receipts"] if isinstance(r, dict)]
+        drop = {str(r.get("tool") or "") for r in receipts if is_block_family(r)}
+        try:
+            out = _narrator_call([SystemMessage(
+                content=_narrator_prompt(rst, receipts, drop, config, role))]
+                + with_tool_call_pairs(list(rst["messages"])))
+        except Exception as e:  # noqa: BLE001 —— 见 docstring 最后一段
+            logger.warning("[react_arm] narrator 调用异常，退回决策模型那条草稿：%s", e,
+                           exc_info=True)
+            return draft
+        if out is None:
+            logger.warning("[react_arm] narrator 两次都没给出正文，退回决策模型那条草稿")
+            return draft
+        return out
 
     # ── 帧合成 ───────────────────────────────────────────────────────
     def _on_model(self, m: AIMessage, role: str | None,
@@ -514,6 +588,80 @@ def _llm() -> Any:
                    max_tokens=settings.planner_native_max_tokens,
                    timeout=settings.planner_native_timeout,
                    enable_thinking=settings.planner_native_thinking)
+
+
+def _narrator_llm() -> Any:
+    """narrator 用 LLM：**与生产 `model_node` 同一句**（`get_llm(enable_thinking=False)`）。
+
+    与 `_llm()`（决策那份，走 `planner_native_*` 三个 settings）**故意不共用**：生产就是
+    两个不同的参数档（决策要低温度短输出，叙述要能长篇）。共用一个工厂就等于把 P6 刚拆开的
+    两件事又捏回一个模型——那时"闸门判的对象与生产同不同种"这个问题会重新变成"看运气"。
+
+    `enable_thinking=False` 的理由与生产那条注同源（长上下文下思考链爆炸，20260830 超时
+    事故），本线的 narrator 上下文比生产更长：整份技能表 + 循环说明 + 工具帧。
+    """
+    return get_llm(enable_thinking=False)
+
+
+def _narrator_prompt(rst: dict, receipts: list, drop: set[str], config: dict | None,
+                     role: str | None) -> str:
+    """生产 narrator 的提示词资产，**逐字同一份**（`graph._EXECUTOR_PROMPT`）。
+
+    本函数只负责"哪几个格填什么"，三个格的口径与 `graph.model_node` 逐条对齐——
+    凡是与它不同的地方都是**明写的口径差**，不是随手：
+
+      · `plan=_narrator_plan(rst, config)`：计划文本 + 账甲那条本轮事实。传的是 `rst`
+        这份最小 state（不是生产的 `AgentState`），而 `_narrator_plan` 只读
+        `plan`/`receipts`/`noop_specs`/`blocked`/`blocked_seen`/`pending_confirm`/
+        `ledger`/`confirm_grant`——`_round_state` 给的正是这一批，**与闸门读的是同一份**
+        （两个消费端不会对同一轮算出不一样的形状）；
+      · `tool_frames` 走 `article_pointer=True`：生产只有 narrator 这一处这么用（原始
+        ToolMessage 就在它手边的消息流里，未超预算的正文帧两份逐字节相同 ⇒ 换指针句
+        省掉整整一份正文）；
+      · `fact_block` 按 `is_action_family` 分岔，判据是**回执**不是"印了几行"（见
+        `_NO_PRINTED_FACTS` 的注：20261002 那次"系统发的空授权"就是按错判据分岔的现场）。
+    """
+    msgs = list(rst.get("messages") or [])
+    return _EXECUTOR_PROMPT.format(
+        persona=BLOG_ASSISTANT_PROMPT,
+        audience=audience_block(role),
+        plan=_narrator_plan(rst, config),
+        tool_frames=_frame_texts(msgs, drop_tools=drop, article_pointer=True),
+        exec_receipts=_receipts_text(receipts, drop_tools=drop),
+        fact_block=block_of(receipts) or (_NO_PRINTED_FACTS_ACTION
+                                          if any(is_action_family(r) for r in receipts)
+                                          else _NO_PRINTED_FACTS),
+        page_ctx=_page_ctx(msgs, role),
+        sticker_guide=STICKER_GUIDE)
+
+
+def _narrator_call(msgs: list) -> AIMessage | None:
+    """零工具调用一次，把生产 narrator 那两段补救**照原样**带上。
+
+    两段都是真事故换来的，所以这里一条不少地复用同一套判据与同一份措辞资产：
+      · **空内容重试一次**（20261001）：上游偶发"有 completion token、正文却是空串"
+        （133 个 narrator 轮里 3 条），重试是"再问一次模型"，比放宽判据更接近事实；
+      · **回了 `tool_calls` 的纠正**（20261006）：零工具节点最坏的形态不是报错，而是
+        "只写了一句开场白 + 一条 tool_call"——正文非空 ⇒ 闸门判 PASS ⇒ 主人收到一句
+        内容为零的话却当成功交付。`_NARRATOR_NO_TOOLCALL_NUDGE` 是那一批的资产。
+
+    返回 `None` = 两次都没拿到可用正文，调用方退回决策模型那条草稿：一条有内容、没经过
+    narrator 资产的话，仍然比"我刚才好像卡住了"诚实。
+    """
+    llm = _narrator_llm()
+    resp = llm.invoke(msgs)
+    if not str(getattr(resp, "content", "") or "").strip():
+        logger.warning("[react_arm] narrator 返回空内容 → 重试一次")
+        resp = llm.invoke(msgs)
+    if getattr(resp, "tool_calls", None):
+        _bad = resp
+        logger.warning("[react_arm] narrator 回了 tool_calls（零工具节点不该有）n=%d"
+                       " → 带纠正重问一次", len(_bad.tool_calls or []))
+        _corr = llm.invoke(msgs + [SystemMessage(content=_NARRATOR_NO_TOOLCALL_NUDGE)])
+        resp = (_corr if not getattr(_corr, "tool_calls", None)
+                and str(getattr(_corr, "content", "") or "").strip() else _bad)
+    text = repair_sticker_tokens(str(getattr(resp, "content", "") or ""))
+    return AIMessage(content=text) if text.strip() else None
 
 
 def _skill_menu(role: str | None) -> list[StructuredTool]:
@@ -753,21 +901,51 @@ def _plan_for_gate(plan_obj: dict) -> dict:
 
 def _gate_state(state: dict, plan_obj: dict, ledger: RunLedger, messages: list,
                 executor: SkillExecutor, reply: AIMessage, *, replan: bool) -> dict:
-    """喂给 `graph.gate_node` 的最小 state——**它读的七个键，逐个对得上**（20261011）。
+    """喂给 `graph.gate_node` 的最小 state——**它读的键，逐个对得上**（20261011）。
+    P6 起它只是 `_round_state(..., reply=…)` 的一层壳（键清单与理由都在那边）。"""
+    return _round_state(state, plan_obj, ledger, messages, executor, reply=reply,
+                        replan=replan)
 
-    做法与 `_popup_state` 同族（那也是按目标函数读的键拼一份最小 state 去直调生产资产）。
-    两份塑形器而不是一份：它们喂的是**不同的资产**、要的键也不同（那边四个键、
-    这边七个），合并只会让"谁要哪个键"更难看出来。键清单是用 grep 从 `gate_node`
-    函数体里数出来的，不是凭记忆写的：
+
+def _round_state(state: dict, plan_obj: dict, ledger: RunLedger, messages: list,
+                 executor: SkillExecutor, reply: AIMessage | None = None,
+                 *, replan: bool = False) -> dict:
+    """本轮的最小 state——**两个消费端读的是同一批键**（20261011 起 gate，20261012 起 narrator）。
+
+    `reply=None`（narrator 那一支）**不放答复**：生产 narrator 看不到任何"草稿"（它读的是
+    计划契约与工具帧），把决策模型那条消息塞进去就是把 P6 拆掉的那件事又接回去。
+    闸门那一支必须带（`_repeat_reason` 的复读比对要看得见它）。
+
+    做法与 `_popup_state` 同族（那也是按目标函数读的键拼一份最小 state 去直调生产资产），
+    但**这两处合成了一份**（20261012）：`_narrator_plan` 与 `gate_node` 读的是同一批键
+    ——账甲 `_round_facts` 那一族正是两个消费端共用的合成函数，"两边各拼一份 state"
+    必然在某一天让它们对**同一轮**算出不一样的形状。键清单是用 grep 从 `gate_node`
+    **函数体**里数出来的（`state.get("…")` / `state["…"]`），不是凭记忆写的：
 
         messages / plan / receipts / ledger / pending_confirm / noop_specs / gate_replan
 
+    ⚠️ **`gate_node` 的函数体里只有这七个是直接读的**（20261011 实测：`awk` 切出
+    12345–12802 逐行 grep）。另外三个是它调用的**辅助函数**读的，函数体里看不见，
+    20261011 补：
+
+        blocked / blocked_seen  ← `_round_facts`（账甲）与 `_blocked_article_targets`
+        confirm_grant           ← `_round_facts` 的 `granted`
+
+    漏这三个**不会报错**，只会让闸门**少开火**（`.get(…, [])` 把"本线没喂"与
+    "本轮确实没有"读成同一件事）——正是本仓最熟的"判据没接到底"那一族。两处已实证
+    的影响面：`_claim_issue` 的洞⑥（确认话术声称）读 `facts.consent_blocked`
+    ⇒ 缺 `blocked_seen` 时它恒 False ⇒ `promise_ok=True` ⇒ 那一族在本线上**不判**；
+    `_blocked_article_targets` 读 `state["blocked"]` 的 `spec` ⇒ 缺它时 5a 的混合轮
+    收窄恒不启用。`blocked` 的键形（`spec`/`tool`/`reason`）由 `_blocked_row` 给，
+    与 producer 读的那一份**同源**——两处各拼一份就会一处在判、一处在显示。
+
     两处取法要**说准**，它们各自都有一个假读数：
 
-    · `messages` **必须把本轮的工具帧与那条答复本身放进去**——`frames` 是 `gate_node`
-      判"有没有执行事实"的唯一依据（它从消息流里挑 `ToolMessage`），喂空的会让**每一族
-      声称判据**都判成"零帧轮"（方向是**过严**：一条真办成了事的回复会被当成零帧轮
-      按更宽的族去查）。回复本身要在里面，`_repeat_reason` 的复读比对才看得见它。
+    · `messages` **必须把本轮的工具帧放进去**——`frames` 是 `gate_node` 判"有没有执行
+      事实"的唯一依据（它从消息流里挑 `ToolMessage`），喂空的会让**每一族声称判据**都
+      判成"零帧轮"（方向是**过严**：一条真办成了事的回复会被当成零帧轮按更宽的族去查）。
+      过闸门那一支还要把**答复本身**放进去（`reply=`），`_repeat_reason` 的复读比对才
+      看得见它；narrator 那一支不带（见上）。
       帧用 `_tool_frame` ——**与发到用户/report 的是同一份**：闸门判的对象必须是主人
       真看到的那些帧，另造一份措辞不同的一次性帧＝判据与事实分家。
     · `plan` 走 **`plan_state(...)["plan"]`**（不是 `plan_encode` 直调 —— 那个函数
@@ -776,10 +954,20 @@ def _gate_state(state: dict, plan_obj: dict, ledger: RunLedger, messages: list,
     · `gate_replan` 是**上一圈有没有重规划过**，由调用方给（见 `_gate` 的注）。
     """
     frames = [_tool_frame(i, c) for i, c in enumerate(executor.calls)]
+    blocked = [_blocked_row(b) for b in ledger.blocked]
     return {
-        "messages": list(messages or []) + frames + [reply],
+        "messages": (list(messages or []) + frames
+                     + ([reply] if reply is not None else [])),
         **plan_state(_plan_for_gate(plan_obj)),
         "receipts": list(ledger.receipts),
+        # 账甲（`_round_facts`）与 `_blocked_article_targets` 读的三格：见 docstring
+        # 里那段"辅助函数读的键"。`blocked_seen` 的键形与 `execute_node` 的
+        # `_blocked_key` 逐字同款（`工具::原因码`）——生产那一支是**跨轮累积**，本线的
+        # `ledger.blocked` 同样只增不减，所以这一次运行的范围就是同一种累积。
+        "blocked": blocked,
+        "blocked_seen": sorted({f"{b.get('tool')}::{b.get('reason')}"
+                                for b in ledger.blocked}),
+        "confirm_grant": (state or {}).get("confirm_grant"),
         "ledger": (state or {}).get("ledger") or {},
         "pending_confirm": (state or {}).get("pending_confirm"),
         "noop_specs": (state or {}).get("noop_specs") or [],
