@@ -16,6 +16,57 @@
 
 ## 20261012
 
+- **跨轮台账从"提示词里的一段散文"升成循环的续跑变量（行为，20261012）**：一句话两件写，
+  走到第二轮以后的形状是「卡① → 确定 → 执行 → **直接收尾**」。`route_after_execute` 的
+  confirm 分支读的是 `_pending_intents(state)`——那是 `_scan_action_intents` 对**当轮那句话**
+  做的具名动作别名扫描，而**写意图它结构上看不见**（`agent/tasks.py` 头注早就给了这个论据），
+  所以"还剩一件写"永远扫不出来。于是系统把一件**已经识别、已经登记、参数已备**的剩余退回去
+  问主人「要不要现在继续，你说一声我就去办」——纯废话轮（五天内命中五次，其中两次是**主人自己
+  发现漏了**；最坏的一次主人回「要」之后，回复「这一轮没有做任何改动」，第二步最终没落地）。
+  现在判据只有一个纯函数 `tasks.next_actionable(open_tasks, receipts)`（行在开 ∧
+  `pending_question` 空 ∧ `advance_by_receipts` 游标位那步有 `tool`——**复用同一个结算函数**，
+  不另写一套"这步做了没"）＋命名包装 `ledger_continue`，三处接线都只读它：①
+  `route_after_execute` 的 confirm 分支改成 `_pending_intents or ledger_continue`；②
+  `_decide_late_correct` 里那条"收尾丢意图"纠偏的判据换成**并集**（**纠偏通道数仍是八条**，
+  变的是第七条读哪本账）；③ `gate._task_ledger_probe` 从"只记 trace、一个字都不改行为"升成
+  **设网**——正断言（`next_actionable` 非空）∧ 回复是**征询式收尾** ⇒ 产出 `_REPLAN_ISSUES`
+  家族的一条 issue，走**既有的** `gate_replan`（只此一次）回 planner 接着办。**本轮语境守卫**
+  `_ledger_in_scope`：`confirm_grant` 为真、或该行本轮已在场（本轮 `task_frames` 出现过它的
+  `task_id`，或本轮 receipts 推进过它）才许续 ⇒ **不在无关轮里自动续跑陈旧行**（不新增 state
+  字段，`task_frames` 本就在 `AgentState` 里）。`_TASK_BLOCK_TAIL` 同步加一句"还剩的事接着做、
+  做不了就说清为什么、**不许**问主人要不要继续"（提示词不是主防线，漏了这族会漂回去）。
+  `AGENT_TASK_STATE=0` 时新增判据恒 False、行为逐字节不动（写成判据）。**本批未 push、未重启**
+  ⇒ 线上仍跑改动前的代码。
+- **语料不变量加 I7「废话轮」（判据，只列不判）**：判据是**三层与**——在台账工作面上
+  （`task_inject.n>0` 或有 `task_auto`）∧ **trace 里有"还剩"的直接证据**（同一个
+  `task_ledger_probe` 探针记的 `rows > len(settled)`）∧ 回复命中 `_LEDGER_SOLICIT_RE`
+  （**线上那条判据用的同一根正则**，另抄一份就会漂移成"扫描说 0、线上还在发"）。目标 0。
+  **实测标定（这条必须如实写）**：计划里"今天 5 例"**在它自己写的口径下复现不出来**——
+  按计划那条口径（零 `execute.call` ∧ 工作面 ∧ 征询族）扫 20261001 以来 318 份 trace 只
+  得 **1** 条，而且那一条是**假阳性**（`20261009T044732`：「要不要再补一句…」，是真澄清）；
+  落地口径同样得 **1** 条，那一条才是病灶本体（`20261012T054330`）。原因也查清了：计划
+  点名的另外四处里，两处本轮**有** `execute.call`（`044855`／`044342`，都不是"什么都没做"
+  的轮），两处不在台账工作面上（`065826` 是弹卡确认轮、`045019` 是闸门否掉后的重新征询）
+  ⇒ **计划那条形式判据连它自己引作证据的现场都漏掉**，故按落地口径实现。副产物是两个数：
+  **`leftover`**（有"还剩"证据、但回复**没**问主人）——`20261009T044855` 就落在这里，
+  那一轮的剩余是"同一句话换个措辞"（「**喊我一声**就行」落在 `_LEDGER_SOLICIT_RE` 族外，
+  已注释在案），只列不设目标；以及 **`on_face` 是分母**（101 轮）而不是命中。
+
+- **条件边路由要读 `config`，拿不到会静默退化成老行为（判据）**：接线点①要读
+  `config["configurable"]["open_tasks"]`，而 `route_after_execute` 此前只收 `state`。langgraph 的
+  `_branch.py::_route` 走的是 `self.path.invoke(value, config)` ⇒ 带 `config` 形参的路由函数拿得到
+  整份 config（本机最小图、去向往两边都实测过）。但这是**结构前提**，拿不到的表现是**路由照旧走
+  老分支、什么都不报**（本仓最忌的失效形状）⇒ `tests/test_task_continuation.py` 里那组接线断言
+  （喂最小 state + 最小 config，断言"config 里台账还剩一件"时去 **planner**）是本批的头号判据，
+  不是补充。
+- **如实登记两条本批不修的遗留（不是缺口，别照着"补上"）**：① **隔轮追认**——主人在后续无关轮里
+  主动说「把刚才那件办了」，今天没有确定性通道（既非 `confirm_grant`、本轮 `task_frames` 也空），
+  这正是"只续当前请求的语境"这条边界的代价；三处接线落地后征询不再发出，这种追认本身不再必要。
+  ② **`pending_question` 挡住的那条路**——主人回答了那个问题之后，行怎么重新变回可执行，今天没有
+  确定性通道（`advance_by_receipts` 只在结算成功时清 `pending_question`），故 `next_actionable`
+  对这类行**恒跳过**（那一轮本就该停下问）。另记一条：接线点③复用 `gate_replan`，意味着它与
+  "该查而没查"族**共用同一枚一次性令牌**，同一轮两族同时命中只救得了一边。
+
 - **评审员在 DeepSeek 上 181/181 全废（判据修复）**：`eval/llm_judge.py` 的输出契约原本
   **只挂在 `response_format: json_schema` 上**，而 DeepSeek 不吃这个方言（400
   `This response_format type is unavailable now`）⇒ 每次都走纯 prompt 降级，而降级路径

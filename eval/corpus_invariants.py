@@ -11,7 +11,8 @@ heredoc——结论不可复核、口径每次都不一样，而且**同一段�
 清单逐条印现场供人分类，脚本不替人下结论（元讨论引述与真事故在字面上长得一样，
 机器分不干净——这正是它只列不判的理由）。要盯"有没有新增"，用 `--compare` 比基线。
 
-六条不变量（I6 是 20260927 批 D 加的，理由见 `_i6_rows` 头注）：
+七条不变量（I6 是 20260927 批 D 加的，I7 是 20261012 批加的，理由各见 `_i6_rows` /
+`_i7_rows` 头注）：
   I1 `reply_cmd_prefix`        终稿正文里出现命令前缀标签
                                （`AUTO_NAVIGATE:` / `NAVIGATE:` / `EFFECT:` / `DARKMODE:`）
                                按"本轮有没有真命令回执"分两型——
@@ -70,6 +71,11 @@ heredoc——结论不可复核、口径每次都不一样，而且**同一段�
                                ⚠️ 开关 `AGENT_TASK_STATE` 默认 off ⇒ **off 窗口里六格全 0 是
                                "功能没开"，不是"很干净"**（同 I4 的 `0` 那条纪律）——
                                分母 `注入过未完结任务的轮次` 是给这一格用的。
+  I7 `waste_round`            **废话轮**（20261012 批，用户点名的现场）：这一轮系统自己
+                               记着台账里还剩一件能立刻动手的事，回复却把主动权退回主人
+                               （"要不要我现在就…"／"你说一声我就去办"）。判据是三层
+                               与：在台账工作面上 ∧ trace 里有"还剩"的直接证据 ∧ 命中
+                               征询族。**目标 0**，详见 `_i7_rows` 头注（含"这是下界"那条）。
 
 用法（cd saudade-blog-agent）：
   .venv/bin/python eval/corpus_invariants.py                    # 全量语料，只列不写
@@ -95,7 +101,10 @@ from trace_io import load_trace  # noqa: E402
 # 连线命令的**唯一** Python 侧实现（命令 → `AUTO_NAVIGATE:<url>` 等连线形）。
 # 这里刻意不复写一份：批 2 之后 trace 里的命令是结构化 `cmd`，与 golden/server 那边
 # 重建出来的是同一件东西，各写一份就是漂移（同 `_cmd_wire` 的文档字符串）。
-from agent.graph import _cmd_wire  # noqa: E402
+# 同理「把主动权退回主人」的征询族取 `_LEDGER_SOLICIT_RE`——它是那条判据**在线路上**
+# 用的同一根正则（`_ledger_continuation_issue`），这里另抄一份就会漂移成"扫描说 0、
+# 线上还在发"。
+from agent.graph import _LEDGER_SOLICIT_RE, _cmd_wire  # noqa: E402
 from agent.skills import (PLAN_STATUS_VALUES, SKILL_MAP,  # noqa: E402
                           arg_enum, skill_param_specs, tool_arg_schemas)
 
@@ -218,9 +227,59 @@ def _i6_rows(d: dict) -> list:
     return rows
 
 
+def _i7_rows(d: dict) -> list:
+    """I7：**废话轮**（20261012 批，用户原话"非要多烧一轮对话说废话"）。
+
+    病灶的形状（现场 `logs/agent/traces/20261012/054330`）：主人一句话交代了两件写，
+    第一件办完，**系统自己记着台账里还剩一件**（`gate.task_ledger_probe rows=3
+    settled=[1]`，那行的步骤、工具、参数都齐），回复却把这件事退回给主人去重说一遍
+    （"要现在继续给他降成「杂鱼」吗？你说一声我就去办。"）。主人上一句话已经命令过，
+    没有任何新信息要问——这一轮白烧。改法见 `agent/tasks.py::next_actionable` 那一族。
+
+    判据是**三层与**（缺一层都不成立，这也是它不会误伤的原因）：
+
+      a) **在台账的工作面上**：本轮注入过未完结任务（`producer.task_inject` 的 n>0），
+         或有任务登记/注入事件（`planner.task_auto`／老机制的 `planner.ledger_frame`）。
+         不在工作面上的轮（纯闲聊、纯通用知识作答）结构上不可能"把已登记的事退回去"。
+      b) **trace 里有"还剩"的直接证据**：`gate.task_ledger_probe` 记着 `rows` 与
+         `settled` 两个数（同一个探针、同一次读数），`rows > len(settled)` = 这一轮结算
+         了一部分、台账里还挂着别的。⚠️ **这一层是下界不是全量**：那条探针只在"本轮
+         结算过至少一行"时才落 trace，所以"没有证据"≠"没有剩余"——历史窗口与关档窗口
+         都读不出它（同 I4 的 `0` 那条纪律）。判据宁可漏，不拿没证据的轮去凑数。
+      b′) 没有 b 但仍在工作面上 ⇒ 记一条 `leftover`（观察量，**只列不设目标**：主人
+         这一轮聊别的事、或那一件本来就该等主人回话，都落在这里，机器分不开）。
+      c) **回复把主动权退回主人**：命中 `_LEDGER_SOLICIT_RE`（线上那条判据用的同一根
+         正则）。词形这一层**只负责**判"这句话是不是在推诿"，不单独成立——上面
+         a∧b 才是前提（这正是"我还可以帮你做 X"这类正当建议不会被误伤的原因）。
+
+    判据读 trace 里记下的事件（不回放今天的代码）：20261009 之前没有 `agent_task`
+    注入（那时是 `planner.ledger_frame` 的老机制），所以那些窗口里 a 命中的是另一种
+    台账；`i7_waste` 在**新窗口**（`--from <上线日>`）读 0 才算数。
+    """
+    evs = d.get("events", [])
+    inj = _ev(d, "producer", "task_inject")
+    probe = _ev(d, "gate", "task_ledger_probe")
+    n_inj = sum(int(e.get("n") or 0) for e in inj)
+    on_face = bool(n_inj or _ev(d, "planner", "task_auto") or _ev(d, "planner", "ledger_frame"))
+    if not on_face:
+        return []
+    rows = [{"kind": "on_face", "n": n_inj}]      # 分母：进了工作面才有可能出这一族
+    left = [(int(e.get("rows") or 0), len(e.get("settled") or [])) for e in probe]
+    left = [(r, s) for r, s in left if r > s]
+    if not left:
+        return rows
+    ids = ",".join(str(i) for e in inj for i in (e.get("ids") or [])[:3])
+    m = _LEDGER_SOLICIT_RE.search(str(d.get("reply") or ""))
+    tail = {"rows": left[0][0], "settled": left[0][1],
+            "reply": str(d.get("reply") or "")[-90:].replace("\n", " ")}
+    rows.append({"kind": "waste" if m else "leftover", "clause": m.group(0) if m else "",
+                 "ids": ids, **tail})
+    return rows
+
+
 def scan_one(d: dict) -> dict:
-    """单份 trace 的命中（返回 {i1..i5, i6}；i1/i2/i3/i5/i6 是清单，i4 是计数）。"""
-    out = {"i1": [], "i2": [], "i3": [], "i4": 0, "i5": [], "i6": []}
+    """单份 trace 的命中（返回 {i1..i7}；除 i4 是计数，其余都是清单）。"""
+    out = {"i1": [], "i2": [], "i3": [], "i4": 0, "i5": [], "i6": [], "i7": []}
     evs = d.get("events", [])
 
     # ── I1 终稿正文里的命令前缀 ────────────────────────────────────────────
@@ -273,6 +332,9 @@ def scan_one(d: dict) -> dict:
 
     # ── I6 任务登记的写端 vs 消费端（20260927 批 D）────────────────────────
     out["i6"] = _i6_rows(d)
+
+    # ── I7 废话轮（20261012 批）───────────────────────────────────────────
+    out["i7"] = _i7_rows(d)
     return out
 
 
@@ -314,6 +376,13 @@ def _accumulate(one: dict, counts: Counter, hits: dict, stamp: str, uid: int) ->
         # 不进清单就等于没人会看。
         if x["kind"] not in ("corrected", "injected"):
             hits[f"i6_{x['kind']}"].append({"stamp": stamp, "uid": uid, **x})
+    for x in one["i7"]:
+        counts[f"i7_{x['kind']}"] += 1
+        # `on_face` 是**分母**（进了工作面的轮次），不是"哪一条出事了"——同 I6 的
+        # `injected`。`leftover` 与 `waste` 都进清单：前者只列不设目标，后者目标 0，
+        # 但两者都要能被人点名看现场。
+        if x["kind"] != "on_face":
+            hits[f"i7_{x['kind']}"].append({"stamp": stamp, "uid": uid, **x})
 
 
 def scan(since: str, until: str) -> dict:
@@ -368,6 +437,11 @@ def report(r: dict) -> None:
           f"只登记不干活被纠偏 = {c.get('i6_corrected', 0)}）"
           f"  ← 前两格目标 0（写端产生了、消费端拿不到）；"
           f"`挂着没人管` **只列不设目标**——主人这一轮聊别的事完全合法，见 `_i6_rows` 注")
+    print(f"I7 废话轮（台账还剩却把主动权退回主人）= {c.get('i7_waste', 0)}"
+          f"   （分母：在台账工作面上的轮次 = {c.get('i7_on_face', 0)}；"
+          f"有「还剩」证据但回复没退回主动权 = {c.get('i7_leftover', 0)}）"
+          f"  ← 目标 0；判据只认 trace 里 `task_ledger_probe` 留下的直接证据，"
+          f"**没有证据的轮一律不判**，所以它是**下界**（见 `_i7_rows` 注）")
     for cat in sorted(r["hits"]):
         rows = r["hits"][cat]
         print(f"\n── {cat}（{len(rows)} 条）" + ("  ★ 批 2 的目标清单" if cat == "i1_cited" else ""))
@@ -378,6 +452,11 @@ def report(r: dict) -> None:
             extra += f" skill={x['skill']}" if x.get("skill") else ""
             extra += f" receipts={x['receipts']}" if "receipts" in x else ""
             extra += f" [{x['bucket']}]" if x.get("bucket") else ""
+            if cat.startswith("i7_"):
+                # 这一族**两个位置都要印**：`clause` 是词形命中（推诿那句），`reply` 是
+                # 它出现的上下文——只印 clause 看不出"台账里到底还剩什么"。
+                tail = (f"{x.get('clause') or ''} 〔{str(x.get('reply') or '')[-70:]}〕 "
+                        f"rows={x.get('rows')}/{x.get('settled')}")
             if cat.startswith("i5_"):
                 # 这一族**逐条印会淹掉屏幕**（实测 69 条未读参数名），改印"按名字归并"
                 # 的一行——名字相同就是同一处接线缺口，逐条列的是同一个原因重复 N 遍。
