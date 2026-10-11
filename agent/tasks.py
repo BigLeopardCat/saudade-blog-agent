@@ -795,6 +795,54 @@ def settled_by_receipts(task: Any, receipts: Any) -> bool:
     return bool(adv) and adv.get("state") == "succeeded"
 
 
+def next_actionable(open_tasks: Any, receipts: Any) -> tuple[dict, dict] | None:
+    """台账里**下一件现在就能动手的事** → `(行, 步骤)`；没有可执行的剩余 → `None`（纯函数）。
+
+    **它补的是哪个空白**（20261012）：跨轮台账一直只是"提示词里的一段散文"
+    （`render_open_tasks` 注入 system 上下文），而**循环的续跑判据读的是"这一轮那句话"**
+    ——`route_after_execute` 的确认分支问 `_pending_intents`，那是对当轮那句话做
+    **具名别名**扫描（写意图它结构上看不见）。两者不同源，所以"主人一句话两件写、
+    第一件办完"的那一轮，台账明写着还剩一件，路由却看见空清单、直去 narrator，
+    narrator 只能如实写「降级还没做。**要现在继续给他降成「杂鱼」吗？你说一声我就去办。**」
+    ——把系统自己已经登记、参数已备的剩余，退回去让主人重说一遍。现场：
+    `logs/agent/traces/20261012/054330`（五天内五次，两次是主人自己发现漏了）。
+
+    **三格判据都要**，缺一格就会把"本就该停下来问的那一行"当成剩余去续跑：
+      ① 行 `state ∈ TASK_OPEN_STATES`（终态行没有"下一步"可言）；
+      ② `pending_question` 非空的行**跳过**——那行正等着主人回话；
+      ③ 游标位那一步**带 `tool`**（没有机器可读的工具名 = 不知道下一步调什么，续跑无从谈起）。
+
+    游标取 `advance_by_receipts` 的结论（**复用结算函数**，别另写一套"这步做了没"，
+    同族教训见 `rows_to_settle` 的注）：它返回 `None` 表示"本轮回执没能推进这一行"，
+    那行的游标就停在原位、游标位那步仍是可执行的——**这正是我们要的那一件**。
+
+    已知边界（本批不修，如实登记）：主人回话之后，`pending_question` 非空的行怎么重新
+    变成可执行，今天没有确定性通道（`advance_by_receipts` 只在结算成功时才清它）。
+    所以本函数是"漏报"取向：宁可当没有剩余，也不去猜主人那句答话接的是哪一行。
+    """
+    rows = task_rows(open_tasks)
+    if not rows:
+        return None
+    receipts = receipts if isinstance(receipts, list) else []
+    for row in rows:
+        if str(row.get("state") or "") not in TASK_OPEN_STATES:
+            continue
+        if str(row.get("pending_question") or "").strip():
+            continue
+        steps = row.get("steps")
+        if not isinstance(steps, list) or not steps:
+            continue
+        adv = advance_by_receipts(row, receipts)
+        cursor = max(0, int((adv or row).get("cursor") or 0))
+        if cursor >= len(steps):
+            continue
+        step = steps[cursor] if isinstance(steps[cursor], dict) else {}
+        if not str(step.get("tool") or ""):
+            continue
+        return row, step
+    return None
+
+
 def drop_is_completion(open_tasks: Any, conversation_id: Any, decl: Any,
                        receipts: Any) -> bool:
     """这一次 `task_drop` 是不是其实是「**我已经把它做完了**」（纯函数，20260927）。
@@ -850,6 +898,9 @@ _TASK_BLOCK_HEAD = (
 _TASK_BLOCK_TAIL = (
     "（主人这一轮的话如果是在回答上面某个问题、或在推进某件事，就接着把它做完——"
     "该走的技能通道照常走；**做完由系统按执行回执自动结算，你不用再登记一次**。"
+    "**只要你上面还列着「还剩」的步骤，就不许把「要不要继续」反问回主人**"
+    "——主人上一句话已经交代过这件事了，接着做（一轮一件）才是回答；"
+    "真做不下去（缺参数/需要博主身份/通道不允许）就把**卡在哪一步、缺什么**说清楚。"
     "「」里要问主人的那一句**原样问出来**，不许改写成别的说法、不许自己加选项。"
     "主人明确说不做某件事时，用 `task_drop`（同一个 goal）把它撤下；"
     "**做完的事不要撤下、也不要再登记**，系统自己会结算。"

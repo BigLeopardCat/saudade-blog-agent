@@ -125,8 +125,8 @@ from agent.skills import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
 # `agent/tasks.py`——本模块只决定"什么时候用它"（见 planner 的那一支）。
 from agent.tasks import (TASK_DONE_NOTE, TASK_INTENTS, declaration_note,
                          declaration_nudge, drop_is_completion, frame_payload,
-                         intent_frames, render_open_tasks, settled_by_receipts,
-                         task_rows)
+                         intent_frames, next_actionable, render_open_tasks,
+                         settled_by_receipts, task_rows)
 from utils import trace as trace_mod
 from utils.trace import record
 
@@ -3498,6 +3498,82 @@ def _open_tasks_rows(config) -> list:
     return task_rows(cfg.get("open_tasks"))
 
 
+def _ledger_in_scope(state, config) -> bool:
+    """这一轮**还在那件事的工作面上**吗——用户拍板"只续当前请求的语境"的守卫（20261012）。
+
+    **接台账之前必须先过这一关**：台账是跨轮跨天的（Rust 读侧取最近 3 行、72h 时效），
+    若路由一见"还剩一件"就无条件续跑，那么第二天主人随口问一句"服务器怎么样"也会被
+    顺手把昨天那件事办了、或者弹出一张没人要的确认卡——那比废话轮坏得多。
+    **只续当前请求**这条边界因此是结构性的，不是靠判据精确。
+
+    两条确定性判据（覆盖今天全部五个现场，零成本、零 LLM）：
+      · `confirm_grant`：这一轮就是**兑现那张卡**的轮次（签过名的令牌刚被点掉）——它
+        天然是那件事的延续（现场 `logs/agent/traces/20261012/054330`：确认轮执行完
+        发通知、台账还剩降级那件）。注意这一轮的 `task_frames` 是**空的**（`_planner_preflight`
+        的确认分支 `return _plan_update(plan_obj, rounds)` 不带那格），所以这条判据不能省。
+      · 本轮 `task_frames` 非空：这一轮的 planner 刚登记/撤下过任务 ⇒ 台账就在工作面上。
+
+    刻意**不去判"主人这句话像不像在追认那件事"**：那要读自然语言、要词表，而误伤的
+    代价（在无关轮里真的降级一个账号）比漏报大得多。漏报的代价只是回到本批之前的行为
+    ——主人**主动**隔轮追认（现场 会话 331 `204417`「要」）本批不修，如实登记：
+    接线点 3 落地后那种征询不再发得出去，这一步本身就消失了。
+    """
+    if state.get("confirm_grant"):
+        return True
+    return bool(state.get("task_frames"))
+
+
+def _ledger_next(state, config) -> "tuple[dict, dict] | None":
+    """这一轮**该接着做**台账里的哪一件 → `(行, 步骤)`；不该续 → `None`（20261012）。
+
+    三个调用点（`route_after_execute` 的确认分支 / planner 的收尾丢意图纠偏 / gate 的
+    账乙网）读的**就是这一句**，判据只此一处。三格合起来才成立，顺序也是刻意的
+    （最便宜的开关最先判）：
+      ① `AGENT_TASK_STATE` 开着——**关 ⇒ 逐字节退回本批之前的行为**（写成判据在
+         `tests/test_task_continuation.py` 里）；
+      ② `_ledger_in_scope`：这一轮确实在那件事的工作面上（只续当前请求的语境）；
+      ③ `tasks.next_actionable`：台账里还有**现在就能动手**的下一步（三格形状判据、
+         `pending_question` 门的全部内容都在那个纯函数里，这里不重判）。
+
+    返回元组而不仅是布尔：planner 那处纠偏要把"哪一行、下一步调什么"讲进指令里
+    （只给一句"还有事没做"＝让它自己猜，那正是废话轮的成因）。
+    """
+    if not settings.agent_task_state:
+        return None
+    if not _ledger_in_scope(state, config):
+        return None
+    return next_actionable(_open_tasks_rows(config), state.get("receipts"))
+
+
+def _ledger_has_next(state, config) -> bool:
+    """`_ledger_next` 的非空判定（路由那一处只要"有没有"，读起来是一件事）。"""
+    return _ledger_next(state, config) is not None
+
+
+def _ledger_continue_nudge(row: dict, step: dict) -> str:
+    """台账还有可执行剩余时给 planner 的**续跑指令**（走既有的单发 `correction` 槽）。
+
+    三条内容缺一不可，都是现场换来的：
+      · **点名那一行与下一步的工具**——只说"还有事没做"，模型就得自己猜是哪件、
+        猜错就再空转一轮（废话轮就是这么长出来的）；
+      · **`goal` 用主人当初那句话**（台账行里存的就是它），让它认出"这是上一轮我自己
+        登记下来的"，而不是当成新指令；
+      · **明写不许反问"要不要继续"**——这是本批要治的那句话本身（`054330` 的回复
+        原文）。指令只描述事实与禁止句，不写"系统会去弹卡"那种机制描述（同
+        `_finalize_unaccounted` 的教训：写给 narrator 的机制描述会变成它的词汇）。
+    """
+    return (
+        "你这一轮**没有排任何工具**（等于宣布收尾），但系统台账里这件事还没做完："
+        f"目标「{row.get('goal') or '（无表述）'}」，"
+        f"下一步该走的是 `{step.get('tool')}`"
+        f"（{step.get('label') or step.get('tool')}）"
+        "——它是你自己在之前某一轮登记下来的（不是主人这一轮的新指令），"
+        "主人当时已经把这件事交代清楚了。本轮把它做掉（一轮一件）；"
+        "**不许**问主人「要不要继续」/「需要我现在办吗」——那是把主人已经说过的话"
+        "退回去让他重说一遍。真做不下去（缺参数/需要博主身份/通道不允许）就把"
+        "**卡在哪一步、缺什么**说清楚。")
+
+
 def _task_ledger_probe(reply: str, state, config, issue: str = "") -> None:
     """账乙的**观测探针**（20261008 批 2）：只记 trace，**一个字都不改行为**。
 
@@ -3527,6 +3603,60 @@ def _task_ledger_probe(reply: str, state, config, issue: str = "") -> None:
     clause = _round_not_landed_clause(_strip_quoted_spans(str(reply or "")))
     record("gate", "task_ledger_probe", rows=len(rows), settled=settled,
            clause=_clip_clause(clause) if clause else "", issue=issue or "")
+
+
+# 「把动作的**发起权**交回主人」的几句话（20261012）。**词形刻意收得很窄**，只收
+# "你说一句我就去办"这一族——它们共同的意思是"这件事现在动手需要你再说一遍"：
+#   · **不收**「我还可以帮你做 X」/「要不要顺便看看 Y」这类**正当的建议**：那是在推荐
+#     **另一件**事，不是在推诿已经在册的剩余（放宽它 = 把正常的礼貌收尾判成缺陷）。
+#   · **不收**裸「要…吗」：主人问的是"要我把这篇也贴上这个标签吗"这类**真澄清**
+#     （目标不唯一时那是该问的），形态上与推诿**完全一样**，收不得。
+# 判据本来就不是靠词形单独成立的（前提在 `_ledger_next`：台账里真有可执行的剩余），
+# 词形这一层只负责"这句话是不是把主动权退回去了"。
+# **一条已知漏网（20261012 标定，如实记）**：「等主人哪天想动手发公告时，**喊我一声**就行」
+# （现场 `20261009T044855`）——同一个意思换个措辞就落在族外。不改宽是**有意**的：那一轮
+# 的剩余不是"问得对不对"的问题（它压根没问），指望这条正则去接它接不住；接它的是
+# `_decide_late_correct` 那条并集纠偏。I7 把它记成 `leftover` 而非 `waste`，正是为了让
+# 这个差集**看得见**（`eval/corpus_invariants.py::_i7_rows`）。
+_LEDGER_SOLICIT_RE = re.compile(
+    r"要不要|需不需要|用不用|需要我|要我(?:帮|去|现在)?|你说一声|你点个头|你点头|"
+    r"你说句话|你吩咐|你说(?:一句|一声)(?:话)?我就", re.S)
+
+
+def _ledger_continuation_issue(reply: str, state, config) -> "tuple | None":
+    """**征询式收尾**的判据 → `(issue, 兜底文案, 子句)`；不命中 → `None`（20261012）。
+
+    要治的病（用户原话："不是问模糊的内容或者二次确认，但非要多烧一轮对话说废话"）：
+    这一轮结束时**台账里还有一件能立刻动手的事**（主人上一句话已经交代过、参数已备），
+    而回复把这件事退回给主人去重说一遍。现场 `logs/agent/traces/20261012/054330`：
+    「至于降级身份那一步——这次只执行了发通知，降级还没做。**要现在继续给他降成「杂鱼」
+    吗？你说一声我就去办。**」
+
+    **这不是谎话判据，是循环终止判据**（与洞⑮ 的关系见 `_task_ledger_probe` 的 docstring）：
+    上面那段话**字字属实**（它如实说了"降级还没做"），所以洞⑮ 的前提（`ok_writes` 非空 +
+    回复声称"还没落地"）根本接不住——它的前提是"本轮有写办成"，而这里"还没办的那件事"
+    按定义**本轮就没有回执**。正确出路也不是 `__RESET__` 兜底（那会把一段诚实的回复换成
+    一句道歉），而是**回 planner 接着做** ⇒ 挂 `_REPLAN_ISSUES`，走既有的重规划通道。
+
+    **一处刻意的取舍**：`gate_replan` 那一枚一次性令牌与"该查而没查"族**共用**——同一轮
+    两族同时命中只救得了一边。不当成没发生（它是既有语义，本批不改），如实记在这里。
+
+    不命中 `not state.get("gate_replan")` 时**直接返回 None**（不调 `fail`）：第二次进来
+    `fail` 会落到兜底，把一段诚实的回复换成通用道歉文案——那正是本仓反复划的那条界
+    （"打回"的代价是吞掉整轮叙述，宁漏勿误伤）。
+    """
+    if state.get("gate_replan"):
+        return None
+    if not _ledger_next(state, config):
+        return None
+    clause = (_LEDGER_SOLICIT_RE.search(_strip_quoted_spans(str(reply or ""))) or
+              _LEDGER_SOLICIT_RE.search(str(reply or "")))
+    if not clause:
+        return None
+    record("gate", "ledger_solicit", clause=_clip_clause(clause.group(0)),
+           goal=(_ledger_next(state, config) or ({}, {}))[0].get("goal"))
+    logger.info("[gate] 台账仍有可执行剩余，而回复把「要不要继续」反问回主人 → 重规划")
+    return "ledger_continuation_pending", _FALLBACK_LEDGER_CONTINUATION, clause.group(0)
 
 
 def _change_denial_claim(reply: str, has_real_change: bool) -> bool:
@@ -5215,6 +5345,16 @@ _FALLBACK_EMPTY = (
     "喵呜……主人，我刚才好像卡住了，没能说出话来。可以再问我一次嘛？这次我让"
     "系统查清楚了再好好回答～")
 
+# 台账里还有能立刻动手的剩余，而回复把「要不要继续」反问回主人（20261012，
+# 见 `_ledger_continuation_issue`）。**这条兜底实际上走不到**（调用点先判了
+# `not gate_replan`，命中即 `_replan_result` 回 planner），留着是为了 `fail()` 的
+# 形状完整、且万一真走到这里也必须是一句**实话**：不声称办了任何事、不编进度，
+# 只说明"这件事还挂着、我接着办"。
+_FALLBACK_LEDGER_CONTINUATION = (
+    "喵呜……主人，这件事**我还没办完**（系统台账里还挂着下一步），刚才那句"
+    "「要不要继续」是我多问的——你早就交代过了 :委屈: 我这就接着办；真办不下去"
+    "（缺信息 / 需要你到后台操作），我会说清卡在哪一步。")
+
 # 零帧纯作答轮、而主人问的是他自己那份数据（20261003，见 gate 第 4b 节）。
 # 措辞只陈述**可查的事实**（这一轮没有去取），并给出去路——**不许出现任何看起来像
 # 结论的句子**（未读数、条数、"没有什么"…）：这条路走到兜底时，字数与条数一个都没取到，
@@ -5423,6 +5563,13 @@ _REPLAN_ISSUES = frozenset({
     # 已经办好了，把它说成没办会诱使主人再点一次），而正确出路是**照回执如实说**，
     # 出力与 ⑩ 逐字相同 ⇒ 建议/原因两条都直接指向 ⑩ 那两份（见下方别名）。
     "round_not_landed",
+    # 20261012 补一族（gate 的账乙网）：**不是"这句话真不真"，是"这一轮该不该收尾"**。
+    # 上面每一条问的都是"回复说的对不对"，没有一条问"该做的那件事做完了没有"。
+    # 本族的回复**字字属实**（它如实说"降级还没做"），所以洞⑮ 接不住——它的前提是
+    # "本轮有写办成"，而"还没办的那件事"按定义本轮没有回执。挂号理由与
+    # `own_read_question_without_tool` 同向：正确的出路是**真的去做**，不是让主人
+    # 看一句道歉（所以不能走兜底）。判据本体见 `_ledger_continuation_issue`。
+    "ledger_continuation_pending",
 })
 
 # 打回提示里"两条出路"的措辞**按族分**：同一句"去查一遍"写给写族是**指错路**
@@ -5597,6 +5744,27 @@ _REPLAN_WHY_DEFAULT = "  而**这一轮一个工具都没有执行**——那条
 # "键必须是 `_REPLAN_ISSUES` 成员"的锁照旧满足——别名也是键）。
 _REPLAN_ADVICE["round_not_landed"] = _REPLAN_ADVICE["write_change_denial"]
 _REPLAN_WHY["round_not_landed"] = _REPLAN_WHY["write_change_denial"]
+
+# 账乙网（20261012）：主人上一句话已经把这件事交代清楚了，正确的两条件是"接着做"
+# 与"如实说清卡在哪"——**不是**检索族那份"去查一遍"。写族那份也不贴（那些说的是
+# "主人这一轮在要你办事"，而本族的前提是"那件事是**之前**某一轮登记下来的"，
+# 台账行里就摆着它的 goal）。
+_REPLAN_ADVICE["ledger_continuation_pending"] = [
+    "- 台账里还剩的那件事**接着做**：选出能做它的技能，把工具连参数写进调用清单"
+    "——目标只能取**系统帧里印出来的** id / 名字，**不许自己编一个**；"
+    "需要主人点头的照常弹卡（弹卡是本轮正常出口，不是你该替主人预判的事）；",
+    "- 确实做不下去（缺参数 / 需要博主身份 / 站内没有这条通道）→ 如实说清"
+    "**卡在哪一步、缺什么**；纯闲聊的轮次照常 SKILL=chat 老实作答。",
+    "**不许**把「要不要我继续」这类话再问回主人——主人上一句话已经交代过这件事，"
+    "把已经登记在册的剩余退回去问一遍，等于让他重说一次。",
+]
+# 否定说明的第一行是"它写下了「<子句>」这样的结论"——本族的子句是那句推诿原话
+# （`_ledger_continuation_issue` 取 `_LEDGER_SOLICIT_RE` 的命中片段），前提却与所有
+# 其他族都不同：不是"没有依据"，是"**这一轮不该在这儿停下**"。
+_REPLAN_WHY["ledger_continuation_pending"] = (
+    "  而**这一轮结束时系统台账里还有一件能立刻动手的事**（它是之前某一轮登记下来的、"
+    "主人当时已经交代清楚，进度就摆在上方的行里）——那段话把这件事退回给主人，"
+    "让他把自己说过的话再说一遍。")
 
 
 def _replan_note(issue: str, clause: str) -> str:
@@ -7071,6 +7239,52 @@ def _decide_write_guard(c: "_DecideCtx") -> "_Step":
     return _Step("next")
 
 
+def _wrapup_intent_correct(c: "_DecideCtx") -> "_Step | None":
+    """零工具收尾那一格该不该纠偏 → `_Step("continue")`；不必纠 → None（20261003/20261012）。
+
+    **判据是两本账的并集**：当轮那句话（`_pending_intents`）与跨轮台账（`_ledger_next`）
+    ——任一非空即续跑，且**两族走同一个 `c.correction` 槽、同一个单发锁存器**（外层守卫
+    仍留在 `_decide_late_correct`），所以不新增预算、不会与 `MAX_PLAN_ROUNDS` 叠乘：
+    第二次进来 `not c.correction` 为假，照常落到既有终点。
+
+    为什么必须取并集：`_pending_intents` 是对当轮那句话做**具名别名**扫描，**写意图它
+    结构上看不见**（论据见 `agent/tasks.py` 头注）⇒ "主人一句话两件写、第一件办完"
+    的那一族它恒为空，这条纠偏从来没盖住过最常出现的那一族（现场
+    `logs/agent/traces/20261012/054330`）。
+
+    调用点那一段注里留着守卫的四条来历（`has_frames` / `not dropped` / 等等）——判据
+    一个字没变，搬出来的只是长度（本函数与 `_decide_late_correct` 都顶着复杂度闸）。
+    """
+    _left = _pending_intents(c.state)
+    if _left:
+        c.correction = (
+            "你这一轮**没有排任何工具**（等于宣布收尾），但主人那句话里还有这些"
+            "动作**一次都没有被执行过**："
+            + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
+            + "。你手里没有与它们相关的任何工具返回。本轮先把没做过的做掉"
+            "（一轮一件），再谈收尾。")
+        c.correction_kind = "收尾丢意图"
+        record("planner", "wrapup_intent_correct",
+               pending=[i["key"] for i in _left], round=c.rounds)
+        logger.warning("[planner] 零工具收尾但意图清单仍有未规划项（%s）"
+                       "→ 纠偏重决策一次：%s",
+                       "、".join(i["key"] for i in _left), c.correction[:120])
+        return _Step("continue")
+    _led = _ledger_next(c.state, c.config)
+    if not _led:
+        return None
+    _row, _step = _led
+    c.correction = _ledger_continue_nudge(_row, _step)
+    c.correction_kind = "收尾丢台账"
+    record("planner", "wrapup_ledger_correct", round=c.rounds,
+           goal=_row.get("goal"), tool=_step.get("tool"),
+           task_id=_row.get("task_id"))
+    logger.warning("[planner] 零工具收尾但跨轮台账仍有可执行剩余（%s → %s）"
+                   "→ 纠偏重决策一次：%s",
+                   _row.get("goal"), _step.get("tool"), c.correction[:120])
+    return _Step("continue")
+
+
 def _decide_late_correct(c: "_DecideCtx") -> "_Step":
     """阶段 D6+D7：参数不齐 / 写形态 / 动作重复 / 收尾丢意图 / 菜单摘项放弃 /
     写命令零调用，收在最后的剔空纠偏（全函数唯一的 `break`）。"""
@@ -7189,23 +7403,22 @@ def _decide_late_correct(c: "_DecideCtx") -> "_Step":
     # 不会把"已经被拒过的动作"再推它重试一次：上过计划的动作（哪怕被拒）spec 都
     # 进了 `executed`，`_intent_done` 会把它标成已完成 ⇒ 留在清单里的只能是
     # **从没被规划过**的那些。
+    #
+    # 20261012 **判据换成并集**（不是新增通道，见本文件"八条纠偏通道"的台账）：
+    # 上面那三条理由证明的只是"当轮那句话算得出来的、还没做的动作"——而
+    # `_pending_intents` 是对当轮那句话做**具名别名**扫描，**写意图它结构上看不见**
+    # （论据见 `agent/tasks.py` 头注）⇒ "一句话两件写"的那一族它恒为空，这条纠偏
+    # 从来没盖住过最常出现的那一族。跨轮台账里那件（`_ledger_next`）是同一件事的
+    # **持久**记法，两本账取并集：任一非空即续跑，**走同一个 `correction` 槽、
+    # 同一个单发锁存器**——所以不新增预算、不会与 `MAX_PLAN_ROUNDS` 叠乘
+    # （第二次进来 `not c.correction` 为假，照常落到既有终点）。
+    # 判据与两族的纠偏文本都在 `_wrapup_intent_correct`（20261012 搬出去，理由：
+    # 本函数顶着复杂度闸的棘轮）；**这一格的两条判据仍在同一个守卫之内**。
     if (not c.correction and c.has_frames and not c.plan_obj["tools"]
             and not c.plan_obj.get("dropped")):
-        _left = _pending_intents(c.state)
-        if _left:
-            c.correction = (
-                "你这一轮**没有排任何工具**（等于宣布收尾），但主人那句话里还有这些"
-                "动作**一次都没有被执行过**："
-                + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
-                + "。你手里没有与它们相关的任何工具返回。本轮先把没做过的做掉"
-                "（一轮一件），再谈收尾。")
-            c.correction_kind = "收尾丢意图"
-            record("planner", "wrapup_intent_correct",
-                   pending=[i["key"] for i in _left], round=c.rounds)
-            logger.warning("[planner] 零工具收尾但意图清单仍有未规划项（%s）"
-                           "→ 纠偏重决策一次：%s",
-                           "、".join(i["key"] for i in _left), c.correction[:120])
-            return _Step("continue")
+        _st = _wrapup_intent_correct(c)
+        if _st:
+            return _st
 
     # 菜单被摘之后"当场放弃"纠偏（20261008，见 `_MENU_DENIED_GIVEUP_NUDGE` 的长注）：
     # 上一轮受阻、该技能这一轮从菜单里摘掉，模型没有改选，而是**零工具收尾**——
@@ -12342,6 +12555,66 @@ def _blocked_article_targets(state) -> list[int]:
     return sorted(out)
 
 
+def _err_frame_claim_issue(reply: str, err_frames: list, state) -> "tuple | None":
+    """5a：工具失败（`__ERROR__` 帧）却回复完成式声称 → `(issue, 文案, 子句)`；放行 → None。
+
+    **为什么搬成一个函数**（20261012）：这一块是 `gate_node` 里唯一输入只有
+    `reply`/`err_frames`/`state` 的**自足判定链**，而账乙那条新网要在 `gate_node` 的
+    两个 PASS 出口接线——复杂度闸（`tests/test_complexity_budget.py`）对 `gate_node`
+    是**只许缩小**的棘轮，加了接线就必须还回去。判据、文案、顺序**一个字没改**。
+
+    三条来历（原文保留）：
+
+    · **回复含失败类实词则不触发**——如实报告失败是正当行为；
+    · **兜底文案按原因码分**（20260921）：同意闸/目标有据这两族错误帧说的是"还没动手"
+      （等确认 / 不知道改哪一篇），套通用"执行出错了"既与事实不符、又把用户引向
+      "再试一次"（20260920 §5.2 缺口③ 的同一个根因）；
+    · **混合轮收窄**（20261008，现场 trace `20261008T064432`）：同一轮里 13 真写成功、
+      11 被 `target_mismatch` 挡下，narrator 如实写了 13 那一条——5a 只看见「`__ERROR__`
+      在场 + 回复里有完成式声称」，就把整条回复换掉、套上「有一篇我没有动」：**把真发生
+      过的那次写也一起否认了**。主人读到的"如实报告"与系统台账当场矛盾，比不打回更坏
+      （本仓既有纪律："打回"的代价是吞掉整轮叙述，宁漏勿误伤）。
+    收窄的判据 = 这句完成式声称**指得到**被挡下的那些文章吗？指不到就不是在替它邀功：
+      · 声称所在的**子句**里点名了文章、且与被挡下的 id 无交集 ⇒ 说的是别的篇 ⇒ 放行；
+      · 子句里一个 id 都没点名（"两篇都改好了"）⇒ 退回看**整条回复**点名的 id，同样
+        无交集才放行——**泛指声称正是 5a 要拦的形状**，两处都没点名时一律照旧打回；
+      · 有交集、或根本没点名 ⇒ 照旧（下面按原因码分派兜底文案，一个字不动）。
+    """
+    if any(k in reply for k in
+           ("失败", "错误", "出错", "未成功", "不成功", "没成功", "还是不行")):
+        return None
+    if not (_COMPLETION_CLAIM_RE.search(reply) or _WRITE_CONTENT_CLAIM_RE.search(reply)):
+        return None
+    clause5a = _claim_clause(reply, _COMPLETION_CLAIM_RE, _WRITE_CONTENT_CLAIM_RE)
+    err_text = "\n".join(str(getattr(f, "content", "")) for f in err_frames)
+    _blocked_aids = _blocked_article_targets(state)
+    _named5a = (set(A.user_named_article_ids(clause5a))
+                or set(A.user_named_article_ids(reply))) if _blocked_aids else set()
+    # 下面整条分派链挂在同一个 if/elif 上（**每一支都 return**）：收窄成立时
+    # 四支全都不许进——20261008 实测踩过：只把第一支改成 elif，后面几支仍是
+    # 独立的 if，收窄形同虚设（放行的轮次照样被 target 支捞走）。
+    if _blocked_aids and _named5a and not (_named5a & set(_blocked_aids)):
+        record("gate", "err_frame_claim_other_target", blocked=_blocked_aids,
+               named=sorted(_named5a), clause=_clip_clause(clause5a))
+        logger.info("[gate] err 帧 + 完成式声称，但声称指向的是**别的篇**"
+                    "（本轮被挡下 %s，回复点名 %s）→ 不套兜底文案",
+                    _blocked_aids, sorted(_named5a))
+        return None
+    elif authz.consent_error_reason(err_text):
+        logger.info("[gate] 写操作未获同意却声称已完成 → fallback(consent)")
+        return ("err_frame_claim_consent", _FALLBACK_CONSENT, clause5a)
+    elif A.target_error_reason(err_text):
+        logger.info("[gate] 写操作目标无据却声称已完成 → fallback(unknown_target)")
+        return ("err_frame_claim_target", _FALLBACK_UNKNOWN_TARGET, clause5a)
+    elif A.policy_error_reason(err_text):
+        # 后台规则拒绝（20260926）：与上面两条同为"还没动手"，但指引不同——
+        # 政策拒绝**不许**说"再试一次"（重试一万次也一样），要换目标或换人。
+        logger.info("[gate] 写操作被后台规则拒绝却声称已完成 → fallback(policy)")
+        return ("err_frame_claim_policy", _FALLBACK_POLICY, clause5a)
+    logger.info("[gate] 工具帧 __ERROR__ 但回复含完成式声称 → fallback")
+    return ("err_frame_claim", _FALLBACK_ERR_CLAIM, clause5a)
+
+
 def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """确定性检查节点：核对 narrator 叙述与帧事实/计划注记的一致性后收尾。
 
@@ -12520,6 +12793,15 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             logger.info("[gate] 零帧纯作答轮：主人在问站内语料而这一轮零检索 → 重规划")
             return fail("site_corpus_question_without_tool", _FALLBACK_SITE_CORPUS, plan, 0)
 
+        # 账乙网（20261012，接线点 3）：零帧轮**也不是**可以随便收尾的地方——
+        # 台账里还剩一件能立刻动手的事（且本轮就在它的工作面上，`_ledger_in_scope`），
+        # 而回复把这件事反问回主人 ⇒ 回 planner 接着做（理由与射程见
+        # `_ledger_continuation_issue`；这是**循环终止**判据，不是谎话判据）。
+        # 放在 `record("gate","pass")` **之前**：打回的这一轮不许在 trace 里留下
+        # 一个"pass"，否则分母里混进被拦下的轮次，两族读数的差值就废了。
+        _led = _ledger_continuation_issue(reply, state, config)
+        if _led:
+            return fail(_led[0], _led[1], plan, len(frames), _led[2])
         record("gate", "pass", zero_frame=True,
                duration_s=round(time.monotonic() - _t0, 2))
         logger.info("[gate] PASS（零工具轮，skill=%s）", plan["skill"])
@@ -12529,57 +12811,15 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # `tool_text` 已在第 2/3 节之前算好（命令前缀那一支要对账），这里直接用。
     err_frames = [f for f in frames
                   if str(getattr(f, "content", "")).lstrip().startswith("__ERROR__")]
-    # 5a. 工具失败（__ERROR__ 帧）却回复完成式声称 → 把失败说成成功
-    #     （回复含失败类实词则不触发——如实报告失败是正当行为）
-    if err_frames and not any(k in reply for k in
-                              ("失败", "错误", "出错", "未成功", "不成功", "没成功", "还是不行")):
-        if _COMPLETION_CLAIM_RE.search(reply) or _WRITE_CONTENT_CLAIM_RE.search(reply):
-            # 兜底文案按**原因码**分（20260921）：同意闸/目标有据这两族错误帧说的
-            # 是"还没动手"（等确认 / 不知道改哪一篇），套通用"执行出错了"既与事实
-            # 不符、又把用户引向"再试一次"（20260920 §5.2 缺口③ 的同一个根因）。
-            clause5a = _claim_clause(reply, _COMPLETION_CLAIM_RE, _WRITE_CONTENT_CLAIM_RE)
-            err_text = "\n".join(str(getattr(f, "content", "")) for f in err_frames)
-            # 混合轮收窄（20261008，现场 trace `20261008T064432`）：同一轮里 13 真写成功、
-            # 11 被 `target_mismatch` 挡下，narrator 如实写了 13 那一条——5a 只看见
-            # 「__ERROR__ 在场 + 回复里有完成式声称」，就把整条回复换掉、套上
-            # 「有一篇我没有动」：**把真发生过的那次写也一起否认了**。主人读到的"如实报告"
-            # 与系统台账当场矛盾，比不打回更坏（本仓既有纪律："打回"的代价是吞掉整轮叙述，
-            # 宁漏勿误伤）。
-            # 判据 = 这句完成式声称**指得到**被挡下的那些文章吗？指不到就不是在替它邀功：
-            #   · 声称所在的**子句**里点名了文章、且与被挡下的 id 无交集 ⇒ 说的是别的篇 ⇒ 放行；
-            #   · 子句里一个 id 都没点名（"两篇都改好了"）⇒ 退回看**整条回复**点名的 id，同样
-            #     无交集才放行——**泛指声称正是 5a 要拦的形状**，两处都没点名时一律照旧打回；
-            #   · 有交集、或根本没点名 ⇒ 照旧（下面按原因码分派兜底文案，一个字不动）。
-            _blocked_aids = _blocked_article_targets(state)
-            _named5a = (set(A.user_named_article_ids(clause5a))
-                        or set(A.user_named_article_ids(reply))) if _blocked_aids else set()
-            # 下面整条分派链挂在同一个 if/elif 上（**每一支都 return**）：收窄成立时
-            # 四支全都不许进——20261008 实测踩过：只把第一支改成 elif，后面几支仍是
-            # 独立的 if，收窄形同虚设（放行的轮次照样被 target 支捞走）。
-            if _blocked_aids and _named5a and not (_named5a & set(_blocked_aids)):
-                record("gate", "err_frame_claim_other_target", blocked=_blocked_aids,
-                       named=sorted(_named5a), clause=_clip_clause(clause5a))
-                logger.info("[gate] err 帧 + 完成式声称，但声称指向的是**别的篇**"
-                            "（本轮被挡下 %s，回复点名 %s）→ 不套兜底文案",
-                            _blocked_aids, sorted(_named5a))
-            elif authz.consent_error_reason(err_text):
-                logger.info("[gate] 写操作未获同意却声称已完成 → fallback(consent)")
-                return fail("err_frame_claim_consent", _FALLBACK_CONSENT,
-                                        plan, len(frames), clause5a)
-            elif A.target_error_reason(err_text):
-                logger.info("[gate] 写操作目标无据却声称已完成 → fallback(unknown_target)")
-                return fail("err_frame_claim_target", _FALLBACK_UNKNOWN_TARGET,
-                                        plan, len(frames), clause5a)
-            elif A.policy_error_reason(err_text):
-                # 后台规则拒绝（20260926）：与上面两条同为"还没动手"，但指引不同——
-                # 政策拒绝**不许**说"再试一次"（重试一万次也一样），要换目标或换人。
-                logger.info("[gate] 写操作被后台规则拒绝却声称已完成 → fallback(policy)")
-                return fail("err_frame_claim_policy", _FALLBACK_POLICY,
-                                        plan, len(frames), clause5a)
-            else:
-                logger.info("[gate] 工具帧 __ERROR__ 但回复含完成式声称 → fallback")
-                return fail("err_frame_claim", _FALLBACK_ERR_CLAIM, plan, len(frames),
-                                        clause5a)
+    # 5a. 工具失败（__ERROR__ 帧）却回复完成式声称 → 把失败说成成功。
+    #     判据本体、"如实报告失败"与"声称指的是别的篇"两条放行、原因码分派、
+    #     20261008 混合轮收窄，整块在 `_err_frame_claim_issue`（20261012 搬出去，
+    #     理由见那里的注：账乙网要在本函数的两个 PASS 出口接线，而复杂度闸对本函数
+    #     是只许缩小的棘轮）。
+    if err_frames:
+        _e5a = _err_frame_claim_issue(reply, err_frames, state)
+        if _e5a:
+            return fail(_e5a[0], _e5a[1], plan, len(frames), _e5a[2])
     # 5b. 确认式导航（NAVIGATE: 帧、无 AUTO_NAVIGATE:）却回复到达声称 →
     #     页面实际未跳转（前端等确认）
     #     **20260926 起休眠**：navigate 技能恒发 confirm=false、前端确认卡停用 ⇒
@@ -12789,6 +13029,13 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                         _fallback_deed_no_receipt([lbl for lbl, _ in _claims5h]),
                                     plan, len(frames), clause5h)
 
+    # 账乙网（20261012，接线点 3）：有帧轮的最后一道——上面那些判据问的都是"这句话真不真"，
+    # 这一条问的是"这一轮该不该在这儿收尾"。现场 `20261012T054330`：确认轮办完发通知、
+    # 台账还剩"降级"那件，回复如实说"降级还没做"（字字属实 ⇒ 上面每一条都放行了）
+    # 却把它反问回主人。判据与守卫全在 `_ledger_continuation_issue`。
+    _led = _ledger_continuation_issue(reply, state, config)
+    if _led:
+        return fail(_led[0], _led[1], plan, len(frames), _led[2])
     record("gate", "pass", zero_frame=False, frames=len(frames),
            duration_s=round(time.monotonic() - _t0, 2))
     logger.info("[gate] PASS（skill=%s frames=%d）", plan["skill"], len(frames))
@@ -12808,7 +13055,8 @@ def route_after_planner(state: AgentState) -> Literal["execute", "model"]:
     return "execute" if plan["tools"] else "model"
 
 
-def route_after_execute(state: AgentState) -> Literal["planner", "reflector", "end"]:
+def route_after_execute(state: AgentState, config: RunnableConfig | None = None
+                        ) -> Literal["planner", "reflector", "end"]:
     """execute 执行完的下一站（20260904 checker 驱动路由）：
       - pending_confirm（20260921）→ **end**：本轮只弹了个确认框，什么都没执行。
         绝不能去 model——narrator 面对"零工具帧 + 一条待确认的写"最可能的输出
@@ -12840,8 +13088,20 @@ def route_after_execute(state: AgentState) -> Literal["planner", "reflector", "e
     # 原话，于是把没做的说成「夜间模式和雪花特效这边也一并处理好了」（同轮 trace
     # 实证，gate 放行）。交回 planner 正是**非弹窗轮早就在做的事**（规则 5 + 每轮
     # 重算的 intent_hints），弹窗只是把那条路截断了一次。
+    #
+    # 20261012 补上这条例外的**另一半**（`_ledger_has_next`）：`_pending_intents` 是对
+    # **当轮那句话**做**具名别名**扫描，**写意图它结构上看不见**（论据见 `agent/tasks.py`
+    # 头注）——所以"一句话两件写、第一件办了"的那种轮次它恒为空，20260927 那条修复
+    # 从来没盖住过最常出现的那一族。生产实证 `logs/agent/traces/20261012/054330`：
+    # 确认轮发完通知，`gate.task_ledger_probe rows=3 settled=[1]`（台账明写还剩两件），
+    # 路由却见空清单 ⇒ 直去 narrator ⇒ 回复「至于降级身份那一步……**要现在继续给他降成
+    # 「杂鱼」吗？你说一声我就去办。**」——把一个系统自己已经登记、参数已备的剩余退回去
+    # 让主人重说一遍。现在那两本账**取并集**：当轮那句话算得出来的（快、但看得见的窄）
+    # 与跨轮台账里还剩的（准、且写意图同样登记在册）任一非空即交回 planner。
+    # 守卫（开关 / 只续当前请求的语境 / 真有可执行剩余）全在 `_ledger_has_next`。
     if state.get("confirm_grant") and not state.get("blocked"):
-        return "planner" if _pending_intents(state) else "model"
+        return "planner" if (_pending_intents(state)
+                             or _ledger_has_next(state, config)) else "model"
     if not state.get("blocked"):
         return "planner"
     if state.get("blocked_repeat"):

@@ -8,9 +8,11 @@
 
 本文件喂**合成 trace**（不读生产 `logs/`——套件必须与线上语料无关，否则结论随当天流量变）：
 
-  · `scan_one` 的返回形状（六个键一个不少）；
+  · `scan_one` 的返回形状（七个键一个不少）；
   · **I6 任务登记的写端/消费端对账**（批 D）四格逐格：`no_id` / `noconv` /
     `unadvanced`（含它的分母 `injected` 与两条不该命中的对照）/ `corrected`；
+  · **I7 废话轮**（20261012 批）三层与逐层否定：不在工作面 / 在工作面但没证据 /
+    证据干净 / 三层齐 = `waste` / 还剩但不推诿 = `leftover`；
   · `_accumulate` 的计数键名与 hits 分流（观察量只计数、缺陷量进清单）；
   · I1/I2/I4 各一条最小样例（它们此前没有测试，顺手把口径钉住，防止重构改坏）。
 
@@ -51,13 +53,14 @@ def _kinds(rows: list) -> list:
 
 # ── ① scan_one 的返回形状 ───────────────────────────────────────────────
 def test_scan_one_shape():
-    print("\n[形状] scan_one 六个键一个不少（消费方按名取，少一个就是静默 None）")
+    print("\n[形状] scan_one 七个键一个不少（消费方按名取，少一个就是静默 None）")
     one = CI.scan_one(_trace())
-    check("空 trace 也有六格", set(one) == {"i1", "i2", "i3", "i4", "i5", "i6"},
+    check("空 trace 也有七格", set(one) == {"i1", "i2", "i3", "i4", "i5", "i6", "i7"},
           str(sorted(one)))
     check("i4 是计数（其余是清单）",
           isinstance(one["i4"], int) and isinstance(one["i6"], list))
     check("全空时 I6 五格全 0 条", one["i6"] == [], str(one["i6"]))
+    check("全空时 I7 无命中", one["i7"] == [], str(one["i7"]))
 
 
 # ── ② I6：写端 vs 消费端对账（批 D） ─────────────────────────────────────
@@ -112,6 +115,62 @@ def test_i6_corrected_is_observational():
     check("计数记上了", counts.get("i6_corrected") == 1, str(dict(counts)))
     check("**不进 hits**（它不是「哪一条出事了」）",
           "i6_corrected" not in hits, str(dict(hits)))
+
+
+# ── ②′ I7：废话轮（20261012 批） ─────────────────────────────────────
+_SOLICIT = "降级还没做。要现在继续给他降成「杂鱼」吗？你说一声我就去办。"
+
+
+def test_i7_needs_all_three_layers():
+    print("\n[I7] 三层与缺一层都不成立（这正是它不误伤正当建议的原因）")
+    probe_ok = _ev("gate", "task_ledger_probe", rows=3, settled=["at_1"])
+    inj = _ev("producer", "task_inject", n=3, ids=["at_1", "at_2", "at_3"])
+    # ① 不在工作面上（纯闲聊轮）：句子再像推诿也不判——结构上没"已登记的事"可退回
+    check("不在台账工作面上 → 不判（哪怕回复是那句推诿话）",
+          CI._i7_rows(_trace(reply=_SOLICIT)) == [])
+    # ② 在工作面上、但没有"还剩"的直接证据 ⇒ 只产出分母，**不**记 leftover/waste
+    check("在工作面上但没证据 → 只有分母 on_face",
+          _kinds(CI._i7_rows(_trace(inj, reply=_SOLICIT))) == ["on_face"],
+          str(CI._i7_rows(_trace(inj, reply=_SOLICIT))))
+    check("结算干净（rows == settled）→ 也只有分母",
+          _kinds(CI._i7_rows(_trace(
+              inj, _ev("gate", "task_ledger_probe", rows=1, settled=["at_1"]),
+              reply=_SOLICIT))) == ["on_face"])
+    # ③ 三层齐 ⇒ waste（带词形命中，人一眼看见是哪句）
+    waste = CI._i7_rows(_trace(inj, probe_ok, reply=_SOLICIT))
+    check("三层齐 → waste", _kinds(waste) == ["on_face", "waste"], str(waste))
+    check("  带命中词与台账读数（定位现场要的两样）",
+          waste[1]["clause"] and waste[1]["rows"] == 3 and waste[1]["settled"] == 1)
+    check("  带上注入的 id（人得知道还剩的是哪几件）", waste[1]["ids"] == "at_1,at_2,at_3")
+    # ④ 还剩但回复没把主动权退回 ⇒ leftover（观察量，只列不设目标）
+    left = CI._i7_rows(_trace(inj, probe_ok, reply="通知发完了，我接着去办降级。"))
+    check("还剩但没推诿词 → leftover（不是 waste）",
+          _kinds(left) == ["on_face", "leftover"], str(left))
+    check("  leftover 不带词形命中", left[1]["clause"] == "")
+    # 老机制的台账也算工作面（20261009 之前是 `ledger_frame`）
+    check("`planner.ledger_frame` 的老台账也在工作面上",
+          _kinds(CI._i7_rows(_trace(
+              _ev("planner", "ledger_frame", ids=["userId:1"]), probe_ok,
+              reply=_SOLICIT))) == ["on_face", "waste"])
+
+
+def test_i7_accumulate_routing():
+    print("\n[I7] `on_face` 是分母（只计数、不进清单），waste/leftover 都进清单")
+    inj = _ev("producer", "task_inject", n=2, ids=["at_1", "at_2"])
+    probe_ok = _ev("gate", "task_ledger_probe", rows=2, settled=["at_1"])
+    counts, hits = Counter(), defaultdict(list)
+    CI._accumulate(CI.scan_one(_trace(inj, probe_ok, reply=_SOLICIT)),
+                   counts, hits, "20261012T054330", 1)
+    check("i7_waste = 1", counts.get("i7_waste") == 1, str(dict(counts)))
+    check("i7_on_face = 1（分母真的在数）", counts.get("i7_on_face") == 1)
+    check("hits 里有 waste、**没有** on_face（分母不进清单）",
+          "i7_waste" in hits and "i7_on_face" not in hits, str(sorted(hits)))
+    counts2, hits2 = Counter(), defaultdict(list)
+    CI._accumulate(CI.scan_one(_trace(inj, probe_ok, reply="接着办。")),
+                   counts2, hits2, "20261012T054331", 1)
+    check("leftover 也进清单（只列不设目标 ≠ 不列）",
+          "i7_leftover" in hits2 and counts2.get("i7_leftover") == 1,
+          f"{sorted(hits2)} {dict(counts2)}")
 
 
 # ── ③ _accumulate：键名与 hits 分流 ─────────────────────────────────────
@@ -191,15 +250,34 @@ def test_report_mentions_every_i6_kind():
     check("产出集合 ⊆ 报告认识的那几种", produced <= set(KINDS), str(sorted(produced)))
 
 
+def test_report_mentions_every_i7_kind():
+    print("\n[报告] `_i7_rows` 产出的每一种 kind 都在 report() 里露面")
+    import inspect
+    src = inspect.getsource(CI.report)
+    missing = [k for k in ("on_face", "leftover", "waste") if f"i7_{k}" not in src]
+    check("每个 kind 都读了一遍（含分母 on_face）", not missing, str(missing))
+    produced = set()
+    inj = _ev("producer", "task_inject", n=2, ids=["at_1", "at_2"])
+    probe_ok = _ev("gate", "task_ledger_probe", rows=2, settled=["at_1"])
+    produced |= set(_kinds(CI._i7_rows(_trace(inj))))
+    produced |= set(_kinds(CI._i7_rows(_trace(inj, probe_ok, reply=_SOLICIT))))
+    produced |= set(_kinds(CI._i7_rows(_trace(inj, probe_ok, reply="接着办。"))))
+    check("产出集合 ⊆ 报告认识的那几种",
+          produced <= {"on_face", "leftover", "waste"}, str(sorted(produced)))
+
+
 if __name__ == "__main__":
     for fn in (test_scan_one_shape,
                test_i6_declare_without_id,
                test_i6_declare_without_conversation,
                test_i6_unadvanced_needs_injection,
                test_i6_corrected_is_observational,
+               test_i7_needs_all_three_layers,
+               test_i7_accumulate_routing,
                test_accumulate_key_names_and_routing,
                test_i1_i2_i4_minimal,
-               test_report_mentions_every_i6_kind):
+               test_report_mentions_every_i6_kind,
+               test_report_mentions_every_i7_kind):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
     sys.exit(1 if FAILS else 0)
