@@ -18,6 +18,10 @@
 
 不 import 生产图、不连库、不调 LLM：模型与真工具都用假的顶（`_llm` / `_real_tools`
 是模块级函数，直接换掉）。**验的是接线，不是智能**——准确率归 golden A/B。
+
+**唯一一处例外是 ⑧ 的端到端那两条**：它们要验"臂发的那帧到不到主人手里"，就得把臂挂到
+**真生产者**（`server._run_agent_stream_to_queue`）上跑一次——那一段**照旧零网络零 LLM**
+（模型还是 `_llm` 替身），只是不再"不 import 生产图"：那正是它要测的那条缝。
 """
 import sys
 from pathlib import Path
@@ -32,6 +36,7 @@ from langchain_core.messages import (  # noqa: E402
     AIMessage,
     AIMessageChunk,
     HumanMessage,
+    SystemMessage,
     ToolMessage,
 )
 
@@ -128,6 +133,52 @@ def _last_node(frames: list, node: str) -> dict:
     """
     hits = [u[node] for u in _ups(frames) if node in u]
     return hits[-1] if hits else {}
+
+
+def _gate_frames(frames: list) -> list[dict]:
+    """`updates` 通道上全部 `gate` 载荷（保序）。"""
+    return [u["gate"] for u in _ups(frames) if "gate" in u]
+
+
+def _drive_producer(script: list, msg: str = "谢谢你", tid: str = "t-react-gate") -> list:
+    """把**这一条臂**挂到**真生产者**上跑一次，收队列里的原始帧。
+
+    上半段（⑧a–⑧c）验的是"臂自己发不发那条帧"，这一段验的是那帧**到不到主人手里**：
+    生产者按名字读 `updates["gate"]`、`fallback_text` 走 `emit_reset("text",…)` 并把正文
+    换成兜底文本。两段之间那条缝（帧形状对不上 ⇒ 生产者静默不发）正是本仓最常复发的
+    "判据没接到底"，而它**离线可测**——所以在这里钉住，别留给 golden。
+    """
+    import asyncio
+    import threading
+
+    import server
+
+    out: list = []
+    queue: asyncio.Queue = asyncio.Queue()
+    R._llm = lambda: _Scripted(messages=iter(script), ai_message_chunk=iter([]))
+    R._real_tools = lambda *a, **k: {}
+    R._system_prompt = lambda *a, **k: "你是测试用助手。"
+    arm = R.build()
+
+    async def main() -> None:
+        loop = asyncio.get_running_loop()
+        old = server._agent
+        server._agent = arm
+        t = threading.Thread(target=server._run_agent_stream_to_queue,
+                             args=([HumanMessage(content=msg)], tid, queue, loop))
+        try:
+            t.start()
+            while True:
+                item = await asyncio.wait_for(queue.get(), 60)
+                out.append(item)
+                if item is None:      # 收尾哨兵也收进来（形状本身是断言的一部分）
+                    break
+        finally:
+            server._agent = old
+        t.join(timeout=60)
+
+    asyncio.run(main())
+    return out
 
 
 # ── ① 帧契约 ─────────────────────────────────────────────────────────
@@ -426,6 +477,96 @@ _mupd = _last_node(_draft, "model")
 check("model update 的末条是最终答复（`final_reply` 落库的那一格同源）",
       str((_mupd.get("messages") or [])[-1].content) == "最终答复：这一件我没做成",
       str((_mupd.get("messages") or [])[-1].content))
+
+# ── ⑧ 闸门谓词（P4，20261011）：这条臂**自己**能不能发 fallback ────────────────
+# 为什么要单立一节：这一族此前**结构上不可能为假**——臂从不发 `gate.fallback_text`，
+# 于是语料里 138 条 `forbid_fallback` 断言白送（`eval/arm_capability.py` 因此判
+# `comparable=False`），那唯一一次全量读数（0.9216）不可读。
+#
+# ⚠️ **别拿 `arm_capability --arm react --probe` 当这一批的判据**：那条正控是**从外面**
+# 给臂套一层、补一条 `gate.fallback_text` 帧（探针的设计就是"后门不留在臂里"），所以它
+# 验的是**下游生产者**接没接到底，与这条臂会不会发那条帧**无关**。实测过了：把本批的
+# 改动整份 stash 掉，`--probe` 照旧打印 `comparable = True`。判这一批只能靠下面这几条。
+print("\n⑧ 闸门谓词（P4）：臂自己发 fallback / 撑一次重规划 / 干净轮一个字节都不加")
+_CMD_REPLY = "好的，我这就带你过去。\nAUTO_NAVIGATE:/guestbook"
+RAN.clear()
+_g = _run([AIMessage(content=_CMD_REPLY)], {}, principal=UNKNOWN, msg="谢谢你")
+_gf = _gate_frames(_g)
+check("正文带命令前缀 ⇒ 产 `fallback_text`（生产据此发 `__RESET__` 并换正文）",
+      bool(_gf) and bool(_gf[0].get("fallback_text")) and _gf[0].get("done") is True,
+      repr(_gf))
+check("兜底轮**不发**正文帧（正文换成兜底文本的是生产者，不是臂自己去演）",
+      not [c for c in _chunks(_g) if isinstance(c, AIMessageChunk)],
+      repr([str(c.content)[:30] for c in _chunks(_g)]))
+_sys = [c for c in _chunks(_g) if isinstance(c, SystemMessage)]
+check("同步路径的 `[Fallback 决定]` 也在（`_run_agent_sync` 只读 messages 通道那一格）",
+      len(_sys) == 1 and str(_sys[0].content).startswith("[Fallback 决定]:"),
+      repr([str(c.content)[:24] for c in _sys]))
+
+# 「只此一次」：`_REPLAN_ISSUES` 那一族第一次交回内层重来，第二次必走兜底
+# （`gate_node` 自己用 `gate_replan` 保证）——所以这一跑**恰好**两格 gate，
+# 一格 replan、一格 fallback。多一格 = 循环没封顶；少一格 = 重规划没接上。
+_CLAIM = "我刚才调用了 rake_search 查了一下，站内没有相关文章。"
+RAN.clear()
+_rp = _run([AIMessage(content=_CLAIM), AIMessage(content=_CLAIM)],
+           {}, principal=UNKNOWN, msg="谢谢你")
+_gf2 = _gate_frames(_rp)
+check("零帧声称 ⇒ 第一次是 `gate_replan`（交回内层重规划一次，不结束本轮）",
+      bool(_gf2) and _gf2[0].get("gate_replan") is True
+      and _gf2[0].get("done") is False, repr(_gf2))
+check("重规划**只此一次**：第二轮仍不过 ⇒ 第二格就是兜底（恰好两格 gate）",
+      len(_gf2) == 2 and bool(_gf2[1].get("fallback_text"))
+      and not _gf2[1].get("gate_replan"), repr(_gf2))
+check("重规划那格的提示**不上** messages 通道（它只是内层的输入，不是给主人看的正文）",
+      len([c for c in _chunks(_rp) if isinstance(c, SystemMessage)
+           and not str(c.content).startswith("[Fallback 决定]")]) == 0,
+      repr([str(c.content)[:24] for c in _chunks(_rp)]))
+
+# 负控：一句干净的话**一个 gate 帧都不该有**。少了这一条，上面两条对"闸门恒开火"的
+# 实现同样全绿——而那比不接闸门更糟（每个正常轮都被换成道歉）。
+RAN.clear()
+_ok = _run([AIMessage(content="你好呀，有什么可以帮你的吗？")],
+           {}, principal=UNKNOWN, msg="谢谢你")
+check("干净轮：零 gate 帧、正文原样上 messages 通道",
+      not _gate_frames(_ok)
+      and any("你好呀" in str(c.content) for c in _chunks(_ok)),
+      repr(_gate_frames(_ok)))
+
+# 端到端（真生产者）：臂→`server._run_agent_stream_to_queue`→队列原始帧
+_o = _drive_producer([AIMessage(content=_CMD_REPLY)])
+_resets = [x for x in _o if isinstance(x, str) and x.startswith("__RESET__")]
+check("端到端：真生产者收到那帧后**真的发了** `__RESET__`（scope=text，只作废叙述）",
+      len(_resets) == 1 and _resets[0].startswith("__RESET__:text:"), repr(_resets))
+_o2 = _drive_producer([AIMessage(content="你好呀，有什么可以帮你的吗？")], tid="t-react-gate-ctl")
+check("端到端负控：干净轮一条 `__RESET__` 都没有",
+      not [x for x in _o2 if isinstance(x, str) and x.startswith("__RESET__")], repr(_o2))
+
+# 接线锁：判据只许有一份
+check("臂侧**直调** `graph.gate_node`（判据不抄第二份 ⇒ 不会各自漂）",
+      _arm_src.count("gate_node(") == 1 and "from agent.graph import" in _arm_src)
+# 这一条**必须看代码、不看文本**：臂的注释里正解释着"这几条判据一条都没抄"，
+# 裸搜字符串会把那段说明本身判成违规（"断言先剥注释"——同族坑见 CSS 那次的
+# `[^}]*` 在注释处截断）。所以走 AST：只在**标识符**里找，散文里点名不算数。
+def _idents(src: str) -> set[str]:
+    import ast
+    out: set[str] = set()
+    for n in ast.walk(ast.parse(src)):
+        if isinstance(n, ast.Name):
+            out.add(n.id)
+        elif isinstance(n, ast.Attribute):
+            out.add(n.attr)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            out.update((a.asname or a.name).split(".")[-1] for a in n.names)
+    return out
+
+
+_ARM_IDS = _idents(_arm_src)
+check("判据本体一个标识符都没搬进来（`_REPLAN_ISSUES` / `_fallback_result` / `_claim_issue`）",
+      not (_ARM_IDS & {"_REPLAN_ISSUES", "_fallback_result", "_claim_issue"}))
+
+
+check("`plan_encode` **不经手**——臂手上是 `plan_obj`，塑形走 `plan_state`（唯一获准的编码方）",
+      "plan_encode" not in _ARM_IDS and "plan_state" in _ARM_IDS)
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

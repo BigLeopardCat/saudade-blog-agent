@@ -44,9 +44,15 @@ producer 用 `confirm_text` 发**一次**——臂这边一个字节的正文都
 纪律是 narrator（零工具节点）的口径，所以前面加了一段立场改写（`_DISCIPLINE_STANCE`，
 同 `audience_block` 的手法：只换指称、实质一条不放宽）。
 
-**这一版明确不做的**（都是 `docs` 里 P4–P6 的活，别当成已经做完了）：
-  · 闸门谓词（P4）⇒ `gate.fallback_text`/`gate_replan` 恒不发，`forbid_fallback`
-    在 react 臂上**不可证伪**（这正是 P0 要给它的合成正控）;
+**闸门谓词（P4，20261011 已接）**：这条臂此前**结构上不会发 fallback** ⇒
+`arm_capability --arm react` 判 `comparable = False`（372 个可证伪键实例里 138 条落在
+`forbid_fallback`，全白发）⇒ 那唯一一次全量读数（`20261005_203521_332`，0.9216）
+**不可读、不许引用**。接法见 `ReactGoldenArm._gate`：**直调 `graph.gate_node`**，
+arm 侧只做两件事——按它读的七个键塑形一份最小 state（`_gate_state`），
+把返回翻成帧。判据（`_REPLAN_ISSUES` 约 20 族 / `_claim_issue` / `_fallback_result`
+/ `_replan_result`）**一条都没抄**：抄第二份就是抄一条漂移源，而它恰好是本仓最常见的缺陷。
+
+**这一版明确不做的**（都是 `docs` 里 P5–P6 的活，别当成已经做完了）：
   · 跨轮执行记忆 + task 行（P5）⇒ 不发 `task_frames`、不读不写台账族；
   · narrator 的**独立节点**（P6 后半）⇒ 收尾仍由**同一个模型**写。
     **动作事实块这一格 20261005 起不再是缺口**：生产两臂都停止代印（
@@ -70,14 +76,15 @@ import json
 import logging
 from typing import Any, Iterator
 
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.messages import (AIMessage, AIMessageChunk, HumanMessage,
+                                     SystemMessage, ToolMessage)
 from langchain_core.tools import StructuredTool
 
 from agent.context import (_doc_anchors, _frame_texts, _last_assistant_utterance,
                            _last_user_msg, _page_ctx, _recent_tail, _short_reply_hint)
 from agent.decisions import _article_fast_path, _intent_hints
 from agent.graph import (NARRATOR_DISCIPLINE, _confirm_popup, _pending_ledger_frame,
-                         _principal_of, _render_planner_prompt)
+                         _principal_of, _render_planner_prompt, gate_node, plan_state)
 from agent.native_plan import build_tool_schema
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import RunLedger, SkillExecutor, build_agent
@@ -229,68 +236,101 @@ class ReactGoldenArm:
         # 发帧**：`run_one` 的 `text` 是 messages 通道上每一条分片的拼接，先发的那条
         # 草稿会与真正的最终答复**连在一起**交给判据与主人（"消息壳架空判据"那一族）。
         # 所以零工具答复先扣在这里，**循环结束才发**；被打回时由后一条覆盖。
-        pending_final: AIMessage | None = None
-        try:
-            # 内层只看得到本轮那一句（理由见模块头注的最后一条口径偏差）——但那一句
-            # **带着它的多模态部件**（见 `_inner_message`：按文本重建会把图片丢掉）。
-            for step in agent.stream({"messages": [_inner_message(messages, user_msg)]},
-                                     {"recursion_limit": REC_LIMIT},
-                                     stream_mode="updates"):
-                for node, upd in (step or {}).items():
-                    msgs = list((upd or {}).get("messages") or [])
-                    if node == "tools":
-                        sent_calls = yield from self._on_tools(
-                            executor, ledger, sent_calls)
-                        # 写操作卡在同意闸上 ⇒ 这一轮到此为止（P3）。位置与生产同源：
-                        # `graph.execute_node` 是"逐 spec 循环**之前**判一次"，本线
-                        # 是"这一批工具轮跑完、模型再决策之前"判一次——两者都保证
-                        # **一张卡不带任何半截执行**。
-                        popup = self._pending_popup(ledger, executor, state, last_plan,
-                                                    messages, principal, user_msg, config)
-                        if popup is not None:
-                            yield from self._on_popup(popup, ledger)
-                            return   # 与 graph 的 `route_after_execute` → END 同义
-                        continue
-                    for m in msgs:
-                        if not isinstance(m, AIMessage):
+        #
+        # **闸门打回也是一条"重来一次"**（P4，20261011）：`gate_node` 判不过 `_REPLAN_ISSUES`
+        # 那一族时返回 `gate_replan`，生产那边由 `route_after_gate` 走回 planner。本线没有
+        # 那条边，等价物是**再 invoke 一次内层**（只此一次，见 `_gate` 的注），所以外层是个
+        # 两圈封顶的循环；`notes` 就是 `_replan_result` 那条确定性提示。
+        notes: list = []
+        replan_used = False
+        while True:
+            pending_final: AIMessage | None = None
+            try:
+                # 内层只看得到本轮那一句（理由见模块头注的最后一条口径偏差）——但那一句
+                # **带着它的多模态部件**（见 `_inner_message`：按文本重建会把图片丢掉）。
+                # 重规划那一圈把 gate 的提示接在同一条 HumanMessage 之后（`_replan_result`
+                # 已经把被否定的那条 AI 消息从生产 state 里摘掉了；这里内层每次 invoke 都
+                # 从空 state 起，被否定的那条**天然不在**上下文里，与生产同形）。
+                for step in agent.stream(
+                        {"messages": [_inner_message(messages, user_msg)] + notes},
+                        {"recursion_limit": REC_LIMIT},
+                        stream_mode="updates"):
+                    for node, upd in (step or {}).items():
+                        msgs = list((upd or {}).get("messages") or [])
+                        if node == "tools":
+                            sent_calls = yield from self._on_tools(
+                                executor, ledger, sent_calls)
+                            # 写操作卡在同意闸上 ⇒ 这一轮到此为止（P3）。位置与生产同源：
+                            # `graph.execute_node` 是"逐 spec 循环**之前**判一次"，本线
+                            # 是"这一批工具轮跑完、模型再决策之前"判一次——两者都保证
+                            # **一张卡不带任何半截执行**。
+                            popup = self._pending_popup(ledger, executor, state, last_plan,
+                                                        messages, principal, user_msg, config)
+                            if popup is not None:
+                                yield from self._on_popup(popup, ledger)
+                                return   # 与 graph 的 `route_after_execute` → END 同义
                             continue
-                        if node == "model":
-                            if not m.tool_calls:
-                                # 零工具 = 收尾候选：**扣着不发**（见 `pending_final` 的注）。
-                                pending_final = m
+                        for m in msgs:
+                            if not isinstance(m, AIMessage):
                                 continue
-                            # 这一轮点名的技能（`plan_obj`）：`_plan_skill` 只读它，
-                            # 而令牌里签的技能名就是它——取不到 ⇒ 空串 ⇒ `sign` 拒绝
-                            # 签发 ⇒ 卡弹不出来。所以按"最近一次有效计划"记着。
-                            plan = _plan_of(m.tool_calls, role)
-                            if plan:
-                                last_plan = plan
-                            yield from self._on_model(m, role, plan)
-                        elif _is_convergence_node(node):
-                            # 收敛中间件注入的**确定性收尾**（`ConvergenceMiddleware._stop`
-                            # 返回 `{"jump_to": "end", "messages": [AIMessage(收尾正文)]}`）。
-                            # 它挂在中间件自己的节点名下（`ConvergenceMiddleware.after_model`
-                            # / `.before_model`），**不叫 "model"** —— 20261005 实测（脚本化假
-                            # 模型跑 `build_agent` 的原始 update 流）：只认 "model" 会把这条
-                            # 正文**静默丢掉**，用户拿到的是**空回复**，而报告里看不出是
-                            # "模型没说"还是"适配器没转发"。这不是边角：撞预算与"同一个调用
-                            # 重试两次"是本线**唯一**的两条收尾路径（`ConvergenceMiddleware`
-                            # 的全部判据都在这里），丢掉它 = 那两类运行全部记成"什么都没说"。
-                            # 确定性收尾取代任何扣着的草稿：那一条才是这一轮的事实。
-                            pending_final = None
-                            yield from self._on_wrap_up(m)
-            # 循环正常走完 ⇒ 扣着的收尾候选就是**最终答复**（只有它没被打回才会走到
+                            if node == "model":
+                                if not m.tool_calls:
+                                    # 零工具 = 收尾候选：**扣着不发**（见 `pending_final` 的注）。
+                                    pending_final = m
+                                    continue
+                                # 这一轮点名的技能（`plan_obj`）：`_plan_skill` 只读它，
+                                # 而令牌里签的技能名就是它——取不到 ⇒ 空串 ⇒ `sign` 拒绝
+                                # 签发 ⇒ 卡弹不出来。所以按"最近一次有效计划"记着。
+                                plan = _plan_of(m.tool_calls, role)
+                                if plan:
+                                    last_plan = plan
+                                yield from self._on_model(m, role, plan)
+                            elif _is_convergence_node(node):
+                                # 收敛中间件注入的**确定性收尾**（`ConvergenceMiddleware._stop`
+                                # 返回 `{"jump_to": "end", "messages": [AIMessage(收尾正文)]}`）。
+                                # 它挂在中间件自己的节点名下（`ConvergenceMiddleware.after_model`
+                                # / `.before_model`），**不叫 "model"** —— 20261005 实测（脚本化假
+                                # 模型跑 `build_agent` 的原始 update 流）：只认 "model" 会把这条
+                                # 正文**静默丢掉**，用户拿到的是**空回复**，而报告里看不出是
+                                # "模型没说"还是"适配器没转发"。这不是边角：撞预算与"同一个调用
+                                # 重试两次"是本线**唯一**的两条收尾路径（`ConvergenceMiddleware`
+                                # 的全部判据都在这里），丢掉它 = 那两类运行全部记成"什么都没说"。
+                                # 确定性收尾取代任何扣着的草稿：那一条才是这一轮的事实。
+                                pending_final = None
+                                yield from self._on_wrap_up(m)
+            except Exception as e:  # noqa: BLE001 —— 内层炸了也要给主人一句诚实的话
+                # 不把异常放走：golden 一条用例炸掉会让整轮跑丢一条读数，而"这臂办不成事"
+                # 与"这臂崩了"在报告里必须**长得不一样**。所以照样产一条收尾正文（确定性、
+                # 不含任何执行声称），并留 WARNING（原样吞掉才是真的查不出来）。
+                logger.warning("[react_arm] 内层循环异常，按诚实收尾处理：%s", e,
+                               exc_info=True)
+                yield from self._crash_tail(ledger, e)
+                return
+            # 循环正常走完 ⇒ 扣着的收尾候选就是**最终答复的候选**（只有它没被打回才会走到
             # 这里；打回过的那条已被后一条覆盖）。位置在循环**之后**是有意的：
             # `run_one` 的 `text` 按帧序拼接，草稿若先发就会与最终答复连成一串。
-            if pending_final is not None:
-                yield from self._on_model(pending_final, role, {})
-        except Exception as e:  # noqa: BLE001 —— 内层炸了也要给主人一句诚实的话
-            # 不把异常放走：golden 一条用例炸掉会让整轮跑丢一条读数，而"这臂办不成事"
-            # 与"这臂崩了"在报告里必须**长得不一样**。所以照样产一条收尾正文（确定性、
-            # 不含任何执行声称），并留 WARNING（原样吞掉才是真的查不出来）。
-            logger.warning("[react_arm] 内层循环异常，按诚实收尾处理：%s", e,
-                           exc_info=True)
-            yield from self._crash_tail(ledger, e)
+            # 但它**先过闸门**（P4）——这就是这条臂此前那 138 条 `forbid_fallback` 恒真的洞。
+            if pending_final is None:
+                return
+            verdict = self._gate(pending_final, last_plan, ledger, state, messages,
+                                 executor, config, replan_used)
+            if verdict["kind"] == "replan":
+                replan_used = True
+                notes = list(verdict["messages"])
+                yield ("updates", {"gate": {"gate_replan": True, "done": False}})
+                continue
+            if verdict["kind"] == "fallback":
+                # 两条通道都要发：**流式**那半读 updates 的 `fallback_text`（发 `__RESET__`
+                # 并把正文换成兜底文本），**同步**那半只认 messages 通道上那条
+                # `[Fallback 决定]` SystemMessage（`_run_agent_sync`）。少发一条 = 那一半
+                # 的 fallback 静默失效，而另一条通道看起来完全正常。
+                yield ("messages", (SystemMessage(
+                    content=f"[Fallback 决定]: {verdict['text']}"), {}))
+                yield ("updates", {"gate": {"fallback_text": verdict["text"],
+                                            "done": True}})
+                return
+            yield from self._on_model(pending_final, role, {})
+            return
 
     # ── 帧合成 ───────────────────────────────────────────────────────
     def _on_model(self, m: AIMessage, role: str | None,
@@ -392,6 +432,54 @@ class ReactGoldenArm:
         body = {k: v for k, v in popup.items() if k != "kind"}
         yield ("updates", {"execute": dict(body, messages=[],
                                            receipts=list(ledger.receipts))})
+
+    # ── 闸门（P4，20261011）──────────────────────────────────────────────
+    def _gate(self, reply: AIMessage, plan_obj: dict, ledger: RunLedger, state: dict,
+              messages: list, executor: SkillExecutor, config: dict | None,
+              replan_used: bool) -> dict:
+        """最终答复候选过一遍 `graph.gate_node`（**同一个资产，不抄第二份**）。
+
+        **为什么必须直调它**：这条臂此前结构上不会发 fallback ⇒ `arm_capability`
+        判 `comparable=False`（138 条 `forbid_fallback` 全白发），那 138 条断言连同
+        它们保护的"不许把没做的事说成做了"一起失效。判据住在 `gate_node` 里
+        （`_REPLAN_ISSUES` 约 20 族 / `_claim_issue` 的声称族 / `_repeat_reason` 的
+        复读族 / 编造 URL / 零帧如实核验），**一条也不许在这里重写**——抄一份就是
+        抄一条漂移源，而"人工同步 94 处"正是本仓架构审计的头号结论。
+
+        **重规划只此一次**，分两处保证，与生产同源：
+        · 本方法把上一轮的 `replan_used` 透进 `gate_replan` 键 ⇒ `gate_node` 的
+          `fail()` 走 `_fallback_result`（它自己就有那条 `not state.get("gate_replan")`
+          的判据，见 `graph.py` 的 `fail` 闭包）；
+        · 外层 `stream` 的两圈封顶。
+
+        返回三种之一：`{"kind": "pass"}` / `{"kind": "fallback", "text": …}` /
+        `{"kind": "replan", "messages": [...]}`。**不在这里发帧**——翻译成帧的那一步
+        在 `stream` 里（两条通道各发什么，那里有注）。
+
+        异常**吞掉并按 pass 处理**（`logger.warning` 留痕）：闸门是**加装**的一层，
+        它自己炸了不该把主人这一轮的答复整条吃掉——生产那边 `gate_node` 抛异常会被
+        langgraph 变成整轮错误，本线没有那层兜底，所以这里自己兜。
+        """
+        try:
+            out = gate_node(
+                _gate_state(state, plan_obj, ledger, messages, executor, reply,
+                            replan=replan_used),
+                config)
+        except Exception as e:  # noqa: BLE001 —— 见 docstring 最后一段
+            logger.warning("[react_arm] gate_node 抛异常，本轮按「未打回」处理：%s", e,
+                           exc_info=True)
+            return {"kind": "pass"}
+        if out.get("gate_replan"):
+            # 只留那条提示，**丢掉 `RemoveMessage`**：`_replan_result` 拿它把被否定的
+            # 那条 AI 消息从生产 state 里摘掉，而本线内层每次 invoke 都从空 state 起
+            # ——那条消息**天然不在**上下文里（与生产同形），照搬 RemoveMessage 反而
+            # 会把它塞进下一次 invoke 的输入消息表（那是 `add_messages` 的指令、不是
+            # 消息，混进 `create_agent` 的入参是未定义行为）。
+            return {"kind": "replan",
+                    "messages": [m for m in (out.get("messages") or [])
+                                 if isinstance(m, SystemMessage)]}
+        text = str(out.get("fallback_text") or "")
+        return {"kind": "fallback", "text": text} if text else {"kind": "pass"}
 
     def _crash_tail(self, ledger: RunLedger, err: Exception
                     ) -> Iterator[tuple[str, Any]]:
@@ -643,6 +731,59 @@ def _popup_state(state: dict, plan_obj: dict, ledger: RunLedger, messages: list,
         "plan_obj": dict(plan_obj or {}),
         "receipts": list(ledger.receipts),
         "confirm_grant": (state or {}).get("confirm_grant"),
+    }
+
+
+def _plan_for_gate(plan_obj: dict) -> dict:
+    """`plan_obj` → **能被 `plan_state` 编码**的那份（缺键补上，不静默）。
+
+    `plan_state`（= `plan_encode` 的唯一调用点，`tests/test_plan_channel.py` 用源码锁
+    钉着）要 `skill` 与 `reply` 两个键，缺一个就是 `KeyError`。本线的 `_plan_of` 在
+    **一条工具调用都没发生**时返回 `{}`（纯闲聊轮），那时生产那边的技能名是 `chat`
+    ——按它补，别填空串：`gate_node` 拿 `plan["skill"]` 当分族判据的入参，空串会退化
+    成宽查（漏判，方向安全但读数与生产不是同一档）。
+    """
+    obj = dict(plan_obj or {})
+    obj.setdefault("skill", "chat")
+    obj.setdefault("tools", [])
+    obj.setdefault("note", "")
+    obj.setdefault("reply", "")
+    return obj
+
+
+def _gate_state(state: dict, plan_obj: dict, ledger: RunLedger, messages: list,
+                executor: SkillExecutor, reply: AIMessage, *, replan: bool) -> dict:
+    """喂给 `graph.gate_node` 的最小 state——**它读的七个键，逐个对得上**（20261011）。
+
+    做法与 `_popup_state` 同族（那也是按目标函数读的键拼一份最小 state 去直调生产资产）。
+    两份塑形器而不是一份：它们喂的是**不同的资产**、要的键也不同（那边四个键、
+    这边七个），合并只会让"谁要哪个键"更难看出来。键清单是用 grep 从 `gate_node`
+    函数体里数出来的，不是凭记忆写的：
+
+        messages / plan / receipts / ledger / pending_confirm / noop_specs / gate_replan
+
+    两处取法要**说准**，它们各自都有一个假读数：
+
+    · `messages` **必须把本轮的工具帧与那条答复本身放进去**——`frames` 是 `gate_node`
+      判"有没有执行事实"的唯一依据（它从消息流里挑 `ToolMessage`），喂空的会让**每一族
+      声称判据**都判成"零帧轮"（方向是**过严**：一条真办成了事的回复会被当成零帧轮
+      按更宽的族去查）。回复本身要在里面，`_repeat_reason` 的复读比对才看得见它。
+      帧用 `_tool_frame` ——**与发到用户/report 的是同一份**：闸门判的对象必须是主人
+      真看到的那些帧，另造一份措辞不同的一次性帧＝判据与事实分家。
+    · `plan` 走 **`plan_state(...)["plan"]`**（不是 `plan_encode` 直调 —— 那个函数
+      有源码锁，只许 `plan_state` 调；也不是自己拼 `SKILL=` 行 —— 那是第二份排版）。
+    · `ledger` 原样透传（洞⑦ 的台账否认判据读它，`graph_input` 装的就是这一格）。
+    · `gate_replan` 是**上一圈有没有重规划过**，由调用方给（见 `_gate` 的注）。
+    """
+    frames = [_tool_frame(i, c) for i, c in enumerate(executor.calls)]
+    return {
+        "messages": list(messages or []) + frames + [reply],
+        **plan_state(_plan_for_gate(plan_obj)),
+        "receipts": list(ledger.receipts),
+        "ledger": (state or {}).get("ledger") or {},
+        "pending_confirm": (state or {}).get("pending_confirm"),
+        "noop_specs": (state or {}).get("noop_specs") or [],
+        "gate_replan": bool(replan),
     }
 
 
