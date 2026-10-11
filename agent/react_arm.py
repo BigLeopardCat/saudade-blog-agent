@@ -70,6 +70,20 @@ arm 侧只做两件事——按它读的键塑形一份最小 state（`_round_st
     （`task_state_resume_settle`），而它的兄弟判据 `require_task_state` 由生产那半的
     确定性结算满足（`server.py` 的 `rows_to_settle`）⇒ 这一族在本线上是 `armed` 而
     **没有**变成 `comparable = False` 的来源（20261012 实测）。如实登记为未做。
+  · **trace 的节点事件这一族**（20261012 全量双臂实测抓出）：本线每轮**只**留下
+    `producer.*` 与 `gate.*` 两类事件（gate 那几格是直调 `graph.gate_node` 顺带记的），
+    生产那半每轮的 `planner.llm_done` / `native_decision` / `decision` /
+    `execute.call` / `execute.check` **一个都没有** ⇒ L3 跨源对账
+    （`eval/trace_reconcile.py`）对本线近乎无料可读。
+    **判据后果只兑现了一处、且已修**：`planner.ledger_frame` 缺席让
+    `require_ledger_frame` / `require_ledger_rows` / `require_card_targets_from_ledger`
+    三条断言在本线上**恒假**（全量里 `admin_board_audit_reviewed_refusal` 因此报红，
+    而两臂那一轮的行为**逐字相同**——回复正文一字不差、卡载荷的 skill/tool/args 全同）
+    ⇒ `_system_prompt` 现在照 `graph.py` 的 planner 那一处记同款事件，判据
+    `tests/test_react_arm.py` ⑬（含负控）。这与 `forbid_fallback` 是同一个病的两个方向：
+    那边"做不到 ⇒ 纯否定断言恒真"（假绿），这边"不产证据 ⇒ 要求型断言恒假"（假红）。
+    **其余节点事件的补记仍未做**——它今天一个读数都不改变（没有断言读它们），补它是为
+    将来 L3 与本臂真上线，不是为这份读数。
   · （20261012 划掉两条此前记在这里的"缺口"——**实测都不是缺口，所以一个字都没改**：
     · `__EXEC__` **已经在发**：`_on_tools` 按生产形状产的 `receipts` 里就带着 PASS 行的
       `cmd`，而 `__EXEC__` 是 `server._run_agent_stream_to_queue` 从 updates 里读的
@@ -121,6 +135,7 @@ from agent.stickers import repair_sticker_tokens
 from config.settings import settings
 from models.llm import get_llm
 from tools import get_all_tools
+from utils.trace import record
 
 logger = logging.getLogger(__name__)
 
@@ -737,7 +752,26 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
             user_msg, _last_assistant_utterance(messages), principal, config)
     except Exception:  # noqa: BLE001 —— 台账读不到不该炸掉整轮（它只是背景事实）
         logger.warning("[react_arm] 待办台账读取失败，按「没有台账」处理", exc_info=True)
-        ledger_frame = ""
+        ledger_frame, _meta = "", {}
+    if ledger_frame:
+        # 台账帧**进了这一轮的提示词**这件事必须留痕（事件名与形状逐字同
+        # `graph.py` 的 planner：`record("planner", "ledger_frame", **meta)`）。
+        #
+        # 为什么非记不可：`require_ledger_frame` / `require_ledger_rows` /
+        # `require_card_targets_from_ledger` 三条判据读的**唯一证据**就是这个 trace
+        # 事件（`run_golden` 从 `planner.ledger_frame` 取 `ids`/`rows`）。本线此前
+        # 把台账读进了提示词却一个字都没记 ⇒ 那三条判据在本线上**恒假**：20261012
+        # 全量双臂里 `admin_board_audit_reviewed_refusal` 因此报红，而两臂那一轮的
+        # 行为**逐字相同**（回复正文一字不差、确认卡载荷的 skill/tool/args 全同）
+        # ——红的是证据通道，不是行为。这与 `forbid_fallback` 那 138 条是同一个病的
+        # 两个方向：那边是"做不到 ⇒ 纯否定断言恒真"（假绿），这边是"不产证据 ⇒
+        # 要求型断言恒假"（假红）。
+        #
+        # 条件与生产同源（`graph.py` 的 `if rounds == 0 and ledger_frame`）：本线的
+        # 提示词每请求只建一次，等价于生产那个 `rounds == 0`；空帧不记——"没摆上桌"
+        # 与"摆了张空的"在那三条判据里是两件事（`require_ledger_frame` 明写「只判摆
+        # 没摆，不管队列空不空」，而生产连空帧都不记 ⇒ 本线照抄，别自作聪明放宽）。
+        record("planner", "ledger_frame", **_meta)
     planner = _render_planner_prompt(
         role=role, page_ctx=_page_ctx(messages, role), round_info=_ROUND_INFO,
         user_msg=user_msg,

@@ -44,6 +44,10 @@ from langchain_core.messages import (  # noqa: E402
 
 import agent.authz as authz  # noqa: E402
 import agent.react_arm as R  # noqa: E402
+# 真的 `_system_prompt` 要先扣下来：下面每一节都把它换成一句桩（"你是测试用助手。"），
+# 换掉的是**模块属性**、原函数就此从命名空间里消失。⑬ 要验的正是它里面那一行留痕，
+# 所以在这里存一份——**必须在任何一节跑之前**（模块级赋值按行序执行）。
+_REAL_SYSTEM_PROMPT = R._system_prompt
 from agent.principal import UNKNOWN, Principal  # noqa: E402
 from agent.react_line import RunLedger, SkillExecutor  # noqa: E402
 
@@ -883,6 +887,80 @@ try:
           "AGENT_ARM" in _boom and "拒绝启动" in _boom, _boom[:60])
 finally:
     _st.agent_arm = _orig_arm
+
+# ── ⑬ 台账帧必留痕（20261012 全量双臂抓出的假红）──────────────────────────────
+# 病：本线把待办台账**读进了提示词**（`_system_prompt` 的 `pending_ledger` 槽），
+# 却一个字都没记进 trace。而 golden 的三条判据——`require_ledger_frame` /
+# `require_ledger_rows` / `require_card_targets_from_ledger`——读的**唯一证据**就是
+# `planner.ledger_frame` 这个 trace 事件（`eval/run_golden.py::check_gold` 从那里面取
+# `ids` / `rows`）。没有它，这三条判据在这条臂上**恒假**。
+#
+# 现场（20261012 01:49 那轮全量，GOLDEN_ARM=react）：`admin_board_audit_reviewed_refusal`
+# 报红，理由逐字是「本轮没有 planner.ledger_frame 事件 —— 待办台账**没摆上桌**」，
+# 而**两臂那一轮的行为逐字相同**——回复正文一字不差，确认卡载荷的 `skill`
+# （`board_audit`）/`tool`（`audit_board_comment`）/`args`（`{"talk_id": 44,
+# "verdict": "reject"}`）三项全同。红的是**证据通道**，不是行为。
+#
+# 这与 ⑧ 那批是同一个病的两个方向，**判据的形状也一样，只是方向相反**：
+#   ⑧ `forbid_fallback`：臂做不到 ⇒ 纯否定断言恒**真**（假绿，138 条白送）；
+#   本节的 `require_ledger_*`：臂不产证据 ⇒ 要求型断言恒**假**（假红，1 条）。
+# 所以这一节钉的不是"台账读没读到"（那是 ⑫ 上游的事），而是**"读到了就说出来"**：
+# 事件名与载荷形状必须与 `graph.py` 的 planner 那一处**逐字同款**——判据只认那一份形状，
+# 换个名字等于没记（这正是本仓最熟的"接了但没接到底"）。
+print("\n⑬ 台账帧必留痕：`_system_prompt` 读到非空台账 ⇒ 必须记 `planner.ledger_frame`")
+import tempfile as _tempfile  # noqa: E402 —— 与 `_drive_producer` 里的局部 import 同风格
+
+import utils.trace as _trace_mod  # noqa: E402
+
+_ledger_calls: list = []
+
+
+def _ledger_events(_frame: str, _meta: dict) -> list:
+    """跑一整轮 `arm.stream`，收这一轮的 `planner.ledger_frame` 事件。
+
+    **走整条链**（`stream` → `_system_prompt` → `record`）而不是只调 `_system_prompt`：
+    只调后者的话，"`stream` 压根没把台账算进去"这种坏法照样全绿——判据得盖住它自己要防的
+    那一段路。`_pending_ledger_frame` 是**从 graph 借进来的那一个**，换掉它只改"读到什么"，
+    不绕过留痕那一步。
+    """
+    _orig = R._pending_ledger_frame
+    _orig_sp = R._system_prompt
+    R._pending_ledger_frame = lambda *a, **k: (_frame, dict(_meta))
+    # **装回真的 `_system_prompt`**（上面每一节都把它换成桩，而这一节要验的正是它里面那一行）
+    R._system_prompt = _REAL_SYSTEM_PROMPT
+    R._llm = lambda: _Scripted(messages=iter([AIMessage(content="好呀")]),
+                               ai_message_chunk=iter([]))
+    R._narrator_llm = lambda: _narrator_stub("好呀")
+    R._real_tools = lambda *a, **k: {}
+    _tid = f"t_ledger_frame_{len(_ledger_calls)}"
+    _ledger_calls.append(_tid)
+    try:
+        _trace_mod.start_trace(_tid, 7, "th", {}, dir=_tempfile.mkdtemp(), by_day=False)
+        list(R.build().stream({"messages": [HumanMessage(content="后台留言有几条等着我点头")]}, {}))
+    finally:
+        R._pending_ledger_frame = _orig
+        R._system_prompt = _orig_sp
+    return [e for e in _trace_mod.events_of(_tid) if e.get("event") == "ledger_frame"]
+
+
+_ev_hit = _ledger_events("系统台账（确定性事实）…\n· board 1 件：talkId: 44…",
+                         {"ids": ["44"], "rows": {"board": 1}, "chars": 289})
+check("非空台账 ⇒ **记了一条** `planner.ledger_frame`（事件名与 node 都必须与生产同款，"
+      "换个名字判据就认不出）",
+      len(_ev_hit) == 1 and _ev_hit[0].get("node") == "planner",
+      f"{len(_ev_hit)} 条 {[e.get('node') for e in _ev_hit]}")
+check("载荷带 `ids` / `rows`（`require_ledger_rows` 读 `ids`、`require_card_targets_from_ledger` "
+      "才是卡上编号的出处——只记一条空事件等于判据还是判不动）",
+      bool(_ev_hit) and _ev_hit[0].get("ids") == ["44"]
+      and _ev_hit[0].get("rows") == {"board": 1},
+      repr(_ev_hit[0] if _ev_hit else None)[:140])
+
+# 负控：**空帧不记**。少了这一条，一个"每轮无条件记一条"的实现同样能过上面两条——
+# 而那种实现会让 `require_ledger_frame`（"台账摆没摆上桌"）恒真，比不记更糟。
+# 条件照抄生产（`graph.py` 的 `if rounds == 0 and ledger_frame`）。
+_ev_miss = _ledger_events("", {})
+check("**空台账 ⇒ 一条都不记**（条件与生产同源；无条件记会让「摆没摆上桌」那族判据恒真）",
+      _ev_miss == [], repr(_ev_miss)[:140])
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
