@@ -42,12 +42,30 @@ def get_llm(**kwargs) -> ChatOpenAI:
         "timeout": kwargs.pop("timeout", settings.llm_timeout),
         **kwargs,
     }
-    # enable_thinking 是 Qwen 自有参数，须走 extra_body（model_kwargs 只接受标准
+    # enable_thinking 是各家自有参数，须走 extra_body（model_kwargs 只接受标准
     # OpenAI 参数）。总开关默认开（settings.llm_enable_thinking，可 LLM_ENABLE_THINKING
     # 覆盖），但图内四个调用均 per-call 显式关闭（见上方注）——关闭是 per-call
     # 覆写、与总开关无关（思维链经 reasoning_content 返回，历史有混入正文风险）
-    if settings.llm_provider.lower() == "qwen":
-        params["extra_body"] = {"enable_thinking": bool(thinking)}
+    #
+    # **开关的字段名每家不一样，必须各译各的**（20261012 实测补的 deepseek 那一支）：
+    # qwen 用 `enable_thinking`，DeepSeek 用 `thinking.type`。此前只译 qwen ⇒ 切到
+    # DeepSeek 后四个调用点写的 `enable_thinking=False` **被静默丢掉**（本仓最忌的那种
+    # 失效），而 `deepseek-flash` 默认**思考是开的**（同题 completion_tokens：开 125 / 关 1）。
+    # 后果不是"想多了"，是**整轮空回复**：多轮累积里 assistant 消息带着思考输出，回放时
+    # 不带 `reasoning_content` ⇒ `400 The reasoning_content in the thinking mode must be
+    # passed back to the API`，炸在 **narrator 那一次调用**（golden 三条冒烟 2 条空回复，
+    # 而 planner/execute 那几轮全绿——因为它们的消息里还没有"前一条 assistant"要回放）。
+    #
+    # 合并而不是覆盖：调用方自己传了 extra_body 时**不许**把它悄悄抹掉——那正是上面
+    # 这个 bug 的同一个形状（"写了没人读"与"写了被丢掉"是一回事）。
+    _extra = dict(params.get("extra_body") or {})
+    _prov = settings.llm_provider.lower()
+    if _prov == "qwen":
+        _extra["enable_thinking"] = bool(thinking)
+    elif _prov == "deepseek":
+        _extra["thinking"] = {"type": "enabled" if thinking else "disabled"}
+    if _extra:
+        params["extra_body"] = _extra
     if seed:                       # 0/空 ⇒ 不设，见上面的注
         params["seed"] = int(seed)
     return ChatOpenAI(**params)
