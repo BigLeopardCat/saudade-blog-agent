@@ -108,8 +108,8 @@
     "lines": 100
   },
   "eval/param_matrix.py::report": {
-    "c": 65,
-    "lines": 97
+    "c": 50,
+    "lines": 84
   },
   "eval/probe_admin_write.py::main": {
     "c": 32,
@@ -134,10 +134,6 @@
   "eval/probe_admin_write.py::step8_popup_write": {
     "c": 40,
     "lines": 101
-  },
-  "eval/recall_eval.py::evaluate": {
-    "c": 31,
-    "lines": 47
   },
   "eval/run_golden.py::check_gold": {
     "c": 244,

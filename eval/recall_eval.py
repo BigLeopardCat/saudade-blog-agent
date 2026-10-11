@@ -7,6 +7,12 @@ queries 与 golden 的 `rag_*` 用例**同源出题，但不是逐条对应**（
 不进 golden；`rag_talk_rag` 随 20260901 检索池净化退出 L1、留在 golden（端到端仍覆盖）。
 期望命中文档按出题意图标注（note/talk 的公开 id）。
 
+**每条 query 跑两臂（20261011）**：线上那一臂（断崖开）+ 断崖前那一臂（`apply_cliff=False`）。
+报告里因此多了 `cliff` 一格（裁掉多少候选 / 有没有动 top-3 里的名次，后者必须为空，理由见
+`rag/search.py` 模块头《断崖保底 top-K》）。这正是"截断吃掉了什么"的现场——20261010 那次
+语料 +1 篇导致两条 query 的 gold 被断崖切掉，是靠人手工比对两轮报告才定位的；现在它每次
+都在报告里，且 `eval/cliff_probe.py` 拿它当夜间的证书。
+
 用法：
   python3 eval/recall_eval.py                 # 跑线上检索，报告进 eval/report/runs/<ts>.json
   python3 eval/recall_eval.py --show          # 打印每 query 的 top-k 命中明细
@@ -24,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import report_archive  # noqa: E402  同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
 from rag.search import (  # noqa: E402
+    cliff_config,
     expansion_enabled,
     get_index,
     last_route,
@@ -186,53 +193,124 @@ def routes_text(modes: dict) -> str:
     return "、".join(f"{k}×{v}" for k, v in sorted(modes.items()))
 
 
+def _div(num: float, den: int, digits: int = 4) -> float:
+    """比率（分母为 0 ⇒ 0.0，与改造前逐字一致）。"""
+    return round(num / den, digits) if den else 0.0
+
+
+def _measure_one(q: dict) -> tuple[dict, str]:
+    """一条 query 跑**两臂**，返回 `(逐条读数, 实测路线)`。
+
+    两臂同 query、同 top_k=5、同开关，**只差断崖一下** ⇒ 两臂之差只能由断崖造成。
+    路线必须在线上那一臂**之后**、断崖前那一臂**之前**读——那一臂也会记一次 route。
+    """
+    hits = search(q["query"], top_k=5)
+    mode = last_route()["mode"]
+    hit_keys = [f"{h['type']}:{h['id']}" for h in hits]
+    rank = next((i + 1 for i, h in enumerate(hit_keys) if h in q["expected"]), None)
+    pre_keys = [f"{h['type']}:{h['id']}" for h in search(q["query"], top_k=5, apply_cliff=False)]
+    pre_rank = next((i + 1 for i, h in enumerate(pre_keys) if h in q["expected"]), None)
+    return {
+        "id": q["id"], "expected": q["expected"],
+        "hits": hit_keys, "rank": rank,
+        "recall1": rank == 1, "recall3": rank is not None and rank <= 3,
+        "recall5": rank is not None,
+        # 断崖前那一臂：`cut` = 被断崖丢掉的候选（**这就是它的产出**，正常非空）；
+        # `rank_precliff` 与 `rank` 之差才是"断崖动了名次"的证据，那个必须恒为空。
+        "hits_precliff": pre_keys, "rank_precliff": pre_rank,
+        "cut": [k for k in pre_keys if k not in hit_keys],
+        "known_fail": bool(q.get("known_fail")),
+    }, mode
+
+
+def _rank_changed(results: list[dict]) -> list[dict]:
+    """断崖**动了 top-3 里名次**的那几条（空 = 保底那条结构约束今天成立）。
+
+    名次变化只可能落在**第 4 名以后**（保底那一段是原样保留的，断崖只删不排）：gold 原本
+    排 4/5 名、被裁 ⇒ @5 从真变假是断崖**该有的**代价，不是回归；反过来，gold 出现在
+    top-3 里而两臂名次不同，就是保底破了——那才是违例。
+    """
+    return [{"id": r["id"], "rank_precliff": r["rank_precliff"], "rank": r["rank"]}
+            for r in results
+            if r["rank_precliff"] != r["rank"]
+            and ((r["rank_precliff"] or 99) <= 3 or (r["rank"] or 99) <= 3)]
+
+
+def _aggregate(results: list[dict]) -> dict:
+    """把逐条读数合成指标（含断崖那一格）。**纯函数**——`evaluate` 只负责跑与打印。
+
+    断崖的成绩单分两个数报：裁掉多少候选（**它的产出**）与有没有动 top-3 里的名次
+    （**它不许碰的东西**）。只报前者会把"截断很勤快"读成"截断很安全"。
+    """
+    positive = [r for r in results if r["expected"]]
+    noise = [r for r in results if not r["expected"]]
+    npos = len(positive)
+    return {
+        "n": len(results),
+        "recall@1": _div(sum(1 for r in positive if r["rank"] == 1), npos),
+        "recall@3": _div(sum(1 for r in positive if r["rank"] and r["rank"] <= 3), npos),
+        "recall@5": _div(sum(1 for r in positive if r["rank"] is not None), npos),
+        "MRR": _div(sum(1.0 / r["rank"] for r in positive if r["rank"]), npos),
+        # 噪声样本没有 gold：这一格判的是"有没有命中任何一篇"（合理性参考，诚实拒答的
+        # 真判据在端到端 golden）。
+        "noise_hit_rate": _div(sum(1 for r in noise if r["hits"]), len(noise)),
+        # 供给端指标（20260920 批次 d）：平均候选数 = planner 视野宽度，也是"候选驱动读"
+        # 的上游（十来篇语料 × top_k=8 曾几乎倒回整个语料库）。
+        "mean_candidates": _div(sum(len(r["hits"]) for r in results), len(results), 2),
+        "mean_candidates_positive": _div(sum(len(r["hits"]) for r in positive), npos, 2),
+        # 断崖前那一臂：只对**正例**算 recall（与线上臂同口径，否则两臂不可比）。
+        # @5 单列是因为它是断崖**该动**的那一格（它裁的就是尾巴）——与"保底破了"分开读。
+        "cliff": {
+            **cliff_config(),
+            "recall@1_precliff": _div(sum(1 for r in positive if r["rank_precliff"] == 1), npos),
+            "recall@3_precliff": _div(sum(1 for r in positive if r["rank_precliff"]
+                                         and r["rank_precliff"] <= 3), npos),
+            "recall@5_precliff": _div(sum(1 for r in positive
+                                         if r["rank_precliff"] is not None), npos),
+            "candidates_cut": sum(len(r["cut"]) for r in results),
+            "queries_cut": sum(1 for r in results if r["cut"]),
+            "rank_changed": _rank_changed(results),
+        },
+        "known_fail": [r["id"] for r in results if r.get("known_fail")],
+    }
+
+
 def evaluate(idx, show: bool, queries: list[dict] | None = None) -> dict:
     """跑一套 query，返回指标。
 
     `queries` 显式传入是为了让留出集与主集**走同一套度量代码**（复制一份出来的那天起，
     两个数就再也对不上了），但**分别报告**——留出集不是基线的一部分，混进同一个小数里
     会让"站点的检索分数"这个口径悄悄换掉。
+
+    **每条 query 跑两臂**（20261011）：线上那一臂（默认 cutoff）与**断崖前那一臂**
+    （`apply_cliff=False`）。同 query、同 top_k、同开关，只差断崖一下 ⇒ 两臂之差**只能**
+    由断崖造成，报告里因此可以直接读"截断吃掉了谁"。这不是又一次评测：它是把一条此前
+    只活在**注释里的经验证书**（"α≤0.25 与不截断逐条一致"，见 `rag/search.py` 模块头）
+    变成报告里的一等公民——那张证书当年是拿一次实跑签发的，此后没人复验过，而它失效的
+    方式就是静默的（20261010 语料 +1 篇，两条 query 的 gold 被断崖切掉，四个指标里只有
+    recall@1 动，没有任何判据会指认凶手）。
+    保底 top-3 落地后这两臂**在 top-3 内必须逐条一致**；不一致就是那条结构约束破了。
+    （@5 不在此列——断崖裁的就是尾巴，gold 原本排 4/5 名被裁是它**该有**的代价，单列报。）
+
+    逐条测量在 `_measure_one`、指标合成在 `_aggregate`——本函数只负责跑与打印
+    （两臂那一段让 `evaluate` 超了复杂度预算，拆出去也顺带让"两臂只差断崖一下"局部可读）。
     """
     queries = QUERIES if queries is None else queries
-    results = []
+    results: list[dict] = []
     modes: dict[str, int] = {}          # 实测路线计数（不是配置，是这批 query 真走过的路）
     for q in queries:
-        hits = search(q["query"], top_k=5)
-        mode = last_route()["mode"]
+        row, mode = _measure_one(q)
         modes[mode] = modes.get(mode, 0) + 1
-        hit_keys = [f"{h['type']}:{h['id']}" for h in hits]
-        rank = next((i + 1 for i, h in enumerate(hit_keys) if h in q["expected"]), None)
-        results.append({
-            "id": q["id"], "expected": q["expected"],
-            "hits": hit_keys, "rank": rank,
-            "recall1": rank == 1, "recall3": rank is not None and rank <= 3,
-            "recall5": rank is not None,
-            "known_fail": bool(q.get("known_fail")),
-        })
+        results.append(row)
         if show:
-            print(f"  {q['id']:<24} exp={q['expected']} rank={rank} hits={hit_keys}")
-
-    positive = [r for r in results if r["expected"]]
-    mrr = sum(1.0 / r["rank"] for r in positive if r["rank"]) / len(positive) if positive else 0
-    r1 = sum(r["recall1"] for r in positive) / len(positive) if positive else 0
-    r3 = sum(r["recall3"] for r in positive) / len(positive) if positive else 0
-    r5 = sum(r["recall5"] for r in positive) / len(positive) if positive else 0
-    noise = [r for r in results if not r["expected"]]
-    noise_hit = sum(1 for r in noise if r["hits"]) / len(noise) if noise else 0
-    # 供给端指标（20260920 批次 d）：平均候选数=planner 视野宽度，也是"候选驱动读"
-    # 浪费的上游（十篇语料 × top_k=8 曾几乎倒回整个语料库）
-    mean_n = sum(len(r["hits"]) for r in results) / len(results) if results else 0
-    mean_n_pos = sum(len(r["hits"]) for r in positive) / len(positive) if positive else 0
+            print(f"  {q['id']:<24} exp={q['expected']} rank={row['rank']} hits={row['hits']}"
+                  + (f"   ✂ 断崖前 {row['hits_precliff']}（rank {row['rank_precliff']}）"
+                     if row["hits_precliff"] != row["hits"] else ""))
     # 档位名按**实测**取：混着跑（部分查询融合、部分降级）时不冒认 hybrid——
     # 那种报告最容易被读成"混合检索的效果"，实际是两条路的指标混在一起。
     return {"baseline": (_BASELINE_HYBRID if modes.get("hybrid") == len(results)
                          else _BASELINE_LEXICAL),
-            "routes": modes, "n": len(results),
-            "recall@1": round(r1, 4), "recall@3": round(r3, 4), "recall@5": round(r5, 4),
-            "MRR": round(mrr, 4), "noise_hit_rate": round(noise_hit, 4),
-            "mean_candidates": round(mean_n, 2), "mean_candidates_positive": round(mean_n_pos, 2),
-            "known_fail": [r["id"] for r in results if r.get("known_fail")],
-            "results": results}
+            "routes": modes, **_aggregate(results), "results": results}
 
 
 def main() -> None:
@@ -283,6 +361,17 @@ def main() -> None:
     print(f"  recall@1={rep['recall@1']:.2f} recall@3={rep['recall@3']:.2f} "
           f"recall@5={rep['recall@5']:.2f} MRR={rep['MRR']:.2f} noise_hit={rep['noise_hit_rate']:.2f}")
     print(f"  平均候选={rep['mean_candidates']:.2f}（正例 {rep['mean_candidates_positive']:.2f}）")
+    # 断崖那一格（20261011）：**同一个 query 跑两臂**，报告因此能直接读"截断吃掉了谁"。
+    # 判据放在这里而不是只写进 JSON：这是每次跑都会被人看到的那两行。
+    cf = rep["cliff"]
+    print(f"  断崖 α={cf['ratio']} 保底 top-{cf['min_keep']}：裁掉 {cf['candidates_cut']} 条候选"
+          f"（{cf['queries_cut']}/{rep['n']} 条 query 动过候选）")
+    if cf["rank_changed"]:
+        print("  ❌ 断崖改变了名次（保底之后这**不该发生** ⇒ 先看那条结构约束，别读通过率）："
+              + "、".join(f"{c['id']} {c['rank_precliff']}→{c['rank']}" for c in cf["rank_changed"]))
+    else:
+        print(f"  ✅ 断崖未动任何一条名次（断崖前 recall@1={cf['recall@1_precliff']:.2f} "
+              f"@3={cf['recall@3_precliff']:.2f}，与线上那一臂一致）")
     # 已知 FAIL 单列：它们进 recall@1 分子分母（数字不美化），但要在报告里点名，
     # 免得好好的 0.92 被读成"改动引入的退化"（见 QUERIES 里 known_fail 条目的注释）
     kf = [(r["id"], r["rank"]) for r in rep["results"] if r.get("known_fail")]
@@ -313,6 +402,9 @@ def main() -> None:
         ts = Path(out).stem
         payload = {"ts": ts, "corpus": corpus, "queries": len(QUERIES), "runs": [rep],
                    "expansion": ediag}
+        # 断崖那一格的明细在 `runs[0]["cliff"]`（含逐条 rank_changed）；顶层再放一个**结论**
+        # ——读报告的人（含 `eval/cliff_probe.py` 那个探针）先看这一行，不必进逐条明细里翻。
+        payload["cliff_ok"] = not rep["cliff"]["rank_changed"]
         if rep_h is not None:
             # 留出集另起一个键：`runs` 是"站点检索基线"，别把扩展的判据集混进同一个读数
             payload["holdout"] = rep_h
