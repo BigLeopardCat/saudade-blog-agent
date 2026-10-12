@@ -60,7 +60,7 @@ from agent.principal import (  # noqa: E402
     ROLE_SUPERADMIN,
     Principal,
 )
-from tests import _parent_repo  # noqa: E402
+from tests import _parent_repo, _rust_src  # noqa: E402
 
 FAILED: list[str] = []
 
@@ -106,31 +106,14 @@ _KNOWN_LIST_RE = re.compile(
 
 
 def _rust_fn(name: str) -> str:
-    """取某个函数的**函数体**（花括号配对）。
-
-    只看函数体、不看全文：本文件里到处是角色名的注释与字面量，且 `can_access_console`
-    与 `is_admin_tier`、`check_freeze` 与 `check_role_change` 都长得像——全文搜
-    `role == ROLE_ADMIN` 会同时命中它们，判据认错对象比没有判据更坏（它会让真改错的
-    那次看着是绿的）。这一课在第三站撞过，见 `test_note_tags_codec.py::_func_src`。
+    """取 `src/authz.rs` 里某个函数的**函数体**（助手与"为什么只能看函数体"见
+    `tests/_rust_src.py`——那里也写了本文件这一课：`can_access_console` 与 `is_admin_tier`
+    都长得像，全文搜会认错对象，而认错对象比没有判据更坏）。
     """
-    m = re.search(rf"^[ \t]*(?:pub )?fn {re.escape(name)}\s*\(", _RUST_SRC, re.M)
-    if not m:
-        return ""
-    i = _RUST_SRC.find("{", m.end())
-    if i < 0:
-        return ""
-    depth = 0
-    for j in range(i, len(_RUST_SRC)):
-        if _RUST_SRC[j] == "{":
-            depth += 1
-        elif _RUST_SRC[j] == "}":
-            depth -= 1
-            if depth == 0:
-                return _RUST_SRC[i + 1:j]
-    return ""
+    return _rust_src.fn_body(_RUST_SRC, name)
 
 
-_RS_ROLES = dict(_ROLE_CONST_RE.findall(_RUST_SRC))
+_RS_ROLES = _rust_src.str_consts(_RUST_SRC, "ROLE_")
 _PY_ROLES = _py_roles()
 
 # ══ ① 角色名 ↔ 值：逐条相同（双向）════════════════════════════════════════
