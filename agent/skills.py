@@ -19,8 +19,54 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from dataclasses import dataclass, field, replace
 from typing import Any
+
+# 依赖导入（20261012 统一上移）：这一组此前夹在模块级数据（`_NEAR_MISS_CONTRACT`、
+# `NAV_MAP`）之后，是 ruff E402 全部 27 条里**唯一不在脚本里**的一组——而
+# `docs/lint-baseline.md` 当时把 E402 一律说成"脚本形态"，口径与事实不符。
+# 位置不改变求值时刻（模块级 import 都在 import 期跑），但把 import 夹在数据之后
+# 违反本仓 `pyproject.toml` 自己的 lint 契约，读的时候也分不清"哪些是依赖、哪些是数据"。
+# 上移安全：`agent.skills` 的导入者只有 `eval/` 与 `tests/`，无循环导入。
+#
+# 各条目为什么长这样：
+#   · agent.adminops —— 写操作的纯函数层（归一/渲染，见 instantiate_plan 写分支）。
+#   · agent.authz —— 管理读工具清单从它的 scope 表**派生**（20260924）：哪些工具是
+#     "后台读面"是安全边界的事实，边界定义在 authz（`SCOPE_ADMIN_CONSOLE` = Rust
+#     auth_guard 后面的只读接口），这里只消费它——手抄一份名单必然与边界漂移。
+#     authz 只依赖 principal，无循环导入。
+#   · agent.principal —— 技能可见性按角色过滤（20260921 管理助手；20260926 起是
+#     **管理员族**，超管同权；20261002 加 CHAT_ONLY_ROLES 的否决支，见 visible_skills）。
+#   · agent.refs —— 参数引用 `$tool[0].field`（20260919，见 instantiate_plan）。
+#   · tools.base —— 常量与判据的单一事实来源，这里只消费、不重写：
+#       IOT_ENABLED / IOT_NAV_PATH：IoT 开关与入口路径与工具层**同源**（路径字面量的
+#         唯一出处是 tools/base.py，那里的白名单要按同一个开关收口）；开关值本身出自
+#         `config/settings.py` 的 `iot_enabled`。这里只做转发，不重新判断。
+#       _NAV_EXACT_PATHS / nav_path_valid：白名单路径（/category/*、/article/* 为前缀
+#         匹配，需至少带一个 id 段）。20261008 起判据本身也收进工具层一个函数——
+#         这一层与工具层**各写一遍同一个条件**，此前正是它让"带定位参数的路径"两处
+#         口径分岔（见该函数头注）。
+#       _TODO_TEXT_LIMIT：待办正文上限，与 Rust `MAX_TEXT_CHARS` 同源。
+#       _NOTICE_CONTENT_LIMIT / _NOTICE_TITLE_LIMIT / _QUOTA_NOTE_LIMIT：通知的标题/
+#         正文上限，与 Rust `notice.rs` 的 `TITLE_MAX` / `CONTENT_MAX` 同源。
+#   后两组在展开层挡住超长只是为了"零写 + 说清原因"，真正的硬闸在工具与服务端那两道。
+import agent.adminops as A
+import agent.authz as authz
+from agent.principal import ADMIN_ROLES, CHAT_ONLY_ROLES
+from agent.refs import is_ref
+from tools.base import (
+    _NAV_EXACT_PATHS,
+    _NOTICE_CONTENT_LIMIT,
+    _NOTICE_TITLE_LIMIT,
+    _QUOTA_NOTE_LIMIT,
+    _TODO_TEXT_LIMIT,
+    IOT_ENABLED,
+    IOT_NAV_PATH,
+    nav_path_valid,
+)
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 按名字写数据的共同转述契约（20260925）
@@ -38,10 +84,6 @@ _NEAR_MISS_CONTRACT = (
 # ---------------------------------------------------------------------------
 # 导航映射表（业务唯一数据源）
 # ---------------------------------------------------------------------------
-# IoT 开关与入口路径与工具层**同源**：路径字面量的唯一出处是 `tools/base.py`
-# （那里的白名单要按同一个开关收口），开关值本身出自 `config/settings.py` 的
-# `iot_enabled`。这里只做转发，不重新判断。
-from tools.base import IOT_ENABLED, IOT_NAV_PATH
 
 # IoT 入口的全部别名——**只此一处**。开关关掉时它们在 NAV_MAP 里映射为 None，
 # 但**语义与"已下线"不同**（友链是曾经有过、现在撤了；IoT 是本站从来没装），
@@ -135,31 +177,6 @@ for _panel, _panel_path in DASHBOARD_PANELS:
     if _panel not in _PUBLIC_NAME_TAKEN:
         NAV_MAP.setdefault(_panel, _panel_path)
 del _panel, _panel_path
-
-# 白名单路径（单一事实来源 = 工具层 navigate_to 的校验常量，避免双源漂移；
-# /category/*、/article/* 为前缀匹配，需至少带一个 id 段）
-# 20261008：判据本身也收进工具层一个函数（`nav_path_valid`）——这一层与工具层
-# **各写一遍同一个条件**，此前正是它让"带定位参数的路径"两处口径分岔（见该函数头注）。
-from tools.base import _NAV_EXACT_PATHS, nav_path_valid
-# 待办正文上限：**只此一处**（tools/base.py，与 Rust `MAX_TEXT_CHARS` 同源）。
-# 展开层挡住超长只是为了"零写 + 说清原因"，真正的判据在工具与服务端那两道。
-from tools.base import _TODO_TEXT_LIMIT
-# 通知的标题/正文上限：同上，**只此一处**（tools/base.py，与 Rust `notice.rs` 的
-# `TITLE_MAX` / `CONTENT_MAX` 同源）。展开层挡超长只是为了"零工具 + 说清原因"，
-# 真正的硬闸在工具与服务端那两道。
-from tools.base import (_NOTICE_CONTENT_LIMIT, _NOTICE_TITLE_LIMIT, _QUOTA_NOTE_LIMIT)
-from agent.refs import is_ref  # 参数引用 $tool[0].field（20260919，见 instantiate_plan）
-from agent.principal import ADMIN_ROLES, CHAT_ONLY_ROLES  # 技能可见性按角色过滤
-                             # （20260921 管理助手；20260926 起是**管理员族**，超管同权；
-                             #  20261002 加 CHAT_ONLY_ROLES 的否决支，见 visible_skills）
-# 管理读工具清单从 authz 的 scope 表**派生**（20260924）：哪些工具是"后台读面"
-# 是安全边界的事实，边界定义在 authz（`SCOPE_ADMIN_CONSOLE` = Rust auth_guard 后面的
-# 只读接口），这里只消费它——手抄一份名单必然与边界漂移。authz 只依赖 principal，
-# 无循环导入。
-import agent.authz as authz
-import agent.adminops as A  # 写操作的纯函数层（归一/渲染，见 instantiate_plan 写分支）
-
-logger = logging.getLogger(__name__)
 
 
 # 管理助手写技能（20260921 第二轮，第四轮补齐标签改删与分类三件）。刻意**不进**
@@ -4056,6 +4073,12 @@ def arg_enum(spec: object) -> tuple[str, ...]:
 
 
 _TOOL_ARG_SCHEMAS: dict[str, dict] = {}   # 工具名 → {"properties": {...}, "required": frozenset}（首次用时建一次）
+# ⚠️ 20261012 加锁：此前是裸 dict 的 check-then-act —— execute 跑在线程池里、工具会被
+# 并发调用，两个线程可以同时进 `if not _TOOL_ARG_SCHEMAS` 各自往**同一个全局 dict** 里
+# 填；而调用方正拿着这个 dict 迭代时就会 `RuntimeError: dictionary changed size during
+# iteration`。与 `tools/base.py::_last_display_lock` 是同一类竞态、同一套处理：
+# 填的过程在锁内、**只在整张表建好之后**才发布（半成品不对外可见）。
+_TOOL_ARG_SCHEMAS_LOCK = threading.Lock()
 
 
 def tool_arg_schemas() -> dict[str, dict]:
@@ -4067,22 +4090,27 @@ def tool_arg_schemas() -> dict[str, dict]:
     自己发明的标记（那样 pydantic 不认识、我们也就读不到了）。
     """
     if not _TOOL_ARG_SCHEMAS:
-        from tools.base import get_all_tools   # 同文件已在模块级导入 tools.base，这里只是取注册表
-        for t in get_all_tools():
-            schema = getattr(t, "args_schema", None)
-            try:
-                js = schema.model_json_schema() if schema is not None else {}
-            except Exception:   # 取不到就跳过：**不因为一个工具没有 schema 而拦住参数校验**
-                logger.warning("[skills] 取 %s 的 args_schema 失败，该工具的参数不参与校验",
-                               getattr(t, "name", t))
-                continue
-            if not isinstance(js, dict):
-                continue
-            req = js.get("required")
-            _TOOL_ARG_SCHEMAS[t.name] = {
-                "properties": js.get("properties") or {},
-                "required": frozenset(req) if isinstance(req, list) else frozenset(),
-            }
+        with _TOOL_ARG_SCHEMAS_LOCK:
+            if not _TOOL_ARG_SCHEMAS:      # 双检：另一个线程可能刚建好
+                # 同文件已在模块级导入 tools.base，这里只是取注册表
+                from tools.base import get_all_tools
+                built: dict[str, dict] = {}
+                for t in get_all_tools():
+                    schema = getattr(t, "args_schema", None)
+                    try:
+                        js = schema.model_json_schema() if schema is not None else {}
+                    except Exception:   # 取不到就跳过：**不因为一个工具没有 schema 而拦住参数校验**
+                        logger.warning("[skills] 取 %s 的 args_schema 失败，该工具的参数不参与校验",
+                                       getattr(t, "name", t))
+                        continue
+                    if not isinstance(js, dict):
+                        continue
+                    req = js.get("required")
+                    built[t.name] = {
+                        "properties": js.get("properties") or {},
+                        "required": frozenset(req) if isinstance(req, list) else frozenset(),
+                    }
+                _TOOL_ARG_SCHEMAS.update(built)
     return _TOOL_ARG_SCHEMAS
 
 
