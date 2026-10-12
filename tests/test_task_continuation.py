@@ -208,7 +208,8 @@ print("\n⑤ 源码锁：本批**没有**新增第九条纠偏通道")
 _SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 _LATE = _SRC[_SRC.index("def _decide_late_correct("):]
 _LATE = _LATE[:_LATE.index("\ndef ")]
-_GUARD = 'if (not c.correction and c.has_frames and not c.plan_obj["tools"]'
+_GUARD = 'if not c.correction and c.has_frames and not c.plan_obj.get("dropped")'
+_CALL = "_wrapup_intent_correct(c)"
 # 这一格里的**并列通道数**（每一条以 `not c.correction` 起头的守卫 = 一条通道，
 # 共用同一枚单发锁存器）：参数不齐 / 写形态·动作重复 / 收尾丢意图 / 菜单摘项后放弃 /
 # 写命令零调用。**本批不许把这个数变大**——`收尾丢台账` 是"收尾丢意图"那条的
@@ -224,8 +225,11 @@ _HELP = _SRC[_SRC.index("def _wrapup_intent_correct("):]
 _HELP = _HELP[:_HELP.index("\ndef ")]
 check("planner 那处落在**同一个守卫**之内（收尾丢意图那一格，不是并列通道）",
       _LATE.count(_GUARD) == 1
-      and _LATE.count("_wrapup_intent_correct(c)") == 1
-      and _LATE.index(_GUARD) < _LATE.index("_wrapup_intent_correct(c)"))
+      and _LATE.count(_CALL) == 1
+      and _LATE.index(_GUARD) < _LATE.index(_CALL))
+check("  同一守卫之内还接上了「清单会被去重剪空」那一档（判据与裁剪同源）",
+      "_plan_trims_to_empty(c.plan_obj, c.state)" in _HELP
+      and "not c.plan_obj[\"tools\"]" in _HELP)
 check("  两条判据在同一个函数里（`收尾丢意图` 与 `收尾丢台账` 都走 `c.correction`）",
       'c.correction_kind = "收尾丢意图"' in _HELP
       and 'c.correction_kind = "收尾丢台账"' in _HELP
@@ -243,6 +247,110 @@ check("`graph.py` 里没有真的写下 `from __future__ import annotations`"
       "（会让条件边的 config 注入静默失效；头注第 53 行只是那条纪律的说明）",
       not any(ln.strip().startswith("from __future__ import annotations")
               for ln in _SRC.splitlines()))
+
+# ══════════════════════════════════════════════════════════════════════════
+print("\n⑥ 二次接线：清单**会被去重剪空**时也要判台账（现场 081550）")
+# 第一版只接了三处，生产上又冒出新的一处缝：确认轮办完第一件 → 台账续跑把这一轮交回
+# planner（接线点 1 生效，两次）→ 模型又挑了**刚办完**的那件 → 零改动 → 剪空 → 收尾
+# → 回复「…主人点个头，我下一轮就把它发掉喵」。剪裁跑在决策循环**之外**
+# （`_finalize_dedupe`），剪完直接 `_wrap_up_plan` 走人 ⇒ 上面那条并集纠偏结构上够不到它。
+
+_DUP = 'set_account_role({"name": "demo", "role": "zako"})'
+_NEW = 'send_user_notice({"uid": 3, "text": "hi"})'
+_NOOP_STATE = {"noop_specs": [list(G._spec_signature("set_account_role",
+                                                    {"name": "demo", "role": "zako"}))]}
+
+check("预演：全是被去重剪掉的（工具自报零改动）⇒ True",
+      G._plan_trims_to_empty({"tools": [_DUP]}, _NOOP_STATE) is True)
+check("预演：空清单 ⇒ False（「剪空」以有东西可剪为前提）",
+      G._plan_trims_to_empty({"tools": []}, _NOOP_STATE) is False)
+check("预演：有一件新的 ⇒ False",
+      G._plan_trims_to_empty({"tools": [_DUP, _NEW]}, _NOOP_STATE) is False)
+# 同源锁：预演与**真剪裁**必须同一结论（判据不另写一份"这步是不是重复"）
+_real = G._trim_noop_specs({"tools": [_DUP]}, _NOOP_STATE["noop_specs"])
+check("预演与真剪裁同源（同一对纯函数、同一顺序）",
+      bool(_real) and not _real[0]["tools"]
+      and G._plan_trims_to_empty({"tools": [_DUP]}, _NOOP_STATE))
+_PIN = {"tools": [_DUP]}
+G._plan_trims_to_empty(_PIN, _NOOP_STATE)
+check("预演不改入参（那两个裁剪都是纯函数——就地改会让真计划当场少一件）",
+      _PIN["tools"] == [_DUP])
+
+
+def _ctx(**kw):
+    """最小 `_DecideCtx`（数据类字段全必填，逐格给中性值）。"""
+    base = dict(state={}, config=None, task_sink=None, rounds=1, user_msg="", intent_msg="",
+                role="owner", page_ctx="", has_frames=True, doc_anchors=(), ledger_frame="",
+                principal=None, round_info="", frames_txt="", gate_note="", deny=set(),
+                _base_llm=None, _task_state=True, llm=None, deny_pseudo=set(),
+                correction="", correction_kind="", native_note="", plan_obj=None,
+                raw="", decided=None, skill_name="", params={}, _tools_off=False,
+                _img_turn=False)
+    base.update(kw)
+    return G._DecideCtx(**base)
+
+
+_NOTICE_ROW = _row(task_id="at_notice", goal="给 demo 发一条站内通知",
+                   steps=[{"label": "发通知", "tool": "send_user_notice"}])
+_FACE = {"confirm_grant": True, "receipts": [], "messages": [], "executed": [],
+         "noop_specs": _NOOP_STATE["noop_specs"]}
+_PLAN = {"tools": [_DUP], "skill": "account_set_role", "params": {}, "dropped": []}
+
+with _Dial(True):
+    _c = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]), plan_obj=dict(_PLAN))
+    _step = G._decide_late_correct(_c)
+check("剪空 + 台账还剩一件 ⇒ 纠偏重决策（不是收尾）",
+      _step.action == "continue" and _c.correction_kind == "收尾丢台账")
+check("  指令点名下一步的工具（只说「还有事没做」＝让它自己猜）",
+      "send_user_notice" in _c.correction)
+check("  开场句按「排过但被剪掉」写——**不许**说成「这一轮没有排任何工具」（那是假话）",
+      "已经执行过了" in _c.correction and "没有排任何工具" not in _c.correction)
+check("  仍然明写不许反问「要不要继续」", "不许" in _c.correction)
+
+with _Dial(True):
+    _c0 = _ctx(state=dict(_FACE), config=_cfg([]), plan_obj=dict(_PLAN))
+    _step0 = G._decide_late_correct(_c0)
+check("剪空但台账没有剩余 ⇒ 照老路（break，交给 `_finalize_dedupe` 收尾）",
+      _step0.action == "break" and not _c0.correction)
+
+with _Dial(False):
+    _c_off = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]), plan_obj=dict(_PLAN))
+    _step_off = G._decide_late_correct(_c_off)
+check("`AGENT_TASK_STATE=0` ⇒ 这一格逐字节退回老行为（break、不纠偏）",
+      _step_off.action == "break" and not _c_off.correction)
+
+# 剪空档**只走台账那一支**：当轮那句话的意图清单判的是"里面的动作一次都没被规划过"，
+# 与剪空（规划过、做过了）互斥，硬套会把两件事混成一条纠偏。
+_old_pi = G._pending_intents
+G._pending_intents = lambda st: [{"label": "收藏", "key": "favorite"}]
+try:
+    with _Dial(True):
+        _c1 = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]), plan_obj=dict(_PLAN))
+        _s1 = G._wrapup_intent_correct(_c1)
+        # 反控：清单**不会**被剪空时，这一格一件都不许纠（它还有真事要做）
+        _c2 = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]),
+                   plan_obj={"tools": [_NEW], "skill": "user_notice", "params": {},
+                             "dropped": []})
+        _s2 = G._wrapup_intent_correct(_c2)
+finally:
+    G._pending_intents = _old_pi
+check("剪空档不读「当轮那句话」的清单（走的是台账那一支）",
+      _s1 is not None and _c1.correction_kind == "收尾丢台账")
+check("  反控：清单里有真的新活儿 ⇒ 这一格不纠（不许把正常的排计划拦下来）",
+      _s2 is None and not _c2.correction)
+
+# 最后一个洞：那条征询族原本只收「**你**点个头」，生产上换个主语就漏了。
+_SOLICIT_081550 = ("**还差一步**：给 demo 发一条站内通知，告诉他「由于近期活跃度不佳，"
+                   "现将他降级为杂鱼」。这条通知我这边还挂着没发出去——"
+                   "主人点个头，我下一轮就把它发掉喵。")
+check("② 现场措辞「主人点个头」现在命中征询族",
+      bool(G._LEDGER_SOLICIT_RE.search(_SOLICIT_081550)))
+check("  正当的建议仍在族外（推荐**另一件**事 ≠ 推诿已在册的剩余）",
+      not G._LEDGER_SOLICIT_RE.search("我还可以顺便帮你把这篇的标签也加上"))
+with _Dial(True):
+    check("  端到端：这段话 + 台账还剩一件 ⇒ 这条网命中",
+          bool(G._ledger_continuation_issue(_SOLICIT_081550, {"confirm_grant": True},
+                                            _cfg([_NOTICE_ROW]))))
 
 # ══════════════════════════════════════════════════════════════════════════
 print()

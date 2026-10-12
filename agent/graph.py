@@ -3687,7 +3687,7 @@ def _ledger_has_next(state, config) -> bool:
     return _ledger_next(state, config) is not None
 
 
-def _ledger_continue_nudge(row: dict, step: dict) -> str:
+def _ledger_continue_nudge(row: dict, step: dict, drained: bool = False) -> str:
     """台账还有可执行剩余时给 planner 的**续跑指令**（走既有的单发 `correction` 槽）。
 
     三条内容缺一不可，都是现场换来的：
@@ -3698,9 +3698,20 @@ def _ledger_continue_nudge(row: dict, step: dict) -> str:
       · **明写不许反问"要不要继续"**——这是本批要治的那句话本身（`054330` 的回复
         原文）。指令只描述事实与禁止句，不写"系统会去弹卡"那种机制描述（同
         `_finalize_unaccounted` 的教训：写给 narrator 的机制描述会变成它的词汇）。
+
+    `drained=True`＝这一轮**排过**工具、但那件被去重剪掉了（已取回／零改动，
+    `_plan_trims_to_empty` 那一格）。开场那句必须随之换掉：`False` 档的
+    "你这一轮没有排任何工具"在这一档里是**假话**，而给模型一句与事实相反的前提，
+    正是本仓反复吃亏的形态（它会照着那句去解释自己为什么被叫回来）。
     """
+    _head = (
+        ("你这一轮排的那件**这一轮已经执行过了**（系统判定为本轮重复：已取回／零改动，"
+         "不会再跑一遍），它不算这一轮的进展，**也不要再挑它**。")
+        if drained else
+        "你这一轮**没有排任何工具**（等于宣布收尾），但")
     return (
-        "你这一轮**没有排任何工具**（等于宣布收尾），但系统台账里这件事还没做完："
+        _head +
+        "系统台账里这件事还没做完："
         f"目标「{row.get('goal') or '（无表述）'}」，"
         f"下一步该走的是 `{step.get('tool')}`"
         f"（{step.get('label') or step.get('tool')}）"
@@ -3755,8 +3766,14 @@ def _task_ledger_probe(reply: str, state, config, issue: str = "") -> None:
 # 的剩余不是"问得对不对"的问题（它压根没问），指望这条正则去接它接不住；接它的是
 # `_decide_late_correct` 那条并集纠偏。I7 把它记成 `leftover` 而非 `waste`，正是为了让
 # 这个差集**看得见**（`eval/corpus_invariants.py::_i7_rows`）。
+# **20261012 二次标定**：族里原本只收「**你**点个头」/「**你**点头」，于是同一句话换个
+# 主语就漏了——现场 `logs/agent/traces/20261012/081550` 的回复原文正是
+# 「…这条通知我这边还挂着没发出去——**主人点个头**，我下一轮就把它发掉喵」，
+# `search` 返回 None ⇒ 这条网没设起来（那一轮台账里明明还有可执行的剩余）。
+# 去掉主语限定（`点个头|点头`）**不是**放宽族别：它收的仍是"你点一下头我才动手"这
+# 一个意思，只是不再要求代词恰好是"你"；「我还可以帮你做 X」那类正当建议照旧在族外。
 _LEDGER_SOLICIT_RE = re.compile(
-    r"要不要|需不需要|用不用|需要我|要我(?:帮|去|现在)?|你说一声|你点个头|你点头|"
+    r"要不要|需不需要|用不用|需要我|要我(?:帮|去|现在)?|你说一声|点个头|点头|"
     r"你说句话|你吩咐|你说(?:一句|一声)(?:话)?我就", re.S)
 
 
@@ -7379,10 +7396,24 @@ def _decide_write_guard(c: "_DecideCtx") -> "_Step":
 def _wrapup_intent_correct(c: "_DecideCtx") -> "_Step | None":
     """零工具收尾那一格该不该纠偏 → `_Step("continue")`；不必纠 → None（20261003/20261012）。
 
+    **这一格收两种"清单没了"的形态**（都由调用点那条守卫放进来，`has_frames` 与
+    `not dropped` 仍留在那边）：
+      · 清单**真空**：planner 这一轮一个工具都没排（等于自己宣布收尾）；
+      · 清单**会被去重剪空**（20261012 二次接线）：它排了，可排的是**刚办完**的那件
+        （已取回／零改动），`_finalize_dedupe` 会把它剪掉。裁剪跑在决策循环**之外**，
+        剪完直接 `_wrap_up_plan` 走人 ⇒ 台账那一支此前**结构上够不到**它。现场
+        `logs/agent/traces/20261012/081550`：剪空 → 收尾 → 回复「这条通知我这边还挂着
+        没发出去——**主人点个头**，我下一轮就把它发掉喵」。预演走 `_plan_trims_to_empty`，
+        与那两道裁剪**同一对纯函数**，不另写一份判据。
+
     **判据是两本账的并集**：当轮那句话（`_pending_intents`）与跨轮台账（`_ledger_next`）
     ——任一非空即续跑，且**两族走同一个 `c.correction` 槽、同一个单发锁存器**（外层守卫
     仍留在 `_decide_late_correct`），所以不新增预算、不会与 `MAX_PLAN_ROUNDS` 叠乘：
     第二次进来 `not c.correction` 为假，照常落到既有终点。
+
+    **剪空那一档只走台账那一支**：当轮那句话的意图清单判的是"这句话里的动作**一次都没被
+    规划过**"，而剪空恰恰意味着"规划过、做过了"——两者互斥，硬套会把主人那句话里真没做
+    的动作与"做过又重复"混成一条纠偏。
 
     为什么必须取并集：`_pending_intents` 是对当轮那句话做**具名别名**扫描，**写意图它
     结构上看不见**（论据见 `agent/tasks.py` 头注）⇒ "主人一句话两件写、第一件办完"
@@ -7392,7 +7423,10 @@ def _wrapup_intent_correct(c: "_DecideCtx") -> "_Step | None":
     调用点那一段注里留着守卫的四条来历（`has_frames` / `not dropped` / 等等）——判据
     一个字没变，搬出来的只是长度（本函数与 `_decide_late_correct` 都顶着复杂度闸）。
     """
-    _left = _pending_intents(c.state)
+    _no_tools = not c.plan_obj["tools"]
+    if not (_no_tools or _plan_trims_to_empty(c.plan_obj, c.state)):
+        return None
+    _left = _pending_intents(c.state) if _no_tools else []
     if _left:
         c.correction = (
             "你这一轮**没有排任何工具**（等于宣布收尾），但主人那句话里还有这些"
@@ -7411,13 +7445,14 @@ def _wrapup_intent_correct(c: "_DecideCtx") -> "_Step | None":
     if not _led:
         return None
     _row, _step = _led
-    c.correction = _ledger_continue_nudge(_row, _step)
+    c.correction = _ledger_continue_nudge(_row, _step, drained=not _no_tools)
     c.correction_kind = "收尾丢台账"
     record("planner", "wrapup_ledger_correct", round=c.rounds,
            goal=_row.get("goal"), tool=_step.get("tool"),
-           task_id=_row.get("task_id"))
-    logger.warning("[planner] 零工具收尾但跨轮台账仍有可执行剩余（%s → %s）"
+           task_id=_row.get("task_id"), drained=not _no_tools)
+    logger.warning("[planner] %s但跨轮台账仍有可执行剩余（%s → %s）"
                    "→ 纠偏重决策一次：%s",
+                   "零工具收尾" if _no_tools else "本轮清单会被去重剪空",
                    _row.get("goal"), _step.get("tool"), c.correction[:120])
     return _Step("continue")
 
@@ -7544,8 +7579,11 @@ def _decide_late_correct(c: "_DecideCtx") -> "_Step":
     # （第二次进来 `not c.correction` 为假，照常落到既有终点）。
     # 判据与两族的纠偏文本都在 `_wrapup_intent_correct`（20261012 搬出去，理由：
     # 本函数顶着复杂度闸的棘轮）；**这一格的两条判据仍在同一个守卫之内**。
-    if (not c.correction and c.has_frames and not c.plan_obj["tools"]
-            and not c.plan_obj.get("dropped")):
+    # 20261012 二次接线：判"收尾"不能只看清单**现在**空不空，还要看它**会不会被剪空**
+    # （"这件不用重跑"≠"这套活儿干完了"；裁剪跑在本函数之后 ⇒ 台账那一支此前够不到它，
+    # 现场 `081550` 的回复「主人点个头，我下一轮就把它发掉」）。两档的分别见
+    # `_wrapup_intent_correct`；预演与真裁剪同源，见 `_plan_trims_to_empty`。
+    if not c.correction and c.has_frames and not c.plan_obj.get("dropped"):
         _st = _wrapup_intent_correct(c)
         if _st:
             return _st
@@ -8217,6 +8255,34 @@ def _trim_noop_specs(plan_obj: dict, noop_specs) -> tuple[dict, list[str]] | Non
             "不许说成刚改好、也不许说成没办成")
     fresh["note"] = f"{old_note}｜{tail}" if old_note else tail
     return fresh, dropped
+
+
+def _plan_trims_to_empty(plan_obj, state) -> bool:
+    """**预演**上面两道裁剪：剪完一件都不剩 ⇒ True（20261012 二次接线）。
+
+    为什么需要它：`_finalize_dedupe` 的裁剪跑在决策循环**之外**（`_planner_decide` 的
+    后段），剪空就直接 `_wrap_up_plan(True, ...)` 返回 ⇒ 收尾那一格（`_decide_late_correct`
+    里的台账支）永远看不到"清单其实会空"。而"这一件不用重跑"**不等于**"这套活儿干完了"
+    ——现场 `logs/agent/traces/20261012/081550`：剪空之后收尾，回复把台账里还剩的那件
+    退回给主人（「主人点个头，我下一轮就把它发掉」）。
+
+    判据**不新写一份**：调的就是那两道裁剪本身（两者都是纯函数——返回新 dict、不动入参，
+    见各自 docstring 末句），顺序也与 `_finalize_dedupe` 一致（先"已取回"、后"零改动"）。
+    空清单返回 False（"剪空"以"有东西可剪"为前提，避免调用方把它当成"零工具"那一格）。
+
+    如实记一条边界：`_finalize_dedupe` 在两道裁剪**之前**还有四条守卫（检索重复改读候选等）
+    ——若某一条本会把清单改成候选清单，这里的预演就"多预测了一次剪空"，代价是**多一次
+    带台账指令的重决策**（不夺决策权、不改任何判据），方向上是安全的那一侧。
+    """
+    if not plan_obj.get("tools"):
+        return False
+    cur = plan_obj
+    for _fn, _arg in ((_trim_done_reads, state.get("receipts")),
+                      (_trim_noop_specs, state.get("noop_specs"))):
+        _t = _fn(cur, _arg)
+        if _t is not None:
+            cur = _t[0]
+    return not cur.get("tools")
 
 
 def _tool_args(tool_spec: str) -> tuple[dict, bool]:
