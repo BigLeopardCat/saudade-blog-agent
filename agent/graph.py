@@ -12685,10 +12685,10 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 重复那次让 deepseek 整轮 400，而 qwen 端点容忍 ⇒ **生产一直绿**，洞在库里躺了
     # 8 天。修在源头（`execute_node::_frame_id`）之后，这一层是**回归绊线**——只记
     # 日志与 trace，**绝不改序列**（在这一层顺手改掉重复 id = 同一规则的第二份实现，
-    # 且真回归会被就地抹平成绿的，绊线也就白设了）。
+    # 且真回归会被就地抹平成绿的，绊线也就白设了）。行首 `wire_illegal` 是取证锚点，**不许改名**（见 `context.strict_wire_issues` 头注）。
     _wire_bad = strict_wire_issues(_msgs)
     if _wire_bad:
-        logger.error("[model] 出站序列不合严格服务商协议（%d 处）：%s",
+        logger.error("[model] wire_illegal 出站序列不合严格服务商协议（%d 处）：%s",
                      len(_wire_bad), "；".join(_wire_bad[:3]))
         record("model", "wire_illegal", issues=_wire_bad[:5], frames=len(_msgs) - 1)
     # 看得见（20261005，输入防线的"便宜的那一半"）：这里**只量、不拦**。整条提示词的

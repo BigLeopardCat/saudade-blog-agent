@@ -4,8 +4,44 @@ Factory function to create a LangChain ChatOpenAI-compatible LLM.
 Reads the active provider's config from ``settings.active_llm_*``.
 """
 
+import logging
+
 from langchain_openai import ChatOpenAI
 from config import settings
+
+logger = logging.getLogger(__name__)
+
+# 认不出的 provider **只报一次**：这里是每个请求都会走的路径（图内四个调用点），
+# 一次一条会把 agent.log 淹掉、把真信号埋了。常态下走不到这里——`LLM_PROVIDER` 的
+# 启动校验在 `settings.check_provider()`（认不出就拒绝启动）；这一条兜的是**不经
+# server 启动**的入口（`scripts/`、`eval/` 那批直接把设置传进来的脚本）。
+_WARNED_PROVIDERS: set[str] = set()
+
+
+def _thinking_extra(provider: str, thinking: bool) -> dict:
+    """思考开关 → 该服务商的 `extra_body` 键。**缺省那一支必须有**。
+
+    这里此前是 `if qwen / elif deepseek` 而**没有 else**（20261012 第二版）：认不出的
+    provider 会让图内四个调用点写下的 `enable_thinking=False` **静默蒸发**，而
+    `deepseek-flash` 默认思考是开的 ⇒ 多轮累积里那条带思考的 assistant 消息回放时缺
+    `reasoning_content` ⇒ 整轮空回复。"没分支"与"有分支但没人读"是同一个 bug 的两种写法
+    （同 `config/settings.py` 里那段注），所以缺省支做的是**把这件事说出来**，不是什么都不做。
+
+    新增服务商：先确认它有没有思考开关、字段叫什么，再在这里加一支并同步
+    `tests/test_llm_provider_registry.py`。**不许**把"认不出就算了"当成正确行为。
+    """
+    if provider == "qwen":
+        return {"enable_thinking": bool(thinking)}
+    if provider == "deepseek":
+        return {"thinking": {"type": "enabled" if thinking else "disabled"}}
+    if provider not in _WARNED_PROVIDERS:
+        _WARNED_PROVIDERS.add(provider)
+        logger.warning(
+            "[llm] provider=%r 没有思考开关的译法 ⇒ 这一次的 `enable_thinking=%s` "
+            "**被丢弃**（本进程只报一次）。图内四个调用点都靠它关思考，而开着思考的 "
+            "assistant 消息回放会让严格服务商整轮 400 ⇒ 要么在这里登记它的字段名，"
+            "要么确认这家根本没有思考开关。", provider, thinking)
+    return {}
 
 
 def get_llm(**kwargs) -> ChatOpenAI:
@@ -59,11 +95,9 @@ def get_llm(**kwargs) -> ChatOpenAI:
     # 合并而不是覆盖：调用方自己传了 extra_body 时**不许**把它悄悄抹掉——那正是上面
     # 这个 bug 的同一个形状（"写了没人读"与"写了被丢掉"是一回事）。
     _extra = dict(params.get("extra_body") or {})
-    _prov = settings.llm_provider.lower()
-    if _prov == "qwen":
-        _extra["enable_thinking"] = bool(thinking)
-    elif _prov == "deepseek":
-        _extra["thinking"] = {"type": "enabled" if thinking else "disabled"}
+    # 译法表在 `_thinking_extra`（缺省支会出声，见该函数头注）；provider 的归一化
+    # 只认 `settings._provider_prefix` 那一处，别在这里再 strip/lower 一遍。
+    _extra.update(_thinking_extra(settings._provider_prefix, thinking))
     if _extra:
         params["extra_body"] = _extra
     if seed:                       # 0/空 ⇒ 不设，见上面的注

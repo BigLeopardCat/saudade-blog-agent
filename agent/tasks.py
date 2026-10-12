@@ -242,6 +242,9 @@ def task_hold_schema(role: str | None) -> dict:
                     },
                 },
                 "required": ["goal", "steps"],
+                # 伪函数的参数同样是**关闭的**（与 `native_plan.build_tool_schema` 出的
+                # 技能函数逐条同款，见那里的注）。只在这一层——`steps[].{}` 是自由形状。
+                "additionalProperties": False,
             },
         },
     }
@@ -265,6 +268,7 @@ def task_drop_schema() -> dict:
                              "description": "要撤下的那件事（用当初登记时的说法）"},
                 },
                 "required": ["goal"],
+                "additionalProperties": False,
             },
         },
     }
@@ -288,6 +292,7 @@ def task_intents_schema() -> dict:
                 "properties": {INTENTS_ARG: intents_prop_schema(
                     "主人这一句话里要办的每一件事（含你这一轮正要办的那件）")},
                 "required": [INTENTS_ARG],
+                "additionalProperties": False,
             },
         },
     }

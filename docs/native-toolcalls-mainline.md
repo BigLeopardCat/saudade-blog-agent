@@ -67,6 +67,10 @@
 | 谁发起调用 | **Python**，逐条确定性执行 | `out = tool.invoke(args)`（`agent/graph.py`） |
 
 佐证一：全仓 `bind_tools` 只出现在**注释**里（`agent/graph.py` / `server.py`），每一处都在写"我们不用它"。**零个调用点。**
+（**20261012 复核**：今天这条命令还会命中 `eval/arm_capability.py` 与 `tests/` 下几处的
+`def bind_tools(self, tools, **kw)`——那是**测试替身里的桩定义**（假 LLM 要装作有这个方法），
+不是调用点；生产侧唯一那一处仍是 `server.py` 的注释。判据是"有没有人**调用**它"，不是"这个字
+串出现了几次"——照字面数会得到一个假红。）
 
 佐证二：生产端点对原生能力的支持度**已被本项目自己验过**——
 `eval/d4_structured_output_poc.py` 在 qwen3.8-flash 上跑 `json_schema`+`strict`、
@@ -849,7 +853,7 @@ dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop
 
 ```bash
 # ① 零 native tool calling
-grep -rn "bind_tools" --include=*.py . | grep -v .venv      # 应只剩注释
+grep -rn "bind_tools" --include=*.py . | grep -v .venv      # 应只剩注释 + 测试替身里的桩定义（见 ① 的注）
 sed -n '11,47p' models/llm.py                               # 请求参数里无 tools
 grep -n 'tool.invoke' agent/graph.py                        # 真正发起调用的是 Python
 
