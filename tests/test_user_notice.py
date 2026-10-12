@@ -393,11 +393,26 @@ check("⭐ 捕获段多出来的一截**隔着空白** ⇒ 不算「抄短了」
 check("  对照：**贴着**多出来一截仍算（「Async」←「Asyncio」那条实测）",
       g._capture_extends_glued("Async", "Asyncio") is True
       and g._capture_extends_glued("guest5", "guest5") is False, "")
+# ⭐ 上面那条判据的**另一半**（20261012 生产实测，trace `20261012T090332`）：中文里名字与
+#   动作词之间通常**不隔空白**（「给用户demo发一条通知…」），只判"隔没隔空白"时那一截被
+#   当成名字的续写 ⇒ planner **填对了**的 `demo` 被改写成 `demo发一条` ⇒ 名录探针如实回
+#   「没有叫「demo发一条」的账号」——一句**长得像诚实拒绝的错话**，正是 20260926 那条
+#   头注本来要防的。取向不变：**只许少改、不许改错**（拿不准就不动 planner 的值）。
+check("⭐ 多出来的一截是**动作短语的字头** ⇒ 也不算「抄短了」（无空白形态）",
+      g._capture_extends_glued("demo", "demo发一条", g._NOTICE_MARKS) is False, "")
+check("  `_capture_filler` 认两族：动作词**首字**（发通知→发）与前置介词（把/给/跟…）",
+      g._capture_filler("发一条", g._NOTICE_MARKS) is True
+      and g._capture_filler("给", g._NOTICE_MARKS) is True
+      and g._capture_filler("cio", g._TARGET_ACTION_MARKS) is False, "")
 try:
     _keep = instantiate_plan("notice_send", {"name": "guest5", "content": BODY}, ROLE_ADMIN)
     _arg_fix(_keep, "给账号 guest5 发个通知，让他补齐资料")
     check("⭐⭐ 主人说「发个通知」而 planner 填对了名字 → 名字**不被改写**",
           '"name": "guest5"' in _keep["tools"][0], str(_keep["tools"]))
+    _demo = instantiate_plan("notice_send", {"name": "demo", "content": BODY}, ROLE_ADMIN)
+    _arg_fix(_demo, "给用户demo发一条通知告诉他由于近期社区表现不好被降级为杂鱼身份")
+    check("⭐⭐ 同一条锁的**无空白**现场（`090332`）：名字仍不被改写",
+          '"name": "demo"' in _demo["tools"][0], str(_demo["tools"]))
     _fixd = instantiate_plan("tag_delete", {"name": "Async"}, ROLE_ADMIN)
     _arg_fix(_fixd, "把标签 Asyncio 删掉")
     check("  对照：planner 真抄短了（Async←Asyncio）时仍然校正",
@@ -635,6 +650,15 @@ class _FakeTool:
         return self.out
 
 
+def _grant_of(spec, skill=None):
+    """照**卡上签的那一件**造令牌（20261012 起 `_grant_covers` 按工具名+参数比对：
+    光有令牌不算数——空壳 `{"token": "x"}` 会让确认轮重新弹卡）。"""
+    args, ok = g._tool_args(spec)
+    assert ok, spec
+    return {"token": "x", "skill": skill, "specs": [{"tool": g._tool_name(spec),
+                                                     "args": args}]}
+
+
 def _run_exec(msg, spec, skill="notice_send", grant=None):
     _CALLS.clear()
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
@@ -680,7 +704,7 @@ try:
                                             "args": {"name": "guest5",
                                                      "content": BODY}}],
               str(payload))
-    r = _run_exec("给 guest5 发个通知", _SPEC, grant={"token": "x"})
+    r = _run_exec("给 guest5 发个通知", _SPEC, grant=_grant_of(_SPEC, "notice_send"))
     check("确认轮（主人点了确定）→ 放行执行（「一律弹窗」不是「永不执行」）",
           _CALLS == [{"name": "guest5", "content": BODY}], str(_CALLS))
     check("  回执带执行角色与 op（跨轮执行记忆只认结构化回执，不认叙述）",
