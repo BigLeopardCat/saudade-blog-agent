@@ -816,6 +816,15 @@ class _FakeTool:
         return self.out
 
 
+def _grant_of(spec, skill=None):
+    """照**卡上签的那一件**造令牌（20261012 起 `_grant_covers` 按工具名+参数比对：
+    光有令牌不算数——空壳 `{"token": "x"}` 会让确认轮重新弹卡）。"""
+    args, ok = g._tool_args(spec)
+    assert ok, spec
+    return {"token": "x", "skill": skill, "specs": [{"tool": g._tool_name(spec),
+                                                     "args": args}]}
+
+
 def _run_exec(msg, spec, skill, grant=None, users=DIRD, pending=None):
     _CALLS.clear()
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
@@ -850,7 +859,8 @@ try:
           and _payload.get("specs") == [{"tool": "approve_quota_request",
                                         "args": {"user_id": 126}}], str(_payload))
     r = _run_exec("批准一下 Alice 的额度申请", _SPEC_A, "quota_approve",
-                  grant={"token": "x"}, users=_seq(DIRD, DIRD_ZERO), pending=PEND)
+                  grant=_grant_of(_SPEC_A, "quota_approve"),
+                  users=_seq(DIRD, DIRD_ZERO), pending=PEND)
     check("确认轮（主人点了确定）→ 放行执行（「一律弹窗」不是「永不执行」）",
           _CALLS == [{"user_id": 126}], str(_CALLS))
     check("  回执带执行角色与 op（跨轮执行记忆只认结构化回执，不认叙述）",

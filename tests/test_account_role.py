@@ -590,6 +590,15 @@ class _FakeTool:
         return self.out
 
 
+def _grant_of(spec, skill=None):
+    """照**卡上签的那一件**造令牌（20261012 起 `_grant_covers` 按工具名+参数比对：
+    光有令牌不算数——空壳 `{"token": "x"}` 会让确认轮重新弹卡）。"""
+    args, ok = g._tool_args(spec)
+    assert ok, spec
+    return {"token": "x", "skill": skill, "specs": [{"tool": g._tool_name(spec),
+                                                     "args": args}]}
+
+
 def _run_exec(msg, spec, grant=None):
     _CALLS.clear()
     obj = _plan(spec)
@@ -643,7 +652,7 @@ try:
                                             "args": {"name": "guest5",
                                                      "role": "zako"}}],
               str(payload))
-    r = _run_exec("把 guest5 改成杂鱼", _SPEC_CMD, grant={"token": "x"})
+    r = _run_exec("把 guest5 改成杂鱼", _SPEC_CMD, grant=_grant_of(_SPEC_CMD))
     check("确认轮（主人点了确定）→ 放行执行（「一律弹窗」不是「永不执行」）",
           _CALLS == [{"name": "guest5", "role": "zako"}], str(_CALLS))
     check("  回执带执行角色与 op（跨轮执行记忆只认结构化回执，不认叙述）",

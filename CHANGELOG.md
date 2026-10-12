@@ -16,6 +16,44 @@
 
 ## 20261012
 
+- **一次点头只授权**签名体里那一件**（行为，20261012）**：主人点的卡是「把 demo 的身份改成
+  普通用户」（`set_account_role`），同一轮里 planner 顺手排的**发站内通知**——那是恒弹卡族
+  （`authz._ALWAYS_CONFIRM_TOOLS`）的一员——**连卡都没弹**就落了库，回复里两件并列报喜
+  （现场 `logs/agent/traces/20261012/091103`，会话 341：`set_account_role` 与
+  `send_user_notice` 两次 `execute.call` 之间**一个 `consent_popup` 事件都没有**）。
+  病根是两处把「令牌在场」当成了「这一件被授权」：`_confirm_popup` 开头那两行
+  （`grant = state.get("confirm_grant")` / `if grant: return None`）与 `execute_node` 里
+  `consent_missing` 的 `not state.get("confirm_grant")`。而 `confirm_grant` 住在 state 里、
+  活到**整轮结束**：确认轮执行完，台账续跑（上面那条）把控制权交回 planner，那一轮
+  **同样读得到**它。「令牌只授权签名体里那一件」此前只体现在**计划重建**那一侧
+  （`_confirm_grant_plan` 只把签名体拼成 TOOLS 行），**闸门这一侧一条判据都没有**——
+  靠的是"确认轮不可能排出别的东西"这个**没人守着的推论**，而写意图对
+  `_scan_action_intents` 结构上失明（见上面那条）⇒ 这条路此前几乎走不到，台账续跑把它
+  变成了常路。
+  现在多了 `_grant_covers(state, spec)`（工具名**与参数**逐字相等，参数解析不出来一律不算覆盖
+  ——fail-closed）＋批判据 `_all_granted`：`_confirm_popup` 用后者决定免不免卡，
+  `execute_node` 的 `consent_missing` / `target_missing` / `target_conflict` 三处用前者。
+  **行为**：没被点过的那一件 ⇒ 当场弹**第二张卡**（顺序两张卡，零调用、零回执），不再落库。
+  判据 = `tests/test_confirm.py` ⑤b（形状 6 条含"同一件工具换个目标"与 fail-closed，加执行层
+  端到端：同一轮排的发通知零调用、当场出卡）；**另有一处收窄证明**——`tests/test_confirm.py`、
+  `test_account_freeze.py`、`test_account_role.py`、`test_chat_quota.py`、`test_todo_schedule.py`
+  五处"确认轮放行"的夹具原本拿空壳 `{"token": "x"}` 就能放行，现在一律要照**卡上签的那一件**
+  造令牌（空壳会让确认轮重新弹卡，那正是收窄的现场）。
+- **名字纠偏把动作短语当成了名字的续写（行为，20261012）**：主人说「给用户demo发一条通知
+  告诉他…」，planner 的 `task_auto.goals` 两件意图都识别对了、`name="demo"` 也**填对了**，
+  可 trace 里明明白白记着一条 `planner name_target_correct got=demo used=demo发一条`
+  （现场 `logs/agent/traces/20261012/090332`，会话 339）——**模型没错，是一个确定性纠偏节点
+  用一个错值盖掉了它**。`_capture_extends_glued` 判"捕获段是不是名字的续写"只有一条判据：
+  两截之间**隔不隔空白**；而中文里名字与动作词之间通常不隔（`_NOTICE_MARKS` 里也没有光杆
+  「发」，窗口一路吃到「通知」才闭合）⇒ `demo发一条` 被当成"主人原话里更长的那一段"，
+  按"抄短了就让位"规则覆盖了 planner 的值。后果是名录探针如实回「后台账号列表里没有叫
+  「demo发一条」的账号」——一句**长得像诚实拒绝的错话**，正是 20260926 那条头注写来要防的。
+  补第二族判据 `_capture_filler`：多出来那一截的首字命中**该工具动作词表的首字**
+  （`_mark_initials`，「发通知」→ `发`）或命中前置介词族（把/将/对/给/跟/和/拿/替/为/向/从/往）
+  ⇒ **不算**续写。取向与那条判据一致：**只许少改、不许改错**（拿不准就不动 planner 的值，
+  退回"名字查无此人"的诚实拒绝）。判据 = `tests/test_user_notice.py` ⑦（新增无空白形态的
+  形状断言 + 端到端"名字仍不被改写"，与既有的"贴着多出来一截仍算校正"那条负控成对）。
+
 - **跨轮台账从"提示词里的一段散文"升成循环的续跑变量（行为，20261012）**：一句话两件写，
   走到第二轮以后的形状是「卡① → 确定 → 执行 → **直接收尾**」。`route_after_execute` 的
   confirm 分支读的是 `_pending_intents(state)`——那是 `_scan_action_intents` 对**当轮那句话**

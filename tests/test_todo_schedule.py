@@ -627,6 +627,15 @@ class _FakeTool:
         return self.out
 
 
+def _grant_of(spec, skill=None):
+    """照**卡上签的那一件**造令牌（20261012 起 `_grant_covers` 按工具名+参数比对：
+    光有令牌不算数——空壳 `{"token": "x"}` 会让确认轮重新弹卡）。"""
+    args, ok = g._tool_args(spec)
+    assert ok, spec
+    return {"token": "x", "skill": skill, "specs": [{"tool": g._tool_name(spec),
+                                                     "args": args}]}
+
+
 def _run(msg, spec, grant=None):
     CALLS.clear()
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
@@ -681,7 +690,7 @@ try:
               str(sorted(r)))
         check("  与提问/假设同族：走既有追问链路，一个字节都不写",
               CALLS == [] and r.get("receipts") == [])
-    r = _run("给猫买罐头", SPEC, grant={"token": "x"})
+    r = _run("给猫买罐头", SPEC, grant=_grant_of(SPEC, "dashboard_todo_add"))
     check("确认轮（主人点了确定）→ 放行执行（「一律弹窗」不是「永不执行」）",
           CALLS == [{"text": "给猫买罐头", "date": TOMORROW}], str(CALLS))
     check("回执带执行角色与 op（跨轮执行记忆只认结构化回执，不认叙述）",
@@ -1146,7 +1155,7 @@ try:
     obj["tools"] = [_SPEC_DONE]
     state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content="交房租办完了")],
-             "confirm_grant": {"token": "x"}}
+             "confirm_grant": _grant_of(_SPEC_DONE, "dashboard_todo_done")}
     r = execute_node(state, cfg())
     check("确认轮 → 放行执行（工具收到的是**原样正文**）",
           CALLS == [{"text": "交房租"}], str(CALLS))
@@ -1673,7 +1682,7 @@ try:
     obj["tools"] = [_SPEC_RSCH]
     state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content="简历那条的日子我想挪一下")],
-             "confirm_grant": {"token": "x"}}
+             "confirm_grant": _grant_of(_SPEC_RSCH, "dashboard_todo_reschedule")}
     r = execute_node(state, cfg())
     check("确认轮 → 放行执行（工具收到的是**原样正文 + 归一后的日期**）",
           CALLS == [{"text": "更新简历（国庆后）", "date": _TOMORROW}], str(CALLS))
