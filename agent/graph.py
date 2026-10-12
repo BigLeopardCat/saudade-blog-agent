@@ -6253,7 +6253,9 @@ def _intent_src(state: AgentState) -> str:
 
     卡面文本是**我们自己的话**，不是主人的话：凡是要判"主人要什么/主人点名了谁"的
     地方都该读这里。同一根错源在本仓已修过两次（`_pending_intents` 的意图清单、
-    `_planner_preflight` 的 `intent_msg`），这是第三处。
+    `_planner_preflight` 的 `intent_msg`），这是第三处；**第四处（也是最后一处）**
+    20261012 批 C 补上——`_planner_preflight` 的 `user_msg` 现在直接取本函数，
+    "主人这一轮说了什么"因此只剩**一个**来源（那个 `intent_msg` 别名随之删掉）。
 
     `messages` 缺席按空处理（不是 `state["messages"]`）：这个函数现在挂在**路由函数**
     `route_after_execute` 底下，而路由的判据测试（`tests/test_confirm.py` ⑦"每个路由
@@ -6620,7 +6622,6 @@ class _Preflight(NamedTuple):
     rounds: int = 0
     resumed: bool = False
     user_msg: str = ""
-    intent_msg: str = ""
     principal: object = None
     role: str = ""
     page_ctx: str = ""
@@ -6692,11 +6693,22 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
                                                  plan_task_id=pe.task_id,
                                                  plan_cursor=pe.cursor))
 
-    user_msg = _last_user_msg(state["messages"])
-    # 意图清单的**消息来源**（20260927）：确认兑现轮读主人原话，其余轮同 `user_msg`。
-    # 下面三处共用它——提示词的 {intent_hints}、动作去重收尾的"还有未完成项"、
-    # 以及 resumed 轮的纠偏提示（{correction}）。
-    intent_msg = _intent_src(state)
+    # **「主人这一轮说了什么」只有一个来源**（20261012 批 C）。这一行此前是
+    # `_last_user_msg`，于是同一轮里住着两个答案：`user_msg`（给下面二十来处出处闸与
+    # 歧义判据读）与 `intent_msg`（给意图清单读）。两者只在**确认兑现轮**（`resumed`）
+    # 上分岔——那一轮最后一条 user 消息是前端合成的**卡面回显**
+    # （`确认执行：……吗？点「确定」我就去办。`），那是**我们自己的话**，不是主人的话。
+    # 分岔的代价当场就有两处（现场 `20261012T101621`，会话 342，一句话两件写）：
+    #   · 出处闸拿卡面去比对实参 ⇒ 主人自己的话被判成捏造（`_name_arg_fix` /
+    #     `_todo_text_fix` 那一族）；
+    #   · `_confirm_popup` 见卡面里的问号判"像提问" ⇒ 第二张卡根本不弹。
+    # 执行层 20261012 已经换过同一根错源（`_intent_src` 的注记着那第三处），这里是
+    # **第四处、也是最后一处**：两个名字并回一个（`intent_msg` 这个别名随之删掉，
+    # 它的三个读点全部改读 `user_msg`）。
+    #
+    # **无令牌的轮次上这一行与旧值逐字相同**（`_intent_src` 只在 `confirm_grant` 在场时
+    # 换源）⇒ 影响面只有确认兑现轮这一格，写成判据在 `tests/test_session_input_source.py`。
+    user_msg = _intent_src(state)
     # 角色要在**取 page_ctx 之前**定：能力清单按角色渲染（20260921——清单里不含
     # 管理能力是 narrator 讲"我不能改后台"的"依据"，见 context.site_guide）。
     # principal 也在这里一并取：下面写门序列里的政策预检要读它的 uid 与角色
@@ -6810,7 +6822,7 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
             record("planner", "fastpath", kind="effect_switch", tools=switch["tools"], round=rounds)
             return _Preflight(early=_plan_update(switch, rounds))
     return _Preflight(
-        rounds=rounds, resumed=resumed, user_msg=user_msg, intent_msg=intent_msg,
+        rounds=rounds, resumed=resumed, user_msg=user_msg,
         principal=principal, role=role, page_ctx=page_ctx, has_frames=has_frames,
         doc_anchors=doc_anchors, ledger_frame=ledger_frame)
 
@@ -6833,7 +6845,6 @@ class _DecideCtx:
     task_sink: "list | None"
     rounds: int
     user_msg: str
-    intent_msg: str
     role: str
     page_ctx: str
     has_frames: bool
@@ -6992,7 +7003,7 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
     native_note = ""
     return _DecideCtx(
         state=state, config=config, task_sink=task_sink,
-        rounds=rounds, user_msg=pre.user_msg, intent_msg=pre.intent_msg, role=role,
+        rounds=rounds, user_msg=pre.user_msg, role=role,
         page_ctx=pre.page_ctx, has_frames=has_frames, doc_anchors=pre.doc_anchors,
         ledger_frame=pre.ledger_frame, principal=pre.principal, round_info=round_info,
         frames_txt=frames_txt, gate_note=gate_note, deny=deny, _base_llm=_base_llm,
@@ -7013,7 +7024,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
         # 拿的就是这一份——**同一个提问**，只有规则 7 按各自接口层取值。
         _prompt_args = dict(
             role=c.role, page_ctx=c.page_ctx, round_info=c.round_info, user_msg=c.user_msg,
-            intent_hints=_intent_hints(c.state.get("executed") or [], c.intent_msg),
+            intent_hints=_intent_hints(c.state.get("executed") or [], c.user_msg),
             doc_anchors=c.doc_anchors,
             recent_context=_recent_tail(c.state["messages"]),
             # 短应答提示只在首轮（rounds==0）给：第二轮起本轮已有工具帧，短应答

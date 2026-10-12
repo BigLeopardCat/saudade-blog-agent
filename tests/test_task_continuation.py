@@ -279,7 +279,7 @@ check("预演不改入参（那两个裁剪都是纯函数——就地改会让�
 
 def _ctx(**kw):
     """最小 `_DecideCtx`（数据类字段全必填，逐格给中性值）。"""
-    base = dict(state={}, config=None, task_sink=None, rounds=1, user_msg="", intent_msg="",
+    base = dict(state={}, config=None, task_sink=None, rounds=1, user_msg="",
                 role="owner", page_ctx="", has_frames=True, doc_anchors=(), ledger_frame="",
                 principal=None, round_info="", frames_txt="", gate_note="", deny=set(),
                 _base_llm=None, _task_state=True, llm=None, deny_pseudo=set(),
@@ -387,12 +387,11 @@ _GRANT_195727 = {"token": "tok", "skill": "dashboard_todo_add",
 
 
 def _pre(resumed=True, owner=_OWNER_195727):
-    from langchain_core.messages import HumanMessage
+    """最小 `_Preflight`。`user_msg` = **主人原话**（20261012 批 C 起确认兑现轮就只有
+    这一个来源了，`_intent_src` 的注记着`intent_msg` 那个别名为什么被删掉）。
+    """
     return G._Preflight(
-        rounds=1, resumed=resumed, user_msg=_CARD_195727,
-        intent_msg=G._intent_src({"messages": [HumanMessage(content=owner),
-                                               HumanMessage(content=_CARD_195727)],
-                                  "confirm_grant": _GRANT_195727}),
+        rounds=1, resumed=resumed, user_msg=owner,
         principal=None, role="owner", page_ctx="", has_frames=True, ledger_frame=""), owner
 
 
