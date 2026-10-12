@@ -120,7 +120,7 @@ from agent.skills import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
                           arg_type_short, build_planner_context,
                           callable_query_tools, instantiate_plan,
                           param_problem_note, skill_param_specs,
-                          visible_skills)
+                          split_tool_spec, visible_skills)
 # 任务登记（20260927 批 D）：登记帧的构造与那一轮给 narrator 的注记/纠偏都在
 # `agent/tasks.py`——本模块只决定"什么时候用它"（见 planner 的那一支）。
 from agent.tasks import (TASK_DONE_NOTE, TASK_INTENTS, declaration_note,
@@ -6332,6 +6332,9 @@ def _auto_task_frames(state: AgentState, config, decided, rounds: int) -> list[d
            # 时"`dropped: 1`"分不出"拦对了"与"拦过火了"，这两种读法要的是相反的处置。
            raw_retraced=audit.get("retraced_goals") or [],
            raw_dropped=audit.get("dropped_goals") or [],
+           # 落库前把步骤表降到列宽以内了几次、降在哪一级（批 A，`tasks.certify_steps`）。
+           steps_degraded=audit.get("steps_degraded", 0),
+           steps_degraded_kinds=audit.get("steps_degraded_kinds") or [],
            goals=[str(f.get("goal") or "")[:60] for f in frames])
     return frames
 
@@ -7218,8 +7221,10 @@ def _decide_register(c: "_DecideCtx") -> "_Step":
         # 不登记不影响这一轮：要问的那句照样由 narrator 问出来，丢的只是"下一轮还记得"。
         conv_id = (c.config or {}).get("configurable", {}).get("conversation_id")
         frame: dict = {}
+        # 帧载荷自己的读数（批 A：`steps` 超列宽时的降级），与 `task_declare` 一起记。
+        _faudit: dict = {}
         if isinstance(conv_id, int):
-            frame = frame_payload(decl, conv_id)
+            frame = frame_payload(decl, conv_id, _faudit)
         else:
             logger.warning("[planner] 任务登记拿不到会话 id（config 里没有）→ 本轮"
                            "不落库，只如实收尾：%s", decl.get("goal"))
@@ -7227,7 +7232,12 @@ def _decide_register(c: "_DecideCtx") -> "_Step":
         record("planner", "task_declare", task_id=frame.get("task_id") or "",
                goal=decl.get("goal"), steps=len(decl.get("steps") or []),
                state=decl.get("state"), question=bool(decl.get("pending_question")),
-               round=c.rounds, corrected=bool(c.correction), frames=c.has_frames)
+               round=c.rounds, corrected=bool(c.correction), frames=c.has_frames,
+               # 落库前把步骤表降到列宽以内了几次（0 = 原样落库，`tasks.certify_steps`）。
+               # 记它是因为降级**看得见**才算降级：一个"剩 3 步"的台账行如果其实是
+               # 被砍掉标签/实参之后的形状，读 trace 的人必须能当场看出来。
+               steps_degraded=_faudit.get("steps_degraded", 0),
+               steps_degraded_kinds=_faudit.get("steps_degraded_kinds") or [])
         logger.info("[planner] 任务%s：%s（剩 %d 步，状态 %s，问主人=%s，task_id=%s）",
                     "撤下" if _cancelled else "登记",
                     decl.get("goal"), len(decl.get("steps") or []),
@@ -8403,10 +8413,12 @@ def _tool_args(tool_spec: str) -> tuple[dict, bool]:
     都失败兜底空参 + ok=False——checker 据此判 args_parse（调用方按错误帧处理；
     工具签名必填参数缺失时工具层自会报 __ERROR__，不炸图）。
     """
-    m = re.match(r"^(\w+)\((.*)\)$", tool_spec.strip(), re.DOTALL)
-    if not m or not m.group(2).strip():
+    # 拆分（`名字(args)` 那对括号）走 `skills.split_tool_spec`——**形状的写端在
+    # `skills.py`**，规则只该有一处。这里只保留"怎么读那串参数"的容错。
+    m, raw = split_tool_spec(tool_spec)
+    raw = raw.strip()
+    if not m or not raw:
         return {}, True
-    raw = m.group(2).strip()
     for loader in (json.loads, ast.literal_eval):
         try:
             obj = loader(raw)
