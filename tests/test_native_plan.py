@@ -82,11 +82,16 @@ def test_name_set_equals_visible_skills():
           [hold["name"], drop["name"], ints["name"]]
           == [T.TASK_HOLD, T.TASK_DROP, T.TASK_INTENTS],
           f"{hold['name']},{drop['name']},{ints['name']}")
-    check("task_intents 只收 intents 一格，每项 = goal + skill（无枚举：闭集是"
-          "全部可见技能名，写进 schema 的代价落在每次 planner 调用上）",
+    # `params`（20261012 批 A）：这一件**要用的实参**——有它，登记出来的步骤就是可执行
+    # 的；没有它，那一步是占位步（落到它时回 planner 补参）。它不是必填，`required`
+    # 仍然只有 goal/skill ⇒ "说不全就整格省略"是模型真正能做到的那条路。
+    check("task_intents 只收 intents 一格，每项 = goal + skill + 可选 params（无枚举："
+          "闭集是全部可见技能名，写进 schema 的代价落在每次 planner 调用上）",
           list(ints["parameters"]["properties"]) == ["intents"]
           and list(ints["parameters"]["properties"]["intents"]["items"]
-                   ["properties"]) == ["goal", "skill"]
+                   ["properties"]) == ["goal", "skill", "params"]
+          and ints["parameters"]["properties"]["intents"]["items"].get("required")
+          == ["goal", "skill"]
           and "enum" not in ints["parameters"]["properties"]["intents"]["items"]
           ["properties"]["skill"])
     check("task_drop 只有 goal 一格（可空的 steps 会把老歧义请回来）",

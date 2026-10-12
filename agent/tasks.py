@@ -71,10 +71,14 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import logging
 import re
 from typing import Any
 
-from agent.skills import SKILL_MAP, callable_query_tools, visible_skills
+from agent.skills import (SKILL_MAP, args_are_bound, callable_query_tools,
+                          instantiate_plan, split_tool_spec, visible_skills)
+
+logger = logging.getLogger(__name__)
 
 # 模型侧的两个伪函数名（**20260927 拆成两个**，理由见 `TASK_DROP` 上方那段）。
 # 它们**不是技能**（技能表 `SKILLS` 里没有它们，`instantiate_plan` 也不认）——只在
@@ -144,7 +148,26 @@ TASK_MAX_STEPS = 8
 TASK_MAX_INTENTS = 6
 GOAL_COL_MAX = 300          # = 迁移里的 varchar(300)（`goal` / `pending_question` 同列宽）
 LABEL_MAX = 80
-TOOL_MAX = 64
+TOOL_MAX = 64               # 工具名 / 技能名（技能名比工具名短，共用一格足够）
+
+# `steps` 列的字符上限——**与父仓 `Saudade-Blog/src/routes/chat.rs::TASK_STEPS_COL_MAX`
+# 同值**（跨语言契约，改一处必须同步另一处）。
+#
+# **为什么 Python 必须知道这个数**（20261012，步骤开始带实参之后才成立）：Rust 落库是
+# `v["steps"].to_string().chars().take(N)`——**从中间截断**，且注释里写明"绝不为了
+# 看起来是合法 JSON 去改写内容"。截出来的串不是合法 JSON ⇒ 读回时 `steps` 落 `Null`
+# ⇒ `advance_by_receipts` 见不可解析的步骤直接返回 `None` ⇒ **那一行从此永远结算不掉**
+# （僵尸行，比不登记更坏）。所以签发前必须由**产出方**自证，见 `certify_steps`。
+#
+# 取值取**保守**一侧：父仓只放宽不收紧，所以跟着小的那个数永远安全。
+#
+# 20261012 两侧已同步到 **16000**（批 A 落地时一起改的：步骤从"只有工具名"扩成
+# `{label,tool,skill,args}`，参数落库，4000 字符装不下八步带实参的计划）。
+# 这个数是**算出来的**：
+# `steps` 是 MySQL `text`＝65535 **字节**，而截断数的是**字符**；utf8mb4 下 1 字符
+# ≤ 4 字节 ⇒ 16000 × 4 = 64000 < 65535，最坏情况也顶不到列宽。再往上调之前，
+# 先把这条不等式重算一遍（超过列宽在严格模式下是 1406，那一行整个落不进去）。
+TASK_STEPS_COL_MAX = 16000
 
 TASK_HOLD_DESC = (
     "把「还没做完的事」登记下来（跨轮不会丢）。"
@@ -206,11 +229,26 @@ def task_hold_schema(role: str | None) -> dict:
     `steps` 带 `minItems: 1`：空步骤在**服务端**就不合法（`normalize_declaration`
     是第二道）——这道约束的价值不在于拦住模型（它照样会发），而在于让"撤下"不再有
     一条与"没有剩下的步骤"同形的表达（见 `TASK_DROP` 上方那段）。
+
+    `skill` / `args` 两格（20261012 批 A）：一步不再只是"一个工具名"，而是**"用哪个
+    本领、带什么实参"**——`Skill.plan` 本来就是 `list[(工具名, {参数模板})]`，参数在
+    产出那一刻就存在（`skills.py::instantiate_plan` 已经能把它展开成完整实参），此前
+    只是在 schema / 归一器两处被丢掉，于是台账里住的是一串**没法执行的名字**，每一步
+    都得请模型重推一遍参数（那是"废话轮"与"漏步"共同的来源）。
+    `skill` 那一格**带 `visible_skills` 名做闭集**：与 `tool` 同一条理由（闭集＝能执行的），
+    代价是每次 planner 调用多一份技能名表——比 `tool` 那份小（技能名比工具名短），且只在
+    本开关打开时存在。`args` **不带闭集**（键＝工具参数名，逐工具不同，写进来要乘 47 个
+    技能函数）；`required` 仍然只有 `label`/`tool`：**给不出实参就整格省略**，那一步是
+    **占位步**（落到它时回 planner 补参），不是失败。
     """
     tools = step_tool_enum(role)
     tool_prop: dict[str, Any] = {"type": "string"}
     if tools:
         tool_prop["enum"] = tools
+    skills = sorted({str(s.name) for s in visible_skills(role) if getattr(s, "name", None)})
+    skill_prop: dict[str, Any] = {"type": "string"}
+    if skills:
+        skill_prop["enum"] = skills
     return {
         "type": "function",
         "function": {
@@ -231,6 +269,15 @@ def task_hold_schema(role: str | None) -> dict:
                                           "description": "这一步做什么（人话）"},
                                 "tool": {**tool_prop,
                                          "description": "做这一步要用的站内工具名"},
+                                "skill": {**skill_prop,
+                                          "description": "这一步属于哪个本领（技能名）"},
+                                "args": {
+                                    "type": "object",
+                                    "description": "这一步的实参（键＝工具参数名，"
+                                                   "值取主人原话里说过的那个）；"
+                                                   "拿不准就整格省略，系统会按"
+                                                   "「还不知道怎么调」处理这一步",
+                                },
                             },
                             "required": ["label", "tool"],
                         },
@@ -338,6 +385,16 @@ def intents_prop_schema(description: str) -> dict:
                          "description": "这件事的一句话目标（取主人原话里的说法）"},
                 "skill": {"type": "string",
                           "description": "办这件事要用的本领名（技能名）"},
+                # `params`（20261012 批 A）：这件事**要用的实参**（键＝技能参数名，值取
+                # 主人原话里的说法）。有它，登记出来的步骤就是**可执行的**（`instantiate_plan`
+                # 展开成完整实参）；没有它，那一步是**占位步**，落到它时再回 planner 补参。
+                # 不是必填：**说不全就整格省略**，别拿猜的值来凑——一个编出来的参数比
+                # "还不知道怎么调"坏得多（它会被当成本轮已定的实参落进台账）。
+                "params": {
+                    "type": "object",
+                    "description": "办这件事要用的实参（键＝该技能的参数名，值取主人"
+                                   "原话里说过的那个）；说不全就整格省略，别瞎填",
+                },
             },
             "required": ["goal", "skill"],
         },
@@ -368,6 +425,13 @@ def normalize_intents(args: Any, role: str | None) -> list[dict]:
     `skill` 用 `visible_skills(role)` 判**而不是** `SKILL_MAP`：这与 planner 菜单、
     native schema、"这一轮能选什么"是同一张表（同源），够不着的本领在这里就被挡住，
     而不是等到 execute 才炸。
+
+    `params`（20261012 批 A）**原样留下**，只做"是不是个非空 object"这一条判断：
+    · 空 dict / 不是 dict ⇒ **不写这一格**（老形状逐字不变，调用方 `it.get("params")`
+      拿到 None ⇒ 那一步是占位步，今天的行为）；
+    · 值**一个都不改**（不截断、不归一）：实参是**要执行的**东西，这里"顺手"截断一个
+      长正文＝把一次真写入改坏。体积由 `certify_steps` 在落库前**整格**丢（降级为
+      占位步）来管，不在这一层**局部**改值。
     """
     if not isinstance(args, dict):
         return []
@@ -383,7 +447,11 @@ def normalize_intents(args: Any, role: str | None) -> list[dict]:
         skill = str(one.get("skill") or "").strip()
         if not goal or skill not in allowed or skill == "chat":
             continue
-        out.append({"goal": goal, "skill": skill})
+        rec: dict[str, Any] = {"goal": goal, "skill": skill}
+        params = one.get("params")
+        if isinstance(params, dict) and params:
+            rec["params"] = params
+        out.append(rec)
     return out
 
 
@@ -505,6 +573,71 @@ def reconcile_goal(goal: Any, sources: Any) -> str | None:
     return None
 
 
+def bound_steps(skill_name: str, params: Any, role: str | None,
+                allowed: Any = None) -> list[dict]:
+    """技能名 + 实参 → **已经绑好实参的步骤**；**展开不干净就返回 `[]`**（纯函数）。
+
+    用的是**执行侧同一个展开器**（`skills.instantiate_plan`，planner 点这个技能时走的
+    就是它）——步骤集合与实参必须与"真执行那一次"逐字同源：这里另推一份，两条通道
+    迟早对不上（同族教训＝`intents_to_declarations` 的排除规则与判据侧
+    `require_task_goal_per_intent` 必须同一条）。
+
+    **all-or-nothing（刻意的保守）**：只要出现下面任一种情况就返回 `[]`，由调用方退回
+    今天那份"只有工具名"的占位步骤——
+      · 展开零个工具（参数不齐 / 值用不了：`_param_problem_plan` 就是零工具）；
+      · 有工具**落不出实参**（`skills.args_are_bound` 判：值里有 `None` 或未解析的
+        `$tool[N]` 引用）；
+      · 有条目的工具**不在** `allowed` 闭集里（模板带了这个角色够不到的工具）。
+    为什么不"能绑几条绑几条"：一个计划是**有序的整体**，中间少一条、或某一条只剩工具
+    名，得到的就不是"这份计划"，而是第三样没人设计过的东西——而它会被当成"剩余的步骤"
+    落进台账、被下一轮的 planner 当事实读回来。宁可整份退回占位步骤（＝今天的行为）。
+
+    `allowed` 由调用方传入（它已经算过一遍 `step_tool_enum`）；不给就现算。
+    """
+    plan = instantiate_plan(skill_name, params if isinstance(params, dict) else {}, role)
+    if not isinstance(plan, dict):
+        return []
+    specs = plan.get("tools")
+    if not isinstance(specs, list) or not specs:
+        return []
+    closed = {str(t) for t in allowed} if allowed is not None else set(step_tool_enum(role))
+    out: list[dict] = []
+    for spec in specs:
+        tool, raw = split_tool_spec(spec)
+        if not tool or tool not in closed:
+            return []
+        try:
+            # 严格 JSON：这串是**本进程刚由 `json.dumps` 产出**的（展开器那十余处
+            # 写端），不需要 `graph._tool_args` 那套容模型的漂移（单引号/尾逗号）。
+            args = json.loads(raw) if raw.strip() else {}
+        except (ValueError, TypeError):
+            return []
+        if not args_are_bound(args):
+            return []
+        out.append({"skill": skill_name, "tool": tool, "args": args})
+    return out
+
+
+def steps_for_intent(it: dict, role: str | None, allowed: Any) -> list[dict]:
+    """一件意图 → 要登记的那几步；`[]` ＝这一件推不出任何步骤（调用方跳过它）。
+
+    步骤集合取自**技能模板 ∩ 本角色的闭集**（`step_tool_enum`）：登记一行"够不到的工具"
+    只会永远挂在台账里（`advance_by_receipts` 见无可结算的步骤直接返回 None），那比不登记
+    更坏。`params` 有值就用**执行侧同一个展开器**（`bound_steps`）把实参绑上去；绑不出
+    （参数不齐 / 落不出实参 / 够不到的工具）就退回"只有工具名"的**占位步骤**——两步的
+    工具集合因此逐字相同，多出来的只是 `skill`/`args` 两格（批 A 里谁都还没读，
+    渲染器 `_step_line` 只看 label/tool）。
+    """
+    skill = SKILL_MAP.get(it["skill"])
+    tools = [str(t) for t, _tmpl in (getattr(skill, "plan", None) or ()) if t in allowed]
+    if not tools:
+        return []
+    steps = bound_steps(it["skill"], it.get("params"), role, allowed)
+    if steps:
+        return steps
+    return [{"skill": it["skill"], "label": t, "tool": t} for t in tools]
+
+
 def intents_to_declarations(intents: Any, *, role: str | None, sources: Any,
                             acted_skills: Any = (), receipts: Any = (),
                             skip_goals: Any = (), audit: dict | None = None) -> list[dict]:
@@ -521,7 +654,9 @@ def intents_to_declarations(intents: Any, *, role: str | None, sources: Any,
         `require_task_goal_per_intent` 的排除**同一条规则**（两处必须同源：判据说
         "没上卡的都要有登记"，机制就得"没上卡的都登记"；各写一份迟早一边松一边紧）；
       · 该技能模板的工具**这一轮全在回执里** ⇒ 这件事这一轮已经做完了（模型把一件
-        刚做完的事也列进清单是常有的事，登记它就等于长出一行永远结算不掉的未完成）；
+        刚做完的事也列进清单是常有的事，登记它就等于长出一行永远结算不掉的未完成）。
+        判据用**实际要写下去的那份步骤**的工具集合（批 A 起，有实参时以展开结果为准，
+        见下面 `bound_steps` 那一段）；
       · `goal ∈ skip_goals`（`same_goal` 判）⇒ **同一轮里模型已经用 `task_hold` 明确
         登记过它了**。两条通道说的是同一件事，而幂等键按 goal 指纹算——两份措辞不同
         的 goal 会算出两个 task_id、长出两行同义的未完成（那正是本仓"同一件事只许有
@@ -549,11 +684,12 @@ def intents_to_declarations(intents: Any, *, role: str | None, sources: Any,
             continue
         if any(same_goal(it["goal"], g) for g in skipped):
             continue
-        skill = SKILL_MAP.get(it["skill"])
-        tools = [str(t) for t, _tmpl in (getattr(skill, "plan", None) or ()) if t in allowed]
-        if not tools:
+        steps = steps_for_intent(it, role, allowed)
+        if not steps:
             continue
-        if set(tools) <= done_tools:
+        # "这件这一轮已经做完"的判据跟着**实际要写下去的步骤**走（有实参时以展开结果
+        # 为准）——上面那条"模板工具全在回执里"说的就是这件事，两者必须同一集合。
+        if {str(s.get("tool") or "") for s in steps} <= done_tools:
             continue
         # ④ 出处对账（20261009）：这一件的 goal 里那些号得是主人说过的（本轮那句，或更早
         #    轮次里说过的话——跨轮复述是合法重提，判据在 `reconcile_goal`）。
@@ -574,8 +710,9 @@ def intents_to_declarations(intents: Any, *, role: str | None, sources: Any,
         # label 用工具名——自动登记这一路没有"人话标签"的来源，而任何现成的渲染器
         # （`action_text.tool_action_text`）拿到的都是**未解析的模板实参**
         # （`{"name": "$name"}` ⇒ 「解冻账号「上一步返回」」），写进去比不写更坏。
-        decl = normalize_declaration(
-            {"goal": goal, "steps": [{"label": t, "tool": t} for t in tools]})
+        # （实参走的是另一格 `args`：那里要么是展开器给出的完整实参、要么整格不写，
+        # 不会出现上面那种半成品。）
+        decl = normalize_declaration({"goal": goal, "steps": steps})
         if decl:
             out.append(decl)
     return out
@@ -601,11 +738,123 @@ def intent_frames(intents: Any, *, role: str | None, conversation_id: Any, sourc
     """
     if not isinstance(conversation_id, int):
         return []
-    return [frame_payload(d, conversation_id)
+    return [frame_payload(d, conversation_id, audit)
             for d in intents_to_declarations(intents, role=role, sources=sources,
                                              acted_skills=acted_skills,
                                              receipts=receipts,
                                              skip_goals=skip_goals, audit=audit)]
+
+
+def step_record(one: Any) -> dict | None:
+    """一步（模型写的 / 系统推的）→ 归一化步骤 dict；**没有工具名也没有标签 ⇒ None**。
+
+    形状是**加法的**：老两格 `{label, tool}` 一定在，**绑定了实参才多出 `skill`/`args`**
+    两格（20261012 批 A）。这样做的理由不是省字节，是**兼容面**：`steps` 里有存量行、
+    有跨语言契约（Rust 只透传不解析）、有拿它当"每一步做什么"渲染的注入块——多两格是
+    纯增量，少两格才是协议变更。`args` **不在**（而不是"是空的"）才叫**占位步**：知道要
+    调什么工具、不知道该怎么调，落到它时由 planner 补参（见下面那一段）。
+
+    列宽截断在这里（`LABEL_MAX`/`TOOL_MAX`）：`label` 缺省落到工具名上——与
+    `normalize_declaration` 的老行为逐字相同（自动登记那一路没有"人话标签"的来源）。
+    """
+    if isinstance(one, dict):
+        label = str(one.get("label") or one.get("tool") or "").strip()[:LABEL_MAX]
+        tool = str(one.get("tool") or "").strip()[:TOOL_MAX]
+        skill = str(one.get("skill") or "").strip()[:TOOL_MAX]
+        args = one.get("args")
+    elif one is None:
+        # `null` 在 steps 数组里**什么都不是**。老写法 `str(None)` 会造出一个
+        # `{"label": "None", "tool": ""}` 的幽灵步——没有工具名 ⇒ 永远结算不掉
+        # （僵尸行的最小形态），而台账上看上去只是一步"叫 None 的事"。
+        return None
+    else:
+        label, tool, skill, args = str(one).strip()[:LABEL_MAX], "", "", None
+    if not (label or tool):
+        return None
+    out: dict[str, Any] = {"label": label or tool, "tool": tool}
+    if skill:
+        out["skill"] = skill
+    # `args` **是不是 dict** 就是"这一步有没有绑定实参"这件事本身，所以空 dict
+    # （`list_tags({})`：一次完整、无参的调用）照样写下去——它和"还不知道怎么调"
+    # （没有这一格 ⇒ 占位步）是两件事，合流会让批 B 把可确定的下一步又交回给模型。
+    # 值本身一个都不改（见 `normalize_intents` 的注）；装不进 JSON 的那种（理论上
+    # 只在非模型产出时出现）**整格丢掉**并记一笔，不静默塞一个坏值进列里。
+    if isinstance(args, dict):
+        try:
+            json.dumps(args, ensure_ascii=False)
+        except (TypeError, ValueError):
+            logger.warning("[tasks] 步骤实参装不进 JSON，整格丢弃（工具=%s）", tool)
+        else:
+            out["args"] = args
+    return out
+
+
+def certify_steps(steps: Any, max_chars: int = TASK_STEPS_COL_MAX) -> tuple[list, list]:
+    """步骤表 → `(可安全落库的步骤表, 降级记录)`。**判据是序列化后的字符数**。
+
+    **这是消耗方（Rust）的截断规则在产出侧的自证**：`save_agent_task` 对 `steps` 做
+    `chars().take(TASK_STEPS_COL_MAX)`，从中间切断出来的串不是合法 JSON ⇒ 那一行读回来
+    永远结算不掉（详见 `TASK_STEPS_COL_MAX` 的注）。所以宁可**有损地降级、也要是合法
+    JSON**，且降级必须**看得见**（返回值第二格 + WARNING）。**绝不丢步骤**：`total_steps`
+    是这一行的分母，少一步就是把进度说成假话。
+
+    超标的**只可能是 `args`**，这就是阶梯长这样的原因：`label` ≤ 80、`tool`/`skill` ≤ 64，
+    八步全加起来 ≈ 2k（`TASK_MAX_STEPS=8`），离 16000 远得很；而实参是**没有上限**的
+    （一条待办正文、一段公告、一句留言引文）。所以：
+
+      ① 丢实参，**从最大的那条丢起**（贪心：一条一条丢到刚好装下 ⇒ **保住尽可能多
+         的可执行步骤**）。丢掉的步退回**占位步**——落到它时请 planner 补参，不是失败，
+         但确实是**执行能力的损失**，所以记 `args_dropped:N` 如实报个数；
+      ② 还不够就丢 `label`（纯显示，`_step_line` 本来就会落回工具名）；
+      ③ 还不够就只剩最小形状 `{label: 工具名, tool}`；
+      ④ 连最小形状都装不下（只可能出现在"上限被人改小"这种情形）⇒ WARNING + `unfittable`，
+         **原样交给 Rust 去截**——在这里替它丢步骤就等于把"还剩几步"说成假话。
+
+    "先丢显示后丢执行"这条顺序**不适用于这一族**：丢 label 一共只省得下几十个字符，
+    装不下的时候它一个字节都救不回来。真正的选择是"丢几条实参"，不是"先丢哪一格"。
+    """
+    def _size(x: Any) -> int:
+        return len(json.dumps(x, ensure_ascii=False))
+
+    def _tool_of(s: Any) -> str:
+        return str(s.get("tool") or "") if isinstance(s, dict) else ""
+
+    # 浅拷（只拷外层 dict）：降级**不许改调用方手里那份** `decl`
+    cur: list = [dict(s) if isinstance(s, dict) else s
+                 for s in (steps if isinstance(steps, list) else [])]
+    notes: list[str] = []
+    if _size(cur) <= max_chars:
+        return cur, notes
+    # ① 贪心丢最大的实参，丢到刚好装下为止
+    n = 0
+    while True:
+        with_args = [i for i, s in enumerate(cur) if isinstance(s, dict) and "args" in s]
+        if not with_args:
+            break
+        i = max(with_args, key=lambda j: _size(cur[j]["args"]))
+        cur[i] = {k: v for k, v in cur[i].items() if k != "args"}
+        n += 1
+        if _size(cur) <= max_chars:
+            notes.append(f"args_dropped:{n}")
+            return cur, notes
+    if n:
+        notes.append(f"args_dropped:{n}")
+    # ② 丢人话标签
+    no_label = [{k: v for k, v in s.items() if k != "label"} if isinstance(s, dict) else s
+                for s in cur]
+    if _size(no_label) <= max_chars:
+        notes.append("label_dropped")
+        return no_label, notes
+    # ③ 只剩最小形状（连技能名一起丢）
+    minimal = [{"label": _tool_of(s)[:LABEL_MAX], "tool": _tool_of(s)[:TOOL_MAX]} for s in cur]
+    if _size(minimal) <= max_chars:
+        notes.append("label_and_skill_dropped")
+        return minimal, notes
+    logger.warning("[tasks] steps 最小形状序列化后 %d 字符仍超过列上限 %d"
+                   "（请核对父仓 TASK_STEPS_COL_MAX 与本文件常量是否同值）",
+                   _size(minimal), max_chars)
+    notes.append("unfittable")
+    return minimal, notes
 
 
 def normalize_declaration(args: Any) -> dict | None:
@@ -614,6 +863,7 @@ def normalize_declaration(args: Any) -> dict | None:
     四条归一（都在这一处，调用方不用再判）：
       · `goal` 空白 ⇒ None（没有目标就没有这件事，也就没有可对齐的 id）；
       · 步骤超 `TASK_MAX_STEPS` 只收前几步；缺 label 用 tool 顶上、缺 tool 留空串；
+        每步的形状（含批 A 的 `skill`/`args` 两格什么时候写）全在 `step_record`；
       · `pending_question` 与 goal 同列宽截断（列宽是硬约束，超了 DB 会报 1406）；
       · **一条有效步骤都没有 ⇒ None**（20260927 改）：以前这里返回
         `state="cancelled"`，于是"模型心里没有剩下的步骤了"被读成"主人不要这件事了"
@@ -630,13 +880,12 @@ def normalize_declaration(args: Any) -> dict | None:
     raw_steps = args.get("steps")
     if isinstance(raw_steps, list):
         for one in raw_steps[:TASK_MAX_STEPS]:
-            if isinstance(one, dict):
-                label = str(one.get("label") or one.get("tool") or "").strip()[:LABEL_MAX]
-                tool = str(one.get("tool") or "").strip()[:TOOL_MAX]
-            else:
-                label, tool = str(one).strip()[:LABEL_MAX], ""
-            if label or tool:
-                steps.append({"label": label or tool, "tool": tool})
+            # 形状只有一处（`step_record`）：截断、label 落到工具名的兜底、`skill`/`args`
+            # 两格的取舍全在那里。老两格 `{label, tool}` 的输入到这里**逐字产出老形状**
+            # （没有 skill/args 就不写那两格），所以这一步的改动对存量调用者零影响。
+            rec = step_record(one)
+            if rec:
+                steps.append(rec)
     if not steps:
         return None
     return {"goal": goal, "steps": steps, "pending_question": q,
@@ -693,19 +942,35 @@ def task_id_for(idempotency_key: str) -> str:
     return "at_" + hashlib.sha1(idempotency_key.encode("utf-8")).hexdigest()[:8]
 
 
-def frame_payload(decl: dict, conversation_id: int) -> dict:
+def frame_payload(decl: dict, conversation_id: int, audit: dict | None = None) -> dict:
     """归一化声明 → `__TASK__` 帧载荷（字段与 `agent_task` 的列一一对应）。
 
     **不带 `conversation_id` / `user_id`**（列里有、帧里没有）：这两格是身份，
     Rust 落库时从**请求**取（`save_agent_task(db, uid, conversation_id, v)`），
     不由帧携带——模型碰不到身份字段，这一条是结构性的而不是靠它自觉。
+
+    **`steps` 在这里过 `certify_steps`**（20261012 批 A）：第 2 步起步骤带得上实参，
+    体积第一次可能顶到列宽——而 Rust 到顶是**从中间截断**（`TASK_STEPS_COL_MAX` 那条注：
+    截出来不是合法 JSON ⇒ 读侧给 Null ⇒ 那一行永远结算不掉）。消耗方的截断规则，由
+    产出方在**发帧之前**自证：宁可有损降级成一个合法的小计划，也不发一个落库即损坏的。
+    降级**不许静默**：`audit` 收读数、日志收 WARNING，两条都有人看（`frame_payload`
+    是两条登记通道（意图清单 / 显式 `task_hold`）**唯一**的帧出口，所以闸设在这里一处）。
+    `audit` 为 None 时只有日志——纯函数仍可脱开读数调用。
     """
+    steps, notes = certify_steps(decl.get("steps"))
+    if notes:
+        _bump(audit, "steps_degraded")
+        if audit is not None:
+            audit.setdefault("steps_degraded_kinds", []).append(", ".join(notes))
+        logger.warning("[tasks] 步骤表降级落库 %s（%s；%d 步）——原始步骤超列宽，"
+                       "降级后的计划会少掉人话标签或实参（实参丢掉的那几步退回「占位步」）",
+                       notes, decl.get("goal"), len(steps))
     idem = idempotency_key_for(conversation_id, decl["goal"])
     return {
         "task_id": task_id_for(idem),
         "goal": decl["goal"],
-        "steps": decl["steps"],
-        "total_steps": len(decl["steps"]),
+        "steps": steps,
+        "total_steps": len(steps),
         "cursor": 0,
         "state": decl["state"],
         "pending_question": decl["pending_question"],

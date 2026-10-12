@@ -16,6 +16,30 @@
 
 ## 20261012
 
+- **跨轮任务的步骤开始带实参：`steps` 从「一串工具名」变成「能执行的一串步骤」（契约，
+  20261012）**：一个步骤此前只有 `{label, tool}` 两格，而参数**在产出那一刻就存在**
+  （`Skill.plan` 是 `(工具名, {参数模板})`，`instantiate_plan` 已经能展开成完整实参），
+  只是在 schema 与归一器两处被丢掉 ⇒ 台账里住的是一串**没法执行的名字**，每一步都得请
+  模型重新推一遍参数——"剩下那件要不要继续"的废话轮与漏步，共同的来源就是它。本批只改
+  **写入侧**：步骤多出 `skill`（哪个本领，schema 里带可见技能名的闭集）与 `args`（实参，
+  键＝工具参数名）两格，界面/提示词/结算**一个读点都没有**（渲染器只看 label/tool）⇒
+  对外行为与今天逐字相同，回退＝不发这两格。`args` **空 dict 也写**（`list_tags({})` 是
+  一次完整调用），与"这一格不在"（还不知道怎么调＝**占位步**）是**两件不同的事**——后者
+  落到它时照旧回 planner 补参。实参一律取自与执行侧**同一个展开器**（不许另推一份），
+  且**一个字符都不改**（顺手截断＝把一次真写入改坏）。落地：`agent/tasks.py` 的
+  `step_record` / `certify_steps` / `bound_steps` / `steps_for_intent`（`intents_to_declarations`
+  拆出后者，复杂度回到预算内）、`task_hold_schema` 与 `intents_prop_schema` 各加一格、
+  `normalize_intents` 保留 `params`、`frame_payload` 发帧前自证；`agent/skills.py` 新增
+  `split_tool_spec` / `args_are_bound`（形状与"能不能脱离现场执行"两条规则，贴着写端）。
+- **`steps` 列宽上限两侧同步 4000 → 16000，且由产出方在发帧前自证（契约，20261012）**：
+  Rust 落库是 `chars().take(N)`——**从中间截断**，截出来的串不是合法 JSON ⇒ 读回时 `steps`
+  落 `Null` ⇒ 那一行**从此永远结算不掉**（僵尸行，比不登记更坏）。步骤带实参之后 4000 字符
+  装不下八步（`label`≤80、`tool`/`skill`≤64，超标的**只可能是 `args`**），所以：父仓
+  `src/routes/chat.rs::TASK_STEPS_COL_MAX` 与 `agent/tasks.py` 的同名镜像一起改成 16000
+  （**算出来的**：`text` 列 65535 **字节**，utf8mb4 下 1 字符 ≤ 4 字节 ⇒ 16000×4=64000 < 65535），
+  且 agent 侧发帧前按同一个数**自证**（`certify_steps`：超了就降级——先按体积从最大的那条
+  **逐条丢实参**、再丢人话标签、最后只剩最小形状，**绝不丢步骤**，每次降级都进 trace 与
+  日志）。跨语言对拍测试读不到父仓时**跳过**、`SAUDADE_REQUIRE_PARENT=1` 时是红。
 - **回执侧补一条「件数」判据：`require_exec_once_any`（判据，20261012）**：上面那条行为修复
   （令牌用掉即作废）在语料侧**原本没有人看得见**——「同一件在一轮里被兑现了两遍」这件事，
   回执侧既有的三个键（`require_exec_tools` / `forbid_exec_tools` / `require_zero_exec`）读的

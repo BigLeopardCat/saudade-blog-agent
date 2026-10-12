@@ -4334,6 +4334,47 @@ def _param_problem_plan(skill: Skill, chk: dict,
     }
 
 
+# 一条 spec 的字面形状：`工具名({json 参数})`。写端在本模块（`tools.append`
+# `f"{tool}({json.dumps(args, ensure_ascii=False)})"`，十余处），读端有三处
+# （`graph._tool_args`、`tasks.bound_steps`、测试）——**拆分规则只能有一处**，
+# 所以留在这里、贴着写端（同族教训见 agent/graph.py `_esc_spec` 的注：
+# "改一处要同步十三处"正是全仓审计点名的主导缺陷）。
+_TOOL_SPEC_RE = re.compile(r"^(\w+)\((.*)\)$", re.DOTALL)
+
+
+def split_tool_spec(spec: Any) -> tuple[str, str]:
+    """`工具名({json 参数})` → `(工具名, 参数原文)`；**形状不匹配一律 `("", "")`**。
+
+    只做拆分，**不解析参数**：参数原文怎么读由各消费方按自己的容错要求决定——
+    `graph._tool_args` 要容模型的漂移（单引号/尾逗号/行注释，见 `_loads_tolerant`），
+    而 `tasks.bound_steps` 读的是**本进程刚由 `json.dumps` 产出**的串（严格 JSON 就够）。
+    把容错搬到这里会让前者变宽、后者变窄，两边都不对。
+    """
+    m = _TOOL_SPEC_RE.match(str(spec or "").strip())
+    if not m:
+        return "", ""
+    return m.group(1), m.group(2)
+
+
+def args_are_bound(args: Any) -> bool:
+    """这份实参**能不能脱离本轮现场直接执行**（＝这一步算不算"已绑定实参"）。
+
+    两个不是"已经能调"的形态，**都来自展开器自己的产出**，所以判据贴着它：
+      · 值里有 `None` ⇒ 必填参数没给到（`expand_template_args` 只为"必填而没值"写
+        None，可选而没值的那一格它直接不落键）——真发出去只会换回一个 `__ERROR__`；
+      · 值里有**未解析的参数引用** `$tool[N].field` ⇒ 它的值要等**前面那次调用**回来
+        才知道，本轮的现场之外根本取不到（`expand_template_args` 刻意原样透传，见
+        它的注）。跨轮把一个带引用的步骤当"已绑定"去执行 = 拿着一个永远取不到值的
+        占位符去写。
+
+    空 dict **算已绑定**（`list_tags({})` 这种无参工具本身就是完整的一次调用）——
+    它和"还不知道怎么调"（没有 `args` 这一格）是两件不同的事，别在这里合流。
+    """
+    if not isinstance(args, dict):
+        return False
+    return all(v is not None and not _contains_ref(v) for v in args.values())
+
+
 def expand_template_args(tmpl: dict, params: dict,
                          specs: dict[str, ParamSpec] | None = None) -> dict:
     """把 `skill.plan` 的参数模板实例化成工具实参（通用分支的唯一展开点）。
