@@ -1,0 +1,38 @@
+{
+  "_note": "mypy 错误数的棘轮基线。只许变小；--update 是唯一放宽通道。版本必须与 pyproject.toml 的 dev 组同源。",
+  "mypy_version": "2.4.0",
+  "targets": [
+    "agent",
+    "config",
+    "models",
+    "rag",
+    "tools",
+    "utils",
+    "server.py"
+  ],
+  "total": 212,
+  "files_checked": 46,
+  "by_file": {
+    "agent/action_text.py": 1,
+    "agent/adminops.py": 19,
+    "agent/authz.py": 3,
+    "agent/context.py": 2,
+    "agent/entities.py": 1,
+    "agent/graph.py": 98,
+    "agent/hostinfo.py": 2,
+    "agent/native_plan.py": 7,
+    "agent/react_arm.py": 6,
+    "agent/react_line.py": 5,
+    "agent/refs.py": 4,
+    "agent/reports.py": 1,
+    "agent/skills.py": 12,
+    "agent/tasks.py": 3,
+    "rag/embed_space.py": 1,
+    "rag/graph_build.py": 3,
+    "rag/search.py": 4,
+    "rag/vector_index.py": 3,
+    "server.py": 7,
+    "tools/base.py": 28,
+    "utils/trace.py": 2
+  }
+}
