@@ -11,6 +11,7 @@
 
 import ast
 import json
+import logging
 import re
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -24,6 +25,8 @@ from agent.block_reasons import block_reason_type  # 受阻原因码 → 类型�
 # IoT 开关：与 `skills._IOT_*` 同源。`tools/base.py` 是开关值进入 agent 的唯一入口
 # （它读 `config.settings.iot_enabled`），这里只转发、不重新判断。
 from tools.base import IOT_ENABLED as _IOT_ENABLED
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 消息/上下文工具
@@ -258,6 +261,10 @@ def _attach_page_guide(page_ctx: str, role: str | None = None) -> str:
             out += "\n" + GUESTBOOK_GUIDE
         return out
     except Exception:
+        # 降级方向是对的（少一段指南好过拖垮整轮），但**不许静默**：能力清单从
+        # 提示词里消失，正是"模型照单声称自己做不到"那一族（20260921 的洞）的
+        # 上游。事后要能回答"那一轮为什么没注入"——只有日志说得出。
+        logger.warning("页面指南注入失败，本轮退回纯 page_ctx", exc_info=True)
         return page_ctx or ""
 
 
@@ -862,11 +869,18 @@ def _doc_id_lookup(title: str) -> str:
 
 
 def _corpus_ready() -> bool:
-    """语料索引快照是否可用（只看"有没有内容"，不建索引、不阻塞）。"""
+    """语料索引快照是否可用（只看"有没有内容"，不建索引、不阻塞）。
+
+    返回 False 有两种来路，**语义不同**：语料空（正常，冷启动）与**取快照时抛了
+    异常**（索引坏了）。调用方只看 bool，两者长得一样；后者此前没有任何痕迹，
+    事后查"为什么文章标题都解析不出 id"会一无所获。20261012 补观测：只有异常
+    那一路留 warning，空语料不吵人。
+    """
     try:
         from rag.search import get_index
         return bool(get_index().docs_snapshot())
     except Exception:
+        logger.warning("语料索引快照读取失败（按'未就绪'降级）", exc_info=True)
         return False
 
 

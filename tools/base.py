@@ -1319,6 +1319,14 @@ _DISPLAY_DEDUP_SECONDS = 30.0
 _last_display: dict[int, tuple[str, float]] = {}
 _last_display_lock = threading.Lock()
 
+# ⚠️ 20261012 补观测（同一条线）：`device_oled_display` 里那段**回执确认**是为"幽灵
+# 在线窗口"写的（设备断电→遗嘱到达前，曾达 ~2 分钟；publish 入队即 200，设备其实收
+# 不到）。它靠响应体里的 `req_id` 起头——而这个 id 解析不出来时，整段确认会被**跳过**，
+# 函数照旧返回"已下发"。也就是说：唯一那段能分辨"设备真确认了"与"我们根本没去问"的
+# 代码，会在没人知道的情况下不执行，加固等于静默退回原状。所以那一格现在必写一条
+# WARNING——**这是日志口径的补丁，不是行为修正**（返回语义逐字不变，判据见
+# `tests/test_silent_degradation.py` ④）。
+
 
 def _sign_user_jwt(user_id: int) -> str:
     """用与博客相同的 JWT_SECRET 签发 HS256 JWT（sub=user_id，5 分钟有效），
@@ -1449,8 +1457,8 @@ def device_oled_display(
         rid = None
         try:
             rid = resp.json().get("req_id") or None
-        except Exception:
-            rid = None
+        except Exception:   # 解析不出 ⇒ 回执确认整段跳过（后果与留痕见 `_last_display` 段）
+            logger.warning("回执 id 解析失败 ⇒ 跳过回执确认（按已下发返回）", exc_info=True)
         if rid:
             for _ in range(5):
                 time.sleep(1)

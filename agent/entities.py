@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 # 摘要总长上限：Rust 侧 detail 列 varchar(300)，动作行 + 摘要一起截断；
 # 留足动作行空间（"查看留言板"约 10 字），并防 8 行窗口把注入串（上限 1500）撑爆。
@@ -55,6 +58,12 @@ def _parse(result: str):
         try:
             return json.loads(text)
         except Exception:
+            # 走到这里 = 文本长得像结构（`[`/`{` 开头，见上一行的早退）却两种解析都
+            # 不认 —— 是**工具返回形状漂了**，不是"这条不该有摘要"。摘要在
+            # `receipt_digest` 里被吞成空串后，跨轮指代取值会静静地退化成"再跑一遍
+            # 工具"（本模块的头注就是治这个的），所以这里必须留痕。20261012 补观测。
+            logger.warning("实体摘要：工具返回形态解析不出（按无摘要降级）: %s",
+                           text[:120], exc_info=True)
             return None
 
 
