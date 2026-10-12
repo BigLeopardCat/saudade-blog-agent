@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""工程配置的五条判据（20261013，行业规范收口批 2）。
+"""工程配置的六条判据（20261013，行业规范收口批 2；⑥ 同日升 3.12 时补）。
 
 **为什么单起一套**：这几处此前的失效形状**一模一样**——"文件里写着一句话，而那句
 话没有任何东西看着"：
@@ -15,9 +15,18 @@
      ⇒ 函数签名注释了约 78% 而没有一个被校验。补成真之后，"棘轮真的接在 CI 上"
      与"三处写的 mypy 版本是同一个"同样需要有人看着——否则它会以 ① 那种方式再死一次。
   ⑤ 覆盖率那一档（`run_all.py --coverage`）的 pin 与配置：pin 少写 `[toml]` extra ⇒
-     Python 3.10 上 coverage 读不了 `pyproject.toml`、**每个套件都退 1**（现场像整批
-     代码坏了）；`[tool.coverage.run].source` 少列一个包 ⇒ 那个包**整份**从报告里消失，
-     而"哪些文件一直没人碰"这个问题的答案就悄悄少一块。两处都是"同一件事写两遍"。
+     coverage 读不了 `pyproject.toml`、**每个套件都退 1**（现场像整批代码坏了；
+     当年是 3.10，标准库没有 TOML）；`[tool.coverage.run].source` 少列一个包 ⇒
+     那个包**整份**从报告里消失，而"哪些文件一直没人碰"这个问题的答案就悄悄少一块。
+     两处都是"同一件事写两遍"。
+  ⑥ **解释器版本**：这一条一度是上面五条里唯一**没有**机器锁的，而它恰好是写法最
+     分散的一项——`requires-python`、`.python-version`、`[tool.ruff].target-version`、
+     `[tool.mypy].python_version`、CI 的 `python-version`、棘轮基线的 `python_target`，
+     **六处**。20261013 把 3.10 升到 3.12 时逐处手改才看清：任何一处漏掉都不报错，
+     只会以"CI 装了 3.10 而代码声明 3.12"这种**假绿**的形式存在（反过来更糟：
+     声明 3.12、CI 只验 3.10 ⇒ 升版这件事压根没被验过）。另外还有 `uv.lock` 这份
+     **生成物**（不是手写的第七处）：它同样记着 `requires-python`，改声明忘重跑
+     `uv lock` 会落在 CI 的 `uv sync --frozen` 上，而本机没有这条出口可验。
 
 判据一律读**磁盘事实**（目录在不在、源码里还有没有第二份字面量），不读"文档里写了
 这一条"——后者的失效方式正是"名单对了、事情没做"。
@@ -67,9 +76,13 @@ def _strip_comments(text: str) -> str:
 def _section(text: str, header: str) -> str:
     """取 TOML 里 `[header]` 那一节的正文（到下一个行首 `[` 为止），**已剥注释**。
 
-    刻意不引 toml 解析器：本机 Python 是 3.10（没有 `tomllib`），而为一处配置断言
-    添一个依赖是本末倒置。这里的用法只有"读一个节里的一个字符串键"，剥掉注释后
-    正则够用；真正需要机器读 TOML 的地方（`uv` 本身）读的是同一个文件。
+    刻意不引 toml 解析器：**20261013 升到 3.12 之后理由从"没有"变成了"不必"**——
+    以前是本机 Python 3.10 没有 `tomllib`，现在是标准库里有（3.11+）但这里用不着。
+    两个理由都成立且都指向同一件事：这六条判据里有几条**正是为了在升版前后都能跑**
+    才写的（⑥ 要能告诉你 `requires-python` 是不是写歪了），让它先依赖新解释器才有的
+    标准库，等于把"验升版"的那把尺子和"升版"绑在一起。这里的用法始终只有"读一个节
+    里的一个字符串键"，剥掉注释后正则够用；真正需要机器读 TOML 的地方（`uv` 本身）
+    读的是同一个文件。
     """
     m = re.search(rf"^\[{re.escape(header)}\](?P<body>.*?)(?=^\[|\Z)", text, re.M | re.S)
     return _strip_comments(m.group("body")) if m else ""
@@ -254,14 +267,17 @@ check(f"  整仓的 `uvx mypy@X` 与 dev 分组同版（{MYPY_PIN}）——升�
 # ══════════════════════════════════════════════════════════════════════════
 print("\n⑤ 覆盖率那一档（`run_all.py --coverage`）：pin 要带 extra，量的面要与打包的面同源")
 
-# pin 必须写成 `coverage[toml]==X`。这不是风格：Python 3.10 **没有标准库 TOML**，没这个
-# extra 时 coverage 连 `pyproject.toml` 都打不开，而且不是"跳过配置接着跑"，是**构造
-# Coverage 对象时就抛 ConfigError、退出码 1** ⇒ 每个子套件都退 1，现场看着像"这批代码
-# 全坏了"。20261013 真踩了一次才写下的这条（`run_all.py` 的探针也是那次加的）。
+# pin 写成 `coverage[toml]==X`。20261013 真踩了一次才写下的这条（`run_all.py` 的探针
+# 也是那次加的）：当年是 3.10、**没有标准库 TOML**，装了 coverage 却没这个 extra 时
+# 它连 `pyproject.toml` 都打不开，而且不是"跳过配置接着跑"，是**构造 Coverage 对象时
+# 就抛 ConfigError、退出码 1** ⇒ 每个子套件都退 1，现场看着像"这批代码全坏了"。
+# 升到 3.12 后 `tomllib` 进了标准库、这个 extra 变成**多余但无害**（它带的 `tomli`
+# 只在 <=3.11 装）。判据**照样留着**：要固定的是「配置必须读得进来」这个形状，
+# 而不是"这一版解释器恰好不用装东西"——后者会随解释器版本自己变，正是不该当判据的东西。
 _cov_pin = re.search(r'"coverage(\[[^\]]*\])?==([0-9][^"]*)"', _dg_sec)
 check("pyproject 的 dev 分组钉了 coverage 版本", _cov_pin is not None,
       _cov_pin.group(2) if _cov_pin else "dependency-groups 里没有钉死的 coverage==")
-check("⭐ pin 带 `[toml]` extra（没有它 = 每个套件都退 1，理由见上面这段）",
+check("⭐ pin 带 `[toml]` extra（3.12 上它已多余，但写下来的是「配置读得进来」这个形状）",
       _cov_pin is not None and _cov_pin.group(1) == "[toml]",
       _cov_pin.group(0) if _cov_pin else "—")
 
@@ -292,6 +308,66 @@ check("`.coverage-data/` 既在 run_all.py 里、也在 .gitignore 里（两处�
 # 以 ModuleNotFoundError 变红（实测一次：130 个套件里红 17 个，看着像整批守卫坏了）。
 check("  run_all.py 给子进程挂上了 `tests/`（否则覆盖率档下同目录助手 import 不到）",
       'env["PYTHONPATH"] = str(TESTS)' in RALL)
+# 配方**不许写死解释器路径**：`lib/python3.X/site-packages` 这种写法升一次版本就烂一次，
+# 而这一档起不来时是**拒绝运行**（一个套件都不跑）⇒ 症状会是"覆盖率整个用不了"。
+# 20261013 从 3.10 升 3.12 时这里正是坏的。改成问包自己装在哪，配方就跟着解释器走。
+check("  配方不写死 `lib/python3.X/site-packages`（改问 `coverage.__file__`）",
+      "lib/python3." not in RALL and "SITE=$(/tmp/cov/bin/python -c" in RALL)
+# 光判头注不够：**真被抄走的是拒绝消息里那三行**（头注是人读的、拒绝消息是发生故障时
+# 直接贴进终端的）。两处判同一件事——解释器从 `sys.executable` 来、版本号一个字都不写死。
+# `--python {v}` 那一形是 20261013 之前的写法：它让"建临时环境的那一侧"与"跑套件的那一侧"
+# 可以是**两个不同版本**，而这正是 `[toml]` extra 那件事按谁家规则来的分岔口。
+check("  起不来时打出来的三行配方也**按当前解释器算**（`sys.executable`，不写死版本号）",
+      "--python {sys.executable}" in RALL and "--python {v}" not in RALL)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+print("\n⑥ 解释器版本只有一处事实源（六处手写 + 一份生成物，必须是同一个值）")
+
+_pf = re.search(r'^requires-python\s*=\s*">=\s*([0-9]+\.[0-9]+)"', PROJECT_SEC, re.M)
+PY_FLOOR = _pf.group(1) if _pf else None
+check("pyproject 的 `requires-python` 是个 `>=X.Y` 的下限", PY_FLOOR is not None, str(PY_FLOOR))
+
+_pyver_file = (ROOT / ".python-version").read_text(encoding="utf-8").strip()
+check(f"⭐ `.python-version` == requires-python 的下限（{PY_FLOOR}）",
+      _pyver_file == PY_FLOOR, f".python-version={_pyver_file}")
+
+_ruff_tv = re.search(r'^target-version\s*=\s*"([^"]+)"',
+                     _section(PYPROJECT, "tool.ruff"), re.M)
+RUFF_TV = _ruff_tv.group(1) if _ruff_tv else None
+check(f"⭐ `[tool.ruff].target-version` == `py{(PY_FLOOR or '').replace('.', '')}`"
+      f"（同一个值，去掉小数点）",
+      PY_FLOOR is not None and RUFF_TV == "py" + PY_FLOOR.replace(".", ""), str(RUFF_TV))
+
+_mypy_tv = re.search(r'^python_version\s*=\s*"([^"]+)"',
+                     _section(PYPROJECT, "tool.mypy"), re.M)
+MYPY_TV = _mypy_tv.group(1) if _mypy_tv else None
+check(f"⭐ `[tool.mypy].python_version` == {PY_FLOOR}（这一项决定 mypy 报哪一套错误）",
+      MYPY_TV == PY_FLOOR, str(MYPY_TV))
+
+# ⚠️ 这一条的存在本身就是结论：**CI 装的解释器与代码声明的必须是同一个**。只声明不验
+# ⇒ "升级"这件事没有任何东西验过（CI 拿 3.10 跑一套声明 3.12 的代码，绿得毫无意义）；
+# 只验不声明 ⇒ 装的版本迟早与写着的分叉。
+_ci_py = re.search(r'^\s*python-version:\s*"([^"]+)"', _eval_code2, re.M)
+CI_PY = _ci_py.group(1) if _ci_py else None
+check(f"⭐ CI 的 `python-version` == {PY_FLOOR}",
+      CI_PY == PY_FLOOR, f"CI={CI_PY}")
+
+if _base.is_file():
+    # 与 ④ 的 mypy 版本同款：这两项都**改变错误集**，换了就必须重出账。
+    check(f"⭐ 棘轮基线的 `python_target` == {PY_FLOOR}（换目标就换了一套错误集）",
+          _b.get("python_target") == PY_FLOOR, str(_b.get("python_target")))
+
+# 第七处，但它**不是手写的那六处之一**：`uv.lock` 是 `uv lock` 生成的，里面同样记着
+# `requires-python`（还有由它算出来的 `resolution-markers`，例如 `tomli` 那条
+# `python_full_version <= '3.11'` 的 marker）。**改了声明没重跑 `uv lock`** 会当场红在
+# CI 的 `uv sync --frozen`（它拒绝在锁过期时跑）——但那要等到 CI；本机没有 `uv sync`
+# 这条出口（`.venv` 是产线 venv），等于本地无处可验。所以这里直接把两处字面钉在一起。
+_ul = re.search(r'^requires-python\s*=\s*">=\s*([0-9]+\.[0-9]+)"',
+                (ROOT / "uv.lock").read_text(encoding="utf-8"), re.M)
+UVLOCK_PY = _ul.group(1) if _ul else None
+check(f"⭐ `uv.lock` 的 `requires-python` == {PY_FLOOR}（生成物与声明要同源）",
+      UVLOCK_PY == PY_FLOOR, f"uv.lock={UVLOCK_PY}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
