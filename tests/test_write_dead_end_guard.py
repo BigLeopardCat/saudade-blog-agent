@@ -215,6 +215,105 @@ else:
           _prose("帮我把公告删了吧") is True
           and _prose("帮我发个公告，说说这次活动有什么注意事项") is True)
 
+print("\n⑥ 按件判（20261012）：整句有疑问词时，只否掉「自己那句在问」的那几件")
+#   现场 trace `20261012T192204`（会话 343）：主人一句话四件，第三件写成
+#   「审核一下**是否**通过」⇒ 整句被判成"像提问"⇒ 原先这一格**整批一起否决**：
+#   四件事的卡一张都不弹（零卡零执行，回复退化成"四件各自问一遍"）。改法的方向
+#   只能是**多弹卡**：这一格只在"整句否决本来就会命中"时才进入，而那时今天的结果
+#   是零张卡；`_vetoed` 是整批的子集 ⇒ 不可能把今天弹得出来的卡弹没了。
+#   ⚠️ 别把这节写成"必须弹满四张"：`audit_board_comment` 那件的参数（talk_id/verdict）
+#   在原话里锚不住 ⇒ 整句兜底 —— 它是**靠另一条判据**（`_ORDER_FRAME_RE` 收列表
+#   连接词）放行的，两条各自的隔离件在下面分开钉。
+_REAL_MSG = ("猫咪加条待办给用户niuniu重置额度，然后去把他额度重置，"
+             "然后把待审的留言你审核一下是否通过，然后再发一条公告，以你的口吻随便说点声明")
+_REAL_TOOLS = [
+    _spec("create_dashboard_todo", {"text": "给用户niuniu重置额度"}),
+    _spec("reset_user_quota", {"uid": 9, "user": "niuniu"}),
+    _spec("audit_board_comment", {"talk_id": 1, "verdict": True}),
+    _spec("create_announcement", {"title": "声明", "content": "随便说点声明"}),
+]
+
+
+def _card_tools(popup) -> set:
+    """卡上那几件的**工具名**（`pending_confirm.specs` 里是 {tool, args} 字典）。"""
+    pc = (popup or {}).get("pending_confirm") or {}
+    return {str(s.get("tool")) for s in (pc.get("specs") or [])}
+
+
+_real = _popup(_REAL_MSG, _REAL_TOOLS, "chat")
+check("现场那句：锚得住的那两件**当场弹卡**（不再是整批零卡）",
+      ({"create_dashboard_todo", "reset_user_quota"} <= _card_tools(_real)),
+      f"卡上={sorted(_card_tools(_real))}")
+
+# 逐件隔离：**只有** A 件自己那句在问（谓词位「会有什么影响」），B 件是命令
+_MIX_MSG = ("给 niuniu 发通知说「你的额度已重置」会有什么影响？"
+            "另外发条公告，标题「周末维护」正文随便写点")
+_MIX_TOOLS = [
+    _spec("send_user_notice", {"uid": 9, "title": "额度通知", "content": "你的额度已重置"}),
+    _spec("create_announcement", {"title": "周末维护", "content": "随便写点"}),
+]
+_mix = _popup(_MIX_MSG, _MIX_TOOLS, "chat")
+check("逐件隔离：A 件自己那句在问 ⇒ A 不弹、B 照弹（卡上只有公告）",
+      _card_tools(_mix) == {"create_announcement"}, f"卡上={sorted(_card_tools(_mix))}")
+
+# 反控（与上面**只差一个词位**）：句尾疑问 / 问后果 / 无骨架提问 ⇒ 照旧一件都不弹
+for _m, _why in [
+    ("，然后去把 guest5 冻掉会有什么影响？", "问后果"),
+    ("然后把 guest5 冻掉会怎么样？", "问后果"),
+    ("，然后去把 guest5 冻结好吗？", "句尾疑问"),
+    ("先说说把 guest5 冻结的流程是什么", "无骨架提问"),
+]:
+    check(f"反控·{_why}照样不弹：{_m[:20]}",
+          _popup(_m, [_spec("freeze_account", {"name": "guest5"})], "account_freeze") is None)
+# 上面四条反控的**正控**：同一件写、同一句话，去掉疑问词那一截就得弹得出卡
+# （没有这一条，上面四条可能是"这件写本来就走不到卡"的假绿）
+check("正控（反控不假绿）：「，然后去把 guest5 冻结」弹得出卡",
+      _popup("，然后去把 guest5 冻结",
+             [_spec("freeze_account", {"name": "guest5"})], "account_freeze") is not None)
+
+# 自查时踩到的两条（第一版按件判**放过**了它们，所以钉在这里）：疑问词与那一件
+# 只隔着一个引号里的「！」或一个逗号 ⇒ 按件切分会把那一件切出来当命令。
+_DEL = [_spec("delete_announcement", {"title": "今晚不许熬夜！"})]
+for _m, _why in [
+    ("把公告「今晚不许熬夜！」删掉好吗", "句尾疑问（锚点值里带「！」）"),
+    ("把公告「今晚不许熬夜！」删掉，好吗？", "句尾疑问（逗号隔开）"),
+    ("把公告「今晚不许熬夜！」删掉会有什么影响", "问后果（锚点值里带「！」）"),
+]:
+    check(f"反控·{_why}照样不弹：{_m[:22]}", _popup(_m, _DEL, "announcement_delete") is None)
+check("正控（上面三条不假绿）：同一句去掉疑问那一截 ⇒ 弹得出卡",
+      _popup("把公告「今晚不许熬夜！」删掉", _DEL, "announcement_delete") is not None)
+
+# 判据层（真值只此一处）：取景换了，两族的真值不许互相串
+_sc, _asks = getattr(g, "_spec_clause", None), getattr(g, "_spec_asks_question", None)
+check("agent.graph 里有 `_spec_clause` / `_spec_asks_question`（按件判的两个判据）",
+      _sc is not None and _asks is not None,
+      "" if (_sc is not None and _asks is not None) else "未定义")
+if _sc is not None and _asks is not None:
+    _anchor = _spec("create_dashboard_todo", {"text": "给用户niuniu重置额度"})
+    _noanchor = _spec("audit_board_comment", {"talk_id": 1, "verdict": True})
+    check("锚得住 ⇒ 只取那一小段（逗号也是断点，四件不粘成一句）",
+          _sc(_REAL_MSG, _anchor) == "加条待办给用户niuniu重置额度，",
+          repr(_sc(_REAL_MSG, _anchor)))
+    check("锚不住（参数全是模型编的）⇒ **退回整句**（fail-closed，与引入前逐字节相同）",
+          _sc(_REAL_MSG, _noanchor) == authz.strip_user_shell(_REAL_MSG),
+          repr(_sc(_REAL_MSG, _noanchor))[:40])
+    check("`_spec_asks_question`：命令那件 False、只问一件的那段 True",
+          _asks(_REAL_MSG, _anchor) is False
+          and _asks(_MIX_MSG, _MIX_TOOLS[0]) is True
+          and _asks(_MIX_MSG, _MIX_TOOLS[1]) is False)
+# 骨架表（这一批新收的**列表连接词**）：老骨架一条都没变窄，新收的只在"把/将/给"前
+_frame = g._ORDER_FRAME_RE
+check("老骨架一条不落（请/帮我/给我…、句首与逗号后）",
+      all(_frame.search(m) for m in (
+          "把文章 12 设为私密", "请把文章 12 设为私密", "帮我删掉文章 12",
+          "记得给 niuniu 发通知", "，把文章 12 设为私密", "给我把公告删了")))
+check("新收：并列命令的连接词（然后/再/接着… + 去/来）",
+      all(_frame.search(m) for m in (
+          "，然后去把文章 12 设为私密", "然后再把公告删了", "，接着把我们那个标签建了")))
+check("新收的连接词**认不出**「然后」后面不是把/将/给的句子（照旧按提问处理）",
+      _prose("然后把文章 12 设为私密会怎么样？") is False
+      and _prose("，然后去把他额度重置") is True)
+
 print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
