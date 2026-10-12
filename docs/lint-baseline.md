@@ -79,6 +79,16 @@ F821 是"会炸"的那一类，E/F/I/W 是"会烂"的那一类。本文件管后
   数字会漂，别在别处抄——`eval/complexity_baseline.json` 是唯一事实源。
   **不走 ruff 的 C901** 的理由写在那份文件的头注里（阈值 10 ⇒ 264 个违规，
   阈值 ≥100 ⇒ 等于没闸）。它由 `tests/run_all.py` 按磁盘枚举，CI 与夜间自动到手。
+- **同族的第三道（20261013 已落地）**：`eval/type_gate.py` + `eval/mypy_baseline.json`
+  —— 管的是**类型**。此前 `[tool.mypy]` 配了却从不执行（mypy 不在依赖、不在 `uv.lock`、
+  CI 没有这一步），而函数签名已注释约 78% ⇒ 写了从不校验。首次真跑读到
+  `212 errors in 21 files (checked 46)`，故与上面两道同规则：**记基线、只许变小**、
+  `--update` 是唯一放宽通道；判据两条（总数变大 / **某文件**变大，防互相抵消）。
+  本机跑它用隔离的 `uvx mypy@2.4.0`（同 dev 分组所钉版本，`uv sync` 本机永远不许跑）：
+  `python eval/type_gate.py --mypy "uvx mypy@2.4.0"`。
+  ⚠️ **换 mypy 版本 ⇒ 报出来的错误集整个变**，基线里记着出账时的版本，对不上直接退 3
+  （升版要重出基线，见 `pyproject.toml` dev 分组那段注释）。接线由
+  `tests/test_packaging.py` ④ 盯着（CI 有那一步、四处版本同源、账上的面 == 量到的面）。
 - 存量清理：按文件分批（先 `agent/` 与 `tools/` 这两个"会被 import 的"，后测试），
   每批单独提交、每批跑一次 `tests/run_all.py`。**`--fix` 之后必须看 diff**：
   F401/F811 的自动修会删掉"为了副作用而 import"的行与"刻意重复导入"的行。

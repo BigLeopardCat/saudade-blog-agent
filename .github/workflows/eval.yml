@@ -134,6 +134,20 @@ jobs:
       - name: 未定义名静态扫描（ruff F821，秒级）
         run: uv run --frozen ruff check --select F821 --no-cache .
 
+      # 类型检查棘轮（20261013 补）。`[tool.mypy]` 那段配置（`pyproject.toml` 末尾）
+      # 在此之前**从不执行**——mypy 不在依赖、不在 `uv.lock`、CI 没有这一步，而函数签名已
+      # 注释约 78% ⇒ 写了从不校验。配上以来第一次真跑：`212 errors in 21 files (checked 46)`。
+      # **不是一次性门禁而是棘轮**：一上来要求全绿会让 CI 恒红，人人学会无视它；改记基线、
+      # 只许变小（照 `eval/complexity_baseline.json` 同款）。判据两条：总数变大、或**某个文件**
+      # 变大（防"这边修三个、那边坏两个"在总数上互相抵消）。
+      # ⚠️ mypy 的版本从 `pyproject.toml` 的 dev 组来（上面 `uv sync --frozen` 已按 uv.lock 装好），
+      # 而 `eval/mypy_baseline.json` 里记着出基线时的版本——**两者对不上直接退 3**：换了 mypy
+      # 版本就换了一套错误集，棘轮不再是同一个量，这时要跑 `--update` 重出基线（升级 PR 里做）。
+      # 本机（产线 venv，**不许** `uv sync`）跑同一条判据用隔离的
+      # `python eval/type_gate.py --mypy "uvx mypy@2.4.0"`（与 dev 组同版）。
+      - name: 类型检查棘轮（mypy 错误数只许变小）
+        run: uv run --frozen python eval/type_gate.py
+
   # ═ 看板娘 pin 漂移提示（20261002）════════════════════════════════════════
   # **独立 job、只警告、恒绿**。上面那个 eval job 是门禁，这一条不是：它回答的是
   # "这次改了看板娘前端，父仓那个 pin 跟上了没有"。

@@ -51,10 +51,19 @@ dependencies = [
 #     `test_react_line` / `test_react_narrator_assets` 在 CI 里从那天起**恒红**，
 #     本机却一直是绿的（产线 venv 里还留着删依赖之前的那份 1.3.11）。版本钉在产线
 #     实际在跑的那个上，`uv.lock` 才是"CI 装什么"的唯一事实源。
+#   · `mypy` —— **20261013 补**：`[tool.mypy]` 那段配置（见本文件末尾）在此之前**从不执行**
+#     （不在依赖、不在 lock、CI 没有这一步），而函数签名已注释约 78% ⇒ 写了从不校验。
+#     首次真跑：`212 errors in 21 files (checked 46)`（`agent/graph.py` 98、`tools/base.py` 28）。
+#     数量不大 ⇒ 走**棘轮**而不是一次清零：`eval/mypy_baseline.json` 记当前读数，
+#     `eval/type_gate.py` 只许它变小（照 `tests/test_complexity_budget.py` +
+#     `eval/complexity_baseline.json` 同款）。**版本必须与 baseline 同源**——换了 mypy
+#     版本，报出来的错误集会变，棘轮就不再是同一个量；升版 ⇒ 重新出 baseline（CI 会红着逼你）。
+#     ⚠️ 本机不进 dev 组的安装流程（见上一段：本机不许 `uv sync`）⇒ 本机跑它用隔离的
+#     `uvx mypy@2.4.0 …`（与这里同版），CI 里才由 `uv sync --frozen` 装。
 # ⚠️ 本机 `.venv` 是**产线 venv**，不许 `uv sync` ⇒ 本机跑静态扫描仍用隔离的
 # `uvx ruff@0.14.4 check …`（与这里同版；升版 = 改这一行 + `uv lock`，本机命令一起改）。
 [dependency-groups]
-dev = ["langchain==1.3.11", "ruff==0.14.4"]
+dev = ["langchain==1.3.11", "mypy==2.4.0", "ruff==0.14.4"]
 
 [project.urls]
 Homepage = "https://github.com/BigLeopardCat/saudade-blog-agent"

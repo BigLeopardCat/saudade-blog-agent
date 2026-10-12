@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""工程配置的三条判据（20261013，行业规范收口批 2）。
+"""工程配置的四条判据（20261013，行业规范收口批 2）。
 
-**为什么单起一套**：这三处此前的失效形状**一模一样**——"文件里写着一句话，而那句
+**为什么单起一套**：这几处此前的失效形状**一模一样**——"文件里写着一句话，而那句
 话没有任何东西看着"：
 
   ① `pyproject.toml` 的 wheel 包列表列了并不存在的 `chains/`、漏了生产代码真的
@@ -11,6 +11,9 @@
   ③ `SECURITY.md` 把上游 CVE 明确推给"Dependabot"，而仓库里从来没有
      `.github/dependabot.yml` ⇒ 那句承诺当时是空的（依赖又全 `==` 钉死，没有它
      什么都不会升级）。
+  ④ `[tool.mypy]` 配了却**从不执行**（mypy 不在依赖、不在 lock、CI 没有这一步）
+     ⇒ 函数签名注释了约 78% 而没有一个被校验。补成真之后，"棘轮真的接在 CI 上"
+     与"三处写的 mypy 版本是同一个"同样需要有人看着——否则它会以 ① 那种方式再死一次。
 
 判据一律读**磁盘事实**（目录在不在、源码里还有没有第二份字面量），不读"文档里写了
 这一条"——后者的失效方式正是"名单对了、事情没做"。
@@ -21,6 +24,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 import re
 import sys
@@ -69,6 +73,7 @@ def _section(text: str, header: str) -> str:
 
 PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 PROJECT_SEC = _section(PYPROJECT, "project")
+EVAL_YML = ROOT / ".github" / "workflows" / "eval.yml"
 WHEEL_SEC = _section(PYPROJECT, "tool.hatch.build.targets.wheel")
 
 _m = re.search(r'^version\s*=\s*"([^"]+)"', PROJECT_SEC, re.M)
@@ -168,6 +173,77 @@ if _dep.is_file():
 _sec = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
 check("对照：SECURITY.md 确实把这件事推给了 Dependabot（否则本套件名不副实）",
       "Dependabot" in _sec)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+print("\n④ 类型检查棘轮真的接在 CI 上，且 mypy 版本只有一处事实源")
+
+_gate = ROOT / "eval" / "type_gate.py"
+_base = ROOT / "eval" / "mypy_baseline.json"
+check("eval/type_gate.py 在位", _gate.is_file())
+check("eval/mypy_baseline.json 在位（棘轮的量就在这份账上）", _base.is_file())
+
+# 版本按**dev 分组体**取，不写 `dev = ["mypy==X"]` 那种"顺手把唯一一项也判进去"的
+# 正则——20261005 那次（见 test_ci_suite_list.py ①b 的注释）正是这么坏的：
+# 给 dev 组加第二个包就会让判据红，而它红的时候说的是"没找到那一行"。
+_dg_sec = _section(PYPROJECT, "dependency-groups")
+_mypy_pin = re.search(r'"mypy==([0-9][^"]*)"', _dg_sec)
+MYPY_PIN = _mypy_pin.group(1) if _mypy_pin else None
+check("pyproject 的 dev 分组钉了 mypy 版本", MYPY_PIN is not None,
+      MYPY_PIN or "dependency-groups 里没有钉死的 mypy==")
+
+if _base.is_file():
+    _b = json.loads(_base.read_text(encoding="utf-8"))
+    # ⚠️ 版本对不上不是"变差"而是**换了一个量**：换 mypy 版本就换了一套错误集，
+    # 拿旧账比新读数毫无意义。`eval/type_gate.py` 因此在这里也退 3（两道）。
+    check(f"⭐ 基线的 mypy 版本 == dev 分组钉的（{MYPY_PIN}）",
+          _b.get("mypy_version") == MYPY_PIN,
+          f"基线={_b.get('mypy_version')} dev={MYPY_PIN}")
+    check("  基线里记着读数（total 与逐文件计数都在）",
+          isinstance(_b.get("total"), int) and isinstance(_b.get("by_file"), dict)
+          and bool(_b["by_file"]), f"total={_b.get('total')}")
+    # 查谁：基线的 targets 与棘轮里的 TARGETS 必须同源，否则"量到的面"和"账上的面"
+    # 会各自漂——两边都看不出对方变了（同 `rag/` 那个洞的形状）。
+    _tg = ast.parse(_gate.read_text(encoding="utf-8"))
+    _targets = None
+    for _n in _tg.body:
+        if isinstance(_n, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "TARGETS" for t in _n.targets):
+            _targets = ast.literal_eval(_n.value)
+    check("  基线的 targets == 棘轮里的 TARGETS（否则账与量各漂各的）",
+          _targets is not None and _targets == _b.get("targets"),
+          f"棘轮={_targets} 基线={_b.get('targets')}")
+
+_eval_code2 = "\n".join(ln for ln in EVAL_YML.read_text(encoding="utf-8").splitlines()
+                        if not ln.lstrip().startswith("#"))
+check("CI 有一步**会执行**的 eval/type_gate.py（不是只在注释里提一句）",
+      "eval/type_gate.py" in _eval_code2)
+# 与 ①b 同款：会执行的那一行不许自己手写 mypy（`uvx mypy@X` / `mypy==X`），
+# 版本只从 pyproject 的 dev 分组来 —— "同一件事写两处"就是改一处忘另一处的形状。
+check("  CI 那一行不手写 mypy 版本（版本只从 dev 分组来）",
+      "uvx mypy" not in _eval_code2 and "mypy==" not in _eval_code2)
+
+# 本机命令散在注释与文档里写的是 `uvx mypy@X`（隔离环境，不碰产线 venv）：**必须同版**。
+# 判据扫**整仓**的源码/文档，不只是 README——`uvx mypy@X` 这轮就落在三个文件里
+# （pyproject 注释、eval.yml 注释、type_gate.py 的用法示例）。
+# ⚠️ 本文件也在扫描范围内，所以下面这条命令字面**拆开写**：不然它自己是唯一一处
+# 逃过判据的落点（自己给自己开后门）。
+_MYPY_CMD_RE = re.compile("uvx " + r"mypy@([0-9][0-9A-Za-z.\-]*)")
+_SWEEP_EXT = {".py", ".toml", ".md", ".yml", ".yaml", ".sh"}
+_SKIP_DIRS = {".git", ".venv", ".mypy_cache", "__pycache__", "node_modules"}
+_hits: list[tuple[str, str]] = []
+for _p in ROOT.rglob("*"):
+    if not _p.is_file() or _p.suffix not in _SWEEP_EXT:
+        continue
+    if _SKIP_DIRS & set(_p.relative_to(ROOT).parts):
+        continue
+    for _v in _MYPY_CMD_RE.findall(_p.read_text(encoding="utf-8", errors="ignore")):
+        _hits.append((str(_p.relative_to(ROOT)), _v))
+check("  对照：整仓确实扫到了 `uvx mypy@X`（否则上面那条是空跑）",
+      len(_hits) >= 3, f"{len(_hits)} 处：" + "、".join(f"{f}@{v}" for f, v in _hits))
+_bad_ver = [f"{f}@{v}" for f, v in _hits if v != MYPY_PIN]
+check(f"  整仓的 `uvx mypy@X` 与 dev 分组同版（{MYPY_PIN}）——升版只改一处就会被这条抓住",
+      not _bad_ver, "、".join(_bad_ver))
 
 
 # ══════════════════════════════════════════════════════════════════════════

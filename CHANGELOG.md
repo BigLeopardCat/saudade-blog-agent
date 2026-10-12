@@ -16,6 +16,19 @@
 
 ## 20261013
 
+- **类型检查从"配了从不跑"变成棘轮（判据，20261013）**：`[tool.mypy]` 一直是**一份从不
+  执行的配置**（mypy 不在依赖、不在 `uv.lock`、CI 没有这一步），而函数签名已注释约 78%
+  ⇒ 写了从不校验。补进 dev 分组并 `uv lock` 之后第一次真跑：`212 errors in 21 files`
+  （`agent/graph.py` 98、`tools/base.py` 28），大半是 langgraph/langchain/openai 那几族
+  **没有类型信息**的对象 ⇒ 一次清零要动 21 个文件，一上来就当门禁只会换来"人人无视它"。
+  故新增 `eval/type_gate.py` + `eval/mypy_baseline.json`，与
+  `tests/test_complexity_budget.py`／`docs/lint-baseline.md` 同一形状：**记读数、只许变小**，
+  `--update` 是唯一放宽通道。判据两条：**总数变大**，或**某个文件**变大（防"这边修三个、
+  那边坏两个"在总数上互相抵消）。CI 加一步 `uv run --frozen python eval/type_gate.py`。
+  ⚠️ **换 mypy 版本 = 换一套错误集**：基线里记着出账时的版本，与 dev 分组对不上直接退 3
+  （不是"变差"而是"换了一个量"），升版要重出基线。接线由 `tests/test_packaging.py` ④ 盯着
+  （CI 真有那一步、四处写的版本同源、账上的面 == 量到的面）。**agent 行为一个字没改**。
+
 - **命令行前缀词表上锁（判据，20261013）**：同一张词表（`NAVIGATE:`/`AUTO_NAVIGATE:`/
   `EFFECT:`/`DARKMODE:`/`SUMMARY:`/`[System:`）在四处各写一遍——`agent/reports.py`
   的消毒正则、`agent/graph.py` 的兜底判据与载荷核对、`chat-core.js` 的 `COMMAND_RE`

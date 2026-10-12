@@ -57,3 +57,6 @@ _parent/
 
 # golden 草稿（含真实用户文本，绝不入库；只在本机被 REVIEW 与人工挑选用）
 eval/drafts/
+
+# mypy 的缓存（eval/type_gate.py 会跑它）
+.mypy_cache/
