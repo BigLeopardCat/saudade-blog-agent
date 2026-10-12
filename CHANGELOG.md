@@ -16,6 +16,39 @@
 
 ## 20261012
 
+- **服务商取值域从"用到才炸"改成"启动就拒"，思考开关的译法补上缺省支（行为，20261012）**：
+  这两处是同一个形状——**"一家一译"的地方只有 `if/elif`、没有缺省支**。① `LLM_PROVIDER`
+  此前**没有任何一处校验**（`AGENT_ARM` 有，它没有）⇒ 认不出的取值会一路走到请求里才炸，而且
+  炸法很难认：`get_llm` 的 `kwargs.pop("model", settings.active_llm_model)` 默认值**急切求值**，
+  `getattr(self, "<provider>_model")` 在调用方已传齐参数时照样先抛，落进图里就是"规划这一步
+  没跑完（服务抖动）"，而 `/health` **刻意不报 500**（探针只回答"进程还活着没有"）⇒ 除启动那
+  一刻没有第二处拦得住。现在 `Settings.check_provider()` 在 `lifespan` 里、`_build_arm()`
+  **之前**跑，认不出即 `ValueError` **拒绝启动**；归一化（大小写 + 首尾空白）只此一处，所以手写
+  `.env` 的 `" DEEPSEEK "` 既过校验也取得到值。② `models/llm.py` 的思考开关译法
+  （qwen `enable_thinking` / deepseek `thinking.type`）此前**没有 else**——认不出的 provider
+  静默丢掉这个开关；那正是 20261012 整轮 400 的形状（开着思考的 assistant 消息回放时缺
+  `reasoning_content`）。现在缺省支返回空 dict 并**出声**（`logger.warning`，本进程只报一次，
+  因为这路径每个请求都走）——**绝不替它塞别家的键**："静默丢"换成"静默错"是同一种失效。
+- **函数参数顶层声明 `additionalProperties: false`（契约，20261012）**：`native_plan.
+  build_tool_schema` 与 `tasks.py` 三个伪函数的 `parameters` 各加一句。不写它 ≡ 允许任意额外键，
+  模型编参数时**没有任何一侧报错**（`param_unknown` 只在事后 WARN）。**只长在顶层**——内层
+  `calls[].args` / `steps[].{}` / `intents.items` 是**自由形状**（键就是被调工具的形参名），在那儿
+  加会把"任何工具的任何参数"判成非法；正控（都写了）与负控（内层没写）都进
+  `tests/test_llm_provider_registry.py`。改之前用**真实最小调用在当班服务商**上验过中性（带键 /
+  去键各发一次，都是 `finish_reason=stop`）——本仓纪律是不拿没实测过的连线形状当默认。
+- **出站合规绊线补了自动出口（判据 / 跨仓契约，20261012）**：`graph.model_node` 那条绊线
+  （`context.strict_wire_issues`）此前**只写日志与 trace**，而生产跑在 qwen 上时它**永远是绿的**
+  （qwen 容忍那两种非法形状）⇒ 20260928 的 `tool_call_id` 重复在库里躺了 8 天，换服务商才炸。
+  「红了只发生在没人看的日志里」= 没有出口。父仓 `scripts/healthcheck.sh` 新增**第 7 项**：
+  记 `logs/agent/agent.log` 字节基线、每分钟只扫**增量段**、命中即 WARN（形状与第 4 项
+  nginx error.log 逐条相同，文件变小即重置基线）。**取证锚点用 ASCII 单 token `wire_illegal`**
+  （与 trace 事件同名）、**不许改名**，由 `test_wire_illegal_anchor_is_stable` 钉住——不 grep 那句
+  中文是因为"句子改一个字就断"的取证，断掉时是静默的。
+- **评审员的方言表改成按服务商查表（判据，20261012）**：`eval/llm_judge.py::response_format()`
+  此前把 provider 与字面量 `"deepseek"` 比 ⇒ 加服务商就静默落到默认方言，症状是"整份判据作废
+  而夜里照旧 ALL PASS"。现在 `_DIALECTS` 覆盖 `KNOWN_LLM_PROVIDERS` 全集、未登记**出声**，
+  且"覆盖全集"本身写成了断言。
+- **本批未 push、未重启** ⇒ 线上仍跑改动前的代码。
 - **跨轮台账从"提示词里的一段散文"升成循环的续跑变量（行为，20261012）**：一句话两件写，
   走到第二轮以后的形状是「卡① → 确定 → 执行 → **直接收尾**」。`route_after_execute` 的
   confirm 分支读的是 `_pending_intents(state)`——那是 `_scan_action_intents` 对**当轮那句话**

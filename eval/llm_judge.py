@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import logging
 import pathlib
 import re
 import sys
@@ -100,13 +101,37 @@ _RESPONSE_FORMAT = {"type": "json_schema",
 # （schema 是加成，提示词才是所有路径的共同底座）。
 _JSON_OBJECT_FORMAT = {"type": "json_object"}
 
+# 方言表（20261012 第二版）：**每一家都在这儿有一行**，不再写成
+# `if provider == "deepseek" ... else 默认`——那种写法的缺省支是**隐式**的，加一个服务商
+# 时"它落进 else 了"这件事没有任何地方说过，形状与 `models/llm.py` 那个少 else 的
+# 思考开关译法一模一样（同一个 bug 的第二份拷贝，本次一并修）。
+# 取值域与 `config.settings.KNOWN_LLM_PROVIDERS` 由 `tests/test_llm_provider_registry.py`
+# 对锁：**加服务商却忘了登记这张表 ⇒ 离线套件红**（机械闸门，不靠人记得）。
+_DIALECTS = {
+    "qwen": _RESPONSE_FORMAT,        # POC 在产线端点上实测强制生效（见上一段）
+    "openai": _RESPONSE_FORMAT,      # json_schema 的原生地
+    "deepseek": _JSON_OBJECT_FORMAT, # 只认 json_object，见上一段 400 原文
+}
+
 
 def response_format(provider: str = "") -> dict:
-    """当前服务商的结构化输出方言。空串 ⇒ 现读配置（测试可显式传，免得依赖当前档位）。"""
+    """当前服务商的结构化输出方言。空串 ⇒ 现读配置（测试可显式传，免得依赖当前档位）。
+
+    没登记的服务商**出声**再按默认走：这里的静默降级后果是"整份判据作废而夜里照旧
+    ALL PASS"（见上一段），所以哪怕最后仍按默认走，也必须留下一条日志——它是这条路
+    上唯一"还看得见"的地方。
+    """
     if not provider:
         from config import settings          # 延后 import：本文件要能被离线套件直接引（同 make_llm）
         provider = settings.llm_provider
-    return _JSON_OBJECT_FORMAT if provider.lower() == "deepseek" else _RESPONSE_FORMAT
+    dialect = _DIALECTS.get((provider or "").strip().lower())
+    if dialect is None:
+        logging.getLogger(__name__).warning(
+            "[judge] provider=%r 的结构化输出方言没登记 ⇒ 按默认 json_schema 走。"
+            "换服务商请先探针实测它认哪种方言，再登记进 `_DIALECTS`"
+            "（未登记就默认，正是 20261012 那 181 条判据全废的形状）。", provider)
+        dialect = _RESPONSE_FORMAT
+    return dialect
 
 _JUDGE_SYS = """你是评测评审员，只做一件事：核对一条客服回复**有没有编材料**。
 
