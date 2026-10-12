@@ -16,6 +16,20 @@
 
 ## 20261013
 
+- **命令行前缀词表上锁（判据，20261013）**：同一张词表（`NAVIGATE:`/`AUTO_NAVIGATE:`/
+  `EFFECT:`/`DARKMODE:`/`SUMMARY:`/`[System:`）在四处各写一遍——`agent/reports.py`
+  的消毒正则、`agent/graph.py` 的兜底判据与载荷核对、`chat-core.js` 的 `COMMAND_RE`
+  （外加 `server.py`/评测/前端展示的若干 `startswith` 与元组）。**改动时漏一处不报错**，
+  这是本仓自认的头号系统风险。新增 `tests/test_cross_language_tables.py`：从源码**现取值**
+  （AST 读 Python 正则、正则读 JS 字面量），算出每站与其余各站的**差集**，要求差集与
+  **台账**逐条对齐、**双向**（漏写一条红、某站补齐了忘了销账也红），另有变体前缀
+  `[A-Za-z0-9_]*EFFECT`（`SNOW_EFFECT:`）与"冒出没登记的新词"两条扫描。四处本来**就
+  该不同**（消毒是超集、兜底判据是子集），所以锁的是"差集有理由"，不是"四处一字不差"。
+  行为**一个字没改**。
+  ⚠️ 台账里记下一处**没考察过**的事实（不是拍板）：`graph.py::_CMD_PREFIX_RE` 自
+  `f69315e`（20260903）引入起就是 4 词，`SUMMARY`/`System` 从来没进来过；要不要加属于
+  行为改动（会改兜底触发面），得单独一批带 golden 证据。
+
 - **`pyproject.toml` 成了版本号的唯一来源（契约，20261013）**：`/openapi.json` 与 `/docs`
   上挂的 `info.version` 此前是 `server.py` 里手写的 `"1.0.0"`，而 `pyproject.toml` 声明的
   是 `0.2.0`——**差两个大版本**，问哪一份两份都有理。现在运行期版本读安装元数据里的
