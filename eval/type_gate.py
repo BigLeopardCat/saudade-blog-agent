@@ -19,13 +19,20 @@
 `baseline.mypy_version` 与 `pyproject.toml` 里 dev 组钉的版本对不上就直接退 3
 （`tests/test_packaging.py` ④ 也断言这一条，两道）。
 
+**解释器目标同理，而且它是后补的洞（20261013 升 3.12 时发现）**：本脚本调 mypy 时
+**不传 `--python-version`** ⇒ 目标只来自 `pyproject.toml` 的 `[tool.mypy].python_version`。
+而那一项**会改变报出来的错误集**（3.11+ 的 `Self`/`ExceptionGroup`、3.12 的泛型语法…）。
+基线当时只记 `mypy_version` ⇒「把 3.10 改成 3.12」这种**换了一个量**的改动，在棘轮眼里
+和「什么都没动」长得一模一样（错误数没涨就不报）。现在基线里也记 `python_target`，
+对不上同样退 3。
+
 用法（⚠️ 本机 `.venv` 是**产线 venv**、不许 `uv sync` ⇒ 本机用隔离的 uvx 跑同一个版本）：
     uvx mypy@2.4.0 …            # 本机：--mypy "uvx mypy@2.4.0"
     python eval/type_gate.py --mypy "uvx mypy@2.4.0"
     python eval/type_gate.py              # CI：dev 组已装好，走 sys.executable -m mypy
     python eval/type_gate.py --update     # 重出 baseline
 
-退出码：0 通过 / 1 变差 / 3 跑不起来（缺 mypy、汇总行认不出、版本对不上）。
+退出码：0 通过 / 1 变差 / 3 跑不起来（缺 mypy、汇总行认不出、版本或解释器目标对不上）。
 """
 
 from __future__ import annotations
@@ -56,6 +63,21 @@ def _pinned_mypy() -> str | None:
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     m = re.search(r'"mypy==([0-9][^"]*)"', text)
     return m.group(1) if m else None
+
+
+def _pinned_python() -> str | None:
+    """从 `[tool.mypy]` 里读出 `python_version`（不引 toml 解析器）。
+
+    只取那一节的正文：`python_version` 这个名字在本文件别处也可能作为**注释里的文字**
+    出现，整篇搜会把注释当取值读（本仓踩过同形状的坑，见 `test_packaging._strip_comments`）。
+    """
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    m = re.search(r"^\[tool\.mypy\](?P<body>.*?)(?=^\[|\Z)", text, re.M | re.S)
+    if not m:
+        return None
+    body = "\n".join(ln.split("#", 1)[0] for ln in m.group("body").splitlines())
+    v = re.search(r'^python_version\s*=\s*"([^"]+)"', body, re.M)
+    return v.group(1) if v else None
 
 
 def _counts(out: str) -> tuple[dict[str, int], int, int]:
@@ -100,8 +122,9 @@ def _gather(prog: list[str]) -> tuple[dict[str, int], int, int]:
 def _write_baseline(by_file: dict[str, int], total: int, checked: int) -> None:
     BASELINE.write_text(json.dumps({
         "_note": "mypy 错误数的棘轮基线。只许变小；--update 是唯一放宽通道。"
-                 "版本必须与 pyproject.toml 的 dev 组同源。",
+                 "版本与解释器目标都必须与 pyproject.toml 同源——两者都会改变错误集。",
         "mypy_version": _pinned_mypy(),
+        "python_target": _pinned_python(),
         "targets": TARGETS,
         "total": total,
         "files_checked": checked,
@@ -140,9 +163,19 @@ def main() -> int:
               f"而 dev 组钉的是 {pin} —— 换版本就换了一套错误集，先 `--update` 重出。")
         return 3
 
+    # 同款、同因：解释器目标也换错误集。**多判这一条是本脚本 20261013 才补上的**——
+    # 在此之前「3.10 改 3.12」在棘轮眼里是隐形改动（旧基线里根本没有这个键 ⇒ 这里会
+    # 因为 `None != "3.12"` 而退 3，正是要的效果：逼你先 `--update` 换一套账）。
+    py_target = _pinned_python()
+    if base.get("python_target") != py_target:
+        print(f"❌ 基线是用 Python {base.get('python_target')} 的目标出的，"
+              f"而 `[tool.mypy].python_version` 现在是 {py_target} —— 换解释器目标同样换"
+              f"了一套错误集，先 `--update` 重出。")
+        return 3
+
     grew = {f: (n, base["by_file"].get(f, 0)) for f, n in by_file.items()
             if n > base["by_file"].get(f, 0)}
-    print(f"[扫描] mypy {pin}：{total} 个错误 / {len(by_file)} 个文件"
+    print(f"[扫描] mypy {pin} / py{py_target}：{total} 个错误 / {len(by_file)} 个文件"
           f"（基线 {base['total']} / {len(base['by_file'])} 个；查过 {checked} 个源文件）")
     for f, (now, was) in sorted(grew.items()):
         print(f"  ❌ {f}  {now}（基线 {was}）—— 这一处变多了")

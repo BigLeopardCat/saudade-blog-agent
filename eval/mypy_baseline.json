@@ -1,6 +1,7 @@
 {
-  "_note": "mypy 错误数的棘轮基线。只许变小；--update 是唯一放宽通道。版本必须与 pyproject.toml 的 dev 组同源。",
+  "_note": "mypy 错误数的棘轮基线。只许变小；--update 是唯一放宽通道。版本与解释器目标都必须与 pyproject.toml 同源——两者都会改变错误集。",
   "mypy_version": "2.4.0",
+  "python_target": "3.12",
   "targets": [
     "agent",
     "config",

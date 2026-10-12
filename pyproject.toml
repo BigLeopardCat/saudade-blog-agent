@@ -3,7 +3,16 @@ name = "saudade-agent"
 version = "0.2.0"
 description = "泠月喵看板娘 AI 对话 Agent：LangGraph 技能注册表 + 模板质检 + 评测驱动的对话系统"
 readme = "README.md"
-requires-python = ">=3.10"
+# Python 3.12（20261013 从 3.10 升上来）。**解释器版本是一个有五处写法的量**
+# ——这一行、`.python-version`、`[tool.ruff].target-version`、`[tool.mypy].python_version`、
+# CI 的 `python-version`，加上棘轮基线里的 `python_target`——此前**一处不对就没人知道**。
+# 从今天起 `tests/test_packaging.py` ⑥ 把它们钉成同一个值：只改一处当场红。
+# 升版的连带项（改一处忘另一处就会以"配了但和事实两套"的形式烂在那里）：
+#   · 产线 `.venv` 要重建（**主人的活**，停机窗口里做）；
+#   · `uv lock` 要重跑（lock 里也记着 requires-python）；
+#   · `eval/type_gate.py --update` 要重出 baseline——**换解释器目标 = 换了一套 mypy
+#     错误集**，棘轮的"变差"判据认不出来，所以基线里现在也记着 `python_target`。
+requires-python = ">=3.12"
 license = "MIT"
 # 依赖一律 `==` 钉死（20260928）：这里声明的版本 = 生产 `.venv` 里实际在跑的版本。
 # 之前全是 `>=`，`uv.lock` 与声明的下限可以差出好几十个版本都"合法"（lock 停在 8 月，
@@ -65,9 +74,13 @@ dependencies = [
 #     只有形状判据配当门禁，百分比会把"该测的没测"与"测了但那一支没走到"混成一个数，拿它
 #     当闸门只会把人推去测 getter；它回答的是"这轮动得多不多、哪些文件一直没人碰"。
 #     配置在文件末尾的 `[tool.coverage.*]`（`source` 只列生产包）。
-#     ⚠️ **必须带 `[toml]` 这个 extra**：那是配置读得进来的前提（Python 3.10 没有标准库
-#     TOML 支持）——没它的话 coverage 连 `pyproject.toml` 都打不开，**退出码直接是 1**
-#     （不是"忽略配置继续跑"），表现是"每个套件都红"。
+#     ⚠️ 这个 `[toml]` extra **留着**，但理由在 20261013 升到 3.12 之后**变了一半**：
+#     当时它是**必需**的（Python 3.10 没有标准库 TOML ⇒ 没它 coverage 连
+#     `pyproject.toml` 都打不开，而且不是"忽略配置继续跑"、是构造时就退 1，表现是
+#     "每个套件都红"）；3.12 起 `tomllib` 进了标准库，coverage 自己就能读，它成了
+#     **多余但无害**的声明。留着的理由只有一个：**判据不该依赖"当前解释器恰好带了
+#     TOML"**——写下来的是一个"配置必须读得进来"的形状，不是"这一版正好不用装东西"。
+#     它带 `tomli` 的 marker 是 `python_full_version <= '3.11'` ⇒ 在 3.12 上不装任何东西。
 #     ⚠️ 同前：本机不许 `uv sync` ⇒ 本机跑它给产线 venv **临时挂一份**（`PYTHONPATH` 指
 #     到隔离装的那份，见 `tests/run_all.py` 头注的三行命令），CI 里才由 `uv sync --frozen` 装。
 # ⚠️ 本机 `.venv` 是**产线 venv**，不许 `uv sync` ⇒ 本机跑静态扫描仍用隔离的
@@ -93,13 +106,20 @@ packages = ["agent", "config", "models", "rag", "tools", "utils"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+# 与 `requires-python` 同一个值（`tests/test_packaging.py` ⑥ 判着）。留着它是"别写出
+# 低版本解释器不认的语法"这条约束的机器化——虽然 `requires-python` 已经把它表达了。
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 
 [tool.mypy]
-python_version = "3.10"
+# ⚠️ 这一项**会改变报出来的错误集**（比如 3.11+ 的 `ExceptionGroup`/`Self`、3.12 的
+# 泛型语法），而 `eval/type_gate.py` **不传 `--python-version`** ⇒ 目标只来自这一行。
+# 20261013 升 3.12 时发现的洞：基线当时只记 `mypy_version`，于是"换解释器目标"这种
+# **换了一个量**的改动在棘轮眼里和"没动过"长得一样（错误数没涨就不报）。
+# ⇒ 现在基线里也记 `python_target`，对不上退 3（同 mypy 版本那一档）。
+python_version = "3.12"
 strict = false
 ignore_missing_imports = true
 

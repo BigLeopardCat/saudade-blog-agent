@@ -101,7 +101,10 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.10"
+          # 与 `requires-python` / `.python-version` 同一个值（`tests/test_packaging.py`
+          # ⑥ 判着——CI 装 3.10 而声明 3.12 是"CI 绿但产线跑不了"那种假绿的反面：
+          # 声明 3.12 而 CI 只验 3.10，等于**升版这件事根本没被任何东西验过**）。
+          python-version: "3.12"
 
       - name: Install dependencies
         run: uv sync --frozen

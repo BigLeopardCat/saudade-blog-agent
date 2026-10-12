@@ -17,11 +17,20 @@ README 正文），加一个套件要改三处，漏一处就变成"看着在跑
 是另一个问题——"这轮动得多不多、哪些文件一直没人碰"。CI 的墙钟因此不为它翻倍。
 ⚠️ **本机 `.venv` 是产线 venv（不许 `uv sync`，里面没有 coverage）** ⇒ 本机那份是
 **临时挂上去的**（coverage 是纯 Python 包，挂上去就能用；C 版 tracer 装不上会自动退回
-Python 版并打一行警告，不影响报告）。**必须带 `[toml]` 这个 extra**——配置就在
-`pyproject.toml` 里，而 Python 3.10 没有标准库 TOML 支持；没它的话 coverage 连配置都
-打不开，**退出码直接是 1**（不是"忽略配置继续跑"），现场看起来像"每个套件都红"：
-  uv venv /tmp/cov --python 3.10 && uv pip install --python /tmp/cov/bin/python "coverage[toml]"
-  PYTHONPATH=/tmp/cov/lib/python3.10/site-packages .venv/bin/python tests/run_all.py --coverage
+Python 版并打一行警告，不影响报告）。**要带 `[toml]` 这个 extra**——3.10 时代它是必需
+（没有标准库 TOML 时 coverage 连配置都打不开、**退出码直接是 1**，现场看起来像"每个
+套件都红"）；20261013 升到 3.12 后 `tomllib` 进了标准库，它成了**多余但无害**的声明
+（理由见 `pyproject.toml` 的 dev 组那一节）。三行配方——**刻意不写死解释器版本**，
+那样升一次版本就会烂一次（本文件升级到 3.12 时正是这么坏的）：
+  uv venv /tmp/cov --python .venv/bin/python && uv pip install --python /tmp/cov/bin/python "coverage[toml]"
+  SITE=$(/tmp/cov/bin/python -c 'import coverage,os;print(os.path.dirname(os.path.dirname(coverage.__file__)))')
+  PYTHONPATH="$SITE" .venv/bin/python tests/run_all.py --coverage
+（`--python .venv/bin/python` 是**故意的**：建临时环境的那一侧必须与跑套件的那一侧
+是**同一个解释器**，否则 `[toml]` extra 那件事会按对方版本的规则来——3.12 上它不装
+`tomli`，挂到还在跑 3.10 的产线 venv 上就是"配置读不进来"那个老毛病。写路径而不是写
+版本号，两侧就由构造保证同版本，也顺带把版本号从这条配方里彻底去掉。
+`SITE` 那一行问的是**装好的那个包自己在哪**，所以它跟着解释器走。
+真写错时不用猜：下面 `_coverage_problem` 起不来会把这三行**按当前解释器算好**打出来。）
 （为什么要挂而不用 `uvx --from coverage coverage run` 跑整套：`coverage run` 是在**它自己
 那个解释器**里执行被测脚本的 ⇒ 子进程会换成一个没有 langgraph 的环境，套件集体红。）
 CI 里则由 dev 组的 `uv sync --frozen` 装。覆盖率这一档起不来时本入口**直接拒绝运行**
@@ -164,8 +173,8 @@ def _coverage_report(env: dict) -> None:
 def _coverage_problem() -> str:
     """coverage 这一档起不来时返回一行**给人看的原因**（能用则空串）。**不静默降级**。
 
-    只判 `import coverage` 是不够的——真踩过一次：Python 3.10 上装了 coverage 但**没有
-    `[toml]` extra** 时它读不了 `pyproject.toml`，而且不是"跳过配置接着跑"，是**构造
+    只判 `import coverage` 是不够的——真踩过一次：装了 coverage 但**没有 `[toml]` extra**
+    （当时是 3.10，标准库没有 TOML）时它读不了 `pyproject.toml`，而且不是"跳过配置接着跑"，是**构造
     Coverage 对象时就抛 ConfigError**（见 `coverage/tomlconfig.py` 那段：只在我们自己的
     配置文件里搜到 `[tool.coverage` 就会拒绝）。于是每个子套件的退出码都变成 1，现场看着
     像"这一批代码全坏了"——正是本入口最该拦住的那类假信号。
@@ -195,10 +204,22 @@ def main() -> int:
         if why:
             # 宁可一行都不跑：静默降级成"跑完没有覆盖率"与"跑了覆盖率"在输出上长得一样；
             # 而"覆盖率的毛病把套件染红"更糟——那是一整片假红。
+            #
+            # 配方里**只有 `sys.executable` 这一个变量**，没有写死的版本号：临时环境
+            # 与跑套件必须是同一个解释器（否则 `[toml]` extra 那件事按对方版本的规则来），
+            # 而 site-packages 的路径要问包自己装在哪——旧配方两处都写死了小版本号，
+            # 20261013 从 3.10 升 3.12 时正是这么烂的。
             print(f"❌ 覆盖率这一档起不来（{sys.executable}）：{why}\n"
-                  f"   本机产线 venv 不许 `uv sync`，按模块头注那三行给它临时挂一份隔离装的"
+                  f"   本机产线 venv 不许 `uv sync`，按下面三行给它临时挂一份隔离装的"
                   f"（**要带 `[toml]` extra**，否则就是上面这个错）；CI 里由 dev 组的 "
-                  f"`uv sync --frozen` 装。本次**一个套件都没跑**。", file=sys.stderr)
+                  f"`uv sync --frozen` 装。本次**一个套件都没跑**。\n"
+                  f"     uv venv /tmp/cov --python {sys.executable} && uv pip install "
+                  f"--python /tmp/cov/bin/python \"coverage[toml]\"\n"
+                  f"     SITE=$(/tmp/cov/bin/python -c "
+                  f"'import coverage,os;print(os.path.dirname(os.path.dirname("
+                  f"coverage.__file__)))')\n"
+                  f"     PYTHONPATH=\"$SITE\" {sys.executable} tests/run_all.py --coverage",
+                  file=sys.stderr)
             return 1
 
     todo = suites(args.keyword)

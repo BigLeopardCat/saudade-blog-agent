@@ -870,7 +870,7 @@ async def chat(req: ChatRequest, request: Request):
     thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()  # 非 get_event_loop()：后者 3.10 起已废弃
         # 摘要独立化（needs_summary 轮）：与 agent 图并行做后端总结——输入是原始
         # 历史数据而非模型回复，杜绝"回复耦合生成"时代的推断/编造（曾出现摘要
         # 编造"助手调用工具"污染记忆）。生成失败返回空 → 不入库，旧摘要保留。
@@ -1838,7 +1838,7 @@ async def chat_stream(req: ChatRequest, request: Request):
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()  # 同上（event_stream 也是协程）
 
         # 摘要独立化：needs_summary 轮与流式生成并行做后端总结（输入为原始历史，
         # 不依赖模型回复），流结束时随 __SUMMARY__ 帧返回（Rust 解析入库）

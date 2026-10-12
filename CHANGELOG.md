@@ -16,6 +16,21 @@
 
 ## 20261013
 
+- **解释器目标上 3.12，并把它锁成一处事实源（判据，20261013）**：`requires-python` /
+  `.python-version` / `[tool.ruff].target-version` / `[tool.mypy].python_version` / CI 的
+  `python-version` / 棘轮基线的 `python_target` —— **六处写法，此前一处都没有机器看着**，
+  漏一处不报错，只会以"CI 装了 3.10 而代码声明 3.12"这种假绿存在。新增
+  `tests/test_packaging.py` ⑥ 把它们钉成同一个值。⚠️ 升版顺带带出两个**早就存在、只是
+  没人看见**的洞：① **mypy 棘轮不记解释器目标**，而 `eval/type_gate.py` 调 mypy 时
+  **不传 `--python-version`** ⇒ 目标只来自 `pyproject.toml`，于是"3.10 改 3.12"这种
+  **换了一个量**的改动，在棘轮眼里和"什么都没动"长得一模一样（错误数没涨就不报）——
+  现在基线里也记 `python_target`，对不上退 3（同 mypy 版本那一档）；② `tests/run_all.py`
+  的覆盖率配方**写死了** `lib/python3.10/site-packages` ⇒ 升版后照抄它会挂到一个不存在
+  的路径上，而那一档起不来是**拒绝运行**（一个套件都不跑），症状是"覆盖率整个用不了"。
+  配方改成问 `coverage.__file__`，且起不来时打出来的三行是**按当前解释器算**的。
+  顺带：`server.py` 两处 `asyncio.get_event_loop()` → `get_running_loop()`（3.10 起已
+  deprecated）。⚠️ **产线 `.venv` 要重建**——那是停机窗口里的活，不在本仓。
+
 - **离线套件多出一档覆盖率报告（工程，20261013）**：`tests/run_all.py --coverage` —— 逐套件
   收集（配置 `parallel = true`，各写各的数据文件）、结尾 `combine` 成一份，配置落在
   `pyproject.toml` 的 `[tool.coverage.*]`（`source` 只列**生产包**：`tests/` 与 `eval/` 是
@@ -23,7 +38,7 @@
   没测"与"测了但那一支没走到"混成一个数，拿它当闸门只会把人推去测 getter；它回答的是
   "这轮动得多不多、哪些文件一直没人碰"。**判据一个字没变**（子进程就是
   `coverage run <套件>`，退出码即套件的退出码）。⚠️ 三条踩出来的：① dev 组的 pin 必须是
-  `coverage[toml]`（Python 3.10 没有标准库 TOML ⇒ coverage **读不了** `pyproject.toml`，
+  `coverage[toml]`（当时是 3.10，没有标准库 TOML ⇒ coverage **读不了** `pyproject.toml`，
   而且是**构造时就退 1**、不是"跳过配置接着跑"，现场看着像"这一批代码全坏了"）；② 因此本
   入口的可用性探针**连"配置读得进来吗"一起判**，起不来就一个套件都不跑、并原样打出那句
   报错（不静默降级成"跑完了但没有覆盖率"）；③ `coverage run <脚本>` 往 `sys.path` 里放的
