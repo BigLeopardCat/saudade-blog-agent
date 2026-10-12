@@ -24,6 +24,10 @@
   真的 import 的 `rag/`（本仓从不构建 wheel ⇒ 列错不报错）。三条都上了机器锁：
   `tests/test_packaging.py`——含 `.github/dependabot.yml` 的在场判据（`SECURITY.md` 早就把
   上游 CVE 的升级推给了它，而那份配置一直不存在，依赖又全 `==` 钉死 ⇒ 什么都不会升级）。
+  顺带补上 `rag/__init__.py`：`rag/` 此前是 PEP 420 **隐式命名空间包**（所有 import 都写
+  `rag.xxx`，所以运行期一直没坏），而 `[tool.mypy]` 那份配置配上以来第一次真跑，mypy 当场
+  拒绝整个目录（`Source file found twice under different module names`）——这也说明"配了
+  却从没跑过"的静态检查等于没有。
 
 - **四处静默降级现在留痕（观测，20261013）**：`context._attach_page_guide`（页面/能力
   清单注入失败被悄悄丢掉）、`context._corpus_ready`（索引抛异常被压成"没就绪"）、

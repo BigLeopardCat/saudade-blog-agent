@@ -82,6 +82,14 @@ check("pyproject 里有 wheel 包列表", bool(_pkgs), WHEEL_SEC.strip()[:60])
 check("每一项都是**真实存在**的目录（`chains/` 就是这么被写进去的）",
       all((ROOT / p).is_dir() for p in _pkgs),
       "、".join(p for p in _pkgs if not (ROOT / p).is_dir()))
+# 每一项还得是**普通包**（有 `__init__.py`），不是 PEP 420 隐式命名空间包。
+# 判据是 20261013 那次"第一次真跑 mypy"给的：`rag/` 没有 `__init__.py`，mypy 当场
+# 拒绝整个目录（`Source file found twice under different module names: "search" and
+# "rag.search"`）——所有 Python import 都写 `rag.xxx` 所以运行期一直没坏，只有
+# **静态分析器**看得出来。列进 `packages` 的目录尤其不该留这种余地。
+_implicit = [p for p in _pkgs if not (ROOT / p / "__init__.py").is_file()]
+check("每一项都有 `__init__.py`（隐式命名空间包会让 mypy 拒绝整个目录）",
+      not _implicit, "、".join(_implicit))
 
 # 更强的另一半：生产代码**真的 import 了**的顶层包，一个都不许漏。
 # 这正是 `rag/` 的那个洞——它被 `agent/graph.py` 等十几处 import，却不在列表里。
