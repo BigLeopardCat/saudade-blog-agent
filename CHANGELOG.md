@@ -16,6 +16,23 @@
 
 ## 20261013
 
+- **角色常量与三张派生表上锁（判据 + CI 落位自检，20261013）**：`role` 是跨语言枚举，
+  Rust `src/authz.rs` 与 agent `agent/principal.py` 各声明一份，而改一侧不改另一侧
+  **不报错**——症状是身份**静默降级**（加一档没同步 ⇒ 那个人 `known_role` 恒 None ⇒
+  一律拒绝；改拼写没同步 ⇒ 原本能用的人突然全拒）。新增 `tests/test_role_tables.py`
+  一次锁五张表：① `ROLE_*` 常量名与值逐条相同（双向）；② 取值域 `KNOWN_ROLES` 集合相等
+  （两侧顺序本来就不同，不比顺序）；③ `ADMIN_ROLES` == 后端 `can_access_console` 认的那
+  几个；④ ⭐ `graph._FREEZE_ALLOWED_TARGETS` == 从 `check_freeze` 的三条判据（发起人准入 /
+  目标非超管 / 管理员之间）**推导**出来的表——那张表漂移的代价是**把一个后端本来会 Ok 的
+  操作提前拒掉、还回一句说错政策的话**；⑤ `adminops.ROLE_CN` == Rust `role_label`（兜底那
+  一格两侧**刻意不同**，写下来了）。另两条按本仓既有形状：⑥ `CHAT_ONLY_ROLES` /
+  `_ROLE_ALIASES` / `_ROLE_CONSEQ` 是 **agent 独有**（Rust 没有对应物），只判自洽并写明；
+  ⑧ 生产包里 `superadmin`/`zako` 的字面量只许出现在声明它们的两个文件里——**第五处手抄**
+  当场红。取值一律**从源码现取**（Rust 正则取函数体、Python 走 AST），不抄常量。
+  CI 的落位自检加了一行 `src/authz.rs`，并写明它**不是**锥模式：cone 模式本来就会带上
+  祖先目录的直系文件，顺手往锥里加 `src/authz` 会让 checkout 直接失败（探过）。
+  **agent 行为一个字没改**。
+
 - **`note.tags` 编解码两侧对齐（行为 + 判据，20261013）**：`note.tags` 是**逗号分隔的
   正整数 id 串**，两侧各写一份实现（本侧 `adminops.parse_tag_ids`、前端
   `noteTags.ts::parseNoteTags`）。两侧判断"什么算合法 id"用的是**两套语言规则**——

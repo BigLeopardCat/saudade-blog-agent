@@ -88,6 +88,11 @@ jobs:
           test -f _parent/src/routes/chat.rs
           test -f _parent/frontend/src/utils/stickers.ts
           test -f _parent/frontend/src/components/NoteTagSelect/index.tsx
+          # 这一条**不是**锥模式，是锥的**语义**：cone 模式会连同"锥目录的各级祖先目录里的
+          # 直系文件"一起拉下来（`.git/info/sparse-checkout` 里那几行 `!/src/*/` 就是干这个的）
+          # ⇒ `src/*.rs`（authz.rs / quota.rs …）本来就在。20261013 批 3b 探过这一条：
+          # 顺手加一条 `src/authz` 进锥**会让 checkout 直接失败**（它不是一个目录）。
+          test -f _parent/src/authz.rs
 
       # ⚠️ 20260928 首跑带出两条**信息性**注解（不影响本次绿）：`actions/checkout@v4` 与
       # `astral-sh/setup-uv@v5` 是针对 Node 20 的，runner 已强制它们跑在 Node 24 上。等上游
