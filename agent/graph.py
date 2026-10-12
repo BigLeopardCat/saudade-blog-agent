@@ -9429,22 +9429,50 @@ def _owner_target_span(got: str, spans: list[str], parent: str,
     return None
 
 
-def _capture_extends_glued(got: str, cand: str) -> bool:
+@lru_cache(maxsize=None)
+def _mark_initials(marks: tuple) -> frozenset:
+    """动作词表里每个词的**首字**（「发通知」→ `发`）。见 `_capture_filler`。"""
+    return frozenset(m[0] for m in marks if m)
+
+
+def _capture_filler(frag: str, marks: tuple) -> bool:
+    """多出来那一截 `frag` 接的是**动作短语**、不是名字的续写吗？
+
+    ⚠️ 20261012 生产现场（trace `20261012T090332`，`_capture_extends_glued` 头注那条
+    判据的**反例**）：主人说「给用户demo发一条通知告诉他…」，planner **填对了** `demo`，
+    而捕获段是 `demo发一条`——`_NOTICE_MARKS` 里没有光杆「发」，窗口一路吃到「通知」
+    才闭合。字面判据：`frag` 若以**动作词表某个词的首字**起头（`发` ← `发通知`），或
+    就是「给/把/对…」这类**处置词**，接的是动作。首字从**传进来的那张词表**现推
+    （不另立一张填充词表：两处各写一份必然漂移，同 `_write_family_marks` 那条纪律）。
+
+    取向是**只许少改、不许改错**：判真 ⇒ 放弃这次改写，planner 那个值原样留着。真被
+    抄短了又恰好撞上首字（极罕见）时，下游还有名录/标签字典那道查存在的问题。
+    """
+    f = str(frag or "").lstrip()
+    if not f:
+        return False
+    return f[0] in _mark_initials(marks) or bool(_PRE_NOUN_LEAD_RE.match(f))
+
+
+def _capture_extends_glued(got: str, cand: str, marks: tuple | None = None) -> bool:
     """捕获段 `cand` 是不是"planner 那个值**紧贴着**多出来一截"（`Async` ← `Asyncio`）？
 
-    判据落在**词边界（空白）**上：捕获段比 planner 的值多出来的那一截，如果是从一段
-    空白之后开始的，那它就不是同一个词的续写，而是**后面那个动词的填充词**——中文里
-    「给账号 guest5 发个通知」的捕获段是 `guest5 发个`、「发条/发一条」同形，冻结族
-    的存量形态是「把账号 guest5 给冻结了吧」→ `guest5 给`。
+    两条判据，任一判真 ⇒ **不算**续写：
+    - **词边界（空白）**：多出来的那一截若从一段空白之后开始，它就不是同一个词的续写，
+      而是后面那个动词的填充词——「给账号 guest5 发个通知」的捕获段是 `guest5 发个`、
+      冻结族的存量形态是「把账号 guest5 给冻结了吧」→ `guest5 给`。
+    - **动作短语的字头**（`_capture_filler`，20261012 补）：中文里名字与动作词之间
+      **常常不隔空白**（「给用户demo发一条通知」），空白这条兜不住那一族写法。
 
     ⚠️ 为什么必须区分（20260926 第十一轮实测）：不区分的话，主人说「给账号 guest5
     发个通知」、planner **填对了** `guest5`，这一格会把目标名**改写成** `guest5 发个`
     ⇒ 工具按名字查名录查无此名 ⇒ 主人收到一句「后台账号列表里没有叫「guest5 发个」的
     账号」——**一句长得像诚实拒绝的错话**，而那个账号本来就在名单上。
+    （20261012 那次是同一个错的**不隔空白**版本：改写成 `demo发一条`，主人被请去"照
+    完整账号名再说一遍"。）
 
-    空白是这里唯一能用的判据：中文名之间不空格，而"抄短了"（Async ← Asyncio）多出来的
-    那一截必定**贴着**（同一串字符）。捕获段本身保留了原文的空白（`_bare_target_name`
-    只 strip 两端），所以词边界还在。
+    捕获段本身保留了原文的空白（`_bare_target_name` 只 strip 两端），所以词边界还在。
+    `marks` = 该工具的 `_lexicon(tool)[1]`；不传就按默认那三张表（存量路径）。
     """
     sq_got = _squash_spaces(got)
     raw = str(cand or "")
@@ -9459,6 +9487,9 @@ def _capture_extends_glued(got: str, cand: str) -> bool:
     text = "".join(glued)
     at = text.find(sq_got)
     if at < 0 or len(text) == len(sq_got):
+        return False
+    tail = text[at + len(sq_got):]
+    if _capture_filler(tail, marks or _TARGET_ACTION_MARKS):
         return False
     return (at + len(sq_got)) not in boundaries
 
@@ -9497,11 +9528,11 @@ def _name_target_fix(plan_obj: dict, user_msg,
         _gq, _cq = _squash_spaces(got), _squash_spaces(cand)
         # 第三种让位的形态：planner 把名字**抄短了**（实测 name="Async"——它是原话的
         # 子串，子串级地基照样放它过去）。取向与引号那条一致：主人原话里那一段是系统
-        # 数据，模型的截断让位。只在"捕获段确实更长"时用，且**多出来的那一截必须紧贴着**
-        # （同一串字符、不隔空白）——隔了空白的多出部分不是名字的续写，是后面那个动词的
-        # 填充词（`guest5 发个` / `guest5 给`），让位会把对的名字改错（见
-        # `_capture_extends_glued` 头注那次实测）。
-        _frag = _capture_extends_glued(got, cand)
+        # 数据，模型的截断让位。只在"捕获段确实更长"时用，且**多出来的那一截必须是名字
+        # 的续写**（隔了空白的是 `guest5 发个`，首字是动作词表字头的是 `demo发一条`——
+        # 中文里这两截常常不隔空白），否则让位会把**填对了**的名字改错（见
+        # `_capture_extends_glued` / `_capture_filler` 头注那两次实测）。
+        _frag = _capture_extends_glued(got, cand, lex[1])
         # 第四种让位的形态（20260924）：move 类请求里 planner 把**父标签名**填成了目标名
         # （实测「把标签 Rust 挪到「嵌入式」下面」→ `name="嵌入式"`，而"嵌入式"正是句里
         # 另一个操作数）。父标签跟在"挪到"后面、目标名在名词与动作词之间，两者不是一回事
