@@ -16,6 +16,37 @@
 
 ## 20261012
 
+- **确认兑现轮的「下一步」不再经过模型：台账里那一步参数已备就零 LLM 发出去（行为，
+  20261012，开关 `AGENT_TASK_PLAN_EXEC` 默认关）**：主人一句话里两件写时，第一件办完的
+  那一轮此前要把控制权交回 planner 再"注意到"还剩一件——而这一步**不需要任何决策**：还剩
+  哪一件、参数是什么，早在登记那一刻就落在台账里了（上一条批次的 `skill`/`args`）。结果
+  是模型两次没注意到，主人读到「**要现在继续吗？你说一声我就去办。**」（`20261012T054330`
+  逐字如此）。现在**确认兑现轮的续跑**这一格（令牌在场 ∧ 本请求已进过一次决策轮 ∧ 无受阻）
+  改成一次**查表**：取台账里第一件还能动手的、按 `adminops.linked_units` 的**确认单元**
+  归组、单元内每一步都带实参 ⇒ 拼出与令牌那条通道**同款**的计划直接执行 ⇒ `execute`
+  照常弹下一张卡（`pending_confirm` 一置位路由就收尾，所以"点确定 ⇒ 第一件真办 + 第二张卡
+  当场弹出"发生在**同一个请求**里）。**不绕任何闸**：产出的仍是一份普通计划，同意闸、目标
+  有据、断连检查一条不少；而**旧令牌盖不住新卡**（`_grant_covers` 比的是工具名 ∧ 参数逐字，
+  换一件就是 False）⇒ 新卡由 `_confirm_popup` 重新签，令牌"只授权签名体里那一件"一字未动。
+  **不猜**：单元里哪一步没有 `args`（批 A 的占位步）、实参还挂着 `$tool[N]`（那是**本轮**帧
+  的引用，跨轮取不到）、技能名认不出（批 A 之前登记的老行）⇒ 一律交回 planner 补参，并留一条
+  `plan_placeholder_handback` / `plan_exec_skill_mismatch`——占位步是这条路上的**正常状态**，
+  不是失败。**进度守卫**是这条例外的另一半：同一行同一游标连发两次而回执一条都没落地 ⇒
+  停手并记 `plan_exec_stalled`；没有它，"发出去的计划执行时不产生回执"会变成一个不出声的
+  死循环。该出口**不吃 `plan_rounds`**（零 LLM 出口不许拿一次不存在的决策去抵
+  `MAX_PLAN_ROUNDS`）。开关是**两档**：`AGENT_TASK_PLAN_EXEC=0`（出厂）时这条分支在源码里
+  就不存在，与 `AGENT_TASK_STATE=0` 一起逐字节回到今天。落地：`agent/graph.py` 的
+  `_plan_exec_next_card` / `_plan_done_probe` / `_unit_at` / `_exec_skill_for`，`AgentState`
+  显式声明 `plan_task_id` / `plan_cursor`（未声明的键会被静默丢弃）且 `graph_input` 给中性
+  初值，`agent/tasks.py` 新增 `next_cursor`（`next_actionable` 改为直接问它——游标只有一个
+  算法）；`.env.example` 加同名键。trace 事件：`plan_step_bound` / `plan_card_next` /
+  `plan_placeholder_handback` / `plan_exec_stalled` / `plan_exec_skill_mismatch` / `plan_done`
+  （最后一个是"那一行到头了"的对偶，没有它分不出"执行器没生效"与"执行器把这件事办完了"）。
+  ⚠️ **本批的读数如实记**：离线套件全绿；A/B（两臂交替、只拨这一个旋钮、3 遍 ×5 例）两臂
+  **逐格相同、零计划事件**——因为那五条用例**一轮确认轮都没有**（`resumed` 要求令牌在场），
+  这条分支在它们上面**结构上不会被走到**，所以那是"没有推歪主线"的证据，**不是**"机制生效"
+  的证据。真正读它的用例是语料里的 `mt3_two_writes_second_card_next_round`（第 2 轮
+  `require_frame_prefix` 要求第二张卡当场弹出）——它带 `needs_real_write`，**本轮没有跑**。
 - **跨轮任务的步骤开始带实参：`steps` 从「一串工具名」变成「能执行的一串步骤」（契约，
   20261012）**：一个步骤此前只有 `{label, tool}` 两格，而参数**在产出那一刻就存在**
   （`Skill.plan` 是 `(工具名, {参数模板})`，`instantiate_plan` 已经能展开成完整实参），

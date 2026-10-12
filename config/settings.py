@@ -175,6 +175,14 @@ class Settings(BaseSettings):
     # 而解析失败在注入侧的后果是整块静默消失（同"枚举只有一个入口"那类坑）——
     # 时效的单执行者是 Rust 读侧（`TASK_READ_TTL_HOURS`，见迁移头注）。
     agent_task_inject_max: int = 3
+    # 计划执行器（20261012 批 B）：兑现一张确认卡之后，若台账里**下一步已绑实参**，
+    # 就**零 LLM** 直接把那一份计划发出去（`graph._plan_exec_next_card`），而不是
+    # 请 planner 再"注意到"还剩一件。它与 `agent_task_state` 是**两档**：
+    #   关（出厂）：不读台账、不出下一张卡——路由与今天逐字节一致；
+    #   开：只在"确认兑现轮的续跑"这一格生效（`resumed`），其余轮次一字未动。
+    # 为什么默认关：它把一条**提示词纠偏**换成一条确定性出口，判据要先在离线 A/B 与
+    # 生产 trace 上对齐了再放行（同 `agent_task_state` / `iot_enabled` 的纪律）。
+    agent_task_plan_exec: bool = False
 
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
     # 与博客共用 JWT_SECRET：agent 以对话用户身份签发 JWT 调用 device-service

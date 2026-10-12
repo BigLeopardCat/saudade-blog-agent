@@ -152,6 +152,7 @@ _PROBE = ("import json,sys;sys.path.insert(0,%r);"
 _TAKE = ("import json,sys;sys.path.insert(0,%r);"
          "from config.settings import settings;"
          "print(json.dumps({'agent_task_state': bool(settings.agent_task_state),"
+         " 'agent_task_plan_exec': bool(settings.agent_task_plan_exec),"
          " 'iot_enabled': bool(settings.iot_enabled)}))")
 
 
@@ -214,6 +215,7 @@ _eff = _pinned_effective()
 check("⭐⭐ 入口钉住的档位**真的生效**（钉了不生效 ⇒ 套件按另一档跑，且静默）",
       _eff is not None
       and _eff["agent_task_state"] == (run_all._PINNED["AGENT_TASK_STATE"] == "1")
+      and _eff["agent_task_plan_exec"] == (run_all._PINNED["AGENT_TASK_PLAN_EXEC"] == "1")
       and _eff["iot_enabled"] == (run_all._PINNED["IOT_ENABLED"] == "1"),
       f"实际生效={_eff}；声明={run_all._PINNED}")
 

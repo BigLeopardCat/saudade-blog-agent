@@ -65,7 +65,14 @@ TESTS = ROOT / "tests"
 # （与 `SAUDADE_IGNORE_ENV_FILE` 那一条同族）；② 更要命的是**会去打真 embedding
 # 端点**——离线套件的纪律是"秒级、无网络、无 LLM"，这一条破了不只是慢，是它在
 # 本机花的钱/CI 上的必然超时。要验混合档的套件自己在子进程/构造 Settings 里开。
-_PINNED = {"AGENT_TASK_STATE": "0", "RAG_HYBRID_ENABLED": "0",
+#
+# `AGENT_TASK_PLAN_EXEC=0`（20261012 批 B）：计划执行器出厂默认**关**。钉它的理由与
+# `AGENT_TASK_STATE` 逐字相同——`tests/test_plan_executor.py` 里有一整节判据写的是
+# "关档 ⇒ 路由与今天逐字节一致"，而那一节读的是**环境里的档位**；不钉住的话，谁在
+# shell 里 export 过它，那节就会红（或更糟：绿得没有理由）。要验开档的用例在同一
+# 进程里临时拨 `settings.agent_task_plan_exec`（同 `test_task_continuation.py` 的 `_Dial`）。
+_PINNED = {"AGENT_TASK_STATE": "0", "AGENT_TASK_PLAN_EXEC": "0",
+           "RAG_HYBRID_ENABLED": "0",
            "SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
 
 

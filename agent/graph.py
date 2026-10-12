@@ -111,6 +111,7 @@ from agent.principal import (CHAT_ONLY_ROLES, KNOWN_ROLES, ROLE_ADMIN,
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.skills import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
+                          args_are_bound,
                           DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
                           DROP_SUFFIX_SKILL_NO_CALLS,
                           FUZZY_NAV_RULES, NAV_MAP, PLAN_STATUS_ABSENCE_EXEMPT,
@@ -123,10 +124,10 @@ from agent.skills import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
                           split_tool_spec, visible_skills)
 # 任务登记（20260927 批 D）：登记帧的构造与那一轮给 narrator 的注记/纠偏都在
 # `agent/tasks.py`——本模块只决定"什么时候用它"（见 planner 的那一支）。
-from agent.tasks import (TASK_DONE_NOTE, TASK_INTENTS, declaration_note,
-                         declaration_nudge, drop_is_completion, frame_payload,
-                         intent_frames, next_actionable, render_open_tasks,
-                         settled_by_receipts, task_rows)
+from agent.tasks import (TASK_DONE_NOTE, TASK_INTENTS, advance_by_receipts,
+                         declaration_note, declaration_nudge, drop_is_completion,
+                         frame_payload, intent_frames, next_actionable, next_cursor,
+                         render_open_tasks, settled_by_receipts, task_rows)
 from utils import trace as trace_mod
 from utils.trace import record
 
@@ -394,6 +395,19 @@ class AgentState(TypedDict):
     #                 同名同义（`eval/run_golden.py` 的 `require_task_goal_per_intent`
     #                 就按它逐帧判）。
     task_frames: list[dict]
+    # ── 计划执行器（20261012 批 B）——**必须显式声明**，理由同 fallback_text ──
+    # plan_task_id: 本请求里**由计划执行器驱动**的那一行台账（`_plan_exec_next_card`
+    #               零 LLM 发出下一步时写入）。空串 = 本请求没走执行器。
+    # plan_cursor:  发那份计划时那一行的游标。
+    #               两者的**唯一读端**是执行器的进度守卫：同一行、同一个游标连着发两次
+    #               而回执一个都没落地 ⇒ 停手，交回正常链路（否则"发出去的计划换不来
+    #               回执"这一格会变成一个不出声的死循环——`route_after_execute` 见
+    #               `_ledger_has_next` 仍为真又会交回 planner）。
+    #               ⚠️ 未声明的键会被 LangGraph **静默丢出 updates 流**（不是报错）⇒
+    #               守卫恒读到初值、恒不触发——那正是本仓"config 注入静默失效"那一族的
+    #               形状，所以这里不是"多写两格图个整齐"，是这条守卫能不能成立的**前提**。
+    plan_task_id: str
+    plan_cursor: int
 
 
 # ---------------------------------------------------------------------------
@@ -3730,6 +3744,162 @@ def _ledger_has_next(state, config) -> bool:
     return _ledger_next(state, config) is not None
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 计划执行器（20261012 批 B）：兑现一张卡之后，**零 LLM** 把下一步发出去
+# ══════════════════════════════════════════════════════════════════════════════
+# 病（五天内五次，形状一样）：主人一句话里三件写，planner 一轮只选一个技能 ⇒ 弹卡①
+# ⇒ 点确定 ⇒ 执行① ⇒ 台账明写着还剩两件 ⇒ 路由把控制权交回 planner ⇒ **planner 请
+# 主人再说一遍**「要不要现在继续？」。这条链上每一步都是 LLM 的**注意力**在负责
+# "还剩什么"，而它已经两次没注意到了——这正是"用提示词去纠一个模型不看提示词的病"。
+#
+# 这里换掉的是**出口**，不是判据：下一步是谁、参数是什么，早就在台账里落好了
+# （批 A 让步骤带上了 `skill`/`args`）⇒ 拼装它就是一次**查表**，不需要任何决策。
+# 仍然保留的两条边界：
+#   · **不绕任何闸**：产出的还是一份普通计划，`execute` 照常过同意闸、目标有据、
+#     断连检查——该弹卡的弹卡（新卡由 `_confirm_popup` 重新签，令牌只授权它签名的那一件）；
+#   · **不猜**：实参不齐 / 技能名认不出 / 单元里有够不到的工具 ⇒ 一律退回 planner
+#     补参（今天的行为），并记一条 `plan_placeholder_handback`。
+
+
+def _unit_at(steps: list[dict], cursor: int) -> list[dict]:
+    """游标所在的那个**确认单元**里**还没做**的步骤（含游标那一步）。
+
+    单元的定义与卡面共用一份（`adminops.linked_units`）：单元内部要么一起办、要么不办。
+    今天唯一的单元是「先建再挂」——`create_tag(甲)` 紧跟 `set_article_tags(add 甲)`，
+    后者**只有在同一批里先执行前者**才可能成功（工具按名字精确匹配，站内没有就拒绝）。
+    把它们拆成两张卡，第二张注定点不动（`linked_units` 的头注就是那次 `20261010T011456`
+    现场换来的）。
+
+    游标落在单元**中间**时（前一半已经执行过）只取剩下那几步——单元头几步的回执已经
+    在册，再发一遍就是把同一件写做第二遍。
+    """
+    for grp in A.linked_units(steps):
+        if cursor in grp:
+            return [steps[i] for i in grp if cursor <= i < len(steps)]
+    return [steps[cursor]] if 0 <= cursor < len(steps) else []
+
+
+def _exec_skill_for(steps: list[dict]) -> "object | None":
+    """盖得住这个单元**全部**工具的技能（内部一致性检查，判据同 `_confirm_grant_plan`）。
+
+    不取"第一步的技能名"：一个单元可以横跨两个技能——「先建再挂」里 `create_tag` 属
+    `tag_create`、`set_article_tags` 属 `article_tags`，而 `article_tags` 用
+    `extra_plan_tools` **声明过** `create_tag` 是它的条件工具。所以判据是**闭集覆盖**：
+    哪个技能的允许集装得下整个单元就用哪个。装不下 ⇒ `None`（一个工具都不执行）——
+    与 `_confirm_grant_plan` 那条"技能与工具必须对得上"是同一条：写操作跑在一份没有人
+    预期它会跑的技能名下，是最难查的那类事故。
+
+    旧行（批 A 之前登记的）没有 `skill` 这一格 ⇒ 这里恒 `None` ⇒ 退回 planner 补参。
+    这是**刻意的**：那些行的步骤只有工具名，谁也不敢说照着重放一遍就是主人要的那一件。
+    """
+    want = {str(s.get("tool") or "") for s in steps}
+    if not want or "" in want:
+        return None
+    for name in {str(s.get("skill") or "") for s in steps}:
+        sk = SKILL_MAP.get(name)
+        if sk is None:
+            continue
+        allowed = {t for t, _ in sk.plan} | set(getattr(sk, "extra_plan_tools", ()) or ())
+        if want <= allowed:
+            return sk
+    return None
+
+
+class _PlanExec(NamedTuple):
+    """`_plan_exec_next_card` 的产物：一份**可以直接发出去**的计划 + 它来自哪一行哪一步。"""
+    plan_obj: dict
+    task_id: str
+    cursor: int
+    tools: list[str]
+
+
+def _plan_exec_next_card(state: AgentState, config) -> "_PlanExec | None":
+    """台账里**下一步已绑实参** ⇒ 零 LLM 产出它那一份计划；不该出 ⇒ `None`。
+
+    `None` 的四条路（都是"交回今天的链路"，不是失败）：
+
+      ① 台账里没有可执行的下一步（`_ledger_next` 的三格判据：开档 / 在工作面上 /
+         有现在就能动手的一件）；
+      ② 下一步是**占位步**（没有 `args`，或实参还挂着 `$tool[N]` 引用，或技能名认不出）
+         ⇒ planner 去补参。占位步是这条路上的**正常状态**，不是缺陷；
+      ③ **进度守卫**：同一行、同一个游标上一轮已经发过一次，而回执一条都没落地 ⇒ 停手。
+         没有这一格，"发出去的计划执行时不产生回执"会变成一个不出声的死循环
+         （`route_after_execute` 见 `_ledger_has_next` 仍为真 ⇒ 又交回 planner ⇒ 又发一遍）。
+         守卫是 `<=` 而不是 `<`：游标**不前进**就是没进展，重发同一份计划毫无意义；
+      ④ 技能闭集盖不住这个单元（内部不一致）⇒ 一个工具都不执行，交回 planner。
+
+    `$tool[N]` 引用那条尤其要写下来：它的值要等**前面那次调用**回来才知道，而那些帧
+    早随上一轮请求消失了（`refs` 的取值源是 `state["tool_data"]`，请求内累计）。跨轮
+    拿着它去执行 = 拿空值去写——所以它和"没绑定"合流，一律退回 planner 在**现场**补参。
+    """
+    nxt = _ledger_next(state, config)
+    if nxt is None:
+        _plan_done_probe(state, config)
+        return None
+    row, _step = nxt
+    task_id = str(row.get("task_id") or "")
+    steps = [s for s in (row.get("steps") or []) if isinstance(s, dict)]
+    cursor = next_cursor(row, state.get("receipts"))
+    if cursor >= len(steps):
+        return None
+    last_cur = state.get("plan_cursor")
+    if (task_id and task_id == str(state.get("plan_task_id") or "")
+            and isinstance(last_cur, int) and cursor <= last_cur):
+        record("planner", "plan_exec_stalled", task_id=task_id, cursor=cursor,
+               reason="同一行同一游标已发过一次，回执没动")
+        logger.warning("[planner] 计划执行器停手：%s 停在第 %d 步（回执没推进）",
+                       task_id, cursor)
+        return None
+    unit = _unit_at(steps, cursor)
+    for one in unit:
+        tool = str(one.get("tool") or "")
+        args = one.get("args")
+        if not tool or not isinstance(args, dict) or not args_are_bound(args):
+            record("planner", "plan_placeholder_handback", task_id=task_id,
+                   cursor=cursor, tool=tool,
+                   reason="缺实参" if isinstance(args, dict) else "没有 args 这一格")
+            return None
+    skill = _exec_skill_for(unit)
+    if skill is None:
+        record("planner", "plan_exec_skill_mismatch", task_id=task_id, cursor=cursor,
+               skills=sorted({str(s.get("skill") or "") for s in unit}),
+               tools=[str(s.get("tool") or "") for s in unit])
+        return None
+    # 拼装与 `_confirm_grant_plan` 同款（同一份 TOOLS 行契约，同一处 `NOTE` 位置）。
+    # 注记只描述**事实与禁止**，不写"系统会去弹卡"那种机制（写给 narrator 的机制描述
+    # 会变成它的词汇——同 `_finalize_unaccounted` 的教训）。
+    tools = [f"{s['tool']}({json.dumps(s['args'], ensure_ascii=False)})" for s in unit]
+    note = ("这一步是**跨轮台账里已经登记、参数已备**的下一步（主人之前交代过的那件事），"
+            "照登记的参数执行；不得增删改任何参数、不得换工具")
+    record("planner", "plan_step_bound", task_id=task_id, cursor=cursor, tools=tools)
+    return _PlanExec(plan_obj={"skill": skill.name, "tools": tools, "note": note,
+                               "reply": skill.reply_contract, "chat": skill.chat,
+                               "dropped": []},
+                     task_id=task_id, cursor=cursor,
+                     tools=[str(s["tool"]) for s in unit])
+
+
+def _plan_done_probe(state, config) -> None:
+    """执行器驱动过的那一行**已经没有下一步**了 ⇒ 记一条（只观测，不改行为）。
+
+    为什么要记：`plan_step_bound` 是"执行器发出了下一步"，缺一个"那一行到头了"的对偶，
+    生产上就分不出"执行器没生效"与"执行器把这件事办完了"。范围只到**这一行**
+    （`state["plan_task_id"]`）——别的行有没有剩余是另一个问题，它由 `_ledger_next`
+    在下一轮回答。本请求没驱动过任何一行（`plan_task_id` 空）⇒ 什么都不记。
+    """
+    tid = str(state.get("plan_task_id") or "")
+    if not tid:
+        return
+    row = next((r for r in _open_tasks_rows(config)
+                if str(r.get("task_id") or "") == tid), None)
+    if row is None or next_actionable([row], state.get("receipts")) is not None:
+        return
+    adv = advance_by_receipts(row, state.get("receipts")) or {}
+    record("planner", "plan_done", task_id=tid,
+           cursor=int(adv.get("cursor") or row.get("cursor") or 0),
+           state=str(adv.get("state") or row.get("state") or ""))
+
+
 def _ledger_continue_nudge(row: dict, step: dict, drained: bool = False,
                            resumed: bool = False) -> str:
     """台账还有可执行剩余时给 planner 的**续跑指令**（走既有的单发 `correction` 槽）。
@@ -6357,7 +6527,9 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     return upd
 
 
-def _plan_update(plan_obj: dict, rounds: int, task_frames: list | None = None) -> dict:
+def _plan_update(plan_obj: dict, rounds: int, task_frames: list | None = None, *,
+                 advance: bool = True, plan_task_id: str | None = None,
+                 plan_cursor: int | None = None) -> dict:
     """决策出口的**唯一构造点**（20261009 拆 `_planner_decide` 时收口）。
 
     `_planner_decide` 有二十几处出口，形状逐字相同：`{**plan_state(plan_obj),
@@ -6366,10 +6538,24 @@ def _plan_update(plan_obj: dict, rounds: int, task_frames: list | None = None) -
     出口形状只留这一处可改。
     `task_frames is not None` 时才加那个键：`[]` 与 `[frame]` 两种取值都是**显式**传进来
     的，「缺键」与「传空列表」不是一回事（见任务登记那两处特例）。
+
+    **`advance=False`（20261012 批 B）**：这条出口**没花一次 LLM 决策**（计划是从跨轮
+    台账里确定性取出来的），所以也不该吃 `plan_rounds` 的预算——`MAX_PLAN_ROUNDS`
+    是"防 planner⇄execute 死循环"的额度，拿一次不存在的决策去抵它，只会让一句话
+    三件写在第三件之前撞上限。零 LLM 出口**在同一轮内可以连着走**，所以它与
+    `plan_task_id`/`plan_cursor`（进度守卫，见 `_plan_exec_next_card`）必须成对出现。
+
+    `plan_task_id`/`plan_cursor` 用 `is not None` 判而不是真值判：`plan_cursor`
+    的合法取值含 `0`，「传了 0」与「没传」不是一回事（同 `task_frames` 那条）。
     """
-    upd = {**plan_state(plan_obj), "plan_rounds": rounds + 1, "done": False}
+    upd = {**plan_state(plan_obj),
+           "plan_rounds": rounds + 1 if advance else rounds, "done": False}
     if task_frames is not None:
         upd["task_frames"] = task_frames
+    if plan_task_id is not None:
+        upd["plan_task_id"] = plan_task_id
+    if plan_cursor is not None:
+        upd["plan_cursor"] = plan_cursor
     return upd
 
 
@@ -6446,10 +6632,11 @@ class _Preflight(NamedTuple):
 def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) -> "_Preflight":
     """决策的**前置闸**（20261009 从 `_planner_decide` 抽出，B 段）。
 
-    确认轮照令牌拼计划 / 杂鱼身份零工具短路 / 上下文装配（角色、page_ctx、
-    帧、锚点、待办台账）/ 轮次上限强制收尾 / 五条确定性快道——全部是**零 LLM**
-    的确定性判定。任一条命中即 `_Preflight(early=<该轮的完整返回>)`，调用方
-    `if pre.early is not None: return pre.early`；否则用其余各格往下走。
+    确认轮照令牌拼计划 / **确认兑现后照台账拼下一步（批 B，`agent_task_plan_exec`）** /
+    杂鱼身份零工具短路 / 上下文装配（角色、page_ctx、帧、锚点、待办台账）/
+    轮次上限强制收尾 / 五条确定性快道——全部是**零 LLM** 的确定性判定。任一条命中即
+    `_Preflight(early=<该轮的完整返回>)`，调用方 `if pre.early is not None: return
+    pre.early`；否则用其余各格往下走。
 
     ⚠️ `resumed` 必须带出去：装配段（`_planner_setup`）读它决定要不要补
     `correction`（「令牌只授权一次」那条语义靠它守住）。
@@ -6487,6 +6674,23 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
             record("planner", "confirm_wrap", rounds=rounds,
                    reason="确认轮执行受阻，不重发清单")
         return _Preflight(early=_plan_update(plan_obj, rounds))
+
+    # 计划执行器（20261012 批 B）：**确认兑现轮的续跑**这一格，下一步若已绑实参，
+    # 就在这里零 LLM 把它发出去——不再请 planner"注意到"还剩一件。
+    #
+    # 为什么只在这一格（`resumed`）：它的语义是"令牌刚兑现完、这一轮的主人消息是前端
+    # 合成的确认回显"，正是废话轮长出来的那一格（现场 `20261012T195727` / `054330`）。
+    # 其余轮次的续跑一字未动（本批不动 `route_after_execute`，也不新增节点）。
+    # 开关关着 ⇒ 这一支**不存在**，路由与今天逐字节一致（写成判据在
+    # `tests/test_plan_executor.py`）。
+    if resumed and settings.agent_task_plan_exec:
+        pe = _plan_exec_next_card(state, config)
+        if pe is not None:
+            record("planner", "plan_card_next", task_id=pe.task_id, cursor=pe.cursor,
+                   tools=pe.tools, round=rounds)
+            return _Preflight(early=_plan_update(pe.plan_obj, rounds, advance=False,
+                                                 plan_task_id=pe.task_id,
+                                                 plan_cursor=pe.cursor))
 
     user_msg = _last_user_msg(state["messages"])
     # 意图清单的**消息来源**（20260927）：确认兑现轮读主人原话，其余轮同 `user_msg`。
@@ -13756,4 +13960,8 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
             "gate_replan": False, "task_frames": [],
             "pending_confirm": None, "confirm_text": "",
             "noop_text": "", "noop_note": "",
-            "confirm_grant": confirm_grant, "ledger": ledger or {}}
+            "confirm_grant": confirm_grant, "ledger": ledger or {},
+            # 计划执行器（批 B）的中性初值：`""` = 本请求还没驱动过任何一行台账；
+            # `-1` = 还没发过计划。守卫比的是 `(task_id, cursor)` 两个一起，而
+            # `plan_task_id` 为 `""` 时真 task_id 永远对不上 ⇒ 初值不会误触守卫。
+            "plan_task_id": "", "plan_cursor": -1}
