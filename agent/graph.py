@@ -11329,9 +11329,20 @@ _QUEUE_READ_TOOLS = {"get_moderation_status": "board", "list_admin_board": "boar
 # （判"这句是不是在问"，判错的代价是少一条入口）。两支判据的错向相反，共用一张表
 # 会把它们互相绑架——同 `_CONSOLE_INQUIRY_RE` / `_CONSOLE_INQUIRY_BROAD_RE` 分开写的理由。
 # 本表比 authz 那张多收「替我 / 给我」（主人最常用的委托说法之一，authz 那张没登记）。
+#
+# 20261012 补**列表式命令的连接词**（现场 trace `20261012T192204`，会话 343）：主人一句话
+# 四件事、用「然后」串起来——「…，**然后去把**他额度重置，…」——连接词一夹进来，这张表
+# 就认不出后半句还是命令，`_question_words_are_prose` 随之判 False，于是**四件事的卡一张
+# 都不弹**（那一轮零卡零执行，主人只收到一段"四件各自问一遍"的回复）。收的是"并列命令的
+# 连接词（**可叠用**：「**然后再把**…」）+ 可选的去/来"，连接词必须在**子句开头**、
+# 紧接着 把/将/给 才算骨架：
+# 「…，然后会有什么影响」不匹配 ⇒ 照旧按提问处理（谓词位那条硬否决也照旧先走）。
+# 连接词那一段与"去/来"都是**可空**的 ⇒ 今天认得出的骨架一条都没变窄。
+_ORDER_LINK = r"(?:然后|再|接着|随后|之后|顺便|同时|最后)"
 _ORDER_FRAME_RE = re.compile(
     r"^\s*(?:请|帮我|帮忙|麻烦|记得|替我|给我)\s*\S"
-    r"|(?:^|[。！!；;\n，,])\s*(?:请|帮我|帮忙|麻烦|记得|替我|给我)?\s*(?:把|将|给)")
+    r"|(?:^|[。！!；;\n，,])\s*(?:请|帮我|帮忙|麻烦|记得|替我|给我)?\s*"
+    r"(?:" + _ORDER_LINK + r"\s*)*(?:去|来)?\s*(?:把|将|给)")
 
 # 谓词位（**以动作为主语**）的问后果：`_INQUIRY_NOUNS` 在 authz 那边管的是「的X」「什么X」
 # 的名词位，这里要的是「会有什么影响 / 会怎样」的谓词位——两者刻意不共享（方向不同）。
@@ -11376,6 +11387,107 @@ def _question_words_are_prose(user_msg) -> bool:
     if _ORDER_FRAME_RE.search(text):                # 主人在下令 ⟹ 后半句是内容
         return True
     return _question_words_are_content(user_msg)    # 或：疑问词全在引号里
+
+
+# 子句切分（**逗号也算断点**）：与 `_sentence_of` 的 `_SENT_BREAK` 刻意**不共享**——
+# 那张表把逗号留在句内是**故意**的（它的判据是"这一整句是不是元讨论"，见它自己的注），
+# 而这里要的是另一件事：主人一句话里并列的"件"，而中文并列的件正是用逗号分开的
+# （现场 trace `20261012T192204`：「加条待办…，然后去把他额度重置，然后把待审的留言
+# …，然后再发一条公告」）。拿 `_sentence_of` 来切，四件事会粘成一句，疑问词照旧
+# 跨件绑架——那正是这一处要消掉的东西。两张表各自钉着自己那条判据，别合并。
+_CLAUSE_BREAK = _SENT_BREAK + "，,"
+_CLAUSE_SPLIT_RE = re.compile("[" + re.escape(_CLAUSE_BREAK) + "]")
+
+
+def _spec_clause(user_msg, spec) -> str:
+    """这件写落在主人那句话的**哪一段子句**；锚不住 ⇒ 退回整句（fail-closed）。
+
+    锚点 = 这件自己的**字符串参数值**里、在主人这句话中原样出现的那一段，取最早出现的
+    那个位置。拿"值"当锚点是因为它是这件写与主人那句话之间**唯一共享的可见字段**：
+    待办正文/标签名/公告标题这类值都是模型从这句话里摘出来的，位置也就落在这句话里
+    （trace `20261012T192204` 那件 `create_dashboard_todo({"text": "给用户niuniu
+    重置额度"})` 与主人原话逐字对得上）。
+
+    没有锚点（参数全是模型自己编的：公告正文、`audit_board_comment` 的 verdict、或者
+    值被改写成了另一个说法）⇒ 返回**整句** ⇒ 调用点那里与引入本函数之前**逐字节相同**
+    （照旧按"整句像提问"处理，照旧否决）。方向就是 fail-closed：宁可少弹一张卡，
+    也不许把主人真正在问的那一件当成命令弹出来让他签。
+    """
+    text = authz.strip_user_shell(user_msg)
+    args, _ok = _tool_args(spec)
+    anchors = []
+    for v in args.values():
+        if not isinstance(v, str):
+            continue
+        s = v.strip()
+        if len(s) < 2:          # 单字值（"是"/"1"）到处都能撞上，不当锚点
+            continue
+        pos = text.find(s)
+        if pos >= 0:
+            anchors.append(pos)
+    if not anchors:
+        return text
+    at = min(anchors)
+    # 切分要拿**引号段挖空成同长度空格**之后的文本去扫：引号里那一段是**值**（公告标题
+    # 「今晚不许熬夜！」、正文里的问号），里面的标点不是句子边界。不挖空就会在值中间
+    # 断开 ⇒ "值所属的那一小段"里看不见紧跟其后的那个问句（20261012 自查时踩到的：
+    # 「把公告「今晚不许熬夜！」删掉会有什么影响」会被切成不含疑问词的前半截）。
+    scan = _QUOTE_SPAN_RE.sub(lambda m: " " * len(m.group(0)), text)
+    start = 0
+    for m in _CLAUSE_SPLIT_RE.finditer(scan):
+        if m.start() >= at:
+            return text[start:m.end()]   # **带上那个断点字符**（问号本身就是判据）
+        start = m.end()
+    return text[start:]
+
+
+def _spec_asks_question(user_msg, spec) -> bool:
+    """这件写**自己那一句**是不是主人在提问（提问 ⇒ 不许为它弹卡，见 `_confirm_popup`）。
+
+    与 `_confirm_popup` 顶上那道"整句像提问"的闸是**同一个判据、不同的取景**：那里看一句
+    话，这里看一句话里的**一件**。切不出子句（空段）⇒ 判 True（否决）——同一条 fail-closed。
+    """
+    scope = _spec_clause(user_msg, spec)
+    if not scope.strip():
+        return True
+    return authz.is_question_like(scope) and not _question_words_are_prose(scope)
+
+
+def _question_scope(specs: list, user_msg) -> list | None:
+    """整句像提问时，**按件**重判这一批：返回过完取景的 specs；**整批都被否 ⇒ None**。
+
+    只见 `_confirm_popup` 顶上那一格。现场（trace `20261012T192204`，会话 343）：主人
+    一句话四件（加待办／重置额度／审留言／发公告），只因为第三件写成「审核一下**是否**
+    通过」，**整批一起被否** ⇒ 零卡零执行 ⇒ planner 只好把四件各自问一遍，主人收到的
+    是一段"你明确回一句'办'我就去加"——正是用户拍板要根治的废话轮。
+    原先那一格是 `if _q and not _question_words_are_prose(user_msg): return None`：
+    **取景是整句话**，一件在问就把整批的弹卡入口全关掉。恒弹卡族的弹卡是那 17 个工具
+    **唯一**的执行路径 ⇒ 关掉它不是"少问一次"，是**这条写能力没有入口**。
+
+    改法的方向只能是**多弹卡**：本函数只在"整句像提问且疑问词不是内容"时才往下走
+    （那时今天的结果是**零张卡**），返回的 `keep` 是整批的子集 ⇒ 不可能把今天弹得出来
+    的卡弹没了。整批都被否（`keep` 空）⇒ 返回 None ⇒ 调用点照旧 `return None`
+    （今天的行为逐字节不变）。
+    ⚠️ 别顺手把这里改成"整句 ⇒ 一律照弹"：那样「把 guest5 冻结掉会有什么影响？」也会
+    弹出一张卡（把提问读成意图，用户拍板明确不许）——**按件**判才是安全的那一格，
+    没有锚点的那一件走 `_spec_clause` 的整句兜底，照旧被否。
+    """
+    if not authz.is_question_like(user_msg) or _question_words_are_prose(user_msg):
+        return specs        # 不是提问 / 疑问词是**内容**（20261006）：不介入
+    if _TAIL_QUESTION_RE.search(authz.strip_user_shell(user_msg)):
+        # 句尾疑问（「…删掉好吗」「…行吗」）**全局**守卫：它的主语常常就是**紧挨着的
+        # 上一件**（「把公告「今晚不许熬夜！」删掉好吗」——疑问词与那一件只隔了一个
+        # 逗号/引号），按件切分反而会把那一件切出来当命令。所以这一格照旧整批不弹
+        # （今天的行为），只对**句中**的疑问信号做按件重判。
+        return None
+    keep = [s for s in specs if not _spec_asks_question(user_msg, s)]
+    if keep and len(keep) < len(specs):
+        record("confirm", "popup_question_scoped",
+               vetoed=[_tool_name(s) for s in specs if s not in keep],
+               kept=[_tool_name(s) for s in keep])
+        logger.info("[confirm] 整句像提问、按件只否掉 %d 件，其余 %d 件照弹",
+                    len(specs) - len(keep), len(keep))
+    return keep or None
 
 
 def _sign_confirm_picks(state: AgentState, config, principal, picks: list):
@@ -11438,8 +11550,9 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     # 判真时还要问一句"疑问词住在哪"——主人下了令、而疑问词只是他要写进站内的那段话
     # （「帮我发个公告，说说这次活动有什么注意事项」），就不该据此关掉整条入口。
     # 恒弹卡族的弹卡是**唯一**入口，这里的 False 换来的是一次点击，不是一次静默失败。
-    _q = authz.is_question_like(user_msg)
-    if _q and not _question_words_are_prose(user_msg):
+    # 20261012 再收一层取景：整句像提问时**按件**重判（`_question_scope`）。
+    specs = _question_scope(specs, user_msg)
+    if specs is None:
         return None
     picks: list = []
     fast: list = []          # [(TOOLS 行位次, 条目)]——走了"同轮命令即确认"快道的那几件
@@ -11457,8 +11570,8 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         # 拣的名字、模型自己概括的片段）→ 不许一句话直接写，退回弹窗：问句里会把
         # 系统解析到的目标写清楚（标签名/分类名/公告标题/留言原文），由主人点一下确定。
         # 这是**加一次点击**，不是砍能力——名字原样说出口的常见路径一行没变。
-        if not _q and args_ok and authz.consent_granted(principal, name, user_msg) \
-                and _ident_grounded(name, args, user_msg):
+        if not authz.is_question_like(user_msg) and args_ok and authz.consent_granted(
+                principal, name, user_msg) and _ident_grounded(name, args, user_msg):
             fast.append((idx, {"tool": name, "args": args}))
             continue  # 明确命令 + 目标地基都在：直接执行，不弹窗
         decision = authz.check(principal, name)
