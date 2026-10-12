@@ -25,6 +25,13 @@ PROVIDER_DEFAULTS = {
     },
 }
 
+# 认得的服务商名 = **上面那张表的键**（不另抄第二份名单：两份一定会漂，而漂掉的那一份
+# 决定的是"启动校验放不放行"与"思考开关译不译得出来"）。
+# 消费方两处：`Settings.check_provider()`（启动校验）与 `models/llm.py::_thinking_extra`
+# （一家一译的缺省支）；`eval/llm_judge.py` 的方言表用 `tests/test_llm_provider_registry.py`
+# 与本集合对锁。
+KNOWN_LLM_PROVIDERS = frozenset(PROVIDER_DEFAULTS)
+
 
 class Settings(BaseSettings):
     """Global application settings loaded from environment variables / .env file."""
@@ -261,8 +268,36 @@ class Settings(BaseSettings):
 
     @property
     def _provider_prefix(self) -> str:
-        """Return the env-var prefix for the active provider."""
-        return self.llm_provider.lower()
+        """Return the env-var prefix for the active provider.
+
+        **归一化只有这一处**（strip + lower）。三个 `active_llm_*` 靠 `getattr` 按这个
+        前缀取值，`check_provider()` 也用它比对取值域——两处各归一一次就会漏出
+        "校验放行了、取值却取不到"的缝（`LLM_PROVIDER=" qwen"` 是手写 `.env` 的常见形态，
+        改前 `lower()` 不 strip ⇒ 那种写法校验过了、`getattr` 却抛 AttributeError）。
+        """
+        return (self.llm_provider or "").strip().lower()
+
+    def check_provider(self) -> str:
+        """`LLM_PROVIDER` 的**启动校验**：认不出 ⇒ raise（拒绝启动），不回退默认。
+
+        与 `server._build_arm` 对 `AGENT_ARM` 的处置逐条同款、理由也一样：静默回退会让
+        "这一刻到底是谁在跑"从日志里消失。这里还多一层现场依据——`/health` **刻意**把
+        "认不出的 provider"降级成一句自证字符串照旧 200（见 `server.health` 的注：探针要
+        回答的是"进程活没活"，把配置写错报成"agent 挂了"是**指错方向**的告警）。两条合
+        起来的后果正是"服务正常起来、每一条请求都不对"⇒ 启动这一步是唯一拦得住的地方。
+
+        取值域 = `PROVIDER_DEFAULTS` 的键（`KNOWN_LLM_PROVIDERS`），不是手抄的第二份名单。
+        返回归一化后的 provider 名，供启动日志直接打印（**"这一轮是谁在跑"必须是日志里
+        读得到的事实**）。
+        """
+        prov = self._provider_prefix
+        if prov not in KNOWN_LLM_PROVIDERS:
+            raise ValueError(
+                f"LLM_PROVIDER={self.llm_provider!r} 不是已知的服务商"
+                f"（只有 {sorted(KNOWN_LLM_PROVIDERS)}）——拒绝启动。"
+                "不回退默认：静默回退会把'这一刻是谁在跑'从日志里抹掉，"
+                "而且此后每一条请求都会以某种方式不对（`/health` 不会报错）。")
+        return prov
 
     @property
     def active_llm_api_key(self) -> str:

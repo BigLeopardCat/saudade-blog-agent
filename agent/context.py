@@ -1429,6 +1429,14 @@ def strict_wire_issues(messages: list) -> list[str]:
     ≠ 判据有测试"，两份口径迟早各漂各的）；② 真回归发生时被就地抹平，读数变成绿的
     ——而这一层的全部价值就是让回归**响**。调用方只记日志与 trace，绝不改序列。
 
+    **这台读数是谁在读**（20261012 补的出口）：`graph.model_node` 拿到非空结果后记一条
+    ERROR（行首 `wire_illegal`，与下面的 trace 事件同名）与一条 trace 事件，`scripts/
+    healthcheck.sh` 第 7 项每分钟扫 `logs/agent/agent.log` 的**增量段**、命中即 WARN。
+    在这一项之前，"绊线红了"只发生在没人看的日志里——生产跑在 qwen 上时它**永远是绿的**
+    （qwen 容忍那两条非法形状），换服务商才炸。所以那个 ASCII 单 token 是**取证锚点**：
+    句子随改，**锚点不许改名**（改了就是静默半死：探针照跑、永远扫不到），
+    `tests/test_llm_provider_registry.py::test_wire_illegal_anchor_is_stable` 钉住这一点。
+
     纯函数：不修改入参，也不依赖调用顺序（同一个列表跑两遍结果相同）。
     """
     msgs = list(messages or [])

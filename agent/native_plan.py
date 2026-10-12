@@ -318,9 +318,14 @@ def build_tool_schema(role: str | None, *, task_state: bool = False,
         if skill.complete_when:
             desc = f"{desc}\n完成判定：{skill.complete_when}"
         fn: dict[str, Any] = {"name": skill.name, "description": desc,
-                              "parameters": {"type": "object", "properties": props}}
+                              "parameters": {"type": "object", "properties": props,
+                                             "additionalProperties": False}}
         # 无必填就**不写** `required` 键：写空数组与不写语义相同，但少一个字段就少
-        # 一处网关差异（有些网关对空 required 的处理不一致）。
+        # 一处网关差异（有些网关对空 required 的处理不一致）。**`additionalProperties:
+        # False` 不受这条取舍影响**：它是"这份函数的参数就这几格"的**声明**，与空
+        # `required` 那种"写不写都一样"不同——它把"这一格是关闭的"这件事写成了事实，
+        # 而不是留给"没写=随便"去解释。**只加在这一层**（函数参数的顶层）：`calls[].args`
+        # 那类内层对象是**自由形状**（键就是被调工具的形参名），在那儿加会把它关死。
         if required:
             fn["parameters"]["required"] = required
         tools.append({"type": "function", "function": fn})

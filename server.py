@@ -339,6 +339,12 @@ async def lifespan(app: FastAPI):
     global _agent
     setup_logging()
     logger.info("Initialising LangChain agent ...")
+    # `LLM_PROVIDER` 的启动校验（20261012）：认不出的服务商名**拒绝启动**，与下面
+    # `_build_arm` 对 `AGENT_ARM` 的处置同款（理由见 `Settings.check_provider` 的注）。
+    # **顺序在这里是有意的**：先校验 provider 再建臂——否则一条臂会先被建起来、再被
+    # 这个错误丢掉，日志里留下一段"看着像建好了"的痕迹。
+    from config.settings import settings
+    logger.info("LLM provider ready (provider=%s)", settings.check_provider())
     _agent, _arm = _build_arm()
     logger.info("Agent ready (arm=%s)", _arm)
     # 后台预热图谱查询的 embedding 客户端（首次 TLS 建连 ~3s，不预热的话
