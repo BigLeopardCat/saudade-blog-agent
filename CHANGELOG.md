@@ -16,6 +16,23 @@
 
 ## 20261013
 
+- **留言 DTO 的键与审核态上锁（判据，20261013）**：留言板两条通道（公开池
+  `list_guestbook`、我自己的 `list_my_board`）拿回的都是后端 `TalkDto` 那一个 JSON，
+  agent 按**名字**读它（`entities._entry_digest` / `_my_board_digest` 的跨轮记忆、
+  `base._shape` 出口的帧）。改键名**不报错**，症状是"少了半句"：`talkTitle` 改名 ⇒
+  那一行的〔分类〕整段消失；`content` 改名 ⇒ 整行落进 `if not body: continue` 被跳过
+  ⇒ 模型看到"最近 5 条"却只有 2 条。新增 `tests/test_board_dto_keys.py`：① 从
+  `TalkDto` 现取发出的键（`#[serde(rename)]` 优先）对 agent 摘要器 AST 里读的键——
+  **先按帧改名表（`talkKey`→`talkId`）逆映射回上游名**再比，agent 读的必须 ⊆ 后端发的；
+  本侧确实读着一个后端**从不发**的键（`talkContent`，父仓全仓搜不到，是历史兜底、读到
+  恒 None）——写进**双向台账**，行为不动；② `_BOARD_STATE_WORD` 的键 == Rust
+  `review_notice_text_for` 的 match 臂（1=通过/0=待审/2=未通过 两侧相等；两侧都是"不认就
+  拒"，兜底**刻意不同**：后端不发通知、本侧印「状态未知」）；顺带锁住后端的表只有**一处**
+  （`review_notice_text` 是薄包装）与"同键空间（0/1/2）的配额状态表不许与它共用词"；
+  ③ `talkKey` 是 `i32`（非 Option）⇒ agent 的 `isinstance(tid, int)` 恒成立
+  （`/guestbook?lid=<talkId>` 这个位置形态的取值就靠它），并配正控/负控。
+  **agent 行为一个字没改**。
+
 - **写通道的两个枚举词表上锁（判据，20261013）**：`level`（标签层级）与 `status`（文章
   状态）都不是自由文本，取值域两侧各写一份，而两条通道的失效形状**不一样**：
   层级认不出时后端**拒**（`tags.rs::parse_level` 返回 `None` ⇒ 这次移动白做），代价是
