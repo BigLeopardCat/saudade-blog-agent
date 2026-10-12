@@ -243,6 +243,75 @@ def test_not_a_replan_issue():
     check("五种线格式都在网内", not miss, str(miss))
 
 
+# ── ⑧ 令牌只授权一次：同一轮内已执行过的那一件不再被覆盖（现场 195727）────
+# 现场（`logs/agent/traces/20261012/195727`，会话 344）：一句话四件写 ⇒ 第一件 `create_
+# dashboard_todo` 弹卡 ⇒ 主人点「确定」⇒ 执行完（回执 PASS）⇒ 台账还剩三件 ⇒ 路由如实把
+# 这一轮交回 planner（三次）⇒ **而模型照着前端合成的确认回显把那件待办又排了两遍**。
+# 那一件逐字落在签名体里 ⇒ `_all_granted` 让弹卡闭嘴、`consent_missing` 让同意闸放行
+# ——**两处一起被免掉**，同一个调用静默落库三份（三个同名待办）。判据在 `_grant_covers`：
+# 令牌用在那一件上就作废（"令牌只授权一次执行，不是一张可反复使用的通行证"）。
+TODO_SPEC = 'create_dashboard_todo({"text": "给用户niuniu重置额度"})'
+_TODO_SPEC_D = {"tool": "create_dashboard_todo", "args": {"text": "给用户niuniu重置额度"}}
+_GRANT_TODO = {"token": "tok", "skill": "dashboard_todo_add", "specs": [_TODO_SPEC_D]}
+_QUOTA_TOKEN = {"token": "tok", "skill": "quota_reset",
+                "specs": [{"tool": "reset_user_quota", "args": {"uid": 9}}]}
+_OWNER_4 = ("猫咪加条待办给用户niuniu重置额度，然后去把他额度重置，"
+            "然后把待审的留言你审核一下是否通过，然后再发一条公告，以你的口吻随便说点声明")
+_CARD_TODO = ("确认执行：要在后台首页的待办里加一条「给用户niuniu重置额度」，排期 未排期"
+              "（那是你自己那份列表，加完随时能改删）吗？点「确定」我就去办。")
+
+
+def test_grant_spent_after_first_use():
+    print("\n[令牌] 一次点头 = 那一件只办一次（同一轮里第二次不再静默执行）")
+    _fresh = {"confirm_grant": _GRANT_TODO, "executed": []}
+    _spent = {"confirm_grant": _GRANT_TODO, "executed": [TODO_SPEC]}
+    check("正面控制：本轮还没做过 ⇒ 覆盖（判据不是恒假）",
+          G._grant_covers(_fresh, TODO_SPEC) is True)
+    check("本轮已经执行过同一件 ⇒ **不再**覆盖", G._grant_covers(_spent, TODO_SPEC) is False)
+    check("  整批那格随之判假 ⇒ 弹卡那一路不再闭嘴",
+          G._all_granted(_fresh, [TODO_SPEC]) is True
+          and G._all_granted(_spent, [TODO_SPEC]) is False)
+    # 归一化与裁剪/回执同源（`_spec_signature`）：类型差一档仍是同一件
+    check("  归一化同源：令牌里的 `{\"uid\": 9}` 与执行过的那份 `{\"uid\": \"9\"}` 是同一件",
+          G._grant_covers({"confirm_grant": _QUOTA_TOKEN,
+                           "executed": ['reset_user_quota({"uid": "9"})']},
+                          'reset_user_quota({"uid": 9})') is False)
+    check("  反控：执行过的是**另一件**（换参数）⇒ 这一件照旧被覆盖",
+          G._grant_covers({"confirm_grant": _QUOTA_TOKEN,
+                           "executed": ['reset_user_quota({"uid": 8})']},
+                          'reset_user_quota({"uid": 9})') is True)
+
+    # 端到端：重复那一件过**真的** `execute_node`（第 2 轮）⇒ 零执行、不留静默口子
+    plan_obj = G.plan_state({"skill": "dashboard_todo_add", "params": {},
+                             "tools": [TODO_SPEC], "note": "x", "reply": "y"})
+    st = {**plan_obj, "plan_rounds": 1, "done": False,
+          "messages": [HumanMessage(content=_OWNER_4), HumanMessage(content=_CARD_TODO)],
+          "confirm_grant": _GRANT_TODO,
+          "receipts": [{"skill": "dashboard_todo_add", "tool": "create_dashboard_todo",
+                        "args": {"text": "给用户niuniu重置额度"},
+                        "result": "已在后台首页的待办里加了一条", "ts": 1.0}],
+          "executed": [TODO_SPEC], "noop_specs": [], "blocked": [], "blocked_seen": []}
+    fake = _FakeWrite("create_dashboard_todo")
+    saved = G._TOOL_MAP.get("create_dashboard_todo")
+    G._TOOL_MAP["create_dashboard_todo"] = fake
+    try:
+        out = G.execute_node(st, _CFG)
+    finally:
+        if saved is None:
+            G._TOOL_MAP.pop("create_dashboard_todo", None)
+        else:
+            G._TOOL_MAP["create_dashboard_todo"] = saved
+    pop = out.get("pending_confirm") or {}
+    check("一个工具都没执行（这一轮不再出现第二份同款回执）", fake.calls == 0, str(fake.calls))
+    # 回执是**累积**返回的（进 state 那一份原样带出）⇒ 判的是"没有**新增**"，不是"空"
+    _got = [r for r in (out.get("receipts") or [])
+            if r.get("tool") == "create_dashboard_todo"]
+    check("没新增回执（同款回执仍只有进场那一份）", len(_got) == 1, str(out.get("receipts")))
+    check("退回到人的那一环：弹出的是这一件自己的卡（不是静默放行）",
+          [s.get("tool") for s in (pop.get("specs") or [])] == ["create_dashboard_todo"],
+          str(pop.get("specs")))
+
+
 if __name__ == "__main__":
     for fn in (test_second_write_pops_card,
                test_card_only_still_blocks,
@@ -250,7 +319,8 @@ if __name__ == "__main__":
                test_wire_markup_reply_falls_back,
                test_normal_reply_untouched,
                test_mention_spans_exempt,
-               test_not_a_replan_issue):
+               test_not_a_replan_issue,
+               test_grant_spent_after_first_use):
         fn()
     print()
     settings.jwt_secret = _SAVED_SECRET   # 全局单例：还原成进来时的样子

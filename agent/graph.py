@@ -3730,7 +3730,8 @@ def _ledger_has_next(state, config) -> bool:
     return _ledger_next(state, config) is not None
 
 
-def _ledger_continue_nudge(row: dict, step: dict, drained: bool = False) -> str:
+def _ledger_continue_nudge(row: dict, step: dict, drained: bool = False,
+                           resumed: bool = False) -> str:
     """台账还有可执行剩余时给 planner 的**续跑指令**（走既有的单发 `correction` 槽）。
 
     三条内容缺一不可，都是现场换来的：
@@ -3742,12 +3743,22 @@ def _ledger_continue_nudge(row: dict, step: dict, drained: bool = False) -> str:
         原文）。指令只描述事实与禁止句，不写"系统会去弹卡"那种机制描述（同
         `_finalize_unaccounted` 的教训：写给 narrator 的机制描述会变成它的词汇）。
 
-    `drained=True`＝这一轮**排过**工具、但那件被去重剪掉了（已取回／零改动，
-    `_plan_trims_to_empty` 那一格）。开场那句必须随之换掉：`False` 档的
-    "你这一轮没有排任何工具"在这一档里是**假话**，而给模型一句与事实相反的前提，
-    正是本仓反复吃亏的形态（它会照着那句去解释自己为什么被叫回来）。
+    开场那句按**这一轮到了哪一步**换档（三档都不许说与事实相反的前提——模型会照着
+    那句去解释自己为什么被叫回来）：
+      · 缺省：planner 还没决策（零工具收尾那一格）；
+      · `drained=True`＝排过工具、但那件被去重剪掉了（已取回／零改动，
+        `_plan_trims_to_empty` 那一格）⇒ "你这一轮没有排任何工具"是**假话**；
+      · `resumed=True`＝**确认兑现轮的续跑**（决策之前就说，见 `_planner_preflight`）：
+        这一轮的主人消息**不是主人的话**，是前端合成的确认回显，而它描述的那件事
+        刚刚已经执行完（现场 `20261012T195727`：三个续跑轮里模型照着回显把刚加好的
+        待办**又加了两遍**）。这一档要说的两件事与另两档都不同：**点破消息的来源**、
+        **禁止照着回显重排那一件**。
     """
     _head = (
+        ("这一轮的主人消息是前端合成的**确认回显**（主人刚在确认框上点过「确定」；"
+         "回显里描述的那件事已经执行完、回执就在上方）——**不要**照着回显再排一遍"
+         "那件事，也不要顺着它挑工具。")
+        if resumed else
         ("你这一轮排的那件**这一轮已经执行过了**（系统判定为本轮重复：已取回／零改动，"
          "不会再跑一遍），它不算这一轮的进展，**也不要再挑它**。")
         if drained else
@@ -3815,9 +3826,15 @@ def _task_ledger_probe(reply: str, state, config, issue: str = "") -> None:
 # `search` 返回 None ⇒ 这条网没设起来（那一轮台账里明明还有可执行的剩余）。
 # 去掉主语限定（`点个头|点头`）**不是**放宽族别：它收的仍是"你点一下头我才动手"这
 # 一个意思，只是不再要求代词恰好是"你"；「我还可以帮你做 X」那类正当建议照旧在族外。
+# **20261012 三次标定**（同一条修法、第三次撞上）：末条「你**说一声**我就」同样钉着
+# 主语，而现场 `logs/agent/traces/20261012/195727` 的回复原文是
+# 「…先做第 1 件吗？**说一声我就去**。」——那三个字的代词省掉了，`search` 返回 None
+# ⇒ 网又没设起来（台账里当时还剩三件）。只把**带"我就"尾巴**的那条去掉主语限定：
+# 那个尾巴已经把这句钉死成"你说一句我才动手"，裸「说一声」照旧要求主语在场
+# （否则「我会说一声的」这类句子也会被收进来）。
 _LEDGER_SOLICIT_RE = re.compile(
     r"要不要|需不需要|用不用|需要我|要我(?:帮|去|现在)?|你说一声|点个头|点头|"
-    r"你说句话|你吩咐|你说(?:一句|一声)(?:话)?我就", re.S)
+    r"你说句话|你吩咐|(?:你|您|主人)?说(?:一句|一声)(?:话)?我就", re.S)
 
 
 def _ledger_continuation_issue(reply: str, state, config) -> "tuple | None":
@@ -6726,6 +6743,17 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
     # 第四种来源（20260927）：确认兑现轮回来**补主人那句话里剩下的动作**。这一轮的
     # "当前消息"是前端合成的确认句，模型照它决策只会得出"没事可做"——必须把"上一件
     # 已经办完、这几件还没办"讲给它听（只写机器能保证的事实，不做别的暗示）。
+    #
+    # 20261012 补**第二本账**（现场 `20261012T195727`，会话 344）：这一格的判据此前只有
+    # `_pending_intents`（对主人原话做**具名别名**扫描），而**写意图它结构上看不见**
+    # （论据见 `agent/tasks.py` 头注）⇒ "一句话四件写"这种轮次它恒为空 ⇒ **一条纠偏都
+    # 不给**（那三轮各打了一行"判据漂移？"的 WARNING）。模型于是把回显当成主人的话来读：
+    # 回显写着「要在后台首页的待办里加一条「给用户niuniu重置额度」…吗？」，它就把这条
+    # **又加了两遍**（同轮三份逐字相同的 `create_dashboard_todo` 回执）；而同一个令牌
+    # 还逐字覆盖着那一件 ⇒ `_all_granted` 让弹卡闭嘴、`consent_missing` 让同意闸放行
+    # ——**两处一起被免掉**，那两遍静默落库。取并集的理由与 `_wrapup_intent_correct`
+    # 那条完全同源（同一个病灶、另一处缝）：台账里剩下的那件是机器可读的，别让它只活在
+    # 提示词的一段散文里。
     if resumed:
         _left = [i for i in _pending_intents(state)]
         if _left:
@@ -6735,10 +6763,22 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
                 + "、".join(f"{i['label']}（{i['key']}）" for i in _left)
                 + "。本轮把没做完的做掉（一轮一件），**不要**重做刚刚兑现的那次操作。")
             correction_kind = "确认轮剩余意图"
+        else:
+            _led = _ledger_next(state, config)
+            if _led:
+                _row, _step = _led
+                correction = _ledger_continue_nudge(_row, _step, resumed=True)
+                correction_kind = "确认轮台账剩余"
+                record("planner", "confirm_round_ledger_correct", round=rounds,
+                       goal=_row.get("goal"), tool=_step.get("tool"),
+                       task_id=_row.get("task_id"))
+                logger.warning("[planner] 确认兑现轮被交回、而主人那句话的意图清单为空"
+                               "（写意图它看不见）⇒ 改读台账：%s → %s",
+                               _row.get("goal"), _step.get("tool"))
     if resumed and not correction:
-        # 一条都没剩 ⇒ 这一轮不该被交回 planner（`route_after_execute` 只在"还剩"
+        # 两本账都空 ⇒ 这一轮本不该被交回 planner（`route_after_execute` 只在"还剩"
         # 时才交回来）。真出现了就是判据漂移，如实记一笔，决策照常走 LLM 那条路。
-        logger.warning("[planner] 确认兑现轮被交回但意图清单已空（判据漂移？）")
+        logger.warning("[planner] 确认兑现轮被交回但意图清单与台账都空（判据漂移？）")
     # native 档的异常记账（如 native_multi_call）。**必须在循环外先声明**：循环外的
     # `decision` 事件要读它，而它只在 native 档的某一支里被赋值——少了这一行，
     # "某一轮走到某条提前 return 之外的路径"就会以 NameError 的形态炸在收尾上。
@@ -8542,6 +8582,16 @@ def _grant_covers(state, spec) -> bool:
     判据落在**签名体**上：工具名相同**且**参数逐字相同才算覆盖。只比工具名不够——
     同一件工具换个目标（「把 demo 降级」的令牌拿去办 demo_admin）同样是另一件写。
     参数没解析出来的 spec 一律不算覆盖（fail-closed：`args_ok` 为假时不认）。
+
+    ⚠️ **令牌用在那一件上就作废**（20261012 第二次收窄，现场 `20261012T195727`）：
+    上面那条"只授权签名体里那一件"仍然漏了**同一件的第二次**——`state["executed"]`
+    里的那件（**本轮**已经执行过的，`graph_input` 按请求清空）照样被判成"被覆盖"，
+    于是同一个调用在确认轮的续跑轮里再被排出来时，弹卡（`_all_granted`）与同意闸
+    （`consent_missing`）**两处又一起被免掉**，同一件写静默落库三份。一句话点头的
+    含义是"这一件，办一次"——`_planner_decide` 那段注释早写着这句（"令牌只授权一次
+    执行，不是一张可反复使用的通行证"），只是没人守着"第二次"。加这一格：**同一轮内
+    已经执行过的那件不再被令牌覆盖** ⇒ 重复件退回普通写操作该走的路（恒弹卡族弹卡、
+    免问族问同意闸），不再有任何静默执行的口子。
     """
     grant = state.get("confirm_grant") or {}
     specs = [s for s in (grant.get("specs") or []) if isinstance(s, dict)]
@@ -8556,6 +8606,15 @@ def _grant_covers(state, spec) -> bool:
         name = _tool_name(spec)
     if not args_ok:
         return False
+    # 归一化与回执/裁剪同源（`_spec_signature`）：`{"uid": 9}` 与执行过的那份里的
+    # `{"uid": "9"}` 是同一件事（旧判据拿 spec 原文比，JSON 类型一差就判不出来）。
+    sig = _spec_signature(name, args or {})
+    for s in (state.get("executed") or ()):
+        if not isinstance(s, str):
+            continue
+        e_args, e_ok = _tool_args(s)
+        if e_ok and _spec_signature(_tool_name(s), e_args or {}) == sig:
+            return False
     return any(str(s.get("tool") or "") == name
                and (s.get("args") or {}) == (args or {}) for s in specs)
 

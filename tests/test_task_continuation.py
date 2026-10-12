@@ -352,6 +352,103 @@ with _Dial(True):
           bool(G._ledger_continuation_issue(_SOLICIT_081550, {"confirm_grant": True},
                                             _cfg([_NOTICE_ROW]))))
 
+# 第三次标定（同日、另一条现场）：这条族第三次撞上**主语被省掉**。
+_SOLICIT_195727 = ("待办那条已经加好了喵～后台复核过，列表里确实读到了「给用户niuniu重置额度」。\n\n"
+                   "接下来你要办的三件事，我按顺序排着：\n\n1. **把 niuniu 的额度重置**\n"
+                   "2. **审核待审的河灯留言**\n3. **发一条公告**\n\n先做第 1 件吗？说一声我就去。")
+check("③ 现场措辞「说一声我就去」现在命中征询族（前两条要求代词在场）",
+      bool(G._LEDGER_SOLICIT_RE.search(_SOLICIT_195727)))
+check("  裸「说一声」仍在族外（「我会说一声的」不是把主动权退回去）",
+      not G._LEDGER_SOLICIT_RE.search("改完我会说一声的，你放心"))
+with _Dial(True):
+    check("  端到端：这段话 + 台账还剩一件 ⇒ 这条网命中（现场那三个续跑轮就是漏在它上）",
+          bool(G._ledger_continuation_issue(_SOLICIT_195727, {"confirm_grant": True},
+                                            _cfg([_NOTICE_ROW]))))
+
+# ══════════════════════════════════════════════════════════════════════════
+print("\n⑦ 确认兑现轮的续跑纠偏：判据改读**两本账的并集**（现场 195727）")
+# 现场（`logs/agent/traces/20261012/195727`，会话 344）：一句话四件写 ⇒ 第一件弹卡 ⇒
+# 主人点「确定」⇒ 执行完 ⇒ 台账还剩三件 ⇒ `route_after_execute` 如实交回 planner（三次）
+# ⇒ 而这一格的判据只有 `_pending_intents`（**写意图它结构上看不见**）⇒ **一条纠偏都不给**
+# （那三轮各打了一行"判据漂移？"的 WARNING）⇒ 模型把前端合成的**确认回显**当成主人的话来
+# 读，回显里写的那条待办**又加了两遍**（同轮三份逐字相同的回执）。取并集之后它拿到的是
+# 「回显不是主人的话 + 台账里还剩这一件、下一步调什么」。
+
+_CARD_195727 = ("确认执行：要在后台首页的待办里加一条「给用户niuniu重置额度」，排期 未排期"
+                "（那是你自己那份列表，加完随时能改删）吗？点「确定」我就去办。")
+_OWNER_195727 = ("猫咪加条待办给用户niuniu重置额度，然后去把他额度重置，"
+                 "然后把待审的留言你审核一下是否通过，然后再发一条公告，"
+                 "以你的口吻随便说点声明")
+_OWNER_ACTION = "把樱花特效打开吧"      # 反控用：这一句 `_scan_action_intents` **扫得到**
+_TODO_SPEC = 'create_dashboard_todo({"text": "给用户niuniu重置额度"})'
+_GRANT_195727 = {"token": "tok", "skill": "dashboard_todo_add",
+                 "specs": [{"tool": "create_dashboard_todo",
+                            "args": {"text": "给用户niuniu重置额度"}}]}
+
+
+def _pre(resumed=True, owner=_OWNER_195727):
+    from langchain_core.messages import HumanMessage
+    return G._Preflight(
+        rounds=1, resumed=resumed, user_msg=_CARD_195727,
+        intent_msg=G._intent_src({"messages": [HumanMessage(content=owner),
+                                               HumanMessage(content=_CARD_195727)],
+                                  "confirm_grant": _GRANT_195727}),
+        principal=None, role="owner", page_ctx="", has_frames=True, ledger_frame=""), owner
+
+
+def _setup_state(owner=_OWNER_195727):
+    from langchain_core.messages import HumanMessage
+    return {"confirm_grant": _GRANT_195727, "executed": [_TODO_SPEC],
+            "receipts": [{"skill": "dashboard_todo_add", "tool": "create_dashboard_todo",
+                          "args": {"text": "给用户niuniu重置额度"}, "result": "已加", "ts": 1.0}],
+            "blocked": [], "plan": "SKILL=x\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）",
+            "plan_rounds": 1,
+            "messages": [HumanMessage(content=owner), HumanMessage(content=_CARD_195727)]}
+
+
+_pre_obj, _owner = _pre()
+
+
+class _NoLLM:
+    """装配段里那两处**与判据无关**的接线（建客户端 / 绑 native）换成桩：离线套件没有
+    密钥，`get_llm` 会当场抛 `OpenAIError`（CI 里也一样）。本格判的是纠偏文本怎么拼，
+    一个模型都不许被真的叫起来。"""
+
+    def __enter__(self):
+        self._g, self._b = G.get_llm, G.bind_native
+        G.get_llm = lambda **kw: object()
+        G.bind_native = lambda llm, *a, **kw: llm
+        return self
+
+    def __exit__(self, *exc):
+        G.get_llm, G.bind_native = self._g, self._b
+        return False
+
+
+_QROW = _row(task_id="at_q", goal="去把niuniu额度重置",
+             steps=[{"label": "重置额度", "tool": "reset_user_quota"}])
+with _Dial(True), _NoLLM():
+    _c = G._planner_setup(_setup_state(_owner), _cfg([_QROW]), _pre_obj, None)
+check("意图清单为空 ⇒ 读台账（不是一条纠偏都不给）",
+      _c.correction_kind == "确认轮台账剩余" and bool(_c.correction))
+check("  点名台账那一行的目标与下一步工具",
+      "去把niuniu额度重置" in _c.correction and "reset_user_quota" in _c.correction)
+check("  点破消息来源：**不许**照着回显再排一遍那件事（现场重复三遍的成因）",
+      "确认回显" in _c.correction and "**不要**照着回显" in _c.correction)
+check("  仍然明写不许反问「要不要继续」", "不许" in _c.correction)
+
+# 反控：主人那句话里的动作**扫得出来**时，走原来的那一支（文本逐字不变）
+_pre2, _owner2 = _pre(owner=_OWNER_ACTION)
+with _Dial(True), _NoLLM():
+    _c2 = G._planner_setup(_setup_state(_owner2), _cfg([_QROW]), _pre2, None)
+check("反控：当轮那句话扫得出意图 ⇒ 沿用原来那条（这一格没被替换掉）",
+      _c2.correction_kind == "确认轮剩余意图" and "确认回显" not in (_c2.correction or ""))
+
+with _Dial(False), _NoLLM():
+    _c3 = G._planner_setup(_setup_state(_owner), _cfg([_QROW]), _pre_obj, None)
+check("`AGENT_TASK_STATE=0` ⇒ 这一格逐字节退回老行为（无纠偏）",
+      not _c3.correction and not _c3.correction_kind)
+
 # ══════════════════════════════════════════════════════════════════════════
 print()
 if FAILED:
