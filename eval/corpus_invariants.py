@@ -46,7 +46,11 @@ heredoc——结论不可复核、口径每次都不一样，而且**同一段�
                                系统自己写的计划一定带 `STATUS=` 行，漏了就是有条构造路径没接上，
                                而它在别处全都无声（判据读的是值，读不到就跳过 = fail-open）。
                                于是新窗口 `--from <上线日>` 上 `无字段` 与 `非法值` 都应为 0。
-  I3 `fallback_by_issue`       gate fallback 按原因码计数（`cmd_prefix` 是批 2 的目标）。
+  I3 `fallback_by_issue`       gate fallback 按原因码计数（`cmd_prefix` 是批 2 的目标；
+                               `toolcall_markup_reply`——正文里写工具调用线格式——是
+                               20261012 那一网，原因码自动进这一格，不必另立不变量）。
+                               ⚠️ 与 I4 同一条纪律：**新原因码在历史窗口里恒 0**（网刚设），
+                               要读 `--from <上线日>`。
   I4 `fallback_total`          gate fallback 总数 = 生产侧 `__RESET__` 帧数。
                                **`0` 有强含义**：这个窗口里 gate 那条路一次都没被验到，
                                别读成"系统很干净"（golden 侧 `resets=0` 的同一条纪律）。

@@ -2926,6 +2926,49 @@ def _cmd_prefix_hit(text: str) -> str:
         if not _CMD_META_RE.search(_sentence_of(text, i)):
             return _sentence_of(text, i)
     return ""
+
+
+# ── 正文里的**工具调用线格式**（"零工具节点回了 tool_calls"那条不变量的第三个面孔）──
+# 现场（生产 trace `20261012T101621`，会话 342 的确认兑现轮）：narrator 该说的是"降级
+# 那件事我没办成"，吐出来的却是**照着调用格式写的一段文本**：服务商特判 token 形
+# （`<` + 全角竖线 + `DSML` + 全角竖线 … `invoke name="set_account_role"`、`parameter`）。
+# 与 20261006 那两副面孔的关键差别：它不是响应里的 `tool_calls` **字段**，而是**正文
+# 本身**——`_NARRATOR_NO_TOOLCALL_NUDGE` 那层纠正判的是字段，看不见它；而正文会被
+# 逐字流给主人（server 的 `streamed_parts`），gate 又只看"正文非空"⇒ 主人读到裸调用。
+# 三个面孔同源：上下文里 `with_tool_call_pairs` 补的 `assistant(tool_calls=…)` 是仿写
+# 范本，零工具的 narrator 照着它发起了调用。
+#
+# 这里**不做**"带纠正重问一次"（与字段那一副面孔相反）：重问只会把正文换成干净话，
+# 而那段脏字**已经流出去了**——重问之后 gate 看见的是干净正文、判 PASS，`__RESET__`
+# 就不会发生，主人屏幕上那段反而**永远留在气泡里**。能让已展示正文作废的通道只有
+# gate 的 fallback（`_fallback_result` → server 的 `reset`），所以判据挂在那里。
+#
+# 与命令前缀族同源同规矩（`_cmd_prefix_directive`）：**提及不是调用**——讲机制时在
+# 引号/内联代码/举例括号里写这些字样（主人问"你怎么防止假装调工具"时正会这么答）
+# 必须放行，故豁免三区 + 同句机制词，判据逐字一致，免得同一件事在两条通道上两种口径。
+# 词形只收**结构性**的标签/特判 token，不收"我调用一下工具"这类自然语言——那是
+# 声称族（`phantom_tool_claim` 等）的地界。
+_TOOLCALL_MARKUP_RE = re.compile(
+    r"<[|｜]{1,2}[^>\n]*[|｜]{1,2}"          # 服务商特判 token 形：<|…|> / <｜…｜>
+    r"|</?(?:tool_calls?|invoke|function_call)\b"   # 调用标签本体
+    r"|<\s*(?:parameter|arguments)\s+name\s*="     # DSML 参数行（要求 name= 属性）
+    r"|antml:",
+    re.I)
+
+
+def _toolcall_markup_hit(text: str) -> str:
+    """正文里**指令式**写了工具调用线格式的那一句（"" = 没有）。
+
+    与 `_cmd_prefix_hit` 同形（同一次遍历、同一条豁免），返回整句给 trace 作证据。
+    """
+    for m in _TOOLCALL_MARKUP_RE.finditer(text):
+        i = m.start()
+        if not (_inside_quote(text, i) or _inside_code_span(text, i)
+                or _inside_paren_example(text, i)):
+            return _sentence_of(text, i)
+        if not _CMD_META_RE.search(_sentence_of(text, i)):
+            return _sentence_of(text, i)
+    return ""
 # 确认式导航 + 完成式到达声称（NAVIGATE: 帧 = 等待确认，非已跳转；曾见模型返回
 # NAVIGATE: 后回复"已经带您到文章页"，用户视角即幻觉）。仅 navigate 技能轮启用。
 _NAV_ARRIVAL_RE = re.compile(
@@ -5499,6 +5542,17 @@ _FALLBACK_EMPTY = (
     "喵呜……主人，我刚才好像卡住了，没能说出话来。可以再问我一次嘛？这次我让"
     "系统查清楚了再好好回答～")
 
+# 正文里混进了**工具调用线格式**（20261012，判据见 `_TOOLCALL_MARKUP_RE`）。文案只否认
+# **那段文本本身**（"看着像调用的那串字不会生效"），**不说"我什么都没做"**——同一轮里
+# 完全可能有别的事真办成了（同 `_FALLBACK_CMD_PREFIX_DONE` 的教训：整段换成"什么都没做"
+# 比抄错格式更失真），这一轮的事实由系统印的过程行/事实块照实说。
+# 收尾用**提议**而不是反问「要不要继续」：那正是台账续跑那条网要拦的征询
+# （`_ledger_continuation_issue`）——兜底文案自己再犯一次，等于把网从后门漏掉。
+_FALLBACK_TOOLCALL_MARKUP = (
+    "喵呜……主人，我刚才那段回复写成了一串**系统调用格式**的文本，看着像调用了什么，"
+    "其实那段字不会生效、也不会替你执行任何操作（那一类动作走正常流程：该确认的我会"
+    "先问过你再动手）。你要办的事，直接说一声就行～")
+
 # 台账里还有能立刻动手的剩余，而回复把「要不要继续」反问回主人（20261012，
 # 见 `_ledger_continuation_issue`）。**这条兜底实际上走不到**（调用点先判了
 # `not gate_replan`，命中即 `_replan_result` 回 planner），留着是为了 `fail()` 的
@@ -5996,6 +6050,23 @@ def _replan_result(issue: str, plan: dict, frames: int, clause: str, last_ai) ->
 # 「还有没做完的事」这个判据在弹窗之后永远为假。
 def _intent_src(state: AgentState) -> str:
     """意图扫描读**哪句话**：确认兑现轮读主人原话，其余轮读当前消息。
+
+    **执行层也读它**（20261012）：`execute_node` 的 `user_msg` 就是本函数的返回值——
+    改这一行之前那里读的是 `_last_user_msg`，于是确认兑现轮把前端合成的**卡面文本**
+    （`确认执行：…吗？点「确定」我就去办。`）当成了主人的话，两个判据同时被它带偏
+    （生产 trace `20261012T101621`，会话 342，一句话两件写）：
+
+      · `_confirm_popup` 见问号判"像提问" ⇒ **第二张卡根本不弹**；
+      · 同意闸的 `consent_granted(name, 卡面文本)` 也恒假 ⇒ 第二件写落成
+        `consent_required` BLOCK；`blocked` 非空又把 `_planner_preflight` 的
+        `resumed` 判假 ⇒ planner 确定性收尾（`confirm_wrap`）⇒ 主人读到一句
+        "你说一声我就去办"的征询，而台账里那件事一件都没做。
+      最后一轮 narrator 干脆把 `set_account_role` 的**调用**写进了正文（见
+      `_TOOLCALL_MARKUP_RE`）——那一支的兜底在 gate。
+
+    卡面文本是**我们自己的话**，不是主人的话：凡是要判"主人要什么/主人点名了谁"的
+    地方都该读这里。同一根错源在本仓已修过两次（`_pending_intents` 的意图清单、
+    `_planner_preflight` 的 `intent_msg`），这是第三处。
 
     `messages` 缺席按空处理（不是 `state["messages"]`）：这个函数现在挂在**路由函数**
     `route_after_execute` 底下，而路由的判据测试（`tests/test_confirm.py` ⑦"每个路由
@@ -11885,7 +11956,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         return {"messages": []}
     executed = state.get("executed") or []
     principal = _principal_of(config)  # 本轮调用者（权限判据的输入，见 agent/authz.py）
-    user_msg = _last_user_msg(state["messages"])
+    user_msg = _intent_src(state)  # 主人真说的那句（确认轮≠卡面文本，用错源的代价见 _intent_src）
     # 这里的 page_ctx 只喂 _target_evidence/_create_display_text（都是"用户提没提
     # 到这篇文章/给设备写什么文案"），能力清单不参与——但传 role 与另两个节点同构，
     # 免得下次有人复制这行时把角色漏掉。
@@ -12936,6 +13007,19 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                     _dist, "整段照抄" if _kind == "near" else "抄写变体",
                     len(reply), len(_prev))
         return fail("repeat_prev_reply", _FALLBACK_REPEAT, plan, len(frames))
+
+    # ── 1c. 正文里混进了工具调用线格式（任何轮次，20261012）────────────────
+    # 判据与现场见 `_TOOLCALL_MARKUP_RE`：零工具的 narrator 把**调用写成了正文**。
+    # 那段字前端已经逐字推给主人了，唯一的撤回通道就是这里的 fallback ⇒ 必须在这里判；
+    # 位置在声称族之前（裸调用是一段没有主语的标签文本，先落进 `_claim_issue` 只会把
+    # issue 名报成某一族声称、把"这是调用不是话"这个真信号淹掉）。
+    # **不挂 `_REPLAN_ISSUES`**：正确出路不是"再去调一次工具"。
+    _markup = _toolcall_markup_hit(reply)
+    if _markup:
+        logger.warning("[gate] 正文里出现工具调用线格式（零工具节点不该有）：%s",
+                       _clip_clause(_markup))
+        return fail("toolcall_markup_reply", _FALLBACK_TOOLCALL_MARKUP, plan,
+                    len(frames), _markup)
 
     # 本轮全部工具返回原文（下面几道判据共用）。20260926 起**提前到这里**算：
     # 第 5 节那几条（err 帧族等）都要它，而它的算法就是一次 join，早算不亏。
