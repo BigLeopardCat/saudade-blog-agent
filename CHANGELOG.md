@@ -16,6 +16,21 @@
 
 ## 20261013
 
+- **离线套件多出一档覆盖率报告（工程，20261013）**：`tests/run_all.py --coverage` —— 逐套件
+  收集（配置 `parallel = true`，各写各的数据文件）、结尾 `combine` 成一份，配置落在
+  `pyproject.toml` 的 `[tool.coverage.*]`（`source` 只列**生产包**：`tests/` 与 `eval/` 是
+  被测对象、不是被测代码）。**不设阈值、不进 CI**——只有形状判据配当门禁，百分比会把"该测的
+  没测"与"测了但那一支没走到"混成一个数，拿它当闸门只会把人推去测 getter；它回答的是
+  "这轮动得多不多、哪些文件一直没人碰"。**判据一个字没变**（子进程就是
+  `coverage run <套件>`，退出码即套件的退出码）。⚠️ 三条踩出来的：① dev 组的 pin 必须是
+  `coverage[toml]`（Python 3.10 没有标准库 TOML ⇒ coverage **读不了** `pyproject.toml`，
+  而且是**构造时就退 1**、不是"跳过配置接着跑"，现场看着像"这一批代码全坏了"）；② 因此本
+  入口的可用性探针**连"配置读得进来吗"一起判**，起不来就一个套件都不跑、并原样打出那句
+  报错（不静默降级成"跑完了但没有覆盖率"）；③ `coverage run <脚本>` 往 `sys.path` 里放的
+  是**当前目录、不是脚本目录**（`python <脚本>` 才放脚本目录）⇒ 不显式把 `tests/` 挂上，
+  所有 `import _parent_repo` 的跨语言守卫会集体 `ModuleNotFoundError`——实测第一次全套件
+  跑就红了 17 个，**看着像整批守卫坏了**。并行数据落 `.coverage-data/`（进 `.gitignore`）。
+
 - **留言 DTO 的键与审核态上锁（判据，20261013）**：留言板两条通道（公开池
   `list_guestbook`、我自己的 `list_my_board`）拿回的都是后端 `TalkDto` 那一个 JSON，
   agent 按**名字**读它（`entities._entry_digest` / `_my_board_digest` 的跨轮记忆、

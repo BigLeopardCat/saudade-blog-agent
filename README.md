@@ -237,6 +237,12 @@ uv sync
 .venv/bin/python tests/run_all.py -k skills
 # 套件清单**只有 run_all.py 一处**（按磁盘枚举）：加套件不用改 CI、不用改夜间脚本、不用改本文。
 
+# L0 顺带出一份覆盖率报告：**非门禁、不进 CI**，不设阈值、红了也拦不住任何东西。
+# 为什么不做门禁：只有形状判据配当门禁，百分比会把"该测的没测"与"测了但那一支没走到"
+# 混成一个数，拿它当闸门只会把人推去测 getter。它回答的是"这轮动得多不多、哪些文件
+# 一直没人碰"——是个**给人看的**东西。
+.venv/bin/python tests/run_all.py --coverage
+
 # L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
 .venv/bin/python eval/recall_eval.py
 
