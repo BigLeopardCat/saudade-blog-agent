@@ -269,7 +269,13 @@ def parse_tag_ids(raw) -> list[int]:
             n = part
         elif isinstance(part, str):
             s = part.strip()
-            if not s or not re.fullmatch(r"\d+", s):
+            # ⚠️ **ASCII** 数字类，不是 `\d`（20261013）：`\d` 在 Python 里默认认
+            # Unicode 十进制数字——`"１２"`（全角）、`"٣"`、`"१२"` 都会命中，而前端的
+            # `Number()` **一个都不认**（`frontend/src/utils/noteTags.ts::toTagId`）。
+            # 于是这一侧会把它念成 id=12 的标签、屏幕上却没有那个标签（同
+            # `_COLOR_CANON` 那族"说得出、画不出"）。判据 =
+            # `tests/test_note_tags_codec.py` ④：**本侧认下的每一个值，前端也认**。
+            if not s or not re.fullmatch(r"[0-9]+", s):
                 continue
             n = int(s)
         else:
