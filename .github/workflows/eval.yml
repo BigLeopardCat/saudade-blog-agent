@@ -67,9 +67,14 @@ jobs:
           # 20261002 加 `frontend/src/utils`：`tests/test_sticker_repair.py` 要拿父仓那份
           # 贴纸清单（`stickers.ts::STICKERS`）与 agent 侧 `agent/stickers.py::STICKER_NAMES`
           # 逐字核对——"名字清单三处同步"是这套契约里唯一能机器化的那一处。
+          # 20261013 加 `frontend/src/components/NoteTagSelect`：`tests/test_tag_color_tables.py`
+          # 要核对站内 8 色板的**第三处**（用户手建标签时前端自己按名字取色），以及两侧
+          # 哈希算子（Python `_utf16_units` ↔ JS `charCodeAt`）同源。⚠️ 这一处**不在**
+          # `frontend/src/utils` 里，只加 utils 那个锥会让它读不到。
           sparse-checkout: |
             src/routes
             frontend/src/utils
+            frontend/src/components/NoteTagSelect
           fetch-depth: 1
           persist-credentials: false
 
@@ -82,6 +87,7 @@ jobs:
           set -e
           test -f _parent/src/routes/chat.rs
           test -f _parent/frontend/src/utils/stickers.ts
+          test -f _parent/frontend/src/components/NoteTagSelect/index.tsx
 
       # ⚠️ 20260928 首跑带出两条**信息性**注解（不影响本次绿）：`actions/checkout@v4` 与
       # `astral-sh/setup-uv@v5` 是针对 Node 20 的，runner 已强制它们跑在 Node 24 上。等上游

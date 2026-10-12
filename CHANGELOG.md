@@ -16,6 +16,18 @@
 
 ## 20261013
 
+- **标签配色与色名上锁（判据，20261013）**：站内那 8 个色值住着**五处**且互相牵制——
+  agent 的取色表（`adminops.NEW_TAG_COLORS`）、回程色名表（`_COLOR_CANON`）、口语别名表
+  （`_TAG_COLOR_ALIASES`，26 条）、父仓聊天气泡的**色块白名单**（`chatMarkdown.ts::
+  chatColorPalette`）、以及父仓 `NoteTagSelect` 里**用户手建标签时前端自己**的那一份。
+  取色是 `hash % len(表)` ⇒ **换序 = 全站换色**；色板外的色值**前端不画色块** ⇒ agent
+  说得出、屏幕上一片空白。新增 `tests/test_tag_color_tables.py`：三张取色表**逐序**相等、
+  色名表键序 == 取色表序、别名表的值域 ⊆ 色板、跨语言**哈希算子同源**（Python
+  `_utf16_units` ↔ JS `charCodeAt`，乘数/模数从两侧源码现取值），并带一个真实 emoji 对照
+  ——用 `ord()` 顶替 UTF-16 只在 emoji 名字上变色，中文语料里**看不出来**（写在 §④）。
+  CI 的稀疏锥加了 `frontend/src/components/NoteTagSelect`（那一处**不在**
+  `frontend/src/utils` 里）。**agent 行为一个字没改**。
+
 - **类型检查从"配了从不跑"变成棘轮（判据，20261013）**：`[tool.mypy]` 一直是**一份从不
   执行的配置**（mypy 不在依赖、不在 `uv.lock`、CI 没有这一步），而函数签名已注释约 78%
   ⇒ 写了从不校验。补进 dev 分组并 `uv lock` 之后第一次真跑：`212 errors in 21 files`
