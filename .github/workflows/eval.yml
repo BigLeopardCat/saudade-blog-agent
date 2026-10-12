@@ -38,7 +38,7 @@ jobs:
     env:
       PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 跨语言守卫（断言 Rust 侧真有那个臂/那个键/那个字面）此前在 CI 里**恒跳过**：CI 只
       # checkout agent 仓，而父仓私有 ⇒ 最需要它的地方从不运行，本机绿、CI 也绿，两侧谁都没
@@ -52,7 +52,7 @@ jobs:
           fi
 
       - name: 取父仓源码（只读、浅、稀疏）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: BigLeopardCat/Saudade-Blog
           token: ${{ secrets.PARENT_REPO_TOKEN }}
@@ -99,7 +99,7 @@ jobs:
       # 退役 Node 20 支持时这两步会失效——升到 v5 / v6 是**另一件事**（要连带核对 checkout 在
       # 父仓那一处用的 `sparse-checkout` 输入是否改名），别混进无关的提交里。
       - name: Setup uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           # 与 `requires-python` / `.python-version` 同一个值（`tests/test_packaging.py`
           # ⑥ 判着——CI 装 3.10 而声明 3.12 是"CI 绿但产线跑不了"那种假绿的反面：
@@ -182,7 +182,7 @@ jobs:
       BEFORE: ${{ github.event.before }}
       SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0        # 要比 before..sha 的改动区间
       - name: 与父仓 pin 比对（漂移则 ::warning::，恒退 0）
