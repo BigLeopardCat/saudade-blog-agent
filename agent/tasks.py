@@ -1065,6 +1065,21 @@ def settled_by_receipts(task: Any, receipts: Any) -> bool:
     return bool(adv) and adv.get("state") == "succeeded"
 
 
+def next_cursor(row: Any, receipts: Any) -> int:
+    """这一行**现在**该走第几步（纯函数）。
+
+    唯一的实现是 `advance_by_receipts` 的结论（**复用结算函数**，别另写一套"这步做了没"，
+    同族教训见 `rows_to_settle` 的注）：它返回 `None` 表示"本轮回执没能推进这一行"，
+    那就退回行里落库的那个游标。两个读端——`next_actionable`（找下一步）与
+    `graph._plan_exec_next_card`（找下一步所在的**确认单元**）——必须同源：两处各算一份
+    的话，"下一步是哪个工具"与"游标停在第几步"会在某个边界上分叉，而症状是
+    "计划执行器把已经做过的那一步又发了一遍"。
+    """
+    row = row if isinstance(row, dict) else {}
+    adv = advance_by_receipts(row, receipts)
+    return max(0, int((adv or row).get("cursor") or 0))
+
+
 def next_actionable(open_tasks: Any, receipts: Any) -> tuple[dict, dict] | None:
     """台账里**下一件现在就能动手的事** → `(行, 步骤)`；没有可执行的剩余 → `None`（纯函数）。
 
@@ -1082,9 +1097,8 @@ def next_actionable(open_tasks: Any, receipts: Any) -> tuple[dict, dict] | None:
       ② `pending_question` 非空的行**跳过**——那行正等着主人回话；
       ③ 游标位那一步**带 `tool`**（没有机器可读的工具名 = 不知道下一步调什么，续跑无从谈起）。
 
-    游标取 `advance_by_receipts` 的结论（**复用结算函数**，别另写一套"这步做了没"，
-    同族教训见 `rows_to_settle` 的注）：它返回 `None` 表示"本轮回执没能推进这一行"，
-    那行的游标就停在原位、游标位那步仍是可执行的——**这正是我们要的那一件**。
+    游标取 `next_cursor`（它自己再复用结算函数 `advance_by_receipts`）：那一行的游标
+    停在原位时，游标位那步仍是可执行的——**这正是我们要的那一件**。
 
     已知边界（本批不修，如实登记）：主人回话之后，`pending_question` 非空的行怎么重新
     变成可执行，今天没有确定性通道（`advance_by_receipts` 只在结算成功时才清它）。
@@ -1102,8 +1116,7 @@ def next_actionable(open_tasks: Any, receipts: Any) -> tuple[dict, dict] | None:
         steps = row.get("steps")
         if not isinstance(steps, list) or not steps:
             continue
-        adv = advance_by_receipts(row, receipts)
-        cursor = max(0, int((adv or row).get("cursor") or 0))
+        cursor = next_cursor(row, receipts)
         if cursor >= len(steps):
             continue
         step = steps[cursor] if isinstance(steps[cursor], dict) else {}
