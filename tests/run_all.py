@@ -10,6 +10,25 @@ README 正文），加一个套件要改三处，漏一处就变成"看着在跑
   .venv/bin/python tests/run_all.py                 # 全部
   .venv/bin/python tests/run_all.py -k authz        # 只跑文件名含 authz 的
   .venv/bin/python tests/run_all.py --timeout 600   # 单套件超时（默认 300s）
+  .venv/bin/python tests/run_all.py --coverage      # 多出一份覆盖率报告（**非门禁**）
+
+**覆盖率只出报告、不设阈值，也不进 CI**（20261013）：只有形状判据配当门禁，百分比会把
+"该测的没测"与"测了但那一支没走到"混成一个数，拿它当闸门只会把人推去测 getter；它回答的
+是另一个问题——"这轮动得多不多、哪些文件一直没人碰"。CI 的墙钟因此不为它翻倍。
+⚠️ **本机 `.venv` 是产线 venv（不许 `uv sync`，里面没有 coverage）** ⇒ 本机那份是
+**临时挂上去的**（coverage 是纯 Python 包，挂上去就能用；C 版 tracer 装不上会自动退回
+Python 版并打一行警告，不影响报告）。**必须带 `[toml]` 这个 extra**——配置就在
+`pyproject.toml` 里，而 Python 3.10 没有标准库 TOML 支持；没它的话 coverage 连配置都
+打不开，**退出码直接是 1**（不是"忽略配置继续跑"），现场看起来像"每个套件都红"：
+  uv venv /tmp/cov --python 3.10 && uv pip install --python /tmp/cov/bin/python "coverage[toml]"
+  PYTHONPATH=/tmp/cov/lib/python3.10/site-packages .venv/bin/python tests/run_all.py --coverage
+（为什么要挂而不用 `uvx --from coverage coverage run` 跑整套：`coverage run` 是在**它自己
+那个解释器**里执行被测脚本的 ⇒ 子进程会换成一个没有 langgraph 的环境，套件集体红。）
+CI 里则由 dev 组的 `uv sync --frozen` 装。覆盖率这一档起不来时本入口**直接拒绝运行**
+（一个套件都不跑），不会静默降级成"跑了一遍但没有覆盖率"。
+⚠️ 另一条只在这个档里才露头的事：`coverage run <脚本>` 往 `sys.path` 放的是**当前目录**、
+不是脚本目录（`python <脚本>` 才放脚本目录），所以下面**显式把 `tests/` 挂进 `PYTHONPATH`**
+——否则 `import _parent_repo` 那一族跨语言守卫会集体 `ModuleNotFoundError`（实测红过 17 个）。
 
 退出码：全绿 0 / 有红 1（每个套件的输出原样透传，失败时不用重跑就能看到现场）。
 纪律：这些都必须是**秒级、无网络、无 LLM**的套件——要真模型的那几条腿（golden/L1/L2）
@@ -36,12 +55,18 @@ README 正文），加一个套件要改三处，漏一处就变成"看着在跑
 import argparse
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TESTS = ROOT / "tests"
+
+# 覆盖率那一档的落点（`--coverage`）：各子进程的并行数据文件都写进这里，跑完合成一份。
+# 与 pyproject 的 `[tool.coverage.run]` 的 `parallel = true` 是一对——那一条说的是
+# "别互相覆盖"，这一条说的是"都写到这一处"。目录整个在 .gitignore 里。
+COV_DIR = ROOT / ".coverage-data"
 
 # 钉成"出厂默认值"的能力开关（= `config/settings.py` 的默认档）。只钉**会影响离线判据**
 # 的那些：`AGENT_TASK_STATE` 决定 schema 里多不多那个登记伪函数。其余（模型名、超时）不
@@ -108,18 +133,73 @@ def _ambient_note(env: dict) -> str:
     diff = {k: live[k] for k in live if live[k].strip() != _PINNED[k]}
     if not diff:
         return ""
+    want = "、".join(f"{k}={v}" for k, v in _PINNED.items() if k != "SAUDADE_IGNORE_ENV_FILE")
     return (f"本机生效档位 {'、'.join(f'{k}={v}' for k, v in diff.items())}"
             f"（产线取值）与出厂档不同 ⇒ 本次运行**整份 .env 都不读**、一律按出厂档跑"
             f"（{'、'.join(f'{k}={v}' for k, v in live.items())}），与产线行为不同；"
-            f"单跑某个套件时请带上 `SAUDADE_IGNORE_ENV_FILE=1` 与 "
-            f"{'、'.join(f'{k}={v}' for k, v in _PINNED.items() if k != 'SAUDADE_IGNORE_ENV_FILE')}")
+            f"单跑某个套件时请带上 `SAUDADE_IGNORE_ENV_FILE=1` 与 {want}")
+
+
+def _coverage_report(env: dict) -> None:
+    """把各子进程留下的并行数据文件合起来，出一份**非门禁**报告（见模块头注）。
+
+    `combine` 显式喂文件（不靠"扫描当前目录"那套隐含约定：数据文件的位置由
+    `COVERAGE_FILE` 决定，两处约定一旦分岔，表现是"报出来永远是最后一个套件"）。
+    报告**不设阈值**：命令的退出码不进本入口的结论（本入口的结论只有套件自己的 rc）。
+    """
+    print(f"\n{'=' * 8} 覆盖率（非门禁）{'=' * 8}", flush=True)
+    parts = [str(p) for p in sorted(COV_DIR.glob(".coverage.*"))]
+    if not parts:
+        print("⚠️  没有采到任何覆盖率数据（子进程都没留下数据文件）——不是「没有覆盖」，"
+              "是这一档没工作", file=sys.stderr)
+        return
+    for cmd, cwd in ((["-m", "coverage", "combine", *parts], COV_DIR),
+                     (["-m", "coverage", "report"], ROOT)):
+        rc = subprocess.run([sys.executable, *cmd], cwd=cwd, env=env).returncode
+        if rc != 0:
+            print(f"⚠️  `coverage {' '.join(cmd[2:])}` 退 {rc}——报告不完整（不影响上面的"
+                  f"套件结论）", file=sys.stderr)
+
+
+def _coverage_problem() -> str:
+    """coverage 这一档起不来时返回一行**给人看的原因**（能用则空串）。**不静默降级**。
+
+    只判 `import coverage` 是不够的——真踩过一次：Python 3.10 上装了 coverage 但**没有
+    `[toml]` extra** 时它读不了 `pyproject.toml`，而且不是"跳过配置接着跑"，是**构造
+    Coverage 对象时就抛 ConfigError**（见 `coverage/tomlconfig.py` 那段：只在我们自己的
+    配置文件里搜到 `[tool.coverage` 就会拒绝）。于是每个子套件的退出码都变成 1，现场看着
+    像"这一批代码全坏了"——正是本入口最该拦住的那类假信号。
+    ⇒ 探针把"配置读得进来"一起判了（`cwd=ROOT`：配置就在仓根的 pyproject.toml）。
+    """
+    # `get_option` 那一下是为了**把配置读进来**：只构造不给它机会用配置，某些版本会推迟读。
+    probe = ("import coverage\n"
+             "coverage.Coverage(config_file='pyproject.toml').get_option('run:parallel')")
+    r = subprocess.run([sys.executable, "-c", probe], cwd=ROOT,
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        return ""
+    lines = [ln for ln in (r.stderr or r.stdout).strip().splitlines() if ln.strip()]
+    return lines[-1].strip() if lines else f"退出码 {r.returncode}"
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="跑 tests/ 下全部离线套件")
     ap.add_argument("-k", "--keyword", default="", help="只跑文件名含该串的套件")
     ap.add_argument("--timeout", type=float, default=300.0, help="单个套件超时秒数（默认 300）")
+    ap.add_argument("--coverage", action="store_true",
+                    help="逐套件收集覆盖率并在结尾出一份报告（非门禁；需要 coverage）")
     args = ap.parse_args()
+
+    if args.coverage:
+        why = _coverage_problem()
+        if why:
+            # 宁可一行都不跑：静默降级成"跑完没有覆盖率"与"跑了覆盖率"在输出上长得一样；
+            # 而"覆盖率的毛病把套件染红"更糟——那是一整片假红。
+            print(f"❌ 覆盖率这一档起不来（{sys.executable}）：{why}\n"
+                  f"   本机产线 venv 不许 `uv sync`，按模块头注那三行给它临时挂一份隔离装的"
+                  f"（**要带 `[toml]` extra**，否则就是上面这个错）；CI 里由 dev 组的 "
+                  f"`uv sync --frozen` 装。本次**一个套件都没跑**。", file=sys.stderr)
+            return 1
 
     todo = suites(args.keyword)
     if not todo:
@@ -128,6 +208,20 @@ def main() -> int:
 
     env = dict(os.environ)
     env.update(_PINNED)
+    # 套件要 import **同目录的助手**（`_parent_repo` / `_native_stub` / `_rust_src`…）。
+    # 直接 `python tests/test_x.py` 时这是白送的：`sys.path[0]` 就是脚本所在目录。但
+    # `coverage run tests/test_x.py` **不是**——coverage 往 `sys.path` 里放的是**当前目录**
+    # 而不是脚本目录（7.16.2 实测：`path0` = 仓根）。不补这一下，覆盖率档里那一族跨语言
+    # 守卫会以 `ModuleNotFoundError: No module named '_parent_repo'` 集体变红，现场看着像
+    # "这批守卫全坏了"（真发生过一次：17 个套件同时红）。显式挂上，两档的 import 视野一致。
+    env["PYTHONPATH"] = str(TESTS) + (
+        os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    if args.coverage:
+        # 上一次跑的残留数据必须清掉：不清的话"这次没采到"与"上次采到了"混成一份，
+        # 报出来的数字既不是这一次的、也不是上一次的。目录本身在 .gitignore 里。
+        shutil.rmtree(COV_DIR, ignore_errors=True)
+        COV_DIR.mkdir(parents=True)
+        env["COVERAGE_FILE"] = str(COV_DIR / ".coverage")
     note = _ambient_note(env)
     if note:
         # **差异必须打出来**：钉住是"判据不跟运维取值走"，不是"当产线没换过档"——
@@ -138,10 +232,13 @@ def main() -> int:
     for p in todo:
         name = p.relative_to(ROOT)
         print(f"\n{'─' * 8} {name} {'─' * 8}", flush=True)
+        # 子进程的形状只多一层薄壳：`coverage run <套件>` 的退出码就是套件的退出码
+        # （判据一个字不变，这也是覆盖率**可以**挂在路上的前提）。
+        cmd = [sys.executable, "-m", "coverage", "run", str(p)] if args.coverage \
+            else [sys.executable, str(p)]
         t0 = time.monotonic()
         try:
-            rc = subprocess.run([sys.executable, str(p)], cwd=ROOT, timeout=args.timeout,
-                                env=env).returncode
+            rc = subprocess.run(cmd, cwd=ROOT, timeout=args.timeout, env=env).returncode
         except subprocess.TimeoutExpired:
             rc = -1
             print(f"⏱ 超时（>{args.timeout:g}s）——套件内部多半有东西在等网络/挂起了", flush=True)
@@ -155,6 +252,8 @@ def main() -> int:
         print(f"{'✓' if rc == 0 else '✗'}  {str(name):<38} rc={rc:<3} {dt:5.1f}s")
     print(f"\n{len(rows) - len(failed)}/{len(rows)} 通过"
           + (f"；红：{'、'.join(str(f) for f in failed)}" if failed else ""))
+    if args.coverage:
+        _coverage_report(env)
     return 1 if failed else 0
 
 

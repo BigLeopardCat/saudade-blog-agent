@@ -60,3 +60,7 @@ eval/drafts/
 
 # mypy 的缓存（eval/type_gate.py 会跑它）
 .mypy_cache/
+
+# coverage 的并行数据文件（`tests/run_all.py --coverage` 的落点，跑完 combine 成一份）。
+# 与 eval 那些产物同理：只对这台机器的这一次跑有意义，入 git 只是给仓库添垃圾。
+.coverage-data/

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""工程配置的四条判据（20261013，行业规范收口批 2）。
+"""工程配置的五条判据（20261013，行业规范收口批 2）。
 
 **为什么单起一套**：这几处此前的失效形状**一模一样**——"文件里写着一句话，而那句
 话没有任何东西看着"：
@@ -14,6 +14,10 @@
   ④ `[tool.mypy]` 配了却**从不执行**（mypy 不在依赖、不在 lock、CI 没有这一步）
      ⇒ 函数签名注释了约 78% 而没有一个被校验。补成真之后，"棘轮真的接在 CI 上"
      与"三处写的 mypy 版本是同一个"同样需要有人看着——否则它会以 ① 那种方式再死一次。
+  ⑤ 覆盖率那一档（`run_all.py --coverage`）的 pin 与配置：pin 少写 `[toml]` extra ⇒
+     Python 3.10 上 coverage 读不了 `pyproject.toml`、**每个套件都退 1**（现场像整批
+     代码坏了）；`[tool.coverage.run].source` 少列一个包 ⇒ 那个包**整份**从报告里消失，
+     而"哪些文件一直没人碰"这个问题的答案就悄悄少一块。两处都是"同一件事写两遍"。
 
 判据一律读**磁盘事实**（目录在不在、源码里还有没有第二份字面量），不读"文档里写了
 这一条"——后者的失效方式正是"名单对了、事情没做"。
@@ -75,6 +79,7 @@ PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 PROJECT_SEC = _section(PYPROJECT, "project")
 EVAL_YML = ROOT / ".github" / "workflows" / "eval.yml"
 WHEEL_SEC = _section(PYPROJECT, "tool.hatch.build.targets.wheel")
+RALL = (ROOT / "tests" / "run_all.py").read_text(encoding="utf-8")
 
 _m = re.search(r'^version\s*=\s*"([^"]+)"', PROJECT_SEC, re.M)
 PROJECT_VERSION = _m.group(1) if _m else None
@@ -244,6 +249,49 @@ check("  对照：整仓确实扫到了 `uvx mypy@X`（否则上面那条是空�
 _bad_ver = [f"{f}@{v}" for f, v in _hits if v != MYPY_PIN]
 check(f"  整仓的 `uvx mypy@X` 与 dev 分组同版（{MYPY_PIN}）——升版只改一处就会被这条抓住",
       not _bad_ver, "、".join(_bad_ver))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+print("\n⑤ 覆盖率那一档（`run_all.py --coverage`）：pin 要带 extra，量的面要与打包的面同源")
+
+# pin 必须写成 `coverage[toml]==X`。这不是风格：Python 3.10 **没有标准库 TOML**，没这个
+# extra 时 coverage 连 `pyproject.toml` 都打不开，而且不是"跳过配置接着跑"，是**构造
+# Coverage 对象时就抛 ConfigError、退出码 1** ⇒ 每个子套件都退 1，现场看着像"这批代码
+# 全坏了"。20261013 真踩了一次才写下的这条（`run_all.py` 的探针也是那次加的）。
+_cov_pin = re.search(r'"coverage(\[[^\]]*\])?==([0-9][^"]*)"', _dg_sec)
+check("pyproject 的 dev 分组钉了 coverage 版本", _cov_pin is not None,
+      _cov_pin.group(2) if _cov_pin else "dependency-groups 里没有钉死的 coverage==")
+check("⭐ pin 带 `[toml]` extra（没有它 = 每个套件都退 1，理由见上面这段）",
+      _cov_pin is not None and _cov_pin.group(1) == "[toml]",
+      _cov_pin.group(0) if _cov_pin else "—")
+
+# 量的面 == 打包的面：`source` 少列一个包，那个包会**整份**从报告里消失（不报错，
+# 只是不出现——"哪些文件一直没人碰"这个问题的答案就悄悄少了一块）；多列一个不存在的
+# 名字则什么也不量。两处都是"生产包"这一件事，所以判据是**集合相等**。
+_run_sec = _section(PYPROJECT, "tool.coverage.run")
+_src = re.search(r"^source\s*=\s*\[(?P<v>.*?)\]", _run_sec, re.M | re.S)
+COV_SOURCE = re.findall(r'"([^"]+)"', _src.group("v")) if _src else []
+check("⭐ `[tool.coverage.run].source` == wheel 包列表（同一件事：生产包）",
+      sorted(COV_SOURCE) == sorted(_pkgs),
+      f"覆盖={sorted(COV_SOURCE)} 打包={sorted(_pkgs)}")
+check("  对照：那一节确实在（正则没匹配到空串时上面那条会「绿得没有理由」）",
+      bool(_run_sec.strip()), f"{len(COV_SOURCE)} 项")
+# `parallel = true`：子套件是**独立进程**（run_all.py 的形状），不开这个后一个会整份
+# 覆盖前一个的数据，报出来永远是"最后一个套件跑了什么"。
+check("`[tool.coverage.run].parallel` 开着（否则各子进程互相覆盖）",
+      re.search(r"^\s*parallel\s*=\s*true", _run_sec, re.M | re.I) is not None)
+check("`[tool.coverage.report]` 在场（`show_missing` 那份人看的表就长在这节里）",
+      bool(_section(PYPROJECT, "tool.coverage.report").strip()))
+# 并行数据文件的落点：`run_all.py` 里那个目录名与会 .gitignore 里的那条必须对得上——
+# 只写一处的话，另一处会以"git status 里一堆新文件"或"报告读到上次的残留"的形式出现。
+_gi = (ROOT / ".gitignore").read_text(encoding="utf-8")
+check("`.coverage-data/` 既在 run_all.py 里、也在 .gitignore 里（两处同一个名字）",
+      "COV_DIR = ROOT / \".coverage-data\"" in RALL and ".coverage-data/" in _gi)
+# ⚠️ `coverage run <脚本>` 往 `sys.path` 里放的是**当前目录**、不是脚本目录（`python <脚本>`
+# 才是脚本目录）。不显式把 `tests/` 挂上，覆盖率档里所有 `import _parent_repo` 的守卫都会
+# 以 ModuleNotFoundError 变红（实测一次：130 个套件里红 17 个，看着像整批守卫坏了）。
+check("  run_all.py 给子进程挂上了 `tests/`（否则覆盖率档下同目录助手 import 不到）",
+      'env["PYTHONPATH"] = str(TESTS)' in RALL)
 
 
 # ══════════════════════════════════════════════════════════════════════════

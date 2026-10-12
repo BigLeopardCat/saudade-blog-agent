@@ -246,7 +246,7 @@ flowchart LR
 
 | 层 | 评测对象 | 手段 | 指标 | 对应升级组件 |
 |---|---|---|---|---|
-| **L0 单元级** | 图节点、工具、schema | 单测（`tests/test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率 | 图重写、记忆剥离 |
+| **L0 单元级** | 图节点、工具、schema | 单测（`tests/test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率；**另出一份非门禁的覆盖率报告**（20261013，见下） | 图重写、记忆剥离 |
 | **L1 基准级** | 检索器、生成层、端到端 RAG | BEIR / RGB / CRAG（§3） | nDCG@10、Recall@5、MRR；噪声准确率 / 拒答率 / 错误检测率；Truthfulness（幻觉=-1） | RAG、防幻觉 |
 | **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，条数以用例文件为准）；**LLM 评审员**（20260925，报告非门禁，见 §2 末） | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
 | **L3 对账级**（原设计为"回放级"） | 线上行为的**跨源一致性** | `eval/trace_reconcile.py`：trace ↔ `agent.log` ↔ `monitor.log` 三源确定性对账（零 LLM、只读） | 各判据条数：trace 有收尾行没有 / 收尾行有 trace 没有 / 重复 trace_id / end_reason·frames 不等 / 只在失败分支出现的前端上报 | 全部（每次升级后跑） |
@@ -523,6 +523,12 @@ FAIL 复审单把回归组红置顶（当天必修）。混跑的坏处正是这
 结论：L2 **本机跑**（本机即生产服务器，链路真实，130 条约 25 分钟，device 真机用例天然覆盖）；
 `eval/golden_full_run.py` 已提供进程隔离 + 单条 180s 超时（防悬挂污染），是本机的看门狗。
 CI 只留 L0 秒级套件。
+
+**L0 的覆盖率是"报告"不是"门禁"（20261013）**：`tests/run_all.py --coverage` 逐套件收集、
+结尾合成一份报告（配置在 `pyproject.toml` 的 `[tool.coverage.*]`，`source` 只列生产包——
+`tests/` 与 `eval/` 是被测对象、不是被测代码）。**不设阈值、不进 CI**：只有形状判据配当门禁，
+百分比会把"该测的没测"与"测了但那一支没走到"混成一个数，拿它当闸门只会把人推去测 getter；
+它回答的是另一个问题——"这轮动得多不多、哪些文件一直没人碰"。因此 CI 的墙钟不为它翻倍。
 
 **golden 也落 trace（20260922）**：跑 golden 时每条用例落一份 trace——
 `logs/agent/golden_traces/<run_id>/<case_id>.json`（`eval/golden_trace.py`）。此前一条都没有：
