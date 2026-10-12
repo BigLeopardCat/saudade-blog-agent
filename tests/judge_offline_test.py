@@ -779,6 +779,28 @@ SHAPE_CASES = [
      {"text": "我**没删掉**「绝对不存在的标签名xyz」，它还在原处。"},
      "反例：**动作否定**不是目标不存在（「没删掉」没带引导词 ⇒ 不算）"),
     ("PASS", {"forbid_exec_tools": ["delete_tag"]}, {}, "没执行过 ⇒ 负向断言过"),
+    # `require_exec_once_any`（20261012）：**办了的那一件不许办第二遍**。三条一起构成
+    # 这个键的边界——正控、"空转"反控、"重复"反控（后者正是现场 195727 的形状）。
+    # 只看前两条会得到"这个键在重复面前不咬人"，只看后两条会得到"它不咬空转"。
+    ("PASS", {"require_exec_once_any": ["send_user_notice", "create_dashboard_todo"]},
+     {"exec_rows": [{"tool": "create_dashboard_todo"}],
+      "exec_tools": ["create_dashboard_todo"]},
+     "采样无关：两件里办了任一件、且只有一条回执 ⇒ 过"),
+    ("FAIL", {"require_exec_once_any": ["send_user_notice", "create_dashboard_todo"]},
+     {},
+     "一件都没办 ⇒ 红（没有这一半，这个键在「什么都不做」的臂上恒真）"),
+    ("FAIL", {"require_exec_once_any": ["send_user_notice", "create_dashboard_todo"]},
+     {"exec_rows": [{"tool": "create_dashboard_todo"}, {"tool": "create_dashboard_todo"},
+                    {"tool": "create_dashboard_todo"}],
+      "exec_tools": ["create_dashboard_todo", "create_dashboard_todo",
+                     "create_dashboard_todo"]},
+     "现场 195727 逐字形状：同一件同一轮三条回执 ⇒ 红（`require_exec_tools` 在这里照样绿）"),
+    # 对照：同一个 result，集合语义的键**看不见**重复——这条是"为什么必须新加一个键"
+    # 的可执行证据（不是叙述）。
+    ("PASS", {"require_exec_tools": ["create_dashboard_todo"]},
+     {"exec_rows": [{"tool": "create_dashboard_todo"}, {"tool": "create_dashboard_todo"}],
+      "exec_tools": ["create_dashboard_todo", "create_dashboard_todo"]},
+     "对照：`require_exec_tools` 对「写了两遍」**判过**（它只看在不在）"),
     ("FAIL", {"forbid_exec_tools": ["delete_tag"]}, {"exec_rows": [{"tool": "delete_tag"}]},
      "真执行过 ⇒ 红（负向断言看的是回执，不是 planner 的决策）"),
     # 这两条一起说明"决策"与"执行"是两个信号：同一个工具，决定了但没执行成 ⇒

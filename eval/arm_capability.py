@@ -69,6 +69,10 @@ ASSERT_KEYS = frozenset({
     "require_tool_calls", "require_tool_calls_any", "no_tool_calls", "forbid_tool_calls",
     "require_exec_tools", "require_exec_args", "require_arg_from_result",
     "require_exec_result", "require_zero_exec", "forbid_exec_tools",
+    # 回执**条数**（20261012，与 `run_golden.GOLD_ASSERT_KEYS` 同源）：至少一件真办了、
+    # 且办过的每一件只有一条回执。正向键（一件都没办也红）⇒ **不进 `FAMILIES`**
+    # （那张表装的才是"什么都不做也恒真"的纯否定族，需要见证者武装）。
+    "require_exec_once_any",
     "require_frame_prefix", "forbid_frame_prefix", "forbid_fallback",
     "require_confirm_payload",
     "require_ledger_frame", "require_ledger_rows", "require_card_targets_from_ledger",

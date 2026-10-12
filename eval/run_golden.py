@@ -1917,6 +1917,15 @@ GOLD_ASSERT_KEYS = frozenset({
     "require_exec_tools", "require_exec_args", "require_arg_from_result",
     # 回执**文本**（20260926，真写用例专用）：args 对了不等于"那件事真的发生了"
     "require_exec_result",
+    # 回执**条数**（20261012）：列表里**至少有一件真办了**，且办过的每一件**只有一条**
+    # 回执。治的是"一次性授权的令牌活在整轮 ⇒ 同一件在轮内被重复兑现"（现场
+    # `20261012T195727`：同一件待办同一轮落三份逐字相同的回执、后台三张同名待办）。
+    # ⚠️ 这个缺陷在语料里此前是**判据结构上缺席**：`require_exec_tools` 是集合语义
+    # （看"在不在"，不看几条）、`require_zero_exec` 看"有没有写"、`forbid_exec_tools`
+    # 是它的负向孪生——**没有一条读得出条数**。别拿 `require_exec_tools` 顶替：它在一
+    # 轮写三遍时照样绿。
+    # ⚠️ **不要用在"同一工具对多个目标各写一次"的用例上**（那是合法形状，会被判红）。
+    "require_exec_once_any",
     # 零**写**执行（20260925 双轮，20261001 收窄）：第 1 轮"只弹卡、一个后台写都没
     # 发生"的**正面**断言，与第 2 轮的 require_exec_tools 配对（`forbid_exec_tools`
     # 是它的负向孪生）。**读不算**（收窄的依据见 check_case 那段注）：要"连读都不许"
@@ -1981,6 +1990,50 @@ def _squash_ws(s: str) -> str:
     换行/加空格），标点变了就是抄错了字。全角空格一并归一——中文正文里它和空格等价。
     """
     return re.sub(r"\s+", "", s.replace("　", " "))
+
+
+def _exec_claim_fails(gold: dict, result: dict) -> list[str]:
+    """回执侧两族：**在不在**（`require_exec_tools`）与**几条**（`require_exec_once_any`）。
+
+    两个键看的是同一份 `exec_rows`，但**判的东西不同、互不替代**（这是它们同住这里而不是
+    二选一的理由）：
+
+      · `require_exec_tools` —— 集合语义：列表里每个工具**在不在**回执里（全称）。
+      · `require_exec_once_any`（20261012 新键）—— 条数语义：列表里**至少有一件真办了**，
+        且**办过的每一件只有一条**回执。缺前半句它在"什么都不做"的臂上恒真（本仓最贵的
+        那种绿，同 `forbid_*` 那族要靠正向兄弟武装的理由）；缺后半句它看不见重复。
+        `exec_rows` 是**逐条累积**的（同一工具的两次执行是两条）⇒ 条数读得出来；而
+        `exec_tools` 只是名字清单，同一轮写三遍在那上面**看不见**。
+
+    现场 `logs/agent/traces/20261012/195727`（会话 344）：一次性授权的令牌活在整轮，模型
+    照着前端合成的确认回显把**刚办完**的那件待办又排了两遍 ⇒ 同一轮三份逐字相同的回执、
+    后台三张同名待办，而 `require_exec_tools` / `forbid_exec_tools` / `require_zero_exec`
+    **全部判过**（它们看的是"在不在"）。
+
+    采样无关：先办哪一件由 planner 决定 ⇒ 列表里放**候选**，实际取自哪一件由语料自己写
+    （同 `require_tool_calls_any` 的理由）。⚠️ 别用在"同一工具对多个目标各写一次"的用例上
+    ——那是合法形状，会被条数那一格判红。
+    """
+    out: list[str] = []
+    for t in gold.get("require_exec_tools", []):
+        if t not in result["exec_tools"]:
+            out.append(f"checker 验收回执缺少工具 {t}（exec：{result['exec_tools']}）")
+    _once = gold.get("require_exec_once_any") or []
+    if not _once:
+        return out
+    _ran = [t for t in _once if t in result["exec_tools"]]
+    _n = {t: sum(1 for r in result["exec_rows"]
+                 if isinstance(r, dict) and r.get("tool") == t) for t in _ran}
+    if not _ran:
+        out.append(f"这些件里一件都没真执行（这一格不是空转的）{_once}"
+                   f"（exec：{result['exec_tools']}）")
+        return out
+    _bad = {t: v for t, v in _n.items() if v > 1}
+    if _bad:
+        _all = [r.get("tool") for r in result["exec_rows"] if isinstance(r, dict)]
+        out.append(f"同一件在一轮里被兑现了不止一次 {_bad}"
+                   f"（一次点头 = 一件办一次）；本轮全部回执={_all}")
+    return out
 
 
 def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
@@ -2131,9 +2184,9 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
     for t in expand_token_list(gold.get("forbid_tool_calls") or []):
         if t in result["tool_calls"]:
             fails.append(f"不应调用工具 {t}（已调用：{result['tool_calls']}）")
-    for t in gold.get("require_exec_tools", []):
-        if t not in result["exec_tools"]:
-            fails.append(f"checker 验收回执缺少工具 {t}（exec：{result['exec_tools']}）")
+    # 回执侧的**"在不在"**与**"几条"**两族断言（20261012 起同住一个纯函数：`check_gold`
+    # 是全仓最长的那几个函数之一、台账里**只许缩小**，新判据一律另起函数）。
+    fails += _exec_claim_fails(gold, result)
     # 20260925：**零写执行**的正面断言。此前 11 条弹卡用例只有 `forbid_tool_calls`
     # （点名几个不许调的工具）——那不是"一个写都没发生"：漏点一个、或将来新增一个写
     # 工具，用例照样绿。本键断言的是**这一轮一个后台写都没落地**：planner 侧没有写工具
