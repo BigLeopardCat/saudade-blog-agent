@@ -8451,6 +8451,55 @@ def _confirm_grant_plan(grant: dict) -> dict:
             "reply": skill.reply_contract, "chat": skill.chat, "dropped": []}
 
 
+def _grant_covers(state, spec) -> bool:
+    """这条 spec 是不是**签名体里那一件**（工具名与参数都逐字相等）？
+
+    ⚠️ 为什么需要这个判据（20261012 生产实证，`logs/agent/traces/20261012/091103`）：
+    此前两处都写成 `not state.get("confirm_grant")`——**「令牌在场」被当成了「这一件
+    被授权」**。而 `confirm_grant` 住在 state 里、活到**这一轮结束**：确认轮执行完，
+    `route_after_execute` 因台账还剩一件把控制权交回 planner（那是同日的台账续跑），
+    那一轮**同样读得到 grant** ⇒ ① `_confirm_popup` 一见 grant 就 `return None`（不弹
+    卡）② `execute_node` 的 `consent_missing` 一见 grant 就放行 ⇒ 主人点「确定」点的
+    是**改身份**那张卡，同一轮里 planner 顺手排的**发站内通知**也跟着落了库，**第二件
+    连卡都没弹**（回复里两件并列报喜）。一次点头授权了两件写。
+
+    「令牌只授权一次」这条语义此前靠的是"确认轮只可能排签名体里那一件"这个**没人守着
+    的推论**（`_planner_decide` 那段注释就把它当既成事实写下了）——第一次进来的修复
+    （20260927 那句"这句话里还有没做完的动作"）几乎走不到（`_pending_intents` 对写意图
+    结构上失明），所以它一直是**休眠**的；台账续跑把那条路变成了常路，洞就活了。
+
+    判据落在**签名体**上：工具名相同**且**参数逐字相同才算覆盖。只比工具名不够——
+    同一件工具换个目标（「把 demo 降级」的令牌拿去办 demo_admin）同样是另一件写。
+    参数没解析出来的 spec 一律不算覆盖（fail-closed：`args_ok` 为假时不认）。
+    """
+    grant = state.get("confirm_grant") or {}
+    specs = [s for s in (grant.get("specs") or []) if isinstance(s, dict)]
+    if not specs:
+        return False
+    # spec 有两种形状：TOOLS 行原样的 `"tool({…})"` 串（生产里就是这个），以及
+    # `{"tool": …, "args": {…}}`（`_confirm_grant_plan` 与测试夹具在用的那种）。
+    if isinstance(spec, dict):
+        name, args, args_ok = str(spec.get("tool") or ""), spec.get("args") or {}, True
+    else:
+        args, args_ok = _tool_args(spec)
+        name = _tool_name(spec)
+    if not args_ok:
+        return False
+    return any(str(s.get("tool") or "") == name
+               and (s.get("args") or {}) == (args or {}) for s in specs)
+
+
+def _all_granted(state, specs) -> bool:
+    """这一批是不是**整批都在签名体里**（弹卡那处用的批判据）。
+
+    没有令牌 ⇒ 假（照常走弹卡逻辑）；**空批 ⇒ 真**（批里一件写都没有，本来就不弹，
+    与这条判据引入之前的行为逐字节相同——调用方那两种出口都落在"不弹卡"上）。
+    """
+    if not state.get("confirm_grant"):
+        return False
+    return all(_grant_covers(state, spec) for spec in specs)
+
+
 # ── 写操作的目标按名字解不出来（20260922，探针腿⑮）─────────────────────────
 # 名字通道把"目标"交给工具在 execute 阶段解析，而**弹确认框发生在执行之前**——
 # 于是出现这种形态：系统明知道这个名字在字典里根本没有（或者有歧义），还是问了
@@ -11312,9 +11361,8 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     `kind` 字段，LangGraph 对未声明的键是**静默丢弃**——那正是本仓 `config 注入静默失效`
     那一族的形状）。
     """
-    grant = state.get("confirm_grant")
-    if grant:
-        return None
+    if _all_granted(state, specs):
+        return None   # 令牌只免**签名体里那一件**（20261012：见 `_grant_covers`）
     # 「像提问」是**有前提的**否决（20261006，见上面 `_question_words_are_prose` 的长注）：
     # 判真时还要问一句"疑问词住在哪"——主人下了令、而疑问词只是他要写进站内的那段话
     # （「帮我发个公告，说说这次活动有什么注意事项」），就不该据此关掉整条入口。
@@ -11930,17 +11978,17 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if not decision.allowed and not authz.enforcing(decision.scope):
             record("execute", "authz_shadow", tool=name, principal=str(principal),
                    decision=str(decision))
-        # 写操作的「人在回路」确认（20260920）：**权限判"能不能做"，
-        # 这里判"这一次用户到底要不要做"**。只对有 CONSENT_SCOPES 声明的工具生效；
-        # 一旦新增，它**自动**落在闸下（声明驱动，不靠人记得来改）。与权限判据同层：
-        # 确定性、无 LLM、调用之前、fail-closed。今天不设 shadow：这一层是纯新增的
-        # 保护，不存在"真流量会被它改行为"的观测需求（没有工具会命中它）。
-        # 确认轮（20260921）：`confirm_grant` 在场 = 用户刚在确认框上点了确定，
-        # **这一下点击就是同意本身**——不再要求"本轮消息里有一句确认语"（那条
-        # 判据是给"用户打字确认"用的）。注意这里放行的只有同意闸：权限（scope）
-        # 一行不动，非管理员拿着令牌照样被 _HARD_SCOPES 拦下。
+        # 写操作的「人在回路」确认（20260920）：**权限判"能不能做"，这里判"这一次用户
+        # 到底要不要做"**。只对有 CONSENT_SCOPES 声明的工具生效（声明驱动，新增自动落
+        # 闸）。与权限判据同层：确定性、无 LLM、调用之前、fail-closed；不设 shadow。
+        # 确认轮（20260921）：`confirm_grant` 在场 = 用户刚在确认框上点了确定，**这一下
+        # 点击就是同意本身**——不再要求"本轮消息里有一句确认语"（那条判据是给"用户打字
+        # 确认"用的）。这里放行的只有同意闸：权限（scope）一行不动，非管理员拿着令牌
+        # 照样被 _HARD_SCOPES 拦下；而免闸的**只有签名体里那一件**（20261012，见
+        # `_grant_covers`）——写成"grant 在场就放行"时，确认轮执行完、控制权交回 planner
+        # 的那一轮（台账续跑）里排出的**第二件写**会跟着免闸落库。
         consent_missing = (authz.requires_consent(principal, name)
-                           and not state.get("confirm_grant")
+                           and not _grant_covers(state, spec)
                            and not authz.consent_granted(principal, name, user_msg))
         if consent_missing:
             record("execute", "consent_required", tool=name, principal=str(principal),
@@ -11955,12 +12003,12 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 与写错状态不同，它是**不可回滚的对外可见改动**（把别人的文章设成私密）。
         # 之所以放在这里而不是工具内部：工具看不到"本轮读到过什么"（跨轮记忆与
         # 页面上下文都只活在 graph 状态里）。
-        # **确认轮放行**（20260921，与上面同意闸同源）：确认轮里没有本轮工具帧
+        # **签名体里那一件放行**（20260921；20261012 按 `_grant_covers` 收窄）：确认轮里没有本轮工具帧
         # （那一轮是用户点的按钮，不是一次检索），"有据"已由**签发令牌时**的解析
         # 保证（见 _confirm_popup：无据的 spec 根本不进令牌）。不放行的话每一次
         # 确认执行都会栽在 unknown_target 上，整个弹窗机制形同虚设。
         target_missing = (ref_err is None and args_ok and name in _ARTICLE_WRITE_TOOLS
-                          and not state.get("confirm_grant")
+                          and not _grant_covers(state, spec)
                           and not A.target_mentioned(args.get("article_id"),
                                                      _target_evidence(state, user_msg, page_ctx)))
         if target_missing:
@@ -11975,7 +12023,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # planner 填的参数（目标只能由用户决定，系统只否决）。空集=用户没点名
         # （"把这篇置顶"这类指代）→ 判据不启用，行为与之前完全一致。
         target_conflict = (ref_err is None and args_ok and not target_missing
-                           and not consent_missing and not state.get("confirm_grant")
+                           and not consent_missing and not _grant_covers(state, spec)
                            and name in _ARTICLE_WRITE_TOOLS
                            and not A.target_named(args.get("article_id"), named_ids))
         if target_conflict:

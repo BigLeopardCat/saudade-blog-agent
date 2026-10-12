@@ -760,7 +760,10 @@ try:
               and payload.get("specs") == [{"tool": "freeze_account",
                                             "args": {"name": "guest5"}}],
               str(payload))
-    r = _run_exec("把 guest5 冻结掉", _SPEC_CMD, grant={"token": "x"})
+    # 令牌里带**卡上签的那一件**（20261012 起 `_grant_covers` 按工具名+参数比对：光有
+    # 令牌不算数——空壳 `{"token": "x"}` 会让确认轮重新弹卡）。
+    r = _run_exec("把 guest5 冻结掉", _SPEC_CMD, grant={
+        "token": "x", "specs": [{"tool": "freeze_account", "args": {"name": "guest5"}}]})
     check("确认轮（主人点了确定）→ 放行执行（「一律弹窗」不是「永不执行」）",
           _CALLS == [{"name": "guest5"}], str(_CALLS))
     check("  回执带执行角色与 op（跨轮执行记忆只认结构化回执，不认叙述）",

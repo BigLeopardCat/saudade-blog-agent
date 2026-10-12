@@ -285,10 +285,12 @@ check("参数含 $ref → 不弹（令牌签不出来，退回追问）",
                                         '"add": ["$list_tags[0].name"]})'],
                               "note": "x", "reply": "y"}, extra=(EVID,)) is None)
 check("确认轮自己（confirm_grant 在场）→ 不弹（否则点完确定又弹一个）",
+      # spec 走**签名体里那一件**（20261012：免卡判据现在比对工具名与参数，
+      # 随手编一组别的参数不再算"同一件"——那正是 `⑤b` 要判的那件事）。
       _confirm_popup({"messages": [HumanMessage(content="确认执行：建标签")],
                       **plan_state(PLAN_TAG), "confirm_grant": {"skill": "tag_create",
                                                                 "specs": SPECS}},
-                     [{"tool": "create_tag", "args": {"title": "X"}}],
+                     [dict(SPECS[0])],
                      Principal(uid=7, role="admin"), "确认执行：建标签", CFG) is None)
 
 print("\n④ 点确定之后：照签名执行")
@@ -376,6 +378,89 @@ finally:
         g._TOOL_MAP.pop("set_article_status", None)
     else:
         g._TOOL_MAP["set_article_status"] = _saved
+
+# ══════════════════════════════════════════════════════════════════════════
+print("\n⑤b 令牌**只授权签名体里那一件**（20261012：一次点头曾授权两件写）")
+
+# 生产现场（`logs/agent/traces/20261012/091103`）：主人点的那张卡是「把 demo 的身份改成
+# 普通用户」，而同一轮里 planner 顺手排的**发站内通知**也跟着落了库——那是恒弹卡族
+# （`authz._ALWAYS_CONFIRM_TOOLS`）的一件，**连卡都没弹**，回复里两件并列报喜。
+#
+# 病根是两处把「令牌在场」当成了「这一件被授权」：`_confirm_popup` 的 `if grant: return
+# None`、`execute_node` 的 `not state.get("confirm_grant")`。而 `confirm_grant` 住在
+# state 里、活到**这一轮结束**：确认轮执行完，`route_after_execute` 因跨轮台账还剩一件
+# 把控制权交回 planner（同日的台账续跑），那一轮**同样读得到** grant。
+#
+# 「令牌只授权一次」此前靠的是"确认轮只可能排签名体里那一件"这个**没人守着的推论**，
+# 所以 20260927 就写下的那句"同意闸不会因为 grant 在场而放行任何新写"一直是**休眠**的
+# （`_pending_intents` 对写意图结构上失明 ⇒ 那条路几乎走不到）；台账续跑把它变成常路。
+_ROLE_SPEC = {"tool": "set_account_role", "args": {"name": "demo", "role": "user"}}
+_NOTICE_SPEC = {"tool": "send_user_notice",
+                "args": {"name": "demo", "content": "正文"}}
+_TK = {"skill": "account_set_role", "specs": [_ROLE_SPEC]}
+
+check("整批都在签名体里 ⇒ 免卡（兑现轮拼的就是签名体）",
+      g._all_granted({"confirm_grant": _TK}, [_ROLE_SPEC]) is True)
+check("签名体里是**另一件** ⇒ 不免（要弹卡）",
+      g._all_granted({"confirm_grant": _TK}, [_NOTICE_SPEC]) is False)
+check("同一件工具**换个目标** ⇒ 同样是另一件写（只比工具名不够）",
+      g._all_granted({"confirm_grant": _TK}, [{"tool": "set_account_role",
+                                               "args": {"name": "demo_admin",
+                                                        "role": "admin"}}]) is False)
+check("没有令牌 ⇒ 不免（照常走弹卡逻辑，与改动前逐字节相同）",
+      g._all_granted({}, [_ROLE_SPEC]) is False
+      and g._grant_covers({}, _ROLE_SPEC) is False)
+check("空批 + 有令牌 ⇒ 免（一件写都没有，本来就什么都不弹）",
+      g._all_granted({"confirm_grant": _TK}, []) is True)
+check("参数没解析出来的 spec 一律不算覆盖（fail-closed）",
+      g._grant_covers({"confirm_grant": _TK},
+                      'set_account_role({不是 JSON})') is False)
+
+# 执行层（**判据在这里才算数**）：同一轮里那件没被点过的写必须零调用。
+_CALLS2: list = []
+
+
+class _FakeNotice:
+    name = "send_user_notice"
+
+    def invoke(self, args):
+        _CALLS2.append(args)
+        return _base.ok("已发出站内通知")
+
+
+_saved2 = g._TOOL_MAP.get("send_user_notice")
+g._TOOL_MAP["send_user_notice"] = _FakeNotice()
+try:
+    _nspec = 'send_user_notice(' + json.dumps(_NOTICE_SPEC["args"],
+                                              ensure_ascii=False) + ')'
+    _st2 = {**plan_state({"skill": "notice_send", "params": {},
+                          "tools": [_nspec], "note": "x", "reply": "y"}),
+            "plan_rounds": 1, "done": False,
+            "messages": [HumanMessage(content="确认执行：把账号「demo」的身份改成普通用户")],
+            "confirm_grant": _TK}
+    _CALLS2.clear()
+    _r2 = execute_node(_st2, grant_cfg)
+    _pop2 = _r2.get("pending_confirm") or {}
+    check("⭐ 令牌是**改身份**那张卡，同一轮排的**发通知** ⇒ 零调用、当场弹第二张卡",
+          _CALLS2 == []
+          and [s.get("tool") for s in (_pop2.get("specs") or [])] == ["send_user_notice"]
+          and not _r2.get("receipts"),
+          f"calls={_CALLS2} specs={_pop2.get('specs')}")
+    # 反控：**被点过的那一件**照旧放行（收窄不能把兑现轮一起掐死）
+    _st3 = {**plan_state({"skill": "account_set_role", "params": {},
+                          "tools": ['set_account_role(' + json.dumps(
+                              _ROLE_SPEC["args"], ensure_ascii=False) + ')'],
+                          "note": "x", "reply": "y"}),
+            "plan_rounds": 1, "done": False,
+            "messages": [HumanMessage(content="确认执行：把账号「demo」的身份改成普通用户")],
+            "confirm_grant": _TK}
+    check("  反控：签名体里那一件（同工具同参数）仍免同意闸",
+          g._grant_covers(_st3, _st3["plan_obj"]["tools"][0]) is True)
+finally:
+    if _saved2 is None:
+        g._TOOL_MAP.pop("send_user_notice", None)
+    else:
+        g._TOOL_MAP["send_user_notice"] = _saved2
 
 print("\n⑥ 颜色：站内 8 色板 + 中文色名映射")
 check("色板与前端/后台同源同序（顺序变了颜色就全变）",
@@ -547,10 +632,15 @@ try:
     check("  令牌照常签发（点确定后照签名拼计划，不靠模型回忆）",
           len((_r or {}).get("pending_confirm", {}).get("token", "")) > 20)
     # 对照组：同一个计划、同样真跑 execute，**确认轮**必须真执行（弹卡 ≠ 不办）。
+    # 令牌里带的必须是**卡上签的那一件**（20261012 起 `_grant_covers` 按工具名+参数比对：
+    # 光有令牌不算数——一个空壳 `{"token": "x"}` 会让这一轮重新弹卡）。
     _r2 = execute_node({"messages": [HumanMessage(content="确定")],
                         **plan_state(_plan_obj), "plan_rounds": 0, "done": False,
                         "receipts": [],
-                        "confirm_grant": {"token": "x"}},
+                        "confirm_grant": {"token": "x",
+                                          "specs": [dict(_s) for _s in (_r or {})
+                                                    .get("pending_confirm", {})
+                                                    .get("specs", [])]}},
                        {**CFG, "configurable": {**CFG.get("configurable", {}),
                                                 "principal": Principal(uid=7,
                                                                        role="admin")}})
