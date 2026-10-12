@@ -64,7 +64,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["agent/", "chains/", "config/", "models/", "tools/", "utils/"]
+# 本仓是**应用**、从源码运行（入口 = 仓库根目录的 `server.py`，`.venv/bin/uvicorn
+# server:app`），部署走 git pull + 重启，**从不构建 wheel**；CI 的 `uv sync` 只装
+# 依赖、不发布。所以这个 target 现在只有"声明我有哪些包"的价值。
+# 20261013 按**磁盘事实**重列：原列表里有并不存在的 `chains/`，又漏了生产代码真的
+# import 的 `rag/`（`agent/graph.py` 等十几处）——列错不会报错，因为从没构建过。
+# 判据：`tests/test_packaging.py` 逐项断言"这个目录真的在磁盘上"，防止它再漂。
+packages = ["agent", "config", "models", "rag", "tools", "utils"]
 
 [tool.ruff]
 line-length = 100

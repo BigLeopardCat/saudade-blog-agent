@@ -16,6 +16,15 @@
 
 ## 20261013
 
+- **`pyproject.toml` 成了版本号的唯一来源（契约，20261013）**：`/openapi.json` 与 `/docs`
+  上挂的 `info.version` 此前是 `server.py` 里手写的 `"1.0.0"`，而 `pyproject.toml` 声明的
+  是 `0.2.0`——**差两个大版本**，问哪一份两份都有理。现在运行期版本读安装元数据里的
+  `[project].version`（同一份 `pyproject.toml`），两边不可能再对不上。顺带修掉
+  `[tool.hatch.build.targets.wheel].packages`：它列了并不存在的 `chains/`、又漏了生产代码
+  真的 import 的 `rag/`（本仓从不构建 wheel ⇒ 列错不报错）。三条都上了机器锁：
+  `tests/test_packaging.py`——含 `.github/dependabot.yml` 的在场判据（`SECURITY.md` 早就把
+  上游 CVE 的升级推给了它，而那份配置一直不存在，依赖又全 `==` 钉死 ⇒ 什么都不会升级）。
+
 - **四处静默降级现在留痕（观测，20261013）**：`context._attach_page_guide`（页面/能力
   清单注入失败被悄悄丢掉）、`context._corpus_ready`（索引抛异常被压成"没就绪"）、
   `entities._parse`（工具返回形态漂了、`literal_eval` 与 `json` 两种解析都不认）、

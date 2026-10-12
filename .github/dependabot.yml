@@ -1,0 +1,52 @@
+# 依赖升级的机器入口（20261013 补）。
+#
+# **为什么本来该有、却一直没有**：`SECURITY.md` 把上游 CVE 明确推给"上游与 Dependabot"
+# （见该文件「不在本仓支持范围内」那一节的最后一条），但仓库里从来没有这份配置 ⇒
+# 只有 GitHub 的**安全告警**，没有**版本升级 PR**；而本仓的依赖一律 `==` 钉死
+# （见 pyproject.toml 那段注），没有任何东西会去动它们 ⇒ 那句"交给 Dependabot"
+# 当时是一句空头承诺。补上这份配置，那句话才成立。
+#
+# 与 CI 的关系：本仓的静态扫描与套件都以**锁定的版本**为准（CI 跑 `uv sync --frozen`，
+# `docs/lint-baseline.md` 的纪律①b 还断言"文档里的 ruff 版本 == dev 分组的版本"）。
+# 所以 ruff 的升级 PR **必须**同时改 `pyproject.toml` 与 `docs/lint-baseline.md`——
+# 那份 PR 绿了才说明改齐了；这条不是提醒，是 `tests/test_ci_suite_list.py` ①b 会红的。
+version: 2
+
+updates:
+  # 运行时依赖 + dev 组都在 pyproject.toml 里，都由 uv.lock 定版；Dependabot 的
+  # pip 生态认识 uv.lock，会在同一个 PR 里把它一起改掉（改 pyproject 不改 lock
+  # 会让 CI 的 `uv sync --frozen` 当场失败，这正是我们要它一起改的原因）。
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"
+    groups:
+      # 次要/补丁合成一个 PR：本仓的提交纪律是"一笔提交一个意图"
+      # （见 CLAUDE.md 的提交规范），十几个单依赖 PR 只会让复审停摆。
+      # 主版本**不并进来**——那是要读 changelog、跑套件的那一类，值得单独一个 PR。
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # workflow 里钉的 action 版本（`actions/checkout@v4`、`astral-sh/setup-uv@v5` 这些）。
+  # 它们没有 lock 文件，升版就是改 `.github/workflows/*.yml` 那一行——单独成组，
+  # 免得与依赖升级混在同一个 PR 里（两者的验证方式完全不同）。
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns: ["*"]

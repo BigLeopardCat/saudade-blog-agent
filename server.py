@@ -20,6 +20,8 @@ import time
 import uuid
 from datetime import datetime
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from typing import Literal
 from concurrent.futures import ThreadPoolExecutor
 
@@ -357,7 +359,26 @@ async def lifespan(app: FastAPI):
     logger.info("Agent shutting down")
 
 
-app = FastAPI(title="Saudade Blog Agent", version="1.0.0", lifespan=lifespan)
+def _app_version() -> str:
+    """本应用的版本号——**只有 `pyproject.toml` 的 `[project].version` 一个来源**。
+
+    此前这里写死 `version="1.0.0"`，而 `pyproject.toml` 是 `0.2.0`：`/openapi.json`
+    与 `/docs` 上挂着哪个，全看读的是哪一份，而**没有任何东西会发现**。本仓的规矩
+    写在 `tests/test_style_hygiene.py`③——"要用版本就从 pyproject 读"。
+
+    `importlib.metadata` 读的就是安装时从 `pyproject.toml` 写进 dist-info 的那个值，
+    而环境只有 `uv sync` 一个构建入口（改了版本号它会重装）。读不到（裸源码跑、这台
+    机器上没装过这个包）时**如实说 `0.0.0+source`**，不编一个看起来像真的版本号——
+    假版本号比没有版本号更坏，它会让人以为两份对上了。判据：`tests/test_packaging.py`
+    断言它与 `pyproject.toml` 逐字相等。
+    """
+    try:
+        return _pkg_version("saudade-agent")
+    except PackageNotFoundError:
+        return "0.0.0+source"
+
+
+app = FastAPI(title="Saudade Blog Agent", version=_app_version(), lifespan=lifespan)
 
 
 # ── 链路追踪（可观测最小集）──
