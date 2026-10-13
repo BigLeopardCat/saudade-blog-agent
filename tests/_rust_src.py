@@ -77,3 +77,43 @@ def str_consts(src: str, prefix: str = "") -> dict[str, str]:
     按 `mod tests` 切段后再取，别在这里加"容错"。
     """
     return dict(re.findall(_STR_CONST_RE.format(prefix=re.escape(prefix)), src, re.M))
+
+
+def strip_comments(src: str) -> str:
+    """去掉 `//` 行注释（**认字符串状态**，`"a//b"` 里的不当注释）；换行原样保留。
+
+    **为什么必须有这一步**（20261013 实测踩到）：`fn_body` 用"跳注释/跳字符串"来**配对
+    花括号**，但它 `return` 的是两个花括号之间的**原样切片**——注释与字符串都还在里面。
+    于是"在函数体里搜不到某个字面量"这类断言会把**注释里的举例**当成代码算进去：本仓的
+    注释风格恰恰是**大段引用代码**（`// **这里没有 `.limit(...)` 是刻意的**`），第一版
+    `tests/test_task_read_window.py` 就是这么被自己的注释判红的——**方向还是反的**：
+    真有人把窗口加回来时，那句"别加回来"的注释多半也在，判据看上去照样有意见。
+
+    纪律：断言跑在**代码**上（本函数），引用原文时才用 `fn_body` / 全文件。
+    """
+    out: list[str] = []
+    i, n, in_str = 0, len(src), False
+    while i < n:
+        c = src[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:        # 转义：连下一个字符一起吞
+                out.append(src[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j            # 换行留给下一轮原样写入
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
