@@ -82,13 +82,18 @@ F821 是"会炸"的那一类，E/F/I/W 是"会烂"的那一类。本文件管后
 - **同族的第三道（20261013 已落地）**：`eval/type_gate.py` + `eval/mypy_baseline.json`
   —— 管的是**类型**。此前 `[tool.mypy]` 配了却从不执行（mypy 不在依赖、不在 `uv.lock`、
   CI 没有这一步），而函数签名已注释约 78% ⇒ 写了从不校验。首次真跑读到
-  `212 errors in 21 files (checked 46)`，故与上面两道同规则：**记基线、只许变小**、
+  `220 errors in 21 files (checked 46)`，故与上面两道同规则：**记基线、只许变小**、
   `--update` 是唯一放宽通道；判据两条（总数变大 / **某文件**变大，防互相抵消）。
   本机跑它用隔离的 `uvx mypy@2.4.0`（同 dev 分组所钉版本，`uv sync` 本机永远不许跑）：
-  `python eval/type_gate.py --mypy "uvx mypy@2.4.0"`。
+  `<隔离 3.12 环境>/bin/python eval/type_gate.py --mypy "uvx mypy@2.4.0"`。
   ⚠️ **换 mypy 版本 ⇒ 报出来的错误集整个变**，基线里记着出账时的版本，对不上直接退 3
-  （升版要重出基线，见 `pyproject.toml` dev 分组那段注释）。接线由
-  `tests/test_packaging.py` ④ 盯着（CI 有那一步、四处版本同源、账上的面 == 量到的面）。
+  （升版要重出基线，见 `pyproject.toml` dev 分组那段注释）。
+  ⚠️ **「用哪个解释器启动」也会换一个量**（20261013 上线当天被 CI 抓到的第三个洞）：
+  mypy 去谁的 site-packages 里找三方库由 `--python-executable` 决定，不给就认自己所在的
+  环境 ⇒ 隔离的 `uvx` 那份看不到 langgraph/openai/fastapi、import 全退化成 Any，
+  同一条命令少报 8 个。`type_gate.py` 现在恒带该参数（值 = 启动器的解释器）**并且**
+  要求启动器的版本 == `[tool.mypy].python_version`。接线由
+  `tests/test_packaging.py` ④ 盯着（CI 有那一步、五处同源、账上的面 == 量到的面）。
 - 存量清理：按文件分批（先 `agent/` 与 `tools/` 这两个"会被 import 的"，后测试），
   每批单独提交、每批跑一次 `tests/run_all.py`。**`--fix` 之后必须看 diff**：
   F401/F811 的自动修会删掉"为了副作用而 import"的行与"刻意重复导入"的行。

@@ -1,5 +1,5 @@
 {
-  "_note": "mypy 错误数的棘轮基线。只许变小；--update 是唯一放宽通道。版本与解释器目标都必须与 pyproject.toml 同源——两者都会改变错误集。",
+  "_note": "mypy 错误数的棘轮基线。只许变小；--update 是唯一放宽通道。三个量都必须与 pyproject.toml / 启动器同源：mypy 版本、解释器目标、以及「mypy 照哪个解释器去找三方库」（命令里恒带 --python-executable <启动本脚本的解释器>）——三者都会改变错误集。",
   "mypy_version": "2.4.0",
   "python_target": "3.12",
   "targets": [
@@ -11,7 +11,7 @@
     "utils",
     "server.py"
   ],
-  "total": 212,
+  "total": 220,
   "files_checked": 46,
   "by_file": {
     "agent/action_text.py": 1,
@@ -19,11 +19,11 @@
     "agent/authz.py": 3,
     "agent/context.py": 2,
     "agent/entities.py": 1,
-    "agent/graph.py": 98,
+    "agent/graph.py": 99,
     "agent/hostinfo.py": 2,
     "agent/native_plan.py": 7,
-    "agent/react_arm.py": 6,
-    "agent/react_line.py": 5,
+    "agent/react_arm.py": 10,
+    "agent/react_line.py": 7,
     "agent/refs.py": 4,
     "agent/reports.py": 1,
     "agent/skills.py": 12,
@@ -32,7 +32,7 @@
     "rag/graph_build.py": 3,
     "rag/search.py": 4,
     "rag/vector_index.py": 3,
-    "server.py": 7,
+    "server.py": 8,
     "tools/base.py": 28,
     "utils/trace.py": 2
   }
