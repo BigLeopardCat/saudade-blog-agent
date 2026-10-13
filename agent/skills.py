@@ -580,6 +580,134 @@ def param_tools(role: str | None) -> list[str]:
     return public
 
 
+# ── 工具的中文说明：**唯一一份**（20261013 批 C 从 `graph._TOOL_MENU_LINES` 搬来）──
+#
+# 这份表原本住在 `graph.py`，只服务 planner 文本菜单（`_tools_desc`）。搬到这里是因为
+# **它现在有两个消费方**：① graph 臂的文本菜单（原样，逐字节不变）；② 本臂的函数
+# schema——`native_plan` 把「名字：说明」渲染进 `content_query.tools/calls` 的参数
+# 描述里。两份各自维护就是本仓反复打掉的"手抄第二份名单"，所以只有一处定义。
+#
+# 为什么函数 schema 那一侧非有不可（20261013 批 B 的实测代价）：批 B 把文本菜单整块
+# 摘掉之后，`multi_step_search_then_read_top` 从 4/4 掉到 **0/4**（两臂交替各 4 遍），
+# 失败形态是零工具调用、正文改自称"本轮还没检索"，或拿 `list_notes` 顶替检索工具。
+# 读下去原因不在循环机制那几行字：`content_query` 的两格参数里，`tools` 只列**无参只读**
+# 工具名、`calls` 只有一串裸名字，**没有一处说得出 `search_notes` / `rag_search` /
+# `get_article_detail` 各自是干什么的**——"该点哪一个"此前只住在被摘掉的文本菜单里。
+# 这就是"技能面替契约干活"的具体形状：补法是把说明搬到工具旁边（本表＋下面的
+# `tool_purpose`），**不是**再写一条全局规则。
+TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 docstring）
+    "search_notes": "按关键词搜文章（标题+内容），返回候选列表（含 id/标题/描述/封面）",
+    "rag_search": "语义相关度检索（BM25），返回行式候选（type/id/score/标题/命中节，"
+                  "用于定位，不给全文）",
+    "get_article_detail": "读指定文档（doc_type=note|talk|board|announcement；超长文章"
+                          "只带回部分小节时用 section 补读被略去的某一节；"
+                          "article_id 只能取上一轮工具返回中的真实 id，或直接写引用 "
+                          "$<工具名>[<序号>].<字段>，见规则 3b）",
+    "list_notes": "分页列文章",
+    "get_weather": "查天气（location：城市名，缺省北京）",
+    # 这三条**不许**写"要取更早的用 offset=N"（20261005 实测）：写了之后 planner 会在
+    # **每一轮**都显式带上 `offset=0`（一次 4 条调用里两条是它），既多跑一遍同一次读取，
+    # 又撞上"带参调用覆盖无参点名"的剔重路径。取回方式改写进**帧尾注记**——只在列表真的
+    # 被封顶时出现，见 `tools/base.py::_cap_rows` 的 offset 分支。这是本仓一贯的
+    # "按需披露"：菜单不预告用不上的参数，需要它的那一刻由系统注记当面说。
+    "list_guestbook": "无参直取：留言板（河灯集）列表",
+    "list_talks": "无参直取：说说（动态/碎语）列表",
+    "get_announcements": "无参直取：博客公告列表",
+    "get_current_time": "无参直取：当前日期时间",
+    "get_blog_info": "无参直取：博客基本信息（作者/头像/签名/ICP备案号）",
+    "get_social_links": "无参直取：社交链接（QQ/GitHub/BILIBILI/邮箱）",
+    "get_site_map": "无参直取：博客功能结构图（有哪些页面/板块）",
+    "get_top_notes": "无参直取：置顶文章列表",
+    "list_categories": "无参直取：全部分类（名称/颜色/图标/文章数量）",
+    # 两级一起给（20260921 修）：只写"一级标签"时 planner 会照菜单作答"站内没有
+    # 二级标签"——工具早就读得到两级了，缺的只是菜单没说
+    "list_tags": "无参直取：全部标签（一级 + 其下的二级，靠 level/fatherTag 区分）",
+    # 后台读面（20260924 用户拍板）：**只对 admin 出现**（白名单侧由
+    # skills.callable_query_tools 按角色放开，见该函数注）。说明里都带上"仅管理员"
+    # ——非 admin 的菜单里根本没有这些行，这句是给"管理员看到后知道自己为什么有"
+    # 用的，也顺带提醒它这类问题归管理岗、别拿去回答访客。
+    "list_admin_notes": "仅管理员：后台文章清单（含草稿/私密/置顶，公开接口看不见的那些）；"
+                        "可选 keyword=关键词收窄（与站内公开搜索同一套切词口径，区别是"
+                        "**连草稿与私密一起搜**）",
+    "get_user_stats": "仅管理员：用户数据统计（用户数/活跃度/会话与消息量）",
+    "get_note_stats": "仅管理员：文章流量报表（阅读/点赞/收藏三张排行榜各前 10，"
+                      "逐条印着「第 N 名」，含全站合计与近 30 天趋势）",
+    # 与上面那张快照报表的分工**必须写进菜单**（同 list_admin_board 那条的理由）：
+    # 两张纸都叫"文章数据"，切法不同——不写，问"上周哪篇最热"时模型会去点快照那张，
+    # 拿到的是"到目前为止"的三张榜，答不上"上周"。
+    "get_note_periods": "仅管理员：文章**分期**报表（周报/月报/年报，按期切开、"
+                        "每期印出本期阅读量前 5 篇）——问「上周/这个月/今年」时用它；"
+                        "必填 kind=week|month|year（与上面那张快照报表不是一张纸）",
+    "get_moderation_status": "仅管理员：河灯留言审核状况（AI 通过/驳回/待人工复批），"
+                             "可选 status=ai_passed|ai_rejected|pending 只看某一类",
+    # 名册与上面那张报表的分工写进说明里：不写的话，问"这条是谁发的"时模型会去点
+    # 报表（那张按状态切三份名单、每份默认只印 5 条），拿到的是另一张纸。
+    "list_admin_board": "仅管理员：河灯留言后台名册（逐条，含待审/未通过），"
+                        "每条带**发表账号**——匿名留言也溯得到是谁发的；"
+                        "可选 status=pending|passed|rejected、keyword=关键词"
+                        "（**注意与上面那张报表的 status 不是同一套取值**）",
+    "get_server_status": "仅管理员：服务器状态报表（CPU/内存/磁盘/负载）",
+    "get_service_health": "仅管理员：服务健康报表（服务是否正常/异常告警/日志与心跳）",
+}
+
+_TOOL_DESCRIPTIONS: dict[str, str] = {}
+
+
+def tool_purpose(name: str, *, brief: bool = False) -> str:
+    """工具的中文说明：手写表优先，缺省回退**注册表自己的 docstring**。
+
+    回退那半与 `graph._tools_desc` 的取值逐字相同（那里原来写的就是
+    `tool.description.strip().replace("\\n", " ")`），所以两处渲染同一件工具时
+    出来的是同一句话——这正是"两条通道同源"要的那条性质。**这条默认口径不能改**：
+    planner 菜单要与改动前逐字节相同。
+
+    `brief=True` 是**函数 schema 那一侧**要的短版（20261013 批 C 实测逼出来的）：
+    注册表里那些 `list_my_*` 的 docstring 是几百字的多段说明，整族铺进参数描述之后
+    `content_query` 一个函数涨到 9,837 字符、整份 tools 数组 41,128 字符——每一轮
+    都要重发一遍。菜单（每请求一份、可缓存）与函数 schema（每轮一份）的预算不一样，
+    所以短版只留**头一句**并按 `_BRIEF_MAX` 截断。**两处仍是同一句话的前缀**，
+    不是两份说明。
+
+    取不到（名字不在注册表里）返回空串：**宁可少说，不说错**。
+    """
+    got = TOOL_MENU_LINES.get(name)
+    if got:
+        return got
+    raw = _registry_desc(name)
+    if not brief:
+        # **逐字节同旧**：graph 的 `_tools_desc` 原来写的就是这两步。
+        return raw.replace("\n", " ")
+    text = " ".join(raw.split())
+    head = text.split("。", 1)[0]
+    if len(head) > _BRIEF_MAX:
+        head = head[:_BRIEF_MAX] + "…"
+    elif head != text:
+        head += "。"
+    return head
+
+
+_BRIEF_MAX = 48
+
+
+def _registry_desc(name: str) -> str:
+    """注册表里那件工具自己的 docstring（只去首尾空白）。建一次、之后复用。"""
+    if not _TOOL_DESCRIPTIONS:
+        from tools.base import get_all_tools
+        for t in get_all_tools():
+            _TOOL_DESCRIPTIONS.setdefault(
+                t.name, (getattr(t, "description", "") or "").strip())
+    return _TOOL_DESCRIPTIONS.get(name, "")
+
+
+def tool_menu_lines(names, *, brief: bool = False) -> str:
+    """`名字：说明` 逐条成串（函数 schema 的参数描述里用）。说明取不到就只留名字。"""
+    bits = []
+    for n in names:
+        why = tool_purpose(n, brief=brief)
+        bits.append(f"{n}：{why}" if why else str(n))
+    return "；".join(bits)
+
+
 # 技能描述里的工具枚举**不能是模块常量**（20260924）：它是角色相关的，得在
 # build_planner_context 里按 role 展开。占位标记刻意**不含花括号**——整份 planner
 # 提示词最后要过 `_PLANNER_PROMPT.format(...)`，带 `{}` 的标记会被当成占位符炸掉。

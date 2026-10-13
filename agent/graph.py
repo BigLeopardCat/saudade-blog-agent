@@ -121,7 +121,8 @@ from agent.skills import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
                           arg_type_short, build_planner_context,
                           callable_query_tools, instantiate_plan,
                           param_problem_note, skill_param_specs,
-                          split_tool_spec, visible_skills)
+                          split_tool_spec, visible_skills,
+                          TOOL_MENU_LINES, tool_purpose)
 # 任务登记（20260927 批 D）：登记帧的构造与那一轮给 narrator 的注记/纠偏都在
 # `agent/tasks.py`——本模块只决定"什么时候用它"（见 planner 的那一支）。
 from agent.tasks import (TASK_DONE_NOTE, TASK_INTENTS, advance_by_receipts,
@@ -839,60 +840,12 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
 # 只需改 skills.py 一处。参数签名从 tool.args 派生。
 # 动作工具不在白名单 → 结构性进不了菜单：planner 无法经 calls 通道越权动作，
 # 只能由技能模板展开（skills.py 已论证）。
-_TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 docstring）
-    "search_notes": "按关键词搜文章（标题+内容），返回候选列表（含 id/标题/描述/封面）",
-    "rag_search": "语义相关度检索（BM25），返回行式候选（type/id/score/标题/命中节，"
-                  "用于定位，不给全文）",
-    "get_article_detail": "读指定文档（doc_type=note|talk|board|announcement；超长文章"
-                          "只带回部分小节时用 section 补读被略去的某一节；"
-                          "article_id 只能取上一轮工具返回中的真实 id，或直接写引用 "
-                          "$<工具名>[<序号>].<字段>，见规则 3b）",
-    "list_notes": "分页列文章",
-    "get_weather": "查天气（location：城市名，缺省北京）",
-    # 这三条**不许**写"要取更早的用 offset=N"（20261005 实测）：写了之后 planner 会在
-    # **每一轮**都显式带上 `offset=0`（一次 4 条调用里两条是它），既多跑一遍同一次读取，
-    # 又撞上"带参调用覆盖无参点名"的剔重路径。取回方式改写进**帧尾注记**——只在列表真的
-    # 被封顶时出现，见 `tools/base.py::_cap_rows` 的 offset 分支。这是本仓一贯的
-    # "按需披露"：菜单不预告用不上的参数，需要它的那一刻由系统注记当面说。
-    "list_guestbook": "无参直取：留言板（河灯集）列表",
-    "list_talks": "无参直取：说说（动态/碎语）列表",
-    "get_announcements": "无参直取：博客公告列表",
-    "get_current_time": "无参直取：当前日期时间",
-    "get_blog_info": "无参直取：博客基本信息（作者/头像/签名/ICP备案号）",
-    "get_social_links": "无参直取：社交链接（QQ/GitHub/BILIBILI/邮箱）",
-    "get_site_map": "无参直取：博客功能结构图（有哪些页面/板块）",
-    "get_top_notes": "无参直取：置顶文章列表",
-    "list_categories": "无参直取：全部分类（名称/颜色/图标/文章数量）",
-    # 两级一起给（20260921 修）：只写"一级标签"时 planner 会照菜单作答"站内没有
-    # 二级标签"——工具早就读得到两级了，缺的只是菜单没说
-    "list_tags": "无参直取：全部标签（一级 + 其下的二级，靠 level/fatherTag 区分）",
-    # 后台读面（20260924 用户拍板）：**只对 admin 出现**（白名单侧由
-    # skills.callable_query_tools 按角色放开，见该函数注）。说明里都带上"仅管理员"
-    # ——非 admin 的菜单里根本没有这些行，这句是给"管理员看到后知道自己为什么有"
-    # 用的，也顺带提醒它这类问题归管理岗、别拿去回答访客。
-    "list_admin_notes": "仅管理员：后台文章清单（含草稿/私密/置顶，公开接口看不见的那些）；"
-                        "可选 keyword=关键词收窄（与站内公开搜索同一套切词口径，区别是"
-                        "**连草稿与私密一起搜**）",
-    "get_user_stats": "仅管理员：用户数据统计（用户数/活跃度/会话与消息量）",
-    "get_note_stats": "仅管理员：文章流量报表（阅读/点赞/收藏三张排行榜各前 10，"
-                      "逐条印着「第 N 名」，含全站合计与近 30 天趋势）",
-    # 与上面那张快照报表的分工**必须写进菜单**（同 list_admin_board 那条的理由）：
-    # 两张纸都叫"文章数据"，切法不同——不写，问"上周哪篇最热"时模型会去点快照那张，
-    # 拿到的是"到目前为止"的三张榜，答不上"上周"。
-    "get_note_periods": "仅管理员：文章**分期**报表（周报/月报/年报，按期切开、"
-                        "每期印出本期阅读量前 5 篇）——问「上周/这个月/今年」时用它；"
-                        "必填 kind=week|month|year（与上面那张快照报表不是一张纸）",
-    "get_moderation_status": "仅管理员：河灯留言审核状况（AI 通过/驳回/待人工复批），"
-                             "可选 status=ai_passed|ai_rejected|pending 只看某一类",
-    # 名册与上面那张报表的分工写进说明里：不写的话，问"这条是谁发的"时模型会去点
-    # 报表（那张按状态切三份名单、每份默认只印 5 条），拿到的是另一张纸。
-    "list_admin_board": "仅管理员：河灯留言后台名册（逐条，含待审/未通过），"
-                        "每条带**发表账号**——匿名留言也溯得到是谁发的；"
-                        "可选 status=pending|passed|rejected、keyword=关键词"
-                        "（**注意与上面那张报表的 status 不是同一套取值**）",
-    "get_server_status": "仅管理员：服务器状态报表（CPU/内存/磁盘/负载）",
-    "get_service_health": "仅管理员：服务健康报表（服务是否正常/异常告警/日志与心跳）",
-}
+#
+# 中文说明那份表 20261013 批 C **搬去了 `skills.py`**（`TOOL_MENU_LINES`）：它现在有
+# 两个消费方——这里（planner 文本菜单）与 `native_plan`（函数 schema 的参数描述），
+# 各留一份就是"手抄第二份名单"。这个名字保留成别名，取值就是 skills 里那一份，
+# 渲染结果**逐字节不变**（缺省回退也走同一个 `tool_purpose`）。
+_TOOL_MENU_LINES: dict[str, str] = TOOL_MENU_LINES
 
 
 # 参数类型 → 菜单里的短标记（20260925）。**纯展示**：只为让 planner 看得见"哪些必填、
@@ -962,7 +915,7 @@ def _tools_desc(role: str | None = None) -> str:
             logger.warning("[planner] 白名单工具 %s 不在注册表，菜单已剔除", name)
             continue
         args = _menu_arg_signature(tool)
-        desc = _TOOL_MENU_LINES.get(name) or (tool.description or "").strip().replace("\n", " ")
+        desc = tool_purpose(name)
         lines.append(f"- {name}({args})：{desc}")
     return "\n".join(lines)
 

@@ -44,9 +44,11 @@ from agent.skills import (
     ParamSpec,
     callable_query_tools,
     explicit_tools,
+    param_tools,
     render_tool_marks,
     skill_param_specs,
     tool_arg_schemas,
+    tool_menu_lines,
     visible_skills,
 )
 from agent.tasks import (
@@ -220,17 +222,31 @@ def _override_for(role: str | None, skill_name: str, param: str) -> dict | None:
         return None
     out = dict(base)
     if skill_name == "content_query" and param == "tools":
+        # 每个名字**带上它自己的说明**（20261013 批 C）：枚举里只有裸名字时，"该点哪一个"
+        # 这一格没有任何信息——说明的来源与 planner 文本菜单是同一个 `tool_purpose`
+        # （见 skills.TOOL_MENU_LINES 的头注：批 B 摘下文本菜单后，这一格是缺口所在）。
         out["items"] = {"type": "string", "enum": explicit_tools(role)}
+        out["description"] = (
+            f"{base['description']}。{tool_menu_lines(explicit_tools(role), brief=True)}")
     elif skill_name == "content_query" and param == "calls":
         # 闭集按角色展开 —— 白名单只有 `callable_query_tools` 这一处来源
         # （见 agent/skills.py 的注：手写名单是漏项来源）。
+        allowed = callable_query_tools(role)
         out["items"] = {
             **base["items"],
             "properties": {
                 **base["items"]["properties"],
-                "tool": {"type": "string", "enum": callable_query_tools(role)},
+                "tool": {"type": "string", "enum": allowed},
             },
         }
+        # 同 `tools` 那一格，再加**这一格独有的**参数名提示（`review_inbox` 一直有，
+        # `content_query` 此前没有）：检索族真正的成本住在"填什么"上——`search_notes`
+        # 要 keyword、`rag_search` 要 query、`get_article_detail` 要 doc_type+article_id。
+        out["description"] = (
+            f"{base['description']}。{tool_menu_lines(allowed, brief=True)}")
+        hint = _calls_arg_hint(param_tools(role))
+        if hint:
+            out["description"] += f"（要填的参数：{hint}）"
     elif skill_name == "review_inbox" and param == "calls":
         # 闭集 = 该技能 `plan` 声明的工具全集（与 `_expand_change_set` / 执行轮
         # `_confirm_grant_plan` 读的是**同一个字段**，见技能定义：它同时是跨族安全性
