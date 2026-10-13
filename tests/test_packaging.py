@@ -373,8 +373,25 @@ check("`.coverage-data/` 既在 run_all.py 里、也在 .gitignore 里（两处�
 # ⚠️ `coverage run <脚本>` 往 `sys.path` 里放的是**当前目录**、不是脚本目录（`python <脚本>`
 # 才是脚本目录）。不显式把 `tests/` 挂上，覆盖率档里所有 `import _parent_repo` 的守卫都会
 # 以 ModuleNotFoundError 变红（实测一次：130 个套件里红 17 个，看着像整批守卫坏了）。
+def _child_path_src(src: str) -> bool:
+    """`run_all.py` 真把同目录助手挂进了子进程的 `PYTHONPATH`（20261014 改的口径）。
+
+    此前这一条钉的是一行字面量（`env["PYTHONPATH"] = str(TESTS)`）——那一行 20261014 搬进了
+    `child_import_path()`（仓根要排在 `tests/` **前面**，见那里的注），钉字面量的写法当场
+    变红，而**契约一个字没变**。改成两级：那一句**接线**（剥掉注释后仍是文本，只此一句）
+    ＋ `child_import_path` **函数体里引没引用 `TESTS`**（AST，不认注释与别处的举例）。
+    """
+    if 'env["PYTHONPATH"] = child_import_path()' not in _strip_comments(src):
+        return False
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.FunctionDef) and node.name == "child_import_path":
+            return any(isinstance(n, ast.Name) and n.id == "TESTS"
+                       for n in ast.walk(node))
+    return False
+
+
 check("  run_all.py 给子进程挂上了 `tests/`（否则覆盖率档下同目录助手 import 不到）",
-      'env["PYTHONPATH"] = str(TESTS)' in RALL)
+      _child_path_src(RALL))
 # 配方**不许写死解释器路径**：`lib/python3.X/site-packages` 这种写法升一次版本就烂一次，
 # 而这一档起不来时是**拒绝运行**（一个套件都不跑）⇒ 症状会是"覆盖率整个用不了"。
 # 20261013 从 3.10 升 3.12 时这里正是坏的。改成问包自己装在哪，配方就跟着解释器走。

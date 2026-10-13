@@ -35,6 +35,17 @@
   拆掉窗口之后它不再造成重复执行，但清掉那份噪声要动 `task_frames`（提示词可见）⇒ 必须
   两臂 A/B，**不顺手改**。
 
+- **判据读的是不是本仓的代码：入口把仓根挂进子进程的 `PYTHONPATH`（判据，20261014）**：
+  套件是 `python tests/test_x.py` 起的，`sys.path[0]` 是 `tests/`、**不是仓根** ⇒
+  `import config` / `agent` / `tools` 拿到谁完全由 `PYTHONPATH` 决定；而本机 `.venv` 里那个
+  可编辑安装指向**产线 checkout**（还停在老提交上）。不挂仓根时套件读的是**产线那份代码**，
+  判据照样出绿出红、**只是判的不是你刚改的那份**（worktree 里实测：`test_ci_suite_list`
+  报 `agent_arm` 偏离默认值——产线那份还是 `graph`，仓里已经是 `react`，看着像真缺陷）。
+  `tests/run_all.py` 现在把**仓根排在子进程 `PYTHONPATH` 的最前**（新函数
+  `child_import_path()`），`test_ci_suite_list` 新增 ④c 钉住它，并配一条确定性反控
+  （把 `PYTHONPATH` 指到一个假的 `config` 包 ⇒ 探针必须如实回报**别处**）。
+  单仓 checkout 与 CI 里仓根与安装落点是同一个目录 ⇒ **不改变任何读数**。
+
 ## 20261013
 
 - **函数菜单里补上「这件工具是干什么的」（行为，20261013 批 C 切片 1）**：`content_query`

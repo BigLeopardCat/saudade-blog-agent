@@ -210,6 +210,55 @@ if (ROOT / ".env").exists():
 else:
     print("  ⏭  没有 .env（CI 就这样）⇒ 这一半无从对照；机制那半已在上一条验过")
 
+# ── ④c 套件读的是**本仓**的代码吗（20261014）─────────────────────────────────
+# `python tests/test_x.py` 的 `sys.path[0]` 是**脚本所在目录**（`tests/`），**不是仓根**，
+# 所以 `import config` / `agent` / `tools` 拿到谁完全由 `PYTHONPATH` 决定；而本机 `.venv`
+# 里有一个可编辑安装（`_editable_impl_saudade_agent.pth`）指向**产线 checkout**。
+# 不把仓根挂上去时，套件读的是**产线那份代码**——判据照样出绿出红，**只是判的不是你刚改
+# 的那份**。现场（worktree 里跑本入口）：本套件报 `agent_arm` 偏离默认值，看着像真缺陷，
+# 其实是产线 checkout 停在老提交、那一格还是 `graph`。
+print("\n④c 判据读的是**本仓**的代码（`.venv` 里那个可编辑安装指着产线 checkout）")
+import tempfile  # noqa: E402
+
+# `p for p in sys.path if p` 去掉 `''`（= cwd）：真实套件的 `sys.path[0]` 是 `tests/`，
+# 那里没有 `config` 包，去掉它这条判据才只问 `PYTHONPATH`。
+_ORIGIN = ("import json,sys,pathlib;"
+           "sys.path=[p for p in sys.path if p];"
+           "import config;"
+           "print(json.dumps(str(pathlib.Path(config.__file__).resolve().parent.parent)))")
+
+
+def _origin(pythonpath: str) -> str | None:
+    """起一个子进程回报 `config` 来自哪个仓根；起不来返回 None。
+
+    cwd 刻意放在 `tests/`（同真实套件），免得 cwd 顺手把仓根带进 `sys.path` 让判据假绿。
+    """
+    env = dict(os.environ)
+    env["PYTHONPATH"] = pythonpath
+    out = subprocess.run([sys.executable, "-c", _ORIGIN], cwd=str(ROOT / "tests"),
+                         env=env, capture_output=True, text=True, timeout=120)
+    if out.returncode != 0:
+        return None
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+check("  入口把**仓根排在子进程 PYTHONPATH 的最前**",
+      run_all.child_import_path().split(os.pathsep)[0] == str(ROOT),
+      run_all.child_import_path())
+_here = _origin(run_all.child_import_path())
+check("  入口给的 PYTHONPATH 下，那个子进程读到的就是本仓",
+      _here == str(ROOT), f"{_here}")
+
+# 反控（确定性，不靠这台机器装了什么）：把 PYTHONPATH 指到一个**假的 `config` 包**，
+# 探针必须如实回报那个目录 —— 否则上面那条绿可能只是"探针恒返回本仓"。
+_fake = None
+with tempfile.TemporaryDirectory() as _td:
+    (pathlib.Path(_td) / "config").mkdir()
+    (pathlib.Path(_td) / "config" / "__init__.py").write_text("", encoding="utf-8")
+    _fake = _origin(_td)
+check("  反控：PYTHONPATH 指向别处的 `config` ⇒ 探针如实回报**别处**（判据真的在看来处）",
+      _fake == _td, f"{_fake}")
+
 # 另一半：钉了要真的生效（上一条把钉子摘掉了才验得干净）。逐值核对三个钉子档位。
 _eff = _pinned_effective()
 check("⭐⭐ 入口钉住的档位**真的生效**（钉了不生效 ⇒ 套件按另一档跑，且静默）",

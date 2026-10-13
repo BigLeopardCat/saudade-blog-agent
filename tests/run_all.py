@@ -77,6 +77,30 @@ TESTS = ROOT / "tests"
 # "别互相覆盖"，这一条说的是"都写到这一处"。目录整个在 .gitignore 里。
 COV_DIR = ROOT / ".coverage-data"
 
+
+def child_import_path() -> str:
+    """子进程的 `PYTHONPATH`：**仓根排在最前**，其次是用原本就有的，最后是同目录助手。
+
+    为什么仓根必须在最前（20261014 实测踩到，同族教训见 `docs/问题记录.md` 的
+    「判据的前提住在别人手里」）：套件是 `python tests/test_x.py` 起的，`sys.path[0]`
+    是**脚本所在目录 `tests/`**、不是仓根——`import config` / `agent` / `tools` 拿到谁，
+    完全由 `PYTHONPATH` 决定。而本机那份 `.venv` 里有一个**可编辑安装**（`_editable_impl_
+    saudade_agent.pth`）指向**产线 checkout**：不把仓根挂上去时，套件读的是**产线那份
+    代码**，判据照样跑、照样出绿出红，**只是判的不是你刚改的那份**。
+
+    现场：在 worktree 里跑本入口，`test_ci_suite_list` 报 `agent_arm` 偏离默认值
+    （产线 checkout 停在老提交、那一格还是 `graph`，而仓里已经是 `react`）——看着像
+    真缺陷，其实是"这条命令读的是另一份代码"。挂上仓根立刻全绿。
+    在正常的单仓 checkout 与 CI 里，仓根与可编辑安装的落点是同一个目录 ⇒ 这一条
+    **不改变任何读数**，它只是把"本仓"这件事从环境里显式说出来。
+    """
+    parts = [str(ROOT)]
+    cur = os.environ.get("PYTHONPATH")
+    if cur:
+        parts.append(cur)
+    parts.append(str(TESTS))
+    return os.pathsep.join(parts)
+
 # 钉成"出厂默认值"的能力开关（= `config/settings.py` 的默认档）。只钉**会影响离线判据**
 # 的那些：`AGENT_TASK_STATE` 决定 schema 里多不多那个登记伪函数。其余（模型名、超时）不
 # 影响离线套件的形状判据，不钉。
@@ -235,8 +259,9 @@ def main() -> int:
     # 而不是脚本目录（7.16.2 实测：`path0` = 仓根）。不补这一下，覆盖率档里那一族跨语言
     # 守卫会以 `ModuleNotFoundError: No module named '_parent_repo'` 集体变红，现场看着像
     # "这批守卫全坏了"（真发生过一次：17 个套件同时红）。显式挂上，两档的 import 视野一致。
-    env["PYTHONPATH"] = str(TESTS) + (
-        os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    # 仓根排在最前那一半见 `child_import_path()`——它管的是"读的是不是本仓的代码"，
+    # 比助手能不能 import 更要命（读错代码时判据照样出绿出红）。
+    env["PYTHONPATH"] = child_import_path()
     if args.coverage:
         # 上一次跑的残留数据必须清掉：不清的话"这次没采到"与"上次采到了"混成一份，
         # 报出来的数字既不是这一次的、也不是上一次的。目录本身在 .gitignore 里。
