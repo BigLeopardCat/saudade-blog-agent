@@ -58,7 +58,11 @@ def wire(r: dict) -> str:
 # 且索引与语料对齐，所以两格都要（只有一格的话，"拨了但一次没生效"永远看不见）。
 # `rag_state` 是第四格、也是**唯一一格能读出病因的**：线上首建那 6 秒的真实组合是
 # `enabled=true / active=false / missing=0`，两个布尔加一个计数拼不出"还在建"这个意思。
-DIAL_KEYS = {"planner_native_thinking", "agent_task_state",
+# 20261013：加 `agent_arm`（批 0）。它是这一块里**唯一一格能证「没跑」的**——其余几格
+# 都是"某条路开着/有索引"，而**一条不在跑的臂不留下任何 trace 事件**，事后从日志与
+# trace 里都推不出"当时跑的是哪一条"。回的是本进程 `_build_arm()` 的返回值（不是重新
+# 解析 `AGENT_ARM`），所以它同时钉住了"dotenv 改完没重启"这一格。
+DIAL_KEYS = {"agent_arm", "planner_native_thinking", "agent_task_state",
              "llm_provider", "llm_model",
              "rag_hybrid_enabled", "rag_hybrid_active", "rag_state", "vector_missing"}
 
@@ -72,9 +76,12 @@ try:
           '"agent_ready":true' in body, body[:80])
     check("顶层键 = status / agent_ready / dials（多一个少一个都要有人解释）",
           set(r) == {"status", "agent_ready", "dials"}, sorted(r))
-    check("dials 是一个对象、键集恰好那四个",
+    check("dials 是一个对象、键集**逐格钉死**（多一格少一格都要有人解释）",
           isinstance(r["dials"], dict) and set(r["dials"]) == DIAL_KEYS,
           sorted(r.get("dials") or []))
+    check("`agent_arm` 回的是**本进程那条臂**（不是重新解析 `AGENT_ARM` 一遍）",
+          r["dials"]["agent_arm"] == server._arm,
+          f"{r['dials']['agent_arm']!r}/{server._arm!r}")
 finally:
     server._agent = _old_agent
 check("图没建好时 agent_ready 仍是 false（不是恒 true）",

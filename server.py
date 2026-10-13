@@ -301,6 +301,11 @@ class ChatResponse(BaseModel):
 
 
 _agent = None
+# 这一进程**实际挂上的是哪条臂**（20261013 批 0）。与 `_agent` 同层是刻意的：
+# `_build_arm()` 原来把它交回给启动日志那一行就丢了，于是「在跑哪条臂」只在日志里
+# 出现一次、`/health` 里读不到。本仓的既定教训是 **trace 事件指纹只能证「在跑」、
+# 不能证「没跑」**——一条不在跑的臂不会留下任何事件；臂名是能证「没跑」的那一格。
+_arm: str = ""
 
 
 def _build_arm():
@@ -338,7 +343,7 @@ def _build_arm():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _agent
+    global _agent, _arm
     setup_logging()
     logger.info("Initialising LangChain agent ...")
     # `LLM_PROVIDER` 的启动校验（20261012）：认不出的服务商名**拒绝启动**，与下面
@@ -2337,6 +2342,11 @@ async def health():
             # `planner_engine` 这一格 20261004 删掉：接口层只剩 native tool calls 一条
             # （见 config/settings.py 那段注），没有第二个取值可拨。dials 5 → 4，
             # `tests/test_health_dials.py` 同步。
+            # `agent_arm`（20261013 批 0）：回的是**本进程挂上的那条臂**（`_build_arm`
+            # 的返回值），不是重新解析 `AGENT_ARM` 一遍——按这一块的立项理由，要暴露的
+            # 是"这个进程的内存取值"。空串 = lifespan 还没跑完（那时 `agent_ready` 也是
+            # false，两格自洽）。
+            "agent_arm": _arm,
             "planner_native_thinking": bool(getattr(settings, "planner_native_thinking", False)),
             "agent_task_state": bool(getattr(settings, "agent_task_state", False)),
             "llm_provider": getattr(settings, "llm_provider", ""),
