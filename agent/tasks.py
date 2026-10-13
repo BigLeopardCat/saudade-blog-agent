@@ -1218,8 +1218,11 @@ def _step_line(i: int, s: Any) -> str:
 def render_open_tasks(raw: Any, limit: int = 3, with_guide: bool = True) -> str:
     """未完结任务 → planner 上下文里的一段文本；没有 → 空串（调用方据此不注入）。
 
-    只渲染 `TASK_OPEN_STATES` 里的行：终态过滤的主判据在 Rust 的 SQL 里（限额是
-    "最新 3 条"，先取再筛会让已完结的行把窗口吃掉），这里是读到脏数据时的第二道。
+    只渲染 `TASK_OPEN_STATES` 里的行：终态过滤的主判据在 Rust 的 SQL 里（`WHERE state
+    IN (…)`，先取再筛会让已完结的行把窗口吃掉），这里是读到脏数据时的第二道。
+    `limit` 只决定**列几行给模型看**（缺省 3，注入端给的是 `agent_task_inject_max`）；
+    Rust 读侧刻意**不设窗口**——同一份列表还是结算与"下一件做什么"的射程，给它加窗口
+    就会让"哪几件事结得掉账"跟着提示词尺寸走（20261013 现场：站内通知发了两遍）。
     时效（72h）**不在这里再判一次**：那需要解析 `created_at` 的钟面格式，而解析失败
     在这里的后果是**整块静默消失**（同"trace 根只能走一个入口"那类坑）——时效的
     单执行者是 Rust 读侧，见迁移头注。
