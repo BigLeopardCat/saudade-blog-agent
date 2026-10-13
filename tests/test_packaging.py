@@ -232,6 +232,73 @@ if _base.is_file():
           _targets is not None and _targets == _b.get("targets"),
           f"棘轮={_targets} 基线={_b.get('targets')}")
 
+# ⚠️ **第三个量：mypy 从哪儿看到三方库**（20261013 上线当天就被 CI 抓到的洞）。
+# `eval/type_gate.py` 拼出来的那条 mypy 命令必须**恒带**
+# `--python-executable <启动本脚本的解释器>`。不传时，mypy 认的是"我自己跑在哪个环境里"
+# ⇒ 同一条判据、同一个 mypy 版本、同一个 `python_version`，**只换启动器就能读出两个数**：
+#   `<项目解释器> -m mypy` → 220（找得到 langgraph / openai / fastapi ⇒ 有真类型）
+#   `uvx mypy@X …`          → 212（uvx 是只装了 mypy 的隔离环境 ⇒ 三方 import 全落到
+#                            `ignore_missing_imports` ⇒ 退化成 Any ⇒ 少报 8 个）
+# 最初那份 212 的基线就是这么量出来的，CI 拿真环境一跑当场红。
+# **更要命的是它坏起来不像坏**：脱掉这个 flag 读数只会**变小** ⇒ 棘轮说的是
+# 「比基线少了 8 个，记账可以收得更紧」⇒ 照着 `--update` 就把错的数烤进账里了。
+# 棘轮自己看不见这个形状（"变好"本来就不报红），所以只能由这里看着。
+# 读**程序**用 AST（别用正则扒源码文本——本仓为此踩过三次，见 `_strip_comments` 一族）。
+_tg_src = _gate.read_text(encoding="utf-8")
+_tgt = ast.parse(_tg_src)
+_pe_lists = [n for n in ast.walk(_tgt)
+             if isinstance(n, ast.List) and any(
+                 isinstance(e, ast.Constant) and e.value == "--python-executable"
+                 for e in n.elts)]
+check("  对照：源码里确实有 `--python-executable` 那个字面量（否则下面两条是空跑）",
+      len(_pe_lists) == 1, f"扫到 {len(_pe_lists)} 处")
+# 值必须是 `sys.executable`（**启动本脚本的那个解释器**），不是写死的路径、也不是
+# `"python3"`：写死就失去了"跟着启动器走"这个唯一的用处。
+_paired = [n for n in _pe_lists if any(
+    isinstance(e, ast.Attribute) and e.attr == "executable"
+    and isinstance(e.value, ast.Name) and e.value.id == "sys" for e in n.elts)]
+check("⭐ mypy 命令恒带 `--python-executable sys.executable`（把「去哪找三方库」钉在启动器上）",
+      len(_paired) == 1,
+      "有字面量但没有绑 sys.executable" if _pe_lists else "没有这一项")
+# 光有 flag 还不够：`--python-executable` 一旦指向**版本不同的**解释器，量到的就是
+# 「3.10 的库 + 3.12 的语法」这第四个量。所以要有一条守卫**去读运行解释器自己的版本号**
+# 与 `python_target` 对撞（`--update` 路径也必须过）。
+# 只认「读了 sys.version_info」这个形状，不认某一种写法：`sys.version_info[0]`、
+# `sys.version_info.major`、`sys.version_info[:2]` 都算——判据要钉的是"读了版本"，
+# 不是"必须用我偏爱的那种读法"（钉写法会把等价改写判红）。
+
+
+def _reads_runtime_version(tree: ast.AST) -> bool:
+    def _is_version_info(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Attribute) and node.attr == "version_info"
+                and isinstance(node.value, ast.Name) and node.value.id == "sys")
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Subscript) and _is_version_info(n.value):
+            return True
+        if isinstance(n, ast.Attribute) and n.attr in ("major", "minor") \
+                and _is_version_info(n.value):
+            return True
+    return False
+
+
+check("⭐ 有「启动器解释器版本 == python_target」的守卫（否则量的是「旧库 + 新语法」）",
+      _reads_runtime_version(_tgt), "源码里没有读 sys.version_info 的地方")
+# 上面那条必须在 `--update` 路径上也跑得到：把错的读数烤进基线走的正是这条路。
+# ⚠️ 判这条要认**调用点**、不能搜函数名——第一版就是搜 `_launcher_guard(`，结果被
+# `def _launcher_guard(...)` 自己满足了（定义在 `main()` 之前 ⇒ 恒在 `if args.update:`
+# 之前 ⇒ 把调用整行删掉也全绿）。**是反控当场戳穿的**，不是读出来的。
+_upd_ifs = [n for n in ast.walk(_tgt)
+            if isinstance(n, ast.If) and isinstance(n.test, ast.Attribute)
+            and n.test.attr == "update"]
+_guard_calls = [n for n in ast.walk(_tgt)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "_launcher_guard" and hasattr(n, "lineno")]
+check("  `_launcher_guard` 的**调用**排在 `if args.update:` 之前（否则 `--update` 是后门）",
+      bool(_upd_ifs) and bool(_guard_calls)
+      and min(c.lineno for c in _guard_calls) < min(u.lineno for u in _upd_ifs),
+      f"调用 {[c.lineno for c in _guard_calls]} vs `if args.update:` "
+      f"{[u.lineno for u in _upd_ifs]}")
+
 _eval_code2 = "\n".join(ln for ln in EVAL_YML.read_text(encoding="utf-8").splitlines()
                         if not ln.lstrip().startswith("#"))
 check("CI 有一步**会执行**的 eval/type_gate.py（不是只在注释里提一句）",

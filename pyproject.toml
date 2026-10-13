@@ -62,13 +62,18 @@ dependencies = [
 #     实际在跑的那个上，`uv.lock` 才是"CI 装什么"的唯一事实源。
 #   · `mypy` —— **20261013 补**：`[tool.mypy]` 那段配置（见本文件末尾）在此之前**从不执行**
 #     （不在依赖、不在 lock、CI 没有这一步），而函数签名已注释约 78% ⇒ 写了从不校验。
-#     首次真跑：`212 errors in 21 files (checked 46)`（`agent/graph.py` 98、`tools/base.py` 28）。
+#     首次真跑：`220 errors in 21 files (checked 46)`（`agent/graph.py` 99、`tools/base.py` 28）。
 #     数量不大 ⇒ 走**棘轮**而不是一次清零：`eval/mypy_baseline.json` 记当前读数，
 #     `eval/type_gate.py` 只许它变小（照 `tests/test_complexity_budget.py` +
 #     `eval/complexity_baseline.json` 同款）。**版本必须与 baseline 同源**——换了 mypy
 #     版本，报出来的错误集会变，棘轮就不再是同一个量；升版 ⇒ 重新出 baseline（CI 会红着逼你）。
 #     ⚠️ 本机不进 dev 组的安装流程（见上一段：本机不许 `uv sync`）⇒ 本机跑它用隔离的
 #     `uvx mypy@2.4.0 …`（与这里同版），CI 里才由 `uv sync --frozen` 装。
+#     ⚠️⚠️ **本机跑还要求"用哪个解释器启动"**：mypy 靠 `--python-executable` 决定去谁的
+#     site-packages 里找 langgraph/openai/fastapi，不传就认自己所在的环境 ⇒ 隔离的 `uvx`
+#     那份**看不到三方库**、把 import 全退化成 Any，同一条命令会少报 8 个（212 vs 220）。
+#     `type_gate.py` 现在恒带这个参数并把值钉成启动器的解释器，所以本机**必须**
+#     用那个已装好依赖的解释器去启动脚本，再让它去跑隔离的 mypy（细节见该文件 docstring）。
 #   · `coverage[toml]` —— **20261013 补**：`tests/run_all.py --coverage` 用它出那份
 #     **非门禁**的覆盖率报告（逐套件 `coverage run` + 结尾 `combine`）。为什么**不设阈值**：
 #     只有形状判据配当门禁，百分比会把"该测的没测"与"测了但那一支没走到"混成一个数，拿它
