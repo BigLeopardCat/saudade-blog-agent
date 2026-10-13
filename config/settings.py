@@ -100,6 +100,15 @@ class Settings(BaseSettings):
     # 选臂那一步在 `server._build_arm`（不 import `eval/golden_arm.py`——生产不该依赖
     # 评测侧的壳）。拨它要重启服务才生效（`sudo systemctl restart saudade-agent`）。
     agent_arm: str = "react"
+    # 循环里**一次决策**的输出额度（`REACT_DECISION_MAX_TOKENS`，20261013 批 A）。
+    # 为什么必须与 `planner_native_max_tokens` 分开：那个 8192 是"**一次吐完整计划**"
+    # 那个形态的档（模型把整串 `SKILL=`/`PARAMS=` 连同正文一口气写完），而 react 臂里
+    # **那个形态已经不存在**——一次决策要么是一个工具调用、要么是一句收尾。
+    # 不分开的账单（trace `20261013T095258_1_rde4e103`）：一次决策吐了 **30,540 字符**
+    # 还在写、`finish=length` 被截断，`native_fallback ... disposition=truncated_wrapup`
+    # 之后又重跑一遍，两次合起来 **70 秒**（整轮 78 秒）。
+    # ⚠️ **不许改 `planner_native_max_tokens` 去凑**：graph 臂还要逐字用它。
+    react_decision_max_tokens: int = 1024
     # ⚠️ 20261007 删掉两个**从未被读到**的字段：`agent_max_iterations` 与
     # `agent_early_stopping_method`（原 `AGENT_MAX_ITERATIONS` / `AGENT_EARLY_STOPPING`）。
     # 它们是 LangGraph 旧 `AgentExecutor` 时代的旋钮；20260903 换成手写图 + planner 全权后

@@ -81,6 +81,15 @@ def test_settings_defaults_are_the_determinism_arm():
           S.planner_temperature == 0.0, str(S.planner_temperature))
     check("llm_seed 默认 0 = 不设（未经验证的采样通路不做默认）",
           S.llm_seed == 0, str(S.llm_seed))
+    # 20261013 批 A：react 臂的**一次决策**额度。这一格存在的全部理由就是"这条臂里
+    # 没有『一次吐完整计划』那个形态"——它一旦被调到 planner 那档的量级（1200/8192），
+    # 就等于把止住那次 30,540 字符截断的东西又还回去了。
+    check("react_decision_max_tokens 默认 1024（一次决策 = 一个工具调用或一句收尾）",
+          S.react_decision_max_tokens == 1024, str(S.react_decision_max_tokens))
+    # ⚠️ 这里**刻意不**加一条"它必须小于 planner 那一档"：那种判据读的是**这台机器
+    # 的 `.env`**（产线把 planner 那格写成了 8192，默认却是 1200），有人把 planner
+    # 调小就会红，而红的原因与代码形状一个字都没关系——本仓既定纪律是判据钉代码形状。
+    # "两格不许并回去"由 `tests/test_react_arm.py` ⑤b 的哨兵值判（读哪一格）。
 
 
 if __name__ == "__main__":

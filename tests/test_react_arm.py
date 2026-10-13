@@ -48,6 +48,10 @@ import agent.react_arm as R  # noqa: E402
 # 换掉的是**模块属性**、原函数就此从命名空间里消失。⑬ 要验的正是它里面那一行留痕，
 # 所以在这里存一份——**必须在任何一节跑之前**（模块级赋值按行序执行）。
 _REAL_SYSTEM_PROMPT = R._system_prompt
+# 同理先扣下**真的** `_llm`：①..⑤ 每一节都通过 `_run()` 把它换成脚本替身
+# （`R._llm = lambda: _Scripted(...)`，见 `_run` 与 ①b），⑤b 要验的正是真函数里
+# 读的是哪一格 settings——拿替身去验等于验自己。
+_REAL_LLM = R._llm
 from agent.principal import UNKNOWN, Principal  # noqa: E402
 from agent.react_line import RunLedger, SkillExecutor  # noqa: E402
 
@@ -415,6 +419,48 @@ try:
 except Exception as e:  # noqa: BLE001
     check("菜单占位体被调用时抛错", "占位体" in str(e))
 print("   技能菜单：user=%d 个" % len(_menu))
+
+# ── ⑤b 决策模型的额度与思考（20261013 批 A）─────────────────────────────
+# 病（trace `20261013T095258_1_rde4e103`）：一次决策吐满 **30,540 字符**还在写、
+# `finish=length` 被截断，兜底重跑一遍，两次合起来 **70 秒**（整轮 78 秒）。原因是
+# 这一条臂借用了 `planner_native_max_tokens`——那 8192（产线 `.env`）是"**一次吐完整
+# 计划**"那个形态的档，而在本臂里**那个形态已经不存在**：一次决策要么是一个工具调用、
+# 要么是一句收尾。思考同理（`enable_thinking` 跟着 `planner_native_thinking=True`）。
+#
+# ⚠️ 本节的哨兵值**刻意与 settings 的任何真值都不撞车**：判据必须钉"读的是哪一格"，
+# 不是"读出来的数是多少"。写成 `max_tokens == 1024` 的话，`.env` 里那位主人改一格
+# 就会红，而红的原因与代码一个字都没关系（本仓既定纪律：判据钉代码形状，不钉这台
+# 机器恰好装了什么）。
+print("\n⑤b 决策模型的额度与思考：本臂自己的档，不借 planner 那两格")
+from config.settings import settings as _cfg  # noqa: E402
+
+_og = (_cfg.react_decision_max_tokens, _cfg.planner_native_max_tokens,
+       _cfg.planner_native_timeout, _cfg.planner_native_thinking)
+_cfg.react_decision_max_tokens, _cfg.planner_native_max_tokens = 4242, 9876
+_cfg.planner_native_timeout, _cfg.planner_native_thinking = 7.5, True
+_llm_kw: dict = {}
+_orig_get_llm = R.get_llm
+# 不转发给真的 `get_llm`：那会现构一个 LLM 客户端（本套件是**秒级离线**定位，
+# 而"构出来的是什么"与本节判的接线无关）。
+R.get_llm = lambda **kw: (_llm_kw.update(kw), object())[1]
+try:
+    _REAL_LLM()
+finally:
+    R.get_llm = _orig_get_llm
+    (_cfg.react_decision_max_tokens, _cfg.planner_native_max_tokens,
+     _cfg.planner_native_timeout, _cfg.planner_native_thinking) = _og
+check("额度取**本臂那一格** `react_decision_max_tokens`，不是 `planner_native_max_tokens`"
+      "（哨兵 4242 vs 9876：读错那一格这里就红）",
+      _llm_kw.get("max_tokens") == 4242, repr(_llm_kw))
+check("**就算全局开着 `planner_native_thinking=True`，本臂的决策也必须关思考**"
+      "（长上下文下思考链爆炸 = 30,540 字符那次；同 `_narrator_llm` 那条理由）",
+      _llm_kw.get("enable_thinking") is False, repr(_llm_kw.get("enable_thinking")))
+check("超时仍是**直读 settings**（这一格没有第二份来源，也不该有）",
+      _llm_kw.get("timeout") == 7.5, repr(_llm_kw.get("timeout")))
+check("⚠️ 额度那一格**改了不会漏进 graph 臂**：`graph.planner_llm` 依旧读"
+      "`planner_native_max_tokens`（基线不许自己动）",
+      "max_tokens=settings.planner_native_max_tokens" in (
+          (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")))
 
 # ── ⑥ 同意闸 + 确认卡（P3） ───────────────────────────────────────────
 # 病：同意闸那两条判据（`requires_consent` / `consent_granted`）本线此前**一处都没接**

@@ -34,6 +34,19 @@
   哪一条"。空串 = lifespan 还没跑完（那时 `agent_ready` 也是 false，两格自洽）。
   `scripts/healthcheck.sh` 按 `"agent_ready":true` 子串判活，多这一格不影响它。
 
+- **react 臂的决策模型换了参数档：额度收到 1024、思考关掉（行为，20261013 批 A）**：
+  新旋钮 `REACT_DECISION_MAX_TOKENS`（默认 1024）替代沿用 `planner_native_max_tokens`
+  （产线 `.env` 里是 **8192**），决策那一次调用硬编码 `enable_thinking=False`。理由是
+  **形态不同**：8192 那一档是"一次吐完整计划"的档，而这条臂一次决策要么是一个工具调用、
+  要么是一句收尾——**那个形态不存在**。不分开的现场（trace `20261013T095258_1_rde4e103`）：
+  一次决策吐满 **30,540 字符**还在写、`finish_reason=length` 被截断，
+  `native_fallback … disposition=truncated_wrapup` 之后兜底又重跑一遍，两次合起来
+  **70 秒**（整轮 78 秒）。⚠️ **`PLANNER_NATIVE_MAX_TOKENS` 一个字没动**——graph 臂
+  （归档臂）还要逐字用它，基线不许自己动；两格的"不许并回去"由 `tests/test_react_arm.py`
+  ⑤b 的哨兵值判（判的是读**哪一格**，不是读数是多少）。⚠️ 这一改**破了"两臂同解码"**
+  那条不变式，是有意的：两臂读数本来就不可互比，此后的对照一律在**同一条臂的改前改后**
+  之间做。
+
 - **解释器目标上 3.12，并把它锁成一处事实源（判据，20261013）**：`requires-python` /
   `.python-version` / `[tool.ruff].target-version` / `[tool.mypy].python_version` / CI 的
   `python-version` / 棘轮基线的 `python_target` —— **六处写法，此前一处都没有机器看着**，
