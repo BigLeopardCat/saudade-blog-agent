@@ -16,6 +16,19 @@
 
 ## 20261013
 
+- **函数菜单里补上「这件工具是干什么的」（行为，20261013 批 C 切片 1）**：`content_query`
+  的两格参数（`tools` 无参点名、`calls` 带参调用清单）此前只有**裸名字**——枚举里
+  26 + 31 个工具名，一句说明都没有。这件工具是干什么的、该点哪一个，只住在 planner
+  文本菜单里 ⇒ 批次 B 把菜单从本臂摘掉后，**检索族成片红**（`multi_step_search_then_read_top`
+  两臂交替各 4 遍：4/4 → 0/4；14 条检索/内容用例再量：7/14、8/14）。现在两格的描述里
+  每个名字都带一句说明，来源与文本菜单**是同一份表**（`agent/skills.py` 的
+  `TOOL_MENU_LINES` ＋ `tool_purpose()`，从 `graph.py` 搬来、那里留同名别名）
+  ⇒ **planner 文本菜单逐字节不变**（admin 4,504 / user 2,840 字符实测），函数菜单里
+  **只有 `content_query` 那两格变了**（枚举没动、别的函数没动）。改动后实测
+  **13/14、12/14**，`multi_step_search_then_read_top` 回到 2/2 绿。`rag_project_files`
+  两臂都红 = 慢性，与本批无关。新套件 `tests/test_surface_composition.py` 钉住
+  「两条通道同源」（`is` 同一张表 + 枚举里不许有裸名字，都配反控）。
+
 - **react 臂的系统提示词里不再有规划契约（行为，20261013 批 B）**：决策模型这一侧
   原来逐字拼的是 `graph._render_planner_prompt(...)`——技能表、判定规则 1..7、输出契约
   （`SKILL=` / `PARAMS=` / `TODO:` 那些行），admin 档占整份提示词 **70%**；现在整块摘掉，
