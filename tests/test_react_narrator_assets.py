@@ -18,7 +18,8 @@
      的 `no_tool_calls` 跟着红）。
 
 判据分四段：① 拆分逐字节（生产提示词一个字节都没变）② 纪律块本体完好
-③ 接线（三件真的进了臂的 system prompt，且立场改写在纪律**之前**）④ 多模态透传的边界。
+③ 接线（贴纸名字表 / 人设 / 循环机制真的进了臂的 system prompt，且 **20261013 起
+规划契约整块不在了**，见 ③b）④ 多模态透传的边界。
 
 **这一节不测智能**——"接上之后 `own_*` 是不是真绿了"归 golden A/B（多遍读计数）。
 """
@@ -99,33 +100,64 @@ check("「读到了确实是空」才准说没有（`own_*` 两条负断言的�
 check("纪律里仍有不许编造的底线（拆段不是把纪律切成只留 20 条）",
       "不得编造" in _d or "不许编造" in _d)
 
-# ── ③ 接线：三件真的进了臂的 system prompt ────────────────────────────
+# ── ③ 接线：留下的几件真的进了臂的 system prompt ───────────────────────
 print("\n③ 接线：能力在常量里 ≠ 接上了（`test_source_attribution` ②的同一条道理）")
 R._pending_ledger_frame = lambda *a, **k: ("", {})  # 离线：不读台账
 _sp = R._system_prompt([HumanMessage(content="我有哪些未读通知？")], "admin", UNKNOWN, {}, "")
-check("**叙述纪律整段进了臂的系统提示**（不是只在 graph 里躺着）", G.NARRATOR_DISCIPLINE in _sp)
 check("**贴纸名字表进了臂的系统提示**（不接 ⇒ `sticker_*` 结构上产不出）",
       R.STICKER_GUIDE in _sp and "害羞" in _sp and "每轮最多一个" in _sp)
 check("`R.STICKER_GUIDE is graph 用的那一份`（同一个对象，不是抄的第二份）",
       R.STICKER_GUIDE is G.STICKER_GUIDE)
-check("立场改写也在（纪律 1「你没有工具」与本循环相反，不写就是自相矛盾的提示词）",
-      R._DISCIPLINE_STANCE in _sp)
-check("**立场改写排在纪律之前**（放在后面等于先让模型照 narrator 的立场读一遍）",
-      _sp.index(R._DISCIPLINE_STANCE) < _sp.index(G.NARRATOR_DISCIPLINE))
-check("立场改写点破了纪律 1 那句（「你没有工具」→「你有工具」）",
-      "你没有任何可以直接调用的工具" in R._DISCIPLINE_STANCE
-      and "自己调用" in R._DISCIPLINE_STANCE)
-check("  且写明**实质纪律一条都不放宽**（改的是指称，不是底线）",
-      "一条都不放宽" in R._DISCIPLINE_STANCE or "全部照旧生效" in R._DISCIPLINE_STANCE)
-check("前提为假的那几条纪律**逐条点名作废**（20261005 实测：泛泛一句「你有工具」"
-      "压不住紧跟着的 23 条正文，工具调用整体掉了三格）",
-      all(f"纪律 {n}" in R._DISCIPLINE_STANCE for n in (1, 3, 9, 18, 23)))
-check("  且**只作废前提为假的那半句**：3 与 18 的诚实那半照旧生效"
-      "（空结果 ≠ 没执行 / 只按回执说结果）",
-      R._DISCIPLINE_STANCE.count("照旧生效") >= 2
-      and "空结果" in R._DISCIPLINE_STANCE and "只按回执说结果" in R._DISCIPLINE_STANCE)
+check("人设与受众也在（`BLOG_ASSISTANT_PROMPT` / `audience_block(role)`）",
+      R.BLOG_ASSISTANT_PROMPT in _sp and R.audience_block("admin") in _sp)
+check("**循环机制进了系统提示**（怎么走、怎么结束——本循环里没有 planner 的规则行兜着）",
+      R._LOOP_MECHANICS in _sp)
+check("  且它写明收尾那条消息是**收束信号**、正文由系统组织"
+      "（P6 起正文归独立 narrator 重写；不写明就是提示词在骗模型）",
+      "收束信号" in R._LOOP_MECHANICS)
+check("  且它写明「别把活派回给主人」（`own_*` 那族的正面对手，20261005 那一族的继任者）",
+      "派回给主人" in R._LOOP_MECHANICS)
+check("  且它写明「读不到 ≠ 空」（那一族两条负断言的正面对手）",
+      "读不到 ≠ 空" in R._LOOP_MECHANICS)
+check("**固定那几块排在事实格之前**（前缀缓存：逐轮变的那一段必须在尾部，"
+      "否则 `cache_read` 会从三万多掉到几千）",
+      _sp.index(R.STICKER_GUIDE) < _sp.index(R._HEAD_PAGE_CTX))
 check("臂的提示词里 `.format` 的槽都填好了（拼的是渲染结果，不是模板）",
       "{persona}" not in _sp and "{sticker_guide}" not in _sp)
+
+# ── ③b 规划契约整块摘掉（20261013 批次 B 的判据本身）──────────────────
+# 上一版第一块逐字拼的是 `graph._render_planner_prompt(...)`：技能表 + 判定规则 1..7 +
+# 输出契约，实测占整份提示词的 70%。那一族是给「一次吐完整计划」的**解析器**写的
+# （`SKILL=`/`PARAMS=` 契约行、`TODO:` 行），本循环里模型直接调函数 ⇒ 一句都不需要它读。
+# 这一节判两个方向，**缺一个都不算数**：契约真的不在了 **且** 它确实还在别处活着
+# （否则"删干净了"与"这份文本早就没了"长得一样）。
+print("\n③b 规划契约不在决策循环里了，但它仍活在生产 narrator 资产里（两个方向都判）")
+_contract = G._PLANNER_OUTPUT_CONTRACT_NATIVE
+check("控：输出契约**确实带着 `SKILL=`/`PARAMS=` 这类指纹**"
+      "（断言它们不在别处之前，先证这几个探针真能认出契约）",
+      "SKILL=" in _contract and "PARAMS=" in _contract, f"{len(_contract)} 字")
+check("**输出契约整块不在臂的提示词里**", _contract not in _sp)
+check("  且两个契约指纹一个都没漏进来", "SKILL=" not in _sp and "PARAMS=" not in _sp)
+check("  且技能表的文本渲染也不在了（技能描述已经在函数 schema 里，这是第二份渲染器）",
+      "PARAMS.calls" not in _sp and "TODO:" not in _sp)
+check("控：叙述纪律**仍在**生产 narrator 资产里（只是不再进决策循环——"
+      "它本来就是给零工具节点写的）",
+      G.NARRATOR_DISCIPLINE in G._EXECUTOR_PROMPT)
+check("**叙述纪律不在臂的提示词里**（本循环的模型手上有工具，"
+      "纪律 1「你没有任何可以直接调用的工具」对它恒假）",
+      G.NARRATOR_DISCIPLINE not in _sp)
+check("  立场改写那段也不再需要（它存在的唯一理由是给那份纪律换指称）",
+      not hasattr(R, "_DISCIPLINE_STANCE") and not hasattr(R, "_CLOSING_RULES"))
+check("**提示词总量上锁**（改前 admin 档 35,762 字符；契约长回去 = 有人把它抄回来了）",
+      len(_sp) < 12_000, f"{len(_sp)} 字")
+
+# 台账那一格必须留：`planner.ledger_frame` 的留痕是三条 `require_ledger_*` 判据的
+# **唯一**证据，而台账本身得先真的摆进提示词（只记不留 = 证据与事实两回事）。
+R._pending_ledger_frame = lambda *a, **k: ("[待办台账] 留言审核 3 条", {"ids": [1, 2, 3]})
+_sp2 = R._system_prompt([HumanMessage(content="我有哪些未读通知？")], "admin", UNKNOWN, {}, "")
+check("台账帧摆进了提示词（它带着 `id`，是「主人说的是哪一条」的判据来源）",
+      _sp2.index(R._HEAD_LEDGER) < _sp2.index("[待办台账] 留言审核 3 条"))
+R._pending_ledger_frame = lambda *a, **k: ("", {})
 
 # ── ④ 多模态透传 ─────────────────────────────────────────────────────
 print("\n④ 多模态：文本口径不变，非文本部件原样带上")

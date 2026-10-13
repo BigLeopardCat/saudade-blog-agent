@@ -748,9 +748,10 @@ check("narrator 收到的是**生产 narrator 那一份资产**（纪律 1 原�
       "两处都在 ⇒ 接的是 `_EXECUTOR_PROMPT` 本身，不是另拼一份）",
       "你没有任何可以直接调用的工具" in _nsys and "[本轮工具执行记录]" in _nsys,
       f"{len(_nsys)} 字")
-check("**立场改写（`_DISCIPLINE_STANCE`）不在 narrator 提示词里**——那是决策循环的东西；"
-      "narrator 本就是零工具节点，纪律 1 对它成立",
-      "立场改写" not in _nsys)
+check("**决策循环那两件都不在 narrator 提示词里**——立场改写（20261013 批次 B 起连"
+      "决策模型那侧也摘了）与循环机制；narrator 是零工具节点，纪律 1 对它成立，"
+      "而「一轮挑一件工具」对它是一句无从执行的命令",
+      "立场改写" not in _nsys and R._LOOP_MECHANICS not in _nsys)
 check("narrator 的输入里**没有**决策模型那条草稿（生产 narrator 也看不到任何草稿；"
       "把草稿塞进去等于把 P6 又接回去）",
       bool(_seen) and all("草稿" not in str(m.content) for m in _seen[0][1:]))
