@@ -592,23 +592,38 @@ def build() -> ReactGoldenArm:
 
 
 def _llm() -> Any:
-    """决策用 LLM：**与生产 planner 同一组解码参数**。
+    """决策用 LLM：**超时直读 settings，额度与思考是这一条臂自己的档**。
 
-    `GOLDEN_ARM` 的两臂必须同解码，否则比的是解码参数而不是循环结构——20261004 那次
-    "17× 成本 / 33% 撞上限"的假读数就是这么来的（离线 A/B 头注记着：裸 `get_llm()` 是
-    thinking=True + temp 0.7 + 8192 预算）。生产 planner 的三个值走 settings
-    （`.env` 里 `PLANNER_NATIVE_THINKING=false`），这里照读同一组，不另写常数。
+    ⚠️ **温度那一格是手抄的 0.2，与生产的 `settings.planner_temperature`（0.0）不同。**
+    这不是本批引入的（`graph.planner_llm` 在 `graph.py:6918` 读 settings，本线从建立起就
+    写死 0.2），但**别把它当成"同组"**——0.2 正是生产 20261006 之前的那一档。**不动它**：
+    改一个字就是改行为，而"温度能治路由抖动"这个归因已被两臂交替的 A/B 证伪
+    （`docs/param-tuning-20261006.md`），没有理由把一次未验证的行为改动塞进一个宣称
+    "只改延迟"的批次。真要统一到 `settings.planner_temperature`，**单独一批 + A/B**。
+
+    20261013 批 A 把额度与思考从 `planner_native_*` 上摘下来，理由是**形态不同**：
+    `planner_native_max_tokens` 那个 8192（产线 `.env`）是"**一次吐完整计划**"的档，
+    而本臂里一次决策要么是一个工具调用、要么是一句收尾——**那个形态已经不存在**。
+    不摘的账单是 trace `20261013T095258_1_rde4e103`：一次决策吐满 **30,540 字符**、
+    `finish=length` 被截断、兜底重跑一遍，两次合起来 **70 秒**（整轮 78 秒）。
+    `enable_thinking=False` 同 `_narrator_llm` 那条理由（长上下文下思考链爆炸，
+    20260830 超时事故），本线的决策上下文只比 narrator 更长。
+
+    ⚠️ **这一改动了"两臂同解码"那条不变式**，是有意的：两臂的读数本来就**不可互比**
+    （收尾由谁写、判据判哪一段都不同），本批之后的对照一律在**同一条臂的改前改后**
+    之间做。**不许**为了"让两臂对齐"去改 `planner_native_max_tokens`——graph 臂还要
+    逐字用它，基线不能自己动。
     """
     return get_llm(temperature=0.2,
-                   max_tokens=settings.planner_native_max_tokens,
+                   max_tokens=settings.react_decision_max_tokens,
                    timeout=settings.planner_native_timeout,
-                   enable_thinking=settings.planner_native_thinking)
+                   enable_thinking=False)
 
 
 def _narrator_llm() -> Any:
     """narrator 用 LLM：**与生产 `model_node` 同一句**（`get_llm(enable_thinking=False)`）。
 
-    与 `_llm()`（决策那份，走 `planner_native_*` 三个 settings）**故意不共用**：生产就是
+    与 `_llm()`（决策那份，走自己的额度档 + 直读 `planner_native_timeout`）**故意不共用**：生产就是
     两个不同的参数档（决策要低温度短输出，叙述要能长篇）。共用一个工厂就等于把 P6 刚拆开的
     两件事又捏回一个模型——那时"闸门判的对象与生产同不同种"这个问题会重新变成"看运气"。
 
