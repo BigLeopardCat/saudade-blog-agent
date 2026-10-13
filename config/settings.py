@@ -84,15 +84,22 @@ class Settings(BaseSettings):
     llm_seed: int = 0
 
     # ── Agent ───────────────────────────────────────────────────────
-    # 跑哪一条臂（20261012 批 4，`AGENT_ARM`）。**默认 `graph` = 生产那条，逐字节不变**；
-    # 另一档 `react` 是本分支的试验线（`agent/react_arm.py`，自成一个 ReAct 循环 +
-    # 独立 narrator，见该模块头注）。
-    # **默认值必须是 graph**：这一档要是反过来，等于在没人点头的情况下把产线换掉，
-    # 而两臂的读数**不可互比**（P6 之后尤其，见 CHANGELOG 20261012）。
+    # 跑哪一条臂（20261012 批 4，`AGENT_ARM`）。**默认 `react`（20261013 批 0 翻的）**
+    # = 主线；`graph`（手写 LangGraph，planner 全权）退成**归档臂**，整块躺在
+    # `legacy/graph-planner` 分支上。
+    # **翻这一格是谁点的头**：20261013 主人拍板「现在的首先规划推到一个新分支，
+    # 主线用原生 ReAct 开始优化」。此前这一格被一条源码锁钉在 `graph` 上，理由原文是
+    # 「反过来等于没人点头就把产线换掉」——**那句理由今天仍然成立，只是点头发生了**，
+    # 所以那条锁改成钉「默认值 = react，且原文记着是谁在什么时候点的头」
+    # （见 `tests/test_react_arm.py` ⑫）。
+    # ⚠️ **翻这一格不等于翻产线**：`AGENT_ARM` 的真值源是 `.env`，产线那份显式写着
+    # `AGENT_ARM=graph` ⇒ 今天在跑的还是 graph，**换产线要改 `.env` + 重启，归主人**。
+    # 所以两条"翻臂"是两件事：本格翻的是**新环境的默认**，`.env` 翻的是**这一台在跑的**；
+    # 后者要等验收线（金标采样下界 ≥ 0.9000 + 多任务场景全绿）真绿了再动。
     # 真值源与 `AGENT_REQUIRE_ASSERTION` 同族 = `.env`；**这里只声明**，
     # 选臂那一步在 `server._build_arm`（不 import `eval/golden_arm.py`——生产不该依赖
     # 评测侧的壳）。拨它要重启服务才生效（`sudo systemctl restart saudade-agent`）。
-    agent_arm: str = "graph"
+    agent_arm: str = "react"
     # ⚠️ 20261007 删掉两个**从未被读到**的字段：`agent_max_iterations` 与
     # `agent_early_stopping_method`（原 `AGENT_MAX_ITERATIONS` / `AGENT_EARLY_STOPPING`）。
     # 它们是 LangGraph 旧 `AgentExecutor` 时代的旋钮；20260903 换成手写图 + planner 全权后

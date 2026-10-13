@@ -850,8 +850,16 @@ check("**台账与内层 agent 都是 `stream()` 的局部量**（提成常驻�
 print("\n⑫ 选臂：默认 graph、认 react、不认识的名字不许回退")
 _srv_src = (ROOT / "server.py").read_text(encoding="utf-8")
 _set_src = (ROOT / "config" / "settings.py").read_text(encoding="utf-8")
-check("**默认值必须是 `graph`**（反过来等于没人点头就把产线换掉）",
-      'agent_arm: str = "graph"' in _set_src)
+check("**默认值 = `react`**（20261013 批 0 翻的：主线用原生 ReAct，graph 退成归档臂）",
+      'agent_arm: str = "react"' in _set_src)
+# 这条锁 20261013 变了口径，**不是被删掉**：原来它钉「默认必须 graph」，理由原文是
+# 「反过来等于没人点头就把产线换掉」——那句理由今天仍然成立，只是**点头发生了**
+# （主人拍板「首先规划推到新分支，主线用原生 ReAct」）。所以它现在钉两件事：
+# ① 默认值确实是 react；② **谁在什么时候点的头必须在源码里读得到**（不靠提交信息）。
+# 少掉 ② 的话，下一个人看到一个翻过来的默认值，会以为它一直是这样。
+check("翻默认臂的那次**授权与日期写在源码里**（不是只活在提交信息里）",
+      "20261013" in _set_src and "主人拍板" in _set_src
+      and "AGENT_ARM=graph" in _set_src)
 check("`graph` 那一支就是原来那一行 `create_agent()`（逐字节：本批没给它加任何参数）",
       "return create_agent(), arm" in _srv_src
       and _srv_src.count("_agent, _arm = _build_arm()") == 1)

@@ -16,6 +16,24 @@
 
 ## 20261013
 
+- **`AGENT_ARM` 默认值翻到 `react`，主线换成原生 ReAct（行为，20261013）**：
+  `config/settings.py` 的 `agent_arm` 默认 `graph` → `react`，手写 LangGraph 那条退成
+  **归档臂**、整块躺在 `legacy/graph-planner` 分支上（打在 `096bf58`，零成本回退）。
+  ⚠️ **翻这一格不等于翻产线**：`AGENT_ARM` 的真值源是 `.env`，产线那份**显式**写着
+  `AGENT_ARM=graph` ⇒ 今天在跑的仍是 graph；换产线要改 `.env` 那一行 + 重启，而它要等
+  验收线（金标采样下界 ≥ 0.9000 + 多任务场景全绿）真绿了再动。两臂的读数**不可互比**，
+  别拿这一格当"换个更快的"。原来那条源码锁写着「默认必须是 graph，反过来等于没人点头
+  就把产线换掉」——**那句理由今天仍然成立，只是点头发生了**，所以锁改成钉「默认 = react、
+  且授权人与日期写在源码里」（`tests/test_react_arm.py` ⑫）。
+
+- **`/health` 的 `dials` 多一格 `agent_arm`（跨语言契约，20261013）**：回的是**本进程
+  实际挂上的那条臂**（`server._build_arm()` 的返回值），不是重新解析一遍 `AGENT_ARM`
+  ——同这一块的立项理由，要暴露的是"这个进程的内存取值"（文件里写的与进程里加载的可能
+  不是同一份）。它是这一块里**唯一能证「没跑」的格**：其余几格都是"某条路开着/有索引"，
+  而**一条不在跑的臂不留下任何 trace 事件**，事后从日志与 trace 里都推不出"当时跑的是
+  哪一条"。空串 = lifespan 还没跑完（那时 `agent_ready` 也是 false，两格自洽）。
+  `scripts/healthcheck.sh` 按 `"agent_ready":true` 子串判活，多这一格不影响它。
+
 - **解释器目标上 3.12，并把它锁成一处事实源（判据，20261013）**：`requires-python` /
   `.python-version` / `[tool.ruff].target-version` / `[tool.mypy].python_version` / CI 的
   `python-version` / 棘轮基线的 `python_target` —— **六处写法，此前一处都没有机器看着**，
