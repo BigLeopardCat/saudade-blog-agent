@@ -733,13 +733,16 @@ _saved_tool = g._TOOL_MAP.get("freeze_account")
 try:
     # 前提：先证明"弹卡"不是**因为那句话本身不被放行**才好断言——
     # `write.console` 那把尺子对「…，我说的」这种骨架是真会放行的（下面这句对
-    # `delete_tag` 就是 True），同一句话换到 freeze_account 上被拦，唯一的差别
+    # `set_article_status` 就是 True），同一句话换到 freeze_account 上被拦，唯一的差别
     # 只能是 `_ALWAYS_CONFIRM_TOOLS` 那道早退。不钉这一条，用一个agreeing 尺子本来
     # 就不认的说法去测，"每次都弹"会因为**另一个原因**成立——测的是空气。
+    # 尺子为什么是它：20261015 起判据**按工具判**（每个工具声明自己认的动作词），
+    # `set_article_status` 认「设为…」而 `delete_tag` 只认「去掉/移除…」——
+    # 再拿 delete_tag 当尺子，量到的就是"尺子不认"而不是"那道早退"。
     _GRANTABLE = "把文章 123 设为私密，我说的"
     check("（前提）这句话在 write.console 那把尺子下**本来就该放行**"
-          "（对标签族为 True）——同一句换到冻结上必须是 False",
-          authz.consent_granted(_adm, "delete_tag", _GRANTABLE) is True
+          "（对它自己那个工具 `set_article_status` 为 True）——同一句换到冻结上必须是 False",
+          authz.consent_granted(_adm, "set_article_status", _GRANTABLE) is True
           and authz.consent_granted(_adm, "freeze_account", _GRANTABLE) is False,
           _GRANTABLE)
     g._TOOL_MAP["freeze_account"] = _FakeTool(

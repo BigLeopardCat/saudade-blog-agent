@@ -653,11 +653,24 @@ SPEC = ('create_dashboard_todo({"text": "给猫买罐头", "date": "' + TOMORROW
 # `_console_command` 是同意闸自己那把尺子（句首动词 + 明确目标 + 「确认…」骨架），
 # 而「新建待办，叫X」正好落在它的目标形式（`叫X`）与动词表（新建）里。不钉这一条，
 # 用一个它本来就判不成的说法去测，"弹卡"会因为**另一个原因**成立——测的是空气。
+#
+# 20261015 批 5 起判据**按工具名判**（每件后台写工具声明自己认哪些动作词），而
+# `create_dashboard_todo` 在 `_ALWAYS_CONFIRM_TOOLS` 里、按设计**没有声明**（给一件
+# 走不到快道的工具声明动作词 = 声明一条不存在的路径）⇒ 这句对它恒 False。所以这条前提
+# 改成用**一件声明了「新建」的后台写工具**来量"这句算不算命令形状"——量的仍是同一把尺子
+# 同一个解析器（句首动词 + 目标形式），只是换一个"认这个词"的工具来问；下面那条
+# 另一半钉住"这件工具弹卡的理由是**一律弹窗**，不是判据判不出来"。
 _CMD_MSG = "新建待办，叫明天交房租"
+_CMD_SHAPE_TOOL = "create_tag"          # 声明了「新建」、且不在「一律弹窗」族 ⇒ 快道真的通
 _saved = g._TOOL_MAP.get("create_dashboard_todo")
 try:
-    check("（前提）这句在同意闸自己的尺子下就是一条命令",
-          authz._console_command(_CMD_MSG, "create_dashboard_todo") is True, _CMD_MSG)
+    check("（前提）这句在同意闸自己的尺子下就是一条命令（换一件认「新建」的工具量它）",
+          authz._console_command(_CMD_MSG, _CMD_SHAPE_TOOL) is True, _CMD_MSG)
+    check("（前提·另一半）加待办这件工具**没有**快道声明 ⇒ 它恒走弹卡",
+          "create_dashboard_todo" not in authz._CONSOLE_TOOL_ACTIONS
+          and authz._console_command(_CMD_MSG, "create_dashboard_todo") is False
+          and not authz.consent_granted(Principal(uid=1, role=ROLE_ADMIN),
+                                        "create_dashboard_todo", _CMD_MSG))
     g._TOOL_MAP["create_dashboard_todo"] = _FakeTool(
         base.ok("已在后台首页的待办里加了一条「给猫买罐头」（排期 9月27日）",
                 meta={"op": "dashboard_todo_add", "text": "给猫买罐头",

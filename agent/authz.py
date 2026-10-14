@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from agent.principal import (KNOWN_ROLES, ROLE_ADMIN,
                             ROLE_SUPERADMIN, ROLE_USER, ROLE_ZAKO, Principal)
@@ -443,13 +444,13 @@ _CONSENT_PATTERNS: dict[str, object] = {
 }
 
 
-# ── write.console 的「命令式判据」（20260921）─────────────────────────
+# ── write.console 的「命令式判据」（20260921；20261015 批 5 改按工具名判）────
 # **它判的是"本轮有没有明确命令"，不是"第二次确认"**（用户拍板：同轮命令即确认
 # ——管理员说「把《架构文档》设为私密」本身就是命令，再要一句"确认"是把确认闸
 # 做成复读机）。三个小判据按 AND 组合，每一条都能单独写正反用例：
 #
 #   ① 有明确目标（id / 《书名号》/ 指代词 / 标签名）
-#   ② 有后台写动作词
+#   ② 有**这个工具**的动作词（下方 `_CONSOLE_TOOL_ACTIONS` 的声明）
 #   ③ 是命令句：有命令骨架（把/将/给，或动词起首），且**不是**疑问/假设/反问
 #
 # 提问与假设是这里最要命的误判来源：「把文章 12 设为私密会有什么影响？」若被判成
@@ -465,31 +466,18 @@ _CONSOLE_QUESTION_RE = re.compile(
     r"对吧|是吧|对吗|不是吗|怎么办|咋办|什么后果|风险")
 _CONSOLE_HYPOTHESIS_RE = re.compile(
     r"^\s*(?:如果|假如|假设|要是|若是|万一|倘若|我想问|我想知道|想问|请问|问一下)")
-# 命令骨架：句首的「把/将/给」，或句首的动词，或「请/帮我…」起首。
+# 命令骨架：句首的「把/将/给」，或「请/帮我…」起首——③「**句首动词**」那一支
+# 20261015 批 5 从内联词表改成读声明（`_console_lead_order`，词表见
+# `_CONSOLE_TOOL_ACTIONS` 的 `lead` 字段）。
 _CONSOLE_ORDER_RE = re.compile(
     r"(?:^|[。！!；;\n，,])\s*(?:请|帮我|帮忙|麻烦|记得|快去)?\s*(?:把|将|给)"
     r"|^\s*(?:请|帮我|帮忙|麻烦|记得)\s*\S"
-    r"|^\s*(?:新建|创建|建立|添加|发布|置顶|取消置顶|取消顶置|隐藏|公开|私密|下架)"
     # 「取消…置顶」把动词拆开了（宾语插在中间）："取消文章 12 的置顶"是**最常见的
-    # 撤顶说法**，上面第三支的"取消置顶"连写认不到。只放 置顶/顶置 两个宾语——
+    # 撤顶说法**，句首动词那一支的"取消置顶"连写认不到。只放 置顶/顶置 两个宾语——
     # 「取消…标签」那类不放：`功能/排序` 之类的抽象宾语会与闲聊撞车，而"取消标签"
     # 另有"把文章 12 的标签去掉/去掉标签"等**动词连写**的说法可走（fail-closed 的
     # 方向是多问一句，不是多写一次生产数据）。
     r"|^\s*(?:取消|解除)[^\n。！？!?；;，,]{0,12}?(?:置顶|顶置)")
-# 「确认…」命令骨架（20260921）：**agent 自己建议、用户照抄**的那种短回声
-# （"确认创建标签 X"）。生产实测里这句被判 False ⇒ 同意闸不放行 ⇒ 死路一条
-# （详见 20260921 事故：用户照着建议打了一遍，系统还说不算命令）。
-#
-# 为什么单独成条正则而不是并进上面那张表：这条**只认句首**（回声必然是整句），
-# 且要配下面的疑问尾排除——两条判据的组合语义（"像回声" ∧ "不是在打听"）
-# 用一条正则写不出来，分开写能各自测。
-_CONSOLE_CONFIRM_ORDER_RE = re.compile(
-    # ① 把字结构：「确认把文章 12 设为私密」——动词在宾语之后，中间要允许宾语
-    r"^\s*确认(?:一下)?\s*(?:把|将|给)[^\n。！？!?；;，,]{1,20}?"
-    r"(?:设为|设成|改成|置顶|取消置顶|隐藏|发布|下架|打上|加上|去掉|移除)"
-    # ② 动词直接跟在确认之后：「确认创建标签 X」「确认置顶文章 12」
-    r"|^\s*确认(?:一下)?\s*"
-    r"(?:创建|新建|建立|新增|建|加|打上|加上|设为|设成|改成|置顶|取消置顶|隐藏|发布|下架)")
 # 疑问尾：出现即说明这是**在打听**（多久/多少钱/怎么弄），不是在下命令。
 # 收窄的理由和上面一样——一个误判的代价是一次真写，而多问一次的代价只是弹个窗。
 _CONSOLE_INQUIRY_TAIL_RE = re.compile(
@@ -497,36 +485,171 @@ _CONSOLE_INQUIRY_TAIL_RE = re.compile(
     r"需要|要不要|吗|呢")
 
 
-# 动作词（后台写域；"公开/私密/草稿/发布"这些裸词靠"命令骨架 + 目标"两项兜住，
-# 单看它们会与陈述句撞车）。
+# ── 每个后台写工具的「动作词」声明（20261015 批 5）──────────────────────
+# 判据只回答"主人这句话里有没有**这个工具**会做的那个动作"。
 #
-# 20260922 补「改名 / 改名叫」：活体探针腿⑭ 实测，「把分类「X」改名叫「Y」」这句
-# 教科书式命令**命不中快道**（表里只有「改名为」「改成」），于是落进弹窗那条路——
-# 弹窗本身是更安全的 fail-closed 取向、不是缺陷，但用户明明下的是命令，却被多问
-# 一次；而词表的语义是"哪些说法算明确的命令"，这里缺的正是最常用的那个说法。
-# （"改名"是"改名叫/改名为"的子串，单列只为可读性；`_console_target` 靠同一张表
-# 判"这个词是不是标签名"，多几项只会让它更保守。）
-_CONSOLE_VERBS = (
-    "设为私密", "设为公开", "设为草稿", "设成私密", "设成公开", "设成草稿",
-    "改成私密", "改成公开", "改成草稿", "转成私密", "转成公开", "转为私密", "转为公开",
-    "置顶", "取消置顶", "取消顶置", "顶置", "隐藏", "公开", "私密", "草稿",
-    "发布", "下架", "撤下",
-    "新建", "创建", "建立", "新增", "建一个", "建个", "添加", "打上", "加上", "打个",
-    "改成", "改为", "换成", "改名为", "改名", "改名叫", "取消标签", "去掉标签", "移除标签", "删掉标签",
-    "去掉", "移除",
-)
+# 上一版是一张 46 项的**共享**词表（`_CONSOLE_VERBS`，已删），三个后果：
+#   ① 手抄维护，且 13 项是 `设为/设成/改成/转成/转为 × 私密/公开/草稿` 这种组合排列
+#      ——判据用 `in` 子串匹配，裸词已在表里 ⇒ 组合项一个都不增加命中面；
+#   ② 判据**工具无关**：任何后台写工具撞上表里任何一个词就判"这是命令"，于是
+#      「把分类「随笔」改名叫「碎笔」」对 `delete_category` 也判成立（**误靶写**——
+#      而 scope 级同意是全族共享的一张，兜不住工具错配）；
+#   ③ 新加一个后台写工具**自动继承**整张表，不需要任何人想过它该认哪些词。
+#
+# 现在改成与 `_own_command` 同一体例：**逐工具声明**，判据按工具名取表。三条性质随之
+# 成立——误靶关掉（目标写对了工具、又说了该工具的动作词，命令才成立）；完备性可锁
+# （键必须**恰好**是"够得着快道的工具"，见 `console_fastpath_tools()`，新工具不声明就
+# 红）；表能变小（组合项与子串冗余项全删，46 → 33 个字符串）。
+#
+# 三个字段对应三处**位置**，不是三种同义词：
+#   · `body` = 句中动作词（`in` 子串）——"这句话里提到了这个动作"；
+#   · `lead` = 能当**句首**动词的（`startswith`）——命令骨架第三支。**刻意**不进
+#     `lead` 的那些词（`新增/建一个/建个/草稿/顶置/撤下`）在旧版同样是"句中算、句首
+#     不算"（旧骨架支只有 8 个词）⇒ 这一支逐词照旧，不趁改造放宽；
+#   · `echo` = 能跟在「确认…」后面的（`_console_confirm_order`）。**与 lead 不同源**：
+#     echo 的选词标准是"主人照抄 agent 建议时会原样打出来"（「确认创建标签 X」），
+#     lead 的标准是"能直接起首当祈使动词"——`设为/设成` 只满足前者，`建/加`（单字）
+#     只满足前者，而 `新增/建一个` 两者都不满足。
+#
+# **留空也是声明**：`delete_*` 两件的 `lead`/`echo` 是空元组——删除族的连写说法
+# （「把标签 X 删掉」）刻意**不判命令**、走弹窗，这是既有取向
+# （`tests/test_admin_write.py` 的 `_unreachable` 逐条锁着它），本批只把"刻意"从
+# 注释里搬进表里（原先它体现为"词表恰好没长这几个词"，谁来加一个词都看不出来）。
+class _ConsoleWords(NamedTuple):
+    """一个后台写工具认哪些说法算"它自己的动作"（字段语义见上方那段头注）。"""
+
+    body: tuple[str, ...]
+    lead: tuple[str, ...]
+    echo: tuple[str, ...]
+
+
+# 共享词族：同一件事在多个工具上说法相同，就在这里写一次、被各自引用（改一处即全改）。
+# 每一项都取"动作本体"，不带组合（组合项是子串冗余，见头注①）。
+#
+# ⚠️ **组内顺序有意义**：下标切出来的那几支（下面的 `*_LEAD` / `*_ECHO`）是本族里
+# "还能用在别的位置"的子集，靠切片表达而不是再抄一遍字面量——`eval/wordlist_gate.py`
+# 的穷举量数的是**字面量出现次数**，同一个词写两处就算两份（旧版词表里 13 项组合词
+# 正是这么长出来的）。改这几组的顺序时，跟着看一眼下方切片的注释。
+_CONSOLE_STATUS_WORDS = ("私密", "公开", "隐藏", "发布", "下架", "草稿", "撤下")
+_CONSOLE_TOP_WORDS = ("置顶", "取消置顶", "取消顶置", "顶置")
+# 「改成/改为/换成」与「改名」分开用：前者是**重新指派**的说法（「把文章 12 的标签改成
+# Python 和 架构」= 清空重挂，`set_article_tags` 也认），后者只针对**实体本身的名字**
+# （`update_tag`/`update_category`）⇒ 前三个切出来给两个消费方，第四个只在改名族里。
+_CONSOLE_RENAME_WORDS = ("改成", "改为", "换成", "改名")
+_CONSOLE_CREATE_WORDS = ("新建", "创建", "建立", "新增", "建一个", "建个", "添加")
+_CONSOLE_TAG_MARK_WORDS = ("打上", "加上", "打个")
+_CONSOLE_DROP_WORDS = ("去掉", "移除")
+_CONSOLE_TAG_DROP_WORDS = ("取消标签", "删掉标签")
+
+# 句首动词（命令骨架第三支）：旧版那张内联表逐词照搬——
+#   状态 = 私密/公开/隐藏/发布/下架（**不含** 草稿/撤下）；置顶族 = 置顶/取消置顶/取消顶置
+#   （**不含** 顶置）；创建族 = 新建/创建/建立/添加（**不含** 新增/建一个/建个）
+_CONSOLE_STATUS_LEAD = _CONSOLE_STATUS_WORDS[:5]
+_CONSOLE_TOP_LEAD = _CONSOLE_TOP_WORDS[:3]
+_CONSOLE_CREATE_LEAD = _CONSOLE_CREATE_WORDS[:3] + _CONSOLE_CREATE_WORDS[6:7]
+
+# 重新指派（不改实体名）：`set_article_tags` 用它（旧版整张共享词表里这三个词对它同样
+# 成立 —— 「把文章 12 的标签改成 Python」是它的教科书说法）。
+_CONSOLE_SET_WORDS = _CONSOLE_RENAME_WORDS[:3]
+
+# 「确认…」回声（旧版第二条内联表逐词照搬）：状态 = 设为/设成/改成/置顶/取消置顶/
+# 隐藏/发布/下架；标签族 = 打上/加上/去掉/移除；创建族 = 创建/新建/建立/新增/建/加。
+# 只有「设为/设成」与「建/加」是本族里没有的新词——它们在旧版也只出现在回声那一支。
+_CONSOLE_STATUS_ECHO = (("设为", "设成") + _CONSOLE_RENAME_WORDS[:1]
+                        + _CONSOLE_TOP_WORDS[:2] + _CONSOLE_STATUS_WORDS[2:5])
+_CONSOLE_CREATE_ECHO = _CONSOLE_CREATE_WORDS[:4] + ("建", "加")
+_CONSOLE_RENAME_ECHO = _CONSOLE_RENAME_WORDS[:1]
+_CONSOLE_TAG_MARK_ECHO = _CONSOLE_TAG_MARK_WORDS[:2]
+
+# 键集 = `console_fastpath_tools()`，由 `tests/test_authz.py` 双向锁（漏一个红、
+# 多一个红）。**13 件一律弹窗的工具不在表里**：它们走不到"同轮命令即确认"这条快道
+# （`consent_granted` 对它们恒 False），给它们声明动作词等于声明一条不存在的路径。
+_CONSOLE_TOOL_ACTIONS: dict[str, _ConsoleWords] = {
+    # 改文章的发布状态与置顶（`set_article_status`，唯一带 is_top 的工具）
+    "set_article_status": _ConsoleWords(
+        body=_CONSOLE_STATUS_WORDS + _CONSOLE_TOP_WORDS,
+        lead=_CONSOLE_STATUS_LEAD + _CONSOLE_TOP_LEAD,
+        echo=_CONSOLE_STATUS_ECHO,
+    ),
+    # 给文章打/清标签（`set_article_tags`）：打上/加上/打个、去掉/移除、以及
+    # 「把…的标签**改成** X」（重新指派那一族，见 `_CONSOLE_SET_WORDS`）——不含「改名」
+    # （那是改标签实体本身的名字，`update_tag` 的事）。
+    "set_article_tags": _ConsoleWords(
+        body=_CONSOLE_TAG_MARK_WORDS + _CONSOLE_DROP_WORDS + _CONSOLE_SET_WORDS,
+        lead=(),
+        echo=_CONSOLE_TAG_MARK_ECHO + _CONSOLE_DROP_WORDS + _CONSOLE_RENAME_ECHO,
+    ),
+    # 新建标签（`create_tag`）
+    "create_tag": _ConsoleWords(
+        body=_CONSOLE_CREATE_WORDS + _CONSOLE_TAG_MARK_WORDS,
+        lead=_CONSOLE_CREATE_LEAD,
+        echo=_CONSOLE_CREATE_ECHO + _CONSOLE_TAG_MARK_ECHO,
+    ),
+    # 改标签（`update_tag`）：只认"改名/改状态类"，**不含**去掉/移除那一族——
+    # 那些是 `set_article_tags`（改文章身上的标签）与 `delete_tag`（删标签实体）的
+    # 说法，撞上就是误靶写（今天「把标签 X 去掉」对 update_tag 判成立）。
+    "update_tag": _ConsoleWords(
+        body=_CONSOLE_RENAME_WORDS,
+        lead=(),
+        echo=_CONSOLE_RENAME_ECHO,
+    ),
+    # 删标签（`delete_tag`）：连写说法在表里（它们本来就是**负词**——`_console_target`
+    # 靠它们认出「标签」后面跟的是动作词而不是名字），裸「删掉/删了」不在。
+    "delete_tag": _ConsoleWords(
+        body=_CONSOLE_DROP_WORDS + _CONSOLE_TAG_DROP_WORDS,
+        lead=(),
+        echo=(),
+    ),
+    # 新建分类（`create_category`）
+    "create_category": _ConsoleWords(
+        body=_CONSOLE_CREATE_WORDS,
+        lead=_CONSOLE_CREATE_LEAD,
+        echo=_CONSOLE_CREATE_ECHO,
+    ),
+    # 改分类（`update_category`）
+    "update_category": _ConsoleWords(
+        body=_CONSOLE_RENAME_WORDS,
+        lead=(),
+        echo=_CONSOLE_RENAME_ECHO,
+    ),
+    # 删分类（`delete_category`）：只留"去掉/移除"这一族（「把分类 X 去掉」），
+    # 与 `delete_tag` 一样**不认**句首动词与确认回声。
+    "delete_category": _ConsoleWords(body=_CONSOLE_DROP_WORDS, lead=(), echo=()),
+}
+
+
+def console_fastpath_tools() -> frozenset[str]:
+    """**够得着"同轮命令即确认"快道**的后台写工具（= write.console 全体 − 一律弹窗那批）。
+
+    这是 `_CONSOLE_TOOL_ACTIONS` 键集的**真值源**（不是手抄的第二份名单）：新增一件
+    后台写工具时，它要么进 `_ALWAYS_CONFIRM_TOOLS`（每次弹卡），要么必须有人为它写一行
+    「它认哪些动作词」的声明——不写就红（`tests/test_authz.py` 的完备性锁）。旧版没有
+    这条：新工具**静默继承**那张 46 项共享词表，于是"这个工具该不至于被一句话直接写
+    生产数据"这件事从来没人确认过。
+    """
+    return frozenset(
+        t for t, s in TOOL_SCOPE.items() if s == SCOPE_WRITE_CONSOLE
+    ) - _ALWAYS_CONFIRM_TOOLS
+
+
+# 「确认…」回声的骨架（**只认句首**）：整句必须以它开头，后面接什么由
+# `_console_confirm_order` 按工具声明判。词表拆走、骨架留下——骨架是固定格式的解析。
+_CONSOLE_CONFIRM_ECHO_RE = re.compile(r"^\s*确认(?:一下)?\s*")
+
 # 「标签 / 叫 <名字>」形态的目标：名字取到空白或标点为止。
 _CONSOLE_TAG_NAME_RE = re.compile(
     r"(?:叫|名为|叫做|名字是|名称是|标签)\s*[：:]?\s*[\"'“”‘’]?"
     r"([^\s，。！？!?；;\"'“”]{1,30})")
 
 
-def _console_target(text: str) -> bool:
+def _console_target(text: str, acts: "_ConsoleWords") -> bool:
     """消息里有没有**明确的目标**（数字 id / 《书名号》/ 指代词 / 一个标签名）。
 
     标签名那一支要做一次反查：「把**标签去掉**」里"标签"后面跟的是**动作词**，
-    不是名字——只看正则的话它和「新建标签 Python」长得一模一样，会把一
-    「把标签去掉」判成有目标的命令。所以命中后要求那个"名字"不落在动作词表里。
+    不是名字——只看正则的话它和「新建标签 Python」长得一模一样，会把
+    「把标签去掉」判成有目标的命令。所以命中后要求那个"名字"不落在**这个工具**的
+    动作词里（`acts.body`；旧版读的是那张共享表，于是「把标签 X 删掉」对任何工具
+    都算"没有目标"——工具无关的副作用：`update_tag` 拿到的是别的工具的词）。
     """
     if re.search(r"\d+", text):
         return True
@@ -538,14 +661,41 @@ def _console_target(text: str) -> bool:
     if not m:
         return False
     name = m.group(1)
-    return not any(v.startswith(name) or name.startswith(v) for v in _CONSOLE_VERBS)
+    return not any(v.startswith(name) or name.startswith(v) for v in acts.body)
 
 
-def _console_confirm_order(text: str) -> bool:
-    """「确认 + 写动词」的**短回声**骨架（见 _CONSOLE_CONFIRM_ORDER_RE 注释）。"""
-    if not _CONSOLE_CONFIRM_ORDER_RE.search(text):
+def _console_lead_order(text: str, acts: "_ConsoleWords") -> bool:
+    """命令骨架第三支：**句首**就是这个工具的动作词（「发布文章 12」「新建一个分类」）。
+
+    与句中那支分开判：句中那支是 `in` 子串（说了这个动作就算），句首这支锚定
+    （`startswith`）。两支队列表也分开声明——"能不能在句首当动词"是每个工具自己的事，
+    旧版把两支写在同一张表里，加词时无从知道加的是哪一个位置。
+    """
+    head = text.lstrip()
+    return any(head.startswith(w) for w in acts.lead)
+
+
+def _console_confirm_order(text: str, acts: "_ConsoleWords") -> bool:
+    """「确认 + **这个工具的**动作词」的**短回声**骨架（见 `_CONSOLE_CONFIRM_ECHO_RE`）。
+
+    两支的区分留在**结构**里：① 把字结构（「确认把文章 12 设为私密」——动词在宾语
+    之后）；② 动作词直接跟在确认之后（「确认创建标签 X」）。词表各读工具的 `echo`
+    声明——旧版这两支各带一张内联词表，与 `body` 那张表必须人工同步（同族缺陷）。
+    """
+    m = _CONSOLE_CONFIRM_ECHO_RE.match(text)
+    if not m:
         return False
-    return not _CONSOLE_INQUIRY_TAIL_RE.search(text)
+    if _CONSOLE_INQUIRY_TAIL_RE.search(text):
+        return False
+    rest = text[m.end():]
+    if rest.startswith(("把", "将", "给")):
+        # ① 确认 + 把/将/给 + 宾语 + 动作词。宾语窗口与旧正则逐字一致（1–20 字、
+        #    **不跨句读**）——收窄它没必要，放宽它则是一处没人量过的行为变化。
+        gap = re.match(r"[^\n。！？!?；;，,]{1,20}", rest[1:])
+        if gap is None:          # 显式判空：`bool(gap) and …` 是同一件事，
+            return False         # 但 mypy 穿不过布尔运算去做收窄（棘轮会红一条）
+        return any(w in rest[1:1 + gap.end()] for w in acts.echo)
+    return any(rest.startswith(w) for w in acts.echo)  # ② 确认 + 动作词
 
 
 # 系统注入的消息壳（`server.py` 的 `_build_messages` 给本轮用户消息加的
@@ -620,22 +770,32 @@ def strip_user_shell(text: str) -> str:
 
 
 def _console_command(msg: str, tool: str | None = None) -> bool:
-    """本轮消息是不是一条明确的后台写命令（确定性、无 LLM）。
+    """本轮消息是不是一条明确的**后台写**命令（确定性、无 LLM）。
 
-    `tool` 收下但**不用**：后台写的判据只回答"是不是命令"，落到哪个工具由技能模板与
-    `_ARTICLE_WRITE_TOOLS` 的目标校验管（那里比"这句话里有没有这个动作词"更硬）。
-    签名统一成两参只是为了 `consent_granted` 的那一处调用（见它自己的注释）。
+    `tool` 决定"哪些动作词算数"（20261015 批 5，见 `_CONSOLE_TOOL_ACTIONS`）——**不知道
+    是哪个工具就判不了**：判据问的是"这句话是不是**这个工具的**命令"，少了工具那一半
+    等于回到那张共享词表（任何工具撞上任何动作词都算命令）。所以 `tool=None` 或工具没
+    声明 ⇒ **False**（fail-closed，走弹窗那条路，与 `_own_command` 同一取向）。
+
+    旧签名收下 `tool` 而不用它，理由是"落到哪个工具由技能模板与 `_ARTICLE_WRITE_TOOLS`
+    的目标校验管"。那句话今天仍然成立（**写什么**由它们管），但它答的不是本判据的问题
+    ——本判据要回答的是「主人这句话是不是在命令**这一件**事」，而"目标校验"只在工具已经
+    被选中之后运行，管不到"选错了工具"。
     """
+    acts = _CONSOLE_TOOL_ACTIONS.get(tool or "")
+    if acts is None:
+        return False
     text = strip_user_shell(msg)          # 系统壳 + 称呼壳：判据看到的是主人实际说的那句
     if not text:
         return False
     if _CONSOLE_QUESTION_RE.search(text) or _CONSOLE_HYPOTHESIS_RE.search(text):
         return False
-    if not _console_target(text):
+    if not _console_target(text, acts):
         return False
-    if not any(v in text for v in _CONSOLE_VERBS):
+    if not any(v in text for v in acts.body):
         return False
-    return bool(_CONSOLE_ORDER_RE.search(text)) or _console_confirm_order(text)
+    return (bool(_CONSOLE_ORDER_RE.search(text))
+            or _console_lead_order(text, acts) or _console_confirm_order(text, acts))
 
 
 def is_question_like(msg: str) -> bool:
