@@ -53,6 +53,7 @@ from typing import Any
 #   后两组在展开层挡住超长只是为了"零写 + 说清原因"，真正的硬闸在工具与服务端那两道。
 import agent.adminops as A
 import agent.authz as authz
+from agent.authz import SCOPE_WRITE_CONSOLE, SCOPE_WRITE_OWN, TOOL_SCOPE
 from agent.principal import ADMIN_ROLES, CHAT_ONLY_ROLES
 from agent.refs import is_ref
 from tools.base import (
@@ -179,175 +180,138 @@ for _panel, _panel_path in DASHBOARD_PANELS:
 del _panel, _panel_path
 
 
-# 管理助手写技能（20260921 第二轮，第四轮补齐标签改删与分类三件）。刻意**不进**
-# 上面两份 planner 点名白名单：写操作只能由技能模板展开（planner 选技能 + 填参数），
-# 不能经 PARAMS.calls 直接点名工具——白名单是"只读"这一条纪律的载体，写工具混进去
-# 等于放弃它。（`review_inbox` 的 `calls` 不是这条纪律的例外：它只能填该技能 `plan`
-# 里那两个工具，闭集是另一份、判在 `_expand_change_set`。）
-WRITE_SKILL_NAMES = frozenset({
-    "tag_create", "article_status", "article_tags",
-    "tag_update", "tag_delete",
-    "category_create", "category_update", "category_delete",
-    "announcement_create", "announcement_update", "announcement_delete",
-    "board_audit", "board_delete",
-    # 用户**自己**的数据（20260923 批 7）：动的是发起人自己账号里的私有数据
-    # （收藏夹 / 已读状态），scope=write.own 而不是 write.console，roles 不设限。
-    "favorite_add", "favorite_remove", "notice_read",
+# ── 写技能的**靶通道**：一处声明，写名单与四个桶都从它派生（20261015 批 1）────────
+#
+# 从前这里有**两份必须手工同步的表**：写技能名单（`WRITE_SKILL_NAMES`，30 个名字手抄）
+# 与"这个技能的靶出自哪个通道"（四个 frozenset，28 个名字手抄；剩下两件硬写在展开链的
+# `else` 里）。漂移的后果不是"多打几个字"，是**静默的**：
+#   · 新写技能没进名单 ⇒ 它根本不进 `instantiate_plan` 的写分支（那条分支的入口就是
+#     名单），于是落进通用模板分支，把 `{"ids": null}` 这种"零范围"实参原样展开成一次写；
+#   · 靶通道漏了 ⇒ 落进 `_expand_write_skill` 的尾部兜底，零工具零写还不报错，主人只
+#     看到"什么都没办"。
+#
+# 现在只有**一处声明**：下面这张 `{技能名: 靶通道}`。写名单由"这个技能的计划里有没有
+# 一个写作用域的工具"派生（`authz.TOOL_SCOPE` 是作用域的单一事实源，见
+# `WRITE_SKILL_NAMES` 那条注），四个桶由通道值派生。加一件写技能 = 在注册表里写它的
+# `plan` + 在这张表里声明通道；**漏了后者 ⇒ 展开器响亮拒绝**（`instantiate_plan` 里
+# `_chan is None` 那一支），不再静默零写。
+#
+# 通道的判据是"**靶从哪来**"，不是"写什么"：
+#   name      靶是主人原话里**点名叫出来的一个站内名字**（标签/分类/公告标题/账号名/
+#             留言正文片段），由工具对着站内实时字典核对；名字不在名录里 ⇒ 零写 + 如实说。
+#   ledger    靶是**现场台账里那一行的编号**（`talkId:<n>` / `账号 id=<n>`）——主人说的
+#             是「全部批准」，那一行是谁只有系统摊开的那份台账说得清。比 name 更强：
+#             可验证、不可能编造（校验在 `graph._ledger_target_refusal`）。
+#   own       靶是主人**自己账号里**的数据，scope 是 write.own 而不是 write.console、
+#             roles 不设限，且有"无范围就零工具"这条硬判据（`_expand_own_skill` 头注）。
+#   free_text 靶是**一段自由文本**（待办正文 / 排期日）——站内没有东西可核对，判据只有
+#             "正文在不在、日期说清楚没有"。
+#   article   靶是 article_id，但**由系统从上下文取**而不是主人的原话片段（"把这篇
+#             设为私密"），scope 也是 write.console（管理助手面）。
+_WRITE_TARGET_CHANNEL: dict[str, str] = {
+    # ── name：站内既有名字（标签 / 分类 / 公告标题 / 账号名 / 留言正文片段）──────
+    "tag_create": "name",
+    "tag_update": "name",
+    "tag_delete": "name",
+    "category_create": "name",
+    "category_update": "name",
+    "category_delete": "name",
+    "announcement_create": "name",
+    "announcement_update": "name",
+    # 公告认**标题**（不是正文）——工具侧对着文章/公告名录核对。
+    "announcement_delete": "name",
+    # 留言删除（20260922 第六轮）：留言没有名字/标题，主人说的就是那句话本身 ⇒ 名字通道的
+    # 留言版（靶参数 quote，唯一子串命中在工具侧判）。它**没有**跟复核那件一起改成按
+    # talkId（20260929 批 H）：已通过/已驳回的留言不在待办台账里，只认编号会让"删掉那条
+    # 老留言"可能连编号都拿不到，见 `tools.base.delete_board_comment` 的 docstring。
+    "board_delete": "name",
+    # 账号冻结/解冻（20260926 第九轮）：planner 写名字，工具对着后台账号名录解析
+    # （`tools.base._find_named_user`）。**刻意不开编号通道**：后台列表不列超管那一行
+    # （src/routes/temp_user.rs），这条防线只在"定位必须经过列表"时成立——给一个 user_id
+    # 参数就等于从第二扇门把"冻结一个看不见的超管"打开。
+    "account_freeze": "name",
+    "account_unfreeze": "name",
+    # 给单个账号发通知（20260926 第十一轮）：同一条通道（`_find_named_user`）。与
+    # `notice_read`（标记**主人自己**的通知已读，走 own）**不是一对**——那一件动的是自己
+    # 账号里的数据，这一件动的是**发给别人的一段话**；名字近形，别把两个技能名读成一族。
+    # 正文虽是自由文本，但它**不是这个技能的靶**（靶是收件人）⇒ 不进 free_text。
+    "notice_send": "name",
+    # 主动重置额度（20260929）：同一条通道。**只有这一件留在名字通道**——它不需要对方
+    # 申请过（"你替他决定"），所以靶不在任何队列里、没有系统印的编号可抄；同一族的
+    # quota_approve / quota_reject 治的是"申请表里等着办的那一行"，见 ledger。
+    # 三件而不是一件带方向的参数：方向必须写进动作本身（批准=清零且不可撤销 / 驳回=额度
+    # 不变但会通知他 / 重置=不需要他申请过），卡面才不可能与真正执行的方向相反。
+    "quota_reset": "name",
+    # 变更账号身份（20261002）：靶同样是后台名录里的一个账号名。与冻结族有一处不同：
+    # 方向不在技能名里，而在参数的**取值**（`role`）——所以卡面必须把"从什么身份 →
+    # 什么身份"印出来（那不是锦上添花，是这一支唯一的复核点，见 adminops `_ROLE_*` 头注）。
+    "account_set_role": "name",
+    # 禁言 / 解除禁言（20261002）：靶同样是后台名录里的一个账号名。与冻结族唯一的结构
+    # 差别是禁言方向多一个**取值参数** `hours`（禁多久）；它**不是**"要写进去的自由文本"，
+    # 而是一次归一（`adminops.normalize_mute_hours`：主人说的「三天」→ 72），归不出的字面
+    # **零工具 + 问清**——绝不许静默按永久办（那会把"关他三天"办成永久禁言，卡面与实际
+    # 同源、两边都看不出来）。
+    "mute_account": "name",
+    "unmute_account": "name",
+    # ── ledger：靶是现场台账里那一行的**编号** ────────────────────────────────
+    # 河灯留言复核（20260929 批 H）：靶 talk_id，编号印在台账帧 `talkId:<n>` 与审核状况
+    # 明细上。
+    "board_audit": "ledger",
+    # 额度申请的两件（20260929 批 H）：靶 user_id，编号印在台账帧 `账号 id=<n>` 与
+    # `list_quota_requests` 的行上（quota_reset 不在这一桶，理由见上）。
+    "quota_approve": "ledger",
+    "quota_reject": "ledger",
+    # 审核队列的**变更集**（20260929 批 F；批 H 交回模型）：一次点头办 N 件，可跨族
+    # （留言复核 + 额度批准）。它的 `params` 是**逐条调用清单**
+    # （`{"calls":[{"tool","args"}]}`，与 `content_query.calls` 同构，见
+    # `_expand_change_set`），因此展开函数**不是** `_expand_write_skill`。它的 `plan`
+    # 声明的是**允许出现在变更集里的工具全集**（`_confirm_grant_plan` 按它逐条核对
+    # "技能与工具对得上"），不是一套固定序列模板——它同时是跨族安全性的来源：别的写
+    # 工具名拼不进 `calls`。
+    "review_inbox": "ledger",
+    # ── own：靶是主人**自己账号里**的数据 ─────────────────────────────────────
+    # 收藏两件（article_id）+ 标记已读（通知 id 列表 / "全部"），共用 `_expand_own_skill`
+    # ——"无范围就零工具"那条硬判据写在它的头注里。
+    "favorite_add": "own",
+    "favorite_remove": "own",
+    "notice_read": "own",
     # 站内信标记已读（20260923 批 8）：与 notice_read 同一形状、另一个物件。
-    # ⚠️ 漏了这里的后果是**静默的**：不在 WRITE_SKILL_NAMES 就进不了
-    # instantiate_plan 的写分支，会落到下面的通用模板分支，把
-    # `{"ids": null, "all": null}` 原样实例化成一次"零范围"的写（本文件
-    # test_userdata ⑤ 有一条专门盯它）。
-    "message_read",
-    # 后台首页待办 / 日程（20260926 第八轮）：`dashboard_todo_add` 是写面里
-    # **唯一目标是自由文本**的一件（既不是站内既有名字，也不是 article_id），
-    # 另起一条展开路径见 `_expand_todo_skill`。
-    # `dashboard_todo_list` **不在**这份名单里：它是读（admin.console），走的是
-    # 注册表里普通技能那条路——把它写进来会让它落进写分支的参数展开，产出一次
-    # 不成形的写。⚠️ 同上：名单与 `instantiate_plan` 的分支**两处都要补**。
-    "dashboard_todo_add",
-    # 把某一条勾成完成（20260926 第十轮）：与 `dashboard_todo_add` 同一族（目标也是
-    # 一段自由文本），但**展开函数不同**——`instantiate_plan` 的 `_FREE_TEXT_WRITE_SKILLS`
-    # 分支里按技能名二分，见那一段的注（漏了那一步会把"勾完成"静默展开成
-    # `create_dashboard_todo(...)`，即**多记一条待办**）。
-    "dashboard_todo_done",
-    # 改某一条的排期日（20260929 批 G）：与上面两件同一族（目标也是一段自由文本），
-    # 展开函数是第三个（`_expand_todo_reschedule_skill`）——三件各有各的必填项，
-    # 见 `_FREE_TEXT_WRITE_SKILLS` 那条注。
-    "dashboard_todo_reschedule",
-    # 后台账号冻结 / 解冻（20260926 第九轮）：目标是一个**账号名**（在后台账号
-    # 列表里核对得到的名字）⇒ 走 `_WRITE_NAME_TARGET_SKILLS` 那条名字通道。
-    # ⚠️ 两个技能名与两个工具名**不是一套字面量**（技能 `account_freeze` /
-    # 工具 `freeze_account`）：技能名说的是"这件事"，工具名说的是"这个动作"。
-    # 混用会让 `_expand_write_skill` 的分支静默不命中（尾部兜底 → "未知的写技能"
-    # → 零工具零写，还不报错）。
-    "account_freeze", "account_unfreeze",
-    # 变更账号身份（20261002）：同走名字通道（目标是一个账号名），多一个**取值参数**
-    # `role`（不是"要写进去的自由文本"，是一次归一——见 `_expand_write_skill` 那一支）。
-    # ⚠️ 同上：技能名 `account_set_role` 与工具名 `set_account_role` 也不是一套字面量，
-    # 漏进这里的后果是**静默的**（零工具零写、主人只看到"什么都没办"）。
-    "account_set_role",
-    # 给单个账号发站内通知（20260926 第十一轮）：目标也是一个**账号名**（后台账号
-    # 列表里核对得到）⇒ 同走名字通道。正文是自由文本，但它**不是**这个技能的目标
-    # ——目标是收件人，正文是"要发出去的那段字"，所以**不进** `_FREE_TEXT_WRITE_SKILLS`
-    # （那一桶的判据是"目标没有东西可核对"）。
-    "notice_send",
-    # 对话额度的申请审核 + 主动重置（20260929）：三件的后果互不相同（批准=清零且
-    # 不可撤销 / 驳回=额度不变但会通知他 / 主动重置=**不需要他申请过**），所以是
-    # **三个技能**而不是一件带方向的——方向必须写进动作本身，卡面才不可能与真正
-    # 执行的方向相反（同 account_freeze/account_unfreeze 那条论证）。
-    # 批 H 起**目标通道分成两条**：批准与驳回治的是"申请表里等着办的那一行"⇒ 按
-    # **台账编号**（`_LEDGER_TARGET_WRITE_SKILLS`）；主动重置不在任何队列里 ⇒ 仍按
-    # **账号名**（`_WRITE_NAME_TARGET_SKILLS`）。三条理由写在各自桶的头注里。
-    # ⚠️ 技能名与工具名**不是一套字面量**（`quota_approve` / `approve_quota_request`）：
-    # 漏了这里的后果是**静默的**——技能落进 `_expand_write_skill` 的尾部兜底，
-    # 零工具零写还不报错。
-    "quota_approve", "quota_reject", "quota_reset",
-    # 禁言 / 解除禁言（20261002 内容风控下放给 agent）：同走名字通道（目标是后台
-    # 名录里的一个账号名）。⚠️ **工具名是后端先定的**（src/routes/mod.rs 那条路由的
-    # 注里点名要 agent 用 `account_mute` / `account_unmute`），技能名按本仓惯例另起
-    # （技能名说"这件事"、工具名说"这个动作"，同 account_freeze / freeze_account）。
-    # 两边混用会让 `_expand_write_skill` 的分支静默不命中（尾部兜底 → "未知的写技能"
-    # → 零工具零写、还不报错）。
-    "mute_account", "unmute_account",
-    # 审核队列的**变更集**（20260929 批 F）：一次点头办 N 件，可跨族（留言复核 +
-    # 额度批准）。它的 `params` 是**逐条调用**（`{"calls": [{"tool","args"}]}`，形状
-    # 与 `content_query.calls` 同构，见 `_expand_change_set`），因此：
-    #   · 批 H 起**进 planner 菜单**（从 `_SYSTEM_ONLY_SKILLS` 移出）——主人一句
-    #     「全部批准」要办哪几件，由模型看着台账帧自己拼，系统不再替他读上一轮散文；
-    #   · `plan` 声明的是**允许出现在变更集里的工具全集**（`_confirm_grant_plan` 按它
-    #     逐条核对"技能与工具对得上"），不是一套固定序列模板——它同时是跨族安全性的
-    #     来源：别的写工具名拼不进 `calls`。
-    # ⚠️ 与 `dashboard_todo_add/done` 同一类坑：它的展开函数与 `_expand_write_skill`
-    # **不是同一个** ⇒ `instantiate_plan` 那一支里按技能名二分（漏了会落进
-    # `_expand_write_skill` 的尾部兜底：零工具零写还不报错）。
-    "review_inbox",
-})
+    "message_read": "own",
+    # ── free_text：靶是一段**自由文本**，站内没有东西可核对 ───────────────────
+    # 后台首页待办 / 日程（20260926 第八轮起三件）。⚠️ 这一桶**不止一个展开函数**
+    # （第十轮起两件、批 G 起三件）：通道只说"靶是自由文本"，而"加一条 / 勾一条 / 改一条
+    # 的排期"是三件不同的事 ⇒ `instantiate_plan` 里按**技能名**三分。漏了那一步的后果是
+    # 静默的："勾完成"会被 `_expand_todo_skill` 展开成 `create_dashboard_todo(...)`，
+    # **多记一条待办**（比零工具危险得多：主人看到成功的回执，列表里却悄悄多了一行）；
+    # "改排期"更隐蔽——展开成 `create_dashboard_todo({'text':…,'date':…})`，于是"把简历
+    # 挪到 10 月 8 号"变成**又记一条简历**，而主人以为日期改好了。
+    # `dashboard_todo_list` **不在**这里：它是读（admin.console），把它写进来会让它落进
+    # 写分支的参数展开，产出一次不成形的写。
+    "dashboard_todo_add": "free_text",
+    "dashboard_todo_done": "free_text",
+    "dashboard_todo_reschedule": "free_text",
+    # ── article：靶是 article_id，但**由系统从上下文取** ──────────────────────
+    # 两件**就地展开**（不走 `_expand_write_skill`）：它们的目标是 article_id、另有
+    # "点名即据"的判据，且 `article_tags` 要加的标签站内还没有时会先 `create_tag`
+    # （条件工具，见 `Skill.extra_plan_tools`）。
+    # 这一桶从前的名字**长在展开链里**（`article_status` / `article_tags` 两个字符串硬写在
+    # fail-closed 那句排除项里），20261015 批 1 起显式成桶。
+    "article_status": "article",
+    "article_tags": "article",
+}
 
-# 其中"目标是一个**名字**（或留言的正文片段）"的那批（标签 / 分类 / 公告 / 账号 /
-# 账号通知 / 留言删除 / 主动重置额度），共用 `_expand_write_skill`：它们与其余几件的
-# 差别不在写法而在**目标通道**——文章两件与收藏两件认 article_id（有"用户点名即据"
-# 的判据），标签/分类/公告写认名字（公告认标题），账号族认账号名，解析在工具侧对着
-# 实时字典做。**模型必须把那个名字本身写出来**，系统从主人原话里核对（`graph` 的
-# `_WRITE_NAME_FIELDS` 那一族）。
-#
-# ⚠️ 这份名单从 20260923 起是**显式白名单**，不再是 `WRITE_SKILL_NAMES - {…}` 的
-# 减法：减法定义下，任何"目标不是名字"的新写技能都会**悄悄落进** `_expand_write_skill`，
-# 被它尾部的兜底当成「未知的写技能」⇒ 零工具零写、还不报错（`instantiate_plan` 里
-# 那条 `if not note` 会把它填成"参数齐备"，看起来一切正常）。加写技能时**两个地方
-# 都要补**：这里的名单（或者下面 `_OWN_WRITE_SKILLS` / `_LEDGER_TARGET_WRITE_SKILLS`），
-# 以及 `instantiate_plan` 的分支。tests 有锁：注册表里每个写技能都必须落进四者之一。
-_WRITE_NAME_TARGET_SKILLS = frozenset({
-    "tag_create", "tag_update", "tag_delete",
-    "category_create", "category_update", "category_delete",
-    "announcement_create", "announcement_update", "announcement_delete",
-    # 留言删除（20260922 第六轮）：留言没有名字/标题，主人说的就是那句话本身 ⇒
-    # 名字通道的留言版（目标参数 quote，唯一子串命中在工具侧判）。
-    # 它**没有**跟复核那件一起改成按 talkId（20260929 批 H）：已通过/已驳回的留言
-    # 不在待办台账里，只认编号会让"删掉那条老留言"可能连编号都拿不到，
-    # 见 `tools.base.delete_board_comment` 的 docstring。
-    "board_delete",
-    # 账号冻结/解冻（20260926 第九轮）：同一条通道——planner 写名字，工具对着
-    # 后台账号名录解析（`tools.base._find_named_user`），名字不在名录里就零写 +
-    # 如实说"后台账号列表里没有这个账号"。**刻意不开编号通道**：后台列表不列
-    # 超管那一行（src/routes/temp_user.rs），这条防线只在"定位必须经过列表"时
-    # 成立——给一个 user_id 参数就等于从第二扇门把"冻结一个看不见的超管"打开。
-    "account_freeze", "account_unfreeze",
-    # 给单个账号发通知（20260926 第十一轮）：同一条通道（同样是
-    # `tools.base._find_named_user` 对着后台账号名录解析名字）。与已存在的
-    # `notice_read`（标记通知已读）**不是一对**——那一件动的是**主人自己**的通知
-    # （write.own，走 `_OWN_WRITE_SKILLS`），这一件动的是**发给别人**的一段话。
-    # 名字近形，别把两个技能名读成一族（见 `_expand_write_skill` 那一支）。
-    "notice_send",
-    # 主动重置额度（20260929）：同一条通道。**只有这一件留在名字通道**——它不需要
-    # 对方申请过（"你替他决定"），所以目标不在任何队列里、没有系统印的编号可抄；
-    # 同一族的 quota_approve / quota_reject 治的是"申请表里等着办的那一行"，批 H
-    # 起按台账编号，见 `_LEDGER_TARGET_WRITE_SKILLS`。
-    # 三个技能而不是一件带方向的参数：方向必须写进动作本身（同账冻族那条论证）。
-    "quota_reset",
-    # 变更账号身份（20261002）：目标同样是后台名录里的一个**账号名**。它与冻结族
-    # 有一处不同：方向不在技能名里，而在参数的**取值**（`role`）——所以卡面必须把
-    # "从什么身份 → 什么身份"印出来（那不是锦上添花，是这一支唯一的复核点，
-    # 见 adminops 的 `_ROLE_*` 头注）。
-    "account_set_role",
-    # 禁言 / 解除禁言（20261002）：目标同样是后台名录里的一个**账号名**。与冻结族
-    # 唯一的结构差别是禁言方向多一个**取值参数** `hours`（禁多久）；它**不是**"要写进去
-    # 的自由文本"，而是一次归一（`adminops.normalize_mute_hours`：主人说的「三天」→ 72），
-    # 归不出的字面**零工具 + 问清**（见 `_expand_write_skill` 那一支）——绝不许静默
-    # 按永久办（那会把"关他三天"办成永久禁言，卡面与实际同源、两边都看不出来）。
-    "mute_account", "unmute_account",
-})
 
-# **目标是一个台账编号**的那批（20260929 批 H）：它们治的不是"主人点名叫出来的一个
-# 名字"，而是**队列里等着办的那一行**——主人说的是「全部批准」「按你的想法来吧」，
-# 那一行是谁、编号多少，只有系统摊开的那份台账说得清。于是目标通道从"这段字面出自
-# 主人原话"换成"这个编号出自现场台账"（更强：可验证、不可能编造），校验与拒绝在
-# `graph._ledger_target_refusal`。
-#
-# 与 `_WRITE_NAME_TARGET_SKILLS` **共用 `_expand_write_skill`**（缺参零工具 / 只落
-# 点名的参数 / 归一在确定性层做，这套纪律两族完全一致），差别只在展开函数里那几支
-# 怎么取目标。加新成员时同上面那条警告：名单与 `instantiate_plan` 的分支两处都要补。
-_LEDGER_TARGET_WRITE_SKILLS = frozenset({
-    # 河灯留言复核（20260929 批 H）：目标 talk_id，编号印在台账帧 `talkId:<n>` 与
-    # 审核状况明细上。
-    "board_audit",
-    # 额度申请的两件（20260929 批 H）：目标 user_id，编号印在台账帧
-    # `账号 id=<n>` 与 `list_quota_requests` 的行上（`reset_user_quota` 不在这一桶，
-    # 理由见上）。
-    "quota_approve", "quota_reject",
-    # 审核队列的**变更集**（20260929 批 F；批 H 交回模型）：它的若干条目标同样取自
-    # 台账编号，而它的展开函数**不是** `_expand_write_skill`（`_expand_change_set`）
-    # ——见 `instantiate_plan` 里那处按技能名的二分。放在这一桶是因为"目标从台账来"
-    # 这条性质它最强调（整批都是）。
-    "review_inbox",
-})
+def _channel(*want: str) -> frozenset[str]:
+    """靶通道的值 → 技能集合（下面四个桶共用；桶的成员**只能**从那张表来）。"""
+    return frozenset(k for k, v in _WRITE_TARGET_CHANNEL.items() if v in want)
 
-# 用户自己数据的写技能（20260923 批 7），共用 `_expand_own_skill`：目标是 article_id
-# （收藏两件）或通知 id 列表 / "全部"（标记已读），**且有"无范围就零工具"这条硬判据**
-# ——见该函数头注。
-_OWN_WRITE_SKILLS = frozenset({"favorite_add", "favorite_remove", "notice_read",
-                                "message_read"})
 
+# 四桶 = 上面那张表的**视图**。名字与成员资格与从前逐名相同——`graph.py` 的可见性闸与
+# 八个套件的锁都读它们（`tests/test_todo_schedule.py` 直接断言 free_text 那一桶）。
+_WRITE_NAME_TARGET_SKILLS = _channel("name")
+_LEDGER_TARGET_WRITE_SKILLS = _channel("ledger")
+_OWN_WRITE_SKILLS = _channel("own")
+_FREE_TEXT_WRITE_SKILLS = _channel("free_text")
 # ── 能力否定判据词（20261003 洞⑫）：技能名 → **对象**词元组 ────────────────────
 #
 # 判据（`graph._capability_absent_claim`）：回复把**注册表里明明有**的能力说成
@@ -413,21 +377,6 @@ CAPABILITY_DENIAL_VERBS = {
     "content_query": r"搜|查|看|读|检索|浏览|找",
 }
 
-# 目标是**自由文本**的写技能（20260926 第八轮），上面三组的目标都是"能在站内核对出来
-# 的东西"（名字 / article_id / 通知 id），这一组的目标是主人随口说的那件事——**没有
-# 东西可核对**，所以它的判据只能是"正文在不在、排期翻不翻得出来"（见两个展开函数的
-# 头注）。同 `_WRITE_NAME_TARGET_SKILLS`：显式白名单，不是减法。
-#
-# ⚠️ 这一桶**不止一个展开函数**（第十轮起两件、批 G 起三件）：桶成员资格回答的是
-# "目标是不是自由文本"，而"加一条 / 勾一条 / 改一条的排期"是三件不同的事（各有各的
-# 必填项，勾那条连"这条在不在列表里"都要到工具侧才判）⇒ `instantiate_plan` 里按
-# **技能名**三分。桶里加新成员时**必须同时补那条分支**：漏了的后果是静默的——
-# "勾完成"会被 `_expand_todo_skill` 展开成 `create_dashboard_todo(...)`，**多记一条
-# 待办**（比零工具危险得多：主人看到一个成功的回执，而他的列表里悄悄多了一行）；
-# "改排期"漏了则更隐蔽——它会被展开成 `create_dashboard_todo({'text': …, 'date': …})`，
-# 于是"把简历挪到 10 月 8 号"变成**又记一条简历**，而主人以为日期改好了。
-_FREE_TEXT_WRITE_SKILLS = frozenset({"dashboard_todo_add", "dashboard_todo_done",
-                                     "dashboard_todo_reschedule"})
 
 
 def _norm_pos_int(value) -> int | None:
@@ -2438,6 +2387,33 @@ SKILLS: list[Skill] = [
 ]
 
 SKILL_MAP: dict[str, Skill] = {s.name: s for s in SKILLS}
+# ── 写技能名单 = **派生**，不再手抄（20261015 批 1）───────────────────────────────
+#
+# 判据 = "这个技能的计划里有没有一个**写作用域**的工具"（`authz.TOOL_SCOPE` 是作用域的
+# 单一事实源）。手抄名单的病不是"多打几个字"，是**漏掉的后果是静默的**：新写技能没进
+# 名单 ⇒ 它根本不进展开器的写分支（那条分支的入口就是名单）⇒ 落进通用模板分支，把
+# `{"ids": null}` 这种"零范围"实参原样展开成一次写。派生之后这条洞按构造不存在。
+#
+# ⚠️ 刻意**不用**广义的 `authz.is_write()`：那个谓词还含 `write.page`（导航/特效/夜间）
+# 与 `write.device`（屏幕显示）——那四件动的是主人的**浏览器**、不是站内数据，混进写分支
+# 反会被写族的"缺参零工具"纪律拦成办不成。实测：广义谓词多出 navigate / effect /
+# darkmode / device_display 四件；收窄到这两个 scope 才与从前的手抄名单**逐名相等**
+# （30 件，`tests/test_write_channel.py` 有锁）。`extra_plan_tools` 里的写工具也算
+# ——`article_tags` 的 `create_tag` 就在那一格。
+_WRITE_SCOPES = frozenset({SCOPE_WRITE_CONSOLE, SCOPE_WRITE_OWN})
+
+
+def _derive_write_skill_names(skills: list[Skill]) -> frozenset[str]:
+    """注册表 → 写技能名单（**收一个参数而不是直接读 `SKILLS`**：这样反控能喂它一个
+    假的"新写技能"，证明"新技能自动进名单"这条性质真的成立，见
+    `tests/test_write_channel.py` ⑧）。"""
+    return frozenset(
+        s.name for s in skills
+        if any(TOOL_SCOPE.get(n) in _WRITE_SCOPES
+               for n in [n for n, _ in s.plan] + list(s.extra_plan_tools)))
+
+
+WRITE_SKILL_NAMES = _derive_write_skill_names(SKILLS)
 
 
 # ---------------------------------------------------------------------------
@@ -3405,6 +3381,73 @@ def _param_alias_fix(skill: Skill, params: dict) -> tuple[dict, list[tuple[str, 
     return out, moved
 
 
+def _expand_article_status(params: dict,
+                           aids: list[int]) -> tuple[list[str], str, str | None]:
+    """文章类写技能的**状态**那一半：把点名的 N 篇改成点名的 status / is_top。
+
+    （20261015 批 1 从 `_instantiate_plan` 抽出来：文章通道那两支合起来让那个函数顶到
+    行数棘轮，而这一支自身就是一件完整的事——C=13 / 32 行，两项都在预算内。）
+    ⚠️ 另一半 `article_tags` **没有**一起抽：它单独成函数是 93 行 / C=32，当场撞上本仓
+    `C ≤ 30` 的预算（`tests/test_complexity_budget.py`）⇒ 要么再拆两半、要么别动；它与
+    `graph._drop_satisfied_tag_creates` 的摘除判据紧耦合（见那段长注），拆它得把那一对
+    同源关系一起重读，留到那一族下次改动时一起做。
+
+    归一（status / is_top）在**这一层**做，归不出来 ⇒ 零工具 + 问清：写操作最不该做的事
+    就是"参数看不懂时猜一个"（猜出来的那一版会当真写进去）。
+
+    ⚠️⚠️ **第三个返回值是既有行为里的一处同名捕获，本批原样保留**：从前这一支住在一个
+    也叫 `status` 的局部变量**同名**的 `_instantiate_plan` 里（那个 `status` 是导航族
+    用来记 `nav_iot_off` / 最终写进计划 `status` 字段的那个字符串）⇒ 这一支的归一结果
+    **会盖掉它**：`instantiate_plan("article_status", {"article_id": 46, "status":
+    "private"})` 的计划 `status` 字段是 **`"private"`** 而不是 `"executed"`（两臂实测：
+    611 格里恰好这 3 格不同）。它同时**关掉**了下面那句"零工具轮不许不成账"（那个判据
+    读的也是 `status`）。**看起来像缺陷**（计划 status 字段的语义应该是执行状态，不是
+    文章的目标状态），但改它是**行为变更**、要单独一趟验证 ⇒ 这里按原样把值回传出去，
+    不在"零行为变更"这一批里顺手改掉；换名 = 那 3 格当场变成 `executed`，谁要动它请连
+    这条注一起改并跑 golden。
+    ⇒ 因此签名第三项**如实**写 `str | None`（旧代码里 `status` 被重新绑定成 `str | None`
+    也是同一个 mypy 错误）；照原样回传的代价是**调用点那一句留住了一个既有的计数错误**
+    （本仓没有一处 `# type: ignore`，220 个错误就是这么记着账的）——别拿 ignore 把它抹掉。
+    """
+    status = A.normalize_status(params.get("status"))
+    top = A.normalize_top(params.get("is_top"))
+    # ⚠️ 注记**先落到变量上再回传**，别直接写成 `return [], "中文…", status`：`eval/wordlist_gate.py`
+    # 的第二层按 AST 数"住在集合字面量里的中文串"，元组的直接元素也算一处 ⇒ 同一个字面量
+    # 换个位置就会被记成"新增了一张中文表"（实测：这一支原本就是这样，红了一次）。
+    if params.get("status") not in (None, "") and status is None:
+        note = (f"status「{params.get('status')}」认不出来（只支持 "
+                "public/private/draft）：不调用任何工具，如实向主人问清")
+        return [], note, status
+    if params.get("is_top") not in (None, "") and top is None:
+        note = (f"is_top「{params.get('is_top')}」认不出来（只支持 1/0）："
+                "不调用任何工具，如实向主人问清")
+        return [], note, status
+    if status is None and top is None:
+        note = ("article_status 没有指出要改什么（status / is_top）："
+                "不调用任何工具，如实向主人问清要改成什么")
+        return [], note, status
+    # **一篇一条 spec**（20261009，与 `tag_create.titles` 同一条纪律）：N 篇 ⇒ N 条
+    # `set_article_status`，多 spec 的现成通道全部自动接上（卡印成清单 + 「全部办」、
+    # 逐条执行、逐条回执、逐条"已是目标值"摘除）。N=1 时逐字节等于旧行为（键序
+    # article_id→status→is_top 不变）。
+    # `dict[str, object]`：两个值的类型不同（归一后的 status 是 `str`、is_top 是 `int`），
+    # 而它们要一起进 `json.dumps` ⇒ 按值域写 object（旧代码写 `fields = {}`，mypy 按
+    # 第一笔赋值推成 `dict[str, str]`，于是 `fields["is_top"] = top` 一直是条计数错误）。
+    fields: dict[str, object] = {}
+    if status is not None:
+        fields["status"] = status
+    if top is not None:
+        fields["is_top"] = top
+    out = [f"set_article_status({json.dumps({'article_id': one, **fields}, ensure_ascii=False)})"
+           for one in aids]
+    note = (f"修改文章 {'、'.join(str(x) for x in aids)}："
+            + "、".join(filter(None, [
+                f"状态→{A.status_cn(status)}" if status is not None else "",
+                f"置顶→{A.top_cn(top)}" if top is not None else ""]))
+            + "（只改点名的字段）")
+    return out, note, status
+
+
 def instantiate_plan(skill_name: str, params: dict,
                      role: str | None = None) -> dict:
     """公开入口：`_instantiate_plan` 的产物 + **统一补齐 `param_unknown`**。
@@ -3672,8 +3715,12 @@ def _instantiate_plan(skill_name: str, params: dict,
         #   · 标签 / 分类类写技能全部走 `_expand_write_skill`（目标按名字，见其头注）；
         #     文章类两件留在下面（它们的目标是 article_id，另有"点名即据"的判据）。
         note = ""
-        if (skill.name in _WRITE_NAME_TARGET_SKILLS
-                or skill.name in _LEDGER_TARGET_WRITE_SKILLS):
+        # 靶通道从**一处声明**读（20261015 批 1）：`_WRITE_TARGET_CHANNEL` 是"这个技能的
+        # 靶出自哪个通道"的单一事实源，上面四个桶与这条分派链都从它派生——**从前这里是
+        # 同一份分类的第二份手抄**（四个成员判定 + 两个硬写在 fail-closed 排除项里的
+        # 技能名），漏一处的后果是静默的（见那张表的头注）。
+        _chan = _WRITE_TARGET_CHANNEL.get(skill.name)
+        if _chan in ("name", "ledger"):
             # 两桶（名字/正文片段 ⇄ 台账编号）**共用** `_expand_write_skill`（缺参
             # 零工具 / 只落点名的参数 / 归一在确定性层做，这套纪律两族一致），差别只
             # 在展开函数里那几支怎么取目标。
@@ -3687,12 +3734,12 @@ def _instantiate_plan(skill_name: str, params: dict,
             else:
                 wtools, note = _expand_write_skill(skill, params)
             tools.extend(wtools)
-        elif skill.name in _OWN_WRITE_SKILLS:
+        elif _chan == "own":
             # 用户自己的数据（20260923 批 7）：收藏两件（article_id）+ 标记已读
             # （ids 或 all，二选一，都没给就零工具追问）。
             wtools, note = _expand_own_skill(skill, params)
             tools.extend(wtools)
-        elif skill.name in _FREE_TEXT_WRITE_SKILLS:
+        elif _chan == "free_text":
             # 目标是**自由文本**的写技能：待办 / 日程（20260926 第八轮 + 第十轮，
             # 20260929 批 G 加第三件）。前两组的目标都能在站内核对（名字 / id），
             # 这一组只有"正文在不在、日期说清楚没有"那几条判据——见三个展开函数的头注。
@@ -3709,11 +3756,12 @@ def _instantiate_plan(skill_name: str, params: dict,
             else:
                 wtools, note = _expand_todo_skill(skill, params)
             tools.extend(wtools)
-        elif skill.name not in ("article_status", "article_tags"):
-            # fail-closed（20260923）：落到这里的只可能是"加了新写技能、没在
-            # instantiate_plan 里接分支"——旧写法的减法是**静默**的（下面那段
-            # 会把它当 article_status 处理，产出一个看不懂的注记或一个凭空的
-            # article_id 校验）。响亮地说出来，并保持零工具零写。
+        elif _chan != "article":
+            # fail-closed（20260923；20261015 批 1 起判据换成"**没有声明靶通道**"）：
+            # 落到这里的只可能是"加了新写技能、但没在 `_WRITE_TARGET_CHANNEL` 里给它
+            # 声明通道"。写名单是**派生**的（按 plan 的工具作用域），所以这样一件技能
+            # 一定进得来、一定落到这里——这正是派生要换来的东西：从前它压根不进写分支，
+            # 静默落进下面的通用模板分支。响亮地说出来，并保持零工具零写。
             return {"skill": skill.name, "tools": [], "dropped": [], "param_unknown": [],
                     "note": (f"{skill.name}：新加的写技能没有接入参数展开（系统内部"
                              "配置缺项）：不调用任何工具，如实告知这次没能执行"),
@@ -3734,36 +3782,11 @@ def _instantiate_plan(skill_name: str, params: dict,
                         "如实向主人问清是哪一篇文章；若不知道 id，"
                         "先选 admin_notes 技能读出后台文章清单再回来")
             elif skill.name == "article_status":
-                status = A.normalize_status(params.get("status"))
-                top = A.normalize_top(params.get("is_top"))
-                if params.get("status") not in (None, "") and status is None:
-                    note = (f"status「{params.get('status')}」认不出来（只支持 "
-                            "public/private/draft）：不调用任何工具，如实向主人问清")
-                elif params.get("is_top") not in (None, "") and top is None:
-                    note = (f"is_top「{params.get('is_top')}」认不出来（只支持 1/0）："
-                            "不调用任何工具，如实向主人问清")
-                elif status is None and top is None:
-                    note = ("article_status 没有指出要改什么（status / is_top）："
-                            "不调用任何工具，如实向主人问清要改成什么")
-                else:
-                    # **一篇一条 spec**（20261009，与 `tag_create.titles` 同一条纪律）：
-                    # N 篇 ⇒ N 条 `set_article_status`，多 spec 的现成通道全部自动接上
-                    # （卡印成清单 + 「全部办」、逐条执行、逐条回执、逐条"已是目标值"
-                    # 摘除）。N=1 时逐字节等于旧行为（键序 article_id→status→is_top 不变）。
-                    fields = {}
-                    if status is not None:
-                        fields["status"] = status
-                    if top is not None:
-                        fields["is_top"] = top
-                    for one in aids:
-                        tools.append("set_article_status("
-                                     + json.dumps({"article_id": one, **fields},
-                                                  ensure_ascii=False) + ")")
-                    note = (f"修改文章 {'、'.join(str(x) for x in aids)}："
-                            + "、".join(filter(None, [
-                                f"状态→{A.status_cn(status)}" if status is not None else "",
-                                f"置顶→{A.top_cn(top)}" if top is not None else ""]))
-                            + "（只改点名的字段）")
+                # 整支抽成函数（20261015 批 1，见其头注）：它自身是独立的一件事。
+                # ⚠️ `status` 是**回传的同名捕获**（既有行为、不是这里新引入的）——见那头注
+                # 里那两段 ⚠️：直接删掉这个赋值会让 3 格计划 status 当场变样。
+                atools, note, status = _expand_article_status(params, aids)
+                tools.extend(atools)
             else:  # article_tags
                 aid = aid if aid is not None else (aids[0] if len(aids) == 1 else None)
                 add, rm, rep = params.get("add"), params.get("remove"), params.get("replace")
