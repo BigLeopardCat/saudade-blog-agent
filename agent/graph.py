@@ -7236,7 +7236,7 @@ def _evidence_on() -> bool:
     return bool(getattr(settings, "agent_evidence", False))
 
 
-def _evidence_fields(plan_obj: dict, user_msg, ledger_src: str = ""
+def _evidence_fields(plan_obj: "dict | None", user_msg, ledger_src: str = ""
                      ) -> tuple[list[tuple[str, str, object, bool]], list[str]]:
     """计划里**该有出处**的那几格 → `[(工具名, 参数名, 值, 今天判它有没有出处)], [待议的扩大项]`。
 
@@ -7264,6 +7264,10 @@ def _evidence_fields(plan_obj: dict, user_msg, ledger_src: str = ""
     wanted: list[tuple[str, str, object, bool]] = []
     seen: set[tuple[str, str]] = set()
     widen: list[str] = []
+    # 没有计划 ⇒ 没有格子（`plan_obj` 的缺省 `{}` 同义）。**不是**"一条空事件"：
+    # 调用点靠 `wanted` / `widen` 非空才落事件，所以这一支什么都不产出。
+    if plan_obj is None:
+        return wanted, widen
     scope = _prov.write_scope_tools()
     sq_msg = _squash_spaces(user_msg)
     sq_ledger = _squash_spaces(ledger_src)
@@ -7284,15 +7288,15 @@ def _evidence_fields(plan_obj: dict, user_msg, ledger_src: str = ""
                 if isinstance(one, str) and one.strip():
                     wanted.append((name, k, one.strip(),
                                    _grounded_value(one, sq_msg, sq_ledger)))
-        for k in (tkey, pkey):
-            if not k or k not in args or (name, k) in seen:
+        for nk in (tkey, pkey):
+            if not nk or nk not in args or (name, nk) in seen:
                 continue
-            seen.add((name, k))
-            got = str(args[k] or "").strip()
+            seen.add((name, nk))
+            got = str(args[nk] or "").strip()
             today = bool(got) and _msg_grounded_name(got, user_msg, spans, lex)
             # 值一律**去两端空白**再进这行（`review` 自己也 strip）：`_evidence_shadow`
             # 要按 `(参数名, 值)` 把两问对齐，两边不 strip 就会对不上、`today` 记成 None。
-            wanted.append((name, k, got, today))
+            wanted.append((name, nk, got, today))
         if name in scope and name not in _WRITE_VALUE_FIELDS \
                 and name not in _WRITE_NAME_FIELDS:
             ks = ",".join(sorted(args))
@@ -7353,7 +7357,7 @@ def _evidence_shadow(c: "_DecideCtx", ledger_src: str) -> None:
             record("planner", "evidence_shadow", **rec)
 
 
-def _refused_values(plan_obj: dict, wtool: str) -> list[str]:
+def _refused_values(plan_obj: "dict | None", wtool: str) -> list[str]:
     """被拒那一件工具上**该有出处**的那几格的值（trace 用，20261014）。
 
     为什么要它：拒绝这件事此前只活在一段散文（`reason=` 里的 `why`）里，于是
@@ -7361,6 +7365,8 @@ def _refused_values(plan_obj: dict, wtool: str) -> list[str]:
     判据就瞎。判据读结构化字段是本仓既定纪律（同 `write_value_unresolved` 的 `values=`）。
     """
     out: list[str] = []
+    if plan_obj is None:      # 没有计划 ⇒ 没有值可拒（判据读的是"空"，不是"缺席"）
+        return out
     for spec in (plan_obj.get("tools") or []):
         if _tool_name(spec) != wtool:
             continue
