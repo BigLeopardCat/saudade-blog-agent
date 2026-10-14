@@ -996,6 +996,7 @@ def _src(p):
 # 父仓 —— 那时**明说跳过**，不假装通过。
 sys.path.insert(0, str(ROOT / "tests"))
 import _parent_repo  # noqa: E402
+import _ctx_src  # noqa: E402  （模型可见正文的取值入口：`prose()`）
 
 _rust = _parent_repo.read(
     "src/routes/chat.rs",
@@ -1118,7 +1119,8 @@ check("收藏列表进了『有据』的帧来源（收藏过的文章 id 也算
 # ══════════════════════════════════════════════════════════════════
 print("\n⑦ 语料与判据（20260923 批 8：这套能力「读不到时会说什么」是判据的一部分）")
 
-_g_src = _src("agent/graph.py")
+_g_src = _ctx_src.prose()   # 下面整段判的是**叙述纪律正文本体**（20261014 起住 prompts.py；
+                            # 仍读 graph.py 全文会假红——句子还在，只是换了文件）
 # 20261004 改口：纪律 20 与帧文案同批改。这一条锁的是"纪律与帧**同源**"——纪律里
 # 引的帧原话必须就是 `tools/base._NO_IDENTITY_READ` 那句，不然模型会照着一句不存在的
 # 帧措辞去编。

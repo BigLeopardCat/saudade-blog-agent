@@ -191,7 +191,7 @@ saudade-blog-agent/
 │   ├── entities.py        执行回执实体摘要
 │   ├── tasks.py           跨轮任务状态
 │   ├── hostinfo.py        本机运维读数（只读 /proc、systemctl、日志）
-│   ├── prompts.py         人设与叙述规则
+│   ├── prompts.py         ★ 全部模型可见正文（人设 / 叙述纪律 / planner 与 reflector 模板 / 输出契约）
 │   ├── moderator.py       留言 AI 审核侧任务
 │   ├── summarizer.py      对话摘要侧任务
 │   └── …                  其余模块见目录（action_text / factblock / stickers / llm_usage / agent / memory 等）

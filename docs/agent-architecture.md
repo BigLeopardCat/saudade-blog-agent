@@ -95,7 +95,8 @@ flowchart TB
 │   ├── summarizer.py          # 侧任务·摘要：fail-empty
 │   ├── hostinfo.py            # 本机运维读数（只读 /proc、systemctl、日志）——get_server_status / get_service_health 的数据源
 │   ├── reports.py             # 四张后台报表的纯函数出口（数字在工具侧算好，不让 LLM 数数）
-│   ├── prompts.py             # BLOG_ASSISTANT_PROMPT：猫猫女仆人设 + 叙述规则（model 零工具 narrator 用；工具调用规则在 planner/技能注册表侧）
+│   ├── prompts.py             # ★ 全部模型可见正文的唯一落点（20261014 起：猫猫女仆人设 BLOG_ASSISTANT_PROMPT +
+│   │                          #   叙述纪律 + planner / reflector 模板 + 输出契约）；渲染点与全部逻辑仍在 graph.py
 │   └── __init__.py
 ├── rag/                       # ★ RAG 检索管线（20260830）：词法 2/3-gram BM25 内存倒排 + 10 分钟懒刷新，
 │   │                          #   语料=线上可见文章（20260901 净化：说说/留言/公告移出检索池，走数据工具直查）；

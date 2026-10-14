@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT / "eval"))
 
 import server  # noqa: E402
 import run_golden as rg  # noqa: E402  （夹具占位符展开：expand_now / build_request）
+import agent.graph as G  # noqa: E402  （提示词正文本体；20261014 起住在 agent/prompts.py）
 
 FAILS: list[str] = []
 
@@ -111,19 +112,23 @@ def test_raw_ledger_stays_raw():
 
 def test_prompt_wiring():
     print("[接线] 规划纪律 6c 与叙述纪律 22 都在，且与 6b 划清边界")
-    src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-    check("规划纪律有 6c 现时状态类询问", "6c. 现时状态类询问" in src)
-    check("6c 要求重新调用同一个数据工具", "必须重新调用**同一个数据工具**" in src)
+    # 20261014：这两串正文（planner 模板 / 叙述纪律）已从 `agent/graph.py` 搬到
+    # `agent/prompts.py` ⇒ 断言改指**常量本体**（模型真正读到的那串）。判据形状与措辞
+    # 一个字没变，只是取值改从"图文件全文"换成"提示词/纪律本体"。
+    _tpl, _disc = G._PLANNER_PROMPT, G.NARRATOR_DISCIPLINE
+    check("规划纪律有 6c 现时状态类询问", "6c. 现时状态类询问" in _tpl)
+    check("6c 要求重新调用同一个数据工具", "必须重新调用**同一个数据工具**" in _tpl)
     check("6c 明确不适用于前端实时状态（current_* 字段）",
-          "current_url`/`current_effects`/`current_darkmode` 字段" in src)
-    check("6c 明确把取值指代（6b）摘出去", "走 6b" in src)
+          "current_url`/`current_effects`/`current_darkmode` 字段" in _tpl)
+    check("6c 明确把取值指代（6b）摘出去", "走 6b" in _tpl)
     check("规则 6 里那句格式说明提到了「（…前）」并指向 6c",
-          "是**系统按当前时间算好的**" in src and "见 6c" in src)
-    check("叙述纪律 22 管「刚才」措辞", "22. 时间措辞不许模糊过去的距离" in src)
+          "是**系统按当前时间算好的**" in _tpl and "见 6c" in _tpl)
+    check("叙述纪律 22 管「刚才」措辞", "22. 时间措辞不许模糊过去的距离" in _disc)
     check("叙述纪律 22 要求照抄系统给的年龄",
-          "照抄系统给的年龄" in src.replace("\n", "").replace("    ", ""))
+          "照抄系统给的年龄" in _disc.replace("\n", "").replace("    ", ""))
     check("narrator 拿得到台账原文与年龄（注入块里两样都在）",
-          "{page_ctx}" in src and "『已执行』行行首时间" in (ROOT / "server.py").read_text(encoding="utf-8"))
+          "{page_ctx}" in _tpl
+          and "『已执行』行行首时间" in (ROOT / "server.py").read_text(encoding="utf-8"))
 
 
 def test_fixture_intent():
