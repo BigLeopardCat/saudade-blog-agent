@@ -675,13 +675,15 @@ _SPEC = 'send_user_notice({"name": "guest5", "content": "%s"})' % BODY
 _saved_tool = g._TOOL_MAP.get("send_user_notice")
 try:
     # 前提：证明"弹卡"不是**因为那句话本身不被放行**——那把尺子对「…，我说的」是真会
-    # 放行的（下面对 delete_tag 是 True），同一句换到 send_user_notice 上必须是 False，
+    # 放行的（下面对 set_article_status 是 True），同一句换到 send_user_notice 上必须是 False，
     # 唯一的差别只能是 `_ALWAYS_CONFIRM_TOOLS` 那道早退。不钉这一条，用一把本来就不认
     # 的尺子去测，"每次都弹"会因**另一个原因**成立——测的是空气。
+    # 尺子为什么是它：20261015 起判据**按工具判**（每个工具声明自己认的动作词），
+    # `set_article_status` 认「设为…」而 `delete_tag` 只认「去掉/移除…」。
     _GRANTABLE = "把文章 123 设为私密，我说的"
-    check("（前提）这句话在那把尺子下本来就该放行（对标签族 True）"
+    check("（前提）这句话在那把尺子下本来就该放行（对它自己那个工具 `set_article_status` True）"
           "——同一句换到发通知上必须是 False",
-          authz.consent_granted(_adm, "delete_tag", _GRANTABLE) is True
+          authz.consent_granted(_adm, "set_article_status", _GRANTABLE) is True
           and authz.consent_granted(_adm, _t, _GRANTABLE) is False, _GRANTABLE)
     g._TOOL_MAP["send_user_notice"] = _FakeTool(
         base.ok(A.render_notice_status("guest5", 126, "", BODY),

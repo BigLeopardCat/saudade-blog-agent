@@ -405,10 +405,12 @@ check("非管理员不放行（权限先于确认）",
           and not authz.check(Principal(uid=9, role=None), t).allowed
           for t in _Q3), "")
 # 前提：证明"每次都弹"不是因为那句话本身不被放行——那把尺子对「…，我说的」真会放行
+# （20261015 起判据按工具判：尺子要用**认这句里那几个动作词**的那个工具，
+#  `set_article_status` 认「设为…」，`delete_tag` 只认「去掉/移除…」）
 _GRANTABLE = "把文章 123 设为私密，我说的"
-check("（前提）这句话在那把尺子下本来就该放行（对标签族 True）"
+check("（前提）这句话在那把尺子下本来就该放行（对它自己那个工具 `set_article_status` True）"
       "——同一句换到额度三件上必须是 False，唯一的差别只能是那道早退",
-      authz.consent_granted(_adm, "delete_tag", _GRANTABLE) is True
+      authz.consent_granted(_adm, "set_article_status", _GRANTABLE) is True
       and all(authz.consent_granted(_adm, t, _GRANTABLE) is False for t in _Q3),
       _GRANTABLE)
 check("⭐ 任何措辞都不算同意（命令式也不）——**行为**断言",

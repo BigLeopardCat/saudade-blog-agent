@@ -255,8 +255,9 @@ check("公告三件即使写成明确命令也判不出确认（捷径结构性�
       str([m for m in _ANN_CMDS
            if authz.consent_granted(p(ROLE_ADMIN), "create_announcement", m)]))
 # 同一句「新建一个…叫 X」对标签/分类仍判成命令——收窄只落在公告三件上。
-# （删除类命令本来就不在 `_CONSOLE_VERBS` 里（"删了"这种词形没进表），那是既有
-# 收窄方向：判不出来就弹窗问一次，不放开。）
+# （删除类命令本来就不在动作词表里（"删了"这种词形没进表），那是既有收窄方向：
+# 判不出来就弹窗问一次，不放开。20261015 批 5 起这条"不放开"是 `_CONSOLE_TOOL_ACTIONS`
+# 里 `delete_*` 两行的显式空位，不再依赖"词表恰好没长那几个词"。）
 check("同一句话对**别的**后台写仍算命令（收窄只落在公告三件上）",
       authz.consent_granted(p(ROLE_ADMIN), "create_tag", "新建一个标签叫 探针标签")
       and authz.consent_granted(p(ROLE_ADMIN), "create_category", "新建一个分类叫 随笔"))
@@ -341,26 +342,31 @@ print("⑨c 后台写确认语（命令式判据：判『本轮有没有明确�
 # 是一条**判据函数**（_console_command）——因为后台写的命令有无数种说法，但
 # "什么算命令"是可判的：必须有动作词 + 目标 + 命令句式，且排除疑问/假设。
 # 误判方向不对称：判成"命令"= 直接动生产数据；判成"不是命令"= 多问一句。故 fail-closed。
+#
+# 20261015 批 5：判据从"共享词表 + 工具无关"改成**按工具名判**（每个工具声明自己认
+# 哪些动作词，`_CONSOLE_TOOL_ACTIONS`）。所以正例表改成 **(工具, 句子)** 对——一句
+# 话只对它自己那个工具成立，这正是本批要的性质（旧版任何工具撞上任何动作词都算命令，
+# 「把分类「X」改名叫「Y」」对 delete_category 也判成立 = 误靶写）。
 CONSOLE_POS = [
-    "把文章 12 设为私密",
-    "把文章 12 设为私密。",
-    "帮我把《架构文档》隐藏起来",
-    "把文章 12 置顶",
-    "取消文章 12 的置顶",
-    "请把文章 12 的标签改成 Python 和 架构",
-    "帮我建一个标签：Python",
-    "新建一级标签「测试」",
-    "给文章 12 打上标签 Python",
-    "把文章 12 的标签去掉",
-    "发布文章 12",
-    "把这篇设为草稿",
+    ("set_article_status", "把文章 12 设为私密"),
+    ("set_article_status", "把文章 12 设为私密。"),
+    ("set_article_status", "帮我把《架构文档》隐藏起来"),
+    ("set_article_status", "把文章 12 置顶"),
+    ("set_article_status", "取消文章 12 的置顶"),
+    ("set_article_status", "发布文章 12"),
+    ("set_article_status", "把这篇设为草稿"),
+    ("set_article_tags", "请把文章 12 的标签改成 Python 和 架构"),
+    ("set_article_tags", "给文章 12 打上标签 Python"),
+    ("set_article_tags", "把文章 12 的标签去掉"),
+    ("create_tag", "帮我建一个标签：Python"),
+    ("create_tag", "新建一级标签「测试」"),
     # 20260922：后台标签/分类写域的两个说法。活体探针腿⑭ 实测「把分类「X」改名叫
     # 「Y」」**命不中快道**（表里只有「改名为」，没有「改名/改名叫」）⇒ 用户明明下的是
     # 命令却落进弹窗那条路。命令快道是 fail-closed 的（判错只是多问一次），但"常用
     # 说法不在表里"不是保守，是缺口——这两条钉住它。
-    "把分类「随笔」改名叫「碎笔」",
-    "把标签「Asyncio」改名成「异步」",
-    "给标签「Python」改名叫「蟒蛇」",
+    ("update_category", "把分类「随笔」改名叫「碎笔」"),
+    ("update_tag", "把标签「Asyncio」改名成「异步」"),
+    ("update_tag", "给标签「Python」改名叫「蟒蛇」"),
 ]
 CONSOLE_NEG = [
     "把文章 12 设为私密会有什么影响？",
@@ -376,33 +382,61 @@ CONSOLE_NEG = [
     "这些标签是做什么用的",
     "你能置顶文章吗",
 ]
-_bad_pos = [t for t in CONSOLE_POS
-            if not authz.consent_granted(p(ROLE_ADMIN), "set_article_status", t)]
-_bad_neg = [t for t in CONSOLE_NEG
-            if authz.consent_granted(p(ROLE_ADMIN), "set_article_status", t)]
-check(f"后台写命令语认得（{len(CONSOLE_POS)} 条）", not _bad_pos, f"漏判: {_bad_pos}")
+_bad_pos = [(t, m) for t, m in CONSOLE_POS
+            if not authz.consent_granted(p(ROLE_ADMIN), t, m)]
+_bad_neg = [m for m in CONSOLE_NEG
+            if authz.consent_granted(p(ROLE_ADMIN), "set_article_status", m)]
+check(f"后台写命令语认得（{len(CONSOLE_POS)} 条，各自判给自己的工具）",
+      not _bad_pos, f"漏判: {_bad_pos}")
 check(f"疑问/假设/闲聊不是命令（{len(CONSOLE_NEG)} 条）", not _bad_neg, f"误判: {_bad_neg}")
-check("命令式判据三种工具共用（同一句对三个工具结论一致）",
-      all(authz.consent_granted(p(ROLE_ADMIN), t, "把文章 12 设为私密")
-          for t in ("create_tag", "set_article_status", "set_article_tags")))
+# 本批的**主线**（取代旧的「三种工具共用」那条锁——那条钉的正是要改掉的性质）：
+# 同一句命令，写对了工具才成立，写错了工具必须判 False（否则 planner 误靶选工具时，
+# scope 级同意会把它放过去直接写生产数据）。
+check("判据按工具判：『把文章 12 设为私密』只对 set_article_status 成立",
+      authz.consent_granted(p(ROLE_ADMIN), "set_article_status", "把文章 12 设为私密")
+      and not authz.consent_granted(p(ROLE_ADMIN), "create_tag", "把文章 12 设为私密")
+      and not authz.consent_granted(p(ROLE_ADMIN), "set_article_tags", "把文章 12 设为私密")
+      and not authz.consent_granted(p(ROLE_ADMIN), "delete_category", "把文章 12 设为私密"))
+check("判据按工具判：『把分类「随笔」改名叫「碎笔」』不喂给 delete_category/delete_tag",
+      authz.consent_granted(p(ROLE_ADMIN), "update_category", "把分类「随笔」改名叫「碎笔」")
+      and not authz.consent_granted(p(ROLE_ADMIN), "delete_category", "把分类「随笔」改名叫「碎笔」")
+      and not authz.consent_granted(p(ROLE_ADMIN), "delete_tag", "把分类「随笔」改名叫「碎笔」"))
+# 判据问的是"这句话是不是**这个工具**的命令"，少了工具那一半等于回到那张共享词表
+# ⇒ 不知道工具就判不了（fail-closed，走弹窗），与 `_own_command` 同一取向。
+check("不知道是哪个工具 ⇒ 判不了命令（tool=None 恒 False，不回退到共享词表）",
+      authz._console_command("把文章 12 设为私密") is False)
+# 完备性锁（**派生**，不是手抄对照）：够得着快道的工具 = write.console − 一律弹窗那批，
+# 而它必须与"声明了动作词的工具"**逐一相等**。新加一件后台写工具时，要么进
+# `_ALWAYS_CONFIRM_TOOLS`（每次弹卡），要么必须有人写一行"它认哪些动作词"的声明——
+# 旧版没有这条：新工具静默继承整张共享词表，没人确认过它该认什么。
+check("动作词声明的键 == 够得着快道的工具（新工具不声明就红）",
+      set(authz._CONSOLE_TOOL_ACTIONS) == set(authz.console_fastpath_tools()),
+      f"多: {sorted(set(authz._CONSOLE_TOOL_ACTIONS) - set(authz.console_fastpath_tools()))} "
+      f"少: {sorted(set(authz.console_fastpath_tools()) - set(authz._CONSOLE_TOOL_ACTIONS))}")
+check("一律弹窗的工具不在动作词声明里（给它们声明 = 声明一条走不到的路径）",
+      authz.console_fastpath_tools().isdisjoint(set(authz.always_confirm_tools()))
+      and not set(authz.always_confirm_tools()) & set(authz._CONSOLE_TOOL_ACTIONS))
 check("同意看的是本轮消息，与 principal 无关（user 说命令也不放行——权限在更前面拦）",
       not authz.check(p(ROLE_USER), "set_article_status").allowed)
 
 # ⑨d「确认…」短回声（20260921 生产实测）：agent 自己建议的说法、用户照抄一遍，
 # 此前一律判 False ⇒ 同意闸不放行 ⇒ planner 追问 ⇒ 用户再打一遍 ⇒ 又 False
 # （**没有出口**）。这一支只认句首的「确认 + 写动词」骨架，并排除打听尾。
+# 判据形状与 ⑨c 同一把尺子：(工具, 句子) 对——回声里那个动词也得是**这个工具的**。
 print("⑨d 「确认…」短回声（agent 建议、用户照抄的那句话必须放行）")
 CONFIRM_ECHO = [
-    "确认创建标签 测试",
-    "确认创建标签 agent标签功能测试",
-    "确认一下新建二级标签 测试",
-    "确认把文章 12 设为私密",     # 「确认 + 写动词」→ 短回声骨架
-    "确认发布文章 12",
-    "确认置顶文章 12",
+    ("create_tag", "确认创建标签 测试"),
+    ("create_tag", "确认创建标签 agent标签功能测试"),
+    ("create_tag", "确认一下新建二级标签 测试"),
+    ("set_article_status", "确认把文章 12 设为私密"),     # ① 把字结构
+    ("set_article_status", "确认发布文章 12"),            # ② 动词紧跟确认
+    ("set_article_status", "确认置顶文章 12"),
 ]
-_bad_echo = [t for t in CONFIRM_ECHO
-             if not authz.consent_granted(p(ROLE_ADMIN), "create_tag", t)]
+_bad_echo = [(t, m) for t, m in CONFIRM_ECHO
+             if not authz.consent_granted(p(ROLE_ADMIN), t, m)]
 check(f"短回声判成命令（{len(CONFIRM_ECHO)} 条）", not _bad_echo, f"漏判: {_bad_echo}")
+check("短回声也按工具判：『确认把文章 12 设为私密』对 create_tag 不成立",
+      not authz.consent_granted(p(ROLE_ADMIN), "create_tag", "确认把文章 12 设为私密"))
 CONFIRM_ECHO_NEG = [
     "确认一下文章 12 是不是私密",     # 打听（是不是）——回声骨架不许把它救活
     "确认一下这个标签能不能删",       # 能不能
@@ -413,6 +447,12 @@ CONFIRM_ECHO_NEG = [
 _bad_echo_neg = [t for t in CONFIRM_ECHO_NEG
                  if authz.consent_granted(p(ROLE_ADMIN), "set_article_status", t)]
 check(f"打听不是命令（{len(CONFIRM_ECHO_NEG)} 条）", not _bad_echo_neg, f"误判: {_bad_echo_neg}")
+# 删除族的连写说法（「删掉标签」）刻意**不判命令**、走弹窗——旧版靠"词表恰好没长这几个
+# 词"达成，本批把它做成**声明里看得见**的空位（`delete_*` 的 lead/echo 是空元组）。
+check("删除族的连写说法仍不判命令（刻意走弹窗，不是缺口）",
+      not authz.consent_granted(p(ROLE_ADMIN), "delete_tag", "把标签 Asyncio 删掉")
+      and not authz.consent_granted(p(ROLE_ADMIN), "delete_tag", "删了 Asyncio 那个标签")
+      and not authz.consent_granted(p(ROLE_ADMIN), "delete_category", "把分类「随笔」删掉"))
 
 # 生产事故原句：**不是**命令（走弹窗，不走快道）——放宽谓词时最容易顺手连带
 # 放宽的一句，单独钉住。
@@ -724,7 +764,10 @@ for _tool, _t in _VOC_SAMPLES:
     _s = _VOC_ADDR.sub("", _t, count=1)          # 剥称呼后的同一句话——判据必须给出同一结论
     for _name, _f in (("consent", lambda x: authz.consent_granted(p(ROLE_ADMIN), _tool, x)),
                       ("question", authz.is_question_like),
-                      ("console", authz._console_command)):
+                      # 判据按工具判（20261015 批 5）：这一臂必须带上 `_tool`，否则
+                      # `_console_command(x)` 恒 False、两边都是 False —— 一条**空转**的
+                      # 透明性检查（本仓「假透明」老坑：两个臂都全绿不等于判据在动）。
+                      ("console", lambda x: authz._console_command(x, _tool))):
         if _f(_t) != _f(_s):
             _vdiff.append(f"{_name}:{_t}")
 check(f"带称呼与不带称呼判定一致（{len(_VOC_SAMPLES)} 条 × 3 个判据）", not _vdiff,
