@@ -513,7 +513,9 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 - **不换模型求稳**：8 个洞里 3 个是系统自己喂错数据/读错字段，换模型一条都修不掉。
 - **不引入第三方 agent 框架**：现有拓扑（planner ⇄ execute → model → gate）与
   checker/receipts/refs 已具备所需结构，问题在**数据契约**不在编排。
-- **不为判据加更多词表**：先减后加（D6 的 KPI 就是不许加）。
+- **不为判据加更多词表**：先减后加（D6 的 KPI 就是不许加）。——**20261014 起这条不再是散文**：
+  机器判据在 `eval/wordlist_gate.py` + `eval/judge_registry.json`（未登记的中文表即红、已登记的只许
+  变小、`open` 类必须写明替代与收口批次），由 `tests/test_wordlist_gate.py` 反控。
 - **不做会话控制类新功能**（取消/重做/多任务并行）——不在本轮范围。
 - **不动 `authz_enforce` / `_HARD_SCOPES` / 写工具 fail-closed 纪律**：
   `uid<=0` 不发请求、HTTP 200 不算成功、"没做成"必须 `unavailable`——这三条是今天唯一没出事的层，别碰。
