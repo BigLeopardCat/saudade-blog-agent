@@ -419,6 +419,18 @@ _ALWAYS_CONFIRM_TOOLS = frozenset({
     "account_mute", "account_unmute",
 })
 
+
+def always_confirm_tools() -> frozenset[str]:
+    """`_ALWAYS_CONFIRM_TOOLS` 的**公开读口**（20261014）。
+
+    存在的理由只有一个：写参数出处闸的**强制域**要按"卡片会不会把值全量印出来"
+    派生（见 `agent/provenance.py` 头注 1），而那个判据住在另一个模块里。**这里不
+    新增任何语义**——表是同一份，函数名只是让"谁读它"能 grep 出来，而不是让下一个人
+    去 import 一个下划线名（那正是"两份名单各漂各的"的开头）。
+    """
+    return _ALWAYS_CONFIRM_TOOLS
+
+
 # 每个需确认的 scope 配一张**确认语表**：用户的**本轮消息**命中才算确认。
 # 刻意收窄（"确认发布"这种明确说法）——fail-open 的代价是未经同意把内容发出去，
 # 宁可多问一轮。扩表时先问一句：这句话会不会被误读成确认？

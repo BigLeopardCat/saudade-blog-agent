@@ -39,6 +39,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from agent.provenance import (
+    EVIDENCE_ARG,
+    EVIDENCE_FIELD_DESC,
+    evidence_prop_schema,
+    parse_evidence,
+    write_scope_tools,
+)
 from agent.skills import (
     SKILL_MAP,
     ParamSpec,
@@ -97,6 +104,11 @@ class NativeDecision:
     # 拿这个标记去走一次纠偏——见 `planner_node` 的"零调用"那一格与
     # `_PLANNER_OUTPUT_CONTRACT_NATIVE` 第 7 条。
     undecided: bool = False
+    # 出处引文（20261014 第一批，`agent/provenance.py`）：挂在动作调用上的那一格
+    # `evidence` 摘下来之后的**归一产物** `((arg, quote), ...)`。空元组 = 模型没给
+    # （出厂关这一档的常态，也是开档但目标明确时的常态）。**它只进 trace 与影子核验**：
+    # 第一批**不拦任何事**，也**永不进 `spec.args`**（见模块头注的出处通道一节）。
+    evidence: tuple[tuple[str, str], ...] = ()
 
 
 def _items_schema(sp: ParamSpec) -> dict:
@@ -246,7 +258,20 @@ def _override_for(role: str | None, skill_name: str, param: str) -> dict | None:
     return out
 
 
+def _has_write_tool(skill) -> bool:
+    """这个技能**可能**派出去的工具里，有没有落在出处闸射程内的写工具（20261014）。
+
+    取两者之和（`plan` 模板 + `extra_plan_tools` 条件工具），即"这份令牌里容得下
+    哪几件"——与 `_confirm_grant_plan` 的形状检查**同一处事实源**（见 `Skill.extra_plan_tools`
+    的注：只看 `plan` 会漏掉 `article_tags` 的 `create_tag`，而那正是要出处的那一件）。
+    """
+    scope = write_scope_tools()
+    return any(t in scope for t in
+               [t for t, _ in skill.plan] + list(skill.extra_plan_tools))
+
+
 def build_tool_schema(role: str | None, *, task_state: bool = False,
+                      evidence: bool = False,
                       deny: frozenset[str] | set[str] | None = None,
                       deny_pseudo: frozenset[str] | set[str] | None = None) -> list[dict]:
     """本轮这个身份能选的技能 → OpenAI `tools` 数组。
@@ -279,6 +304,12 @@ def build_tool_schema(role: str | None, *, task_state: bool = False,
     它**不进 `required`**、也不改 `params`（`tool_calls_to_plan` 摘走它再归一化），
     所以"模型不填"这条路径与本参数不存在时**逐字节相同**。
 
+    `evidence=True`（20261014 第一批，**出厂关**）时，**会产出写工具的技能**再多一格
+    可选参数 `evidence`（出处引文，见 `agent/provenance.py` 头注）。三个"同 `intents`"：
+    不进 `required`、不进 `params`（`tool_calls_to_plan` 摘走）、不填时逐字节相同。
+    两处不同：① 只挂在**射程内**的技能上（`_has_write_tool`，射程是派生的）；
+    ② 这一批**只是影子**——摘出来的引文没人拿它拦任何事，只落 trace。
+
     **`deny_pseudo` 是同一个 `deny` 的伪函数版**（20261008 批 ②，见 `graph.py` 里
     "只交意图清单"那一格）：语义、代价、空集不变性**逐条同 `deny`**，只有一处不同——
     它的来源不是"上一轮失败过"，而是"**这一轮回的正是它**"。实测依据（两条 golden
@@ -309,6 +340,14 @@ def build_tool_schema(role: str | None, *, task_state: bool = False,
         # 把它置顶"），而"哪几件"这件事与技能是不是写无关。
         if task_state:
             props[INTENTS_ARG] = intents_prop_schema(INTENTS_FIELD_DESC)
+        # 出处引文（20261014 第一批，`evidence` 那一格）：**只挂在会产出写工具的
+        # 技能上**。射程由 `agent/provenance.write_scope_tools` 派生（= authz 里声明
+        # 为写 ∧ 不在"一律弹窗"族），不是第二份手抄名单——挂多了是给模型白送一格
+        # 没人读的自我说明，挂少了影子数据会缺一整族。
+        # 与 `intents` 一样：**不进 `required`、不进 `params`**（`tool_calls_to_plan`
+        # 摘走），所以"模型不填"与本参数不存在时逐字节相同。
+        if evidence and _has_write_tool(skill):
+            props[EVIDENCE_ARG] = evidence_prop_schema(EVIDENCE_FIELD_DESC)
         # 描述里的工具枚举标记**必须在这里展开**（20260927 修）：技能描述里写着
         # `__无参只读工具清单__` 这类占位（见 skills.py 的 `_EXPLICIT_TOOLS_MARK`），
         # 角色相关的展开此前只发生在文本菜单那一路（`skills.py` 的 `render_tool_marks`）⇒ native 档把
@@ -359,6 +398,52 @@ def _content_of(resp: object) -> str:
     if isinstance(raw, list):
         return "".join(b.get("text", "") for b in raw if isinstance(b, dict))
     return ""
+
+
+def _split_pseudo_calls(calls: list, role: str | None):
+    """把**三个伪函数**（登记 / 撤下 / 意图清单）从调用里摘出来。
+
+    返回 `(剩下的调用, declare, intents, notes)`。`task_state=True` 时它们不参与技能选择，
+    单独归一化成 `declare` / `intents`（机制与取向见 `tool_calls_to_plan` 头注那一节）。
+    判不了一律**记账不猜**：
+      · 两个伪函数同轮出现 ⇒ 取登记、把撤下记成 `task_drop_ignored`（代价不对称：丢掉
+        登记 = 这件事又没人管了，丢掉撤下 = 系统多跟踪一会儿，下一轮照样能撤）；
+      · 归一化失败（没给 goal / 一条有效步骤都没有 / 撤下的 goal 是空的）**不等于判不了**
+        ——当作"这次登记无效"记一笔，继续按剩下的调用决定这一轮：为此丢掉一个合法决策
+        是更大的损失。这一格也是"空 steps 撤下"那条老路的终点：它现在什么都不做
+        （见 `agent/tasks.py` 的 TASK_DROP 注）；
+      · 意图清单与登记**互不替代**，两条可以同时出现（"这一轮做一件 + 把这句话里剩下那
+        几件记下来"正是它该有的形态）；整份判无效（没给数组 / 一条都归一不出来）同样只记一笔。
+    """
+    rest, holds, drops, ints = [], [], [], []
+    for c in calls:
+        nm = str((c or {}).get("name") or "") if isinstance(c, dict) else ""
+        if nm == TASK_HOLD:
+            holds.append(c)
+        elif nm == TASK_DROP:
+            drops.append(c)
+        elif nm == TASK_INTENTS:
+            ints.append(c)
+        else:
+            rest.append(c)
+    notes: list[str] = []
+    declare: dict | None = None
+    intents: tuple[dict, ...] = ()
+    if holds and drops:
+        notes.append("task_drop_ignored")
+    if holds:
+        declare = normalize_declaration((holds[0] or {}).get("args"))
+        if declare is None:
+            notes.append("task_hold_invalid")
+    elif drops:
+        declare = normalize_drop((drops[0] or {}).get("args"))
+        if declare is None:
+            notes.append("task_drop_invalid")
+    if ints:
+        intents = tuple(normalize_intents((ints[0] or {}).get("args"), role))
+        if not intents:
+            notes.append("task_intents_invalid")
+    return rest, declare, intents, notes
 
 
 def tool_calls_to_plan(resp: object, role: str | None, *,
@@ -420,39 +505,7 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
     intents: tuple[dict, ...] = ()
     notes: list[str] = []
     if task_state:
-        rest, holds, drops, ints = [], [], [], []
-        for c in calls:
-            nm = str((c or {}).get("name") or "") if isinstance(c, dict) else ""
-            if nm == TASK_HOLD:
-                holds.append(c)
-            elif nm == TASK_DROP:
-                drops.append(c)
-            elif nm == TASK_INTENTS:
-                ints.append(c)
-            else:
-                rest.append(c)
-        calls = rest
-        if holds and drops:
-            notes.append("task_drop_ignored")
-        # 归一化失败（没给 goal / 一条有效步骤都没有 / 撤下的 goal 是空的）**不等于判不了**：
-        # 当作"这次登记无效"记一笔（`task_hold_invalid`），继续按剩下的调用决定这一轮
-        # ——为此丢掉一个合法决策是更大的损失。这一格也是"空 steps 撤下"那条老路的
-        # 终点：它现在什么都不做（见 agent/tasks.py 的 TASK_DROP 注）。
-        if holds:
-            declare = normalize_declaration((holds[0] or {}).get("args"))
-            if declare is None:
-                notes.append("task_hold_invalid")
-        elif drops:
-            declare = normalize_drop((drops[0] or {}).get("args"))
-            if declare is None:
-                notes.append("task_drop_invalid")
-        # 意图清单（20261008 批 ②）：与登记**互不替代**，两条可以同时出现（"这一轮做一件
-        # + 把这句话里剩下那几件记下来"正是它该有的形态）。整份判无效（没给数组 /
-        # 一条都归一不出来）记一笔，不猜、也不丢掉这一轮的动作决策——同上面那条取向。
-        if ints:
-            intents = tuple(normalize_intents((ints[0] or {}).get("args"), role))
-            if not intents:
-                notes.append("task_intents_invalid")
+        calls, declare, intents, notes = _split_pseudo_calls(calls, role)
     if not calls:
         undecided = False
         if declare is None and not notes and not intents:
@@ -490,6 +543,10 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
     args = head.get("args")
     if not isinstance(args, dict):
         return None
+    # 出处引文（20261014）：**无条件摘走**，与 `evidence` 那一档开不开无关。理由同下面
+    # `intents` 那条长注（摘的是"非技能参数"），且多一条：摘掉才是"这一格不存在"那条
+    # 路径**逐字节相同**（缺键 `pop` 是 no-op）——关了出厂档不许有任何行为差，就是这条。
+    evidence = parse_evidence(args.pop(EVIDENCE_ARG, None))
     # 单独一条 `task_intents` 调用**和**一个动作调用同轮到达（网关忽略
     # `parallel_tool_calls=False` 时的形态）——下面两条记账要分开，别把"字段填了"
     # 读成"多来了一条调用"（一个是设计内的常态，一个是约定被打破的证据）。
@@ -527,11 +584,12 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
         # 而不是"intents 非空"**：字段那一路（设计内的常态）另有 `task_intents_field`
         # 一条，混用会让"约定被打破"这个信号恒真。
         notes.append(f"{TASK_INTENTS}_inline:{name}")
-    return NativeDecision(skill=name, params=args, notes=tuple(notes),
+    return NativeDecision(skill=name, params=args, notes=tuple(notes), evidence=evidence,
                           declare=declare, intents=intents, **base)
 
 
 def bind_native(llm: object, role: str | None, *, task_state: bool = False,
+                evidence: bool = False,
                 deny: frozenset[str] | set[str] | None = None,
                 deny_pseudo: frozenset[str] | set[str] | None = None) -> object:
     """把 LLM 绑上本轮的 schema。**`tool_choice` 固定 `auto`、`parallel_tool_calls=False`**。
@@ -545,6 +603,9 @@ def bind_native(llm: object, role: str | None, *, task_state: bool = False,
     · `task_state=True` 时 schema 里多一个 `task_hold`（见 `build_tool_schema` 的注）：
       开关默认 off ⇒ 这一格与它的消费方（planner 的任务登记支）一起不存在，
       线上行为逐字节不变。
+    · `evidence=True` 时会产出写工具的技能多一格 `evidence`：同样**出厂关**，
+      同样"关了就等于这一格不存在"（`build_tool_schema` 不往 `props` 里放它，
+      模型结构上发不出来）。
     · schema 为空时**不 bind**（20261002）：OpenAI 兼容网关对 `tools: []` 没有一致语义
       （有的 400，有的直接拒 `tool_choice="auto"`）。今天这一支不可达——`chat` 技能
       对任何角色可见，schema 恒非空；留着是防"将来有人把 chat 也收掉"（比如给杂鱼
@@ -552,8 +613,8 @@ def bind_native(llm: object, role: str | None, *, task_state: bool = False,
       按既有的"零调用"路径走，不新增分支。`deny` 交上来时这一支同样兜着（`chat`
       不进 deny，故仍不可达）。
     """
-    schema = build_tool_schema(role, task_state=task_state, deny=deny,
-                               deny_pseudo=deny_pseudo)
+    schema = build_tool_schema(role, task_state=task_state, evidence=evidence,
+                               deny=deny, deny_pseudo=deny_pseudo)
     if not schema:
         return llm
     return llm.bind_tools(schema, tool_choice="auto", parallel_tool_calls=False)

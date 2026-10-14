@@ -59,10 +59,6 @@
     "c": 36,
     "lines": 152
   },
-  "agent/native_plan.py::tool_calls_to_plan": {
-    "c": 44,
-    "lines": 168
-  },
   "agent/react_line.py::SkillExecutor.run": {
     "c": 33,
     "lines": 124
@@ -150,10 +146,6 @@
   "eval/task_state_probe.py::main": {
     "c": 36,
     "lines": 111
-  },
-  "eval/trace_alert.py::main": {
-    "c": 40,
-    "lines": 100
   },
   "eval/trace_reconcile.py::reconcile": {
     "c": 72,
