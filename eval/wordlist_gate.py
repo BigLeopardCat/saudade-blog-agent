@@ -478,6 +478,18 @@ def _print_eval_reds(now: dict, reg: dict) -> int:
               f"判据拦着**（跑 `--update` 出一次，再把每一条为什么不改写进 why）")
         return 1
     reds: list[str] = []
+    reds += _eval_key_reds(now, reg)
+    reds += _eval_exempt_reds(now, reg)
+    reds += _eval_family_reds(now, reg)
+    reds += _eval_metric_reds(now, reg)
+    for r in reds:
+        print(f"  ❌ {r}")
+    return len(reds)
+
+
+def _eval_key_reds(now: dict, reg: dict) -> list[str]:
+    """四个文本断言键：未登记 / why 空 / 新模式 / 格数项数变大。"""
+    reds: list[str] = []
     for k in EVAL_KEYS:
         got = now["keys"].get(k) or {}
         want = (reg.get("keys") or {}).get(k)
@@ -495,6 +507,12 @@ def _print_eval_reds(now: dict, reg: dict) -> int:
         if got["sites"] > want["sites"] or got["items"] > want["items"]:
             reds.append(f"`{k}` 变大：{want['sites']} 格→{got['sites']} 格、"
                         f"{want['items']} 项→{got['items']} 项 —— **只许变小**")
+    return reds
+
+
+def _eval_exempt_reds(now: dict, reg: dict) -> list[str]:
+    """六个豁免开关：未登记却被打开 / why 空 / 多被用例打开（豁免在替谁让路要看得见）。"""
+    reds: list[str] = []
     for k in EVAL_EXEMPT_KEYS:
         got = set(now["exempt"].get(k) or [])
         want = (reg.get("exempt") or {}).get(k) or {}
@@ -510,6 +528,12 @@ def _print_eval_reds(now: dict, reg: dict) -> int:
             reds.append(f"豁免开关 `{k}` 多被 {len(added)} 条用例打开了："
                         f"{'、'.join(added[:4])}{' 等' if len(added) > 4 else ''} —— 这一处"
                         f"让路的判据是哪一个、为什么必须让，写进它的 why")
+    return reds
+
+
+def _eval_family_reds(now: dict, reg: dict) -> list[str]:
+    """四张共享族：未登记 / why 空 / 变大 / **同数量改写**（逐条换措辞正是这一族的病）。"""
+    reds: list[str] = []
     for nm, cur in (now.get("families") or {}).items():
         want = (reg.get("families") or {}).get(nm)
         if want is None:
@@ -524,14 +548,17 @@ def _print_eval_reds(now: dict, reg: dict) -> int:
             reds.append(f"共享族 `{nm}` 被**同数量改写**（{cur['size']} 个元素，指纹 "
                         f"{want.get('sha')}→{cur['sha']}）—— 逐条替换措辞正是这一族的病"
                         f"（见 `ABSENCE_COMPOUND` 头注那次假红）")
+    return reds
+
+
+def _eval_metric_reds(now: dict, reg: dict) -> list[str]:
+    """整份判据面的总量（集合中文串 / 含中文正则字符）——窄口径看不见的表在这里现形。"""
     jm_now, jm_old = now.get("judge_metric"), (reg.get("judge_metric") or None)
     if jm_now and jm_old and any(jm_now[i] > jm_old[i] for i in (0, 1)):
-        reds.append(f"`{EVAL_JUDGE}` 的判据面总量变大：集合中文串 {jm_old[0]}→{jm_now[0]}、"
-                    f"含中文正则字符 {jm_old[1]}→{jm_now[1]} —— 窄口径看不见的表在这里现形"
-                    f"（这是 eval 侧的量，别与上面那份合并）")
-    for r in reds:
-        print(f"  ❌ {r}")
-    return len(reds)
+        return [f"`{EVAL_JUDGE}` 的判据面总量变大：集合中文串 {jm_old[0]}→{jm_now[0]}、"
+                f"含中文正则字符 {jm_old[1]}→{jm_now[1]} —— 窄口径看不见的表在这里现形"
+                f"（这是 eval 侧的量，别与上面那份合并）"]
+    return []
 
 
 def _print_eval_greens(now: dict, reg: dict) -> None:
