@@ -37,6 +37,7 @@
    桥当场换路由、陈述与动作同一时刻）。第五、六组用例锁这两向，外加"回执里的 cmd
    一字不动"。
 """
+import re
 import sys
 from pathlib import Path
 
@@ -45,6 +46,7 @@ sys.path.insert(0, str(ROOT))
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
+import agent.decisions as D  # noqa: E402
 import agent.graph as G  # noqa: E402
 from agent.graph import (  # noqa: E402
     _FALLBACK_CMD_PREFIX, _FALLBACK_CMD_PREFIX_DONE, _FALLBACK_NAV_NO_FRAME,
@@ -407,6 +409,79 @@ def test_referent_nav_fast_path():
               str(len(llm3.prompts)))
     finally:
         G.get_llm = _orig
+
+
+def test_referent_nav_lead_shell():
+    """⑤ 指代型导航快道：「带我去」前面那些衬字（称呼 / 语气词）到底由谁剥。
+
+    `_REFERENT_NAV_RE` 里**内联着一份衬字表**，而它上游的 `_bare` 已经先剥过一层
+    `authz._VOCATIVE_RE`（称呼表在那儿、正常情况下只有那一份）。两个表叠在一起，
+    "哪一条在承重"就不直观了——而"删冗余项"这条路正需要先知道这件事。实测只有三条
+    （下面逐条钉住）：
+
+      · **语气词**（好 / 嗯 / 那就 / 麻烦 / 赶紧…）由内联那一份承重：`authz` 只剥称呼，
+        不剥语气词；
+      · **单层称呼**不靠内联（`_bare` 已经剥掉），但 `_strip_address_shell` 是
+        `count=1` ⇒「猫咪猫咪带我过去」这种**叠称呼**的第二层只能靠内联；
+      · 「宝贝」**不在** `authz` 的封闭表里（泛称、不属站内人设）⇒ 只能靠内联。
+
+    所以表里 `小猫咪 / 猫咪 / 泠月喵` 看着与 `authz` 重复、**直接删掉会让叠称呼那一
+    形状静默失效**（没人看得出来：主人说「猫咪猫咪带我过去」，系统只是退回去多问一次
+    LLM，没有任何报错）。没有这几条锁就动它 = 静默收紧一条没人看得见的输入形状。
+    """
+    print("[referent_nav] 衬字（称呼 / 语气词）由谁剥")
+
+    def hit(msg):
+        p = D._referent_nav_fast_path(msg, _PREV_WITH_LINK)
+        return (p or {}).get("params", {}).get("target")
+
+    check("① 语气词衬字由内联表承重（authz 只剥称呼、不剥语气词）",
+          [hit(m) for m in ("好带我过去", "嗯带我过去", "那就带我过去",
+                            "麻烦带我过去", "赶紧带我过去", "你带我过去")]
+          == ["/article/19"] * 6)
+    check("② 单层称呼是 `_bare` 剥的（不靠内联表）",
+          hit("小猫咪带我过去") == "/article/19", str(hit("小猫咪带我过去")))
+    check("③ 叠称呼的第二层由内联表承重（`_strip_address_shell` 是 count=1）",
+          [hit("猫咪猫咪带我过去"), hit("小猫咪猫咪带我过去")] == ["/article/19"] * 2,
+          str(hit("猫咪猫咪带我过去")))
+    check("④ 「宝贝」不在 authz 的封闭表里 ⇒ 只能靠内联表",
+          hit("宝贝带我过去") == "/article/19", str(hit("宝贝带我过去")))
+    check("反控：底下那三条守卫一个都没被衬字绕过去"
+          "（只叫名字 / 句里还有别的意图 / 否定 / 提问）",
+          [hit(m) for m in ("猫咪", "宝贝", "好猫咪，这篇文章讲了什么",
+                            "别带我过去", "带我去哪一篇？")] == [None] * 5,
+          str([hit(m) for m in ("猫咪", "宝贝", "好猫咪，这篇文章讲了什么",
+                                "别带我过去", "带我去哪一篇？")]))
+
+    # 整轮：叠称呼那一形状也要证明**零 LLM**（不是靠 planner 兜住的）
+    llm = _ScriptedLLM([])               # 一个都不该被消费（消费了会 IndexError）
+    _origget = G.get_llm
+    try:
+        G.get_llm = lambda **kw: llm     # noqa: ARG005
+        out = planner_node({"messages": [AIMessage(content=_PREV_WITH_LINK),
+                                          HumanMessage(content="猫咪猫咪带我过去")],
+                            "plan_rounds": 0}, _cfg())
+        check("  叠称呼整轮：零 LLM 直接实例化 navigate 到上一轮那条链接",
+              len(llm.prompts) == 0
+              and parse_plan(out["plan"])["tools"]
+              == ['navigate_to({"path": "/article/19", "confirm": false})'],
+              str(parse_plan(out["plan"])["tools"]))
+    finally:
+        G.get_llm = _origget
+
+    # 变异臂：把内联表里「宝贝」那一条挖掉 ⇒ 上面 ④ 的**同一个判据**当场点名它。
+    # （挖掉的是被测的表，不是断言——这才是"这条锁不是恒真"的证明。）
+    _orig = D._REFERENT_NAV_RE
+    try:
+        D._REFERENT_NAV_RE = re.compile(_orig.pattern.replace("|宝贝", ""))
+        check("⑤ 变异臂：抽掉内联表里的「宝贝」⇒ 同一判据当场把那一件标红"
+              "（且阳性对照 带我过去 仍命中）",
+              hit("宝贝带我过去") is None and hit("带我过去") == "/article/19",
+              str(hit("宝贝带我过去")))
+    finally:
+        D._REFERENT_NAV_RE = _orig
+    check("  复原：变异臂还原后 ④ 的结论不变（锁没被自己的变异污染）",
+          hit("宝贝带我过去") == "/article/19")
 
 
 def test_cmd_prefix_fallback_truthful():
@@ -856,6 +931,7 @@ def main():
                test_nav_promise_claim_without_nav_command,
                test_nav_exec_claim_with_unrelated_frames,
                test_referent_nav_fast_path,
+               test_referent_nav_lead_shell,
                test_cmd_prefix_fallback_truthful,
                test_whole_page_target_not_claimed_as_done,
                test_nav_family_not_printed_into_fact_block,
