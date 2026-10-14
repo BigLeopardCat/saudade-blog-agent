@@ -16,6 +16,24 @@
 
 ## 20261015
 
+- **评测侧负正则族按现场删冗余；同族「换结构断言」的推定被归档证伪（判据被放宽，无行为变更）**——
+  `eval/golden/basic.jsonl` 的 `text_not_match_regex` **65 格 / 67 处 / 153 项 / 98 模式 →
+  35 格 / 36 处 / 86 项 / 58 模式**：删掉的 31 处**全部**在删除前就已挂着 `require_zero_exec` +
+  `forbid_tool_calls` + `require_frame_prefix`（弹窗轮的正文由 `adminops.render_confirm_text`
+  确定性产出，这一轮连 gate 节点都不到）⇒ 这是**删重复**，不是换表征。计划里那条「整族『不许声称
+  已经帮你做了 X』守的是零写 ⇒ 换 `require_zero_exec`」的推定**被自己的归档证伪**：零写轮照样能编
+  「已经建好了」，而 `own_*_not_logged_in` 那几格**必须调写工具**（写被按「未登录」拒掉、回复如实说
+  「你先登录」才是对的），在那里加零写断言当场红；剩下 36 处里只有 4 处有 `require_zero_exec`。
+  **正反词表一格没动**（正向词表没有结构替身：「工具帧里有 X」≠「回答里答了主人问的 X」），与三条
+  只能判文本的共享族（`DENIAL_FAMILY` / `ABSENCE_COMPOUND`+`ABSENCE_LEADS` / `LOGIN_DEMAND_RE`）
+  一起**登记为 `closed`（= 已定价接受、只许变小）**进 `eval/judge_registry.json` 新增的
+  `eval_vocab` 段（`eval/wordlist_gate.py` 的第三层：格/项只许变小、新模式必须登记理由、
+  `--update` 是唯一放宽通道且只刷读数）；顺手删掉一个**空载豁免** `not_match_exempt_conditional`
+  （它服务的判据整族撤除后再无消费方）。新增判据暴露度哨兵 **`eval/corpus_terms.py --exposure`**
+  （`--drift` 也会带上这一节）：把**今天的判据**跑在 1402 份归档报告上，逐格读出「正词表恒通过 /
+  恒失败 / 有区分力、负判据触发过 / 从未触发」——**只报数不判红**（负判据 0 命中在「化石」与
+  「模型一直守规矩」之间长得一模一样）。推定被证伪的三条证据、探针三条口径与首轮读数见
+  [docs/问题记录.md](docs/问题记录.md) §1.60。**agent 会怎么做，与昨天一模一样。**
 - **短应答判据换表征：三张手写中文词表整族删，准入改纯结构（⚠️ 本批唯一一条真行为变更）**——
   「好」是同意？「算了」是收回？「你看着办」是授权？此前由**三张手写中文词表**
   （`_SHORT_POS`/`_SHORT_NEG`/`_SHORT_AUTH`）＋ 正则（`_SHORT_AUTH_RE`）在剥壳后对表判出

@@ -27,6 +27,15 @@
 **为什么非要①不可**：②只数总量，验不了"这张表该不该存在"；而"哪张表是病、替代是什么"
 正是这次要交付的清单（roadmap §6 的待办）。①提供姓名、类别与出路，②保证①没有漏网。
 
+**③ eval 侧那一段**（20261015 批 4）：上面两层查的是**运行时判据面**（`agent/`/`tools/`），
+而 `eval/` 里还有**同一副病**的第二张脸——golden 的负正则/正反词表、`run_golden.py` 的四张
+共享族、六个豁免开关。它们此前是"判据的判据"，谁都没看着：往 golden 里加一条负正则不需要
+任何理由，往豁免开关上再挂一条用例也不需要。现在这一段把同一套棘轮搬过去（只许变小、
+新增模式要先把理由写进 why、`--update` 是唯一放宽通道）。
+⚠️ **它与①②的量分开读，不并进同一个计数**（`TARGETS` 还是 `agent`/`tools`/`server.py`）：
+"运行时判据面少了一张表"与"评测判据面多了一条正则"不是同一个量，混在一起会让加一条负正则
+看起来像删了一张表。两段的红各自报各自的。
+
 **五种类别**（每一类都必须能对"它为什么不是病"给出一句话）：
 
   | 类别 | 意思 | 判据 |
@@ -54,6 +63,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import pathlib
 import re
@@ -63,8 +73,8 @@ from dataclasses import dataclass, field
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "eval" / "judge_registry.json"
 
-# 查什么：**运行时的判据面**。`tests/`、`eval/` 不进这道闸——它们是判据的**判据**，
-# 自己就充满中文断言（`eval/` 侧的词表族由批 4 单独处置，别在这里混成一个量）。
+# 查什么：**运行时的判据面**。`tests/`、`eval/` 不进这道闸的前两层——它们是判据的**判据**，
+# 自己就充满中文断言。`eval/` 侧那一份由下面 ③ 那一段（`scan_eval`）单独管，**量不合并**。
 TARGETS = ["agent", "tools", "server.py"]
 
 CJK = re.compile(r"[一-鿿]")
@@ -246,6 +256,132 @@ def _file_metric(tree: ast.AST) -> list[int]:
     return [coll, regex]
 
 
+# ── ③ eval 侧：评测判据面的棘轮（批 4）───────────────────────────────────────
+#
+# 这一段的判据来源与①②不同：那里扫**代码形状**，这里的三块各扫一种"评测判据面"——
+#   · `keys`    ：golden 三个文本断言键的**模式/词条全集** + 格数 + 项数（数据在 jsonl 里）
+#   · `exempt`  ：六个豁免开关**各被哪些用例打开**（开关是判据替自己打的补丁：加了一处
+#                 就说明有一条判据又在误伤，值得被人看见一次）
+#   · `families`：`run_golden.py` 里四张共享族（诚实拒绝 / 目标不存在 / 存在性引导词 /
+#                 派登录）的元素数 + 元素集哈希。**哈希是为了抓"数量不变、条目被换掉"**
+#                 （逐条替换措辞正是这一族的病，见 `ABSENCE_COMPOUND` 头注那次假红）。
+#   另加 `judge_metric`：`run_golden.py` 走一遍①②的穷举量（集合里的中文串 + 含中文的正则
+#   字符数）——上面三块是**窄口径**（我点得出名字的才数），这句是补网。
+EVAL_GOLDEN = "eval/golden/basic.jsonl"
+EVAL_JUDGE = "eval/run_golden.py"
+EVAL_KEYS = ("text_not_match_regex", "text_contains", "text_not_contains")
+EVAL_EXEMPT_KEYS = (
+    "not_contains_exempt_quote", "not_match_exempt_conditional",
+    "not_match_exempt_refuted", "not_match_exempt_mention",
+    "not_match_exempt_doc_fact", "not_match_exempt_consequence",
+)
+EVAL_FAMILIES = ("DENIAL_FAMILY", "ABSENCE_COMPOUND", "ABSENCE_LEADS", "LOGIN_DEMAND_RE")
+
+
+def _golden_golds(case: dict) -> list[dict]:
+    """一条用例里的 gold 对象（多轮取每一轮的）。
+
+    ⚠️ 这是 `eval/run_golden.py::iter_rounds` 的**镜像**，只镜像"gold 在哪"这一点。
+    镜像而非 import 是必要的：闸门不许把 langchain/LLM 拖进来（`tests/test_wordlist_gate.py`
+    与 `--dump` 都要秒级跑完）。镜像就有漂移风险，所以 ⑪ 用一条"顶层 gold 与 rounds 并存"
+    的用例钉住它的形状（**只读 rounds**，与 `iter_rounds` 同一取舍）。
+    """
+    rounds = case.get("rounds")
+    if rounds:
+        return [r.get("gold") or {} for r in rounds]
+    return [case.get("gold") or {}]
+
+
+def _sha(parts: list[str]) -> str:
+    """元素集的稳定指纹（`ast.unparse` 之后——不受排版/注释影响，元素换掉才变）。"""
+    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:10]
+
+
+def _literal_cjk(node: ast.AST) -> tuple[int, bool]:
+    """`a + b + r"中文"` 这种拼接里能数到的中文字符数，以及"是否全是字面量"。
+
+    为什么不能只认 `Constant`：`LOGIN_DEMAND_RE` 就是三段拼接（中间那段是
+    `_LOGIN_NOUN_TAIL` 这个变量名）。全认不出 ⇒ 这张族在闸门里是隐形的，
+    而它正是 `不能删的五张共享族` 之一。
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return len(CJK.findall(node.value)), True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        l, lc = _literal_cjk(node.left)
+        r, rc = _literal_cjk(node.right)
+        return l + r, lc and rc
+    return 0, False
+
+
+def _family_shape(value: ast.AST) -> dict:
+    """一张共享族的形状：元素数 + 指纹。元组数元素，正则数中文字符（同①②的口径）。
+
+    拼接出来的正则只能数到字面量那几段 ⇒ 记 `partial: true`（读数下界）——指纹仍是全式的，
+    所以"多加一段"或"换掉中间那个变量"都会让 sha 变。
+    """
+    inner = value
+    if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+            and value.func.id in WRAPPERS and len(value.args) == 1):
+        inner = value.args[0]
+    if isinstance(inner, COLLECTIONS):
+        elts = (list(inner.keys) + list(inner.values)) if isinstance(inner, ast.Dict) else inner.elts
+        parts = [ast.unparse(e) for e in elts]
+        return {"kind": "collection", "size": len(parts), "sha": _sha(parts)}
+    if (isinstance(value, ast.Call) and getattr(value.func, "attr", "") == "compile" and value.args):
+        n, complete = _literal_cjk(value.args[0])
+        return {"kind": "regex", "size": n, "sha": _sha([ast.unparse(value)]),
+                **({} if complete else {"partial": True})}
+    return {"kind": "?", "size": 0, "sha": ""}
+
+
+def scan_eval() -> dict:
+    """扫 eval 侧那三块 + 补网那个量。
+
+    **文件不在就整块缺席**（`{}` 里的三段各留空）：反控用的临时树只放 `agent/`，那时这一层
+    必须**沉默**而不是报"文件没了"。真仓里两个文件都在，所以 ③ 在真仓上是常开的。
+    """
+    out: dict = {"keys": {}, "exempt": {}, "families": {}}
+    gpath, jpath = ROOT / EVAL_GOLDEN, ROOT / EVAL_JUDGE
+    if gpath.is_file():
+        keys = {k: {"sites": 0, "items": 0, "patterns": set()} for k in EVAL_KEYS}
+        exempt = {k: set() for k in EVAL_EXEMPT_KEYS}
+        for line in gpath.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            case = json.loads(line)
+            name = str(case.get("name") or case.get("id") or "?")
+            for gold in _golden_golds(case):
+                for k in EVAL_KEYS:
+                    vals = gold.get(k)
+                    if not vals:
+                        continue
+                    vals = vals if isinstance(vals, list) else [vals]
+                    keys[k]["sites"] += 1
+                    keys[k]["items"] += len(vals)
+                    keys[k]["patterns"].update(str(v) for v in vals)
+                for k in EVAL_EXEMPT_KEYS:
+                    if gold.get(k):
+                        exempt[k].add(name)
+        out["keys"] = {k: {"sites": v["sites"], "items": v["items"],
+                           "patterns": sorted(v["patterns"])} for k, v in keys.items()}
+        out["exempt"] = {k: sorted(v) for k, v in exempt.items()}
+    if jpath.is_file():
+        try:
+            tree = ast.parse(jpath.read_text(encoding="utf-8"))
+        except SyntaxError as e:          # 与①②同一条纪律：语法错不许静默跳过
+            raise RuntimeError(f"{EVAL_JUDGE} 解析不了：{e}") from e
+        fam: dict = {}
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value is not None:
+                targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+                nm = next((_target_name(t) for t in targets if _target_name(t)), "")
+                if nm in EVAL_FAMILIES:
+                    fam[nm] = _family_shape(n.value)
+        out["families"] = fam
+        out["judge_metric"] = _file_metric(tree)
+    return out
+
+
 # ── 判 ────────────────────────────────────────────────────────────────────
 
 def _rel(p: pathlib.Path) -> str:
@@ -324,12 +460,130 @@ def _print_greens(gone: list, opens: list) -> None:
             print(f"     … 另有 {len(opens) - 14} 条，见 {_rel(BASELINE)}")
 
 
+def _eval_filled(d: dict) -> bool:
+    return bool(d.get("category")) and bool(d.get("why"))
+
+
+def _print_eval_reds(now: dict, reg: dict) -> int:
+    """③ eval 侧的红。**与①②的计数分开**（见模块头注 ③）。
+
+    缺席两种，都不算红：①临时树里没有 eval 文件（`now` 空）；②这一层的关键词一个都没
+    出现（例如只放了 `agent/` 的树）。真仓上两个文件都在 ⇒ 真仓上这一层常开。
+    """
+    if not now or not any(now.values()):
+        return 0
+    if not reg:
+        print(f"  ❌ 登记表里**没有 `eval_vocab` 这一段** —— `eval/` 侧的词表族（golden 的"
+              f"负正则/正反词表、六个豁免开关、run_golden 的四张共享族）此刻**没有任何机器"
+              f"判据拦着**（跑 `--update` 出一次，再把每一条为什么不改写进 why）")
+        return 1
+    reds: list[str] = []
+    for k in EVAL_KEYS:
+        got = now["keys"].get(k) or {}
+        want = (reg.get("keys") or {}).get(k)
+        if want is None:
+            reds.append(f"`{k}` 在登记表里没有（新长出来的一个文本断言键？先登记理由）")
+            continue
+        if not _eval_filled(want):
+            reds.append(f"`{k}` 的 category/why 还是空的（新增模式要在 why 里写清它守什么不变量）")
+        newpat = [p for p in got.get("patterns", []) if p not in set(want.get("patterns") or [])]
+        if newpat:
+            show = "、".join(f"'{p[:44]}'" for p in newpat[:3])
+            more = f" 等 {len(newpat)} 个" if len(newpat) > 3 else ""
+            reds.append(f"`{k}` 多了 {len(newpat)} 个模式：{show}{more} —— 往评测判据里加词"
+                        f"**先在这条的 why 里写理由**（或改成结构断言），再跑 `--update`")
+        if got["sites"] > want["sites"] or got["items"] > want["items"]:
+            reds.append(f"`{k}` 变大：{want['sites']} 格→{got['sites']} 格、"
+                        f"{want['items']} 项→{got['items']} 项 —— **只许变小**")
+    for k in EVAL_EXEMPT_KEYS:
+        got = set(now["exempt"].get(k) or [])
+        want = (reg.get("exempt") or {}).get(k) or {}
+        if not want:
+            if got:
+                reds.append(f"豁免开关 `{k}` 在登记表里没有，却被 {len(got)} 条用例打开了"
+                            f"（豁免是判据替自己打的补丁，登记了才看得见它在为谁让路）")
+            continue
+        if not _eval_filled(want):
+            reds.append(f"豁免开关 `{k}` 的 category/why 还是空的")
+        added = sorted(got - set(want.get("cases") or []))
+        if added:
+            reds.append(f"豁免开关 `{k}` 多被 {len(added)} 条用例打开了："
+                        f"{'、'.join(added[:4])}{' 等' if len(added) > 4 else ''} —— 这一处"
+                        f"让路的判据是哪一个、为什么必须让，写进它的 why")
+    for nm, cur in (now.get("families") or {}).items():
+        want = (reg.get("families") or {}).get(nm)
+        if want is None:
+            reds.append(f"共享族 `{nm}` 在登记表里没有（{EVAL_JUDGE} 里新长出来的一张表）")
+            continue
+        if not _eval_filled(want):
+            reds.append(f"共享族 `{nm}` 的 category/why 还是空的")
+        if cur["size"] > want.get("size", 0):
+            reds.append(f"共享族 `{nm}` 变大：{want.get('size')} → {cur['size']} 个"
+                        f"（{'中文字符' if cur['kind'] == 'regex' else '元素'}）—— 只许变小")
+        elif cur["size"] == want.get("size") and cur["sha"] != want.get("sha"):
+            reds.append(f"共享族 `{nm}` 被**同数量改写**（{cur['size']} 个元素，指纹 "
+                        f"{want.get('sha')}→{cur['sha']}）—— 逐条替换措辞正是这一族的病"
+                        f"（见 `ABSENCE_COMPOUND` 头注那次假红）")
+    jm_now, jm_old = now.get("judge_metric"), (reg.get("judge_metric") or None)
+    if jm_now and jm_old and any(jm_now[i] > jm_old[i] for i in (0, 1)):
+        reds.append(f"`{EVAL_JUDGE}` 的判据面总量变大：集合中文串 {jm_old[0]}→{jm_now[0]}、"
+                    f"含中文正则字符 {jm_old[1]}→{jm_now[1]} —— 窄口径看不见的表在这里现形"
+                    f"（这是 eval 侧的量，别与上面那份合并）")
+    for r in reds:
+        print(f"  ❌ {r}")
+    return len(reds)
+
+
+def _print_eval_greens(now: dict, reg: dict) -> None:
+    """③ 的收缩提示：**变小是目标达成、不是变差**，但要人跑一次 `--update` 把基线收紧。"""
+    hints: list[str] = []
+    for k in EVAL_KEYS:
+        got = now["keys"].get(k) or {}
+        want = (reg.get("keys") or {}).get(k) or {}
+        if want and (got.get("sites", 0) < want.get("sites", 0)
+                     or got.get("items", 0) < want.get("items", 0)):
+            hints.append(f"`{k}` 已收缩 {want.get('sites')}→{got.get('sites')} 格 /"
+                         f" {want.get('items')}→{got.get('items')} 项")
+    for nm, cur in (now.get("families") or {}).items():
+        want = (reg.get("families") or {}).get(nm) or {}
+        if want and cur["size"] < want.get("size", 0):
+            hints.append(f"共享族 `{nm}` 已收缩 {want.get('size')}→{cur['size']}")
+    for k in EVAL_EXEMPT_KEYS:
+        got, want = set(now["exempt"].get(k) or []), set(
+            ((reg.get("exempt") or {}).get(k) or {}).get("cases") or [])
+        if want and got < want:
+            hints.append(f"豁免开关 `{k}` 少了 {len(want - got)} 处")
+    if hints:
+        print(f"  💚 eval 侧收缩（{len(hints)} 处）——跑 `--update` 收紧：")
+        for h in hints[:8]:
+            print(f"     · {h}")
+
+
+def _print_eval_summary(now: dict) -> None:
+    """③ 的一句话现状（红绿都打）。三个键各自的格/项/模式数是最常被引用的那三个读数。"""
+    if not now or not now.get("keys"):
+        return
+    k = now["keys"]
+
+    def brief(name: str) -> str:
+        d = k.get(name) or {}
+        return f"{d.get('sites', 0)} 格/{d.get('items', 0)} 项/{len(d.get('patterns') or [])} 模式"
+
+    ex = sum(len(v) for v in (now.get("exempt") or {}).values())
+    jm = now.get("judge_metric")
+    print(f"[eval] 负正则 {brief('text_not_match_regex')}；正词表 {brief('text_contains')}；"
+          f"反词表 {brief('text_not_contains')}；豁免 {ex} 处；"
+          f"共享族 {len(now.get('families') or {})} 张；判据面 "
+          f"{jm[0] if jm else '-'}/{jm[1] if jm else '-'}（集合中文串/含中文正则字符）")
+
+
 def check() -> int:
     if not BASELINE.is_file():
         print(f"❌ 没有登记表 {_rel(BASELINE)}——先跑 `--dump` 出一次。")
         return 3
     try:
         cands, metric = scan()
+        ev_now = scan_eval()
     except RuntimeError as e:
         print(f"❌ 跑不起来：{e}")
         return 3
@@ -349,13 +603,20 @@ def check() -> int:
     print(f"[扫描] 登记表候选 {len(cands)} 个 / 已登记 {len(reg)} 条"
           f"（open {len(opens)} 条待收口）；穷举量 {metric['total'][0]} 集合中文串 + "
           f"{metric['total'][1]} 正则中文字符 / {len(metric['by_file'])} 文件")
+    _print_eval_summary(ev_now)
     n_red = _print_reds(*verdicts, metric_grew)
-    if n_red:
-        print(f"\n❌ {len(verdicts[0])} 未登记、{len(verdicts[1])} 条变大、"
-              f"{len(verdicts[2])} 未分类、{len(verdicts[3])} 条 open 缺出路、"
-              f"{len(metric_grew)} 个文件穷举量变大")
+    n_eval = _print_eval_reds(ev_now, whole.get("eval_vocab") or {})
+    if n_red or n_eval:
+        if n_red:
+            print(f"\n❌ {len(verdicts[0])} 未登记、{len(verdicts[1])} 条变大、"
+                  f"{len(verdicts[2])} 未分类、{len(verdicts[3])} 条 open 缺出路、"
+                  f"{len(metric_grew)} 个文件穷举量变大")
+        if n_eval:
+            print(f"\n❌ eval 侧 {n_eval} 项变差（**判据的判据**，与上面那份计数分开读："
+                  f"运行时判据面少一张表 ≠ 评测判据面多一条正则）")
         return 1
     _print_greens(gone, opens)
+    _print_eval_greens(ev_now, whole.get("eval_vocab") or {})
     print("✅ 没有变差")
     return 0
 
@@ -365,7 +626,43 @@ def check() -> int:
 _NOTE = ("判据层「词表形状」的登记表。未登记即红；已登记的**只许变小**。"
          "category ∈ closed | system_data | parser | prompt_text | open；"
          "open 是病，必须带 replacement 与 sunset。`metric` 是穷举量（按文件），"
-         "两个层各自的意义见 eval/wordlist_gate.py 头注。")
+         "`eval_vocab` 是**评测判据面**（判据的判据）那一段——两段的量分开读，"
+         "各自的意义见 eval/wordlist_gate.py 头注。")
+
+_EVAL_NOTE = ("`eval/` 侧（判据的**判据**）的词表族棘轮。四块：`keys` = golden 三个文本断言键的"
+              "模式/词条**全集** + 格数 + 项数；`exempt` = 六个豁免开关各被哪些用例打开；"
+              "`families` = `eval/run_golden.py` 四张共享族的元素数 + 元素集指纹"
+              "（抓「数量不变、条目被换掉」；拼接出来的正则只数得到字面量那几段，那种条目带 "
+              "`partial: true` 标记、读作下界）；`judge_metric` = 该文件走一遍①②穷举量得到的补网。"
+              "只许变小；**新增模式要先在这条自己的 why 里写清它守哪个不变量**再跑 `--update`。"
+              "⚠️ 与上面 agent/tools 那份计数**分开读**，别混成一个量。"
+              "⚠️ category 仍取那五档（不新开档）：这一段的 `closed` 读作**已定价接受、只许变小**"
+              "——不是「划得完」（它们逐条都是中文词表，理由与代价写在各自的 why 里）。"
+              "`--update` 只刷新读数，**category/q/why 一律保留**。")
+
+
+def _keep_eval(old: dict, kind: str, name: str, now: dict) -> dict:
+    """把已填的 category/q/why 保留下来，其余用现场重出（与 `entries` 同一条纪律）。"""
+    prev = ((old or {}).get(kind) or {}).get(name) or {}
+    keep = {k: v for k, v in prev.items() if k in ("category", "q", "why")}
+    return {**now, **keep}
+
+
+def _eval_vocab(old: dict | None) -> dict:
+    """eval 侧那一段的新值（`--dump` 与 `--update` 共用）。"""
+    old = old or {}
+    now = scan_eval()
+    return {
+        "_note": _EVAL_NOTE,
+        "golden": EVAL_GOLDEN,
+        "judge": EVAL_JUDGE,
+        "keys": {k: _keep_eval(old, "keys", k, v) for k, v in now["keys"].items()},
+        "exempt": {k: _keep_eval(old, "exempt", k, {"cases": v})
+                   for k, v in now["exempt"].items()},
+        "families": {k: _keep_eval(old, "families", k, v)
+                     for k, v in now["families"].items()},
+        **({"judge_metric": now["judge_metric"]} if "judge_metric" in now else {}),
+    }
 
 
 def _write(payload: dict) -> None:
@@ -376,11 +673,13 @@ def _write(payload: dict) -> None:
 def _dump() -> int:
     """出登记骨架：给每条一个空壳，category 留 `?` 逼人填。**不覆盖已有登记**。"""
     cands, metric = scan()
-    have = {e["id"]: e for e in _entries()} if BASELINE.is_file() else {}
+    whole = _load_registry() if BASELINE.is_file() else {}
+    have = {e["id"]: e for e in whole.get("entries", [])}
     entries = []
     for c in cands:
         entries.append(have.get(c.ident) or {**c.as_json(), "category": "?", "q": "", "why": ""})
-    _write({"_note": _NOTE, "targets": TARGETS, "metric": metric, "entries": entries})
+    _write({"_note": _NOTE, "targets": TARGETS, "metric": metric, "entries": entries,
+            "eval_vocab": _eval_vocab(whole.get("eval_vocab"))})
     n_q = sum(1 for e in entries if e.get("category") == "?")
     print(f"已写出登记骨架：{len(entries)} 条 → {_rel(BASELINE)}"
           f"（其中 {n_q} 条 category 待填）")
@@ -388,15 +687,17 @@ def _dump() -> int:
 
 
 def update() -> int:
-    """重出登记表：保留已填的 category/why/replacement/sunset，同步 size、现场与穷举量。"""
+    """重出登记表：保留已填的 category/why/replacement/sunset，同步 size、现场与两份量。"""
     cands, metric = scan()
-    reg = {e["id"]: e for e in _entries()} if BASELINE.is_file() else {}
+    whole = _load_registry() if BASELINE.is_file() else {}
+    reg = {e["id"]: e for e in whole.get("entries", [])}
     entries = []
     for c in cands:
         keep = {k: v for k, v in reg.get(c.ident, {}).items()
                 if k in ("category", "q", "why", "replacement", "sunset")}
         entries.append({**c.as_json(), **keep})
-    _write({"_note": _NOTE, "targets": TARGETS, "metric": metric, "entries": entries})
+    _write({"_note": _NOTE, "targets": TARGETS, "metric": metric, "entries": entries,
+            "eval_vocab": _eval_vocab(whole.get("eval_vocab"))})
     print(f"已重出：{len(entries)} 条 → {_rel(BASELINE)}")
     return 0
 

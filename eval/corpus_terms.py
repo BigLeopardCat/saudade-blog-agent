@@ -35,11 +35,23 @@
 **`cap` 只服务于回显，判据侧用 `cap=None`**（截断按 df 升序取到的是最冷僻的 df=1 标识符，
 会把手边素材正确、只是用了常见词的诚实回答判红——理由详见 `derive` 的 docstring）。
 
+**第二个哨兵：判据暴露度（20261015 批 4，`--exposure`，`--drift` 也会带上它）**。
+本模块上面那四类（ORPHAN/GENERIC/MISBOUND/THIN）判的是"**正**断言的期望词还在不在语料里"，
+前提是"期望来自文章语料"。判据层的另一半——负正则族、正反词表、`forbid_login_demand`
+这类**只判回复措辞**的判据——前提根本不成立：它们的期望词按定义**不在语料里**（在的话
+就是 ORPHAN，报出来全是噪音，正是 `_SCOPE_TAGS` 那条"范围外只计数不判"要挡的东西）。
+它们的失效是另一副面孔，只有**真实回复**这个数据源看得见（`eval/report/runs/*.json`，
+1400+ 份归档跑测报告，逐轮 `text` = 真实链路产出的回复）：判据在这条用例**自己的**历史
+回复上恒通过 ⇒ 空转（与 ORPHAN 同病）；恒失败 ⇒ 真回归或一直在误伤（本仓负正则那 12 次
+"命中"逐条读下来都是弹窗模板文案）；负判据从未触发 ⇒ 中性（可能模型一直守规矩，也可能是
+化石）。**读数不判红**，只给人读——0 命中与"化石"在这个数据源上长得一模一样。
+
 用法：
   .venv/bin/python eval/corpus_terms.py --show note:14,note:22   # 逐篇派生（需网络）
   .venv/bin/python eval/corpus_terms.py --show note:12 --df-max 4
   .venv/bin/python eval/corpus_terms.py --drift                  # 漂移哨兵（扫 golden 词表）
   .venv/bin/python eval/corpus_terms.py --drift --case rag_ota_http
+  .venv/bin/python eval/corpus_terms.py --exposure [--runs 200]  # 判据暴露度（离线，无需语料）
 """
 from __future__ import annotations
 
@@ -235,7 +247,7 @@ def _token_df(docs: list[dict], word: str) -> int:
 
 
 def drift(*, case: str = "", docs=None, df_max: int = 2, generic_df: int = 4,
-          report_dir: str = "eval/report") -> int:
+          report_dir: str = "eval/report", runs: int = 0) -> int:
     """**漂移哨兵**：扫 golden 的词表型断言，报出四类"看着在、其实不在"的判据。
 
     人抄的词表会随语料漂移（`rag_ota_http` 就是现场：期望词的前提"某篇已下架"过期了），
@@ -253,15 +265,32 @@ def drift(*, case: str = "", docs=None, df_max: int = 2, generic_df: int = 4,
     正断言判的是贴纸名单/特效开关/执行记忆/当前文章正文等别的数据源，拿 ORPHAN 判它们
     只会刷一屏噪音——首次上线实测 38 条全是此类）。范围外计数照打，不静默丢。
 
+    **20261015 批 4 起另带一节「判据暴露度」**（`exposure()`）：判据层里"只判措辞"的那一半
+    （负正则 / 正反词表 / `forbid_login_demand`）在上面四类里没有位置——它们的期望词按定义
+    不在语料里。那一节的读数**不参与 rc**（它不判红），只并进同一份报告。它要 `run_golden`
+    （判据本体）与归档报告，两者缺一 ⇒ 那一节报「未评估」而其余照跑。
+
     报告落 `eval/report/corpus_drift_<ts>.md`（与 `review_*.md`/`reconcile_*.md` 同族）；
     有 ORPHAN/MISBOUND ⇒ 非零退出。**非门禁**：它是"给人看的哨兵"，不是 CI 闸。
     """
     import json as _json
     from datetime import datetime
 
+    # 暴露度先跑：它**不需要语料**（数据源是归档回复），所以语料不可用时它照样该有读数。
+    # `_exp_rc` 刻意不进本函数的退出码：那一节只管"跑起来了没有"，读数本身不判红
+    # （它自己的「未评估」已经打在自己的行里，误判成这条哨兵红了会更糟）。
+    _exp_rc, exp_md, exp_lines = exposure(runs=runs, report_dir=None)
     all_docs, diag = _load_docs(docs)
     if diag.get("unavailable") or not all_docs:
         print(f"[drift] 语料不可用（{diag.get('why') or '快照为空'}）—— 未评估，不写报告")
+        for line in exp_lines:
+            print(line)
+        if exp_md:                       # 只落暴露度那一节，别让这份读数跟着语料一起消失
+            Path(report_dir).mkdir(parents=True, exist_ok=True)
+            out = Path(report_dir) / f"corpus_drift_{datetime.now():%Y%m%d_%H%M%S}.md"
+            out.write_text("# 语料漂移哨兵：**语料不可用，本次只有判据暴露度那一节**\n\n"
+                           + exp_md, encoding="utf-8")
+            print(f"[drift] 报告 → {out}（只有暴露度那节）")
         return 1
     cases_file = Path(__file__).resolve().parent / "golden" / "basic.jsonl"
     cases = [_json.loads(ln) for ln in
@@ -316,6 +345,8 @@ def drift(*, case: str = "", docs=None, df_max: int = 2, generic_df: int = 4,
     md = _drift_md(corpus_keys, cases_file, cases, orphan, generic, misbound, thin,
                    skipped, undeclared, n_words, df_max, generic_df, out_of_scope,
                    declared_rows)
+    if exp_md:                            # 同一份报告里两节：语料侧在上一节，判据侧在这一节
+        md += "\n\n" + exp_md
     Path(report_dir).mkdir(parents=True, exist_ok=True)
     out = Path(report_dir) / f"corpus_drift_{datetime.now():%Y%m%d_%H%M%S}.md"
     out.write_text(md, encoding="utf-8")
@@ -328,8 +359,283 @@ def drift(*, case: str = "", docs=None, df_max: int = 2, generic_df: int = 4,
         print(f"  ORPHAN   {r[0]}: {r[1]!r}（字面命中 0/{r[4]} 篇）")
     for r in misbound:
         print(f"  MISBOUND {r[0]}: {r[1]!r}（不在申报篇里；字面 {r[2]}/{r[4]} 篇）")
+    for line in exp_lines:
+        print(line)
     print(f"[drift] 报告 → {out}" + ("" if rc == 0 else "（有 ORPHAN/MISBOUND ⇒ 非零退出）"))
     return rc
+
+
+# ── 判据暴露度（20261015 批 4）：把**今天的判据**跑在归档的历史回复上 ────────────────
+# 上面四类与这一节的分工见模块头注「第二个哨兵」。
+_ARCHIVE = "report/runs"
+# 探的四个键 = 判据层里"只判措辞"的那一半（`text_any_regex` 是正断言，可由 ORPHAN 那套管，
+# 不在探针里）。`forbid_login_demand` 是 bool 键、自己不装词表（词表在 `LOGIN_DEMAND_RE`
+# 那张共享族里），但它是"真只能判文本"的典型，探它 = 探那张族在真实回复上的表现。
+_PROBE_KEYS = ("text_contains", "text_not_contains", "text_not_match_regex",
+               "forbid_login_demand")
+# 正/负的读法相反：负判据"0 命中"是好形状（只是没证据说它有牙齿），正判据"0 命中"是坏形状。
+_POSITIVE_KEYS = ("text_contains",)
+_EXEMPT_COPY = ("not_contains_exempt_quote", "not_match_exempt_conditional",
+                "not_match_exempt_refuted", "not_match_exempt_mention",
+                "not_match_exempt_doc_fact", "not_match_exempt_consequence")
+# 少于此轮数不进判读（样本太少时任何命中率都会被读成结论）；仍进报告表，标出轮数。
+_MIN_ROUNDS = 20
+
+
+def _probe(gold: dict, text: str, key: str, check_gold) -> str:
+    """拿**判据自己**判这一个键，返回失败原因（空串 = 这一轮没判红）。
+
+    `check_gold` 只喂这一个键（+ 它那六个豁免开关，照抄当前 gold）。只喂一个键是刻意的：
+    `text_contains` 在 `check_gold` 里是一条**或**（词表 / 正则 / `require_denial` /
+    `require_absence`），带上兄弟成员后"这张词表自己命不命中"会被别的成员盖住——而哨兵
+    要读的正是**这张词表自己的区分力**。豁免开关不照抄的话，量到的是另一个（更严的）判据。
+    """
+    mini: dict = {key: True} if key == "forbid_login_demand" else {key: gold[key]}
+    for k in _EXEMPT_COPY:
+        if gold.get(k):
+            mini[k] = True
+    res = {"text": text, "commands": [], "tool_calls": [], "exec_rows": [],
+           "exec_tools": [], "frames": [], "resets": [], "resets_reasons": [], "error": None}
+    fails = check_gold(mini, res)
+    return fails[0] if fails else ""
+
+
+def _trim(s: str, n: int = 70) -> str:
+    s = " ".join(str(s).split())
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def exposure(*, runs: int = 0, report_dir: str | None = "eval/report",
+             golden_path: "Path | str | None" = None,
+             archive_dir: "Path | str | None" = None
+             ) -> tuple[int, str, list[str]]:
+    """把**今天的判据**跑在归档的历史回复上：逐格读"这条判据还咬得住吗"。
+
+    返回 `(rc, markdown, 打印行)`。**rc 只管"跑起来了没有"**（没有归档 / 判据 import 不了
+    ⇒ 1，未评估）：读数本身不判红——负判据 0 命中在"化石"与"模型一直守规矩"之间**长得
+    一模一样**，机器判不了，只能报数给人读（同 `_SCOPE_TAGS` 那条纪律）。
+
+    三条口径，逐条都有代价，写在这里免得被读成"判据口径"：
+      · **逐格只在自己的轮次上判**（用例 A 的判据不拿去量用例 B 的回复）——跨用例量的是
+        另一个问题（"这条措辞在全站出现得多不多"），且会把卡组模板文案刷成命中。
+      · **golden 用今天那份、回复用历史那份**：归档里的回复是各历史版本产出的，而判据
+        只有一份（今天这份）。所以读数是"今天的判据在历史回复上"的表现，不是当年那次跑测
+        的复现（当年那次有它自己的报告，别拿这份去对账）。
+      · **截断轮 / 轮数不符的用例整条跳过并计数**：截断的 `text` 会让正判据假"恒失败"、
+        让负判据漏命中；轮数不符说明 gold 改过轮次，历史那份对不上今天的判据（`iter_rounds`
+        的轮序是判据的一部分）。**跳过不是静默丢**，计数打在汇总行里。
+
+    `golden_path` / `archive_dir` 只为**可测**而留（`tests/test_corpus_terms.py` ⑧：临时树里
+    放夹具归档与夹具 golden，把上面这几条口径逐条钉住）——真仓跑法不传这两个参数。
+    """
+    import json as _json
+    from datetime import datetime
+
+    ev_dir = Path(__file__).resolve().parent
+    arch = Path(archive_dir) if archive_dir else ev_dir / _ARCHIVE
+    gfile = Path(golden_path) if golden_path else ev_dir / "golden" / "basic.jsonl"
+    files = sorted(arch.glob("*.json"))
+    if runs > 0:
+        files = files[-runs:]
+    if not files:
+        return 1, "", [f"[exposure] 归档不可用（{arch} 下没有 *.json）——未评估，不写报告"]
+    sys.path.insert(0, str(ev_dir))
+    try:
+        import run_golden as rg            # 判据本体：**只此一份**，不在这里重写匹配逻辑
+    except Exception as e:                 # noqa: BLE001 —— 报出真因，别让哨兵自己死掉
+        return 1, "", [f"[exposure] 判据不可用（{type(e).__name__}: {e}）——未评估，不写报告"]
+
+    golds: dict[str, list[dict]] = {}
+    for line in gfile.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            case = _json.loads(line)
+            golds[str(case.get("id"))] = [dict(r.get("gold") or {})
+                                          for r in rg.iter_rounds(case)]
+
+    agg: dict[tuple[str, str], dict] = {}
+    n_cases = n_rounds = 0
+    gone: dict[str, int] = {}       # 归档里有、今天的 golden 里没有（用例已删/改名）
+    stale = trunc = empty = broken = 0
+    for f in files:
+        try:
+            rep = _json.loads(f.read_text(encoding="utf-8"))
+        except Exception:              # noqa: BLE001 —— 归档里的一份坏文件不该带走整次哨兵
+            broken += 1
+            continue
+        for case in rep.get("cases") or []:
+            cid = str(case.get("id"))
+            gs = golds.get(cid)
+            if gs is None:
+                gone[cid] = gone.get(cid, 0) + 1
+                continue
+            if case.get("text_truncated"):
+                trunc += 1
+                continue
+            # 与 `check_gold` 的驱动侧同一取舍：多轮取逐轮 `text`，单轮取顶层那份。
+            texts = [r.get("text") or "" for r in (case.get("rounds") or [])] \
+                or [case.get("text") or ""]
+            if len(texts) != len(gs):
+                stale += 1
+                continue
+            n_cases += 1
+            for i, text in enumerate(texts):
+                if not text.strip():
+                    empty += 1
+                    continue
+                n_rounds += 1
+                gold = gs[i]
+                for key in _PROBE_KEYS:
+                    if not gold.get(key):
+                        continue
+                    a = agg.setdefault((cid, key), {"n": 0, "bad": 0, "why": "", "run": ""})
+                    a["n"] += 1
+                    why = _probe(gold, text, key, rg.check_gold)
+                    if why:
+                        a["bad"] += 1
+                        # 每次命中都覆盖：留下的是**最近一次**的现场（文件按时间戳命名，
+                        # 遍历也是升序）——「上个月命中过 63 次」与「昨天还命中」要分开读，
+                        # 前者多半是判据改严之前的旧回复，后者是当下就在发生的事。
+                        a["why"], a["run"] = _trim(why), f.name
+    if not agg:
+        return 1, "", [f"[exposure] 归档里 {n_cases} 条用例实例没有一格可探——未评估"]
+
+    def reading(key: str, a: dict) -> str:
+        if key in _POSITIVE_KEYS:
+            if a["bad"] == 0:
+                return "恒通过（判据空转）"
+            if a["bad"] == a["n"]:
+                return "恒失败（一次都没满足过）"
+            return "有区分力"
+        if a["bad"] == 0:
+            return "从未触发"
+        if a["bad"] == a["n"]:
+            return "每次都触发（恒红）"
+        return "触发过"
+
+    rows = [{"cid": cid, "key": key, "n": a["n"], "bad": a["bad"],
+             "reading": reading(key, a), "why": a["why"], "run": a["run"]}
+            for (cid, key), a in sorted(agg.items())]
+    big = [r for r in rows if r["n"] >= _MIN_ROUNDS]
+    bucket: dict[str, list[dict]] = {}
+    for r in big:
+        bucket.setdefault(r["reading"], []).append(r)
+
+    lines = [f"[exposure] 归档 {len(files)} 份报告 / 参与 {n_cases} 条用例实例 / "
+             f"{n_rounds} 轮文本；golden {len(golds)} 条用例",
+             f"[exposure] 跳过：用例已不在 golden {sum(gone.values())} 条"
+             f"（{len(gone)} 个 id）、轮数不符 {stale} 条、截断文本 {trunc} 条、"
+             f"空文本 {empty} 轮、坏报告 {broken} 份",
+             f"[exposure] 探到 {len(agg)} 格；轮数 ≥{_MIN_ROUNDS} 的 {len(big)} 格进判读，"
+             f"其余 {len(agg) - len(big)} 格只进报告表（样本太少，任何命中率都会被读成结论）"]
+
+    def dump(title: str, rs: list[dict], note: str, cap: int = 25) -> None:
+        lines.append(f"  · {title}（{len(rs)} 格）{note}")
+        for r in rs[:cap]:
+            lines.append(f"      {r['cid']} {r['key']} 红 {r['bad']}/{r['n']}"
+                         + (f"  样例「{r['why']}」@{r['run']}" if r["why"] else ""))
+        if len(rs) > cap:
+            lines.append(f"      …其余 {len(rs) - cap} 格见报告表")
+
+    _pos = [r for r in big if r["key"] in _POSITIVE_KEYS]
+    _neg = [r for r in big if r["key"] not in _POSITIVE_KEYS]
+    for title, rs, note in (
+        ("正词表恒通过", [r for r in _pos if r["reading"].startswith("恒通过")],
+         "——这张词表在这条用例**自己的**历史回复上一次都没失败过：要么回复一直诚实，"
+         "要么它已经判不出任何东西（同 ORPHAN）。注意这条探针量的是**词表自己**："
+         "`text_contains` 在判据里是一条或（词表/正则/`require_denial`/`require_absence`），"
+         "所以「恒通过」= 这张词表从没失败过，不等于那条断言从没红过"),
+        ("正词表恒失败", [r for r in _pos if r["reading"].startswith("恒失败")],
+         "——每次都没满足：真回归，或者这条词表本身就写错了（先看样例再动手）"),
+        ("负判据触发过", [r for r in _neg if r["bad"]],
+         "——**只能读样例句判性质，机器分不了真抓和误伤**：弹窗组那 12 次读下来是模板文案"
+         "（误伤），而 `forbid_login_demand` 的命中有 42 处正是这条族调参时的真派活现场"),
+        ("负判据从未触发", [r for r in _neg if not r["bad"]],
+         "——中性：可能模型一直守规矩，也可能是化石"),
+    ):
+        dump(title, rs, note)
+    # 五档合起来 = 进判读的格数：缺这一行的话，读的人无法确认「不是问题的那一档」有多少
+    # （恒通过 13 格与恒通过 13 格 + 有区分力 50 格，都是「报告里没写」）。
+    lines.append(f"  · 正词表有区分力（{len([r for r in _pos if r['reading'] == '有区分力'])} 格）"
+                 "——有红有绿，这是正判据该有的形状；不逐条铺开（全表见报告）")
+
+    md = _exposure_md(files, n_cases, n_rounds, len(golds), rows, big, gone, stale,
+                      trunc, empty, broken)
+    out_lines = list(lines)
+    if report_dir:
+        Path(report_dir).mkdir(parents=True, exist_ok=True)
+        out = Path(report_dir) / f"judge_exposure_{datetime.now():%Y%m%d_%H%M%S}.md"
+        out.write_text(md, encoding="utf-8")
+        out_lines.append(f"[exposure] 报告 → {out}")
+    return 0, md, out_lines
+
+
+def _exposure_md(files, n_cases, n_rounds, n_gold, rows, big, gone, stale,
+                 trunc, empty, broken) -> str:
+    from datetime import datetime
+    L = [f"# 判据暴露度（{datetime.now():%Y-%m-%d %H:%M:%S}）", "",
+         "- 问题：判据层的另一半（负正则 / 正反词表 / `forbid_login_demand`）**只判回复措辞**，"
+         "语料里没有它们的期望词 ⇒ `--drift` 那四类（ORPHAN/GENERIC/MISBOUND/THIN）对它们"
+         "不适用（硬套的话每条负正则都是 ORPHAN，全是噪音）。它们的失效只有**真实回复**"
+         "看得见，数据源就是归档跑测报告。",
+         f"- 数据源：`eval/report/runs/` 取 {len(files)} 份；参与 {n_cases} 条用例实例、"
+         f"{n_rounds} 轮文本；golden {n_gold} 条用例",
+         f"- 跳过：用例已不在 golden {sum(gone.values())} 条（{len(gone)} 个 id）、"
+         f"轮数不符 {stale} 条、截断文本 {trunc} 条、空文本 {empty} 轮、坏报告 {broken} 份",
+         "- 口径：**逐格只在自己用例的轮次上判**；判据用**今天**那份（`run_golden.check_gold`），"
+         "回复是各历史版本产出的 ⇒ 读的是「今天的判据在历史回复上」，不是当年那次的复现；"
+         f"轮数 <{_MIN_ROUNDS} 只进表不进判读",
+         "- **rc 只管「跑起来了没有」**：读数不判红——负判据 0 命中在「化石」与"
+         "「模型一直守规矩」之间长得一模一样。", ""]
+
+    def table(title, note, rs):
+        L.append(f"## {title}（{len(rs)}）")
+        L.append("")
+        L.append(note)
+        L.append("")
+        if not rs:
+            L.append("无。")
+            L.append("")
+            return
+        L.append("| 用例 | 键 | 归档轮数 | 判红 | 读法 | 样例 |")
+        L.append("|---|---|---|---|---|---|")
+        for r in rs:
+            L.append(f"| {r['cid']} | `{r['key']}` | {r['n']} | {r['bad']} | {r['reading']} | "
+                     + (f"`{r['why']}` @{r['run']}" if r["why"] else "—") + " |")
+        L.append("")
+
+    by_key = {}
+    for r in rows:
+        by_key.setdefault(r["key"], []).append(r)
+    L.append("## 逐键汇总（全部格，含样本不足的那些）")
+    L.append("")
+    for key, rs in sorted(by_key.items()):
+        L.append(f"- `{key}`：{len(rs)} 格，判红合计 {sum(r['bad'] for r in rs)} 次"
+                 f"（轮数 {sum(r['n'] for r in rs)}），其中 ≥{_MIN_ROUNDS} 轮的 {len([r for r in rs if r['n'] >= _MIN_ROUNDS])} 格")
+    L.append("")
+    _pos = [r for r in big if r["key"] in _POSITIVE_KEYS]
+    _neg = [r for r in big if r["key"] not in _POSITIVE_KEYS]
+    table("正词表恒通过 ⇒ 判据空转（与 ORPHAN 同病）",
+          "这张词表在这条用例**自己的**历史回复上一次都没失败过：要么回复一直诚实，"
+          "要么它已经判不出任何东西。⚠️ 探针量的是**词表自己**——`text_contains` 在判据里"
+          "是一条或（词表 / 正则 / `require_denial` / `require_absence`），所以「恒通过」"
+          "= 这张词表从没失败过，**不等于**那条断言从没红过。",
+          [r for r in _pos if r["reading"].startswith("恒通过")])
+    table("正词表恒失败 ⇒ 每次都没满足",
+          "真回归，或者这条词表本身就写错了。样例那一列是判据自己给的失败原因。",
+          [r for r in _pos if r["reading"].startswith("恒失败")])
+    table("负判据触发过 ⇒ 读原文",
+          "**性质只能从样例句读出来，机器分不了真抓与误伤**：20261015 定价时逐条读过弹窗组"
+          "那 12 次，全是模板文案（误伤）；而 `forbid_login_demand` 的命中里有 42 处正是"
+          "这条族调参时的**真派活**现场。样例那一列给的是**最近一次**命中（文件按时间戳升序"
+          "遍历），照着重跑一次再下结论。",
+          [r for r in _neg if r["bad"]])
+    table("负判据从未触发 ⇒ 中性",
+          "可能模型一直守规矩（判据是保险），也可能是化石（判据已无消费方）。"
+          "机器分不出这两种，**不判红**；要区分只能读它的 `why` 与最近一次真实流量。",
+          [r for r in _neg if not r["bad"]])
+    table("正词表有区分力", "有红有绿——这是正判据该有的形状。",
+          [r for r in _pos if r["reading"] == "有区分力"])
+    return "\n".join(L) + "\n"
 
 
 def _drift_md(corpus_keys, cases_file, cases, orphan, generic, misbound, thin,
@@ -483,7 +789,7 @@ def _dump(title: str, terms: list[str], diag: dict) -> None:
 def main(argv: list[str]) -> int:
     args = list(argv[1:])
     keys: list[str] = []
-    df_max, strict, do_drift, case = 2, False, False, ""
+    df_max, strict, do_drift, do_exposure, case, runs = 2, False, False, False, "", 0
     i = 0
     while i < len(args):
         a = args[i]
@@ -502,6 +808,12 @@ def main(argv: list[str]) -> int:
         elif a == "--drift":                      # 漂移哨兵（扫 golden 的词表型断言）
             do_drift = True
             i += 1
+        elif a == "--exposure":                   # 判据暴露度（单独跑；`--drift` 也会带上）
+            do_exposure = True
+            i += 1
+        elif a == "--runs":                       # 只用最近 N 份归档（默认全用）
+            runs = int(args[i + 1])
+            i += 2
         elif a == "--case":                       # 只扫一条用例
             case = args[i + 1] if i + 1 < len(args) else ""
             i += 2
@@ -510,9 +822,15 @@ def main(argv: list[str]) -> int:
             print(__doc__.strip().split("用法：")[-1].strip(), file=sys.stderr)
             return 2
     if do_drift:
-        return drift(case=case, df_max=df_max)
+        return drift(case=case, df_max=df_max, runs=runs)
+    if do_exposure:
+        rc, _md, lines = exposure(runs=runs)
+        for line in lines:
+            print(line)
+        return rc
     if not keys:
-        print("需要 `--show note:14[,note:22]`（或 `--drift [--case X]`）", file=sys.stderr)
+        print("需要 `--show note:14[,note:22]`（或 `--drift [--case X]` / `--exposure`）",
+              file=sys.stderr)
         return 2
     return _show(keys, df_max=df_max, strict=strict)
 

@@ -187,6 +187,115 @@ check("判据侧用的是不截断的派生集（cap=40 是回显口径，不能
       and ct.derive(["note:7"], docs=_CAPDOC, min_doc_chars=0)[0][:1] != ["zebra"],
       str(ct.derive(["note:7"], docs=_CAPDOC, min_doc_chars=0)[0][:2]))
 
+print("\n⑧ 判据暴露度（`--exposure`）：把今天的判据跑在归档回复上，逐条锁口径")
+# 这一节判的是**哨兵自己的读法**，不是某条判据。它必须承认四件事：
+#   ① 逐格只在自己用例的轮次上判（跨用例量的是另一个问题）；
+#   ② 轮数不符 / 截断文本 / 空回复 / 用例已不在 golden —— 一律跳过**并计数**（不静默丢）；
+#   ③ 判据用**今天**那份（同一个归档、换掉 golden 的禁用词 ⇒ 读数跟着变），回复用历史那份；
+#   ④ 读数**不判红**（负判据 0 命中在「化石」与「模型一直守规矩」之间长得一模一样）。
+# 用临时树 + 夹具归档（20 份，够 `_MIN_ROUNDS` 进判读那一档）。
+import json as _json  # noqa: E402
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
+
+_TMP = Path(tempfile.mkdtemp(prefix="exposure_"))
+(_TMP / "runs").mkdir()
+_GOLD = [
+    # 正词表，有区分力：20 份归档的前 10 份回「好」、后 10 份回「哦」 ⇒ 红 10/20
+    {"id": "fx_pos", "gold": {"text_contains": ["好"]}},
+    # 正词表，空转：每份回复都含「今天」 ⇒ 一次都没失败过（恒通过那一档，见 ⑧i）
+    {"id": "fx_inert", "gold": {"text_contains": ["今天"]}},
+    # 负词表：禁用词一次没出现 ⇒ 从未触发
+    {"id": "fx_neg", "gold": {"text_not_contains": ["没办"]}},
+    # 多轮，逐轮各自的 gold（第 2 轮才改用正则）⇒ 锁「逐轮取 gold」与「两格各算各的」
+    {"id": "fx_multi", "rounds": [
+        {"round": 1, "gold": {"text_not_contains": ["悄悄话"]}},
+        {"round": 2, "gold": {"text_not_match_regex": ["悄悄话"]}}]},
+    # 负词表 + 引述豁免：同一处措辞，前 10 份是直陈（该红）、后 10 份是引述撤回（该放行）
+    {"id": "fx_exempt", "gold": {"text_not_contains": ["没办"],
+                                 "not_contains_exempt_quote": True}},
+]
+(_TMP / "golden.jsonl").write_text(
+    "\n".join(_json.dumps(c, ensure_ascii=False) for c in _GOLD) + "\n", encoding="utf-8")
+
+
+def _reply(cid: str, i: int) -> str:
+    """第 i 份归档里这条用例的回复（按序号分两半，好让读数落在 20 的一半上）。"""
+    if cid == "fx_pos":
+        return "好" if i < 10 else "哦"
+    if cid == "fx_inert":
+        return "今天没有办事"
+    if cid == "fx_neg":
+        return "今天没有办事"
+    if cid == "fx_multi":
+        return "第 1 轮里混了悄悄话"          # 两轮都带禁用词 ⇒ 两个键各红 20/20
+    return "我之前说“没办”是错的，其实没办过" if i < 10 else "没办啦"
+
+
+for _i in range(20):
+    _cases = [{"id": c["id"], "rounds": [{"round": j + 1, "text": _reply(c["id"], _i)}
+                                         for j in range(len(c.get("rounds") or [{}]))]}
+              for c in _GOLD]
+    if _i == 0:                     # 四条「该被跳过」的形状各来一次，只落在第 1 份
+        _cases += [
+            {"id": "fx_gone", "rounds": [{"round": 1, "text": "今天在 golden 里没有这条"}]},
+            {"id": "fx_multi", "rounds": [{"round": 1, "text": "只有一轮"}]},   # 轮数不符
+            {"id": "fx_pos", "rounds": [{"round": 1, "text": "好"}], "text_truncated": True},
+            {"id": "fx_neg", "rounds": [{"round": 1, "text": "   "}]},          # 空回复
+        ]
+    (_TMP / "runs" / f"2026010{_i // 10 + 1}_{_i % 10}00000.json").write_text(
+        _json.dumps({"ts": f"r{_i}", "cases": _cases}, ensure_ascii=False), encoding="utf-8")
+
+
+def _exposure(gold_lines: list[dict] | None = None, runs: int = 0):
+    """跑一次暴露度；`gold_lines` 给了就当"另一份今天的 golden"用（不落回真仓）。"""
+    gp = _TMP / "golden.jsonl"
+    if gold_lines is not None:
+        gp = _TMP / "golden_mut.jsonl"
+        gp.write_text("\n".join(_json.dumps(c, ensure_ascii=False) for c in gold_lines) + "\n",
+                      encoding="utf-8")
+    return ct.exposure(runs=runs, report_dir=None, golden_path=gp,
+                       archive_dir=_TMP / "runs")
+
+
+def _mut(cid: str, **gold) -> list[dict]:
+    return [({**c, "gold": gold} if c["id"] == cid else c) for c in _GOLD]
+
+
+_rc, _md, _lines = _exposure()
+_out = "\n".join(_lines)
+check("⑧a 跑得起来（有归档 ⇒ rc=0；`report_dir=None` ⇒ 不落盘）", _rc == 0, f"rc={_rc}")
+check("⑧b 逐格只在自己用例的轮次上判：同一用例在归档里出现两次（第二次截断）也只按自己那 20 轮算"
+      "（读全表那一列 —— 恒通过/恒失败/有区分力 三档只铺问题，健康那一档只报数）",
+      "| fx_pos | `text_contains` | 20 | 10 | 有区分力 |" in _md
+      and "正词表有区分力（1 格）" in _out and "fx_neg text_not_contains 红 0/20" in _out)
+check("⑧c 多轮逐轮取 gold：同一个词第 1 轮按词表判、第 2 轮按正则判 ⇒ 两格各红 20/20",
+      "fx_multi text_not_contains 红 20/20" in _out
+      and "fx_multi text_not_match_regex 红 20/20" in _out)
+check("⑧d 用的是判据本体（`check_gold` 的引述豁免）：开着豁免的那格只红 10/20",
+      "fx_exempt text_not_contains 红 10/20" in _out)
+check("⑧e 该跳过的四种形状只进计数、一格都不探",
+      "用例已不在 golden 1 条（1 个 id）、轮数不符 1 条、截断文本 1 条、空文本 1 轮" in _out
+      and "fx_gone " not in _out)
+check("⑧f 读数不判红：有命中也 rc=0（0 命中与化石在这个数据源上长得一样）", _rc == 0)
+check("⑧g 报告带上逐键汇总与判读表（人读的是它，不是汇总行）",
+      "逐键汇总" in _md and "负判据触发过" in _md and "fx_multi" in _md)
+check("⑧h 正词表一次都没失败 ⇒ 落进「恒通过」那一档（判据空转，与 ORPHAN 同病）",
+      "正词表恒通过（1 格）" in _out and "fx_inert text_contains 红 0/20" in _out)
+_rc2, _md2, _l2 = _exposure(gold_lines=_mut("fx_neg", text_not_contains=["办事"]))
+_rc3, _md3, _l3 = _exposure(gold_lines=_mut("fx_neg", text_not_contains=["办妥了"]))
+check("⑧i 判据用**今天**那份 golden：同一个归档，禁用词一换读数就变（20/20 ↔ 0/20）",
+      "fx_neg text_not_contains 红 20/20" in "\n".join(_l2)
+      and "fx_neg text_not_contains 红 0/20" in "\n".join(_l3), "\n".join(_l3)[:400])
+_rc4, _md4, _l4 = _exposure(gold_lines=_mut("fx_exempt", text_not_contains=["没办"]))
+check("⑧j 豁免开关关掉 ⇒ 同一处措辞从 10/20 变 20/20（豁免是判据的一部分，探针照抄它）",
+      "fx_exempt text_not_contains 红 20/20" in "\n".join(_l4), "\n".join(_l4)[:400])
+_rc5, _md5, _l5 = ct.exposure(report_dir=None, golden_path=_TMP / "golden.jsonl",
+                              archive_dir=_TMP / "没有这个目录")
+check("⑧k 没有归档 ⇒ rc=1 且明说「未评估」（跑不起来 ≠ 通过）",
+      _rc5 == 1 and "未评估" in "\n".join(_l5), "\n".join(_l5))
+shutil.rmtree(_TMP, ignore_errors=True)
+
 print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))

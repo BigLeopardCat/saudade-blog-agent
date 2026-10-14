@@ -7,7 +7,7 @@
 闸门的两层判据各自都要有一条**会红**的反控，否则"它能拦"与"它恒绿"长得一模一样
 （本仓三犯过的老坑，见 `tests/test_complexity_budget.py` 与 `test_confirm.py` 的变异锁）。
 
-十节：
+十一节：
 
   ① **真值**：闸门在**真仓**上退 0（登记表与代码同步、没有未分类、没有 open 缺出路）
   ② **未登记即红**：临时树里放一个"被当匹配器用"的中文集合，登记表里没有它 ⇒ 退 1 且点名
@@ -23,6 +23,12 @@
      本套件必须由 `tests/run_all.py` **按磁盘枚举**收进 CI（写成手抄名单 ⇒ 静默掉队）
   ⑨ **换了量 ⇒ 退 3**：登记表的 `targets` 与扫描面不一致时不许当成"变好/变差"读
   ⑩ **样板新模块里零条目**：`provenance.py` / `textnorm.py` 是这一族的规范形状，自己不该长词表
+  ⑪ **eval 侧那一份（判据的判据）也在闸门里**（20261015 批 4）：golden 的负正则/正反词表、
+     六个豁免开关、`run_golden.py` 的四张共享族各有一条**会红**的反控（加一个模式 / 多一条
+     用例打开豁免 / 族多一个元素 / 同数量改写），一条变异锁证明「新模式」那一段在承重，
+     一条真数据反控（往真登记表里塞一个模式）+ 一条 `--update` 锁（唯一放宽通道，只刷读数、
+     category/q/why 逐条保留，且不就地写回真表）。**这一段与①②的量分开计数**——
+     「运行时判据面少一张表」与「评测判据面多一条正则」不是同一个量。
 
 ⚠️ **登记表的 category 是复核物、不是防篡改锁**：把一条 `open` 手改成 `closed` 能让闸门变绿，
 本套件拦不住，也不打算拦（同 `eval/complexity_baseline.json` —— 基线类产物一律靠 reviewer
@@ -97,7 +103,18 @@ def snapshot_of(gate, root: pathlib.Path, targets: list[str] | None = None) -> d
     cands, metric = gate.scan()
     return {"_note": "临时", "targets": gate.TARGETS, "metric": metric,
             "entries": [{**c.as_json(), "category": "closed", "q": "x", "why": "反控用"}
-                        for c in cands]}
+                        for c in cands],
+            # eval 侧那一段也如实登记（树里没有 eval 文件时它是三个空字典 ⇒ 闸门这一层沉默）
+            "eval_vocab": eval_snapshot_of(gate)}
+
+
+def eval_snapshot_of(gate) -> dict:
+    """eval 侧（判据的**判据**）那一份"已如实登记"的登记表。category/why 一律填上。"""
+    ev = gate._eval_vocab(None)
+    for grp in ("keys", "exempt", "families"):
+        for d in (ev.get(grp) or {}).values():
+            d.update(category="closed", q="x", why="反控用")
+    return ev
 
 
 def write_reg(d: pathlib.Path, payload: dict, name: str = "_reg.json") -> pathlib.Path:
@@ -123,7 +140,33 @@ _LABELS = ("甲", "乙")
 def render(i: int) -> str:
     return _LABELS[i]
 '''
+# ── ⑪ 用的三份 eval 侧素材（都是**最小**的：只放这一节要动的形状）─────────────
+# 一个负正则站、一个反词表站（多轮，第 1 轮带豁免开关）、一个"顶层 gold 与 rounds 并存"的
+# 多轮用例（钉镜像的形状：只读 rounds）。
+_EVAL_GOLDEN_SRC = "\n".join([
+    json.dumps({"id": "ev_c1", "gold": {"text_not_match_regex": ["(?:已经|已)办好了"]}},
+               ensure_ascii=False),
+    json.dumps({"id": "ev_c2",
+                "rounds": [{"round": 1, "gold": {"text_not_contains": ["已经办好了"],
+                                                 "not_match_exempt_conditional": True}},
+                           {"round": 2, "gold": {"text_contains": ["办好了"]}}]},
+               ensure_ascii=False),
+    json.dumps({"id": "ev_c3", "gold": {"text_not_contains": ["顶层这份不该被读"]},
+                "rounds": [{"round": 1, "gold": {"text_not_contains": ["轮里的才该被读"]}}]},
+               ensure_ascii=False),
+]) + "\n"
+# 四张共享族各一条（正则那张故意写成拼接，钉 `partial` 那条读数下界的路）
+_EVAL_JUDGE_SRC = '''# -*- coding: utf-8 -*-
+import re
 
+DENIAL_FAMILY = ("甲", "乙")
+ABSENCE_COMPOUND = ("没有找到",)
+ABSENCE_LEADS = ("找到",)
+_NOUN_TAIL = r"(?!用户|者)"
+LOGIN_DEMAND_RE = re.compile(r"先登录" + _NOUN_TAIL)
+'''
+
+print("① 真值：闸门在真仓上退 0（登记表与代码同步）")
 print("① 真值：闸门在真仓上退 0（登记表与代码同步）")
 _g = load_gate()
 _rc0, _out0 = run(_g, ROOT, REGISTRY)
@@ -254,6 +297,140 @@ check("⑩ provenance.py / textnorm.py 在登记表里**零条目**（引文核�
       str([e["id"] for e in _real["entries"] if e["file"] in _new]))
 shutil.rmtree(_d3, ignore_errors=True)
 shutil.rmtree(_d4, ignore_errors=True)
+
+print("\n⑪ eval 侧（判据的**判据**）的棘轮：加一条负正则/一个豁免/一个族元素 ⇒ 都要红")
+# 这一节治的是**第二张脸**：agent/ 那份词表看着，eval/ 侧（golden 的负正则、正反词表、
+# 六个豁免开关、run_golden 的四张共享族）此前谁都没看着。它必须与①②**分开计数**：
+# "运行时判据面少一张表"与"评测判据面多一条正则"不是同一个量。
+_d5 = tree({"agent/x.py": _MATCHER_SRC, "eval/golden/basic.jsonl": _EVAL_GOLDEN_SRC,
+            "eval/run_golden.py": _EVAL_JUDGE_SRC})
+_snap5 = snapshot_of(_g, _d5, targets=["agent"])
+_reg5 = write_reg(_d5, _snap5, "_ev_ok.json")
+check("⑪a 反控前提：原状是绿的（eval 侧如实行过登记）",
+      run(_g, _d5, _reg5, targets=["agent"])[0] == 0)
+check("⑪b 镜像锁：多轮用例只读 `rounds` 里的 gold，顶层那份不读（同 `iter_rounds`）",
+      _snap5["eval_vocab"]["keys"]["text_not_contains"]["patterns"] == ["已经办好了", "轮里的才该被读"],
+      str(_snap5["eval_vocab"]["keys"]["text_not_contains"]["patterns"]))
+
+_p = _d5 / "eval/golden/basic.jsonl"
+
+
+def _golden_write(lines: list[str]) -> None:
+    _p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+_golden_write([_EVAL_GOLDEN_SRC.replace("|已)办好了", "|已)办妥了")])   # 换掉一个模式（数量不变）
+_rc, _out = run(_g, _d5, _reg5, targets=["agent"])
+_n_red_lines = sum(1 for l in _out.splitlines() if l.startswith("  ❌"))
+check("⑪c **换掉**一个模式（格/项/数量都不变）⇒ 只可能由「新模式」那一条判红",
+      _rc == 1 and _n_red_lines == 1 and "多了 1 个模式" in _out and "办妥了" in _out,
+      f"rc={_rc} / 红 {_n_red_lines} 条")
+_golden_write([_EVAL_GOLDEN_SRC])                                       # 还原
+_c1 = json.loads(_EVAL_GOLDEN_SRC.splitlines()[0])
+_c1["gold"]["text_not_match_regex"].append("(?:帮你|给你)办好了")
+_lines = _EVAL_GOLDEN_SRC.splitlines()
+_lines[0] = json.dumps(_c1, ensure_ascii=False)
+_golden_write(_lines)
+_rc, _out = run(_g, _d5, _reg5, targets=["agent"])
+check("⑪c₂ **追加**一个模式 ⇒ 两条红（新模式 + 项数变大）——一次改动可能同时踩两条线",
+      _rc == 1 and "多了 1 个模式" in _out and "变大" in _out, f"rc={_rc}")
+check("⑪d 红**只**来自 eval 侧那一层（agent 那套计数一个字都不动 ⇒ 两段没有混成一个量）",
+      "eval 侧 2 项变差" in _out and "未登记、0 条变大、0 未分类、0 条 open 缺出路、"
+      "0 个文件穷举量变大" not in _out, _out.strip().splitlines()[-1])
+
+_lines = list(_EVAL_GOLDEN_SRC.splitlines())
+_lines.append(json.dumps({"id": "ev_c4", "gold": {"text_contains": ["办好了"],
+                                                  "not_match_exempt_conditional": True}},
+                         ensure_ascii=False))
+_golden_write(_lines)
+_rc, _out = run(_g, _d5, _reg5, targets=["agent"])
+check("⑪e 多一条用例打开豁免开关 ⇒ 红并**点名那条用例**（豁免是判据替自己打的补丁）",
+      _rc == 1 and "多被 1 条用例打开了" in _out and "ev_c4" in _out, f"rc={_rc}")
+_golden_write(list(_EVAL_GOLDEN_SRC.splitlines()))                     # 还原文案
+
+_j = _d5 / "eval/run_golden.py"
+_j.write_text(_EVAL_JUDGE_SRC.replace('("甲", "乙")', '("甲", "乙", "丙")'), encoding="utf-8")
+_rc, _out = run(_g, _d5, _reg5, targets=["agent"])
+check("⑪f₁ 共享族多一个元素 ⇒ 红（`DENIAL_FAMILY` 那一族是逐次加词长出来的）",
+      _rc == 1 and "共享族 `DENIAL_FAMILY` 变大" in _out, f"rc={_rc}")
+_j.write_text(_EVAL_JUDGE_SRC.replace('("甲", "乙")', '("甲", "丙")'), encoding="utf-8")
+_rc, _out = run(_g, _d5, _reg5, targets=["agent"])
+check("⑪f₂ **同数量改写**也红（指纹变了）——「数量不变、条目被换掉」正是这一族的病",
+      _rc == 1 and "同数量改写" in _out, f"rc={_rc}")
+_j.write_text(_EVAL_JUDGE_SRC, encoding="utf-8")
+
+print("\n⑪g 变异锁：两条判据各挖一次 ⇒ 对应的那次改动不再红（证明是它们在承重）")
+
+
+def _mutant(anchor: str, repl: str, tag: str):
+    """把闸门源码里的 `anchor` 换成 `repl`，返回变异体模块（锚点不唯一则返回 None）。"""
+    src = GATE_SRC.read_text(encoding="utf-8")
+    if src.count(anchor) != 1:
+        return None
+    d = pathlib.Path(tempfile.mkdtemp(prefix=f"evmut_{tag}_"))
+    f = d / f"gate_{tag}.py"
+    f.write_text(src.replace(anchor, repl), encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(f"gate_{tag}", f)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[f"gate_{tag}"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_cut_pat = ('newpat = [p for p in got.get("patterns", []) if p not in set(want.get("patterns") or [])]',
+            "newpat = []")
+_gm_pat = _mutant(*_cut_pat, "pat")
+check("⑪g₁ 锚点「新模式」恰好命中 1 处（源码一漂就停，别静默不生效）", _gm_pat is not None)
+if _gm_pat:
+    _golden_write([_EVAL_GOLDEN_SRC.replace("|已)办好了", "|已)办妥了")])   # 与 ⑪c 同一处改动
+    _rcm, _outm = run(_gm_pat, _d5, _reg5, targets=["agent"])
+    check("⑪g₂ 挖掉它 ⇒ ⑪c 那处改动退 0（⇒ ⑪c 的红确实来自这一段）", _rcm == 0, f"rc={_rcm}")
+    _golden_write(list(_EVAL_GOLDEN_SRC.splitlines()))
+
+_cut_sz = ('if got["sites"] > want["sites"] or got["items"] > want["items"]:', "if False:")
+_gm_sz = _mutant(*_cut_sz, "size")
+check("⑪g₃ 锚点「格/项变大」恰好命中 1 处", _gm_sz is not None)
+if _gm_sz:
+    _evs = json.loads(json.dumps(_real["eval_vocab"]))
+    _evs["keys"]["text_not_contains"]["sites"] -= 1
+    _regs = write_reg(_d5, {**_real, "eval_vocab": _evs}, "_evs2.json")
+    check("⑪g₄ 反控前提：未挖掉时那一处改动是红的",
+          run(_g, ROOT, _regs)[0] == 1)
+    check("⑪g₅ 挖掉它 ⇒ 同一处改动退 0（⇒ ⑪h₂ 的红确实来自这一段）",
+          run(_gm_sz, ROOT, _regs)[0] == 0)
+
+print("\n⑪h 真数据反控 + 唯一放宽通道：动真登记表的 eval 段 ⇒ 当场红；`--update` 保留理由")
+_d6 = pathlib.Path(tempfile.mkdtemp(prefix="evreal_"))
+_ev = json.loads(json.dumps(_real["eval_vocab"]))
+_ev["keys"]["text_not_match_regex"]["patterns"].pop()      # 登记表少一个模式（源码里有）
+_rc, _out = run(_g, ROOT, write_reg(_d6, {**_real, "eval_vocab": _ev}, "_evp.json"))
+check("⑪h₁ 真登记表比现场少一个模式 ⇒ 退 1 且把那个模式点名（「新增必须登记理由」的落点）",
+      _rc == 1 and "多了 1 个模式" in _out, f"rc={_rc}")
+_ev2 = json.loads(json.dumps(_real["eval_vocab"]))
+_ev2["keys"]["text_not_contains"]["sites"] -= 1
+_rc, _out = run(_g, ROOT, write_reg(_d6, {**_real, "eval_vocab": _ev2}, "_evs.json"))
+check("⑪h₂ 把某条的格数减一（＝评测判据面长大了）⇒ 退 1 且点「只许变小」",
+      _rc == 1 and "只许变小" in _out, f"rc={_rc}")
+_rc, _out = run(_g, ROOT, write_reg(_d6, {**_real, "eval_vocab": {}}, "_evf.json"))
+check("⑪h₃ 整块 `eval_vocab` 撤掉 ⇒ 退 1（否则「eval 侧没人看着」与「eval 侧没问题」同形）",
+      _rc == 1 and "没有 `eval_vocab` 这一段" in _out, f"rc={_rc}")
+_before = REGISTRY.read_bytes()
+_g.ROOT, _g.TARGETS = ROOT, list(_DEFAULT_TARGETS)
+_g.BASELINE = _d6 / "_upd.json"
+shutil.copyfile(REGISTRY, _g.BASELINE)
+_g.update()
+_after = json.loads(_g.BASELINE.read_text(encoding="utf-8"))
+_missing = [k for grp in ("keys", "exempt", "families")
+            for k, v in _real["eval_vocab"][grp].items()
+            if _after["eval_vocab"][grp].get(k, {}).get("why") != v.get("why")]
+check("⑪h₄ `--update` 是唯一放宽通道，且**只刷新读数**：category/q/why 逐条保留",
+      not _missing, str(_missing))
+_g.BASELINE = REGISTRY
+check("⑪h₅ `--update` 没碰真登记表（就地取材 ≠ 就地写回）", REGISTRY.read_bytes() == _before)
+_rc, _out = run(_g, ROOT, REGISTRY)          # 复位后再跑一次真值
+check("⑪h₆ 复位后真仓仍是绿的", _rc == 0 and "✅ 没有变差" in _out, f"rc={_rc}")
+shutil.rmtree(_d5, ignore_errors=True)
+shutil.rmtree(_d6, ignore_errors=True)
 
 print()
 if FAILED:
