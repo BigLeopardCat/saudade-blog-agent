@@ -35,6 +35,7 @@
 | [identity-and-permissions.md](identity-and-permissions.md) | 身份与权限：Principal / scope manifest / 同意闸 / 管理助手（原名 secretary.md） | 现状型 |
 | [multimodal-retrieval.md](multimodal-retrieval.md) | 多模态检索分阶段方案（ADR-0005 的展开，**已搁置**） | 方向型 |
 | [write-provenance-shadow-20261014.md](write-provenance-shadow-20261014.md) | 写参数出处改造第一批（影子）的两臂读数与分歧报告，**§6 是第二批决策输入** | 记录型（**§6** 方向型） |
+| [fastpath-pricing-20261015.md](fastpath-pricing-20261015.md) | 五条确定性快道的定价读数（生产命中分布 + 语料两臂），**§5 是删除/收窄清单** | 记录型（**§5** 方向型） |
 
 > 这份表**刻意不写"最后修订"日期**：手抄的日期没有判据看着（CI 是浅克隆，读不到逐文件的
 > 提交日期），注定漂。要看某份文档最近改了什么：`git log -1 --format=%ad -- docs/<文件>`。

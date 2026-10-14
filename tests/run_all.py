@@ -114,6 +114,13 @@ COV_DIR = ROOT / ".coverage-data"
 # 临时拨 `settings.agent_evidence`（并同步重建 schema，见 test_provenance 的那一节）。
 _PINNED = {"AGENT_TASK_STATE": "0", "AGENT_TASK_PLAN_EXEC": "0",
            "AGENT_EVIDENCE": "0",
+           # `AGENT_FASTPATH`（20261015 快道定价档）：**出厂开**，但这里钉 `1` 是必须的
+           # ——本仓教训"离线套件对档位是瞎的"：不钉的话，谁在 shell 里 export 过
+           # `AGENT_FASTPATH=0`（比如为了跑两臂），整套里凡是走 planner 的用例都会
+           # 按另一档判，而**红得毫无理由**（快道不跑 ⇒ 那一轮多一次 LLM、计划文本
+           # 也不同）。要验关档手臂的用例在同一进程里临时拨
+           # `settings.agent_fastpath`（照 `test_task_continuation.py` 的 `_Dial`）。
+           "AGENT_FASTPATH": "1",
            "RAG_HYBRID_ENABLED": "0",
            "SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
 

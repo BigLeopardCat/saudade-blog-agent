@@ -6407,6 +6407,12 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
     page_ctx = _page_ctx(state["messages"], role)
     has_frames = _has_frames(state["messages"])
     doc_anchors = _doc_anchors(state["messages"])
+    # 快道档（20261015 定价档）**读一次、两处用同一个值**：① 首轮那一段开不开；
+    # ② 下面的 `planner.context` 事件里记一笔。记这一笔是必须的——命中会落
+    # `fastpath` 事件，但"没有那条事件"本身证明不了任何事（本仓纪要：trace 指纹
+    # 只能证"在跑"、不能证"没跑"）；关档那几轮与"开档但没命中"在 trace 上长得
+    # 一模一样，没有这一格就分不出是"快道没用"还是"快道没开"。
+    fastpath_on = _fastpath_on()
     # 待办台账帧（批 H · S1）：把"等着主人点头的那几件"按 id 摆上桌——**事实归系统、
     # 决策归模型**。触发器在 `_ledger_families_due` 里（族名命中 / 授权式全选式 /
     # 上一轮真读过那份队列），都不命中就一次都不读。每一轮都重读（而不是只在首轮算
@@ -6433,7 +6439,8 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
         record("planner", "context", page_ctx=page_ctx[:1500],
                recent_tail=_rt,
                short_reply=_short_reply_hint(state["messages"])[:400],
-               doc_anchors=doc_anchors[:600])
+               doc_anchors=doc_anchors[:600],
+               fastpath="on" if fastpath_on else "off")
 
     # 轮次上限 → 强制收尾（不再规划新调用；帧内容足够就让 narrator 如实作答）
     if rounds >= MAX_PLAN_ROUNDS:
@@ -6444,7 +6451,10 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
     # 确定性快道只在首轮（rounds==0 且本轮尚无任何工具帧）判定——execute 完成
     # 后控制权回到 planner 时若再命中快道，会重复规划同一动作 → 死循环
     # （设计陷阱 20260903：快道对象是"用户首条消息"，不是"每轮重新评估"）。
-    if rounds == 0 and not has_frames:
+    # `fastpath_on` = `AGENT_FASTPATH` 定价档（20261015）：关掉整块不跑，五条
+    # 快道全交给 planner LLM。**默认开 ⇒ 与从前逐字节相同**；这一档的去留由
+    # 读数决定（`eval/fastpath_pricing.py`），不是"看着多余就删"。
+    if rounds == 0 and not has_frames and fastpath_on:
         # 导航确定性快道（零 LLM）：命中即返回，不调用 planner LLM（耗时大头）。
         nav = _nav_fast_path(user_msg)
         if nav is not None:
@@ -7223,6 +7233,20 @@ def _decide_instantiate(c: "_DecideCtx") -> "_Step":
         record("planner", "param_rejected", skill=c.plan_obj["skill"], round=c.rounds,
                missing=pp.get("missing") or [], bad=pp.get("bad") or [])
     return _Step("next")
+
+
+def _fastpath_on() -> bool:
+    """`AGENT_FASTPATH` 这一档的**唯一读口**（20261015，出厂开 = 与从前一致）。
+
+    它管的只有一件事：`planner_node` 首轮那一段五条确定性快道跑不跑。取值只在这里
+    读（`fastpath_on` 读一次、两处用），因为"多一处读 `settings` 就多一处可能漂移的
+    说法"——本仓在 IoT 那个开关上吃过"三处同源不是'一个开关'"的教训。
+
+    这一档**不是**给生产用的开关，是**定价装置**：快道命中即拿走 planner 的决策权，
+    要不要删某一条得看命中的价钱（生产 trace 的 `fastpath` 分布 + golden 两臂），
+    读数之前一条都不删。
+    """
+    return bool(getattr(settings, "agent_fastpath", True))
 
 
 def _evidence_on() -> bool:
