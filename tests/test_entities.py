@@ -118,31 +118,40 @@ check("截断发生在条目边界（不留半条）", lg.rstrip('」').count("�
 check("None/非字符串不炸", receipt_digest("list_guestbook", None) == "")
 
 print("⑥ planner 契约在位（规则 6b + 回执字段名与 Rust 侧一致）")
-src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-check("planner 提示词含规则 6b", "6b. 指代取值优先于重查" in src)
-check("规则 6b 点了 recent_executions 实体摘要", "实体摘要" in src)
-check("回执写入 digest 字段（Rust render_exec_row 读同名键）", 'rcpt["digest"] = digest' in src)
+# 20261014：模型可见正文（planner 模板 / 叙述纪律）已从 `agent/graph.py` 搬到
+# `agent/prompts.py`，**正文与代码从此分开取**——判"这句纪律写下来了没有"读常量本体
+# （= 模型真正读到的那串），判"这行代码长这样"才读 graph.py 文本。比原来更严：
+# 原来只要文件里**任何地方**出现这句话就算过（注释里抄一句也算），现在必须是提示词本体。
+from agent.graph import NARRATOR_DISCIPLINE as _DISC  # noqa: E402
+from agent.graph import _PLANNER_PROMPT as _TPL  # noqa: E402
+_CODE = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+check("planner 提示词含规则 6b", "6b. 指代取值优先于重查" in _TPL)
+check("规则 6b 点了 recent_executions 实体摘要", "实体摘要" in _TPL)
+check("回执写入 digest 字段（Rust render_exec_row 读同名键）", 'rcpt["digest"] = digest' in _CODE)
 # 双侧契约（20260921）：规则 6b 末条在 planner 侧只决定"这轮不重查"，而**句子是 narrator
 # 写的**——纪律 15 缺失时同一条输入会时对时错（真实 trace：19:59 追问对 / 20:08 直接
 # 答「编程 8 篇」）。两处必须同时在位，缺一条就等于没有这条行为。
-check("planner 规则 6b 点名「不唯一 → 追问澄清」", "指代对象在摘要里本身就**不唯一**" in src)
+check("planner 规则 6b 点名「不唯一 → 追问澄清」", "指代对象在摘要里本身就**不唯一**" in _TPL)
 # 20261001：6b/6c 的分界原先只长在 6c 的尾巴上（"取值指代走 6b"），而**判错的那一轮
 # 恰好是照着 6b 在走**——模型把"编程那个分类下面有几篇文章"当成 6c 的现时状态去重查了。
 # 这条锁判的不是"那句话在不在"，是**它在不在 6b 的位置上**（句子在谁的位置上，就属于
 # 谁的判据）。顺手把旧版那句绝对化的话一起拦掉：分类文章数这类量会变，"照抄摘要是
 # 历史事实、永远对"是把一个会变的量说成了不会变。
-_6b = src.index("6b. 指代取值优先于重查")
-_6c = src.index("6c. 现时状态类询问")
+# 位置类断言在**提示词内部**取下标（20261014）：原来在图文件里取，"位置"的含义会被
+# 文件里别处出现的同名字符串搅浑；现在量的是"这句话在 planner 提示词里的位置"。
+_6b = _TPL.index("6b. 指代取值优先于重查")
+_6c = _TPL.index("6c. 现时状态类询问")
 check("6b/6c 的分界句长在 6b 里（不在 6c 的尾巴上）",
-      _6b < src.index("第一步先分清问的是哪一件事", _6b) < _6c, f"6b@{_6b} 6c@{_6c}")
+      _6b < _TPL.index("第一步先分清问的是哪一件事", _6b) < _6c, f"6b@{_6b} 6c@{_6c}")
 check("分界句把量词明确算进 6b（「有几篇文章」不是现时状态）",
-      "量词不改变归属" in src[_6b:_6c])
-check("旧版绝对化的那句已删净（graph.py）", "照抄摘要永远是对的" not in src)
+      "量词不改变归属" in _TPL[_6b:_6c])
+check("旧版绝对化的那句已删净（graph.py 与提示词都不许有）",
+      "照抄摘要永远是对的" not in _CODE and "照抄摘要永远是对的" not in _TPL)
 check("旧版绝对化的那句已删净（server.py）",
       "照抄摘要永远是对的" not in (ROOT / "server.py").read_text(encoding="utf-8"))
-check("narrator 叙述纪律 15（指代不唯一先追问）在位", "15. 指代不唯一时先追问" in src)
-check("纪律 15 要求点名候选（不是笼统反问）", "追问要**点名候选**" in src)
-check("纪律 15 含反面（带序号/已点名 → 直接答，不反问）", "就是多此一举" in src)
+check("narrator 叙述纪律 15（指代不唯一先追问）在位", "15. 指代不唯一时先追问" in _DISC)
+check("纪律 15 要求点名候选（不是笼统反问）", "追问要**点名候选**" in _DISC)
+check("纪律 15 含反面（带序号/已点名 → 直接答，不反问）", "就是多此一举" in _DISC)
 
 print("⑦ 后台文章清单也有摘要了（20261007：跨轮取值通道缺的那一格）")
 # 生产实证（trace 20261007T191440 → 20261007T191543）：19:14 真调了后台文章清单、

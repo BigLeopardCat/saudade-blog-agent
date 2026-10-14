@@ -1168,7 +1168,8 @@ for _n in ("tag_create", "article_status", "article_tags"):
     _d = _BY_NAME[_n].description
     check(f"{_n} 描述含「照常选本技能 + 系统弹确认框」纪律",
           "照常选本技能" in _d and "索要确认" in _d, _d[-60:])
-gsrc2 = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+import _ctx_src  # noqa: E402  （模型可见正文的取值入口：`prose()`）
+gsrc2 = _ctx_src.prose()   # 判的是**planner 规则正文**（20261014 起住 agent/prompts.py）
 check("planner 规则里也有同一条（4b 写操作纪律：要不要执行不由你判断）",
       "要不要执行" in gsrc2 and "4b." in gsrc2)
 

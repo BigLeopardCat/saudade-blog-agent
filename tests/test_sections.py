@@ -377,8 +377,11 @@ check("旧的无声硬截断已移除", "原文过长仅示前" not in ctx_src)
 # （`rounds` → `c.rounds`）⇒ 本文件的整文件文本锁先去掉那个前缀再看：
 # 判据文本与拆分之前**逐字相同**（前缀清单从 graph.py 的 AST 读，见 `_ctx_src`）。
 g_src = _ctx_src.graph_deprefixed()
-check("planner 规则含按节补读", "超长文章按节补读" in g_src)
-check("narrator 纪律 14 在位", "14. 工具返回帧标注" in g_src)
+# 这两条判的是**正文**（planner 规则 / narrator 纪律），取值走正文本体：20261014 起
+# 正文住在 `agent/prompts.py` ⇒ 仍读 graph.py 全文会假红。下面的代码类判据照旧读 g_src。
+_p_src = _ctx_src.prose()
+check("planner 规则含按节补读", "超长文章按节补读" in _p_src)
+check("narrator 纪律 14 在位", "14. 工具返回帧标注" in _p_src)
 check("造帧侧（execute）在 ToolMessage 出口去重",
       "sections.slim_frame(str(out))" in g_src)
 check("去重没有动 `_shape`（那是引用取值源，必须保持原样）",

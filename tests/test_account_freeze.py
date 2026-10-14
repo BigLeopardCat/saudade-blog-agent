@@ -682,8 +682,10 @@ check("  政策兜底**不请主人重试**（重试一万次结果一样）",
 check("  政策兜底也不说成「目标不存在」（政策拒绝时目标可能是真的存在的）",
       "不存在" not in g._FALLBACK_POLICY and "找不到" not in g._FALLBACK_POLICY,
       g._FALLBACK_POLICY[:60])
+import _ctx_src  # noqa: E402  （模型可见正文的取值入口：`prose()`）
+_prose = _ctx_src.prose()   # 判的是**两侧正文**（20261014 起住 agent/prompts.py）
 check("  planner 与 narrator 两侧都写了 `[policy_refused]` 不许重试",
-      _src.count("[policy_refused]") >= 2, str(_src.count("[policy_refused]")))
+      _prose.count("[policy_refused]") >= 2, str(_prose.count("[policy_refused]")))
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑯ 派生锁：plan 含**名字型写工具**的技能必须在 WRITE_SKILL_NAMES 里")

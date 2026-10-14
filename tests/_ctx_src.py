@@ -12,6 +12,10 @@
 文本与拆分之前逐字相同，reviewer 看到的 diff 是"锚点换了个取源码的方式"，
 不是"判据被改松了"。
 
+**第二个入口 `prose()`（20261014）**：模型可见正文已搬到 `agent/prompts.py`，
+"整文件找散文"的判据同样会整族假红 ⇒ 同一套思路（取值点跟着正文搬、判据字面不动），
+详见该函数自己的注释。
+
 两条边界，都写在这里免重议：
 
   · **字段清单从 `agent/graph.py` 自己的 AST 读**（`_DecideCtx` 的注解字段），
@@ -59,3 +63,25 @@ def deprefix(src):
 def graph_deprefixed():
     """读 `agent/graph.py` 并返回去前缀后的全文（那七个套件的入口就这一行）。"""
     return deprefix(GRAPH.read_text(encoding="utf-8"))
+
+
+def prose():
+    """**模型可见正文**的全量文本（20261014 起住在 `agent/prompts.py`）。
+
+    给"这段纪律/规则写下来了没有"这一类接线锁取值。正文按族搬出 graph.py 之后，
+    原来"读 `agent/graph.py` 整文件找散文"的判据会整族变假红（句子还在、只是换了
+    文件），而它们要判的东西一个字没变 ⇒ 加这一个入口，**判据文本逐字不动**、
+    只把取值点从"图文件全文"换成"正文本体"。
+
+    取值走 `agent.graph` 上的常量（那里按原名 re-export）⇒ 拿到的是**模型真读到的
+    那串**，比读文件更严：读文件会把注释/别处抄一句也算过。
+
+    组成：planner 模板 + 输出契约 + reflector 模板 + narrator 三段拼装后的那一份。
+    **`_EXECUTOR_PROMPT` 里已逐字含 `_EXECUTOR_HEAD` 与 `NARRATOR_DISCIPLINE`**
+    （23 + 6222 + 尾段 = 7197），所以这里不再重复拼进去——重复拼会让"计数类"
+    断言（如 `count("[policy_refused]") >= 2`）凭空多算一份。改拼装方式时要来
+    这里看一眼：真那样改，纪律类的断言会搜到一个不含纪律的串。
+    """
+    import agent.graph as G
+    return "\n".join((G._PLANNER_PROMPT, G._PLANNER_OUTPUT_CONTRACT_NATIVE,
+                      G._REFLECTOR_PROMPT, G._EXECUTOR_PROMPT))
