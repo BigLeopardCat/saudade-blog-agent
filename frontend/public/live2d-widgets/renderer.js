@@ -92,10 +92,20 @@
   };
 
   const pickOne = (v) => (Array.isArray(v) ? v[Math.floor(Math.random() * v.length)] : v);
+  // 填进 `$N` 的值一律**先转义**（20261015）：模板里那两个 `<span>` 是文案自带的结构
+  // （欢迎语要把标题画成强调色），而填进去的值来自**页面之外**——`document.title` 与
+  // `document.referrer` 的 hostname。`show()` 最后是 `el.innerHTML = …`，不转义就等于
+  // 把标题当成 HTML 解析。只转义参数、不转义模板，故意的标记因此照常生效。
+  // 现状（20261015 核实）**够不到**真实攻击面：能改 `document.title` 的只有
+  // `SeoHelmet` 的几处，标题/分类名只有管理员写得了——所以这是纵深防御，
+  // 不是"访客能踩的洞"；但这一段的价值在于**值不该被当标记**，与谁写标题无关。
+  const esc = (s) => String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   const subst = (tpl, ...args) =>
     tpl.replace(/\$(\d+)/g, (m, d) => {
       const v = args[parseInt(d, 10) - 1];
-      return v === undefined || v === null ? '' : v;
+      return v === undefined || v === null ? '' : esc(v);
     });
 
   g.__waifuRenderer = function () {
