@@ -622,7 +622,12 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 **只产草稿不自动入库**，含真实用户文本故不进 git）+ L2 门禁分两层（回归组硬判 100%，见 §2 门槛分工）。
 **20260925 补**：`eval/llm_judge.py`（LLM 评审员，判"回复有没有编材料"，**只出报告不进任何门禁**，
 **已接进夜间**（跑在 golden 之后、不置 `fail=1`），口径与四条纪律见 §2 末）+ trace 的工具返回上限可配（`TRACE_TOOL_RESULT_LIMIT`，golden 轮 40000，
-生产仍 200——评审员拿摘要当材料会误判，这条是它的前置条件）|
+生产仍 200——评审员拿摘要当材料会误判，这条是它的前置条件）。**20261015 补**：快道的**定价装置**
+——档位 `AGENT_FASTPATH`（出厂开、唯一读口 `graph._fastpath_on()`、进 `run_all._PINNED`，
+档位显式落 `planner.context` 的 `fastpath` 格）+ `eval/trace_alert.py` 的 **R5** 段（生产 trace
+的命中分布与每次的价钱）+ `eval/fastpath_pricing.py`（`map` 静态映射 / `run` 两臂交替读计数，
+`--ids/--tag` 供单条复采样）+ 锁 `tests/test_fastpath_dial.py`；读数与删除/收窄清单见
+[docs/fastpath-pricing-20261015.md](fastpath-pricing-20261015.md)。**它只定价，不改行为** |
 | 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:）；20260830 修 golden 断言过严三条（行为正确不判失败） |
 | 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0 秒级套件硬门禁）；L2 全量 golden 本机跑（20260920 起撤出 CI）+ nightly crontab（scripts/nightly_regression，失败标 `~/agent_regression.failed`）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
 | 3 记忆 | 🟡 部分完成：摘要独立化（2026-08-26）结构性关闭污染面；**未做**：记忆专项评测（召回相关性、摘要合并质量、污染检测） |

@@ -12,6 +12,10 @@ golden 只测 66 条固定用例、trace_metrics 只测过程指标（轮次/工
   R3 MED   高频拉锯：同一用户 10 分钟内 ≥3 轮对话（来回重试的形态指纹）
   R4 MED   出处候选误拒：写目标被出处闸拒了，而被拒的那个**字面就在主人原话里**
            （判据读事件的结构化 `values=`，不读拒绝文案——文案一改就瞎）
+  R5  —    快道定价（20261015）：五条确定性快道各命中几次、每次的价钱（命中轮的工具数、
+           命中后还问了 planner 几次、有没有 gate 打回、下一轮主人有没有质疑）。
+           这一节不是告警，是 `AGENT_FASTPATH` 那一档的**取数出口**——删/收窄一条
+           快道要拿它 + golden 两臂说话，不能纸面推定。
 
 巡检非门禁：不置失败标记（避免与 golden 门禁混同制造红斑）。局限：抓的是
 "用户有反应/agent 自知"的拉锯；无道歉词的静默跑题（9/8 第 2 轮「读正文」
@@ -54,6 +58,13 @@ GAP = timedelta(minutes=10)  # R3 拉锯链的最大间隔
 # `ledger_id` / `policy` 两支拒的是"台账上没有这一行 / 规则不许"——它们与"值有没有出处"
 # 无关，把它们的值拿来原话里找必然找不到，是假阳性流水线，故**不收**。
 REFUSAL_SOURCES = ("quote", "value", "todo_text", "grounding")
+
+# R5 用的：**现行**五条快道写进 trace 的 `kind`。这不是"词表"——它是本系统自己写的
+# **事件名**（属"系统数据"，与 wire 前缀同类；判据层那四类里不含中文语义表）。
+# ⚠️ 加第六条快道时这里不改也**不会静默漏**：R5 把窗口里出现过的 kind **全部**列出来，
+# 不在这一组里的单独标「不在现行五条里」——所以漏的是"归类"，不是"看不见"。
+FASTPATH_KINDS = ("nav", "referent_nav", "display", "article_read", "effect_switch")
+_MAX_LIST = 40   # R5 逐条清单的上限（命中本来就少，这是防它哪天变成流水账）
 
 
 def _squash(s: str) -> str:
@@ -177,6 +188,96 @@ def _print_refusals(r4: list, seen: int, readable: int, legacy: int) -> None:
     print()
 
 
+def _fastpath_rows(doc: dict, stamp: str, uid: int, conv: int, msg: str) -> list[dict]:
+    """一份 trace → 快道命中行（R5 的原料：**命中次数 + 命中后那一轮的结构信号**）。
+
+    判据全在**结构化事件**里，一个字的文案都不读：
+      · 命中 = `planner.fastpath`，它的 `kind=`／`tools=`（工具数 = 这一轮快道替主人做了几件）；
+      · 本轮的 planner 调用次数 = `planner.llm_done` 的条数。⚠️ **别把它读成"快道省了几次
+        LLM"**：execute 跑完控制权一律回到 planner，所以命中轮恒有 ≥1 次——"零 LLM"说的是
+        **命中那一刻**不叫模型，不是"整轮不叫"。有意义的是**比 1 多出来的那几次**：那才是
+        快道没接住的后续意图（trace 20260923T123437 主人说「把这篇文章收藏了」，快道先读了
+        一遍文章，planner 紧接着又为收藏跑了一轮）；
+      · 打回 = `gate.fallback`（打回 = 主人看到的是兜底文本，是命中的代价之一）；
+      · 档位 = `planner.context` 的 `fastpath` 格。**缺那一格 ≠ 开档**：它是本档
+        上线（20261015）之前的存量 trace，与"开了但没命中"必须分开数。
+    """
+    hits, llm_done, fallback, dial = [], 0, False, None
+    for ev in (doc.get("events") or []):
+        key = (ev.get("node"), ev.get("event"))
+        if key == ("planner", "fastpath"):
+            hits.append({"stamp": stamp, "uid": uid, "conv": conv, "msg": msg,
+                         "kind": str(ev.get("kind") or ""),
+                         "tools": [str(t) for t in (ev.get("tools") or [])]})
+        elif key == ("planner", "llm_done"):
+            llm_done += 1
+        elif key == ("gate", "fallback"):
+            fallback = True
+        elif key == ("planner", "context"):
+            dial = ev.get("fastpath")          # 缺键 = 本档上线前的存量（**不是**"开"）
+    for h in hits:
+        h["llm_done"] = llm_done
+        h["fallback"] = fallback
+        h["dial"] = dial
+    return hits
+
+
+def _next_turn_challenged(row: dict, seq: dict) -> bool:
+    """命中那一轮的**下一条**（同一用户同一会话）里，主人有没有质疑/纠错信号。
+
+    复用 R1 的 `USER_CHALLENGE`（同一个词表、同一个含义，不再抄第二份）。口径上的
+    两处诚实：① 排序靠 trace 文件名里的时间戳（同一秒的先后靠文件名，可能反）；
+    ② 会话 id 缺失（旧 trace）时归到 0 —— 那一段的"下一轮"只能同用户粗配。
+    """
+    chain = seq.get((row["uid"], row["conv"])) or []
+    for i, (stamp, _msg) in enumerate(chain):
+        if stamp == row["stamp"] and i + 1 < len(chain):
+            return bool(USER_CHALLENGE.search(chain[i + 1][1] or ""))
+    return False
+
+
+def _print_fastpath(rows: list, dials: dict, scanned: int, seq: dict) -> None:
+    """R5 那一节（**20261015 快道定价档的取数出口**）。
+
+    这一节不定结论，只把"命中几次、每次的价钱"摊开。读的人要拿它与
+    `AGENT_FASTPATH=1/0` 两臂的 golden 对照（跑法见 `config/settings.py` 那条注）。
+    ⚠️ 窗口里若"关档轮次"不为 0，说明有人拨过档，这一节的读数是两档混着的。
+    """
+    if not rows:
+        print("R5 快道定价：窗口内无 `planner.fastpath` 命中（⚠️ 这不等于五条都没用——"
+              "先把 `planner.context` 的档位格数一遍再看）\n")
+        return
+    by_kind: dict = {}
+    for r in rows:
+        by_kind.setdefault(r["kind"], []).append(r)
+    _n = {"on": dials.get("on", 0), "off": dials.get("off", 0), "none": dials.get(None, 0)}
+    print(f"R5 快道定价：窗口内真实对话 {scanned} 轮，快道命中 {len(rows)} 次"
+          f"（{len(by_kind)} 种 kind）")
+    print(f"   档位格：开 {_n['on']} / 关 {_n['off']} / **没有这一格** {_n['none']}"
+          "（没有 = 本档上线前的存量 trace，不是'开'）")
+    for kind, rs in sorted(by_kind.items(), key=lambda kv: -len(kv[1])):
+        extra = "" if kind in FASTPATH_KINDS else "  ← **不在现行五条里**（已删的快道 or 新加的？）"
+        n_fb = sum(1 for r in rs if r["fallback"])
+        n_ch = sum(1 for r in rs if _next_turn_challenged(r, seq))
+        n_extra = sum(1 for r in rs if r["llm_done"] > 1)      # 比下限 1 多花的那几次
+        tools = sorted({len(r["tools"]) for r in rs})
+        print(f"   kind={kind:18s} 命中 {len(rs):3d} 次 | 本轮工具数 {tools} | "
+              f"命中后另有后续意图（planner 调用 >1 次）{n_extra} 次 | "
+              f"gate 打回 {n_fb} 次 | 下一轮主人质疑 {n_ch} 次{extra}")
+    print(f"   —— 未在现行五条里的 kind 已在上表标出；现行五条里**窗口内一次都没命中**的："
+          f"{[k for k in FASTPATH_KINDS if k not in by_kind] or '无'}")
+    # 逐条摊开**必须**有：命中是"这条快道替主人做了这件事"，而"该不该替"是语义判断，
+    # 机器在这一层判不了（判得了的只有上面那几个结构数）。R4 同一体例。
+    print(f"   （命中逐条列出，供人工看'这次命中该不该'；共 {len(rows)} 条"
+          + (f"，只列前 {_MAX_LIST}" if len(rows) > _MAX_LIST else "") + "）")
+    for r in rows[:_MAX_LIST]:
+        print(f"     {r['stamp']} u{r['uid']:<4d} [{r['kind']}] "
+              f"{brief(r['msg'], 40)}  →  {brief('、'.join(r['tools']), 60)}")
+    if len(rows) > _MAX_LIST:
+        print(f"     …另有 {len(rows) - _MAX_LIST} 条未列")
+    print()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=7, help="近 N 天（默认 7；给定 --from 时忽略）")
@@ -191,6 +292,8 @@ def main():
     # R4 的候选（20261014）：**独立一趟扫事件**，不往 `records` 里塞 events——R3 的链
     # 只吃 stamp/uid/msg，而 events 是每份 trace 里最大的一块。
     r4, r4_seen, r4_readable, r4_legacy = [], 0, 0, 0
+    # R5（20261015）：命中行 + 档位格计数 + 会话内时序（`_next_turn_challenged` 用）。
+    r5, dials, seq = [], defaultdict(int), defaultdict(list)
     files = iter_trace_files(TRACE_DIR)
     for f in files:
         stamp, uid_s = parse_trace_name(f)
@@ -204,8 +307,15 @@ def main():
         if d is None:
             continue
         scanned += 1
-        msg = str((d.get("input") or {}).get("message") or "")
+        _in = d.get("input") or {}
+        msg = str(_in.get("message") or "")
         reply = str(d.get("reply") or "")
+        _conv = int(_in.get("conversation_id") or 0)
+        seq[(uid, _conv)].append((stamp, msg))
+        r5.extend(_fastpath_rows(d, stamp, uid, _conv, msg))
+        for ev in (d.get("events") or []):
+            if (ev.get("node"), ev.get("event")) == ("planner", "context"):
+                dials[ev.get("fastpath")] += 1     # 缺键 ⇒ 计到 None 那一档（存量）
         _cands, _seen, _read, _legacy = _refusal_hits(d, stamp, uid, msg)
         r4.extend(_cands)
         r4_seen += _seen
@@ -228,6 +338,7 @@ def main():
         print(f"   用户: {brief(h['msg'])}")
         print(f"   回复: {brief(h['reply'])}\n")
     _print_refusals(r4, r4_seen, r4_readable, r4_legacy)
+    _print_fastpath(r5, dials, scanned, seq)
     for uid, chain in r3_focus:
         t0, t1 = chain[0]["stamp"], chain[-1]["stamp"]
         print(f"[MED ] u{uid} {t0[9:13]}–{t1[9:13]}（{t0[:8]}）共 {len(chain)} 条  R3 高频拉锯（含质疑/认错信号）")

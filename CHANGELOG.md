@@ -16,6 +16,25 @@
 
 ## 20261015
 
+- **确定性快道定价档 `AGENT_FASTPATH` + 两条取数腿（新档位与新判据，无行为变更）**——`agent/decisions.py`
+  那五条确定性快道（导航 / 指代型导航 / 显示 / 读当前文章 / 特效切换）命中即**拿走 planner 的决策权**，
+  而每条都是"中文动词表 + 位置窗口"，删或收窄得先量价。新增定价档（**出厂开 = 与从前逐字节相同**；
+  唯一读口 `agent/graph.py::_fastpath_on()`，同时进 `tests/run_all.py::_PINNED`——离线套件对档位是瞎的），
+  并把档位**显式**落进 trace（`planner.context` 的 `fastpath` 格：**缺这一格 ≠ 开**，否则"开档但没命中"
+  与"根本没开"在 trace 上长得一模一样）。取数两条腿缺一不可：`eval/trace_alert.py` 的 **R5** 段
+  （生产 trace 的命中分布 + 每次的价钱：本轮工具数 / 命中后是否另有意图 / gate 打回 / 下一轮主人是否质疑）
+  与 `eval/fastpath_pricing.py`（静态映射 `map` + 两臂**交替**跑，**读计数不读通过率**；`--ids/--tag`
+  供单条复采样）。新判据 `tests/test_fastpath_dial.py`：逐条断"决策权在谁手里"而不是"有没有 `fastpath`
+  事件"、档位不泄漏、变异臂（架空读口 ⇒ 关档臂当场失效）、单一读口 AST 锁、运行器钉档。首轮读数与
+  **删除/收窄清单**见 [docs/fastpath-pricing-20261015.md](docs/fastpath-pricing-20261015.md)：
+  生产 1164 轮里命中 22 次（`article_read` 12 / `nav` 5 / `referent_nav` 2 / 已删的 `auth_pending_review` 3；
+  `display` 与 `effect_switch` **0 命中**），语料两臂里 `effect_switch`（`multi_turn_redirect`）与
+  `article_read`（`todo_multi_step_serial`，且在 `regression` 硬层）各 **6/6 vs 0/6**。
+  **结论是五条全部留下、一条不删、一条不收窄**：两条**无从定价**（`display` 那条语料用例是构造性盲的
+  ——两臂都靠"没身份、如实失败"通过，与这条快道无关；`referent_nav` 语料零覆盖），一个看上去干净的
+  收窄方向（"只认整句 `NAV_MAP`"）**被生产证据当场否掉**（会砍掉两次真实导航）。**agent 会怎么做，
+  与昨天一模一样。**
+
 - **中文词表闸：判据层的「词表形状」从此有机器判据（新判据，无行为变更）**——本仓那条纪律
   （`docs/toolcall-stability-roadmap.md` §6「不为判据加更多词表」）此前**只是一句散文**：除
   `_DEICTIC_WORDS` 外几十张表处于"默认可扩"状态。新增 `eval/wordlist_gate.py` +

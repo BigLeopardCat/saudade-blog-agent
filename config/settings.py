@@ -202,6 +202,23 @@ class Settings(BaseSettings):
     # 对齐之后再翻权威（第二批：`refusal_source` 加 `evidence` 支 + 整族删表）。
     agent_evidence: bool = False
 
+    # ── 确定性快道（定价档，20261015）───────────────────────────────
+    # `agent/decisions.py` 那五条快道（导航 / 指代型导航 / 显示 / 读当前文章 /
+    # 特效切换）都是"中文动词表 + 位置窗口"，**命中即拿走 planner 的决策权**：
+    # 整轮不调 planner LLM，直接实例化一张计划交 execute。它们各有真实事故依据
+    # （最有名的一条：planner 对「不要樱花了改成下雨」十轮里八轮只做半边），
+    # 所以**不能纸面推定删**——删/收窄一条要有读数。
+    #
+    # 这一档就是那个读数装置：**默认开 = 与从前逐字节相同**（唯一读口
+    # `agent/graph.py::_fastpath_on()`）；关掉则首轮那一段整块不跑，全部交给
+    # planner LLM。两臂交替跑，读的是**命中计数与轮数**（不读通过率）——两臂
+    # 都绿不说明什么，命中数才是价钱。
+    #
+    # ⚠️ 必须同时进 `tests/run_all.py::_PINNED`（本仓教训：离线套件对档位是瞎的，
+    # 判据跟着 shell 档位走会让本机与 CI 结论不同）。定价读数出自生产 trace 的
+    # `fastpath` 事件 + golden 两臂，见 `eval/fastpath_pricing.py`。
+    agent_fastpath: bool = True
+
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
     # 与博客共用 JWT_SECRET：agent 以对话用户身份签发 JWT 调用 device-service
     jwt_secret: str = ""
