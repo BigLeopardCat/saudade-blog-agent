@@ -222,6 +222,57 @@ def _fastpath_rows(doc: dict, stamp: str, uid: int, conv: int, msg: str) -> list
     return hits
 
 
+def _reply_kind_rows(doc: dict, stamp: str, uid: int, msg: str) -> list[dict]:
+    """一份 trace → 短应答**自我申报**行（R6 的原料；20261015 批 3 的取数口）。
+
+    `planner.reply_kind` 是模型对这一轮那句短话读法的**唯一**读数口（三张手写词表
+    删掉之后，系统侧不再有第二份判断可以对照）。两个字段缺一不可：
+      · `kind` —— 模型读成 pos/neg/auth 里的哪一类（认不出的写法原样留 16 字）；
+      · `target` —— **系统这一轮手里有没有可承接的目标**（台账帧非空）。
+    `kind=auth` 而 `target=False` 就是"模型以为主人把决定权交出来了、系统手里却一件
+    都拿不出来"——旧版由词表在这里兜底，现在这条只记账、由人复核（**不拦截**）。
+    """
+    out = []
+    for ev in (doc.get("events") or []):
+        if (ev.get("node"), ev.get("event")) != ("planner", "reply_kind"):
+            continue
+        out.append({"stamp": stamp, "uid": uid, "msg": msg,
+                    "kind": str(ev.get("kind") or ""),
+                    "short": ev.get("short"), "target": ev.get("target"),
+                    "round": ev.get("round")})
+    return out
+
+
+def _print_reply_kind(rows: list, scanned: int) -> None:
+    """R6 那一节（短应答自我申报的取数出口）。
+
+    不定结论：这一节摊开的是"模型把短话读成了哪一类、当时手里有没有东西可给"。
+    「过度授权候选」（auth + 无目标）**只列不判**——它也可能是主人当场把决定权交出来、
+    而这一轮确实没有等着办的事（那种情况零写收尾才是对的）。判"该不该"是人的事。
+    """
+    if not rows:
+        print("R6 短应答申报：窗口内无 `planner.reply_kind` 事件"
+              "（⚠️ 这条 20261015 才上线 ⇒ 窗口跨上线日时，前段没有是正常的）\n")
+        return
+    by_kind: dict = {}
+    for r in rows:
+        by_kind[r["kind"]] = by_kind.get(r["kind"], 0) + 1
+    over = [r for r in rows if r["kind"] == "auth" and not r["target"]]
+    n_nonshort = sum(1 for r in rows if r["short"] is False)
+    print(f"R6 短应答申报：窗口内 {scanned} 轮里模型申报了 {len(rows)} 次"
+          f"（{', '.join(f'{k}×{v}' for k, v in sorted(by_kind.items(), key=lambda kv: -kv[1]))}）")
+    print(f"   其中**过度授权候选**（申报 auth 而本轮无台账目标）：{len(over)} 次"
+          "  ← 只列不判：主人当场交权 + 确实没有等着办的事，零写收尾本就是对的那条路")
+    print(f"   另有 {n_nonshort} 次申报发生在**非短消息**上（提示块写的是「当前消息不是"
+          "短应答」⇒ 按纪律不该填；填了说明模型没照块读，值一看）")
+    for r in over[:_MAX_LIST]:
+        print(f"   过度授权候选 {r['stamp']} u{r['uid']} round={r['round']}  "
+              f"主人: {brief(r['msg'], 40)}")
+    if len(over) > _MAX_LIST:
+        print(f"   …另有 {len(over) - _MAX_LIST} 条未列")
+    print()
+
+
 def _next_turn_challenged(row: dict, seq: dict) -> bool:
     """命中那一轮的**下一条**（同一用户同一会话）里，主人有没有质疑/纠错信号。
 
@@ -294,6 +345,8 @@ def main():
     r4, r4_seen, r4_readable, r4_legacy = [], 0, 0, 0
     # R5（20261015）：命中行 + 档位格计数 + 会话内时序（`_next_turn_challenged` 用）。
     r5, dials, seq = [], defaultdict(int), defaultdict(list)
+    # R6（20261015 批 3）：短应答自我申报行（`planner.reply_kind`）。
+    r6: list = []
     files = iter_trace_files(TRACE_DIR)
     for f in files:
         stamp, uid_s = parse_trace_name(f)
@@ -313,6 +366,7 @@ def main():
         _conv = int(_in.get("conversation_id") or 0)
         seq[(uid, _conv)].append((stamp, msg))
         r5.extend(_fastpath_rows(d, stamp, uid, _conv, msg))
+        r6.extend(_reply_kind_rows(d, stamp, uid, msg))
         for ev in (d.get("events") or []):
             if (ev.get("node"), ev.get("event")) == ("planner", "context"):
                 dials[ev.get("fastpath")] += 1     # 缺键 ⇒ 计到 None 那一档（存量）
@@ -339,6 +393,7 @@ def main():
         print(f"   回复: {brief(h['reply'])}\n")
     _print_refusals(r4, r4_seen, r4_readable, r4_legacy)
     _print_fastpath(r5, dials, scanned, seq)
+    _print_reply_kind(r6, scanned)
     for uid, chain in r3_focus:
         t0, t1 = chain[0]["stamp"], chain[-1]["stamp"]
         print(f"[MED ] u{uid} {t0[9:13]}–{t1[9:13]}（{t0[:8]}）共 {len(chain)} 条  R3 高频拉锯（含质疑/认错信号）")

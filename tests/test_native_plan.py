@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT))
 
 from langchain_core.messages import AIMessage  # noqa: E402
 
+from agent import context as C  # noqa: E402
 from agent import native_plan as N  # noqa: E402
 from agent import skills as S  # noqa: E402
 from agent import tasks as T  # noqa: E402
@@ -249,6 +250,12 @@ def test_intents_field_inlined_with_action():
 def test_params_mirror_skill_param_specs():
     print("\n[同源] 参数名/必填/闭集逐项等于 skill_param_specs")
     overrides = set(N._SCHEMA_OVERRIDES)
+    # **伪参数**：不是技能参数、由 `tool_calls_to_plan` 摘走的那几格。这一档
+    # （`task_state` 出厂关、`evidence` 出厂关）里只有 `reply_kind`——它刻意**没有档位**
+    # （见 `context.REPLY_KIND_ARG` 的注），于是它必须在这里被显式认领，否则这条断言
+    # 会把它当成"schema 里多了一个没人申报的键"而红。守的不变量没变：**期望集合 =
+    # 参数 + 已认领的伪参数**，多出任何别的键照样红。
+    pseudo = {C.REPLY_KIND_ARG}
     bad_names, bad_req, bad_enum = [], [], []
     for role in (None, "admin"):
         fns = _by_name(role)
@@ -256,8 +263,9 @@ def test_params_mirror_skill_param_specs():
             specs = S.skill_param_specs(skill)
             params = fns[skill.name]["parameters"]
             props = params.get("properties") or {}
-            if set(props) != set(specs):
-                bad_names.append(f"{role}/{skill.name}: {set(props) ^ set(specs)}")
+            if set(props) != set(specs) | pseudo:
+                bad_names.append(f"{role}/{skill.name}: "
+                                 f"{set(props) ^ (set(specs) | pseudo)}")
             want_req = sorted(n for n, sp in specs.items() if sp.required)
             got_req = sorted(params.get("required") or [])
             if got_req != want_req:
@@ -268,9 +276,43 @@ def test_params_mirror_skill_param_specs():
                 got = props[pname]
                 if list(got.get("enum") or []) != list(sp.choices):
                     bad_enum.append(f"{role}/{skill.name}.{pname}")
-    check("参数名集合逐技能相等", not bad_names, str(bad_names))
+    check("参数名集合逐技能相等（+ 已认领的伪参数 reply_kind）", not bad_names, str(bad_names))
     check("必填集合逐技能相等", not bad_req, str(bad_req))
     check("闭集逐项相等（无覆盖的格子）", not bad_enum, str(bad_enum))
+    # 伪参数那一格本身：每个技能都有、**都不必填**（必填集合那条已经覆盖"不进 required"，
+    # 这里再把"它有没有出现在每个技能上"钉一遍——只挂一半技能会让读数缺一整族）。
+    missing_kind = [f"{role}/{s.name}" for role in (None, "admin")
+                    for s in S.visible_skills(role)
+                    if _by_name(role)[s.name]["parameters"]["properties"]
+                    .get(C.REPLY_KIND_ARG, {}).get("enum") != ["pos", "neg", "auth"]]
+    check("reply_kind：每个技能都挂、且闭集就是三种出口", not missing_kind, str(missing_kind))
+
+
+def test_reply_kind_is_stripped_from_params():
+    print("\n[摘走] reply_kind 填了也不进 params（它是伪参数，不是技能参数）")
+    msg = AIMessage(content="", tool_calls=[{
+        "name": "category_create", "id": "c", "type": "tool_call",
+        "args": {"name": "临江仙", C.REPLY_KIND_ARG: "auth"}}])
+    got = N.tool_calls_to_plan(msg, "admin")
+    check("技能照旧、params 里没有那一格",
+          got is not None and got.skill == "category_create"
+          and got.params == {"name": "临江仙"}, str(got and got.params))
+    check("申报值原样进 NativeDecision（只进 trace）",
+          got is not None and got.reply_kind == "auth", str(got and got.reply_kind))
+    # 别处塞进来的写法原样留 16 字：读数要的是"它到底填了什么"，不是清洗过后的样子
+    odd = AIMessage(content="", tool_calls=[{
+        "name": "category_create", "id": "c", "type": "tool_call",
+        "args": {"name": "临江仙", C.REPLY_KIND_ARG: " Positive "}}])
+    got2 = N.tool_calls_to_plan(odd, "admin")
+    check("非三选一的写法归一后原样记账（不静默抹成空）",
+          got2 is not None and got2.params == {"name": "临江仙"}
+          and got2.reply_kind == "positive", str(got2 and got2.reply_kind))
+    # 不填 ⇒ 与本参数不存在时逐字节相同（这是它"可以挂在每个技能上"的前提）
+    plain = AIMessage(content="", tool_calls=[{
+        "name": "category_create", "id": "c", "type": "tool_call",
+        "args": {"name": "临江仙"}}])
+    check("不填 ⇒ 空串（缺键路径与不存在逐字节相同）",
+          N.tool_calls_to_plan(plain, "admin").reply_kind == "")
 
 
 def test_override_table_is_closed():

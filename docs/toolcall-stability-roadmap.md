@@ -35,7 +35,7 @@
 | 节选截断切碎具名锚点（`_clip_mid` 切点落进「」内 + 锚点正则不认「」） | D1 | **T1** | P4 | `agent/context.py` `_snap_tail_start` / `_TAIL_TITLE_ANCHOR_RE` |
 | 「差不多」被讲成「没有」（逐字相等 ⇒ 近似命中退化成假否定） | D2 | **T2** | P3 | `tools/base.py` `_find_named_announcement`（标签/分类同款） |
 | 近似候选无法跨轮存活（候选只活在 narrator 回复里，下轮又被节选截断） | D3 | **T3** | P3/P4 | `graph.py` `_truncation_candidate` + `_write_target_refusal`（载体=弹卡） |
-| 短应答判据漏掉人格化尾缀（「要的喵」） | D4 | **T4** | P4 | `agent/context.py` `_SHORT_TAIL_TIC_RE` |
+| 短应答判据漏掉人格化尾缀（「要的喵」） | D4 | **T4** | P4 | `agent/context.py` `_SHORT_TAIL_TIC_RE`（⚠️ 20261015 批 3 已整族删，准入改纯结构） |
 | 写形态请求零工具没有兜底（无引号 ⇒ `_name_write_nudge` 不跑） | D5 | **T5** | P4 | `graph.py` `_name_write_nudge` + `_name_write_verbs` |
 
 **别把 T 当 D 读**：`T3` 说的是"一次写请求在弹卡这一环断掉了"，不是 §3 那条

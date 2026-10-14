@@ -39,6 +39,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from agent.context import (
+    REPLY_KIND_ARG,
+    REPLY_KIND_FIELD_DESC,
+    parse_reply_kind,
+    reply_kind_prop_schema,
+)
 from agent.provenance import (
     EVIDENCE_ARG,
     EVIDENCE_FIELD_DESC,
@@ -93,6 +99,11 @@ class NativeDecision:
     finish_reason: str = ""          # `length` = 被额度截断（"预算够不够"的判据）
     raw_tool_calls: tuple = field(default_factory=tuple)
     declare: dict | None = None      # 归一化后的任务登记（无 → None）
+    # 模型对**短应答**那一类的自我申报（20261015 批 3，`agent/context.py::REPLY_KIND_ARG`）：
+    # `"pos"|"neg"|"auth"`、别处塞进来的写法（原样留 16 字）或 `""`（没申报）。
+    # **不是判据**——准入是纯结构的（`context._is_short_reply`），这一格只进 trace
+    # （`planner.reply_kind`）供事后核对"模型把哪一类读错了"。
+    reply_kind: str = ""
     # 归一化后的**意图清单**（20261008 批 ②，`agent/tasks.py::TASK_INTENTS`）：主人这一句
     # 话里要办的每一件事 `[{"goal", "skill"}]`（含这一轮正要办的那件）。与 `declare`
     # 并列而**不是**它的替代：`declare` 是"剩下的步骤与工具"（模型写的计划），
@@ -340,6 +351,14 @@ def build_tool_schema(role: str | None, *, task_state: bool = False,
         # 把它置顶"），而"哪几件"这件事与技能是不是写无关。
         if task_state:
             props[INTENTS_ARG] = intents_prop_schema(INTENTS_FIELD_DESC)
+        # 短应答的自我申报（20261015 批 3，`context.REPLY_KIND_FIELD_DESC`）：**挂在每个
+        # 技能上、没有任何档位**。与 `intents` 一样**不进 `required`、不进 `params`**
+        # （`tool_calls_to_plan` 摘走），所以"模型不填"这条路径与本参数不存在时逐字节相同。
+        # 拷 `tasks.py` 那份体例的两处不同见 `context.REPLY_KIND_ARG` 的注；这里只补一条
+        # 为什么**不**像 `evidence` 那样按技能射程收窄：短应答的三种出口各自落到哪个技能
+        # 是不定的（同意多半落在读、授权多半落在写），而"模型读成了哪一类"这件事与技能
+        # 无关——按射程收窄会让大部分轮次没有申报口，读数就断了。
+        props[REPLY_KIND_ARG] = reply_kind_prop_schema(REPLY_KIND_FIELD_DESC)
         # 出处引文（20261014 第一批，`evidence` 那一格）：**只挂在会产出写工具的
         # 技能上**。射程由 `agent/provenance.write_scope_tools` 派生（= authz 里声明
         # 为写 ∧ 不在"一律弹窗"族），不是第二份手抄名单——挂多了是给模型白送一格
@@ -547,6 +566,9 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
     # `intents` 那条长注（摘的是"非技能参数"），且多一条：摘掉才是"这一格不存在"那条
     # 路径**逐字节相同**（缺键 `pop` 是 no-op）——关了出厂档不许有任何行为差，就是这条。
     evidence = parse_evidence(args.pop(EVIDENCE_ARG, None))
+    # 短应答申报（20261015 批 3）：同样**无条件摘走**，理由与上面 `evidence` 逐字相同
+    # ——摘的是"非技能参数"，留着会跟着 `params` 走到 `PARAMS=` 与 `execute` 的参数校验。
+    reply_kind = parse_reply_kind(args.pop(REPLY_KIND_ARG, None))
     # 单独一条 `task_intents` 调用**和**一个动作调用同轮到达（网关忽略
     # `parallel_tool_calls=False` 时的形态）——下面两条记账要分开，别把"字段填了"
     # 读成"多来了一条调用"（一个是设计内的常态，一个是约定被打破的证据）。
@@ -585,6 +607,7 @@ def tool_calls_to_plan(resp: object, role: str | None, *,
         # 一条，混用会让"约定被打破"这个信号恒真。
         notes.append(f"{TASK_INTENTS}_inline:{name}")
     return NativeDecision(skill=name, params=args, notes=tuple(notes), evidence=evidence,
+                          reply_kind=reply_kind,
                           declare=declare, intents=intents, **base)
 
 
