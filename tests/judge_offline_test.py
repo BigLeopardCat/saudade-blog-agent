@@ -20,6 +20,7 @@ not_contains_exempt_quote）后先跑本脚本——判据是纯文本函数，�
 预期时退出码 0。
 """
 import json
+import re
 import sys
 import os
 from pathlib import Path
@@ -421,8 +422,18 @@ CASES = [
     ("FAIL", PEC, "反例：颜色认不出回落成按名配色（用户点了名却没给色值）",
      "好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
      "**新建一级标签「秋日随笔」（按名字自动配色）**\n\n点「确定」我就去办。"),
-    ("FAIL", PEC, "反例：确认轮却用完成式声称已建好（这一轮零执行）",
-     "好呀，已经帮你建好标签「秋日随笔」了，颜色是粉色（#eb2f96）喵～"),
+    # 20261015 批 4：这一格**翻面**。它原来期望 FAIL，喂的是"确认轮却用完成式声称已建好"，
+    # 靠一条中文负正则判。批 4 把弹窗轮的负正则整族撤除（气泡是 `render_confirm_text` 的
+    # 确定性模板、这一轮连 gate 节点都不到，"卡弹了、写没发生"由 `require_zero_exec` +
+    # `forbid_tool_calls` + `require_frame_prefix` 三条结构断言守着——不合成 result 验不到，
+    # 所以那三条在 SHAPE_CASES 里，含"真执行过（有验收回执）⇒ 红"）。
+    # 留着词表反而**必假红**：卡面正文里会印主人自己口述的字（发通知的正文、标签名），
+    # 主人要是把标签起名叫「已经建好了」，这条卡完全正确却被判成违规。下面这行就是这个形状。
+    ("PASS", PEC, "20261015 批 4：确认轮正文里的完成式字面不再判红——"
+     "那个字出自主人自己（标签名），判词形就是把正确行为判红",
+     "好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
+     "**新建一级标签「已经建好了」，颜色 粉色（#eb2f96）**\n\n"
+     "点「确定」我就去办；点「取消」就当没说过，或者直接告诉我改成别的。"),
     # forbid 侧真有牙齿：同一段合规文本 + 一条混进来的确认帧 → 必须判 FAIL
     ("FAIL", AWQ, "反例：问句这一轮却弹了确认框（forbid_frame_prefix 生效）",
      "主人，先给结论：把这篇设为私密后，它会从访客可见的列表里消失、"
@@ -1088,7 +1099,15 @@ _LOGIN_PROBES: tuple[tuple[bool, str, str], ...] = (
 # 这半句 + 「弹了卡」+ 「参数出自主人原话」——改成日子与改成「未排期」在这些断言下**同分**，
 # 于是"反方向"这一整格在评测层是空的（同 `admin_todo_add_popup` 的 `_note` 明写不做正文断言
 # 那一类盲点，只是这次那条用例自己的 `text_any_regex` 已经是能长牙的形态）。
-# 补法不是加密措辞，是**锁方向**：正断言钉住那一格**是个日子**、负断言钉住**不许是清空词**。
+# 20261008 的补法是两半：**正断言**钉住那一格是个日子 + **负断言**钉住不许是清空词。
+#
+# **20261015 批 4 撤掉了负断言那一半**（弹窗轮的负正则整族撤除：正文由
+# `adminops.render_confirm_text` 确定性产出，见 `eval/judge_registry.json` 的
+# `eval.golden.negative_regex_family`）。承重因此全部落在**正断言**上，而它本来就够：
+# 「…的排期改成<数字>月<数字>[日号]」对"清空那一档"是**结构性不命中**，不靠任何清空词表。
+# 本节现在锁五件：① 生产两张卡确实是两个方向；② 真卡零红；③ 假绿卡红在**正断言**上
+# （负断言的红必须为 0——它要是被加回来，本节当场红）；④ 判别力取自**生产函数**；
+# ⑤ 红基线：把正断言截回旧版那半句，它在清空卡上**照样命中**（20261008 的假绿就是这么来的）。
 #
 # 三张卡（真/假/复现）都由**生产渲染器**拼，不手抄字符串：`adminops.render_todo_reschedule_action`
 # 是弹卡那一行的唯一出处，清空词也取生产契约常量 `adminops._TODO_CLEAR_WORD`——
@@ -1258,11 +1277,12 @@ def main() -> int:
         bad += 0 if ok else 1
         print(f"{'✓' if ok else '✗ 不符'} [login] {desc}\n"
               f"    期望 {'判红' if want_red else '放行'} / 实得 {'判红' if got else '放行'}")
-    # ── 待办改排期的**方向锁**（20261008，本条自己吐出来的假绿）───────────────────
+    # ── 待办改排期的**方向锁**（20261008，本条自己吐出来的假绿；20261015 批 4 改承重）──
     # 五件一起锁：① 两张生产卡的形状确实是两个方向（前提，坏了下面都没有意义）；
     # ② 真卡整条零红（新断言不许把做对的那一轮判红）；③ 假绿现场那种卡**必须**红在
-    # 正断言的"不是日子"与负断言的"是清空词"上；④ 负断言的清空词取自生产契约常量；
-    # ⑤ 反向锁：把那条负断言从副本里拿掉 ⇒ 这一条红消失（证明红是它给的，
+    # 正断言的"不是日子"上、且**不许**再出现负断言的红（弹窗组负正则 20261015 整族撤除，
+    # 被加回来本节就红）；④ 判别力取自**生产函数**：正断言命中真卡、不命中清空卡；
+    # ⑤ 红基线：把正断言截回旧版那半句 ⇒ 它在清空卡上照样命中（证明红是它给的，
     #    不是别的断言顺带开火——同拆 key 那套纪律）。
     print("\n── 待办改排期的方向锁（20261008）")
     gold = GOLD.get(RESCHEDULE_CASE)
@@ -1288,28 +1308,35 @@ def main() -> int:
 
         ff = _judge_reschedule(gold, false_line)
         pos_hit = [f for f in ff if f.startswith("文本缺少任一关键词") and "排期改成" in f]
-        neg_hit = [f for f in ff if f.startswith("文本不应命中正则") and "排期改成未排期" in f]
-        ok = bool(pos_hit) and bool(neg_hit)
+        neg_hit = [f for f in ff if f.startswith("文本不应命中正则")]
+        ok = bool(pos_hit) and not neg_hit
         bad += 0 if ok else 1
-        print(f"{'✓' if ok else '✗ 不符'} [方向锁] 假绿卡（改成清空词）红在方向的两条上："
-              f"正断言未命中={bool(pos_hit)} / 负断言命中={bool(neg_hit)}\n"
+        print(f"{'✓' if ok else '✗ 不符'} [方向锁] 假绿卡（改成清空词）红在**正断言**上："
+              f"正断言未命中={bool(pos_hit)} / 负断言命中={bool(neg_hit)}"
+              f"（后者必须 False——弹窗组的负正则 20261015 整族撤除，加回来本节就红）\n"
               f"    红名单 {ff}")
 
-        words = A._TODO_CLEAR_WORD
-        neg_rx = " ".join(gold.get("text_not_match_regex") or [])
-        ok = words in neg_rx
+        pos_rx = gold.get("text_any_regex") or []
+        hit_true = any(re.search(rx, true_line) for rx in pos_rx)
+        hit_false = any(re.search(rx, false_line) for rx in pos_rx)
+        ok = bool(pos_rx) and hit_true and not hit_false
         bad += 0 if ok else 1
-        print(f"{'✓' if ok else '✗ 不符'} [方向锁] 负断言的词表取自生产契约清空词 {words!r}"
-              f"（渲染器/契约换词 ⇒ 这里当场红）")
+        print(f"{'✓' if ok else '✗ 不符'} [方向锁] 判别力取自生产函数：正断言命中真卡={hit_true}"
+              f" / 不命中清空卡={not hit_false}（两行都由 `render_todo_reschedule_action` 拼、"
+              f"清空词取 {A._TODO_CLEAR_WORD!r} ⇒ 渲染器/契约换词这里当场红）")
 
-        drop = json.loads(json.dumps(gold, ensure_ascii=False))
-        drop["text_not_match_regex"] = [x for x in (drop.get("text_not_match_regex") or [])
-                                        if "未排期" not in x]
-        dff = _judge_reschedule(drop, false_line)
-        ok = not [f for f in dff if f.startswith("文本不应命中正则")]
+        # 红基线（20261015 批 4）：把正断言**截回旧版那半句**——20261008 之前只锁到
+        # 「…的排期改成」为止，那一版在清空卡上**照样命中**（这就是那天的假绿），现版不命中。
+        # 断言"这一格的红必须由日期那一格换来"：截点在正断言的第一条上找不到 ⇒ 响亮地红
+        # （形态被改写 ⇒ 这一节要有人回头看），不静默空转。
+        anchor = "的排期改成"
+        old_rx = pos_rx[0][:pos_rx[0].find(anchor) + len(anchor)] if pos_rx and anchor in pos_rx[0] else ""
+        ok = (bool(old_rx) and bool(re.search(old_rx, false_line))
+              and not any(re.search(rx, false_line) for rx in pos_rx))
         bad += 0 if ok else 1
-        print(f"{'✓' if ok else '✗ 不符'} [方向锁] 反向锁：拿掉那条负断言 ⇒ 这一格的红消失"
-              f"（剩下的红 {dff}）")
+        print(f"{'✓' if ok else '✗ 不符'} [方向锁] 红基线：旧版正断言 {old_rx!r} 在清空卡上"
+              f"命中={bool(old_rx) and bool(re.search(old_rx, false_line))}（= 20261008 的假绿），"
+              f"现版不命中 ⇒ 这一格的红是「长出日期那一格」换来的")
     # ── `DENIAL_FAMILY` 第 ⑦ 支 ⇄ 生产哨兵常量的**派生锁**（20261009）───────────────
     # 为什么单列一节：这一支的全部正确性就是"它等于系统那帧的原话"。哨兵文案改了、判据
     # 没跟着改，它会**静默**退化成一条谁也命中不了的死正则——而它守的那一族（`own_*`
