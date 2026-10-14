@@ -105,7 +105,15 @@ COV_DIR = ROOT / ".coverage-data"
 # "关档 ⇒ 路由与今天逐字节一致"，而那一节读的是**环境里的档位**；不钉住的话，谁在
 # shell 里 export 过它，那节就会红（或更糟：绿得没有理由）。要验开档的用例在同一
 # 进程里临时拨 `settings.agent_task_plan_exec`（同 `test_task_continuation.py` 的 `_Dial`）。
+#
+# `AGENT_EVIDENCE=0`（20261014 第一批，影子）：写参数出处改"引文核对"这条通道同样
+# **出厂默认关**，且这一档**同时**决定两件事（schema 里有没有 `evidence` 格、影子核验
+# 跑不跑，见 `config/settings.py` 那段注）。钉它的理由多一条：开档会往 planner 的
+# **函数 schema** 里多加一格——`tests/test_native_plan.py` 钉的是 props 键集，不钉住的
+# 话谁在 shell 里 export 过它，那几条就会按另一档的键集判。要验开档的用例在同一进程里
+# 临时拨 `settings.agent_evidence`（并同步重建 schema，见 test_provenance 的那一节）。
 _PINNED = {"AGENT_TASK_STATE": "0", "AGENT_TASK_PLAN_EXEC": "0",
+           "AGENT_EVIDENCE": "0",
            "RAG_HYBRID_ENABLED": "0",
            "SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
 

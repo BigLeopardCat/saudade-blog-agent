@@ -111,7 +111,12 @@ from agent.principal import (CHAT_ONLY_ROLES, KNOWN_ROLES, ROLE_ADMIN,
 from agent.prompts import (BLOG_ASSISTANT_PROMPT, NARRATOR_DISCIPLINE, STICKER_GUIDE,
                            _EXECUTOR_HEAD, _EXECUTOR_PROMPT, _PLANNER_OUTPUT_CONTRACT_NATIVE,
                            _PLANNER_PROMPT, _REFLECTOR_PROMPT, audience_block)
+from agent import provenance as _prov
+from agent.provenance import QUOTE_SPAN_RE as _QUOTE_SPAN_RE
 from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
+from agent.textnorm import (FULLWIDTH_ASCII_MAP as _FULLWIDTH_ASCII_MAP,
+                            fold_typing as _fold_typing,
+                            squash_spaces as _squash_spaces)
 from agent.skills import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
                           args_are_bound,
                           DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
@@ -1176,7 +1181,7 @@ def _strip_menu(c: "_DecideCtx", name: str) -> None:
     """
     c.deny = set(c.deny) | {name}
     c.llm = bind_native(c._base_llm, c.role, task_state=c._task_state,
-                        deny=c.deny, deny_pseudo=c.deny_pseudo)
+                        evidence=c._evidence, deny=c.deny, deny_pseudo=c.deny_pseudo)
 
 
 def _name_write_correct(c: "_DecideCtx") -> bool:
@@ -6523,6 +6528,10 @@ class _DecideCtx:
     deny: set
     _base_llm: object
     _task_state: bool
+    # 出处引文那一档（`AGENT_EVIDENCE`）在这一轮的取值，**装配段读一次、各段共用**。
+    # 读四次的写法会让"这一轮的 schema 开着、影子关着"成为可能（同一个进程里两处读到
+    # 不同值），而判据与产物必须来自同一个事实。取值只看 `_evidence_on()`（唯一读口）。
+    _evidence: bool
     # ── 可变：跨段活（`_planner_setup` 给初值）───────────────────────────────
     llm: object
     deny_pseudo: set
@@ -6586,8 +6595,9 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
         timeout=settings.planner_native_timeout,
         enable_thinking=settings.planner_native_thinking)
     _task_state = bool(getattr(settings, "agent_task_state", False))
-    llm = bind_native(_base_llm, role, task_state=_task_state, deny=deny,
-                      deny_pseudo=deny_pseudo)
+    _evidence = _evidence_on()
+    llm = bind_native(_base_llm, role, task_state=_task_state,
+                      evidence=_evidence, deny=deny, deny_pseudo=deny_pseudo)
     round_info = (
         f"当前决策：第 {rounds + 1}/{MAX_PLAN_ROUNDS} 轮。"
         + ("本轮已有工具执行帧（见下方结果），决策据此收敛。" if has_frames
@@ -6673,7 +6683,7 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
         page_ctx=pre.page_ctx, has_frames=has_frames, doc_anchors=pre.doc_anchors,
         ledger_frame=pre.ledger_frame, principal=pre.principal, round_info=round_info,
         frames_txt=frames_txt, gate_note=gate_note, deny=deny, _base_llm=_base_llm,
-        _task_state=_task_state, llm=llm, deny_pseudo=deny_pseudo,
+        _task_state=_task_state, _evidence=_evidence, llm=llm, deny_pseudo=deny_pseudo,
         correction=correction, correction_kind=correction_kind,
         native_note=native_note, plan_obj=None, raw=None, decided=None,
         skill_name="", params={}, _tools_off=False, _img_turn=False)
@@ -6757,6 +6767,9 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
     # 决定由工具调用表达（`agent/native_plan.py::tool_calls_to_plan`）。它返回
     # `None` = 这一版响应**没给出可用决定**（五条来源见那里的头注），与"零调用但
     # 有正文"（返回 chat + `undecided`）是**两回事**，别再合并成一条路。
+    # ⚠️ `evidence` 那一格**不在这里传**：`tool_calls_to_plan` 无条件把它从 args 里摘走
+    # （见那边的注）。档位只管"模型发不发得出"，不管"摘不摘"——摘永远是安全的，
+    # 漏摘会漏进 `params`。
     c.decided = tool_calls_to_plan(
         resp, c.role, task_state=bool(getattr(settings, "agent_task_state", False)))
     if c.decided is None:
@@ -6930,8 +6943,8 @@ def _decide_zero_tool_correct(c: "_DecideCtx") -> "_Step":
                  or _acted_no_intents)):
         if _acted_no_intents and not c.correction:
             c.deny_pseudo.add(TASK_INTENTS)
-            c.llm = bind_native(c._base_llm, c.role, task_state=c._task_state, deny=c.deny,
-                              deny_pseudo=c.deny_pseudo)
+            c.llm = bind_native(c._base_llm, c.role, task_state=c._task_state,
+                                evidence=c._evidence, deny=c.deny, deny_pseudo=c.deny_pseudo)
             c.correction = _INTENTS_BACKFILL_NUDGE
             c.correction_kind = "点了技能清单没留下要记的"
             # `listed` 是**这一格两种形状**的分水岭（0 = 没交，>0 = 交了但只剩它
@@ -6965,8 +6978,8 @@ def _decide_zero_tool_correct(c: "_DecideCtx") -> "_Step":
             # 摘掉之后它只剩两条路：点一个真技能，或显式点 `chat`——两者都是可判的
             # 决策，而"再交一次清单"这条空转路没了。
             c.deny_pseudo.add(TASK_INTENTS)
-            c.llm = bind_native(c._base_llm, c.role, task_state=c._task_state, deny=c.deny,
-                              deny_pseudo=c.deny_pseudo)
+            c.llm = bind_native(c._base_llm, c.role, task_state=c._task_state,
+                                evidence=c._evidence, deny=c.deny, deny_pseudo=c.deny_pseudo)
             _auto_nudge = _name_write_nudge({"tools": [], "dropped": None},
                                             c.user_msg, c.rounds, c.role)
             c.correction = ((_auto_nudge + _INTENTS_ONLY_NUDGE) if _auto_nudge
@@ -7212,6 +7225,157 @@ def _decide_instantiate(c: "_DecideCtx") -> "_Step":
     return _Step("next")
 
 
+def _evidence_on() -> bool:
+    """`AGENT_EVIDENCE` 这一档的**唯一读口**（20261014 第一批，出厂关）。
+
+    这一档要在**四处**同时生效才能算"开着"：① `bind_native` 的 schema（模型发不发得出
+    `evidence`）；② `tool_calls_to_plan` 的摘取（**无条件**，与档位无关）；③ 这一处影子
+    核验；④ `eval` 侧的巡检。读口只留这一个函数，是因为"多一处读 `settings` 就多一处
+    可能漂移的说法"——本仓在 IoT 那个开关上吃过"三处同源不是'一个开关'"的教训。
+    """
+    return bool(getattr(settings, "agent_evidence", False))
+
+
+def _evidence_fields(plan_obj: dict, user_msg, ledger_src: str = ""
+                     ) -> tuple[list[tuple[str, str, object, bool]], list[str]]:
+    """计划里**该有出处**的那几格 → `[(工具名, 参数名, 值, 今天判它有没有出处)], [待议的扩大项]`。
+
+    第一项（本批的射程）取的是**今天那条闸的同一批格子**：`_WRITE_VALUE_FIELDS`
+    （要写进站内的**值**：新名字 / 标签名列表）∪ `_WRITE_NAME_FIELDS`（**目标身份**：
+    工具要查字典证明它存在的那一格）。换的是**判据**（词表+位置窗口 → 引文核对），
+    不是射程——射程要动就得先有数据，见第二项。
+
+    第四个分量是**今天那条闸**对同一个值的判决，而且**用的是它自己那两个函数**：
+      · 值字段 → `_grounded_value`（逐字子串 + 台账那一本）；
+      · 目标名段 → `_msg_grounded_name`（位置窗口抽取器，`_target_grounding_refusal`
+        判的就是它，见那个函数的 `if not got or _msg_grounded_name(...)` 一行）。
+    在影子这一层**并列**两问、而不是让新判据去猜旧判据的意思：分歧报告要回答的是
+    "新判据假拒了吗、旧判据漏放了吗"，那就必须两边都真跑一遍。
+    注意它**不**等于"旧闸会不会拒"——旧闸还有 `len(tools)==1` / `_name_like(msg)` /
+    带 `$ref` 三类早退（`放行`），那些在报告里按事件上下文读。
+
+    第二项（**只记账、不判**）是"射程可能该扩大"的候选：`authz` 里声明为写、
+    又**不在**一律弹窗族里的工具（`agent/provenance.write_scope_tools` 的语义），
+    若它出现在本计划里而上面两张表没覆盖它，就把它的参数名列出来。为什么不当场生效：
+    这些格（如 `set_article_status.article_id` / 收藏族的 `note_id`）今天**没有任何
+    出处判据**，把它纳入强制会是净收紧、可能凭空造出新的假拒——按第一批影子数据
+    逐格定，每条写明理由、键集由测试钉死（同 `_SCHEMA_OVERRIDES` 的纪律）。
+    """
+    wanted: list[tuple[str, str, object, bool]] = []
+    seen: set[tuple[str, str]] = set()
+    widen: list[str] = []
+    scope = _prov.write_scope_tools()
+    sq_msg = _squash_spaces(user_msg)
+    sq_ledger = _squash_spaces(ledger_src)
+    for spec in (plan_obj.get("tools") or []):
+        name = _tool_name(spec)
+        args, _ok = _tool_args(spec)
+        tkey, pkey = _WRITE_NAME_FIELDS.get(name) or (None, None)
+        lex = _lexicon(name)
+        spans = _msg_quote_spans(user_msg)
+        for k in (_WRITE_VALUE_FIELDS.get(name) or ()):
+            if k not in args or (name, k) in seen:
+                continue
+            seen.add((name, k))
+            # **逐项**（`add` / `titles` 这些格的值是数组）：旧闸自己也是逐项判的
+            # （`_name_arg_fix` 的 `bad = [v for v in vals if not _grounded_value(v, ...)]`），
+            # 整份数组喂进去只会得到恒 False 的假读数——分歧报告因此整族失真。
+            for one in (args[k] if isinstance(args[k], (list, tuple)) else [args[k]]):
+                if isinstance(one, str) and one.strip():
+                    wanted.append((name, k, one.strip(),
+                                   _grounded_value(one, sq_msg, sq_ledger)))
+        for k in (tkey, pkey):
+            if not k or k not in args or (name, k) in seen:
+                continue
+            seen.add((name, k))
+            got = str(args[k] or "").strip()
+            today = bool(got) and _msg_grounded_name(got, user_msg, spans, lex)
+            # 值一律**去两端空白**再进这行（`review` 自己也 strip）：`_evidence_shadow`
+            # 要按 `(参数名, 值)` 把两问对齐，两边不 strip 就会对不上、`today` 记成 None。
+            wanted.append((name, k, got, today))
+        if name in scope and name not in _WRITE_VALUE_FIELDS \
+                and name not in _WRITE_NAME_FIELDS:
+            ks = ",".join(sorted(args))
+            widen.append(f"{name}({ks})" if ks else name)
+    return wanted, widen
+
+
+def _evidence_shadow(c: "_DecideCtx", ledger_src: str) -> None:
+    """第一批（影子）：写参数的**引文核验**——**只算不拦**（20261014）。
+
+    为什么先影子：这一批换掉的是写通道上最厚的一层判据（约 40 张中文词表 + 位置窗口，
+    见 `agent/provenance.py` 头注），而它的失效形状恰恰是**假拒**——直接收口的话，
+    新判据自己的假拒会以"主人的一次写没办成"的形式出现。影子期把两边的判决一起落
+    trace，用真实流量算分歧，再决定收口与整族删（`docs/adr` 那一条的口径）。
+
+    影子只算两问，都不改任何行为：
+      · **引文核验**（`provenance.review`）：逐格 `归一(value) ⊆ 归一(quote) ⊆ 归一(来源)`。
+        没出处的格记一条 `planner.evidence_shadow`（含 today 那条闸的判决，便于逐条对齐）；
+      · **射程候选**（`_evidence_fields` 第二项）：今天没有任何出处判据的写格，
+        记一条 `planner.evidence_scope`。**缺键 ≠ 空集**：没有候选就整条事件不落。
+
+    开关 `AGENT_EVIDENCE` 关着时**整段不跑**：那一档 schema 里没有 `evidence` 格
+    （见 `native_plan.build_tool_schema`），模型发不出来的东西没有影子可算。
+    """
+    if not _evidence_on():
+        return
+    wanted, widen = _evidence_fields(c.plan_obj, c.user_msg, ledger_src)
+    if widen:
+        record("planner", "evidence_scope", round=c.rounds,
+               scope=",".join(widen)[:300])
+    if not wanted:
+        return
+    ev = getattr(c.decided, "evidence", ())
+    exec_src = str((c.state.get("ledger") or {}).get("executions") or "")
+    # **按工具分组核**，不把全计划的格子并成一串：同一个参数名（`name`）长在好几件
+    # 工具上，而 `_prov.review` 的影子判决只按参数名回话——并成一串就没法把"哪一件
+    # 工具的那一格"对上（trace 要按工具归类，分歧报告也按工具读）。
+    by_tool: dict[str, list[tuple[str, object, bool]]] = {}
+    for t, k, v, d in wanted:
+        by_tool.setdefault(t, []).append((k, v, bool(d)))
+    for tool, fields in by_tool.items():
+        try:
+            rulings = _prov.review(ev, [(k, v) for k, v, _d in fields],
+                                   c.user_msg, ledger_src=ledger_src,
+                                   exec_src=exec_src)
+        except Exception as exc:                   # noqa: BLE001
+            # 影子**绝不许**弄坏一轮对话：它是观测通道，不是判据。记一笔就走。
+            logger.warning("[planner] 引文影子核验失败（不影响本轮）：%s", exc)
+            continue
+        # 键是 **(参数名, 值)** 而不是参数名：一格的几个值是数组时（`add: [a, b]`），
+        # 按参数名取会把 a 的判决错记到 b 上。
+        tool_of = {(k, str(v)): d for k, v, d in fields}
+        for r in rulings:
+            rec = {"tool": tool, "round": c.rounds, **r.as_trace()}
+            # 今天那条闸对同一格的判决（`_evidence_fields` 已用它自己那两个函数算好）。
+            # 两问并列，分歧报告才读得出"是新判据假拒、还是旧判据漏放"。
+            rec["today"] = tool_of.get((r.arg, r.value))
+            record("planner", "evidence_shadow", **rec)
+
+
+def _refused_values(plan_obj: dict, wtool: str) -> list[str]:
+    """被拒那一件工具上**该有出处**的那几格的值（trace 用，20261014）。
+
+    为什么要它：拒绝这件事此前只活在一段散文（`reason=` 里的 `why`）里，于是
+    `eval/trace_alert.py` 的误拒巡检**读不到被拒的那个值**，只能读措辞——而措辞一变
+    判据就瞎。判据读结构化字段是本仓既定纪律（同 `write_value_unresolved` 的 `values=`）。
+    """
+    out: list[str] = []
+    for spec in (plan_obj.get("tools") or []):
+        if _tool_name(spec) != wtool:
+            continue
+        args, _ok = _tool_args(spec)
+        keys = list(_WRITE_VALUE_FIELDS.get(wtool) or ())
+        tkey, pkey = _WRITE_NAME_FIELDS.get(wtool) or (None, None)
+        keys += [k for k in (tkey, pkey) if k]
+        for k in keys:
+            v = args.get(k)
+            for one in (v if isinstance(v, (list, tuple)) else [v]):
+                if isinstance(one, str) and one.strip():
+                    out.append(one.strip())
+    return out
+
+
 def _decide_write_guard(c: "_DecideCtx") -> "_Step":
     """阶段 D5：写目标拒绝链（引号 / 取值 / 待办 / 出处 / 目标 / 台账 / 策略）——
     命中即写 `plan_obj["refusal"]` 并 `_Step("return")`（**不许 break**：收尾路径
@@ -7233,6 +7397,11 @@ def _decide_write_guard(c: "_DecideCtx") -> "_Step":
     ledger_src = "\n".join(
         x for x in (_ledger_pending_text(c.state.get("ledger")),
                     _task_ledger_text(c.config)) if x)
+    # 第一批（影子，20261014）：引文核验**只算不拦**、只落 trace。**必须在这里**——
+    # 下面那一串 `_*_fix` 会把 spec 里的参数值就地改掉（引号校正 / 名字校正 / 待办
+    # 正文校正），而两边判据要判的是**模型自己填进来的那个值**，不是被校正后的值：
+    # 放后面就成了"拿旧闸的产物去喂新闸"，分歧报告读出来的是幻觉。
+    _evidence_shadow(c, ledger_src)
     # 先过片段地基（20260922 ②防线）：留言的 quote 校正到主人引号里那段原话
     # （或在没有可指认的片段时确定性拒绝）——**必须在目标预检之前**，否则预检
     # 判的是 planner 那个被截短/被概括错的片段。
@@ -7339,9 +7508,20 @@ def _decide_write_guard(c: "_DecideCtx") -> "_Step":
         else:
             logger.warning("[planner] 写操作参数解不出「主人这句话」里的来源（%s）：%s"
                            " → 确定性如实收尾", wtool, why)
+        # **被拒的那个字面**要进事件（20261014，与 `write_value_unresolved` 的
+        # `values=` 对齐）：这类拒绝此前只活在 `reason` 那段散文里，于是巡检
+        # （`eval/trace_alert.py`）读不到值、只能读措辞——措辞一改判据就瞎，
+        # 而误拒恰恰是这层最难自查的失效形状（`docs/问题记录.md`）。判据读结构化
+        # 字段是本仓既定纪律。来源限定在**出处族**：`ledger_id`/`policy` 两族拒的是
+        # "台账上没有这一行 / 规则不许"，跟"值有没有出处"不是一回事，把它们的值
+        # 混进来会让 R4 拿它们去原话里找、然后再也找不到——那是假阳性流水线。
+        refused_values = (_refused_values(c.plan_obj, wtool)
+                          if refusal_source in ("quote", "value", "todo_text",
+                                                "grounding") else [])
         record("planner", "write_target_unresolved", tool=wtool,
                source=refusal_source,
-               reason=why[:160], round=c.rounds)
+               reason=why[:160], round=c.rounds,
+               values=list(dict.fromkeys(refused_values))[:3])
         # 文案结构：**"没做"与"原因"必须是一句**。拆成两个独立的
         # 句子（"…没有改动（本轮一个工具都没有执行）。系统核对过 X，结果是：Y。"），
         # 而 narrator 抄走了**第一个**——它在被加粗的那句的「。」处收手，句号之后
@@ -8639,46 +8819,12 @@ _WRITE_NAME_FIELDS = {
 # 边界（如实说明）：地基判据是**子串**级，挡得住"主人从没说过这个名字"，挡不住
 # "说过但指的未必是它"（同 20260922 探针报告里那句"亚串免疫"）；真正的身份裁决仍在
 # 工具侧的确定性解析（唯一命中才动手，歧义零写）。
-_QUOTE_SPAN_RE = re.compile(r"「([^」]{1,80})」|『([^』]{1,80})』|“([^”]{1,80})”"
-                            r"|\"([^\"]{1,80})\"")
-
-
-def _squash_spaces(text) -> str:
-    """去掉全部空白——模型转写常把换行/空格抹平（与 tools.base 的片段匹配同一口径）。"""
-    return re.sub(r"\s+", "", str(text or ""))
-
-
-# 键盘噪声归一（20261008）。主人**打出来的字**与站内字典里的字，只要读起来是同一个词，
-# 就不该被判成"主人没说过这个名字"——出处闸（`_grounded_value`）此前是**逐字**子串，
-# 连大小写差一格都认不出。现场（trace `20261008T075023`）：主人打的是
-# 「把git，代码版本管理挂上去」，planner 填的却是站内的**正字**「Git」（标签字典里
-# id=10006 就叫 `Git`，`find_tag` 是完全相等匹配 ⇒ 填 `git` 反而写不进去），
-# 逐字比一次判它"没出处" ⇒ 整条写被零执行拦下，而给主人的理由
-# （「主人这句话里没有能对上「Git」这个参数值的名字」）在他看来**是假话**：
-# 那三个字母就在他这句话里，只是小写。
-#
-# 两个形态是同一类转写噪声（与 `_squash_spaces` 已在做的"换行/空格抹平"同源：
-# 全角空格 U+3000 早就被 `\s` 吃掉了，只有全角**字母数字**漏在外面）：
-#   · ASCII 大小写：`git` / `Git`；
-#   · 全角 ASCII：中文输入法的全角态打出的 `Ｇｉｔ`。
-# **只归一"比不比得上"，绝不改值**：这一格的正确写法是**站内字典那一份**，
-# 把 `Git` 改写成主人打的 `git` 不是校正、是写不进去（校正型只该用在
-# "主人写下的原文就是权威"的那些格子，如 `_name_target_fix`）。
-# 用显式映射而不是 `unicodedata.normalize("NFKC")`：NFKC 还会顺手改 `①`／`㎡`／`㈱`
-# 这类与"同一个词的不同打法"毫无关系的字形——那是凭空扩权，不是归一。
-_FULLWIDTH_ASCII_MAP = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}
-
-
-def _fold_typing(text) -> str:
-    """键盘噪声归一（**比较用**的后半段）：全角 ASCII→半角 + `casefold`（见上方长注）。
-
-    **不去空白**：本函数的调用契约是"传进来的串已经 `_squash_spaces` 过"——那条契约
-    由 `_grounded_value` 的 `sq_msg` / `sq_ledger` 两个入参守着（测试里有一条专门钉
-    它：传没归一的原话进去会**静默判否**）。这里替它代劳等于把那条锁拆掉。
-    键必须是**码位整数**：`str.translate` 收到字典时只认 `__getitem__(int)`，
-    拿 `chr(c)` 当键不会报错、而是**一个字符都不换**（20261008 实测踩过）。
-    """
-    return str(text).translate(_FULLWIDTH_ASCII_MAP).casefold()
+# 归一化与引号正则**不再长在这里**（20261014）：它们搬去 `agent/textnorm.py` 与
+# `agent/provenance.py`，由写参数出处闸与 graph 共用（graph 不能反向 import 那两个
+# 模块的消费方，所以它们必须独立于 graph 存在）。下面三个名字是**同源别名**，
+# 历史调用点与测试（`g._squash_spaces` / `g._fold_typing` / `_FULLWIDTH_ASCII_MAP`）
+# 因此一字不用改。`_QUOTE_SPAN_RE` 同样：它 20261014 前被这里四个抽取器共用，
+# 现在只留在 `provenance`（主人自己打的引号是那套判据里**唯一保留的结构**）。
 
 
 def _msg_quote_spans(user_msg) -> list[str]:

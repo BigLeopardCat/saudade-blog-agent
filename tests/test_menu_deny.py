@@ -311,6 +311,9 @@ class _FakeCtx:
     def __init__(self, user_msg: str = "", plan: dict | None = None,
                  receipts: list | None = None, role: str = _ROLE) -> None:
         self.role, self._task_state, self.deny_pseudo = role, False, set()
+        # 出处引文那一档（`AGENT_EVIDENCE`）：`_strip_menu` 重绑客户端时要读它传给
+        # `bind_native`（schema 里给不给 `evidence` 那一格）。这里给 False = 出厂档。
+        self._evidence = False
         self.deny = {"blocked_skill"}          # 上一轮受阻项：必须是**并集**，不能被覆盖
         self._base_llm = _FakeLLM()
         self.llm = "还没重绑"

@@ -184,6 +184,24 @@ class Settings(BaseSettings):
     # 生产 trace 上对齐了再放行（同 `agent_task_state` / `iot_enabled` 的纪律）。
     agent_task_plan_exec: bool = False
 
+    # ── 写参数的出处：引文核对（20261014 第一批，**影子**）──────────────
+    # 写通道上那层"值有没有出处"的判据正在换表征：从**约 40 张手抄中文词表 +
+    # 位置窗口**换成**模型给逐字引文、系统只做逐字核对**（citations /
+    # quote-then-verify）。理由与失效现场见 `agent/provenance.py` 头注。
+    #
+    # ⚠️ **这一档同时管两件事，且两件事必须同档**：
+    #   · 关（出厂）：schema 里**没有** `evidence` 那一格（模型发不出来），
+    #     影子核验整段不跑 —— 线上行为与改造前逐字节相同；
+    #   · 开：schema 里多一格可选参数、`planner.evidence_shadow` 落 trace，
+    #     **但一个写都拦不住**（第一批只算不拦）。
+    # 为什么必须同档：只开 schema 不开核验 = 白送模型一段没人读的自我说明；
+    # 只开核验不开 schema = 模型发不出 `evidence`，影子记到的**全是 `no_quote`**
+    # （那是一条读不出任何信息的曲线，会被误读成"引文通道根本没通过"）。
+    #
+    # 与 `agent_task_state` 同一条纪律：默认关、先影子、离线 A/B 与生产 trace
+    # 对齐之后再翻权威（第二批：`refusal_source` 加 `evidence` 支 + 整族删表）。
+    agent_evidence: bool = False
+
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
     # 与博客共用 JWT_SECRET：agent 以对话用户身份签发 JWT 调用 device-service
     jwt_secret: str = ""

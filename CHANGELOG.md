@@ -16,7 +16,18 @@
 
 ## 20261014
 
-- **（这天只有代码与注释的整理，无行为变更）**：模型可见的正文（planner 模板与输出契约、
+- **写参数出处改造第一批：影子观测（新开关 `AGENT_EVIDENCE`，出厂关）**——"这个值有没有出处"
+  这层从**中文词表 + 位置窗口**（约 40 张手抄词表 + 四个抽取器）换成**引文核对 + 站内实体解析**：
+  新模块 `agent/provenance.py`（只做逐字核对与来源分类，`user` / `ledger` / `exec` 三本账）与
+  `agent/textnorm.py`。**开档时**写作用域技能的 `evidence` 格会进 planner 的函数 schema、从
+  工具调用里摘出并落 `state`（**永不进 `spec.args`**），核验结论落 `planner.evidence_shadow`
+  事件；关档（出厂）时 schema、提示词、路由与今天**逐字节相同**。两条新判据：
+  `tests/test_provenance.py`（9 节）与 `eval/trace_alert.py` 的 **R4 出处闸误拒巡检**
+  （启发式、非门禁）。拒绝事件 `write_target_unresolved` 与 `plan_obj["refusal"]` 补上被拒的
+  `arg`/`value` 结构化字段（**缺键 ≠ 对立取值**）。读数与第二批决策输入见
+  [docs/write-provenance-shadow-20261014.md](docs/write-provenance-shadow-20261014.md)。
+  **agent 会怎么做，与昨天一模一样**——两批落地，第二批才收口并整族删词表。
+- **（同日另一件：代码与注释的整理，无行为变更）**：模型可见的正文（planner 模板与输出契约、
   reflector 模板、叙述纪律、执行层提示词）从 `agent/graph.py` 搬进 `agent/prompts.py`，
   graph.py 按**原名** import 回来 ⇒ 渲染结果、引用点、判据一个字没变（做法同 20260912
   那次拆分）。顺手把注释里 25 处"讲已经不在了的旧行为"改成时态中立的现况说明，当前规则、
