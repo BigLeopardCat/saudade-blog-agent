@@ -97,8 +97,11 @@
   // 20261011a = 「看板娘默认位置回退」那一轮（widget.css：#waifu 的 `left` 145px → 15px、
   // `transform` translateY(-5px) → -15px，即撤销 20261003 那两次位移）。文件在
   // live2d-widgets 下 ⇒ 必须 bump；不 bump 访客吃 1 年缓存，看板娘还停在右移后的位置。
+  // 20261015a = 「欢迎语里填进去的值先转义」那一轮（renderer.js 的 subst：`$1` 会被
+  // 填进 `#waifu-tips` 的 innerHTML，值来自 document.title / referrer hostname）。
+  // 同上 ⇒ 必须 bump，否则一年内访客拿到的还是"值当标记解析"的那一版。
   // 五个同步点见 frontend/README.md。
-  const VER = '20261011a';
+  const VER = '20261015a';
 
   function loadExternalResource(url, type) {
     return new Promise((resolve, reject) => {
