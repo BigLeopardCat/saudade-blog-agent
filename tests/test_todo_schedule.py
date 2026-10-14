@@ -715,11 +715,24 @@ check("写技能名单里有 dashboard_todo_add",
 check("读技能 dashboard_todo_list **不在**写名单里（它一个字节都不改）",
       "dashboard_todo_list" not in WRITE_SKILL_NAMES)
 _gsrc = (ROOT / "agent" / "skills.py").read_text(encoding="utf-8")
-check("展开分支真的接在 instantiate_plan 里（漏接就走 fail-closed 那一支：能力结构性不可达）",
-      "in _FREE_TEXT_WRITE_SKILLS" in _gsrc and "elif skill.name" in _gsrc)
-check("  它排在写通道的 fail-closed 兜底**之前**（排在后面等于永远走不到那一条）",
-      _gsrc.index("in _FREE_TEXT_WRITE_SKILLS")
-      < _gsrc.index('elif skill.name not in ("article_status", "article_tags")'))
+# 这两条从前按**源码文本**钉（`"in _FREE_TEXT_WRITE_SKILLS" in _gsrc` + 用 `index()` 比
+# 先后）。20261015 批 1 把那份成员判定换成按「靶通道」表派生（`_chan == "free_text"`）
+# ⇒ 文本锁当场红：它锁的其实是**实现形状**，不是"接线对不对"。改成**跑一遍看产物**——
+# 接线漏了就走 fail-closed 那一支（零工具）、三条分支串了就是"勾完成"被展成 `create_*`
+# （多记一条待办，见 `_expand_todo_skill` 头注里那两处现场），两种病在产物上直接现形。
+_ADD = instantiate_plan("dashboard_todo_add", {"text": "写周报"})["tools"]
+_DONE = instantiate_plan("dashboard_todo_done", {"text": "写周报"})["tools"]
+_RESCHED = instantiate_plan("dashboard_todo_reschedule",
+                            {"text": "写周报", "date": "10月8号"})["tools"]
+check("三条展开分支真的接在 `instantiate_plan` 里（漏接就走 fail-closed 那一支：零工具，"
+      "能力结构性不可达）",
+      _ADD and _DONE and _RESCHED, f"add={_ADD} done={_DONE} resched={_RESCHED}")
+check("  且各走各的**最小通道**——不是三条都落进 add 那一支（`create_*` 会把"
+      "「勾完成 / 改排期」变成**又记一条待办**，而主人以为改好了）",
+      _ADD[0].startswith("create_dashboard_todo(")
+      and _DONE[0].startswith("complete_dashboard_todo(")
+      and _RESCHED[0].startswith("reschedule_dashboard_todo("),
+      f"add={_ADD} done={_DONE} resched={_RESCHED}")
 check("工具侧**没有** PUT 整份覆盖这条路（agent 手里没有那份列表：先读再写会把主人"
       "刚做的改动抹掉，发一份自己拼的等于清空他的待办）",
       '"/api/protected/todos"' in (ROOT / "tools" / "base.py").read_text(encoding="utf-8")
