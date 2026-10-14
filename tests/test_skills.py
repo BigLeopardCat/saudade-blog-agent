@@ -597,7 +597,7 @@ def test_fast_path_shell_transparency():
     # 因此恒不命中过（导航快道/同意闸/短应答，见 `authz.strip_user_shell` 注）。判据必须
     # 对**两层**都透明，而"透明"的判据是逐字相同的结论，不是"都不命中"（那是恒不命中
     # 那个病本身）——所以最后一条专门断言带称呼的导航命令**确实**命中。
-    from agent.context import _ledger_frame_wanted, _short_reply_kind
+    from agent.context import _is_short_reply
     V = "小猫咪，"
     for _nm, _f, _s in [
         ("导航快道", _nav_fast_path, "带我去留言板"),
@@ -607,8 +607,9 @@ def test_fast_path_shell_transparency():
          lambda m: _article_fast_path(m, "current_url=https://saudade.site/article/12"),
          "我正在读这篇"),
         ("动作意图扫描", lambda m: [i["key"] for i in _scan_action_intents(m)], "去留言板"),
-        ("短应答判据", _short_reply_kind, "好"),
-        ("待办台账全选式", _ledger_frame_wanted, "你看着办"),
+        # 短应答准入（20261015 批 3 起是**形状**判据）：带称呼与裸句必须同一结论。
+        # 它守的不变量变了但是同一条——壳（称呼）不许改变任何判据的看法。
+        ("短应答准入", _is_short_reply, "好"),
     ]:
         check(f"{_nm}对句首称呼壳透明（「{_s}」带不带称呼同一结论）",
               _f(_s) == _f(V + _s), f"裸={_f(_s)!r} 带称呼={_f(V + _s)!r}")
@@ -4123,181 +4124,114 @@ def test_short_reply_and_adjacent_pairs():
     ② 新增确定性短应答判定（同意 → 把泠月提议的那件事真的规划出来执行；
     拒绝 → 零调用收尾、绝不执行），提示里直接给出被承接的那句泠月发言。
     """
-    from agent.context import (_last_assistant_utterance, _recent_tail,
-                               _short_reply_hint, _short_reply_kind)
+    from agent.context import (_SHORT_MAX, _is_short_reply, _last_assistant_utterance,
+                               _recent_tail, _short_core, _short_reply_hint)
 
-    # —— 短应答分类 ——
-    for t in ("要", "好", "好的", "那好的", "查", "查一下", "嗯嗯", "继续吧", "麻烦你了"):
-        check(f"短应答·同意「{t}」", _short_reply_kind(t) == "pos", _short_reply_kind(t))
-    for t in ("不用了", "不用", "那算了", "算了，不用", "别了", "先不用", "没事了"):
-        check(f"短应答·拒绝「{t}」", _short_reply_kind(t) == "neg", _short_reply_kind(t))
-    # —— 授权式（20260923 P1）：主人没指定做哪件，把选择权也交给泠月 ——
-    # 事故原文就是第一条（20260923T131918 主人原话），它此前落在三不管地带：
-    # 不在 pos（=不是"同意那件具体事"）、不在 neg，于是 short_reply 恒为空 ⇒
-    # planner 没有任何确定性指引，最后 narrator 从历史里挑了个旧留言当目标。
-    for t in ("小猫咪按你想法来吧", "按你想法来", "按你的想法来办吧", "你看着办",
-              "看着办吧", "你决定", "都听你的", "听你的", "随你", "随你便", "随便你",
-              "都行", "怎么都行", "都可以", "你拿主意", "你说了算", "你安排"):
-        check(f"短应答·授权「{t}」", _short_reply_kind(t) == "auth", _short_reply_kind(t))
-    # 授权 ≠ 同意：裸"好/行/可以"承接的是**具体那件事**，不许被并进 auth
-    for t in ("好", "行", "可以", "好的"):
-        check(f"裸肯定「{t}」仍是 pos（授权式不吞同意式）",
-              _short_reply_kind(t) == "pos", _short_reply_kind(t))
-    for t in ("帮我把樱花打开", "你看着办吧，先别动那篇文章", "我觉得都行啊不过先看看"):
-        check(f"非短应答（授权形态的长句）「{t[:10]}」",
-              _short_reply_kind(t) == "", _short_reply_kind(t))
-    # 非短应答：长句 / 别的话题 / 近似但不同的句子都不许误判成应答
-    for t in ("帮我看看《架构文档》里快道怎么写的", "你好呀小猫咪", "要的是哪一篇来着",
-              "把樱花打开", "不用麻烦了，我自己去看那篇文章就好"):
-        check(f"非短应答「{t[:12]}」", _short_reply_kind(t) == "", _short_reply_kind(t))
-    # —— 承接块（20260926）：认不出类别 ≠ 与上一轮无关 ——
-    # 事故（会话 247）：主人回「当然是都做」，三张表一张都不命中 ⇒ 旧写法在这里早退成
-    # 一句缺省语，上一轮泠月那句"①…还是②…"的提问**从未交给 planner**，两个动作都没做。
-    # 修的是"要不要给出上下文"（`_looks_like_followup` 宽容触发），**类别判据一个字节不放宽**
-    # ——上面那两条负例与下面的裸肯定就是这条不变性的锁（判宽会牵动同意/授权/拒绝的闸门）。
+    # —— 准入 = 形状，零词表（20261015 批 3 换表征）——
+    # 旧版这里是三张手写中文词表（`_SHORT_POS`/`_SHORT_NEG`/`_SHORT_AUTH`）在判
+    # "这句算同意、算拒绝、还是算授权"。那是**开放类语义问题**：措辞无底，同族已经以
+    # 四副面孔出现过（系统消息壳 / 喵尾缀 / 句尾语气词 / 「按你的**方案**」），每一次
+    # 修复都是往表里补词。现在判据只剩形状（剥壳后非空且 ≤ `_SHORT_MAX`），三类出口
+    # 同时写进同一段提示块由模型自己读（`reply_kind` 那一格只落 trace 供事后核对）。
+    # ⇒ 本节**刻意只钉形状与块内容**：再写一条"「好」判 pos"就是把那张表要回来了。
+    for t in ("要", "好", "好的", "那好的", "查", "查一下", "嗯嗯", "继续吧", "麻烦你了",
+              "不用了", "不用", "那算了", "算了，不用", "别了", "先不用", "没事了",
+              "小猫咪按你想法来吧", "按你想法来", "按你的想法来办吧", "你看着办",
+              "看着办吧", "你决定", "都听你的", "随你", "随便你", "都行", "怎么都行",
+              "都可以", "你拿主意", "你说了算", "你安排",
+              "都做", "当然是都做", "两个都做", "全都要", "都办了吧",
+              "执行这个日程", "好现在执行这个日程", "要喵", "好的喵", "不用了喵",
+              "你看着办喵", "都行喵"):
+        check(f"短应答准入（形状）「{t}」", _is_short_reply(t), repr(t))
+    # 长句不是短应答；**只有标点的消息也不是**（剥完为空 ⇒ 没有"话"可承接）
+    for t in ("帮我看看《架构文档》里快道怎么写的", "你好呀小猫咪，帮我个忙好吗呀",
+              "不用麻烦了，我自己去看那篇文章就好",
+              "那《架构文档》里怎么写的，帮我按章节梳理一遍吧？",
+              "我刚才让你开的樱花特效现在还在吗",  # 16 字，仍在 4→10 轮那条窗口之外
+              "", "   ", "，。！？", "[当前问题]: "):
+        check(f"非短应答（长句 / 剥完为空）「{t[:14]}」", not _is_short_reply(t), repr(t))
+    check("长度边界：`_SHORT_MAX` 上取到、多一字即出界",
+          _is_short_reply("一" * _SHORT_MAX)
+          and not _is_short_reply("一" * (_SHORT_MAX + 1)))
+    # ⚠️ **放宽的那几格必须钉住**——这是本批的价钱，不是意外：
+    # 「把樱花打开」是个**独立命令**、旧版三张表判 ''（=不给上下文）；现在它形状上就是
+    # 短消息 ⇒ 进准入 ⇒ planner 多拿到一段上一轮发言、台账帧预读两份后台队列。块里那条
+    # "不是回应就当新话题、按字面办"的出口正是给这类句子准备的（与 20260926 承接块同一
+    # 取向：放宽的是"要不要给出上下文"，不是把闸门语义判宽）。钉住它 = 以后谁想收紧都得
+    # 先把这条断言改掉、看见代价。
+    for t in ("把樱花打开", "你好呀小猫咪", "要的是哪一篇来着"):
+        check(f"放宽项（旧判 ''、现在进准入）「{t}」", _is_short_reply(t), repr(t))
+    # 两层壳（系统锚点 + 句首称呼）透明：裸句与带壳同一结论——旧版是**整串相等**型，
+    # 壳一在就恒返回 ''（生产实证：followup_short_yes_executes 的 trace 里 planner 收到
+    # 的 short_reply 写着「当前消息不是短应答」）。这里必须用**带壳输入**断言。
+    for t in ("要", "好", "不用了", "算了", "你看着办", "[当前问题]: 要",
+              "[当前问题]: 不用了喵", "小猫咪，要", "猫咪[当前问题]: 好"):
+        check(f"两层壳透明「{t}」", _is_short_reply(t), repr(_short_core(t)))
+
+    # —— 单块多出口：三类动作纪律**同时**写进同一段 ——
+    # 事故留档（20260923T131918）：主人说「小猫咪按你想法来吧」，旧三表把它落在 pos/neg
+    # 之外的三不管地带 ⇒ planner 没有任何确定性指引 ⇒ narrator 从历史里挑了个旧留言当
+    # 目标。现在它进同一块，块里明写"授权"那一支该怎么定目标。
     _hist_short = [HumanMessage(content="有没有关于 OTA 的文章"),
                    AIMessage(content="站内有《ESP32-S3 OBC 固件接入参考》。"
                                      "要我把它的 OTA 章节读一遍给你讲讲吗？")]
-    for t in ("都做", "当然是都做", "两个都做", "全都要", "都办了吧",
-              "执行这个日程", "好现在执行这个日程"):
+    blk = _short_reply_hint(_hist_short + [HumanMessage(content="要")])
+    check("块里带出被承接的那句泠月发言",
+          "泠月：站内有《ESP32-S3 OBC 固件接入参考》" in blk, blk[:60])
+    check("块里同时列出三类出口（同意 / 授权 / 拒绝）",
+          "同意" in blk and "授权" in blk and "拒绝" in blk, blk[:60])
+    check("块里点明是三选一（别同时按两种做）", "三选一" in blk)
+    check("同意那一支：真要规划执行，不得只口头答应",
+          "规划" in blk and "不得只口头答应" in blk)
+    check("授权那一支：目标必须从系统数据里定",
+          "目标必须从系统数据里定" in blk)
+    check("授权那一支：禁止从历史里挑自然语言当目标 + 照台账 id 列调用",
+          "不许从历史对话里挑一条自然语言当目标" in blk and "照台账里的 id" in blk)
+    check("授权那一支：写操作一律弹卡签字、主人点确定才算数",
+          "弹确认框给主人签字" in blk and "点确定才算数" in blk)
+    check("授权那一支：台账空 ⇒ 零写 + 如实说、不许编一条、不许声称已发起",
+          "本轮零写" in blk and "绝不许编一件出来" in blk and "绝不声称已经发起" in blk)
+    check("拒绝那一支：本轮不规划任何工具（零调用收尾）", "不规划任何工具" in blk)
+    check("凑齐口径：上一句发言是一份、本轮系统台账是另一份",
+          "凑齐" in blk and "上面那句泠月发言里提过的是其中一份" in blk and "系统台账" in blk)
+    check("不许自己补项 + 给出「当新话题」那条出口",
+          "不许自己补项" in blk and "按字面当新话题" in blk)
+    # **准入在 LLM 之前、不分类** ⇒ 同一条块对所有短消息一视同仁。这是"拿掉三层分类"
+    # 最直接的可观测形态：旧版这四句会拿到四条不同的块（pos/neg/auth/缺省语）。
+    # 比对面从「是**短应答**」起算——块首那句带原文引用（`当前消息「…」`），
+    # 它本来就该逐字不同；除此之外**一个字节都不许差**。
+    def _body(h):
+        return h[h.index("是**短应答**"):]
+
+    for t in ("要", "不用了", "你看着办", "把樱花打开"):
         _h = _short_reply_hint(_hist_short + [HumanMessage(content=t)])
-        check(f"承接块·全选式「{t}」仍不是短应答（类别不放宽）",
-              _short_reply_kind(t) == "", _short_reply_kind(t))
-        check(f"承接块·全选式「{t}」把上一轮泠月发言交出去",
-              "泠月：站内有《ESP32-S3 OBC 固件接入参考》" in _h
-              and "要我把它的 OTA 章节读一遍给你讲讲吗？" in _h, _h[:60])
-        # 两臂的**共同纪律**（不随来源变）：不许自己补项 + 给出"当新话题"那条出口。
-        # 拆臂（20261001）改的是"目标从哪儿凑"，不是这两条。
-        check(f"承接块·全选式「{t}」不许补项、且给出新话题出口",
-              "不许自己补项" in _h and "按字面当新话题" in _h)
-    # —— 承接块分臂（20261001）——
-    # 事故：会话 319 主人先追问「额度申请呢」（上一轮泠月因此只列了额度那一件），
-    # 紧接着说「两个都通过吧」——台账里留言与额度两件都摆着，却被"只在上面那句里
-    # 逐项还原"堵死 ⇒ 零工具 ⇒ gate 判 confirm_claim_without_popup。
-    # 分臂判据 = `_ledger_frame_wanted`（与 `graph._ledger_families_due` 同一个函数），
-    # **不是**新写一份词表。
-    from agent.context import _ledger_frame_wanted  # noqa: E402
-    for t in ("都做", "两个都做", "全都要", "都办了吧"):
-        check(f"分臂判据：全选式「{t}」命中台账那一臂", _ledger_frame_wanted(t))
-        _h = _short_reply_hint(_hist_short + [HumanMessage(content=t)])
-        check(f"承接块·台账臂「{t}」把本轮系统台账列为**另一份来源**"
-              "（凑齐，而不是只在上一段里还原）",
-              "凑齐" in _h and "系统台账" in _h, _h[:80])
-        check(f"承接块·台账臂「{t}」仍先看上一轮发言（不是硬换锚点："
-              "「都做」承接的若是与台账无关的提议，照旧按上一句办）",
-              "上面那句泠月发言里提过的是其中一份" in _h, _h[:80])
-    for t in ("当然是都做", "执行这个日程", "好现在执行这个日程"):
-        check(f"分臂判据：非全选式「{t}」**不**命中台账那一臂",
-              not _ledger_frame_wanted(t))
-        _h = _short_reply_hint(_hist_short + [HumanMessage(content=t)])
-        check(f"承接块·发言臂「{t}」仍锚在上一轮发言上（逐项还原，不引台账）",
-              "逐项还原" in _h and "系统台账" not in _h, _h[:80])
-    # 出口必须成对：块里既要写"该接"，也要写"不接就当新话题"——只写前者的块会把
-    # 每一句短消息都往上一轮上硬接（「把樱花打开」也是短句，它是个独立命令）
-    _h_new = _short_reply_hint(_hist_short + [HumanMessage(content="把樱花打开")])
-    check("承接块：给出「按新话题处理」那条出口", "按字面当新话题" in _h_new)
-    check("承接块：没有上一轮发言时仍是缺省语（无物可承接）",
-          _short_reply_hint([HumanMessage(content="都做")]) == "（当前消息不是短应答）")
-    check("承接块：长句不触发（形态判据不等于什么都交出去）",
+        check(f"「{t}」与「要」拿到同一个块（准入不分类）", _body(_h) == _body(blk),
+              _h[:40])
+    # 带壳形态同样生效（生产链路里用户消息自带 `[当前问题]: ` 锚点）
+    check("带壳短应答的块仍是真的块（不是缺省语）",
+          _body(_short_reply_hint(_hist_short
+                                  + [HumanMessage(content="[当前问题]: 要")])) == _body(blk))
+    # 长句不触发（形态判据不等于什么都交出去）
+    check("长句给缺省语",
           _short_reply_hint(_hist_short
                             + [HumanMessage(content="帮我看看《架构文档》里快道怎么写的")])
           == "（当前消息不是短应答）")
-    # 带壳形态（20260923 修）：生产链路里用户消息自带 `[当前问题]: ` 锚点（server.py），
-    # 而本判据是**整串相等**型 ⇒ 壳一在就恒返回 ''（实证：followup_short_yes_executes 的
-    # trace 里 planner 收到的 short_reply 写着「当前消息不是短应答」）。这里**必须用带壳
-    # 输入断言**——喂裸句测的是那个恒不命中的形态，结论对生产无意义（快道那轮同样的教训）。
-    for t, want in (("[当前问题]: 要", "pos"), ("[当前问题]: 好", "pos"),
-                    ("[当前问题]: 不用了", "neg"), ("[当前问题]: 算了", "neg")):
-        check(f"带壳短应答「{t}」判 {want}", _short_reply_kind(t) == want, _short_reply_kind(t))
-    check("带壳非短应答不误判",
-          _short_reply_kind("[当前问题]: 帮我把樱花打开") == "")
-    # —— 尾缀语气词（20260925）——
-    # 同族第三例（前两例：系统消息壳、导航快道）：判据是**整串相等**型，于是任何一层
-    # 外壳都能把它架空。泠月人设自带"喵"字尾，主人跟着回「要喵」「好的喵呜」是常态，
-    # 旧判据把它们全判成"不是短应答" ⇒ planner 又失去那条确定性指引。
-    # 锁的是**形态族**（剥句尾语气词素），不是往三个集合里加带喵写法——词表追不全。
-    for t, want in (("[当前问题]: 要喵", "pos"), ("[当前问题]: 好的喵", "pos"),
-                    ("[当前问题]: 嗯嗯喵", "pos"), ("要喵呜", "pos"),
-                    ("[当前问题]: 不用了喵", "neg"), ("[当前问题]: 算了喵呜", "neg"),
-                    ("[当前问题]: 你看着办喵", "auth"), ("[当前问题]: 都行喵", "auth")):
-        check(f"尾缀语气词短应答「{t}」判 {want}",
-              _short_reply_kind(t) == want, _short_reply_kind(t))
-    # 不矫枉过正：只剥**句尾**的语气词，句中/别的话题一律不动；整句只剩语气词也不是短应答
-    for t in ("[当前问题]: 喵", "[当前问题]: 喵喵", "[当前问题]: 我要看喵喵的贴纸",
-              "[当前问题]: 把「喵呜」打开"):
-        check(f"语气词不误判「{t}」", _short_reply_kind(t) == "", _short_reply_kind(t))
-
-    # —— 邻接对节选 ——
-    hist = [
-        HumanMessage(content="[System: page=https://saudade.site/; current_effects=none]"),
-        HumanMessage(content="去看你的项目文档"),
-        AIMessage(content="我读了《AI Agent 架构文档》(id=19)：快道是零 LLM 的确定性决策"),
-        HumanMessage(content="你看了吗就说没写"),
-    ]
-    tail = _recent_tail(hist)
-    check("邻接对：一问一答同行成对",
-          "[上1轮] 用户：去看你的项目文档" in tail and "泠月：我读了《AI Agent 架构文档》" in tail)
-    check("邻接对：当前消息不入节选", "你看了吗就说没写" not in tail)
-    check("邻接对：注入的页面上文不占轮次", "[System:" not in tail)
-    check("邻接对：最近一轮标出应答关系", "← 当前这条消息就是对这句的回应" in tail)
-    check("邻接对：无更早轮次给缺省语",
-          _recent_tail([HumanMessage(content="你好")]).startswith("最近对话节选：（无更早轮次）"))
-
-    hist2 = [HumanMessage(content="第一句"), AIMessage(content="第一答"),
-             HumanMessage(content="第二句"), AIMessage(content="第二答"),
-             HumanMessage(content="当前")]
-    t2 = _recent_tail(hist2)
-    check("邻接对：多轮按时间正序、上N编号正确",
-          "[上2轮]" in t2 and "[上1轮]" in t2 and t2.index("第一句") < t2.index("第二句"))
-    check("邻接对：标记落在最近一轮（不是更早轮）",
-          t2.index("第二答") < t2.index("← 当前这条消息"))
-    check("最近泠月发言：取当前消息之前的那条", _last_assistant_utterance(hist2) == "第二答")
-    check("最近泠月发言：无历史给空", _last_assistant_utterance([HumanMessage(content="你好")]) == "")
-
-    # —— 短应答提示（同意 / 拒绝 两条相反指令）——
-    proposal = [HumanMessage(content="有没有关于 OTA 的文章"),
-                AIMessage(content="站内有《ESP32-S3 OBC 固件接入参考》。"
-                                  "要我把它的 OTA 章节读一遍给你讲讲吗？")]
-    pos = _short_reply_hint(proposal + [HumanMessage(content="要")])
-    check("短应答提示·同意：给出被承接的泠月发言", "要我把它的 OTA 章节读一遍" in pos)
-    check("短应答提示·同意：要求真的规划执行（不得只口头答应）",
-          "同意" in pos and "规划" in pos and "不得只口头答应" in pos)
-    neg = _short_reply_hint(proposal + [HumanMessage(content="不用了")])
-    check("短应答提示·拒绝：零调用收尾", "拒绝" in neg and "不规划任何工具" in neg)
-    # —— 授权式提示（20260923 P1）：三件事必须都写清，缺一条就会重演 13:19 那条事故 ——
-    auth = _short_reply_hint(proposal + [HumanMessage(content="小猫咪按你想法来吧")])
-    check("短应答提示·授权：点名「授权式」而不是当成同意", "授权式" in auth)
-    check("短应答提示·授权：目标必须从系统数据里定", "目标必须从系统数据里定" in auth)
-    check("短应答提示·授权：禁止从历史里挑自然语言当目标",
-          "不许从历史对话里挑一条自然语言当目标" in auth)
-    # 20260929 批 H:旧写法是「候选不唯一 → 零写 + 请主人点名」——那条口径随旧快道一起
-    # 作废（主人说「全部批准」时**本来就是要模型挑**，而挑的依据是台账里的 id、不是
-    # 从原话里抠出来的引文）。新的三件事：目标只许出自台账 id / 写操作一律弹卡签字 /
-    # 台账空 ⇒ 零写并如实说没有、不许编一条。
-    check("短应答提示·授权：目标只许出自台账 id（不许从历史里挑自然语言）",
-          "照台账里的 id" in auth)
-    check("短应答提示·授权：写操作一律弹卡、主人点确定才算数",
-          "弹确认框给主人签字" in auth and "点确定才算数" in auth)
-    check("短应答提示·授权：台账空 ⇒ 零写 + 如实说、不许编一条",
-          "本轮零写" in auth and "绝不许编一件出来" in auth)
-    check("短应答提示·授权：不许声称已发起/已确认", "绝不声称已经发起" in auth)
-    check("带壳授权式提示：真的给出「授权式」指令（生产形态）",
-          "授权式" in _short_reply_hint(proposal + [HumanMessage(content="[当前问题]: 小猫咪按你想法来吧")]))
-    check("带壳授权式分类", _short_reply_kind("[当前问题]: 你看着办") == "auth",
-          _short_reply_kind("[当前问题]: 你看着办"))
-    # 提示块本身也要在**带壳**形态下生效（用户消息进 hint 前同样带壳）
-    check("带壳短应答提示·同意：真的给出「同意」指令",
-          "同意" in _short_reply_hint(proposal + [HumanMessage(content="[当前问题]: 要")]))
-    check("带壳短应答提示·拒绝：真的给出「拒绝」指令",
-          "拒绝" in _short_reply_hint(proposal + [HumanMessage(content="[当前问题]: 不用了")]))
-    check("短应答提示：长句非短应答给缺省语",
-          _short_reply_hint(proposal + [HumanMessage(content="那《架构文档》里怎么写的，帮我按章节梳理一遍吧？")])
-          == "（当前消息不是短应答）")
-    # 短问句（≤12 字）走**承接块**：它形态上确实可能在承接上一轮，而块里那条"当新话题
-    # 处理"的出口就是给这类句子准备的。**不许**在这里断言缺省语——那等于要求"短句一律
-    # 不交上下文"，而这正是本次要修的洞（「都做」也只有两个字）。
-    _h_q = _short_reply_hint(proposal + [HumanMessage(content="那《架构文档》里怎么写的？")])
-    check("短问句：给承接块而不是缺省语（短 ≠ 短应答）",
+    # 短消息但**本会话此前没有泠月发言** ⇒ **必须**与"不是短应答"那条出口同字面（缺省语）。
+    # ⚠️ 这条判据的措辞是 golden 逐条对出来的（20261015 批 3）：本轮没有可承接的上一轮
+    # 发言时，主人的意思由**别处**的规则承接（最要紧的是 `pending_action` 那条"照原样
+    # 重新提交"），短应答块一个字都不该说。这里曾写成"是短应答，但……按字面做最保守的
+    # 解读，**不要凭空补出一个动作**"——只多这一句，`mt2_short_yes_resubmits_card`
+    # 就从 4/4 绿变成 19/19 红（那一轮的上一轮发言恰好不在 messages 里，是
+    # `pending_action` 注入的卡面）。所以这里**不许**再写成"明说没有可承接的"那种更
+    # 具体的提示：越具体的提示越会被模型当成"这一轮什么也别做"的指令。
+    _no_hist = _short_reply_hint([HumanMessage(content="都做")])
+    check("短消息但无上一轮发言：与缺省语同字面（给了上下文反而会被读成禁令）",
+          _no_hist == "（当前消息不是短应答）", _no_hist)
+    # 短问句（≤12 字）走同一块：它形态上确实可能在承接上一轮，块里那条"当新话题"
+    # 的出口就是给这类句子准备的。**不许**在这里断言缺省语——那等于要求"短句一律不交
+    # 上下文"，而这正是本次要修的洞（「都做」也只有两个字）。
+    _h_q = _short_reply_hint(_hist_short + [HumanMessage(content="那《架构文档》里怎么写的？")])
+    check("短问句：给块而不是缺省语（短 ≠ 一定是应答）",
           "泠月：" in _h_q and "按字面当新话题" in _h_q, _h_q[:60])
     # 模板占位符即契约：多一个少一个都在这里红（漏传 → 运行时 KeyError）
     from string import Formatter

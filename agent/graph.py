@@ -87,8 +87,8 @@ from agent.stickers import repair_sticker_tokens
 from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            BLOCKED_ROWS_EMPTY, blocked_rows,
                            _doc_anchors, _frame_texts, _has_frames,
+                           _is_short_reply,
                            _last_assistant_utterance, _last_user_msg,
-                           _ledger_frame_wanted,
                            _msg_text, _page_ctx, _prev_user_msg, _receipts_text,
                            _recent_tail, _short_reply_hint, _turn_has_image,
                            strict_wire_issues, with_tool_call_pairs)
@@ -6699,6 +6699,30 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
         skill_name="", params={}, _tools_off=False, _img_turn=False)
 
 
+def _record_reply_kind(kind: str, rounds: int, state, ledger_frame: str) -> None:
+    """短应答的**自我申报**落 trace（20261015 批 3，`context.REPLY_KIND_ARG`）。
+
+    提示块里三条出口同时写着，模型自己选一条照办，系统只记账——**不据此放行/拦截任何
+    事**（准入在 LLM 之前、且是纯结构的，见 `context._is_short_reply`）。两个读数缺一
+    不可：① 模型把这句话读成了哪一类；② 它声明 `auth` 而系统这一轮手里**没有可承接的
+    目标**（`target=False` = 台账帧为空）——那正是"过度授权"的形状，而旧版在这里兜底的
+    正是那三张词表。删掉词表之后这里是**唯一**能看见"模型读错了哪一类"的地方（取数出口
+    `eval/trace_alert.py` 的 R6），所以它进 trace 而不进 state——state 里每一格都要有
+    消费方，这一格的消费方是事后复核。
+
+    **取值在调用点**（而不是收整只 `_DecideCtx`）：`c.decided` 在 `_DecideCtx` 里刻意
+    注解成 `object`（见那个类的注），mypy 只在 `_decide_llm` 里 `is None` 之后那段
+    收窄过——收到函数里就会多两条 `attr-defined`，正好顶破 mypy 棘轮（`eval/type_gate.py`）。
+    这个函数单独立出来的另一半理由同：`_decide_llm` 的分支数贴着复杂度台账的上限
+    （`eval/complexity_baseline.json`），这一格不能再加一条分支。
+    """
+    if not kind:
+        return
+    record("planner", "reply_kind", round=rounds, kind=kind,
+           short=_is_short_reply(_last_user_msg(state["messages"])),
+           target=bool(ledger_frame))
+
+
 def _decide_llm(c: "_DecideCtx") -> "_Step":
     """阶段 D1：组提示词 → `invoke` → 解析。`task_sink[:]` 原位覆盖（本轮登记的
     唯一注入点）、`_forbids_tools` 降级、菜单禁用纠偏。"""
@@ -6814,6 +6838,14 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
                        "（round %d/%d）", fin or "—", c.rounds + 1, MAX_PLAN_ROUNDS)
         c.correction, c.correction_kind = _PLANNER_UNPARSEABLE_NUDGE, "决策不可解析"
         return _Step("continue")
+    # 短应答的**自我申报**（20261015 批 3，`context.REPLY_KIND_ARG`）：提示块里三条
+    # 出口同时写着，模型自己选一条照办，系统只记账——**不据此放行/拦截任何事**
+    # （准入在 LLM 之前、且是纯结构的，见 `context._is_short_reply`）。两个读数缺一
+    # 不可：① 模型把这句话读成了哪一类；② 它声明 `auth` 而系统这一轮手里**没有可承接
+    # 的目标**（`target=False` = 台账帧为空）——那正是"过度授权"的形状，而旧版在这里
+    # 兜底的正是那三张词表。删掉词表之后这里是**唯一**能看见"模型读错了哪一类"的地方，
+    # 所以它进 trace 而不进 state（state 里每一格都要有消费方；这一格的消费方是事后复核）。
+    _record_reply_kind(c.decided.reply_kind, c.rounds, c.state, c.ledger_frame)
     # ② 自动登记（20261008）：模型枚举的意图 − 本轮办了的 ⇒ 本轮的登记帧。
     # **注入点只此一处**（在 `decided` 之后、所有分支之前）：写进壳持有的
     # `task_sink`，由 `planner_node` 在返回前并进 updates——`_planner_decide`
@@ -11119,16 +11151,25 @@ def _ledger_families_due(user_msg: str, prev_ai: str, config) -> dict:
     三条来源，取或：
       · 主人这句话或上一轮泠月那句里提到了这一族（`_REVIEW_INTENT_RE` / `_QUOTA_INTENT_RE`）
         ——这两个正则自此**只做帧触发器**，不再替模型读结论（旧确定性快道已删）；
-      · 这句话是**授权式/全选式**（`_ledger_frame_wanted`：`你看着办`/`全都要`/`全部批准`）
-        ⇒ **两族都摆**——这类话里目标根本没出现，"有什么正等着办"是系统必须给的事实；
+      · 这句话**形状上是短消息**（`context._is_short_reply`）⇒ **两族都摆**——这类话里
+        目标根本没出现（"你看着办"/"全都要"/"全部批准"，以及任何一句短话），
+        "有什么正等着办"是系统必须给的事实；
       · 上一轮**真的读过**这份队列（`_QUEUE_READ_TOOLS` ∩ `recent_tools`）。
     都不命中 ⇒ 该族一次都不读（"不提也不读的族不读队列"的零额外网络开销纪律照旧）。
+
+    ⚠️ **第二条 20261015 批 3 放宽过**（判据从三张手写词表换成纯结构准入）：短消息现在
+    一律预读两族，代价是"每条短消息多一次两队列读"。这是拿下那三张词表的价钱，
+    而且**有界**：`_ledger_due_families` 的权限闸（`_ledger_family_allowed`）先把
+    办不了这两件事的主人挡掉（非管理员两族都不读 ⇒ 访客/普通用户一分钱不花）⇒ 价钱全
+    落在主人自己说话的时候：全量语料 194 轮里 74 轮的触发器会新命中（族读数 28 → 169）。
+    ⚠️ 别拿"带 admin 标记的用例"去量：那批轮次恰好全是长句，差值算出来是 0。
+    反方向（继续用手写词表认授权语）的代价**没有上界**：生产上「按你的方案」漏过三次。
     """
     touched = {_QUEUE_READ_TOOLS[t] for t in _recent_tools_of(config)
                if t in _QUEUE_READ_TOOLS}
     prev = prev_ai or ""
     msg = user_msg or ""
-    bulk = _ledger_frame_wanted(msg)
+    bulk = _is_short_reply(msg)
     return {
         "board": (bulk or bool(_REVIEW_INTENT_RE.search(msg))
                   or bool(_REVIEW_INTENT_RE.search(prev)) or "board" in touched),

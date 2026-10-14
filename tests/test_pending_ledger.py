@@ -8,15 +8,16 @@
     候选摆给了模型，但同一块末尾写着「读到本块 = 系统这一轮没能拼出那张卡……**一条都
     不要写成已办**（本轮零写）」⇒ 模型照办，回了一句 answer_only。
   · 22:18:54「全部批准」——快道第一行 `if _short_reply_kind(user_msg) != "auth"` 直接
-    早退 ⇒ **台账一次都没读**；模型自己从上一轮的残留里取回了正确的那条留言原文、
+    早退（该函数 20261015 批 3 已随三张词表一起删除）⇒ **台账一次都没读**；模型自己从上一轮的残留里取回了正确的那条留言原文、
     选中 board_audit，然后被「原话必须出自主人这句话」那条判据打死。
 两次都是**模型决策对了、系统手里没有可给的事实**。本批把事实供给与决策分开：
 台账每轮如实摆上桌（本模块），办不办、办哪几件由模型定，系统只在写之前校验 id。
 
 覆盖十块：
-  ① 触发器：族名命中 / 授权式全选式 / 上一轮真读过 ⇒ 摆；都不命中 ⇒ **一次都不读**。
-  ② 形态族：「全部批准」/「都办」/「你看着办」命中；「现在几点了」这类**不许**因为
-     「像承接」就去读两份队列。
+  ① 触发器：族名命中 / 短消息 / 上一轮真读过 ⇒ 摆；都不命中 ⇒ **一次都不读**。
+  ② 形态族（20261015 批 3 换表征）：准入门从三张手写中文词表换成**纯结构**（剥壳后非空
+     且 ≤ `_SHORT_MAX`）⇒ 任何短话都预读两族；**上界由权限闸给**（非管理员两族都不读，
+     读也只会白拿一次 403）而不是由词表给——超长句与都不命中的轮次照旧一次都不读。
   ③ 事实齐不齐：每族的 id 必须在帧里（talkId: / 账号 id=）、原文/理由/作者在。
   ④ 上限：每族 ≤5 条 + 「…还有 N 条未列出」（不静默截断）。
   ⑤ 读不到 ≠ 没有：读失败必须明说「没读到、不确定」，**绝不许**写成「没有/0 条」。
@@ -46,8 +47,7 @@ import agent.graph as g  # noqa: E402
 import tools.base as tb  # noqa: E402
 from agent import adminops as A  # noqa: E402
 from agent import authz  # noqa: E402
-from agent.context import (_ledger_frame_wanted, _short_reply_hint,  # noqa: E402
-                           _short_reply_kind)
+from agent.context import _SHORT_MAX, _is_short_reply, _short_reply_hint  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
 
 FAILED: list[str] = []
@@ -130,18 +130,20 @@ def _frame(user_msg, prev_ai="", principal=ADMIN, cfg=None):
 print("① 触发器：命中才摆、都不命中就一次都不读")
 _lg = _Ledger().install()
 try:
-    _t, _m = _frame("今天天气怎么样")
-    check("闲聊轮：不摆台账", _t == "" and _m == {}, repr(_t[:40]))
+    # ⚠️ 闲聊的例子必须是**长句**（20261015 批 3 起短消息一律进准入，见 §②）——
+    # 「今天天气怎么样」现在会摆台账，用它当"不摆"的正例就成了假绿。
+    _t, _m = _frame("今天天气怎么样呀，外面是不是快要下雨了？")
+    check("闲聊轮（长句）：不摆台账", _t == "" and _m == {}, repr(_t[:40]))
     check("  且**一次都没读**（零额外网络开销的纪律照旧）", _lg.reads == [], str(_lg.reads))
 
     _lg.reads.clear()
-    _t2, _m2 = _frame("留言那边有什么等着我吗")
+    _t2, _m2 = _frame("留言板那边现在有什么等着我处理的东西吗？")
     check("当场提到留言 ⇒ 只读这一族", _lg.reads == ["board"], str(_lg.reads))
     check("  帧里出现该族的待审条数", "待审" in _t2 and _m2.get("board") == 2, str(_m2))
 
     _lg.reads.clear()
     _t3, _m3 = _frame("你看着办")
-    check("授权式 ⇒ **两族都读**", sorted(_lg.reads) == ["board", "quota"], str(_lg.reads))
+    check("短消息 ⇒ **两族都读**", sorted(_lg.reads) == ["board", "quota"], str(_lg.reads))
     check("  两族都在帧里", "talkId:101" in _t3 and "guest5" in _t3)
 
     _lg.reads.clear()
@@ -150,16 +152,49 @@ try:
           sorted(_lg.reads) == ["board", "quota"], str(_lg.reads))
 
     _lg.reads.clear()
-    _frame("还有别的吗", "", ADMIN, _cfg(recent_tools=["list_quota_requests"]))
+    _frame("那除了这些，还有别的什么需要我看看的吗？", "", ADMIN,
+           _cfg(recent_tools=["list_quota_requests"]))
     check("上一轮**真读过**那份队列 ⇒ 这一族接着摆", _lg.reads == ["quota"], str(_lg.reads))
 finally:
     _lg.uninstall()
 
-print("② 形态族：授权式/全选式的话才触发，「像承接」不算")
-for t in ("全部批准", "都办", "两个都办", "全都要", "你看着办", "按你的想法来吧", "一起办吧"):
-    check(f"「{t}」算授权式/全选式", _ledger_frame_wanted(t), _short_reply_kind(t))
-for t in ("现在几点了", "然后呢", "这样可以吗", "通过搜索找到的那篇", "这是什么"):
-    check(f"「{t}」**不**算（不许因此去读两份队列）", not _ledger_frame_wanted(t))
+print("② 形态族（20261015 批 3 换表征）：短消息就摆两族，长句照旧一次都不读")
+# 旧版这里是三张手写中文词表判"这句算不算授权式/全选式"，负例正是「现在几点了」
+# 这类"像承接"的短话。准入换成**形状**之后这些短话一律进 ⇒ 它们不再是负例——上界
+# 改由**权限闸**给（下面那条非管理员的断言）。这是本批的价钱，钉在这里不许漂。
+for t in ("全部批准", "都办", "两个都办", "全都要", "你看着办", "按你的想法来吧", "一起办吧",
+          # 旧负例：现在**故意**进准入（形状上是短消息 ⇒ 预读两族）
+          "现在几点了", "然后呢", "这样可以吗", "这是什么"):
+    check(f"「{t}」形状上是短消息 ⇒ 摆两族", _is_short_reply(t))
+_lg = _Ledger().install()
+try:
+    _lg.reads.clear()
+    _frame("现在几点了", "", ADMIN)
+    check("  短消息·非授权式 ⇒ 真的去读了两族（代价落地，不是纸面）",
+          sorted(_lg.reads) == ["board", "quota"], str(_lg.reads))
+    _lg.reads.clear()
+    _frame("通过搜索找到的那篇", "", ADMIN)   # 9 字 ⇒ 进准入
+    check("  同上（上界不靠措辞，靠形状）", sorted(_lg.reads) == ["board", "quota"],
+          str(_lg.reads))
+    # **上界**：不是管理员 ⇒ 一条队列都不读（办不了这两件事的主人，读了也只能白拿 403）
+    _lg.reads.clear()
+    _frame("你看着办", "", GUEST)
+    check("  非管理员：短消息也两族都不读（上界在这里，不在词表里）",
+          _lg.reads == [], str(_lg.reads))
+    # 长句 / 不提这两族的轮次照旧零读（零额外网络开销的纪律没动）
+    _lg.reads.clear()
+    _frame("帮我看看《架构文档》里快道是怎么写的，按章节梳理一遍给我讲讲吧", "", ADMIN)
+    check("  长句 ⇒ 一次都不读", _lg.reads == [], str(_lg.reads))
+    _lg.reads.clear()
+    _frame("谢啦", "我把结果都整理好了，你随时可以来看。", ADMIN)  # 2 字 ⇒ 仍进准入
+    check("  短消息即使上一轮没提这两族也读（形状即准入）",
+          sorted(_lg.reads) == ["board", "quota"], str(_lg.reads))
+finally:
+    _lg.uninstall()
+# 边界：`_SHORT_MAX` 上取到、多一字即出界——判据只有这一条尺子
+check("长度边界：`_SHORT_MAX` 内 ⇒ 摆，多一字 ⇒ 不摆（只有这一条尺子）",
+      _is_short_reply("一" * _SHORT_MAX)
+      and not _is_short_reply("一" * (_SHORT_MAX + 1)))
 
 print("③ 事实齐不齐：id 与原文/理由都在帧里")
 _lg = _Ledger().install()
@@ -563,9 +598,9 @@ try:
           g._ledger_fact_note(_st([HumanMessage(_SILENT)]), _cfg()) == ""
           and g._ledger_closing_note(_st([HumanMessage(_SILENT)]), _cfg()) != "")
     _lg.reads.clear()
-    check("闲聊轮 ⇒ 不发、也不读", g._ledger_fact_note(
-        _st([HumanMessage("今天天气怎么样")]), _cfg()) == "" and _lg.reads == [],
-        str(_lg.reads))
+    check("闲聊轮（长句）⇒ 不发、也不读", g._ledger_fact_note(
+        _st([HumanMessage("今天天气怎么样呀，外面是不是快要下雨了？")]), _cfg()) == ""
+        and _lg.reads == [], str(_lg.reads))
     check("这一轮真动了手 ⇒ 不加（归「改完再询问」那一支）",
           g._ledger_fact_note(_st([HumanMessage(_Q)], plan=_WRITE_PLAN), _cfg()) == "")
     check("确定性收尾轮（台账核对结论已在计划里）⇒ 不加，别抢那句话",

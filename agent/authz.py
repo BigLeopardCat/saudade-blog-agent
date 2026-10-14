@@ -588,7 +588,8 @@ strip_system_tags = _strip_system_tags
 #     （洞⑨ 那句事故原文）。
 #   · 弹窗分叉 `is_question_like` 8 条翻正——全是「小猫咪！」「小猫咪」这种**只叫名字**
 #     的轮次：剥完为空 ⇒ 按"无从判断时不弹"走，方向与全表一致（叫名字不是意图）。
-#   · 后台写判据 `_console_command`、短应答 `_short_reply_kind`、导航快道：**0 条变化**
+#   · 后台写判据 `_console_command`、短应答判据（20261015 批 3 已整族删，改纯结构准入）、
+#     导航快道：**0 条变化**
 #     （导航快道的老表已内联认「小猫咪」，本判据多认的是裸「猫咪」——语料里还没有这种
 #     说法，属可预期的加宽；「猫咪带我去留言板」实测命中）。
 #
@@ -598,7 +599,8 @@ strip_system_tags = _strip_system_tags
 #
 # ⚠️ **称呼表只有这一份**：`decisions._NAV_VERB_RE` 与 `context._SHORT_LEAD_RE` 里各内联过
 # 一份（都不含裸「猫咪」，于是同一句话在两处口径不同）——20260930 一并收进来，全部改走
-# `strip_user_shell`。再加称呼只改这里。
+# `strip_user_shell`。再加称呼只改这里。（`_SHORT_LEAD_RE` 本身 20261015 批 3 已删，
+# 位置被 `context._short_core` 接走；`decisions` 那一处照旧。）
 _VOCATIVE_RE = re.compile(
     r"^\s*(?:(?:小|大|傻|臭|笨|乖)?(?:猫咪|猫猫)|泠月喵|泠月|喵喵|喵|主人)"
     r"(?:\s*[，,、:：!！~～。.…]+\s*|\s+)?")

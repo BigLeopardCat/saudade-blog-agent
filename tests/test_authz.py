@@ -758,10 +758,15 @@ check("导航快道吃的是同一份剥壳（`decisions._bare`，表不再内�
       decisions._bare("小猫咪带我去留言板") == "带我去留言板"
       and bool(decisions._NAV_VERB_RE.match(decisions._bare("猫咪带我去留言板")))
       and "小猫咪" not in decisions._NAV_VERB_RE.pattern)
-check("短应答判据吃的是同一份剥壳（`context._SHORT_LEAD_RE` 里不再有称呼）",
-      context._short_reply_kind("猫咪，好") == "pos"
-      and context._short_reply_kind("小猫咪！") == ""
-      and "小猫咪" not in context._SHORT_LEAD_RE.pattern)
+check("短应答准入吃的是同一份剥壳（`context._short_core` —— 称呼壳剥完只剩「好」）",
+      context._short_core("猫咪，好") == "好"
+      and context._short_core("小猫咪，好") == "好"
+      and context._short_core("好") == "好"
+      # 20261015 批 3：`_short_core` 只管剥壳，**不再**剥句首虚词/句尾语气词
+      # （那两道剥法存在的唯一理由是让整串相等命中手写词表，表没了它们也一并删了）
+      and context._short_core("那好的") == "那好的" and context._short_core("要喵") == "要喵"
+      # 只叫名字的轮次剥完为空 ⇒ 不是"一句话"，准入判 False
+      and not context._is_short_reply("小猫咪！") and not context._is_short_reply("猫咪"))
 
 print("⑨b 接线：闸在调用之前，拒绝说得出原因，叙述侧封得住")
 check("execute 在调用前算确认", "consent_missing = (authz.requires_consent" in graph_src)
