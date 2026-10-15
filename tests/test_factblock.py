@@ -27,7 +27,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 import threading
 from pathlib import Path
@@ -35,8 +34,8 @@ from pathlib import Path
 # 出厂档钉子（与 `tests/run_all.py` 的 `_PINNED` 同值）。**必须在 import `agent.graph`
 # 之前设**（settings 在那一刻构造）。
 # （20261004 去掉了 `PLANNER_ENGINE` 那一钉：接口层只剩 native 一条、拨盘已删，桩自带
-# `bind_tools`——见 `tests/_native_stub.py`。）
-os.environ.setdefault("AGENT_TASK_STATE", "0")
+# `bind_tools`——见 `tests/_native_stub.py`。20261015 去掉了 `AGENT_TASK_STATE` 那一钉：
+# 档位整族撤掉、任务状态常开 ⇒ 这里**没有本套件自己要钉的档位了**，环境由入口给。）
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 

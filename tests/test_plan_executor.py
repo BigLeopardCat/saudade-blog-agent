@@ -18,8 +18,11 @@
   ④ **进度守卫**：同一行同一游标连着发两次而回执没动 ⇒ 停手（否则是个不出声的死循环）；
   ⑤ 单元推进：卡的最小单位＝`adminops.linked_units` 的单元（「先建再挂」两张卡会把
      第二张变成"点不动的格子"）；
-  ⑥ **开关关 ⇒ 这条路不存在**（`AGENT_TASK_PLAN_EXEC=0`，出厂档；`run_all._PINNED`
-     钉住它，理由与 `AGENT_TASK_STATE` 逐字相同）。
+  ⑥ **撤档（20261015）⇒ 这一支常开**：`AGENT_TASK_PLAN_EXEC` 已随任务状态那一族整族删除，
+     判据只剩"台账里有没有现在能动手的一件"；本节反转成"不许把档位加回来"的锁
+     （裸 `if resumed:` 守卫 + 单调用点 + 反向对照：台账在场但不是兑现轮 ⇒ 也不出卡）。
+     **撤档前**这一节判的是"关档 ⇒ 这条路不存在"（`AGENT_TASK_PLAN_EXEC=0`，出厂档，
+     `run_all._PINNED` 钉住它）——那个对照臂随档位一起没了。
 
 用法：.venv/bin/python tests/test_plan_executor.py
 """
