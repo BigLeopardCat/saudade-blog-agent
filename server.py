@@ -46,8 +46,10 @@ from agent.summarizer import summarize
 # 过程行，现在在 `agent/action_text.py` 里。
 # 会话级任务状态（20260927 批 D）：登记帧的发出与流尾的**确定性结算**都在 producer
 # （这里拿得到 req 与流内全部回执——两样东西凑齐的地方只有这一处，见 _run_agent_stream_to_queue）
-from agent.tasks import (advance_by_tools, done_tools, render_open_tasks,
-                         rows_to_settle, task_rows)
+from agent.tasks import (TASK_CONSENT_ASK, TS_MMDD_HHMM_RE, advance_by_tools,
+                         age_minutes, done_tools, expire_transitions,
+                         render_open_tasks, rows_to_settle, task_rows,
+                         transition_frames)
 # 写工具参数的归一（20260923 批 7）原在本文件 import：`_tool_action_text` 用它把
 # "预告帧"与"计划文本"对同一个参数值的理解对齐。**20260928 渲染搬进
 # `agent/action_text.py` 后这里不再需要**（那两件仍从同一处 import，纪律不变：
@@ -509,10 +511,11 @@ def _resolve_user_id(request: Request, body_uid: int) -> int:
 EXEC_STALE_MINUTES = 10
 
 # 台账行行首的时间戳（Rust 侧渲染时补的 `MM-DD HH:MM`，见 chat.rs render_exec_row）。
-# 两侧的排除项都是为了**只认自己那一行的时间**：前面不许接数字或连字符（挡掉完整日期
-# `2026-09-05 14:06:57` 里的后两段）、后面不许接数字或冒号（挡掉带秒的时间）。看不懂
-# 的一律不标——标注宁缺勿错，标错了是凭空给模型一个假事实。
-_EXEC_TS_RE = re.compile(r"(?<![\d-])(\d{2})-(\d{2}) (\d{2}):(\d{2})(?![\d:])")
+# **形状与解析规则都不在这里**——20261015 起与台账终态那一族共用 `tasks.TS_MMDD_HHMM_RE`
+# / `tasks.age_minutes`（同一个钟面、同一套"超前 6 小时退一年"规则）。此前这两份是
+# 各写各的，而"两份会漂的解析规则"正是本仓反复吃的亏：改了这里忘了那里，两边对同一行
+# 时间给出不同年龄，且**没有任何东西会红**。看不懂的一律不标——标注宁缺勿错，标错了
+# 是凭空给模型一个假事实（终态那一侧同一条纪律，只是那边是"记一笔 undecidable"）。
 
 
 def _age_phrase(minutes: int) -> str:
@@ -541,21 +544,13 @@ def annotate_exec_ages(exec_txt: str, now: "datetime | None" = None) -> str:
     now = now or datetime.now()
 
     def _rep(m: "re.Match[str]") -> str:
-        try:
-            t = datetime(now.year, int(m.group(1)), int(m.group(2)),
-                         int(m.group(3)), int(m.group(4)))
-        except ValueError:
+        minutes = age_minutes(m.group(0), now)
+        if minutes is None:              # 看不懂 ⇒ 原样留着，不猜（见 `age_minutes`）
             return m.group(0)
-        if (t - now).total_seconds() > 6 * 3600:
-            try:
-                t = t.replace(year=t.year - 1)
-            except ValueError:
-                return m.group(0)
-        minutes = int((now - t).total_seconds() // 60)
         mark = "·已过期" if minutes > EXEC_STALE_MINUTES else ""
         return f"{m.group(0)}（{_age_phrase(minutes)}{mark}）"
 
-    return _EXEC_TS_RE.sub(_rep, exec_txt)
+    return TS_MMDD_HHMM_RE.sub(_rep, exec_txt)
 
 
 def _ledger_block(req: ChatRequest, confirmed: bool = False) -> str:
@@ -1074,6 +1069,138 @@ def _task_advance_rows(open_tasks: str, declared_tasks: list, exec_rows: list,
     return out
 
 
+def _consent_asks(ex_upd: dict, into: dict) -> None:
+    """本轮"同意闸挡下 / 弹了卡"的那几件 → `{工具名: 同意闸问句}`（20261015）。
+
+    `into` 是**累计**字典（同轮可能多次 execute update），就地更新。两个来源、**同一个
+    问句**（`tasks.TASK_CONSENT_ASK`）：
+
+      · **弹了卡**（`pending_confirm`）⇒ 从 `specs` 里取**工具名**（`[(idx, {"tool": …,
+        "args": …})]`，过流后 tuple 变 list）。⚠️ 这里**刻意不逐字回填卡面问句 `q`**：
+        卡面那句结尾是「点「确定」我就去办」，它**指着一张卡**；而 `pending_question`
+        要到下一轮（乃至 12 小时后）才印给主人看，那时令牌已过期、卡也不在了。
+      · **只被同意闸挡下**（`blocked` 里 `reason == consent_required`）⇒ 没有卡，直接取
+        工具名。这条路的问句同样不能用 `authz.consent_frame`——那是给**模型**看的一整段
+        （带 `__ERROR__:` 前缀与 uid/role），印到主人眼前是另一回事。
+
+    ⚠️ 两句问句都必须是**固定常量**（不许按行拼个性化文本）：`tasks.advance_by_tools`
+    靠"这句话是不是系统写的那两句之一"来决定游标推进后要不要清掉它——按行拼出来的
+    句子它认不出，于是那一行会被一句过期问句永久挡住（详见那里的注释）。
+
+    这个映射的唯一消费点是 `_task_expire_rows`：台账里那一步的工具名在里面 ⇒ 那一行
+    当场转 `input_required` + 这句问句（"在等你点头"才是它的实情）。
+    """
+    popup = ex_upd.get("pending_confirm")
+    if isinstance(popup, dict):
+        for item in popup.get("specs") or []:
+            if not (isinstance(item, (list, tuple)) and len(item) == 2):
+                continue
+            one = item[1]
+            name = str(one.get("tool") or "") if isinstance(one, dict) else ""
+            if name:
+                into.setdefault(name, TASK_CONSENT_ASK)
+    for b in ex_upd.get("blocked") or []:
+        if not isinstance(b, dict) or str(b.get("reason") or "") != "consent_required":
+            continue
+        name = str(b.get("tool") or "")
+        if name:
+            into.setdefault(name, TASK_CONSENT_ASK)
+
+
+def _emit_task_frames(frames: list, queue, loop) -> None:
+    """把算好的 `__TASK__` 载荷逐帧发出去（**登记那条不走这里**——它是"收到即发"）。
+
+    单起一个函数只为一件事：复杂度闸按函数计，而 producer 那个函数已经贴着台账
+    （`_run_agent_stream_to_queue` 只许缩小）——两条路各写一遍那个三行的 `queue.put`
+    正是它长大的方式之一。行为与内联逐字相同。
+    """
+    for one in frames:
+        asyncio.run_coroutine_threadsafe(
+            queue.put("__TASK__:" + json.dumps(one, ensure_ascii=False)),
+            loop).result()
+
+
+def _task_settle_and_expire(open_tasks, declared_tasks, exec_rows, satisfied_specs,
+                            consent_asks, record, queue, loop) -> None:
+    """流尾与台账有关的两件事：**先结算、后收口**（20261015 起是两件；判据分别在
+    `_task_advance_rows` 与 `_task_expire_rows`）。
+
+    结算那一半的口径（20260927 批 D 定下）：**由系统按证据结算，模型说了不算**（同
+    execution_log 的纪律），推进一步发一帧 `__TASK__` 回写 cursor/state，全部推进完
+    ⇒ `succeeded` ⇒ 下一轮不再注入（Rust 的终态过滤在 SQL 里）。
+
+    收口那一半补的是"结不掉的账"：同意闸拒/未答、以及"改用别的工具办掉了"两条出口
+    **在代码里任何一处都不会改 state**，于是那些行只能等 72h 读侧时效把它们从**注入**
+    里抹掉——**行永久留在表里、状态永远撒谎说"还开着"**。行业做法是审批/动作类待办
+    必须有终态（超时/放弃/失败），判据见 `tasks.expire_transitions`。
+
+    ⚠️ **"先结算"不是顺序洁癖**：这一轮真被回执办完的行必须先结掉，否则收口那一半会
+    在同一次流尾把**刚办完**的那一行判成过期、当场写成 `cancelled`（先结账再催账）。
+
+    两条路各自 try/except、失败只记一行：它们是**辅助事实**，绝不阻断对话
+    （与 `__EXEC__`/`__PENDING__` 同口径）。两件事都住在 producer 外面，是为了让
+    `_run_agent_stream_to_queue` 别再长——它已贴着复杂度台账的**行数**上限。
+    """
+    settled: list[str] = []
+    try:
+        advs = _task_advance_rows(open_tasks, declared_tasks, exec_rows,
+                                  satisfied_specs, record)
+        settled = [str(a.get("task_id") or "") for a in advs]
+        _emit_task_frames(advs, queue, loop)
+    except Exception as e:                      # noqa: BLE001 —— 结算失败不影响本轮
+        logger.warning("[producer] 任务结算失败（不影响本轮回复）：%s", e)
+    try:
+        _emit_task_frames(_task_expire_rows(open_tasks, declared_tasks, consent_asks,
+                                            settled, record), queue, loop)
+    except Exception as e:                      # noqa: BLE001 —— 收口失败不影响本轮
+        logger.warning("[producer] 任务收口失败（不影响本轮回复）：%s", e)
+
+
+def _task_expire_rows(open_tasks: str, declared_tasks: list, consent_asks: dict,
+                      settled_ids: list, record) -> list[dict]:
+    """流尾任务**收口**：算这一轮该发哪几帧"终态/催办" `__TASK__`（20261015）。
+
+    `_task_advance_rows` 的**同级**函数，判据全在 `tasks.expire_transitions`（纯函数，
+    含软/硬期限、同意闸那一支、"只问一次"与"同值不产出"三条）——这里只做三件编排的事：
+
+      · **先结账、后催账**：把这一轮已经结算过的 task_id 当 `settled` 传下去，否则
+        "刚被回执结掉的那一行"会在同一次流尾被判过期、当场写成 `cancelled`
+        （`drop_is_completion` 治过的就是这同一个病）；
+      · **本轮刚登记的行也要看**：同意闸挡下这件事**就发生在登记的同一轮**（planner
+        登记 → execute 撞上同意闸 → 弹卡/受阻 → 图直接 END），那一行此刻**还不在**
+        Rust 读回来的那串里。不看它，"当场说在等你点头"就退化成"12 小时后才问"
+        ——而这正是 D1.2 要的那一格。所以把 `declared_tasks` 的载荷并进来，
+        并把"只在本轮登记里出现"的 id 当 `fresh_ids` 传下去（判据与为什么不混进
+        `undecidable` 见 `expire_transitions`）。
+      · **认不出要响亮**：`undecidable`（`created_at` 读不出来、因此没判的行）记一条
+        `task_expire_undecidable`——不记的话，这一格就退化成"静默少判了一行"，
+        而本仓对"没给"与"给了但解析不出"共用一个返回值的教训已经吃过四次。
+    """
+    read_rows = task_rows(open_tasks)
+    decl_rows = [f for f, _ in declared_tasks if isinstance(f, dict) and f.get("task_id")]
+    read_ids = {str(r.get("task_id") or "") for r in read_rows}
+    fresh_ids = [str(r.get("task_id") or "") for r in decl_rows
+                 if str(r.get("task_id") or "") not in read_ids]
+    transitions, undecidable = expire_transitions(
+        read_rows + decl_rows, consent_asks=consent_asks, settled=settled_ids,
+        fresh_ids=fresh_ids)
+    if undecidable:
+        record("producer", "task_expire_undecidable", ids=undecidable)
+    frames = transition_frames(read_rows + decl_rows, transitions)
+    if frames:
+        # `via` **逐条**取自转换本身（`expire_transitions` 每格带一格 `via`），不从
+        # "这一轮有没有 consent_asks" 反推：本轮可能既有同意闸挡下的行、又有单纯到期的行，
+        # 反推出来的那个 `via` 会把两类混成一个词，而事后要分的正是"这一行为什么被收口"。
+        # `transition_frames` 会把 `via` 丢掉（帧是 8 键契约，多一格要同步 Rust），
+        # 所以这里按 `task_id` 对回转换那一格——两边的 `task_id` 同源、一一对应。
+        via = {str(t.get("task_id") or ""): str(t.get("via") or "") for t in transitions}
+        record("producer", "task_expire",
+               ids=[str(f.get("task_id") or "") for f in frames],
+               states=[str(f.get("state") or "") for f in frames],
+               via=[via.get(str(f.get("task_id") or ""), "") for f in frames])
+    return frames
+
+
 def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Queue, loop, user_id: int = 0,
                                stop_event: threading.Event | None = None,
                                principal: Principal | None = None,
@@ -1183,6 +1310,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         # 做了。唯一消费点是流尾结算（`_task_advance_rows`），带 `args` 而非只带工具名
         # 的理由见 `tasks._settled_by_already`。
         satisfied_specs: list = []
+        # 本轮"同意闸挡下 / 弹了卡"的那几件 → `{工具名: 同意闸问句}`（累计，见 `_consent_asks`）
+        consent_asks: dict = {}
         # 注入端记账（20260927 批 D）：本会话**读回来了几条**未完结任务、都是谁。
         # 为什么值得一条 trace 事件：`eval/corpus_invariants.py` 的 I6 要判"挂着的任务
         # 有没有人管"，而"这一轮系统给 planner 看过什么"只有 trace 知道——不记这一格，
@@ -1405,6 +1534,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     # 「系统认定已达标」的那批 spec（20261015），同轮可能多次 update ⇒
                     # 累加（形状过滤与"为什么不产生回执"见 `_task_satisfied_specs`）。
                     satisfied_specs.extend(_task_satisfied_specs(ex_upd))
+                    _consent_asks(ex_upd, consent_asks)   # 「同意闸挡下 / 弹了卡」那几件
                     # 写操作确认弹窗（20260921）：execute 在同意闸上把"有意向但没判成
                     # 命令"的写 spec 收成一次确认（见 graph._confirm_popup），本轮
                     # **零执行、零 LLM**——图直接路由到 END（route_after_execute），
@@ -1628,20 +1758,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                    emitted_head=emitted_reply[:80], recorded_head=recorded_reply[:80])
         record("producer", "stream_end", reply=emitted_reply if saw_model_chunk
                else (recorded_reply or emitted_reply))
-        # 任务结算（20260927 批 D）：**由系统按证据结算，模型说了不算**（同
-        # execution_log 的纪律），推进一步发一帧 `__TASK__` 回写 cursor/state，全部
-        # 推进完 ⇒ succeeded ⇒ 下一轮不再注入（Rust 的终态过滤在 SQL 里）。判据、
-        # 两种证据与"为什么放在流尾"（执行的完整回执到这一刻才齐，早发会把"还没做"
-        # 记成"做了"）见 `_task_advance_rows`。失败只记一行——它是辅助事实，绝不阻断
-        # 对话（与 __EXEC__/__PENDING__ 同口径）。
-        try:
-            for adv in _task_advance_rows(open_tasks, declared_tasks, exec_rows,
-                                          satisfied_specs, record):
-                asyncio.run_coroutine_threadsafe(
-                    queue.put("__TASK__:" + json.dumps(adv, ensure_ascii=False)),
-                    loop).result()
-        except Exception as e:                      # noqa: BLE001 —— 结算失败不影响本轮
-            logger.warning("[producer] 任务结算失败（不影响本轮回复）：%s", e)
+        # 任务结算 + 收口（20260927 批 D / 20261015）：判据、两种证据、"为什么放在
+        # 流尾"（执行的完整回执到这一刻才齐，早发会把"还没做"记成"做了"）与**顺序**
+        # （先结算、后收口）见 `_task_settle_and_expire`。
+        _task_settle_and_expire(open_tasks, declared_tasks, exec_rows, satisfied_specs,
+                                consent_asks, record, queue, loop)
         # 跨轮执行记忆帧（20260904 C3）：checker 验收回执发 Rust 落库 execution_log
         # （读取侧限最近 8 条）。
         # ⚠️ 20261001 起回执**在 execute update 里就已经增量发完**（见上），这里

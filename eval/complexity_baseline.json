@@ -143,10 +143,6 @@
     "c": 58,
     "lines": 259
   },
-  "eval/task_state_probe.py::main": {
-    "c": 36,
-    "lines": 111
-  },
   "eval/trace_reconcile.py::reconcile": {
     "c": 72,
     "lines": 165
