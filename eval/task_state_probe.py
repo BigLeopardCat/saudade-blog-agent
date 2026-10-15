@@ -44,9 +44,10 @@ native 引擎 + 目标来源态判据那批修好（轮 0 navigate → 轮 1 eff
 
 跑法（cd saudade-blog-agent，需网络）：
 
-    .venv/bin/python eval/task_state_probe.py                  # 按本机档位（看 AGENT_TASK_STATE）
-    AGENT_TASK_STATE=1 .venv/bin/python eval/task_state_probe.py
+    .venv/bin/python eval/task_state_probe.py
     .venv/bin/python eval/task_state_probe.py --strict         # 任一条不成立 → 退出码 1
+
+（任务状态 20261015 起**常开**、没有档位，所以本探针也不用再拨任何开关。）
 
 报告落 `eval/report/task_state_probe_<ts>.md`。**本脚本不改任何文档**，结论由人手写进
 `docs/native-toolcalls-mainline.md` 或 ADR。
@@ -65,7 +66,6 @@ import trace_io  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent.tasks import frame_payload, normalize_declaration, render_open_tasks  # noqa: E402
-from config.settings import settings  # noqa: E402
 
 # 会话 id：**探针自造的合成值**（不指向任何真实会话，也不落库——本探针走内部链路，
 # Rust 那一段不在场）。用一个一眼看得出是探针的号码。
@@ -152,10 +152,9 @@ def main() -> int:
     # AttributeError、**不报错也不落 trace**，只表现为"整轮什么都不发生"）。
     G.ensure_agent()
 
-    flag = bool(getattr(settings, "agent_task_state", False))
-    # 接口层不打了：20261004 起只有 native 一条（`PLANNER_ENGINE` 拨盘已删），
-    # 每跑一次都印同一个常量只是噪声。
-    print(f"[档位] AGENT_TASK_STATE={'1（开）' if flag else '0（关）'}")
+    # 20261015：档位撤掉、任务状态常开 ⇒ 不再印档位（`config.settings` 也因而不再被
+    # 本文件 import——一格恒定真值的"档位"是噪声，同 20261004 删 `PLANNER_ENGINE`）。
+    print("[档位] 任务状态**常开**（20261015 撤掉 `AGENT_TASK_STATE`）")
     print(f"[会话] 探针合成会话 id={PROBE_CONV}（走内部链路，不落库）")
 
     run_id = f"taskprobe_{datetime.now().strftime('%Y%m%d_%H%M%S')}"

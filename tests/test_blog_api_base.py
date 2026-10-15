@@ -84,7 +84,7 @@ print(json.dumps({
 """
 
 # 与 run_all 同一形状的钉子：出厂档 + .env 不读（本机 .env 是产线那份）。
-_PINS = {"AGENT_TASK_STATE": "0", "SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
+_PINS = {"SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
 
 
 def probe(api_base: str = "") -> dict:

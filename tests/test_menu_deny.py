@@ -208,12 +208,12 @@ check("`planner_node` 从**上一轮受阻项**算 deny",
       'deny = denied_skills(state.get("blocked") or [])' in _GRAPH_SRC)
 check("算 deny 在用它之前（顺序错了就是 UnboundLocalError 或静默用上一轮的值）",
       "deny=deny" in _GRAPH_SRC[_GRAPH_SRC.index("deny = denied_skills("):])
-# 20261008 批 ②：这一格的锚点随那次重构挪了形——原来那行把 `task_state=` 的表达式
-# 内联在调用里，现在先算进 `_task_state`（"只交清单"那一格要**重绑一次** llm，两处
-# 必须取同一个值，见 `graph.py` 的 `deny_pseudo` 那一段）。断言本身**不变**：`deny`
-# 真的交给了 `bind_native`，且交的是算出来的那个集合——只是从"逐字比对整行"改成
-# "在这一次调用的窗口里找"，后者不会因为多一个形参就假红。新加的 `deny_pseudo`
-# 那一路另有判据（`tests/test_native_plan.py` ①b）。
+# 20261008 批 ②：这一格的锚点随那次重构挪了形——原来那行把表达式内联在调用里，
+# 现在先算成局部变量（"只交清单"那一格要**重绑一次** llm，两处必须取同一个值，见
+# `graph.py` 的 `deny_pseudo` 那一段）。断言本身**不变**：`deny` 真的交给了
+# `bind_native`，且交的是算出来的那个集合——只是从"逐字比对整行"改成"在这一次调用的
+# 窗口里找"，后者不会因为多一个形参就假红。新加的 `deny_pseudo` 那一路另有判据
+# （`tests/test_native_plan.py` ①b）。
 _bind_at = _GRAPH_SRC.index("llm = bind_native(")
 check("把 deny 交给了 bind_native（schema 那一半）",
       "deny=deny" in _GRAPH_SRC[_bind_at:_bind_at + 300],
@@ -310,7 +310,7 @@ class _FakeCtx:
 
     def __init__(self, user_msg: str = "", plan: dict | None = None,
                  receipts: list | None = None, role: str = _ROLE) -> None:
-        self.role, self._task_state, self.deny_pseudo = role, False, set()
+        self.role, self.deny_pseudo = role, set()
         # 出处引文那一档（`AGENT_EVIDENCE`）：`_strip_menu` 重绑客户端时要读它传给
         # `bind_native`（schema 里给不给 `evidence` 那一格）。这里给 False = 出厂档。
         self._evidence = False

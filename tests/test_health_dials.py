@@ -58,7 +58,9 @@ def wire(r: dict) -> str:
 # 且索引与语料对齐，所以两格都要（只有一格的话，"拨了但一次没生效"永远看不见）。
 # `rag_state` 是第四格、也是**唯一一格能读出病因的**：线上首建那 6 秒的真实组合是
 # `enabled=true / active=false / missing=0`，两个布尔加一个计数拼不出"还在建"这个意思。
-DIAL_KEYS = {"planner_native_thinking", "agent_task_state",
+# 20261015：`agent_task_state` 那一格删掉（任务状态撤档**常开** ⇒ 一格恒定真值的
+# "档位"是噪声，同 20261004 删 `planner_engine`）。
+DIAL_KEYS = {"planner_native_thinking", "agent_fastpath",
              "llm_provider", "llm_model",
              "rag_hybrid_enabled", "rag_hybrid_active", "rag_state", "vector_missing"}
 
@@ -72,7 +74,7 @@ try:
           '"agent_ready":true' in body, body[:80])
     check("顶层键 = status / agent_ready / dials（多一个少一个都要有人解释）",
           set(r) == {"status", "agent_ready", "dials"}, sorted(r))
-    check("dials 是一个对象、键集恰好那四个",
+    check("dials 是一个对象、键集恰好那几格",
           isinstance(r["dials"], dict) and set(r["dials"]) == DIAL_KEYS,
           sorted(r.get("dials") or []))
 finally:
@@ -82,7 +84,7 @@ check("图没建好时 agent_ready 仍是 false（不是恒 true）",
 
 print()
 print("② 取自**本进程的内存单例**，不是重新解析 .env")
-_marks = {"planner_native_thinking": True, "agent_task_state": True}
+_marks = {"planner_native_thinking": True, "agent_fastpath": True}
 _saved = {k: getattr(settings, k) for k in _marks}
 _saved_prov = settings.llm_provider
 try:

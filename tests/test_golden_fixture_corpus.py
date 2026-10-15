@@ -183,7 +183,7 @@ check("申报了 `require_doc_terms` 的用例都带 `corpus` 标签（否则上
 # ══════════════════════════════════════════════════════════════════
 print("\n④ 起真桩、走真读路径：`_get` → `_fetch_corpus`（字段名只有这条路径验得动）")
 
-_PINS = {"AGENT_TASK_STATE": "0", "SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
+_PINS = {"SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
 
 _SRV = None
 

@@ -625,7 +625,7 @@ _INTENTS_BREAKDOWN = (
 )
 
 
-def _short_reply_hint(messages: list, *, task_state: bool = False) -> str:
+def _short_reply_hint(messages: list) -> str:
     """短应答提示块（planner 模板 {short_reply_hint}）。
 
     两个出口（20261015 批 3 起）：
@@ -641,8 +641,9 @@ def _short_reply_hint(messages: list, *, task_state: bool = False) -> str:
     不该接），本批把分类那一层也并了进去。
 
     ⚠️ 一处与旧版的差异记在这里：旧版只在"认不出类别"的那两臂追加 `_INTENTS_BREAKDOWN`，
-    pos/neg/auth 三路没有；现在只有一块 ⇒ `task_state=True` 时三路都带上它
-    （它讲的是"两件以上时怎么登记"，对哪一类出口都成立）。默认 `False`。
+    pos/neg/auth 三路没有；现在只有一块 ⇒ 三路都带上它（它讲的是"两件以上时怎么登记"，
+    对哪一类出口都成立）。它另外还挂在一个 `task_state` 档位下，**20261015 随档位一起
+    撤掉**（任务状态是默认必备的，见 `docs/问题记录.md` §1.63）——现在无条件是它。
 
     20260929 批 H：原先这里还能额外挂一段"系统台账"（`system_facts` 形参，20260923 P2
     为授权式那一路加的）。**已摘除**——台账改由独立槽 `{pending_ledger}` 供给
@@ -690,7 +691,7 @@ def _short_reply_hint(messages: list, *, task_state: bool = False) -> str:
             "是哪几件，**绝不**编一件出来凑数。**不许自己补项**，也不许把哪儿都没有的事"
             "加进来；别只在嘴上说「点「确定」我就去办」——那要成立，前提是这一轮真的"
             "列出了调用（系统据此弹卡）。"
-            + (_INTENTS_BREAKDOWN if task_state else ""))
+            + _INTENTS_BREAKDOWN)
 
 def _has_frames(messages: list) -> bool:
     """当前请求是否有工具执行帧（ToolMessage）。"""
