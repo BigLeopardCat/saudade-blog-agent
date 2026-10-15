@@ -398,7 +398,7 @@ _hit = [n for n in ast.walk(_neg_d)
         and any(_is_turn_call(a) for a in n.args)]
 check("`_recent_tail(_turn(state))` **判红**", len(_hit) == 1, f"命中 {len(_hit)}")
 
-# --- 规则 E：冻结必须发生在 planner 的**唯一**出口，且 planner 是唯一入口 ------
+# --- 规则 E：冻结点必须在 planner 的**入口**、单一注入点，且 planner 是唯一入口 ---
 # 这条锁的是"这一刀靠什么成立"：起点只在**还没人追加**的时候算得对 ⇒ 必须挂在
 # `START → planner` 这个入口上、且只有一个注入点（`planner_node` 是薄壳，理由同它
 # 已有的 `task_sink`）。哪天有人把入口改成别的节点、或让 `_planner_decide` 直接返回，
@@ -407,12 +407,61 @@ print("[5E] 规则 E：冻结点必须在 planner 的单一出口，且 planner 
 _planner = next((f for f in ast.walk(_tree)
                  if isinstance(f, ast.FunctionDef) and f.name == "planner_node"), None)
 check("planner_node 存在", _planner is not None)
+
+
+def _freeze_before_first_read(fn: ast.AST) -> tuple[bool, str]:
+    """`freeze_turn_start(...)` 的**行号**必须小于 `_planner_decide(...)` 的行号。
+
+    这是本套件里**唯一一条不是想出来的、是被真链路打出来的**规则（20261015 批 1）：
+    节点的 state 更新要等节点**返回**才落盘 ⇒ 冻结若写在 `return` 前，`_planner_decide`
+    里的每一个 `_turn` 读到的还是输入那个 `-1`（= 不窗口化）⇒ **planner 自己成了唯一
+    没被修好的读端**，而 `_page_ctx`（页面事实）正是在那里读的。当时臂 A 上量到的
+    症状：planner 第一遍 `turn_start=-1`，第二遍（重规划）才是 `0`——**两次读数不一致**
+    就是它的指纹。`--turn-window` 探针当时没抓住，因为它的迷你节点是按"应该怎么写"
+    实现的，不是 import 真的 `planner_node`。
+    """
+    frz = [n.lineno for n in ast.walk(fn)
+           if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+           and n.func.id == "freeze_turn_start"]
+    dec = [n.lineno for n in ast.walk(fn)
+           if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+           and n.func.id == "_planner_decide"]
+    if not frz or not dec:
+        return False, f"freeze={frz} decide={dec}"
+    return min(frz) < min(dec), f"freeze@{min(frz)} < decide@{min(dec)}"
+
+
 if _planner is not None:
     _ret = [n for n in ast.walk(_planner) if isinstance(n, ast.Return)]
     check("planner_node 只有一个 return（薄壳）", len(_ret) == 1, f"{len(_ret)} 个")
     _seg = ast.get_source_segment(_src_full, _planner) or ""
     check("planner_node 体内冻结了 turn_start（freeze_turn_start 调用）",
           "freeze_turn_start(" in _seg)
+    _ok_e, _det_e = _freeze_before_first_read(_planner)
+    check("⭐ 冻结在 `_planner_decide` **之前**（否则 planner 自己就是那个没被修好的读端）",
+          _ok_e, _det_e)
+    check("冻结之后把新值给了本节点的读端（`state = {**state, …}` 视图，不就地改）",
+          "turn_start\": turn_start}" in _seg or "turn_start\": turn_start }" in _seg
+          or "{**state" in _seg)
+
+print("[5E-] 规则 E 的反向对照：把冻结挪到 return 前必须判红（这是真踩过的那个错）")
+_late_src = ("def planner_node(state, config=None):\n"
+             "    sink = []\n"
+             "    upd = _planner_decide(state, config, task_sink=sink)\n"
+             "    upd['turn_start'] = freeze_turn_start(state['messages'], 0, -1)\n"
+             "    return upd\n")
+_ok_e, _det_e = _freeze_before_first_read(ast.parse(_late_src))
+check("冻结写在 `_planner_decide` 之后 ⇒ **判红**", not _ok_e, _det_e)
+_early_src = ("def planner_node(state, config=None):\n"
+              "    ts = freeze_turn_start(state['messages'], 0, -1)\n"
+              "    state = {**state, 'turn_start': ts}\n"
+              "    sink = []\n"
+              "    upd = _planner_decide(state, config, task_sink=sink)\n"
+              "    upd['turn_start'] = ts\n"
+              "    return upd\n")
+_ok_e, _det_e = _freeze_before_first_read(ast.parse(_early_src))
+check("冻结写在 `_planner_decide` 之前 ⇒ **判绿**", _ok_e, _det_e)
+
 check("`START → planner` 是唯一入口（冻结点必须在没人追加的时候跑）",
       any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
           and n.func.attr == "add_edge"
