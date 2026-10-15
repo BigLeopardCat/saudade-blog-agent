@@ -6262,6 +6262,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
     # 预算取 settings 的 native 三项（见 config/settings.py 的注）：思考链会先把额度
     # 吃掉，沿用文本档的 400/30s 会让 arguments 断在半截（finish_reason=length）。
     for _attempt in (0, 1):
+        c.llm_attempt = _attempt
         # 决策循环的**外壳只剩调度**（20261009 刀 2-C）：七段各是一个函数，返回
         # `_Step`；`"next"` 往下走、`"continue"` 换下一次尝试（原 `continue`）、
         # `"break"` 跳出循环（原那个唯一的 `break`）、`"return"` 直接返回。
@@ -6560,6 +6561,10 @@ class _DecideCtx:
     params: dict
     _tools_off: bool
     _img_turn: bool
+    # **本次决策**用掉了第几次尝试（0/1，调度器在循环口上赋值，见 `_planner_decide`）。
+    # 唯一的消费方是 `_llm_error_step`：它要判"这一格现在重问一次还安不安全"——
+    # 第二次也炸时必须落到兜底收尾，否则循环耗尽尝试数退出来时 `plan_obj` 还是 `None`。
+    llm_attempt: int
 
 
 class _Step(NamedTuple):
@@ -6705,7 +6710,7 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
         _evidence=_evidence, llm=llm, deny_pseudo=deny_pseudo,
         correction=correction, correction_kind=correction_kind,
         native_note=native_note, plan_obj=None, raw=None, decided=None,
-        skill_name="", params={}, _tools_off=False, _img_turn=False)
+        skill_name="", params={}, _tools_off=False, _img_turn=False, llm_attempt=0)
 
 
 def _record_reply_kind(kind: str, rounds: int, state, ledger_frame: str) -> None:
@@ -6730,6 +6735,67 @@ def _record_reply_kind(kind: str, rounds: int, state, ledger_frame: str) -> None
     record("planner", "reply_kind", round=rounds, kind=kind,
            short=_is_short_reply(_last_user_msg(state["messages"])),
            target=bool(ledger_frame))
+
+
+# ── 决策 LLM 抛异常时的那条出口（20261015）───────────────────────────────
+# 「等一会儿再来一次就好」那一族的判据是**系统数据**：HTTP 状态码 + SDK 的异常类名，
+# 全是 ASCII 常量（不是"主人这句话里有没有我认识的那个词"那类判断）。
+# 4xx 里只有这三个能重试（超时/冲突/太早），429 与 5xx 是"服务端此刻不接客"。
+_RETRY_HTTP = frozenset({408, 409, 425, 429})
+_RETRY_EXC = frozenset({"APIConnectionError"})
+
+
+def _llm_retriable(e: BaseException) -> bool:
+    """这个异常值不值得把决策循环的**第二次尝试**用掉。
+
+    **刻意不含超时**（`APITimeoutError`）：planner 那一次调用自己的预算是
+    `settings.planner_native_timeout`（60s），一次超时已经把这份预算花光了，再试一次
+    最坏再多花一份；而 SSE 那一侧的空闲窗口是 120s（`STREAM_IDLE_TIMEOUT`）——
+    "一次超时"与"两次超时把整轮拖死"之间，后者会把主人这一句回复整个丢掉。
+    连接错误与状态码错误都是**立刻返回**的那一族，重试只花几百毫秒。
+    """
+    code = getattr(e, "status_code", None)
+    if isinstance(code, int) and (code in _RETRY_HTTP or code >= 500):
+        return True
+    return type(e).__name__ in _RETRY_EXC
+
+
+def _llm_error_step(c: "_DecideCtx", e: BaseException, dur: float) -> "_Step":
+    """决策 LLM 抛异常时的**唯一出口**：先记账，再决定要不要用掉第二次尝试。
+
+    两件处置（这一格以前只有第二件）：
+
+      · **服务抖了一下**（`_llm_retriable`）且这是**本次决策的第一次尝试** ⇒
+        `continue`：决策循环本来就有第二次尝试（`for _attempt in (0, 1)`），此前它只
+        被剔空纠偏用，而"服务抖了一下"这条更常见的路上**没人用它**——这一轮直接就收尾了。
+        限第一次尝试是**必要的**：第二次也失败时必须落到下面的兜底（它会给
+        `c.plan_obj` 赋值），否则循环耗尽尝试数退出来时 `plan_obj` 还是 `None`。
+      · 否则 ⇒ 今天的兜底收尾（有帧基于帧收、无帧走 chat 诚实答复）。**不炸对话**：
+        这是"规划这一步没跑成"，不是轮次用满——默认文案会说成「已达规划轮次上限（4）」，
+        而 narrator 会照着它组织回复。
+
+    ★ 无论走哪一条都**先落 `llm_error` 事件**：此前这条出口在 trace 里**一个字都不写**
+    （没有 `llm_done`、没有 `decision`），于是"这一轮为什么零调用"在事后只能靠翻
+    `logs/agent/agent.log` 才看得出来。现场 `20261015T092916`（会话 347）就是这么丢的：
+    planner 撞 503 ⇒ 确认兑现轮那条「台账里还剩一件（发公告）」的纠偏被静默吞掉 ⇒
+    narrator 只好顺着写成一句征询 ⇒ gate 打回 ⇒ 重规划那一版把**两轮前就办完**的
+    `set_article_status(54)` 当成本轮任务 ⇒ 掏空出口 + 一句"这一轮没有做任何改动"。
+    判据读字段不读措辞：`kind`/`status`/`retry`/`detail` 四格都是机器可读的，
+    `status` 缺席（不是 0）就说明这个异常身上没有状态码。
+    """
+    code = getattr(e, "status_code", None)
+    retry = c.llm_attempt == 0 and _llm_retriable(e)
+    record("planner", "llm_error", round=c.rounds, attempt=c.llm_attempt,
+           kind=type(e).__name__, retry=retry, duration_s=round(dur, 2),
+           detail=str(e)[:160], **({"status": code} if isinstance(code, int) else {}))
+    if retry:
+        logger.warning("[planner] LLM 异常（%s，本尝试 %.1fs）→ 用第二次尝试再问一遍: %s",
+                       type(e).__name__, dur, e)
+        return _Step("continue")
+    logger.warning("[planner] LLM 异常，兜底收尾计划: %s", e)
+    c.plan_obj = _wrap_up_plan(
+        c.has_frames, reason="本轮规划这一步没有跑完（服务抖动），不再新增调用")
+    return _Step("return", _plan_update(c.plan_obj, c.rounds))
 
 
 def _decide_llm(c: "_DecideCtx") -> "_Step":
@@ -6779,14 +6845,8 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
         _prompt = _render_planner_prompt(**_prompt_args)
         resp = c.llm.invoke(_prompt)
     except Exception as e:
-        # planner LLM 异常（API 抖动/超时）→ 不炸对话：按收尾兜底如实告知，
-        # 有帧就基于帧收尾（narrator 仍能正常叙述），无帧走 chat 诚实答复。
-        logger.warning("[planner] LLM 异常，兜底收尾计划: %s", e)
-        # 原因如实（同 dedupe 那一处）：这是**规划这一步没跑成**，不是轮次用满
-        # ——默认文案会说成「已达规划轮次上限（4）」，而 narrator 会照着它组织回复。
-        c.plan_obj = _wrap_up_plan(
-            c.has_frames, reason="本轮规划这一步没有跑完（服务抖动），不再新增调用")
-        return _Step("return", _plan_update(c.plan_obj, c.rounds))
+        # 两种处置（记账 + 抖动时用掉第二次尝试 / 兜底收尾）都在这一处，判据见它的注。
+        return _llm_error_step(c, e, time.monotonic() - _t0)
     # 20260830：慢调用监控——打 WARN（正常 <5s，慢=服务端排队/长思考，
     # 与前端 60s 空闲超时呼应：慢调用是超时事故的前兆信号）。
     # 阈值走 settings（20260927）：planner 的 timeout 本就是 60s，沿用 30 会让告警

@@ -319,7 +319,7 @@ def _ctx(**kw):
                 deny_pseudo=set(),
                 correction="", correction_kind="", native_note="", plan_obj=None,
                 raw="", decided=None, skill_name="", params={}, _tools_off=False,
-                _img_turn=False)
+                _img_turn=False, llm_attempt=0)
     base.update(kw)
     return G._DecideCtx(**base)
 
