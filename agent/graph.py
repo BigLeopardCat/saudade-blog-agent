@@ -6471,6 +6471,10 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
     if rounds >= MAX_PLAN_ROUNDS:
         plan_obj = _wrap_up_plan(has_frames)
         logger.info("[planner] 规划轮次上限(%d)，强制收尾", MAX_PLAN_ROUNDS)
+        # 落 trace（20261015）：这条出口此前**只有日志**，trace 里看不见 ⇒ 离线统计
+        # 读不到"有多少轮是撞上限收的尾"（而它与"模型自己决定收尾"是两件事：
+        # 前者说明预算不够、后者说明模型判断做完了）。planner 的其余出口都有事件。
+        record("planner", "round_cap_wrapup", round=rounds, cap=MAX_PLAN_ROUNDS)
         return _Preflight(early=_plan_update(plan_obj, rounds))
 
     # 确定性快道只在首轮（rounds==0 且本轮尚无任何工具帧）判定——execute 完成
@@ -13875,6 +13879,12 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
     `ledger`（20260924）：本请求注入用的两块台账原文（见 AgentState.ledger）。
     **由 server.py 按它实际注入的内容原样传入**——判据看的是"系统给模型看过什么"，
     两个来源各算各的必然对不上（洞⑦ 的假阴性/误伤都从这里来）。
+
+    **不变量：声明的每一个键在这里都有初值**（键集**恰好**等于 `AgentState` 的声明集，
+    判据见 `tests/test_state_keys.py` ⑤）。这不是"图个整齐"：少一个初值就是一颗哑弹
+    ——`state["X"]` 当场 `KeyError`，而 `state.get("X")` 是**静默 `None`**（LangGraph 对
+    没写过的键不报错），正是本仓反复吃的那个形状。20261015 补上 `pending_action`
+    （此前它是唯一一个声明了却没有初值的键，只在写之后才被读 ⇒ 今天无害、将来不保证）。
     """
     return {"messages": messages, "plan": "", "plan_obj": {}, "plan_rounds": 0,
             "done": False,
@@ -13884,6 +13894,9 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
             "reflect_end": False, "tool_data": [], "fallback_text": "",
             "gate_replan": False, "task_frames": [],
             "pending_confirm": None, "confirm_text": "",
+            # pending_action 的初值与 pending_confirm 同为 None（两者都是"本轮要不要
+            # 发某个帧"的载荷，读侧一律 `x or {}`，见 server.py 的 `__PENDING__` 分支）。
+            "pending_action": None,
             "noop_text": "", "noop_note": "", "task_satisfied": [],
             "confirm_grant": confirm_grant, "ledger": ledger or {},
             # 计划执行器（批 B）的中性初值：`""` = 本请求还没驱动过任何一行台账；
