@@ -24,9 +24,12 @@
   ⑨ 影子通道：today 与旧闸**同源**（跑的是它自己那两个函数）、关档不落事件、
      开启时落**结构化**字段——分歧报告全靠这一格。
 
-**这一批不改任何行为**（影子）：所以本文件**不**断言「拒绝姿势」（refusal_source=evidence、
-拒绝文案不许出现「原样再说一次」这类死路措辞）——那是第二批的事，见 `docs/adr/` 那条与
-`agent/provenance.py` 头注的「上线形状」。这里只钉「判据本身对不对」与「影子接线通不通」。
+**这一批不改任何行为**（影子）：所以本文件**不**断言「拒绝姿势」（refusal_source=evidence）
+——那是第二批的事，见 `docs/adr/` 那条与 `agent/provenance.py` 头注的「上线形状」。
+这里只钉「判据本身对不对」与「影子接线通不通」。
+（**20261015 补**：那句话术里的**死路措辞**已经先单独修掉了——「把那个名字原样再说一次」
+不再出现，追问只给"加引号"这条真的走得通的路，它的断言住在
+`tests/test_target_grounding.py` ③；第二批剩下的是**拒绝姿势**本身，仍然挂起。）
 
 用法：.venv/bin/python tests/test_provenance.py
 """
@@ -278,24 +281,31 @@ try:
                                        user_msg=_msg, state={}, decided=None, rounds=1), "")
     check("关档：一条事件都不落（影子不是少算一点，是整段不跑）", not _events, str(_events))
 
-    # 开档 + 175114 现场的形状：旧闸判否、新判据（有引文时）判是
+    # 开档 + 「旧闸判否、新判据（有引文时）判是」的形状 ⇒ 分歧可见。
+    #
+    # 20261015 换样本（**不是放宽断言**）：这里原来用的是 175114 的现场
+    # 「猫猫给用户niuniu升级为管理员」——那正是本批补的「名词紧跟」格的例子，
+    # 补完之后 `_msg_grounded_name`（today）也判 True ⇒ 旧样本上**两个判据不再分歧**，
+    # 这条断言的**意思**（"分歧看得见"）就没东西可量了。换成一个仍然分歧的真实语序：
+    # `给用户小猫升级为管理员`（中文名，N 格**刻意**不认——要认得回答"哪一个字算名字"，
+    # 那是又一张中文词表）⇒ today=False（旧闸取不出），ok=True/kind=user（引文对得上）。
     g.settings.agent_evidence = True
     _events.clear()
-    _p = _plan("set_account_role", {"name": "niuniu", "role": "admin"},
+    _p = _plan("set_account_role", {"name": "小猫", "role": "admin"},
                skill="account_set_role")
-    _ctx = SimpleNamespace(plan_obj=_p, user_msg="猫猫给用户niuniu升级为管理员", state={},
+    _ctx = SimpleNamespace(plan_obj=_p, user_msg="猫猫给用户小猫升级为管理员", state={},
                            decided=SimpleNamespace(evidence=(
-                               ("name", "猫猫给用户niuniu升级为管理员"),)),
+                               ("name", "猫猫给用户小猫升级为管理员"),)),
                            rounds=0)
     _fields, _widen = g._evidence_fields(_p, _ctx.user_msg)
     check("`_evidence_fields` 收的是今天那道闸判的同一批格子（目标名段在里面）",
           [k for _t, k, _v, _d in _fields] == ["name"], str(_fields))
-    check("★ today 与旧闸**同源**：175114 那个值在旧判据下判否（这正是要换掉的那一问）",
+    check("★ today 与旧闸**同源**：中文名那个值在旧判据下判否（这正是要换掉的那一问）",
           _fields[0][3] is False, str(_fields))
     _lex = g._lexicon("set_account_role")
     check("（复算：today 就是 `_msg_grounded_name` 自己的结论，不是另写的一问）",
           bool(_fields[0][3]) == bool(g._msg_grounded_name(
-              "niuniu", _ctx.user_msg, g._msg_quote_spans(_ctx.user_msg), _lex)))
+              "小猫", _ctx.user_msg, g._msg_quote_spans(_ctx.user_msg), _lex)))
     g._evidence_shadow(_ctx, "")
     _sh = [kw for _n, e, kw in _events if e == "evidence_shadow"]
     check("开档：没出处的格落一条 `planner.evidence_shadow`", len(_sh) == 1, str(_events))
@@ -307,6 +317,11 @@ try:
           "—— 这一格就是本次改造要消掉的那类假拒",
           bool(_sh) and _sh[0]["today"] is False and _sh[0]["ok"] is True
           and _sh[0]["kind"] == P.KIND_USER, str(_sh))
+    check("★ 换样本的正控：N 格认得的那个语序（`给用户niuniu升级为管理员`）在旧闸下"
+          "**已经判是** ⇒ 它不再是分歧样本（拿它量「分歧可见」会静默变空）",
+          bool(g._msg_grounded_name("niuniu", "猫猫给用户niuniu升级为管理员",
+                                    g._msg_quote_spans("猫猫给用户niuniu升级为管理员"),
+                                    g._lexicon("set_account_role"))))
     check("tool 名归位（不是空串）", bool(_sh) and _sh[0]["tool"] == "set_account_role",
           str(_sh))
 

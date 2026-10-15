@@ -99,6 +99,23 @@ check("「恰是整句的子串」**不算**出处（本轮要拿掉的那条假
 check("名词前的同指语序也算出处（`大笨狗那个标签`，否则如实追问会自相矛盾）",
       _msg_grounded_name("大笨狗", "大笨狗那个标签我不想要了，删掉吧")
       and not _msg_grounded_name("删掉吧", "大笨狗那个标签我不想要了，删掉吧"))
+# 20261015 第二批：**名词紧跟**那一格（N，见 `_msg_post_noun_name`）。
+# 两次生产现场的根因：主人写「给用户 niuniu 升级为管理员」「告诉用户 demo…」——名字紧跟
+# 名词，**后面没有动作词垫着**（B/S 要一个动作词、P 要名字在名词前面）⇒ 四格全落空，
+# 判据把主人明明白白写在句子里的名字判成"对不回名字位置"：零写 + 请他再说一遍，
+# 而他照原样重说一遍**仍然过不去**（同一个写法当然还是判不出来）。
+_ROLE_MSG_1 = "猫猫给用户niuniu升级为管理员"                              # 20261014T175114 逐字
+_ROLE_MSG_2 = "猫咪告诉用户demo，由于近期活跃度不佳，现将他降级为杂鱼"      # 20261012T081408 前半句逐字（原话还有「，然后你给他身份降级」）
+_ROLE_LEX = g._lexicon("set_account_role")
+check("N 名词紧跟：名字紧贴名词时取得到名字（两次生产现场逐字）",
+      _msg_grounded_name("niuniu", _ROLE_MSG_1, [], _ROLE_LEX)
+      and _msg_grounded_name("demo", _ROLE_MSG_2, [], _ROLE_LEX))
+check("  中文名**刻意**不认（要认它就得回答「哪一个字算名字」，那是又一张中文词表）",
+      not _msg_grounded_name("小猫", "把用户小猫升级为管理员", [], _ROLE_LEX))
+check("  一句话里两个没加引号的名字 ⇒ 说不清，不给值（同 `_bare_target_name`）",
+      g._msg_post_noun_name("把用户 A 升级为管理员，另外把用户 B 降级为杂鱼", _ROLE_LEX) == "")
+check("  N 只放宽**取值**，不放宽「这一门要不要介入」（`_name_like` 不读它）",
+      "_msg_post_noun_name" not in _names_in(_name_like))
 # 20261006 改判：P 语序（名字在名词**前**）原来在 `_name_like` 这一门就被挡掉，于是
 # 「泠月喵，把jingbao这个用户降级为杂鱼」+ planner 填了另一个名字时，整条校正通道
 # **根本没进过门**（生产 trace `20261006T023655` 的 message 逐字）。上一行（本表第 97
@@ -161,6 +178,24 @@ if r:
     check("  话术声明零改动", "没有改动" in why)
 check("父标签就是主人点过名的那个 → 不拒", _target_grounding_refusal(
     _plan("create_tag", {"title": "向量数据库", "parent_tag": "编程"}), _CTX) is None)
+# 20261015 第二批：**名字紧跟名词**的两条生产现场不再被拒（原话逐字），以及话术里
+# **必须给出那条能走通的路**——此前收拾句写的是「把那个名字原样再说一次即可」，而
+# 同一个写法当然还是判不出来：主人照着重说一遍照样被拒，等于把他送进死循环。
+_REFUSED = _target_grounding_refusal(
+    _plan("set_account_role", {"name": "niuniu", "role": "admin"}), _ROLE_MSG_1)
+check("名字紧跟名词 ⇒ 不拒（20261014T175114 原话逐字）", _REFUSED is None, str(_REFUSED)[:120])
+check("名字紧跟名词 ⇒ 不拒（20261012T081408 原话逐字）",
+      _target_grounding_refusal(
+          _plan("set_account_role", {"name": "demo", "role": "user"}), _ROLE_MSG_2) is None)
+_GEN = _target_grounding_refusal(
+    _plan("set_account_role", {"name": "小猫", "role": "admin"}), "猫猫给用户小猫升级为管理员")
+check("中文名仍拒（fail-closed：N 不认这一格的中文名，宁可问清）", _GEN is not None,
+      str(_GEN)[:80])
+if _GEN:
+    check("  追问里给出**能走通的那条路**：加引号（与名字长什么样无关）",
+          "引号" in _GEN[1], _GEN[1])
+    check("  不再说「原样再说一次」（那句话把主人送进死循环）",
+          "原样" not in _GEN[1] and "没有加引号点名的名字" not in _GEN[1], _GEN[1])
 check("引号里的目标（公告/留言族）→ 不拒",
       _target_grounding_refusal(_plan("delete_announcement", {"title": "公告"}),
                                 "把标题是「公告」的那条公告删掉吧") is None
@@ -249,9 +284,9 @@ check("_owner_target_span 规则④ 不引用泛称/动作词表",
 check("门函数不引用任何词表",
       not (_names_in(_target_grounding_refusal)
            & {"_GENERIC_NAME_WORDS", "_TARGET_ACTION_MARKS", "_GENERIC_VALUE_WORDS"}))
-check("判据读的是主人原话本身（四个抽取器，全部由名词/引号/句读这些结构锚定）",
-      {"_msg_quote_spans", "_msg_name_slot", "_bare_target_name", "_msg_pre_noun_runs"}
-      <= _names_in(_msg_grounded_name),
+check("判据读的是主人原话本身（五个抽取器，全部由名词/引号/句读这些结构锚定）",
+      {"_msg_quote_spans", "_msg_name_slot", "_bare_target_name", "_msg_pre_noun_runs",
+       "_msg_post_noun_name"} <= _names_in(_msg_grounded_name),
       str(sorted(_names_in(_msg_grounded_name))))
 check("P 以**剥过**的形态参与 `_name_like`（裸的 `_msg_pre_noun_runs` 仍不参与）",
       "_pre_noun_names" in _names_in(_name_like)
