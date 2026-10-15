@@ -577,7 +577,17 @@ def _drain(script: list) -> list:
                 if item is None:
                     break
                 out.append(item)
-            t.join(timeout=5)
+            # ⚠️ 别在协程里直接 `t.join()`（20261015）：生产者的收尾是
+            # `run_coroutine_threadsafe(queue.put(None), loop).result()`——哨兵已进队列，但那个
+            # future 要等循环再跑一批 done 回调才置位；`t.join()` 把唯一的事件循环堵住
+            # ⇒ 生产者等循环、循环等生产者，每次白等满 timeout（本套件是 5s，别的套件 30/60s）。
+            # **让出循环**轮询等它自己收尾（刻意不写 `t.join()`——病根是"阻塞"不是"等"）。
+            # 形状锁见 `tests/test_async_blocking_join.py`；机理见
+            # `tests/test_trace_reply_source.py::drive` 的注。
+            for _ in range(100):
+                if not t.is_alive():
+                    break
+                await asyncio.sleep(0.01)
             return out
         return asyncio.run(run())
     finally:

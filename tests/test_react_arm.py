@@ -223,7 +223,16 @@ def _drive_producer(script: list, msg: str = "谢谢你", tid: str = "t-react-ga
                     break
         finally:
             server._agent = old
-        t.join(timeout=60)
+        # ⚠️ 别在协程里直接 `t.join()`（20261015：本套件 123 秒的全部来路，断言本身毫秒级）。
+        # 生产者的收尾是 `run_coroutine_threadsafe(queue.put(None), loop).result()`——哨兵已进队列，
+        # 但那个 future 要等循环再跑一批 done 回调才置位；`t.join()` 把唯一的事件循环堵住
+        # ⇒ 生产者等循环、循环等生产者，每次白等满 timeout。**让出循环**轮询等它自己收尾
+        # （刻意不写 `t.join()`——病根是"阻塞"不是"等"）。形状锁见
+        # `tests/test_async_blocking_join.py`；详细机理见 `tests/test_trace_reply_source.py::drive` 的注。
+        for _ in range(600):
+            if not t.is_alive():
+                break
+            await asyncio.sleep(0.01)
 
     asyncio.run(main())
     return out

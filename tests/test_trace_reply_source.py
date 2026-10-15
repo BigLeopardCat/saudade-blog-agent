@@ -129,7 +129,23 @@ def drive(script) -> dict:
                     break
         finally:
             server._agent = old
-        t.join(timeout=30)
+        # ⚠️ **不要在协程里直接 `t.join()`**（20261015 实测：这一行是本套件 272 秒的**全部**来路，
+        # 而断言本身是毫秒级）。生产者的最后一行是
+        # `asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()`——哨兵**已经进了队列**
+        # （所以上面 `queue.get()` 收得到 None），但那个 concurrent future 要等循环**再跑一批**
+        # 它自己的 done 回调才会被置位。而 `t.join()` 是阻塞调用，在协程里会把**唯一**的事件循环
+        # 整个堵住 ⇒ 生产者等循环、循环等生产者，每次白等满 timeout（30s × 9 = 270s）。
+        # 生产上不存在这个死结：uvicorn 的循环是长活的，收尾回调下一批就跑到了
+        # （`eval/run_golden.py` 的 drain 也不受影响——它用 `run_until_complete` 驱动，
+        # 而 `loop.stop()` 是**批末**生效，那批回调照样跑）。
+        # 正确姿势：**让出循环**轮询等线程自己收尾（正常第一轮 10ms 就退出）。这里刻意
+        # **不写 `t.join()`**——它的病根不是"等"而是"阻塞"：循环被占住的每一刻，生产者
+        # 那条 done 回调都跑不了。轮询同样有上限（300×10ms），不会无限挂。
+        # 形状锁：`tests/test_async_blocking_join.py`（协程里不许出现 Thread.join）。
+        for _ in range(300):
+            if not t.is_alive():
+                break
+            await asyncio.sleep(0.01)
 
     asyncio.run(main())
     path = tracemod.finish_trace(tid, "producer_done", 0.1, frames=len(out))
