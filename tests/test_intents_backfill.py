@@ -30,7 +30,7 @@
 tasks 层的契约，与"不许 import agent.graph"同一条纪律。
 
 用法：.venv/bin/python tests/test_intents_backfill.py
-（跑法两种档位都行：这一件不碰 schema 的档位，`AGENT_TASK_STATE` 取 0/1 结论相同。）
+（20261015 起没有"跑哪一档"这回事了：`AGENT_TASK_STATE` 档位已整族撤掉、任务状态常开。）
 """
 import sys
 from pathlib import Path

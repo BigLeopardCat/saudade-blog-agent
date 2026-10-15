@@ -78,9 +78,11 @@ TESTS = ROOT / "tests"
 COV_DIR = ROOT / ".coverage-data"
 
 # 钉成"出厂默认值"的能力开关（= `config/settings.py` 的默认档）。只钉**会影响离线判据**
-# 的那些：`AGENT_TASK_STATE` 决定 schema 里多不多那个登记伪函数。其余（模型名、超时）不
+# 的那些：`AGENT_EVIDENCE` 决定 schema 里多不多 `evidence` 那一格。其余（模型名、超时）不
 # 影响离线套件的形状判据，不钉。
-# （20261004 删掉了 `PLANNER_ENGINE` 那一钉：接口层只剩 native 一条，没有第二个取值可钉。）
+# （20261004 删掉了 `PLANNER_ENGINE` 那一钉：接口层只剩 native 一条，没有第二个取值可钉。
+# 20261015 删掉了 `AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC` 那两钉：档位整族撤掉，
+# 任务状态常开、没有第二个取值可钉——但**钉子表没被清空**，理由见下面那段 ⚠️。）
 #
 # 另有一项不是"取值"而是"环境"：`SAUDADE_IGNORE_ENV_FILE=1` ⇒ 子进程**整份 .env 不读**
 # （`config/settings.py` 的 model_config）。上面那几项漏了还能靠人眼从 ⚠️ 那行看出来，
