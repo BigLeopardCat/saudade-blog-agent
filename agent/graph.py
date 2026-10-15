@@ -76,6 +76,7 @@ from langgraph.graph.message import add_messages
 from config import settings
 from models import get_llm
 from tools import get_all_tools
+from agent import _ckpt_probe
 from agent import action_text
 from agent import adminops as A
 from agent import authz
@@ -6432,6 +6433,11 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
     page_ctx = _page_ctx(state["messages"], role)
     has_frames = _has_frames(state["messages"])
     doc_anchors = _doc_anchors(state["messages"])
+    # 实验读数（20261015，见 agent/_ckpt_probe.py）：`msgs` 是本轮 planner 看到的
+    # 消息条数（线程复用后会带上历史），`has_frames` 决定首轮五条确定性快道开不开
+    # ——上一轮的 ToolMessage 会让它恒 True。未设 `CHECKPOINT_PROBE_OUT` 时是空操作。
+    _ckpt_probe.dump("planner", msgs=len(state["messages"]), has_frames=has_frames,
+                     rounds=rounds, page_ctx=page_ctx[:160])
     # 快道档（20261015 定价档）**读一次、两处用同一个值**：① 首轮那一段开不开；
     # ② 下面的 `planner.context` 事件里记一笔。记这一笔是必须的——命中会落
     # `fastpath` 事件，但"没有那条事件"本身证明不了任何事（本仓纪要：trace 指纹
@@ -12468,6 +12474,17 @@ def _frame_id(messages: list, idx: int) -> str:
     return f"execute_{base + idx}"
 
 
+def _frame_chars(messages: list | None) -> int:
+    """已执行工具帧的累计字符数（`execute_node` 的帧封顶预算的起点）。
+
+    20261015 从 `execute_node` 里原样抽出来（表达式一字未动），只为让实验读数
+    （`eval/experiments/checkpoint_probe.py`）能调**同一份**实现——实验里另抄一份
+    判据是这条分支最不该犯的错。语义见调用点的注。
+    """
+    return sum(len(m.content) for m in (messages or [])
+               if isinstance(m, ToolMessage) and isinstance(m.content, str))
+
+
 def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """确定性执行 planner 调用清单：逐条 literal_eval 参数 → _TOOL_MAP 调用 →
     ToolMessage 帧（含 __ERROR__ 错误帧）→ 逐 spec checker 验收（PASS 回执 /
@@ -12544,8 +12561,11 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 已执行过的帧——**只会有本轮的**，历史注入（`server.py::_build_messages`）只造
     # Human/AIMessage，ToolMessage 只由本函数 append。加上循环里已追加的那些，就是
     # "这一轮模型已经读到多少字"。
-    frame_chars = sum(len(m.content) for m in (state.get("messages") or [])
-                      if isinstance(m, ToolMessage) and isinstance(m.content, str))
+    # ⚠️ 上面那句"只会有本轮的"**依赖"每请求独立线程、无 checkpointer"**（20261015
+    # 实验分支实测，见 `eval/experiments/checkpoint_probe.py`）：线程一复用，上一轮的
+    # ToolMessage 就躺在 `state["messages"]` 里 ⇒ 这个封顶预算**开局就被历史吃掉一块**，
+    # 本轮真实可用的帧预算比常量小。这里不修（修法是"本轮帧窗口"，属第二批），只标注。
+    frame_chars = _frame_chars(state.get("messages"))
     receipts = list(state.get("receipts") or [])  # 请求内累计（与 executed 同模式）
     noop_specs = list(state.get("noop_specs") or [])  # 请求内累计的零改动签名（见 AgentState）
     # 事实信封的读端（F1，20260930）：`tools.base.is_noop` 是**唯一**实现——它读
@@ -13039,6 +13059,8 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         record("model", "fact_block", n=len(_facts), tools=sorted(_drop))
         logger.info("[model] 动作事实块 %d 行（族内工具 %s），叙述权收归系统",
                     len(_facts), "、".join(sorted(_drop)) or "-")
+    # 抽成局部只为实验读数能看见它（同一函数、同一取值，见下方 `_ckpt_probe.dump`）。
+    _probe_page = _page_ctx(state["messages"], role)
     system = SystemMessage(content=_EXECUTOR_PROMPT.format(
         persona=BLOG_ASSISTANT_PROMPT,
         audience=audience_block(role),
@@ -13056,7 +13078,7 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         fact_block=_block or (_NO_PRINTED_FACTS_ACTION if _has_action else _NO_PRINTED_FACTS),
         # 能力清单与 audience 同一角色源（20260921）：两处口径不同会出现
         # "管理员身份 + 清单里没有管理能力"的自相矛盾 prompt
-        page_ctx=_page_ctx(state["messages"], role),
+        page_ctx=_probe_page,
         sticker_guide=STICKER_GUIDE))
     _t0 = time.monotonic()
     logger.info("[model] LLM 调用开始（narrator）")
@@ -13080,6 +13102,12 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 先把它变成一条可查的事实——服务的正是"会不会把上下文撑爆"这个问题。
     # 改行为要等真出现超限的轮次再谈，先有读数。
     _prompt_chars = len(system.content or "") + sum(len(_msg_text(m) or "") for m in _msgs[1:])
+    # 实验读数（20261015）：narrator 那一刻的**真实**提示词规模 —— `_prompt_chars`
+    # 就是发出去那一坨的字符数，`frames` 是带进提示词的帧条数（线程复用后包含历史
+    # 轮次的 ToolMessage，见 context._frame_texts），`msgs` 是 state 里的消息总数。
+    # 这一格是 §4.6"上下文无限膨胀"那半句唯一的直接读数。
+    _ckpt_probe.dump("model", msgs=len(state["messages"]), frames=len(_msgs) - 1,
+                     prompt_chars=_prompt_chars, page_ctx=_probe_page[:160])
     if _prompt_chars > _PROMPT_OVERSIZE_CHARS:
         logger.warning("[model] 提示词过大：%d 字符（system=%d，帧 %d 条）",
                        _prompt_chars, len(system.content or ""), len(_msgs) - 1)
@@ -13823,8 +13851,13 @@ REFLECTOR_ROUTES = {"planner": "planner", "model": "model"}
 GATE_ROUTES = {"planner": "planner", "end": END}
 
 
-def build_graph():
+def build_graph(checkpointer=None):
     """构建手写图：节点 + 边 + 编译。返回 CompiledStateGraph。
+
+    `checkpointer`（20261015，实验分支）：缺省 `None` = 现状（无持久化，每请求独立
+    线程，恢复从不发生）。传入 saver 时图会在每个 superstep 落 checkpoint、并在
+    同一 `thread_id` 的后续调用里**恢复**状态——这正是要量的那一格。生产调用点
+    （`agent.create_agent`）不传它，行为逐字节不变。
 
     拓扑（20260904 定稿：planner 全权 + checker 确定性验收 + 受阻分流）：
       START → planner ─┬─ 有调用清单 → execute（逐 spec：执行 + checker 验收）
@@ -13858,7 +13891,7 @@ def build_graph():
     g.add_edge("model", "gate")
     g.add_conditional_edges("gate", route_after_gate, GATE_ROUTES)
 
-    return g.compile()
+    return g.compile(checkpointer=checkpointer)
 
 
 def graph_input(messages: list, confirm_grant: dict | None = None,
