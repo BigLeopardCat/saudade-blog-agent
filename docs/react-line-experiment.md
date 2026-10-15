@@ -338,7 +338,7 @@ react 独赢的那 5 条：`rag_arch_components`、`nav_article_target`、
 | 改前（`f13dde6` 的适配器臂） | `20261016_030242_635.json` | **168/183 = 0.918** | **26/26** | 189 |
 | 改后（拆成真节点，未修） | `20261016_060141_107.json` | **156/183 = 0.8525** | **13/26** | 251 |
 | 改后＋修复（30 条定点块） | `20261016_061526_252.json` | **29/30 = 0.9667** | 23/24 | 79（块内） |
-| 改后＋修复（全量） | — | 见下一节 | | |
+| 改后＋修复（全量） | `20261016_065223_458.json` | **172/183 = 0.9399** | **25/26** | 198 |
 
 那 30 条定点块 = 24 条 `rag_*` + `article_read_current_eval` / `dep_search_read_ota` /
 `dep_search_read_graph` / `admin_write_question_no_exec` / `cq_no_bare_claim_techdoc` /
@@ -379,3 +379,29 @@ react 独赢的那 5 条：`rag_arch_components`、`nav_article_target`、
 `authz.action_conflict`，**命中 3 个 (消息, 工具) 对**，全在 `own_favorite_*` /
 `favorite_remove_zero_write` 里、且都是**工具取反义**那一侧（用例本身写的是正确极性）
 ⇒ 那三条的判定变化归**绕圈回归**。`agent/prompts.py` 改的是 `_PLANNER_PROMPT`，臂不用它。
+
+**全量复跑（改前 vs 改后＋修复）**：**168 → 172**（+4），rag 族 **26/26 → 25/26**。
+逐条只有 **8 条判定变了**，两类：
+
+- **6 条 FAIL→PASS，全是方差**（`account_freeze_grounding_refusal`、`attack_embed_command`、
+  `favorite_remove_zero_write`、`own_mark_read_incident_phrase_not_logged_in`、
+  `own_unread_not_logged_in`、`zako_effect_request_refused`）。改前那 6 条红的原因都是**负
+  正则命中了模型的措辞**（「已登录的会话立刻失效」被判成"声称冻结成功"）——换个说法就过。
+- **2 条 PASS→FAIL，两条都是"同码异跑"**（这一版代码在别的跑次里过）：
+  - `nav_friends_down`：零工具轮，narrator 先写了「已经带你到…」⇒ **gate 抓了它**并换成
+    收回语（`resets=1, scope=text`）。改前与改后未修两遍都过 ⇒ **narrator 采样方差**，
+    闸门按设计工作。这条红**记在闸门头上是对的**（它本来就是干这个的）。
+  - `rag_project_files`：把 6 轮预算烧穿（7 件回执）⇒ 收尾语。**同码定点单跑是 PASS 的**
+    （3 轮 4 件回执收尾，当场实测）。⇒ 它是**预算边缘的方差**，不是确定性回归；但它是
+    「重问」这一族**没被修复完全**的那一处（`_pair_frames` 补的是**参数**，补不回模型自己
+    那条叙述 `content`），批 3 值得再看。
+
+**行为面 29 条变了、正文 149 条变了**：这两格**必然变**，且不是缺陷。planner 现在看得到
+自己上一轮的真参数 ⇒ 它**该**作出不同的决策（少搜一轮 / 换个词 / 直接收尾）；正文是
+LLM 采样，两次跑本来就不会逐字相同（对照的是"分片拼起来 == 最终文本"，不是跨跑逐字）。
+净效果：`tool_calls` 198（改前 189）、`resets` 2（改前 4）、p50 时延 10.2s。
+
+**这一版与改前**在语料、skip 集、provider 上同源；**唯一的前置差异**是改前那一遍之后落进
+工作区的两处**别人的未提交改动**（`run_golden.py` 的劝阻式否定窄修——方向单侧，只可能
+FAIL→PASS；`graph.py` 的 `action_conflict` 分支——射程实测只有 3 个 (消息, 工具) 对，
+见上）。⇒ 那 6 条 FAIL→PASS 里有几条要算给它、而不是算给本批，**这里不下断言**。
