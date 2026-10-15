@@ -464,8 +464,165 @@ def cmd_summarize(path: str) -> int:
     return 0
 
 
+def _windowed_mini_graph(saver, sink: list):
+    """与 `_mini_graph` 同构，但节点的**动作顺序照线上**：先冻结、再读、最后追加。
+
+    顺序是这个实验的全部要害：
+
+      · 冻结必须在**还没人追加**的时候做（= `planner_node` 的位置，`START → planner`
+        是唯一入口）。晚一步算出来就偏，窗口会把开头的 `[System: …]` 挤出去；
+      · 本轮族的读端在冻结之后、追加之前读（= planner 的判据）；
+      · 追加之后还有读端（= model / gate）——它们也走**同一个** `turn_start`，
+        因为起点已经冻住，追加再多条也不会漂。
+
+    `sink` 收每轮的观察值（节点里 print 会被 stream 的输出搅乱，收出来统一渲染）。
+    """
+
+    def turn(state):
+        i = state.get("plan_rounds", 0)
+        # ① 冻结（与 `graph.planner_node` **同源**：同一个纯函数，不是重写一遍）
+        start = context.freeze_turn_start(state.get("messages"), state.get("turn_msgs"),
+                                          state.get("turn_start", -1))
+        # ② 本轮窗口（图内唯一的取值口，线上走 `graph._turn(state)`）
+        win = context.turn_window(state.get("messages"), start)
+        whole = state.get("messages") or []
+        sink.append({
+            "round": i, "frozen_start": start,
+            "turn_msgs": state.get("turn_msgs"), "len": len(whole),
+            "win_msgs": len(win), "identity": win is whole,
+            # 四个读端各读**两遍**：窗口 vs 整表。两列并排才看得出这一刀在治什么。
+            "page_win": context._page_ctx(win),
+            "page_whole": context._page_ctx(whole),
+            "frames_win": context._has_frames(win),
+            "frames_whole": context._has_frames(whole),
+            "fchars_win": G._frame_chars(win),
+            "fchars_whole": G._frame_chars(whole),
+        })
+        # ③ 追加本轮产出（= `execute_node` 干的事）
+        return {"messages": [AIMessage(content=f"第 {i} 轮回复"),
+                             ToolMessage(content=FRAME_BODIES[(i - 1) % 3],
+                                         tool_call_id=f"c{i}", name="get_article_detail")],
+                "plan_rounds": i,
+                # 冻结结果写回 state：追加之后的读端（model/gate）靠它，不重算。
+                "turn_start": start}
+
+    g = StateGraph(G.AgentState)
+    g.add_node("turn", turn)
+    g.add_edge(START, "turn")
+    g.add_edge("turn", END)
+    return g.compile(checkpointer=saver)
+
+
+def cmd_turn_window() -> int:
+    """**本轮窗口**的判据（20261015 批 1）：有窗口时读对本轮页面，人为关掉窗口时
+    必须**复现今天的错读**。
+
+    为什么必须是"两臂 + 真 saver"而不是纯函数单测：纯函数那一层（`tests/
+    test_turn_window.py`）只证"切片算得对"，证不了"读端真的因此读对了"——
+    中间隔着"谁在什么时候把 `turn_start` 写进 state"这一跳，而那一跳正是这一刀
+    最容易接错的地方（接晚了 ⇒ 窗口偏 ⇒ 注入块被挤出 ⇒ 页面读错，**且不报错**）。
+    这里用真 reducer + 真 checkpoint 把那一跳也走一遍。
+
+    `turn_msgs = 0`（⇒ `turn_start = -1` ⇒ 不窗口化）就是**今天的行为**：那一臂是
+    反向对照，它必须**红**（复现 `/article/62`）。否则前面那格是恒绿的。
+    """
+    rows_all = {}
+    for arm, turn_msgs in (("窗口", None), ("无窗口（今天）", 0)):
+        saver = make_saver()
+        thread = f"{THREAD}-turnwin"
+        saver.delete_thread(thread)   # 跨臂不许串：同 thread 的 checkpoint 会累积
+        sink: list = []
+        mini = _windowed_mini_graph(saver, sink)
+        cfg = {"configurable": {"thread_id": thread}}
+        for i, page in enumerate(PAGES, start=1):
+            inp = G.graph_input([_user_turn(page, f"第 {i} 轮的问题")])
+            inp["plan_rounds"] = i
+            if turn_msgs is not None:
+                # 反向对照臂：把"本轮几条"人为设成 0 = 没记边界 = 老行为。
+                inp["turn_msgs"] = turn_msgs
+            list(mini.stream(inp, cfg, stream_mode=["updates"]))
+        rows_all[arm] = sink
+
+    def _url(s: str) -> str:
+        return (s or "").split(" ")[0].removeprefix("current_url=")
+
+    for arm, rows in rows_all.items():
+        print(f"\n【{arm}】")
+        print(f"  {'轮':>2} {'本轮页面':<11} | {'冻结起点':>8} {'窗口':>7} {'恒等?':>6} | "
+              f"{'page_ctx(窗口)':<22} {'page_ctx(整表)':<22} | {'有帧(窗口)':>9} "
+              f"{'有帧(整表)':>9}")
+        for r in rows:
+            print(f"  {r['round']:>2} {PAGES[r['round'] - 1].split(' ')[0]:<11} | "
+                  f"{r['frozen_start']:>8} {r['win_msgs']:>3}/{r['len']:<3} "
+                  f"{str(r['identity']):>6} | {_url(r['page_win']):<22} "
+                  f"{_url(r['page_whole']):<22} | {str(r['frames_win']):>9} "
+                  f"{str(r['frames_whole']):>9}")
+
+    print()
+    ok = True
+
+    def check(label, cond, detail):
+        nonlocal ok
+        ok = ok and cond
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label} —— {detail}")
+
+    w = rows_all["窗口"]
+    n = rows_all["无窗口（今天）"]
+
+    # 比的是**读端看见的东西**，不是 `frozen_start`：第 1 轮窗口臂冻成 0、无窗口臂是 -1，
+    # 两者**本来就不该相等**（一个记了边界、一个没记），而 `turn_window` 对 0 和 -1 都是
+    # 恒等 ⇒ 读端逐格相同。把 `frozen_start` 塞进比对里等于拿"实现细节"当判据，会假红。
+    check("第 1 轮两臂**读端逐格相同**（无历史可窗口 ⇒ 这一刀在第一轮是恒等）",
+          all(w[0][k] == n[0][k] for k in
+              ("win_msgs", "len", "identity", "page_win", "frames_win", "fchars_win")),
+          f"窗口 {w[0]['win_msgs']}/{w[0]['len']} vs 无窗口 {n[0]['win_msgs']}/{n[0]['len']}")
+    check("第 1 轮的差别只在「记没记边界」这一个内部标记上（0 = 表头，-1 = 没记）",
+          (w[0]["frozen_start"], n[0]["frozen_start"]) == (0, -1),
+          f"窗口臂 {w[0]['frozen_start']}（= 表头，整个列表）vs 无窗口臂 {n[0]['frozen_start']}（没记）")
+
+    check("窗口臂：第 2/3 轮的窗口读到**本轮**页面（这是这一刀要的结果）",
+          _url(w[1]["page_win"]).endswith("/about")
+          and _url(w[2]["page_win"]).endswith("/guestbook"),
+          f"第 2 轮 {_url(w[1]['page_win'])}；第 3 轮 {_url(w[2]['page_win'])}")
+
+    check("窗口臂：窗口真的在收窄（起点 > 0 且 窗口 < 整表）",
+          w[1]["frozen_start"] > 0 and w[1]["win_msgs"] < w[1]["len"]
+          and w[2]["frozen_start"] > 0 and w[2]["win_msgs"] < w[2]["len"],
+          f"第 2 轮 {w[1]['win_msgs']}/{w[1]['len']}，第 3 轮 {w[2]['win_msgs']}/{w[2]['len']}")
+
+    check("窗口臂：第 2/3 轮「本轮还没执行」⇒ 窗口内无帧（首轮快道条件恢复成立）",
+          (not w[1]["frames_win"]) and (not w[2]["frames_win"]),
+          f"窗口内 {w[1]['frames_win']}/{w[2]['frames_win']}；"
+          f"同一时刻整表读是 {w[1]['frames_whole']}/{w[2]['frames_whole']}")
+
+    check("窗口臂：冻结结果写回了 state（追加之后的读端也用它 ⇒ 起点不漂）",
+          w[1]["frozen_start"] == w[1]["turn_msgs"] + 2,   # 前一轮 1 条输入 + 2 条产出
+          f"第 2 轮起点 {w[1]['frozen_start']}（= 上一轮留下的 3 条）")
+
+    check("反向对照：**关掉窗口**必须复现今天的错读（第 2/3 轮读到第 1 轮页面）",
+          _url(n[1]["page_whole"]).endswith("/article/62")
+          and _url(n[2]["page_whole"]).endswith("/article/62"),
+          f"第 2 轮问 /about 读到 {_url(n[1]['page_whole'])}；"
+          f"第 3 轮问 /guestbook 读到 {_url(n[2]['page_whole'])}")
+
+    check("反向对照：**关掉窗口**时上一轮的帧被算成本轮证据（第 2 轮起恒 True）",
+          (not n[0]["frames_whole"]) and n[1]["frames_whole"] and n[2]["frames_whole"],
+          "首轮五条快道入口条件 `rounds==0 and not has_frames` 结构上不再成立")
+
+    check("反向对照臂里「窗口 = 整表」是恒等（证明它确实什么都没做）",
+          all(r["identity"] for r in n),
+          f"identity = {[r['identity'] for r in n]}")
+
+    print()
+    print("结论（第三格）：**有窗口 ⇒ 读端回到本轮；关掉窗口 ⇒ 逐格复现今天的错读。**"
+          "反向对照那一臂不是恒绿的，所以前一格不是判据自己跟自己玩。")
+    return 0 if ok else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="原生 checkpoint 实验读数仪器")
+    ap.add_argument("--turn-window", action="store_true",
+                    help="本轮窗口的正/反向对照（有窗口读对本轮页面 / 关掉窗口复现错读）")
     ap.add_argument("--deterministic", action="store_true",
                     help="零 LLM：真 saver + 真读端，证「恢复发生了、读端不知道本轮到哪儿」")
     ap.add_argument("--keep-thread", action="store_true",
@@ -479,6 +636,8 @@ def main() -> int:
     ap.add_argument("--pg-stats", action="store_true", help="实验库现状")
     ap.add_argument("--summarize", metavar="PROBE_JSONL", help="汇总探针 JSONL")
     args = ap.parse_args()
+    if args.turn_window:
+        return cmd_turn_window()
     if args.deterministic:
         return cmd_deterministic(keep_thread=args.keep_thread)
     if args.history_dup:
