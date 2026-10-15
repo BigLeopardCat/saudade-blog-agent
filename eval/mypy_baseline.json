@@ -11,7 +11,7 @@
     "utils",
     "server.py"
   ],
-  "total": 219,
+  "total": 209,
   "files_checked": 48,
   "by_file": {
     "agent/action_text.py": 1,
@@ -22,7 +22,6 @@
     "agent/graph.py": 99,
     "agent/hostinfo.py": 2,
     "agent/native_plan.py": 7,
-    "agent/react_arm.py": 10,
     "agent/react_line.py": 7,
     "agent/refs.py": 4,
     "agent/reports.py": 1,

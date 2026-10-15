@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
-"""ReAct 试验线：拿 `create_agent` 当骨架，把现网手写图攒下的**两件资产**装回去。
+"""ReAct 试验线：把现网手写图攒下的**两件资产**（收敛判据 / 工具级回执）装到第二条臂上。
+
+⚠️ **20261016 起本模块不再有骨架**：此前它自己拿 `create_agent` 建图（`build_agent` +
+`ConvergenceMiddleware` + `wrap_tools_with_receipts` 三个符号），现在循环住在
+`agent/react_arm.py` 那张**真图**里（四个节点 `planner`/`execute`/`model`/`gate`），
+本模块只留两件**与图无关**的资产：`convergence_verdict`（纯函数）与
+`SkillExecutor` / `RunLedger`（执行链 + 台账）。`create_agent` 三个符号已整体退场
+（理由与判据见 `docs/adr/adr-0009-*`）。
 
 **出厂不是生产路径**（20261012 复核）：`AGENT_ARM` 的真值源是 `.env`、默认 `graph`
 ——线上跑的还是那条手写图。`react` 那一档 20261012 才接进 `server._build_arm`（拨它要
@@ -16,32 +23,38 @@ schema 与真 planner 提示词装到自由 ReAct 上之后，命中率与现网
 
 补的就是这两件：
 
-## 一、收敛判据（`ConvergenceMiddleware`）
+## 一、收敛判据（`convergence_verdict`，纯函数）
 
 生产侧对应物是 `graph.py` 的 `MAX_PLAN_ROUNDS` + `_wrap_up_plan`：轮次用完**不是抛错**，
 是产一条诚实的收尾。自由 ReAct 的默认行为是撞 `GraphRecursionError`——用户拿到的是
-异常而不是回答。这里把同一件事做进 `create_agent` 的 `before_model` 钩子：
+异常而不是回答。三条判据现在是一个**纯函数**（`convergence_verdict`），由第二条臂的
+`planner` 节点在每一轮决策前后调用：
 
-- **轮次预算**：模型轮数用满 ⇒ 跳 `end` 并注入确定性收尾；
-- **无进展**：上一轮点的每个 `(工具, 参数)` 签名**都已经执行过** ⇒ 跳 `end`。
+- **轮次预算**：模型轮数用满 ⇒ 产确定性收尾（`last_ai=None` 那个相位）；
+- **无进展**：这一轮点的每个 `(工具, 参数)` 签名**都已经执行过** ⇒ 产收尾。
   **不执行这次重复**是有意的：同样的调用已经进了台账，再跑一遍只会再拿一份同样的
-  结果（生产侧的 `_already_done_writes` / `_trim_done_reads` 也提前拦这一格）。
+  结果（生产侧的 `_already_done_writes` / `_trim_done_reads` 也提前拦这一格）；
+- **收尾丢意图纠偏**：模型自己宣布收尾、而主人那句话里还有**一次都没被规划过**的
+  动作 ⇒ 打回重决策**一次**。
 
-两个判据挂在**不同的钩子**上，因为它们的对象不同：
+**为什么是纯函数而不是中间件**（20261016，`docs/adr/adr-0009-*`）：这一族判据原来住在
+`create_agent` 的 `ConvergenceMiddleware` 里，而中间件只在"内层是 `create_agent`"这个
+前提下存在。第二条臂的循环已经拆成真节点（`planner`/`execute`/`model`/`gate`），
+判据因此必须能在**没有中间件框架**的地方被调用——`before_model` 那半对应"节点入口、
+还没调模型"，`after_model` 那半对应"节点里刚拿到模型输出"。函数签名把这两相写成
+`last_ai is None` / `last_ai=<刚拿到的 AIMessage>`，两相各自的**理由**逐条留在实现里。
 
-- **预算**判在 `before_model`（"下一次模型调用之前"）⇒ 与生产同序：**撞预算的那一轮
-  照样执行**，停的是"再来一轮"。挂在 `after_model` 会把模型已经点名的调用整个吞掉，
-  那是另一个语义（用户等了半天，动作没发生）。
-- **无进展**判在 `after_model`（"模型刚提出这一轮之后"）⇒ 判据的对象是它**这一轮想
-  做什么**；等下一轮开始时最后一条已经是 ToolMessage，看不出来它想点什么了。这里
-  跳 `end` 时那次重复**不执行**——同样的调用已经进台账，再跑一遍拿的是同样的结果。
+⚠️ **原来的 `before_model` 数的是 `AIMessage` 条数，这里数的是 `plan_rounds`**。前者
+成立是因为它住在一个每轮 `invoke` 从空 state 起的内层 agent 里（一条 `AIMessage`
+= 一轮决策）；真节点的 `state["messages"]` 带着 DB 历史，数 `AIMessage` 会把**历史里
+的**那些算进预算。
 
-## 二、工具级回执（`wrap_tools_with_receipts`）
+## 二、工具级回执（`SkillExecutor` + `RunLedger`）
 
 自由 ReAct 的工具结果只是消息流里的一串字符——没有验收、没有台账，narrator 事后
-"我办成了吗"只能靠猜。这里给每个工具套一层包装：调完立刻用**生产同一个** checker
-（`agent.graph._check_spec`，不抄第二份）判 PASS/BLOCK，把回执记进 `RunLedger`，
-并把一行回执附在工具结果末尾还给模型。
+"我办成了吗"只能靠猜。这里把"一次技能调用"展开成生产那条执行链：逐 spec 执行，立刻用
+**生产同一个** checker（`agent.graph._check_spec`，不抄第二份）判 PASS/BLOCK，把回执
+记进 `RunLedger`，并把一行回执附在工具结果末尾还给模型。
 
 两件事因此一起解决：
   · 模型看得见"这一步已经成过/被挡了、为什么"，不必重试同一个调用（这是撞上限的
@@ -63,18 +76,11 @@ import time
 from collections import Counter
 from typing import Any
 
-from langchain.agents.middleware import AgentMiddleware, hook_config
-from langchain.agents.middleware.types import AgentState
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.tools import BaseTool, StructuredTool
-from typing_extensions import NotRequired
-
 from agent import authz
 from agent.decisions import _doc_title, _intent_done, _scan_action_intents
 from agent.entities import receipt_digest
 from agent.frames import executed_specs
 from agent.graph import _VERDICT_PASS, _check_spec, _grant_covers, _tool_args, _tool_name
-from agent.principal import UNKNOWN as _UNKNOWN_PRINCIPAL
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +130,39 @@ def attempted_specs(ledger: RunLedger) -> list[str]:
     return out
 
 
+def literal_path_override(skill: str, params: dict, user_msg: str) -> dict:
+    """`navigate` 的字面路径防推断兜底（20261005，照搬 `graph.py` 的 planner 同款兜底）。
+
+    主人原话里出现 `/` 开头的路径时，导航目标**必须原样用那个路径**。模型会把 "/iot"
+    推断成"物联网平台"（**语义替身**）→ 目标变成 `/device-console/`、真跳过去、还回一句
+    「已经在路上」——等于**系统替一个主人没要的页面背书**。
+
+    **工具层的白名单拦不住这一格**（`tools/base.py` 的 `_NAV_EXACT_PATHS`）：它判的是
+    "路径合不合法"，而 `/device-console/` 合法；被换掉的是**目标本身**，只有对着主人
+    原话才看得出来。修正**不是放行**——字面路径照样要过白名单，白名单外 ⇒
+    `instantiate_plan` 给「不存在」注记 + 零工具 ⇒ 如实告知。
+    实证：golden `nav_nonexistent` react 臂 **6/6 红**、graph 6/47（13%）。
+
+    正则**比 `graph.py` 那处紧一格**（那里是 `/[A-Za-z0-9_\\-./]+`）：`/` 前面不许是
+    `:`、`/`、字母数字或下划线。松的那版会把**整条 URL** 吞成一个路径
+    （`https://saudade.site/article/22` → `//saudade.site/article/22`），也会把
+    `12/25 号`、`价格 3/4` 里的 `/25`、`/4` 当成主人点名的路径——一旦被当成字面路径就会
+    强制改目标、然后被判「不存在」。窄的是**"主人确实点名了一个站内路径"**这个意思，
+    宽的不是。
+
+    住在这里而不是 `SkillExecutor.run` 的函数体里：`run` 是台账里挂着的热点
+    （C=33 > 30、行数只许缩小），把这一支连注释一起搬出来既减 C 又减行数。
+    """
+    if skill != "navigate":
+        return params
+    lit = re.search(r"(?<![:/\w])/[A-Za-z0-9_\-./]+", user_msg or "")
+    if not lit or (params or {}).get("target") == lit.group(0):
+        return params
+    logger.info("[react_line] 字面路径修正：主人原话含 %s，模型目标 %r → 强制用字面路径",
+                lit.group(0), (params or {}).get("target"))
+    return {**(params or {}), "target": lit.group(0)}
+
+
 class RunLedger:
     """一次 agent 运行（一次 `invoke`）的工具台账。
 
@@ -135,17 +174,17 @@ class RunLedger:
     白名单）——那批只服务于后台审计，golden 一个断言都不读，搬了是给 Rust 侧
     平添一条没验证的通路。
 
-    ⚠️ **一次运行一个实例**：它活在 Python 对象里，不是 graph state。`create_agent`
-    的每次 `invoke` 都该配一个新的 `build_agent(...)`（本线唯一的用法就是这样）。
+    ⚠️ **一次运行一个实例**：它活在 Python 对象里，不是 graph state。
 
-    **当前状态（20261012 复核）**：arm 层**已经**按调用隔离——`ReactGoldenArm.stream`
-    每次都新建 `RunLedger()` 与 `build_agent(...)`（`agent/react_arm.py`），所以它挂到
-    `server._agent` 上跑（`AGENT_ARM=react`）不会串账，那条要求**不是**上线前还欠着的
-    一步（此前这段注释把它写成"必须补的一步"，与实况不符）。隔离的判据在
-    `tests/test_react_arm.py` 的并发用例（两个 `stream()` 交替推进，两本台账互不可见）。
-    **但**这条纪律本身仍然成立：若将来把 `build_agent(...)` 提成**常驻单例**（为省一次
-    构图而共用同一个 agent 对象），就必须同时把账的键换成 langgraph 的 `run_id` 分桶
-    ——共用单例 + 一个实例账 = 两个并发请求往同一本账上写。
+    **当前状态（20261016 复核）**：arm 层按调用隔离——`ReactGoldenArm.stream` 每次
+    请求新建一份 `RunLedger()`（放进 `config["configurable"]["react_ctx"]`，**不进图
+    state**），所以它挂到 `server._agent` 上跑（`AGENT_ARM=react`）不会串账。隔离的
+    判据在 `tests/test_react_arm.py` 的并发用例（两个 `stream()` 交替推进，两本台账
+    互不可见）+ 那条形状锁（账**不是**模块级/类属性）。
+
+    **但**这条纪律本身仍然成立：图是 `build()` 时编一次、跨请求共用的单例，若哪天有人
+    为了"省一次建账"把它挪进图的闭包或 state 默认值，就必须同时把账的键换成 langgraph
+    的 `run_id` 分桶——共用单例 + 一个实例账 = 两个并发请求往同一本账上写。
     """
 
     def __init__(self) -> None:
@@ -178,11 +217,6 @@ class RunLedger:
 
     def block_reasons(self) -> list[str]:
         return [str(b.get("reason") or "") for b in self.blocked]
-
-    def as_state(self) -> dict:
-        """给 graph state 的那一份（`ReactLineState` 声明的键）。"""
-        return {"react_line_receipts": self.receipts, "react_line_blocked": self.blocked,
-                "react_line_stop": self.stop_reason}
 
 
 def _verdict_of(name: str, args: dict, args_ok: bool, text: str, skill: str,
@@ -219,6 +253,22 @@ def _verdict_of(name: str, args: dict, args_ok: bool, text: str, skill: str,
             verdict)
 
 
+# ── `ledger.record` 的两条硬要求（`SkillExecutor.run` 的签名口径）────────────────
+# 无进展判据（`convergence_verdict` 的 `no_progress`）比的是"模型这一轮**点名了什么**"，
+# 而登记的签名就是那条判据的**对照方** ⇒ 口径错一条，判据就恒不触发（安静失效，不报错）。
+#
+#   ① **技能级**（`spec_signature(skill, params)`）。模型点名的是**技能 + 参数**——
+#      `planner` 拿 `resp.tool_calls` 的 `name`/`args` 直接喂进来，那个 `name` 就是技能名。
+#      换回工具级（`navigate_to` 之流）会让两边永远对不上。
+#   ② **在"字面路径修正"之前取参**。判据的对照方是模型的**原始** `tool_calls.args`；
+#      拿修正后的 `target` 去记，主人原话带路径那一格又会漏判（同族：**键必须与比对方同源**）。
+#
+# 另一条（不是签名口径，但同样只在这里判）：**只在真跑了工具的出口登记**。纯应答技能
+# （chat 一类，0 个工具）与同意闸拦下的一批（一个都没执行）都不记——"没做过的事"记成
+# 做过，收尾正文会印出假的件数。
+#
+# 这段说明住在函数体**外面**是有意的：`SkillExecutor.run` 是台账里挂着的热点函数
+# （C=33 > 30），台账只许缩小，把契约散文搬出函数体是唯一不放松棘轮的做法。
 class SkillExecutor:
     """把"一次技能调用"展开成生产那条执行链：`instantiate_plan` → 逐 spec 执行 → 验收。
 
@@ -238,7 +288,7 @@ class SkillExecutor:
     """
 
     def __init__(self, tools_by_name: dict[str, Any], ledger: RunLedger, *,
-                 role: str = "admin", principal: Any = None,
+                 role: str | None = "admin", principal: Any = None,
                  user_msg: str = "", grant: Any = None,
                  state: dict | None = None) -> None:
         self.tools = tools_by_name
@@ -269,37 +319,19 @@ class SkillExecutor:
         self.calls: list[dict] = []
 
     def run(self, skill: str, params: dict) -> tuple[str, int]:
-        """→ `(给模型看的正文, 真正执行了几个工具)`。
+        """→ `(给模型看的正文, 真正执行了几个工具)`。第二项是**无进展判据的输入**。
 
-        第二项是**无进展判据的输入**（见 `wrap_tools_with_receipts`）：纯应答技能
-        （chat 一类）执行 0 个工具，重复它不算"卡在同一个动作上"。
+        台账登记（`ledger.record`）的口径见上面《`ledger.record` 的两条硬要求》
+        ——**签名必须与判据的对照方同源**，错一条 ⇒ 无进展判据恒不触发。
         """
         from agent.refs import resolve_args
         from agent.skills import instantiate_plan
 
-        # ── 字面路径防推断兜底（20261005，照搬 `graph.py` 的 planner 字面路径修正兜底）──
-        # 主人原话里出现 `/` 开头的路径时，导航目标**必须原样用那个路径**。模型会把
-        # "/iot" 推断成"物联网平台"（**语义替身**）→ 目标变成 /device-console/、真跳
-        # 过去、还回一句「已经在路上」——等于**系统替一个主人没要的页面背书**。
-        #
-        # **工具层的白名单拦不住这一格**（`tools/base.py` 的 `_NAV_EXACT_PATHS`）：
-        # 它判的是"路径合不合法"，而 `/device-console/` 合法；被换掉的是**目标本身**，
-        # 只有对着主人原话才看得出来。修正**不是放行**——字面路径照样要过白名单，
-        # 白名单外 ⇒ `instantiate_plan` 给「不存在」注记 + 零工具 ⇒ 如实告知。
-        # 实证：golden `nav_nonexistent` react 臂 **6/6 红**、graph 6/47（13%）。
-        #
-        # 正则**比 `graph.py` 那处紧一格**（那里是 `/[A-Za-z0-9_\-./]+`）：`/` 前面
-        # 不许是 `:`、`/`、字母数字或下划线。松的那版会把**整条 URL** 吞成一个路径
-        # （`https://saudade.site/article/22` → `//saudade.site/article/22`），也会把
-        # `12/25 号`、`价格 3/4` 里的 `/25`、`/4` 当成主人点名的路径——一旦被当成
-        # 字面路径就会强制改目标、然后被判「不存在」。窄的是**"主人确实点名了一个
-        # 站内路径"**这个意思，宽的不是。
-        if skill == "navigate":
-            lit = re.search(r"(?<![:/\w])/[A-Za-z0-9_\-./]+", self.user_msg or "")
-            if lit and (params or {}).get("target") != lit.group(0):
-                logger.info("[react_line] 字面路径修正：主人原话含 %s，模型目标 %r → 强制用字面路径",
-                            lit.group(0), (params or {}).get("target"))
-                params = {**(params or {}), "target": lit.group(0)}
+        # 无进展判据的键（**取参在字面路径修正之前**，见类上面那一段 ①②）。
+        sig = spec_signature(skill, params)
+
+        # 字面路径防推断兜底：判据与理由见 `literal_path_override` 的 docstring。
+        params = literal_path_override(skill, dict(params or {}), self.user_msg)
 
         plan = instantiate_plan(skill, dict(params or {}), self.role)
         specs = [str(s) for s in (plan.get("tools") or [])]
@@ -389,8 +421,14 @@ class SkillExecutor:
             line, verdict = _verdict_of(name, args, args_ok, text, skill, kind, meta,
                                         self.ledger)
             outs.append(line)
+            # `line`（那行"【内部回执】…"）**单独留一格**：它要跟着这一条调用走到模型
+            # 窗口里去（`react_arm._expand` 按 `tool_call_id` 取），而**不能**混进
+            # `result`——`result` 是发给生产者的工具帧正文，多一行内部旁白就是往
+            # "系统确认的事实"里掺话（闸门与 narrator 读的都是 `result`）。
             self.calls.append({"tool": name, "args": args, "result": text,
-                               "kind": kind, "verdict": verdict})
+                               "kind": kind, "verdict": verdict, "line": line})
+        # 真跑了工具 ⇒ 登记技能级签名（无进展判据的对照方，见 docstring）。
+        self.ledger.record(sig)
         return "\n".join(outs), len(specs)
 
     def _grant_covers(self, spec: str) -> bool:
@@ -436,220 +474,72 @@ class SkillExecutor:
                 and not authz.consent_granted(self.principal, name, self.user_msg))
 
 
-def wrap_tools_with_receipts(tools: list[BaseTool], ledger: RunLedger,
-                             skill: str = "", executor: SkillExecutor | None = None,
-                             principal: Any = None,
-                             user_msg: str = "") -> list[BaseTool]:
-    """把每个工具包成"执行 + 立刻验收 + 记台账 + 附一行回执"的同名工具。
+def convergence_verdict(ledger: RunLedger, *, rounds: int, budget: int,
+                        last_ai: Any = None, repeat_limit: int = 1,
+                        user_msg: str = "", corrected: bool = False) -> dict[str, Any]:
+    """三条收敛判据 —— **纯函数**，由第二条臂的 `planner` 节点调用（不再住中间件里）。
 
-    包装层**不改工具本身**（`description` / `args_schema` 逐字保留）：模型看到的菜单
-    必须与生产 schema 一致，否则测的就不是"同一份资产"了（这是臂 B→C′ 那一跳的教训）。
+    返回四选一：
 
-    工具抛异常 ⇒ 不吞：转成一条 BLOCK 台账再抛？不。**返回错误帧**——自由 ReAct 里
-    抛异常会把整轮消息丢掉（20261004 撞上限被误读成"没调工具"就是这个机理），而
-    生产侧对应物本来就是"错误帧 + BLOCK 回执"。异常文本截断进回执，模型据此换参。
+      · `{"kind": "budget"}` —— 模型轮数用满，产确定性收尾；
+      · `{"kind": "no_progress", "specs": [...]}` —— 这一轮点的每个签名都已经执行过，
+        **这一轮不执行**、直接收尾；
+      · `{"kind": "correct", "pending": [...]}` —— 模型自己宣布收尾、而主人那句话里还有
+        一次都没被规划过的动作 ⇒ 打回重决策**一次**；
+      · `{"kind": "continue"}` —— 什么都不判，照常继续。
 
-    `executor` 给定时交给它执行（技能级回执，见 `SkillExecutor`）；不给就是**工具级**
-    （直接调工具自己、`_check_spec` 拿到的 name 就是工具名）。两个口径都产同一种台账。
+    **两相靠 `last_ai` 区分**（原来靠挂在 `before_model` / `after_model` 两个钩子上）：
 
-    **两条入口都要过权限闸**（P1）：`executor` 那条在 `SkillExecutor.run` 里判；这一条
-    原本没有——那是"两扇门只锁了一扇"（`executor is None` 时调用点直接落到工具本体上）。
-    判据与生产 `graph.execute_node` 逐字同一条（`not allowed and authz.enforcing(scope)`），
-    `principal` 缺省按**身份不明**（`authz.UNKNOWN`）算，fail-closed。
+      · `last_ai is None` = **节点入口、还没调模型**。这一相只判预算，与生产同序：
+        **撞预算的那一轮照样执行**，停的是"再来一轮"。判在拿到模型输出之后会把模型
+        已经点名的调用整个吞掉——那是另一个语义（用户等了半天，动作没发生）。
+      · `last_ai` = **刚拿到的 AIMessage**。这一相判"模型刚提出的这一轮"：等下一轮开始时
+        最后一条已经是 ToolMessage，看不出来它想点什么了。
+
+    **`rounds` 是 `state["plan_rounds"]`，不是 `AIMessage` 条数**（原中间件数后者）。
+    前者成立是因为它住在一个每轮 `invoke` 从空 state 起的内层 agent 里（一条 `AIMessage`
+    = 一轮决策）；真节点的 `state["messages"]` 带着 DB 历史，数 `AIMessage` 会把
+    **历史里的**那些算进预算。
+
+    **`corrected` 由调用方持有**（原来是中间件实例属性 `_corrected`）：纠偏**只此一次**
+    ——纠第二次是把"它坚持不做"读成"它没听懂"，而生产那一支同样只跑两轮。
     """
-    out: list[BaseTool] = []
-    who = principal if principal is not None else _UNKNOWN_PRINCIPAL
-    for t in tools:
-        inner = getattr(t, "func", None)
+    if last_ai is None:
+        return {"kind": "budget"} if rounds >= budget else {"kind": "continue"}
 
-        def _body(_inner=inner, _t=t, **kwargs):
-            # 字面路径防推断兜底（工具级那一扇门，20261005；技能级那扇在
-            # `SkillExecutor.run` 里同样一处）：**两扇门都要锁**，否则绕开技能那扇
-            # 就能替身导航（同一份教训见下面的权限闸注）。修正要在算签名**之前**——
-            # 签名是"实际执行了什么"的摘要，用未修正的参数算会让台账与事实对不上。
-            if _t.name == "navigate_to" and user_msg:
-                lit = re.search(r"(?<![:/\w])/[A-Za-z0-9_\-./]+", user_msg)
-                if lit and kwargs.get("path") != lit.group(0):
-                    logger.info("[react_line] 字面路径修正（工具级）：主人原话含 %s，"
-                                "模型目标 %r → 强制用字面路径",
-                                lit.group(0), kwargs.get("path"))
-                    kwargs = {**kwargs, "path": lit.group(0)}
-            sig = spec_signature(_t.name, kwargs)
-            if executor is not None:
-                text, n_tools = executor.run(_t.name, kwargs)
-                # **没执行任何工具的调用不进无进展判据**：纯应答（chat）重复一次不是
-                # "卡在同一个动作上"（20261004 试跑实测：把它算进去会让模型"先说一句、
-                # 下一步就去调工具"的正常节奏被误判成卡住，整轮停在闲聊上）。次数限制
-                # 由轮次预算管，那才是它该管的事。
-                if n_tools:
-                    ledger.record(sig)
-                return text
-            else:
-                decision = authz.check(who, _t.name)
-                if not decision.allowed and authz.enforcing(decision.scope):
-                    raw, kind, meta = authz.denial_frame(decision, who), "ok", {}
-                    logger.info("[react_line] 权限拒绝，不执行: %s → %s",
-                                _t.name, decision)
-                else:
-                    try:
-                        res = _inner(**kwargs)
-                        raw = str(res)
-                        kind = str(getattr(res, "kind", "ok") or "ok")
-                        meta = getattr(res, "meta", None) or {}
-                    except Exception as e:  # noqa: BLE001 —— 见上面长注：异常必须变成数据
-                        raw, kind, meta = f"__ERROR__ {type(e).__name__}: {e}", "ok", {}
-                        logger.info("[react_line] 工具 %s 抛错：%s", _t.name, e)
-                line, _v = _verdict_of(_t.name, kwargs, True, raw, skill, kind, meta,
-                                       ledger)
-                text = f"{raw}\n{line}"
-            ledger.record(sig)
-            return text
+    calls = list(getattr(last_ai, "tool_calls", None) or [])
+    if calls:
+        # **无进展**：判据的对象是模型**刚提出**的这一轮。跳收尾时这次重复**不执行**
+        # ——同样的调用已进台账，再跑一遍只会拿到同样的结果（生产
+        # `_already_done_writes` / `_trim_done_reads` 提前拦的也是这一格）。
+        # 混合轮（既有新调用又有重复）**不判停**：那一轮里还有没做过的事，停掉等于把
+        # 主人的活儿丢了；重复那几条各花一次调用，代价可接受。
+        specs = [spec_signature(str(c.get("name") or ""), c.get("args") or {})
+                 for c in calls]
+        if all(ledger.executed.get(s, 0) >= repeat_limit for s in specs):
+            return {"kind": "no_progress", "specs": specs}
+        return {"kind": "continue"}
 
-        out.append(StructuredTool(name=t.name, description=t.description,
-                                  args_schema=t.args_schema, func=_body))
-    return out
-
-
-class ReactLineState(AgentState):
-    """`ConvergenceMiddleware` 往 state 里写的那三个键（审计用，判据不读它们）。"""
-
-    react_line_receipts: NotRequired[list]
-    react_line_blocked: NotRequired[list]
-    react_line_stop: NotRequired[str]
-
-
-class ConvergenceMiddleware(AgentMiddleware):
-    """轮次预算 + 同工具同参无进展 + **收尾丢意图纠偏** ⇒ 确定性收尾（跳 `end`，不抛异常）。
-
-    与 `langchain.agents.middleware.ModelCallLimitMiddleware` 的分工：那个是**通用**的
-    轮数上限，收尾正文是英文机器句（`Model call limits exceeded: ...`），直接进回复
-    会念给主人听。这里自己数（数 `AIMessage` 的条数，不额外占 state 键），收尾正文
-    是中性的、诚实的中文，且**带台账**（办成了哪几件）。
-    """
-
-    state_schema = ReactLineState
-
-    def __init__(self, ledger: RunLedger, *, budget: int = 6,
-                 repeat_limit: int = 1, user_msg: str = "") -> None:
-        """budget：允许的**模型轮数**（生产 `MAX_PLAN_ROUNDS=4`，这里放宽到 6 是因为
-        自由 ReAct 一轮里可能并发多条调用，步子比 planner 碎）；repeat_limit：同一个
-        签名允许执行的次数，超过即判无进展。`user_msg` 是主人这一轮的**原话**
-        ——收尾丢意图纠偏（见 `_intent_correction`）要拿它扫动作意图，缺省空串等于
-        这条判据不生效（fail-safe：拿不准就不拦）。"""
-        super().__init__()
-        self.ledger = ledger
-        self.budget = budget
-        self.repeat_limit = repeat_limit
-        self.user_msg = user_msg
-        # 纠偏**只此一次**（生产同一支的注：「只纠一次」——`for _attempt` 只跑两轮）。
-        # 一次运行一个中间件实例，所以实例属性就是"这一次运行"的范围。
-        self._corrected = False
-
-    def _stop(self, reason: str) -> dict[str, Any]:
-        """跳 `end`：注入一条确定性收尾，并把台账写回 state（审计用）。"""
-        self.ledger.stop_reason = reason
-        note = wrap_up_text(self.ledger, reason)
-        self.ledger.wrap_up = note
-        logger.info("[react_line] 收尾 reason=%s 回执=%d 受阻=%d",
-                    reason, len(self.ledger.receipts), len(self.ledger.blocked))
-        return {"jump_to": "end", "messages": [AIMessage(content=note)],
-                **self.ledger.as_state()}
-
-    @hook_config(can_jump_to=["end"])
-    def before_model(self, state: ReactLineState, runtime: Any) -> dict[str, Any] | None:
-        """**只管预算**：模型轮数用满 ⇒ 收尾。
-
-        判在"下一次模型调用之前"，于是撞预算的那一轮**已经执行过**（生产
-        `MAX_PLAN_ROUNDS` 同序）。轮数数 `AIMessage` 条数——不额外占 state 键，
-        也不受"工具消息有几条"影响。
-        """
-        msgs = list(state.get("messages") or [])
-        if sum(1 for m in msgs if isinstance(m, AIMessage)) >= self.budget:
-            return self._stop("budget")
-        return None
-
-    async def abefore_model(self, state: ReactLineState,
-                            runtime: Any) -> dict[str, Any] | None:
-        return self.before_model(state, runtime)
-
-    @hook_config(can_jump_to=["model", "end"])
-    def after_model(self, state: ReactLineState, runtime: Any) -> dict[str, Any] | None:
-        """**无进展 ⇒ 收尾**；**零工具收尾但意图清单还有没做过的 ⇒ 打回模型重决策一次**。
-
-        判在这里（而不是 `before_model`）是因为判据的对象是"模型**刚提出**的这一轮"：
-        等下一轮开始时最后一条是 ToolMessage、看不到它想点什么了。跳 `end` 时这次
-        重复**不执行**——同样的调用已进台账，再跑一遍只会拿到同样的结果，这正是
-        生产 `_already_done_writes` / `_trim_done_reads` 提前拦的那一格。
-
-        混合轮（既有新调用又有重复）**不判停**：那一轮里还有没做过的事，停掉等于
-        把主人的活儿丢了；重复那几条各花一次调用，代价可接受。
-        """
-        msgs = list(state.get("messages") or [])
-        last = msgs[-1] if msgs else None
-        calls = list(getattr(last, "tool_calls", None) or [])
-        if calls:
-            if all(self.ledger.executed.get(
-                    spec_signature(str(c.get("name") or ""), c.get("args") or {}), 0)
-                    >= self.repeat_limit for c in calls):
-                return self._stop("no_progress")
-            return None
-        # 零工具轮 = 模型**自己宣布收尾**（ReAct 里没有别的含义）。往下问一句：
-        # 主人那句话里的动作，是不是还有一次都没做过的？
-        return self._intent_correction()
-
-    def _intent_correction(self) -> dict[str, Any] | None:
-        """收尾丢意图纠偏——照搬 `graph.py:5229` 那一支（20261005）。
-
-        **病**（生产 20261003 立此判据的现场，golden `multi_step_referent_nav_effect`）：
-        模型看过工具返回、决定收尾，可主人那句话里还有**一次都没被规划过**的动作。
-        提示词里那份意图清单明明标着"**未完成**"，它却收尾了 ⇒ 与那件事相关的工具
-        返回一条都没有，收尾正文只剩主人的原话可依据，于是如实答成"没帮你做"。
-        主人要的却是把它做掉。react 臂的零调用尾巴（`rag_noise_mysql` 3/6、
-        `multi_turn_correction` 2/6）同形。
-
-        **判据的三条守卫，都是从生产那一支逐条搬的**：
-          · `has_frames`（这里＝台账里已有 PASS 或 BLOCK 行）：首轮零工具轮是另一族
-            ——没看过任何返回就收尾，再问一次通常还是零工具（`test_unaccounted_zero_tool_round`
-            明写"不新增重决策通道"）。看过返回之后的零工具才是"决定收尾"。
-          · 台账空 / `user_msg` 空 ⇒ 不判（fail-safe：拿不准就不拦，绝不凭一个读不到
-            的字段把这一轮改道）。
-          · `_corrected` ⇒ 只纠一次。纠第二次是把"它坚持不做"读成"它没听懂"，
-            而生产那一支同样只跑两轮。
-
-        **已被拒过的动作不会再被推一次**：上过计划的 spec（哪怕 BLOCK）都进了
-        `attempted_specs` ⇒ `_intent_done` 判它已完成，留在清单里的只能是**从没被
-        规划过**的那些。
-        """
-        if self._corrected or not self.user_msg:
-            return None
-        if not (self.ledger.receipts or self.ledger.blocked):
-            return None
-        left = [i for i in _scan_action_intents(self.user_msg)
-                if not _intent_done(i, attempted_specs(self.ledger))]
-        if not left:
-            return None
-        self._corrected = True
-        pending = "、".join(f"{i['label']}（{i['key']}）" for i in left)
-        logger.warning("[react_line] 零工具收尾但意图清单仍有未规划项（%s）→ 纠偏重决策一次",
-                       "、".join(i["key"] for i in left))
-        # 措辞照抄生产那一支（`graph.py` 里零工具收尾纠偏的 `c.correction`）：同一件资产在两臂上说同一句话，
-        # 将来复核"哪一臂的读数变了"时才不会被措辞差污染。
-        return {"jump_to": "model", "messages": [HumanMessage(content=(
-            "你这一轮**没有排任何工具**（等于宣布收尾），但主人那句话里还有这些"
-            f"动作**一次都没有被执行过**：{pending}。你手里没有与它们相关的任何"
-            "工具返回。本轮先把没做过的做掉（一轮一件），再谈收尾。"))]}
-
-    async def aafter_model(self, state: ReactLineState,
-                           runtime: Any) -> dict[str, Any] | None:
-        return self.after_model(state, runtime)
+    # 零工具轮 = 模型**自己宣布收尾**（ReAct 里没有别的含义）。往下问一句：主人那句话
+    # 里的动作，是不是还有一次都没做过的？（`_intent_correction` 的三条守卫逐条搬来）
+    #   · 台账空 ⇒ 首轮零工具轮是另一族——没看过任何返回就收尾，再问一次通常还是零工具；
+    #   · `user_msg` 空 ⇒ 拿不准就不拦（fail-safe，绝不凭一个读不到的字段把这一轮改道）；
+    #   · `corrected` ⇒ 只纠一次。
+    if corrected or not user_msg:
+        return {"kind": "continue"}
+    if not (ledger.receipts or ledger.blocked):
+        return {"kind": "continue"}
+    left = [i for i in _scan_action_intents(user_msg)
+            if not _intent_done(i, attempted_specs(ledger))]
+    return {"kind": "correct", "pending": left} if left else {"kind": "continue"}
 
 
 def wrap_up_text(ledger: RunLedger, reason: str) -> str:
     """确定性收尾正文——与生产 `_wrap_up_plan` 同一取向：**只陈述系统确认过的事实**。
 
     两句话模板：为什么停（"卡住"还是"轮次用完"）+ 台账里真办成的那几件。**不写**
-    "剩下的我稍后再办"这类承诺——那正是 gate 洞①要拦的假完成式；本线还没接 gate，
-    所以这里自己就不许生成那种句子。
+    "剩下的我稍后再办"这类承诺——那正是 gate 洞①要拦的假完成式；这段收尾**照样过闸门**，
+    所以自己先不许生成那种句子。
     """
     done = ledger.passed_tools()
     head = ("我停在这里了：同一个操作我连着试了没进展，再重复也是同样的结果。"
@@ -658,34 +548,3 @@ def wrap_up_text(ledger: RunLedger, reason: str) -> str:
     if done:
         return f"{head}这一轮确实办成 {len(done)} 件（{'、'.join(done)}）。剩下的你说一声我接着做。"
     return f"{head}这一轮没有任何一件办成，我没有假装办好了。"
-
-
-def build_agent(model: Any, tools: list[BaseTool], *, system_prompt: str,
-                budget: int = 6, repeat_limit: int = 1, skill: str = "",
-                executor: SkillExecutor | None = None, ledger: RunLedger | None = None,
-                principal: Any = None, name: str = "react_line",
-                user_msg: str = ""):
-    """建一个带收敛判据与回执台账的 `create_agent`。
-
-    返回 `(agent, ledger)`：`ledger` 是这一次运行的台账，跑完从它读回执与停止原因。
-    `executor` 给定时工具调用按**技能**展开（见 `SkillExecutor`），不给就是工具级。
-    `ledger` 可由调用方给（技能展开那一路必须与 executor 共用**同一个**台账，
-    否则技能回执与技能签名会记到两本账上）。`principal` 是**工具级**那一路的身份
-    （技能级那一路的身份在 `executor` 上）；不给按身份不明算，硬 scope 的工具会被拒。
-    """
-    from langchain.agents import create_agent
-
-    ledger = ledger or RunLedger()
-    # 主人原话给**工具级**那扇门的字面路径兜底用；技能级那扇自带（在 `executor` 上）。
-    # 缺省从 executor 取，两处同源，不另设第二个来源；`user_msg` 是给**没有 executor**
-    # 的调用方（离线单测）留的那条路——两处都必须落在同一句话上，否则收尾丢意图纠偏
-    # 会对着另一句话扫意图。
-    msg = user_msg or getattr(executor, "user_msg", "") or ""
-    wrapped = wrap_tools_with_receipts(tools, ledger, skill=skill, executor=executor,
-                                       principal=principal, user_msg=msg)
-    agent = create_agent(model=model, tools=wrapped, system_prompt=system_prompt,
-                         middleware=[ConvergenceMiddleware(
-                             ledger, budget=budget, repeat_limit=repeat_limit,
-                             user_msg=msg)],
-                         name=name)
-    return agent, ledger

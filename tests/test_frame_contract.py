@@ -3,11 +3,10 @@
 
 ## 为什么要有这一条
 
-`agent/react_arm.py` 是**第二份实现**：另一套循环（`create_agent` + 收敛判据 + 回执台账）
-产出与生产**逐字相同**的帧。两套实现共享一份契约，而那份契约此前**只活在约定里**——
-`gate_node` 从 state 读哪些键，是用 `awk` 切出函数体逐行 grep 数出来、抄进适配器
-docstring 的；`.get("X", [])` 把"本线没喂"与"本轮确实没有"读成同一件事 ⇒ **抄漏不报错，
-只是闸门安静地少开火**。
+`agent/react_arm.py` 是**第二份实现**：它产出与生产**逐字相同**的帧。两套实现共享一份
+契约，而那份契约此前**只活在约定里**——`gate_node` 从 state 读哪些键，是用 `awk` 切出
+函数体逐行 grep 数出来、抄进适配器 docstring 的；`.get("X", [])` 把"本线没喂"与"本轮
+确实没有"读成同一件事 ⇒ **抄漏不报错，只是闸门安静地少开火**。
 
 20261016 用 AST 走完整传递闭包实测，那两张手抄表**各漏了**：
 
@@ -21,21 +20,38 @@ docstring 的；`.get("X", [])` 把"本线没喂"与"本轮确实没有"读成�
 本套件把这一层交给机器守。规矩与本仓 `tests/test_state_keys.py` 同族：**值从源码现取、
 与台账算双向差集、带反向对照**。
 
+## 批 2（20261016）：判据从"喂没喂"换成"结构上成不成立"
+
+批 1 的 ③④ 是**真调一次塑形器**看它喂没喂全（`round_state` / `popup_state`）。那两件
+连同整个适配器**退场了**（`docs/adr/adr-0009-*`）：臂现在是一张真的 `StateGraph`，
+`planner`/`execute`/`model`/`gate` 是编译进图里的**真节点**，`gate_node` 与
+`_confirm_popup` 拿到的是**真 state**（`graph.AgentState` 的实例）。
+
+所以这一层不再有"合成 state 的键集对不对"这个问题，换成三条**结构**判据——它们比原判据
+强，因为它们不依赖任何人的记性：
+
+  · 图里**必须真的有** `NODE_FRAMES` 那四个节点名（生产者按名取键，少一个 = 那一格
+    静默丢掉）；
+  · 两张键集表**必须全是 `AgentState` 的声明键**（未声明的键被 langgraph **静默丢掉**，
+    本仓为此付过 13 次代价）；
+  · 臂源码里**一个手搓的 `("updates", …)` 元组、一个 `langgraph_node` 字面量都不许有**
+    ——这两样是适配器的本体，回来一个就等于适配器回来一半。
+
 ## 判法（静态 AST + 纯函数直调：不跑图、不调 LLM、无网络）
 
   ① 从 `graph.gate_node` 走**读侧传递闭包**（含它调用的 `_round_facts` /
      `_ledger_in_scope` / `_blocked_article_targets` 等辅助函数），取所有
      `state.get("X")` / `state["X"]` 的键 ⇒ 与 `frames.GATE_STATE_KEYS` **双向**比对。
   ② 同法走 `graph._confirm_popup` ⇒ 与 `frames.POPUP_STATE_KEYS` 双向比对。
-  ③④ `round_state` / `popup_state` **真调一次**，返回的键集必须盖住各自声明的键集
-     ——声明对了但塑形器没给，读侧照样读到空（这正是 `executed` 那一格此前的形态）。
+  ③ 编译臂的图，节点集必须 ⊇ `NODE_FRAMES`（且含 `VISIBLE_NODE`）；两张键集表 ⊆
+     `AgentState.__annotations__`，且 ⊆ `graph_input` 的初值键。
+  ④ 臂源码 AST：`("updates", …)` 二元组 **0 个**；`langgraph_node` 字面量 **0 个**；
+     `frames.py` 里 `*_frame` 构造器 **0 个**（手搓的门全焊死）。
   ⑤ `NODE_FRAMES` 与 `server.py` 从 `updates` 里现取的四个键**恰好**相等。
-  ⑥ `frames.py` 里每个 `*_frame` 构造器只产**一个**顶层键、且那个键在 `NODE_FRAMES` 里；
-     四个键**都有**构造器；`react_arm.py` 的 `("updates", …)` 第二项一律是构造器调用
-     （不许手搓 dict 字面量）。
+  ⑥ 反向对照（本批的核心）：从 `NODE_FRAMES` **删一格** / 往 `GATE_STATE_KEYS` **加一格**
+     / 闭包取空 —— 三种都必须当场判红、且只红那几条。
   ⑦ `NOOP_TEXT` 与 `graph.py` 里那一句**逐字**相等（两处各写一遍是既有事实，先锁住）。
-  ⑧ 反向对照：删一个键 / 加一个键 / 闭包取空 —— 三种都必须被判出来。
-  ⑨ 同意判据用的是**生产那一份** `graph._grant_covers`（源码锁 + 行为锁）。
+  ⑧ 同意判据用的是**生产那一份** `graph._grant_covers`（源码锁 + 行为锁）。
 
 ## 射程（本套件**抓不到**什么，如实划界）
 
@@ -43,8 +59,8 @@ docstring 的；`.get("X", [])` 把"本线没喂"与"本轮确实没有"读成�
     改名的中间变量**不追**（今天 `graph.py` 里那几处辅助函数没有这种写法——它们一律
     直接用形参名）。`**state` 整体展开也不追。
   · 闭包按**函数名**解析调用点，同名函数（嵌套定义遮蔽）只认最后一个。
-  · `react_arm.py` 产 `messages` 通道的分片不在射程（那条通道没有键集，只有
-    `langgraph_node` 一个约定，由 `tests/test_react_arm.py` 守）。
+  · ③ 判的是"图里**有**这些节点名"，判不了"节点之间连对了没有"（拓扑由
+    `tests/test_react_arm.py` 的行为用例守）。
   · `graph.py` 的**写侧**（节点交给图的键）不在这里，那是 `tests/test_state_keys.py`。
 
 用法：.venv/bin/python tests/test_frame_contract.py
@@ -152,21 +168,8 @@ def audit(real: set, declared: set, floor: int = 1) -> bool:
     return not stale and not stray
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 夹具：塑形器真调一次所需的两个替身
-# ══════════════════════════════════════════════════════════════════════════════
-
-class _Ledger:
-    receipts: list = []
-    blocked: list = []
-
-
-class _Exec:
-    calls: list = []
-
-
 def _sec_closure(gtree) -> set:
-    """⓪①②：两个消费端的读侧闭包与声明算双向差集。→ `gate_node` 的闭包（⑧要用）。"""
+    """⓪①②：两个消费端的读侧闭包与声明算双向差集。→ `gate_node` 的闭包（⑥要用）。"""
     g_real = read_closure(gtree, "gate_node")
     p_real = read_closure(gtree, "_confirm_popup")
     check("⓪ 正控：两个闭包都取到了 ≥8 格（取空 ⇒ 后面全是恒真的假绿）",
@@ -176,7 +179,7 @@ def _sec_closure(gtree) -> set:
     g_stale, g_stray = diff(g_real, F.GATE_STATE_KEYS)
     check("①a `GATE_STATE_KEYS` 每一格 `gate_node`（含辅助函数）都真读",
           not g_stale, f"声明了没人读：{g_stale}")
-    check("①b `gate_node` 读的每一格都声明了（漏登 ⇒ 臂少喂一格、闸门静默少开火）",
+    check("①b `gate_node` 读的每一格都声明了（漏登 ⇒ 读侧读到空、闸门静默少开火）",
           not g_stray, f"读了没声明：{g_stray}")
 
     p_stale, p_stray = diff(p_real, F.POPUP_STATE_KEYS)
@@ -187,16 +190,77 @@ def _sec_closure(gtree) -> set:
     return g_real
 
 
-def _sec_shapers() -> None:
-    """③④：声明对了但塑形器没喂 = 读侧照样读到空（`executed` 此前就是这一态）。"""
-    rs = F.round_state({}, {"skill": "chat"}, _Ledger(), [], _Exec(), reply=None)
-    check("③ `round_state` 返回的键盖住 `GATE_STATE_KEYS`（缺一格 = 闸门读到空）",
-          not sorted(F.GATE_STATE_KEYS - set(rs)),
-          f"没喂：{sorted(F.GATE_STATE_KEYS - set(rs))}")
-    ps = F.popup_state({}, {"skill": "chat"}, _Ledger(), [], _Exec())
-    check("④ `popup_state` 返回的键盖住 `POPUP_STATE_KEYS`（`executed` 是 20261012 那一格）",
-          not sorted(F.POPUP_STATE_KEYS - set(ps)),
-          f"没喂：{sorted(F.POPUP_STATE_KEYS - set(ps))}")
+# ══════════════════════════════════════════════════════════════════════════════
+# ③ 结构：图里真有那四个节点；两张表全是声明键
+# ══════════════════════════════════════════════════════════════════════════════
+
+def nodes_ok(nodes: set, declared) -> bool:
+    """图的节点集必须 ⊇ 声明的帧名（判据本体，反向对照也走它）。"""
+    return set(declared) <= set(nodes)
+
+
+def keys_declared(declared, ann: set) -> bool:
+    """键集必须全是 `AgentState` 的声明键（未声明 ⇒ 被 langgraph 静默丢掉）。"""
+    return set(declared) <= set(ann)
+
+
+def _sec_structure() -> None:
+    import agent.react_arm as RA  # noqa: E402
+    from agent.graph import AgentState, graph_input  # noqa: E402
+
+    nodes = set(RA._compiled().get_graph().nodes)
+    check("③a 臂编译出来的图里**真有** `NODE_FRAMES` 那四个节点"
+          "（生产者按名取键，少一个 = 那一格静默丢掉）",
+          nodes_ok(nodes, F.NODE_FRAMES),
+          f"图里={sorted(nodes)} 声明={sorted(F.NODE_FRAMES)}")
+    check("③b `VISIBLE_NODE` 也是图里的真节点（正文那条分片的 `langgraph_node` 由它盖）",
+          F.VISIBLE_NODE in nodes, f"图里={sorted(nodes)}")
+    check("③c 图里**没有多出**别的业务节点（多一个 = 有人在图外面又接了一条路）",
+          nodes - set(F.NODE_FRAMES) <= {"__start__", "__end__"},
+          str(sorted(nodes - set(F.NODE_FRAMES))))
+
+    ann = set(AgentState.__annotations__)
+    check("③d `GATE_STATE_KEYS` 全是 `AgentState` 的**声明键**"
+          "（未声明 ⇒ 被 langgraph 静默丢掉，本仓为此付过 13 次代价）",
+          keys_declared(F.GATE_STATE_KEYS, ann),
+          str(sorted(set(F.GATE_STATE_KEYS) - ann)))
+    check("③e `POPUP_STATE_KEYS` 同上",
+          keys_declared(F.POPUP_STATE_KEYS, ann),
+          str(sorted(set(F.POPUP_STATE_KEYS) - ann)))
+    g0 = set(graph_input([]))
+    check("③f 两张表的键在 `graph_input` 的**初值**里也有"
+          "（不是「声明了、但谁都没写过」——那等于读侧恒读到空）",
+          (set(F.GATE_STATE_KEYS) | set(F.POPUP_STATE_KEYS)) <= g0,
+          str(sorted((set(F.GATE_STATE_KEYS) | set(F.POPUP_STATE_KEYS)) - g0)))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ④ 手搓的门焊死了没有
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _sec_no_handmade(atree, ftree) -> None:
+    """臂里不许再有"手搓帧"的痕迹——适配器的本体就是这三样。"""
+    tuples = [n.lineno for n in ast.walk(atree)
+              if isinstance(n, ast.Tuple) and len(n.elts) == 2
+              and isinstance(n.elts[0], ast.Constant)
+              and n.elts[0].value in ("updates", "messages", "values")]
+    check("④a 臂源码里**一个手搓的 `(\"updates\", …)` 二元组都没有**"
+          "（图里没有地方可以手搓，回来一个就等于适配器回来一半）",
+          not tuples, f"行号 {tuples}")
+
+    # `langgraph_node` 是**生产者读的键**，臂只许让它由 langgraph 自己盖。
+    # 扫 `ast.Constant` 而不是文本：模块头注里**正解释着**"不再冒充 langgraph_node"，
+    # 文本扫会把那句说明当成命中（批 1 记下的坑：**锁的落点要选判据别选字面**）。
+    fake = [n.lineno for n in ast.walk(atree)
+            if isinstance(n, ast.Constant) and n.value == "langgraph_node"]
+    check("④b 臂源码里没有 `langgraph_node` 这个字面量（不再给分片冒充节点名）",
+          not fake, f"行号 {fake}")
+
+    made = [fn.name for fn in ftree.body
+            if isinstance(fn, ast.FunctionDef) and fn.name.endswith("_frame")]
+    check("④c `frames.py` 里 `*_frame` 构造器一个都不剩"
+          "（留着它，下一个人就能在图外面再手搓一份形状对的帧）",
+          made == ["tool_frame"], str(made))
 
 
 def _consumed_updates(stree) -> set:
@@ -214,47 +278,15 @@ def _consumed_updates(stree) -> set:
     return out
 
 
-def _frame_builders(ftree) -> dict:
-    """`frames.py` 里每个 `*_frame` 构造器 return 的那个 dict 字面量的键。"""
-    made: dict = {}
-    for fn in ftree.body:
-        if not isinstance(fn, ast.FunctionDef) or not fn.name.endswith("_frame"):
-            continue
-        for node in ast.walk(fn):
-            if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
-                made[fn.name] = [k.value for k in node.value.keys
-                                 if isinstance(k, ast.Constant)]
-    return made
-
-
-def _sec_frames(ftree, atree, stree) -> None:
-    """⑤⑥：帧名三处同源；臂的 updates 帧一律走构造器，不许手搓 dict。"""
+def _sec_frames(stree) -> set:
+    """⑤：帧名三处同源——声明 = 生产者现取 = 图里的节点。→ 生产者现取的键集（⑥e 要用）。"""
     consumed = _consumed_updates(stree)
     check("⑤a `server.py` 确实按名消费 updates（扫面没被改窄）",
           len(consumed) >= 4, f"取到 {sorted(consumed)}")
     check("⑤b `NODE_FRAMES` 与 `server.py` 现取的键集**恰好**相等",
           consumed == set(F.NODE_FRAMES),
           f"server={sorted(consumed)} frames={sorted(F.NODE_FRAMES)}")
-
-    made = _frame_builders(ftree)
-    check("⑥a `frames.py` 每个 `*_frame` 只产一个顶层键",
-          made and all(len(v) == 1 for v in made.values()), str(made))
-    produced = {v[0] for v in made.values() if len(v) == 1}
-    check("⑥b 四个帧名**都有**构造器（新增帧名不补构造器 = 臂只能手搓）",
-          produced == set(F.NODE_FRAMES),
-          f"构造器产={sorted(produced)} 帧名={sorted(F.NODE_FRAMES)}")
-
-    aliases = {a.asname or a.name
-               for n in ast.walk(atree)
-               if isinstance(n, ast.ImportFrom) and n.module == "agent.frames"
-               for a in n.names}
-    bad = [ast.dump(n.elts[1])[:60] for n in ast.walk(atree)
-           if isinstance(n, ast.Tuple) and len(n.elts) == 2
-           and isinstance(n.elts[0], ast.Constant) and n.elts[0].value == "updates"
-           and not (isinstance(n.elts[1], ast.Call) and isinstance(n.elts[1].func, ast.Name)
-                    and (n.elts[1].func.id in aliases or n.elts[1].func.id in made))]
-    check("⑥c `react_arm.py` 的 updates 帧一律走构造器（手搓 dict = 第二份形状）",
-          not bad, str(bad))
+    return consumed
 
 
 def _sec_noop(gtree) -> None:
@@ -266,31 +298,51 @@ def _sec_noop(gtree) -> None:
           len(hits) == 1, f"graph.py 里命中 {len(hits)} 处")
 
 
-def _sec_reverse(g_real: set) -> None:
-    """⑧：四个方向都必须判出来 —— 证明上面那几条不是恒绿（正控不红不算数）。"""
+def _sec_reverse(g_real: set, nodes: set, ann: set, consumed: set) -> None:
+    """⑥：正控不红不算数 —— 每一种"改坏"都必须当场判红。
+
+    ⚠️ 有一条**故意不在这里**：「从 `NODE_FRAMES` 删一格」。③a 是 ⊇ 判据，
+    **删掉一条要求正是"少要一个名字"**——⊇ 只会更松，判绿是**对的**（同族：本仓
+    「收窄判据会架空测试尺子」）。删一格能被抓到的落点是 **⑤b 的相等判据**
+    （生产者现取的键集不再等于声明），所以它归 ⑥e。
+    """
     declared = set(F.GATE_STATE_KEYS)
     one = sorted(declared)[0]
     thin = set(list(g_real)[:3])
     cases = (
-        ("⑧a 反控：从台账里**删**一格 ⇒ 判出来（源码在读）",
-         g_real, declared - {one}, f"删了 {one} 仍判绿 = 这条判据恒真"),
-        ("⑧b 反控：往台账里**加**一格 ⇒ 判出来（没人读）",
-         g_real, declared | {"no_such_state_key"}, "加了假键仍判绿 = 这条判据恒真"),
-        ("⑧c 反控：闭包**取空** ⇒ 判出来（空集与干净集在差集上同形）",
-         set(), declared, "取空仍判绿 = 扫面坏了不响"),
-        ("⑧d 反控：闭包只取到零星几格（低于 floor）⇒ 判出来",
-         thin, declared, "扫面被改窄到 3 格仍判绿"),
+        ("⑥a 反控：从台账里**删**一格 ⇒ 判出来（源码在读）",
+         not audit(g_real, declared - {one}, floor=8), f"删了 {one} 仍判绿 = 判据恒真"),
+        ("⑥b 反控：往台账里**加**一格 ⇒ 判出来（没人读）",
+         not audit(g_real, declared | {"no_such_state_key"}, floor=8),
+         "加了假键仍判绿 = 判据恒真"),
+        ("⑥c 反控：闭包**取空** ⇒ 判出来（空集与干净集在差集上同形）",
+         not audit(set(), declared, floor=8), "取空仍判绿 = 扫面坏了不响"),
+        ("⑥d 反控：闭包只取到零星几格（低于 floor）⇒ 判出来",
+         not audit(thin, declared, floor=8), "扫面被改窄到 3 格仍判绿"),
+        ("⑥e 反控：从 `NODE_FRAMES` **删**一格 ⇒ 判出来（抓它的是 ⑤b 的**相等**判据，"
+         "不是 ③a 的 ⊇——少要一个名字只会让 ⊇ 更松）",
+         not (consumed == set(n for n in F.NODE_FRAMES if n != "gate")),
+         "删了 `gate` 仍判绿 = 那条相等判据没在看声明"),
+        ("⑥f 反控：往 `NODE_FRAMES` **加**一格（图里没有）⇒ 判出来",
+         not nodes_ok(nodes, (*F.NODE_FRAMES, "reflector")),
+         "加一个不存在的节点仍判绿 = 那条判据没在看图"),
+        ("⑥g 反控：往 `GATE_STATE_KEYS` **加**一格（未声明键）⇒ 判出来"
+         "（这正是「未声明键被静默丢掉」那一族）",
+         not keys_declared((*F.GATE_STATE_KEYS, "no_such_state_key"), ann),
+         "加了未声明键仍判绿 = 那条判据没在看声明"),
+        ("⑥h 反控：把 `AgentState` 的声明取空 ⇒ 判出来（空集与干净集同形）",
+         not keys_declared(F.GATE_STATE_KEYS, set()), "声明取空仍判绿"),
     )
-    for desc, real, fake, why in cases:
-        check(desc, not audit(real, fake, floor=8), why)
+    for desc, ok, why in cases:
+        check(desc, ok, why)
 
 
 def _sec_consent(ltree) -> None:
-    """⑨：同意判据 = 生产那一份（源码锁 + 行为锁，六格行为）。"""
+    """⑧：同意判据 = 生产那一份（源码锁 + 行为锁，六格行为）。"""
     lsrc = LINE.read_text(encoding="utf-8")
-    check("⑨a `react_line` 直调生产的 `_grant_covers`（不许自写一份等价判据）",
+    check("⑧a `react_line` 直调生产的 `_grant_covers`（不许自写一份等价判据）",
           "from agent.graph import" in lsrc and "_grant_covers(" in lsrc)
-    # ⑨b 走 AST 不走文本：`_consent_missing` 的 docstring 里**正记着**那句旧写法
+    # ⑧b 走 AST 不走文本：`_consent_missing` 的 docstring 里**正记着**那句旧写法
     # （"这里此前写的是 `not self.grant`"），文本扫会把它当成代码命中 ⇒ 假红。
     # 判据是"函数体里没有 `self.grant` 这个取值"，docstring 不算函数体。
     cm = next((f for f in ast.walk(ltree)
@@ -301,9 +353,9 @@ def _sec_consent(ltree) -> None:
     reads = [n for b in body for n in ast.walk(b)
              if isinstance(n, ast.Attribute) and n.attr == "grant"
              and isinstance(n.value, ast.Name) and n.value.id == "self"]
-    check("⑨b `_consent_missing` 函数体里没有 `self.grant`（收窄前那一版，20261012 之前）",
+    check("⑧b `_consent_missing` 函数体里没有 `self.grant`（收窄前那一版，20261012 之前）",
           cm is not None and not reads, f"命中 {len(reads)} 处")
-    check("⑨c `executed` 现算自 `executor.calls`（生产由 execute_node 累积，臂不回写）",
+    check("⑧c `executed` 现算自 `executor.calls`（生产由 execute_node 累积，臂不回写）",
           "executed_specs(self.calls)" in lsrc)
 
     import agent.authz as authz  # noqa: E402
@@ -312,7 +364,7 @@ def _sec_consent(ltree) -> None:
 
     spec = 'delete_tag({"name": "大笨狗"})'
     admin = Principal(uid=0, role="admin")
-    check("⑨d 夹具前提：`delete_tag` 确实落在同意闸的 scope 里",
+    check("⑧d 夹具前提：`delete_tag` 确实落在同意闸的 scope 里",
           authz.requires_consent(admin, "delete_tag"), "前提不成立 ⇒ 下面几格全无意义")
 
     def missing(grant=None, executed=(), calls=()):
@@ -324,34 +376,41 @@ def _sec_consent(ltree) -> None:
 
     ok = {"skill": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]}
     other = {"skill": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "别的"}}]}
-    check("⑨e 无令牌 ⇒ 判「没获同意」", missing() is True)
-    check("⑨f 令牌签名体里**正是这一件** ⇒ 放行（这是令牌的正常用法）",
+    check("⑧e 无令牌 ⇒ 判「没获同意」", missing() is True)
+    check("⑧f 令牌签名体里**正是这一件** ⇒ 放行（这是令牌的正常用法）",
           missing(ok) is False)
-    check("⑨g 令牌是**另一件**（同工具换目标）⇒ 仍判「没获同意」（20261012 第一次收窄）",
+    check("⑧g 令牌是**另一件**（同工具换目标）⇒ 仍判「没获同意」（20261012 第一次收窄）",
           missing(other) is True)
-    check("⑨h 令牌签名体**只有 skill 没有 specs**（生产不产这种形状）⇒ 不算覆盖",
+    check("⑧h 令牌签名体**只有 skill 没有 specs**（生产不产这种形状）⇒ 不算覆盖",
           missing({"skill": "tag_delete"}) is True)
-    check("⑨i 这一轮**已经执行过**同一件 ⇒ 令牌作废（20261012 第二次收窄）",
+    check("⑧i 这一轮**已经执行过**同一件 ⇒ 令牌作废（20261012 第二次收窄）",
           missing(ok, executed=[spec]) is True)
-    check("⑨j 本线真跑过的那件（`executor.calls`）同样让令牌作废",
+    check("⑧j 本线真跑过的那件（`executor.calls`）同样让令牌作废",
           missing(ok, calls=[{"tool": "delete_tag", "args": {"name": "大笨狗"}}]) is True)
 
 
 def main() -> int:
+    import agent.react_arm as RA  # noqa: E402
+    from agent.graph import AgentState  # noqa: E402
+
     gtree = ast.parse(GRAPH.read_text(encoding="utf-8"))
     atree = ast.parse(ARM.read_text(encoding="utf-8"))
     ftree = ast.parse((ROOT / "agent" / "frames.py").read_text(encoding="utf-8"))
     stree = ast.parse(SERVER.read_text(encoding="utf-8"))
     ltree = ast.parse(LINE.read_text(encoding="utf-8"))
+    nodes = set(RA._compiled().get_graph().nodes)
+    ann = set(AgentState.__annotations__)
 
-    print("[扫面] frames.py 声明 gate=%d 格 / popup=%d 格 / 帧名 %s"
-          % (len(F.GATE_STATE_KEYS), len(F.POPUP_STATE_KEYS), list(F.NODE_FRAMES)))
+    print("[扫面] frames.py 声明 gate=%d 格 / popup=%d 格 / 帧名 %s / 图节点 %s"
+          % (len(F.GATE_STATE_KEYS), len(F.POPUP_STATE_KEYS), list(F.NODE_FRAMES),
+             sorted(nodes)))
 
     g_real = _sec_closure(gtree)
-    _sec_shapers()
-    _sec_frames(ftree, atree, stree)
+    _sec_structure()
+    _sec_no_handmade(atree, ftree)
+    consumed = _sec_frames(stree)
     _sec_noop(gtree)
-    _sec_reverse(g_real)
+    _sec_reverse(g_real, nodes, ann, consumed)
     _sec_consent(ltree)
 
     print()

@@ -36,6 +36,19 @@
   `intent_frames` 对 conv 不是 int 的一轮**静默返回空**（实测 `conv: null / frames: 0`）
   ⇒ 剩下的那件**不执行、不上卡、不登记**，无声消失（叙述倒是诚实的，会明说没办成）。
   同族写族混合作业（`mix2_*`/`mt3_*`）都带会话 id，新用例照此补齐。
+- **第二条臂的循环拆成真节点，外层适配器退场**（`agent/react_arm.py` 900 行 → 四节点图；
+  `create_agent` / `ConvergenceMiddleware` / `wrap_tools_with_receipts` 删除）。臂现在是一棵
+  真的 `StateGraph`：`planner`/`execute`/`model`/`gate` 是编译进图的节点，`gate_node` 与
+  `_confirm_popup` 拿到的是**真 `AgentState`**（不再是塑形出来的最小 dict），`langgraph_node`
+  由 langgraph 自己盖（不再冒充），三份塑形器与五个帧构造器一起删掉。**两处刻意的口径差、
+  明写不假装同源**：① **真流式**——narrator 的分片由 LLM 流给（生产今天就是这个形状），
+  代价是分片在闸门**之前**出去（生产同形，`__RESET__` 负责撤屏）；② **`gate` 节点异常
+  吞掉按 pass 处理**（闸门是加装的一层，它自己炸了不该把主人这一轮的答复整条吃掉）。
+  **行为变更只落在 react 臂**：生产默认 `AGENT_ARM=graph`，`graph.py` 与 `server.py`
+  **一个字节没动**、线上路径逐字节不变。判据从"喂没喂"换成**结构锁**
+  （`tests/test_frame_contract.py` ③④：图里真有那四个节点名、两张键集表全是 `AgentState`
+  的声明键、臂源码 AST 里手搓 `("updates", …)` / `langgraph_node` 字面量 / `*_frame`
+  构造器一个都不许有）。
 
 ## 20261015
 
