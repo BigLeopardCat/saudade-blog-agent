@@ -887,6 +887,27 @@ check("  `article_id` 与 `article_ids` 同时给 ⇒ 合并去重、不丢 id",
 check("  一个 id 都给不出 ⇒ 零工具 + 问清（不许悄悄挑一篇）",
       not instantiate_plan("article_status",
                            {"article_ids": [0, -1], "is_top": 1})["tools"])
+# 20261015：`article_ids` 的**文本形态**（生产 trace `20261015T080030` 逐字：
+# `{"article_id": 54, "article_ids": "[54, 13, 11, 10]"}`）。旧解析器只认真数组，
+# 字符串一律交 `_norm_pos_int` ⇒ 空表 ⇒ 那一格**等于没填**，另外三篇一个字都没提。
+_text = instantiate_plan("article_status",
+                         {"article_id": 54, "article_ids": "[54, 13, 11, 10]",
+                          "status": "private"})
+check("  文本形态的清单照认（JSON 那一串：4 篇一条不少）",
+      len(_text["tools"]) == 4 and '"article_id": 10' in _text["tools"][-1],
+      str(_text["tools"]))
+check("  顿号/空白/引号包着也认（同一族写法不该各有各的命）",
+      len(instantiate_plan("article_status",
+                           {"article_ids": "54、13， 11", "status": "private"})["tools"]) == 3
+      and len(instantiate_plan("article_status",
+                               {"article_ids": "'22'", "status": "private"})["tools"]) == 1)
+check("  ★ 认不出 ≠ 没给：片段认不出 ⇒ 零工具 + 问清（不许只办认出来的那几篇）",
+      not instantiate_plan("article_status",
+                           {"article_ids": "54, 13, 看看这两篇", "status": "private"})["tools"])
+check("  零工具那一轮的注记里点出认不出的片段（主人得知道是哪一段读不懂）",
+      "看看这两篇" in instantiate_plan("article_status",
+                                       {"article_ids": "54, 13, 看看这两篇",
+                                        "status": "private"})["note"])
 
 
 # ══════════════════════════════════════════════════════════════════

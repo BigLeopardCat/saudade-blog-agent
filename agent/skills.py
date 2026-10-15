@@ -389,13 +389,28 @@ def _norm_pos_int(value) -> int | None:
     return int(s) if s.isdigit() and int(s) > 0 else None
 
 
-def _pos_int_list(value) -> list[int]:
-    """实参 → **去重保序**的正整数列表（多篇形态用，见 `article_status.article_ids`）。
+# 数字清单的**定格式**（见 `_pos_int_list`）：剥掉成对的括号/引号，再按逗号/顿号/
+# 分号/斜杠/空白切分。这两条是**标点级**的封闭类，不是"中文词表"——它们拆的是
+# **固定格式**的文本，与 `agent/provenance.py::parse_evidence` 收五种形状是同一条
+# 纪律（形状漂移的代价不该由主人承担）。挂在变量上而不是塞进集合字面量里，也顺带
+# 不惊动 `eval/wordlist_gate.py` 的穷举量（它数的是"住在集合里的中文串"，标点不算）。
+_LIST_WRAP = "[](){}<>（）【】「」『』“”\"'` \t\r\n"
+_LIST_BREAK = ",;|/、，；\t \r\n"
 
-    不是列表时也认单个值（`"22"` → `[22]`），认不出的一律丢掉。返回**空表**而不是
-    None：调用方那条"一个 id 都没给"的守卫读的是 `not aids`，于是"没给"与"给的东西
-    一个都认不出"走同一条零工具路径——与 `_norm_pos_int` 的 None 同义，只是外面套了
-    一层数组（20260928 那条教训：同一个语义有两种表示，两边迟早只认一种）。
+
+def _pos_int_list(value) -> tuple[list[int], list[str]]:
+    """实参 → （**去重保序**的正整数表，**认不出的原样片段**）。
+
+    多篇形态用（`article_status.article_ids`）。两类实参都收：真数组，或**一段写着
+    清单的文本**——后者是模型交上来的常见形状（20261015 生产 trace
+    `20261015T080030` 实证：`article_ids` 填成 `"[54, 13, 11, 10]"`），从前一律丢掉
+    ⇒ 只算 `article_id` 那一篇、其余几篇**不留任何痕迹**（20261009「剩下的篇不留
+    痕迹」换了一张脸）。文本形态按上面的**定格式**解析，认不出的片段一个都不猜。
+
+    **认不出的必须回传给调用方**：旧签名两种情况都返回空表，而"没给"与"给的东西
+    一个都认不出"**不是同一件事**——调用方那条 `not aids` 守卫会把后一种也当成"缺
+    id"，于是多篇请求静默降级成单篇。回传片段让调用方**响亮地零工具问清**（同
+    `_norm_pos_int` 的 None：同一个语义只有一种表示，这是 20260928 那条教训的另一半）。
     """
     if isinstance(value, (list, tuple)):
         out: list[int] = []
@@ -403,9 +418,28 @@ def _pos_int_list(value) -> list[int]:
             n = _norm_pos_int(x)
             if n is not None and n not in out:
                 out.append(n)
-        return out
-    n = _norm_pos_int(value)
-    return [n] if n is not None else []
+        return out, []
+    if isinstance(value, bool) or value is None:
+        return [], []
+    text = str(value).strip()
+    if not text:
+        return [], []
+    flat = text.strip(_LIST_WRAP).strip()
+    one = _norm_pos_int(flat)
+    if one is not None:
+        return [one], []          # 单个值（`"22"` / `"[22]"`）——与旧行为逐字节同
+    for ch in _LIST_BREAK:
+        flat = flat.replace(ch, " ")
+    out2: list[int] = []
+    bad: list[str] = []
+    for piece in flat.split():
+        n = _norm_pos_int(piece.strip(_LIST_WRAP))
+        if n is None:
+            if piece not in bad:
+                bad.append(piece[:20])
+        elif n not in out2:
+            out2.append(n)
+    return out2, bad
 
 NAV_VALID_PATHS: set[str] = set(_NAV_EXACT_PATHS)
 
@@ -3774,10 +3808,18 @@ def _instantiate_plan(skill_name: str, params: dict,
             # **可以同时给**（模型把第一篇写进单个槽、其余写进数组是常见形态）⇒ 合并成
             # 一份去重保序的清单；只给单个槽时逐字节等价于旧行为。数组本身的语义是
             # "这个动作对这几篇各来一次"（一篇一条 spec），不是"一篇文章几个 id"。
-            aids = _pos_int_list(params.get("article_ids"))
+            aids, bad_ids = _pos_int_list(params.get("article_ids"))
             if aid is not None:
                 aids = [aid] + [x for x in aids if x != aid]
-            if not aids:
+            if bad_ids:
+                # **认不出 ≠ 没给**（见 `_pos_int_list`）：宁可整轮零工具问清，也不许
+                # 悄悄只办认出来的那几篇——主人点的是 5 篇、办 1 篇而一个字都不提，
+                # 正是 20261009 起写在这里的那条纪律（20261015 补上"值在、但解析不出"
+                # 这一格：那一轮 `article_ids` 填成了文本清单，其余三篇无声消失）。
+                note = (f"{skill.name} 的 article_ids 里有认不出的片段"
+                        f"（{'、'.join(bad_ids[:3])}）：不调用任何工具，"
+                        "如实向主人问清这次要改哪几篇")
+            elif not aids:
                 note = (f"{skill.name} 缺少文章 id（article_id）：不调用任何工具，"
                         "如实向主人问清是哪一篇文章；若不知道 id，"
                         "先选 admin_notes 技能读出后台文章清单再回来")
