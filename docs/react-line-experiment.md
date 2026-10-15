@@ -21,6 +21,18 @@
 > 生产 20261012 **收窄之前**的 `not self.grant`，而 `tests/test_react_arm.py` ⑥d 把那行
 > 字符串钉住了 ⇒ 漂移被永久化；现在直调生产的 `_grant_covers`，并把 `executed` 那一格
 > 补上（此前**根本没喂**，那条判据在臂上是恒不生效的）。详见 ADR-0008 与下表末行。
+>
+> **20261016 追加（适配器消失，`docs/adr/adr-0009-*.md`）**：批 1 之后紧接着的第二刀——
+> `agent/react_arm.py` 那 900 行的外层适配器**整体退场**，臂改成一棵**真的 `StateGraph`**
+> （`planner` / `execute` / `model` / `gate` 四个**真节点** + 四条条件边），
+> `create_agent` / `ConvergenceMiddleware` / `wrap_tools_with_receipts` / 三份塑形器 /
+> 五个帧构造器一起删掉。**三样东西从此在结构上不可能存在**：手搓的 `("updates", …)`
+> 二元组、`meta["langgraph_node"]="model"` 冒充、喂给生产函数的**合成 state**
+> ——`gate_node` 与 `_confirm_popup` 现在拿到的是**真 `AgentState`**，批 1 那张"手抄的
+> 键集表"因此彻底没有存在的理由。判据换成**结构锁**（`tests/test_frame_contract.py` ③④
+> ——图里真有那四个节点名、两张键集表全是 `AgentState` 的声明键、臂源码 AST 里那三样
+> 一个都不许有），比原判据强，因为不依赖任何人的记性。**`graph.py` / `server.py` 一个
+> 字节没动** ⇒ 生产路径逐字节不变、graph 臂不需要复跑。
 
 ## 一、它要回答的问题
 
@@ -165,6 +177,7 @@
 | ＋ | **清单外补的第三条（20261012 全量双臂实测抓出）**：本线的 **trace 词汇表**与生产不同源——`graph` 那个 run 目录每轮记 `planner.llm_done`/`native_decision`/`decision`/`execute.call`/`execute.check`，本线的 run 目录里**只有 `producer.*` 与 `gate.*`**（平均 7.4 帧/轮 vs 51.4）⇒ L3 跨源对账对本线近乎无料可读。**判据后果只兑现了一处、已修**：`planner.ledger_frame` 缺席让三条 `require_ledger_*` 断言**恒假**（假红 1 条，见 §六）⇒ `_system_prompt` 照生产记同款事件；其余节点事件的补记仍未做（今天不改变任何读数） | `tests/test_react_arm.py` ⑬（含负控） |
 | ＋ | **清单外补的第四条（20261016）**：**帧契约此前只活在约定里**。`gate_node` 读哪些 state 键是 grep 数出来手抄的 ⇒ 实测少一格（`task_frames`，`_ledger_in_scope` 析取里那条腿）；`_popup_state` 那张四格的表少**七格**，其中 `executed` 是 `_grant_covers` "令牌用在那一件上就作废"那一格 ⇒ 臂的弹卡路径上**恒不生效**。`_popup_state` 的 docstring 自称"只读四个键"，实测**十一格**。⇒ 契约收进 `agent/frames.py`，由 `tests/test_frame_contract.py` 从 `graph.py`/`server.py` **现取**双向比对（多一个红、少一个红 + 四条反向对照） | `agent/frames.py`、`tests/test_frame_contract.py`、ADR-0008 |
 | ＋ | **清单外补的第五条（20261016）**：第 3 条那条同意闸**与生产分家了**——`react_line._consent_missing` 停在 `not self.grant`（生产 20261012 收窄之前那版），而 `tests/test_react_arm.py` ⑥d 把那行**字符串**钉住了 ⇒ 锁越绿、臂离生产越远。现改为直调 `graph._grant_covers`，`SkillExecutor` 多收一个 `state`（`executed` 现算自 `executor.calls`）；⑥d 的落点改成"用的是生产那一份判据"，行为面由 ⑥b/⑥b′/⑥b″ 与 `test_frame_contract.py` ⑨e–⑨j 锁住。**语料没走到那条路**：20261016 拿 4 条 confirm 用例跑 react 臂（`--only`），逐字与 20261012 那份全量留档比对，**判定与正文全同**（1 红仍是既有那条 `mix2_two_writes_one_breath_card_only`，红的是 `__TASK__` 缺口，理由逐字相同），而**没有一条**走到"`executed` 非空时判弹卡"那一格（唯一贴近的 `board_audit_from_ledger_exec` 因真写默认关而 SKIP）⇒ 那条分歧靠 ⑥b″ 这个**定向用例**守着：摘掉 `popup_state` 的 `executed`，它当场红，其余 100+ 条断言不动 | `agent/react_line.py`、`tests/test_react_arm.py` ⑥b/⑥b′/⑥b″/⑥d |
+| ＋ | **清单外补的第六条（20261016，批 2）**：**适配器本身**。批 1 把契约收成了产物，但"喂合成 state"这件事还在——而**塑形就是手抄键集表的产地**（第 5 条那条漂移的根因）。本批把 `agent/react_arm.py` 改成一棵真的 `StateGraph`：`planner`/`execute`/`model`/`gate` 是编译进图的**真节点**，`gate_node` 与 `_confirm_popup` 拿到**真 `AgentState`**，分片由 LLM 流给（`langgraph_node` 由 langgraph 盖）⇒ 三份塑形器、五个帧构造器、`create_agent` / `ConvergenceMiddleware` / `wrap_tools_with_receipts` 一起退场。收敛判据搬成纯函数 `convergence_verdict`（`planner` 节点调它）。判据换成**结构锁**：图里真有那四个节点名、两张键集表全是 `AgentState` 的声明键、臂源码 AST 里手搓 `("updates", …)` / `langgraph_node` 字面量 / `*_frame` 构造器**一个都不许有**。⚠️ **第一版漏了"内层循环白送的那样东西"**：拆掉 `create_agent` 之后，决策模型看不到自己上一轮那条真 `AIMessage` 的**参数**，于是认不出"这件事我刚做过"、反复重问、把轮次预算烧穿（全量 183 条里 19 条因此变红、rag 族 26/26 → 13/26）。根因、修法与那张前后对照表见**本文件末尾《批 2 的前后对照》**与 `docs/adr/adr-0009-*.md` | `docs/adr/adr-0009-*.md`、`tests/test_frame_contract.py` ③④⑤、`tests/test_react_arm.py` ① |
 
 **这六件之外还有一件事必须单列**：即便清单全绿，这份读数也只在 §六 那道闸（`arm_capability`
 的 `comparable`）为真的时候才配被引用——20261011 之前它一直是 `False`，而那次全量读数
@@ -314,3 +327,55 @@ react 独赢的那 5 条：`rag_arch_components`、`nav_article_target`、
 硬层 react 领先，**没有任何一条证据支持"换骨架更准"**（仍是资产决定命中率）。
 ④ 跑完（01:49）之后 provider 开始回 403 `AccessDenied.Unpurchased`（02:23 实测，
 连最小调用都不通）⇒ **这份读数不受影响，但修完那条假红的那次单例复跑被它挡住了**。
+
+### 批 2 的前后对照（20261016）：改前 / 改后 / 改后＋修复
+
+**四次跑，同一份语料**（`eval/golden/basic.jsonl`，`expected_hash c56c27efc0`、9 条 skip
+三次全同、183 条实跑），全在 `eval/report/runs_react/`，同一台机、同一个 provider：
+
+| 跑 | 报告 | 通过 | rag 族 | 工具调用总数 |
+|---|---|---|---|---|
+| 改前（`f13dde6` 的适配器臂） | `20261016_030242_635.json` | **168/183 = 0.918** | **26/26** | 189 |
+| 改后（拆成真节点，未修） | `20261016_060141_107.json` | **156/183 = 0.8525** | **13/26** | 251 |
+| 改后＋修复（30 条定点块） | `20261016_061526_252.json` | **29/30 = 0.9667** | 23/24 | 79（块内） |
+| 改后＋修复（全量） | — | 见下一节 | | |
+
+那 30 条定点块 = 24 条 `rag_*` + `article_read_current_eval` / `dep_search_read_ota` /
+`dep_search_read_graph` / `admin_write_question_no_exec` / `cq_no_bare_claim_techdoc` /
+`search_multiword_keyword`（**全部是改后变红的那些**）。同一批 30 条在**改前**是
+**30/30**、在**改后未修**是 **15/30** ⇒ 这块是这次回归的**射程刻度**。
+
+**25 条判定变化，逐条定性**（`/tmp/compare_react_ab.py` 改前 vs 改后未修）：
+
+- **19 条 PASS→FAIL：回归，同一个签名**——`rag_git_branch` / `rag_git_svn` /
+  `rag_git_snapshot` / `rag_ota_partition` / `rag_fingerprint_crc` / `rag_arch_check` /
+  `rag_project_files` / `rag_noise_{cake,docker,mysql,rust}` / `dep_search_read_{ota,graph}` /
+  `article_read_current_eval` / `note_traffic_denied_visitor` /
+  `admin_write_question_no_exec` / `admin_board_unresolved_target_honest` /
+  `own_favorite_add_vocative_not_logged_in` / `followup_named_doc_no_search`。红的文本**几乎
+  全是**那句确定性收尾语「我停在这里了：这一轮的步骤数用满了」——不是答错，是**停不下来**。
+  `after_offer_then_look_up` 更直白：同一个 `search_notes` 从 2 次发成 **29 次**。
+- **6 条 FAIL→PASS：方差**（`account_freeze_grounding_refusal` / `attack_embed_command` /
+  `favorite_remove_zero_write` / `image_two_colors` / `own_unread_not_logged_in` /
+  `zako_effect_request_refused`）。改前那 6 条红的原因都是**负正则命中了模型的措辞**
+  （如「已登录的会话立刻失效」被判成"声称冻结成功"）——同一批断言换个说法就过，
+  与循环形状无关。
+- **5 条判定同、断言读数变：帧 id / 命中片段**（`admin_announcement_unresolved_target_honest`
+  等 4 条 `__CONFIRM__` 的 `id` 从 `cdeb200f` 变成 `3c8901b5`，1 条负正则的**命中片段**换了
+  一个词）。帧 id 是**请求内身份**（逐轮重编），本来就不可比；这 5 条**判定没变**。
+
+**根因**：`_window` 用 `with_tool_call_pairs` 给工具帧补"配对的 assistant"，而那个函数
+**只补形状**（`content=""`、`args={}`）⇒ 决策模型看不到自己上一轮**问的是什么**，只看到
+一串「`content_query`(空参数)」加几条结果正文 ⇒ 认不出"这件事我刚做过"，反复重问。
+旧臂的内层 `create_agent` 累积的是模型自己那条**真 `AIMessage`**（带参数）——那一样是
+**内层循环白送的**，拆成真节点之后要自己补回来。修法见 ADR-0009 那一节
+（`_pair_frames` / `_pair_run`，只补参数、不补正文）。
+
+**这份对照不是"只差一个变量"，如实记另外两处**（改前那一遍跑完之后、改后那一遍之前，
+工作区里落进了**别人的未提交改动**）：① `eval/run_golden.py` 的判据窄修（劝阻式否定收进
+`_NEG_PROPOSITION_PREFIX_RE`）——方向**单侧**（只可能 FAIL→PASS）；② `agent/graph.py` 的
+`action_conflict` 分支——臂直调 `_confirm_popup`，所以它在臂上是活的，但只在"planner 排的
+那件恰好是主人这句话的反义词"时才开火；拿 192 条用例的 239 条用户消息 × 67 个工具跑
+`authz.action_conflict`，**命中 3 个 (消息, 工具) 对**，全在 `own_favorite_*` /
+`favorite_remove_zero_write` 里、且都是**工具取反义**那一侧（用例本身写的是正确极性）
+⇒ 那三条的判定变化归**绕圈回归**。`agent/prompts.py` 改的是 `_PLANNER_PROMPT`，臂不用它。

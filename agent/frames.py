@@ -2,8 +2,8 @@
 """帧契约：第二条臂（`agent/react_arm.py`）与生产（`graph.py` / `server.py`）之间的唯一事实源。
 
 **为什么有这个模块**（20261016，`docs/adr/adr-0008-*`）。`agent/react_arm.py` 是**第二份
-实现**：它用另一套循环（`create_agent` + 收敛判据 + 回执台账）产出**与生产逐字相同的帧**。
-两套实现共享一份契约，而契约此前**只活在约定里**——三处症状，全都在这个仓里付过代价：
+实现**：它产出**与生产逐字相同的帧**。两套实现共享一份契约，而契约此前**只活在约定里**
+——三处症状，全都在这个仓里付过代价：
 
   ① **消费面靠 grep 数出来**。`gate_node` 从 state 读哪些键，是用 `awk` 切出函数体逐行
      grep 数的，抄成一张七格的表贴在 `_round_state` 的 docstring 里，另外三格（它调用的
@@ -20,6 +20,19 @@
 本模块把这一层**写下来并交给机械锁**（`tests/test_frame_contract.py`）：键集从 `graph.py`
 现取、与这里的声明算**双向**差集（多一个红、少一个红），并带反向对照。规矩与本仓既有的
 `tests/test_state_keys.py` 同族——**手抄的表必须由机器守，且守的必须是取值本身**。
+
+**批 2（20261016）之后本模块瘦了一圈，判据反而更强**：臂不再手搓 `updates` 二元组、不再
+给分片冒充 `langgraph_node`、不再合成 state —— 它是一张真的 `StateGraph`
+（`docs/adr/adr-0009-*`），`planner`/`execute`/`model`/`gate` 是编译进图里的**真节点**，
+那两个生产资产拿到的是**真 state**。于是本模块从"手搓时该填什么"的说明书，变成
+**"结构上必须成立什么"**的判据来源：
+
+  · `NODE_FRAMES` —— 编译出来的图的节点集必须 ⊇ 这四个名字（producer 按名取键，
+    多一个名字无害、少一个是那一格**静默丢掉**）；
+  · `VISIBLE_NODE` —— 用户可见正文挂的节点名（`run_golden` 只把这一格拼进 `text`）；
+  · `GATE_STATE_KEYS` / `POPUP_STATE_KEYS` —— 那两个资产的**读侧闭包**必须全是
+    `AgentState` 的**声明键**（未声明的键被 langgraph 静默丢掉）；
+  · `spec_text` / `blocked_row` / `tool_frame` / `plan_for_gate` —— 唯一构造点。
 
 **契约的三层，本模块只管中间那一层**：
   · `AgentState` 的声明键（`graph.py`）—— 图内部的账，`tests/test_state_keys.py` 守；
@@ -38,9 +51,7 @@ import json
 import logging
 from typing import Any
 
-from langchain_core.messages import AIMessageChunk, ToolMessage
-
-from agent.graph import plan_state
+from langchain_core.messages import ToolMessage
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +63,14 @@ logger = logging.getLogger(__name__)
 # `server._run_agent_stream_to_queue` 按名字消费 `updates` 里**恰好这四个**节点。
 # 臂产任何别的名字 = 那一格被生产者**静默丢掉**（它按名取键，取不到就不发对应的帧），
 # 而报告里看不出是"臂没产"还是"生产者没认"。
+# **批 2 起这条是结构判据**：臂是一张真图，这四个名字必须**编译在图里**
+# （`test_frame_contract.py` 拿 `get_graph().nodes` 与它比对）。
 NODE_FRAMES = ("planner", "execute", "model", "gate")
 
 # `messages` 通道上**用户可见正文**挂的节点名。生产那条是 `model_node`（零工具 narrator）；
-# 臂的正文不是从图里来的，但**必须冒充成同一个名字**——`run_golden.run_one` 只把
-# `langgraph_node == "model"` 的分片拼进 `text`，改名等于每一条文本断言都被中间推理污染。
+# 臂这一格**也是真节点**（`langgraph_node` 由 langgraph 自己盖，不再有人手填）。
+# `run_golden.run_one` 只把 `langgraph_node == "model"` 的分片拼进 `text`，
+# 改名等于每一条文本断言都被中间推理污染。
 VISIBLE_NODE = "model"
 
 # ── `gate_node` 的读侧闭包（含它调用的辅助函数）──────────────────────────────
@@ -78,15 +92,19 @@ VISIBLE_NODE = "model"
 # ⚠️ `task_frames` 是 20261016 补上的那一格。它缺席的形态**极难看出来**：`_ledger_in_scope`
 # 的判据是"`confirm_grant` 在场 **或** 本轮 `task_frames` 非空"，少喂一格只是让那条
 # **析取**少一条腿——闸门照常开火，只是账乙网在"这一轮 planner 刚登记过任务"的现场
-# 静默不启用。臂今天**不产** `task_frames`（如实登记的缺口），所以这一格对它是恒空；
+# 静默不启用。臂今天**不产** `task_frames`（如实登记的缺口，批 3 补），所以这一格对它是恒空；
 # 但**恒空与缺席不是一回事**：缺席是"没人喂"，恒空是"这一线确实没有任务"。写下来才分得清。
+#
+# **批 2 起这张表的判据换了个方向**：臂拿的是真 state，所以"喂没喂"不再是问题——
+# 问题是"这张表里有没有 `AgentState` **没声明**的键"（未声明 ⇒ 被 langgraph 静默丢掉，
+# 本仓为此付过 13 次代价）。判据 = `GATE_STATE_KEYS ⊆ AgentState.__annotations__`。
 GATE_STATE_KEYS = frozenset({
     "blocked", "blocked_seen", "confirm_grant", "gate_replan", "ledger", "messages",
     "noop_specs", "pending_confirm", "plan", "receipts", "task_frames",
 })
 
 # ── `_confirm_popup` 的读侧闭包（含它调用的辅助函数）────────────────────────
-# 弹卡那一格的形状判据（`_popup_state` 的 docstring 此前写的是"它只读 state 的四个键"——
+# 弹卡那一格的形状判据（合成 state 的年代，docstring 写的是"它只读 state 的四个键"——
 # 20261016 实测**是十一格**，那四个只是 `_confirm_popup` **函数体里**直接读的）：
 #
 #   messages         _confirm_popup:12113 —— 喂 `_target_evidence`（"文章 id 有据"）
@@ -100,9 +118,10 @@ GATE_STATE_KEYS = frozenset({
 # ⚠️ `executed` 是这一格里**最要紧**的一格，也是 20261016 之前**根本没喂**的一格。
 # `_grant_covers` 拿它实现"令牌用在那一件上就作废"（20261012 第二次收窄，现场
 # `20261012T195727`：同一件写静默落库三份）。缺了它 ⇒ `state.get("executed") or ()` 空 ⇒
-# 那一格判据**恒不生效** ⇒ 臂这边"同一件第二次"又退回被令牌覆盖。
-# **臂的 `executed` 必须现算**：生产由 `execute_node` 在请求内累积（`graph_input` 初值 `[]`），
-# 而臂不往那份 state 里回写——本轮真执行过的调用只活在 `executor.calls` 里（`executed_specs`）。
+# 那一格判据**恒不生效** ⇒ "同一件第二次"又退回被令牌覆盖。
+# **批 2 起这一格不再靠"喂"**：`execute` 节点把本轮真执行过的 spec 写回 `state["executed"]`
+# （`executed_specs(executor.calls)`，与生产 `execute_node` 同一种累积），
+# 弹卡拿到的是真 state，那一格由结构保证在场。
 POPUP_STATE_KEYS = frozenset({
     "blocked", "blocked_seen", "confirm_grant", "executed", "ledger", "messages",
     "noop_specs", "pending_confirm", "plan", "plan_obj", "receipts",
@@ -156,48 +175,18 @@ def executed_specs(calls: list) -> list[str]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 帧构造：四类 updates + 两路 messages
+# 帧构造：只剩"工具帧"与"受阻行"（`updates` 的四类格子不再由本模块造）
 # ══════════════════════════════════════════════════════════════════════════════
-
-def planner_frame(plan_obj: dict) -> dict:
-    """`planner` 那一格（生产 `planner_node` 的 update 里 producer 只读 `plan_obj`）。"""
-    return {"planner": {"plan_obj": plan_obj}}
-
-
-def model_frame(m: Any) -> dict:
-    """`model` 那一格（正文那条 `AIMessage` 的原文）。"""
-    return {"model": {"messages": [m]}}
-
-
-def gate_frame(**extra: Any) -> dict:
-    """`gate` 那一格。`extra` 按调用方给的来：`fallback_text` / `gate_replan` / `done`。
-
-    **不补默认值**——`{"done": False}` 与"不发 `done`"在 producer 那边是两件事
-    （前者会覆盖上一轮的值，后者不动）。这类"补一个看起来无害的默认值"正是本仓
-    `pydantic 空串缺省值` 那一族。
-    """
-    return {"gate": dict(extra)}
-
-
-def execute_frame(*, receipts: Any, blocked: Any = (), **extra: Any) -> dict:
-    """`execute` 那一格（回执/受阻行/弹卡载荷都走这里）。
-
-    `receipts` 是**累计语义**（生产 `execute_node` 每次交的都是请求内全部 PASS 行，
-    producer 靠 `receipt_sent` 下标算增量）⇒ 调用方必须给全量，不是增量。
-    `blocked` 同理。`extra` 不补默认值，理由同 `gate_frame`。
-    """
-    return {"execute": {"receipts": list(receipts or []),
-                        "blocked": list(blocked or []), **extra}}
-
-
-def visible_chunk(text: str) -> tuple[str, Any]:
-    """`messages` 通道上**用户可见**的那一条分片（正文）。
-
-    与"发不发"无关——空正文由调用方决定不发（`_on_model` 那条注：补一段话掩盖
-    "模型没说"会让 `nonempty` 断言假绿）。这里只管形状，含 `langgraph_node` 那一格
-    （见 `VISIBLE_NODE` 的注：它决定这段字进不进 `text`）。
-    """
-    return ("messages", (AIMessageChunk(content=text), {"langgraph_node": VISIBLE_NODE}))
+# **20261016 批 2**：`planner_frame` / `model_frame` / `gate_frame` / `execute_frame` /
+# `visible_chunk` 五个构造器整体删除。它们存在的理由是"臂自己手搓 `updates` 二元组、
+# 给分片冒充 `langgraph_node`"——而现在臂是一张真的 `StateGraph`，四类格子由**节点名**
+# 产生（`planner`/`execute`/`model`/`gate` 是编译进图里的真节点），`langgraph_node` 由
+# langgraph 自己盖。**手搓这件事在结构上不可能存在了**，构造器随之失去存在理由：
+# 留着它，下一个人就能在图外面再手搓一份形状对的帧，而那正是这一批要消灭的东西。
+#
+# `NODE_FRAMES` / `VISIBLE_NODE` 两条声明**留着**：它们现在是"图里必须有哪些节点名"
+# 的判据（`test_frame_contract.py` 拿编译出来的图的节点集与它比对），不再是"手搓时
+# 该填什么名字"的说明书。
 
 
 def tool_frame(i: int, c: dict) -> ToolMessage:
@@ -206,9 +195,9 @@ def tool_frame(i: int, c: dict) -> ToolMessage:
     单独成函数只为**一处措辞**：文章读取快道要把它喂给模型（系统提示的 `tool_results`），
     `_on_tools` 要把它发给用户/报告——两处各自拼一份字符串，改一处漏一处就是一条新漂移源。
 
-    `tool_call_id` 用 `react_{下标}`：内层 `create_agent` 自己发的 `ToolMessage` 有它
-    自己的 id，这里不需要与任何 `AIMessage` 的 `tool_calls` 对上（golden 只读 `name` 与
-    `content`），造一个稳定的即可。
+    `tool_call_id` 用 `react_{下标}`：golden 只读 `name` 与 `content`，不需要与任何
+    `AIMessage` 的 `tool_calls` 对上，造一个稳定的即可。**同一个下标在两次调用之间
+    可能撞名**（`execute` 每轮从 0 重数），但工具帧之间不互相配对，撞了也无害。
     """
     return ToolMessage(content=str(c.get("result") or ""),
                        name=str(c.get("tool") or ""),
@@ -226,7 +215,7 @@ def blocked_row(b: dict) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# state 塑形：把"最小 state"喂给生产那两个资产（`gate_node` / `_confirm_popup`）
+# 计划塑形：`plan_obj` → 能被 `plan_state` 编码的那份
 # ══════════════════════════════════════════════════════════════════════════════
 
 def plan_for_gate(plan_obj: dict) -> dict:
@@ -246,102 +235,21 @@ def plan_for_gate(plan_obj: dict) -> dict:
     return obj
 
 
-def popup_state(state: dict, plan_obj: dict, ledger: Any, messages: list,
-                executor: Any) -> dict:
-    """喂给 `graph._confirm_popup` 的最小 state（`POPUP_STATE_KEYS` 那十一格）。
-
-    `messages` 必须带上**本轮已执行工具的真结果**：`_target_evidence`（"文章 id 有据"
-    那条判据）从 `ToolMessage` 里找材料，喂空的会让文章族写操作的目标判据恒假 ⇒ 卡弹不
-    出来——方向是**假阴性**，恰好是"评测里做不到生产做得到的事"，而报告上看起来像
-    "这臂不会弹卡"。`executor.calls` 就是这一轮的逐次真调用（工具名 + 结果原文）。
-
-    **其余七格从 `state` 原样透传**（20261016 补）：生产那一轮它们都是真值（`graph_input`
-    给了初值、`execute_node` 在请求内累积），臂此前只挑了自己造的四格、把剩下的丢了
-    ——`_round_facts` / `_grant_covers` / `_ledger_pending_text` 于是各自读到空。
-    `executed` **例外，必须现算**（见 `POPUP_STATE_KEYS` 的注）：`state` 里那份是请求初值，
-    臂的真执行只活在 `executor.calls` 里，两者相加才是"本轮已执行过什么"。
-    """
-    calls = list(getattr(executor, "calls", []) or [])
-    extra = [ToolMessage(content=str(c.get("result") or ""),
-                         name=str(c.get("tool") or ""),
-                         tool_call_id=f"popup_{i}") for i, c in enumerate(calls)]
-    src = state or {}
-    return {
-        "messages": list(messages or []) + extra,
-        # `_plan_skill` 只读这一格，而令牌里签的技能名就是它：空 ⇒ `sign` 拒绝签发
-        # ⇒ 卡弹不出来（所以 `stream` 里按"最近一次有效计划"记着）。
-        "plan_obj": dict(plan_obj or {}),
-        "receipts": list(ledger.receipts),
-        "confirm_grant": src.get("confirm_grant"),
-        "executed": list(src.get("executed") or []) + executed_specs(calls),
-        "ledger": src.get("ledger") or {},
-        "plan": src.get("plan") or "",
-        "blocked": list(src.get("blocked") or []),
-        "blocked_seen": list(src.get("blocked_seen") or []),
-        "noop_specs": list(src.get("noop_specs") or []),
-        "pending_confirm": src.get("pending_confirm"),
-    }
-
-
-def round_state(state: dict, plan_obj: dict, ledger: Any, messages: list,
-                executor: Any, reply: Any = None, *, replan: bool = False) -> dict:
-    """本轮的最小 state——**两个消费端读的是同一批键**（20261011 起 gate，20261012 起 narrator）。
-
-    `reply=None`（narrator 那一支）**不放答复**：生产 narrator 看不到任何"草稿"（它读的是
-    计划契约与工具帧），把决策模型那条消息塞进去就是把 P6 拆掉的那件事又接回去。
-    闸门那一支必须带（`_repeat_reason` 的复读比对要看得见它）。
-
-    做法与 `popup_state` 同族，但**这两处合成了一份**（20261012）：`_narrator_plan` 与
-    `gate_node` 读的是同一批键——账甲 `_round_facts` 那一族正是两个消费端共用的合成函数，
-    "两边各拼一份 state"必然在某一天让它们对**同一轮**算出不一样的形状。
-
-    **键集由 `GATE_STATE_KEYS` 声明、由 `tests/test_frame_contract.py` 从 `graph.py`
-    现取比对**（20261016 起）——此前那张表是用 `awk`+grep 从 `gate_node` 函数体里数出来
-    的手抄表，少了一格（`task_frames`），而少一格的形态是**闸门安静地少开火**。
-
-    三处取法要**说准**，它们各自都有一个假读数：
-
-    · `messages` **必须把本轮的工具帧放进去**——`frames` 是 `gate_node` 判"有没有执行
-      事实"的唯一依据（它从消息流里挑 `ToolMessage`），喂空的会让**每一族声称判据**都
-      判成"零帧轮"（方向是**过严**：一条真办成了事的回复会被当成零帧轮按更宽的族去查）。
-      过闸门那一支还要把**答复本身**放进去（`reply=`），`_repeat_reason` 的复读比对才
-      看得见它；narrator 那一支不带（见上）。
-      帧用 `tool_frame` ——**与发到用户/report 的是同一份**：闸门判的对象必须是主人
-      真看到的那些帧，另造一份措辞不同的一次性帧＝判据与事实分家。
-    · `plan` 走 **`plan_state(...)`**（不是 `plan_encode` 直调——那个函数有源码锁，只许
-      `plan_state` 调；也不是自己拼 `SKILL=` 行——那是第二份排版）。
-    · `ledger` 原样透传（洞⑦ 的台账否认判据读它，`graph_input` 装的就是这一格）。
-    · `gate_replan` 是**上一圈有没有重规划过**，由调用方给。
-    """
-    src = state or {}
-    frames = [tool_frame(i, c) for i, c in enumerate(getattr(executor, "calls", []) or [])]
-    blocked = [blocked_row(b) for b in ledger.blocked]
-    return {
-        "messages": (list(messages or []) + frames
-                     + ([reply] if reply is not None else [])),
-        **plan_state(plan_for_gate(plan_obj)),
-        "receipts": list(ledger.receipts),
-        # 账甲（`_round_facts`）与 `_blocked_article_targets` 读的三格：见 `GATE_STATE_KEYS`。
-        # `blocked_seen` 的键形与 `execute_node` 的 `_blocked_key` 逐字同款（`工具::原因码`）
-        # ——生产那一支是**跨轮累积**，本线的 `ledger.blocked` 同样只增不减，所以这一次
-        # 运行的范围就是同一种累积。
-        "blocked": blocked,
-        "blocked_seen": sorted({f"{b.get('tool')}::{b.get('reason')}"
-                                for b in ledger.blocked}),
-        "confirm_grant": src.get("confirm_grant"),
-        "ledger": src.get("ledger") or {},
-        "pending_confirm": src.get("pending_confirm"),
-        "noop_specs": src.get("noop_specs") or [],
-        # `task_frames` 原样透传（20261016 补）：`_ledger_in_scope` 的析取里那一条腿。
-        # 臂今天不产任务帧 ⇒ 它恒空；但**恒空**（这一线确实没有任务）与**缺席**
-        # （没人喂）在读侧不是一回事，后者让闸门安静地少开一次火。
-        "task_frames": list(src.get("task_frames") or []),
-        "gate_replan": bool(replan),
-    }
-
-
-def gate_state(state: dict, plan_obj: dict, ledger: Any, messages: list,
-               executor: Any, reply: Any, *, replan: bool) -> dict:
-    """喂给 `graph.gate_node` 的最小 state——键集与理由都在 `round_state`（P6 起它只是壳）。"""
-    return round_state(state, plan_obj, ledger, messages, executor, reply=reply,
-                       replan=replan)
+# ── 批 2（20261016）：三份塑形器整体退场 ─────────────────────────────────────
+# `popup_state` / `round_state` / `gate_state` 三个函数**删掉了**。它们此前的作用是
+# 把臂自己攒的碎片拼成一份"最小 state"喂给生产那两个资产（`gate_node` /
+# `_confirm_popup`）——而这一批之后臂是一张真图，那两个资产拿到的是**真 state**
+# （`AgentState` 的实例，由 `graph_input` 给初值、由节点在请求内累积）。
+#
+# 删掉它们的理由不是"用不上了"，是**它们本身是一类缺陷的载体**：合成 state 的键集
+# 是一张手抄表，而抄漏的形态是**消费端安静地少开一次火**——`round_state` 少一格
+# `task_frames`（`_ledger_in_scope` 的析取少一条腿）、`popup_state` 少七格、其中
+# `executed` 正是"令牌用在那一件上就作废"那一格（缺它 ⇒ 同一件写第二次又被放行）。
+# 只要还有"合成一份 state"这个动作，就还有下一张手抄表。
+#
+# 两条声明留在上面，但它们的意思变了：
+#   · `GATE_STATE_KEYS` / `POPUP_STATE_KEYS` —— 从"合成时该填哪些键"变成
+#     **"这两个资产的读侧闭包必须全是 `AgentState` 的声明键"**（未声明的键被
+#     langgraph 静默丢掉，本仓为此付过 13 次代价）。判据在 `test_frame_contract.py`。
+#   · 逐条来源注释（`gate_node:13292` 之流）保留：它们是**取值的凭证**，
+#     `test_frame_contract.py` 用 AST 从 `graph.py` 现取闭包与这里比对，对不上就红。
