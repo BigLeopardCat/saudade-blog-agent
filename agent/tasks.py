@@ -73,6 +73,7 @@ import hashlib
 import json
 import logging
 import re
+from datetime import datetime
 from typing import Any
 
 from agent.skills import (SKILL_MAP, args_are_bound, callable_query_tools,
@@ -1084,6 +1085,22 @@ def advance_by_tools(task: dict, done: "set[str] | Any", *,
     if moved == cursor:
         return None
     state = "succeeded" if moved >= total else "running"
+    # `pending_question` 的归属（20261015）：**系统写的问句是"这一行此刻被挡住"的那句**
+    # （软期限催办 / 同意闸挡下，见 `TASK_SYSTEM_ASKS`）。游标一旦往前动，那一行就不再
+    # 被挡住 ⇒ 那句话已经过期，必须跟着清掉。
+    #
+    # 不这么做的具体后果（本批自己造出来的洞，写完才想清）：同意闸挡下的行当场转
+    # `input_required` + 问句；下一轮主人点了确定、那一步真执行、回执把游标从 0 推到 1
+    # ⇒ state 变回 `running` 而问句**留了下来** ⇒ `next_actionable` 的判据②（非空
+    # `pending_question` 一律跳过）从此把这一行永久跳过，剩下的步骤再也没人续跑，
+    # 而主人看到的是一句"还办吗？"——他刚刚才点过确定。
+    #
+    # **只清自己写的那两句**：模型自己问的话（`normalize_declaration` 的
+    # `pending_question`）照旧保留——它问的可能是后面某一步的事，游标推进答不了它。
+    # 这条边界就是本函数原来那行的行为，一个字没放宽。
+    asked = str(task.get("pending_question") or "")
+    if state == "succeeded" or asked in TASK_SYSTEM_ASKS:
+        asked = ""
     return {
         "task_id": task.get("task_id"),
         "goal": task.get("goal") or "",
@@ -1091,7 +1108,7 @@ def advance_by_tools(task: dict, done: "set[str] | Any", *,
         "total_steps": total,
         "cursor": moved,
         "state": state,
-        "pending_question": "" if state == "succeeded" else (task.get("pending_question") or ""),
+        "pending_question": asked,
     }
 
 
@@ -1241,6 +1258,262 @@ def drop_is_completion(open_tasks: Any, conversation_id: Any, decl: Any,
 
 
 # 被判定为"其实是做完了"的撤下轮，交给 narrator 的注记（**单行**，理由同
+# ══════════════════════════════════════════════════════════════════════════════
+# 台账终态（20261015）：开着的行要么被回执结掉，要么被期限结掉
+# ══════════════════════════════════════════════════════════════════════════════
+# 病（20261015 生产库直读，窗口内 17 行 `running` **全部** `cursor=0`）：两条出口——
+# ① 同意闸挡下（`consent_required` → `check BLOCK` → **零回执**）、② 换另一件工具办掉了
+# （回执工具名 ≠ 声明工具名）——**在代码里都没有任何一处会改 state**：`advance_by_tools`
+# 见游标推不动就 `return None`，`_task_advance_rows` 见 `None` 就 `continue`。于是那一行
+# 只能等 Rust 读侧的 72h 时效把它从**注入**里抹掉，而**行本身永远留在表里、状态永远
+# 写着"还开着"**——这正是"结算判据是好的（8 行全结掉），但有一族账永远结不掉"。
+#
+# 行业做法：审批/动作类待办必须有**终态**（超时/放弃），而不是靠读侧把它"看没了"。
+# 本段补的就是这一格，且**不新造状态**——`cancelled` 六态里已有、写入方已有
+# （`normalize_drop`）。"过期"与"撤下"共用同一个终态，语义都是"这件事不办了"；
+# 要分开的话得加第七态并同步迁移与 Rust 的 `TASK_OPEN_STATES`，而那个区分今天没有
+# 任何消费方（读侧只关心"还在不在窗口里"）。
+#
+# ⚠️ **终态由「期限」驱动，不由「主人点取消」驱动**，这是既有设计的**刻意取舍**：
+# `agent/confirm.py` 明写「取消不发请求，令牌自然过期——这是"取消"零副作用的实现方式」，
+# 前端也只在本地结算（`chat-stream.js` 的 `askSettle('已取消', …, 'cancel')`）。让取消
+# "看得见"要改父仓 `src/` + 前端（一次真部署），并且会推翻 20260924 事故后专门立下的
+# "真实结论由轮次收尾给出"那条纪律（卡片上的乐观文本正是那次事故的成因）。
+# ⇒ 期限是这条路上唯一不必付那种代价的收口。
+
+# 软/硬期限（小时）。**硬不变量：SOFT < HARD < 读侧时效**——转换若只在读窗口之外才
+# 触发，这段代码就是**死代码**（本仓"写了没人执行"那一族：R2 的 `--keep 3`、
+# logrotate 的 `rotate 14`，两者都实测过是装饰）。`tests/test_task_expiry.py` 从父仓
+# `src/routes/chat.rs` 现读那个数来断言，改任一侧都会当场红。
+TASK_STALE_SOFT_HOURS = 12
+TASK_STALE_HARD_HOURS = 48
+
+# `TASK_READ_TTL_HOURS` 的**镜像**（跨语言契约，与父仓 `chat.rs` 同值）。Python 需要它
+# 只为上面那条不变量——读侧过滤的真执行者**始终**是 Rust 的 SQL，这里没有第二个消费方。
+TASK_READ_TTL_HOURS = 72
+
+# 催办问句（软期限到点、**只问一次**）。这一格是**唯一一处**这句中文：`render_open_tasks`
+# 把 `pending_question` 原样印进 planner 上下文，`declaration_note` 让它逐字问出来，
+# 两个消费方都读这一格，别在别处再写一句同义的。
+TASK_STALE_ASK = (
+    "这件事我还没办成，先搁着了——你还要办吗？要办就告诉我怎么办，不办我就撤下。")
+
+# 同意闸挡下、又没弹成卡时的问句（`consent_required` 那条路）。
+# ⚠️ **刻意不复用 `authz.consent_frame` 的文本**：那是给**模型**看的一整段（带
+# `__ERROR__:` 前缀、带 uid/role、还含"本轮未执行、也不得声称已完成"这类纪律句），
+# 而 `pending_question` 是**要逐字问给主人**的一句。两者读者不同，混用会把一段内部
+# 错误文本印到主人眼前。
+#
+# ⚠️ **也不逐字回填弹窗的卡面问句**（`pending_confirm.q`）——这是 20261015 写完之后
+# 才想清的一处：卡面问句长这样「要给 demo 重置额度吗？**点「确定」我就去办。**」，
+# 它**指着一张卡**。而 `pending_question` 是**下一轮**（乃至 12 小时后）才印给主人
+# 看的一句，那时令牌早已过期、卡也不在了 ⇒ 照抄等于请主人去找一个不存在的按钮。
+# 两句合一的另一个好处见 `advance_by_tools`：这一族问句必须是**固定常量**，
+# 系统才认得出"这句是它自己写的"（认得出才敢在游标推进后清掉它）。
+TASK_CONSENT_ASK = "这件事要动站上的数据，得你点头我才做——还办吗？"
+
+# **系统自己写的**那一族问句（就这两句）。`advance_by_tools` 靠它认"这句话是系统的"
+# ⇒ 游标一推进就清掉（见那里的注释）。模型自己写的问句（`normalize_declaration` 的
+# `pending_question`）**不在里面**，一个字都不许动它。
+TASK_SYSTEM_ASKS = frozenset({TASK_STALE_ASK, TASK_CONSENT_ASK})
+
+# 行首时间戳的形状（`MM-DD HH:MM`，Rust 渲染时补的，只有月日没有年）。
+# **与 `server.annotate_exec_ages` 共用这一处**——两份会漂的解析规则正是本仓反复吃的
+# 亏（"一处实现两处用，改一处忘一处"）。两端的排除项都是为了**只认自己那一行的时间**：
+# 前面不许接数字或连字符（挡掉完整日期 `2026-09-05 14:06:57` 里的后两段），后面不许接
+# 数字或冒号（挡掉带秒的时间）。
+TS_MMDD_HHMM_RE = re.compile(r"(?<![\d-])(\d{2})-(\d{2}) (\d{2}):(\d{2})(?![\d:])")
+
+
+def age_minutes(ts: Any, now: "datetime | None" = None) -> int | None:
+    """`MM-DD HH:MM` 钟面 → 距今分钟数；**看不懂返回 None**（不猜）。
+
+    规则与 `server.annotate_exec_ages` **同一处**（20261015 抽出来共用）：按当年解析，
+    **超前 6 小时以上一律退一年**——跨年时"12-31 23:50"在 1 月 1 日按当年算会变成
+    "十一个月后的未来"。看不懂（形状不对 / 月日越界）返回 None，调用方据此**响亮地**
+    记一笔，绝不退化成"刚刚"（本仓"认不出必须响亮"：`_drop_correction` 的第四次现形
+    就是"没给"与"给了但解析不出"共用一个返回值）。
+
+    **为什么这条规则在本账上一定够用**：Rust 读侧只交回 **72 小时以内**的行
+    （`chat.rs::TASK_READ_TTL_HOURS`）⇒ 跨年歧义只在元旦前后三天内出现，而它恰好被
+    上面那条规则覆盖。**改读侧时效就要重算这条论据**——这也是上面那条不变量存在的
+    第二个理由。
+    """
+    m = TS_MMDD_HHMM_RE.match(str(ts or "").strip())
+    if not m:
+        return None
+    now = now or datetime.now()
+    try:
+        t = datetime(now.year, int(m.group(1)), int(m.group(2)),
+                     int(m.group(3)), int(m.group(4)))
+    except ValueError:
+        return None
+    if (t - now).total_seconds() > 6 * 3600:
+        try:
+            t = t.replace(year=t.year - 1)
+        except ValueError:
+            return None
+    return int((now - t).total_seconds() // 60)
+
+
+def _step_at(row: dict, cursor: int) -> dict:
+    """行里**游标位那一步**（形状不齐给空 dict，调用方按"没有工具名"处理）。
+
+    ⚠️ 形状判据写成"先取值、再 `isinstance` 收窄"，**不写成
+    `row.get("steps") if isinstance(row.get("steps"), list) else []`**：后者在
+    mypy 眼里类型是 `Any | list[Any] | None`（`Any` 上的 `isinstance` 收不掉 `None`），
+    于是 `len()` 与下标各报一格（本仓棘轮按文件计数，多出来的格子要当场还清）。
+    同文件 `render_open_tasks` 里那句老写法正带着两格基线——别照着抄。
+    """
+    steps = row.get("steps")
+    if isinstance(steps, list) and 0 <= cursor < len(steps):
+        one = steps[cursor]
+        if isinstance(one, dict):
+            return one
+    return {}
+
+
+def expire_transitions(rows: Any, *, now: "datetime | None" = None,
+                       consent_asks: Any = (), settled: Any = (), fresh_ids: Any = (),
+                       soft_hours: float = TASK_STALE_SOFT_HOURS,
+                       hard_hours: float = TASK_STALE_HARD_HOURS,
+                       ) -> tuple[list[dict], list[str]]:
+    """开着的行 → 终态/催办转换；`(transitions, undecidable)`（纯函数，20261015）。
+
+    `transitions` 每格是 `{task_id, state, pending_question, via}`（前三格够
+    `transition_frames` 拼出帧；`via` 只进 trace——帧是 8 键契约，多一格要同步 Rust）；
+    `undecidable` 是"`created_at` 看不懂、因此**没判**"的 task_id —— 调用方据此记一条
+    trace，**不许静默**。
+
+    三种转换，按优先级：
+
+      ① **同意闸挡下**（`consent_asks` 里有这一步的工具名）⇒ `input_required` +
+         那句同意闸问句。这是**当轮已知**的事实（`consent_required` 是这一轮发生的），
+         不必等期限——这一行**当场**就该诚实地说"在等你点头"，而不是含混的 `running`。
+         **这一支不看年龄**，所以本轮刚登记的行（`fresh_ids`）也接得住。
+      ② **硬期限**（年龄 ≥ `hard_hours`）⇒ `cancelled`，`pending_question` 一并清空
+         （撤下的事不该还挂着一个要问的问题，同 `normalize_drop`）。
+      ③ **软期限**（年龄 ≥ `soft_hours`）**且当前不是 `input_required`** ⇒
+         `input_required` + 催办问句。**"催办本身就是状态转换"**是刻意的：转过之后
+         这一支不再命中 ⇒ **天然只问一次**，不需要另立一个"问过没有"的标志位
+         （少一个需要同步的真源）。②不受③这条限制——问过一遍没回音，期限到点照样收掉。
+
+    `settled` 是**本轮已经结算过的** task_id：**先结账、后催账**。同一轮既真办完又被判
+    过期，会把"刚办完"那一行当场写成 `cancelled`——那正是 `drop_is_completion` 那道闸
+    治过的同一个病换个入口回来。
+
+    `fresh_ids` 是**本轮刚登记、且不是从 Rust 读回来的**那一批 task_id。它们**没有**
+    `created_at`（Rust 那一列由落库时写，本轮还没走完落库），若照常解析会全部落进
+    `undecidable`——而"刚登记"与"时间戳读不出来"是两件完全不同的事，混在一起会把那个
+    响亮信号冲成噪声（本仓"认不出必须响亮"的反面：**喊得太滥等于没喊**）。所以：
+    **只**把它们排除出 `undecidable`，年龄那一支照旧判不了（没数据不猜），能命中它们的
+    只有同意闸那一支——而那正是要的（当场说"在等你点头"）。
+
+    **同值不产出**（当前 state 与 pending_question 与目标逐字相同 ⇒ 不转换）：
+    `__TASK__` 帧每发一次，Rust 就把 `attempts` 加一（`chat.rs`），发空帧等于刷计数。
+    """
+    settled_ids = {str(t) for t in (settled or ()) if str(t)}
+    fresh = {str(t) for t in (fresh_ids or ()) if str(t)}
+    asks = consent_asks if isinstance(consent_asks, dict) else {}
+    out: list[dict] = []
+    undecidable: list[str] = []
+    seen: set[str] = set()
+    for row in task_rows(rows):
+        tid = str(row.get("task_id") or "")
+        if not tid or tid in settled_ids or tid in seen:
+            continue
+        seen.add(tid)          # 同 id 两行（读回来那行 + 本轮重登记那行）只判一次
+        want, cant_tell = _expire_one(row, tid, asks=asks, now=now, fresh=fresh,
+                                      soft_hours=soft_hours, hard_hours=hard_hours)
+        if cant_tell:
+            undecidable.append(tid)
+        elif want is not None:
+            out.append({"task_id": tid, **want})
+    return out, undecidable
+
+
+def _expire_one(row: dict, tid: str, *, asks: dict, now: "datetime | None",
+                fresh: set, soft_hours: float,
+                hard_hours: float) -> "tuple[dict | None, bool]":
+    """单行 → `(目标转换 | None, 是不是"认不出")`（拆出来只为把上面那个循环的
+    分支数压回复杂度闸内——闸按函数计，别把判据摊回去）。
+
+    判据本身一条不少，全在 `expire_transitions` 的 docstring 里；这里只补两处**为什么
+    写成这样**：
+
+      · `state` 不在 `TASK_OPEN_STATES` 的行**直接不看**（终态行没有"过期"可言，
+        再判一次就会把 `succeeded` 的行改写成别的）；
+      · 时间戳读不出来时**只有**"还没被判过的行"才进认不出名单：已经在等主人回话的行
+        （`input_required`）不该因为读不出来就被喊一次——那一格是给"系统本该判却没判"
+        用的，而它此刻判不判都一样（`input_required` 已经是软期限的目标态）。
+    """
+    state = str(row.get("state") or "")
+    if state not in TASK_OPEN_STATES:
+        return None, False
+    cursor = max(0, int(row.get("cursor") or 0))
+    tool = str(_step_at(row, cursor).get("tool") or "")
+    if tool and tool in asks:
+        return {"state": "input_required",
+                "pending_question": str(asks.get(tool) or "")[:GOAL_COL_MAX],
+                "via": "consent"}, False
+    age = age_minutes(row.get("created_at"), now)
+    if age is None:
+        return None, (tid not in fresh and state != "input_required")
+    want: dict | None = None
+    if age >= hard_hours * 60:
+        want = {"state": "cancelled", "pending_question": "", "via": "stale"}
+    elif age >= soft_hours * 60 and state != "input_required":
+        want = {"state": "input_required", "pending_question": TASK_STALE_ASK,
+                "via": "stale"}
+    if want is None:
+        return None, False
+    if (want["state"] == state
+            and want["pending_question"] == str(row.get("pending_question") or "")):
+        return None, False                 # 同值不产出（别刷 attempts）
+    return want, False
+
+
+def transition_frames(rows: Any, transitions: Any) -> list[dict]:
+    """终态/催办转换 → `__TASK__` 帧载荷（**与结算帧逐字同形**，20261015）。
+
+    ⚠️ **不新增帧键**：`__TASK__` 的键集与 `agent_task` 的列一一对应，多一格要同步
+    Rust 与 `tests/test_tasks.py` 那条"恰为 8 格"的锁（跨语言契约）。所以这里复用结算帧
+    的形状（`advance_by_tools` 的产出）：`goal` / `steps` / `cursor` / `total_steps`
+    **原样带回**、不改写。
+
+    尤其 **`steps` 不清空**：它是审计线索（`chat.rs` 的 `TASK_STEPS_COL_MAX` 注写明
+    "非执行依据"），`normalize_drop` 之所以给 `steps=[]` 是"撤下"语义——这里不是撤下，
+    是把一件**没办成**的事按期限收口，原始步骤恰恰是事后唯一查得到的线索。
+
+    `idempotency_key` 结算帧也没有，这里同样不带：Rust 只在**新建行**时写它，已有行的
+    upsert 不读（`save_agent_task`）。
+
+    查不到对应行（本轮读回来的行里没有它）⇒ 跳过：没有行就没有 `goal`/`steps`，拼出来
+    的帧会把那一行**改写成一个空计划**——比不转换坏得多。
+    """
+    by_id = {str(r.get("task_id") or ""): r for r in task_rows(rows)}
+    out: list[dict] = []
+    for one in transitions or []:
+        if not isinstance(one, dict):
+            continue
+        row = by_id.get(str(one.get("task_id") or ""))
+        if not row:
+            continue
+        steps = row.get("steps")
+        if not isinstance(steps, list):    # 形状判据同 `_step_at` 的那条注（mypy 棘轮）
+            steps = []
+        out.append({
+            "task_id": row.get("task_id"),
+            "goal": row.get("goal") or "",
+            "steps": steps,
+            "total_steps": max(int(row.get("total_steps") or 0), len(steps)),
+            "cursor": max(0, int(row.get("cursor") or 0)),
+            "state": one.get("state"),
+            "pending_question": one.get("pending_question") or "",
+        })
+    return out
+
+
 # `declaration_note`：它会被拼进计划契约的 `NOTE:` 行）。措辞的三条要求：
 #   ① **不许出现"撤下/取消/不做了"这类词**——注记是给 narrator 的，它照着措辞写字，
 #      而那正是被替换掉的那句错话（「系统已按你的登记把「X」撤下（不再跟踪）」）。
