@@ -48,10 +48,17 @@ producer 用 `confirm_text` 发**一次**——臂这边一个字节的正文都
 `arm_capability --arm react` 判 `comparable = False`（372 个可证伪键实例里 138 条落在
 `forbid_fallback`，全白发）⇒ 那唯一一次全量读数（`20261005_203521_332`，0.9216）
 **不可读、不许引用**。接法见 `ReactGoldenArm._gate`：**直调 `graph.gate_node`**，
-arm 侧只做两件事——按它读的键塑形一份最小 state（`_round_state`：函数体里七个，
-**外加辅助函数读的三个**，见那里的注），把返回翻成帧。判据（`_REPLAN_ISSUES` 约 20 族 /
+arm 侧只做两件事——按它读的键塑形一份最小 state（`agent/frames.round_state`，键集由
+`GATE_STATE_KEYS` 声明、由 `tests/test_frame_contract.py` 从 `graph.py` 现取比对），
+把返回翻成帧。判据（`_REPLAN_ISSUES` 约 20 族 /
 `_claim_issue` / `_fallback_result` / `_replan_result`）**一条都没抄**：抄第二份就是抄
 一条漂移源，而它恰好是本仓最常见的缺陷。
+
+**帧的形状搬去了 `agent/frames.py`（20261016）**：本模块从此只管"**什么时候**发"，
+"发出去长什么样"全在那边。那一层此前是手抄的（键集靠 `awk`+grep 从 `gate_node` 函数体
+里数出来），而手抄会漂——两张表合起来实测漏了 **8 格**（闸门那张漏 `task_frames`，
+`_popup_state` 那张四格的漏七格），见 `agent/frames.py` 的模块头注与
+`docs/adr/adr-0008-*`。搬走不是为了好看：搬走之后**键集有源码可依**，机械锁才钉得住。
 
 **narrator 独立节点（P6，20261012 已接）**：收尾不再由决策模型自己写——内层循环给出
 "没有工具调用了"那条消息（`pending_final`）之后，正文改由**独立的零工具调用**产出
@@ -113,8 +120,7 @@ import json
 import logging
 from typing import Any, Iterator
 
-from langchain_core.messages import (AIMessage, AIMessageChunk, HumanMessage,
-                                     SystemMessage, ToolMessage)
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 
 from agent.context import (_doc_anchors, _frame_texts, _last_assistant_utterance,
@@ -122,10 +128,25 @@ from agent.context import (_doc_anchors, _frame_texts, _last_assistant_utterance
                            _short_reply_hint, with_tool_call_pairs)
 from agent.decisions import _article_fast_path, _intent_hints
 from agent.factblock import block_of, is_action_family, is_block_family
+# 帧的形状全在 `agent/frames.py`（20261016 起）——**本模块只负责"什么时候发"**。
+# 带下划线的别名是为兼容既有测试（`tests/test_react_arm.py` 按 `R._round_state` 取用），
+# 不是"这里还有第二份"。
+from agent.frames import (NOOP_TEXT,
+                          blocked_row as _blocked_row,
+                          execute_frame as _execute_frame,
+                          gate_frame as _gate_frame,
+                          gate_state as _gate_state,
+                          model_frame as _model_frame,
+                          planner_frame as _planner_frame,
+                          plan_for_gate as _plan_for_gate,
+                          popup_state as _popup_state,
+                          round_state as _round_state,
+                          tool_frame as _tool_frame,
+                          visible_chunk as _visible_chunk)
 from agent.graph import (_EXECUTOR_PROMPT, NARRATOR_DISCIPLINE, _NARRATOR_NO_TOOLCALL_NUDGE,
                          _NO_PRINTED_FACTS, _NO_PRINTED_FACTS_ACTION, _confirm_popup,
                          _narrator_plan, _pending_ledger_frame, _principal_of,
-                         _render_planner_prompt, gate_node, plan_state)
+                         _render_planner_prompt, gate_node)
 from agent.native_plan import build_tool_schema
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import RunLedger, SkillExecutor, build_agent
@@ -150,22 +171,6 @@ _CONVERGENCE_NODE_PREFIX = "ConvergenceMiddleware"
 def _is_convergence_node(node: object) -> bool:
     """这个 update 是不是收敛中间件发的那一格（见 `stream` 的接线注）。"""
     return str(node).startswith(_CONVERGENCE_NODE_PREFIX)
-
-
-def _tool_frame(i: int, c: dict) -> ToolMessage:
-    """一次已发生调用 → 工具帧（`messages` 通道那一条 ToolMessage）。
-
-    单独成函数只为**一处措辞**：文章读取快道（`ReactGoldenArm.stream`）要把它喂给
-    模型（系统提示的 `tool_results`），`_on_tools` 要把它发给用户/报告——两处各自
-    拼一份字符串，改一处漏一处就是一条新漂移源。
-
-    `tool_call_id` 用 `react_{下标}`：内层 `create_agent` 自己发的 ToolMessage 有它
-    自己的 id，这里不需要与任何 AIMessage 的 tool_calls 对上（golden 只读 `name` 与
-    `content`），造一个稳定的即可。
-    """
-    return ToolMessage(content=str(c.get("result") or ""),
-                       name=str(c.get("tool") or ""),
-                       tool_call_id=f"react_{i}")
 
 
 def _inner_message(messages: list, user_msg: str) -> HumanMessage:
@@ -235,7 +240,8 @@ class ReactGoldenArm:
         # `user_msg` 与 planner 读的同一句）——不另设来源，否则弹卡判据会与执行判据分家。
         grant = (state or {}).get("confirm_grant")
         executor = SkillExecutor(_real_tools(config), ledger, role=role,
-                                 principal=principal, user_msg=user_msg, grant=grant)
+                                 principal=principal, user_msg=user_msg, grant=grant,
+                                 state=state)
 
         # ── 当前文章读取快道（20261005，照搬 planner 的 `_article_fast_path`）──────
         # 生产在 planner 的首轮、**任何 LLM 之前**判它（`graph.py` 里
@@ -368,7 +374,7 @@ class ReactGoldenArm:
             if verdict["kind"] == "replan":
                 replan_used = True
                 notes = list(verdict["messages"])
-                yield ("updates", {"gate": {"gate_replan": True, "done": False}})
+                yield ("updates", _gate_frame(gate_replan=True, done=False))
                 continue
             if verdict["kind"] == "fallback":
                 # 两条通道都要发：**流式**那半读 updates 的 `fallback_text`（发 `__RESET__`
@@ -377,8 +383,7 @@ class ReactGoldenArm:
                 # 的 fallback 静默失效，而另一条通道看起来完全正常。
                 yield ("messages", (SystemMessage(
                     content=f"[Fallback 决定]: {verdict['text']}"), {}))
-                yield ("updates", {"gate": {"fallback_text": verdict["text"],
-                                            "done": True}})
+                yield ("updates", _gate_frame(fallback_text=verdict["text"], done=True))
                 return
             yield from self._on_model(reply, role, {})
             return
@@ -431,16 +436,16 @@ class ReactGoldenArm:
         """
         if m.tool_calls:
             if plan:
-                yield ("updates", {"planner": {"plan_obj": plan}})
+                yield ("updates", _planner_frame(plan))
             return
         text = str(m.content or "")
         if not text:
             # 空收尾（模型给了个空消息）：不发 messages 帧。`nonempty` 断言会因此红——
             # 那是**真的**（主人确实没读到东西），不该由适配器补一段话来掩盖。
-            yield ("updates", {"model": {"messages": [m]}})
+            yield ("updates", _model_frame(m))
             return
-        yield ("messages", (AIMessageChunk(content=text), {"langgraph_node": "model"}))
-        yield ("updates", {"model": {"messages": [m]}})
+        yield _visible_chunk(text)
+        yield ("updates", _model_frame(m))
 
     def _on_wrap_up(self, m: AIMessage) -> Iterator[tuple[str, Any]]:
         """收敛中间件的确定性收尾 → 用户可见正文（见 `stream` 里那段注）。
@@ -453,8 +458,8 @@ class ReactGoldenArm:
         text = str(m.content or "")
         if not text:
             return
-        yield ("messages", (AIMessageChunk(content=text), {"langgraph_node": "model"}))
-        yield ("updates", {"model": {"messages": [m]}})
+        yield _visible_chunk(text)
+        yield ("updates", _model_frame(m))
 
     def _on_tools(self, executor: SkillExecutor, ledger: RunLedger,
                   sent_calls: int) -> Iterator[tuple[str, Any]]:
@@ -468,9 +473,8 @@ class ReactGoldenArm:
             yield ("messages", (_tool_frame(i, c), {}))
         # 回执是**累计语义**（生产 execute_node 每次交的都是请求内全部 PASS 行，
         # producer 靠 `receipt_sent` 下标算增量）⇒ 这里也必须给全量。
-        yield ("updates", {"execute": {
-            "receipts": list(ledger.receipts),
-            "blocked": [_blocked_row(b) for b in ledger.blocked]}})
+        yield ("updates", _execute_frame(receipts=ledger.receipts,
+                                         blocked=[_blocked_row(b) for b in ledger.blocked]))
         return len(executor.calls)
 
     # ── 弹卡（P3） ────────────────────────────────────────────────────────
@@ -482,10 +486,12 @@ class ReactGoldenArm:
         「触发逻辑照搬」在这里的实现方式是**直接调用它**，不是抄一份：那里面的排序
         （免弹窗的三条前提 → 硬权限 → 参数/`$ref` → 文章目标有据 → 惰性快照 →
         `reached_specs` 滤空）改一处漏一处就是一条新漂移源，而它恰好是本仓最常见的
-        那种缺陷。它能被这么用的理由是它只读 state 的四个键；`_popup_state` 按那四个
-        键拼一份最小 state。`config` 原样透传：它要做 tag/cat/board/note/users/todos…
-        那一串**惰性读**，配置缺了会静默退化成"读不到 ⇒ 只印名字"（方向安全，但读数
-        会与生产不同，所以不自己另拼一份 config）。
+        那种缺陷。它能被这么用的理由是它只读 state 的**十一**个键（20261016 用 AST
+        走传递闭包实测；此前这里写的是"四个"，那是**函数体里**直接读的个数，
+        `_round_facts` / `_grant_covers` / `_plan_skill` 那几个辅助函数读的没算进去）；
+        `_popup_state` 按那一批键拼一份最小 state。`config` 原样透传：它要做
+        tag/cat/board/note/users/todos… 那一串**惰性读**，配置缺了会静默退化成
+        "读不到 ⇒ 只印名字"（方向安全，但读数会与生产不同，所以不自己另拼一份 config）。
 
         返回 `None` = 这批不该弹卡（主人这句是提问、参数里还挂着 `$ref`、目标不在
         主人原话里……都是 `_confirm_popup` 里的 `continue`）。此时这批 spec **既没
@@ -513,14 +519,13 @@ class ReactGoldenArm:
             # 宁可这一轮如实收尾，也不拿一个来路不明的 dict 当弹卡批次发出去。
             logger.error("[react_arm] 确认出口的判别键认不出（kind=%r，键=%s）→ 按零改动收尾",
                          kind, sorted(popup))
-            yield ("updates", {"execute": {
-                "noop_text": "这一步现在没有需要改动的地方，我就没有动手。",
-                "noop_note": f"确认出口判别键认不出（{kind or '空'}），本轮零改动",
-                "messages": [], "receipts": list(ledger.receipts)}})
+            yield ("updates", _execute_frame(
+                receipts=ledger.receipts, messages=[],
+                noop_text=NOOP_TEXT,
+                noop_note=f"确认出口判别键认不出（{kind or '空'}），本轮零改动"))
             return
         body = {k: v for k, v in popup.items() if k != "kind"}
-        yield ("updates", {"execute": dict(body, messages=[],
-                                           receipts=list(ledger.receipts))})
+        yield ("updates", _execute_frame(receipts=ledger.receipts, messages=[], **body))
 
     # ── 闸门（P4，20261011）──────────────────────────────────────────────
     def _gate(self, reply: AIMessage, plan_obj: dict, ledger: RunLedger, state: dict,
@@ -581,8 +586,8 @@ class ReactGoldenArm:
             text = (f"我停在这里了：内部出了点问题（{type(err).__name__}），"
                     "这一轮没有任何一件办成，我没有假装办好了。")
         m = AIMessage(content=text)
-        yield ("messages", (AIMessageChunk(content=text), {"langgraph_node": "model"}))
-        yield ("updates", {"model": {"messages": [m]}})
+        yield _visible_chunk(text)
+        yield ("updates", _model_frame(m))
 
 
 # ── 建臂 ─────────────────────────────────────────────────────────────
@@ -893,133 +898,3 @@ def _plan_of(tool_calls: list, role: str | None) -> dict:
     return {"skill": "|".join(str(p.get("skill") or "") for p in plans),
             "tools": [t for p in plans for t in (p.get("tools") or [])],
             "note": "", "reply": "", "status": ""}
-
-
-def _popup_state(state: dict, plan_obj: dict, ledger: RunLedger, messages: list,
-                 executor: SkillExecutor) -> dict:
-    """喂给 `graph._confirm_popup` 的最小 state（它读的四个键，见 `_pending_popup`）。
-
-    `messages` 必须带上**本轮已执行工具的真结果**：`_target_evidence`（"文章 id 有据"
-    那条判据）从 `ToolMessage` 里找材料，喂空的会让文章族写操作的目标判据恒假 ⇒ 卡弹不
-    出来——方向是**假阴性**，恰好是"评测里做不到生产做得到的事"，而报告上看起来像
-    "这臂不会弹卡"。`executor.calls` 就是这一轮的逐次真调用（工具名 + 结果原文）。
-    """
-    calls = list(getattr(executor, "calls", []) or [])
-    extra = [ToolMessage(content=str(c.get("result") or ""),
-                         name=str(c.get("tool") or ""),
-                         tool_call_id=f"popup_{i}") for i, c in enumerate(calls)]
-    return {
-        "messages": list(messages or []) + extra,
-        # `_plan_skill` 只读这一格，而令牌里签的技能名就是它：空 ⇒ `sign` 拒绝签发
-        # ⇒ 卡弹不出来（所以 `stream` 里按"最近一次有效计划"记着，见那里的注）。
-        "plan_obj": dict(plan_obj or {}),
-        "receipts": list(ledger.receipts),
-        "confirm_grant": (state or {}).get("confirm_grant"),
-    }
-
-
-def _plan_for_gate(plan_obj: dict) -> dict:
-    """`plan_obj` → **能被 `plan_state` 编码**的那份（缺键补上，不静默）。
-
-    `plan_state`（= `plan_encode` 的唯一调用点，`tests/test_plan_channel.py` 用源码锁
-    钉着）要 `skill` 与 `reply` 两个键，缺一个就是 `KeyError`。本线的 `_plan_of` 在
-    **一条工具调用都没发生**时返回 `{}`（纯闲聊轮），那时生产那边的技能名是 `chat`
-    ——按它补，别填空串：`gate_node` 拿 `plan["skill"]` 当分族判据的入参，空串会退化
-    成宽查（漏判，方向安全但读数与生产不是同一档）。
-    """
-    obj = dict(plan_obj or {})
-    obj.setdefault("skill", "chat")
-    obj.setdefault("tools", [])
-    obj.setdefault("note", "")
-    obj.setdefault("reply", "")
-    return obj
-
-
-def _gate_state(state: dict, plan_obj: dict, ledger: RunLedger, messages: list,
-                executor: SkillExecutor, reply: AIMessage, *, replan: bool) -> dict:
-    """喂给 `graph.gate_node` 的最小 state——**它读的键，逐个对得上**（20261011）。
-    P6 起它只是 `_round_state(..., reply=…)` 的一层壳（键清单与理由都在那边）。"""
-    return _round_state(state, plan_obj, ledger, messages, executor, reply=reply,
-                        replan=replan)
-
-
-def _round_state(state: dict, plan_obj: dict, ledger: RunLedger, messages: list,
-                 executor: SkillExecutor, reply: AIMessage | None = None,
-                 *, replan: bool = False) -> dict:
-    """本轮的最小 state——**两个消费端读的是同一批键**（20261011 起 gate，20261012 起 narrator）。
-
-    `reply=None`（narrator 那一支）**不放答复**：生产 narrator 看不到任何"草稿"（它读的是
-    计划契约与工具帧），把决策模型那条消息塞进去就是把 P6 拆掉的那件事又接回去。
-    闸门那一支必须带（`_repeat_reason` 的复读比对要看得见它）。
-
-    做法与 `_popup_state` 同族（那也是按目标函数读的键拼一份最小 state 去直调生产资产），
-    但**这两处合成了一份**（20261012）：`_narrator_plan` 与 `gate_node` 读的是同一批键
-    ——账甲 `_round_facts` 那一族正是两个消费端共用的合成函数，"两边各拼一份 state"
-    必然在某一天让它们对**同一轮**算出不一样的形状。键清单是用 grep 从 `gate_node`
-    **函数体**里数出来的（`state.get("…")` / `state["…"]`），不是凭记忆写的：
-
-        messages / plan / receipts / ledger / pending_confirm / noop_specs / gate_replan
-
-    ⚠️ **`gate_node` 的函数体里只有这七个是直接读的**（20261011 实测：`awk` 切出
-    12345–12802 逐行 grep）。另外三个是它调用的**辅助函数**读的，函数体里看不见，
-    20261011 补：
-
-        blocked / blocked_seen  ← `_round_facts`（账甲）与 `_blocked_article_targets`
-        confirm_grant           ← `_round_facts` 的 `granted`
-
-    漏这三个**不会报错**，只会让闸门**少开火**（`.get(…, [])` 把"本线没喂"与
-    "本轮确实没有"读成同一件事）——正是本仓最熟的"判据没接到底"那一族。两处已实证
-    的影响面：`_claim_issue` 的洞⑥（确认话术声称）读 `facts.consent_blocked`
-    ⇒ 缺 `blocked_seen` 时它恒 False ⇒ `promise_ok=True` ⇒ 那一族在本线上**不判**；
-    `_blocked_article_targets` 读 `state["blocked"]` 的 `spec` ⇒ 缺它时 5a 的混合轮
-    收窄恒不启用。`blocked` 的键形（`spec`/`tool`/`reason`）由 `_blocked_row` 给，
-    与 producer 读的那一份**同源**——两处各拼一份就会一处在判、一处在显示。
-
-    两处取法要**说准**，它们各自都有一个假读数：
-
-    · `messages` **必须把本轮的工具帧放进去**——`frames` 是 `gate_node` 判"有没有执行
-      事实"的唯一依据（它从消息流里挑 `ToolMessage`），喂空的会让**每一族声称判据**都
-      判成"零帧轮"（方向是**过严**：一条真办成了事的回复会被当成零帧轮按更宽的族去查）。
-      过闸门那一支还要把**答复本身**放进去（`reply=`），`_repeat_reason` 的复读比对才
-      看得见它；narrator 那一支不带（见上）。
-      帧用 `_tool_frame` ——**与发到用户/report 的是同一份**：闸门判的对象必须是主人
-      真看到的那些帧，另造一份措辞不同的一次性帧＝判据与事实分家。
-    · `plan` 走 **`plan_state(...)["plan"]`**（不是 `plan_encode` 直调 —— 那个函数
-      有源码锁，只许 `plan_state` 调；也不是自己拼 `SKILL=` 行 —— 那是第二份排版）。
-    · `ledger` 原样透传（洞⑦ 的台账否认判据读它，`graph_input` 装的就是这一格）。
-    · `gate_replan` 是**上一圈有没有重规划过**，由调用方给（见 `_gate` 的注）。
-    """
-    frames = [_tool_frame(i, c) for i, c in enumerate(executor.calls)]
-    blocked = [_blocked_row(b) for b in ledger.blocked]
-    return {
-        "messages": (list(messages or []) + frames
-                     + ([reply] if reply is not None else [])),
-        **plan_state(_plan_for_gate(plan_obj)),
-        "receipts": list(ledger.receipts),
-        # 账甲（`_round_facts`）与 `_blocked_article_targets` 读的三格：见 docstring
-        # 里那段"辅助函数读的键"。`blocked_seen` 的键形与 `execute_node` 的
-        # `_blocked_key` 逐字同款（`工具::原因码`）——生产那一支是**跨轮累积**，本线的
-        # `ledger.blocked` 同样只增不减，所以这一次运行的范围就是同一种累积。
-        "blocked": blocked,
-        "blocked_seen": sorted({f"{b.get('tool')}::{b.get('reason')}"
-                                for b in ledger.blocked}),
-        "confirm_grant": (state or {}).get("confirm_grant"),
-        "ledger": (state or {}).get("ledger") or {},
-        "pending_confirm": (state or {}).get("pending_confirm"),
-        "noop_specs": (state or {}).get("noop_specs") or [],
-        "gate_replan": bool(replan),
-    }
-
-
-def _blocked_row(b: dict) -> dict:
-    """受阻台账 → producer 读的那一行（它读 `spec` 与 `reason`）。
-
-    `spec` 的形态与生产一致（`<工具>(<json 参数>)`），producer 用 `_spec_one` 解回来
-    再渲染人话动作（`tool_action_text`）——自己拼中文动作行会让过程行两套措辞。
-    """
-    try:
-        args = json.dumps(b.get("args") or {}, ensure_ascii=False)
-    except Exception:  # noqa: BLE001
-        args = "{}"
-    return {"spec": f"{b.get('tool') or ''}({args})", "reason": b.get("reason"),
-            "tool": b.get("tool")}

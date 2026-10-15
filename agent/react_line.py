@@ -72,7 +72,8 @@ from typing_extensions import NotRequired
 from agent import authz
 from agent.decisions import _doc_title, _intent_done, _scan_action_intents
 from agent.entities import receipt_digest
-from agent.graph import _VERDICT_PASS, _check_spec, _tool_args, _tool_name
+from agent.frames import executed_specs
+from agent.graph import _VERDICT_PASS, _check_spec, _grant_covers, _tool_args, _tool_name
 from agent.principal import UNKNOWN as _UNKNOWN_PRINCIPAL
 
 logger = logging.getLogger(__name__)
@@ -238,7 +239,8 @@ class SkillExecutor:
 
     def __init__(self, tools_by_name: dict[str, Any], ledger: RunLedger, *,
                  role: str = "admin", principal: Any = None,
-                 user_msg: str = "", grant: Any = None) -> None:
+                 user_msg: str = "", grant: Any = None,
+                 state: dict | None = None) -> None:
         self.tools = tools_by_name
         self.ledger = ledger
         self.role = role
@@ -249,6 +251,10 @@ class SkillExecutor:
         # 所以不传它们时行为与从前一字不差。
         self.user_msg = user_msg
         self.grant = grant
+        # 生产那一份 state（20261016）：只为 `_grant_covers` 的 `executed` 一格——生产由
+        # `execute_node` 在请求内累积（`graph_input` 初值 `[]`），本线不往 state 里回写，
+        # 所以那一格还要**加上本线真执行过的**（见 `_grant_covers` 方法）。
+        self.state = state or {}
         # 调用者身份（P1，20261004）：`None` = 身份不明。判据是 `authz.check` 的
         # 那一处——**fail-closed**：身份不明 ⇒ 零权限（`REASON_UNKNOWN_ROLE`），
         # 从不"默认放行"。离线 A/B（工具全是桩、不碰库不碰设备）不传它，行为
@@ -387,19 +393,46 @@ class SkillExecutor:
                                "kind": kind, "verdict": verdict})
         return "\n".join(outs), len(specs)
 
+    def _grant_covers(self, spec: str) -> bool:
+        """这条 spec 是不是**令牌签名体里那一件**——直调生产那份判据（`graph._grant_covers`）。
+
+        **为什么要直调而不是写个等价的**：这条判据收窄过两次，每一次都对应一次生产事故
+        （两次的现场都写在 `_grant_covers` 的 docstring 里：一次点头授权了两件写、同一件
+        写静默落库三份）。本线此前停在**收窄之前**的那一版（`not self.grant`——「令牌在场」
+        当成「这一件被授权」），而 `tests/test_react_arm.py` ⑥d 又把那一行字符串钉住了
+        ⇒ 漂移被永久化。判据分家的两条偏差（比生产宽 / 比生产严）各自的读数都是假的，
+        所以这里只 import 生产那一份，不另立。
+
+        `executed` **必须现算**：`_grant_covers` 拿它实现"令牌用在那一件上就作废"
+        （20261012 第二次收窄）。生产那一格由 `execute_node` 在请求内累积，本线不往
+        那份 state 里回写——本轮真执行过的调用只活在 `self.calls` 里，两者相加才是
+        "这一轮已经执行过什么"。缺了它那一格判据**恒不生效**，形态是"同一个调用在
+        续跑轮里再被排出来时又被令牌放行"。
+        """
+        return _grant_covers(
+            {"confirm_grant": self.grant,
+             "executed": (list(self.state.get("executed") or [])
+                          + executed_specs(self.calls))},
+            spec)
+
     def _consent_missing(self, spec: str) -> bool:
         """这条 spec 是不是"写操作、这一轮没获同意"。
 
-        判据与 `graph.execute_node` 的 `consent_missing`（graph.py:8717）**逐字同款**
-        ——`requires_consent` ∧ 没有 `confirm_grant`（主人刚在卡上点过确定）∧ 这句里
-        没有对该技能的明确命令。改成别的写法会让两臂比的不是同一件事：
+        与 `graph.execute_node` 的 `consent_missing`（`graph.py:12602`）**逐条同款**
+        ——`requires_consent` ∧ 没被令牌覆盖（`_grant_covers`，**不是**"令牌在场"）∧
+        这句里没有对该技能的明确命令。改成别的写法会让两臂比的不是同一件事：
           · 比生产**宽**（多判成"要问一句"）⇒ 生产里会直执行的写，这里静默不执行；
           · 比生产**严**（放行了本该问的）⇒ 评测里做得出生产做不出的写。
         两条偏差各自的读数都是假的，所以这里只 import 生产那一份判据，不另立。
+
+        ⚠️ 20261016 修：这里此前写的是 `not self.grant`。那句话在 20261012 之后**与生产
+        不是同一条判据了**——`_grant_covers` 就是为收窄它而生的（见该方法的 docstring）。
+        本条 docstring 当时还自称"逐字同款"并把生产那处**指到了 `graph.py:8717`**
+        （真址 12602，漂了约 3900 行）：**指路自己先漂了**，这是"手抄的表没人守"的典型形态。
         """
         name = _tool_name(spec)
         return (authz.requires_consent(self.principal, name)
-                and not self.grant
+                and not self._grant_covers(spec)
                 and not authz.consent_granted(self.principal, name, self.user_msg))
 
 
