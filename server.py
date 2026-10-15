@@ -46,8 +46,8 @@ from agent.summarizer import summarize
 # 过程行，现在在 `agent/action_text.py` 里。
 # 会话级任务状态（20260927 批 D）：登记帧的发出与流尾的**确定性结算**都在 producer
 # （这里拿得到 req 与流内全部回执——两样东西凑齐的地方只有这一处，见 _run_agent_stream_to_queue）
-from agent.tasks import (advance_by_receipts, render_open_tasks, rows_to_settle,
-                         task_rows)
+from agent.tasks import (advance_by_tools, done_tools, render_open_tasks,
+                         rows_to_settle, task_rows)
 # 写工具参数的归一（20260923 批 7）原在本文件 import：`_tool_action_text` 用它把
 # "预告帧"与"计划文本"对同一个参数值的理解对齐。**20260928 渲染搬进
 # `agent/action_text.py` 后这里不再需要**（那两件仍从同一处 import，纪律不变：
@@ -1019,6 +1019,59 @@ def _specs_from_tools(tools) -> list:
     return out
 
 
+def _task_satisfied_specs(ex_upd: dict) -> list:
+    """`execute` 的**零改动出口**报上来的"系统读到现状、目标已达标"那批 spec（20261015）。
+
+    形状过滤就在这里做：非 dict、或工具名为空的一律丢掉（下游判据按 `tool` 配对，空名
+    进来只会白跑一圈）。它**不产生回执**——这一轮确实什么都没执行，回执那格保持原样；
+    只有流尾结算把它当台账那一步的**第二种完成证据**（见 `_task_advance_rows`）。
+    """
+    return [s for s in (ex_upd.get("task_satisfied") or [])
+            if isinstance(s, dict) and str(s.get("tool") or "")]
+
+
+def _task_advance_rows(open_tasks: list, declared_tasks: list, exec_rows: list,
+                       satisfied_specs: list, record) -> list[dict]:
+    """流尾任务结算：算出这一轮该发哪几帧 `__TASK__`（**发帧留在 producer 里**）。
+
+    为什么"算"与"发"要分开：任务由**系统按证据结算**（模型说了不算，同 execution_log
+    的纪律），而这段游标推进自带一串判据（两种证据并用、`via` 归类、证据原样落 trace）
+    ——把它埋在流式编排里，那个函数每加一条结算判据就再长一截（复杂度闸已贴预算）。
+
+    结算范围 = Rust 读回来的行（上一轮起就挂着）+ 本轮新登记的行；两类的 ts 下限不同
+    （读回来的行 0、新登记的行用登记时刻），**逐行配对**的理由与那个"两行同 id"的陷阱
+    见 `tasks.rows_to_settle` 的 docstring。
+
+    两种证据**在同一次游标推进**里并用（不是先试回执、推不动再试系统认定）：分两次的
+    话，回执推动到一半就返回，系统认定那半不会再补上，那一行照样停在中途、下一轮继续
+    被催。第一种 = 某一步声明的工具这一轮真的 PASS 执行过（`tasks.done_tools`）；
+    第二种 = 系统读到现状、目标本来就成立（`satisfied_specs`，判据见
+    `tasks._settled_by_already`）。
+
+    `via` 记的是这一轮**在场的**是哪几种证据（不是"这一步靠哪一种"——游标推进只认
+    "这一步有没有证据"，分不出单步归属）。`via` 与 `satisfied` 都只进 trace、
+    **不进帧**：`__TASK__` 的载荷键集与 Rust 的列一一对应，多一个键要同步另一侧。
+    证据本身也原样记（`{tool, args}`）：判据是"工具 ∧ 共同键相等"，只记工具名的话事后
+    分不出"这一行为什么结掉了"——而"靶对不对得上"正是那条判据的射程所在（trace 是
+    JSON，原样落得下，不另写一份 `工具名({json})` 的拼装——那串字面全仓已有十余处）。
+    """
+    out: list[dict] = []
+    for task, after in rows_to_settle(open_tasks, declared_tasks):
+        rcpt = done_tools(exec_rows, declared_after=after)
+        adv = advance_by_tools(task, rcpt, satisfied=satisfied_specs)
+        if not adv:
+            continue
+        record("producer", "task_advance", task_id=str(task.get("task_id") or ""),
+               cursor=adv.get("cursor"), total=adv.get("total_steps"),
+               state=adv.get("state"),
+               via="+".join([x for x in (("receipts" if rcpt else ""),
+                                         ("satisfied" if satisfied_specs else "")) if x])
+               or "none",
+               **({"satisfied": satisfied_specs} if satisfied_specs else {}))
+        out.append(adv)
+    return out
+
+
 def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Queue, loop, user_id: int = 0,
                                stop_event: threading.Event | None = None,
                                principal: Principal | None = None,
@@ -1122,6 +1175,12 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         # 它们的 `declared_after`（同轮新登记的行走 ts 过滤，见 tasks.advance_by_receipts
         # 的注：不这么做，"先导航再登记"那半步会被自己刚执行的回执立刻算完成）。
         declared_tasks: list = []
+        # 本次请求里"系统读到现状、认出目标已达标"的那批 spec（20261015）。**与回执
+        # 分开一份**是刻意的：回执是"真执行过"（进 execution_log、进跨轮记忆、进
+        # narrator 的事实），这一份只是"不需要执行也已经达标"——合流会把没做的事说成
+        # 做了。唯一消费点是流尾结算（`_task_advance_rows`），带 `args` 而非只带工具名
+        # 的理由见 `tasks._settled_by_already`。
+        satisfied_specs: list = []
         # 注入端记账（20260927 批 D）：本会话**读回来了几条**未完结任务、都是谁。
         # 为什么值得一条 trace 事件：`eval/corpus_invariants.py` 的 I6 要判"挂着的任务
         # 有没有人管"，而"这一轮系统给 planner 看过什么"只有 trace 知道——不记这一格，
@@ -1341,6 +1400,9 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                 # execute update 的 receipts 都是请求内全部 PASS 行，末批即全量
                 ex_upd = data.get("execute")
                 if ex_upd:
+                    # 「系统认定已达标」的那批 spec（20261015），同轮可能多次 update ⇒
+                    # 累加（形状过滤与"为什么不产生回执"见 `_task_satisfied_specs`）。
+                    satisfied_specs.extend(_task_satisfied_specs(ex_upd))
                     # 写操作确认弹窗（20260921）：execute 在同意闸上把"有意向但没判成
                     # 命令"的写 spec 收成一次确认（见 graph._confirm_popup），本轮
                     # **零执行、零 LLM**——图直接路由到 END（route_after_execute），
@@ -1564,26 +1626,15 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                    emitted_head=emitted_reply[:80], recorded_head=recorded_reply[:80])
         record("producer", "stream_end", reply=emitted_reply if saw_model_chunk
                else (recorded_reply or emitted_reply))
-        # 任务结算（20260927 批 D）：**由系统按回执结算，模型说了不算**（同
-        # execution_log 的纪律）。判据是"某一步声明的工具这一轮真的 PASS 执行过"
-        # （`tasks.advance_by_receipts`），推进一步发一帧 `__TASK__` 回写 cursor/state，
-        # 全部推进完 ⇒ succeeded ⇒ 下一轮不再注入（Rust 的终态过滤在 SQL 里）。
-        # 放在流尾（与 __EXEC__ 同处）是刻意的：执行的完整回执到这一刻才齐，
-        # 早发会拿半份回执去结算（把"还没做"记成"做了"）。
-        # 失败只记一行——它是辅助事实，绝不阻断对话（与 __EXEC__/__PENDING__ 同口径）。
+        # 任务结算（20260927 批 D）：**由系统按证据结算，模型说了不算**（同
+        # execution_log 的纪律），推进一步发一帧 `__TASK__` 回写 cursor/state，全部
+        # 推进完 ⇒ succeeded ⇒ 下一轮不再注入（Rust 的终态过滤在 SQL 里）。判据、
+        # 两种证据与"为什么放在流尾"（执行的完整回执到这一刻才齐，早发会把"还没做"
+        # 记成"做了"）见 `_task_advance_rows`。失败只记一行——它是辅助事实，绝不阻断
+        # 对话（与 __EXEC__/__PENDING__ 同口径）。
         try:
-            # 结算范围 = Rust 读回来的行（上一轮起就挂着）+ 本轮新登记的行。两类的
-            # ts 下限不同（读回来的行 0、新登记的行用登记时刻），**逐行配对**的理由
-            # 与那个"两行同 id"的陷阱见 `tasks.rows_to_settle` 的 docstring。
-            rows = rows_to_settle(open_tasks, declared_tasks)
-            for task, after in rows:
-                tid = str(task.get("task_id") or "")
-                adv = advance_by_receipts(task, exec_rows, declared_after=after)
-                if not adv:
-                    continue
-                record("producer", "task_advance", task_id=tid,
-                       cursor=adv.get("cursor"), total=adv.get("total_steps"),
-                       state=adv.get("state"))
+            for adv in _task_advance_rows(open_tasks, declared_tasks, exec_rows,
+                                          satisfied_specs, record):
                 asyncio.run_coroutine_threadsafe(
                     queue.put("__TASK__:" + json.dumps(adv, ensure_ascii=False)),
                     loop).result()

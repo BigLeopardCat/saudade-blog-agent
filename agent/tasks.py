@@ -978,17 +978,91 @@ def frame_payload(decl: dict, conversation_id: int, audit: dict | None = None) -
     }
 
 
+def done_tools(receipts: Any, *, declared_after: float = 0.0) -> set:
+    """**回执**那条证据 → 这一轮真执行过的工具名集合（纯函数）。
+
+    一条回执 = 一次 checker 判 PASS 的执行（`graph.execute_node` 的 receipts），
+    这是"发生过"的唯一事实来源（与 `execution_log` 同一条纪律）。`declared_after`
+    是同轮新登记那行的声明时刻（见 `advance_by_receipts`）。
+
+    粒度是**工具名**——这是它原本的口径，20261015 加第二种证据时**没有**跟着放宽
+    （第二种证据自带更窄的靶判据，见 `advance_by_tools` 的 `satisfied`）。
+    """
+    out = {str(r.get("tool") or "") for r in receipts
+           if isinstance(r, dict) and float(r.get("ts") or 0) > declared_after}
+    out.discard("")
+    return out
+
+
+def _settled_by_already(step: Any, satisfied: Any) -> bool:
+    """这一步**不需要执行**也算达标吗？——第二种证据的射程判据（纯函数）。
+
+    证据来自 `adminops.reached_specs`：系统自己读了现状，认出那一件的**目标值已经
+    成立**（`graph._confirm_popup` 的幂等出口把摘掉的那些 spec 原样带出来）。
+    为什么必须有它（实测，不是推演）：一个**不产生回执的出口**在"靠回执结账"的账上
+    **永远结不掉**。现场 `at_c2a9c87d`「给用户 demo 重置额度」：20261013 被判成
+    "额度本来就是满的" ⇒ 零执行零回执 ⇒ 那一行从 20261013 挂到 20261015，每轮被催
+    一次，最后一轮催完 planner 转手把**两轮前就办完的**另一件事又规划了一遍。
+
+    判据三层，**方向一律是"不认"**（宁可继续催，也绝不把没做的那件判成做完了）：
+
+      ① 工具名相同——这一层与回执那条一样；
+      ② 两边都有 `args` 时，**共同键**的取值必须相同。只在单侧出现的键不管：台账那一步
+         的 args 出自意图清单（`intents_to_declarations`），弹窗那一批出自 planner 的
+         计划文本，**两个产出方给同一件事的参数形态可以不同**（`{"name": "demo"}` vs
+         `{"user_id": 126}`）——按"逐字相等"判会连这一支真正要救的那件事都认不出来
+         （修法认不出 = 那一行继续永远结不掉，等于没修）。
+         之所以不满足于①：同工具、**换靶**（台账那步是文章 19、这一轮摘掉的是文章 21）
+         按工具名会**静默**把那一步判成办完了——比"一直催"坏得多（`_grant_covers` 在
+         授权侧用的就是"同工具 ∧ 参数逐字"，本条是它在"两个产出方不同"时的可达形态）。
+      ③ 形状不齐（老行没有 `args`、或对方给的 args 不是 dict）⇒ 退回只比工具名——
+         退回的是**今天的行为**，不比原来更宽，也不假装判得更准。
+    """
+    if not isinstance(step, dict) or not isinstance(satisfied, (list, tuple)):
+        return False
+    tool = str(step.get("tool") or "")
+    if not tool:
+        return False
+    want = step.get("args")
+    for spec in satisfied:
+        if not isinstance(spec, dict) or str(spec.get("tool") or "") != tool:
+            continue
+        got = spec.get("args")
+        if not isinstance(want, dict) or not isinstance(got, dict):
+            return True
+        if all(want[k] == got[k] for k in set(want) & set(got)):
+            return True
+    return False
+
+
 def advance_by_receipts(task: dict, receipts: list, *,
                         declared_after: float = 0.0) -> dict | None:
-    """一条未完结任务 × 本轮的 PASS 回执 → 要回写的更新（无推进 → None）。
+    """`advance_by_tools` 的**回执那一条证据**（只有回执，线上原口径）。
 
-    **结算判据是回执，不是模型的话**（与 `execution_log` 同一条纪律）：某一步声明的
-    工具在本轮回执里出现过（`ts > declared_after`）⇒ 该步算完成。从当前游标**连续**
-    推进（前面那步没做就停在那儿，不做跳跃）——跳跃会让"进度 2/3"变成一句编出来的话。
+    **结算判据是回执，不是模型的话**（与 `execution_log` 同一条纪律）。`declared_after`
+    是**同轮新登记**的行的声明时刻：不传的话，"先导航（轮 0）再登记（轮 1）"这一族里，
+    轮 1 登记的行会拿轮 1 之前那些回执去结算（那是登记之前发生的事）。Rust 读回来的行
+    （上一轮登记的）传 0 —— 它天然早于本轮任何回执。
 
-    `declared_after` 是**同轮新登记**的行的声明时刻：不传的话，"先导航（轮 0）再登记
-    （轮 1）"这一族里，轮 1 登记的行会拿轮 1 之前那些回执去结算（那是登记之前发生的事）。
-    Rust 读回来的行（上一轮登记的）传 0 —— 它天然早于本轮任何回执。
+    保留这个入口（而不是让调用方都改拼 `done_tools`+`advance_by_tools`）的理由：
+    `settled_by_receipts` / `next_cursor` 两个纯函数只关心回执那一条，多一个"系统认定"
+    的形参会把它们的语义讲糊——**它们的调用方没有那种证据**。
+    """
+    return advance_by_tools(task, done_tools(receipts, declared_after=declared_after))
+
+
+def advance_by_tools(task: dict, done: "set[str] | Any", *,
+                     satisfied: Any = ()) -> dict | None:
+    """一条未完结任务 × 两种完成证据 → 要回写的更新（无推进 → None）。
+
+    **游标推进只有这一个实现**（本函数 20261015 从 `advance_by_receipts` 里拆出来，
+    只为了给"已完成"加第二个证据来源而不出现第二套游标逻辑）：从当前游标**连续**推进
+    （前面那步没做就停在那儿，不做跳跃）——跳跃会让"进度 2/3"变成一句编出来的话。
+
+    `done` = 回执那条证据（工具名集合，`done_tools` 的产物）；`satisfied` = 系统认定
+    那条（`[{"tool": …, "args": …}]`，判据见 `_settled_by_already`）。两种证据在**同一次
+    游标推进**里并用：分两次的话，回执推动到一半就返回，另一条永远不会补上，那一行照样
+    停在中途、下一轮继续被催。
 
     解不出 `steps`（列被截断/写坏）⇒ None：**结算不了就不结算**，绝不猜"就当它做完了"。
     """
@@ -997,13 +1071,14 @@ def advance_by_receipts(task: dict, receipts: list, *,
         return None
     cursor = max(0, int(task.get("cursor") or 0))
     total = max(int(task.get("total_steps") or 0), len(steps))
-    done_tools = {str(r.get("tool") or "") for r in receipts
-                  if isinstance(r, dict) and float(r.get("ts") or 0) > declared_after}
+    finished = {str(t) for t in (done or ()) if str(t)}
     moved = cursor
     while moved < len(steps):
         one = steps[moved] if isinstance(steps[moved], dict) else {}
         tool = str(one.get("tool") or "")
-        if not tool or tool not in done_tools:
+        if not tool:
+            break
+        if tool not in finished and not _settled_by_already(one, satisfied):
             break
         moved += 1
     if moved == cursor:
@@ -1147,6 +1222,12 @@ def drop_is_completion(open_tasks: Any, conversation_id: Any, decl: Any,
     查不到对应行（goal 没登记过 / 会话 id 不是整数）⇒ `False`（**按撤下处理**）：
     此时没有"步骤"可判，而无从判定的撤下只会给 Rust upsert 出一行 `cancelled`
     ——终态行不参与注入，代价接近零；反过来拦掉它才是瞎猜。
+
+    ⚠️ 这里**刻意只用回执**（20261015 给流尾结算加了第二种证据之后仍然如此）：这条闸
+    问的是"**这一轮真把它做完了吗**"（模型的 `task_drop` 是不是在给一次真执行收尾），
+    而"系统读到现状、目标本来就成立"回答的是另一个问题——它不需要**这一轮**发生任何
+    事，早就是那样了。把它并进来会让"主人说不做了"在"事情碰巧本来就成了"时被拦下，
+    方向正好反了（主人那句话才是这里的权威）。
     """
     if not isinstance(decl, dict) or decl.get("state") != "cancelled":
         return False

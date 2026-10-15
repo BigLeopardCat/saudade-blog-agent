@@ -35,6 +35,7 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -347,6 +348,67 @@ with patch.object(base, "_tag_index", lambda config: {}), \
               bool((r_fail or {}).get("pending_confirm")), str(r_fail)[:90])
 
 # ══════════════════════════════════════════════════════════════════
+print("\n②b 掏空 + 这一轮**真办过事** ⇒ 正文不许说「连写请求都没有发出去」（20261015）")
+
+# 现场 trace `20261015T092916`（会话 347）：主人点了确认卡 ⇒ 令牌那一轮把站内通知
+# **真的发出去了**（回执在系统里、执行台账里也有）；紧接着 planner 把**两轮前就办完**的
+# `set_article_status(54)` 当成本轮任务 ⇒ 到这一格时 `picks` 被掏空 ⇒ 气泡却说
+# 「这一轮**没有做任何改动**——连写请求都没有发出去」。主人刚点的那件事从这一轮的回复里
+# 整个消失了（execution_log 不发给前端，气泡是他唯一读得到的东西）。
+# 判据 = **这一轮真发出去过的写回执**（账甲 `ok_write_rows`，即 `_has_real_change` 的
+# 逐条版本），不是叙述、也不是"计划里排了什么"。
+_NOTICE_RCPT = {"skill": "notice_send", "tool": "send_user_notice", "ts": 1.0,
+                "args": {"name": "guest5", "body": "来一趟"},
+                "result": "已把通知发给账号「guest5」（账号 id=126）：标题「站内通知」，"
+                          "正文「来一趟」。"}
+_ST_PLAN = {"skill": "article_status", "params": {}, "tools": [], "note": "", "reply": "x"}
+_ST_SPEC = 'set_article_status({"article_id": 12, "status": "public"})'
+_MSG_ST = "文章 12 设成公开吧"
+
+
+def _popup_done(receipts, noop_specs=()):
+    """真跑 `_confirm_popup`，只把**本轮已有的回执**填进 state（后端读照旧桩掉）。"""
+    st = {"messages": [HumanMessage(content=_MSG_ST)], **g.plan_state(_ST_PLAN)}
+    st["receipts"] = list(receipts)
+    st["noop_specs"] = list(noop_specs)
+    return g._confirm_popup(st, [_ST_SPEC], Principal(uid=1, role="admin"), _MSG_ST,
+                            {"configurable": {"user_id": 1, "conversation_id": 42}})
+
+
+with patch.object(base, "_note_index", lambda config: NOTES):
+    r_done = _popup_done([_NOTICE_RCPT]) or {}
+    _td = r_done.get("noop_text") or ""
+    check("前置：文章 12 本来就是公开 ⇒ 这一批被掏空、不弹卡",
+          not r_done.get("pending_confirm") and bool(_td), str(r_done)[:100])
+    check("★ 这一轮确实发出过写请求 ⇒ 正文**不许**说「连写请求都没有发出去」"
+          "（那是**整轮**的声称，而这一格只看得到它自己那一批）",
+          "连写请求都没有发出去" not in _td, _td[:160])
+    check("  真办过的那件用**回执原文**印出来（主人看得见自己点的这件事真的办了）",
+          "已把通知发给账号「guest5」" in _td, _td[:200])
+    check("  已达成那几件的现状照旧印出来（① 没被挤掉）",
+          "文章 12" in _td and "本来就是公开" in _td, _td[:160])
+    check("  收窄后的说法仍在（「没有为它们再发一次写请求」）",
+          "一件都没有动过" in _td, _td[:200])
+
+    # 反控①：这一轮零写回执 ⇒ **逐字**回到老话术（②③ 两条硬要求一个字没变）
+    _t0 = (_popup_done([]) or {}).get("noop_text") or ""
+    check("  反控：零写回执 ⇒ 老话术逐字不变（「没有做任何改动」+「连写请求都没有发出去」）",
+          "没有做任何改动" in _t0 and "连写请求都没有发出去" in _t0 and "对账" not in _t0)
+    # 反控②：那条回执是**短路的零改动写**（工具自报 `changed=False`，站内一个字节都没变）
+    # ⇒ 它不算"真发出去过"，不许被拿去当"这一轮办了事"的证据（判据是 receipts×noop_specs，
+    # 与洞⑩ 同一份；只读 receipts 会把零改动的那一族全算成真写）。
+    _sig = [list(g._spec_signature("send_user_notice", _NOTICE_RCPT["args"]))]
+    _t1 = (_popup_done([_NOTICE_RCPT], noop_specs=_sig) or {}).get("noop_text") or ""
+    check("  反控：回执在 `noop_specs` 里（零改动）⇒ 照旧说「连写请求都没有发出去」",
+          "连写请求都没有发出去" in _t1 and "对账" not in _t1, _t1[:160])
+    # 反控③：只读那几条回执**不算数**——读工具的回执再多，也不构成"发出过写请求"
+    _t2 = (_popup_done([{**{k: v for k, v in _NOTICE_RCPT.items() if k != "tool"},
+                         "tool": "get_article_detail", "result": "文章 12《架构漫谈》"}])
+           or {}).get("noop_text") or ""
+    check("  反控：读回执 ⇒ 不算（这一格问的是**写请求**发没发出去）",
+          "连写请求都没有发出去" in _t2, _t2[:160])
+
+# ══════════════════════════════════════════════════════════════════
 print("\n③ 混合轮：该弹的照弹、已达成的摘掉并写进卡面补充句")
 
 with patch.object(base, "_tag_index", lambda config: {}), \
@@ -566,6 +628,81 @@ check("  按零改动收尾（响亮的出口仍走 noop，不拿一个来路不
       isinstance(r_bad, dict) and bool(r_bad.get("noop_note")) and not r_bad.get("pending_confirm"),
       str(r_bad)[:120])
 
+# ══════════════════════════════════════════════════════════════════
+print("\n⑦ 「已达成」那一批进流尾结算（20261015）：不产生回执的出口也要能结账")
+
+# 现场 `at_c2a9c87d`「给用户 demo 重置额度」：20261013 被判成"额度本来就是满的"
+# ⇒ 零执行零回执 ⇒ 台账那一行从 20261013 挂到 20261015，每轮被催一次，最后一轮
+# 催完 planner 转手把两轮前就办完的另一件事又规划了一遍。根因一句话：
+# **一个不产生回执的出口，等于在"靠回执结账"的账上永远结不掉。**
+with patch.object(base, "_tag_index", lambda config: {}), \
+        patch.object(base, "_favorites_snapshot", lambda config, what: (FAV_ONLY_19, None)):
+    r_noop_task = _popup(['add_favorite({"article_id": 19})'], "文章 19 这篇我先收藏一下吧")
+    # 混合轮（这一节真正难的那一半）：一件已达成、一件要办 ⇒ 卡照弹，
+    # 但**已达成的那件也要带出去**——只给掏空那支出的话，台账那一步在混合轮这个
+    # 形状下照样永远结不掉，而混合轮恰恰是最常见的形状。
+    with patch.object(base, "_notifications_snapshot",
+                      lambda config, what: (NOTIF_HAS_UNREAD, None)):
+        r_mixed_task = _popup(['add_favorite({"article_id": 19})',
+                               'read_notifications({"all": true})'],
+                              "收藏一下文章 19，顺便把通知都标成已读")
+
+_sat = (r_noop_task or {}).get("task_satisfied") or []
+check("⭐ 掏空出口带回 `task_satisfied`——**带的是 spec（含靶）不是光秃秃的工具名**"
+      "（结算侧要比'是不是这一步那个靶'：只带名字，同工具换靶会静默算完成）",
+      _sat == [{"tool": "add_favorite", "args": {"article_id": 19}}], str(_sat))
+check("  它**不是回执**：`receipts` 一格没动（多一条就是把没做的事说成做了）",
+      (r_noop_task or {}).get("receipts") == [])
+check("⭐ 混合轮也带（卡照弹 + 已达成那件仍进证据）",
+      ((r_mixed_task or {}).get("task_satisfied") or [])
+      == [{"tool": "add_favorite", "args": {"article_id": 19}}],
+      str((r_mixed_task or {}).get("task_satisfied")))
+check("  混合轮的卡没被这一格弄坏（要办的那件还在卡上）",
+      [str(s.get("tool")) for s in ((r_mixed_task or {}).get("pending_confirm") or {})
+       .get("specs") or []] == ["read_notifications"])
+_gsrc = open(ROOT / "agent" / "graph.py", encoding="utf-8").read()
+check("  两个出口用的是**同一个**算法（`_satisfied_specs` 只此一处定义、两处调用）",
+      _gsrc.count("def _satisfied_specs(") == 1
+      and _gsrc.count("_satisfied_specs(already)") == 2)
+
+# 「必须显式声明」同 ④ 那条（未声明的 key 会被 LangGraph 静默丢出 updates 流 ⇒
+# server.py 恒收到空表、那一行照旧结不掉，且**无声**）。
+check("AgentState 显式声明了 task_satisfied（未声明 = 静默丢弃）",
+      "task_satisfied" in _ann)
+check("graph_input 给了空初值（`[]`——结算侧按 `or []` 读同一支）",
+      graph_input([]).get("task_satisfied") == [])
+
+# 接线（"能力有测试 ≠ 接线有测试"）：producer 收、并、结算，三段缺一这段就是空跑。
+check("接线：producer 收 execute 的 `task_satisfied` 并累加"
+      "（同轮可能多次 update）",
+      'ex_upd.get("task_satisfied")' in _src and "satisfied_specs.extend(" in _src)
+# 「同一次推进」这条**不能**用源码字面量判：写死一串调用文本，等于把断言钉在局部变量名
+# 上（`_rcpt`/`rcpt` 一改名就假红，而"是不是同一次"它一个字都没查）。真正要不许出现的是
+# **第二次调用**（"先试回执、推不动再试系统认定"那个形状）⇒ 判据 = 全文件里这个函数
+# **只被调用一处**，且那一处同时带着两种证据（位置参 + `satisfied=`）。
+_adv_calls = [n for n in ast.walk(ast.parse(_src))
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+              and n.func.id == "advance_by_tools"]
+check("⭐ 两种证据走**同一次**游标推进（分两次的话，推不动的那半永远补不上）",
+      len(_adv_calls) == 1
+      and len(_adv_calls[0].args) >= 2
+      and [k.arg for k in _adv_calls[0].keywords] == ["satisfied"],
+      f"调用处 {len(_adv_calls)} 个；"
+      f"参={[ast.dump(a) for a in (_adv_calls[0].args if _adv_calls else [])][:3]} "
+      f"kw={[k.arg for k in (_adv_calls[0].keywords if _adv_calls else [])]}")
+# 帧载荷那条用 AST 判而不是 grep 源码文本：`__TASK__` 的键集与 Rust 的列一一对应，
+# 多一个键要同步另一侧（本批零 Rust 改动）——而"多没多键"只有看这次调用才知道。
+_dumps_adv = [n for n in ast.walk(ast.parse(_src))
+              if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute) and n.func.attr == "dumps"
+              and isinstance(n.func.value, ast.Name) and n.func.value.id == "json"
+              and n.args and isinstance(n.args[0], ast.Name) and n.args[0].id == "adv"]
+_extra = [k.arg for n in _dumps_adv for k in n.keywords if k.arg not in ("ensure_ascii",)]
+check("⭐ `__TASK__` 帧的载荷就是结算回写本身、一个额外键都不加"
+      "（`via`/`satisfied` 只进 trace）",
+      len(_dumps_adv) == 1 and not _extra, str(_extra))
+
+# ══════════════════════════════════════════════════════════════════
 print()
 if FAILED:
     print(f"{len(FAILED)} 条未通过：")
