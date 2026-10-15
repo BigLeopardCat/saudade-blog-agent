@@ -368,6 +368,14 @@ class AgentState(TypedDict):
     #            "零工具帧 + 一件本来就办好的事"——它最可能说的就是"我已经帮你办好啦"。
     noop_text: str
     noop_note: str
+    # task_satisfied: 「状态已达成」那一批被摘掉的写 spec（`{tool, args}`，20261015）。
+    #            **不是回执**（这一轮零执行），而是交给流尾结算的**第二种完成证据**
+    #            ——判据见 `tasks._settled_by_already`（比工具名窄：还要靶对得上）。
+    #            没有这一格，"零改动出口"在只认回执的账上就永远结不掉（现场
+    #            `at_c2a9c87d`「给用户 demo 重置额度」从 20261013 挂到 20261015、天天被催）。
+    #            **必须显式声明**（理由同 noop_text：未声明的 key 会被 LangGraph 静默
+    #            丢出 updates 流 ⇒ server.py 恒收到空表、那一行照旧结不掉，且无声）。
+    task_satisfied: list[dict]
     # pending_action: 本轮弹窗那条待办的**结构化形态**（{task_id, skill, specs, target,
     #                 requested_by, source_event}）——server.py 见它随 __CONFIRM__ 一起
     #                 发 `__PENDING__` 帧给 Rust 落库（Rust 收到即写、不转发前端），
@@ -3274,6 +3282,10 @@ class RoundFacts(NamedTuple):
     # 用途只有一处：洞⑥ 的 ① 支（承诺形态）在这一档里是**有据的**，见 `_claim_issue`。
     # 带默认值 ⇒ `RoundFacts(**base)` 这类既有构造（单测）逐字节不变。
     consent_blocked: bool = False
+    # `ok_writes` 那一列的**明细行**（同一次循环里攒的，不重判）：掏空出口要把
+    # "这一轮真发出去过什么"印给主人看，光有工具名（`set_article_status`）没法印。
+    # 带默认值 ⇒ `RoundFacts(**base)` 这类既有构造（单测）逐字节不变。
+    ok_write_rows: tuple = ()
 
 
 def _plan_tool_specs(raw) -> list:
@@ -3307,12 +3319,17 @@ def _round_facts(state) -> RoundFacts:
     noop = {tuple(s) for s in (state.get("noop_specs") or [])}
     ok: list[str] = []
     noop_w: list[str] = []
+    ok_rows: list[dict] = []
     for r in receipts:
         name = str(r.get("tool") or "")
         if not authz.is_write(name):
             continue
         # 归一化与 receipts / 剪裁 / planner 去重同一份（`_spec_signature`），别另写。
-        (noop_w if _spec_signature(name, r.get("args") or {}) in noop else ok).append(name)
+        if _spec_signature(name, r.get("args") or {}) in noop:
+            noop_w.append(name)
+        else:
+            ok.append(name)
+            ok_rows.append(r)
     planned = tuple(
         n for n in (_tool_name(s) for s in _plan_tool_specs(state.get("plan")))
         if n and authz.is_write(n))
@@ -3333,6 +3350,7 @@ def _round_facts(state) -> RoundFacts:
         planned_writes=planned,
         ok_writes=tuple(ok),
         noop_writes=tuple(noop_w),
+        ok_write_rows=tuple(ok_rows),
         # 「真改了东西」仍由 `_has_real_change` 一处判（它收的是 receipts×noop_specs，
         # 与我上面那两列的算法同源；这里只是把它的结论搬进来，不复制它的判据）。
         changed=_has_real_change(receipts, state.get("noop_specs")),
@@ -11797,6 +11815,218 @@ def _sign_confirm_picks(state: AgentState, config, principal, picks: list):
     return token, units
 
 
+def _satisfied_specs(already: list) -> list:
+    """`reached_specs` 判成「已达成」那一批的 `{tool, args}`——`task_satisfied` 的唯一算法。
+
+    两个出口（掏空收尾 / 混合轮的卡）都要带回这一格，所以它只能有一处：两份拷贝在
+    这种"顺手再抄一行"的形状上一定会漂（本族前例见 `_plan_skill` 头注那段）。
+
+    **为什么带 `args` 而不是只带工具名**：结算侧比的是"是不是**这一步的那个靶**"
+    （`tasks._settled_by_already`）——只带工具名的话，同工具换靶（台账那步是文章 19、
+    这一轮摘掉的是文章 21）会**静默**把台账那一步判成办完了。`why` 不带（它是给主人
+    看的文案，结算用不上，而 note 里已经印了工具名）。
+    名字为空的那几条丢掉：空名字进了证据集合会变成一条**谁都对不上**的证据。
+    """
+    return [{"tool": str(x.get("tool") or ""), "args": x.get("args") or {}}
+            for x in (already or ()) if str(x.get("tool") or "")]
+
+
+def _popup_index_snaps(picks: list, config, principal) -> dict:
+    """渲染问句要的四份「名字字典」：标签 / 分类 / 留言 / 文章。
+
+    它们喂 `adminops.render_confirm_question`——卡面得写出父标签**名字**、会失去分类的
+    文章数、匹配到的那一条留言（#id + 作者 + 原文）、要改的那篇文章的标题与现状。
+    四份**只在对应工具族真进了候选时才各读一次**（这条纪律随每一族重申一遍：别的写弹窗
+    一次都不多花）；读不到一律留 `None` ⇒ 问句退回名字/id 原文，**绝不因此不弹卡**
+    （回退到"判成歧义就追问"才是真正的死路形态）。
+    """
+    # 问句要把父标签**名字**写出来（20260921）：只写「新建二级标签「Rust」」时
+    # 用户无从核对它要挂到哪个爸爸底下，而"挂错父标签"正是本轮修的参数对调事故。
+    # 读字典失败 → index=None，问句退回名字原文（宁可只给名字，也不能因为一次
+    # 读不到就不弹窗——那会退回"死路"形态）。
+    try:
+        from tools.base import _tag_index
+        tag_index = _tag_index(config)
+    except Exception:
+        tag_index = None
+    # 分类字典只为分类写操作而读（删分类要报"有几篇文章会失去分类"）：一张平表、
+    # 一次请求，且**只在真要点到分类时才读**——标签写操作不该为此多一次网络往返。
+    cat_index = None
+    if any(str(s.get("tool") or "").endswith("_category") for s in picks):
+        try:
+            from tools.base import _category_index
+            cat_index = _category_index(config)
+        except Exception:
+            cat_index = None
+    # 留言清单同理（20260922 第六轮）：留言按正文片段指认，问句要把**匹配到的
+    # 那一条**（#id + 作者 + 原文）写出来，否则主人签的是一段"可能出现在好几条
+    # 留言里"的话。
+    board_index = None
+    if any(str(s.get("tool") or "").endswith("_board_comment") for s in picks):
+        try:
+            from tools.base import _board_index
+            board_index = _board_index(config)
+        except Exception:
+            board_index = None
+    # 文章清单同理：文章写操作的问句**不能只有内部 id**
+    # （「修改文章 46」），是整套写面里唯一的盲签——主人看不出那是不是他说的那篇，
+    # 而弹窗点确定正是文章这类写操作唯一的人类兜底（"目标有据 ≠ 目标唯一"）。
+    # 读的是与写工具读前值同一份后台清单（含草稿/私密、不含修改稿）：弹窗里的
+    # 「现在：草稿」必须是真的会被改的那一行的现状。读不到 → 退回只写 id，
+    # **绝不因此不弹窗**（那会退回"判成歧义就追问"的死路形态）。
+    # 20260923 批 7 补一道前置判据：这份清单挂在**管理员面**，而写面从这一批起
+    # 含普通访客也能用的收藏两件——对访客读它只会白拿一次 403。判据用 authz 那张
+    # 表现成的（他读不读得动 list_admin_notes），不另立规则。
+    note_index = None
+    if any(str(s.get("tool") or "") in _POPUP_TITLE_TOOLS for s in picks) \
+            and authz.check(principal, "list_admin_notes").allowed:
+        try:
+            from tools.base import _note_index
+            note_index = _note_index(config)
+        except Exception:
+            note_index = None
+    return {"tag_index": tag_index, "cat_index": cat_index,
+            "board_index": board_index, "note_index": note_index}
+
+
+def _popup_people_snaps(picks: list, config) -> dict:
+    """账号名录与待办清单：两份要印**可核对的 id / 排期**的实时读。
+
+    账号族的问句要写出账号 id（名字能被改、id 不会）；待办勾完成的问句要写出那一行的
+    排期与当前状态（待办既没有 id 也没有标题，正文是他唯一能认的）。同样**惰性**读，
+    读不到 → 只印名字/正文，**绝不因此不弹卡**（弹卡是这类写操作唯一的人类兜底）。
+    """
+    # 弹窗两件在下面两处都要用（SSE 帧 + 落库的待办行），提成局部量只为**同源**：
+    # 20260924 起卡片能在刷新后从库里重建，重建出来的问句/按钮必须与当轮弹的那张
+    # 逐字一致，各算一遍就是两份实现。
+    # 账号名录同理（20260926）：账号族的问句要把**账号 id** 写出来
+    # （「冻结账号「guest5」（账号 id=126，现在：正常）」／「给账号「guest5」
+    # （账号 id=126）发一条**站内通知」（标题「…」，正文：「…」）」）——主人得能核对
+    # "是不是那个人"，而账号名是可以被改的、id 不会。同样**惰性**读：只有 plan 里真含
+    # 这一族的工具时才多这一次请求，别的写弹窗一次都不多花。读不到 → 只印名字，
+    # **绝不因此不弹窗**（弹窗是这类写操作唯一的人类兜底，少了它比少一句现状严重得多）。
+    # 判据用 `_ACCOUNT_TOOLS`（整族）：发通知同样要印 id，漏了它卡面就只剩一个名字，
+    # 而正文全文才是那张卡真正要主人核对的东西（见 adminops.render_notice_action）。
+    users = None
+    if any(str(s.get("tool") or "") in _ACCOUNT_TOOLS for s in picks):
+        try:
+            from tools.base import _user_directory
+            users = _user_directory(config)
+            if not isinstance(users, dict):
+                users = None   # 读失败时它是 ToolResult（含原因文本），这里只当"没有"
+        except Exception:
+            users = None
+    # 待办列表同理（20260926 第十轮）：勾完成的问句要写出**那一行的排期与当前状态**
+    # （「把待办「交房租」勾成完成（排期 9月28日，现在：未完成）」）——待办没有 id 也
+    # 没有标题，正文是他唯一能认的；而"有没有这一条""是不是已经完成了"只有这份实时
+    # 列表能回答。同样**惰性**读：只有 plan 里真含这个工具时才多这一次请求。
+    # 读不到 → 只印正文，**绝不因此不弹窗**（同 users 那条注）。
+    todos = None
+    if any(str(s.get("tool") or "") in _TODO_TOOLS for s in picks):
+        try:
+            from tools.base import _admin_get, _todo_rows
+            # 读失败时 `_admin_get` 回的是 `ToolResult`（str 子类）⇒ `_todo_rows`
+            # 判它不是列表、回 None —— 正好就是"读不到"那一态，不必另设分支。
+            todos = _todo_rows(_admin_get("/api/protected/todos", config))
+        except Exception:
+            todos = None
+    return {"users": users, "todos": todos}
+
+
+def _popup_reached_snaps(picks: list, config) -> dict:
+    """「状态已达成」判据要的五份快照：收藏 / 通知 / 信箱 / 公告 / 额度申请（20260926）。
+
+    收藏两件、已读两件、额度三件写的是**主人自己账号里的**状态，公告改的是标题/正文
+    ——都不在上面那两份渲染快照里；`adminops.reached_specs` 要求"读得到现状"，才补这
+    几次惰性读。读不到一律留 `None` ⇒ 判据判不了 ⇒ **照弹卡**（fail-open 的方向永远是
+    弹卡，绝不静默拒绝一次主人要的写）。
+    """
+    # ── 「状态已达成」判据要的四份快照（20260926）─────────────────────────
+    # 收藏两件、已读两件写的是**主人自己账号里的**状态（`write.own`），公告改的是
+    # 标题/正文——三样都不在上面的渲染快照里。判据（adminops.reached_specs）要求
+    # "读得到现状"，所以这三族各补一次惰性读：**只在对应工具族真进了候选时才读**，
+    # 别的写弹窗一次都不多花（照 users/todos 那条既有纪律）。
+    # 读不到一律留 None ⇒ 判据判不了 ⇒ **照弹卡**（fail-open 的方向永远是弹卡，
+    # 绝不静默拒绝一次主人要的写）。
+    favorites = None
+    if any(str(s.get("tool") or "") in _FAVORITE_TOOLS for s in picks):
+        try:
+            from tools.base import _favorites_snapshot
+            # 与工具写前读**同一个函数**（见该函数头注）；这里只取第一项，失败
+            # 那一半（ToolResult）不进卡面（判据判不了就照弹，不需要多一句话）。
+            favorites, _fav_fail = _favorites_snapshot(
+                config, "你的收藏列表（拿不准现在是什么状态）")
+        except Exception:
+            favorites = None
+    notifications = None
+    if "read_notifications" in [str(s.get("tool") or "") for s in picks]:
+        try:
+            from tools.base import _notifications_snapshot
+            notifications, _nf = _notifications_snapshot(
+                config, "通知列表（拿不准哪几条是未读）")
+        except Exception:
+            notifications = None
+    messages = None
+    if "read_messages" in [str(s.get("tool") or "") for s in picks]:
+        try:
+            from tools.base import _mailbox_snapshot
+            messages, _mf = _mailbox_snapshot(
+                config, "你的信箱（拿不准哪几封是未读）")
+        except Exception:
+            messages = None
+    announcements = None
+    # `_ANNOUNCE_TOOLS` 里只有"改"这一件：新建没有"已经是这个状态"这回事、删除更没有
+    # （删一条已删的），两份都不该用"同值"这层判据去摘。
+    if any(str(s.get("tool") or "") in _ANNOUNCE_TOOLS for s in picks):
+        try:
+            from tools.base import _announcement_index
+            announcements = _announcement_index(config)
+        except Exception:
+            announcements = None
+    # 待处理的额度申请同理（20260929，第五份惰性读）：额度三件的卡面要印出**申请人
+    # 写的理由**（批准/驳回是拿别人的一句话做裁决，主人在点确定之前有权读到那句原话），
+    # 而"他现在有没有待处理的申请"只有这份实时队列能回答——驳回那一支的"状态已达成"
+    # 判据（没有 pending 行）也住在这里。同样**只在三件真进了候选时才读**，
+    # 别的写弹窗一次都不多花（照 users/todos 那条既有纪律）。
+    # 读不到 → 留 None ⇒ 判据判不了 ⇒ **照弹卡**（fail-open 的方向永远是弹卡）；
+    # 卡面那句理由跟着一起少说，绝不编。
+    quota_requests = None
+    if any(str(s.get("tool") or "") in _QUOTA_TOOLS for s in picks):
+        try:
+            from tools.base import _quota_pending_index
+            # 读失败时它回的是 `ToolResult`（str 子类，含原因文本）⇒ 判它不是 dict、
+            # 回 None —— 正好就是"读不到"那一态（与 users 那条同一招）。
+            quota_requests = _quota_pending_index(config)
+            if not isinstance(quota_requests, dict):
+                quota_requests = None
+        except Exception:
+            quota_requests = None
+    return {"favorites": favorites, "notifications": notifications,
+            "messages": messages, "announcements": announcements,
+            "quota_requests": quota_requests}
+
+
+def _popup_snapshots(picks: list, config, principal) -> dict:
+    """写确认卡要用的**现状快照**：十一份惰性读，只读真进了候选的那几族。
+
+    为什么要现读：卡面写的是"现在：<现状>"（这一步之前是什么样、这条留言是哪一条、
+    这个人是不是他），而"现状"只有当场读一次才知道——它是主人点确定之前唯一能核对的
+    东西。**每一份都只在自己那一族工具真进了候选时才读**：别的写弹窗一次都不多花。
+    读不到一律留 `None`（不是空值）：`adminops.reached_specs` 那三条判据（读到 +
+    认准 + 取值相等）缺一即判"没达成" ⇒ **照弹卡**——一次网络读不到绝不能变成"静默
+    拒绝一次主人要的写"。
+
+    为什么分成三组（20261015）：这一节此前内联在 `_confirm_popup` 里，十一族各自的
+    注释加在一起把那个函数顶到 436 行（复杂度闸的台账只许缩小，见
+    `tests/test_complexity_budget.py`）；而十一族合成一个函数又是 C=45 的新超预算项
+    ——于是按**用途**切三组（渲染问句 / 人名与待办 / 已达成判据），每组各自过闸。
+    **搬出来的是位置，不是行为**：同一批惰性读、同一份返回值、同一个 `None` 兜底。
+    """
+    return {**_popup_index_snaps(picks, config, principal),
+            **_popup_people_snaps(picks, config),
+            **_popup_reached_snaps(picks, config)}
+
+
 def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                    config) -> dict | None:
     """本轮要不要弹"写操作确认框"？要就返回 `pending_confirm` 的 state 增量。
@@ -11958,145 +12188,20 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                        len(target_dropped),
                        "、".join(f"{n}({why})" for _, n, why, _ in target_dropped))
         return None
-    # 问句要把父标签**名字**写出来（20260921）：只写「新建二级标签「Rust」」时
-    # 用户无从核对它要挂到哪个爸爸底下，而"挂错父标签"正是本轮修的参数对调事故。
-    # 读字典失败 → index=None，问句退回名字原文（宁可只给名字，也不能因为一次
-    # 读不到就不弹窗——那会退回"死路"形态）。
-    try:
-        from tools.base import _tag_index
-        tag_index = _tag_index(config)
-    except Exception:
-        tag_index = None
-    # 分类字典只为分类写操作而读（删分类要报"有几篇文章会失去分类"）：一张平表、
-    # 一次请求，且**只在真要点到分类时才读**——标签写操作不该为此多一次网络往返。
-    cat_index = None
-    if any(str(s.get("tool") or "").endswith("_category") for s in picks):
-        try:
-            from tools.base import _category_index
-            cat_index = _category_index(config)
-        except Exception:
-            cat_index = None
-    # 留言清单同理（20260922 第六轮）：留言按正文片段指认，问句要把**匹配到的
-    # 那一条**（#id + 作者 + 原文）写出来，否则主人签的是一段"可能出现在好几条
-    # 留言里"的话。
-    board_index = None
-    if any(str(s.get("tool") or "").endswith("_board_comment") for s in picks):
-        try:
-            from tools.base import _board_index
-            board_index = _board_index(config)
-        except Exception:
-            board_index = None
-    # 文章清单同理：文章写操作的问句**不能只有内部 id**
-    # （「修改文章 46」），是整套写面里唯一的盲签——主人看不出那是不是他说的那篇，
-    # 而弹窗点确定正是文章这类写操作唯一的人类兜底（"目标有据 ≠ 目标唯一"）。
-    # 读的是与写工具读前值同一份后台清单（含草稿/私密、不含修改稿）：弹窗里的
-    # 「现在：草稿」必须是真的会被改的那一行的现状。读不到 → 退回只写 id，
-    # **绝不因此不弹窗**（那会退回"判成歧义就追问"的死路形态）。
-    # 20260923 批 7 补一道前置判据：这份清单挂在**管理员面**，而写面从这一批起
-    # 含普通访客也能用的收藏两件——对访客读它只会白拿一次 403。判据用 authz 那张
-    # 表现成的（他读不读得动 list_admin_notes），不另立规则。
-    note_index = None
-    if any(str(s.get("tool") or "") in _POPUP_TITLE_TOOLS for s in picks) \
-            and authz.check(principal, "list_admin_notes").allowed:
-        try:
-            from tools.base import _note_index
-            note_index = _note_index(config)
-        except Exception:
-            note_index = None
-    # 弹窗两件在下面两处都要用（SSE 帧 + 落库的待办行），提成局部量只为**同源**：
-    # 20260924 起卡片能在刷新后从库里重建，重建出来的问句/按钮必须与当轮弹的那张
-    # 逐字一致，各算一遍就是两份实现。
-    # 账号名录同理（20260926）：账号族的问句要把**账号 id** 写出来
-    # （「冻结账号「guest5」（账号 id=126，现在：正常）」／「给账号「guest5」
-    # （账号 id=126）发一条**站内通知」（标题「…」，正文：「…」）」）——主人得能核对
-    # "是不是那个人"，而账号名是可以被改的、id 不会。同样**惰性**读：只有 plan 里真含
-    # 这一族的工具时才多这一次请求，别的写弹窗一次都不多花。读不到 → 只印名字，
-    # **绝不因此不弹窗**（弹窗是这类写操作唯一的人类兜底，少了它比少一句现状严重得多）。
-    # 判据用 `_ACCOUNT_TOOLS`（整族）：发通知同样要印 id，漏了它卡面就只剩一个名字，
-    # 而正文全文才是那张卡真正要主人核对的东西（见 adminops.render_notice_action）。
-    users = None
-    if any(str(s.get("tool") or "") in _ACCOUNT_TOOLS for s in picks):
-        try:
-            from tools.base import _user_directory
-            users = _user_directory(config)
-            if not isinstance(users, dict):
-                users = None   # 读失败时它是 ToolResult（含原因文本），这里只当"没有"
-        except Exception:
-            users = None
-    # 待办列表同理（20260926 第十轮）：勾完成的问句要写出**那一行的排期与当前状态**
-    # （「把待办「交房租」勾成完成（排期 9月28日，现在：未完成）」）——待办没有 id 也
-    # 没有标题，正文是他唯一能认的；而"有没有这一条""是不是已经完成了"只有这份实时
-    # 列表能回答。同样**惰性**读：只有 plan 里真含这个工具时才多这一次请求。
-    # 读不到 → 只印正文，**绝不因此不弹窗**（同 users 那条注）。
-    todos = None
-    if any(str(s.get("tool") or "") in _TODO_TOOLS for s in picks):
-        try:
-            from tools.base import _admin_get, _todo_rows
-            # 读失败时 `_admin_get` 回的是 `ToolResult`（str 子类）⇒ `_todo_rows`
-            # 判它不是列表、回 None —— 正好就是"读不到"那一态，不必另设分支。
-            todos = _todo_rows(_admin_get("/api/protected/todos", config))
-        except Exception:
-            todos = None
-    # ── 「状态已达成」判据要的四份快照（20260926）─────────────────────────
-    # 收藏两件、已读两件写的是**主人自己账号里的**状态（`write.own`），公告改的是
-    # 标题/正文——三样都不在上面的渲染快照里。判据（adminops.reached_specs）要求
-    # "读得到现状"，所以这三族各补一次惰性读：**只在对应工具族真进了候选时才读**，
-    # 别的写弹窗一次都不多花（照 users/todos 那条既有纪律）。
-    # 读不到一律留 None ⇒ 判据判不了 ⇒ **照弹卡**（fail-open 的方向永远是弹卡，
-    # 绝不静默拒绝一次主人要的写）。
-    favorites = None
-    if any(str(s.get("tool") or "") in _FAVORITE_TOOLS for s in picks):
-        try:
-            from tools.base import _favorites_snapshot
-            # 与工具写前读**同一个函数**（见该函数头注）；这里只取第一项，失败
-            # 那一半（ToolResult）不进卡面（判据判不了就照弹，不需要多一句话）。
-            favorites, _fav_fail = _favorites_snapshot(
-                config, "你的收藏列表（拿不准现在是什么状态）")
-        except Exception:
-            favorites = None
-    notifications = None
-    if "read_notifications" in [str(s.get("tool") or "") for s in picks]:
-        try:
-            from tools.base import _notifications_snapshot
-            notifications, _nf = _notifications_snapshot(
-                config, "通知列表（拿不准哪几条是未读）")
-        except Exception:
-            notifications = None
-    messages = None
-    if "read_messages" in [str(s.get("tool") or "") for s in picks]:
-        try:
-            from tools.base import _mailbox_snapshot
-            messages, _mf = _mailbox_snapshot(
-                config, "你的信箱（拿不准哪几封是未读）")
-        except Exception:
-            messages = None
-    announcements = None
-    # `_ANNOUNCE_TOOLS` 里只有"改"这一件：新建没有"已经是这个状态"这回事、删除更没有
-    # （删一条已删的），两份都不该用"同值"这层判据去摘。
-    if any(str(s.get("tool") or "") in _ANNOUNCE_TOOLS for s in picks):
-        try:
-            from tools.base import _announcement_index
-            announcements = _announcement_index(config)
-        except Exception:
-            announcements = None
-    # 待处理的额度申请同理（20260929，第五份惰性读）：额度三件的卡面要印出**申请人
-    # 写的理由**（批准/驳回是拿别人的一句话做裁决，主人在点确定之前有权读到那句原话），
-    # 而"他现在有没有待处理的申请"只有这份实时队列能回答——驳回那一支的"状态已达成"
-    # 判据（没有 pending 行）也住在这里。同样**只在三件真进了候选时才读**，
-    # 别的写弹窗一次都不多花（照 users/todos 那条既有纪律）。
-    # 读不到 → 留 None ⇒ 判据判不了 ⇒ **照弹卡**（fail-open 的方向永远是弹卡）；
-    # 卡面那句理由跟着一起少说，绝不编。
-    quota_requests = None
-    if any(str(s.get("tool") or "") in _QUOTA_TOOLS for s in picks):
-        try:
-            from tools.base import _quota_pending_index
-            # 读失败时它回的是 `ToolResult`（str 子类，含原因文本）⇒ 判它不是 dict、
-            # 回 None —— 正好就是"读不到"那一态（与 users 那条同一招）。
-            quota_requests = _quota_pending_index(config)
-            if not isinstance(quota_requests, dict):
-                quota_requests = None
-        except Exception:
-            quota_requests = None
+    # 卡面要的现状快照：**十一份惰性读**（每份只在自己那族工具真进了候选时才读），
+    # 各族的理由与"读不到一律照弹卡"的兜底见 `_popup_snapshots`。
+    snaps = _popup_snapshots(picks, config, principal)
+    tag_index = snaps["tag_index"]
+    cat_index = snaps["cat_index"]
+    board_index = snaps["board_index"]
+    note_index = snaps["note_index"]
+    users = snaps["users"]
+    todos = snaps["todos"]
+    favorites = snaps["favorites"]
+    notifications = snaps["notifications"]
+    messages = snaps["messages"]
+    announcements = snaps["announcements"]
+    quota_requests = snaps["quota_requests"]
     # ── 已经就是那个样子 ⇒ 从这一批里摘掉（20260926）─────────────────────
     # 用户实测的病：对一篇**已经收藏**的文章说"收藏这篇"，卡照弹、点确定还照走一遍
     # 写通道（回执诚实、卡不诚实）。判据是 `adminops.reached_specs` 那个纯函数，
@@ -12119,11 +12224,35 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         # 出口与 pending_confirm 同形（route_after_execute 见 `noop_note` 直接 END），
         # 绝不去 model：narrator 面对"零工具帧 + 一件本来就办好的事"最可能说的
         # 就是"我已经帮你办好啦"。
-        text = A.render_noop_text(already)
+        # `done=`（20261015）：这一格说的是"**这一批**没有一件需要动"，它**不是**整轮的
+        # 结论——同一轮先按令牌办过别的事、又走到这里时，把整轮说成"连写请求都没有
+        # 发出去"就是把主人那件事从回复里抹掉（现场 `20261015T092916`：通知真发出去了，
+        # 气泡却说这一轮没有任何改动）。事实取账甲那一列（判据仍只有 `_has_real_change`
+        # 一处），这里只把明细行取出来给文案用。
+        _done_rows = _round_facts(state).ok_write_rows
+        if _done_rows:
+            # 单独一条事件，让"掏空 + 这一轮真办过事"这个形状**事后数得出来**
+            # ——它是"planner 把别的事当本轮任务"的伴生信号（R 巡检读它）。
+            record("confirm", "idem_reached_done",
+                   tools=[str(r.get("tool") or "") for r in _done_rows])
+        text = A.render_noop_text(
+            already, done=[str(r.get("result") or "") for r in _done_rows])
         note = ("状态已是目标值（" + "、".join(str(x.get("tool") or "") for x in already)
                 + "），本轮零改动")
         logger.info("[execute] 写操作的状态已达成 → 不弹卡、零执行: %s", note)
+        # `task_satisfied`（20261015）：把"**这些工具的目标现在就已经成立**"这件事
+        # 交给流尾结算，作为台账里那一步的**第二种完成证据**（`tasks._settled_by_already`）。
+        #
+        # 为什么非要有这一格：出口若只带回 `receipts`（原样不新增），那一行在"只认回执"
+        # 的账上就**永远结不掉**——现场 `at_c2a9c87d`「给用户 demo 重置额度」从 20261013
+        # 挂到 20261015，每轮被催一次，最后一轮催完 planner 转手把两轮前就办完的另一件
+        # 事又规划了一遍。**一个不产生回执的出口，等于在靠回执结账的账上永远结不掉**。
+        #
+        # 它**不是**回执：这里没有发生任何执行，`receipts` 一格不动（回执进 execution_log
+        # 跨轮记忆、也进 narrator 的"已发生事实"，多一条就是把没做的事说成做了）。
+        # 它说的是另一件真事——系统刚刚读了现状、认出目标已达成（`A.reached_specs`）。
         return {"kind": "noop", "noop_text": text, "noop_note": note, "messages": [],
+                "task_satisfied": _satisfied_specs(already),
                 "receipts": list(state.get("receipts") or [])}
     # 切单元 + 签发是**一次调用**（`units` 同时供卡片按格数，见 `_sign_confirm_picks`）。
     token, units = _sign_confirm_picks(state, config, principal, picks)
@@ -12146,6 +12275,12 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     expires_at = confirm.token_expiry(token)
     return {
         "kind": "confirm",
+        # 混合轮那一半的 `task_satisfied`（20261015）：这一批里**已被判成"已达成"、
+        # 从卡上摘掉**的那些工具，与掏空出口带的是同一件事（同一份 `already`、
+        # 同一个 `_satisfied_specs`）。只给掏空那一支带的话，台账里的那一步在
+        # **混合轮**这个形状下照样永远结不掉——而混合轮恰恰是最常见的形状
+        # （"收藏这篇，顺便把额度重置一下"：前者已达成、后者上卡）。
+        "task_satisfied": _satisfied_specs(already),
         "pending_confirm": {
             "q": question,
             "opts": opts,
@@ -13749,7 +13884,7 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
             "reflect_end": False, "tool_data": [], "fallback_text": "",
             "gate_replan": False, "task_frames": [],
             "pending_confirm": None, "confirm_text": "",
-            "noop_text": "", "noop_note": "",
+            "noop_text": "", "noop_note": "", "task_satisfied": [],
             "confirm_grant": confirm_grant, "ledger": ledger or {},
             # 计划执行器（批 B）的中性初值：`""` = 本请求还没驱动过任何一行台账；
             # `-1` = 还没发过计划。守卫比的是 `(task_id, cursor)` 两个一起，而

@@ -19,6 +19,12 @@
     请求取——模型碰不到身份，这是结构性的不是靠它自觉）；
   · `advance_by_receipts`：只认回执、**连续推进不跳跃**、`declared_after` 之前的回执
     不算数、解不出步骤就不结算；
+  · **两种完成证据、一份游标逻辑**（20261015）：回执（真执行过）与**系统认定**
+    （系统读到现状、目标本来就已经成立——`adminops.reached_specs` 的结论，经
+    `_confirm_popup` 的两个出口带出来）。没有第二种，"零改动出口"在只认回执的账上
+    **永远结不掉**（现场 `at_c2a9c87d` 挂了两天、天天被催）。它的射程**比回执那条窄**：
+    工具名相同之外还要**靶对得上**（共同键取值相等）——同工具换靶按工具名会静默把
+    没做的那件判成办完了；
   · `task_rows` 任何形状不对都当没有（不阻断对话）；
   · **完成 > 撤下**（`settled_by_receipts` / `drop_is_completion`，20260927 实测加的）：
     那件事的剩余步骤本轮回执已覆盖 ⇒ 这次 `task_drop` 不成立（判据与流尾结算同一个函数，
@@ -330,6 +336,91 @@ def test_advance_total_steps_is_the_floor():
                                 [{"tool": "navigate_to", "ts": 9}])
     check("cursor 负值夹到 0（脏数据不越界）",
           got is not None and got["cursor"] == 1, str(got and got["cursor"]))
+
+
+# ── ④b 第二种完成证据：系统认定（20261015）─────────────────────────────
+def test_already_reached_is_the_second_evidence():
+    """一个不产生回执的出口，在"靠回执结账"的账上**永远结不掉**。
+
+    现场 `at_c2a9c87d`「给用户 demo 重置额度」：20261013 被判成"额度本来就是满的"
+    ⇒ 零执行零回执 ⇒ 那一行从 20261013 挂到 20261015，每轮被催一次，最后一轮催完
+    planner 转手把两轮前就办完的另一件事又规划了一遍。第二种证据（系统读了现状、
+    认出目标已成立）就是为此加的——但它的**射程必须比回执那条窄**：回执来自本轮
+    计划的字面执行（计划就是台账那一步），而这一批来自 planner 当轮提的写 spec，
+    工具可能相同而**靶不同**。
+    """
+    print("\n[结算] 第二种证据（系统认定）：不产生回执的出口也要能结账，但靶要对得上")
+    check("对照：回执通道零回执 ⇒ 不动（这就是那个'永远结不掉'的形状）",
+          T.advance_by_receipts(_task(), []) is None)
+    check("⭐ 系统认定在场 ⇒ 第一步推进（它没有回执，照样算达标）",
+          (T.advance_by_tools(_task(), set(),
+                              satisfied=[{"tool": "navigate_to", "args": {}}])
+           or {}).get("cursor") == 1)
+    check("  两步的靶都对得上 ⇒ 游标到头、state=succeeded",
+          (T.advance_by_tools(_task(), set(),
+                              satisfied=[{"tool": "navigate_to", "args": {}},
+                                         {"tool": "toggle_effect", "args": {}}])
+           or {}).get("state") == "succeeded")
+    # 连续性不因为证据换了来源就松掉
+    check("只认第二步 ⇒ 不动（不跳跃，与回执那条同一个规则）",
+          T.advance_by_tools(_task(), set(),
+                             satisfied=[{"tool": "toggle_effect", "args": {}}]) is None)
+    # ⭐ 新判据的**射程**：同工具、换靶 —— 台账那步说的是文章 19，这一轮摘掉的是 21
+    row19 = _task(steps=[{"label": "收藏", "tool": "add_favorite",
+                          "args": {"article_id": 19}}])
+    check("⭐ 同工具、**换靶**（19 没办，摘掉的是 21）⇒ **不算**达成"
+          "（宁可继续催，也绝不静默把没做的那件判成办完了）",
+          T.advance_by_tools(row19, set(),
+                             satisfied=[{"tool": "add_favorite",
+                                         "args": {"article_id": 21}}]) is None)
+    check("  靶对得上（同一篇）⇒ 达成",
+          (T.advance_by_tools(row19, set(),
+                              satisfied=[{"tool": "add_favorite",
+                                          "args": {"article_id": 19}}]) or {})
+          .get("cursor") == 1)
+    check("  只在单侧出现的键**不管**（两个产出方给同一件事的参数形态不同："
+          "台账那侧 `name`、planner 那侧 `user_id`——按逐字相等判会连要救的那件事都认不出）",
+          (T.advance_by_tools(
+              _task(steps=[{"label": "重置额度", "tool": "reset_user_quota",
+                            "args": {"name": "demo"}}]), set(),
+              satisfied=[{"tool": "reset_user_quota",
+                          "args": {"user_id": 126}}]) or {}).get("cursor") == 1)
+    check("  形状不齐（老行没有 args）⇒ 退回只比工具名（= 不比今天更宽）",
+          (T.advance_by_tools(
+              _task(steps=[{"label": "跳过去", "tool": "navigate_to"}]), set(),
+              satisfied=[{"tool": "navigate_to", "args": {"path": "/x"}}]) or {})
+          .get("cursor") == 1)
+    check("  工具名不同 ⇒ 不算（这一层是**并列**的不是可选的）",
+          T.advance_by_tools(_task(), set(),
+                             satisfied=[{"tool": "list_tags", "args": {}}]) is None)
+    check("形状容错：None / 非 dict / 空工具名 都不炸、也不凭空长出一条证据",
+          T.advance_by_tools(_task(), set(), satisfied=[None, "add_favorite", {}]) is None
+          and T.advance_by_tools(_task(), None, satisfied=None) is None)
+
+
+def test_settlement_entries_have_one_cursor_walk():
+    """两个入口、一份游标逻辑——**这条锁的是"别长出第二套"**。"""
+    print("\n[结算] 回执入口不带第二种证据的形参；游标推进只有一处实现")
+    src = (ROOT / "agent" / "tasks.py").read_text(encoding="utf-8")
+    fns = {n.name: n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef)}
+    _args = [a.arg for a in fns["advance_by_receipts"].args.args
+             + fns["advance_by_receipts"].args.kwonlyargs]
+    check("`advance_by_receipts` 没有 `satisfied` 形参（`settled_by_receipts`/"
+          "`next_cursor` 那两个调用方**根本没有**这种证据，多一个形参只会把语义讲糊）",
+          "satisfied" not in _args, str(_args))
+    check("  它转发给 `advance_by_tools`（自己不再数一遍游标）",
+          any(isinstance(n, ast.Call) and getattr(n.func, "id", "") == "advance_by_tools"
+              for n in ast.walk(fns["advance_by_receipts"])))
+    check("`advance_by_tools` 有 `satisfied` 关键字形参（默认空 = 只有回执那条的老口径）",
+          [a.arg for a in fns["advance_by_tools"].args.kwonlyargs] == ["satisfied"])
+    check("第二种证据的射程判据只此一处（`_settled_by_already` 有定义、且被游标读到）",
+          "_settled_by_already" in fns
+          and any(isinstance(n, ast.Call)
+                  and getattr(n.func, "id", "") == "_settled_by_already"
+                  for n in ast.walk(fns["advance_by_tools"])))
+    # 游标推进必须靠 `moved += 1` 从当前游标连续数（跳跃会让"进度 2/3"变成编出来的话）
+    check("  推进仍是从游标起的连续计数（`moved` 初值就是落库游标）",
+          "moved = cursor" in src)
 
 
 # ── ⑤ 读侧入口：形状容错 ────────────────────────────────────────────────
@@ -662,6 +753,8 @@ if __name__ == "__main__":
                test_advance_requires_receipts,
                test_advance_does_not_jump,
                test_advance_honors_declared_after,
+               test_already_reached_is_the_second_evidence,
+               test_settlement_entries_have_one_cursor_walk,
                test_settle_rows_pair_by_row_not_by_id,
                test_advance_refuses_unreadable_steps,
                test_advance_total_steps_is_the_floor,
