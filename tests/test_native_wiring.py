@@ -139,14 +139,15 @@ def _expected_schema_names(role: str) -> set[str]:
     """`planner_node` 该绑的名字集合 = 可见技能 ∪（开档时的两个伪函数）。
 
     ⚠️ 20261007：原写法是"与 `visible_skills(role)` **全等**"，那句话只在
-    `AGENT_TASK_STATE=0` 下成立——`tests/run_all.py` 把这一档钉成 0，所以 CI 与夜间
-    **从来看不到**；而产线 `.env` 自 20261002 起是**开**的 ⇒ 本机裸跑这套直接红（实测）。
+    `AGENT_TASK_STATE=0` 下成立——而档位 20261015 已撤（任务状态常开）⇒ 那半句话连同
+    档位一起过期了，这里改成**无条件**加那三个伪函数（与产线逐字同一档）。
     口径与 `tests/test_native_plan.py` ① 同一句：**多出来的只准是那三个申报过的伪函数**
     （名字取 `agent/tasks.py` 的常量，不硬编码），多别的一律红——"不扩权"没被放松。
     """
     names = {s.name for s in visible_skills(role)}
-    if settings.agent_task_state:
-        names |= {TASK_HOLD, TASK_DROP, TASK_INTENTS}
+    # 20261015 起**无条件**加这三个：`AGENT_TASK_STATE` 档位已撤（任务状态常开），
+    # 于是"多出来的只准是那三个申报过的伪函数"这句话在全档位下都成立。
+    names |= {TASK_HOLD, TASK_DROP, TASK_INTENTS}
     return names
 
 

@@ -16,6 +16,13 @@
 
 ## 20261015
 
+- **任务状态的两个档位撤掉（`AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC`，判据被换成常开锁）**——
+  任务状态在业界是默认必备的，不该有开关把它变成摆设。三个伪函数（`task_hold` / `task_drop` /
+  `task_intents`）改**常绑**、"确认兑现后照台账拼下一步"那一支改 `if resumed:` **常开**。产线
+  `.env` 自 20261002 起一直是 `1` ⇒ **线上零行为差异**；变的是这一族判据从此在离线套件与 CI 里
+  **看得见**（`tests/run_all.py::_PINNED` 此前钉的是 `0`，等于它只有本机裸跑才跑到）。顺手删掉
+  一个**出厂默认关的静默失效面**：`bind_native(task_state=)` / `tool_calls_to_plan(task_state=)`
+  与 `_DecideCtx._task_state` 整族不留，将来漏传一处就是"静默关掉任务登记"。
 - **评测侧负正则族按现场删冗余；同族「换结构断言」的推定被归档证伪（判据被放宽，无行为变更）**——
   `eval/golden/basic.jsonl` 的 `text_not_match_regex` **65 格 / 67 处 / 153 项 / 98 模式 →
   35 格 / 36 处 / 86 项 / 58 模式**：删掉的 31 处**全部**在删除前就已挂着 `require_zero_exec` +

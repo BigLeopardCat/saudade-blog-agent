@@ -688,8 +688,10 @@ def _skill_menu(role: str | None) -> list[StructuredTool]:
     （后者会让整轮看起来跑通了、其实一个工具都没执行）。
     """
     out: list[StructuredTool] = []
-    task_state = bool(getattr(settings, "agent_task_state", False))
-    for item in build_tool_schema(role, task_state=task_state):
+    # 三个任务伪函数**常绑**（20261015 撤掉 `AGENT_TASK_STATE` 档位，理由见
+    # `graph._ledger_next` 的注）。第二条臂与主路径在这里必须同源，否则两条臂看到的
+    # 菜单不一样、A/B 读出的差异是菜单差而不是策略差。
+    for item in build_tool_schema(role):
         fn = (item.get("function") or item) if isinstance(item, dict) else {}
         name = str(fn.get("name") or "")
         if not name:

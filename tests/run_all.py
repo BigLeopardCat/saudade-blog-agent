@@ -100,11 +100,15 @@ COV_DIR = ROOT / ".coverage-data"
 # 端点**——离线套件的纪律是"秒级、无网络、无 LLM"，这一条破了不只是慢，是它在
 # 本机花的钱/CI 上的必然超时。要验混合档的套件自己在子进程/构造 Settings 里开。
 #
-# `AGENT_TASK_PLAN_EXEC=0`（20261012 批 B）：计划执行器出厂默认**关**。钉它的理由与
-# `AGENT_TASK_STATE` 逐字相同——`tests/test_plan_executor.py` 里有一整节判据写的是
-# "关档 ⇒ 路由与今天逐字节一致"，而那一节读的是**环境里的档位**；不钉住的话，谁在
-# shell 里 export 过它，那节就会红（或更糟：绿得没有理由）。要验开档的用例在同一
-# 进程里临时拨 `settings.agent_task_plan_exec`（同 `test_task_continuation.py` 的 `_Dial`）。
+# `AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC`：**20261015 已从钉子表里删掉**——两个
+# 档位按主人裁决整族撤掉（任务状态在业界是默认必备的，不该有开关把它变成摆设；撤档
+# 在产线上是零行为差异，理由见 `config/settings.py` 那段注与 `docs/问题记录.md` §1.63）。
+# 不许它们长回来的判据在 `tests/test_task_continuation.py` ③（AST 扫四个消费面）。
+#
+# ⚠️ 这一条是**替换**而不是删除：`_ambient_note` 靠 `_PINNED` 里**真设置项**那几格
+# 报"本机 .env 与出厂档不同"。以前那两格兼职做这件事，撤档后改挂在
+# `AGENT_EVIDENCE` 与 `AGENT_FASTPATH` 上（都还在）——**别把 `_PINNED` 清成只剩
+# 环境开关**，那会让这个机制静默变成空跑（本仓纪律：撤一条判据要同时证明剩下的还咬）。
 #
 # `AGENT_EVIDENCE=0`（20261014 第一批，影子）：写参数出处改"引文核对"这条通道同样
 # **出厂默认关**，且这一档**同时**决定两件事（schema 里有没有 `evidence` 格、影子核验
@@ -112,14 +116,12 @@ COV_DIR = ROOT / ".coverage-data"
 # **函数 schema** 里多加一格——`tests/test_native_plan.py` 钉的是 props 键集，不钉住的
 # 话谁在 shell 里 export 过它，那几条就会按另一档的键集判。要验开档的用例在同一进程里
 # 临时拨 `settings.agent_evidence`（并同步重建 schema，见 test_provenance 的那一节）。
-_PINNED = {"AGENT_TASK_STATE": "0", "AGENT_TASK_PLAN_EXEC": "0",
-           "AGENT_EVIDENCE": "0",
+_PINNED = {"AGENT_EVIDENCE": "0",
            # `AGENT_FASTPATH`（20261015 快道定价档）：**出厂开**，但这里钉 `1` 是必须的
            # ——本仓教训"离线套件对档位是瞎的"：不钉的话，谁在 shell 里 export 过
            # `AGENT_FASTPATH=0`（比如为了跑两臂），整套里凡是走 planner 的用例都会
            # 按另一档判，而**红得毫无理由**（快道不跑 ⇒ 那一轮多一次 LLM、计划文本
-           # 也不同）。要验关档手臂的用例在同一进程里临时拨
-           # `settings.agent_fastpath`（照 `test_task_continuation.py` 的 `_Dial`）。
+           # 也不同）。要验关档手臂的用例在同一进程里临时拨 `settings.agent_fastpath`。
            "AGENT_FASTPATH": "1",
            "RAG_HYBRID_ENABLED": "0",
            "SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
@@ -151,7 +153,9 @@ def _ambient_note(env: dict) -> str:
     """
     try:
         from config.settings import settings  # noqa: PLC0415  （只在需要时报这一行说明）
-        live = {"AGENT_TASK_STATE": "1" if getattr(settings, "agent_task_state", False) else "0"}
+        # 只挂**真设置项**（撤档后从 `AGENT_TASK_STATE` 换成这两格，见 `_PINNED` 上面那段注）。
+        live = {"AGENT_EVIDENCE": "1" if settings.agent_evidence else "0",
+                "AGENT_FASTPATH": "1" if settings.agent_fastpath else "0"}
     except Exception as e:  # pragma: no cover - 依赖缺失时也把话说清楚
         return f"读不到本机档位（{type(e).__name__}: {e}）——本次一律按出厂档跑"
     diff = {k: live[k] for k in live if live[k].strip() != _PINNED[k]}

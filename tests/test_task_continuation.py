@@ -18,14 +18,22 @@ config ⇒ 静默退化成老行为"）：
 
   ① `next_actionable` 的形状（五格）；
   ② **接线锁**：`route_after_execute` 在"config 里台账还剩一件"时去 **planner**；
-  ③ `AGENT_TASK_STATE=0` ⇒ 本批新增判据逐字节不动（`_ledger_next` 恒 None）；
+  ③ **撤档锁**：`AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC` 两个档位不许再长回来
+     （20261015 主人裁决撤档：任务状态在业界是默认必备的，不该有开关把它变成摆设）；
   ④ **不新增第九条纠偏通道**（planner 那处是**判据替换**，同一个单发锁存器）。
+
+⚠️ **20261015**：本套件原来还有一个 `_Dial` 夹具、以及一节"`AGENT_TASK_STATE=0` ⇒
+逐字节退回本批之前"的判据。档位撤掉之后**那个手臂不存在了**（撤档在产线上是零行为
+差异：`.env` 的 `AGENT_TASK_STATE` 自 20261002 起一直是 `1`），于是那一节反转成 ③
+这条**不许把档位加回来**的锁。原来"两档都要跑"的纪律在这里**没有替代物**：没有第二
+档可跑，能做的就是钉住"档位已经没了"。
 
 用法：.venv/bin/python tests/test_task_continuation.py
 """
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 
@@ -34,6 +42,9 @@ sys.path.insert(0, str(ROOT))
 
 import agent.tasks as T  # noqa: E402
 import agent.graph as G  # noqa: E402
+
+sys.path.insert(0, str(ROOT / "tests"))
+import run_all  # noqa: E402  （③ 要断言它的钉子表里也没有那两个档位名）
 
 FAILED: list[str] = []
 
@@ -44,25 +55,10 @@ def check(name: str, ok: bool, extra: str = "") -> None:
         FAILED.append(name)
 
 
-class _Dial:
-    """把 `AGENT_TASK_STATE` 拨到指定档位（退出时**必须**还原）。
+# ⚠️ 这里原来有一个 `_Dial` 夹具（把 `AGENT_TASK_STATE` 拨到指定档位、退出时还原）。
+# 档位 20261015 撤掉了 ⇒ 夹具一并删（留着它就是把一个不存在的档位演给人看）。
+# 撤档锁见下面 ③。
 
-    本仓纪律：开关关着的那一档要**逐字节退回**本批之前的行为，所以两档都要跑；
-    而离线套件默认钉的是出厂档（`tests/run_all.py::_PINNED` 里 `AGENT_TASK_STATE=0`）
-    ——临时拨开关只许在这一段里，别泄漏给后面的用例（那会让下一节读到"开着"的档）。
-    """
-
-    def __init__(self, on: bool):
-        self.on = on
-
-    def __enter__(self):
-        self.old = G.settings.agent_task_state
-        G.settings.agent_task_state = self.on
-        return self
-
-    def __exit__(self, *exc):
-        G.settings.agent_task_state = self.old
-        return False
 
 
 def _row(task_id="at_1", goal="把 demo 的身份降级为杂鱼", steps=None,
@@ -126,39 +122,77 @@ print("\n② 接线锁：`route_after_execute` 在台账还剩一件时去 plann
 
 # 确认兑现轮：零 LLM 拼令牌、执行完第一件。台账里还剩第二件 ⇒ 不许直去 narrator。
 _state = {"confirm_grant": True, "blocked": [], "receipts": [], "messages": []}
-with _Dial(True):
-    check("台账还剩一件 ⇒ planner（不是 model）",
-          G.route_after_execute(_state, _cfg([_row()])) == "planner")
-    check("台账空 ⇒ 老行为 model",
-          G.route_after_execute(_state, _cfg([])) == "model")
-    check("台账里只有在等回话的行 ⇒ model（本来就该停下来问）",
-          G.route_after_execute(_state, _cfg([_row(pending_question="降成哪个？")]))
-          == "model")
-    check("config 里没有 open_tasks 这一格 ⇒ model（不因为读不到就改道）",
-          G.route_after_execute(_state, {}) == "model")
-    check("config 是 None ⇒ model（路由的手上真可能没有它）",
-          G.route_after_execute(_state, None) == "model")
-    check("非确认轮不受影响（那是原本就回 planner 的一支）",
-          G.route_after_execute({"blocked": [], "messages": []}, _cfg([_row()]))
-          == "planner")
-    check("受阻轮不受影响（blocked 非空 ⇒ 不走台账那一支）",
-          G.route_after_execute({"confirm_grant": True, "blocked": [{"tool": "x"}],
-                                 "messages": []}, _cfg([_row()])) == "planner")
+check("台账还剩一件 ⇒ planner（不是 model）",
+      G.route_after_execute(_state, _cfg([_row()])) == "planner")
+check("台账空 ⇒ 老行为 model",
+      G.route_after_execute(_state, _cfg([])) == "model")
+check("台账里只有在等回话的行 ⇒ model（本来就该停下来问）",
+      G.route_after_execute(_state, _cfg([_row(pending_question="降成哪个？")]))
+      == "model")
+check("config 里没有 open_tasks 这一格 ⇒ model（不因为读不到就改道）",
+      G.route_after_execute(_state, {}) == "model")
+check("config 是 None ⇒ model（路由的手上真可能没有它）",
+      G.route_after_execute(_state, None) == "model")
+check("非确认轮不受影响（那是原本就回 planner 的一支）",
+      G.route_after_execute({"blocked": [], "messages": []}, _cfg([_row()]))
+      == "planner")
+check("受阻轮不受影响（blocked 非空 ⇒ 不走台账那一支）",
+      G.route_after_execute({"confirm_grant": True, "blocked": [{"tool": "x"}],
+                             "messages": []}, _cfg([_row()])) == "planner")
 
 # ══════════════════════════════════════════════════════════════════════════
-print("\n③ `AGENT_TASK_STATE=0` ⇒ 本批新增判据逐字节不动")
+print("\n③ 撤档锁（20261015）：两个档位名不许再长回代码里")
 
-with _Dial(False):
-    check("路由：台账还剩一件也仍是 model（关档 = 本批之前的行为）",
-          G.route_after_execute(_state, _cfg([_row()])) == "model")
-    check("`_ledger_next` 恒 None",
-          G._ledger_next(_state, _cfg([_row()])) is None)
-    check("`_ledger_has_next` 恒 False",
-          G._ledger_has_next(_state, _cfg([_row()])) is False)
-    check("gate 的账乙网恒不命中（哪怕是再露骨的征询句）",
-          G._ledger_continuation_issue("要不要我现在就继续？你说一声我就去办。",
-                                       {"task_frames": [{"task_id": "at_1"}]},
-                                       _cfg([_row()])) is None)
+# 这一节原来判的是"关档 ⇒ 本批新增判据逐字节不动"。档位撤掉后**那一档不存在**，
+# 于是它反转成"档位不许回来"。判据读 **AST 的属性访问**而不是源码文本：注释正当地
+# 记着这两个名字（历史要说得出口），源码文本里出现它们不算违规——只有**取值**才算。
+_NO_DIALS = ("agent_task_state", "agent_task_plan_exec")
+_SCANNED = [ROOT / "agent" / "graph.py", ROOT / "agent" / "react_arm.py",
+            ROOT / "config" / "settings.py", ROOT / "server.py"]
+
+
+def _dial_reads(src: str) -> list[str]:
+    """源码里**取值**这些档位的地方（`settings.<档位>` 与 `getattr(…, "<档位>", …)`）。
+
+    只认这两种形态，不认文本出现：注释正当地记着这两个名字（历史要说得出口），
+    把它们也判红会逼着下一个人**把历史从注释里删掉**——那正是本仓最不想要的失效形状
+    （"判据逼人擦史"）。**读程序上 AST，读文件才用正则**（本仓吃过注释截断断言的亏）。
+    """
+    out: list[str] = []
+    for n in ast.walk(ast.parse(src)):
+        if isinstance(n, ast.Attribute) and n.attr in _NO_DIALS:
+            out.append(n.attr)
+        if (isinstance(n, ast.Constant) and isinstance(n.value, str)
+                and n.value in _NO_DIALS):
+            out.append(n.value)
+    return out
+
+
+# 反控（红基线）先跑：撤档锁不能自己就是瞎的。塞一段**撤档前逐字存在的源码**进去，
+# 扫描器必须当场认出来——这一步是"上面那条全仓判据在断什么"的唯一证据。
+_PROBE = ("def _ledger_next(state, config):\n"
+          "    if not settings.agent_task_state:\n        return None\n"
+          "    if resumed and settings.agent_task_plan_exec:\n        pass\n")
+check("反控：撤档前的源码形态（`settings.agent_task_state` / `…plan_exec`）必被认出",
+      set(_dial_reads(_PROBE)) == set(_NO_DIALS),
+      str(_dial_reads(_PROBE)))
+check("反控：`getattr(settings, \"agent_task_state\", False)` 那种字符串取值也认得出",
+      _dial_reads("x = bool(getattr(settings, 'agent_task_state', False))")
+      == ["agent_task_state"])
+check("反控：只是注释里提到这两个名字 ⇒ **不**算违规（判据不许逼人擦史）",
+      _dial_reads("# 20261015 撤掉 `AGENT_TASK_STATE` 与 `agent_task_plan_exec`\n")
+      == [])
+
+_hits: list[str] = []
+for _f in _SCANNED:
+    _hits += [f"{_f.name}:{h}" for h in _dial_reads(_f.read_text(encoding="utf-8"))]
+check("四个消费面（graph / react_arm / settings / server）一处档位取值都没有",
+      not _hits, "、".join(_hits))
+check("  两个名字在 `Settings` 的字段表里已经不存在",
+      not (set(_NO_DIALS) & set(G.settings.model_fields)),
+      str(sorted(set(_NO_DIALS) & set(G.settings.model_fields))))
+check("  离线套件的钉子表里也没有它们（`tests/run_all.py::_PINNED`）",
+      not (set(_NO_DIALS) & set(run_all._PINNED)), str(sorted(run_all._PINNED)))
 
 # ══════════════════════════════════════════════════════════════════════════
 print("\n④ gate 的账乙网（接线点 3）：征询式收尾 ⇒ 回 planner")
@@ -166,35 +200,34 @@ print("\n④ gate 的账乙网（接线点 3）：征询式收尾 ⇒ 回 planne
 _IN = {"task_frames": [{"task_id": "at_1"}]}       # 本轮就在那件事的工作面上
 _SOLICIT = ("至于降级身份那一步——这次只执行了发通知，降级还没做。"
             "**要现在继续给他降成「杂鱼」吗？你说一声我就去办。**")
-with _Dial(True):
-    _iss = G._ledger_continuation_issue(_SOLICIT, _IN, _cfg([_row()]))
-    check("命中 ⇒ 返回 (issue, 兜底文案, 子句)",
-          bool(_iss) and _iss[0] == "ledger_continuation_pending"
-          and bool(_iss[1]) and bool(_iss[2]))
-    check("  该族在 `_REPLAN_ISSUES` 里（否则打回时一步到兜底）",
-          "ledger_continuation_pending" in G._REPLAN_ISSUES)
-    check("  自备 `_REPLAN_ADVICE`（默认那份让 planner 去检索，是错的出路）",
-          "ledger_continuation_pending" in G._REPLAN_ADVICE)
-    check("  自备 `_REPLAN_WHY`（默认那句「这一轮一个工具都没有执行」在这里是假话）",
-          "ledger_continuation_pending" in G._REPLAN_WHY)
-    check("  建议里明写**不许**再问「要不要继续」",
-          "不许" in " ".join(G._REPLAN_ADVICE["ledger_continuation_pending"])
-          and "要不要我继续" in " ".join(G._REPLAN_ADVICE["ledger_continuation_pending"]))
+_iss = G._ledger_continuation_issue(_SOLICIT, _IN, _cfg([_row()]))
+check("命中 ⇒ 返回 (issue, 兜底文案, 子句)",
+      bool(_iss) and _iss[0] == "ledger_continuation_pending"
+      and bool(_iss[1]) and bool(_iss[2]))
+check("  该族在 `_REPLAN_ISSUES` 里（否则打回时一步到兜底）",
+      "ledger_continuation_pending" in G._REPLAN_ISSUES)
+check("  自备 `_REPLAN_ADVICE`（默认那份让 planner 去检索，是错的出路）",
+      "ledger_continuation_pending" in G._REPLAN_ADVICE)
+check("  自备 `_REPLAN_WHY`（默认那句「这一轮一个工具都没有执行」在这里是假话）",
+      "ledger_continuation_pending" in G._REPLAN_WHY)
+check("  建议里明写**不许**再问「要不要继续」",
+      "不许" in " ".join(G._REPLAN_ADVICE["ledger_continuation_pending"])
+      and "要不要我继续" in " ".join(G._REPLAN_ADVICE["ledger_continuation_pending"]))
 
-    check("诚实叙述（没有把主动权退回去）⇒ 不命中",
-          G._ledger_continuation_issue(
-              "通知已经发出去了，接下来我接着把降级办掉。", _IN, _cfg([_row()])) is None)
-    check("台账里没有可执行的剩余 ⇒ 不命中（词形这一层不单独成立）",
-          G._ledger_continuation_issue(
-              _SOLICIT, _IN, _cfg([_row(pending_question="降成哪个？")])) is None)
-    check("不在工作面（无 confirm_grant、本轮无 task_frames）⇒ 不命中",
-          G._ledger_continuation_issue(_SOLICIT, {}, _cfg([_row()])) is None)
-    check("`gate_replan` 已为真 ⇒ 不命中（第二次进去不许把诚实的回复换成道歉）",
-          G._ledger_continuation_issue(_SOLICIT, {**_IN, "gate_replan": True},
-                                       _cfg([_row()])) is None)
-    check("确认轮（`confirm_grant`）也在工作面里",
-          bool(G._ledger_continuation_issue(
-              _SOLICIT, {"confirm_grant": True}, _cfg([_row()]))))
+check("诚实叙述（没有把主动权退回去）⇒ 不命中",
+      G._ledger_continuation_issue(
+          "通知已经发出去了，接下来我接着把降级办掉。", _IN, _cfg([_row()])) is None)
+check("台账里没有可执行的剩余 ⇒ 不命中（词形这一层不单独成立）",
+      G._ledger_continuation_issue(
+          _SOLICIT, _IN, _cfg([_row(pending_question="降成哪个？")])) is None)
+check("不在工作面（无 confirm_grant、本轮无 task_frames）⇒ 不命中",
+      G._ledger_continuation_issue(_SOLICIT, {}, _cfg([_row()])) is None)
+check("`gate_replan` 已为真 ⇒ 不命中（第二次进去不许把诚实的回复换成道歉）",
+      G._ledger_continuation_issue(_SOLICIT, {**_IN, "gate_replan": True},
+                                   _cfg([_row()])) is None)
+check("确认轮（`confirm_grant`）也在工作面里",
+      bool(G._ledger_continuation_issue(
+          _SOLICIT, {"confirm_grant": True}, _cfg([_row()]))))
 
 # 三张表的口径锁（同族：家族必须三处都挂号）
 check("`_REPLAN_ADVICE` 的键都是 `_REPLAN_ISSUES` 的成员",
@@ -282,7 +315,7 @@ def _ctx(**kw):
     base = dict(state={}, config=None, task_sink=None, rounds=1, user_msg="",
                 role="owner", page_ctx="", has_frames=True, doc_anchors=(), ledger_frame="",
                 principal=None, round_info="", frames_txt="", gate_note="", deny=set(),
-                _base_llm=None, _task_state=True, _evidence=False, llm=None,
+                _base_llm=None, _evidence=False, llm=None,
                 deny_pseudo=set(),
                 correction="", correction_kind="", native_note="", plan_obj=None,
                 raw="", decided=None, skill_name="", params={}, _tools_off=False,
@@ -297,9 +330,8 @@ _FACE = {"confirm_grant": True, "receipts": [], "messages": [], "executed": [],
          "noop_specs": _NOOP_STATE["noop_specs"]}
 _PLAN = {"tools": [_DUP], "skill": "account_set_role", "params": {}, "dropped": []}
 
-with _Dial(True):
-    _c = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]), plan_obj=dict(_PLAN))
-    _step = G._decide_late_correct(_c)
+_c = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]), plan_obj=dict(_PLAN))
+_step = G._decide_late_correct(_c)
 check("剪空 + 台账还剩一件 ⇒ 纠偏重决策（不是收尾）",
       _step.action == "continue" and _c.correction_kind == "收尾丢台账")
 check("  指令点名下一步的工具（只说「还有事没做」＝让它自己猜）",
@@ -308,31 +340,26 @@ check("  开场句按「排过但被剪掉」写——**不许**说成「这一�
       "已经执行过了" in _c.correction and "没有排任何工具" not in _c.correction)
 check("  仍然明写不许反问「要不要继续」", "不许" in _c.correction)
 
-with _Dial(True):
-    _c0 = _ctx(state=dict(_FACE), config=_cfg([]), plan_obj=dict(_PLAN))
-    _step0 = G._decide_late_correct(_c0)
+_c0 = _ctx(state=dict(_FACE), config=_cfg([]), plan_obj=dict(_PLAN))
+_step0 = G._decide_late_correct(_c0)
 check("剪空但台账没有剩余 ⇒ 照老路（break，交给 `_finalize_dedupe` 收尾）",
       _step0.action == "break" and not _c0.correction)
 
-with _Dial(False):
-    _c_off = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]), plan_obj=dict(_PLAN))
-    _step_off = G._decide_late_correct(_c_off)
-check("`AGENT_TASK_STATE=0` ⇒ 这一格逐字节退回老行为（break、不纠偏）",
-      _step_off.action == "break" and not _c_off.correction)
+# （原来这里还有一格「`AGENT_TASK_STATE=0` ⇒ 剪空不纠偏」的对照臂。档位 20261015 已撤，
+#  那一臂不存在了；上面的对照方（台账没有剩余 ⇒ break）仍在，本节不是空跑。）
 
 # 剪空档**只走台账那一支**：当轮那句话的意图清单判的是"里面的动作一次都没被规划过"，
 # 与剪空（规划过、做过了）互斥，硬套会把两件事混成一条纠偏。
 _old_pi = G._pending_intents
 G._pending_intents = lambda st: [{"label": "收藏", "key": "favorite"}]
 try:
-    with _Dial(True):
-        _c1 = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]), plan_obj=dict(_PLAN))
-        _s1 = G._wrapup_intent_correct(_c1)
-        # 反控：清单**不会**被剪空时，这一格一件都不许纠（它还有真事要做）
-        _c2 = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]),
-                   plan_obj={"tools": [_NEW], "skill": "user_notice", "params": {},
-                             "dropped": []})
-        _s2 = G._wrapup_intent_correct(_c2)
+    _c1 = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]), plan_obj=dict(_PLAN))
+    _s1 = G._wrapup_intent_correct(_c1)
+    # 反控：清单**不会**被剪空时，这一格一件都不许纠（它还有真事要做）
+    _c2 = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]),
+               plan_obj={"tools": [_NEW], "skill": "user_notice", "params": {},
+                         "dropped": []})
+    _s2 = G._wrapup_intent_correct(_c2)
 finally:
     G._pending_intents = _old_pi
 check("剪空档不读「当轮那句话」的清单（走的是台账那一支）",
@@ -348,10 +375,9 @@ check("② 现场措辞「主人点个头」现在命中征询族",
       bool(G._LEDGER_SOLICIT_RE.search(_SOLICIT_081550)))
 check("  正当的建议仍在族外（推荐**另一件**事 ≠ 推诿已在册的剩余）",
       not G._LEDGER_SOLICIT_RE.search("我还可以顺便帮你把这篇的标签也加上"))
-with _Dial(True):
-    check("  端到端：这段话 + 台账还剩一件 ⇒ 这条网命中",
-          bool(G._ledger_continuation_issue(_SOLICIT_081550, {"confirm_grant": True},
-                                            _cfg([_NOTICE_ROW]))))
+check("  端到端：这段话 + 台账还剩一件 ⇒ 这条网命中",
+      bool(G._ledger_continuation_issue(_SOLICIT_081550, {"confirm_grant": True},
+                                        _cfg([_NOTICE_ROW]))))
 
 # 第三次标定（同日、另一条现场）：这条族第三次撞上**主语被省掉**。
 _SOLICIT_195727 = ("待办那条已经加好了喵～后台复核过，列表里确实读到了「给用户niuniu重置额度」。\n\n"
@@ -361,10 +387,9 @@ check("③ 现场措辞「说一声我就去」现在命中征询族（前两条
       bool(G._LEDGER_SOLICIT_RE.search(_SOLICIT_195727)))
 check("  裸「说一声」仍在族外（「我会说一声的」不是把主动权退回去）",
       not G._LEDGER_SOLICIT_RE.search("改完我会说一声的，你放心"))
-with _Dial(True):
-    check("  端到端：这段话 + 台账还剩一件 ⇒ 这条网命中（现场那三个续跑轮就是漏在它上）",
-          bool(G._ledger_continuation_issue(_SOLICIT_195727, {"confirm_grant": True},
-                                            _cfg([_NOTICE_ROW]))))
+check("  端到端：这段话 + 台账还剩一件 ⇒ 这条网命中（现场那三个续跑轮就是漏在它上）",
+      bool(G._ledger_continuation_issue(_SOLICIT_195727, {"confirm_grant": True},
+                                        _cfg([_NOTICE_ROW]))))
 
 # ══════════════════════════════════════════════════════════════════════════
 print("\n⑦ 确认兑现轮的续跑纠偏：判据改读**两本账的并集**（现场 195727）")
@@ -427,7 +452,7 @@ class _NoLLM:
 
 _QROW = _row(task_id="at_q", goal="去把niuniu额度重置",
              steps=[{"label": "重置额度", "tool": "reset_user_quota"}])
-with _Dial(True), _NoLLM():
+with _NoLLM():
     _c = G._planner_setup(_setup_state(_owner), _cfg([_QROW]), _pre_obj, None)
 check("意图清单为空 ⇒ 读台账（不是一条纠偏都不给）",
       _c.correction_kind == "确认轮台账剩余" and bool(_c.correction))
@@ -439,15 +464,13 @@ check("  仍然明写不许反问「要不要继续」", "不许" in _c.correcti
 
 # 反控：主人那句话里的动作**扫得出来**时，走原来的那一支（文本逐字不变）
 _pre2, _owner2 = _pre(owner=_OWNER_ACTION)
-with _Dial(True), _NoLLM():
+with _NoLLM():
     _c2 = G._planner_setup(_setup_state(_owner2), _cfg([_QROW]), _pre2, None)
 check("反控：当轮那句话扫得出意图 ⇒ 沿用原来那条（这一格没被替换掉）",
       _c2.correction_kind == "确认轮剩余意图" and "确认回显" not in (_c2.correction or ""))
 
-with _Dial(False), _NoLLM():
-    _c3 = G._planner_setup(_setup_state(_owner), _cfg([_QROW]), _pre_obj, None)
-check("`AGENT_TASK_STATE=0` ⇒ 这一格逐字节退回老行为（无纠偏）",
-      not _c3.correction and not _c3.correction_kind)
+# （同上：原来这里有一格「档位关 ⇒ 无纠偏」的对照臂，随档位一并撤。反控仍在
+#  ——上面那句"当轮那句话扫得出意图 ⇒ 沿用原来那条"就是这一节的对照方。）
 
 # ══════════════════════════════════════════════════════════════════════════
 print()

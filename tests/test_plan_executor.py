@@ -49,23 +49,14 @@ def check(name: str, ok: bool, extra: str = "") -> None:
 ROLE = "superadmin"
 
 
-class _Dials:
-    """把两个开关拨到指定档位（退出时**必须**还原）。
+# ⚠️ **20261015 撤档**：这里原来有一个 `_Dials` 夹具，把 `AGENT_TASK_STATE` 与
+# `AGENT_TASK_PLAN_EXEC` 两个档位拨到指定位置——`_ledger_next` 的第一格判据就是前者
+# （关 ⇒ 台账整个不读），执行器建在它之上。两个档位都已按主人裁决撤掉（任务状态在
+# 业界是默认必备的，不该有开关把它变成摆设；**产线上撤档是零行为差异**：`.env` 的
+# `AGENT_TASK_STATE` 自 20261002 起一直是 `1`，计划执行器那一档从没打开过）。
+# ⇒ 本套件现在**没有关档手臂可跑**，也没了 `**dials` 形参。不许把档位加回来的判据在
+# `tests/test_task_continuation.py` ③（全仓 grep 锁）。
 
-    **两个一起拨**：`_ledger_next` 的第一格判据就是 `settings.agent_task_state`
-    （关 ⇒ 台账整个不读），执行器是建在它之上的第二条出口。只拨 `plan_exec` 会得到
-    "什么都没发生"——那是**对的**，但会让这一整节看起来像空跑，所以在夹具里写清楚。
-    """
-
-    def __init__(self, *, task_state: bool, plan_exec: bool):
-        self.want = (task_state, plan_exec)
-
-    def __enter__(self):
-        self.old = (G.settings.agent_task_state, G.settings.agent_task_plan_exec)
-        G.settings.agent_task_state, G.settings.agent_task_plan_exec = self.want
-
-    def __exit__(self, *exc):
-        G.settings.agent_task_state, G.settings.agent_task_plan_exec = self.old
 
 
 # ── 夹具：行全部**从真登记通道产出**（不手抄形状）────────────────────────────
@@ -125,12 +116,11 @@ def _state(**over) -> dict:
     return st
 
 
-def _run(state: dict, config, **dials) -> tuple[object, list]:
+def _run(state: dict, config) -> tuple[object, list]:
     """跑一次 `_planner_preflight`，回 `(pre, 本次的 planner 事件)`。"""
     tid = f"t_planexec_{len(_EVENTS)}"
     rec = trace_mod.start_trace(tid, 7, "th", {}, dir=tempfile.mkdtemp(), by_day=False)
-    with _Dials(**dials):
-        pre = G._planner_preflight(state, config)
+    pre = G._planner_preflight(state, config)
     _EVENTS.append(tid)
     return pre, [e for e in rec.events if e.get("node") == "planner"]
 
@@ -145,7 +135,7 @@ def _ev(events: list, name: str) -> list[dict]:
 # ══════════════════════════════════════════════════════════════════════════
 def test_confirm_resume_emits_the_next_card_without_llm():
     print("\n① 确认兑现轮的续跑：下一步已绑实参 ⇒ 零 LLM 出下一张卡")
-    pre, ev = _run(_state(), _cfg([_row()]), task_state=True, plan_exec=True)
+    pre, ev = _run(_state(), _cfg([_row()]))
     check("`_planner_preflight` 直接 early 返回（**没有**走到 LLM 决策轮）",
           pre.early is not None)
     if pre.early is None:
@@ -180,7 +170,7 @@ def test_confirm_resume_emits_the_next_card_without_llm():
 # ══════════════════════════════════════════════════════════════════════════
 def test_grant_does_not_cover_the_next_card():
     print("\n② 越位拒绝：上一张卡的令牌**不许**覆盖这一张卡的 spec")
-    pre, _ = _run(_state(), _cfg([_row()]), task_state=True, plan_exec=True)
+    pre, _ = _run(_state(), _cfg([_row()]))
     specs = G.parse_plan(pre.early["plan"])["tools"]
     st = _state()
     check("对照：令牌签名体里那一件**在**覆盖范围里（否则下面几条是空跑）",
@@ -211,8 +201,7 @@ def test_unbound_next_step_goes_back_to_planner():
          "plan_exec_skill_mismatch"),
     ]
     for name, steps, event in cases:
-        pre, ev = _run(_state(), _cfg([_row(steps=steps, total_steps=len(steps))]),
-                       task_state=True, plan_exec=True)
+        pre, ev = _run(_state(), _cfg([_row(steps=steps, total_steps=len(steps))]))
         check(f"{name} ⇒ 不 early、交回今天的链路", pre.early is None)
         check(f"  留下一条如实的痕（`{event}`）", len(_ev(ev, event)) == 1)
 
@@ -221,10 +210,10 @@ def test_unbound_next_step_goes_back_to_planner():
 def test_progress_guard_stops_a_silent_loop():
     print("\n④ 进度守卫：同一行同一游标连着发两次而回执没动 ⇒ 停手")
     st = _state()
-    pre1, _ = _run(st, _cfg([_row()]), task_state=True, plan_exec=True)
+    pre1, _ = _run(st, _cfg([_row()]))
     check("第一跳：发得出（否则下面那条是空跑）", pre1.early is not None)
     carried = {k: pre1.early[k] for k in ("plan_task_id", "plan_cursor")}
-    pre2, ev2 = _run(_state(**carried), _cfg([_row()]), task_state=True, plan_exec=True)
+    pre2, ev2 = _run(_state(**carried), _cfg([_row()]))
     check("⭐ 第二跳：同一行同一游标 ⇒ **不发**（回执没推进，重发毫无意义）",
           pre2.early is None)
     check("  trace 留痕 `plan_exec_stalled`（这一格必须是看得见的，不能静默空转）",
@@ -235,8 +224,7 @@ def test_progress_guard_stops_a_silent_loop():
     row = _row()
     check("  回执落地后游标真的前进了（判据与结算同源：`tasks.next_cursor`）",
           T.next_cursor(row, rcp) == 1)
-    pre3, _ = _run(_state(receipts=rcp, **carried), _cfg([row]),
-                   task_state=True, plan_exec=True)
+    pre3, _ = _run(_state(receipts=rcp, **carried), _cfg([row]))
     check("⭐ 游标前进 ⇒ 放行，且发的是**单元剩下的那一步**（不重发已执行的那一步）",
           pre3.early is not None
           and pre3.early["plan_obj"]["tools"] == [_spec(_STEPS[1])],
@@ -266,24 +254,32 @@ def test_unit_is_the_card_granularity():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-def test_switch_off_keeps_today():
-    print("\n⑥ 开关关 ⇒ 这条路**不存在**（出厂档；与今天逐字节一致）")
-    pre, ev = _run(_state(), _cfg([_row()]), task_state=True, plan_exec=False)
-    check("台账明写着还剩一件，也**不 early**（回到 planner 那条老路）",
-          pre.early is None and pre.resumed is True)
-    check("  一条执行器事件都不记（不是「记了但不发」）",
-          not _ev(ev, "plan_card_next") and not _ev(ev, "plan_step_bound"))
-    # 关档 + 台账关档：本批之前的整份 preflight 行为（回到那条老路，什么都不变）
-    pre2, _ = _run(_state(), _cfg([_row()]), task_state=True, plan_exec=False)
-    pre3, _ = _run(_state(), {"configurable": {}}, task_state=True, plan_exec=False)
-    check("  台账在不在场，preflight 的产物一模一样（没读它 = 逐字节不变）",
-          pre2 == pre3)
-    # 源码锁：这一支必须被开关**包住**，而不是"进了分支再判"
+def test_no_dial_keeps_the_executor_always_on():
+    print("\n⑥ 撤档（20261015）⇒ 这一支**常开**，且不许再长出第二格档位判据")
+
+    # 撤档前这一节判的是"关档 ⇒ 这条路不存在（逐字节退回本批之前）"。档位撤掉之后
+    # 那个手臂**不存在**了，于是本节反转成一条**不许把档位加回来**的锁：判据只剩
+    # "台账里有没有现在能动手的一件"，不再有第三格开关。
+    pre, ev = _run(_state(), _cfg([_row()]))
+    check("台账明写着还剩一件 ⇒ 零 LLM 出下一张卡（常开档的唯一形态）",
+          pre.early is not None
+          and bool(_ev(ev, "plan_card_next")) and bool(_ev(ev, "plan_step_bound")))
+    check("  台账不在场 ⇒ 什么都不发生（常开不等于无判据）",
+          _run(_state(), {"configurable": {}})[0].early is None)
+    # 反向对照：台账里同样躺着那一行，但这一轮**不是确认兑现轮**（`plan_rounds==0`）
+    # ⇒ 一个 `plan_card_next` 都不许有。守卫是"令牌刚兑现完"这个语义，不是"台账里有
+    # 东西"——把这两件事分开，否则明天有人把守卫改成"有台账就发"时，本节的其它格
+    # （都从同一个 `_state()` 派生）会一起跟着变绿。
+    _pre0, ev0 = _run(_state(plan_rounds=0), _cfg([_row()]))
+    check("  台账在场但不是兑现轮（rounds=0）⇒ 也不出这张卡",
+          not _ev(ev0, "plan_card_next") and _pre0.early is not None)
+
     src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-    check("源码锁：`if resumed and settings.agent_task_plan_exec:` 恰好一处",
-          src.count("if resumed and settings.agent_task_plan_exec:") == 1)
+    check("源码锁：调用点的守卫就是**裸 `if resumed:`**（多一格档位就要有人解释）",
+          src.count("if resumed:\n        pe = _plan_exec_next_card(") == 1)
     check("源码锁：`_plan_exec_next_card` 只有一处调用点（另一处是定义）",
           src.count("_plan_exec_next_card(") == 2)
+    # 全仓 grep 锁在 `tests/test_task_continuation.py` ③（两个档位名一处都不许再有）。
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -314,9 +310,8 @@ def test_done_probe_is_observable():
           T.settled_by_receipts(row, rcp) and T.next_actionable([row], rcp) is None)
     _tid = "t_planexec_done"
     rec = trace_mod.start_trace(_tid, 7, "th", {}, dir=tempfile.mkdtemp(), by_day=False)
-    with _Dials(task_state=True, plan_exec=True):
-        out = G._plan_exec_next_card(_state(receipts=rcp, plan_task_id=row["task_id"]),
-                                     _cfg([row]))
+    out = G._plan_exec_next_card(_state(receipts=rcp, plan_task_id=row["task_id"]),
+                                 _cfg([row]))
     done = [e for e in rec.events if e.get("event") == "plan_done"]
     check("这一行到头 ⇒ 不出计划，只记 `plan_done`（带游标与终态）",
           out is None and len(done) == 1
@@ -324,8 +319,7 @@ def test_done_probe_is_observable():
           str(done))
     rec2 = trace_mod.start_trace("t_planexec_done2", 7, "th", {},
                                  dir=tempfile.mkdtemp(), by_day=False)
-    with _Dials(task_state=True, plan_exec=True):
-        G._plan_exec_next_card(_state(receipts=rcp), _cfg([row]))
+    G._plan_exec_next_card(_state(receipts=rcp), _cfg([row]))
     check("  本请求没驱动过任何一行（`plan_task_id` 空）⇒ 不记（这事件不是背景噪声）",
           not [e for e in rec2.events if e.get("event") == "plan_done"])
 
@@ -370,8 +364,7 @@ def test_the_row_just_settled_is_not_re_emitted():
           T.settled_by_receipts(row_a, rcp))
     check("  两行是**不同的**任务（同一个 goal 会算出同一个 `task_id`）",
           row_a["task_id"] != row_b["task_id"])
-    pre, ev = _run(_state(receipts=rcp), _cfg([row_a, row_b]),
-                   task_state=True, plan_exec=True)
+    pre, ev = _run(_state(receipts=rcp), _cfg([row_a, row_b]))
     check("⭐ 发出的是**第二行**的单元，不是刚办完的第一行",
           pre.early is not None
           and pre.early["plan_obj"]["tools"] == [_spec(s) for s in _STEPS2],
@@ -387,7 +380,7 @@ def test_the_row_just_settled_is_not_re_emitted():
           pre.early is not None and pre.early["plan_cursor"] == 0)
     # 反面对照：两行都还在（第一行没有回执）⇒ 发的**就是第一行**。没有这一条，
     # 「永远发第二行」也会绿——而那是另一副面孔的错（漏掉主人先说的那件）。
-    pre2, _ = _run(_state(), _cfg([row_a, row_b]), task_state=True, plan_exec=True)
+    pre2, _ = _run(_state(), _cfg([row_a, row_b]))
     check("对照：第一行还没办 ⇒ 发的就是第一行（顺序不是「写死第二行」）",
           pre2.early is not None
           and pre2.early["plan_obj"]["tools"] == [_spec(s) for s in _STEPS])
@@ -399,7 +392,7 @@ if __name__ == "__main__":
                test_unbound_next_step_goes_back_to_planner,
                test_progress_guard_stops_a_silent_loop,
                test_unit_is_the_card_granularity,
-               test_switch_off_keeps_today,
+               test_no_dial_keeps_the_executor_always_on,
                test_state_fields_are_declared_and_read,
                test_done_probe_is_observable,
                test_next_cursor_is_the_single_cursor_authority,

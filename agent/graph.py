@@ -1180,8 +1180,8 @@ def _strip_menu(c: "_DecideCtx", name: str) -> None:
     会接住它（既有机制，这里不重复造）。
     """
     c.deny = set(c.deny) | {name}
-    c.llm = bind_native(c._base_llm, c.role, task_state=c._task_state,
-                        evidence=c._evidence, deny=c.deny, deny_pseudo=c.deny_pseudo)
+    c.llm = bind_native(c._base_llm, c.role, evidence=c._evidence,
+                        deny=c.deny, deny_pseudo=c.deny_pseudo)
 
 
 def _name_write_correct(c: "_DecideCtx") -> bool:
@@ -3392,19 +3392,21 @@ def _ledger_next(state, config) -> "tuple[dict, dict] | None":
     """这一轮**该接着做**台账里的哪一件 → `(行, 步骤)`；不该续 → `None`（20261012）。
 
     三个调用点（`route_after_execute` 的确认分支 / planner 的收尾丢意图纠偏 / gate 的
-    账乙网）读的**就是这一句**，判据只此一处。三格合起来才成立，顺序也是刻意的
-    （最便宜的开关最先判）：
-      ① `AGENT_TASK_STATE` 开着——**关 ⇒ 逐字节退回本批之前的行为**（写成判据在
-         `tests/test_task_continuation.py` 里）；
-      ② `_ledger_in_scope`：这一轮确实在那件事的工作面上（只续当前请求的语境）；
-      ③ `tasks.next_actionable`：台账里还有**现在就能动手**的下一步（三格形状判据、
+    账乙网）读的**就是这一句**，判据只此一处。两格合起来才成立，顺序也是刻意的：
+      ① `_ledger_in_scope`：这一轮确实在那件事的工作面上（只续当前请求的语境）；
+      ② `tasks.next_actionable`：台账里还有**现在就能动手**的下一步（三格形状判据、
          `pending_question` 门的全部内容都在那个纯函数里，这里不重判）。
 
     返回元组而不仅是布尔：planner 那处纠偏要把"哪一行、下一步调什么"讲进指令里
     （只给一句"还有事没做"＝让它自己猜，那正是废话轮的成因）。
+
+    ⚠️ **20261015 撤掉了第一格 `AGENT_TASK_STATE` 档位判据**（主人裁决：任务状态在业界
+    是默认必备的，不该有个开关把它变成摆设）。撤之前的形状是"关 ⇒ 逐字节退回本批之前
+    的行为"，而产线 `.env` 自 20261002 起一直是 `1` ⇒ **撤掉这一档在产线上是零行为差
+    异**（档位那一格的取值本来就是常量真）。档位存在时的真代价是：离线套件钉的是
+    `0`（`tests/run_all.py::_PINNED`），于是 CI 与夜间**从来看不到**这一族判据，
+    本机裸跑又直接红——判据跑在哪一档成了第三件事。
     """
-    if not settings.agent_task_state:
-        return None
     if not _ledger_in_scope(state, config):
         return None
     return next_actionable(_open_tasks_rows(config), state.get("receipts"))
@@ -6304,7 +6306,7 @@ class _Preflight(NamedTuple):
 def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) -> "_Preflight":
     """决策的**前置闸**（20261009 从 `_planner_decide` 抽出，B 段）。
 
-    确认轮照令牌拼计划 / **确认兑现后照台账拼下一步（批 B，`agent_task_plan_exec`）** /
+    确认轮照令牌拼计划 / **确认兑现后照台账拼下一步（批 B，20261015 起常开）** /
     杂鱼身份零工具短路 / 上下文装配（角色、page_ctx、帧、锚点、待办台账）/
     轮次上限强制收尾 / 五条确定性快道——全部是**零 LLM** 的确定性判定。任一条命中即
     `_Preflight(early=<该轮的完整返回>)`，调用方 `if pre.early is not None: return
@@ -6353,9 +6355,13 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
     # 为什么只在这一格（`resumed`）：它的语义是"令牌刚兑现完、这一轮的主人消息是前端
     # 合成的确认回显"，正是废话轮长出来的那一格（现场 `20261012T195727` / `054330`）。
     # 其余轮次的续跑一字未动（本批不动 `route_after_execute`，也不新增节点）。
-    # 开关关着 ⇒ 这一支**不存在**，路由与今天逐字节一致（写成判据在
-    # `tests/test_plan_executor.py`）。
-    if resumed and settings.agent_task_plan_exec:
+    # **20261015 撤掉 `AGENT_TASK_PLAN_EXEC` 档位**：一个出厂默认关、产线从没打开过的
+    # 开关，等于让"任务状态"这件事在线上只走软提示那一半（实测：四个执行侧事件
+    # `plan_step_bound` / `plan_placeholder_handback` / `plan_exec_stalled` /
+    # `plan_done` 各 0/1177）——主人问的「任务状态为什么没生效变成摆设了」就是它。
+    # 撤档不改这一支的**安全边界**（下面两行注仍逐字成立）：产出的还是一份普通计划，
+    # `execute` 照常过同意闸，新卡由 `_confirm_popup` 重新签 —— 不绕任何闸。
+    if resumed:
         pe = _plan_exec_next_card(state, config)
         if pe is not None:
             record("planner", "plan_card_next", task_id=pe.task_id, cursor=pe.cursor,
@@ -6537,7 +6543,6 @@ class _DecideCtx:
     gate_note: str
     deny: set
     _base_llm: object
-    _task_state: bool
     # 出处引文那一档（`AGENT_EVIDENCE`）在这一轮的取值，**装配段读一次、各段共用**。
     # 读四次的写法会让"这一轮的 schema 开着、影子关着"成为可能（同一个进程里两处读到
     # 不同值），而判据与产物必须来自同一个事实。取值只看 `_evidence_on()`（唯一读口）。
@@ -6604,10 +6609,14 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
         max_tokens=settings.planner_native_max_tokens,
         timeout=settings.planner_native_timeout,
         enable_thinking=settings.planner_native_thinking)
-    _task_state = bool(getattr(settings, "agent_task_state", False))
+    # 任务状态的三个伪函数（`task_hold`/`task_drop`/`task_intents`）**常绑**：20261015
+    # 撤掉 `AGENT_TASK_STATE` 档位（理由见 `_ledger_next` 的注）。撤之前产线 `.env`
+    # 一直是 `1` ⇒ 这一格在线上取值本来就是 `True`，改成常量是零行为差异。**常量也不再
+    # 往 `_DecideCtx` 里传**：一格恒真的字段与 `bind_native` 的 `task_state=` 形参是同一件
+    # 事——留着它，将来某个调用点漏传就成了"静默关掉任务登记"（本仓最恨的失效形状）。
     _evidence = _evidence_on()
-    llm = bind_native(_base_llm, role, task_state=_task_state,
-                      evidence=_evidence, deny=deny, deny_pseudo=deny_pseudo)
+    llm = bind_native(_base_llm, role, evidence=_evidence,
+                      deny=deny, deny_pseudo=deny_pseudo)
     round_info = (
         f"当前决策：第 {rounds + 1}/{MAX_PLAN_ROUNDS} 轮。"
         + ("本轮已有工具执行帧（见下方结果），决策据此收敛。" if has_frames
@@ -6693,7 +6702,7 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
         page_ctx=pre.page_ctx, has_frames=has_frames, doc_anchors=pre.doc_anchors,
         ledger_frame=pre.ledger_frame, principal=pre.principal, round_info=round_info,
         frames_txt=frames_txt, gate_note=gate_note, deny=deny, _base_llm=_base_llm,
-        _task_state=_task_state, _evidence=_evidence, llm=llm, deny_pseudo=deny_pseudo,
+        _evidence=_evidence, llm=llm, deny_pseudo=deny_pseudo,
         correction=correction, correction_kind=correction_kind,
         native_note=native_note, plan_obj=None, raw=None, decided=None,
         skill_name="", params={}, _tools_off=False, _img_turn=False)
@@ -6740,8 +6749,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
             # 短应答提示只在首轮（rounds==0）给：第二轮起本轮已有工具帧，短应答
             # 的语义已由第一轮的规划兑现，再念一遍"把提议那件事规划出来"只会
             # 诱导重复规划（同一件事已经执行过一次了）。
-            short_reply_hint=(_short_reply_hint(c.state["messages"],
-                                                task_state=c._task_state)
+            short_reply_hint=(_short_reply_hint(c.state["messages"])
                               if c.rounds == 0
                               else "（非首轮决策：短应答语义已在上轮兑现）"),
             # 台账**每一轮都给**（见上面那段计算）：它是系统事实，不该只在首轮
@@ -6805,7 +6813,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
     # （见那边的注）。档位只管"模型发不发得出"，不管"摘不摘"——摘永远是安全的，
     # 漏摘会漏进 `params`。
     c.decided = tool_calls_to_plan(
-        resp, c.role, task_state=bool(getattr(settings, "agent_task_state", False)))
+        resp, c.role)
     if c.decided is None:
         # 判不了 ⇒ 确定性收尾，**没有第二条解析通道**（20261004 删掉文本兜底）：
         # 全量 trace 实测那条路 0 次被走到，而它把"响应不可解析"与"模型没决策"
@@ -6985,8 +6993,8 @@ def _decide_zero_tool_correct(c: "_DecideCtx") -> "_Step":
                  or _acted_no_intents)):
         if _acted_no_intents and not c.correction:
             c.deny_pseudo.add(TASK_INTENTS)
-            c.llm = bind_native(c._base_llm, c.role, task_state=c._task_state,
-                                evidence=c._evidence, deny=c.deny, deny_pseudo=c.deny_pseudo)
+            c.llm = bind_native(c._base_llm, c.role, evidence=c._evidence,
+                                deny=c.deny, deny_pseudo=c.deny_pseudo)
             c.correction = _INTENTS_BACKFILL_NUDGE
             c.correction_kind = "点了技能清单没留下要记的"
             # `listed` 是**这一格两种形状**的分水岭（0 = 没交，>0 = 交了但只剩它
@@ -7020,8 +7028,8 @@ def _decide_zero_tool_correct(c: "_DecideCtx") -> "_Step":
             # 摘掉之后它只剩两条路：点一个真技能，或显式点 `chat`——两者都是可判的
             # 决策，而"再交一次清单"这条空转路没了。
             c.deny_pseudo.add(TASK_INTENTS)
-            c.llm = bind_native(c._base_llm, c.role, task_state=c._task_state,
-                                evidence=c._evidence, deny=c.deny, deny_pseudo=c.deny_pseudo)
+            c.llm = bind_native(c._base_llm, c.role, evidence=c._evidence,
+                                deny=c.deny, deny_pseudo=c.deny_pseudo)
             _auto_nudge = _name_write_nudge({"tools": [], "dropped": None},
                                             c.user_msg, c.rounds, c.role)
             c.correction = ((_auto_nudge + _INTENTS_ONLY_NUDGE) if _auto_nudge

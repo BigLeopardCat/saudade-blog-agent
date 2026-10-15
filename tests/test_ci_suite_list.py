@@ -121,8 +121,13 @@ _enum = {p.name for p in run_all.suites()}
 check("枚举 == 磁盘（漏在磁盘上的文件就是「从不运行」的那种漏）",
       _disk == _enum, f"只在磁盘：{sorted(_disk - _enum)}；只在枚举：{sorted(_enum - _disk)}")
 check("枚举结果非空且覆盖多套（不是把 glob 换成了空名单）", len(_enum) >= 10, f"{len(_enum)} 套")
+# 20261015 撤档把 `AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC` 两格从钉子表里删掉了
+# （两格一起换成 `AGENT_EVIDENCE` / `AGENT_FASTPATH`，理由见 `run_all._PINNED` 上面那段注）。
+# 这一条守的不变量不变：**钉子表里必须留着"真设置项"那几格**——只有环境开关（离线套件
+# 与 IoT）的话，`_ambient_note` 那个"本机 .env 与出厂档不同"的机构会静默变成空跑。
 check("出厂档钉子还在（判据不跟运维取值走）",
-      run_all._PINNED.get("AGENT_TASK_STATE") == "0"
+      run_all._PINNED.get("AGENT_EVIDENCE") == "0"
+      and run_all._PINNED.get("AGENT_FASTPATH") == "1"
       and run_all._PINNED.get("IOT_ENABLED") == "1", str(run_all._PINNED))
 from config.settings import Settings  # noqa: E402  （默认值从声明取，不手抄一份）
 check("接口层没有第二个档可钉（`PLANNER_ENGINE` 已删，20261004）",
@@ -151,8 +156,8 @@ _PROBE = ("import json,sys;sys.path.insert(0,%r);"
 # 第二支探针（见 `_pinned_effective`）：只回报**钉子档位**的实际生效值。
 _TAKE = ("import json,sys;sys.path.insert(0,%r);"
          "from config.settings import settings;"
-         "print(json.dumps({'agent_task_state': bool(settings.agent_task_state),"
-         " 'agent_task_plan_exec': bool(settings.agent_task_plan_exec),"
+         "print(json.dumps({'agent_evidence': bool(settings.agent_evidence),"
+         " 'agent_fastpath': bool(settings.agent_fastpath),"
          " 'iot_enabled': bool(settings.iot_enabled)}))")
 
 
@@ -214,8 +219,8 @@ else:
 _eff = _pinned_effective()
 check("⭐⭐ 入口钉住的档位**真的生效**（钉了不生效 ⇒ 套件按另一档跑，且静默）",
       _eff is not None
-      and _eff["agent_task_state"] == (run_all._PINNED["AGENT_TASK_STATE"] == "1")
-      and _eff["agent_task_plan_exec"] == (run_all._PINNED["AGENT_TASK_PLAN_EXEC"] == "1")
+      and _eff["agent_evidence"] == (run_all._PINNED["AGENT_EVIDENCE"] == "1")
+      and _eff["agent_fastpath"] == (run_all._PINNED["AGENT_FASTPATH"] == "1")
       and _eff["iot_enabled"] == (run_all._PINNED["IOT_ENABLED"] == "1"),
       f"实际生效={_eff}；声明={run_all._PINNED}")
 

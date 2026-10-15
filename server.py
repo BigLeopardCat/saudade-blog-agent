@@ -2338,7 +2338,15 @@ async def health():
             # （见 config/settings.py 那段注），没有第二个取值可拨。dials 5 → 4，
             # `tests/test_health_dials.py` 同步。
             "planner_native_thinking": bool(getattr(settings, "planner_native_thinking", False)),
-            "agent_task_state": bool(getattr(settings, "agent_task_state", False)),
+            # `agent_fastpath`（20261015 快道定价档）：**两档都有意义**（开/关是两条真链路），
+            # 而它正是本仓吃过亏的那种"两个真值源"——`.env` 与 systemd drop-in 各能设一次，
+            # 进程环境还优先。定价那批读 trace 数命中分布时，先得知道**这个进程在跑哪一档**，
+            # 否则 ON/OFF 两臂的读数会张冠李戴（同上一条立项理由：回显内存取值，不读文件）。
+            "agent_fastpath": bool(getattr(settings, "agent_fastpath", False)),
+            # `agent_task_state` 这一格 20261015 删掉：任务状态撤档**常开**
+            # （主人裁决：业界默认必备，不该有个开关把它变成摆设）⇒ 一格恒定真值
+            # 的"档位"是噪声，与 20261004 删 `planner_engine` 同一条理由。
+            # `tests/test_health_dials.py` 的 `DIAL_KEYS` 同步。
             "llm_provider": getattr(settings, "llm_provider", ""),
             "llm_model": _model,
             # 只回档位名与计数，**不回 model/key/URL**（这一块的纪律见上面那段注）。

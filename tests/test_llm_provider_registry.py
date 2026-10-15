@@ -219,7 +219,7 @@ def test_additional_properties_on_function_params():
 
 
 def test_additional_properties_on_pseudo_tools():
-    tools = build_tool_schema("admin", task_state=True)
+    tools = build_tool_schema("admin")
     pseudo = [n for n, p in _param_objects(tools)
               if n in ("task_hold", "task_drop", "task_intents")]
     check("三个伪函数都在（判据的对象存在）", len(pseudo) == 3, str(pseudo))
@@ -236,7 +236,7 @@ def test_additional_properties_NOT_on_inner_objects():
     步骤；把它们关成 `additionalProperties: False` = 把"任何工具的任何参数"判成非法。
     正控挡住"忘了写"，这条挡住"顺手写多了"。
     """
-    fns = _fn_by_name("admin", task_state=True)
+    fns = _fn_by_name("admin")
     cq = fns["content_query"]["parameters"]["properties"]["calls"]
     check("content_query.calls 的 items 上没有 additionalProperties",
           "additionalProperties" not in cq["items"], str(sorted(cq["items"])))
