@@ -9591,6 +9591,45 @@ def _pre_noun_names(text, lex=None) -> bool:
     return False
 
 
+@lru_cache(maxsize=None)
+def _noun_only_re(nouns: tuple):
+    """只要名词标记本身的正则（`_msg_post_noun_name` 用；同 `_noun_re` 的缓存纪律）。"""
+    return re.compile("|".join(nouns))
+
+
+# **名词标记紧后面**那一格（20261015）：中文最直白的语序是「给用户 niuniu 升级为
+# 管理员」——名字**紧跟名词**，后面没有动词可依。既有四格全都要一个动作词垫在名字
+# 后面（B/S）或名字在名词前面（P）⇒ 这一格整段落空：主人明明白白写了名字，判据却
+# 判成"对不回名字位置"（20261012/20261014 两次生产现场的根因）。
+# 只认**形状像名字的 token**：字母/数字开头，由字母、数字、下划线、@、点、连字符
+# 组成。中文名（「用户小猫」）**刻意**不认——要认它就得回答"哪一个字算名字"，那是
+# 又一张中文词表；取不出的照旧零写 + 问清（方向是 fail-closed），而追问里会明说
+# **加引号**是唯一与名字长什么样无关的写法（中文名照认）。
+_POST_NOUN_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_@.\-]*")
+
+
+def _msg_post_noun_name(user_msg, lex=None) -> str:
+    """主人原话里**紧跟在名词标记之后**的那个名字状 token（没有则空串）。
+
+    只回传**唯一**的那一个：一句话里点了不止一个名字就说不清，同 `_bare_target_name`
+    （实测「把标签 A 删掉，另外把标签 B 挪到…」两处都命中 ⇒ 返回空串）。
+    `lex` 同 `_bare_target_name`（名词表按工具取，见 `_lexicon`）。
+    """
+    nouns, _m, generic = lex or _DEFAULT_LEXICON
+    text = str(user_msg or "")
+    hits: list[str] = []
+    for m in _noun_only_re(tuple(nouns)).finditer(text):
+        t = _POST_NOUN_NAME_RE.match(text[m.end():].lstrip(" \t"))
+        if t is None:
+            continue
+        tok = t.group(0).rstrip(".")
+        if not tok or len(tok) > 60 or tok in generic:
+            continue
+        if tok not in hits:
+            hits.append(tok)
+    return hits[0] if len(hits) == 1 else ""
+
+
 def _msg_grounded_name(got: str, user_msg, spans: list[str] | None = None,
                        lex=None) -> bool:
     """planner 填的这个名字，能不能由主人这句话**取出来**？（四个具名抽取器，见长注）
@@ -9609,6 +9648,9 @@ def _msg_grounded_name(got: str, user_msg, spans: list[str] | None = None,
       过"——如实追问里就会出现"「大笨狗」不是主人说出口的名字"这种**自相矛盾**的话
       （它就在句子里）。边界与 S 同级：句读（，。！？；、空白/引号）切断，故不会退化成
       "整句话里出现过"那条假通道。
+    · N 名词紧跟：值就是**紧跟在名词标记后面**的那个名字状 token（20261015 补，见
+      `_msg_post_noun_name`：`给用户 niuniu 升级为管理员`——B/S 要一个动作词垫在名字
+      后面、P 要名字在名词前面，这一格四格全落空）。
 
     空值返回 True：`got` 为空是"没填"（由别的判据管），不是"编的"。
     `spans` 可由调用方传入（同一句话里多处复用，省一次正则）。
@@ -9623,6 +9665,8 @@ def _msg_grounded_name(got: str, user_msg, spans: list[str] | None = None,
         return True
     slot = _msg_name_slot(user_msg, lex)
     if slot and sq in _squash_spaces(slot):
+        return True
+    if sq == _squash_spaces(_msg_post_noun_name(user_msg, lex)):
         return True
     return any(sq in _squash_spaces(run) for run in _msg_pre_noun_runs(user_msg, lex))
 
@@ -10435,10 +10479,18 @@ def _target_grounding_refusal(plan_obj: dict, user_msg,
         else:
             # 不给"主人没说过这个名字"这种断言：值可能是主人换个语序说的（"大笨狗那个
             # 标签"），本层只知道它**对不回名字位置**。话术只说系统知道的那件事。
-            tail = "主人这句话里没有加引号点名的名字。"
+            #
+            # 20261015 补的是**能走通的那条路**：此前这里只说"没有加引号点名的名字"，
+            # 收拾句又说"把那个名字**原样**再说一次即可"——而同一个写法当然还是判不出来，
+            # 主人照着重说一遍照样被拒（20261012/20261014 两次现场：主人写了
+            # 「给用户niuniu升级为管理员」，系统请他重说，重说仍然出不去）。
+            # 加引号是唯一**与名字长什么样无关**的写法（中文名照认，见
+            # `_msg_grounded_name` 的 Q 格），所以只写它。
+            tail = ("系统核实不到这个名字的出处——把名字**加引号**说"
+                    "（「小明」或\"小明\"都认），是唯一能确保被认出来的写法。")
         why = (f"系统给{label}填的名字是「{got}」，没能对回主人这句话里的名字位置——"
-               f"{tail}本次没有改动任何内容；请主人确认要操作的到底是哪一个"
-               "（把那个名字原样再说一次即可，系统照着办）。")
+               f"{tail}本次没有改动任何内容；请主人把那个名字加上引号再说一次，"
+               "系统照着办。")
         return name, why
     return None
 
