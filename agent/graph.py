@@ -92,7 +92,8 @@ from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _last_assistant_utterance, _last_user_msg,
                            _msg_text, _page_ctx, _prev_user_msg, _receipts_text,
                            _recent_tail, _short_reply_hint, _turn_has_image,
-                           strict_wire_issues, with_tool_call_pairs)
+                           freeze_turn_start, strict_wire_issues, turn_window,
+                           with_tool_call_pairs)
 from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES,
                              _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
@@ -259,9 +260,14 @@ _TARGET_EVIDENCE_TOOLS = frozenset({
 
 
 def _target_evidence(state, user_msg: str, page_ctx: str) -> list[str]:
-    """本轮可见的、可能承载文章 id 的材料（目标校验的输入，纯拼装无判断）。"""
+    """本轮可见的、可能承载文章 id 的材料（目标校验的输入，纯拼装无判断）。
+
+    读端走 `_turn(state)`（20261015 批 1）：这里是"**本轮**可见"的材料，而工具帧
+    只由 `execute_node` 追加 ⇒ 一旦线程被复用，全表扫描会把**上一轮**的帧也当成本轮
+    的目标证据（于是"上一轮提过的文章 id"能替本轮的目标背书，正是目标判据要防的事）。
+    """
     texts = [user_msg or "", page_ctx or ""]
-    for m in state.get("messages") or []:
+    for m in _turn(state):
         if (isinstance(m, ToolMessage)
                 and (getattr(m, "name", "") or "") in _TARGET_EVIDENCE_TOOLS):
             texts.append(str(getattr(m, "content", "")))
@@ -313,6 +319,24 @@ class AgentState(TypedDict):
     """
 
     messages: Annotated[list, add_messages]
+    # ── 本轮窗口（20261015，实验分支第一批）——**两个通道，缺一不可** ──
+    # `messages` 是唯一带追加 reducer 的通道 ⇒ 一旦线程被复用（接上持久化 saver），
+    # 它装的是"这个会话开天辟地以来所有条"，而图内有一族读端假定"只有本轮的"
+    # （`_page_ctx` 取第一条 `[System: …]`、`_has_frames` / `_frame_texts` /
+    # `_frame_chars` 数全表 ToolMessage、gate 的 `frames`…）。这两格让"本轮到哪儿
+    # 为止"成为图内的显式事实，读端统一走 `_turn(state)`。
+    #
+    # turn_msgs:  **本轮注入了几条消息**。只有 `graph_input` 知道（它手里就是那整份），
+    #             而它在图外、看不见上一轮的 state ⇒ 报不出下标。**每轮新设**。
+    # turn_start: 本轮在 `messages` 里的**绝对起点**。由 `planner_node`（`START →
+    #             planner` 是唯一入口）在还没人追加的时候冻结一次，此后只读不写。
+    #             `-1` = 没记边界 ⇒ `_turn` 原样返回整个列表（= 老行为）。
+    #             **为什么不直接取"末尾 turn_msgs 条"**：一旦 execute 追加了帧，
+    #             "末尾 N 条"就把开头的 `[System: …]` 注入块挤出窗口了（页面事实静默
+    #             消失）。详见 `context.freeze_turn_start` 的头注。
+    #             判据见 `tests/test_turn_window.py`（纯函数 + AST 审计锁）。
+    turn_msgs: int
+    turn_start: int
     plan: str
     # plan_obj: 本轮计划的**结构化那一态**（`plan_state` 与 `plan` 一次写入，20260928
     #           批 C）：`plan` 是给人和提示词看的契约文本，`plan_obj` 是给程序读的
@@ -424,6 +448,22 @@ class AgentState(TypedDict):
     #               形状，所以这里不是"多写两格图个整齐"，是这条守卫能不能成立的**前提**。
     plan_task_id: str
     plan_cursor: int
+
+
+def _turn(state) -> list:
+    """**本轮的**消息切片（见 `AgentState.turn_start` 与 `context.turn_window`）。
+
+    图内凡"只看本轮"的读端一律走这里，不许再直接写 `state["messages"]`——那个写法
+    把"每请求独立线程、无 checkpointer"这条**图外的**约定当成了图内的保证。
+    无 saver 时本函数恒等于 `state["messages"]`（`turn_start` 是 `0` 或 `-1`），
+    所以替换它**不改变任何行为**；接上 saver、线程复用之后，它自动收窄到本轮。
+
+    **不要**拿它去换那些本来就该看全表的读端（`_recent_tail` / `_doc_anchors` /
+    `_task_goal_sources` / `_recent_ai_replies` / `_repeat_reason` / `_url_trusted` /
+    `with_tool_call_pairs` / `strict_wire_issues`）——那会**吃掉历史**，是另一个方向
+    的错。哪些该换由 `tests/test_turn_window.py` 的 AST 审计锁按白名单管。
+    """
+    return turn_window(state.get("messages"), state.get("turn_start", -1))
 
 
 # ---------------------------------------------------------------------------
@@ -6218,6 +6258,17 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     upd = _planner_decide(state, config, task_sink=sink)
     if sink:
         upd["task_frames"] = list(upd.get("task_frames") or ()) + sink
+    # 本轮窗口的**绝对起点**（20261015 批 1，见 `AgentState.turn_start`）：与上面
+    # `task_sink` 同一个理由——`_planner_decide` 有二十几处出口，逐条补一个键等于把
+    # 这件事绑死在"作者记得的那几条"上（漏一条 = 那一轮的窗口悄悄退回整份列表，
+    # 而那正是这一刀要修的东西，且没有任何测试会红）。**只留这一个注入点**。
+    #
+    # 位置也是对的：`START → planner` 是唯一入口，此刻这一轮还**没人往 messages 里
+    # 追加过东西** ⇒ `len(messages) - turn_msgs` 正好是本轮注入块的起点。晚一步
+    # （execute 追加完帧之后）算出来就会偏大，把开头的 `[System: …]` 挤出窗口。
+    # 重规划轮再进这里时 `turn_start` 已经是 ≥0 ⇒ `freeze_turn_start` 原样返回。
+    upd["turn_start"] = freeze_turn_start(state.get("messages"), state.get("turn_msgs"),
+                                          state.get("turn_start", -1))
     return upd
 
 
@@ -6364,7 +6415,7 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
             plan_obj = _confirm_grant_plan(grant)
             record("planner", "confirm_grant", skill=plan_obj["skill"], tools=plan_obj["tools"])
         else:
-            plan_obj = _wrap_up_plan(_has_frames(state["messages"]))
+            plan_obj = _wrap_up_plan(_has_frames(_turn(state)))
             record("planner", "confirm_wrap", rounds=rounds,
                    reason="确认轮执行受阻，不重发清单")
         return _Preflight(early=_plan_update(plan_obj, rounds))
@@ -6430,8 +6481,8 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
         record("planner", "zako_shortcut", round=rounds)
         return _Preflight(early=_plan_update(plan_obj, rounds))
 
-    page_ctx = _page_ctx(state["messages"], role)
-    has_frames = _has_frames(state["messages"])
+    page_ctx = _page_ctx(_turn(state), role)
+    has_frames = _has_frames(_turn(state))
     doc_anchors = _doc_anchors(state["messages"])
     # 实验读数（20261015，见 agent/_ckpt_probe.py）：`msgs` 是本轮 planner 看到的
     # 消息条数（线程复用后会带上历史），`has_frames` 决定首轮五条确定性快道开不开
@@ -6653,7 +6704,7 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
     # 工具帧文本先算一次（下面 format 里要用，trace 里也要记长度）——20260920 起
     # 落 `frames_chars`：单帧上限 20000 是拍出来的经验值，没有真实体量数据就无法
     # 判断"该收该放"（超长文章改造后尤其要能看见节选是否生效）。
-    frames_txt = _frame_texts(state["messages"])
+    frames_txt = _frame_texts(_turn(state))
 
     # ── 决策（最多两次：正常一次 + 剔空纠偏一次）─────────────────────────
     # 20260921 22:34 生产实证（用户报："被降级了但是居然就直接结束而不是重新规划
@@ -7863,7 +7914,7 @@ def _decide_late_correct(c: "_DecideCtx") -> "_Step":
     # 但剔空那条以 `break` 收尾，排在它后面的代码永远到不了。
     if (not c.correction and c.has_frames and c.plan_obj["tools"]
             and c.plan_obj["skill"] in _ACTION_SKILLS):
-        _frames = {getattr(m, "name", "") or "" for m in c.state["messages"]
+        _frames = {getattr(m, "name", "") or "" for m in _turn(c.state)
                    if isinstance(m, ToolMessage)}
         _planned = {_tool_name(s) for s in c.plan_obj["tools"]}
         _left = _pending_intents(c.state)
@@ -8125,7 +8176,7 @@ def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str, raw: str,
     # （动作一次决策即完成，多轮只应发生在 content_query 检索链路——知识型
     # 轮次允许同名检索工具重复（换关键词再搜是合法多轮）。
     if has_frames and plan_obj["tools"] and plan_obj["skill"] in _ACTION_SKILLS:
-        frame_names = {getattr(m, "name", "") or "" for m in state["messages"]
+        frame_names = {getattr(m, "name", "") or "" for m in _turn(state)
                        if isinstance(m, ToolMessage)}
         planned_names = {_tool_name(s) for s in plan_obj["tools"]}
         if planned_names and planned_names <= frame_names:
@@ -8200,7 +8251,7 @@ def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str, raw: str,
     # 命中同样确定性转读未读候选全文（planner 已实证靠搜索收敛不了，读全文才有
     # 据收尾）或直接收尾。__ERROR__ 帧存在时整块跳过（错误修正重试合法）。
     if (plan_obj["skill"] == "content_query" and plan_obj["tools"]
-            and not _any_error_frame(state["messages"])):
+            and not _any_error_frame(_turn(state))):
         executed = state.get("executed") or []
         kind = _search_retry_kind(plan_obj, executed)
         if kind:
@@ -8223,7 +8274,7 @@ def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str, raw: str,
                 record("planner", "intercept", reason=kind, dups=dups, redirected=False)
                 return plan_obj, _plan_update(plan_obj, rounds)
             terms = _search_terms(plan_obj, executed, user_msg)
-            cand = _candidate_detail_plan(state["messages"], executed, terms)
+            cand = _candidate_detail_plan(_turn(state), executed, terms)
             if cand is None:
                 logger.info("[planner] 检索重复拦截（%s），无可读候选 → 如实收尾列候选",
                             "、".join(dups) if dups else "rag_search 变体 ≥2 次")
@@ -11475,12 +11526,13 @@ def _ledger_frames_present(state) -> set:
     """本轮 narrator 手上**已经有哪几族**的后台帧（`_QUEUE_READ_TOOLS` 那张表的反查）。
 
     只能按**帧**算：`receipts` 只收 checker 判过 PASS 的那几件（BLOCK 的帧照样进了
-    提示词），`tool_data` 是给参数引用用的。扫 `state["messages"]` 里的 ToolMessage
-    ——那正是 `model_node` 组装 narrator 提示词时读的同一份东西，判"要不要补事实"与
-    它必须同源。
+    提示词），`tool_data` 是给参数引用用的。扫**本轮窗口**（`_turn(state)`）里的
+    ToolMessage——那正是 `model_node` 组装 narrator 提示词时读的同一份东西，判"要不要
+    补事实"与它必须同源。（20261015 批 1 起两边都走 `_turn`；此前是全表，线程一复用
+    就会把上一轮的帧算成本轮已经有的事实。）
     """
     out: set = set()
-    for m in state.get("messages") or []:
+    for m in _turn(state):
         if not isinstance(m, ToolMessage):
             continue
         fam = _QUEUE_READ_TOOLS.get(getattr(m, "name", "") or "")
@@ -12112,7 +12164,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             if not A.target_mentioned(
                     args.get("article_id"),
                     _target_evidence(state, user_msg,
-                                     _page_ctx(state["messages"], principal.known_role))
+                                     _page_ctx(_turn(state), principal.known_role))
                     # **第二本账**（20261008，与 `_grounded_value` 的 `sq_ledger` 同源）：
                     # 目标也可以住在**系统自己那行台账**里。主人回一句指代
                     # （「对就是你说的这样」）重提上一轮那张卡上的事时，那一篇与那几个值
@@ -12514,7 +12566,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 这里的 page_ctx 只喂 _target_evidence/_create_display_text（都是"用户提没提
     # 到这篇文章/给设备写什么文案"），能力清单不参与——但传 role 与另两个节点同构，
     # 免得下次有人复制这行时把角色漏掉。
-    page_ctx = _page_ctx(state["messages"], principal.known_role)
+    page_ctx = _page_ctx(_turn(state), principal.known_role)
     # 用户本轮**原话点名**的文章 id（写侧目标的权威，见下方 target_conflict）：
     # 逐 spec 只读不改，循环外算一次。
     named_ids = A.user_named_article_ids(user_msg)
@@ -12557,15 +12609,10 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                     "messages": [], "receipts": list(state.get("receipts") or [])}
         return dict(body, messages=[], receipts=list(state.get("receipts") or []))
     results: list = []
-    # 帧文本封顶的累计口径（20261005）：`state["messages"]` 里的 ToolMessage 就是本轮
-    # 已执行过的帧——**只会有本轮的**，历史注入（`server.py::_build_messages`）只造
-    # Human/AIMessage，ToolMessage 只由本函数 append。加上循环里已追加的那些，就是
-    # "这一轮模型已经读到多少字"。
-    # ⚠️ 上面那句"只会有本轮的"**依赖"每请求独立线程、无 checkpointer"**（20261015
-    # 实验分支实测，见 `eval/experiments/checkpoint_probe.py`）：线程一复用，上一轮的
-    # ToolMessage 就躺在 `state["messages"]` 里 ⇒ 这个封顶预算**开局就被历史吃掉一块**，
-    # 本轮真实可用的帧预算比常量小。这里不修（修法是"本轮帧窗口"，属第二批），只标注。
-    frame_chars = _frame_chars(state.get("messages"))
+    # 帧文本封顶的累计口径（20261005）：本轮窗口里的 ToolMessage = 本轮已执行过的帧
+    # （历史注入只造 Human/AI，ToolMessage 只由本函数 append），加循环里已追加的 =
+    # "本轮模型读到多少字"。起点改读 `_turn(state)`（20261015 批 1，见其 docstring）。
+    frame_chars = _frame_chars(_turn(state))
     receipts = list(state.get("receipts") or [])  # 请求内累计（与 executed 同模式）
     noop_specs = list(state.get("noop_specs") or [])  # 请求内累计的零改动签名（见 AgentState）
     # 事实信封的读端（F1，20260930）：`tools.base.is_noop` 是**唯一**实现——它读
@@ -12724,6 +12771,8 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             record("execute", "frame_capped", name=name, used=frame_chars - len(frame_text),
                    **capped)
         results.append(ToolMessage(
+            # `_frame_id` 刻意**不**窗口化（20261015 批 1）：唯一性靠"帧只增不减"，出站串
+            # 是整份 `state["messages"]`；窗口化会让 id 每轮从头数 ⇒ 两轮撞同一个 id ⇒ 400。
             content=frame_text, tool_call_id=_frame_id(state.get("messages"), idx),
             name=name))
         logger.info("[execute] %s(%s) → %.100s", name, json.dumps(args, ensure_ascii=False),
@@ -12921,7 +12970,7 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
         raise AgentCancelled()
     rounds = state.get("reflect_rounds", 0)
     blocked = state.get("blocked") or []
-    has_frames = _has_frames(state["messages"])
+    has_frames = _has_frames(_turn(state))
 
     def _terminal(reason: str, new_rounds: int) -> dict:
         """确定性收尾计划 + reflect_end → model。记录后无 LLM，绝不静默 accept。"""
@@ -12942,7 +12991,7 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
         f"- skill={b.get('skill', '')} | {b.get('spec', '')} | reason={b.get('reason', '')}"
         f" | result={str(b.get('result', ''))[:150]}"
         for b in blocked[:6])[:600] or "（空）"
-    facts = (_frame_texts(state["messages"]) + "\n"
+    facts = (_frame_texts(_turn(state)) + "\n"
              + _receipts_text(state.get("receipts") or []))[:900]
     record("reflector", "round_start", blocked=[b.get("spec") for b in blocked],
            round=rounds + 1)
@@ -13060,7 +13109,7 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         logger.info("[model] 动作事实块 %d 行（族内工具 %s），叙述权收归系统",
                     len(_facts), "、".join(sorted(_drop)) or "-")
     # 抽成局部只为实验读数能看见它（同一函数、同一取值，见下方 `_ckpt_probe.dump`）。
-    _probe_page = _page_ctx(state["messages"], role)
+    _probe_page = _page_ctx(_turn(state), role)
     system = SystemMessage(content=_EXECUTOR_PROMPT.format(
         persona=BLOG_ASSISTANT_PROMPT,
         audience=audience_block(role),
@@ -13073,7 +13122,7 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         # `article_pointer=True` **只有这一处**（20261005）：narrator 的上下文里原始
         # ToolMessage 就在手边，未超预算的正文帧两份逐字节相同 ⇒ 这里换成指针句，
         # 省掉整整一份正文（见 context._frame_texts 的注）。
-        tool_frames=_frame_texts(state["messages"], drop_tools=_drop, article_pointer=True),
+        tool_frames=_frame_texts(_turn(state), drop_tools=_drop, article_pointer=True),
         exec_receipts=_receipts_text(_receipts, drop_tools=_drop),
         fact_block=_block or (_NO_PRINTED_FACTS_ACTION if _has_action else _NO_PRINTED_FACTS),
         # 能力清单与 audience 同一角色源（20260921）：两处口径不同会出现
@@ -13314,7 +13363,17 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     _t0 = time.monotonic()
     plan = parse_plan(state.get("plan", ""))
     msgs = state["messages"]
-    frames = [m for m in msgs if isinstance(m, ToolMessage)]
+    # **两个视野，别混**（20261015 批 1）：
+    #   `turn` = 本轮窗口（`_turn`），给"本轮证据"类判据用 —— `frames`（本轮帧）、
+    #            `page_ctx`（本轮页面）、`_has_exec_memory` / `_exec_memory_has_search`
+    #            （读的是**本轮注入**的 `[System: …]` 块）；
+    #   `msgs` = 整份列表，给"跨轮"类判据用 —— `_recent_ai_replies`（复读比对面本来就
+    #            要往回看 N 轮）、`_url_trusted`、`_last_user_msg`（从后往前扫，天然自愈）。
+    # 无 saver 时两者是同一个对象，这里拆开**不改任何行为**；线程一复用就分道扬镳，
+    # 而此前它们是同一个变量 ⇒ 上一轮的帧会被算成本轮证据、上一轮的 `[System: …]`
+    # 会被当成本轮的注入块。
+    turn = _turn(state)
+    frames = [m for m in turn if isinstance(m, ToolMessage)]
     last_ai = next((m for m in reversed(msgs) if isinstance(m, AIMessage)), None)
     reply = ((getattr(last_ai, "content", "") or "").strip() if last_ai else "")
     record("gate", "check", skill=plan["skill"], frames=len(frames))
@@ -13387,7 +13446,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         for f in frames
     )
     issue = _claim_issue(reply, plan["skill"], plan, bool(frames),
-                         _has_exec_memory(msgs, state.get("ledger")), _exec_memory_has_search(msgs),
+                         _has_exec_memory(turn, state.get("ledger")), _exec_memory_has_search(turn),
                          has_popup=bool(state.get("pending_confirm")),
                          ledger=state.get("ledger"), receipts=receipts,
                          noop_specs=state.get("noop_specs"),
@@ -13401,7 +13460,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                          # 洞⑪ 的真值来源：前端实时上报的访客位置（见 `_live_page_path`）。
                          # 取法与 planner/model 同一处（`_page_ctx` 扫首条 [System: …]），
                          # 角色只影响能力清单，判据不看那一半。
-                         page_ctx=_page_ctx(msgs, _principal_of(config).known_role),
+                         page_ctx=_page_ctx(turn, _principal_of(config).known_role),
                          # 洞⑫ 的真值来源：**本轮调用者的角色**（决定技能表里有什么）。
                          # 与 `page_ctx` 取同一处身份，别再各算一份。
                          role=_principal_of(config).known_role)
@@ -13552,7 +13611,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     executed_names = {str(getattr(m, "name", "") or "") for m in frames}
     # frame_text 传入 = 开启"复述工具自己说的话"豁免（20260921，见 _phantom_tool_claim_span）
     phantom = _phantom_tool_claim_span(
-        reply, executed_names, _has_exec_memory(msgs, state.get("ledger")), tool_text)
+        reply, executed_names, _has_exec_memory(turn, state.get("ledger")), tool_text)
     if phantom:
         logger.info("[gate] 具名工具声称无帧支撑：%s（本轮执行=%s）｜子句=%s → fallback",
                     phantom[0], "、".join(sorted(n for n in executed_names if n)) or "无",
@@ -13571,7 +13630,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     #     点名工具，泛指检索声称归这里。
     if not (executed_names & _CONTENT_TOOLS):
         own5d = _strip_quoted_spans(reply)
-        clause5d = _site_search_claim_clause(own5d, _has_exec_memory(msgs, state.get("ledger")))
+        clause5d = _site_search_claim_clause(own5d, _has_exec_memory(turn, state.get("ledger")))
         if clause5d:
             logger.info("[gate] 站内检索声称但本轮无内容类工具帧（执行=%s）｜子句=%s → fallback",
                         "、".join(sorted(n for n in executed_names if n)) or "无",
@@ -13583,7 +13642,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                                     plan, len(frames))
         # 5f. 站内"没有"结论 vs 本轮内容类帧（洞④的混合轮形态，20260921）：本轮只跑了
         #     动作类工具（导航/特效/设备），回复却对站内内容下"没有"的结论 → 无依据。
-        clause5f = _site_absence_claim_clause(own5d, _exec_memory_has_search(msgs))
+        clause5f = _site_absence_claim_clause(own5d, _exec_memory_has_search(turn))
         if clause5f:
             logger.info("[gate] 站内『没有』结论但本轮无内容类工具帧（执行=%s）｜子句=%s → fallback",
                         "、".join(sorted(n for n in executed_names if n)) or "无",
@@ -13686,7 +13745,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
             reply, _ACTION_RESTATE_RE, _STATE_ACTION_EXEMPT_RE,
             # 回执在场 ⇒ "刚才/之前"指的是**已记录的执行**（rule 6 据实转述），
             # 与零帧那条网（洞①）共用同一族豁免，理由见 `_state_action_claim`。
-            veto=_prior_time_veto(_has_exec_memory(msgs, state.get("ledger"))))
+            veto=_prior_time_veto(_has_exec_memory(turn, state.get("ledger"))))
         if clause5g:
             logger.info("[gate] 动作族轮次复述式声称（事实块已由系统印）｜子句=%s（只记不判）",
                         _clip_clause(clause5g))
@@ -13909,7 +13968,16 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
     **由 server.py 按它实际注入的内容原样传入**——判据看的是"系统给模型看过什么"，
     两个来源各算各的必然对不上（洞⑦ 的假阴性/误伤都从这里来）。
     """
-    return {"messages": messages, "plan": "", "plan_obj": {}, "plan_rounds": 0,
+    return {"messages": messages,
+            # 本轮到哪儿为止（20261015，见 `AgentState.turn_msgs`）：**这里是唯一
+            # 知道"本轮注入了几条"的地方**——收到的 `messages` 就是本轮注入的那整份。
+            # 读端统一走 `_turn(state)`，于是"只有本轮的"这条假定从图外的约定
+            # 变成图内的事实。无 saver 时窗口恒等于整个列表 ⇒ 行为零变化。
+            # `turn_start` 在这里只能是 `-1`（还没合并、算不出下标）：由
+            # `planner_node` 在没人追加之前冻结一次，见 `context.freeze_turn_start`。
+            "turn_msgs": len(messages),
+            "turn_start": -1,
+            "plan": "", "plan_obj": {}, "plan_rounds": 0,
             "done": False,
             "executed": [], "receipts": [], "noop_specs": [],
             "blocked": [], "blocked_seen": [],

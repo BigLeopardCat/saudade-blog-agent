@@ -45,6 +45,86 @@ def _msg_text(m) -> str:
     return content if isinstance(content, str) else str(content)
 
 
+# ── 本轮窗口（20261015，实验分支 `exp/native-checkpoint` 第一批）──
+# 图内有一族读端**假定 `state["messages"]` 就是本轮**：从前往后扫第一条
+# `[System: …]` 的 `_page_ctx`，对全表数 ToolMessage 的 `_has_frames` /
+# `_frame_texts` / `_frame_chars`，以及 gate 的 `frames` 等等。
+#
+# 这条假定今天成立，但**不是图保证的，是图外保证的**：`graph_input` 每轮把整份消息
+# 列表整个塞进 `messages` 通道，而线程每请求独立随机 ⇒ `add_messages` 的追加永远
+# 没有"上一轮"可追加。任何不经 `graph_input` 的入口（新调用点、测试、接上持久化
+# saver）都会**静默**换语义——20261015 实测：线程一复用，`_page_ctx` 就把上一轮的
+# 页面当本轮报给模型（用户人在留言板，模型被告知在首页），`_has_frames` 把上一轮的
+# 帧当本轮证据（首轮那五条确定性快道结构上永不命中）。
+#
+# 本轮边界要**两个**值才表达得出来，这不是冗余，是"谁知道哪一半"决定的：
+#
+#   `turn_msgs`  = 本轮**注入了几条**。只有 `graph_input` 知道（它手里就是那整份），
+#                  而它在**图外**、看不见上一轮的 state ⇒ 它报不出下标。
+#   `turn_start` = 本轮在 `messages` 里的**绝对起点**。它要等 `add_messages` 合并之后
+#                  才存在（= `len(messages) - turn_msgs`），而合并之后**每追加一条消息
+#                  这个起点就往前错一位**（execute 的帧、model 的回复、gate 的注记）
+#                  ⇒ 换算**只能做一次、在还没人追加的时候做**。
+#
+# 所以分工是：`graph_input` 报条数，图里的**第一个节点**（planner，`START → planner`
+# 是唯一入口）把它冻结成下标，此后所有读端只用下标。
+#
+# ⚠️ 这里踩过一次（20261015 批 1 设计稿的原始形态）：当初想只留条数、窗口取
+# `msgs[-turn_msgs:]`（"末尾 N 条"）。那只在**还没人追加**的时候等于"本轮"。一旦
+# execute 追加了 k 条帧，`msgs[-turn_msgs:]` 就是 `注入[k:] + 追加`——把**开头的
+# `[System: …]` 注入块挤出窗口**（页面事实静默消失），而窗口看起来"还是有内容"。
+# 条数与下标**不是**同一个东西，别再用"反正无 saver 时恒等"来掩盖（无 saver 时
+# 两者确实恒等，所以这个错在臂 A 上永远看不出来）。
+#
+# **无 saver 时窗口是恒等**：`turn_start == 0`（第一轮）或 `-1`（没记）都返回整个
+# 列表，而"没记"正是今天的行为。所以这一刀对臂 A 是**逐字节零变化**
+# （`tests/test_turn_window.py` 钉住这一格，`ckpt_ab_driver --arms graph` 的前后两张
+# 逐轮签名表是它的真链路判据）。
+def freeze_turn_start(messages: list | None, turn_msgs: int, turn_start: int) -> int:
+    """把「本轮注入了几条」换算成**绝对起点**——只做一次，在还没人追加的时候。
+
+    `turn_start >= 0` ⇒ 已经冻结过（重规划轮、reflector 回环都会再进 planner）
+    ⇒ 原样返回，**不许重算**：那时候帧已经在表里，`len(messages) - turn_msgs`
+    会比真起点大，重算等于把窗口的前半段切掉。
+    `turn_msgs <= 0` ⇒ 没记边界（老调用点、探针里的迷你图）⇒ 返回 `-1` = 不窗口化。
+    """
+    if turn_start is not None and turn_start >= 0:
+        return turn_start
+    n = turn_msgs or 0
+    if n <= 0:
+        return -1
+    k = len(messages or []) - n
+    return k if k >= 0 else -1
+
+
+def turn_window(messages: list | None, turn_start: int) -> list:
+    """本轮的切片：从绝对起点 `turn_start` 到表尾。
+
+    `turn_start < 0`（没记边界：老调用点、探针里的迷你图）= 原样返回整个列表，
+    也就是**今天的行为**——不是"空窗口"。`turn_start == 0` 同样是整个列表，而且
+    那是**对的**（本轮的起点就在表头）。起点比列表还长（不该发生）同样退回整个
+    列表，但**记一行 warning**：静默吞掉会让"边界记错了"与"本来就该看全表"长得
+    一模一样，而那正是本仓最贵的一类失效。
+
+    `messages is None` 才换成空表（**不是 `or []`**）：`or []` 会把空表也换成一个新
+    对象，于是"恒等返回"这条负控在空表那一格上不成立——判据要的是**同一个对象**，
+    不是"长得一样"。见 `tests/test_turn_window.py` §①。
+    """
+    msgs = [] if messages is None else messages
+    k = -1 if turn_start is None else turn_start
+    if k <= 0:
+        # `k == 0` = 本轮起点就在表头（第一轮）⇒ 窗口就是整个列表，返回**同一个对象**
+        # 而不是 `msgs[0:]` 那个新列表：判据要的是"零变化"，而"新列表内容相同"不等于
+        # 零变化（`is` 那一格是这一刀的负控，见 `tests/test_turn_window.py` §①）。
+        return msgs
+    if k > len(msgs):
+        logger.warning("本轮窗口的起点比消息列表还长（turn_start=%d > len(messages)=%d）"
+                       "——按整个列表处理；边界记错了，去查 graph_input 与 planner_node "
+                       "的 `freeze_turn_start` 调用", k, len(msgs))
+        return msgs
+    return msgs[k:]
+
+
 # ── 页面操作指南（20260905：留言引导幻觉修复的确定性知识源）──
 # 背景：3660 事故（用户问"怎么留言"，narrator 编出"昵称/邮箱输入框+右上角登录"
 # 全套幻觉流程）——RAG 语料只有文章，没有留言板操作说明；模型没有真凭实据时
