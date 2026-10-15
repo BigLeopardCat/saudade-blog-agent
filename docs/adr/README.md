@@ -73,6 +73,7 @@
 | [0005](adr-0005-multimodal-retrieval-deferred.md) | 多模态检索：方向认可，现在不做（等图片规模与查询形态） | **已搁置** |
 | [0006](adr-0006-permission-rules-deferred.md) | 权限规则集（(action, resource, effect) +「总是允许」）：方向认可，现在不做 | **已搁置** |
 | [0007](adr-0007-unavailable-retry-not-fixed-in-prompt-layer.md) | `unavailable` 的那次原地重试不在提示词层治（试过两版、A/B 否掉） | **已搁置** |
+| [0010](adr-0010-state-accumulator-reducers-deferred.md) | state 累加器的合并语义：先立台账，暂不加 reducer | **已搁置** |
 
 ## 相关的、但不算 ADR 的文档
 
