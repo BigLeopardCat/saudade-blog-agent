@@ -6254,21 +6254,33 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     持有的 `task_sink`，壳在返回前并进去。`frames` 为空（绝大多数轮次）时返回的 dict
     逐字不变。
     """
-    sink: list[dict] = []
-    upd = _planner_decide(state, config, task_sink=sink)
-    if sink:
-        upd["task_frames"] = list(upd.get("task_frames") or ()) + sink
-    # 本轮窗口的**绝对起点**（20261015 批 1，见 `AgentState.turn_start`）：与上面
+    # 本轮窗口的**绝对起点**（20261015 批 1，见 `AgentState.turn_start`）：与下面
     # `task_sink` 同一个理由——`_planner_decide` 有二十几处出口，逐条补一个键等于把
     # 这件事绑死在"作者记得的那几条"上（漏一条 = 那一轮的窗口悄悄退回整份列表，
     # 而那正是这一刀要修的东西，且没有任何测试会红）。**只留这一个注入点**。
+    #
+    # ⚠️ **必须在这里算，不能在 return 前算**（这一条踩过）：节点的 state 更新要等
+    # 节点**返回**才落盘 ⇒ 若把冻结放在返回前，`_planner_decide` 里的每一个 `_turn`
+    # 读到的还是输入那个 `-1`（= 不窗口化）⇒ **本节点自己成了唯一没被修好的读端**，
+    # 而 `_page_ctx`（页面事实）正是在这里读的。真链路上量到的症状：planner 第一遍
+    # 的读数 `turn_start=-1`，第二遍（重规划）才是 `0`。
     #
     # 位置也是对的：`START → planner` 是唯一入口，此刻这一轮还**没人往 messages 里
     # 追加过东西** ⇒ `len(messages) - turn_msgs` 正好是本轮注入块的起点。晚一步
     # （execute 追加完帧之后）算出来就会偏大，把开头的 `[System: …]` 挤出窗口。
     # 重规划轮再进这里时 `turn_start` 已经是 ≥0 ⇒ `freeze_turn_start` 原样返回。
-    upd["turn_start"] = freeze_turn_start(state.get("messages"), state.get("turn_msgs"),
-                                          state.get("turn_start", -1))
+    turn_start = freeze_turn_start(state.get("messages"), state.get("turn_msgs"),
+                                   state.get("turn_start", -1))
+    if turn_start != state.get("turn_start", -1):
+        # 本节点内的读端得看见它。**造一个新 dict，不就地改 `state`**：LangGraph 的
+        # state 是同 superstep 内共享的对象，就地写会污染别的读者（而且那不是
+        # "节点写 state"的正规通道）。浅拷贝一个几十键的 dict，代价可忽略。
+        state = {**state, "turn_start": turn_start}
+    sink: list[dict] = []
+    upd = _planner_decide(state, config, task_sink=sink)
+    if sink:
+        upd["task_frames"] = list(upd.get("task_frames") or ()) + sink
+    upd["turn_start"] = turn_start
     return upd
 
 
@@ -6488,7 +6500,15 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
     # 消息条数（线程复用后会带上历史），`has_frames` 决定首轮五条确定性快道开不开
     # ——上一轮的 ToolMessage 会让它恒 True。未设 `CHECKPOINT_PROBE_OUT` 时是空操作。
     _ckpt_probe.dump("planner", msgs=len(state["messages"]), has_frames=has_frames,
-                     rounds=rounds, page_ctx=page_ctx[:160])
+                     rounds=rounds, page_ctx=page_ctx[:160],
+                     # 本轮窗口（20261015 批 1）：`win` 是 `_turn` 收窄之后的条数，
+                     # `ident` 是"窗口**就是**整表那个对象"。臂 A（无 saver）下
+                     # `ident` 必须**恒 True**——这一刀对臂 A 是逐字节零变化，而
+                     # 这条读数把"零变化"从读代码的结论变成真链路上量到的事实。
+                     # `start` 只会是 0（第一轮，表头）或 -1（没记边界）。
+                     turn_start=state.get("turn_start", -1),
+                     turn_msgs=state.get("turn_msgs"), win=len(_turn(state)),
+                     ident=_turn(state) is state["messages"])
     # 快道档（20261015 定价档）**读一次、两处用同一个值**：① 首轮那一段开不开；
     # ② 下面的 `planner.context` 事件里记一笔。记这一笔是必须的——命中会落
     # `fastpath` 事件，但"没有那条事件"本身证明不了任何事（本仓纪要：trace 指纹
