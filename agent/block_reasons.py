@@ -55,6 +55,12 @@ REASONS: dict[str, tuple[str, bool]] = {
     # 下一条路是**把 id 换成主人点名的那个**——都不是"重试同一个调用"，但都不是死路。
     "unknown_target": ("目标未经确认", True),
     "target_mismatch": ("目标与主人点名的不是同一篇", True),
+    # 动作冲突（`agent/authz.py::action_conflict_error_reason` 取回，20261016，§1.57）：
+    # 主人这句要的是收藏、planner 排的是取消收藏（反极性改选）——下一条路是**按主人
+    # 说的那件重新规划**，所以算"可救"（True）⇒ 这一件**不**进 `denied_skills`：
+    # 它本来就没坏，坏的是"模型被摘掉一件之后改选了它的反面"这个动作，摘第二件只会
+    # 把菜单越摘越空（§1.57 明确否掉了"同族一起摘"那条路）。
+    "action_conflict": ("与主人这句话要的动作相反", True),
     # 目标不存在（20260923 三轮，kind=not_found）：与 unavailable 刻意分开——
     # 那个的下一步是"稍后再试"，这个的下一步是"换个 id 或如实问主人"。
     "target_not_found": ("目标不存在", True),
