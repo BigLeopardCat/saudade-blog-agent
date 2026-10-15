@@ -1030,7 +1030,7 @@ def _task_satisfied_specs(ex_upd: dict) -> list:
             if isinstance(s, dict) and str(s.get("tool") or "")]
 
 
-def _task_advance_rows(open_tasks: list, declared_tasks: list, exec_rows: list,
+def _task_advance_rows(open_tasks: str, declared_tasks: list, exec_rows: list,
                        satisfied_specs: list, record) -> list[dict]:
     """流尾任务结算：算出这一轮该发哪几帧 `__TASK__`（**发帧留在 producer 里**）。
 
@@ -1040,7 +1040,9 @@ def _task_advance_rows(open_tasks: list, declared_tasks: list, exec_rows: list,
 
     结算范围 = Rust 读回来的行（上一轮起就挂着）+ 本轮新登记的行；两类的 ts 下限不同
     （读回来的行 0、新登记的行用登记时刻），**逐行配对**的理由与那个"两行同 id"的陷阱
-    见 `tasks.rows_to_settle` 的 docstring。
+    见 `tasks.rows_to_settle` 的 docstring。`open_tasks` 是**原文串**（`req.agent_tasks`
+    的 JSON 文本，`tasks.rows_to_settle` 里才解析），注解别"顺手"改回 `list`——改成
+    `list` 会让 mypy 棘轮当场多一格（20261015 实测），而它读的确实是串。
 
     两种证据**在同一次游标推进**里并用（不是先试回执、推不动再试系统认定）：分两次的
     话，回执推动到一半就返回，系统认定那半不会再补上，那一行照样停在中途、下一轮继续
