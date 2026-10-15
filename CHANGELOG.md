@@ -16,6 +16,15 @@
 
 ## 20261016
 
+- **帧契约从口头约定收成一件有锁的产物**（新增 `agent/frames.py` + `tests/test_frame_contract.py`）：
+  第二条臂（`AGENT_ARM=react`）产帧要喂哪些 state 键，此前是 grep 数出来手抄的，实测**两张
+  手抄表合起来漏 8 格**——闸门那张漏 `task_frames`（析取里的一条腿，少喂只会让闸门静默少
+  开火），`_popup_state` 那张 docstring 自称四格、AST 走完闭包实测**十一格**，其中 `executed`
+  正是「令牌用在那一件上就作废」那一格 ⇒ 臂的弹卡路径上那条判据**恒不生效**。新锁从
+  `graph.py`/`server.py` **现取**键集与帧名，与声明算双向差集，带四条反向对照。**行为变更只
+  落在 react 臂**：`react_line._consent_missing` 从 20261012 收窄之前的 `not self.grant`
+  改成直调生产 `graph._grant_covers`（`SkillExecutor` 多收一个 `state`）。生产默认
+  `AGENT_ARM=graph`，**线上路径逐字节不变**。
 - **补 3 条「跨通道混合」golden 用例（新判据，无行为变更）**——命令帧与确认卡两条载荷通道
   首次同轮：`mix4_cmd_and_write_one_breath`（特效命令 + 后台待办）、`mix4_read_then_write_card`
   （读标签 → 建二级标签）、`mix5_cmd_nav_read_three_way`（特效 + 跳转 + 内容查询，两轮）。

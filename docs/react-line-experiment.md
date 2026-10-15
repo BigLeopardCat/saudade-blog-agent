@@ -12,6 +12,15 @@
 > 独立 narrator）。读完这篇要知道：它证了什么、没证什么、真要做成产品还差哪几件，
 > 以及——**这一族读数什么时候才配被引用**（§六，本轮最值钱的一条）。
 > §六 末节是 **20261012 那次全量双臂对比的读数**（两臂各 180 条、同分母）。
+>
+> **20261016 追加（帧契约收口，`docs/adr/adr-0008-*.md`）**：三条 react 分支又核了一遍
+> ——`exp/react-native-line` / `feat/react-mainline` / `feat/react-arm-adapt` **全是 `main`
+> 的祖先**（落后 262/249/56，零独有提交），`main` 上那份最新。裁决两件：**臂留在主线当
+> 开关**（不拆仓），以及**帧契约收成 `agent/frames.py` + 机械锁
+> `tests/test_frame_contract.py`**。同时修掉一条真分歧：`react_line._consent_missing` 停在
+> 生产 20261012 **收窄之前**的 `not self.grant`，而 `tests/test_react_arm.py` ⑥d 把那行
+> 字符串钉住了 ⇒ 漂移被永久化；现在直调生产的 `_grant_covers`，并把 `executed` 那一格
+> 补上（此前**根本没喂**，那条判据在臂上是恒不生效的）。详见 ADR-0008 与下表末行。
 
 ## 一、它要回答的问题
 
@@ -154,6 +163,8 @@
 | ＋ | **清单外补的一条**：收尾丢意图纠偏环（零工具收尾但主人那句话里还有一次都没规划过的动作 ⇒ 纠偏重决策一次） | `19b1601`。这是原清单没列、但生产那一侧早就有的判据 |
 | ＋ | **清单外补的第二条**：离线定点探针的三处**测量偏差**（工具名折算扫子串、族级口径把方向相反的工具算成命中、两条 ReAct 臂逐字共用 planner 的提示词） | `d9d45ad`（20261011）。探针不进 CI，所以它那三处偏差由门禁里的 `tests/test_react_arm.py` ⑨ 看着 |
 | ＋ | **清单外补的第三条（20261012 全量双臂实测抓出）**：本线的 **trace 词汇表**与生产不同源——`graph` 那个 run 目录每轮记 `planner.llm_done`/`native_decision`/`decision`/`execute.call`/`execute.check`，本线的 run 目录里**只有 `producer.*` 与 `gate.*`**（平均 7.4 帧/轮 vs 51.4）⇒ L3 跨源对账对本线近乎无料可读。**判据后果只兑现了一处、已修**：`planner.ledger_frame` 缺席让三条 `require_ledger_*` 断言**恒假**（假红 1 条，见 §六）⇒ `_system_prompt` 照生产记同款事件；其余节点事件的补记仍未做（今天不改变任何读数） | `tests/test_react_arm.py` ⑬（含负控） |
+| ＋ | **清单外补的第四条（20261016）**：**帧契约此前只活在约定里**。`gate_node` 读哪些 state 键是 grep 数出来手抄的 ⇒ 实测少一格（`task_frames`，`_ledger_in_scope` 析取里那条腿）；`_popup_state` 那张四格的表少**七格**，其中 `executed` 是 `_grant_covers` "令牌用在那一件上就作废"那一格 ⇒ 臂的弹卡路径上**恒不生效**。`_popup_state` 的 docstring 自称"只读四个键"，实测**十一格**。⇒ 契约收进 `agent/frames.py`，由 `tests/test_frame_contract.py` 从 `graph.py`/`server.py` **现取**双向比对（多一个红、少一个红 + 四条反向对照） | `agent/frames.py`、`tests/test_frame_contract.py`、ADR-0008 |
+| ＋ | **清单外补的第五条（20261016）**：第 3 条那条同意闸**与生产分家了**——`react_line._consent_missing` 停在 `not self.grant`（生产 20261012 收窄之前那版），而 `tests/test_react_arm.py` ⑥d 把那行**字符串**钉住了 ⇒ 锁越绿、臂离生产越远。现改为直调 `graph._grant_covers`，`SkillExecutor` 多收一个 `state`（`executed` 现算自 `executor.calls`）；⑥d 的落点改成"用的是生产那一份判据"，行为面由 ⑥b/⑥b′/⑥b″ 与 `test_frame_contract.py` ⑨e–⑨j 锁住。**语料没走到那条路**：20261016 拿 4 条 confirm 用例跑 react 臂（`--only`），逐字与 20261012 那份全量留档比对，**判定与正文全同**（1 红仍是既有那条 `mix2_two_writes_one_breath_card_only`，红的是 `__TASK__` 缺口，理由逐字相同），而**没有一条**走到"`executed` 非空时判弹卡"那一格（唯一贴近的 `board_audit_from_ledger_exec` 因真写默认关而 SKIP）⇒ 那条分歧靠 ⑥b″ 这个**定向用例**守着：摘掉 `popup_state` 的 `executed`，它当场红，其余 100+ 条断言不动 | `agent/react_line.py`、`tests/test_react_arm.py` ⑥b/⑥b′/⑥b″/⑥d |
 
 **这六件之外还有一件事必须单列**：即便清单全绿，这份读数也只在 §六 那道闸（`arm_capability`
 的 `comparable`）为真的时候才配被引用——20261011 之前它一直是 `False`，而那次全量读数

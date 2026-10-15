@@ -137,11 +137,15 @@ def _narrator_stub(text: str, seen: list | None = None):
 
 def _run(script: list, tools: dict, *, principal=None, model=None,
          msg: str = "带我去首页", grant=None, narrator=None, seen=None,
-         narrator_model=None) -> list:
+         narrator_model=None, executed=None) -> list:
     """跑一次 `arm.stream`，收下全部 `(mode, data)` 二元组。
 
     `narrator` / `seen` / `narrator_model` 是 P6 的三个旋钮：默认是"narrator 把脚本里
     那一句原样说出来"（既有断言因此一字不用改），要造"正文换人写"的现场才显式给。
+
+    `executed` 是生产 `AgentState` 的那一格（"这一轮已经执行过哪些 spec"）——生产由
+    `execute_node` 累积，臂不回写它。默认不喂（= 这一轮还没执行过任何东西），
+    要造"令牌用在那一件上就作废"的现场（⑥b″）才显式给。
     """
     R._llm = lambda: (model or _Scripted(messages=iter(script),
                                          ai_message_chunk=iter([])))
@@ -156,6 +160,8 @@ def _run(script: list, tools: dict, *, principal=None, model=None,
     state = {"messages": [HumanMessage(content=msg)]}
     if grant is not None:
         state["confirm_grant"] = grant
+    if executed is not None:
+        state["executed"] = list(executed)
     return list(R.build().stream(state, cfg))
 
 
@@ -300,6 +306,10 @@ print("\n③ 权限闸：与 `graph.execute_node` **同一条**条件（不是�
 _src_line = "not decision.allowed and authz.enforcing(decision.scope)"
 _graph_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 _arm_src = (ROOT / "agent" / "react_arm.py").read_text(encoding="utf-8")
+# 帧契约的唯一事实源（20261016 起）：`_round_state` / `_popup_state` / 四个帧构造器都
+# 搬去了这里。下面几处"接线锁"要同时读两份源码——只读臂那一份，锁会指向**已经搬走**的
+# 字符串（那是"锁的不是事实、是某一行曾经长这样"）。
+_frames_src = (ROOT / "agent" / "frames.py").read_text(encoding="utf-8")
 _line_src = (ROOT / "agent" / "react_line.py").read_text(encoding="utf-8")
 check("**判据字面与 graph 一致**（改成「一律拦」= 两臂比的就不是同一件事了）",
       _src_line in _graph_src and _src_line in _line_src)
@@ -482,10 +492,45 @@ try:
     check("且**不弹卡**（同一条判据的另一面）",
           not _last_node(_gf, "execute").get("pending_confirm"))
     RAN.clear()
+    # 令牌形状必须是**生产真会产出的那种**（`confirm.verify` 出来的 payload）：
+    # `{"skill": …, "specs": [{"tool": …, "args": …}]}`。此前这里喂的是
+    # `{"skill": "tag_delete"}`（没有 `specs`）——生产**从不产这种形状**，它当初能过
+    # 只是因为旧判据是"令牌在场就放行"。判据改成 `_grant_covers` 之后这种形状
+    # 合理地判成"不覆盖"（`specs` 空 ⇒ 假），所以夹具要跟着改成真的。
+    _G_OK = {"skill": "tag_delete",
+             "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]}
     _gf2 = _run([_call("tag_delete", name="大笨狗")], {"delete_tag": _nav_tool},
-                principal=ADMIN0, msg=W_MSG, grant={"skill": "tag_delete"})
-    check("主人刚在卡上点过确定（`confirm_grant` 在场）⇒ 这句不是命令也放行",
+                principal=ADMIN0, msg=W_MSG, grant=_G_OK)
+    check("主人刚在卡上点过确定（令牌签名体里**正是这一件**）⇒ 这句不是命令也放行",
           len(RAN) == 1 and not _last_node(_gf2, "execute").get("pending_confirm"), str(RAN))
+
+    print("\n⑥b′ 令牌只授权**签名体里那一件**（20261012 生产实证：一次点头授权了两件写）")
+    RAN.clear()
+    # 同一件工具、**换一个目标**：令牌是给「大笨狗」的，这句要删的是「别的标签」
+    # ⇒ 不是签名体里那一件 ⇒ 照常弹卡。旧判据（`not self.grant`）会在这里放行。
+    _gf3 = _run([_call("tag_delete", name="别的标签")], {"delete_tag": _nav_tool},
+                principal=ADMIN0, msg=W_MSG,
+                grant={"skill": "tag_delete",
+                       "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]})
+    check("令牌是**另一件**（同工具换目标）⇒ 一件都不执行、照常弹卡",
+          RAN == [] and bool(_last_node(_gf3, "execute").get("pending_confirm")),
+          f"RAN={RAN}")
+
+    print("\n⑥b″ 令牌**用在那一件上就作废**（20261012 第二次收窄：同一件写静默落库三份）")
+    RAN.clear()
+    # 令牌签名体里**正是这一件**，但这一件**本轮已经执行过**（`state["executed"]` 有它）
+    # ⇒ 令牌已被用掉，不再覆盖 ⇒ 照常弹卡、零执行。
+    #
+    # 这一格是**专门为「补上的那七格」造的定向用例**：`_popup_state` 补上 `executed`
+    # 之前，投影给 `_confirm_popup` 的那份 state 里**没有这一格** ⇒ `_grant_covers`
+    # 读到空 ⇒ 判「覆盖」⇒ 不弹卡、直接执行。offline 差分（`_popup_state` 四格 vs
+    # 十一格）在同一个现场上实测过这条会翻面，这里是它进套件的样子。
+    _gf4 = _run([_call("tag_delete", name="大笨狗")], {"delete_tag": _nav_tool},
+                principal=ADMIN0, msg=W_MSG, grant=_G_OK,
+                executed=['delete_tag({"name": "大笨狗"})'])
+    check("令牌在、签名体也对，但**这一件事已经做过了** ⇒ 一件都不执行、照常弹卡",
+          RAN == [] and bool(_last_node(_gf4, "execute").get("pending_confirm")),
+          f"RAN={RAN}")
 
     print("\n⑥c 提问轮：**不许弹卡**（把提问读成意图 = 凭空造一次授权）")
     RAN.clear()
@@ -501,10 +546,19 @@ finally:
 
 print("\n⑥d 接线锁：几处照着抄就会漂的地方")
 _line_src2 = (ROOT / "agent" / "react_line.py").read_text(encoding="utf-8")
-check("同意闸用的是**生产那三条判据本身**（需要同意 ∧ 无 grant ∧ 无命令语），不另立一套",
+# ⚠️ 20261016 修：这一条此前钉的是 `"not self.grant" in _line_src2`。锁的**意图**是
+# "别另立一套同意判据"，落点却选成了一行**字符串**——而生产 20261012 把那行改成了
+# `not _grant_covers(state, spec)`（两次收窄，各对应一次生产事故）⇒ 这条锁**把漂移
+# 永久化了**：它越绿，臂离生产越远。现在落点改成"调的是生产那一份判据"，字符串只是
+# 那个调用的写法；判据本身的行为面由 `tests/test_frame_contract.py` ⑨e–⑨j 逐格锁住
+# （无令牌/正是这一件/另一件/只有 skill 没 specs/已执行过/本线跑过）。
+check("同意闸用的是**生产那三条判据本身**（需要同意 ∧ 令牌不覆盖这一件 ∧ 无命令语），"
+      "不另立一套",
       "authz.requires_consent(self.principal, name)" in _line_src2
-      and "not self.grant" in _line_src2
+      and "not self._grant_covers(spec)" in _line_src2
       and "authz.consent_granted(self.principal, name, self.user_msg)" in _line_src2)
+check("且那份 `_grant_covers` 是**从生产 import 的**（自写一份等价判据＝第二条漂移源）",
+      "from agent.graph import" in _line_src2 and "_grant_covers," in _line_src2)
 check("**整批先判**（命中即一个都不跑）——读工具与写工具混排时不能跑一半",
       "missing = [s for s in specs if self._consent_missing(s)]" in _line_src2)
 check("弹卡调的是 `graph._confirm_popup` **本身**（抄第二份排序/快照/滤空 = 两条漂移源）",
@@ -623,7 +677,10 @@ check("判据本体一个标识符都没搬进来（`_REPLAN_ISSUES` / `_fallbac
 
 
 check("`plan_encode` **不经手**——臂手上是 `plan_obj`，塑形走 `plan_state`（唯一获准的编码方）",
-      "plan_encode" not in _ARM_IDS and "plan_state" in _ARM_IDS)
+      # 20261016：`plan_state` 那一处调用随塑形器搬去了 `agent/frames.py` ⇒ 判据要读
+      # 两份源码。判的仍是"唯一获准的编码方"（不是"某一行出现在哪个文件里"）。
+      "plan_encode" not in _ARM_IDS and "plan_encode" not in _idents(_frames_src)
+      and "plan_state" in _idents(_frames_src))
 
 # 塑形器喂的键：**函数体里读的那七个看得见，辅助函数读的三个看不见**（20261012 补）。
 # 漏后三个**不报错**，只让闸门少开火（`.get(…, [])` 把"本线没喂"与"本轮确实没有"读成
@@ -761,7 +818,11 @@ check("**narrator 用的是独立模型工厂**（`_narrator_call` 调 `_narrato
       and "llm = _narrator_llm()" in _arm_src)
 check("闸门与 narrator 共用**同一份 state 塑形器**（两处各拼一份 ⇒ 迟早对同一轮"
       "算出不一样的形状）",
-      "return _round_state(" in _arm_src and "rst = _round_state(" in _arm_src)
+      # 20261016：塑形器本体搬去了 `agent/frames.py`（`round_state`），闸门那一支
+      # 只是它的一层壳（`gate_state`）。所以这一条要读**两份**源码：臂在两处调、
+      # 壳在 frames 里 return 同一份。只读臂那一份会锁住一个**已经搬走**的字符串。
+      "rst = _round_state(" in _arm_src and "_gate_state(state, plan_obj" in _arm_src
+      and "return round_state(" in _frames_src)
 check("narrator 的提示词走**唯一入口** `_narrator_prompt` 一处（第二份排版＝漂移源）",
       _arm_src.count("_EXECUTOR_PROMPT.format") == 1)
 
