@@ -3161,36 +3161,32 @@ def test_tag_create_batch():
               [{"tool": "create_tag", "args": {"title": "Git"}}]))
 
 
-def test_todo_contract():
-    """TODO 行契约（20260904 最小契约）：可选第 6 行、插在 REPLY 前（REPLY 的
-    DOTALL 解析假设它是末行，追加在后会被吞）；TODO 是"声明"不是"执行指令"——
-    不进 tools 解析、parse 失败不影响计划，只给后续轮次/reflector 看链依赖。"""
-    print("[todo] TODO 行编码/解析契约")
+def test_todo_line_retired():
+    """`TODO:` 行**整行退休**（20261016）——反向锁：不许悄悄回来。
+
+    为什么留一条判据而不是把旧测试整段删掉：这一行的历史恰恰是"模型写了没人读"
+    （`eval/corpus_invariants.py` 的 I6 拿它当反面教材，`agent/tasks.py` 是它的替代者），
+    而"删掉的能力"正是本仓最容易被无意恢复的东西（改提示词的人会顺手把那一行加回去）。
+    这里钉的是**两条行为**，不是某段文字：
+
+      · 写端：就算有人往 `plan_obj` 里塞一个 `todo` 键，`plan_encode` 也不产出 `TODO:` 行；
+      · 读端：`parse_plan` 的返回值里**没有** `todo` 这一格；改造前留在 state 里的老文本
+        真带 TODO 行时，只被**忽略**（不复活字段、不污染 REPLY——REPLY 的 DOTALL 解析
+        假设它是末行，当年那一行才要插在 REPLY 之前）。
+    """
+    print("[todo] `TODO:` 行已退休（反向锁：不许回来）")
     obj = instantiate_plan("chat", {})
     obj["params"] = {}
-    obj["todo"] = ["定位文章 id", "navigate 跳转过去"]
+    obj["todo"] = ["定位文章 id", "navigate 跳转过去"]      # 塞进去也不该有任何反应
     encoded = plan_encode(obj)
-    check("带 todo → TODO 行在 REPLY 之前", "TODO: 定位文章 id → navigate 跳转过去" in encoded
-          and encoded.index("TODO:") < encoded.index("REPLY:"),
-          encoded)
+    check("写端：塞了 todo 也不产出 TODO 行", "TODO:" not in encoded, encoded)
     parsed = parse_plan(encoded)
-    check("往返 todo 一致", parsed["todo"] == ["定位文章 id", "navigate 跳转过去"], str(parsed["todo"]))
-    check("todo 不进 tools（声明非指令）", parsed["tools"] == [], str(parsed["tools"]))
-    check("REPLY 未被 TODO 行污染", parsed["reply"] == obj["reply"] and "TODO" not in parsed["reply"],
-          repr(parsed["reply"])[:80])
-    # 无 todo → 不写 TODO 行、解析为空
-    obj2 = instantiate_plan("chat", {})
-    obj2["params"] = {}
-    check("无 todo → 无 TODO 行", "TODO:" not in plan_encode(obj2), plan_encode(obj2))
-    parsed2 = parse_plan(plan_encode(obj2))
-    check("缺 todo 行 → 空列表", parsed2["todo"] == [], str(parsed2["todo"]))
-    # 解析容错：行首序号剥除、空占位不计
-    p3 = parse_plan("SKILL: content_query\nTODO: 1. 读候选全文 → 2. 跳转那篇\nREPLY: r")
-    check("序号前缀剥除", p3["todo"] == ["读候选全文", "跳转那篇"], str(p3["todo"]))
-    p4 = parse_plan("SKILL: chat\nTODO: （无）\nREPLY: r")
-    check("（无）占位 → 空列表", p4["todo"] == [], str(p4["todo"]))
-    p5 = parse_plan("SKILL: chat\nTODO: 只搜留言板 → 再搜说说\nREPLY: r")
-    check("planner 口吻步骤 → 原样保留", p5["todo"] == ["只搜留言板", "再搜说说"], str(p5["todo"]))
+    check("读端：parse_plan 不再返回 todo 这一格", "todo" not in parsed, str(sorted(parsed)))
+    check("REPLY 仍是末行（没有东西再插在它前面）",
+          encoded.rstrip().endswith(obj["reply"]), repr(encoded[-40:]))
+    legacy = parse_plan("SKILL: content_query\nTODO: 1. 读候选全文 → 2. 跳转那篇\nREPLY: r")
+    check("老文本里的 TODO 行只被忽略（不复活字段、不污染 REPLY）",
+          "todo" not in legacy and legacy["reply"] == "r", str(legacy))
 
 
 def test_checker():
@@ -5756,7 +5752,7 @@ def main():
                test_review_inbox_calls_whitelist,
                test_gate_repeat_reply,
                test_execute_node, test_refs, test_write_ref_loud,
-               test_tag_create_batch, test_todo_contract,
+               test_tag_create_batch, test_todo_line_retired,
                test_checker,
                test_execute_receipts_and_route, test_reflector_routes_and_budget,
                test_gate_fallback_message,
