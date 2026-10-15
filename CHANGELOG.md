@@ -39,6 +39,18 @@
   6/6——**两变体没有可分辨的差别**。对照历史基线（`landing_gate.py --red-rank`，92 次全量跑）：
   这三条的红率分别是 **4/92、3/92、3/92** ⇒ 每变体 57 个用例轮次里 1–2 条红**正好落在基线上**，
   两臂都没有多出来的红。
+- **新判据（无行为变更）：`AgentState` 的累加器要么带 reducer、要么在台账里写明理由**——
+  `tests/test_state_reducers.py`。LangGraph 只对**带 reducer 的键**做合并，其余 last-write-wins；
+  `AgentState` 28 个键里 **9 个是 list**，其中**只有 `messages`** 带 `Annotated[list, add_messages]`，
+  其余 **8 个是裸 list**，混着三种语义：**请求内累加器**（`executed` / `receipts` / `noop_specs` /
+  `blocked_seen` / `tool_data`，累加靠每个写入者手工把整个累加器再返回一遍——漏掉那一步
+  **静默丢一半、没有任何东西会红**）、**覆盖语义**（`blocked` 只含本轮、`task_satisfied` 每轮重算）、
+  以及**未裁决**的 `task_frames`（壳累加 / `_plan_update` 整体赋值两种并存）。闸是**双向台账**
+  （不许漏登、也不许留过期条目），含三条合成反控、一条负控、一条**端到端反控**（往 `AgentState`
+  真加一个裸 list 键 ⇒ 当场红并点名）。它补的是 `tests/test_state_keys.py` 的**另一半**：
+  那个闸管**键名**在不在 schema 里（「初值」那一半已锁死），这个管**合并语义**有没有被声明出来
+  （「reducer」那一半此前零判据）。**真加 reducer 的那一步先不做**，理由与重开条件见
+  `docs/adr/adr-0010-state-accumulator-reducers-deferred.md`（已搁置）。
 - **菜单被摘之后的"改选"不再能把动作反过来（行为变更，`docs/问题记录.md` §1.57）**：写工具因
   环境型受阻（`unavailable`）被 `denied_skills` 摘掉后，planner 会**改选**菜单里剩下的那一件
   ——而"剩下的一件"常是它的**反极性兄弟**。实测形态：主人说「收藏这篇文章」，回复却是一张
