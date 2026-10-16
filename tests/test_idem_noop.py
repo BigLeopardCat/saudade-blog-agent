@@ -692,15 +692,34 @@ check("⭐ 两种证据走**同一次**游标推进（分两次的话，推不�
       f"kw={[k.arg for k in (_adv_calls[0].keywords if _adv_calls else [])]}")
 # 帧载荷那条用 AST 判而不是 grep 源码文本：`__TASK__` 的键集与 Rust 的列一一对应，
 # 多一个键要同步另一侧（本批零 Rust 改动）——而"多没多键"只有看这次调用才知道。
-_dumps_adv = [n for n in ast.walk(ast.parse(_src))
+# ⚠️ 20261015：发帧那一行搬进了 `_emit_task_frames`（复杂度闸按函数计，
+# `_run_agent_stream_to_queue` 只许缩小）⇒ 判据跟着走两步，**不是放宽**：
+#   ① `_emit_task_frames` 里那一次 `json.dumps` 的实参必须是**裸名字**、且除
+#      `ensure_ascii` 之外不许带任何键（"多没多键"只可能在这一步发生）；
+#   ② 调用它的地方恰好两处（结算 / 收口），两处第一个实参也都是**裸名字**
+#      ——写成 `{**a, "via": …}` 这类合并在这一步同样会把键加进去。
+_emit_fn = [n for n in ast.walk(ast.parse(_src))
+            if isinstance(n, ast.FunctionDef) and n.name == "_emit_task_frames"]
+_dumps_adv = [n for fn in _emit_fn for n in ast.walk(fn)
               if isinstance(n, ast.Call)
               and isinstance(n.func, ast.Attribute) and n.func.attr == "dumps"
-              and isinstance(n.func.value, ast.Name) and n.func.value.id == "json"
-              and n.args and isinstance(n.args[0], ast.Name) and n.args[0].id == "adv"]
+              and isinstance(n.func.value, ast.Name) and n.func.value.id == "json"]
 _extra = [k.arg for n in _dumps_adv for k in n.keywords if k.arg not in ("ensure_ascii",)]
+_bare = [n for n in _dumps_adv if n.args and isinstance(n.args[0], ast.Name)]
+_emit_calls = [n for n in ast.walk(ast.parse(_src))
+               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+               and n.func.id == "_emit_task_frames"]
+# ② 那一半的判据是"**没有加键的形状**"：实参只许是裸名字或另一次调用的返回值，
+# 不许是字典字面量 / `{**x, …}`（`Dict` 带 `Starred`）/ 字典推导。
+_key_adding = [n for n in _emit_calls
+               if not n.args or isinstance(n.args[0],
+                                           (ast.Dict, ast.DictComp, ast.Starred))]
 check("⭐ `__TASK__` 帧的载荷就是结算回写本身、一个额外键都不加"
       "（`via`/`satisfied` 只进 trace）",
-      len(_dumps_adv) == 1 and not _extra, str(_extra))
+      len(_emit_fn) == 1 and len(_dumps_adv) == 1 and not _extra
+      and len(_bare) == 1 and len(_emit_calls) == 2 and not _key_adding,
+      f"dumps={len(_dumps_adv)} extra={_extra} 裸参={len(_bare)} "
+      f"调用={len(_emit_calls)} 加键形状={len(_key_adding)}")
 
 # ══════════════════════════════════════════════════════════════════
 print()

@@ -495,10 +495,8 @@ def _narrator_msgs(state) -> list:
 #   第 3 行: TOOLS: <实例化后的工具调用序列>（chat/收尾轮为"（无）"）
 #   第 4 行: NOTE: <业务注记>（导航目标下线/不存在/已按决策执行等）
 #   第 5 行: REPLY: <技能回复契约>（model 叙述时遵守、gate 不做文本级对照）
-#   第 6 行: TODO: <剩余步骤列表>（可选，多步链中间轮声明：后续依赖步骤用 →
-#            分隔。20260904 起：TODO 是"声明"不是"执行指令"——execute 只执行
-#            TOOLS 行，TODO 供 reflector 判链依赖/checker 语境/trace 留痕，
-#            不进执行路径；依赖步骤的参数只能等上轮工具返回后填，不预编）
+#   （曾有的第 6 行 `TODO:` 20261016 整行退休：读端一个都不剩了，理由与取证
+#     写在下面 `plan_encode` 那一处）
 # 导航映射表在 skills.py（页面别名→路径，"物联网平台→/device-console/"是系统数据，
 # 不是模型猜测）——planner 跑题的结构性根因（不知道工具语义）由此消除。
 # TOOLS 行是"执行清单"不是"允许名单"——execute 节点把它当命令逐条执行，
@@ -1421,8 +1419,10 @@ def _write_command_nudge(plan_obj: dict, user_msg, has_frames: bool,
 # （`extract_plan_fields` / `_PLANNER_OUTPUT_RE` / `_SKILL_QUOTED_RES` / `_parse_params`
 # / `_plan_body_of`）——20261004 随文本契约档一起删除。它与下面 `parse_plan` 读的
 # **内部计划文本协议**是两件事：那套协议（`SKILL=` / `PARAMS=` / `TOOLS:` / `NOTE:` /
-# `REPLY:` / `TODO:`，由 `plan_encode` 写、`parse_plan` 读）由 execute/gate 消费，
+# `REPLY:`，由 `plan_encode` 写、`parse_plan` 读）由 execute/gate 消费，
 # **仍在用**；删掉的只是"模型自己写契约行"那条通道。
+# （协议里那个可选的 `TODO:` 行 20261016 也删了——它不是"模型写契约行"那条通道的
+#   一部分，是**系统自己写、再自己读回来**的一格，读端为零，见 `plan_encode`。）
 
 
 def _loads_tolerant(text: str):
@@ -1499,10 +1499,23 @@ def plan_encode(plan_obj: dict) -> str:
         f"TOOLS: {tools}",
         f"NOTE: {plan_obj.get('note') or '（无）'}",
     ]
-    # TODO 行是可选第 6 行：插在 REPLY 之前（REPLY 的 DOTALL 解析假设它是末行）
-    todo = plan_obj.get("todo") or []
-    if todo:
-        lines.append(f"TODO: {' → '.join(todo)}")
+    # ── 第 6 行 `TODO:` 于 20261016 整行退休（写端 + 读端 + 提示词契约同批）──
+    # 它当年是"多步链的中间轮声明后续依赖步骤"的一格。退休的取证是三件事叠起来：
+    #   ① **读端为零**。全仓只被 `plan_encode` 自己回渲染一遍，再由 `parse_plan`
+    #      读回同一个列表（`plan_obj["todo"]`）——一个闭环，没有消费方；
+    #   ② **它的名义消费者早已被换掉**。`agent/tasks.py`（20260927 批 D）就是来补
+    #      "还剩什么没做完"这个缺口的，那个模块自己的头注写着这一行"只有 trace 消费
+    #      （有写无读）"；`eval/corpus_invariants.py` 的 I6 则把它当成"模型写了没人读"
+    #      的**反面教材**引用。当初注释里写的"供 reflector 判链依赖"，实测不成立：
+    #      全量 1194 份 trace 里 `planner.todo` 只出现过 **7 个请求 / 10 次**，而
+    #      reflector 跑过的请求是 51 个，**两者交集为 0**——reflector 从没收到过它；
+    #   ③ **它在场时还常常是垃圾**。`_parse_todo` 吃的是模型正文，而模型会照抄提示词
+    #      里的占位符模板 ⇒ 生产 trace 里真出现过
+    #      `todo=['<步骤1', '<步骤2', '`". So I\'ll write TODO: …']` 这种把模板和
+    #      自述一起切进来的结果。`native-toolcalls-mainline.md` §6.6 的纪律是
+    #      "必须有消费者，否则不许写"——两条出路里选了删掉这条（另一条是补一个
+    #      扫描不变量），因为消费者已经在 `agent_task` 表上了，再补一个只是把
+    #      同一件事记第二遍。
     lines.append(f"REPLY: {plan_obj['reply']}")
     return "\n".join(lines)
 
@@ -1534,27 +1547,10 @@ def plan_state(plan_obj: dict) -> dict:
     return {"plan": plan_encode(plan_obj), "plan_obj": plan_obj}
 
 
-def _parse_todo(raw: str) -> list:
-    """提取 TODO 行剩余步骤列表（可选第 6 行契约；planner_node 与 parse_plan 共用）。
-
-    容错：按 [→>] 拆段、去行首序号、剥空白与句末标点，空段/“（无）/无/暂无”
-    不计。多步链的中间轮才有内容；单步/收尾轮返回空列表。
-    """
-    tm = re.search(r"TODO\s*[:=]\s*(.+)", raw or "", re.IGNORECASE)
-    if not tm:
-        return []
-    out = []
-    for s in re.split(r"[→>]", tm.group(1)):
-        s = re.sub(r"^\s*\d+[.)、]\s*", "", s).strip().strip("；;，,。")
-        if s and s not in ("（无）", "无", "暂无"):
-            out.append(s)
-    return out
-
-
 def parse_plan(raw: str) -> dict:
     """解析 plan 字段（契约的读端）。容错：解析失败 → 按 chat 兜底（宁可少干活，不硬猜）。
 
-    返回 {"skill", "params", "tools", "note", "reply", "todo", "chat", "status"}。
+    返回 {"skill", "params", "tools", "note", "reply", "chat", "status"}。
     `status` 见 `PLAN_STATUS_VALUES`（批 3）：系统自己写的计划一定带 `STATUS=` 行，
     缺了才走下面那段兼容派生（判据别依赖派生，它只是给旧文本留的路）。
     容错原则：所有"LLM 输出 → 程序消费"的边界都要能优雅降级——LLM 不是
@@ -1582,7 +1578,6 @@ def parse_plan(raw: str) -> dict:
     note = nm.group(1).strip() if nm else ""
     rm = re.search(r"REPLY\s*[:=]\s*(.+)", raw or "", re.IGNORECASE | re.DOTALL)
     reply = rm.group(1).strip() if rm else ""
-    todo = _parse_todo(raw)
     sm = re.search(r"STATUS\s*[:=]\s*(\w+)", raw or "", re.IGNORECASE)
     status = sm.group(1).strip().lower() if sm else ""
     if status not in PLAN_STATUS_VALUES:
@@ -1618,7 +1613,6 @@ def parse_plan(raw: str) -> dict:
         "tools": tools,
         "note": note,
         "reply": reply,
-        "todo": todo,
         "chat": (skill in SKILL_MAP and SKILL_MAP[skill].chat) or skill == "chat",
         "status": status,
     }
@@ -6382,7 +6376,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
     upd = _finalize_unaccounted(c.plan_obj, c.rounds, c.has_frames)
     if upd is not None:
         return upd
-    c.plan_obj, upd = _finalize_dedupe(c.plan_obj, c.state, c.user_msg, c.raw,
+    c.plan_obj, upd = _finalize_dedupe(c.plan_obj, c.state, c.user_msg,
                                        c.rounds, c.has_frames)
     if upd is not None:
         return upd
@@ -6566,6 +6560,10 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
     if rounds >= MAX_PLAN_ROUNDS:
         plan_obj = _wrap_up_plan(has_frames)
         logger.info("[planner] 规划轮次上限(%d)，强制收尾", MAX_PLAN_ROUNDS)
+        # 落 trace（20261015）：这条出口此前**只有日志**，trace 里看不见 ⇒ 离线统计
+        # 读不到"有多少轮是撞上限收的尾"（而它与"模型自己决定收尾"是两件事：
+        # 前者说明预算不够、后者说明模型判断做完了）。planner 的其余出口都有事件。
+        record("planner", "round_cap_wrapup", round=rounds, cap=MAX_PLAN_ROUNDS)
         return _Preflight(early=_plan_update(plan_obj, rounds))
 
     # 确定性快道只在首轮（rounds==0 且本轮尚无任何工具帧）判定——execute 完成
@@ -8178,9 +8176,12 @@ def _finalize_unaccounted(plan_obj: dict, rounds: int, has_frames: bool) -> "dic
         return _plan_update(plan_obj, rounds)
 
 
-def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str, raw: str,
+def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str,
                      rounds: int, has_frames: bool) -> "tuple[dict, dict | None]":
-    """字面路径修正 + TODO 提取 + 八条去重/拦截守卫。
+    """字面路径修正 + 八条去重/拦截守卫。
+
+    （`raw` 那个入参 20261016 随 TODO 行的退休一起去掉了——它在本函数里唯一的
+      用途就是喂 `_parse_todo`。）
 
     返回 `(plan_obj, update)`：任一条守卫命中 ⇒ `update` 非空（终局）；全部落空 ⇒
     `update=None`，`plan_obj` 是**可能已被就地修正**的那一份（字面路径修正会重建它），
@@ -8199,14 +8200,9 @@ def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str, raw: str,
         plan_obj = instantiate_plan("navigate", {"target": lit.group(0)})
         plan_obj["params"] = {"target": lit.group(0)}
 
-    # TODO 剩余步骤声明提取（20260904 最小契约）：planner LLM 可选输出行，多步
-    # 依赖链的中间轮用它声明"本轮之后还要做什么"——给后续轮次/reflector 看，
-    # 不是执行指令（execute 只执行 TOOLS 行）。仅 LLM 决策轮有 raw；快道/拦截
-    # 路径的计划是确定性 dict，不带 todo → plan_encode 不写 TODO 行。
-    todo = _parse_todo(raw)
-    if todo:
-        plan_obj["todo"] = todo
-        record("planner", "todo", todo=todo, round=rounds)
+    # （这里曾是 TODO 剩余步骤声明的提取点：`_parse_todo(raw)` → `plan_obj["todo"]`
+    #   → `record("planner","todo")`。20261016 整行退休，取证与理由见 `plan_encode`
+    #   那一处；本函数的 `raw` 入参同批去掉。）
 
     # 动作重复执行防护（确定性）：非首轮（已有帧）planner 若仍规划了动作技能
     # （navigate/effect/darkmode/device_display/device_query/read_article）且其
@@ -8825,6 +8821,7 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
         # 漏接的后果是**静默**产回执）。
         return _VERDICT_BLOCK, (ref_error_reason(text) or authz.scope_error_reason(text)
                                 or authz.consent_error_reason(text)
+                                or authz.action_conflict_error_reason(text)
                                 or A.target_error_reason(text)
                                 or A.policy_error_reason(text) or "error_frame")
     # 命令工具契约层校验（20260926 批 2 改键）：动作工具必须交出**连线命令**——但
@@ -12183,11 +12180,24 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     # 它们不进卡，见下面「不许弹半张卡」那一段：卡一弹，`execute_node` 这一轮就一个工具
     # 都不执行 ⇒ 帧链也一起不发生 ⇒ 那几件**既不上卡、又没人告诉 planner 改**。
     target_dropped: list = []
+    # [(TOOLS 行位次, 工具名, 主人要的那件)]——**反极性改选**被拦下的写（20261016，
+    # §1.57 候选改法①）。与上面那一族并列：同一条论证（卡一弹，`execute_node` 这一轮
+    # 就一个工具都不执行 ⇒ 帧链也一起不发生 ⇒ 那一件**既不上卡、又没人告诉 planner 改**），
+    # 所以下面走**同一个**整批退回出口，只是记事件与日志时分开，免得两族的读数搅在一起。
+    action_dropped: list = []
     for idx, spec in enumerate(specs):
         name = _tool_name(spec)
         if not authz.requires_consent(principal, name):
             continue
         args, args_ok = _tool_args(spec)
+        # 反极性改选：主人这句要的是「收藏」，而这一件是「取消收藏」——**不弹卡**。
+        # 弹了就是把误靶洗成一条已授权的写（问错一边再让主人点确定，与 target 那两道
+        # 同一个论证）；跳过 → 由下方逐 spec 产 `action_conflict` 帧，planner 按帧
+        # 按主人说的那件重新规划。判据见 `authz.action_conflict`（多意图句判 False，
+        # 兄弟服务另一个目标也判 False ⇒ 那两种照旧弹卡）。
+        if authz.action_conflict(user_msg, name):
+            action_dropped.append((idx, name, authz.own_antipode(name) or ""))
+            continue
         # 免弹窗（"同轮命令即确认"）多一条前提（20260922 ②防线）：**主人自己把目标
         # 说出口了**。判成命令但目标名字不在主人这句话里（别名跳步、从执行记忆里
         # 拣的名字、模型自己概括的片段）→ 不许一句话直接写，退回弹窗：问句里会把
@@ -12264,7 +12274,12 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                     "整批一起问（否则它们这一轮谁都不会执行）", len(fast))
         picks = sorted(picks + fast, key=lambda p: p[0])
     picks = [p for _, p in picks]
-    if not picks:
+    # 空的 `picks` **不等于**"这一批没有要问的"（20261016）：被下面 `target_dropped` /
+    # `action_dropped` 整批退回时它也是空的——而那两族**要留痕**（下面那个出口里记事件，
+    # 事后靠它数"拦下了几件"）。此前这一格无条件短路 ⇒ 整批被退回时**事件记不下来**，
+    # 那两族的射程读数就只剩"返回值恰好是 None"这一个说不清的信号。只在**没有退回项**
+    # 时短路，出口与返回值一个字没变（两条路都还是 `return None`）。
+    if not picks and not (target_dropped or action_dropped):
         return None
     # ── 不许弹半张卡（20261009）：被目标拦住的那几件，**要么整批一起问、要么整批不弹**
     # ──
@@ -12282,15 +12297,29 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     # 所以整批退回：这一轮不弹卡，让 execute 照常产那两帧（unknown_target /
     # target_mismatch / consent_required），planner 按帧把号改回主人点名的那个，
     # 下一轮再连挂标签一起弹一张完整的卡。
-    if target_dropped:
-        record("confirm", "partial_batch_refused",
-               dropped=[f"{n}:{why}" for _, n, why, _ in target_dropped],
-               picks=[str(e.get("tool") or "") for e in picks],
-               ids=[str(a) for *_, a in target_dropped])
-        logger.warning("[confirm] 这一批里有 %d 件写被目标判据拦下（%s）→ 不弹半张卡，"
-                       "退回帧链让 planner 按主人点名的目标改回来",
-                       len(target_dropped),
-                       "、".join(f"{n}({why})" for _, n, why, _ in target_dropped))
+    if target_dropped or action_dropped:
+        if target_dropped:
+            record("confirm", "partial_batch_refused",
+                   dropped=[f"{n}:{why}" for _, n, why, _ in target_dropped],
+                   picks=[str(e.get("tool") or "") for e in picks],
+                   ids=[str(a) for *_, a in target_dropped])
+            logger.warning("[confirm] 这一批里有 %d 件写被目标判据拦下（%s）→ 不弹半张卡，"
+                           "退回帧链让 planner 按主人点名的目标改回来",
+                           len(target_dropped),
+                           "、".join(f"{n}({why})" for _, n, why, _ in target_dropped))
+        if action_dropped:
+            # 与上面那一族**同一个出口**（整批退回），理由逐字相同：卡一弹，execute 这
+            # 一轮一个工具都不执行 ⇒ `action_conflict` 帧也一起不发生 ⇒ 那一件既不上卡、
+            # 又没人告诉 planner 改。事件名分开记，让"反极性改选"这件事**事后数得出来**
+            # （§1.57 的射程读数就是靠这类事件复扫的）。
+            record("confirm", "action_conflict_batch_refused",
+                   dropped=[f"{n}<-{want}" for _, n, want in action_dropped],
+                   picks=[str(e.get("tool") or "") for e in picks])
+            logger.warning("[confirm] 这一批里有 %d 件写与主人这句话要的动作**相反**"
+                           "（%s）→ 不弹卡，退回帧链让 planner 按主人说的那件改回来",
+                           len(action_dropped),
+                           "、".join(f"{n}（主人要的是 {want}）"
+                                     for _, n, want in action_dropped))
         return None
     # 卡面要的现状快照：**十一份惰性读**（每份只在自己那族工具真进了候选时才读），
     # 各族的理由与"读不到一律照弹卡"的兜底见 `_popup_snapshots`。
@@ -12711,9 +12740,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         consent_missing = (authz.requires_consent(principal, name)
                            and not _grant_covers(state, spec)
                            and not authz.consent_granted(principal, name, user_msg))
-        if consent_missing:
-            record("execute", "consent_required", tool=name, principal=str(principal),
-                   scope=authz.required_scope(name))
+        if consent_missing:  # 反极性改选（§1.57①）也走这一格：见 authz.consent_block_*
+            record("execute", authz.consent_block_reason(user_msg, name), tool=name,
+                   principal=str(principal), scope=authz.required_scope(name))
             logger.info("[execute] 写操作未经确认，不执行: %s（principal=%s）",
                         spec, principal)
         # 写操作的目标校验（20260921 第二轮，与上一条同层同风格：确定性、无 LLM、
@@ -12778,7 +12807,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 所以这一格保持 20261007 的门序（先问「要不要做」，再问「哪一篇」），
             # `tests/test_admin_write.py` 那条顺序锁照旧有效——**别只为一句更顺的帧文
             # 再换一次**，要换得先拿出"禁令真的把人堵死过"的现场。
-            out = authz.consent_frame(name, principal)
+            out = authz.consent_block_frame(name, principal, user_msg)  # 反极性改选也走这里
         elif target_missing:
             # 同族（__ERROR__ + 原因码），语义是"先去读、或先问哪一篇"
             out = A.unknown_target_frame(name)
@@ -14016,6 +14045,12 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
     `ledger`（20260924）：本请求注入用的两块台账原文（见 AgentState.ledger）。
     **由 server.py 按它实际注入的内容原样传入**——判据看的是"系统给模型看过什么"，
     两个来源各算各的必然对不上（洞⑦ 的假阴性/误伤都从这里来）。
+
+    **不变量：声明的每一个键在这里都有初值**（键集**恰好**等于 `AgentState` 的声明集，
+    判据见 `tests/test_state_keys.py` ⑤）。这不是"图个整齐"：少一个初值就是一颗哑弹
+    ——`state["X"]` 当场 `KeyError`，而 `state.get("X")` 是**静默 `None`**（LangGraph 对
+    没写过的键不报错），正是本仓反复吃的那个形状。20261015 补上 `pending_action`
+    （此前它是唯一一个声明了却没有初值的键，只在写之后才被读 ⇒ 今天无害、将来不保证）。
     """
     return {"messages": messages,
             # 本轮到哪儿为止（20261015，见 `AgentState.turn_msgs`）：**这里是唯一
@@ -14034,6 +14069,9 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
             "reflect_end": False, "tool_data": [], "fallback_text": "",
             "gate_replan": False, "task_frames": [],
             "pending_confirm": None, "confirm_text": "",
+            # pending_action 的初值与 pending_confirm 同为 None（两者都是"本轮要不要
+            # 发某个帧"的载荷，读侧一律 `x or {}`，见 server.py 的 `__PENDING__` 分支）。
+            "pending_action": None,
             "noop_text": "", "noop_note": "", "task_satisfied": [],
             "confirm_grant": confirm_grant, "ledger": ledger or {},
             # 计划执行器（批 B）的中性初值：`""` = 本请求还没驱动过任何一行台账；

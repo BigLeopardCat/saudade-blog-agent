@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""会话级任务状态（批 D）的两轮探针：**验的是那 4 条 golden 用例验不到的那一半**。
+"""会话级任务状态（批 D + 台账终态 20261015）的三轮探针：**验的是那 4 条 golden
+用例验不到的那一半**。
 
 ## 为什么需要它（先看这条实测，否则会以为 golden 已经验过了）
 
@@ -31,14 +32,22 @@ native 引擎 + 目标来源态判据那批修好（轮 0 navigate → 轮 1 eff
   轮 2  把载荷当 `agent_tasks` 喂回去（**与 Rust 读侧交回来的形状一致**：JSON 数组串），
         看三件事：注入进没进上下文、planner 认不认这是"上一轮自己登记的事"、
         做完之后 producer 有没有按**回执**把游标推进。
-        外加一条负断言：**两轮都不该出现 `cancelled` 帧**——撤下只有 `task_drop` 一条
+        外加一条负断言：**前两轮都不该出现 `cancelled` 帧**——撤下只有 `task_drop` 一条
         通道（20260927 拆形状，"做完后顺手再登记一次空 steps"不再等于撤下，
         见 `agent/tasks.py` 的 `TASK_DROP` 头注）。
+  轮 3  **台账终态**（20261015）：喂两条过期的行（13h / 49h），看**期限**那条路真的
+        发得出帧——13h ⇒ `input_required` + 催办问句，49h ⇒ `cancelled`（终态）。
+        这是新增的**第三结局**，前两轮结构上验不到（它们喂的是刚登记的新行）。
 
 ## 它不验什么（如实划界）
 
   · **Rust 那一段不在本探针里**：落库（`save_agent_task`）、读回（`load_agent_tasks` 的终态
     过滤与 72h 时效）只由真机链路覆盖。本探针喂的是"Rust 交回来的形状"，不是 Rust 本身。
+  · **轮 3 的 `created_at` 是探针自己按"现在"减出来的**（13h / 49h）：真机上它是 Rust 写的
+    落库时刻。所以轮 3 验的是"**期限判据在真链路里发得出帧**"，不是"Rust 写的时间对"。
+  · **轮 3 的前提可能被别人动掉**（「前提在别人手里」那一族）：若这一轮 planner 真去办那两行，
+    同意闸会当场挡下 ⇒ 走 `via=consent` 分支（**也对**，但不是期限那条路）。故轮 3 先判
+    "这一轮没动那两行"这条前提，前提不成立时后面几条按**未评估**读，不许当期限判据通过。
   · **不是门禁**：结果打印给人看，默认退出码 0（同 `llm_judge.py` 的取向）。需要时加 `--strict`。
   · **不入 L0 套件、不进夜间**：要网络与 API key（`tests/run_all.py` 只收 `tests/*.py`）。
 
@@ -65,7 +74,12 @@ import run_golden as G  # noqa: E402
 import trace_io  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from agent.tasks import frame_payload, normalize_declaration, render_open_tasks  # noqa: E402
+from agent.tasks import (  # noqa: E402
+    TASK_STALE_ASK,
+    frame_payload,
+    normalize_declaration,
+    render_open_tasks,
+)
 
 # 会话 id：**探针自造的合成值**（不指向任何真实会话，也不落库——本探针走内部链路，
 # Rust 那一段不在场）。用一个一眼看得出是探针的号码。
@@ -110,6 +124,47 @@ FALLBACK_DECL = {
     "pending_question": "",
 }
 
+# ── 轮 3：台账**终态**（20261015）────────────────────────────────────────
+# 病：结不掉的账。窗口内 17 行 `running` 全部 `cursor=0`、声明的那一步工具一次都没执行过
+# （同意闸挡下 / 换另一件工具办掉了）——**代码里没有任何一处会改 state**，那些行只能等
+# 72h 读侧时效从**注入**里抹掉，行本身永远留在表里。这一轮验的是"期限那一半真的发得出帧"。
+#
+# 行的形状**逐字照 Rust 读侧交回来的**（`load_agent_tasks` 的 `created_at` 就是
+# `MM-DD HH:MM`，只有月日没有年）。两条行的年龄刻意跨在两条期限的两侧。
+TURN3 = {
+    "id": "probe_turn3",
+    "user_input": "今天就先这样吧，谢谢你",
+    "context": {
+        "current_url": "/", "page_title": "首页",
+        "current_effects": "none", "current_darkmode": "off",
+        "conversation_id": PROBE_CONV,
+        # agent_tasks 由 main 按"现在"算好填进来（见 _stale_rows）。
+    },
+    "gold": {},
+}
+
+# 步子的工具挑 `create_announcement`：它的标题/正文**当场创作**、`args_are_bound` 绑不上
+# （20261015 实测的另一副面孔）⇒ 这一轮**结构上**不会产生回执 ⇒ 不会把要验的那一行
+# 提前结掉、把断言变成偶发红。这是刻意的，不是随手挑的。
+STALE_TOOL = "create_announcement"
+
+
+def _stale_rows(now: "datetime | None" = None) -> list:
+    """两条过期的行（13 小时 / 49 小时），`created_at` 按 Rust 那格渲染。"""
+    now = now or datetime.now()
+
+    def at(hours: float) -> str:
+        return datetime.fromtimestamp(now.timestamp() - hours * 3600).strftime("%m-%d %H:%M")
+
+    def row(tid: str, goal: str, hours: float) -> dict:
+        return {"task_id": tid, "goal": goal,
+                "steps": [{"label": "发一条公告", "tool": STALE_TOOL}],
+                "total_steps": 1, "cursor": 0, "state": "running",
+                "pending_question": "", "created_at": at(hours)}
+
+    return [row("at_5ta1e000", "给站上发一条公告", 13),      # ≥ 软期限 12h ⇒ 催办
+            row("at_5ta1e001", "把上个月的公告都清掉", 49)]  # ≥ 硬期限 48h ⇒ 终态
+
 
 def _task_frames(res: dict) -> list:
     """这一轮发出的 `__TASK__` 载荷。
@@ -140,6 +195,81 @@ def _events(trace: dict, node: str, event: str) -> list:
         return []
     return [e for e in (trace.get("events") or [])
             if e.get("node") == node and e.get("event") == event]
+
+
+def _run_round3(run_id: str, check) -> dict:
+    """轮 3：喂两条**过期**的行，验期限那两条路真的发得出帧（20261015）。
+
+    前两轮喂的是**刚登记的新行** ⇒ 结构上验不到期限那两条路，所以单开一轮。
+    `check` 是 `main` 里那个闭包（同一个出口，不另立第二套记账）。
+    """
+    TURN3["context"]["agent_tasks"] = json.dumps(_stale_rows(), ensure_ascii=False)
+    print(f"\n[轮 3] {TURN3['user_input']}   （喂两条过期的行：13h 软期限 / 49h 硬期限）")
+    t0 = time.monotonic()
+    r3 = G.run_one(G.build_request(TURN3), G.build_principal(TURN3),
+                   trace_ctx={"run": run_id, "case": TURN3["id"]})
+    d3 = time.monotonic() - t0
+    tr3 = _load_case_trace(run_id, TURN3["id"])
+    print(f"  回复：{(r3.get('text') or '')[:70]}…  {d3:.1f}s")
+    print(f"  命令帧：{r3.get('commands')}  执行工具：{r3.get('exec_tools')}")
+
+    # **前提**（「前提在别人手里」那一族）：这一轮没动那两行，才谈得上"期限把它们收掉"。
+    # 声明的那一步是写工具 ⇒ 万一 planner 真去办，同意闸会当场挡下 ⇒ 那两行走
+    # `via=consent` 分支（**也是对的**，但验的就不是期限那条路了）。所以先判前提，
+    # 前提不成立时后面的读数按"未评估"看，别当成期限判据通过。
+    exp = _events(tr3, "producer", "task_expire")
+    via = " ".join(str(e.get("via")) for e in exp)
+    touched = [t for t in (r3.get("exec_tools") or []) if t == STALE_TOOL]
+    check("前提：这一轮没动那两行（无回执、无同意闸挡下）⇒ 期限判据才有意义",
+          not touched and "consent" not in via,
+          f"exec={touched} via={via or '（无）'}")
+
+    frames = _task_frames(r3)
+    print(f"  过期帧：{json.dumps(frames, ensure_ascii=False)[:300]}")
+    by_id = {str(f.get("task_id") or ""): f for f in frames}
+    soft = by_id.get("at_5ta1e000") or {}
+    hard = by_id.get("at_5ta1e001") or {}
+    check("软期限那行（13h）转成「在等你回话」：input_required + 催办问句",
+          str(soft.get("state")) == "input_required"
+          and str(soft.get("pending_question")) == TASK_STALE_ASK,
+          json.dumps(soft, ensure_ascii=False))
+    check("硬期限那行（49h）转成终态 cancelled、问句一并清空",
+          str(hard.get("state")) == "cancelled"
+          and str(hard.get("pending_question")) == "",
+          json.dumps(hard, ensure_ascii=False))
+    check("过期帧与结算帧**同形**（7 键，无 idempotency_key、无 via）",
+          bool(frames) and all(
+              set(f) == {"task_id", "goal", "steps", "total_steps", "cursor",
+                         "state", "pending_question"} for f in frames),
+          str([sorted(f) for f in frames]))
+    check("trace 记下了这次过期（producer.task_expire，via 里有 stale）",
+          bool(exp) and "stale" in via, str(exp)[:200])
+    undec = _events(tr3, "producer", "task_expire_undecidable")
+    check("没有认不出时间戳的行（不该出现 task_expire_undecidable）",
+          not undec, str(undec) or "无")
+    return {"text": r3.get("text") or "", "d": d3}
+
+
+def _write_report(run_id: str, *, checks: list, payload: dict, declared_by_model: bool,
+                  durations: tuple, texts: tuple) -> str:
+    """落报告，返回路径。**纯排版**：判据的结果全在 `checks` 里，这里不重算。"""
+    os.makedirs("eval/report", exist_ok=True)
+    path = f"eval/report/task_state_probe_{run_id.split('_', 1)[1]}.md"
+    d1, d2, d3 = durations
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"# 会话级任务状态三轮探针 {run_id}\n\n")
+        f.write("- 档位：任务状态**常开**（20261015 撤掉 `AGENT_TASK_STATE`，无档位可拨）\n")
+        f.write("- 轮 1 登记来源：**"
+                f"{'模型自己登记' if declared_by_model else '手工等价载荷（模型本轮没登记）'}**\n")
+        f.write(f"- 轮 1 `{d1:.1f}s` / 轮 2 `{d2:.1f}s` / 轮 3 `{d3:.1f}s`\n")
+        f.write(f"- 轮 1/2 载荷：`{json.dumps(payload, ensure_ascii=False)}`\n")
+        f.write(f"- 轮 3 载荷（两条过期的行）：`{TURN3['context']['agent_tasks']}`\n\n")
+        f.write("| 判据 | 结果 | 现场 |\n|---|---|---|\n")
+        for c in checks:
+            f.write(f"| {c['desc']} | {'✅' if c['ok'] else '❌'} | `{c['detail'][:160]}` |\n")
+        for i, t in enumerate(texts, 1):
+            f.write(f"\n轮 {i} 回复：\n\n> {t.strip()}\n")
+    return path
 
 
 def main() -> int:
@@ -230,24 +360,19 @@ def main() -> int:
     # 轮 1 是"做了一步、剩下一步"，轮 2 是"把那一步做完"。
     _canc = [str(f.get("state")) for f in (frames1 + _task_frames(r2))
              if str(f.get("state")) == "cancelled"]
-    check("两轮都没有 cancelled 帧（撤下只有 task_drop 一条通道）",
+    check("前两轮都没有 cancelled 帧（撤下只有 task_drop 一条通道）",
           not _canc, str(_canc) or "无")
 
+    # ── 轮 3：台账终态（20261015）────────────────────────────────────────
+    r3 = _run_round3(run_id, check)
+
     # ── 报告 ────────────────────────────────────────────────────────────
-    os.makedirs("eval/report", exist_ok=True)
-    path = f"eval/report/task_state_probe_{run_id.split('_', 1)[1]}.md"
+    path = _write_report(run_id, checks=checks, payload=payload,
+                         declared_by_model=declared_by_model,
+                         durations=(d1, d2, r3["d"]),
+                         texts=(r1.get("text") or "", r2.get("text") or "",
+                                r3["text"]))
     bad = [c for c in checks if not c["ok"]]
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(f"# 会话级任务状态两轮探针 {run_id}\n\n")
-        f.write("- 档位：任务状态**常开**（20261015 撤掉 `AGENT_TASK_STATE`，无档位可拨）\n")
-        f.write(f"- 轮 1 登记来源：**{'模型自己登记' if declared_by_model else '手工等价载荷（模型本轮没登记）'}**\n")
-        f.write(f"- 轮 1 `{d1:.1f}s` / 轮 2 `{d2:.1f}s`\n")
-        f.write(f"- 载荷：`{json.dumps(payload, ensure_ascii=False)}`\n\n")
-        f.write(f"| 判据 | 结果 | 现场 |\n|---|---|---|\n")
-        for c in checks:
-            f.write(f"| {c['desc']} | {'✅' if c['ok'] else '❌'} | `{c['detail'][:160]}` |\n")
-        f.write(f"\n轮 1 回复：\n\n> {(r1.get('text') or '').strip()}\n\n")
-        f.write(f"轮 2 回复：\n\n> {(r2.get('text') or '').strip()}\n")
     print(f"\n报告：{path}")
     print(f"trace：logs/agent/golden_traces/{run_id}/")
     print(("全部成立 ✅" if not bad else f"不成立 {len(bad)} 条 ❌"))

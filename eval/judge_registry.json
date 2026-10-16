@@ -32,7 +32,7 @@
         441
       ],
       "agent/block_reasons.py": [
-        20,
+        21,
         0
       ],
       "agent/checkpoint_arm.py": [
@@ -67,8 +67,12 @@
         0,
         0
       ],
+      "agent/frames.py": [
+        0,
+        0
+      ],
       "agent/graph.py": [
-        316,
+        313,
         3914
       ],
       "agent/hostinfo.py": [
@@ -104,7 +108,7 @@
         0
       ],
       "agent/react_arm.py": [
-        1,
+        0,
         0
       ],
       "agent/react_line.py": [
@@ -156,12 +160,12 @@
         2
       ],
       "server.py": [
-        28,
+        29,
         0
       ]
     },
     "total": [
-      1141,
+      1139,
       4790
     ]
   },
@@ -1937,10 +1941,10 @@
       "file": "server.py",
       "kind": "collection",
       "name": "_REASON_CN",
-      "size": 20,
+      "size": 21,
       "category": "system_data",
       "q": "_REASON_CN",
-      "why": "帧退出原因的显示字"
+      "why": "帧退出原因的显示字。**19→20（20261016）**：新码 `action_conflict`（反极性改选，docs/问题记录.md §1.57）；**20→21（20261016，写操作的重放闸）**：新码 `write_in_doubt`（恢复前已发出、结果未能确认，ADR-0012）——这张表**不是判据词表**，是给主人看的显示字，且与 `agent/block_reasons.py::REASONS` 有一道**跨侧同值锁**（tests/test_block_reasons.py：键集相等 + 逐值相等）。⇒ 新增一个原因码**必然**在这里 +1，没有第二条路可走；这不是「往判据里加词」。"
     },
     {
       "id": "tools/base.py::_WEATHER_LOC_RE",
