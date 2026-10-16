@@ -490,34 +490,64 @@ check("`_planner_decide` 不自己写 turn_start（注入点只留一处）",
 # （`prompt_oversize` 是一条 warning，不是判据）。所以这里钉**结构**：narrator 的
 # 消息表必须经过那一个取值口，而那个取值口必须真的委托给 `context.narrator_messages`。
 print("[5F] 规则 F：narrator 的窗口闸门在场且没被绕过")
+
+# **20261016 合并之后这条链多了一环**：主线把"补形状"收进了 `_narrator_wire`
+# （前缀缓存要重排顺序，补形状与重排是同一趟），于是 `model_node` 里**不再直接**调
+# `with_tool_call_pairs`。判据跟着链路走，**锁关系不锁字面**（本仓为此付过代价：
+# `test_react_arm.py` ⑥d 钉了字面，把漂移永久化）：
+#
+#   model_node --(_narrator_wire(  ))--> _narrator_wire --(with_tool_call_pairs)--> 补形状
+#
+# 两环各判一次，中间那一环的入参必须是窗口化的产物。
 _model = next((f for f in ast.walk(_tree)
                if isinstance(f, ast.FunctionDef) and f.name == "model_node"), None)
 check("model_node 存在", _model is not None)
-if _model is not None:
-    _pair_calls = [n for n in ast.walk(_model)
+_wire = next((f for f in ast.walk(_tree)
+              if isinstance(f, ast.FunctionDef) and f.name == "_narrator_wire"), None)
+check("`_narrator_wire` 存在（补形状那一环）", _wire is not None)
+
+if _model is not None and _wire is not None:
+    # ── 第 2 环：补形状只许住在 `_narrator_wire` 里 ──────────────────────
+    _pair_all = [n for n in ast.walk(_tree)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                 and n.func.id == "with_tool_call_pairs"]
+    _pair_in_wire = [n for n in ast.walk(_wire)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                     and n.func.id == "with_tool_call_pairs"]
+    check("`_narrator_wire` 里 `with_tool_call_pairs` 恰好一处",
+          len(_pair_in_wire) == 1, f"{len(_pair_in_wire)} 处")
+    check("全文件里 `with_tool_call_pairs` 的调用也恰好一处（第二份补形状=第二条漂移源）",
+          len(_pair_all) == 1, f"{len(_pair_all)} 处")
+    # 补形状的入参是它**自己的形参**，不是 state —— 不然窗口在这一环就被绕开了。
+    check("`_narrator_wire` 里补形状的入参不是整份 messages 读",
+          not any(_reads_key(a, "messages") for n in _pair_in_wire for a in n.args))
+
+    # ── 第 1 环：`model_node` 必须把**窗口化的产物**交给它 ────────────────
+    _wire_calls = [n for n in ast.walk(_model)
                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                   and n.func.id == "with_tool_call_pairs"]
-    check("model_node 里 with_tool_call_pairs 恰好一处", len(_pair_calls) == 1,
-          f"{len(_pair_calls)} 处")
+                   and n.func.id == "_narrator_wire"]
+    check("model_node 里 `_narrator_wire` 恰好一处", len(_wire_calls) == 1,
+          f"{len(_wire_calls)} 处")
     # 闸门变量：`X = _narrator_msgs(state)` 里的 X（本仓的写法是**先取再传**，
-    # 探针那一格要拿它比身份）。直接 `with_tool_call_pairs(_narrator_msgs(state))`
-    # 也算过——判的是"入参是不是窗口化的产物"，不是"写法长什么样"。
+    # 探针那一格要拿它比身份）。直接 `_narrator_wire(_narrator_msgs(state))` 也算过
+    # ——判的是"入参是不是窗口化的产物"，不是"写法长什么样"。
     _gated_names = {t.id for n in ast.walk(_model) if isinstance(n, ast.Assign)
                     and isinstance(n.value, ast.Call)
                     and isinstance(n.value.func, ast.Name)
                     and n.value.func.id == "_narrator_msgs"
                     for t in n.targets if isinstance(t, ast.Name)}
-    _pair_args = _pair_calls[0].args if _pair_calls else []
-    _pair_ok = bool(_pair_args) and all(
+    _wire_args = _wire_calls[0].args if _wire_calls else []
+    _wire_ok = bool(_wire_args) and all(
         (isinstance(a, ast.Call) and isinstance(a.func, ast.Name)
          and a.func.id == "_narrator_msgs")
         or (isinstance(a, ast.Name) and a.id in _gated_names)
-        for a in _pair_args)
+        for a in _wire_args)
     check("⭐ 它的入参是 `_narrator_msgs(state)`（或它的产物）而不是整份 `state[\"messages\"]`",
-          _pair_ok,
-          "；".join(_src(a).strip()[:60] for a in _pair_args))
-    check("`with_tool_call_pairs` 的入参**不是**整份 messages 读",
-          not any(_reads_key(a, "messages") for a in _pair_args))
+          _wire_ok,
+          "；".join(_src(a).strip()[:60] for a in _wire_args))
+    check("`_narrator_wire` 的入参**不是**整份 messages 读",
+          not any(_reads_key(a, "messages") for a in _wire_args))
+
 _narr = next((f for f in ast.walk(_tree)
               if isinstance(f, ast.FunctionDef) and f.name == "_narrator_msgs"), None)
 check("`_narrator_msgs` 存在且委托给 `context.narrator_messages`",
@@ -532,22 +562,44 @@ check("`_narrator_msgs` 把 `turn_start` 传下去了（不传 ⇒ 窗口恒不�
           for n in ast.walk(_narr)))
 
 print("[5F-] 规则 F 的反向对照：绕开闸门必须判红")
-_bypass = ast.parse("def model_node(state):\n"
-                    "    return [system] + with_tool_call_pairs(state['messages'])\n")
-_pc = [n for n in ast.walk(_bypass)
-       if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-       and n.func.id == "with_tool_call_pairs"]
-check("`with_tool_call_pairs(state[\"messages\"])` ⇒ **判红**",
-      not any(isinstance(a, ast.Call) and isinstance(a.func, ast.Name)
-              and a.func.id == "_narrator_msgs" for a in _pc[0].args))
-_gated = ast.parse("def model_node(state):\n"
-                   "    return [system] + with_tool_call_pairs(_narrator_msgs(state))\n")
-_pc2 = [n for n in ast.walk(_gated)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-        and n.func.id == "with_tool_call_pairs"]
-check("`with_tool_call_pairs(_narrator_msgs(state))` ⇒ **判绿**",
-      any(isinstance(a, ast.Call) and isinstance(a.func, ast.Name)
-          and a.func.id == "_narrator_msgs" for a in _pc2[0].args))
+# 反向对照用**同一个分类器**（跟正判据一样的两环判法），不是另写一遍判据。
+def _wire_gate_verdict(tree: ast.AST) -> bool:
+    """合成片段里：`_narrator_wire` 的入参是不是窗口化的产物。"""
+    mn = next((f for f in ast.walk(tree)
+               if isinstance(f, ast.FunctionDef) and f.name == "model_node"), None)
+    if mn is None:
+        return False
+    names = {t.id for n in ast.walk(mn) if isinstance(n, ast.Assign)
+             and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name)
+             and n.value.func.id == "_narrator_msgs"
+             for t in n.targets if isinstance(t, ast.Name)}
+    calls = [n for n in ast.walk(mn) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Name) and n.func.id == "_narrator_wire"]
+    if len(calls) != 1 or not calls[0].args:
+        return False
+    return all((isinstance(a, ast.Call) and isinstance(a.func, ast.Name)
+                and a.func.id == "_narrator_msgs")
+               or (isinstance(a, ast.Name) and a.id in names) for a in calls[0].args)
+
+
+check("`_narrator_wire(state[\"messages\"])` ⇒ **判红**",
+      not _wire_gate_verdict(ast.parse(
+          "def model_node(state):\n"
+          "    return [_head] + _narrator_wire(state['messages']) + [_tail]\n")))
+check("`_narrator_wire(_narrator_msgs(state))` ⇒ **判绿**",
+      _wire_gate_verdict(ast.parse(
+          "def model_node(state):\n"
+          "    return [_head] + _narrator_wire(_narrator_msgs(state)) + [_tail]\n")))
+check("先取再传（`_m = _narrator_msgs(state)` 再 `_narrator_wire(_m)`）⇒ **判绿**",
+      _wire_gate_verdict(ast.parse(
+          "def model_node(state):\n"
+          "    _m = _narrator_msgs(state)\n"
+          "    return [_head] + _narrator_wire(_m) + [_tail]\n")))
+check("同名局部名不是从 `_narrator_msgs` 绑的（`_m = state['messages']`）⇒ **判红**",
+      not _wire_gate_verdict(ast.parse(
+          "def model_node(state):\n"
+          "    _m = state['messages']\n"
+          "    return [_head] + _narrator_wire(_m) + [_tail]\n")))
 
 # ---------------------------------------------------------------------------
 print()

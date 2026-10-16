@@ -14,43 +14,40 @@
 
 **覆盖范围**：20260928 建立，回溯到 20260925（建立前一周）。更早的变更去 `git log`。
 
-## 20261016
+## 20261017
 
-- **写操作的重放闸：崩溃重放不再写第二遍（判据 + 采纳前置，20261016；⚠️ 生产行为零变更）**——
-  这是"接上持久化 saver"的**硬前置**（ADR-0011 的触发条件）。LangGraph 的恢复单位是
-  **superstep**：节点内的 state 更新要等节点**返回**才落盘 ⇒ 崩在 `execute_node` 中途时整个
-  节点从头重跑，而它里面那次 `tool.invoke` 是**真的写库**。今天生产没开 saver，这一格不存在；
-  采纳之后它立刻存在。做法：`execute_node` 里那次调用改走一本账（`agent/replay_guard.py`
-  + `agent/replay_guard_pg.py`，自建表 `agent_write_replay`，池必须 autocommit）——**先占位
-  （原子）→ 调用 → 记结局**，键 = `(thread_id, superstep 任务 id, 第几件)`。显式选
-  **at-most-once**（宁可漏写、绝不双写），因为要护的是公告 / 给第三方的站内通知 / 冻结账号
-  那一族：双写落在**不可撤回、且落在别人身上**。三种重放结局一种都不许糊：有结局 ⇒ 逐字回放
-  那个 `ToolResult`（`kind`/`meta` 一起存，否则一次真 no-op 会被重放成"真改动"、审计回执
-  会丢 `before/after`）；只有占位没有结局 ⇒ **不调工具**、返回 `kind="in_doubt"` ⇒ 判 BLOCK，
-  叙述侧说的是"可能已经生效，也可能没有"（`write_in_doubt` 登记进 `block_reasons` 与
-  `server._REASON_CN` 两侧同话术、标"不可重试" ⇒ planner 被要求**先去读一次现状**，不重发）；
-  占位上的 spec 指纹与当前不符 ⇒ **响亮抛**，绝不回放"另一件的结果"。
-  **两条前提写进 ADR 而不是"最好配上"**：① 幂等键取节点 config 的 `__pregel_task_id`
-  ——`configurable["checkpoint_id"]` 被 langgraph **无条件写死成 `None`**，拿它当键会塌成
-  `(会话, None, 下标)`、**静默压掉整条会话的写**，而"只写一件"时与键对了**表现完全一样**；
-  ② 图必须用 `durability="sync"` 跑——缺省 `async` 下 checkpoint 写交给后台线程、主循环
-  **不等待**，进程被**硬杀**（SIGKILL/OOM/部署重启）时那一步可能没落盘 ⇒ 恢复时 `__start__`
-  重跑、任务 id 变了 ⇒ **账被静默绕过**；而这只在崩溃那一刻发生（进程内异常那条路照样全绿），
-  所以闸**自己断言**这一档，档不对当场抛。**射程只有"重放同一个 superstep"**（实测：每次
-  全新输入的 run 都拿到**新的**任务 id）⇒ 这本账**压不到新的一轮**，主人下一句说同一件事
-  该不该再写，仍归既有的同意闸管。**判据**：`tests/test_replay_guard.py`（真图 +
-  真 `execute_node` + 真 saver 的四条——正向"崩一次只调 1 次" / 反控"账关掉 ⇒ 2 次" /
-  **正控"恢复后再走一个新 superstep、排同一件写仍要执行"**（抓键塌缩，没有它前两条在键塌了
-  时照样全绿）/ 响亮"指纹不符 ⇒ 抛且一个工具都没调"）、
-  `eval/experiments/checkpoint_probe.py --crash-resume --guard`（真子进程硬杀 + 真 PG saver：
-  **2× → 1×**；反控 `--guard-unsafe`（占位不提交）回到 2×）与
-  `--concurrency N --guard`（**N 个真进程同时重放同一个未完成的 superstep**：实测 N=4 ⇒
-  **只写 1 次**、账里只 1 行、4 个进程的任务 id 逐字相同；反控 `--guard-unsafe`
-  （占位不提交 + 先读后写 ⇒ 非原子）⇒ **4 次写**——"原子性"才是干活的那一句，不是"有没有账"；
-  另一档 `--guard-slow`（工具在占位之后停 2s）⇒ 后到的**全部**读到"占位在、结局未知"，
-  即**正在进行中**也压得住）。
-  **不改生产链路**（`server.py` 只多一行原因码中文），不带账时**逐字节等于今天**（连
-  durability 都不查）⇒ 对既有 golden 四臂读数零影响。裁决见 ADR-0012。
+- **写操作幂等账：两种实现收敛成一份（判据，20261017；⚠️ 生产行为零变更）**——同一件事此前
+  在两条支线上各写了一遍：主线的 `agent/idem.py`（键 = `sha256([checkpoint_ns, 工具名, 参数指纹])`）
+  与实验分支的 `agent/replay_guard.py` + `agent/replay_guard_pg.py`（键 = `(thread_id, superstep
+  任务 id, 第几件)`），两条抢 `execute_node` 里**同一行** ⇒ 合并时必须二选一。裁决：**主线那份
+  活下来**（键更短，而且不需要把账塞进 `configurable`——挂没挂 saver 从 checkpointer 本身就能
+  看出来），本支那份**整体删除**，连同它的 ADR、判据文件与原因码 `write_in_doubt`
+  （`agent/block_reasons.py` / `server.py::_REASON_CN` / planner 规则 / 登记表四侧同批；那一族
+  「不可重试」仍是**八个**，只是第八个换成主线的 `write_outcome_unknown`）。它测出来的东西
+  **一件不留地搬过去**：真子进程硬杀、N 个真进程抢同一个未完成的 superstep、以及
+  `durability` 自断言（缺省 `async` 下 checkpoint 写交给后台线程、主循环不等待 ⇒ **硬杀**时
+  恢复的任务 id 会变、账被静默绕过，而表面一切正常——这一档只有真起子进程才测得出来）。
+  那条自断言现在**住在代码里**（`agent/idem.py::require_sync_durability`：账本在场而档不是
+  `sync` ⇒ **当场抛**，不降级成一条回执——降级会让整轮的写静悄悄地全不执行），CI 侧由
+  `tests/test_write_idempotency.py` 的 ⑨/⑩ 两块钉住：`sync` 照常跑 / `async`、`exit`、
+  **键整个缺席**（＝缺省档）三档都抛且一件写都不执行 / 没挂 saver 时连档位都不查；
+  以及「重放的行**必须是元组**」——喂 dict 会**不报错地**回放字面串 `'text'`，那是下一步
+  把账迁到 PG 时最要防的坑（池的 `row_factory` 是 `dict_row`）。
+  **顺带修掉 SQLite 账的一条实测缺陷**（探针量出来的）：4 个真进程**同时冷启**一本还不
+  存在的账时，`PRAGMA journal_mode=WAL` 会立刻抛 `database is locked`（SQLite 不为这句
+  调 busy handler，把 `busy_timeout` 挪到它前面也没用）⇒ 实测 6~7/32 次 `claim` 抛 ⇒
+  **那次写被 fail-closed 拒掉**（不是双写，但合法写没了）。加一圈 20×50ms 的冷启重试后
+  实测 0/32。这一格只在**冷启**存在（库建好之后正常等锁）；且只在**降级档**存在
+  （账挂 PG saver 时走 `idem_pg`，没有开库竞态这回事）。
+  合并后 narrator 的装配是 `[_sys_head] + _narrator_wire(_narrator_msgs(state)) + [_sys_tail]`
+  ——前缀缓存重排（稳定头留在最前）与本轮窗口两刀**撞在同一行**上，补形状那一趟仍住在
+  `_narrator_wire` 里、一个字没改，只是喂给它的表从整份 `state["messages"]` 换成了窗口化的
+  产物。**判据跟着改**：`tests/test_turn_window.py` 规则 F 改成跟着链路判（`_narrator_wire`
+  的入参是不是窗口化的产物 + `with_tool_call_pairs` 只在它里面），
+  `tests/test_tool_call_pairs.py` 的接线锁改**钉关系不钉字面**（那一行已经漂过三次：
+  整行钉法在批 3 与本次各红过一次，而两次行为都没变）。
+
+## 20261016
 
 - **跨轮上下文的"本轮"在图里成了事实（判据 + 评测臂，20261016；⚠️ 生产行为零变更）**——
   在这之前"这一轮到哪儿为止"是**图外的约定**：`server._build_messages` 每请求重建上下文、
@@ -197,6 +194,63 @@
   `tests/test_daily_metrics.py` 锁住（含一条反控）。
   **写路径没有"同一件已办过"的守卫**（`_trim_done_reads` 只读、`_trim_noop_specs` 只认
   零净改动）——如实登记，本批**只量不改**。
+- **narrator 的出站消息重排：稳定头留在最前、每轮都变的那一段挪到对话历史之后**
+  （行为变更——改的是模型**读到的顺序**，为的是前缀缓存）。此前装配是
+  `[全量系统提示词] + [System 上下文块] + 历史…`，而**两处"每轮都变的东西"都站在最前面**：
+  系统提示词从 `{plan}` 起每轮不同，那条上下文块里 `current_time` **精确到分钟**。前缀缓存
+  命中的是**最长公共前缀** ⇒ 公共前缀在**第二条消息**就断了，**20 条对话历史一条都进不了缓存**。
+  生产实测（`logs/agent/traces`，20260927–20261016，459 次 narrator 调用）：稳定头
+  `_EXECUTOR_HEAD + NARRATOR_DISCIPLINE` = 8285 字（访客）/ 8747 字（主人）≈ 5021 / 5301 tok，
+  而每次命中的**中位数恒为 5120 tok**（= 5 个 1024 分块）⇒ **命中的恰好就是那个头按分块取整**。
+  新装配 `[稳定头] + [历史…] + [上下文块] + [变化段]`，**只改发给模型的那份副本**：
+  `state["messages"]` 一个字不改（planner / gate / `_page_ctx` / `strict_wire_issues` /
+  `_last_user_msg` 读的都是 state）。拆分的**内容零改动**——`_EXECUTOR_PROMPT` 仍逐字节等于
+  拆分前那一串（`tests/test_react_narrator_assets.py` 拿拆前算的 sha256 钉着），第二条臂
+  `agent/react_arm.py` 走的就是 `_EXECUTOR_PROMPT` ⇒ **臂的提示词与顺序都没动**。
+  **射程与投影**：与上一次 narrator 调用（**任意会话**）间隔 ≤5 分钟的调用占 narrator 输入
+  tok 的 63%，那一桶当前命中 48.0%；按"新公共前缀 = 上一次请求减去它自己的 [上下文块 +
+  变化段]"（变化段实测地板 ≈1060 tok）逐条投影：narrator **48.0% → ~72.5%**、
+  **全站 77.8% → ~80.1%**（近 5 天 20261012–20261016 口径；保守档 79.3%、上限档 80.5%）。
+  ⚠️ **一条必须写下来的观察：`thread_id` 是逐 trace 随机的**（459 次调用落在 **447** 个 thread
+  上）⇒ 前缀缓存**不是按会话寻址、是按内容前缀寻址**，跨会话照样命中；按 thread 分桶会把
+  这件事整个看漏（第一版就是这么错的，得出的"射程只有 11% tok"是假的）。另一条支撑：
+  间隔 ≤300s 的后续调用里 **`cache_read=0` 的有 0 次** ⇒ 缓存确实活着，"改动能吃到"这个
+  假设成立。
+  反向锁：`tests/test_narrator_cache_layout.py`（7 条；判据本体是**连续两轮出站序列的公共
+  前缀字符数**，并配一条**把上下文块放回首位的旧装配反控**——反控当场塌掉，证明这条判据
+  不恒绿）。同批改两处判据落点：`tests/test_factblock.py::_system_prompt` 改成**拼接全部
+  SystemMessage**（它判的是"那段文字在不在提示词里"，与落在哪条消息无关），
+  `tests/test_tool_call_pairs.py` 的接线锁改跟**链路**（`_msgs` 由 `_narrator_wire` 出、
+  补形状在里面）而不是跟字面。
+  **golden A/B**（6 条多轮/多意图用例 × 3 轮 × 两臂交替 = 36 次真链路；换臂＝换文件）：
+  **两臂各 18/18 首跑绿，逐次工具轮数基本一致**；仅两处逐次差异
+  （`mix4_cmd_and_write_one_breath` 第 2 轮、`mt2_short_yes_resubmits_card` 第 1 轮），而这两处
+  **在各自臂内跨轮就不一致** ⇒ 按本仓口径属逐次方差，**不判效应**。
+  同批销账：`docs/问题记录.md` §1.50 里那句描述接线位置的话（原写作 `[system] +
+  with_tool_call_pairs(...)`）补上"20261016 起改由 `_narrator_wire` 装配"。
+- **写操作的幂等账：先记账再动手，至多一次（无行为变更——闸今天关着）**——新增
+  `agent/idem.py`（一本 agent 自持的 SQLite，零新依赖），包在 `execute_node` 里**唯一**的
+  工具收口上（`tool.invoke(args)`，全文件只出现一次）。**为什么需要它**：LangGraph 的
+  checkpoint 提交粒度是 **superstep 不是语句** ⇒ 节点里连做 N 次写、进程死在中间、从上一个
+  checkpoint 恢复，那 N 次写会**各执行两遍**（实测：`native-checkpoint-verdict-20261015.md`
+  §2.6）。生产今天没有 saver（`build_graph()` 是裸的 `g.compile()`）⇒ 这条路径**从来没通过电**，
+  而 ADR-0011 要做的正是给它通电——本批就是**接线之前的保险丝**。键 =
+  `sha256([checkpoint_ns, 工具名, 参数指纹])`（`checkpoint_ns` 实测是纯函数：崩溃+恢复逐字节
+  相同、同一 thread 不同轮互不相同、没挂 saver 时是随机 uuid4）；**`intent` 行在远端调用之前
+  提交**，返回（或抛异常）后改 `done`；留在 `intent` = 结果未知 ⇒ **新原因码
+  `write_outcome_unknown`**（`agent/block_reasons.py` + `server.py::_REASON_CN` 两侧同批，
+  **不可重试**——重试正是要防的那件事），planner 的下一步是"先读一次确认到底成没成"。
+  **取至多一次**：重复写对外可见且不可撤销，漏一次写可恢复、可如实告知。**两条"必须这么写
+  否则静默坏掉"**：① 指纹必须在**改动 `args` 之前**取——`device_oled_display` 的 `text` 是
+  temperature **0.7** 现创的，改后取指纹会让那个工具**恒不命中且不报错**；② 重放要把
+  `meta` 一起还回去——命令类写工具的连线命令住在 `meta["cmd"]`，只还文本会让重放出来的命令帧
+  被 `cmd_shape` 判 BLOCK（一次**凭空**的失败）。**闸** =
+  `config["configurable"]["__pregel_checkpointer"] is not None` ⇒ 没挂 saver 就直通、连
+  `logs/agent/idem.sqlite3` 都不创建（已登记进 `eval/retention_manifest.py`，`open`/未接管）。
+  反向锁 `tests/test_write_idempotency.py`（8 组，含真 `StateGraph` + `MemorySaver` 在进程内
+  复现崩溃+恢复；**两条反控实测能红**：摘掉闸 ⇒ 执行序列 `[0,1]` 变 `[0,0,1]`；收口搬回
+  `graph.py` ⇒ 接线锁红）。`tests/test_block_reasons.py` 的"不可重试那一族就是这七个"随之变成
+  **八个**。ADR-0012；架构 §4.8；`docs/问题记录.md` §1.66。
 
 ## 20261015
 

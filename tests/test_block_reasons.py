@@ -59,11 +59,11 @@ _GRAPH_SRC = _ctx_src.graph_deprefixed()
 # "不可重试"这一族是**刻意**列出来的：每多一个 False，就等于对 planner 说"这一条
 # 重试没用、换路或如实说"。多写一个的代价是掐掉一条合法重试，所以这个集合要有人复核
 # （这条断言就是这个作用——与 planner 模板占位符集合那条同一个纪律）。
+# 20261016 批 2 加第八个 `write_outcome_unknown`：写操作已经发出、进程在拿到返回
+# 之前中断。**重试就是这一族要防的那件事本身**（一次写会变成两次，而写对外可见且
+# 不可撤销）⇒ planner 的下一步是"先读一次确认到底成没成"，不是"再来一遍"。
 _NON_RETRY = {"unavailable", "cmd_shape", "policy_refused", "consent_required",
-              "denied", "no_manifest", "unknown_role",
-              # 重放闸的"已发出、结果未知"（20261016 批 2）：重试等于盲目重发一件
-              # 可能已经写进去的写——这一族里**只有它**的下一步是"去读一次核对"。
-              "write_in_doubt"}
+              "denied", "no_manifest", "unknown_role", "write_outcome_unknown"}
 check("表非空，每项形如 (非空中文, bool)",
       bool(REASONS) and all(isinstance(v, tuple) and len(v) == 2 and v[0]
                             and not v[0].isascii() and isinstance(v[1], bool)
@@ -104,10 +104,10 @@ check("源码级：`_check_spec` 里 `_VERDICT_BLOCK, \"…\"` 形状的字面�
 # 末端兜底的 `error_frame` 单独锁一句——它是最容易被漏掉的那个码。
 check("源码级：or 链末端的 error_frame 也登记了",
       'or "error_frame"' in _BODY and "error_frame" in REASONS)
-check("源码级：五个取回通道都还接在 `_check_spec` 上（摘一个就少一族码）",
+check("源码级：六个取回通道都还接在 `_check_spec` 上（摘一个就少一族码）",
       all(fn in _BODY for fn in
           ("ref_error_reason", "scope_error_reason", "consent_error_reason",
-           "target_error_reason", "policy_error_reason")))
+           "target_error_reason", "policy_error_reason", "replay_reason")))
 # 行为级抽查：不走源码文本，真的调一次。取的是 or 链上的一族（权限不足帧），
 # "从源码里看见字面"与"真的从帧里取回这个码"是两件事。
 _r = g._check_spec("read_notifications", {}, True,
@@ -118,14 +118,22 @@ check("行为级：权限不足帧 → (BLOCK, denied)，且 denied 在表里",
 _r2 = g._check_spec("read_notifications", {}, True, "…", "notice_read", kind="unavailable")
 check("行为级：kind=unavailable → 表里标的是不可重试",
       _r2 == ("BLOCK", "unavailable") and block_reason_type(_r2[1])[1] is False, str(_r2))
-# 重放闸（20261016 批 2）：**新 kind 不接进 `_check_spec` 的后果是静默产回执**
-# ——非空文本一律 PASS ⇒ 一件"可能没写进去"的写会进 receipts、经 `__EXEC__` 落库、
-# 下一轮 narrator 照着它讲。这条断言就是那一格的出口。
-_r3 = g._check_spec("set_article_status", {}, True, "〔重放〕…", "article_status",
-                    kind="in_doubt")
-check("行为级：kind=in_doubt → (BLOCK, write_in_doubt)，且表里标的是不可重试",
-      _r3 == ("BLOCK", "write_in_doubt")
+# 写操作幂等账（20261016）：崩溃重放时"上一次已经发出、没拿到返回"这一格。
+# 走的是**错误帧族**（`agent/idem.py::unknown_frame`，`__ERROR__` 开头 + 原因码），
+# 不是新 kind——与 authz / adminops 那几族同一个取回口（`replay_reason` 接在 or 链上）。
+# 这一格的后果是**静默产回执**：非空文本一律 PASS ⇒ 一件"可能没写进去"的写会进
+# receipts、经 `__EXEC__` 落库、下一轮 narrator 照着它讲。
+_r3 = g._check_spec("set_article_status", {}, True,
+                    g.idem.unknown_frame("set_article_status"), "article_status")
+check("行为级：幂等账的「结果未知」帧 → (BLOCK, write_outcome_unknown)，且不可重试",
+      _r3 == ("BLOCK", "write_outcome_unknown")
       and block_reason_type(_r3[1])[1] is False, str(_r3))
+# 反向对照：**同一句话但摘掉原因码** ⇒ 走末端兜底的 error_frame，而不是被认成这一族
+# （否则这条判据只是"看着像错帧就红"，说不出取回通道在不在）。
+_r3n = g._check_spec("set_article_status", {}, True, "__ERROR__: 随便什么别的失败",
+                     "article_status")
+check("反向对照：没有那个原因码的错帧取不回这一族（判的是码，不是帧形）",
+      _r3n == ("BLOCK", "error_frame"), str(_r3n))
 
 
 # ── ④ 渲染：blocked_rows 的形状 ────────────────────────────────────────────

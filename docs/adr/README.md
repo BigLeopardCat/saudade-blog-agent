@@ -77,7 +77,7 @@
 | [0009](adr-0009-react-arm-becomes-a-real-graph.md) | 第二条臂的循环拆成真节点（`create_agent` 退场） | 已采纳 |
 | [0010](adr-0010-state-accumulator-reducers-deferred.md) | state 累加器的合并语义：先立台账，暂不加 reducer | **已搁置** |
 | [0011](adr-0011-graph-holds-context-checkpoint-memory.md) | 上下文由图自己持有（原生 checkpoint 取代手写注入）：方向认可，前置已落地、采纳待做 | **已搁置** |
-| [0012](adr-0012-write-replay-guard.md) | 写操作的重放闸：崩溃重放不再写第二遍（采纳 saver 的前置） | 已采纳 |
+| [0012](adr-0012-write-idempotency-ledger.md) | 写操作的幂等账：先记账再动手，至多一次 | 已采纳 |
 
 ## 相关的、但不算 ADR 的文档
 
