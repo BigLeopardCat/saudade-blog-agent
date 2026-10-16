@@ -82,6 +82,7 @@ from agent import adminops as A
 from agent import authz
 from agent import confirm
 from agent import refs
+from agent import replay_guard
 from agent.block_reasons import denied_skills
 from rag import sections
 from agent.stickers import repair_sticker_tokens
@@ -8793,6 +8794,14 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
         return _VERDICT_BLOCK, "args_parse"
     if kind == "unavailable":
         return _VERDICT_BLOCK, "unavailable"
+    if kind == "in_doubt":
+        # 重放闸的"已发出、结果没记下来"（20261016 批 2，见 agent/replay_guard.py）：
+        # **同样判 BLOCK**。PASS 在本仓的定义是"系统确认的事实"，而这一件可能生效、
+        # 也可能没生效——把"未知"记成确认事实就是编造，且它还会经 `__EXEC__` 落进
+        # 跨轮执行记忆，下一轮 narrator 会照着一件没发生的事讲。
+        # ⚠️ 与上面几族同一条纪律：**新 kind 不接进本函数就是静默产回执**
+        # （`_check_spec` 对非空文本一律 PASS），这是本仓踩过的形态。
+        return _VERDICT_BLOCK, "write_in_doubt"
     if kind == "not_found":
         # 目标不存在 / 不在我能确认的范围内（20260923 三轮，见 tools.base.not_found）：
         # 同样 BLOCK（什么都没改成事实），但与 unavailable 分开给原因码——planner 的
@@ -12780,10 +12789,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             out = f"__ERROR__: 未知工具 {name}（planner 调用清单越界，被 execute 拒绝执行）"
             logger.warning("[execute] 未知工具 %s，拒绝执行", name)
         else:
-            try:
-                out = tool.invoke(args)
-            except Exception as e:
-                out = f"__ERROR__: {type(e).__name__}: {e}"
+            # 写操作的重放闸（20261016 批 2）：try/except 挪进它，语义不变。本行是
+            # execute 里唯一的持久副作用入口——新加的写必须走这里，见 replay_guard.py
+            out = replay_guard.invoke_guarded(tool, args, name, idx, config)
         # 帧文本 = 原始返回去掉"同一段正文存两份"的那个重复键（20260925）。详情帧是
         # `str(dict)` 而 dict 同时带 `noteContent` 与 `content`（实测 11 篇逐篇相等）
         # ⇒ 帧体积 ≈ 正文 ×2；此前只有渲染侧（`_frame_texts` → `sections.frame_excerpt`）

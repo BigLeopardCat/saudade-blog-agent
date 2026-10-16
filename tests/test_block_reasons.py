@@ -60,12 +60,15 @@ _GRAPH_SRC = _ctx_src.graph_deprefixed()
 # 重试没用、换路或如实说"。多写一个的代价是掐掉一条合法重试，所以这个集合要有人复核
 # （这条断言就是这个作用——与 planner 模板占位符集合那条同一个纪律）。
 _NON_RETRY = {"unavailable", "cmd_shape", "policy_refused", "consent_required",
-              "denied", "no_manifest", "unknown_role"}
+              "denied", "no_manifest", "unknown_role",
+              # 重放闸的"已发出、结果未知"（20261016 批 2）：重试等于盲目重发一件
+              # 可能已经写进去的写——这一族里**只有它**的下一步是"去读一次核对"。
+              "write_in_doubt"}
 check("表非空，每项形如 (非空中文, bool)",
       bool(REASONS) and all(isinstance(v, tuple) and len(v) == 2 and v[0]
                             and not v[0].isascii() and isinstance(v[1], bool)
                             for v in REASONS.values()))
-check("「改参数重试无效」那一族就是这七个（多一个少一个都要有人复核）",
+check("「改参数重试无效」那一族就是这八个（多一个少一个都要有人复核）",
       {k for k, v in REASONS.items() if not v[1]} == _NON_RETRY,
       str(sorted(k for k, v in REASONS.items() if not v[1])))
 check("unavailable 与 target_not_found 是**两族**（一个重试无效、一个换 id 可救）",
@@ -115,6 +118,14 @@ check("行为级：权限不足帧 → (BLOCK, denied)，且 denied 在表里",
 _r2 = g._check_spec("read_notifications", {}, True, "…", "notice_read", kind="unavailable")
 check("行为级：kind=unavailable → 表里标的是不可重试",
       _r2 == ("BLOCK", "unavailable") and block_reason_type(_r2[1])[1] is False, str(_r2))
+# 重放闸（20261016 批 2）：**新 kind 不接进 `_check_spec` 的后果是静默产回执**
+# ——非空文本一律 PASS ⇒ 一件"可能没写进去"的写会进 receipts、经 `__EXEC__` 落库、
+# 下一轮 narrator 照着它讲。这条断言就是那一格的出口。
+_r3 = g._check_spec("set_article_status", {}, True, "〔重放〕…", "article_status",
+                    kind="in_doubt")
+check("行为级：kind=in_doubt → (BLOCK, write_in_doubt)，且表里标的是不可重试",
+      _r3 == ("BLOCK", "write_in_doubt")
+      and block_reason_type(_r3[1])[1] is False, str(_r3))
 
 
 # ── ④ 渲染：blocked_rows 的形状 ────────────────────────────────────────────

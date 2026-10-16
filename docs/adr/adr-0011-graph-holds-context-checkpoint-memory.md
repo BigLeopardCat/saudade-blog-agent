@@ -1,7 +1,9 @@
 # ADR-0011：上下文由图自己持有（原生 checkpoint 取代手写注入）——方向认可，采纳待写幂等账
 
 - **状态**：**已搁置**（20261016）——方向认可，**采纳的触发条件是批 2（写操作幂等账）落地**，
-  见文末《触发条件》。
+  见文末《触发条件》。**该条件已于 20261016 满足**（批 2 落地，见
+  [adr-0012-write-replay-guard.md](adr-0012-write-replay-guard.md)）；采纳本身
+  （三处一起动）**仍未做**，所以状态仍是搁置。
 - **背景文档**：[../agent-architecture.md](../agent-architecture.md) §4.1（记忆四层）、
   §4.6（`MemorySaver` 为什么不承担记忆）、§4.7（"无状态图能不能中途暂停"）；
   仓外判决文档 `/home/ubuntu/native-checkpoint-verdict-20261015.md`（批 0 的实验读数与
@@ -315,3 +317,17 @@ Rust 发过来的那份 JSON），而 `req.history = [dict, …]` 这种赋值 *
 （= `conversation_id`，会话删除要级联清 checkpoint）、`build_graph(checkpointer=…)` 接上
 产线 saver。⚠️ **本批的读数不能当作"采纳安全了"**：golden 的真写默认关（`needs_real_write`
 的 5 条被跳过）⇒ 崩溃重放那一格在本批的读数里**不存在**，臂 C 是**评测臂**不是生产路径。
+
+### 20261016 追记：这条触发条件**已满足**
+
+批 2（写操作的重放闸）已落地，见
+[adr-0012-write-replay-guard.md](adr-0012-write-replay-guard.md)：键 =
+`(thread_id, __pregel_task_id, spec_index)`、at-most-once（先占位 → 调用 → 记结局）、
+覆盖集从 `authz` 派生。它同时量出两条此前没写明的前提——① 节点 config 里
+`configurable["checkpoint_id"]` **恒为 `None`**（langgraph 无条件写死），superstep 身份
+只能去 `__pregel_task_id` 拿；② 图必须用 `durability="sync"` 跑，缺省 `async` 下**硬杀**
+会让恢复的 task_id 变、账被**静默绕过**（且只在崩溃那一刻失效）。
+
+⇒ **采纳现在只差"三处一起动"与真机读数**：长会话 K=10 的正向收缩、崩溃重放对**产线等效**
+saver、同会话并发两轮；外加 `pyproject.toml` / `uv.lock` 的依赖。**前置满足不等于采纳完成**
+——本 ADR 的状态在那一步落地之前仍是"已搁置"。

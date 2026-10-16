@@ -458,7 +458,10 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 历史教训：曾经复用线程累积，长对话（教程连载）导致输入上下文与 worker 内存无限膨胀直至截断/被杀，
 于是改为"每请求独立线程 + DB 注入"。**线程复用是禁区，恢复即重蹈覆辙。**
 （20261016：上面这句的**射程**在 §4.8 被收窄为「不许在**没有窗口闸门、且没做写幂等账**的
-情况下恢复」——结论本身没被推翻，生产今天照旧没有 saver。）
+情况下恢复」——结论本身没被推翻，生产今天照旧没有 saver。两个条件里「写幂等账」这一条
+已于 20261016 落地（`agent/replay_guard.py` + `agent/replay_guard_pg.py`，
+见 [adr/adr-0012-write-replay-guard.md](adr/adr-0012-write-replay-guard.md)）；窗口闸门
+见 §4.8。**采纳本身（三处一起动）仍未做**。）
 
 ### 4.7 无状态图能不能"中途暂停等用户决定"？（20260920 回答）
 
@@ -503,7 +506,7 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 `_has_frames` 把上一轮的帧当本轮证据（首轮那五条确定性快道**结构上**永不命中）、
 narrator 提示词随会话线性膨胀（`with_tool_call_pairs(state["messages"])` 无截断）。
 
-处置分两批，都落在实验分支 `exp/native-checkpoint`（生产一个字节没动）：
+**读端**的处置分两批，都落在实验分支 `exp/native-checkpoint`（生产一个字节没动）：
 
 - **批 1（已落地）**：**读端**窗口。`context.freeze_turn_start` 在 `_planner_decide`
   **之前**冻住本轮起点（顺序反了就是"planner 自己漏修"——这条单独占一笔提交），
@@ -521,9 +524,13 @@ narrator 提示词随会话线性膨胀（`with_tool_call_pairs(state["messages"
 **§4.6 那条结论今天仍然成立**：生产没有 saver，去掉注入就是去掉全部跨轮记忆。所以"停止
 注入"这一刀属于**采纳**，不属于上面两批——批 3 只是把它做成一条**评测臂**
 （`checkpoint_delta`）。采纳要**三处一起动**（`_build_messages` 删注入循环、`thread_id`
-改会话坐标、`build_graph(checkpointer=…)` 接产线 saver），且必须先过**批 2 写操作幂等账**
+改会话坐标、`build_graph(checkpointer=…)` 接产线 saver），且必须先过**批 2 写操作重放闸**
 ——恢复单位是 superstep，节点内的 state 更新要等节点**返回**才落盘 ⇒ 幂等键不能住在
-state 里，必须落在节点之外的一本账上。裁决、读数与触发条件见
+state 里，必须落在节点之外的一本账上。**批 2 已于 20261016 落在这支分支上**
+（`agent/replay_guard.py` + `agent/replay_guard_pg.py`，裁决见
+[adr/adr-0012-write-replay-guard.md](adr/adr-0012-write-replay-guard.md)）：它给出的是
+**采纳的前提**，不是采纳本身——生产今天照旧没有 saver，去注入仍是"去掉全部跨轮记忆"。
+批 1 / 批 3 的裁决、读数与触发条件见
 [adr/adr-0011-graph-holds-context-checkpoint-memory.md](adr/adr-0011-graph-holds-context-checkpoint-memory.md)。
 
 **一条维护者需要知道的测量事实：golden 现有语料测不出这一刀。** 10 条多轮用例**一个轮次都
@@ -1377,7 +1384,23 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > 改之前长什么样」以及「这条结论当时基于哪次测量」。涉及对外行为变化的条目同时记在
 > [CHANGELOG.md](../CHANGELOG.md)。
 
-> 最后更新：2026-10-16（**新增 §4.8 追记：§4.6 那句「线程复用是禁区」的射程被收窄**——
+> 最后更新：2026-10-16（**批 2 落地：写操作的重放闸**——采纳 saver 的硬前置（ADR-0011 的
+> 《触发条件》）。`agent/replay_guard.py`（纯件：键 / 覆盖集 / `invoke_guarded`）+
+> `agent/replay_guard_pg.py`（自建表 `agent_write_replay`，池必须 autocommit）：
+> `execute_node` 里那次 `tool.invoke` 改走一本账——先占位（原子）→ 调用 → 记结局 ⇒
+> **同一个 superstep 重放不再写第二遍**（at-most-once：宁可漏写、绝不双写）；只有占位、
+> 没有结局时返回 `kind="in_doubt"` ⇒ `_check_spec` 判 BLOCK、planner 先去读一次现状，
+> **不许重发**。两条前提写进 ADR 而不是"最好配上"：① 幂等键取节点 config 的
+> `__pregel_task_id`（`configurable["checkpoint_id"]` 被 langgraph **无条件写死成 `None`**，
+> 拿它当键会静默压掉整条会话的写）；② 图必须用 `durability="sync"` 跑（缺省 `async` 下
+> checkpoint 由后台线程写、主循环不等待 ⇒ **硬杀**时恢复的 task_id 会变、账被静默绕过
+> ——而这只在崩溃那一刻发生，进程内异常那条路照样全绿）。判据：`tests/test_replay_guard.py`
+> （真图四条：正向 / 反控 / 正控抓键塌缩 / 响亮）+ 探针 `--crash-resume --guard`
+> （真子进程硬杀 + 真 PG saver：2× → 1×；反控 `--guard-unsafe` 回到 2×）。
+> **本批不改生产链路**（`server.py` 只多一行原因码中文），不带账时逐字节等于今天；
+> **采纳本身仍未做**（三处一起动，见 §4.8）。裁决见
+> [ADR-0012](adr/adr-0012-write-replay-guard.md)。）
+> 上版：2026-10-16（**新增 §4.8 追记：§4.6 那句「线程复用是禁区」的射程被收窄**——
 > 批 0 量出膨胀有两个成因（图持有会话是想要的；`_build_messages` 每轮**又**注入一遍是重复的），
 > 批 1 治读端（`turn_window`）、批 3 治输入契约（`narrator_messages`）。**原有章节编号与原文
 > 一字未动**：§4.6 与 §10.5 各只**追加**一句前向指针，§4.8 插在 §4.7 之后。裁决与触发条件

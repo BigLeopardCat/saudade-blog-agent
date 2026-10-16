@@ -7,6 +7,9 @@
                       什么？（零 LLM、零采样、可重复 ⇒ 这是最硬的一格证据）
     --crash-resume    崩在"一个节点中途"时，恢复会从哪儿重放？——**整节点重跑**，
                       所以写操作**会执行两次**（安全相关，见那里的注）
+      --guard         加这一档：真子进程崩在工具调用中途，**重放闸**把写压成一次
+                      （2× → 1×；不带 --guard 的那条就是它的内置反控）
+      --guard-unsafe  上一条的反控：占位不提交（池非 autocommit）⇒ 读数应回到两次
     --pg-stats        实验库里有什么（逐 thread 的 checkpoint 行数/字节、单行大小）
     --summarize       把 `CHECKPOINT_PROBE_OUT` 那份 JSONL 汇总成逐轮曲线
 
@@ -315,6 +318,161 @@ def cmd_crash_resume() -> int:
           "节点里跑 N 件写、且没有幂等键 ⇒ 接上持久化 saver 之后，"
           "「崩溃后重放导致写操作重复」从「结构上不可能」变成「可能」。")
     print("（对照组：今天没有 saver ⇒ 进程崩了整轮就没了，不会写两次。）")
+    return 0 if ok else 1
+
+
+# ── `--crash-resume --guard`：重放闸的读数（20261016 批 2）──────────────────
+# 上面那条 `--crash-resume` 演示的是"**没有账**会写两次"（今天的现状）。这一条演示
+# "有账只写一次"——所以上面那条 2× 的输出就是本条**内置的反控**，不必另造一个。
+#
+# 为什么**必须真起子进程**：进程内抛 `BaseException` 只能证明"节点没返回"，证明不了
+# "占位已经提交到库里"。而"占位已提交"正是这本账的**全部价值**——占位若随崩溃回滚，
+# 账就白做了，而且**表面上看不出来**（表在、代码在，只有崩溃那一刻的读数不对）。
+# 子进程用 `os._exit` 硬杀：不走 atexit、不走连接池收尾，与 OOM / 被 kill 同形。
+#
+# ⚠️ **两处 `stream` 都必须 `durability="sync"`**（`_guard_worker` 与恢复那一次）：
+# 缺省 `async` 下 checkpoint 由后台线程写、主循环不等待，硬杀时那一步可能没落盘 ⇒
+# 恢复时 `__start__` 重跑、`__pregel_task_id` 变了 ⇒ **账被绕过，读数回到 2×**。
+# 这不是探针的讲究，是**账的前提**（推导与实测对照见 `agent/replay_guard.py` 头注
+# 《前提》）。反过来说：把这两处改回 async，本探针就会红——那是这套判据的价值。
+#
+# 「库」= 一个盘上的文件（跨进程、跨崩溃都在），与 `execute_node` 里"调一个工具、
+# 它写了库"逐字同形。
+
+class _SideEffectTool:
+    """把"写库"换成一个**真的落到盘上**的副作用；`PROBE_CRASH` 在场就硬杀。"""
+
+    def invoke(self, args):
+        with open(os.environ["PROBE_SIDE"], "a", encoding="utf-8") as f:
+            f.write("写一件\n")
+            f.flush()
+        if os.environ.get("PROBE_CRASH"):
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(9)          # 硬杀：**不**走任何收尾（模拟 OOM / 被 kill / 部署重启）
+        return "写好了"
+
+
+def _guard_node(state, config):
+    """真节点：唯一那次写走**账**（与 `graph.execute_node` 里那一行同一个入口）。"""
+    from agent import replay_guard as RG
+    out = RG.invoke_guarded(_SideEffectTool(), {}, "set_article_status", 0, config)
+    return {"messages": [ToolMessage(content=str(out), tool_call_id="probe")]}
+
+
+def _guard_graph(saver):
+    g = StateGraph(G.AgentState)
+    g.add_node("execute", _guard_node)
+    g.add_edge(START, "execute")
+    g.add_edge("execute", END)
+    return g.compile(checkpointer=saver)
+
+
+class _UnsafeGuard:
+    """**反控**：占位写在一笔**不提交**的事务里（连接也不还池）。
+
+    进程被杀 ⇒ 连接断开 ⇒ 服务端回滚 ⇒ 占位没了 ⇒ 账白做、写被重放（读数回到 2）。
+    这一条钉的是 `agent/replay_guard_pg.py` 头注那条"池必须 autocommit"的契约：
+    没有它，"账只在进程活着的时候有效"这件事**表面上看不出来**。
+    """
+
+    def __init__(self, dsn: str):
+        import psycopg
+        self.conn = psycopg.connect(dsn, autocommit=False)
+
+    def claim(self, key, signature):
+        from agent import replay_guard as RG
+        k = (str(key[0]), str(key[1]), int(key[2]))
+        cur = self.conn.cursor()
+        cur.execute("SELECT 1 FROM agent_write_replay WHERE thread_id = %s AND "
+                    "task_id = %s AND spec_index = %s", k)
+        if cur.fetchone() is not None:
+            return RG.Claim(proceed=False, outcome=None)
+        cur.execute("INSERT INTO agent_write_replay (thread_id, task_id, spec_index, "
+                    "signature) VALUES (%s, %s, %s, %s)", (*k, signature))
+        return RG.Claim(proceed=True)      # ← **没有 commit**，这就是"不安全"的全部
+
+    def record(self, key, outcome):
+        pass
+
+
+def _guard_worker(thread: str, unsafe: bool) -> None:
+    """子进程体。**必须是模块级函数**：`spawn` 要 pickle 它（同 `_conc_worker`）。"""
+    from agent.checkpoint_arm import _dsn, make_guard, make_saver
+    from agent.replay_guard import REQUIRED_DURABILITY
+
+    os.environ["PROBE_CRASH"] = "1"
+    saver = make_saver()
+    guard = _UnsafeGuard(_dsn()) if unsafe else make_guard(saver.conn)
+    app = _guard_graph(saver)
+    list(app.stream(G.graph_input([]),
+                    {"configurable": {"thread_id": thread, "replay_guard": guard}},
+                    stream_mode=["updates"], durability=REQUIRED_DURABILITY))
+    os._exit(3)          # 到不了：工具里就硬杀了
+
+
+def _side_lines(path: str) -> list[str]:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return [ln for ln in f.read().splitlines() if ln.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def cmd_crash_resume_guard(unsafe: bool = False) -> int:
+    """`--crash-resume --guard`：真子进程崩在工具调用中途 ⇒ 账把重放压住（2× → 1×）。"""
+    import multiprocessing as mp
+    import tempfile
+
+    from agent.checkpoint_arm import make_guard, make_saver
+    from agent.replay_guard import REQUIRED_DURABILITY
+
+    saver = make_saver()
+    guard = make_guard(saver.conn)     # 先建账（setup 幂等建表），下面才删得动行
+    thread = "probe-crash-resume-guard" + ("-unsafe" if unsafe else "")
+    saver.delete_thread(thread)
+    with saver.conn.connection() as conn:
+        conn.execute("DELETE FROM agent_write_replay WHERE thread_id = %s", (thread,))
+
+    with tempfile.NamedTemporaryFile(prefix="probe-guard-", suffix=".txt",
+                                     delete=False) as fh:
+        side = fh.name
+    os.environ["PROBE_SIDE"] = side
+    os.environ.pop("PROBE_CRASH", None)
+
+    print(f"thread : {thread}")
+    print(f"「库」  : {side}（盘上的文件，跨进程、跨崩溃都在）")
+    print(f"账     : {'**不安全的**（占位不提交）—— 这是反控' if unsafe else 'postgres（autocommit）'}")
+    print()
+    ctx = mp.get_context("spawn")
+    p = ctx.Process(target=_guard_worker, args=(thread, unsafe))
+    p.start()
+    p.join()
+    after_crash = _side_lines(side)
+    print(f"第 1 次跑（真子进程 pid={p.pid}，退出码 {p.exitcode}）：崩在工具调用中途")
+    print(f"  此刻「库」里已有：{after_crash}")
+    print()
+    print("模拟重启后再来一次（输入 None = 从 checkpoint 恢复，**本进程**接着跑）：")
+    app = _guard_graph(saver)
+    list(app.stream(None, {"configurable": {"thread_id": thread, "replay_guard": guard}},
+                    stream_mode=["updates"], durability=REQUIRED_DURABILITY))
+    final = _side_lines(side)
+    print(f"  跑完后「库」里是：{final}")
+    print()
+    n = len(final)
+    want = 2 if unsafe else 1
+    ok = n == want
+    print(f"  [{'PASS' if ok else 'FAIL'}] 同一件写执行了 {n} 次（期望 {want}）："
+          + ("账把重放压住了" if want == 1 else "占位没提交 ⇒ 账白做（反控成立）"))
+    print()
+    if unsafe:
+        print("结论：**占位必须提交**。池不是 autocommit 时，占位随崩溃一起回滚 ⇒ "
+              "重放照旧发生，而表面上一切正常。契约在 replay_guard_pg.ensure_autocommit。")
+    else:
+        print("结论：真子进程被硬杀之后**占位仍在库里**，恢复那一轮的第 1 件走 in-doubt "
+              "（不重发、判 BLOCK）⇒ 这一格从「可能双写」变成「at-most-once」。"
+              "内置反控 = 上面那条不带 --guard 的 `--crash-resume`（2×）。")
+    os.unlink(side)
     return 0 if ok else 1
 
 
@@ -781,6 +939,10 @@ def main() -> int:
                     help="每轮注入 N 条历史 ⇒ 数它被 reducer 复制了几份")
     ap.add_argument("--crash-resume", action="store_true",
                     help="崩在节点中途 ⇒ 恢复整节点重跑 ⇒ 写操作执行两次")
+    ap.add_argument("--guard", action="store_true",
+                    help="配 --crash-resume：真子进程崩在工具调用中途，重放闸把写压成一次")
+    ap.add_argument("--guard-unsafe", action="store_true",
+                    help="上一条的反控：占位不提交（池非 autocommit）⇒ 读数应回到两次")
     ap.add_argument("--concurrency", type=int, default=0, metavar="N",
                     help="同一 thread 上 N 个进程并发写（生产 4 worker 那一格）")
     ap.add_argument("--pg-stats", action="store_true", help="实验库现状")
@@ -795,6 +957,8 @@ def main() -> int:
     if args.history_dup:
         return cmd_history_dup(args.history_dup)
     if args.crash_resume:
+        if args.guard or args.guard_unsafe:
+            return cmd_crash_resume_guard(unsafe=args.guard_unsafe)
         return cmd_crash_resume()
     if args.concurrency:
         return cmd_concurrency(args.concurrency)
