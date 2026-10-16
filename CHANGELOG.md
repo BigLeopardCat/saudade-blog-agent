@@ -80,6 +80,21 @@
   `intent_frames` 对 conv 不是 int 的一轮**静默返回空**（实测 `conv: null / frames: 0`）
   ⇒ 剩下的那件**不执行、不上卡、不登记**，无声消失（叙述倒是诚实的，会明说没办成）。
   同族写族混合作业（`mix2_*`/`mt3_*`）都带会话 id，新用例照此补齐。
+- **零成本观测接回自动通道：`eval/daily_metrics.py` 一行 + `healthcheck.sh` 第 9 项**
+  （`docs/eval-observability.md` §5.2）。20261012 起夜间回归整体挂起，而
+  `scripts/nightly_regression.sh` 把 L1/L2/L3 + `trace_alert` + `golden_draft` 装在
+  **同一个脚本**里 ⇒ 一停全停，生产健康只剩 healthcheck 每分钟那八项；`token_cost_report`
+  与 `trace_metrics` 这两件**零 LLM 成本**的读数装置从此没有任何自动通道。代价有现场：
+  20261016 planner 前缀缓存命中率 84.6% → 51.8%（当天改了 `_render_planner_prompt`，
+  改提示词 = 整段前缀失效 = 多花钱），**没有任何东西会报**。新的一行按天边沿触发
+  （一天最多一行，跑挂了当天留一条 WARN、不重试），内容是真实流量效率 + **写重复** +
+  按技能异常聚集 + planner 缓存命中率。**写重复是新判据**：一轮里同一个 (工具, 参数)
+  成功执行 ≥2 次——实测生产 3 次候选里 **1 次为真**（`create_dashboard_todo` 在确认回调
+  那条路上被连执行 3 次、三条都报"加好了"），另两次是尺子不对（一次 `consent_required`
+  从未执行、一次 `changed=False` 已被 `_trim_noop_specs` 拦住）⇒ 四条边由
+  `tests/test_daily_metrics.py` 锁住（含一条反控）。
+  **写路径没有"同一件已办过"的守卫**（`_trim_done_reads` 只读、`_trim_noop_specs` 只认
+  零净改动）——如实登记，本批**只量不改**。
 
 ## 20261015
 
