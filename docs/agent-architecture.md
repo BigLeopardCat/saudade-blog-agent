@@ -77,6 +77,7 @@ flowchart TB
 │   ├── decisions.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取/特效切换/导航/屏幕显示）+ 动作意图扫描（intent_hints 原料）+ 检索候选裁决（标题相关性）+ 终局计划（轮次上限/复盘终局/拦截收尾）——被 graph.py 节点调用，反向外移函数按原名 re-export
 │   ├── context.py             # 上下文组装（纯函数叶子层）：消息文本提取（多模态兼容）/page_ctx/页面操作指南（GUESTBOOK_GUIDE、SITE_GUIDE）/工具帧摘要/checker 回执摘要
 │   ├── plan_codec.py          # ★ 计划文本契约的编解码（20261017 从 graph.py 切出，那边按原名 re-export）：plan_encode 写端（唯一入口 plan_state，一次出两态）+ parse_plan 读端（按 `KEY[:=]` 搜索，不依赖行序与分隔符）；TOOLS 行的分隔符不许长在值里
+│   ├── tool_specs.py          # ★ 执行清单（TOOLS 行）条目的解析与去重裁剪（20261017 第二刀，同样按原名 re-export）：_tool_args 解析 + _spec_signature 指纹 + _search_retry_kind/_already_done_writes 判重 + _trim_done_reads/_trim_noop_specs/_plan_trims_to_empty 裁剪。**出边为零**（不 import graph）才搬得动
 │   ├── agent.py               # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
 │   ├── checkpoint.py          # build_checkpointer：checkpointer 的接线点（空 DSN 恒返回 None，见 §4.6）
 │   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，身份与权限地基（docs/identity-and-permissions.md）

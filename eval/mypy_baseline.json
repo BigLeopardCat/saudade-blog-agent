@@ -11,15 +11,15 @@
     "utils",
     "server.py"
   ],
-  "total": 203,
-  "files_checked": 49,
+  "total": 201,
+  "files_checked": 52,
   "by_file": {
     "agent/action_text.py": 1,
     "agent/adminops.py": 19,
     "agent/authz.py": 3,
     "agent/context.py": 2,
     "agent/entities.py": 1,
-    "agent/graph.py": 98,
+    "agent/graph.py": 96,
     "agent/hostinfo.py": 2,
     "agent/planner_llm.py": 7,
     "agent/react_line.py": 2,
