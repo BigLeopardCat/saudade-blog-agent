@@ -98,7 +98,8 @@ function calling（`tool_choice=auto` / 强制指定 / 函数侧 `strict`），�
 1. **`TODO:` 行有写无读。** 提示词**主动教模型写它**（「多步链中间轮可另加一行：
    `TODO: <步骤1> → <步骤2>`」，`agent/graph.py`），
    `plan_encode` 写它（`agent/graph.py`）、`parse_plan` 读进
-   `plan_obj["todo"]`、trace 记一条——**然后没有任何消费者**。planner 提示词的
+   `plan_obj["todo"]`、trace 记一条——**然后没有任何消费者**（**已了结**：这一行
+   20261016 整行退休，取证与反向锁见 §6.6 末尾那条「落地状态」）。planner 提示词的
    14 个槽位（skills_context / tools_desc / page_ctx / round_info / intent_hints /
    doc_anchors / recent_context / short_reply_hint / tool_results / ref_hints /
    reflector_feedback / correction / max_rounds / user_msg）里**没有"上一轮计划/剩余步骤"**。
@@ -553,6 +554,17 @@ submitted → running → succeeded / failed / cancelled
 （`agent/skills.py` 那层薄壳就是为 `param_unknown` 这条"planner 写了、没人读"
 补的），并且已经有了对账口径（`eval/corpus_invariants.py` 的 **I5 `param_unread`**）。
 新主线里这条改由任务行承担，**必须同批配上一条扫它的不变量**，否则就是第三遍。
+
+**落地状态（20261016 补）**：这条纪律当年只写下了、没有执行——`TODO:` 行一直留到 20261016
+才**整行退休**（写端 `plan_encode` / 读端 `_parse_todo`＋`parse_plan` / 提示词契约三处同批）。
+退休的取证是全量 trace 实测，不是"看着像没人用"：**1194 份生产 trace 里 `planner.todo` 只
+出现过 7 个请求 / 10 次**，而它的名义消费者 reflector 跑过的请求是 51 个，**两者交集为 0**；
+在场的那几次里还常是垃圾（模型照抄提示词里的 `<步骤1> → <步骤2>` 占位符，`_parse_todo` 把
+模板与自述一起切进列表）。"还剩什么没做完"这个能力**早已由 §6.7 的 `agent_task` 表承担**
+（`agent/tasks.py` 自己的头注就写着这一行"有写无读"）⇒ 两条出路（补消费者 / 删掉）里选了
+删掉——补一个扫描不变量只是把同一件事记第二遍。反向锁落在 `tests/test_skills.py` 的
+`test_todo_line_retired`（写端塞了 `todo` 也不产出、读端不再返回那一格）与
+`tests/test_native_wiring.py` 的契约源码锁。
 
 ### 6.7 落地形态（20260927，批 D）
 

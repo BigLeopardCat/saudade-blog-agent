@@ -327,9 +327,28 @@ _ctl("某侧删掉一个**只有它有**的词 ⇒ 差集变小、却让台账�
 print("\n⑤ 扫一遍：不许有**没登记**的站点也写这套词")
 
 # 这些是**别的**协议族的帧标签，与本词表同形（全大写 + 冒号）但不是命令前缀：
-# `TOOLS:`/`NOTE:`/`REPLY:`/`TODO:` 是内部计划文本协议（`plan_encode`/`parse_plan`，
+# `TOOLS:`/`NOTE:`/`REPLY:` 是内部计划文本协议（`plan_encode`/`parse_plan`，
 # 见 `agent/graph.py` 那段注释），`ISSUE:`/`DECIDE:` 是 reflector 的两行契约。
-OTHER_TAG_FAMILIES = {"TOOLS", "NOTE", "REPLY", "TODO", "ISSUE", "DECIDE"}
+OTHER_TAG_FAMILIES = {"TOOLS", "NOTE", "REPLY", "ISSUE", "DECIDE"}
+
+# **已退休**的协议标签（20261016）：`TODO:` 那一行整行退休（写端 `plan_encode` / 读端
+# `_parse_todo`＋`parse_plan` / 提示词契约三处同批，取证见 `agent/graph.py::plan_encode`）。
+# 它今天只出现在**叙述它为什么退休**的注释里，但本扫描读的是**字面量**（`` `TODO:` `` 这种
+# 反引号引用的写法照样命中）⇒ 把它单列一张表，而不是塞回上面那张：
+#   · 塞回去 = 让"退休"这件事在唯一扫得到它的地方**看不出来**（过期条目没销账）；
+#   · 直接删掉 = 逼着退休说明不许点名那个标签，而"能按名字 grep 到"正是它存在的理由。
+# 反向锁在别处（`tests/test_skills.py::test_todo_line_retired`：塞 `todo` 键也不产出该行、
+# `parse_plan` 也不返回那一格）——**本表不是那条锁**，它只负责让扫描不被叙述性引用打红。
+RETIRED_TAG_FAMILIES = {"TODO"}
+
+
+def _ignored_tag(word: str) -> bool:
+    """这个词是不是"别的协议族 / 已退休协议"的标签（本词表不管它们）。
+
+    两处消费点（`_unregistered` 与逐词那条）走**同一个**函数：同一判据写两遍就是两个
+    漂移源——加了退休表却只改一处，另一处会照旧红。
+    """
+    return word in OTHER_TAG_FAMILIES or word in RETIRED_TAG_FAMILIES
 
 _SWEEP_FILES = ["server.py", "agent/graph.py", "agent/prompts.py", "agent/decisions.py",
                 "agent/reports.py", "eval/run_golden.py", "eval/corpus_invariants.py",
@@ -363,7 +382,7 @@ def _covered(word: str) -> bool:
 
 VARIANT_BASES = {w for ws in sites.values() for w, has_v in ws.items() if has_v}
 _all_words = {w for ws in _found.values() for w in ws}
-_unregistered = {rel: sorted(w for w in ws if not _covered(w) and w not in OTHER_TAG_FAMILIES)
+_unregistered = {rel: sorted(w for w in ws if not _covered(w) and not _ignored_tag(w))
                  for rel, ws in _found.items()}
 _unregistered = {k: v for k, v in _unregistered.items() if v}
 check("没有哪个文件冒出**词表之外**的命令前缀字面量（冒出来就该有人看一眼）",
@@ -377,7 +396,7 @@ check("  变体族（`…_EFFECT:`）算被覆盖，不算新词",
       "、".join(sorted(w for w in _all_words if w not in UNIVERSE)))
 for _w in sorted(_all_words - set(UNIVERSE)):
     check(f"  非词表字面量 {_w}: ⇒ 属于别的协议族（否则上面那条该红）",
-          _covered(_w) or _w in OTHER_TAG_FAMILIES, "既不是变体也不在忽略名单里")
+          _covered(_w) or _ignored_tag(_w), "既不是变体也不在忽略名单里")
 check("  （记录）`tests/test_reports.py` 的手抄词表仍落在词表内 —— 它**没必要**再抄，"
       "但那要连 ⑦ 的判据形状一起改，不在本站射程内",
       all(_covered(w) for w in _found.get("tests/test_reports.py", set())),

@@ -436,10 +436,8 @@ class AgentState(TypedDict):
 #   第 3 行: TOOLS: <实例化后的工具调用序列>（chat/收尾轮为"（无）"）
 #   第 4 行: NOTE: <业务注记>（导航目标下线/不存在/已按决策执行等）
 #   第 5 行: REPLY: <技能回复契约>（model 叙述时遵守、gate 不做文本级对照）
-#   第 6 行: TODO: <剩余步骤列表>（可选，多步链中间轮声明：后续依赖步骤用 →
-#            分隔。20260904 起：TODO 是"声明"不是"执行指令"——execute 只执行
-#            TOOLS 行，TODO 供 reflector 判链依赖/checker 语境/trace 留痕，
-#            不进执行路径；依赖步骤的参数只能等上轮工具返回后填，不预编）
+#   （曾有的第 6 行 `TODO:` 20261016 整行退休：读端一个都不剩了，理由与取证
+#     写在下面 `plan_encode` 那一处）
 # 导航映射表在 skills.py（页面别名→路径，"物联网平台→/device-console/"是系统数据，
 # 不是模型猜测）——planner 跑题的结构性根因（不知道工具语义）由此消除。
 # TOOLS 行是"执行清单"不是"允许名单"——execute 节点把它当命令逐条执行，
@@ -1362,8 +1360,10 @@ def _write_command_nudge(plan_obj: dict, user_msg, has_frames: bool,
 # （`extract_plan_fields` / `_PLANNER_OUTPUT_RE` / `_SKILL_QUOTED_RES` / `_parse_params`
 # / `_plan_body_of`）——20261004 随文本契约档一起删除。它与下面 `parse_plan` 读的
 # **内部计划文本协议**是两件事：那套协议（`SKILL=` / `PARAMS=` / `TOOLS:` / `NOTE:` /
-# `REPLY:` / `TODO:`，由 `plan_encode` 写、`parse_plan` 读）由 execute/gate 消费，
+# `REPLY:`，由 `plan_encode` 写、`parse_plan` 读）由 execute/gate 消费，
 # **仍在用**；删掉的只是"模型自己写契约行"那条通道。
+# （协议里那个可选的 `TODO:` 行 20261016 也删了——它不是"模型写契约行"那条通道的
+#   一部分，是**系统自己写、再自己读回来**的一格，读端为零，见 `plan_encode`。）
 
 
 def _loads_tolerant(text: str):
@@ -1440,10 +1440,23 @@ def plan_encode(plan_obj: dict) -> str:
         f"TOOLS: {tools}",
         f"NOTE: {plan_obj.get('note') or '（无）'}",
     ]
-    # TODO 行是可选第 6 行：插在 REPLY 之前（REPLY 的 DOTALL 解析假设它是末行）
-    todo = plan_obj.get("todo") or []
-    if todo:
-        lines.append(f"TODO: {' → '.join(todo)}")
+    # ── 第 6 行 `TODO:` 于 20261016 整行退休（写端 + 读端 + 提示词契约同批）──
+    # 它当年是"多步链的中间轮声明后续依赖步骤"的一格。退休的取证是三件事叠起来：
+    #   ① **读端为零**。全仓只被 `plan_encode` 自己回渲染一遍，再由 `parse_plan`
+    #      读回同一个列表（`plan_obj["todo"]`）——一个闭环，没有消费方；
+    #   ② **它的名义消费者早已被换掉**。`agent/tasks.py`（20260927 批 D）就是来补
+    #      "还剩什么没做完"这个缺口的，那个模块自己的头注写着这一行"只有 trace 消费
+    #      （有写无读）"；`eval/corpus_invariants.py` 的 I6 则把它当成"模型写了没人读"
+    #      的**反面教材**引用。当初注释里写的"供 reflector 判链依赖"，实测不成立：
+    #      全量 1194 份 trace 里 `planner.todo` 只出现过 **7 个请求 / 10 次**，而
+    #      reflector 跑过的请求是 51 个，**两者交集为 0**——reflector 从没收到过它；
+    #   ③ **它在场时还常常是垃圾**。`_parse_todo` 吃的是模型正文，而模型会照抄提示词
+    #      里的占位符模板 ⇒ 生产 trace 里真出现过
+    #      `todo=['<步骤1', '<步骤2', '`". So I\'ll write TODO: …']` 这种把模板和
+    #      自述一起切进来的结果。`native-toolcalls-mainline.md` §6.6 的纪律是
+    #      "必须有消费者，否则不许写"——两条出路里选了删掉这条（另一条是补一个
+    #      扫描不变量），因为消费者已经在 `agent_task` 表上了，再补一个只是把
+    #      同一件事记第二遍。
     lines.append(f"REPLY: {plan_obj['reply']}")
     return "\n".join(lines)
 
@@ -1475,27 +1488,10 @@ def plan_state(plan_obj: dict) -> dict:
     return {"plan": plan_encode(plan_obj), "plan_obj": plan_obj}
 
 
-def _parse_todo(raw: str) -> list:
-    """提取 TODO 行剩余步骤列表（可选第 6 行契约；planner_node 与 parse_plan 共用）。
-
-    容错：按 [→>] 拆段、去行首序号、剥空白与句末标点，空段/“（无）/无/暂无”
-    不计。多步链的中间轮才有内容；单步/收尾轮返回空列表。
-    """
-    tm = re.search(r"TODO\s*[:=]\s*(.+)", raw or "", re.IGNORECASE)
-    if not tm:
-        return []
-    out = []
-    for s in re.split(r"[→>]", tm.group(1)):
-        s = re.sub(r"^\s*\d+[.)、]\s*", "", s).strip().strip("；;，,。")
-        if s and s not in ("（无）", "无", "暂无"):
-            out.append(s)
-    return out
-
-
 def parse_plan(raw: str) -> dict:
     """解析 plan 字段（契约的读端）。容错：解析失败 → 按 chat 兜底（宁可少干活，不硬猜）。
 
-    返回 {"skill", "params", "tools", "note", "reply", "todo", "chat", "status"}。
+    返回 {"skill", "params", "tools", "note", "reply", "chat", "status"}。
     `status` 见 `PLAN_STATUS_VALUES`（批 3）：系统自己写的计划一定带 `STATUS=` 行，
     缺了才走下面那段兼容派生（判据别依赖派生，它只是给旧文本留的路）。
     容错原则：所有"LLM 输出 → 程序消费"的边界都要能优雅降级——LLM 不是
@@ -1523,7 +1519,6 @@ def parse_plan(raw: str) -> dict:
     note = nm.group(1).strip() if nm else ""
     rm = re.search(r"REPLY\s*[:=]\s*(.+)", raw or "", re.IGNORECASE | re.DOTALL)
     reply = rm.group(1).strip() if rm else ""
-    todo = _parse_todo(raw)
     sm = re.search(r"STATUS\s*[:=]\s*(\w+)", raw or "", re.IGNORECASE)
     status = sm.group(1).strip().lower() if sm else ""
     if status not in PLAN_STATUS_VALUES:
@@ -1559,7 +1554,6 @@ def parse_plan(raw: str) -> dict:
         "tools": tools,
         "note": note,
         "reply": reply,
-        "todo": todo,
         "chat": (skill in SKILL_MAP and SKILL_MAP[skill].chat) or skill == "chat",
         "status": status,
     }
@@ -6300,7 +6294,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
     upd = _finalize_unaccounted(c.plan_obj, c.rounds, c.has_frames)
     if upd is not None:
         return upd
-    c.plan_obj, upd = _finalize_dedupe(c.plan_obj, c.state, c.user_msg, c.raw,
+    c.plan_obj, upd = _finalize_dedupe(c.plan_obj, c.state, c.user_msg,
                                        c.rounds, c.has_frames)
     if upd is not None:
         return upd
@@ -8087,9 +8081,12 @@ def _finalize_unaccounted(plan_obj: dict, rounds: int, has_frames: bool) -> "dic
         return _plan_update(plan_obj, rounds)
 
 
-def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str, raw: str,
+def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str,
                      rounds: int, has_frames: bool) -> "tuple[dict, dict | None]":
-    """字面路径修正 + TODO 提取 + 八条去重/拦截守卫。
+    """字面路径修正 + 八条去重/拦截守卫。
+
+    （`raw` 那个入参 20261016 随 TODO 行的退休一起去掉了——它在本函数里唯一的
+      用途就是喂 `_parse_todo`。）
 
     返回 `(plan_obj, update)`：任一条守卫命中 ⇒ `update` 非空（终局）；全部落空 ⇒
     `update=None`，`plan_obj` 是**可能已被就地修正**的那一份（字面路径修正会重建它），
@@ -8108,14 +8105,9 @@ def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str, raw: str,
         plan_obj = instantiate_plan("navigate", {"target": lit.group(0)})
         plan_obj["params"] = {"target": lit.group(0)}
 
-    # TODO 剩余步骤声明提取（20260904 最小契约）：planner LLM 可选输出行，多步
-    # 依赖链的中间轮用它声明"本轮之后还要做什么"——给后续轮次/reflector 看，
-    # 不是执行指令（execute 只执行 TOOLS 行）。仅 LLM 决策轮有 raw；快道/拦截
-    # 路径的计划是确定性 dict，不带 todo → plan_encode 不写 TODO 行。
-    todo = _parse_todo(raw)
-    if todo:
-        plan_obj["todo"] = todo
-        record("planner", "todo", todo=todo, round=rounds)
+    # （这里曾是 TODO 剩余步骤声明的提取点：`_parse_todo(raw)` → `plan_obj["todo"]`
+    #   → `record("planner","todo")`。20261016 整行退休，取证与理由见 `plan_encode`
+    #   那一处；本函数的 `raw` 入参同批去掉。）
 
     # 动作重复执行防护（确定性）：非首轮（已有帧）planner 若仍规划了动作技能
     # （navigate/effect/darkmode/device_display/device_query/read_article）且其
