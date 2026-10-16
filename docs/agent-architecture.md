@@ -962,9 +962,12 @@ flowchart TB
   选 navigate 且用户消息含 / 开头路径时，target 强制用字面路径（qwen 曾把 /iot 推断成"物联网平台"
   做替身跳转，golden nav_nonexistent 实证）。轮次上限 `MAX_PLAN_ROUNDS=4`，超限 `_terminal_plan`
   强制收尾（基于已有帧如实作答，不存在无限追问）；planner LLM 异常（API 抖动/超时）→ 收尾兜底
-  不炸对话；LLM 调用 >30s 打 WARN（20260830 慢调用监控约定）。20260904 追加：多步依赖链轮次
-  在 REPLY 行前追加 `TODO: <剩余步骤>` 声明行（如"读当前文章 → 跳留言板"）——只描述后续依赖链、
-  不重复本轮步骤、依赖参数（article_id 等）只能等上轮工具返回后填绝不预先编造；planner 提示词注入
+  不炸对话；LLM 调用 >30s 打 WARN（20260830 慢调用监控约定）。20260904 追加的「多步依赖链轮次
+  在 REPLY 行前追加 `TODO: <剩余步骤>` 声明行（如"读当前文章 → 跳留言板"）」**20261016 整行
+  退休**（写端/读端/提示词契约三处同批；理由与全量 trace 取证见
+  `docs/native-toolcalls-mainline.md` §6.6）。它当初要立的规矩**原样留着**，只是不再靠那一行
+  声明：后续步骤由下一轮看着帧决策、依赖参数（article_id 等）只能等上轮工具返回后填绝不预先
+  编造；planner 提示词注入
   `{reflector_feedback}` 复盘建议占位（受阻重复打回时由 reflector 给出，见下），有复盘区块仍失败 →
   按建议收尾或换路径，不再第三次自试。
 - execute = 确定性执行节点（graph.py `execute_node`，取代旧 tools_node）：TOOLS 行 spec
