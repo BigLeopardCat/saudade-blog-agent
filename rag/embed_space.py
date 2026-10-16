@@ -17,9 +17,15 @@
 ## 解析规则（与 ``Settings.embedding_configured`` 同一口径，有测试锁住不许漂）
 
 ``EMBEDDING_MODEL`` 与 ``EMBEDDING_API_KEY`` 都非空（且 key 不是占位串）⇒ ``source="embedding"``；
-否则回落 ``source="qwen"``（``text-embedding-v4`` / 1024 维 / 批 10 + ``QWEN_*``）。
+否则回落 ``source="qwen"``（``FALLBACK_MODEL`` / 1024 维 / 批 10 + ``QWEN_*``）。
 **不回落 ``active_llm_*``**：跟着对话 provider 走时，切到一个没有 embeddings 端点的
 provider 就会哑掉，而且哑得没有声音（20260927 的教训）。
+
+⚠️ 这里**有两个模型名常量，不是一个**（20261016 拆开）：``FALLBACK_MODEL`` 是"回落档
+现在该用哪个"（会随平台换代），``FLAT_CACHE_MODEL`` 是"盘上那些没有空间签名的老缓存
+当年是谁建的"（历史事实，永不改）。**别把两者合并**——合并的那一刻
+``legacy_cache_ok()`` 就会把老模型的向量认成新模型建的，两代向量混进同一张图，
+而图不报错、只是默默变得不对（见该函数头注）。
 
 ## 两处超时不是一个数（别合并）
 
@@ -35,8 +41,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping
 
-# 图谱这条线在"没配 EMBEDDING_*"时回落的旧配置（20261007 之前是它唯一的配置）。
-LEGACY_MODEL = "text-embedding-v4"
+# 回落档（`source="qwen"`）用哪个模型。**这是"现在该用哪个"，会随平台换代**——
+# 20261016 由 `text-embedding-v4` 换成它，与 `config/settings.py::embedding_model`
+# 的缺省值对齐（同一个问题在本仓只该有一个答案，否则"配了 EMBEDDING_*"与"只配
+# QWEN_*"两个部署会各自解出不同的空间，而谁都没写错过一个字）。
+#
+# 换名的依据是 20261016 实测的两个端点模型表（`GET {base}/models`，两个 workspace
+# 各 176 个模型）：`text-embedding-v4` **不是坏了、是分家**——`QWEN_BASE_URL` 那个
+# 端点照旧 200，`EMBEDDING_BASE_URL` 那个已经 403 `AccessDenied.Unpurchased`；
+# 两个端点都提供 `qwen3.7-text-embedding`（dim 1024、单请求 10 条 200）。
+# ⇒ 旧值并没有"死"，但它是**上一代**，而这个账号已经在往下掉它了。
+#
+# 代价说清楚：回落档建的老产物/老缓存要**重建一次**。这是**响亮**的（`space_mismatch`
+# 一条 WARNING + 前端退回本地关键词匹配），不是静默的——所以可以换。
+FALLBACK_MODEL = "qwen3.7-text-embedding"
+# 旧格式（无空间签名）缓存文件**唯一的出处**：`text-embedding-v4` + `QWEN_BASE_URL`。
+# ⚠️ **历史事实，不是缺省值**：它记的是"盘上那些老文件是谁建的"，所以**永远不许**
+# 跟着 `FALLBACK_MODEL` 走（20261007 引入空间签名之前的产物全都是它建的）。
+FLAT_CACHE_MODEL = "text-embedding-v4"
 LEGACY_DIM = 1024
 LEGACY_BATCH = 10              # 百炼 text-embedding 单请求 input 上限 10 条
 # `EMBEDDING_BASE_URL` 留空 = SDK 默认端点（与 openai SDK 的语义一致）。
@@ -121,7 +143,7 @@ def resolve(env: Mapping[str, str]) -> Space:
             batch=_int(env.get("EMBEDDING_BATCH_SIZE"), LEGACY_BATCH, minimum=1),
         )
     return Space(
-        source="qwen", model=LEGACY_MODEL,
+        source="qwen", model=FALLBACK_MODEL,
         base_url=_norm(_clean(env.get("QWEN_BASE_URL"))),
         api_key=_clean(env.get("QWEN_API_KEY")),
         dim=LEGACY_DIM, batch=LEGACY_BATCH,
@@ -184,16 +206,23 @@ def signature(space: Space) -> dict:
 def legacy_cache_ok(space: Space, env: Mapping[str, str]) -> bool:
     """旧格式（没有空间签名）的缓存文件能不能认作 ``space`` 的。
 
-    只此一条通路：旧文件唯一的可能出处就是那条老路（``text-embedding-v4`` +
-    ``QWEN_BASE_URL``），所以要么这次解出来的就是它，要么整份作废重嵌。
+    只此一条通路：旧文件唯一的可能出处就是那条老路（``FLAT_CACHE_MODEL`` +
+    ``QWEN_BASE_URL``），所以要么这次解出来的**模型名与端点都对得上**，要么整份作废重嵌。
     差一个字就不认——混两代向量是建图里最不该出现的静默失效。
+
+    **模型名那一格两个来源都要判**（20261016）。从前是 ``source == "qwen"`` 直接放行，
+    理由是"回落档解出来的就是那条老路"——那句话在回落模型名换成 ``FALLBACK_MODEL``
+    之后**不再成立**：老缓存是 ``FLAT_CACHE_MODEL`` 建的，而回落档现在是新模型，
+    照旧按 source 放行就会把老向量认成新模型建的、混进同一张图。
+    端点那一格对回落档是自动成立的（``resolve()`` 就是从 ``QWEN_BASE_URL`` 取的），
+    所以合并成一条判据不丢任何信息。今天还认的只剩一格：**显式配了
+    ``EMBEDDING_MODEL=FLAT_CACHE_MODEL`` + ``EMBEDDING_BASE_URL=QWEN_BASE_URL``**
+    ——即"从回落档迁到显式配置、但一个字没改空间"的那种部署。
     """
-    if space.source == "qwen":
-        return bool(_norm(space.base_url))
-    return (space.model == LEGACY_MODEL
-            and space.dim in (0, LEGACY_DIM)
-            and bool(_norm(space.base_url))
-            and _norm(space.base_url) == _norm(_clean(env.get("QWEN_BASE_URL"))))
+    if space.model != FLAT_CACHE_MODEL or space.dim not in (0, LEGACY_DIM):
+        return False
+    base = _norm(space.base_url)
+    return bool(base) and base == _norm(_clean(env.get("QWEN_BASE_URL")))
 
 
 def _is_vec(value) -> bool:
