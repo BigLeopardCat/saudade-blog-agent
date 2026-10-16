@@ -778,7 +778,14 @@ NARRATOR_DISCIPLINE = """\
 [执行计划]（系统决策结果——本轮执行了什么、按什么契约回复）：
 """
 
-_EXECUTOR_PROMPT = _EXECUTOR_HEAD + NARRATOR_DISCIPLINE + """\
+# 尾段（20261016 从 `_EXECUTOR_PROMPT` 里切出来，**逐字节不变**）：它是**每轮都变**
+# 的那一半——计划文本、工具帧、执行回执、动作事实块、页面上下文。切开的理由不是可读性，
+# 是**前缀缓存**：命中率的分母与分子都按"最长公共前缀"算，而这一段从 `{plan}` 起就
+# 每轮不同 ⇒ 它只要还在系统提示词里，**它后面的一切（包括整整 20 条对话历史）就一条都
+# 进不了缓存**。实测（生产 trace 20260927–20261016，486 次 narrator 调用）：稳定头
+# 8304 字 ≈ 5033 tok，而每次命中的中位数恒为 5248 tok ⇒ 命中的**恰好只有稳定头**。
+# narrator 现在把这一段**放到对话历史后面**（装配见 `graph.model_node`）。
+_EXECUTOR_TAIL = """\
 {plan}
 
 计划首行的 `STATUS=` 是**系统填的**本轮处境（20260926 批 3），照它决定口径。
@@ -813,3 +820,9 @@ _EXECUTOR_PROMPT = _EXECUTOR_HEAD + NARRATOR_DISCIPLINE + """\
 情绪表达素材（20260904：真正的情绪表达时才引用，不堆砌不机械）：
 {sticker_guide}
 """
+
+# 三段拼接 = 拆分前的那个字符串，**一个字节都没动**（`tests/test_react_narrator_assets.py`
+# 拿拆之前算出的 sha256 钉住它；第二条臂 `agent/react_arm.py` 也是按这个名字取的）。
+# ⇒ 这次拆分对**臂**与**任何按 `_EXECUTOR_PROMPT` 取用的人**都是零变化；
+# 变的是 `graph.model_node` 怎么**装配**这三段（头留在系统提示词、尾挪到历史之后）。
+_EXECUTOR_PROMPT = _EXECUTOR_HEAD + NARRATOR_DISCIPLINE + _EXECUTOR_TAIL

@@ -234,9 +234,18 @@ check("纯函数：量一遍不改入参（形状也不改）",
 _SRC2 = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("接线：narrator 出站前真的量了一遍（这一句被删掉，绊线就成了装饰）",
       "_wire_bad = strict_wire_issues(_msgs)" in _SRC2)
-check("  量在 `with_tool_call_pairs` **之后**（量的是真正发出去的那份）",
-      _SRC2.index("_msgs = [system] + with_tool_call_pairs(state[\"messages\"])")
-      < _SRC2.index("_wire_bad = strict_wire_issues(_msgs)"))
+# 20261016：装配从 `[system] + with_tool_call_pairs(state["messages"])` 变成
+# `[_sys_head] + _narrator_wire(state["messages"]) + [_sys_tail]`（前缀缓存，见
+# `tests/test_narrator_cache_layout.py`）。**判据不变**——"补形状在量之前"——所以这里
+# 跟着走的是**那条链路**而不是某个字面：`_msgs` 由 `_narrator_wire` 出，补形状在它里面。
+_MSGS_LINE = next(ln for ln in _SRC2.splitlines() if ln.lstrip().startswith("_msgs = "))
+check("  `_msgs` 经 `_narrator_wire` 装配（补形状就在那条链路上）",
+      '_narrator_wire(state["messages"])' in _MSGS_LINE, _MSGS_LINE.strip())
+_WIRE_FN = _SRC2[_SRC2.index("def _narrator_wire"):_SRC2.index("def model_node")]
+check("  `_narrator_wire` 里真的调了 `with_tool_call_pairs`",
+      "with_tool_call_pairs(messages)" in _WIRE_FN)
+check("  量在装配**之后**（量的是真正发出去的那份）",
+      _SRC2.index(_MSGS_LINE) < _SRC2.index("_wire_bad = strict_wire_issues(_msgs)"))
 check("  只报不修：这一层不许出现对 id 的就地改写",
       "wire_illegal" in _SRC2 and "_frame_id(_msgs" not in _SRC2)
 
