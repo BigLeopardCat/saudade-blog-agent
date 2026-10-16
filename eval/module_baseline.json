@@ -8,15 +8,15 @@
     "top_defs": 37
   },
   "agent/context.py": {
-    "lines": 1474,
-    "top_defs": 39
+    "lines": 1712,
+    "top_defs": 46
   },
   "agent/graph.py": {
-    "lines": 13513,
-    "top_defs": 246
+    "lines": 13682,
+    "top_defs": 250
   },
   "agent/prompts.py": {
-    "lines": 828,
+    "lines": 833,
     "top_defs": 1
   },
   "agent/react_arm.py": {
@@ -35,20 +35,24 @@
     "lines": 901,
     "top_defs": 30
   },
+  "eval/experiments/checkpoint_probe.py": {
+    "lines": 1591,
+    "top_defs": 35
+  },
   "eval/probe_admin_write.py": {
     "lines": 2854,
     "top_defs": 82
   },
   "eval/run_golden.py": {
-    "lines": 3630,
-    "top_defs": 50
+    "lines": 3677,
+    "top_defs": 51
   },
   "scripts/build_word_graph.py": {
     "lines": 1183,
     "top_defs": 36
   },
   "server.py": {
-    "lines": 2547,
+    "lines": 2549,
     "top_defs": 50
   },
   "tests/judge_offline_test.py": {

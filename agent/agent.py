@@ -19,10 +19,12 @@ from .graph import build_graph
 logger = logging.getLogger(__name__)
 
 
-def create_agent(**llm_kwargs):
+def create_agent(checkpointer=None, **llm_kwargs):
     """Build the hand-written planner/execute/model/gate graph.
 
     Args:
+        checkpointer: 缺省 `None` = 现状（无持久化）。实验臂传 saver 进来，见
+            `agent/graph.py::build_graph` 与 `agent/checkpoint_arm.py`。
         **llm_kwargs: 保留以兼容旧签名——图内部按节点自行配置 LLM
             （planner 快思考/廉价，model 全量对话，execute 文案创作小模型），
             无需外部覆盖。
@@ -30,6 +32,6 @@ def create_agent(**llm_kwargs):
     Returns:
         CompiledStateGraph: Ready-to-use agent graph (LangGraph 1.x).
     """
-    graph = build_graph()
+    graph = build_graph(checkpointer=checkpointer)
     logger.info("Hand-written agent graph ready (planner/execute/model/gate)")
     return graph

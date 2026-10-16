@@ -98,9 +98,14 @@ VISIBLE_NODE = "model"
 # **批 2 起这张表的判据换了个方向**：臂拿的是真 state，所以"喂没喂"不再是问题——
 # 问题是"这张表里有没有 `AgentState` **没声明**的键"（未声明 ⇒ 被 langgraph 静默丢掉，
 # 本仓为此付过 13 次代价）。判据 = `GATE_STATE_KEYS ⊆ AgentState.__annotations__`。
+# ⚠️ `turn_start` 是 20261016 合并时被这条锁**当场抓出来**的一格：本支的读端窗口让
+# `gate_node` 的闭包多读了它（`_turn` / `_narrator_msgs` 用它把"本轮"从整表里切出来），
+# 而主线那份声明写在这之前。**两边各自都对、合起来才错**——正是这条双向锁存在的理由。
+# 它也不是"多喂一格无害"：缺席时 `state.get` 落到 `-1` ⇒ 窗口恒等于整表 ⇒ 线程一复用，
+# 闸门看到的就是整条会话（批 1 治的正是这一格）。
 GATE_STATE_KEYS = frozenset({
     "blocked", "blocked_seen", "confirm_grant", "gate_replan", "ledger", "messages",
-    "noop_specs", "pending_confirm", "plan", "receipts", "task_frames",
+    "noop_specs", "pending_confirm", "plan", "receipts", "task_frames", "turn_start",
 })
 
 # ── `_confirm_popup` 的读侧闭包（含它调用的辅助函数）────────────────────────
@@ -124,7 +129,7 @@ GATE_STATE_KEYS = frozenset({
 # 弹卡拿到的是真 state，那一格由结构保证在场。
 POPUP_STATE_KEYS = frozenset({
     "blocked", "blocked_seen", "confirm_grant", "executed", "ledger", "messages",
-    "noop_specs", "pending_confirm", "plan", "plan_obj", "receipts",
+    "noop_specs", "pending_confirm", "plan", "plan_obj", "receipts", "turn_start",
 })
 
 
