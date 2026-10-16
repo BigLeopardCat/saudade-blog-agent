@@ -167,8 +167,9 @@ eval/corpus_check.py + recall_eval QUERIES 已常态化）。仍开放的行：
   的值复制一份过去（代码不做隐式绑定，那正是"独立配置"的代价）。
   **20261007 起这一组不再只归检索**：首页「文章向量空间图谱」的建图
   （`scripts/build_word_graph.py`）与图谱检索（`rag/wordgraph.py`）共用 `rag/embed_space.py`
-  同一条解析规则——**配了 `EMBEDDING_*` 就用它，没配回落 `QWEN_*` + `text-embedding-v4`**
-  （所以只配 `QWEN_*` 的老部署行为逐字不变）。图上记着自己那片空间（模型 + 端点），
+  同一条解析规则——**配了 `EMBEDDING_*` 就用它，没配回落 `QWEN_*` + `qwen3.7-text-embedding`**
+  （回落这条通路本身不变；但**模型名 20261016 换过一代**，所以按旧回落档建过的图要重建一次，
+  检索侧会以 `space_mismatch` 明着降级、不是静默错）。图上记着自己那片空间（模型 + 端点），
   查的东西对不上就 `space_mismatch` 明着降级（零 embedding 调用），处置是重建一次图谱
   ——**换 `EMBEDDING_*` 的模型或端点之后必须重建**。
 - **索引与增量**（`rag/vector_index.py`）：自研 f32 文件 + manifest（零新增依赖，

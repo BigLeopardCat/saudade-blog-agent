@@ -313,7 +313,7 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | `PLANNER_NATIVE_THINKING` / `_MAX_TOKENS` / `_TIMEOUT` / `_SLOW_S` | `true` / `1200` / `60` / `30` | native 档的四个旋钮，各自的取舍见 `settings.py` 的注 |
 | ~~`AGENT_TASK_STATE`~~、~~`AGENT_TASK_PLAN_EXEC`~~ | **已删（20261015）** | 会话级未完成意图的登记/注入**常开**，没有开关了（任务状态是业界默认必备的，不该有开关把它变成摆设）。**写进 `.env` 现在是鬼键**；理由与判据见 docs/问题记录.md §1.63 |
 | `AGENT_ARM` | `graph` | 跑哪一条 agent 臂：`graph`（生产那条）/ `react`（分支上的试验线，自成 ReAct 循环 + 独立 narrator）。**默认恒 `graph` = 生产行为逐字节不变**；两臂读数**不可互比**，是"让谁更好这个问题可答"的对照物，不是"更快的那个"。拨了要 `systemctl restart saudade-agent`；名字不认识 ⇒ **服务拒绝启动**（不回退 graph） |
-| `RAG_HYBRID_ENABLED`、`EMBEDDING_*`、`RRF_K` | 不设（= 纯词法） | 向量 + RRF 混合检索，可选件。⚠️ **`EMBEDDING_*` 不只管检索**：首页那件「文章向量空间图谱」的建图（`scripts/build_word_graph.py`）与检索（`rag/wordgraph.py`）也用它——配了走它，没配回落 `QWEN_*` + `text-embedding-v4`（两端共用 `rag/embed_space.py` 一条规则）。**换模型/端点后要重建一次图谱**（后台「站点设置 → 向量图谱」），否则检索侧以 `space_mismatch` 明着降级 |
+| `RAG_HYBRID_ENABLED`、`EMBEDDING_*`、`RRF_K` | 不设（= 纯词法） | 向量 + RRF 混合检索，可选件。⚠️ **`EMBEDDING_*` 不只管检索**：首页那件「文章向量空间图谱」的建图（`scripts/build_word_graph.py`）与检索（`rag/wordgraph.py`）也用它——配了走它，没配回落 `QWEN_*` + `qwen3.7-text-embedding`（两端共用 `rag/embed_space.py` 一条规则）。**换模型/端点后要重建一次图谱**（后台「站点设置 → 向量图谱」），否则检索侧以 `space_mismatch` 明着降级 |
 
 **B. `server.py` 直接读进程环境的常量**：这四个**写进 `.env` 一点作用都没有**——`.env` 只喂给 pydantic-settings 的 `Settings` 对象，**不会进 `os.environ`**（systemd unit 里也没有 `EnvironmentFile=`）。
 要配就得走 systemd 的 `Environment=`、或启动前 `export`。判据是它们**不报错、只是不生效**：默认值恰好就是多数人想要的那个，所以只有在你真想改的时候才会发现改了没用。

@@ -14,6 +14,30 @@
 
 **覆盖范围**：20260928 建立，回溯到 20260925（建立前一周）。更早的变更去 `git log`。
 
+## 20261017
+
+- **回落档的 embedding 模型名换代，且与「老缓存当年是谁建的」拆成两个常量**
+  （`rag/embed_space.py`）：`LEGACY_MODEL` 一个常量此前同时干两件事——① `resolve()` 在
+  「没配 `EMBEDDING_*`」时**回落用的模型名**；② `legacy_cache_ok()` 判「盘上那些没有空间
+  签名的老缓存**是不是同一片空间**」。拆成 `FALLBACK_MODEL`（现在该用哪个，**与
+  `Settings.embedding_model` 的缺省值同源**，有判据钉住）与 `FLAT_CACHE_MODEL`
+  （`text-embedding-v4`，历史事实、永不改）。**为什么非拆不可**：两者合在一起时，"换回落档
+  的模型名"会顺手把 `legacy_cache_ok` 变成"把上一代向量认成新模型建的"——两代向量混进
+  同一张图，**不报错**（反控实测：把两个常量合并，`tests/test_embed_space.py` 当场 7 条红）。
+  同批把 `legacy_cache_ok` 的 `source == "qwen"` 直通分支去掉：那条的理由是"回落档解出来的
+  就是那条老路"，而回落模型名一换这句话就不成立 ⇒ 现在**模型名那一格两个来源都要判**。
+  依据（20261016 实测两个端点各自的 `GET /models` + 真调）：`text-embedding-v4`
+  **不是坏了、是分家**——`QWEN_BASE_URL` 那个端点照旧 200（dim 1024），`EMBEDDING_BASE_URL`
+  那个才 403 `AccessDenied.Unpurchased`；两个端点都提供 `qwen3.7-text-embedding`
+  （dim 1024、单请求 10 条 200）。**行为变更只落在"没配 `EMBEDDING_*` 的部署"**（含"从回落档
+  迁到显式配置、一个字没改空间"的那种）：它们的图谱与向量缓存要**重建一次**，检索侧以
+  `space_mismatch` 明着降级（日志一条 WARNING + 前端退回本地关键词匹配），不是静默错。
+  生产配了 `EMBEDDING_*` ⇒ 本笔不改变它解出的空间（它那份 453 条平铺缓存的作废与重建，
+  由 `EMBEDDING_MODEL` 那一行的改动决定，与本笔无关）。判据：`tests/test_embed_space.py`
+  新增四条（两个常量不许相等、回落档不再认老缓存、显式配 `FALLBACK_MODEL` + `QWEN_BASE_URL`
+  也不认、回落档模型名与 `Settings` 缺省值同源）；README / `.env.example` / `docs/rag-design.md`
+  与三处模块头注里的回落档模型名同批改到新值。
+
 ## 20261016
 
 - **帧契约从口头约定收成一件有锁的产物**（新增 `agent/frames.py` + `tests/test_frame_contract.py`）：
