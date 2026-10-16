@@ -37,7 +37,8 @@ from pathlib import Path
 # `bind_tools`——见 `tests/_native_stub.py`。20261015 去掉了 `AGENT_TASK_STATE` 那一钉：
 # 档位整族撤掉、任务状态常开 ⇒ 这里**没有本套件自己要钉的档位了**，环境由入口给。）
 
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+from langchain_core.messages import (AIMessage, AIMessageChunk, HumanMessage,
+                                     SystemMessage)
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
@@ -354,8 +355,16 @@ def _run_graph(plans, narrations, result=None, tool_name="toggle_effect",
 
 
 def _system_prompt(llm: "_ScriptedLLM") -> str:
-    """最后一轮 narrator 的 system 提示词（model 传的是 [system] + messages）。"""
-    return str(llm.model_prompts[-1][0].content)
+    """最后一轮 narrator 的 system 提示词——**按出站顺序拼接全部 SystemMessage**。
+
+    20261016 起 narrator 把系统提示词拆成**两条** SystemMessage（稳定头在最前、
+    变化段在对话历史之后，见 `agent/graph.py::_narrator_wire` 与
+    `tests/test_narrator_cache_layout.py`）。本文件判的是"那段文字在不在提示词里"，
+    与它落在哪一条消息无关；拼接后的文本与拆分前逐字节相同（头 + 变化段 = 原来那
+    一整段，`tests/test_react_narrator_assets.py` 用 sha256 钉着）。
+    """
+    return "".join(str(m.content) for m in llm.model_prompts[-1]
+                   if isinstance(m, SystemMessage))
 
 
 def test_graph_command_round_not_printed():
