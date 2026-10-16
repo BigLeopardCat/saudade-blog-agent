@@ -227,6 +227,20 @@ CREATE TABLE IF NOT EXISTS agent_write_replay (
   正是这本账的全部价值。
 - 既有套件：`tests/run_all.py`、`eval/type_gate.py`（只许缩）、`ruff check --select F821`、
   `eval/wordlist_gate.py`。
+- `checkpoint_probe.py --concurrency N --guard`（**不在 CI**，要真 PG）：**N 个真进程同时
+  重放同一个未完成的 superstep**（夹具：先让一个节点在**占位之前**崩掉 ⇒ 线程上留着待跑的
+  `execute`、而账里没有它的占位；N 个子进程各自 `stream(None)` 恢复同一个 checkpoint；
+  节点第一行是屏障，保证都读完 checkpoint、都算完 task_id 之后才开抢）。20261016 实测
+  N=4：**同一件写执行 1 次**、恰好 1 个真调了工具、账里恰好 1 行且 outcome 非空、
+  4 个进程的 `__pregel_task_id` **逐字相同**。反控两档：
+  `--guard-unsafe`（占位不提交 + 先 SELECT 再 INSERT ⇒ 非原子）⇒ **4 次写**；
+  `--guard-slow`（工具在占位之后停 2s）⇒ 后到的**全部**读到 in-doubt（而不是等赢家写完
+  再回放），即"**正在进行中**也压得住"。这一格量的是《决策 五》里"为什么不用
+  `BaseStore.put`"那个理由——**原子性**是干活的那一句，不是"有没有账"。
+- 同一批顺手钉住的两条**射程**（都是实测，不是推的）：**每次全新输入的 run 都会拿到
+  一个新的 `__pregel_task_id`**（input checkpoint 是新造的）⇒ 这本账**永远压不到新的一轮**，
+  只有"重放同一个未完成的 superstep"才同键；**恢复同一次崩溃**时 task_id 与崩那次
+  逐字相同。
 
 ## 明确不做（本批）
 

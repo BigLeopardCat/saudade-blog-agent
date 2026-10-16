@@ -419,6 +419,15 @@ def _side_lines(path: str) -> list[str]:
         return []
 
 
+def _scalar(conn, sql: str, params: tuple = ()):
+    """取一个标量。**别写 `fetchone()[0]`**：`saver.conn` 那条池的 `row_factory` 是
+    `dict_row`（`checkpoint_arm._make_pool`，langgraph 要的），行是 **dict** ⇒
+    `[0]` 抛的是 `KeyError: 0`，而它长得像"没有这一列"，很容易被读成别的问题
+    （20261016 在竞态探针里真踩过一次）。"""
+    row = conn.execute(sql, params).fetchone()
+    return None if row is None else next(iter(row.values()))
+
+
 def cmd_crash_resume_guard(unsafe: bool = False) -> int:
     """`--crash-resume --guard`：真子进程崩在工具调用中途 ⇒ 账把重放压住（2× → 1×）。"""
     import multiprocessing as mp
@@ -538,6 +547,308 @@ def cmd_concurrency(n: int = 4) -> int:
     print(f"  [{'PASS' if not errs else 'FAIL'}] 并发写同一 thread "
           f"{'全部成功（PG 串行化，无报错）' if not errs else f'{len(errs)} 个进程报错'}")
     return 0 if not errs else 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# `--concurrency N --guard`：N 个真进程**同时重放同一个未完成的 superstep**
+# ══════════════════════════════════════════════════════════════════════════════
+# 上一格（`--concurrency`）量的是 **checkpoint 层**：并发写同一个 thread 会不会报错、
+# 会不会丢。这一格量的是**账的 claim 在真并发下是不是原子的**——也就是 ADR-0012 决策五
+# 里"为什么不用 LangGraph 的 `BaseStore`"那个理由：`BaseStore.put` 是 upsert、
+# **没有 compare-and-set**，占位不原子。自建表 + 主键 + `ON CONFLICT DO NOTHING`
+# 一条语句才原子——**这一条是断言，本格是它的读数**。
+#
+# 夹具三步，缺一步读数就不成立：
+#
+#   ① **造一个"待跑的 superstep"，且账里没有它的占位**：跑一次图，节点在**占位之前**
+#      抛 `BaseException` ⇒ 节点不返回 ⇒ step 0 不提交 ⇒ 线程上留着一个待跑的 `execute`。
+#      ⚠️ 与 `--crash-resume --guard` 的差别**就在这一点上**：那一格崩在**占位之后**
+#      （所以读数是"总共 1 次，恢复那轮走 in-doubt"）；这一格崩在**占位之前**，
+#      所以键是**空的**，N 个 worker 是"谁先抢到谁写"。两格不是同一个问题。
+#
+#   ② **N 个 worker 恢复同一个 checkpoint**：`__pregel_task_id` 由
+#      `(checkpoint_id, ns, step, 节点名, triggers)` 算出（`_algo.py:616`），所以只要读的是
+#      **同一个** checkpoint、节点名都是 `execute`，N 个 worker 的键就**逐字相同**。
+#      ⚠️ 这条前提是**实测**的，不是推的：崩那次与恢复那次拿到的 task_id 同一个
+#      （`tid_probe2` 的读数），而**两次全新输入**的 run 拿到的是**两个不同的** id
+#      （`tid_probe`：`85bc4deb…` vs `41bca42a…`）——因为每次全新输入都会造一个新的
+#      input checkpoint。⇒ **闸的射程真的只到"重放同一个 superstep"**，新的一轮
+#      永远是新键、永远不会被这本账压住。这一格顺手把这条也钉住了。
+#
+#   ③ **节点第一行 `barrier.wait()`**：保证 N 个 worker **都读完 checkpoint、都算完
+#      task_id** 之后才开抢。少了它，先跑完的那个提交了 step 0，后到的 worker
+#      `stream(None)` 会**根本没有待跑的任务**（实测过）⇒ 读数退化成"只有一个 worker
+#      跑过"的**空判据**（"写了 1 次"恒真，而闸没起作用）。收尾那行
+#      `0 个没跑` 就是盯这一点的：任何 worker 报"没跑"⇒ 本格读数作废。
+#
+# 三档，第一档还会分两种形态（都合法，取决于谁先跑完）：
+#   · `--guard`        真账（autocommit + 主键）：**恰好 1 个真调了工具**、**1 次写**；
+#                      后到的那些走「回放已记的结局」（赢家已 `record`）或「in-doubt」
+#                      （赢家还没记）——两种都**不再调工具**；
+#   · `--guard-slow`   同上，但工具在**占位之后**停 2 秒 ⇒ 把「占位在、结局未知」那个
+#                      窗口撑开，后到的**必然**全部读到 in-doubt。这一档量的是
+#                      "**正在进行中**也压得住"——与"事后回放"是 at-most-once 的两半；
+#   · `--guard-unsafe` 占位**不提交**、且是「先 SELECT 再 INSERT」（`_UnsafeGuard`）：
+#                      非原子 ⇒ N 个都以为自己是第一个 ⇒ **N 次写**。
+# 反控这一档**比「干脆不带账」更值钱**：它把「有没有账」与「**原子性**」分开了——不带账
+# 红了只说明夹具在并发跑（那一格 `--concurrency` 已经单独量过），带一个**非原子**的账
+# 还是红，才说明干活的是**主键 + `ON CONFLICT DO NOTHING` 那一句**。
+
+# 一个 worker 的三种结局（`raw` = 拿到占位、**真调了工具**那一个；后两种都**没有**再调）：
+#   `ok`       = 占位在、**结局已记** ⇒ 逐字回放赢家的结局（`load_outcome` 造的 `ToolResult`）
+#   `in_doubt` = 占位在、**结局未知** ⇒ 不重发、判 BLOCK
+# ⚠️ 赢家返回的是工具**原样**的输出（这里是个 str），回放者拿到的是 `ToolResult`
+# ——所以"赢家"只能靠 `getattr(res, "kind", RAW)` 的缺省值认出来，不是靠工具自己报的。
+_RAW, _REPLAYED, _DOUBT = "raw", "ok", "in_doubt"
+_RACE_KIND_CN = {_RAW: "赢家（真调了工具）", _REPLAYED: "回放赢家的结局",
+                 _DOUBT: "结局未知 ⇒ BLOCK"}
+
+
+def _prep_crash_node(state, config):
+    """夹具①：节点**在占位之前**就崩（`BaseException` 拦不住 ⇒ 节点不返回 ⇒ 不提交）。"""
+    raise BaseException("prep: 崩在占位之前")
+
+
+def _conc_guard_worker(k: int, thread: str, out, sink: str, barrier, mode: str) -> None:
+    """竞态探针的子进程体。**必须是模块级函数**：`spawn` 要 pickle 它。
+
+    `mode` ∈ {`on`, `slow`, `unsafe`}（后两档见 `cmd_concurrency_guard` 的《三档》）。
+    节点名固定叫 `execute`（与夹具①同名 ⇒ 同键）。
+    """
+    from langgraph.graph import END, START, StateGraph
+
+    from agent.checkpoint_arm import _dsn, make_guard, make_saver
+    from agent.replay_guard import REQUIRED_DURABILITY
+
+    class _Sink:
+        """"写库"= 往一个**跨进程共享**的文件追加一行；与 `_SideEffectTool` 同形。"""
+
+        def invoke(self, args):
+            if mode == "slow":
+                # 把「占位已提交、结局还没记」那个窗口**撑开**（2s）：账的全部价值就在这个
+                # 窗口里——别人此刻来重放，看到的是"占位在、结局未知" ⇒ 不许再写一遍。
+                # 不撑开也测得出"最终只写了一次"，但那可能只是"赢家早就写完了、别人在回放"，
+                # 与"**正在进行中**也压得住"是两件事。两档各钉一行。
+                time.sleep(2.0)
+            with open(sink, "a", encoding="utf-8") as f:
+                f.write(f"写一件（worker{k}）\n")
+                f.flush()
+            return f"写好了 worker{k}"
+
+    def execute(state, config):
+        from agent import replay_guard as RG
+        conf = config["configurable"]
+        barrier.wait(timeout=180)          # ← 见上面第 ③ 条：先让所有人都算完 task_id
+        res = RG.invoke_guarded(_Sink(), {}, "set_article_status", 0, config)
+        # `raw` = 工具**原样**返回的（只有拿到占位的那个才会走到这里，见 invoke_guarded）；
+        # 其余两种都是 `load_outcome` 造出来的 `ToolResult`，区分"回放了结局"与"结局未知"。
+        out.put((k, "ran", {"kind": str(getattr(res, "kind", "raw")),
+                            "text": str(res),
+                            "task_id": conf.get("__pregel_task_id")}))
+        return {"messages": [ToolMessage(content=str(res), tool_call_id=f"c{k}")]}
+
+    g = StateGraph(G.AgentState)
+    g.add_node("execute", execute)
+    g.add_edge(START, "execute")
+    g.add_edge("execute", END)
+    saver = make_saver()
+    app = g.compile(checkpointer=saver)
+    cfg = {"configurable": {"thread_id": thread}}
+    cfg["configurable"]["replay_guard"] = (
+        _UnsafeGuard(_dsn()) if mode == "unsafe" else make_guard(saver.conn))
+    try:
+        list(app.stream(None, cfg, stream_mode=["updates"],
+                        durability=REQUIRED_DURABILITY))
+        out.put((k, "done", ""))
+    except Exception as e:  # noqa: BLE001 —— 屏障超时/并发报错都要看得见，不许吞
+        out.put((k, "err", f"{type(e).__name__}: {e}"[:200]))
+
+
+def _race_prepare(saver, thread: str, sink: str) -> tuple[bool, int]:
+    """夹具①：造一个「待跑的 superstep」，且账里**没有**它的占位。
+
+    返回 `(崩没崩, 竞态之前账里的占位行数)`。崩法用 `BaseException`（不是
+    `os._exit`）：节点没返回 ⇒ step 0 不提交 ⇒ 线程上留着待跑的 `execute`，
+    而**占位一次都没写**（崩在 `invoke_guarded` 之前）。这就是"键是空的、谁先抢到谁写"。
+    """
+    from agent.replay_guard import REQUIRED_DURABILITY
+
+    g = StateGraph(G.AgentState)
+    g.add_node("execute", _prep_crash_node)
+    g.add_edge(START, "execute")
+    g.add_edge("execute", END)
+    prep = g.compile(checkpointer=saver)
+    try:
+        list(prep.stream(G.graph_input([]), {"configurable": {"thread_id": thread}},
+                         stream_mode=["updates"], durability=REQUIRED_DURABILITY))
+        crashed = False
+    except BaseException as e:  # noqa: BLE001 —— 夹具就是靠它崩的
+        crashed = True
+        print(f"夹具① 崩在占位之前：{type(e).__name__}: {e}")
+    with saver.conn.connection() as conn:
+        rows = _scalar(conn, "SELECT count(*) FROM agent_write_replay "
+                             "WHERE thread_id = %s", (thread,))
+    print(f"  此刻账里这个 thread 的占位行：{rows}（**必须是 0**：键是空的，谁先抢到谁写）")
+    print(f"  此刻「库」里：{_side_lines(sink)}（夹具①崩在写之前 ⇒ 也是空的）")
+    print()
+    return crashed, rows
+
+
+def _race_run(n: int, thread: str, sink: str, mode: str) -> dict:
+    """夹具②③：N 个 worker 同时恢复同一个 checkpoint；把读数打印出来并分组返回。"""
+    import multiprocessing as mp
+
+    ctx = mp.get_context("spawn")
+    out = ctx.Queue()
+    barrier = ctx.Barrier(n)      # ← 见模块头注第 ③ 条：先让所有人算完 task_id
+    procs = [ctx.Process(target=_conc_guard_worker,
+                         args=(k, thread, out, sink, barrier, mode))
+             for k in range(n)]
+    t0 = time.time()
+    for p in procs:
+        p.start()
+    msgs = []
+    deadline = time.time() + 300
+    while len(msgs) < 2 * n and time.time() < deadline:
+        try:
+            msgs.append(out.get(timeout=5))
+        except Exception:  # noqa: BLE001 —— 队列空了就再等一轮，直到 deadline
+            if all(not p.is_alive() for p in procs):
+                break
+    for p in procs:
+        p.join(30)
+    run = {"ran": {m[0]: m[2] for m in msgs if m[1] == "ran"},
+           "done": {m[0] for m in msgs if m[1] == "done"},
+           "errs": [m for m in msgs if m[1] == "err"],
+           "elapsed": round(time.time() - t0, 1)}
+    print(f"worker 读数（耗时 {run['elapsed']}s）：")
+    for k in range(n):
+        if k in run["ran"]:
+            v = run["ran"][k]
+            print(f"  worker{k}: {_RACE_KIND_CN.get(v['kind'], v['kind'])}  正文={v['text']!r}")
+        elif k in run["done"]:
+            print(f"  worker{k}: **没跑**（stream(None) 时已经没有待跑的任务了）")
+        else:
+            print(f"  worker{k}: **没报告**（进程没起来/被屏障卡住）")
+    for m in run["errs"]:
+        print(f"  worker{m[0]}: err {m[2]}")
+    print()
+    return run
+
+
+def _race_facts(saver, thread: str, sink: str, run: dict) -> dict:
+    """赛后的三样事实：「库」里的行、账里的行、账里 outcome 非空的行。
+
+    ⚠️ 账里的行数**必须在这里现读**：`_race_prepare` 那个读数是**竞态之前**的
+    （它检查的是"夹具①没占位"），拿它当赛后的行数会让那一格**恒红**——20261016
+    真踩过，库里明明只有 1 行。
+    """
+    writes = _side_lines(sink)
+    with saver.conn.connection() as conn:
+        rows_after = _scalar(conn, "SELECT count(*) FROM agent_write_replay "
+                                   "WHERE thread_id = %s", (thread,))
+        recorded = _scalar(conn, "SELECT count(*) FROM agent_write_replay "
+                                 "WHERE thread_id = %s AND outcome IS NOT NULL",
+                           (thread,))
+    winners = [k for k, v in run["ran"].items() if v["kind"] == _RAW]
+    losers = {k: v["kind"] for k, v in run["ran"].items() if v["kind"] != _RAW}
+    if winners:
+        print(f"赢家 worker{winners[0]} 的正文：{run['ran'][winners[0]]['text']!r}；"
+              f"回放者拿到的正文："
+              f"{[run['ran'][k]['text'] for k in sorted(losers) if losers[k] == _REPLAYED]!r}")
+        print()
+    return {"writes": writes, "rows_after": rows_after, "recorded": recorded,
+            "winners": winners, "losers": losers,
+            "tids": {str(v["task_id"]) for v in run["ran"].values()}}
+
+
+def _race_checks(n: int, mode: str, prep: tuple, run: dict, facts: dict) -> list:
+    """本格的判据。`prep` = `(崩没崩, 竞态前占位行数)`。"""
+    crashed, rows_before = prep
+    checks = [
+        (crashed and rows_before == 0, "夹具① 留下一个待跑的 superstep，且账里没有占位"),
+        (len(run["ran"]) == n, f"{n} 个 worker **都真跑了**（没有空判据）"),
+        (len(facts["tids"]) == 1 and "" not in facts["tids"],
+         f"{n} 个 worker 的 `__pregel_task_id` 逐字相同（实测：{sorted(facts['tids'])}）"),
+        (not run["errs"], "没有 worker 报错"),
+        (len(facts["writes"]) == (1 if mode != "unsafe" else n),
+         f"同一件写执行了 {len(facts['writes'])} 次"
+         f"（期望 {1 if mode != 'unsafe' else n}）"),
+    ]
+    if mode == "unsafe":
+        return checks
+    kinds = set(facts["losers"].values())
+    checks += [
+        (len(facts["winners"]) == 1,
+         f"恰好 1 个 worker 真调了工具（赢家：worker{facts['winners']}）"),
+        (len(facts["losers"]) == n - 1 and kinds <= {_REPLAYED, _DOUBT},
+         f"其余 {n - 1} 个一件都没再调（结局：{ {_RACE_KIND_CN[v] for v in kinds} }）"),
+        (facts["rows_after"] == 1 and facts["recorded"] == 1,
+         f"账里恰好 {facts['rows_after']} 行、且 outcome 非空（主键挡住了第二次 claim）"),
+    ]
+    if mode == "slow":
+        checks.append((kinds == {_DOUBT},
+                       "工具慢（占位已提交、结局还没记）⇒ 后到的全都读到"
+                       "「占位在、结局未知」⇒ in-doubt，**不是**等赢家写完再回放"))
+    else:
+        checks.append((kinds <= {_REPLAYED, _DOUBT},
+                       "后到的两种结局都是合法的（回放 / in-doubt），**没有第三种**"))
+    return checks
+
+
+_RACE_CONCLUSION = {
+    "on": ("结论：**claim 在真并发下是原子的**——N 个进程读同一个 checkpoint、算同一个键，"
+           "只有 1 个 INSERT 成功，其余走「回放已记的结局」或「in-doubt」。写**只发生了一次**，"
+           "而这一条正是当初不用 `BaseStore.put`（upsert、没有 CAS）的理由（ADR-0012 决策五）。"),
+    "slow": ("结论：把「占位已提交、结局未记」那个窗口撑到 2s，后到的 worker 仍然"
+             "**一次都没写**——读到的是 in-doubt（判 BLOCK），不是「等赢家写完再回放」。"
+             "⇒ 这本账压住的不只是「事后回放」，还有「**正在进行中**」"
+             "（at-most-once 的另一半）。"),
+    "unsafe": ("结论：**反控成立**。占位既不提交、又是「先读后写」，N 个 worker 都以为自己是"
+               "第一个 ⇒ N 次写。⇒ 光「有账」不够，**原子性**"
+               "（主键 + `ON CONFLICT DO NOTHING`）才是干活的那一句。"),
+}
+
+
+def cmd_concurrency_guard(n: int = 4, mode: str = "on") -> int:
+    """`--concurrency N --guard`：N 个进程同时重放同一个未完成的 superstep。
+
+    三段（夹具① / 夹具②③ / 判据）各自成函数——`test_complexity_budget.py` 的预算
+    是 C ≤ 30，一坨写下来是 46（**不许**靠 `--update` 记进台账来消掉，那是放宽）。
+    """
+    import tempfile
+
+    from agent.checkpoint_arm import make_guard, make_saver
+
+    label = {"on": "真账（autocommit + 主键）",
+             "slow": "真账，但工具**慢**（占位提交后停 2s 才记结局）",
+             "unsafe": "**不安全的**（先 SELECT 再 INSERT、且不提交）—— 这是反控"}[mode]
+    thread = f"probe-conc-guard-{mode}"
+    saver = make_saver()
+    make_guard(saver.conn)              # 先建表（幂等），下面才删得动行
+    saver.delete_thread(thread)
+    with saver.conn.connection() as conn:
+        conn.execute("DELETE FROM agent_write_replay WHERE thread_id = %s", (thread,))
+    with tempfile.NamedTemporaryFile(prefix="probe-race-", suffix=".txt",
+                                     delete=False) as fh:
+        sink = fh.name
+
+    print(f"thread : {thread}    worker 数 : {n}")
+    print(f"账     : {label}")
+    print(f"「库」  : {sink}（盘上的文件，跨进程都在）")
+    print()
+
+    prep = _race_prepare(saver, thread, sink)
+    run = _race_run(n, thread, sink, mode)
+    facts = _race_facts(saver, thread, sink, run)
+    checks = _race_checks(n, mode, prep, run, facts)
+    ok = all(c for c, _ in checks)
+    for c, t in checks:
+        print(f"  [{'PASS' if c else 'FAIL'}] {t}")
+    print()
+    print(_RACE_CONCLUSION[mode])
+    os.unlink(sink)
+    return 0 if ok else 1
 
 
 def cmd_pg_stats() -> int:
@@ -940,11 +1251,15 @@ def main() -> int:
     ap.add_argument("--crash-resume", action="store_true",
                     help="崩在节点中途 ⇒ 恢复整节点重跑 ⇒ 写操作执行两次")
     ap.add_argument("--guard", action="store_true",
-                    help="配 --crash-resume：真子进程崩在工具调用中途，重放闸把写压成一次")
+                    help="配 --crash-resume / --concurrency：账上场（崩在占位后 / N 个进程抢同一个键）")
+    ap.add_argument("--guard-slow", action="store_true",
+                    help="配 --concurrency：工具在占位之后停 2s ⇒ 后到的必读 in-doubt"
+                         "（量「正在进行中也压得住」那一半）")
     ap.add_argument("--guard-unsafe", action="store_true",
-                    help="上一条的反控：占位不提交（池非 autocommit）⇒ 读数应回到两次")
+                    help="上一条的反控：占位不提交（池非 autocommit）⇒ 崩档读数应回到两次")
     ap.add_argument("--concurrency", type=int, default=0, metavar="N",
-                    help="同一 thread 上 N 个进程并发写（生产 4 worker 那一格）")
+                    help="同一 thread 上 N 个进程并发写（生产 4 worker 那一格）；配 --guard "
+                         "则改成 N 个进程**同时重放同一个未完成的 superstep**")
     ap.add_argument("--pg-stats", action="store_true", help="实验库现状")
     ap.add_argument("--summarize", metavar="PROBE_JSONL", help="汇总探针 JSONL")
     args = ap.parse_args()
@@ -961,6 +1276,10 @@ def main() -> int:
             return cmd_crash_resume_guard(unsafe=args.guard_unsafe)
         return cmd_crash_resume()
     if args.concurrency:
+        if args.guard or args.guard_unsafe or args.guard_slow:
+            mode = ("unsafe" if args.guard_unsafe else
+                    "slow" if args.guard_slow else "on")
+            return cmd_concurrency_guard(args.concurrency, mode=mode)
         return cmd_concurrency(args.concurrency)
     if args.pg_stats:
         return cmd_pg_stats()
