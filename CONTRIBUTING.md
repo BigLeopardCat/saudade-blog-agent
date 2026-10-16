@@ -65,6 +65,13 @@ CI 跑的就是这两条（`.github/workflows/eval.yml`）。两点要知道：
   fork 的 PR 从结构上拿不到这枚凭据 ⇒ 那一条在你这边必然缺席，不是你的问题，
   合并进 `main` 时会补跑。
 
+**改动落在哪个文件**：本仓用「预算 + 台账、只许缩小」的棘轮管体量，一共三道——
+函数级（`tests/test_complexity_budget.py`）、类型级（`eval/type_gate.py`）、
+**文件级**（`tests/test_module_budget.py`）。文件级那道意味着**往一个已经超预算的模块里
+加东西会让 CI 红**（`agent/graph.py`、`tools/base.py`、`server.py` 等 26 个在台账里）。
+所以：**先找归属模块，找不到再新建，不要往最顺手的那个文件尾部追加**。真要拆就按主题拆；
+`--update` 不是常规通道，它是"这次确实该变大"的辩护记录，reviewer 会看那份 diff。
+
 ## 3. 提交约定
 
 首行 `<type>: <一句话>`，**≤60 字符**，其后空一行、正文用 `- ` 列表。

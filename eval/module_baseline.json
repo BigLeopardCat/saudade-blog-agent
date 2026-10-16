@@ -1,0 +1,106 @@
+{
+  "agent/adminops.py": {
+    "lines": 3272,
+    "top_defs": 128
+  },
+  "agent/authz.py": {
+    "lines": 1721,
+    "top_defs": 37
+  },
+  "agent/context.py": {
+    "lines": 1474,
+    "top_defs": 39
+  },
+  "agent/graph.py": {
+    "lines": 13994,
+    "top_defs": 259
+  },
+  "agent/prompts.py": {
+    "lines": 828,
+    "top_defs": 1
+  },
+  "agent/react_arm.py": {
+    "lines": 1243,
+    "top_defs": 40
+  },
+  "agent/skills.py": {
+    "lines": 4764,
+    "top_defs": 52
+  },
+  "agent/tasks.py": {
+    "lines": 1655,
+    "top_defs": 44
+  },
+  "eval/corpus_terms.py": {
+    "lines": 901,
+    "top_defs": 30
+  },
+  "eval/probe_admin_write.py": {
+    "lines": 2854,
+    "top_defs": 82
+  },
+  "eval/run_golden.py": {
+    "lines": 3630,
+    "top_defs": 50
+  },
+  "scripts/build_word_graph.py": {
+    "lines": 1183,
+    "top_defs": 36
+  },
+  "server.py": {
+    "lines": 2547,
+    "top_defs": 50
+  },
+  "tests/judge_offline_test.py": {
+    "lines": 1432,
+    "top_defs": 11
+  },
+  "tests/test_admin_write.py": {
+    "lines": 2000,
+    "top_defs": 24
+  },
+  "tests/test_authz.py": {
+    "lines": 1250,
+    "top_defs": 5
+  },
+  "tests/test_chat_quota.py": {
+    "lines": 1039,
+    "top_defs": 20
+  },
+  "tests/test_confirm.py": {
+    "lines": 1190,
+    "top_defs": 7
+  },
+  "tests/test_nav_truthfulness.py": {
+    "lines": 953,
+    "top_defs": 19
+  },
+  "tests/test_react_arm.py": {
+    "lines": 1210,
+    "top_defs": 22
+  },
+  "tests/test_reports.py": {
+    "lines": 956,
+    "top_defs": 6
+  },
+  "tests/test_skills.py": {
+    "lines": 5784,
+    "top_defs": 72
+  },
+  "tests/test_tag_admin.py": {
+    "lines": 1601,
+    "top_defs": 16
+  },
+  "tests/test_todo_schedule.py": {
+    "lines": 2066,
+    "top_defs": 29
+  },
+  "tests/test_userdata.py": {
+    "lines": 1233,
+    "top_defs": 12
+  },
+  "tools/base.py": {
+    "lines": 5845,
+    "top_defs": 160
+  }
+}
