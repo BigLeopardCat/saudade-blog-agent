@@ -123,6 +123,46 @@ check("headings 只列真正的小节（不含开头段）",
 check("level 记录标题级别（## → 2）",
       [c["level"] for c in sections.split(LONG, TITLE, shortcut=False)][1] == 2)
 
+print("①b 围栏代码块里的行不当标题（20261017）")
+# 被锁住的问题：`.gitignore` / shell / diff 的**示例内容整段住在 ``` 里**，而 `.gitignore`
+# 的注释行就是 `# …`——与 markdown 一级标题**逐字同形**。线上 note:16 实测：从
+# `# ========== 依赖管理 ==========` 一路切到 `# ========== 本地数据库文件 ==========`，
+# 11 节**全部空正文**、节名还是 gitignore 的注释（`_is_readable` 与 `_is_lossy` 的注里
+# 都记着这件事）。后果不止多几节：全语料 330 个 chunk 里 **48 个空正文**、chunk 长度
+# **中位数 69 字**、`avgdl` 被压到 **103** ⇒ BM25 长度归一系统性偏爱短碎片。
+_FENCE = (TITLE + "\n\n## 3. 主流技术栈专属配置\n\n"
+          + "```gitignore\n# ========== 依赖管理 ==========\nnode_modules/\n"
+          + "# ========== 本地数据库文件 ==========\n*.db\n```\n\n"
+          + "## 4. 下一节\n下一节正文MARK4")
+_FCUT = sections.split(_FENCE, TITLE, shortcut=False)
+check("围栏里的 `# 注释` 不是节边界（切出来只有 3 节，不是十几节）",
+      [c["section"] for c in _FCUT] == [TITLE, "3. 主流技术栈专属配置", "4. 下一节"],
+      str([c["section"] for c in _FCUT]))
+check("围栏内容留在节正文里（一个字都没丢，只是不再当标题）",
+      "========== 本地数据库文件 ==========" in _FCUT[1]["text"]
+      and "*.db" in _FCUT[1]["text"])
+check("围栏**认到关栏为止**：关栏之后的标题照常切（§4 是独立的一节）",
+      "MARK4" in _FCUT[2]["text"] and "MARK4" not in _FCUT[1]["text"])
+check("正控：把围栏拿掉，同样的行立刻切出节来（不是判据自己跟自己玩）",
+      len(sections.split(_FENCE.replace("```gitignore\n", "").replace("*.db\n```", "*.db"),
+                         TITLE, shortcut=False)) > len(_FCUT))
+_TILDE = TITLE + "\n\n## 3. 某节\n\n~~~\n# 注释\n~~~\n\n## 4. 下一节\n正文MARK4"
+check("`~~~` 围栏同样认（不只 ``` ）",
+      [c["section"] for c in sections.split(_TILDE, TITLE, shortcut=False)]
+      == [TITLE, "3. 某节", "4. 下一节"])
+check("围栏外的标题一行都不受影响（正控：`# 标题` 仍切节）",
+      len(sections.split(TITLE + "\n\n# 一节\n甲\n# 二节\n乙", TITLE, shortcut=False)) == 3)
+# 开栏没关 ⇒ 其后全部算围栏内（markdown 语义）。**这是个要认下来的取舍**：一篇正文里
+# 漏写一个关栏，后面就不再切节（整篇后半段合成一个 chunk）。线上语料 20261017 实测：
+# 13 篇里 7 篇有围栏，**开栏 77 / 关栏 77，一篇都没落单** ⇒ 这是"把语义做对"，
+# 不是"引入一个已知会踩的坑"（真出现落单时，症状是那一篇的检索候选变少，不是静默错读）。
+check("开栏没关 ⇒ 其后不再切节（不猜、不自作主张恢复）",
+      len(sections.split(TITLE + "\n\n## 3. 某节\n甲\n```\n# 注释\n\n## 4. 名义上的下一节\n乙",
+                         TITLE, shortcut=False)) == 2)
+check("`_is_lossy` 与 `split` 同一把尺子（围栏里的行两边都不算标题）",
+      not sections._is_lossy(_FENCE, _FCUT)
+      and sections._is_lossy(LOSSY, sections.split(LOSSY, TITLE, shortcut=False)))
+
 print("② pick：三级指称")
 check("标题全称", sections.pick(LONG, "9. 部署与运维", TITLE)["section"] == "9. 部署与运维")
 check("全称容忍空白差异", sections.pick(LONG, "  9.  部署与运维 ", TITLE) is not None)
