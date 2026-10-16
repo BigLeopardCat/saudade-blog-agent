@@ -604,7 +604,8 @@ def test_contract_no_longer_licenses_an_empty_decision():
           "一个函数都不点" in n and "没有做出决策" in n)
     check("不含旧文本契约行（两版混写就是让模型二选一）",
           "SKILL: <技能名>" not in n and "PARAMS: <JSON>" not in n)
-    check("保留 TODO 行（多步链声明仍走正文，`_parse_todo` 读它）", "TODO:" in n)
+    check("契约里**不再**有 `TODO:` 那一行（20261016 整行退休，取证见 graph.plan_encode）",
+          "TODO:" not in n)
     check("仍是规则 7（改契约不该改规则编号）", n.startswith("7. "))
 
 

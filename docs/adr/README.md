@@ -75,6 +75,7 @@
 | [0007](adr-0007-unavailable-retry-not-fixed-in-prompt-layer.md) | `unavailable` 的那次原地重试不在提示词层治（试过两版、A/B 否掉） | **已搁置** |
 | [0008](adr-0008-second-arm-stays-in-mainline-frame-contract-locked.md) | 第二条臂留在主线当开关；帧契约收成一件有锁的产物 | 已采纳 |
 | [0009](adr-0009-react-arm-becomes-a-real-graph.md) | 第二条臂的循环拆成真节点（`create_agent` 退场） | 已采纳 |
+| [0010](adr-0010-state-accumulator-reducers-deferred.md) | state 累加器的合并语义：先立台账，暂不加 reducer | **已搁置** |
 
 ## 相关的、但不算 ADR 的文档
 
