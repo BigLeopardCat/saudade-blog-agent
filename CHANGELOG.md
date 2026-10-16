@@ -16,6 +16,30 @@
 
 ## 20261017
 
+- **删掉一个"看着能用"的记忆存根，换成恒惰性的 checkpointer 接线点**
+  （`agent/memory.py` → `agent/checkpoint.py`）：旧的 `get_checkpointer()` 返回
+  `MemorySaver()`——**进程内**，而生产是 4 个 uvicorn worker，照它接线的人拿到的是
+  "每 worker 各记各的"上下文，**而且不报错**；它的英文 docstring 甚至写着 "maintain
+  context across multiple turns in a session"，与 `docs/agent-architecture.md` §4.6
+  明说的"它从未积累过任何状态"正相反（该函数**零调用方**，是纯陷阱）。新模块的
+  `build_checkpointer(dsn)`：**空 DSN ⇒ `None`**（= 今天的行为，`build_graph()` 仍是裸
+  `compile()`，生产逐字节不变）；非空 DSN 的**每一条分支都抛异常**——scheme 认不出来要
+  响亮（**故意不支持内存档**），依赖没装要点名包名与 pip 命令，依赖装齐了也不许只改这一处
+  （ADR-0011 的"三处一起动"，只做一处会**静默产生双份上下文**）。**本笔不写没跑过的 saver
+  构造代码**：真接 saver 属于 ADR-0011 采纳批，等依赖落地后与它的判据一起补。判据
+  `tests/test_checkpoint_factory.py`（六探针 + 正控/反控）：① 惰性（空 DSN 返回 `None`，
+  且**一次 import 都不发**）；② 反控（给了合法 DSN 就**绝不**静默返回 `None`）；③④ 两条
+  响亮拒绝；⑤ 接线锁（AST 钉住 `build_graph()` 里**唯一一处** `.compile()` 只许带一个
+  `checkpointer=`、值恰好是调用方那个同名参数，且该参数缺省 `None` ⇒ 生产不传就与从前
+  逐字节相同。**20261017 改过判据**：这条锁原先是"末尾仍是**裸的** `.compile()`"，
+  上游 `48da74f` 正是照它要的方式接了线 ⇒ 锁跟着钉**新**不变量：禁的不是"传参"，是
+  **在这一层造 saver**（写死 `MemorySaver()` / 现算 `build_checkpointer(...)` / 缺省值改成
+  非 `None`）——那会让生产**突然开始持久化**而别的判据一条都不会红；裸 `g.compile()` 同样
+  算违规，理由不同：实验臂传进来的 saver 会被**静默忽略**，"没挂 saver"于是伪装成
+  "checkpoint 没区别"）；⑥ 旧陷阱不许回来
+  （按 **AST** 扫 `agent/` 的生产代码里不许再有 `MemorySaver`——按文本扫会假红，本节
+  正当当地写着这个词）。
+
 - **写操作幂等账迁到 PG：存储变两档（判据 + 契约，20261017；⚠️ 生产行为零变更）**——SQLite
   那一档是临时做法，本批把它**加成一档**而不是换掉：挂的 saver 是 PG 的（池挂在 `.conn`）⇒
   账落**与 checkpoint 同一个库**（新增 `agent/idem_pg.py`，表 `agent_write_idem`）；其余
@@ -93,6 +117,16 @@
   新增四条（两个常量不许相等、回落档不再认老缓存、显式配 `FALLBACK_MODEL` + `QWEN_BASE_URL`
   也不认、回落档模型名与 `Settings` 缺省值同源）；README / `.env.example` / `docs/rag-design.md`
   与三处模块头注里的回落档模型名同批改到新值。
+
+- **加一道「文件级」棘轮：模块体量只许缩小**（`tests/test_module_budget.py` +
+  `eval/module_baseline.json`）：此前三道棘轮管函数复杂度 / 类型 / lint，**没有一道
+  看着"文件有多大"**——而 `agent/graph.py` 已经长到 **13994 行 / 259 个模块级定义**
+  （占全仓 Python 的 39%）。两个读数：行数与**模块级**定义数（不下钻方法——一个 3000 行的
+  文件是 5 个大函数还是 200 个小函数，治法是两回事）。台账 **26 条**（阈值 lines>800 或
+  top_defs>60），规则同族：**只许缩小**、回到预算内必须销账、`--update` 是唯一放宽通道
+  （那份 diff 就是"这一版为什么该变大"的辩护记录）。**不改任何对外行为**，纯判据 + 一份
+  台账；CI 由 `tests/run_all.py` 按磁盘枚举自动到手。判据自带正控/反控（新增超预算、
+  行数长大、定义变多、该销账、台账过期五路都要红，没动的要绿）。
 
 ## 20261016
 

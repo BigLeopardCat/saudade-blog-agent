@@ -33,6 +33,7 @@ from agent.skills import (  # noqa: E402
     PLAN_STATUS_ABSENCE_EXEMPT, PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, SKILLS,
     SKILL_MAP, _IOT_OFF_NOTE, _param_problem_plan, instantiate_plan,
 )
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
 FAILS: list[str] = []
 
@@ -219,7 +220,10 @@ check("台账收尾轮的豁免仍在（走抬头那条判据，批 3 没动它�
 # ══════════════════════════════════════════════════════════════════
 print("\n④ 接线锁（源码级）：写端一定写、判据侧一定不读措辞")
 
-_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+# 20261017：写端那一族（`plan_encode`/`plan_state`/`parse_plan`）搬进了
+# `agent/plan_codec.py`。取值点改成"这一族全部文件"的拼接视图（见
+# `_ctx_src.plan_codec_src`），下面的断言**字面一个字没动**——判据没被改松。
+_src = _ctx_src.plan_codec_src()
 check("plan_encode 写 STATUS= 行",
       re.search(r'lines\.append\(f"STATUS=\{status\}"\)', _src) is not None)
 check("STATUS 行排在 REPLY 之前（REPLY 的正则吃 DOTALL，它必须是末行）",

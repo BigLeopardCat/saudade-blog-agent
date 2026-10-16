@@ -1,10 +1,17 @@
-"""native tool calls 接线层（20260927 新主线第一批）。
+"""planner 与 LLM 之间的接线层：技能表 ↔ API 的 `tools` / `tool_calls`（20260927 起）。
 
 **为什么存在**：planner 此前靠"系统渲染文本菜单 → 模型写五行文本 → 正则抠"决策
-（`SKILL=` / `PARAMS=` / `TOOLS:` 契约见 `agent/graph.py` 的 `plan_encode`）。那条路把
+（`SKILL=` / `PARAMS=` / `TOOLS:` 契约见 `agent/plan_codec.py` 的 `plan_encode`）。那条路把
 **格式正确性**押在模型的文本纪律上：实测约 15% 的轮次改用 JSON 对象或带引号键回答，
-旧内联正则匹配不到 ⇒ 静默落成 chat（主人收到一句假的"我做不到"）。native tool calls
-把这一步换成 API 的 `tools` 字段 + `tool_calls` 返回——格式由服务端约定、参数由 schema 约束。
+旧内联正则匹配不到 ⇒ 静默落成 chat（主人收到一句假的"我做不到"）。现在这一步换成
+API 的 `tools` 字段 + `tool_calls` 返回——格式由服务端约定、参数由 schema 约束。
+
+> 本模块 20261017 前叫 `native_plan.py`。改名是因为 `native` 那个限定词的**对照物
+> 已经不在了**：20261004 文本契约那一档连同它的解析器整族删除后，"native" 不再
+> 与任何东西相对。**代码与注释里残留的 `native` 分三类，别顺手改**：① 归档键
+> （trace 事件 `native_decision` / `native_fallback` / `native_multi_call`、报告里的
+> `engine="native"`）——改了历史基线就失去可比性；② `.env` 的键（`planner_native_*`，
+> 见 `config/settings.py` 那一段的注）；③ 历史文档里的叙述（CHANGELOG / 问题记录 / ADR）。
 
 **为什么模型选的是「技能」而不是「工具」**（本模块最关键的一条，是被反证逼出来的）：
 初看更自然是"模型直接调工具、我们再反查技能"，核完代码后不成立——
@@ -21,7 +28,7 @@
 **为什么这不缩小本模块的价值**：技能集正是渲染 planner 菜单用的那张表
 （`visible_skills(role)` × `skill_param_specs`）⇒ schema 与菜单**同源**，"模型能选的"
 恒等于"今天这个身份本来就能选的"，没有第二份名单可漂移——**不扩权是结构性的**，
-`tests/test_native_plan.py` 另有一条集合相等断言做防御。工具参数上的 `Literal` 闭集
+`tests/test_planner_llm.py` 另有一条集合相等断言做防御。工具参数上的 `Literal` 闭集
 也第一次变成服务端强制的 `enum`（此前只是提示词里的一句话）。
 
 **边界（别过度承诺）**：这一层治格式正确性、参数正确性、单轮多调用。多步目标跨轮丢失
@@ -82,8 +89,8 @@ _TYPE_MAP = {"str": "string", "int": "integer", "num": "number",
 
 
 @dataclass(frozen=True)
-class NativeDecision:
-    """native 档的一次决策结果。**只是数据**——不写 state、不碰库、不发帧。
+class PlannerDecision:
+    """一次工具调用决策的结果。**只是数据**——不写 state、不碰库、不发帧。
 
     `skill` / `params` 交给 `instantiate_plan` 展开，与文本档产出**同构**；其余字段
     只进 trace，供事后按 engine 切语料对账（见本模块头注的"边界"）。
@@ -176,7 +183,7 @@ def _param_schema(sp: ParamSpec) -> dict:
 # 服务端强制的 `enum`。`review_inbox.calls` 同理（它的 `plan` 模板参数也是空的——
 # 逐条调用的**工具名由模型写**，模板给不出映射）。
 # **别顺手往这张表里加别的键**——每加一格就少一格同源保证，
-# `tests/test_native_plan.py` 把键集合钉成了字面量，加键必须同改测试（= 有人复核）。
+# `tests/test_planner_llm.py` 把键集合钉成了字面量，加键必须同改测试（= 有人复核）。
 _CALLS_ITEMS = {
     "type": "object",
     "properties": {
@@ -307,7 +314,7 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
     （出厂关、产线开）：现在没有开关了——任务状态是默认必备的能力，不该有开关把它变成
     摆设（主人裁决，理由与判据见 `docs/问题记录.md` §1.63）。它们不进 `visible_skills`
     那条集合断言的口径里——断言写的是"技能名集合 + 申报过的伪函数"（见
-    `tests/test_native_plan.py` ①）。**这不是扩权**：它们不是技能、不执行任何工具、
+    `tests/test_planner_llm.py` ①）。**这不是扩权**：它们不是技能、不执行任何工具、
     也没有第二个消费方，只是让模型能把"剩下的步骤"说出来、把"不做了"说清楚；
     能不能真做，仍然由技能通道与下游全部防线决定。
 
@@ -370,7 +377,7 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
             props[EVIDENCE_ARG] = evidence_prop_schema(EVIDENCE_FIELD_DESC)
         # 描述里的工具枚举标记**必须在这里展开**（20260927 修）：技能描述里写着
         # `__无参只读工具清单__` 这类占位（见 skills.py 的 `_EXPLICIT_TOOLS_MARK`），
-        # 角色相关的展开此前只发生在文本菜单那一路（`skills.py` 的 `render_tool_marks`）⇒ native 档把
+        # 角色相关的展开此前只发生在文本菜单那一路（`skills.py` 的 `render_tool_marks`）⇒ 接口层把
         # **未展开的标记原样**发给了模型（实测 admin/None 各 1 处）。两处渲染同一份
         # 描述文本，展开器只能有一个（同"手抄第二份名单"的教训）。
         desc = render_tool_marks(skill.description, role)
@@ -465,8 +472,8 @@ def _split_pseudo_calls(calls: list, role: str | None):
     return rest, declare, intents, notes
 
 
-def tool_calls_to_plan(resp: object, role: str | None) -> NativeDecision | None:
-    """一次 `tool_calls` 返回 → `NativeDecision`；**判不了就返回 None**（调用方兜底）。
+def tool_calls_to_plan(resp: object, role: str | None) -> PlannerDecision | None:
+    """一次 `tool_calls` 返回 → `PlannerDecision`；**判不了就返回 None**（调用方兜底）。
 
     None 的五个来源（全是"没给出可用决定"，调用方一律走确定性收尾，**不猜**）：
       · `invalid_tool_calls` 非空 —— 参数被截断或不是合法 JSON（思考链吃光
@@ -550,7 +557,7 @@ def tool_calls_to_plan(resp: object, role: str | None) -> NativeDecision | None:
             undecided = True
         # 只有登记/撤回/意图清单、或伪函数参数无效：技能位给 chat（本轮没有动作要执行）
         # ——`declare`/`intents` 交给 planner 那一支，`notes` 让那一格在 trace 里看得见。
-        return NativeDecision(skill="chat", params={}, notes=tuple(notes),
+        return PlannerDecision(skill="chat", params={}, notes=tuple(notes),
                               declare=declare, intents=intents,
                               undecided=undecided, **base)
     head = calls[0] if isinstance(calls[0], dict) else {}
@@ -604,12 +611,12 @@ def tool_calls_to_plan(resp: object, role: str | None) -> NativeDecision | None:
         # 而不是"intents 非空"**：字段那一路（设计内的常态）另有 `task_intents_field`
         # 一条，混用会让"约定被打破"这个信号恒真。
         notes.append(f"{TASK_INTENTS}_inline:{name}")
-    return NativeDecision(skill=name, params=args, notes=tuple(notes), evidence=evidence,
+    return PlannerDecision(skill=name, params=args, notes=tuple(notes), evidence=evidence,
                           reply_kind=reply_kind,
                           declare=declare, intents=intents, **base)
 
 
-def bind_native(llm: object, role: str | None, *, evidence: bool = False,
+def bind_planner_tools(llm: object, role: str | None, *, evidence: bool = False,
                 deny: frozenset[str] | set[str] | None = None,
                 deny_pseudo: frozenset[str] | set[str] | None = None) -> object:
     """把 LLM 绑上本轮的 schema。**`tool_choice` 固定 `auto`、`parallel_tool_calls=False`**。
@@ -640,7 +647,7 @@ def bind_native(llm: object, role: str | None, *, evidence: bool = False,
     return llm.bind_tools(schema, tool_choice="auto", parallel_tool_calls=False)
 
 
-def tool_call_names(decision: NativeDecision) -> str:
+def tool_call_names(decision: PlannerDecision) -> str:
     """trace 用：这次决策**实际点到了**哪些函数名（含被丢弃的并发调用，便于事后核算）。
 
     ⚠️ 零调用回**空串**、不回 `decision.skill`（20260927 二稿改）：两者必须可分辨——

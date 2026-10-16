@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """planner 接口层的**接线**单测：离线、秒级、零网络零 LLM。
 
-**为什么单独一套**：`agent/native_plan.py` 的纯函数测试（`tests/test_native_plan.py`）
+**为什么单独一套**：`agent/planner_llm.py` 的纯函数测试（`tests/test_planner_llm.py`）
 只验"给一个响应，映射对不对"。而真正会出事的缝在**接线**上——`planner_node` 有没有
 把 schema 绑上、预算有没有取错、模型"一个函数都不点"时系统怎么处置、`decided is None`
 落到哪一轨。**"能力有测试 ≠ 接线有测试"**是这个仓反复吃过亏的一类洞（探针跑绿了、
@@ -141,7 +141,7 @@ def _expected_schema_names(role: str) -> set[str]:
     ⚠️ 20261007：原写法是"与 `visible_skills(role)` **全等**"，那句话只在
     `AGENT_TASK_STATE=0` 下成立——而档位 20261015 已撤（任务状态常开）⇒ 那半句话连同
     档位一起过期了，这里改成**无条件**加那三个伪函数（与产线逐字同一档）。
-    口径与 `tests/test_native_plan.py` ① 同一句：**多出来的只准是那三个申报过的伪函数**
+    口径与 `tests/test_planner_llm.py` ① 同一句：**多出来的只准是那三个申报过的伪函数**
     （名字取 `agent/tasks.py` 的常量，不硬编码），多别的一律红——"不扩权"没被放松。
     """
     names = {s.name for s in visible_skills(role)}

@@ -176,7 +176,7 @@ N/M 不为 0 时必须人工签字（写进 `eval/report/review_*.md` 的复审�
 白名单校验 → 缺参守卫（`_norm_pos_int` 等）→ pydantic（工具侧）。
 
 > ⚠️ **20261004 追记（这一段描述的是那之前的形态）**：`planner_node` 的输出**已换成 native
-> tool calls**（API 的 `tools` 字段 + `tool_calls` 返回，见 `agent/native_plan.py`）——
+> tool calls**（API 的 `tools` 字段 + `tool_calls` 返回，见 `agent/planner_llm.py`）——
 > 即"模型不再吐这五行文本"。**本方向想买的东西（格式由服务端约束、不由模型的文本纪律承担）
 > 已经由这条路拿到**，只是走的是 function calling 而不是 `response_format=json_schema`。
 > ⚠️ **别把两层读混**：**内部计划文本协议**（`plan_encode` ↔ `parse_plan`，由系统从
@@ -698,7 +698,7 @@ tool calls；`skill_schema.py` 那条老路**不必做了**，但 **D5（id 类�
 ### 附六：复读判据的两个"朝少报取值"的参数（20261003，P2/P1 方向的第五次加固）
 
 **起因**：uid=1 会话 320 的 19:41 那一轮。用户问「我有哪些未读通知呀」，planner 落成
-`chat` 零工具（native 档下"该查自己数据的问句"落 chat 是**已知的慢性漂移**，用真实上下文
+`chat` 零工具（接口层里"该查自己数据的问句"落 chat 是**已知的慢性漂移**，用真实上下文
 重放同一句 8 次得 7/8 正确、1/8 零帧 ≈12.5%，与既有的 ~15% 同水位），narrator 于是把
 **上 2 轮**那份"我没有翻日志的工具"的答案搬了过来：两条回复整体重合 **87.9%**、最长逐字
 连续块 **568 字**，于是用户收到一段**关于别的话题的真话**，只得下一轮自己纠错

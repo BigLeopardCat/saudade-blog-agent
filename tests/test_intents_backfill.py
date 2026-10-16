@@ -2,7 +2,7 @@
 """意图清单的**反方向**补交（20261009）：点了技能却没交清单 ⇒ 催一次。
 
 **这一件治什么**：批 ②（ADR-0002 追记）让模型把"主人这句话里有几件事"一次列全，
-但清单有两个出口（伪函数 `task_intents`、技能调用上的 `intents` 字段），而 native 档
+但清单有两个出口（伪函数 `task_intents`、技能调用上的 `intents` 字段），而 接口层
 `parallel_tool_calls=False` ⇒ 一轮只发得出一条调用、两个出口**互斥**。于是有两个方向
 的失败，此前只堵了一个：
 
@@ -175,7 +175,7 @@ def test_branch_wiring():
     check("摘掉清单伪函数（同一个手法：不是再劝一次，是把那个选项从 schema 里拿走）",
           "deny_pseudo.add(TASK_INTENTS)" in blk)
     check("摘完**重新绑定** llm（只 add 不重绑 = 摘了个没人用的集合）",
-          "llm = bind_native(" in blk and "deny_pseudo=deny_pseudo" in blk)
+          "llm = bind_planner_tools(" in blk and "deny_pseudo=deny_pseudo" in blk)
     check("记账用**格**的名字 `intents_backfill`（全量 trace 复扫按它数这一格）",
           'record("planner", "intents_backfill"' in blk)
     check("一次性：`if _acted_no_intents and not correction:` 且随后 `continue`",

@@ -176,7 +176,7 @@ def main() -> int:
 
     print(f"trace 总数 {len(files)}；其中有工具执行的轮次 {len(all_rows)}")
     _report("全部引擎", all_rows)
-    _report("native 档", native_rows)
+    _report("接口层", native_rows)
     safe = buckets.get(FAMILY_CMD, []) + buckets.get(FAMILY_WRITE, [])
     _report("可安全砍族（命令类 + 写类：事实块系统现成）", safe)
     _report("数据类（返回是 JSON，讲人话本身就是模型的活）", buckets.get(FAMILY_DATA, []))

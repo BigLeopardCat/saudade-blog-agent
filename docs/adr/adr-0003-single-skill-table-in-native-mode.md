@@ -3,7 +3,7 @@
 - **状态**：已采纳（20260927）
 - **背景文档**：`docs/native-toolcalls-mainline.md`、`docs/adr/adr-0001-*.md`（接缝在技能级）
 - **影响范围**：`agent/skills.py`（`build_planner_context(slim=)`、`_skill_plan_seq`、
-  `Skill.planner_contract`）、`agent/native_plan.py`（描述渲染走 `render_tool_marks`）、
+  `Skill.planner_contract`）、`agent/planner_llm.py`（描述渲染走 `render_tool_marks`）、
   `agent/graph.py`（`_render_planner_prompt(slim_skills=)` 与两个调用点）
 - **判据**：`tests/test_slim_skills.py`（纯渲染 + 信息等价 + 契约单一来源 + 驱动真
   `planner_node` 的接线）
@@ -16,7 +16,7 @@ native 档一轮 planner 调用里，**同一张技能表被下发了两次**，
 | | 来源 | admin 档字数 |
 |---|---|---|
 | 提示词里的散文菜单 | `skills.build_planner_context`（触发条件 / 参数 / 固定工具序列 / 完成判定） | 17,588 |
-| `tools` 数组 | `native_plan.build_tool_schema`（`description` = 同一段描述 + 完成判定，`properties` = 同一份 `skill_param_specs`） | 20,480 |
+| `tools` 数组 | `planner_llm.build_tool_schema`（`description` = 同一段描述 + 完成判定，`properties` = 同一份 `skill_param_specs`） | 20,480 |
 
 两者合计 38,068 字 = 单次 planner 调用的绝大部分输入。重复本身不致命，**两份各自漂移**
 才致命——本批落地时就抓到一处实证：`build_tool_schema` 里的 `content_query` 描述**原样
@@ -37,7 +37,7 @@ native 档一轮 planner 调用里，**同一张技能表被下发了两次**，
 - **口语变体说明**。
 
 配套一条**唯一渲染器**纪律：技能描述的角色相关展开（`render_tool_marks`）在
-`native_plan.build_tool_schema` 里也必须调用一次——两份形态共用同一个渲染器，不手抄第二份。
+`planner_llm.build_tool_schema` 里也必须调用一次——两份形态共用同一个渲染器，不手抄第二份。
 `slim` 只作为渲染参数。**20261004 追记**：`slim` 的默认值已翻成 `True`，因为
 `PLANNER_ENGINE` 拨盘与文本档**已整体删除**——生产只剩 native 一条路，而 native 恒用 slim
 （`slim=False` 现在只在 `tests/test_slim_skills.py` 里当对照臂，见 `skills.build_planner_context`

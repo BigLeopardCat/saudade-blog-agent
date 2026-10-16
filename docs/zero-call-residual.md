@@ -185,7 +185,7 @@ followup_entity_slot_category` / `_ambiguous`）。
 "我没有工具"的谎），改这一批时当场撞上：用例红得有理。
 
 处置：⑥/⑥d 的脚本让 planner **第二次仍然点 `chat`**（`_PLAN_CHAT` 写两遍），于是这一节
-仍然测的是**闸门兜底层**；决策层那条成功路径锁在 `tests/test_native_wiring.py`。
+仍然测的是**闸门兜底层**；决策层那条成功路径锁在 `tests/test_planner_wiring.py`。
 新出现的那个形状（有帧 + 驴唇不对马嘴的叙述）本批**不治**——它需要的是"答没答这个问题"
 这类判据，而那个判据族在本仓是明写的空白（见 `docs/问题记录.md` 与 gate 判据族的取向：
 全是"不许说假话"型）。**这是一条要记账的欠债，不是本批的成果。**
@@ -236,6 +236,6 @@ followup_entity_slot_category` / `_ambiguous`）。
   - `tests/test_skills.py` `calls_in_wrong_skill`：那句 `最近有哪些文章呀` 命中
     `is_site_corpus_question`（会走上一层纠偏，本节要验的 `_drop_correction` 就看不见了），
     换成中性句 `帮我看看天气吧`。
-- 新增接线锁 `tests/test_native_wiring.py`：判据前移的**成功路径**（纠偏一次 → 落到真工具）、
+- 新增接线锁 `tests/test_planner_wiring.py`：判据前移的**成功路径**（纠偏一次 → 落到真工具）、
   第二次仍点 `chat`（记账放行、**不放宽成 `wrapped`**），以及三条反锁
   （闲聊句 / 已有帧 / `uid<=0`）。

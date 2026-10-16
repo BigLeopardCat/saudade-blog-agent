@@ -4,8 +4,8 @@
 **这一件为什么存在**：LangGraph 的 checkpoint 提交粒度是 **superstep 不是语句** ⇒
 一个节点里连做 N 次写，进程死在中间、从上一个 checkpoint 恢复，那 N 次写会**各执行
 两遍**（实测见 `native-checkpoint-verdict-20261015.md` §2.6）。生产今天没有 saver
-（`build_graph()` 是裸的 `g.compile()`）⇒ 这件事炸不了，但**接上 saver 那天重放路径
-第一次通电，而它一行判据都没有**。本文件就是那道保险丝上的判据。
+（`build_graph` 的 `checkpointer` 缺省 `None`，生产调用点不传）⇒ 这件事炸不了，但**接上
+saver 那天重放路径第一次通电，而它一行判据都没有**。本文件就是那道保险丝上的判据。
 
 被测十一块（每条都配了会红的那一半）：
   · ① **§2.6 镜像**：真 `StateGraph` + `MemorySaver`，节点做到一半抛异常、再 `invoke(None)`

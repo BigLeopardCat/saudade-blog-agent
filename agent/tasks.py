@@ -6,7 +6,7 @@
 「带我过去后开启一个特效」这类多步目标只走完第一步就直接收尾，第二步从未被规划；
 模型自己写的 `TODO:` 行（`plan_encode` 的契约第 6 行）只有 trace 消费（**有写无读**）
 ——那一行 20261016 已整行退休，**本模块就是它的替代者**（取证见
-`agent/graph.py::plan_encode`：读端为零、名义消费者 reflector 实测从未收到过它）。
+`agent/plan_codec.py::plan_encode`：读端为零、名义消费者 reflector 实测从未收到过它）。
 本模块 = 那个缺口的补法：一张 `agent_task` 表（迁移 `agent_task_20260927.sql`）+
 模型侧的一次登记 + 系统侧的确定性结算。
 
@@ -14,7 +14,7 @@
 `decisions.py::_scan_action_intents` 只认**具名别名**（`_EFFECT_ALIASES` 里有"樱花/
 大雨"才会扫出 effect 意图），而本族失败的第二步宾语恰恰是**未具名指称**（「开启一个
 特效」）——扫描器结构上看不见它。能看见的只有理解语义的模型，所以登记的入口是模型
-（native 档的三个伪函数：意图清单 `task_intents`、登记 `task_hold`、撤下 `task_drop`）。
+（接口层的三个伪函数：意图清单 `task_intents`、登记 `task_hold`、撤下 `task_drop`）。
 这不违反"服务端记录不许模型自报"那条纪律：
 那条管的是**已发生的事实**（由 checker 回执认定，模型说了不算）；而"主人一共要几件事、
 还差哪一步"只存在于 planner 的决策里，没有任何下游能推导出来。
@@ -64,7 +64,7 @@
     的 narrator 是照"撤下"的注记说的。这一支今天没有判据覆盖（多轮用例里它没出现过），
     如实记在这里。
 
-⚠️ **本模块不许 import `agent.graph`**（与 `agent/native_plan.py` 同一条）：graph 是
+⚠️ **本模块不许 import `agent.graph`**（与 `agent/planner_llm.py` 同一条）：graph 是
 消费方，反向 import 会成环。本模块只依赖 `agent.skills` 的可见技能表。
 """
 
@@ -85,7 +85,7 @@ logger = logging.getLogger(__name__)
 
 # 模型侧的两个伪函数名（**20260927 拆成两个**，理由见 `TASK_DROP` 上方那段）。
 # 它们**不是技能**（技能表 `SKILLS` 里没有它们，`instantiate_plan` 也不认）——只在
-# native 档的 `tools` 数组里出现，被 `tool_calls_to_plan` 认出来后才交给本模块。
+# 接口层的 `tools` 数组里出现，被 `tool_calls_to_plan` 认出来后才交给本模块。
 # 刻意用**不与任何技能重名**的名字：重名会让"模型到底点了技能还是登记"在 trace
 # 里分不清。
 TASK_HOLD = "task_hold"
@@ -216,7 +216,7 @@ def step_tool_enum(role: str | None) -> list[str]:
       （声明成 `list_tags` 之类），漏掉它这一步就永远结算不掉。**没有新增泄露**：
       这些名字本来就以 `enum` 的形式在同一个 `tools` 数组里给过模型。
     两个来源都不含"不在白名单/模板里"的工具 ⇒ 闭集仍然是"能执行的"，不是"注册表里
-    有的"（全量 54 个会把模型够不到的名字塞进它眼前，见 `native_plan.py` 头注）。
+    有的"（全量 54 个会把模型够不到的名字塞进它眼前，见 `planner_llm.py` 头注）。
     """
     names = {str(t) for s in visible_skills(role) for t, _tmpl in (s.plan or ()) if t}
     names |= {str(t) for t in callable_query_tools(role)}
@@ -292,7 +292,7 @@ def task_hold_schema(role: str | None) -> dict:
                     },
                 },
                 "required": ["goal", "steps"],
-                # 伪函数的参数同样是**关闭的**（与 `native_plan.build_tool_schema` 出的
+                # 伪函数的参数同样是**关闭的**（与 `planner_llm.build_tool_schema` 出的
                 # 技能函数逐条同款，见那里的注）。只在这一层——`steps[].{}` 是自由形状。
                 "additionalProperties": False,
             },
@@ -362,7 +362,7 @@ def intents_prop_schema(description: str) -> dict:
     """意图清单那一格的**属性** schema —— 唯一来源（两个出口共用，见 `INTENTS_ARG`）。
 
     出口一：伪函数 `task_intents` 的参数（独立一条调用，这一轮不动手）；
-    出口二：**每一个技能函数上的可选同名字段**——`native_plan.build_tool_schema` 打开
+    出口二：**每一个技能函数上的可选同名字段**——`planner_llm.build_tool_schema` 打开
     任务状态时把它挂到每个技能上，`tool_calls_to_plan` 从动作调用的参数里摘出来。
 
     为什么需要出口二（20261008 实测，本函数存在的全部理由）：生产模型在
@@ -408,7 +408,7 @@ def intents_prop_schema(description: str) -> dict:
 def pseudo_tool_schemas(role: str | None) -> list[dict]:
     """本开关打开时，`tools` 数组末尾追加的**全部伪函数**（登记 + 撤下 + 意图清单）。
 
-    单一入口：`build_tool_schema` 只调它，名字集合的断言（`tests/test_native_plan.py`）
+    单一入口：`build_tool_schema` 只调它，名字集合的断言（`tests/test_planner_llm.py`）
     也只认它——三个伪函数的形状若各写一处，"开档只多这几个名字"这条判据就会漂移。
     """
     return [task_hold_schema(role), task_drop_schema(), task_intents_schema()]
@@ -426,7 +426,7 @@ def normalize_intents(args: Any, role: str | None) -> list[dict]:
         `intents_to_declarations`：登记要带机器可读的 `tool`，够不着的本领给不出）；
       · 超过 `TASK_MAX_INTENTS` 只收前几件（截断在这里，不靠模型自觉）。
     `skill` 用 `visible_skills(role)` 判**而不是** `SKILL_MAP`：这与 planner 菜单、
-    native schema、"这一轮能选什么"是同一张表（同源），够不着的本领在这里就被挡住，
+    工具 schema、"这一轮能选什么"是同一张表（同源），够不着的本领在这里就被挡住，
     而不是等到 execute 才炸。
 
     `params`（20261012 批 A）**原样留下**，只做"是不是个非空 object"这一条判断：

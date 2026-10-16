@@ -34,7 +34,7 @@ from pathlib import Path
 # 出厂档钉子（与 `tests/run_all.py` 的 `_PINNED` 同值）。**必须在 import `agent.graph`
 # 之前设**（settings 在那一刻构造）。
 # （20261004 去掉了 `PLANNER_ENGINE` 那一钉：接口层只剩 native 一条、拨盘已删，桩自带
-# `bind_tools`——见 `tests/_native_stub.py`。20261015 去掉了 `AGENT_TASK_STATE` 那一钉：
+# `bind_tools`——见 `tests/_planner_stub.py`。20261015 去掉了 `AGENT_TASK_STATE` 那一钉：
 # 档位整族撤掉、任务状态常开 ⇒ 这里**没有本套件自己要钉的档位了**，环境由入口给。）
 
 from langchain_core.messages import (AIMessage, AIMessageChunk, HumanMessage,
@@ -51,7 +51,7 @@ from agent.factblock import (  # noqa: E402
 )
 from agent.graph import build_graph, graph_input  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from _native_stub import bind_tools_stub, native_reply  # noqa: E402
+from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 from tools import base as _base  # noqa: E402
 
 FAILS: list[str] = []
@@ -270,11 +270,11 @@ def test_action_restate_regex():
 class _ScriptedLLM:
     """按入参形态分流 planner / model（同 `test_gate_replan.py` 的理由）。
 
-    planner 那一支走 `_native_stub.native_reply`：夹具里的 `SKILL=/PARAMS=` 文本被翻成
-    native tool_calls（20261004 接口层单通道），判据仍在 `agent/native_plan.py` 里。
+    planner 那一支走 `_planner_stub.toolcall_reply`：夹具里的 `SKILL=/PARAMS=` 文本被翻成
+    native tool_calls（20261004 接口层单通道），判据仍在 `agent/planner_llm.py` 里。
     """
 
-    bind_tools = bind_tools_stub        # `bind_native` 要用（见 _native_stub）
+    bind_tools = bind_tools_stub        # `bind_planner_tools` 要用（见 _planner_stub）
 
     def __init__(self, plans: list, narrations: list):
         self.plans, self.narrations = list(plans), list(narrations)
@@ -290,8 +290,8 @@ class _ScriptedLLM:
             return AIMessage(content=self.narrations.pop(0))
         if not self.plans:
             self.exhausted.append("planner")
-            return native_reply("SKILL: chat\nPARAMS: {}")
-        return native_reply(self.plans.pop(0))
+            return toolcall_reply("SKILL: chat\nPARAMS: {}")
+        return toolcall_reply(self.plans.pop(0))
 
 
 class _FakeTool:
