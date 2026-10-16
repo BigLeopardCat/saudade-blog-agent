@@ -8,7 +8,7 @@
 > ⚠️ 下表是 20260927 的读数，**别当现值用**。20261012 复测：**840 errors / 221 个文件**
 > （241 fixable）——15 天里涨的是**文件数**（新增的测试与 `eval/` 入口），不是哪个文件变脏：
 > 每文件的分布**形状没变**（`tests/test_skills.py` 108→111、`tools/base.py` 45→52、
-> `tests/test_reports.py` 39→38、`eval/probe_admin_write.py` 28→31、`agent/graph.py` 16→22）。
+> `tests/test_reports.py` 39→38、`eval/admin_write_probe.py` 28→31、`agent/graph.py` 16→22）。
 > 本文件是"新代码要干净"的**参照点**，不是"存量有多少"的**账本**——参照点没变，
 > 所以下面的纪律一条都不用改；但引用绝对数之前先按上面那行命令**自己跑一遍**。
 
@@ -44,7 +44,7 @@ uvx ruff@0.14.4 check --no-cache --statistics .   # 按规则计数
   ⇒ **578 里约 86% 是行长与导入排序**。这条要说清楚：基线数字大不代表代码烂，
   只代表这个仓没把格式化当门禁。真正值得看的是 F841/F811 那 9 条。
 - 最集中的文件：`tests/test_skills.py` 108、`tools/base.py` 45、`agent/skills.py` 41、
-  `tests/test_reports.py` 39、`eval/probe_admin_write.py` 28、`agent/graph.py` 16。
+  `tests/test_reports.py` 39、`eval/admin_write_probe.py` 28、`agent/graph.py` 16。
 
 CI 目前只跑一个更窄的闸：`eval.yml` 的 `uv run --frozen ruff check --select F821 .`（未定义名，秒级）。
 F821 是"会炸"的那一类，E/F/I/W 是"会烂"的那一类。本文件管后者。

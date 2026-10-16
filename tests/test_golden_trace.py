@@ -288,7 +288,7 @@ check("弹卡族判据的反向对照：board_audit 全在恒弹卡族、tag_cre
 
 # 接线（能力有测试 ≠ 接线有测试）：通道落在跑法里不代表夜间真给身份——脚本里少了那行
 # export，夜里跑的仍是 uid=0 的虚构态，而报告里只会安静地多出几条 SKIP。两条都要在，
-# 且都带"未设即响亮跳过"的说明（与 reconcile_offline_test 读脚本原文同一纪律）。
+# 且都带"未设即响亮跳过"的说明（与 test_reconcile_offline 读脚本原文同一纪律）。
 _nightly_src = (ROOT / "scripts" / "nightly_regression.sh")
 _nightly = _nightly_src.read_text(encoding="utf-8") if _nightly_src.exists() else ""
 check("夜间脚本真给两条身份（export GOLDEN_ADMIN_UID / GOLDEN_USER_UID）",

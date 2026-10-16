@@ -1514,7 +1514,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > ⑤技能名 ≠ 工具名（分类三件：技能 `category_*` / 工具 `*_category`）——混用会产生
 > "未知工具"错误帧、整轮零弹窗；已在 `tests/test_tag_admin.py` ⑧ 用"工具名 ∈ 注册表"锁死。
 > 验证：`tests/test_tag_admin.py`（离线）+ golden 92 条（新增 4 条写类用例，不做真写）+
-> 活体探针腿 ⑪–⑮（`eval/probe_admin_write.py`，统一"读到连接关闭才算干净收尾"）。
+> 活体探针腿 ⑪–⑮（`eval/admin_write_probe.py`，统一"读到连接关闭才算干净收尾"）。
 > 上版：2026-09-20（20260920 七项：①调用者身份与权限模型——新增 `agent/principal.py`
 > （身份的唯一构造点）+ `agent/authz.py`（scope 词汇表 / 工具→scope 声明表 / 角色→授予表 /
 > 唯一判据 `check()`），execute 在调用工具之前过判据，默认 shadow 只记不拦；角色只来自
