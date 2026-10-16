@@ -592,6 +592,21 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 
 （多 agent 升级后追加：路由分布、各子 agent 超时率/成功率。）
 
+**自动通道的现状（20261016 核）**：上表里"已经落地"与"有人跑才有"是两件事，混在一起
+会让"这一周没人看"读成"这一周没问题"。今天的账是：
+
+| 通道 | 频率 | 覆盖 |
+|---|---|---|
+| `scripts/healthcheck.sh` 第 1–8 项 | 每分钟 | Rust / agent 存活、worker 崩溃、nginx error、无头浏览器残留、夜间哨兵、出站协议违规、安全响应头 |
+| `scripts/healthcheck.sh` 第 9 项 | **每天一次**（按天边沿触发） | `eval/daily_metrics.py` 一行：真实流量效率 + **写重复** + 按技能异常聚集 + planner 前缀缓存命中率 |
+| `scripts/nightly_regression.sh` | **20261012 起挂起**（主人「钱包扛不住」） | L1 + L2 + L3 + `trace_alert` + `golden_draft` —— 它把这五件装在**同一个脚本**里，所以一停全停 |
+
+⇒ 第 9 项就是为"夜间挂起之后还剩什么"补的：`eval/token_cost_report.py`（成本 / 前缀
+缓存）与 `eval/trace_metrics.py`（真实流量效率）都是**零 LLM 成本**的读数装置，此前却
+没有任何自动通道——代价有现场：20261016 planner 前缀缓存命中率 84.6% → 51.8%（当天改
+了 `_render_planner_prompt`，改提示词 = 整段前缀失效 = 多花钱），**没有任何东西会报**。
+判据与四条边见 `tests/test_daily_metrics.py`。
+
 ### 5.3 Logs
 
 现有 logging 升级为 JSON 结构化（`{"ts":..., "trace_id":..., "event":...}`），与 trace_id 关联，

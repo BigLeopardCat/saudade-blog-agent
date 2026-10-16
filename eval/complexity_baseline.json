@@ -59,10 +59,6 @@
     "c": 36,
     "lines": 152
   },
-  "agent/react_line.py::SkillExecutor.run": {
-    "c": 33,
-    "lines": 124
-  },
   "agent/skills.py::_expand_write_skill": {
     "c": 97,
     "lines": 473
@@ -143,10 +139,6 @@
     "c": 58,
     "lines": 259
   },
-  "eval/task_state_probe.py::main": {
-    "c": 36,
-    "lines": 111
-  },
   "eval/trace_reconcile.py::reconcile": {
     "c": 72,
     "lines": 165
@@ -194,10 +186,6 @@
   "tests/test_nav_truthfulness.py::test_gate_nav_present_claim_verified_against_page_ctx": {
     "c": 38,
     "lines": 246
-  },
-  "tests/test_react_line.py::main": {
-    "c": 37,
-    "lines": 199
   },
   "tests/test_retention_manifest.py::main": {
     "c": 41,

@@ -98,7 +98,8 @@ function calling（`tool_choice=auto` / 强制指定 / 函数侧 `strict`），�
 1. **`TODO:` 行有写无读。** 提示词**主动教模型写它**（「多步链中间轮可另加一行：
    `TODO: <步骤1> → <步骤2>`」，`agent/graph.py`），
    `plan_encode` 写它（`agent/graph.py`）、`parse_plan` 读进
-   `plan_obj["todo"]`、trace 记一条——**然后没有任何消费者**。planner 提示词的
+   `plan_obj["todo"]`、trace 记一条——**然后没有任何消费者**（**已了结**：这一行
+   20261016 整行退休，取证与反向锁见 §6.6 末尾那条「落地状态」）。planner 提示词的
    14 个槽位（skills_context / tools_desc / page_ctx / round_info / intent_hints /
    doc_anchors / recent_context / short_reply_hint / tool_results / ref_hints /
    reflector_feedback / correction / max_rounds / user_msg）里**没有"上一轮计划/剩余步骤"**。
@@ -554,6 +555,17 @@ submitted → running → succeeded / failed / cancelled
 补的），并且已经有了对账口径（`eval/corpus_invariants.py` 的 **I5 `param_unread`**）。
 新主线里这条改由任务行承担，**必须同批配上一条扫它的不变量**，否则就是第三遍。
 
+**落地状态（20261016 补）**：这条纪律当年只写下了、没有执行——`TODO:` 行一直留到 20261016
+才**整行退休**（写端 `plan_encode` / 读端 `_parse_todo`＋`parse_plan` / 提示词契约三处同批）。
+退休的取证是全量 trace 实测，不是"看着像没人用"：**1194 份生产 trace 里 `planner.todo` 只
+出现过 7 个请求 / 10 次**，而它的名义消费者 reflector 跑过的请求是 51 个，**两者交集为 0**；
+在场的那几次里还常是垃圾（模型照抄提示词里的 `<步骤1> → <步骤2>` 占位符，`_parse_todo` 把
+模板与自述一起切进列表）。"还剩什么没做完"这个能力**早已由 §6.7 的 `agent_task` 表承担**
+（`agent/tasks.py` 自己的头注就写着这一行"有写无读"）⇒ 两条出路（补消费者 / 删掉）里选了
+删掉——补一个扫描不变量只是把同一件事记第二遍。反向锁落在 `tests/test_skills.py` 的
+`test_todo_line_retired`（写端塞了 `todo` 也不产出、读端不再返回那一格）与
+`tests/test_native_wiring.py` 的契约源码锁。
+
 ### 6.7 落地形态（20260927，批 D）
 
 上面 6.1–6.6 是**设计草案**，落地时被两处证据改掉了。按实际落地的样子记（ADR 全文见
@@ -820,6 +832,59 @@ dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop
 
 **完整取舍与替代选项**见 ADR-0002 文末《20261015 撤档追记》；症状／读数／换尺清单见
 `docs/问题记录.md` §1.63。
+
+### 6.14 开着的行只许有两种结局：被回执结掉，或被期限结掉（20261015）
+
+§6.13 把"完成"补到了两源，补的是"**做成了却没结账**"。这一节补的是另一半——"**完不成**"。
+
+**病（生产库直读，2×2 不靠 trace）**：窗口内 17 行 `running` **全部 `cursor=0` /
+`total_steps=1`、声明的那一步工具一次都没执行过**；`succeeded` 那 8 行**每一行**声明的那一步都
+真执行过（8/8）。⇒ 结算判据本身是好的，结不掉的行有且只有两条来路，而**两条在代码里都没有任何
+一处会改 `state`**（`moved == cursor` ⇒ `return None` ⇒ `continue`）：
+
+- **① 同意闸挡下**：`consent_required` → `check BLOCK` → **零回执**。
+- **② 换另一件工具办掉了**：回执里的工具名与声明的那一步对不上 ⇒ 第二证据源（工具名 **∧** 共享
+  参数键相等）也接不住。
+
+这些行此后永远停在 `running`，只能等 Rust 读侧的 72h 时效把它们从**注入**里抹掉——**行本身永久
+留在表里、状态永远在撒谎**。业界做法：审批/动作类待办必须有**终态**（超时、放弃、失败）。
+
+**形态（`agent/tasks.py::expire_transitions` → `transition_frames`，接线在
+`server.py::_task_settle_and_expire`；顺序**先结算、后收口**）**
+
+| 触发 | 转换 | 依据 |
+|---|---|---|
+| 声明的那一步**本轮**被同意闸挡下（`via=consent`） | → `input_required` + 同意闸问句 | 当轮已知的事实，**不看年龄**（本轮刚登记的行也接得住） |
+| 年龄 ≥12h 且当前不是 `input_required`（`via=stale`） | → `input_required` + 催办问句 | **催办本身就是状态转换** ⇒ 转过之后这一支不再命中 ⇒ **天然只问一次**，不另立标志位 |
+| 年龄 ≥48h | → `cancelled`（问句清空） | 六态里已有的终态、已有写入方（`normalize_drop`），**不新造状态** |
+
+**四条约束／坑（都踩过或差点踩）**
+
+1. **帧形状一个字节没改**：复用结算帧那 7 键（不带 `idempotency_key`），`steps` 原样带回
+   ——它是审计线索，**"过期"≠"撤下"**（`normalize_drop` 给 `steps=[]` 是撤下语义）⇒
+   **Rust / 前端零改动**，`TASK_OPEN_STATES`（读侧单点）也不用动。**同值不产出**：Rust 收到该
+   `task_id` 的 `__TASK__` 帧就 `attempts+1`，空转帧＝刷计数。
+2. **不变量 `12 < 48 < TASK_READ_TTL_HOURS(72)`**：转换落在读窗口外就是**死代码**（本仓
+   「写了没人执行」那一族）。判据从父仓 `src/routes/chat.rs` **现读**那个常量，**不手抄**。
+3. **年龄解析只此一处**：抽成 `tasks.age_minutes`，与 `server.annotate_exec_ages` **共用**那条已
+   测过的跨年规则（`MM-DD HH:MM` 按当年解析、超前 6 小时以上退一年）。**看不懂返回 `None`** ⇒
+   记 `producer.task_expire_undecidable`（**认不出必须响亮**，不许退化成"刚刚"）。
+4. **系统自己写的问句要在游标推进后清掉**（`TASK_SYSTEM_ASKS` 那两句**固定常量**）：留着它更糟
+   ——`tasks.next_actionable` 有一条判据是"有 `pending_question` 的行不自动续办"⇒ 过期的问句会把
+   那一行**永久锁死**（既不续办、也不再问）。**模型自己写的问句一个字不许动**（认得出才敢清）。
+   同理**问句文本不能抄现成的**：`authz.consent_frame` 是给**模型**看的整段（`__ERROR__:` 前缀 +
+   uid/role + 纪律句）；弹窗卡面问句末尾写着「点「确定」我就去办」——**指着一张卡**，而这句话印出
+   来的时刻那张卡早就不在了。
+
+**明确不做**：**显式取消信号**（`agent/confirm.py`：「取消不发请求，令牌自然过期」⇒ 取消在架构上
+到不了 agent；要加须改父仓 `src/` + 前端，且会推翻 20260924 事故后"真实结论由轮次收尾给出"的
+设计）——**这是产品决定，归主人**；出口②的自动认账（判据现在是工具名粒度，放宽会把无关工具算
+进去）要单独定价；`agent_task` 的独立 sweep（只能是父仓 `scripts/` 夜间 SQL，归主人跑）；`failed`
+的写入方（"过期"与"失败"是两件事）。
+
+**判据**：`tests/test_task_expiry.py`（12 条，含两条反控）；真链路 `eval/task_state_probe.py`
+**第三轮**（喂 13h / 49h 两条行）实测两条终态帧都真的发了出去。**完整取舍**见 ADR-0002 文末
+《20261015 终态追记》；症状／读数见 `docs/问题记录.md` §1.64。
 
 ---
 

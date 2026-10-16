@@ -77,9 +77,160 @@
   不改变行为"这条结论本批是靠 8 条单轮对照撑住的。细节见 ADR-0011《读数》。）
   裁决、读数与触发条件（采纳必须先做写幂等账）见 [ADR-0011](docs/adr/adr-0011-graph-holds-context-checkpoint-memory.md)
   与架构文档 §4.8。
+- **帧契约从口头约定收成一件有锁的产物**（新增 `agent/frames.py` + `tests/test_frame_contract.py`）：
+  第二条臂（`AGENT_ARM=react`）产帧要喂哪些 state 键，此前是 grep 数出来手抄的，实测**两张
+  手抄表合起来漏 8 格**——闸门那张漏 `task_frames`（析取里的一条腿，少喂只会让闸门静默少
+  开火），`_popup_state` 那张 docstring 自称四格、AST 走完闭包实测**十一格**，其中 `executed`
+  正是「令牌用在那一件上就作废」那一格 ⇒ 臂的弹卡路径上那条判据**恒不生效**。新锁从
+  `graph.py`/`server.py` **现取**键集与帧名，与声明算双向差集，带四条反向对照。**行为变更只
+  落在 react 臂**：`react_line._consent_missing` 从 20261012 收窄之前的 `not self.grant`
+  改成直调生产 `graph._grant_covers`（`SkillExecutor` 多收一个 `state`）。生产默认
+  `AGENT_ARM=graph`，**线上路径逐字节不变**。
+- **第二条臂的循环拆成真节点，外层适配器退场**（`agent/react_arm.py` 900 行 → 四节点图；
+  `create_agent` / `ConvergenceMiddleware` / `wrap_tools_with_receipts` 删除）。臂现在是一棵
+  真的 `StateGraph`：`planner`/`execute`/`model`/`gate` 是编译进图的节点，`gate_node` 与
+  `_confirm_popup` 拿到的是**真 `AgentState`**（不再是塑形出来的最小 dict），`langgraph_node`
+  由 langgraph 自己盖（不再冒充），三份塑形器与五个帧构造器一起删掉。**两处刻意的口径差、
+  明写不假装同源**：① **真流式**——narrator 的分片由 LLM 流给（生产今天就是这个形状），
+  代价是分片在闸门**之前**出去（生产同形，`__RESET__` 负责撤屏）；② **`gate` 节点异常
+  吞掉按 pass 处理**（闸门是加装的一层，它自己炸了不该把主人这一轮的答复整条吃掉）。
+  **行为变更只落在 react 臂**：生产默认 `AGENT_ARM=graph`，`graph.py` 与 `server.py`
+  **一个字节没动**、线上路径逐字节不变。判据从"喂没喂"换成**结构锁**
+  （`tests/test_frame_contract.py` ③④：图里真有那四个节点名、两张键集表全是 `AgentState`
+  的声明键、臂源码 AST 里手搓 `("updates", …)` / `langgraph_node` 字面量 / `*_frame`
+  构造器一个都不许有）。**落地时抓出一条真回归**：内层 `create_agent` 白送的"模型自己
+  那条带真参数的 `AIMessage`"没补回来 ⇒ 决策模型认不出"这件事我刚做过"、反复重问、
+  烧穿轮次预算（全量 183 条里 19 条变红）。补法是 `_pair_frames` 按 `execute` 登记的
+  出处把工具帧还原成**带真参数**的合成 assistant；30 条定点块 15/30 → 29/30，
+  全量 156/183 → 172/183。
+- **默认向量模型换掉**（`config/settings.py`）：`embedding_model` 的缺省值从空串改成
+  `qwen3.7-text-embedding`——百炼平台上原来那个模型已下线。**取值优先级不变**（`.env` 的
+  `EMBEDDING_MODEL` 仍覆盖缺省值）⇒ 只动缺省值那一格；但缺省值不再是空串之后，那个「向量路
+  可用」的谓词（`bool(embedding_model.strip())`）在**没配这个变量**的环境里不再拦。
+- **计划文本的第 6 行 `TODO:` 整行退休（行为变更，`docs/native-toolcalls-mainline.md` §6.6）**：
+  那一行是"多步链的中间轮声明后续依赖步骤"，写端 `plan_encode`、读端 `_parse_todo`＋
+  `parse_plan`、提示词契约三处**同批删掉**。它不是被"砍掉一半能力"——**读端一个都不剩**：
+  全量 1194 份生产 trace 里 `planner.todo` 只出现过 7 个请求 / 10 次，而它的名义消费者
+  reflector 跑过的请求是 51 个，**两者交集为 0**；在场的那几次里还常是垃圾（模型照抄提示词里
+  的 `<步骤1> → <步骤2>` 占位符，解析器把模板和自述一起切进列表）。"还剩什么没做完"这个能力
+  早已由 `agent_task` 表承担（`agent/tasks.py` 自己的头注就写着这一行"有写无读"）。planner
+  提示词里那段"多步链的后续步骤**由你下一轮看着帧继续决策**、本轮不预先排"保留，参数纪律
+  （后续步骤的参数只能等上轮工具返回后填）一字未动。反向锁：`tests/test_skills.py` 的
+  `test_todo_line_retired`（写端塞了 `todo` 也不产出、读端不再返回那一格、老文本里的 TODO 行
+  只被忽略）+ `tests/test_native_wiring.py` 的契约源码锁（契约里**不再**有 `TODO:`）。
+  同批销账：`docs/agent-architecture.md` §3 里那句仍在用**现在时**描述这一行的正文改成"已退休"、
+  `tests/test_cross_language_tables.py` 把 `TODO` 从"别的协议族"挪进新的
+  `RETIRED_TAG_FAMILIES`（反控：清空它 ⇒ 扫描当场红，证明这张表不是摆设）。
+  **射程如实记**：这是 planner 提示词 + 计划协议的改动，而 `_render_planner_prompt` 是
+  **两条臂共用**的（`agent/react_arm.py:777`）⇒ 两臂都重评了。**golden A/B**（回归组 19 条 ×
+  两臂 × 两变体 × 3 轮、交替跑，共 228 个用例轮次）：before 56/57、after 55/57 首跑绿，
+  react 臂两变体各 57/57；三处首跑红落在**互不相同**的三条上，且其中一条出在**对照臂** ⇒
+  再按"复跑计数"逐条定性（6 轮 × 两变体）：`exec_memory_none_honest` 12/12 绿、
+  `followup_named_doc_no_search` 12/12 绿、`followup_named_doc_reread` 对照臂 4/6 而本臂
+  6/6——**两变体没有可分辨的差别**。对照历史基线（`landing_gate.py --red-rank`，92 次全量跑）：
+  这三条的红率分别是 **4/92、3/92、3/92** ⇒ 每变体 57 个用例轮次里 1–2 条红**正好落在基线上**，
+  两臂都没有多出来的红。
+- **新判据（无行为变更）：`AgentState` 的累加器要么带 reducer、要么在台账里写明理由**——
+  `tests/test_state_reducers.py`。LangGraph 只对**带 reducer 的键**做合并，其余 last-write-wins；
+  `AgentState` 28 个键里 **9 个是 list**，其中**只有 `messages`** 带 `Annotated[list, add_messages]`，
+  其余 **8 个是裸 list**，混着三种语义：**请求内累加器**（`executed` / `receipts` / `noop_specs` /
+  `blocked_seen` / `tool_data`，累加靠每个写入者手工把整个累加器再返回一遍——漏掉那一步
+  **静默丢一半、没有任何东西会红**）、**覆盖语义**（`blocked` 只含本轮、`task_satisfied` 每轮重算）、
+  以及**未裁决**的 `task_frames`（壳累加 / `_plan_update` 整体赋值两种并存）。闸是**双向台账**
+  （不许漏登、也不许留过期条目），含三条合成反控、一条负控、一条**端到端反控**（往 `AgentState`
+  真加一个裸 list 键 ⇒ 当场红并点名）。它补的是 `tests/test_state_keys.py` 的**另一半**：
+  那个闸管**键名**在不在 schema 里（「初值」那一半已锁死），这个管**合并语义**有没有被声明出来
+  （「reducer」那一半此前零判据）。**真加 reducer 的那一步先不做**，理由与重开条件见
+  `docs/adr/adr-0010-state-accumulator-reducers-deferred.md`（已搁置）。
+- **菜单被摘之后的"改选"不再能把动作反过来（行为变更，`docs/问题记录.md` §1.57）**：写工具因
+  环境型受阻（`unavailable`）被 `denied_skills` 摘掉后，planner 会**改选**菜单里剩下的那一件
+  ——而"剩下的一件"常是它的**反极性兄弟**。实测形态：主人说「收藏这篇文章」，回复却是一张
+  「**取消收藏**文章 12」的确认卡。现在这种排法在**拦卡那一格**就被退回（不进 `picks`、
+  不弹卡——弹了就是把误靶洗成一条已授权的写），并由 `execute_node` 既有的同意闸那一格产一条
+  **`action_conflict` 错误帧**交 planner 按主人说的那件重新规划。**这一件不被摘菜单**
+  （新码 `retry_param=True`）：模型需要的是一句"你排反了"，再摘一件只会把菜单越摘越空。
+  多意图句（「把 12 收藏、把 13 取消收藏」）**不拦**——反极性兄弟在那里服务的是另一件目标。
+  射程：生产 trace 里本形状 0 次（uid=0 哨兵专属）；三条 `own_*` golden 由 0/3 转 3/3，
+  同族相邻 6 条 6/6 不回退。
+- **新原因码 `action_conflict` 跨两侧同步**：`agent/block_reasons.py` 与 `server.py::_REASON_CN`
+  逐值同锁（`tests/test_block_reasons.py`），后者 19→20 已按 `eval/wordlist_gate.py` 的
+  `--update` 通道记账（该表是给主人看的显示字、不是判据词表）。
+- **判据（golden 侧，无行为变更）**：命题否定那一族收下**劝阻式**这一副面孔——「**别以为**
+  已经收进去啦」与「不是已经帮你收进收藏夹了」是同一个否定的两种句式（祈使 vs 陈述）。
+  中段守卫照旧，双重否定（「别以为**我没**帮你收藏好啦」）当场判红。归档射程：两条收藏负正则
+  命中 137 处，劝阻式只有 1 处。
+
+- **补 3 条「跨通道混合」golden 用例（新判据，无行为变更）**——命令帧与确认卡两条载荷通道
+  首次同轮：`mix4_cmd_and_write_one_breath`（特效命令 + 后台待办）、`mix4_read_then_write_card`
+  （读标签 → 建二级标签）、`mix5_cmd_nav_read_three_way`（特效 + 跳转 + 内容查询，两轮）。
+  判据形状照 `mt3_two_writes_second_card_next_round` 的先例：**本轮真办的那件必须真发生，
+  没办的那件必须留下任务登记**（`require_task_goal_per_intent` 自己处理"那件上了卡就跳过"
+  这一格采样）。首版写成「一轮三件全办完」是**判据自己错**（实测 5 跑 3 红）——本仓 planner
+  一轮办一件、跨轮推进是已定的合法形态，`mt3_*` 那条就是这么写的。
+- **同批记进 `_note` 的一个坑（判据的，不是能力的）**：用例漏 `context.conversation_id` 时
+  `intent_frames` 对 conv 不是 int 的一轮**静默返回空**（实测 `conv: null / frames: 0`）
+  ⇒ 剩下的那件**不执行、不上卡、不登记**，无声消失（叙述倒是诚实的，会明说没办成）。
+  同族写族混合作业（`mix2_*`/`mt3_*`）都带会话 id，新用例照此补齐。
+- **零成本观测接回自动通道：`eval/daily_metrics.py` 一行 + `healthcheck.sh` 第 9 项**
+  （`docs/eval-observability.md` §5.2）。20261012 起夜间回归整体挂起，而
+  `scripts/nightly_regression.sh` 把 L1/L2/L3 + `trace_alert` + `golden_draft` 装在
+  **同一个脚本**里 ⇒ 一停全停，生产健康只剩 healthcheck 每分钟那八项；`token_cost_report`
+  与 `trace_metrics` 这两件**零 LLM 成本**的读数装置从此没有任何自动通道。代价有现场：
+  20261016 planner 前缀缓存命中率 84.6% → 51.8%，**没有任何东西会报**。
+  **该处初稿把原因写成"当天改了提示词"，当天复盘更正为误判**：那天 17 条 trace 全落在
+  02:29–04:24，而 `agent/prompts.py` 的改动 03:11 才落盘、05:09 才随重启生效（health.log
+  只有那一次 master 更换）⇒ 当天读数一次都没跑到新提示词。真实原因是**流量稀疏**：
+  两小时窗口里只有 4 段对话、段间隔 20 分钟以上，前缀缓存在段间冷掉，每次冷启动丢掉
+  整个 ~51k 前缀。新的一行按天边沿触发
+  （一天最多一行，跑挂了当天留一条 WARN、不重试），内容是真实流量效率 + **写重复** +
+  按技能异常聚集 + planner 缓存命中率。**写重复是新判据**：一轮里同一个 (工具, 参数)
+  成功执行 ≥2 次——实测生产 3 次候选里 **1 次为真**（`create_dashboard_todo` 在确认回调
+  那条路上被连执行 3 次、三条都报"加好了"），另两次是尺子不对（一次 `consent_required`
+  从未执行、一次 `changed=False` 已被 `_trim_noop_specs` 拦住）⇒ 四条边由
+  `tests/test_daily_metrics.py` 锁住（含一条反控）。
+  **写路径没有"同一件已办过"的守卫**（`_trim_done_reads` 只读、`_trim_noop_specs` 只认
+  零净改动）——如实登记，本批**只量不改**。
 
 ## 20261015
 
+- **节点交给图的键从此有一条机械闸**：LangGraph 只把 `AgentState` 里**声明过**的键透出
+  updates 流，节点返回一个没声明的键**不报错、不告警、直接丢掉**——这一族在本仓已经付过
+  **13 次**代价（`AgentState` 里 13 个键各自挂着一句「必须显式声明（理由同 `fallback_text`…）」，
+  最贵的 `fallback_text` 静默死了 **2.5 周**），而此前**没有任何机械判据**看着它，只有四处
+  为具体键名手加的点检。现在 `tests/test_state_keys.py` 静态找出所有"把一份 dict 交给图"的
+  函数，断言那份 dict 的**最外层**键全部已声明；反向断言声明的键**都有人写**、`graph_input`
+  的初值键集**恰好**等于声明集；两张豁免（写确认卡的 `kind` 判别器、写卡时的站内现状快照）
+  做成**双向台账**（多登一个键红、留一条过期条目也红）。两条合成反控 + **真源码反控**
+  （往 `execute_node` 的 updates 注入未声明键 ⇒ 当场红）。
+- **`graph_input` 补 `pending_action` 初值**——此前它是**唯一一个声明了却没有初值的键**：只在
+  写之后才被读，今天无害，但 `state["pending_action"]` 会当场 `KeyError`、`state.get(...)`
+  是静默 `None`（哑弹）。**planner 轮次上限强制收尾补一条 trace 事件
+  `planner.round_cap_wrapup`**：这条出口此前只有日志、trace 里看不见，离线统计读不到"有多少轮
+  是撞上限收的尾"（它与"模型自己判断做完了"是两件事）。**agent 对外行为零变化**（不弹卡、
+  不执行、不改帧）。
+- **台账里的行从此只有两种结局：被回执结掉，或被期限结掉**——生产库直读的一手读数
+  （窗口内 17 行 `running` 全部 `cursor=0`、声明的那一步工具**一次都没执行过**）坐实了
+  第三种结局的存在：**结不掉的账**。两条路都到不了结算判据——① 同意闸挡下（`consent_required`
+  → checker 判 BLOCK → 零回执）；② 主人要的那件事被**另一件工具**办掉了（回执里的工具名
+  对不上声明的那一步）。这两行此后永远停在 `running`，只能等 Rust 读侧的 72h 时效把它们从
+  **注入**里抹掉，**行本身永久留在表里、状态永远在撒谎**。现在补齐两个终局：
+  **①同意闸挡下的行当场转 `input_required`**（"在等你点头"是这一轮已知的事实，不必等期限）；
+  **②期限**——年龄 ≥12h 且不是 `input_required` ⇒ 转 `input_required` 并把催办问句
+  `pending_question` 写进去（**转过之后这一支不再命中 ⇒ 天然只问一次**，不另立"问过没有"
+  的标志位）；年龄 ≥48h ⇒ 转 `cancelled`（终态，问句一并清空）。软/硬/读侧时效三条线
+  `12 < 48 < 72` 用测试从父仓 `src/routes/chat.rs` **现读** `TASK_READ_TTL_HOURS` 来断言
+  （转换若落在读窗口外，这段代码就是死代码——本仓「写了没人执行」那一族）。`created_at`
+  看不懂 ⇒ **不转换 + 记一条 `producer.task_expire_undecidable`**（认不出必须响亮，不许
+  退化成"刚刚"）。**帧的形状一个字没改**：终态复用结算帧那 7 键（不带 `idempotency_key`），
+  `steps` 原样带回（它是审计线索，不清空）⇒ **Rust 与前端零改动**。
+- **系统自己写的问句，在游标推进之后由系统清掉**——`advance_by_tools` 此前无条件保留
+  `pending_question`。这一批新增的两句（催办 / 同意闸）是**系统写的**，转过一次之后就该消失；
+  留着它反而更糟：`tasks.next_actionable` 有一条判据是"有 `pending_question` 的行不自动续办"
+  ⇒ 那句过期的问句会把这一行**永久锁死**（既不续办、也不再问）。模型自己写的问句一个字不动
+  （`TASK_SYSTEM_ASKS` 是固定常量，认得出才敢清）。**为什么不复用同意闸那段现成的话术**：
+  `authz.consent_frame` 是给**模型**看的一整段（带 `__ERROR__:` 前缀、uid/role、"本轮未执行"
+  这类纪律句），而 `pending_question` 是**要逐字问给主人**的一句；弹窗的卡面问句也不能抄
+  ——它末尾写着「点「确定」我就去办」，**指着一张卡**，而这句话要印出来的时刻那张卡早就不在了。
 - **未定义名（ruff F821）从"只有 CI 跑"变成"本地也跑"（判据，20261015）**——撤档那批删掉了
   `eval/task_state_probe.py` 的档位变量，报告写入段里还留着一句 `{'1' if flag else '0'}` ⇒
   探针跑完两轮真链路、**写报告那一刻** `NameError`：CI 当场红（`ruff check --select F821`），
