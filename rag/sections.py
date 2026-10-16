@@ -33,10 +33,23 @@ agent 包"来把它藏起来。`rag` 是三处里最低的一层（`agent/decisi
 不进 `text`；首个标题之前的内容归到 `section=文章标题`（`level=0`）。**不要把
 `#{1,3}` 放宽到 4-6 级**：索引侧的 chunk 边界一变，检索分数与 golden 全部跟着漂。
 
+**20261017：围栏代码块里的行不当标题**（见 `_fenced_flags`）。这一条改的**只是"哪一行
+算标题"**，上面那个 1-3 级口径一个字没动。为什么非改不可：`.gitignore` / shell / diff 的
+**示例内容整段住在 ``` 里**，而 `.gitignore` 的注释行就是 `# …`——与一级标题逐字同形。
+不认围栏时线上 note:16（Git 教程）被切成 11 个**全空**的节，节名是 gitignore 的注释
+（`# ========== 依赖管理 ==========`）；全语料代价是 **330 chunk 里 48 个空正文、
+长度中位数 69 字、`avgdl` 被压到 103** ⇒ BM25 的长度归一**系统性偏爱短碎片**，
+`rag_arch_ports_real` 那条 known FAIL 的榜首就是这么来的（40 字的 `.gitignore` 残片
+拿 10.24 分，真答案 3.01 排第 4）。认了围栏之后：**197 chunk / 28 空 / 中位 318 字 /
+`avgdl` 171.9**，节名回到真标题（`1. 什么是 Git`、`3.1 三个区域`）。
+
 **父标题与它的子节是两个平级的 chunk**（`## 6. 防幻觉…` 与 `### 6.1 …` 都在列表里），
 于是**父标题自己的 `text` 常常是空串**——内容全都住在子节里。实测线上语料 10 篇
 **317 节里 47 节正文为空**（19 节的正文住在子节里、28 节是真空节；最长的一篇 25 节里 3 节，
-另一篇 178 节里 28 节）。这不是
+另一篇 178 节里 28 节）。（那一批的"28 节真空节"里，绝大多数其实是**围栏里的 `# 注释`
+被当成标题**——20261017 认了围栏之后重测：**197 chunk 里 28 个空正文、其中只有 1 节
+真的读不出来**（note:10 的 §test3，原文就是光秃秃一个标题）；空正文的绝大多数现在是
+"正文住在子节里"这种正常形状。）这不是
 边角形状，是常态，两处调用点各有一条判据挡着：
 
 - `pick` 命中一个空正文的父标题时，**连带把子节并进来**（见 `_with_children`）；
@@ -51,6 +64,9 @@ import re
 # 只认 1-3 级（与索引一致，见模块头注）
 _HEADING_RE = re.compile(r"^#{1,3}\s+(.+)$")
 
+# 围栏代码块（``` / ~~~，三个起；开栏行后面可以跟信息串，如 ```gitignore）
+_FENCE_OPEN_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+
 # 未展开小节清单的标记串：渲染侧靠它在帧注记里区分"按节节选"与"退回头截断"，
 # tests/test_sections.py 也断言它出现。改字面量要同步 agent/context.py 的用法。
 UNEXPANDED_MARK = "**以下小节尚未展开**"
@@ -61,6 +77,50 @@ _OUTLINE_RESERVE = 600
 _OUTLINE_MAX_ITEMS = 12
 
 
+def _fence_open(line: str) -> str:
+    """这一行是不是围栏的**开栏行**；是就返回那串围栏（如 "```" / "~~~~"），否则 ""。"""
+    m = _FENCE_OPEN_RE.match(line)
+    return m.group(1) if m else ""
+
+
+def _fence_close(line: str, fence: str) -> bool:
+    """这一行关掉 `fence` 吗——**只由同一种字符构成、且不短于开栏那串**。"""
+    s = line.strip()
+    return bool(s) and set(s) == {fence[0]} and len(s) >= len(fence)
+
+
+def _fenced_flags(lines: list[str]) -> list[bool]:
+    """逐行标出"这一行住在围栏代码块里吗"（**围栏行自己也算 True**）。
+
+    为什么必须有它：`.gitignore` / shell / diff 的**示例内容整段住在 ``` 围栏里**，
+    而 `.gitignore` 的注释行就是 `# …` —— 与 markdown 一级标题**逐字同形**。不认围栏
+    时它们会被当成标题切成几十个 0 字小节（线上 note:16 实测：从
+    `# ========== 依赖管理 ==========` 一路切到 `# ========== 本地数据库文件 ==========`，
+    11 节全部空正文，节名还是 gitignore 的注释）。围栏里的行一律不当标题。
+    """
+    flags: list[bool] = []
+    fence = ""
+    for ln in lines:
+        if fence:
+            flags.append(True)
+            if _fence_close(ln, fence):
+                fence = ""
+            continue
+        fence = _fence_open(ln)
+        flags.append(bool(fence))
+    return flags
+
+
+def _heading_hits(lines: list[str], fenced: list[bool]) -> list[tuple[int, re.Match]]:
+    """`(行号, 匹配)` 列表 —— 只认**围栏外**的 1-3 级标题。
+
+    `split` 与 `_is_lossy` **共用这一把尺子**：两处各判一次的话，"正文里有几个标题行"
+    与"切出几个 chunk"就按两套口径算，`_is_lossy` 会开始报假有损（或漏报真损）。
+    """
+    return [(i, m) for i, ln in enumerate(lines) if not fenced[i]
+            and (m := _HEADING_RE.match(ln.strip()))]
+
+
 def split(content: str, title: str = "", shortcut: bool = True) -> list[dict]:
     """按 markdown 标题切节 → `[{"section", "text", "level"}]`。
 
@@ -68,15 +128,20 @@ def split(content: str, title: str = "", shortcut: bool = True) -> list[dict]:
     （小节名取文章标题）——短文的标题结构没有检索价值，切开只会把同一篇拆成
     多个低分 chunk。**渲染侧与取回侧要 shortcut=False**：那两处关心的是"哪一段
     属于哪一节"，与文章长短无关。
+
+    **围栏代码块里的行不当标题**（20261017，见 `_fenced_flags`）：改的只是"哪一行算
+    标题"，`#{1,3}` 这个级别口径一个字没动（4-6 级仍不是节边界）。
     """
     text = content or ""
     if shortcut and len(text) < 2000:
         return [{"section": title, "text": text, "level": 0}]
+    lines = text.split("\n")
+    heads = dict(_heading_hits(lines, _fenced_flags(lines)))
     chunks: list[dict] = []
     cur: list[str] = []
     cur_section, cur_level = title, 0
-    for line in text.split("\n"):
-        m = _HEADING_RE.match(line.strip())
+    for i, line in enumerate(lines):
+        m = heads.get(i)
         if m:
             if cur:
                 chunks.append({"section": cur_section, "text": "\n".join(cur),
@@ -114,15 +179,21 @@ def _is_lossy(content: str, chunks: list[dict]) -> bool:
     """chunk 列表是不是**有损**的（正文里有标题行没能成为 chunk）。
 
     `split` 对"标题行**紧跟着另一个标题行**"的那一个不产 chunk（`cur == []`：
-    标题前一行也是标题，中间一行正文都没有）。实测线上语料 10 篇里 15 处，
-    **全部在同一篇的代码块里**（`# <<<<<<< HEAD`、`# drop = 删除该提交` …）。
+    标题前一行也是标题，中间一行正文都没有）。20261009 实测线上语料 10 篇里 15 处，
+    **全部在同一篇的代码块里**（`# <<<<<<< HEAD`、`# drop = 删除该提交` …）——那正是
+    20261017 把围栏代码块排除出"标题行"的理由（见 `_fenced_flags`）。围栏认了之后这一支
+    应当基本不再命中；它**留着**，因为"有损 ⇒ 不推层级"要防的是**任何**原因导致的列表
+    不完整，而不只是代码块这一个成因。
 
     为什么这件事必须先判：**"谁是谁的子节"是靠层级推的**。丢掉的那个标题不在列表里，
     它后面的子节就会被算到**前一个**标题头上 ⇒ "读第 4 节"会把第 5 节的内容一起端出来，
     而且是**无声**的。有损时一律**不做任何层级推导**（只认自身正文），代价是那一篇
     拿不到并入的好处、退回"这一节没有正文"的如实分支——过度并比比读不到更坏。
+
+    标题行数与 `split` **同一把尺子**（`_heading_hits`），否则这里会开始报假有损。
     """
-    heads = sum(1 for ln in (content or "").split("\n") if _HEADING_RE.match(ln.strip()))
+    lines = (content or "").split("\n")
+    heads = len(_heading_hits(lines, _fenced_flags(lines)))
     lead = 1 if chunks and not chunks[0].get("level") else 0   # 首个标题之前的正文
     return len(chunks) - lead != heads
 
@@ -146,8 +217,12 @@ def _is_readable(chunks: list[dict], i: int, lossy: bool = False) -> bool:
     """这一节发一次按节读取，能不能真的拿回正文。
 
     两种能：① 自身有正文；② 自身没正文但**子节有**（取回时会连子节一起给，见
-    `_with_children`）。两者都不满足 = 真空节（线上确有：代码块里的 `# 注释` 行被
-    当成标题，下一条注释行又把它截断 ⇒ 一串 0 字的"节"）。
+    `_with_children`）。两者都不满足 = 真空节。
+
+    线上真空节的**主要来源曾经是围栏里的 `# 注释` 被当成标题**（那串 0 字的
+    `========== 依赖管理 ==========`，见 `_fenced_flags`）——20261017 认了围栏之后，
+    全语料 197 chunk 里只剩 **1 节**真的读不出来（note:10 的 §test3，原文就一个光标题）。
+    这条判据**留着**：它挡的是"清单里列了一个取不回来的节"这件事本身，与成因无关。
     """
     start, end = _child_span(chunks, i, lossy)
     return bool((chunks[i].get("text") or "").strip()) or end > start
