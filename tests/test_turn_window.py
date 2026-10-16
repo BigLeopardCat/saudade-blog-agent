@@ -279,6 +279,19 @@ def _msgs_holder(v: ast.AST) -> bool:
         isinstance(v, ast.Attribute) and v.attr == "state")
 
 
+def _reads_key(node: ast.AST, key: str) -> bool:
+    """`X[key]` 或 `state.get(key, …)` 两种取值写法（`X` = `state` / `c.state`）。"""
+    if isinstance(node, ast.Subscript):
+        return (isinstance(node.slice, ast.Constant) and node.slice.value == key
+                and _msgs_holder(node.value))
+    if isinstance(node, ast.Call):
+        return (isinstance(node.func, ast.Attribute) and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == "state"
+                and bool(node.args) and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == key)
+    return False
+
+
 def _is_msgs_read(node: ast.AST) -> bool:
     """读 messages 通道的两种写法：`X["messages"]` / `X.get("messages")`。
 
@@ -286,15 +299,7 @@ def _is_msgs_read(node: ast.AST) -> bool:
     对**每一个** Call/Subscript 节点都要从头数一遍行——graph.py 里十万个节点，那条路
     实测 50 秒。形状判是 O(1) 的属性检查，同一条判据。
     """
-    if isinstance(node, ast.Subscript):
-        return (isinstance(node.slice, ast.Constant) and node.slice.value == "messages"
-                and _msgs_holder(node.value))
-    if isinstance(node, ast.Call):
-        return (isinstance(node.func, ast.Attribute) and node.func.attr == "get"
-                and isinstance(node.func.value, ast.Name) and node.func.value.id == "state"
-                and bool(node.args) and isinstance(node.args[0], ast.Constant)
-                and node.args[0].value == "messages")
-    return False
+    return _reads_key(node, "messages")
 
 #: 允许直接读**整份** messages 的地方，按**所在函数名**登记（不按行号——行号会漂）。
 #: 理由分三类：
@@ -304,6 +309,8 @@ def _is_msgs_read(node: ast.AST) -> bool:
 _ALLOWED_RAW: dict[str, str] = {
     # (d) 取值口与输入端本身
     "_turn": "(d) 取值口自己",
+    "_narrator_msgs": "(d) 取值口自己（narrator 的窗口：本轮 + 最近若干轮，"
+                      "历史段剥事实行/剪孤儿/丢工具帧——见 tests/test_narrator_window.py）",
     # (b) 自愈族
     "_intent_src": "(b) 只把它交给 _last_user_msg/_prev_user_msg（从后往前扫）",
     "_planner_preflight": "(b) 尾部读（gate_note 取最后一条）+ (c) _doc_anchors/"
@@ -321,7 +328,8 @@ _ALLOWED_RAW: dict[str, str] = {
     "planner_node": "(d) 冻结 turn_start：`freeze_turn_start` 要的就是**还没人追加时**的"
                     "整表长度（`len(messages) - turn_msgs`），窗口化它等于把要算的东西先切掉",
     "execute_node": "(d) _frame_id 的基数：**刻意**用整份（唯一性靠帧只增不减）",
-    "model_node": "(c) with_tool_call_pairs 出站配对 + (d) 探针计量",
+    "model_node": "(c) with_tool_call_pairs 出站配对 + (d) 探针计量（`msgs=` 与 "
+                  "`narr_ident=` 那一格要的就是整表长度/整表身份，窗口化它就没得比了）",
     "gate_node": "(d) 拆两个视野的地方：msgs 喂给 _recent_ai_replies/_url_trusted/"
                  "_last_user_msg 那几个跨轮/自愈判据，本轮族走局部 `turn`",
 }
@@ -474,6 +482,72 @@ check("`_planner_decide` 不自己写 turn_start（注入点只留一处）",
           "\n".join(_lines),
           next(f for f in ast.walk(_tree)
                if isinstance(f, ast.FunctionDef) and f.name == "_planner_decide")) or ""))
+
+# --- 规则 F：narrator 那一侧的闸门**不许被摘掉**（批 3）-----------------------
+# 规则 A–E 管的是"该收窄的读端没收窄"；这一条管反过来的错：`model_node` 曾经直接
+# `with_tool_call_pairs(state["messages"])`（无截断），线程一复用提示词就随会话线性
+# 膨胀。摘掉 `_narrator_msgs` 这一层**不会有任何东西报错**——只是提示词慢慢变大
+# （`prompt_oversize` 是一条 warning，不是判据）。所以这里钉**结构**：narrator 的
+# 消息表必须经过那一个取值口，而那个取值口必须真的委托给 `context.narrator_messages`。
+print("[5F] 规则 F：narrator 的窗口闸门在场且没被绕过")
+_model = next((f for f in ast.walk(_tree)
+               if isinstance(f, ast.FunctionDef) and f.name == "model_node"), None)
+check("model_node 存在", _model is not None)
+if _model is not None:
+    _pair_calls = [n for n in ast.walk(_model)
+                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id == "with_tool_call_pairs"]
+    check("model_node 里 with_tool_call_pairs 恰好一处", len(_pair_calls) == 1,
+          f"{len(_pair_calls)} 处")
+    # 闸门变量：`X = _narrator_msgs(state)` 里的 X（本仓的写法是**先取再传**，
+    # 探针那一格要拿它比身份）。直接 `with_tool_call_pairs(_narrator_msgs(state))`
+    # 也算过——判的是"入参是不是窗口化的产物"，不是"写法长什么样"。
+    _gated_names = {t.id for n in ast.walk(_model) if isinstance(n, ast.Assign)
+                    and isinstance(n.value, ast.Call)
+                    and isinstance(n.value.func, ast.Name)
+                    and n.value.func.id == "_narrator_msgs"
+                    for t in n.targets if isinstance(t, ast.Name)}
+    _pair_args = _pair_calls[0].args if _pair_calls else []
+    _pair_ok = bool(_pair_args) and all(
+        (isinstance(a, ast.Call) and isinstance(a.func, ast.Name)
+         and a.func.id == "_narrator_msgs")
+        or (isinstance(a, ast.Name) and a.id in _gated_names)
+        for a in _pair_args)
+    check("⭐ 它的入参是 `_narrator_msgs(state)`（或它的产物）而不是整份 `state[\"messages\"]`",
+          _pair_ok,
+          "；".join(_src(a).strip()[:60] for a in _pair_args))
+    check("`with_tool_call_pairs` 的入参**不是**整份 messages 读",
+          not any(_reads_key(a, "messages") for a in _pair_args))
+_narr = next((f for f in ast.walk(_tree)
+              if isinstance(f, ast.FunctionDef) and f.name == "_narrator_msgs"), None)
+check("`_narrator_msgs` 存在且委托给 `context.narrator_messages`",
+      _narr is not None and any(
+          isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+          and n.func.id == "narrator_messages" for n in ast.walk(_narr)))
+check("`_narrator_msgs` 把 `turn_start` 传下去了（不传 ⇒ 窗口恒不开火）",
+      _narr is not None and any(
+          isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+          and n.func.id == "narrator_messages"
+          and any(_reads_key(a, "turn_start") for a in n.args)
+          for n in ast.walk(_narr)))
+
+print("[5F-] 规则 F 的反向对照：绕开闸门必须判红")
+_bypass = ast.parse("def model_node(state):\n"
+                    "    return [system] + with_tool_call_pairs(state['messages'])\n")
+_pc = [n for n in ast.walk(_bypass)
+       if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+       and n.func.id == "with_tool_call_pairs"]
+check("`with_tool_call_pairs(state[\"messages\"])` ⇒ **判红**",
+      not any(isinstance(a, ast.Call) and isinstance(a.func, ast.Name)
+              and a.func.id == "_narrator_msgs" for a in _pc[0].args))
+_gated = ast.parse("def model_node(state):\n"
+                   "    return [system] + with_tool_call_pairs(_narrator_msgs(state))\n")
+_pc2 = [n for n in ast.walk(_gated)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        and n.func.id == "with_tool_call_pairs"]
+check("`with_tool_call_pairs(_narrator_msgs(state))` ⇒ **判绿**",
+      any(isinstance(a, ast.Call) and isinstance(a.func, ast.Name)
+          and a.func.id == "_narrator_msgs" for a in _pc2[0].args))
 
 # ---------------------------------------------------------------------------
 print()

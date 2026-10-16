@@ -92,7 +92,8 @@ from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            _last_assistant_utterance, _last_user_msg,
                            _msg_text, _page_ctx, _prev_user_msg, _receipts_text,
                            _recent_tail, _short_reply_hint, _turn_has_image,
-                           freeze_turn_start, strict_wire_issues, turn_window,
+                           freeze_turn_start, narrator_messages,
+                           strict_wire_issues, turn_window,
                            with_tool_call_pairs)
 from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES,
                              _any_error_frame, _article_fast_path,
@@ -464,6 +465,22 @@ def _turn(state) -> list:
     的错。哪些该换由 `tests/test_turn_window.py` 的 AST 审计锁按白名单管。
     """
     return turn_window(state.get("messages"), state.get("turn_start", -1))
+
+
+def _narrator_msgs(state) -> list:
+    """**narrator 该看到的消息表**（批 3，见 `context.narrator_messages`）。
+
+    与 `_turn` 是**两个**读端，别合并：`_turn` 是"本轮"，给那些"只看本轮"的判据用；
+    本函数是"本轮 + 最近若干轮"，给 narrator **叙述材料**用——它本来就该看得见主人
+    前面说了什么（臂 A 靠 `server._build_messages` 注入 `history[-20:]` 给它，图自持
+    历史之后靠这里）。合并掉任何一个都会各自错一边：`_turn` 换成这个 ⇒ 上一轮的帧
+    被算成本轮证据；这个换成 `_turn` ⇒ narrator 忘掉上一句。
+
+    历史段做三件清理（剥事实行 / 剪孤儿 user / 丢工具帧），**本轮段原样**——
+    理由见 `context.narrator_messages` 的 docstring。无 saver 时 `turn_start` 是
+    `0`/`-1` ⇒ 返回**同一个对象**，臂 A 逐字节不变。
+    """
+    return narrator_messages(state.get("messages"), state.get("turn_start", -1))
 
 
 # ---------------------------------------------------------------------------
@@ -13155,7 +13172,9 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # `with_tool_call_pairs`（20260928）：execute 造的 ToolMessage 前面没有声明过
     # 调用的 assistant——qwen 容忍这条非法序列，strict 服务商一律 400 拒（见该函数
     # docstring 的实测）。**只补形状、不动内容**：帧原文照旧是 narrator 的叙述材料。
-    _msgs = [system] + with_tool_call_pairs(state["messages"])
+    # 批 3：本轮 + 最近若干轮（历史段剥事实行/剪孤儿/丢工具帧）；臂 A 返回**同一个对象**。
+    _narr_msgs = _narrator_msgs(state)
+    _msgs = [system] + with_tool_call_pairs(_narr_msgs)
     # 出站合规绊线（20261006，见 `context.strict_wire_issues` 头注）：`tool_call_id`
     # 重复那次让 deepseek 整轮 400，而 qwen 端点容忍 ⇒ **生产一直绿**，洞在库里躺了
     # 8 天。修在源头（`execute_node::_frame_id`）之后，这一层是**回归绊线**——只记
@@ -13176,7 +13195,9 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 轮次的 ToolMessage，见 context._frame_texts），`msgs` 是 state 里的消息总数。
     # 这一格是 §4.6"上下文无限膨胀"那半句唯一的直接读数。
     _ckpt_probe.dump("model", msgs=len(state["messages"]), frames=len(_msgs) - 1,
-                     prompt_chars=_prompt_chars, page_ctx=_probe_page[:160])
+                     prompt_chars=_prompt_chars, page_ctx=_probe_page[:160],
+                     # 批 3：窗口**没动手** ⇒ 臂 A 恒 True、臂 B/C 第 2 轮起恒 False
+                     narr_ident=_narr_msgs is state["messages"])
     if _prompt_chars > _PROMPT_OVERSIZE_CHARS:
         logger.warning("[model] 提示词过大：%d 字符（system=%d，帧 %d 条）",
                        _prompt_chars, len(system.content or ""), len(_msgs) - 1)
