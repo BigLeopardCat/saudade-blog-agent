@@ -1749,7 +1749,7 @@ finally:
 print("\n⑲ 待办正文的出处闸：主人标出来的那一段才是正文（20261006 事故）")
 
 import agent.skills as _S  # noqa: E402
-from _native_stub import bind_tools_stub, native_reply  # noqa: E402
+from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
 _skill_map = _S.SKILL_MAP
 # 接线判据读的是**源码字面**（同 `test_plan_channel` 钉 `plan_encode` 调用点那条）：
@@ -1767,7 +1767,7 @@ class _ScriptedLLM:
         self.replies = list(replies)
 
     def invoke(self, prompt):
-        return native_reply(self.replies.pop(0))
+        return toolcall_reply(self.replies.pop(0))
 
 
 def _planner_cfg():

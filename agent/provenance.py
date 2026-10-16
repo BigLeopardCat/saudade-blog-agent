@@ -60,8 +60,8 @@ __all__ = ["EVIDENCE_ARG", "EVIDENCE_FIELD_DESC", "evidence_prop_schema",
            "always_confirm_tools"]
 
 # ── schema 面：写技能函数上多一格可选参数 ────────────────────────────────
-# 与 `tasks.INTENTS_ARG` 完全同一个做法（注入在 `native_plan.build_tool_schema`、
-# 摘走在 `native_plan.tool_calls_to_plan`）：`additionalProperties: False` 意味着
+# 与 `tasks.INTENTS_ARG` 完全同一个做法（注入在 `planner_llm.build_tool_schema`、
+# 摘走在 `planner_llm.tool_calls_to_plan`）：`additionalProperties: False` 意味着
 # **不加进 props 模型根本发不出来**，而留着不走就等于跟着 `params` 一路漏进
 # `PARAMS=` 计划文本与 `execute` 的参数校验（见 tool_calls_to_plan 的注）。
 EVIDENCE_ARG = "evidence"
@@ -166,8 +166,8 @@ def parse_evidence(raw) -> tuple[tuple[str, str], ...]:
     形状漂移的代价不该由主人承担（旧的文本契约时代，约 15% 的轮次格式就漂了）。
     五形状都收：裸字符串 / `{参数名: 引文}` 映射 / `{arg,quote}` 单对象 / 上面的数组 /
     已经归一好的 `((arg, quote), ...)`。
-    最后那一种不是"给模型看的"——`NativeDecision.evidence` **落地时就是归一形态**
-    （见 `native_plan.tool_calls_to_plan`），影子与第二批的核验都直接吃它；本函数认它，
+    最后那一种不是"给模型看的"——`PlannerDecision.evidence` **落地时就是归一形态**
+    （见 `planner_llm.tool_calls_to_plan`），影子与第二批的核验都直接吃它；本函数认它，
     是为了"再喂一次自己刚吐出来的东西"不静默变空（测试 `test_provenance` ⑥ 钉的就是这条）。
     `arg` 缺省 = **空串（通配）**，它匹配任何一格——语义是"这段原文就是这个值的出处"，
     与"这段原文覆盖了这几格"是同一件事（判据只问"能不能找到一段主人说过的原话"）。

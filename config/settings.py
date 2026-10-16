@@ -127,20 +127,25 @@ class Settings(BaseSettings):
     authz_enforce: bool = False
 
     # ── planner 接口层（20260927 新主线第一批）───────────────────────
-    # **接口只有一种：native tool calls**（API 的 `tools` 字段 + `tool_calls` 返回，
-    # 见 agent/native_plan.py）。20261004 把"文本契约"那一档连同它的解析器整族删掉
+    # **接口只有一种：工具调用**（API 的 `tools` 字段 + `tool_calls` 返回，见
+    # agent/planner_llm.py）。20261004 把"文本契约"那一档连同它的解析器整族删掉
     # ——全量 384 份 trace 里那条兜底路径 `native_fallback` 命中 **0** 次，即删掉它
     # 不改变任何一轮生产对话的形状；留着一个从不被走到的分支只会让"模型没做出决策"
     # 与"响应不可解析"混成同一个归宿。所以**没有** `planner_engine` 这个拨盘了：
     # 别再加快关回来，多一档就是多一条没人验证的通路。
-    # native 是否开思考。**单独一个开关是刻意的**：它是三个待拍板项之一
+    #
+    # ⚠️ **下面四个字段名里的 `native` 是冻结 token，别顺手改名**：它们同时是 `.env`
+    # 的键（`PLANNER_NATIVE_*`），而 pydantic-settings 读不到键时**不报错**，直接回落
+    # 成本文件里的缺省值 ⇒ 只改字段名不改 `.env`，会在下一次重启时把这一档**静默**
+    # 拨回缺省。真要改，字段名、`.env`、重启必须在同一个窗口里完成。
+    # planner 是否开思考。**单独一个开关是刻意的**：它是三个待拍板项之一
     # （"开思考的预算"），要能单独开关才产得出对照数据。
     planner_native_thinking: bool = True
-    # native 档的预算。**不能沿用文本档的 400**：模型开思考时思考链先吃掉额度，
+    # 接口层的预算。**不能沿用文本契约时代的 400**：模型开思考时思考链先吃掉额度，
     # tool_call 的 arguments 会被截断在中途（finish_reason=length，JSON 都不完整）。
-    # 值取自 eval/d4 与 native 探针的实测上界，见 docs/native-toolcalls-mainline.md。
+    # 值取自 eval/d4 与探针的实测上界，见 docs/native-toolcalls-mainline.md。
     planner_native_max_tokens: int = 1200
-    # 同理，文本档的 30s 正压思考档的 p50 6.4s / max 28.5s（实测）⇒ 留出余量。
+    # 同理，文本契约时代的 30s 正压思考档的 p50 6.4s / max 28.5s（实测）⇒ 留出余量。
     planner_native_timeout: float = 60.0
     # 慢轮告警阈值（秒）：超了就记 WARNING。**参数化是为了"不许只放宽不监控"**
     # ——放宽 timeout 而不看这个数，等于把超时问题藏起来。

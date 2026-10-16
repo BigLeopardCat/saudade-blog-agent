@@ -440,13 +440,13 @@ class _NoLLM:
     一个模型都不许被真的叫起来。"""
 
     def __enter__(self):
-        self._g, self._b = G.get_llm, G.bind_native
+        self._g, self._b = G.get_llm, G.bind_planner_tools
         G.get_llm = lambda **kw: object()
-        G.bind_native = lambda llm, *a, **kw: llm
+        G.bind_planner_tools = lambda llm, *a, **kw: llm
         return self
 
     def __exit__(self, *exc):
-        G.get_llm, G.bind_native = self._g, self._b
+        G.get_llm, G.bind_planner_tools = self._g, self._b
         return False
 
 
