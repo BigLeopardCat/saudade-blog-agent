@@ -55,10 +55,6 @@
     "c": 105,
     "lines": 451
   },
-  "agent/graph.py::model_node": {
-    "c": 36,
-    "lines": 152
-  },
   "agent/skills.py::_expand_write_skill": {
     "c": 97,
     "lines": 473
