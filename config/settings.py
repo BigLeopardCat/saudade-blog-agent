@@ -306,8 +306,13 @@ class Settings(BaseSettings):
     # 写操作幂等账（`agent/idem.py`，20261016 批 2）。**今天恒不被打开**：它的闸是
     # "这一轮挂没挂 checkpointer"，而生产没有 saver（见 `agent/graph.py` 的
     # `return g.compile()`）⇒ 没挂 saver 的环境里连这个文件都不会被创建。
+    # 这个路径只是**降级档**（20261017）：`_shared(config)` 按 saver 自己选——挂的是 PG
+    # saver ⇒ 账落**同一个池、同一个库**（`agent/idem_pg.py`，保留期与 checkpoint 同源），
+    # 只有内存 saver / 没挂 saver 才落到这里。
     # 落 `logs/` 下 ⇒ **必须登记进 `eval/retention_manifest.py`**（那里的 `audit()`
     # 会把 `logs/` 树里没登记的路径报红），登记项同时给出保留期。
+    # ⚠️ PG 那张表不在该清单的射程内（它只审计 `logs/` 树）⇒ 保留期写在 ADR-0012
+    # 的《迁移到 PG》一节，是一条欠账。
     idem_db: str = "/home/ubuntu/Saudade-Blog/logs/agent/idem.sqlite3"
 
     # ── Active provider helpers ─────────────────────────────────────

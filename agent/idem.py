@@ -23,6 +23,13 @@ LangGraph 的 checkpoint **提交粒度是 superstep，不是语句**（实测�
 - 同一 thread 的 3 轮**互不相同** ⇒ 不会把两轮的写合成一次；
 - **没挂 saver 时是随机 uuid4** ⇒ `active()` 为假，本模块**天然惰性**、今天一行账都不记。
 
+## 两档存储（20261017）
+
+账本本体有**两档**，由 `_shared(config)` 按 saver 自己选：挂 PG saver ⇒ 落**同一个池、
+同一个库**（`agent/idem_pg.py`，psycopg 只住那边）；否则 ⇒ 本文件的 `Ledger`（agent 自持的
+SQLite 文件，`settings.idem_db`）。选 PG 那一档是为了**保留期同源**：账与 checkpoint 必须
+一起裁，分开清会把本批要堵的洞重新打开。采纳那天账自动变 PG，没有第二个开关可忘。
+
 ## 协议：先记账再动手 ⇒ 至多一次（at-most-once）
 
 `intent` 行在**远端调用之前**提交，调用返回（或抛异常）后改 `done`。留在 `intent` 只有
@@ -314,11 +321,49 @@ _shared_lock = threading.Lock()
 _shared_ledger = None
 
 
-def _shared() -> Ledger:
-    """进程内共享的一本账（4 个 worker 各持一份连接，互斥靠主键）。
+def _pg_pool(config):
+    """这一轮的 saver 是不是 PG 的：是 ⇒ 返回它的连接池，不是 ⇒ `None`。
+
+    `PostgresSaver` 把池挂在 `.conn` 上；`InMemorySaver` / `MemorySaver` **没有**这个
+    属性（已核实）。判据取"有 `.connection` 方法"而不是"有 `.conn`"——后者对任何
+    恰好叫这个名字的属性都成立，而我们要的是"能借出连接的东西"。
+    """
+    try:
+        saver = ((config or {}).get("configurable") or {}).get("__pregel_checkpointer")
+    except AttributeError:
+        return None
+    pool = getattr(saver, "conn", None)
+    return pool if hasattr(pool, "connection") else None
+
+
+def _shared(config=None):
+    """这一轮该用哪本账。**两档**，按 saver 自己选：
+
+      · 挂的是 PG saver ⇒ 账落**同一个池、同一个库**（`agent/idem_pg.py`）。这样账与
+        checkpoint 的保留期天然同源——分开清会把本批要堵的洞重新打开（清了账、留着
+        checkpoint ⇒ 恢复重放时账是空的 ⇒ 写落第二遍）。
+      · 其余（内存 saver / 没挂 saver / CI）⇒ 今天的 SQLite，**逐字节不变**。
+
+    **失败姿态**：拿到池但建表/断言失败 ⇒ **响亮抛，绝不静默退回 SQLite**。调用方
+    （`guarded_invoke`）把它变成 `unavailable` ⇒ 拒绝这次写——ADR-0012 的失效姿态就是
+    "账本不可用 ⇒ 拒绝这次写"，不是"换一本假装没事的账"。
+
+    缓存口径**刻意不同**：SQLite 那档缓存（一条进程级连接，4 个 worker 各持一份，互斥靠
+    主键），PG 那档**不缓存**（`PostgresLedger` 是薄壳、构造零成本，而池本身已经是共享的
+    ——再包一层缓存只会给"测试之间互相泄漏结论"留门）。
 
     **只在真的要记账时才会被调到**：`active()` 为假时 `guarded_invoke` 在它之前就返回了。
     """
+    pool = _pg_pool(config)
+    if pool is not None:
+        from agent import idem_pg     # psycopg 只住那边（依赖面锁：块⑪）
+        # 幂等建表（`CREATE TABLE IF NOT EXISTS`，与 `saver.setup()` 同办 ⇒ 不需要迁移
+        # 脚本）。**每次写都问一遍**是刻意的：多花的是一次目录查询，换来的是"表在不在"
+        # 这件事每次都当场被确认——真被人删了，这次写会被 `unavailable` 拒掉（响亮），
+        # 而不是等 `claim` 抛一个别名的错。缓存它要多一把按池索引的锁/弱集，为一个
+        # 微秒级的开销引入一个新的失效面，不划算。
+        idem_pg.setup(pool)
+        return idem_pg.PostgresLedger(pool)
     global _shared_ledger
     with _shared_lock:
         if _shared_ledger is None:
@@ -333,6 +378,10 @@ def guarded_invoke(tool, name: str, args: dict, config, *,
     ⚠️ 账本在场时**必须** `durability="sync"`（`require_sync_durability`，档不对当场抛）：
     缺省 `async` 下恢复后的 `__pregel_task_id` 会变，账**静默失效**。
 
+    账本**不进 config**：本函数只拿到 `config`，后端由 `_shared(config)` 按 saver 自己选
+    （挂 PG saver ⇒ 落同一个库；否则 SQLite）。`ledger=` 那个参数是给判据换账本用的
+    （反控 `NullLedger` 之类），生产调用点不传。
+
     `fingerprint` **必须由调用方在改动参数之前取**：`execute_node` 会在调用前把
     `device_oled_display` 缺的 `text` 用 temperature 0.7 的 LLM 现创出来
     （`agent/graph.py::_create_display_text`）——对改后的 args 取指纹，那个工具每次
@@ -345,13 +394,17 @@ def guarded_invoke(tool, name: str, args: dict, config, *,
     require_sync_durability(config)
     if not authz.is_write(name):
         return _call(tool, args)
-    led = ledger if ledger is not None else _shared()
     key = key_for(config, name, fingerprint)
+    led = None
     try:
+        # 选后端也在这个 `try` 里：PG 档建表/断言失败 ⇒ 与"记账失败"同一个姿态
+        # （`unavailable` ⇒ 拒绝这次写），**不静默退回 SQLite**。
+        led = ledger if ledger is not None else _shared(config)
         state, row = led.claim(key, name, fingerprint)
     except Exception as e:
         logger.warning("[idem] 记账失败，拒绝执行写操作 %s: %s", name, e)
-        record("execute", "idem_error", name=name, phase="claim", error=str(e)[:200])
+        record("execute", "idem_error", name=name,
+               phase="claim" if led is not None else "open", error=str(e)[:200])
         return unavailable("写操作未执行：幂等账不可用（拒绝在无法记账的情况下动手）")
     if state == "done":
         record("execute", "write_replay_hit", name=name, key=key)
