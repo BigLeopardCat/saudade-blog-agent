@@ -969,7 +969,12 @@ _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败"
               # 漏了这行不会静默——它会原样打出英文码 `policy_refused` 给访客看。
               # 与"服务不可用"刻意分开：那个的下一步是稍后重试，这个重试一万次也一样
               # （要换的是目标或身份，见 graph 规则里那条"不要改参重试"）。
-              "policy_refused": "后台规则拒绝"}
+              "policy_refused": "后台规则拒绝",
+              # 与主人这句话要的动作相反（authz.action_conflict_frame，20261016，
+              # §1.57 候选改法①）：主人说「收藏」、planner 排的是「取消收藏」。
+              # 中文与 `agent/block_reasons.REASONS` 的那一格**必须同话术**（两侧
+              # 键集合相等 + 逐值相等，判据在 tests/test_block_reasons.py）。
+              "action_conflict": "与主人这句话要的动作相反"}
 
 
 def _spec_one(spec: str):

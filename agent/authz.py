@@ -761,7 +761,7 @@ def _strip_address_shell(text: str) -> str:
     return _VOCATIVE_RE.sub("", text or "", count=1)
 
 
-def strip_user_shell(text: str) -> str:
+def strip_user_shell(text: str | None) -> str:
     """判据入口的**唯一**剥壳定义：系统锚点壳 + 句首称呼壳 → **用户实际说的那句话**。
 
     只用于**判定**，不碰给模型的 prompt（两层壳都是给模型看的语用信息，不是缺陷）。
@@ -959,7 +959,7 @@ _OWN_FAMILY_RE: dict[str, re.Pattern] = {
 _OWN_INQUIRY_RE = re.compile(r"哪些|哪个|哪篇|哪条|几篇|几条|几件|几个|几次")
 
 
-def _own_command(msg: str, tool: str | None = None) -> bool:
+def _own_command(msg: str | None, tool: str | None = None) -> bool:
     """本轮消息是不是一条明确的「写自己私有数据」命令（确定性、无 LLM）。
 
     `tool` 是**必需**的（见上面那段注释：判的是"命令**这一个**工具"）。未登记家族的
@@ -992,6 +992,165 @@ def _own_command(msg: str, tool: str | None = None) -> bool:
 
 
 _CONSENT_PATTERNS[SCOPE_WRITE_OWN] = _own_command
+
+
+# ── write.own 的**动作冲突**：反极性改选（20261016，§1.57 候选改法①）────────
+# 病（docs/问题记录.md §1.57，20261009 记下、20261016 治）：`favorite_add` 被环境型
+# 受阻（`unavailable`，uid=0 哨兵）判 BLOCK ⇒ `denied_skills` 把**这一件**从菜单摘掉
+# ⇒ 下一轮模型**改选**，选中的却是 `favorite_remove`（反极性兄弟）——菜单里只剩它
+# 这一件"和收藏有关"的可点项。`remove_favorite` 不是主人那句话的命令
+# （`_own_command` 判淡）⇒ 走正常弹卡 ⇒ 主人看到的是「**取消收藏**文章 12」，
+# 而他刚说的是**收藏**。
+#
+# 判据的落点：§1.57 已经说清"不能按同族一起摘"——合法改选（`account_roster` 读被摘
+# 之后改选 `unmute_account` 写）与反极性改选**结构上长得一样**。判据只能落在
+# 「**主人这句话要的动作**」上，而那个量 `_own_command` 已经算得出来：同族＝放行、
+# 反极性＝冲突。所以这一格不是新判据，是**同一个谓词的第二个用法**。
+#
+# 反极性映射由家族表**派生**，不手抄一份工具名表（手抄的那份会漂，本仓为它付过
+# 代价）。ADD↔REMOVE 是同一件物件（收藏夹）上的**相反**动作；READ 族
+# （通知/站内信）**没有**反极性——那两个工具是同一动作的不同物件，§1.57 里它们
+# 属"改选"但不属"反极性"，这一格刻意不碰它们（"标记通知已读"被摘之后改选
+# "标记站内信已读"是**另一件东西**，不是同一句话的反面）。
+_OWN_ANTIPODE_FAMILY = {_OWN_FAMILY_ADD: _OWN_FAMILY_REMOVE,
+                        _OWN_FAMILY_REMOVE: _OWN_FAMILY_ADD}
+_OWN_ANTIPODE: dict[str, str] = {}
+for _t, _f in _OWN_TOOL_FAMILY.items():
+    _mates = [t for t, f in _OWN_TOOL_FAMILY.items()
+              if f == _OWN_ANTIPODE_FAMILY.get(_f)]
+    # 反极性家族**恰好一件**才算得出兄弟；多于一件 = 映射有歧义 ⇒ 不登记（这一格
+    # 退化成不启用），由 `tests/test_own_action_conflict.py` 的台账锁把它钉住——
+    # 家族表长出新成员时那条锁当场红，不会静默少拦一格。
+    if len(_mates) == 1:
+        _OWN_ANTIPODE[_t] = _mates[0]
+
+
+def own_antipode(tool: str | None) -> str | None:
+    """同一件物件上**相反**动作的工具名（无 → None）。台账锁见测试套件。"""
+    return _OWN_ANTIPODE.get(tool or "")
+
+
+# 家族 → 代表工具（逐子句扫"这句说了哪几族"用）。同族共用一个判据正则，取哪个都等价
+# （`_OWN_FAMILY_RE` 是按族建的，不是按工具）——READ 族两个工具同式，这里取先遇到的那个。
+_OWN_FAMILY_TOOL: dict[str, str] = {}
+for _t2, _f2 in _OWN_TOOL_FAMILY.items():
+    _OWN_FAMILY_TOOL.setdefault(_f2, _t2)
+
+# 子句切分。**顿号 `、` 必须在内**：`_OWN_FAMILY_RE` 那几支的宾语 span 排除了中文逗号
+# `，` 却**没排除顿号**，于是一句顿号并列的话会被整句读成**第一个子句的方向**——span
+# 跨过 `、` 一直吃到第二个子句里的撤除词（实测：「把 12 收藏、把 13 取消收藏」被
+# `_own_command(msg, "remove_favorite")` 读成 True、`add_favorite` 读成 False）。
+# 那是既有判据的既有形状，**这里不动它**（它服务的是同意闸，"多判一次命令"的方向是
+# 少一次点击）；本函数只是不拿它当"主人只说了反方向"的证据。
+#
+# 子句切分：**只切标点**（不含任何连词，见 `_own_families` 头注为什么连词不进这张表）。
+_OWN_CLAUSE_SPLIT_RE = re.compile(r"[、，,；;。！？!?\n]+")
+
+
+def _own_families(msg: str | None) -> set[str]:
+    """这句命令了**哪几族** own-write（逐子句、子句内再逐起点判）。
+
+    逐子句是必须的：几支族判据都锚在句首（`^`），整句扫会漏掉第二个子句里的那一族，
+    而"第二个子句里还有另一族"正是多意图句的形状。漏了它，`action_conflict` 就会把
+    一句**两个方向都说了**的话读成"只说了反方向"，从而拦掉一件主人真要的写。
+    子句切分**必须在**（不是可有可无）：族判据的宾语 span 排除了中文逗号 `，` 却**没
+    排除顿号**（既有形状，`_own_command` 那侧不动它）⇒ 不切的话「把 12 收藏、把 13
+    取消收藏」会被整句读成**第一个子句的方向**，第二个子句那一族就此消失。
+
+    **子句内逐起点**（20261016）：几支族判据锚在 `^`，而第二个子句可以以**连词**起头
+    ——「把文章 12 取消收藏，**另外**把文章 13 收藏」里 `_OWN_ADD_RE` 的 `^把` 永远看
+    不见后半句，那一族被判成"没说" ⇒ `action_conflict` 把一件主人**真要**的写拦掉。
+    另一种写法是**再抄一份连词表**（另外/还有/以及/顺便…），而那是开放类：每遇一种新
+    说法就要加一个词——本仓为这个病立了闸（`eval/wordlist_gate.py`：判据层的中文词表
+    只许变小、不许长新的）。所以这里改**表征**：从子句内每个字起试一次，连词、语气词、
+    任意口语前缀一律不必登记。
+
+    代价是 O(子句长 × 族数) 次正则；消息都很短，且三族认全即提前退出。
+    **多试几个起点只会多认出一族** ⇒ `action_conflict` 更容易返回 False ⇒ 退回既有的
+    弹卡路径（fail-closed，多问主人一次），**不会**多拦一件主人真要的写；少认才是真
+    损失（那才会拦掉主人真要的那件）。方向与全表一致：多一次点击 < 多一次误写。
+    """
+    text = strip_user_shell(msg)
+    out: set[str] = set()
+    for clause in _OWN_CLAUSE_SPLIT_RE.split(text):
+        if not clause.strip():
+            continue
+        # 起点的**上界**：各族在句首的那次匹配，最远结束到哪儿。已经认出来的那条命令
+        # **内部**不是另一条命令的起点——「取消收藏」里的「收藏」不是"要收藏"。这一格
+        # 是逐起点扫的守卫：没有它，「取消收藏文章 12」会被读成"也说了收藏族"
+        # ⇒ 反方向（主人说撤、planner 排了加）那一支当场失效。
+        head = max([0] + [m.end() for m in (rx.match(clause)
+                                            for rx in _OWN_FAMILY_RE.values()) if m])
+        for i in range(len(clause)):
+            if 0 < i < head:
+                continue
+            for fam, rep in _OWN_FAMILY_TOOL.items():
+                if fam not in out and _own_command(clause[i:], rep):
+                    out.add(fam)
+            if len(out) == len(_OWN_FAMILY_TOOL):
+                return out
+    return out
+
+
+def action_conflict(msg: str | None, tool: str | None) -> bool:
+    """这一件写是不是**主人这句话要的那件的反面**（确定性、无 LLM）。
+
+    两个条件同时成立才算冲突：主人这句话**明确命令了**它的反极性兄弟，**且没有**
+    命令它自己。前半句说"主人要的是那件"，后半句说"主人没要这件"——两句都是
+    `_own_command` 的现成用法（它判的就是"命令**这一个**工具"）。
+
+    多意图句（「把 12 收藏、把 13 取消收藏」）**不会**在这里被拦：`_own_command`
+    里那条"同一句里出现了另一族 ⇒ False"让两句都判 False ⇒ 本函数 False ⇒ 照旧
+    走弹窗（§1.57 点名必须走查的那个反例，由 `_own_command` 自己的 fail-closed
+    兜住，不是由这里兜）。反极性兄弟服务的是**另一个目标**时同理。
+    """
+    sib = own_antipode(tool)
+    if not sib:
+        return False
+    if not _own_command(msg, sib):
+        return False
+    if _own_command(msg, tool):
+        return False
+    # 这句里**还出现了这一件所属族**的动作（逐子句扫，见 `_own_families` 的头注）⇒
+    # 两个方向都说了（多意图句），判不准 ⇒ **不拦**，交给既有的弹卡问一次。
+    # §1.57 点名必须走查的反例就是它：「把 12 收藏、把 13 取消收藏」——反极性兄弟
+    # 服务的是**另一件目标**，那不该被摘。
+    fam = _OWN_TOOL_FAMILY.get(tool or "")
+    return fam not in _own_families(msg)
+
+
+REASON_ACTION_CONFLICT = "action_conflict"
+
+
+def action_conflict_frame(tool: str, sibling: str | None = None) -> str:
+    """反极性改选时的错误帧（checker 判 BLOCK，planner 按帧改回来）。
+
+    形态与 `adminops.target_conflict_frame` 同族（`__ERROR__` + 原因码），论证也
+    同一条：**问错一件再让主人点确定，等于把误靶洗成一条已授权的写**——只不过
+    target 那一族洗错的是"哪一篇"，这一族洗错的是"哪一边"（收藏 ↔ 取消收藏）。
+
+    帧文里那一句"不许把相反的那件当成同一件事办掉"是本格存在的理由：模型改选
+    反极性兄弟不是因为不懂，而是因为**菜单里只剩它**（见 `denied_skills`）——
+    它需要有人明说"这不算办成了"。
+
+    帧里点的是**工具名**而不是中文动作词：读它的是 planner，而 planner 的 TOOLS 行
+    本来就只认工具名（另立一份"工具 → 中文动词"表的话，它既多一张要同步的中文表、
+    又会漂——`eval/wordlist_gate.py` 正是为"判据层不许长新词表"立的闸）。
+    """
+    sibling = sibling or ""
+    return (f"__ERROR__: 与主人这句话要的动作相反[{REASON_ACTION_CONFLICT}]"
+            f"（主人这句明确要的是「{sibling}」，而你排的是「{tool}」"
+            f"——两件事相反。下一轮按主人说的那件重新规划；"
+            f"**办不成也如实告诉他没办成**，不要拿相反的那一件来充数）")
+
+
+_OWN_ACTION_ERR_RE = re.compile(rf"\[{REASON_ACTION_CONFLICT}\]")
+
+
+def action_conflict_error_reason(text: str) -> str | None:
+    """从错误帧取回原因码（非本族帧 → None），供 `_check_spec` 用。"""
+    return (REASON_ACTION_CONFLICT
+            if _OWN_ACTION_ERR_RE.search(str(text or "")) else None)
 
 
 # ── 「在问我自己那份数据」的问句判据（20261003）─────────────────────────────
@@ -1535,3 +1694,28 @@ def consent_error_reason(text: str) -> str | None:
     """从 __ERROR__ 帧文本里取回确认拒绝的原因码（checker 判 reason 用）。"""
     m = _CONSENT_ERR_RE.search(text or "")
     return m.group(1) if m else None
+
+
+# ── 同意闸挡下**一件写**时的两样产出（20261016，§1.57 候选改法①）──────────────
+# 反极性改选（主人说「收藏」、planner 排的是「取消收藏」）走的是**同一个**同意闸出口：
+# 那一件同样"本轮消息里没获确认"（`_own_command` 判淡），所以它本来就会被 `consent_missing`
+# 接住——只不过报的是 `consent_required`，于是卡上问的还是那个错的方向。
+#
+# 为什么是**两个**函数而不是一个返回 `(码, 文)` 的：唯一的消费方 `graph.execute_node`
+# 的行数/复杂度预算**一格都不剩**（`tests/test_complexity_budget.py`，台账 400 行 / C=78
+# 且**只许缩小**），一次元组解包就要多一行。所以分成"一处要码、一处要文"两个薄函数。
+# 它们**不各自判一遍**——都只问同一个谓词 `action_conflict`，判据只有一份
+# （`tests/test_own_action_conflict.py` 用源码锁钉住这一点）。两处必然同进同出：
+# 同一个 `user_msg`、同一个 `name`、同一个纯函数。
+def consent_block_reason(user_msg: str | None, tool: str | None) -> str:
+    """同意闸挡下这一件写时的**原因码**：反极性改选 → `action_conflict`，否则 `consent_required`。"""
+    return REASON_ACTION_CONFLICT if action_conflict(user_msg, tool) else REASON_CONSENT
+
+
+def consent_block_frame(tool: str, principal: Principal | None,
+                        user_msg: str | None) -> str:
+    """同一格的**帧文**。`action_conflict` 为真时改说"你排反了"（否则模型只会收到
+    一句"要不要做"——那正是它已经答错的那个问题）。"""
+    if action_conflict(user_msg, tool):
+        return action_conflict_frame(tool, own_antipode(tool))
+    return consent_frame(tool, principal)

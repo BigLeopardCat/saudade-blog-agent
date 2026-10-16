@@ -813,8 +813,18 @@ check("短应答准入吃的是同一份剥壳（`context._short_core` —— �
 
 print("⑨b 接线：闸在调用之前，拒绝说得出原因，叙述侧封得住")
 check("execute 在调用前算确认", "consent_missing = (authz.requires_consent" in graph_src)
-check("未确认时不执行（产帧而非 invoke）", "out = authz.consent_frame(name, principal)" in graph_src)
-check("未确认记 trace（consent_required 事件）", '"consent_required"' in graph_src)
+check("未确认时不执行（产帧而非 invoke）",
+      "out = authz.consent_block_frame(name, principal, user_msg)" in graph_src)
+# 20261016（§1.57 候选①）：同意闸那一格的**原因码与帧文**改由一个薄函数产出——反极性改选
+# （主人说「收藏」而 planner 排了 `remove_favorite`）要走同一格，但码换成 `action_conflict`、
+# 帧文换成"你排的与主人要的相反"。⇒ 判据从**源码字面**（`"consent_required"` 那个字符串不再
+# 出现在 graph.py 里）改成**取值**：非冲突时那一格必须逐字退回 `consent_required`。
+check("未确认记 trace（同意闸那一格的原因码仍是 `consent_required`；"
+      "反极性改选才换成 `action_conflict`，见 tests/test_own_action_conflict.py）",
+      "authz.consent_block_reason(user_msg, name)" in graph_src
+      and authz.consent_block_reason("帮我把文章 12 收藏一下", "add_favorite") == "consent_required"
+      and authz.consent_block_reason("帮我把文章 12 收藏一下", "remove_favorite")
+      == authz.REASON_ACTION_CONFLICT)
 check("checker 认得确认原因码", "authz.consent_error_reason(text)" in graph_src)
 check("gate 5a 扩了写内容的完成式声称词表（未确认却说已发布 → fallback）",
       "_WRITE_CONTENT_CLAIM_RE.search(reply)" in graph_src)
