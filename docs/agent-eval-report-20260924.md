@@ -115,12 +115,12 @@
 `nonempty` 在管它——**判据还在、约束没了、报告全绿**。
 
 现状没有实际踩到（126 条里除注释键外全部有效），所以这是**防线缺失**而不是现存缺陷。
-补法很便宜：在 `judge_offline_test.py` 或一条新 L0 里断言"用例用到的每个 gold 键
+补法很便宜：在 `test_judge_offline.py` 或一条新 L0 里断言"用例用到的每个 gold 键
 ∈ 已支持键集合 ∪ {`_note`, `note`}`"。**待拍板**（§6.2）。
 
 ### 3.6 判据族自身的配套
 
-`tests/judge_offline_test.py`（词表/正则族/引述豁免的离线自测）+ `not_contains_exempt_quote`
+`tests/test_judge_offline.py`（词表/正则族/引述豁免的离线自测）+ `not_contains_exempt_quote`
 （引述豁免）+ `forbid_fallback`（opt-in，堵"用户收到兜底道歉、正断言却恰好命中道歉文本"）
 ——这三件在，判据从"能判"到"判错了能看出来"是闭环的。本轮没有新增判据族缺口。
 

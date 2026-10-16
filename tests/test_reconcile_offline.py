@@ -14,7 +14,7 @@
 最后一段是**接线断言**：读 `scripts/nightly_regression.sh` 原文，断言对账那一节在里面
 ——"能力有测试 ≠ 接线有测试"是本仓反复出过的问题（`tests/test_golden_trace.py` 同款纪律）。
 
-用法：.venv/bin/python tests/reconcile_offline_test.py → 全符合预期时退出码 0。
+用法：.venv/bin/python tests/test_reconcile_offline.py → 全符合预期时退出码 0。
 """
 import gzip
 import json
