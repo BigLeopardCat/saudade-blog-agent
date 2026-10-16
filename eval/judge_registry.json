@@ -31,6 +31,10 @@
         21,
         0
       ],
+      "agent/checkpoint.py": [
+        0,
+        0
+      ],
       "agent/confirm.py": [
         3,
         0
@@ -68,10 +72,6 @@
         0
       ],
       "agent/llm_usage.py": [
-        0,
-        0
-      ],
-      "agent/memory.py": [
         0,
         0
       ],

@@ -16,6 +16,24 @@
 
 ## 20261017
 
+- **删掉一个"看着能用"的记忆存根，换成恒惰性的 checkpointer 接线点**
+  （`agent/memory.py` → `agent/checkpoint.py`）：旧的 `get_checkpointer()` 返回
+  `MemorySaver()`——**进程内**，而生产是 4 个 uvicorn worker，照它接线的人拿到的是
+  "每 worker 各记各的"上下文，**而且不报错**；它的英文 docstring 甚至写着 "maintain
+  context across multiple turns in a session"，与 `docs/agent-architecture.md` §4.6
+  明说的"它从未积累过任何状态"正相反（该函数**零调用方**，是纯陷阱）。新模块的
+  `build_checkpointer(dsn)`：**空 DSN ⇒ `None`**（= 今天的行为，`build_graph()` 仍是裸
+  `compile()`，生产逐字节不变）；非空 DSN 的**每一条分支都抛异常**——scheme 认不出来要
+  响亮（**故意不支持内存档**），依赖没装要点名包名与 pip 命令，依赖装齐了也不许只改这一处
+  （ADR-0011 的"三处一起动"，只做一处会**静默产生双份上下文**）。**本笔不写没跑过的 saver
+  构造代码**：真接 saver 属于 ADR-0011 采纳批，等依赖落地后与它的判据一起补。判据
+  `tests/test_checkpoint_factory.py`（六探针 + 正控/反控）：① 惰性（空 DSN 返回 `None`，
+  且**一次 import 都不发**）；② 反控（给了合法 DSN 就**绝不**静默返回 `None`）；③④ 两条
+  响亮拒绝；⑤ 接线锁（AST 钉住 `build_graph()` 里仍是**唯一一处、不带参数**的
+  `.compile()`——不是"永远不许接"，是接线那一刻必须自觉来改它）；⑥ 旧陷阱不许回来
+  （按 **AST** 扫 `agent/` 的生产代码里不许再有 `MemorySaver`——按文本扫会假红，本节
+  正当当地写着这个词）。
+
 - **回落档的 embedding 模型名换代，且与「老缓存当年是谁建的」拆成两个常量**
   （`rag/embed_space.py`）：`LEGACY_MODEL` 一个常量此前同时干两件事——① `resolve()` 在
   「没配 `EMBEDDING_*`」时**回落用的模型名**；② `legacy_cache_ok()` 判「盘上那些没有空间

@@ -77,7 +77,7 @@ flowchart TB
 │   ├── decisions.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取/特效切换/导航/屏幕显示）+ 动作意图扫描（intent_hints 原料）+ 检索候选裁决（标题相关性）+ 终局计划（轮次上限/复盘终局/拦截收尾）——被 graph.py 节点调用，反向外移函数按原名 re-export
 │   ├── context.py             # 上下文组装（纯函数叶子层）：消息文本提取（多模态兼容）/page_ctx/页面操作指南（GUESTBOOK_GUIDE、SITE_GUIDE）/工具帧摘要/checker 回执摘要
 │   ├── agent.py               # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
-│   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
+│   ├── checkpoint.py          # build_checkpointer：checkpointer 的接线点（空 DSN 恒返回 None，见 §4.6）
 │   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，身份与权限地基（docs/identity-and-permissions.md）
 │   ├── authz.py               # ★ 权限模型（20260920）：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
 │   ├── skills.py              # ★ 技能注册表：47 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）+ NAV_MAP 导航映射（业务唯一数据源）
@@ -452,11 +452,28 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 ### 4.6 MemorySaver 为什么不承担记忆
 
-`agent/memory.py` 返回 `MemorySaver`（进程内），但 server.py 每请求生成全新 thread_id
-（`user_{id}_{uuid4().hex[:8]}`）——跨请求永不命中同一线程，MemorySaver 实际上**从未积累过任何状态**；
-手写图（graph.py）已完全不挂 checkpointer，memory.py 是无人引用的兼容死代码（保留以防旧代码误用）。
-历史教训：曾经复用线程累积，长对话（教程连载）导致输入上下文与 worker 内存无限膨胀直至截断/被杀，
-于是改为"每请求独立线程 + DB 注入"。**线程复用是禁区，恢复即重蹈覆辙。**
+`agent/checkpoint.py` 提供 `build_checkpointer(dsn)`，**空 DSN ⇒ 返回 `None`**；而手写图
+（graph.py）的 `build_graph()` 末尾是裸的 `g.compile()`，**不挂 checkpointer**。所以今天
+的图是纯无状态的：连续性完全靠 Rust 侧注入最近 N 条历史 + 滚动摘要。
+
+**为什么不是"每请求一个线程的 MemorySaver"**：server.py 每请求生成全新 thread_id
+（`user_{id}_{uuid4().hex[:8]}`）——跨请求永不命中同一线程，MemorySaver 实际上**从未积累过
+任何状态**。历史教训：曾经复用线程累积，长对话（教程连载）导致输入上下文与 worker 内存
+无限膨胀直至截断/被杀，于是改为"每请求独立线程 + DB 注入"。
+**线程复用是禁区，恢复即重蹈覆辙。**
+
+**接上真 saver 是三处一起动**（ADR-0011）：① `server._build_messages` 删掉历史注入循环；
+② `thread_id` 改成会话坐标（`conv_<conversation_id>`）；③ `build_graph(checkpointer=…)`
+并**显式** `durability="sync"`——缺省 `"async"` 时硬杀会让幂等账的键漂移、账被静默绕过
+（ADR-0012《触发条件》）。**只做 ③ 会静默产生双份上下文**，所以 `build_checkpointer()`
+在依赖装齐、三处同批改完之前**一律抛异常**，绝不回落成内存档。
+
+**20261017 之前这里是什么**：`agent/memory.py`（**已删**，本批改名成 `agent/checkpoint.py`）
+的 `get_checkpointer()` 返回 `MemorySaver()`——一个**无人调用**、却"看起来能用"的存根（4 个
+uvicorn worker 下每 worker 各记各的，且不报错）。它的英文 docstring 甚至写着 "maintain
+context across multiple turns in a session"，与本节开头正相反。判据
+`tests/test_checkpoint_factory.py` ⑥ 按 **AST** 钉住
+"`agent/` 的生产代码里不许再出现 `MemorySaver`"（读文本会假红：本节正当当地写着这个词）。
 
 ### 4.7 无状态图能不能"中途暂停等用户决定"？（20260920 回答）
 
