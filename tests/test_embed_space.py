@@ -6,12 +6,13 @@
 默默变得不对，所以判据只能建在**解析结果与产物记账**上：
 
 ① **解析规则**（`resolve`）：`EMBEDDING_*` 齐 ⇒ 用它；缺 key / 占位 key / 缺 model ⇒
-   回落 `QWEN_*` + `text-embedding-v4`；垃圾的 dim/batch 不许炸、也不许悄悄变成别的值。
+   回落 `QWEN_*` + `FALLBACK_MODEL`；垃圾的 dim/batch 不许炸、也不许悄悄变成别的值。
 ② **与 `Settings.embedding_configured` 同口径**：那条规则写在两处（一处给配置面看，
    一处给图谱用），两边**任何一格分叉**都会让"配了却没生效"或"没配却去调"。
 ③ **旧缓存兼容只有一条通路**：旧文件没有空间签名，唯一可能的出处就是老路
-   （`text-embedding-v4` + `QWEN_BASE_URL`）——差一个字就整份作废重嵌，**绝不半读**
-   （半读 = 两代向量混进同一张图）。
+   （`FLAT_CACHE_MODEL` + `QWEN_BASE_URL`）——差一个字就整份作废重嵌，**绝不半读**
+   （半读 = 两代向量混进同一张图）。⚠️ **`FALLBACK_MODEL` 与 `FLAT_CACHE_MODEL` 是两个
+   不同的东西**（"现在该用哪个" vs "老文件当年是谁建的"），这里有一条锁钉住它们不相等。
 ④ **查询侧明着降级**：产物不是当前空间建的 ⇒ `query_words` 返回 `space_mismatch`，
    且**一次 embedding 调用都不花**（`_embed_one` 被换成计数器：它动了就是红）。
 
@@ -28,6 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from config.settings import Settings  # noqa: E402  （显式传参，不读 .env）
 from rag import embed_space as es  # noqa: E402
 from rag import wordgraph as wg  # noqa: E402
 
@@ -59,9 +61,13 @@ check("  EMBEDDING_DIM 没配 ⇒ 0（＝不向 API 传 dimensions，以返回�
       s.dim == 0 and s.batch == es.LEGACY_BATCH, s.describe())
 
 s = es.resolve(ENV_LEGACY)
-check("★一处没配 ⇒ 回落 QWEN_* + text-embedding-v4 / 1024 / 批 10（旧口径逐字不变）",
+check("★一处没配 ⇒ 回落 QWEN_* + FALLBACK_MODEL / 1024 / 批 10",
       (s.source, s.model, s.dim, s.batch, s.base_url)
-      == ("qwen", es.LEGACY_MODEL, es.LEGACY_DIM, es.LEGACY_BATCH, QWEN_BASE), s.describe())
+      == ("qwen", es.FALLBACK_MODEL, es.LEGACY_DIM, es.LEGACY_BATCH, QWEN_BASE), s.describe())
+check("★回落档的模型名与 `Settings.embedding_model` 的缺省值同源"
+      "（同一个问题在本仓只该有一个答案；分叉了就是两个部署各自解出不同的空间）",
+      es.FALLBACK_MODEL == Settings.model_fields["embedding_model"].default,
+      f"{es.FALLBACK_MODEL} vs {Settings.model_fields['embedding_model'].default}")
 
 for bad in ("", "   ", "your-api-key-here"):
     check(f"  key 是 {bad!r} ⇒ 回落（占位串＝没配，与 Settings 同一条判据）",
@@ -115,8 +121,6 @@ check("  describe() 给出人话来源（模型/维度/批），不带 key",
 # ─────────────────────────────────── ② 与 Settings.embedding_configured 同口径
 print("\n② 口径锁：`Settings.embedding_configured` ↔ `resolve(env_of(Settings))`")
 
-from config.settings import Settings  # noqa: E402  （显式传参，不读 .env）
-
 _CASES = [
     ("两样都配了", dict(embedding_api_key="sk-x", embedding_model="m1"), True),
     ("没有 key", dict(embedding_model="m1"), False),
@@ -151,9 +155,19 @@ check("  回落那条路拿得到 QWEN_* 的 key/base（不给的话回落也是
 # ─────────────────────────────────────────── ③ 旧缓存兼容只有一条通路
 print("\n③ legacy_cache_ok：旧格式（无签名）缓存认不认")
 
-check("  source=qwen ⇒ 认（旧文件本来就是它建的）", es.legacy_cache_ok(es.resolve(ENV_LEGACY), ENV_LEGACY))
-check("★source=embedding 但模型/维度/端点与旧口径逐字相同 ⇒ 认"
-      "（本机就是这一格：不改一个字、453 条缓存照旧命中，连重建都不需要）",
+check("★两个模型名常量不许合并：一个是「现在该用哪个」、一个是「老文件当年是谁建的」",
+      es.FALLBACK_MODEL != es.FLAT_CACHE_MODEL,
+      f"{es.FALLBACK_MODEL} / {es.FLAT_CACHE_MODEL}")
+check("★回落档（source=qwen，模型已是 FALLBACK_MODEL）⇒ **不认**"
+      "（老缓存是 FLAT_CACHE_MODEL 建的；从前按 source 放行，换名之后那一条就变成"
+      "「把上一代向量混进新模型的图」，且不报错）",
+      not es.legacy_cache_ok(es.resolve(ENV_LEGACY), ENV_LEGACY))
+check("  显式配了 FALLBACK_MODEL + QWEN_BASE_URL ⇒ 也不认（同上：模型名换了就是另一片空间）",
+      not es.legacy_cache_ok(
+          es.resolve({**ENV_LEGACY, "EMBEDDING_API_KEY": "sk-x",
+                      "EMBEDDING_MODEL": es.FALLBACK_MODEL}), ENV_LEGACY))
+check("★source=embedding 且模型/维度/端点与老路逐字相同 ⇒ 认"
+      "（从回落档迁到显式配置、一个字没改空间的那种部署：老缓存照旧命中，连重建都不需要）",
       es.legacy_cache_ok(es.resolve(ENV_BOTH), ENV_BOTH))
 check("  端点差一个字 ⇒ 不认（宁可重嵌一次）",
       not es.legacy_cache_ok(es.resolve({**ENV_BOTH, "EMBEDDING_BASE_URL": QWEN_BASE + "/x"}), ENV_BOTH))
@@ -164,7 +178,7 @@ check("  显式配了别的维度 ⇒ 不认",
           es.resolve({**ENV_BOTH, "EMBEDDING_DIM": "768"}), ENV_BOTH))
 check("  QWEN_BASE_URL 没配（无从确认是不是同一片空间）⇒ 不认",
       not es.legacy_cache_ok(
-          es.resolve({"EMBEDDING_API_KEY": "sk-x", "EMBEDDING_MODEL": es.LEGACY_MODEL}), {}))
+          es.resolve({"EMBEDDING_API_KEY": "sk-x", "EMBEDDING_MODEL": es.FLAT_CACHE_MODEL}), {}))
 check("  dim=0 或 1024 都算旧口径（0 = 没传 dimensions，服务端默认就是 1024）",
       es.legacy_cache_ok(es.resolve({**ENV_BOTH, "EMBEDDING_DIM": "1024"}), ENV_BOTH))
 
