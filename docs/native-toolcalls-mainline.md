@@ -564,7 +564,7 @@ submitted → running → succeeded / failed / cancelled
 （`agent/tasks.py` 自己的头注就写着这一行"有写无读"）⇒ 两条出路（补消费者 / 删掉）里选了
 删掉——补一个扫描不变量只是把同一件事记第二遍。反向锁落在 `tests/test_skills.py` 的
 `test_todo_line_retired`（写端塞了 `todo` 也不产出、读端不再返回那一格）与
-`tests/test_native_wiring.py` 的契约源码锁。
+`tests/test_planner_wiring.py` 的契约源码锁。
 
 ### 6.7 落地形态（20260927，批 D）
 
@@ -584,7 +584,7 @@ submitted → running → succeeded / failed / cancelled
 
 - `tests/test_tasks.py`（离线秒级）：归一化四条、幂等键**不含步骤**、帧载荷**不带身份两列**、
   结算"只认回执/连续推进/`declared_after`"、注入渲染的框架字符消毒、注记单行；
-- `tests/test_native_plan.py`：开/关两态下的名字集合相等 + `task_hold` 的三种组合；
+- `tests/test_planner_llm.py`：开/关两态下的名字集合相等 + `task_hold` 的三种组合；
 - `eval/corpus_invariants.py` 的 **I6**（写端 vs 消费端对账：无 id 的登记 / 拿不到会话的
   登记 / 注入了却没人管 / 被纠偏次数）+ `tests/test_corpus_invariants.py`（这个脚本
   此前**一条测试都没有**）；
@@ -696,7 +696,7 @@ submitted → running → succeeded / failed / cancelled
 
 **修法（出口二）**：`AGENT_TASK_STATE` 开档时，**每个技能函数**多一格可选参数 `intents`。它用
 `tasks.intents_prop_schema` 造形状，与伪函数 `task_intents` 那一格**同源**（只差描述文案，测试
-按 items 逐字对拍）。`native_plan.tool_calls_to_plan` 在解释 args 之前把它 `pop` 掉 ⇒ **它绝不
+按 items 逐字对拍）。`planner_llm.tool_calls_to_plan` 在解释 args 之前把它 `pop` 掉 ⇒ **它绝不
 进 `params`、绝不进 TOOLS 行、绝不进 `tool_call_names`**，只喂归一化器；记账 `task_intents_field:
 <name>`（填了但收不下 ⇒ `task_intents_field_invalid`）。原 `task_intents_inline:<name>` 的含义
 随之收窄为「清单来自**另一条**调用」。
@@ -744,8 +744,8 @@ dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop
   `20261008_222340` 第二版又填了 `intents` 但只填剩下的 ⇒ 最终登记是上一版的**子集**，上卡那件
   由卡承载）。代价同上一条。
 - **伪函数现在是三个**（`task_hold` / `task_drop` / `task_intents`）**加一个字段**（每个技能上的
-  `intents`）。§6.7 那张表写于 20260927，只讲前两个；`tests/test_native_plan.py` 的
-  `pseudo_tool_schemas` 与两条接线套件（`test_native_wiring` / `test_slim_skills`）的
+  `intents`）。§6.7 那张表写于 20260927，只讲前两个；`tests/test_planner_llm.py` 的
+  `pseudo_tool_schemas` 与两条接线套件（`test_planner_wiring` / `test_slim_skills`）的
   `_expected_schema_names` 都已按三个认。
 
 ### 6.12 清单的两个失败方向各堵一处 + 声明侧的出处对账（20261009）
@@ -803,7 +803,7 @@ dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop
 
 1. **档位名与字段**：`config/settings.py` 两个字段、`/health` 的 `dials` 那一格、`tests/run_all.py::_PINNED`
    的两格、`.env.example` 两个键（留 ⚠️ 说明：**写进去现在是鬼键**）、`README.md` 那一行。
-2. **形参族**（这一半比档位名要紧）：`build_tool_schema` / `tool_calls_to_plan` / `bind_native`
+2. **形参族**（这一半比档位名要紧）：`build_tool_schema` / `tool_calls_to_plan` / `bind_planner_tools`
    的 `task_state` 形参、`_short_reply_hint` 的同名形参、`_DecideCtx` 的 `_task_state` 字段。
    一个"默认关的关键字形参"是**活的静默失效陷阱**：将来的调用点漏传一次就静默关掉登记通道，不报错
    也不留痕。删完之后那三个伪函数与每技能上的 `intents` 那一格**无条件**进 schema。

@@ -171,8 +171,8 @@ grep -l authz_shadow /home/ubuntu/Saudade-Blog/logs/agent/traces/*.json | wc -l
 
 | 层 | 落点 | 拦什么 | 硬度 |
 |---|---|---|---|
-| ① 技能可见性 | `skills.visible_skills`（`role in CHAT_ONLY_ROLES and not s.chat`） | planner 菜单 / native schema / narrator 能力清单三处**同源**只剩 `chat` | **软**：`instantiate_plan` 不校验可见性，LLM 点名不可见技能照样成行 |
-| ② native schema | `native_plan.build_tool_schema` | native 档模型只点得出 `chat` | **软**：只对 native 档生效，而默认档是 `text` |
+| ① 技能可见性 | `skills.visible_skills`（`role in CHAT_ONLY_ROLES and not s.chat`） | planner 菜单 / 工具 schema / narrator 能力清单三处**同源**只剩 `chat` | **软**：`instantiate_plan` 不校验可见性，LLM 点名不可见技能照样成行 |
+| ② 工具 schema | `planner_llm.build_tool_schema` | 模型**发得出**的技能只剩 `chat` | **软**：schema 约束的是模型能*发出*什么，不是系统*接受*什么——`instantiate_plan` 照样收下点名别的技能（与 ① 是同一道口子的另一个入口；20261017 更正：原文写的"只对 native 档生效、默认档是 text"自 20261004 文本契约档删除后已不成立） |
 | ③ authz 空 scope | `authz._ROLE_SCOPES[ROLE_ZAKO] = frozenset()` | 执行前的 `authz.check` | **软**：`execute_node` 在 shadow 档下（`not allowed and not enforcing`）**只记账不拦**，而 `zako` 会拿到的那些 scope 没有一个在 `_HARD_SCOPES` |
 | ④ planner 短路 | `graph.planner_node` 顶部 | 结构上不产出 TOOLS 行 ⇒ `execute` **永不被进入** | **硬**（确定性、无 LLM、无配置开关） |
 

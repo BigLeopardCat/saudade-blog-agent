@@ -653,7 +653,7 @@ class Skill:
     complete_when: str = ""            # 完成判定（注入 planner 提示词，辅助收尾决策）
     reply_contract: str = ""           # 回复契约（model 遵守）
     # 规划契约（20260927）：**必须怎么做**的那一句话，与"技能是干什么的"（description）
-    # 分开写。分开的理由是被实测逼出来的，不是文风：native 档去重（skills.build_planner_context
+    # 分开写。分开的理由是被实测逼出来的，不是文风：接口层去重（skills.build_planner_context
     # 的 `slim`）把 description 从散文菜单里删掉、只留 schema，而 rag_talk_rag 这条用例
     # 随之从 5/5 绿变成 0/5 红——「'有没有人聊过/写过 X'必须成对点名 list_guestbook 与
     # list_talks」原本住在 description 里，搬进 `tools[].description` 之后模型照旧选对了
@@ -1214,7 +1214,7 @@ SKILLS: list[Skill] = [
                 "color": "（可选）用户点了名的颜色：中文色名或站内色板色值；没说就不填"},
         plan=[("create_tag", {"title": "$title", "parent_tag": "$parent_tag", "color": "$color"})],
         complete_when="create_tag 返回了新建或复用的标签 id",
-        # 契约写在**提示词正文**里而不是只写进 description（20261008）：native 档把
+        # 契约写在**提示词正文**里而不是只写进 description（20261008）：接口层把
         # description 从散文菜单里删掉（只留 schema 那一份），而"一次点名好几个新标签
         # 时该填哪一格"是**必须怎么做**，不是"这技能是干什么用的"——同 `content_query`
         # 成对点名那条契约的教训（理由与实测见 `build_planner_context` 的头注）。
@@ -1268,7 +1268,7 @@ SKILLS: list[Skill] = [
         # 你要的样子了」）。`intents` 里那三件被排除规则①按**技能粒度**减掉（`acted_skills`
         # 收到的是"这一轮派下去的技能"，而它假定"卡装下了这个技能的全部件"）——那条件
         # 只有在卡真装得下时成立，所以补齐的是**卡**：填 `article_ids` 让一张卡覆盖全部篇。
-        # 契约写在提示词正文里而不只写进 description，理由同 tag_create（native 档只留
+        # 契约写在提示词正文里而不只写进 description，理由同 tag_create（接口层只留
         # schema 那一份，而"一次点名好几篇该填哪一格"是**必须怎么做**）。
         planner_contract=(
             "主人一句话点了**好几篇文章**、要改成同一个状态/置顶（「除了 19 全部取消置顶」"
@@ -2590,7 +2590,7 @@ def _expand_change_set(skill, params: dict) -> tuple[list[str], str]:
 
     与其余展开函数的根本差别：**这里没有"解释"这一步**。`calls` 里的每一条已经是
     「工具 + 参数」的完整调用（形状与 `content_query.calls` **逐字同构**：模型侧由
-    `native_plan._SCHEMA_OVERRIDES[("review_inbox","calls")]` 给出闭集）——这一层与
+    `planner_llm._SCHEMA_OVERRIDES[("review_inbox","calls")]` 给出闭集）——这一层与
     它之间是一条**恒等**通道：不补参、不改写、不排序、不合并。理由是同一条纪律的
     另一面："参数不全时猜一个"在别处只是办不成，在这一族是**拿别人的一句话做裁决**。
 
@@ -4603,7 +4603,7 @@ _SYSTEM_ONLY_SKILLS = frozenset({"read_article"})
 # 屏幕显示文字）与 `device_query`（有哪些设备/在线状态）。平台没装 ⇒ 没有设备可
 # 列、没有屏幕可写，留着它们就是两份"能做"的承诺（`capability` 会原样进 narrator
 # 的能力清单，planner 也会照选）。收在 `visible_skills` 这一处，理由同上一行：
-# **可见性判据只能有一处**——planner 注入、native 档的 tools schema、narrator 的
+# **可见性判据只能有一处**——planner 注入、接口层的 tools schema、narrator 的
 # 能力清单三处都从它派生。
 # ⚠️ 只影响**可见性**，不动工具注册表：`tools/base.py` 里那两个工具照旧注册着
 # （`_TOOL_MAP`、authz 的写操作判定、gate 的具名工具声称核对都还引用它们）。
@@ -4670,10 +4670,10 @@ def build_planner_context(role: str | None = None, *, slim: bool = False,
     理由是这三样在同一轮的 `tools`
     里逐字重复出现（schema 的 `description` = `s.description` + `完成判定：` +
     `complete_when`，`properties` = 同一份 `skill_param_specs`），而**同一事实写两遍
-    是有代价的**：native 档下面临的是两份形态不同的同一张表（散文 vs JSON Schema），
+    是有代价的**：接口层面临的是两份形态不同的同一张表（散文 vs JSON Schema），
     模型得自己判断听哪一份，且两份会漂移——本批落地时就抓到一处：schema 侧的
     `content_query` 描述里原样漏着未展开的 `__无参只读工具清单__` 标记（已修，
-    见 `native_plan.py`）。**不删的**：固定工具序列（`tools` 的 schema 里没有，
+    见 `planner_llm.py`）。**不删的**：固定工具序列（`tools` 的 schema 里没有，
     而 `content_query` 的 calls 通道要求写工具名）、导航映射表、能力边界兜底段、
     口语变体说明——这些是这一块独有的信息，删了就真丢。
 
@@ -4682,7 +4682,7 @@ def build_planner_context(role: str | None = None, *, slim: bool = False,
 
     `deny`（20261007，1d）= **这一轮不许再选的技能名**（来源见
     `agent/block_reasons.py::denied_skills`：上一轮受阻、且原因是"改参数重试无效"
-    那一族）。它与 native 档的 `tools` schema 收的是**同一个集合**——"菜单"横跨
+    那一族）。它与 接口层的 `tools` schema 收的是**同一个集合**——"菜单"横跨
     两处（这张自动生成的技能表 + `tools` schema），只摘一处等于没摘（提示词里还列着，
     模型照着名字点，只是 schema 里没有那个函数了）。**传空集/None 时渲染逐字节不变**，
     无阻碍轮一分钱不花。

@@ -31,7 +31,7 @@
     cd <本分支 worktree>
     PYTHONPATH=$PWD .venv/bin/python eval/zero_call_residual_probe.py --rounds 3
 
-判读见 `docs/zero-call-residual.md`。同族放在 `eval/` 平铺的先例：`native_tools_probe.py`、
+判读见 `docs/zero-call-residual.md`。同族放在 `eval/` 平铺的先例：`toolcall_probe.py`、
 `task_state_probe.py`、`d4_structured_output_poc.py`（**要花真 LLM 调用，不进 CI**）。
 """
 from __future__ import annotations

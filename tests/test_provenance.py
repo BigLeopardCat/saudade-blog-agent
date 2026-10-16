@@ -2,7 +2,7 @@
 """写参数**出处**的引文核对通道（20261014 第一批，纯函数、零网络、零 LLM、秒级）。
 
 被测 = `agent/provenance.py`（判据本体）+ `agent/textnorm.py`（两把尺子）+
-`agent/native_plan.py` 的 schema 注入/摘取 + `agent/graph.py` 的影子接线。
+`agent/planner_llm.py` 的 schema 注入/摘取 + `agent/graph.py` 的影子接线。
 
 **这一批换的是什么**：写通道上「这个值有没有出处」从**约 40 张手抄中文词表 + 位置窗口**
 （「主人这句话里有没有我认识的那个动词」）换成**模型给逐字引文、系统只做逐字核对**
@@ -183,7 +183,7 @@ check("`always_confirm_tools()` 是 `authz` 那一份的**公开读口**（同�
 
 # ── ⑦ schema 面 ────────────────────────────────────────────────────────
 print("⑦ schema 面：进 props **不进** required；射程外的技能没有；摘走不进 params")
-from agent import native_plan as N  # noqa: E402
+from agent import planner_llm as N  # noqa: E402
 
 
 def _schema(role, **kw):
@@ -217,7 +217,7 @@ _dec = N.tool_calls_to_plan(_msg_resp, "admin")
 check("★ 摘走：evidence **不进 params**（漏进去会走 PARAMS= 计划文本、还会被 "
       "check_skill_params 记成未知参数，把漂移探针淹掉）",
       _dec is not None and "evidence" not in (_dec.params or {}), str(_dec and _dec.params))
-check("摘出来的引文进 `NativeDecision.evidence`（归一成 (arg, quote) 对）",
+check("摘出来的引文进 `PlannerDecision.evidence`（归一成 (arg, quote) 对）",
       _dec.evidence == (("name", "标签「大笨狗」"),), str(_dec.evidence))
 check("技能参数原样留着（摘的是那一格，不是这个技能的参数）",
       (_dec.params or {}).get("name") == "大笨狗")

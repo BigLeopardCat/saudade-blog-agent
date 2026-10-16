@@ -231,7 +231,7 @@ STICKER_GUIDE = (
 # 为什么搬：graph.py 一半以上的非空行是散文（注释 + docstring + 提示词正文），
 # 而"哪一段是写给模型看的"因此无处可认。搬的是**纯文本常量**，零逻辑：
 #   · `_PLANNER_PROMPT`  planner 模板（渲染点 `graph._render_planner_prompt`）
-#   · `_PLANNER_OUTPUT_CONTRACT_NATIVE`  规则 7 输出契约（native 档唯一一份）
+#   · `_PLANNER_OUTPUT_CONTRACT_NATIVE`  规则 7 输出契约（接口层唯一一份）
 #   · `_REFLECTOR_PROMPT` 复盘器模板
 #   · `_EXECUTOR_HEAD` / `NARRATOR_DISCIPLINE` / `_EXECUTOR_PROMPT`  narrator 三段
 # 判据：搬迁前后**逐字节相同**（`tests/test_react_narrator_assets.py` 的 sha256 锁

@@ -55,7 +55,7 @@ from agent.graph import (  # noqa: E402
 )
 from agent.principal import Principal  # noqa: E402
 from agent.skills import instantiate_plan  # noqa: E402
-from _native_stub import bind_tools_stub, native_reply  # noqa: E402
+from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -112,7 +112,7 @@ def _cfg():
 
 
 class _ScriptedLLM:
-    """按顺序吐回复、留 prompt 供断言；夹具文本走 native 桩翻成 tool_calls（见 _native_stub）。"""
+    """按顺序吐回复、留 prompt 供断言；夹具文本走 native 桩翻成 tool_calls（见 _planner_stub）。"""
 
     bind_tools = bind_tools_stub
 
@@ -121,7 +121,7 @@ class _ScriptedLLM:
 
     def invoke(self, prompt):
         self.prompts.append(prompt)
-        return native_reply(self.replies.pop(0))
+        return toolcall_reply(self.replies.pop(0))
 
 
 def test_param_problem_corrected_in_round():

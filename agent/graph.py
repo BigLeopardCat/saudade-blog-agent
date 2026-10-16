@@ -104,7 +104,7 @@ from agent.entities import receipt_digest
 from agent.factblock import (action_facts, is_action_family, is_block_family,
                              render_fact_block)
 from agent.llm_usage import usage_fields
-from agent.native_plan import (bind_native, finish_reason, tool_call_names,
+from agent.planner_llm import (bind_planner_tools, finish_reason, tool_call_names,
                                tool_calls_to_plan)
 from agent.principal import (CHAT_ONLY_ROLES, KNOWN_ROLES, ROLE_ADMIN,
                              ROLE_SUPERADMIN, ROLE_USER,
@@ -473,15 +473,15 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
     · `contract` 默认 `_PLANNER_OUTPUT_CONTRACT_NATIVE`——**留成参数是为了测试能
       往里塞别的文本做对照**（如 `test_prompt_prefix` 判规则顺序），不是生产拨盘；
     · `slim_skills`（20260927）= 技能块去掉与 `tools` schema 逐字重复的三行（判据与
-      不删清单见 `skills.build_planner_context`）——native 档恒 True；传 False 只有
+      不删清单见 `skills.build_planner_context`）——接口层恒 True；传 False 只有
       离线对照在跑；
     · `blocked_rows`（20261007）= 本轮受阻项的**类型化**呈现（原因码 ← checker、
       技能名 ← 计划；渲染见 `agent/context.py::blocked_rows`，类型表见
       `agent/block_reasons.py`）。`planner_node` 每轮都传，默认值是缺省语——留给
-      不建模受阻状态的离线探针/对照臂（`eval/native_tools_probe.py`、
+      不建模受阻状态的离线探针/对照臂（`eval/toolcall_probe.py`、
       `agent/react_arm.py`）与既有单测。
     · `deny`（20261007，1d）= 这一轮**不许再选的技能名**（见 `block_reasons.denied_skills`）
-      ——同一集合还要交给 `bind_native` 摘掉 schema 那一半，两处都是菜单（摘一半留一半
+      ——同一集合还要交给 `bind_planner_tools` 摘掉 schema 那一半，两处都是菜单（摘一半留一半
       等于没摘）。空集/None 时渲染逐字节不变。
     """
     return _PLANNER_PROMPT.format(
@@ -1181,14 +1181,14 @@ def _strip_menu(c: "_DecideCtx", name: str) -> None:
     """本轮菜单里再摘掉一个技能（20261012）。
 
     `deny` 有**两个出口**，必须一起改，只改一处等于没摘：① 工具 schema
-    （`bind_native(deny=…)`）；② 技能菜单（`_decide_llm` 的 `_prompt_args["deny"]`
+    （`bind_planner_tools(deny=…)`）；② 技能菜单（`_decide_llm` 的 `_prompt_args["deny"]`
     ⇒ `build_planner_context(deny=…)`）。`tests/test_menu_deny.py` 第五节钉的就是这条线。
 
     模型若绕开 schema 照旧报出这个名字，`_decide_register` 的 `menu_denied_used` 那一格
     会接住它（既有机制，这里不重复造）。
     """
     c.deny = set(c.deny) | {name}
-    c.llm = bind_native(c._base_llm, c.role, evidence=c._evidence,
+    c.llm = bind_planner_tools(c._base_llm, c.role, evidence=c._evidence,
                         deny=c.deny, deny_pseudo=c.deny_pseudo)
 
 
@@ -1309,7 +1309,7 @@ def _deny_giveup_nudge(deny, plan_obj: dict, user_msg, rounds: int,
 #
 # 两条收窄，都为"别把有帧的合法收尾轮纠成硬凑一次写"：
 #   · **整个请求还没排过任何写**（`_wrote_this_round`，读账甲）：写过的那一轮零工具
-#     收尾是合法收尾（`tests/test_native_wiring.py` 那条反锁钉着同一件事）；
+#     收尾是合法收尾（`tests/test_planner_wiring.py` 那条反锁钉着同一件事）；
 #   · 沿用既有的两道：主人明说不要工具 / 这一轮带图（同上面那两格，见 `_tools_off`
 #     `_img_turn`）。
 _WRITE_COMMAND_ZERO_CALL_NUDGE = (
@@ -1501,7 +1501,7 @@ def parse_plan(raw: str) -> dict:
 
     ⚠️ 这里的输入是**系统自己写的**契约文本（`plan_encode` 的产物，只经过一次
     `state` 存取），不是模型原始输出 ⇒ 用顶格正则即可。模型那一侧 20261004 起
-    根本不写文本契约了（native tool calls，见 `agent/native_plan.py`），所以
+    根本不写文本契约了（native tool calls，见 `agent/planner_llm.py`），所以
     这里**不需要**也不该再有"容错抠模型自由文本"的第二套解析器——曾经有过一份
     （`extract_plan_fields`，20260926 为 JSON 漂移加的），随文本档一起删除。
     """
@@ -6268,7 +6268,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
     c = _planner_setup(state, config, pre, task_sink)
 
     # LLM 决策轮。低温度（分类不需要创造力）、小 max_tokens、短超时。
-    # **接口层只剩一条路**（20261004）：决定由**工具调用**表达（`agent/native_plan.py`）。
+    # **接口层只剩一条路**（20261004）：决定由**工具调用**表达（`agent/planner_llm.py`）。
     # 文本契约那一档连同它的拨盘（`settings.planner_engine`）整体删除——生产实测
     # 384 份 trace 里 `native_fallback` 0 次，也就是说"native 判不了 → 退回文本解析"
     # 那条兜底**从未被走到过**；留着它只会让"模型什么都不点"（`undecided`）与"响应
@@ -6600,7 +6600,7 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
     菜单禁用（`deny` / `deny_pseudo`）→ 绑定 native 客户端 → 轮次/帧/打回注记 →
     确认轮补 `correction`：全部零 LLM，产出决策循环各段共用的 `_DecideCtx`。
 
-    ⚠️ `deny` 要经 `bind_native` 的 `deny=` 与 `_prompt_args` 两处漏出去（模型的菜单与
+    ⚠️ `deny` 要经 `bind_planner_tools` 的 `deny=` 与 `_prompt_args` 两处漏出去（模型的菜单与
     提示词里都不能出现受阻技能），所以它只能在这一个函数里定义一次。"""
     rounds = pre.rounds
     role = pre.role
@@ -6635,10 +6635,10 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
     # 任务状态的三个伪函数（`task_hold`/`task_drop`/`task_intents`）**常绑**：20261015
     # 撤掉 `AGENT_TASK_STATE` 档位（理由见 `_ledger_next` 的注）。撤之前产线 `.env`
     # 一直是 `1` ⇒ 这一格在线上取值本来就是 `True`，改成常量是零行为差异。**常量也不再
-    # 往 `_DecideCtx` 里传**：一格恒真的字段与 `bind_native` 的 `task_state=` 形参是同一件
+    # 往 `_DecideCtx` 里传**：一格恒真的字段与 `bind_planner_tools` 的 `task_state=` 形参是同一件
     # 事——留着它，将来某个调用点漏传就成了"静默关掉任务登记"（本仓最恨的失效形状）。
     _evidence = _evidence_on()
-    llm = bind_native(_base_llm, role, evidence=_evidence,
+    llm = bind_planner_tools(_base_llm, role, evidence=_evidence,
                       deny=deny, deny_pseudo=deny_pseudo)
     round_info = (
         f"当前决策：第 {rounds + 1}/{MAX_PLAN_ROUNDS} 轮。"
@@ -6715,8 +6715,8 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
         # 两本账都空 ⇒ 这一轮本不该被交回 planner（`route_after_execute` 只在"还剩"
         # 时才交回来）。真出现了就是判据漂移，如实记一笔，决策照常走 LLM 那条路。
         logger.warning("[planner] 确认兑现轮被交回但意图清单与台账都空（判据漂移？）")
-    # native 档的异常记账（如 native_multi_call）。**必须在循环外先声明**：循环外的
-    # `decision` 事件要读它，而它只在 native 档的某一支里被赋值——少了这一行，
+    # 接口层的异常记账（如 native_multi_call）。**必须在循环外先声明**：循环外的
+    # `decision` 事件要读它，而它只在 接口层的某一支里被赋值——少了这一行，
     # "某一轮走到某条提前 return 之外的路径"就会以 NameError 的形态炸在收尾上。
     native_note = ""
     return _DecideCtx(
@@ -6884,7 +6884,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
 
     c.raw = getattr(resp, "content", str(resp))
     c.native_note = ""
-    # 决定由工具调用表达（`agent/native_plan.py::tool_calls_to_plan`）。它返回
+    # 决定由工具调用表达（`agent/planner_llm.py::tool_calls_to_plan`）。它返回
     # `None` = 这一版响应**没给出可用决定**（五条来源见那里的头注），与"零调用但
     # 有正文"（返回 chat + `undecided`）是**两回事**，别再合并成一条路。
     # ⚠️ `evidence` 那一格**不在这里传**：`tool_calls_to_plan` 无条件把它从 args 里摘走
@@ -6897,7 +6897,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
         # 全量 trace 实测那条路 0 次被走到，而它把"响应不可解析"与"模型没决策"
         # 混成同一个归宿。两条轨分开：
         #   · `finish_reason == "length"`：**预算**失败（不是采样失败），同一条
-        #     消息再问多半截在同一处（见 native_plan 的"刻意不重试"）⇒ 直接收尾；
+        #     消息再问多半截在同一处（见 planner_llm 的"刻意不重试"）⇒ 直接收尾；
         #   · 其余（半截 arguments / 未知函数名 / args 非对象 / 空正文）：形态坏，
         #     走既有的 `correction` 通道纠偏**一次**（同 `_drop_correction` 的一次性）。
         # 两轨都产 `_wrap_up_plan`（借用确定性收尾轮的 `wrapped` 语义，**不新造
@@ -7071,7 +7071,7 @@ def _decide_zero_tool_correct(c: "_DecideCtx") -> "_Step":
                  or _acted_no_intents)):
         if _acted_no_intents and not c.correction:
             c.deny_pseudo.add(TASK_INTENTS)
-            c.llm = bind_native(c._base_llm, c.role, evidence=c._evidence,
+            c.llm = bind_planner_tools(c._base_llm, c.role, evidence=c._evidence,
                                 deny=c.deny, deny_pseudo=c.deny_pseudo)
             c.correction = _INTENTS_BACKFILL_NUDGE
             c.correction_kind = "点了技能清单没留下要记的"
@@ -7094,7 +7094,7 @@ def _decide_zero_tool_correct(c: "_DecideCtx") -> "_Step":
             # 前者负责说清"清单不代替动作"，后者负责说清"主人这句话要动手、名字
             # 就在他原话里"（单给前者那一版实测无效，见下）。
             #
-            # **为什么还要摘菜单**（20261008 批 ②，真链路实测）：native 档一轮只发得出
+            # **为什么还要摘菜单**（20261008 批 ②，真链路实测）：接口层一轮只发得出
             # 一条调用（`parallel_tool_calls=False`），于是"交清单"与"点技能"在同一
             # 轮里**天然互斥**——模型交了清单那一轮就零动作。而纠偏在 `for _attempt in
             # (0, 1)` 里只有一次机会，实测（`20261008_213818` 的 `mix2_two_writes_one_
@@ -7106,7 +7106,7 @@ def _decide_zero_tool_correct(c: "_DecideCtx") -> "_Step":
             # 摘掉之后它只剩两条路：点一个真技能，或显式点 `chat`——两者都是可判的
             # 决策，而"再交一次清单"这条空转路没了。
             c.deny_pseudo.add(TASK_INTENTS)
-            c.llm = bind_native(c._base_llm, c.role, evidence=c._evidence,
+            c.llm = bind_planner_tools(c._base_llm, c.role, evidence=c._evidence,
                                 deny=c.deny, deny_pseudo=c.deny_pseudo)
             _auto_nudge = _name_write_nudge({"tools": [], "dropped": None},
                                             c.user_msg, c.rounds, c.role)
@@ -7370,7 +7370,7 @@ def _fastpath_on() -> bool:
 def _evidence_on() -> bool:
     """`AGENT_EVIDENCE` 这一档的**唯一读口**（20261014 第一批，出厂关）。
 
-    这一档要在**四处**同时生效才能算"开着"：① `bind_native` 的 schema（模型发不发得出
+    这一档要在**四处**同时生效才能算"开着"：① `bind_planner_tools` 的 schema（模型发不发得出
     `evidence`）；② `tool_calls_to_plan` 的摘取（**无条件**，与档位无关）；③ 这一处影子
     核验；④ `eval` 侧的巡检。读口只留这一个函数，是因为"多一处读 `settings` 就多一处
     可能漂移的说法"——本仓在 IoT 那个开关上吃过"三处同源不是'一个开关'"的教训。
@@ -7461,7 +7461,7 @@ def _evidence_shadow(c: "_DecideCtx", ledger_src: str) -> None:
         记一条 `planner.evidence_scope`。**缺键 ≠ 空集**：没有候选就整条事件不落。
 
     开关 `AGENT_EVIDENCE` 关着时**整段不跑**：那一档 schema 里没有 `evidence` 格
-    （见 `native_plan.build_tool_schema`），模型发不出来的东西没有影子可算。
+    （见 `planner_llm.build_tool_schema`），模型发不出来的东西没有影子可算。
     """
     if not _evidence_on():
         return

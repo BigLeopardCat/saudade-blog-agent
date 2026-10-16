@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""native tool calls 接线层（`agent/native_plan.py`）单测：离线、秒级、零网络零 LLM。
+"""native tool calls 接线层（`agent/planner_llm.py`）单测：离线、秒级、零网络零 LLM。
 
-**为什么单独一套**：native 档把"模型能选什么"从**提示词里的一段散文**搬到了**服务端的
+**为什么单独一套**：接口层把"模型能选什么"从**提示词里的一段散文**搬到了**服务端的
 `tools` 数组**。散文写宽了顶多让模型多试一次（试了也会被下游白名单剥掉），而 schema 写宽
 了就是**结构性地把能力面放大**——模型能点出一个今天这个身份根本不该有的工具，且这一次
 没有任何一层会说"不"。所以本文件的第一组断言是**集合相等**而不是"包含"。
@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import AIMessage  # noqa: E402
 
 from agent import context as C  # noqa: E402
-from agent import native_plan as N  # noqa: E402
+from agent import planner_llm as N  # noqa: E402
 from agent import skills as S  # noqa: E402
 from agent import tasks as T  # noqa: E402
 from tools.base import get_all_tools  # noqa: E402
@@ -303,7 +303,7 @@ def test_reply_kind_is_stripped_from_params():
     check("技能照旧、params 里没有那一格",
           got is not None and got.skill == "category_create"
           and got.params == {"name": "临江仙"}, str(got and got.params))
-    check("申报值原样进 NativeDecision（只进 trace）",
+    check("申报值原样进 PlannerDecision（只进 trace）",
           got is not None and got.reply_kind == "auth", str(got and got.reply_kind))
     # 别处塞进来的写法原样留 16 字：读数要的是"它到底填了什么"，不是清洗过后的样子
     odd = AIMessage(content="", tool_calls=[{
@@ -329,7 +329,7 @@ def test_override_table_is_closed():
     # 形状因此必须逐字同构，见 `test_review_inbox_calls_shape`。
     # 20261008 加的第四格 `tag_create.titles`：技能模板一个名字一条 spec
     # （`{"title": "$title"}`），数组那一格配不到工具参数 ⇒ 不覆盖就会被兜底成
-    # `string`，而它装的是一批名字（见 agent/native_plan.py 那一格的注）。
+    # `string`，而它装的是一批名字（见 agent/planner_llm.py 那一格的注）。
     check("_SCHEMA_OVERRIDES 的键集合恰为 content_query 两格 + review_inbox 一格"
           " + tag_create 一格",
           set(N._SCHEMA_OVERRIDES) == {("content_query", "tools"),
@@ -419,7 +419,7 @@ def test_explicit_chat_call_params_pass_through():
     点 `chat` 且带 `reply`）——`chat` 的 schema 里 `properties` 是空的，网关并不拦多余
     参数。本层的职责是**映射**不是**消毒**：参数合法性归既有的 `check_skill_params`
     （它记 `param_unknown` 而不阻断）。在这里悄悄删掉一个模型真发来的字段，等于把
-    "模型在臆造参数"这条证据抹平——**探针要留着**，哪怕它在 native 档会更常亮。
+    "模型在臆造参数"这条证据抹平——**探针要留着**，哪怕它在 接口层会更常亮。
     """
     print("\n[决策] 显式点 chat 带的参数原样传下去")
     msg = AIMessage(content="", tool_calls=[{
@@ -707,8 +707,8 @@ def test_review_inbox_calls_channel():
 
 
 def test_module_does_not_import_graph():
-    print("\n[结构] native_plan 不许 import agent.graph（会成环）")
-    tree = ast.parse((ROOT / "agent" / "native_plan.py").read_text(encoding="utf-8"))
+    print("\n[结构] planner_llm 不许 import agent.graph（会成环）")
+    tree = ast.parse((ROOT / "agent" / "planner_llm.py").read_text(encoding="utf-8"))
     hits = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("agent.graph"):

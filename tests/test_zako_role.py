@@ -5,7 +5,7 @@
 
 **为什么这套判据要写得这么细**——"零工具"在本仓不是一个开关，而是四层收口：
   ① `skills.visible_skills` 只剩 `chat`（模型看到的菜单）
-  ② `native_plan.build_tool_schema` 只发得出 `chat`（native 档的 tools 数组）
+  ② `planner_llm.build_tool_schema` 只发得出 `chat`（接口层的 tools 数组）
   ③ `authz.scopes_for("zako")` 空集（执行前的判据）
   ④ `graph.planner_node` 顶部短路（**连决策都不发生**）
 前三层都是**软的**：`instantiate_plan` 不校验技能可见性、native 只是另一个档位、
@@ -30,8 +30,8 @@ from agent.graph import (  # noqa: E402
     _FREEZE_ALLOWED_TARGETS, _freeze_policy_refusal, parse_plan, planner_node,
     route_after_planner,
 )
-from agent.native_plan import build_tool_schema  # noqa: E402
-from _native_stub import bind_tools_stub, native_reply  # noqa: E402
+from agent.planner_llm import build_tool_schema  # noqa: E402
+from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 from agent.principal import (  # noqa: E402
     CHAT_ONLY_ROLES, KNOWN_ROLES, ROLE_ADMIN, ROLE_SUPERADMIN, ROLE_USER, ROLE_ZAKO,
     Principal,
@@ -65,7 +65,7 @@ def _state(msg=_MSG):
 
 
 class _ScriptedLLM:
-    """按顺序吐回复；夹具文本走 native 桩翻成 tool_calls（见 _native_stub）。"""
+    """按顺序吐回复；夹具文本走 native 桩翻成 tool_calls（见 _planner_stub）。"""
 
     bind_tools = bind_tools_stub
 
@@ -74,7 +74,7 @@ class _ScriptedLLM:
 
     def invoke(self, prompt):
         self.prompts.append(prompt)
-        return native_reply(self.replies.pop(0))
+        return toolcall_reply(self.replies.pop(0))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -117,9 +117,9 @@ check_(f"TOOL_SCOPE 里 {len(TOOL_SCOPE)} 个工具逐个判：无一放行", no
        f"放行的: {_allowed}")
 
 # ══════════════════════════════════════════════════════════════════
-print("\n④ native 档：schema 恒等于可见技能集 + 三个恒在的伪函数，且**非空**（层②）")
+print("\n④ 接口层：schema 恒等于可见技能集 + 三个恒在的伪函数，且**非空**（层②）")
 # 20261015 撤掉 `AGENT_TASK_STATE` 档位后，三个伪函数**恒在**（理由见
-# `tests/test_native_plan.py` 头注与 docs/问题记录.md §1.63）——判据因此从
+# `tests/test_planner_llm.py` 头注与 docs/问题记录.md §1.63）——判据因此从
 # "两边都该是 {chat}" 改成"真技能那一侧恰是 {chat}、伪函数是申报过的那三个"。
 _PSEUDO_FNS = {"task_hold", "task_drop", "task_intents"}
 _zako_schema = [t["function"]["name"] for t in build_tool_schema(ROLE_ZAKO)]
@@ -127,7 +127,7 @@ check_("schema 名集合 == visible_skills 名集合 ∪ 三个伪函数（两�
        set(_zako_schema) == {s.name for s in visible_skills(ROLE_ZAKO)} | _PSEUDO_FNS
        and {s.name for s in visible_skills(ROLE_ZAKO)} == {"chat"},
        str(_zako_schema))
-check_("**非空**（空 tools 数组在网关那边是无定义行为，见 bind_native 的那一注）"
+check_("**非空**（空 tools 数组在网关那边是无定义行为，见 bind_planner_tools 的那一注）"
        "：1 个真技能 + 3 个伪函数",
        len(_zako_schema) == 4, str(_zako_schema))
 # 伪函数是**登记通道**不是能力面：把它们从这一档的读数里剔掉之后必须只剩 `chat`，
