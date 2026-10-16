@@ -163,6 +163,29 @@
   **在各自臂内跨轮就不一致** ⇒ 按本仓口径属逐次方差，**不判效应**。
   同批销账：`docs/问题记录.md` §1.50 里那句描述接线位置的话（原写作 `[system] +
   with_tool_call_pairs(...)`）补上"20261016 起改由 `_narrator_wire` 装配"。
+- **写操作的幂等账：先记账再动手，至多一次（无行为变更——闸今天关着）**——新增
+  `agent/idem.py`（一本 agent 自持的 SQLite，零新依赖），包在 `execute_node` 里**唯一**的
+  工具收口上（`tool.invoke(args)`，全文件只出现一次）。**为什么需要它**：LangGraph 的
+  checkpoint 提交粒度是 **superstep 不是语句** ⇒ 节点里连做 N 次写、进程死在中间、从上一个
+  checkpoint 恢复，那 N 次写会**各执行两遍**（实测：`native-checkpoint-verdict-20261015.md`
+  §2.6）。生产今天没有 saver（`build_graph()` 是裸的 `g.compile()`）⇒ 这条路径**从来没通过电**，
+  而 ADR-0011 要做的正是给它通电——本批就是**接线之前的保险丝**。键 =
+  `sha256([checkpoint_ns, 工具名, 参数指纹])`（`checkpoint_ns` 实测是纯函数：崩溃+恢复逐字节
+  相同、同一 thread 不同轮互不相同、没挂 saver 时是随机 uuid4）；**`intent` 行在远端调用之前
+  提交**，返回（或抛异常）后改 `done`；留在 `intent` = 结果未知 ⇒ **新原因码
+  `write_outcome_unknown`**（`agent/block_reasons.py` + `server.py::_REASON_CN` 两侧同批，
+  **不可重试**——重试正是要防的那件事），planner 的下一步是"先读一次确认到底成没成"。
+  **取至多一次**：重复写对外可见且不可撤销，漏一次写可恢复、可如实告知。**两条"必须这么写
+  否则静默坏掉"**：① 指纹必须在**改动 `args` 之前**取——`device_oled_display` 的 `text` 是
+  temperature **0.7** 现创的，改后取指纹会让那个工具**恒不命中且不报错**；② 重放要把
+  `meta` 一起还回去——命令类写工具的连线命令住在 `meta["cmd"]`，只还文本会让重放出来的命令帧
+  被 `cmd_shape` 判 BLOCK（一次**凭空**的失败）。**闸** =
+  `config["configurable"]["__pregel_checkpointer"] is not None` ⇒ 没挂 saver 就直通、连
+  `logs/agent/idem.sqlite3` 都不创建（已登记进 `eval/retention_manifest.py`，`open`/未接管）。
+  反向锁 `tests/test_write_idempotency.py`（8 组，含真 `StateGraph` + `MemorySaver` 在进程内
+  复现崩溃+恢复；**两条反控实测能红**：摘掉闸 ⇒ 执行序列 `[0,1]` 变 `[0,0,1]`；收口搬回
+  `graph.py` ⇒ 接线锁红）。`tests/test_block_reasons.py` 的"不可重试那一族就是这七个"随之变成
+  **八个**。ADR-0012；架构 §4.8；`docs/问题记录.md` §1.66。
 
 ## 20261015
 
