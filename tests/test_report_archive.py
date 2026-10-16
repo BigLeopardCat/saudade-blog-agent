@@ -5,7 +5,7 @@
 （`run_golden.py` 的进程内跑法、`golden_full_run.py` 的隔离跑法、`recall_eval.py`）。
 同一秒内跑完两次（典型：全量 + `--only` 调试跑）就是同名，后写的把先写的静默覆盖——
 目录里只剩后跑那份，"先跑的那次"不留任何痕迹，报错信息也只会说"留档里没有你以为的
-那份"。20261002 由 `tests/golden_rerun_offline_test.py` 第 ⑥ 组撞出来（那条断言此前
+那份"。20261002 由 `tests/test_golden_rerun_offline.py` 第 ⑥ 组撞出来（那条断言此前
 **只在撞车时绿**）。
 
 判据三条，缺一不可：

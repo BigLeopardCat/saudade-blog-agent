@@ -84,7 +84,7 @@ def _load_runner():
 
 def _stub_result() -> dict:
     """子进程 `main()` 会读的这些键，一个都不能少（少一个 = 报的是 KeyError，
-    读起来像"环境坏了"，而不是"那条断言没测着"——同 `golden_rerun_offline_test` 的老教训）。"""
+    读起来像"环境坏了"，而不是"那条断言没测着"——同 `test_golden_rerun_offline` 的老教训）。"""
     return {"text": "回答", "commands": [], "tool_calls": [], "rounds": [],
             "exec_rows": [], "exec_tools": [], "tool_rounds": 0, "trace": None,
             "resets": 0, "resets_reasons": [], "reset_scopes": [], "fallback_reasons": [],

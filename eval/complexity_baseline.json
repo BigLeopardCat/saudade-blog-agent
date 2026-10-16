@@ -95,27 +95,27 @@
     "c": 50,
     "lines": 84
   },
-  "eval/probe_admin_write.py::main": {
+  "eval/admin_write_probe.py::main": {
     "c": 32,
     "lines": 175
   },
-  "eval/probe_admin_write.py::step11_tag_admin": {
+  "eval/admin_write_probe.py::step11_tag_admin": {
     "c": 66,
     "lines": 185
   },
-  "eval/probe_admin_write.py::step16_announcement": {
+  "eval/admin_write_probe.py::step16_announcement": {
     "c": 35,
     "lines": 85
   },
-  "eval/probe_admin_write.py::step17_auth_review": {
+  "eval/admin_write_probe.py::step17_auth_review": {
     "c": 160,
     "lines": 316
   },
-  "eval/probe_admin_write.py::step18_ledger_zero_write": {
+  "eval/admin_write_probe.py::step18_ledger_zero_write": {
     "c": 92,
     "lines": 216
   },
-  "eval/probe_admin_write.py::step8_popup_write": {
+  "eval/admin_write_probe.py::step8_popup_write": {
     "c": 40,
     "lines": 101
   },
@@ -167,7 +167,7 @@
     "c": 43,
     "lines": 257
   },
-  "tests/judge_offline_test.py::main": {
+  "tests/test_judge_offline.py::main": {
     "c": 96,
     "lines": 213
   },

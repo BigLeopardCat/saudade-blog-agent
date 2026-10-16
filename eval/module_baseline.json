@@ -39,7 +39,7 @@
     "lines": 1591,
     "top_defs": 35
   },
-  "eval/probe_admin_write.py": {
+  "eval/admin_write_probe.py": {
     "lines": 2854,
     "top_defs": 82
   },
@@ -55,7 +55,7 @@
     "lines": 2549,
     "top_defs": 50
   },
-  "tests/judge_offline_test.py": {
+  "tests/test_judge_offline.py": {
     "lines": 1432,
     "top_defs": 11
   },

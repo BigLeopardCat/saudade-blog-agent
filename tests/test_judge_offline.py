@@ -16,7 +16,7 @@ not_contains_exempt_quote）后先跑本脚本——判据是纯文本函数，�
 20260925 补第二批 `SHAPE_CASES`：喂**合成的 result** 而不是文本——零执行、
 执行回执、确认卡片载荷这三个键看的根本不是回复文字（见那一段的注释）。
 
-用法：.venv/bin/python tests/judge_offline_test.py  → 逐项"期望/实得"，全符合
+用法：.venv/bin/python tests/test_judge_offline.py  → 逐项"期望/实得"，全符合
 预期时退出码 0。
 """
 import json
@@ -37,7 +37,7 @@ for line in open(GOLDEN):
     # 取第 1 轮的 gold（`rg.first_gold`）：多轮用例（20260925 双轮）的 gold 写在各轮里、
     # 顶层**没有** `gold` 键，直接下标会在 import 期 KeyError。本文件按 id 合成结果跑
     # check_gold，天然只对应第 1 轮；逐轮判据的锁在 tests/test_golden_keys.py 与
-    # tests/golden_rerun_offline_test.py 那两处。
+    # tests/test_golden_rerun_offline.py 那两处。
     GOLD[d["id"]] = rg.first_gold(d)
 
 CH = "challenge_claim_phantom_nav"
