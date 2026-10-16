@@ -974,7 +974,10 @@ _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败"
               # §1.57 候选改法①）：主人说「收藏」、planner 排的是「取消收藏」。
               # 中文与 `agent/block_reasons.REASONS` 的那一格**必须同话术**（两侧
               # 键集合相等 + 逐值相等，判据在 tests/test_block_reasons.py）。
-              "action_conflict": "与主人这句话要的动作相反"}
+              "action_conflict": "与主人这句话要的动作相反",
+              # 写操作结果未知（agent/idem.py::REASON_OUTCOME_UNKNOWN，20261016 批 2）：
+              # 上一次已经发出、进程在拿到返回之前中断 ⇒ 不许重试，先读一次确认。
+              "write_outcome_unknown": "写操作结果未知"}
 
 
 def _spec_one(spec: str):

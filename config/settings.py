@@ -303,6 +303,12 @@ class Settings(BaseSettings):
     # 每请求一份 JSON（输入/节点事件序列/分段耗时/回复/退出原因）；
     # 与项目 logs/ 目录对齐（日志体系规范见 CLAUDE.md §2），logrotate 轮转
     trace_dir: str = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
+    # 写操作幂等账（`agent/idem.py`，20261016 批 2）。**今天恒不被打开**：它的闸是
+    # "这一轮挂没挂 checkpointer"，而生产没有 saver（见 `agent/graph.py` 的
+    # `return g.compile()`）⇒ 没挂 saver 的环境里连这个文件都不会被创建。
+    # 落 `logs/` 下 ⇒ **必须登记进 `eval/retention_manifest.py`**（那里的 `audit()`
+    # 会把 `logs/` 树里没登记的路径报红），登记项同时给出保留期。
+    idem_db: str = "/home/ubuntu/Saudade-Blog/logs/agent/idem.sqlite3"
 
     # ── Active provider helpers ─────────────────────────────────────
 

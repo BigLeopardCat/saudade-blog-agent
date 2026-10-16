@@ -59,13 +59,16 @@ _GRAPH_SRC = _ctx_src.graph_deprefixed()
 # "不可重试"这一族是**刻意**列出来的：每多一个 False，就等于对 planner 说"这一条
 # 重试没用、换路或如实说"。多写一个的代价是掐掉一条合法重试，所以这个集合要有人复核
 # （这条断言就是这个作用——与 planner 模板占位符集合那条同一个纪律）。
+# 20261016 批 2 加第八个 `write_outcome_unknown`：写操作已经发出、进程在拿到返回
+# 之前中断。**重试就是这一族要防的那件事本身**（一次写会变成两次，而写对外可见且
+# 不可撤销）⇒ planner 的下一步是"先读一次确认到底成没成"，不是"再来一遍"。
 _NON_RETRY = {"unavailable", "cmd_shape", "policy_refused", "consent_required",
-              "denied", "no_manifest", "unknown_role"}
+              "denied", "no_manifest", "unknown_role", "write_outcome_unknown"}
 check("表非空，每项形如 (非空中文, bool)",
       bool(REASONS) and all(isinstance(v, tuple) and len(v) == 2 and v[0]
                             and not v[0].isascii() and isinstance(v[1], bool)
                             for v in REASONS.values()))
-check("「改参数重试无效」那一族就是这七个（多一个少一个都要有人复核）",
+check("「改参数重试无效」那一族就是这八个（多一个少一个都要有人复核）",
       {k for k, v in REASONS.items() if not v[1]} == _NON_RETRY,
       str(sorted(k for k, v in REASONS.items() if not v[1])))
 check("unavailable 与 target_not_found 是**两族**（一个重试无效、一个换 id 可救）",

@@ -67,6 +67,11 @@ REASONS: dict[str, tuple[str, bool]] = {
     # ── 环境 / 授权 / 政策：不是"你没填对"，重试同一个调用不会有别的结果 ──────
     "unavailable": ("服务不可用", False),
     "cmd_shape": ("返回格式异常", False),
+    # 写操作结果未知（`agent/idem.py::REASON_OUTCOME_UNKNOWN`，20261016 批 2）：上一次
+    # 已经发出、进程在拿到返回之前中断。**不可重试**——重试正是要防的那件事
+    # （重放/重试会让一次写变成两次，而写是对外可见且不可撤销的）。planner 的下一步
+    # 是**先读一次确认到底成没成**，再把结果如实告诉主人。
+    "write_outcome_unknown": ("写操作结果未知", False),
     "policy_refused": ("后台规则拒绝", False),
     "consent_required": ("未获主人确认", False),
     "denied": ("身份权限不足", False),

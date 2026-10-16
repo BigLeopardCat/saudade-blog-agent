@@ -1,0 +1,287 @@
+"""写操作幂等账（批 2）——给"重放"这道保险丝。
+
+## 为什么需要它
+
+LangGraph 的 checkpoint **提交粒度是 superstep，不是语句**（实测见
+`native-checkpoint-verdict-20261015.md` §2.6：一个节点里连做两件写，进程死在中间、
+从上一个 checkpoint 恢复 ⇒ **两件写各执行了两遍**）。今天这件事炸不了，因为生产
+**没有 saver**（`agent/agent.py` 调裸的 `build_graph()`，见 `agent/graph.py` 的
+`return g.compile()`）；但**接上 saver 那天重放路径第一次通电，而它一行判据都没有**。
+本模块就是那道保险丝：把"这一件写做没做过"从 state 里搬出来，落到**节点之外**的一本账上。
+
+**为什么不能是 state 里的一个字段**：节点内的 state 更新要等节点**返回**才落盘
+（verdict 文档 §10.6）——崩溃重放时读到的是**上一个** checkpoint 的 state，"我做过没有"
+这个问题的答案恰好不在里面。
+
+## 幂等键是什么（实测，不是读文档）
+
+节点内 `config["configurable"]["checkpoint_ns"] == f"{节点名}:{task_id}"`，而
+`task_id = _xxhash_str(...)`（`langgraph/pregel/_algo.py`，`_xxhash_str` 同文件）是**纯函数**。
+三条实测结论：
+
+- 崩溃 + 恢复的两次运行里该值**逐字节相同** ⇒ 重放认得出是同一件；
+- 同一 thread 的 3 轮**互不相同** ⇒ 不会把两轮的写合成一次；
+- **没挂 saver 时是随机 uuid4** ⇒ `active()` 为假，本模块**天然惰性**、今天一行账都不记。
+
+## 协议：先记账再动手 ⇒ 至多一次（at-most-once）
+
+`intent` 行在**远端调用之前**提交，调用返回（或抛异常）后改 `done`。留在 `intent` 只有
+一种成因：进程死在"已经发出、还没拿到返回"这段中间 ⇒ **结果未知**。
+
+**为什么取至多一次而不是至少一次**：重复写是**外部可见且不可撤销**的（多发一条站内通知、
+多建一个标签、多改一次文章状态），漏掉一次写是**可恢复且可如实告知**的。代价不对称。
+
+**失效姿态**：账本不可用 ⇒ **拒绝这次写**（`tools.base.unavailable` ⇒ checker 判 BLOCK），
+不"降级成不记账"——那等于把保险丝拆了还假装它在。唯一例外：写**已经发生**之后收尾记账
+失败，那时照常返回结果（已经发生的事取消不了，也不能让一条成功的写看起来像失败）。
+"""
+
+import hashlib
+import json
+import logging
+import os
+import re
+import sqlite3
+import threading
+import time
+
+from agent import authz
+from config import settings
+from tools.base import ToolResult, unavailable
+from utils.trace import record
+
+logger = logging.getLogger(__name__)
+
+# 原因码：**三处同批改**（本文件的帧与取回、`agent/block_reasons.py` 的 REASONS、
+# `server.py` 的 `_REASON_CN`）。前两处只改一处会当场红（既有判据对着比这两张表）。
+REASON_OUTCOME_UNKNOWN = "write_outcome_unknown"
+
+# 记账时留存的返回文本上限。写操作的返回几乎都是短确认；这一格只防"某个写工具将来
+# 返回一大坨"。撞顶时**不静默**：存 NULL + 一条 trace，重放拿到的是"已执行过、
+# 原始返回未留档"的如实帧（是降级，不是假装没发生）。
+_RESULT_MAX = 20000
+
+_REASON_RE = re.compile(rf"\[{REASON_OUTCOME_UNKNOWN}\]")
+
+# 撞顶时重放拿到的帧。**不是**错误帧——写确实发生了，这一点是事实，`_check_spec`
+# 应当 PASS 并产回执；只是原始返回没留档。它刻意写得不像正常返回，好让"重放拿到了
+# 降级帧"在下游（引用取值、narrator）留得下痕迹而不是被当成一次正常结果。
+_NOREPLAY_FRAME = ToolResult(
+    "（这一步已经执行过：重放命中幂等账。原始返回超过留档上限，未留存，"
+    "如需确切结果请重新读一次）", "ok", {})
+
+
+def active(config) -> bool:
+    """这一轮有没有挂 checkpointer（= 重放这条路通不通电）。
+
+    没有 saver ⇒ LangGraph 给的是随机 uuid4 的 `checkpoint_ns`，重放**不可能**发生
+    ⇒ 账本一行都不该记。这个函数就是那个闸，也是"今天生产行为零改动"的依据。
+    `config` 可以是 `None`（`execute_node(state, config=None)` 的默认值）。
+    """
+    try:
+        return (config or {}).get("configurable", {}).get(
+            "__pregel_checkpointer") is not None
+    except AttributeError:      # 认不出的 config 形状 ⇒ 当作没挂（不猜）
+        return False
+
+
+def key_for(config, name: str, fingerprint: str) -> str:
+    """幂等键 = sha256([这一轮的节点身份, 工具名, 参数指纹])。
+
+    三个成分缺一不可：`checkpoint_ns` 把**同一 thread 的不同轮**分开；工具名把同一轮
+    里的不同工具分开；参数指纹把**同一轮里同一工具的两次不同调用**分开——少了最后
+    那一个，"先建标签 A 再建标签 B"会被合成一次，那是"至多一次"退化成"从不执行"的
+    地方，而且**不报错**。
+
+    用 sha256 而不是"三段用分隔符拼起来"：分隔符一旦长在某个值里，一条键会被读成
+    两条（本仓踩过，见 `saudade-agent-plan-text-separator`）。定长摘要没有这个面。
+    """
+    try:
+        ns = ((config or {}).get("configurable") or {}).get("checkpoint_ns") or ""
+    except AttributeError:
+        ns = ""
+    raw = json.dumps([ns, name, fingerprint], ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def replay_reason(text: str) -> str | None:
+    """从错误帧取回原因码（非本族帧 → None），供 `_check_spec` 的 or 链接上。
+
+    与 `authz.scope_error_reason` / `adminops.target_error_reason` 同形：**只认自己的
+    那个码**，别族帧一律 None。
+    """
+    return REASON_OUTCOME_UNKNOWN if _REASON_RE.search(str(text or "")) else None
+
+
+def unknown_frame(name: str) -> str:
+    """「上一次发出去了、但没拿到返回」的错误帧（checker 判 BLOCK）。"""
+    return (f"__ERROR__: 写操作结果未知[{REASON_OUTCOME_UNKNOWN}]"
+            f"（{name} 上一次已经发出，进程在拿到返回之前中断了——**不要重试**，"
+            f"重试可能把它做第二遍。先读一次确认它到底成没成，再把结果如实告诉主人）")
+
+
+def _call(tool, args):
+    """今天那条调用路径，逐字搬进来（含 `__ERROR__` 的兜底形态）。
+
+    搬进本模块是为了让 `agent/graph.py` 里**只剩一个出口**——`tool.invoke(` 从此只
+    出现在这里，`tests/test_write_idempotency.py` 的接线锁按这条钉。
+    """
+    try:
+        return tool.invoke(args)
+    except Exception as e:
+        return f"__ERROR__: {type(e).__name__}: {e}"
+
+
+def _rehydrate(row) -> str:
+    """重放：把记下的那份**逐字**还给下游（文本 + kind + meta 三样都要）。
+
+    `meta` 必须还原：命令类写工具（`navigate_to` / `toggle_effect` / `toggle_dark_mode`）
+    的连线命令就住在 `meta["cmd"]`，`_check_spec` 的 `cmd_shape` 按它校验——只还文本
+    会让重放出来的命令帧判 BLOCK，那是一次**凭空的**失败。
+    """
+    _status, text, kind, meta_json = row
+    if text is None:
+        return _NOREPLAY_FRAME
+    try:
+        meta = json.loads(meta_json) if meta_json else {}
+    except (TypeError, ValueError):
+        meta = {}
+    return ToolResult(text, kind or "ok", meta if isinstance(meta, dict) else {})
+
+
+class Ledger:
+    """一本 SQLite 账。`key` 是主键 ⇒ 多个 worker 天然互斥（生产 4 个）。
+
+    连接**惰性**：import 期不开库，`active()` 为假时一次都不开——没挂 saver 的环境
+    连这个文件都不该被创建出来。
+    """
+
+    def __init__(self, path: str):
+        self.path = path
+        self._lock = threading.Lock()
+        self._conn = None
+
+    def _db(self):
+        if self._conn is None:
+            with self._lock:
+                if self._conn is None:
+                    parent = os.path.dirname(self.path)
+                    if parent:
+                        os.makedirs(parent, exist_ok=True)
+                    # `isolation_level=None` = 自动提交：`claim` 的 INSERT 必须在**发出
+                    # 请求之前**真的落盘，否则"先记账"这条协议是假的。
+                    conn = sqlite3.connect(self.path, timeout=5.0, isolation_level=None)
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA busy_timeout=5000")
+                    conn.execute(
+                        "CREATE TABLE IF NOT EXISTS idem ("
+                        " key TEXT PRIMARY KEY, tool TEXT NOT NULL, fp TEXT NOT NULL,"
+                        " status TEXT NOT NULL, ts REAL NOT NULL,"
+                        " text TEXT, kind TEXT, meta TEXT)")
+                    self._conn = conn
+        return self._conn
+
+    def claim(self, key: str, tool: str, fp: str) -> tuple[str, tuple | None]:
+        """占位。返回 `("new"|"done"|"intent", 行或 None)`。
+
+        `INSERT OR IGNORE` + 回读是**一次原子判定**：插入成功 ⇒ 这一件从没做过；
+        被忽略 ⇒ 行已存在，看它是 `done`（重放，返回记下的那份）还是 `intent`
+        （上一次死在调用中间 ⇒ 结果未知）。
+        """
+        conn = self._db()
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO idem(key, tool, fp, status, ts)"
+            " VALUES (?,?,?,'intent',?)", (key, tool, fp, time.time()))
+        if cur.rowcount == 1:
+            return "new", None
+        row = conn.execute(
+            "SELECT status, text, kind, meta FROM idem WHERE key=?", (key,)).fetchone()
+        if row is None:
+            # 插入被忽略（行存在）却回读不到（行没了）——只可能是并发清理撞上了。
+            # **不猜**：抛出去，交给上层 fail-closed（拒绝这次写）。
+            raise RuntimeError("幂等账行状态不可判定（插入被忽略但回读为空）")
+        if row[0] not in ("done", "intent"):
+            raise RuntimeError(f"幂等账行状态认不出：{row[0]!r}")
+        return row[0], row
+
+    def finish(self, key: str, out) -> bool:
+        """记完成。返回"结果是否因超上限而未留档"（撞顶时上层补一条 trace）。"""
+        text = str(out)
+        capped = len(text) > _RESULT_MAX
+        self._db().execute(
+            "UPDATE idem SET status='done', text=?, kind=?, meta=? WHERE key=?",
+            (None if capped else text, str(getattr(out, "kind", "ok") or "ok"),
+             json.dumps(getattr(out, "meta", None) or {}, ensure_ascii=False), key))
+        return capped
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+
+class NullLedger:
+    """不记账的账本 = **今天的形状**。
+
+    存在的理由只有一条：**反控**。判据要用它证明"没有这本账时重放真的会让写发生
+    两次"——否则探针①（有账 ⇒ 只发生一次）不红不算数，它可能只是恒真。
+    """
+
+    def claim(self, key: str, tool: str, fp: str) -> tuple[str, tuple | None]:
+        return "new", None
+
+    def finish(self, key: str, out) -> bool:
+        return False
+
+
+_shared_lock = threading.Lock()
+_shared_ledger = None
+
+
+def _shared() -> Ledger:
+    """进程内共享的一本账（4 个 worker 各持一份连接，互斥靠主键）。
+
+    **只在真的要记账时才会被调到**：`active()` 为假时 `guarded_invoke` 在它之前就返回了。
+    """
+    global _shared_ledger
+    with _shared_lock:
+        if _shared_ledger is None:
+            _shared_ledger = Ledger(settings.idem_db)
+    return _shared_ledger
+
+
+def guarded_invoke(tool, name: str, args: dict, config, *,
+                   fingerprint: str, ledger=None) -> str:
+    """写操作的**唯一出口**：账本在场则至多一次，账本不在场则与今天逐字相同。
+
+    `fingerprint` **必须由调用方在改动参数之前取**：`execute_node` 会在调用前把
+    `device_oled_display` 缺的 `text` 用 temperature 0.7 的 LLM 现创出来
+    （`agent/graph.py::_create_display_text`）——对改后的 args 取指纹，那个工具每次
+    指纹都不同，幂等判据对它**恒不命中，而且不报错**。
+    """
+    if not active(config) or not authz.is_write(name):
+        return _call(tool, args)        # 今天的形状：直通，一行账都不记
+    led = ledger if ledger is not None else _shared()
+    key = key_for(config, name, fingerprint)
+    try:
+        state, row = led.claim(key, name, fingerprint)
+    except Exception as e:
+        logger.warning("[idem] 记账失败，拒绝执行写操作 %s: %s", name, e)
+        record("execute", "idem_error", name=name, phase="claim", error=str(e)[:200])
+        return unavailable("写操作未执行：幂等账不可用（拒绝在无法记账的情况下动手）")
+    if state == "done":
+        record("execute", "write_replay_hit", name=name, key=key)
+        return _rehydrate(row)
+    if state == "intent":
+        # 上一次"已经记账、还没拿到返回"就死了。**不许重试**——重试正是要防的那件事。
+        record("execute", "write_outcome_unknown", name=name, key=key)
+        return unknown_frame(name)
+    out = _call(tool, args)
+    try:
+        if led.finish(key, out):
+            record("execute", "idem_result_capped", name=name, key=key)
+    except Exception as e:
+        # 写**已经发生**了，取消不了；收尾记账失败不能让一条成功的写看起来像失败。
+        logger.warning("[idem] 记账收尾失败（写已发生，无法撤销）: %s", e)
+        record("execute", "idem_error", name=name, phase="finish", error=str(e)[:200])
+    return out

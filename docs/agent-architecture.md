@@ -491,6 +491,45 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
   被真实用户提出过。在那之前，形态 A 覆盖"要不要发这条 / 选哪个候选 / 二选一确认"这类有限、
   可枚举的决策。
 
+### 4.8 写操作的幂等账：接 checkpointer 之前的保险丝（20261016 批 2）
+
+§4.7 说"现在不需要 checkpointer"，本节的约束是**将来真接上那天**必须已经就位的东西。
+ADR-0011（图自持上下文）自述的唯一采纳门就是这一节。
+
+**为什么必须有一本账。** LangGraph 的 checkpoint 提交粒度是 **superstep，不是语句**——
+一个节点里连做 N 次写，进程死在中间、从上一个 checkpoint 恢复，那 N 次写会**各执行两遍**
+（实测：`/home/ubuntu/native-checkpoint-verdict-20261015.md` §2.6，两件写各跑了两次）。
+生产今天没有 saver（`agent/graph.py::build_graph()` 是裸的 `g.compile()`），所以这件事炸不了，
+但**接上 saver 那天重放路径第一次通电，而它此前一行判据都没有**。
+
+**为什么不能是 state 里的一个字段**：节点内的 state 更新要等节点**返回**才落盘（§4.7 引的
+同文档 §10.6）——崩溃重放时读到的是**上一个** checkpoint 的 state，"这一件我做过没有"的答案
+恰好不在里面。`receipts` / `executed` / `execution_log` 都在这一侧，用不了。
+
+**做法**（`agent/idem.py`，20261016）：在 `execute_node` 里**唯一**的工具收口
+（`tool.invoke(args)`，全文件只出现一次）上包一层 `guarded_invoke`：
+
+| 件 | 内容 |
+|---|---|
+| 闸 | `config["configurable"]["__pregel_checkpointer"] is not None`。没挂 saver ⇒ 直通、一行账都不记 |
+| 键 | `sha256([checkpoint_ns, 工具名, 参数指纹])`。`checkpoint_ns` 实测是纯函数（崩溃+恢复逐字节相同、同一 thread 不同轮互不相同、没挂 saver 时是随机 uuid4） |
+| 协议 | `intent` 行在**远端调用之前**提交，返回（或抛异常）后改 `done`。留在 `intent` = 结果未知 |
+| 存储 | agent 自持 SQLite（`settings.idem_db`），`key` 是主键 ⇒ 4 个 worker 天然互斥 |
+| 结果未知 | 新原因码 `write_outcome_unknown`（**不可重试**）⇒ 进 `blocked`，planner 下一步是"先读一次确认到底成没成" |
+| 重放命中 | 不重跑，把记下的 `(text, kind, meta)` **逐字**还回下游 + 一条 `write_replay_hit` trace |
+
+**取至多一次（at-most-once）而不是至少一次**：重复写是**外部可见且不可撤销**的（多发一条
+站内通知、多建一个标签、多改一次文章状态），漏掉一次写是**可恢复且可如实告知**的。代价不对称。
+
+**指纹必须在改动参数之前取**：`execute_node` 会在调用前解引用（`resolve_args`）、并给
+`device_oled_display` **现创**屏幕文案（`_create_display_text`，temperature 0.7）。对改后的
+args 取指纹，那个工具每次指纹都不同 ⇒ 幂等判据对它**恒不命中，而且不报错**。
+
+**今天零行为变更**：闸关着（没有 saver）⇒ 账本惰性、连 `logs/agent/idem.sqlite3` 都不会被
+创建。判据 `tests/test_write_idempotency.py` 用真 `StateGraph` + `MemorySaver` 在进程内复现
+"崩溃 + 恢复"，并配了会红的反控（`NullLedger` ⇒ 同一场景写发生两次）。决策全文见
+[adr/adr-0012](adr/adr-0012-write-idempotency-ledger.md)。
+
 ---
 
 ## 5. 工具系统（67 个）

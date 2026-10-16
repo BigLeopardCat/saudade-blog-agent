@@ -80,6 +80,7 @@ from agent import action_text
 from agent import adminops as A
 from agent import authz
 from agent import confirm
+from agent import idem
 from agent import refs
 from agent.block_reasons import denied_skills
 from rag import sections
@@ -8721,6 +8722,7 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
                                 or authz.consent_error_reason(text)
                                 or authz.action_conflict_error_reason(text)
                                 or A.target_error_reason(text)
+                                or idem.replay_reason(text)
                                 or A.policy_error_reason(text) or "error_frame")
     # 命令工具契约层校验（20260926 批 2 改键）：动作工具必须交出**连线命令**——但
     # 判据从"返回文本的前缀"改成"`meta["cmd"]` 的 kind"。工具返回形态漂移（忘了带
@@ -12598,6 +12600,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             break
         name = _tool_name(spec)
         args, args_ok = _tool_args(spec)
+        # 幂等键的参数成分（20261016 批 2）：**必须在下面两处改动 args 之前**取——
+        # 理由与后果见 `agent/idem.py::guarded_invoke`（改后取会让屏显恒不命中且不报错）。
+        args_fp = _spec_signature(name, args)[1]
         # 参数引用（20260919，agent/refs.py）：把上一步的真实返回值绑进参数。
         # 解析失败 → 该 spec **不执行**（拿 `$x[0].y` 当参数去调用是更坏的结果），
         # 产带原因码的 __ERROR__ 帧走既有 blocked 链路（planner 改参 → reflector）。
@@ -12706,10 +12711,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             out = f"__ERROR__: 未知工具 {name}（planner 调用清单越界，被 execute 拒绝执行）"
             logger.warning("[execute] 未知工具 %s，拒绝执行", name)
         else:
-            try:
-                out = tool.invoke(args)
-            except Exception as e:
-                out = f"__ERROR__: {type(e).__name__}: {e}"
+            out = idem.guarded_invoke(tool, name, args, config, fingerprint=args_fp)
         # 帧文本 = 原始返回去掉"同一段正文存两份"的那个重复键（20260925）。详情帧是
         # `str(dict)` 而 dict 同时带 `noteContent` 与 `content`（实测 11 篇逐篇相等）
         # ⇒ 帧体积 ≈ 正文 ×2；此前只有渲染侧（`_frame_texts` → `sections.frame_excerpt`）

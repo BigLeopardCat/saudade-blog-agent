@@ -112,6 +112,30 @@ CLASSES = [
         rule=None,
     ),
     dict(
+        key="agent-idem-ledger",
+        label="写操作幂等账（agent 自持的 SQLite）",
+        root=DEFAULT_LOGS_ROOT,
+        # `*` 要带上 `-wal` / `-shm`：WAL 模式下这两个兄弟文件与主库同生共死，
+        # 只登记主库的话，账本一开起来审计就红（而红的原因与安全无关）。
+        patterns=["agent/idem.sqlite3*"],
+        status="open",
+        # 没人清 ⇒ 不填 owner（填了 check_classes 判自相矛盾）
+        owner=None,
+        owner_ref=None,
+        retention="未接管（与将来的 checkpoint store 必须一起设计）",
+        why="20261016 批 2（`agent/idem.py`，ADR-0012）新增。**今天这个文件根本不存在**："
+            "它的闸是「这一轮挂没挂 checkpointer」，而生产没有 saver ⇒ 惰性、一行都不写。"
+            "登记它是因为**它一上线就会长在 `logs/` 树下**（`settings.idem_db`），"
+            "而没登记的表现就是审计把一条正常的运行产物报成异类。"
+            "**为什么是「未接管」而不是给个保留期**：账本行的意义只到「同一个 superstep 的"
+            "崩溃恢复」为止（几秒），按那个窗口裁当然安全——但账本与 checkpoint **必须一起裁**："
+            "留下 checkpoint 却删掉账本行，恰恰等于把本批要堵的那个洞重新打开，"
+            "而两者今天都还没有执行者。等 ADR-0011 真接上 saver 时，这件事与"
+            "checkpoint store 的保留策略同批设计（与 `golden-traces` / `runs/` 同一条理由："
+            "分开清会正好帮倒忙）",
+        rule=None,
+    ),
+    dict(
         key="golden-traces",
         label="golden 每轮跑落的 trace",
         root=DEFAULT_LOGS_ROOT,
