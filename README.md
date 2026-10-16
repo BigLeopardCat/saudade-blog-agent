@@ -194,7 +194,7 @@ saudade-blog-agent/
 │   ├── prompts.py         ★ 全部模型可见正文（人设 / 叙述纪律 / planner 与 reflector 模板 / 输出契约）
 │   ├── moderator.py       留言 AI 审核侧任务
 │   ├── summarizer.py      对话摘要侧任务
-│   └── …                  其余模块见目录（action_text / factblock / stickers / llm_usage / agent / memory 等）
+│   └── …                  其余模块见目录（action_text / factblock / stickers / llm_usage / agent / checkpoint 等）
 ├── tools/base.py          67 个工具、工具注册表和 ToolResult 契约
 ├── rag/search.py          BM25 内存倒排检索
 ├── rag/sections.py        超长文章分节（索引 / 帧 / 按节取回三处共用；纯函数）
