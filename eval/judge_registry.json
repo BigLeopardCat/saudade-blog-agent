@@ -77,7 +77,7 @@
       ],
       "agent/graph.py": [
         313,
-        3914
+        3869
       ],
       "agent/hostinfo.py": [
         0,
@@ -122,6 +122,10 @@
       "agent/refs.py": [
         0,
         3
+      ],
+      "agent/repeat_guard.py": [
+        0,
+        45
       ],
       "agent/reports.py": [
         19,
@@ -1394,8 +1398,8 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/graph.py::_REDO_REQUEST_RE",
-      "file": "agent/graph.py",
+      "id": "agent/repeat_guard.py::_REDO_REQUEST_RE",
+      "file": "agent/repeat_guard.py",
       "kind": "regex",
       "name": "_REDO_REQUEST_RE",
       "size": 45,
