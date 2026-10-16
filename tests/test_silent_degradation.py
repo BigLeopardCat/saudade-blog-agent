@@ -5,8 +5,8 @@
 `agent/context.py::_attach_page_guide`（站点/能力清单注入失败被悄悄丢掉）、
 `agent/context.py::_corpus_ready`（索引抛异常被压成"没就绪"）、
 `agent/entities.py::_parse`（工具返回形态漂了、两种解析都不认）、
-`tools/base.py::device_oled_display`（回执 id 解析不出 ⇒ 整段回执确认被跳过，
-"幽灵在线窗口里的假成功"静默复活）。四处的降级方向都对，问题是**事后查不出**：
+`tools/device.py::device_oled_display`（20261017 从 base.py 搬来；回执 id 解析不出 ⇒ 整段回执确认
+被跳过，"幽灵在线窗口里的假成功"静默复活）。四处的降级方向都对，问题是**事后查不出**：
 清单为什么没进提示词、文章标题为什么解析不出 id、那次屏显到底确认没确认。
 
 **本批只补观测，不改返回语义**——四处返回什么、还是返回什么（本套件逐条反控）。
@@ -25,9 +25,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# 20261017 device 族搬出 `tools/base.py` ⇒ 桩与 logger 捕获必须打在 `tools.device`
+# 上（`D.logger` 才是代码真正写的那一个）。本文件已不再引用 `tools.base`，故不 import。
 import agent.context as C  # noqa: E402
 import agent.entities as E  # noqa: E402
-import tools.base as B  # noqa: E402
+import tools.device as D  # noqa: E402
 
 FAILED: list[str] = []
 
@@ -173,15 +175,15 @@ class _BadJsonResp:
         raise ValueError("测试桩：返回体不是 JSON")
 
 
-_orig_put, _orig_jwt = B.httpx.put, B._sign_user_jwt
-B.httpx.put = lambda *_a, **_k: _BadJsonResp()
-B._sign_user_jwt = lambda _uid: "test-token"
+_orig_put, _orig_jwt = D.httpx.put, D._sign_user_jwt
+D.httpx.put = lambda *_a, **_k: _BadJsonResp()
+D._sign_user_jwt = lambda _uid: "test-token"
 try:
-    with _Capture(B.logger) as cap4:
-        out = B.device_oled_display.func(
+    with _Capture(D.logger) as cap4:
+        out = D.device_oled_display.func(
             "降级观测用文本-20261012", {"configurable": {"user_id": 1}}, "dev-test-1")
 finally:
-    B.httpx.put, B._sign_user_jwt = _orig_put, _orig_jwt
+    D.httpx.put, D._sign_user_jwt = _orig_put, _orig_jwt
 
 check("降级方向没变：仍按『已下发』返回（不是报错、不是空）",
       isinstance(out, str) and "已下发" in out, out[:40])
