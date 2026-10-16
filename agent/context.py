@@ -546,7 +546,7 @@ _PUNCT_ONLY_RE = re.compile(r"[\s，。！？~～、；：,.!?…·\-—_/\\|]+"
 _FOLLOWUP_TAIL = 320
 
 # 模型申报的那一格（`reply_kind`）：与 `tasks.INTENTS_ARG` / `provenance.EVIDENCE_ARG`
-# 同一个体例——**不进 `required`、不进 `params`**（`native_plan.tool_calls_to_plan`
+# 同一个体例——**不进 `required`、不进 `params`**（`planner_llm.tool_calls_to_plan`
 # 摘走），模型不填时这一格等于不存在。三处不同，都是刻意的：
 #   · **挂在每个技能上**（不像 `evidence` 只挂写技能）：短应答的三种出口各自落到哪个
 #     技能是不定的（同意多半落在读、授权多半落在写，而"读成哪一类"与技能无关）；

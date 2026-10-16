@@ -182,7 +182,7 @@ saudade-blog-agent/
 │   ├── decisions.py       零 LLM 确定性决策和快道
 │   ├── context.py         上下文、工具帧和回执组装
 │   ├── skills.py          技能注册表、计划模板和业务映射
-│   ├── native_plan.py     native tool calls 计划通道
+│   ├── planner_llm.py     技能表 ↔ API tools/tool_calls 的接线层
 │   ├── authz.py           scope 权限模型
 │   ├── principal.py       调用者身份（uid/role/source）的唯一构造点
 │   ├── confirm.py         无状态 HMAC 确认令牌
@@ -310,7 +310,7 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | `AGENT_REQUIRE_ASSERTION` | `0` | 置 1 时缺失身份断言的请求直接拒绝（默认只记 WARNING，便于滚动上线） |
 | `AUTHZ_ENFORCE` | `0` | 权限模型的强制开关 |
 | `PLANNER_TEMPERATURE` | `0.0` | 规划温度（调优实验可逐臂拨）。**"它能治路由抖动"已被 A/B 证伪**，别拿它当调参理由 |
-| `PLANNER_NATIVE_THINKING` / `_MAX_TOKENS` / `_TIMEOUT` / `_SLOW_S` | `true` / `1200` / `60` / `30` | native 档的四个旋钮，各自的取舍见 `settings.py` 的注 |
+| `PLANNER_NATIVE_THINKING` / `_MAX_TOKENS` / `_TIMEOUT` / `_SLOW_S` | `true` / `1200` / `60` / `30` | 接口层的四个旋钮，各自的取舍见 `settings.py` 的注 |
 | ~~`AGENT_TASK_STATE`~~、~~`AGENT_TASK_PLAN_EXEC`~~ | **已删（20261015）** | 会话级未完成意图的登记/注入**常开**，没有开关了（任务状态是业界默认必备的，不该有开关把它变成摆设）。**写进 `.env` 现在是鬼键**；理由与判据见 docs/问题记录.md §1.63 |
 | `AGENT_ARM` | `graph` | 跑哪一条 agent 臂：`graph`（生产那条）/ `react`（分支上的试验线，自成 ReAct 循环 + 独立 narrator）。**默认恒 `graph` = 生产行为逐字节不变**；两臂读数**不可互比**，是"让谁更好这个问题可答"的对照物，不是"更快的那个"。拨了要 `systemctl restart saudade-agent`；名字不认识 ⇒ **服务拒绝启动**（不回退 graph） |
 | `RAG_HYBRID_ENABLED`、`EMBEDDING_*`、`RRF_K` | 不设（= 纯词法） | 向量 + RRF 混合检索，可选件。⚠️ **`EMBEDDING_*` 不只管检索**：首页那件「文章向量空间图谱」的建图（`scripts/build_word_graph.py`）与检索（`rag/wordgraph.py`）也用它——配了走它，没配回落 `QWEN_*` + `qwen3.7-text-embedding`（两端共用 `rag/embed_space.py` 一条规则）。**换模型/端点后要重建一次图谱**（后台「站点设置 → 向量图谱」），否则检索侧以 `space_mismatch` 明着降级 |

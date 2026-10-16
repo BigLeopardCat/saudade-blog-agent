@@ -85,7 +85,7 @@ flowchart TB
 │   ├── refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用（20260919）：递归遍历 + 五个错误码——解不出的引用必须响亮（20260922 改递归）
 │   ├── confirm.py             # ★ 待确认令牌（20260921）：无状态 HMAC（TTL 600s，2 worker 安全）；不落库、不落用户消息
 │   ├── entities.py            # ★ 执行回执实体摘要（20260920）：压成一行供跨轮取值；digest 是 Python 写 / Rust 读的跨语言契约
-│   ├── native_plan.py         # ★ native tool calls 接线层（20260927 新主线；20261004 起**唯一**接口层）：planner 输出就是 API 的 tools/tool_calls，格式由服务端与 schema 保证；零调用不再等于闲聊（先纠偏一次）
+│   ├── planner_llm.py         # ★ 技能表 ↔ API tools/tool_calls 的接线层（20260927 起；20261004 起**唯一**接口层，20261017 前名 native_plan.py）：planner 输出就是 API 的 tools/tool_calls，格式由服务端与 schema 保证；零调用不再等于闲聊（先纠偏一次）
 │   ├── tasks.py               # ★ 会话级任务状态（20260927 批 D）：未完成的意图跨轮不丢（agent_task 表 + 模型登记 + 系统确定性结算）
 │   ├── action_text.py         # ★ 一次执行 → 一行中文动作的跨语言渲染唯一实现（过程行 / 执行台账行两档）
 │   ├── factblock.py           # ★ 动作族分族（命令族+写族，量化口径与 narrator_facts_share 同源）＋历史事实行剥离；**系统代印 20261005 起停用**（BLOCK_FAMILIES 空集）

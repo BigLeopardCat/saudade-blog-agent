@@ -201,10 +201,10 @@ cd /home/ubuntu/Saudade-Blog/saudade-blog-agent        # 就是仓根，不是�
   `.venv` 的 editable `.pth` 把主仓钉在 `sys.path` 上"那种跑法——那会**静默**用到主仓
   那份代码，实验看起来"跑了"其实没跑分支。现在实现在仓根本体上，直接跑即可；
   **但那条性质本身没变**：哪天又用 worktree 跑对照，`PYTHONPATH` 还得指过去。
-- 抓 planner 真提示词的办法**曾经**是 monkeypatch `agent.graph.bind_native`（包一层记录
+- 抓 planner 真提示词的办法**曾经**是 monkeypatch `agent.graph.bind_planner_tools`（包一层记录
   `.invoke(prompt)`）——20261011 起**两条 ReAct 臂不再用 planner 那份提示词**（那是拿一份
   它们结构上满足不了的契约考它们），各拿各的惯用提示词（`react_arm._system_prompt`）。
-  要"一字不改地拿到当轮那份"这个纪律本身仍然有效（`eval/native_tools_probe.py` 首版
+  要"一字不改地拿到当轮那份"这个纪律本身仍然有效（`eval/toolcall_probe.py` 首版
   栽过），只是对象换了。
 - ReAct 臂必须 `agent.stream(..., stream_mode="values")` 收消息：`invoke` 撞上限抛错会把
   **整轮已发生的调用一起丢掉**，把"绕太多圈被掐死"误读成"没调工具"。

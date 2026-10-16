@@ -13,7 +13,7 @@
      "给一个光秃秃的问题 + tools，模型会不会用工具"——而线上要回答的是
      "**在完整提示词里**，模型会不会用工具"。两者不是同一个问题：真实提示词里规则 7
      白纸黑字写着"输出两行纯文本、不要任何其他文字"，**它与 tools 是打架的**。
-  ② 由此暴露的设计缺口：native 档必须换掉规则 7（否则测的是"提示词与 schema 谁赢"，
+  ② 由此暴露的设计缺口：接口层必须换掉规则 7（否则测的是"提示词与 schema 谁赢"，
      不是"接口层换没换"）⇒ `agent/graph.py` 的 `{output_contract}` 槽就是这么来的。
 
 现在**渲染真提示词**再发（`_render_planner_prompt(...)`，契约槽恒 `_PLANNER_OUTPUT_CONTRACT_NATIVE`）
@@ -28,21 +28,21 @@ schema**，且**思考档只验了 json_schema、没验 tools**。这两个缺�
   ① **`enable_thinking=True` 与 `tools` 同用** —— 端点接受吗？还是 400？
   ② **思考链会不会把 `tool_call.arguments` 截断** —— 这是最可能的失败形态，而且是**静默**的：
      文本档 max_tokens=400 时，思考先吃掉额度，`arguments` 断在半截，`finish_reason=length`。
-     native 档因此把预算提到 1200 / timeout 60（见 `config/settings.py`）——**这里就是验它
+     接口层因此把预算提到 1200 / timeout 60（见 `config/settings.py`）——**这里就是验它
      够不够的地方**。判据是 `json.loads(arguments)` 成功，不是"看着像"。
   ③ **延迟**：思考档实测 p50 6.4s / max 28.5s，正压文本档的 timeout=30。要拿 p50/max 说话，
      不能靠印象。
   ④ **`parallel_tool_calls=False` 真的被遵守吗** —— 网关忽略它的话，多意图那句会回两条调用，
      而下游"一张确认卡只装同一个技能的动作"是按一轮一条设计的（多了只取第一条，见
-     `agent/native_plan.tool_calls_to_plan`）。**必须知道它是不是常态**。
+     `agent/planner_llm.tool_calls_to_plan`）。**必须知道它是不是常态**。
   ⑤ **`tool_choice="auto"` 下闲聊轮会不会被逼出假技能调用** —— 这是不能用 `required` 的原因。
 
 ## 跑法（cd saudade-blog-agent，需网络）
 
-  .venv/bin/python eval/native_tools_probe.py                       # 每句 3 次，思考关/开各一轮
-  .venv/bin/python eval/native_tools_probe.py --trials 5
-  .venv/bin/python eval/native_tools_probe.py --no-thinking         # 只跑思考关（快）
-  .venv/bin/python eval/native_tools_probe.py --json                # 机器可读摘要
+  .venv/bin/python eval/toolcall_probe.py                       # 每句 3 次，思考关/开各一轮
+  .venv/bin/python eval/toolcall_probe.py --trials 5
+  .venv/bin/python eval/toolcall_probe.py --no-thinking         # 只跑思考关（快）
+  .venv/bin/python eval/toolcall_probe.py --json                # 机器可读摘要
 
 报告同时落 `eval/report/native_probe_<ts>.md`。**本脚本不改任何文档**，结论由人手写进
 `docs/native-toolcalls-mainline.md` 或 ADR。
@@ -66,13 +66,13 @@ from agent.graph import (  # noqa: E402
     _intent_hints,
     _render_planner_prompt,
 )
-from agent.native_plan import build_tool_schema  # noqa: E402
+from agent.planner_llm import build_tool_schema  # noqa: E402
 from agent.refs import ref_hints  # noqa: E402
 from config.settings import settings  # noqa: E402
 
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report")
 
-# native 档的预算（与 config/settings.py 的三个 planner_native_* 同值）——**探针必须用
+# 接口层的预算（与 config/settings.py 的三个 planner_native_* 同值）——**探针必须用
 # 上线要用的那一组**，否则测出来的"够不够"不是线上那个问题的答案。
 NATIVE_ARGS = {"temperature": 0.2, "max_tokens": 1200, "timeout": 60}
 
@@ -102,7 +102,7 @@ def _real_prompt(user_msg: str) -> str:
     走 `_render_planner_prompt` ——与 `planner_node` **同一个入口**，所以这里不可能
     悄悄漂移成第二份拼装。页面上下文/轮次/工具结果给的是"首轮、无帧"的常态值，
     其余全部走真函数（技能菜单、工具菜单、锚点、意图清单都由真代码生成）。
-    唯一按 native 档取值的只有规则 7（输出契约）——那正是本探针要验的那一格。
+    唯一按 接口层取值的只有规则 7（输出契约）——那正是本探针要验的那一格。
     """
     msgs = [HumanMessage(content=user_msg)]
     return _render_planner_prompt(
@@ -254,7 +254,7 @@ def main() -> int:
         f.write(f"- 模型 `{model}` / provider `{settings.llm_provider}` / role `{ROLE}`\n")
         f.write(f"- 技能 {len(tools)} 个，schema {schema_kb:.1f} KB，预算 {NATIVE_ARGS}\n")
         f.write("- 发的是**真 planner 提示词**"
-                f"（`_render_planner_prompt`，native 档规则 7）："
+                f"（`_render_planner_prompt`，接口层规则 7）："
                 f"{prompt_chars} 字符\n")
         tf = "/".join("开" if t else "关" for t in rounds)
         f.write(f"- 每句 {args.trials} 次，思考档 {tf}\n\n")

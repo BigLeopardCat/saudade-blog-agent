@@ -2516,7 +2516,7 @@ async def health():
         "agent_ready": _agent is not None,
         # 这一进程真正生效的档位（回的是**内存里的取值**，不是 env 原文）。
         "dials": {
-            # `planner_engine` 这一格 20261004 删掉：接口层只剩 native tool calls 一条
+            # `planner_engine` 这一格 20261004 删掉：接口层只剩工具调用一条
             # （见 config/settings.py 那段注），没有第二个取值可拨。dials 5 → 4，
             # `tests/test_health_dials.py` 同步。
             "planner_native_thinking": bool(getattr(settings, "planner_native_thinking", False)),

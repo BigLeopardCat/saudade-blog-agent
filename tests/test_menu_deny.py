@@ -16,10 +16,10 @@
 被测五块：
   · ① `block_reasons.denied_skills` —— 只取"改参数重试无效"那一族；`chat` 永不进；
     空/None/脏项不炸；
-  · ② `native_plan.build_tool_schema(deny=…)` —— 恰好少那一条；空集 ⇒ **逐字节不变**；
+  · ② `planner_llm.build_tool_schema(deny=…)` —— 恰好少那一条；空集 ⇒ **逐字节不变**；
   · ③ `skills.build_planner_context(deny=…)` —— 技能行**和它的契约行**一起走；
     空集 ⇒ **逐字节不变**；
-  · ④ `bind_native` 真的把裁剪后的 schema 交下去了（不是接了个没人用的形参）；
+  · ④ `bind_planner_tools` 真的把裁剪后的 schema 交下去了（不是接了个没人用的形参）；
   · ⑤ 接线 —— `planner_node` 每轮算 `deny`、记账、传给 bind 与渲染、以及那一格
     一次性纠偏与它的记账；
   · ⑥ **同一轮内现摘**（20261012）—— `_sated_read_skill` 判"这一版计划里的读全是
@@ -38,7 +38,7 @@ sys.path.insert(0, str(ROOT))
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
 import agent.graph as g  # noqa: E402
-import agent.native_plan as np  # noqa: E402
+import agent.planner_llm as np  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.block_reasons import denied_skills  # noqa: E402
 from agent.skills import SKILL_MAP, build_planner_context, visible_skills  # noqa: E402
@@ -175,7 +175,7 @@ if _TARGET:
           f"基线 {_n} 处 → 摘后 {_y} 处（剩下的那处住在模板字面里）")
 
 
-# ── ④ bind_native：裁剪后的 schema 真的交下去了 ────────────────────────────
+# ── ④ bind_planner_tools：裁剪后的 schema 真的交下去了 ────────────────────────────
 class _FakeLLM:
     def __init__(self) -> None:
         self.schema = None
@@ -187,15 +187,15 @@ class _FakeLLM:
 
 
 _llm = _FakeLLM()
-np.bind_native(_llm, _ROLE, deny={_TARGET} if _TARGET else set())
-check("bind_native 交下去的是**裁剪后**的 schema（不是接了个没人用的形参）",
+np.bind_planner_tools(_llm, _ROLE, deny={_TARGET} if _TARGET else set())
+check("bind_planner_tools 交下去的是**裁剪后**的 schema（不是接了个没人用的形参）",
       _llm.schema is not None and _TARGET not in _names(_llm.schema or []),
       f"n={len(_llm.schema or [])}")
 check("约定没被顺手改掉（tool_choice=auto / parallel_tool_calls=False）",
       _llm.kw.get("tool_choice") == "auto"
       and _llm.kw.get("parallel_tool_calls") is False, str(_llm.kw))
 _llm2 = _FakeLLM()
-np.bind_native(_llm2, _ROLE)
+np.bind_planner_tools(_llm2, _ROLE)
 check("不传 deny ⇒ 交下去的就是基线 schema（逐字节）",
       _jdump(_llm2.schema or []) == _jdump(_full))
 
@@ -211,11 +211,11 @@ check("算 deny 在用它之前（顺序错了就是 UnboundLocalError 或静默
 # 20261008 批 ②：这一格的锚点随那次重构挪了形——原来那行把表达式内联在调用里，
 # 现在先算成局部变量（"只交清单"那一格要**重绑一次** llm，两处必须取同一个值，见
 # `graph.py` 的 `deny_pseudo` 那一段）。断言本身**不变**：`deny` 真的交给了
-# `bind_native`，且交的是算出来的那个集合——只是从"逐字比对整行"改成"在这一次调用的
+# `bind_planner_tools`，且交的是算出来的那个集合——只是从"逐字比对整行"改成"在这一次调用的
 # 窗口里找"，后者不会因为多一个形参就假红。新加的 `deny_pseudo` 那一路另有判据
-# （`tests/test_native_plan.py` ①b）。
-_bind_at = _GRAPH_SRC.index("llm = bind_native(")
-check("把 deny 交给了 bind_native（schema 那一半）",
+# （`tests/test_planner_llm.py` ①b）。
+_bind_at = _GRAPH_SRC.index("llm = bind_planner_tools(")
+check("把 deny 交给了 bind_planner_tools（schema 那一半）",
       "deny=deny" in _GRAPH_SRC[_bind_at:_bind_at + 300],
       repr(_GRAPH_SRC[_bind_at:_bind_at + 300]))
 check("把 deny 交给了渲染（提示词那一半）",
@@ -312,7 +312,7 @@ class _FakeCtx:
                  receipts: list | None = None, role: str = _ROLE) -> None:
         self.role, self.deny_pseudo = role, set()
         # 出处引文那一档（`AGENT_EVIDENCE`）：`_strip_menu` 重绑客户端时要读它传给
-        # `bind_native`（schema 里给不给 `evidence` 那一格）。这里给 False = 出厂档。
+        # `bind_planner_tools`（schema 里给不给 `evidence` 那一格）。这里给 False = 出厂档。
         self._evidence = False
         self.deny = {"blocked_skill"}          # 上一轮受阻项：必须是**并集**，不能被覆盖
         self._base_llm = _FakeLLM()

@@ -48,7 +48,7 @@ CI 里则由 dev 组的 `uv sync --frozen` 装。覆盖率这一档起不来时�
 （实测过一次：换接口层档位后 4 个套件红，把那一项钉回默认值立刻全绿）。
 判据必须钉在代码的形状上，不能钉在运维的取值上。
 （20261004：接口层只剩 native 一条、`PLANNER_ENGINE` 拨盘已删 ⇒ 那项钉子连同这个隐患
-一起没了；假 LLM 桩现在自带 `bind_tools`，见 `tests/_native_stub.py`。）
+一起没了；假 LLM 桩现在自带 `bind_tools`，见 `tests/_planner_stub.py`。）
 
 20260928 起这个钉子从"钉两项"扩到**整个 .env 都不读**（`SAUDADE_IGNORE_ENV_FILE=1`，见
 `config/settings.py` 的 model_config）：只钉两项不够——凡是**值本身**会影响判据形状的取值
@@ -115,7 +115,7 @@ COV_DIR = ROOT / ".coverage-data"
 # `AGENT_EVIDENCE=0`（20261014 第一批，影子）：写参数出处改"引文核对"这条通道同样
 # **出厂默认关**，且这一档**同时**决定两件事（schema 里有没有 `evidence` 格、影子核验
 # 跑不跑，见 `config/settings.py` 那段注）。钉它的理由多一条：开档会往 planner 的
-# **函数 schema** 里多加一格——`tests/test_native_plan.py` 钉的是 props 键集，不钉住的
+# **函数 schema** 里多加一格——`tests/test_planner_llm.py` 钉的是 props 键集，不钉住的
 # 话谁在 shell 里 export 过它，那几条就会按另一档的键集判。要验开档的用例在同一进程里
 # 临时拨 `settings.agent_evidence`（并同步重建 schema，见 test_provenance 的那一节）。
 _PINNED = {"AGENT_EVIDENCE": "0",
@@ -250,7 +250,7 @@ def main() -> int:
 
     env = dict(os.environ)
     env.update(_PINNED)
-    # 套件要 import **同目录的助手**（`_parent_repo` / `_native_stub` / `_rust_src`…）。
+    # 套件要 import **同目录的助手**（`_parent_repo` / `_planner_stub` / `_rust_src`…）。
     # 直接 `python tests/test_x.py` 时这是白送的：`sys.path[0]` 就是脚本所在目录。但
     # `coverage run tests/test_x.py` **不是**——coverage 往 `sys.path` 里放的是**当前目录**
     # 而不是脚本目录（7.16.2 实测：`path0` = 仓根）。不补这一下，覆盖率档里那一族跨语言
