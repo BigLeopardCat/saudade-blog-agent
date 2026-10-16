@@ -619,10 +619,160 @@ def cmd_turn_window() -> int:
     return 0 if ok else 1
 
 
+# ── 批 3：narrator 窗口的**正向收缩**合成探针 ─────────────────────────────
+#: 轮数要**明显超过** `context._NARRATOR_TURNS`（10），否则窗口一次都不触发。
+NARR_ROUNDS = 12
+
+
+def _narr_mini_graph(saver, sink: list):
+    """与 `_windowed_mini_graph` 同构，节点里量的是**narrator 那一刀**。
+
+    动作顺序照线上：① `planner_node` 冻结 `turn_start`；② `model_node` 取 narrator 的
+    消息表（线上走 `graph._narrator_msgs(state)`，这里直接调它委派的那个纯函数
+    `context.narrator_messages`——**同一个函数**，不是重写一遍）；③ 追加本轮产出。
+
+    每轮额外记两列：`with_tool_call_pairs(win)` 的字符数（narrator 真正发出去的那一段，
+    与 `graph.model_node` 量 `_prompt_chars` 同口径）与整表的同一量。两列并排才看得出
+    "封顶"与"线性膨胀"。
+    """
+
+    def turn(state):
+        i = state.get("plan_rounds", 0)
+        msgs = state.get("messages") or []
+        # ① 冻结（同源纯函数）
+        start = context.freeze_turn_start(msgs, state.get("turn_msgs"),
+                                          state.get("turn_start", -1))
+        # ② narrator 的窗口（线上是 `graph._narrator_msgs(state)`）
+        win = context.narrator_messages(msgs, start)
+        win_wire = context.with_tool_call_pairs(win)
+        whole_wire = context.with_tool_call_pairs(msgs)
+        sink.append({
+            "round": i, "frozen_start": start, "len": len(msgs),
+            "win_msgs": len(win), "ident": win is msgs,
+            "first_is_sys": bool(win) and context._is_system_block(win[0]),
+            "chars_win": sum(len(context._msg_text(m) or "") for m in win_wire),
+            "chars_whole": sum(len(context._msg_text(m) or "") for m in whole_wire),
+            "frames_win": len([m for m in win_wire if type(m).__name__ == "ToolMessage"]),
+        })
+        return {"messages": [AIMessage(content=f"第 {i} 轮回复"),
+                             ToolMessage(content=FRAME_BODIES[(i - 1) % 3],
+                                         tool_call_id=f"c{i}", name="get_article_detail")],
+                "plan_rounds": i,
+                "turn_start": start}
+
+    g = StateGraph(G.AgentState)
+    g.add_node("turn", turn)
+    g.add_edge(START, "turn")
+    g.add_edge("turn", END)
+    return g.compile(checkpointer=saver)
+
+
+def cmd_narrator_window() -> int:
+    """**narrator 窗口**的正/反向对照（20261016 批 3）。
+
+    为什么要合成：golden 的多轮用例最多 **3 轮**（实测 `rounds <= 3`），而窗口深度
+    `_NARRATOR_TURNS = 10` ⇒ 在真链路上窗口**一次都不会触发**（端到端只能验"不过度
+    触发"这一侧）。正向收缩这一半必须自己造 12 轮出来。
+
+    两臂只差一格：`turn_msgs` 报不报（`graph_input` 在线上**恒报**，见
+    `graph.py:14013`）。不报 ⇒ `freeze_turn_start` 返回 -1 ⇒ `narrator_messages` 原样
+    返回整表 = **今天的行为**。所以反向对照臂必须**复现线性膨胀**，否则前一臂是恒绿的。
+    """
+    rows_all = {}
+    for arm, report in (("窗口（批 3）", True), ("无窗口（今天）", False)):
+        saver = make_saver()
+        thread = f"{THREAD}-narrwin"
+        saver.delete_thread(thread)   # 跨臂不许串（同 thread 的 checkpoint 会累积）
+        sink: list = []
+        mini = _narr_mini_graph(saver, sink)
+        cfg = {"configurable": {"thread_id": thread}}
+        for i in range(1, NARR_ROUNDS + 1):
+            page = PAGES[(i - 1) % len(PAGES)]
+            inp = G.graph_input([_user_turn(page, f"第 {i} 轮的问题")])
+            inp["plan_rounds"] = i
+            if not report:
+                inp["turn_msgs"] = 0     # 反向对照：没记边界 = 老行为
+            list(mini.stream(inp, cfg, stream_mode=["updates"]))
+        rows_all[arm] = sink
+
+    for arm, rows in rows_all.items():
+        print(f"\n【{arm}】")
+        print(f"  {'轮':>2} {'起点':>4} {'窗口/整表':>10} {'恒等?':>6} {'首条是注入块?':>12} "
+              f"{'帧(窗口)':>8} {'narrator段字符':>14} {'整表字符':>10}")
+        for r in rows:
+            print(f"  {r['round']:>2} {r['frozen_start']:>4} "
+                  f"{r['win_msgs']:>4}/{r['len']:<5} {str(r['ident']):>6} "
+                  f"{str(r['first_is_sys']):>12} {r['frames_win']:>8} "
+                  f"{r['chars_win']:>14} {r['chars_whole']:>10}")
+
+    print()
+    ok = True
+
+    def check(label, cond, detail):
+        nonlocal ok
+        ok = ok and cond
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label} —— {detail}")
+
+    w = rows_all["窗口（批 3）"]
+    n = rows_all["无窗口（今天）"]
+    # ⚠️ **下标写全，别用"末轮"这种相对说法**：第一版把 `NARR_ROUNDS-1` 同时当"倒数第二轮"
+    # 用，于是两处判据都在**拿一行跟它自己比**——恒真，而且看起来还印了具体数字。
+    # 判据里的"两行之比"必须一眼看出是**两行**。
+    i_last = NARR_ROUNDS - 1                    # 第 12 轮
+    i_sat = context._NARRATOR_TURNS - 1         # 第 10 轮：历史刚超过窗口深度 ⇒ 从这轮起饱和
+    tail_w = w[i_sat:]
+
+    check("窗口臂：第 1 轮恒等（本轮起点就在表头 ⇒ 这一刀在第一轮无事可做）",
+          w[0]["ident"] is True and w[0]["frozen_start"] == 0,
+          f"起点 {w[0]['frozen_start']}、恒等 {w[0]['ident']}")
+    check("窗口臂：第 2 轮起闸门真的开火（起点 > 0 ⇒ 窗口不再等于整表）",
+          w[1]["frozen_start"] > 0 and w[1]["ident"] is False,
+          f"第 2 轮起点 {w[1]['frozen_start']}、窗口 {w[1]['win_msgs']}/{w[1]['len']}")
+    check("窗口臂：切的是**轮**不是条数（窗口首条恒为 `[System: ` 注入块）",
+          all(r["first_is_sys"] for r in w),
+          f"{NARR_ROUNDS} 轮里首条是注入块的有 {sum(1 for r in w if r['first_is_sys'])} 轮")
+    check(f"窗口臂：饱和之后**条数恒定**（第 {i_sat + 1}..{NARR_ROUNDS} 轮同宽，"
+          "而整表仍在长）",
+          len({r["win_msgs"] for r in tail_w}) == 1
+          and w[i_last]["len"] > w[i_sat]["len"],
+          f"窗口条数 {[r['win_msgs'] for r in tail_w]}；"
+          f"整表 {[r['len'] for r in tail_w]}")
+    check("窗口臂：饱和之后 narrator 段字符数**不随轮次增长**（极差 < 单轮注入的量级）",
+          max(r["chars_win"] for r in tail_w) - min(r["chars_win"] for r in tail_w) < 250,
+          f"字符数 {[r['chars_win'] for r in tail_w]}"
+          f"（极差 {max(r['chars_win'] for r in tail_w) - min(r['chars_win'] for r in tail_w)}）")
+    check("整表在同样这几轮里**仍在长**（窗口的平不是「整表也平」造成的）",
+          w[i_last]["chars_whole"] - w[i_sat]["chars_whole"] > 2000,
+          f"整表字符数 {[r['chars_whole'] for r in tail_w]}"
+          f"（涨了 {w[i_last]['chars_whole'] - w[i_sat]['chars_whole']}）")
+    check("窗口臂：历史段的工具帧被丢掉（`_build_messages` 从不注入帧，形状对齐）",
+          w[i_last]["frames_win"] == 0 and n[i_last]["frames_win"] > 0,
+          f"窗口臂末轮窗口内帧 {w[i_last]['frames_win']}；"
+          f"整表里帧 {n[i_last]['frames_win']}")
+    check("反向对照：**关掉闸门**时窗口恒等（证明它确实什么都没做）",
+          all(r["ident"] for r in n),
+          f"identity = {[r['ident'] for r in n]}")
+    check("反向对照：**关掉闸门**必须复现线性膨胀（每轮都比上一轮长）",
+          all(n[i]["chars_win"] < n[i + 1]["chars_win"] for i in range(NARR_ROUNDS - 1)),
+          f"第 2 轮 {n[1]['chars_win']} → 第 {i_last + 1} 轮 {n[i_last]['chars_win']}")
+    check("反向对照：末轮字符数远大于窗口臂（膨胀真的被闸门挡住了）",
+          n[i_last]["chars_win"] > 5 * w[i_last]["chars_win"],
+          f"无窗口 {n[i_last]['chars_win']} vs 窗口 {w[i_last]['chars_win']}"
+          f"（{n[i_last]['chars_win'] / w[i_last]['chars_win']:.1f}×）")
+
+    print()
+    print(f"结论（批 3）：**有闸门 ⇒ narrator 的提示词从第 {i_sat + 1} 轮起封顶；关掉闸门 ⇒ "
+          "逐轮线性膨胀。** 反向对照那一臂不是恒绿的，所以前一格不是判据自己跟自己玩。")
+    return 0 if ok else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="原生 checkpoint 实验读数仪器")
     ap.add_argument("--turn-window", action="store_true",
                     help="本轮窗口的正/反向对照（有窗口读对本轮页面 / 关掉窗口复现错读）")
+    ap.add_argument("--narrator-window", action="store_true",
+                    help=f"narrator 消息窗口的正/反向对照（{NARR_ROUNDS} 轮同一线程："
+                         "有闸门提示词封顶 / 关掉闸门复现线性膨胀）")
     ap.add_argument("--deterministic", action="store_true",
                     help="零 LLM：真 saver + 真读端，证「恢复发生了、读端不知道本轮到哪儿」")
     ap.add_argument("--keep-thread", action="store_true",
@@ -638,6 +788,8 @@ def main() -> int:
     args = ap.parse_args()
     if args.turn_window:
         return cmd_turn_window()
+    if args.narrator_window:
+        return cmd_narrator_window()
     if args.deterministic:
         return cmd_deterministic(keep_thread=args.keep_thread)
     if args.history_dup:

@@ -14,6 +14,41 @@
 
 **覆盖范围**：20260928 建立，回溯到 20260925（建立前一周）。更早的变更去 `git log`。
 
+## 20261016
+
+- **跨轮上下文的"本轮"在图里成了事实（判据 + 评测臂，20261016；⚠️ 生产行为零变更）**——
+  在这之前"这一轮到哪儿为止"是**图外的约定**：`server._build_messages` 每请求重建上下文、
+  thread 随机（§4.6），图里 `state["messages"]` 永远只有本轮。线程一旦复用，读端就会把
+  **上一轮**当本轮——`_page_ctx` 把上一轮的页面报给模型、`_has_frames` 把上一轮的帧当本轮
+  证据（首轮那五条确定性快道**结构上**永不命中）、narrator 提示词随会话线性膨胀、注入的历史
+  还被 reducer 逐轮再收一遍（第 r 轮注入 r 次 ⇒ O(轮数²)）。两批处置都落在**实验分支**
+  `exp/native-checkpoint`，**`server.py` 一个字节没动**（生产照旧没有 saver）：
+  ① `context.freeze_turn_start` 在 `_planner_decide` **之前**冻住本轮起点（顺序反了等于没冻
+  ——这条单独占一笔提交），读端改用 `context.turn_window`；② `context.narrator_messages` 把
+  narrator 看到的消息表切成「近 10 轮（剥事实行、剪孤儿、丢历史段的工具帧）+ 本轮原样」。
+  两条口径同源：`turn_start <= 0`（没记边界）⇒ 返回**同一个对象** ⇒ **对现状逐字节零变化，
+  且是构造性的**（不是"应该没变"）。③ 顺带修 `context._prev_user_msg`——它取"倒数第二条
+  `HumanMessage`"而**不跳 `[System: `**，线程复用后第 2 轮会取到**本轮的 System 块**；它只在
+  确认兑现轮用，而那一轮恰恰是"不许重新理解一遍、只能靠原话"⇒ 取错源 = 意图清单恒空。
+  **判据**：`tests/test_turn_window.py` 规则 A–F（F 是"narrator 的闸门不许被摘掉"；反向对照
+  三条——`k<0` / 剪枝扩到全表 / `turns=0`——必须当场红）、`tests/test_narrator_window.py`
+  （闸门恒等断言用 `is` 而不是"内容相同"；`_prev_user_msg` 拿**改前实现的逐字转写**当参照物
+  对拍六种形状）、`tests/test_golden_prod_history.py`、
+  `eval/experiments/checkpoint_probe.py --narrator-window`（12 轮真 saver：闸门开 ⇒ 第 10 轮起
+  条数与字符数封顶；关 ⇒ 复现线性膨胀，末轮 13.8×）。
+  **一条要记住的测量事实**：golden 现有语料**测不出**"停止注入历史"这一刀——10 条多轮用例
+  **一个轮次都不注入 `history`**，注入 `history` 的 29 个轮次**全在单轮用例上**（线程是新的，
+  其中只有 4 个带 `conversation_id`）⇒ 那一格在
+  语料里**不存在**，不处置的话读数会显示"停止注入没用"。新增 `GOLDEN_PROD_HISTORY=1`：多轮
+  用例第 i>1 轮的 `history` = 第 1..i−1 轮**真发出去**的那两句（与 Rust `history[-20:]` 同形），
+  四臂跑**同一份**驱动。**以后凡是改输入契约的批，先问一句"这一格语料里有吗"。**
+  （判决性读数 104 跑里**证伪了一条先写下来的判读规则**：反控臂 D「照旧用原 thread」在
+  golden 里**就是复用**——golden 传的 `thread_id` 是常量 `"golden_thread"`，所以 D 在多轮
+  用例上是个正向臂而不是噪声地板，五条多轮用例上与臂 B **逐格相同**。"挂了 saver 本身
+  不改变行为"这条结论本批是靠 8 条单轮对照撑住的。细节见 ADR-0011《读数》。）
+  裁决、读数与触发条件（采纳必须先做写幂等账）见 [ADR-0011](docs/adr/adr-0011-graph-holds-context-checkpoint-memory.md)
+  与架构文档 §4.8。
+
 ## 20261015
 
 - **未定义名（ruff F821）从"只有 CI 跑"变成"本地也跑"（判据，20261015）**——撤档那批删掉了

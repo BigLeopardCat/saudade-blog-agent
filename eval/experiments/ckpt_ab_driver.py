@@ -109,8 +109,9 @@ def pg_stats() -> dict:
         out["threads"] = r[0]
     return out
 
-ARMS = ("graph", "checkpoint", "checkpoint_random")
+ARMS = ("graph", "checkpoint", "checkpoint_delta", "checkpoint_random")
 ARM_CN = {"graph": "A(现状)", "checkpoint": "B(saver+会话线程)",
+          "checkpoint_delta": "C(停止注入历史)",
           "checkpoint_random": "D(saver+随机线程)"}
 
 # 多轮族里**可跑**的那 5 条（另外 5 条 `needs_real_write` ⇒ 没有 GOLDEN_ALLOW_REAL_WRITE
@@ -130,8 +131,23 @@ def _reports(arm: str) -> str:
                         else f"eval/report/runs_{arm}")
 
 
-def run_case(arm: str, case: str, probe_dir: str, rep: int) -> dict:
-    """跑一条用例的一条臂，返回报告里那条 case（含逐轮）。"""
+#: 单条用例的挂钟上限。**必须比 `settings.llm_timeout`（120s）宽裕得多**（一条多轮用例
+#: 是 3 轮 × 若干次调用），但**必须有**：20261016 试跑实测，服务商把连接半关（socket 停在
+#: CLOSE-WAIT）而客户端不返回 ⇒ 子进程挂满 15 分钟。那时 `subprocess.run` 抛
+#: `TimeoutExpired`，而 `run_case` 没接 ⇒ **整个驱动带崩**，前面跑完的用例读数一起丢。
+#: 一份读数因为"某一条卡住"而全废，是本仓最不划算的一类失败。
+CASE_TIMEOUT = 900
+
+
+def run_case(arm: str, case: str, probe_dir: str, rep: int,
+             prod_history: bool = False) -> dict:
+    """跑一条用例的一条臂，返回报告里那条 case（含逐轮）。
+
+    `prod_history`（批 3）：把 `GOLDEN_PROD_HISTORY=1` 透给子进程——多轮用例第 i>1 轮
+    的 `history` 由**上一轮真发出去的那两句**合成（Rust `history[-20:]` 的形状）。
+    **没有它这一格，臂 C 与臂 B 在今天的语料上逐字节相同**（多轮用例一条都不注入
+    history）⇒ 会读成"停止注入没用"。四臂必须跑**同一份**驱动（要么都开、要么都不开）。
+    """
     before = set(glob.glob(os.path.join(_reports(arm), "*.json")))
     env = dict(os.environ)
     env.update({
@@ -144,16 +160,29 @@ def run_case(arm: str, case: str, probe_dir: str, rep: int) -> dict:
         "CHECKPOINT_PROBE_OUT": os.path.join(
             probe_dir, f"{arm}__{case}__r{rep}.jsonl"),
     })
+    if prod_history:
+        env["GOLDEN_PROD_HISTORY"] = "1"
     t0 = time.time()
     # **跑工作树的 run_golden.py**（不是主仓那份）：`run_golden.py` 自己
     # `sys.path.insert(0, "eval")` 是**相对 cwd** 的，而 cwd 必须是主仓（`.env` 是
     # 相对路径）；脚本路径给绝对路径才能让 `sys.path[0] = <工作树>/eval` 先命中
     # ——否则 `import golden_arm` 拿到主仓那份，臂名 `checkpoint` 当场不认识。
     # 三条臂走的是**同一份** run_golden/eval 判据，所以比对仍然同源。
-    p = subprocess.run(
-        [os.path.join(MAIN, ".venv/bin/python"),
-         os.path.join(WT, "eval/run_golden.py"), "--only", case],
-        cwd=MAIN, env=env, capture_output=True, text=True, timeout=900)
+    try:
+        p = subprocess.run(
+            [os.path.join(MAIN, ".venv/bin/python"),
+             os.path.join(WT, "eval/run_golden.py"), "--only", case],
+            cwd=MAIN, env=env, capture_output=True, text=True, timeout=CASE_TIMEOUT)
+    except subprocess.TimeoutExpired as e:
+        # **超时不是"这一条跑得慢"，是"这一条没有读数"**：如实记 FAIL 并接着跑下一条，
+        # 绝不带崩整轮（见 `CASE_TIMEOUT`）。子进程已被 `run()` 杀掉，但它的输出只存在于
+        # 异常对象上——`e.stdout/e.stderr` 可能是 None（`text=True` 下通常是 str），
+        # 所以要挡一层。
+        tail = (e.stderr or e.stdout or "")
+        tail = tail[-400:] if isinstance(tail, str) else repr(tail)[-400:]
+        return {"id": case, "ok": False, "error": f"超时（>{CASE_TIMEOUT}s）",
+                "fails": [f"子进程挂过 {CASE_TIMEOUT}s 被杀；stderr 尾部：{tail}"],
+                "elapsed": round(time.time() - t0, 1), "rounds": []}
     elapsed = round(time.time() - t0, 1)
     new = sorted(set(glob.glob(os.path.join(_reports(arm), "*.json"))) - before)
     if not new:
@@ -167,6 +196,71 @@ def run_case(arm: str, case: str, probe_dir: str, rep: int) -> dict:
                 "fails": [f"报告里没有 {case}"], "elapsed": elapsed, "rounds": []}
     case_rep["wall"] = elapsed
     return case_rep
+
+
+#: 主判据要读的那几格（`agent/_ckpt_probe.py` 落的行）。**本批的命题是结构性的**
+#: （"谁在持有上下文"），效应量是**计数级**的 ⇒ 这张表是主判据，PASS/FAIL 只是护栏。
+#: `model.narr_ident`（批 3）= 窗口没动手；`planner.ident` = 本轮窗口就是整表。
+_PROBE_COLS = ("msgs", "frames", "narr_ident", "prompt_chars")
+_PLANNER_COLS = ("msgs", "has_frames", "ident", "start")
+
+
+def read_probe(path: str) -> list:
+    """一份 jsonl ⇒ **按文件顺序**（= 挂钟顺序）的行列表。
+
+    ⚠️ **不要按 site 分桶再按下标对齐**：一次 planner 调用与一次 model 调用**不是一一对应**
+    （planner ⇄ execute 会重入，实测一条 3 轮用例有 5 次 planner、3 次 model）。第一版就是
+    分桶后按 `i` 对齐，于是把第 2 次 planner 和第 2 次 model 摆在同一行——**看起来像同一轮**，
+    而它们中间隔着一整轮。文件顺序本身就是时间序（`_ckpt_probe.dump` 逐行 append），照它印。
+    """
+    out: list = []
+    if not os.path.exists(path):
+        return out
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:  # noqa: BLE001 —— 读数坏了不该把驱动弄死
+            continue
+        out.append(rec)
+    return out
+
+
+def probe_table(probe_dir: str, cases: list, arms: list, reps: int) -> None:
+    """探针计数表：逐 (用例, 臂, 遍) 按**时间序**印出每一次上下文组装的规模。
+
+    这一节是批 3的主判据（见 `_PROBE_COLS` 的注）。四条预期（先写下来，免得事后按结果
+    编解释）：
+
+      · **A 与 D**：`narr_ident`/`ident` 恒 True、`msgs` 逐轮小 ⇒ 不窗口化也不需要；
+      · **B**：`msgs` 随轮次**超线性**涨（注入的历史被 reducer 再收一遍）、第 2 轮起
+        `has_frames` 恒 True、`prompt_chars` 涨——"复用线程 + 仍注入"的代价；
+      · **C**：`narr_ident` 第 2 轮起 False、`msgs` 只随**本轮**长 ⇒ 闸门真开火；
+      · **C vs B 的差**恰好是**注入进去的那一对**（恒等格让第 1 轮逐格相同）。
+
+    读数**先写下来**再跑，跑完照它判——这是本仓反复付过学费的那条（见 `ab1` 那张作废的表）。
+    """
+    print("\n" + "=" * 104)
+    print("探针计数表（**主判据**）：planner 看几条 / narrator 看几条 / 提示词多大（按时间序）")
+    print("=" * 104)
+    for case in cases:
+        print(f"\n{case}")
+        for arm in arms:
+            for rep in range(1, reps + 1):
+                rows = read_probe(os.path.join(probe_dir, f"{arm}__{case}__r{rep}.jsonl"))
+                print(f"   {ARM_CN.get(arm, arm):<20} r{rep}  （{len(rows)} 次组装）")
+                for k, r in enumerate(rows, 1):
+                    if r.get("site") == "model":
+                        print(f"        {k:>2} model   msgs={r.get('msgs'):<3} "
+                              f"帧={r.get('frames'):<3} 窗口没动手={r.get('narr_ident')!s:<5} "
+                              f"提示词={r.get('prompt_chars')}")
+                    else:
+                        print(f"        {k:>2} planner msgs={r.get('msgs'):<3} "
+                              f"有帧={r.get('has_frames')!s:<5} "
+                              f"本轮=整表={r.get('ident')!s:<5} "
+                              f"起点={r.get('turn_start')} 本轮几条={r.get('turn_msgs')}")
 
 
 def _round_view(r: dict) -> dict:
@@ -201,6 +295,9 @@ def main() -> int:
                     help="不复位会话 thread（演示 checkpoint 跨遍存活）")
     ap.add_argument("--reps", type=int, default=1,
                     help="每条用例每臂跑几遍（判据是多遍 A/B，不是一遍）")
+    ap.add_argument("--prod-history", action="store_true",
+                    help="GOLDEN_PROD_HISTORY=1：多轮用例第 i>1 轮的 history 按生产形状"
+                         "合成（见 run_golden.ENV_PROD_HISTORY）——**没有它臂 C ≡ 臂 B**")
     args = ap.parse_args()
 
     cases = ([c.strip() for c in args.cases.split(",") if c.strip()]
@@ -238,7 +335,7 @@ def main() -> int:
                         print("        （复位 " + "、".join(
                             f"{t}：删 {c} 行" for t, c in n.items()) + "）", flush=True)
                 pg0 = pg_stats()
-                r = run_case(arm, case, probe_dir, rep)
+                r = run_case(arm, case, probe_dir, rep, prod_history=args.prod_history)
                 pg1 = pg_stats()
                 # 这一遍往库里写了多少（写入放大，§4.7 ③ 那一格）
                 r["pg_delta"] = {k: (pg1[k]["n"] - pg0[k]["n"],
@@ -284,6 +381,9 @@ def main() -> int:
                 uniq[s] = uniq.get(s, 0) + 1
             print(f"      {ARM_CN.get(arm, arm):<22} 逐轮签名 {uniq}")
 
+    # ── 主判据：探针计数表 ──────────────────────────────────────────
+    probe_table(probe_dir, cases, arms, args.reps)
+
     # ── 噪声地板 vs 臂间差（这是本实验唯一站得住的判读方式）────────────
     print("\n" + "=" * 104)
     print("噪声地板（反控 D 与 A 的差 = **结构上不可能有差异**的两臂之差）")
@@ -292,11 +392,14 @@ def main() -> int:
         a = [bool(r.get("ok")) for r in results[case].get("graph", [])]
         d = [bool(r.get("ok")) for r in results[case].get("checkpoint_random", [])]
         b = [bool(r.get("ok")) for r in results[case].get("checkpoint", [])]
+        c = [bool(r.get("ok")) for r in results[case].get("checkpoint_delta", [])]
         if not (a and d):
             continue
-        if a == d and a == b:
+        # 四条都同 ⇒ 这一条没话可说（省掉满屏同形行）。**C 也算进来**：本批的判决是
+        # 「C vs A 差集为空」，一条只在 C 上分叉的用例必须印出来。
+        if a == d == b == c:
             continue
-        print(f"  {case:<44} A={a}  D={d}  B={b}")
+        print(f"  {case:<44} A={a}  D={d}  B={b}  C={c}")
 
     stats = pg_stats()
     print(f"\n[ab] 库现状（跑后）：{stats}")

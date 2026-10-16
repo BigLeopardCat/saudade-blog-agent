@@ -457,6 +457,8 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 手写图（graph.py）已完全不挂 checkpointer，memory.py 是无人引用的兼容死代码（保留以防旧代码误用）。
 历史教训：曾经复用线程累积，长对话（教程连载）导致输入上下文与 worker 内存无限膨胀直至截断/被杀，
 于是改为"每请求独立线程 + DB 注入"。**线程复用是禁区，恢复即重蹈覆辙。**
+（20261016：上面这句的**射程**在 §4.8 被收窄为「不许在**没有窗口闸门、且没做写幂等账**的
+情况下恢复」——结论本身没被推翻，生产今天照旧没有 saver。）
 
 ### 4.7 无状态图能不能"中途暂停等用户决定"？（20260920 回答）
 
@@ -490,6 +492,48 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
   任意中间步选择、且选择会改变后续多步结构"的任务（长流程编排、多轮填槽表单），且这个需求
   被真实用户提出过。在那之前，形态 A 覆盖"要不要发这条 / 选哪个候选 / 二选一确认"这类有限、
   可枚举的决策。
+
+### 4.8 追记：§4.6 那句"禁区"的射程被收窄了（20261016，实验分支）
+
+§4.6 记的是**后果**（长对话膨胀到截断/被杀），结论写成"线程复用是禁区"。20261015 的批 0
+把成因量清楚了：**禁区不是"复用线程"，是"复用线程之后没人知道本轮到哪儿为止"**。同一线程
+跑 N 轮的实测，膨胀有**两个**成因——① 图持有整条会话（这是想要的）；② `_build_messages`
+每轮又把 `history[-20:]` 注入成**真消息**、被 reducer 再收一遍（第 r 轮的历史被注入 r 次
+⇒ O(轮数²)）。同时量到三处读端把**上一轮**当本轮：`_page_ctx` 把上一轮的页面报给模型、
+`_has_frames` 把上一轮的帧当本轮证据（首轮那五条确定性快道**结构上**永不命中）、
+narrator 提示词随会话线性膨胀（`with_tool_call_pairs(state["messages"])` 无截断）。
+
+处置分两批，都落在实验分支 `exp/native-checkpoint`（生产一个字节没动）：
+
+- **批 1（已落地）**：**读端**窗口。`context.freeze_turn_start` 在 `_planner_decide`
+  **之前**冻住本轮起点（顺序反了就是"planner 自己漏修"——这条单独占一笔提交），
+  20 处读端改用 `context.turn_window`。口径是 `turn_start <= 0`（没记边界）⇒ 返回
+  **同一个对象**，所以对现状**逐字节零变化，且是构造性的**（不是"应该没变"）。
+  判据 `tests/test_turn_window.py` 规则 A–E。
+- **批 3**：**输入契约**。图既然自持历史，注入的历史就不该再进来。
+  `context.narrator_messages(messages, turn_start, turns=10)` 把 narrator 看到的消息表切成
+  「近 10 轮（剥事实行、剪孤儿、丢历史段的工具帧）+ 本轮原样」，`model_node` 改调它；
+  同批修了 `context._prev_user_msg`——它取"倒数第二条 `HumanMessage`"而**不跳 `[System: `**，
+  线程复用后第 2 轮会取到**本轮的 System 块**而不是上一轮主人那句。它只在确认兑现轮用，
+  而那一轮恰恰是"不许重新理解一遍、只能靠原话"⇒ 取错源 = 意图清单恒空。
+  判据 `tests/test_narrator_window.py` + `tests/test_turn_window.py` 规则 F。
+
+**§4.6 那条结论今天仍然成立**：生产没有 saver，去掉注入就是去掉全部跨轮记忆。所以"停止
+注入"这一刀属于**采纳**，不属于上面两批——批 3 只是把它做成一条**评测臂**
+（`checkpoint_delta`）。采纳要**三处一起动**（`_build_messages` 删注入循环、`thread_id`
+改会话坐标、`build_graph(checkpointer=…)` 接产线 saver），且必须先过**批 2 写操作幂等账**
+——恢复单位是 superstep，节点内的 state 更新要等节点**返回**才落盘 ⇒ 幂等键不能住在
+state 里，必须落在节点之外的一本账上。裁决、读数与触发条件见
+[adr/adr-0011-graph-holds-context-checkpoint-memory.md](adr/adr-0011-graph-holds-context-checkpoint-memory.md)。
+
+**一条维护者需要知道的测量事实：golden 现有语料测不出这一刀。** 10 条多轮用例**一个轮次都
+不注入 `history`**（跨轮靠 saver 线程 + 显式注入的 `pending_action`/`agent_tasks`/`executions`），
+注入 `history` 的 29 个轮次**全在单轮用例上**（线程是新的，其中只有 4 个带 `conversation_id`）
+⇒ 「停止注入」的差别只出现在
+**线程非空 × 本轮仍注入 history** 这一格，而这一格在语料里**不存在**，不处置的话读数会显示
+"臂 C ≡ 臂 B"、被读成"停止注入没用"。批 3 加了 `GOLDEN_PROD_HISTORY=1`：多轮用例第 i>1 轮的
+`history` = 第 1..i−1 轮**真发出去**的那两句（与 Rust `history[-20:]` 逐字同形），
+四臂跑**同一份**驱动。**以后凡是改输入契约的批，先问一句"这一格语料里有吗"。**
 
 ---
 
@@ -1311,7 +1355,9 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
    解析（帧必须在 `__END__` 之前）；golden `summary_round` 断言"回复不得包含 SUMMARY:"，回归时必跑。
    前端 `cleanAgentText` 的 SUMMARY 过滤是防御性残留（防注入诱导输出），勿删。
 4. 线程池挂起：LLM API 无响应时任务占用线程 120s，16 线程下短时间 16 次对话即占满——超时参数是生命线。
-5. MemorySaver 陷阱：别恢复"线程复用"——DB 注入已承担全部连续性。
+5. MemorySaver 陷阱：别恢复"线程复用"——DB 注入已承担全部连续性。（20261016 收窄：
+   不许在**没有本轮窗口闸门、且没做写幂等账**的情况下恢复；触发条件与读数见 §4.8 与
+   [adr/adr-0011-graph-holds-context-checkpoint-memory.md](adr/adr-0011-graph-holds-context-checkpoint-memory.md)。）
 6. `enable_thinking` 只能走 extra_body（Qwen 自有参数，model_kwargs 不收）。
 7. 本仓库与宿主仓库独立维护：agent 代码位于独立 git 仓库（remote: `BigLeopardCat/saudade-blog-agent`，物理上嵌套于博客项目中并被其 gitignore）。两仓库各自 push 各自 CI：agent 改动只在 agent 仓库提交（宿主仓库 git status 不会显示 agent 目录改动，勿误提交）。改完代码记得提交推送——否则服务器重建会丢改动。⚠️ **提交时逐文件点名 `git add <文件>`，不要 `git add -A` / `git commit -a`**（见宿主仓 CONTRIBUTING.md §4《改代码时的几条硬约束》）：工作区里常年挂着别的批次/会话的在途改动，一把梭会把它们一起发布。
 8. 写给模型的举例里不许出现具体取值（20260922 实测，写面）：技能描述/规则里的举例名会被 planner
@@ -1331,7 +1377,13 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > 改之前长什么样」以及「这条结论当时基于哪次测量」。涉及对外行为变化的条目同时记在
 > [CHANGELOG.md](../CHANGELOG.md)。
 
-> 最后更新：2026-10-09（**文档自身的一遍整理，机制与结论一字未动**：① 原先堆在文档头部的
+> 最后更新：2026-10-16（**新增 §4.8 追记：§4.6 那句「线程复用是禁区」的射程被收窄**——
+> 批 0 量出膨胀有两个成因（图持有会话是想要的；`_build_messages` 每轮**又**注入一遍是重复的），
+> 批 1 治读端（`turn_window`）、批 3 治输入契约（`narrator_messages`）。**原有章节编号与原文
+> 一字未动**：§4.6 与 §10.5 各只**追加**一句前向指针，§4.8 插在 §4.7 之后。裁决与触发条件
+> 见 [ADR-0011](adr/adr-0011-graph-holds-context-checkpoint-memory.md)，已登记进 ADR 索引。
+> 注：本节记的是**实验分支** `exp/native-checkpoint` 上的状态，生产未动。）
+> 上版：2026-10-09（**文档自身的一遍整理，机制与结论一字未动**：① 原先堆在文档头部的
 > 逐版修订记录（「最后更新 / 上版 / 上上版 / 更早」）整体移到本节，头部换成一句话说明本文的
 > 读法；② §2 的 `docs/` 目录注释补全——原先只列了四份，实际已有 `adr/`
 > 与另外九份专题文档。）
