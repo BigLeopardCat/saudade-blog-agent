@@ -76,8 +76,11 @@ flowchart TB
 │   ├── graph.py               # ★ 手写 LangGraph 图：State/契约/声称闸 + planner(唯一决策) ⇄ execute(确定性执行) → (reflector) → model(零工具叙述) → gate(确定性检查) + 条件边路由
 │   ├── decisions.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取/特效切换/导航/屏幕显示）+ 动作意图扫描（intent_hints 原料）+ 检索候选裁决（标题相关性）+ 终局计划（轮次上限/复盘终局/拦截收尾）——被 graph.py 节点调用，反向外移函数按原名 re-export
 │   ├── context.py             # 上下文组装（纯函数叶子层）：消息文本提取（多模态兼容）/page_ctx/页面操作指南（GUESTBOOK_GUIDE、SITE_GUIDE）/工具帧摘要/checker 回执摘要
+│   ├── plan_codec.py          # ★ 计划文本契约的编解码（20261017 从 graph.py 切出，那边按原名 re-export）：plan_encode 写端（唯一入口 plan_state，一次出两态）+ parse_plan 读端（按 `KEY[:=]` 搜索，不依赖行序与分隔符）；TOOLS 行的分隔符不许长在值里
+│   ├── tool_specs.py          # ★ 执行清单（TOOLS 行）条目的解析与去重裁剪（20261017 第二刀，同样按原名 re-export）：_tool_args 解析 + _spec_signature 指纹 + _search_retry_kind/_already_done_writes 判重 + _trim_done_reads/_trim_noop_specs/_plan_trims_to_empty 裁剪。**出边为零**（不 import graph）才搬得动
+│   ├── repeat_guard.py        # ★ 逐字复读判据（20261017 第三刀，gate 1b）：_repeat_reason 两档判据（距离 1 走"最长连续块"、距离 ≥2 只接"整体重合率 + 最长块"）+ _recent_ai_replies 比对面 + _REDO_REQUEST_RE 放行档。出边为零（只用 difflib/re/_msg_text），调用点留在 graph.py
 │   ├── agent.py               # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
-│   ├── memory.py              # get_checkpointer：MemorySaver 兼容存根（实际不承担记忆，见 §4.6）
+│   ├── checkpoint.py          # build_checkpointer：checkpointer 的接线点（空 DSN 恒返回 None，见 §4.6）
 │   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，身份与权限地基（docs/identity-and-permissions.md）
 │   ├── authz.py               # ★ 权限模型（20260920）：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
 │   ├── skills.py              # ★ 技能注册表：47 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）+ NAV_MAP 导航映射（业务唯一数据源）
@@ -85,7 +88,7 @@ flowchart TB
 │   ├── refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用（20260919）：递归遍历 + 五个错误码——解不出的引用必须响亮（20260922 改递归）
 │   ├── confirm.py             # ★ 待确认令牌（20260921）：无状态 HMAC（TTL 600s，2 worker 安全）；不落库、不落用户消息
 │   ├── entities.py            # ★ 执行回执实体摘要（20260920）：压成一行供跨轮取值；digest 是 Python 写 / Rust 读的跨语言契约
-│   ├── native_plan.py         # ★ native tool calls 接线层（20260927 新主线；20261004 起**唯一**接口层）：planner 输出就是 API 的 tools/tool_calls，格式由服务端与 schema 保证；零调用不再等于闲聊（先纠偏一次）
+│   ├── planner_llm.py         # ★ 技能表 ↔ API tools/tool_calls 的接线层（20260927 起；20261004 起**唯一**接口层，20261017 前名 native_plan.py）：planner 输出就是 API 的 tools/tool_calls，格式由服务端与 schema 保证；零调用不再等于闲聊（先纠偏一次）
 │   ├── tasks.py               # ★ 会话级任务状态（20260927 批 D）：未完成的意图跨轮不丢（agent_task 表 + 模型登记 + 系统确定性结算）
 │   ├── action_text.py         # ★ 一次执行 → 一行中文动作的跨语言渲染唯一实现（过程行 / 执行台账行两档）
 │   ├── factblock.py           # ★ 动作族分族（命令族+写族，量化口径与 narrator_facts_share 同源）＋历史事实行剥离；**系统代印 20261005 起停用**（BLOCK_FAMILIES 空集）
@@ -452,14 +455,33 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 
 ### 4.6 MemorySaver 为什么不承担记忆
 
-`agent/memory.py` 返回 `MemorySaver`（进程内），但 server.py 每请求生成全新 thread_id
-（`user_{id}_{uuid4().hex[:8]}`）——跨请求永不命中同一线程，MemorySaver 实际上**从未积累过任何状态**；
-手写图（graph.py）已完全不挂 checkpointer，memory.py 是无人引用的兼容死代码（保留以防旧代码误用）。
-历史教训：曾经复用线程累积，长对话（教程连载）导致输入上下文与 worker 内存无限膨胀直至截断/被杀，
-于是改为"每请求独立线程 + DB 注入"。**线程复用是禁区，恢复即重蹈覆辙。**
-（20261016：上面这句的**射程**在 §4.9 被收窄为「不许在**没有窗口闸门、且没做写幂等账**的
-情况下恢复」——结论本身没被推翻，生产今天照旧没有 saver。两个条件里「写幂等账」这一条
-已于 20261016 落地（`agent/idem.py`，见
+`agent/checkpoint.py` 提供 `build_checkpointer(dsn)`，**空 DSN ⇒ 返回 `None`**；手写图
+（graph.py）的 `build_graph(checkpointer=None)` **收**这个参数并原样传给
+`g.compile(checkpointer=...)`，但**缺省 `None`**，而生产调用点（`server.py` →
+`agent.create_agent()`）不传 ⇒ **今天不挂 checkpointer**（这条"只传不造、缺省 None"
+由 `tests/test_checkpoint_factory.py` 的接线锁钉着）。所以今天的图是纯无状态的：连续性
+完全靠 Rust 侧注入最近 N 条历史 + 滚动摘要。
+
+**为什么不是"每请求一个线程的 MemorySaver"**：server.py 每请求生成全新 thread_id
+（`user_{id}_{uuid4().hex[:8]}`）——跨请求永不命中同一线程，MemorySaver 实际上**从未积累过
+任何状态**。历史教训：曾经复用线程累积，长对话（教程连载）导致输入上下文与 worker 内存
+无限膨胀直至截断/被杀，于是改为"每请求独立线程 + DB 注入"。
+**线程复用是禁区，恢复即重蹈覆辙。**
+
+**接上真 saver 是三处一起动**（ADR-0011）：① `server._build_messages` 删掉历史注入循环；
+② `thread_id` 改成会话坐标（`conv_<conversation_id>`）；③ `build_graph(checkpointer=…)`
+并**显式** `durability="sync"`——缺省 `"async"` 时硬杀会让幂等账的键漂移、账被静默绕过
+（ADR-0012《触发条件》）。**只做 ③ 会静默产生双份上下文**，所以 `build_checkpointer()`
+在依赖装齐、三处同批改完之前**一律抛异常**，绝不回落成内存档。
+
+**20261017 之前这里是什么**：`agent/memory.py`（**已删**，本批改名成 `agent/checkpoint.py`）
+的 `get_checkpointer()` 返回 `MemorySaver()`——一个**无人调用**、却"看起来能用"的存根（4 个
+uvicorn worker 下每 worker 各记各的，且不报错）。它的英文 docstring 甚至写着 "maintain
+context across multiple turns in a session"，与本节开头正相反。判据
+`tests/test_checkpoint_factory.py` ⑥ 按 **AST** 钉住
+"`agent/` 的生产代码里不许再出现 `MemorySaver`"（读文本会假红：本节正当当地写着这个词）。
+（20261016 追记：上面那句「禁区」的**射程**在 §4.9 被收窄为「不许在**没有窗口闸门、且没做写幂等账**的情况下恢复」——结论本身没被推翻。两个条件里「写幂等账」这一条已于
+20261016 落地（`agent/idem.py`，见
 [adr/adr-0012-write-idempotency-ledger.md](adr/adr-0012-write-idempotency-ledger.md)）；
 窗口闸门见 §4.9。**采纳本身（三处一起动）仍未做**。）
 
@@ -504,7 +526,8 @@ ADR-0011（图自持上下文）自述的唯一采纳门就是这一节。
 **为什么必须有一本账。** LangGraph 的 checkpoint 提交粒度是 **superstep，不是语句**——
 一个节点里连做 N 次写，进程死在中间、从上一个 checkpoint 恢复，那 N 次写会**各执行两遍**
 （实测：`/home/ubuntu/native-checkpoint-verdict-20261015.md` §2.6，两件写各跑了两次）。
-生产今天没有 saver（`agent/graph.py::build_graph()` 是裸的 `g.compile()`），所以这件事炸不了，
+生产今天没有 saver（`agent/graph.py::build_graph` 的 `checkpointer` 缺省 `None`、生产调用点
+不传），所以这件事炸不了，
 但**接上 saver 那天重放路径第一次通电，而它此前一行判据都没有**。
 
 **为什么不能是 state 里的一个字段**：节点内的 state 更新要等节点**返回**才落盘（§4.7 引的

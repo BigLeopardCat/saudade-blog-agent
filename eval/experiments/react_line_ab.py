@@ -42,7 +42,7 @@ args_schema，函数体只返回假结果，**任何真写都不会发生**；`p
     还是反的**）。改成读结构化的 `Skill.plan`（`list[(工具名, 参数模板)]`）＋
     `extra_plan_tools` ⇒ `account_unfreeze` 只剩一件，`article_tags` 反过来**多出**
     `create_tag`（条件工具，旧口径永远折算不出来）。
-  · **两条 ReAct 臂不再共用 planner 的提示词**：此前 monkeypatch `bind_native` 抓
+  · **两条 ReAct 臂不再共用 planner 的提示词**：此前 monkeypatch `bind_planner_tools` 抓
     planner 当轮真渲染的那份，逐字喂给 ReAct 臂——等于拿一份它们结构上满足不了的契约
     考它们，量出来的差值里掺着"提示词不匹配"。现在各拿各的惯用提示词（`_react_prompt`）。
   · **反向工具进判据**（见上"定向命中"）。
@@ -73,7 +73,7 @@ from langchain_core.tools import StructuredTool  # noqa: E402
 
 import agent.graph as G  # noqa: E402
 import agent.react_arm as RA  # noqa: E402
-from agent.native_plan import build_tool_schema  # noqa: E402
+from agent.planner_llm import build_tool_schema  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 from agent.skills import SKILLS  # noqa: E402
 from models.llm import get_llm  # noqa: E402
@@ -258,7 +258,7 @@ def run_planner(msg: str, tid: str) -> dict:
 def _react_prompt(sent: str) -> str:
     """两条 ReAct 臂的**惯用**提示词：它们跑生产时用的就是这一份。
 
-    **20261011 改**：此前这里 monkeypatch `bind_native` 去抓 **planner 当轮真实渲染出来的
+    **20261011 改**：此前这里 monkeypatch `bind_planner_tools` 去抓 **planner 当轮真实渲染出来的
     提示词**，再**逐字喂给两条 ReAct 臂**——等于拿一份它们结构上满足不了的契约去考它们
     （那份提示词写的是"输出五行契约 / 只用技能不用工具"，而 ReAct 臂吃的是原生 tool_calls）。
     量出来的差值因此掺着"提示词不匹配"这一项，而它不是架构差。

@@ -1,4 +1,4 @@
 from .agent import create_agent
-from .memory import get_checkpointer
+from .checkpoint import build_checkpointer
 
-__all__ = ["create_agent", "get_checkpointer"]
+__all__ = ["create_agent", "build_checkpointer"]

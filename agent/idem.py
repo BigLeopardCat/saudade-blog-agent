@@ -5,8 +5,9 @@
 LangGraph 的 checkpoint **提交粒度是 superstep，不是语句**（实测见
 `native-checkpoint-verdict-20261015.md` §2.6：一个节点里连做两件写，进程死在中间、
 从上一个 checkpoint 恢复 ⇒ **两件写各执行了两遍**）。今天这件事炸不了，因为生产
-**没有 saver**（`agent/agent.py` 调裸的 `build_graph()`，见 `agent/graph.py` 的
-`return g.compile()`）；但**接上 saver 那天重放路径第一次通电，而它一行判据都没有**。
+**没有 saver**（`agent/agent.py` 调 `build_graph(checkpointer=None)`，见 `agent/graph.py`
+的 `return g.compile(checkpointer=checkpointer)`——缝留着，生产不传）；但**接上 saver 那天
+重放路径第一次通电，而它一行判据都没有**。
 本模块就是那道保险丝：把"这一件写做没做过"从 state 里搬出来，落到**节点之外**的一本账上。
 
 **为什么不能是 state 里的一个字段**：节点内的 state 更新要等节点**返回**才落盘

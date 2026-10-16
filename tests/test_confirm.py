@@ -986,7 +986,7 @@ check("  对照：已读两件没有这一档——目标不要求有据 ⇒ 判
                       "通知那边有点乱", None)))
 
 print("\n  描述 ↔ 代码事实：契约句必须跟着 `_ALWAYS_CONFIRM_TOOLS` 走")
-# 上面矩阵的结论要落到**模型读的那句话**上（native 档 description 直达模型）。两条
+# 上面矩阵的结论要落到**模型读的那句话**上（接口层 description 直达模型）。两条
 # 相反的方向都要锁：非「一律弹窗」族不许承诺"一定有卡"；「一律弹窗」族不许承诺"直接办"
 # （它们的 `consent_granted` 恒 False ⇒ 快路径在结构上关掉了）。
 _always = authz._ALWAYS_CONFIRM_TOOLS

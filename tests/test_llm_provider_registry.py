@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT))
 from config import settings as S  # noqa: E402  （`config/__init__.py` 导出的是**实例**）
 from config.settings import PROVIDER_DEFAULTS, KNOWN_LLM_PROVIDERS, Settings  # noqa: E402
 import models.llm as llm_mod  # noqa: E402
-from agent.native_plan import build_tool_schema  # noqa: E402
+from agent.planner_llm import build_tool_schema  # noqa: E402
 from eval import llm_judge as judge  # noqa: E402
 
 FAILS: list[str] = []

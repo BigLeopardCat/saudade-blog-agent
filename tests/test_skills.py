@@ -47,7 +47,7 @@ from agent.skills import (NAV_MAP, NAV_VALID_PATHS, SKILL_MAP, instantiate_plan,
                           visible_skills)
 # 假 planner LLM 的共享桩：把夹具里现成的 `SKILL=/PARAMS=` 文本翻成 tool_calls
 # （20261004 起接口层只剩 native tool calls，桩缺 `bind_tools` 会 AttributeError）。
-from _native_stub import bind_tools_stub, native_reply  # noqa: E402
+from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
 
 FAILS = []
@@ -2126,7 +2126,7 @@ def test_review_inbox_calls_whitelist():
     """`review_inbox.calls` 的**第二道关**：展开层的 `allowed` 白名单（负锁二）。
 
     逐条调用里的工具名由模型写 ⇒ 两道独立防线：schema 的 `enum`（服务端强制，见
-    `tests/test_native_plan.py`）与 `_expand_change_set` 的 `allowed`（`skill.plan`
+    `tests/test_planner_llm.py`）与 `_expand_change_set` 的 `allowed`（`skill.plan`
     声明的工具全集）。**任一条不合格 ⇒ 整批零工具**——不是"剔掉那条、办其余几条"：
     一个装了两族的卡上少了一条，主人点"全部办"时看到的件数就是错的。
 
@@ -3570,11 +3570,11 @@ def test_read_repeat_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
-        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+        bind_tools = bind_tools_stub        # planner 走 `bind_planner_tools`（20261004）
 
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return native_reply(self.replies.pop(0))
+            return toolcall_reply(self.replies.pop(0))
 
     _cfg = {"configurable": {"principal": Principal(uid=721, role="admin"),
                              "user_id": 721, "conversation_id": 42, "stop_event": None}}
@@ -4234,7 +4234,7 @@ def test_short_reply_and_adjacent_pairs():
     import agent.graph as g
     fields = {f for _, f, _, _ in Formatter().parse(g._PLANNER_PROMPT) if f}
     # `output_contract`（20260927 主线批 A）是**唯一按接口层档位取值**的占位符：
-    # 文本档代入"两行纯文本"契约、native 档代入"用工具调用表达决定"。它进这个集合
+    # 文本档代入"两行纯文本"契约、接口层代入"用工具调用表达决定"。它进这个集合
     # 是刻意的——提示词里多一个注入点必须有人复核（这条断言就是这个作用）。
     # `blocked_rows`（20261007）= 本轮受阻项的**类型化**呈现（原因码 ← checker、
     # 技能名 ← 计划；类型表 `agent/block_reasons.py`，接线锁在
@@ -4437,11 +4437,11 @@ def test_drop_correction():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
-        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+        bind_tools = bind_tools_stub        # planner 走 `bind_planner_tools`（20261004）
 
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return native_reply(self.replies.pop(0))
+            return toolcall_reply(self.replies.pop(0))
 
     # 剧本里的被剔工具用 `navigate_to`（**动作工具**：谁都不能经 calls 点名，
     # 它对任何角色都结构性地不可点名，包括管理员——写/动作工具只由技能模板展开）。
@@ -4529,11 +4529,11 @@ def test_multi_step_intent_correction():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
-        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+        bind_tools = bind_tools_stub        # planner 走 `bind_planner_tools`（20261004）
 
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return native_reply(self.replies.pop(0))
+            return toolcall_reply(self.replies.pop(0))
 
     _NAV = ('SKILL=navigate\nPARAMS={"target": "首页"}\nREPLY: 好的，带你去首页')
     _CHAT = 'SKILL=chat\nPARAMS={}\nREPLY: 已经带你过去了'
@@ -4661,11 +4661,11 @@ def test_unaccounted_zero_tool_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
-        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+        bind_tools = bind_tools_stub        # planner 走 `bind_planner_tools`（20261004）
 
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return native_reply(self.replies.pop(0))
+            return toolcall_reply(self.replies.pop(0))
 
     # `content_query` 空参：`plan=[]` 且两个入参都可选 ⇒ 走到尾巴时记账字段全空。
     # **正是 Layer A 硬排除的那一个**（零工具在"已有帧的收尾轮"上合法，
@@ -4786,11 +4786,11 @@ def test_calls_in_wrong_skill_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
-        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+        bind_tools = bind_tools_stub        # planner 走 `bind_planner_tools`（20261004）
 
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return native_reply(self.replies.pop(0))
+            return toolcall_reply(self.replies.pop(0))
 
     _WRONG = ('SKILL=chat\nPARAMS={"calls": [{"tool": "list_notes", "args": {"limit": 5}}]}\n'
               "REPLY: 我查查")
@@ -4855,11 +4855,11 @@ def test_write_target_refusal_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
-        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+        bind_tools = bind_tools_stub        # planner 走 `bind_planner_tools`（20261004）
 
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return native_reply(self.replies.pop(0))
+            return toolcall_reply(self.replies.pop(0))
 
     _WRITE = ('SKILL=tag_update\n'
               'PARAMS={"name": "绝对不存在的标签名xyz", "parent_tag": "编程"}\n'
@@ -4954,11 +4954,11 @@ def test_write_grounding_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
-        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+        bind_tools = bind_tools_stub        # planner 走 `bind_planner_tools`（20261004）
 
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return native_reply(self.replies.pop(0))
+            return toolcall_reply(self.replies.pop(0))
 
     class _Row(dict):
         pass
@@ -5165,11 +5165,11 @@ def test_announcement_text_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
-        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+        bind_tools = bind_tools_stub        # planner 走 `bind_planner_tools`（20261004）
 
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return native_reply(self.replies.pop(0))
+            return toolcall_reply(self.replies.pop(0))
 
     _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}
@@ -5271,11 +5271,11 @@ def test_name_target_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
-        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+        bind_tools = bind_tools_stub        # planner 走 `bind_planner_tools`（20261004）
 
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return native_reply(self.replies.pop(0))
+            return toolcall_reply(self.replies.pop(0))
 
     _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}
@@ -5619,7 +5619,7 @@ def test_write_desc_no_example_names():
     # （名词），而写参数里最要命的那个值是 **id**——它是"删哪条/改哪篇"的唯一指认。
     # 审计实测残留：`favorite_add` / `favorite_remove` 的描述里写着「把文章 12 加到
     # 收藏」，planner 规则 4b 与 narrator 规则 18/19 也各带一个真 id 的举例。描述经
-    # native 档 `tools[].description` 直达模型 ⇒ 与"示例名被抄成 title"是同一族机制，
+    # 接口层 `tools[].description` 直达模型 ⇒ 与"示例名被抄成 title"是同一族机制，
     # 只是抄出来的是**另一篇文章的 id**（改错文章，症状更隐蔽：操作会"成功"）。
     # 判据是形态而不是取值：`文章<数字>` 一律换成 〈id〉——id 是**每轮现取**的
     # （页面上下文 / 本轮工具帧 / 主人原话），任何写死在提示词里的号都是错的。
@@ -5663,11 +5663,11 @@ def test_write_intent_never_expressed_round():
         def __init__(self, replies):
             self.replies, self.prompts = list(replies), []
 
-        bind_tools = bind_tools_stub        # planner 走 `bind_native`（20261004）
+        bind_tools = bind_tools_stub        # planner 走 `bind_planner_tools`（20261004）
 
         def invoke(self, prompt):
             self.prompts.append(prompt)
-            return native_reply(self.replies.pop(0))
+            return toolcall_reply(self.replies.pop(0))
 
     _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}

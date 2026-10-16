@@ -43,7 +43,7 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-_MSG = "帮我把樱花打开"          # 不命中任何快道（同 test_native_wiring 的那句）
+_MSG = "帮我把樱花打开"          # 不命中任何快道（同 test_planner_wiring 的那句）
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
 # 端点实测的形状（20260927 探针：13 tok 的短提问也带 input_token_details）
@@ -142,7 +142,7 @@ def test_no_usage_returns_empty_and_never_raises():
 def _patch_llm(reply):
     """planner 那只 LLM 的假桩：**只有一只**。
 
-    20261004 前这里按 `max_tokens==400` 分辨两只（文本档 400 / native 档取 settings
+    20261004 前这里按 `max_tokens==400` 分辨两只（文本档 400 / 接口层取 settings
     的值，影子档会同时构造两只、顺序不可依赖）。接口层只剩 native 之后
     （`settings.planner_engine` 已删）没有第二只可分辨。
     """

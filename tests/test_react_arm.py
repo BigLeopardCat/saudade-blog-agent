@@ -901,7 +901,7 @@ check("反向集为空时两个口径一致（没有方向可言的句子不该�
 check("**每句都挂了反向集那一格**（漏挂 = 那一句静默退回旧口径）",
       all(len(s) == 3 and isinstance(s[2], set) for s in _ab.SENTS),
       repr([len(s) for s in _ab.SENTS]))
-check("两条 ReAct 臂的提示词不再来自 planner（不再 monkeypatch `bind_native`）",
+check("两条 ReAct 臂的提示词不再来自 planner（不再 monkeypatch `bind_planner_tools`）",
       "_capture_prompt" not in _ab.__dict__ and "_react_prompt" in _ab.__dict__)
 
 # ── ⑩ narrator 独立节点（P6，20261012）─────────────────────────────────────────

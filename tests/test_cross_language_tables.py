@@ -332,7 +332,7 @@ print("\n⑤ 扫一遍：不许有**没登记**的站点也写这套词")
 OTHER_TAG_FAMILIES = {"TOOLS", "NOTE", "REPLY", "ISSUE", "DECIDE"}
 
 # **已退休**的协议标签（20261016）：`TODO:` 那一行整行退休（写端 `plan_encode` / 读端
-# `_parse_todo`＋`parse_plan` / 提示词契约三处同批，取证见 `agent/graph.py::plan_encode`）。
+# `_parse_todo`＋`parse_plan` / 提示词契约三处同批，取证见 `agent/plan_codec.py::plan_encode`）。
 # 它今天只出现在**叙述它为什么退休**的注释里，但本扫描读的是**字面量**（`` `TODO:` `` 这种
 # 反引号引用的写法照样命中）⇒ 把它单列一张表，而不是塞回上面那张：
 #   · 塞回去 = 让"退休"这件事在唯一扫得到它的地方**看不出来**（过期条目没销账）；

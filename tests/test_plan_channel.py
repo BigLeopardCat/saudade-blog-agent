@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """计划双态通道（20260928 批 C）：写端唯一入口 + 两态不分叉 + 新旧判据等价。
 
-被测 = 计划的**两态**：`agent/graph.py::plan_state` 一次写出 `plan`（人读的契约文本）与
+被测 = 计划的**两态**：`agent/plan_codec.py::plan_state` 一次写出 `plan`（人读的契约文本）与
 `plan_obj`（程序读的字段），以及"读端直取对象"这件事本身。
 
 **为什么存在**：批 C 之前有四处读端靠**抠文本**认计划——`server.py` 的
@@ -45,7 +45,9 @@ sys.path.insert(0, str(ROOT))
 
 from agent import graph as G        # noqa: E402
 from agent import skills as S       # noqa: E402
+from agent.plan_codec import _esc_spec   # noqa: E402  （④ 的写端转义：20261017 起住这里）
 import server as SRV                # noqa: E402  （③ 读它的新读法：`_spec_one`/`_specs_from_tools`）
+import _ctx_src                     # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
 FAILS: list[str] = []
 
@@ -59,7 +61,10 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 # ── ① 写端唯一入口（源码锁）─────────────────────────────────────────────────
 # 锁的是"代码里在哪调用了谁"：文档字符串与注释里提到 `plan_encode` 不算（`plan_state` 的
 # 头注就在讲它），所以先把三引号段整段抹成空行、再排除纯注释行。
-_GRAPH_SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+# 20261017：这一族从 `agent/graph.py` 搬进了 `agent/plan_codec.py`。锁判的是"这一族里
+# 谁调用了谁"，所以取值点跟着搬（两份文件的拼接视图，见 `_ctx_src.plan_codec_src`），
+# 下面的断言**字面一个字没动**——判据没被改松，只是锚点跟着代码搬。
+_GRAPH_SRC = _ctx_src.plan_codec_src()
 _DOCSTR = re.compile(r'""".*?"""', re.DOTALL)
 _CODE_LINES = _DOCSTR.sub(lambda m: "\n" * m.group(0).count("\n"), _GRAPH_SRC).splitlines()
 
@@ -93,7 +98,8 @@ check(f"那一处落在 plan_state 体内（行 {_ps_lo}–{_ps_hi}）",
       bool(_calls) and _ps_lo <= _calls[0][0] <= _ps_hi, str(_calls[:1]))
 
 _plan_keys = _code_hits(r'"plan"\s*:')
-check("graph.py 里手写 \"plan\": 只剩两处（plan_state 的返回 + graph_input 初值）",
+check("契约族（graph.py + plan_codec.py）里手写 \"plan\": 只剩两处"
+      "（plan_state 的返回 + graph_input 初值）",
       len(_plan_keys) == 2, str([h[1][:60] for h in _plan_keys]))
 check("  其一在 plan_state 体内（与 plan_encode 同一行）",
       any(_ps_lo <= i <= _ps_hi and "plan_encode" in l for i, l in _plan_keys),
@@ -239,9 +245,9 @@ def _plan_with(tools: list[str]) -> str:
 
 
 check("_esc_spec 只动 ASCII 分号：全角 `；`、`(`/`)`/`,`/反斜杠一律原样",
-      G._esc_spec("；") == "；" and G._esc_spec("a(b),c\\d") == "a(b),c\\d")
+      _esc_spec("；") == "；" and _esc_spec("a(b),c\\d") == "a(b),c\\d")
 check("  且幂等（转义产物里没有裸分号，再来一次不再变）",
-      G._esc_spec(G._esc_spec("a;b")) == G._esc_spec("a;b") == "a\\u003bb")
+      _esc_spec(_esc_spec("a;b")) == _esc_spec("a;b") == "a\\u003bb")
 
 _bad = []
 for _v in ("a;b", "a;b;c", "；全角不算分隔符；", "分号后带空白 ; ", "a" + ";" * 12 + "z"):

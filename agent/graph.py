@@ -58,8 +58,6 @@ LangGraph 四件套：
 # 没有报错、没有异常，只有一条 UserWarning（生产日志里根本不会被看见）。
 # tests/test_authz.py 用 `warnings.simplefilter("error")` 构建图来锁这一条：注解一旦退回
 # 字符串，套件立刻红。
-import ast
-import difflib
 import json
 import logging
 import re
@@ -107,7 +105,7 @@ from agent.entities import receipt_digest
 from agent.factblock import (action_facts, is_action_family, is_block_family,
                              render_fact_block)
 from agent.llm_usage import usage_fields
-from agent.native_plan import (bind_native, finish_reason, tool_call_names,
+from agent.planner_llm import (bind_planner_tools, finish_reason, tool_call_names,
                                tool_calls_to_plan)
 from agent.principal import (CHAT_ONLY_ROLES, KNOWN_ROLES, ROLE_ADMIN,
                              ROLE_SUPERADMIN, ROLE_USER,
@@ -127,13 +125,13 @@ from agent.skills import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
                           DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
                           DROP_SUFFIX_SKILL_NO_CALLS,
                           FUZZY_NAV_RULES, NAV_MAP, PLAN_STATUS_ABSENCE_EXEMPT,
-                          PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, SKILL_MAP,
+                          PLAN_STATUS_NAV_NOTE, SKILL_MAP,
                           _NAV_REAL_PAGES, _NAV_REF_HINT,
                           _WRITE_NAME_TARGET_SKILLS,
                           arg_type_short, build_planner_context,
                           callable_query_tools, instantiate_plan,
                           param_problem_note, skill_param_specs,
-                          split_tool_spec, visible_skills)
+                          visible_skills)
 # 任务登记（20260927 批 D）：登记帧的构造与那一轮给 narrator 的注记/纠偏都在
 # `agent/tasks.py`——本模块只决定"什么时候用它"（见 planner 的那一支）。
 from agent.tasks import (TASK_DONE_NOTE, TASK_INTENTS, advance_by_receipts,
@@ -207,14 +205,6 @@ SNAPSHOT_SKILLS = frozenset({"ops_report", "moderation_report", "user_report",
 _ACTION_SKILLS = ("navigate", "effect", "darkmode", "device_display", "device_query",
                   "read_article")
 
-# 后台写技能（20260921 第二轮）：**不是**快照型——见 planner 里的重复规划防护。
-# 20260921 第三轮评估（新写技能 tag_update/tag_delete/category_* 要不要进来）→ **不进**。
-# 判据是"同一件事已经做过"的正确性而不是省一轮：这三族里"再做一次"是**正常请求**
-# （改回原名、换个颜色、再删一个），而进来的效果是 planner 见到逐字相同的计划就收尾；
-# 收尾话术再诚实也挡不住一种情形——用户在后台把那件事改回去了、再让 agent 做，agent
-# 只会说"刚做过"。宁可多规划一轮让工具去活字典里核一遍（核不到会响亮地报出来），
-# 也不要把"没做"说成"做过"。tag_create 留在里面是因为它**幂等**（同名复用是真的同一件事）。
-EXECUTED_ONCE_SKILLS = frozenset({"tag_create", "article_status", "article_tags"})
 
 # 需要"本轮读过这个 id 才准写"的工具（见 execute 的目标校验）。
 # 20260923 批 7 加入收藏两件：它们的目标同样是 article_id，同样会**写错篇**
@@ -531,15 +521,15 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
     · `contract` 默认 `_PLANNER_OUTPUT_CONTRACT_NATIVE`——**留成参数是为了测试能
       往里塞别的文本做对照**（如 `test_prompt_prefix` 判规则顺序），不是生产拨盘；
     · `slim_skills`（20260927）= 技能块去掉与 `tools` schema 逐字重复的三行（判据与
-      不删清单见 `skills.build_planner_context`）——native 档恒 True；传 False 只有
+      不删清单见 `skills.build_planner_context`）——接口层恒 True；传 False 只有
       离线对照在跑；
     · `blocked_rows`（20261007）= 本轮受阻项的**类型化**呈现（原因码 ← checker、
       技能名 ← 计划；渲染见 `agent/context.py::blocked_rows`，类型表见
       `agent/block_reasons.py`）。`planner_node` 每轮都传，默认值是缺省语——留给
-      不建模受阻状态的离线探针/对照臂（`eval/native_tools_probe.py`、
+      不建模受阻状态的离线探针/对照臂（`eval/toolcall_probe.py`、
       `agent/react_arm.py`）与既有单测。
     · `deny`（20261007，1d）= 这一轮**不许再选的技能名**（见 `block_reasons.denied_skills`）
-      ——同一集合还要交给 `bind_native` 摘掉 schema 那一半，两处都是菜单（摘一半留一半
+      ——同一集合还要交给 `bind_planner_tools` 摘掉 schema 那一半，两处都是菜单（摘一半留一半
       等于没摘）。空集/None 时渲染逐字节不变。
     """
     return _PLANNER_PROMPT.format(
@@ -1239,14 +1229,14 @@ def _strip_menu(c: "_DecideCtx", name: str) -> None:
     """本轮菜单里再摘掉一个技能（20261012）。
 
     `deny` 有**两个出口**，必须一起改，只改一处等于没摘：① 工具 schema
-    （`bind_native(deny=…)`）；② 技能菜单（`_decide_llm` 的 `_prompt_args["deny"]`
+    （`bind_planner_tools(deny=…)`）；② 技能菜单（`_decide_llm` 的 `_prompt_args["deny"]`
     ⇒ `build_planner_context(deny=…)`）。`tests/test_menu_deny.py` 第五节钉的就是这条线。
 
     模型若绕开 schema 照旧报出这个名字，`_decide_register` 的 `menu_denied_used` 那一格
     会接住它（既有机制，这里不重复造）。
     """
     c.deny = set(c.deny) | {name}
-    c.llm = bind_native(c._base_llm, c.role, evidence=c._evidence,
+    c.llm = bind_planner_tools(c._base_llm, c.role, evidence=c._evidence,
                         deny=c.deny, deny_pseudo=c.deny_pseudo)
 
 
@@ -1367,7 +1357,7 @@ def _deny_giveup_nudge(deny, plan_obj: dict, user_msg, rounds: int,
 #
 # 两条收窄，都为"别把有帧的合法收尾轮纠成硬凑一次写"：
 #   · **整个请求还没排过任何写**（`_wrote_this_round`，读账甲）：写过的那一轮零工具
-#     收尾是合法收尾（`tests/test_native_wiring.py` 那条反锁钉着同一件事）；
+#     收尾是合法收尾（`tests/test_planner_wiring.py` 那条反锁钉着同一件事）；
 #   · 沿用既有的两道：主人明说不要工具 / 这一轮带图（同上面那两格，见 `_tools_off`
 #     `_img_turn`）。
 _WRITE_COMMAND_ZERO_CALL_NUDGE = (
@@ -1413,213 +1403,13 @@ def _write_command_nudge(plan_obj: dict, user_msg, has_frames: bool,
 
 
 # ---------------------------------------------------------------------------
-# 容错解析工具（计划文本 → 结构化）
+# 计划文本契约（写端 plan_encode / 读端 parse_plan）——20261017 搬进 agent/plan_codec.py
 # ---------------------------------------------------------------------------
-
-# ⚠️ 这里曾经还有一族"从 planner 自由文本里抠 SKILL=/PARAMS="的容错解析器
-# （`extract_plan_fields` / `_PLANNER_OUTPUT_RE` / `_SKILL_QUOTED_RES` / `_parse_params`
-# / `_plan_body_of`）——20261004 随文本契约档一起删除。它与下面 `parse_plan` 读的
-# **内部计划文本协议**是两件事：那套协议（`SKILL=` / `PARAMS=` / `TOOLS:` / `NOTE:` /
-# `REPLY:`，由 `plan_encode` 写、`parse_plan` 读）由 execute/gate 消费，
-# **仍在用**；删掉的只是"模型自己写契约行"那条通道。
-# （协议里那个可选的 `TODO:` 行 20261016 也删了——它不是"模型写契约行"那条通道的
-#   一部分，是**系统自己写、再自己读回来**的一格，读端为零，见 `plan_encode`。）
-
-
-def _loads_tolerant(text: str):
-    """JSON 容错解析：常见漂移（单引号、尾逗号、行注释）逐个修正后重试。
-
-    解析失败返回 None（调用方决定兜底），不抛异常。
-
-    **保留**（不是文本档私有）：`parse_plan` 读内部计划文本协议的 `PARAMS=` 时用它
-    （见本文件下方 `parse_plan`），删掉会把保留下来的那套协议一起弄坏。
-    """
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        fixed = re.sub(r"//.*$", "", text, flags=re.M)
-        fixed = fixed.replace("'", '"')
-        fixed = re.sub(r",\s*([}\]])", r"\1", fixed)
-        try:
-            return json.loads(fixed)
-        except json.JSONDecodeError:
-            return None
-
-
-def _esc_spec(tool_spec: str) -> str:
-    """单条 spec 里的 `;` 转义成 `\\u003b`——**文本通道的分隔符不能出现在值里**。
-
-    `plan_encode` 用 `"; ".join(tools)` 拼 TOOLS 行，`parse_plan` 读回时 `split(";")`
-    （`_tool_args` 的贪婪正则能兜住参数里的 `(`/`)`，**兜不住 `;`**）。20260929 生产
-    实证：模型给 `device_oled_draw` 的 `ops` 写了一串用 `;` 分隔的伪指令（12 个分号，
-    `tri(30,6,…); circle(64,38,26,F); …`）⇒ **一条调用裂成 13 条 spec**：12 条被当成
-    不存在的工具（`tri`/`circle`/`line`/`text`）逐个拒掉，第 13 条（真名那条）截断在
-    第一个 `;` 上 ⇒ `args_parse` BLOCK。最狠的一层是它**不像失败**：那一轮工具其实
-    跑了、设备也回了执（"已下发、设备已确认执行"都印出来了），但 spec 解析不出参数 ⇒
-    checker 判 BLOCK ⇒ 无回执 ⇒ **屏幕画了、台账没记一笔**，跨轮执行记忆里什么都没有。
-    （`device_oled_draw` 当天随画板功能一起撤掉了，此处是历史取证；这个转义与绘图
-    无关——任何参数值里带 `;` 的调用都会中招。）
-
-    `\\u003b` 是合法 JSON 转义，`json.loads`/`ast.literal_eval` 读回都会还原成 `;`，
-    **语义一个字节没变**，只是文本里不再有裸 `;`。写在这里而不是那 13 个拼 spec 的地方
-    （`skills.py` 12 处 + 本文件 1 处）：写端只有这一处，且"改一处要同步十三处"正是
-    全仓审计点名的主导特征。分隔符本身由 `join` 产出、不经过这里，所以转义的只有值里的。
-    **PARAMS 行不用**：它不参与任何 `;` 切分（`json.dumps` 已把换行转义掉）。
-    """
-    return tool_spec.replace(";", "\\u003b")   # 落盘即 `;`（一个反斜杠，JSON 转义）
-
-
-def plan_encode(plan_obj: dict) -> str:
-    """结构化计划（instantiate_plan 产物）→ plan 字段（契约的写端）。
-
-    `STATUS=` 行（20260926 批 3）**由系统写死**，模型一个字都不填——所以它一定
-    排在 SKILL 之后（紧跟"这是份什么计划"，与人读的顺序一致），而**不是**塞在
-    REPLY 附近：`parse_plan` 的 REPLY 正则吃 DOTALL，它必须是末行。
-
-    派生规则（`plan_obj` 没带 status 时）：有工具 → `executed`；chat 技能 →
-    `answer_only`；其余留空。**留空不是"忘了填"的唯一形态，也不全是缺陷**：写技能
-    零工具那一族（缺必填/目标查无此名）目前也落在这里，而它们各自都带了系统写的
-    注记——所以 `""` 只说明"没有构造点用一个值认领这一轮"，消费侧据此 fail-open
-    （判据读不到就跳过），`eval/corpus_invariants.py` 的 I2 拿它当"未记账"档、
-    **不拿它当缺陷计数**。**别把这条派生当成判据的常态入口**——各构造点都显式给值
-    （navigate 三出口 / `_param_problem_plan` / `_terminal_plan` / fail-closed 写技能），
-    派生只兜住"手写的夹具文本"与"改造前留在 state 里的旧计划"。
-    """
-    tools = ("（无）" if not plan_obj.get("tools")
-             else "; ".join(_esc_spec(t) for t in plan_obj["tools"]))
-    status = plan_obj.get("status") or (
-        "executed" if plan_obj.get("tools")
-        else ("answer_only" if plan_obj.get("chat") else ""))
-    lines = [
-        f"SKILL={plan_obj['skill']}",
-    ]
-    if status:
-        lines.append(f"STATUS={status}")
-    lines += [
-        f"PARAMS={json.dumps(plan_obj.get('params', {}), ensure_ascii=False)}",
-        f"TOOLS: {tools}",
-        f"NOTE: {plan_obj.get('note') or '（无）'}",
-    ]
-    # ── 第 6 行 `TODO:` 于 20261016 整行退休（写端 + 读端 + 提示词契约同批）──
-    # 它当年是"多步链的中间轮声明后续依赖步骤"的一格。退休的取证是三件事叠起来：
-    #   ① **读端为零**。全仓只被 `plan_encode` 自己回渲染一遍，再由 `parse_plan`
-    #      读回同一个列表（`plan_obj["todo"]`）——一个闭环，没有消费方；
-    #   ② **它的名义消费者早已被换掉**。`agent/tasks.py`（20260927 批 D）就是来补
-    #      "还剩什么没做完"这个缺口的，那个模块自己的头注写着这一行"只有 trace 消费
-    #      （有写无读）"；`eval/corpus_invariants.py` 的 I6 则把它当成"模型写了没人读"
-    #      的**反面教材**引用。当初注释里写的"供 reflector 判链依赖"，实测不成立：
-    #      全量 1194 份 trace 里 `planner.todo` 只出现过 **7 个请求 / 10 次**，而
-    #      reflector 跑过的请求是 51 个，**两者交集为 0**——reflector 从没收到过它；
-    #   ③ **它在场时还常常是垃圾**。`_parse_todo` 吃的是模型正文，而模型会照抄提示词
-    #      里的占位符模板 ⇒ 生产 trace 里真出现过
-    #      `todo=['<步骤1', '<步骤2', '`". So I\'ll write TODO: …']` 这种把模板和
-    #      自述一起切进来的结果。`native-toolcalls-mainline.md` §6.6 的纪律是
-    #      "必须有消费者，否则不许写"——两条出路里选了删掉这条（另一条是补一个
-    #      扫描不变量），因为消费者已经在 `agent_task` 表上了，再补一个只是把
-    #      同一件事记第二遍。
-    lines.append(f"REPLY: {plan_obj['reply']}")
-    return "\n".join(lines)
-
-
-def plan_state(plan_obj: dict) -> dict:
-    """**写计划的唯一入口**：同一份计划出两态，一次写入——人读的契约文本
-    （`plan`，进提示词/进 trace/进测试夹具）＋ 程序读的结构化对象（`plan_obj`）。
-
-    **为什么要有它（20260928，架构审计第 ② 条的一半）**：此前 24 个计划构造点各自写
-    `{"plan": plan_encode(plan_obj), …}`，而**读端**要拿其中某个字段时只能再去抠那段
-    文本——`server.py` 用 `plan.startswith("SKILL=")` 判"这是不是一份真计划"、
-    `"\nTOOLS: " in plan` 判"有没有执行清单"，`_plan_skill` 又自己写了一条
-    `SKILL=` 正则（与 `parse_plan` 里那条是两份拷贝）。三处都是"改 `plan_encode`
-    的排版必须同步改三个读端"的人工约定。现在读端直取 `state["plan_obj"]`。
-
-    **两态必须**由这一处一起给**（而不是各构造点自己填两遍）：文本是派生物，
-    谁漏了 `plan_obj` 谁就让读端退回文本抠字——`tests/test_plan_channel.py` 用源码锁
-    钉住"`plan_encode` 只许在这个函数里被调用"，构造点想绕开它就得先删掉那条锁。
-
-    ⚠️ 别把 `plan_obj` 当成"文本的缓存"来用后又去改它：它进了 state 就是**程序读
-    计划的首选**来源，两态一旦分叉，判据会照着对象走、而人照着文本吵。
-
-    **文本仍然有人读**（别把"改掉三处"读成"文本没人读了"）：`plan` 进 narrator
-    提示词（`_narrator_plan`）、进 trace、进测试夹具；`parse_plan` 这个**容错全解析器**
-    仍在 `route_after_planner`/`execute_node`/`gate_node`/`_wrote_this_round` 四处用它
-    （它按 `KEY[:=]` 搜索、不依赖行序与分隔符，是"契约的读端"而不是"排版的嗅探"）。
-    批 C 治的是**排版嗅探**，不是要废掉文本态。
-    """
-    return {"plan": plan_encode(plan_obj), "plan_obj": plan_obj}
-
-
-def parse_plan(raw: str) -> dict:
-    """解析 plan 字段（契约的读端）。容错：解析失败 → 按 chat 兜底（宁可少干活，不硬猜）。
-
-    返回 {"skill", "params", "tools", "note", "reply", "chat", "status"}。
-    `status` 见 `PLAN_STATUS_VALUES`（批 3）：系统自己写的计划一定带 `STATUS=` 行，
-    缺了才走下面那段兼容派生（判据别依赖派生，它只是给旧文本留的路）。
-    容错原则：所有"LLM 输出 → 程序消费"的边界都要能优雅降级——LLM 不是
-    JSON 解析器，输出格式漂移是常态（解析失败 → 按 chat 兜底，宁可少干活）。
-
-    ⚠️ 这里的输入是**系统自己写的**契约文本（`plan_encode` 的产物，只经过一次
-    `state` 存取），不是模型原始输出 ⇒ 用顶格正则即可。模型那一侧 20261004 起
-    根本不写文本契约了（native tool calls，见 `agent/native_plan.py`），所以
-    这里**不需要**也不该再有"容错抠模型自由文本"的第二套解析器——曾经有过一份
-    （`extract_plan_fields`，20260926 为 JSON 漂移加的），随文本档一起删除。
-    """
-    m = re.search(r"SKILL\s*[:=]\s*(\w+)", raw or "", re.IGNORECASE)
-    skill = m.group(1) if m else "chat"
-    params = {}
-    pm = re.search(r"PARAMS\s*[:=]\s*(\{.*?\})\s*\n", raw or "", re.IGNORECASE | re.DOTALL)
-    if pm:
-        obj = _loads_tolerant(pm.group(1).strip().strip("`"))
-        if isinstance(obj, dict):
-            params = obj
-    tools = []
-    tm = re.search(r"TOOLS\s*[:=]\s*(.+)", raw or "", re.IGNORECASE)
-    if tm:
-        tools = [s.strip() for s in tm.group(1).split(";") if s.strip() and s.strip() != "（无）"]
-    nm = re.search(r"NOTE\s*[:=]\s*(.+)", raw or "", re.IGNORECASE)
-    note = nm.group(1).strip() if nm else ""
-    rm = re.search(r"REPLY\s*[:=]\s*(.+)", raw or "", re.IGNORECASE | re.DOTALL)
-    reply = rm.group(1).strip() if rm else ""
-    sm = re.search(r"STATUS\s*[:=]\s*(\w+)", raw or "", re.IGNORECASE)
-    status = sm.group(1).strip().lower() if sm else ""
-    if status not in PLAN_STATUS_VALUES:
-        status = ""
-    if not status:
-        # 兼容派生（20260926 批 3）：**只兜旧文本与手写夹具**。系统自己写的计划
-        # 一定有 STATUS 行（`plan_encode`），所以下面这段不会在常态里跑到——
-        # `tests/test_status_judgements.py` 有源码锁钉住这一点。
-        #
-        # 为什么不留空、非要派生一遍：留空 = 判据 fail-open，而"缺 STATUS"最可能
-        # 的来历正是**改造前留在 state 里的旧计划文本**——那时判据判的是注记措辞，
-        # 派生一遍等于把旧行为原样接上，不会因为升级而突然少拦一类（也不会突然
-        # 多拦——派生只认系统自己那三条注记的**固定前缀**，见 skills.py）。
-        if tools:
-            status = "executed"
-        elif skill == "chat":
-            status = "answer_only"
-        elif skill == "navigate" and "不调用任何工具" in note:
-            # ⚠️ "未部署" 必须排在 "已下线" **之前**：`_IOT_OFF_NOTE` 里那句叮嘱
-            # （"不要说「已下线」"）本身含"已下线"三个字，先判它就会把"IoT 没装"
-            # 派生成"页面下线了"——正是这两个值分开要防的那件事，从这里漏回来。
-            if "未部署" in note:
-                status = "nav_iot_off"
-            elif "已下线" in note:
-                status = "nav_offline"
-            elif "无法识别" in note:
-                status = "nav_unresolved"
-            elif "不存在" in note:
-                status = "target_unreachable"
-    return {
-        "skill": skill if skill in SKILL_MAP else "chat",
-        "params": params,
-        "tools": tools,
-        "note": note,
-        "reply": reply,
-        "chat": (skill in SKILL_MAP and SKILL_MAP[skill].chat) or skill == "chat",
-        "status": status,
-    }
-
-
-
+# 这一族是图文件里边界最干净的一块：三个名字、一套文本协议、零图拓扑依赖。按**原名**
+# re-export ⇒ 本文件剩的 6 处调用点、以及全仓 `from agent.graph import plan_state` 那
+# 几十处引用（含测试）一个都不用改。判据侧同步见 `tests/_ctx_src.plan_codec_src()`。
+# ⚠️ 改协议（加行、改分隔符、改 KEY 名）要去 `agent/plan_codec.py`，不是这里。
+from agent.plan_codec import parse_plan, plan_encode, plan_state  # noqa: E402,F401
 
 # ---------------------------------------------------------------------------
 # 声称检查正则族（gate 确定性兜底用；作用域见 _claim_issue）
@@ -3803,171 +3593,30 @@ def _change_denial_claim(reply: str, has_real_change: bool) -> bool:
     return _clause_hits(reply, _NO_CHANGE_CLAIM_RE, _NO_EXEC_EXEMPT_RE)
 
 
-# ── gate 1b：逐字复读上一轮回复（20260920）──────────────────────────────────
-# 纪律 11（"绝不把历史里自己的回复原文再输出一遍"）只是**软约束**，压不住：
-# 20260920 实证 narrator（温度 0.7）在"本轮用户消息模糊 + 上下文里摆着上轮一份
-# 完整答案"时会把上轮回复整段抄出来——11:15:44 那条与 11 小时前 00:23:52 那条
-# **逐字节相同**（781 字，difflib diff 为空）。0.7 采样自由生成撞出 781 字全同的
-# 概率可忽略 ⇒ 它是从注入历史（最近 20 条纯历史，那条回复正好落在窗口里）里抄的。
-# 抄写有机会是因为被 gate 否定的叙述仍进了历史（fallback_text channel 缺失，见
-# _fallback_result）；修好 channel 后本判据是第二道闸：**不许把复读当成回答**。
-# 判据（确定性、纯字面）：本轮回复与上一轮 assistant 回复的最长逐字连续片段
-# ≥ max(200 字, 60% × 本轮长度) ⇒ 复读。门槛刻意高（宁漏勿误伤）：**只抓"整段
-# 照抄"**。门槛由全量 trace 回放定（426 对相邻轮，见 eval 之外的一次性脚本能力）：
-# floor=80 命中 4 对，其中两对是 90 字级的"两次都回答我不会做饭/烤蛋糕"——同义
-# 寒暄撞同一句模板，应答本身合理，拦下来才是误伤；一对是用户点名重做（走
-# _REDO_REQUEST_RE 放行）；抬到 200 后只剩 1 对真复读（09-05T19:10:07，489 字
-# 逐字照抄）。合理复用（引用同一段工具返回、复述要点的两三句）远达不到门槛。
-# 代价：≤200 字的回复不判复读——短回复的整段重合几乎都是模板复用，宁漏勿误伤。
-# 与 _repeat_ask_note（server.py：用户**原句重发**时注入提示）分工不同——那个管
-# 输入端（让模型别复读），本判据管输出端（真复读了就拦），触发条件也无关。
-_REPEAT_MIN_RUN = 200
-_REPEAT_COVER = 0.6
-
-# ── 20261003 加：比对面从"紧邻一轮"扩到"最近 N 轮"，并补一档"整段抄写变体" ──────
-# 现场（uid=1 会话 320，19:41）：用户问「我有哪些未读通知呀」，planner 落成 chat 零工具，
-# narrator 把**上 2 轮**那份"我没有翻日志的工具"的答案搬了过来（整体重合 87.9%、最长
-# 连续块 568 字）。上面两条现存限制同时把它放过去：① `_prev_ai_reply` 只取紧邻那一条
-# （本轮那条与紧邻那条的相似度只有 9.7%，压根不在比对范围）；② 老判据量的是**最长
-# 连续块**，门槛 max(200, 60%×967)=580 > 568——差 12 个字。
-# 修法就对应这两条：比对面扩到最近 `_REPEAT_RECENT_N` 条；再补一档"整体重合率 + 最长块"
-# 双条件。**老门槛不能照搬到更早轮次**：确认卡这类模板整段相同（259 字的卡在老门槛
-# max(200, 60%×259)=200 下当场误伤），所以距离 ≥2 只接新档。
-#
-# 误伤面按两份真实语料量过（本机一次性脚本、按会话配对，不进仓）：
-#   · chat_history 全量（26 会话 / 321 条 assistant）：距离 2..5 共 936 对 —— 新档命中
-#     **1**（就是上面那一对），老档命中 0；
-#   · trace 全量按 `input.conversation_id` 配对（55 个多轮会话 / 306 对相邻轮）——
-#     新档命中 0、老档命中 0（对照：全量 1106 份 trace 里老档历史上只开火过 2 次）。
-# 两档共用 `_REDO_REQUEST_RE` 豁免（用户点名重做 ⇒ 高重合是被要求的）。
-_REPEAT_RECENT_N = 5      # 比对面：当前用户消息之前最近的 N 条 AI 发言（含紧邻那条）
-_REPEAT_FAR_COVER = 0.75  # 「抄写变体」档：整体重合率（difflib ratio）下限
-_REPEAT_FAR_RUN = 300     #                  且最长连续块下限（两条**同时**满足才判）
-# 预筛（把 difflib 挡在门外）：40 字探针每 50 字取一个，命中 ≥4 个才做精确比对。
-# 这是**必要条件**：最长连续块 ≥300 ⇒ 至少 5 个探针整块落在里面（300/50-1）⇒ 取 4 留
-# 余量不会漏真命中。实测 chat_history 936 对里只有 1 对过筛（正是要抓的那对），
-# 每轮开销 = 每个比对面约 20 次 C 级 `in`（~1000 字），可忽略。
-_REPEAT_PROBE_LEN = 40
-_REPEAT_PROBE_STEP = 50
-_REPEAT_PROBE_MIN = 4
-
-# 用户点名要求重做/重发 → 本轮高重合是**被要求的**，不得判复读（20260916 09:25:34
-# 实证：用户说"flowchart 换回 graph 试试"，回复把 1400 字 mermaid 图原样重画、
-# 只换了栅栏语言与开头一句——那是正确行为，拦下来等于把用户点名要的东西吞掉）。
-# 只用于**放行**（宁漏勿误伤）：用户没这么说而复读 = 真复读。
-_REDO_REQUEST_RE = re.compile(
-    r"再(?:画|说|写|发|来|贴|试)|重新|重来|重发|重画|换个|换成|换回|换用|换一版|"
-    r"改成|改一下|改一版|另一(?:个|种|版)|同一(?:个|张)图")
-
-
-def _recent_ai_replies(msgs: list, n: int = _REPEAT_RECENT_N) -> list:
-    """当前用户消息之前**最近 n 条** assistant 回复原文（**从近到远**）。
-
-    注入历史形状 = [System 上下文 Human] + 历史(Human/AI 交替) + 当前 Human +
-    本轮工具帧 + 本轮 AI 回复——从末尾往前先定位"当前用户消息"（最后一条非
-    `[System:` 的 HumanMessage），再往前收最近的 AIMessage。
-
-    为什么收 n 条而不是只收一条（20261003）：只取紧邻那条时，"抄上 2 轮那份现成
-    答案"整族从判据底下过——`_prev_ai_reply` 拿到的对象与真被抄的那条毫不相干。
-    距离越远越不像复读（长会话里"翻旧账"），所以距离 ≥2 只接严格档（见
-    `_repeat_reason`）。无对比对象（首轮）→ 空列表，判据自动放行。
-    """
-    cur = None
-    for i in range(len(msgs) - 1, -1, -1):
-        m = msgs[i]
-        if isinstance(m, HumanMessage) and not (_msg_text(m) or "").lstrip().startswith("[System:"):
-            cur = i
-            break
-    if cur is None:
-        return []
-    out: list = []
-    for m in reversed(msgs[:cur]):
-        if isinstance(m, AIMessage):
-            out.append((_msg_text(m) or "").strip())
-            if len(out) >= n:
-                break
-    return out
-
-
-def _prev_ai_reply(msgs: list) -> str:
-    """紧邻上一轮 assistant 回复原文（= `_recent_ai_replies(msgs, 1)` 的第 0 条）。
-
-    保留这个名字与签名：老判据（`_repeat_of_prev_reply`）与它的单测都按"只有一条"
-    使用；要更早的轮次走 `_recent_ai_replies`。无则返回空串（自动放行）。
-    """
-    got = _recent_ai_replies(msgs, 1)
-    return got[0] if got else ""
-
-
-def _repeat_of_prev_reply(reply: str, prev: str, user_msg: str = "") -> bool:
-    """本轮回复是否逐字复读上一轮回复（门槛见 _REPEAT_MIN_RUN 注释）。
-
-    实现是最朴素的滑窗：取较短文本为窗口源、较长者为被查串，窗口长度 = 门槛，
-    首个命中即判真（只需"是否达到门槛"，不求真正的最长值）。回复量级千字、
-    str 查找是 C 级，无需后缀自动机。`user_msg` 带重做语（_REDO_REQUEST_RE）时
-    直接放行——那是照办，不是复读。
-    """
-    if not reply or not prev:
-        return False
-    if user_msg and _REDO_REQUEST_RE.search(user_msg):
-        return False
-    short, long_ = (reply, prev) if len(reply) <= len(prev) else (prev, reply)
-    thr = max(_REPEAT_MIN_RUN, int(len(reply) * _REPEAT_COVER))
-    if len(short) < thr:
-        return False
-    return any(short[i:i + thr] in long_ for i in range(len(short) - thr + 1))
-
-
-def _repeat_far(reply: str, prev: str) -> bool:
-    """「整段抄写变体」档（20261003，见 `_REPEAT_FAR_COVER` 注释）：整体重合率达标
-    **且**最长连续块达标。
-
-    为什么不能只看最长连续块：抄的人只要在中间插自己的一句话，那一段逐字重合就被
-    切成两半——本轮那条正是这样，568 字的长块（整体重合 87.9%）从 580 的门槛底下
-    溜走。这一档问的是"整篇到底有多少字是抄来的"。
-
-    先过廉价预筛（`_REPEAT_PROBE_*`，必要条件、不漏真命中），只有过筛才对两条文本
-    做 difflib——生产每轮最多 5 个比对面，实测全量语料 936 对里只有 1 对值得精算。
-    """
-    if not reply or not prev:
-        return False
-    if len(reply) < _REPEAT_FAR_RUN or len(prev) < _REPEAT_FAR_RUN:
-        return False
-    hits = 0
-    for i in range(0, len(reply) - _REPEAT_PROBE_LEN + 1, _REPEAT_PROBE_STEP):
-        if reply[i:i + _REPEAT_PROBE_LEN] in prev:
-            hits += 1
-            if hits >= _REPEAT_PROBE_MIN:
-                break
-    else:
-        return False
-    sm = difflib.SequenceMatcher(None, reply, prev)
-    block = max(m.size for m in sm.get_matching_blocks())
-    return block >= _REPEAT_FAR_RUN and sm.ratio() >= _REPEAT_FAR_COVER
-
-
-def _repeat_reason(reply: str, prevs: list, user_msg: str = ""):
-    """复读判据总入口：命中返回 `("near"|"far", 距离, 那条回复原文)`，否则 None。
-
-    · 距离 1（紧邻）：**老档** `_repeat_of_prev_reply`（门槛由 426 对相邻轮回放定过，
-      一字不动）；新档在同一条上也接——"最近 N 轮"是同一份规则，距离 1 没必要留空洞
-      （实测 trace 306 对相邻轮上新档新增 0 命中）。
-    · 距离 ≥2：只接**新档**。老门槛在更早轮次上会误伤：模板类回复（确认卡等）整段
-      相同，259 字的卡在老门槛 max(200, 60%×259)=200 下当场判复读。
-    `_REDO_REQUEST_RE` 豁免在这里统一做（比 `_repeat_of_prev_reply` 内部那道更早）。
-    """
-    if not reply or not prevs:
-        return None
-    if user_msg and _REDO_REQUEST_RE.search(user_msg):
-        return None
-    for dist, prev in enumerate(prevs, start=1):
-        if not prev:
-            continue
-        if dist == 1 and _repeat_of_prev_reply(reply, prev):
-            return ("near", dist, prev)
-        if _repeat_far(reply, prev):
-            return ("far", dist, prev)
-    return None
+# ---------------------------------------------------------------------------
+# 逐字复读判据（gate 1b）—— 20261017 搬进 agent/repeat_guard.py
+# ---------------------------------------------------------------------------
+# 这一族（5 个函数 + 9 个常量，含 `_REDO_REQUEST_RE`）对 graph.py 的**出边为零**：
+# 只用 difflib / re / `agent.context._msg_text` / AIMessage / HumanMessage。
+# 按原名 re-export ⇒ `gate_node` 里那两处调用点与 `tests/test_skills.py` 的
+# `from agent.graph import _REPEAT_MIN_RUN, ...` 一处不用改。搬家的取舍与那条
+# 中文正则要手工重登记 `eval/judge_registry.json` 的事，都记在新模块头注里。
+from agent.repeat_guard import (  # noqa: E402,F401
+    _REDO_REQUEST_RE,
+    _REPEAT_COVER,
+    _REPEAT_FAR_COVER,
+    _REPEAT_FAR_RUN,
+    _REPEAT_MIN_RUN,
+    _REPEAT_PROBE_LEN,
+    _REPEAT_PROBE_MIN,
+    _REPEAT_PROBE_STEP,
+    _REPEAT_RECENT_N,
+    _prev_ai_reply,
+    _recent_ai_replies,
+    _repeat_far,
+    _repeat_of_prev_reply,
+    _repeat_reason,
+)
 
 
 def _site_search_claim_clause(text: str, exec_memory: bool) -> str | None:
@@ -6349,7 +5998,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
     c = _planner_setup(state, config, pre, task_sink)
 
     # LLM 决策轮。低温度（分类不需要创造力）、小 max_tokens、短超时。
-    # **接口层只剩一条路**（20261004）：决定由**工具调用**表达（`agent/native_plan.py`）。
+    # **接口层只剩一条路**（20261004）：决定由**工具调用**表达（`agent/planner_llm.py`）。
     # 文本契约那一档连同它的拨盘（`settings.planner_engine`）整体删除——生产实测
     # 384 份 trace 里 `native_fallback` 0 次，也就是说"native 判不了 → 退回文本解析"
     # 那条兜底**从未被走到过**；留着它只会让"模型什么都不点"（`undecided`）与"响应
@@ -6694,7 +6343,7 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
     菜单禁用（`deny` / `deny_pseudo`）→ 绑定 native 客户端 → 轮次/帧/打回注记 →
     确认轮补 `correction`：全部零 LLM，产出决策循环各段共用的 `_DecideCtx`。
 
-    ⚠️ `deny` 要经 `bind_native` 的 `deny=` 与 `_prompt_args` 两处漏出去（模型的菜单与
+    ⚠️ `deny` 要经 `bind_planner_tools` 的 `deny=` 与 `_prompt_args` 两处漏出去（模型的菜单与
     提示词里都不能出现受阻技能），所以它只能在这一个函数里定义一次。"""
     rounds = pre.rounds
     role = pre.role
@@ -6729,10 +6378,10 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
     # 任务状态的三个伪函数（`task_hold`/`task_drop`/`task_intents`）**常绑**：20261015
     # 撤掉 `AGENT_TASK_STATE` 档位（理由见 `_ledger_next` 的注）。撤之前产线 `.env`
     # 一直是 `1` ⇒ 这一格在线上取值本来就是 `True`，改成常量是零行为差异。**常量也不再
-    # 往 `_DecideCtx` 里传**：一格恒真的字段与 `bind_native` 的 `task_state=` 形参是同一件
+    # 往 `_DecideCtx` 里传**：一格恒真的字段与 `bind_planner_tools` 的 `task_state=` 形参是同一件
     # 事——留着它，将来某个调用点漏传就成了"静默关掉任务登记"（本仓最恨的失效形状）。
     _evidence = _evidence_on()
-    llm = bind_native(_base_llm, role, evidence=_evidence,
+    llm = bind_planner_tools(_base_llm, role, evidence=_evidence,
                       deny=deny, deny_pseudo=deny_pseudo)
     round_info = (
         f"当前决策：第 {rounds + 1}/{MAX_PLAN_ROUNDS} 轮。"
@@ -6809,8 +6458,8 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
         # 两本账都空 ⇒ 这一轮本不该被交回 planner（`route_after_execute` 只在"还剩"
         # 时才交回来）。真出现了就是判据漂移，如实记一笔，决策照常走 LLM 那条路。
         logger.warning("[planner] 确认兑现轮被交回但意图清单与台账都空（判据漂移？）")
-    # native 档的异常记账（如 native_multi_call）。**必须在循环外先声明**：循环外的
-    # `decision` 事件要读它，而它只在 native 档的某一支里被赋值——少了这一行，
+    # 接口层的异常记账（如 native_multi_call）。**必须在循环外先声明**：循环外的
+    # `decision` 事件要读它，而它只在 接口层的某一支里被赋值——少了这一行，
     # "某一轮走到某条提前 return 之外的路径"就会以 NameError 的形态炸在收尾上。
     native_note = ""
     return _DecideCtx(
@@ -6978,7 +6627,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
 
     c.raw = getattr(resp, "content", str(resp))
     c.native_note = ""
-    # 决定由工具调用表达（`agent/native_plan.py::tool_calls_to_plan`）。它返回
+    # 决定由工具调用表达（`agent/planner_llm.py::tool_calls_to_plan`）。它返回
     # `None` = 这一版响应**没给出可用决定**（五条来源见那里的头注），与"零调用但
     # 有正文"（返回 chat + `undecided`）是**两回事**，别再合并成一条路。
     # ⚠️ `evidence` 那一格**不在这里传**：`tool_calls_to_plan` 无条件把它从 args 里摘走
@@ -6991,7 +6640,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
         # 全量 trace 实测那条路 0 次被走到，而它把"响应不可解析"与"模型没决策"
         # 混成同一个归宿。两条轨分开：
         #   · `finish_reason == "length"`：**预算**失败（不是采样失败），同一条
-        #     消息再问多半截在同一处（见 native_plan 的"刻意不重试"）⇒ 直接收尾；
+        #     消息再问多半截在同一处（见 planner_llm 的"刻意不重试"）⇒ 直接收尾；
         #   · 其余（半截 arguments / 未知函数名 / args 非对象 / 空正文）：形态坏，
         #     走既有的 `correction` 通道纠偏**一次**（同 `_drop_correction` 的一次性）。
         # 两轨都产 `_wrap_up_plan`（借用确定性收尾轮的 `wrapped` 语义，**不新造
@@ -7165,7 +6814,7 @@ def _decide_zero_tool_correct(c: "_DecideCtx") -> "_Step":
                  or _acted_no_intents)):
         if _acted_no_intents and not c.correction:
             c.deny_pseudo.add(TASK_INTENTS)
-            c.llm = bind_native(c._base_llm, c.role, evidence=c._evidence,
+            c.llm = bind_planner_tools(c._base_llm, c.role, evidence=c._evidence,
                                 deny=c.deny, deny_pseudo=c.deny_pseudo)
             c.correction = _INTENTS_BACKFILL_NUDGE
             c.correction_kind = "点了技能清单没留下要记的"
@@ -7188,7 +6837,7 @@ def _decide_zero_tool_correct(c: "_DecideCtx") -> "_Step":
             # 前者负责说清"清单不代替动作"，后者负责说清"主人这句话要动手、名字
             # 就在他原话里"（单给前者那一版实测无效，见下）。
             #
-            # **为什么还要摘菜单**（20261008 批 ②，真链路实测）：native 档一轮只发得出
+            # **为什么还要摘菜单**（20261008 批 ②，真链路实测）：接口层一轮只发得出
             # 一条调用（`parallel_tool_calls=False`），于是"交清单"与"点技能"在同一
             # 轮里**天然互斥**——模型交了清单那一轮就零动作。而纠偏在 `for _attempt in
             # (0, 1)` 里只有一次机会，实测（`20261008_213818` 的 `mix2_two_writes_one_
@@ -7200,7 +6849,7 @@ def _decide_zero_tool_correct(c: "_DecideCtx") -> "_Step":
             # 摘掉之后它只剩两条路：点一个真技能，或显式点 `chat`——两者都是可判的
             # 决策，而"再交一次清单"这条空转路没了。
             c.deny_pseudo.add(TASK_INTENTS)
-            c.llm = bind_native(c._base_llm, c.role, evidence=c._evidence,
+            c.llm = bind_planner_tools(c._base_llm, c.role, evidence=c._evidence,
                                 deny=c.deny, deny_pseudo=c.deny_pseudo)
             _auto_nudge = _name_write_nudge({"tools": [], "dropped": None},
                                             c.user_msg, c.rounds, c.role)
@@ -7464,7 +7113,7 @@ def _fastpath_on() -> bool:
 def _evidence_on() -> bool:
     """`AGENT_EVIDENCE` 这一档的**唯一读口**（20261014 第一批，出厂关）。
 
-    这一档要在**四处**同时生效才能算"开着"：① `bind_native` 的 schema（模型发不发得出
+    这一档要在**四处**同时生效才能算"开着"：① `bind_planner_tools` 的 schema（模型发不发得出
     `evidence`）；② `tool_calls_to_plan` 的摘取（**无条件**，与档位无关）；③ 这一处影子
     核验；④ `eval` 侧的巡检。读口只留这一个函数，是因为"多一处读 `settings` 就多一处
     可能漂移的说法"——本仓在 IoT 那个开关上吃过"三处同源不是'一个开关'"的教训。
@@ -7555,7 +7204,7 @@ def _evidence_shadow(c: "_DecideCtx", ledger_src: str) -> None:
         记一条 `planner.evidence_scope`。**缺键 ≠ 空集**：没有候选就整条事件不落。
 
     开关 `AGENT_EVIDENCE` 关着时**整段不跑**：那一档 schema 里没有 `evidence` 格
-    （见 `native_plan.build_tool_schema`），模型发不出来的东西没有影子可算。
+    （见 `planner_llm.build_tool_schema`），模型发不出来的东西没有影子可算。
     """
     if not _evidence_on():
         return
@@ -8439,297 +8088,25 @@ def _finalize_wrap(plan_obj: dict, rounds: int, has_frames: bool,
 
 
 
-def _search_retry_kind(plan_obj: dict, executed: list) -> str | None:
-    """重复调用拦截判定（纯函数，20260905 工具级计数扩展，20260913 分出数据工具族）。
-
-    content_query 轮 planner 计划中仍含 executed 里的同款 spec：
-      - 重复项里有检索族工具（search_notes/rag_search）→ "retry_loop"（原句连发，
-        20260903 判据）——调用方按"改读未读候选全文/如实收尾列候选"处理；
-      - 重复项只有数据直取工具（无参站点信息类等）→ "data_repeat"：同一份数据再
-        取一遍零新信息，但**没有候选可读**，调用方直接收尾如实作答（20260913
-        白名单补齐后实测命中：round 2 重复 get_social_links）。
-    无同款 spec 但本轮仍规划 rag_search 且已执行 rag_search ≥2 → "rag_loop"
-    （换词变体打转——rule5"换词语义重试"已给足 2 次自由检索：首搜 + 一次换词，
-    第三次变体在 BM25 下大概率仍回同批文档，判定打转）。都不中 → None（放行）。
-
-    rag_loop 只统计 rag_search：search_notes/list_notes 是确定性点名列（成对点名/
-    多关键词链合法），无打转实证；__ERROR__ 帧的修正重试由调用方整块跳过
-    （本函数不看 messages）。
-    """
-    if plan_obj.get("skill") != "content_query" or not plan_obj.get("tools"):
-        return None
-    dups = [s for s in plan_obj["tools"] if s in executed]
-    if dups:
-        # search_notes 计检索族（与 rag_search 同属"换词再搜"语义，重复即打转）；
-        # get_article_detail/list_notes 等不算——重复读同一篇/列同一页由
-        # data_repeat 兜底收尾（不误判成检索打转、不触发候选改读）
-        return ("retry_loop" if any(_tool_name(s) in ("search_notes", "rag_search")
-                                    for s in dups) else "data_repeat")
-    if (any(_tool_name(s) == "rag_search" for s in plan_obj["tools"])
-            and sum(1 for s in executed if _tool_name(s) == "rag_search") >= 2):
-        return "rag_loop"
-    return None
-
-
-def _spec_signature(name: str, args: dict) -> tuple[str, str]:
-    """(工具名, 参数指纹)——写操作的重复规划判据（比"只比工具名"严一档）。
-
-    指纹按**回执侧的形态**归一：回执构造时把每个值 `str(v)[:200]`（见 execute 的
-    rcpt），所以计划侧必须走同一归一化，否则 `{"isTop": 1}` 与回执里的
-    `{"isTop": "1"}` 永不相等——判据失效成"从不收尾"（比误收尾更难发现：表现为
-    多跑一轮，看不出是判据坏了）。键序用 sort_keys 抹平（取决于 spec 的书写顺序）。
-    """
-    key = json.dumps({str(k): str(v)[:200] for k, v in (args or {}).items()},
-                     sort_keys=True, ensure_ascii=False)
-    return (name, key)
-
-
-def _already_done_writes(plan_obj: dict, receipts) -> bool:
-    """这批写计划是否**与已 PASS 的回执逐字相同**（planner 收尾判据，纯函数）。
-
-    收尾的正当性只来自"同一件事已经做过"：`(工具名, 参数)` 整体出现在回执里
-    （回执 = checker 验收过的事实），计划里每一件都已如此 ⇒ 这次规划是重复规划。
-    换一个参数（"再帮我把那篇也置顶"）就是另一件事，**不由这里收尾**——
-    这正是本轮把判据从"比工具名"改成"比 (工具名, 参数)"的原因：同名不同参会被
-    只比名字的旧判据静默吞掉，而 narrator 手里握着第一条真回执，必然说成"都改好了"。
-
-    空计划返回 False（没有要执行的，收尾与否不归这条判据管）。
-    """
-    if not (plan_obj.get("tools") and plan_obj.get("skill") in EXECUTED_ONCE_SKILLS):
-        return False
-    passed = {_spec_signature(r.get("tool"), r.get("args") or {})
-              for r in (receipts or [])}
-    planned = {_spec_signature(_tool_name(s), _tool_args(s)[0] or {})
-               for s in plan_obj["tools"]}
-    return bool(planned) and planned <= passed
-
-
-def _read_repeat_note(receipts, done_specs: list[str]) -> str:
-    """只读重复收尾的注记：**点名本轮取到的到底有哪几件**（20261001）。
-
-    要治的病（trace `20261001T005722` 实证）：整份计划都是已取回的只读 spec ⇒ 收尾，
-    而旧注记只说"本轮已取回的只读数据就在上方工具返回里"——"上方"到底覆盖了什么，
-    那句话一个字都没说。模型于是把**几轮前自己读公开帧得来的旧说法**当成本轮事实
-    （那次它把 `talkId:100` 的账号说成"同样归属 userId:1"，而本轮名册只筛出
-    `talkId:97` 一行，100 那一行**从没进过本轮任何一帧**）。
-
-    所以注记要把这一轮**真取到的数据行**逐条念出来（`rcpt["action"]` 或
-    `action_text.tool_action_text`——过程行/台账行同源的一份实现），再明说两句：
-    没在其中出现的东西本轮没有查过；会话历史里自己的说法不是本轮事实。
-
-    行集 = **本轮只读回执**（写族的回执不是"取回的数据"，剔掉；同一 (工具, 参数)
-    归一化后只占一行，与 `_trim_done_reads` 同一份签名）。回执读不出行时退回
-    `done_specs` 原文渲染。只搬事实：这几行不总结、不替模型下结论。
-    """
-    rows: list[str] = []
-    seen: set = set()
-    for r in receipts or []:
-        name = str(r.get("tool") or "")
-        if not name or authz.required_scope(name) in authz.WRITE_SCOPES:
-            continue
-        sig = _spec_signature(name, r.get("args") or {})
-        if sig in seen:
-            continue
-        seen.add(sig)
-        rows.append(r.get("action")
-                    or action_text.tool_action_text(name, r.get("args") or {}))
-    if not rows:
-        rows = [action_text.tool_action_text(_tool_name(s)) for s in done_specs]
-    listed = "、".join(rows[:5])
-    if len(rows) > 5:
-        listed += f"、另有 {len(rows) - 5} 件未列出"
-    return (f"本轮**真正取到的数据只有这些**：{listed}（同一件工具、同一份参数只取一次，"
-            "重复调用拿回的是同一份数据）。**没在上面出现的，本轮就没有查过**——"
-            "包括你自己前面几轮读到过、说过的那些：那是会话历史里的旧说法，"
-            "不是本轮事实，不许照它下结论；本轮答不了的如实说没查到。")
-
-
-def _trim_done_reads(plan_obj: dict, receipts) -> tuple[dict, list[str]] | None:
-    """把**已在回执里**的只读 spec 从本轮 TOOLS 行剔除（纯函数，20260925）。
-
-    要治的病（trace 20260925T004234 实证）：round 0 管理员走点名通道取了
-    `get_server_status`（PASS），round 1 planner 改选 `ops_report` 技能，而技能模板
-    写死了 `[get_server_status, get_service_health]` ⇒ 已在手里的那件**又跑一遍**
-    （两份快照 CPU 28.7%→30.0%、内存 61%→60%，同一轮同一指标两个读数）。既有四道
-    守卫都够不着它：动作族那道按"整集合 ⊆ 帧名"、SNAPSHOT 那道按"整集合 ⊆ 回执"，
-    而这里的计划是**超集**（多带一件服务健康）；`content_query` 专用的 data_repeat
-    分支又因为 skill 已切换而整块跳过。
-
-    判据 = **工具粒度 + 归一化 (工具, 参数)**：`_spec_signature` 与回执侧同源
-    （`str(v)[:200]` + 键序抹平），于是 `{"article_id": "46"}` 与回执里的
-    `{"article_id": 46}` 是同一个签名——旧判据拿 spec **原文**比较，只在 JSON 类型
-    上不同的重复一件都判不出来（全量 861 条 trace 里"同一篇读两遍"有 5 条是这种）。
-
-    **只动只读工具**（`authz.WRITE_SCOPES` 之外的）：写族的"再来一次"可能是**另一
-    件事**（改回原名、再删一个），取舍见 EXECUTED_ONCE_SKILLS 上方注释；`device_oled_display`
-    同理（write.device，"再显示一次"是新请求，rule 6 明确要求重发）。参数解析失败
-    （`ok=False`）的 spec 一律保留——那是要交给 execute 响亮报错的，不是"已完成"。
-
-    返回 `(裁剪后的计划, 被剔的 spec 原文)`；一件都没剔 → None（调用方按原计划走）。
-    剔空时 `tools` 为空，由调用方决定收尾——本函数不判"要不要收尾"。
-
-    **边界**：键集必须**完全一致**才算同一件事（签名是整份参数字典的归一化）。
-    计划里少带一个键（如只写 `article_id` 不写 `doc_type`）按"另一次调用"放行——
-    宁可多跑一次，也不把带过滤参数的调用（`get_moderation_status({"status": "pending"})`
-    与无参的那次）并成同一件。
-    """
-    if not (plan_obj.get("tools") and receipts):
-        return None
-    passed = {_spec_signature(r.get("tool"), r.get("args") or {})
-              for r in receipts}
-    kept, dropped = [], []
-    for s in plan_obj["tools"]:
-        name = _tool_name(s)
-        args, ok = _tool_args(s)
-        if (ok and authz.required_scope(name) not in authz.WRITE_SCOPES
-                and _spec_signature(name, args) in passed):
-            dropped.append(s)
-        else:
-            kept.append(s)
-    if not dropped:
-        return None
-    drop_sigs = {_spec_signature(_tool_name(s), _tool_args(s)[0]) for s in dropped}
-    drop_names = {_tool_name(s) for s in dropped}
-    fresh = dict(plan_obj)
-    fresh["tools"] = kept
-    # PARAMS 与 TOOLS 行同源生成，剔了 TOOLS 行就得同剔 PARAMS——计划文本是 narrator
-    # 读到的唯一计划，两行不一致等于让它猜"到底取了没有"（判据仍是签名，见上）。
-    params = dict(plan_obj.get("params") or {})
-    calls = params.get("calls")
-    if isinstance(calls, list):
-        params["calls"] = [
-            c for c in calls
-            if not (isinstance(c, dict)
-                    and _spec_signature(c.get("tool"),
-                                        c.get("args") or {}) in drop_sigs)]
-    names = params.get("tools")
-    if isinstance(names, list):
-        params["tools"] = [n for n in names if n not in drop_names]
-    fresh["params"] = params
-    why = "、".join(_tool_name(s) for s in dropped)
-    old_note = (plan_obj.get("note") or "").strip()
-    tail = (f"{why} 本轮已取回，不重复取（返回就在上方工具返回里）；"
-            "其余按清单继续，全部基于已有返回如实作答")
-    fresh["note"] = f"{old_note}｜{tail}" if old_note else tail
-    return fresh, dropped
-
-
-def _trim_noop_specs(plan_obj: dict, noop_specs) -> tuple[dict, list[str]] | None:
-    """把**本轮已经执行过、且工具自报零改动**的 spec 从 TOOLS 行剔除（纯函数，20260930）。
-
-    要治的病（用户上线后报告，trace `20260930T192824` 实证）：主人说「收藏这一篇」，
-    `add_favorite(23)` 执行 → 工具如实返回「本来就在你的收藏夹里，无需改动（没有发出
-    写请求）」→ checker PASS → planner **拿不到"目标已达成"这个事实**，下一轮照着同一件
-    事再规划一次……连跑 **4 轮**（每轮各一次同一调用、每次都零改动），直到轮次上限才
-    收场。12.5 秒 / 5 次 LLM，换来一个"什么都没发生"。
-
-    既有四道去重守卫都够不着它：`EXECUTED_ONCE_SKILLS` 刻意只收**幂等技能**（教条见该
-    集合上方注释，收藏两件不在内）；`_trim_done_reads` 刻意**只动只读**（写族的"再来
-    一次"可能是另一件事）；`_already_done_writes` 只在技能进白名单时生效；search 那条
-    只管 content_query。
-
-    判据 = **工具事实信封里的 `changed=False`**（零改动证书，execute 按
-    `tools.base.is_noop` 判并落进 `noop_specs`）。
-    与上面几条的分别在于事实来源：那几条判"这件事做过没有"，这条判"做了等于没做"——
-    状态**本来就已是目标值**，所以"再来一次"在语义上是**已经完成**，不是"另一件事"。
-    （这正是它敢动写族的原因：会不会改由工具自己说了算，不由我们猜。）
-
-    剔除的 spec 与 PARAMS 同步（`calls`/`tools` 两份，同 `_trim_done_reads`）；
-    一件都没剔 → None。剔空时 `tools` 为空，由调用方决定收尾——本函数不判"要不要收尾"。
-    """
-    if not (plan_obj.get("tools") and noop_specs):
-        return None
-    # `noop_specs` 里存的是 `list(_spec_signature(...))`（state 要能 JSON 序列化），
-    # 比较前还原成 tuple（就地拿 list 建 set 会因为不可哈希当场炸）。
-    noop = {tuple(s) for s in noop_specs}
-    kept, dropped, drop_sigs, drop_names = [], [], set(), set()
-    for s in plan_obj["tools"]:
-        name = _tool_name(s)
-        args, ok = _tool_args(s)
-        if ok and _spec_signature(name, args) in noop:
-            dropped.append(s)
-            drop_sigs.add(_spec_signature(name, args))
-            drop_names.add(name)
-        else:
-            kept.append(s)
-    if not dropped:
-        return None
-    fresh = dict(plan_obj)
-    fresh["tools"] = kept
-    params = dict(plan_obj.get("params") or {})
-    calls = params.get("calls")
-    if isinstance(calls, list):
-        params["calls"] = [
-            c for c in calls
-            if not (isinstance(c, dict)
-                    and _spec_signature(c.get("tool"), c.get("args") or {}) in drop_sigs)]
-    names = params.get("tools")
-    if isinstance(names, list):
-        params["tools"] = [n for n in names if n not in drop_names]
-    fresh["params"] = params
-    why = "、".join(_tool_name(s) for s in dropped)
-    old_note = (plan_obj.get("note") or "").strip()
-    # 注记必须把**这一件为什么不算数**说清楚，否则 narrator 拿到"零改动"的返回会两头
-    # 都敢说：说成"刚给你改好了"（改了这一轮没发生）或说成"被拦下了/办不了"（目标其实
-    # 已达成）。措辞只写工具返回里印着的那件事。
-    tail = (f"{why} 本轮已执行过，工具返回的是**状态本来就是目标值**"
-            "（零改动、没有发出写请求），不重复执行；照返回如实说明现在就是这个状态，"
-            "不许说成刚改好、也不许说成没办成")
-    fresh["note"] = f"{old_note}｜{tail}" if old_note else tail
-    return fresh, dropped
-
-
-def _plan_trims_to_empty(plan_obj, state) -> bool:
-    """**预演**上面两道裁剪：剪完一件都不剩 ⇒ True（20261012 二次接线）。
-
-    为什么需要它：`_finalize_dedupe` 的裁剪跑在决策循环**之外**（`_planner_decide` 的
-    后段），剪空就直接 `_wrap_up_plan(True, ...)` 返回 ⇒ 收尾那一格（`_decide_late_correct`
-    里的台账支）永远看不到"清单其实会空"。而"这一件不用重跑"**不等于**"这套活儿干完了"
-    ——现场 `logs/agent/traces/20261012/081550`：剪空之后收尾，回复把台账里还剩的那件
-    退回给主人（「主人点个头，我下一轮就把它发掉」）。
-
-    判据**不新写一份**：调的就是那两道裁剪本身（两者都是纯函数——返回新 dict、不动入参，
-    见各自 docstring 末句），顺序也与 `_finalize_dedupe` 一致（先"已取回"、后"零改动"）。
-    空清单返回 False（"剪空"以"有东西可剪"为前提，避免调用方把它当成"零工具"那一格）。
-
-    如实记一条边界：`_finalize_dedupe` 在两道裁剪**之前**还有四条守卫（检索重复改读候选等）
-    ——若某一条本会把清单改成候选清单，这里的预演就"多预测了一次剪空"，代价是**多一次
-    带台账指令的重决策**（不夺决策权、不改任何判据），方向上是安全的那一侧。
-    """
-    if not plan_obj.get("tools"):
-        return False
-    cur = plan_obj
-    for _fn, _arg in ((_trim_done_reads, state.get("receipts")),
-                      (_trim_noop_specs, state.get("noop_specs"))):
-        _t = _fn(cur, _arg)
-        if _t is not None:
-            cur = _t[0]
-    return not cur.get("tools")
-
-
-def _tool_args(tool_spec: str) -> tuple[dict, bool]:
-    """TOOLS 行条目 → (参数字典, 解析是否成功)。spec 参数由 instantiate_plan 以
-    json.dumps 落盘（JSON 的 true/false/null 不是 Python 字面量，ast.literal_eval
-    会拒），故先 json.loads（规范格式）再 ast.literal_eval（容手写 Python 风格），
-    都失败兜底空参 + ok=False——checker 据此判 args_parse（调用方按错误帧处理；
-    工具签名必填参数缺失时工具层自会报 __ERROR__，不炸图）。
-    """
-    # 拆分（`名字(args)` 那对括号）走 `skills.split_tool_spec`——**形状的写端在
-    # `skills.py`**，规则只该有一处。这里只保留"怎么读那串参数"的容错。
-    m, raw = split_tool_spec(tool_spec)
-    raw = raw.strip()
-    if not m or not raw:
-        return {}, True
-    for loader in (json.loads, ast.literal_eval):
-        try:
-            obj = loader(raw)
-            if isinstance(obj, dict):
-                return obj, True
-        except Exception:
-            continue
-    logger.warning("[execute] 工具参数解析失败，按空参调用: %s", tool_spec)
-    return {}, False
-
+# ---------------------------------------------------------------------------
+# 执行清单（TOOLS 行）条目的解析与去重裁剪 —— 20261017 搬进 agent/tool_specs.py
+# ---------------------------------------------------------------------------
+# 这一族（8 个函数 + `EXECUTED_ONCE_SKILLS`）对外**只**用到 `_tool_name` /
+# `split_tool_spec` / `action_text` / `authz`，**一个 graph.py 的名字都不需要**
+# ⇒ 出边为零、无循环 import——这正是它能被整体搬走的原因（同第一刀 `plan_codec`）。
+# 按**原名** re-export ⇒ 本文件剩下的调用点与全仓 `from agent.graph import _tool_args`
+# 一处都不用改。⚠️ 改这一族去 `agent/tool_specs.py`，不是这里。
+from agent.tool_specs import (  # noqa: E402,F401
+    EXECUTED_ONCE_SKILLS,
+    _already_done_writes,
+    _plan_trims_to_empty,
+    _read_repeat_note,
+    _search_retry_kind,
+    _spec_signature,
+    _tool_args,
+    _trim_done_reads,
+    _trim_noop_specs,
+)
 
 _DISPLAY_CREATE_PROMPT = """\
 你是 OLED 屏幕文案创作器。结合最近这句对话，为看板娘生成一句要显示在访客

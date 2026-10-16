@@ -12,7 +12,7 @@
   **现在只剩 `.env` 一处真值源**。
 - **背景文档**：`docs/native-toolcalls-mainline.md`（主线交接）、`docs/adr/adr-0001-*.md`
 - **迁移**：`scripts/migration/agent_task_20260927.sql`（表 `agent_task`，已执行；头注含三端契约与 20260927 补记）
-- **影响范围**：`agent/tasks.py`（新）、`agent/native_plan.py`、`agent/graph.py`、`server.py`、
+- **影响范围**：`agent/tasks.py`（新）、`agent/planner_llm.py`、`agent/graph.py`、`server.py`、
   `config/settings.py`（`AGENT_TASK_STATE` 默认 off）、`src/routes/chat.rs`、`src/entity/agent_task.rs`
 
 ## 背景
@@ -148,7 +148,7 @@ agent 有两个"跨轮记不住"的缺口，形状完全不同，此前只补了
 或结算。**动作**：`AGENT_TASK_STATE=0`（一行 `.env`，可逆）。
 
 **为什么先不拆机制**：关拨盘捕获了全部收益且可逆；拆机制要动
-`agent/{tasks,native_plan,graph}.py`、`server.py`、Rust `src/routes/chat.rs` +
+`agent/{tasks,planner_llm,graph}.py`、`server.py`、Rust `src/routes/chat.rs` +
 `src/entity/agent_task.rs` + 迁移 flag + 本 ADR + 若干测试，会把 §6.8/§6.9 已验过的形态
 （含 `task_state_resume_settle` 用例与"完成 > 撤下"闸）一起拆掉。在下面那条触发条件出现前不值。
 
@@ -193,7 +193,7 @@ dotenv**（实测：把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ d
    理由是**结构性的**：native 档 `parallel_tool_calls=False` ⇒ 一轮只能发一条调用 ⇒「交清单」
    与「点技能」在同一轮里**互斥**。两条互为否定的真跑证明了这不是方差：同一句 prompt、同一份
    schema、`temp=0.0`，一次交清单（当轮零动作）、一次直接点技能（剩下的那件没人记）。
-   `native_plan.tool_calls_to_plan` 把它从 args 里 `pop` 掉 ⇒ 不进 `params`、不进 TOOLS 行。
+   `planner_llm.tool_calls_to_plan` 把它从 args 里 `pop` 掉 ⇒ 不进 `params`、不进 TOOLS 行。
 3. **三条排除规则**（与判据侧 `require_task_goal_per_intent` 同源）：`skill ∈ acted_skills`、
    模板工具全在回执里、`goal ∈ skip_goals` ⇒ 本轮真办掉的那件自动出局。**"多填无害"是判据保证
    的**，所以字段描述敢写"含你这一轮正要办的那件"。
@@ -359,7 +359,7 @@ dotenv**（实测：把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ d
 |---|---|
 | **保留 `AGENT_TASK_STATE`，默认值翻成 `1`** | 一个"能被拨成关"的必备能力，等于承认它**可以**是装饰；而产线实测它**已经**是半个装饰——登记侧开着而自发登记 0 次（§6.8 一手读数），执行侧那档从没打开过。默认值只是"今天的默认"，不是不变量 |
 | **只删 `AGENT_TASK_PLAN_EXEC`**（它才是从没打开的） | 留一个同名族的档位，下一个人还会照着它加第三个；而且两者名下的**形参**（`task_state=`）是同一个静默失效陷阱 |
-| **删档位名、保留形参（默认 `True`）** | 这是最坏的一档：默认关的关键字形参，漏传一次就静默关掉登记通道，且不报错。撤档同时把 `build_tool_schema` / `tool_calls_to_plan` / `bind_native` / `_short_reply_hint` / `_DecideCtx` 上的**形参族一起删**——"忘了传"因此在结构上不存在 |
+| **删档位名、保留形参（默认 `True`）** | 这是最坏的一档：默认关的关键字形参，漏传一次就静默关掉登记通道，且不报错。撤档同时把 `build_tool_schema` / `tool_calls_to_plan` / `bind_planner_tools` / `_short_reply_hint` / `_DecideCtx` 上的**形参族一起删**——"忘了传"因此在结构上不存在 |
 | **只删 Python 侧、留 `.env` 那两行做兼容** | 鬼键比明键更坏：改了不生效、也不报错（本仓同族） |
 
 **撤档是一次零行为差异的改动**（这一点必须先说清，否则整批读数的意义会被读反）：产线 `.env`

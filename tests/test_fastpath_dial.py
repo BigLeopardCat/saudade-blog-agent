@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（套件统一住在 tests/）
 sys.path.insert(0, str(ROOT))
 
-from _native_stub import bind_tools_stub, native_reply  # noqa: E402
+from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
@@ -44,7 +44,7 @@ def _cfg():
 
 
 class _ScriptedLLM:
-    """按顺序吐回复、留 prompt；夹具文本走 native 桩翻成 tool_calls（见 `_native_stub`）。"""
+    """按顺序吐回复、留 prompt；夹具文本走 native 桩翻成 tool_calls（见 `_planner_stub`）。"""
 
     bind_tools = bind_tools_stub
 
@@ -53,7 +53,7 @@ class _ScriptedLLM:
 
     def invoke(self, prompt):
         self.prompts.append(prompt)
-        return native_reply(self.replies.pop(0))
+        return toolcall_reply(self.replies.pop(0))
 
 
 class _Dial:
