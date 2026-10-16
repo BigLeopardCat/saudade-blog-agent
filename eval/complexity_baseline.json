@@ -215,10 +215,6 @@
     "c": 31,
     "lines": 112
   },
-  "tools/base.py::device_oled_display": {
-    "c": 33,
-    "lines": 121
-  },
   "tools/base.py::read_messages": {
     "c": 32,
     "lines": 104
@@ -234,5 +230,9 @@
   "tools/base.py::update_tag": {
     "c": 61,
     "lines": 144
+  },
+  "tools/device.py::device_oled_display": {
+    "c": 33,
+    "lines": 124
   }
 }
