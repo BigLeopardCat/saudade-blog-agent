@@ -16,6 +16,62 @@
 
 ## 20261017
 
+- **写操作幂等账迁到 PG：存储变两档（判据 + 契约，20261017；⚠️ 生产行为零变更）**——SQLite
+  那一档是临时做法，本批把它**加成一档**而不是换掉：挂的 saver 是 PG 的（池挂在 `.conn`）⇒
+  账落**与 checkpoint 同一个库**（新增 `agent/idem_pg.py`，表 `agent_write_idem`）；其余
+  （内存 saver / 没挂 saver / CI）⇒ 维持 agent 自持的 SQLite，**逐字节不变**。选择由
+  `idem._shared(config)` 按 saver 自己做，**没有第二个开关可忘**：采纳那天账自动变 PG。
+  **为什么非要落同一个库**：账与 checkpoint 的保留期必须同源——清了账、留着 checkpoint，
+  恢复重放时账是空的 ⇒ 写落第二遍，恰好把本批要堵的洞重新打开。落在同一个库里，这件事
+  就变成一句"一起裁"。**失败姿态**：拿到池但建表/断言失败 ⇒ 响亮，且**绝不静默退回 SQLite**
+  （走既有的 `unavailable` ⇒ 判 BLOCK、拒绝这次写）。`psycopg` **只住在 `agent/idem_pg.py`**、
+  只在 `_shared` 体内懒 import ⇒ 没挂 PG saver 的进程与 CI 一次都不碰它（新判据块⑪钉住）。
+  **两个"不报错"的坑各钉了一条**：① `meta` 列必须是 `text` 不是 `jsonb`（`jsonb` 会让 psycopg
+  直接返回 dict ⇒ `json.loads(dict)` 抛 TypeError ⇒ 被 `except (TypeError, ValueError)`
+  **静默吞掉** ⇒ meta 变 `{}` ⇒ 重放出来的命令帧被 `cmd_shape` 判 BLOCK，一次**凭空**的失败）；
+  ② 行**必须是 4 元组**（池的 `row_factory` 是 langgraph 要的 `dict_row`，把 dict 交给
+  `_rehydrate` 会**按键名解包** ⇒ 重放回的是字面串 `"text"`、`kind == "kind"`，**不报错**）
+  ⇒ PG 那边每一次查询都显式 `cursor(row_factory=tuple_row)`。`autocommit=True` 也是硬要求，
+  但真实理由不是"不自动提交就不提交"（`with conn:` 退出照样 `commit()`），而是**提交点**：
+  自动提交让占位在**语句返回时**就落库，"先记账再动手"要求占位在**远端调用之前**真的落盘。
+  探针改成跑 PG 那一档（**不传账本** ⇒ 走的就是生产那条路），五格读数全部复现：崩溃重放
+  **1 次**／反控（占位留在一笔没提交的事务里）**2 次**、4 个真进程抢同一个未完成的 superstep
+  **1 次**／反控（先 SELECT 再 INSERT、不看有没有插进去）**4 次**、`--backend-parity` 两档
+  9 步读数**逐字相等**。⚠️ 并发那条反控必须在 SELECT 与 INSERT 之间停 0.5s，否则读数是**抖的**
+  （PG 的自动提交立刻可见，某个 worker 的 SELECT 晚一步就真看到那一行 ⇒ 3 而不是 4）——
+  那不是"反控不成立"，是仪器没量准，被量的是非原子性。**一条欠账**：PG 那张表不在
+  `eval/retention_manifest.py` 的射程内（它只审计 `logs/` 树），保留口径写进 ADR-0012 的
+  《迁移到 PG》，采纳那批要落一个能审计 PG 表的清单（或把 checkpoint 与账的清理写成同一条）。
+- **写操作幂等账：两种实现收敛成一份（判据，20261017；⚠️ 生产行为零变更）**——同一件事此前
+  在两条支线上各写了一遍：主线的 `agent/idem.py`（键 = `sha256([checkpoint_ns, 工具名, 参数指纹])`）
+  与实验分支的 `agent/replay_guard.py` + `agent/replay_guard_pg.py`（键 = `(thread_id, superstep
+  任务 id, 第几件)`），两条抢 `execute_node` 里**同一行** ⇒ 合并时必须二选一。裁决：**主线那份
+  活下来**（键更短，而且不需要把账塞进 `configurable`——挂没挂 saver 从 checkpointer 本身就能
+  看出来），本支那份**整体删除**，连同它的 ADR、判据文件与原因码 `write_in_doubt`
+  （`agent/block_reasons.py` / `server.py::_REASON_CN` / planner 规则 / 登记表四侧同批；那一族
+  「不可重试」仍是**八个**，只是第八个换成主线的 `write_outcome_unknown`）。它测出来的东西
+  **一件不留地搬过去**：真子进程硬杀、N 个真进程抢同一个未完成的 superstep、以及
+  `durability` 自断言（缺省 `async` 下 checkpoint 写交给后台线程、主循环不等待 ⇒ **硬杀**时
+  恢复的任务 id 会变、账被静默绕过，而表面一切正常——这一档只有真起子进程才测得出来）。
+  那条自断言现在**住在代码里**（`agent/idem.py::require_sync_durability`：账本在场而档不是
+  `sync` ⇒ **当场抛**，不降级成一条回执——降级会让整轮的写静悄悄地全不执行），CI 侧由
+  `tests/test_write_idempotency.py` 的 ⑨/⑩ 两块钉住：`sync` 照常跑 / `async`、`exit`、
+  **键整个缺席**（＝缺省档）三档都抛且一件写都不执行 / 没挂 saver 时连档位都不查；
+  以及「重放的行**必须是元组**」——喂 dict 会**不报错地**回放字面串 `'text'`，那是下一步
+  把账迁到 PG 时最要防的坑（池的 `row_factory` 是 `dict_row`）。
+  **顺带修掉 SQLite 账的一条实测缺陷**（探针量出来的）：4 个真进程**同时冷启**一本还不
+  存在的账时，`PRAGMA journal_mode=WAL` 会立刻抛 `database is locked`（SQLite 不为这句
+  调 busy handler，把 `busy_timeout` 挪到它前面也没用）⇒ 实测 6~7/32 次 `claim` 抛 ⇒
+  **那次写被 fail-closed 拒掉**（不是双写，但合法写没了）。加一圈 20×50ms 的冷启重试后
+  实测 0/32。这一格只在**冷启**存在（库建好之后正常等锁）；且只在**降级档**存在
+  （账挂 PG saver 时走 `idem_pg`，没有开库竞态这回事）。
+  合并后 narrator 的装配是 `[_sys_head] + _narrator_wire(_narrator_msgs(state)) + [_sys_tail]`
+  ——前缀缓存重排（稳定头留在最前）与本轮窗口两刀**撞在同一行**上，补形状那一趟仍住在
+  `_narrator_wire` 里、一个字没改，只是喂给它的表从整份 `state["messages"]` 换成了窗口化的
+  产物。**判据跟着改**：`tests/test_turn_window.py` 规则 F 改成跟着链路判（`_narrator_wire`
+  的入参是不是窗口化的产物 + `with_tool_call_pairs` 只在它里面），
+  `tests/test_tool_call_pairs.py` 的接线锁改**钉关系不钉字面**（那一行已经漂过三次：
+  整行钉法在批 3 与本次各红过一次，而两次行为都没变）。
 - **回落档的 embedding 模型名换代，且与「老缓存当年是谁建的」拆成两个常量**
   （`rag/embed_space.py`）：`LEGACY_MODEL` 一个常量此前同时干两件事——① `resolve()` 在
   「没配 `EMBEDDING_*`」时**回落用的模型名**；② `legacy_cache_ok()` 判「盘上那些没有空间
@@ -40,6 +96,38 @@
 
 ## 20261016
 
+- **跨轮上下文的"本轮"在图里成了事实（判据 + 评测臂，20261016；⚠️ 生产行为零变更）**——
+  在这之前"这一轮到哪儿为止"是**图外的约定**：`server._build_messages` 每请求重建上下文、
+  thread 随机（§4.6），图里 `state["messages"]` 永远只有本轮。线程一旦复用，读端就会把
+  **上一轮**当本轮——`_page_ctx` 把上一轮的页面报给模型、`_has_frames` 把上一轮的帧当本轮
+  证据（首轮那五条确定性快道**结构上**永不命中）、narrator 提示词随会话线性膨胀、注入的历史
+  还被 reducer 逐轮再收一遍（第 r 轮注入 r 次 ⇒ O(轮数²)）。两批处置都落在**实验分支**
+  `exp/native-checkpoint`，**`server.py` 一个字节没动**（生产照旧没有 saver）：
+  ① `context.freeze_turn_start` 在 `_planner_decide` **之前**冻住本轮起点（顺序反了等于没冻
+  ——这条单独占一笔提交），读端改用 `context.turn_window`；② `context.narrator_messages` 把
+  narrator 看到的消息表切成「近 10 轮（剥事实行、剪孤儿、丢历史段的工具帧）+ 本轮原样」。
+  两条口径同源：`turn_start <= 0`（没记边界）⇒ 返回**同一个对象** ⇒ **对现状逐字节零变化，
+  且是构造性的**（不是"应该没变"）。③ 顺带修 `context._prev_user_msg`——它取"倒数第二条
+  `HumanMessage`"而**不跳 `[System: `**，线程复用后第 2 轮会取到**本轮的 System 块**；它只在
+  确认兑现轮用，而那一轮恰恰是"不许重新理解一遍、只能靠原话"⇒ 取错源 = 意图清单恒空。
+  **判据**：`tests/test_turn_window.py` 规则 A–F（F 是"narrator 的闸门不许被摘掉"；反向对照
+  三条——`k<0` / 剪枝扩到全表 / `turns=0`——必须当场红）、`tests/test_narrator_window.py`
+  （闸门恒等断言用 `is` 而不是"内容相同"；`_prev_user_msg` 拿**改前实现的逐字转写**当参照物
+  对拍六种形状）、`tests/test_golden_prod_history.py`、
+  `eval/experiments/checkpoint_probe.py --narrator-window`（12 轮真 saver：闸门开 ⇒ 第 10 轮起
+  条数与字符数封顶；关 ⇒ 复现线性膨胀，末轮 13.8×）。
+  **一条要记住的测量事实**：golden 现有语料**测不出**"停止注入历史"这一刀——10 条多轮用例
+  **一个轮次都不注入 `history`**，注入 `history` 的 29 个轮次**全在单轮用例上**（线程是新的，
+  其中只有 4 个带 `conversation_id`）⇒ 那一格在
+  语料里**不存在**，不处置的话读数会显示"停止注入没用"。新增 `GOLDEN_PROD_HISTORY=1`：多轮
+  用例第 i>1 轮的 `history` = 第 1..i−1 轮**真发出去**的那两句（与 Rust `history[-20:]` 同形），
+  四臂跑**同一份**驱动。**以后凡是改输入契约的批，先问一句"这一格语料里有吗"。**
+  （判决性读数 104 跑里**证伪了一条先写下来的判读规则**：反控臂 D「照旧用原 thread」在
+  golden 里**就是复用**——golden 传的 `thread_id` 是常量 `"golden_thread"`，所以 D 在多轮
+  用例上是个正向臂而不是噪声地板，五条多轮用例上与臂 B **逐格相同**。"挂了 saver 本身
+  不改变行为"这条结论本批是靠 8 条单轮对照撑住的。细节见 ADR-0011《读数》。）
+  裁决、读数与触发条件（采纳必须先做写幂等账）见 [ADR-0011](docs/adr/adr-0011-graph-holds-context-checkpoint-memory.md)
+  与架构文档 §4.8。
 - **帧契约从口头约定收成一件有锁的产物**（新增 `agent/frames.py` + `tests/test_frame_contract.py`）：
   第二条臂（`AGENT_ARM=react`）产帧要喂哪些 state 键，此前是 grep 数出来手抄的，实测**两张
   手抄表合起来漏 8 格**——闸门那张漏 `task_frames`（析取里的一条腿，少喂只会让闸门静默少
