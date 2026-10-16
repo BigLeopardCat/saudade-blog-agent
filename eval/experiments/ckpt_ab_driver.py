@@ -286,7 +286,12 @@ def _judged(rv: dict) -> tuple:
     return tuple(str(rv.get(k)) for k in _JUDGED)
 
 
-def main() -> int:
+def _parse_args(argv=None):
+    """命令行 → `(cases, arms, args)`。
+
+    从 `main()` 里拆出来的（20261017）：`main` 撞了复杂度预算（C=46 > 30），
+    而这里与"跑"无关，是纯粹的口径解析。**行为一字未改。**
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--cases", default="", help="逗号分隔的用例 id（缺省 = 多轮族 + 单轮对照）")
     ap.add_argument("--arms", default=",".join(ARMS))
@@ -298,30 +303,34 @@ def main() -> int:
     ap.add_argument("--prod-history", action="store_true",
                     help="GOLDEN_PROD_HISTORY=1：多轮用例第 i>1 轮的 history 按生产形状"
                          "合成（见 run_golden.ENV_PROD_HISTORY）——**没有它臂 C ≡ 臂 B**")
-    args = ap.parse_args()
-
+    args = ap.parse_args(argv)
     cases = ([c.strip() for c in args.cases.split(",") if c.strip()]
              or MULTI + SINGLE)
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
-    probe_dir = os.path.join(OUT, args.tag)
-    os.makedirs(probe_dir, exist_ok=True)
-    print(f"[ab] tag={args.tag}  arms={arms}  cases={len(cases)}")
-    print(f"[ab] 读数落点 {probe_dir}/")
-    print(f"[ab] 库现状（跑前）：{pg_stats()}")
+    return cases, arms, args
 
-    # 用例 id → 会话 id（臂 B 的 thread 就是它）。单轮用例没有 conversation_id
-    # ⇒ 臂 B 退回随机线程，与臂 D 同形（见 `checkpoint_arm._thread_for`）。
-    conv_of = {}
+
+def _conv_of() -> dict:
+    """用例 id → 会话 id（臂 B 的 thread 就是它）。单轮用例没有 conversation_id
+    ⇒ 臂 B 退回随机线程，与臂 D 同形（见 `checkpoint_arm._thread_for`）。
+    """
+    out = {}
     for line in open(os.path.join(MAIN, "eval/golden/basic.jsonl"), encoding="utf-8"):
         line = line.strip()
         if not line:
             continue
         c = json.loads(line)
-        conv_of[c["id"]] = (c.get("context") or {}).get("conversation_id")
+        out[c["id"]] = (c.get("context") or {}).get("conversation_id")
+    return out
 
+
+def _run_matrix(cases: list, arms: list, args, probe_dir: str, conv_of: dict) -> dict:
+    """逐遍 × 逐用例 × 逐臂跑完，返回 `results`（`case -> arm -> [每遍的报告]`）。
+
+    **逐用例交替 + 逐遍交替**：外层遍、再用例、再臂 ⇒ 同一遍里三条臂挨着跑，
+    采样窗口最接近（判据是多遍 A/B，不是一遍）。
+    """
     results: dict[str, dict[str, list]] = {}
-    # **逐用例交替 + 逐遍交替**：外层遍、再用例、再臂 ⇒ 同一遍里三条臂挨着跑，
-    # 采样窗口最接近（判据是多遍 A/B，不是一遍）。
     for rep in range(1, args.reps + 1):
         for i, case in enumerate(cases, 1):
             results.setdefault(case, {})
@@ -344,17 +353,25 @@ def main() -> int:
                                            "checkpoint_blobs")}
                 r["rep"] = rep
                 results[case].setdefault(arm, []).append(r)
-                flag = "PASS" if r.get("ok") else "FAIL"
-                fb = sum(_round_view(x)["fb"] for x in (r.get("rounds") or []) if x)
-                d = r["pg_delta"]
-                print(f"[r{rep} {i:>2}/{len(cases)}] {case:<44} "
-                      f"{ARM_CN.get(arm, arm):<20} {flag} {r.get('elapsed')}s "
-                      f"resets={r.get('resets')} fb={fb} "
-                      f"写库={d['checkpoints'][0]}行/{d['checkpoints'][1]}B"
-                      f"{'  ' + str(r.get('fails'))[:70] if not r.get('ok') else ''}",
-                      flush=True)
+                _print_run_line(rep, i, len(cases), case, arm, r)
+    return results
 
-    # ── 汇总：逐用例 × 逐臂的 PASS 计数 + 逐轮判据序列 ──────────────────
+
+def _print_run_line(rep: int, i: int, total: int, case: str, arm: str, r: dict) -> None:
+    """跑完一条印一行（逐遍进度）。"""
+    flag = "PASS" if r.get("ok") else "FAIL"
+    fb = sum(_round_view(x)["fb"] for x in (r.get("rounds") or []) if x)
+    d = r["pg_delta"]
+    print(f"[r{rep} {i:>2}/{total}] {case:<44} "
+          f"{ARM_CN.get(arm, arm):<20} {flag} {r.get('elapsed')}s "
+          f"resets={r.get('resets')} fb={fb} "
+          f"写库={d['checkpoints'][0]}行/{d['checkpoints'][1]}B"
+          f"{'  ' + str(r.get('fails'))[:70] if not r.get('ok') else ''}",
+          flush=True)
+
+
+def _print_matrix(cases: list, arms: list, results: dict) -> None:
+    """汇总：逐用例 × 逐臂的 PASS 计数 + 逐轮判据序列。"""
     print("\n" + "=" * 104)
     print("逐用例 × 逐臂（每臂 N 遍的 PASS 数 / N；末列 = 各遍逐轮判据序列）")
     print("=" * 104)
@@ -381,10 +398,9 @@ def main() -> int:
                 uniq[s] = uniq.get(s, 0) + 1
             print(f"      {ARM_CN.get(arm, arm):<22} 逐轮签名 {uniq}")
 
-    # ── 主判据：探针计数表 ──────────────────────────────────────────
-    probe_table(probe_dir, cases, arms, args.reps)
 
-    # ── 噪声地板 vs 臂间差（这是本实验唯一站得住的判读方式）────────────
+def _print_noise_floor(cases: list, results: dict) -> None:
+    """噪声地板 vs 臂间差（这是本实验唯一站得住的判读方式）。"""
     print("\n" + "=" * 104)
     print("噪声地板（反控 D 与 A 的差 = **结构上不可能有差异**的两臂之差）")
     print("=" * 104)
@@ -400,6 +416,21 @@ def main() -> int:
         if a == d == b == c:
             continue
         print(f"  {case:<44} A={a}  D={d}  B={b}  C={c}")
+
+
+def main() -> int:
+    cases, arms, args = _parse_args()
+    probe_dir = os.path.join(OUT, args.tag)
+    os.makedirs(probe_dir, exist_ok=True)
+    print(f"[ab] tag={args.tag}  arms={arms}  cases={len(cases)}")
+    print(f"[ab] 读数落点 {probe_dir}/")
+    print(f"[ab] 库现状（跑前）：{pg_stats()}")
+
+    results = _run_matrix(cases, arms, args, probe_dir, _conv_of())
+    _print_matrix(cases, arms, results)
+    # ── 主判据：探针计数表 ──────────────────────────────────────────
+    probe_table(probe_dir, cases, arms, args.reps)
+    _print_noise_floor(cases, results)
 
     stats = pg_stats()
     print(f"\n[ab] 库现状（跑后）：{stats}")
