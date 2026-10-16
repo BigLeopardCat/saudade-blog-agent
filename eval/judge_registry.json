@@ -76,8 +76,12 @@
         0
       ],
       "agent/graph.py": [
-        313,
-        3869
+        198,
+        3844
+      ],
+      "agent/name_grounding.py": [
+        115,
+        25
       ],
       "agent/hostinfo.py": [
         0,
@@ -1733,8 +1737,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/graph.py::_MOVE_MARKS",
-      "file": "agent/graph.py",
+      "id": "agent/name_grounding.py::_MOVE_MARKS",
+      "file": "agent/name_grounding.py",
       "kind": "collection",
       "name": "_MOVE_MARKS",
       "size": 9,
@@ -1745,8 +1749,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/graph.py::_RENAME_MARKS",
-      "file": "agent/graph.py",
+      "id": "agent/name_grounding.py::_RENAME_MARKS",
+      "file": "agent/name_grounding.py",
       "kind": "collection",
       "name": "_RENAME_MARKS",
       "size": 6,
@@ -1757,8 +1761,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/graph.py::_PRE_NOUN_LEAD_RE",
-      "file": "agent/graph.py",
+      "id": "agent/name_grounding.py::_PRE_NOUN_LEAD_RE",
+      "file": "agent/name_grounding.py",
       "kind": "regex",
       "name": "_PRE_NOUN_LEAD_RE",
       "size": 12,
@@ -1770,8 +1774,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/graph.py::_PRE_NOUN_TAIL_RE",
-      "file": "agent/graph.py",
+      "id": "agent/name_grounding.py::_PRE_NOUN_TAIL_RE",
+      "file": "agent/name_grounding.py",
       "kind": "regex",
       "name": "_PRE_NOUN_TAIL_RE",
       "size": 13,
