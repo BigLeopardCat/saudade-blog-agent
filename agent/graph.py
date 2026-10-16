@@ -8726,6 +8726,7 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
         # 漏接的后果是**静默**产回执）。
         return _VERDICT_BLOCK, (ref_error_reason(text) or authz.scope_error_reason(text)
                                 or authz.consent_error_reason(text)
+                                or authz.action_conflict_error_reason(text)
                                 or A.target_error_reason(text)
                                 or A.policy_error_reason(text) or "error_frame")
     # 命令工具契约层校验（20260926 批 2 改键）：动作工具必须交出**连线命令**——但
@@ -12083,11 +12084,24 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     # 它们不进卡，见下面「不许弹半张卡」那一段：卡一弹，`execute_node` 这一轮就一个工具
     # 都不执行 ⇒ 帧链也一起不发生 ⇒ 那几件**既不上卡、又没人告诉 planner 改**。
     target_dropped: list = []
+    # [(TOOLS 行位次, 工具名, 主人要的那件)]——**反极性改选**被拦下的写（20261016，
+    # §1.57 候选改法①）。与上面那一族并列：同一条论证（卡一弹，`execute_node` 这一轮
+    # 就一个工具都不执行 ⇒ 帧链也一起不发生 ⇒ 那一件**既不上卡、又没人告诉 planner 改**），
+    # 所以下面走**同一个**整批退回出口，只是记事件与日志时分开，免得两族的读数搅在一起。
+    action_dropped: list = []
     for idx, spec in enumerate(specs):
         name = _tool_name(spec)
         if not authz.requires_consent(principal, name):
             continue
         args, args_ok = _tool_args(spec)
+        # 反极性改选：主人这句要的是「收藏」，而这一件是「取消收藏」——**不弹卡**。
+        # 弹了就是把误靶洗成一条已授权的写（问错一边再让主人点确定，与 target 那两道
+        # 同一个论证）；跳过 → 由下方逐 spec 产 `action_conflict` 帧，planner 按帧
+        # 按主人说的那件重新规划。判据见 `authz.action_conflict`（多意图句判 False，
+        # 兄弟服务另一个目标也判 False ⇒ 那两种照旧弹卡）。
+        if authz.action_conflict(user_msg, name):
+            action_dropped.append((idx, name, authz.own_antipode(name) or ""))
+            continue
         # 免弹窗（"同轮命令即确认"）多一条前提（20260922 ②防线）：**主人自己把目标
         # 说出口了**。判成命令但目标名字不在主人这句话里（别名跳步、从执行记忆里
         # 拣的名字、模型自己概括的片段）→ 不许一句话直接写，退回弹窗：问句里会把
@@ -12164,7 +12178,12 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                     "整批一起问（否则它们这一轮谁都不会执行）", len(fast))
         picks = sorted(picks + fast, key=lambda p: p[0])
     picks = [p for _, p in picks]
-    if not picks:
+    # 空的 `picks` **不等于**"这一批没有要问的"（20261016）：被下面 `target_dropped` /
+    # `action_dropped` 整批退回时它也是空的——而那两族**要留痕**（下面那个出口里记事件，
+    # 事后靠它数"拦下了几件"）。此前这一格无条件短路 ⇒ 整批被退回时**事件记不下来**，
+    # 那两族的射程读数就只剩"返回值恰好是 None"这一个说不清的信号。只在**没有退回项**
+    # 时短路，出口与返回值一个字没变（两条路都还是 `return None`）。
+    if not picks and not (target_dropped or action_dropped):
         return None
     # ── 不许弹半张卡（20261009）：被目标拦住的那几件，**要么整批一起问、要么整批不弹**
     # ──
@@ -12182,15 +12201,29 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     # 所以整批退回：这一轮不弹卡，让 execute 照常产那两帧（unknown_target /
     # target_mismatch / consent_required），planner 按帧把号改回主人点名的那个，
     # 下一轮再连挂标签一起弹一张完整的卡。
-    if target_dropped:
-        record("confirm", "partial_batch_refused",
-               dropped=[f"{n}:{why}" for _, n, why, _ in target_dropped],
-               picks=[str(e.get("tool") or "") for e in picks],
-               ids=[str(a) for *_, a in target_dropped])
-        logger.warning("[confirm] 这一批里有 %d 件写被目标判据拦下（%s）→ 不弹半张卡，"
-                       "退回帧链让 planner 按主人点名的目标改回来",
-                       len(target_dropped),
-                       "、".join(f"{n}({why})" for _, n, why, _ in target_dropped))
+    if target_dropped or action_dropped:
+        if target_dropped:
+            record("confirm", "partial_batch_refused",
+                   dropped=[f"{n}:{why}" for _, n, why, _ in target_dropped],
+                   picks=[str(e.get("tool") or "") for e in picks],
+                   ids=[str(a) for *_, a in target_dropped])
+            logger.warning("[confirm] 这一批里有 %d 件写被目标判据拦下（%s）→ 不弹半张卡，"
+                           "退回帧链让 planner 按主人点名的目标改回来",
+                           len(target_dropped),
+                           "、".join(f"{n}({why})" for _, n, why, _ in target_dropped))
+        if action_dropped:
+            # 与上面那一族**同一个出口**（整批退回），理由逐字相同：卡一弹，execute 这
+            # 一轮一个工具都不执行 ⇒ `action_conflict` 帧也一起不发生 ⇒ 那一件既不上卡、
+            # 又没人告诉 planner 改。事件名分开记，让"反极性改选"这件事**事后数得出来**
+            # （§1.57 的射程读数就是靠这类事件复扫的）。
+            record("confirm", "action_conflict_batch_refused",
+                   dropped=[f"{n}<-{want}" for _, n, want in action_dropped],
+                   picks=[str(e.get("tool") or "") for e in picks])
+            logger.warning("[confirm] 这一批里有 %d 件写与主人这句话要的动作**相反**"
+                           "（%s）→ 不弹卡，退回帧链让 planner 按主人说的那件改回来",
+                           len(action_dropped),
+                           "、".join(f"{n}（主人要的是 {want}）"
+                                     for _, n, want in action_dropped))
         return None
     # 卡面要的现状快照：**十一份惰性读**（每份只在自己那族工具真进了候选时才读），
     # 各族的理由与"读不到一律照弹卡"的兜底见 `_popup_snapshots`。
@@ -12602,9 +12635,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         consent_missing = (authz.requires_consent(principal, name)
                            and not _grant_covers(state, spec)
                            and not authz.consent_granted(principal, name, user_msg))
-        if consent_missing:
-            record("execute", "consent_required", tool=name, principal=str(principal),
-                   scope=authz.required_scope(name))
+        if consent_missing:  # 反极性改选（§1.57①）也走这一格：见 authz.consent_block_*
+            record("execute", authz.consent_block_reason(user_msg, name), tool=name,
+                   principal=str(principal), scope=authz.required_scope(name))
             logger.info("[execute] 写操作未经确认，不执行: %s（principal=%s）",
                         spec, principal)
         # 写操作的目标校验（20260921 第二轮，与上一条同层同风格：确定性、无 LLM、
@@ -12669,7 +12702,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 所以这一格保持 20261007 的门序（先问「要不要做」，再问「哪一篇」），
             # `tests/test_admin_write.py` 那条顺序锁照旧有效——**别只为一句更顺的帧文
             # 再换一次**，要换得先拿出"禁令真的把人堵死过"的现场。
-            out = authz.consent_frame(name, principal)
+            out = authz.consent_block_frame(name, principal, user_msg)  # 反极性改选也走这里
         elif target_missing:
             # 同族（__ERROR__ + 原因码），语义是"先去读、或先问哪一篇"
             out = A.unknown_target_frame(name)
