@@ -13211,6 +13211,63 @@ def _narrator_system_pair(state, config, role: str | None, receipts: list, block
     return head, tail
 
 
+def _salvage_narrator_reply(llm, msgs: list, resp):
+    """narrator 这次返回不中用时的两次补救（空内容 / 回了 tool_calls）。
+
+    从 `model_node` 里原样搬出来的（20261017）：两件事都是"把**这一次**的返回救回来"，
+    与提示词装配无关，而 `model_node` 顶到了行数预算。**行为一字未改**——顺序、判据、
+    兜底方向、trace 事件名都照旧（`tests/test_narrator_empty_retry.py` 与
+    `tests/test_narrator_toolcall_correct.py` 逐条钉着它们）。
+
+    ## 空内容重试一次（20261001）
+
+    上游偶发"有 completion token、内容却是空串"的响应（`usage.output` 十几到几十，
+    正文 `.strip()` 后为空），与提示词、帧数、轮次都无关——同一条用例换个时间再跑
+    就是正常回复（`eval/report/review_20261001_042903.md` 的 `nav_article_target`：
+    首跑 output=14 且正文空、复跑 104 正常）。空内容此前只有一个出口：gate 判
+    `empty_reply` ⇒ `_FALLBACK_EMPTY`（"我刚才好像卡住了，没能说出话来"）——**主人
+    读到的是一句内容为零的道歉**，而那一轮的工具帧、执行回执、动作事实块全都好好的。
+    20261001 夜间实测：133 个 narrator 轮里 3 条（2.3%，output 14/13/29、input 从
+    6235 到 33268 都有 ⇒ 是采样本身，不是提示词长度或某类轮次）；同日生产语料
+    1167 份 trace / 1137 个 narrator 轮里 1 条（0.09%）。
+    重试一次而不是直接改判据：这是**采样失败**不是判据错误（复跑就正常），
+    而"再问一次模型"比"把这条判据放宽"更接近事实。仍为空 ⇒ 照旧走既有兜底
+    （fail-open 方向不变：多花的只有一次调用）。
+
+    ## 零工具节点回了 tool_calls（20261006）
+
+    成因与两副面孔见 `_NARRATOR_NO_TOOLCALL_NUDGE` 的注：一条是"正文为空 + 一条 tool_call"
+    （同消息重试必然复现 ⇒ 兜底道歉），另一条是"只有开场白 + 一条 tool_call"
+    （gate 判 PASS ⇒ 内容为零却当成功交付）。这里**加一次带纠正的调用**，不是改上面那次
+    同消息重试的语义（那一条被离线锁逐字钉着）。纠正后仍带 tool_calls 或仍为空
+    ⇒ 退回纠正前那份正文，照旧交 gate：这一步只可能变好，不会把原本能过的轮次弄坏。
+    """
+    if not ((getattr(resp, "content", "") or "").strip()):
+        _rm = getattr(resp, "response_metadata", None) or {}
+        logger.warning("[model] narrator 返回空内容（usage=%s finish_reason=%s）→ 重试一次",
+                       usage_fields(resp), _rm.get("finish_reason"))
+        record("model", "llm_empty_retry", **usage_fields(resp))
+        resp = llm.invoke(msgs)
+    if getattr(resp, "tool_calls", None):
+        _bad = resp
+        _names = [str((c or {}).get("name")) for c in (_bad.tool_calls or [])]
+        logger.warning("[model] narrator 回了 tool_calls（零工具节点不该有）n=%d names=%s"
+                       " → 带纠正重问一次", len(_names), _names)
+        record("model", "llm_toolcall_correct", n=len(_names), names=_names,
+               **usage_fields(_bad))
+        _corr = llm.invoke(msgs + [SystemMessage(content=_NARRATOR_NO_TOOLCALL_NUDGE)])
+        if getattr(_corr, "tool_calls", None) or not ((getattr(_corr, "content", "") or "").strip()):
+            logger.warning("[model] 纠正后仍不可用（tool_calls=%d，正文 %d 字）"
+                           " → 保留纠正前那份正文",
+                           len(getattr(_corr, "tool_calls", None) or []),
+                           len(str(getattr(_corr, "content", "") or "")))
+            record("model", "llm_toolcall_correct_failed", **usage_fields(_corr))
+            resp = _bad
+        else:
+            resp = _corr
+    return resp
+
+
 def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """narrator：零工具回复节点（人设 + 计划 + 工具帧 + 叙述纪律 → 最终回复）。
 
@@ -13307,48 +13364,7 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                        len(_sys_tail.content or ""), len(_msgs) - 2)
         record("model", "prompt_oversize", chars=_prompt_chars, frames=len(_msgs) - 2)
     resp = llm.invoke(_msgs)
-    # ── 空内容重试一次（20261001）────────────────────────────────────────
-    # 上游偶发"有 completion token、内容却是空串"的响应（`usage.output` 十几到几十，
-    # 正文 `.strip()` 后为空），与提示词、帧数、轮次都无关——同一条用例换个时间再跑
-    # 就是正常回复（`eval/report/review_20261001_042903.md` 的 `nav_article_target`：
-    # 首跑 output=14 且正文空、复跑 104 正常）。空内容此前只有一个出口：gate 判
-    # `empty_reply` ⇒ `_FALLBACK_EMPTY`（"我刚才好像卡住了，没能说出话来"）——**主人
-    # 读到的是一句内容为零的道歉**，而那一轮的工具帧、执行回执、动作事实块全都好好的。
-    # 20261001 夜间实测：133 个 narrator 轮里 3 条（2.3%，output 14/13/29、input 从
-    # 6235 到 33268 都有 ⇒ 是采样本身，不是提示词长度或某类轮次）；同日生产语料
-    # 1167 份 trace / 1137 个 narrator 轮里 1 条（0.09%）。
-    # 重试一次而不是直接改判据：这是**采样失败**不是判据错误（复跑就正常），
-    # 而"再问一次模型"比"把这条判据放宽"更接近事实。仍为空 ⇒ 照旧走既有兜底
-    # （fail-open 方向不变：多花的只有一次调用）。
-    if not ((getattr(resp, "content", "") or "").strip()):
-        _rm = getattr(resp, "response_metadata", None) or {}
-        logger.warning("[model] narrator 返回空内容（usage=%s finish_reason=%s）→ 重试一次",
-                       usage_fields(resp), _rm.get("finish_reason"))
-        record("model", "llm_empty_retry", **usage_fields(resp))
-        resp = llm.invoke(_msgs)
-    # ── 零工具节点回了 tool_calls（20261006）──────────────────────────────
-    # 成因与两副面孔见 `_NARRATOR_NO_TOOLCALL_NUDGE` 的注：一条是"正文为空 + 一条 tool_call"
-    # （同消息重试必然复现 ⇒ 兜底道歉），另一条是"只有开场白 + 一条 tool_call"
-    # （gate 判 PASS ⇒ 内容为零却当成功交付）。这里**加一次带纠正的调用**，不是改上面那次
-    # 同消息重试的语义（那一条被离线锁逐字钉着）。纠正后仍带 tool_calls 或仍为空
-    # ⇒ 退回纠正前那份正文，照旧交 gate：这一步只可能变好，不会把原本能过的轮次弄坏。
-    if getattr(resp, "tool_calls", None):
-        _bad = resp
-        _names = [str((c or {}).get("name")) for c in (_bad.tool_calls or [])]
-        logger.warning("[model] narrator 回了 tool_calls（零工具节点不该有）n=%d names=%s"
-                       " → 带纠正重问一次", len(_names), _names)
-        record("model", "llm_toolcall_correct", n=len(_names), names=_names,
-               **usage_fields(_bad))
-        _corr = llm.invoke(_msgs + [SystemMessage(content=_NARRATOR_NO_TOOLCALL_NUDGE)])
-        if getattr(_corr, "tool_calls", None) or not ((getattr(_corr, "content", "") or "").strip()):
-            logger.warning("[model] 纠正后仍不可用（tool_calls=%d，正文 %d 字）"
-                           " → 保留纠正前那份正文",
-                           len(getattr(_corr, "tool_calls", None) or []),
-                           len(str(getattr(_corr, "content", "") or "")))
-            record("model", "llm_toolcall_correct_failed", **usage_fields(_corr))
-            resp = _bad
-        else:
-            resp = _corr
+    resp = _salvage_narrator_reply(llm, _msgs, resp)
     # ── 贴纸残记号修补（20261002）────────────────────────────────────────
     # 模型偶尔把 `:头疼:` 写成 `:头疼`（少了收尾冒号）：前端两处渲染器都按
     # `:([^:\s]{1,12}):` 匹配，缺尾冒号结构上匹配不上，而"未命中就原样保留成文本"
