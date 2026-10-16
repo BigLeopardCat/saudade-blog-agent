@@ -105,6 +105,15 @@ temperature **0.7** 的 LLM）。对改后的 args 取指纹，那个工具每�
 - **ADR-0011 真接上 saver**（图自持上下文 + `thread_id` 挪到会话坐标）——那时本份的账本
   **第一次真正通电**，必须同时把 `logs/agent/idem.sqlite3` 的保留策略与 checkpoint store
   **一起**设计（`eval/retention_manifest.py` 里登记的是 `open`/未接管，理由就在那儿）；
+- **接线的那一刻先确认 `durability` 档**。`langgraph/pregel/main.py:2618` 的缺省是
+  **`"async"`**（`config.get(CONF, {}).get(CONFIG_KEY_DURABILITY, "async")`，docstring 也这么写）：
+  checkpoint 写交给后台线程、主循环**不等它**。进程被**硬杀**时上一步可能没落盘 ⇒ 恢复点
+  前移 ⇒ 重放那个 superstep 拿到的 `task_id` 可能与崩前那次不同 ⇒ **键变了、账被静默绕过**。
+  ⚠️ **本份没有测过这一档**：§2.6 镜像与 `tests/test_write_idempotency.py` 用的是 `MemorySaver`
+  （同步、进程内），它在结构上就看不见这件事。⇒ 接线时要么显式跑 `durability="sync"`，要么
+  先补一条"硬杀 + 真 saver"的判据。这条前提是 `exp/native-checkpoint` 的 `5afd414` 记下的
+  （那一份用 PG 自建表、键取 `__pregel_task_id` 而不是 `checkpoint_ns`），**本份未采纳那份实现**，
+  但这条前提与本份的键同源、必须一起验；
 - 出现**新的写工具**且它的参数由模型现创（像 `_create_display_text` 那样）——要复核指纹
   仍在改动之前取；
 - 账本行里出现**结果超上限未留档**（trace 事件 `idem_result_capped`）——那时重放拿到的是
