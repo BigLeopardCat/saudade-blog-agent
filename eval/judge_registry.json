@@ -11,6 +11,10 @@
         0,
         0
       ],
+      "agent/_ckpt_probe.py": [
+        0,
+        0
+      ],
       "agent/action_text.py": [
         91,
         0
@@ -29,6 +33,18 @@
       ],
       "agent/block_reasons.py": [
         21,
+        0
+      ],
+      "agent/checkpoint_arm.py": [
+        0,
+        0
+      ],
+      "agent/checkpoint_delta_arm.py": [
+        0,
+        0
+      ],
+      "agent/checkpoint_random_arm.py": [
+        0,
         0
       ],
       "agent/confirm.py": [

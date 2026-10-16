@@ -46,7 +46,26 @@ ARM_REACT = "react"
 # 全是 `False`（有 env 跳过 ⇒ `run_golden.is_full_run` 假）⇒ 闸开着、恰好没响。
 # 这跟本仓今天另外两处是同一个形状：**判据看着在，其实靠运气在**。
 ARM_MATRIX = "matrix"
-KNOWN_ARMS = (ARM_GRAPH, ARM_REACT, ARM_MATRIX)
+# `checkpoint` / `checkpoint_random`（20261015，实验分支 `exp/native-checkpoint`）：
+# **原生 LangGraph checkpoint 落 PostgreSQL** 的两条臂，实现见
+# `agent/checkpoint_arm.py` 头注（那一份把"为什么"写全了）。两者的差别只有一格：
+#
+#   · `checkpoint`         = 持久化 saver + 线程改写为会话 id（臂 B，恢复**真的发生**）
+#   · `checkpoint_random`  = 同一个 saver，线程照旧每请求随机（**反控 D**：只写不读）
+#
+# 反控 D 存在的理由：把"挂了 saver"与"复用了线程"拆开。D 与 graph 臂的差集若为空，
+# 差异就全部来自"复用线程"——与"存内存还是存磁盘"无关。**没有 D 这一格，一份
+# 变化了的读数说不清是谁造成的**（同 `ARM_MATRIX` 那条注的形状：臂 = 归档身份）。
+ARM_CHECKPOINT = "checkpoint"
+ARM_CHECKPOINT_RANDOM = "checkpoint_random"
+# `checkpoint_delta`（20261016，批 3）：臂 B 那层壳 + **一步输入变换**——进图之前把
+# `state["messages"]` 换成「System 块 + 当前问题」，也就是 `server._build_messages`
+# **停止注入 `req.history[-20:]`** 之后逐字剩下的东西。恒等格（`turn_msgs <= 2`）
+# 让"臂 C 与臂 B 的差集"恰好等于注入过 history 的那几条用例。实现见
+# `agent/checkpoint_delta_arm.py` 头注。
+ARM_CHECKPOINT_DELTA = "checkpoint_delta"
+KNOWN_ARMS = (ARM_GRAPH, ARM_REACT, ARM_MATRIX,
+              ARM_CHECKPOINT, ARM_CHECKPOINT_RANDOM, ARM_CHECKPOINT_DELTA)
 ENV_ARM = "GOLDEN_ARM"
 
 # 接口层（报告里 `engine` 那一格的地基，20260927 批 A）：20261004 起只剩 native tool calls

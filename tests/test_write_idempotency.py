@@ -7,7 +7,7 @@
 （`build_graph()` 是裸的 `g.compile()`）⇒ 这件事炸不了，但**接上 saver 那天重放路径
 第一次通电，而它一行判据都没有**。本文件就是那道保险丝上的判据。
 
-被测六块（每条都配了会红的那一半）：
+被测十一块（每条都配了会红的那一半）：
   · ① **§2.6 镜像**：真 `StateGraph` + `MemorySaver`，节点做到一半抛异常、再 `invoke(None)`
     恢复 ⇒ 写**只发生一次**；
   · ② **反控**：同一场景换成 `NullLedger`（今天的形状）⇒ 写**发生两次**。没有这一条，
@@ -16,8 +16,16 @@
   · ④ **惰性**：没挂 saver ⇒ `active()` 为假，且**连库文件都不该被创建**；
   · ⑤ **不误合并**：参数不同 / 工具不同的两次调用**都要执行**——"至多一次"最容易
     退化成"从不执行"的地方，而且退化了不报错；
-  · ⑥ **fail-closed + 接线锁**：账本不可用 ⇒ 拒绝执行（响亮）；`agent/graph.py` 里
-    不许再出现 `tool.invoke(`（收口唯一）。
+  · ⑥ **重放逐字还回**：文本 + `kind` + `meta` 三样都要（只还文本会让命令帧判 BLOCK）；
+  · ⑦ **fail-closed**：账本不可用 ⇒ 拒绝执行（响亮，不降级成"不记账"）；
+  · ⑧ **接线锁**：`agent/graph.py` 里不许再出现 `tool.invoke(`（收口唯一）；
+  · ⑨ **durability 自断言**：账本在场 ⇒ 必须 `sync` 档（缺省 `async` 下账**静默失效**）；
+  · ⑩ **`_rehydrate` 的行形状**：喂 dict 会**不报错地**回放字面串（PG 那条路的正控）；
+  · ⑪ **依赖面锁**：`psycopg` 只住在 `agent/idem_pg.py`，且只在 `_shared` 体内懒 import。
+
+⑨–⑪ 是 20261016 迁 PG 那一批补的：⑨ 钉"账的前提"，⑩ 钉"两个后端交出的行必须是
+**同一种形状**"，⑪ 钉"PG 是**可选档**——没挂 PG saver 的进程（含 CI）一次都不碰 psycopg"。
+三件都是**不报错**的失效，靠读代码看不出来。
 
 为什么主断言落在**调用次数**上而不是"帧文本长什么样"：这一件的失败面是"写真的做了
 两遍"，那是外部可见且不可撤销的。断言一句措辞是假绿——换一句话就过。
@@ -103,16 +111,27 @@ def _run(led, *, crash_after, thread, fp0="fp0", fp1="fp1",
     cfg = {"configurable": {"thread_id": thread}}
     for first in (True, False):
         try:
-            app.invoke({} if first else None, cfg)
+            # `durability="sync"` 是账的前提（见 `idem.require_sync_durability`）：
+            # 不传的话这里会当场抛 `ReplayMisconfigured` —— 那正说明断言咬得住。
+            app.invoke({} if first else None, cfg, durability=idem.REQUIRED_DURABILITY)
         except _Boom:
             pass
     return hits, seen
 
 
 def _cfg(ns: str, saver=True) -> dict:
-    """一条"节点内"的 config：`checkpoint_ns` 是幂等键的身份成分（实测纯函数）。"""
-    return {"configurable": {"checkpoint_ns": ns,
-                             "__pregel_checkpointer": MemorySaver() if saver else None}}
+    """一条"节点内"的 config：`checkpoint_ns` 是幂等键的身份成分（实测纯函数）。
+
+    `__pregel_durability` 与 `__pregel_checkpointer` 一样是**真图会写进来的**内部键
+    （`langgraph/_internal/_constants.py::CONFIG_KEY_DURABILITY` = `"__pregel_durability"`，
+    实测：传了 `durability="sync"` 才有这个键，不传则**整个键缺席**）。没挂 saver 时
+    两个键一起缺席——那种 config 下闸本来就是关的，形状照实写。
+    """
+    conf = {"checkpoint_ns": ns,
+            "__pregel_checkpointer": MemorySaver() if saver else None}
+    if saver:
+        conf["__pregel_durability"] = idem.REQUIRED_DURABILITY
+    return {"configurable": conf}
 
 
 print("① §2.6 镜像：崩溃 + 恢复后，写只发生一次")
@@ -242,6 +261,96 @@ _call_line = min(n.lineno for n in ast.walk(_fn)
                  if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "guarded_invoke")
 check("指纹在**改动 args 之前**取、且在调用之前（顺序反了 ⇒ 屏显恒不命中且不报错）",
       _fp_line < _mut_line < _call_line, f"指纹@{_fp_line} < 改参@{_mut_line} < 调用@{_call_line}")
+
+print("\n⑨ durability 自断言：账本在场就必须 `sync` 档（缺省 `async` ⇒ 账**静默失效**）")
+check("`REQUIRED_DURABILITY` 就是 `sync`（改这个字面等于改账的前提）",
+      idem.REQUIRED_DURABILITY == "sync", repr(idem.REQUIRED_DURABILITY))
+_hits9: list = []
+idem.guarded_invoke(_mk_tool(0, _hits9), _W0, {}, _cfg("n:dur"),
+                    fingerprint="f", ledger=idem.Ledger(os.path.join(_TMP, "f.sqlite3")))
+check("`sync` 档：照常执行（断言没把功能一起挡掉）", _hits9 == [0], f"执行序列={_hits9}")
+for _bad in ("async", "exit", None):
+    _conf = {"checkpoint_ns": "n:dur", "__pregel_checkpointer": MemorySaver()}
+    if _bad is not None:
+        _conf["__pregel_durability"] = _bad      # `None` = 那个键**整个缺席**（缺省档）
+    _h9: list = []
+    _o9, _raised = None, None
+    try:
+        _o9 = idem.guarded_invoke(_mk_tool(0, _h9), _W0, {}, {"configurable": _conf},
+                                  fingerprint="f",
+                                  ledger=idem.Ledger(os.path.join(_TMP, "g.sqlite3")))
+    except idem.ReplayMisconfigured as e:
+        _o9, _raised = None, e
+    # 两件事一起判：①抛的是**异常**（若 `require_sync_durability` 落在那个 `try` 里，
+    # 这里拿到的会是一条 `unavailable` 回执 —— 整轮静悄悄地全不执行，更难发现）；
+    # ②写**一件都没执行**（抛在 `is_write` 之前，任何工具都当场炸）。
+    check(f"档位 {_bad!r} ⇒ 抛 `ReplayMisconfigured`（不是回执）且写一件都没执行",
+          _raised is not None and _o9 is None and _h9 == [],
+          f"{type(_raised).__name__}: {_raised}")
+_never9 = os.path.join(_TMP, "never9", "n.sqlite3")
+_h9c: list = []
+idem.guarded_invoke(_mk_tool(0, _h9c), _W0, {},
+                    {"configurable": {"checkpoint_ns": "n:x", "__pregel_durability": "async"}},
+                    fingerprint="f", ledger=idem.Ledger(_never9))
+check("没挂 saver ⇒ 连档位都不查（今天就是这个形状：那一格不存在，一行都不该动）",
+      _h9c == [0] and not os.path.exists(_never9), f"执行序列={_h9c}")
+
+print("\n⑩ 重放的行**必须是元组**：喂 dict 会**不报错地**回放字面串（PG 那条路的正控）")
+_row10 = ("done", "正文", "ok", '{"cmd": {"kind": "navigate"}}')
+_r10 = idem._rehydrate(_row10)
+check("4 元组 ⇒ 逐字还原（`status` 被丢掉，text / kind / meta 三样都在）",
+      isinstance(_r10, ToolResult) and str(_r10) == "正文" and _r10.kind == "ok"
+      and _r10.meta.get("cmd") == {"kind": "navigate"}, f"{str(_r10)!r} / {_r10.kind!r}")
+_dict10 = {"status": "done", "text": "正文", "kind": "ok", "meta": "{}"}
+_d10 = idem._rehydrate(_dict10)
+check("喂 dict ⇒ 解包到的是**键名**（正文变 `'text'`、kind 变 `'kind'`），且**不抛**"
+      " ⇒ PG 那条池若交出 `dict_row`，重放会静默腐化",
+      str(_d10) == "text" and _d10.kind == "kind", f"{str(_d10)!r} / {_d10.kind!r}")
+_led10 = idem.Ledger(os.path.join(_TMP, "h.sqlite3"))
+_led10.claim("k10", _W0, "f")
+_kind10, _row10 = _led10.claim("k10", _W0, "f")
+check("SQLite 这条路交出的行**就是元组**（两个后端同一份契约，这条是它的正控）",
+      isinstance(_row10, tuple) and _row10[0] == "intent" and _kind10 == "intent",
+      f"{_kind10!r} / {_row10!r}")
+
+print("\n⑪ 依赖面锁：psycopg 只住在 `agent/idem_pg.py`，且只在真要用时才被 import")
+
+
+def _import_targets(n) -> list[str]:
+    """这个 AST 节点 import 的**完整路径**（`import a.b` 与 `from a import b` 同形）。
+
+    读 AST 不读字面（同 ⑧）：`agent/idem.py` 的注释与 docstring 里逐字写着 `psycopg`
+    ——那正是在解释"它为什么住隔壁"。按文本数会把一条正确的注释判成违规。
+    """
+    if isinstance(n, ast.ImportFrom):
+        base = n.module or ""
+        return [f"{base}.{a.name}" if base else a.name for a in n.names]
+    if isinstance(n, ast.Import):
+        return [a.name for a in n.names]
+    return []
+
+
+def _imports_pg(n) -> bool:
+    """这个节点 import 的**是 psycopg 本身**（不是某个恰好带这串字符的名字）。"""
+    return any(t.split(".")[0] == "psycopg" for t in _import_targets(n))
+
+
+_idem_tree = ast.parse(_idem_src)
+_pg_path = ROOT / "agent" / "idem_pg.py"
+_pg_src = _pg_path.read_text(encoding="utf-8") if _pg_path.exists() else ""
+_pg_imports = [n for n in ast.walk(ast.parse(_pg_src)) if _imports_pg(n)] if _pg_src else []
+check("`agent/idem_pg.py` 存在且它**确实** import 了 psycopg（否则下面两条是恒真）",
+      len(_pg_imports) > 0, f"{_pg_path.name} 存在={_pg_path.exists()}，import 处={len(_pg_imports)}")
+check("`agent/idem.py` 不 import psycopg（PG 是**可选档**：没挂 PG saver 的进程与 CI 都不装它）",
+      [n for n in ast.walk(_idem_tree) if _imports_pg(n)] == [])
+check("`agent.idem_pg` 不在 idem.py 的**模块级** import 里（那样 import 期就把 psycopg "
+      "拖进来，没装 psycopg 的进程会**整个** import 失败）",
+      [n for n in _idem_tree.body if "agent.idem_pg" in _import_targets(n)] == [])
+_shared_fn = next(n for n in ast.walk(_idem_tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == "_shared")
+check("`agent.idem_pg` 只在 `_shared` 函数体内懒 import（恰好一处）",
+      sum(1 for n in ast.walk(_shared_fn)
+          if "agent.idem_pg" in _import_targets(n)) == 1)
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
