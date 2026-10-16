@@ -17,8 +17,16 @@
   · ④ **缺依赖就响亮**：合法 scheme 但后端没装 ⇒ `RuntimeError`，消息里有包名与 pip 命令。
     **故意不去打桩"装上了"再断言返回值**：真造 saver 那一段还没写，写一条断言去假装
     它存在，正是本仓最贵的"看着在跑、其实没跑"；
-  · ⑤ **接线锁**：`agent/graph.py` 的 `build_graph()` 末尾仍是裸的 `g.compile()`。
-    这条锁不是"永远不许接"——是**接线那一刻必须自觉来改它**（ADR-0011 的三处一起动）；
+  · ⑤ **接线锁**：`agent/graph.py` 那一处 `.compile()` **只许把调用方给的 `checkpointer`
+    原样传下去**（`g.compile(checkpointer=checkpointer)`），且 `build_graph` 自己的
+    `checkpointer` 缺省 `None` ⇒ 生产（`server.py` 的 `create_agent()`，不带参数）恒惰性。
+    **20261017 改过判据**：这条锁原先是"末尾仍是**裸的** `g.compile()`"，上游 `48da74f`
+    正是照它要的方式接了线（缺省 `None`、不传就与从前逐字节相同）⇒ 锁跟着钉**新**不变量。
+    现在禁的不是"传参"，是**在编译点造 saver**（写死 `MemorySaver()` / 现算
+    `build_checkpointer(...)` / 把缺省值改成非 `None`）——那几种会让生产**突然开始持久化**，
+    而别的判据一条都不会因此变红。裸 `g.compile()` 同样算违规，理由不同：实验臂
+    （`agent/checkpoint_arm.py`）传进来的 saver 会被**静默忽略**，于是"没挂 saver"
+    伪装成"checkpoint 没区别"，正是本件要防的那种失效；
   · ⑥ **旧陷阱不许回来**：`agent/*.py` 的生产代码里再出现 `MemorySaver` 就红。
 
 用法：.venv/bin/python tests/test_checkpoint_factory.py
@@ -108,21 +116,109 @@ else:
     check("后端已装 ⇒ 仍是响亮拒绝（造 saver 属于 ADR-0011 采纳批，未实现）",
           "还没实现" in _pg, _pg[:200])
 
-print("\n⑤ 接线锁：`build_graph()` 今天仍不挂 checkpointer")
-_tree = ast.parse((ROOT / "agent" / "graph.py").read_text(encoding="utf-8"))
-_fn = next((n for n in _tree.body
-            if isinstance(n, ast.FunctionDef) and n.name == "build_graph"), None)
-check("找得到 `build_graph`（找不到 = 锚点没了，这条锁会空过）", _fn is not None)
-if _fn is not None:
-    _compiles = [n for n in ast.walk(_fn)
-                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                 and n.func.attr == "compile"]
-    check("里面只有一处 `.compile()`（多出来 = 有人从别处把 saver 接上了）",
-          len(_compiles) == 1, f"{len(_compiles)} 处")
-    if _compiles:
-        check("那一处 `.compile()` 不带任何参数（= 今天恒惰性）",
-              not _compiles[0].args and not _compiles[0].keywords,
-              ast.unparse(_compiles[0]))
+print("\n⑤ 接线锁：那一处 `.compile()` 只许把调用方给的 `checkpointer` 原样传下去")
+
+
+def _defaults_of(fn: ast.FunctionDef) -> dict:
+    """参数名 → 缺省值节点（没有缺省值的不在表里）。
+
+    位置参数与 kw-only 的对齐规则不同（`defaults` 只盖位置参数**尾部**，`kw_defaults`
+    与 `kwonlyargs` 一一对应、其中"没有缺省值"占位是 `None`）——手算下标最容易在这里错，
+    所以先把它摊成一张表再用。
+    """
+    out = {}
+    pos = fn.args.posonlyargs + fn.args.args
+    for a, d in zip(pos[len(pos) - len(fn.args.defaults):], fn.args.defaults):
+        out[a.arg] = d
+    for a, d in zip(fn.args.kwonlyargs, fn.args.kw_defaults):
+        if d is not None:
+            out[a.arg] = d
+    return out
+
+
+def _callee_name(node: ast.expr) -> str | None:
+    """被调方**按名字**认：`g.compile(...)` → `compile`，`build_graph(...)` → `build_graph`。
+
+    锁不认"是属性还是裸名"（两者都合法），只认名字——这样同一条锁能同时钉住
+    `build_graph` 里那一处 `.compile()` 与 `create_agent` 里那一处 `build_graph()`。
+    """
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
+
+
+def _wire_lock(src: str, fname: str, callee: str) -> list[str]:
+    """接线锁：**违规描述**列表（空 = 合规）。红基线用它证明锁抓得住那几种坏法。
+
+    判据 = 三件事同时成立，合起来是"saver 只能由调用方带进来，这一层自己不造、不写死、
+    也不把它丢掉"：① `fname` 里恰好一处 `callee(...)`；② 那一处**只**带一个关键字参数
+    `checkpointer=`，值**恰好是同名参数**（不是 `MemorySaver()`、不是 `build_checkpointer(...)`）；
+    ③ 该参数缺省 `None`（不传 ⇒ 无持久化）。
+    """
+    bad: list[str] = []
+    fn = next((n for n in ast.parse(src).body
+               if isinstance(n, ast.FunctionDef) and n.name == fname), None)
+    if fn is None:
+        return [f"找不到 `{fname}`（锚点没了 ⇒ 这条锁会空过）"]
+    calls = [n for n in ast.walk(fn)
+             if isinstance(n, ast.Call) and _callee_name(n.func) == callee]
+    if len(calls) != 1:
+        bad.append(f"{len(calls)} 处 `{callee}(...)`（多出来 = 有人从别处把 saver 接上了）")
+        return bad
+    _d = _defaults_of(fn).get("checkpointer")
+    if _d is None:
+        bad.append("`checkpointer` 没有缺省值（必填 ⇒ 生产调用点会当场炸）")
+    elif not (isinstance(_d, ast.Constant) and _d.value is None):
+        bad.append(f"`checkpointer` 缺省不是 None：{ast.unparse(_d)}")
+    _c = calls[0]
+    _kw = [k for k in _c.keywords if k.arg]
+    if _c.args or [k.arg for k in _kw] != ["checkpointer"]:
+        bad.append(f"`{callee}` 不是「只带一个 checkpointer=」：{ast.unparse(_c)}")
+    elif not (isinstance(_kw[0].value, ast.Name) and _kw[0].value.id == "checkpointer"):
+        bad.append(f"`checkpointer=` 传的不是调用方那个名字：{ast.unparse(_c)}")
+    return bad
+
+
+# 红基线（本仓纪律：正控不红不算数）——锁必须抓得住"在这一层造 saver"那四种形态。
+# 正控用**真源码**（下面两条）与一份最小的合规骨架，三处都不许红。
+_BARE = "def build_graph(checkpointer=None):\n    return g.compile()\n"
+_HARD = ("def build_graph(checkpointer=None):\n"
+         "    return g.compile(checkpointer=MemorySaver())\n")
+_DFLT = ("def build_graph(checkpointer=MemorySaver()):\n"
+         "    return g.compile(checkpointer=checkpointer)\n")
+_EXTRA = ("def build_graph(checkpointer=None):\n"
+          "    return g.compile(checkpointer=checkpointer, store=STORE)\n")
+_OK = ("def build_graph(checkpointer=None):\n"
+       "    return g.compile(checkpointer=checkpointer)\n")
+check("红基线：抓得住裸 `g.compile()`（实验臂传进来的 saver 会被静默忽略）",
+      bool(_wire_lock(_BARE, "build_graph", "compile")),
+      str(_wire_lock(_BARE, "build_graph", "compile")))
+check("红基线：抓得住这一层现造 `MemorySaver()`",
+      bool(_wire_lock(_HARD, "build_graph", "compile")),
+      str(_wire_lock(_HARD, "build_graph", "compile")))
+check("红基线：抓得住缺省值被改成非 None",
+      bool(_wire_lock(_DFLT, "build_graph", "compile")),
+      str(_wire_lock(_DFLT, "build_graph", "compile")))
+check("红基线：抓得住多挂一个 `store=`",
+      bool(_wire_lock(_EXTRA, "build_graph", "compile")),
+      str(_wire_lock(_EXTRA, "build_graph", "compile")))
+check("反控：合规骨架不许红（不然这条锁只会恒红）",
+      not _wire_lock(_OK, "build_graph", "compile"),
+      str(_wire_lock(_OK, "build_graph", "compile")))
+check("反控：锚点没了要**报**出来，不许空过",
+      bool(_wire_lock("x = 1\n", "build_graph", "compile")),
+      str(_wire_lock("x = 1\n", "build_graph", "compile")))
+
+_graph_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+_agent_src = (ROOT / "agent" / "agent.py").read_text(encoding="utf-8")
+check("生产图 `agent/graph.py::build_graph` 合规",
+      not _wire_lock(_graph_src, "build_graph", "compile"),
+      "；".join(_wire_lock(_graph_src, "build_graph", "compile")))
+check("`agent/agent.py::create_agent` 同样只传不造（缺省 None + 原样传给 build_graph）",
+      not _wire_lock(_agent_src, "create_agent", "build_graph"),
+      "；".join(_wire_lock(_agent_src, "create_agent", "build_graph")))
 
 print("\n⑥ 旧陷阱不许回来：`agent/` 的生产代码里没有 MemorySaver")
 

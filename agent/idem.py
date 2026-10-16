@@ -5,8 +5,9 @@
 LangGraph 的 checkpoint **提交粒度是 superstep，不是语句**（实测见
 `native-checkpoint-verdict-20261015.md` §2.6：一个节点里连做两件写，进程死在中间、
 从上一个 checkpoint 恢复 ⇒ **两件写各执行了两遍**）。今天这件事炸不了，因为生产
-**没有 saver**（`agent/agent.py` 调裸的 `build_graph()`，见 `agent/graph.py` 的
-`return g.compile()`）；但**接上 saver 那天重放路径第一次通电，而它一行判据都没有**。
+**没有 saver**（`agent/agent.py` 调 `build_graph(checkpointer=None)`，见 `agent/graph.py`
+的 `return g.compile(checkpointer=checkpointer)`——缝留着，生产不传）；但**接上 saver 那天
+重放路径第一次通电，而它一行判据都没有**。
 本模块就是那道保险丝：把"这一件写做没做过"从 state 里搬出来，落到**节点之外**的一本账上。
 
 **为什么不能是 state 里的一个字段**：节点内的 state 更新要等节点**返回**才落盘
@@ -22,6 +23,13 @@ LangGraph 的 checkpoint **提交粒度是 superstep，不是语句**（实测�
 - 崩溃 + 恢复的两次运行里该值**逐字节相同** ⇒ 重放认得出是同一件；
 - 同一 thread 的 3 轮**互不相同** ⇒ 不会把两轮的写合成一次；
 - **没挂 saver 时是随机 uuid4** ⇒ `active()` 为假，本模块**天然惰性**、今天一行账都不记。
+
+## 两档存储（20261017）
+
+账本本体有**两档**，由 `_shared(config)` 按 saver 自己选：挂 PG saver ⇒ 落**同一个池、
+同一个库**（`agent/idem_pg.py`，psycopg 只住那边）；否则 ⇒ 本文件的 `Ledger`（agent 自持的
+SQLite 文件，`settings.idem_db`）。选 PG 那一档是为了**保留期同源**：账与 checkpoint 必须
+一起裁，分开清会把本批要堵的洞重新打开。采纳那天账自动变 PG，没有第二个开关可忘。
 
 ## 协议：先记账再动手 ⇒ 至多一次（at-most-once）
 
@@ -56,6 +64,13 @@ logger = logging.getLogger(__name__)
 # `server.py` 的 `_REASON_CN`）。前两处只改一处会当场红（既有判据对着比这两张表）。
 REASON_OUTCOME_UNKNOWN = "write_outcome_unknown"
 
+# 账本在场时**必须**的 checkpoint 档位。理由与实测对照见 `require_sync_durability`。
+REQUIRED_DURABILITY = "sync"
+
+
+class ReplayMisconfigured(RuntimeError):
+    """账本在场而档位不对。**刻意用异常**：配置错不该被降级成一条回执。"""
+
 # 记账时留存的返回文本上限。写操作的返回几乎都是短确认；这一格只防"某个写工具将来
 # 返回一大坨"。撞顶时**不静默**：存 NULL + 一条 trace，重放拿到的是"已执行过、
 # 原始返回未留档"的如实帧（是降级，不是假装没发生）。
@@ -69,6 +84,40 @@ _REASON_RE = re.compile(rf"\[{REASON_OUTCOME_UNKNOWN}\]")
 _NOREPLAY_FRAME = ToolResult(
     "（这一步已经执行过：重放命中幂等账。原始返回超过留档上限，未留存，"
     "如需确切结果请重新读一次）", "ok", {})
+
+
+def require_sync_durability(config) -> None:
+    """账本在场时，这一轮**必须**是 `durability="sync"`，否则响亮抛。
+
+    ## 为什么这条断言住在这里，而不是文档里
+
+    本账的全部依据是"**幂等键在崩溃恢复前后逐字节相同**"，而键取自
+    `config["configurable"]["checkpoint_ns"]`（= `f"{节点名}:{task_id}"`）。这个前提
+    **只在 `durability="sync"` 下成立**，实测三行对照：
+
+    | 档位 / 收场方式 | 恢复后 `__pregel_task_id` |
+    |---|---|
+    | `sync` + 硬杀 | 与崩前**逐字相同** ⇒ 账认得出来 |
+    | `async`（缺省）+ 硬杀 | **变了** ⇒ 键变 ⇒ 账**被静默绕过**（读数回到 2×） |
+    | 任意档 + 进程内抛异常 | 不变（异常路径本来就会刷盘） |
+
+    ⚠️ 缺省就是 `async`：**什么都不做就会踩中**，而踩中之后的表面现象是"账在、代码在、
+    一切正常，只是没起作用"。这种失效模式靠读代码看不出来，只能靠一条会响的断言。
+
+    放在 `guarded_invoke` 的 `try` **外面**：这是配置错，不是"服务不可用"，不该被
+    降级成一条 `unavailable` 回执（那会让一整轮的写静悄悄地全都不执行）。
+    """
+    got = None
+    try:
+        got = ((config or {}).get("configurable") or {}).get("__pregel_durability")
+    except AttributeError:
+        got = None
+    if got != REQUIRED_DURABILITY:
+        raise ReplayMisconfigured(
+            f"写操作幂等账要求 durability={REQUIRED_DURABILITY!r}，当前是 {got!r}。"
+            f"缺省档 async 下 checkpoint 由后台线程写，硬杀时可能没落盘 ⇒ 恢复后 "
+            f"`__pregel_task_id` 变了 ⇒ 幂等键变了 ⇒ 账被静默绕过（写会重放）。"
+            f"调用处必须传 `durability={REQUIRED_DURABILITY!r}`。")
 
 
 def active(config) -> bool:
@@ -161,6 +210,51 @@ class Ledger:
         self._lock = threading.Lock()
         self._conn = None
 
+    # 冷启重试的退避与次数（见 `_connect` 的注）。20 × 50ms ≈ 1s 的上限。
+    _OPEN_RETRIES = 20
+    _OPEN_BACKOFF = 0.05
+
+    def _connect(self):
+        """开库 + 建表。**带重试，且重试的是"冷启竞态"不是"等锁"**。
+
+        实测（20261017，`--concurrency 4 --guard` 探针）：4 个真进程**同时**冷启一个
+        还不存在的库时，`claim` 有约 1/5 的概率抛 `database is locked` ——
+        而 `PRAGMA journal_mode=WAL` 要一把排他锁，SQLite **不为它调 busy handler**
+        （把 `busy_timeout` 挪到 WAL 那句之前也没用，实测 6/32 vs 7/32）⇒ 那句是
+        **立刻**抛的，`timeout=5.0` 挡不住。加这一圈短退避重试后实测 0/32。
+
+        ⚠️ 这一格**只在冷启**存在（库建好之后走的是 busy handler，正常等锁）。所以
+        退避很短、次数有限；**用尽仍然抛** —— 调用方 `guarded_invoke` 的 fail-closed
+        会把它变成"拒绝这次写"（`unavailable`），那是刻意的姿态，不在这里吞掉。
+
+        ⚠️ 这一格是**降级档（SQLite）**的：账挂在 PG saver 上时走 `idem_pg`，没有
+        开库竞态这回事。留着它是因为"降级档也得真的能用"，而且探针在它上面出读数。
+        """
+        last: Exception | None = None
+        for attempt in range(self._OPEN_RETRIES):
+            if attempt:
+                time.sleep(self._OPEN_BACKOFF)
+            conn = sqlite3.connect(self.path, timeout=5.0, isolation_level=None)
+            try:
+                # `isolation_level=None` = 自动提交：`claim` 的 INSERT 必须在**发出
+                # 请求之前**真的落盘，否则"先记账"这条协议是假的。
+                conn.execute("PRAGMA busy_timeout=5000")
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS idem ("
+                    " key TEXT PRIMARY KEY, tool TEXT NOT NULL, fp TEXT NOT NULL,"
+                    " status TEXT NOT NULL, ts REAL NOT NULL,"
+                    " text TEXT, kind TEXT, meta TEXT)")
+            except sqlite3.OperationalError as e:
+                conn.close()          # 不关就是每重试一次漏一条连接
+                last = e
+                continue
+            except Exception:
+                conn.close()
+                raise
+            return conn
+        raise last
+
     def _db(self):
         if self._conn is None:
             with self._lock:
@@ -168,17 +262,7 @@ class Ledger:
                     parent = os.path.dirname(self.path)
                     if parent:
                         os.makedirs(parent, exist_ok=True)
-                    # `isolation_level=None` = 自动提交：`claim` 的 INSERT 必须在**发出
-                    # 请求之前**真的落盘，否则"先记账"这条协议是假的。
-                    conn = sqlite3.connect(self.path, timeout=5.0, isolation_level=None)
-                    conn.execute("PRAGMA journal_mode=WAL")
-                    conn.execute("PRAGMA busy_timeout=5000")
-                    conn.execute(
-                        "CREATE TABLE IF NOT EXISTS idem ("
-                        " key TEXT PRIMARY KEY, tool TEXT NOT NULL, fp TEXT NOT NULL,"
-                        " status TEXT NOT NULL, ts REAL NOT NULL,"
-                        " text TEXT, kind TEXT, meta TEXT)")
-                    self._conn = conn
+                    self._conn = self._connect()
         return self._conn
 
     def claim(self, key: str, tool: str, fp: str) -> tuple[str, tuple | None]:
@@ -238,11 +322,49 @@ _shared_lock = threading.Lock()
 _shared_ledger = None
 
 
-def _shared() -> Ledger:
-    """进程内共享的一本账（4 个 worker 各持一份连接，互斥靠主键）。
+def _pg_pool(config):
+    """这一轮的 saver 是不是 PG 的：是 ⇒ 返回它的连接池，不是 ⇒ `None`。
+
+    `PostgresSaver` 把池挂在 `.conn` 上；`InMemorySaver` / `MemorySaver` **没有**这个
+    属性（已核实）。判据取"有 `.connection` 方法"而不是"有 `.conn`"——后者对任何
+    恰好叫这个名字的属性都成立，而我们要的是"能借出连接的东西"。
+    """
+    try:
+        saver = ((config or {}).get("configurable") or {}).get("__pregel_checkpointer")
+    except AttributeError:
+        return None
+    pool = getattr(saver, "conn", None)
+    return pool if hasattr(pool, "connection") else None
+
+
+def _shared(config=None):
+    """这一轮该用哪本账。**两档**，按 saver 自己选：
+
+      · 挂的是 PG saver ⇒ 账落**同一个池、同一个库**（`agent/idem_pg.py`）。这样账与
+        checkpoint 的保留期天然同源——分开清会把本批要堵的洞重新打开（清了账、留着
+        checkpoint ⇒ 恢复重放时账是空的 ⇒ 写落第二遍）。
+      · 其余（内存 saver / 没挂 saver / CI）⇒ 今天的 SQLite，**逐字节不变**。
+
+    **失败姿态**：拿到池但建表/断言失败 ⇒ **响亮抛，绝不静默退回 SQLite**。调用方
+    （`guarded_invoke`）把它变成 `unavailable` ⇒ 拒绝这次写——ADR-0012 的失效姿态就是
+    "账本不可用 ⇒ 拒绝这次写"，不是"换一本假装没事的账"。
+
+    缓存口径**刻意不同**：SQLite 那档缓存（一条进程级连接，4 个 worker 各持一份，互斥靠
+    主键），PG 那档**不缓存**（`PostgresLedger` 是薄壳、构造零成本，而池本身已经是共享的
+    ——再包一层缓存只会给"测试之间互相泄漏结论"留门）。
 
     **只在真的要记账时才会被调到**：`active()` 为假时 `guarded_invoke` 在它之前就返回了。
     """
+    pool = _pg_pool(config)
+    if pool is not None:
+        from agent import idem_pg     # psycopg 只住那边（依赖面锁：块⑪）
+        # 幂等建表（`CREATE TABLE IF NOT EXISTS`，与 `saver.setup()` 同办 ⇒ 不需要迁移
+        # 脚本）。**每次写都问一遍**是刻意的：多花的是一次目录查询，换来的是"表在不在"
+        # 这件事每次都当场被确认——真被人删了，这次写会被 `unavailable` 拒掉（响亮），
+        # 而不是等 `claim` 抛一个别名的错。缓存它要多一把按池索引的锁/弱集，为一个
+        # 微秒级的开销引入一个新的失效面，不划算。
+        idem_pg.setup(pool)
+        return idem_pg.PostgresLedger(pool)
     global _shared_ledger
     with _shared_lock:
         if _shared_ledger is None:
@@ -254,20 +376,36 @@ def guarded_invoke(tool, name: str, args: dict, config, *,
                    fingerprint: str, ledger=None) -> str:
     """写操作的**唯一出口**：账本在场则至多一次，账本不在场则与今天逐字相同。
 
+    ⚠️ 账本在场时**必须** `durability="sync"`（`require_sync_durability`，档不对当场抛）：
+    缺省 `async` 下恢复后的 `__pregel_task_id` 会变，账**静默失效**。
+
+    账本**不进 config**：本函数只拿到 `config`，后端由 `_shared(config)` 按 saver 自己选
+    （挂 PG saver ⇒ 落同一个库；否则 SQLite）。`ledger=` 那个参数是给判据换账本用的
+    （反控 `NullLedger` 之类），生产调用点不传。
+
     `fingerprint` **必须由调用方在改动参数之前取**：`execute_node` 会在调用前把
     `device_oled_display` 缺的 `text` 用 temperature 0.7 的 LLM 现创出来
     （`agent/graph.py::_create_display_text`）——对改后的 args 取指纹，那个工具每次
     指纹都不同，幂等判据对它**恒不命中，而且不报错**。
     """
-    if not active(config) or not authz.is_write(name):
+    if not active(config):
         return _call(tool, args)        # 今天的形状：直通，一行账都不记
-    led = ledger if ledger is not None else _shared()
+    # 账本在场 ⇒ 先查档位。**在 `try` 之外、在 is_write 之前**：档不对是配置错，
+    # 对**任何**工具都该当场炸，不该等"恰好这件是写"才炸，更不该降级成一条回执。
+    require_sync_durability(config)
+    if not authz.is_write(name):
+        return _call(tool, args)
     key = key_for(config, name, fingerprint)
+    led = None
     try:
+        # 选后端也在这个 `try` 里：PG 档建表/断言失败 ⇒ 与"记账失败"同一个姿态
+        # （`unavailable` ⇒ 拒绝这次写），**不静默退回 SQLite**。
+        led = ledger if ledger is not None else _shared(config)
         state, row = led.claim(key, name, fingerprint)
     except Exception as e:
         logger.warning("[idem] 记账失败，拒绝执行写操作 %s: %s", name, e)
-        record("execute", "idem_error", name=name, phase="claim", error=str(e)[:200])
+        record("execute", "idem_error", name=name,
+               phase="claim" if led is not None else "open", error=str(e)[:200])
         return unavailable("写操作未执行：幂等账不可用（拒绝在无法记账的情况下动手）")
     if state == "done":
         record("execute", "write_replay_hit", name=name, key=key)

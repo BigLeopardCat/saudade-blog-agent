@@ -2,9 +2,11 @@
 
 ## 今天恒惰性
 
-`build_checkpointer()` 在没给 DSN 时返回 `None`，而 `agent/graph.py` 的 `build_graph()`
-今天**不问它**（末尾是裸的 `g.compile()`，无 checkpointer 参数）⇒ 生产行为与以前逐字节
-相同。本模块只做一件事：把"接上 saver 那天该在哪儿接"从散落的注释收成一个**有名字、
+`build_checkpointer()` 在没给 DSN 时返回 `None`；图那侧（`agent/graph.py::build_graph`）
+**收**这个参数并原样传给 `g.compile(checkpointer=...)`，但它**缺省 `None`**，而生产调用点
+（`server.py` → `agent.create_agent()`）**不传** ⇒ 全仓没有任何一处调用本函数，生产行为与
+以前逐字节相同（这条"只传不造、缺省 None"由 `tests/test_checkpoint_factory.py` 的接线锁
+钉着）。本模块只做一件事：把"接上 saver 那天该在哪儿接"从散落的注释收成一个**有名字、
 有判据**的函数。
 
 ## 为什么原来的存根必须换掉（不是"不好看"）

@@ -45,6 +45,235 @@ def _msg_text(m) -> str:
     return content if isinstance(content, str) else str(content)
 
 
+# ── 本轮窗口（20261015，实验分支 `exp/native-checkpoint` 第一批）──
+# 图内有一族读端**假定 `state["messages"]` 就是本轮**：从前往后扫第一条
+# `[System: …]` 的 `_page_ctx`，对全表数 ToolMessage 的 `_has_frames` /
+# `_frame_texts` / `_frame_chars`，以及 gate 的 `frames` 等等。
+#
+# 这条假定今天成立，但**不是图保证的，是图外保证的**：`graph_input` 每轮把整份消息
+# 列表整个塞进 `messages` 通道，而线程每请求独立随机 ⇒ `add_messages` 的追加永远
+# 没有"上一轮"可追加。任何不经 `graph_input` 的入口（新调用点、测试、接上持久化
+# saver）都会**静默**换语义——20261015 实测：线程一复用，`_page_ctx` 就把上一轮的
+# 页面当本轮报给模型（用户人在留言板，模型被告知在首页），`_has_frames` 把上一轮的
+# 帧当本轮证据（首轮那五条确定性快道结构上永不命中）。
+#
+# 本轮边界要**两个**值才表达得出来，这不是冗余，是"谁知道哪一半"决定的：
+#
+#   `turn_msgs`  = 本轮**注入了几条**。只有 `graph_input` 知道（它手里就是那整份），
+#                  而它在**图外**、看不见上一轮的 state ⇒ 它报不出下标。
+#   `turn_start` = 本轮在 `messages` 里的**绝对起点**。它要等 `add_messages` 合并之后
+#                  才存在（= `len(messages) - turn_msgs`），而合并之后**每追加一条消息
+#                  这个起点就往前错一位**（execute 的帧、model 的回复、gate 的注记）
+#                  ⇒ 换算**只能做一次、在还没人追加的时候做**。
+#
+# 所以分工是：`graph_input` 报条数，图里的**第一个节点**（planner，`START → planner`
+# 是唯一入口）把它冻结成下标，此后所有读端只用下标。
+#
+# ⚠️ 这里踩过一次（20261015 批 1 设计稿的原始形态）：当初想只留条数、窗口取
+# `msgs[-turn_msgs:]`（"末尾 N 条"）。那只在**还没人追加**的时候等于"本轮"。一旦
+# execute 追加了 k 条帧，`msgs[-turn_msgs:]` 就是 `注入[k:] + 追加`——把**开头的
+# `[System: …]` 注入块挤出窗口**（页面事实静默消失），而窗口看起来"还是有内容"。
+# 条数与下标**不是**同一个东西，别再用"反正无 saver 时恒等"来掩盖（无 saver 时
+# 两者确实恒等，所以这个错在臂 A 上永远看不出来）。
+#
+# **无 saver 时窗口是恒等**：`turn_start == 0`（第一轮）或 `-1`（没记）都返回整个
+# 列表，而"没记"正是今天的行为。所以这一刀对臂 A 是**逐字节零变化**
+# （`tests/test_turn_window.py` 钉住这一格，`ckpt_ab_driver --arms graph` 的前后两张
+# 逐轮签名表是它的真链路判据）。
+def freeze_turn_start(messages: list | None, turn_msgs: int, turn_start: int) -> int:
+    """把「本轮注入了几条」换算成**绝对起点**——只做一次，在还没人追加的时候。
+
+    `turn_start >= 0` ⇒ 已经冻结过（重规划轮、reflector 回环都会再进 planner）
+    ⇒ 原样返回，**不许重算**：那时候帧已经在表里，`len(messages) - turn_msgs`
+    会比真起点大，重算等于把窗口的前半段切掉。
+    `turn_msgs <= 0` ⇒ 没记边界（老调用点、探针里的迷你图）⇒ 返回 `-1` = 不窗口化。
+    """
+    if turn_start is not None and turn_start >= 0:
+        return turn_start
+    n = turn_msgs or 0
+    if n <= 0:
+        return -1
+    k = len(messages or []) - n
+    return k if k >= 0 else -1
+
+
+def turn_window(messages: list | None, turn_start: int) -> list:
+    """本轮的切片：从绝对起点 `turn_start` 到表尾。
+
+    `turn_start < 0`（没记边界：老调用点、探针里的迷你图）= 原样返回整个列表，
+    也就是**今天的行为**——不是"空窗口"。`turn_start == 0` 同样是整个列表，而且
+    那是**对的**（本轮的起点就在表头）。起点比列表还长（不该发生）同样退回整个
+    列表，但**记一行 warning**：静默吞掉会让"边界记错了"与"本来就该看全表"长得
+    一模一样，而那正是本仓最贵的一类失效。
+
+    `messages is None` 才换成空表（**不是 `or []`**）：`or []` 会把空表也换成一个新
+    对象，于是"恒等返回"这条负控在空表那一格上不成立——判据要的是**同一个对象**，
+    不是"长得一样"。见 `tests/test_turn_window.py` §①。
+    """
+    msgs = [] if messages is None else messages
+    k = -1 if turn_start is None else turn_start
+    if k <= 0:
+        # `k == 0` = 本轮起点就在表头（第一轮）⇒ 窗口就是整个列表，返回**同一个对象**
+        # 而不是 `msgs[0:]` 那个新列表：判据要的是"零变化"，而"新列表内容相同"不等于
+        # 零变化（`is` 那一格是这一刀的负控，见 `tests/test_turn_window.py` §①）。
+        return msgs
+    if k > len(msgs):
+        logger.warning("本轮窗口的起点比消息列表还长（turn_start=%d > len(messages)=%d）"
+                       "——按整个列表处理；边界记错了，去查 graph_input 与 planner_node "
+                       "的 `freeze_turn_start` 调用", k, len(msgs))
+        return msgs
+    return msgs[k:]
+
+
+# ── 图自持上下文（批 3，20261016）：narrator 的消息窗口 ──────────────────────
+# 背景：`server._build_messages` 每轮把 `req.history[-20:]` **注入**成真消息
+# （assistant 侧过 `strip_fact_lines`、孤儿 user 剪枝），图自己**不持有**历史。接上
+# 持久化 saver、线程改成会话坐标之后反过来：图持有整条会话，注入进来的历史就是
+# **重复**（批 0 实测：历史被重复注入 r 次 ⇒ 提示词 O(轮数²) 膨胀，见判决文档 §4.6）。
+#
+# 这一组函数做的是"**替代**"而不是"删除"——把 `_build_messages` 一直在**悄悄**
+# 提供的三样东西补回图里，否则丢掉注入历史会变成丢掉上下文：
+#
+#   | `_build_messages` 在做 | 不补回来会怎样 | 这里的对应物 |
+#   |---|---|---|
+#   | `req.history[-20:]` 封顶 | 提示词随会话线性膨胀（`model_node` 那句  `with_tool_call_pairs(state["messages"])` **无截断**） | `narrator_messages(turns=10)` |
+#   | assistant 侧过 `strip_fact_lines` | 上一轮的「〔系统〕 页面已跳转：…」变成"它自己说过的话"（生产实证 `20261001T230954`） | `strip_fact_messages` |
+#   | 孤儿 user 剪枝 | 断流轮留下的无回复 user 下一轮被当成待答问题 | `prune_orphan_users` |
+#
+# 三条口径与批 1 的 `turn_window` **完全同源**（同一次设计，同一种失效）：
+#   · `turn_start <= 0`（没记边界／第一轮）⇒ 返回**同一个对象**，= 今天的行为；
+#   · 只作用于 `turn_start` **之前**那一段（历史）；`msgs[turn_start:]`（本轮）原样；
+#   · 判据要的是 `is` 而不是"内容相同"（见 `tests/test_narrator_window.py` §①）。
+#
+# ⚠️ **切轮不切条数**：条数切法会把开头的 `[System: …]` 挤出窗口、页面事实静默消失
+# ——与 `turn_window` 上面那段注记是同一个坑（批 1 已付过一次）。
+
+_SYS_PREFIX = "[System:"
+# 窗口深度：与 `_RECALL_TURNS`（planner 侧能回看的最深轮数，见 `_recent_tail`）同值。
+# `_build_messages` 注入的 `history[-20:]` 约等于 10 轮问答——同一量级，不是新发明。
+# 可调档：去留由读数定（`checkpoint_probe.py --narrator-window` 的合成探针）。
+_NARRATOR_TURNS = 10
+
+
+def _is_system_block(m) -> bool:
+    """服务端注入的上下文块（`[System: …]` 的 HumanMessage）——**不是主人说的话**。
+
+    全仓原本有四处各写一份，取法还不一致（`context.py:534`/`:573`、`graph.py:6131`
+    是 `startswith`；`graph.py:3865` 是 `.lstrip().startswith`）。这里取**宽的那一版**
+    （`.lstrip()`）——判据的意图是"这条是不是注入块"，不是"注入块有没有被缩进过"。
+
+    **不去改那四处**：那属于另一批的机械清理，混进来会让本批"对臂 A 逐字节不变"
+    这条判据多一个不相干的变量。
+    """
+    return (isinstance(m, HumanMessage)
+            and (_msg_text(m) or "").lstrip().startswith(_SYS_PREFIX))
+
+
+def _recent_turn_start(messages: list, end: int, keep: int) -> int:
+    """`messages[:end]` 里**最近 `keep` 轮**的起点下标。
+
+    轮边界 = `_is_system_block`（服务端每轮注入的那条 `[System: …]`）——所以这是
+    **切轮**：切完的窗口一定以一条 `[System: …]` 开头，页面事实不会掉出去。
+    `keep <= 0` ⇒ 返回 `end`（空窗口）；一条边界都没有（老调用点/探针迷你图）⇒ 0。
+    """
+    if keep <= 0:
+        return end
+    starts = [i for i in range(end) if _is_system_block(messages[i])]
+    if not starts:
+        return 0
+    idx = len(starts) - keep
+    return starts[0] if idx < 0 else starts[idx]
+
+
+def strip_fact_messages(messages: list) -> list:
+    """剥掉 assistant 侧的「〔系统〕 …」事实行（复用 `factblock.strip_fact_lines`）。
+
+    那些行是**系统**发给主人的页面事实，生产里由 `_build_messages` 在注入前剥掉
+    （`server.py:717`）。图自持历史之后它们会以"它自己说过的话"的身份回到提示词里
+    ——生产实证 `20261001T230954`。`strip_fact_lines` **幂等**（见 `tests/test_narrator_window.py` §③），
+    所以对**已经被剥过**的注入历史是 no-op。
+
+    只动 `AIMessage` 的**字符串** content：主人的话、工具帧、以及多模态 content
+    数组一律原样（`_msg_text` 会把数组压成文本，拿它写回去是**改内容**）。
+    内容没变的条目返回**原对象**（判据比的是"这一条有没有被动过"）。
+    """
+    out = []
+    for m in messages:
+        if isinstance(m, AIMessage):
+            text = getattr(m, "content", None)   # 先落到局部：mypy 才认得出窄化
+            if isinstance(text, str):
+                stripped = strip_fact_lines(text)
+                if stripped != text:
+                    m = m.model_copy(update={"content": stripped})
+        out.append(m)
+    return out
+
+
+def prune_orphan_users(messages: list) -> list:
+    """剪掉"后面**没有** assistant 回复"的 user 消息（`server.py:733-736` 同款）。
+
+    断流/中断轮会在图 state 里留下一条无回复的 user 消息，下一轮它会被读成"主人问过、
+    系统没答"。服务端注入历史时已经在剪，图自持历史之后这一刀要补回来。
+
+    **判据是"下一条 user 之前有没有 AIMessage"，不是"紧接着的那条是不是 assistant"**：
+    图 state 里这一轮的形状是 `[Sys, Q, 工具帧…, AI]`——`Q` 紧接着的是 `ToolMessage`，
+    按"紧邻"判会把**每一条**答过的提问都剪掉（真答案在帧后面）。服务端那版能按紧邻判，
+    只因为它的历史表里**只有** user/assistant 两种角色。
+
+    `_is_system_block` 的注入块不参与（它后面跟的是主人的问题，不是 assistant）。
+    """
+    out = []
+    for i, m in enumerate(messages):
+        if isinstance(m, HumanMessage) and not _is_system_block(m):
+            answered = False
+            for nxt in messages[i + 1:]:
+                if isinstance(nxt, AIMessage):
+                    answered = True
+                    break
+                if isinstance(nxt, HumanMessage):
+                    break  # 下一条提问：这一轮的窗口到头了
+            if not answered:
+                continue
+        out.append(m)
+    return out
+
+
+def narrator_messages(messages: list | None, turn_start: int,
+                      turns: int = _NARRATOR_TURNS) -> list:
+    """narrator 的消息表：**本轮 + 最近 `turns` 轮**，历史段做三件清理。
+
+    历史段（`messages[:turn_start]`）依次过：剥事实行 → 剪孤儿 user → **丢掉
+    `ToolMessage`**。最后一条是本函数存在的**主要**理由之一：
+
+    · 臂 A（无 saver）的 narrator 只看到**本轮**的帧——`_build_messages` 注入历史时
+      只注入 user/assistant **文本**，从不注入工具帧（`server.py:701-737`）；
+    · 图自持历史之后每轮的帧都留在表里 ⇒ 只按轮数切的话，提示词仍按 K×单帧预算膨胀
+      （`graph.py:13170` 的注自己写着"单帧与单轮已在 execute_node 封顶，**多轮累加
+      仍可能很大**"）。丢掉历史帧之后形状与臂 A 对齐，且真封顶。
+
+    丢帧**不会**造成出站序列非法：图 state 里这些 `ToolMessage` 本来就是**裸的**
+    （`execute_node` 直接 append，前面没有声明调用的 assistant），随后
+    `with_tool_call_pairs` 会给它们补形状——整段丢掉就是没有这段，无孤儿可补。
+
+    `turn_start <= 0`（没记边界／第一轮）或 `turns <= 0` ⇒ 返回**同一个对象**。
+    后者是刻意留的反向对照口（把窗口关掉必须能**复现**线性膨胀，见
+    `tests/test_narrator_window.py` §⑤）。
+    """
+    msgs = [] if messages is None else messages
+    k = -1 if turn_start is None else turn_start
+    if k <= 0 or turns <= 0:
+        return msgs
+    if k > len(msgs):
+        logger.warning("narrator 窗口的起点比消息列表还长（turn_start=%d > len(messages)=%d）"
+                       "——按整个列表处理；边界记错了，去查 graph_input 与 planner_node "
+                       "的 `freeze_turn_start` 调用", k, len(msgs))
+        return msgs
+    start = _recent_turn_start(msgs, k, turns - 1)  # 本轮之外还能留 `turns-1` 轮
+    hist = strip_fact_messages(msgs[start:k])
+    hist = [m for m in prune_orphan_users(hist) if not isinstance(m, ToolMessage)]
+    return hist + msgs[k:]
+
+
 # ── 页面操作指南（20260905：留言引导幻觉修复的确定性知识源）──
 # 背景：3660 事故（用户问"怎么留言"，narrator 编出"昵称/邮箱输入框+右上角登录"
 # 全套幻觉流程）——RAG 语料只有文章，没有留言板操作说明；模型没有真凭实据时
@@ -330,14 +559,23 @@ def _prev_user_msg(messages: list) -> str:
     「确定」时**合成**的确认句（`chat-stream.js` 拼的「确认执行：…」），主人真正
     说的那句在它前面。取不到（历史里没有第二条）返回空串——调用方据此退回它
     今天的口径（"没有可继承的意图"），**不抛异常**。
+
+    **必须跳过 `[System: …]` 注入块**（20261016 批 3）：线程一复用，这一轮的形状就是
+    `[Sys1, Q1, AI1, 帧1…, Sys_cur, Q_cur]` ⇒ 不跳的话"倒数第二条 HumanMessage"是
+    **本轮的 System 块**，不是主人上一句。而确认兑现轮正是"不许重新理解一遍、只能靠
+    原话"的那一轮 ⇒ 取错源 = 意图清单恒空（真缺陷，不是理论问题）。
+
+    取法是"先取非系统 Human 表，长度 ≥2 就用它，否则退回全 Human 表"。**臂 A 逐字节
+    不变**：无 saver 时注入历史里没有 System 块、`Sys` 恒在表头 ⇒ `real[-2] == humans[-2]`
+    （`tests/test_narrator_window.py` §④ 三形态各一条断言）；只有"历史为空 `[Sys, Q]`"
+    那一格走退回分支，而那正是今天返回 System 块文本的那一格。
     """
-    seen = 0
-    for m in reversed(messages):
-        if isinstance(m, HumanMessage):
-            seen += 1
-            if seen == 2:
-                return _msg_text(m)[-500:]
-    return ""
+    humans = [m for m in messages if isinstance(m, HumanMessage)]
+    real = [m for m in humans if not _is_system_block(m)]
+    src = real if len(real) >= 2 else humans
+    if len(src) < 2:
+        return ""
+    return _msg_text(src[-2])[-500:]
 
 
 # 节选截断（20260919）：旧版只留**末尾** per 字，长回复中段的指代锚点会被整段
