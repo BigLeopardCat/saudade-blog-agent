@@ -284,7 +284,7 @@ class Settings(BaseSettings):
     rag_hybrid_enabled: bool = False       # RAG_HYBRID_ENABLED=1/true/yes/on
     embedding_api_key: str = ""            # EMBEDDING_API_KEY
     embedding_base_url: str = ""           # EMBEDDING_BASE_URL（留空 = SDK 默认端点）
-    embedding_model: str = ""              # EMBEDDING_MODEL（留空 = 未配置，向量路不可用）
+    embedding_model: str = "qwen3.7-text-embedding"              # EMBEDDING_MODEL（留空 = 未配置，向量路不可用）
     # 0 = **不向 API 传 `dimensions`**，以返回向量的长度为准（不同供应商支持度不一，
     # 传了可能 400）。想要固定维度才填，填了则校验返回长度必须一致。
     embedding_dim: int = 0                 # EMBEDDING_DIM

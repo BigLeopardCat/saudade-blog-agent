@@ -23,6 +23,7 @@
 **真生产者**（`server._run_agent_stream_to_queue`）上跑一次——那一段**照旧零网络零 LLM**
 （模型还是 `_llm` 替身），只是不再"不 import 生产图"：那正是它要测的那条缝。
 """
+import ast
 import itertools
 import re
 import sys
@@ -41,6 +42,7 @@ from langchain_core.messages import (  # noqa: E402
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.outputs import ChatGenerationChunk  # noqa: E402
 
 import agent.authz as authz  # noqa: E402
 import agent.react_arm as R  # noqa: E402
@@ -71,10 +73,43 @@ class _Res(str):
 
 
 class _Scripted(GenericFakeChatModel):
-    """按脚本吐消息的假模型（同 `test_react_line.py`）。"""
+    """按脚本吐消息的假模型（同 `test_react_line.py`）。
+
+    **必须自己实现 `_stream`**（20261016，臂改成真图的那一天撞出来的）：
+
+    `GenericFakeChatModel._stream`（`fake_chat_models.py`）只读 `message.content`、
+    按空白切片，**`tool_calls` 整个丢掉**。而"走不走流式"由 `BaseChatModel._should_stream`
+    决定——它的最后一条判据是"回调链上挂没挂 `_StreamingCallbackHandler`"。于是同一个
+    假模型在两种跑法下行为相反：
+
+      · 旧臂是**普通生成器**（`yield from` 手搓二元组），没有任何回调 ⇒ `_should_stream`
+        为假 ⇒ 走 `_generate` ⇒ `tool_calls` 在；
+      · 现在臂是**真图**，langgraph 每个节点都挂 `StreamMessagesHandler`（它正是
+        `_StreamingCallbackHandler`）⇒ 走 `_stream` ⇒ 照抄基类就得到
+        **"模型一个工具都不调"**的假现场。
+
+    这不是臂的缺陷（真模型本来就流式吐 tool_call 增量），是替身与真实之间的一处保真度
+    缺口 ⇒ 在替身这一侧补齐，不为了迁就替身去改臂。切法与真流一致：正文按空白切，
+    `tool_calls` 挂在**最后一个**分片上（`AIMessageChunk` 的合并语义会把它们累加出来，
+    实测 `AIMessageChunk(tool_calls=[…])` 会自动补出 `tool_call_chunks`）。
+    """
 
     def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN003
         return self
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):  # noqa: ANN001
+        msg = self._generate(messages, stop=stop, run_manager=run_manager,
+                             **kwargs).generations[0].message
+        text = str(msg.content or "")
+        toks = [t for t in re.split(r"(\s)", text) if t] or [""]
+        for i, tok in enumerate(toks):
+            last = i == len(toks) - 1
+            chunk = AIMessageChunk(
+                content=tok, id=getattr(msg, "id", None),
+                tool_calls=list(getattr(msg, "tool_calls", None) or []) if last else [])
+            if run_manager:
+                run_manager.on_llm_new_token(tok, chunk=ChatGenerationChunk(message=chunk))
+            yield ChatGenerationChunk(message=chunk)
 
 
 class _Boom(_Scripted):
@@ -137,11 +172,15 @@ def _narrator_stub(text: str, seen: list | None = None):
 
 def _run(script: list, tools: dict, *, principal=None, model=None,
          msg: str = "带我去首页", grant=None, narrator=None, seen=None,
-         narrator_model=None) -> list:
+         narrator_model=None, executed=None) -> list:
     """跑一次 `arm.stream`，收下全部 `(mode, data)` 二元组。
 
     `narrator` / `seen` / `narrator_model` 是 P6 的三个旋钮：默认是"narrator 把脚本里
     那一句原样说出来"（既有断言因此一字不用改），要造"正文换人写"的现场才显式给。
+
+    `executed` 是生产 `AgentState` 的那一格（"这一轮已经执行过哪些 spec"）——生产由
+    `execute_node` 累积，臂不回写它。默认不喂（= 这一轮还没执行过任何东西），
+    要造"令牌用在那一件上就作废"的现场（⑥b″）才显式给。
     """
     R._llm = lambda: (model or _Scripted(messages=iter(script),
                                          ai_message_chunk=iter([])))
@@ -156,12 +195,48 @@ def _run(script: list, tools: dict, *, principal=None, model=None,
     state = {"messages": [HumanMessage(content=msg)]}
     if grant is not None:
         state["confirm_grant"] = grant
+    if executed is not None:
+        state["executed"] = list(executed)
     return list(R.build().stream(state, cfg))
 
 
-def _chunks(frames: list) -> list:
-    """`messages` 帧的正文分片——**照生产那半的读法剥一层**（`chunk, meta = data`）。"""
+def _raw_chunks(frames: list) -> list:
+    """`messages` 通道上的**全部**载荷（不分节点、不看类型）。
+
+    只给"通道洁净度"那几条**否定**断言用（⑧："重规划那格的提示不上 messages 通道"）
+    ——判"没有别的东西"必须看得见全部，用下面那个按消费端口径滤过的读法会把它变成恒真。
+    """
     return [d[0] for m, d in frames if m == "messages"]
+
+
+def _chunks(frames: list) -> list:
+    """`messages` 帧的正文分片——**照生产者那半的读法剥一层**（`chunk, meta = data`）。
+
+    ⚠️ 20261016（臂改成真图）起这里**必须按节点名滤**：`planner` 节点自己也在调 LLM、
+    也流式，它的分片带的是 `langgraph_node="planner"`。生产那两条路径
+    （`_run_agent_stream_to_queue` 与 `_run_agent_sync`）都是
+    `isinstance(chunk, AIMessageChunk) and meta.get("langgraph_node") == "model"` 才当
+    主人可见正文 ⇒ 这里照抄同一条判据。不滤的话套件读的是一条生产根本不存在的通道，
+    判据与消费端就不同源了（那正是本仓最常复发的形状）。
+
+    `ToolMessage` 与 `[Fallback 决定]` 开头的 `SystemMessage` 照收，理由也照抄生产：
+    前者两条路径都收（②c 要读那条空内容的帧），后者是 `_run_agent_sync` 认的兜底通道
+    （它**不看节点名**，只看内容前缀）。
+    """
+    out: list = []
+    for m, d in frames:
+        if m != "messages":
+            continue
+        c, meta = d
+        if isinstance(c, AIMessageChunk):
+            if (meta or {}).get("langgraph_node") == "model":
+                out.append(c)
+        elif isinstance(c, ToolMessage):
+            out.append(c)
+        elif isinstance(c, SystemMessage) and str(c.content or "").startswith(
+                "[Fallback 决定]"):
+            out.append(c)
+    return out
 
 
 def _ups(frames: list) -> list:
@@ -253,10 +328,18 @@ check("**`plan_obj` 嵌在 planner 那一格下面**（producer 读的是 `upd[\
 check("TOOLS 行是**真工具**（`instantiate_plan` 展开过，不是技能名）",
       all("navigate_to(" in str(t) for t in (_plan.get("tools") or [])),
       str(_plan.get("tools")))
+_ck = [d for m, d in frames if m == "messages" and isinstance(d[0], AIMessageChunk)]
+_nodes = {(d[1] or {}).get("langgraph_node") for d in _ck}
 check("**正文帧带 `langgraph_node=model`**（meta 不对 ⇒ producer 整条丢掉，"
       "读数静默变成「什么都没说」）",
-      all((d[1] or {}).get("langgraph_node") == "model"
-          for m, d in frames if m == "messages" and isinstance(d[0], AIMessageChunk)))
+      _nodes == {"model", "planner"}, str(sorted(map(str, _nodes))))
+# 20261016 起 `planner` 是真节点、它自己也在调 LLM ⇒ **原始流上一定有它的分片**。
+# 这条断言是"判据与消费端同源"的正控：滤掉它的是生产那半的节点名判据（见 `_chunks`），
+# 不是臂自己不发——臂根本没有"发/不发"这个开关了。
+check("决策轮的推理分片**确实在原始流上**（带 `langgraph_node=planner`）"
+      "——它是被生产者按节点名滤掉的，不是不存在",
+      any((d[1] or {}).get("langgraph_node") == "planner" for m, d in frames
+          if m == "messages" and isinstance(d[0], AIMessageChunk)))
 check("messages 帧的 data 形态与 langgraph 一致（`(chunk, meta)` 二元组）",
       all(isinstance(d, tuple) and len(d) == 2 for m, d in frames if m == "messages"))
 
@@ -300,6 +383,10 @@ print("\n③ 权限闸：与 `graph.execute_node` **同一条**条件（不是�
 _src_line = "not decision.allowed and authz.enforcing(decision.scope)"
 _graph_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 _arm_src = (ROOT / "agent" / "react_arm.py").read_text(encoding="utf-8")
+# 帧契约的唯一事实源（20261016 起）：`_round_state` / `_popup_state` / 四个帧构造器都
+# 搬去了这里。下面几处"接线锁"要同时读两份源码——只读臂那一份，锁会指向**已经搬走**的
+# 字符串（那是"锁的不是事实、是某一行曾经长这样"）。
+_frames_src = (ROOT / "agent" / "frames.py").read_text(encoding="utf-8")
 _line_src = (ROOT / "agent" / "react_line.py").read_text(encoding="utf-8")
 check("**判据字面与 graph 一致**（改成「一律拦」= 两臂比的就不是同一件事了）",
       _src_line in _graph_src and _src_line in _line_src)
@@ -332,20 +419,42 @@ try:
     check("拒绝帧的措辞走 `authz.denial_frame`（与生产同源，不自己拼）",
           _den.startswith("__ERROR__: 权限不足["), _den[:80])
 
-    print("\n③b 工具级入口（`executor is None`）也得有闸——**两扇门只锁一扇**是这条的病")
-    from langchain_core.tools import StructuredTool
-
-    from agent.react_line import wrap_tools_with_receipts
-    RAN.clear()
-    led2 = RunLedger()
-    _t = StructuredTool(name="list_admin_notes", description="",
-                        args_schema={"type": "object", "properties": {}},
-                        func=lambda **kw: _nav_tool(**kw))
-    _wrapped = wrap_tools_with_receipts([_t], led2, skill="")
-    _wrapped[0].func()
-    check("工具级入口同样拒绝（`executor is None` 那条路不再是敞开的）",
-          RAN == [], str(RAN))
-    check("受阻也记进台账（不是静默）", len(led2.blocked) == 1, str(len(led2.blocked)))
+    print("\n③b 第二扇门**已经不存在**（20261016：`wrap_tools_with_receipts` 整体退场）")
+    # 这一节原来的判据是"工具级入口（`executor is None`）也得有闸"——病是**两扇门只锁了
+    # 一扇**。现在那个入口连同它的包装层一起删了：`SkillExecutor.run` 是唯一的执行口，
+    # 闸在它里面。**判据因此从"第二扇门也锁上了"改成"第二扇门没有了"**——锁的是结构，
+    # 不是某一行曾经长这样（批 1 记下的坑 6：锁的落点要选判据，别选字面）。
+    #
+    # 为什么这是**更强**的锁：只要那个包装层回来，就一定有人重新接上一条绕过
+    # `SkillExecutor` 的执行路径，而那条路径上没有任何一节在测它。
+    # **落点选结构，不选字面**（批 1 的坑 6）：两个模块的 docstring 里都还写着那几个
+    # 退场符号的名字（那是在讲历史，不是在用它们），所以判据**不能**是
+    # `"…" not in src`——那会把"名字被提及"读成"门还在"。要判的是**它们不再是这里的
+    # 顶层符号**：AST 走一遍模块体，`FunctionDef` / `ClassDef` 名单里不许有它们。
+    _line_tree = ast.parse(_line_src)
+    _line_fns = {n.name for n in _line_tree.body
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    _line_cls = {n.name for n in _line_tree.body if isinstance(n, ast.ClassDef)}
+    _gone = {"build_agent", "wrap_tools_with_receipts", "ReactLineState"}
+    check("旧骨架整体退场（AST：`build_agent`/包装层/内层 state 都不是本模块的顶层符号）",
+          not (_gone & _line_fns) and "ConvergenceMiddleware" not in _line_cls,
+          f"命中 {sorted((_gone & _line_fns) | ({'ConvergenceMiddleware'} & _line_cls))}")
+    check("两个模块都不再 import `langchain.agents`（内层那张图这一层已经没有了）",
+          "langchain.agents" not in _line_src and "langchain.agents" not in _arm_src)
+    check("`SkillExecutor` 不再有「没给执行器就自己跑」的那条路",
+          "executor is None" not in _line_src)
+    check("臂里**只有 `SkillExecutor.run` 一个执行口**（工具不被任何别处直接调用）",
+          _arm_src.count("executor.run(") == 1)
+    # 光数 `executor.run(` 还不够——真工具表要是被别处拆开自己调，那一处不会经过
+    # `SkillExecutor`，闸与台账都不在。判据 = **工具表的消费方只有一个**，且必须是
+    # `SkillExecutor(...)` 那一处（不是"某一行长这样"：行可以重排，消费方数量不行）。
+    _tool_uses = [ln.strip() for ln in _arm_src.splitlines()
+                  if "_real_tools(" in ln and not ln.lstrip().startswith("def ")]
+    check("真工具表只交给一个消费方，而那个消费方建的正是 `SkillExecutor`"
+          "（没有第二条执行路径）",
+          len(_tool_uses) == 1 and "_real_tools(config)" in _tool_uses[0]
+          and _arm_src.count("SkillExecutor(") == 1,
+          f"{_tool_uses} SkillExecutor×{_arm_src.count('SkillExecutor(')}")
 finally:
     authz.check = _orig_check  # type: ignore[assignment]
 
@@ -400,8 +509,16 @@ finally:
 _ov_text = "".join(str(c.content) for c in _chunks(_over) if isinstance(c, AIMessageChunk))
 check("撞预算的收尾同样上正文（`before_model` 那条分支也认）", bool(_ov_text.strip()),
       repr(_ov_text))
-check("两条收尾走的是**同一个转发口**（`_on_wrap_up` 只此一处，不与 `_on_model` 混）",
-      _arm_src.count("def _on_wrap_up") == 1)
+# 改前这条钉的是 `def _on_wrap_up`（那个函数已经随适配器一起没了）。**要判的事情没变**：
+# 两条收尾（无进展 / 撞预算）不许各走一条转发路——一条路被删掉、另一条还在，报告里
+# 只会显示"某几条用例的正文是空的"，看不出是哪条路没了。
+# 新拓扑下这件事**结构性地**成立：正文只有 `model` 节点发（它 → `gate` → `END`），收尾语
+# 只是它三个出口之一。落点因此改成**产/发两边的计数**：产三处（预算与无进展共用
+# `_stop_update`、planner 崩、execute 崩）、**发只一处**。多一个转发口 ⇒ 当场红。
+_ww = _arm_src.count('ctx["wrap_up"] = ')
+_wr = _arm_src.count('ctx["wrap_up"]') - _ww
+check("两条收尾走的是**同一个转发口**（收尾语产三处、发只一处：`model` 节点）",
+      _ww == 3 and _wr == 1, f"writes={_ww} reads={_wr}")
 
 
 
@@ -482,10 +599,45 @@ try:
     check("且**不弹卡**（同一条判据的另一面）",
           not _last_node(_gf, "execute").get("pending_confirm"))
     RAN.clear()
+    # 令牌形状必须是**生产真会产出的那种**（`confirm.verify` 出来的 payload）：
+    # `{"skill": …, "specs": [{"tool": …, "args": …}]}`。此前这里喂的是
+    # `{"skill": "tag_delete"}`（没有 `specs`）——生产**从不产这种形状**，它当初能过
+    # 只是因为旧判据是"令牌在场就放行"。判据改成 `_grant_covers` 之后这种形状
+    # 合理地判成"不覆盖"（`specs` 空 ⇒ 假），所以夹具要跟着改成真的。
+    _G_OK = {"skill": "tag_delete",
+             "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]}
     _gf2 = _run([_call("tag_delete", name="大笨狗")], {"delete_tag": _nav_tool},
-                principal=ADMIN0, msg=W_MSG, grant={"skill": "tag_delete"})
-    check("主人刚在卡上点过确定（`confirm_grant` 在场）⇒ 这句不是命令也放行",
+                principal=ADMIN0, msg=W_MSG, grant=_G_OK)
+    check("主人刚在卡上点过确定（令牌签名体里**正是这一件**）⇒ 这句不是命令也放行",
           len(RAN) == 1 and not _last_node(_gf2, "execute").get("pending_confirm"), str(RAN))
+
+    print("\n⑥b′ 令牌只授权**签名体里那一件**（20261012 生产实证：一次点头授权了两件写）")
+    RAN.clear()
+    # 同一件工具、**换一个目标**：令牌是给「大笨狗」的，这句要删的是「别的标签」
+    # ⇒ 不是签名体里那一件 ⇒ 照常弹卡。旧判据（`not self.grant`）会在这里放行。
+    _gf3 = _run([_call("tag_delete", name="别的标签")], {"delete_tag": _nav_tool},
+                principal=ADMIN0, msg=W_MSG,
+                grant={"skill": "tag_delete",
+                       "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]})
+    check("令牌是**另一件**（同工具换目标）⇒ 一件都不执行、照常弹卡",
+          RAN == [] and bool(_last_node(_gf3, "execute").get("pending_confirm")),
+          f"RAN={RAN}")
+
+    print("\n⑥b″ 令牌**用在那一件上就作废**（20261012 第二次收窄：同一件写静默落库三份）")
+    RAN.clear()
+    # 令牌签名体里**正是这一件**，但这一件**本轮已经执行过**（`state["executed"]` 有它）
+    # ⇒ 令牌已被用掉，不再覆盖 ⇒ 照常弹卡、零执行。
+    #
+    # 这一格是**专门为「补上的那七格」造的定向用例**：`_popup_state` 补上 `executed`
+    # 之前，投影给 `_confirm_popup` 的那份 state 里**没有这一格** ⇒ `_grant_covers`
+    # 读到空 ⇒ 判「覆盖」⇒ 不弹卡、直接执行。offline 差分（`_popup_state` 四格 vs
+    # 十一格）在同一个现场上实测过这条会翻面，这里是它进套件的样子。
+    _gf4 = _run([_call("tag_delete", name="大笨狗")], {"delete_tag": _nav_tool},
+                principal=ADMIN0, msg=W_MSG, grant=_G_OK,
+                executed=['delete_tag({"name": "大笨狗"})'])
+    check("令牌在、签名体也对，但**这一件事已经做过了** ⇒ 一件都不执行、照常弹卡",
+          RAN == [] and bool(_last_node(_gf4, "execute").get("pending_confirm")),
+          f"RAN={RAN}")
 
     print("\n⑥c 提问轮：**不许弹卡**（把提问读成意图 = 凭空造一次授权）")
     RAN.clear()
@@ -501,17 +653,33 @@ finally:
 
 print("\n⑥d 接线锁：几处照着抄就会漂的地方")
 _line_src2 = (ROOT / "agent" / "react_line.py").read_text(encoding="utf-8")
-check("同意闸用的是**生产那三条判据本身**（需要同意 ∧ 无 grant ∧ 无命令语），不另立一套",
+# ⚠️ 20261016 修：这一条此前钉的是 `"not self.grant" in _line_src2`。锁的**意图**是
+# "别另立一套同意判据"，落点却选成了一行**字符串**——而生产 20261012 把那行改成了
+# `not _grant_covers(state, spec)`（两次收窄，各对应一次生产事故）⇒ 这条锁**把漂移
+# 永久化了**：它越绿，臂离生产越远。现在落点改成"调的是生产那一份判据"，字符串只是
+# 那个调用的写法；判据本身的行为面由 `tests/test_frame_contract.py` ⑨e–⑨j 逐格锁住
+# （无令牌/正是这一件/另一件/只有 skill 没 specs/已执行过/本线跑过）。
+check("同意闸用的是**生产那三条判据本身**（需要同意 ∧ 令牌不覆盖这一件 ∧ 无命令语），"
+      "不另立一套",
       "authz.requires_consent(self.principal, name)" in _line_src2
-      and "not self.grant" in _line_src2
+      and "not self._grant_covers(spec)" in _line_src2
       and "authz.consent_granted(self.principal, name, self.user_msg)" in _line_src2)
+check("且那份 `_grant_covers` 是**从生产 import 的**（自写一份等价判据＝第二条漂移源）",
+      "from agent.graph import" in _line_src2 and "_grant_covers," in _line_src2)
 check("**整批先判**（命中即一个都不跑）——读工具与写工具混排时不能跑一半",
       "missing = [s for s in specs if self._consent_missing(s)]" in _line_src2)
 check("弹卡调的是 `graph._confirm_popup` **本身**（抄第二份排序/快照/滤空 = 两条漂移源）",
       "from agent.graph import" in _arm_src and _arm_src.count("_confirm_popup(") == 1)
-_onpop = _arm_src.split("def _on_popup")[1].split("def _crash_tail")[0]
-check("弹卡轮**不自己发正文**（补一条 messages 帧 = 正文入队两遍）",
-      "AIMessageChunk" not in _onpop)
+# 改前这条钉的是 `def _on_popup` 那一段源码（那个函数随适配器一起没了）。**要判的事情
+# 没变**：弹卡轮不许臂自己补一条正文（补了 = producer 的 `confirm_text` 与它一前一后，
+# 正文入队两遍）。新拓扑下这件事**结构性地**成立——`execute` 的弹卡/零改动出口经
+# `EXECUTE_ROUTES` 直接落 `END`，`model` 节点根本不在路径上。落点因此改成**走哪条边**，
+# 与 `graph.route_after_execute` 判的是同一件事（不是"某一段曾经长这样"）。
+_pc = {"pending_confirm": {"specs": ["delete_tag({\"name\": \"x\"})"]}}
+check("弹卡轮**不自己发正文**（弹卡/零改动轮经 `EXECUTE_ROUTES` 直接落 `END`，到不了 `model`）",
+      R.EXECUTE_ROUTES[R.route_after_execute(_pc)] == "__end__"
+      and R.EXECUTE_ROUTES[R.route_after_execute({"noop_note": "状态已达成"})] == "__end__",
+      str(R.EXECUTE_ROUTES[R.route_after_execute(_pc)]))
 check("待确认的 spec **不进 `calls`/`blocked`**（进 calls 会让 `forbid_tool_calls: [\"@write_console\"]`"
       "当场转红，而那族的本意正是「一件写工具都没碰」）",
       "self.calls.append" not in _line_src2.split("if missing:")[1].split("outs: list[str] = []")[0])
@@ -552,9 +720,23 @@ _gf = _gate_frames(_g)
 check("正文带命令前缀 ⇒ 产 `fallback_text`（生产据此发 `__RESET__` 并换正文）",
       bool(_gf) and bool(_gf[0].get("fallback_text")) and _gf[0].get("done") is True,
       repr(_gf))
-check("兜底轮**不发**正文帧（正文换成兜底文本的是生产者，不是臂自己去演）",
-      not [c for c in _chunks(_g) if isinstance(c, AIMessageChunk)],
+# 改前这条钉的是"兜底轮一个 `AIMessageChunk` 都没有"——那在**手搓一整片**的适配器下
+# 成立（臂自己把正文一次性塞进 updates）。20261016 臂换成真图之后 narrator 走**真流式**
+# （与生产 `model_node` 同一条 `get_llm`、同一个 `llm_streaming=True`），分片在**闸门
+# 之前**就上了通道 ⇒ 那句断言不再成立，**但病没回来**：要防的是"臂自己把兜底文本再发
+# 一遍"（生产者的 `emit_text` 会把正文入队两遍）。判据因此落到**兜底文本本身**上。
+_fb0 = str((_gf[0] or {}).get("fallback_text") or "")
+check("兜底轮**臂自己不发**兜底正文（兜底文本只走 `gate.fallback_text` + 那条 "
+      "`[Fallback 决定]`；以分片再发一遍 = 生产者 `emit_text` 的正文入队两遍）",
+      bool(_fb0) and not [c for c in _chunks(_g) if isinstance(c, AIMessageChunk)
+                          and _fb0[:20] in str(c.content)],
       repr([str(c.content)[:30] for c in _chunks(_g)]))
+# **刻意偏差**（ADR-0009《取舍》）：分片先出、闸门后判。它安全**只因为**同一格带了
+# `fallback_text`——生产者的 `__RESET__` 全靠它把已经流出去的那段撤掉。两条必须同时
+# 成立，所以锁成一条蕴含式：想改回"先缓冲再判"，就得连这条与 ADR 一起改。
+check("分片在闸门之前出去（**刻意偏差**，与生产同形）⇒ 兜底轮必须同时产 `fallback_text`",
+      any(isinstance(c, AIMessageChunk) and str(c.content).strip() for c in _chunks(_g))
+      and bool(_fb0))
 _sys = [c for c in _chunks(_g) if isinstance(c, SystemMessage)]
 check("同步路径的 `[Fallback 决定]` 也在（`_run_agent_sync` 只读 messages 通道那一格）",
       len(_sys) == 1 and str(_sys[0].content).startswith("[Fallback 决定]:"),
@@ -584,10 +766,18 @@ check("重规划那格的提示**不上** messages 通道（它只是内层的�
 RAN.clear()
 _ok = _run([AIMessage(content="你好呀，有什么可以帮你的吗？")],
            {}, principal=UNKNOWN, msg="谢谢你")
-check("干净轮：零 gate 帧、正文原样上 messages 通道",
-      not _gate_frames(_ok)
+# 改前这条钉的是"零 gate 帧"——那是**适配器**的产物（旧的 `_gate` 在通过时返回 `{}`，
+# 于是 updates 里根本没有 `gate` 这一格）。现在臂直调生产 `gate_node`，它的**通过**出口
+# 就是 `{"done": True, "gate_replan": False}`（`graph.py:13751`）⇒ 有且只有一格，且
+# **没有 `fallback_text`**。判据因此改成"通过出口逐字同源"，比"零帧"更强：零帧既可以
+# 是"没开火"，也可以是"这一格压根没接上"，而报告里两者长得一样。
+_gok = _gate_frames(_ok)
+check("干净轮：gate 走**通过**出口（`done=True, gate_replan=False`，与 `graph.py` 逐字同源）"
+      "、无 `fallback_text`、正文原样上 messages 通道",
+      len(_gok) == 1 and _gok[0].get("done") is True
+      and _gok[0].get("gate_replan") is False and not _gok[0].get("fallback_text")
       and any("你好呀" in str(c.content) for c in _chunks(_ok)),
-      repr(_gate_frames(_ok)))
+      repr(_gok))
 
 # 端到端（真生产者）：臂→`server._run_agent_stream_to_queue`→队列原始帧
 _o = _drive_producer([AIMessage(content=_CMD_REPLY)])
@@ -599,8 +789,6 @@ check("端到端负控：干净轮一条 `__RESET__` 都没有",
       not [x for x in _o2 if isinstance(x, str) and x.startswith("__RESET__")], repr(_o2))
 
 # 接线锁：判据只许有一份
-check("臂侧**直调** `graph.gate_node`（判据不抄第二份 ⇒ 不会各自漂）",
-      _arm_src.count("gate_node(") == 1 and "from agent.graph import" in _arm_src)
 # 这一条**必须看代码、不看文本**：臂的注释里正解释着"这几条判据一条都没抄"，
 # 裸搜字符串会把那段说明本身判成违规（"断言先剥注释"——同族坑见 CSS 那次的
 # `[^}]*` 在注释处截断）。所以走 AST：只在**标识符**里找，散文里点名不算数。
@@ -618,28 +806,62 @@ def _idents(src: str) -> set[str]:
 
 
 _ARM_IDS = _idents(_arm_src)
+# 这一条原来钉 `_arm_src.count("gate_node(") == 1`——名字换了（`gate_node as
+# `_prod_gate_node`，因为臂自己也有一个同名节点函数），锁**当场变空**。落点改成本意：
+# **判据本体是生产那一份，且只有一处调用点**（标识符面 + 调用点计数，不是某个字符串）。
+check("臂侧**直调** `graph.gate_node`（判据不抄第二份 ⇒ 不会各自漂）",
+      "_prod_gate_node" in _ARM_IDS and _arm_src.count("_prod_gate_node(") == 1)
 check("判据本体一个标识符都没搬进来（`_REPLAN_ISSUES` / `_fallback_result` / `_claim_issue`）",
       not (_ARM_IDS & {"_REPLAN_ISSUES", "_fallback_result", "_claim_issue"}))
 
 
 check("`plan_encode` **不经手**——臂手上是 `plan_obj`，塑形走 `plan_state`（唯一获准的编码方）",
-      "plan_encode" not in _ARM_IDS and "plan_state" in _ARM_IDS)
+      # 批 1 时这一处调用住在 `frames.round_state` 里，判据读两份源码；批 2 塑形器退场，
+      # `plan_state` 的调用点回到臂自己（`_norm_state`）。**落点仍是"唯一获准的编码方
+      # 有没有被绕过"**，不是"某一行出现在哪个文件里"（批 1 坑 6：锁要选判据别选字面）。
+      "plan_encode" not in _ARM_IDS and "plan_encode" not in _idents(_frames_src)
+      and "plan_state" in _ARM_IDS)
 
-# 塑形器喂的键：**函数体里读的那七个看得见，辅助函数读的三个看不见**（20261012 补）。
-# 漏后三个**不报错**，只让闸门少开火（`.get(…, [])` 把"本线没喂"与"本轮确实没有"读成
-# 同一件事）——`_claim_issue` 洞⑥ 的 `facts.consent_blocked` 恒 False ⇒ `promise_ok=True`
-# ⇒ 那一族在本线上不判；`_blocked_article_targets` 要 `state["blocked"][i]["spec"]`。
-_led0 = RunLedger()
-_ex0 = SkillExecutor({}, _led0)
-_kst = set(R._gate_state({}, {}, _led0, [], _ex0, AIMessage(content="x"), replan=False))
-check("闸门 state 喂了**辅助函数读的那三格**（`blocked`/`blocked_seen`/`confirm_grant`）",
-      {"blocked", "blocked_seen", "confirm_grant"} <= _kst, str(sorted(_kst)))
+# 塑形器**整体退场**（20261016）：闸门与 `_confirm_popup` 拿到的就是 `execute` 节点
+# 返回的那份**真 state**。改前这一节判的是"塑形器喂了哪几格"，而那张表**自称四格、AST
+# 走完实测十一格**——漏掉的 `executed` 正是「令牌用在那一件上就作废」那一格，那条判据
+# 因此**恒不生效**（批 1 用事实换来的教训）。
+# 真 state 下这件事变成结构性质，判据落到**那几格是不是 `AgentState` 的声明键**上：
+# 未声明的键被 langgraph **静默丢掉**（本仓付过 13 次代价的那一族），少一格不报错、
+# 只让闸门少开火。反向对照：从 `AgentState` 里删掉任一格 ⇒ 当场红。
+from agent.graph import AgentState, graph_input  # noqa: E402
+from agent.frames import GATE_STATE_KEYS, POPUP_STATE_KEYS  # noqa: E402
+_ANN = set(AgentState.__annotations__)
+_GK = {"blocked", "blocked_seen", "confirm_grant"}      # 辅助函数读的那三格（20261012 补）
+check("闸门辅助函数读的那三格是 `AgentState` 的**声明键**（未声明 ⇒ 被静默丢掉）",
+      _GK <= _ANN, str(sorted(_GK - _ANN)))
+check("`graph_input` 的初值里也带着它们（不是「声明了、但谁都没写过」）",
+      _GK <= set(graph_input([])), str(sorted(_GK - set(graph_input([])))))
+check("**两张表整体** ⊆ `AgentState`（`GATE_STATE_KEYS` / `POPUP_STATE_KEYS` 都不许有"
+      "声明外的键——那正是「漏掉 `executed`」那一族的形状）",
+      (set(GATE_STATE_KEYS) | set(POPUP_STATE_KEYS)) <= _ANN,
+      str(sorted((set(GATE_STATE_KEYS) | set(POPUP_STATE_KEYS)) - _ANN)))
 check("`blocked` 的键形与 producer 读的那一份同源（缺 `spec` ⇒ 文章族目标判据恒假）",
       "spec" in R._blocked_row({"tool": "t", "reason": "r", "args": {"a": 1}}))
-_gmsgs = R._gate_state({}, {}, _led0, [], _ex0, AIMessage(content="x"), replan=False)
-check("narrator 那一支的 state **不带答复**（`reply` 缺省不放；生产 narrator 也看不到草稿）",
-      R._round_state({}, {}, _led0, [], _ex0)["messages"] == []
-      and len(_gmsgs["messages"]) == 1 and str(_gmsgs["messages"][0].content) == "x")
+check("塑形器在臂里**一个都不是标识符**了（`_round_state`/`_gate_state`/`_popup_state`）",
+      not (_ARM_IDS & {"_round_state", "_gate_state", "_popup_state", "round_state",
+                       "gate_state", "popup_state"}))
+# narrator 看不到草稿这件事现在是**结构性**的：`planner` 节点不往消息表写任何东西
+# （它一旦写，`with_tool_call_pairs` 会把工具帧认领进那条 assistant，而 planner 的
+# `tool_calls` 与 execute 真发出去的 `tool_call_id` 对不上 ⇒ 出站序列非法）。
+_planner_tree = ast.parse(_arm_src)
+_pn = next(n for n in _planner_tree.body
+           if isinstance(n, ast.FunctionDef) and n.name == "planner_node")
+_pn_msg_keys = [k.value for r in ast.walk(_pn) if isinstance(r, ast.Dict)
+                for k in r.keys
+                if isinstance(k, ast.Constant) and k.value == "messages"]
+check("`planner` 节点**从不写消息表**（AST：它的字典里没有 `messages` 这个键）"
+      "⇒ 草稿结构上到不了 narrator 与闸门",
+      not _pn_msg_keys, str(_pn_msg_keys))
+check("多轮跑下来 `planner` 那一格也从没带过 `messages`（与 AST 那条互为对照）",
+      all("messages" not in (u.get("planner") or {})
+          for u in _ups(_draft) if u.get("planner")),
+      repr([sorted(u["planner"]) for u in _ups(_draft) if u.get("planner")]))
 
 # ── ⑨ 离线 A/B 探针的折算表（20261011 修的三处测量偏差）────────────────────────
 # `eval/experiments/react_line_ab.py` 是"定点探针"，不在 CI（`tests/run_all.py` 只收
@@ -732,7 +954,11 @@ _g2 = _gate_frames(_run([AIMessage(content="AUTO_NAVIGATE:/guestbook")], {},
                         principal=UNKNOWN, msg="谢谢你",
                         narrator="那我们再聊聊别的吧。"))
 check("草稿带前缀、narrator 那段干净 ⇒ **不**打回（拿草稿去过闸的实现会在这里错判）",
-      not _g2, repr(_g2))
+      # 20261016：通过出口现在是 `{"done": True, "gate_replan": False}`（生产
+      # `graph.gate_node` 的 PASS 就是这一格），不再像旧适配器那样返回 `{}` ⇒
+      # 判据从"一格都没有"改成"这一格**没有打回**"。
+      len(_g2) == 1 and not _g2[0].get("fallback_text")
+      and not _g2[0].get("gate_replan"), repr(_g2))
 
 _ef = _run([AIMessage(content=_DRAFT)], {}, principal=UNKNOWN, msg="谢谢你", narrator="")
 check("narrator 两次都拿不出正文 ⇒ 退回决策模型那条草稿（一条有内容的话比"
@@ -759,9 +985,18 @@ check("**narrator 用的是独立模型工厂**（`_narrator_call` 调 `_narrato
       "捏回一个模型）",
       "def _narrator_llm()" in _arm_src and "def _llm()" in _arm_src
       and "llm = _narrator_llm()" in _arm_src)
-check("闸门与 narrator 共用**同一份 state 塑形器**（两处各拼一份 ⇒ 迟早对同一轮"
-      "算出不一样的形状）",
-      "return _round_state(" in _arm_src and "rst = _round_state(" in _arm_src)
+# 20261016：塑形器那一对壳（`round_state` / `gate_state`）连同整个 `frames` 塑形层
+# 一起退场了，收成**一个函数** `_norm_state`。判据跟着换落点：**调用点恰好两处，且
+# 就在这两个函数里**（AST 取，不钉字面——行可以重排，"谁调了它"不行）。反向对照：
+# 谁再各拼一份形状，这条当场红。
+_norm_owners = sorted({fn.name for fn in ast.walk(ast.parse(_arm_src))
+                       if isinstance(fn, ast.FunctionDef)
+                       for n in ast.walk(fn)
+                       if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                       and n.func.id == "_norm_state"})
+check("闸门与 narrator 共用**同一份 state 塑形器**（`_norm_state` 是唯一一份，"
+      "调用点恰好两处）",
+      _norm_owners == ["_narrator_prompt", "gate_node"], str(_norm_owners))
 check("narrator 的提示词走**唯一入口** `_narrator_prompt` 一处（第二份排版＝漂移源）",
       _arm_src.count("_EXECUTOR_PROMPT.format") == 1)
 

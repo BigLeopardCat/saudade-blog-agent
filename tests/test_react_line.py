@@ -1,30 +1,37 @@
 # -*- coding: utf-8 -*-
-"""ReAct 试验线（`agent/react_line.py`）的接线单测：离线、秒级、零网络零 LLM。
+"""`agent/react_line.py` 的单测：离线、秒级、零网络零 LLM。
 
-**为什么必须单独一套**：这条线的两件资产（收敛判据、工具级回执）都是"跑起来才知道
-接没接上"的东西。判据写在 `before_model` 里，而 `before_model` 会不会被 `create_agent`
-调用、`jump_to="end"` 会不会真的终止、包装层的回执有没有进台账——这些都不是纯函数
-能验的。**"能力有测试 ≠ 接线有测试"**（本仓的既定纪律）。
+**20261016 重写**。这份文件此前驱动的是 `create_agent` + `ConvergenceMiddleware` +
+`wrap_tools_with_receipts` 那一套骨架（三条收敛判据挂在 `before_model` / `after_model`
+两个钩子上，工具级回执挂在包装层上）。那三件**整体退场**了——第二条臂现在是一张真的
+`StateGraph`（`agent/react_arm.py`），判据由 `planner` 节点**直接调**。所以这份文件
+换了两件事：
+
+  · **循环级的行为**（无进展 / 预算 / 纠偏 / 权限闸真的拦住了执行）搬去了
+    `tests/test_react_arm.py`——那边跑的是真图、真节点、真帧；在这里再搭一个假循环
+    只会搭出**第二份实现**，而两份实现对同一件事的看法迟早会分家。
+  · **本文件改判剩下的四件纯资产**：`spec_signature` / `RunLedger` / `SkillExecutor` /
+    `convergence_verdict` / `wrap_up_text`。它们是判据的**全部输入输出面**，逐格锁住
+    就等于把循环级的判据锁住了一大半（剩下的那一半是"节点有没有真的调它"，归
+    `test_react_arm.py`）。
 
 钉住的契约（这里红 = 某条判据被改掉了，改动要同步改这里）：
 
-  · **无进展收敛**：同一个 `(工具, 参数)` 签名执行过一次之后，第二轮**不再执行**它，
-    跳 `end` 产收尾，**不抛 `GraphRecursionError`**（自由 ReAct 的默认形态是抛）；
-  · **轮次预算**：模型轮数用满即收尾，且**撞预算的那一轮照常执行**（与生产
-    `MAX_PLAN_ROUNDS` 同序——本文件的用例会断言最后一条 ToolMessage 在场）；
-  · **回执台账**：checker PASS 进 `ledger.receipts`、BLOCK 进 `ledger.blocked` 带原因码，
-    且工具返回文本末尾**附了一行回执**（模型看得见，这是治"同一步反复重试"的燃料）；
-  · **自然收尾不受打扰**：模型自己给出无 tool_calls 的回复 ⇒ 零收尾注入、`stop_reason`
-    为空（判据不许把"正常答完"也当成"卡住"）；
+  · **签名归一**：`(工具, 参数)` 的键序/类型漂移都算同一个调用；
+  · **台账分列**：checker PASS 进 `receipts`、BLOCK 进 `blocked` 带原因码、纯应答技能
+    进 `replies`（**不进 receipts**——receipts 的语义是"系统确认的事实"）；
+  · **技能级展开**：一次技能调用 = 实例化计划 + 逐工具验收，`run()` 回报真跑了几件；
+  · **台账登记**（20261016 新增，本批 ④b 那条判据的燃料）：`SkillExecutor.run` 记的是
+    **技能级**签名、且取参在**字面路径修正之前**——两条口径都必须与
+    `convergence_verdict` 的对照方（模型的原始 `tool_calls`）同源，错一条 ⇒ 无进展判据
+    恒不触发（症状是"同一个动作原地打转到撞预算"，报告里看着像模型不听话）；
+  · **三条收敛判据**：预算（入口相）/ 无进展（出口相）/ 意图纠偏（只此一次）；
   · **权限闸**（P1，20261004）：判据字面与 `graph.execute_node` **同一条**
-    （`not allowed and authz.enforcing(scope)`），**两条入口都有**（技能级
-    `SkillExecutor.run` 与工具级 `wrap_tools_with_receipts`）——只锁一扇门是这条的
-    原始病；被拒的调用**也记进 `executed`**，于是反复被拒由"无进展"收尾，而不是把
-    轮次预算全烧在同一个拒绝上。
+    （`not allowed and authz.enforcing(scope)`），被拒的调用**也记进台账**。
 
-⚠️ 用例里的模型是**脚本化的假模型**（`_Scripted`）：它不看提示词、不看工具菜单，只按
-脚本吐 `AIMessage`。所以本文件证明的是**接线**，不是"模型会不会用工具"——后者只有
-真链路的 A/B（`eval/experiments/react_line_ab.py`）能回答，别拿这份绿灯去替它背书。
+⚠️ 这里**没有假模型**：本文件不再跑循环。循环级用例（含假模型）在 `test_react_arm.py`，
+那是"接线"那一层；"模型会不会用工具"只有真链路的 A/B
+（`eval/experiments/react_line_ab.py`）能回答，别拿这份绿灯去替它背书。
 """
 import sys
 from pathlib import Path
@@ -32,21 +39,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 
-from langchain_core.language_models.fake_chat_models import (  # noqa: E402
-    GenericFakeChatModel,
-)
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
-from langchain_core.tools import StructuredTool  # noqa: E402
+from langchain_core.messages import AIMessage  # noqa: E402
 
 from agent import authz  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 from agent.react_line import (  # noqa: E402
-    ConvergenceMiddleware,
     RunLedger,
     SkillExecutor,
-    build_agent,
+    convergence_verdict,
     spec_signature,
-    wrap_tools_with_receipts,
+    wrap_up_text,
 )
 
 # 用例里的动作是**管理动作**（`freeze_account`，硬 scope `admin.console`）。20261004 起
@@ -64,157 +66,43 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-_UID_SCHEMA = {"type": "object", "properties": {"uid": {"type": "integer"}},
-               "required": ["uid"]}
-
-
 def authz_deny(principal, tool: str) -> bool:
     """这个身份调这个工具**会不会被闸拦下**（判据字面与 `graph.execute_node` 同一条）。"""
     d = authz.check(principal, tool)
     return not d.allowed and authz.enforcing(d.scope)
 
 
-def _stub(name: str, body) -> StructuredTool:
-    return StructuredTool(name=name, description=f"{name} 的离线桩",
-                          args_schema=_UID_SCHEMA, func=body)
-
-
-class _Scripted(GenericFakeChatModel):
-    """按脚本吐回复的假模型。忽略绑定与提示词——**验的是接线不是智能**。"""
-
-    def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN003
-        # 假模型是 pydantic 模型（`GenericFakeChatModel`）⇒ 不许挂任意属性；
-        # 它本来就忽略菜单（只按脚本吐消息），记不记这笔都不影响判据。
-        return self
-
-
-class _Cmd(str):
-    """带连线命令的工具返回（`str` 子类 + `kind`/`meta`，同 `tools.base.ToolResult`）。
-
-    动作类工具（`toggle_effect` 等）在 `_check_spec` 里有一条**命令契约**判据：没有
-    `meta["cmd"]`（kind 对得上）一律 BLOCK `cmd_shape`。桩不带它就测不到"真的办成了"
-    这一步，只会看到一条受阻回执。
-    """
-
-    def __new__(cls, text: str, kind: str = "effect"):
-        o = super().__new__(cls, text)
-        o.kind = "ok"
-        o.meta = {"cmd": {"kind": kind, "effect": "sakura", "action": "on",
-                          "url": "/", "mode": "direct"}}
-        return o
-
-
 def _call(name: str, **args) -> AIMessage:
+    """模型这一轮点名的一个**技能**（第二条臂绑的是技能菜单，不是裸工具）。"""
     return AIMessage(content="", tool_calls=[
         {"name": name, "args": args, "id": f"call_{name}_{len(args)}", "type": "tool_call"}])
 
 
-def _run(script: list, tools: list, *, msg: str = "动手吧", **kw) -> tuple[dict, RunLedger]:
-    model = _Scripted(messages=iter(script), ai_message_chunk=iter([]))
-    kw.setdefault("principal", ADMIN)
-    # 主人原话**两个去处**：给模型看的那条消息，与收尾丢意图纠偏扫意图的那一句。
-    # 缺省「动手吧」扫不出任何动作意图 ⇒ 既有用例的行为一字不变。
-    kw.setdefault("user_msg", msg)
-    agent, ledger = build_agent(model, tools, system_prompt="你是测试用助手。", **kw)
-    state = agent.invoke({"messages": [HumanMessage(content=msg)]}, {"recursion_limit": 25})
-    return state, ledger
-
-
 def main() -> int:  # noqa: C901
-    ok_tool = _stub("freeze_account", lambda uid: f"已冻结账号 {uid}")
-
-    # ── ① 一次调用 + 自然收尾：不该有任何收尾注入 ─────────────────────────
-    print("\n① 正常一轮：调用 → 答完")
-    state, led = _run([_call("freeze_account", uid=12), AIMessage(content="办好了")], [ok_tool])
-    check("工具真的被执行（台账 1 条 PASS 回执）", len(led.receipts) == 1,
-          f"receipts={led.receipts}")
-    check("工具结果进了消息流（ToolMessage 在场）",
-          any(isinstance(m, ToolMessage) for m in state["messages"]))
-    check("自然收尾：零收尾注入、stop_reason 为空", led.stop_reason == "", led.stop_reason)
-    check("最后一条是模型自己的回复", str(state["messages"][-1].content) == "办好了")
-
-    # ── ② 同工具同参反复点：停在第二次之前，不执行重复 ────────────────────
-    print("\n② 无进展：同一签名连点 20 次")
-    same = [_call("freeze_account", uid=12) for _ in range(20)]
-    state, led = _run(same, [ok_tool])
-    check("**没有**抛 GraphRecursionError（自由 ReAct 的默认形态是抛）", True)
-    check("停止原因 = no_progress", led.stop_reason == "no_progress", led.stop_reason)
-    check("重复的那次**没有执行**（台账只 1 条）", len(led.receipts) == 1,
-          f"executed={dict(led.executed)}")
-    check("模型轮数远小于脚本长度（第二轮就被判停）",
-          sum(1 for m in state["messages"] if isinstance(m, AIMessage)) <= 3)
-    check("收尾正文是中文且说清为什么停",
-          ("停在这里了" in led.wrap_up and "没进展" in led.wrap_up), led.wrap_up[:60])
-
-    # ── ③ 轮次预算：每一步都是新调用 ⇒ 用满预算才停，且末轮照样执行 ────────
-    print("\n③ 轮次预算：每轮换新参数（不会判无进展）")
-    many = [_call("freeze_account", uid=i) for i in range(1, 20)]
-    state, led = _run(many, [ok_tool], budget=3)
-    check("停止原因 = budget", led.stop_reason == "budget", led.stop_reason)
-    check("执行次数 == 预算（撞预算那一轮照常执行，与生产 MAX_PLAN_ROUNDS 同序）",
-          len(led.receipts) == 3, f"receipts={len(led.receipts)}")
-    check("末轮的工具结果在场（不是\"点了名却没跑\"）",
-          any(isinstance(m, ToolMessage) for m in state["messages"]))
-    check("收尾正文带台账：说清真办成了几件",
-          "确实办成 3 件" in led.wrap_up and "freeze_account" in led.wrap_up, led.wrap_up[:80])
-
-    # ── ④ 回执分族：错误帧 ⇒ BLOCK、带原因码、不进 receipts ────────────────
-    print("\n④ 工具报错：回执判 BLOCK")
-    # 帧的形态照抄生产（`adminops.unknown_target_frame`）：`__ERROR__: …[原因码]（…）`，
-    # 原因码由 `_check_spec` 的 `target_error_reason` 那一链取回——自己编一个
-    # "看着像"的帧，验的是我编的帧不是真判据。
-    def _missing(uid):  # noqa: ANN001, ANN202
-        return f"__ERROR__: 目标账号不存在[unknown_target]（{uid} 不在我能确认的范围内）"
-    bad_tool = _stub("freeze_account", _missing)
-    state, led = _run([_call("freeze_account", uid=999), AIMessage(content="没办成")],
-                      [bad_tool])
-    check("BLOCK 不进 receipts", not led.receipts, f"receipts={led.receipts}")
-    check("BLOCK 带原因码 unknown_target", led.block_reasons() == ["unknown_target"],
-          str(led.block_reasons()))
-    tool_msg = next(m for m in state["messages"] if isinstance(m, ToolMessage))
-    check("回执行附在工具结果末尾（模型看得见）", "内部回执" in str(tool_msg.content)
-          and "未生效" in str(tool_msg.content), str(tool_msg.content)[:80])
-
-    # ── ⑤ 工具抛异常 ⇒ 变成错误帧 + BLOCK，不吞掉整轮 ─────────────────────
-    print("\n⑤ 工具抛异常：转成错误帧")
-    def _boom(uid):  # noqa: ANN001, ANN202
-        raise RuntimeError("后端炸了")
-    state, led = _run([_call("freeze_account", uid=1), AIMessage(content="知道了")],
-                      [_stub("freeze_account", _boom)])
-    check("异常没把整轮掀掉（还有最终回复）",
-          str(state["messages"][-1].content) == "知道了")
-    check("异常变成 BLOCK 台账", len(led.blocked) == 1 and not led.receipts,
-          f"blocked={led.block_reasons()}")
-
-    # ── ⑥ 纯函数：签名归一 ───────────────────────────────────────────────
-    print("\n⑥ 签名归一")
+    # ── ① 签名归一 ────────────────────────────────────────────────────────
+    print("\n① 签名归一：键序、类型漂移都算同一个调用")
     check("键序无关", spec_signature("t", {"a": 1, "b": "2"})
           == spec_signature("t", {"b": 2, "a": "1"}))
     check("工具名不同 ⇒ 签名不同", spec_signature("t1", {}) != spec_signature("t2", {}))
+    check("`None` 参数与空串同归一（JSON 里 `null` 与 `\"\"` 是同一个意思：没填）",
+          spec_signature("t", {"a": None}) == spec_signature("t", {"a": "  "}))
+    check("不可序列化的参数降级成字面量、不炸",
+          bool(spec_signature("t", {"a": object()})))
 
-    # ── ⑦ 包装层不动菜单：description / args_schema 逐字保留 ───────────────
-    print("\n⑦ 包装层不改工具形状")
+    # ── ② 台账分列 ────────────────────────────────────────────────────────
+    print("\n② 台账分列：事实 / 受阻 / 应答 三本账，混装会改读数")
     led = RunLedger()
-    wrapped = wrap_tools_with_receipts([ok_tool], led)[0]
-    check("name/description/schema 逐字一致",
-          (wrapped.name, wrapped.description) == (ok_tool.name, ok_tool.description)
-          and wrapped.args_schema == ok_tool.args_schema)
+    led.receipts.append({"tool": "freeze_account", "args": {"uid": "12"}, "result": "已冻结"})
+    led.blocked.append({"tool": "freeze_account", "reason": "unknown_target", "args": {}})
+    led.replies.append({"skill": "chat", "reply": "好呀"})
+    check("`passed_tools` 只读 receipts（BLOCK 的那条不算「办成了」）",
+          led.passed_tools() == ["freeze_account"] and led.block_reasons() == ["unknown_target"])
+    check("`executed` 是签名计数器（不是布尔）——重复阈值靠它",
+          not led.seen("t::{}") and led.record("t::{}") is None and led.seen("t::{}")
+          and led.executed["t::{}"] == 1)
 
-    # ── ⑧ 收尾判据不许误伤：已有帧之后模型正常答完 ⇒ 不注入收尾 ────────────
-    print("\n⑧ 反锁：正常收尾不受打扰")
-    state, led = _run([_call("freeze_account", uid=3), AIMessage(content="好了"),
-                       AIMessage(content="还有别的事吗")], [ok_tool])
-    check("两轮无工具回复都没被当成卡住", led.stop_reason == "" and not led.wrap_up,
-          f"stop={led.stop_reason}")
-
-    # ── ⑨ 中间件的预算与重复阈值可配（别写死） ─────────────────────────────
-    print("\n⑨ 阈值可配")
-    led = RunLedger()
-    mw = ConvergenceMiddleware(led, budget=9, repeat_limit=3)
-    check("阈值原样存下", (mw.budget, mw.repeat_limit) == (9, 3))
-
-    # ── ⑩ 技能级回执：一次技能调用 = 实例化计划 + 逐工具验收 ────────────────
-    print("\n⑩ 技能级回执（SkillExecutor）")
+    # ── ③ 技能级展开：一次技能调用 = 实例化计划 + 逐工具验收 ───────────────
+    print("\n③ 技能级回执（SkillExecutor）")
     led = RunLedger()
     ex = SkillExecutor({"get_article_detail": lambda article_id: f"文章 {article_id} 的正文"},
                        led, role="admin")
@@ -226,14 +114,16 @@ def main() -> int:  # noqa: C901
           led.receipts[0]["args"] == {"article_id": "23"}, str(led.receipts[0]["args"]))
     check("正文里带上了工具输出与回执行", "文章 23 的正文" in text and "内部回执" in text)
     check("回报执行了几个工具（无进展判据的输入）", n_tools == 1, str(n_tools))
+    check("真工具名进了 `calls` 留痕（golden 的 `tool_calls` 输入）",
+          [c["tool"] for c in ex.calls] == ["get_article_detail"], str(ex.calls))
 
-    print("\n⑩b 计划里的工具不在可执行清单 ⇒ 响亮地 BLOCK，不静默跳过")
+    print("\n③b 计划里的工具不在可执行清单 ⇒ 响亮地 BLOCK，不静默跳过")
     led = RunLedger()
     SkillExecutor({}, led, role="admin").run("read_article", {"article_id": 1})
-    check("缺工具 ⇒ BLOCK（不是\"这条计划没写工具\"）", len(led.blocked) == 1 and not led.receipts,
-          str(led.block_reasons()))
+    check("缺工具 ⇒ BLOCK（不是「这条计划没写工具」）",
+          len(led.blocked) == 1 and not led.receipts, str(led.block_reasons()))
 
-    print("\n⑩c 纯应答技能（chat）留痕在 replies，**不进 receipts**")
+    print("\n③c 纯应答技能（chat）留痕在 replies，**不进 receipts**")
     led = RunLedger()
     _txt, n_tools = SkillExecutor({}, led, role="admin").run("chat", {"reply": "好呀"})
     check("chat 没有回执（receipts 的语义是「系统确认的事实」）",
@@ -242,74 +132,147 @@ def main() -> int:  # noqa: C901
           str(led.replies))
     check("回报执行 0 个工具（⇒ 重复调用不判无进展）", n_tools == 0, str(n_tools))
 
-    print("\n⑩d 命令工具没有 meta[cmd] ⇒ 生产 checker 判 BLOCK（判据没被换掉）")
+    print("\n③d 命令工具没有 meta[cmd] ⇒ 生产 checker 判 BLOCK（判据没被换掉）")
     led = RunLedger()
     SkillExecutor({"navigate_to": lambda path, confirm=False: "页面已跳转"},
                   led, role="admin").run("navigate", {"target": "首页"})
     check("navigate_to 缺 cmd ⇒ BLOCK cmd_shape", led.block_reasons() == ["cmd_shape"],
           str(led.block_reasons()))
 
-    # ── ⑪ 权限闸（P1）：无身份 ⇒ 硬 scope 不执行，且**照样收敛** ─────────────
-    print("\n⑪ 权限闸：身份不明不执行，且不把预算烧在反复被拒上")
+    # ── ④ 台账登记：无进展判据的燃料（20261016，本批 ④b 那条判据的根因）─────────
+    print("\n④ 台账登记：签名必须与判据的对照方**同源**")
+    led = RunLedger()
+    SkillExecutor({"get_article_detail": lambda article_id: "正文"}, led,
+                  role="admin").run("read_article", {"article_id": 7})
+    check("跑过工具的技能 ⇒ 记了一条**技能级**签名（不是工具级 `get_article_detail`）",
+          led.executed.get(spec_signature("read_article", {"article_id": 7})) == 1
+          and not led.executed.get(spec_signature("get_article_detail", {"article_id": 7})),
+          str(dict(led.executed)))
+    check("**判据照着模型的原始 `tool_calls` 算得出同一把键**（这条不对，无进展恒不触发）",
+          convergence_verdict(led, rounds=1, budget=6,
+                              last_ai=_call("read_article", article_id=7))["kind"]
+          == "no_progress")
+    led2 = RunLedger()
+    SkillExecutor({}, led2, role="admin").run("chat", {"reply": "好呀"})
+    check("纯应答技能（0 个工具）**不登记**（把没做过的事记成做过 ⇒ 收尾印出假件数）",
+          not led2.executed, str(dict(led2.executed)))
+
+    print("\n④b 字面路径修正**之前**取参（判据的对照方是模型的原始参数）")
+    # 主人原话带 `/guestbook`，模型点的是「物联网平台」（**语义替身**）⇒
+    # `SkillExecutor.run` 会把 target 强制改成 `/guestbook`。签名若取**修正后**的参，
+    # 这一格就永远对不上模型的原始 `tool_calls`。
+    led = RunLedger()
+    SkillExecutor({"navigate_to": lambda **kw: "页面已跳转"}, led, role="admin",
+                  user_msg="带我去 /guestbook 看看").run("navigate", {"target": "物联网平台"})
+    check("记的是**模型原样**的那个 target（修正后的 `/guestbook` 不在账上）",
+          led.executed.get(spec_signature("navigate", {"target": "物联网平台"})) == 1
+          and not led.executed.get(spec_signature("navigate", {"target": "/guestbook"})),
+          str(dict(led.executed)))
+
+    # ── ⑤ 权限闸（P1）：无身份 ⇒ 硬 scope 不执行 ──────────────────────────
+    # 靶子选 `account_roster`（读后台账号列表）而不是 `account_freeze`：后者的 scope 是
+    # `write.console`，它**先被同意闸拦下**（未获同意 ⇒ 一个都不执行、记 `pending`），
+    # 根本走不到权限闸那一行——拿它当靶子测的是同意闸，不是权限闸。
+    # `list_accounts` 是**读**工具、不吃同意闸，而 `admin.console` 在 `_HARD_SCOPES` 里
+    # （不吃 shadow 开关）⇒ 它是这条判据唯一能真的开火的靶子。
+    print("\n⑤ 权限闸：身份不明不执行（fail-closed），且记的是受阻不是事实")
     _ran: list = []
-    _guarded = _stub("freeze_account", lambda uid: _ran.append(uid) or f"已冻结 {uid}")
-    state, led = _run([_call("freeze_account", uid=12), AIMessage(content="好")], [_guarded],
-                      principal=Principal(uid=0, role=None))
-    check("**工具一次都没真的跑**（fail-closed）", _ran == [], str(_ran))
+    led = RunLedger()
+    SkillExecutor({"list_accounts": lambda **kw: _ran.append(kw) or "账号列表"},
+                  led, role="admin", principal=Principal(uid=0, role=None)).run(
+        "account_roster", {})
+    check("**工具一次都没真的跑**", _ran == [], str(_ran))
     check("记的是受阻、不是事实",
           not led.receipts and len(led.blocked) == 1, f"blocked={led.block_reasons()}")
     check("受阻带原因码（`_check_spec` 认得权限帧 ⇒ 走同一条受阻链路）",
           led.block_reasons() == ["unknown_role"], str(led.block_reasons()))
-    state, led = _run([_call("freeze_account", uid=12) for _ in range(20)], [_guarded],
-                      principal=Principal(uid=0, role=None))
-    check("反复被拒也判无进展收尾（**拒过的调用也要记进 executed**，"
-          "否则预算全烧在同一个拒绝上）", led.stop_reason == "no_progress", led.stop_reason)
-    check("普通用户同样越不过硬 scope",
-          authz_deny(Principal(uid=7, role="user"), "freeze_account"))
-    check("管理员则放行（闸不是「一律拦」）", not authz_deny(ADMIN, "freeze_account"))
+    _led_u = RunLedger()
+    SkillExecutor({"list_accounts": lambda **kw: "账号列表"}, _led_u, role="admin",
+                  principal=Principal(uid=7, role="user")).run("account_roster", {})
+    check("普通用户同样越不过硬 scope（原因码是「角色认得、但这个 scope 没授予」，"
+          "与「身份不明」分开——两族读数不同）",
+          _led_u.block_reasons() == ["denied"] and not _led_u.receipts,
+          str(_led_u.block_reasons()))
+    check("管理员则放行（闸不是「一律拦」）", not authz_deny(ADMIN, "list_accounts"))
 
-    # ── ⑫ 收尾丢意图纠偏（20261005，照搬 `graph.py` 的零工具收尾纠偏那一支）──────
-    print("\n⑫ 零工具收尾但意图清单还有没做过的 ⇒ 打回重决策一次")
-    _EFF_SCHEMA = {"type": "object",
-                   "properties": {"effect": {"type": "string"},
-                                  "action": {"type": "string"}}}
-    _eff = StructuredTool(
-        name="toggle_effect", description="特效桩", args_schema=_EFF_SCHEMA,
-        func=lambda **kw: _Cmd(f"特效 {kw.get('effect')}={kw.get('action')}"))
-    # 主人原话是一件**扫描器认得出的真动作**（别名「樱花」+ 动作动词「打开」）。
-    # 剧本：第 1 轮做了**别的**动作（有帧了）→ 第 2 轮零工具收尾（删掉意图）→
-    # 被纠偏后第 3 轮补做 → 第 4 轮正常收尾。
-    _script = [_call("toggle_effect", effect="rain", action="off"),
-               AIMessage(content="樱花已经帮你打开了"),
-               _call("toggle_effect", effect="sakura", action="on"),
-               AIMessage(content="这次真的做完了")]
-    state, led = _run(_script, [_eff], user_msg="把樱花特效打开")
-    _sys = [str(m.content) for m in state["messages"]
-            if isinstance(m, HumanMessage) and "没有排任何工具" in str(m.content)]
-    check("纠偏真的注入了（一条纠正消息）", len(_sys) == 1, str(_sys)[:120])
-    check("纠正文本点名了漏掉的那一件（effect:sakura=on）",
-          bool(_sys) and "effect:sakura=on" in _sys[0])
-    check("被纠偏后那件真的做了（台账里有 sakura=on）",
-          any(r["args"].get("effect") == "sakura" for r in led.receipts),
-          str([r["args"] for r in led.receipts]))
-    check("**只纠一次**（第 4 轮零工具收尾不再打回）",
-          sum(1 for m in state["messages"]
-              if isinstance(m, HumanMessage) and "没有排任何工具" in str(m.content)) == 1)
+    # ── ⑥ 收敛判据（纯函数）：入口相 / 出口相 ─────────────────────────────
+    print("\n⑥ 收敛判据：`rounds >= budget` 只在**入口相**（`last_ai is None`）判")
+    _empty = RunLedger()
+    check("入口相、轮数没到 ⇒ 继续", convergence_verdict(_empty, rounds=0, budget=3)["kind"]
+          == "continue")
+    check("入口相、轮数用满 ⇒ budget",
+          convergence_verdict(_empty, rounds=3, budget=3)["kind"] == "budget")
+    check("出口相**不判预算**（撞预算的那一轮照常执行——判在这里会把模型已经点名的调用"
+          "整个吞掉，主人等了半天、动作没发生）",
+          convergence_verdict(_empty, rounds=9, budget=3,
+                              last_ai=_call("navigate", target="首页"))["kind"] == "continue")
 
-    print("\n⑫b 首轮零工具收尾**不纠**（没看过任何返回，再问一次还是零工具）")
-    state, led = _run([AIMessage(content="樱花已经帮你打开了")], [_eff],
-                      user_msg="把樱花特效打开")
-    check("零帧 ⇒ 不注入纠偏",
-          not any(isinstance(m, HumanMessage) and "没有排任何工具" in str(m.content)
-                  for m in state["messages"]))
+    print("\n⑥b 无进展：这一轮点的每个签名都执行过 ⇒ 不执行、收尾")
+    _led = RunLedger()
+    _led.record(spec_signature("navigate", {"target": "首页"}))
+    check("同签名再点 ⇒ no_progress（重复那次不执行）",
+          convergence_verdict(_led, rounds=1, budget=6,
+                              last_ai=_call("navigate", target="首页"))["kind"]
+          == "no_progress")
+    check("换了参数 ⇒ continue（不是「同一个工具点两次就算卡住」）",
+          convergence_verdict(_led, rounds=1, budget=6,
+                              last_ai=_call("navigate", target="留言板"))["kind"]
+          == "continue")
+    check("**混合轮不判停**（既有新调用又有重复：那一轮里还有没做过的事，停掉等于把"
+          "主人的活儿丢了）",
+          convergence_verdict(_led, rounds=1, budget=6,
+                              last_ai=AIMessage(content="", tool_calls=[
+                                  {"name": "navigate", "args": {"target": "首页"}, "id": "a",
+                                   "type": "tool_call"},
+                                  {"name": "navigate", "args": {"target": "留言板"}, "id": "b",
+                                   "type": "tool_call"}]))["kind"] == "continue")
+    check("`repeat_limit` 可配（=2 时执行过一次还不算卡住）",
+          convergence_verdict(_led, rounds=1, budget=6, repeat_limit=2,
+                              last_ai=_call("navigate", target="首页"))["kind"] == "continue")
 
-    print("\n⑫c 意图已做掉 ⇒ 不收尾也纠（判据是「清单里还有没做过的」）")
-    state, led = _run([_call("toggle_effect", effect="sakura", action="on"),
-                       AIMessage(content="开好啦")], [_eff], user_msg="把樱花特效打开")
-    check("做完了就正常收尾（没有纠正消息）",
-          not any(isinstance(m, HumanMessage) and "没有排任何工具" in str(m.content)
-                  for m in state["messages"]))
-    check("停因仍是自然收尾", led.stop_reason == "", led.stop_reason)
+    print("\n⑥c 零工具轮 = 模型自己宣布收尾：三条守卫，缺一不纠")
+    check("首轮零工具（台账空）⇒ 不纠（没看过任何返回，再问一次通常还是零工具）",
+          convergence_verdict(RunLedger(), rounds=0, budget=6, user_msg="把樱花特效打开",
+                              last_ai=AIMessage(content="开好啦"))["kind"] == "continue")
+    check("`user_msg` 空 ⇒ 不纠（fail-safe：绝不凭一个读不到的字段把这一轮改道）",
+          convergence_verdict(_led, rounds=1, budget=6, user_msg="",
+                              last_ai=AIMessage(content="开好啦"))["kind"] == "continue")
+    check("`corrected` 已置 ⇒ 不纠（纠第二次是把「它坚持不做」读成「它没听懂」）",
+          convergence_verdict(_led, rounds=2, budget=6, user_msg="把樱花特效打开",
+                              corrected=True,
+                              last_ai=AIMessage(content="开好啦"))["kind"] == "continue")
+    _led2 = RunLedger()
+    _led2.receipts.append({"tool": "toggle_effect",
+                           "args": {"effect": "rain", "action": "off"}, "result": "已关"})
+    _v = convergence_verdict(_led2, rounds=1, budget=6, user_msg="把樱花特效打开",
+                             last_ai=AIMessage(content="都弄好了"))
+    check("台账非空 + 原话里还有没做过的动作 ⇒ correct，且点名那一件",
+          _v["kind"] == "correct" and any("sakura" in i["key"] for i in _v["pending"]),
+          str(_v))
+    _led3 = RunLedger()
+    _led3.receipts.append({"tool": "toggle_effect",
+                           "args": {"effect": "sakura", "action": "on"}, "result": "已开"})
+    check("那件**已经做过** ⇒ 不纠（判据是「清单里还有没做过的」，不是「有没有零工具」）",
+          convergence_verdict(_led3, rounds=1, budget=6, user_msg="把樱花特效打开",
+                              last_ai=AIMessage(content="开好啦"))["kind"] == "continue")
+    check("BLOCK 过的那件**也算做过**（生产口径：上过计划的 spec 都进了 executed，"
+          "被拒过再推它重试一次是另一种病）",
+          convergence_verdict(
+              _l4 := _with_blocked(), rounds=1, budget=6, user_msg="把樱花特效打开",
+              last_ai=AIMessage(content="开好啦"))["kind"] == "continue")
+
+    # ── ⑦ 收尾正文：只说系统确认过的事实 ──────────────────────────────────
+    print("\n⑦ 收尾正文（`wrap_up_text`）：为什么停 + 真办成几件")
+    _done = RunLedger()
+    _done.receipts.append({"tool": "navigate_to", "args": {"path": "/"}, "result": "已跳转"})
+    _np = wrap_up_text(_done, "no_progress")
+    _bg = wrap_up_text(_done, "budget")
+    check("两种停因各说各的话（措辞不自己拼）",
+          "没进展" in _np and "步骤数用满了" in _bg, _bg[:40])
+    check("件数与工具名来自台账", "确实办成 1 件" in _np and "navigate_to" in _np, _np[:80])
+    check("零件时如实说零件（**不假装办好了**，也不承诺「稍后再办」）",
+          "没有任何一件办成" in wrap_up_text(RunLedger(), "budget")
+          and "稍后" not in _np)
 
     print(f"\n{'=' * 60}")
     if FAILS:
@@ -319,6 +282,15 @@ def main() -> int:  # noqa: C901
         return 1
     print("✅ 全部通过")
     return 0
+
+
+def _with_blocked() -> RunLedger:
+    """台账里有一件**被拒过**的 `effect:sakura=on`（BLOCK 也算做过）。"""
+    led = RunLedger()
+    led.blocked.append({"tool": "toggle_effect",
+                        "args": {"effect": "sakura", "action": "on"},
+                        "reason": "unknown_role"})
+    return led
 
 
 if __name__ == "__main__":
