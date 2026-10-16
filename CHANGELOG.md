@@ -16,6 +16,35 @@
 
 ## 20261016
 
+- **写操作的重放闸：崩溃重放不再写第二遍（判据 + 采纳前置，20261016；⚠️ 生产行为零变更）**——
+  这是"接上持久化 saver"的**硬前置**（ADR-0011 的触发条件）。LangGraph 的恢复单位是
+  **superstep**：节点内的 state 更新要等节点**返回**才落盘 ⇒ 崩在 `execute_node` 中途时整个
+  节点从头重跑，而它里面那次 `tool.invoke` 是**真的写库**。今天生产没开 saver，这一格不存在；
+  采纳之后它立刻存在。做法：`execute_node` 里那次调用改走一本账（`agent/replay_guard.py`
+  + `agent/replay_guard_pg.py`，自建表 `agent_write_replay`，池必须 autocommit）——**先占位
+  （原子）→ 调用 → 记结局**，键 = `(thread_id, superstep 任务 id, 第几件)`。显式选
+  **at-most-once**（宁可漏写、绝不双写），因为要护的是公告 / 给第三方的站内通知 / 冻结账号
+  那一族：双写落在**不可撤回、且落在别人身上**。三种重放结局一种都不许糊：有结局 ⇒ 逐字回放
+  那个 `ToolResult`（`kind`/`meta` 一起存，否则一次真 no-op 会被重放成"真改动"、审计回执
+  会丢 `before/after`）；只有占位没有结局 ⇒ **不调工具**、返回 `kind="in_doubt"` ⇒ 判 BLOCK，
+  叙述侧说的是"可能已经生效，也可能没有"（`write_in_doubt` 登记进 `block_reasons` 与
+  `server._REASON_CN` 两侧同话术、标"不可重试" ⇒ planner 被要求**先去读一次现状**，不重发）；
+  占位上的 spec 指纹与当前不符 ⇒ **响亮抛**，绝不回放"另一件的结果"。
+  **两条前提写进 ADR 而不是"最好配上"**：① 幂等键取节点 config 的 `__pregel_task_id`
+  ——`configurable["checkpoint_id"]` 被 langgraph **无条件写死成 `None`**，拿它当键会塌成
+  `(会话, None, 下标)`、**静默压掉整条会话的写**，而"只写一件"时与键对了**表现完全一样**；
+  ② 图必须用 `durability="sync"` 跑——缺省 `async` 下 checkpoint 写交给后台线程、主循环
+  **不等待**，进程被**硬杀**（SIGKILL/OOM/部署重启）时那一步可能没落盘 ⇒ 恢复时 `__start__`
+  重跑、任务 id 变了 ⇒ **账被静默绕过**；而这只在崩溃那一刻发生（进程内异常那条路照样全绿），
+  所以闸**自己断言**这一档，档不对当场抛。**判据**：`tests/test_replay_guard.py`（真图 +
+  真 `execute_node` + 真 saver 的四条——正向"崩一次只调 1 次" / 反控"账关掉 ⇒ 2 次" /
+  **正控"恢复后再走一个新 superstep、排同一件写仍要执行"**（抓键塌缩，没有它前两条在键塌了
+  时照样全绿）/ 响亮"指纹不符 ⇒ 抛且一个工具都没调"）、
+  `eval/experiments/checkpoint_probe.py --crash-resume --guard`（真子进程硬杀 + 真 PG saver：
+  **2× → 1×**；反控 `--guard-unsafe`（占位不提交）回到 2×）。
+  **不改生产链路**（`server.py` 只多一行原因码中文），不带账时**逐字节等于今天**（连
+  durability 都不查）⇒ 对既有 golden 四臂读数零影响。裁决见 ADR-0012。
+
 - **跨轮上下文的"本轮"在图里成了事实（判据 + 评测臂，20261016；⚠️ 生产行为零变更）**——
   在这之前"这一轮到哪儿为止"是**图外的约定**：`server._build_messages` 每请求重建上下文、
   thread 随机（§4.6），图里 `state["messages"]` 永远只有本轮。线程一旦复用，读端就会把

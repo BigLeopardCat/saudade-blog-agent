@@ -66,6 +66,11 @@ REASONS: dict[str, tuple[str, bool]] = {
     "denied": ("身份权限不足", False),
     "no_manifest": ("工具未声明权限范围", False),
     "unknown_role": ("身份不明", False),
+    # 重放闸（20261016 批 2，kind=in_doubt）：这一件在进程恢复之前**已经发出去了**，
+    # 但返回结果没能记下来 ⇒ 它可能生效、也可能没有。`retry_param=False` ⇒ 摘菜单
+    # 一轮：**盲目重发一件可能已经写进去的写**正是这一格要挡的事。planner 的下一步是
+    # 去读一次现状核对（见 prompts 规则），不是再点一次同一个调用。
+    "write_in_doubt": ("恢复前已发出、结果未能确认", False),
 }
 
 # 表里没有的码：按"还有救"处理（fail-safe，见模块头注）。中文退回原因码本身——

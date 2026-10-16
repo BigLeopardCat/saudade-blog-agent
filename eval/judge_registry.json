@@ -11,6 +11,10 @@
         0,
         0
       ],
+      "agent/_ckpt_probe.py": [
+        0,
+        0
+      ],
       "agent/action_text.py": [
         91,
         0
@@ -28,7 +32,19 @@
         441
       ],
       "agent/block_reasons.py": [
-        19,
+        20,
+        0
+      ],
+      "agent/checkpoint_arm.py": [
+        0,
+        0
+      ],
+      "agent/checkpoint_delta_arm.py": [
+        0,
+        0
+      ],
+      "agent/checkpoint_random_arm.py": [
+        0,
         0
       ],
       "agent/confirm.py": [
@@ -99,6 +115,14 @@
         0,
         3
       ],
+      "agent/replay_guard.py": [
+        0,
+        0
+      ],
+      "agent/replay_guard_pg.py": [
+        0,
+        0
+      ],
       "agent/reports.py": [
         19,
         0
@@ -132,12 +156,12 @@
         2
       ],
       "server.py": [
-        27,
+        28,
         0
       ]
     },
     "total": [
-      1139,
+      1141,
       4790
     ]
   },
@@ -1913,7 +1937,7 @@
       "file": "server.py",
       "kind": "collection",
       "name": "_REASON_CN",
-      "size": 19,
+      "size": 20,
       "category": "system_data",
       "q": "_REASON_CN",
       "why": "帧退出原因的显示字"
