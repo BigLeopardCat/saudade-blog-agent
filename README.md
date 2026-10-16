@@ -183,6 +183,7 @@ saudade-blog-agent/
 │   ├── context.py         上下文、工具帧和回执组装
 │   ├── plan_codec.py      计划文本契约的编解码（plan_encode / plan_state / parse_plan）
 │   ├── tool_specs.py      执行清单条目的解析与去重裁剪（_tool_args / _trim_done_reads 等）
+│   ├── repeat_guard.py    逐字复读判据（_repeat_reason / _recent_ai_replies 等，gate 1b）
 │   ├── skills.py          技能注册表、计划模板和业务映射
 │   ├── planner_llm.py     技能表 ↔ API tools/tool_calls 的接线层
 │   ├── authz.py           scope 权限模型
