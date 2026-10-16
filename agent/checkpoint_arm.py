@@ -14,8 +14,11 @@ worker 的堆。所以真正的问题是另一件事，而且是可量的：
   ① `context._page_ctx` 取**第一条** `[System:` ⇒ 读到上一轮的页面/时间/特效；
   ② `context._has_frames` / `graph.frame_chars` / gate 的 `frames` ⇒ 上一轮的
      ToolMessage 被算成本轮证据（首轮五条确定性快道因此**永不命中**）；
-  ③ `graph.model_node` 的 `with_tool_call_pairs(state["messages"])` **无截断**
-     ⇒ narrator 提示词随会话线性膨胀（埋点 `prompt_oversize` 就在那儿）。
+  ③ `graph.model_node` 送出去的 `_msgs` 里，narrator 那一段取自 `state["messages"]`
+     ⇒ **无截断**，随会话线性膨胀（埋点 `prompt_oversize` 就在那儿）。
+     ⚠️ 本支已给这一段加了**轮次窗口**（`_narrator_msgs(state)` ⇒ `_turn(state)`，
+     `tests/test_turn_window.py` 规则 F 盯着这条链路）⇒ 本条读数的"膨胀"只该出现在
+     **窗口之外**的部分；窗口本身封顶与否，看 `--narrator-window` 那一格。
 
 **它是什么（代码上）**：一层极薄的适配器。本臂**用的就是生产那张图**
 （`agent.create_agent(checkpointer=...)`）——拓扑、节点、判据一个字都不动。
@@ -51,7 +54,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from agent import create_agent, replay_guard
+from agent import create_agent, idem
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +101,8 @@ def _make_pool(pool_max: int) -> ConnectionPool:
     `autocommit=True` + `prepare_threshold=0` + `dict_row` 三项都是 langgraph 的
     要求（`from_conn_string` 内部就是这么连的）；池的 `max_size` 只给本进程用——
     4 个 uvicorn worker 各一条池，`max_connections=30` 那个参数是照此定的。
-    `autocommit` 还是**重放闸**的硬要求（见 `agent/replay_guard_pg.py` 头注）。
+    `autocommit` 还是**幂等账**的硬要求：占位必须**按语句**即时落库
+    （见 `agent/idem_pg.py` 的 `ensure_autocommit`）。
 
     不预连的话，DSN 指错只会表现为"每个用例跑到第一次写 checkpoint 时卡 30 秒再抛
     PoolTimeout"——慢、且混在一堆 golden 输出里，很容易被读成"这一臂就是慢"。
@@ -125,23 +129,6 @@ def make_saver(pool_max: int = 4) -> PostgresSaver:
     return saver
 
 
-def make_guard(pool=None, pool_max: int = 2):
-    """建**写操作的重放闸**（`agent/replay_guard_pg.py`；判据与取舍见 `agent/replay_guard.py`）。
-
-    `pool` 缺省时自建一条；给一条就复用（臂里传 saver 那条池 —— 两本账同库同 DSN，
-    少一条池，也让"崩的那一刻占位与 checkpoint 落在同一个库"不可能被配错）。
-
-    它是**采纳 saver 的前置**（ADR-0011 的《触发条件》）：接上持久化 saver 之后，
-    崩溃重放会让 `execute_node` 里的写第二次落库，这本账就是堵那一格的。
-    """
-    from agent import replay_guard_pg
-
-    if pool is None:
-        pool = _make_pool(pool_max)
-    replay_guard_pg.setup(pool)   # 幂等：自建表 ⇒ 不需要产线迁移
-    return replay_guard_pg.PostgresReplayGuard(pool)
-
-
 class CheckpointGoldenArm:
     """`server._agent` 上的一层薄外壳：生产那张图 + 持久化 saver + 线程改写。"""
 
@@ -150,14 +137,14 @@ class CheckpointGoldenArm:
     def __init__(self, mode: str | None = None, saver: PostgresSaver | None = None):
         self.mode = mode or thread_mode()
         self.saver = saver or make_saver()
-        # 重放闸（20261016 批 2）：本臂的线程**真的会复用**，所以崩溃重放这一格在本臂上
+        # 幂等账（20261016 批 2）：本臂的线程**真的会复用**，所以崩溃重放这一格在本臂上
         # 是**活的**——`execute_node` 里的写必须走账，否则同一件会落两次库。
-        # 复用 saver 那条池：两本账同库同 DSN。
-        self.guard = make_guard(self.saver.conn)
+        # ⚠️ 账本**不进 config**：`idem` 的闸是"挂没挂 checkpointer"（`idem.active`），
+        # 账本本体由 `idem._shared(config)` 按 saver 自己选（挂了 saver 那条池 ⇒ 同库）。
         self.graph = create_agent(checkpointer=self.saver)
         # 臂标也要能被"实例上"读到（进程里 import 到的是模块，两者都印更省事）。
         self.mark = CHECKPOINT_ARM_MARK
-        logger.info("[checkpoint] 臂就绪：saver=postgres thread_mode=%s guard=on", self.mode)
+        logger.info("[checkpoint] 臂就绪：saver=postgres thread_mode=%s idem=on", self.mode)
 
     # ── 线程改写 ─────────────────────────────────────────────────────
     def _thread_for(self, config: dict | None) -> str:
@@ -182,18 +169,17 @@ class CheckpointGoldenArm:
 
         `stream_mode` 原样往下传（生产者要 `["messages", "updates"]` 两路）。
 
-        ⚠️ **`durability="sync"` 是重放闸的前提，不是性能选项**：缺省 `async` 下
+        ⚠️ **`durability="sync"` 是幂等账的前提，不是性能选项**：缺省 `async` 下
         checkpoint 由后台线程写、主循环不等待，进程被硬杀时那一步可能没落盘 ⇒ 恢复时
         `__start__` 重跑、task_id 变了 ⇒ **账只在崩溃那一刻失效**（实测对照与推导见
-        `agent/replay_guard.py` 头注《前提》）。代价：每个 superstep 多一次同步提交。
+        `agent/idem.py::require_sync_durability`）。代价：每个 superstep 多一次同步提交。
         """
         cfg = dict(config or {})
         conf = dict(cfg.get("configurable") or {})
         conf["thread_id"] = self._thread_for(config)
-        conf["replay_guard"] = self.guard
         cfg["configurable"] = conf
         return self.graph.stream(state, cfg, stream_mode=stream_mode,
-                                 durability=replay_guard.REQUIRED_DURABILITY)
+                                 durability=idem.REQUIRED_DURABILITY)
 
 
 # ── 建臂 ─────────────────────────────────────────────────────────────

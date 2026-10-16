@@ -457,11 +457,11 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 手写图（graph.py）已完全不挂 checkpointer，memory.py 是无人引用的兼容死代码（保留以防旧代码误用）。
 历史教训：曾经复用线程累积，长对话（教程连载）导致输入上下文与 worker 内存无限膨胀直至截断/被杀，
 于是改为"每请求独立线程 + DB 注入"。**线程复用是禁区，恢复即重蹈覆辙。**
-（20261016：上面这句的**射程**在 §4.8 被收窄为「不许在**没有窗口闸门、且没做写幂等账**的
+（20261016：上面这句的**射程**在 §4.9 被收窄为「不许在**没有窗口闸门、且没做写幂等账**的
 情况下恢复」——结论本身没被推翻，生产今天照旧没有 saver。两个条件里「写幂等账」这一条
-已于 20261016 落地（`agent/replay_guard.py` + `agent/replay_guard_pg.py`，
-见 [adr/adr-0012-write-replay-guard.md](adr/adr-0012-write-replay-guard.md)）；窗口闸门
-见 §4.8。**采纳本身（三处一起动）仍未做**。）
+已于 20261016 落地（`agent/idem.py`，见
+[adr/adr-0012-write-idempotency-ledger.md](adr/adr-0012-write-idempotency-ledger.md)）；
+窗口闸门见 §4.9。**采纳本身（三处一起动）仍未做**。）
 
 ### 4.7 无状态图能不能"中途暂停等用户决定"？（20260920 回答）
 
@@ -496,7 +496,46 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
   被真实用户提出过。在那之前，形态 A 覆盖"要不要发这条 / 选哪个候选 / 二选一确认"这类有限、
   可枚举的决策。
 
-### 4.8 追记：§4.6 那句"禁区"的射程被收窄了（20261016，实验分支）
+### 4.8 写操作的幂等账：接 checkpointer 之前的保险丝（20261016 批 2）
+
+§4.7 说"现在不需要 checkpointer"，本节的约束是**将来真接上那天**必须已经就位的东西。
+ADR-0011（图自持上下文）自述的唯一采纳门就是这一节。
+
+**为什么必须有一本账。** LangGraph 的 checkpoint 提交粒度是 **superstep，不是语句**——
+一个节点里连做 N 次写，进程死在中间、从上一个 checkpoint 恢复，那 N 次写会**各执行两遍**
+（实测：`/home/ubuntu/native-checkpoint-verdict-20261015.md` §2.6，两件写各跑了两次）。
+生产今天没有 saver（`agent/graph.py::build_graph()` 是裸的 `g.compile()`），所以这件事炸不了，
+但**接上 saver 那天重放路径第一次通电，而它此前一行判据都没有**。
+
+**为什么不能是 state 里的一个字段**：节点内的 state 更新要等节点**返回**才落盘（§4.7 引的
+同文档 §10.6）——崩溃重放时读到的是**上一个** checkpoint 的 state，"这一件我做过没有"的答案
+恰好不在里面。`receipts` / `executed` / `execution_log` 都在这一侧，用不了。
+
+**做法**（`agent/idem.py`，20261016）：在 `execute_node` 里**唯一**的工具收口
+（`tool.invoke(args)`，全文件只出现一次）上包一层 `guarded_invoke`：
+
+| 件 | 内容 |
+|---|---|
+| 闸 | `config["configurable"]["__pregel_checkpointer"] is not None`。没挂 saver ⇒ 直通、一行账都不记 |
+| 键 | `sha256([checkpoint_ns, 工具名, 参数指纹])`。`checkpoint_ns` 实测是纯函数（崩溃+恢复逐字节相同、同一 thread 不同轮互不相同、没挂 saver 时是随机 uuid4） |
+| 协议 | `intent` 行在**远端调用之前**提交，返回（或抛异常）后改 `done`。留在 `intent` = 结果未知 |
+| 存储 | agent 自持 SQLite（`settings.idem_db`），`key` 是主键 ⇒ 4 个 worker 天然互斥 |
+| 结果未知 | 新原因码 `write_outcome_unknown`（**不可重试**）⇒ 进 `blocked`，planner 下一步是"先读一次确认到底成没成" |
+| 重放命中 | 不重跑，把记下的 `(text, kind, meta)` **逐字**还回下游 + 一条 `write_replay_hit` trace |
+
+**取至多一次（at-most-once）而不是至少一次**：重复写是**外部可见且不可撤销**的（多发一条
+站内通知、多建一个标签、多改一次文章状态），漏掉一次写是**可恢复且可如实告知**的。代价不对称。
+
+**指纹必须在改动参数之前取**：`execute_node` 会在调用前解引用（`resolve_args`）、并给
+`device_oled_display` **现创**屏幕文案（`_create_display_text`，temperature 0.7）。对改后的
+args 取指纹，那个工具每次指纹都不同 ⇒ 幂等判据对它**恒不命中，而且不报错**。
+
+**今天零行为变更**：闸关着（没有 saver）⇒ 账本惰性、连 `logs/agent/idem.sqlite3` 都不会被
+创建。判据 `tests/test_write_idempotency.py` 用真 `StateGraph` + `MemorySaver` 在进程内复现
+"崩溃 + 恢复"，并配了会红的反控（`NullLedger` ⇒ 同一场景写发生两次）。决策全文见
+[adr/adr-0012](adr/adr-0012-write-idempotency-ledger.md)。
+
+### 4.9 追记：§4.6 那句"禁区"的射程被收窄了（20261016，实验分支）
 
 §4.6 记的是**后果**（长对话膨胀到截断/被杀），结论写成"线程复用是禁区"。20261015 的批 0
 把成因量清楚了：**禁区不是"复用线程"，是"复用线程之后没人知道本轮到哪儿为止"**。同一线程
@@ -504,7 +543,8 @@ chat.rs `strip_summary_from_reply` / `looks_like_summary_paragraph` / `summary_t
 每轮又把 `history[-20:]` 注入成**真消息**、被 reducer 再收一遍（第 r 轮的历史被注入 r 次
 ⇒ O(轮数²)）。同时量到三处读端把**上一轮**当本轮：`_page_ctx` 把上一轮的页面报给模型、
 `_has_frames` 把上一轮的帧当本轮证据（首轮那五条确定性快道**结构上**永不命中）、
-narrator 提示词随会话线性膨胀（`with_tool_call_pairs(state["messages"])` 无截断）。
+narrator 提示词随会话线性膨胀（当时那一行是 `with_tool_call_pairs(state["messages"])`，
+无截断）。
 
 **读端**的处置分两批，都落在实验分支 `exp/native-checkpoint`（生产一个字节没动）：
 
@@ -521,16 +561,22 @@ narrator 提示词随会话线性膨胀（`with_tool_call_pairs(state["messages"
   而那一轮恰恰是"不许重新理解一遍、只能靠原话"⇒ 取错源 = 意图清单恒空。
   判据 `tests/test_narrator_window.py` + `tests/test_turn_window.py` 规则 F。
 
+  批 3 与主线 20261016 的前缀缓存重排（`_narrator_wire` + `_narrator_system_pair`，见 §4.10）
+  **撞在同一行上**，合并后的装配是
+  `_msgs = [_sys_head] + _narrator_wire(_narrator_msgs(state)) + [_sys_tail]`：补形状那一趟
+  仍住在 `_narrator_wire` 里（**一个字没改**），只是喂给它的表从整份 `state["messages"]`
+  换成了窗口化的产物。规则 F 因此改成**跟着链路判**（`_narrator_wire` 的入参是不是窗口化
+  的产物 + `with_tool_call_pairs` 只在它里面），不再钉某一行字面。
+
 **§4.6 那条结论今天仍然成立**：生产没有 saver，去掉注入就是去掉全部跨轮记忆。所以"停止
 注入"这一刀属于**采纳**，不属于上面两批——批 3 只是把它做成一条**评测臂**
 （`checkpoint_delta`）。采纳要**三处一起动**（`_build_messages` 删注入循环、`thread_id`
-改会话坐标、`build_graph(checkpointer=…)` 接产线 saver），且必须先过**批 2 写操作重放闸**
-——恢复单位是 superstep，节点内的 state 更新要等节点**返回**才落盘 ⇒ 幂等键不能住在
-state 里，必须落在节点之外的一本账上。**批 2 已于 20261016 落在这支分支上**
-（`agent/replay_guard.py` + `agent/replay_guard_pg.py`，裁决见
-[adr/adr-0012-write-replay-guard.md](adr/adr-0012-write-replay-guard.md)）：它给出的是
-**采纳的前提**，不是采纳本身——生产今天照旧没有 saver，去注入仍是"去掉全部跨轮记忆"。
-批 1 / 批 3 的裁决、读数与触发条件见
+改会话坐标、`build_graph(checkpointer=…)` 接产线 saver），且必须先过**批 2 写操作幂等账**
+（§4.8）——恢复单位是 superstep，节点内的 state 更新要等节点**返回**才落盘 ⇒ 幂等键不能
+住在 state 里，必须落在节点之外的一本账上。**批 2 已于 20261016 落地**（`agent/idem.py`，
+裁决见 [adr/adr-0012-write-idempotency-ledger.md](adr/adr-0012-write-idempotency-ledger.md)）：
+它给出的是**采纳的前提**，不是采纳本身——生产今天照旧没有 saver，去注入仍是"去掉全部
+跨轮记忆"。批 1 / 批 3 的裁决、读数与触发条件见
 [adr/adr-0011-graph-holds-context-checkpoint-memory.md](adr/adr-0011-graph-holds-context-checkpoint-memory.md)。
 
 **一条维护者需要知道的测量事实：golden 现有语料测不出这一刀。** 10 条多轮用例**一个轮次都
@@ -1387,27 +1433,29 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > 改之前长什么样」以及「这条结论当时基于哪次测量」。涉及对外行为变化的条目同时记在
 > [CHANGELOG.md](../CHANGELOG.md)。
 
-> 最后更新：2026-10-16（**批 2 落地：写操作的重放闸**——采纳 saver 的硬前置（ADR-0011 的
-> 《触发条件》）。`agent/replay_guard.py`（纯件：键 / 覆盖集 / `invoke_guarded`）+
-> `agent/replay_guard_pg.py`（自建表 `agent_write_replay`，池必须 autocommit）：
-> `execute_node` 里那次 `tool.invoke` 改走一本账——先占位（原子）→ 调用 → 记结局 ⇒
-> **同一个 superstep 重放不再写第二遍**（at-most-once：宁可漏写、绝不双写）；只有占位、
-> 没有结局时返回 `kind="in_doubt"` ⇒ `_check_spec` 判 BLOCK、planner 先去读一次现状，
-> **不许重发**。两条前提写进 ADR 而不是"最好配上"：① 幂等键取节点 config 的
-> `__pregel_task_id`（`configurable["checkpoint_id"]` 被 langgraph **无条件写死成 `None`**，
-> 拿它当键会静默压掉整条会话的写）；② 图必须用 `durability="sync"` 跑（缺省 `async` 下
-> checkpoint 由后台线程写、主循环不等待 ⇒ **硬杀**时恢复的 task_id 会变、账被静默绕过
-> ——而这只在崩溃那一刻发生，进程内异常那条路照样全绿）。判据：`tests/test_replay_guard.py`
-> （真图四条：正向 / 反控 / 正控抓键塌缩 / 响亮）+ 探针 `--crash-resume --guard`
-> （真子进程硬杀 + 真 PG saver：2× → 1×；反控 `--guard-unsafe` 回到 2×）。
+> 最后更新：2026-10-16（**两条支线合流：写操作幂等账的两种实现收敛成一份**。同一件事此前
+> 各写了一遍——主线的 `agent/idem.py`（键 = `sha256([checkpoint_ns, 工具名, 参数指纹])`）
+> 与本支那份（键 = `(thread_id, __pregel_task_id, spec_index)`），两条抢 `execute_node`
+> 里**同一行**。
+> 裁决：**主线那份活下来**；本支那份连同它的 ADR、判据与原因码 `write_in_doubt` 一起删除，
+> 它测出来的东西（真子进程硬杀 / N 进程抢键 / `durability` 自断言）改由主线那套的判据与
+> 探针承担。本节 §4.8 是主线那节，本支的追记顺延为 §4.9。`agent/idem.py` 的存储今天仍是
+> agent 自持 SQLite（**临时做法**，迁 PG 见 ADR-0012 的《存储》一节）。）
+> 上版：2026-10-16（**批 2 落地：写操作的幂等账**——采纳 saver 的硬前置（ADR-0011 的
+> 《触发条件》）。`agent/idem.py`：`execute_node` 里那次 `tool.invoke` 改走一本账——先占位
+> （原子）→ 调用 → 记结局 ⇒ **同一个 superstep 重放不再写第二遍**（at-most-once：宁可漏写、
+> 绝不双写）；只有占位、没有结局时返回「结果未知」帧 ⇒ `_check_spec` 判 BLOCK、planner
+> 先去读一次现状，**不许重发**。判据 `tests/test_write_idempotency.py`（真图 +
+> `MemorySaver` 在进程内复现"崩溃 + 恢复"，带会红的反控 `NullLedger`）。
 > **本批不改生产链路**（`server.py` 只多一行原因码中文），不带账时逐字节等于今天；
-> **采纳本身仍未做**（三处一起动，见 §4.8）。裁决见
-> [ADR-0012](adr/adr-0012-write-replay-guard.md)。）
-> 上版：2026-10-16（**新增 §4.8 追记：§4.6 那句「线程复用是禁区」的射程被收窄**——
+> **采纳本身仍未做**（三处一起动，见 §4.9）。裁决见
+> [ADR-0012](adr/adr-0012-write-idempotency-ledger.md)。）
+> 上上版：2026-10-16（**新增 §4.9 追记：§4.6 那句「线程复用是禁区」的射程被收窄**——
 > 批 0 量出膨胀有两个成因（图持有会话是想要的；`_build_messages` 每轮**又**注入一遍是重复的），
 > 批 1 治读端（`turn_window`）、批 3 治输入契约（`narrator_messages`）。**原有章节编号与原文
-> 一字未动**：§4.6 与 §10.5 各只**追加**一句前向指针，§4.8 插在 §4.7 之后。裁决与触发条件
-> 见 [ADR-0011](adr/adr-0011-graph-holds-context-checkpoint-memory.md)，已登记进 ADR 索引。
+> 一字未动**：§4.6 与 §10.5 各只**追加**一句前向指针，本节的追记插在 §4.7 之后（合流时顺延
+> 为 §4.9）。裁决与触发条件见
+> [ADR-0011](adr/adr-0011-graph-holds-context-checkpoint-memory.md)，已登记进 ADR 索引。
 > 注：本节记的是**实验分支** `exp/native-checkpoint` 上的状态，生产未动。）
 > 上版：2026-10-09（**文档自身的一遍整理，机制与结论一字未动**：① 原先堆在文档头部的
 > 逐版修订记录（「最后更新 / 上版 / 上上版 / 更早」）整体移到本节，头部换成一句话说明本文的

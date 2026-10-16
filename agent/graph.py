@@ -81,8 +81,8 @@ from agent import action_text
 from agent import adminops as A
 from agent import authz
 from agent import confirm
+from agent import idem
 from agent import refs
-from agent import replay_guard
 from agent.block_reasons import denied_skills
 from rag import sections
 from agent.stickers import repair_sticker_tokens
@@ -113,7 +113,8 @@ from agent.principal import (CHAT_ONLY_ROLES, KNOWN_ROLES, ROLE_ADMIN,
                              ROLE_SUPERADMIN, ROLE_USER,
                              ROLE_ZAKO, UNKNOWN as UNKNOWN_PRINCIPAL)
 from agent.prompts import (BLOG_ASSISTANT_PROMPT, NARRATOR_DISCIPLINE, STICKER_GUIDE,
-                           _EXECUTOR_HEAD, _EXECUTOR_PROMPT, _PLANNER_OUTPUT_CONTRACT_NATIVE,
+                           _EXECUTOR_HEAD, _EXECUTOR_PROMPT, _EXECUTOR_TAIL,
+                           _PLANNER_OUTPUT_CONTRACT_NATIVE,
                            _PLANNER_PROMPT, _REFLECTOR_PROMPT, audience_block)
 from agent import provenance as _prov
 from agent.provenance import QUOTE_SPAN_RE as _QUOTE_SPAN_RE
@@ -8790,14 +8791,6 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
         return _VERDICT_BLOCK, "args_parse"
     if kind == "unavailable":
         return _VERDICT_BLOCK, "unavailable"
-    if kind == "in_doubt":
-        # 重放闸的"已发出、结果没记下来"（20261016 批 2，见 agent/replay_guard.py）：
-        # **同样判 BLOCK**。PASS 在本仓的定义是"系统确认的事实"，而这一件可能生效、
-        # 也可能没生效——把"未知"记成确认事实就是编造，且它还会经 `__EXEC__` 落进
-        # 跨轮执行记忆，下一轮 narrator 会照着一件没发生的事讲。
-        # ⚠️ 与上面几族同一条纪律：**新 kind 不接进本函数就是静默产回执**
-        # （`_check_spec` 对非空文本一律 PASS），这是本仓踩过的形态。
-        return _VERDICT_BLOCK, "write_in_doubt"
     if kind == "not_found":
         # 目标不存在 / 不在我能确认的范围内（20260923 三轮，见 tools.base.not_found）：
         # 同样 BLOCK（什么都没改成事实），但与 unavailable 分开给原因码——planner 的
@@ -8823,6 +8816,7 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, skill: str,
                                 or authz.consent_error_reason(text)
                                 or authz.action_conflict_error_reason(text)
                                 or A.target_error_reason(text)
+                                or idem.replay_reason(text)
                                 or A.policy_error_reason(text) or "error_frame")
     # 命令工具契约层校验（20260926 批 2 改键）：动作工具必须交出**连线命令**——但
     # 判据从"返回文本的前缀"改成"`meta["cmd"]` 的 kind"。工具返回形态漂移（忘了带
@@ -12596,6 +12590,10 @@ def _frame_id(messages: list, idx: int) -> str:
     性质——**帧只增不减**（历史注入只造 Human/AIMessage，ToolMessage 只由 `execute_node`
     append；本图的返回一律走 `add_messages` 的追加语义），不依赖"每轮 planner 恰好对上
     一次 execute"这条路由约定。纯函数：不读全局、不改入参。
+
+    ⚠️ **这个入参刻意不窗口化**（20261015 批 1 的轮次窗口落地时确认过）：出站串是整份
+    `state["messages"]`，基数必须跟着整份数——换成窗口化的那份，id 会每轮从头数、两轮
+    撞同一个 id，正是上面那个 400。调用点因此传 `state.get("messages")` 而不是 `_turn(state)`。
     """
     base = sum(1 for m in (messages or []) if isinstance(m, ToolMessage))
     return f"execute_{base + idx}"
@@ -12710,6 +12708,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             break
         name = _tool_name(spec)
         args, args_ok = _tool_args(spec)
+        # 幂等键的参数成分（20261016 批 2）：**必须在下面两处改动 args 之前**取——
+        # 理由与后果见 `agent/idem.py::guarded_invoke`（改后取会让屏显恒不命中且不报错）。
+        args_fp = _spec_signature(name, args)[1]
         # 参数引用（20260919，agent/refs.py）：把上一步的真实返回值绑进参数。
         # 解析失败 → 该 spec **不执行**（拿 `$x[0].y` 当参数去调用是更坏的结果），
         # 产带原因码的 __ERROR__ 帧走既有 blocked 链路（planner 改参 → reflector）。
@@ -12818,9 +12819,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             out = f"__ERROR__: 未知工具 {name}（planner 调用清单越界，被 execute 拒绝执行）"
             logger.warning("[execute] 未知工具 %s，拒绝执行", name)
         else:
-            # 写操作的重放闸（20261016 批 2）：try/except 挪进它，语义不变。本行是
-            # execute 里唯一的持久副作用入口——新加的写必须走这里，见 replay_guard.py
-            out = replay_guard.invoke_guarded(tool, args, name, idx, config)
+            # 写操作的幂等账（20261016）：try/except 挪进它，语义不变。本行是 execute
+            # 里唯一的持久副作用入口——新加的写必须走这里，见 `agent/idem.py`
+            out = idem.guarded_invoke(tool, name, args, config, fingerprint=args_fp)
         # 帧文本 = 原始返回去掉"同一段正文存两份"的那个重复键（20260925）。详情帧是
         # `str(dict)` 而 dict 同时带 `noteContent` 与 `content`（实测 11 篇逐篇相等）
         # ⇒ 帧体积 ≈ 正文 ×2；此前只有渲染侧（`_frame_texts` → `sections.frame_excerpt`）
@@ -12845,8 +12846,6 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             record("execute", "frame_capped", name=name, used=frame_chars - len(frame_text),
                    **capped)
         results.append(ToolMessage(
-            # `_frame_id` 刻意**不**窗口化（20261015 批 1）：唯一性靠"帧只增不减"，出站串
-            # 是整份 `state["messages"]`；窗口化会让 id 每轮从头数 ⇒ 两轮撞同一个 id ⇒ 400。
             content=frame_text, tool_call_id=_frame_id(state.get("messages"), idx),
             name=name))
         logger.info("[execute] %s(%s) → %.100s", name, json.dumps(args, ensure_ascii=False),
@@ -13143,6 +13142,75 @@ _NO_PRINTED_FACTS_ACTION = (
 # `graph.NARRATOR_DISCIPLINE` 并拿 sha256 钉住拼装结果 ⇒ 别按 F401 把它们清掉。
 
 
+def _narrator_wire(messages: list) -> list:
+    """narrator 出站序列：`with_tool_call_pairs` 补形状，再把**首条 `[System: …]`
+    上下文块从最前面挪到最后**。
+
+    **为什么必须挪**（20261016）：前缀缓存命中的是**最长公共前缀**。那条上下文块由
+    `server._build_messages` 生成，里面的 `current_time` **精确到分钟**、`page`/`title`
+    随访客翻页就变 ⇒ 它站在第一位时，它后面的每一条消息（整整 20 条对话历史）都不可能是
+    公共前缀的一部分。挪到最后，公共前缀就从"稳定头"延伸成"稳定头 + 整段历史"。
+
+    判据取"**首条** + 是 HumanMessage + 以 `[System:` 开头"三件同时成立——产出点只有
+    `server._build_messages` 一处（golden 的多模态用例走同一个构造点），本文件里
+    `:3818` 收历史尾时用的就是这个形状。**取不到就原样返回**（fail-open）：少命中一次
+    缓存是可量可逆的代价，把消息顺序改坏不是。
+
+    **实测**（生产 trace 20260927–20261016，486 次 narrator 调用）：稳定头 8304 字
+    ≈ 5033 tok，而每次命中的中位数**恒为 5248 tok**——命中的恰好只有那个头，历史
+    全长在外；射程是与同会话上一次 narrator 间隔 ≤5 分钟的那一桶（近 5 天口径下
+    39 次调用占 narrator 输入 tok 的 61%，当前命中 48.7%）。
+
+    `[System: …]` 那类 HumanMessage 是上下文注入、不是主人说的话（同 `:6071` 的注）。
+    **只动发给模型的这份副本**：`state["messages"]` 一个字不改——planner / gate /
+    `_page_ctx` / `strict_wire_issues` / `_last_user_msg` 读的都是 state。
+    纯函数：不改入参，只返回新列表。
+    """
+    wire = with_tool_call_pairs(messages)
+    if wire and isinstance(wire[0], HumanMessage) \
+            and (_msg_text(wire[0]) or "").lstrip().startswith("[System:"):
+        return wire[1:] + [wire[0]]
+    return wire
+
+
+def _narrator_system_pair(state, config, role: str | None, receipts: list, block: str,
+                          drop: set, has_action: bool) -> tuple:
+    """narrator 的两条系统消息：**稳定头**（人设 + 23 条叙述纪律）与**变化段**
+    （计划 / 工具帧 / 执行回执 / 事实块 / 页面上下文）。
+
+    **为什么拆成两条**（20261016）：前缀缓存命中的是**最长公共前缀**，而变化段从
+    `{plan}` 起每轮都不同 ⇒ 它只要还留在系统提示词里，**它后面的一切（包括整整 20 条
+    对话历史）就一条都进不了缓存**。生产实测（20260927–20261016，486 次 narrator
+    调用）：稳定头 8304 字 ≈ 5033 tok，而每次命中的中位数**恒为 5248 tok**——命中的
+    恰好只有那个头。装配顺序（头在最前、变化段在历史之后）由 `model_node` 定，
+    见 `_narrator_wire` 与 `tests/test_narrator_cache_layout.py`。
+    """
+    head = SystemMessage(content=(_EXECUTOR_HEAD + NARRATOR_DISCIPLINE).format(
+        persona=BLOG_ASSISTANT_PROMPT,
+        audience=audience_block(role)))
+    tail = SystemMessage(content=_EXECUTOR_TAIL.format(
+        # [执行计划] 段带一条本轮事实（本轮没有写操作时，见 `_narrator_plan`）：
+        # 此前它只在 `data_repeat` 收尾支注入，零工具轮拿不到 ⇒ narrator 抄历史里
+        # 系统自己写的卡面话术（trace 20260926T082919 实证）。S4 起这里还带上
+        # 台账收尾那一问（改完再询问 / 没动作就问一句，见 `_ledger_closing_note`）
+        # ——它要现场重读台账，所以必须拿到 config。
+        plan=_narrator_plan(state, config),
+        # `article_pointer=True` **只有这一处**（20261005）：narrator 的上下文里原始
+        # ToolMessage 就在手边，未超预算的正文帧两份逐字节相同 ⇒ 这里换成指针句，
+        # 省掉整整一份正文（见 context._frame_texts 的注）。
+        # 批 3：取值源是**本轮窗口**（`_turn`，不是全表）——与 `model_node` 里那处
+        # `_page_ctx(_turn(state), role)` 同一个口，`tests/test_turn_window.py` 规则 A
+        # 拿源码现取比对（白名单为空，任何一处退回 `state["messages"]` 当场红）。
+        tool_frames=_frame_texts(_turn(state), drop_tools=drop, article_pointer=True),
+        exec_receipts=_receipts_text(receipts, drop_tools=drop),
+        fact_block=block or (_NO_PRINTED_FACTS_ACTION if has_action else _NO_PRINTED_FACTS),
+        # 能力清单与 audience 同一角色源（20260921）：两处口径不同会出现
+        # "管理员身份 + 清单里没有管理能力"的自相矛盾 prompt
+        page_ctx=_page_ctx(_turn(state), role),
+        sticker_guide=STICKER_GUIDE))
+    return head, tail
+
+
 def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """narrator：零工具回复节点（人设 + 计划 + 工具帧 + 叙述纪律 → 最终回复）。
 
@@ -13182,36 +13250,31 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         record("model", "fact_block", n=len(_facts), tools=sorted(_drop))
         logger.info("[model] 动作事实块 %d 行（族内工具 %s），叙述权收归系统",
                     len(_facts), "、".join(sorted(_drop)) or "-")
+    # ── 系统提示词**两半分开装配**（20261016，前缀缓存）──────────────────────
+    # 稳定头留在最前、**每轮都变**的那一段挪到对话历史之后，理由与实测读数见
+    # `_narrator_system_pair`。
+    _sys_head, _sys_tail = _narrator_system_pair(
+        state, config, role, _receipts, _block, _drop, _has_action)
     # 抽成局部只为实验读数能看见它（同一函数、同一取值，见下方 `_ckpt_probe.dump`）。
+    # 批 3：取值源与 `_narrator_system_pair` 里那两处**同一个**（`_turn`，不是全表）。
     _probe_page = _page_ctx(_turn(state), role)
-    system = SystemMessage(content=_EXECUTOR_PROMPT.format(
-        persona=BLOG_ASSISTANT_PROMPT,
-        audience=audience_block(role),
-        # [执行计划] 段带一条本轮事实（本轮没有写操作时，见 `_narrator_plan`）：
-        # 此前它只在 `data_repeat` 收尾支注入，零工具轮拿不到 ⇒ narrator 抄历史里
-        # 系统自己写的卡面话术（trace 20260926T082919 实证）。S4 起这里还带上
-        # 台账收尾那一问（改完再询问 / 没动作就问一句，见 `_ledger_closing_note`）
-        # ——它要现场重读台账，所以必须拿到 config。
-        plan=_narrator_plan(state, config),
-        # `article_pointer=True` **只有这一处**（20261005）：narrator 的上下文里原始
-        # ToolMessage 就在手边，未超预算的正文帧两份逐字节相同 ⇒ 这里换成指针句，
-        # 省掉整整一份正文（见 context._frame_texts 的注）。
-        tool_frames=_frame_texts(_turn(state), drop_tools=_drop, article_pointer=True),
-        exec_receipts=_receipts_text(_receipts, drop_tools=_drop),
-        fact_block=_block or (_NO_PRINTED_FACTS_ACTION if _has_action else _NO_PRINTED_FACTS),
-        # 能力清单与 audience 同一角色源（20260921）：两处口径不同会出现
-        # "管理员身份 + 清单里没有管理能力"的自相矛盾 prompt
-        page_ctx=_probe_page,
-        sticker_guide=STICKER_GUIDE))
     _t0 = time.monotonic()
     logger.info("[model] LLM 调用开始（narrator）")
     record("model", "llm_start")
     # `with_tool_call_pairs`（20260928）：execute 造的 ToolMessage 前面没有声明过
     # 调用的 assistant——qwen 容忍这条非法序列，strict 服务商一律 400 拒（见该函数
     # docstring 的实测）。**只补形状、不动内容**：帧原文照旧是 narrator 的叙述材料。
-    # 批 3：本轮 + 最近若干轮（历史段剥事实行/剪孤儿/丢工具帧）；臂 A 返回**同一个对象**。
+    #
+    # 装配（20261016）：`[稳定头] + [历史…] + [系统上下文块] + [变化段]`（此前是
+    # `[全量提示词] + [上下文块] + 历史…`）。两处"每轮都变的东西站在最前面"的成因、
+    # 实测读数与**只动发给模型的这份副本**（`state["messages"]` 一个字不改）见
+    # `_narrator_wire` 的 docstring。
+    #
+    # 批 3：取值口是 `_narrator_msgs(state)`（本轮 + 最近若干轮：历史段剥事实行/剪孤儿/
+    # 丢工具帧），**不是全表**；臂 A 上它返回**同一个对象**。补形状那一趟仍在
+    # `_narrator_wire` 里（`with_tool_call_pairs`），顺序与字面一字未改。
     _narr_msgs = _narrator_msgs(state)
-    _msgs = [system] + with_tool_call_pairs(_narr_msgs)
+    _msgs = [_sys_head] + _narrator_wire(_narr_msgs) + [_sys_tail]
     # 出站合规绊线（20261006，见 `context.strict_wire_issues` 头注）：`tool_call_id`
     # 重复那次让 deepseek 整轮 400，而 qwen 端点容忍 ⇒ **生产一直绿**，洞在库里躺了
     # 8 天。修在源头（`execute_node::_frame_id`）之后，这一层是**回归绊线**——只记
@@ -13226,19 +13289,23 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 总量今天没有硬限（单帧与单轮已在 execute_node 封顶，多轮累加仍可能很大），所以
     # 先把它变成一条可查的事实——服务的正是"会不会把上下文撑爆"这个问题。
     # 改行为要等真出现超限的轮次再谈，先有读数。
-    _prompt_chars = len(system.content or "") + sum(len(_msg_text(m) or "") for m in _msgs[1:])
+    # 20261016：系统提示词拆成两半（头 / 尾）之后不能再写 `len(system.content)`，
+    # 改成对**整个出站序列**求和。口径不变（`_msg_text` 对 SystemMessage 就是取 content），
+    # 但**不再假设"系统提示词只有一条"**——那正是这次改掉的东西。
+    _prompt_chars = sum(len(_msg_text(m) or "") for m in _msgs)
     # 实验读数（20261015）：narrator 那一刻的**真实**提示词规模 —— `_prompt_chars`
     # 就是发出去那一坨的字符数，`frames` 是带进提示词的帧条数（线程复用后包含历史
     # 轮次的 ToolMessage，见 context._frame_texts），`msgs` 是 state 里的消息总数。
     # 这一格是 §4.6"上下文无限膨胀"那半句唯一的直接读数。
-    _ckpt_probe.dump("model", msgs=len(state["messages"]), frames=len(_msgs) - 1,
+    _ckpt_probe.dump("model", msgs=len(state["messages"]), frames=len(_msgs) - 2,
                      prompt_chars=_prompt_chars, page_ctx=_probe_page[:160],
                      # 批 3：窗口**没动手** ⇒ 臂 A 恒 True、臂 B/C 第 2 轮起恒 False
                      narr_ident=_narr_msgs is state["messages"])
     if _prompt_chars > _PROMPT_OVERSIZE_CHARS:
-        logger.warning("[model] 提示词过大：%d 字符（system=%d，帧 %d 条）",
-                       _prompt_chars, len(system.content or ""), len(_msgs) - 1)
-        record("model", "prompt_oversize", chars=_prompt_chars, frames=len(_msgs) - 1)
+        logger.warning("[model] 提示词过大：%d 字符（稳定头 %d + 变化段 %d，帧 %d 条）",
+                       _prompt_chars, len(_sys_head.content or ""),
+                       len(_sys_tail.content or ""), len(_msgs) - 2)
+        record("model", "prompt_oversize", chars=_prompt_chars, frames=len(_msgs) - 2)
     resp = llm.invoke(_msgs)
     # ── 空内容重试一次（20261001）────────────────────────────────────────
     # 上游偶发"有 completion token、内容却是空串"的响应（`usage.output` 十几到几十，
