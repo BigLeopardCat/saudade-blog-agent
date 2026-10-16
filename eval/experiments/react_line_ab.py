@@ -68,13 +68,13 @@ ROOT = Path(__file__).resolve().parents[2]      # 仓根（eval/experiments/ -> 
 sys.path.insert(0, str(ROOT))
 
 from langchain.agents import create_agent  # noqa: E402
-from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 from langchain_core.tools import StructuredTool  # noqa: E402
 
 import agent.graph as G  # noqa: E402
+import agent.react_arm as RA  # noqa: E402
 from agent.native_plan import build_tool_schema  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from agent.react_line import RunLedger, SkillExecutor, build_agent  # noqa: E402
 from agent.skills import SKILLS  # noqa: E402
 from models.llm import get_llm  # noqa: E402
 from tools import get_all_tools  # noqa: E402
@@ -281,32 +281,80 @@ def _collect(msgs: list, out: dict) -> None:
     out["skills"], out["calls"], out["rounds"] = calls, len(calls), n_ai
 
 
+def _collect_line(last: dict, plans: list, out: dict) -> None:
+    """真图那条臂的读数来源（与 `create_agent` 那条**故意不同源**）。
+
+    `agent/react_arm.py` 的 `planner` 是**纯决策节点**：它不往消息表里写东西（那条
+    docstring 解释了为什么——写了会让 `with_tool_call_pairs` 把工具帧认领进一条
+    `tool_call_id` 对不上的合成 assistant，出站序列非法）。所以这一臂上：
+
+      · **技能名**只在逐轮的 `plan_obj["calls"]` 里 ⇒ 得把每一格 `values` 都收一遍
+        （只看最后一份会漏掉前几轮）；
+      · **真工具名**只在工具帧（`ToolMessage.name`）里 ⇒ 直接收，**比 `_SKILL_TOOLS`
+        折算更准**（那张表是给"只看得到技能名"的 `create_agent` 臂用的）。
+
+    两处都收，`tools` 才是"这一句真的调了哪些工具"。
+    """
+    out["_raw"] |= {str(getattr(m, "name", "") or "")
+                    for m in (last.get("messages") or []) if isinstance(m, ToolMessage)}
+    out["_raw"].discard("")
+    for po in plans:
+        for c in (po.get("calls") or []):
+            name = str(c.get("skill") or "")
+            out["skills"].append(name)
+            out["_raw"] |= _tools_in_args(c.get("params") or {})
+            out["_raw"] |= _SKILL_TOOLS.get(name, set())
+    out["calls"] = len([s for s in out["skills"] if s])
+    out["rounds"] = len(plans)
+
+
 def run_react(sent: str, sys_prompt: str, *, line: bool) -> dict:
-    """`line=True` ⇒ 走本分支（收敛判据＋技能级回执）；否则是臂 C′（裸 create_agent）。"""
+    """`line=True` ⇒ 走本分支（**真图**：planner/execute/model/gate 四节点）；否则是臂 C′
+    （裸 `create_agent`）。
+
+    **20261016 改**：本分支此前是 `create_agent` + `ConvergenceMiddleware` +
+    `wrap_tools_with_receipts`。那三件整体退场了（`docs/adr/adr-0009-*.md`），臂现在是
+    `agent/react_arm.build()` 编出来的一张真图 ⇒ 这里换入口。两件事照旧：
+
+      · **同解码**（`DECODE`）：决策与 narrator 都换成探针这一份 `llm`——两臂比的必须是
+        循环结构，不是解码参数（`DECODE` 的注记着 20261004 那次假读数）；
+      · **一次运行一本账**：`make_ctx` 是 `react_ctx` 的唯一构造点，从 `configurable`
+        注入（`ReactGoldenArm.stream` 认这一格；生产与单测都不传，各自现建一份）。
+    """
     out = {"error": "", "skills": [], "tools": [], "calls": 0, "text": "", "capped": False,
            "rounds": 0, "ledger": None, "_raw": set()}
     llm = get_llm(**DECODE)
     stubs = SKILL_STUBS
+    plans: list = []
     if line:
-        # 一次运行一本账：executor（技能展开）与包装层/中间件必须共用同一个实例。
-        led = RunLedger()
-        ledger_holder["led"] = led
-        agent, led = build_agent(llm, stubs, system_prompt=sys_prompt, budget=BUDGET,
-                                 executor=SkillExecutor(RAW_STUBS, led, role="admin"),
-                                 ledger=led)
+        RA._llm = lambda: llm              # noqa: E731 —— 同解码（见 docstring）
+        RA._narrator_llm = lambda: llm     # noqa: E731
+        agent = RA.build()
+        st0 = G.graph_input([HumanMessage(content=sent)])
+        ctx = RA.make_ctx(config=CFG, principal=PRINCIPAL, role="admin", user_msg=sent,
+                          state=st0, real_tools=RAW_STUBS)
+        ledger_holder["led"] = ctx["ledger"]
+        cfg = {**CFG, "configurable": {**CFG["configurable"], "react_ctx": ctx},
+               "recursion_limit": REC_LIMIT}
     else:
         agent = create_agent(model=llm, tools=stubs, system_prompt=sys_prompt,
                              name="ab_react_assets")
+        cfg = {"recursion_limit": REC_LIMIT}
     last: dict = {}
     try:
-        for st in agent.stream({"messages": [HumanMessage(content=sent)]},
-                               {"recursion_limit": REC_LIMIT}, stream_mode="values"):
+        for st in agent.stream({"messages": [HumanMessage(content=sent)]}, cfg,
+                               stream_mode="values"):
             last = st
+            if line and st.get("plan_obj"):
+                plans.append(st["plan_obj"])
     except Exception as e:  # noqa: BLE001
         out["error"] = f"{type(e).__name__}: {e}"
         out["capped"] = "Recursion" in type(e).__name__
     msgs = last.get("messages") or []
-    _collect(msgs, out)
+    if line:
+        _collect_line(last, plans, out)
+    else:
+        _collect(msgs, out)
     out["tools"] = sorted(out["_raw"])
     out["text"] = str(getattr(msgs[-1], "content", ""))[:400] if msgs else ""
     if line:

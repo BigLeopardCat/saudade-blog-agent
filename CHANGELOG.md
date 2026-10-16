@@ -16,6 +16,36 @@
 
 ## 20261016
 
+- **帧契约从口头约定收成一件有锁的产物**（新增 `agent/frames.py` + `tests/test_frame_contract.py`）：
+  第二条臂（`AGENT_ARM=react`）产帧要喂哪些 state 键，此前是 grep 数出来手抄的，实测**两张
+  手抄表合起来漏 8 格**——闸门那张漏 `task_frames`（析取里的一条腿，少喂只会让闸门静默少
+  开火），`_popup_state` 那张 docstring 自称四格、AST 走完闭包实测**十一格**，其中 `executed`
+  正是「令牌用在那一件上就作废」那一格 ⇒ 臂的弹卡路径上那条判据**恒不生效**。新锁从
+  `graph.py`/`server.py` **现取**键集与帧名，与声明算双向差集，带四条反向对照。**行为变更只
+  落在 react 臂**：`react_line._consent_missing` 从 20261012 收窄之前的 `not self.grant`
+  改成直调生产 `graph._grant_covers`（`SkillExecutor` 多收一个 `state`）。生产默认
+  `AGENT_ARM=graph`，**线上路径逐字节不变**。
+- **第二条臂的循环拆成真节点，外层适配器退场**（`agent/react_arm.py` 900 行 → 四节点图；
+  `create_agent` / `ConvergenceMiddleware` / `wrap_tools_with_receipts` 删除）。臂现在是一棵
+  真的 `StateGraph`：`planner`/`execute`/`model`/`gate` 是编译进图的节点，`gate_node` 与
+  `_confirm_popup` 拿到的是**真 `AgentState`**（不再是塑形出来的最小 dict），`langgraph_node`
+  由 langgraph 自己盖（不再冒充），三份塑形器与五个帧构造器一起删掉。**两处刻意的口径差、
+  明写不假装同源**：① **真流式**——narrator 的分片由 LLM 流给（生产今天就是这个形状），
+  代价是分片在闸门**之前**出去（生产同形，`__RESET__` 负责撤屏）；② **`gate` 节点异常
+  吞掉按 pass 处理**（闸门是加装的一层，它自己炸了不该把主人这一轮的答复整条吃掉）。
+  **行为变更只落在 react 臂**：生产默认 `AGENT_ARM=graph`，`graph.py` 与 `server.py`
+  **一个字节没动**、线上路径逐字节不变。判据从"喂没喂"换成**结构锁**
+  （`tests/test_frame_contract.py` ③④：图里真有那四个节点名、两张键集表全是 `AgentState`
+  的声明键、臂源码 AST 里手搓 `("updates", …)` / `langgraph_node` 字面量 / `*_frame`
+  构造器一个都不许有）。**落地时抓出一条真回归**：内层 `create_agent` 白送的"模型自己
+  那条带真参数的 `AIMessage`"没补回来 ⇒ 决策模型认不出"这件事我刚做过"、反复重问、
+  烧穿轮次预算（全量 183 条里 19 条变红）。补法是 `_pair_frames` 按 `execute` 登记的
+  出处把工具帧还原成**带真参数**的合成 assistant；30 条定点块 15/30 → 29/30，
+  全量 156/183 → 172/183。
+- **默认向量模型换掉**（`config/settings.py`）：`embedding_model` 的缺省值从空串改成
+  `qwen3.7-text-embedding`——百炼平台上原来那个模型已下线。**取值优先级不变**（`.env` 的
+  `EMBEDDING_MODEL` 仍覆盖缺省值）⇒ 只动缺省值那一格；但缺省值不再是空串之后，那个「向量路
+  可用」的谓词（`bool(embedding_model.strip())`）在**没配这个变量**的环境里不再拦。
 - **计划文本的第 6 行 `TODO:` 整行退休（行为变更，`docs/native-toolcalls-mainline.md` §6.6）**：
   那一行是"多步链的中间轮声明后续依赖步骤"，写端 `plan_encode`、读端 `_parse_todo`＋
   `parse_plan`、提示词契约三处**同批删掉**。它不是被"砍掉一半能力"——**读端一个都不剩**：
