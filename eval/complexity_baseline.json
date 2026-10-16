@@ -87,7 +87,7 @@
     "c": 32,
     "lines": 54
   },
-  "eval/native_tools_probe.py::main": {
+  "eval/toolcall_probe.py::main": {
     "c": 46,
     "lines": 100
   },

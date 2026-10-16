@@ -2,7 +2,7 @@
 
 - **状态**：已采纳（20260927）
 - **背景文档**：`docs/native-toolcalls-mainline.md`（主线交接，含三条实证与冻结范围）
-- **影响范围**：`agent/native_plan.py`（新）、`agent/graph.py::planner_node`、`config/settings.py`
+- **影响范围**：`agent/planner_llm.py`（新）、`agent/graph.py::planner_node`、`config/settings.py`
 
 ## 背景
 
@@ -66,7 +66,7 @@ planner 此前用**文本计划协议**决策：系统渲染文本菜单 → 模
   技能模板承载了参数校正、确认卡边界、roles 过滤三件事，绕过它等于把这三件事重写一遍。
 - `content_query.tools/calls` 两格**推不出形状**（该技能 `plan` 是空列表，调用清单由
   planner 经 PARAMS 注入），因此有一张只有两格的 `_SCHEMA_OVERRIDES` 手写表；
-  键集合被 `tests/test_native_plan.py` 钉成字面量，加格必须同改测试。
+  键集合被 `tests/test_planner_llm.py` 钉成字面量，加格必须同改测试。
 - native **不治**"多步目标跨轮丢失"（那要会话级任务状态），也不改行为纪律
   （短应答还原 / 全选式短应答 / 授权式 / 写身份防线）——那是**行为**不是格式。
 

@@ -104,7 +104,7 @@ X"既可能是回忆也可能是谎言；生产那个被判的模型是**零工�
     `model_node` 同款——**不是**另建一条 `AIMessage`：重建会换掉 id，而那条 id 已经被
     `messages` 通道认领过（`on_llm_end` 的 dedupe 靠它），重建 = 同一段正文发两遍。
   · `parallel_tool_calls` 没有钉住——生产 planner 是 `parallel_tool_calls=False`
-    （见 `native_plan.bind_native` 的注）。本线的 `bind_tools` **不传**它，容忍一轮多条
+    （见 `planner_llm.bind_planner_tools` 的注）。本线的 `bind_tools` **不传**它，容忍一轮多条
     调用（合并成一份 `plan_obj`、逐条发 `execute`），所以偏差表现为"步子更碎"，不会丢调用。
   · 内层只看得到 `[HumanMessage(本轮用户消息)]`（与被测的 graph planner 信息面同源：
     page_ctx / recent_tail / doc_anchors 都在系统提示里）。文本按 `_last_user_msg` 取末
@@ -172,7 +172,7 @@ from agent.graph import (AgentCancelled, AgentState, _EXECUTOR_PROMPT,
                          _frame_id, _narrator_plan, _pending_ledger_frame,
                          _principal_of, _render_planner_prompt, _stopped,
                          gate_node as _prod_gate_node, graph_input, plan_state)
-from agent.native_plan import build_tool_schema
+from agent.planner_llm import build_tool_schema
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import (RunLedger, SkillExecutor, convergence_verdict,
                               wrap_up_text)

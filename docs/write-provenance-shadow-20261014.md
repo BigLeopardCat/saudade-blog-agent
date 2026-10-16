@@ -25,7 +25,7 @@
 |---|---|---|
 | 新模块：出处核验 | `agent/provenance.py`（新） | 只做两件事：**逐字核对**（归一后 `value ⊆ quote ⊆ source`）+ **来源分类**（`user` > `ledger` > `exec`）。判否时给出 `why`（`no_quote` / `value_not_in_quote` / `quote_not_in_source`）。**核验方判来源，模型不填 `from`** |
 | 新模块：归一化 | `agent/textnorm.py`（新） | `_squash_spaces` / `_fold_typing` 从 `graph.py` 搬出，graph 侧保留同名别名（不改上百个调用点） |
-| schema 面 | `agent/native_plan.py` | 写作用域技能的 `evidence` 格（`[{"arg","quote"}]`）注入 `props`（不进 `required`）；从 `tool_calls_to_plan` 摘走 → `NativeDecision.evidence` → `state`，**永不进 `spec.args`** |
+| schema 面 | `agent/planner_llm.py` | 写作用域技能的 `evidence` 格（`[{"arg","quote"}]`）注入 `props`（不进 `required`）；从 `tool_calls_to_plan` 摘走 → `PlannerDecision.evidence` → `state`，**永不进 `spec.args`** |
 | 观测面 | `agent/graph.py` | `_evidence_fields()` 每轮算出"若收口，会被判成什么"，落两条事件：`planner.evidence_shadow`（逐格判决）与 `planner.evidence_scope`（今天**没有任何**出处判据的写格＝射程候选，**只记账**） |
 | 拒绝事件补结构化字段 | `agent/graph.py` | `write_target_unresolved` / `plan_obj["refusal"]` 带上被拒的 `arg` / `value`（此前值埋在散文里，R4 巡检结构上看不见） |
 | 新开关 | `config/settings.py` + `.env.example` | `AGENT_EVIDENCE`，默认 **False**，并进 `tests/run_all.py::_PINNED` 钉 `"0"` |
@@ -44,7 +44,7 @@
   的「它」当成新标签名，而它是原话子串、**天然自满足逐字出处判据**。封闭类划定义域 ≠ 枚举打补丁。
 - `_QUOTE_SPAN_RE`（引号，标点级封闭结构）**保留**，且它是**唯一**保留下来的"结构"。
 
-**`eval/complexity_baseline.json` 减了 2 条**（`native_plan.tool_calls_to_plan`、`trace_alert.main`
+**`eval/complexity_baseline.json` 减了 2 条**（`planner_llm.tool_calls_to_plan`、`trace_alert.main`
 落到阈值之下，不是放宽）：台账只收超预算的函数，函数变小 ⇒ 条目消失是正常刷新。
 
 ---

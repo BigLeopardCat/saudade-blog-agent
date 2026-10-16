@@ -51,7 +51,7 @@ ADMIN_ROLES = frozenset({ROLE_ADMIN, ROLE_SUPERADMIN})
 
 # "只准闲聊族"（20261002，目前只有杂鱼）。**判据只此一处**，三条派生：
 #   ① skills.visible_skills —— 只剩 `chat`（`s.chat` 为真的那个技能），planner 菜单 /
-#      native schema / narrator 能力清单三处同源跟随；
+#      工具 schema / narrator 能力清单三处同源跟随；
 #   ② prompts.audience_block —— 走 AUDIENCE_ZAKO 那一档口吻；
 #   ③ graph.planner_node —— 顶部短路，连 planner LLM 都不调（**这一条才是硬保证**：
 #      技能可见性约束的是"模型看到的菜单"，而 instantiate_plan 不校验可见性、authz 在

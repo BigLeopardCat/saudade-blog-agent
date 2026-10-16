@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""native 档技能块去重（`build_planner_context(..., slim=True)`）单测：离线、秒级、零 LLM。
+"""接口层技能块去重（`build_planner_context(..., slim=True)`）单测：离线、秒级、零 LLM。
 
-**为什么存在**：native 档一轮里下发的是**同一张技能表的两份形态**——提示词里的散文菜单
+**为什么存在**：接口层一轮里下发的是**同一张技能表的两份形态**——提示词里的散文菜单
 （触发条件 / 参数 / 固定工具序列 / 完成判定）与 `tools` 里的 JSON Schema（`description`
 含同一段描述与完成判定、`properties` 是同一份 `skill_param_specs`）。重复本身不致命，
 **两份各自漂移**才致命，而本批落地时就抓到一处实证：schema 那侧的 `content_query` 描述里
@@ -40,7 +40,7 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
-from agent.native_plan import build_tool_schema  # noqa: E402
+from agent.planner_llm import build_tool_schema  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 from agent.skills import (build_planner_context, render_tool_marks,  # noqa: E402
                           skill_param_specs, visible_skills)
@@ -79,7 +79,7 @@ def _expected_schema_names(role: str) -> set[str]:
     ⚠️ 20261007：原写法是"与 `visible_skills(role)` **全等**"，那句话只在
     `AGENT_TASK_STATE=0` 下成立——而档位 20261015 已撤（任务状态常开）⇒ 那半句话连同
     档位一起过期了，这里改成**无条件**加那三个伪函数（与产线逐字同一档）。
-    口径与 `tests/test_native_plan.py` ① 同一句：**多出来的只准是那三个申报过的伪函数**
+    口径与 `tests/test_planner_llm.py` ① 同一句：**多出来的只准是那三个申报过的伪函数**
     （名字取 `agent/tasks.py` 的常量，不硬编码），多别的一律红——"不扩权"没被放松。
     """
     names = {s.name for s in visible_skills(role)}
