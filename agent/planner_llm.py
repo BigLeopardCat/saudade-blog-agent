@@ -1,7 +1,7 @@
 """planner 与 LLM 之间的接线层：技能表 ↔ API 的 `tools` / `tool_calls`（20260927 起）。
 
 **为什么存在**：planner 此前靠"系统渲染文本菜单 → 模型写五行文本 → 正则抠"决策
-（`SKILL=` / `PARAMS=` / `TOOLS:` 契约见 `agent/graph.py` 的 `plan_encode`）。那条路把
+（`SKILL=` / `PARAMS=` / `TOOLS:` 契约见 `agent/plan_codec.py` 的 `plan_encode`）。那条路把
 **格式正确性**押在模型的文本纪律上：实测约 15% 的轮次改用 JSON 对象或带引号键回答，
 旧内联正则匹配不到 ⇒ 静默落成 chat（主人收到一句假的"我做不到"）。现在这一步换成
 API 的 `tools` 字段 + `tool_calls` 返回——格式由服务端约定、参数由 schema 约束。

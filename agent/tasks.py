@@ -6,7 +6,7 @@
 「带我过去后开启一个特效」这类多步目标只走完第一步就直接收尾，第二步从未被规划；
 模型自己写的 `TODO:` 行（`plan_encode` 的契约第 6 行）只有 trace 消费（**有写无读**）
 ——那一行 20261016 已整行退休，**本模块就是它的替代者**（取证见
-`agent/graph.py::plan_encode`：读端为零、名义消费者 reflector 实测从未收到过它）。
+`agent/plan_codec.py::plan_encode`：读端为零、名义消费者 reflector 实测从未收到过它）。
 本模块 = 那个缺口的补法：一张 `agent_task` 表（迁移 `agent_task_20260927.sql`）+
 模型侧的一次登记 + 系统侧的确定性结算。
 

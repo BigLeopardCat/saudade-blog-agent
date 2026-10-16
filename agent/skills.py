@@ -4430,7 +4430,7 @@ def _param_problem_plan(skill: Skill, chk: dict,
 # 一条 spec 的字面形状：`工具名({json 参数})`。写端在本模块（`tools.append`
 # `f"{tool}({json.dumps(args, ensure_ascii=False)})"`，十余处），读端有三处
 # （`graph._tool_args`、`tasks.bound_steps`、测试）——**拆分规则只能有一处**，
-# 所以留在这里、贴着写端（同族教训见 agent/graph.py `_esc_spec` 的注：
+# 所以留在这里、贴着写端（同族教训见 agent/plan_codec.py `_esc_spec` 的注：
 # "改一处要同步十三处"正是全仓审计点名的主导缺陷）。
 _TOOL_SPEC_RE = re.compile(r"^(\w+)\((.*)\)$", re.DOTALL)
 

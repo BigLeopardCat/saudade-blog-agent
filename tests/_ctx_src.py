@@ -65,6 +65,26 @@ def graph_deprefixed():
     return deprefix(GRAPH.read_text(encoding="utf-8"))
 
 
+def plan_codec_src():
+    """**计划文本契约**那一族的全量文本（20261017 起住在 `agent/plan_codec.py`）。
+
+    给"整文件源码文本锁"取值：`test_plan_channel` ① 判"`plan_encode` 的代码调用点恰好
+    一处、且在 `plan_state` 体内"，`test_status_judgements` ④ 判"写端一定写 `STATUS=`
+    行、且排在 REPLY 之前"。这两条判的都是**这一族内部谁调用了谁**，而这一族
+    20261017 从 `agent/graph.py` 搬进了 `agent/plan_codec.py` ⇒ 原来"读 graph.py 整文件"
+    的取值点会整族变假红（代码还在、只是换了文件）。
+
+    取值点改成这一族**全部文件**的拼接视图，于是那些断言**一个字都不用改**：判据没被
+    改松，只是锚点跟着代码搬（同 `deprefix` / `prose()` 那两次的思路）。
+
+    **列的是文件、不是"整个 agent 包"**：整个包拼起来会把别处同名的字面量也数进来，
+    那是把锁放松，不是搬家。两份文件用 `\\n` 相接 ⇒ 行号会平移，但下面那几条判据只在
+    这一份文本内部比大小/找区间，**两份共用同一张行号表**，所以自洽。
+    """
+    return "\n".join(p.read_text(encoding="utf-8")
+                     for p in (GRAPH, ROOT / "agent" / "plan_codec.py"))
+
+
 def prose():
     """**模型可见正文**的全量文本（20261014 起住在 `agent/prompts.py`）。
 

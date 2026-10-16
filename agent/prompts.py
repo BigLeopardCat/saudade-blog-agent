@@ -570,7 +570,7 @@ _PLANNER_PROMPT = """\
 # 决策通道"说清楚，避免模型一半调函数一半写契约行（实测确实会两边都写）。
 # `TODO:` 那行 20261016 整行退休（当初这段注解说"删掉等于把既有能力悄悄砍掉一半"，
 # 全量 trace 实测推翻了它：1194 份里只出现 7 个请求，且读端为零——取证见
-# `agent/graph.py::plan_encode` 那一处）。"还剩什么没做完"这个能力现在住在
+# `agent/plan_codec.py::plan_encode` 那一处）。"还剩什么没做完"这个能力现在住在
 # `agent/tasks.py` 的 `agent_task` 表上，不再是这一行。
 _PLANNER_OUTPUT_CONTRACT_NATIVE = """\
 7. 你的决定**通过工具调用表达**：调用本轮 tools 里与所选**技能同名**的那个函数，
