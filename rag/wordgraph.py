@@ -10,7 +10,7 @@ dirs.f32         被剔除的主方向（strip_top × dim）——**可能是 0 
 ===============  ==========================================================
 
 **用哪个 embedding 模型/端点不在这里决定**（20261007）：`rag/embed_space.py` 解析
-（配了 `EMBEDDING_*` 就用它、没配回落 `QWEN_*` + `text-embedding-v4`），与建图脚本
+（配了 `EMBEDDING_*` 就用它、没配回落 `QWEN_*` + `qwen3.7-text-embedding`），与建图脚本
 `scripts/build_word_graph.py` 读的是**同一条规则**。两侧解出的空间不一致时，查询向量
 会落在另一片空间里 —— 症状同样是"搜 X 结果飞到一个视觉上离 X 很远的角落"，
 **而且不报错**。所以产物里记着它自己的空间，`_load()` 拿它当场对一次：不符就
@@ -227,7 +227,7 @@ def _cosines(q: list[float], vecs: array.array, count: int, dim: int) -> list[fl
 
 def _embed_one(text: str) -> list[float] | None:
     """查询串 → 向量。**用解析出来的 embedding 空间**（见 `rag/embed_space.py`）：
-    配了 `EMBEDDING_*` 就用它，否则回落 `QWEN_*` + `text-embedding-v4`——与建图脚本
+    配了 `EMBEDDING_*` 就用它，否则回落 `QWEN_*` + `qwen3.7-text-embedding`——与建图脚本
     同一条规则。刻意**不**跟着 `settings.active_llm_*` 走：对话 provider 可能没有
     embeddings 端点（deepseek 就没有），跟着它走会在切 provider 时哑掉。
 

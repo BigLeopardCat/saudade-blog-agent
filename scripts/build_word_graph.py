@@ -4,7 +4,7 @@
 做什么：公开文章 → jieba 抽词 → embedding 向量化 → **UMAP 三维布局**
         → 1024 维 kNN 连边 → 产出前端展示数据 + agent 查询用向量。
         **用哪个模型/端点/维度不在这里决定**：`rag/embed_space.py`（两端唯一事实源）
-        解析 —— 配了 `EMBEDDING_*` 就用它、没配回落 `QWEN_*` + `text-embedding-v4`。
+        解析 —— 配了 `EMBEDDING_*` 就用它、没配回落 `QWEN_*` + `qwen3.7-text-embedding`。
         与图谱检索侧（`rag/wordgraph.py`）读的是同一份规则；两边一旦解出不同的空间，
         查询向量就落在别处，而图不报错、只是默默不对。
         （20260917 起默认布局是 UMAP；`--layout semantic` 保留旧的 PCA+弹簧，

@@ -268,7 +268,11 @@ class Settings(BaseSettings):
     # ⚠️ 这一组**不只是混合检索的配置**：站首页那件「文章向量空间图谱」也用它
     # （20261007 起，建图 `scripts/build_word_graph.py` 与图谱检索 `rag/wordgraph.py`
     # 共用 `rag/embed_space.py` 一条解析规则）。配了就两处一起换、没配则两处一起
-    # 回落 `QWEN_*` + `text-embedding-v4`。**换模型/端点之后要重建一次图谱**
+    # 回落 `QWEN_*` + `qwen3.7-text-embedding`（回落档的模型名是
+    # `rag/embed_space.py::FALLBACK_MODEL`，与**下面 `embedding_model` 的缺省值同源**
+    # ——同一个问题在本仓只该有一个答案，有判据钉住。⚠️ 另有一个
+    # `FLAT_CACHE_MODEL` 是"老缓存当年是谁建的"，**别与它混**）。
+    # **换模型/端点之后要重建一次图谱**
     # （后台「站点设置 → 向量图谱」）：旧图是另一片空间建的，检索侧会以
     # `space_mismatch` 明着降级（日志一条 WARNING + 前端退回本地关键词匹配）。
     #
@@ -276,7 +280,7 @@ class Settings(BaseSettings):
     # 用聚合平台的话，把 `QWEN_BASE_URL` / `QWEN_API_KEY` 的值**复制**过来一份：
     #   EMBEDDING_BASE_URL=<与 QWEN_BASE_URL 同值>
     #   EMBEDDING_API_KEY=<与 QWEN_API_KEY 同值>
-    #   EMBEDDING_MODEL=<聚合平台上的 embedding 模型名，如 text-embedding-v4>
+    #   EMBEDDING_MODEL=<聚合平台上的 embedding 模型名，如 qwen3.7-text-embedding>
     # ⚠️ 刻意**不**回落 `active_llm_*`（20260927 的教训，见 rag/wordgraph.py 的
     # `_embed_one`）：跟着 active provider 走，切到一个没有 embeddings 端点的 provider
     # 就会哑掉，而且哑得没有声音。独立一份 = 换对话模型不会顺带打断向量路。
