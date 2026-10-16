@@ -98,7 +98,8 @@ function calling（`tool_choice=auto` / 强制指定 / 函数侧 `strict`），�
 1. **`TODO:` 行有写无读。** 提示词**主动教模型写它**（「多步链中间轮可另加一行：
    `TODO: <步骤1> → <步骤2>`」，`agent/graph.py`），
    `plan_encode` 写它（`agent/graph.py`）、`parse_plan` 读进
-   `plan_obj["todo"]`、trace 记一条——**然后没有任何消费者**。planner 提示词的
+   `plan_obj["todo"]`、trace 记一条——**然后没有任何消费者**（**已了结**：这一行
+   20261016 整行退休，取证与反向锁见 §6.6 末尾那条「落地状态」）。planner 提示词的
    14 个槽位（skills_context / tools_desc / page_ctx / round_info / intent_hints /
    doc_anchors / recent_context / short_reply_hint / tool_results / ref_hints /
    reflector_feedback / correction / max_rounds / user_msg）里**没有"上一轮计划/剩余步骤"**。

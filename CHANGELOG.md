@@ -27,8 +27,18 @@
   （后续步骤的参数只能等上轮工具返回后填）一字未动。反向锁：`tests/test_skills.py` 的
   `test_todo_line_retired`（写端塞了 `todo` 也不产出、读端不再返回那一格、老文本里的 TODO 行
   只被忽略）+ `tests/test_native_wiring.py` 的契约源码锁（契约里**不再**有 `TODO:`）。
+  同批销账：`docs/agent-architecture.md` §3 里那句仍在用**现在时**描述这一行的正文改成"已退休"、
+  `tests/test_cross_language_tables.py` 把 `TODO` 从"别的协议族"挪进新的
+  `RETIRED_TAG_FAMILIES`（反控：清空它 ⇒ 扫描当场红，证明这张表不是摆设）。
   **射程如实记**：这是 planner 提示词 + 计划协议的改动，而 `_render_planner_prompt` 是
-  **两条臂共用**的（`agent/react_arm.py:777`）⇒ 两臂的读数都得重评，golden A/B 读数另补。
+  **两条臂共用**的（`agent/react_arm.py:777`）⇒ 两臂都重评了。**golden A/B**（回归组 19 条 ×
+  两臂 × 两变体 × 3 轮、交替跑，共 228 个用例轮次）：before 56/57、after 55/57 首跑绿，
+  react 臂两变体各 57/57；三处首跑红落在**互不相同**的三条上，且其中一条出在**对照臂** ⇒
+  再按"复跑计数"逐条定性（6 轮 × 两变体）：`exec_memory_none_honest` 12/12 绿、
+  `followup_named_doc_no_search` 12/12 绿、`followup_named_doc_reread` 对照臂 4/6 而本臂
+  6/6——**两变体没有可分辨的差别**。对照历史基线（`landing_gate.py --red-rank`，92 次全量跑）：
+  这三条的红率分别是 **4/92、3/92、3/92** ⇒ 每变体 57 个用例轮次里 1–2 条红**正好落在基线上**，
+  两臂都没有多出来的红。
 - **菜单被摘之后的"改选"不再能把动作反过来（行为变更，`docs/问题记录.md` §1.57）**：写工具因
   环境型受阻（`unavailable`）被 `denied_skills` 摘掉后，planner 会**改选**菜单里剩下的那一件
   ——而"剩下的一件"常是它的**反极性兄弟**。实测形态：主人说「收藏这篇文章」，回复却是一张
