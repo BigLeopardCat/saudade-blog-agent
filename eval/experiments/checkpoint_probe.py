@@ -11,6 +11,7 @@
                       （2× → 1×；不带 --guard 的那条就是它的内置反控）
       --guard-unsafe  上一条的反控：占位留在一笔**没提交**的事务里 ⇒ 读数应回到两次
     --pg-stats        实验库里有什么（逐 thread 的 checkpoint 行数/字节、单行大小）
+    --backend-parity  两档账本（PG / SQLite）跑同一份序列 ⇒ 读数必须**逐字相等**
     --summarize       把 `CHECKPOINT_PROBE_OUT` 那份 JSONL 汇总成逐轮曲线
 
 **跑法**（cwd 必须是主仓 —— `.env` 是相对路径；解释器用主仓 `.venv`）：
@@ -32,7 +33,6 @@ PYTHONPATH=/home/ubuntu/exp/saudade-agent-checkpoint:/home/ubuntu/exp/pydeps \\
 import argparse
 import json
 import os
-import sqlite3
 import sys
 import time
 
@@ -49,6 +49,7 @@ from agent import context  # noqa: E402
 from agent import graph as G  # noqa: E402
 from agent import idem  # noqa: E402
 from agent.checkpoint_arm import make_saver  # noqa: E402
+from tools.base import ToolResult  # noqa: E402
 
 THREAD = "probe-conv-20260925"
 # 三轮各自的页面上下文（`_build_messages` 写进首条 [System: …] 的那一串）。
@@ -335,16 +336,24 @@ def cmd_crash_resume() -> int:
 # ⚠️ **两处 `stream` 都必须 `durability="sync"`**（`_guard_worker` 与恢复那一次）：
 # 缺省 `async` 下 checkpoint 由后台线程写、主循环不等待，硬杀时那一步可能没落盘 ⇒
 # 恢复时 `__start__` 重跑、`__pregel_task_id` 变了 ⇒ **账被绕过，读数回到 2×**。
-# 这不是探针的讲究，是**账的前提**（推导与实测对照见 `agent/idem.py` 头注与
-# ADR-0012 的《前提》）。反过来说：把这两处改回 async，本探针就会红——那是这套判据
+# 这不是探针的讲究，是**账的前提**（推导与实测对照见
+# `agent/idem.py::require_sync_durability` 与 ADR-0012 的《触发条件》）。反过来说：
+# 把这两处改回 async，本探针就会红——那是这套判据
 # 的价值。（`idem.require_sync_durability` 把这条断言搬进了代码本身：档不对当场抛。）
 #
 # 「库」= 一个盘上的文件（跨进程、跨崩溃都在），与 `execute_node` 里"调一个工具、
 # 它写了库"逐字同形。
 #
-# **账也用一个盘上的文件**（`tempfile` 造的独立 SQLite，不是 `settings.idem_db`）：
-# 探针不该往产线那本账里写，而且独立文件才好"清场"——`idem` 的键是 sha256，没有
-# thread 列可删，清场只能靠换一个空库。
+# **账落在 PG**（与 saver 同一个库、同一张表 `agent_write_idem`），而且**不传 `ledger=`**
+# ⇒ 走的是 `idem._shared(config)` 那条真路：它看见 saver 是 PG 的，就把账挂到 saver 那条
+# 池上。这一段**后端选择**的代码是这一批新加的，除了这里没有第二处能真机验它——CI 里
+# 没有 PG，块⑪ 只能钉"psycopg 没漏进 idem.py"，钉不了"真的选对了"。
+#
+# **清场靠换一个没人用过的 thread 名**（`uuid` 后缀）：键是 sha256，表里没有 thread_id
+# 列，没有 DELETE 可做。换了 thread 名 ⇒ 新的 `task_id` ⇒ 新的键 ⇒ 一片干净的行，
+# 而且**顺带**证明了"每次全新输入都是新键"（见下面竞态那格的 ②）。
+#
+# **DSN 不上屏**：它是凭据（`.env` 里那份都没它），日志里只印"落在 PG 哪张表"。
 
 class _SideEffectTool:
     """把"写库"换成一个**真的落到盘上**的副作用；`PROBE_CRASH` 在场就硬杀。"""
@@ -363,8 +372,10 @@ class _SideEffectTool:
 def _guard_graph(saver, ledger):
     """真图：唯一那次写走**账**（与 `graph.execute_node` 里那一行同一个入口）。
 
-    节点名固定 `execute`（与夹具①同名），`ledger` 由闭包带进来——**不再走
-    `config["configurable"]`**：`idem` 的闸是"挂没挂 checkpointer"，账本本体不进 config。
+    节点名固定 `execute`（与夹具①同名）。`ledger=None`（安全档）⇒ `guarded_invoke`
+    自己去 `idem._shared(config)` 按 saver 选后端（**生产那条路**）；两个反控档才由闭包
+    塞一条账进来。**账本本体不进 `config["configurable"]`**：`idem` 的闸是"挂没挂
+    checkpointer"，账从 saver 上认。
     """
     def execute(state, config):
         out = idem.guarded_invoke(_SideEffectTool(), "set_article_status", {}, config,
@@ -378,40 +389,91 @@ def _guard_graph(saver, ledger):
     return g.compile(checkpointer=saver)
 
 
+def _pg_conn(autocommit: bool):
+    """一条**裸** psycopg 连接（两个反控用）：与 saver 同一个库，但**不经池**。
+
+    DSN 取 `checkpoint_arm._dsn()`（那个"缺了就炸、绝不静默降级"是**同一份**纪律，
+    在这里重写一遍就多了一处会漂的副本）。`autocommit=False` 是反控的一半：要的就是
+    "占位留在一笔没提交的事务里"。
+    """
+    import psycopg
+
+    from agent.checkpoint_arm import _dsn
+    return psycopg.connect(_dsn(), autocommit=autocommit)
+
+
+def _init_idem_table() -> None:
+    """先把表建好（自动提交，走 `idem_pg` 那份 DDL 的**同一处**源码）。
+
+    只给反控档用：它们故意不做 DDL，免得"建表"混进反控读数。**不另抄一份 CREATE
+    TABLE**——抄一份就多了一处会与实现漂开的表结构，而漂开之后的表现是"账看起来是空的"。
+    """
+    from agent import idem_pg
+    conn = _pg_conn(autocommit=True)
+    try:
+        conn.execute(idem_pg._DDL)
+    finally:
+        conn.close()
+
+
+def _idem_key_rows(key: str, done: bool = False) -> int:
+    """账里**这一个键**的行数（按主键查）。
+
+    为什么不能"数全表"：键是 sha256，表里**没有 thread_id 这一列**，而这张表是
+    saver 那个库里的**共用**一张表（其他探针、其他运行的行都在里面）⇒ 全表行数与
+    本格无关。`done=True` 数的是"结局已记"的行（旧表的 `outcome IS NOT NULL`）。
+    """
+    from agent import idem_pg
+    conn = _pg_conn(autocommit=True)
+    try:
+        sql = f"SELECT count(*) FROM {idem_pg.TABLE} WHERE key=%s"
+        if done:
+            sql += " AND status='done'"
+        return conn.execute(sql, (key,)).fetchone()[0]
+    finally:
+        conn.close()
+
+
 class _UnsafeLedger:
     """**反控（崩溃那一格）**：占位写在一笔**不提交**的事务里。
 
-    进程被硬杀 ⇒ 连接断开 ⇒ SQLite 回滚那笔事务 ⇒ 占位没了 ⇒ 账白做、写被重放
-    （读数回到 2）。这一条钉的是 `idem.Ledger` 那条"占位必须**按语句**即时落库"
-    （它用 `isolation_level=None` = 自动提交）的契约：没有它，"账只在进程活着的
-    时候有效"这件事**表面上看不出来**。
+    进程被硬杀 ⇒ 连接断开 ⇒ PG 回滚那笔事务 ⇒ 占位没了 ⇒ 账白做、写被重放（读数
+    回到 2）。这一条钉的是"占位必须**按语句**即时落库"（`idem_pg.ensure_autocommit`
+    与 `idem.Ledger` 的 `isolation_level=None` 是同一件事的两档写法）：没有它，
+    "账只在进程活着的时候有效"这件事**表面上看不出来**。
 
-    ⚠️ **不能拿它当并发那一格的反控**：SQLite 只有一个写者，一笔没提交的写事务会把
-    别人的 INSERT 挡在门外 —— 后到的不是"也写了一遍"，而是等 5 秒后 `database is
-    locked` ⇒ 被 fail-closed 拒掉（20261017 实测 3/4 个 worker 走这一路）。并发那一格
-    的反控是 `_RaceUnsafeLedger`：**两个反控各治一件事，不能互换**。
+    ⚠️ 裸连接**不能**只把池设成非自动提交来模拟：`with conn:` 退出时
+    `psycopg.Connection.__exit__` 会 `commit()`，那样它照样提交（见
+    `idem_pg.ensure_autocommit`）。"不提交"必须是一条**裸连接 + 一句 COMMIT 都不发**。
+
+    ⚠️ **不能拿它当并发那一格的反控**：一笔没提交的 INSERT 会把同一个键上的
+    `ON CONFLICT` 判定**堵住**（PG 得先知道那行到底提不提交）⇒ 后到的不是"也写了一遍"，
+    而是等锁/被拒。**"不提交"与"非原子"是两件事**，并发那格的反控是 `_RaceUnsafeLedger`。
     """
 
-    def __init__(self, path: str):
-        self.conn = sqlite3.connect(path, isolation_level=None)
-        self.conn.execute("BEGIN")     # ← 从这一刻起，占位都留在一笔没提交的事务里
+    def __init__(self, dsn: str):
+        from agent import idem_pg
+        self.table = idem_pg.TABLE
+        self.conn = _pg_conn(autocommit=False)   # ← 从这一刻起，占位都留在一笔没提交的事务里
 
     def claim(self, key, tool, fp):
-        cur = self.conn.execute("SELECT status, text, kind, meta FROM idem WHERE key=?",
-                                (key,))
-        row = cur.fetchone()
-        if row is not None:
-            return row[0], row
-        self.conn.execute(
-            "INSERT INTO idem(key, tool, fp, status, ts) VALUES (?,?,?,'intent',?)",
-            (key, tool, fp, time.time()))
+        with self.conn.cursor() as cur:
+            cur.execute(f"SELECT status, text, kind, meta FROM {self.table} WHERE key=%s",
+                        (key,))
+            row = cur.fetchone()
+            if row is not None:
+                return row[0], row
+            cur.execute(f"INSERT INTO {self.table}(key, tool, fp, status)"
+                        " VALUES (%s,%s,%s,'intent')", (key, tool, fp))
         return "new", None             # ← **没有 COMMIT**，这就是"不安全"的全部
 
     def finish(self, key, out):
-        self.conn.execute(
-            "UPDATE idem SET status='done', text=?, kind=?, meta=? WHERE key=?",
-            (str(out), str(getattr(out, "kind", "ok") or "ok"),
-             json.dumps(getattr(out, "meta", None) or {}, ensure_ascii=False), key))
+        with self.conn.cursor() as cur:
+            cur.execute(f"UPDATE {self.table} SET status='done', text=%s, kind=%s,"
+                        " meta=%s WHERE key=%s",
+                        (str(out), str(getattr(out, "kind", "ok") or "ok"),
+                         json.dumps(getattr(out, "meta", None) or {},
+                                    ensure_ascii=False), key))
         return False
 
     def close(self):
@@ -421,34 +483,50 @@ class _UnsafeLedger:
 class _RaceUnsafeLedger:
     """**反控（并发那一格）**：占位的**原子性**被拿掉。
 
-    `claim` 先 SELECT、再 `INSERT OR IGNORE`，但**不看 `rowcount`** ⇒ 谁都以为自己
-    抢到了。自动提交（每条语句即时落库）⇒ 不靠"不提交"制造假象，只把"判定与插入是
-    一条原子语句"这件事拆开。N 个 worker 于是都真调工具 ⇒ N 次写。
+    `claim` 先 SELECT、再 `INSERT ... ON CONFLICT DO NOTHING`，但**不看返回的行** ⇒
+    谁都以为自己抢到了。自动提交（每条语句即时落库）⇒ 不靠"不提交"制造假象，只把
+    "判定与插入是一条原子语句"这件事拆开。N 个 worker 于是都真调工具 ⇒ N 次写。
 
-    为什么需要它（而不是复用 `_UnsafeLedger`）：见那个类的 ⚠️ —— 不提交的版本在
-    SQLite 上根本走不到"也写一遍"，只会撞锁被拒。**"不提交"与"非原子"是两件事**，
+    为什么需要它（而不是复用 `_UnsafeLedger`）：见那个类的 ⚠️ —— 不提交的版本会堵住
+    别人的 `ON CONFLICT` 判定，根本走不到"也写一遍"。**"不提交"与"非原子"是两件事**，
     崩溃那格量前者、并发这格量后者。
+
+    ⚠️ **SELECT 与 INSERT 之间要停一下**（`_WINDOW`），否则这一档的读数是**抖的**：
+    PG 的自动提交是立刻可见的，某个 worker 的 SELECT 只要晚于别人的 INSERT 就会
+    **真的看到那一行** ⇒ 它走了回放 ⇒ 读数是 3 而不是 4（20261017 实测）。那不是说
+    "反控不成立"，而是**这个仪器没量准**：非原子性才是被量的事，而"谁先谁后"是采样
+    运气。把窗口撑开之后，"所有人都读到空、所有人都以为自己是第一个"就变成确定的
+    ——与 `--guard-slow` 用 2s 撑开 in-doubt 窗口是同一个手法。
     """
 
-    def __init__(self, path: str):
-        self.conn = sqlite3.connect(path, timeout=5.0, isolation_level=None)
-        self.conn.execute("PRAGMA busy_timeout=5000")
+    _WINDOW = 0.5          # 秒；见类注的 ⚠️
+
+    def __init__(self, dsn: str):
+        from agent import idem_pg
+        self.table = idem_pg.TABLE
+        self.conn = _pg_conn(autocommit=True)
 
     def claim(self, key, tool, fp):
-        row = self.conn.execute("SELECT status, text, kind, meta FROM idem WHERE key=?",
-                                (key,)).fetchone()
-        if row is not None:
-            return row[0], row
-        self.conn.execute(
-            "INSERT OR IGNORE INTO idem(key, tool, fp, status, ts)"
-            " VALUES (?,?,?,'intent',?)", (key, tool, fp, time.time()))
-        return "new", None             # ← 不看 rowcount：被忽略也当自己抢到了
+        with self.conn.cursor() as cur:
+            cur.execute(f"SELECT status, text, kind, meta FROM {self.table} WHERE key=%s",
+                        (key,))
+            row = cur.fetchone()
+            if row is not None:
+                return row[0], row
+        time.sleep(self._WINDOW)       # ← 让**所有人**都读完（都读到空）之后才开始插
+        with self.conn.cursor() as cur:
+            cur.execute(f"INSERT INTO {self.table}(key, tool, fp, status)"
+                        " VALUES (%s,%s,%s,'intent') ON CONFLICT (key) DO NOTHING",
+                        (key, tool, fp))
+        return "new", None             # ← 不看有没有插进去：被挡下也当自己抢到了
 
     def finish(self, key, out):
-        self.conn.execute(
-            "UPDATE idem SET status='done', text=?, kind=?, meta=? WHERE key=?",
-            (str(out), str(getattr(out, "kind", "ok") or "ok"),
-             json.dumps(getattr(out, "meta", None) or {}, ensure_ascii=False), key))
+        with self.conn.cursor() as cur:
+            cur.execute(f"UPDATE {self.table} SET status='done', text=%s, kind=%s,"
+                        " meta=%s WHERE key=%s",
+                        (str(out), str(getattr(out, "kind", "ok") or "ok"),
+                         json.dumps(getattr(out, "meta", None) or {},
+                                    ensure_ascii=False), key))
         return False
 
     def close(self):
@@ -456,32 +534,22 @@ class _RaceUnsafeLedger:
 
 
 # 三档账本。**按名取**（不是 `unsafe: bool`）：两个反控各治一件事，混成一个布尔值
-# 就会像上面那条 ⚠️ 一样，把"撞锁被拒"读成"反控不成立"。
-_LEDGERS = {"safe": idem.Ledger, "crash-unsafe": _UnsafeLedger,
-            "race-unsafe": _RaceUnsafeLedger}
+# 就会像上面那条 ⚠️ 一样，把"被堵住"读成"反控不成立"。
+# `safe` 那档是 `None` —— **不是**"忘了传"，而是"这一档就是不传账本"：不传才会走
+# `idem._shared(config)` 那条真路（见本节头注）。
+_LEDGERS = {"safe": None, "crash-unsafe": _UnsafeLedger, "race-unsafe": _RaceUnsafeLedger}
 
 
-def _ledger_for(db: str, kind: str):
-    return _LEDGERS[kind](db)
+def _ledger_for(kind: str, dsn: str):
+    cls = _LEDGERS[kind]
+    return None if cls is None else cls(dsn)
 
 
-def _init_idem_db(db: str) -> None:
-    """先把库和表建好（走**安全**那条路，提交）。
-
-    只给 `race-unsafe` 档用：那一档的 worker 不做 DDL，免得"冷启竞态"混进反控读数
-    （`safe` 档**故意**不预建——那两格要继续量真实的"4 个进程同时冷启一本还不存在的账"，
-    `idem.Ledger._connect` 那条重试就是为此加的）。
-    """
-    led = idem.Ledger(db)
-    led._db()
-    led.close()
-
-
-def _guard_worker(thread: str, unsafe: bool, db: str) -> None:
+def _guard_worker(thread: str, unsafe: bool, dsn: str) -> None:
     """子进程体。**必须是模块级函数**：`spawn` 要 pickle 它（同 `_conc_worker`）。"""
     os.environ["PROBE_CRASH"] = "1"
     saver = make_saver()
-    app = _guard_graph(saver, _ledger_for(db, "crash-unsafe" if unsafe else "safe"))
+    app = _guard_graph(saver, _ledger_for("crash-unsafe" if unsafe else "safe", dsn))
     list(app.stream(G.graph_input([]), {"configurable": {"thread_id": thread}},
                     stream_mode=["updates"], durability=idem.REQUIRED_DURABILITY))
     os._exit(3)          # 到不了：工具里就硬杀了
@@ -504,37 +572,20 @@ def _scalar(conn, sql: str, params: tuple = ()):
     return None if row is None else next(iter(row.values()))
 
 
-def _idem_rows(db: str, done: bool = False) -> int:
-    """幂等账里的行数（**直连那个库文件**读，不经 `idem.Ledger`）。
-
-    为什么不借 `idem.Ledger` 去数：探针要读的是"盘上到底有什么"，而 `Ledger` 会
-    顺手建表——文件不在时它把库造出来、然后回你 0，那正好把"账根本没落盘"读成
-    "账是空的"。`done=True` 数的是"结局已记"的行（对应旧表的 `outcome IS NOT NULL`）。
-    """
-    if not os.path.exists(db):
-        return 0
-    conn = sqlite3.connect(db)
-    try:
-        sql = "SELECT count(*) FROM idem"
-        if done:
-            sql += " WHERE status='done'"
-        return conn.execute(sql).fetchone()[0]
-    finally:
-        conn.close()
-
-
 def cmd_crash_resume_guard(unsafe: bool = False) -> int:
     """`--crash-resume --guard`：真子进程崩在工具调用中途 ⇒ 账把重放压住（2× → 1×）。"""
     import multiprocessing as mp
     import tempfile
+    import uuid
+
+    from agent.checkpoint_arm import _dsn
 
     saver = make_saver()
-    thread = "probe-crash-resume-guard" + ("-unsafe" if unsafe else "")
-    saver.delete_thread(thread)
-    workdir = tempfile.mkdtemp(prefix="probe-guard-")
-    db = os.path.join(workdir, "idem.sqlite3")
+    dsn = _dsn()
+    # 唯一 thread 名 = 清场（键是 sha256，表里没有 thread 列可删，见本节头注）。
+    thread = f"probe-crash-guard-{uuid.uuid4().hex[:8]}" + ("-unsafe" if unsafe else "")
     if unsafe:
-        _init_idem_db(db)   # 反控那本账不做 DDL（见 `_UnsafeLedger`），表先建好
+        _init_idem_table()   # 反控那条路不做 DDL（见 `_UnsafeLedger`），表先建好
 
     with tempfile.NamedTemporaryFile(prefix="probe-guard-", suffix=".txt",
                                      delete=False) as fh:
@@ -544,12 +595,12 @@ def cmd_crash_resume_guard(unsafe: bool = False) -> int:
 
     print(f"thread : {thread}")
     print(f"「库」  : {side}（盘上的文件，跨进程、跨崩溃都在）")
-    print(f"账     : {db}"
-          + ("（**不安全的**：占位留在一笔没提交的事务里 —— 这是反控）" if unsafe
-             else "（SQLite，占位按语句即时落库）"))
+    print(f"账     : PG（与 saver **同一个库**、表 `agent_write_idem`；DSN 是凭据，不上屏）"
+          + ("\n          **不安全的**：占位留在一笔没提交的事务里 —— 这是反控"
+             if unsafe else "\n          占位按语句即时落库（`ensure_autocommit`）"))
     print()
     ctx = mp.get_context("spawn")
-    p = ctx.Process(target=_guard_worker, args=(thread, unsafe, db))
+    p = ctx.Process(target=_guard_worker, args=(thread, unsafe, dsn))
     p.start()
     p.join()
     after_crash = _side_lines(side)
@@ -557,7 +608,7 @@ def cmd_crash_resume_guard(unsafe: bool = False) -> int:
     print(f"  此刻「库」里已有：{after_crash}")
     print()
     print("模拟重启后再来一次（输入 None = 从 checkpoint 恢复，**本进程**接着跑）：")
-    app = _guard_graph(saver, _ledger_for(db, "crash-unsafe" if unsafe else "safe"))
+    app = _guard_graph(saver, _ledger_for("crash-unsafe" if unsafe else "safe", dsn))
     list(app.stream(None, {"configurable": {"thread_id": thread}},
                     stream_mode=["updates"], durability=idem.REQUIRED_DURABILITY))
     final = _side_lines(side)
@@ -712,13 +763,24 @@ _RACE_KIND_CN = {_RAW: "赢家（真调了工具）", _REPLAYED: "回放赢家�
                  _UNAVAIL: "**账本不可用 ⇒ 这次写被拒**（fail-closed）"}
 
 
+# 夹具①那个节点看到的 `checkpoint_ns`（= `f"{节点名}:{task_id}"`）。父进程要从它算出
+# 本格的键，而那个键**只在这个节点里存在过**（节点崩了 ⇒ 没有别的出口能拿到它）。
+# 模块级的一个列表就够了：夹具①是在**父进程**里跑的。
+_PREP_NS: list[str] = []
+
+
 def _prep_crash_node(state, config):
-    """夹具①：节点**在占位之前**就崩（`BaseException` 拦不住 ⇒ 节点不返回 ⇒ 不提交）。"""
+    """夹具①：节点**在占位之前**就崩（`BaseException` 拦不住 ⇒ 节点不返回 ⇒ 不提交）。
+
+    崩之前先把 `checkpoint_ns` 记下来（见 `_PREP_NS`）：本格所有行数判据都按**这一个键**
+    查，而键要用它算。**不另抄一遍 ns 的拼法**（抄一遍就多了一处会与实现漂开的公式）。
+    """
+    _PREP_NS.append(str((config.get("configurable") or {}).get("checkpoint_ns") or ""))
     raise BaseException("prep: 崩在占位之前")
 
 
 def _conc_guard_worker(k: int, thread: str, out, sink: str, barrier, mode: str,
-                       db: str) -> None:
+                       dsn: str) -> None:
     """竞态探针的子进程体。**必须是模块级函数**：`spawn` 要 pickle 它。
 
     `mode` ∈ {`on`, `slow`, `unsafe`}（后两档见 `cmd_concurrency_guard` 的《三档》）。
@@ -744,15 +806,19 @@ def _conc_guard_worker(k: int, thread: str, out, sink: str, barrier, mode: str,
     def execute(state, config):
         conf = config["configurable"]
         barrier.wait(timeout=180)          # ← 见上面第 ③ 条：先让所有人都算完 task_id
+        # 本进程算出来的键（与 `guarded_invoke` 内部那一句**同一个函数**）：父进程要靠它
+        # 判"N 个 worker 抢的真是同一个键"，而且那一条要与"夹具①那个待跑任务的键"对上。
+        key = idem.key_for(config, "set_article_status", "probe")
         res = idem.guarded_invoke(_Sink(), "set_article_status", {}, config,
                                   fingerprint="probe",
-                                  ledger=_ledger_for(db, "race-unsafe" if mode == "unsafe" else "safe"))
+                                  ledger=_ledger_for("race-unsafe" if mode == "unsafe" else "safe", dsn))
         # 先按原因码认 in-doubt（见上面 `_DOUBT` 那条注），剩下的才看 `.kind`：
         # 回放者拿到 `_rehydrate` 造的 `ToolResult`，赢家拿到工具原样的 str。
         kind = (_DOUBT if idem.replay_reason(str(res)) is not None
                 else str(getattr(res, "kind", _RAW)))
         out.put((k, "ran", {"kind": kind,
                             "text": str(res),
+                            "key": key,
                             "task_id": conf.get("__pregel_task_id")}))
         return {"messages": [ToolMessage(content=str(res), tool_call_id=f"c{k}")]}
 
@@ -770,13 +836,14 @@ def _conc_guard_worker(k: int, thread: str, out, sink: str, barrier, mode: str,
         out.put((k, "err", f"{type(e).__name__}: {e}"[:200]))
 
 
-def _race_prepare(saver, thread: str, sink: str, db: str) -> tuple[bool, int]:
+def _race_prepare(saver, thread: str, sink: str) -> tuple[bool, int, str]:
     """夹具①：造一个「待跑的 superstep」，且账里**没有**它的占位。
 
-    返回 `(崩没崩, 竞态之前账里的占位行数)`。崩法用 `BaseException`（不是
+    返回 `(崩没崩, 竞态之前账里那个键的行数, 那个键)`。崩法用 `BaseException`（不是
     `os._exit`）：节点没返回 ⇒ step 0 不提交 ⇒ 线程上留着待跑的 `execute`，
     而**占位一次都没写**（崩在 `guarded_invoke` 之前）。这就是"键是空的、谁先抢到谁写"。
     """
+    _PREP_NS.clear()
     g = StateGraph(G.AgentState)
     g.add_node("execute", _prep_crash_node)
     g.add_edge(START, "execute")
@@ -789,13 +856,18 @@ def _race_prepare(saver, thread: str, sink: str, db: str) -> tuple[bool, int]:
     except BaseException as e:  # noqa: BLE001 —— 夹具就是靠它崩的
         crashed = True
         print(f"夹具① 崩在占位之前：{type(e).__name__}: {e}")
-    print(f"  此刻账里的占位行：{_idem_rows(db)}（**必须是 0**：键是空的，谁先抢到谁写）")
+    ns = _PREP_NS[0] if _PREP_NS else ""
+    key = idem.key_for({"configurable": {"checkpoint_ns": ns}}, "set_article_status", "probe")
+    rows = _idem_key_rows(key)
+    print(f"  待跑任务的 checkpoint_ns：{ns!r}")
+    print(f"  它的幂等键：{key[:16]}…（sha256 前 16 位）")
+    print(f"  此刻账里那个键的行：{rows}（**必须是 0**：键是空的，谁先抢到谁写）")
     print(f"  此刻「库」里：{_side_lines(sink)}（夹具①崩在写之前 ⇒ 也是空的）")
     print()
-    return crashed, _idem_rows(db)
+    return crashed, rows, key
 
 
-def _race_run(n: int, thread: str, sink: str, mode: str, db: str) -> dict:
+def _race_run(n: int, thread: str, sink: str, mode: str, dsn: str) -> dict:
     """夹具②③：N 个 worker 同时恢复同一个 checkpoint；把读数打印出来并分组返回。"""
     import multiprocessing as mp
 
@@ -803,7 +875,7 @@ def _race_run(n: int, thread: str, sink: str, mode: str, db: str) -> dict:
     out = ctx.Queue()
     barrier = ctx.Barrier(n)      # ← 见模块头注第 ③ 条：先让所有人算完 task_id
     procs = [ctx.Process(target=_conc_guard_worker,
-                         args=(k, thread, out, sink, barrier, mode, db))
+                         args=(k, thread, out, sink, barrier, mode, dsn))
              for k in range(n)]
     t0 = time.time()
     for p in procs:
@@ -837,20 +909,20 @@ def _race_run(n: int, thread: str, sink: str, mode: str, db: str) -> dict:
     return run
 
 
-def _race_facts(saver, thread: str, sink: str, run: dict, db: str) -> dict:
-    """赛后的三样事实：「库」里的行、账里的行、账里「结局已记」的行。
+def _race_facts(sink: str, run: dict, key: str) -> dict:
+    """赛后的三样事实：「库」里的行、账里那个键的行、其中「结局已记」的行。
 
     ⚠️ 账里的行数**必须在这里现读**：`_race_prepare` 那个读数是**竞态之前**的
     （它检查的是"夹具①没占位"），拿它当赛后的行数会让那一格**恒红**——20261016
     真踩过，库里明明只有 1 行。
 
-    账的键是 `sha256([节点身份, 工具名, 指纹])`，**表里没有 thread_id 这一列**
-    ⇒ 数不了"这个 thread 的行"。好在竞态那几格用的是**每次现造的临时库文件**
-    （`cmd_concurrency_guard` 里 `mkdtemp`），全表就是这一格的账，不必筛。
+    按**键**数（不是数全表）：这张表在 saver 那个库里是**共用**的一张（其他探针、
+    其他运行的行都在里面），键是 sha256、表里也没有 thread_id 列 ⇒ 只有"这一个键
+    有几行"是本格的读数。
     """
     writes = _side_lines(sink)
-    rows_after = _idem_rows(db)
-    recorded = _idem_rows(db, done=True)
+    rows_after = _idem_key_rows(key)
+    recorded = _idem_key_rows(key, done=True)
     winners = [k for k, v in run["ran"].items() if v["kind"] == _RAW]
     losers = {k: v["kind"] for k, v in run["ran"].items() if v["kind"] != _RAW}
     if winners:
@@ -860,18 +932,25 @@ def _race_facts(saver, thread: str, sink: str, run: dict, db: str) -> dict:
         print()
     return {"writes": writes, "rows_after": rows_after, "recorded": recorded,
             "winners": winners, "losers": losers,
-            "tids": {str(v["task_id"]) for v in run["ran"].values()}}
+            "tids": {str(v["task_id"]) for v in run["ran"].values()},
+            "keys": {str(v.get("key")) for v in run["ran"].values()}}
 
 
 def _race_checks(n: int, mode: str, prep: tuple, run: dict, facts: dict) -> list:
-    """本格的判据。`prep` = `(崩没崩, 竞态前占位行数)`。"""
-    crashed, rows_before = prep
+    """本格的判据。`prep` = `(崩没崩, 竞态前那个键的行数, 那个键)`。"""
+    crashed, rows_before, key = prep
     unavail = sum(1 for v in run["ran"].values() if v["kind"] == _UNAVAIL)
     checks = [
         (crashed and rows_before == 0, "夹具① 留下一个待跑的 superstep，且账里没有占位"),
         (len(run["ran"]) == n, f"{n} 个 worker **都真跑了**（没有空判据）"),
         (len(facts["tids"]) == 1 and "" not in facts["tids"],
          f"{n} 个 worker 的 `__pregel_task_id` 逐字相同（实测：{sorted(facts['tids'])}）"),
+        # 键是幂等判定的**全部身份**：N 个 worker 抢的必须是同一个键，而且必须**就是**
+        # 夹具①那个待跑任务的键（后者是"重放认得出是同一件"的正面读数——它若不成立，
+        # 下面的行数会变成 0，而那条 FAIL 看着像"账没写进去"）。
+        (facts["keys"] == {key},
+         f"{n} 个 worker 算出的键与夹具①那个待跑任务的键逐字相同"
+         f"（{len(facts['keys'])} 个不同的键）"),
         (not run["errs"], "没有 worker 报错"),
         (len(facts["writes"]) == (1 if mode != "unsafe" else n),
          f"同一件写执行了 {len(facts['writes'])} 次"
@@ -884,9 +963,10 @@ def _race_checks(n: int, mode: str, prep: tuple, run: dict, facts: dict) -> list
         # 账本不可用 = `claim` 抛了 ⇒ 这次写**被拒**（fail-closed，不是双写）。它与
         # "1 次写"不冲突，但**不能算过**：一个"偶尔把合法写拒掉"的账不是可用的账。
         # 反控档不查这条——那一档的账是**故意**不可用的。
+        # ⚠️ PG 档**必须恒为 0**：SQLite 那档的偶发不可用是冷启竞态
+        # （`idem.Ledger._connect` 那条重试治的就是它），PG 没有开库竞态这回事。
         (unavail == 0,
-         f"账本在并发下可用（不可用 {unavail}/{n} 次；冷启竞态见 "
-         f"`idem.Ledger._connect`，PG 档必须恒为 0）"),
+         f"账本在并发下可用（不可用 {unavail}/{n} 次；PG 档必须恒为 0）"),
         (len(facts["winners"]) == 1,
          f"恰好 1 个 worker 真调了工具（赢家：worker{facts['winners']}）"),
         (len(facts["losers"]) == n - 1 and kinds <= {_REPLAYED, _DOUBT},
@@ -913,12 +993,14 @@ _RACE_CONCLUSION = {
              "**一次都没写**——读到的是 in-doubt（判 BLOCK），不是「等赢家写完再回放」。"
              "⇒ 这本账压住的不只是「事后回放」，还有「**正在进行中**」"
              "（at-most-once 的另一半）。"),
-    "unsafe": ("结论：**反控成立**。占位的判定与插入被拆成两句（先 SELECT 再 `INSERT OR "
-               "IGNORE`、且不看 rowcount），N 个 worker 都以为自己是第一个 ⇒ N 次写。"
-               "⇒ 光「有账」不够，**原子性**（主键 + `ON CONFLICT DO NOTHING`，一条语句）"
-               "才是干活的那一句。⚠️ 这一档量的是**非原子**，不是「不提交」——"
-               "「不提交」那个反控在崩溃那一格（`--crash-resume --guard-unsafe`）："
-               "SQLite 只有一个写者，不提交只会撞锁，量不出 N 次写。"),
+    "unsafe": ("结论：**反控成立**。占位的判定与插入被拆成两句（先 SELECT 再 `INSERT ... "
+               "ON CONFLICT DO NOTHING`、且不看有没有插进去），N 个 worker 都以为自己是"
+               "第一个 ⇒ N 次写。⇒ 光「有账」不够，**原子性**（主键 + `ON CONFLICT DO "
+               "NOTHING` 的**返回行**，一条语句）才是干活的那一句。"
+               "⚠️ 这一档量的是**非原子**，不是「不提交」——「不提交」那个反控在崩溃那一格"
+               "（`--crash-resume --guard-unsafe`）：一笔没提交的 INSERT 会把同一个键上的 "
+               "`ON CONFLICT` 判定堵住（PG 得先知道那行提不提交），后到的不是「也写了一遍」"
+               "而是等锁，量不出 N 次写。"),
 }
 
 
@@ -929,37 +1011,34 @@ def cmd_concurrency_guard(n: int = 4, mode: str = "on") -> int:
     是 C ≤ 30，一坨写下来是 46（**不许**靠 `--update` 记进台账来消掉，那是放宽）。
     """
     import tempfile
+    import uuid
 
-    from agent.checkpoint_arm import make_saver
+    from agent.checkpoint_arm import _dsn, make_saver
 
-    label = {"on": "真账（自动提交 + 主键）",
+    label = {"on": "真账（PG：自动提交 + 主键 + `ON CONFLICT DO NOTHING`）",
              "slow": "真账，但工具**慢**（占位提交后停 2s 才记结局）",
-             "unsafe": "**不安全的**（先 SELECT 再 INSERT、且不提交）—— 这是反控"}[mode]
-    thread = f"probe-conc-guard-{mode}"
+             "unsafe": "**不安全的**（先 SELECT 再 INSERT、不看有没有插进去）—— 这是反控"}[mode]
+    # 唯一 thread 名 = 清场（键是 sha256，表里没有 thread 列可删，见本节头注）。
+    thread = f"probe-conc-guard-{mode}-{uuid.uuid4().hex[:8]}"
     saver = make_saver()
-    saver.delete_thread(thread)
-    # 账：**每次现造一个空库**。旧表的键带 `thread_id`，清场是一句 `DELETE`；新表的键是
-    # sha256（表里没有 thread_id 这一列）⇒ 清场改成"换个没人用过的库文件"。这样还顺带
-    # 保证了下面那两条行数判据数到的**只有这一格**的行。
-    workdir = tempfile.mkdtemp(prefix="probe-race-")
-    db = os.path.join(workdir, "idem.sqlite3")
+    dsn = _dsn()
     if mode == "unsafe":
-        # 只给反控档预建表：`on`/`slow` 两档**故意**不预建，让它们继续量真实的"4 个
-        # 进程同时冷启一本还不存在的账"（`idem.Ledger._connect` 那条重试就是为此加的）。
-        _init_idem_db(db)
+        # 只给反控档预建表：`on`/`slow` 两档**故意**不预建，让它们走真实的
+        # `idem._shared(config)` ⇒ 第一次真用时由它自己 `setup`（幂等建表）。
+        _init_idem_table()
     with tempfile.NamedTemporaryFile(prefix="probe-race-", suffix=".txt",
                                      delete=False) as fh:
         sink = fh.name
 
     print(f"thread : {thread}    worker 数 : {n}")
-    print(f"账     : {db}")
+    print(f"账     : PG（与 saver **同一个库**、表 `agent_write_idem`；DSN 是凭据，不上屏）")
     print(f"         {label}")
     print(f"「库」  : {sink}（盘上的文件，跨进程都在）")
     print()
 
-    prep = _race_prepare(saver, thread, sink, db)
-    run = _race_run(n, thread, sink, mode, db)
-    facts = _race_facts(saver, thread, sink, run, db)
+    prep = _race_prepare(saver, thread, sink)
+    run = _race_run(n, thread, sink, mode, dsn)
+    facts = _race_facts(sink, run, prep[2])
     checks = _race_checks(n, mode, prep, run, facts)
     ok = all(c for c, _ in checks)
     for c, t in checks:
@@ -967,6 +1046,101 @@ def cmd_concurrency_guard(n: int = 4, mode: str = "on") -> int:
     print()
     print(_RACE_CONCLUSION[mode])
     os.unlink(sink)
+    return 0 if ok else 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# `--backend-parity`：同一份序列走两档账本，读数必须逐字相等
+# ══════════════════════════════════════════════════════════════════════════════
+# 两档账本是**两份实现**（`idem.Ledger` = SQLite 文件 / `idem_pg.PostgresLedger` = PG），
+# 而它们要满足**同一份契约**：`claim` 交出的东西的形状、`finish` 的撞顶判定、重放还回的
+# (文本, kind, meta)。任何一条不同，同一个写走哪一档就会得到**不同的重放结果**——
+# 而**两档各自的判据都是绿的**（CI 只跑 SQLite、探针其余几格只跑 PG）。这正是本仓
+# 反复吃过的"两份实现各自绿、合起来错"。
+#
+# 先例：`tests/test_action_text.py` ⑤「同一份输入走两侧、结果直接相等」。
+#
+# ⚠️ 键**必须每次现造**（`uuid` 后缀）：这张表是 saver 那个库里**共用**的一张，写死键
+# 会让第二次运行读到第一次留下的行 ⇒ 第一步从 `new` 变成 `done`，而那看起来像
+# "两个后端行为不同"。
+
+_PARITY_TOOL = "set_article_status"
+
+
+def _parity_sequence(led, cases: list) -> list:
+    """在**一本账**上跑同一份序列，把每一步的读数收成一份可逐字比较的形状。
+
+    一件写三步：`claim`（新键 ⇒ 必须 `new`）→ `finish` → 再 `claim`（⇒ `done` + 重放）。
+
+    记下**行的类型**（`type(row).__name__`）是刻意的：那是 `_rehydrate` 那个坑的真机
+    判据——CI 的块⑩ 只能喂一个**手搓的** dict，证明不了"PG 那条路真的会交元组"。
+    """
+    seq = []
+    for key, tool, fp, out in cases:
+        state, row = led.claim(key, tool, fp)
+        seq.append(("claim-new", state, type(row).__name__))
+        seq.append(("finish", bool(led.finish(key, out)), None))
+        state, row = led.claim(key, tool, fp)
+        r = idem._rehydrate(row)
+        seq.append(("replay", state, type(row).__name__, str(r),
+                    getattr(r, "kind", None), getattr(r, "meta", None)))
+    return seq
+
+
+def cmd_backend_parity() -> int:
+    """`--backend-parity`：同一份写序列在 SQLite 与 PG 两档上跑，读数逐字比。"""
+    import tempfile
+    import uuid
+
+    from agent import idem_pg
+    from agent.checkpoint_arm import make_saver
+
+    tag = uuid.uuid4().hex[:8]
+    cases = [
+        (f"parity-{tag}-1", _PARITY_TOOL, "fp1",
+         ToolResult("正文一", "ok", {"cmd": {"kind": "navigate", "url": "/about"}})),
+        (f"parity-{tag}-2", _PARITY_TOOL, "fp2", ToolResult("x" * 50, "ok", {"n": 2})),
+        # 撞顶那件：两档**必须都**判 capped、**都**不给正文（存 NULL）
+        (f"parity-{tag}-3", _PARITY_TOOL, "fp3",
+         ToolResult("y" * (idem._RESULT_MAX + 10), "ok", {})),
+    ]
+    saver = make_saver()
+    idem_pg.setup(saver.conn)          # 幂等建表（与 `_shared` 里那句同一处源码）
+    sqlite = idem.Ledger(os.path.join(tempfile.mkdtemp(prefix="parity-"), "idem.sqlite3"))
+    pg = idem_pg.PostgresLedger(saver.conn)
+    try:
+        a = _parity_sequence(sqlite, cases)
+        b = _parity_sequence(pg, cases)
+    finally:
+        sqlite.close()
+
+    print(f"同一份 {len(cases)} 件写 × 3 步，走两档账本：")
+    print(f"  · SQLite：{sqlite.path}")
+    print(f"  · PG    ：与 saver **同一个库**、表 `{idem_pg.TABLE}`（DSN 是凭据，不上屏）")
+    print()
+    for i, (x, y) in enumerate(zip(a, b)):
+        print(f"  {'  ' if x == y else '≠ '}{i:2} {x!r}")
+        if x != y:
+            print(f"     ↳ 另一侧：{y!r}")
+    print()
+    replays = [s for s in a if s[0] == "replay"]
+    capped = [s for s in a if s[0] == "finish" and s[1] is True]
+    checks = [
+        (len(a) == len(b) and not [1 for x, y in zip(a, b) if x != y],
+         f"两档 {len(a)} 步读数**逐字相等**（不等 ⇒ 同一个写走哪一档会得到不同的重放结果）"),
+        (all(s[2] == "tuple" for s in replays),
+         f"两档重放拿到的行**都是元组**（实测 {sorted({s[2] for s in replays})}）——"
+         "PG 那条池是 `dict_row`，交 dict 会**不报错地**回放字面串 `'text'`"),
+        (len(capped) == 1,
+         f"撞 `_RESULT_MAX` 那件两档都判 capped（实测 {len(capped)} 件）"),
+        (any(s[3] == str(idem._NOREPLAY_FRAME) for s in replays),
+         "撞顶那件的重放帧是**同一句**降级帧（写确实发生了，只是原始返回没留档）"),
+        (any(isinstance(s[5], dict) and s[5].get("cmd") for s in replays),
+         "`meta` 逐字还回（命令类写工具的连线命令就住在 `meta['cmd']`）"),
+    ]
+    ok = all(c for c, _ in checks)
+    for c, t in checks:
+        print(f"  [{'PASS' if c else 'FAIL'}] {t}")
     return 0 if ok else 1
 
 
@@ -1381,6 +1555,8 @@ def main() -> int:
                     help="同一 thread 上 N 个进程并发写（生产 4 worker 那一格）；配 --guard "
                          "则改成 N 个进程**同时重放同一个未完成的 superstep**")
     ap.add_argument("--pg-stats", action="store_true", help="实验库现状")
+    ap.add_argument("--backend-parity", action="store_true",
+                    help="同一份写序列走两档账本（PG / SQLite）⇒ 读数必须逐字相等")
     ap.add_argument("--summarize", metavar="PROBE_JSONL", help="汇总探针 JSONL")
     args = ap.parse_args()
     if args.turn_window:
@@ -1403,6 +1579,8 @@ def main() -> int:
         return cmd_concurrency(args.concurrency)
     if args.pg_stats:
         return cmd_pg_stats()
+    if args.backend_parity:
+        return cmd_backend_parity()
     if args.summarize:
         return cmd_summarize(args.summarize)
     ap.print_help()

@@ -7,7 +7,7 @@
 （`build_graph()` 是裸的 `g.compile()`）⇒ 这件事炸不了，但**接上 saver 那天重放路径
 第一次通电，而它一行判据都没有**。本文件就是那道保险丝上的判据。
 
-被测十块（每条都配了会红的那一半）：
+被测十一块（每条都配了会红的那一半）：
   · ① **§2.6 镜像**：真 `StateGraph` + `MemorySaver`，节点做到一半抛异常、再 `invoke(None)`
     恢复 ⇒ 写**只发生一次**；
   · ② **反控**：同一场景换成 `NullLedger`（今天的形状）⇒ 写**发生两次**。没有这一条，
@@ -20,10 +20,12 @@
   · ⑦ **fail-closed**：账本不可用 ⇒ 拒绝执行（响亮，不降级成"不记账"）；
   · ⑧ **接线锁**：`agent/graph.py` 里不许再出现 `tool.invoke(`（收口唯一）；
   · ⑨ **durability 自断言**：账本在场 ⇒ 必须 `sync` 档（缺省 `async` 下账**静默失效**）；
-  · ⑩ **`_rehydrate` 的行形状**：喂 dict 会**不报错地**回放字面串（PG 那条路的正控）。
+  · ⑩ **`_rehydrate` 的行形状**：喂 dict 会**不报错地**回放字面串（PG 那条路的正控）；
+  · ⑪ **依赖面锁**：`psycopg` 只住在 `agent/idem_pg.py`，且只在 `_shared` 体内懒 import。
 
-⑨ 与 ⑩ 是 20261016 迁 PG 那一批补的：前者钉"账的前提"，后者钉"两个后端交出的行必须是
-**同一种形状**"——两件都是**不报错**的失效，靠读代码看不出来。
+⑨–⑪ 是 20261016 迁 PG 那一批补的：⑨ 钉"账的前提"，⑩ 钉"两个后端交出的行必须是
+**同一种形状**"，⑪ 钉"PG 是**可选档**——没挂 PG saver 的进程（含 CI）一次都不碰 psycopg"。
+三件都是**不报错**的失效，靠读代码看不出来。
 
 为什么主断言落在**调用次数**上而不是"帧文本长什么样"：这一件的失败面是"写真的做了
 两遍"，那是外部可见且不可撤销的。断言一句措辞是假绿——换一句话就过。
@@ -310,6 +312,45 @@ _kind10, _row10 = _led10.claim("k10", _W0, "f")
 check("SQLite 这条路交出的行**就是元组**（两个后端同一份契约，这条是它的正控）",
       isinstance(_row10, tuple) and _row10[0] == "intent" and _kind10 == "intent",
       f"{_kind10!r} / {_row10!r}")
+
+print("\n⑪ 依赖面锁：psycopg 只住在 `agent/idem_pg.py`，且只在真要用时才被 import")
+
+
+def _import_targets(n) -> list[str]:
+    """这个 AST 节点 import 的**完整路径**（`import a.b` 与 `from a import b` 同形）。
+
+    读 AST 不读字面（同 ⑧）：`agent/idem.py` 的注释与 docstring 里逐字写着 `psycopg`
+    ——那正是在解释"它为什么住隔壁"。按文本数会把一条正确的注释判成违规。
+    """
+    if isinstance(n, ast.ImportFrom):
+        base = n.module or ""
+        return [f"{base}.{a.name}" if base else a.name for a in n.names]
+    if isinstance(n, ast.Import):
+        return [a.name for a in n.names]
+    return []
+
+
+def _imports_pg(n) -> bool:
+    """这个节点 import 的**是 psycopg 本身**（不是某个恰好带这串字符的名字）。"""
+    return any(t.split(".")[0] == "psycopg" for t in _import_targets(n))
+
+
+_idem_tree = ast.parse(_idem_src)
+_pg_path = ROOT / "agent" / "idem_pg.py"
+_pg_src = _pg_path.read_text(encoding="utf-8") if _pg_path.exists() else ""
+_pg_imports = [n for n in ast.walk(ast.parse(_pg_src)) if _imports_pg(n)] if _pg_src else []
+check("`agent/idem_pg.py` 存在且它**确实** import 了 psycopg（否则下面两条是恒真）",
+      len(_pg_imports) > 0, f"{_pg_path.name} 存在={_pg_path.exists()}，import 处={len(_pg_imports)}")
+check("`agent/idem.py` 不 import psycopg（PG 是**可选档**：没挂 PG saver 的进程与 CI 都不装它）",
+      [n for n in ast.walk(_idem_tree) if _imports_pg(n)] == [])
+check("`agent.idem_pg` 不在 idem.py 的**模块级** import 里（那样 import 期就把 psycopg "
+      "拖进来，没装 psycopg 的进程会**整个** import 失败）",
+      [n for n in _idem_tree.body if "agent.idem_pg" in _import_targets(n)] == [])
+_shared_fn = next(n for n in ast.walk(_idem_tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == "_shared")
+check("`agent.idem_pg` 只在 `_shared` 函数体内懒 import（恰好一处）",
+      sum(1 for n in ast.walk(_shared_fn)
+          if "agent.idem_pg" in _import_targets(n)) == 1)
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

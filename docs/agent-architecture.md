@@ -519,7 +519,8 @@ ADR-0011（图自持上下文）自述的唯一采纳门就是这一节。
 | 闸 | `config["configurable"]["__pregel_checkpointer"] is not None`。没挂 saver ⇒ 直通、一行账都不记 |
 | 键 | `sha256([checkpoint_ns, 工具名, 参数指纹])`。`checkpoint_ns` 实测是纯函数（崩溃+恢复逐字节相同、同一 thread 不同轮互不相同、没挂 saver 时是随机 uuid4） |
 | 协议 | `intent` 行在**远端调用之前**提交，返回（或抛异常）后改 `done`。留在 `intent` = 结果未知 |
-| 存储 | agent 自持 SQLite（`settings.idem_db`），`key` 是主键 ⇒ 4 个 worker 天然互斥 |
+| 存储 | **两档**，按 saver 自己选（`_shared(config)`）：挂 PG saver ⇒ 落**同一个库**（表 `agent_write_idem`，`agent/idem_pg.py`）；其余 ⇒ SQLite（`settings.idem_db`）。两档的 `key` 都是主键 ⇒ 4 个 worker 天然互斥 |
+| 档位 | 账本在场 ⇒ **必须** `durability="sync"`（缺省 `async` 下硬杀会让 `task_id` 变 ⇒ 键变 ⇒ 账**被静默绕过**）。断言住在 `idem.require_sync_durability`，档不对**响亮抛** |
 | 结果未知 | 新原因码 `write_outcome_unknown`（**不可重试**）⇒ 进 `blocked`，planner 下一步是"先读一次确认到底成没成" |
 | 重放命中 | 不重跑，把记下的 `(text, kind, meta)` **逐字**还回下游 + 一条 `write_replay_hit` trace |
 
@@ -532,7 +533,10 @@ args 取指纹，那个工具每次指纹都不同 ⇒ 幂等判据对它**恒�
 
 **今天零行为变更**：闸关着（没有 saver）⇒ 账本惰性、连 `logs/agent/idem.sqlite3` 都不会被
 创建。判据 `tests/test_write_idempotency.py` 用真 `StateGraph` + `MemorySaver` 在进程内复现
-"崩溃 + 恢复"，并配了会红的反控（`NullLedger` ⇒ 同一场景写发生两次）。决策全文见
+"崩溃 + 恢复"，并配了会红的反控（`NullLedger` ⇒ 同一场景写发生两次）。真机读数（要真 PG、
+不在 CI）在 `eval/experiments/checkpoint_probe.py`：`--crash-resume --guard` **1 次** /
+`--guard-unsafe` **2 次**、`--concurrency 4 --guard` **1 次** / `--guard-unsafe` **4 次**、
+`--backend-parity` 两档 9 步读数**逐字相等**。决策全文见
 [adr/adr-0012](adr/adr-0012-write-idempotency-ledger.md)。
 
 ### 4.9 追记：§4.6 那句"禁区"的射程被收窄了（20261016，实验分支）
@@ -1433,7 +1437,16 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > 改之前长什么样」以及「这条结论当时基于哪次测量」。涉及对外行为变化的条目同时记在
 > [CHANGELOG.md](../CHANGELOG.md)。
 
-> 最后更新：2026-10-16（**两条支线合流：写操作幂等账的两种实现收敛成一份**。同一件事此前
+> 最后更新：2026-10-17（**幂等账迁 PG：存储变两档**。挂 PG saver ⇒ 账落**与 checkpoint
+> 同一个库**（新增 `agent/idem_pg.py`，表 `agent_write_idem`），其余（内存 saver / 没挂 saver /
+> CI）⇒ 维持 agent 自持的 SQLite，**逐字节不变**；采纳那天账**自动**变 PG，没有第二个开关可忘。
+> 选"同一个库"是为了**保留期同源**——账与 checkpoint 分开清，会把本批要堵的洞重新打开。
+> 另把 `durability="sync"` 那条前提从文档**搬进代码**（`idem.require_sync_durability`：账本在场
+> 而档不对 ⇒ **响亮抛**，缺省 `async` 下账会**被静默绕过**），探针也改成跑 PG 那一档
+> （真机读数：崩溃重放 **1×**／反控 **2×**、4 进程抢同一个键 **1×**／反控 **4×**、
+> `--backend-parity` 两档 9 步读数**逐字相等**）。见
+> [ADR-0012](adr/adr-0012-write-idempotency-ledger.md) 的《决策 4》与《迁移到 PG》。）
+> 上版：2026-10-16（**两条支线合流：写操作幂等账的两种实现收敛成一份**。同一件事此前
 > 各写了一遍——主线的 `agent/idem.py`（键 = `sha256([checkpoint_ns, 工具名, 参数指纹])`）
 > 与本支那份（键 = `(thread_id, __pregel_task_id, spec_index)`），两条抢 `execute_node`
 > 里**同一行**。

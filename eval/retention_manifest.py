@@ -113,7 +113,7 @@ CLASSES = [
     ),
     dict(
         key="agent-idem-ledger",
-        label="写操作幂等账（agent 自持的 SQLite）",
+        label="写操作幂等账（**降级档**：agent 自持的 SQLite）",
         root=DEFAULT_LOGS_ROOT,
         # `*` 要带上 `-wal` / `-shm`：WAL 模式下这两个兄弟文件与主库同生共死，
         # 只登记主库的话，账本一开起来审计就红（而红的原因与安全无关）。
@@ -123,16 +123,19 @@ CLASSES = [
         owner=None,
         owner_ref=None,
         retention="未接管（与将来的 checkpoint store 必须一起设计）",
-        why="20261016 批 2（`agent/idem.py`，ADR-0012）新增。**今天这个文件根本不存在**："
-            "它的闸是「这一轮挂没挂 checkpointer」，而生产没有 saver ⇒ 惰性、一行都不写。"
-            "登记它是因为**它一上线就会长在 `logs/` 树下**（`settings.idem_db`），"
-            "而没登记的表现就是审计把一条正常的运行产物报成异类。"
+        why="20261016 批 2（`agent/idem.py`，ADR-0012）新增；20261017 起账有**两档**，"
+            "这条登记的是**降级档**——挂的是 PG saver 时账落 PG（`agent/idem_pg.py`，"
+            "表 `agent_write_idem`，**与 checkpoint 同一个库**），不落这个文件。"
+            "**今天这个文件根本不存在**：它的闸是「这一轮挂没挂 checkpointer」，"
+            "而生产没有 saver ⇒ 惰性、一行都不写。登记它是因为**它一上线就会长在 `logs/` "
+            "树下**（`settings.idem_db`），而没登记的表现就是审计把一条正常的运行产物报成异类。"
             "**为什么是「未接管」而不是给个保留期**：账本行的意义只到「同一个 superstep 的"
             "崩溃恢复」为止（几秒），按那个窗口裁当然安全——但账本与 checkpoint **必须一起裁**："
             "留下 checkpoint 却删掉账本行，恰恰等于把本批要堵的那个洞重新打开，"
             "而两者今天都还没有执行者。等 ADR-0011 真接上 saver 时，这件事与"
             "checkpoint store 的保留策略同批设计（与 `golden-traces` / `runs/` 同一条理由："
-            "分开清会正好帮倒忙）",
+            "分开清会正好帮倒忙）。⚠️ **PG 那张表不在本清单的射程内**（这里只审计 `logs/` 树）"
+            "⇒ 它的保留口径写在 ADR-0012 的《迁移到 PG》，并且是一条**欠账**",
         rule=None,
     ),
     dict(

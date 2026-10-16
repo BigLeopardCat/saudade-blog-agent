@@ -16,6 +16,32 @@
 
 ## 20261017
 
+- **写操作幂等账迁到 PG：存储变两档（判据 + 契约，20261017；⚠️ 生产行为零变更）**——SQLite
+  那一档是临时做法，本批把它**加成一档**而不是换掉：挂的 saver 是 PG 的（池挂在 `.conn`）⇒
+  账落**与 checkpoint 同一个库**（新增 `agent/idem_pg.py`，表 `agent_write_idem`）；其余
+  （内存 saver / 没挂 saver / CI）⇒ 维持 agent 自持的 SQLite，**逐字节不变**。选择由
+  `idem._shared(config)` 按 saver 自己做，**没有第二个开关可忘**：采纳那天账自动变 PG。
+  **为什么非要落同一个库**：账与 checkpoint 的保留期必须同源——清了账、留着 checkpoint，
+  恢复重放时账是空的 ⇒ 写落第二遍，恰好把本批要堵的洞重新打开。落在同一个库里，这件事
+  就变成一句"一起裁"。**失败姿态**：拿到池但建表/断言失败 ⇒ 响亮，且**绝不静默退回 SQLite**
+  （走既有的 `unavailable` ⇒ 判 BLOCK、拒绝这次写）。`psycopg` **只住在 `agent/idem_pg.py`**、
+  只在 `_shared` 体内懒 import ⇒ 没挂 PG saver 的进程与 CI 一次都不碰它（新判据块⑪钉住）。
+  **两个"不报错"的坑各钉了一条**：① `meta` 列必须是 `text` 不是 `jsonb`（`jsonb` 会让 psycopg
+  直接返回 dict ⇒ `json.loads(dict)` 抛 TypeError ⇒ 被 `except (TypeError, ValueError)`
+  **静默吞掉** ⇒ meta 变 `{}` ⇒ 重放出来的命令帧被 `cmd_shape` 判 BLOCK，一次**凭空**的失败）；
+  ② 行**必须是 4 元组**（池的 `row_factory` 是 langgraph 要的 `dict_row`，把 dict 交给
+  `_rehydrate` 会**按键名解包** ⇒ 重放回的是字面串 `"text"`、`kind == "kind"`，**不报错**）
+  ⇒ PG 那边每一次查询都显式 `cursor(row_factory=tuple_row)`。`autocommit=True` 也是硬要求，
+  但真实理由不是"不自动提交就不提交"（`with conn:` 退出照样 `commit()`），而是**提交点**：
+  自动提交让占位在**语句返回时**就落库，"先记账再动手"要求占位在**远端调用之前**真的落盘。
+  探针改成跑 PG 那一档（**不传账本** ⇒ 走的就是生产那条路），五格读数全部复现：崩溃重放
+  **1 次**／反控（占位留在一笔没提交的事务里）**2 次**、4 个真进程抢同一个未完成的 superstep
+  **1 次**／反控（先 SELECT 再 INSERT、不看有没有插进去）**4 次**、`--backend-parity` 两档
+  9 步读数**逐字相等**。⚠️ 并发那条反控必须在 SELECT 与 INSERT 之间停 0.5s，否则读数是**抖的**
+  （PG 的自动提交立刻可见，某个 worker 的 SELECT 晚一步就真看到那一行 ⇒ 3 而不是 4）——
+  那不是"反控不成立"，是仪器没量准，被量的是非原子性。**一条欠账**：PG 那张表不在
+  `eval/retention_manifest.py` 的射程内（它只审计 `logs/` 树），保留口径写进 ADR-0012 的
+  《迁移到 PG》，采纳那批要落一个能审计 PG 表的清单（或把 checkpoint 与账的清理写成同一条）。
 - **写操作幂等账：两种实现收敛成一份（判据，20261017；⚠️ 生产行为零变更）**——同一件事此前
   在两条支线上各写了一遍：主线的 `agent/idem.py`（键 = `sha256([checkpoint_ns, 工具名, 参数指纹])`）
   与实验分支的 `agent/replay_guard.py` + `agent/replay_guard_pg.py`（键 = `(thread_id, superstep
