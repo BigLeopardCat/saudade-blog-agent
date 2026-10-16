@@ -325,7 +325,7 @@ Python 写 / Rust 读，`src/routes/chat.rs::render_exec_row` 四个新臂），
   零写 + 如实无权）、`admin_write_no_identity_honest`（uid=0 打不存在的 id → 不许声称成功）。
   三条都带 `forbid_fallback` + 负向正则族——**正向一律用形态正则族而不是词表**（实测：
   "没有权限"这种连续串命中不了"没有修改文章权限"，词表追不上措辞）。
-- `eval/probe_admin_write.py`（**不进 CI**，需要真实管理员 uid）：默认只跑零真写的三步
+- `eval/admin_write_probe.py`（**不进 CI**，需要真实管理员 uid）：默认只跑零真写的三步
   （非管理员写指令 / 管理员疑问句 / 打不存在的 id），真写（草稿置顶来回、标签加减、
   经生产入口真写一轮 + 跨轮复述）需显式 `--allow-write`，删临时标签还需 `--allow-tag-delete`；
   **断言读后端真值**（探针自己现签 JWT 直查 `/api/protected/*`），不看工具返回值。
@@ -425,13 +425,13 @@ execute 遇到写 spec 卡在同意闸上
 #### 验证与**诚实缺口**
 
 - 离线（进 CI）：`tests/test_confirm.py`（令牌往返/篡改/换 uid/换会话/过期/空密钥/`$ref` 拒签 +
-  弹窗触发矩阵 + 点确定后的执行轮 + 颜色表）、`tests/test_authz.py` ⑨d/⑨f、`tests/judge_offline_test.py`
+  弹窗触发矩阵 + 点确定后的执行轮 + 颜色表）、`tests/test_authz.py` ⑨d/⑨f、`tests/test_judge_offline.py`
   新增帧级判据的 fixture。
 - golden（**点不了按钮**）：`admin_write_natural_confirm_popup` 只能验"该弹窗时弹了窗、
   且什么都没写"——帧级断言 `require_frame_prefix: ["__CONFIRM__:"]` + 零写工具 + 文本里
   色名与色值齐全 + `forbid_fallback`；另两条既有写用例补 `forbid_frame_prefix`（问句/非
   admin/目标不存在时**不许弹窗**）。
-- 活体（`eval/probe_admin_write.py` ⑧⑨⑩，**需真实管理员 uid**）：非命令措辞 → 确认帧
+- 活体（`eval/admin_write_probe.py` ⑧⑨⑩，**需真实管理员 uid**）：非命令措辞 → 确认帧
   （**20260922 探针侧盲区已修**：⑧⑨⑩ 的判据从"整名匹配 / token 子串"改成
   **请求前快照、请求后差分**——新出现的行就是这一腿造的，无论它叫什么名字；腿⑤ 的"复原"
   从"循环跑完"改成"按库真值核对"。此前⑩ 曾因 planner 把下划线当 markdown 强调剥掉而

@@ -102,17 +102,17 @@ langgraph 在节点执行完之后才抛 KeyError）——腿⑧ 当时只核库
 `/api/tagone|tagtwo`，**不看工具返回值**——工具说"改好了"不算数，库里那一行才算。
 
 用法：
-  .venv/bin/python eval/probe_admin_write.py --uid <管理员 uid>
-  .venv/bin/python eval/probe_admin_write.py --uid <uid> --allow-write          # 含草稿来回
-  .venv/bin/python eval/probe_admin_write.py --uid <uid> --allow-write --allow-tag-delete
+  .venv/bin/python eval/admin_write_probe.py --uid <管理员 uid>
+  .venv/bin/python eval/admin_write_probe.py --uid <uid> --allow-write          # 含草稿来回
+  .venv/bin/python eval/admin_write_probe.py --uid <uid> --allow-write --allow-tag-delete
   # ⑰（真写腿）逐颗开关：--allow-board-audit 才会跑；结论为放行时还要 --allow-board-publish
   # （动留言）、卡上带额度那几件时还要 --allow-quota-review（动别人的额度）；
   # 队列里那些够不着（超管/已注销）时加 --allow-quota-stage 自造一个够得着的靶子
-  .venv/bin/python eval/probe_admin_write.py --uid <uid> --allow-write --allow-board-audit
+  .venv/bin/python eval/admin_write_probe.py --uid <uid> --allow-write --allow-board-audit
   # 只想验 ⑱/⑰、不愿放开其余九条写腿（草稿/标签/分类/公告）：加 --only-board
   #（这时 ⑰ 只看它自己那几颗开关，其余腿逐条打印「没验」）
-  .venv/bin/python eval/probe_admin_write.py --uid <uid> --only-board --allow-board-audit
-  APP_ADMIN_UID=<uid> .venv/bin/python eval/probe_admin_write.py
+  .venv/bin/python eval/admin_write_probe.py --uid <uid> --only-board --allow-board-audit
+  APP_ADMIN_UID=<uid> .venv/bin/python eval/admin_write_probe.py
 退出码 = 不符预期的检查项数（0 = 全绿）。agent（8010）与 Rust（3000）都必须已在跑。
 
 靶子题材：**草稿文章**（`status=draft`、`draftOf` 为空）——它在公开面完全不可见

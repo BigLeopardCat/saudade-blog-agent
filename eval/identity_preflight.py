@@ -78,7 +78,7 @@ def probe(uid: int, *, role_expected: str, timeout: int = 10,
     """
     try:
         # 与真链路同源：同一个签名函数、同一个后台地址。lazy import 的理由同
-        # probe_admin_write（import 顺序/副作用），且 import 失败本身要能报出来。
+        # admin_write_probe（import 顺序/副作用），且 import 失败本身要能报出来。
         from tools.base import ADMIN_BASE, _sign_local_jwt
     except Exception as exc:  # 取不到签名能力 ⇒ 不知道，不是不可用
         return UNKNOWN, f"取不到 agent 的签名函数/后台地址（{exc}）"

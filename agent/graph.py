@@ -10597,7 +10597,7 @@ def _freeze_policy_refusal(plan_obj: dict, config,
 # 改宽一次就是一次白读两次后台（外加一份与主人这句话无关的台账进提示词），
 # 改窄则是该摆的没摆、模型手里又空一次。两个方向都有锁（`tests/test_pending_ledger.py`
 # ①②），而活体那一侧看的是 **trace 里有没有 `planner.ledger_frame` 事件**
-# （`eval/probe_admin_write.py` ⑰/⑱）——探针**不再** import 这个正则当判据了。
+# （`eval/admin_write_probe.py` ⑰/⑱）——探针**不再** import 这个正则当判据了。
 # 额度族另起一份（两族读的是两份队列，一份正则分不出该读哪份）。
 _REVIEW_INTENT_RE = re.compile(r"留言|审核|复核|待审|驳回|放行|通过|隐藏")
 _QUOTA_INTENT_RE = re.compile(r"额度|配额|申请")

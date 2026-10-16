@@ -19,8 +19,8 @@
      **真的登录了**的普通用户来问运维报表。
 
 用法：
-  .venv/bin/python eval/probe_admin_report.py --uid <管理员的 uid> [--visitor-uid N]
-  APP_ADMIN_UID=<uid> .venv/bin/python eval/probe_admin_report.py
+  .venv/bin/python eval/admin_report_probe.py --uid <管理员的 uid> [--visitor-uid N]
+  APP_ADMIN_UID=<uid> .venv/bin/python eval/admin_report_probe.py
 退出码 = 不符预期的检查项数（0 = 全绿）。agent 必须已在跑（127.0.0.1:8010）。
 
 ⚠️ admin 那半必须给**库里真实是 admin 的 uid**：给个不存在的 uid，断言里的 role 仍是 admin

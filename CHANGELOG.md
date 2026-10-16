@@ -841,7 +841,7 @@
   `mt3_two_writes_second_card_next_round` 第 2 轮加这一格（**采样无关形态**，取代原先
   「回执侧没有『任一』形态的键」那句注）；`eval/arm_capability.py` 的 `ASSERT_KEYS` 收录
   （**不进 `FAMILIES`**：那是正向键，不是"什么都不做也恒真"的纯否定族）；
-  `tests/judge_offline_test.py` 四例（采样无关过／一件没办红／195727 逐字形状红／
+  `tests/test_judge_offline.py` 四例（采样无关过／一件没办红／195727 逐字形状红／
   `require_exec_tools` 对重复**判过**的对照）。实现上回执侧两族（在不在／几条）合并进一个新
   纯函数 `_exec_claim_fails`：`check_gold` 是全仓最长的那几个函数之一、复杂度台账里**只许
   缩小**，新判据一律另起函数。
@@ -1522,7 +1522,7 @@
   一帧发一帧（收到即发，不攒到流尾）；评测侧解析出的同名同义。
   **判据**：golden 新键 `require_task_goal_per_intent`（每条意图都要有一帧 `__TASK__` 的 goal
   命中，**撤下帧不算登记**）+ 挂上两条既有真写靶（141 / 163，落地前**预期红**、落地后应转绿）；
-  `tests/judge_offline_test.py` 8 条离线探针；`tests/test_tasks.py` 三组纯函数档位（含"推不出
+  `tests/test_judge_offline.py` 8 条离线探针；`tests/test_tasks.py` 三组纯函数档位（含"推不出
   步骤就跳过"与"拿不到会话 id 一条都不发"）；`tests/test_native_plan.py` 的名字集合锁从两个
   伪函数改到三个。**已知缺口如实挂着**：清单本身仍是模型说"有几件事"（下界检查＝确定性扫描
   `_scan_action_intents` 只在"这轮一件都没列"时才纠偏一次，fail-open）；narrator 侧的注记与
@@ -2103,7 +2103,7 @@
   ⚠️ 这份文本是**两臂共用**的（第二条臂 import 同一份 `_EXECUTOR_PROMPT`）⇒
   `tests/test_react_narrator_assets.py` 的模板 sha256 锁已按闸门要求更新（数字换新、
   理由写在旁边）：**改动前跑的任何 golden 读数都不代表改后的行为，两臂都要重跑**。
-  配套：`tests/judge_offline_test.py`、`tests/test_factblock.py` 的判据从"只取写族"
+  配套：`tests/test_judge_offline.py`、`tests/test_factblock.py` 的判据从"只取写族"
   重写成"三族都不进 + 分类没缩水"（反向对照留住）。
 
 - **真身份用例补上"叫主人去登录"的负断言（判据，20261005）**：那句 LOGIN 正则此前只长在
@@ -2114,7 +2114,7 @@
   豁免键**不加**（`not_match_exempt_mention` 会连带放宽本用例另外两条完成式正则，而归档
   复扫显示这条 0 处引述命中——无收益只有风险）。归档复扫（936 份报告、该用例去重后
   25 绿 / 3 红）：**25 份旧绿 0 命中**（收紧不误伤），3 份红里 2 份命中且**都另有红因**
-  ——那 2 份正是当场那两句话。`tests/judge_offline_test.py` 加了一正一反两条探针。
+  ——那 2 份正是当场那两句话。`tests/test_judge_offline.py` 加了一正一反两条探针。
   这一条**只动判据与语料**，agent 行为一个字没改。
 
 - **杂鱼口吻：招牌让步句「真拿你没办法」改为"偶尔也说"（行为，20261005）**：主人报
@@ -2337,7 +2337,7 @@
   全对（零写、追问名字、不弹卡）。补一条**相邻否定护栏**：`(?<!不)(?<!没)(?<!未)(?<!没有)
   (?<!还没)(?<!无法)(?<!不能)(?<!不会)` 只挡动词短语**紧邻**那 1–2 字的否定；
   「刚才那次没成功，不过现在已经帮你建好啦」这类**远处否定 + 无条件声称**照旧判红
-  （三条锁进 `tests/judge_offline_test.py` 的 TAGAMB 段）。护栏只长在这一条用例上，
+  （三条锁进 `tests/test_judge_offline.py` 的 TAGAMB 段）。护栏只长在这一条用例上，
   共用这一族完成式负断言的另外 37 条**逐字节未动**。全量归档 56 跑 3 红、红因三种各不相同，
   这一种只出现 1 次。
 
@@ -2574,7 +2574,7 @@
   真值源是 `agent/action_text.WRITE_CLAIM_ROOTS`（`graph._WRITE_DONE_CLAIM_RE` 由它拼出来）
   ——**表里加一个词形、golden 不跟着动，就静默漏掉一种说法**（同族已出过两次：豁免表的裸
   「未」、引述豁免只有词表肢有、正则肢没有）。现按表**逐字派生**补进负断言，补上此前无人管的
-  四个词形（标记作已读 / 标为已读 / 标成已读 / 清空未读），并在 `tests/judge_offline_test.py`
+  四个词形（标记作已读 / 标为已读 / 标成已读 / 清空未读），并在 `tests/test_judge_offline.py`
   加三组锁：**派生锁**（表拼出来的整式必须逐字出现在用例的负断言里）、**覆盖锁**（表里每一个
   词形都要有一句真声称探针被抓住）、**反向锁**（诚实的否认句必须放行）。表一改、词形一漏，
   那里当场红，不再靠人记得同步。
@@ -2759,7 +2759,7 @@
   只作用于 `text_not_contains`**，正则肢敞着——这是 20261003 06:19 复审单那条假红的根因。
   已开的三条用例（`own_mark_read_incident_phrase_not_logged_in`、
   `own_favorite_add_not_logged_in`、`own_favorite_add_vocative_not_logged_in`）的负正则、
-  `require_denial`、工具断言**一字未动**；非提述的完成声称照旧判红（`tests/judge_offline_test.py`
+  `require_denial`、工具断言**一字未动**；非提述的完成声称照旧判红（`tests/test_judge_offline.py`
   九条正/反例锁）。**仍未覆盖（另案，勿当已修）**：形容词形态（「已发布的公告」「已有的分类
   改成」）、引静态文档事实（「生产服务器是 3.7GB」）、确认卡正文自命中——见归档复扫清单。
 
@@ -3070,7 +3070,7 @@
   说首页、一个命令都不发）。两条都带 `forbid_fallback`：判真值的判据一旦误杀，整轮会被兜底道歉
   吞掉，而这个键正是让"通过"不能靠"道歉得恰好"。
 - **`forbid_fallback` 从此判 scope，不再判"被打回过"**（`eval/run_golden.py` 新增
-  `fallback_resets`；`tests/test_reset_scope.py` 第 ④ 组 + `tests/judge_offline_test.py` 四条形状探针）。
+  `fallback_resets`；`tests/test_reset_scope.py` 第 ④ 组 + `tests/test_judge_offline.py` 四条形状探针）。
   20261001 把 `__RESET__` 拆成两档之后，这个键还在数 `resets` 总数 ⇒ **`all` 那一档（gate 打回 ⇒
   planner 重规划）被当成了终局兜底**：主人看到的其实是重查之后的真回答，判据却红，FAIL 文案还断言
   "用户收到的是兜底道歉"这件没发生的事。04:24 那次全量跑 11 条红里有 3 条就是这么来的
@@ -3121,7 +3121,7 @@
   `eval/llm_judge.py` 判"有没有编材料"用的也是这段正文——这一批起它们读的才是主人读过的那份，
   **跨这条线比读数不成立**（空回复的计数会掉，那不是"变好了"，是原来数的是 trace 的谎）。
 - **golden 留档不再"同秒覆盖"**（新增 `eval/report_archive.py`，三个产出者共用；
-  `tests/test_report_archive.py` + `tests/golden_rerun_offline_test.py` 第 ⑥ 组）。`eval/report/runs/<ts>.json`
+  `tests/test_report_archive.py` + `tests/test_golden_rerun_offline.py` 第 ⑥ 组）。`eval/report/runs/<ts>.json`
   的名字此前是**秒级** ts（旁边那句注释写着"防覆盖丢历史"，行为恰好是反的），而它有三个产出者
   （进程内跑法 / 隔离跑法 / recall_eval）：全量跑与 `--only` 调试跑落在同一秒就同名，**先跑那次的
   留档静默消失**——复跑用例第 ⑥ 组此前只在撞车时绿。现在戳是 `YYYYMMDD_HHMMSS_mmm`、同毫秒顺延
@@ -3190,7 +3190,7 @@
   词形。现在族只此一份（复合否定形态 + 裸否定必须 4 字内带引导词：`没有叫 X 的` 算，
   「我没删掉 X」不算），用例侧只声明**字面目标**（可给多个，覆盖"把关键词拆开说"的现场）。
   与 `text_contains` / `require_denial` 同属那个"任一命中即过"的 OR 族。判据
-  `tests/judge_offline_test.py` 八条（含「找到」与「我没删掉 X」两条反向对照）。
+  `tests/test_judge_offline.py` 八条（含「找到」与「我没删掉 X」两条反向对照）。
 - **`require_zero_exec` 从"整轮零工具"收窄成"零后台写"**（弹卡用例那条正面断言）。它此前
   断言"这一轮一个工具都没调"，可存档里**这个键的 6 次红全是读**（`list_dashboard_todos`×3、
   `get_moderation_status`×2、`list_guestbook`、`list_tags`），每一次 `exec` 侧都是空的——一个
@@ -3198,7 +3198,7 @@
   不是"不许查"（写前先读正是设计要求）。现在只看 `authz.TOOL_SCOPE` 里 `write_console` 那一族：
   planner 侧不许有写调用、checker 侧不许有写回执，**读一律放行**；要"连读都不许"的用例改用
   `no_tool_calls`（8 个消费者，语义就是字面意思）。哨兵 `@write_console` 与 `forbid_tool_calls`
-  同源 ⇒ 将来新增写工具两边一起收紧、零人工同步。判据 `tests/judge_offline_test.py` 加两条对照
+  同源 ⇒ 将来新增写工具两边一起收紧、零人工同步。判据 `tests/test_judge_offline.py` 加两条对照
   （只读接地 ⇒ 过；同轮读+写混着来 ⇒ 写那一侧照旧红）。
 - **"这一轮能不能落地"从"一个通过率"改成"三个数 + 两层判据"**（判据实现只有一处：
   `eval/landing_gate.py`）。此前判"达标了吗"只有一个点估计通过率，而它同时被拿去回答三个
@@ -3287,7 +3287,7 @@
   否认很少写成「没有脑补」，而是「**不是 + 我/自己** + 脑补」；判据只按 `endswith(否定词)` 判，
   结构上就漏掉这一族最常见的写法。现在 `_modulated_claim` 另认这一形态（`_NEG_FORM_RE`，
   中段**只收**第一人称/反身代词与一个可选的「是/在」——收「你/他」或任意字符就成了后门）。
-  两条都在 `tests/judge_offline_test.py` 留下**反向对照**（真声称、真否认、半真半假各一例），
+  两条都在 `tests/test_judge_offline.py` 留下**反向对照**（真声称、真否认、半真半假各一例），
   离线可判、不依赖 LLM 采样。
 
 - **完成式负断言改看「同一句话里有没有自带反证」**（判据放宽，逐例 opt-in）：这一族此前只有
@@ -3299,7 +3299,7 @@
   **紧接其后**（本句剩余 + 下一句）出现反证标记（未登录/未改动/没成功/失败…），或这条声称本身
   就是个问句（命中处到本小句结束之间就是「？」），才算豁免。**方向不容退让**：命中**之前**的
   反证一律不认（「系统返回未登录，不过我已经帮你收藏好啦」照旧判红），窗口外的（第三句）也不认。
-  `tests/judge_offline_test.py` 留 2 条原话正例 + 5 条反例（无条件声称 / 反证在前 / 反证在第三句 /
+  `tests/test_judge_offline.py` 留 2 条原话正例 + 5 条反例（无条件声称 / 反证在前 / 反证在第三句 /
   问句落在**后一个**小句 / 同一句改陈述）。
 
 - **`not_logged_in` 族不再点名「登录」这两个字**：主人 20261001 拍板的前提是「**必须登录才能和
