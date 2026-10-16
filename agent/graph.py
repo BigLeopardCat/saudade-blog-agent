@@ -13063,7 +13063,7 @@ def _narrator_wire(messages: list) -> list:
     return wire
 
 
-def _narrator_system_pair(state, config, role: str, receipts: list, block: str,
+def _narrator_system_pair(state, config, role: str | None, receipts: list, block: str,
                           drop: set, has_action: bool) -> tuple:
     """narrator 的两条系统消息：**稳定头**（人设 + 23 条叙述纪律）与**变化段**
     （计划 / 工具帧 / 执行回执 / 事实块 / 页面上下文）。
