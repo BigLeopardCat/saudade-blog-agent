@@ -17,8 +17,9 @@
   · ① `block_reasons.denied_workflows` —— 只取"改参数重试无效"那一族；`chat` 永不进；
     空/None/脏项不炸；
   · ② `planner_llm.build_tool_schema(deny=…)` —— 恰好少那一条；空集 ⇒ **逐字节不变**；
-  · ③ `workflows.build_planner_context(deny=…)` —— 技能行**和它的契约行**一起走；
-    空集 ⇒ **逐字节不变**；
+  · ③ `workflows.build_planner_context(deny=…)` —— 技能行**和它的固定工具序列**一起走；
+    空集 ⇒ **逐字节不变**（20261017 起靶子不再按契约挑：契约并进了 `description`，
+    slim 本来就不渲染描述 ⇒ "契约行也跟着走"在 slim 里已是恒真，锁它等于没锁）；
   · ④ `bind_planner_tools` 真的把裁剪后的 schema 交下去了（不是接了个没人用的形参）；
   · ⑤ 接线 —— `planner_node` 每轮算 `deny`、记账、传给 bind 与渲染、以及那一格
     一次性纠偏与它的记账；
@@ -41,7 +42,8 @@ import agent.graph as g  # noqa: E402
 import agent.planner_llm as np  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.block_reasons import denied_workflows  # noqa: E402
-from agent.workflows import WORKFLOW_MAP, build_planner_context, visible_workflows  # noqa: E402
+from agent.workflows import (WORKFLOW_MAP, _workflow_plan_seq,  # noqa: E402
+                             build_planner_context, visible_workflows)
 
 FAILS: list[str] = []
 
@@ -58,10 +60,15 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 _GRAPH_SRC = _ctx_src.graph_deprefixed()
 _ROLE = "admin"
 _NAMES = [s.name for s in visible_workflows(_ROLE)]
-# 挑一个**有契约行**的技能当靶子（`planner_contract` 非空）——③ 要锁的正是"技能行与
-# 契约行一起走"，靶子没有契约行就锁不住那一半。挑不到就整节跳过并在读数里看得见。
+# 挑一个**有固定工具序列**的技能当靶子——③ 要锁的正是"那一整块一起走"（技能行 + 它的
+# 工具序列），靶子没有序列就只剩一行、锁不出"整块"这件事。挑不到就整节跳过并在读数里
+# 看得见。
+# ⚠️ 20261017 起靶子**不再按契约挑**：契约并进了 `description`，而 slim 档本来就不渲染
+# 描述（它随 schema 那一份走）⇒ "契约行也跟着走"这句话在 slim 里**已经空了**，拿它当
+# 靶子等于拿一条恒真的断言当判据（本仓点过名的"判据被架空"）。契约那一半由 ② 的
+# `build_tool_schema(deny=…)` 锁（schema 是它唯一的家）。
 _TARGET = next((s.name for s in visible_workflows(_ROLE)
-                if s.planner_contract and s.name != "chat"), "")
+                if s.plan and s.name != "chat"), "")
 
 
 def _names(tools: list) -> list[str]:
@@ -136,15 +143,14 @@ def _drop_block(text: str, name: str) -> str:
 
 
 if not _TARGET:
-    check("③ 跳过：没有带 planner_contract 的技能可当靶子", False, "靶子为空")
+    check("③ 跳过：没有带固定工具序列的技能可当靶子", False, "靶子为空")
 else:
     _expected = _drop_block(_menus, _TARGET)
     _got = build_planner_context(_ROLE, slim=True, deny={_TARGET})
     check("不含靶子技能那一行",
           f"- {_TARGET}：" not in _got, _TARGET)
-    check("**契约行也跟着走了**（摘一半留一半等于没摘——模型照着名字点）",
-          WORKFLOW_MAP[_TARGET].planner_contract and
-          WORKFLOW_MAP[_TARGET].planner_contract not in _got)
+    check("**它的固定工具序列也跟着走了**（摘一半留一半等于没摘——模型照着名字点）",
+          _workflow_plan_seq(WORKFLOW_MAP[_TARGET]) not in _got)
     check("摘掉的正是那一整块，其余逐字节不变",
           _got == _expected and _got != _menus,
           f"Δ={len(_menus) - len(_got)}")

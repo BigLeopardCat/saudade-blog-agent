@@ -15,9 +15,15 @@
      把那一行加回 `build_planner_context`，别改这里。
   ② **留下的必须是 schema 里没有的**：固定工具序列（`content_query` 的 calls 通道要求写
      工具名）、导航映射表、能力边界的兜底段、口语变体说明——这些是这一块独有的信息。
-  ②b **规划契约两档都渲染、且只住在正文**：这一层是 ① 的反面纪律，也是本批 A/B 实测
-     逼出来的——"必须怎么做"的话随描述搬进 `tools[].description` 后遵守率掉到 0/5
-     （描述归 schema、契约归正文）。同族的哨兵是"别把契约再抄回 description"。
+  ②b **规划契约只有一个家：`description`**（20261017 并回；此前是独立的 `planner_contract`
+     字段）。这一层是 ① 的反面纪律。依据是四臂 A/B（`eval/contract_position_ab.py`，
+     7 用例 × 12 遍，同一天跑三次）：**整句删掉才掉**（三次 ③ 臂 73/75/79，差的全部是
+     `pair_one_talks` 一条，1/12 → 7/12），而"只住正文 / 只住 schema / 并进 description"
+     三臂**逐条相同**（各 84/84）⇒ 位置无关、承重的是那句话本身。⚠️ **方向稳、量级不稳**
+     （温度 0.0 也不逐字节可复现）⇒ 判据只认"③ 掉、①②④ 不掉"，不认掉了多少；
+     原记的「随描述搬进 schema ⇒ 0/5」已改归因为**信息丢失**（当时 slim 臂 schema 里原样
+     漏着未展开的 `__无参只读工具清单__`，`tools` 参数描述又被 `_SCHEMA_OVERRIDES` 盖成
+     一句没有工具名的话）。哨兵从"位置"换成"**别多出一份**"。
   ③ **接线**：真跑 `planner_node`，发出去的那份提示词确实是 slim 的。
      "能力有测试 ≠ 接线有测试"是这个仓反复吃过亏的洞（探针绿了、线上那条路没接上）。
 
@@ -189,72 +195,62 @@ def test_slim_keeps_what_the_schema_does_not_have():
               all(f"- {n}：（无固定工具）" in slim for n in planless), str(planless))
 
 
-# ── ②b 规划契约：两档都渲染，且**只许有一份**（20260927 实测逼出来的那条规则）──
-def test_planner_contract_is_rendered_in_both_arms():
-    """契约行是 slim 与完整两档共同的；少一档就是"某一档的模型看不到这条必做"。
+# ── ②b 规划契约：**只有一个家**（`description`）——四臂 A/B 逼出来的那条纪律 ──
+def test_contract_is_in_the_schema_and_nowhere_else():
+    """契约句**只住在 `description` 里**：schema 拿得到一份，别处没有第二份。
 
-    依据（20261017 三臂重验，`eval/contract_position_ab.py`）：**整句删掉才掉**——
-    `pair_one_talks` 1/12（另 6 条用例 12/12），掉法正是"技能选对、只点了一个源"。
+    依据（20261017 四臂重验，`eval/contract_position_ab.py`）：**整句删掉才掉**——
+    `pair_one_talks` 3/12（另 6 条用例 12/12），掉法正是"技能选对、只点了一个源"；
+    只住正文、只住 schema、并进 description **逐条相同**（各 84/84）⇒ 位置无关。
     原记的「搬进 `tools[].description` ⇒ 0/5」已改归因为**信息丢失**，见 ADR-0003 补记。
     """
-    print("\n[契约] planner_contract 在 slim 与完整两档都渲染（且各一次）")
+    print("\n[契约] 契约句在 schema 里各一份，且不在别处再出现一次")
     for role in _ROLES:
-        full, slim = build_planner_context(role), build_planner_context(role, slim=True)
+        sch = {t["function"]["name"]: t["function"].get("description", "")
+               for t in build_tool_schema(role)}
+        slim = build_planner_context(role, slim=True)
         for s in visible_workflows(role):
-            if not s.planner_contract:
+            c = s.contract
+            if not c:
                 continue
-            line = f"  契约：{s.planner_contract}"
-            check(f"[{role}] {s.name} 的契约行在完整档里",
-                  full.count(line) == 1, f"命中 {full.count(line)} 次")
-            check(f"[{role}] {s.name} 的契约行在 slim 档里",
-                  slim.count(line) == 1, f"命中 {slim.count(line)} 次")
-    # 反例哨兵：契约不是"反正没写就没写"——本轮至少要有一条真的在渲染
-    check("至少有一条技能声明了 planner_contract（否则上面全是空转）",
-          any(s.planner_contract for s in visible_workflows("admin")))
-
-
-def test_planner_contract_lives_only_in_the_prose_block():
-    """契约句**只许有一份**（住正文还是住 schema 都行）——两边不许互相抄。
-
-    依据从"位置"改成"漂移"（20261017 三臂重验）：契约只住 schema 与只住正文**逐条
-    相同**（各 84/84）⇒「schema 那侧遵守率更低」**已被证伪**；留下的是"两处就会漂"。
-    """
-    print("\n[契约] 契约句不出现在 schema / description / inputs 里（单一来源）")
-    for role in _ROLES:
-        raw = json.dumps(build_tool_schema(role), ensure_ascii=False)
-        for s in visible_workflows(role):
-            if not s.planner_contract:
-                continue
-            check(f"[{role}] {s.name} 的契约不在 tools schema 里",
-                  s.planner_contract not in raw)
-            check(f"[{role}] {s.name} 的契约不在自己的 description 里",
-                  s.planner_contract not in s.description)
-            check(f"[{role}] {s.name} 的契约不在自己的 inputs 里",
-                  all(s.planner_contract not in str(v) for v in s.inputs.values()))
+            hit = sch.get(s.name, "").count(c)
+            check(f"[{role}] {s.name} 的契约在 schema 的 description 里（一次）",
+                  hit == 1, f"命中 {hit} 次")
+            check(f"[{role}] {s.name} 的契约不在 slim 正文里（没有第二份）",
+                  f"  契约：{c}" not in slim)
+            check(f"[{role}] {s.name} 的契约不在 inputs 里",
+                  all(c not in str(v) for v in s.inputs.values()))
+    # 反例哨兵：契约不是"反正没写就没写"——至少要有一条真的在渲染
+    check("至少有一条技能带契约（否则上面全是空转）",
+          any(s.contract for s in visible_workflows("admin")))
 
 
 def test_content_query_pairs_the_two_sources_from_one_place():
     """成对点名这条契约在 `content_query` 里只有**一个**来源。
 
     它原本写在两处（`description` 里一句、`inputs["tools"]` 里一句），措辞还不一样；
-    现在两处都收敛进 `planner_contract`。判据按语义锚点（两个工具名同现的那句）
-    而非逐字全文——措辞允许再改，但"只留一处"这件事不许回退。
+    20260927 收敛进 `planner_contract`，20261017 又随字段并回 `description` 的**末尾
+    那一段**。判据按语义锚点（两个工具名同现的那句）而非逐字全文——措辞允许再改，
+    但"只留一处"这件事不许回退。
     """
-    print("\n[契约] content_query 的成对点名只留一处（description/inputs 里都不再各写一份）")
+    print("\n[契约] content_query 的成对点名只留一处（inputs 里不再另写一份）")
     from agent.workflows import WORKFLOW_MAP
     cq = WORKFLOW_MAP["content_query"]
-    body = f"{cq.description}\n{json.dumps(cq.inputs, ensure_ascii=False)}"
-    check("description/inputs 里不再重复成对点名句",
+    contract = cq.contract
+    check("两个数据源名逐字写在契约那一段里",
+          "list_guestbook" in contract and "list_talks" in contract, contract)
+    check("契约里点明了「成对」（只说名字不点明规则等于没写）", "成对" in contract)
+    body = json.dumps(cq.inputs, ensure_ascii=False)
+    check("inputs 里没有第二份成对点名句",
           not ("list_guestbook" in body and "list_talks" in body), body[:120])
-    check("两个数据源名仍逐字写在 planner_contract 里",
-          "list_guestbook" in cq.planner_contract and "list_talks" in cq.planner_contract,
-          cq.planner_contract)
-    check("契约里点明了「成对」（只说名字不点明规则等于没写）",
-          "成对" in cq.planner_contract)
-    # 两档渲染出来各一次：这是模型实际读到的那份
-    full = build_planner_context("user")
-    check("完整档里成对点名句只出现一次（读到的是一处，不是三处）",
-          full.count("成对") == 1, f"命中 {full.count('成对')} 次")
+    # 模型实际读到的那份：schema 里一次、正文里零次
+    sch = {t["function"]["name"]: t["function"]["description"]
+           for t in build_tool_schema("user")}
+    check("schema 里成对点名句只出现一次",
+          sch["content_query"].count("成对") == 1,
+          f"命中 {sch['content_query'].count('成对')} 次")
+    check("slim 正文里一次都没有（读到的是一处，不是两处）",
+          build_planner_context("user", slim=True).count("成对") == 0)
 
 
 def test_dual_source_pairing_is_deterministic():
@@ -395,8 +391,7 @@ if __name__ == "__main__":
                test_schema_marks_are_expanded_all_roles,
                test_slim_drops_exactly_the_three_duplicated_lines,
                test_slim_keeps_what_the_schema_does_not_have,
-               test_planner_contract_is_rendered_in_both_arms,
-               test_planner_contract_lives_only_in_the_prose_block,
+               test_contract_is_in_the_schema_and_nowhere_else,
                test_content_query_pairs_the_two_sources_from_one_place,
                test_dual_source_pairing_is_deterministic,
                test_slim_only_changes_rendering_not_judgements,

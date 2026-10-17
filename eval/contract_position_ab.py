@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""契约位置三臂 A/B（20261017 重验「描述归 schema、契约归提示词正文」）。
+"""契约位置 A/B（20261017 重验「描述归 schema、契约归提示词正文」，四臂）。
 
 **只读实验**：只发 LLM 请求，不碰数据库、不写 trace、不改任何生产状态。需要网络与
 API key，**因此不入 L0 套件、不进夜间**（`tests/run_all.py` 只收 tests/*.py，本文件在 eval/）。
@@ -18,15 +18,22 @@ API key，**因此不入 L0 套件、不进夜间**（`tests/run_all.py` 只收 
   不必用「位置」解释。那处标记今天已修（`planner_llm.build_tool_schema` 里
   `render_tool_marks(workflow.description, role)`）。
 
-## 三臂（**只动契约那一句的位置**，散文菜单其余部分逐字节相同）
+## 四臂（**只动契约那一句的位置**，散文菜单其余部分逐字节相同）
 
-  ① prose   契约句只在本轮提示词正文（= 今天的形态）          基线
-  ② schema  正文那行摘掉，同一句追加进 `tools[].description`   隔离「位置」这一个变量
+  ④ merged  产线原样（契约与描述同住 `description`）           **基线 = 已发出去的那个形状**
+  ① prose   描述里那段摘掉，同一句回填进本轮提示词正文的 `  契约：` 行（= 改之前的形态）
+  ② schema  同上，但追加在 `tools[].description` **末尾**（带 `契约：` 标记行）——上一轮
+            测过的近似物，留在这里是为了不让"就差了三个字的标记"替代一次实测
   ③ none    整句不出现                                         **正控**：证明这句话本身承重
 
-③ 是原始实验缺的那一环。若 ③ 与 ① 无差别而 ② 与 ① 也无差别 ⇒ 位置无关、且契约根本
-没在做功 ⇒ 原 0/5 是误归因。若 ③ 掉、② 不掉 ⇒ 契约在正文里是必要的，但「schema 里有
-副本」无害。若 ③ 掉、② 也掉 ⇒ 原结论成立，依据换成这次的数据。
+**决策已定（20261017）**：③ 掉、①②④ 逐条相同 ⇒ **位置无关、那句话本身承重**。所以
+`planner_contract` 字段撤掉、并回 `description`，④ 从此就是产线形状（本文件对它
+**一个字都不改**）。本文件因此从"待裁决的实验"变成**回归探针**：再有人把契约搬走时，
+①/② 还能量出搬动有没有代价。
+
+④ 与 ② 的差别现在只剩两处：④ 的契约在 `description` 里、且排在 `完成判定：` **之前**
+（那是 `build_tool_schema` 的拼接顺序）；② 排在末尾、还多三个字的标记。两次都测，
+是因为这次要动的正是产线提示词——**"只差一点"不是一次实测**。
 
 ## 观测层 = **planner 原始输出**（绕开图）
 
@@ -76,8 +83,8 @@ API key，**因此不入 L0 套件、不进夜间**（`tests/run_all.py` 只收 
 
 ## 跑法（cd saudade-blog-agent，需网络）
 
-  .venv/bin/python eval/contract_position_ab.py --dry-run     # 只打三臂的差异，不发请求
-  .venv/bin/python eval/contract_position_ab.py --trials 12   # 每臂每句 12 遍，三臂交替
+  .venv/bin/python eval/contract_position_ab.py --dry-run     # 只打四臂的差异，不发请求
+  .venv/bin/python eval/contract_position_ab.py --trials 12   # 每臂每句 12 遍，四臂交替
   .venv/bin/python eval/contract_position_ab.py --trials 12 --json
 
 报告落 `eval/report/contract_position_<ts>.md` + 同名 `.json`（`.json` 的 `arms` 形状可直接
@@ -105,17 +112,21 @@ import agent.graph as G  # noqa: E402
 from agent.context import _doc_anchors, _frame_texts, _recent_tail, _short_reply_hint  # noqa: E402
 from agent.planner_llm import build_tool_schema, tool_calls_to_plan  # noqa: E402
 from agent.refs import ref_hints  # noqa: E402
-from agent.workflows import _pos_int_list, build_planner_context, visible_workflows  # noqa: E402
+from agent.workflows import (WORKFLOW_MAP, _pos_int_list, build_planner_context,  # noqa: E402
+                            visible_workflows)
 from config.settings import settings  # noqa: E402
 from models.llm import get_llm  # noqa: E402
 
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report")
 
-ARMS = ("prose", "schema", "none")
-ARM_DESC = {"prose": "① 正文（今天）", "schema": "② 只在 tools[].description",
+ARMS = ("prose", "schema", "merged", "none")
+ARM_DESC = {"merged": "④ 并进 description（产线原样）",
+            "prose": "① 回填正文（改之前的形态）",
+            "schema": "② 追加在 description 末尾（带标记）",
             "none": "③ 整句删掉（正控）"}
 
-# 契约行在 `build_planner_context(slim=True)` 里的形状（见 workflows.py 那一行）
+# 契约行在 `build_planner_context(slim=True)` 里的形状（① 臂把它回填进正文时用；
+# 20261017 之后产线正文里**已经没有**这一行了——契约与描述同住 schema）
 _CONTRACT_PREFIX = "  契约："
 
 # 成对点名的两个数据源（与 `graph._DUAL_SOURCE_PAIR` 同值；本文件**不 import 它**——
@@ -246,27 +257,58 @@ ARGS = {"temperature": settings.planner_temperature,
         "timeout": settings.planner_native_timeout}
 
 
-def _strip_contract(text: str) -> str:
-    """摘掉正文里每一行 `  契约：…`（**只摘契约行**，其余逐字节不动）。"""
-    return "\n".join(ln for ln in text.splitlines() if not ln.startswith(_CONTRACT_PREFIX))
+def _contracts(role: str | None) -> dict[str, str]:
+    """本轮可见技能里 `名字 → 契约句`（空的略掉）。"""
+    out = {}
+    for w in visible_workflows(role):
+        c = w.contract
+        if c:
+            out[w.name] = c
+    return out
 
 
 def arm_context(arm: str, role: str | None) -> str:
-    """该臂下 `build_planner_context` 的产物。"""
+    """该臂下 `build_planner_context` 的产物。
+
+    ④ 是产线原样。① 要把契约句**回填**进正文——回填位置与 20261017 之前那份代码一致
+    （紧跟该技能的 `- 名字：…` 那一行），否则①就不是"改之前的形态"了。
+    """
     ctx = build_planner_context(role, slim=True)
-    return ctx if arm == "prose" else _strip_contract(ctx)
+    if arm != "prose":
+        return ctx
+    contracts = _contracts(role)
+    lines = ctx.splitlines()
+    out = []
+    for ln in lines:
+        out.append(ln)
+        for name, c in contracts.items():
+            if ln.startswith(f"- {name}："):
+                out.append(f"{_CONTRACT_PREFIX}{c}")
+                break
+    return "\n".join(out)
 
 
 def arm_tools(arm: str, role: str | None) -> list[dict]:
-    """该臂下 `tools` 数组。臂②把同一句追加进同名函数的 `description`。"""
+    """该臂下 `tools` 数组。
+
+    ④ **一个字都不改**（`build_tool_schema` 的产物就是产线要发的那个形状——契约已经在
+    `description` 里）。①/②/③ 都要先把那段摘出来：① 摘掉后回填正文、② 摘掉后追加到
+    `description` 末尾（带 `契约：` 标记）、③ 摘掉就是摘掉。
+    """
     tools = copy.deepcopy(build_tool_schema(role))
-    if arm != "schema":
+    if arm == "merged":
         return tools
-    by_name = {w.name: w.planner_contract for w in visible_workflows(role) if w.planner_contract}
+    by_name = _contracts(role)
     for t in tools:
-        c = by_name.get(t["function"]["name"])
-        if c:
-            t["function"]["description"] = f"{t['function']['description']}\n契约：{c}"
+        fn = t["function"]
+        c = by_name.get(fn["name"])
+        if not c:
+            continue
+        d = fn["description"]
+        assert d.count("\n" + c) == 1, f"{fn['name']} 的描述里找不到那一段契约"
+        fn["description"] = d.replace("\n" + c, "", 1)
+        if arm == "schema":
+            fn["description"] = fn["description"] + "\n契约：" + c
     return tools
 
 
@@ -347,30 +389,51 @@ def once(llm, arm: str, key: str, user_msg: str, check) -> dict:
 
 
 def dry_run() -> int:
-    """不发请求：打三臂的差异，证明"只动了契约那一句"。"""
+    """不发请求：打四臂的差异，证明"只动了契约那一句"。"""
+    # ── 切法的前提（`Workflow.contract` 靠它成立；坏了要响，不能静默切错）──────
+    with_nl = [w.name for w in visible_workflows(ROLE) if "\n" in w.description]
+    declared = sorted(_contracts(ROLE))
+    print(f"role={ROLE} 描述里含换行的技能 {len(with_nl)} 个 / 有契约的 {len(declared)} 个"
+          f" —— 必须同一批：{sorted(with_nl) == declared}")
+    multi = [w.name for w in visible_workflows(ROLE) if w.description.count("\n") > 1]
+    print(f"含不止一段换行的技能：{multi}（必须为空——契约只接在末尾一段）")
+
     base = build_planner_context(ROLE, slim=True)
-    stripped = _strip_contract(base)
-    n_contract = len(base.splitlines()) - len(stripped.splitlines())
-    print(f"role={ROLE} 正文 {len(base)} 字符 / 摘掉契约行 {n_contract} 行 "
-          f"→ {len(stripped)} 字符")
-    for w in visible_workflows(ROLE):
-        if not w.planner_contract:
-            continue
-        line = f"{_CONTRACT_PREFIX}{w.planner_contract}"
-        in_inputs = sum(str(v).count(w.planner_contract) for v in (w.inputs or {}).values())
-        print(f"  · {w.name:<20} 正文 {base.count(line)} 次 / "
-              f"description {w.description.count(w.planner_contract)} 次 / inputs {in_inputs} 次")
-    print(f"\n摘掉后正文里还剩 {stripped.count(_CONTRACT_PREFIX)} 行契约（必须为 0）")
-    tools = arm_tools("schema", ROLE)
-    with_c = sum(1 for t in tools if "契约：" in t["function"]["description"])
-    print(f"臂② schema：{len(tools)} 个函数，其中 {with_c} 个 description 末尾多了契约句")
-    print("臂①/③ schema 逐字节相同："
-          f"{arm_tools('prose', ROLE) == arm_tools('none', ROLE)}")
+    prose = arm_context("prose", ROLE)
+    print(f"\n正文：④ {len(base)} 字符 / ① 回填后 {len(prose)} 字符"
+          f"（多 {len(prose) - len(base)}）")
+    print(f"④ 正文里 `{_CONTRACT_PREFIX}` 行数 = {base.count(_CONTRACT_PREFIX)}（产线必须为 0）")
+    for name, c in _contracts(ROLE).items():
+        in_inputs = sum(str(v).count(c) for v in (WORKFLOW_MAP[name].inputs or {}).values())
+        print(f"  · {name:<20} ① 正文 {prose.count(_CONTRACT_PREFIX + c)} 次 / "
+              f"description {WORKFLOW_MAP[name].description.count(c)} 次 / inputs {in_inputs} 次")
+
+    contracts = _contracts(ROLE)
+    t4, t2, t3, t1 = (arm_tools(a, ROLE) for a in ("merged", "schema", "none", "prose"))
+    desc4 = {t["function"]["name"]: t["function"]["description"] for t in t4}
+    print(f"\n臂④ 就是产线 schema 原样：{t4 == build_tool_schema(ROLE)}")
+    print(f"臂①/③ schema 逐字节相同（都没了那段）：{t1 == t3}")
+    print(f"臂④ 的描述里都还带着契约：{all(c in desc4[n] for n, c in contracts.items())}")
+    with_c = sum(1 for t in t2 if "契约：" in t["function"]["description"])
+    print(f"臂② schema：{len(t2)} 个函数，其中 {with_c} 个末尾多了带标记的契约句"
+          f"（应等于 {len(contracts)}）")
+    # ② 与 ④ 的差别只有两处：那个标记、以及契约段排在哪（④ 在 `完成判定：` 之前，
+    # ② 在末尾）。判据 = 把 ④ 的契约段挪到末尾、再去掉标记，应当逐字节等于 ②。
+    fixed = copy.deepcopy(t4)
+    for t in fixed:
+        fn = t["function"]
+        c = contracts.get(fn["name"])
+        if c:
+            fn["description"] = fn["description"].replace("\n" + c, "", 1) + "\n" + c
+    unmapped = copy.deepcopy(t2)
+    for t in unmapped:
+        t["function"]["description"] = t["function"]["description"].replace("\n契约：", "\n", 1)
+    print(f"臂④ 把契约段挪到末尾 == ② 去掉标记：{fixed == unmapped}")
     return 0
 
 
 def _run_trials(client: dict, trials: int) -> list[dict]:
-    """三臂交替跑完，逐条打一行。**外层是遍数**（本仓纪律：不并行、不各跑一段）。"""
+    """四臂交替跑完，逐条打一行。**外层是遍数**（本仓纪律：不并行、不各跑一段）。"""
     rows: list[dict] = []
     for i in range(trials):
         for key, msg, why, check in CASES:
@@ -442,11 +505,11 @@ def _write_reports(rows: list[dict], stats: dict, trials: int) -> tuple[str, str
 
     mpath = os.path.join(REPORT_DIR, f"contract_position_{ts}.md")
     with open(mpath, "w", encoding="utf-8") as f:
-        f.write(f"# 契约位置三臂 A/B {ts}\n\n")
+        f.write(f"# 契约位置四臂 A/B {ts}\n\n")
         f.write(f"- 模型 `{meta['model']}` / provider `{meta['provider']}` / role `{ROLE}` / "
                 f"温度 `{meta['temperature']}` / 思考 `{meta['thinking']}` / "
                 f"max_tokens `{meta['max_tokens']}`\n")
-        f.write(f"- 三臂 × {len(CASES)} 用例 × {trials} 遍，**交替**读计数\n")
+        f.write(f"- 四臂 × {len(CASES)} 用例 × {trials} 遍，**交替**读计数\n")
         f.write("- 观测层 = planner 原始输出（绕开图；图里的 `_pair_dual_sources` "
                 "会掩掉原始漏项，端到端量不出差别）\n\n")
         f.write("| 臂 | 合规 |\n|---|---|\n")
@@ -463,10 +526,10 @@ def _write_reports(rows: list[dict], stats: dict, trials: int) -> tuple[str, str
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--trials", type=int, default=12, help="每臂每句多少遍（三臂交替）")
+    ap.add_argument("--trials", type=int, default=12, help="每臂每句多少遍（四臂交替）")
     ap.add_argument("--set", choices=("public", "admin"), default="public",
                     help="用例集：public=content_query 成对点名；admin=计划点名的那三条")
-    ap.add_argument("--dry-run", action="store_true", help="只打三臂差异，不发请求")
+    ap.add_argument("--dry-run", action="store_true", help="只打四臂差异，不发请求")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
@@ -479,7 +542,7 @@ def main() -> int:
     print(f"模型 {settings.active_llm_model} | provider {settings.llm_provider} | role {ROLE} | "
           f"温度 {ARGS['temperature']} | 思考 {settings.planner_native_thinking} | "
           f"max_tokens {ARGS['max_tokens']}")
-    print(f"用例集 {args.set} | 三臂 × 用例 {len(CASES)} × {args.trials} 遍"
+    print(f"用例集 {args.set} | 四臂 × 用例 {len(CASES)} × {args.trials} 遍"
           f"（**交替**：每轮换一臂）\n")
 
     rows = _run_trials({arm: planner_llm(arm) for arm in ARMS}, args.trials)

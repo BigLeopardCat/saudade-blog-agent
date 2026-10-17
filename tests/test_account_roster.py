@@ -230,9 +230,9 @@ print("\n④ 七件写技能**点名**了它（这是这一批改动的目的本
 
 for _n in WRITE_WORKFLOWS:
     _s = S.WORKFLOW_MAP.get(_n)
-    check(f"④-{_n} 声明了 planner_contract 且点名 account_roster",
-          _s is not None and "account_roster" in (_s.planner_contract or ""),
-          (_s.planner_contract if _s else "<缺技能>") or "<空>")
+    check(f"④-{_n} 契约里点名 account_roster",
+          _s is not None and "account_roster" in _s.contract,
+          (_s.contract if _s else "<缺技能>") or "<空>")
     check(f"  {_n} 的描述仍写着那条前提（「必须能在列表里看到」不许被这次改动挤掉）",
           _s is not None and ("必须能在列表里看到" in _s.description
                               or "能在列表里看到" in _s.description))
@@ -247,21 +247,22 @@ for _n in WRITE_WORKFLOWS:
 #   `name`）⇒ 契约必须明写"读不到也照常提卡、别自己收尾"。少了这半句，整条写能力
 #   会在"名录读不到"的那些轮里**没有入口**。
 for _n in WRITE_WORKFLOWS:
-    _c = S.WORKFLOW_MAP[_n].planner_contract or ""
+    _c = S.WORKFLOW_MAP[_n].contract
     check(f"④-{_n} 契约写了回落：名录读不到**不是**不能办、不许自己收尾",
           "不能办" in _c and "别自己收尾" in _c and "确认卡" in _c, _c[:70])
 check("④-7 契约把名录指成**核对手段**并挡住近邻（点名别拿文章/留言的清单顶替——"
       "trace `20261006T082437` 那次抓的就是 `admin_notes`）",
-      all("别拿文章/留言的清单顶替" in (S.WORKFLOW_MAP[n].planner_contract or "")
+      all("别拿文章/留言的清单顶替" in S.WORKFLOW_MAP[n].contract
           for n in WRITE_WORKFLOWS))
 
-_contracts = [S.WORKFLOW_MAP[n].planner_contract for n in WRITE_WORKFLOWS]
-check("④-8 七条契约**两两不同**（`test_slim_workflows` 判据要求每条的渲染行只出现一次："
-      "共用同一串会让那一组断言假红，也会让「哪件技能该先读名录」消失在一条通用句里）",
+_contracts = [S.WORKFLOW_MAP[n].contract for n in WRITE_WORKFLOWS]
+check("④-8 七条契约**两两不同**（共用同一串会让「哪件技能该先读名录」消失在一条通用句里，"
+      "也会让「哪一句在承重」这件事失去分辨力）",
       len(set(_contracts)) == len(_contracts))
-check("④-9 契约**没有**被抄回描述或参数说明里（描述归 schema、契约归提示词正文——"
-      "20260927 的 A/B：同一句随描述搬进 schema 后遵守率显著更低）",
-      all(c not in S.WORKFLOW_MAP[n].description
+check("④-9 契约**在**描述里、且**不在**参数说明里（20261017 并回：契约与描述同住 "
+      "`description`，`tools[]` 只有 `{name, description, parameters}`——"
+      "而 `inputs` 那份参数说明是 schema 的 `properties`，同一句话写两处就会漂）",
+      all(c in S.WORKFLOW_MAP[n].description
           and all(c not in str(v) for v in S.WORKFLOW_MAP[n].inputs.values())
           for n, c in zip(WRITE_WORKFLOWS, _contracts)))
 
@@ -294,11 +295,12 @@ print("\n⑥ 名录**这一侧**也自己写着那句话（20261007：回落句�
 # trace 里 planner 第 1 轮仍原地再点一次 `account_roster`（契约它**看得见**：
 # `build_planner_context` 每轮把全部可见技能的契约都渲染给 planner），差别在
 # **站在哪个技能上**——回落句长在"下一步该去"的技能旁边，而模型卡在"上一步"。
-# 所以同一句话必须**也**长在名录这一侧（`account_roster.planner_contract`）。
+# 所以同一句话必须**也**长在名录这一侧（`account_roster` 自己的契约段）。
 # 下面这条锁的就是它：删掉那一句 ⇒ 本套件红（而不是等哪次跑分掉了才发现）。
-_r_norm = (_roster.planner_contract or "").replace("**", "")
-check("⑥-1 名录技能自己声明了 planner_contract（此前它没有——那正是 20261007 前半段的洞）",
-      bool((_roster.planner_contract or "").strip()), (_roster.planner_contract or "<空>")[:60])
+_r_contract = _roster.contract
+_r_norm = _r_contract.replace("**", "")
+check("⑥-1 名录技能自己带契约（此前它没有——那正是 20261007 前半段的洞）",
+      bool(_r_contract.strip()), _r_contract[:60] or "<空>")
 check("⑥-2 它把本技能**限定成核对手段**、并明说不是写操作的前置"
       "（④ 那条断言判的是写技能那一半，这一半此前无人守）",
       "只做核对" in _r_norm and "不是任何写操作的前置条件" in _r_norm, _r_norm[:80])
@@ -310,11 +312,11 @@ check("⑥-4 它没有被写成一条「读不到就什么都别做」的禁令�
       "写技能" in _r_norm and "确认卡" in _r_norm, _r_norm[-60:])
 check("⑥-5 与七条写技能的契约**不是同一串**（名录这一侧说的是「本技能只做核对」，"
       "两边逐字相同就说明有一侧抄错了对象）",
-      all(_roster.planner_contract != c for c in _contracts))
-check("⑥-6 契约没有抄回它自己的描述/参数说明里（同 ④-9 的不变量，两侧一起守）",
-      bool(_roster.planner_contract)          # 空串会让 `"" in 描述` 恒真——那一条由 ⑥-1 判
-      and _roster.planner_contract not in _roster.description
-      and all(_roster.planner_contract not in str(v) for v in _roster.inputs.values()))
+      all(_r_contract != c for c in _contracts))
+check("⑥-6 契约在它自己的描述里、但**不在**参数说明里（同 ④-9 的不变量，两侧一起守）",
+      bool(_r_contract)                       # 空串会让 `"" in 描述` 恒真——那一条由 ⑥-1 判
+      and _r_contract in _roster.description
+      and all(_r_contract not in str(v) for v in _roster.inputs.values()))
 
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
