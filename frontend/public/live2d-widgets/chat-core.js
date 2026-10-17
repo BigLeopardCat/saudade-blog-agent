@@ -70,6 +70,37 @@
       // 广播帧）按纯文本处理，不再渲染"图已过期"占位块（无图消息误报）
       hasImg: (it && it.hasImg && Array.isArray(it.thumbs) && it.thumbs.length) ? 1 : undefined,
     });
+    // ── DB 历史行 → 核心条目（20261018 图片落库那一批搬进来的）──────────────
+    // **这一步以前长在 `chat-engine.js` 的 `mapDbItems` 里**，是一个手写的白名单
+    // 对象字面量。加 `images` 时才发现那种写法的代价：白名单之外的新字段**静默消失**
+    // ——DB 明明有图，界面照旧渲染"ⓘ图片已过期"占位块，而**没有任何判据看得见**
+    // （那一段是 IIFE 内部的闭包，测不到）。搬到这里之后：① 它是纯函数，
+    // `frontend/tests/chat-core.test.mjs`（`.mjs` ⇒ 进 CI 门禁）能直接喂行断言；
+    // ② 以后 DB 行加字段只改这一处。
+    const dbRowToItem = (row) => ({
+      id: 'd' + row.id,
+      type: row.role === 'user' ? 'user' : 'agent',
+      text: row.content,
+      time: row.time,
+      // 图片：20261018 起图片真的落库了（PG `chat_image` 表），
+      // `GET /api/chat/history` 的每条 item 多带一个 dataURL 数组。
+      // 缺席/空数组 = 这条消息没有图（老轮次、或响应体字节预算装不下的那条）。
+      images: row.images,
+    });
+    // `rows` = `/api/chat/history` 的 `items`；`lookupProcess` = 该会话的过程行查表
+    // （`chat-engine.js` 的闭包，要读 localStorage 的会话键 ⇒ **不搬进来**）。
+    // **漏传要响亮**：它缺席时 `process` 静默变 undefined，而整条 `pullHistory`
+    // 的 catch 会退化成本地缓存 —— 症状是"图不显示"，只有一行 console。
+    // 所以这里抛，不给自己一个静默默认。
+    const mapDbItems = (rows, lookupProcess) => {
+      if (typeof lookupProcess !== 'function') {
+        throw new Error('mapDbItems: lookupProcess 必须是函数（漏传会静默退化成无过程行）');
+      }
+      return rows.map((row) => migrateItem({
+        ...dbRowToItem(row),
+        process: row.role === 'user' ? undefined : lookupProcess(row.content),
+      }));
+    };
     const mergeItems = (local, incoming) => {
       const out = local.slice();
       const byId = new Set(out.map(i => i.id));
@@ -218,7 +249,8 @@
     // 不会渲染出 1970 日期；prev 无效视为"间隔未知"→ 显示 cur 的标签）
     const shouldShowTime = (prev, cur) => !!cur && validTime(cur.time)
       && (!prev || !validTime(prev.time) || (cur.time - prev.time > TIME_GAP_MS));
-    return { genId, migrateItem, mergeItems, replaceWithIncoming, capItems, normText, stripImgMark, matchText,
+    return { genId, migrateItem, mapDbItems, dbRowToItem, mergeItems, replaceWithIncoming, capItems,
+             normText, stripImgMark, matchText,
              stripMentionSpans, COMMAND_RE, TIME_GAP_MS, formatTimeLabel, shouldShowTime };
   })();
 
