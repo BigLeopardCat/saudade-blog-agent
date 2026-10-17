@@ -134,7 +134,8 @@ def arg_enum(spec: object) -> tuple[str, ...]:
     return ()
 
 
-_TOOL_ARG_SCHEMAS: dict[str, dict] = {}   # 工具名 → {"properties": {...}, "required": frozenset}（首次用时建一次）
+# 工具名 → {"properties": {...}, "required": frozenset}（首次用时建一次）
+_TOOL_ARG_SCHEMAS: dict[str, dict] = {}
 # ⚠️ 20261012 加锁：此前是裸 dict 的 check-then-act —— execute 跑在线程池里、工具会被
 # 并发调用，两个线程可以同时进 `if not _TOOL_ARG_SCHEMAS` 各自往**同一个全局 dict** 里
 # 填；而调用方正拿着这个 dict 迭代时就会 `RuntimeError: dictionary changed size during
@@ -162,8 +163,9 @@ def tool_arg_schemas() -> dict[str, dict]:
                     try:
                         js = schema.model_json_schema() if schema is not None else {}
                     except Exception:   # 取不到就跳过：**不因为一个工具没有 schema 而拦住参数校验**
-                        logger.warning("[workflows] 取 %s 的 args_schema 失败，该工具的参数不参与校验",
-                                       getattr(t, "name", t))
+                        logger.warning(
+                            "[workflows] 取 %s 的 args_schema 失败，该工具的参数不参与校验",
+                            getattr(t, "name", t))
                         continue
                     if not isinstance(js, dict):
                         continue
@@ -272,7 +274,8 @@ def _coerce_value(want: str, value: Any) -> tuple[bool, Any]:
     if want == "bool":
         if isinstance(value, bool):
             return True, value
-        if isinstance(value, str) and value.strip().lower() in ("true", "false", "1", "0", "yes", "no"):
+        if isinstance(value, str) and value.strip().lower() in ("true", "false",
+                                                               "1", "0", "yes", "no"):
             return True, value.strip().lower() in ("true", "1", "yes")
         if isinstance(value, int) and value in (0, 1):
             return True, bool(value)
@@ -307,7 +310,9 @@ def _bad_choice(name: str, value: Any, choices: tuple[str, ...]) -> str | None:
 
 def check_workflow_params(workflow: Workflow, params: dict,
                        specs: dict[str, ParamSpec] | None = None) -> dict:
-    """PARAMS 事前校验（纯函数）→ `{"fixed": [...], "unknown": [...], "missing": [...], "bad": [...]}`。
+    """PARAMS 事前校验（纯函数）。
+
+    返回 `{"fixed": [...], "unknown": [...], "missing": [...], "bad": [...]}`。
 
     · `fixed`：归一过的值（`article_id "3"→3`），只作说明——**不是问题**；
     · `unknown`：系统不认识的参数名（planner 写了但没人读）——**响亮但不阻断**
@@ -347,7 +352,8 @@ def check_workflow_params(workflow: Workflow, params: dict,
     return {"fixed": fixed, "unknown": unknown, "missing": missing, "bad": bad}
 
 
-def param_problem_note(workflow: Workflow, chk: dict, specs: dict[str, ParamSpec] | None = None) -> str:
+def param_problem_note(workflow: Workflow, chk: dict,
+                       specs: dict[str, ParamSpec] | None = None) -> str:
     """参数不齐/不可用时给 planner 的确定性话术（零 LLM、只说机器能保证的事实）。
 
     **不许**出现"站内没有/查不到"这类台账话术——这一层压根没读过台账，缺的是参数。
@@ -458,7 +464,8 @@ def check_call_args(tool_name: str, args: dict) -> dict:
     """
     schemas = tool_arg_schemas()
     entry = schemas.get(tool_name)
-    if entry is None:                      # 注册表里没有/没有 schema：不拦（白名单那一层已判过工具名）
+    # 注册表里没有/没有 schema：不拦（白名单那一层已判过工具名）
+    if entry is None:
         return {"args": dict(args), "bad": [], "unknown": []}
     props, req = entry.get("properties") or {}, entry.get("required") or frozenset()
     out, bad, unknown = {}, [], []

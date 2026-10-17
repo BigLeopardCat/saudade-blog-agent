@@ -23,8 +23,14 @@ from __future__ import annotations
 
 from agent.authz import SCOPE_WRITE_CONSOLE, SCOPE_WRITE_OWN, TOOL_SCOPE
 from agent.principal import CHAT_ONLY_ROLES
-from agent.workflow_defs import (account_write, content_write, navigation, own_todo,
-                                 public_read, reports)
+from agent.workflow_defs import (
+    account_write,
+    content_write,
+    navigation,
+    own_todo,
+    public_read,
+    reports,
+)
 from agent.workflow_model import Workflow
 from tools.base import IOT_ENABLED
 
