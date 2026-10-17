@@ -14,7 +14,9 @@
 #   cd saudade-blog-agent
 #   .venv/bin/python eval/run_golden.py                     # 全量；--limit N / --only a,b / --min-pass-rate
 #   .venv/bin/python eval/golden_full_run.py                # 进程隔离版：逐条独立进程 + 180s 超时，防悬挂
-#   夜间 04:00 已有 scripts/nightly_regression.sh（crontab）跑 tests/run_all.py + 全量 golden + trace 巡检。
+#   夜间 04:00 有 scripts/nightly_regression.sh（crontab）跑 tests/run_all.py + 全量 golden + trace 巡检，
+#   **但那个 cron 默认不装**（一次全量 ≈10M tok / ¥2.4；开关 scripts/enable_nightly.sh）——
+#   所以上面那句"CI 只跑 L0"在默认部署下是全部，别把没跑的夜间当成跑过且绿。
 #
 # 仓库 Secrets QUALITY_GATE_API_KEY / QUALITY_GATE_BASE_URL 与 Variables
 # GOLDEN_MIN_PASS_RATE / QWEN_MODEL 已无引用，可留可删（留下不影响任何运行）。
