@@ -4754,7 +4754,9 @@ def test_calls_in_wrong_workflow_round():
     import agent.graph as G
     from agent.graph import _drop_correction, parse_plan, planner_node
     from agent.principal import Principal
-    from agent.workflows import DROP_SUFFIX_WORKFLOW_NO_CALLS
+    # 常量的家是 `agent.workflow_model`（批 2 刀 2a 下沉层），刀 2d 之后
+    # `agent/workflows.py` 自己已不消费它 ⇒ 取值点跟着定义走。
+    from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
 
     _CALLS = [{"tool": "list_notes", "args": {"limit": 5}}]
     # ① 记账 + 后缀（三种技能各测一遍：chat 走通用分支、navigate 有自己分支、

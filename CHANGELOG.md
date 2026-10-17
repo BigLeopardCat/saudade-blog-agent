@@ -16,13 +16,18 @@
 
 ## 20261018
 
-- **技能注册表按域拆开、参数 schema 独立成层（批 2）——对外行为零变更**：`agent/workflows.py`
-  从 4764 行降到两千出头，47 条技能定义按域住进 `agent/workflow_defs/`，参数规格与事前校验
-  住进 `agent/workflow_params.py`，计划状态闭集住进 `agent/plan_status.py`。**技能名单顺序、
-  每条技能的字面、参数规格的派生结果都与拆分前逐字相同**——注册表的穷举量总账 `1139 / 4856`
-  一格未动（搬走而不是新增的机器可读凭据），`WORKFLOWS` 的顺序是一份契约，这次拆分的切点
-  就是按"六个域在原序列里各自连续"选的。老写法（`from agent.workflows import …`）全部照旧
-  可用，转发层是**迁移期的临时形态**、收尾刀整块消失。
+- **技能注册表按域拆开、参数 schema 与展开层独立成层（批 2）——对外行为零变更**：
+  `agent/workflows.py` 从 4764 行降到 1160 行，47 条技能定义按域住进 `agent/workflow_defs/`，
+  参数规格与事前校验住进 `agent/workflow_params.py`，计划状态闭集住进 `agent/plan_status.py`，
+  模板展开层住进 `agent/workflow_expand.py` 与 `agent/workflow_expand_write.py`（写技能那一族
+  单独一个模块，为的是模块预算）。**技能名单顺序、每条技能的字面、参数规格的派生结果、
+  展开出来的调用清单都与拆分前逐字相同**——注册表的穷举量总账 `1139 / 4856` 一格未动
+  （搬走而不是新增的机器可读凭据），`WORKFLOWS` 的顺序是一份契约，这次拆分的切点就是按
+  "六个域在原序列里各自连续"选的。老写法（`from agent.workflows import …`）全部照旧可用，
+  转发层是**迁移期的临时形态**、收尾刀整块消失。
+- **类型棘轮收紧到 198 / 20**（原 201 / 20）：展开层搬走时顺手修掉它带过来的三处 mypy 报错
+  （同一个 `args` 在 `_expand_write_workflow` 里被重复标注、以及禁言分支那处 dict 值类型），
+  顺带删掉两个从没人读的死局部。**都是标注与死代码层面的改动，展开结果不变。**
 - **日志里 `%(name)s` 那一列开始说真话**：参数层那几行 warning 的 logger 名从 `agent.workflows`
   改成 `agent.workflow_params`（此前日志指着一个文件、代码在另一个文件）。人类可读前缀
   `[workflows]` 不变，按前缀 grep 的老办法照旧有效。
