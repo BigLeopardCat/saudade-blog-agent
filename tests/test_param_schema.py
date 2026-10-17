@@ -431,8 +431,8 @@ def test_enum_closure_derives_from_literal():
                 'Literal["sakura", "rain", "snow"]',
                 'Literal["on", "off"]'):
         check(f"tools/base.py 里有 {ann}", ann in base)
-    check("workflows.py 用 arg_enum 派生（不手写枚举表）",
-          "choices=arg_enum(" in (ROOT / "agent" / "workflows.py").read_text(encoding="utf-8"))
+    check("参数规格用 arg_enum 派生（不手写枚举表）",
+          "choices=arg_enum(" in (ROOT / "agent" / "workflow_params.py").read_text(encoding="utf-8"))
 
 
 def test_enum_closure_zeroes_tools_before_pydantic():
@@ -577,6 +577,11 @@ def test_wiring():
 
     src_workflows, src_graph = _code("agent/workflows.py"), _code("agent/graph.py")
     raw_workflows = (ROOT / "agent" / "workflows.py").read_text(encoding="utf-8")
+    # 取值点跟着定义走（20261017 批 2 刀 2c）：`check_workflow_params` 已搬进
+    # `agent/workflow_params.py`——**指回 workflows.py 会 StopIteration**（"取不到"
+    # 比"取到旧的"响，但也别让它发生）。`render_workflow_params` 仍在 workflows.py，
+    # 它搬走时（刀 2e）这条也要跟着改。
+    raw_params = (ROOT / "agent" / "workflow_params.py").read_text(encoding="utf-8")
 
     check("planner 菜单用 render_workflow_params（不再 dump inputs 的 JSON）",
           "render_workflow_params(s)" in src_workflows
@@ -598,7 +603,7 @@ def test_wiring():
     # 判据在 workflows 里、展示在 workflows/graph 里，但**不许**有人去读渲染出来的字符串
     # 当判据（同 _menu_arg_signature 头注那条纪律）
     fn_src = ast.get_source_segment(
-        raw_workflows, next(n for n in ast.walk(ast.parse(raw_workflows))
+        raw_params, next(n for n in ast.walk(ast.parse(raw_params))
                          if isinstance(n, ast.FunctionDef)
                          and n.name == "check_workflow_params"))
     check("check_workflow_params 不读渲染字符串（判据只读 specs）",
