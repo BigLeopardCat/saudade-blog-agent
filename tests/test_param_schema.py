@@ -575,17 +575,20 @@ def test_wiring():
         # 字面量里也有 `#`，剥了就断在半个字符串上——本文件第一版这么炸过一次）。
         return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
-    src_workflows, src_graph = _code("agent/workflows.py"), _code("agent/graph.py")
-    raw_workflows = (ROOT / "agent" / "workflows.py").read_text(encoding="utf-8")
+    src_graph = _code("agent/graph.py")
     # 取值点跟着定义走（20261017 批 2 刀 2c）：`check_workflow_params` 已搬进
     # `agent/workflow_params.py`——**指回 workflows.py 会 StopIteration**（"取不到"
-    # 比"取到旧的"响，但也别让它发生）。`render_workflow_params` 仍在 workflows.py，
-    # 它搬走时（刀 2e）这条也要跟着改。
+    # 比"取到旧的"响，但也别让它发生）。
     raw_params = (ROOT / "agent" / "workflow_params.py").read_text(encoding="utf-8")
+    # 同上（批 2 刀 2e-2）：`render_workflow_params` 已随菜单渲染搬进
+    # `agent/workflow_menu.py`，这条断言跟着它走——**留着读 workflows.py 会静默变假
+    # 绿**（那条调用在新文件里，旧文件里什么都没有，"没有 json.dumps"这半恒真）。
+    src_menu = _code("agent/workflow_menu.py")
+    src_menu_raw = (ROOT / "agent" / "workflow_menu.py").read_text(encoding="utf-8")
 
     check("planner 菜单用 render_workflow_params（不再 dump inputs 的 JSON）",
-          "render_workflow_params(s)" in src_workflows
-          and "json.dumps(s.inputs" not in src_workflows, "")
+          "render_workflow_params(s)" in src_menu
+          and "json.dumps(s.inputs" not in src_menu, "")
     check("类型写法映射只有一处（graph 里不再定义 _ARG_TYPE_SHORT / _menu_arg_type）",
           "_ARG_TYPE_SHORT" not in src_graph and "def _menu_arg_type" not in src_graph
           and src_graph.count("arg_type_short(") == 1, "")
@@ -613,7 +616,7 @@ def test_wiring():
     # 加了 enum 就变成"可选值清单"这种机器格式，且会与工具描述里的说明重复）。
     # 这条锁是防"顺手统一"：哪天要把 enum 印进菜单，得连上面三条菜单断言一起改。
     rsp = ast.get_source_segment(
-        raw_workflows, next(n for n in ast.walk(ast.parse(raw_workflows))
+        src_menu_raw, next(n for n in ast.walk(ast.parse(src_menu_raw))
                          if isinstance(n, ast.FunctionDef)
                          and n.name == "render_workflow_params"))
     check("菜单渲染不读 choices（闭集只用于校验）",
