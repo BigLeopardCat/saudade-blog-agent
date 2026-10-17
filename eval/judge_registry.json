@@ -207,6 +207,14 @@
         4,
         0
       ],
+      "agent/workflow_expand.py": [
+        6,
+        0
+      ],
+      "agent/workflow_expand_write.py": [
+        14,
+        0
+      ],
       "agent/workflow_model.py": [
         0,
         0
@@ -216,7 +224,7 @@
         0
       ],
       "agent/workflows.py": [
-        21,
+        1,
         0
       ],
       "tools/__init__.py": [

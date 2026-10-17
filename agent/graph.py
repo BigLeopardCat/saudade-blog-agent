@@ -124,10 +124,12 @@ from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.textnorm import (FULLWIDTH_ASCII_MAP as _FULLWIDTH_ASCII_MAP,
                             fold_typing as _fold_typing,
                             squash_spaces as _squash_spaces)
+# 后缀常量（20261017 批 2 刀 2a）：家已在 `agent.workflow_model`（下沉层），
+# 取值点跟着定义走。`agent.workflows` 迁移期仍转发另两个 DROP_SUFFIX_*。
+from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
 from agent.workflows import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
                           args_are_bound,
                           DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
-                          DROP_SUFFIX_WORKFLOW_NO_CALLS,
                           FUZZY_NAV_RULES, NAV_MAP, PLAN_STATUS_ABSENCE_EXEMPT,
                           PLAN_STATUS_NAV_NOTE, WORKFLOW_MAP,
                           _NAV_REAL_PAGES, _NAV_REF_HINT,
