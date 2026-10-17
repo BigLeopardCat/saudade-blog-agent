@@ -104,7 +104,7 @@ print("\n② 覆盖锁：注册表里有写作用域工具的技能必须声明�
 def _write_workflows(workflows: list) -> set:
     """注册表里"计划带写作用域工具"的技能（含 `extra_plan_tools`）。"""
     return {s.name for s in workflows
-            if any(S.TOOL_SCOPE.get(n) in S._WRITE_SCOPES
+            if any(authz.TOOL_SCOPE.get(n) in S._WRITE_SCOPES
                    for n in [n for n, _ in s.plan] + list(s.extra_plan_tools))}
 
 
