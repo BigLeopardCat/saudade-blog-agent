@@ -76,7 +76,7 @@ flowchart TB
 │   ├── graph.py               # ★ 手写 LangGraph 图：State/契约/声称闸 + planner(唯一决策) ⇄ execute(确定性执行) → (reflector) → model(零工具叙述) → gate(确定性检查) + 条件边路由
 │   ├── decisions.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取/特效切换/导航/屏幕显示）+ 动作意图扫描（intent_hints 原料）+ 检索候选裁决（标题相关性）+ 终局计划（轮次上限/复盘终局/拦截收尾）——被 graph.py 节点调用，反向外移函数按原名 re-export
 │   ├── context.py             # 上下文组装（纯函数叶子层）：消息文本提取（多模态兼容）/page_ctx/页面操作指南（GUESTBOOK_GUIDE、SITE_GUIDE）/工具帧摘要/checker 回执摘要
-│   ├── plan_codec.py          # ★ 计划文本契约的编解码（20261017 从 graph.py 切出，那边按原名 re-export）：plan_encode 写端（唯一入口 plan_state，一次出两态）+ parse_plan 读端（按 `KEY[:=]` 搜索，不依赖行序与分隔符）；TOOLS 行的分隔符不许长在值里
+│   ├── plan_codec.py          # ★ 计划契约的编解码（20261017 从 graph.py 切出，那边按原名 re-export）：plan_encode 写端（唯一入口 plan_state，一次出两态）+ plan_view 读端（读对象那一态，四个生产读点的唯一入口）+ parse_plan **文本读器**（按 `KEY[:=]` 搜索，不依赖行序与分隔符；生产链路零调用点，只服务旧 trace 与夹具）；TOOLS 行的分隔符不许长在值里
 │   ├── tool_specs.py          # ★ 执行清单（TOOLS 行）条目的解析与去重裁剪（20261017 第二刀，同样按原名 re-export）：_tool_args 解析 + _spec_signature 指纹 + _search_retry_kind/_already_done_writes 判重 + _trim_done_reads/_trim_noop_specs/_plan_trims_to_empty 裁剪。**出边为零**（不 import graph）才搬得动
 │   ├── repeat_guard.py        # ★ 逐字复读判据（20261017 第三刀，gate 1b）：_repeat_reason 两档判据（距离 1 走"最长连续块"、距离 ≥2 只接"整体重合率 + 最长块"）+ _recent_ai_replies 比对面 + _REDO_REQUEST_RE 放行档。出边为零（只用 difflib/re/_msg_text），调用点留在 graph.py
 │   ├── agent.py               # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
@@ -953,9 +953,12 @@ flowchart TB
 **20261004 起接口层是 native tool calls 单通道**：planner 的"选技能 + 填参数"就是一次
 **工具调用**（函数名 = 技能名、args = 参数），格式由 API 的 `tools` schema 保证；曾经那条
 "输出五行文本、服务端正则抠"的文本档（`PLANNER_ENGINE=text`）连同其解析器**已删**。
-`instantiate_plan` 随后把参数实例化为**内部计划文本**（`WORKFLOW=/PARAMS=/TOOLS: /NOTE: /REPLY:`
-五行契约）写入 `state.plan`——这份内部协议 `execute`/`gate`/路由都读，**与接口层选哪一档无关**，
-保持不变。TOOLS 行 = "执行清单"
+`instantiate_plan` 随后把参数实例化为**内部计划**（`WORKFLOW=/PARAMS=/TOOLS: /NOTE: /REPLY:`
+五行契约）——20261017 批 1 起，这份计划以**两态**一次写入（`plan_state`）：`state.plan_obj`
+是**唯一事实源**，`state.plan` 是它的**渲染**（只喂 narrator 提示词与 trace）。`execute`/`gate`/
+路由**都读对象那一态**（唯一入口 `plan_view(state)`），不再读渲染文本——此前两边各读一态，
+同一份计划能给出两个答案（对象是写的人填了什么就是什么，文本是读的时候归一过的）。
+这份内部协议**与接口层选哪一档无关**，保持不变。TOOLS 行 = "执行清单"
 而非旧"允许名单"——execute 把它当命令逐条执行，"点名了却不调用"的自由 20260903 已从执行层移除。
 **值里不许长分隔符**（20260929）：TOOLS 行是 `"; ".join(specs)` 拼的、`parse_plan` 用
 `split(";")` 读回 ⇒ `plan_encode` 把每条 spec 里的 `;` 转义成 JSON 的 `\u003b`（读回仍是

@@ -212,7 +212,9 @@ cd /home/ubuntu/Saudade-Blog/saudade-blog-agent        # 就是仓根，不是�
   虚增到 33%。另外桩的返回值要带命令形状（`meta.cmd`），否则 `navigate_to` 那一批整批
   BLOCK（`cmd_shape`）——回执行还在、`receipts` 却是空的，"办成几件"会读成 0。
 - 判工具名**不能读** `native_decision.calls`（那里只有技能名，读族的工具全在 PARAMS 里）——
-  现网臂要读计划文本的 TOOLS 行；ReAct 臂的技能要按 `WORKFLOW→plan 模板` **结构化**折算
+  现网臂要读计划的执行清单（本报告记录的那一轮是读计划文本的 `TOOLS` 行；**20261017 批 1
+  起生产侧改读 `plan_obj["tools"]`**，两处是同一条清单）；ReAct 臂的技能要按
+  `WORKFLOW→plan 模板` **结构化**折算
   （`Workflow.plan`），**不许扫子串**：`account_unfreeze` 的模板里只出现 `unfreeze_account`，
   扫子串会把 `freeze_account` 一起白送（方向还正好相反）。三种口径统一折算，否则比的是
   三种不同的问题。

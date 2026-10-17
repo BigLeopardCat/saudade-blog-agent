@@ -334,12 +334,19 @@ class AgentState(TypedDict):
     #             判据见 `tests/test_turn_window.py`（纯函数 + AST 审计锁）。
     turn_msgs: int
     turn_start: int
+    # plan: **渲染出来的契约文本**，不是计划本体。只喂三个消费方——narrator 提示词
+    #       （`_narrator_plan`）、trace、测试夹具。**20261017 批 1 起没有任何节点读它**
+    #       （四个生产读点都改走 `plan_view(state)`，源码锁见 `tests/test_plan_channel.py`
+    #       ⑤a）：此前 `execute`/`gate`/路由都读它，于是同一份计划在"对象那一态"与
+    #       "文本那一态"上能给出两个答案（对象是写的人填了什么就是什么，文本是读的
+    #       时候归一过的）。
     plan: str
-    # plan_obj: 本轮计划的**结构化那一态**（`plan_state` 与 `plan` 一次写入，20260928
-    #           批 C）：`plan` 是给人和提示词看的契约文本，`plan_obj` 是给程序读的
+    # plan_obj: 本轮计划的**唯一事实源**（`plan_state` 与 `plan` 一次写入，20260928
+    #           批 C；20261017 批 1 起归一也在写侧做，见 `normalize_plan`）：给程序读的
     #           字段（workflow/tools/params/status/…）。读端要拿字段就读这个，**不要**再
-    #           从 `plan` 文本里抠 `WORKFLOW=`/`TOOLS: `（那三处已于 20260928 改掉，
-    #           见 `plan_state` 头注）。缺省 `{}` = 本轮没有计划（graph_input 的初值）。
+    #           从 `plan` 文本里抠 `WORKFLOW=`/`TOOLS: `，也不要从渲染文本反推字段——
+    #           读侧唯一入口是 `plan_view(state)`。缺省 `{}` = 本轮没有计划
+    #           （graph_input 的初值，`plan_view` 把它兜成一份空计划）。
     plan_obj: dict
     plan_rounds: int
     done: bool
@@ -3114,7 +3121,7 @@ def _has_real_change(receipts, noop_specs) -> bool:
 #
 # 全部复用现成单一实现，**绝不在这里另写一套**：`_spec_signature`（归一化只有一份）、
 # `authz.is_write`（写族判据只有一份）、`_has_real_change`（"真改了东西"只有一份）、
-# `parse_plan`（计划文本只有一份解析器）。
+# `plan_view`（计划只有一份读法，20261017 批 1 起是对象那一态）。
 class RoundFacts(NamedTuple):
     """账甲：本轮（请求内）状态。字段逐个对应上面"今天谁在算"的那六处之一。"""
     granted: bool            # `confirm_grant` 在场：主人刚点过头的那一兑现轮

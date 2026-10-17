@@ -62,8 +62,10 @@
 > ⚠️ **20261004**：上表是**切换前**的形态，留作对照。第三行那两个正则解析器
 > （`extract_plan_fields` / `_PLANNER_OUTPUT_RE`）已删——它们只服务"native 判不了
 > 就退回文本"这条兜底，而该兜底从未被走到过。第四行的 `parse_plan` **保留**：
-> 它是**内部计划文本协议**（`plan_encode` ↔ `parse_plan`）的读侧，`execute` / `gate` /
-> 路由全读它，与接口层选哪一档无关。
+> 它是**内部计划文本协议**（`plan_encode` ↔ `parse_plan`）的读侧，与接口层选哪一档无关。
+> （**20261017 追记**：`parse_plan` 此后**不再是生产链路的读端**——计划改为两态同写、
+> 对象那一态是唯一事实源，`execute` / `gate` / 路由都读 `plan_view(state)`。它退回成
+> **文本读器**，只服务旧 trace 的考古与测试夹具，`agent/` 下代码调用点为零。）
 | 谁发起调用 | **Python**，逐条确定性执行 | `out = tool.invoke(args)`（`agent/graph.py`） |
 
 佐证一：全仓 `bind_tools` 只出现在**注释**里（`agent/graph.py` / `server.py`），每一处都在写"我们不用它"。**零个调用点。**
