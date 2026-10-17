@@ -121,10 +121,33 @@ echo "--- 真写夹具残留哨兵 (只读公开接口, 秒级, 非门禁) ---" 
 $PY eval/golden_fixture.py --verify >> "$LOG" 2>&1 || echo "[$TS] 真写夹具有残留或读不到公开接口（非门禁，见上面的 [fixture-leftover]/[fixture-check-failed] 行）" >> "$LOG"
 echo "--- golden set (149 条用例；其中 3 条真写按设计不在此处跑 = 146 条真实对话，约 25 分钟) ---" >> "$LOG"
 # 20260924 起：给「需要真身份」的那类用例一个 uid，治那 5 条常年 SKIP（moderation_report_admin /
-# user_report_admin / 三条 *_unresolved_target_honest）。721 是**测试专用管理员账号**（不是主人
-# 的 uid=1——那条写用例会真改主人自己的数据），role=admin、口令已是不可知哈希，只为这条通道存在。
+# user_report_admin / 三条 *_unresolved_target_honest）。取的不是主人的 uid=1——那条写用例会真改
+# 主人自己的数据。
 # 未设该变量时 run_golden 会**响亮跳过并打印**（跳过关乎通过率分母，不静默豁免）。
-export GOLDEN_ADMIN_UID=721
+#
+# ⚠️ **20261017 换指专用夹具管理员 756**，两笔迁移（都在父仓 `scripts/migration/`）：
+#
+#   ① `fixture_admin_closeout_20261017.sql` 把 721 收口——口令换成新的不可知哈希 +
+#      由 admin 降为 user。721 是 20260924 建的评测残留夹具，而那份文件自己写下的纪律是
+#      「不要把这两行加进任何会真写业务数据的自动化」，`GOLDEN_ALLOW_REAL_WRITE=1` 正是
+#      那种自动化，这条纪律一直没照办。降权之后它不再是 admin，而 `middleware.rs` 的准入
+#      判据**从库里现读 role**（不信令牌 claims）⇒ 继续指它这几条用例会全线 403。
+#   ② `golden_admin_fixture_20261017.sql` 新建 **756 `agent_golden_admin_20261017`**
+#      （admin / status=0 / 口令 = 四个随机 UUID 的 SHA-256 ⇒ **结构上登录不进去**），
+#      并把待办族夹具从 721 挪到它名下。
+#
+# **为什么是新建一个号，而不是就近指 748 `demo_admin`**（中途确实短暂指过它）：748 是
+# **在用的号**（20261017 实测 3 会话 / 89 条消息 / 2 篇文章 / 一条真人待办），而后台首页
+# 那张待办卡保存走的是 `PUT /api/protected/todos` —— **整份列表覆盖**
+# （`src/routes/todos.rs::save_todos` 事务内先删该用户全部行再逐条插入）⇒ 谁在首页点一下
+# 保存，夹具就没了。而待办列表是**按 uid 过滤**的（同文件每个 handler 都做
+# `UserId.eq(uid)`）⇒ 夹具的主人**必须**等于这个变量。原设计挑一个「从不登录」的号，
+# 要的就是"那份列表永远不会有第二个写者"这条性质。
+#
+# 令牌不依赖代次：`tools/base._sign_local_jwt` 刻意**不带 `ver`**，而 Rust 侧 `Claims.ver` 是
+# `Option`，没有该声明就跳过代次比对、只判冻不冻结 ⇒ 换指任何未冻结的 admin 都能用，
+# 与 `token_version` 无关（756 的是 0）。
+export GOLDEN_ADMIN_UID=756
 # 20260924 起：普通用户那条通道（722，role=user）。作用是把「被 role 闸拦住」与「谁调不动」
 # 分开——不给 uid 时 uid=0 是 agent 侧哨兵，`admin_write_denied_user` 会因为"谁都调不动"而
 # 通过，通过的理由是错的。接线刻意排在 gate 能力否定误伤修好**之后**：误伤在时，这条用例
