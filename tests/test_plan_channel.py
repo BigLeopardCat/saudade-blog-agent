@@ -45,7 +45,8 @@ sys.path.insert(0, str(ROOT))
 
 from agent import graph as G        # noqa: E402
 from agent import workflows as S       # noqa: E402
-from agent.plan_codec import _esc_spec   # noqa: E402  （④ 的写端转义：20261017 起住这里）
+from agent import decisions as D     # noqa: E402  （② 取样 `_terminal_plan`/`_wrap_up_plan`）
+from agent.plan_codec import _CONTRACT_KEYS, _esc_spec   # noqa: E402  （④ 的写端转义：20261017 起住这里）
 import server as SRV                # noqa: E402  （③ 读它的新读法：`_spec_one`/`_specs_from_tools`）
 import _ctx_src                     # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
@@ -110,31 +111,55 @@ check("  另一处是 graph_input 的初值，且同一行给了 plan_obj 的初
 
 
 # ── ② 两态不分叉 ───────────────────────────────────────────────────────────
-# 两处**已知不同形**（改造前就是如此，不是批 C 引入的）：显式归一后再逐项比。
-#   · params：对象里可能是 None，文本里恒是 `{}`（`plan_encode` 用 `json.dumps(… or {})`）
-#   · note  ：对象的空值渲染成文本的 `（无）`，解析回来是那三个字
+# 20261017 批 1 起，写侧先过 `normalize_plan` ⇒ 对象**就是规范形态**，七格逐项相等。
+# 只剩**两处渲染**要显式还原（都是文本格式的固有产物，不是语义差异）：
+#   · note ：`plan_encode` 把空注记渲染成 `（无）` 三个字，对象这边留 `""`。**不吸收
+#            那个哨兵是故意的**——`note` 同时是写侧的输入（`graph.py` / `decisions.py`
+#            / `tool_specs.py` 都会 `plan_obj["note"] = f"{old}｜{tail}"`），把哨兵吃进
+#            对象，下一次拼接就会产出 `（无）｜…`，把"没有注记"讲成一句真注记。
+#   · tools：值里的 `;` 在文本里被 `_esc_spec` 写成 `;`（TOOLS 行用 `;` 当分隔符，
+#            见 ④），`_tool_args` 读回时还原 ⇒ 比**语义**（工具名 + 参数）而不是比字节。
+# 改造前这里是六格六条归一（`params`/`reply`/`tools`/`workflow`/`status` 各归一一次），
+# 那五条归一正是"写端没归一、读端替它归一"的症状；现在它们全部消失。
 _NORM = {
-    "params": lambda v: v or {},
     "note": lambda v: "" if v in (None, "", "（无）") else v,
-    "reply": lambda v: v or "",
-    "tools": lambda v: v or [],
-    "workflow": lambda v: v or "",
-    "status": lambda v: v or "",
+    "tools": lambda v: [G._tool_args(s) for s in (v or [])],
 }
+# 契约七格（唯一事实源在 `agent/plan_codec.py`，别再各抄一份键名清单）
+_KEYS = _CONTRACT_KEYS
 
 
 def _real_plans() -> list[tuple[str, dict]]:
-    """真计划的取样：注册表全集（空参）+ navigate 的四条出口 + 一条手写对象。"""
+    """真计划的取样：注册表全集（空参）+ navigate 四条出口 + 四条**确定性构造路径**。
+
+    后四条是 20261017 批 1 补的：它们不走 `instantiate_plan`，此前**没有任何判据**
+    盯过"这两态在它们身上是否也不分叉"——而 `_confirm_grant_plan` 恰恰是"对象少一个
+    `status` 键"的那条路径（`normalize_plan` 就是为它这一类存在的）。
+    """
     out = [(f"{n}(空参)", S.instantiate_plan(n, {})) for n in S.WORKFLOW_MAP]
     for target in ("物联网平台", "友链", "/iot", "量子对撞机车间"):
         out.append((f"navigate({target})", S.instantiate_plan("navigate", {"target": target})))
+    out.append(("_terminal_plan", D._terminal_plan(True, "max_rounds")))
+    out.append(("_wrap_up_plan", D._wrap_up_plan(True)))
+    out.append(("_param_problem_plan", S._param_problem_plan(
+        S.WORKFLOW_MAP["navigate"],
+        {"fixed": [], "unknown": [], "missing": ["target"], "bad": []})))
+    out.append(("_confirm_grant_plan", G._confirm_grant_plan(
+        {"workflow": "tag_create",
+         "specs": [{"tool": "create_tag", "args": {"name": "甲"}}]})))
+    # 值里带 `;` 的一条（`_esc_spec` 的射程）。**少了它 `_NORM["tools"]` 从不被触发**
+    # ——上面 55 例的参数值里一个分号都没有，于是"比语义不比字节"那句归一在 ② 里是空跑，
+    # 一条从不被触发的归一器与没有它一样（本仓最贵的那类失效模式）。
+    out.append(("值里带 `;`", {"workflow": "tag_delete",
+                               "tools": ['delete_tag({"name": "甲;乙"})'],
+                               "params": {}, "note": "", "reply": "r"}))
     return out
 
 
 print("② 两态不分叉（对象 ↔ 文本）")
 _cases = _real_plans()
-check("取样非空（注册表全集 + navigate 四出口）", len(_cases) >= len(S.WORKFLOW_MAP),
-      f"{len(_cases)} 例")
+check("取样非空（注册表全集 + navigate 四出口 + 四条确定性构造路径 + 一条带 `;` 的值）",
+      len(_cases) >= len(S.WORKFLOW_MAP) + 5, f"{len(_cases)} 例")
 _div, _derived = [], []
 for label, obj in _cases:
     st = G.plan_state(obj)
@@ -142,15 +167,17 @@ for label, obj in _cases:
         _div.append(f"{label}:plan_obj 不是同一份对象")
         continue
     parsed = G.parse_plan(st["plan"])
-    for k, norm in _NORM.items():
+    for k in _KEYS:
+        norm = _NORM.get(k, lambda v: v)
         if norm(obj.get(k)) != norm(parsed.get(k)):
             _div.append(f"{label}:{k} 对象={norm(obj.get(k))!r} 文本={norm(parsed.get(k))!r}")
-    # STATUS 兼容派生在当前真计划上恒不触发：对象没给 status 时，文本也不该"读出"一个
-    if not (obj.get("status") or "") and (parsed.get("status") or ""):
-        _derived.append(f"{label}:文本派生出 {parsed['status']!r}")
-check("六项逐项相等（workflow/tools/params/note/reply/status，两处不同形已归一）",
+    # 两态的 STATUS 派生必须同源：写侧 `normalize_plan` 派生了什么，文本读回来就得是
+    # 同一个值（它们共用 `_derive_status`；这条盯的是"别哪天有人只改一边"）。
+    if (obj.get("status") or "") != (parsed.get("status") or ""):
+        _derived.append(f"{label}:对象 {obj.get('status')!r} / 文本 {parsed.get('status')!r}")
+check("契约七格逐项相等（workflow/params/tools/note/reply/chat/status，两处渲染已还原）",
       not _div, "；".join(_div[:5]))
-check("STATUS 兼容派生在真计划上恒不触发（NOTE 措辞不再决定 status）",
+check("STATUS 的派生两态同源（写侧派生的值与文本读回来的一致）",
       not _derived, "；".join(_derived[:5]))
 def _keyerror(fn) -> bool:
     try:

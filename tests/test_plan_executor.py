@@ -157,9 +157,9 @@ def test_confirm_resume_emits_the_next_card_without_llm():
     check("文本态与结构化态一起给（`plan_state` 的唯一入口，execute 读的是文本那条）",
           G.parse_plan(pre.early["plan"])["tools"] == pre.early["plan_obj"]["tools"])
     check("plan_obj 的键集与令牌那条通道**同款**（同一个 `_confirm_grant_plan` 契约）",
-          set(pre.early["plan_obj"]) == set(G._confirm_grant_plan(
+          set(pre.early["plan_obj"]) == set(G.plan_state(G._confirm_grant_plan(
               {"workflow": "tag_create", "specs": [{"tool": "create_tag",
-                                                 "args": {"title": "甲"}}]})))
+                                                    "args": {"title": "甲"}}]}))["plan_obj"]))
     check("注记只写**事实与禁止**，不写机制（写给 narrator 的机制描述会变成它的词汇）",
           "弹卡" not in pre.early["plan_obj"]["note"]
           and "不得" in pre.early["plan_obj"]["note"])

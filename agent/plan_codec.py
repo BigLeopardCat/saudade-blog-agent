@@ -7,11 +7,22 @@
 三个名字（`plan_encode` / `plan_state` / `parse_plan`）、一套文本协议、**零图拓扑依赖**
 ——进一份计划对象、出一段文本，反过来一样。
 
-**这一族是什么**：planner / execute / gate / narrator 之间传的那份**内部计划文本协议**
-（`WORKFLOW=` / `STATUS=` / `PARAMS=` / `TOOLS:` / `NOTE:` / `REPLY:`；第 6 行 `TODO:` 于
-20261016 整行退休）。写端唯一入口是 `plan_state`——一次写出两态：人读的文本（`plan`）
-＋ 程序读的对象（`plan_obj`）；读端是 `parse_plan`——容错全解析，按 `KEY[:=]` 搜索、
-**不依赖行序与分隔符**。
+**这一族是什么**：planner / execute / gate / narrator 之间传的那份计划。**20261017 批 1
+起它是"一份对象 + 一份渲染"**（此前是"两态并列"，谁是规范形态没有答案）：
+
+  · **唯一事实源 = `plan_obj`**（`dict`）。写侧唯一入口 `plan_state` 先过
+    `normalize_plan` 归一，再出 `plan_obj` 与文本两态；**全仓读计划一律直取对象**。
+  · **`plan`（文本）是渲染**，只喂三个消费方：narrator 提示词、trace、以及测试夹具。
+    它的形态是 `WORKFLOW=` / `STATUS=` / `PARAMS=` / `TOOLS:` / `NOTE:` / `REPLY:`
+    （第 6 行 `TODO:` 于 20261016 整行退休）。
+  · **`parse_plan` 是文本读器**，不是计划的读端：容错全解析，按 `KEY[:=]` 搜索、
+    不依赖行序与分隔符。生产链路零调用点（有源码锁）。
+
+**一条硬不变量**：TOOLS 行是 `"; ".join(specs)` 拼的、`parse_plan` 用 `split(";")` 读回
+⇒ 值里一个裸 `;` 就把**一条调用撕成 N 条**（20260929 生产实证，取证见 `_esc_spec`）。
+所以**分隔符不许长在值里**，转义只有这一处。⚠️ 这条不变量**只管文本那一态**：执行侧
+改读 `plan_obj["tools"]` 之后，撕裂事故在**执行**上已经不可能——`_esc_spec` 现在只服务
+"给 narrator 看的排版"与"旧文本读回来"。
 
 ⚠️ **别与"模型自己写契约行"那条通道搞混**：那条（`extract_plan_fields` 一族）20261004
 随文本契约档一起删除。**这份协议仍在用**——系统自己写、系统自己读回来，模型一个字都不
@@ -19,20 +30,28 @@
 
 **一条硬不变量**：TOOLS 行是 `"; ".join(specs)` 拼的、`parse_plan` 用 `split(";")` 读回
 ⇒ 值里一个裸 `;` 就把**一条调用撕成 N 条**（20260929 生产实证，取证见 `_esc_spec`）。
-所以**分隔符不许长在值里**，转义只有这一处。
+所以**分隔符不许长在值里**，转义只有这一处。⚠️ 这条不变量**只管文本那一态**：执行侧
+改读 `plan_obj["tools"]` 之后，撕裂事故在**执行**上已经不可能——`_esc_spec` 现在只服务
+"给 narrator 看的排版"与"旧文本读回来"。
 
-**搬家方式**：`agent/graph.py` 按原名 re-export 这三个名字 ⇒ 那边剩的 **6 处**调用点与
-全仓 `from agent.graph import plan_state` 那几十处引用（含测试）**一个都不用改**。判据侧
-同理：`tests/_ctx_src.plan_codec_src()` 把两份文件拼成一份取值视图，`test_plan_channel`
-① 与 `test_status_judgements` ④ 的**断言字面一个字没动**——判据没被改松，只是锚点跟着
-代码搬（同 `_ctx_src.deprefix` / `.prose()` 那两次）。
-搬动时正文**逐字未动**，只同步了一处路径指针（`agent/workflows.py` 里"同族教训见 …"那句）。
+**搬家方式**：`agent/graph.py` 按原名 re-export 这几个名字 ⇒ 那边剩的调用点与全仓
+`from agent.graph import plan_state` 那几十处引用（含测试）**一个都不用改**。判据侧同理：
+`tests/_ctx_src.plan_codec_src()` 把两份文件拼成一份取值视图，`test_plan_channel` ① 与
+`test_status_judgements` ④ 的**断言字面一个字没动**——判据没被改松，只是锚点跟着代码搬
+（同 `_ctx_src.deprefix` / `.prose()` 那两次）。搬动时正文**逐字未动**，只同步了一处路径
+指针（`agent/workflows.py` 里"同族教训见 …"那句）。
 """
 
 import json
 import re
 
 from agent.workflows import PLAN_STATUS_VALUES, WORKFLOW_MAP
+
+# 契约的**七格**：`normalize_plan` 负责把它们归成规范形态，`parse_plan` 负责把它们从
+# 文本里读回来。两态在这七格上逐项相等（唯一例外是 `note` 的空值哨兵，见
+# `normalize_plan`）——判据侧（`tests/test_plan_channel.py` ② 与批 1 的等价判据）
+# 直接 import 这一份，别再各写一遍键名清单。
+_CONTRACT_KEYS = ("workflow", "params", "tools", "note", "reply", "chat", "status")
 
 # ---------------------------------------------------------------------------
 # 容错解析工具（计划文本 → 结构化）
@@ -91,6 +110,45 @@ def _esc_spec(tool_spec: str) -> str:
     return tool_spec.replace(";", "\\u003b")   # 落盘即 `;`（一个反斜杠，JSON 转义）
 
 
+def _derive_status(tools: list, workflow: str, note: str) -> str:
+    """缺 `STATUS=` 时的**兼容派生**：只服务旧文本与手写夹具，新计划一律显式给值。
+
+    `normalize_plan`（写侧）与 `parse_plan`（读侧）**共用这一份**——20261017 之前它只
+    长在 `parse_plan` 里，于是"对象那一态"与"文本那一态"对同一份计划能给出两个答案
+    （对象是写的人填了什么就是什么，文本是读的时候派生过的）。搬到一处之后，这个
+    分叉在结构上不可能再出现：**同一个输入只有一份派生**。
+
+    为什么不留空、非要派生一遍：留空 = 判据 fail-open，而"缺 STATUS"最可能的来历正是
+    **改造前留在 state 里的旧计划文本**——那时判据判的是注记措辞，派生一遍等于把旧行为
+    原样接上，不会因为升级而突然少拦一类（也不会突然多拦——派生只认系统自己那三条
+    注记的**固定前缀**，见 `workflows.py`）。
+
+    ⚠️ `workflow` 收的是**归一后**的技能名（不在 `WORKFLOW_MAP` 里的一律已经落回
+    `chat`）。**这一点必须两边一致**（20261017 实测踩过）：写侧若按原始名派生、而文本
+    里写的是归一后的名，`WORKFLOW=nope` 这种输入就会让对象说 `""`、文本说
+    `answer_only`——正是这一族要消灭的分叉。真计划不可能有非法技能名
+    （`instantiate_plan` / `_confirm_grant_plan` / 各确定性构造点都保证合法），所以
+    这个口径差异只在手写夹具上可见。
+    """
+    if tools:
+        return "executed"
+    if workflow == "chat":
+        return "answer_only"
+    if workflow == "navigate" and "不调用任何工具" in note:
+        # ⚠️ "未部署" 必须排在 "已下线" **之前**：`_IOT_OFF_NOTE` 里那句叮嘱
+        # （"不要说「已下线」"）本身含"已下线"三个字，先判它就会把"IoT 没装"
+        # 派生成"页面下线了"——正是这两个值分开要防的那件事，从这里漏回来。
+        if "未部署" in note:
+            return "nav_iot_off"
+        if "已下线" in note:
+            return "nav_offline"
+        if "无法识别" in note:
+            return "nav_unresolved"
+        if "不存在" in note:
+            return "target_unreachable"
+    return ""
+
+
 def plan_encode(plan_obj: dict) -> str:
     """结构化计划（instantiate_plan 产物）→ plan 字段（契约的写端）。
 
@@ -109,9 +167,19 @@ def plan_encode(plan_obj: dict) -> str:
     """
     tools = ("（无）" if not plan_obj.get("tools")
              else "; ".join(_esc_spec(t) for t in plan_obj["tools"]))
-    status = plan_obj.get("status") or (
-        "executed" if plan_obj.get("tools")
-        else ("answer_only" if plan_obj.get("chat") else ""))
+    # `status` 键**在场即权威**——哪怕是空串（空串的含义是"没有构造点用一个值认领这一轮"，
+    # 不是"忘了填"）。**经 `plan_state` 调用时下面那一支恒不触发**：`normalize_plan` 一定
+    # 把键补全。它只服务"直接调 `plan_encode` 的测试夹具"与"改造前留在盘上的旧对象"。
+    #
+    # ⚠️ 少了 `"status" not in plan_obj` 这个条件就会分叉（20261017 实测）：`normalize_plan`
+    # 按**原始技能名**派生（与 `parse_plan` 同源），这里若按**归一后的**名字再派生一次，
+    # 技能名不在注册表里的输入上两态会给出不同的值（对象 `""` / 文本 `answer_only`）。
+    status = str(plan_obj.get("status") or "")
+    if status not in PLAN_STATUS_VALUES:
+        status = ""
+    if not status and "status" not in plan_obj:
+        status = ("executed" if plan_obj.get("tools")
+                  else ("answer_only" if plan_obj.get("chat") else ""))
     lines = [
         f"WORKFLOW={plan_obj['workflow']}",
     ]
@@ -143,6 +211,63 @@ def plan_encode(plan_obj: dict) -> str:
     return "\n".join(lines)
 
 
+def normalize_plan(plan_obj: dict) -> dict:
+    """把一份计划对象**归一成规范形态**——**原地改**，返回同一份对象。
+
+    **为什么要有它**（20261017 批 1，行业惯例里的 "normalize at the boundary"）：在它
+    之前，"谁是计划的规范形态"有**两个**答案——对象是**写的人填了什么就是什么**，而
+    文本是**读的时候归一过的**（`parse_plan` 在读侧做了三件事：技能名不在注册表里就落回
+    `chat`；`chat` 由注册表重算；`status` 缺了就按注记措辞派生）。于是任何一处"写端漏了
+    一格"，读文本的人看得见、读对象的人看不见。现成的例子是 `_confirm_grant_plan`
+    （`agent/graph.py`）：它返回的对象**根本没有 `status` 键**，可它的文本里
+    `STATUS=executed` 是 `plan_encode` 派生出来的——两条读法给出两个答案。
+
+    归一**只在写侧做一次**（就是这里），而不是在每个读侧各做一遍：`plan_state` 调它，
+    之后全仓读计划一律直取对象。`parse_plan` 因此退回成**纯文本读器**（服务旧 trace 与
+    夹具），不再兼任"读侧归一器"。
+
+    **归一的七格**（`_CONTRACT_KEYS`）：`workflow`（不在 `WORKFLOW_MAP` 就落回 `chat`）、
+    `chat`（由注册表定，不信调用方填的）、`tools`（恒是 list）、`params`（恒是 dict）、
+    `note` / `reply`（恒是 str）、`status`（先校验 ∈ `PLAN_STATUS_VALUES`，缺则
+    `_derive_status` 派生）。**其余键一律原样留着**——`dropped` / `param_problem` /
+    `param_unknown` 这些是各展开函数写给判据看的，不属于契约七格。
+
+    ⚠️ **`note` 是唯一一个"两态仍然不同形"的格子，这是故意的**：`plan_encode` 把空注记
+    渲染成 `（无）` 三个字，而对象这边留 `""`。不吸收那个哨兵，是因为 `note` 同时是
+    **写侧的输入**（`graph.py` / `decisions.py` / `tool_specs.py` 都会
+    `plan_obj["note"] = f"{old_note}｜{tail}"`）——把哨兵吃进对象，下一次拼接就会产出
+    `（无）｜…` 这种把"没有注记"讲成一句真注记的文本。
+
+    **幂等**：`normalize_plan(normalize_plan(o))` 与一次调用结果逐项相等（第二次进来时
+    七格已经都是规范形态）。调用点可以放心重复调。
+
+    **身份不变**：返回的就是传进来的那份对象（`is` 相等）。`plan_state` 靠这条把
+    "`st["plan_obj"] is obj`"钉住（`tests/test_plan_channel.py` ②）——写端与调用方
+    共享同一份对象，谁都不该在这之后又去改它（见 `plan_state` 的警告）。
+    """
+    raw_workflow = str(plan_obj.get("workflow") or "")
+    workflow = raw_workflow if raw_workflow in WORKFLOW_MAP else "chat"
+    tools = list(plan_obj.get("tools") or [])
+    params = plan_obj.get("params")
+    if not isinstance(params, dict):
+        params = {}
+    note = "" if plan_obj.get("note") is None else str(plan_obj.get("note"))
+    reply = "" if plan_obj.get("reply") is None else str(plan_obj.get("reply"))
+    status = str(plan_obj.get("status") or "").strip().lower()
+    if status not in PLAN_STATUS_VALUES:
+        status = ""
+    if not status:
+        status = _derive_status(tools, workflow, note)
+    plan_obj["workflow"] = workflow
+    plan_obj["tools"] = tools
+    plan_obj["params"] = params
+    plan_obj["note"] = note
+    plan_obj["reply"] = reply
+    plan_obj["chat"] = bool(WORKFLOW_MAP[workflow].chat)
+    plan_obj["status"] = status
+    return plan_obj
+
+
 def plan_state(plan_obj: dict) -> dict:
     """**写计划的唯一入口**：同一份计划出两态，一次写入——人读的契约文本
     （`plan`，进提示词/进 trace/进测试夹具）＋ 程序读的结构化对象（`plan_obj`）。
@@ -166,16 +291,33 @@ def plan_state(plan_obj: dict) -> dict:
     仍在 `route_after_planner`/`execute_node`/`gate_node`/`_wrote_this_round` 四处用它
     （它按 `KEY[:=]` 搜索、不依赖行序与分隔符，是"契约的读端"而不是"排版的嗅探"）。
     批 C 治的是**排版嗅探**，不是要废掉文本态。
+
+    **20261017 批 1 起，写之前先过 `normalize_plan`**：对象不再是"调用方填了什么就是
+    什么"，而是**规范形态**——与文本读回来逐项相等（唯一例外是 `note` 的空值哨兵，见
+    `normalize_plan`）。这是"计划对象是唯一事实源"这句承诺的**实现**：承诺不是靠
+    "大家都记得填全"，是靠写侧这一道归一。
     """
-    return {"plan": plan_encode(plan_obj), "plan_obj": plan_obj}
+    p = normalize_plan(plan_obj)
+    return {"plan": plan_encode(p), "plan_obj": p}
 
 
 def parse_plan(raw: str) -> dict:
-    """解析 plan 字段（契约的读端）。容错：解析失败 → 按 chat 兜底（宁可少干活，不硬猜）。
+    """解析 **plan 文本**（契约的读端，返回 `_CONTRACT_KEYS` 七格）。容错：解析失败 →
+    按 chat 兜底（宁可少干活，不硬猜）。
 
-    返回 {"workflow", "params", "tools", "note", "reply", "chat", "status"}。
+    ⚠️ **20261017 批 1 起，生产链路不再用它**。计划的唯一事实源是**对象那一态**
+    （`state["plan_obj"]`，由 `plan_state` 经 `normalize_plan` 写出）；这个函数现在读的
+    是**文本那一态**，而文本只剩三个消费方：narrator 提示词、trace、以及**旧 trace 的
+    考古与测试夹具**。`tests/test_plan_channel.py` 有一条源码锁钉住"`agent/` 下
+    （本文件除外）零个 `parse_plan` 代码调用点"——想再把它接回执行链路，得先删掉那条锁。
+
+    为什么留着不删：① 文本仍在产出（`plan_encode` 是 narrator 提示词与 trace 的输入），
+    ② 30 天保留窗口里的旧 trace 只有文本、没有对象，排障要能读回来，③ 十几个套件用它
+    造夹具。**它是"文本读器"，不是"计划的读端"**——两者的区别在 20261017 之前是模糊的，
+    而那正是"同一份计划两个答案"的源头。
+
     `status` 见 `PLAN_STATUS_VALUES`（批 3）：系统自己写的计划一定带 `STATUS=` 行，
-    缺了才走下面那段兼容派生（判据别依赖派生，它只是给旧文本留的路）。
+    缺了才走 `_derive_status` 的兼容派生（判据别依赖派生，它只是给旧文本留的路）。
     容错原则：所有"LLM 输出 → 程序消费"的边界都要能优雅降级——LLM 不是
     JSON 解析器，输出格式漂移是常态（解析失败 → 按 chat 兜底，宁可少干活）。
 
@@ -186,7 +328,7 @@ def parse_plan(raw: str) -> dict:
     （`extract_plan_fields`，20260926 为 JSON 漂移加的），随文本档一起删除。
     """
     m = re.search(r"WORKFLOW\s*[:=]\s*(\w+)", raw or "", re.IGNORECASE)
-    workflow = m.group(1) if m else "chat"
+    raw_workflow = m.group(1) if m else "chat"
     params = {}
     pm = re.search(r"PARAMS\s*[:=]\s*(\{.*?\})\s*\n", raw or "", re.IGNORECASE | re.DOTALL)
     if pm:
@@ -205,37 +347,19 @@ def parse_plan(raw: str) -> dict:
     status = sm.group(1).strip().lower() if sm else ""
     if status not in PLAN_STATUS_VALUES:
         status = ""
+    workflow = raw_workflow if raw_workflow in WORKFLOW_MAP else "chat"
     if not status:
-        # 兼容派生（20260926 批 3）：**只兜旧文本与手写夹具**。系统自己写的计划
-        # 一定有 STATUS 行（`plan_encode`），所以下面这段不会在常态里跑到——
+        # 兼容派生（20260926 批 3，20261017 搬进 `_derive_status`）：**只兜旧文本与
+        # 手写夹具**。系统自己写的计划一定有 STATUS 行（`plan_encode`，而它上游的
+        # `normalize_plan` 已经把值补全），所以这段不会在常态里跑到——
         # `tests/test_status_judgements.py` 有源码锁钉住这一点。
-        #
-        # 为什么不留空、非要派生一遍：留空 = 判据 fail-open，而"缺 STATUS"最可能
-        # 的来历正是**改造前留在 state 里的旧计划文本**——那时判据判的是注记措辞，
-        # 派生一遍等于把旧行为原样接上，不会因为升级而突然少拦一类（也不会突然
-        # 多拦——派生只认系统自己那三条注记的**固定前缀**，见 workflows.py）。
-        if tools:
-            status = "executed"
-        elif workflow == "chat":
-            status = "answer_only"
-        elif workflow == "navigate" and "不调用任何工具" in note:
-            # ⚠️ "未部署" 必须排在 "已下线" **之前**：`_IOT_OFF_NOTE` 里那句叮嘱
-            # （"不要说「已下线」"）本身含"已下线"三个字，先判它就会把"IoT 没装"
-            # 派生成"页面下线了"——正是这两个值分开要防的那件事，从这里漏回来。
-            if "未部署" in note:
-                status = "nav_iot_off"
-            elif "已下线" in note:
-                status = "nav_offline"
-            elif "无法识别" in note:
-                status = "nav_unresolved"
-            elif "不存在" in note:
-                status = "target_unreachable"
+        status = _derive_status(tools, workflow, note)
     return {
-        "workflow": workflow if workflow in WORKFLOW_MAP else "chat",
+        "workflow": workflow,
         "params": params,
         "tools": tools,
         "note": note,
         "reply": reply,
-        "chat": (workflow in WORKFLOW_MAP and WORKFLOW_MAP[workflow].chat) or workflow == "chat",
+        "chat": bool(WORKFLOW_MAP[workflow].chat),
         "status": status,
     }
