@@ -3,7 +3,8 @@
 
 产品级"plan 写进 workflow"的落地：执行步骤是模板化数据，不是模型编的自由文本。
 planner 只从本注册表选技能 + 填参数（受限规划，不再自由写 STEPS），
-instantiate_plan 把模板实例化为计划文本（含 TOOLS 行执行清单），execute 确定性逐条执行。
+instantiate_plan 把模板实例化为计划（两态一次写入：对象是唯一事实源、文本是渲染，
+含 TOOLS 行执行清单），execute 确定性逐条执行。
 
 导航映射表是本模块的单一事实来源（页面别名→路径，替代散落在 prompt 里的白名单）：
 planner 选 navigate 技能时能看到映射表，"去物联网平台"→ /device-console/ 的
