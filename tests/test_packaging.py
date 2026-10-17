@@ -438,6 +438,61 @@ check(f"⭐ `uv.lock` 的 `requires-python` == {PY_FLOOR}（生成物与声明�
 
 
 # ══════════════════════════════════════════════════════════════════════════
+print("\n⑦ 静态检查棘轮真的接在 CI 上，且它的三个量都只有一处事实源")
+
+_lint_gate = ROOT / "eval" / "lint_gate.py"
+_lint_base = ROOT / "eval" / "lint_baseline.json"
+check("eval/lint_gate.py 在位", _lint_gate.is_file())
+check("eval/lint_baseline.json 在位（棘轮的量就在这份账上）", _lint_base.is_file())
+
+# 版本按 dev 分组体取，理由同 ④ 里那段（别写 `dev = ["ruff==X"]` 那种一次就坏的正则）。
+RUFF_PIN = (re.search(r'"ruff==([0-9][^"]*)"', _dg_sec).group(1)
+            if re.search(r'"ruff==([0-9][^"]*)"', _dg_sec) else None)
+check("pyproject 的 dev 分组钉了 ruff 版本", RUFF_PIN is not None,
+      RUFF_PIN or "dependency-groups 里没有钉死的 ruff==")
+
+if _lint_base.is_file():
+    _lb = json.loads(_lint_base.read_text(encoding="utf-8"))
+    # 三个量都是"换了它就不是同一个量"（同 ④ 里 mypy 版本那一条的道理）：
+    # ruff 版本换规则实现；line-length 一条 E501 就占掉全仓六成条目；select 多一族当场多一片。
+    check(f"⭐ 基线的 ruff 版本 == dev 分组钉的（{RUFF_PIN}）",
+          _lb.get("ruff_version") == RUFF_PIN,
+          f"基线={_lb.get('ruff_version')} dev={RUFF_PIN}")
+    _ruff_sec = _section(PYPROJECT, "tool.ruff")
+    _ll = re.search(r"^line-length\s*=\s*(\d+)", _ruff_sec, re.M)
+    check(f"⭐ 基线的 line-length == pyproject 的（{_ll.group(1) if _ll else None}）",
+          _ll is not None and _lb.get("line_length") == int(_ll.group(1)),
+          f"基线={_lb.get('line_length')} pyproject={_ll.group(1) if _ll else None}")
+    # ⚠️ `select` 住在 `[tool.ruff.lint]`，**不是** `[tool.ruff]`——`_section` 按行首 `[`
+    # 截断，取错那一节会读到空串、判据当场红成"pyproject 是 None"（这条就是这么抓到的）。
+    _sel = re.search(r"^select\s*=\s*\[([^\]]*)\]",
+                     _section(PYPROJECT, "tool.ruff.lint"), re.M)
+    _sel_list = (re.findall(r'"([^"]+)"', _sel.group(1)) if _sel else None)
+    check(f"⭐ 基线的 select == pyproject 的（{_sel_list}）",
+          _sel_list is not None and _lb.get("select") == _sel_list,
+          f"基线={_lb.get('select')} pyproject={_sel_list}")
+    check("  基线里记着读数（total 与逐文件计数都在）",
+          isinstance(_lb.get("total"), int) and isinstance(_lb.get("by_file"), dict)
+          and bool(_lb["by_file"]), f"total={_lb.get('total')}")
+    # 逐文件计数之和必须等于 total：两个口径分岔时棘轮会悄悄量另一个东西
+    # （`lint_gate._counts` 里那条 ValueError 是运行时的同一道，这里是落盘的这一道）。
+    check("  逐文件计数之和 == total（账自己得自洽）",
+          sum(_lb["by_file"].values()) == _lb["total"],
+          f"和={sum(_lb['by_file'].values())} total={_lb['total']}")
+
+check("CI 有一步**会执行**的 eval/lint_gate.py（不是只在注释里提一句）",
+      "eval/lint_gate.py" in _eval_code2)
+check("  CI 那一行不手写 ruff 版本（版本只从 dev 分组来）",
+      "uvx ruff" not in _eval_code2 and "ruff==" not in _eval_code2)
+# 上面那条 `_eval_code2` 是**剥掉注释**之后的正文——本仓踩过"只在注释里提一句也算接线"
+# 的坑（`test_ci_suite_list.py` 头注那一段）。这里再补一条反控：文档里那两条待建/已建的
+# 措辞必须真的翻面，否则"落地说"只活在提交信息里。
+_lbd = (ROOT / "docs/lint-baseline.md").read_text(encoding="utf-8")
+check("  docs/lint-baseline.md 不再写着「机械闸（待建）」",
+      "机械闸（**待建**）" not in _lbd and "eval/lint_gate.py" in _lbd)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 print()
 if FAILED:
     print(f"❌ 失败 {len(FAILED)} 项：" + "、".join(FAILED))
