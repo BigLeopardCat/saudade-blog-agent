@@ -1413,7 +1413,8 @@ def _write_command_nudge(plan_obj: dict, user_msg, has_frames: bool,
 # re-export ⇒ 本文件剩的 6 处调用点、以及全仓 `from agent.graph import plan_state` 那
 # 几十处引用（含测试）一个都不用改。判据侧同步见 `tests/_ctx_src.plan_codec_src()`。
 # ⚠️ 改协议（加行、改分隔符、改 KEY 名）要去 `agent/plan_codec.py`，不是这里。
-from agent.plan_codec import parse_plan, plan_encode, plan_state  # noqa: E402,F401
+from agent.plan_codec import (  # noqa: E402,F401
+    normalize_plan, parse_plan, plan_encode, plan_state)
 
 # ---------------------------------------------------------------------------
 # 声称检查正则族（gate 确定性兜底用；作用域见 _claim_issue）
