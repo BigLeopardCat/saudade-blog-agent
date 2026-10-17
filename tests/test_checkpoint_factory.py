@@ -7,7 +7,7 @@
 §4.6 明说的"它从未积累过任何状态"正相反。重写之后必须证明两件事：**今天一次都不碰**
 （惰性），以及**任何"半成品接法"都炸得响**（不静默降级）。
 
-六条探针，每条都配了会红的那一半：
+七条探针，每条都配了会红的那一半：
   · ① **惰性**：不给 DSN ⇒ 返回 `None`，且**一次 import 都不发**——不是"import 完才发现
     没配再返回 None"，那已经晚了一步；
   · ② **反控**：给了合法 DSN ⇒ **绝不返回 None**。没有这一条，①可能只是恒真
@@ -27,7 +27,11 @@
     而别的判据一条都不会因此变红。裸 `g.compile()` 同样算违规，理由不同：实验臂
     （`agent/checkpoint_arm.py`）传进来的 saver 会被**静默忽略**，于是"没挂 saver"
     伪装成"checkpoint 没区别"，正是本件要防的那种失效；
-  · ⑥ **旧陷阱不许回来**：`agent/*.py` 的生产代码里再出现 `MemorySaver` 就红。
+  · ⑥ **旧陷阱不许回来**：`agent/*.py` 的生产代码里再出现 `MemorySaver` 就红；
+  · ⑦ **DSN 的来源只有一处**（20261017 补）：`build_checkpointer()` 不给参数时读
+    `settings.checkpoint_dsn`。把那一格临时拨成合法 DSN ⇒ **不给参数**的调用必须
+    **响亮抛**；拨回空 ⇒ 返回 `None`。没有这一条，那一格就是个"填了不生效、也不报错"
+    的幽灵旋钮（本仓在配置面上栽过五次）。
 
 用法：.venv/bin/python tests/test_checkpoint_factory.py
 """
@@ -252,6 +256,28 @@ _hits: list[str] = []
 for _p in sorted((ROOT / "agent").glob("*.py")):
     _hits += [f"{_p.name}:{h}" for h in _scan(_p.read_text(encoding="utf-8"))]
 check("agent/*.py 的**代码**里零引用", not _hits, f"又出现在 {_hits}")
+
+print("\n⑦ 缺省参数取自 `settings.checkpoint_dsn`（不是第二个写死的空串）")
+# 20261017：`config/settings.py` 加了 `checkpoint_dsn` 这一格，`build_checkpointer()` 不给
+# 参数时读它。这一条必须证明**那条通路真的通**：不通的话那一格就是幽灵旋钮——填了不生效、
+# 也不报错（本仓在配置面上栽过五次，见 `tests/test_settings_surface.py` 头注）。
+# 打的是**实例属性**：`config/__init__.py` 导出的就是那个单例，与 `agent/checkpoint.py`
+# `from config import settings` 拿到的是**同一个对象** ⇒ 测的是真通路，不是影子。
+from config import settings as _S  # noqa: E402
+
+_old_dsn = _S.checkpoint_dsn
+try:
+    _S.checkpoint_dsn = "postgresql://u@127.0.0.1/blog"
+    _loud = _raises(C.build_checkpointer)
+    check("拨成合法 DSN ⇒ **不给参数**也响亮抛（不是静默返回 None）",
+          _loud.startswith("RuntimeError:"), _loud[:90] or "（没抛 = 这一格是死的）")
+    _S.checkpoint_dsn = "   "
+    check("拨成纯空白 ⇒ 与 `build_checkpointer('   ')` 同一把尺子：None",
+          C.build_checkpointer() is None)
+    _S.checkpoint_dsn = ""
+    check("拨回空 ⇒ None（= 今天的行为）", C.build_checkpointer() is None)
+finally:
+    _S.checkpoint_dsn = _old_dsn
 
 print()
 if FAILS:
