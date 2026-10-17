@@ -19,6 +19,14 @@ pydantic-settings 按字段名定变量名，而那一位叫 `agent_early_stoppi
 `.env` 只喂 pydantic-settings、**不进进程环境** ⇒ 写进 `.env` 不生效。这一条不是缺陷
 （它们本就可以只走 systemd），**缺陷是它没被写下来过**——判据 ④ 钉的是 README 说了这件事。
 
+**20261017 把 ① 的尺子换掉了**（`_consumers`）：原先它是在整份源码文本上做 `\b字段名\b`
+的搜索，于是**注释与 docstring 里的提及**也算"有消费点"。真做了一次反控才发现：把
+`agent/checkpoint.py` 里那行 `dsn = settings.checkpoint_dsn` 改成写死的 `""`（字段真的
+成了幽灵旋钮），这一条**照样绿**——因为同一份文件的 docstring 里正当地写着这个字段名。
+现在改读 AST：只数名字（`.attr` / 裸名）、关键字实参名、以及**非 docstring** 的字符串
+字面量（最后那一支留给生成式取值，`rrf_k` / `agent_evidence` 等 7 个字段只以那种形态出现）。
+实测 50 个字段在新尺子下一个都不新红 ⇒ **只收紧、不误伤**；反控（把那一行改回写死）当场红。
+
 本套件只判"**面**"上的三件事，不判任何取值语义：**不读 `.env`**（本机那份是产线配置，
 读它就是在拿产线事实当判据），只看 `settings.py` 的字段声明与 `.env.example` 的键。
 秒级、无网络、不跑 LLM；由 `tests/run_all.py` 按磁盘枚举自动收。
@@ -27,6 +35,7 @@ pydantic-settings 按字段名定变量名，而那一位叫 `agent_early_stoppi
 """
 from __future__ import annotations
 
+import ast
 import pathlib
 import re
 import sys
@@ -71,14 +80,49 @@ _PROCESS_ONLY = {
 
 
 def _consumers(field: str) -> list[str]:
-    """这个字段被**哪个非测试文件**引用了（自己写一遍 grep，不依赖 shell）。"""
+    """这个字段被**哪个非测试文件**引用了（读 AST，不读源码文本）。
+
+    **20261017 换法**：此前是 `re.search(r"\\b" + field + r"\\b", 整份文本)` —— 它把
+    **注释与 docstring 里的提及**也算成"有消费点"。实测代价（真做了一次反控）：把
+    `agent/checkpoint.py` 里那行 `dsn = settings.checkpoint_dsn` 改成写死的 `""`
+    （字段真的成了幽灵旋钮）时，这一条**照样绿**——因为同一份文件的 docstring 里正当地
+    写着这个字段名。判据的落点要选判据、别选字面（同族纪律：读程序上 AST，读文件才用
+    正则；本仓"看着在跑、其实没跑"那一族）。
+
+    数三种**真引用**：名字（`settings.x` 的 `.attr`、裸名）、关键字实参名、以及
+    **非 docstring** 的字符串字面量——最后这一支是给**生成式取值**留的（`getattr(settings,
+    f"{p}_{s}")` 那种按名字拼的读法；`rrf_k` / `agent_evidence` 等 7 个字段只以这种形态
+    出现）。**排除 docstring** 正是这次改法的要点：写在文档里不算读过。实测 50 个字段在
+    新尺子下**一个都不新红**（= 只收紧、不误伤）。
+    """
     hits: list[str] = []
     for p in sorted(ROOT.rglob("*.py")):
         rel = p.relative_to(ROOT).as_posix()
         if rel.startswith(("tests/", "eval/", ".venv/")) or rel == "config/settings.py":
             continue
-        if re.search(r"\b" + field + r"\b", p.read_text(encoding="utf-8")):
-            hits.append(rel)
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+        except SyntaxError:      # 语法坏掉的文件由别的判据管，这里不当成"没人读"
+            continue
+        _docs = {d for n in ast.walk(tree)
+                 if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                                   ast.ClassDef))
+                 for d in [ast.get_docstring(n, clean=False)] if d}
+        _pat = re.compile(r"\b" + field + r"\b")
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Name) and n.id == field:
+                hits.append(rel)
+                break
+            if isinstance(n, ast.Attribute) and n.attr == field:
+                hits.append(rel)
+                break
+            if isinstance(n, ast.Call) and any(k.arg == field for k in n.keywords):
+                hits.append(rel)
+                break
+            if (isinstance(n, ast.Constant) and isinstance(n.value, str)
+                    and n.value not in _docs and _pat.search(n.value)):
+                hits.append(rel)
+                break
     return hits
 
 
