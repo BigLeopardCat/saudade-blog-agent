@@ -60,9 +60,9 @@ def check(name: str, ok: bool, extra: str = "") -> None:
         FAILED.append(name)
 
 
-def _plan(tool: str, args: dict, skill: str = "chat") -> dict:
+def _plan(tool: str, args: dict, workflow: str = "chat") -> dict:
     """一条 spec 的计划对象（判据只读 `tools` 里的参数，够用）。"""
-    return {"skill": skill, "params": dict(args),
+    return {"workflow": workflow, "params": dict(args),
             "tools": [f"{tool}({json.dumps(args, ensure_ascii=False)})"],
             "note": "x", "reply": "y"}
 
@@ -215,7 +215,7 @@ _msg_resp = AIMessage(content="", tool_calls=[{
     "args": {"name": "大笨狗", "evidence": [{"arg": "name", "quote": "标签「大笨狗」"}]}}])
 _dec = N.tool_calls_to_plan(_msg_resp, "admin")
 check("★ 摘走：evidence **不进 params**（漏进去会走 PARAMS= 计划文本、还会被 "
-      "check_skill_params 记成未知参数，把漂移探针淹掉）",
+      "check_workflow_params 记成未知参数，把漂移探针淹掉）",
       _dec is not None and "evidence" not in (_dec.params or {}), str(_dec and _dec.params))
 check("摘出来的引文进 `PlannerDecision.evidence`（归一成 (arg, quote) 对）",
       _dec.evidence == (("name", "标签「大笨狗」"),), str(_dec.evidence))
@@ -292,7 +292,7 @@ try:
     g.settings.agent_evidence = True
     _events.clear()
     _p = _plan("set_account_role", {"name": "小猫", "role": "admin"},
-               skill="account_set_role")
+               workflow="account_set_role")
     _ctx = SimpleNamespace(plan_obj=_p, user_msg="猫猫给用户小猫升级为管理员", state={},
                            decided=SimpleNamespace(evidence=(
                                ("name", "猫猫给用户小猫升级为管理员"),)),
@@ -346,7 +346,7 @@ try:
     _events.clear()
     _m2 = "把 git 和代码版本管理两个标签加到文章 16"
     _p2 = _plan("set_article_tags", {"article_id": 16, "add": ["git", "代码版本管理"]},
-                skill="article_tags")
+                workflow="article_tags")
     _f2, _ = g._evidence_fields(_p2, _m2)
     check("数组值**逐项**进影子（不是把整份数组当一格）",
           [(k, v, d) for _t, k, v, d in _f2] == [("add", "git", True),

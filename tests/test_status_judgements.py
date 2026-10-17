@@ -29,9 +29,9 @@ from agent.graph import (  # noqa: E402
     _FALLBACK_DOWN, _FALLBACK_GONE, _FALLBACK_UNDEPLOYED, _claim_issue, gate_node,
     parse_plan, plan_encode,
 )
-from agent.skills import (  # noqa: E402
-    PLAN_STATUS_ABSENCE_EXEMPT, PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, SKILLS,
-    SKILL_MAP, _IOT_OFF_NOTE, _param_problem_plan, instantiate_plan,
+from agent.workflows import (  # noqa: E402
+    PLAN_STATUS_ABSENCE_EXEMPT, PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, WORKFLOWS,
+    WORKFLOW_MAP, _IOT_OFF_NOTE, _param_problem_plan, instantiate_plan,
 )
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
@@ -66,7 +66,7 @@ check("确定性收尾轮（有帧）→ wrapped", _wrap_up_plan(True)["status"]
       _wrap_up_plan(True)["status"])
 check("确定性收尾轮（无帧）→ wrapped", _wrap_up_plan(False)["status"] == "wrapped",
       _wrap_up_plan(False)["status"])
-_pp = _param_problem_plan(SKILL_MAP["navigate"],
+_pp = _param_problem_plan(WORKFLOW_MAP["navigate"],
                           {"fixed": [], "unknown": [], "missing": ["target"], "bad": []})
 check("`_param_problem_plan`（**另一条**构造路径）→ param_missing",
       _pp["status"] == "param_missing", _pp["status"])
@@ -83,7 +83,7 @@ check("每个构造出的值都在闭集里（拼错一个词 = 判据静默失�
 # 所以这里不实例化，改用**系统自己那段注记**拼一份计划文本——顺带把
 # `parse_plan` 的兼容派生也验了：那段注记里含叮嘱"不要说「已下线」"，
 # 派生必须先认「未部署」，否则会把它派生成"页面下线了"（见 graph.py 那段注释）。
-_IOT_TXT = ("SKILL=navigate\nPARAMS={}\nTOOLS: （无）\n"
+_IOT_TXT = ("WORKFLOW=navigate\nPARAMS={}\nTOOLS: （无）\n"
             f"NOTE: {_IOT_OFF_NOTE}\nREPLY: x")
 check("IoT 未部署注记 → 兼容派生认 nav_iot_off（**不是** nav_offline）",
       parse_plan(_IOT_TXT)["status"] == "nav_iot_off", parse_plan(_IOT_TXT)["status"])
@@ -143,7 +143,7 @@ check("  ★ target_unreachable 下说「已下线」也不够（不许拿一句
 
 # IoT 未部署：真相是"本站从来没装这个可选件"——与"已下线"是两回事，兜底文案分开
 # （20261002 洞⑫）。`STATUS=` 明写出来，走的是与上面同一支判据（不看注记措辞）。
-_iot = _IOT_TXT.replace("SKILL=navigate", "SKILL=navigate\nSTATUS=nav_iot_off")
+_iot = _IOT_TXT.replace("WORKFLOW=navigate", "WORKFLOW=navigate\nSTATUS=nav_iot_off")
 o = _gate(_iot, "物联网平台在本站没有部署喵，那是可选件。")
 check("nav_iot_off + 如实说「没有部署」→ 放行（无兜底文案）",
       o.get("done") is True and not _fb(o), str(_fb(o))[:30])
@@ -160,7 +160,7 @@ check("  · 未部署那份兜底里**不许**出现「下线」（那是另一�
 
 # ── 反向锁：措辞一模一样、状态不是导航注记轮 ⇒ 判据**不许**动 ───────────────
 # 本套件的核心断言：只做正向的话，旧实现（grep 措辞）同样会通过。
-_WORDING = ("SKILL=navigate\nPARAMS={}\nTOOLS: （无）\n"
+_WORDING = ("WORKFLOW=navigate\nPARAMS={}\nTOOLS: （无）\n"
             "NOTE: 导航目标「友链」已下线：如实告知访客，不调用任何工具\n"
             "REPLY: x")
 check("旧文本（无 STATUS 行）仍按兼容派生认出 nav_offline（存量/夹具不因升级而漏拦）",
@@ -173,19 +173,19 @@ check("  ★ 兼容派生那条也真能驱动判据（不是只往字典里填�
 # （前提 = 本轮压根没碰导航，与 status 无关），拿它当夹具测的就不再是第 4 节了。
 # 下面这句两样都不沾——没有如实词（第 4 节若跑就会打回）、也没有到达声称（洞⑭ 不判）。
 _NOT_CLAIMING = "那个板块我平时不怎么去喵。"
-o = _gate(_WORDING.replace("SKILL=navigate", "SKILL=navigate\nSTATUS=wrapped"),
+o = _gate(_WORDING.replace("WORKFLOW=navigate", "WORKFLOW=navigate\nSTATUS=wrapped"),
           _NOT_CLAIMING)
 check("★ 措辞一字不差、状态是 wrapped ⇒ **不判**（判据真的搬走了）",
       o.get("done") is True and not _fb(o), str(_fb(o))[:30])
 
-o = _gate(_WORDING.replace("SKILL=navigate", "SKILL=chat\nSTATUS=answer_only"),
+o = _gate(_WORDING.replace("WORKFLOW=navigate", "WORKFLOW=chat\nSTATUS=answer_only"),
           "站内没有这个页面喵。")
 check("★ 措辞在、状态是 answer_only ⇒ 也不判（status 是白名单式判据，不是「有值就管」）",
       o.get("done") is True and not _fb(o), str(_fb(o))[:30])
 
 # 派生也认不出来（注记不带系统那三条固定前缀）⇒ 空串 ⇒ 整条跳过。
 # 宁可漏判也不误伤：这条判据是**白名单式**的，读不到就当作"这一轮不归我管"。
-o = _gate("SKILL=navigate\nPARAMS={}\nTOOLS: （无）\nNOTE: 目标页: 友链\nREPLY: x",
+o = _gate("WORKFLOW=navigate\nPARAMS={}\nTOOLS: （无）\nNOTE: 目标页: 友链\nREPLY: x",
           _NOT_CLAIMING)          # 同上：到达声称那一类归洞⑭，这里测的是第 4 节的 status
 check("status 派生也认不出（空串）⇒ 第 4 节整条跳过，不凭空判",
       o.get("done") is True and not _fb(o), str(_fb(o))[:30])
@@ -197,22 +197,22 @@ _REPLY = "站内没有关于这个话题的文章喵。"
 
 
 def _issue(plan):
-    return _claim_issue(_REPLY, plan.get("skill", "chat"), plan, False)
+    return _claim_issue(_REPLY, plan.get("workflow", "chat"), plan, False)
 
 
 for _st in PLAN_STATUS_ABSENCE_EXEMPT:
-    r = _issue({"skill": "navigate", "note": "", "status": _st})
+    r = _issue({"workflow": "navigate", "note": "", "status": _st})
     check(f"status={_st} ⇒ 豁免（那是系统给的确定性事实，narrator 只是转告）",
           r is None or r[0] != "site_absence_claim_without_tool", str(r and r[0]))
 for _st in ("executed", "answer_only", "wrapped", ""):
-    r = _issue({"skill": "chat", "note": "", "status": _st})
+    r = _issue({"workflow": "chat", "note": "", "status": _st})
     check(f"status={_st or '（空）'} ⇒ 不豁免（放宽的判据读不到时必须保持原样拦截）",
           bool(r) and r[0] == "site_absence_claim_without_tool", str(r and r[0]))
-r = _issue({"skill": "navigate", "status": "wrapped",
+r = _issue({"workflow": "navigate", "status": "wrapped",
             "note": "导航目标「友链」已下线：如实告知访客，不调用任何工具"})
 check("★ 措辞一字不差（含「不调用任何工具」）、状态是 wrapped ⇒ 照样拦",
       bool(r) and r[0] == "site_absence_claim_without_tool", str(r and r[0]))
-r = _issue({"skill": "chat", "status": "executed",
+r = _issue({"workflow": "chat", "status": "executed",
             "note": G._LEDGER_NOTE_PREFIX + "站内没有含「xx」的留言"})
 check("台账收尾轮的豁免仍在（走抬头那条判据，批 3 没动它）",
       r is None or r[0] != "site_absence_claim_without_tool", str(r and r[0]))
@@ -264,7 +264,7 @@ _miss = []
 for _p in (instantiate_plan("chat", {}), instantiate_plan("navigate", {"target": "留言板"}),
            _wrap_up_plan(False), instantiate_plan("navigate", {}), _pp):
     if not re.search(r"^STATUS=\w+$", plan_encode(_p), re.M):
-        _miss.append(_p.get("skill", "?"))
+        _miss.append(_p.get("workflow", "?"))
 check("所有构造路径的 plan_encode 产物都带 STATUS 行", not _miss, str(_miss))
 
 # ══════════════════════════════════════════════════════════════════
@@ -284,13 +284,13 @@ check("所有构造路径的 plan_encode 产物都带 STATUS 行", not _miss, st
 _UNACCOUNTED_OK = {"content_query"}
 print("\n④ 注册表扫描：零工具 ∧ 记账字段全空 的计划不许存在（D1 的派生锁）")
 _bad_plans = []
-for _sk in SKILLS:
+for _sk in WORKFLOWS:
     _p = instantiate_plan(_sk.name, {})
     if (not _p.get("tools") and not _p.get("dropped") and not _p.get("param_problem")
             and not _p.get("chat") and not _p.get("status")
             and _sk.name not in _UNACCOUNTED_OK):
         _bad_plans.append(_sk.name)
-check(f"注册表 {len(SKILLS)} 个技能里没有「不成账」的零工具计划",
+check(f"注册表 {len(WORKFLOWS)} 个技能里没有「不成账」的零工具计划",
       not _bad_plans, f"{_bad_plans}")
 check("  白名单只有 content_query 一条（往里加技能前先回答：它的零工具轮合法吗）",
       _UNACCOUNTED_OK == {"content_query"}, str(sorted(_UNACCOUNTED_OK)))
@@ -306,7 +306,7 @@ check("  空参的 tag_delete 落成 param_missing（不再是「不成账」）
       instantiate_plan("tag_delete", {})["status"] == "param_missing",
       instantiate_plan("tag_delete", {})["status"])
 # 兜底那一条（Layer B）住在 planner_node 里：这里只锁"接线在位"（形状判据 + 分两支的
-# 注记），整轮行为由 `test_skills.py` 的假 LLM 剧本锁（那里跑的是真 `planner_node`）。
+# 注记），整轮行为由 `test_workflows.py` 的假 LLM 剧本锁（那里跑的是真 `planner_node`）。
 _G_SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("Layer B 在 planner_node 里（按不成账形状收尾，不新增重决策通道）",
       '"unaccounted_plan"' in _G_SRC)

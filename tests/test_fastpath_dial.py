@@ -84,7 +84,7 @@ def _sys(ctx: str) -> HumanMessage:
 _PREV_WITH_LINK = ("给你找到啦：[文章向量空间图谱项目文档]"
                    "(https://saudade.site/article/19) 就是这篇～")
 
-_CHAT_PLAN = "SKILL=chat\nPARAMS={}\nREPLY: 这个交给模型决定就好"
+_CHAT_PLAN = "WORKFLOW=chat\nPARAMS={}\nREPLY: 这个交给模型决定就好"
 
 # 五个形状 × 一条一定能命中该快道的输入（页面上下文跟在后面的那条 System 消息里）。
 # `kind` = `record("planner", "fastpath", kind=…)` 那一格的名字；`tools` = 快道计划的
@@ -135,7 +135,7 @@ def test_on_arm_each_kind():
                                _cfg())
             plan = parse_plan(out["plan"])
             check(f"{kind}：命中（计划里是 {'+'.join(tools)}）",
-                  _tool_names(plan) == tools, f'{plan["skill"]} {plan["tools"]}')
+                  _tool_names(plan) == tools, f'{plan["workflow"]} {plan["tools"]}')
             check(f"  {kind}：零 LLM（快道没把问题退回模型）", len(llm.prompts) == 0,
                   str(len(llm.prompts)))
             _kinds = [k.get("kind") for a, k in events
@@ -179,8 +179,8 @@ def test_off_arm_each_kind():
                       len(llm.prompts) == calls, str(len(llm.prompts)))
                 check(f"  {kind}：计划是模型给的那张（不是快道那张 "
                       f"{'+'.join(case['tools'])}）",
-                      plan["skill"] == "chat" and _tool_names(plan) == [],
-                      f'{plan["skill"]} {plan["tools"]}')
+                      plan["workflow"] == "chat" and _tool_names(plan) == [],
+                      f'{plan["workflow"]} {plan["tools"]}')
                 _dial = [k.get("fastpath") for a, k in events
                          if a[:2] == ("planner", "context")]
                 check(f"  {kind}：`planner.context` 记着档位 = off"

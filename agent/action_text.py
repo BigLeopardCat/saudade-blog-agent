@@ -51,7 +51,7 @@ planner 菜单也不在任何技能模板里）没有臂：`receipt_action` 对�
 import re
 
 from agent import adminops as A          # 标签颜色/状态的既有中文词表（写工具问句共用）
-from agent.skills import NAV_MAP, _norm_id_list, _norm_true
+from agent.workflows import NAV_MAP, _norm_id_list, _norm_true
 # 分期报表的粒度词（周报/月报/年报）：**唯一一份**在 `agent/reports.py`（帧头与
 # 动作行必须同一套字），这里只取用、不另抄。
 from agent.reports import _KIND_CN
@@ -66,7 +66,7 @@ _EFFECT_CN = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}
 # planner 看到的就是这一行）。Rust 侧旧表是 `!= "off"` 当开，本模块统一到这张词表。
 _ON_WORDS = frozenset({"on", "开", "开启", "打开", "true", "1", "yes", "y"})
 
-# 无参只读点名工具 → 中文动作（planner 直接点名展开，见 skills._EXPLICIT_TOOLS）。
+# 无参只读点名工具 → 中文动作（planner 直接点名展开，见 workflows._EXPLICIT_TOOLS）。
 # 与 Rust `render_exec_row` 的同名臂同源；**这张表是唯一来源**，Rust 那张 legacy 表
 # 只对存量行生效。
 _NOARG_VERB = {

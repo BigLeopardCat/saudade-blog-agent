@@ -51,7 +51,7 @@ import agent.react_arm as R  # noqa: E402
 # 所以在这里存一份——**必须在任何一节跑之前**（模块级赋值按行序执行）。
 _REAL_SYSTEM_PROMPT = R._system_prompt
 from agent.principal import UNKNOWN, Principal  # noqa: E402
-from agent.react_line import RunLedger, SkillExecutor  # noqa: E402
+from agent.react_line import RunLedger, WorkflowExecutor  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -119,14 +119,14 @@ class _Boom(_Scripted):
         raise RuntimeError("模拟内层炸了")
 
 
-def _call(skill: str, **args) -> AIMessage:
+def _call(workflow: str, **args) -> AIMessage:
     """一次决策轮：**带一句正文**（「让我先看看」）——它绝不许上 messages 通道。
 
-    第一个形参叫 `skill` 而不是 `name`：写技能的参数**恰好就叫 `name`**（标签族/
+    第一个形参叫 `workflow` 而不是 `name`：写技能的参数**恰好就叫 `name`**（标签族/
     账号族都是），撞名会让 `_call("tag_delete", name="大笨狗")` 直接 TypeError。
     """
     return AIMessage(content="让我先看看", tool_calls=[
-        {"name": skill, "args": args, "id": f"call_{skill}", "type": "tool_call"}])
+        {"name": workflow, "args": args, "id": f"call_{workflow}", "type": "tool_call"}])
 
 
 NAV_CMD = {"kind": "navigate", "url": "/", "mode": "direct"}
@@ -324,7 +324,7 @@ check("有 execute update", bool(_node(frames, "execute")))
 check("有 model update", bool(_node(frames, "model")))
 _plan = _node(frames, "planner").get("plan_obj") or {}
 check("**`plan_obj` 嵌在 planner 那一格下面**（producer 读的是 `upd[\"plan_obj\"]`）",
-      _plan.get("skill") == "navigate", f"skill={_plan.get('skill')}")
+      _plan.get("workflow") == "navigate", f"workflow={_plan.get('workflow')}")
 check("TOOLS 行是**真工具**（`instantiate_plan` 展开过，不是技能名）",
       all("navigate_to(" in str(t) for t in (_plan.get("tools") or [])),
       str(_plan.get("tools")))
@@ -360,14 +360,14 @@ check("回执带 `ts`（生产形状）", bool(_rows) and isinstance(_rows[0].ge
 check("**回执带 `cmd`**（producer 据此发 `__CMD__` 帧；缺了那一族断言空转）",
       bool(_rows) and _rows[0].get("cmd") == NAV_CMD,
       str(_rows[0].get("cmd")) if _rows else "—")
-check("回执与生产同键（skill/tool/args/result/kind）",
+check("回执与生产同键（skill 是 `__EXEC__` 帧体键，随 Rust 那批改；tool/args/result/kind）",
       bool(_rows) and {"skill", "tool", "args", "result", "kind"} <= set(_rows[0]))
 check("工具真的只跑了一次（决策轮没有因为重渲染提示词而重复执行）", len(RAN) == 1, str(RAN))
 
 print("\n②b 一轮多条调用：合并成一份 plan_obj（`parallel_tool_calls` 未钉住的那条容差）")
 _p2 = R._plan_of([{"name": "navigate", "args": {"target": "首页"}, "id": "a"},
                   {"name": "navigate", "args": {"target": "设备"}, "id": "b"}], None)
-check("技能名用 `|` 连接（两条都留下，不丢）", "|" in str(_p2.get("skill")), _p2.get("skill"))
+check("技能名用 `|` 连接（两条都留下，不丢）", "|" in str(_p2.get("workflow")), _p2.get("workflow"))
 check("tools 取并集而不是覆盖", len(_p2.get("tools") or []) == 2, str(_p2.get("tools")))
 check("instantiate_plan 抛错时仍产一格（整轮不该因为一条坏调用消失）",
       bool(R._plan_of([{"name": "不存在的技能", "args": {}, "id": "c"}], None)))
@@ -400,7 +400,7 @@ try:
         scope=authz.SCOPE_ADMIN_CONSOLE, tool=t)
     RAN.clear()
     led = RunLedger()
-    _ex = SkillExecutor({"list_admin_notes": lambda **kw: _nav_tool(**kw)}, led,
+    _ex = WorkflowExecutor({"list_admin_notes": lambda **kw: _nav_tool(**kw)}, led,
                         role="admin", principal=Principal(uid=9, role="admin"))
     _ex.run("admin_notes", {})
     check("**技能入口拒绝时工具一次都没真的跑**", RAN == [], str(RAN))
@@ -421,12 +421,12 @@ try:
 
     print("\n③b 第二扇门**已经不存在**（20261016：`wrap_tools_with_receipts` 整体退场）")
     # 这一节原来的判据是"工具级入口（`executor is None`）也得有闸"——病是**两扇门只锁了
-    # 一扇**。现在那个入口连同它的包装层一起删了：`SkillExecutor.run` 是唯一的执行口，
+    # 一扇**。现在那个入口连同它的包装层一起删了：`WorkflowExecutor.run` 是唯一的执行口，
     # 闸在它里面。**判据因此从"第二扇门也锁上了"改成"第二扇门没有了"**——锁的是结构，
     # 不是某一行曾经长这样（批 1 记下的坑 6：锁的落点要选判据，别选字面）。
     #
     # 为什么这是**更强**的锁：只要那个包装层回来，就一定有人重新接上一条绕过
-    # `SkillExecutor` 的执行路径，而那条路径上没有任何一节在测它。
+    # `WorkflowExecutor` 的执行路径，而那条路径上没有任何一节在测它。
     # **落点选结构，不选字面**（批 1 的坑 6）：两个模块的 docstring 里都还写着那几个
     # 退场符号的名字（那是在讲历史，不是在用它们），所以判据**不能**是
     # `"…" not in src`——那会把"名字被提及"读成"门还在"。要判的是**它们不再是这里的
@@ -441,20 +441,20 @@ try:
           f"命中 {sorted((_gone & _line_fns) | ({'ConvergenceMiddleware'} & _line_cls))}")
     check("两个模块都不再 import `langchain.agents`（内层那张图这一层已经没有了）",
           "langchain.agents" not in _line_src and "langchain.agents" not in _arm_src)
-    check("`SkillExecutor` 不再有「没给执行器就自己跑」的那条路",
+    check("`WorkflowExecutor` 不再有「没给执行器就自己跑」的那条路",
           "executor is None" not in _line_src)
-    check("臂里**只有 `SkillExecutor.run` 一个执行口**（工具不被任何别处直接调用）",
+    check("臂里**只有 `WorkflowExecutor.run` 一个执行口**（工具不被任何别处直接调用）",
           _arm_src.count("executor.run(") == 1)
     # 光数 `executor.run(` 还不够——真工具表要是被别处拆开自己调，那一处不会经过
-    # `SkillExecutor`，闸与台账都不在。判据 = **工具表的消费方只有一个**，且必须是
-    # `SkillExecutor(...)` 那一处（不是"某一行长这样"：行可以重排，消费方数量不行）。
+    # `WorkflowExecutor`，闸与台账都不在。判据 = **工具表的消费方只有一个**，且必须是
+    # `WorkflowExecutor(...)` 那一处（不是"某一行长这样"：行可以重排，消费方数量不行）。
     _tool_uses = [ln.strip() for ln in _arm_src.splitlines()
                   if "_real_tools(" in ln and not ln.lstrip().startswith("def ")]
-    check("真工具表只交给一个消费方，而那个消费方建的正是 `SkillExecutor`"
+    check("真工具表只交给一个消费方，而那个消费方建的正是 `WorkflowExecutor`"
           "（没有第二条执行路径）",
           len(_tool_uses) == 1 and "_real_tools(config)" in _tool_uses[0]
-          and _arm_src.count("SkillExecutor(") == 1,
-          f"{_tool_uses} SkillExecutor×{_arm_src.count('SkillExecutor(')}")
+          and _arm_src.count("WorkflowExecutor(") == 1,
+          f"{_tool_uses} WorkflowExecutor×{_arm_src.count('WorkflowExecutor(')}")
 finally:
     authz.check = _orig_check  # type: ignore[assignment]
 
@@ -534,7 +534,7 @@ check("`parallel_tool_calls` 的口径偏差写在文件里（读读数的人得
       "parallel_tool_calls" in _arm_src)
 check("`RunLedger` 在每次 `stream()` 里**新建**（模块级常驻会把两次请求记到一本账上）",
       "ledger = RunLedger()" in _arm_src)
-_menu = R._skill_menu("user")
+_menu = R._workflow_menu("user")
 try:
     next(t for t in _menu if t.name == "chat").func(reply="x")
     check("菜单占位体被调用时抛错", False, "它没抛")
@@ -575,8 +575,8 @@ try:
           bool(_pc), str(sorted(_pex))[:120])
     check("卡面带问句/按钮/令牌/到期时刻（producer 逐格读，缺一格前端就是残卡）",
           all(_pc.get(k) for k in ("q", "opts", "token", "exp")), str(sorted(_pc)))
-    check("令牌里签的技能是 `tag_delete`（`_plan_skill` 读 `plan_obj`，空串 ⇒ 拒签 ⇒ 无卡）",
-          (_confirm.inspect(str(_pc.get("token") or "")) or {}).get("skill") == "tag_delete",
+    check("令牌里签的技能是 `tag_delete`（`_plan_workflow` 读 `plan_obj`，空串 ⇒ 拒签 ⇒ 无卡）",
+          (_confirm.inspect(str(_pc.get("token") or "")) or {}).get("workflow") == "tag_delete",
           str(_confirm.inspect(str(_pc.get("token") or "")))[:100])
     check("`pending_action` 也在（`__PENDING__` 那条帧的输入；`require_frame_prefix` 要两条都发）",
           bool((_pex.get("pending_action") or {}).get("task_id")))
@@ -600,11 +600,11 @@ try:
           not _last_node(_gf, "execute").get("pending_confirm"))
     RAN.clear()
     # 令牌形状必须是**生产真会产出的那种**（`confirm.verify` 出来的 payload）：
-    # `{"skill": …, "specs": [{"tool": …, "args": …}]}`。此前这里喂的是
-    # `{"skill": "tag_delete"}`（没有 `specs`）——生产**从不产这种形状**，它当初能过
+    # `{"workflow": …, "specs": [{"tool": …, "args": …}]}`。此前这里喂的是
+    # `{"workflow": "tag_delete"}`（没有 `specs`）——生产**从不产这种形状**，它当初能过
     # 只是因为旧判据是"令牌在场就放行"。判据改成 `_grant_covers` 之后这种形状
     # 合理地判成"不覆盖"（`specs` 空 ⇒ 假），所以夹具要跟着改成真的。
-    _G_OK = {"skill": "tag_delete",
+    _G_OK = {"workflow": "tag_delete",
              "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]}
     _gf2 = _run([_call("tag_delete", name="大笨狗")], {"delete_tag": _nav_tool},
                 principal=ADMIN0, msg=W_MSG, grant=_G_OK)
@@ -617,7 +617,7 @@ try:
     # ⇒ 不是签名体里那一件 ⇒ 照常弹卡。旧判据（`not self.grant`）会在这里放行。
     _gf3 = _run([_call("tag_delete", name="别的标签")], {"delete_tag": _nav_tool},
                 principal=ADMIN0, msg=W_MSG,
-                grant={"skill": "tag_delete",
+                grant={"workflow": "tag_delete",
                        "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]})
     check("令牌是**另一件**（同工具换目标）⇒ 一件都不执行、照常弹卡",
           RAN == [] and bool(_last_node(_gf3, "execute").get("pending_confirm")),
@@ -658,7 +658,7 @@ _line_src2 = (ROOT / "agent" / "react_line.py").read_text(encoding="utf-8")
 # `not _grant_covers(state, spec)`（两次收窄，各对应一次生产事故）⇒ 这条锁**把漂移
 # 永久化了**：它越绿，臂离生产越远。现在落点改成"调的是生产那一份判据"，字符串只是
 # 那个调用的写法；判据本身的行为面由 `tests/test_frame_contract.py` ⑨e–⑨j 逐格锁住
-# （无令牌/正是这一件/另一件/只有 skill 没 specs/已执行过/本线跑过）。
+# （无令牌/正是这一件/另一件/只有 workflow 没 specs/已执行过/本线跑过）。
 check("同意闸用的是**生产那三条判据本身**（需要同意 ∧ 令牌不覆盖这一件 ∧ 无命令语），"
       "不另立一套",
       "authz.requires_consent(self.principal, name)" in _line_src2
@@ -880,11 +880,11 @@ _ab_spec.loader.exec_module(_ab)
 # 两处**实测过的**折算（20261011）：互为子串的名字不再互相污染，条件工具不再漏
 check("`account_unfreeze` 只折算出一件工具（旧口径会把 `freeze_account` 一起白送——"
       "互为子串，方向还正好相反）",
-      _ab._SKILL_TOOLS.get("account_unfreeze") == {"unfreeze_account"},
-      repr(sorted(_ab._SKILL_TOOLS.get("account_unfreeze") or ())))
+      _ab._WORKFLOW_TOOLS.get("account_unfreeze") == {"unfreeze_account"},
+      repr(sorted(_ab._WORKFLOW_TOOLS.get("account_unfreeze") or ())))
 check("`article_tags` 折算进条件工具 `create_tag`（`extra_plan_tools`，旧口径永远漏）",
-      "create_tag" in (_ab._SKILL_TOOLS.get("article_tags") or set()),
-      repr(sorted(_ab._SKILL_TOOLS.get("article_tags") or ())))
+      "create_tag" in (_ab._WORKFLOW_TOOLS.get("article_tags") or set()),
+      repr(sorted(_ab._WORKFLOW_TOOLS.get("article_tags") or ())))
 check("参数里的工具名按**值**精确取（同样不许子串互串）",
       _ab._tools_in_args({"a": "unfreeze_account", "b": ["list_talks"]})
       == {"unfreeze_account", "list_talks"},
@@ -1141,7 +1141,7 @@ finally:
 #
 # 现场（20261012 01:49 那轮全量，GOLDEN_ARM=react）：`admin_board_audit_reviewed_refusal`
 # 报红，理由逐字是「本轮没有 planner.ledger_frame 事件 —— 待办台账**没摆上桌**」，
-# 而**两臂那一轮的行为逐字相同**——回复正文一字不差，确认卡载荷的 `skill`
+# 而**两臂那一轮的行为逐字相同**——回复正文一字不差，确认卡载荷的 `workflow`
 # （`board_audit`）/`tool`（`audit_board_comment`）/`args`（`{"talk_id": 44,
 # "verdict": "reject"}`）三项全同。红的是**证据通道**，不是行为。
 #

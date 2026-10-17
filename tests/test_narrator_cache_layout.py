@@ -64,8 +64,8 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 
 
 _MSG = "这篇讲了什么"
-_PLAN = "SKILL=content_query\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）"
-_PLAN2 = "SKILL=chat\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）"
+_PLAN = "WORKFLOW=content_query\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）"
+_PLAN2 = "WORKFLOW=chat\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）"
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
 
@@ -184,14 +184,14 @@ def main() -> int:
     check("头里有人设", G.BLOG_ASSISTANT_PROMPT[:40] in head)
     check("头里有叙述纪律", G.NARRATOR_DISCIPLINE in head, f"{len(G.NARRATOR_DISCIPLINE)} 字")
     check("头里**没有**本轮计划文本（`{plan}` 那一半已经被搬走）",
-          "SKILL=content_query" not in head)
+          "WORKFLOW=content_query" not in head)
 
     print("\n② 末条 = 变化段，本轮计划文本在这里")
     tail = _text(wire[-1])
     _state = {"messages": t1, "plan": _PLAN, "receipts": []}
     _real_plan = G._narrator_plan(_state, _CFG)
     check("末条是 SystemMessage", isinstance(wire[-1], SystemMessage), type(wire[-1]).__name__)
-    check("变化段里有本轮计划文本", "SKILL=content_query" in tail)
+    check("变化段里有本轮计划文本", "WORKFLOW=content_query" in tail)
     check("变化段用的是 `_narrator_plan` 那一份（没换来源）",
           tail.startswith(_real_plan), _real_plan.splitlines()[0])
     # **拆分零改动**这条不能在"渲染后"比：`_full_prompt` 的其余槽位是占位值，真的那份
@@ -240,7 +240,7 @@ def main() -> int:
           f"公共前缀 {new_cp} 字 / 头 {len(head)} + 历史 {hist_chars}")
     check("  反控：旧装配（上下文块在首位）的公共前缀**只有稳定头**",
           old_cp < len(head) + 100, f"公共前缀 {old_cp} 字")
-    # 反控臂多算的那几个字是两份计划文本的公共开头（`SKILL=`，6 字）——不是历史。
+    # 反控臂多算的那几个字是两份计划文本的公共开头（`WORKFLOW=`，6 字）——不是历史。
     check("  两者相差的就是这次改动挣回来的量（≈ 整段历史）",
           new_cp - old_cp >= hist_chars - 10, f"差 {new_cp - old_cp} 字（历史 {hist_chars} 字）")
 

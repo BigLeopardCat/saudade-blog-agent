@@ -1,5 +1,8 @@
 # ADR-0003：native 档一轮只发一份技能表（技能块去重）
 
+
+> ⚠️ 20261017 起 `skill` 已改名为 **`workflow`**（`agent/skills.py` → `agent/workflows.py`、`tests/test_skills.py` → `tests/test_workflows.py`、`tests/test_slim_skills.py` → `tests/test_slim_workflows.py`；计划 IR `SKILL=` → `WORKFLOW=`）。本文档保留**当时的名字**，不回溯改写；读它时把 skill 读作 workflow 即可。
+
 - **状态**：已采纳（20260927）
 - **背景文档**：`docs/native-toolcalls-mainline.md`、`docs/adr/adr-0001-*.md`（接缝在技能级）
 - **影响范围**：`agent/skills.py`（`build_planner_context(slim=)`、`_skill_plan_seq`、

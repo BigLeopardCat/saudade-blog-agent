@@ -51,12 +51,12 @@ SENT_2 = ("我能确定的是：他的申请还在待处理队列里（账号「
 
 # 现场那条回执（写族、checker PASS、非 noop）与那份计划（**计划里没有写**——
 # 这正是供给侧与判据侧打架的那条缝，见 `_round_fact_note` ②）。
-_RECEIPT = {"skill": "quota_approve", "tool": "approve_quota_request",
+_RECEIPT = {"workflow": "quota_approve", "tool": "approve_quota_request",
             "args": {"user_id": 5},
             "result": "已批准账号「niuniu」的额度重置申请，他的额度现在读数是 剩 500/500",
             "ts": 0.0}
-_CHAT_PLAN = "SKILL=chat\nTOOLS: （无）\nSTATUS=answer_only"
-_WRITE_PLAN = ('SKILL=quota_approve\nPARAMS: {}\n'
+_CHAT_PLAN = "WORKFLOW=chat\nTOOLS: （无）\nSTATUS=answer_only"
+_WRITE_PLAN = ('WORKFLOW=quota_approve\nPARAMS: {}\n'
                'TOOLS: approve_quota_request({"user_id": 5})\nSTATUS=executed')
 
 # 一个写回执归一化后的签名（`noop_specs` 里存的就是 `list(_spec_signature(...))`）
@@ -74,7 +74,7 @@ def _facts(**kw) -> "g.RoundFacts":
 
 def _issue(text: str, facts=None, **kw):
     """按现场状态喂进声称闸（`facts=None` ⇒ 走老形参现推那条路，与生产同源）。"""
-    args = dict(skill="quota_approve", plan={}, frames_exist=True, has_popup=False,
+    args = dict(workflow="quota_approve", plan={}, frames_exist=True, has_popup=False,
                 receipts=[_RECEIPT], noop_specs=[], page_ctx="", role="admin")
     args.update(kw)
     if facts is not None:
@@ -118,13 +118,13 @@ check("边界：**缺 `noop_specs`** ⇒ 从严，写回执全算真改动（cha
 
 f_blk = g._round_facts({"receipts": [_RECEIPT],
                         "blocked": [{"spec": "x", "tool": "audit_board_comment",
-                                     "reason": "r", "skill": "s", "result": ""},
+                                     "reason": "r", "workflow": "s", "result": ""},
                                     {"spec": "y", "tool": "search_notes", "reason": "r",
-                                     "skill": "s", "result": ""}]})
+                                     "workflow": "s", "result": ""}]})
 check("blocked_writes 只收**写族**（`search_notes` 那种读工具不算）",
       f_blk.blocked_writes == ("audit_board_comment",))
 
-f_g = g._round_facts({"confirm_grant": {"skill": "quota_approve"},
+f_g = g._round_facts({"confirm_grant": {"workflow": "quota_approve"},
                       "receipts": [_RECEIPT]})
 check("granted 档：`confirm_grant` 在场 + 回执有写 ⇒ 两个字段同时为真",
       f_g.granted is True and f_g.ok_writes == ("approve_quota_request",))
@@ -212,7 +212,7 @@ check("`_replan_note` 对两族给**同一份**提示（「这一轮是真的执
 print()
 print("⑥ 供给侧（预防这一侧）：几条被账甲顶掉的假事实")
 check("`_round_fact_note` ①：`confirm_grant` 在场 ⇒ 仍是那条快照事实（逐字保留）",
-      g._round_fact_note({"confirm_grant": {"skill": "s"}}) == g._CONFIRM_ROUND_NOTE)
+      g._round_fact_note({"confirm_grant": {"workflow": "s"}}) == g._CONFIRM_ROUND_NOTE)
 note_seam = g._round_fact_note({"plan": _CHAT_PLAN, "receipts": [_RECEIPT]})
 check("②**计划没写、回执却有写**那条缝 ⇒ 补一条账甲事实（这正是打架的那一轮）",
       "账甲事实（本轮）" in note_seam and "已经执行并复核通过" in note_seam)

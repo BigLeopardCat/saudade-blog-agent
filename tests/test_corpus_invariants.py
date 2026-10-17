@@ -218,11 +218,11 @@ def test_i1_i2_i4_minimal():
     check("I1 无回执自己写标签 → invented",
           [x["kind"] for x in invented["i1"]] == ["invented"], str(invented["i1"]))
     i2 = CI.scan_one(_trace(
-        _ev("planner", "decision", skill="navigate", tools=[], round=0, status="refused")))
+        _ev("planner", "decision", workflow="navigate", tools=[], round=0, status="refused")))
     check("I2 零执行的规划交给 narrator → 命中且分档「记账」（status 合法即系统记了账）",
           len(i2["i2"]) == 1 and i2["i2"][0]["bucket"] == "记账", str(i2["i2"]))
     i2_old = CI.scan_one(_trace(
-        _ev("planner", "decision", skill="navigate", tools=[], round=0)))
+        _ev("planner", "decision", workflow="navigate", tools=[], round=0)))
     check("I2 批 3 之前的 trace（无 status 字段）→ 分档「无字段」",
           i2_old["i2"][0]["bucket"] == "无字段", str(i2_old["i2"]))
     i4 = CI.scan_one(_trace(_ev("gate", "fallback", issue="cmd_prefix", clause="x")))

@@ -84,7 +84,7 @@ sequenceDiagram
 
 ### 1. 受限规划，而不是自由 ReAct
 
-`agent/skills.py` 维护技能注册表。planner 只能选择注册技能、填写参数并生成调用清单；`instantiate_plan()` 再做模板展开和白名单校验。
+`agent/workflows.py` 维护技能注册表。planner 只能选择注册技能、填写参数并生成调用清单；`instantiate_plan()` 再做模板展开和白名单校验。
 
 工具调用有三种入口：
 
@@ -184,7 +184,7 @@ saudade-blog-agent/
 │   ├── plan_codec.py      计划文本契约的编解码（plan_encode / plan_state / parse_plan）
 │   ├── tool_specs.py      执行清单条目的解析与去重裁剪（_tool_args / _trim_done_reads 等）
 │   ├── repeat_guard.py    逐字复读判据（_repeat_reason / _recent_ai_replies 等，gate 1b）
-│   ├── skills.py          技能注册表、计划模板和业务映射
+│   ├── workflows.py          技能注册表、计划模板和业务映射
 │   ├── planner_llm.py     技能表 ↔ API tools/tool_calls 的接线层
 │   ├── authz.py           scope 权限模型
 │   ├── principal.py       调用者身份（uid/role/source）的唯一构造点
@@ -236,8 +236,8 @@ uv sync
 # L0 离线、秒级、无 LLM、无网络——整个秒级套件
 .venv/bin/python tests/run_all.py
 
-# L0 局部（-k 按文件名筛选；改技能注册表/计划契约后至少跑 skills + authz + confirm）
-.venv/bin/python tests/run_all.py -k skills
+# L0 局部（-k 按文件名筛选；改技能注册表/计划契约后至少跑 workflows + authz + confirm）
+.venv/bin/python tests/run_all.py -k workflows
 # 套件清单**只有 run_all.py 一处**（按磁盘枚举）：加套件不用改 CI、不用改夜间脚本、不用改本文。
 
 # L0 顺带出一份覆盖率报告：**非门禁、不进 CI**，不设阈值、红了也拦不住任何东西。

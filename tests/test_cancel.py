@@ -12,7 +12,7 @@
      调用自然结束才在**下一个检查点**生效——但"下一个检查点"一定是拦得住的，
      所以"用户走了还写设备"这件事不会发生。
 
-纯函数 / 无网络 / 不起图（直接调节点函数，与 tests/test_skills.py 同款）。
+纯函数 / 无网络 / 不起图（直接调节点函数，与 tests/test_workflows.py 同款）。
 """
 import sys
 import threading
@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 
 import agent.graph as g
 from agent.graph import AgentCancelled, execute_node, gate_node, model_node, planner_node, reflector_node
-from agent.skills import instantiate_plan
+from agent.workflows import instantiate_plan
 from agent.graph import plan_encode
 from _planner_stub import bind_tools_stub, toolcall_reply
 
@@ -145,14 +145,14 @@ def test_cancel_during_blocking_llm():
         这次调用**照常返回**（LLM 调用本身不可打断），节点自己也照常产出计划。
 
         点名的工具必须是白名单内的：白名单外的点名会被剔空，而 20260921 起剔空会
-        触发确定性纠偏/收尾（见 test_skills.test_drop_correction）——那会把计划
+        触发确定性纠偏/收尾（见 test_workflows.test_drop_correction）——那会把计划
         改写掉，这条用例就测不到"取消不打断 LLM 调用"这件事了。"""
 
         bind_tools = bind_tools_stub      # planner 先 bind_planner_tools 再 invoke（见 _planner_stub）
 
         def invoke(self, *a, **kw):
             ev.set()
-            return toolcall_reply('SKILL=content_query\nPARAMS={"calls": [{"tool": "search_notes",'
+            return toolcall_reply('WORKFLOW=content_query\nPARAMS={"calls": [{"tool": "search_notes",'
                                 ' "args": {"keyword": "取消"}}]}')
 
     orig_llm = g.get_llm

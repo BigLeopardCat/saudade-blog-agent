@@ -12,7 +12,7 @@
   · `react_assets`：`create_agent` ＋**资产装满**（45 个技能级 schema ＋ 当轮真 planner
     提示词）——结构与资产的差值；
   · `react_line`：上一个 ＋ 本分支的两件（收敛判据 `ConvergenceMiddleware`、工具级回执
-    `SkillExecutor`）——**本分支要证的东西**。
+    `WorkflowExecutor`）——**本分支要证的东西**。
 
 ## 安全
 
@@ -39,7 +39,7 @@ args_schema，函数体只返回假结果，**任何真写都不会发生**；`p
   · **工具名折算不再扫子串**：旧写法 `{n for n in TOOL_NAMES if n in json.dumps(plan)}`
     一个子串扫过去，互为子串的两个名字一起命中。实测：`account_unfreeze` 的模板里
     只有 `unfreeze_account`，旧口径却同时给出 `freeze_account`（**白送一次命中，方向
-    还是反的**）。改成读结构化的 `Skill.plan`（`list[(工具名, 参数模板)]`）＋
+    还是反的**）。改成读结构化的 `Workflow.plan`（`list[(工具名, 参数模板)]`）＋
     `extra_plan_tools` ⇒ `account_unfreeze` 只剩一件，`article_tags` 反过来**多出**
     `create_tag`（条件工具，旧口径永远折算不出来）。
   · **两条 ReAct 臂不再共用 planner 的提示词**：此前 monkeypatch `bind_planner_tools` 抓
@@ -75,7 +75,7 @@ import agent.graph as G  # noqa: E402
 import agent.react_arm as RA  # noqa: E402
 from agent.planner_llm import build_tool_schema  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from agent.skills import SKILLS  # noqa: E402
+from agent.workflows import WORKFLOWS  # noqa: E402
 from models.llm import get_llm  # noqa: E402
 from tools import get_all_tools  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
@@ -138,14 +138,14 @@ SENTS = [
 TOOL_NAMES = {t.name for t in get_all_tools()}
 
 
-def _tools_of_skill(s: object) -> set[str]:
+def _tools_of_workflow(s: object) -> set[str]:
     """技能被展开后**真正落到哪些工具**——从结构化模板取，不扫字符串。
 
     旧写法是 `{n for n in TOOL_NAMES if n in json.dumps(s.plan)}`：一个子串扫过去，
     互为子串的两个工具名一起命中。**实测复现过**（20261011）：`account_unfreeze` 的模板
     里只出现 `unfreeze_account`，那份旧代码却同时返回
     `{'freeze_account', 'unfreeze_account'}` —— 白送一次命中，方向还是反的。
-    `Skill.plan` 本来就是 `list[tuple[工具名, 参数模板]]`，取 `[0]` 即可；
+    `Workflow.plan` 本来就是 `list[tuple[工具名, 参数模板]]`，取 `[0]` 即可；
     `extra_plan_tools`（条件工具，如 `article_tags` 的 `create_tag`）也算数，
     否则那一支永远折算不出来。
     """
@@ -157,7 +157,7 @@ def _tools_of_skill(s: object) -> set[str]:
 # 技能 → 工具名（技能被展开后"真正落到哪些工具"由此折算，三臂才可比：
 # `react_assets` 只看得见技能名，`planner` 看得见计划文本，`react_line` 看得见台账
 # ——三种口径统一折算成工具名再比）
-_SKILL_TOOLS: dict[str, set[str]] = {s.name: _tools_of_skill(s) for s in SKILLS}
+_WORKFLOW_TOOLS: dict[str, set[str]] = {s.name: _tools_of_workflow(s) for s in WORKFLOWS}
 
 
 def _tools_in_args(args: object) -> set[str]:
@@ -165,7 +165,7 @@ def _tools_in_args(args: object) -> set[str]:
 
     这一格不能整段删：数据工具点名族（`content_query` 的 `tools`/`calls`）**确实**把
     工具名当参数值传（"留言板里有没有聊过 X"要成对点名 `list_guestbook` 与 `list_talks`）。
-    但旧写法是 `n in json.dumps(args)`——与上面 `_SKILL_TOOLS` 同一个病：参数里出现
+    但旧写法是 `n in json.dumps(args)`——与上面 `_WORKFLOW_TOOLS` 同一个病：参数里出现
     `unfreeze_account` 会让 `freeze_account` 一起命中。字符串按逗号/空白切开逐段比对，
     既是"点名"的原意，也不会再互相串味。
     """
@@ -205,14 +205,14 @@ def _stub_text(name: str) -> str:
 def raw_stubs() -> dict:
     """65 个裸工具 → 同名可调用体（工具级回执那条路要用）。
 
-    ⚠️ 必须吃 `**kwargs`：`SkillExecutor` 是 `fn(**args)` 调的，签名收不下就会
+    ⚠️ 必须吃 `**kwargs`：`WorkflowExecutor` 是 `fn(**args)` 调的，签名收不下就会
     抛 TypeError —— 而那是**被包装层兜成错误帧**的（不会炸图），于是症状是
     "每个工具都 BLOCK error_frame"，看起来像判据在开火，其实是桩写错了。
     """
     return {t.name: (lambda *a, _n=t.name, **k: _stub_text(_n)) for t in get_all_tools()}
 
 
-def skill_stubs() -> list:
+def workflow_stubs() -> list:
     """45 个**技能级** schema 的桩（臂 C′/D 的菜单：与 planner 看到的是同一份）。"""
     out = []
     for item in build_tool_schema("admin"):
@@ -241,15 +241,15 @@ def run_planner(msg: str, tid: str) -> dict:
         out["error"] = f"{type(e).__name__}: {e}"
     ev = trace_mod.events_of(tid)
     dec = [e for e in ev if e.get("node") == "planner" and e.get("event") == "native_decision"]
-    skills = [str(e.get("calls") or "") for e in dec]
+    workflows = [str(e.get("calls") or "") for e in dec]
     # ⚠️ 工具名**只能**从计划文本的 TOOLS 行取：`native_decision.calls` 里只有技能名，
     # 读族的工具全在 PARAMS 里 —— 读那格会把「我有哪些未读通知」误记成"零调用"。
     plan_txt = "".join(str(upd.get(k) or "") for k in ("plan",))
     tools = {n for n in re.findall(r"([a-z_]{4,})\s*\(", plan_txt) if n in TOOL_NAMES}
-    for s in skills:
+    for s in workflows:
         if s in TOOL_NAMES:
             tools.add(s)
-    out.update(skills=skills, tools=sorted(tools), calls=len([s for s in skills if s]),
+    out.update(workflows=workflows, tools=sorted(tools), calls=len([s for s in workflows if s]),
                rounds=len(dec))
     return out
 
@@ -277,8 +277,8 @@ def _collect(msgs: list, out: dict) -> None:
             for c in (m.tool_calls or []):
                 calls.append(str(c.get("name") or ""))
                 out["_raw"] |= _tools_in_args(c.get("args") or {})
-                out["_raw"] |= _SKILL_TOOLS.get(str(c.get("name") or ""), set())
-    out["skills"], out["calls"], out["rounds"] = calls, len(calls), n_ai
+                out["_raw"] |= _WORKFLOW_TOOLS.get(str(c.get("name") or ""), set())
+    out["workflows"], out["calls"], out["rounds"] = calls, len(calls), n_ai
 
 
 def _collect_line(last: dict, plans: list, out: dict) -> None:
@@ -290,7 +290,7 @@ def _collect_line(last: dict, plans: list, out: dict) -> None:
 
       · **技能名**只在逐轮的 `plan_obj["calls"]` 里 ⇒ 得把每一格 `values` 都收一遍
         （只看最后一份会漏掉前几轮）；
-      · **真工具名**只在工具帧（`ToolMessage.name`）里 ⇒ 直接收，**比 `_SKILL_TOOLS`
+      · **真工具名**只在工具帧（`ToolMessage.name`）里 ⇒ 直接收，**比 `_WORKFLOW_TOOLS`
         折算更准**（那张表是给"只看得到技能名"的 `create_agent` 臂用的）。
 
     两处都收，`tools` 才是"这一句真的调了哪些工具"。
@@ -300,11 +300,11 @@ def _collect_line(last: dict, plans: list, out: dict) -> None:
     out["_raw"].discard("")
     for po in plans:
         for c in (po.get("calls") or []):
-            name = str(c.get("skill") or "")
-            out["skills"].append(name)
+            name = str(c.get("workflow") or "")
+            out["workflows"].append(name)
             out["_raw"] |= _tools_in_args(c.get("params") or {})
-            out["_raw"] |= _SKILL_TOOLS.get(name, set())
-    out["calls"] = len([s for s in out["skills"] if s])
+            out["_raw"] |= _WORKFLOW_TOOLS.get(name, set())
+    out["calls"] = len([s for s in out["workflows"] if s])
     out["rounds"] = len(plans)
 
 
@@ -321,10 +321,10 @@ def run_react(sent: str, sys_prompt: str, *, line: bool) -> dict:
       · **一次运行一本账**：`make_ctx` 是 `react_ctx` 的唯一构造点，从 `configurable`
         注入（`ReactGoldenArm.stream` 认这一格；生产与单测都不传，各自现建一份）。
     """
-    out = {"error": "", "skills": [], "tools": [], "calls": 0, "text": "", "capped": False,
+    out = {"error": "", "workflows": [], "tools": [], "calls": 0, "text": "", "capped": False,
            "rounds": 0, "ledger": None, "_raw": set()}
     llm = get_llm(**DECODE)
-    stubs = SKILL_STUBS
+    stubs = WORKFLOW_STUBS
     plans: list = []
     if line:
         RA._llm = lambda: llm              # noqa: E731 —— 同解码（见 docstring）
@@ -366,7 +366,7 @@ def run_react(sent: str, sys_prompt: str, *, line: bool) -> dict:
     return out
 
 
-SKILL_STUBS: list = []
+WORKFLOW_STUBS: list = []
 RAW_STUBS: dict = {}
 ledger_holder: dict = {}
 
@@ -481,8 +481,8 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 句（试跑用）")
     ap.add_argument("--out", default="/tmp/react_line_ab.json")
     a = ap.parse_args()
-    global SKILL_STUBS, RAW_STUBS
-    SKILL_STUBS, RAW_STUBS = skill_stubs(), raw_stubs()
+    global WORKFLOW_STUBS, RAW_STUBS
+    WORKFLOW_STUBS, RAW_STUBS = workflow_stubs(), raw_stubs()
     sents = SENTS[:a.limit] if a.limit else SENTS
     arms = [s for s in a.arms.split(",") if s]
     prompts = _render_prompts(sents) if any(x != "planner" for x in arms) else {}

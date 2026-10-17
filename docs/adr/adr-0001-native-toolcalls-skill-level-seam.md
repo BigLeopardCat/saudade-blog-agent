@@ -1,5 +1,8 @@
 # ADR-0001：native tool calls 的接缝开在技能级，不接在工具级
 
+
+> ⚠️ 20261017 起 `skill` 已改名为 **`workflow`**（`agent/skills.py` → `agent/workflows.py`、`tests/test_skills.py` → `tests/test_workflows.py`、`tests/test_slim_skills.py` → `tests/test_slim_workflows.py`；计划 IR `SKILL=` → `WORKFLOW=`）。本文档保留**当时的名字**，不回溯改写；读它时把 skill 读作 workflow 即可。
+
 - **状态**：已采纳（20260927）
 - **背景文档**：`docs/native-toolcalls-mainline.md`（主线交接，含三条实证与冻结范围）
 - **影响范围**：`agent/planner_llm.py`（新）、`agent/graph.py::planner_node`、`config/settings.py`

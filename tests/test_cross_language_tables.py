@@ -337,7 +337,7 @@ OTHER_TAG_FAMILIES = {"TOOLS", "NOTE", "REPLY", "ISSUE", "DECIDE"}
 # 反引号引用的写法照样命中）⇒ 把它单列一张表，而不是塞回上面那张：
 #   · 塞回去 = 让"退休"这件事在唯一扫得到它的地方**看不出来**（过期条目没销账）；
 #   · 直接删掉 = 逼着退休说明不许点名那个标签，而"能按名字 grep 到"正是它存在的理由。
-# 反向锁在别处（`tests/test_skills.py::test_todo_line_retired`：塞 `todo` 键也不产出该行、
+# 反向锁在别处（`tests/test_workflows.py::test_todo_line_retired`：塞 `todo` 键也不产出该行、
 # `parse_plan` 也不返回那一格）——**本表不是那条锁**，它只负责让扫描不被叙述性引用打红。
 RETIRED_TAG_FAMILIES = {"TODO"}
 

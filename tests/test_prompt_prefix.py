@@ -70,10 +70,10 @@ def _planner_pair():
 
 def _narrator_pair():
     kw = dict(persona=G.BLOG_ASSISTANT_PROMPT, audience="受众段", sticker_guide=G.STICKER_GUIDE)
-    a = G._EXECUTOR_PROMPT.format(**kw, plan="SKILL=effect（第 1 轮）", tool_frames="（本轮尚无工具执行）",
+    a = G._EXECUTOR_PROMPT.format(**kw, plan="WORKFLOW=effect（第 1 轮）", tool_frames="（本轮尚无工具执行）",
                                  exec_receipts="（无）", fact_block="（本轮没有动作族执行）",
                                  page_ctx="页面A：/article/7")
-    b = G._EXECUTOR_PROMPT.format(**kw, plan="SKILL=chat（第 2 轮）", tool_frames="工具返回：正文……",
+    b = G._EXECUTOR_PROMPT.format(**kw, plan="WORKFLOW=chat（第 2 轮）", tool_frames="工具返回：正文……",
                                  exec_receipts="读取文章 46《标题》", fact_block="· 跳转「/dashboard」",
                                  page_ctx="页面B：/dashboard")
     return a, b
@@ -90,7 +90,7 @@ def test_planner_prefix_covers_rules():
     last_rule = a.index("6c. 现时状态类询问")
     check("整段判定规则正文都在稳定前缀里（含最后一条 6c）",
           last_rule < n, f"6c 在 {last_rule}，前缀只到 {n}")
-    # 门槛按**生产形态**取：20261004 起 planner 只有 native 一条路，`slim_skills`
+    # 门槛按**生产形态**取：20261004 起 planner 只有 native 一条路，`slim_workflows`
     # 恒真（技能描述/参数/完成判定那三行与 tools schema 重复，已不再进提示词），
     # 菜单段因此从 20,387 掉到 8,595——再拿旧的 30,000 判就是拿一个**不存在**的
     # 档位当基线。实测前缀 19,312（到第一个易变块 `page_ctx` 为止）。
@@ -116,8 +116,8 @@ def test_narrator_prefix_covers_disciplines():
           last < n, f"19 在 {last}，前缀只到 {n}")
     check("稳定前缀 ≥ 5,000 字（纪律块 5,401 的量级）", n >= 5000, f"lcp={n}")
     check("[执行计划] 排在纪律正文之后（不进缓存前缀）",
-          a.index("SKILL=effect（第 1 轮）") > last,
-          f"计划在 {a.index('SKILL=effect（第 1 轮）')}，纪律最后一条在 {last}")
+          a.index("WORKFLOW=effect（第 1 轮）") > last,
+          f"计划在 {a.index('WORKFLOW=effect（第 1 轮）')}，纪律最后一条在 {last}")
 
 
 # ── ③ 方向词与真实位置自洽 ─────────────────────────────────────────────────

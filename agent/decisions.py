@@ -2,7 +2,7 @@
 
 四组：
   1. 快道（fast path）：当前文章读取 / 特效切换 / 导航 / 屏幕显示——强模式命中
-     即实例化计划，不请 planner LLM（映射表白名单校验已在 skills.instantiate_plan
+     即实例化计划，不请 planner LLM（映射表白名单校验已在 workflows.instantiate_plan
      兜底，命中即确定性识别，无"模型猜错"通道）；不命中一律 None 落回 planner。
   2. 动作意图扫描：_scan_action_intents 确定性扫出消息里的动作指令，_intent_hints
      标注完成状态后注入 planner 提示词——planner 仍是唯一决策者，它只是不再
@@ -13,10 +13,10 @@
      检索重复拦截共用），不经 LLM、不静默 accept。
 
 与 graph.py 的关系：graph.py 定义图拓扑与节点（planner/execute/model/gate），
-节点调用本层；本层只依赖 skills / rag.search / context（无反向依赖，避免循环导入）。
-命名沿用原下划线前缀（tests/test_skills.py 与 graph.py 按原名引用，重构不改契约）。
+节点调用本层；本层只依赖 workflows / rag.search / context（无反向依赖，避免循环导入）。
+命名沿用原下划线前缀（tests/test_workflows.py 与 graph.py 按原名引用，重构不改契约）。
 
-依赖：skills（技能表/实例化）、rag.search（分词）、context（消息文本）。
+依赖：workflows（技能表/实例化）、rag.search（分词）、context（消息文本）。
 """
 
 import ast
@@ -28,7 +28,7 @@ from langchain_core.messages import ToolMessage
 
 from agent.authz import strip_user_shell
 from agent.context import _msg_text
-from agent.skills import (IOT_ENABLED, NAV_MAP, SKILL_MAP, fuzzy_nav_hit,
+from agent.workflows import (IOT_ENABLED, NAV_MAP, WORKFLOW_MAP, fuzzy_nav_hit,
                           instantiate_plan)
 # 与检索侧同一分词（2/3-gram）——候选标题相关性判定复用，避免两套词法
 from rag.search import tokenize as _rag_tokenize
@@ -184,10 +184,10 @@ def _effect_switch_fast_path(user_msg: str, current_effects: str) -> dict | None
         return None
     note = f"特效切换快道（确定性，非模型决策）：{'、'.join(tools)}"
     return {
-        "skill": "effect",
+        "workflow": "effect",
         "tools": tools,
         "note": note,
-        "reply": SKILL_MAP["effect"].reply_contract,
+        "reply": WORKFLOW_MAP["effect"].reply_contract,
         "chat": False,
         "params": {"effect_switch": f"{old or '（无）'}→{target}"},
     }
@@ -380,8 +380,8 @@ def _display_fast_path(user_msg: str) -> dict | None:
     """
     # 平台没装（`IOT_ENABLED=0`）就没有屏幕可写：本快道整条不命中，交回 planner LLM。
     # **快道不负责骗人**——它要在这里硬答一句"本站没有接入设备"，就得在这里自己
-    # 判一次开关，那就是第二处判据（`skills` 里 `_IOT_OFF_NOTE` 是给 navigate 用的）。
-    # 交回 planner 后，`visible_skills` 已经把 device_display 摘掉了，planner 选不到它。
+    # 判一次开关，那就是第二处判据（`workflows` 里 `_IOT_OFF_NOTE` 是给 navigate 用的）。
+    # 交回 planner 后，`visible_workflows` 已经把 device_display 摘掉了，planner 选不到它。
     if not IOT_ENABLED:
         return None
     msg = _bare(user_msg)
@@ -398,7 +398,7 @@ def _display_fast_path(user_msg: str) -> dict | None:
 # 动作意图清单（20260912，多意图丢失修复）
 # 事故实证：golden multi_intent_two_effects 21 次留档 3 次 FAIL（≈14%），失败回执
 # 恒为 exec：['toggle_effect']——"帮我把樱花特效打开，顺便切一下夜间模式"这类**跨
-# 技能并列意图**：一轮只能选一个技能（SKILL= 单值），必须靠 planner⇄execute 多轮
+# 技能并列意图**：一轮只能选一个技能（WORKFLOW= 单值），必须靠 planner⇄execute 多轮
 # 完成；但 planner 第 2 轮按 rule5"动作已执行 → 本轮收尾"直接收尾，第二个动作永久
 # 丢失（narrator 只好如实承认"没切换成功"）。与 effect 切换快道同源的历史证据：
 # "不要樱花了，改成下雨吧"10 轮采样 8 轮丢 rain:on——**"一句话多个动作"是本模型已
@@ -704,11 +704,11 @@ def _terminal_plan(has_frames: bool, reason: str, note: str = "") -> dict:
     """
     if has_frames:
         if note:
-            return {"skill": "content_query", "tools": [], "note": note,
-                    "reply": SKILL_MAP["content_query"].reply_contract, "chat": False,
+            return {"workflow": "content_query", "tools": [], "note": note,
+                    "reply": WORKFLOW_MAP["content_query"].reply_contract, "chat": False,
                     "status": "wrapped"}
         return {
-            "skill": "content_query",
+            "workflow": "content_query",
             "tools": [],
             # 「本轮**已经执行过**上面列出的工具调用」这半句是**正向锚点**（20261008）：
             # 收尾轮的 plan 里 TOOLS 行是空的，收尾原因又是"轮次/不再执行"这类**预算**
@@ -721,15 +721,15 @@ def _terminal_plan(has_frames: bool, reason: str, note: str = "") -> dict:
             "note": (f"{reason}：本轮**已经执行过**上面列出的工具调用，请只依据这些"
                      "已经拿到的返回如实收尾作答；返回不足以回答的部分，如实告知"
                      "'这次没查到/暂时确认不了'，不得用模型记忆硬答"),
-            "reply": SKILL_MAP["content_query"].reply_contract,
+            "reply": WORKFLOW_MAP["content_query"].reply_contract,
             "chat": False,
             "status": "wrapped",
         }
     if note:
-        return {"skill": "chat", "tools": [], "note": note,
+        return {"workflow": "chat", "tools": [], "note": note,
                 "reply": "直接回答", "chat": True, "status": "wrapped"}
     return {
-        "skill": "chat",
+        "workflow": "chat",
         "tools": [],
         "note": (f"{reason}且无任何工具执行记录：如实告知暂时无法确认/无法回答，"
                  "不得编造"),

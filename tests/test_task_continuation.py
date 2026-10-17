@@ -318,7 +318,7 @@ def _ctx(**kw):
                 _base_llm=None, _evidence=False, llm=None,
                 deny_pseudo=set(),
                 correction="", correction_kind="", native_note="", plan_obj=None,
-                raw="", decided=None, skill_name="", params={}, _tools_off=False,
+                raw="", decided=None, workflow_name="", params={}, _tools_off=False,
                 _img_turn=False, llm_attempt=0)
     base.update(kw)
     return G._DecideCtx(**base)
@@ -328,7 +328,7 @@ _NOTICE_ROW = _row(task_id="at_notice", goal="给 demo 发一条站内通知",
                    steps=[{"label": "发通知", "tool": "send_user_notice"}])
 _FACE = {"confirm_grant": True, "receipts": [], "messages": [], "executed": [],
          "noop_specs": _NOOP_STATE["noop_specs"]}
-_PLAN = {"tools": [_DUP], "skill": "account_set_role", "params": {}, "dropped": []}
+_PLAN = {"tools": [_DUP], "workflow": "account_set_role", "params": {}, "dropped": []}
 
 _c = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]), plan_obj=dict(_PLAN))
 _step = G._decide_late_correct(_c)
@@ -357,7 +357,7 @@ try:
     _s1 = G._wrapup_intent_correct(_c1)
     # 反控：清单**不会**被剪空时，这一格一件都不许纠（它还有真事要做）
     _c2 = _ctx(state=dict(_FACE), config=_cfg([_NOTICE_ROW]),
-               plan_obj={"tools": [_NEW], "skill": "user_notice", "params": {},
+               plan_obj={"tools": [_NEW], "workflow": "user_notice", "params": {},
                          "dropped": []})
     _s2 = G._wrapup_intent_correct(_c2)
 finally:
@@ -407,7 +407,7 @@ _OWNER_195727 = ("猫咪加条待办给用户niuniu重置额度，然后去把�
                  "以你的口吻随便说点声明")
 _OWNER_ACTION = "把樱花特效打开吧"      # 反控用：这一句 `_scan_action_intents` **扫得到**
 _TODO_SPEC = 'create_dashboard_todo({"text": "给用户niuniu重置额度"})'
-_GRANT_195727 = {"token": "tok", "skill": "dashboard_todo_add",
+_GRANT_195727 = {"token": "tok", "workflow": "dashboard_todo_add",
                  "specs": [{"tool": "create_dashboard_todo",
                             "args": {"text": "给用户niuniu重置额度"}}]}
 
@@ -424,9 +424,9 @@ def _pre(resumed=True, owner=_OWNER_195727):
 def _setup_state(owner=_OWNER_195727):
     from langchain_core.messages import HumanMessage
     return {"confirm_grant": _GRANT_195727, "executed": [_TODO_SPEC],
-            "receipts": [{"skill": "dashboard_todo_add", "tool": "create_dashboard_todo",
+            "receipts": [{"workflow": "dashboard_todo_add", "tool": "create_dashboard_todo",
                           "args": {"text": "给用户niuniu重置额度"}, "result": "已加", "ts": 1.0}],
-            "blocked": [], "plan": "SKILL=x\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）",
+            "blocked": [], "plan": "WORKFLOW=x\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）",
             "plan_rounds": 1,
             "messages": [HumanMessage(content=owner), HumanMessage(content=_CARD_195727)]}
 

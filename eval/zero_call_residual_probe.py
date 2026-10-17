@@ -121,7 +121,7 @@ LEGACY_CONTRACT = """\
 7. 你的决定**通过工具调用表达**：调用本轮 tools 里与所选**技能同名**的那个函数，
    把该技能的参数填进 arguments。技能名与参数名一律以 tools 里的定义为准——不要
    自己造名字，也不要把**工具**名（技能模板内部用的那些）当成技能名。
-   - 正文不是决策通道：**不要**再写 SKILL=/PARAMS= 这类契约行，决策只以工具调用为准
+   - 正文不是决策通道：**不要**再写 WORKFLOW=/PARAMS= 这类契约行，决策只以工具调用为准
      （正文只在你自己想留一句说明时写，主人看不到规划轮的正文）。
    - 只想闲聊、或如实说明查不到时，可以不调用任何函数、直接给正文。
    - 多步链的中间轮仍可在正文里另起一行写 `TODO: <步骤1> → <步骤2>`（只描述本轮
@@ -196,7 +196,7 @@ def run_one(msg: str, tid: str) -> dict:
         name = e.get("event")
         if name == "native_decision":
             out["decisions"].append({"round": e.get("round"),
-                                     "skill": str(e.get("skill") or ""),
+                                     "workflow": str(e.get("workflow") or ""),
                                      "calls": str(e.get("calls") or ""),
                                      "finish": str(e.get("finish") or "")})
         elif name == "no_call_nudge":
@@ -222,7 +222,7 @@ def kind_of(dec: dict) -> str:
     """一条决策的形状：`zero`（一个函数都没点）/ `chat`（点了 chat）/ `tool`。"""
     if not dec["calls"]:
         return "zero"
-    if dec["skill"] == "chat":
+    if dec["workflow"] == "chat":
         return "chat"
     return "tool"
 
@@ -266,7 +266,7 @@ def main() -> int:
                 secs = time.monotonic() - t0
                 data_shape = bool(fam)
                 g = agg[(arm, data_shape)]
-                dec = r["decisions"][-1] if r["decisions"] else {"skill": "", "calls": "",
+                dec = r["decisions"][-1] if r["decisions"] else {"workflow": "", "calls": "",
                                                                  "finish": ""}
                 k = kind_of(dec) if r["decisions"] else "zero"
                 # 对照组的"判对"没有意义（点不点工具都可能对），只对数据型打分。
@@ -283,7 +283,7 @@ def main() -> int:
                 detail.append({"round": rnd, "arm": arm, "sent": sent,
                                "data_shape": data_shape,
                                "kinds": [kind_of(d) for d in r["decisions"]],
-                               "skills": [d["skill"] for d in r["decisions"]],
+                               "workflows": [d["workflow"] for d in r["decisions"]],
                                "finish": [d["finish"] for d in r["decisions"]],
                                "tools": sorted(r["tools"]), "expect": sorted(fam),
                                "nudge": r["nudge"], "accepted": r["accepted"],

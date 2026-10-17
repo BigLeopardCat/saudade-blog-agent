@@ -83,7 +83,7 @@ flowchart TB
 │   ├── checkpoint.py          # build_checkpointer：checkpointer 的接线点（空 DSN 恒返回 None，见 §4.6）
 │   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，身份与权限地基（docs/identity-and-permissions.md）
 │   ├── authz.py               # ★ 权限模型（20260920）：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
-│   ├── skills.py              # ★ 技能注册表：47 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）+ NAV_MAP 导航映射（业务唯一数据源）
+│   ├── workflows.py              # ★ 技能注册表：47 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）+ NAV_MAP 导航映射（业务唯一数据源）
 │   ├── adminops.py            # ★ 后台写操作域（20260921-22）：标签/分类索引与**名字→id 解析**（find_tag/find_category）+ 移动/降级校验（move_verdict）+ 确认卡文本 + 色名映射；能算的不交给 LLM
 │   ├── refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用（20260919）：递归遍历 + 五个错误码——解不出的引用必须响亮（20260922 改递归）
 │   ├── confirm.py             # ★ 待确认令牌（20260921）：无状态 HMAC（TTL 600s，2 worker 安全）；不落库、不落用户消息
@@ -125,7 +125,7 @@ flowchart TB
 │   │                          #       + golden_case_runner.py / golden_full_run.py（进程隔离跑法）
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
-├── tests/test_skills.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
+├── tests/test_workflows.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
 ├── tests/test_authz.py              # L0 单元级（权限模型：scope 声明完备性 + 角色授予表 + 失败取向
 │                              #   + 写操作的"人在回路"确认闸 + config 接线回归锁，秒级）
 ├── docs/                      # 本文档（现状：系统是什么）
@@ -718,7 +718,7 @@ planner 在写技能里写名字——人嘴里说的就是名字，跨轮执行
 **① 解不出的引用必须响亮**（三处）：`refs.resolve_args` 改递归（`has_refs` 本来就是递归的，
 嵌套引用此前解析不出，`_confirm_popup` 也会拒绝签发令牌）；写技能分支引用原样透传给
 execute 去报错误码，不再静默变 `None`；注记只写已知事实（层级未知时不许写「（一级标签）」）。
-回归锁 = `test_skills.test_write_ref_loud` + `test_refs` 嵌套用例 + 探针腿⑮。
+回归锁 = `test_workflows.test_write_ref_loud` + `test_refs` 嵌套用例 + 探针腿⑮。
 
 Rust 侧新增 `POST /api/protected/tag/move`（父仓，20260921 上线）：换父级与一级↔二级互转是
 一次原子移动，而不是"删了重建"（删除会触发全表 `prune_note_tags`）。id 策略keepId 优先
@@ -748,7 +748,7 @@ scope `write.console`）。公告是对全体访客说的话，因此比其它�
   「发个公告说今晚维护」是教科书式命令，也照弹确认框（内容会显示在框里等主人过目）。
   离线锁 `test_authz`（同一句话对别的后台写仍判命令 ⇒ 收窄只落在公告三件上），探针腿⑯ 实测
   三种措辞都弹框。
-- **正文不许代笔**：正文只写主人说过的内容，缺正文就追问，**绝不替他补一句**（`_expand_write_skill`
+- **正文不许代笔**：正文只写主人说过的内容，缺正文就追问，**绝不替他补一句**（`_expand_write_workflow`
   的公告分支零工具收尾）。
 
 | 端点事实（三条，都踩过） | 处置 |
@@ -947,12 +947,12 @@ flowchart TB
 > 预算耗尽走确定性终局 `_terminal_plan`（无静默 accept）。gate 保持 20260903 语义 unchanged。
 
 固定流程任务（导航/特效/暗色/设备显示/设备查询/content_query 内容查询/read_article 当前文章）落地为
-技能注册表（agent/skills.py，业务唯一数据源）：每个技能是静态定义——触发条件、参数 schema、
+技能注册表（agent/workflows.py，业务唯一数据源）：每个技能是静态定义——触发条件、参数 schema、
 固定工具序列模板、回复契约。planner 只从注册表选技能 + 填参数，不再自由写执行步骤。
 **20261004 起接口层是 native tool calls 单通道**：planner 的"选技能 + 填参数"就是一次
 **工具调用**（函数名 = 技能名、args = 参数），格式由 API 的 `tools` schema 保证；曾经那条
 "输出五行文本、服务端正则抠"的文本档（`PLANNER_ENGINE=text`）连同其解析器**已删**。
-`instantiate_plan` 随后把参数实例化为**内部计划文本**（`SKILL=/PARAMS=/TOOLS: /NOTE: /REPLY:`
+`instantiate_plan` 随后把参数实例化为**内部计划文本**（`WORKFLOW=/PARAMS=/TOOLS: /NOTE: /REPLY:`
 五行契约）写入 `state.plan`——这份内部协议 `execute`/`gate`/路由都读，**与接口层选哪一档无关**，
 保持不变。TOOLS 行 = "执行清单"
 而非旧"允许名单"——execute 把它当命令逐条执行，"点名了却不调用"的自由 20260903 已从执行层移除。
@@ -1060,7 +1060,7 @@ flowchart TB
   （只能由技能模板展开）——planner 无法经 calls 通道越权动作。清单为空 = planner 决策无需工具
   （收尾轮：信息已足够或明确查无结果），不再是"自由 ReAct"。planner 菜单（`_QUERY_TOOLS_DESC`）
   由白名单 × 工具注册表生成（参数签名从 `tool.args` 派生），手写菜单是漏工具的来源（20260913
-  前手抄 8 条，漏掉全部站点信息类数据工具）；test_skills 锁"白名单 ⊆ 菜单"且动作工具不入菜单。
+  前手抄 8 条，漏掉全部站点信息类数据工具）；test_workflows 锁"白名单 ⊆ 菜单"且动作工具不入菜单。
 
 - 导航映射表（`NAV_MAP`）：页面别名 → 真实路径，"物联网平台→/device-console/"是系统数据而非模型猜测
   （旧版 planner 跑题的根因：看不到工具语义/页面映射）；映射为 None = 页面已下线（友链 → 如实告知、不导航）；
@@ -1101,7 +1101,7 @@ flowchart TB
   ——`_frame_id` 以"消息里已有的帧数"为基数，20261006 前是"本轮 spec 的下标"、逐轮从 0 重编，
   两轮的帧并进同一条 assistant 就是重复 id ⇒ 严格服务商整轮 400，见问题记录 1.50）回 planner；未知
   工具/参数解析失败 → `__ERROR__` 帧（planner 据错误修正参数或如实收尾，不炸图）。无自由
-  意志、无授权检查分支：清单经 instantiate_plan 白名单校验生成，越权工具在 skills 白名单即被
+  意志、无授权检查分支：清单经 instantiate_plan 白名单校验生成，越权工具在 workflows 白名单即被
   剥，到不了 execute。执行前做断连检查（写操作绝不发生在用户已离开之后，20260827 实测教训
   保留）。唯一保留的"创作"自由 = device_oled_display 缺 text 时由小 LLM 结合对话创作屏幕文案
   （`_create_display_text`）——技能模板固有设计（屏幕文案在展示时创作，不进 planner 文本通道），
@@ -1164,7 +1164,7 @@ flowchart TB
     确认帧 + 到达声称（`_NAV_ARRIVAL_RE`，navigate 技能轮——确认式导航在访客确认前不得声称已到达）；
   - 任何轮：**导航承诺／到达声称，而这一轮压根没跳成**（洞⑭，20261007）——回执里既无
     `NAVIGATE:` 也无 `AUTO_NAVIGATE:`、导航工具也没报过错，回复却说"马上带你过去／已经带你
-    到了"⇒ 页面不会动。**不再限 `skill == "navigate"`**（原 5b2 写死在这里，20261007T232014
+    到了"⇒ 页面不会动。**不再限 `workflow == "navigate"`**（原 5b2 写死在这里，20261007T232014
     那轮计划落 chat ⇒ 整条判据一次都没跑）。射程上界两条：导航注记轮（已下线/未部署/目标
     不存在）归第 4 节按 status 选文案、`navigate_to` 报错帧归 5a；
   - 任何轮：**这一轮真办成了，却说还在等／还没落地**（洞⑮，20261008）——回执里有 checker
@@ -1200,7 +1200,7 @@ flowchart TB
   灰色折叠区；gate 打回时被否定叙述的完整文本归档为可展开子项（`archiveRejected`）——用户既只看
   到最终输出，又能展开查看中间过程。Rust 对 `__PROCESS__` 帧只转发、不累积进 reply（过程行
   不属于最终回复，否则污染 chat_history）。
-- 测试：`tests/test_skills.py`（映射表完整性、instantiate_plan 参数实例化含已下线/未识别区分、
+- 测试：`tests/test_workflows.py`（映射表完整性、instantiate_plan 参数实例化含已下线/未识别区分、
   content_query calls/tools 白名单展开、plan 编码/解析往返与容错、execute 确定性执行、gate 收窄
   作用域 + fallback 终局语义）+ golden set 端到端 + `eval/recall_eval.py`（检索基线，直接测线上
   rag/search.py）。改技能注册表/plan 契约后必须跑。
@@ -1259,7 +1259,7 @@ flowchart TB
   免引号那一条另有三处**刻意不认**（说不清就不动，交给弹窗与预检那两条路）：一句话里点了不止一个
   名字、捕获段里混了补语（"Asyncio 这个名字"）、改名形态里的新名字（`改名叫「协程」` 那段引号
   是 `new_title`，不当父标签填）。真写错名字的兜底仍是工具侧的确定性解析 + 弹窗里那个名字要主人点。
-- 锁：`test_skills` 四个函数（`test_write_grounding_round` / `test_write_ledger_note_round` /
+- 锁：`test_workflows` 四个函数（`test_write_grounding_round` / `test_write_ledger_note_round` /
   `test_announcement_text_round` / `test_name_target_round`）+ `test_admin_write` ⑰⑱⑲⑳㉑㉒
   （⑳ 值地基 18 例含 ⑭c–⑭h 改名族，㉑ 公告正文字段标记词形）。 ㉒ 是文章问句的《标题》+ 现状（含"读不到清单仍弹窗"与两个读取器同端点）。
 
@@ -1325,7 +1325,7 @@ flowchart TB
   empty/unavailable 取向）、`test_action_text` ⑥（动作词两档 + 认不出的 status 不许硬凑 +
   `$list_admin_board[N].talkKey` 的中文来源名）、`test_id_namespaces` ⑤（`author` → `留名`
   只改键名、注记不占下标）、`test_entities` ①（〔〕外壳 + 分类缺失不硬凑空壳）、
-  `test_skills.test_read_repeat_note`（数据行逐条点名 / 写族回执不进清单 / 两句纪律 /
+  `test_workflows.test_read_repeat_note`（数据行逐条点名 / 写族回执不进清单 / 两句纪律 /
   退回被剔 spec / ≤5 行）、`test_pending_ledger` ⑯（提问轮事实照给 / 有帧与有写与闲聊
   轮一个字不加且零读 / 逐族分别判 / 与 S4 那支互斥 / 闸门只有一份实现的源码锁）。
 
@@ -1450,7 +1450,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
    〈…〉占位符」42/42；更凶的是把失败样例连真名字写进规则 4b 之后掉到 12/24（那些名字当场被抄进
    参数）⇒ 占位符化后回到 36/36。**纪律：写技能描述与写规则里只写 〈名字〉/〈父标签名〉 这类占位符，
    连"反例"也不许带真名字**；判据的"取值一律从主人这句话里原样抄、完整照抄"写在 planner 规则 4b。
-   回归锁 = `test_skills.test_write_desc_no_example_names`（扫写技能描述 + 规则 4b 整段）。
+   回归锁 = `test_workflows.test_write_desc_no_example_names`（扫写技能描述 + 规则 4b 整段）。
 
 ---
 

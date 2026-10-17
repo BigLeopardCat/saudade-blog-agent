@@ -54,7 +54,7 @@ state（`frames.round_state` / `popup_state`）。现在这四样东西在结构
   ③ **回执按生产形状**（`tool/args/result/ts` + PASS 行的 `cmd`）——`__EXEC__`/`__CMD__`
      两条帧、以及那 131 条 `*/cmd_*` 断言的全部输入。
 
-**写操作确认卡（P3，20261005）**：写 spec 卡在同意闸上时——`SkillExecutor` 判
+**写操作确认卡（P3，20261005）**：写 spec 卡在同意闸上时——`WorkflowExecutor` 判
 「需要同意 ∧ 这一轮没获同意」⇒ **不执行**、记进 `ledger.pending`（判据直调生产
 `graph._grant_covers`，见 `_consent_missing`），`execute` 节点收尾时调 **`graph._confirm_popup`
 本身**（不抄第二份排序/快照/滤空逻辑）拿到 `pending_confirm` / `pending_action` /
@@ -125,7 +125,7 @@ X"既可能是回忆也可能是谎言；生产那个被判的模型是**零工�
     **判据后果只兑现了一处、且已修**：`planner.ledger_frame` 缺席让
     `require_ledger_frame` / `require_ledger_rows` / `require_card_targets_from_ledger`
     三条断言在本线上**恒假**（全量里 `admin_board_audit_reviewed_refusal` 因此报红，
-    而两臂那一轮的行为**逐字相同**——回复正文一字不差、卡载荷的 skill/tool/args 全同）
+    而两臂那一轮的行为**逐字相同**——回复正文一字不差、卡载荷的 workflow/tool/args 全同）
     ⇒ `_system_prompt` 现在照 `graph.py` 的 planner 那一处记同款事件，判据
     `tests/test_react_arm.py` ⑬（含负控）。这与 `forbid_fallback` 是同一个病的两个方向：
     那边"做不到 ⇒ 纯否定断言恒真"（假绿），这边"不产证据 ⇒ 要求型断言恒假"（假红）。
@@ -174,10 +174,10 @@ from agent.graph import (AgentCancelled, AgentState, _EXECUTOR_PROMPT,
                          gate_node as _prod_gate_node, graph_input, plan_state)
 from agent.planner_llm import build_tool_schema
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
-from agent.react_line import (RunLedger, SkillExecutor, convergence_verdict,
+from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
                               wrap_up_text)
 from agent.refs import ref_hints
-from agent.skills import instantiate_plan
+from agent.workflows import instantiate_plan
 from agent.stickers import repair_sticker_tokens
 from config.settings import settings
 from models.llm import get_llm
@@ -188,7 +188,7 @@ logger = logging.getLogger(__name__)
 
 ARM_NAME = "react"
 
-# 一次运行一个实例的那几件（`RunLedger` / `SkillExecutor`）**不进图 state**：图是
+# 一次运行一个实例的那几件（`RunLedger` / `WorkflowExecutor`）**不进图 state**：图是
 # `build()` 时编一次、跨请求共用的单例，账进 state 才是对的、账进闭包就会串账。它们走
 # `config["configurable"]`——与生产把 `stop_event` / `principal` / `open_tasks` 放那儿
 # 同源（`server.py` 的 `_run_agent_stream_to_queue`）。
@@ -317,7 +317,7 @@ def _window(state: AgentState, ctx: dict) -> list:
     idx = max((i for i, m in enumerate(msgs) if isinstance(m, HumanMessage)), default=-1)
     tail = [_expand(m, ctx) for m in msgs[idx + 1:]]
     notes = [ToolMessage(content=str(n.get("text") or ""),
-                         name=str(n.get("skill") or ""),
+                         name=str(n.get("workflow") or ""),
                          tool_call_id=f"note_{i}")
              for i, n in enumerate(ctx.get("notes") or [])]
     out = ([_inner_message(msgs, ctx.get("user_msg") or "")]
@@ -390,7 +390,7 @@ def _bound_llm(ctx: dict) -> Any:
     生产 planner 那侧是每请求一份（`_planner_setup` 把 `llm` 放进 `_Ctx`），本线照同源。
     """
     if ctx.get("llm") is None:
-        ctx["llm"] = _llm().bind_tools(_skill_menu(ctx.get("role")))
+        ctx["llm"] = _llm().bind_tools(_workflow_menu(ctx.get("role")))
     return ctx["llm"]
 
 
@@ -400,7 +400,7 @@ def _norm_state(state: AgentState) -> AgentState:
     与 `frames.plan_for_gate` 逐字同源（那条链就是 `plan_state(plan_for_gate(plan_obj))`，
     批 2 之前它住在 `frames.round_state` 里，那个塑形器随适配器一起退场了）：
     `plan_obj` 为空（首轮就收尾、纯闲聊）时，生产那一轮的计划是 `chat`——不归一会让
-    narrator 的 [执行计划] 段空着（生产从不空着），而 `gate_node` 拿空的 `skill` 当分族
+    narrator 的 [执行计划] 段空着（生产从不空着），而 `gate_node` 拿空的 `workflow` 当分族
     入参会退化成宽查（方向安全，但读数与生产不是同一档）。
     """
     # `cast`：`plan_state` 的返回类型是 `dict`，拼出来的字面量 mypy 证不出是 `AgentState`
@@ -426,7 +426,7 @@ def _plan_update(plan_obj: dict, rounds: int, *, advance: bool = True) -> dict:
 def _fast_plan(fast: dict) -> dict:
     """文章读取快道 → 执行节点读的那一份（**补上 `calls`**，它是清单的唯一来源）。"""
     obj = dict(fast or {})
-    obj["calls"] = [{"skill": str(obj.get("skill") or "read_article"),
+    obj["calls"] = [{"workflow": str(obj.get("workflow") or "read_article"),
                      "params": dict(obj.get("params") or {})}]
     return obj
 
@@ -598,7 +598,7 @@ def _popup_update(state: AgentState, ctx: dict) -> dict:
 
 
 def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
-    """跑清单：逐条技能 → `SkillExecutor.run`（展开 → 权限 → 同意闸 → checker 验收）。
+    """跑清单：逐条技能 → `WorkflowExecutor.run`（展开 → 权限 → 同意闸 → checker 验收）。
 
     帧的顺序与生产同源：**工具帧（`messages`）先到，本节点的 `updates` 后到**
     （`graph.execute_node` 也是先产 ToolMessage 再交回 update）。
@@ -618,18 +618,18 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 出处。`base` 是本批在下标空间里的起点（`origin` 的值是**调用**的下标，不是帧的
     # ——一次技能调用展开成几条帧是 `instantiate_plan` 的事，与模型说了几条无关）。
     base = len(ctx["calls"])
-    ctx["calls"].extend({"name": str((c or {}).get("skill") or ""),
+    ctx["calls"].extend({"name": str((c or {}).get("workflow") or ""),
                          "args": dict((c or {}).get("params") or {})} for c in calls)
     try:
         for ci, c in enumerate(calls):
-            skill = str((c or {}).get("skill") or "")
+            workflow = str((c or {}).get("workflow") or "")
             n_before = len(executor.calls)
-            text, n_tools = executor.run(skill, dict((c or {}).get("params") or {}))
+            text, n_tools = executor.run(workflow, dict((c or {}).get("params") or {}))
             if not n_tools:
                 # 纯应答技能（chat 一类）：零工具 ⇒ **不发帧**（生产那一轮
                 # `if not specs: return {"messages": []}` 同款）。结果只喂模型
                 # （合成注记帧，见 `_window`）——它不进 `state["messages"]`。
-                ctx["notes"].append({"skill": skill, "text": text})
+                ctx["notes"].append({"workflow": workflow, "text": text})
                 continue
             for call in list(executor.calls[n_before:]):
                 # `_frame_id` 的基数是"消息里已有的帧数"，而这一批里刚发的那些还没进
@@ -652,7 +652,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     return body
 
 
-def _exec_body(out: list, ledger: RunLedger, executor: SkillExecutor) -> dict:
+def _exec_body(out: list, ledger: RunLedger, executor: WorkflowExecutor) -> dict:
     """`execute` 的公共返回（崩溃支与正常支逐字同一形状）。"""
     return {"messages": out,
             "receipts": list(ledger.receipts),
@@ -893,7 +893,7 @@ def make_ctx(*, config: RunnableConfig | None, principal: Any, role: str | None,
         "每条工具帧是哪一条调用发的"（见 `_pair_frames`）。
     """
     ledger = RunLedger()
-    executor = SkillExecutor(real_tools if real_tools is not None else {}, ledger,
+    executor = WorkflowExecutor(real_tools if real_tools is not None else {}, ledger,
                              role=role, principal=principal, user_msg=user_msg,
                              grant=state.get("confirm_grant"), state=state)
     return {
@@ -1006,10 +1006,10 @@ def _narrator_call(msgs: list) -> Any:
     return resp
 
 
-def _skill_menu(role: str | None) -> list[StructuredTool]:
+def _workflow_menu(role: str | None) -> list[StructuredTool]:
     """技能级菜单：与 planner 看到的 schema **逐字同一份**（`build_tool_schema`）。
 
-    `func` 只是占位——`SkillExecutor` 才是真正被调的那一层（它转给真工具）。占位体故意
+    `func` 只是占位——`WorkflowExecutor` 才是真正被调的那一层（它转给真工具）。占位体故意
     抛异常：万一将来接线断了，症状是**响亮的一次调用失败**，而不是"调了个什么都不做的桩"
     （后者会让整轮看起来跑通了、其实一个工具都没执行）。
     """
@@ -1033,7 +1033,7 @@ def _skill_menu(role: str | None) -> list[StructuredTool]:
 def _real_tools(config: RunnableConfig | None = None) -> dict[str, Any]:
     """真工具名 → 可调用体。**必须是纯函数签名（`**kwargs`）**：
 
-    `SkillExecutor` 是 `fn(**args)` 调的，而 `BaseTool.__call__` 的第一个位置参数是
+    `WorkflowExecutor` 是 `fn(**args)` 调的，而 `BaseTool.__call__` 的第一个位置参数是
     `tool_input` ⇒ 直接塞 `StructuredTool` 会把它当成"参数名恰好叫 path 的 tool_input"，
     症状是**被包装层兜成错误帧**（不炸图），看起来像"每个工具都 BLOCK error_frame"
     ——判据在开火，其实是适配器写错了。这里统一走 `.invoke(单个 dict)`，与生产
@@ -1095,7 +1095,7 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
         # 事件（`run_golden` 从 `planner.ledger_frame` 取 `ids`/`rows`）。本线此前
         # 把台账读进了提示词却一个字都没记 ⇒ 那三条判据在本线上**恒假**：20261012
         # 全量双臂里 `admin_board_audit_reviewed_refusal` 因此报红，而两臂那一轮的
-        # 行为**逐字相同**（回复正文一字不差、确认卡载荷的 skill/tool/args 全同）
+        # 行为**逐字相同**（回复正文一字不差、确认卡载荷的 workflow/tool/args 全同）
         # ——红的是证据通道，不是行为。这与 `forbid_fallback` 那 138 条是同一个病的
         # 两个方向：那边是"做不到 ⇒ 纯否定断言恒真"（假绿），这边是"不产证据 ⇒
         # 要求型断言恒假"（假红）。
@@ -1208,9 +1208,9 @@ _CLOSING_RULES = """\
 
 # ── plan_obj / blocked 行 ────────────────────────────────────────────
 def _plan_of(tool_calls: list, role: str | None) -> dict:
-    """模型这一轮点的技能调用 → 生产的 `plan_obj`（producer 只读 `skill` 与 `tools`）。
+    """模型这一轮点的技能调用 → 生产的 `plan_obj`（producer 只读 `workflow` 与 `tools`）。
 
-    一轮多条调用时合并成一份：`skill` 用 `|` 连起来，`tools` 取并集——生产
+    一轮多条调用时合并成一份：`workflow` 用 `|` 连起来，`tools` 取并集——生产
     `parallel_tool_calls=False` 保证它那边恒为一条，这里是有意的容差（见模块头注的
     口径偏差）。
 
@@ -1225,18 +1225,18 @@ def _plan_of(tool_calls: list, role: str | None) -> dict:
         try:
             plans.append(dict(instantiate_plan(name, args, role)))
         except Exception:  # noqa: BLE001 —— 实例化失败不该让整轮消失
-            logger.warning("[react_arm] instantiate_plan 失败：skill=%s args=%s", name, args,
+            logger.warning("[react_arm] instantiate_plan 失败：workflow=%s args=%s", name, args,
                            exc_info=True)
-            plans.append({"skill": name, "tools": [], "note": "", "reply": "",
+            plans.append({"workflow": name, "tools": [], "note": "", "reply": "",
                           "status": ""})
-    calls = [{"skill": str((c or {}).get("name") or ""),
+    calls = [{"workflow": str((c or {}).get("name") or ""),
               "params": dict((c or {}).get("args") or {})} for c in tool_calls]
     if not plans:
         return {}
     if len(plans) == 1:
         out = plans[0]
     else:
-        out = {"skill": "|".join(str(p.get("skill") or "") for p in plans),
+        out = {"workflow": "|".join(str(p.get("workflow") or "") for p in plans),
                "tools": [t for p in plans for t in (p.get("tools") or [])],
                "note": "", "reply": "", "status": ""}
     out["calls"] = calls

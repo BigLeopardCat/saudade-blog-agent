@@ -96,7 +96,7 @@ RagIndex
 - 工具层（tools/base.py）：`rag_search`（调 search()，返回候选 JSON）；
   `get_article_detail` 泛化 `doc_type`（note/talk/board/announcement），
   talk/board/announcement 无单条端点，从列表接口按 key 过滤（列表已带全文）。
-- 技能层（agent/skills.py）：rag_query 技能定义两段式 plan；实例化时第二段参数填
+- 技能层（agent/workflows.py）：rag_query 技能定义两段式 plan；实例化时第二段参数填
   占位说明文本（"从 rag_search 返回结果中取最高分候选"），模型自行填 id/type——
   reflector 检查点据 TOOLS 行强制两段都执行。
 

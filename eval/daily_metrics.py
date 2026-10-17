@@ -110,7 +110,7 @@ def collect(paths: list) -> dict:
     """扫一遍语料，出这一行要的全部数字。"""
     conv = {"total": 0, "unread": 0, "zero_first": 0, "zero_first_chat": 0,
             "rev": 0, "dup": 0, "dup_detail": []}
-    per_skill = defaultdict(lambda: [0, 0])      # [总, 有 gate 否决]
+    per_workflow = defaultdict(lambda: [0, 0])      # [总, 有 gate 否决]
     for p in paths:
         doc = load_trace(p)
         if not doc:
@@ -125,19 +125,19 @@ def collect(paths: list) -> dict:
             pass
         else:
             conv["zero_first"] += 1
-            if a["skill"] == "chat":
+            if a["workflow"] == "chat":
                 conv["zero_first_chat"] += 1
         if a["rev"]:
             conv["rev"] += 1
-        s = per_skill[a["skill"]]
+        s = per_workflow[a["workflow"]]
         s[0] += 1
         if a["rev"]:
             s[1] += 1
         dups = dup_writes(doc.get("events") or [])
         if dups:
             conv["dup"] += 1
-            conv["dup_detail"].append((a["skill"], dups))
-    conv["per_skill"] = per_skill
+            conv["dup_detail"].append((a["workflow"], dups))
+    conv["per_workflow"] = per_workflow
     return conv
 
 
@@ -179,14 +179,14 @@ def render(paths: list, days: int) -> str:
         # 重复的**是哪一件**比次数重要：同一个工具在一轮里执行 3 次和 3 个工具各 2 次
         # 是两种病（前者是循环，后者是多步任务里的撞车）。
         items = []
-        for _skill, dups in conv["dup_detail"][:3]:
+        for _workflow, dups in conv["dup_detail"][:3]:
             items += [f"{t}×{n}" for t, _a, n in dups]
         dup_txt += "（" + "、".join(items[:3]) + "）"
     parts.append(dup_txt)
 
     # 按技能的**异常聚集**：单条 gate 否决是噪声，同一技能成片才是信号
     # （现场：account_roster 3/18 全在 10-12～10-14 三天，形态一模一样）。
-    hot = [f"{k}({v[1]}/{v[0]})" for k, v in sorted(conv["per_skill"].items())
+    hot = [f"{k}({v[1]}/{v[0]})" for k, v in sorted(conv["per_workflow"].items())
            if v[0] >= 3 and v[1] / v[0] >= 0.3]
     if hot:
         parts.append("异常技能=" + "、".join(hot[:3]))

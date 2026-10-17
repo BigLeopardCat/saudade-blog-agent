@@ -63,8 +63,8 @@ CFG = {"configurable": {"principal": ADMIN, "user_id": 7, "conversation_id": 42,
                         "stop_event": None}}
 
 
-def _popup(msg: str, tools: list, skill: str):
-    plan = {"skill": skill, "params": {}, "tools": list(tools), "note": "x", "reply": "y"}
+def _popup(msg: str, tools: list, workflow: str):
+    plan = {"workflow": workflow, "params": {}, "tools": list(tools), "note": "x", "reply": "y"}
     st = {"messages": [HumanMessage(content=msg)], **plan_state(plan),
           "plan_rounds": 0, "done": False}
     return _confirm_popup(st, list(tools), ADMIN, msg, CFG)
@@ -161,20 +161,20 @@ check("表里没有非恒弹卡工具（加了它就会红在一个不相干的�
       ",".join(_extra))
 
 print("\n② 形态前置：这 17 句话**确实**被判成「像提问」（不成立的话下面全是假绿）")
-for tool, msg, _specs, _skill in CASES:
+for tool, msg, _specs, _workflow in CASES:
     check(f"{tool}: is_question_like 为真（疑问词在内容里，不是主人在问）",
           authz.is_question_like(msg) is True, msg)
 
 print("\n③ 死路守卫：命令说清了 ⇒ 卡**必须**弹得出来")
-for tool, msg, specs, skill in CASES:
-    popup = _popup(msg, [specs], skill)
+for tool, msg, specs, workflow in CASES:
+    popup = _popup(msg, [specs], workflow)
     kind = (popup or {}).get("kind")
     check(f"{tool}: 弹得出卡（kind=confirm）", kind == "confirm",
           f"kind={kind!r} msg={msg[:34]}")
 
 print("\n④ 反例：**真提问**照样不弹（把提问读成意图是用户拍板明确不许的）")
 #   这几句与 ③ 的区别只有一个：**没有命令骨架**。疑问词不是内容，是主人在问。
-for tool, msg, specs, skill in [
+for tool, msg, specs, workflow in [
     ("create_announcement", "发公告有什么注意事项", _spec(
         "create_announcement", {"title": "活动", "content": "x"}), "announcement_create"),
     ("create_announcement", "发公告的流程是什么", _spec(
@@ -188,7 +188,7 @@ for tool, msg, specs, skill in [
     ("delete_announcement", "把公告「今晚不许熬夜！」删掉好吗", _spec(
         "delete_announcement", {"title": "今晚不许熬夜！"}), "announcement_delete"),
 ]:
-    popup = _popup(msg, [specs], skill)
+    popup = _popup(msg, [specs], workflow)
     check(f"真提问不弹：{msg[:24]}", popup is None, f"kind={(popup or {}).get('kind')!r}")
 
 print("\n⑤ 判据层：疑问词「在内容里」的两种形态各自成立（真值只此一处）")

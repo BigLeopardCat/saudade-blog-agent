@@ -22,7 +22,7 @@ from agent.authz import (SCOPE_READ_OWN,  # 帧预算按 scope 分族（见 _fra
                          strip_user_shell)  # 两层壳剥除（见下方 `_short_core` 的注）
 from agent.factblock import strip_fact_lines  # 系统事实行不进模型语境（见 _recent_tail）
 from agent.block_reasons import block_reason_type  # 受阻原因码 → 类型（见 blocked_rows）
-# IoT 开关：与 `skills._IOT_*` 同源。`tools/base.py` 是开关值进入 agent 的唯一入口
+# IoT 开关：与 `workflows._IOT_*` 同源。`tools/base.py` 是开关值进入 agent 的唯一入口
 # （它读 `config.settings.iot_enabled`），这里只转发、不重新判断。
 from tools.base import IOT_ENABLED as _IOT_ENABLED
 
@@ -303,9 +303,9 @@ _GUESTBOOK_URL_RE = re.compile(r"/(?:guestbook|he)\b")
 # 未命中即缺失；近义重问还模板复读同文（489=489）。纪律 2 要求"页面存在"须
 # 有据——板块事实不注入，narrator 只能靠记忆碎片或检索命中拼。解法：常驻注入
 # 页面上下文（planner 与 model 均可见，模型只转述），与 GUESTBOOK_GUIDE 同构。
-# 板块路径与 NAV_MAP（skills.py 单一事实来源）保持一致，新增板块须同步此处与
-# test_skills 断言。
-# 物联网平台那一段随开关走（20261002，`IOT_ENABLED`，见 skills.py 与博客仓 `iot/`）：
+# 板块路径与 NAV_MAP（workflows.py 单一事实来源）保持一致，新增板块须同步此处与
+# test_workflows 断言。
+# 物联网平台那一段随开关走（20261002，`IOT_ENABLED`，见 workflows.py 与博客仓 `iot/`）：
 #   · 装了就照旧列进板块清单——它是真实存在的页面，清单必须覆盖它（否则
 #     `test_site_guide_covers_nav_map` 的覆盖断言会红，而它红得对：清单漏了活路径）；
 #   · 没装就**连"未部署"这句一起写上**，而不是整段不写。理由是**留白会被填**：
@@ -344,7 +344,7 @@ _SITE_GUIDE_TAIL = "看访客发来的图片并描述内容/颜色。"
 # 现场（`admin_tag_move_question_no_popup`，近 14 次全量红 4 次）：「系统目前只提供了
 # 「新建标签」的能力，并没有开放「修改已有标签」的通道」，而**同一份注入的清单里逐字
 # 写着**「修改已有标签：改名 / 改颜色 / 换父标签 / 一级↔二级互转」（注册表
-# `skills.py` 的 capability）。主人问的是"挪到别的标签下会有什么影响"，得到的却是一句
+# `workflows.py` 的 capability）。主人问的是"挪到别的标签下会有什么影响"，得到的却是一句
 # "系统没这个能力"——**列着却否认**与超纲承诺是同一种不诚实（都让主人对系统能力产生
 # 错误印象），而它更容易骗到人：听起来像系统限制，不像模型犯懒。
 _SITE_GUIDE_CLOSING = ("介绍能力时按此完整列出，不要遗漏；反过来，**清单之外的动作一律"
@@ -426,14 +426,14 @@ def _item_link_fact() -> str:
 
 
 def _dashboard_clause() -> str:
-    """/dashboard 各面板的板块短语（**从 skills.DASHBOARD_PANELS 渲染**，20260926）。
+    """/dashboard 各面板的板块短语（**从 workflows.DASHBOARD_PANELS 渲染**，20260926）。
 
     它们要进板块清单有两个理由：① `test_site_guide_covers_nav_map` 的覆盖断言——
     清单必须覆盖 NAV_MAP 的**全部**存活路径，而后台面板 20260926 起进了 NAV_MAP；
     ② 访客问"后台里有什么"、博主问"我能改哪些东西"时，narrator 得答得出来。
     手写这份清单就是第三份副本（本模块 20260921 刚把能力行改成渲染），所以现算。
     """
-    from agent.skills import DASHBOARD_PANELS    # 局部导入：同 site_guide 的理由（叶子层）
+    from agent.workflows import DASHBOARD_PANELS    # 局部导入：同 site_guide 的理由（叶子层）
     return "、".join(f"{name}（{path}）" for name, path in DASHBOARD_PANELS)
 # 管理能力的引导语（能力**内容**仍来自注册表的 capability 字段，这里只有抬头）
 _ADMIN_GUIDE_HEAD = "🔑 以管理员身份（本轮对话者是博主本人）你还额外能做："
@@ -446,14 +446,14 @@ def site_guide(role: str | None = None) -> str:
     narrator 一会儿说"我可以建标签"、一会儿说"我不能改后台"（165525/165544 vs
     165645/165937，同一能力三轮两种答案），而它**说的每一句都"有据"**——据的是
     那份不会动的清单。现在能力行 = 注册表的 capability 字段 × 同一套角色可见性
-    判据（skills.visible_skills），加技能/改角色只动注册表一处。
+    判据（workflows.visible_workflows），加技能/改角色只动注册表一处。
 
     可见性是**分流不是隐藏**：访客看不到管理能力行（他不该被告知"我能改后台"），
     管理员看到的清单里明确列出他能改什么（他不该被告知"我不能改"）。
     """
-    from agent.skills import visible_skills        # 局部导入：context 是叶子层，
-    base, admin = [], []                           # skills 反过来不依赖 context，但
-    for s in visible_skills(role):                 # 保持此处零模块级耦合更稳
+    from agent.workflows import visible_workflows        # 局部导入：context 是叶子层，
+    base, admin = [], []                           # workflows 反过来不依赖 context，但
+    for s in visible_workflows(role):                 # 保持此处零模块级耦合更稳
         if not s.capability:
             continue
         (admin if s.roles else base).append(s.capability)
@@ -465,12 +465,12 @@ def site_guide(role: str | None = None) -> str:
     # 枚举——`_SITE_GUIDE_CLOSING` 与 `test_capability_truth.py` 管的是"能不能做"的边界，
     # 掺进一句"事实"会让那条边界跟着漂。仍在收束句**之前**是因为既有两处锁死
     # `site_guide(...).endswith(_SITE_GUIDE_CLOSING)`（`tests/test_capability_truth.py`、
-    # `tests/test_skills.py` 各有一条）——清单的收束句必须真的是最后一句。
+    # `tests/test_workflows.py` 各有一条）——清单的收束句必须真的是最后一句。
     return (out + "\n" + _SITE_GUIDE_BOARD_FACT + "\n" + _item_link_fact()
             + "\n" + _SITE_GUIDE_CLOSING)
 
 
-# 无角色渲染（模块级常量）：既有导入点与 test_skills 的板块覆盖断言仍以此为准。
+# 无角色渲染（模块级常量）：既有导入点与 test_workflows 的板块覆盖断言仍以此为准。
 # **不要**在运行时用它——运行时要按角色取 site_guide(role)，否则管理员能力行
 # 又会漏掉（这正是本轮修的那个洞）。
 SITE_GUIDE = site_guide(None)
@@ -856,7 +856,7 @@ def _is_short_reply(text: str) -> bool:
 _INTENTS_BREAKDOWN = (
     "**「逐项」不等于「同一轮全办」**：一轮只发得出一条调用、一张确认卡也只装得下"
     "同一个本领的一件事。所以两件以上时，**在你点技能的那次调用里顺手把 `intents` "
-    "那一格填上**（逐件写 goal + skill，含你这一轮正要办的那件；也可以单独调一次 "
+    "那一格填上**（逐件写 goal + workflow，含你这一轮正要办的那件；也可以单独调一次 "
     "`task_intents`，但那样这一轮就没有动作了、系统会再请你办一件），这一轮只办"
     "最靠前那一件——其余的交由系统登记成跨轮任务、下一轮接着办。"
     "**漏列的那件下一轮谁都不记得**——宁可先列上，也别让它凭空消失。"
@@ -1685,7 +1685,7 @@ def blocked_rows(blocked: list | None) -> str:
     **完全能办**的事整条没有入口（现场见 `docs/问题记录.md` §1.55）。
 
     这一块只做一件事：把 blocked 项里**已经有的**类型渲染出来——原因码（← checker）、
-    技能名（← execute 从计划里读的 `plan["skill"]`）、以及"改参数重试有没有意义"
+    技能名（← execute 从计划里读的 `plan["workflow"]`）、以及"改参数重试有没有意义"
     （判据在 `agent/block_reasons.py` 的类型表，**不是这里现编的**）。硬编码的只剩
     措辞与截断长度，类型判断一律不在这里重做。
 
@@ -1701,11 +1701,11 @@ def blocked_rows(blocked: list | None) -> str:
     for b in items[:6]:  # 同 _receipts_text：同轮多 spec 时最多 6 条，防稀释
         cn, retry = block_reason_type(b.get("reason"))
         spec = " ".join(str(b.get("spec") or b.get("tool") or "").split())[:120]
-        skill = str(b.get("skill") or "").strip() or "（未标注）"
+        workflow = str(b.get("workflow") or "").strip() or "（未标注）"
         res = " ".join(str(b.get("result") or "").split())[:80]
         tail = ("改对参数再试一次仍可能成功" if retry else
                 "**改参数重试无效**（不是你没填对，重试同一个调用不会有别的结果）")
-        line = f"· 技能={skill}｜调用={spec}｜原因={cn}：{tail}"
+        line = f"· 技能={workflow}｜调用={spec}｜原因={cn}：{tail}"
         if res:
             line += f"｜工具返回={res}"
         lines.append(line)

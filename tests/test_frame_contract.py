@@ -360,7 +360,7 @@ def _sec_consent(ltree) -> None:
 
     import agent.authz as authz  # noqa: E402
     from agent.principal import Principal  # noqa: E402
-    from agent.react_line import RunLedger, SkillExecutor  # noqa: E402
+    from agent.react_line import RunLedger, WorkflowExecutor  # noqa: E402
 
     spec = 'delete_tag({"name": "大笨狗"})'
     admin = Principal(uid=0, role="admin")
@@ -368,21 +368,21 @@ def _sec_consent(ltree) -> None:
           authz.requires_consent(admin, "delete_tag"), "前提不成立 ⇒ 下面几格全无意义")
 
     def missing(grant=None, executed=(), calls=()):
-        ex = SkillExecutor({}, RunLedger(), principal=admin,
+        ex = WorkflowExecutor({}, RunLedger(), principal=admin,
                            user_msg="标签「大笨狗」我不想要了，删掉吧",
                            grant=grant, state={"executed": list(executed)})
         ex.calls.extend(calls)
         return ex._consent_missing(spec)
 
-    ok = {"skill": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]}
-    other = {"skill": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "别的"}}]}
+    ok = {"workflow": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]}
+    other = {"workflow": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "别的"}}]}
     check("⑧e 无令牌 ⇒ 判「没获同意」", missing() is True)
     check("⑧f 令牌签名体里**正是这一件** ⇒ 放行（这是令牌的正常用法）",
           missing(ok) is False)
     check("⑧g 令牌是**另一件**（同工具换目标）⇒ 仍判「没获同意」（20261012 第一次收窄）",
           missing(other) is True)
-    check("⑧h 令牌签名体**只有 skill 没有 specs**（生产不产这种形状）⇒ 不算覆盖",
-          missing({"skill": "tag_delete"}) is True)
+    check("⑧h 令牌签名体**只有 workflow 没有 specs**（生产不产这种形状）⇒ 不算覆盖",
+          missing({"workflow": "tag_delete"}) is True)
     check("⑧i 这一轮**已经执行过**同一件 ⇒ 令牌作废（20261012 第二次收窄）",
           missing(ok, executed=[spec]) is True)
     check("⑧j 本线真跑过的那件（`executor.calls`）同样让令牌作废",

@@ -132,7 +132,7 @@ _BASE = dict(state={"messages": []}, config=None, task_sink=None, rounds=1, user
              principal=None, round_info="", frames_txt="", gate_note="", deny=set(),
              _base_llm=None, _evidence=False, llm=None, deny_pseudo=set(),
              correction="", correction_kind="", native_note="", plan_obj=None,
-             raw="", decided=None, skill_name="", params={}, _tools_off=False,
+             raw="", decided=None, workflow_name="", params={}, _tools_off=False,
              _img_turn=False, llm_attempt=0)
 _EVENTS: list = []
 _ORIG_RECORD = G.record

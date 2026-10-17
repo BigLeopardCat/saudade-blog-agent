@@ -5,7 +5,7 @@
 `ConvergenceMiddleware` + `wrap_tools_with_receipts` 三个符号），现在循环住在
 `agent/react_arm.py` 那张**真图**里（四个节点 `planner`/`execute`/`model`/`gate`），
 本模块只留两件**与图无关**的资产：`convergence_verdict`（纯函数）与
-`SkillExecutor` / `RunLedger`（执行链 + 台账）。`create_agent` 三个符号已整体退场
+`WorkflowExecutor` / `RunLedger`（执行链 + 台账）。`create_agent` 三个符号已整体退场
 （理由与判据见 `docs/adr/adr-0009-*`）。
 
 **出厂不是生产路径**（20261012 复核）：`AGENT_ARM` 的真值源是 `.env`、默认 `graph`
@@ -49,7 +49,7 @@ schema 与真 planner 提示词装到自由 ReAct 上之后，命中率与现网
 = 一轮决策）；真节点的 `state["messages"]` 带着 DB 历史，数 `AIMessage` 会把**历史里
 的**那些算进预算。
 
-## 二、工具级回执（`SkillExecutor` + `RunLedger`）
+## 二、工具级回执（`WorkflowExecutor` + `RunLedger`）
 
 自由 ReAct 的工具结果只是消息流里的一串字符——没有验收、没有台账，narrator 事后
 "我办成了吗"只能靠猜。这里把"一次技能调用"展开成生产那条执行链：逐 spec 执行，立刻用
@@ -130,7 +130,7 @@ def attempted_specs(ledger: RunLedger) -> list[str]:
     return out
 
 
-def literal_path_override(skill: str, params: dict, user_msg: str) -> dict:
+def literal_path_override(workflow: str, params: dict, user_msg: str) -> dict:
     """`navigate` 的字面路径防推断兜底（20261005，照搬 `graph.py` 的 planner 同款兜底）。
 
     主人原话里出现 `/` 开头的路径时，导航目标**必须原样用那个路径**。模型会把 "/iot"
@@ -150,10 +150,10 @@ def literal_path_override(skill: str, params: dict, user_msg: str) -> dict:
     强制改目标、然后被判「不存在」。窄的是**"主人确实点名了一个站内路径"**这个意思，
     宽的不是。
 
-    住在这里而不是 `SkillExecutor.run` 的函数体里：`run` 是台账里挂着的热点
+    住在这里而不是 `WorkflowExecutor.run` 的函数体里：`run` 是台账里挂着的热点
     （C=33 > 30、行数只许缩小），把这一支连注释一起搬出来既减 C 又减行数。
     """
-    if skill != "navigate":
+    if workflow != "navigate":
         return params
     lit = re.search(r"(?<![:/\w])/[A-Za-z0-9_\-./]+", user_msg or "")
     if not lit or (params or {}).get("target") == lit.group(0):
@@ -219,11 +219,11 @@ class RunLedger:
         return [str(b.get("reason") or "") for b in self.blocked]
 
 
-def _verdict_of(name: str, args: dict, args_ok: bool, text: str, skill: str,
+def _verdict_of(name: str, args: dict, args_ok: bool, text: str, workflow: str,
                 kind: str, meta: dict, ledger: RunLedger) -> tuple[str, str]:
     """跑生产 checker、记台账、返回 `(给模型看的那一行回执, verdict)`。"""
-    verdict, reason = _check_spec(name, args, args_ok, text, skill, kind, meta)
-    receipt = {"skill": skill, "tool": name,
+    verdict, reason = _check_spec(name, args, args_ok, text, workflow, kind, meta)
+    receipt = {"skill": workflow, "tool": name,
                "args": {k: str(v)[:200] for k, v in (args or {}).items()},
                "result": text[:200], "kind": kind, "ts": time.time()}
     if verdict == _VERDICT_PASS:
@@ -253,11 +253,11 @@ def _verdict_of(name: str, args: dict, args_ok: bool, text: str, skill: str,
             verdict)
 
 
-# ── `ledger.record` 的两条硬要求（`SkillExecutor.run` 的签名口径）────────────────
+# ── `ledger.record` 的两条硬要求（`WorkflowExecutor.run` 的签名口径）────────────────
 # 无进展判据（`convergence_verdict` 的 `no_progress`）比的是"模型这一轮**点名了什么**"，
 # 而登记的签名就是那条判据的**对照方** ⇒ 口径错一条，判据就恒不触发（安静失效，不报错）。
 #
-#   ① **技能级**（`spec_signature(skill, params)`）。模型点名的是**技能 + 参数**——
+#   ① **技能级**（`spec_signature(workflow, params)`）。模型点名的是**技能 + 参数**——
 #      `planner` 拿 `resp.tool_calls` 的 `name`/`args` 直接喂进来，那个 `name` 就是技能名。
 #      换回工具级（`navigate_to` 之流）会让两边永远对不上。
 #   ② **在"字面路径修正"之前取参**。判据的对照方是模型的**原始** `tool_calls.args`；
@@ -267,9 +267,9 @@ def _verdict_of(name: str, args: dict, args_ok: bool, text: str, skill: str,
 # （chat 一类，0 个工具）与同意闸拦下的一批（一个都没执行）都不记——"没做过的事"记成
 # 做过，收尾正文会印出假的件数。
 #
-# 这段说明住在函数体**外面**是有意的：`SkillExecutor.run` 是台账里挂着的热点函数
+# 这段说明住在函数体**外面**是有意的：`WorkflowExecutor.run` 是台账里挂着的热点函数
 # （C=33 > 30），台账只许缩小，把契约散文搬出函数体是唯一不放松棘轮的做法。
-class SkillExecutor:
+class WorkflowExecutor:
     """把"一次技能调用"展开成生产那条执行链：`instantiate_plan` → 逐 spec 执行 → 验收。
 
     **为什么要展开**：本线的模型菜单是**技能**（臂 C′ 的资产），而 checker
@@ -318,32 +318,32 @@ class SkillExecutor:
         # 一次 `run()` 可能被包装层逐技能调用多次，重置会把前一轮的调用抹掉。
         self.calls: list[dict] = []
 
-    def run(self, skill: str, params: dict) -> tuple[str, int]:
+    def run(self, workflow: str, params: dict) -> tuple[str, int]:
         """→ `(给模型看的正文, 真正执行了几个工具)`。第二项是**无进展判据的输入**。
 
         台账登记（`ledger.record`）的口径见上面《`ledger.record` 的两条硬要求》
         ——**签名必须与判据的对照方同源**，错一条 ⇒ 无进展判据恒不触发。
         """
         from agent.refs import resolve_args
-        from agent.skills import instantiate_plan
+        from agent.workflows import instantiate_plan
 
         # 无进展判据的键（**取参在字面路径修正之前**，见类上面那一段 ①②）。
-        sig = spec_signature(skill, params)
+        sig = spec_signature(workflow, params)
 
         # 字面路径防推断兜底：判据与理由见 `literal_path_override` 的 docstring。
-        params = literal_path_override(skill, dict(params or {}), self.user_msg)
+        params = literal_path_override(workflow, dict(params or {}), self.user_msg)
 
-        plan = instantiate_plan(skill, dict(params or {}), self.role)
+        plan = instantiate_plan(workflow, dict(params or {}), self.role)
         specs = [str(s) for s in (plan.get("tools") or [])]
         if not specs:
             # 纯应答技能：没有工具要跑。留痕放 `ledger.replies`，**不进 receipts**
             # ——receipts 的语义是"系统确认的事实"（见 RunLedger 的注）。
             note = str(plan.get("note") or "")
             reply = note or str(plan.get("reply") or "")
-            self.ledger.replies.append({"skill": skill, "reply": reply[:200]})
+            self.ledger.replies.append({"workflow": workflow, "reply": reply[:200]})
             # **注记优先于回复契约**（20261005）：零工具而 `note` 非空，说明这一轮
             # 「为什么不执行」本身就是事实（navigate 的三个出口 / 参数缺失）。此前
-            # 取的是 `reply`＝`skill.reply_contract`，那是**给模型看的约束文本**、
+            # 取的是 `reply`＝`workflow.reply_contract`，那是**给模型看的约束文本**、
             # 不是结果——模型拿到「跳转由系统执行…可以简短确认」却不知道注记说了
             # 「不存在」，于是自己编一句「马上带你过去…页面就会跳过去」（实证：
             # `nav_nonexistent` 修字面路径后 6/6 仍红，但已从"真跳错页"变成
@@ -351,9 +351,9 @@ class SkillExecutor:
             # （`graph.py` 按 `plan["status"]` 选 `_FALLBACK_GONE` 兜底），本线
             # 还没有 gate，所以在这一层就把它交到模型手里。
             if note:
-                return (f"{note}\n{RECEIPT_HEAD} {skill}：本技能**没有执行任何工具**"
+                return (f"{note}\n{RECEIPT_HEAD} {workflow}：本技能**没有执行任何工具**"
                         f"（status={plan.get('status') or '?'}）。"), 0
-            return f"{reply}\n{RECEIPT_HEAD} {skill}：本技能没有要执行的工具（纯应答）。", 0
+            return f"{reply}\n{RECEIPT_HEAD} {workflow}：本技能没有要执行的工具（纯应答）。", 0
 
         # ── 同意闸（P3，20261005）：写操作**整批先判、一件都不执行** ──────────────
         # 生产这边的分工是两道、都在 `graph.execute_node`：① `_confirm_popup` 在**逐
@@ -373,7 +373,7 @@ class SkillExecutor:
                 name = _tool_name(spec)
                 args, args_ok = _tool_args(spec)
                 self.ledger.pending.append({"tool": name, "args": args,
-                                            "spec": spec, "skill": skill})
+                                            "spec": spec, "workflow": workflow})
                 # 正文用**生产同源**的同意帧（`_check_spec` 认得出它，所以"
                 # 这一轮没执行"对模型是读得到的、不是静默）。**不进 `self.calls`、
                 # 不进 `ledger.blocked`**：前者会让 `tool_calls` 记上一次"调用"
@@ -418,7 +418,7 @@ class SkillExecutor:
                     logger.info("[react_line] 工具 %s 抛错：%s", name, e)
             tool_data.append({"tool": name, "result": text[:2000]})
             outs.append(f"[{name}] {text}")
-            line, verdict = _verdict_of(name, args, args_ok, text, skill, kind, meta,
+            line, verdict = _verdict_of(name, args, args_ok, text, workflow, kind, meta,
                                         self.ledger)
             outs.append(line)
             # `line`（那行"【内部回执】…"）**单独留一格**：它要跟着这一条调用走到模型

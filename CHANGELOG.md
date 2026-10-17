@@ -152,6 +152,29 @@
   台账；CI 由 `tests/run_all.py` 按磁盘枚举自动到手。判据自带正控/反控（新增超预算、
   行数长大、定义变多、该销账、台账过期五路都要红，没动的要绿）。
 
+- **概念改名 `skill` → `workflow`（⚠️ 对外行为零变更；两处跨语言键**故意不动**）**——
+  "固定的多步工具配方"在行业惯例里叫 workflow，没有任何一家叫 skill（Anthropic 的
+  `SKILL.md` 是**指令包**，不是固定工具序列；Bedrock 叫 action group、MCP/OpenAI 叫 tool）。
+  本批改的是 **agent 仓内部**：模块与文件（`agent/skills.py` → `agent/workflows.py` 等
+  三处）、全部标识符、计划文本 IR `SKILL=` → `WORKFLOW=`、trace 事件键、`[planner]` 日志
+  键、确认令牌载荷、golden 用例里的 `require_confirm_payload` 键。**读它的都是 Python**，
+  写读同批改 ⇒ 无行为变化。
+  ⚠️ **两个键仍然叫 `skill`**，是刻意的：`__EXEC__` 帧体的 `skill`（→ `execution_log.skill`）
+  与 `__PENDING__` 帧体的 `skill`（→ `pending_action.skill`）。父仓 Rust 按这个名字读，
+  读法是 `unwrap_or("")`——**单改 Python 一侧不报错、只静默落空串**。那一批要连 Rust 读取端
+  与两条 DB 迁移一起落地（等点名授权），所以今天它们原地不动，`tests/test_workflows.py` /
+  `test_confirm.py` / `test_admin_write.py` / `test_react_arm.py` 四处断言也**照旧读 `skill`**
+  并各自写明理由。
+  **判据**：trace 是保留 30 天的长期语料 ⇒ 改名当天盘上全是旧键，读取端只认新键的话，
+  那 30 天里按 `workflow` 统计的巡检会**静默读到 0**、而且到期自己"恢复"（旧文件被删）。
+  旧键在**读取的唯一点**（`eval/trace_io.py::load_trace`）映射成新键，带**日落日期
+  20261116**；`tests/test_trace_io.py` ⑨ 到那天变红，提醒删掉这个兼容函数。另加两条：
+  `tests/test_docs_links.py` ④ 改成从文档正文现读一张**改名表**逐条放行（新路径必须在盘上，
+  否则自说自话的改名表能把幽灵路径洗白），`eval/complexity_baseline.json` 里
+  `tests/test_trace_io.py::main` 销账（拆出两个小函数，不是 `--update`）。
+  **文档**：现役文档跟着改名；**历史档案不回溯改写**（`docs/问题记录.md`、评测报告、
+  ADR）——只在文首加一行说明；**ADR 文件名一个都不动**（改了会打断所有按文件名引用的地方）。
+
 ## 20261016
 
 - **跨轮上下文的"本轮"在图里成了事实（判据 + 评测臂，20261016；⚠️ 生产行为零变更）**——

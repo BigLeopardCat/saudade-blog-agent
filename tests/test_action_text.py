@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import _parent_repo  # noqa: E402
-from agent import skills as S  # noqa: E402  （③ 末尾那条：死工具的可达性只认这两条通道）
+from agent import workflows as S  # noqa: E402  （③ 末尾那条：死工具的可达性只认这两条通道）
 from agent.action_text import receipt_action, tool_action_text  # noqa: E402
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
@@ -298,7 +298,7 @@ _dead_reachable = []
 for _n in sorted(_DEAD):
     if _n in S._EXPLICIT_TOOLS or _n in S._CALLABLE_QUERY_TOOLS:
         _dead_reachable.append(f"{_n}:点名白名单")
-    if any(_n == _t for _s in S.SKILLS for _t, _ in (_s.plan or ())):
+    if any(_n == _t for _s in S.WORKFLOWS for _t, _ in (_s.plan or ())):
         _dead_reachable.append(f"{_n}:技能模板")
 check("★ 两件死工具在哪条点名/模板通道里都够不到（够不到 ⇒ 「死」字成立）",
       not _dead_reachable, "、".join(_dead_reachable))

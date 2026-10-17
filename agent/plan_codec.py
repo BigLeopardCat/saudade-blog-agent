@@ -8,7 +8,7 @@
 ——进一份计划对象、出一段文本，反过来一样。
 
 **这一族是什么**：planner / execute / gate / narrator 之间传的那份**内部计划文本协议**
-（`SKILL=` / `STATUS=` / `PARAMS=` / `TOOLS:` / `NOTE:` / `REPLY:`；第 6 行 `TODO:` 于
+（`WORKFLOW=` / `STATUS=` / `PARAMS=` / `TOOLS:` / `NOTE:` / `REPLY:`；第 6 行 `TODO:` 于
 20261016 整行退休）。写端唯一入口是 `plan_state`——一次写出两态：人读的文本（`plan`）
 ＋ 程序读的对象（`plan_obj`）；读端是 `parse_plan`——容错全解析，按 `KEY[:=]` 搜索、
 **不依赖行序与分隔符**。
@@ -26,22 +26,22 @@
 同理：`tests/_ctx_src.plan_codec_src()` 把两份文件拼成一份取值视图，`test_plan_channel`
 ① 与 `test_status_judgements` ④ 的**断言字面一个字没动**——判据没被改松，只是锚点跟着
 代码搬（同 `_ctx_src.deprefix` / `.prose()` 那两次）。
-搬动时正文**逐字未动**，只同步了一处路径指针（`agent/skills.py` 里"同族教训见 …"那句）。
+搬动时正文**逐字未动**，只同步了一处路径指针（`agent/workflows.py` 里"同族教训见 …"那句）。
 """
 
 import json
 import re
 
-from agent.skills import PLAN_STATUS_VALUES, SKILL_MAP
+from agent.workflows import PLAN_STATUS_VALUES, WORKFLOW_MAP
 
 # ---------------------------------------------------------------------------
 # 容错解析工具（计划文本 → 结构化）
 # ---------------------------------------------------------------------------
 
-# ⚠️ 这里曾经还有一族"从 planner 自由文本里抠 SKILL=/PARAMS="的容错解析器
-# （`extract_plan_fields` / `_PLANNER_OUTPUT_RE` / `_SKILL_QUOTED_RES` / `_parse_params`
+# ⚠️ 这里曾经还有一族"从 planner 自由文本里抠 WORKFLOW=/PARAMS="的容错解析器
+# （`extract_plan_fields` / `_PLANNER_OUTPUT_RE` / `_WORKFLOW_QUOTED_RES` / `_parse_params`
 # / `_plan_body_of`）——20261004 随文本契约档一起删除。它与下面 `parse_plan` 读的
-# **内部计划文本协议**是两件事：那套协议（`SKILL=` / `PARAMS=` / `TOOLS:` / `NOTE:` /
+# **内部计划文本协议**是两件事：那套协议（`WORKFLOW=` / `PARAMS=` / `TOOLS:` / `NOTE:` /
 # `REPLY:`，由 `plan_encode` 写、`parse_plan` 读）由 execute/gate 消费，
 # **仍在用**；删掉的只是"模型自己写契约行"那条通道。
 # （协议里那个可选的 `TODO:` 行 20261016 也删了——它不是"模型写契约行"那条通道的
@@ -84,7 +84,7 @@ def _esc_spec(tool_spec: str) -> str:
 
     `\\u003b` 是合法 JSON 转义，`json.loads`/`ast.literal_eval` 读回都会还原成 `;`，
     **语义一个字节没变**，只是文本里不再有裸 `;`。写在这里而不是那 13 个拼 spec 的地方
-    （`skills.py` 12 处 + 本文件 1 处）：写端只有这一处，且"改一处要同步十三处"正是
+    （`workflows.py` 12 处 + 本文件 1 处）：写端只有这一处，且"改一处要同步十三处"正是
     全仓审计点名的主导特征。分隔符本身由 `join` 产出、不经过这里，所以转义的只有值里的。
     **PARAMS 行不用**：它不参与任何 `;` 切分（`json.dumps` 已把换行转义掉）。
     """
@@ -95,7 +95,7 @@ def plan_encode(plan_obj: dict) -> str:
     """结构化计划（instantiate_plan 产物）→ plan 字段（契约的写端）。
 
     `STATUS=` 行（20260926 批 3）**由系统写死**，模型一个字都不填——所以它一定
-    排在 SKILL 之后（紧跟"这是份什么计划"，与人读的顺序一致），而**不是**塞在
+    排在 WORKFLOW 之后（紧跟"这是份什么计划"，与人读的顺序一致），而**不是**塞在
     REPLY 附近：`parse_plan` 的 REPLY 正则吃 DOTALL，它必须是末行。
 
     派生规则（`plan_obj` 没带 status 时）：有工具 → `executed`；chat 技能 →
@@ -113,7 +113,7 @@ def plan_encode(plan_obj: dict) -> str:
         "executed" if plan_obj.get("tools")
         else ("answer_only" if plan_obj.get("chat") else ""))
     lines = [
-        f"SKILL={plan_obj['skill']}",
+        f"WORKFLOW={plan_obj['workflow']}",
     ]
     if status:
         lines.append(f"STATUS={status}")
@@ -149,9 +149,9 @@ def plan_state(plan_obj: dict) -> dict:
 
     **为什么要有它（20260928，架构审计第 ② 条的一半）**：此前 24 个计划构造点各自写
     `{"plan": plan_encode(plan_obj), …}`，而**读端**要拿其中某个字段时只能再去抠那段
-    文本——`server.py` 用 `plan.startswith("SKILL=")` 判"这是不是一份真计划"、
-    `"\nTOOLS: " in plan` 判"有没有执行清单"，`_plan_skill` 又自己写了一条
-    `SKILL=` 正则（与 `parse_plan` 里那条是两份拷贝）。三处都是"改 `plan_encode`
+    文本——`server.py` 用 `plan.startswith("WORKFLOW=")` 判"这是不是一份真计划"、
+    `"\nTOOLS: " in plan` 判"有没有执行清单"，`_plan_workflow` 又自己写了一条
+    `WORKFLOW=` 正则（与 `parse_plan` 里那条是两份拷贝）。三处都是"改 `plan_encode`
     的排版必须同步改三个读端"的人工约定。现在读端直取 `state["plan_obj"]`。
 
     **两态必须**由这一处一起给**（而不是各构造点自己填两遍）：文本是派生物，
@@ -173,7 +173,7 @@ def plan_state(plan_obj: dict) -> dict:
 def parse_plan(raw: str) -> dict:
     """解析 plan 字段（契约的读端）。容错：解析失败 → 按 chat 兜底（宁可少干活，不硬猜）。
 
-    返回 {"skill", "params", "tools", "note", "reply", "chat", "status"}。
+    返回 {"workflow", "params", "tools", "note", "reply", "chat", "status"}。
     `status` 见 `PLAN_STATUS_VALUES`（批 3）：系统自己写的计划一定带 `STATUS=` 行，
     缺了才走下面那段兼容派生（判据别依赖派生，它只是给旧文本留的路）。
     容错原则：所有"LLM 输出 → 程序消费"的边界都要能优雅降级——LLM 不是
@@ -185,8 +185,8 @@ def parse_plan(raw: str) -> dict:
     这里**不需要**也不该再有"容错抠模型自由文本"的第二套解析器——曾经有过一份
     （`extract_plan_fields`，20260926 为 JSON 漂移加的），随文本档一起删除。
     """
-    m = re.search(r"SKILL\s*[:=]\s*(\w+)", raw or "", re.IGNORECASE)
-    skill = m.group(1) if m else "chat"
+    m = re.search(r"WORKFLOW\s*[:=]\s*(\w+)", raw or "", re.IGNORECASE)
+    workflow = m.group(1) if m else "chat"
     params = {}
     pm = re.search(r"PARAMS\s*[:=]\s*(\{.*?\})\s*\n", raw or "", re.IGNORECASE | re.DOTALL)
     if pm:
@@ -213,12 +213,12 @@ def parse_plan(raw: str) -> dict:
         # 为什么不留空、非要派生一遍：留空 = 判据 fail-open，而"缺 STATUS"最可能
         # 的来历正是**改造前留在 state 里的旧计划文本**——那时判据判的是注记措辞，
         # 派生一遍等于把旧行为原样接上，不会因为升级而突然少拦一类（也不会突然
-        # 多拦——派生只认系统自己那三条注记的**固定前缀**，见 skills.py）。
+        # 多拦——派生只认系统自己那三条注记的**固定前缀**，见 workflows.py）。
         if tools:
             status = "executed"
-        elif skill == "chat":
+        elif workflow == "chat":
             status = "answer_only"
-        elif skill == "navigate" and "不调用任何工具" in note:
+        elif workflow == "navigate" and "不调用任何工具" in note:
             # ⚠️ "未部署" 必须排在 "已下线" **之前**：`_IOT_OFF_NOTE` 里那句叮嘱
             # （"不要说「已下线」"）本身含"已下线"三个字，先判它就会把"IoT 没装"
             # 派生成"页面下线了"——正是这两个值分开要防的那件事，从这里漏回来。
@@ -231,11 +231,11 @@ def parse_plan(raw: str) -> dict:
             elif "不存在" in note:
                 status = "target_unreachable"
     return {
-        "skill": skill if skill in SKILL_MAP else "chat",
+        "workflow": workflow if workflow in WORKFLOW_MAP else "chat",
         "params": params,
         "tools": tools,
         "note": note,
         "reply": reply,
-        "chat": (skill in SKILL_MAP and SKILL_MAP[skill].chat) or skill == "chat",
+        "chat": (workflow in WORKFLOW_MAP and WORKFLOW_MAP[workflow].chat) or workflow == "chat",
         "status": status,
     }

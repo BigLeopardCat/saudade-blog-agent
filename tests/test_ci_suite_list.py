@@ -4,7 +4,7 @@
 **为什么单起一套**（20260928 架构规范化 ①）：审计实测——磁盘上 50+ 个 `tests/*.py`，
 而 `.github/workflows/eval.yml` 是**手工维护**的 26 个 step、`scripts/nightly_regression.sh`
 另抄一份、README 正文再抄一份 ⇒ **一半以上的判据从不在任何自动化里跑**，其中就有
-`test_prompt_prefix`（提示词前缀缓存稳定性的唯一哨兵）与 `test_slim_skills`。
+`test_prompt_prefix`（提示词前缀缓存稳定性的唯一哨兵）与 `test_slim_workflows`。
 加一个套件要改三处名单，漏一处就变成"看着在跑、其实没跑"——**这种失效没有任何东西会
 告诉你**：CI 绿、夜间绿、README 看着齐全。
 
@@ -105,7 +105,7 @@ print("\n② 夜间（scripts/nightly_regression.sh）：与 CI 同一份清单"
 _night = NIGHTLY.read_text(encoding="utf-8")
 _night_called = _called_suites(_night)
 check("夜间跑的也是 tests/run_all.py", "tests/run_all.py" in _night)
-check("夜间没有逐个套件的调用（此前这里是单列 test_skills.py）",
+check("夜间没有逐个套件的调用（此前这里是单列 test_workflows.py）",
       _night_called <= _ALLOWED, f"逐套件调用：{sorted(_night_called - _ALLOWED)}")
 check("夜间给 run_all 也没传 -k（夜间=全量）",
       "run_all.py -k" not in _night and "run_all.py --keyword" not in _night)

@@ -4,7 +4,7 @@
 被锁的产品语义只有一句：和杂鱼对话时，agent 拒绝调用任何工具，只用雌小鬼的口吻闲聊。
 
 **为什么这套判据要写得这么细**——"零工具"在本仓不是一个开关，而是四层收口：
-  ① `skills.visible_skills` 只剩 `chat`（模型看到的菜单）
+  ① `workflows.visible_workflows` 只剩 `chat`（模型看到的菜单）
   ② `planner_llm.build_tool_schema` 只发得出 `chat`（接口层的 tools 数组）
   ③ `authz.scopes_for("zako")` 空集（执行前的判据）
   ④ `graph.planner_node` 顶部短路（**连决策都不发生**）
@@ -37,7 +37,7 @@ from agent.principal import (  # noqa: E402
     Principal,
 )
 from agent.prompts import AUDIENCE_ADMIN, AUDIENCE_VISITOR, AUDIENCE_ZAKO, audience_block  # noqa: E402
-from agent.skills import build_planner_context, visible_skills  # noqa: E402
+from agent.workflows import build_planner_context, visible_workflows  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -88,12 +88,12 @@ check_("Principal.known_role 认它（不进 KNOWN_ROLES 的话这里会是 None
 
 # ══════════════════════════════════════════════════════════════════
 print("\n② 技能可见性只留 chat（层①：模型看到的菜单）")
-_zako_skills = [s.name for s in visible_skills(ROLE_ZAKO)]
-check_("只剩 chat 一项", _zako_skills == ["chat"], str(_zako_skills))
+_zako_workflows = [s.name for s in visible_workflows(ROLE_ZAKO)]
+check_("只剩 chat 一项", _zako_workflows == ["chat"], str(_zako_workflows))
 check_("带工具的技能一个都不在（抽几个有代表性的点名）",
        not {"content_query", "navigate", "toggle_effect", "toggle_dark_mode",
-            "device_display", "list_notes"} & set(_zako_skills),
-       str(_zako_skills))
+            "device_display", "list_notes"} & set(_zako_workflows),
+       str(_zako_workflows))
 _ctx = build_planner_context(ROLE_ZAKO)
 # 技能条目的渲染形状是 `- {name}：`（见 build_planner_context 的 lines.append）。
 # **不能**直接断言 "navigate" 不在整段文本里：菜单下方那张导航映射表的表头里
@@ -103,8 +103,8 @@ _menu = [ln for ln in _ctx.splitlines() if ln.startswith("- ")]
 check_("planner 菜单里**条目**只有 chat 一条（其它技能一个条目都没列）",
        len(_menu) == 1 and _menu[0].startswith("- chat："), str(_menu))
 check_("include_system=True 也带不出别的（系统技能不是后门）",
-       [s.name for s in visible_skills(ROLE_ZAKO, include_system=True)] == ["chat"],
-       str([s.name for s in visible_skills(ROLE_ZAKO, include_system=True)]))
+       [s.name for s in visible_workflows(ROLE_ZAKO, include_system=True)] == ["chat"],
+       str([s.name for s in visible_workflows(ROLE_ZAKO, include_system=True)]))
 
 # ══════════════════════════════════════════════════════════════════
 print("\n③ 执行前的判据：零 scope（层③）")
@@ -123,9 +123,9 @@ print("\n④ 接口层：schema 恒等于可见技能集 + 三个恒在的伪函
 # "两边都该是 {chat}" 改成"真技能那一侧恰是 {chat}、伪函数是申报过的那三个"。
 _PSEUDO_FNS = {"task_hold", "task_drop", "task_intents"}
 _zako_schema = [t["function"]["name"] for t in build_tool_schema(ROLE_ZAKO)]
-check_("schema 名集合 == visible_skills 名集合 ∪ 三个伪函数（两个方向都锁）",
-       set(_zako_schema) == {s.name for s in visible_skills(ROLE_ZAKO)} | _PSEUDO_FNS
-       and {s.name for s in visible_skills(ROLE_ZAKO)} == {"chat"},
+check_("schema 名集合 == visible_workflows 名集合 ∪ 三个伪函数（两个方向都锁）",
+       set(_zako_schema) == {s.name for s in visible_workflows(ROLE_ZAKO)} | _PSEUDO_FNS
+       and {s.name for s in visible_workflows(ROLE_ZAKO)} == {"chat"},
        str(_zako_schema))
 check_("**非空**（空 tools 数组在网关那边是无定义行为，见 bind_planner_tools 的那一注）"
        "：1 个真技能 + 3 个伪函数",
@@ -161,7 +161,7 @@ try:
            plan["tools"] == [] and route_after_planner(out) == "model",
            f"{plan['tools']} → {route_after_planner(out)}")
     check_("技能是 chat、chat 标志为真（不是含糊的收尾）",
-           plan["skill"] == "chat" and plan.get("chat") is True, str(plan.get("skill")))
+           plan["workflow"] == "chat" and plan.get("chat") is True, str(plan.get("workflow")))
     check_("注记是**杂鱼那一条**，不是默认那句『无任何工具执行记录：如实告知无法确认』"
            "（照默认说会把闲聊变成拒答）",
            "杂鱼" in plan.get("note", "") and "无法确认" not in plan.get("note", ""),
@@ -192,7 +192,7 @@ try:
 
     # ── 反向对照：同一条消息、只把角色换回 user，桩必须**真的**被触发 ──────
     _zako_calls = _boom.calls
-    _scripted = _ScriptedLLM(['SKILL=chat\nPARAMS={}\nREPLY: 你好呀'])
+    _scripted = _ScriptedLLM(['WORKFLOW=chat\nPARAMS={}\nREPLY: 你好呀'])
     _user_calls = []
 
     def _spy(**_kw):
@@ -205,8 +205,8 @@ try:
            len(_user_calls) == 1 and _zako_calls == 0,
            f"user={len(_user_calls)} zako={_zako_calls}")
     check_("反向对照：user 的菜单与 schema 都恢复成多项",
-           len(visible_skills(ROLE_USER)) > 1 and len(build_tool_schema(ROLE_USER)) > 1,
-           f"{len(visible_skills(ROLE_USER))} / {len(build_tool_schema(ROLE_USER))}")
+           len(visible_workflows(ROLE_USER)) > 1 and len(build_tool_schema(ROLE_USER)) > 1,
+           f"{len(visible_workflows(ROLE_USER))} / {len(build_tool_schema(ROLE_USER))}")
     check_("反向对照：user 有工具是放行的（zako 一个都没有）",
            any(check(_p(ROLE_USER), t).allowed for t in TOOL_SCOPE)
            and not any(check(_p(ROLE_ZAKO), t).allowed for t in TOOL_SCOPE))
@@ -243,7 +243,7 @@ _real_find = base._find_named_user
 try:
     base._find_named_user = lambda name, config: (
         {"id": 88, "username": name, "nickname": name, "role": ROLE_ZAKO, "status": 0}, None)
-    _plan_obj = {"skill": "account_freeze", "tools": ['freeze_account({"name": "someone"})']}
+    _plan_obj = {"workflow": "account_freeze", "tools": ['freeze_account({"name": "someone"})']}
     _refusal = _freeze_policy_refusal(_plan_obj, _cfg(ROLE_ADMIN, uid=7), _p(ROLE_ADMIN, uid=7))
     check_("管理员冻杂鱼：预检**放行**给后端（后端 check_freeze 判 Ok）", _refusal is None,
            str(_refusal))

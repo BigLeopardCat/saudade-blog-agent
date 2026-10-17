@@ -135,7 +135,7 @@
         19,
         0
       ],
-      "agent/skills.py": [
+      "agent/workflows.py": [
         234,
         0
       ],
@@ -1909,8 +1909,8 @@
       "why": "周报/月报/年报的显示字"
     },
     {
-      "id": "agent/skills.py::_IOT_NAV_ALIASES",
-      "file": "agent/skills.py",
+      "id": "agent/workflows.py::_IOT_NAV_ALIASES",
+      "file": "agent/workflows.py",
       "kind": "collection",
       "name": "_IOT_NAV_ALIASES",
       "size": 10,
@@ -1919,8 +1919,8 @@
       "why": "物联网页面的别名 → 路径（站内页面事实）"
     },
     {
-      "id": "agent/skills.py::NAV_MAP",
-      "file": "agent/skills.py",
+      "id": "agent/workflows.py::NAV_MAP",
+      "file": "agent/workflows.py",
       "kind": "collection",
       "name": "NAV_MAP",
       "size": 18,
@@ -1929,8 +1929,8 @@
       "why": "页面别名 → 真实路径，站内单一事实源"
     },
     {
-      "id": "agent/skills.py::_PUBLIC_NAME_TAKEN",
-      "file": "agent/skills.py",
+      "id": "agent/workflows.py::_PUBLIC_NAME_TAKEN",
+      "file": "agent/workflows.py",
       "kind": "collection",
       "name": "_PUBLIC_NAME_TAKEN",
       "size": 2,

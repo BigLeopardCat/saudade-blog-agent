@@ -90,7 +90,7 @@ CARD = ("确认执行：要给账号「demo」（账号 id=747）发一条**站�
         "吗？点「确定」我就去办。")
 NOTICE = {"tool": "send_user_notice", "args": {"name": "demo", "content": "喵～"}}
 ROLE_SPEC = 'set_account_role({"name": "demo", "role": "zako"})'
-PLAN_OBJ = {"skill": "account_set_role", "params": {}, "tools": [ROLE_SPEC],
+PLAN_OBJ = {"workflow": "account_set_role", "params": {}, "tools": [ROLE_SPEC],
             "note": "x", "reply": "y"}
 _CFG = {"configurable": {"principal": Principal(uid=1, role="superadmin"),
                          "user_id": 1, "conversation_id": 342, "stop_event": None}}
@@ -179,7 +179,7 @@ def _gate(reply: str, tid: str) -> tuple[dict, list]:
                        ToolMessage(content=notice["result"], name="send_user_notice",
                                    tool_call_id="c1"),
                        AIMessage(content=reply)],
-          "plan": "SKILL=content_query\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）",
+          "plan": "WORKFLOW=content_query\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）",
           "receipts": [notice]}
     return G.gate_node(st, _CFG), rec.events
 
@@ -252,8 +252,8 @@ def test_not_a_replan_issue():
 # 令牌用在那一件上就作废（"令牌只授权一次执行，不是一张可反复使用的通行证"）。
 TODO_SPEC = 'create_dashboard_todo({"text": "给用户niuniu重置额度"})'
 _TODO_SPEC_D = {"tool": "create_dashboard_todo", "args": {"text": "给用户niuniu重置额度"}}
-_GRANT_TODO = {"token": "tok", "skill": "dashboard_todo_add", "specs": [_TODO_SPEC_D]}
-_QUOTA_TOKEN = {"token": "tok", "skill": "quota_reset",
+_GRANT_TODO = {"token": "tok", "workflow": "dashboard_todo_add", "specs": [_TODO_SPEC_D]}
+_QUOTA_TOKEN = {"token": "tok", "workflow": "quota_reset",
                 "specs": [{"tool": "reset_user_quota", "args": {"uid": 9}}]}
 _OWNER_4 = ("猫咪加条待办给用户niuniu重置额度，然后去把他额度重置，"
             "然后把待审的留言你审核一下是否通过，然后再发一条公告，以你的口吻随便说点声明")
@@ -282,12 +282,12 @@ def test_grant_spent_after_first_use():
                           'reset_user_quota({"uid": 9})') is True)
 
     # 端到端：重复那一件过**真的** `execute_node`（第 2 轮）⇒ 零执行、不留静默口子
-    plan_obj = G.plan_state({"skill": "dashboard_todo_add", "params": {},
+    plan_obj = G.plan_state({"workflow": "dashboard_todo_add", "params": {},
                              "tools": [TODO_SPEC], "note": "x", "reply": "y"})
     st = {**plan_obj, "plan_rounds": 1, "done": False,
           "messages": [HumanMessage(content=_OWNER_4), HumanMessage(content=_CARD_TODO)],
           "confirm_grant": _GRANT_TODO,
-          "receipts": [{"skill": "dashboard_todo_add", "tool": "create_dashboard_todo",
+          "receipts": [{"workflow": "dashboard_todo_add", "tool": "create_dashboard_todo",
                         "args": {"text": "给用户niuniu重置额度"},
                         "result": "已在后台首页的待办里加了一条", "ts": 1.0}],
           "executed": [TODO_SPEC], "noop_specs": [], "blocked": [], "blocked_seen": []}

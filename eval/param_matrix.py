@@ -250,7 +250,7 @@ def _row(arm: str, rep: int, rc: int, rp: Path | None) -> dict:
 
 # ── 路由稳定性：从 trace 里逐用例取 round 0 决策 ────────────────────────
 def _round0_by_case(trace_dir: str) -> dict[str, tuple]:
-    """`{用例 id: (skill, finish, calls)}`——只取**第一条** planner 决策事件。"""
+    """`{用例 id: (workflow, finish, calls)}`——只取**第一条** planner 决策事件。"""
     out: dict[str, tuple] = {}
     for f in glob.glob(os.path.join(trace_dir or "", "*.json")):
         try:
@@ -263,7 +263,7 @@ def _round0_by_case(trace_dir: str) -> dict[str, tuple]:
         if not dec:
             continue
         e0 = dec[0]
-        out[Path(f).stem] = (str(e0.get("skill")), str(e0.get("finish")),
+        out[Path(f).stem] = (str(e0.get("workflow")), str(e0.get("finish")),
                              str(e0.get("calls") or e0.get("tools") or ""))
     return out
 

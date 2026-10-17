@@ -214,7 +214,7 @@ def test_narrator_records_usage():
     old_get, G.get_llm = G.get_llm, fake
     try:
         G.model_node({"messages": [HumanMessage(content=_MSG)],
-                      "plan": "SKILL=effect\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）",
+                      "plan": "WORKFLOW=effect\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）",
                       "receipts": []}, _CFG)
     finally:
         G.get_llm = old_get
@@ -264,7 +264,7 @@ def test_reflector_records_usage():
                                       usage_metadata=dict(_REAL)))
     old_get, G.get_llm = G.get_llm, fake
     try:
-        G.reflector_node({"messages": [HumanMessage(content=_MSG)], "plan": "SKILL=x",
+        G.reflector_node({"messages": [HumanMessage(content=_MSG)], "plan": "WORKFLOW=x",
                           "blocked": [{"spec": "get_article_detail({})",
                                        "reason": "empty_result", "result": "（空）"}],
                           "reflect_rounds": 0}, _CFG)

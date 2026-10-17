@@ -41,7 +41,7 @@ from agent import adminops as A  # noqa: E402
 from agent import authz, confirm  # noqa: E402
 from agent.graph import execute_node, plan_state  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.skills import _FREE_TEXT_WRITE_SKILLS, instantiate_plan  # noqa: E402
+from agent.workflows import _FREE_TEXT_WRITE_WORKFLOWS, instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
 
 # 父仓（Rust）源码的读取统一走它：三态显式（找得到 → 断言；找不到且设了
@@ -168,7 +168,7 @@ check("繁体/别名同族不作两套（後天=后天、今日=今天）",
 check("不带年份的「9月27日」按**当年**解释（是一条规则，不是猜）",
       A.normalize_due_date("9月27日", today=TODAY) == TOMORROW
       and A.normalize_due_date("9-27", today=TODAY) == TOMORROW)
-# 20261008：日位写「号」**与「日」同义**。此前不认，而 `skills.py` 里那条技能的
+# 20261008：日位写「号」**与「日」同义**。此前不认，而 `workflows.py` 里那条技能的
 # 能力文案自己举的例句就是「把〈…〉挪到 10 月 8 号」⇒ 主人明明说了日子，助手反问
 # 「你说是哪一天」。修的是日位那个同义字，不是放宽"什么算日期"。
 check("★「X月X号」与「X月X日」同义（口语里「号」比「日」更常说）",
@@ -352,12 +352,12 @@ check("  注记写「（未排期）」", "（未排期）" in out["note"], out[
 check("展开出的工具名在注册表里（否则 execute 只能回「未知工具」错误帧）",
       "create_dashboard_todo" in {t.name for t in base.get_all_tools()})
 check("这一族是**自由文本**那一族（不在名字通道、也不在 own 通道——判据错位比没有判据更糟）",
-      _FREE_TEXT_WRITE_SKILLS == frozenset({"dashboard_todo_add", "dashboard_todo_done",
+      _FREE_TEXT_WRITE_WORKFLOWS == frozenset({"dashboard_todo_add", "dashboard_todo_done",
                                             "dashboard_todo_reschedule"}),
-      str(_FREE_TEXT_WRITE_SKILLS))
+      str(_FREE_TEXT_WRITE_WORKFLOWS))
 # 桶成员资格只说"目标是自由文本"，**展开函数要按技能名三分**（第十轮加"勾完成"、
 # 批 G 加"改排期"）：这条钉的是**三个技能名都真的在自己的路径上**——漏了那次分派的
-# 后果是静默的，"勾完成"会被 `_expand_todo_skill` 展开成 `create_dashboard_todo`
+# 后果是静默的，"勾完成"会被 `_expand_todo_workflow` 展开成 `create_dashboard_todo`
 # （多记一条待办），"改排期"同样会**又记一条**（而列表上多出来的那一行看起来就是主人
 # 想要的那条）；所以判据落在"展开出的工具名"上，而不是"桶里有几个名字"。
 check("  桶内三个技能各自展开成自己的工具（勾完成/改排期都不会展开成「加一条」）",
@@ -627,19 +627,19 @@ class _FakeTool:
         return self.out
 
 
-def _grant_of(spec, skill=None):
+def _grant_of(spec, workflow=None):
     """照**卡上签的那一件**造令牌（20261012 起 `_grant_covers` 按工具名+参数比对：
     光有令牌不算数——空壳 `{"token": "x"}` 会让确认轮重新弹卡）。"""
     args, ok = g._tool_args(spec)
     assert ok, spec
-    return {"token": "x", "skill": skill, "specs": [{"tool": g._tool_name(spec),
+    return {"token": "x", "workflow": workflow, "specs": [{"tool": g._tool_name(spec),
                                                      "args": args}]}
 
 
 def _run(msg, spec, grant=None):
     CALLS.clear()
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = "dashboard_todo_add"
+    obj["workflow"] = "dashboard_todo_add"
     obj["tools"] = [spec]
     state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content=msg)]}
@@ -687,8 +687,8 @@ try:
               "「给猫买罐头」" in pop.get("q", "") and "排期 9月27日" in pop.get("q", ""),
               pop.get("q", ""))
         payload = confirm.inspect(pop.get("token") or "") or {}
-        check("  令牌载荷里的 skill 与参数就是这一件（卡上写什么就签什么）",
-              payload.get("skill") == "dashboard_todo_add"
+        check("  令牌载荷里的 workflow 与参数就是这一件（卡上写什么就签什么）",
+              payload.get("workflow") == "dashboard_todo_add"
               and payload.get("specs") == [{"tool": "create_dashboard_todo",
                                             "args": {"text": "给猫买罐头", "date": TOMORROW}}],
               str(payload))
@@ -721,18 +721,18 @@ finally:
 # ══════════════════════════════════════════════════════════════════
 print("\n⑧ 接线：读技能不进写名单，且后台待办的写通道**全是「只动一行」的最小通道")
 
-from agent.skills import WRITE_SKILL_NAMES  # noqa: E402
+from agent.workflows import WRITE_WORKFLOW_NAMES  # noqa: E402
 
 check("写技能名单里有 dashboard_todo_add",
-      "dashboard_todo_add" in WRITE_SKILL_NAMES, str(sorted(WRITE_SKILL_NAMES)))
+      "dashboard_todo_add" in WRITE_WORKFLOW_NAMES, str(sorted(WRITE_WORKFLOW_NAMES)))
 check("读技能 dashboard_todo_list **不在**写名单里（它一个字节都不改）",
-      "dashboard_todo_list" not in WRITE_SKILL_NAMES)
-_gsrc = (ROOT / "agent" / "skills.py").read_text(encoding="utf-8")
-# 这两条从前按**源码文本**钉（`"in _FREE_TEXT_WRITE_SKILLS" in _gsrc` + 用 `index()` 比
+      "dashboard_todo_list" not in WRITE_WORKFLOW_NAMES)
+_gsrc = (ROOT / "agent" / "workflows.py").read_text(encoding="utf-8")
+# 这两条从前按**源码文本**钉（`"in _FREE_TEXT_WRITE_WORKFLOWS" in _gsrc` + 用 `index()` 比
 # 先后）。20261015 批 1 把那份成员判定换成按「靶通道」表派生（`_chan == "free_text"`）
 # ⇒ 文本锁当场红：它锁的其实是**实现形状**，不是"接线对不对"。改成**跑一遍看产物**——
 # 接线漏了就走 fail-closed 那一支（零工具）、三条分支串了就是"勾完成"被展成 `create_*`
-# （多记一条待办，见 `_expand_todo_skill` 头注里那两处现场），两种病在产物上直接现形。
+# （多记一条待办，见 `_expand_todo_workflow` 头注里那两处现场），两种病在产物上直接现形。
 _ADD = instantiate_plan("dashboard_todo_add", {"text": "写周报"})["tools"]
 _DONE = instantiate_plan("dashboard_todo_done", {"text": "写周报"})["tools"]
 _RESCHED = instantiate_plan("dashboard_todo_reschedule",
@@ -993,7 +993,7 @@ check("正文超上限 → 零工具 + 注记（上限与工具侧同源）",
       and str(base._TODO_TEXT_LIMIT) in out["note"], f"{out['tools']} / {out['note'][:50]}")
 
 check("它在写技能名单里（漏了会落进通用模板分支，产出一次不成形的写）",
-      "dashboard_todo_done" in WRITE_SKILL_NAMES, str(sorted(WRITE_SKILL_NAMES)))
+      "dashboard_todo_done" in WRITE_WORKFLOW_NAMES, str(sorted(WRITE_WORKFLOW_NAMES)))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1142,7 +1142,7 @@ try:
                          ("交房租办完了", "陈述式（同意闸本就判不出）")]:
             CALLS.clear()
             obj = instantiate_plan("navigate", {"target": "物联网平台"})
-            obj["skill"] = "dashboard_todo_done"
+            obj["workflow"] = "dashboard_todo_done"
             obj["tools"] = [_SPEC_DONE]
             state = {**plan_state(obj), "plan_rounds": 1, "done": False,
                      "messages": [HumanMessage(content=msg)]}
@@ -1154,8 +1154,8 @@ try:
                   "「交房租」" in pop.get("q", "") and "排期 9月28日" in pop.get("q", "")
                   and "现在：未完成" in pop.get("q", ""), pop.get("q", ""))
             payload = confirm.inspect(pop.get("token") or "") or {}
-            check("  令牌载荷里的 skill 与参数就是这一件（卡上写什么就签什么）",
-                  payload.get("skill") == "dashboard_todo_done"
+            check("  令牌载荷里的 workflow 与参数就是这一件（卡上写什么就签什么）",
+                  payload.get("workflow") == "dashboard_todo_done"
                   and payload.get("specs") == [{"tool": "complete_dashboard_todo",
                                                 "args": {"text": "交房租"}}], str(payload))
             check("  这一轮**零执行**（弹卡轮只弹卡）", CALLS == [] and r["receipts"] == [])
@@ -1163,7 +1163,7 @@ try:
         # 读不到列表时**仍要弹卡**（弹窗是这类写唯一的人类兜底；少一句现状比不弹轻得多）
         CALLS.clear()
         obj = instantiate_plan("navigate", {"target": "物联网平台"})
-        obj["skill"] = "dashboard_todo_done"
+        obj["workflow"] = "dashboard_todo_done"
         obj["tools"] = [_SPEC_DONE]
         state = {**plan_state(obj), "plan_rounds": 1, "done": False,
                  "messages": [HumanMessage(content="把交房租那条勾了")]}
@@ -1177,7 +1177,7 @@ try:
     # 主人点了确定 → 放行执行（「一律弹窗」不是「永不执行」）
     CALLS.clear()
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = "dashboard_todo_done"
+    obj["workflow"] = "dashboard_todo_done"
     obj["tools"] = [_SPEC_DONE]
     state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content="交房租办完了")],
@@ -1201,9 +1201,9 @@ finally:
 print("\n⑯ 报待办时连带报出后台首页上并排的两类「等着你处理」"
       "（留言待审 + 额度重置申请，两个读都带 status=pending，且都是后台读）")
 
-from agent.skills import SKILL_MAP  # noqa: E402
+from agent.workflows import WORKFLOW_MAP  # noqa: E402
 
-_todo_read = SKILL_MAP["dashboard_todo_list"]
+_todo_read = WORKFLOW_MAP["dashboard_todo_list"]
 _tp = instantiate_plan("dashboard_todo_list", {}, role="admin")
 check("技能展开成**三个**工具：待办清单 + 留言审核状况 + 额度重置申请",
       _tp["tools"] == ['list_dashboard_todos({})',
@@ -1215,7 +1215,7 @@ check("后两个读**都必须带 status=pending**（报表的 focus 只展开�
       any("pending" in t for t in _tp["tools"] if t.startswith("get_moderation_status"))
       and any("pending" in t for t in _tp["tools"] if t.startswith("list_quota_requests")))
 check("它是**只读**技能（不在写名单里、清单里没有写工具）",
-      "dashboard_todo_list" not in WRITE_SKILL_NAMES
+      "dashboard_todo_list" not in WRITE_WORKFLOW_NAMES
       and not any(t.split("(")[0] in {"create_dashboard_todo", "complete_dashboard_todo"}
                   for t in _tp["tools"]))
 check("完成判定要求**三个**工具都返回（只等前两个 ⇒ 额度那个没跑也当收尾轮，"
@@ -1682,7 +1682,7 @@ try:
                          ("简历那条的日子我想挪一下", "陈述式（同意闸本就判不出）")]:
             CALLS.clear()
             obj = instantiate_plan("navigate", {"target": "物联网平台"})
-            obj["skill"] = "dashboard_todo_reschedule"
+            obj["workflow"] = "dashboard_todo_reschedule"
             obj["tools"] = [_SPEC_RSCH]
             state = {**plan_state(obj), "plan_rounds": 1, "done": False,
                      "messages": [HumanMessage(content=msg)]}
@@ -1695,8 +1695,8 @@ try:
                   and f"排期改成{A.due_date_cn(_TOMORROW)}" in pop.get("q", "")
                   and "现在：排期 10月8日" in pop.get("q", ""), pop.get("q", ""))
             payload = confirm.inspect(pop.get("token") or "") or {}
-            check("  令牌载荷里的 skill 与参数就是这一件（卡上写什么就签什么）",
-                  payload.get("skill") == "dashboard_todo_reschedule"
+            check("  令牌载荷里的 workflow 与参数就是这一件（卡上写什么就签什么）",
+                  payload.get("workflow") == "dashboard_todo_reschedule"
                   and payload.get("specs") == [{"tool": "reschedule_dashboard_todo",
                                                 "args": {"text": "更新简历（国庆后）",
                                                          "date": _TOMORROW}}], str(payload))
@@ -1704,7 +1704,7 @@ try:
     # 主人点了确定 → 放行执行
     CALLS.clear()
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = "dashboard_todo_reschedule"
+    obj["workflow"] = "dashboard_todo_reschedule"
     obj["tools"] = [_SPEC_RSCH]
     state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content="简历那条的日子我想挪一下")],
@@ -1748,10 +1748,10 @@ finally:
 #   · 无据 + 没标记 → 零工具 + 如实请他把那件事原样再说一次（不许猜一件顶上）。
 print("\n⑲ 待办正文的出处闸：主人标出来的那一段才是正文（20261006 事故）")
 
-import agent.skills as _S  # noqa: E402
+import agent.workflows as _S  # noqa: E402
 from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
-_skill_map = _S.SKILL_MAP
+_workflow_map = _S.WORKFLOW_MAP
 # 接线判据读的是**源码字面**（同 `test_plan_channel` 钉 `plan_encode` 调用点那条）：
 # 这几句是"这道闸到底有没有被 `planner_node` 用上"的唯一可离线断言的东西——
 # 换成调用计数就得跑整流，而这里要锁的恰恰是"链上有没有这一步"。
@@ -1857,7 +1857,7 @@ check("无据 + 主人**没**标标记 ⇒ 零写 + 如实追问（绝不猜一�
       isinstance(_ref_no, str) and "原样再说一次" in _ref_no, str(_ref_no))
 check("  说明里**原样印出**系统填的那个字面（主人要能看出系统编了什么）",
       isinstance(_ref_no, str) and _HALLUCINATED in _ref_no)
-check("  空正文归展开层（`_expand_todo_skill` 那条「缺少正文」），**不**在这里抢答",
+check("  空正文归展开层（`_expand_todo_workflow` 那条「缺少正文」），**不**在这里抢答",
       g._msg_todo_text("加一条待办") is None
       and g._todo_text_fix(_add_plan(""), "加一条待办", "admin") is None)
 
@@ -1876,7 +1876,7 @@ check("别的工具（勾完成/改排期走的是 `⑰` 那条台账通道）�
       g._todo_text_fix(_p_other, _INCIDENT_MSG, "admin") is None
       and (_p_other.get("params") or {}).get("text") == _HALLUCINATED)
 _p_cs = _add_plan(_HALLUCINATED)
-_p_cs["skill"] = "review_inbox"      # 变更集族：params 是 `{"calls": [...]}`，没有 `text` 槽
+_p_cs["workflow"] = "review_inbox"      # 变更集族：params 是 `{"calls": [...]}`，没有 `text` 槽
 _p_cs["params"] = {"calls": [{"tool": "create_dashboard_todo",
                               "args": {"text": _HALLUCINATED}}]}
 check("⭐ 变更集那一族不碰：单条 `calls` 里出现同一件工具时，只按工具名判会往 "
@@ -1893,7 +1893,7 @@ check("  「加一条」**不**进 `_WRITE_NAME_FIELDS`：它的正文不在任�
 # ── 端到端（真 `planner_node` + 桩 LLM）：拒绝真的落到"零工具零帧"──────────
 _saved_llm = g.get_llm
 try:
-    _llm = _ScriptedLLM([f'SKILL: dashboard_todo_add\nPARAMS: '
+    _llm = _ScriptedLLM([f'WORKFLOW: dashboard_todo_add\nPARAMS: '
                          f'{json.dumps({"text": _HALLUCINATED}, ensure_ascii=False)}'])
     g.get_llm = lambda **kw: _llm                                     # noqa: ARG005
     _out = g.planner_node({"messages": [HumanMessage(content="我对下个月有点想法，先记下来")],
@@ -1906,7 +1906,7 @@ try:
           (_po.get("refusal") or {}).get("source") == "todo_text",
           str(_po.get("refusal")))
 
-    _llm2 = _ScriptedLLM([f'SKILL: dashboard_todo_add\nPARAMS: '
+    _llm2 = _ScriptedLLM([f'WORKFLOW: dashboard_todo_add\nPARAMS: '
                           f'{json.dumps({"text": _HALLUCINATED}, ensure_ascii=False)}'])
     g.get_llm = lambda **kw: _llm2                                    # noqa: ARG005
     _out2 = g.planner_node({"messages": [HumanMessage(content=_INCIDENT_MSG)],
@@ -1941,7 +1941,7 @@ def _cid(ledger=None):
     返回 `(plan_obj, trace 事件名列表)`。"""
     _saved_llm2, _saved_rec2 = g.get_llm, g.record
     _ev2: list = []
-    _llm = _ScriptedLLM([f'SKILL: dashboard_todo_add\nPARAMS: '
+    _llm = _ScriptedLLM([f'WORKFLOW: dashboard_todo_add\nPARAMS: '
                          f'{json.dumps({"text": _INCIDENT_BODY}, ensure_ascii=False)}'])
     g.get_llm = lambda **kw: _llm                                         # noqa: ARG005
     g.record = lambda node, event, **data: _ev2.append((node, event, data))
@@ -1973,15 +1973,15 @@ check("反向对照二：台账在、但那一行里**没有**这个正文 ⇒ �
       str(_po_oth.get("refusal")))
 
 # ── 契约在位：描述与参数说明里那句"照抄"不许被后来的改动挤掉──────────────
-_add_skill = _skill_map.get("dashboard_todo_add")
+_add_workflow = _workflow_map.get("dashboard_todo_add")
 check("技能描述仍写着「照抄主人说的」与「不许润色」（提示词正文那一层是**唯一**"
       "还在提醒模型照抄的地方——这一句掉了，校正器就变成事后补漏）",
-      _add_skill is not None and "照抄主人说的" in _add_skill.description
-      and "不许润色" in _add_skill.description)
+      _add_workflow is not None and "照抄主人说的" in _add_workflow.description
+      and "不许润色" in _add_workflow.description)
 check("  参数说明同款（`text` 那一格写的是「原样，不要改写」）",
-      _add_skill is not None and "原样" in str(_add_skill.inputs.get("text"))
-      and "改写" in str(_add_skill.inputs.get("text")),
-      str(_add_skill and _add_skill.inputs.get("text")))
+      _add_workflow is not None and "原样" in str(_add_workflow.inputs.get("text"))
+      and "改写" in str(_add_workflow.inputs.get("text")),
+      str(_add_workflow and _add_workflow.inputs.get("text")))
 
 # ── 评测层那一格（这才是「全量回归跑了这么多轮没发现」的答案）────────────────
 # golden `admin_todo_add_popup` 现在带 `require_confirm_payload.args_from_input: ["text"]`：
@@ -1991,7 +1991,7 @@ check("  参数说明同款（`text` 那一格写的是「原样，不要改写�
 sys.path.insert(0, str(ROOT / "eval"))
 import run_golden as rg  # noqa: E402
 
-_GOLD = {"require_confirm_payload": {"skill": "dashboard_todo_add",
+_GOLD = {"require_confirm_payload": {"workflow": "dashboard_todo_add",
                                      "args_from_input": ["text"]}}
 
 
@@ -2001,7 +2001,7 @@ def _cp_result(text):
             "tool_calls": [], "exec_rows": [], "exec_tools": [],
             "frames": [], "confirm_tokens": ["tok"], "resets": 0, "resets_resets": [],
             "resets_reasons": [], "reset_scopes": [], "fallback_reasons": [], "error": None,
-            "confirm_payloads": [{"skill": "dashboard_todo_add",
+            "confirm_payloads": [{"workflow": "dashboard_todo_add",
                                   "specs": [{"tool": "create_dashboard_todo",
                                              "args": {"text": text}}]}]}
 

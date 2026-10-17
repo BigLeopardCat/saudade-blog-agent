@@ -2,7 +2,7 @@
 """反极性改选（§1.57 候选改法①）单测：纯查表 + 纯谓词 + 集成，零网络、零 LLM。
 
 **这一件为什么存在**（`docs/问题记录.md` §1.57，20261009 记下、20261016 治）：
-`favorite_add` 被环境型受阻（`unavailable`）判 BLOCK ⇒ `denied_skills` 把**这一件**
+`favorite_add` 被环境型受阻（`unavailable`）判 BLOCK ⇒ `denied_workflows` 把**这一件**
 从菜单摘掉 ⇒ 下一轮模型**改选**，选中的却是反极性兄弟 `favorite_remove`——菜单里
 只剩它这一件"和收藏有关"的可点项。于是主人说「收藏文章 12」、卡上写着
 「**取消收藏**文章 12」。
@@ -41,10 +41,10 @@ import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
 import agent.graph as g  # noqa: E402
 from agent import authz  # noqa: E402
-from agent.block_reasons import REASONS, denied_skills  # noqa: E402
+from agent.block_reasons import REASONS, denied_workflows  # noqa: E402
 from agent.graph import execute_node, plan_state  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflows import instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
 
 FAILS: list[str] = []
@@ -184,14 +184,14 @@ check("原因码已登记在 `block_reasons.REASONS`",
 check("登记为**可救**（retry_param=True）：下一条路是「按主人说的那件重新规划」，"
       "不是「重试同一个调用」",
       REASONS[authz.REASON_ACTION_CONFLICT][1] is True)
-check("⚠️ 因此它**不进 `denied_skills`**——摘掉反极性兄弟等于把菜单越摘越空"
+check("⚠️ 因此它**不进 `denied_workflows`**——摘掉反极性兄弟等于把菜单越摘越空"
       "（§1.57 明确否掉「同族一起摘」）",
-      denied_skills([{"skill": "favorite_remove",
+      denied_workflows([{"workflow": "favorite_remove",
                       "reason": authz.REASON_ACTION_CONFLICT}]) == set(),
-      str(denied_skills([{"skill": "favorite_remove",
+      str(denied_workflows([{"workflow": "favorite_remove",
                           "reason": authz.REASON_ACTION_CONFLICT}])))
-check("对照：不可救族照旧被摘（这条不是为了把 `denied_skills` 判空）",
-      denied_skills([{"skill": "favorite_remove", "reason": "unavailable"}])
+check("对照：不可救族照旧被摘（这条不是为了把 `denied_workflows` 判空）",
+      denied_workflows([{"workflow": "favorite_remove", "reason": "unavailable"}])
       == {"favorite_remove"})
 
 print("\n④ 集成 `execute_node`：零调用 + 带原因码的错误帧")
@@ -215,16 +215,16 @@ class _FakeTool:
         return self.out
 
 
-def _plan(tools_list, skill="favorite_remove"):
+def _plan(tools_list, workflow="favorite_remove"):
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = tools_list
     return obj
 
 
-def _run(tools_list, msg, config, skill="favorite_remove"):
+def _run(tools_list, msg, config, workflow="favorite_remove"):
     CALLS.clear()
-    return execute_node({**plan_state(_plan(tools_list, skill)),
+    return execute_node({**plan_state(_plan(tools_list, workflow)),
                          "plan_rounds": 1, "done": False,
                          "messages": [HumanMessage(content=msg)]},
                         config)
@@ -250,7 +250,7 @@ try:
               frm.startswith("__ERROR__") and "[action_conflict]" in frm, frm[:80])
 
     # 反方向对称：主人说「取消收藏」而排的是 `add_favorite`
-    r = _run([SPEC_ADD], "帮我把文章 12 取消收藏", cfg(), skill="favorite_add")
+    r = _run([SPEC_ADD], "帮我把文章 12 取消收藏", cfg(), workflow="favorite_add")
     check("反方向同样拦住（对合，不是单向补丁）",
           CALLS == [] and [b.get("reason") for b in r["blocked"]] == ["action_conflict"],
           str(r["blocked"]))
@@ -264,7 +264,7 @@ try:
     # 正控：多意图句（§1.57 反例）里那一件**不许**被拦。这一句走的是既有的弹卡出口
     # （`add_favorite` 在这一句里判不成命令）⇒ 返回里没有 `blocked`，只有 `pending_confirm`；
     # 判据写成"原因码不是 action_conflict"，于是判据反了时它会当场红。
-    r = _run([SPEC_ADD], "把 12 收藏、把 13 取消收藏", cfg(), skill="favorite_add")
+    r = _run([SPEC_ADD], "把 12 收藏、把 13 取消收藏", cfg(), workflow="favorite_add")
     check("正控（多意图，§1.57 反例）：这一件是主人真要的 ⇒ 不被 `action_conflict` 拦",
           CALLS == [] and [b.get("reason") for b in r.get("blocked", [])] != ["action_conflict"],
           f"calls={CALLS} blocked={r.get('blocked')}")
@@ -274,7 +274,7 @@ try:
     g._TOOL_MAP["read_notifications"] = _FakeTool(base.ok("已标记 2 条通知为已读"))
     try:
         r = _run(['read_notifications({"ids": [1, 2]})'], "把站内信都标记已读", cfg(),
-                 skill="notice_read")
+                 workflow="notice_read")
         check("正控（READ 族）：本格刻意不碰它们 ⇒ 照常走既有链路（非 action_conflict）",
               [b.get("reason") for b in r.get("blocked", [])] != ["action_conflict"],
               str(r.get("blocked")))

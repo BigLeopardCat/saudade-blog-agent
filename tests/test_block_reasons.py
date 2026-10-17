@@ -18,7 +18,7 @@
   · ④ `agent/context.py::blocked_rows` —— 渲染形状：技能名/原因中文（**不裸英文码**）/
     "能不能改参重试"两族措辞/无受阻项时渲染空串（整块只在有受阻项时才付）；
   · ⑤ 接线 —— 模板有槽、渲染函数有形参、`planner_node` 每轮都传、`execute` 往受阻项
-    里写了 `skill`。
+    里写了 `workflow`。
 
 为什么主断言落在**表与形状**上而不是"提示词里有没有那句话"：这一件的失败面是"类型
 没接上线、planner 又得靠猜"。断一句具体措辞是假绿——换一句话就过（20261007 两次
@@ -138,7 +138,7 @@ check("反向对照：没有那个原因码的错帧取不回这一族（判的�
 
 # ── ④ 渲染：blocked_rows 的形状 ────────────────────────────────────────────
 _UNAVAIL = [{"spec": 'list_accounts({"role": "user"})', "tool": "list_accounts",
-             "reason": "unavailable", "skill": "account_roster",
+             "reason": "unavailable", "workflow": "account_roster",
              "result": "UPSTREAM_DOWN\n第二行不该出现"}]
 row = ctx.blocked_rows(_UNAVAIL)
 check("行里有**技能名**（planner 选的是技能，这一格必须跟着走）",
@@ -150,11 +150,11 @@ _row_line = [l for l in row.splitlines() if l.startswith("· ")][0]
 check("工具返回被压成一行（换行不炸行结构）",
       "UPSTREAM_DOWN 第二行不该出现" in _row_line, _row_line)
 row_ok = ctx.blocked_rows([{"spec": 'rag_search({"q": "x"})', "tool": "rag_search",
-                            "reason": "args_parse", "skill": "content_query",
+                            "reason": "args_parse", "workflow": "content_query",
                             "result": "bad json"}])
 check("可救那一族写「改对参数再试一次仍可能成功」，且不误标无效",
       "仍可能成功" in row_ok and "无效" not in row_ok, row_ok)
-check("缺 skill 也不炸（标「未标注」而不是编一个技能名）",
+check("缺 workflow 也不炸（标「未标注」而不是编一个技能名）",
       "技能=（未标注）" in ctx.blocked_rows([{"tool": "t", "reason": "denied"}]))
 check("空/None → **渲染成空串**（没有受阻项时整块都不出现）",
       ctx.blocked_rows([]) == "" and ctx.blocked_rows(None) == ""
@@ -193,12 +193,12 @@ check("渲染函数**必须有**这个形参（漏传即 TypeError）",
       "blocked_rows" in g._render_planner_prompt.__code__.co_varnames)
 check("`planner_node` 每轮把它算进 `_prompt_args`",
       "blocked_rows=blocked_rows(state.get(\"blocked\") or [])" in _GRAPH_SRC)
-# 判据取的是 `blocked.append(...)` **那一段**里的 skill，不是全文件找字面——
-# `rcpt = {"skill": plan["skill"], ...}`（回执那一行）逐字相同，全文件找的话
+# 判据取的是 `blocked.append(...)` **那一段**里的 workflow，不是全文件找字面——
+# `rcpt = {"workflow": plan["workflow"], ...}`（回执那一行）逐字相同，全文件找的话
 # 这一条**永远不会红**（写这条时实测过：把 append 里那一行删掉，全文件找仍然绿）。
 _APPEND = _GRAPH_SRC.split("blocked.append(", 1)[1].split("})", 1)[0]
-check("`execute` 往受阻项里写了 skill（类型接上线的另一半，另一半在 checker）",
-      '"skill"' in _APPEND and 'plan["skill"]' in _APPEND, _APPEND[:120])
+check("`execute` 往受阻项里写了 workflow（类型接上线的另一半，另一半在 checker）",
+      '"workflow"' in _APPEND and 'plan["workflow"]' in _APPEND, _APPEND[:120])
 _prompt = g._render_planner_prompt(
     "admin", "ctx", "round", user_msg="u", intent_hints="i", doc_anchors="d",
     recent_context="r", short_reply_hint="s", tool_results="t", pending_ledger="p",

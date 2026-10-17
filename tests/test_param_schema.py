@@ -39,7 +39,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/
 sys.path.insert(0, str(ROOT))
 
 from agent import graph as G  # noqa: E402
-from agent import skills as S  # noqa: E402
+from agent import workflows as S  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -58,7 +58,7 @@ def _tools(specs: list[str]) -> list[str]:
 def test_specs_derive_from_tool_schema():
     print("\n[派生] 类型/必填/默认值从工具 args_schema 来")
     schemas = S.tool_arg_schemas()
-    specs = {s.name: S.skill_param_specs(s) for s in S.SKILLS}
+    specs = {s.name: S.workflow_param_specs(s) for s in S.WORKFLOWS}
 
     # 逐个技能：凡是从工具派生的参数（from_tool 非空），类型必须与该工具的 schema
     # 一致——不写死期望值，写死会与工具漂移脱钩（这正是"不造第二份真相"的检验）。
@@ -79,7 +79,7 @@ def test_specs_derive_from_tool_schema():
 
     # 必填性：派生 = 在工具 required 里；例外只许由 required/optional_params 造成
     bad = []
-    for sk in S.SKILLS:
+    for sk in S.WORKFLOWS:
         for pname, sp in specs[sk.name].items():
             if not sp.from_tool:
                 continue
@@ -110,32 +110,32 @@ def test_specs_derive_from_tool_schema():
 # ── ② 例外清单：只许这四条，且每条都要有实证依据 ──────────────────────────────
 def test_declared_exceptions_are_the_known_three():
     print("\n[例外] 技能盖掉派生结果的地方只有这四件")
-    declared = {s.name: (s.required_params, s.optional_params) for s in S.SKILLS}
+    declared = {s.name: (s.required_params, s.optional_params) for s in S.WORKFLOWS}
     non_empty = {n: v for n, v in declared.items() if v[0] or v[1]}
     check("没有任何技能声明 required_params/optional_params 之外的例外字段",
-          set(declared) == {s.name for s in S.SKILLS})
+          set(declared) == {s.name for s in S.WORKFLOWS})
     check("只有 navigate / effect / device_display / review_inbox 用了这两个字段",
           set(non_empty) == {"navigate", "effect", "device_display", "review_inbox"},
           str(sorted(non_empty)))
     check("navigate.required_params = (target,)（漏了它会说「站内没有该页面」）",
-          S.SKILL_MAP["navigate"].required_params == ("target",),
-          str(S.SKILL_MAP["navigate"].required_params))
+          S.WORKFLOW_MAP["navigate"].required_params == ("target",),
+          str(S.WORKFLOW_MAP["navigate"].required_params))
     check("effect.required_params = (action,)（工具默认值 on 会静默扭转主人意图）",
-          S.SKILL_MAP["effect"].required_params == ("action",),
-          str(S.SKILL_MAP["effect"].required_params))
+          S.WORKFLOW_MAP["effect"].required_params == ("action",),
+          str(S.WORKFLOW_MAP["effect"].required_params))
     check("device_display.optional_params = (text,)（文案由执行层创作）",
-          S.SKILL_MAP["device_display"].optional_params == ("text",),
-          str(S.SKILL_MAP["device_display"].optional_params))
+          S.WORKFLOW_MAP["device_display"].optional_params == ("text",),
+          str(S.WORKFLOW_MAP["device_display"].optional_params))
     # 20260929 批 H：`review_inbox` 从"系统专用技能、参数不给模型填"改成模型可见的
     # **变更集**技能，参数 `calls` 由模型逐条写（`{tool, args}`，与 `content_query.calls`
     # 同构）⇒ 必填性只能显式声明（模板给不出映射：工具名本身就是模型写的）。
     # 它进这张表是**本批的核心事实**，不是顺手加的例外。
     check("review_inbox.required_params = (calls,)（空清单 = 一张什么都不办的卡）",
-          S.SKILL_MAP["review_inbox"].required_params == ("calls",),
-          str(S.SKILL_MAP["review_inbox"].required_params))
+          S.WORKFLOW_MAP["review_inbox"].required_params == ("calls",),
+          str(S.WORKFLOW_MAP["review_inbox"].required_params))
     # 反面：把 device_display.text 当成必填会让"屏幕显示"这条能力从 planner 通道**整体
     # 不可达**（planner 按 inputs 的说明就不该填 text）。这条断言是上面那条的意义所在。
-    sp = S.skill_param_specs(S.SKILL_MAP["device_display"])["text"]
+    sp = S.workflow_param_specs(S.WORKFLOW_MAP["device_display"])["text"]
     check("device_display.text 不是必填（否则技能整体不可达）", not sp.required, f"{sp}")
 
 
@@ -149,7 +149,7 @@ def test_param_set_is_inputs_only():
     # `$path` 一个。判据本身（"模板里 planner 不该填的占位符，新增一个就红"）没动。
     KNOWN_DEAD = {("navigate", "path")}
     seen_dead, wrong = [], []
-    for sk in S.SKILLS:
+    for sk in S.WORKFLOWS:
         tmap = S._template_param_map(sk)
         dead = {p for p in tmap if p not in sk.inputs}
         seen_dead += [(sk.name, p) for p in dead]
@@ -157,7 +157,7 @@ def test_param_set_is_inputs_only():
             if (sk.name, p) not in KNOWN_DEAD:
                 wrong.append(f"{sk.name}.{p}")
         # 参数表里绝不许出现不在 inputs 的名字
-        extra = set(S.skill_param_specs(sk)) - set(sk.inputs)
+        extra = set(S.workflow_param_specs(sk)) - set(sk.inputs)
         if extra:
             wrong.append(f"{sk.name} 参数表溢出 inputs：{sorted(extra)}")
     check("没有新的模板死占位符", not wrong, "；".join(wrong[:4]))
@@ -165,22 +165,22 @@ def test_param_set_is_inputs_only():
           sorted(seen_dead) == sorted(KNOWN_DEAD), str(sorted(seen_dead)))
 
     # 菜单渲染：navigate 一行里不许出现 path/confirm（它们是模板管道，不是可填参数）
-    sig = S.render_skill_params(S.SKILL_MAP["navigate"])
+    sig = S.render_workflow_params(S.WORKFLOW_MAP["navigate"])
     check("navigate 菜单只列 target", ("target" in sig and "mode" not in sig
                                      and "path" not in sig and "confirm" not in sig), sig)
     check("无参技能渲染成空串（不产生空白的「参数：」行）",
-          all(not S.render_skill_params(s) for s in S.SKILLS
+          all(not S.render_workflow_params(s) for s in S.WORKFLOWS
               if not s.inputs), "")
     # 记号与工具菜单一致：`名字:类型` + 必填 `*` + 默认值 `=值`
     check("菜单记号：必填带 *", "target:any*" in sig, sig)
-    eff = S.render_skill_params(S.SKILL_MAP["effect"])
+    eff = S.render_workflow_params(S.WORKFLOW_MAP["effect"])
     check("菜单记号：类型来自工具（str）", "effect:str*" in eff, eff)
     # 必填的 **不**显示工具默认值：`action:str*="on"` 会被读成"不填也行、默认 on"，
     # 而 action 恰恰是"漏填就会静默扭转主人意图"的那一格（见 required_params 注）。
     # 与工具菜单同优先级：`*` 赢过 `=值`（`_menu_arg_signature` 同样的 if/else）。
     check("菜单记号：必填不显示默认值（避免被读成「不填也行」）",
           "action:str*" in eff and '="on"' not in eff, eff)
-    mr = S.render_skill_params(S.SKILL_MAP["moderation_report"])
+    mr = S.render_workflow_params(S.WORKFLOW_MAP["moderation_report"])
     check("菜单记号：可选且有默认值/说明的参数照常显示类型与说明",
           "status:str" in mr and "*" not in mr.split("（")[0], mr)
 
@@ -250,11 +250,11 @@ def test_coercion_and_null_args():
 
     # 结构性不变量：任何技能**只用必填参数**实例化，实参里都不该出现 null
     bad = []
-    for sk in S.SKILLS:
-        if sk.name in S.WRITE_SKILL_NAMES or sk.name in ("navigate", "read_article",
+    for sk in S.WORKFLOWS:
+        if sk.name in S.WRITE_WORKFLOW_NAMES or sk.name in ("navigate", "read_article",
                                                          "content_query", "chat"):
             continue
-        specs = S.skill_param_specs(sk)
+        specs = S.workflow_param_specs(sk)
         dummy = {}
         for n, sp in specs.items():
             if not sp.required:
@@ -276,9 +276,9 @@ def test_param_refs_pass_through():
           p["tools"] == [f'get_article_detail({{"article_id": "{ref}"}})'], str(p["tools"]))
     check("  引用不被当成「缺必填」或「类型不对」", p["dropped"] == [], str(p["dropped"]))
 
-    sp = S.skill_param_specs(S.SKILL_MAP["effect"])
-    check("check_skill_params 对引用不做类型判据",
-          S.check_skill_params(S.SKILL_MAP["effect"],
+    sp = S.workflow_param_specs(S.WORKFLOW_MAP["effect"])
+    check("check_workflow_params 对引用不做类型判据",
+          S.check_workflow_params(S.WORKFLOW_MAP["effect"],
                                {"effect": ref, "action": "on"}, sp)["bad"] == [], "")
     check("  容器里的引用同样放行（list 元素位置）",
           S.check_call_args("set_article_tags", {"article_id": 1,
@@ -381,10 +381,10 @@ def test_explicit_defaults_render_as_absent():
     # 上面几条只保证了**字形**一致；判据有没有真的咬住是另一件事，单独验——
     # `_search_retry_kind` 收的是"本轮计划"+"此前执行过的 spec 列表"，正是病灶那一格。
     check("  ⇒ 跨轮重复拦截真的认出这是同一件读（第 1 轮即 data_repeat，不再白跑一轮）",
-          G._search_retry_kind({"skill": "content_query", "tools": p_calls["tools"]},
+          G._search_retry_kind({"workflow": "content_query", "tools": p_calls["tools"]},
                                p_tools["tools"]) == "data_repeat", "")
     check("反控：offset=60 与「不带 offset」**不是**同款读（别把不同页码判成重复）",
-          G._search_retry_kind({"skill": "content_query", "tools": p_off["tools"]},
+          G._search_retry_kind({"workflow": "content_query", "tools": p_off["tools"]},
                                p_tools["tools"]) is None, "")
 
 
@@ -409,8 +409,8 @@ def test_enum_closure_derives_from_literal():
     # 不写死期望值——写死就与工具漂移脱钩了（这正是"不造第二份真相"的检验）。
     schemas = S.tool_arg_schemas()
     bad, seen = [], []
-    for sk in S.SKILLS:
-        for pname, sp in S.skill_param_specs(sk).items():
+    for sk in S.WORKFLOWS:
+        for pname, sp in S.workflow_param_specs(sk).items():
             if not sp.from_tool:
                 continue
             tool, arg = sp.from_tool.split(".", 1)
@@ -431,8 +431,8 @@ def test_enum_closure_derives_from_literal():
                 'Literal["sakura", "rain", "snow"]',
                 'Literal["on", "off"]'):
         check(f"tools/base.py 里有 {ann}", ann in base)
-    check("skills.py 用 arg_enum 派生（不手写枚举表）",
-          "choices=arg_enum(" in (ROOT / "agent" / "skills.py").read_text(encoding="utf-8"))
+    check("workflows.py 用 arg_enum 派生（不手写枚举表）",
+          "choices=arg_enum(" in (ROOT / "agent" / "workflows.py").read_text(encoding="utf-8"))
 
 
 def test_enum_closure_zeroes_tools_before_pydantic():
@@ -477,10 +477,10 @@ def test_enum_closure_zeroes_tools_before_pydantic():
 
     # 一句实话：闭集判据只在**校验层**——工具层（pydantic）仍然会硬拒非法值。
     # 两层都拦是对的（纵深），但校验层先拦才能给出"参数值用不了"这种能自纠的话术。
-    check("check_skill_params 的 bad 是字符串列表（graph 原样转述给 planner）",
+    check("check_workflow_params 的 bad 是字符串列表（graph 原样转述给 planner）",
           all(isinstance(x, str) for x in
-              S.check_skill_params(S.SKILL_MAP["effect"], {"effect": "snow", "action": "开"},
-                                   S.skill_param_specs(S.SKILL_MAP["effect"]))["bad"]), "")
+              S.check_workflow_params(S.WORKFLOW_MAP["effect"], {"effect": "snow", "action": "开"},
+                                   S.workflow_param_specs(S.WORKFLOW_MAP["effect"]))["bad"]), "")
 
 
 def test_alias_normalized_params_stay_open():
@@ -491,7 +491,7 @@ def test_alias_normalized_params_stay_open():
     # __ERROR__ 帧）。所以它们的 choices 必须是空的，且中文取值必须仍然走得通。
     for sk_name, pname in (("board_audit", "verdict"), ("article_status", "status"),
                            ("tag_update", "to_level"), ("tag_delete", "level")):
-        sp = S.skill_param_specs(S.SKILL_MAP[sk_name])[pname]
+        sp = S.workflow_param_specs(S.WORKFLOW_MAP[sk_name])[pname]
         check(f"{sk_name}.{pname} 没有闭集（闭集在 adminops 的别名表里，不在工具层）",
               sp.choices == () and sp.type == "str", f"{sp}")
 
@@ -538,11 +538,11 @@ def test_param_unknown_is_filled_by_every_branch():
           S.instantiate_plan("chat", {})["param_unknown"] == [], "")
 
     # 结构性防线：**每个技能**用"它自己声明的全部参数"实例化，param_unknown 必须为空。
-    # 这条同时是薄壳的**误报**防线——壳若拿错了规格（比如按 plan["skill"] 查不到技能、
+    # 这条同时是薄壳的**误报**防线——壳若拿错了规格（比如按 plan["workflow"] 查不到技能、
     # 或用了别的表），这里会集体爆红，而不是等到生产里给 planner 发一堆假警告。
     bad = []
-    for sk in S.SKILLS:
-        specs = S.skill_param_specs(sk)
+    for sk in S.WORKFLOWS:
+        specs = S.workflow_param_specs(sk)
         dummy = {n: {"int": 1, "str": "x", "bool": True, "list": [], "dict": {},
                      "any": "x"}.get(sp.type, "x") for n, sp in specs.items()}
         p = S.instantiate_plan(sk.name, dummy)
@@ -552,7 +552,7 @@ def test_param_unknown_is_filled_by_every_branch():
           "；".join(bad[:3]))
 
     # 薄壳只该有一处实现——"每个分支记得填"是漏项来源（同 iter_trace_files 那条例律）
-    src = (ROOT / "agent" / "skills.py").read_text(encoding="utf-8")
+    src = (ROOT / "agent" / "workflows.py").read_text(encoding="utf-8")
     fn = ast.get_source_segment(
         src, next(n for n in ast.walk(ast.parse(src))
                   if isinstance(n, ast.FunctionDef) and n.name == "instantiate_plan"))
@@ -575,12 +575,12 @@ def test_wiring():
         # 字面量里也有 `#`，剥了就断在半个字符串上——本文件第一版这么炸过一次）。
         return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
-    src_skills, src_graph = _code("agent/skills.py"), _code("agent/graph.py")
-    raw_skills = (ROOT / "agent" / "skills.py").read_text(encoding="utf-8")
+    src_workflows, src_graph = _code("agent/workflows.py"), _code("agent/graph.py")
+    raw_workflows = (ROOT / "agent" / "workflows.py").read_text(encoding="utf-8")
 
-    check("planner 菜单用 render_skill_params（不再 dump inputs 的 JSON）",
-          "render_skill_params(s)" in src_skills
-          and "json.dumps(s.inputs" not in src_skills, "")
+    check("planner 菜单用 render_workflow_params（不再 dump inputs 的 JSON）",
+          "render_workflow_params(s)" in src_workflows
+          and "json.dumps(s.inputs" not in src_workflows, "")
     check("类型写法映射只有一处（graph 里不再定义 _ARG_TYPE_SHORT / _menu_arg_type）",
           "_ARG_TYPE_SHORT" not in src_graph and "def _menu_arg_type" not in src_graph
           and src_graph.count("arg_type_short(") == 1, "")
@@ -595,30 +595,30 @@ def test_wiring():
           'plan_obj.get("dropped")' in src_graph
           and 'plan_obj.get("param_unknown")' in src_graph, "")
 
-    # 判据在 skills 里、展示在 skills/graph 里，但**不许**有人去读渲染出来的字符串
+    # 判据在 workflows 里、展示在 workflows/graph 里，但**不许**有人去读渲染出来的字符串
     # 当判据（同 _menu_arg_signature 头注那条纪律）
     fn_src = ast.get_source_segment(
-        raw_skills, next(n for n in ast.walk(ast.parse(raw_skills))
+        raw_workflows, next(n for n in ast.walk(ast.parse(raw_workflows))
                          if isinstance(n, ast.FunctionDef)
-                         and n.name == "check_skill_params"))
-    check("check_skill_params 不读渲染字符串（判据只读 specs）",
-          fn_src is not None and "render_skill_params" not in fn_src, "")
+                         and n.name == "check_workflow_params"))
+    check("check_workflow_params 不读渲染字符串（判据只读 specs）",
+          fn_src is not None and "render_workflow_params" not in fn_src, "")
 
     # 闭集**只用于校验、不进菜单**（批 5 刻意的取向：菜单是给人/模型读的散文，
     # 加了 enum 就变成"可选值清单"这种机器格式，且会与工具描述里的说明重复）。
     # 这条锁是防"顺手统一"：哪天要把 enum 印进菜单，得连上面三条菜单断言一起改。
     rsp = ast.get_source_segment(
-        raw_skills, next(n for n in ast.walk(ast.parse(raw_skills))
+        raw_workflows, next(n for n in ast.walk(ast.parse(raw_workflows))
                          if isinstance(n, ast.FunctionDef)
-                         and n.name == "render_skill_params"))
+                         and n.name == "render_workflow_params"))
     check("菜单渲染不读 choices（闭集只用于校验）",
           rsp is not None and "choices" not in rsp and "arg_enum" not in rsp, "")
     check("  菜单文本里没有生成出来的取值清单（散文说明照旧）",
-          "sakura / rain / snow" not in S.render_skill_params(S.SKILL_MAP["effect"]),
-          S.render_skill_params(S.SKILL_MAP["effect"]))
+          "sakura / rain / snow" not in S.render_workflow_params(S.WORKFLOW_MAP["effect"]),
+          S.render_workflow_params(S.WORKFLOW_MAP["effect"]))
 
     # 端到端：菜单里对 navigate 说的参数集，正好等于校验接受并会消费的集合
-    sig = S.render_skill_params(S.SKILL_MAP["navigate"])
+    sig = S.render_workflow_params(S.WORKFLOW_MAP["navigate"])
     p = S.instantiate_plan("navigate", {"target": "留言板"})
     check("菜单说的 target 都能被消费（说得到、用得上）",
           "target" in sig and p["param_unknown"] == [] and p["tools"],

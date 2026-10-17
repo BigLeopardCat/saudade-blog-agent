@@ -6,9 +6,9 @@
 定义**（第一刀之后、本刀之前的读数；`eval/module_baseline.json` 里记的是搬完**收紧**到的
 13513 / 246——那个数才是棘轮现在的天花板）。选它当第二刀的理由与第一刀**不同**——
 第一刀靠"边界干净"（三个名字、一套文本协议），这一刀靠**出边为零**：这一族对外只有
-8 个名字（8 个函数 + `EXECUTED_ONCE_SKILLS`），而它们加起来只用到
-`_tool_name`（`agent.decisions`）、`split_tool_spec`（`agent.skills`）、
-`action_text` / `authz` 两个包、`logger`，加上 `EXECUTED_ONCE_SKILLS` 这一个常量
+8 个名字（8 个函数 + `EXECUTED_ONCE_WORKFLOWS`），而它们加起来只用到
+`_tool_name`（`agent.decisions`）、`split_tool_spec`（`agent.workflows`）、
+`action_text` / `authz` 两个包、`logger`，加上 `EXECUTED_ONCE_WORKFLOWS` 这一个常量
 （连它的长注一起搬来了，全仓只有本族在用）。**一个来自 graph.py 的名字都不需要**
 ⇒ 不存在循环 import，也不需要"反向 import graph"那种形状（本仓明令不许，见
 `agent/textnorm.py` 头注：`provenance` 绝不能反向）。**出边为零是能整体搬走的充要条件**，
@@ -23,13 +23,13 @@
     的 spec 从本轮 TOOLS 行剪掉，`_plan_trims_to_empty` 预演剪完还剩不剩，
     `_read_repeat_note` 给只读重复的收尾写注记（点名本轮到底取到了哪几件）。
 
-⚠️ 与 `agent/plan_codec.py` 的分工别搞混：那边管**计划文本契约**（`SKILL=`/`TOOLS:` 那几行
+⚠️ 与 `agent/plan_codec.py` 的分工别搞混：那边管**计划文本契约**（`WORKFLOW=`/`TOOLS:` 那几行
 怎么编解码），这边管**TOOLS 行里每一条 spec 怎么解析、怎么判重、怎么剪**。两族都读
 `plan_obj["tools"]`，但一个在文本层、一个在条目层。
 
-**搬家方式**：`agent/graph.py` 按**原名** re-export 这 8 个名字 + `EXECUTED_ONCE_SKILLS`
+**搬家方式**：`agent/graph.py` 按**原名** re-export 这 8 个名字 + `EXECUTED_ONCE_WORKFLOWS`
 ⇒ 那边剩下的调用点（`_tool_args` 二十余处、`_spec_signature` 十余处……）与全仓
-`from agent.graph import _tool_args` / `EXECUTED_ONCE_SKILLS`（`agent/react_line.py`、
+`from agent.graph import _tool_args` / `EXECUTED_ONCE_WORKFLOWS`（`agent/react_line.py`、
 `tests/test_admin_write.py` 等）**一处都不用改**。
 
 **判据侧一个字都没动**，而且这次连"取值点跟着搬"都不需要：这一族的两条源码锁
@@ -47,7 +47,7 @@ import logging
 
 from agent import action_text, authz
 from agent.decisions import _tool_name
-from agent.skills import split_tool_spec
+from agent.workflows import split_tool_spec
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 # 收尾话术再诚实也挡不住一种情形——用户在后台把那件事改回去了、再让 agent 做，agent
 # 只会说"刚做过"。宁可多规划一轮让工具去活字典里核一遍（核不到会响亮地报出来），
 # 也不要把"没做"说成"做过"。tag_create 留在里面是因为它**幂等**（同名复用是真的同一件事）。
-EXECUTED_ONCE_SKILLS = frozenset({"tag_create", "article_status", "article_tags"})
+EXECUTED_ONCE_WORKFLOWS = frozenset({"tag_create", "article_status", "article_tags"})
 
 
 def _search_retry_kind(plan_obj: dict, executed: list) -> str | None:
@@ -79,7 +79,7 @@ def _search_retry_kind(plan_obj: dict, executed: list) -> str | None:
     多关键词链合法），无打转实证；__ERROR__ 帧的修正重试由调用方整块跳过
     （本函数不看 messages）。
     """
-    if plan_obj.get("skill") != "content_query" or not plan_obj.get("tools"):
+    if plan_obj.get("workflow") != "content_query" or not plan_obj.get("tools"):
         return None
     dups = [s for s in plan_obj["tools"] if s in executed]
     if dups:
@@ -133,7 +133,7 @@ def _already_done_writes(plan_obj: dict, receipts) -> bool:
 
     空计划返回 False（没有要执行的，收尾与否不归这条判据管）。
     """
-    if not (plan_obj.get("tools") and plan_obj.get("skill") in EXECUTED_ONCE_SKILLS):
+    if not (plan_obj.get("tools") and plan_obj.get("workflow") in EXECUTED_ONCE_WORKFLOWS):
         return False
     passed = {_spec_signature(r.get("tool"), r.get("args") or {})
               for r in (receipts or [])}
@@ -191,7 +191,7 @@ def _trim_done_reads(plan_obj: dict, receipts) -> tuple[dict, list[str]] | None:
     （两份快照 CPU 28.7%→30.0%、内存 61%→60%，同一轮同一指标两个读数）。既有四道
     守卫都够不着它：动作族那道按"整集合 ⊆ 帧名"、SNAPSHOT 那道按"整集合 ⊆ 回执"，
     而这里的计划是**超集**（多带一件服务健康）；`content_query` 专用的 data_repeat
-    分支又因为 skill 已切换而整块跳过。
+    分支又因为 workflow 已切换而整块跳过。
 
     判据 = **工具粒度 + 归一化 (工具, 参数)**：`_spec_signature` 与回执侧同源
     （`str(v)[:200]` + 键序抹平），于是 `{"article_id": "46"}` 与回执里的
@@ -199,7 +199,7 @@ def _trim_done_reads(plan_obj: dict, receipts) -> tuple[dict, list[str]] | None:
     上不同的重复一件都判不出来（全量 861 条 trace 里"同一篇读两遍"有 5 条是这种）。
 
     **只动只读工具**（`authz.WRITE_SCOPES` 之外的）：写族的"再来一次"可能是**另一
-    件事**（改回原名、再删一个），取舍见 EXECUTED_ONCE_SKILLS 上方注释；`device_oled_display`
+    件事**（改回原名、再删一个），取舍见 EXECUTED_ONCE_WORKFLOWS 上方注释；`device_oled_display`
     同理（write.device，"再显示一次"是新请求，rule 6 明确要求重发）。参数解析失败
     （`ok=False`）的 spec 一律保留——那是要交给 execute 响亮报错的，不是"已完成"。
 
@@ -260,7 +260,7 @@ def _trim_noop_specs(plan_obj: dict, noop_specs) -> tuple[dict, list[str]] | Non
     事再规划一次……连跑 **4 轮**（每轮各一次同一调用、每次都零改动），直到轮次上限才
     收场。12.5 秒 / 5 次 LLM，换来一个"什么都没发生"。
 
-    既有四道去重守卫都够不着它：`EXECUTED_ONCE_SKILLS` 刻意只收**幂等技能**（教条见该
+    既有四道去重守卫都够不着它：`EXECUTED_ONCE_WORKFLOWS` 刻意只收**幂等技能**（教条见该
     集合上方注释，收藏两件不在内）；`_trim_done_reads` 刻意**只动只读**（写族的"再来
     一次"可能是另一件事）；`_already_done_writes` 只在技能进白名单时生效；search 那条
     只管 content_query。
@@ -351,8 +351,8 @@ def _tool_args(tool_spec: str) -> tuple[dict, bool]:
     都失败兜底空参 + ok=False——checker 据此判 args_parse（调用方按错误帧处理；
     工具签名必填参数缺失时工具层自会报 __ERROR__，不炸图）。
     """
-    # 拆分（`名字(args)` 那对括号）走 `skills.split_tool_spec`——**形状的写端在
-    # `skills.py`**，规则只该有一处。这里只保留"怎么读那串参数"的容错。
+    # 拆分（`名字(args)` 那对括号）走 `workflows.split_tool_spec`——**形状的写端在
+    # `workflows.py`**，规则只该有一处。这里只保留"怎么读那串参数"的容错。
     m, raw = split_tool_spec(tool_spec)
     raw = raw.strip()
     if not m or not raw:

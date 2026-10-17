@@ -62,7 +62,7 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 
 
 _MSG = "随便说点什么"          # 内容与本套件无关：假 LLM 全接管，不经过 planner
-_PLAN = "SKILL=chat\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）"
+_PLAN = "WORKFLOW=chat\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）"
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
 

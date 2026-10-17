@@ -111,8 +111,8 @@ from trace_io import load_trace  # noqa: E402
 # 用的同一根正则（`_ledger_continuation_issue`），这里另抄一份就会漂移成"扫描说 0、
 # 线上还在发"。
 from agent.graph import _LEDGER_SOLICIT_RE, _cmd_wire  # noqa: E402
-from agent.skills import (PLAN_STATUS_VALUES, SKILL_MAP,  # noqa: E402
-                          arg_enum, skill_param_specs, tool_arg_schemas)
+from agent.workflows import (PLAN_STATUS_VALUES, WORKFLOW_MAP,  # noqa: E402
+                          arg_enum, workflow_param_specs, tool_arg_schemas)
 
 TRACE_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report")
@@ -156,20 +156,20 @@ def _i5_rows(d: dict, decs: list) -> list:
     rows = []
     for e in decs:
         params = e.get("params")
-        sk = SKILL_MAP.get(e.get("skill"))
+        sk = WORKFLOW_MAP.get(e.get("workflow"))
         if not isinstance(params, dict) or sk is None:
             continue
-        specs = skill_param_specs(sk)
+        specs = workflow_param_specs(sk)
         # `TOOLS` 行非空 = 这一轮**真的打算执行**（批 0 之后它就是"参数过了校验"的证据）
         executed = bool(e.get("tools") or [])
         for n, v in params.items():
             if n not in specs:
-                rows.append({"kind": "unread", "name": n, "skill": sk.name,
+                rows.append({"kind": "unread", "name": n, "workflow": sk.name,
                              "round": e.get("round"), "reported": n in reported,
                              "executed": executed})
             elif specs[n].choices and isinstance(v, str) and v not in specs[n].choices:
                 rows.append({"kind": "enum_illegal", "name": n, "value": str(v)[:40],
-                             "skill": sk.name, "round": e.get("round"),
+                             "workflow": sk.name, "round": e.get("round"),
                              "reported": n in reported, "executed": executed})
         calls = params.get("calls")            # calls[].args 那一层同判
         if isinstance(calls, list):
@@ -180,7 +180,7 @@ def _i5_rows(d: dict, decs: list) -> list:
                 for an, av in args.items():
                     if _enum_illegal(schemas, str(c.get("tool") or ""), an, av):
                         rows.append({"kind": "enum_illegal", "name": an, "value": str(av)[:40],
-                                     "skill": sk.name, "round": e.get("round"),
+                                     "workflow": sk.name, "round": e.get("round"),
                                      "reported": an in reported, "executed": executed})
     return rows
 
@@ -311,7 +311,7 @@ def scan_one(d: dict) -> dict:
     calls = [e for e in evs if (e.get("node"), e.get("event")) in CALL_EVENTS]
     if decs:
         last = decs[-1]
-        if last.get("skill") != "chat" and not (last.get("tools") or []) and not calls:
+        if last.get("workflow") != "chat" and not (last.get("tools") or []) and not calls:
             # 分档（批 3）：`status` 是系统自己写的处境值。有值 = 系统为这一轮记了账；
             # 无该字段 = 批 3 之前的 trace；有字段但为空 = 未记账（混着合法作答与漏写）。
             if "status" not in last:
@@ -322,14 +322,14 @@ def scan_one(d: dict) -> dict:
                 bucket = "记账"
             else:
                 bucket = "非法值"
-            out["i2"].append({"skill": last.get("skill"), "round": last.get("round"),
+            out["i2"].append({"workflow": last.get("workflow"), "round": last.get("round"),
                               "plan_rounds": len(decs), "bucket": bucket,
                               "status": last.get("status"),
                               "reply": str(reply)[:70].replace("\n", " ")})
 
     # ── I3 / I4 gate fallback ─────────────────────────────────────────────
     fbs = _ev(d, "gate", "fallback")
-    out["i3"] = [{"issue": e.get("issue"), "skill": e.get("skill"),
+    out["i3"] = [{"issue": e.get("issue"), "workflow": e.get("workflow"),
                   "clause": str(e.get("clause") or "")[:80].replace("\n", " ")} for e in fbs]
     out["i4"] = len(fbs)
 
@@ -455,7 +455,7 @@ def report(r: dict) -> None:
         for x in sorted(rows, key=lambda x: x["stamp"]):
             tail = x.get("clause") or x.get("reply") or x.get("at") or ""
             extra = f" issue={x['issue']}" if x.get("issue") else ""
-            extra += f" skill={x['skill']}" if x.get("skill") else ""
+            extra += f" workflow={x['workflow']}" if x.get("workflow") else ""
             extra += f" receipts={x['receipts']}" if "receipts" in x else ""
             extra += f" [{x['bucket']}]" if x.get("bucket") else ""
             if cat.startswith("i7_"):
@@ -466,7 +466,7 @@ def report(r: dict) -> None:
             if cat.startswith("i5_"):
                 # 这一族**逐条印会淹掉屏幕**（实测 69 条未读参数名），改印"按名字归并"
                 # 的一行——名字相同就是同一处接线缺口，逐条列的是同一个原因重复 N 遍。
-                _by_name[f"{x['skill']}.{x['name']}"] += 1
+                _by_name[f"{x['workflow']}.{x['name']}"] += 1
                 continue
             print(f"  {x['stamp']} u{x['uid']}{extra}  {tail}")
         if cat.startswith("i5_"):
