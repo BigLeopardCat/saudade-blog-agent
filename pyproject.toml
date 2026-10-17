@@ -56,7 +56,7 @@ dependencies = [
     # ⚠️ `langgraph-checkpoint-postgres` 要求 `langgraph-checkpoint>=4.1.0`，lock 里已经
     # 正好是 4.1.1、`orjson` 也在 ⇒ 这三行**不牵动任何既有版本**，lock 的 diff 只有新增。
     "langgraph-checkpoint-postgres==3.1.0",
-    "openai==2.44.0",
+    "openai==3.29.0",
     "psycopg[binary]==3.3.6",
     "psycopg-pool==3.3.3",
     "pydantic==2.13.4",
