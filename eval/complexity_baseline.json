@@ -59,7 +59,7 @@
     "c": 97,
     "lines": 473
   },
-  "agent/workflows.py::_instantiate_plan": {
+  "agent/workflow_plan.py::_instantiate_plan": {
     "c": 135,
     "lines": 516
   },

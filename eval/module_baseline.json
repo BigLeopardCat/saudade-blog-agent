@@ -23,10 +23,6 @@
     "lines": 1243,
     "top_defs": 40
   },
-  "agent/workflows.py": {
-    "lines": 4764,
-    "top_defs": 52
-  },
   "agent/tasks.py": {
     "lines": 1655,
     "top_defs": 44

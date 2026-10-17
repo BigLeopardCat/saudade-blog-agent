@@ -30,6 +30,19 @@ import agent.graph as g  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import _RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
+
+# 取值点跟着定义走（20261017 批 2 刀 2f）：`instantiate_plan` 搬进
+# `agent.workflow_plan.py` 之后，`instantiate_plan.__globals__[...]` 读的是**那个模块的
+# 全局**，而这四个名单的家是注册表的派生物 `agent.workflow_defs`（实例化层只是 import
+# 了其中两个）⇒ 按家取，别按"谁的 `__globals__`"取。**为什么非改不可**：读不到时是
+# KeyError 而不是假绿，但那是运气——名字再搬一次，同一条断言就会换成"取到别人的同名键"
+# 这种更难看见的样子。
+from agent.workflow_defs import (  # noqa: E402
+    _FREE_TEXT_WRITE_WORKFLOWS,
+    _OWN_WRITE_WORKFLOWS,
+    _WRITE_NAME_TARGET_WORKFLOWS,
+    WRITE_WORKFLOW_NAMES,
+)
 from agent.workflows import instantiate_plan  # noqa: E402
 
 # 事实信封**只加**的那几个键（F1，20260930）：`tools.base.fact()` 构造、`is_noop` 读，
@@ -585,12 +598,12 @@ for _ok in ["你好，这是一条测试通知。", "这是给账号夹具的一
           str(_p_ok["tools"]))
 
 check("技能名与工具名不是一套字面量（混用会让展开分支静默不命中）",
-      "notice_send" in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"]
-      and "send_user_notice" not in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"], "")
+      "notice_send" in WRITE_WORKFLOW_NAMES
+      and "send_user_notice" not in WRITE_WORKFLOW_NAMES, "")
 check("  它走名字通道（收件人在名录里核对得出来 ⇒ 不进「目标是自由文本」那几桶）",
-      "notice_send" in instantiate_plan.__globals__["_WRITE_NAME_TARGET_WORKFLOWS"]
-      and "notice_send" not in instantiate_plan.__globals__["_FREE_TEXT_WRITE_WORKFLOWS"]
-      and "notice_send" not in instantiate_plan.__globals__["_OWN_WRITE_WORKFLOWS"], "")
+      "notice_send" in _WRITE_NAME_TARGET_WORKFLOWS
+      and "notice_send" not in _FREE_TEXT_WRITE_WORKFLOWS
+      and "notice_send" not in _OWN_WRITE_WORKFLOWS, "")
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑬ 过程行：报账号名，**不报工具名、不报正文**")

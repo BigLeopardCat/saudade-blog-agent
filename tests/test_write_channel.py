@@ -162,7 +162,10 @@ check("⑤b 收窄用的两个 scope 就是它们（不是别处另抄的一份�
       S._WRITE_SCOPES == frozenset({authz.SCOPE_WRITE_CONSOLE, authz.SCOPE_WRITE_OWN}))
 
 print("\n⑥ 展开链只读一处（源码锁：第二份手抄不许长回来）")
-_src = (ROOT / "agent" / "workflows.py").read_text(encoding="utf-8")
+# 取值点跟着定义走（20261017 批 2 刀 2f）：`instantiate_plan` 已搬进
+# `agent/workflow_plan.py`——**指回 workflows.py 会让这三条恒真**（那条调用在新文件里，
+# 旧文件里什么都没有 ⇒ 假绿），比"取不到"更坏。
+_src = (ROOT / "agent" / "workflow_plan.py").read_text(encoding="utf-8")
 check("⑥a `instantiate_plan` 读的是通道表",
       _src.count("_chan = _WRITE_TARGET_CHANNEL.get(workflow.name)") == 1)
 _stale = [p for p in ("workflow.name in _WRITE_NAME_TARGET_WORKFLOWS",
@@ -192,12 +195,18 @@ print("\n⑧ 新写技能没声明通道 ⇒ 响亮拒绝（零工具 + 注记�
 _fake = Workflow(name="zz_fake_write", description="", inputs={},
               plan=[("delete_board_comment", {})])
 WORKFLOW_MAP["zz_fake_write"] = _fake
-S.WRITE_WORKFLOW_NAMES = frozenset(WRITE_WORKFLOW_NAMES | {"zz_fake_write"})   # 派生的等价物
+# 桩要打在**实现读它的那个模块**上（20261017 批 2 刀 2f）：`instantiate_plan` 搬进
+# `agent.workflow_plan` 之后，它读的是**自己模块的全局**，打 `agent.workflows` 上那一份
+# 打不着——而打不着的样子正是"⑧ 静默变绿"（假技能落进通用分支也照样有工具）。
+# 桩改打新模块；反控见本文件头注那条（把桩打回 `S` ⇒ ⑧a 当场红）。
+import agent.workflow_plan as _P  # noqa: E402
+
+_P.WRITE_WORKFLOW_NAMES = frozenset(WRITE_WORKFLOW_NAMES | {"zz_fake_write"})   # 派生的等价物
 try:
     _plan = S.instantiate_plan("zz_fake_write", {})
 finally:
     del WORKFLOW_MAP["zz_fake_write"]
-    S.WRITE_WORKFLOW_NAMES = WRITE_WORKFLOW_NAMES
+    _P.WRITE_WORKFLOW_NAMES = WRITE_WORKFLOW_NAMES
 check("⑧a 零工具", _plan["tools"] == [], str(_plan["tools"]))
 check("⑧b 注记写明是系统侧的配置缺项（不是「主人没说清」）",
       "配置缺项" in _plan["note"] and "没有接入参数展开" in _plan["note"], _plan["note"][:70])
