@@ -112,8 +112,9 @@ import agent.graph as G  # noqa: E402
 from agent.context import _doc_anchors, _frame_texts, _recent_tail, _short_reply_hint  # noqa: E402
 from agent.planner_llm import build_tool_schema, tool_calls_to_plan  # noqa: E402
 from agent.refs import ref_hints  # noqa: E402
-from agent.workflows import (WORKFLOW_MAP, _pos_int_list, build_planner_context,  # noqa: E402
-                            visible_workflows)
+from agent.workflow_defs import WORKFLOW_MAP, visible_workflows  # noqa: E402
+from agent.workflow_expand import _pos_int_list  # noqa: E402
+from agent.workflow_menu import build_planner_context  # noqa: E402
 from config.settings import settings  # noqa: E402
 from models.llm import get_llm  # noqa: E402
 

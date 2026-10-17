@@ -11,7 +11,7 @@
 
 **判据**：文档里声明的数字 == 代码里的真值。真值只有三个来源，不重写：
   - 工具数 = `len(tools.base._TOOL_REGISTRY)`
-  - 技能数 = `len(agent.workflows.WORKFLOWS)`
+  - 技能数 = `len(agent.workflow_defs.WORKFLOWS)`
   - golden 条数 = `eval/golden/basic.jsonl` 行数
 
 **为什么不是「把文档里的数删掉」**：工具数、技能数、golden 规模是读者真要知道的量，
@@ -30,7 +30,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from agent.workflows import WORKFLOWS  # noqa: E402
+from agent.workflow_defs import WORKFLOWS  # noqa: E402
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
 FAILS: list[str] = []
@@ -59,7 +59,7 @@ _CLAIMS: list[tuple[str, str, str, str, int]] = [
     ("README.md", README, "评测：L2 golden 条数", r"真实 LLM 任务评测：(\d+) 条 golden", N_GOLDEN),
     ("agent-architecture.md", ARCH, "§1：LLM 调用旁的工具数", r"LLM 调用、(\d+) 个工具。", N_TOOLS),
     ("agent-architecture.md", ARCH, "§1 图注：mermaid 节点里的工具数", r"(\d+) 工具 · 4 workers", N_TOOLS),
-    ("agent-architecture.md", ARCH, "§2：workflows.py 的技能数", r"技能注册表：(\d+) 个技能静态定义", N_WORKFLOWS),
+    ("agent-architecture.md", ARCH, "§2：workflow_defs 的技能数", r"技能注册表：(\d+) 个技能静态定义", N_WORKFLOWS),
     ("agent-architecture.md", ARCH, "§2：base.py 的工具数", r"(\d+) 个 @tool 工具", N_TOOLS),
     ("agent-architecture.md", ARCH, "§5 标题：工具系统小节标题", r"## 5\. 工具系统（(\d+) 个）", N_TOOLS),
     ("agent-architecture.md", ARCH, "§11：write.content 那句话里的工具数", r"当前 (\d+) 个工具里", N_TOOLS),

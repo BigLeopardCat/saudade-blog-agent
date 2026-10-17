@@ -550,9 +550,14 @@ finally:
 
 
 print("\n⑪ 结构性不可达 + 接线在位（改坏了这几处，上面的功能就静默失效）")
-from agent.workflows import (_CALLABLE_QUERY_TOOLS, _CALLABLE_QUERY_TOOLS_ORDER,
-                          _EXPLICIT_TOOLS, WORKFLOW_MAP, build_planner_context,
-                          callable_query_tools)  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
+from agent.workflow_menu import build_planner_context  # noqa: E402
+from agent.workflow_tools import (  # noqa: E402
+    _CALLABLE_QUERY_TOOLS,
+    _CALLABLE_QUERY_TOOLS_ORDER,
+    _EXPLICIT_TOOLS,
+    callable_query_tools,
+)
 from agent.graph import _CONTENT_TOOLS, _tools_desc  # noqa: E402
 from agent.principal import ADMIN_ROLES  # noqa: E402
 
@@ -618,8 +623,8 @@ check("过程行有中文动作词（否则显示『执行 get_server_status』�
 # 镜像表退成"认不出 `action` 时的回落"，加工具**只在这一处加**（两侧期望值都锁在
 # `tests/test_action_text.py`；这条注释此前的"两边都要加"已作废）。
 from agent.action_text import tool_action_text as _tool_action_text  # noqa: E402
-from agent.workflows import (WORKFLOWS, _CALLABLE_QUERY_TOOLS,  # noqa: E402
-                          _EXPLICIT_TOOLS)
+from agent.workflow_defs import WORKFLOWS  # noqa: E402
+from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 _reachable = set(_EXPLICIT_TOOLS) | set(_CALLABLE_QUERY_TOOLS)
 for _sk in WORKFLOWS:
     _reachable |= {t for t, _ in _sk.plan}
@@ -637,7 +642,7 @@ check("可达工具都在注册表里（否则计划里那一行会执行成未�
 # ops_report_admin 会连规划 4 轮、同两个工具各跑 4 遍（实测 22s/8 次调用）。
 # 20260924 补 `admin_notes`（同判据：单条无参只读 plan）。
 from agent.graph import SNAPSHOT_WORKFLOWS, _PLANNER_PROMPT  # noqa: E402
-from agent.workflows import WORKFLOWS  # noqa: E402
+from agent.workflow_defs import WORKFLOWS  # noqa: E402
 
 check("四件快照型只读技能都在去重名单里（三张报表 + admin_notes）",
       SNAPSHOT_WORKFLOWS == frozenset({"ops_report", "moderation_report", "user_report",
@@ -660,7 +665,7 @@ check("防护判据取 receipts（PASS 回执）——用帧名会把失败重�
 
 
 print("\n⑫ 第二轮（写）接线在位：四个后台工具 + 四个技能")
-from agent.workflows import WRITE_WORKFLOW_NAMES  # noqa: E402
+from agent.workflow_defs import WRITE_WORKFLOW_NAMES  # noqa: E402
 
 W2 = ["list_admin_notes", "create_tag", "set_article_status", "set_article_tags"]
 WRITES = ["create_tag", "set_article_status", "set_article_tags"]

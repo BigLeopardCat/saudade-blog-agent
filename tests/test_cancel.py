@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 
 import agent.graph as g
 from agent.graph import AgentCancelled, execute_node, gate_node, model_node, planner_node, reflector_node
-from agent.workflows import instantiate_plan
+from agent.workflow_plan import instantiate_plan
 from _planner_stub import bind_tools_stub, toolcall_reply
 
 

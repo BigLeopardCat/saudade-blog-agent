@@ -334,7 +334,9 @@ print("\n⑧ 接线：scope / 菜单 / 白名单 / 动作词 / 技能（改坏�
 
 from agent.action_text import tool_action_text  # noqa: E402
 from agent.graph import _CONTENT_TOOLS, _TOOL_MENU_LINES, _tools_desc  # noqa: E402
-from agent.workflows import WORKFLOW_MAP, build_planner_context, callable_query_tools  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
+from agent.workflow_menu import build_planner_context  # noqa: E402
+from agent.workflow_tools import callable_query_tools  # noqa: E402
 from agent.principal import ADMIN_ROLES  # noqa: E402
 
 TOOL = "get_note_stats"

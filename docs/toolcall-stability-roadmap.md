@@ -172,7 +172,7 @@ N/M 不为 0 时必须人工签字（写进 `eval/report/review_*.md` 的复审�
 **现状**：`planner_node` 输出**文本行协议**——`WORKFLOW` / `[STATUS]` / `PARAMS` / `TOOLS` /
 `NOTE` / `[TODO]` / `REPLY`（中括号是可选行，所以是 5–7 行；`STATUS=` 自 20260926 批 3 起
 **由系统写死**、planner 一个字都不填）。`_loads_tolerant` 容忍单引号/尾逗号/围栏；
-参数由模型在 `PARAMS` JSON 里写死；`instantiate_plan`（`agent/workflows.py`）补三层：
+参数由模型在 `PARAMS` JSON 里写死；`instantiate_plan`（`agent/workflow_plan.py`）补三层：
 白名单校验 → 缺参守卫（`_norm_pos_int` 等）→ pydantic（工具侧）。
 
 > ⚠️ **20261004 追记（这一段描述的是那之前的形态）**：`planner_node` 的输出**已换成 native
@@ -548,10 +548,10 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 | ① | 有帧轮专用兜底文案（只否认被点名的那件事，不否认整轮） | `graph.py` `_FALLBACK_PHANTOM_CLAIM` / `_FALLBACK_SEARCH_CLAIM_FRAMED` |
 | ② | 判据命中的**子句**落 trace（`_clause_hit` 系列 + `_claim_clause` + `_fallback_result(clause=)`） | `graph.py`；`tests/test_workflows.py::test_gate_frame_checks` |
 | ③ | `list_tags` 读 `/tagone + /tagtwo` 并保持层级（`merge_tag_rows`，父/子写成 `父/子`） | `tools/base.py` / `agent/adminops.py` / `agent/entities.py` |
-| ④ | 能力清单**由注册表按角色渲染**（`Workflow.capability` + `visible_workflows` + `context.site_guide(role)`） | `agent/workflows.py` / `agent/context.py` / `graph.py` 三节点 |
+| ④ | 能力清单**由注册表按角色渲染**（`Workflow.capability` + `visible_workflows` + `context.site_guide(role)`） | `agent/workflow_defs/` / `agent/context.py` / `graph.py` 三节点 |
 | ⑤ | 5c 加"复述本轮工具自己说的话"豁免 + 工具返回文本里禁止出现工具名（lint 锁） | `graph.py` `_phantom_tool_claim_span`；`adminops.py` 渲染层；`tests/test_workflows.py::test_no_sibling_tool_name_in_user_text` |
 | ⑥ | 回执顶层 meta 的 `tag_name` 不再被当工具实参读 | `src/routes/chat.rs`（+ 3 条单测） |
-| ⑦ | planner 侧参数语义写进技能描述 + 工具侧"父子同名"确定性拒绝 | `agent/workflows.py` / `tools/base.py` |
+| ⑦ | planner 侧参数语义写进技能描述 + 工具侧"父子同名"确定性拒绝 | `agent/workflow_defs/` / `tools/base.py` |
 | ⑧ | 确认弹窗问句点名父标签（读不到字典则退回 id，不因此不弹窗） | `agent/adminops.py` `_confirm_one/render_confirm_question` + `graph.py` `_confirm_popup` |
 
 ### 附二：活体探针补出的两个洞（同一天晚上，**都是判据/纪律缺位，不是执行失败**）
@@ -559,7 +559,7 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 | # | 现场 | 根因（归属五性质） | 落点 |
 |---|------|--------------------|------|
 | ⑨ | 管理员说「把文章 1 置顶」，planner 把后台列表**第一行**（id=46）填进了 `article_id`——它确实读到过 46，于是"目标有据"放行了 | **P3 参数不带来源约束**：id 参数的"有据"只证明**读到过**，不证明**是用户点的那一篇** | `adminops.user_named_article_ids/target_named/target_conflict_frame` + `graph.execute_node`（`target_mismatch`，零写）+ `_confirm_popup`（不一致连窗都不弹） |
-| ⑩ | 「把文章 1 的「摄影」标签去掉」——planner 没产出写 spec，用 chat 回了一句"请再确认一下"，于是**弹窗链路根本没被触发**，用户看到的是又一轮往返 | **叙述权/决定权错位**：planner 把"要不要执行"判成了自己的事（那本是同意闸 + 确认框的事） | `graph.py` planner 规则 4b + `workflows.py` 三个写技能描述同句；`adminops._confirm_one` 顺带补"摘哪个标签"（同族盲签） |
+| ⑩ | 「把文章 1 的「摄影」标签去掉」——planner 没产出写 spec，用 chat 回了一句"请再确认一下"，于是**弹窗链路根本没被触发**，用户看到的是又一轮往返 | **叙述权/决定权错位**：planner 把"要不要执行"判成了自己的事（那本是同意闸 + 确认框的事） | `graph.py` planner 规则 4b + `agent/workflow_defs/` 三个写技能描述同句；`adminops._confirm_one` 顺带补"摘哪个标签"（同族盲签） |
 
 两条都在**判据/措辞层**收口（P3/P4 方向的最小动作），并各补了 golden 用例
 （`admin_write_intent_tag_remove_popup` 锁⑩；⑨ 的判据在 `tests/test_admin_write.py` §⑮ +

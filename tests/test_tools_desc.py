@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统�
 sys.path.insert(0, str(ROOT))
 
 import agent.graph as _G  # noqa: E402
-from agent.workflows import callable_query_tools  # noqa: E402
+from agent.workflow_tools import callable_query_tools  # noqa: E402
 
 
 FAILS = []

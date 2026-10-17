@@ -84,7 +84,7 @@ sequenceDiagram
 
 ### 1. 受限规划，而不是自由 ReAct
 
-`agent/workflows.py` 维护技能注册表。planner 只能选择注册技能、填写参数并生成调用清单；`instantiate_plan()` 再做模板展开和白名单校验。
+`agent/workflow_defs/` 维护技能注册表。planner 只能选择注册技能、填写参数并生成调用清单；`instantiate_plan()` 再做模板展开和白名单校验。
 
 工具调用有三种入口：
 
@@ -184,7 +184,7 @@ saudade-blog-agent/
 │   ├── plan_codec.py      计划文本契约的编解码（plan_encode / plan_state / parse_plan）
 │   ├── tool_specs.py      执行清单条目的解析与去重裁剪（_tool_args / _trim_done_reads 等）
 │   ├── repeat_guard.py    逐字复读判据（_repeat_reason / _recent_ai_replies 等，gate 1b）
-│   ├── workflows.py          技能注册表、计划模板和业务映射
+│   ├── workflow_defs/     技能注册表：47 条静态定义按域拆分 + NAV_MAP 导航映射
 │   ├── planner_llm.py     技能表 ↔ API tools/tool_calls 的接线层
 │   ├── authz.py           scope 权限模型
 │   ├── principal.py       调用者身份（uid/role/source）的唯一构造点

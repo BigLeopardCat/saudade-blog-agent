@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/
 sys.path.insert(0, str(ROOT))
 
 import agent.context as C  # noqa: E402
-from agent.workflows import visible_workflows  # noqa: E402
+from agent.workflow_defs import visible_workflows  # noqa: E402
 
 FAILS: list[str] = []
 

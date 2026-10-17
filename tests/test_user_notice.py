@@ -43,7 +43,7 @@ from agent.workflow_defs import (  # noqa: E402
     _WRITE_NAME_TARGET_WORKFLOWS,
     WRITE_WORKFLOW_NAMES,
 )
-from agent.workflows import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 # 事实信封**只加**的那几个键（F1，20260930）：`tools.base.fact()` 构造、`is_noop` 读，
 # 刻意不进 `g._RCPT_META_KEYS`（进去就要同步 Rust 的 `render_exec_row`）——见
@@ -439,7 +439,7 @@ except BaseException as e:  # noqa: BLE001
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑧ 只读白名单：**不在**（写工具进只读通道 = 绕过同意闸）")
-from agent.workflows import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
+from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 check("不在 _EXPLICIT_TOOLS（无参点名）", "send_user_notice" not in _EXPLICIT_TOOLS)
 check("不在 _CALLABLE_QUERY_TOOLS（带参点名）",
       "send_user_notice" not in _CALLABLE_QUERY_TOOLS)

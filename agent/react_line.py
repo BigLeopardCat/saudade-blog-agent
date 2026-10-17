@@ -325,7 +325,7 @@ class WorkflowExecutor:
         ——**签名必须与判据的对照方同源**，错一条 ⇒ 无进展判据恒不触发。
         """
         from agent.refs import resolve_args
-        from agent.workflows import instantiate_plan
+        from agent.workflow_plan import instantiate_plan
 
         # 无进展判据的键（**取参在字面路径修正之前**，见类上面那一段 ①②）。
         sig = spec_signature(workflow, params)

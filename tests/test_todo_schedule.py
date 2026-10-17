@@ -41,7 +41,8 @@ from agent import adminops as A  # noqa: E402
 from agent import authz, confirm  # noqa: E402
 from agent.graph import execute_node, plan_state  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.workflows import _FREE_TEXT_WRITE_WORKFLOWS, instantiate_plan  # noqa: E402
+from agent.workflow_defs import _FREE_TEXT_WRITE_WORKFLOWS  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
 
 # 父仓（Rust）源码的读取统一走它：三态显式（找得到 → 断言；找不到且设了
@@ -168,7 +169,7 @@ check("繁体/别名同族不作两套（後天=后天、今日=今天）",
 check("不带年份的「9月27日」按**当年**解释（是一条规则，不是猜）",
       A.normalize_due_date("9月27日", today=TODAY) == TOMORROW
       and A.normalize_due_date("9-27", today=TODAY) == TOMORROW)
-# 20261008：日位写「号」**与「日」同义**。此前不认，而 `workflows.py` 里那条技能的
+# 20261008：日位写「号」**与「日」同义**。此前不认，而 `workflow_defs/` 里那条技能的
 # 能力文案自己举的例句就是「把〈…〉挪到 10 月 8 号」⇒ 主人明明说了日子，助手反问
 # 「你说是哪一天」。修的是日位那个同义字，不是放宽"什么算日期"。
 check("★「X月X号」与「X月X日」同义（口语里「号」比「日」更常说）",
@@ -721,13 +722,12 @@ finally:
 # ══════════════════════════════════════════════════════════════════
 print("\n⑧ 接线：读技能不进写名单，且后台待办的写通道**全是「只动一行」的最小通道")
 
-from agent.workflows import WRITE_WORKFLOW_NAMES  # noqa: E402
+from agent.workflow_defs import WRITE_WORKFLOW_NAMES  # noqa: E402
 
 check("写技能名单里有 dashboard_todo_add",
       "dashboard_todo_add" in WRITE_WORKFLOW_NAMES, str(sorted(WRITE_WORKFLOW_NAMES)))
 check("读技能 dashboard_todo_list **不在**写名单里（它一个字节都不改）",
       "dashboard_todo_list" not in WRITE_WORKFLOW_NAMES)
-_gsrc = (ROOT / "agent" / "workflows.py").read_text(encoding="utf-8")
 # 这两条从前按**源码文本**钉（`"in _FREE_TEXT_WRITE_WORKFLOWS" in _gsrc` + 用 `index()` 比
 # 先后）。20261015 批 1 把那份成员判定换成按「靶通道」表派生（`_chan == "free_text"`）
 # ⇒ 文本锁当场红：它锁的其实是**实现形状**，不是"接线对不对"。改成**跑一遍看产物**——
@@ -1201,7 +1201,7 @@ finally:
 print("\n⑯ 报待办时连带报出后台首页上并排的两类「等着你处理」"
       "（留言待审 + 额度重置申请，两个读都带 status=pending，且都是后台读）")
 
-from agent.workflows import WORKFLOW_MAP  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
 
 _todo_read = WORKFLOW_MAP["dashboard_todo_list"]
 _tp = instantiate_plan("dashboard_todo_list", {}, role="admin")
@@ -1748,10 +1748,10 @@ finally:
 #   · 无据 + 没标记 → 零工具 + 如实请他把那件事原样再说一次（不许猜一件顶上）。
 print("\n⑲ 待办正文的出处闸：主人标出来的那一段才是正文（20261006 事故）")
 
-import agent.workflows as _S  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
 from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
-_workflow_map = _S.WORKFLOW_MAP
+_workflow_map = WORKFLOW_MAP
 # 接线判据读的是**源码字面**（同 `test_plan_channel` 钉 `plan_encode` 调用点那条）：
 # 这几句是"这道闸到底有没有被 `planner_node` 用上"的唯一可离线断言的东西——
 # 换成调用计数就得跑整流，而这里要锁的恰恰是"链上有没有这一步"。

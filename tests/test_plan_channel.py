@@ -51,7 +51,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import graph as G        # noqa: E402
-from agent import workflows as S       # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
+from agent.workflow_params import _param_problem_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 from agent import decisions as D     # noqa: E402  （② 取样 `_terminal_plan`/`_wrap_up_plan`）
 from agent.plan_codec import _CONTRACT_KEYS, _esc_spec   # noqa: E402  （④ 的写端转义：20261017 起住这里）
 import server as SRV                # noqa: E402  （③ 读它的新读法：`_spec_one`/`_specs_from_tools`）
@@ -143,13 +145,13 @@ def _real_plans() -> list[tuple[str, dict]]:
     盯过"这两态在它们身上是否也不分叉"——而 `_confirm_grant_plan` 恰恰是"对象少一个
     `status` 键"的那条路径（`normalize_plan` 就是为它这一类存在的）。
     """
-    out = [(f"{n}(空参)", S.instantiate_plan(n, {})) for n in S.WORKFLOW_MAP]
+    out = [(f"{n}(空参)", instantiate_plan(n, {})) for n in WORKFLOW_MAP]
     for target in ("物联网平台", "友链", "/iot", "量子对撞机车间"):
-        out.append((f"navigate({target})", S.instantiate_plan("navigate", {"target": target})))
+        out.append((f"navigate({target})", instantiate_plan("navigate", {"target": target})))
     out.append(("_terminal_plan", D._terminal_plan(True, "max_rounds")))
     out.append(("_wrap_up_plan", D._wrap_up_plan(True)))
-    out.append(("_param_problem_plan", S._param_problem_plan(
-        S.WORKFLOW_MAP["navigate"],
+    out.append(("_param_problem_plan", _param_problem_plan(
+        WORKFLOW_MAP["navigate"],
         {"fixed": [], "unknown": [], "missing": ["target"], "bad": []})))
     out.append(("_confirm_grant_plan", G._confirm_grant_plan(
         {"workflow": "tag_create",
@@ -166,7 +168,7 @@ def _real_plans() -> list[tuple[str, dict]]:
 print("② 两态不分叉（对象 ↔ 文本）")
 _cases = _real_plans()
 check("取样非空（注册表全集 + navigate 四出口 + 四条确定性构造路径 + 一条带 `;` 的值）",
-      len(_cases) >= len(S.WORKFLOW_MAP) + 5, f"{len(_cases)} 例")
+      len(_cases) >= len(WORKFLOW_MAP) + 5, f"{len(_cases)} 例")
 _div, _derived = [], []
 for label, obj in _cases:
     st = G.plan_state(obj)
@@ -229,7 +231,7 @@ def _old_specs_from_plan(plan_text: str) -> list:
 
 print("③ 判据等价（新旧读法）")
 _bad = []
-for n in S.WORKFLOW_MAP:
+for n in WORKFLOW_MAP:
     for obj in ({"workflow": n, "tools": [], "params": {}, "note": "", "reply": "r"},
                 {"workflow": n, "tools": [f'list_tags({{"n": "{n}"}})'], "params": {},
                  "note": "", "reply": "r"}):
@@ -241,7 +243,7 @@ check("空计划（没有 plan_obj / 空文本）两边都判「不是真计划�
       _old_verdict("") == _new_verdict({}) == (False, False, False))
 # 离意偏离 1：新读法用 `== "chat"`，旧读法用的是 startswith —— 只有当出现以 chat 开头的
 # 另一个技能名时两者才分岔。这条断言就是那个前提：真分岔了，先看这里再改判据。
-_dup = [n for n in S.WORKFLOW_MAP if n != "chat" and n.startswith("chat")]
+_dup = [n for n in WORKFLOW_MAP if n != "chat" and n.startswith("chat")]
 check("技能名里以 chat 开头的只有 chat 自己（新读法 `== \"chat\"` 与旧 startswith 等价的唯一前提）",
       not _dup, str(_dup))
 # 刻意偏离：spec 的 JSON 字符串里含 `;`（标题/正文带分号是常态）。三段嗅探的判定不受影响
@@ -336,7 +338,7 @@ check("对照臂：同一串不经转义（= 改写前写端的产物）会被�
 # 走真技能：`device_draw` 当天已随画板撤掉（见 CHANGELOG），这里换成同样把整串塞进
 # **一个**参数的 `tag_delete`——这条判据要的是"真 `instantiate_plan` 产出的 spec"，
 # 与是哪个技能无关；不管哪个技能，值里的 `;` 都得原样活下来。
-_txt = G.plan_state(S.instantiate_plan("tag_delete", {"name": _PROD_SHAPE}))["plan"]
+_txt = G.plan_state(instantiate_plan("tag_delete", {"name": _PROD_SHAPE}))["plan"]
 _specs = G.parse_plan(_txt)["tools"]
 _args, _ok = G._tool_args(_specs[0]) if len(_specs) == 1 else ({}, False)
 check("生产复现：走真技能（instantiate_plan → plan_state → parse_plan）恰好一条 spec",

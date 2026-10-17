@@ -9,7 +9,7 @@
                           policy_frame·unavailable）；
   · `agent/adminops.py` —— 卡面与回执（`render_account_role` / `render_account_role_status`）
                           ——这一族的**硬要求**：卡面必须印「从什么身份 → 什么身份」；
-  · `agent/workflows.py`  —— 技能展开（缺名字/缺身份/认不出/纯数字 一律零工具）；
+  · `agent/workflow_expand.py`  —— 技能展开（缺名字/缺身份/认不出/纯数字 一律零工具）；
   · `agent/graph.py`   —— 四处登记（`_WRITE_NAME_FIELDS` / `_NAME_TARGET_TOOLS` /
                           词表分派 / `_ACCOUNT_TOOLS`）；
   · 接线锁             —— 政策拒绝走错误帧族 ⇒ `_check_spec` 得 BLOCK + `policy_refused`。
@@ -47,7 +47,7 @@ from agent.workflow_defs import (  # noqa: E402
     WORKFLOWS,
     WRITE_WORKFLOW_NAMES,
 )
-from agent.workflows import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_account_freeze 的那一处）──────────────────────────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**（宁可退回追问，也不发一个
@@ -576,7 +576,7 @@ check("  没给名字也只给中文动作词（不打印内部工具名）",
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑪ 只读白名单：**不在**（那是 content_query 的点名通道）")
-from agent.workflows import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
+from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 check("不在 _EXPLICIT_TOOLS（无参点名）",
       "set_account_role" not in _EXPLICIT_TOOLS)
 check("不在 _CALLABLE_QUERY_TOOLS（带参点名）——写工具进只读通道 = 绕过同意闸",

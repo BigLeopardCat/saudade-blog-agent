@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import reports as R  # noqa: E402
-from agent import workflows as S  # noqa: E402
+from agent.workflow_defs import WORKFLOWS, WRITE_WORKFLOW_NAMES  # noqa: E402
 from tools import base as B  # noqa: E402
 
 FAILS: list[str] = []
@@ -72,7 +72,7 @@ check("  （边界）报表仍是**事实**而不是承诺：删除那半必须�
 # ══════════════════════════════════════════════════════════════════
 print("\n② 技能描述与回复契约（planner 与 narrator 读的同一份）")
 
-_SK = {s.name: s for s in S.WORKFLOWS}
+_SK = {s.name: s for s in WORKFLOWS}
 _del = _SK["board_delete"]
 check("board_delete 的技能描述里写着「待审与被驳回的留言同样删得掉」",
       "待审与被驳回的留言同样删得掉" in _del.description)
@@ -125,12 +125,12 @@ from agent import context as C  # noqa: E402
 # ⇒ 判据也就只能落在这里：清单里说的每件事都得能兑现，做不到的别写得像能做。
 
 _TODO_WRITES = sorted(n for n in _SK
-                      if n.startswith("dashboard_todo_") and n in S.WRITE_WORKFLOW_NAMES)
+                      if n.startswith("dashboard_todo_") and n in WRITE_WORKFLOW_NAMES)
 check("待办族的窄写恰好三件（再加一条窄写必须回来看这一节：下面的对称判据只对这三件成立）",
       _TODO_WRITES == ["dashboard_todo_add", "dashboard_todo_done",
                        "dashboard_todo_reschedule"], str(_TODO_WRITES))
 check("  只剩读那件不在写名单里（读写名单不许串）",
-      "dashboard_todo_list" not in S.WRITE_WORKFLOW_NAMES)
+      "dashboard_todo_list" not in WRITE_WORKFLOW_NAMES)
 
 
 def _tool_args(workflow_name: str) -> list[str]:

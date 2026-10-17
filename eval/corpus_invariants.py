@@ -111,8 +111,9 @@ from trace_io import load_trace  # noqa: E402
 # 用的同一根正则（`_ledger_continuation_issue`），这里另抄一份就会漂移成"扫描说 0、
 # 线上还在发"。
 from agent.graph import _LEDGER_SOLICIT_RE, _cmd_wire  # noqa: E402
-from agent.workflows import (PLAN_STATUS_VALUES, WORKFLOW_MAP,  # noqa: E402
-                          arg_enum, workflow_param_specs, tool_arg_schemas)
+from agent.plan_status import PLAN_STATUS_VALUES  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
+from agent.workflow_params import arg_enum, tool_arg_schemas, workflow_param_specs  # noqa: E402
 
 TRACE_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report")

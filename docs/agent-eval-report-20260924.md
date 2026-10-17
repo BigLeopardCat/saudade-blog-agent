@@ -10,7 +10,7 @@
 > 落地情况与**两处改法被否**的原因见 §7——**读 §5.2①/§6 时必须连 §7 一起读**。
 
 
-> ⚠️ 20261017 起 `skill` 已改名为 **`workflow`**（`agent/skills.py` → `agent/workflows.py`、`tests/test_skills.py` → `tests/test_workflows.py`、`tests/test_slim_skills.py` → `tests/test_slim_workflows.py`；计划 IR `SKILL=` → `WORKFLOW=`）。本文档保留**当时的名字**，不回溯改写；读它时把 skill 读作 workflow 即可。
+> ⚠️ 20261017 起 `skill` 已改名为 **`workflow`**（`agent/skills.py` → `agent/workflow_defs/__init__.py`——20261017 先改名为 `agent/workflows.py`，20261018 批 2 收尾刀又把那个中转层整块删掉（**已删**）；`tests/test_skills.py` → `tests/test_workflows.py`、`tests/test_slim_skills.py` → `tests/test_slim_workflows.py`；计划 IR `SKILL=` → `WORKFLOW=`）。本文档保留**当时的名字**，不回溯改写；读它时把 skill 读作 workflow 即可。
 
 ---
 

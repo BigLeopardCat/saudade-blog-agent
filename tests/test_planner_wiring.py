@@ -46,7 +46,7 @@ import agent.graph as G  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.block_reasons import denied_workflows  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from agent.workflows import visible_workflows  # noqa: E402
+from agent.workflow_defs import visible_workflows  # noqa: E402
 from agent.tasks import TASK_DROP, TASK_HOLD, TASK_INTENTS  # noqa: E402
 from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
@@ -473,7 +473,7 @@ def test_write_command_nudge_is_the_only_channel_that_catches_it():
 # 这句命中 `authz.is_own_read_question`（"我都有哪些收藏" = 自己账号里的私有数据），
 # 且**不命中任何快道**。带上 `state_over` 换掉默认消息即可（`_run` 先铺默认再 update）。
 _MSG_OWN_DATA = "小猫咪我都有哪些收藏"
-# 语义上正确的落点：`content_query` 点名无参只读工具 `list_my_favorites`（见 workflows.py
+# 语义上正确的落点：`content_query` 点名无参只读工具 `list_my_favorites`（见 workflow_tools.py
 # 的 `_EXPLICIT_TOOLS_ORDER`——"我收藏了哪些文章"正是那一族被加进菜单的理由）。
 _READ_ARGS = {"tools": ["list_my_favorites"]}
 

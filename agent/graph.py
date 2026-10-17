@@ -127,17 +127,20 @@ from agent.textnorm import (FULLWIDTH_ASCII_MAP as _FULLWIDTH_ASCII_MAP,
 # 后缀常量（20261017 批 2 刀 2a）：家已在 `agent.workflow_model`（下沉层），
 # 取值点跟着定义走。`agent.workflows` 迁移期仍转发另两个 DROP_SUFFIX_*。
 from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
-from agent.workflows import (CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS,
-                          args_are_bound,
-                          DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT,
-                          FUZZY_NAV_RULES, NAV_MAP, PLAN_STATUS_ABSENCE_EXEMPT,
-                          PLAN_STATUS_NAV_NOTE, WORKFLOW_MAP,
-                          _NAV_REAL_PAGES, _NAV_REF_HINT,
-                          _WRITE_NAME_TARGET_WORKFLOWS,
-                          arg_type_short, build_planner_context,
-                          callable_query_tools, instantiate_plan,
-                          param_problem_note, workflow_param_specs,
-                          visible_workflows)
+from agent.plan_status import PLAN_STATUS_ABSENCE_EXEMPT, PLAN_STATUS_NAV_NOTE
+from agent.workflow_defs import WORKFLOW_MAP, _WRITE_NAME_TARGET_WORKFLOWS, visible_workflows
+from agent.workflow_defs.capability import CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS
+from agent.workflow_defs.nav import FUZZY_NAV_RULES, NAV_MAP, _NAV_REAL_PAGES, _NAV_REF_HINT
+from agent.workflow_menu import build_planner_context
+from agent.workflow_model import DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT
+from agent.workflow_params import (
+    arg_type_short,
+    args_are_bound,
+    param_problem_note,
+    workflow_param_specs,
+)
+from agent.workflow_plan import instantiate_plan
+from agent.workflow_tools import callable_query_tools
 # 任务登记（20260927 批 D）：登记帧的构造与那一轮给 narrator 的注记/纠偏都在
 # `agent/tasks.py`——本模块只决定"什么时候用它"（见 planner 的那一支）。
 from agent.tasks import (TASK_DONE_NOTE, TASK_INTENTS, advance_by_receipts,
@@ -492,7 +495,7 @@ def _narrator_msgs(state) -> list:
 # 2. 模块间契约：planner 写入 plan 字段，execute/model/gate 读取
 # ---------------------------------------------------------------------------
 # plan 字段 = 技能模板实例化后的计划文本（受限规划——planner 只从技能注册表
-# agent/workflows.py 选技能 + 填参数，不自由写步骤）：
+# agent/workflow_plan.py 选技能 + 填参数，不自由写步骤）：
 #   第 1 行: WORKFLOW=<技能名>（navigate/effect/darkmode/device_display/
 #            device_query/content_query/chat/read_article）
 #   第 2 行: PARAMS=<JSON 参数>（如 {"target": "物联网平台"}）
@@ -501,7 +504,7 @@ def _narrator_msgs(state) -> list:
 #   第 5 行: REPLY: <技能回复契约>（model 叙述时遵守、gate 不做文本级对照）
 #   （曾有的第 6 行 `TODO:` 20261016 整行退休：读端一个都不剩了，理由与取证
 #     写在下面 `plan_encode` 那一处）
-# 导航映射表在 workflows.py（页面别名→路径，"物联网平台→/device-console/"是系统数据，
+# 导航映射表在 `workflow_defs/nav.py`（页面别名→路径，"物联网平台→/device-console/"是系统数据，
 # 不是模型猜测）——planner 跑题的结构性根因（不知道工具语义）由此消除。
 # TOOLS 行是"执行清单"不是"允许名单"——execute 节点把它当命令逐条执行，
 # 不存在"TOOLS 点了名仍可不调用"的自由（要少做就少点名，点了就是命令）。
@@ -569,16 +572,16 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
         output_contract=contract)
 
 
-# planner 菜单（可规划执行的查询工具清单）——20260913 起由 workflows.py 白名单
+# planner 菜单（可规划执行的查询工具清单）——20260913 起由 workflow_tools.py 白名单
 # （_CALLABLE_QUERY_TOOLS_ORDER = 唯一事实来源）+ 工具注册表**生成**，不再手抄：
 # 手写菜单曾只列 8 个工具，漏掉了站点信息/社交链接/分类/标签/置顶/天气这批数据
 # 工具，于是"作者有哪些社交链接/备案号是多少"这类问题没有可点名的数据工具，
 # planner 只能拿 rag_search/search_notes 去绕（检索索引只有文章正文，对站点元数据
 # 零命中）→ 绕一圈如实答"站内没有"，而数据一直在 /social、/user（20260913 trace 实证）。
 # 生成式菜单的契约：白名单里每个工具必在菜单中出现（test_workflows 锁），新增工具
-# 只需改 workflows.py 一处。参数签名从 tool.args 派生。
+# 只需改 workflow_tools.py 一处。参数签名从 tool.args 派生。
 # 动作工具不在白名单 → 结构性进不了菜单：planner 无法经 calls 通道越权动作，
-# 只能由技能模板展开（workflows.py 已论证）。
+# 只能由技能模板展开（workflow_expand.py 已论证）。
 _TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 docstring）
     "search_notes": "按关键词搜文章（标题+内容），返回候选列表（含 id/标题/描述/封面）",
     "rag_search": "语义相关度检索（BM25），返回行式候选（type/id/score/标题/命中节，"
@@ -639,7 +642,7 @@ _TOOL_MENU_LINES: dict[str, str] = {  # 中文说明（缺省回退注册表 doc
 # 什么类型、默认值是多少"。将来若做执行前校验，依据仍是同一个 args_schema，
 # **不许读这里渲染出来的字符串**——判据与展示必须同源不同形。
 # 类型写法映射（`_ARG_TYPE_SHORT`）与它所服务的 `arg_type_short` 20260925 搬去了
-# `agent/workflows.py`：技能菜单（`render_workflow_params`）与工具菜单（下面这个函数）
+# `agent/workflow_menu.py`：技能菜单（`render_workflow_params`）与工具菜单（下面这个函数）
 # 必须同一套写法，两处各留一份就会漂移成 "str" / "string" 两种叫法。这里只导入。
 
 
@@ -3027,7 +3030,7 @@ def _false_negative_claim(reply: str, receipts_exist: bool) -> bool:
 # 「通知这边其实**本来就没有未读的**，所以这一轮没有可标记的、什么都没改」——
 # 主人据此以为站内什么都没发生（他刚亲手点的确定）。
 #
-# 根因在**技能回复契约**（`workflows.py` 的 notice_read/message_read 把「返回「本来就是
+# 根因在**技能回复契约**（`workflow_defs/` 的 notice_read/message_read 把「返回「本来就是
 # 已读」「本来就没有未读的」就说没有可标的、什么都没改」摆在那里：那是一句**可抄的
 # 否认句**，而成功回执的尾巴「现在未读：通知 0 条」与 no-op 的读数长得一样）⇒ 模型套
 # 了 no-op 那一支。契约措辞已同步改（判据从"匹配返回里的字"改成"看标了几条"），本判据
@@ -5628,7 +5631,7 @@ _ZAKO_PLAN_NOTE = ("（本轮对话者是杂鱼：按本轮的对话者口径直
 
 # 双源契约的确定性补齐（20261005）。
 #
-# 契约本身早就写在提示词里（`workflows.py` 的 content_query description 末段——20261017
+# 契约本身早就写在提示词里（`workflow_defs/` 的 content_query description 末段——20261017
 # 起契约并进 description：问「留言板/说说里有没有人聊过、写过 X」时必须**成对**点名
 # `list_guestbook` 与 `list_talks`，只点一个 = 少查一半）。但它是**纯提示词条款、
 # 没有任何确定性兜底**——历史主线 46 次真跑里 5 次（≈11%）没凑齐两个工具，其中 3 次
@@ -5905,7 +5908,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
       planner（首轮决策：给调用清单）→ execute（确定性执行）→ planner（看工具
       返回再决策：读全文/换词再搜/收尾）→ … → 收尾轮（调用清单空）→ model
     结构保证：
-      - 每轮执行什么由 planner 文本输出决定，白名单/模板双校验（workflows.py）；
+      - 每轮执行什么由 planner 文本输出决定，白名单/模板双校验（workflow_tools/workflow_expand）；
       - 动作技能一次决策后（工具帧已可见）planner 必须收尾——绝不重复执行；
       - 循环上限 MAX_PLAN_ROUNDS，超限强制收尾（_wrap_up_plan）。
     """
@@ -6958,10 +6961,10 @@ def _decide_instantiate(c: "_DecideCtx") -> "_Step":
     # 调了一次"）。现在剔除即 WARNING + trace 事件，排障不再靠猜。
     if c.plan_obj.get("dropped"):
         # 两类原因都走这里（20260925）：被白名单剔除、或**点名写在了不读调用清单的
-        # 技能里**（后者见 workflows.py `_workflow_no_calls_suffix`）。条目自带后缀区分，
+        # 技能里**（后者见 workflow_expand.py `_workflow_no_calls_suffix`）。条目自带后缀区分，
         # 日志文字不再断言"白名单剔除"——那就把第二类讲错了。
         logger.warning("[planner] 点名了工具但本轮不会执行、无帧：%s（round %d/%d）"
-                       "——若属应支持的数据工具，检查 workflows.py 白名单与菜单",
+                       "——若属应支持的数据工具，检查 workflow_tools.py 白名单与菜单",
                        "、".join(c.plan_obj["dropped"]), c.rounds + 1, MAX_PLAN_ROUNDS)
         record("planner", "rejected_call", dropped=c.plan_obj["dropped"],
                workflow=c.plan_obj["workflow"], round=c.rounds)
@@ -6976,7 +6979,7 @@ def _decide_instantiate(c: "_DecideCtx") -> "_Step":
     if c.plan_obj.get("param_unknown"):
         logger.warning("[planner] PARAMS 里有没人读的参数（已忽略，不影响本轮执行）："
                        "%s（workflow=%s，round %d/%d）——若属技能该收的参数，"
-                       "检查 workflows.py 该技能的 inputs/plan 模板",
+                       "检查 workflow_defs/ 该技能的 inputs/plan 模板",
                        "、".join(c.plan_obj["param_unknown"]),
                        c.plan_obj["workflow"], c.rounds + 1, MAX_PLAN_ROUNDS)
         record("planner", "param_unknown", names=c.plan_obj["param_unknown"],
@@ -7998,7 +8001,7 @@ def _finalize_wrap(plan_obj: dict, rounds: int, has_frames: bool,
 # 20260903 架构核心：TOOLS 行是"执行清单"而非"允许名单"。execute 不判断
 # "要不要调"（planner 已决定）、不产生参数（参数在 TOOLS 行 spec 里，planner/
 # 模板侧已定）、没有授权检查分支（清单本身经过 instantiate_plan 白名单校验，
-# 动作工具只能由技能模板展开，workflows.py 已论证）——它只是忠实执行器。
+# 动作工具只能由技能模板展开，workflow_expand.py 已论证）——它只是忠实执行器。
 # 唯一保留的"创作"自由：device_oled_display 的 text=None 时由小型 LLM 结合
 # 对话创作屏幕文案（_create_display_text）——这是技能模板的固有设计（屏幕
 # 文案由系统在展示时创作，不进 planner 文本通道），非执行层的越权自由。

@@ -44,7 +44,7 @@ from agent import authz  # noqa: E402
 from agent.block_reasons import REASONS, denied_workflows  # noqa: E402
 from agent.graph import execute_node, plan_state  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.workflows import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
 
 FAILS: list[str] = []

@@ -38,18 +38,21 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import authz  # noqa: E402
-from agent import workflows as S  # noqa: E402
-from agent.workflows import (  # noqa: E402
+from agent.workflow_defs import (  # noqa: E402
     _FREE_TEXT_WRITE_WORKFLOWS,
     _LEDGER_TARGET_WRITE_WORKFLOWS,
     _OWN_WRITE_WORKFLOWS,
     _WRITE_NAME_TARGET_WORKFLOWS,
+    _WRITE_SCOPES,
     _WRITE_TARGET_CHANNEL,
     WORKFLOW_MAP,
     WORKFLOWS,
     WRITE_WORKFLOW_NAMES,
-    Workflow,
+    _channel,
+    _derive_write_workflow_names,
 )
+from agent.workflow_model import Workflow  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILED: list[str] = []
 
@@ -104,7 +107,7 @@ print("\n② 覆盖锁：注册表里有写作用域工具的技能必须声明�
 def _write_workflows(workflows: list) -> set:
     """注册表里"计划带写作用域工具"的技能（含 `extra_plan_tools`）。"""
     return {s.name for s in workflows
-            if any(authz.TOOL_SCOPE.get(n) in S._WRITE_SCOPES
+            if any(authz.TOOL_SCOPE.get(n) in _WRITE_SCOPES
                    for n in [n for n, _ in s.plan] + list(s.extra_plan_tools))}
 
 
@@ -136,7 +139,7 @@ check("③b 变异臂：把 chat 塞进声明集 ⇒ 当场点名它（同上：
 
 print("\n④ 分区：五桶两两不相交，五桶并集 == 派生名单（一个技能只能有一个靶通道）")
 _buckets = [_WRITE_NAME_TARGET_WORKFLOWS, _LEDGER_TARGET_WRITE_WORKFLOWS, _OWN_WRITE_WORKFLOWS,
-            _FREE_TEXT_WRITE_WORKFLOWS, S._channel("article")]
+            _FREE_TEXT_WRITE_WORKFLOWS, _channel("article")]
 _names = ["name", "ledger", "own", "free_text", "article"]
 _pairs = [(a, b) for i, a in enumerate(_buckets) for b in _buckets[i + 1:]]
 check("④a 五桶两两不相交（一个技能声明两个通道 ⇒ 展开链的 if/elif 会静默吃掉后一个）",
@@ -149,8 +152,8 @@ _chan_vals = {v for v in _WRITE_TARGET_CHANNEL.values()}
 check("④c 通道取值域就是这五个（多一个值 ⇒ 展开链的 `_chan == …` 会有分支没人走）",
       _chan_vals == set(_names), str(sorted(_chan_vals)))
 check("④d `_channel()` 支持多值查询（`_WRITE_SCOPES` 那一族共用它）",
-      S._channel("name", "article")
-      == _WRITE_NAME_TARGET_WORKFLOWS | S._channel("article"))
+      _channel("name", "article")
+      == _WRITE_NAME_TARGET_WORKFLOWS | _channel("article"))
 
 print("\n⑤ 为什么必须收窄到 write.console / write.own：广义 is_write 会多出这四件")
 _broad = {s.name for s in WORKFLOWS
@@ -159,7 +162,7 @@ check("⑤a 广义谓词多出的正好是 navigate / effect / darkmode / device
       _broad - WRITE_WORKFLOW_NAMES == {"navigate", "effect", "darkmode", "device_display"},
       str(sorted(_broad - WRITE_WORKFLOW_NAMES)))
 check("⑤b 收窄用的两个 scope 就是它们（不是别处另抄的一份）",
-      S._WRITE_SCOPES == frozenset({authz.SCOPE_WRITE_CONSOLE, authz.SCOPE_WRITE_OWN}))
+      _WRITE_SCOPES == frozenset({authz.SCOPE_WRITE_CONSOLE, authz.SCOPE_WRITE_OWN}))
 
 print("\n⑥ 展开链只读一处（源码锁：第二份手抄不许长回来）")
 # 取值点跟着定义走（20261017 批 2 刀 2f）：`instantiate_plan` 已搬进
@@ -181,7 +184,7 @@ _fake_write = Workflow(name="zz_fake_write", description="", inputs={},
                     plan=[("delete_board_comment", {})])
 _fake_read = Workflow(name="zz_fake_read", description="", inputs={},
                    plan=[("list_guestbook", {})])
-_derived = S._derive_write_workflow_names([*WORKFLOWS, _fake_write, _fake_read])
+_derived = _derive_write_workflow_names([*WORKFLOWS, _fake_write, _fake_read])
 check("⑦a 假写技能（plan 里是写工具）⇒ 自动进名单",
       "zz_fake_write" in _derived and "zz_fake_read" not in _derived)
 check("⑦b 派生名单不含假技能（真仓取值未被动过）", "zz_fake_write" not in WRITE_WORKFLOW_NAMES)
@@ -189,7 +192,7 @@ _fake_extra = Workflow(name="zz_fake_extra", description="", inputs={},
                     plan=[("list_tags", {})], extra_plan_tools=("create_tag",))
 check("⑦c `extra_plan_tools` 里的写工具也算（`article_tags` 的 create_tag 就在那一格）",
       "article_tags" in _derived
-      and "zz_fake_extra" in S._derive_write_workflow_names([*WORKFLOWS, _fake_extra]))
+      and "zz_fake_extra" in _derive_write_workflow_names([*WORKFLOWS, _fake_extra]))
 
 print("\n⑧ 新写技能没声明通道 ⇒ 响亮拒绝（零工具 + 注记，不是静默落进通用分支）")
 _fake = Workflow(name="zz_fake_write", description="", inputs={},
@@ -203,7 +206,7 @@ import agent.workflow_plan as _P  # noqa: E402
 
 _P.WRITE_WORKFLOW_NAMES = frozenset(WRITE_WORKFLOW_NAMES | {"zz_fake_write"})   # 派生的等价物
 try:
-    _plan = S.instantiate_plan("zz_fake_write", {})
+    _plan = instantiate_plan("zz_fake_write", {})
 finally:
     del WORKFLOW_MAP["zz_fake_write"]
     _P.WRITE_WORKFLOW_NAMES = WRITE_WORKFLOW_NAMES
@@ -213,7 +216,7 @@ check("⑧b 注记写明是系统侧的配置缺项（不是「主人没说清�
 check("⑧c status=refused（「办不成」是系统已知的处境，不是模型判断）",
       _plan["status"] == "refused")
 check("⑧d 声明了通道的技能**不会**走这条拒绝路（同一入口的正控）",
-      S.instantiate_plan("board_audit", {}).get("status") != "refused")
+      instantiate_plan("board_audit", {}).get("status") != "refused")
 
 print("\n⑨ 接线：既有消费点读的还是这四个名字")
 _graph = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")

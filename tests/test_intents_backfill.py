@@ -41,7 +41,7 @@ sys.path.insert(0, str(ROOT))
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
 import agent.graph as g  # noqa: E402
-from agent.workflows import visible_workflows  # noqa: E402
+from agent.workflow_defs import visible_workflows  # noqa: E402
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 FAILS: list[str] = []

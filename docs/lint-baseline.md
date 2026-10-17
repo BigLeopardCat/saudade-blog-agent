@@ -43,7 +43,7 @@ uvx ruff@0.14.4 check --no-cache --statistics .   # 按规则计数
 
   ⇒ **578 里约 86% 是行长与导入排序**。这条要说清楚：基线数字大不代表代码烂，
   只代表这个仓没把格式化当门禁。真正值得看的是 F841/F811 那 9 条。
-- 最集中的文件：`tests/test_workflows.py` 108、`tools/base.py` 45、`agent/workflows.py` 41、
+- 最集中的文件：`tests/test_workflows.py` 108、`tools/base.py` 45、`agent/workflows.py` 41（20261018 批 2 收尾刀**已删**，此处是当时的读数）、
   `tests/test_reports.py` 39、`eval/admin_write_probe.py` 28、`agent/graph.py` 16。
 
 CI 目前只跑一个更窄的闸：`eval.yml` 的 `uv run --frozen ruff check --select F821 .`（未定义名，秒级）。
@@ -60,8 +60,9 @@ F821 是"会炸"的那一类，E/F/I/W 是"会烂"的那一类。本文件管后
    复审成本高、回滚粒度坏。存量清理单独成批（见下）。
    **E402 的大头不要修**：`eval/` 与 `tests/` 那 26 条在"先 `sys.path.insert` 再 import"
    的脚本里，是刻意的形态，改成包内相对导入是另一件事。**但库模块那几条不是**——
-   20261012 已清掉 `agent/workflows.py` 里那 8 条（导入夹在 `NAV_MAP` 表之后），
-   现存 1 条在 `agent/hostinfo.py`；这两处按"库代码 import 必须在顶部"办，不许再往回加。
+   20261012 已清掉 `agent/workflows.py` 里那 8 条（导入夹在 `NAV_MAP` 表之后；该文件 20261018 批 2 收尾刀**已删**），
+   故这一条现在只作为历史读数留着；现存 1 条在 `agent/hostinfo.py`。
+   这两处按"库代码 import 必须在顶部"办，不许再往回加。
 4. **不因为"反正存量有一堆"就把新代码也写脏**：存量条目是历史遗留，新代码按当下标准要求。
 
 ## 后续（已排入规范化批次，不遗忘）

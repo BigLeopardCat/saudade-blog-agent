@@ -7,7 +7,8 @@
 13513 / 246——那个数才是棘轮现在的天花板）。选它当第二刀的理由与第一刀**不同**——
 第一刀靠"边界干净"（三个名字、一套文本协议），这一刀靠**出边为零**：这一族对外只有
 8 个名字（8 个函数 + `EXECUTED_ONCE_WORKFLOWS`），而它们加起来只用到
-`_tool_name`（`agent.decisions`）、`split_tool_spec`（`agent.workflows`）、
+`_tool_name`（`agent.decisions`）、`split_tool_spec`（**本模块**，20261018 从
+`agent/tool_specs.py` 搬回）、
 `action_text` / `authz` 两个包、`logger`，加上 `EXECUTED_ONCE_WORKFLOWS` 这一个常量
 （连它的长注一起搬来了，全仓只有本族在用）。**一个来自 graph.py 的名字都不需要**
 ⇒ 不存在循环 import，也不需要"反向 import graph"那种形状（本仓明令不许，见
@@ -44,12 +45,40 @@
 import ast
 import json
 import logging
+import re
+from typing import Any
 
 from agent import action_text, authz
 from agent.decisions import _tool_name
-from agent.workflows import split_tool_spec
 
 logger = logging.getLogger(__name__)
+
+
+# 一条 spec 的字面形状：`工具名({json 参数})`。**拆分规则只能有一处**，所以它跟着
+# 消费方住在这里（`_tool_args` 就是它的第一个读者）。写端**不在这里**——展开层与实例化
+# 层各自 `json.dumps` 出这个形状（`workflow_expand_write` / `workflow_expand` /
+# `workflow_plan` 十余处），读端有三处（`graph._tool_args`、`tasks.bound_steps`、测试）。
+# 同族教训见 `agent/plan_codec.py` `_esc_spec` 的注："改一处要同步十三处"正是全仓审计
+# 点名的主导缺陷。
+#
+# 20261018 批 2 收尾刀从 `agent/workflows.py` 搬进来：此前它留那边是因为
+# `tool_specs → decisions → workflows` 是一条现成的链，搬过来就成环；转发层删掉之后
+# 这条边没了（`decisions` 不再指向任何 workflow 模块），它才回得了家。
+_TOOL_SPEC_RE = re.compile(r"^(\w+)\((.*)\)$", re.DOTALL)
+
+
+def split_tool_spec(spec: Any) -> tuple[str, str]:
+    """`工具名({json 参数})` → `(工具名, 参数原文)`；**形状不匹配一律 `("", "")`**。
+
+    只做拆分，**不解析参数**：参数原文怎么读由各消费方按自己的容错要求决定——
+    `graph._tool_args` 要容模型的漂移（单引号/尾逗号/行注释，见 `_loads_tolerant`），
+    而 `tasks.bound_steps` 读的是**本进程刚由 `json.dumps` 产出**的串（严格 JSON 就够）。
+    把容错搬到这里会让前者变宽、后者变窄，两边都不对。
+    """
+    m = _TOOL_SPEC_RE.match(str(spec or "").strip())
+    if not m:
+        return "", ""
+    return m.group(1), m.group(2)
 
 
 # 后台写技能（20260921 第二轮）：**不是**快照型——见 planner 里的重复规划防护。
@@ -351,8 +380,8 @@ def _tool_args(tool_spec: str) -> tuple[dict, bool]:
     都失败兜底空参 + ok=False——checker 据此判 args_parse（调用方按错误帧处理；
     工具签名必填参数缺失时工具层自会报 __ERROR__，不炸图）。
     """
-    # 拆分（`名字(args)` 那对括号）走 `workflows.split_tool_spec`——**形状的写端在
-    # `workflows.py`**，规则只该有一处。这里只保留"怎么读那串参数"的容错。
+    # 拆分（`名字(args)` 那对括号）走本模块的 `split_tool_spec`——规则只该有一处。
+    # 这里只保留"怎么读那串参数"的容错。
     m, raw = split_tool_spec(tool_spec)
     raw = raw.strip()
     if not m or not raw:

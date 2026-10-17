@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
-from agent.workflows import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILED: list[str] = []
 SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")

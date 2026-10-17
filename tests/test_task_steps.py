@@ -34,7 +34,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 
-from agent import workflows as S  # noqa: E402
+from agent.tool_specs import split_tool_spec  # noqa: E402
+from agent.workflow_params import args_are_bound  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 from agent import tasks as T  # noqa: E402
 
 FAILS: list[str] = []
@@ -168,8 +170,8 @@ def test_bound_steps_comes_from_the_same_expander():
     print("\n[绑定] `bound_steps` 的实参与**真执行那次**同源（`instantiate_plan`）")
     check("技能名 + 参数 ⇒ 已绑实参的步骤（含参数名归一那条既有通道）",
           T.bound_steps("tag_create", {"name": "临江仙"}, ROLE) == BOUND_TAG)
-    raws = [S.split_tool_spec(x)
-            for x in S.instantiate_plan("tag_create", {"name": "临江仙"}, ROLE)["tools"]]
+    raws = [split_tool_spec(x)
+            for x in instantiate_plan("tag_create", {"name": "临江仙"}, ROLE)["tools"]]
     check("与 `instantiate_plan` 的产出**逐字对账**（两处各推一份迟早对不上）",
           T.bound_steps("tag_create", {"name": "临江仙"}, ROLE)
           == [{"workflow": "tag_create", "tool": t, "args": json.loads(raw)} for t, raw in raws])
@@ -186,9 +188,9 @@ def test_bound_steps_comes_from_the_same_expander():
     check("⭐ 实参里有未解析的 `$tool[N]` 引用 ⇒ 整件 []（不能脱离现场执行）",
           T.bound_steps("tag_create", {"name": "$tool[0].title"}, ROLE) == [])
     check("  （同一条判据在展开器那一层：`args_are_bound` 单判）",
-          S.args_are_bound({"a": "$tool[0].field"}) is False
-          and S.args_are_bound({"a": None}) is False
-          and S.args_are_bound({}) is True and S.args_are_bound({"a": 0}) is True)
+          args_are_bound({"a": "$tool[0].field"}) is False
+          and args_are_bound({"a": None}) is False
+          and args_are_bound({}) is True and args_are_bound({"a": 0}) is True)
     check("非 dict 的 params（模型写了字符串）⇒ 按「什么都没给」处理，不炸",
           T.bound_steps("tag_create", "临江仙", ROLE) == [])
 

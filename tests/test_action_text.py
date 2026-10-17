@@ -29,7 +29,11 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import _parent_repo  # noqa: E402
-from agent import workflows as S  # noqa: E402  （③ 末尾那条：死工具的可达性只认这两条通道）
+from agent.workflow_defs import WORKFLOWS  # noqa: E402  （③ 末尾那条：死工具的可达性只认这两条通道）
+from agent.workflow_tools import (  # noqa: E402  （③ 末尾那条：死工具的可达性只认这两条通道）
+    _CALLABLE_QUERY_TOOLS,
+    _EXPLICIT_TOOLS,
+)
 from agent.action_text import receipt_action, tool_action_text  # noqa: E402
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
@@ -296,9 +300,9 @@ check("有臂工具的 full 档非空（空串=不写 action=悄悄退回老表�
 # 谁哪天把这两件接回去，断言立刻红，逼他回来改标签、改负例、想清楚 gate 的词汇怎么办。
 _dead_reachable = []
 for _n in sorted(_DEAD):
-    if _n in S._EXPLICIT_TOOLS or _n in S._CALLABLE_QUERY_TOOLS:
+    if _n in _EXPLICIT_TOOLS or _n in _CALLABLE_QUERY_TOOLS:
         _dead_reachable.append(f"{_n}:点名白名单")
-    if any(_n == _t for _s in S.WORKFLOWS for _t, _ in (_s.plan or ())):
+    if any(_n == _t for _s in WORKFLOWS for _t, _ in (_s.plan or ())):
         _dead_reachable.append(f"{_n}:技能模板")
 check("★ 两件死工具在哪条点名/模板通道里都够不到（够不到 ⇒ 「死」字成立）",
       not _dead_reachable, "、".join(_dead_reachable))

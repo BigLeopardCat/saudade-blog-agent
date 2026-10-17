@@ -564,7 +564,8 @@ check("白名单里已有 announcement_title / announcement_id（20260922 第五
 # admin_category_create_popup 整轮 FAIL、零弹窗、用户收到一句"未知工具"的系统报错。
 # 这类错误的形态是**参数、模板、注册表都各看一遍都看不出问题**（三处都自洽），
 # 只有把展开结果与注册表对一遍才照得出来——所以锁在这一层。
-from agent.workflows import WORKFLOW_MAP, WRITE_WORKFLOW_NAMES, instantiate_plan  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP, WRITE_WORKFLOW_NAMES  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 _REGISTERED = {t.name for t in base.get_all_tools()}
 # 每个写技能的最小合法参数（只为把模板填满，不涉及真调用）
@@ -592,7 +593,7 @@ _MIN_PARAMS = {
     "message_read": {"all": True},
     # 后台首页待办 / 日程（20260926）：写面里**唯一目标是自由文本**的一件——
     # 目标不是站内既有名字、也不是 id，所以它既不在名字通道也不在 own 通道，
-    # 由 `_expand_todo_workflow` 展开（见 agent/workflows.py 的同名函数头注）。
+    # 由 `_expand_todo_workflow` 展开（见 agent/workflow_expand.py 的同名函数头注）。
     "dashboard_todo_add": {"text": "给猫买罐头", "date": "明天"},
     # 后台账号冻结 / 解冻（20260926 第九轮）：名字通道的又一件——名字 → 账号的
     # 解析在工具侧对着**后台账号名录**做（`tools.base._find_named_user`）。

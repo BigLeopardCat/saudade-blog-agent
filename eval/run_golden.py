@@ -2129,7 +2129,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
 
     # 20260924：**多条命令都要出现**（`require_cmd_contains` 是单串，一个用例只能锁
     # 一条命令）。动机 = multi_turn_redirect 那条"把 X 换成 Y"只断了新开的 Y、
-    # 没断旧开的 X 关掉（`workflows.py` 明写"把X换成Y＝两条 spec 同轮"）——半截执行
+    # 没断旧开的 X 关掉（`workflow_defs/` 明写"把X换成Y＝两条 spec 同轮"）——半截执行
     # 与完整执行在那个断言下同分，于是"只开雨不关樱花"能长期绿。每个模式都必须
     # 命中至少一条命令帧（是全称，不是任一）。
     for pat in gold.get("require_cmd_all", []):

@@ -225,7 +225,7 @@ def _always_confirm_tools() -> frozenset:
 def _workflow_tools(workflow_name: str) -> "frozenset | None":
     """技能 plan 里的工具名集合（`None` = 技能不存在/取不到判据）。"""
     try:
-        from agent.workflows import WORKFLOW_MAP
+        from agent.workflow_defs import WORKFLOW_MAP
         sk = WORKFLOW_MAP.get(workflow_name)
         if sk is None or not getattr(sk, "plan", None):
             return None

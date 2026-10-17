@@ -30,7 +30,7 @@
      说说 `?tk=`）、文章页上的 `#…` 是**阅读进度锚点**不是评论位置。它进的是 planner 与
      narrator **共用**的那份页面上下文（`_attach_page_guide`），且**无条件**（不按 URL
      分档——实测出问题那几轮里有一轮就在首页）。
-  ② **参数通道**（`agent/workflows.py` 的 `navigate.inputs["target"]`）：这一格能填**字面路径**，
+  ② **参数通道**（`agent/workflow_defs/` 的 `navigate.inputs["target"]`）：这一格能填**字面路径**，
      要停在某一条内容上就填上面那两个形态。只写不放行 = 空承诺；只放行不写 = 让模型猜。
      **20261008 抓到的那一处**：`navigate_to` 的白名单拿**整串**比对
      （`p in _NAV_EXACT_PATHS`），`/guestbook?lid=…` 带上 query 后精确表里就没有它了
@@ -58,8 +58,10 @@ sys.path.insert(0, str(ROOT))
 import agent.context as C  # noqa: E402
 import agent.entities as E  # noqa: E402
 from agent import authz  # noqa: E402
-from agent.workflows import (NAV_MAP, WORKFLOWS, _EXPLICIT_TOOLS,  # noqa: E402
-                          instantiate_plan, visible_workflows)
+from agent.workflow_defs import WORKFLOWS, visible_workflows  # noqa: E402
+from agent.workflow_defs.nav import NAV_MAP  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
+from agent.workflow_tools import _EXPLICIT_TOOLS  # noqa: E402
 from tools.base import (_FRAME_ID_KEYS, _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS,  # noqa: E402
                         get_all_tools, list_my_board, nav_path_valid,
                         nav_pure_path, navigate_to)

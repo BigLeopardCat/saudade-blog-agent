@@ -39,7 +39,19 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/
 sys.path.insert(0, str(ROOT))
 
 from agent import graph as G  # noqa: E402
-from agent import workflows as S  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP, WORKFLOWS, WRITE_WORKFLOW_NAMES  # noqa: E402
+from agent.workflow_menu import render_workflow_params  # noqa: E402
+from agent.workflow_model import DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT  # noqa: E402
+from agent.workflow_params import (  # noqa: E402
+    _template_param_map,
+    arg_enum,
+    arg_type_short,
+    check_call_args,
+    check_workflow_params,
+    tool_arg_schemas,
+    workflow_param_specs,
+)
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -57,8 +69,8 @@ def _tools(specs: list[str]) -> list[str]:
 # ── ① 派生：规格必须来自工具 schema，且与工具的必填/类型一致 ─────────────────
 def test_specs_derive_from_tool_schema():
     print("\n[派生] 类型/必填/默认值从工具 args_schema 来")
-    schemas = S.tool_arg_schemas()
-    specs = {s.name: S.workflow_param_specs(s) for s in S.WORKFLOWS}
+    schemas = tool_arg_schemas()
+    specs = {s.name: workflow_param_specs(s) for s in WORKFLOWS}
 
     # 逐个技能：凡是从工具派生的参数（from_tool 非空），类型必须与该工具的 schema
     # 一致——不写死期望值，写死会与工具漂移脱钩（这正是"不造第二份真相"的检验）。
@@ -72,14 +84,14 @@ def test_specs_derive_from_tool_schema():
             if prop is None:
                 bad.append(f"{name}.{pname} 声称派生自 {sp.from_tool}，但该工具没这个参数")
                 continue
-            want = S.arg_type_short(prop)
+            want = arg_type_short(prop)
             if sp.type != want:
                 bad.append(f"{name}.{pname} 类型 {sp.type} ≠ 工具派生的 {want}")
     check("每个派生参数的类型都与工具 schema 一致", not bad, "；".join(bad[:4]))
 
     # 必填性：派生 = 在工具 required 里；例外只许由 required/optional_params 造成
     bad = []
-    for sk in S.WORKFLOWS:
+    for sk in WORKFLOWS:
         for pname, sp in specs[sk.name].items():
             if not sp.from_tool:
                 continue
@@ -110,32 +122,32 @@ def test_specs_derive_from_tool_schema():
 # ── ② 例外清单：只许这四条，且每条都要有实证依据 ──────────────────────────────
 def test_declared_exceptions_are_the_known_three():
     print("\n[例外] 技能盖掉派生结果的地方只有这四件")
-    declared = {s.name: (s.required_params, s.optional_params) for s in S.WORKFLOWS}
+    declared = {s.name: (s.required_params, s.optional_params) for s in WORKFLOWS}
     non_empty = {n: v for n, v in declared.items() if v[0] or v[1]}
     check("没有任何技能声明 required_params/optional_params 之外的例外字段",
-          set(declared) == {s.name for s in S.WORKFLOWS})
+          set(declared) == {s.name for s in WORKFLOWS})
     check("只有 navigate / effect / device_display / review_inbox 用了这两个字段",
           set(non_empty) == {"navigate", "effect", "device_display", "review_inbox"},
           str(sorted(non_empty)))
     check("navigate.required_params = (target,)（漏了它会说「站内没有该页面」）",
-          S.WORKFLOW_MAP["navigate"].required_params == ("target",),
-          str(S.WORKFLOW_MAP["navigate"].required_params))
+          WORKFLOW_MAP["navigate"].required_params == ("target",),
+          str(WORKFLOW_MAP["navigate"].required_params))
     check("effect.required_params = (action,)（工具默认值 on 会静默扭转主人意图）",
-          S.WORKFLOW_MAP["effect"].required_params == ("action",),
-          str(S.WORKFLOW_MAP["effect"].required_params))
+          WORKFLOW_MAP["effect"].required_params == ("action",),
+          str(WORKFLOW_MAP["effect"].required_params))
     check("device_display.optional_params = (text,)（文案由执行层创作）",
-          S.WORKFLOW_MAP["device_display"].optional_params == ("text",),
-          str(S.WORKFLOW_MAP["device_display"].optional_params))
+          WORKFLOW_MAP["device_display"].optional_params == ("text",),
+          str(WORKFLOW_MAP["device_display"].optional_params))
     # 20260929 批 H：`review_inbox` 从"系统专用技能、参数不给模型填"改成模型可见的
     # **变更集**技能，参数 `calls` 由模型逐条写（`{tool, args}`，与 `content_query.calls`
     # 同构）⇒ 必填性只能显式声明（模板给不出映射：工具名本身就是模型写的）。
     # 它进这张表是**本批的核心事实**，不是顺手加的例外。
     check("review_inbox.required_params = (calls,)（空清单 = 一张什么都不办的卡）",
-          S.WORKFLOW_MAP["review_inbox"].required_params == ("calls",),
-          str(S.WORKFLOW_MAP["review_inbox"].required_params))
+          WORKFLOW_MAP["review_inbox"].required_params == ("calls",),
+          str(WORKFLOW_MAP["review_inbox"].required_params))
     # 反面：把 device_display.text 当成必填会让"屏幕显示"这条能力从 planner 通道**整体
     # 不可达**（planner 按 inputs 的说明就不该填 text）。这条断言是上面那条的意义所在。
-    sp = S.workflow_param_specs(S.WORKFLOW_MAP["device_display"])["text"]
+    sp = workflow_param_specs(WORKFLOW_MAP["device_display"])["text"]
     check("device_display.text 不是必填（否则技能整体不可达）", not sp.required, f"{sp}")
 
 
@@ -149,15 +161,15 @@ def test_param_set_is_inputs_only():
     # `$path` 一个。判据本身（"模板里 planner 不该填的占位符，新增一个就红"）没动。
     KNOWN_DEAD = {("navigate", "path")}
     seen_dead, wrong = [], []
-    for sk in S.WORKFLOWS:
-        tmap = S._template_param_map(sk)
+    for sk in WORKFLOWS:
+        tmap = _template_param_map(sk)
         dead = {p for p in tmap if p not in sk.inputs}
         seen_dead += [(sk.name, p) for p in dead]
         for p in dead:
             if (sk.name, p) not in KNOWN_DEAD:
                 wrong.append(f"{sk.name}.{p}")
         # 参数表里绝不许出现不在 inputs 的名字
-        extra = set(S.workflow_param_specs(sk)) - set(sk.inputs)
+        extra = set(workflow_param_specs(sk)) - set(sk.inputs)
         if extra:
             wrong.append(f"{sk.name} 参数表溢出 inputs：{sorted(extra)}")
     check("没有新的模板死占位符", not wrong, "；".join(wrong[:4]))
@@ -165,22 +177,22 @@ def test_param_set_is_inputs_only():
           sorted(seen_dead) == sorted(KNOWN_DEAD), str(sorted(seen_dead)))
 
     # 菜单渲染：navigate 一行里不许出现 path/confirm（它们是模板管道，不是可填参数）
-    sig = S.render_workflow_params(S.WORKFLOW_MAP["navigate"])
+    sig = render_workflow_params(WORKFLOW_MAP["navigate"])
     check("navigate 菜单只列 target", ("target" in sig and "mode" not in sig
                                      and "path" not in sig and "confirm" not in sig), sig)
     check("无参技能渲染成空串（不产生空白的「参数：」行）",
-          all(not S.render_workflow_params(s) for s in S.WORKFLOWS
+          all(not render_workflow_params(s) for s in WORKFLOWS
               if not s.inputs), "")
     # 记号与工具菜单一致：`名字:类型` + 必填 `*` + 默认值 `=值`
     check("菜单记号：必填带 *", "target:any*" in sig, sig)
-    eff = S.render_workflow_params(S.WORKFLOW_MAP["effect"])
+    eff = render_workflow_params(WORKFLOW_MAP["effect"])
     check("菜单记号：类型来自工具（str）", "effect:str*" in eff, eff)
     # 必填的 **不**显示工具默认值：`action:str*="on"` 会被读成"不填也行、默认 on"，
     # 而 action 恰恰是"漏填就会静默扭转主人意图"的那一格（见 required_params 注）。
     # 与工具菜单同优先级：`*` 赢过 `=值`（`_menu_arg_signature` 同样的 if/else）。
     check("菜单记号：必填不显示默认值（避免被读成「不填也行」）",
           "action:str*" in eff and '="on"' not in eff, eff)
-    mr = S.render_workflow_params(S.WORKFLOW_MAP["moderation_report"])
+    mr = render_workflow_params(WORKFLOW_MAP["moderation_report"])
     check("菜单记号：可选且有默认值/说明的参数照常显示类型与说明",
           "status:str" in mr and "*" not in mr.split("（")[0], mr)
 
@@ -188,7 +200,7 @@ def test_param_set_is_inputs_only():
 # ── ④ 校验行为（走 instantiate_plan 端到端） ─────────────────────────────────
 def test_missing_and_bad_params_zero_the_tools():
     print("\n[校验] 缺/坏 ⇒ 零工具 + 只说事实的注记")
-    p = S.instantiate_plan("effect", {"effect": "sakura"})
+    p = instantiate_plan("effect", {"effect": "sakura"})
     check("缺必填 action ⇒ 零工具", p["tools"] == [], str(p["tools"]))
     check("  注记点明「必填参数没给：action」", "必填参数没给" in p["note"] and "action" in p["note"],
           p["note"][:80])
@@ -200,36 +212,36 @@ def test_missing_and_bad_params_zero_the_tools():
           p.get("param_problem", {}).get("missing") == ["action"], str(p.get("param_problem")))
 
     # 台账话术禁令：这一层没读过台账，缺的是参数
-    for note in (p["note"], S.instantiate_plan("navigate", {}).get("note", "")):
+    for note in (p["note"], instantiate_plan("navigate", {}).get("note", "")):
         check("注记不含台账话术（站内/字典/查不到）",
               not any(w in note for w in ("站内没有", "站内查不到", "字典里没有", "查不到")),
               note[:60])
 
-    p = S.instantiate_plan("effect", {"effect": "sakura", "action": None})
+    p = instantiate_plan("effect", {"effect": "sakura", "action": None})
     check("必填传 None 与漏填同判", p["tools"] == [], str(p["tools"]))
 
-    p = S.instantiate_plan("darkmode", {"mode": ["on"]})
+    p = instantiate_plan("darkmode", {"mode": ["on"]})
     check("值类型用不了 ⇒ 零工具 + 「参数值用不了」",
           p["tools"] == [] and "参数值用不了" in p["note"], p["note"][:70])
 
     # navigate 的 target 是**声明**的必填（派不出来）——判据必须排在本技能自己的
     # 映射表判据**之前**，否则会说成"站内没有该页面"（假话）
-    p = S.instantiate_plan("navigate", {})
+    p = instantiate_plan("navigate", {})
     check("navigate 缺 target ⇒ 「必填参数没给」而不是「无法识别」",
           p["tools"] == [] and "必填参数没给" in p["note"] and "无法识别" not in p["note"],
           p["note"][:70])
-    p = S.instantiate_plan("navigate", {"target": "不存在的页"})
+    p = instantiate_plan("navigate", {"target": "不存在的页"})
     check("对照：target 存在但查无此页 ⇒ 仍是「无法识别」（这条没被改掉）",
           p["tools"] == [] and "无法识别" in p["note"], p["note"][:60])
 
-    p = S.instantiate_plan("navigate", {})
+    p = instantiate_plan("navigate", {})
     check("navigate 空 target 也不产出 `null` 实参以外的任何工具（零工具）",
           _tools(p["tools"]) == [], str(p["tools"]))
 
 
 def test_coercion_and_null_args():
     print("\n[归一] 无损归一照做；没值的可选参数不落进实参")
-    p = S.instantiate_plan("content_query", {"calls": [
+    p = instantiate_plan("content_query", {"calls": [
         {"tool": "get_article_detail", "args": {"article_id": "96", "doc_type": "note"}}]})
     # `doc_type: "note"` 恰是工具的默认值 ⇒ 20261005 起被剔掉（判据与理由见 ⑤b 那一节）。
     # 这条要看的是 **article_id 的归一**，实参里少了那半边不影响它——别把它当成回归。
@@ -238,29 +250,29 @@ def test_coercion_and_null_args():
           str(p["tools"]))
 
     # 空的可选参数：工具默认值必须能接管（显式 null 会覆盖它、被 pydantic 判非法）
-    p = S.instantiate_plan("device_display", {})
+    p = instantiate_plan("device_display", {})
     check("device_display 空参 ⇒ 实参里不出现 text:null",
           p["tools"] == ["device_oled_display({})"], str(p["tools"]))
-    p = S.instantiate_plan("moderation_report", {"status": None})
+    p = instantiate_plan("moderation_report", {"status": None})
     check("可选参数传 None ⇒ 不落进实参（`{\"status\": null}` 会撞 pydantic）",
           "null" not in (p["tools"][0] if p["tools"] else ""), str(p["tools"]))
-    p = S.instantiate_plan("effect", {"effect": "sakura", "action": "off"})
+    p = instantiate_plan("effect", {"effect": "sakura", "action": "off"})
     check("给了值就照常落进实参", p["tools"] == ['toggle_effect({"effect": "sakura", "action": "off"})'],
           str(p["tools"]))
 
     # 结构性不变量：任何技能**只用必填参数**实例化，实参里都不该出现 null
     bad = []
-    for sk in S.WORKFLOWS:
-        if sk.name in S.WRITE_WORKFLOW_NAMES or sk.name in ("navigate", "read_article",
+    for sk in WORKFLOWS:
+        if sk.name in WRITE_WORKFLOW_NAMES or sk.name in ("navigate", "read_article",
                                                          "content_query", "chat"):
             continue
-        specs = S.workflow_param_specs(sk)
+        specs = workflow_param_specs(sk)
         dummy = {}
         for n, sp in specs.items():
             if not sp.required:
                 continue
             dummy[n] = {"int": 1, "str": "x", "bool": True, "list": [], "dict": {}}.get(sp.type, "x")
-        p = S.instantiate_plan(sk.name, dummy)
+        p = instantiate_plan(sk.name, dummy)
         if any("null" in t for t in p["tools"]):
             bad.append(f"{sk.name}: {p['tools']}")
     check("只用必填参数实例化时，实参里不出现 null（模板管道不再变 null 实参）",
@@ -270,30 +282,30 @@ def test_coercion_and_null_args():
 def test_param_refs_pass_through():
     print("\n[引用] $tool[N].field 原样透传，永不因类型判据被判不合格")
     ref = "$search_notes[0].noteKey"
-    p = S.instantiate_plan("content_query", {"calls": [
+    p = instantiate_plan("content_query", {"calls": [
         {"tool": "get_article_detail", "args": {"article_id": ref}}]})
     check("引用出现在 calls.args 里 ⇒ 该条目不被剔除",
           p["tools"] == [f'get_article_detail({{"article_id": "{ref}"}})'], str(p["tools"]))
     check("  引用不被当成「缺必填」或「类型不对」", p["dropped"] == [], str(p["dropped"]))
 
-    sp = S.workflow_param_specs(S.WORKFLOW_MAP["effect"])
+    sp = workflow_param_specs(WORKFLOW_MAP["effect"])
     check("check_workflow_params 对引用不做类型判据",
-          S.check_workflow_params(S.WORKFLOW_MAP["effect"],
+          check_workflow_params(WORKFLOW_MAP["effect"],
                                {"effect": ref, "action": "on"}, sp)["bad"] == [], "")
     check("  容器里的引用同样放行（list 元素位置）",
-          S.check_call_args("set_article_tags", {"article_id": 1,
+          check_call_args("set_article_tags", {"article_id": 1,
                                                  "add": ["$list_tags[0].title"]})["bad"] == [], "")
 
 
 def test_unknown_params_are_loud_but_not_blocking():
     print("\n[没人读的参数] 只记账、不阻断（与「点名被剔除」是两种事）")
-    p = S.instantiate_plan("effect", {"effect": "sakura", "action": "on", "speed": 3})
+    p = instantiate_plan("effect", {"effect": "sakura", "action": "on", "speed": 3})
     check("多写的参数名进 param_unknown", p["param_unknown"] == ["speed"], str(p["param_unknown"]))
     check("  工具照常执行（不因为多写一个参数就整轮作废）",
           p["tools"] == ['toggle_effect({"effect": "sakura", "action": "on"})'], str(p["tools"]))
     check("  多写的参数不进实参", "speed" not in (p["tools"][0] if p["tools"] else ""), "")
     check("  也不进 dropped（dropped 是工具可达性）", p["dropped"] == [], str(p["dropped"]))
-    p = S.instantiate_plan("navigate", {"target": "留言板", "path": "/x"})
+    p = instantiate_plan("navigate", {"target": "留言板", "path": "/x"})
     check("navigate 填了模板死占位符 path ⇒ 记成没人读的参数",
           p["param_unknown"] == ["path"], str(p["param_unknown"]))
 
@@ -301,30 +313,30 @@ def test_unknown_params_are_loud_but_not_blocking():
 # ── ⑤ content_query.calls：同一条通道、两种原因、两种话术 ────────────────────
 def test_call_args_dropped_with_typed_reasons():
     print("\n[调用清单] 参数不合格剔除时带原因后缀，且与「args 非对象」分开")
-    p = S.instantiate_plan("content_query", {"calls": [
+    p = instantiate_plan("content_query", {"calls": [
         {"tool": "get_article_detail", "args": {"doc_type": "note"}}]})
     check("缺必填 ⇒ 条目进 dropped、带 BAD_ARGS 后缀",
           p["tools"] == [] and p["dropped"]
           and p["dropped"][0].startswith("get_article_detail")
-          and S.DROP_SUFFIX_BAD_ARGS in p["dropped"][0], str(p["dropped"]))
-    p = S.instantiate_plan("content_query", {"calls": [
+          and DROP_SUFFIX_BAD_ARGS in p["dropped"][0], str(p["dropped"]))
+    p = instantiate_plan("content_query", {"calls": [
         {"tool": "get_article_detail", "args": "ESP32"}]})
     check("args 非对象 ⇒ 仍是 NOT_OBJECT 后缀（既有行为不变）",
-          p["dropped"] == [f"get_article_detail{S.DROP_SUFFIX_NOT_OBJECT}"], str(p["dropped"]))
-    p = S.instantiate_plan("content_query", {"calls": [
+          p["dropped"] == [f"get_article_detail{DROP_SUFFIX_NOT_OBJECT}"], str(p["dropped"]))
+    p = instantiate_plan("content_query", {"calls": [
         {"tool": "rag_search", "args": {"query": "x", "top_k": None}}]})
     check("可选参数 null ⇒ 剔除该参数、调用保留",
           p["tools"] == ['rag_search({"query": "x"})'], str(p["tools"]))
-    p = S.instantiate_plan("content_query", {"calls": [
+    p = instantiate_plan("content_query", {"calls": [
         {"tool": "rag_search", "args": {"query": "x", "nope": 1}}]})
     check("多余参数名 ⇒ 只剔参数、调用保留（不再静默）",
           p["tools"] == ['rag_search({"query": "x"})'], str(p["tools"]))
 
     # 两种后缀的话术必须分开：把它们讲成同一件事，planner 会照着"改成 JSON 对象"
     # 去修一个其实"缺参数"的条目，白试一轮
-    bad_msg = G._drop_correction(["get_article_detail" + S.DROP_SUFFIX_BAD_ARGS
+    bad_msg = G._drop_correction(["get_article_detail" + DROP_SUFFIX_BAD_ARGS
                                   + "缺必填 article_id）"], None)
-    notobj_msg = G._drop_correction([f"get_article_detail{S.DROP_SUFFIX_NOT_OBJECT}"], None)
+    notobj_msg = G._drop_correction([f"get_article_detail{DROP_SUFFIX_NOT_OBJECT}"], None)
     check("BAD_ARGS 后缀 ⇒ 话术是「参数不合格」、并给出改法",
           "参数不合格" in bad_msg and "缺必填 article_id" in bad_msg, bad_msg[:120])
     check("  且**不**说「args 要写成 JSON 对象」（那是另一种毛病的改法）",
@@ -351,8 +363,8 @@ def test_explicit_defaults_render_as_absent():
     """
     print("\n[调用清单] 显式填默认值 ⇒ 与不填渲染成同一个 spec（跨轮重复拦截的判据前提）")
     # 两条通道、同一件读：无参点名 vs 带参（值恰是默认值）
-    p_tools = S.instantiate_plan("content_query", {"tools": ["list_talks"]})
-    p_calls = S.instantiate_plan("content_query",
+    p_tools = instantiate_plan("content_query", {"tools": ["list_talks"]})
+    p_calls = instantiate_plan("content_query",
                                  {"calls": [{"tool": "list_talks", "args": {"offset": 0}}]})
     check("带参填了默认值 offset=0 ⇒ 渲染成 `list_talks({})`",
           p_calls["tools"] == ["list_talks({})"], str(p_calls["tools"]))
@@ -363,17 +375,17 @@ def test_explicit_defaults_render_as_absent():
           f'dropped={p_calls["dropped"]} unknown={p_calls["param_unknown"]}')
 
     # 反控（判据必须能判出**不该剔**）：非默认值一个都不许被碰
-    p_off = S.instantiate_plan("content_query",
+    p_off = instantiate_plan("content_query",
                                {"calls": [{"tool": "list_talks", "args": {"offset": 60}}]})
     check("反控：offset=60（非默认值）⇒ 原样留在实参里",
           p_off["tools"] == ['list_talks({"offset": 60})'], str(p_off["tools"]))
-    p_mix = S.instantiate_plan("content_query", {"calls": [
+    p_mix = instantiate_plan("content_query", {"calls": [
         {"tool": "list_notes", "args": {"page": 1, "page_size": 20}}]})
     check("反控：同一条调用里「默认值剔掉、非默认值留下」各判各的",
           p_mix["tools"] == ['list_notes({"page_size": 20})'], str(p_mix["tools"]))
     # 反控之二：**必填**参数即使填成了某个 schema 默认值也照旧在（必填没有默认值，
     # 这条钉的是"别把判据写成按值匹配、连必填一起吞"）
-    p_req = S.instantiate_plan("content_query",
+    p_req = instantiate_plan("content_query",
                                {"calls": [{"tool": "search_notes", "args": {"keyword": "x"}}]})
     check("反控：必填参数照旧落进实参（判据不是「值长得像默认值就剔」）",
           p_req["tools"] == ['search_notes({"keyword": "x"})'], str(p_req["tools"]))
@@ -394,28 +406,28 @@ def test_enum_closure_derives_from_literal():
     # arg_enum 的三种形状：裸 enum / Optional[Literal] 的 anyOf 包裹 / 没有闭集。
     # 第三条不是凑数：`arg_type_short` 早就写了 anyOf 遍历，arg_enum 若只读顶层
     # `enum` 就会漏掉 Optional 那一格（本批实测第一次就是这么漏的）。
-    check("裸 enum 取得出来", S.arg_enum({"enum": ["a", "b"], "type": "string"}) == ("a", "b"),
-          str(S.arg_enum({"enum": ["a", "b"], "type": "string"})))
+    check("裸 enum 取得出来", arg_enum({"enum": ["a", "b"], "type": "string"}) == ("a", "b"),
+          str(arg_enum({"enum": ["a", "b"], "type": "string"})))
     check("anyOf 包裹的 enum 也取得出来（Optional[Literal] 的渲染形）",
-          S.arg_enum({"anyOf": [{"enum": ["x", "y"], "type": "string"}, {"type": "null"}]}) == ("x", "y"),
-          str(S.arg_enum({"anyOf": [{"enum": ["x", "y"], "type": "string"}, {"type": "null"}]})))
+          arg_enum({"anyOf": [{"enum": ["x", "y"], "type": "string"}, {"type": "null"}]}) == ("x", "y"),
+          str(arg_enum({"anyOf": [{"enum": ["x", "y"], "type": "string"}, {"type": "null"}]})))
     check("没有闭集 ⇒ 空元组（空 = 没有闭集，不是「闭集为空」）",
-          S.arg_enum({"type": "string"}) == () and S.arg_enum(None) == ()
-          and S.arg_enum({"enum": []}) == (), "")
+          arg_enum({"type": "string"}) == () and arg_enum(None) == ()
+          and arg_enum({"enum": []}) == (), "")
     check("非字符串 enum 不认（避免把数字闭集当成可选值渲染给人看）",
-          S.arg_enum({"enum": [1, 2]}) == (), "")
+          arg_enum({"enum": [1, 2]}) == (), "")
 
     # 逐参数核对：choices 必须与**该工具 schema 里那一格**的 enum 完全相等。
     # 不写死期望值——写死就与工具漂移脱钩了（这正是"不造第二份真相"的检验）。
-    schemas = S.tool_arg_schemas()
+    schemas = tool_arg_schemas()
     bad, seen = [], []
-    for sk in S.WORKFLOWS:
-        for pname, sp in S.workflow_param_specs(sk).items():
+    for sk in WORKFLOWS:
+        for pname, sp in workflow_param_specs(sk).items():
             if not sp.from_tool:
                 continue
             tool, arg = sp.from_tool.split(".", 1)
             prop = (schemas.get(tool) or {}).get("properties", {}).get(arg) or {}
-            want = S.arg_enum(prop)
+            want = arg_enum(prop)
             if sp.choices != want:
                 bad.append(f"{sk.name}.{pname} choices={sp.choices} ≠ 工具 enum {want}")
             if want:
@@ -437,7 +449,7 @@ def test_enum_closure_derives_from_literal():
 
 def test_enum_closure_zeroes_tools_before_pydantic():
     print("\n[闭集] 非法取值 ⇒ 零工具 + 同轮纠偏（不是 pydantic 的 __ERROR__ 帧）")
-    p = S.instantiate_plan("effect", {"effect": "樱花", "action": "on"})
+    p = instantiate_plan("effect", {"effect": "樱花", "action": "on"})
     check("中文值不在闭集里 ⇒ 零工具（工具一个都没发出去）", p["tools"] == [], str(p["tools"]))
     check("  注记点明不在可选值里、并列出合法取值",
           "不在可选值里" in p["note"] and "sakura / rain / snow" in p["note"], p["note"][:90])
@@ -453,25 +465,25 @@ def test_enum_closure_zeroes_tools_before_pydantic():
     check("  非法值**不**被记成「归一过」（否则自相矛盾）",
           p.get("param_problem", {}).get("fixed") == [], str(p.get("param_problem")))
 
-    p = S.instantiate_plan("darkmode", {"mode": "yes"})
+    p = instantiate_plan("darkmode", {"mode": "yes"})
     check("darkmode 同判（闭集参数逐个生效，不是一个特例）",
           p["tools"] == [] and "on / off" in p["note"], p["note"][:80])
 
     # 合法值原样通行——闭集判据不能顺手把正常路径挡住
-    p = S.instantiate_plan("moderation_report", {"status": "pending"})
+    p = instantiate_plan("moderation_report", {"status": "pending"})
     check("合法闭集值照常执行（anyOf 那一格也认）",
           p["tools"] == ['get_moderation_status({"status": "pending"})'], str(p["tools"]))
 
     # calls 通道：同一条校验、同样的原因后缀
-    p = S.instantiate_plan("content_query", {"calls": [
+    p = instantiate_plan("content_query", {"calls": [
         {"tool": "get_article_detail", "args": {"article_id": 19, "doc_type": "article"}}]})
     check("calls[].args 的非法闭集值 ⇒ 条目进 dropped、带 BAD_ARGS 后缀",
           p["tools"] == [] and p["dropped"]
-          and S.DROP_SUFFIX_BAD_ARGS in p["dropped"][0]
+          and DROP_SUFFIX_BAD_ARGS in p["dropped"][0]
           and "不在可选值里" in p["dropped"][0], str(p["dropped"]))
     check("  后缀与「args 非对象」不混（改法不同，话术必须分开）",
-          S.DROP_SUFFIX_NOT_OBJECT not in p["dropped"][0], str(p["dropped"]))
-    p = S.instantiate_plan("content_query", {"calls": [
+          DROP_SUFFIX_NOT_OBJECT not in p["dropped"][0], str(p["dropped"]))
+    p = instantiate_plan("content_query", {"calls": [
         {"tool": "get_article_detail", "args": {"article_id": 19, "doc_type": "talk"}}]})
     check("对照：合法闭集值照常展开", p["tools"] != [] and p["dropped"] == [], str(p["dropped"]))
 
@@ -479,8 +491,8 @@ def test_enum_closure_zeroes_tools_before_pydantic():
     # 两层都拦是对的（纵深），但校验层先拦才能给出"参数值用不了"这种能自纠的话术。
     check("check_workflow_params 的 bad 是字符串列表（graph 原样转述给 planner）",
           all(isinstance(x, str) for x in
-              S.check_workflow_params(S.WORKFLOW_MAP["effect"], {"effect": "snow", "action": "开"},
-                                   S.workflow_param_specs(S.WORKFLOW_MAP["effect"]))["bad"]), "")
+              check_workflow_params(WORKFLOW_MAP["effect"], {"effect": "snow", "action": "开"},
+                                   workflow_param_specs(WORKFLOW_MAP["effect"]))["bad"]), "")
 
 
 def test_alias_normalized_params_stay_open():
@@ -491,19 +503,19 @@ def test_alias_normalized_params_stay_open():
     # __ERROR__ 帧）。所以它们的 choices 必须是空的，且中文取值必须仍然走得通。
     for sk_name, pname in (("board_audit", "verdict"), ("article_status", "status"),
                            ("tag_update", "to_level"), ("tag_delete", "level")):
-        sp = S.workflow_param_specs(S.WORKFLOW_MAP[sk_name])[pname]
+        sp = workflow_param_specs(WORKFLOW_MAP[sk_name])[pname]
         check(f"{sk_name}.{pname} 没有闭集（闭集在 adminops 的别名表里，不在工具层）",
               sp.choices == () and sp.type == "str", f"{sp}")
 
     # 20260929 批 H：目标参数从 `quote`（正文片段）换成 `talk_id`（台账编号）——
     # 这一格的被测对象是 **verdict 的别名归一**，目标字段跟着换，断言内容一字不变。
-    ok = S.instantiate_plan("board_audit", {"verdict": "驳回", "talk_id": "101"})
+    ok = instantiate_plan("board_audit", {"verdict": "驳回", "talk_id": "101"})
     check("中文「驳回」仍被归一成 reject 并照常执行（这条通道没被闭集关死）",
           ok["tools"] == ['audit_board_comment({"talk_id": 101, "verdict": "reject"})'],
           str(ok["tools"]))
-    ok = S.instantiate_plan("board_audit", {"verdict": "通过", "talk_id": "101"})
+    ok = instantiate_plan("board_audit", {"verdict": "通过", "talk_id": "101"})
     check("中文「通过」→ pass", "pass" in (ok["tools"][0] if ok["tools"] else ""), str(ok["tools"]))
-    bad = S.instantiate_plan("board_audit", {"verdict": "随便", "talk_id": "101"})
+    bad = instantiate_plan("board_audit", {"verdict": "随便", "talk_id": "101"})
     check("归不了的值仍由别名层如实拒绝（不是闭集判据顺手接管）",
           bad["tools"] == [] and "认不出来" in bad["note"], bad["note"][:60])
 
@@ -516,7 +528,7 @@ def test_param_unknown_is_filled_by_every_branch():
                             ("effect", {"effect": "sakura", "action": "on", "bogus": 1}),
                             ("device_display", {"bogus": 1}),
                             ("article_status", {"article_id": 1, "status": "public", "bogus": 1})):
-        p = S.instantiate_plan(sk_name, params)
+        p = instantiate_plan(sk_name, params)
         check(f"{sk_name}：臆造参数名测得出来（此前只有这两个以外的路从不填）",
               p["param_unknown"] == ["bogus"], str(p["param_unknown"]))
 
@@ -528,24 +540,24 @@ def test_param_unknown_is_filled_by_every_branch():
     #     时，那个值**确实没人读**（回复走 REPLY 行 / `reply_contract`，全仓
     #     `params["reply"]` 零消费点）。报出来是真的，只是频率极低（全量 1157 次
     #     决策里 3 次）。
-    p = S.instantiate_plan("tag_create", {"name": "测试标签", "title": "测试标签"})
+    p = instantiate_plan("tag_create", {"name": "测试标签", "title": "测试标签"})
     check("tag_create 写 name（该写 title）⇒ 报出来", p["param_unknown"] == ["name"],
           str(p["param_unknown"]))
-    p = S.instantiate_plan("chat", {"reply": "在的喵", "bogus": 1})
+    p = instantiate_plan("chat", {"reply": "在的喵", "bogus": 1})
     check("chat 的 PARAMS 里写 reply/臆造名 ⇒ 都报出来（chat 本身没有参数）",
           p["param_unknown"] == ["reply", "bogus"], str(p["param_unknown"]))
     check("  且 chat 的 PARAMS 为空时零报告（常态不产生噪音）",
-          S.instantiate_plan("chat", {})["param_unknown"] == [], "")
+          instantiate_plan("chat", {})["param_unknown"] == [], "")
 
     # 结构性防线：**每个技能**用"它自己声明的全部参数"实例化，param_unknown 必须为空。
     # 这条同时是薄壳的**误报**防线——壳若拿错了规格（比如按 plan["workflow"] 查不到技能、
     # 或用了别的表），这里会集体爆红，而不是等到生产里给 planner 发一堆假警告。
     bad = []
-    for sk in S.WORKFLOWS:
-        specs = S.workflow_param_specs(sk)
+    for sk in WORKFLOWS:
+        specs = workflow_param_specs(sk)
         dummy = {n: {"int": 1, "str": "x", "bool": True, "list": [], "dict": {},
                      "any": "x"}.get(sp.type, "x") for n, sp in specs.items()}
-        p = S.instantiate_plan(sk.name, dummy)
+        p = instantiate_plan(sk.name, dummy)
         if p["param_unknown"]:
             bad.append(f"{sk.name}: {p['param_unknown']}")
     check("全部技能 × 全部已声明参数 ⇒ param_unknown 为空（零误报）", not bad,
@@ -626,12 +638,12 @@ def test_wiring():
     check("菜单渲染不读 choices（闭集只用于校验）",
           rsp is not None and "choices" not in rsp and "arg_enum" not in rsp, "")
     check("  菜单文本里没有生成出来的取值清单（散文说明照旧）",
-          "sakura / rain / snow" not in S.render_workflow_params(S.WORKFLOW_MAP["effect"]),
-          S.render_workflow_params(S.WORKFLOW_MAP["effect"]))
+          "sakura / rain / snow" not in render_workflow_params(WORKFLOW_MAP["effect"]),
+          render_workflow_params(WORKFLOW_MAP["effect"]))
 
     # 端到端：菜单里对 navigate 说的参数集，正好等于校验接受并会消费的集合
-    sig = S.render_workflow_params(S.WORKFLOW_MAP["navigate"])
-    p = S.instantiate_plan("navigate", {"target": "留言板"})
+    sig = render_workflow_params(WORKFLOW_MAP["navigate"])
+    p = instantiate_plan("navigate", {"target": "留言板"})
     check("菜单说的 target 都能被消费（说得到、用得上）",
           "target" in sig and p["param_unknown"] == [] and p["tools"],
           f"{sig} / {p['tools']}")
@@ -643,7 +655,7 @@ def test_param_name_alias_layer():
     # `{"name": …}`，公告族收的是 `title` ⇒ `title` 落进 missing ⇒ 零工具 ⇒ 回落 chat。
     # 根因是 tag/category/账号族一律叫 `name`、公告族叫 `title`，而系统只把 `name`
     # 记进 `param_unknown`（不进纠偏注记）⇒ planner 看不出值就在手上。
-    p = S.instantiate_plan("announcement_update", {"name": "维护通知", "new_title": "维护通知2"})
+    p = instantiate_plan("announcement_update", {"name": "维护通知", "new_title": "维护通知2"})
     check("★ 公告族的 `name` 被搬到 `title`，工具真的展开出来了",
           p["tools"] == ['update_announcement({"title": "维护通知", "new_title": "维护通知2"})'],
           str(p["tools"]))
@@ -655,35 +667,35 @@ def test_param_name_alias_layer():
                        ("announcement_create", {"name": "新公告", "content": "x"}),
                        ("tag_create", {"name": "新标签"}),
                        ("category_create", {"name": "新分类"})):
-        q = S.instantiate_plan(sk, params)
+        q = instantiate_plan(sk, params)
         check(f"  {sk}：同样归一", q["tools"] != [] and q.get("param_alias"), str(q["tools"]))
 
     # ── 护栏：`src ∉ specs` ────────────────────────────────────────────────
     # `name` 在 11 个技能里是**合法**字段（tag_update/tag_delete/category_update/
     # category_delete/account_freeze/account_unfreeze/account_set_role/mute_account/
     # unmute_account/quota_reset 以及下面这条 notice_send）⇒ 规则对它们一律不触发。
-    p = S.instantiate_plan("notice_send", {"name": "guest5", "title": "你好", "content": "x"})
+    p = instantiate_plan("notice_send", {"name": "guest5", "title": "你好", "content": "x"})
     check("★★ 反例锁：`send_user_notice` 的 `name`（收件人）**不许**被搬去当标题",
           p.get("param_alias") in (None, []) and
           'send_user_notice({"name": "guest5"' in (p["tools"][0] if p["tools"] else ""),
           str(p["tools"]))
-    p = S.instantiate_plan("tag_update", {"name": "老标签", "new_title": "新标签"})
+    p = instantiate_plan("tag_update", {"name": "老标签", "new_title": "新标签"})
     check("  反例锁：`update_tag` 的 `name` 是本技能的合法字段 ⇒ 不搬",
           p.get("param_alias") in (None, []) and p["tools"] != [], str(p["tools"]))
 
     # ── 护栏：dst 已有值不覆盖 ─────────────────────────────────────────────
-    p = S.instantiate_plan("announcement_update", {"name": "另一个", "title": "已有的标题"})
+    p = instantiate_plan("announcement_update", {"name": "另一个", "title": "已有的标题"})
     check("★ `title` 已有值 ⇒ 不动它，`name` 照旧进 param_unknown（双写不猜）",
           p.get("param_alias") in (None, []) and p["param_unknown"] == ["name"],
           f'{p.get("param_alias")} / {p["param_unknown"]}')
-    p = S.instantiate_plan("announcement_update", {"name": "A", "title": "", "new_title": "B"})
+    p = instantiate_plan("announcement_update", {"name": "A", "title": "", "new_title": "B"})
     check("  空串等同没填（沿用 pydantic 那套「空串缺省值」口径）",
           p["tools"] == ['update_announcement({"title": "A", "new_title": "B"})'],
           str(p["tools"]))
 
     # ── 纯函数、入参不被就地改写 ───────────────────────────────────────────
     params = {"name": "维护通知"}
-    S.instantiate_plan("announcement_update", params)
+    instantiate_plan("announcement_update", params)
     check("归一**不改调用方的 dict**（返回的是新对象）", params == {"name": "维护通知"},
           str(params))
 

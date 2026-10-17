@@ -877,10 +877,15 @@ finally:
 # ══════════════════════════════════════════════════════════════════
 print("\n⑤ 写技能展开：范围缺失就零工具（不是零参数硬跑）")
 
-from agent.workflows import (WORKFLOW_MAP, _OWN_WRITE_WORKFLOWS,  # noqa: E402
-                          _FREE_TEXT_WRITE_WORKFLOWS, _LEDGER_TARGET_WRITE_WORKFLOWS,
-                          _WRITE_NAME_TARGET_WORKFLOWS, WRITE_WORKFLOW_NAMES)
-from agent.workflows import instantiate_plan  # noqa: E402
+from agent.workflow_defs import (  # noqa: E402
+    WORKFLOW_MAP,
+    WRITE_WORKFLOW_NAMES,
+    _FREE_TEXT_WRITE_WORKFLOWS,
+    _LEDGER_TARGET_WRITE_WORKFLOWS,
+    _OWN_WRITE_WORKFLOWS,
+    _WRITE_NAME_TARGET_WORKFLOWS,
+)
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 
 def _plan(name, params):
@@ -1005,7 +1010,7 @@ _rust = _parent_repo.read(
 
 
 from agent.graph import _CONTENT_TOOLS  # noqa: E402
-from agent.workflows import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
+from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
 _s = _src("agent/action_text.py")

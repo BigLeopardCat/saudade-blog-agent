@@ -33,14 +33,15 @@
 `tests/_ctx_src.plan_codec_src()` 把两份文件拼成一份取值视图，`test_plan_channel` ① 与
 `test_status_judgements` ④ 的**断言字面一个字没动**——判据没被改松，只是锚点跟着代码搬
 （同 `_ctx_src.deprefix` / `.prose()` 那两次）。搬动时正文**逐字未动**，只同步了一处路径
-指针（`agent/workflows.py` 里"同族教训见 …"那句）。
+指针（`agent/tool_specs.py` 里"同族教训见 …"那句）。
 """
 
 import json
 import re
 from collections.abc import Mapping
 
-from agent.workflows import PLAN_STATUS_VALUES, WORKFLOW_MAP
+from agent.plan_status import PLAN_STATUS_VALUES
+from agent.workflow_defs import WORKFLOW_MAP
 
 # 契约的**七格**：`normalize_plan` 负责把它们归成规范形态，`parse_plan` 负责把它们从
 # 文本里读回来。两态在这七格上逐项相等（唯一例外是 `note` 的空值哨兵，见
@@ -98,7 +99,7 @@ def _esc_spec(tool_spec: str) -> str:
 
     `\\u003b` 是合法 JSON 转义，`json.loads`/`ast.literal_eval` 读回都会还原成 `;`，
     **语义一个字节没变**，只是文本里不再有裸 `;`。写在这里而不是那 13 个拼 spec 的地方
-    （`workflows.py` 12 处 + 本文件 1 处）：写端只有这一处，且"改一处要同步十三处"正是
+    （展开层与实例化层 12 处 + 本文件 1 处）：写端只有这一处，且"改一处要同步十三处"正是
     全仓审计点名的主导特征。分隔符本身由 `join` 产出、不经过这里，所以转义的只有值里的。
     **PARAMS 行不用**：它不参与任何 `;` 切分（`json.dumps` 已把换行转义掉）。
     """
@@ -116,7 +117,7 @@ def _derive_status(tools: list, workflow: str, note: str) -> str:
     为什么不留空、非要派生一遍：留空 = 判据 fail-open，而"缺 STATUS"最可能的来历正是
     **改造前留在 state 里的旧计划文本**——那时判据判的是注记措辞，派生一遍等于把旧行为
     原样接上，不会因为升级而突然少拦一类（也不会突然多拦——派生只认系统自己那三条
-    注记的**固定前缀**，见 `workflows.py`）。
+    注记的**固定前缀**，见 `agent/workflow_defs/nav.py`）。
 
     ⚠️ `workflow` 收的是**归一后**的技能名（不在 `WORKFLOW_MAP` 里的一律已经落回
     `chat`）。**这一点必须两边一致**（20261017 实测踩过）：写侧若按原始名派生、而文本

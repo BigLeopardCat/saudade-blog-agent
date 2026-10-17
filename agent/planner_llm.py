@@ -59,16 +59,11 @@ from agent.provenance import (
     parse_evidence,
     write_scope_tools,
 )
-from agent.workflows import (
-    WORKFLOW_MAP,
-    ParamSpec,
-    callable_query_tools,
-    explicit_tools,
-    render_tool_marks,
-    workflow_param_specs,
-    tool_arg_schemas,
-    visible_workflows,
-)
+from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
+from agent.workflow_menu import render_tool_marks
+from agent.workflow_model import ParamSpec
+from agent.workflow_params import tool_arg_schemas, workflow_param_specs
+from agent.workflow_tools import callable_query_tools, explicit_tools
 from agent.tasks import (
     INTENTS_ARG,
     INTENTS_FIELD_DESC,
@@ -82,7 +77,7 @@ from agent.tasks import (
     pseudo_tool_schemas,
 )
 
-# 技能参数的短类型名（`ParamSpec.type`，见 `agent/workflows.py::arg_type_short`）→ JSON Schema。
+# 技能参数的短类型名（`ParamSpec.type`，见 `workflow_params.py::arg_type_short`）→ JSON Schema。
 # `any` / `?` 是"推不出映射"，不在表里——由 `_param_schema` 兜（见那里的注）。
 _TYPE_MAP = {"str": "string", "int": "integer", "num": "number",
              "bool": "boolean", "list": "array", "dict": "object"}
@@ -144,7 +139,7 @@ def _items_schema(sp: ParamSpec) -> dict:
     if not isinstance(frag, dict):
         return {"type": "string"}
     # 可空数组的片段长这样：`{"anyOf": [{"type":"array","items":{...}}, {"type":"null"}]}`
-    # （pydantic 2.13 实测，见 `agent/workflows.py::arg_enum` 的同族注），所以要把
+    # （pydantic 2.13 实测，见 `agent/workflow_params.py::arg_enum` 的同族注），所以要把
     # anyOf 各支与顶层一起看——只看顶层会得出"它没有 items"。
     variants = list(frag.get("anyOf") or ()) + [frag]
     for one in variants:
@@ -253,7 +248,7 @@ def _override_for(role: str | None, workflow_name: str, param: str) -> dict | No
         out["items"] = {"type": "string", "enum": explicit_tools(role)}
     elif workflow_name == "content_query" and param == "calls":
         # 闭集按角色展开 —— 白名单只有 `callable_query_tools` 这一处来源
-        # （见 agent/workflows.py 的注：手写名单是漏项来源）。
+        # （见 agent/workflow_tools.py 的注：手写名单是漏项来源）。
         out["items"] = {
             **base["items"],
             "properties": {
@@ -376,9 +371,10 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
         if evidence and _has_write_tool(workflow):
             props[EVIDENCE_ARG] = evidence_prop_schema(EVIDENCE_FIELD_DESC)
         # 描述里的工具枚举标记**必须在这里展开**（20260927 修）：技能描述里写着
-        # `__无参只读工具清单__` 这类占位（见 workflows.py 的 `_EXPLICIT_TOOLS_MARK`），
-        # 角色相关的展开此前只发生在文本菜单那一路（`workflows.py` 的 `render_tool_marks`）⇒ 接口层把
-        # **未展开的标记原样**发给了模型（实测 admin/None 各 1 处）。两处渲染同一份
+        # `__无参只读工具清单__` 这类占位（见 workflow_model.py 的 `_EXPLICIT_TOOLS_MARK`），
+        # 角色相关的展开此前只发生在文本菜单那一路（`workflow_menu.py` 的
+        # `render_tool_marks`）⇒ 接口层把**未展开的标记原样**发给了模型（实测 admin/None
+        # 各 1 处）。两处渲染同一份
         # 描述文本，展开器只能有一个（同"手抄第二份名单"的教训）。
         desc = render_tool_marks(workflow.description, role)
         if workflow.complete_when:

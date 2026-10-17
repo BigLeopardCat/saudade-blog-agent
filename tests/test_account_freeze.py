@@ -29,7 +29,8 @@ import tools.base as base  # noqa: E402
 from agent.graph import (_RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec,  # noqa: E402
                          plan_state)
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.workflows import PLAN_STATUS_ABSENCE_EXEMPT, instantiate_plan  # noqa: E402
+from agent.plan_status import PLAN_STATUS_ABSENCE_EXEMPT  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_todo_schedule 的那一处）────────────────────────────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**（宁可退回追问，也不发一个
@@ -551,7 +552,7 @@ check("  回执行在「本来就是」时说「没有重复冻结」，**不说
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑩ 只读白名单：两个工具**不在**（那是 content_query 的点名通道）")
-from agent.workflows import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
+from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 check("不在 _EXPLICIT_TOOLS（无参点名）",
       not ({"freeze_account", "unfreeze_account"} & set(_EXPLICIT_TOOLS)))
 check("不在 _CALLABLE_QUERY_TOOLS（带参点名）——写工具进只读通道 = 绕过同意闸",
@@ -689,8 +690,11 @@ check("  planner 与 narrator 两侧都写了 `[policy_refused]` 不许重试",
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑯ 派生锁：plan 含**名字型写工具**的技能必须在 WRITE_WORKFLOW_NAMES 里")
-from agent.workflows import (WORKFLOWS as _WORKFLOWS, WRITE_WORKFLOW_NAMES as _WSN,  # noqa: E402
-                          _WRITE_NAME_TARGET_WORKFLOWS as _WNTS)
+from agent.workflow_defs import (  # noqa: E402
+    WORKFLOWS as _WORKFLOWS,
+    WRITE_WORKFLOW_NAMES as _WSN,
+    _WRITE_NAME_TARGET_WORKFLOWS as _WNTS,
+)
 _missing = sorted({sk.name for sk in _WORKFLOWS
                    if any(t in g._WRITE_NAME_FIELDS for t, _ in (sk.plan or ()))
                    and sk.name not in _WSN})

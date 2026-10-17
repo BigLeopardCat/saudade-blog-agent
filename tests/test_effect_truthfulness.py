@@ -32,7 +32,7 @@ from agent.graph import (  # noqa: E402
     gate_node, parse_plan, plan_encode, plan_state,
 )
 from agent.principal import Principal  # noqa: E402
-from agent.workflows import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILS: list[str] = []
 

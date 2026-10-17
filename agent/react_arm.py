@@ -177,7 +177,7 @@ from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
                               wrap_up_text)
 from agent.refs import ref_hints
-from agent.workflows import instantiate_plan
+from agent.workflow_plan import instantiate_plan
 from agent.stickers import repair_sticker_tokens
 from config.settings import settings
 from models.llm import get_llm

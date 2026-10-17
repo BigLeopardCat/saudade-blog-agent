@@ -54,7 +54,7 @@ from agent.graph import (  # noqa: E402
     _claim_issue, _live_page_path, gate_node, parse_plan, plan_encode, plan_state, planner_node,
 )
 from agent.principal import Principal  # noqa: E402
-from agent.workflows import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
 FAILS: list[str] = []

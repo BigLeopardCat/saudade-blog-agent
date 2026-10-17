@@ -43,10 +43,11 @@ import agent.graph as g
 from agent import adminops as A
 from agent import authz
 from agent import confirm
-from agent import workflows as S
+from agent.workflow_defs import WORKFLOWS, WORKFLOW_MAP
+from agent.workflow_menu import build_planner_context  # noqa: E402
 from agent.graph import (_confirm_grant_plan, _confirm_popup, execute_node,
                          plan_state)
-from agent.workflows import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 from agent.principal import Principal
 import _parent_repo  # noqa: E402  （父仓三态：找得到/要求却找不到=红/找不到=响亮跳过）
 
@@ -912,8 +913,8 @@ check("data_repeat 那一支已拼过：不重复追加（同一段话在提示�
       g._narrator_plan(dict(_st_chat, plan=_PRE)) == _PRE)
 # 菜单侧：兜底语义必须真拼进 planner 的上下文（否则判据只是写在源码里没人读）。
 # 用**非管理员**也断言一次：能力缺位与身份无关，两个菜单都要有这条出口。
-_ctx_admin = S.build_planner_context("admin")
-_ctx_public = S.build_planner_context(None)
+_ctx_admin = build_planner_context("admin")
+_ctx_public = build_planner_context(None)
 check("planner 菜单有「技能都不覆盖 ⇒ 如实说做不到 + 给替代」这条兜底语义（管理员菜单）",
       "根本没有" in _ctx_admin and "如实说做不到" in _ctx_admin)
 check("  公开菜单同样有（能力缺位与身份无关）",
@@ -923,7 +924,7 @@ check("  同一段里禁止索要「要不要我办」（不排写操作就不�
 check("  兜底只在**菜单**、不在 chat 的 description 里"
       "（写进 description 会让'没有能力'变成 chat 的常规用法，"
       "真有技能的请求也可能被判成做不到）",
-      "如实说做不到" not in S.WORKFLOW_MAP["chat"].description)
+      "如实说做不到" not in WORKFLOW_MAP["chat"].description)
 check("  并且要求「拿不准就照常选技能」（失败取向往能干活那侧倒）",
       "拿不准就照常选技能" in _ctx_admin)
 
@@ -991,7 +992,7 @@ print("\n  描述 ↔ 代码事实：契约句必须跟着 `_ALWAYS_CONFIRM_TOOL
 # （它们的 `consent_granted` 恒 False ⇒ 快路径在结构上关掉了）。
 _always = authz._ALWAYS_CONFIRM_TOOLS
 _over_promise, _missing_rule, _under_claim = [], [], []
-for _s in S.WORKFLOWS:
+for _s in WORKFLOWS:
     _tools = [t for t, _ in _s.plan if t]
     if not _tools:
         continue

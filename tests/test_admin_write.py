@@ -43,7 +43,7 @@ from agent.graph import (EXECUTED_ONCE_WORKFLOWS, SNAPSHOT_WORKFLOWS,  # noqa: E
                          _CONTENT_TOOLS, _already_done_writes, _check_spec,
                          execute_node, plan_state)
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.workflows import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
 
 # ── 密钥桩：settings.jwt_secret 是全局单例，测试里直接改它 ────────────────
@@ -1161,7 +1161,7 @@ check("gate 的洞④ 分支真的读了它（锚写了但判据不认 = 白写�
 
 print("\n⑯ 写技能的描述必须写明「不要自己揽下要不要执行」")
 
-from agent.workflows import WORKFLOWS  # noqa: E402
+from agent.workflow_defs import WORKFLOWS  # noqa: E402
 
 _BY_NAME = {s.name: s for s in WORKFLOWS}
 for _n in ("tag_create", "article_status", "article_tags"):
@@ -1500,10 +1500,10 @@ print("\n㉓ 公告正文：谁成文（两种情形）+ 卡面必须印全文�
 #      （同一件事实写四份，是这一族最容易各漂各的地方）；
 #   ② 卡面印**全文**——正文改由模型成文之后判据判不了措辞，主人的签字是这一族**唯一**
 #      的人眼复核点（与待办卡 20260926「一格都不截」同因）。
-import agent.workflows as _S  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
 from tools import base as _B  # noqa: E402
 
-_ann = _S.WORKFLOW_MAP["announcement_create"]
+_ann = WORKFLOW_MAP["announcement_create"]
 _ANN_CARRIERS = {
     "技能描述": _ann.description,
     "技能 inputs.content": str(_ann.inputs.get("content") or ""),
@@ -1532,7 +1532,7 @@ check("阻断文案管的是「卡面要念全」（它是被拦下那一轮的�
       and "一个字都不要改" not in _authz_ann, _authz_ann)
 
 # ── 展开层：原样放行成文的正文；空正文照旧零工具追问 ─────────────────────
-from agent.workflows import _expand_write_workflow  # noqa: E402
+from agent.workflow_expand_write import _expand_write_workflow  # noqa: E402
 
 _LONG_ANN = "本次维护安排如下：" + "请提前做好准备" * 12 + "——结束标记"
 check("前置：这条正文真的比 60 字长（否则下面几条是空转）",
@@ -1896,7 +1896,7 @@ check("两样都筛时仍按搜索口径说「匹配」（限定写进同一条�
 # 一个分类 ⇒ 工具回"没有这个分类"，白烧一轮，而主人看到的是"没有"）。占位词这类坑
 # 本仓有过先例（20260922 tag_create：描述里的〈…〉被当成了真名字）⇒ 契约里必须有一句
 # 明写的禁令。同一句话在工具参数描述里也有一份（planner 两处都看得到）。
-from agent.workflows import WORKFLOWS as _SK  # noqa: E402
+from agent.workflow_defs import WORKFLOWS as _SK  # noqa: E402
 _AN = next(s for s in _SK if s.name == "admin_notes")
 check("planner 契约里明写「不许填占位词」（契约段 + 参数表两处都写，模型两处都看得到）",
       "占位词" in _AN.contract and "未确认分类" in _AN.contract

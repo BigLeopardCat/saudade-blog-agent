@@ -6,7 +6,7 @@
 `agent/graph.py`（gate 按值选如实文案、站内"没有"豁免）、`agent/decisions.py`、
 `eval/corpus_invariants.py`。定义跟着消费方走，不跟着"碰巧住在一起"走。
 
-**刻意不并进 `agent/plan_codec.py`**：那边 import `agent.workflows`（`WORKFLOW_MAP`），
+**刻意不并进 `agent/plan_codec.py`**：那边 import `agent.workflow_defs`（`WORKFLOW_MAP`），
 而参数层（`agent/workflow_params.py`）也要读这个闭集 ⇒ 放进去会绕出一圈
 `workflow_params → plan_codec → workflows → workflow_params`。本模块**零仓内依赖**
 （连标准库都不用 import），谁都能 import，所以它必须住在环外面。
