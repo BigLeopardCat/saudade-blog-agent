@@ -189,7 +189,7 @@
   },
   "tests/test_workflows.py::test_admin_console_role_channel": {
     "c": 44,
-    "lines": 150
+    "lines": 155
   },
   "tests/test_workflows.py::test_name_target_round": {
     "c": 35,

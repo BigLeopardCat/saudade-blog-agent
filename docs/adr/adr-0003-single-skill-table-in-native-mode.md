@@ -1,7 +1,7 @@
 # ADR-0003：native 档一轮只发一份技能表（技能块去重）
 
 
-> ⚠️ 20261017 起 `skill` 已改名为 **`workflow`**（`agent/skills.py` → `agent/workflows.py`、`tests/test_skills.py` → `tests/test_workflows.py`、`tests/test_slim_skills.py` → `tests/test_slim_workflows.py`；计划 IR `SKILL=` → `WORKFLOW=`）。本文档保留**当时的名字**，不回溯改写；读它时把 skill 读作 workflow 即可。
+> ⚠️ 20261017 起 `skill` 已改名为 **`workflow`**（`agent/skills.py` → `agent/workflow_defs/__init__.py`——20261017 先改名为 `agent/workflows.py`，20261018 批 2 收尾刀又把那个中转层整块删掉（**已删**）；`tests/test_skills.py` → `tests/test_workflows.py`、`tests/test_slim_skills.py` → `tests/test_slim_workflows.py`；计划 IR `SKILL=` → `WORKFLOW=`）。本文档保留**当时的名字**，不回溯改写；读它时把 skill 读作 workflow 即可。
 
 - **状态**：已采纳（20260927）
 - **背景文档**：`docs/native-toolcalls-mainline.md`、`docs/adr/adr-0001-*.md`（接缝在技能级）
@@ -307,6 +307,6 @@ admin 集（`admin_notes` 分类名 / `tag_create` 一次多个名字 / `article
   slim 本来就不渲染描述 ⇒ "契约行也跟着走了"在 slim 里**已经恒真**，拿它当靶子等于拿一条
   恒真的断言当判据（本仓点过名的"判据被架空"）。
 
-**没做的**：`agent/workflows.py` 的规模台账是 `{'lines': 4764, 'top_defs': 52}`（只许缩小）。
+**没做的**：`agent/workflows.py`（20261018 批 2 收尾刀**已删**）的规模台账是 `{'lines': 4764, 'top_defs': 52}`（只许缩小）。
 `contract` 因此做成 `Workflow` 的**只读属性**而不是模块级函数——属性不占 `top_defs`
 （该台账只数模块级定义），文件也仍在台账之下。

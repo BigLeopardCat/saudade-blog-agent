@@ -700,7 +700,7 @@ def get_site_map() -> str:
 #
 # `get_chat_history` / `search_knowledge_base`：既不在 planner 菜单，也不在
 # `_EXPLICIT_TOOLS` / `_CALLABLE_QUERY_TOOLS` 点名白名单，更不在任何技能模板的工具
-# 序列里 ⇒ **没有任何通道能把它们执行起来**（`workflows.py` 里那两行"刻意不收"的注释
+# 序列里 ⇒ **没有任何通道能把它们执行起来**（`agent/workflow_tools.py` 里那两行"刻意不收"的注释
 # 解释了为什么当初就没接：一个端点恒返回空、一个是占位）。判据在
 # `tests/test_action_text.py` ③ 末尾三条——"死工具"三个字是**锁出来的**，不是形容词。
 #
@@ -800,12 +800,12 @@ def get_weather(
 # 导航工具
 # ---------------------------------------------------------------------------
 
-# 导航目标白名单（工具层硬校验——本常量是单一事实来源，workflows.py 的
+# 导航目标白名单（工具层硬校验——本常量是单一事实来源，`agent/workflow_defs/nav.py` 的
 # NAV_VALID_PATHS 从这里同源导入，规划侧约束 = NAV_MAP 别名映射 + instantiate_plan
 # 校验 + planner 提示词规则）：模型不可信，工具必须自证。
 # 教训：模型曾把"友链板块"猜成 /links 直接发出去（真实页是 /guestbook）。
 # 后台子页（20260926：转跳要能定位到后台各板块）在这里**逐个列出**，对应
-# workflows.py 的 DASHBOARD_PANELS（面板名与路径的第二处，由 tests/test_workflows.py
+# `agent/workflow_defs/nav.py` 的 DASHBOARD_PANELS（面板名与路径的第二处，由 tests/test_workflows.py
 # 的两侧覆盖断言锁住同源）。**不放开 `/dashboard/` 前缀**：前缀放行等于让模型
 # 自己拼子路径，而前端 /dashboard 下没有通配子路由——猜出来的路径渲染的是一片
 # 空白（不是 NotFound 页），比"拒绝并回真实清单"糟得多。
@@ -814,7 +814,7 @@ def get_weather(
 # 白名单必须同步收口：**放行一个 404 的后果不是"跳过去发现没有"，而是 navigate_to
 # 照常回一句「页面已跳转」——系统替一个不存在的页面背书**，而访客看到的是 SPA
 # 兜底渲染出来的空白页。
-# 路径字面量只此一处：workflows.py 的 NAV_MAP 从这里的 `_NAV_EXACT_PATHS` 同源取名，
+# 路径字面量只此一处：`agent/workflow_defs/nav.py` 的 NAV_MAP 从这里的 `_NAV_EXACT_PATHS` 同源取名，
 # 别在别处再写一遍 `/device-console/`。
 IOT_ENABLED: bool = _settings.iot_enabled
 IOT_NAV_PATH = "/device-console/"

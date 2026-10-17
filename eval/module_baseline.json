@@ -24,7 +24,7 @@
     "top_defs": 40
   },
   "agent/tasks.py": {
-    "lines": 1655,
+    "lines": 1658,
     "top_defs": 44
   },
   "eval/corpus_terms.py": {
@@ -60,15 +60,15 @@
     "top_defs": 24
   },
   "tests/test_authz.py": {
-    "lines": 1250,
+    "lines": 1251,
     "top_defs": 5
   },
   "tests/test_chat_quota.py": {
-    "lines": 1039,
+    "lines": 1045,
     "top_defs": 20
   },
   "tests/test_confirm.py": {
-    "lines": 1190,
+    "lines": 1191,
     "top_defs": 7
   },
   "tests/test_nav_truthfulness.py": {
@@ -80,23 +80,23 @@
     "top_defs": 22
   },
   "tests/test_reports.py": {
-    "lines": 956,
+    "lines": 961,
     "top_defs": 6
   },
   "tests/test_workflows.py": {
-    "lines": 5784,
+    "lines": 5794,
     "top_defs": 72
   },
   "tests/test_tag_admin.py": {
-    "lines": 1601,
+    "lines": 1602,
     "top_defs": 16
   },
   "tests/test_todo_schedule.py": {
-    "lines": 2066,
+    "lines": 2067,
     "top_defs": 29
   },
   "tests/test_userdata.py": {
-    "lines": 1233,
+    "lines": 1238,
     "top_defs": 12
   },
   "tools/base.py": {

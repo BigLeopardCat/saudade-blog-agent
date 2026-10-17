@@ -75,7 +75,7 @@ import agent.graph as G  # noqa: E402
 import agent.react_arm as RA  # noqa: E402
 from agent.planner_llm import build_tool_schema  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from agent.workflows import WORKFLOWS  # noqa: E402
+from agent.workflow_defs import WORKFLOWS  # noqa: E402
 from models.llm import get_llm  # noqa: E402
 from tools import get_all_tools  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402

@@ -41,6 +41,16 @@
 - **日志里 `%(name)s` 那一列开始说真话**：参数层与实例化层那几行 warning 的 logger 名从
   `agent.workflows` 改成 `agent.workflow_params` / `agent.workflow_plan`（此前日志指着一个
   文件、代码在另一个文件）。人类可读前缀 `[workflows]` 不变，按前缀 grep 的老办法照旧有效。
+- **`agent/workflows.py` 转发层整块删除（批 2 收尾刀）——对外行为零变更**：迁移期那个
+  只剩 `_TOOL_SPEC_RE` 与 `split_tool_spec` 的模块连同转发层一起消失，全仓 63 个文件里
+  91 处 `from agent.workflows import …` 逐个改指各符号真正的家（`agent/tool_specs.py`、
+  `agent/workflow_defs/`、`agent/workflow_params.py`、`agent/workflow_plan.py`、
+  `agent/workflow_expand*.py`、`agent/workflow_menu.py`、`agent/workflow_tools.py`）。
+  **本仓不留门面**：别名模块正是"看着在跑、其实没跑"那一族，留着它等于把"哪个模块才是
+  真的"这个问题永久留在仓里。那两个名字按原计划回 `agent/tool_specs.py`（`decisions`
+  不再指向任何 workflow 模块，那条会让它成环的边没了）。注册表穷举量总账 `1139 / 4856`
+  一格未动；模块台账销掉 `agent/workflows.py` 那一条。八个体量已在台账里的文件因 import
+  语句按新模块拆开而各长 1–10 行（ruff 的规范形态是一名一行），台账同批按文本外科改数。
 
 ## 20261017
 

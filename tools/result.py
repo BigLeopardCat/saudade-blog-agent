@@ -192,7 +192,7 @@ UPSTREAM_DOWN = unavailable("服务暂时不可用，请稍后再试")
 #   `toggle_dark_mode` 的 mode        → 无判据（非 "on" 一律当 off）
 #   `get_moderation_status` 的 status → 无判据（落回混合视图，**静默**）
 # 于是机器侧没有任何地方读得到它：`workflows.check_workflow_params` / `check_call_args`
-# 只能判"类型对不对"，判不了"值在不在闭集里"（`workflows.py` 那段"枚举没有来源"
+# 只能判"类型对不对"，判不了"值在不在闭集里"（`agent/workflow_params.py` 那段"枚举没有来源"
 # 的注记说的就是这件事）。后两种形态正是"臆造一个看着合理的值"最坏的去处：
 # 一个静默给出另一份数据、一个白烧一轮。
 # 现在把闭集**写在类型上**（`Literal[...]`）：pydantic 会把它渲染进工具的 JSON

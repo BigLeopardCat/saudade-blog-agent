@@ -5,7 +5,7 @@
   · `server.py`         —— C1/C2 注入行（**整个键缺席 ≠ 剩 0 轮**）、C7 拒答的**帧形状**
                            与"零 LLM、不占并发槽"这两条硬事实（断言成**行为**，不是 grep）；
   · `tools/base.py`     —— 三个写工具的五段式 + `_admin_quota_post` 的**非 200 按族分流**；
-  · `agent/workflows.py`   —— 三个技能的展开（名字通道、纯数字拒绝、驳回理由必填/占位符）；
+  · `agent/workflow_expand.py`   —— 三个技能的展开（名字通道、纯数字拒绝、驳回理由必填/占位符）；
   · `agent/authz.py`    —— scope、一律弹窗族、三条后果句互不同形；
   · `agent/adminops.py` —— 卡面 / 回执行 / "状态已达成 ⇒ 不弹卡"的判据；
   · 接线锁              —— 台账 meta 白名单、词表分岔、只读通道里没有写工具。
@@ -41,7 +41,7 @@ import server  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import _RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.workflows import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_user_notice / test_account_freeze 的那一处）──────────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**（宁可退回追问，也不发一个
@@ -725,11 +725,17 @@ check("  参数解不出 ⇒ args_parse（在文本判据之前）", _r == "args
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑩ 接线锁：台账白名单 / 词表分岔 / 只读通道不含写工具 / 过程行有臂")
-from agent.workflows import (  # noqa: E402
-    _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS, _LEDGER_TARGET_WRITE_WORKFLOWS,
-    _WRITE_NAME_TARGET_WORKFLOWS, WRITE_WORKFLOW_NAMES, callable_query_tools,
+from agent.workflow_defs import (  # noqa: E402
+    WRITE_WORKFLOW_NAMES,
+    _LEDGER_TARGET_WRITE_WORKFLOWS,
+    _WRITE_NAME_TARGET_WORKFLOWS,
 )
-from agent.workflows import WORKFLOW_MAP  # noqa: E402
+from agent.workflow_tools import (  # noqa: E402
+    _CALLABLE_QUERY_TOOLS,
+    _EXPLICIT_TOOLS,
+    callable_query_tools,
+)
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
 
 for _t in _Q3 + ("list_quota_requests",):
     check(f"{_t} 在工具注册表里（不在 ⇒ 技能模板展开出来的 spec 到不了 execute）",

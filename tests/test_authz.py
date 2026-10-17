@@ -847,7 +847,7 @@ for _n in ("你已经提交过河灯啦", "要我现在发布吗？你回复「�
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
 from agent.graph import gate_node, plan_encode, plan_state  # noqa: E402
-from agent.workflows import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 
 def _write_state(reply: str):
@@ -1100,7 +1100,8 @@ check("⭐ 超管的人设是管理员档（写死 role == 'admin' 时它会拿�
       audience_block(ROLE_SUPERADMIN) == audience_block(ROLE_ADMIN)
       != audience_block(ROLE_USER))
 
-from agent.workflows import WORKFLOWS, WORKFLOW_MAP, build_planner_context  # noqa: E402
+from agent.workflow_defs import WORKFLOWS, WORKFLOW_MAP  # noqa: E402
+from agent.workflow_menu import build_planner_context  # noqa: E402
 
 for name in ADMIN_WORKFLOWS:
     sk = WORKFLOW_MAP.get(name)

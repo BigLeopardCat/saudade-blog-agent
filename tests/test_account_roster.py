@@ -15,7 +15,7 @@ helper。于是这条前提**住在模型够不着的地方**，它只能去抓�
   · `tools/base.py::list_accounts` —— **失败取向**：读不到名录必须是 `unavailable`，
     **不是** `empty`（"读不到"渲染成"一个账号都没有"是这一步最坏的错法——它会让下一步
     的零写看起来有依据）；
-  · `agent/workflows.py` —— 技能面（角色可见性、plan 里的工具名真的可执行、**不进**
+  · `agent/workflow_defs/` —— 技能面（角色可见性、plan 里的工具名真的可执行、**不进**
     角色无关的常量菜单、七件写技能各自点名了它）；
   · 接线锁 —— scope 是 `admin.console`、**不在**「一律弹窗」族（它是只读）、
     过程行动作词两档一致；
@@ -38,7 +38,9 @@ import agent.action_text as at  # noqa: E402
 import agent.adminops as A  # noqa: E402
 import agent.authz as authz  # noqa: E402
 import agent.graph as g  # noqa: E402
-import agent.workflows as S  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP, visible_workflows  # noqa: E402
+from agent.workflow_menu import build_planner_context  # noqa: E402
+from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.principal import (ADMIN_ROLES, ROLE_ADMIN, ROLE_SUPERADMIN,
                              ROLE_USER, Principal)  # noqa: E402
@@ -198,28 +200,28 @@ finally:
 # ══════════════════════════════════════════════════════════════════
 print("\n③ 技能面：谁能选、选了执行什么（身份闸 + 可执行性）")
 
-_roster = S.WORKFLOW_MAP.get("account_roster")
+_roster = WORKFLOW_MAP.get("account_roster")
 check("③-1 技能在注册表里，roles = ADMIN_ROLES（管理员与超管）",
       _roster is not None and _roster.roles == ADMIN_ROLES, str(_roster and _roster.roles))
 for _role, _want in (("admin", True), ("superadmin", True), ("user", False),
                      (None, False)):
     check(f"  可见性[{_role}] = {_want}",
-          ("account_roster" in {s.name for s in S.visible_workflows(_role)}) is _want)
+          ("account_roster" in {s.name for s in visible_workflows(_role)}) is _want)
 check("③-2 plan 里点的是**真能执行**的工具（名字打错 = 计划里那一行执行成未知工具）",
       _roster.plan == [("list_accounts", {})]
       and "list_accounts" in g._TOOL_MAP
       and "list_accounts" in {t.name for t in base.get_all_tools()})
 check("③-3 它在 planner 菜单里露面（slim 档——生产唯一那一档）",
-      "- account_roster：" in S.build_planner_context("admin", slim=True)
-      and "- account_roster：" not in S.build_planner_context("user", slim=True))
+      "- account_roster：" in build_planner_context("admin", slim=True)
+      and "- account_roster：" not in build_planner_context("user", slim=True))
 
 # ⚠️ **刻意不进角色无关的常量菜单**：那张菜单是 audience 无关的，管理员看得到它就会
 #    在裸轮里点名 `list_accounts()` 写进 PARAMS.tools ⇒ 被剔空 ⇒ 触发剔空纠偏重决策
-#    （workflows.py 里 `admin_notes_console_list` 的实测现场）。管理读工具走**技能通道**。
+#    （`workflow_defs/` 里 `admin_notes_console_list` 的实测现场）。管理读工具走**技能通道**。
 check("③-4 不在 `_EXPLICIT_TOOLS` / `_CALLABLE_QUERY_TOOLS` 里（管理读工具走技能通道，"
       "进常量菜单会落回「剔空纠偏 → 再点一次」那个死循环）",
-      "list_accounts" not in S._EXPLICIT_TOOLS
-      and "list_accounts" not in S._CALLABLE_QUERY_TOOLS)
+      "list_accounts" not in _EXPLICIT_TOOLS
+      and "list_accounts" not in _CALLABLE_QUERY_TOOLS)
 check("③-5 也不在 `SNAPSHOT_WORKFLOWS` 里（那份名单有逐字断言，且它的判据是「再规划一轮」"
       "拿回同一份不必再跑」——本件是写操作的前置读，混进去会改变写轮的轮次形状）",
       "account_roster" not in g.SNAPSHOT_WORKFLOWS)
@@ -229,7 +231,7 @@ check("③-5 也不在 `SNAPSHOT_WORKFLOWS` 里（那份名单有逐字断言，
 print("\n④ 七件写技能**点名**了它（这是这一批改动的目的本身）")
 
 for _n in WRITE_WORKFLOWS:
-    _s = S.WORKFLOW_MAP.get(_n)
+    _s = WORKFLOW_MAP.get(_n)
     check(f"④-{_n} 契约里点名 account_roster",
           _s is not None and "account_roster" in _s.contract,
           (_s.contract if _s else "<缺技能>") or "<空>")
@@ -247,23 +249,23 @@ for _n in WRITE_WORKFLOWS:
 #   `name`）⇒ 契约必须明写"读不到也照常提卡、别自己收尾"。少了这半句，整条写能力
 #   会在"名录读不到"的那些轮里**没有入口**。
 for _n in WRITE_WORKFLOWS:
-    _c = S.WORKFLOW_MAP[_n].contract
+    _c = WORKFLOW_MAP[_n].contract
     check(f"④-{_n} 契约写了回落：名录读不到**不是**不能办、不许自己收尾",
           "不能办" in _c and "别自己收尾" in _c and "确认卡" in _c, _c[:70])
 check("④-7 契约把名录指成**核对手段**并挡住近邻（点名别拿文章/留言的清单顶替——"
       "trace `20261006T082437` 那次抓的就是 `admin_notes`）",
-      all("别拿文章/留言的清单顶替" in S.WORKFLOW_MAP[n].contract
+      all("别拿文章/留言的清单顶替" in WORKFLOW_MAP[n].contract
           for n in WRITE_WORKFLOWS))
 
-_contracts = [S.WORKFLOW_MAP[n].contract for n in WRITE_WORKFLOWS]
+_contracts = [WORKFLOW_MAP[n].contract for n in WRITE_WORKFLOWS]
 check("④-8 七条契约**两两不同**（共用同一串会让「哪件技能该先读名录」消失在一条通用句里，"
       "也会让「哪一句在承重」这件事失去分辨力）",
       len(set(_contracts)) == len(_contracts))
 check("④-9 契约**在**描述里、且**不在**参数说明里（20261017 并回：契约与描述同住 "
       "`description`，`tools[]` 只有 `{name, description, parameters}`——"
       "而 `inputs` 那份参数说明是 schema 的 `properties`，同一句话写两处就会漂）",
-      all(c in S.WORKFLOW_MAP[n].description
-          and all(c not in str(v) for v in S.WORKFLOW_MAP[n].inputs.values())
+      all(c in WORKFLOW_MAP[n].description
+          and all(c not in str(v) for v in WORKFLOW_MAP[n].inputs.values())
           for n, c in zip(WRITE_WORKFLOWS, _contracts)))
 
 

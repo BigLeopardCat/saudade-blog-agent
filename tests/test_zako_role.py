@@ -37,7 +37,8 @@ from agent.principal import (  # noqa: E402
     Principal,
 )
 from agent.prompts import AUDIENCE_ADMIN, AUDIENCE_VISITOR, AUDIENCE_ZAKO, audience_block  # noqa: E402
-from agent.workflows import build_planner_context, visible_workflows  # noqa: E402
+from agent.workflow_defs import visible_workflows  # noqa: E402
+from agent.workflow_menu import build_planner_context  # noqa: E402
 
 FAILS: list[str] = []
 

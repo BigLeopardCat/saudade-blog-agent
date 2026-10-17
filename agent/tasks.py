@@ -65,7 +65,7 @@
     如实记在这里。
 
 ⚠️ **本模块不许 import `agent.graph`**（与 `agent/planner_llm.py` 同一条）：graph 是
-消费方，反向 import 会成环。本模块只依赖 `agent.workflows` 的可见技能表。
+消费方，反向 import 会成环。本模块只依赖 `agent.workflow_defs` 的可见技能表。
 """
 
 from __future__ import annotations
@@ -78,8 +78,11 @@ import re
 from datetime import datetime
 from typing import Any
 
-from agent.workflows import (WORKFLOW_MAP, args_are_bound, callable_query_tools,
-                          instantiate_plan, split_tool_spec, visible_workflows)
+from agent.tool_specs import split_tool_spec
+from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
+from agent.workflow_params import args_are_bound
+from agent.workflow_plan import instantiate_plan
+from agent.workflow_tools import callable_query_tools
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +238,7 @@ def task_hold_schema(role: str | None) -> dict:
 
     `workflow` / `args` 两格（20261012 批 A）：一步不再只是"一个工具名"，而是**"用哪个
     本领、带什么实参"**——`Workflow.plan` 本来就是 `list[(工具名, {参数模板})]`，参数在
-    产出那一刻就存在（`workflows.py::instantiate_plan` 已经能把它展开成完整实参），此前
+    产出那一刻就存在（`workflow_plan.py::instantiate_plan` 已经能把它展开成完整实参），此前
     只是在 schema / 归一器两处被丢掉，于是台账里住的是一串**没法执行的名字**，每一步
     都得请模型重推一遍参数（那是"废话轮"与"漏步"共同的来源）。
     `workflow` 那一格**带 `visible_workflows` 名做闭集**：与 `tool` 同一条理由（闭集＝能执行的），

@@ -42,8 +42,8 @@ import agent.graph as g  # noqa: E402
 import agent.planner_llm as np  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.block_reasons import denied_workflows  # noqa: E402
-from agent.workflows import (WORKFLOW_MAP, _workflow_plan_seq,  # noqa: E402
-                             build_planner_context, visible_workflows)
+from agent.workflow_defs import WORKFLOW_MAP, visible_workflows  # noqa: E402
+from agent.workflow_menu import _workflow_plan_seq, build_planner_context  # noqa: E402
 
 FAILS: list[str] = []
 

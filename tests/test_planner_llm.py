@@ -38,7 +38,9 @@ from langchain_core.messages import AIMessage  # noqa: E402
 
 from agent import context as C  # noqa: E402
 from agent import planner_llm as N  # noqa: E402
-from agent import workflows as S  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP, visible_workflows  # noqa: E402
+from agent.workflow_params import workflow_param_specs  # noqa: E402
+from agent.workflow_tools import callable_query_tools, explicit_tools  # noqa: E402
 from agent import tasks as T  # noqa: E402
 from tools.base import get_all_tools  # noqa: E402
 
@@ -64,7 +66,7 @@ def test_name_set_equals_visible_workflows():
     print("\n[不扩权] tools 的名字集合 == visible_workflows 的名字集合")
     for role in (None, "user", "admin"):
         got = set(_by_name(role))
-        want = {s.name for s in S.visible_workflows(role)}
+        want = {s.name for s in visible_workflows(role)}
         check(f"role={role!r} 集合相等（技能 {len(want)} + 三个伪函数）",
               got == want | _PSEUDO,
               f"多={sorted(got - want - _PSEUDO)} 少={sorted((want | _PSEUDO) - got)}")
@@ -74,10 +76,10 @@ def test_name_set_equals_visible_workflows():
     # 登记伪函数（20260927 批 D / 20261008 批 ②）在 20261015 撤档后**恒在**：集合相等
     # 因此是"技能名 + 申报过的那几个名字"，多出来的每一格钉成**字面量**（多别的一律红）。
     check("除技能名之外多出来的**只有**申报过的这三个伪函数",
-          set(_by_name("admin")) - {s.name for s in S.visible_workflows("admin")}
+          set(_by_name("admin")) - {s.name for s in visible_workflows("admin")}
           == _PSEUDO,
           str(sorted(set(_by_name("admin"))
-                     - {s.name for s in S.visible_workflows("admin")})))
+                     - {s.name for s in visible_workflows("admin")})))
     hold = N.build_tool_schema(None)[-3]["function"]
     drop = N.build_tool_schema(None)[-2]["function"]
     ints = N.build_tool_schema(None)[-1]["function"]
@@ -176,7 +178,7 @@ def test_intents_field_on_every_workflow():
     print("\n[不扩权] 意图清单那一格挂在每个技能上：每个都有、永远可选")
     on = {t["function"]["name"]: t["function"]
           for t in N.build_tool_schema("admin")}
-    workflows = [s.name for s in S.visible_workflows("admin")]
+    workflows = [s.name for s in visible_workflows("admin")]
     miss = [n for n in workflows if T.INTENTS_ARG not in on[n]["parameters"]["properties"]]
     check(f"{len(workflows)} 个技能**每一个**都有它（漏一个 = 在那个技能上说不出口）",
           not miss, str(miss))
@@ -188,8 +190,8 @@ def test_intents_field_on_every_workflow():
     diffs = []
     for n in workflows:
         keys = set(on[n]["parameters"]["properties"]) - {T.INTENTS_ARG, C.REPLY_KIND_ARG}
-        if keys != set(S.workflow_param_specs(S.WORKFLOW_MAP[n])):
-            diffs.append(f"{n}: {sorted(keys ^ set(S.workflow_param_specs(S.WORKFLOW_MAP[n])))}")
+        if keys != set(workflow_param_specs(WORKFLOW_MAP[n])):
+            diffs.append(f"{n}: {sorted(keys ^ set(workflow_param_specs(WORKFLOW_MAP[n])))}")
     check("去掉那一格之后键集合逐技能等于 `workflow_param_specs`（没有别的新键）",
           not diffs, str(diffs))
     # 唯一来源：与伪函数 `task_intents` 的 `intents` 参数除描述外逐字节同形 ——
@@ -264,8 +266,8 @@ def test_params_mirror_workflow_param_specs():
     bad_names, bad_req, bad_enum = [], [], []
     for role in (None, "admin"):
         fns = _by_name(role)
-        for workflow in S.visible_workflows(role):
-            specs = S.workflow_param_specs(workflow)
+        for workflow in visible_workflows(role):
+            specs = workflow_param_specs(workflow)
             params = fns[workflow.name]["parameters"]
             props = params.get("properties") or {}
             if set(props) != set(specs) | pseudo:
@@ -288,7 +290,7 @@ def test_params_mirror_workflow_param_specs():
     # 伪参数那一格本身：每个技能都有、**都不必填**（必填集合那条已经覆盖"不进 required"，
     # 这里再把"它有没有出现在每个技能上"钉一遍——只挂一半技能会让读数缺一整族）。
     missing_kind = [f"{role}/{s.name}" for role in (None, "admin")
-                    for s in S.visible_workflows(role)
+                    for s in visible_workflows(role)
                     if _by_name(role)[s.name]["parameters"]["properties"]
                     .get(C.REPLY_KIND_ARG, {}).get("enum") != ["pos", "neg", "auth"]]
     check("reply_kind：每个技能都挂、且闭集就是三种出口", not missing_kind, str(missing_kind))
@@ -369,10 +371,10 @@ def test_override_enums_follow_role():
         fns = _by_name(role)
         cq = fns["content_query"]["parameters"]["properties"]
         check(f"role={role!r} tools.items.enum == explicit_tools(role)",
-              list(cq["tools"]["items"].get("enum") or []) == list(S.explicit_tools(role)))
+              list(cq["tools"]["items"].get("enum") or []) == list(explicit_tools(role)))
         check(f"role={role!r} calls.items.tool.enum == callable_query_tools(role)",
               list(cq["calls"]["items"]["properties"]["tool"].get("enum") or [])
-              == list(S.callable_query_tools(role)))
+              == list(callable_query_tools(role)))
     pub, adm = _by_name(None)["content_query"], _by_name("admin")["content_query"]
     check("admin 点名闭集严格包含公开闭集",
           set(adm["parameters"]["properties"]["calls"]["items"]["properties"]["tool"]["enum"])
@@ -689,7 +691,7 @@ def test_review_inbox_calls_channel():
         check(f"{label}.calls 的 tool 是个非空字符串闭集（服务端强制那一关）",
               isinstance(enum, list) and enum and all(isinstance(x, str) for x in enum),
               str(enum))
-    allowed = [t for t, _ in (S.WORKFLOW_MAP["review_inbox"].plan or ())]
+    allowed = [t for t, _ in (WORKFLOW_MAP["review_inbox"].plan or ())]
     check("tool 闭集 == 该技能 plan 里声明的工具全集（执行端读的是同一个字段）",
           list(ri["properties"]["tool"].get("enum") or []) == allowed,
           f"{ri['properties']['tool'].get('enum')} ≠ {allowed}")

@@ -43,8 +43,9 @@ from agent.graph import (REFLECT_MAX_ROUNDS, _article_fast_path,
                          execute_node, gate_node,
                          plan_encode, plan_state, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
-from agent.workflows import (NAV_MAP, NAV_VALID_PATHS, WORKFLOW_MAP, instantiate_plan,
-                          visible_workflows)
+from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
+from agent.workflow_defs.nav import NAV_MAP, NAV_VALID_PATHS
+from agent.workflow_plan import instantiate_plan
 # 假 planner LLM 的共享桩：把夹具里现成的 `WORKFLOW=/PARAMS=` 文本翻成 tool_calls
 # （20261004 起接口层只剩 native tool calls，桩缺 `bind_tools` 会 AttributeError）。
 from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
@@ -465,7 +466,8 @@ def test_dashboard_nav_expansion():
       ④ 「转跳后台」不再需要澄清板块，且 planner 提示词里写着这条纪律。
     """
     print("[dashboard_nav] 后台各面板进导航白名单（面板名与后台侧边栏逐字一致）")
-    from agent.workflows import DASHBOARD_PANELS, _NAV_MAP_LINES
+    from agent.workflow_defs.nav import DASHBOARD_PANELS
+    from agent.workflow_menu import _NAV_MAP_LINES
     from agent.graph import _PLANNER_PROMPT
     import tools.base as base
 
@@ -688,7 +690,7 @@ def test_article_fast_path():
           and parsed["chat"] is False,
           f"parsed={parsed}")
     # build_planner_context 不含 read_article（系统快道专用，planner 不可见不可选）
-    from agent.workflows import build_planner_context
+    from agent.workflow_menu import build_planner_context
     check("planner 技能表不含 read_article（快道专用，对 planner 不可见）",
           "read_article" not in build_planner_context(), "")
 
@@ -875,7 +877,7 @@ def test_planner_tool_menu():
     且动作工具结构性不入菜单（越权通道不可存在）。"""
     print("[planner_menu] 菜单 = 白名单 × 注册表")
     import agent.graph as g
-    from agent.workflows import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
+    from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
     # 菜单按角色取（20260924）：本段锁的是**公开**那半（role=None ⇒ 保守一侧）
     menu = g._tools_desc(None)
     missing = [t for t in sorted(_CALLABLE_QUERY_TOOLS) if f"- {t}(" not in menu]
@@ -901,7 +903,8 @@ def test_planner_tool_menu():
           "- get_weather(location:str" in menu, f"menu={menu}")
     # 技能描述里的工具枚举与白名单同源（20260924 起按角色渲染，断言**渲染后的**
     # 注入文本——标记漏渲染会让提示词里直接露出占位符）
-    from agent.workflows import _EXPLICIT_TOOLS_MARK, _PARAM_TOOLS_MARK, build_planner_context
+    from agent.workflow_menu import build_planner_context
+    from agent.workflow_model import _EXPLICIT_TOOLS_MARK, _PARAM_TOOLS_MARK
     ctx_txt = build_planner_context(None)
     check("描述枚举与白名单同源（渲染后逐项可见）",
           all(t in ctx_txt for t in sorted(_EXPLICIT_TOOLS)),
@@ -930,9 +933,14 @@ def test_admin_console_role_channel():
     print("[admin_channel] 后台读工具按角色进 calls 白名单")
     import agent.authz as authz
     import agent.graph as g
-    from agent.workflows import (_ADMIN_QUERY_TOOLS_ORDER, _CALLABLE_QUERY_TOOLS_ORDER,
-                              _EXPLICIT_TOOLS_ORDER, build_planner_context,
-                              callable_query_tools, explicit_tools)
+    from agent.workflow_menu import build_planner_context
+    from agent.workflow_tools import (
+        _ADMIN_QUERY_TOOLS_ORDER,
+        _CALLABLE_QUERY_TOOLS_ORDER,
+        _EXPLICIT_TOOLS_ORDER,
+        callable_query_tools,
+        explicit_tools,
+    )
 
     public = list(_CALLABLE_QUERY_TOOLS_ORDER)
     check("后台读清单非空（派生自 authz 的 admin.console 那族）",
@@ -1785,7 +1793,7 @@ def test_reply_contract_change_branches():
     ——负断言每遇一次措辞改写就假红一次（本项目的既有教训，见 `DENIAL_FAMILY`）。
     """
     print("[workflows] 写族回复契约按「变化量」分叉")
-    from agent.workflows import WORKFLOWS
+    from agent.workflow_defs import WORKFLOWS
     _by = {s.name: s for s in WORKFLOWS}
     # 技能 → (返回里"真改了"那一支的开头/关键词, "零改动"那一支的开头)
     _CASES = {
@@ -2133,7 +2141,8 @@ def test_review_inbox_calls_whitelist():
     实际办的件数从此对不上（且不一致的地方正是被剔掉的那条）。
     """
     print("[review_inbox] calls 展开：白名单外一条 ⇒ 整批零工具")
-    from agent.workflows import WORKFLOW_MAP, _expand_change_set
+    from agent.workflow_defs import WORKFLOW_MAP
+    from agent.workflow_expand_write import _expand_change_set
 
     _ri = WORKFLOW_MAP["review_inbox"]
     _allowed = {t for t, _ in (_ri.plan or ())}
@@ -4271,7 +4280,8 @@ def test_no_sibling_tool_name_in_user_text():
     """
     import ast, pathlib
     from agent.graph import _TOOL_MAP
-    from agent.workflows import WORKFLOWS, _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
+    from agent.workflow_defs import WORKFLOWS
+    from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
     names = set(_TOOL_MAP)
     # 计划不是固定工具序列的技能（chat/content_query 的 TOOLS 行由 PARAMS 动态展开），
     # "本技能计划里会执行哪些工具"在静态上不可判定 ⇒ 用它们自己的可调用白名单当上界
@@ -4335,7 +4345,7 @@ def test_site_guide_is_role_rendered():
     角色是唯一开关。
     """
     from agent.context import site_guide
-    from agent.workflows import WORKFLOWS, visible_workflows
+    from agent.workflow_defs import WORKFLOWS, visible_workflows
     guest, admin = site_guide(None), site_guide("admin")
     # ① 每个"有 capability 且对某角色可见"的技能，其能力行必须出现在该角色的清单里。
     # 20261002 起三个角色各核一遍（原为 None/admin 两档）：`user` 与匿名今天同集，但
@@ -4376,12 +4386,12 @@ def test_site_guide_is_role_rendered():
 
 
 def test_site_guide_covers_nav_map():
-    """SITE_GUIDE（访客变体 site_guide(None)）必须覆盖 NAV_MAP 全部存活路径（workflows.py 单一事实
+    """SITE_GUIDE（访客变体 site_guide(None)）必须覆盖 NAV_MAP 全部存活路径（`workflow_defs/nav.py` 单一事实
     来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
     trace 190827 实证：能做啥只列 4 项漏 IoT/河灯。20260921 能力清单改按角色渲染后
     此锁仍指向访客变体（管理能力行不得进访客清单，由 test_site_guide_is_role_rendered 锁）。"""
     import agent.graph as g
-    from agent.workflows import NAV_MAP
+    from agent.workflow_defs.nav import NAV_MAP
     alive = {p for p in NAV_MAP.values() if p is not None}
     missing = [p for p in sorted(alive) if p not in g.SITE_GUIDE]
     assert not missing, f"SITE_GUIDE 缺板块路径: {missing}"
@@ -4755,7 +4765,7 @@ def test_calls_in_wrong_workflow_round():
     from agent.graph import _drop_correction, parse_plan, planner_node
     from agent.principal import Principal
     # 常量的家是 `agent.workflow_model`（批 2 刀 2a 下沉层），刀 2d 之后
-    # `agent/workflows.py` 自己已不消费它 ⇒ 取值点跟着定义走。
+    # 收尾刀把 `agent/workflows.py` 整块删掉 ⇒ 取值点跟着定义走。
     from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
 
     _CALLS = [{"tool": "list_notes", "args": {"limit": 5}}]
@@ -5589,19 +5599,19 @@ def test_write_desc_no_example_names():
     红的时候请回来读这段注释。
     """
     print("[write_desc_no_example_names] 写技能描述里不许出现具体名字（只能用 〈…〉 占位符）")
-    from agent import workflows as S
+    from agent.workflow_defs import WORKFLOWS, WRITE_WORKFLOW_NAMES
     # 站内真实存在的标签/分类名 + 已实证被抄过的示例名（20260922）
     banned = ("Python", "架构", "分布式", "Asyncio", "编程", "随笔", "摄影",
               "大笨狗", "嵌入式", "音乐")
-    for sk in S.WORKFLOWS:
-        if sk.name not in S.WRITE_WORKFLOW_NAMES:
+    for sk in WORKFLOWS:
+        if sk.name not in WRITE_WORKFLOW_NAMES:
             continue
         hits = [w for w in banned if w in (sk.description or "")]
         check(f"  {sk.name} 描述里没有具体名字（示例一律 〈…〉）", not hits, f"命中 {hits}")
     # 占位符写法本身要还在（把示例改成占位符 ≠ 把示例删光——触发语还得教）
     for name, must in (("tag_create", "〈名字〉"), ("tag_create", "〈父标签名〉"),
                        ("category_create", "〈名字〉"), ("announcement_create", "〈")):
-        sk = next(s for s in S.WORKFLOWS if s.name == name)
+        sk = next(s for s in WORKFLOWS if s.name == name)
         check(f"  {name} 描述里保留了占位符 {must}", must in sk.description)
     # 规则 4b 的取值纪律在 planner prompt 里（描述之外的第二道）
     import agent.graph as G
@@ -5624,8 +5634,8 @@ def test_write_desc_no_example_names():
     # 判据是形态而不是取值：`文章<数字>` 一律换成 〈id〉——id 是**每轮现取**的
     # （页面上下文 / 本轮工具帧 / 主人原话），任何写死在提示词里的号都是错的。
     _id_re = re.compile(r"文章\s*[0-9]+")
-    for sk in S.WORKFLOWS:
-        if sk.name not in S.WRITE_WORKFLOW_NAMES:
+    for sk in WORKFLOWS:
+        if sk.name not in WRITE_WORKFLOW_NAMES:
             continue
         m = _id_re.search(sk.description or "")
         check(f"  {sk.name} 描述里没有写死的文章 id 举例", m is None, m.group(0) if m else "")

@@ -303,9 +303,9 @@ _GUESTBOOK_URL_RE = re.compile(r"/(?:guestbook|he)\b")
 # 未命中即缺失；近义重问还模板复读同文（489=489）。纪律 2 要求"页面存在"须
 # 有据——板块事实不注入，narrator 只能靠记忆碎片或检索命中拼。解法：常驻注入
 # 页面上下文（planner 与 model 均可见，模型只转述），与 GUESTBOOK_GUIDE 同构。
-# 板块路径与 NAV_MAP（workflows.py 单一事实来源）保持一致，新增板块须同步此处与
+# 板块路径与 NAV_MAP（`workflow_defs/nav.py` 单一事实来源）保持一致，新增板块须同步此处与
 # test_workflows 断言。
-# 物联网平台那一段随开关走（20261002，`IOT_ENABLED`，见 workflows.py 与博客仓 `iot/`）：
+# 物联网平台那一段随开关走（20261002，`IOT_ENABLED`，见 `tools/base.py` 与博客仓 `iot/`）：
 #   · 装了就照旧列进板块清单——它是真实存在的页面，清单必须覆盖它（否则
 #     `test_site_guide_covers_nav_map` 的覆盖断言会红，而它红得对：清单漏了活路径）；
 #   · 没装就**连"未部署"这句一起写上**，而不是整段不写。理由是**留白会被填**：
@@ -344,7 +344,7 @@ _SITE_GUIDE_TAIL = "看访客发来的图片并描述内容/颜色。"
 # 现场（`admin_tag_move_question_no_popup`，近 14 次全量红 4 次）：「系统目前只提供了
 # 「新建标签」的能力，并没有开放「修改已有标签」的通道」，而**同一份注入的清单里逐字
 # 写着**「修改已有标签：改名 / 改颜色 / 换父标签 / 一级↔二级互转」（注册表
-# `workflows.py` 的 capability）。主人问的是"挪到别的标签下会有什么影响"，得到的却是一句
+# `workflow_defs/` 的 capability）。主人问的是"挪到别的标签下会有什么影响"，得到的却是一句
 # "系统没这个能力"——**列着却否认**与超纲承诺是同一种不诚实（都让主人对系统能力产生
 # 错误印象），而它更容易骗到人：听起来像系统限制，不像模型犯懒。
 _SITE_GUIDE_CLOSING = ("介绍能力时按此完整列出，不要遗漏；反过来，**清单之外的动作一律"
@@ -433,7 +433,7 @@ def _dashboard_clause() -> str:
     ② 访客问"后台里有什么"、博主问"我能改哪些东西"时，narrator 得答得出来。
     手写这份清单就是第三份副本（本模块 20260921 刚把能力行改成渲染），所以现算。
     """
-    from agent.workflows import DASHBOARD_PANELS    # 局部导入：同 site_guide 的理由（叶子层）
+    from agent.workflow_defs.nav import DASHBOARD_PANELS  # 局部导入：同 site_guide 的理由（叶子层）
     return "、".join(f"{name}（{path}）" for name, path in DASHBOARD_PANELS)
 # 管理能力的引导语（能力**内容**仍来自注册表的 capability 字段，这里只有抬头）
 _ADMIN_GUIDE_HEAD = "🔑 以管理员身份（本轮对话者是博主本人）你还额外能做："
@@ -451,7 +451,7 @@ def site_guide(role: str | None = None) -> str:
     可见性是**分流不是隐藏**：访客看不到管理能力行（他不该被告知"我能改后台"），
     管理员看到的清单里明确列出他能改什么（他不该被告知"我不能改"）。
     """
-    from agent.workflows import visible_workflows        # 局部导入：context 是叶子层，
+    from agent.workflow_defs import visible_workflows  # 局部导入：context 是叶子层，
     base, admin = [], []                           # workflows 反过来不依赖 context，但
     for s in visible_workflows(role):                 # 保持此处零模块级耦合更稳
         if not s.capability:

@@ -29,10 +29,15 @@ from agent.graph import (  # noqa: E402
     _FALLBACK_DOWN, _FALLBACK_GONE, _FALLBACK_UNDEPLOYED, _claim_issue, gate_node,
     parse_plan, plan_encode, plan_state,
 )
-from agent.workflows import (  # noqa: E402
-    PLAN_STATUS_ABSENCE_EXEMPT, PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, WORKFLOWS,
-    WORKFLOW_MAP, _IOT_OFF_NOTE, _param_problem_plan, instantiate_plan,
+from agent.plan_status import (  # noqa: E402
+    PLAN_STATUS_ABSENCE_EXEMPT,
+    PLAN_STATUS_NAV_NOTE,
+    PLAN_STATUS_VALUES,
 )
+from agent.workflow_defs import WORKFLOWS, WORKFLOW_MAP  # noqa: E402
+from agent.workflow_defs.nav import _IOT_OFF_NOTE  # noqa: E402
+from agent.workflow_params import _param_problem_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
 FAILS: list[str] = []

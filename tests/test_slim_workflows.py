@@ -48,8 +48,9 @@ from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 import agent.graph as G  # noqa: E402
 from agent.planner_llm import build_tool_schema  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from agent.workflows import (build_planner_context, render_tool_marks,  # noqa: E402
-                          workflow_param_specs, visible_workflows)
+from agent.workflow_defs import visible_workflows  # noqa: E402
+from agent.workflow_menu import build_planner_context, render_tool_marks  # noqa: E402
+from agent.workflow_params import workflow_param_specs  # noqa: E402
 from agent.tasks import TASK_DROP, TASK_HOLD, TASK_INTENTS  # noqa: E402
 from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
@@ -126,7 +127,7 @@ def test_deleted_lines_exist_verbatim_in_the_schema():
 def test_schema_marks_are_expanded_all_roles():
     """schema 侧不得漏出未展开的占位标记（本批修掉的真缺陷）。"""
     print("\n[缺陷] schema 描述里的工具枚举标记必须展开（此前只展开文本菜单那一路）")
-    from agent.workflows import _EXPLICIT_TOOLS_MARK, _PARAM_TOOLS_MARK
+    from agent.workflow_model import _EXPLICIT_TOOLS_MARK, _PARAM_TOOLS_MARK
     for role in _ROLES:
         raw = json.dumps(build_tool_schema(role), ensure_ascii=False)
         check(f"[{role}] schema 里没有未展开的占位标记",
@@ -134,7 +135,7 @@ def test_schema_marks_are_expanded_all_roles():
               and _PARAM_TOOLS_MARK not in raw)
     admin_raw = json.dumps(build_tool_schema("admin"), ensure_ascii=False)
     none_raw = json.dumps(build_tool_schema(None), ensure_ascii=False)
-    from agent.workflows import explicit_tools
+    from agent.workflow_tools import explicit_tools
     adm_only = set(explicit_tools("admin")) - set(explicit_tools(None))
     check("展开结果按角色分档（后台读面只出现在 admin 的 schema 里）",
           bool(adm_only) and all(t in admin_raw for t in adm_only)
@@ -234,7 +235,7 @@ def test_content_query_pairs_the_two_sources_from_one_place():
     但"只留一处"这件事不许回退。
     """
     print("\n[契约] content_query 的成对点名只留一处（inputs 里不再另写一份）")
-    from agent.workflows import WORKFLOW_MAP
+    from agent.workflow_defs import WORKFLOW_MAP
     cq = WORKFLOW_MAP["content_query"]
     contract = cq.contract
     check("两个数据源名逐字写在契约那一段里",

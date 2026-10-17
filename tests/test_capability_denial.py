@@ -51,7 +51,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import graph as G  # noqa: E402
-from agent import workflows as S  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
+from agent.workflow_defs.capability import (  # noqa: E402
+    CAPABILITY_DENIAL_OBJECTS,
+    CAPABILITY_DENIAL_VERBS,
+)
 
 FAILS: list[str] = []
 
@@ -154,15 +158,15 @@ check("  反向：普通用户说「没有收藏功能」⇒ 判（favorite_add 
 # ══════════════════════════════════════════════════════════════════
 print("\n④ 两半同源：动词必须来自*这一件*能力（跨技能串台 = 误伤）")
 
-_V = {k: G._capability_denial_verbs(S.WORKFLOW_MAP[k]) for k in S.CAPABILITY_DENIAL_OBJECTS}
+_V = {k: G._capability_denial_verbs(WORKFLOW_MAP[k]) for k in CAPABILITY_DENIAL_OBJECTS}
 check("  每个对象词条都对应一件真技能、且动词非空",
-      all(S.WORKFLOW_MAP.get(k) and _V[k] for k in S.CAPABILITY_DENIAL_OBJECTS))
+      all(WORKFLOW_MAP.get(k) and _V[k] for k in CAPABILITY_DENIAL_OBJECTS))
 check("  读技能那份 `CAPABILITY_DENIAL_VERBS` 的键都在对象表里（两边不许各写一份）",
-      set(S.CAPABILITY_DENIAL_VERBS) <= set(S.CAPABILITY_DENIAL_OBJECTS))
+      set(CAPABILITY_DENIAL_VERBS) <= set(CAPABILITY_DENIAL_OBJECTS))
 check("  board_delete 的动词里**不含**发通知的词根（这就是 ② 第一句放行的原因）",
       not re.search(r"发|通知", _V["board_delete"]), _V["board_delete"])
 check("  `content_query` 走显式表（它的 plan 里没有写工具可借）",
-      _V["content_query"] == S.CAPABILITY_DENIAL_VERBS["content_query"])
+      _V["content_query"] == CAPABILITY_DENIAL_VERBS["content_query"])
 
 # ══════════════════════════════════════════════════════════════════
 print("\n④b 给予义谓词槽（20261003 放宽）：两副形状**都要**接，不许只补一半")
@@ -180,9 +184,9 @@ check("  甲支接了槽（`_CAP_FAIL_LEAD` 与名词之间）",
 check("  乙支也接了槽（缺少它 = 这次放宽要修的那句仍然漏）",
       "{_CAP_FAIL_LEAD}{_CAP_FAIL_GIVE}{_CAP_FAIL_GAP}{{0,3}}" in _SHAPES)
 # 行为锁：拿**定义**（不是仓内现成的常量）重算一遍，防"定义了却忘了接"
-from agent.workflows import CAPABILITY_DENIAL_OBJECTS  # noqa: E402
+from agent.workflow_defs.capability import CAPABILITY_DENIAL_OBJECTS  # noqa: E402
 
-_V_TAG = G._capability_denial_verbs(S.WORKFLOW_MAP["tag_delete"])
+_V_TAG = G._capability_denial_verbs(WORKFLOW_MAP["tag_delete"])
 check("  重算（用 `_CAP_FAIL_GIVE` 现算的正则）仍判那句原话",
       G._capability_denied("系统这边没有提供「直接删除一个标签」的能力",
                            _V_TAG, CAPABILITY_DENIAL_OBJECTS["tag_delete"]))

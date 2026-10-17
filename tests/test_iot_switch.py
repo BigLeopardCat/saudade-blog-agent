@@ -43,22 +43,26 @@ _PROBE = r"""
 import json, sys
 sys.path.insert(0, %r)
 import tools.base as B
-import agent.workflows as S
 import agent.context as C
 import agent.hostinfo as H
 from agent.decisions import _display_fast_path
+from agent.workflow_defs import WORKFLOWS, visible_workflows
+from agent.workflow_defs.nav import (NAV_MAP, _IOT_NAV_ALIASES, _NAV_REAL_PAGES,
+                                     _NAV_REF_HINT)
+from agent.workflow_menu import _NAV_MAP_LINES
+from agent.workflow_plan import instantiate_plan
 
 def nav(target):
-    p = S.instantiate_plan("navigate", {"target": target})
+    p = instantiate_plan("navigate", {"target": target})
     return {"status": p["status"], "tools": p["tools"], "note": p["note"]}
 
 out = {
     "iot": B.IOT_ENABLED,
     "exact_has": B.IOT_NAV_PATH in B._NAV_EXACT_PATHS,
     "whole_page": sorted(B._NAV_WHOLE_PAGE_PATHS),
-    "map_lines_mentions": "物联网" in S._NAV_MAP_LINES,
-    "ref_hint_mentions": "物联网" in S._NAV_REF_HINT,
-    "real_pages_mentions": "物联网" in S._NAV_REAL_PAGES,
+    "map_lines_mentions": "物联网" in _NAV_MAP_LINES,
+    "ref_hint_mentions": "物联网" in _NAV_REF_HINT,
+    "real_pages_mentions": "物联网" in _NAV_REAL_PAGES,
     "nav_iot": nav("物联网平台"),
     "nav_console": nav("设备控制台"),
     "nav_literal": nav("/device-console/"),
@@ -66,13 +70,13 @@ out = {
     "nav_friend": nav("友链"),
     "nav_unknown": nav("量子对撞机车间"),
     "nav_ok": nav("留言板"),
-    "workflows": sorted(s.name for s in S.visible_workflows(None)),
-    "workflow_caps": {s.name: s.capability for s in S.WORKFLOWS if s.name == "navigate"},
+    "workflows": sorted(s.name for s in visible_workflows(None)),
+    "workflow_caps": {s.name: s.capability for s in WORKFLOWS if s.name == "navigate"},
     "site_guide": C.site_guide(None),
     "site_map": B.get_site_map.invoke({}),
     "services": list(H.SERVICES),
     "display_fast": bool(_display_fast_path("在屏幕上显示晚安")),
-    "aliases_all_mapped": sorted(a for a in S._IOT_NAV_ALIASES if a not in S.NAV_MAP),
+    "aliases_all_mapped": sorted(a for a in _IOT_NAV_ALIASES if a not in NAV_MAP),
 }
 print(json.dumps(out, ensure_ascii=False))
 """
