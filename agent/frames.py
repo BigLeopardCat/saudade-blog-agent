@@ -78,7 +78,7 @@ VISIBLE_NODE = "model"
 # （`gate_node` 函数体里看不见，20261016 用 AST 走传递闭包实测）。逐条标出来源：
 #
 #   messages         gate_node:13292   —— 判"有没有执行事实"的唯一依据（它从消息流挑 ToolMessage）
-#   plan             gate_node:13291   —— 分族判据的入参
+#   plan_obj         ← plan_view:329  —— 分族判据的入参（**对象那一态**，20261017 批 1）
 #   gate_replan      gate_node:13307   —— 上一圈有没有重规划过
 #   ledger           gate_node:13366   —— 洞⑦ 的台账否认判据
 #   pending_confirm  gate_node:13367
@@ -103,9 +103,12 @@ VISIBLE_NODE = "model"
 # 而主线那份声明写在这之前。**两边各自都对、合起来才错**——正是这条双向锁存在的理由。
 # 它也不是"多喂一格无害"：缺席时 `state.get` 落到 `-1` ⇒ 窗口恒等于整表 ⇒ 线程一复用，
 # 闸门看到的就是整条会话（批 1 治的正是这一格）。
+# ⚠️ 计划那一格 20261017 批 1 从 `plan` 换成 `plan_obj`：读侧不再读渲染出来的文本，改读
+# 计划对象（`plan_view`）。**这一格不能两态都留**——留下 `plan` 就是"声明了没人读"，
+# 而那正是这张表存在的理由（陈旧声明与漏登一样会让人读错这张表）。
 GATE_STATE_KEYS = frozenset({
     "blocked", "blocked_seen", "confirm_grant", "gate_replan", "ledger", "messages",
-    "noop_specs", "pending_confirm", "plan", "receipts", "task_frames", "turn_start",
+    "noop_specs", "pending_confirm", "plan_obj", "receipts", "task_frames", "turn_start",
 })
 
 # ── `_confirm_popup` 的读侧闭包（含它调用的辅助函数）────────────────────────
@@ -117,7 +120,7 @@ GATE_STATE_KEYS = frozenset({
 #   receipts         _confirm_popup:12260
 #   ledger           _confirm_popup:12130（`_ledger_pending_text`）
 #   executed         ← _grant_covers:8837 —— **20261012 第二次收窄那一格**
-#   plan / blocked / blocked_seen / noop_specs / pending_confirm  ← _round_facts:3319-3347
+#   blocked / blocked_seen / noop_specs / pending_confirm  ← _round_facts:3319-3347
 #   confirm_grant    ← _all_granted:8853
 #
 # ⚠️ `executed` 是这一格里**最要紧**的一格，也是 20261016 之前**根本没喂**的一格。
@@ -127,9 +130,12 @@ GATE_STATE_KEYS = frozenset({
 # **批 2 起这一格不再靠"喂"**：`execute` 节点把本轮真执行过的 spec 写回 `state["executed"]`
 # （`executed_specs(executor.calls)`，与生产 `execute_node` 同一种累积），
 # 弹卡拿到的是真 state，那一格由结构保证在场。
+# ⚠️ 计划那一格同 `GATE_STATE_KEYS`（20261017 批 1）：`plan` 退场，只剩 `plan_obj`
+# ——本格原先两态都在，是因为 `_plan_workflow` 早就直取对象、而 `_round_facts` 那时还在
+# 读文本；现在两处都读对象，`plan` 就成了一条没人读的陈旧声明。
 POPUP_STATE_KEYS = frozenset({
     "blocked", "blocked_seen", "confirm_grant", "executed", "ledger", "messages",
-    "noop_specs", "pending_confirm", "plan", "plan_obj", "receipts", "turn_start",
+    "noop_specs", "pending_confirm", "plan_obj", "receipts", "turn_start",
 })
 
 

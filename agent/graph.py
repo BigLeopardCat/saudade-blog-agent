@@ -1414,7 +1414,7 @@ def _write_command_nudge(plan_obj: dict, user_msg, has_frames: bool,
 # 几十处引用（含测试）一个都不用改。判据侧同步见 `tests/_ctx_src.plan_codec_src()`。
 # ⚠️ 改协议（加行、改分隔符、改 KEY 名）要去 `agent/plan_codec.py`，不是这里。
 from agent.plan_codec import (  # noqa: E402,F401
-    normalize_plan, parse_plan, plan_encode, plan_state)
+    normalize_plan, parse_plan, plan_encode, plan_state, plan_view)
 
 # ---------------------------------------------------------------------------
 # 声称检查正则族（gate 确定性兜底用；作用域见 _claim_issue）
@@ -3137,22 +3137,6 @@ class RoundFacts(NamedTuple):
     ok_write_rows: tuple = ()
 
 
-def _plan_tool_specs(raw) -> list:
-    """计划里的调用清单，**容两种形态**：契约文本（`state["plan"]` 的真实形态，
-    `plan_encode` 写过一次再从 state 读回来的那种）与已经解析好的 plan_obj
-    （纯单测的合成 state 里有 `{"plan": parse_plan(...)}` 这种写法）。
-
-    `_round_facts` 要无条件跑（`_no_popup_fact` 现在先问账甲再决定说不说），
-    所以这里不能像从前那样默认"调用方一定给的是字符串"——那会让一条**判据**因为
-    一个**测试夹具的形状**而抛 TypeError（20261008 实测：`test_workflows` 当场 rc=1）。
-    """
-    if isinstance(raw, dict):
-        return list(raw.get("tools") or [])
-    if isinstance(raw, str) and raw:
-        return list(parse_plan(raw)["tools"])
-    return []
-
-
 def _round_facts(state) -> RoundFacts:
     """账甲合成：纯读 state，无副作用；narrator 与 gate 各调一次、读同一份形状。
 
@@ -3179,8 +3163,11 @@ def _round_facts(state) -> RoundFacts:
         else:
             ok.append(name)
             ok_rows.append(r)
+    # 计划里的写 spec 工具名：经 `plan_view` 取规范对象（20261017 批 1 起读对象那一态；
+    # 此前这里有一个 `_plan_tool_specs`，因为要"容文本/对象两种形态"而存在——收成一种
+    # 形态之后它退化成一行的取字段，留着只是一个会漂的名字）。
     planned = tuple(
-        n for n in (_tool_name(s) for s in _plan_tool_specs(state.get("plan")))
+        n for n in (_tool_name(s) for s in plan_view(state)["tools"])
         if n and authz.is_write(n))
     blocked_w = tuple(
         str(b.get("tool") or "") for b in (state.get("blocked") or [])
@@ -10568,8 +10555,11 @@ def _ledger_turn_families(state, config) -> list[str]:
     """
     if config is None:
         return []
+    #    第三道闸读的是计划的**对象那一态**的 `note`（20261017 批 1 起）：`_LEDGER_NOTE_PREFIX`
+    #    是系统自己写进收尾轮 note 的抬头，判它属于"读契约槽"，与上面两处同源；此前它是拿
+    #    渲染后的文本做子串匹配——同一件事，但判据落在了**排版**上。
     if (_write_receipts(state) or _wrote_this_round(state)
-            or _LEDGER_NOTE_PREFIX in (state.get("plan") or "")):
+            or _LEDGER_NOTE_PREFIX in plan_view(state)["note"]):
         return []
     msgs = state.get("messages") or []
     return _ledger_due_families(_last_user_msg(msgs),
@@ -11650,7 +11640,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     if _stopped(config):
         logger.info("[execute] cancelled (client disconnected) — 不执行任何工具（含写操作）")
         raise AgentCancelled()
-    plan = parse_plan(state.get("plan", ""))  # 缺 plan 容错 → chat 兜底（tools 空，零调用）
+    plan = plan_view(state)  # 缺计划容错 → 空计划（chat / tools 空 ⇒ 零调用）
     specs = plan["tools"]
     if not specs:
         return {"messages": []}
@@ -12543,7 +12533,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         logger.info("[gate] cancelled (client disconnected)")
         raise AgentCancelled()
     _t0 = time.monotonic()
-    plan = parse_plan(state.get("plan", ""))
+    plan = plan_view(state)
     msgs = state["messages"]
     # **两个视野，别混**（20261015 批 1）：
     #   `turn` = 本轮窗口（`_turn`），给"本轮证据"类判据用 —— `frames`（本轮帧）、
@@ -12992,7 +12982,7 @@ def route_after_planner(state: AgentState) -> Literal["execute", "model"]:
       - 计划有调用清单（TOOLS 非空）→ 去 execute 确定性执行
       - 收尾轮（TOOLS 空：chat/信息已足够/查无结果）→ 直接去 model 叙述
     """
-    plan = parse_plan(state.get("plan", ""))
+    plan = plan_view(state)
     return "execute" if plan["tools"] else "model"
 
 

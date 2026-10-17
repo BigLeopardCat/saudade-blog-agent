@@ -16,8 +16,9 @@
      —— 想绕开 `plan_state` 自己拼文本，得先删掉这条锁。
   ② **两态不分叉**：`parse_plan(plan_state(obj)["plan"])` 与 `obj` 在
      workflow/tools/params/note/reply/status 六项上逐项相等（两处**已知不同形**在下面显式归一）。
-     文本仍是四个节点的读端（`route_after_planner` / `execute_node` / `gate_node` /
-     `_wrote_this_round` 都用 `parse_plan`）——这条保证"改了排版，文本那一态的语义没变"。
+     这条保证"改了排版，文本那一态的语义没变"。**20261017 批 1 起文本不再是任何节点的读端**
+     （四个生产读点都改走 `plan_view(state)`，见 ⑤）——② 判的是"渲染仍是保真的渲染"，
+     不再是"渲染就是读端"。
      顺带钉住 **STATUS 的兼容派生在真计划上恒不触发**（缺 STATUS 才会走到按 NOTE 措辞
      反推 nav_offline/nav_unresolved/target_unreachable 那段）——它只是给旧文本与手写夹具
      留的路，见 `parse_plan` 里那段注。
@@ -30,11 +31,17 @@
      的 `\u003b`（读回仍是 `;`，语义一个字节不变）。④ 锁的就是这条不变量：
      TOOLS 行的裸 `;` 只许是分隔符。
 
+  ⑤ **读侧改结构化**（20261017 批 1）：四个生产读点全部收到 `plan_view(state)`（对象那一态），
+     不再读渲染文本。三条判据 = 源码锁（`agent/` 下零个 `parse_plan` 代码调用点）＋
+     正控（文本在场、对象缺席 ⇒ 路由去 model、零执行；**改之前这条必红**）＋
+     等价（`plan_view` 与 `parse_plan` 在契约七格上逐项相等）。三条各带反控。
+
 **不测什么**：不测 `plan_encode` 的**排版**（`test_workflows.py` 有往返用例）、不测
 planner/gate 行为（各有专测）。这里只锁"通道的形状"。
 
 跑法：`.venv/bin/python tests/run_all.py -k plan_channel`
 """
+import ast
 import json
 import pathlib
 import re
@@ -340,6 +347,118 @@ check("  名是 delete_tag、name 逐字节等于原文（转义读回还原成�
       f"ok={_ok} 读回 {len(_args.get('name') or '')} 字 / 原文 {len(_PROD_SHAPE)} 字")
 check("  且 TOOLS 行 0 个裸分号（只有一条 spec，连分隔符都不该有）",
       _tools_line(_txt).count(";") == 0, str(_tools_line(_txt).count(";")))
+
+# ── ⑤ 读侧改结构化（20261017 批 1）────────────────────────────────────────────
+# 批 1 之前计划有**两个读法**：`parse_plan(state["plan"])`（文本，四个生产读点都走它）与
+# `state["plan_obj"]`（对象，只有 `_plan_workflow` / `server.py` 用）。批 1 把生产读点
+# 全部收到 `plan_view(state)`——对象的规范形态（`agent/plan_codec.py`，与写端 `plan_state`
+# 同处）。三条判据，每条都要能抓住"其实没生效"：
+#   ⑤a 源码锁：`agent/` 下（`plan_codec.py` 自身除外）`parse_plan(` 的**代码调用点为零**。
+#   ⑤b 正控（红基线）：文本在场、对象缺席 ⇒ 路由去 model、执行零条。**改之前这条必红**
+#      （旧读法照着文本里的 TOOLS 行就去 execute 了）——它是"真的改读对象了"的证明。
+#   ⑤c 等价：改读对象**没有**顺手改掉语义——两态在契约七格上逐项相等。
+print("⑤ 读侧改结构化：生产链路不再读渲染出来的文本")
+
+# ⑤a 源码锁。扫**调用点**（`ast.Call` 且函数名是裸名 `parse_plan`）而不是文本：文档字符串与
+# 注释里提到它不算——本文件与 `plan_codec.py` 的头注都在讲它，文本扫会当场假红（同
+# `test_frame_contract` ④b 记下的那条：**锁的落点要选判据别选字面**）。`from … import
+# parse_plan` 是 `ImportFrom`，不是 `Call`，所以 `agent/graph.py` 的 re-export 不命中。
+_AGENT_PY = sorted((ROOT / "agent").rglob("*.py"))
+_hits = []
+for _p in _AGENT_PY:
+    if _p.name == "plan_codec.py":
+        continue                     # 文本读器自己：`parse_plan` 的定义与文档就在这儿
+    for _n in ast.walk(ast.parse(_p.read_text(encoding="utf-8"))):
+        if (isinstance(_n, ast.Call) and isinstance(_n.func, ast.Name)
+                and _n.func.id == "parse_plan"):
+            _hits.append(f"{_p.relative_to(ROOT)}:{_n.lineno}")
+check(f"⑤a 扫面非空（agent/ 下 {len(_AGENT_PY)} 个模块，plan_codec.py 除外）",
+      len(_AGENT_PY) > 30, f"{len(_AGENT_PY)} 个")
+check("⑤a `agent/` 下（`plan_codec.py` 自身除外）`parse_plan(` 的**代码调用点为零**"
+      "（谁再把渲染文本读回生产链路，当场红）", not _hits, str(_hits))
+
+# ⑤b 正控（红基线）。材料 = 一份**只有渲染文本**的 state：`plan_state` 照常一次写两态，
+# 这里故意把对象那一格留空。前提单独断言一次——"文本里确实有调用清单"是这条红基线
+# 成立的**条件**，不写成断言就只是修辞。
+_pobj = {"workflow": "content_query", "tools": ['spy_read({"n": 1})'], "params": {},
+         "note": "", "reply": "r"}
+_text_only = {"plan": G.plan_state(dict(_pobj))["plan"], "plan_obj": {},
+              "messages": [], "plan_rounds": 1, "done": False}
+check("⑤b 前提：这份 state 的**文本里确实有调用清单**（旧读法会照着它去 execute）",
+      G.parse_plan(_text_only["plan"])["tools"] == ['spy_read({"n": 1})'],
+      str(G.parse_plan(_text_only["plan"])["tools"]))
+
+
+class _Spy:
+    """只为数调用次数（与真工具无关）：`_TOOL_MAP` 的调用面就是 `.invoke(args)`。"""
+
+    def __init__(self):
+        self.calls: list = []
+
+    def invoke(self, args):
+        self.calls.append(args)
+        return "ok"
+
+
+_spy = _Spy()
+_orig_spy = G._TOOL_MAP.get("spy_read")
+G._TOOL_MAP["spy_read"] = _spy
+_cfg = {"configurable": {"user_id": 0}}
+try:
+    _r = G.execute_node(dict(_text_only), _cfg)
+    check("⑤b 正控（改读对象之后必红的那条）：文本在场、对象缺席 ⇒ 路由去 model、执行零条",
+          G.route_after_planner(dict(_text_only)) == "model"
+          and _r["messages"] == [] and _spy.calls == [],
+          f"路由={G.route_after_planner(dict(_text_only))} "
+          f"帧={len(_r['messages'])} 调用={_spy.calls}")
+    # 反控：同一个计划**给了对象** ⇒ 路由去 execute、工具真被调用一次。少了这一条，
+    # 上面那条"零执行"既可能是判据生效，也可能是夹具本身根本执行不动（本仓
+    # 「正控不红不算数」——一条永远不会红的判据与没有它一样）。
+    _both = {**G.plan_state(dict(_pobj)), "messages": [], "plan_rounds": 1, "done": False}
+    _r2 = G.execute_node(dict(_both), _cfg)
+    check("⑤b 反控：同一个计划给了对象 ⇒ 路由去 execute、工具真被调用一次"
+          "（证明上面那条不是夹具坏掉导致的假绿）",
+          G.route_after_planner(dict(_both)) == "execute"
+          and len(_r2["messages"]) == 1 and _spy.calls == [{"n": 1}],
+          f"路由={G.route_after_planner(dict(_both))} "
+          f"帧={len(_r2['messages'])} 调用={_spy.calls}")
+finally:
+    if _orig_spy is None:
+        G._TOOL_MAP.pop("spy_read", None)
+    else:
+        G._TOOL_MAP["spy_read"] = _orig_spy
+
+
+# ⑤c 等价。取样与 ② 同源（`_real_plans`：注册表全集 + navigate 四出口 + 四条确定性构造
+# 路径 + 一条带 `;` 的值），归一也与 ② 同源（`_NORM` 的两处渲染还原）。
+def _divergences(st: dict) -> list:
+    """对象那一态与文本那一态在契约七格上的差（`_NORM` 归一掉两处已知渲染）。"""
+    view, parsed = G.plan_view(dict(st)), G.parse_plan(st.get("plan") or "")
+    out = []
+    for k in _KEYS:
+        norm = _NORM.get(k, lambda v: v)
+        if norm(view.get(k)) != norm(parsed.get(k)):
+            out.append(f"{k}: 对象={norm(view.get(k))!r} 文本={norm(parsed.get(k))!r}")
+    return out
+
+
+print("⑤c 读侧入口与文本读器等价（plan_view ↔ parse_plan）")
+_bad = []
+for _label, _obj in _real_plans():
+    _d = _divergences(G.plan_state(dict(_obj)))
+    if _d:
+        _bad.append(f"{_label}: " + "；".join(_d))
+check("⑤c 契约七格逐项相等（注册表全集 + navigate 四出口 + 四条确定性构造路径 + 一条带 `;`）"
+      "——改读对象没顺手改掉语义",
+      not _bad, "；".join(_bad[:3]))
+check("⑤c 没有计划时两边兜底同源（`plan_view({})` 逐项等于 `parse_plan(\"\")`）",
+      not _divergences({}), str(_divergences({})))
+# 反控：判据要能抓到"两态真的分叉"。伪造一份对象与文本不一致的 state（文本说 chat、
+# 对象说 navigate）⇒ 必须报出来，否则上面两条只是恒真的空跑。
+_st3 = G.plan_state({"workflow": "chat", "tools": [], "params": {}, "note": "", "reply": "r"})
+_fake = dict(_st3, plan_obj={**_st3["plan_obj"], "workflow": "navigate"})
+check("⑤c 反控：对象与文本不一致时判得出来（不是恒真的空跑）",
+      bool(_divergences(_fake)), "伪造的分叉没被抓到 = 这条判据没在看两态")
 
 print()
 if FAILS:

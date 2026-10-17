@@ -846,12 +846,12 @@ for _n in ("你已经提交过河灯啦", "要我现在发布吗？你回复「�
 # 端到端：未获确认的写操作 + 叙述说"已发布" → gate 必须兜住
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
-from agent.graph import gate_node, plan_encode  # noqa: E402
+from agent.graph import gate_node, plan_encode, plan_state  # noqa: E402
 from agent.workflows import instantiate_plan  # noqa: E402
 
 
 def _write_state(reply: str):
-    return {"plan": plan_encode(instantiate_plan("content_query", {"calls": []})),
+    return {**plan_state(instantiate_plan("content_query", {"calls": []})),
             "done": False, "plan_rounds": 0,
             "messages": [
                 HumanMessage(content="把文章 12 设为私密"),
@@ -944,7 +944,7 @@ check("洞① 的 ④支 认后台写动词（零帧轮的另一张网）",
 
 def _console_state(reply: str):
     """后台写轮的最小状态：一个 consent 错误帧 + narrator 的回复。"""
-    return {"plan": plan_encode(instantiate_plan("article_status",
+    return {**plan_state(instantiate_plan("article_status",
                                                  {"article_id": 12, "status": "private"})),
             "done": False, "plan_rounds": 0,
             "messages": [
@@ -978,7 +978,7 @@ from agent import adminops as A  # noqa: E402
 def _mixed_state(reply: str, *, blocked_aid: int = 11, got: int = 11,
                  spec: str = "", named=(13,)) -> dict:
     """混合轮的最小状态：一篇写成功、另一篇留下 __ERROR__ 帧与一条 blocked。"""
-    return {"plan": plan_encode(instantiate_plan("article_status",
+    return {**plan_state(instantiate_plan("article_status",
                                                  {"article_id": 13, "status": "private"})),
             "done": False, "plan_rounds": 1,
             "blocked": [{"spec": spec or f'set_article_status({{"article_id": {blocked_aid},'

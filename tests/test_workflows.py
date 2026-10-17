@@ -288,7 +288,7 @@ def test_gate_note_honesty():
     print("[gate] 零帧注记核验（navigate 下线/不存在）")
 
     def _st(plan, reply):
-        return {"plan": plan_encode(instantiate_plan("navigate", plan)), "done": False,
+        return {**plan_state(instantiate_plan("navigate", plan)), "done": False,
                 "plan_rounds": 0,
                 "messages": [HumanMessage(content="打开它"), AIMessage(content=reply)]}
 
@@ -326,13 +326,11 @@ def test_gate_nav_pending_claim():
     那时这条红得莫名其妙（测试的失败原因与被测代码无关）。
     """
     print("[gate] 确认式导航声称（NAVIGATE 帧 + 到达声称 → fallback）")
-    plan = plan_encode({
-        "workflow": "navigate",
-        "params": {"target": "留言板"},
-        "tools": ['navigate_to({"path": "/guestbook", "confirm": true})'],
-        "note": "",
-        "reply": "",
-    })
+    # 20261017 批 1：两态一起给——只给文本的夹具在 `gate_node` 改读对象之后恒按"空计划"判。
+    plan_obj = {"workflow": "navigate", "params": {"target": "留言板"},
+                "tools": ['navigate_to({"path": "/guestbook", "confirm": true})'],
+                "note": "", "reply": ""}
+    plan = plan_state(plan_obj)["plan"]
     assert '"confirm": true' in plan  # 手搓的休眠场景：confirm=true ⇒ 前端弹卡等确认
 
     def frame_state(reply: str, frame: str):
@@ -341,7 +339,7 @@ def test_gate_nav_pending_claim():
         # ——所以夹具从"帧里带连线形前缀"换成"回执里带结构化 cmd"。命令工具的事实文本
         # 现在是无前缀的（「导航已发起，等主人确认后才会跳转：<url>」）。
         return {
-            "plan": plan, "done": False, "plan_rounds": 0,
+            **plan_state(plan_obj), "done": False, "plan_rounds": 0,
             "receipts": [{"tool": "navigate_to", "result": "",
                           "cmd": {"kind": "navigate", "url": "https://saudade.site/guestbook",
                                   "mode": "confirm"}}],
@@ -1087,7 +1085,7 @@ def test_gate_claim_scope():
     print("[gate] 零帧声称检查作用域（chat 窄 / content_query 宽）")
 
     def _st(workflow, reply):
-        return {"plan": plan_encode(instantiate_plan(workflow, {})), "done": False,
+        return {**plan_state(instantiate_plan(workflow, {})), "done": False,
                 "plan_rounds": 0,
                 "messages": [HumanMessage(content="显示屏上写点东西"), AIMessage(content=reply)]}
 
@@ -1232,7 +1230,7 @@ def test_gate_cmd_prefix_meta():
 
     # 端到端：gate 走完整路径（workflow/plan 状态齐备）不漏判也不误伤
     def _st(reply):
-        return {"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+        return {**plan_state(instantiate_plan("chat", {})), "done": False,
                 "plan_rounds": 0,
                 "messages": [HumanMessage(content="agent 怎么防止模型假装调用工具？"),
                              AIMessage(content=reply)]}
@@ -1258,8 +1256,8 @@ def test_gate_frame_checks():
     print("[gate] 有帧轮一致性检查")
 
     def _st(workflow, msgs_after_plan, receipts=None, **plan_kw):
-        plan = plan_encode(instantiate_plan(workflow, plan_kw))
-        st = {"plan": plan, "done": False, "plan_rounds": 1,
+        st = {**plan_state(instantiate_plan(workflow, plan_kw)), "done": False,
+              "plan_rounds": 1,
               "messages": [HumanMessage(content="x")] + msgs_after_plan}
         if receipts is not None:
             st["receipts"] = receipts
@@ -1646,7 +1644,7 @@ def test_gate_claim_holes():
 
     # ── ③ gate 集成：零帧轮 + 有帧轮（混合轮）────────────────────────────
     def _st(workflow, msgs_after_plan, **plan_kw):
-        return {"plan": plan_encode(instantiate_plan(workflow, plan_kw)), "done": False,
+        return {**plan_state(instantiate_plan(workflow, plan_kw)), "done": False,
                 "plan_rounds": 1,
                 "messages": [HumanMessage(content="x")] + msgs_after_plan}
 
@@ -1744,7 +1742,7 @@ def test_gate_false_negative_claim():
 
     # ── gate 集成（5e 分支）─────────────────────────────────────────────
     def _st(msgs, receipts, **plan_kw):
-        return {"plan": plan_encode(instantiate_plan("content_query", plan_kw)), "done": False,
+        return {**plan_state(instantiate_plan("content_query", plan_kw)), "done": False,
                 "plan_rounds": 1, "receipts": receipts,
                 "messages": [HumanMessage(content="x")] + msgs}
 
@@ -1923,7 +1921,7 @@ def test_gate_site_absence_claim():
 
     # ── gate 集成 ───────────────────────────────────────────────────────
     def _st(workflow, msgs_after_plan, **plan_kw):
-        return {"plan": plan_encode(instantiate_plan(workflow, plan_kw)), "done": False,
+        return {**plan_state(instantiate_plan(workflow, plan_kw)), "done": False,
                 "plan_rounds": 1,
                 "messages": [HumanMessage(content="x")] + msgs_after_plan}
 
@@ -1950,7 +1948,7 @@ def test_gate_site_absence_claim():
     nav_reply = "博客里没有写过友链相关的内容啦，这个板块已经下线了喵～"
     check("注记轮回复文本本身会被判据拦（豁免的前提）",
           _site_absence_claim(nav_reply) is True)
-    o4 = gate_node({"plan": plan_encode(nav_plan), "done": False, "plan_rounds": 0,
+    o4 = gate_node({**plan_state(nav_plan), "done": False, "plan_rounds": 0,
                     "messages": [HumanMessage(content="去友链看看"), AIMessage(content=nav_reply)]})
     check("零帧 + navigate 已下线注记轮 → pass（NAV_MAP 事实，豁免生效）",
           o4["done"] is True and not o4.get("fallback_text"), str(o4))
@@ -2322,7 +2320,7 @@ def test_gate_confirm_claim():
 
     # ── gate 集成：零帧轮 → fallback；改真了的有帧轮同样 fallback ─────────
     def _mk(workflow, msgs_after_plan, **plan_kw):
-        return {"plan": plan_encode(instantiate_plan(workflow, plan_kw)), "done": False,
+        return {**plan_state(instantiate_plan(workflow, plan_kw)), "done": False,
                 "plan_rounds": 1,
                 "messages": [HumanMessage(content="小猫咪按你想法来吧")] + msgs_after_plan}
     o1 = gate_node(_mk("chat", [AIMessage(content=t_1319)]))
@@ -2431,7 +2429,7 @@ def test_gate_ledger_denial():
                         ledger=ledger) or [None])[0] == "ledger_denial")
 
     def _mk(msgs_after_plan, **extra):
-        st = {"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+        st = {**plan_state(instantiate_plan("chat", {})), "done": False,
               "plan_rounds": 1, "messages": [HumanMessage(content="我刚刚点确认了吗")] + msgs_after_plan}
         st.update(extra)
         return st
@@ -2581,7 +2579,7 @@ def test_gate_repeat_reply():
 
     # ── gate 集成 ───────────────────────────────────────────────────────────
     def _st(reply, workflow="chat", user="小猫咪，我不想去物联网平台", prev=old):
-        return {"plan": plan_encode(instantiate_plan(workflow, {})), "done": False,
+        return {**plan_state(instantiate_plan(workflow, {})), "done": False,
                 "plan_rounds": 1, "receipts": [],
                 "messages": [HumanMessage(content="[System: user_id=1]"),
                              HumanMessage(content="要"), AIMessage(content=prev),
@@ -2600,7 +2598,7 @@ def test_gate_repeat_reply():
     check("有帧技能同样拦（判据与技能无关）",
           o3["done"] is True and o3.get("fallback_text") == _FALLBACK_REPEAT, str(o3)[:60])
     # 首轮（上下文里没有更早的 AI 消息）→ 无对比对象，放行
-    o4 = gate_node({"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+    o4 = gate_node({**plan_state(instantiate_plan("chat", {})), "done": False,
                     "plan_rounds": 1, "receipts": [],
                     "messages": [HumanMessage(content="[System: x]"),
                                  HumanMessage(content="你好"), AIMessage(content=old)]})
@@ -2699,7 +2697,7 @@ def test_gate_repeat_reply():
 
     # ── gate 集成：距离 2 ────────────────────────────────────────────────
     def _st2(reply, older, newer, user="我有哪些未读通知呀"):
-        return {"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+        return {**plan_state(instantiate_plan("chat", {})), "done": False,
                 "plan_rounds": 1, "receipts": [],
                 "messages": [HumanMessage(content="[System: user_id=1]"),
                              HumanMessage(content="第一问"), AIMessage(content=older),
@@ -2741,7 +2739,7 @@ def test_execute_node():
     def _run(tools_list):
         obj = instantiate_plan("navigate", {"target": "物联网平台"})
         obj["tools"] = tools_list  # 手工覆盖清单（模拟 planner 决策产物）
-        return execute_node({"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+        return execute_node({**plan_state(obj), "plan_rounds": 1, "done": False,
                              "messages": [HumanMessage(content="带我去设备控制台")]})
 
     # 计划内工具 → 确定性执行（参数照 spec 字面）
@@ -2933,25 +2931,27 @@ def test_refs():
                                        "{'noteKey': 14, 'noteTitle': '固件'}]")
     g._TOOL_MAP["fake_read"] = _Fake("{'noteKey': 12, 'noteContent': '正文'}")
 
-    def _plan(tools_list):
+    _msg = [HumanMessage(content="OTA 那篇怎么升级")]
+
+    def _plan(tools_list, **over):
+        """`execute_node` 的入参：计划**两态** + 本轮其余字段（20261017 批 1）。"""
         obj = instantiate_plan("navigate", {"target": "物联网平台"})
         obj["workflow"] = "content_query"
         obj["tools"] = tools_list
-        return plan_encode(obj)
+        return {**plan_state(obj), **over}
 
     try:
         # 跨轮：第 1 轮检索 → 第 2 轮用引用读全文（生产主路径）
-        r1 = execute_node({"plan": _plan(['fake_search({"keyword": "ota"})']),
-                           "plan_rounds": 1, "done": False,
-                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        r1 = execute_node(_plan(['fake_search({"keyword": "ota"})'], plan_rounds=1, done=False,
+                                messages=_msg))
         check("轮1：结构化返回入 tool_data（引用取值源）",
               len(r1["tool_data"]) == 1 and r1["tool_data"][0]["tool"] == "fake_search"
               and isinstance(r1["tool_data"][0]["data"], list),
               str(r1["tool_data"])[:120])
         calls.clear()
-        r2 = execute_node({"plan": _plan(['fake_read({"article_id": "$fake_search[0].noteKey"})']),
-                           "plan_rounds": 2, "done": False, "tool_data": r1["tool_data"],
-                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        r2 = execute_node(_plan(['fake_read({"article_id": "$fake_search[0].noteKey"})'],
+                                plan_rounds=2, done=False, tool_data=r1["tool_data"],
+                                messages=_msg))
         check("轮2：引用被解析成真实 id 再调用（不是把 $x[0].y 当参数发出去）",
               calls == [{"article_id": 12}], str(calls))
         check("轮2：回执 args 是解析后值（✅ 过程行可读）",
@@ -2959,17 +2959,15 @@ def test_refs():
               str(r2["receipts"]))
         # 同轮：一条 TOOLS 行里后续 spec 引用前面 spec 的返回（轮内依赖）
         calls.clear()
-        r3 = execute_node({"plan": _plan(['fake_search({"keyword": "ota"})',
-                                          'fake_read({"article_id": "$fake_search[1].noteKey"})']),
-                           "plan_rounds": 1, "done": False,
-                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        r3 = execute_node(_plan(['fake_search({"keyword": "ota"})',
+                                 'fake_read({"article_id": "$fake_search[1].noteKey"})'],
+                                plan_rounds=1, done=False, messages=_msg))
         check("同轮：后一条 spec 能引前一条 spec 的返回（轮内依赖打通）",
               calls == [{"keyword": "ota"}, {"article_id": 14}], str(calls))
         # 失败：引用不可解析 → 该 spec 不执行 + 带原因码错误帧 + blocked 走改参重试
         calls.clear()
-        r4 = execute_node({"plan": _plan(['fake_read({"article_id": "$fake_search[0].noteKey"})']),
-                           "plan_rounds": 1, "done": False,
-                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        r4 = execute_node(_plan(['fake_read({"article_id": "$fake_search[0].noteKey"})'],
+                                plan_rounds=1, done=False, messages=_msg))
         frm = str(r4["messages"][-1].content)
         check("失败：不执行工具（拿 $x[0].y 当参数去查是更坏的结果）", calls == [], str(calls))
         check("失败：__ERROR__ 帧带原因码",
@@ -3039,7 +3037,7 @@ def test_write_ref_loud():
     saved = g._TOOL_MAP.get("create_tag")
     g._TOOL_MAP["create_tag"] = _Fake()
     try:
-        out = execute_node({"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+        out = execute_node({**plan_state(obj), "plan_rounds": 1, "done": False,
                             "messages": [HumanMessage(content="在标签下面建一个 Rust")]},
                            {"configurable": {"user_id": 0}})
         frm = str(out["messages"][-1].content)
@@ -3269,7 +3267,7 @@ def test_execute_receipts_and_route():
     def _st(tools_list, **extra):
         obj = instantiate_plan("navigate", {"target": "物联网平台"})
         obj["tools"] = tools_list
-        base = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+        base = {**plan_state(obj), "plan_rounds": 1, "done": False,
                 "messages": [HumanMessage(content="带我去设备控制台")]}
         base.update(extra)
         return execute_node(base)
@@ -3340,7 +3338,7 @@ def test_reflector_routes_and_budget():
     print("[reflector] 预算终局 + 路由")
 
     def _st(**extra):
-        base = {"plan": plan_encode({"workflow": "navigate", "params": {},
+        base = {**plan_state({"workflow": "navigate", "params": {},
                                      "tools": ['nonsense({"x": 1})'], "note": "n",
                                      "reply": "r"}),
                 "plan_rounds": 1, "done": False, "messages": [],
