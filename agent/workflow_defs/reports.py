@@ -9,8 +9,8 @@
 
 from __future__ import annotations
 
-from agent.workflow_model import Workflow
 from agent.principal import ADMIN_ROLES
+from agent.workflow_model import Workflow
 
 __all__ = ["WORKFLOWS"]
 
@@ -94,7 +94,8 @@ WORKFLOWS: list[Workflow] = [
             "**仅管理员可用**"
         ),
         inputs={"status": "（可选）只看某一类：pending=待审 / passed=已通过 / rejected=未通过"
-                          "（与审核状况报表 moderation_report 的 ai_passed/ai_rejected 不是同一套取值，"
+                          "（与审核状况报表 moderation_report 的 ai_passed/ai_rejected 不是同一套取"
+                          "值，"
                           "别混用）",
                 "keyword": "（可选）关键词，在正文/留名/账号里做子串匹配"},
         plan=[("list_admin_board", {"status": "$status", "keyword": "$keyword"})],

@@ -61,7 +61,8 @@ WORKFLOWS: list[Workflow] = [
         # 见 `tools/base.py::_NAV_WHOLE_PAGE_PATHS`；判据仍在回执的 cmd 上，两套字同源。）
         complete_when="navigate_to 的执行回执带导航命令（有回执 = 跳转已由系统下发）",
         reply_contract=(
-            "跳转由系统执行（命令在 navigate_to 的**执行回执**里，正文里没有）：有回执 = 跳转已由系统下发"
+            "跳转由系统执行（命令在 navigate_to 的**执行回执**里，正文里没有）："
+            "有回执 = 跳转已由系统下发"
             # 整页目标只有 IoT 控制台那一个（`_NAV_WHOLE_PAGE_PATHS`）⇒ 关掉时这半句
             # 整段不出现：教 narrator"整页目标要等回复说完"而站内一个整页目标都没有，
             # 只会让它把这套说法套到普通跳转上（那时候说"马上过去"就是假的）。

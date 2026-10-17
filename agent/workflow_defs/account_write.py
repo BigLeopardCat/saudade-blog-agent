@@ -9,9 +9,9 @@
 
 from __future__ import annotations
 
-from agent.workflow_model import Workflow
 from agent.principal import ADMIN_ROLES
 from agent.workflow_defs.capability import _ROSTER_CHECK_TAIL
+from agent.workflow_model import Workflow
 
 __all__ = ["WORKFLOWS"]
 

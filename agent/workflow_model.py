@@ -99,7 +99,8 @@ class Workflow:
 # ---------------------------------------------------------------------------
 # 详见 `agent/workflow_params.py` 的"技能参数 schema"那一节（生成侧/校验侧同源那三条
 # 约定）。这里只放**跨模块共用**的那两件：哨兵与规格 dataclass。
-_NO_DEFAULT = object()   # 哨兵：`default=None` 在 schema 里是有意义的（可空参数），不能拿 None 当"没默认值"
+# 哨兵：`default=None` 在 schema 里是有意义的（可空参数），不能拿 None 当"没默认值"
+_NO_DEFAULT = object()
 
 
 @dataclass(frozen=True)
