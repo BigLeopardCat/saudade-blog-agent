@@ -1,5 +1,8 @@
 # ADR-0007：`unavailable` 的那次原地重试不在提示词层治
 
+
+> ⚠️ 20261017 起 `skill` 已改名为 **`workflow`**（`agent/skills.py` → `agent/workflows.py`、`tests/test_skills.py` → `tests/test_workflows.py`、`tests/test_slim_skills.py` → `tests/test_slim_workflows.py`；计划 IR `SKILL=` → `WORKFLOW=`）。本文档保留**当时的名字**，不回溯改写；读它时把 skill 读作 workflow 即可。
+
 - **状态**：已搁置（20261007）
 - **背景文档**：[../问题记录.md](../问题记录.md) §1.55（现场、机制、残余与这次的负结果）
 - **影响范围**：无（提示词层的两版纠偏**没有落地**，`agent/graph.py` 停在 HEAD）。

@@ -39,11 +39,11 @@ sys.path.insert(0, str(ROOT))
 import agent.graph as g  # noqa: E402
 from agent import adminops as A  # noqa: E402
 from agent import authz  # noqa: E402
-from agent.graph import (EXECUTED_ONCE_SKILLS, SNAPSHOT_SKILLS,  # noqa: E402
+from agent.graph import (EXECUTED_ONCE_WORKFLOWS, SNAPSHOT_WORKFLOWS,  # noqa: E402
                          _CONTENT_TOOLS, _already_done_writes, _check_spec,
                          execute_node, plan_state)
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflows import instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
 
 # ── 密钥桩：settings.jwt_secret 是全局单例，测试里直接改它 ────────────────
@@ -743,17 +743,17 @@ class _FakeTool:
         return self.out
 
 
-def _plan(tools_list, skill="article_status"):
+def _plan(tools_list, workflow="article_status"):
     """改后返回**对象**（20260928 批 C：夹具与生产同路，经 `plan_state` 一次写两态）。"""
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = tools_list
     return obj
 
 
-def _run(tools_list, msg, config, extra_msgs=(), skill="article_status"):
+def _run(tools_list, msg, config, extra_msgs=(), workflow="article_status"):
     CALLS.clear()
-    return execute_node({**plan_state(_plan(tools_list, skill)),
+    return execute_node({**plan_state(_plan(tools_list, workflow)),
                          "plan_rounds": 1, "done": False,
                          "messages": [HumanMessage(content=msg), *extra_msgs]},
                         config)
@@ -814,7 +814,7 @@ try:
     # `action` 是 20260928 新加的那一个（跨轮执行记忆那一行的**定稿措辞**，Python
     # 写 / Rust 只排版）。加它的正当性：此前那一行由 Rust 独立渲染，同一件事两处
     # 措辞已经漂了（54 条取样只有 31 条逐字相同）——**它是收敛，不是新债**。
-    # 除此之外键集仍然固定：这一条的意义正是"想加键就得来改这份清单"。
+    # 键集固定：想加键就得来改这份清单。首个键仍叫 `skill`——`__EXEC__` 帧体，随 Rust 那批改。
     check("  回执键集固定（多出来的键是无声的兼容性债）",
           set(rcpt) == {"skill", "tool", "args", "result", "ts", "action",
                         "principal_role", "op", "article_id", "before", "after"},
@@ -855,7 +855,7 @@ def _rcpt(tool, **args):
     return {"tool": tool, "args": {k: str(v) for k, v in args.items()}}
 
 
-SOBJ = {"skill": "article_status",
+SOBJ = {"workflow": "article_status",
         "tools": ['set_article_status({"article_id": 12, "status": "private"})']}
 
 check("同一件事重复规划 → 收尾",
@@ -866,7 +866,7 @@ check("**同一工具、另一篇** → 不收尾（第二件事必须真执行�
                                             status="private")]))
 check("同一工具、同一篇、另一个值 → 不收尾（来回切换是两次操作）",
       not _already_done_writes(
-          {"skill": "article_status",
+          {"workflow": "article_status",
            "tools": ['set_article_status({"article_id": 12, "is_top": 0})']},
           [_rcpt("set_article_status", article_id=12, is_top=1)]))
 check("参数键序不同不影响判据（指纹 sort_keys）",
@@ -877,29 +877,29 @@ check("int 与 str 等价（回执侧一律字符串化，计划侧必须走同�
       _already_done_writes(SOBJ, [{"tool": "set_article_status",
                                    "args": {"article_id": "12", "status": "private"}}])
       and _already_done_writes(
-          {"skill": "article_status",
+          {"workflow": "article_status",
            "tools": ['set_article_status({"article_id": "12", "status": "private"})']},
           [_rcpt("set_article_status", article_id=12, status="private")]))
 check("清单里有一件没做过 → 不收尾（不能只做了一半就说都好了）",
       not _already_done_writes(
-          {"skill": "article_status",
+          {"workflow": "article_status",
            "tools": ['set_article_status({"article_id": 12, "status": "private"})',
                      'set_article_status({"article_id": 14, "status": "private"})']},
           [_rcpt("set_article_status", article_id=12, status="private")]))
 check("失败/未确认的写不进回执 ⇒ 改参重试仍放行（判据取 receipts 而非帧名）",
       not _already_done_writes(SOBJ, []))
 check("空计划不归这条判据管（收尾与否由别处决定）",
-      not _already_done_writes({"skill": "article_status", "tools": []},
+      not _already_done_writes({"workflow": "article_status", "tools": []},
                                [_rcpt("set_article_status", article_id=12,
                                       status="private")]))
 check("只读技能不吃这条判据（报表去重有自己那条，判据更宽）",
-      not _already_done_writes({"skill": "content_query", "tools": SOBJ["tools"]},
+      not _already_done_writes({"workflow": "content_query", "tools": SOBJ["tools"]},
                                [_rcpt("set_article_status", article_id=12,
                                       status="private")]))
 check("三个写技能都在名单里，且与快照型报表名单不重叠",
-      EXECUTED_ONCE_SKILLS == frozenset({"tag_create", "article_status", "article_tags"})
-      and not (EXECUTED_ONCE_SKILLS & SNAPSHOT_SKILLS),
-      f"{sorted(EXECUTED_ONCE_SKILLS)} / {sorted(SNAPSHOT_SKILLS)}")
+      EXECUTED_ONCE_WORKFLOWS == frozenset({"tag_create", "article_status", "article_tags"})
+      and not (EXECUTED_ONCE_WORKFLOWS & SNAPSHOT_WORKFLOWS),
+      f"{sorted(EXECUTED_ONCE_WORKFLOWS)} / {sorted(SNAPSHOT_WORKFLOWS)}")
 
 gsrc = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("写工具**不进** _CONTENT_TOOLS（否则「建了个标签」会变成「我检索过」的证据）",
@@ -1049,12 +1049,12 @@ check("不在名字表里的写工具不受这一条约束（文章族走 target
 def _popup(spec, msg, uid=7, role=ROLE_ADMIN):
     """跑一次 `_confirm_popup`（真判据 + 真签发，假的是标签字典与后端）。
 
-    计划夹具走 `plan_state`（20260928 批 C）：`_plan_skill` 现在读 `state["plan_obj"]`，
+    计划夹具走 `plan_state`（20260928 批 C）：`_plan_workflow` 现在读 `state["plan_obj"]`，
     只喂契约文本的话技能名读成空串 ⇒ `confirm.sign` 拒签 ⇒ 该弹的全变 None
     （看起来"符合预期"，其实是密钥/技能名两件事长得一样）。
     """
     return g._confirm_popup(
-        {**g.plan_state({"skill": "tag_delete", "params": {}, "tools": [],
+        {**g.plan_state({"workflow": "tag_delete", "params": {}, "tools": [],
                          "note": "", "reply": "直接回答"})},
         [spec], Principal(uid=uid, role=role), msg,
         {"configurable": {"user_id": uid, "conversation_id": 42}})
@@ -1161,9 +1161,9 @@ check("gate 的洞④ 分支真的读了它（锚写了但判据不认 = 白写�
 
 print("\n⑯ 写技能的描述必须写明「不要自己揽下要不要执行」")
 
-from agent.skills import SKILLS  # noqa: E402
+from agent.workflows import WORKFLOWS  # noqa: E402
 
-_BY_NAME = {s.name: s for s in SKILLS}
+_BY_NAME = {s.name: s for s in WORKFLOWS}
 for _n in ("tag_create", "article_status", "article_tags"):
     _d = _BY_NAME[_n].description
     check(f"{_n} 描述含「照常选本技能 + 系统弹确认框」纪律",
@@ -1211,8 +1211,8 @@ check("族别跟着**贴着引号的那个**标记词走（前面还有别的动
 
 
 def _name_plan(params, spec):
-    """就一个 spec 的假计划（`_name_target_fix` 只读 skill/params/tools）。"""
-    return {"skill": "tag_update", "params": dict(params), "tools": [spec],
+    """就一个 spec 的假计划（`_name_target_fix` 只读 workflow/params/tools）。"""
+    return {"workflow": "tag_update", "params": dict(params), "tools": [spec],
             "note": "注记原文", "reply": "直接回答"}
 
 
@@ -1263,7 +1263,7 @@ check("改名形态：新名字**不会**被当成父标签填进去（族别搞
 # planner 会把它抄成 `title="标题"`；而"标题"**正是主人这句话的子串**，子串级地基
 # 放它过去 ⇒ 弹窗问成了「删除公告「标题」」）
 def _ann_plan(spec, title):
-    return {"skill": "announcement_delete", "params": {"title": title}, "tools": [spec],
+    return {"workflow": "announcement_delete", "params": {"title": title}, "tools": [spec],
             "note": "注记原文", "reply": "直接回答"}
 
 
@@ -1282,13 +1282,13 @@ check("公告族：本来就是主人说的标题 → 一个字节都不改",
 print("\n⑳ 写参数的值也要来自主人这句话（②防线续五：新建编名 / 抄短 / 抄泛称）")
 
 
-def _value_case(desc: str, skill: str, params: dict, msg: str, want):
+def _value_case(desc: str, workflow: str, params: dict, msg: str, want):
     """跑一次 `_name_arg_fix` 并按形态断言。
 
     `want` 三态：dict = 要校正成这几项（顺带断言参数表与 TOOLS 行同步）；None =
     一个字节都不动（主人原话里逐字有据）；"REFUSE" = 零写 + 响亮（解不出就绝不猜）。
     """
-    pl = instantiate_plan(skill, params)
+    pl = instantiate_plan(workflow, params)
     pl["params"] = dict(params)
     before = " ".join(pl.get("tools") or [])
     refuse = g._name_arg_fix(pl, msg)
@@ -1500,10 +1500,10 @@ print("\n㉓ 公告正文：谁成文（两种情形）+ 卡面必须印全文�
 #      （同一件事实写四份，是这一族最容易各漂各的地方）；
 #   ② 卡面印**全文**——正文改由模型成文之后判据判不了措辞，主人的签字是这一族**唯一**
 #      的人眼复核点（与待办卡 20260926「一格都不截」同因）。
-import agent.skills as _S  # noqa: E402
+import agent.workflows as _S  # noqa: E402
 from tools import base as _B  # noqa: E402
 
-_ann = _S.SKILL_MAP["announcement_create"]
+_ann = _S.WORKFLOW_MAP["announcement_create"]
 _ANN_CARRIERS = {
     "技能描述": _ann.description,
     "技能 inputs.content": str(_ann.inputs.get("content") or ""),
@@ -1532,17 +1532,17 @@ check("阻断文案管的是「卡面要念全」（它是被拦下那一轮的�
       and "一个字都不要改" not in _authz_ann, _authz_ann)
 
 # ── 展开层：原样放行成文的正文；空正文照旧零工具追问 ─────────────────────
-from agent.skills import _expand_write_skill  # noqa: E402
+from agent.workflows import _expand_write_workflow  # noqa: E402
 
 _LONG_ANN = "本次维护安排如下：" + "请提前做好准备" * 12 + "——结束标记"
 check("前置：这条正文真的比 60 字长（否则下面几条是空转）",
       len(_LONG_ANN) > 60, str(len(_LONG_ANN)))
-_specs_a, _note_a = _expand_write_skill(_ann, {"title": "维护通知", "content": _LONG_ANN})
+_specs_a, _note_a = _expand_write_workflow(_ann, {"title": "维护通知", "content": _LONG_ANN})
 check("展开层原样放行（不因正文与主人原话不同就拦——那一档本来就是模型成文）",
       len(_specs_a) == 1 and _LONG_ANN in str(_specs_a[0]), str(_specs_a)[:120])
 check("  注记写明「正文全文会印在确认卡上由主人核对」（复核点是卡面，不是措辞）",
       "确认卡" in _note_a and "全文" in _note_a, _note_a)
-_specs_e, _note_e = _expand_write_skill(_ann, {"title": "维护通知", "content": ""})
+_specs_e, _note_e = _expand_write_workflow(_ann, {"title": "维护通知", "content": ""})
 check("正文为空 ⇒ 零工具 + 追问（「槽位空着不许往下走」与「可以润色」是两件事）",
       _specs_e == [] and "问清" in _note_e, _note_e)
 
@@ -1665,11 +1665,11 @@ print("\n㉔ 一次建多个标签：整批一起问（20261008：弹卡整轮�
 # 方向与本文件其它每一处一致：宁可多问一次，也不静默丢一次主人点名的写。
 
 
-def _popup_batch(specs, msg, skill="tag_create", uid=7):
+def _popup_batch(specs, msg, workflow="tag_create", uid=7):
     """跑一次多 spec 的 `_confirm_popup`（真判据 + 真签发，假的是标签字典与后端）。"""
     specs = list(specs)
     return g._confirm_popup(
-        {**g.plan_state({"skill": skill, "params": {}, "tools": specs,
+        {**g.plan_state({"workflow": workflow, "params": {}, "tools": specs,
                          "note": "", "reply": "直接回答"})},
         specs, Principal(uid=uid, role=ROLE_ADMIN), msg,
         {"configurable": {"user_id": uid, "conversation_id": 42}})
@@ -1790,7 +1790,7 @@ _SP_ATTACH_OK = 'set_article_tags({"article_id": 16, "add": ["git", "代码版�
 def _popup_tags(specs, msg=_MSG_TAGS, msgs=None):
     """跑一次"建标签 + 挂标签"批的 `_confirm_popup`（假字典、假文章清单，零网络）。"""
     specs = list(specs)
-    state = {**g.plan_state({"skill": "article_tags", "params": {}, "tools": specs,
+    state = {**g.plan_state({"workflow": "article_tags", "params": {}, "tools": specs,
                              "note": "", "reply": "直接回答"})}
     # `messages` 必须给：文章写的那两道判据会读它（`_target_evidence` / `_page_ctx`）。
     state["messages"] = list(msgs or [])
@@ -1896,7 +1896,7 @@ check("两样都筛时仍按搜索口径说「匹配」（限定写进同一条�
 # 一个分类 ⇒ 工具回"没有这个分类"，白烧一轮，而主人看到的是"没有"）。占位词这类坑
 # 本仓有过先例（20260922 tag_create：描述里的〈…〉被当成了真名字）⇒ 契约里必须有一句
 # 明写的禁令。同一句话在工具参数描述里也有一份（planner 两处都看得到）。
-from agent.skills import SKILLS as _SK  # noqa: E402
+from agent.workflows import WORKFLOWS as _SK  # noqa: E402
 _AN = next(s for s in _SK if s.name == "admin_notes")
 check("planner 契约里明写「不许填占位词」（契约 + 参数表两处都写，模型两处都看得到）",
       "占位词" in _AN.planner_contract and "未确认分类" in _AN.planner_contract

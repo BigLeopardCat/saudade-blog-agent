@@ -4,7 +4,7 @@
 **现场**（同一句话的两轮 trace）：
 
   · `20260927T171545`：主人说「不错收藏啦，开启夜间模式和雪花」——三个动作。planner
-    一轮只能选一个技能（`SKILL=` 单值），选中收藏 ⇒ 写操作弹确认卡 ⇒ 本轮 END。
+    一轮只能选一个技能（`WORKFLOW=` 单值），选中收藏 ⇒ 写操作弹确认卡 ⇒ 本轮 END。
   · `20260927T171550`：主人点「确定」⇒ 前端合成确认句 ⇒ 服务端凭令牌**零 LLM** 拼计划
     ⇒ 执行收藏 ⇒ 直去 narrator ⇒ 它写下「**夜间模式和雪花特效这边也一并处理好了**」，
     gate 判 PASS。主人读到的是一句系统没做过的事，而这一轮的全部动作只是一次收藏。
@@ -34,7 +34,7 @@ from agent.graph import (  # noqa: E402
     _unsupported_deed_claims, gate_node, parse_plan, plan_encode, planner_node,
     route_after_execute,
 )
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflows import instantiate_plan  # noqa: E402
 from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
 FAILS: list[str] = []
@@ -52,23 +52,23 @@ CONFIRM_ASK = "确认执行：要收藏文章 19吗？点「确定」我就去�
 FAVORITE_SPEC = 'add_favorite({"article_id": 19})'
 # 已验签的令牌体（真形状：`confirm.py` 签的就是这两个字段——技能名 + 逐条 spec）。
 # 形状写错的代价是"照令牌拼计划"那一支恒空清单，而用例照样绿（判据哑掉）。
-GRANT = {"v": 2, "uid": 5, "conv": 251, "skill": "favorite_add",
+GRANT = {"v": 2, "uid": 5, "conv": 251, "workflow": "favorite_add",
          "specs": [{"tool": "add_favorite", "args": {"article_id": 19}}]}
 HALLUCINATION = ("好嘞主人～收藏好啦！**夜间模式和雪花特效这边也一并处理好了**，"
                  "晚上看博客眼睛会舒服很多，飘着雪花也很有氛围哦！:比耶:")
-FAVORITE_RCPT = {"skill": "favorite_add", "tool": "add_favorite",
+FAVORITE_RCPT = {"workflow": "favorite_add", "tool": "add_favorite",
                  "args": {"article_id": "19"}, "result": "已收藏文章 19"}
 
 
 def _effect_rcpt(effect="snow"):
-    return {"skill": "effect", "tool": "toggle_effect",
+    return {"workflow": "effect", "tool": "toggle_effect",
             "args": {"effect": effect, "action": "on"},
             "result": f"特效 {effect} 已打开",
             "cmd": {"kind": "effect", "effect": effect, "action": "on"}}
 
 
 def _dark_rcpt():
-    return {"skill": "darkmode", "tool": "toggle_dark_mode", "args": {"mode": "on"},
+    return {"workflow": "darkmode", "tool": "toggle_dark_mode", "args": {"mode": "on"},
             "result": "夜间模式已打开", "cmd": {"kind": "darkmode", "mode": "on"}}
 
 
@@ -165,7 +165,7 @@ try:
           str(parse_plan(out0["plan"])["tools"]))
 
     # ── 形态 B：兑现成功后被交回 ⇒ 走正常 LLM 决策轮，且告知"还剩这几件"──────
-    llm1 = _ScriptedLLM(['SKILL=effect\nPARAMS={"effect": "snow", "action": "on"}\n'
+    llm1 = _ScriptedLLM(['WORKFLOW=effect\nPARAMS={"effect": "snow", "action": "on"}\n'
                          "REPLY: 雪花给你打开啦"])
     G.get_llm = lambda **kw: llm1       # noqa: ARG005
     out1 = planner_node(_grant_state(), _cfg())

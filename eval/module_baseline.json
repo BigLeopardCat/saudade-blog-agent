@@ -23,7 +23,7 @@
     "lines": 1243,
     "top_defs": 40
   },
-  "agent/skills.py": {
+  "agent/workflows.py": {
     "lines": 4764,
     "top_defs": 52
   },
@@ -87,7 +87,7 @@
     "lines": 956,
     "top_defs": 6
   },
-  "tests/test_skills.py": {
+  "tests/test_workflows.py": {
     "lines": 5784,
     "top_defs": 72
   },

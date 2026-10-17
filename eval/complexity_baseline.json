@@ -55,11 +55,11 @@
     "c": 105,
     "lines": 451
   },
-  "agent/skills.py::_expand_write_skill": {
+  "agent/workflows.py::_expand_write_workflow": {
     "c": 97,
     "lines": 473
   },
-  "agent/skills.py::_instantiate_plan": {
+  "agent/workflows.py::_instantiate_plan": {
     "c": 135,
     "lines": 516
   },
@@ -187,25 +187,21 @@
     "c": 41,
     "lines": 178
   },
-  "tests/test_skills.py::test_admin_console_role_channel": {
+  "tests/test_workflows.py::test_admin_console_role_channel": {
     "c": 44,
     "lines": 150
   },
-  "tests/test_skills.py::test_name_target_round": {
+  "tests/test_workflows.py::test_name_target_round": {
     "c": 35,
     "lines": 328
   },
-  "tests/test_skills.py::test_refs": {
+  "tests/test_workflows.py::test_refs": {
     "c": 33,
     "lines": 219
   },
   "tests/test_style_hygiene.py::main": {
     "c": 47,
     "lines": 122
-  },
-  "tests/test_trace_io.py::main": {
-    "c": 35,
-    "lines": 150
   },
   "tests/test_trace_retention.py::main": {
     "c": 48,

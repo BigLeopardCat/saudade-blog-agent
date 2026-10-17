@@ -9,7 +9,7 @@
                           policy_frame·unavailable）；
   · `agent/adminops.py` —— 卡面与回执（`render_account_role` / `render_account_role_status`）
                           ——这一族的**硬要求**：卡面必须印「从什么身份 → 什么身份」；
-  · `agent/skills.py`  —— 技能展开（缺名字/缺身份/认不出/纯数字 一律零工具）；
+  · `agent/workflows.py`  —— 技能展开（缺名字/缺身份/认不出/纯数字 一律零工具）；
   · `agent/graph.py`   —— 四处登记（`_WRITE_NAME_FIELDS` / `_NAME_TARGET_TOOLS` /
                           词表分派 / `_ACCOUNT_TOOLS`）；
   · 接线锁             —— 政策拒绝走错误帧族 ⇒ `_check_spec` 得 BLOCK + `policy_refused`。
@@ -38,7 +38,7 @@ import tools.base as base  # noqa: E402
 from agent.graph import (_RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec,  # noqa: E402
                          plan_state)
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflows import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_account_freeze 的那一处）──────────────────────────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**（宁可退回追问，也不发一个
@@ -130,10 +130,10 @@ DIR = [row(126, "guest5"), row(127, "guest6"), row(130, "zako_one", role="zako")
 DIRD = {r["id"]: r for r in DIR}
 
 
-def _plan(spec, skill="account_set_role"):
+def _plan(spec, workflow="account_set_role"):
     """借一个骨架搭 plan_obj（与 `_wrap_up_plan`/`instantiate_plan` 的产物同形）。"""
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = [spec]
     return obj
 
@@ -490,22 +490,22 @@ _p5 = instantiate_plan("account_set_role", {"name": "126", "role": "杂鱼"}, RO
 check("  纯数字的名字 → 零工具 + 如实说系统不支持按编号（编号通道不存在）",
       _p5["tools"] == [] and "编号" in _p5["note"], _p5["note"][:80])
 check("  技能名与工具名**不是一套字面量**（混用会让分支静默不命中）",
-      "account_set_role" in instantiate_plan.__globals__["WRITE_SKILL_NAMES"]
-      and "set_account_role" not in instantiate_plan.__globals__["WRITE_SKILL_NAMES"],
+      "account_set_role" in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"]
+      and "set_account_role" not in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"],
       "")
 check("  它在**名字通道**名单里（不在 = 展开器尾部兜底成「未知的写技能」，静默零写）",
-      "account_set_role" in instantiate_plan.__globals__["_WRITE_NAME_TARGET_SKILLS"])
+      "account_set_role" in instantiate_plan.__globals__["_WRITE_NAME_TARGET_WORKFLOWS"])
 check("  技能用的工具在 _WRITE_NAME_FIELDS 里（⑧ 的派生锁也覆盖它）",
-      [t for t, _ in instantiate_plan.__globals__["SKILLS"][
-          [s.name for s in instantiate_plan.__globals__["SKILLS"]].index(
+      [t for t, _ in instantiate_plan.__globals__["WORKFLOWS"][
+          [s.name for s in instantiate_plan.__globals__["WORKFLOWS"]].index(
               "account_set_role")].plan] == ["set_account_role"])
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⑧ 派生锁：plan 含名字型写工具的技能必须在 WRITE_SKILL_NAMES 里（静默洞）")
-_missing = sorted({sk.name for sk in instantiate_plan.__globals__["SKILLS"]
+print("\n⑧ 派生锁：plan 含名字型写工具的技能必须在 WRITE_WORKFLOW_NAMES 里（静默洞）")
+_missing = sorted({sk.name for sk in instantiate_plan.__globals__["WORKFLOWS"]
                    if any(t in g._WRITE_NAME_FIELDS for t, _ in (sk.plan or ()))
-                   and sk.name not in instantiate_plan.__globals__["WRITE_SKILL_NAMES"]})
-check("⭐ 没有任何技能的 plan 用了名字型写工具却不在 WRITE_SKILL_NAMES",
+                   and sk.name not in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"]})
+check("⭐ 没有任何技能的 plan 用了名字型写工具却不在 WRITE_WORKFLOW_NAMES",
       _missing == [], str(_missing))
 
 # ══════════════════════════════════════════════════════════════════
@@ -567,7 +567,7 @@ check("  没给名字也只给中文动作词（不打印内部工具名）",
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑪ 只读白名单：**不在**（那是 content_query 的点名通道）")
-from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
+from agent.workflows import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 check("不在 _EXPLICIT_TOOLS（无参点名）",
       "set_account_role" not in _EXPLICIT_TOOLS)
 check("不在 _CALLABLE_QUERY_TOOLS（带参点名）——写工具进只读通道 = 绕过同意闸",
@@ -590,12 +590,12 @@ class _FakeTool:
         return self.out
 
 
-def _grant_of(spec, skill=None):
+def _grant_of(spec, workflow=None):
     """照**卡上签的那一件**造令牌（20261012 起 `_grant_covers` 按工具名+参数比对：
     光有令牌不算数——空壳 `{"token": "x"}` 会让确认轮重新弹卡）。"""
     args, ok = g._tool_args(spec)
     assert ok, spec
-    return {"token": "x", "skill": skill, "specs": [{"tool": g._tool_name(spec),
+    return {"token": "x", "workflow": workflow, "specs": [{"tool": g._tool_name(spec),
                                                      "args": args}]}
 
 
@@ -650,8 +650,8 @@ try:
               and "普通用户" in pop.get("q", "") and "126" in pop.get("q", ""),
               pop.get("q", ""))
         payload = _confirm.inspect(pop.get("token") or "") or {}
-        check("  令牌载荷里的 skill 与 specs 就是这一件（卡上写什么就签什么）",
-              payload.get("skill") == "account_set_role"
+        check("  令牌载荷里的 workflow 与 specs 就是这一件（卡上写什么就签什么）",
+              payload.get("workflow") == "account_set_role"
               and payload.get("specs") == [{"tool": "set_account_role",
                                             "args": {"name": "guest5",
                                                      "role": "zako"}}],

@@ -14,15 +14,15 @@
 缝里）。所以②③两节各锁一遍"两半都摘"，且都带**逐字节不变**的正控。
 
 被测五块：
-  · ① `block_reasons.denied_skills` —— 只取"改参数重试无效"那一族；`chat` 永不进；
+  · ① `block_reasons.denied_workflows` —— 只取"改参数重试无效"那一族；`chat` 永不进；
     空/None/脏项不炸；
   · ② `planner_llm.build_tool_schema(deny=…)` —— 恰好少那一条；空集 ⇒ **逐字节不变**；
-  · ③ `skills.build_planner_context(deny=…)` —— 技能行**和它的契约行**一起走；
+  · ③ `workflows.build_planner_context(deny=…)` —— 技能行**和它的契约行**一起走；
     空集 ⇒ **逐字节不变**；
   · ④ `bind_planner_tools` 真的把裁剪后的 schema 交下去了（不是接了个没人用的形参）；
   · ⑤ 接线 —— `planner_node` 每轮算 `deny`、记账、传给 bind 与渲染、以及那一格
     一次性纠偏与它的记账；
-  · ⑥ **同一轮内现摘**（20261012）—— `_sated_read_skill` 判"这一版计划里的读全是
+  · ⑥ **同一轮内现摘**（20261012）—— `_sated_read_workflow` 判"这一版计划里的读全是
     本轮已取回的"、`_strip_menu` 现改 `deny` 并重绑客户端。病与处方见那两个函数的
     头注；这一节钉的是"判据与 `_trim_done_reads` 同源"与四处收窄的负控。
 
@@ -40,8 +40,8 @@ import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 import agent.graph as g  # noqa: E402
 import agent.planner_llm as np  # noqa: E402
 from agent import authz  # noqa: E402
-from agent.block_reasons import denied_skills  # noqa: E402
-from agent.skills import SKILL_MAP, build_planner_context, visible_skills  # noqa: E402
+from agent.block_reasons import denied_workflows  # noqa: E402
+from agent.workflows import WORKFLOW_MAP, build_planner_context, visible_workflows  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -57,10 +57,10 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 # 判据文本与拆分之前**逐字相同**（前缀清单从 graph.py 的 AST 读，见 `_ctx_src`）。
 _GRAPH_SRC = _ctx_src.graph_deprefixed()
 _ROLE = "admin"
-_NAMES = [s.name for s in visible_skills(_ROLE)]
+_NAMES = [s.name for s in visible_workflows(_ROLE)]
 # 挑一个**有契约行**的技能当靶子（`planner_contract` 非空）——③ 要锁的正是"技能行与
 # 契约行一起走"，靶子没有契约行就锁不住那一半。挑不到就整节跳过并在读数里看得见。
-_TARGET = next((s.name for s in visible_skills(_ROLE)
+_TARGET = next((s.name for s in visible_workflows(_ROLE)
                 if s.planner_contract and s.name != "chat"), "")
 
 
@@ -72,29 +72,29 @@ def _jdump(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, sort_keys=True)
 
 
-# ── ① denied_skills：只取"重试无效"那一族 ──────────────────────────────────
+# ── ① denied_workflows：只取"重试无效"那一族 ──────────────────────────────────
 check("空/None → 空集（无阻碍轮一分钱不花）",
-      denied_skills([]) == set() and denied_skills(None) == set(),
-      str(denied_skills(None)))
+      denied_workflows([]) == set() and denied_workflows(None) == set(),
+      str(denied_workflows(None)))
 check("不可重试那一族 → 进集合",
-      denied_skills([{"skill": "account_roster", "reason": "unavailable"}])
+      denied_workflows([{"workflow": "account_roster", "reason": "unavailable"}])
       == {"account_roster"})
 check("可救那一族 → **不进**集合（参数写错/换 id 正是重试的用法）",
-      denied_skills([{"skill": "content_query", "reason": "args_parse"},
-                     {"skill": "content_query", "reason": "target_not_found"},
-                     {"skill": "content_query", "reason": "empty_result"}]) == set(),
-      str(denied_skills([{"skill": "x", "reason": "args_parse"}])))
+      denied_workflows([{"workflow": "content_query", "reason": "args_parse"},
+                     {"workflow": "content_query", "reason": "target_not_found"},
+                     {"workflow": "content_query", "reason": "empty_result"}]) == set(),
+      str(denied_workflows([{"workflow": "x", "reason": "args_parse"}])))
 check("同一轮里两族混着：只摘不可重试的那个技能",
-      denied_skills([{"skill": "a", "reason": "unavailable"},
-                     {"skill": "b", "reason": "args_parse"}]) == {"a"})
+      denied_workflows([{"workflow": "a", "reason": "unavailable"},
+                     {"workflow": "b", "reason": "args_parse"}]) == {"a"})
 check("`chat` 永不进（禁掉它等于把「如实收尾」这条路也堵死）",
-      denied_skills([{"skill": "chat", "reason": "unavailable"}]) == set())
+      denied_workflows([{"workflow": "chat", "reason": "unavailable"}]) == set())
 check("未登记的码按可救处理（fail-safe 与 block_reason_type 同源）",
-      denied_skills([{"skill": "x", "reason": "brand_new_code"}]) == set())
-check("脏项不炸：非 dict / 缺 skill / 空名 / 非字符串名",
-      denied_skills([None, "x", 3, {"reason": "unavailable"},
-                     {"skill": "  ", "reason": "unavailable"},
-                     {"skill": None, "reason": "unavailable"}]) == set())
+      denied_workflows([{"workflow": "x", "reason": "brand_new_code"}]) == set())
+check("脏项不炸：非 dict / 缺 workflow / 空名 / 非字符串名",
+      denied_workflows([None, "x", 3, {"reason": "unavailable"},
+                     {"workflow": "  ", "reason": "unavailable"},
+                     {"workflow": None, "reason": "unavailable"}]) == set())
 
 
 # ── ② tools schema：恰好少那一条，空集逐字节不变 ───────────────────────────
@@ -143,8 +143,8 @@ else:
     check("不含靶子技能那一行",
           f"- {_TARGET}：" not in _got, _TARGET)
     check("**契约行也跟着走了**（摘一半留一半等于没摘——模型照着名字点）",
-          SKILL_MAP[_TARGET].planner_contract and
-          SKILL_MAP[_TARGET].planner_contract not in _got)
+          WORKFLOW_MAP[_TARGET].planner_contract and
+          WORKFLOW_MAP[_TARGET].planner_contract not in _got)
     check("摘掉的正是那一整块，其余逐字节不变",
           _got == _expected and _got != _menus,
           f"Δ={len(_menus) - len(_got)}")
@@ -164,7 +164,7 @@ if _TARGET:
     check("负控：真的摘了靶子时整份提示词**必须**不一样（否则这个形参没接线）",
           _p_yes != _p_no and _y == _n - 1, f"{_n} → {_y}")
     # **技能名在 planner 提示词里一共出现两处**，这一格把两处都点名（免得下一个人
-    # 以为"摘干净了"）：① `{skills_context}` 里那张**自动生成**的技能表——摘的就是它；
+    # 以为"摘干净了"）：① `{workflows_context}` 里那张**自动生成**的技能表——摘的就是它；
     # ② 判定规则 1 里**手写**的「- 技能名：什么时候用它」——**刻意不摘**。
     # ②留着是有意的：它是散文式的"这技能是干什么用的"，不是可点的菜单（可点的只有
     # tools schema，那一半在 ② 里也被摘了）；把它按名字做文本手术既脆又会让模型失去
@@ -205,9 +205,9 @@ check("形参存在且缺省为 None（缺省即无操作，见 ③ 的整份提
       (g._render_planner_prompt.__kwdefaults__ or {}).get("deny") is None,
       str(g._render_planner_prompt.__kwdefaults__))
 check("`planner_node` 从**上一轮受阻项**算 deny",
-      'deny = denied_skills(state.get("blocked") or [])' in _GRAPH_SRC)
+      'deny = denied_workflows(state.get("blocked") or [])' in _GRAPH_SRC)
 check("算 deny 在用它之前（顺序错了就是 UnboundLocalError 或静默用上一轮的值）",
-      "deny=deny" in _GRAPH_SRC[_GRAPH_SRC.index("deny = denied_skills("):])
+      "deny=deny" in _GRAPH_SRC[_GRAPH_SRC.index("deny = denied_workflows("):])
 # 20261008 批 ②：这一格的锚点随那次重构挪了形——原来那行把表达式内联在调用里，
 # 现在先算成局部变量（"只交清单"那一格要**重绑一次** llm，两处必须取同一个值，见
 # `graph.py` 的 `deny_pseudo` 那一段）。断言本身**不变**：`deny` 真的交给了
@@ -225,14 +225,14 @@ check("摘了菜单就记账（正控：为 0 说明这一跑根本没测到东�
       'record("planner", "menu_denied"' in _GRAPH_SRC)
 check("模型绕过 schema 报出禁用项 ⇒ 记账 + 一次性纠偏后 `continue`",
       'record("planner", "menu_denied_used"' in _GRAPH_SRC
-      and "if skill_name in deny:" in _GRAPH_SRC
+      and "if workflow_name in deny:" in _GRAPH_SRC
       and "_MENU_DENIED_NUDGE, \"菜单禁用\"" in _GRAPH_SRC)
 check("那一格在 `_forbids_tools` 覆盖**之后**（那一条是确定性降级，不该被这里抢走）",
-      _GRAPH_SRC.index("_forbids_tools(user_msg) and skill_name != \"chat\"")
-      < _GRAPH_SRC.index("if skill_name in deny:"))
+      _GRAPH_SRC.index("_forbids_tools(user_msg) and workflow_name != \"chat\"")
+      < _GRAPH_SRC.index("if workflow_name in deny:"))
 check("纠偏语里**不念**任何技能名（念一遍等于把摘掉的菜单又说回去；chat 除外，它是出口）",
       all(s.name not in g._MENU_DENIED_NUDGE
-          for s in visible_skills(_ROLE) if s.name != "chat"),
+          for s in visible_workflows(_ROLE) if s.name != "chat"),
       repr(g._MENU_DENIED_NUDGE[:80]))
 
 
@@ -242,54 +242,54 @@ check("纠偏语里**不念**任何技能名（念一遍等于把摘掉的菜单
 # 既有的 `_trim_done_reads` 拦得住"再执行一遍"，但它落在决策循环**之外**，于是这一轮
 # 以"如实收尾"结束，narrator 只能写出「这件事这一轮还没办，你再说一遍」。处方不是再劝
 # 一次（话术那条纠了两遍、产出逐字节同形），而是**把那个选项从菜单里摘掉**重决策一次。
-_RCPT = [{"skill": "account_roster", "tool": "list_accounts", "args": {}, "result": "…"}]
-_PLAN = {"skill": "account_roster", "tools": ["list_accounts({})"]}
+_RCPT = [{"workflow": "account_roster", "tool": "list_accounts", "args": {}, "result": "…"}]
+_PLAN = {"workflow": "account_roster", "tools": ["list_accounts({})"]}
 check("正控：读已取回 ⇒ 摘 `account_roster`（生产那两条 trace 的形状）",
-      g._sated_read_skill(_PLAN, _RCPT, _ROLE) == ("account_roster", ["list_accounts({})"]),
-      str(g._sated_read_skill(_PLAN, _RCPT, _ROLE)))
+      g._sated_read_workflow(_PLAN, _RCPT, _ROLE) == ("account_roster", ["list_accounts({})"]),
+      str(g._sated_read_workflow(_PLAN, _RCPT, _ROLE)))
 check("负控：**还没读过** ⇒ 不摘（首触路径一步都不动；也兜住「零回执轮」）",
-      g._sated_read_skill(_PLAN, [], _ROLE) is None
-      and g._sated_read_skill(_PLAN, None, _ROLE) is None)
+      g._sated_read_workflow(_PLAN, [], _ROLE) is None
+      and g._sated_read_workflow(_PLAN, None, _ROLE) is None)
 check("负控：读过的是**另一份参数** ⇒ 不摘（`_trim_done_reads` 的签名判据没被绕过）",
-      g._sated_read_skill({"skill": "account_roster",
+      g._sated_read_workflow({"workflow": "account_roster",
                            "tools": ['list_accounts({"status": "frozen"})']},
                           _RCPT, _ROLE) is None)
 check("负控：清单里还有**没读过**的件 ⇒ 不摘（「先搜到那一篇，再改它」那类两步走留在原地）",
-      g._sated_read_skill({"skill": "ops_report",
+      g._sated_read_workflow({"workflow": "ops_report",
                            "tools": ["get_server_status({})", "get_service_health({})"]},
                           [{"tool": "get_server_status", "args": {}}], _ROLE) is None)
 check("负控：模板为空的技能不摘（`content_query` 的工具靠 PARAMS 点名，摘它=关掉整条查询通道）",
-      g._sated_read_skill({"skill": "content_query", "tools": ['search_notes({"q": "x"})']},
+      g._sated_read_workflow({"workflow": "content_query", "tools": ['search_notes({"q": "x"})']},
                           [{"tool": "search_notes", "args": {"q": "x"}}], _ROLE) is None)
 check("负控：动作技能不摘（那一族有自己的重复通道与话术，不在这里抢）",
-      g._sated_read_skill({"skill": "device_query", "tools": ["list_devices({})"]},
+      g._sated_read_workflow({"workflow": "device_query", "tools": ["list_devices({})"]},
                           [{"tool": "list_devices", "args": {}}], "user") is None)
-check("负控：角色看不见的技能不摘（可见性只走 `visible_skills` 那一处，同 ⑤）",
-      g._sated_read_skill(_PLAN, _RCPT, "user") is None)
+check("负控：角色看不见的技能不摘（可见性只走 `visible_workflows` 那一处，同 ⑤）",
+      g._sated_read_workflow(_PLAN, _RCPT, "user") is None)
 
 # 候选集：对每个可见技能都喂一份"它的工具全已取回"的计划——既防这一节空转，也把
 # "摘技能比剔一次调用影响面大得多"这条边界钉成集合判据（写技能一个都不许进来）。
 _pair = lambda s: list(s.plan) + [(t, {}) for t in s.extra_plan_tools]  # noqa: E731
 _cand: dict = {}
-for _s in visible_skills(_ROLE):
+for _s in visible_workflows(_ROLE):
     if _s.chat or not _pair(_s):
         continue
-    _got = g._sated_read_skill(
-        {"skill": _s.name,
+    _got = g._sated_read_workflow(
+        {"workflow": _s.name,
          "tools": [f"{t}({json.dumps(a, ensure_ascii=False)})" for t, a in _pair(_s)]},
         [{"tool": t, "args": a} for t, a in _pair(_s)], _ROLE)
     if _got:
         _cand[_s.name] = _got
 check("候选集非空（≥5 个只读台账类技能）且**一个带写工具的技能都不在里头**",
       len(_cand) >= 5
-      and not any(any(authz.is_write(t) for t, _ in _pair(SKILL_MAP[n]))
+      and not any(any(authz.is_write(t) for t, _ in _pair(WORKFLOW_MAP[n]))
                   for n in _cand),
       f"{len(_cand)} 个：{'、'.join(sorted(_cand))}")
 check("生产那两条 trace 的形状（`account_roster`）在候选集里",
       "account_roster" in _cand, "、".join(sorted(_cand)))
-check("`content_query` 与 `_ACTION_SKILLS` 两族都不在候选集里（上面逐条负控的集合版）",
-      "content_query" not in _cand and not (set(_cand) & set(g._ACTION_SKILLS)),
-      f"{sorted(set(_cand) & set(g._ACTION_SKILLS))}")
+check("`content_query` 与 `_ACTION_WORKFLOWS` 两族都不在候选集里（上面逐条负控的集合版）",
+      "content_query" not in _cand and not (set(_cand) & set(g._ACTION_WORKFLOWS)),
+      f"{sorted(set(_cand) & set(g._ACTION_WORKFLOWS))}")
 
 # 判据同源：这条一旦自己写一份签名比较，就会出现"系统说已取回、却还把那个技能留在
 # 菜单里"（同一个事实两套判据必然漂移）。
@@ -314,7 +314,7 @@ class _FakeCtx:
         # 出处引文那一档（`AGENT_EVIDENCE`）：`_strip_menu` 重绑客户端时要读它传给
         # `bind_planner_tools`（schema 里给不给 `evidence` 那一格）。这里给 False = 出厂档。
         self._evidence = False
-        self.deny = {"blocked_skill"}          # 上一轮受阻项：必须是**并集**，不能被覆盖
+        self.deny = {"blocked_workflow"}          # 上一轮受阻项：必须是**并集**，不能被覆盖
         self._base_llm = _FakeLLM()
         self.llm = "还没重绑"
         self.user_msg, self.rounds = user_msg, 1
@@ -326,7 +326,7 @@ class _FakeCtx:
 _c = _FakeCtx()
 g._strip_menu(_c, "account_roster")
 check("`_strip_menu` ①并进 `deny`（不是覆盖——覆盖会把上一轮的受阻项放回菜单）",
-      _c.deny == {"blocked_skill", "account_roster"}, str(_c.deny))
+      _c.deny == {"blocked_workflow", "account_roster"}, str(_c.deny))
 check("`_strip_menu` ②重绑了客户端，且交下去的 schema 里真没有它（schema 那一半）",
       _c.llm is _c._base_llm and _c.llm.schema is not None
       and "account_roster" not in _names(_c.llm.schema), f"n={len(_c.llm.schema or [])}")
@@ -346,7 +346,7 @@ try:
     _c1 = _FakeCtx(user_msg="给「demo」发个通知")
     _r1 = g._name_write_correct(_c1)
     check("半 ①（有动作词）：接管本轮 + 摘掉 `account_roster` + 话术是 `_name_write_nudge` 那份",
-          _r1 is True and _c1.deny == {"blocked_skill", "account_roster"}
+          _r1 is True and _c1.deny == {"blocked_workflow", "account_roster"}
           and _c1.correction == g._name_write_nudge(_PLAN, _c1.user_msg, 1, _ROLE)
           and "照主人的原话把工具规格写出来" in _c1.correction,
           repr(_c1.correction[:50]))
@@ -358,19 +358,19 @@ try:
     _c2 = _FakeCtx(user_msg="猫咪给demo用户一条通知，以你的口吻说他被降级了，然后把降级身份执行")
     _r2 = g._name_write_correct(_c2)
     check("半 ②（无动作词）：接管本轮 + 摘掉 `account_roster` + 话术是 `_SATED_READ_NUDGE`",
-          _r2 is True and _c2.deny == {"blocked_skill", "account_roster"}
+          _r2 is True and _c2.deny == {"blocked_workflow", "account_roster"}
           and _c2.correction == g._SATED_READ_NUDGE
           and _c2.correction_kind == "读已取回",
           repr(_c2.correction[:50]))
     check("半 ② 记账另起一条事件（不复用 `name_nudge`）：两条的触发判据不同，"
           "合成一条之后「话术那条到底命中了没有」就查不出来了",
           _EVENTS[-1][0][:2] == ("planner", "sated_read_strip")
-          and _EVENTS[-1][1].get("skill") == "account_roster",
+          and _EVENTS[-1][1].get("workflow") == "account_roster",
           str(_EVENTS[-1]))
     # 负控：还没读过 ⇒ 两条都不接管（首触路径一步不动）
     _c3 = _FakeCtx(user_msg="猫咪给demo用户一条通知", receipts=[])
     check("负控：回执为空 ⇒ 两条都不接管，`deny` 与话术一个字节没动",
-          g._name_write_correct(_c3) is False and _c3.deny == {"blocked_skill"}
+          g._name_write_correct(_c3) is False and _c3.deny == {"blocked_workflow"}
           and _c3.correction == "" and _c3.llm == "还没重绑")
     # 负控：这一轮前面几格已经纠过一次 ⇒ **一个字都不改**。这一格是**回归锁**：
     # 这两半合流的那次重构里，原来那句 `nudge = None if c.correction else …` 被
@@ -380,13 +380,13 @@ try:
     _c4.correction = "（参数不齐那条纠偏语）"
     check("负控：本轮已纠过一次（`correction` 非空）⇒ 不接管、不覆盖、不摘菜单",
           g._name_write_correct(_c4) is False and _c4.correction == "（参数不齐那条纠偏语）"
-          and _c4.deny == {"blocked_skill"} and _c4.llm == "还没重绑")
+          and _c4.deny == {"blocked_workflow"} and _c4.llm == "还没重绑")
 finally:
     g.record = _REC
 
-check("接线：判据只有 `_name_write_correct` 一处调 `_sated_read_skill`（定义 1 + 调用 1）"
+check("接线：判据只有 `_name_write_correct` 一处调 `_sated_read_workflow`（定义 1 + 调用 1）"
       "——两处各判一遍必然漂移",
-      _GRAPH_SRC.count("_sated_read_skill(") == 2)
+      _GRAPH_SRC.count("_sated_read_workflow(") == 2)
 check("两条事件在同一个函数里、`name_nudge` 在前（顺序即优先级：有动作词就用更有指向的话术）",
       _GRAPH_SRC.index('record("planner", "name_nudge"')
       < _GRAPH_SRC.index('record("planner", "sated_read_strip"'))

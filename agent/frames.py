@@ -113,7 +113,7 @@ GATE_STATE_KEYS = frozenset({
 # 20261016 实测**是十一格**，那四个只是 `_confirm_popup` **函数体里**直接读的）：
 #
 #   messages         _confirm_popup:12113 —— 喂 `_target_evidence`（"文章 id 有据"）
-#   plan_obj         ← _plan_skill:12362 —— 令牌里签的技能名，空 ⇒ sign 拒签 ⇒ 卡弹不出
+#   plan_obj         ← _plan_workflow:12362 —— 令牌里签的技能名，空 ⇒ sign 拒签 ⇒ 卡弹不出
 #   receipts         _confirm_popup:12260
 #   ledger           _confirm_popup:12130（`_ledger_pending_text`）
 #   executed         ← _grant_covers:8837 —— **20261012 第二次收窄那一格**
@@ -227,13 +227,13 @@ def plan_for_gate(plan_obj: dict) -> dict:
     """`plan_obj` → **能被 `plan_state` 编码**的那份（缺键补上，不静默）。
 
     `plan_state`（= `plan_encode` 的唯一调用点，`tests/test_plan_channel.py` 用源码锁
-    钉着）要 `skill` 与 `reply` 两个键，缺一个就是 `KeyError`。本线的 `_plan_of` 在
+    钉着）要 `workflow` 与 `reply` 两个键，缺一个就是 `KeyError`。本线的 `_plan_of` 在
     **一条工具调用都没发生**时返回 `{}`（纯闲聊轮），那时生产那边的技能名是 `chat`
-    ——按它补，别填空串：`gate_node` 拿 `plan["skill"]` 当分族判据的入参，空串会退化
+    ——按它补，别填空串：`gate_node` 拿 `plan["workflow"]` 当分族判据的入参，空串会退化
     成宽查（漏判，方向安全但读数与生产不是同一档）。
     """
     obj = dict(plan_obj or {})
-    obj.setdefault("skill", "chat")
+    obj.setdefault("workflow", "chat")
     obj.setdefault("tools", [])
     obj.setdefault("note", "")
     obj.setdefault("reply", "")

@@ -342,7 +342,7 @@ def main() -> int:
     dec = _decisions(tr2)
     print("  决策：")
     for e in dec:
-        print(f"    round {e.get('round')} skill={e.get('skill')} tools={e.get('tools')} "
+        print(f"    round {e.get('round')} workflow={e.get('workflow')} tools={e.get('tools')} "
               f"status={e.get('status')}")
     picked = any("toggle_effect" in " ".join(e.get("tools") or []) for e in dec)
     check("planner 认下这件事并把剩余那一步规划出来了（tools 里有 toggle_effect）",

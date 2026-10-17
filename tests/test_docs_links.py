@@ -94,6 +94,23 @@ _TOPS = {d.name for d in ROOT.iterdir()
          if d.is_dir() and d.name not in SKIP_PARTS and not d.name.startswith(".")}
 _MARKERS = ("已删", "删除", "待建", "未建", "占位", "xxx")
 _PY_RE = re.compile(r"`([A-Za-z0-9_./\-]+/[A-Za-z0-9_./\-]+\.py)`")
+# **改名的旧路径**（20261017 `skill` → `workflow`）：记录型文档逐字留着当时的文件名，
+# 那不是"指向不存在的文件"，是"当时叫这个"。旧的**文件级豁免**会把这一整族判据一起放走
+# （记录型文档里真指错了也看不见）；这里改成从说明行现读一张**改名表**，逐条精确放行：
+#   · 表来自文档正文里的 `` `旧.py` → `新.py` ``，不写死在测试里（改名再来一次不必改这里）；
+#   · **新路径必须在盘上**——否则一张自说自话的"改名表"就能把任意幽灵路径洗白；
+#   · 不在表里、盘上也没有的路径**照旧红**（判据没有收窄成"记录型文档免检"）。
+_RENAME_RE = re.compile(r"`([A-Za-z0-9_./\-]+\.py)`\s*→\s*`([A-Za-z0-9_./\-]+\.py)`")
+_RENAMED: dict[str, str] = {}
+for p in HANDWRITTEN:
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if "已改名" not in line:
+            continue
+        for old, new in _RENAME_RE.findall(line):
+            _RENAMED[old] = new
+check("改名表里的新路径都在盘上（自说自话的改名表不许洗白幽灵路径）",
+      all((ROOT / v).exists() for v in _RENAMED.values()) and bool(_RENAMED),
+      f"表={_RENAMED}")
 _ghost: list[str] = []
 for p in HANDWRITTEN:
     if p.parent == ROOT and p.name != "README.md":
@@ -103,7 +120,7 @@ for p in HANDWRITTEN:
             t = m.group(1)
             if t.startswith("/") or ".." in t or t.split("/")[0] not in _TOPS:
                 continue                  # 库内路径（langgraph/…）与父仓路径不归本套件管
-            if (ROOT / t).exists() or any(k in line for k in _MARKERS):
+            if (ROOT / t).exists() or t in _RENAMED or any(k in line for k in _MARKERS):
                 continue
             _ghost.append(f"{p.relative_to(ROOT)}:{i} → {t}")
 check("没有指向不存在文件的仓内 .py 路径（除已标已删/待建/未建的）",

@@ -30,7 +30,7 @@
 `published` 一个），漏写红、过期也红（同 `test_cross_language_tables.py` 的差集台账形状）。
 
 **本套件不管什么**（写下来免得起假安心）：
-  · `agent/skills.py` 的提示词里写着 `one/two`——那是**话术**（告诉模型该填什么），
+  · `agent/workflows.py` 的提示词里写着 `one/two`——那是**话术**（告诉模型该填什么），
     不是判据，改了不影响行为；
   · `adminops._TOP_ALIASES`（置顶）——那是 `0/1` 整数，Rust 侧没有对应词表；
   · `STATUS_CN` 的中文名——前端那份界面标签在父仓前端，与本侧这张只用于"说给主人听"
@@ -68,7 +68,7 @@ def _func_src(src: str, name: str) -> str:
     """某个顶层函数的源码段（AST 限定范围，不看全文）。
 
     ⚠️ 判据必须只看这几个函数里写了什么：整个 `adminops.py` 里还有别的 `"one"`/`"two"`
-    （`move_tag` 的参数校验、`skills.py` 的提示词），全文搜会把它们当成"这里还有一个产出点"
+    （`move_tag` 的参数校验、`workflows.py` 的提示词），全文搜会把它们当成"这里还有一个产出点"
     ——一条判据认错对象，比没有判据更坏（它会让真改错的那次看着是绿的）。
     """
     for node in ast.parse(src).body:

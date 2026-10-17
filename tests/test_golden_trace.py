@@ -97,7 +97,7 @@ check("显式参数优先于环境变量",
       golden_trace.resolve_run_id("20200101_000000") == "20200101_000000")
 tid = golden_trace.start_case(run_id, "case_demo", "把标签 X 挪到 Y 下面", "admin")
 from utils.trace import record  # noqa: E402  （生产同款入口，验证 contextvar 挂上了）
-record("planner", "llm_done", plan="SKILL=tag_update")
+record("planner", "llm_done", plan="WORKFLOW=tag_update")
 path = golden_trace.finish_case(tid, 1.5, frames=3)
 check("trace 落到 golden 目录下、文件名 = 用例 id",
       bool(path) and path == os.path.join(GOLDEN_ROOT, run_id, "case_demo.json"),
@@ -222,11 +222,11 @@ def _always_confirm_tools() -> frozenset:
         return frozenset()
 
 
-def _skill_tools(skill_name: str) -> "frozenset | None":
+def _workflow_tools(workflow_name: str) -> "frozenset | None":
     """技能 plan 里的工具名集合（`None` = 技能不存在/取不到判据）。"""
     try:
-        from agent.skills import SKILL_MAP
-        sk = SKILL_MAP.get(skill_name)
+        from agent.workflows import WORKFLOW_MAP
+        sk = WORKFLOW_MAP.get(workflow_name)
         if sk is None or not getattr(sk, "plan", None):
             return None
         return frozenset(t for t, _ in sk.plan)
@@ -261,30 +261,30 @@ for _c in _cases_jsonl:
                 # 不要求卡 ⇒ 这条通道的经典用法，无写路径断言（旧规矩的形状照旧放行）
                 continue
             _pay = _gold.get("require_confirm_payload") or {}
-            _skills = list(_pay.get("skill_any") or
-                           ([_pay["skill"]] if _pay.get("skill") else []))
+            _workflows = list(_pay.get("workflow_any") or
+                           ([_pay["workflow"]] if _pay.get("workflow") else []))
             _tools: set = set()
-            for _s in _skills:
+            for _s in _workflows:
                 # 技能取不到 ⇒ 空集 ⇒ 断言不放行（与 `_always_confirm_tools` 同一条纪律：
                 # 拿不到判据时朝严格那侧倒）
-                _tools |= set(_skill_tools(_s) or ())
+                _tools |= set(_workflow_tools(_s) or ())
             _always = _always_confirm_tools()
             check(f"{_c['id']}（第 {_r.get('round', '?')} 轮）: 声明身份 + 要求弹卡 ⇒ "
                   "卡上那族必须全在「一律弹窗」族"
                   "（恒弹卡 ⇒ 同轮结构上写不下去；否则真身份下真写是可能的）",
                   bool(_tools) and bool(_always) and _tools <= _always,
-                  f"skills={_skills!r} plan={sorted(_tools) or None} "
+                  f"workflows={_workflows!r} plan={sorted(_tools) or None} "
                   f"always_confirm={len(_always)} 条")
 
 # 判据自己的反向对照（这条族判定既不许恒真也不许恒假）：`board_audit` 的 plan 全在恒弹卡
 # 族里（所以上面那条对它放行），`tag_create` 不在（"同轮命令即确认"那条路是活的）——
 # 同一条判据对两个技能给出相反答案，才说明它真的在判东西。
 check("弹卡族判据的反向对照：board_audit 全在恒弹卡族、tag_create 不在",
-      bool(_skill_tools("board_audit"))
-      and _skill_tools("board_audit") <= _always_confirm_tools()
-      and not (_skill_tools("tag_create") <= _always_confirm_tools()),
-      f"board_audit={sorted(_skill_tools('board_audit') or [])} "
-      f"tag_create={sorted(_skill_tools('tag_create') or [])}")
+      bool(_workflow_tools("board_audit"))
+      and _workflow_tools("board_audit") <= _always_confirm_tools()
+      and not (_workflow_tools("tag_create") <= _always_confirm_tools()),
+      f"board_audit={sorted(_workflow_tools('board_audit') or [])} "
+      f"tag_create={sorted(_workflow_tools('tag_create') or [])}")
 
 # 接线（能力有测试 ≠ 接线有测试）：通道落在跑法里不代表夜间真给身份——脚本里少了那行
 # export，夜里跑的仍是 uid=0 的虚构态，而报告里只会安静地多出几条 SKIP。两条都要在，

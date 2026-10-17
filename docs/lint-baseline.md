@@ -7,7 +7,7 @@
 
 > ⚠️ 下表是 20260927 的读数，**别当现值用**。20261012 复测：**840 errors / 221 个文件**
 > （241 fixable）——15 天里涨的是**文件数**（新增的测试与 `eval/` 入口），不是哪个文件变脏：
-> 每文件的分布**形状没变**（`tests/test_skills.py` 108→111、`tools/base.py` 45→52、
+> 每文件的分布**形状没变**（`tests/test_workflows.py` 108→111、`tools/base.py` 45→52、
 > `tests/test_reports.py` 39→38、`eval/admin_write_probe.py` 28→31、`agent/graph.py` 16→22）。
 > 本文件是"新代码要干净"的**参照点**，不是"存量有多少"的**账本**——参照点没变，
 > 所以下面的纪律一条都不用改；但引用绝对数之前先按上面那行命令**自己跑一遍**。
@@ -43,7 +43,7 @@ uvx ruff@0.14.4 check --no-cache --statistics .   # 按规则计数
 
   ⇒ **578 里约 86% 是行长与导入排序**。这条要说清楚：基线数字大不代表代码烂，
   只代表这个仓没把格式化当门禁。真正值得看的是 F841/F811 那 9 条。
-- 最集中的文件：`tests/test_skills.py` 108、`tools/base.py` 45、`agent/skills.py` 41、
+- 最集中的文件：`tests/test_workflows.py` 108、`tools/base.py` 45、`agent/workflows.py` 41、
   `tests/test_reports.py` 39、`eval/admin_write_probe.py` 28、`agent/graph.py` 16。
 
 CI 目前只跑一个更窄的闸：`eval.yml` 的 `uv run --frozen ruff check --select F821 .`（未定义名，秒级）。
@@ -60,7 +60,7 @@ F821 是"会炸"的那一类，E/F/I/W 是"会烂"的那一类。本文件管后
    复审成本高、回滚粒度坏。存量清理单独成批（见下）。
    **E402 的大头不要修**：`eval/` 与 `tests/` 那 26 条在"先 `sys.path.insert` 再 import"
    的脚本里，是刻意的形态，改成包内相对导入是另一件事。**但库模块那几条不是**——
-   20261012 已清掉 `agent/skills.py` 里那 8 条（导入夹在 `NAV_MAP` 表之后），
+   20261012 已清掉 `agent/workflows.py` 里那 8 条（导入夹在 `NAV_MAP` 表之后），
    现存 1 条在 `agent/hostinfo.py`；这两处按"库代码 import 必须在顶部"办，不许再往回加。
 4. **不因为"反正存量有一堆"就把新代码也写脏**：存量条目是历史遗留，新代码按当下标准要求。
 
@@ -111,6 +111,6 @@ F821 是"会炸"的那一类，E/F/I/W 是"会烂"的那一类。本文件管后
   F401/F811 的自动修会删掉"为了副作用而 import"的行与"刻意重复导入"的行。
 - **F841/F811 那 9 条先单独看一眼**：这批条目与排版无关，指的是"某段计算/某个定义没人用"。
   大概率无害，但值得用一次阅读换掉"我猜它无害"。已看过的一条：
-  `agent/skills.py:1419-1420` 的 `tools`/`note` 是 `_expand_write_skill` 里的死局部
+  `agent/workflows.py:1419-1420` 的 `tools`/`note` 是 `_expand_write_workflow` 里的死局部
   （每个分支各自早退/自建列表，两个变量从头到尾没人读）——删掉即可，无行为影响。
   其余 8 条在测试与 `eval/` 里，是"赋值了没断言"一类。

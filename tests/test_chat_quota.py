@@ -5,7 +5,7 @@
   · `server.py`         —— C1/C2 注入行（**整个键缺席 ≠ 剩 0 轮**）、C7 拒答的**帧形状**
                            与"零 LLM、不占并发槽"这两条硬事实（断言成**行为**，不是 grep）；
   · `tools/base.py`     —— 三个写工具的五段式 + `_admin_quota_post` 的**非 200 按族分流**；
-  · `agent/skills.py`   —— 三个技能的展开（名字通道、纯数字拒绝、驳回理由必填/占位符）；
+  · `agent/workflows.py`   —— 三个技能的展开（名字通道、纯数字拒绝、驳回理由必填/占位符）；
   · `agent/authz.py`    —— scope、一律弹窗族、三条后果句互不同形；
   · `agent/adminops.py` —— 卡面 / 回执行 / "状态已达成 ⇒ 不弹卡"的判据；
   · 接线锁              —— 台账 meta 白名单、词表分岔、只读通道里没有写工具。
@@ -41,7 +41,7 @@ import server  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import _RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflows import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_user_notice / test_account_freeze 的那一处）──────────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**（宁可退回追问，也不发一个
@@ -194,8 +194,8 @@ def kind(out):
     return getattr(out, "kind", None)
 
 
-def verdict(name, args, out, skill, args_ok=True):
-    return _check_spec(name, args, args_ok, str(out), skill,
+def verdict(name, args, out, workflow, args_ok=True):
+    return _check_spec(name, args, args_ok, str(out), workflow,
                        kind(out) or "ok", getattr(out, "meta", None))
 
 
@@ -362,14 +362,14 @@ check("quota_reject 带上理由，注记点明**没有撤回的通道**",
 # 两族的目标**刻意不同形**（20260929 批 H · S2）：批准/驳回治的是"队列里等着办的那一行"
 # ⇒ 只认台账上的**编号**（账号名填进去就是零工具，系统不去猜是哪一个账号）；主动重置治的
 # 是"主人点名要动某个账号"⇒ 仍只认**账号名**（编号填进去零工具，见下一条）。
-for _skill, _params, _why, _must in [
+for _workflow, _params, _why, _must in [
     ("quota_approve", {}, "缺账号 id", "不认账号名"),
     ("quota_approve", {"user_id": "Alice"}, "把账号名填进编号位", "不认账号名"),
     ("quota_reset", {"name": "  "}, "名字只有空白", "不要"),
     ("quota_reject", {"user_id": "126"}, "缺驳回理由", "替他"),
     ("quota_reject", {"user_id": "126", "reason": "  "}, "理由只有空白", "替他"),
 ]:
-    _bad = instantiate_plan(_skill, _params, ROLE_ADMIN)
+    _bad = instantiate_plan(_workflow, _params, ROLE_ADMIN)
     check(f"{_why} → **零工具** + 非空注记，且注记里有「{_must}」",
           _bad["tools"] == [] and _must in _bad["note"],
           f"{_bad['tools']} {_bad['note'][:70]}")
@@ -725,11 +725,11 @@ check("  参数解不出 ⇒ args_parse（在文本判据之前）", _r == "args
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑩ 接线锁：台账白名单 / 词表分岔 / 只读通道不含写工具 / 过程行有臂")
-from agent.skills import (  # noqa: E402
-    _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS, _LEDGER_TARGET_WRITE_SKILLS,
-    _WRITE_NAME_TARGET_SKILLS, WRITE_SKILL_NAMES, callable_query_tools,
+from agent.workflows import (  # noqa: E402
+    _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS, _LEDGER_TARGET_WRITE_WORKFLOWS,
+    _WRITE_NAME_TARGET_WORKFLOWS, WRITE_WORKFLOW_NAMES, callable_query_tools,
 )
-from agent.skills import SKILL_MAP  # noqa: E402
+from agent.workflows import WORKFLOW_MAP  # noqa: E402
 
 for _t in _Q3 + ("list_quota_requests",):
     check(f"{_t} 在工具注册表里（不在 ⇒ 技能模板展开出来的 spec 到不了 execute）",
@@ -765,14 +765,14 @@ check("  `list_quota_requests` 走默认词表（它是读，不参与目标出�
       g._lexicon("list_quota_requests") == g._DEFAULT_LEXICON, "")
 
 for _s in ("quota_approve", "quota_reject", "quota_reset"):
-    check(f"⭐ 技能名 {_s} 在 `WRITE_SKILL_NAMES`（两个名单**都要加**，漏一个是静默的："
-          f"落进尾部兜底 ⇒ 零工具零写还不报错）", _s in WRITE_SKILL_NAMES)
-    check(f"  技能名 {_s} 在 `_LEDGER_TARGET_WRITE_SKILLS` ∪ `_WRITE_NAME_TARGET_SKILLS`"
+    check(f"⭐ 技能名 {_s} 在 `WRITE_WORKFLOW_NAMES`（两个名单**都要加**，漏一个是静默的："
+          f"落进尾部兜底 ⇒ 零工具零写还不报错）", _s in WRITE_WORKFLOW_NAMES)
+    check(f"  技能名 {_s} 在 `_LEDGER_TARGET_WRITE_WORKFLOWS` ∪ `_WRITE_NAME_TARGET_WORKFLOWS`"
           f"（漏一个 ⇒ 目标出处那一步不过）",
-          _s in (_LEDGER_TARGET_WRITE_SKILLS | _WRITE_NAME_TARGET_SKILLS))
-    check(f"  {_s} 注册在 SKILL_MAP 且仅管理员可见",
-          _s in SKILL_MAP and ROLE_ADMIN in SKILL_MAP[_s].roles
-          and ROLE_USER not in SKILL_MAP[_s].roles, "")
+          _s in (_LEDGER_TARGET_WRITE_WORKFLOWS | _WRITE_NAME_TARGET_WORKFLOWS))
+    check(f"  {_s} 注册在 WORKFLOW_MAP 且仅管理员可见",
+          _s in WORKFLOW_MAP and ROLE_ADMIN in WORKFLOW_MAP[_s].roles
+          and ROLE_USER not in WORKFLOW_MAP[_s].roles, "")
 check("⭐ 写工具**不在**只读点名白名单里（写工具进只读通道 = 绕过同意闸）",
       not (set(_Q3) & (set(_EXPLICIT_TOOLS) | set(_CALLABLE_QUERY_TOOLS))), "")
 check("⭐ `list_quota_requests` 在管理员的可点名清单里"
@@ -818,19 +818,19 @@ class _FakeTool:
         return self.out
 
 
-def _grant_of(spec, skill=None):
+def _grant_of(spec, workflow=None):
     """照**卡上签的那一件**造令牌（20261012 起 `_grant_covers` 按工具名+参数比对：
     光有令牌不算数——空壳 `{"token": "x"}` 会让确认轮重新弹卡）。"""
     args, ok = g._tool_args(spec)
     assert ok, spec
-    return {"token": "x", "skill": skill, "specs": [{"tool": g._tool_name(spec),
+    return {"token": "x", "workflow": workflow, "specs": [{"tool": g._tool_name(spec),
                                                      "args": args}]}
 
 
-def _run_exec(msg, spec, skill, grant=None, users=DIRD, pending=None):
+def _run_exec(msg, spec, workflow, grant=None, users=DIRD, pending=None):
     _CALLS.clear()
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = [spec]
     state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content=msg)]}
@@ -856,8 +856,8 @@ try:
           "Alice" in _pop.get("q", "") and "我想接着问" in _pop.get("q", ""),
           _pop.get("q", "")[:110])
     _payload = _confirm.inspect(_pop.get("token") or "") or {}
-    check("  令牌载荷里的 skill 与 specs 就是这一件（卡上写什么就签什么）",
-          _payload.get("skill") == "quota_approve"
+    check("  令牌载荷里的 workflow 与 specs 就是这一件（卡上写什么就签什么）",
+          _payload.get("workflow") == "quota_approve"
           and _payload.get("specs") == [{"tool": "approve_quota_request",
                                         "args": {"user_id": 126}}], str(_payload))
     r = _run_exec("批准一下 Alice 的额度申请", _SPEC_A, "quota_approve",

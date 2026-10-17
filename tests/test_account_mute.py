@@ -14,12 +14,12 @@
                             `changed` 判据带 `mutedUntil` / 出口 kind）；
   · `agent/graph.py`    —— 挂点（`_WRITE_NAME_FIELDS` / `_NAME_TARGET_TOOLS` /
                             `_ACCOUNT_TOOLS` / `_MUTE_TOOLS` 不相交 / 词表分派）；
-  · `agent/skills.py`   —— 展开层（时长认不出 ⇒ **零工具 + 追问**，绝不静默按永久办）；
+  · `agent/workflows.py`   —— 展开层（时长认不出 ⇒ **零工具 + 追问**，绝不静默按永久办）；
   · `agent/authz.py`    —— 两个工具**都在**"一律弹窗"族里（每次都要主人点一下）。
 
 工具名 `account_mute` / `account_unmute` 是**后端先定的契约**（`src/routes/mod.rs`
 那条路由的注），技能面另起 `mute_account` / `unmute_account`——第 ⑥ 节把这条名字
-契约钉死：两侧混用会让 `_expand_write_skill` / `_confirm_one` 的分支**静默不命中**。
+契约钉死：两侧混用会让 `_expand_write_workflow` / `_confirm_one` 的分支**静默不命中**。
 
 用法：.venv/bin/python tests/test_account_mute.py
 """
@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT))
 import agent.adminops as A  # noqa: E402
 import agent.authz as authz  # noqa: E402
 import agent.graph as g  # noqa: E402
-import agent.skills as skills  # noqa: E402
+import agent.workflows as workflows  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.principal import ROLE_ADMIN, Principal  # noqa: E402
 
@@ -382,28 +382,28 @@ for params, want_tool, why in [
     ({"name": "guest5", "hours": "三天"}, "account_mute", "中文数字 + 天"),
     ({"name": "guest5", "hours": 72}, "account_mute", "数字"),
 ]:
-    obj = skills.instantiate_plan("mute_account", params)
+    obj = workflows.instantiate_plan("mute_account", params)
     tools = obj.get("tools") or []
     check(f"mute_account {why} ⇒ 排一条 {want_tool}", len(tools) == 1
           and tools[0].startswith(want_tool + "("), str(tools))
-obj = skills.instantiate_plan("mute_account", {"name": "guest5", "hours": "随便吧"})
+obj = workflows.instantiate_plan("mute_account", {"name": "guest5", "hours": "随便吧"})
 check("时长认不出 ⇒ **零工具** + 注记（不许自己挑一个顶上，也不许当成永久）",
       not obj.get("tools") and "不要" in (obj.get("note") or "")
       and "禁多久" in (obj.get("note") or ""), str(obj.get("note")))
 check("  「三天」进 TOOLS 行的是**归一后的小时数**，不是原话（卡面与执行同源）",
-      "72" in (skills.instantiate_plan("mute_account", {"name": "guest5", "hours": "三天"})
+      "72" in (workflows.instantiate_plan("mute_account", {"name": "guest5", "hours": "三天"})
                .get("tools") or [""])[0])
-obj = skills.instantiate_plan("unmute_account", {"name": "guest5", "hours": 72})
+obj = workflows.instantiate_plan("unmute_account", {"name": "guest5", "hours": 72})
 check("解禁方向多填的 hours 一律丢掉（这件事没有时长这一维）",
       obj.get("tools") == ['account_unmute({"name": "guest5"})'], str(obj.get("tools")))
-obj = skills.instantiate_plan("mute_account", {"hours": 72})
+obj = workflows.instantiate_plan("mute_account", {"hours": 72})
 check("缺账号名 ⇒ 零工具 + 追问（不许拿猜的名字顶上）",
       not obj.get("tools") and "缺少账号名" in (obj.get("note") or ""))
-obj = skills.instantiate_plan("mute_account", {"name": "126", "hours": 72})
+obj = workflows.instantiate_plan("mute_account", {"name": "126", "hours": 72})
 check("给的是编号 ⇒ 零工具 + 追问**名字**（系统不支持按编号操作账号）",
       not obj.get("tools") and "不支持按编号" in (obj.get("note") or ""))
 check("注记里点名「禁言不踢人下线」（planner/narrator 读的就是这一份）",
-      "禁言不踢人下线" in (skills.instantiate_plan("mute_account", {"name": "guest5"})
+      "禁言不踢人下线" in (workflows.instantiate_plan("mute_account", {"name": "guest5"})
                            .get("note") or ""))
 
 # ══════════════════════════════════════════════════════════════════
@@ -413,11 +413,11 @@ check("工具名 = 后端契约（`account_mute` / `account_unmute`，不是 mut
       {"account_mute", "account_unmute"} <= _REG_NAMES
       and not ({"mute_account", "unmute_account"} & _REG_NAMES), str(sorted(_REG_NAMES)[:3]))
 check("技能名与工具名**不是**同一套字面量（技能 = 事件，工具 = 动作）",
-      "mute_account" in skills.WRITE_SKILL_NAMES
-      and "unmute_account" in skills.WRITE_SKILL_NAMES
-      and "account_mute" not in skills.WRITE_SKILL_NAMES)
+      "mute_account" in workflows.WRITE_WORKFLOW_NAMES
+      and "unmute_account" in workflows.WRITE_WORKFLOW_NAMES
+      and "account_mute" not in workflows.WRITE_WORKFLOW_NAMES)
 check("技能注册表里两个技能都在（名字对不上 ⇒ planner 选不出来）",
-      {s.name for s in skills.SKILLS} >= {"mute_account", "unmute_account"})
+      {s.name for s in workflows.WORKFLOWS} >= {"mute_account", "unmute_account"})
 check("_WRITE_NAME_FIELDS：两个工具都按 name 指认目标",
       g._WRITE_NAME_FIELDS.get("account_mute") == ("name", None)
       and g._WRITE_NAME_FIELDS.get("account_unmute") == ("name", None))
@@ -443,7 +443,7 @@ check("写声称词根：两个工具都有（`_write_done_claim` 的并集正�
       "account_mute" in __import__("agent.action_text", fromlist=["x"]).WRITE_CLAIM_ROOTS
       and "account_unmute" in __import__("agent.action_text", fromlist=["x"]).WRITE_CLAIM_ROOTS)
 check("角色隔离：只有管理员可见（普通用户选不出这两个技能）",
-      all(s.roles and "admin" in s.roles for s in skills.SKILLS
+      all(s.roles and "admin" in s.roles for s in workflows.WORKFLOWS
           if s.name in ("mute_account", "unmute_account")))
 
 # ══════════════════════════════════════════════════════════════════

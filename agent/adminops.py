@@ -570,7 +570,7 @@ def render_tag_created(info: TagInfo) -> str:
     判定"点名了本轮没执行的工具" ⇒ 整条回复被换成"这一轮什么都没执行"，
     与该标签**真的建成了**这件事当面矛盾（165645）。工具名是系统内部词汇，
     一句给访客看的人话里出现它，就等着被复述成"我调用了它"。同源 lint 见
-    tests/test_skills.py::test_no_tool_name_in_user_facing_text。"""
+    tests/test_workflows.py::test_no_tool_name_in_user_facing_text。"""
     color = f"，颜色：{describe_color(info.color)}" if info.color else ""
     return (f"已新建{level_cn(info)}标签「{info.label}」（id={info.id}{color}）。"
             f"它目前还挂在标签字典里、没有挂到任何文章上——"
@@ -871,7 +871,7 @@ def render_board_deleted(row) -> str:
 _DUE_REL_DAYS = {"今天": 0, "今日": 0, "明天": 1, "明日": 1, "后天": 2,
                  "後天": 2, "大后天": 3, "大後天": 3}
 # 末尾那个 `[日号]?` 里的「号」是 20261008 补的：**「日」与「号」在这句人话里同义**，
-# 而「X月X号」才是主人嘴里更常见的形态——`skills.py` 的能力文案自己举的例句就是
+# 而「X月X号」才是主人嘴里更常见的形态——`workflows.py` 的能力文案自己举的例句就是
 # 「把〈…〉挪到 10 月 8 号」，旧表却不认它 ⇒ 主人明明说了日子，助手反问「你说是哪一天」。
 # 只在这两个形态的**日位**加一个字：裸的「8号」仍不认（那要另立一条"按当月"的规则，
 # 与「不带年份按当年」不是同一件事，别顺手扩）。
@@ -883,7 +883,7 @@ _DUE_FULL_RE = re.compile(r"^(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2
 _DUE_MONTH_DAY_RE = re.compile(r"^(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*"
                                + _DUE_DAY_SUFFIX + r"$")
 # 「认哪些写法」这句人话**只写一次**（四处报错文案共用）：它此前手抄在
-# `skills.py`×2 与 `tools/base.py`×2，四处已经开始各漂各的——改一处漏一处，就是
+# `workflows.py`×2 与 `tools/base.py`×2，四处已经开始各漂各的——改一处漏一处，就是
 # "系统告诉模型的面"与"真正认的面"不是同一张（同族病：`_ITEM_POSITION_FORMS`）。
 DUE_DATE_FORMS_CN = "年-月-日 / 年/月/日 / X月X日（X月X号也算） / 今天·明天·后天"
 
@@ -1145,7 +1145,7 @@ def render_todo_done(text: str, *, changed: bool = True) -> str:
 # ── 待办"改排期"（20260929 批 G）──────────────────────────────────────────
 # 「清空排期」这条通道上的**契约写法**：改排期与新增不一样——新增那次"没给 date"就是
 # 没排期，而这里**必须**分出三种处境：给了日子 / 说了不要排期 / 压根没说（第三种要
-# 回头问主人，见 `skills._expand_todo_reschedule_skill`）。所以"清掉"要有一个**说得出
+# 回头问主人，见 `workflows._expand_todo_reschedule_workflow`）。所以"清掉"要有一个**说得出
 # 口**的写法，就是这一个词；工具侧另收几个明显同义的词兜底（封闭小集，见
 # `tools.base._TODO_CLEAR_DATES`），但契约只有这一个。
 _TODO_CLEAR_WORD = "未排期"
@@ -1925,7 +1925,7 @@ def render_quota_action(kind: str, name: str, users=None, quota_requests=None,
 
     **两条目标通道**（20260929 批 H · S2）：`user_id` 给得起就走 **id 通道**（批准与
     驳回的参数是台账里的 uid，模型的参数里根本没有名字——名字从名录快照取回来印，
-    取不到就只印编号）；给不起就走**名字通道**（主动重置仍按账号名，见 `_expand_write_skill`
+    取不到就只印编号）；给不起就走**名字通道**（主动重置仍按账号名，见 `_expand_write_workflow`
     那一支的注）。两条通道渲染出来的卡面**同形同事实**，只在"名录里没有这一行"时
     措辞各自说准（一个说名字、一个说编号）。
     """
@@ -2447,7 +2447,7 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         #     从名录快照取回来印，卡面与名字通道同形。
         #   · 主动重置仍走**名字通道**：站内没有"列全部账号"的读工具，改成只认 id
         #     会**静默丢掉**「给某个没申请过的人重置额度」这条真能力（见 `tools/base.py`
-        #     额度节头注与 `_expand_write_skill` 那一支）。
+        #     额度节头注与 `_expand_write_workflow` 那一支）。
         kind = {"approve_quota_request": "approve",
                 "reject_quota_request": "reject",
                 "reset_user_quota": "reset"}[tool]
@@ -2465,7 +2465,7 @@ def linked_units(specs) -> list:
     `pick:<i>`、令牌里的 `units` 三处共用这一份（编号只在本函数里生成一次）。
 
     现在只有一类依赖，就是 `article_tags` 的「先建再挂」（20261009，见
-    `skills.instantiate_plan`）：主人要挂的名字站内还没有时，那一批是 `create_tag(X)`
+    `workflows.instantiate_plan`）：主人要挂的名字站内还没有时，那一批是 `create_tag(X)`
     紧跟 `set_article_tags(… add X)`——**后者只有在同一批里先执行前者才可能成功**
     （工具按名字精确匹配，站内没有就拒绝、不自动新建）。批 F 的「只办第 N 件」
     （20260929）按 **spec 逐条**编号，于是在这样一张卡上"一件事"被切成两个可挑的

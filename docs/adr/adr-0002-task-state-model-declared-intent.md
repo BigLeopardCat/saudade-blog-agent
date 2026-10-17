@@ -1,5 +1,8 @@
 # ADR-0002：未完成的意图由模型声明，完成由回执认定
 
+
+> ⚠️ 20261017 起 `skill` 已改名为 **`workflow`**（`agent/skills.py` → `agent/workflows.py`、`tests/test_skills.py` → `tests/test_workflows.py`、`tests/test_slim_skills.py` → `tests/test_slim_workflows.py`；计划 IR `SKILL=` → `WORKFLOW=`）。本文档保留**当时的名字**，不回溯改写；读它时把 skill 读作 workflow 即可。
+
 - **状态**：已采纳（20260927，批 D）／**拨盘 20261007 关闭**——产线 `.env` 的
   `AGENT_TASK_STATE` 当天由 `1` 改回 `0`（**机制与表都保留**，只关写侧拨盘）。
   依据与复核触发条件见文末《20261007 去留复核》。**20261008 本决策的"声明"那一半加了一个新

@@ -65,7 +65,7 @@
     如实记在这里。
 
 ⚠️ **本模块不许 import `agent.graph`**（与 `agent/planner_llm.py` 同一条）：graph 是
-消费方，反向 import 会成环。本模块只依赖 `agent.skills` 的可见技能表。
+消费方，反向 import 会成环。本模块只依赖 `agent.workflows` 的可见技能表。
 """
 
 from __future__ import annotations
@@ -78,13 +78,13 @@ import re
 from datetime import datetime
 from typing import Any
 
-from agent.skills import (SKILL_MAP, args_are_bound, callable_query_tools,
-                          instantiate_plan, split_tool_spec, visible_skills)
+from agent.workflows import (WORKFLOW_MAP, args_are_bound, callable_query_tools,
+                          instantiate_plan, split_tool_spec, visible_workflows)
 
 logger = logging.getLogger(__name__)
 
 # 模型侧的两个伪函数名（**20260927 拆成两个**，理由见 `TASK_DROP` 上方那段）。
-# 它们**不是技能**（技能表 `SKILLS` 里没有它们，`instantiate_plan` 也不认）——只在
+# 它们**不是技能**（技能表 `WORKFLOWS` 里没有它们，`instantiate_plan` 也不认）——只在
 # 接口层的 `tools` 数组里出现，被 `tool_calls_to_plan` 认出来后才交给本模块。
 # 刻意用**不与任何技能重名**的名字：重名会让"模型到底点了技能还是登记"在 trace
 # 里分不清。
@@ -165,7 +165,7 @@ TOOL_MAX = 64               # 工具名 / 技能名（技能名比工具名短�
 # 取值取**保守**一侧：父仓只放宽不收紧，所以跟着小的那个数永远安全。
 #
 # 20261012 两侧已同步到 **16000**（批 A 落地时一起改的：步骤从"只有工具名"扩成
-# `{label,tool,skill,args}`，参数落库，4000 字符装不下八步带实参的计划）。
+# `{label,tool,workflow,args}`，参数落库，4000 字符装不下八步带实参的计划）。
 # 这个数是**算出来的**：
 # `steps` 是 MySQL `text`＝65535 **字节**，而截断数的是**字符**；utf8mb4 下 1 字符
 # ≤ 4 字节 ⇒ 16000 × 4 = 64000 < 65535，最坏情况也顶不到列宽。再往上调之前，
@@ -196,7 +196,7 @@ TASK_DROP_DESC = (
 TASK_INTENTS_DESC = (
     "把主人**这一句话里要办的每一件事**逐件列出来（**不管这一轮办不办**）。"
     "**一句话里有两件以上要动手做的事时，必须调它**；只有一件事时不要用。"
-    "每件写 goal（主人原话里那件事的说法，别加工）与 skill（你打算用哪个本领办它，"
+    "每件写 goal（主人原话里那件事的说法，别加工）与 workflow（你打算用哪个本领办它，"
     "填上面那些本领名之一）。"
     "⚠️ **只列要动手做的事**：纯闲聊不用列；一件事里有几件不同本领的，就列几件。"
     "⚠️ 列全比列准重要：系统拿它减去你这一轮真办了的，把**剩下的**记成跨轮任务——"
@@ -209,7 +209,7 @@ TASK_INTENTS_DESC = (
 def step_tool_enum(role: str | None) -> list[str]:
     """步骤 `tool` 字段的闭集：**这个身份真能执行到的工具名**（两个既有通道的并集）。
 
-    · 动作工具 = 可见技能模板里出现的那些（`visible_skills(role)` 的 `plan`）——
+    · 动作工具 = 可见技能模板里出现的那些（`visible_workflows(role)` 的 `plan`）——
       它们只能经技能通道执行，与 planner 菜单同源；
     · 数据工具 = `callable_query_tools(role)`（`content_query` 的点名白名单）——
       它们只能经调用清单执行。这一路必须并进来：剩下的一步常常是"查一下 X"
@@ -218,7 +218,7 @@ def step_tool_enum(role: str | None) -> list[str]:
     两个来源都不含"不在白名单/模板里"的工具 ⇒ 闭集仍然是"能执行的"，不是"注册表里
     有的"（全量 54 个会把模型够不到的名字塞进它眼前，见 `planner_llm.py` 头注）。
     """
-    names = {str(t) for s in visible_skills(role) for t, _tmpl in (s.plan or ()) if t}
+    names = {str(t) for s in visible_workflows(role) for t, _tmpl in (s.plan or ()) if t}
     names |= {str(t) for t in callable_query_tools(role)}
     return sorted(names)
 
@@ -233,12 +233,12 @@ def task_hold_schema(role: str | None) -> dict:
     是第二道）——这道约束的价值不在于拦住模型（它照样会发），而在于让"撤下"不再有
     一条与"没有剩下的步骤"同形的表达（见 `TASK_DROP` 上方那段）。
 
-    `skill` / `args` 两格（20261012 批 A）：一步不再只是"一个工具名"，而是**"用哪个
-    本领、带什么实参"**——`Skill.plan` 本来就是 `list[(工具名, {参数模板})]`，参数在
-    产出那一刻就存在（`skills.py::instantiate_plan` 已经能把它展开成完整实参），此前
+    `workflow` / `args` 两格（20261012 批 A）：一步不再只是"一个工具名"，而是**"用哪个
+    本领、带什么实参"**——`Workflow.plan` 本来就是 `list[(工具名, {参数模板})]`，参数在
+    产出那一刻就存在（`workflows.py::instantiate_plan` 已经能把它展开成完整实参），此前
     只是在 schema / 归一器两处被丢掉，于是台账里住的是一串**没法执行的名字**，每一步
     都得请模型重推一遍参数（那是"废话轮"与"漏步"共同的来源）。
-    `skill` 那一格**带 `visible_skills` 名做闭集**：与 `tool` 同一条理由（闭集＝能执行的），
+    `workflow` 那一格**带 `visible_workflows` 名做闭集**：与 `tool` 同一条理由（闭集＝能执行的），
     代价是每次 planner 调用多一份技能名表——比 `tool` 那份小（技能名比工具名短），且只在
     本开关打开时存在。`args` **不带闭集**（键＝工具参数名，逐工具不同，写进来要乘 47 个
     技能函数）；`required` 仍然只有 `label`/`tool`：**给不出实参就整格省略**，那一步是
@@ -248,10 +248,10 @@ def task_hold_schema(role: str | None) -> dict:
     tool_prop: dict[str, Any] = {"type": "string"}
     if tools:
         tool_prop["enum"] = tools
-    skills = sorted({str(s.name) for s in visible_skills(role) if getattr(s, "name", None)})
-    skill_prop: dict[str, Any] = {"type": "string"}
-    if skills:
-        skill_prop["enum"] = skills
+    workflows = sorted({str(s.name) for s in visible_workflows(role) if getattr(s, "name", None)})
+    workflow_prop: dict[str, Any] = {"type": "string"}
+    if workflows:
+        workflow_prop["enum"] = workflows
     return {
         "type": "function",
         "function": {
@@ -272,7 +272,7 @@ def task_hold_schema(role: str | None) -> dict:
                                           "description": "这一步做什么（人话）"},
                                 "tool": {**tool_prop,
                                          "description": "做这一步要用的站内工具名"},
-                                "skill": {**skill_prop,
+                                "workflow": {**workflow_prop,
                                           "description": "这一步属于哪个本领（技能名）"},
                                 "args": {
                                     "type": "object",
@@ -327,9 +327,9 @@ def task_drop_schema() -> dict:
 def task_intents_schema() -> dict:
     """`task_intents`（意图清单）的 OpenAI function schema。
 
-    `skill` **不写 `enum`**（与 `task_hold` 的 `tool` 不同）：那格的闭集是**全部可见
+    `workflow` **不写 `enum`**（与 `task_hold` 的 `tool` 不同）：那格的闭集是**全部可见
     技能名**（25+ 个、每个几十字符），塞进 schema 的代价落在**每一次 planner 调用**上；
-    而这里的 `skill` 只是"打算用哪个本领"，写错/写了个够不着的名字由归一器挡掉
+    而这里的 `workflow` 只是"打算用哪个本领"，写错/写了个够不着的名字由归一器挡掉
     （`normalize_intents` 只收本角色可见的技能名），不影响这一轮的动作。
     """
     return {
@@ -352,7 +352,7 @@ def task_intents_schema() -> dict:
 # `task_intents_schema`）。同一份 schema 会出现在**每一个**技能函数上，所以只有
 # 这两句、且**不点技能名**——文案的代价是每次 planner 调用乘技能数。
 INTENTS_FIELD_DESC = (
-    "**这一句主人话里要办的每一件事**（含你这一轮正要办的那件，逐件写 goal + skill）。"
+    "**这一句主人话里要办的每一件事**（含你这一轮正要办的那件，逐件写 goal + workflow）。"
     "只有一件事就**别填**。系统拿它减去你这一轮办了的，把**剩下的**记成跨轮任务"
     "——漏掉的那件下一轮谁都不记得，主人会以为你要办。"
 )
@@ -371,10 +371,10 @@ def intents_prop_schema(description: str) -> dict:
     先交清单（`mix2` 的 `20261008_213818`）、一次直接点技能（`20261008_220155`），
     全凭采样；而只交清单那一轮"一件都没办"，只点技能那一轮"另外那件谁都不记得"。
     挂在动作调用上的一格让两者**不再竞争**：一次调用同时说出"这一轮办这件"与
-    "这句话里还有那几件"。排除规则也让它便宜——本轮办的那件按 `acted_skills` 自动
+    "这句话里还有那几件"。排除规则也让它便宜——本轮办的那件按 `acted_workflows` 自动
     出局（同 `intents_to_declarations`），所以**多填不会长出多余的行**，只有漏填有代价。
 
-    形状（`goal` + `skill`、没有 `enum`）的理由同 `task_intents_schema`：闭集是全部
+    形状（`goal` + `workflow`、没有 `enum`）的理由同 `task_intents_schema`：闭集是全部
     可见技能名，写进 schema 的代价落在**每一次** planner 调用上；写错的名字由
     `normalize_intents` 挡掉，不影响这一轮的动作。
     """
@@ -386,7 +386,7 @@ def intents_prop_schema(description: str) -> dict:
             "properties": {
                 "goal": {"type": "string",
                          "description": "这件事的一句话目标（取主人原话里的说法）"},
-                "skill": {"type": "string",
+                "workflow": {"type": "string",
                           "description": "办这件事要用的本领名（技能名）"},
                 # `params`（20261012 批 A）：这件事**要用的实参**（键＝技能参数名，值取
                 # 主人原话里的说法）。有它，登记出来的步骤就是**可执行的**（`instantiate_plan`
@@ -399,7 +399,7 @@ def intents_prop_schema(description: str) -> dict:
                                    "原话里说过的那个）；说不全就整格省略，别瞎填",
                 },
             },
-            "required": ["goal", "skill"],
+            "required": ["goal", "workflow"],
         },
         "description": description,
     }
@@ -415,17 +415,17 @@ def pseudo_tool_schemas(role: str | None) -> list[dict]:
 
 
 def normalize_intents(args: Any, role: str | None) -> list[dict]:
-    """模型给的 `task_intents` 参数 → 归一化意图清单 `[{"goal", "skill"}]`。
+    """模型给的 `task_intents` 参数 → 归一化意图清单 `[{"goal", "workflow"}]`。
 
     逐项判、判不了的**单项丢掉**（不整份作废）：清单的价值在"别漏"，为一件写坏的
     而丢掉整份枚举，换来的是"这一轮所有没收到的意图全都不登记"——那正是本批要治的病。
 
     三条归一：
       · `goal` 空白 ⇒ 丢（没有目标就没有这件事）；
-      · `skill` 不在**本角色可见技能**里、或是 `chat` ⇒ 丢（推不出步骤，见
+      · `workflow` 不在**本角色可见技能**里、或是 `chat` ⇒ 丢（推不出步骤，见
         `intents_to_declarations`：登记要带机器可读的 `tool`，够不着的本领给不出）；
       · 超过 `TASK_MAX_INTENTS` 只收前几件（截断在这里，不靠模型自觉）。
-    `skill` 用 `visible_skills(role)` 判**而不是** `SKILL_MAP`：这与 planner 菜单、
+    `workflow` 用 `visible_workflows(role)` 判**而不是** `WORKFLOW_MAP`：这与 planner 菜单、
     工具 schema、"这一轮能选什么"是同一张表（同源），够不着的本领在这里就被挡住，
     而不是等到 execute 才炸。
 
@@ -441,16 +441,16 @@ def normalize_intents(args: Any, role: str | None) -> list[dict]:
     raw = args.get(INTENTS_ARG)
     if not isinstance(raw, list):
         return []
-    allowed = {s.name for s in visible_skills(role)}
+    allowed = {s.name for s in visible_workflows(role)}
     out: list[dict] = []
     for one in raw[:TASK_MAX_INTENTS]:
         if not isinstance(one, dict):
             continue
         goal = re.sub(r"\s+", " ", str(one.get("goal") or "")).strip()[:GOAL_COL_MAX]
-        skill = str(one.get("skill") or "").strip()
-        if not goal or skill not in allowed or skill == "chat":
+        workflow = str(one.get("workflow") or "").strip()
+        if not goal or workflow not in allowed or workflow == "chat":
             continue
-        rec: dict[str, Any] = {"goal": goal, "skill": skill}
+        rec: dict[str, Any] = {"goal": goal, "workflow": workflow}
         params = one.get("params")
         if isinstance(params, dict) and params:
             rec["params"] = params
@@ -576,11 +576,11 @@ def reconcile_goal(goal: Any, sources: Any) -> str | None:
     return None
 
 
-def bound_steps(skill_name: str, params: Any, role: str | None,
+def bound_steps(workflow_name: str, params: Any, role: str | None,
                 allowed: Any = None) -> list[dict]:
     """技能名 + 实参 → **已经绑好实参的步骤**；**展开不干净就返回 `[]`**（纯函数）。
 
-    用的是**执行侧同一个展开器**（`skills.instantiate_plan`，planner 点这个技能时走的
+    用的是**执行侧同一个展开器**（`workflows.instantiate_plan`，planner 点这个技能时走的
     就是它）——步骤集合与实参必须与"真执行那一次"逐字同源：这里另推一份，两条通道
     迟早对不上（同族教训＝`intents_to_declarations` 的排除规则与判据侧
     `require_task_goal_per_intent` 必须同一条）。
@@ -588,7 +588,7 @@ def bound_steps(skill_name: str, params: Any, role: str | None,
     **all-or-nothing（刻意的保守）**：只要出现下面任一种情况就返回 `[]`，由调用方退回
     今天那份"只有工具名"的占位步骤——
       · 展开零个工具（参数不齐 / 值用不了：`_param_problem_plan` 就是零工具）；
-      · 有工具**落不出实参**（`skills.args_are_bound` 判：值里有 `None` 或未解析的
+      · 有工具**落不出实参**（`workflows.args_are_bound` 判：值里有 `None` 或未解析的
         `$tool[N]` 引用）；
       · 有条目的工具**不在** `allowed` 闭集里（模板带了这个角色够不到的工具）。
     为什么不"能绑几条绑几条"：一个计划是**有序的整体**，中间少一条、或某一条只剩工具
@@ -597,7 +597,7 @@ def bound_steps(skill_name: str, params: Any, role: str | None,
 
     `allowed` 由调用方传入（它已经算过一遍 `step_tool_enum`）；不给就现算。
     """
-    plan = instantiate_plan(skill_name, params if isinstance(params, dict) else {}, role)
+    plan = instantiate_plan(workflow_name, params if isinstance(params, dict) else {}, role)
     if not isinstance(plan, dict):
         return []
     specs = plan.get("tools")
@@ -617,7 +617,7 @@ def bound_steps(skill_name: str, params: Any, role: str | None,
             return []
         if not args_are_bound(args):
             return []
-        out.append({"skill": skill_name, "tool": tool, "args": args})
+        out.append({"workflow": workflow_name, "tool": tool, "args": args})
     return out
 
 
@@ -628,31 +628,31 @@ def steps_for_intent(it: dict, role: str | None, allowed: Any) -> list[dict]:
     只会永远挂在台账里（`advance_by_receipts` 见无可结算的步骤直接返回 None），那比不登记
     更坏。`params` 有值就用**执行侧同一个展开器**（`bound_steps`）把实参绑上去；绑不出
     （参数不齐 / 落不出实参 / 够不到的工具）就退回"只有工具名"的**占位步骤**——两步的
-    工具集合因此逐字相同，多出来的只是 `skill`/`args` 两格（批 A 里谁都还没读，
+    工具集合因此逐字相同，多出来的只是 `workflow`/`args` 两格（批 A 里谁都还没读，
     渲染器 `_step_line` 只看 label/tool）。
     """
-    skill = SKILL_MAP.get(it["skill"])
-    tools = [str(t) for t, _tmpl in (getattr(skill, "plan", None) or ()) if t in allowed]
+    workflow = WORKFLOW_MAP.get(it["workflow"])
+    tools = [str(t) for t, _tmpl in (getattr(workflow, "plan", None) or ()) if t in allowed]
     if not tools:
         return []
-    steps = bound_steps(it["skill"], it.get("params"), role, allowed)
+    steps = bound_steps(it["workflow"], it.get("params"), role, allowed)
     if steps:
         return steps
-    return [{"skill": it["skill"], "label": t, "tool": t} for t in tools]
+    return [{"workflow": it["workflow"], "label": t, "tool": t} for t in tools]
 
 
 def intents_to_declarations(intents: Any, *, role: str | None, sources: Any,
-                            acted_skills: Any = (), receipts: Any = (),
+                            acted_workflows: Any = (), receipts: Any = (),
                             skip_goals: Any = (), audit: dict | None = None) -> list[dict]:
     """意图清单 − 本轮已经办了的 ⇒ 要自动登记的声明（纯函数，20261008 批 ②）。
 
     这是「在规划阶段就给写好对应状态」里**确定性**的那一半：模型只负责说出
     "这句话里有哪几件事"，**登记本身不让它做**——步骤从技能模板推
-    （`Skill.plan` 的工具名，逐个过 `step_tool_enum(role)` 的闭集），目标取它写的
+    （`Workflow.plan` 的工具名，逐个过 `step_tool_enum(role)` 的闭集），目标取它写的
     `goal`，`state="running"`、不问主人。于是"漏登记"这件事从模型的行为里消失了。
 
     排除规则（三条，每条都对应一个**已经发生的事实**，不是猜）：
-      · `skill ∈ acted_skills` ⇒ 这件事这一轮**办了**（上了卡或真执行了）。卡一次只装
+      · `workflow ∈ acted_workflows` ⇒ 这件事这一轮**办了**（上了卡或真执行了）。卡一次只装
         得下一个技能，所以这是"没上卡的那几件"的正确定义——与判据侧
         `require_task_goal_per_intent` 的排除**同一条规则**（两处必须同源：判据说
         "没上卡的都要有登记"，机制就得"没上卡的都登记"；各写一份迟早一边松一边紧）；
@@ -676,14 +676,14 @@ def intents_to_declarations(intents: Any, *, role: str | None, sources: Any,
     里有一个号是它编的"——两族完全不同，所以对账排在三条**之后**：被前三条排除的件本来
     就不登记，先对账它们只会往 `audit` 里灌噪声）。
     """
-    acted = {str(s) for s in (acted_skills or ()) if s}
+    acted = {str(s) for s in (acted_workflows or ()) if s}
     done_tools = {str((r or {}).get("tool") or "")
                   for r in (receipts or ()) if isinstance(r, dict)}
     skipped = [g for g in (skip_goals or ()) if str(g or "").strip()]
     allowed = set(step_tool_enum(role))
     out: list[dict] = []
     for it in normalize_intents({"intents": list(intents or ())}, role):
-        if it["skill"] in acted:
+        if it["workflow"] in acted:
             continue
         if any(same_goal(it["goal"], g) for g in skipped):
             continue
@@ -722,7 +722,7 @@ def intents_to_declarations(intents: Any, *, role: str | None, sources: Any,
 
 
 def intent_frames(intents: Any, *, role: str | None, conversation_id: Any, sources: Any,
-                  acted_skills: Any = (), receipts: Any = (),
+                  acted_workflows: Any = (), receipts: Any = (),
                   skip_goals: Any = (), audit: dict | None = None) -> list[dict]:
     """意图清单 → 本轮要发的 `__TASK__` 载荷列表（② 的**唯一入口**）。
 
@@ -743,7 +743,7 @@ def intent_frames(intents: Any, *, role: str | None, conversation_id: Any, sourc
         return []
     return [frame_payload(d, conversation_id, audit)
             for d in intents_to_declarations(intents, role=role, sources=sources,
-                                             acted_skills=acted_skills,
+                                             acted_workflows=acted_workflows,
                                              receipts=receipts,
                                              skip_goals=skip_goals, audit=audit)]
 
@@ -751,7 +751,7 @@ def intent_frames(intents: Any, *, role: str | None, conversation_id: Any, sourc
 def step_record(one: Any) -> dict | None:
     """一步（模型写的 / 系统推的）→ 归一化步骤 dict；**没有工具名也没有标签 ⇒ None**。
 
-    形状是**加法的**：老两格 `{label, tool}` 一定在，**绑定了实参才多出 `skill`/`args`**
+    形状是**加法的**：老两格 `{label, tool}` 一定在，**绑定了实参才多出 `workflow`/`args`**
     两格（20261012 批 A）。这样做的理由不是省字节，是**兼容面**：`steps` 里有存量行、
     有跨语言契约（Rust 只透传不解析）、有拿它当"每一步做什么"渲染的注入块——多两格是
     纯增量，少两格才是协议变更。`args` **不在**（而不是"是空的"）才叫**占位步**：知道要
@@ -763,7 +763,7 @@ def step_record(one: Any) -> dict | None:
     if isinstance(one, dict):
         label = str(one.get("label") or one.get("tool") or "").strip()[:LABEL_MAX]
         tool = str(one.get("tool") or "").strip()[:TOOL_MAX]
-        skill = str(one.get("skill") or "").strip()[:TOOL_MAX]
+        workflow = str(one.get("workflow") or "").strip()[:TOOL_MAX]
         args = one.get("args")
     elif one is None:
         # `null` 在 steps 数组里**什么都不是**。老写法 `str(None)` 会造出一个
@@ -771,12 +771,12 @@ def step_record(one: Any) -> dict | None:
         # （僵尸行的最小形态），而台账上看上去只是一步"叫 None 的事"。
         return None
     else:
-        label, tool, skill, args = str(one).strip()[:LABEL_MAX], "", "", None
+        label, tool, workflow, args = str(one).strip()[:LABEL_MAX], "", "", None
     if not (label or tool):
         return None
     out: dict[str, Any] = {"label": label or tool, "tool": tool}
-    if skill:
-        out["skill"] = skill
+    if workflow:
+        out["workflow"] = workflow
     # `args` **是不是 dict** 就是"这一步有没有绑定实参"这件事本身，所以空 dict
     # （`list_tags({})`：一次完整、无参的调用）照样写下去——它和"还不知道怎么调"
     # （没有这一格 ⇒ 占位步）是两件事，合流会让批 B 把可确定的下一步又交回给模型。
@@ -801,7 +801,7 @@ def certify_steps(steps: Any, max_chars: int = TASK_STEPS_COL_MAX) -> tuple[list
     JSON**，且降级必须**看得见**（返回值第二格 + WARNING）。**绝不丢步骤**：`total_steps`
     是这一行的分母，少一步就是把进度说成假话。
 
-    超标的**只可能是 `args`**，这就是阶梯长这样的原因：`label` ≤ 80、`tool`/`skill` ≤ 64，
+    超标的**只可能是 `args`**，这就是阶梯长这样的原因：`label` ≤ 80、`tool`/`workflow` ≤ 64，
     八步全加起来 ≈ 2k（`TASK_MAX_STEPS=8`），离 16000 远得很；而实参是**没有上限**的
     （一条待办正文、一段公告、一句留言引文）。所以：
 
@@ -851,7 +851,7 @@ def certify_steps(steps: Any, max_chars: int = TASK_STEPS_COL_MAX) -> tuple[list
     # ③ 只剩最小形状（连技能名一起丢）
     minimal = [{"label": _tool_of(s)[:LABEL_MAX], "tool": _tool_of(s)[:TOOL_MAX]} for s in cur]
     if _size(minimal) <= max_chars:
-        notes.append("label_and_skill_dropped")
+        notes.append("label_and_workflow_dropped")
         return minimal, notes
     logger.warning("[tasks] steps 最小形状序列化后 %d 字符仍超过列上限 %d"
                    "（请核对父仓 TASK_STEPS_COL_MAX 与本文件常量是否同值）",
@@ -866,7 +866,7 @@ def normalize_declaration(args: Any) -> dict | None:
     四条归一（都在这一处，调用方不用再判）：
       · `goal` 空白 ⇒ None（没有目标就没有这件事，也就没有可对齐的 id）；
       · 步骤超 `TASK_MAX_STEPS` 只收前几步；缺 label 用 tool 顶上、缺 tool 留空串；
-        每步的形状（含批 A 的 `skill`/`args` 两格什么时候写）全在 `step_record`；
+        每步的形状（含批 A 的 `workflow`/`args` 两格什么时候写）全在 `step_record`；
       · `pending_question` 与 goal 同列宽截断（列宽是硬约束，超了 DB 会报 1406）；
       · **一条有效步骤都没有 ⇒ None**（20260927 改）：以前这里返回
         `state="cancelled"`，于是"模型心里没有剩下的步骤了"被读成"主人不要这件事了"
@@ -883,9 +883,9 @@ def normalize_declaration(args: Any) -> dict | None:
     raw_steps = args.get("steps")
     if isinstance(raw_steps, list):
         for one in raw_steps[:TASK_MAX_STEPS]:
-            # 形状只有一处（`step_record`）：截断、label 落到工具名的兜底、`skill`/`args`
+            # 形状只有一处（`step_record`）：截断、label 落到工具名的兜底、`workflow`/`args`
             # 两格的取舍全在那里。老两格 `{label, tool}` 的输入到这里**逐字产出老形状**
-            # （没有 skill/args 就不写那两格），所以这一步的改动对存量调用者零影响。
+            # （没有 workflow/args 就不写那两格），所以这一步的改动对存量调用者零影响。
             rec = step_record(one)
             if rec:
                 steps.append(rec)
@@ -1227,7 +1227,7 @@ def drop_is_completion(open_tasks: Any, conversation_id: Any, decl: Any,
     **为什么需要这道闸**（实测，不是推演）：`task_drop` 拆出来之后，模型并没有按描述
     只在"主人说不做了"时用它——`eval/golden/basic.jsonl::task_state_resume_settle`
     开开关跑 4 次，3 次出现"把剩下那步做完的同一轮里又调了一次 `task_drop`"
-    （trace 现场：`planner decision round 0 skill=effect status=executed` →
+    （trace 现场：`planner decision round 0 workflow=effect status=executed` →
     `planner task_declare round 1 state=cancelled`）。它的意思是"这行收掉吧，我做完了"，
     而系统读成"主人不要这件事了"⇒ 帧写 `cancelled`、话术说「已撤下、不再跟踪」，
     紧接着流尾结算又按回执把**同一行**写成 `succeeded`——**落库终态对、话不对**，

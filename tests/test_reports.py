@@ -550,8 +550,8 @@ finally:
 
 
 print("\n⑪ 结构性不可达 + 接线在位（改坏了这几处，上面的功能就静默失效）")
-from agent.skills import (_CALLABLE_QUERY_TOOLS, _CALLABLE_QUERY_TOOLS_ORDER,
-                          _EXPLICIT_TOOLS, SKILL_MAP, build_planner_context,
+from agent.workflows import (_CALLABLE_QUERY_TOOLS, _CALLABLE_QUERY_TOOLS_ORDER,
+                          _EXPLICIT_TOOLS, WORKFLOW_MAP, build_planner_context,
                           callable_query_tools)  # noqa: E402
 from agent.graph import _CONTENT_TOOLS, _tools_desc  # noqa: E402
 from agent.principal import ADMIN_ROLES  # noqa: E402
@@ -562,7 +562,7 @@ NEW = ["get_server_status", "get_service_health", "get_moderation_status", "get_
        "get_note_stats", "list_admin_board"]
 # 「结构性不可达」是**分角色**的（20260924 起）：这台五个报表工具都声明为
 # admin.console ⇒ 访客/未知身份结构上点不到，管理员则可经 calls 直接点名
-# （与 list_admin_notes 同批放开，见 tests/test_skills.test_admin_console_role_channel）。
+# （与 list_admin_notes 同批放开，见 tests/test_workflows.test_admin_console_role_channel）。
 check("这些新工具都不在**访客**点名白名单（role=None 结构上点不到）",
       all(n not in _EXPLICIT_TOOLS and n not in callable_query_tools(None) for n in NEW))
 check("也不在访客可调用清单顺序表里（公开那半是角色无关常量）",
@@ -584,7 +584,7 @@ for name, tools in [("ops_report", ["get_server_status", "get_service_health"]),
                     ("user_report", ["get_user_stats"]),
                     ("traffic_report", ["get_note_stats"]),
                     ("board_roster", ["list_admin_board"])]:
-    sk = SKILL_MAP.get(name)
+    sk = WORKFLOW_MAP.get(name)
     check(f"技能 {name} 在位且计划就是这几个工具",
           sk is not None and [t for t, _ in sk.plan] == tools, str(sk and sk.plan))
     # 判据是**管理员族**（20260926 起含超级管理员）：写死 {"admin"} 的那天，
@@ -592,13 +592,13 @@ for name, tools in [("ops_report", ["get_server_status", "get_service_health"]),
     check(f"技能 {name} 对管理员族（admin + superadmin）可见",
           sk is not None and sk.roles == ADMIN_ROLES, str(sk and sk.roles))
 
-_ADMIN_READ_SKILLS = ("ops_report", "moderation_report", "user_report", "traffic_report",
+_ADMIN_READ_WORKFLOWS = ("ops_report", "moderation_report", "user_report", "traffic_report",
                       "board_roster")
 check("非 admin 的 planner 上下文里看不到这几张后台报表技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
-          for n in _ADMIN_READ_SKILLS))
+          for n in _ADMIN_READ_WORKFLOWS))
 check("admin 的 planner 上下文里能看到",
-      all(n in build_planner_context("admin") for n in _ADMIN_READ_SKILLS))
+      all(n in build_planner_context("admin") for n in _ADMIN_READ_WORKFLOWS))
 check("既有公开技能对非 admin 仍然可见（别把过滤写宽了）",
       all(n in build_planner_context("user") for n in ("chat", "content_query", "navigate")))
 
@@ -618,10 +618,10 @@ check("过程行有中文动作词（否则显示『执行 get_server_status』�
 # 镜像表退成"认不出 `action` 时的回落"，加工具**只在这一处加**（两侧期望值都锁在
 # `tests/test_action_text.py`；这条注释此前的"两边都要加"已作废）。
 from agent.action_text import tool_action_text as _tool_action_text  # noqa: E402
-from agent.skills import (SKILLS, _CALLABLE_QUERY_TOOLS,  # noqa: E402
+from agent.workflows import (WORKFLOWS, _CALLABLE_QUERY_TOOLS,  # noqa: E402
                           _EXPLICIT_TOOLS)
 _reachable = set(_EXPLICIT_TOOLS) | set(_CALLABLE_QUERY_TOOLS)
-for _sk in SKILLS:
+for _sk in WORKFLOWS:
     _reachable |= {t for t, _ in _sk.plan}
 _noverb = sorted(n for n in _reachable
                  if _tool_action_text(n, {}) == f"执行 {n}")
@@ -636,14 +636,14 @@ check("可达工具都在注册表里（否则计划里那一行会执行成未�
 # 快照去重（20260921）：报表技能进了 planner 的重复规划防护名单——不进的话
 # ops_report_admin 会连规划 4 轮、同两个工具各跑 4 遍（实测 22s/8 次调用）。
 # 20260924 补 `admin_notes`（同判据：单条无参只读 plan）。
-from agent.graph import SNAPSHOT_SKILLS, _PLANNER_PROMPT  # noqa: E402
-from agent.skills import SKILLS  # noqa: E402
+from agent.graph import SNAPSHOT_WORKFLOWS, _PLANNER_PROMPT  # noqa: E402
+from agent.workflows import WORKFLOWS  # noqa: E402
 
 check("四件快照型只读技能都在去重名单里（三张报表 + admin_notes）",
-      SNAPSHOT_SKILLS == frozenset({"ops_report", "moderation_report", "user_report",
+      SNAPSHOT_WORKFLOWS == frozenset({"ops_report", "moderation_report", "user_report",
                                     "admin_notes"}),
-      str(sorted(SNAPSHOT_SKILLS)))
-_admin = next((s for s in SKILLS if s.name == "admin_notes"), None)
+      str(sorted(SNAPSHOT_WORKFLOWS)))
+_admin = next((s for s in WORKFLOWS if s.name == "admin_notes"), None)
 # 名单的准入判据是"这一轮再规划拿回同一份数据"，而它成立的前提是**只读 + 无参**：
 # admin_notes 只有一条 `list_admin_notes`，把它规划第二遍没有新信息。
 # （若哪天给它加一条带参工具，这条断言会红——那正是重审是否该留在名单里的时机。）
@@ -651,16 +651,16 @@ check("admin_notes 仍是单条无参只读 plan（进名单的前提）",
       _admin is not None and [t for t, _ in _admin.plan] == ["list_admin_notes"],
       str(getattr(_admin, "plan", None)))
 check("该名单里的技能都是只读报表（不含动作/检索技能，别把去重写宽了）",
-      not (SNAPSHOT_SKILLS & {"content_query", "navigate", "effect", "darkmode",
+      not (SNAPSHOT_WORKFLOWS & {"content_query", "navigate", "effect", "darkmode",
                               "read_article", "device_display", "device_query"}))
 gsrc = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("防护判据取 receipts（PASS 回执）——用帧名会把失败重试也一并堵死",
-      'plan_obj["skill"] in SNAPSHOT_SKILLS' in gsrc
+      'plan_obj["workflow"] in SNAPSHOT_WORKFLOWS' in gsrc
       and 'passed = {r.get("tool") for r in (state.get("receipts") or [])}' in gsrc)
 
 
 print("\n⑫ 第二轮（写）接线在位：四个后台工具 + 四个技能")
-from agent.skills import WRITE_SKILL_NAMES  # noqa: E402
+from agent.workflows import WRITE_WORKFLOW_NAMES  # noqa: E402
 
 W2 = ["list_admin_notes", "create_tag", "set_article_status", "set_article_tags"]
 WRITES = ["create_tag", "set_article_status", "set_article_tags"]
@@ -691,13 +691,13 @@ for name, tool, args in [("admin_notes", "list_admin_notes", {}),
                          ("tag_create", "create_tag", "$title"),
                          ("article_status", "set_article_status", "$article_id"),
                          ("article_tags", "set_article_tags", "$article_id")]:
-    sk = SKILL_MAP.get(name)
+    sk = WORKFLOW_MAP.get(name)
     check(f"技能 {name} 在位、对管理员族可见、计划首项是 {tool}",
           sk is not None and sk.roles == ADMIN_ROLES
           and [t for t, _ in sk.plan] == [tool], str(sk and (sk.roles, sk.plan)))
 check("写技能名单 = 三十个**技能**名（instantiate_plan 缺参守卫按它分支；"
       "注意它与工具名不是一套字面量，混用会让守卫静默不生效）",
-      WRITE_SKILL_NAMES == frozenset({"tag_create", "tag_update", "tag_delete",
+      WRITE_WORKFLOW_NAMES == frozenset({"tag_create", "tag_update", "tag_delete",
                                       "category_create", "category_update",
                                       "category_delete",
                                       "announcement_create", "announcement_update",
@@ -736,7 +736,7 @@ check("写技能名单 = 三十个**技能**名（instantiate_plan 缺参守卫�
                                       # 后台账号冻结 / 解冻（20260926 第九轮）：
                                       # 两个技能名与两个工具名**不是一套字面量**
                                       # （技能 account_freeze / 工具 freeze_account）
-                                      # ——混用会让 `_expand_write_skill` 的分支
+                                      # ——混用会让 `_expand_write_workflow` 的分支
                                       # 静默不命中，尾部的"未知的写技能"兜底会
                                       # 零工具零写还不报错（test_account_freeze
                                       # ④ 钉着）
@@ -757,7 +757,7 @@ check("写技能名单 = 三十个**技能**名（instantiate_plan 缺参守卫�
                                       # 而这三件的后果落在**别人的对话能力**上
                                       "quota_approve", "quota_reject", "quota_reset",
                                       # 审核队列的变更集（20260929 批 F）：写面里
-                                      # **唯一不由 planner 选**的一件（`visible_skills`
+                                      # **唯一不由 planner 选**的一件（`visible_workflows`
                                       # 的系统专用名单，与 read_article 同一处过滤），
                                       # 它的参数不是主人填的值、而是系统拼好的逐条调用。
                                       # 它进这份名单是被**派生锁**逼的（这个技能的
@@ -779,14 +779,14 @@ check("写技能名单 = 三十个**技能**名（instantiate_plan 缺参守卫�
                                       # 漏在这份名单外的后果与上面几族逐条相同：
                                       # 落进尾部"未知的写技能"兜底 → 零工具零写还不报错
                                       "mute_account", "unmute_account"})
-      and WRITE_SKILL_NAMES <= set(SKILL_MAP), str(sorted(WRITE_SKILL_NAMES)))
+      and WRITE_WORKFLOW_NAMES <= set(WORKFLOW_MAP), str(sorted(WRITE_WORKFLOW_NAMES)))
 check("非 admin 的 planner 上下文里看不到这四个技能",
       all(n not in build_planner_context("user") and n not in build_planner_context(None)
           for n in ("admin_notes", "tag_create", "article_status", "article_tags")))
 check("admin 的 planner 上下文里能看到",
       all(n in build_planner_context("admin")
           for n in ("admin_notes", "tag_create", "article_status", "article_tags")))
-check("⭐ superadmin 的 planner 上下文里同样能看到（技能可见性只有 visible_skills 一个判据，"
+check("⭐ superadmin 的 planner 上下文里同样能看到（技能可见性只有 visible_workflows 一个判据，"
       "而它是按管理员族过滤的——写死 'admin' 会让博主自己看不见管理技能）",
       all(n in build_planner_context("superadmin")
           for n in ("admin_notes", "tag_create", "article_status", "article_tags")))
@@ -934,8 +934,8 @@ check("★ status 在 schema 里仍是闭集枚举（放宽成 str 会让「认�
 check(" 隔壁报表那套取值**不在**这个枚举里（混用会被 schema 直接挡下）",
       "ai_rejected" not in _enum and "ai_passed" not in _enum)
 check(" 技能参数说明里点明了与隔壁报表不是一套（原生档模型看的是这份）",
-      "不是同一套" in SKILL_MAP["board_roster"].inputs["status"],
-      SKILL_MAP["board_roster"].inputs["status"])
+      "不是同一套" in WORKFLOW_MAP["board_roster"].inputs["status"],
+      WORKFLOW_MAP["board_roster"].inputs["status"])
 _menu_line = next((ln for ln in _tools_desc("admin").splitlines()
                    if ln.startswith("- list_admin_board(")), "")
 check(" 菜单行也写了同一句提醒（文字档模型选工具时看的就是它）",

@@ -96,7 +96,7 @@ Coding agent 的稳定，恰恰来自它**没有**这个空间：它"改了文�
 工具参数是结构化 JSON，参数名/类型/枚举由 schema 约束，模型写不出"散文参数"，
 也写不出"这个字段其实是另一个字段的意思"。参数的**语义**由 schema 的描述承担，
 而描述与校验是同一份东西。
-→ 本项目对照：planner 输出**文本行协议**（`SKILL/[STATUS]/PARAMS/TOOLS/NOTE/[TODO]/REPLY`），
+→ 本项目对照：planner 输出**文本行协议**（`WORKFLOW/[STATUS]/PARAMS/TOOLS/NOTE/[TODO]/REPLY`），
 参数在 `PARAMS` 的 JSON 里由模型写死，事后靠 `instantiate_plan` 的白名单 + 缺参守卫 +
 pydantic 三层手工补网（闭集的**取值**那半 20260926 批 5 起改由工具 `Literal` 派生，
 所以"值写不写得出来"这一格已有机器判据；剩下的仍是语义与来源）。⑦（参数对调）正是这一层的固有事故类型。
@@ -143,7 +143,7 @@ tool_use / tool_result 直接进 transcript，模型对执行结果的"转述"�
 **现状**：`gate_node` 里有 13 处 `_fallback_result` 调用点、15 个 reason 码
 （6 张编号闸 5a–5f + 1b 逐字复读 + 命令前缀 + 编造 URL + 零帧注记核验 + `_claim_issue` 的 5 个子判据），
 词表随每次事故单调增长；
-`tests/test_skills.py` 里散着约 20 条布尔断言锁判据，但**没有一份"真实语料 + 期望判定"的基线**，
+`tests/test_workflows.py` 里散着约 20 条布尔断言锁判据，但**没有一份"真实语料 + 期望判定"的基线**，
 所以"这次改判据少抓了几条 / 多抓了几条"永远算不出来。今天补的 clause 落 trace
 （`_clip_clause` / `_claim_clause` / `_fallback_result(clause=)`）是这条的前置：**先有句子，才有语料**。
 
@@ -169,10 +169,10 @@ N/M 不为 0 时必须人工签字（写进 `eval/report/review_*.md` 的复审�
 
 ### D4 planner 输出 schema 化（结构化输出替代文本协议）
 
-**现状**：`planner_node` 输出**文本行协议**——`SKILL` / `[STATUS]` / `PARAMS` / `TOOLS` /
+**现状**：`planner_node` 输出**文本行协议**——`WORKFLOW` / `[STATUS]` / `PARAMS` / `TOOLS` /
 `NOTE` / `[TODO]` / `REPLY`（中括号是可选行，所以是 5–7 行；`STATUS=` 自 20260926 批 3 起
 **由系统写死**、planner 一个字都不填）。`_loads_tolerant` 容忍单引号/尾逗号/围栏；
-参数由模型在 `PARAMS` JSON 里写死；`instantiate_plan`（`agent/skills.py`）补三层：
+参数由模型在 `PARAMS` JSON 里写死；`instantiate_plan`（`agent/workflows.py`）补三层：
 白名单校验 → 缺参守卫（`_norm_pos_int` 等）→ pydantic（工具侧）。
 
 > ⚠️ **20261004 追记（这一段描述的是那之前的形态）**：`planner_node` 的输出**已换成 native
@@ -189,17 +189,17 @@ N/M 不为 0 时必须人工签字（写进 `eval/report/review_*.md` 的复审�
 1. ~~POC（必须先做）：验证生产模型（qwen 系，OpenAI 兼容端点）对 `response_format=json_schema`
    或 function calling 的支持度与稳定性——**这是本方向的前置未知量，不验证不动手**。~~
    **20260925 已跑完并全部通过**，见下方「D4 POC 结果」；结论带两个协议设计风险，先读那个再动手。
-2. `agent/skill_schema.py`（**未建**）：由 `SKILLS` 注册表派生 schema（`inputs` 已是雏形），
+2. `agent/workflow_schema.py`（**未建**）：由 `WORKFLOWS` 注册表派生 schema（`inputs` 已是雏形），
    加 `required` / `enum`（如 `status ∈ {public,private,draft}`、`is_top ∈ {0,1}`）、
    加 id 类参数的来源约束（见 D5）。
    ⚠️ **20260926 补注（枚举的来源已定层，做这一步时必须照它走）**：`enum` 这半**不再
-   从 `SKILLS.inputs` 派生**——它已经在**工具层**落地：闭集写在工具参数的 `Literal[...]`
-   上（`tools/base.py`），pydantic 渲染进工具 JSON Schema，`skills.arg_enum()` 从
-   `tool_arg_schemas()` 派生（`ParamSpec.choices`），校验在 `check_skill_params` /
+   从 `WORKFLOWS.inputs` 派生**——它已经在**工具层**落地：闭集写在工具参数的 `Literal[...]`
+   上（`tools/base.py`），pydantic 渲染进工具 JSON Schema，`workflows.arg_enum()` 从
+   `tool_arg_schemas()` 派生（`ParamSpec.choices`），校验在 `check_workflow_params` /
    `check_call_args`。**两层各造一份枚举就是漂移**（本文件 §编号约定 说的正是这个），
-   所以 `skill_schema` 若要做，`enum` 那一格必须从工具 schema 取、不许手抄。
+   所以 `workflow_schema` 若要做，`enum` 那一格必须从工具 schema 取、不许手抄。
    另外两件事一并定死：① 带**别名归一层**的参数（`audit_board_comment.verdict` 等收中文
-   写法的那几族）在工具层刻意保持 `str`——`skill_schema` 也不能给它们编 `enum`，否则
+   写法的那几族）在工具层刻意保持 `str`——`workflow_schema` 也不能给它们编 `enum`，否则
    等于把那条容错通道从另一头关死；② id 类参数的来源约束（D5）才是这一步真正剩下的活，
    `enum` 不是。
 3. 迁移期**双轨**：schema 输出 → 归一成现有 `plan` 文本 → 其余链路一行不改
@@ -546,12 +546,12 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 | # | 修法 | 落点 |
 |---|------|------|
 | ① | 有帧轮专用兜底文案（只否认被点名的那件事，不否认整轮） | `graph.py` `_FALLBACK_PHANTOM_CLAIM` / `_FALLBACK_SEARCH_CLAIM_FRAMED` |
-| ② | 判据命中的**子句**落 trace（`_clause_hit` 系列 + `_claim_clause` + `_fallback_result(clause=)`） | `graph.py`；`tests/test_skills.py::test_gate_frame_checks` |
+| ② | 判据命中的**子句**落 trace（`_clause_hit` 系列 + `_claim_clause` + `_fallback_result(clause=)`） | `graph.py`；`tests/test_workflows.py::test_gate_frame_checks` |
 | ③ | `list_tags` 读 `/tagone + /tagtwo` 并保持层级（`merge_tag_rows`，父/子写成 `父/子`） | `tools/base.py` / `agent/adminops.py` / `agent/entities.py` |
-| ④ | 能力清单**由注册表按角色渲染**（`Skill.capability` + `visible_skills` + `context.site_guide(role)`） | `agent/skills.py` / `agent/context.py` / `graph.py` 三节点 |
-| ⑤ | 5c 加"复述本轮工具自己说的话"豁免 + 工具返回文本里禁止出现工具名（lint 锁） | `graph.py` `_phantom_tool_claim_span`；`adminops.py` 渲染层；`tests/test_skills.py::test_no_sibling_tool_name_in_user_text` |
+| ④ | 能力清单**由注册表按角色渲染**（`Workflow.capability` + `visible_workflows` + `context.site_guide(role)`） | `agent/workflows.py` / `agent/context.py` / `graph.py` 三节点 |
+| ⑤ | 5c 加"复述本轮工具自己说的话"豁免 + 工具返回文本里禁止出现工具名（lint 锁） | `graph.py` `_phantom_tool_claim_span`；`adminops.py` 渲染层；`tests/test_workflows.py::test_no_sibling_tool_name_in_user_text` |
 | ⑥ | 回执顶层 meta 的 `tag_name` 不再被当工具实参读 | `src/routes/chat.rs`（+ 3 条单测） |
-| ⑦ | planner 侧参数语义写进技能描述 + 工具侧"父子同名"确定性拒绝 | `agent/skills.py` / `tools/base.py` |
+| ⑦ | planner 侧参数语义写进技能描述 + 工具侧"父子同名"确定性拒绝 | `agent/workflows.py` / `tools/base.py` |
 | ⑧ | 确认弹窗问句点名父标签（读不到字典则退回 id，不因此不弹窗） | `agent/adminops.py` `_confirm_one/render_confirm_question` + `graph.py` `_confirm_popup` |
 
 ### 附二：活体探针补出的两个洞（同一天晚上，**都是判据/纪律缺位，不是执行失败**）
@@ -559,7 +559,7 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 | # | 现场 | 根因（归属五性质） | 落点 |
 |---|------|--------------------|------|
 | ⑨ | 管理员说「把文章 1 置顶」，planner 把后台列表**第一行**（id=46）填进了 `article_id`——它确实读到过 46，于是"目标有据"放行了 | **P3 参数不带来源约束**：id 参数的"有据"只证明**读到过**，不证明**是用户点的那一篇** | `adminops.user_named_article_ids/target_named/target_conflict_frame` + `graph.execute_node`（`target_mismatch`，零写）+ `_confirm_popup`（不一致连窗都不弹） |
-| ⑩ | 「把文章 1 的「摄影」标签去掉」——planner 没产出写 spec，用 chat 回了一句"请再确认一下"，于是**弹窗链路根本没被触发**，用户看到的是又一轮往返 | **叙述权/决定权错位**：planner 把"要不要执行"判成了自己的事（那本是同意闸 + 确认框的事） | `graph.py` planner 规则 4b + `skills.py` 三个写技能描述同句；`adminops._confirm_one` 顺带补"摘哪个标签"（同族盲签） |
+| ⑩ | 「把文章 1 的「摄影」标签去掉」——planner 没产出写 spec，用 chat 回了一句"请再确认一下"，于是**弹窗链路根本没被触发**，用户看到的是又一轮往返 | **叙述权/决定权错位**：planner 把"要不要执行"判成了自己的事（那本是同意闸 + 确认框的事） | `graph.py` planner 规则 4b + `workflows.py` 三个写技能描述同句；`adminops._confirm_one` 顺带补"摘哪个标签"（同族盲签） |
 
 两条都在**判据/措辞层**收口（P3/P4 方向的最小动作），并各补了 golden 用例
 （`admin_write_intent_tag_remove_popup` 锁⑩；⑨ 的判据在 `tests/test_admin_write.py` §⑮ +
@@ -687,10 +687,10 @@ PASS、页面真的跳了，narrator 引回执时把前缀一起抄进正文 ⇒
 混合视图，叙述完全可以说成"这些是被驳回的"——答错且无声）。
 
 **四批之后的诚实状态**：D4 只落地了 **`enum` 这半**（枚举来源定在工具层，见 D4 步骤 2 的补注），
-**planner 输出仍是那 5 行文本协议**、`skill_schema.py` 与双轨迁移都没做；D5（id 类参数的来源约束）
+**planner 输出仍是那 5 行文本协议**、`workflow_schema.py` 与双轨迁移都没做；D5（id 类参数的来源约束）
 没有动；D3、D1、D2 原样挂着。
 （⚠️ **20261004 追记**：这一句写在换路之前——今天 **planner 输出已不是那五行文本**，是 native
-tool calls；`skill_schema.py` 那条老路**不必做了**，但 **D5（id 类参数的来源约束）与 D3/D1/D2
+tool calls；`workflow_schema.py` 那条老路**不必做了**，但 **D5（id 类参数的来源约束）与 D3/D1/D2
 原样成立、与本行无关**。别拿"输出换路了"当"这些方向做完了"。）判据密度仍然高（13 处 fallback / 15 个 reason 码），
 **四批减少的是"失真源头"而不是判据条数**——按本节开头那条 KPI，要看的仍是"真实流量里判据命中数
 是否趋近 0"。

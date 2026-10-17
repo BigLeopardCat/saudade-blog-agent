@@ -70,7 +70,7 @@ def receipt(tool: str, result: str, args: dict | None = None, **extra) -> dict:
     渲染过程行；给字符串会在 producer 里当场 AttributeError，而那条异常会把整轮打成
     `__ERROR__`——本套件第一版就是这么红的）。
     """
-    return {"skill": "admin_ops", "tool": tool, "args": dict(args or {}),
+    return {"workflow": "admin_ops", "tool": tool, "args": dict(args or {}),
             "result": result, **extra}
 
 

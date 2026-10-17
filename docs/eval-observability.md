@@ -53,9 +53,9 @@
 > 与"胡说地做不到"在文本上一模一样，闸门只会把真话也换成道歉，而道歉同样是假话。守住它的是
 > 三样**各有机器锁**的东西：① 供给端把能力边界放到模型读得到的地方（审核报表的"处置"那行、
 > `board_delete` 的技能描述与回复契约、工具的 `.description`）；② 清单本身如实——`site_guide(role)`
-> 由 `visible_skills(role)` 渲染，两个方向都被 `tests/test_skills.py::test_site_guide_is_role_rendered`
+> 由 `visible_workflows(role)` 渲染，两个方向都被 `tests/test_workflows.py::test_site_guide_is_role_rendered`
 > 钉死（可见技能的 capability 必须在清单里、不可见的一个字都不许混入、收束句整句在位），这就是
-> "拿 `visible_skills` 交叉核对"能落地的形态（核**清单**而不是核**回复**：核回复判不出真假，
+> "拿 `visible_workflows` 交叉核对"能落地的形态（核**清单**而不是核**回复**：核回复判不出真假，
 > 核清单是确定性的）；③ 行为侧那条实证用例 `admin_announcement_create_popup_prose` 锁"该弹的卡
 > 必须弹出来、而不是重写成一句追问或道歉"——**卡弹出来的那一轮，回复由系统确定性给出，narrator
 > 根本没机会编那句假否定**。⚠️ 谁要再往 gate 里加一条"能力否定"正则，先把这三条读一遍。
@@ -246,7 +246,7 @@ flowchart LR
 
 | 层 | 评测对象 | 手段 | 指标 | 对应升级组件 |
 |---|---|---|---|---|
-| **L0 单元级** | 图节点、工具、schema | 单测（`tests/test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率；**另出一份非门禁的覆盖率报告**（20261013，见下） | 图重写、记忆剥离 |
+| **L0 单元级** | 图节点、工具、schema | 单测（`tests/test_workflows.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率；**另出一份非门禁的覆盖率报告**（20261013，见下） | 图重写、记忆剥离 |
 | **L1 基准级** | 检索器、生成层、端到端 RAG | BEIR / RGB / CRAG（§3） | nDCG@10、Recall@5、MRR；噪声准确率 / 拒答率 / 错误检测率；Truthfulness（幻觉=-1） | RAG、防幻觉 |
 | **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，条数以用例文件为准）；**LLM 评审员**（20260925，报告非门禁，见 §2 末） | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
 | **L3 对账级**（原设计为"回放级"） | 线上行为的**跨源一致性** | `eval/trace_reconcile.py`：trace ↔ `agent.log` ↔ `monitor.log` 三源确定性对账（零 LLM、只读） | 各判据条数：trace 有收尾行没有 / 收尾行有 trace 没有 / 重复 trace_id / end_reason·frames 不等 / 只在失败分支出现的前端上报 | 全部（每次升级后跑） |
@@ -496,9 +496,9 @@ FAIL 复审单把回归组红置顶（当天必修）。混跑的坏处正是这
    判不了**，第二本账不许把"前提没到"变成静默给绿。今天没有用例带 `pending_action`
    （`grep -c pending_action eval/golden/*.jsonl` = 0）⇒ 这一半是**潜伏**的（下一条"回『嗯』重提"的
    用例一写就会撞上），不是某个用例正在红。上线前那一格是空的：`require_confirm_payload` 原有三键
-   （`skill` / `specs` / `skill_any`）**没有一个字看参数本身**，于是 20261006 待办事故里
+   （`workflow` / `specs` / `workflow_any`）**没有一个字看参数本身**，于是 20261006 待办事故里
    planner 把正文填成了上一轮上下文里的另一件事（trace `20261006T093633`），卡照弹、
-   `skill`/`specs` 全绿、**每一轮全量回归都绿**（该条用例的 `_note` 当时明写不做正文断言，
+   `workflow`/`specs` 全绿、**每一轮全量回归都绿**（该条用例的 `_note` 当时明写不做正文断言，
    理由是"参数由 planner 采样填"——那只对了一半：采样能换的是**措辞**，不是**另一件事**）。
    写法必须是**正断言**：只拦"参数对不回主人原话"，不锁措辞、不锁采样长度，所以不会把一次
    采样换向判成回归。⚠️ 只对**照抄型**字段用——判据是「这一格的**正主**是谁」：
@@ -640,7 +640,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 
 | 阶段 | 并行建设的评测/可观测 |
 |---|---|
-| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（**条数与逐 tag 分量见用例文件与 `eval/report/last_run.json` 的 `by_tag`，不在文档里手抄**）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>`、`--only <id1,id2>` 逗号多选定位、`--skip-ids`、`--min-pass-rate`；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `tests/test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`tests/test_judge_offline.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。**20260921 补**：`eval/golden_draft.py`
+| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（**条数与逐 tag 分量见用例文件与 `eval/report/last_run.json` 的 `by_tag`，不在文档里手抄**）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>`、`--only <id1,id2>` 逗号多选定位、`--skip-ids`、`--min-pass-rate`；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `tests/test_workflows.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`tests/test_judge_offline.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。**20260921 补**：`eval/golden_draft.py`
 （trace_alert 命中的真实现场 → 用例草稿 + 人审对照单，落 `eval/report/golden_drafts_*.{jsonl,md}`；
 **只产草稿不自动入库**，含真实用户文本故不进 git）+ L2 门禁分两层（回归组硬判 100%，见 §2 门槛分工）。
 **20260925 补**：`eval/llm_judge.py`（LLM 评审员，判"回复有没有编材料"，**只出报告不进任何门禁**，
@@ -662,7 +662,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 | 升级组件 | 评测手段 | 可观测指标 |
 |---|---|---|
 | Agent 核心重写（手写图） | L0 节点单测 + L2 golden（意图/防幻觉） | 图路径、递归深度、planner/reflector 计数 |
-| 记忆体系升级 | L0（摘要协议已移除，tests/test_skills.py 断言不再 REVISE）+ golden summary_round（不得输出 SUMMARY:）+ 记忆专项评测（未做） | 摘要触发率、召回命中率、污染事件 |
+| 记忆体系升级 | L0（摘要协议已移除，tests/test_workflows.py 断言不再 REVISE）+ golden summary_round（不得输出 SUMMARY:）+ 记忆专项评测（未做） | 摘要触发率、召回命中率、污染事件 |
 | 多 agent | L2 路由正确性 + 子任务成功率 | 路由分布、子 agent 延迟/成本分解 |
 | 防幻觉 | L1 RGB 四 testbed + L2 攻击样本 | 空回复率、恢复语触发率、`__ERROR__` 率 |
 | RAG | 🟡 已落地：检索基线 L1（recall_eval.py 直接测线上 rag/search.py，词法 2/3-gram BM25 文档级聚合，21 条 queries（12 正例 + 9 噪声）recall@1=1.00——词法已打满当前语料，向量留 BEIR 对比再上）+ L2 golden rag 族 24 条（端到端，同源出题）。未做：BEIR 基准、CRAG Truthfulness | 检索耗时、top-k 来源分布、拒绝回答率 |

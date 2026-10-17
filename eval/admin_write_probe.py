@@ -365,12 +365,12 @@ def history_items(uid: int, role: str, conv_id: int) -> list:
     return body.get("items") or []
 
 
-def _stale_token(uid: int, conv_id: int, skill: str, specs: list) -> str:
+def _stale_token(uid: int, conv_id: int, workflow: str, specs: list) -> str:
     """签一个**已过期**的同形令牌（探针自己持密钥；只为验"过期必拒"）。"""
     from agent import confirm
     from config.settings import settings
     payload = {"v": confirm._VERSION, "uid": uid, "conv": conv_id,
-               "exp": int(time.time()) - 1, "skill": skill, "specs": specs}
+               "exp": int(time.time()) - 1, "workflow": workflow, "specs": specs}
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     sig = hmac.new((settings.jwt_secret or "").encode(),
                    confirm._DOMAIN + body, hashlib.sha256).digest()
@@ -791,7 +791,7 @@ def _drop_conv(rep: Report, uid: int, role: str, cid: int, tag: str) -> None:
 
 
 def _popup_token(rep: Report, uid: int, role: str, conv_id: int, intent: str,
-                 tag: str, want_skill: str) -> dict | None:
+                 tag: str, want_workflow: str) -> dict | None:
     """发一句**非命令措辞的意图**，取回确认帧里的待办令牌（零执行）。
 
     断言三件：帧在、本轮**零执行**（库真值稍后由调用方复核）、令牌没被写进回复正文
@@ -822,9 +822,9 @@ def _popup_token(rep: Report, uid: int, role: str, conv_id: int, intent: str,
     # 所以断言要解令牌，不是查帧原文（20260921 探针自身断言写错，误报了两条腿）。
     load = _token_payload(tok)
     specs = load.get("specs") or []
-    print(f"        令牌载荷：skill={load.get('skill')!r} specs={len(specs)} 条")
-    rep.check(load.get("skill") == want_skill,
-              f"{tag} 令牌载荷里的技能名不是 {want_skill}：{load.get('skill')!r}（执行轮无从拼计划）")
+    print(f"        令牌载荷：workflow={load.get('workflow')!r} specs={len(specs)} 条")
+    rep.check(load.get("workflow") == want_workflow,
+              f"{tag} 令牌载荷里的技能名不是 {want_workflow}：{load.get('workflow')!r}（执行轮无从拼计划）")
     rep.check(bool(specs) and all(isinstance(s, dict) and s.get("tool") for s in specs),
               f"{tag} 令牌载荷里没有可执行的 specs：{specs!r}")
     rep.check(load.get("uid") == uid and load.get("conv") == conv_id,
@@ -880,7 +880,7 @@ def step8_popup_write(rep: Report, uid: int, role: str, art_id: int, title: str)
         # ⑨ 令牌边界：篡改 / 过期 → 必拒且零写（都在真写之前做，靶子还没动）
         for label, bad in (("篡改签名", _tampered(tok)),
                            ("已过期", _stale_token(uid, conv_id,
-                                                   payload.get("skill") or "article_status",
+                                                   payload.get("workflow") or "article_status",
                                                    payload.get("specs") or []))):
             # 每条子腿的基线在**发请求之前**现读（20260922）：共用循环外那个 `cur` 时，
             # 前一条腿一旦真的写成功（哪怕根因是探针自己的 bug），后一条腿会拿旧基线比 ⇒
@@ -1247,7 +1247,7 @@ def _drive_or_click(rep: Report, uid: int, role: str, conv_id: int,
 
 
 def _ann_confirm(rep: Report, uid: int, role: str, conv_id: int, msg: str,
-                 tag: str, want_skill: str) -> tuple[dict, dict] | None:
+                 tag: str, want_workflow: str) -> tuple[dict, dict] | None:
     """发一句公告写指令 → 断言**无论措辞多像命令都弹确认框** → 点确定 → 返回两轮。
 
     这条断言是用户 20260922 点名要求的落点：「可以代发公告，但是内容也需要**弹窗
@@ -1270,8 +1270,8 @@ def _ann_confirm(rep: Report, uid: int, role: str, conv_id: int, msg: str,
         rep.fails.append(f"{tag} 确认帧不是合法 JSON：{raw[:80]}")
         return None
     load = _token_payload(payload.get("token") or "")
-    rep.check(load.get("skill") == want_skill,
-              f"{tag} 令牌载荷里的技能名不是 {want_skill}：{load.get('skill')!r}")
+    rep.check(load.get("workflow") == want_workflow,
+              f"{tag} 令牌载荷里的技能名不是 {want_workflow}：{load.get('workflow')!r}")
     d2 = stream_rust(f"确认执行：{payload.get('q') or ''}", uid, role, conv_id,
                      confirm_token=payload.get("token") or "")
     clean_end(rep, f"{tag} 点确定（真写轮）", d2)
@@ -1466,7 +1466,7 @@ def step15_loud_target(rep: Report, uid: int, role: str) -> None:
          参数，execute 的 resolve_args 会给带原因码的错误帧；若它被当名字去查，
          则落在 (a) 那条路上。**两条路都必须是零回执 + 说实话**：这正是 20260921
          事故最硬的一面（"解不出来"与"没填"长得一样，于是注记里写下了错误事实）。
-         机制本身由 test_skills.test_write_ref_loud 离线锁死，这里只验**对外形态**。
+         机制本身由 test_workflows.test_write_ref_loud 离线锁死，这里只验**对外形态**。
     """
     print("\n⑮ 解不出的目标 → 响亮（零真写，零回执）")
     before = _tags_full(uid, role)
@@ -1559,7 +1559,7 @@ _BOARD_WRITE_TOOL = "audit_board_comment"
 _QUOTA_WRITE_TOOLS = frozenset({"approve_quota_request", "reject_quota_request",
                                 "reset_user_quota"})
 # 令牌载荷里认识的技能名（两族各自单独办，与合并成一张卡都算对）
-_CARD_SKILLS = frozenset({"board_audit", "review_inbox", "quota_approve",
+_CARD_WORKFLOWS = frozenset({"board_audit", "review_inbox", "quota_approve",
                           "quota_reject", "quota_reset"})
 
 
@@ -1755,8 +1755,8 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
         board_specs, quota_specs, other_specs = _split_card_specs(specs)
         rep.check(bool(specs) and not other_specs,
                   f"⑰ 卡上的写工具只该出自这两族（留言复核 / 额度），出现别族：{other_specs!r}")
-        rep.check(str(load.get("skill") or "") in _CARD_SKILLS,
-                  f"⑰ 令牌载荷里的技能名不认识：{load.get('skill')!r}")
+        rep.check(str(load.get("workflow") or "") in _CARD_WORKFLOWS,
+                  f"⑰ 令牌载荷里的技能名不认识：{load.get('workflow')!r}")
         if tok and tok in (d.get("reply") or ""):
             rep.fails.append("⑰ 令牌出现在回复正文里 = Rust 把 __CONFIRM__ 累积进历史了")
 
@@ -2525,14 +2525,14 @@ def _del_probe_account(rep: Report, uid: int, role: str, name: str, tag: str = "
 
 
 def _acct_popup(rep: Report, uid: int, role: str, conv: int, intent: str, tag: str,
-                want_skill: str, name: str, want_state: str):
+                want_workflow: str, name: str, want_state: str):
     """弹卡轮 → `(令牌载荷, 问句)`；没弹出来返回 `(None, "")`。
 
     拿到的问句要满足三件（都在"主人点确定之前"这一侧）：**账号名一字不改**、印着
     `账号 id=`、印着**现状**——这三样是主人唯一能核对的依据（名字对不上、现状是旧的，
     都意味着他在盲签）。
     """
-    payload = _popup_token(rep, uid, role, conv, intent, tag, want_skill)
+    payload = _popup_token(rep, uid, role, conv, intent, tag, want_workflow)
     if payload is None:
         return None, ""
     q = payload.get("q") or ""

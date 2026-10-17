@@ -24,7 +24,7 @@
   · ③ 纠偏语文本 —— 不点任何技能名、必须说清"清单那条通道这一轮没有了"（不说清，
     模型会照旧报一个不在 schema 里的函数名 ⇒ `tool_calls_to_plan` 读不出决策）；
   · ④ 接线 —— 那一格在 `planner_node` 的一次性纠偏通道里，守卫齐备，且**与 ③
-    互换条件不重叠**（③ 收 `skill == "chat"`，④ 收 `skill not in ("", "chat")`）。
+    互换条件不重叠**（③ 收 `workflow == "chat"`，④ 收 `workflow not in ("", "chat")`）。
 
 对账那一半（`tasks.reconcile_goal` / `sources` 贯穿）在 `tests/test_tasks.py`——那是
 tasks 层的契约，与"不许 import agent.graph"同一条纪律。
@@ -41,7 +41,7 @@ sys.path.insert(0, str(ROOT))
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
 import agent.graph as g  # noqa: E402
-from agent.skills import visible_skills  # noqa: E402
+from agent.workflows import visible_workflows  # noqa: E402
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 FAILS: list[str] = []
@@ -127,8 +127,8 @@ def test_backfill_nudge_text():
     print("\n[纠偏] `_INTENTS_BACKFILL_NUDGE`：不替模型选技能、且必须交代清单通道没了")
     check("不念任何技能名（念一遍等于替它做选择；与本仓另外几条纠偏语同一条纪律）",
           all(s.name not in g._INTENTS_BACKFILL_NUDGE
-              for s in visible_skills("admin") if s.name != "chat"),
-          str([s.name for s in visible_skills("admin")
+              for s in visible_workflows("admin") if s.name != "chat"),
+          str([s.name for s in visible_workflows("admin")
                if s.name in g._INTENTS_BACKFILL_NUDGE]))
     check("点名要填的是**内联字段**（`intents` 参数），不是那条伪函数",
           "`intents`" in g._INTENTS_BACKFILL_NUDGE)
@@ -151,7 +151,7 @@ def test_branch_wiring():
     print("\n[接线] ④ 那一格：守卫齐备 + 摘伪函数 + 重绑 llm + 记账 + continue")
     i = _GRAPH_SRC.index("_acted_no_intents = bool(")
     blk = _GRAPH_SRC[i:i + 2200]
-    check("守卫：点了**真技能**才进这一格（skill 既不是空串也不是 chat ⇒ 与 ③ 互斥）",
+    check("守卫：点了**真技能**才进这一格（workflow 既不是空串也不是 chat ⇒ 与 ③ 互斥）",
           'not in ("", "chat")' in blk)
     check("守卫：`rounds == 0`（枚举回答的是「这句话里有几件事」，只该问一次）",
           "rounds == 0" in blk)
@@ -164,8 +164,8 @@ def test_branch_wiring():
           and "not decided.intents" not in blk)
     check("形态判据参与守卫（只有像多件的那句才值得多花一次调用）",
           "_multi_item_shape(user_msg)" in blk)
-    check("与 ③ 的条件互斥：③ 收 `skill == \"chat\"`、④ 收 `skill not in (\"\", \"chat\")`",
-          'decided.skill == "chat"' in _GRAPH_SRC
+    check("与 ③ 的条件互斥：③ 收 `workflow == \"chat\"`、④ 收 `workflow not in (\"\", \"chat\")`",
+          'decided.workflow == "chat"' in _GRAPH_SRC
           and 'not in ("", "chat")' in blk)
     _outer = _GRAPH_SRC.index("(decided.undecided or _asks_data")
     check("④ 也进了外层那一个 `if` 的条件里（不然分支永远到不了——本仓出现过这种"
@@ -191,23 +191,23 @@ def test_branch_wiring():
 class _Decided:
     """`_planner_decide` 的决策对象里，这两个函数用到的那几格。"""
 
-    def __init__(self, skill="", intents=(), declare=None):
-        self.skill = skill
+    def __init__(self, workflow="", intents=(), declare=None):
+        self.workflow = workflow
         self.intents = list(intents)
         self.declare = declare
 
 
 def test_left_count_shares_the_registration_path():
-    print("\n[共用] `_acted_skills` / `_intents_left_count`：与真登记同一份现场事实")
+    print("\n[共用] `_acted_workflows` / `_intents_left_count`：与真登记同一份现场事实")
     check("派下去的那个技能算「办了」（卡一次只装一个 ⇒ 它就是上卡的那件）",
-          g._acted_skills({"receipts": []}, _Decided(skill="category_create"))
+          g._acted_workflows({"receipts": []}, _Decided(workflow="category_create"))
           == {"category_create"})
     check("`chat` 与零调用（空串 / 没这个属性）不算「办了」",
-          g._acted_skills({}, _Decided(skill="chat")) == set()
-          and g._acted_skills({}, _Decided()) == set())
+          g._acted_workflows({}, _Decided(workflow="chat")) == set()
+          and g._acted_workflows({}, _Decided()) == set())
     check("回执里的技能也算（多轮里前面办过的那些不再重复登记），且脏回执不会炸",
-          g._acted_skills({"receipts": [{"skill": "category_create"}, {"tool": "x"}, None]},
-                          _Decided(skill="article_tags"))
+          g._acted_workflows({"receipts": [{"workflow": "category_create"}, {"tool": "x"}, None]},
+                          _Decided(workflow="article_tags"))
           == {"article_tags", "category_create"})
 
     from agent.principal import Principal
@@ -216,40 +216,40 @@ def test_left_count_shares_the_registration_path():
     msg = "想建个新分类叫「临江仙」，文章 23 的标签也想换成「Rust」"
     state = {"messages": [HumanMessage(msg)], "receipts": []}
     check("空清单 ⇒ 0（形状一：点了技能却没交）",
-          g._intents_left_count(state, cfg, _Decided(skill="category_create")) == 0)
+          g._intents_left_count(state, cfg, _Decided(workflow="category_create")) == 0)
     check("**清单里只有「正要办的那件」⇒ 也是 0**（形状二，`20261009_032513` 的现场；"
           "写成 `not decided.intents` 的那一版判不出来）",
           g._intents_left_count(
               state, cfg,
-              _Decided(skill="category_create",
-                       intents=[{"goal": "新建分类「临江仙」", "skill": "category_create"}]))
+              _Decided(workflow="category_create",
+                       intents=[{"goal": "新建分类「临江仙」", "workflow": "category_create"}]))
           == 0)
     check("清单里还有**没上卡**的那件 ⇒ 1（不该催——这一轮该记的已经记着了）",
           g._intents_left_count(
               state, cfg,
-              _Decided(skill="category_create",
-                       intents=[{"goal": "新建分类「临江仙」", "skill": "category_create"},
+              _Decided(workflow="category_create",
+                       intents=[{"goal": "新建分类「临江仙」", "workflow": "category_create"},
                                 {"goal": "把文章 23 的标签换成「Rust」",
-                                 "skill": "article_tags"}]))
+                                 "workflow": "article_tags"}]))
           == 1)
     check("**同一件事换个措辞写两遍 ⇒ 数成两件**（归一化器只管技能闭集与空白，不做 goal "
           "去重；去重只长在「已用 task_hold 显式登记过」那一支，见 `same_goal` 的唯一消费方）。"
           "如实钉住现状——这是**已知边界**，本格不碰它",
           g._intents_left_count(
               state, cfg,
-              _Decided(skill="category_create",
+              _Decided(workflow="category_create",
                        intents=[{"goal": "把文章 23 的标签换成「Rust」",
-                                 "skill": "article_tags"},
+                                 "workflow": "article_tags"},
                                 {"goal": "把文章 23 的标签也换成「Rust」",
-                                 "skill": "article_tags"}]))
+                                 "workflow": "article_tags"}]))
           == 2)
     j = _GRAPH_SRC.index("def _intents_left_count(")
     check("**与登记走同一个函数**（`intent_frames`）——照着登记那条路另写一份排除规则，"
           "迟早一边松一边紧；数出来的 0 必须等于登记出来的 0",
           "intent_frames(" in _GRAPH_SRC[j:j + 1200])
     k = _GRAPH_SRC.index("def _auto_task_frames(")
-    check("**登记那一路也用同一个 `_acted_skills`**（否则两处会各算一份「已办」）",
-          "_acted_skills(state, decided)" in _GRAPH_SRC[k:k + 1500])
+    check("**登记那一路也用同一个 `_acted_workflows`**（否则两处会各算一份「已办」）",
+          "_acted_workflows(state, decided)" in _GRAPH_SRC[k:k + 1500])
     check("记账带 `listed`（这一格两种形状的分水岭：0 = 没交，>0 = 交了但只剩它正要办的那件）",
           "listed=len(getattr(decided, \"intents\", ()) or ())" in _GRAPH_SRC[_I_BRANCH:])
     check("纠偏语在这一格**只发一次**（`not correction` 的守卫仍在）",

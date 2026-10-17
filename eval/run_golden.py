@@ -2129,7 +2129,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
 
     # 20260924：**多条命令都要出现**（`require_cmd_contains` 是单串，一个用例只能锁
     # 一条命令）。动机 = multi_turn_redirect 那条"把 X 换成 Y"只断了新开的 Y、
-    # 没断旧开的 X 关掉（`skills.py` 明写"把X换成Y＝两条 spec 同轮"）——半截执行
+    # 没断旧开的 X 关掉（`workflows.py` 明写"把X换成Y＝两条 spec 同轮"）——半截执行
     # 与完整执行在那个断言下同分，于是"只开雨不关樱花"能长期绿。每个模式都必须
     # 命中至少一条命令帧（是全称，不是任一）。
     for pat in gold.get("require_cmd_all", []):
@@ -2346,7 +2346,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
     # `__CONFIRM__` 帧里的令牌解出（`confirm.inspect`：只解 base64、不验签；评测读它
     # 不构成授权判据，见 agent/confirm.py 里那条警告）。顺带锁一条安全不变量：**令牌
     # 原文不得出现在给用户看的正文里**（它是 10 分钟有效的写授权凭据）。
-    # 载荷六键：`skill`（精确相等）/ `specs`（参数条数）/ `skill_any`（族——"是哪几件
+    # 载荷六键：`workflow`（精确相等）/ `specs`（参数条数）/ `workflow_any`（族——"是哪几件
     # 事之一"这种断言，理由见下面那段注）/ `args_from_input`（20261006：参数正文必须
     # 是**主人原话或本轮台账那一行**的子串——两本账的理由见下面那一格的头注）/
     # `specs_include`（20261009：卡上**必须真带着**这一件，见下面那一格的头注）/
@@ -2359,17 +2359,17 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
         else:
             _pay = _pays[0]
             _specs = _pay.get("specs") or []
-            if _cp.get("skill") and _pay.get("skill") != _cp["skill"]:
-                fails.append(f"卡片技能不符：期望 {_cp['skill']}，载荷 {_pay.get('skill')!r}")
-            # 20260926：`skill_any`（族）——"这张卡必须是上一轮列出的某几件事之一"这一
+            if _cp.get("workflow") and _pay.get("workflow") != _cp["workflow"]:
+                fails.append(f"卡片技能不符：期望 {_cp['workflow']}，载荷 {_pay.get('workflow')!r}")
+            # 20260926：`workflow_any`（族）——"这张卡必须是上一轮列出的某几件事之一"这一
             # 类断言，用不了精确相等，而它恰好是**短应答承接**用例唯一说得清的形态：
             # 「两个都做」这一声到底先落到哪一件上由 planner 采样决定，两件都算对；
             # 真正要判的是"它接住了上一轮列的东西"（没接住时连卡都不会弹，见
             # followup_short_all_two_picks 的 _note）。用精确相等写死其中一个，等于把
             # 采样当判据——那一半的采样一旦换向就假红。
-            if _cp.get("skill_any") and _pay.get("skill") not in _cp["skill_any"]:
-                fails.append(f"卡片技能不在期望族里：期望 {_cp['skill_any']}，"
-                             f"载荷 {_pay.get('skill')!r}")
+            if _cp.get("workflow_any") and _pay.get("workflow") not in _cp["workflow_any"]:
+                fails.append(f"卡片技能不在期望族里：期望 {_cp['workflow_any']}，"
+                             f"载荷 {_pay.get('workflow')!r}")
             if "specs" in _cp and len(_specs) != _cp["specs"]:
                 fails.append(f"卡片参数条数不符：期望 {_cp['specs']}，载荷 {len(_specs)}")
             # 20261010 第六键 `units`：卡面按**几格**编号（= 可独立执行的最小单元数）。
@@ -2388,7 +2388,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
                 elif len(_u) != _cp["units"]:
                     fails.append(f"卡片单元数不符：期望 {_cp['units']} 格，"
                                  f"载荷 {len(_u)} 格（分组 {_u}）")
-            # 20261009 第五键 `specs_include`：**卡上必须真带着那一件**。`skill` 与
+            # 20261009 第五键 `specs_include`：**卡上必须真带着那一件**。`workflow` 与
             # `specs`（条数）都看不见"卡上少了哪一步"——真链路实测（同一用例 13 次采样
             # 里 4 次）：主人说"把这两个标签加到文章〈id〉"、planner 的 id 槽填了别的号 ⇒
             # `set_article_tags` 被目标判据摘掉，而同批的 `create_tag` 照样上卡 ⇒ 卡照弹、
@@ -2412,7 +2412,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
                         f"{json.dumps(_got, ensure_ascii=False)}）")
             # 20261006：**参数正文的出处**。这条判据是 20261006 待办事故的直接产物：
             # 那一天 planner 把「加一条今天的待办，1.…」的正文填成了**上一轮上下文里**
-            # 的另一件事（trace `20261006T093633`），卡片照样弹、格式完全合法、`skill`
+            # 的另一件事（trace `20261006T093633`），卡片照样弹、格式完全合法、`workflow`
             # 与 `specs` 两条断言全绿——因为**这两条判据没有一个字看参数本身**。
             # 那一格在评测层的判据此前是**空的**（`admin_todo_add_popup` 的 `_note`
             # 明写不做正文断言，理由是"参数由 planner 采样填"，于是全量回归跑了多少轮
@@ -2565,21 +2565,21 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
     # 20261008 批 ①：**goal 粒度**的任务断言（上面那两条是 state 粒度——判的是"末帧
     # 写了什么状态"，看不见"到底是哪一件事被跟踪"）。
     # 动机 = 主人点名的「混合多任务执行依旧只挑一个办」：一句话里两件不同本领的写，
-    # 一张确认卡只装得下一件（令牌载荷里的 SKILL 是一个、`_confirm_grant_plan` 也只
+    # 一张确认卡只装得下一件（令牌载荷里的 WORKFLOW 是一个、`_confirm_grant_plan` 也只
     # 还原得出一个技能），planner 规则同样写着"先提最靠前那一项、其余不许说成已办"
-    # ⇒ **只办一件本身是合法形态**，本条不判它（`skill_any` 那一族的存在就是为这个）。
+    # ⇒ **只办一件本身是合法形态**，本条不判它（`workflow_any` 那一族的存在就是为这个）。
     # 要判的是另一件**凭空消失**：既不在卡上、也不在 `agent_task` 里，下一轮谁都不记得
     # 它——这句话在**帧**上可判（有没有一帧 `__TASK__` 的 goal 指着它），在正文上只是
     # 措辞。所以本键是"只挑一件"这件事的筛子，不是"必须两件一起办"的要求。
     #
-    # 取值 = **意图清单**：每项 `{"skill": …, "goal": …}`。`skill` 与
-    # `require_confirm_payload.skill_any` 同一套取值域（"这件事若上卡会是哪个技能"），
+    # 取值 = **意图清单**：每项 `{"workflow": …, "goal": …}`。`workflow` 与
+    # `require_confirm_payload.workflow_any` 同一套取值域（"这件事若上卡会是哪个技能"），
     # `goal` 是这件事在任务帧 `goal` 里必然出现的一段原文。
     # 判法：**凡是没有被本轮卡片载荷认领的那几项，每一项都必须有一帧 `__TASK__` 的
     # `goal` 命中它**。
     #
     # 为什么按卡片载荷**动态排除**、而不是写死"第 2 件必须登记"：先提哪一件由 planner
-    # 采样决定（同 `skill_any` 那段注），写死一件就是把采样当判据 ⇒ 换向即假红，
+    # 采样决定（同 `workflow_any` 那段注），写死一件就是把采样当判据 ⇒ 换向即假红，
     # 判据成了硬币。排除掉被认领的那一件之后**剩下的是确定的**（N 件里必有 N-1 件没上卡），
     # 于是"剩下那几件有没有登记"这句话既判得动、换向又不误伤。
     # 空白归一后再比（`_squash_ws`）：任务 goal 是模型写的自由文本，句中的空格不该
@@ -2596,18 +2596,18 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
         _goals = [_squash_ws(str(f.get("goal") or "")) for f in _tfs]
         _carded = ""
         for _p in (result.get("confirm_payloads") or []):
-            if isinstance(_p, dict) and _p.get("skill"):
-                _carded = str(_p["skill"])
+            if isinstance(_p, dict) and _p.get("workflow"):
+                _carded = str(_p["workflow"])
                 break
         for _it in _per_intent:
-            if str(_it.get("skill") or "") == _carded:
+            if str(_it.get("workflow") or "") == _carded:
                 continue                     # 这一件上了卡 ⇒ 不在本条射程内
             _want = _squash_ws(str(_it.get("goal") or ""))
             if _want and any(_want in _g for _g in _goals):
                 continue
             fails.append(
                 f"没上卡的那件事没有留下任务登记：期望有一帧 __TASK__ 的 goal 含 "
-                f"{_it.get('goal')!r}（这件事的卡片技能是 {_it.get('skill')!r}，"
+                f"{_it.get('goal')!r}（这件事的卡片技能是 {_it.get('workflow')!r}，"
                 f"本轮卡片认领的是 {_carded or '（没有卡片载荷）'}）"
                 f"；本轮帧里的 goal（撤下帧已排除）：{[f.get('goal') for f in _tfs]}")
 

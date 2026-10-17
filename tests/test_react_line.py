@@ -10,7 +10,7 @@
   · **循环级的行为**（无进展 / 预算 / 纠偏 / 权限闸真的拦住了执行）搬去了
     `tests/test_react_arm.py`——那边跑的是真图、真节点、真帧；在这里再搭一个假循环
     只会搭出**第二份实现**，而两份实现对同一件事的看法迟早会分家。
-  · **本文件改判剩下的四件纯资产**：`spec_signature` / `RunLedger` / `SkillExecutor` /
+  · **本文件改判剩下的四件纯资产**：`spec_signature` / `RunLedger` / `WorkflowExecutor` /
     `convergence_verdict` / `wrap_up_text`。它们是判据的**全部输入输出面**，逐格锁住
     就等于把循环级的判据锁住了一大半（剩下的那一半是"节点有没有真的调它"，归
     `test_react_arm.py`）。
@@ -21,7 +21,7 @@
   · **台账分列**：checker PASS 进 `receipts`、BLOCK 进 `blocked` 带原因码、纯应答技能
     进 `replies`（**不进 receipts**——receipts 的语义是"系统确认的事实"）；
   · **技能级展开**：一次技能调用 = 实例化计划 + 逐工具验收，`run()` 回报真跑了几件；
-  · **台账登记**（20261016 新增，本批 ④b 那条判据的燃料）：`SkillExecutor.run` 记的是
+  · **台账登记**（20261016 新增，本批 ④b 那条判据的燃料）：`WorkflowExecutor.run` 记的是
     **技能级**签名、且取参在**字面路径修正之前**——两条口径都必须与
     `convergence_verdict` 的对照方（模型的原始 `tool_calls`）同源，错一条 ⇒ 无进展判据
     恒不触发（症状是"同一个动作原地打转到撞预算"，报告里看着像模型不听话）；
@@ -45,7 +45,7 @@ from agent import authz  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 from agent.react_line import (  # noqa: E402
     RunLedger,
-    SkillExecutor,
+    WorkflowExecutor,
     convergence_verdict,
     spec_signature,
     wrap_up_text,
@@ -94,7 +94,7 @@ def main() -> int:  # noqa: C901
     led = RunLedger()
     led.receipts.append({"tool": "freeze_account", "args": {"uid": "12"}, "result": "已冻结"})
     led.blocked.append({"tool": "freeze_account", "reason": "unknown_target", "args": {}})
-    led.replies.append({"skill": "chat", "reply": "好呀"})
+    led.replies.append({"workflow": "chat", "reply": "好呀"})
     check("`passed_tools` 只读 receipts（BLOCK 的那条不算「办成了」）",
           led.passed_tools() == ["freeze_account"] and led.block_reasons() == ["unknown_target"])
     check("`executed` 是签名计数器（不是布尔）——重复阈值靠它",
@@ -102,9 +102,9 @@ def main() -> int:  # noqa: C901
           and led.executed["t::{}"] == 1)
 
     # ── ③ 技能级展开：一次技能调用 = 实例化计划 + 逐工具验收 ───────────────
-    print("\n③ 技能级回执（SkillExecutor）")
+    print("\n③ 技能级回执（WorkflowExecutor）")
     led = RunLedger()
-    ex = SkillExecutor({"get_article_detail": lambda article_id: f"文章 {article_id} 的正文"},
+    ex = WorkflowExecutor({"get_article_detail": lambda article_id: f"文章 {article_id} 的正文"},
                        led, role="admin")
     text, n_tools = ex.run("read_article", {"article_id": 23})
     check("技能被展开成它计划里的工具（不是拿技能名去验收）",
@@ -119,22 +119,22 @@ def main() -> int:  # noqa: C901
 
     print("\n③b 计划里的工具不在可执行清单 ⇒ 响亮地 BLOCK，不静默跳过")
     led = RunLedger()
-    SkillExecutor({}, led, role="admin").run("read_article", {"article_id": 1})
+    WorkflowExecutor({}, led, role="admin").run("read_article", {"article_id": 1})
     check("缺工具 ⇒ BLOCK（不是「这条计划没写工具」）",
           len(led.blocked) == 1 and not led.receipts, str(led.block_reasons()))
 
     print("\n③c 纯应答技能（chat）留痕在 replies，**不进 receipts**")
     led = RunLedger()
-    _txt, n_tools = SkillExecutor({}, led, role="admin").run("chat", {"reply": "好呀"})
+    _txt, n_tools = WorkflowExecutor({}, led, role="admin").run("chat", {"reply": "好呀"})
     check("chat 没有回执（receipts 的语义是「系统确认的事实」）",
           not led.receipts, str(led.receipts))
-    check("留痕在 replies 里", [r["skill"] for r in led.replies] == ["chat"],
+    check("留痕在 replies 里", [r["workflow"] for r in led.replies] == ["chat"],
           str(led.replies))
     check("回报执行 0 个工具（⇒ 重复调用不判无进展）", n_tools == 0, str(n_tools))
 
     print("\n③d 命令工具没有 meta[cmd] ⇒ 生产 checker 判 BLOCK（判据没被换掉）")
     led = RunLedger()
-    SkillExecutor({"navigate_to": lambda path, confirm=False: "页面已跳转"},
+    WorkflowExecutor({"navigate_to": lambda path, confirm=False: "页面已跳转"},
                   led, role="admin").run("navigate", {"target": "首页"})
     check("navigate_to 缺 cmd ⇒ BLOCK cmd_shape", led.block_reasons() == ["cmd_shape"],
           str(led.block_reasons()))
@@ -142,7 +142,7 @@ def main() -> int:  # noqa: C901
     # ── ④ 台账登记：无进展判据的燃料（20261016，本批 ④b 那条判据的根因）─────────
     print("\n④ 台账登记：签名必须与判据的对照方**同源**")
     led = RunLedger()
-    SkillExecutor({"get_article_detail": lambda article_id: "正文"}, led,
+    WorkflowExecutor({"get_article_detail": lambda article_id: "正文"}, led,
                   role="admin").run("read_article", {"article_id": 7})
     check("跑过工具的技能 ⇒ 记了一条**技能级**签名（不是工具级 `get_article_detail`）",
           led.executed.get(spec_signature("read_article", {"article_id": 7})) == 1
@@ -153,16 +153,16 @@ def main() -> int:  # noqa: C901
                               last_ai=_call("read_article", article_id=7))["kind"]
           == "no_progress")
     led2 = RunLedger()
-    SkillExecutor({}, led2, role="admin").run("chat", {"reply": "好呀"})
+    WorkflowExecutor({}, led2, role="admin").run("chat", {"reply": "好呀"})
     check("纯应答技能（0 个工具）**不登记**（把没做过的事记成做过 ⇒ 收尾印出假件数）",
           not led2.executed, str(dict(led2.executed)))
 
     print("\n④b 字面路径修正**之前**取参（判据的对照方是模型的原始参数）")
     # 主人原话带 `/guestbook`，模型点的是「物联网平台」（**语义替身**）⇒
-    # `SkillExecutor.run` 会把 target 强制改成 `/guestbook`。签名若取**修正后**的参，
+    # `WorkflowExecutor.run` 会把 target 强制改成 `/guestbook`。签名若取**修正后**的参，
     # 这一格就永远对不上模型的原始 `tool_calls`。
     led = RunLedger()
-    SkillExecutor({"navigate_to": lambda **kw: "页面已跳转"}, led, role="admin",
+    WorkflowExecutor({"navigate_to": lambda **kw: "页面已跳转"}, led, role="admin",
                   user_msg="带我去 /guestbook 看看").run("navigate", {"target": "物联网平台"})
     check("记的是**模型原样**的那个 target（修正后的 `/guestbook` 不在账上）",
           led.executed.get(spec_signature("navigate", {"target": "物联网平台"})) == 1
@@ -178,7 +178,7 @@ def main() -> int:  # noqa: C901
     print("\n⑤ 权限闸：身份不明不执行（fail-closed），且记的是受阻不是事实")
     _ran: list = []
     led = RunLedger()
-    SkillExecutor({"list_accounts": lambda **kw: _ran.append(kw) or "账号列表"},
+    WorkflowExecutor({"list_accounts": lambda **kw: _ran.append(kw) or "账号列表"},
                   led, role="admin", principal=Principal(uid=0, role=None)).run(
         "account_roster", {})
     check("**工具一次都没真的跑**", _ran == [], str(_ran))
@@ -187,7 +187,7 @@ def main() -> int:  # noqa: C901
     check("受阻带原因码（`_check_spec` 认得权限帧 ⇒ 走同一条受阻链路）",
           led.block_reasons() == ["unknown_role"], str(led.block_reasons()))
     _led_u = RunLedger()
-    SkillExecutor({"list_accounts": lambda **kw: "账号列表"}, _led_u, role="admin",
+    WorkflowExecutor({"list_accounts": lambda **kw: "账号列表"}, _led_u, role="admin",
                   principal=Principal(uid=7, role="user")).run("account_roster", {})
     check("普通用户同样越不过硬 scope（原因码是「角色认得、但这个 scope 没授予」，"
           "与「身份不明」分开——两族读数不同）",

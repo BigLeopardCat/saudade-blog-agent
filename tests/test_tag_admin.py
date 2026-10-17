@@ -564,7 +564,7 @@ check("白名单里已有 announcement_title / announcement_id（20260922 第五
 # admin_category_create_popup 整轮 FAIL、零弹窗、用户收到一句"未知工具"的系统报错。
 # 这类错误的形态是**参数、模板、注册表都各看一遍都看不出问题**（三处都自洽），
 # 只有把展开结果与注册表对一遍才照得出来——所以锁在这一层。
-from agent.skills import SKILL_MAP, WRITE_SKILL_NAMES, instantiate_plan  # noqa: E402
+from agent.workflows import WORKFLOW_MAP, WRITE_WORKFLOW_NAMES, instantiate_plan  # noqa: E402
 
 _REGISTERED = {t.name for t in base.get_all_tools()}
 # 每个写技能的最小合法参数（只为把模板填满，不涉及真调用）
@@ -592,7 +592,7 @@ _MIN_PARAMS = {
     "message_read": {"all": True},
     # 后台首页待办 / 日程（20260926）：写面里**唯一目标是自由文本**的一件——
     # 目标不是站内既有名字、也不是 id，所以它既不在名字通道也不在 own 通道，
-    # 由 `_expand_todo_skill` 展开（见 agent/skills.py 的同名函数头注）。
+    # 由 `_expand_todo_workflow` 展开（见 agent/workflows.py 的同名函数头注）。
     "dashboard_todo_add": {"text": "给猫买罐头", "date": "明天"},
     # 后台账号冻结 / 解冻（20260926 第九轮）：名字通道的又一件——名字 → 账号的
     # 解析在工具侧对着**后台账号名录**做（`tools.base._find_named_user`）。
@@ -610,7 +610,7 @@ _MIN_PARAMS = {
     "dashboard_todo_done": {"text": "给猫买罐头"},
     # 改排期（20260929 批 G，第三条最小通道）：同族（目标仍是自由文本），第三个展开
     # 函数。`date` 这里填的是**人话**（展开器负责翻成 ISO 再落进 spec——所以 spec 里
-    # 永远不会出现「明天」这种随运行日漂移的词，这是 `_expand_todo_reschedule_skill`
+    # 永远不会出现「明天」这种随运行日漂移的词，这是 `_expand_todo_reschedule_workflow`
     # 与 `create` 那条通道共用 `adminops.normalize_due_date` 的地方）。
     "dashboard_todo_reschedule": {"text": "给猫买罐头", "date": "明天"},
     # 给单个账号发通知（20260926 第十一轮）：名字通道 + 自由文本正文两样并存的一件
@@ -677,19 +677,19 @@ _EXPECT_TOOL = {
     "review_inbox": ["audit_board_comment", "approve_quota_request"],
 }
 check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",
-      set(_EXPECT_TOOL) == set(WRITE_SKILL_NAMES) and set(_MIN_PARAMS) == set(WRITE_SKILL_NAMES),
-      f"{sorted(WRITE_SKILL_NAMES)}")
-for skill_name, params in _MIN_PARAMS.items():
-    out = instantiate_plan(skill_name, params)
+      set(_EXPECT_TOOL) == set(WRITE_WORKFLOW_NAMES) and set(_MIN_PARAMS) == set(WRITE_WORKFLOW_NAMES),
+      f"{sorted(WRITE_WORKFLOW_NAMES)}")
+for workflow_name, params in _MIN_PARAMS.items():
+    out = instantiate_plan(workflow_name, params)
     specs = out["tools"]
     names = [s.split("(", 1)[0] for s in specs]
     # 期望值两种形状：单工具（固定序列技能，绝大多数）与**列表**（变更集：逐条照抄
     # 系统拼好的清单）。写成一个字段、按类型取值，比另起一张表更不容易漂。
-    _want = _EXPECT_TOOL[skill_name]
+    _want = _EXPECT_TOOL[workflow_name]
     _want = list(_want) if isinstance(_want, list) else [_want]
-    check(f"{skill_name} 展开出的工具名 = {_want}",
+    check(f"{workflow_name} 展开出的工具名 = {_want}",
           names == _want, f"{names}（注记：{out['note'][:40]}）")
-    check(f"{skill_name} 展开出的工具名都在 _TOOL_REGISTRY 里（否则 execute 只能回"
+    check(f"{workflow_name} 展开出的工具名都在 _TOOL_REGISTRY 里（否则 execute 只能回"
           f"「未知工具」错误帧）",
           all(n in _REGISTERED for n in names), f"{[n for n in names if n not in _REGISTERED]}")
 
@@ -778,10 +778,10 @@ check("  卡面因此不会凭空多一行「新建」（已达成的现状句�
 # 条件工具（`extra_plan_tools`）**不进 `plan`**是刻意的：`tasks.intents_to_declarations`
 # 会把 `plan` 读成"每个任务都有这一步"，而标签已存在时那一条永远等不到回执（僵尸行）。
 # 但两个读 `plan` 的判据要**照旧看得见它**，否则"加了条件工具"与"技能和工具对不上"
-# 在系统里长得一样——它们各有一条锁在别处（`test_confirm.py` ④、`test_skills.py` ②）。
+# 在系统里长得一样——它们各有一条锁在别处（`test_confirm.py` ④、`test_workflows.py` ②）。
 check("create_tag 不在 article_tags.plan 里（进了 plan 就变成僵尸任务步骤）",
-      "create_tag" not in [t for t, _ in SKILL_MAP["article_tags"].plan]
-      and "create_tag" in SKILL_MAP["article_tags"].extra_plan_tools)
+      "create_tag" not in [t for t, _ in WORKFLOW_MAP["article_tags"].plan]
+      and "create_tag" in WORKFLOW_MAP["article_tags"].extra_plan_tools)
 
 # ── ⑧b′ 「先建再挂」的存在性剪枝（20261009）──────────────────────────────
 # 三步里最后一步、也是最容易漏的一步：展开器派出的 `create_tag` 是**纯函数**的产物，
@@ -837,11 +837,11 @@ check("字典读不到（None）⇒ 一个都不摘（读不到 ≠ 没有；误
       == ["create_tag", "set_article_tags"])
 check("只认 `article_tags`：`tag_create` 本体的「建一级标签」不受它管"
       "（那一步的复用判据是同名同层，同名二级**不该**拦下它）",
-      _prune({"skill": "tag_create",
+      _prune({"workflow": "tag_create",
               "tools": ['create_tag({"title": "Python"})']})[0]
       == ['create_tag({"title": "Python"})'])
 _prune_reads.clear()
-_lazy_tools, _ = _prune({"skill": "article_tags",
+_lazy_tools, _ = _prune({"workflow": "article_tags",
                          "tools": ['set_article_tags({"article_id": 46, "add": ["编程"]})']})
 check("  没有 `create_tag` 的计划一次都不读字典（惰性：不是每条 article_tags 都多一次请求）",
       _lazy_tools == ['set_article_tags({"article_id": 46, "add": ["编程"]})']
@@ -860,7 +860,7 @@ check("planner 收尾前真调了它（且排在 `_name_arg_fix` 之后——那
 
 # 同一族的另一半：`article_status` 的 `article_ids`（主人一句话点了好几篇、要改成
 # **同一个**值）。病与挂标签同源——清单里只有一件时，"剩余意图"按**技能**被判成已办
-# （`intents_to_declarations` 的 `skill ∈ acted_skills` 那条），于是只改了一篇就收尾。
+# （`intents_to_declarations` 的 `workflow ∈ acted_workflows` 那条），于是只改了一篇就收尾。
 # 治法同样是"把这一件事的**全部**条目放进同一张卡"，`intents_to_declarations` 那条
 # 算术一个字不动（它与判据侧 `require_task_goal_per_intent` 同源，见它的 docstring）。
 print("\n⑧c article_status：一次点多篇 ⇒ N 条 spec、一张卡（N=1 逐字节等于旧行为）")
@@ -922,9 +922,9 @@ from agent.graph import (_LEDGER_TARGET_FIELDS,  # noqa: E402
                          _write_target_refusal)
 
 
-def _plan(skill, params):
+def _plan(workflow, params):
     """真实的技能展开（字段名与计划文本同源，避免测试自己拼一个假计划）。"""
-    return instantiate_plan(skill, params)
+    return instantiate_plan(workflow, params)
 
 
 with patch(_tag_index=lambda c: IDX, _category_index=lambda c: CIDX):

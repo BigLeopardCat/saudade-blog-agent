@@ -233,7 +233,7 @@ followup_entity_slot_category` / `_ambiguous`）。
   本批改了两处**用例**（不是判据）：
   - `tests/test_gate_replan.py` ⑥/⑥d：脚本里 `_PLAN_CHAT` 写两遍（判据前移之后，第一次
     落 `chat` 会被决策层接走，闸门就看不到零帧轮，本节会退化成"没被测到"）；
-  - `tests/test_skills.py` `calls_in_wrong_skill`：那句 `最近有哪些文章呀` 命中
+  - `tests/test_workflows.py` `calls_in_wrong_workflow`：那句 `最近有哪些文章呀` 命中
     `is_site_corpus_question`（会走上一层纠偏，本节要验的 `_drop_correction` 就看不见了），
     换成中性句 `帮我看看天气吧`。
 - 新增接线锁 `tests/test_planner_wiring.py`：判据前移的**成功路径**（纠偏一次 → 落到真工具）、

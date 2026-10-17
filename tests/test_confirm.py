@@ -43,10 +43,10 @@ import agent.graph as g
 from agent import adminops as A
 from agent import authz
 from agent import confirm
-from agent import skills as S
+from agent import workflows as S
 from agent.graph import (_confirm_grant_plan, _confirm_popup, execute_node,
                          plan_state)
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflows import instantiate_plan  # noqa: E402
 from agent.principal import Principal
 import _parent_repo  # noqa: E402  （父仓三态：找得到/要求却找不到=红/找不到=响亮跳过）
 
@@ -76,7 +76,7 @@ print("① 令牌签发/验签")
 tok = confirm.sign(7, 42, "tag_create", SPECS)
 check("往返：verify(sign(...)) 取回同一份 payload",
       (lambda p: p is not None and p["uid"] == 7 and p["conv"] == 42
-       and p["skill"] == "tag_create" and p["specs"] == SPECS)(confirm.verify(tok, 7, 42)))
+       and p["workflow"] == "tag_create" and p["specs"] == SPECS)(confirm.verify(tok, 7, 42)))
 check("令牌形状：两段 base64url（正文 + 签名），长度可控",
       tok.count(".") == 1 and len(tok) < 2000, str(len(tok)))
 check("换人 → None（令牌绑 uid）", confirm.verify(tok, 8, 42) is None)
@@ -88,7 +88,7 @@ check("篡改签名 → None",
 check("篡改正文（换一个标签名）→ None（签名覆盖正文）",
       confirm.verify(confirm._b64e(json.dumps(
           {"v": 1, "uid": 7, "conv": 42, "exp": int(time.time()) + 600,
-           "skill": "tag_create",
+           "workflow": "tag_create",
            "specs": [{"tool": "create_tag", "args": {"title": "别的标签"}}]},
           ensure_ascii=False, separators=(",", ":")).encode()) + "." + tok.split(".")[1],
           7, 42) is None)
@@ -99,7 +99,7 @@ check("base64 坏 → None 且不抛", confirm.verify("!!!.???", 7, 42) is None)
 
 # 过期：把 exp 挪到过去再用真密钥签一次（模拟"昨天的令牌"）
 _past = {"v": 1, "uid": 7, "conv": 42, "exp": int(time.time()) - 1,
-         "skill": "tag_create", "specs": SPECS}
+         "workflow": "tag_create", "specs": SPECS}
 _body = json.dumps(_past, ensure_ascii=False, separators=(",", ":")).encode()
 import hashlib  # noqa: E402
 import hmac  # noqa: E402
@@ -141,12 +141,12 @@ print("\n③ 弹窗从哪来（_confirm_popup）")
 check("前置探针：此刻密钥在位、签得出令牌（下面正例才有意义）",
       len(confirm.sign(7, 42, "tag_create", SPECS)) > 20)
 SPEC_STATUS = 'set_article_status({"article_id": 12, "status": "private"})'
-# 计划夹具改走**对象**（20260928 批 C）：`_plan_skill` 现在读 `state["plan_obj"]`，
+# 计划夹具改走**对象**（20260928 批 C）：`_plan_workflow` 现在读 `state["plan_obj"]`，
 # 只喂契约文本的话技能名读成空串 ⇒ `confirm.sign` 拒签 ⇒ 正例全变 None（看起来
 # "全都符合预期"）。夹具与生产同路：对象经 `plan_state` 一次写两态。
-PLAN_STATUS = {"skill": "article_status", "params": {}, "tools": [SPEC_STATUS],
+PLAN_STATUS = {"workflow": "article_status", "params": {}, "tools": [SPEC_STATUS],
                "note": "x", "reply": "y"}
-PLAN_TAG = {"skill": "tag_create", "params": {},
+PLAN_TAG = {"workflow": "tag_create", "params": {},
             "tools": ['create_tag({"title": "测试标签", "parent_id": null, "color": "#eb2f96"})'],
             "note": "x", "reply": "y"}
 CFG = {"configurable": {"principal": Principal(uid=7, role="admin"), "user_id": 7,
@@ -197,7 +197,7 @@ if p:
     check("  签发的 spec 是**具体值**（没有 $ref 残留）",
           not confirm.has_refs(p["pending_confirm"]["specs"]))
     check("  带着技能名（执行轮照它拼计划，不靠模型回忆）",
-          p["pending_confirm"]["skill"] == "tag_create")
+          p["pending_confirm"]["workflow"] == "tag_create")
 
 check("提问 → **不弹**（把提问读成意图是最要命的误判）",
       _popup("文章 12 设为私密的步骤是什么") is None
@@ -225,7 +225,7 @@ check("带壳的意图原句照样弹窗（壳不许把弹窗也一起弄哑）"
 # 同意闸恒不放行 ⇒ **弹窗是它唯一的执行途径**，而弹窗分叉被"要求"这个裸名词挡掉了
 # （旧表把裸名词当疑问锚）⇒ 连着四轮一份公告都没执行途径，planner 每轮改写一遍正文。
 # 这一节锁的是"这句话**必须**弹得出来"，判据在 is_question_like 那边（test_authz ⑨e）。
-PLAN_ANN = {"skill": "announcement_create", "params": {},
+PLAN_ANN = {"workflow": "announcement_create", "params": {},
             "tools": ['create_announcement({"title": "今晚不许熬夜！", '
                       '"content": "全体用户今晚不许熬夜"})'],
             "note": "x", "reply": "y"}
@@ -280,7 +280,7 @@ check("点名 12 而计划写 12 → 弹（判据只否决不一致）",
 check("主人没点名（纯指代）→ 弹（判据不启用，行为与改动前一致）",
       _popup("《架构文档》我想改成私密", PLAN_STATUS, extra=(EVID2,)) is not None)
 check("参数含 $ref → 不弹（令牌签不出来，退回追问）",
-      _popup("改一下文章标签", {"skill": "article_tags", "params": {},
+      _popup("改一下文章标签", {"workflow": "article_tags", "params": {},
                               "tools": ['set_article_tags({"article_id": 12, '
                                         '"add": ["$list_tags[0].name"]})'],
                               "note": "x", "reply": "y"}, extra=(EVID,)) is None)
@@ -288,30 +288,30 @@ check("确认轮自己（confirm_grant 在场）→ 不弹（否则点完确定�
       # spec 走**签名体里那一件**（20261012：免卡判据现在比对工具名与参数，
       # 随手编一组别的参数不再算"同一件"——那正是 `⑤b` 要判的那件事）。
       _confirm_popup({"messages": [HumanMessage(content="确认执行：建标签")],
-                      **plan_state(PLAN_TAG), "confirm_grant": {"skill": "tag_create",
+                      **plan_state(PLAN_TAG), "confirm_grant": {"workflow": "tag_create",
                                                                 "specs": SPECS}},
                      [dict(SPECS[0])],
                      Principal(uid=7, role="admin"), "确认执行：建标签", CFG) is None)
 
 print("\n④ 点确定之后：照签名执行")
-plan_obj = _confirm_grant_plan({"skill": "tag_create", "specs": SPECS})
-check("_confirm_grant_plan：技能名取自签名（不猜）", plan_obj["skill"] == "tag_create")
+plan_obj = _confirm_grant_plan({"workflow": "tag_create", "specs": SPECS})
+check("_confirm_grant_plan：技能名取自签名（不猜）", plan_obj["workflow"] == "tag_create")
 check("  TOOLS 行逐条落签名参数（JSON 形态，参数一字不改）",
       plan_obj["tools"] == ['create_tag(' + json.dumps(SPECS[0]["args"], ensure_ascii=False) + ')'],
       str(plan_obj["tools"]))
 check("  NOTE 明写「用户已确认、不得增改参数」",
       "不得" in plan_obj["note"] and "确定" in plan_obj["note"])
 check("技能名与工具对不上 → 空清单 + 如实告知（防令牌被换工具）",
-      _confirm_grant_plan({"skill": "chat", "specs": SPECS})["tools"] == []
-      and "无效" in _confirm_grant_plan({"skill": "chat", "specs": SPECS})["note"])
+      _confirm_grant_plan({"workflow": "chat", "specs": SPECS})["tools"] == []
+      and "无效" in _confirm_grant_plan({"workflow": "chat", "specs": SPECS})["note"])
 check("技能名不存在 / 缺规格 → 空清单（不回落成 chat 就放行）",
-      _confirm_grant_plan({"skill": "不存在的技能", "specs": SPECS})["tools"] == []
-      and _confirm_grant_plan({"skill": "", "specs": SPECS})["tools"] == [])
+      _confirm_grant_plan({"workflow": "不存在的技能", "specs": SPECS})["tools"] == []
+      and _confirm_grant_plan({"workflow": "", "specs": SPECS})["tools"] == [])
 check("技能内**部分**工具越界也整单拒绝（不做「挑出合法的那几个」）",
-      _confirm_grant_plan({"skill": "tag_create", "specs": SPECS + [
+      _confirm_grant_plan({"workflow": "tag_create", "specs": SPECS + [
           {"tool": "set_article_status", "args": {"article_id": 1}}]})["tools"] == [])
 check("specs 为空 → 空清单（不猜要做什么）",
-      _confirm_grant_plan({"skill": "tag_create", "specs": []})["tools"] == [])
+      _confirm_grant_plan({"workflow": "tag_create", "specs": []})["tools"] == [])
 # 条件工具 `extra_plan_tools`（20261009）：`article_tags` 的展开函数在"要加的名字站内
 # 没有"时会多派一条 `create_tag`（先建再挂，一张卡一次点击）。它**不能**写进 `plan`
 # （会被 `tasks.intents_to_declarations` 读成"每个任务都有这一步"，标签已存在时永远
@@ -320,15 +320,15 @@ check("specs 为空 → 空清单（不猜要做什么）",
 _AT_SPECS = [{"tool": "create_tag", "args": {"title": "embeding"}},
              {"tool": "set_article_tags", "args": {"article_id": 46, "add": ["embeding"]}}]
 check("条件工具照常过闸（article_tags 的先建再挂一条都不许被吞）",
-      _confirm_grant_plan({"skill": "article_tags", "specs": _AT_SPECS})["tools"]
+      _confirm_grant_plan({"workflow": "article_tags", "specs": _AT_SPECS})["tools"]
       == ['create_tag({"title": "embeding"})',
           'set_article_tags({"article_id": 46, "add": ["embeding"]})'],
-      str(_confirm_grant_plan({"skill": "article_tags", "specs": _AT_SPECS})["tools"]))
+      str(_confirm_grant_plan({"workflow": "article_tags", "specs": _AT_SPECS})["tools"]))
 check("  加了条件工具不等于开了口子：越界的照旧整单拒绝",
-      _confirm_grant_plan({"skill": "article_tags", "specs": _AT_SPECS + [
+      _confirm_grant_plan({"workflow": "article_tags", "specs": _AT_SPECS + [
           {"tool": "delete_tag", "args": {"name": "编程"}}]})["tools"] == [])
 check("  条件工具只对**声明了它**的技能开口（别的技能带上 create_tag 照样拒）",
-      _confirm_grant_plan({"skill": "article_status", "specs": [
+      _confirm_grant_plan({"workflow": "article_status", "specs": [
           {"tool": "set_article_status", "args": {"article_id": 22, "is_top": 0}},
           {"tool": "create_tag", "args": {"title": "embeding"}}]})["tools"] == [])
 
@@ -354,7 +354,7 @@ try:
                                  "user_id": 7, "conversation_id": 42, "stop_event": None}}
     grant_state = {**plan_state(PLAN_STATUS), "plan_rounds": 1, "done": False,
                    "messages": [HumanMessage(content="确认执行：修改文章 12")],
-                   "confirm_grant": {"skill": "article_status", "specs": [
+                   "confirm_grant": {"workflow": "article_status", "specs": [
                        {"tool": "set_article_status",
                         "args": {"article_id": 12, "status": "private"}}]}}
     CALLS.clear()
@@ -397,7 +397,7 @@ print("\n⑤b 令牌**只授权签名体里那一件**（20261012：一次点头
 _ROLE_SPEC = {"tool": "set_account_role", "args": {"name": "demo", "role": "user"}}
 _NOTICE_SPEC = {"tool": "send_user_notice",
                 "args": {"name": "demo", "content": "正文"}}
-_TK = {"skill": "account_set_role", "specs": [_ROLE_SPEC]}
+_TK = {"workflow": "account_set_role", "specs": [_ROLE_SPEC]}
 
 check("整批都在签名体里 ⇒ 免卡（兑现轮拼的就是签名体）",
       g._all_granted({"confirm_grant": _TK}, [_ROLE_SPEC]) is True)
@@ -433,7 +433,7 @@ g._TOOL_MAP["send_user_notice"] = _FakeNotice()
 try:
     _nspec = 'send_user_notice(' + json.dumps(_NOTICE_SPEC["args"],
                                               ensure_ascii=False) + ')'
-    _st2 = {**plan_state({"skill": "notice_send", "params": {},
+    _st2 = {**plan_state({"workflow": "notice_send", "params": {},
                           "tools": [_nspec], "note": "x", "reply": "y"}),
             "plan_rounds": 1, "done": False,
             "messages": [HumanMessage(content="确认执行：把账号「demo」的身份改成普通用户")],
@@ -447,7 +447,7 @@ try:
           and not _r2.get("receipts"),
           f"calls={_CALLS2} specs={_pop2.get('specs')}")
     # 反控：**被点过的那一件**照旧放行（收窄不能把兑现轮一起掐死）
-    _st3 = {**plan_state({"skill": "account_set_role", "params": {},
+    _st3 = {**plan_state({"workflow": "account_set_role", "params": {},
                           "tools": ['set_account_role(' + json.dumps(
                               _ROLE_SPEC["args"], ensure_ascii=False) + ')'],
                           "note": "x", "reply": "y"}),
@@ -512,7 +512,7 @@ from agent.graph import (EXECUTE_ROUTES, GATE_ROUTES, PLANNER_ROUTES,  # noqa: E
                          route_after_execute, route_after_gate,
                          route_after_planner, route_after_reflector)
 
-_GRANT = {"skill": "article_status", "specs": [
+_GRANT = {"workflow": "article_status", "specs": [
     {"tool": "set_article_status", "args": {"article_id": 12, "status": "private"}}]}
 _ROUTE_CASES = [
     ("planner", route_after_planner, PLANNER_ROUTES, [
@@ -658,7 +658,7 @@ print()
 # （技能/工具/参数照抄），而不是回历史自然语言里另挑一个目标——历史是解释层，这一行
 # 是系统事实。三端契约：这里产的 dict → server.py 发 `__PENDING__:` 帧 → Rust 落库、
 # 下一轮 prepare_chat 读回来注入页面上下文（字段名见 src/routes/chat.rs
-# `save_pending_action`，**改一侧必须同步另一侧**）。
+# `save_pending_action`，**改一侧必须同步另一侧**——含首个键 `skill`，随 Rust 那批改）。
 settings.jwt_secret = _STUB_SECRET   # ⑤ 的 finally 还原成 _SAVED_SECRET（CI 里是空串）
 _pa = _popup("一级标签，名字叫X，使用粉色颜色") or {}
 _pad = _pa.get("pending_action") or {}
@@ -776,7 +776,7 @@ check("  版本号已 +1（改 payload 结构必须 +1：留着旧号旧令牌�
 # v1 令牌（无 jti）必须验不过——这是版本号这道闸的**唯一**意义。手工造一张签名正确、
 # 只是 v=1 的令牌：证明拒绝来自版本比对，而不是"签名恰好不对"。
 _v1_body = json.dumps({"v": 1, "uid": 7, "conv": 42, "exp": int(time.time()) + 600,
-                       "skill": "tag_create", "specs": []},
+                       "workflow": "tag_create", "specs": []},
                       ensure_ascii=False, separators=(",", ":")).encode()
 _v1 = confirm._b64e(_v1_body) + "." + confirm._b64e(
     hmac.new(_STUB_SECRET.encode(), confirm._DOMAIN + _v1_body, hashlib.sha256).digest())
@@ -797,14 +797,14 @@ settings.jwt_secret = _STUB_SECRET
 _ins = confirm.sign(7, 42, "tag_create", [{"tool": "create_tag_one", "args": {"name": "X"}}])
 _pay = confirm.inspect(_ins)
 check("解得出技能与参数（评测据此断言'卡片上的问法与参数可溯源'）",
-      isinstance(_pay, dict) and _pay.get("skill") == "tag_create"
+      isinstance(_pay, dict) and _pay.get("workflow") == "tag_create"
       and _pay.get("specs") == [{"tool": "create_tag_one", "args": {"name": "X"}}],
       str(_pay)[:120])
 # 伪造令牌：签名段乱写、甚至整个换掉——inspect 照样给载荷。这条断言的作用是**把
 # '它不验签'这件事写进测试**，而不是缺陷：谁将来想在授权分支里用它，先读这里。
 _forged = _ins.split(".")[0] + "." + confirm._b64e(b"whatever")
 check("**对伪造签名的令牌照样返回载荷**（这就是它不能进授权路径的原因）",
-      (confirm.inspect(_forged) or {}).get("skill") == "tag_create"
+      (confirm.inspect(_forged) or {}).get("workflow") == "tag_create"
       and confirm.verify(_forged, 7, 42) is None)
 check("  坏输入给 None、不抛（排障时手滑贴了半截令牌不该炸）",
       confirm.inspect("") is None and confirm.inspect("x.y.z") is None
@@ -886,10 +886,10 @@ print("⑩ 零写轮的事实与出口（20260926）：narrator 拿得到「本�
 # 三层锁：① 判据落在"写"上（不是"零工具"）：确认兑现轮有写、绝不能拿到这句；
 # ② 弹卡轮（pending_confirm）拿不到；③ `data_repeat` 已经拼过的不重复追加；
 # ④ 菜单那一段真被拼进了 planner 上下文（能力有测试 ≠ 接线有测试）。
-_NARRATOR_CHAT_PLAN = ("SKILL=chat\nPARAMS={}\nTOOLS: （无）\nNOTE: （无）\n"
+_NARRATOR_CHAT_PLAN = ("WORKFLOW=chat\nPARAMS={}\nTOOLS: （无）\nNOTE: （无）\n"
                        "REPLY: 直接回答")
 _st_chat = {"plan": _NARRATOR_CHAT_PLAN}
-_st_write = {"plan": "SKILL=account_freeze\nPARAMS={}\n"
+_st_write = {"plan": "WORKFLOW=account_freeze\nPARAMS={}\n"
                      "TOOLS: freeze_account({\"name\": \"x\"})\n"
                      "NOTE: （无）\nREPLY: 直接回答"}
 _out_chat = g._narrator_plan(_st_chat)
@@ -904,7 +904,7 @@ check("写轮（本轮真排了写操作）：一个字都不加——说了就�
       g._wrote_this_round(_st_write)
       and g._narrator_plan(_st_write) == _st_write["plan"])
 check("弹卡轮（pending_confirm 在场）：不加（那种轮次结构上也轮不到 narrator 说话）",
-      g._narrator_plan(dict(_st_chat, pending_confirm={"skill": "x"}))
+      g._narrator_plan(dict(_st_chat, pending_confirm={"workflow": "x"}))
       == _NARRATOR_CHAT_PLAN)
 check("data_repeat 那一支已拼过：不重复追加（同一段话在提示里出现两次）",
       g._narrator_plan({"plan": _NARRATOR_CHAT_PLAN + "\n"
@@ -923,7 +923,7 @@ check("  同一段里禁止索要「要不要我办」（不排写操作就不�
 check("  兜底只在**菜单**、不在 chat 的 description 里"
       "（写进 description 会让'没有能力'变成 chat 的常规用法，"
       "真有技能的请求也可能被判成做不到）",
-      "如实说做不到" not in S.SKILL_MAP["chat"].description)
+      "如实说做不到" not in S.WORKFLOW_MAP["chat"].description)
 check("  并且要求「拿不准就照常选技能」（失败取向往能干活那侧倒）",
       "拿不准就照常选技能" in _ctx_admin)
 
@@ -959,24 +959,24 @@ _EV_NOTIF = ToolMessage(content="站内通知（未读 1）：notifId:23《留�
                         tool_call_id="o2", name="list_notifications")
 
 
-def _own_popup(skill, spec, msg, ev):
-    # 手拼**对象**（20260928 批 C）：此前手拼契约文本，`_plan_skill` 改读 `plan_obj`
+def _own_popup(workflow, spec, msg, ev):
+    # 手拼**对象**（20260928 批 C）：此前手拼契约文本，`_plan_workflow` 改读 `plan_obj`
     # 之后那份文本读不出技能名 ⇒ 令牌签不出来。夹具与生产同路：走 `plan_state`。
-    obj = {"skill": skill, "params": {}, "tools": [spec], "note": "x", "reply": "y"}
+    obj = {"workflow": workflow, "params": {}, "tools": [spec], "note": "x", "reply": "y"}
     msgs = [HumanMessage(content=msg)] + ([ev] if ev is not None else [])
     st = {"messages": msgs, **plan_state(obj), "plan_rounds": 0, "done": False}
     return _confirm_popup(st, obj["tools"],
                           Principal(uid=7, role="admin"), msg, CFG)
 
 
-for _skill, _spec, _intent, _cmd in _OWN_CASES:
-    _ev = _EV_ART if _skill.startswith("favorite") else _EV_NOTIF
-    check(f"{_skill}：有意向没判成命令 + 目标有据 → **弹卡**",
-          bool(_own_popup(_skill, _spec, _intent, _ev)))
+for _workflow, _spec, _intent, _cmd in _OWN_CASES:
+    _ev = _EV_ART if _workflow.startswith("favorite") else _EV_NOTIF
+    check(f"{_workflow}：有意向没判成命令 + 目标有据 → **弹卡**",
+          bool(_own_popup(_workflow, _spec, _intent, _ev)))
     check(f"  同一件事写成明确命令 → **不弹卡**（快路径直执行，卡不是必经之路）",
-          _own_popup(_skill, _spec, _cmd, _ev) is None)
+          _own_popup(_workflow, _spec, _cmd, _ev) is None)
     check(f"  提问形态照旧不弹（提问不是下令）",
-          _own_popup(_skill, _spec, "这个操作是什么意思呀", _ev) is None)
+          _own_popup(_workflow, _spec, "这个操作是什么意思呀", _ev) is None)
 
 check("收藏两件：目标**无据**（本轮没读到那篇文章）→ 本轮不弹卡（交回 planner 先读）",
       _own_popup("favorite_add", 'add_favorite({"article_id": 12})',
@@ -991,7 +991,7 @@ print("\n  描述 ↔ 代码事实：契约句必须跟着 `_ALWAYS_CONFIRM_TOOL
 # （它们的 `consent_granted` 恒 False ⇒ 快路径在结构上关掉了）。
 _always = authz._ALWAYS_CONFIRM_TOOLS
 _over_promise, _missing_rule, _under_claim = [], [], []
-for _s in S.SKILLS:
+for _s in S.WORKFLOWS:
     _tools = [t for t, _ in _s.plan if t]
     if not _tools:
         continue
@@ -1115,7 +1115,7 @@ for _bad_units in ([[0]], [[0], [0]], "x", [[]], [[0], [2]], [[True]]):
 # 里 —— 「按哪份清单数按钮」与「按哪份清单签发」必须是**同一份**（各算一次就会出现
 # "卡面有这一格、令牌里裁不出来"）。这里直接把 graph 那个签发口调一遍，读回令牌里的分组。
 _g_token, _g_units = g._sign_confirm_picks(
-    {"plan_obj": {"skill": "article_tags"}},
+    {"plan_obj": {"workflow": "article_tags"}},
     {"configurable": {"conversation_id": 42}}, Principal(uid=7), _pair)
 _gw, _gwe = confirm.narrow(confirm.verify(_g_token, 7, 42), "pick:0")
 check("  ⇒ graph 那半签发的是同一份分组（卡面与令牌同源，不是各算一次）",

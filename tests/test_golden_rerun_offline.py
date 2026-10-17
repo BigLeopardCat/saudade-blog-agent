@@ -108,7 +108,7 @@ def _stub_run_one(plan: dict, calls: list, tokens: dict | None = None):
                 # 驱动侧读到的是"这一轮没弹卡"，于是所有双轮用例都红在"没令牌上"
                 # ——桩与真函数**返回形状**不一致，和签名不一致一样会骗人。
                 "confirm_tokens": [tok] if tok else [],
-                "confirm_payloads": ([{"skill": "tag_delete",
+                "confirm_payloads": ([{"workflow": "tag_delete",
                                        "specs": [{"tool": "delete_tag"}]}] if tok else [])}
 
     return _run
@@ -339,7 +339,7 @@ check("报告逐轮留档（两轮各自的 round，末轮的扁平结果不淹�
 # 报告里**留载荷、抹令牌**：载荷（技能/参数）是红了要照着读的现场；令牌是 10 分钟有效的
 # 写授权凭据，落盘等于在生产机上多存一份可用的授权（同 server.py 只记布尔 has_confirm）。
 check("报告带着解开的载荷（红了照着读「这张卡问了什么」）",
-      _r["report"]["cases"][0]["rounds"][0]["confirm_payloads"][0]["skill"] == "tag_delete",
+      _r["report"]["cases"][0]["rounds"][0]["confirm_payloads"][0]["workflow"] == "tag_delete",
       str(_r["report"]["cases"][0]["rounds"][0]["confirm_payloads"]))
 check("报告里没有原始令牌（帧体里的 token 被抹成占位符）",
       "tok-1" not in json.dumps(_r["report"], ensure_ascii=False)

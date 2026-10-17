@@ -30,7 +30,7 @@ import agent.graph as g  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import _RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflows import instantiate_plan  # noqa: E402
 
 # 事实信封**只加**的那几个键（F1，20260930）：`tools.base.fact()` 构造、`is_noop` 读，
 # 刻意不进 `g._RCPT_META_KEYS`（进去就要同步 Rust 的 `render_exec_row`）——见
@@ -426,7 +426,7 @@ except BaseException as e:  # noqa: BLE001
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑧ 只读白名单：**不在**（写工具进只读通道 = 绕过同意闸）")
-from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
+from agent.workflows import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 check("不在 _EXPLICIT_TOOLS（无参点名）", "send_user_notice" not in _EXPLICIT_TOOLS)
 check("不在 _CALLABLE_QUERY_TOOLS（带参点名）",
       "send_user_notice" not in _CALLABLE_QUERY_TOOLS)
@@ -585,12 +585,12 @@ for _ok in ["你好，这是一条测试通知。", "这是给账号夹具的一
           str(_p_ok["tools"]))
 
 check("技能名与工具名不是一套字面量（混用会让展开分支静默不命中）",
-      "notice_send" in instantiate_plan.__globals__["WRITE_SKILL_NAMES"]
-      and "send_user_notice" not in instantiate_plan.__globals__["WRITE_SKILL_NAMES"], "")
+      "notice_send" in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"]
+      and "send_user_notice" not in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"], "")
 check("  它走名字通道（收件人在名录里核对得出来 ⇒ 不进「目标是自由文本」那几桶）",
-      "notice_send" in instantiate_plan.__globals__["_WRITE_NAME_TARGET_SKILLS"]
-      and "notice_send" not in instantiate_plan.__globals__["_FREE_TEXT_WRITE_SKILLS"]
-      and "notice_send" not in instantiate_plan.__globals__["_OWN_WRITE_SKILLS"], "")
+      "notice_send" in instantiate_plan.__globals__["_WRITE_NAME_TARGET_WORKFLOWS"]
+      and "notice_send" not in instantiate_plan.__globals__["_FREE_TEXT_WRITE_WORKFLOWS"]
+      and "notice_send" not in instantiate_plan.__globals__["_OWN_WRITE_WORKFLOWS"], "")
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑬ 过程行：报账号名，**不报工具名、不报正文**")
@@ -650,19 +650,19 @@ class _FakeTool:
         return self.out
 
 
-def _grant_of(spec, skill=None):
+def _grant_of(spec, workflow=None):
     """照**卡上签的那一件**造令牌（20261012 起 `_grant_covers` 按工具名+参数比对：
     光有令牌不算数——空壳 `{"token": "x"}` 会让确认轮重新弹卡）。"""
     args, ok = g._tool_args(spec)
     assert ok, spec
-    return {"token": "x", "skill": skill, "specs": [{"tool": g._tool_name(spec),
+    return {"token": "x", "workflow": workflow, "specs": [{"tool": g._tool_name(spec),
                                                      "args": args}]}
 
 
-def _run_exec(msg, spec, skill="notice_send", grant=None):
+def _run_exec(msg, spec, workflow="notice_send", grant=None):
     _CALLS.clear()
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = [spec]
     state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content=msg)]}
@@ -700,8 +700,8 @@ try:
               "guest5" in pop.get("q", "") and BODY in pop.get("q", ""),
               pop.get("q", "")[:80])
         payload = _confirm.inspect(pop.get("token") or "") or {}
-        check("  令牌载荷里的 skill 与 specs 就是这一件（卡上写什么就签什么）",
-              payload.get("skill") == "notice_send"
+        check("  令牌载荷里的 workflow 与 specs 就是这一件（卡上写什么就签什么）",
+              payload.get("workflow") == "notice_send"
               and payload.get("specs") == [{"tool": "send_user_notice",
                                             "args": {"name": "guest5",
                                                      "content": BODY}}],

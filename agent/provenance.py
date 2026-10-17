@@ -228,7 +228,7 @@ def review(evidence, wanted, user_msg, ledger_src: str = "",
 
     `wanted` = 可迭代的 `(arg, value)`（`arg` 是工具参数名，`value` 是要写下去的那个
     值，标量或列表）。**只判非空、非 `$ref` 的值**：空值不是"没出处"（那是
-    `check_skill_params` 的缺参问题），而 `$tool[N].field` 是机器解析出来的引用
+    `check_workflow_params` 的缺参问题），而 `$tool[N].field` 是机器解析出来的引用
     （`refs.py`），没有字面可核——调用方本来也该在带引用时整条早退。
     """
     pairs = parse_evidence(evidence)

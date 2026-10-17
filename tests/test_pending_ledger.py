@@ -281,7 +281,7 @@ _prompt = g._render_planner_prompt(
     "admin", "ctx", "round", user_msg="你看着办", intent_hints="i",
     doc_anchors="d", recent_context="r", short_reply_hint="s",
     tool_results="t", pending_ledger=_t, ref_hints="", reflector_feedback="",
-    correction="", contract=g._PLANNER_OUTPUT_CONTRACT_NATIVE, slim_skills=True)
+    correction="", contract=g._PLANNER_OUTPUT_CONTRACT_NATIVE, slim_workflows=True)
 check("渲染结果里出现台账（talkId）", "talkId:101" in _prompt)
 check("  且渲染函数**必须有**这个形参（漏传即 TypeError）", "pending_ledger" in
       g._render_planner_prompt.__code__.co_varnames)
@@ -321,19 +321,19 @@ print("⑪ 收尾那两句话（S4）：改完再询问 / 没动作就问一句"
 # 判据全在结构上（回执 / 令牌 / 写计划 / 提问判据），事实**现场重读**台账。
 # 两句都只进 narrator 的 [执行计划] 段（`_narrator_plan`），planner 那份帧文本一个字
 # 都不复用（它的 header 是对 planner 说的，见 `_ledger_closing_note` 的头注）。
-_CHAT_PLAN = ("SKILL=chat\nPARAMS={}\nTOOLS: （无）\nNOTE: （无）\nREPLY: 直接回答")
-_WRITE_PLAN = ("SKILL=board_audit\nPARAMS={}\n"
+_CHAT_PLAN = ("WORKFLOW=chat\nPARAMS={}\nTOOLS: （无）\nNOTE: （无）\nREPLY: 直接回答")
+_WRITE_PLAN = ("WORKFLOW=board_audit\nPARAMS={}\n"
                'TOOLS: audit_board_comment({"talk_id": 101, "verdict": "pass"})\n'
                "NOTE: （无）\nREPLY: 直接回答")
-_GRANT_AUDIT = {"skill": "board_audit",
+_GRANT_AUDIT = {"workflow": "board_audit",
                 "specs": [{"tool": "audit_board_comment",
                            "args": {"talk_id": 101, "verdict": "pass"}}]}
-_GRANT_OFFLINE = {"skill": "article_status",
+_GRANT_OFFLINE = {"workflow": "article_status",
                   "specs": [{"tool": "set_article_status", "args": {"article_id": 3}}]}
 
 
 def _receipt(tool, **kw):
-    return {"skill": "review_inbox", "tool": tool, "args": {}, "result": "ok", **kw}
+    return {"workflow": "review_inbox", "tool": tool, "args": {}, "result": "ok", **kw}
 
 
 def _st(msgs, receipts=None, grant=None, plan=_CHAT_PLAN):

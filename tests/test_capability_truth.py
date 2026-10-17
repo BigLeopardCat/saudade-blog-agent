@@ -15,7 +15,7 @@
 三处载体，本套件逐处钉住：
   ① 审核状况报表（`reports.render_moderation_status`）——它是"某条留言现在什么状态"
      的唯一事实源，此前**只报状态、不说能对它做什么**；
-  ② 技能描述与回复契约（`skills.board_delete`）——planner 选技能、narrator 组织话术，
+  ② 技能描述与回复契约（`workflows.board_delete`）——planner 选技能、narrator 组织话术，
      两边读的是同一份；
   ③ 工具自己的 `.description`（`@tool` 之后模型读的是它，**不是** `__doc__`）。
 
@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import reports as R  # noqa: E402
-from agent import skills as S  # noqa: E402
+from agent import workflows as S  # noqa: E402
 from tools import base as B  # noqa: E402
 
 FAILS: list[str] = []
@@ -72,7 +72,7 @@ check("  （边界）报表仍是**事实**而不是承诺：删除那半必须�
 # ══════════════════════════════════════════════════════════════════
 print("\n② 技能描述与回复契约（planner 与 narrator 读的同一份）")
 
-_SK = {s.name: s for s in S.SKILLS}
+_SK = {s.name: s for s in S.WORKFLOWS}
 _del = _SK["board_delete"]
 check("board_delete 的技能描述里写着「待审与被驳回的留言同样删得掉」",
       "待审与被驳回的留言同样删得掉" in _del.description)
@@ -81,7 +81,7 @@ check("board_delete 的技能描述里写着「待审与被驳回的留言同样
 # 写法却是把**那句假话的全文**摆进模型读得到的上下文里（同族的教训：契约里不许出现
 # 可抄的否认句）。现在换成**正向义务**：写明"删留言就是你自己能做的"、并明写"不许把
 # 主人打发去后台手动处理"。硬判据那一半搬去了 gate（洞⑫，`tests/test_capability_denial.py`）
-# ——它按 `visible_skills(role)` 判，比词形锁结实得多。
+# ——它按 `visible_workflows(role)` 判，比词形锁结实得多。
 check("  回复契约里**不再出现**那句可抄的假否定（模型照着抄的就是它）",
       "没有删除被驳回留言的通道" not in _del.reply_contract)
 check("  换成**正向**义务：写明删得掉、且不许把主人打发去后台手动处理",
@@ -125,19 +125,19 @@ from agent import context as C  # noqa: E402
 # ⇒ 判据也就只能落在这里：清单里说的每件事都得能兑现，做不到的别写得像能做。
 
 _TODO_WRITES = sorted(n for n in _SK
-                      if n.startswith("dashboard_todo_") and n in S.WRITE_SKILL_NAMES)
+                      if n.startswith("dashboard_todo_") and n in S.WRITE_WORKFLOW_NAMES)
 check("待办族的窄写恰好三件（再加一条窄写必须回来看这一节：下面的对称判据只对这三件成立）",
       _TODO_WRITES == ["dashboard_todo_add", "dashboard_todo_done",
                        "dashboard_todo_reschedule"], str(_TODO_WRITES))
 check("  只剩读那件不在写名单里（读写名单不许串）",
-      "dashboard_todo_list" not in S.WRITE_SKILL_NAMES)
+      "dashboard_todo_list" not in S.WRITE_WORKFLOW_NAMES)
 
 
-def _tool_args(skill_name: str) -> list[str]:
+def _tool_args(workflow_name: str) -> list[str]:
     """技能模板里那件工具**真实**收哪些参数（从注册表取，不读文案）。"""
-    tool = (_SK[skill_name].plan or [(None, None)])[0][0]
+    tool = (_SK[workflow_name].plan or [(None, None)])[0][0]
     t = next((x for x in B._TOOL_REGISTRY if x.name == tool), None)
-    check(f"  {skill_name} 模板里的 {tool} 在注册表里（清单承诺的动作有真工具）", t is not None)
+    check(f"  {workflow_name} 模板里的 {tool} 在注册表里（清单承诺的动作有真工具）", t is not None)
     return sorted(t.args or {}) if t is not None else []
 
 

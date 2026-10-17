@@ -847,7 +847,7 @@ for _n in ("你已经提交过河灯啦", "要我现在发布吗？你回复「�
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
 from agent.graph import gate_node, plan_encode  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflows import instantiate_plan  # noqa: E402
 
 
 def _write_state(reply: str):
@@ -985,7 +985,7 @@ def _mixed_state(reply: str, *, blocked_aid: int = 11, got: int = 11,
                                           ' "status": "private"})',
                          "tool": "set_article_status",
                          "reason": A.REASON_TARGET_MISMATCH,
-                         "skill": "article_status", "result": "（略）"}],
+                         "workflow": "article_status", "result": "（略）"}],
             "messages": [
                 HumanMessage(content="把 id 13、11、10 设为私密"),
                 ToolMessage(content=A.target_conflict_frame("set_article_status", set(named), got),
@@ -1025,7 +1025,7 @@ print("⑩ 管理助手 admin.console（20260921）：硬拦 + 身份过滤双�
 #   ③ 判据：execute 前的 authz.check + enforcing(scope) 硬拦。
 ADMIN_TOOLS = ["get_server_status", "get_service_health", "get_moderation_status", "get_user_stats",
                "get_note_stats"]
-ADMIN_SKILLS = ["ops_report", "moderation_report", "user_report", "traffic_report"]
+ADMIN_WORKFLOWS = ["ops_report", "moderation_report", "user_report", "traffic_report"]
 
 check("admin.console 是硬拦（不随 authz_enforce 走）",
       authz.enforcing(authz.SCOPE_ADMIN_CONSOLE) is True and settings.authz_enforce is False,
@@ -1100,28 +1100,28 @@ check("⭐ 超管的人设是管理员档（写死 role == 'admin' 时它会拿�
       audience_block(ROLE_SUPERADMIN) == audience_block(ROLE_ADMIN)
       != audience_block(ROLE_USER))
 
-from agent.skills import SKILLS, SKILL_MAP, build_planner_context  # noqa: E402
+from agent.workflows import WORKFLOWS, WORKFLOW_MAP, build_planner_context  # noqa: E402
 
-for name in ADMIN_SKILLS:
-    sk = SKILL_MAP.get(name)
+for name in ADMIN_WORKFLOWS:
+    sk = WORKFLOW_MAP.get(name)
     check(f"技能 {name} 声明了 roles=管理员族", sk is not None and sk.roles == ADMIN_ROLES,
           str(sk and sk.roles))
-# 派生锁（20260926）：上面那几条只覆盖 ADMIN_SKILLS 这份**手写名单**——新加的管理技能
+# 派生锁（20260926）：上面那几条只覆盖 ADMIN_WORKFLOWS 这份**手写名单**——新加的管理技能
 # 若不进那份名单，它写死 `frozenset({ROLE_ADMIN})` 就没人管，而后果是**静默**的：
 # uid=1 提权成超管后，agent 眼里那个技能不可见 ⇒ 博主自己少了这项能力，且没有任何
 # 报错。判据 = 全表扫"roles 恰好等于那个字面量"，正解是 `principal.ADMIN_ROLES`。
-_literal_admin = sorted(sk.name for sk in SKILLS
+_literal_admin = sorted(sk.name for sk in WORKFLOWS
                         if sk.roles == frozenset({ROLE_ADMIN}))
 check("⭐ 没有技能的 roles 写死字面量 {admin}（超管会被静默挡在外面）",
       not _literal_admin, "；".join(_literal_admin))
 for role in (None, ROLE_USER, ROLE_ZAKO):
     ctx = build_planner_context(role)
     check(f"planner 上下文（role={role}）不含管理助手技能",
-          all(n not in ctx for n in ADMIN_SKILLS))
+          all(n not in ctx for n in ADMIN_WORKFLOWS))
 check("planner 上下文（admin）含全部三个管理助手技能",
-      all(n in build_planner_context(ROLE_ADMIN) for n in ADMIN_SKILLS))
-check("⭐ planner 上下文（superadmin）同样含全部三个（技能可见性只有 visible_skills 一个判据）",
-      all(n in build_planner_context(ROLE_SUPERADMIN) for n in ADMIN_SKILLS))
+      all(n in build_planner_context(ROLE_ADMIN) for n in ADMIN_WORKFLOWS))
+check("⭐ planner 上下文（superadmin）同样含全部三个（技能可见性只有 visible_workflows 一个判据）",
+      all(n in build_planner_context(ROLE_SUPERADMIN) for n in ADMIN_WORKFLOWS))
 check("公开技能对任何角色都还在（过滤没写宽）",
       all(n in build_planner_context(None) for n in ("chat", "content_query", "navigate"))
       and all(n in build_planner_context(ROLE_USER) for n in ("chat", "content_query", "navigate")))

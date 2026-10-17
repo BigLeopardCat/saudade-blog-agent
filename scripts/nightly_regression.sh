@@ -57,10 +57,10 @@ echo "=== nightly regression $TS ===" >> "$LOG"
 export SAUDADE_REQUIRE_PARENT=1
 
 fail=0
-# 20260928 起：这一节从"单跑 test_skills.py"换成 **tests/run_all.py**（按磁盘枚举 tests/*.py）。
+# 20260928 起：这一节从"单跑 test_workflows.py"换成 **tests/run_all.py**（按磁盘枚举 tests/*.py）。
 # 理由是审计实测出来的那个数：CI 的 eval.yml 手工维护 26 个 step，而磁盘上有 50+ 个套件
 # ⇒ **一半以上的判据从不在任何自动化里运行**（其中就有前缀缓存稳定性的唯一哨兵
-# test_prompt_prefix 与 test_slim_skills）。夜间此前也只跑一个套件。名单制（三处各抄一份）
+# test_prompt_prefix 与 test_slim_workflows）。夜间此前也只跑一个套件。名单制（三处各抄一份）
 # 正是这个漏的来源 ⇒ 夜间也改成按磁盘枚举，加套件不用改这里。
 # run_all.py 自带出厂档钉子（`AGENT_EVIDENCE=0` / `AGENT_FASTPATH=1` 等项 + **整份 .env
 # 不读**的 `SAUDADE_IGNORE_ENV_FILE=1`）：本机 `.env` 是产线那份，不钉的话离线判据会跟着

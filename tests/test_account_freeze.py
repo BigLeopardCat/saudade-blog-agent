@@ -29,7 +29,7 @@ import tools.base as base  # noqa: E402
 from agent.graph import (_RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec,  # noqa: E402
                          plan_state)
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.skills import PLAN_STATUS_ABSENCE_EXEMPT, instantiate_plan  # noqa: E402
+from agent.workflows import PLAN_STATUS_ABSENCE_EXEMPT, instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_todo_schedule 的那一处）────────────────────────────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**（宁可退回追问，也不发一个
@@ -121,11 +121,11 @@ def row(uid, name, role=ROLE_USER, status=0):
 DIR = [row(126, "guest5"), row(127, "guest6"), row(130, "frozen_one", status=1)]
 
 
-def _plan(spec, skill="account_freeze"):
+def _plan(spec, workflow="account_freeze"):
     """借一个骨架搭 plan_obj（与 `_wrap_up_plan`/`instantiate_plan` 的产物同形，
     只有 tools 换成要测的那一条）。"""
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = [spec]
     return obj
 
@@ -551,7 +551,7 @@ check("  回执行在「本来就是」时说「没有重复冻结」，**不说
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑩ 只读白名单：两个工具**不在**（那是 content_query 的点名通道）")
-from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
+from agent.workflows import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 check("不在 _EXPLICIT_TOOLS（无参点名）",
       not ({"freeze_account", "unfreeze_account"} & set(_EXPLICIT_TOOLS)))
 check("不在 _CALLABLE_QUERY_TOOLS（带参点名）——写工具进只读通道 = 绕过同意闸",
@@ -644,8 +644,8 @@ check("⭐ 对抗输入：params 里塞 frozen=False/action=unfreeze → 展开�
       _p5["tools"] == [f'{_spec("freeze_account", "guest5")}'], str(_p5["tools"]))
 check("  两个技能名与两个工具名不是一套字面量（混用会让分支静默不命中）",
       {"account_freeze", "account_unfreeze"} <= set(
-          instantiate_plan.__globals__["WRITE_SKILL_NAMES"])
-      and "freeze_account" not in instantiate_plan.__globals__["WRITE_SKILL_NAMES"],
+          instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"])
+      and "freeze_account" not in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"],
       "")
 
 # ══════════════════════════════════════════════════════════════════
@@ -688,13 +688,13 @@ check("  planner 与 narrator 两侧都写了 `[policy_refused]` 不许重试",
       _prose.count("[policy_refused]") >= 2, str(_prose.count("[policy_refused]")))
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⑯ 派生锁：plan 含**名字型写工具**的技能必须在 WRITE_SKILL_NAMES 里")
-from agent.skills import (SKILLS as _SKILLS, WRITE_SKILL_NAMES as _WSN,  # noqa: E402
-                          _WRITE_NAME_TARGET_SKILLS as _WNTS)
-_missing = sorted({sk.name for sk in _SKILLS
+print("\n⑯ 派生锁：plan 含**名字型写工具**的技能必须在 WRITE_WORKFLOW_NAMES 里")
+from agent.workflows import (WORKFLOWS as _WORKFLOWS, WRITE_WORKFLOW_NAMES as _WSN,  # noqa: E402
+                          _WRITE_NAME_TARGET_WORKFLOWS as _WNTS)
+_missing = sorted({sk.name for sk in _WORKFLOWS
                    if any(t in g._WRITE_NAME_FIELDS for t, _ in (sk.plan or ()))
                    and sk.name not in _WSN})
-check("⭐ 没有任何技能的 plan 用了名字型写工具却不在 WRITE_SKILL_NAMES（静默洞）",
+check("⭐ 没有任何技能的 plan 用了名字型写工具却不在 WRITE_WORKFLOW_NAMES（静默洞）",
       _missing == [], str(_missing))
 check("  两个账号技能都在名字通道名单里（不在 = 展开器尾部兜底成「未知的写技能」）",
       {"account_freeze", "account_unfreeze"} <= set(_WNTS))
@@ -716,10 +716,10 @@ class _FakeTool:
         return self.out
 
 
-def _run_exec(msg, spec, skill="account_freeze", grant=None):
+def _run_exec(msg, spec, workflow="account_freeze", grant=None):
     _CALLS.clear()
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = [spec]
     state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content=msg)]}
@@ -760,8 +760,8 @@ try:
         check("  卡面上有账号名（主人得能核对是不是那个人）",
               "guest5" in pop.get("q", ""), pop.get("q", ""))
         payload = _confirm.inspect(pop.get("token") or "") or {}
-        check("  令牌载荷里的 skill 与 specs 就是这一件（卡上写什么就签什么）",
-              payload.get("skill") == "account_freeze"
+        check("  令牌载荷里的 workflow 与 specs 就是这一件（卡上写什么就签什么）",
+              payload.get("workflow") == "account_freeze"
               and payload.get("specs") == [{"tool": "freeze_account",
                                             "args": {"name": "guest5"}}],
               str(payload))

@@ -183,7 +183,7 @@ def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:
         （工具对站内没有的名字按名字精确匹配、拒绝、不自动新建）。分组读不懂一律
         fail-closed：宁可零执行，也不猜一个更大的放行范围。
       · 老令牌没有 `units` ⇒ 当作**逐条一单元**（与批 F 的行为逐字相同，老卡面不受影响）。
-      · 这个函数**不改 payload 的其他字段**（uid/conv/exp/jti/skill/units 原样）：它只是
+      · 这个函数**不改 payload 的其他字段**（uid/conv/exp/jti/workflow/units 原样）：它只是
         按主人的选择裁一下清单，不是重新签发。令牌仍然一次性（jti CAS 在 Rust 侧）。
     """
     raw = (pick or "").strip()
@@ -250,17 +250,17 @@ def _units_of(payload: dict, n: int) -> "list | None":
     return units if sorted(flat) == list(range(n)) else None
 
 
-def sign(uid: int, conv_id, skill: str, specs: list, units: "list | None" = None) -> str:
+def sign(uid: int, conv_id, workflow: str, specs: list, units: "list | None" = None) -> str:
     """签发待办令牌。密钥空缺 / 参数不全 → **空串**（调用方据此不弹窗）。
 
     `specs` = `[{"tool": 工具名, "args": {...}}]`，参数必须是**已实例化的具体值**
-    （见 `has_refs`）。`skill` 是技能名，执行轮据此拼计划——**不靠模型回忆**。
+    （见 `has_refs`）。`workflow` 是技能名，执行轮据此拼计划——**不靠模型回忆**。
 
     `units` = `adminops.linked_units(specs)` 的结果：卡面编号与「只办第 N 件」的
     按钮都按它数（见 `narrow`）。不传 ⇒ 载荷里不带这个键，读侧按逐条一单元处理。
     """
     secret = _secret()
-    if not secret or not skill:
+    if not secret or not workflow:
         return ""
     # 引用不签发（见模块头注与 has_refs）：这道判断放在**签发点**而不是只放调用方
     # ——"带引用的令牌"是一张到期必然兑现不了的支票，任何将来新增的签发路径都该
@@ -276,7 +276,7 @@ def sign(uid: int, conv_id, skill: str, specs: list, units: "list | None" = None
         # 每次签发都是新的随机值——**不派生自 uid/会话/时间**，否则同一秒内两次
         # 签发会撞成同一个 jti，第二次会被自己的第一次认领挡掉。
         "jti": secrets.token_hex(16),
-        "skill": str(skill),
+        "workflow": str(workflow),
         "specs": specs or [],
     }
     if units:
@@ -326,7 +326,7 @@ def verify(token: str, uid: int, conv_id) -> dict | None:
     exp = payload.get("exp")
     if not isinstance(exp, int) or exp < int(time.time()):
         return None
-    if not payload.get("skill") or not isinstance(payload.get("specs"), list):
+    if not payload.get("workflow") or not isinstance(payload.get("specs"), list):
         return None
     return payload
 

@@ -80,9 +80,9 @@ NOTIF_ALL_READ = {3: {"id": 3, "isRead": True}, 5: {"id": 5, "isRead": True}}
 NOTIF_HAS_UNREAD = {3: {"id": 3, "isRead": False}, 5: {"id": 5, "isRead": True}}
 MAIL_ALL_READ = {"inbox": [{"id": 9, "isRead": True}], "outbox": [], "unread": 0}
 
-# 计划夹具走**对象**（20260928 批 C）：`_plan_skill` 现在读 `state["plan_obj"]`，
+# 计划夹具走**对象**（20260928 批 C）：`_plan_workflow` 现在读 `state["plan_obj"]`，
 # 只喂契约文本的话技能名读成空串 ⇒ `confirm.sign` 拒签 ⇒ 该弹的全变 None。
-PLAN = {"skill": "favorite_add", "params": {}, "tools": [], "note": "", "reply": "直接回答"}
+PLAN = {"workflow": "favorite_add", "params": {}, "tools": [], "note": "", "reply": "直接回答"}
 
 
 def _popup(specs, msg, uid=7, role="user", plan=PLAN):
@@ -357,11 +357,11 @@ print("\n②b 掏空 + 这一轮**真办过事** ⇒ 正文不许说「连写请
 # 整个消失了（execution_log 不发给前端，气泡是他唯一读得到的东西）。
 # 判据 = **这一轮真发出去过的写回执**（账甲 `ok_write_rows`，即 `_has_real_change` 的
 # 逐条版本），不是叙述、也不是"计划里排了什么"。
-_NOTICE_RCPT = {"skill": "notice_send", "tool": "send_user_notice", "ts": 1.0,
+_NOTICE_RCPT = {"workflow": "notice_send", "tool": "send_user_notice", "ts": 1.0,
                 "args": {"name": "guest5", "body": "来一趟"},
                 "result": "已把通知发给账号「guest5」（账号 id=126）：标题「站内通知」，"
                           "正文「来一趟」。"}
-_ST_PLAN = {"skill": "article_status", "params": {}, "tools": [], "note": "", "reply": "x"}
+_ST_PLAN = {"workflow": "article_status", "params": {}, "tools": [], "note": "", "reply": "x"}
 _ST_SPEC = 'set_article_status({"article_id": 12, "status": "public"})'
 _MSG_ST = "文章 12 设成公开吧"
 
@@ -485,11 +485,11 @@ class _FakeTool:
 
 def _grant_state(tool, args):
     """确认轮状态：`confirm_grant` 在场 ⇒ 同意闸与目标有据两门都放行。"""
-    obj = {"skill": "favorite_add", "params": {}, "tools": [f"{tool}({_json(args)})"],
+    obj = {"workflow": "favorite_add", "params": {}, "tools": [f"{tool}({_json(args)})"],
            "note": "x", "reply": "y"}
     return {**plan_state(obj), "plan_rounds": 1, "done": False,
             "messages": [HumanMessage(content="（点确定的执行轮）")],
-            "confirm_grant": {"skill": "favorite_add",
+            "confirm_grant": {"workflow": "favorite_add",
                               "specs": [{"tool": tool, "args": args}]}}
 
 
@@ -559,7 +559,7 @@ _EXEC_CFG = {"configurable": {"principal": Principal(uid=7, role="user"), "user_
 
 def _exec_round(specs, msg=_MSG_FAV):
     st = graph_input([HumanMessage(content=msg)])
-    st.update(plan_state({"skill": "favorite_add", "params": {}, "tools": list(specs),
+    st.update(plan_state({"workflow": "favorite_add", "params": {}, "tools": list(specs),
                           "note": "", "reply": ""}))
     return execute_node(st, _EXEC_CFG)
 

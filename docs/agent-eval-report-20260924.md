@@ -9,6 +9,9 @@
 > §6.2 的三条）**都已落地**。正文保持当日快照原样不改写（改写了就不再是那一次的记录），
 > 落地情况与**两处改法被否**的原因见 §7——**读 §5.2①/§6 时必须连 §7 一起读**。
 
+
+> ⚠️ 20261017 起 `skill` 已改名为 **`workflow`**（`agent/skills.py` → `agent/workflows.py`、`tests/test_skills.py` → `tests/test_workflows.py`、`tests/test_slim_skills.py` → `tests/test_slim_workflows.py`；计划 IR `SKILL=` → `WORKFLOW=`）。本文档保留**当时的名字**，不回溯改写；读它时把 skill 读作 workflow 即可。
+
 ---
 
 ## 1. 结论摘要

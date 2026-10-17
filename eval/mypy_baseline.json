@@ -25,7 +25,7 @@
     "agent/react_line.py": 2,
     "agent/refs.py": 4,
     "agent/reports.py": 1,
-    "agent/skills.py": 11,
+    "agent/workflows.py": 11,
     "agent/tasks.py": 3,
     "rag/embed_space.py": 1,
     "rag/graph_build.py": 3,

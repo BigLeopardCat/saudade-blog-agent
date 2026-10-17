@@ -9,7 +9,7 @@ golden 只断言最终文本——首轮零工具+编造+修正照样 PASS，能
 
 **20260926 修正一处静默假绿**（本脚本此前连续 23 天在骗人）：`analyze` 读的两处键
 （`check` 事件上的 `tool_calls`、`done`）自 20260904 receipt 驱动重构起就再没命中过——
-事件形状早已改成「每个 spec 一条 `execute/check`（`tool`/`verdict`/`reason`/`skill`）+
+事件形状早已改成「每个 spec 一条 `execute/check`（`tool`/`verdict`/`reason`/`workflow`）+
 `planner/decision` 自带 `round`」，而 `tool_calls` 如今只出现在 `model/llm_done` 上且恒假。
 键读不到**不报错**，于是全表打印「首轮即调=0% / 打回=0」看起来像"效率很好"。
 ⇒ 现在按真实键取，且**读不到信号的 trace 一律返回 None**（计入输出里的"未识别"），
@@ -51,7 +51,7 @@ def _call_names(tools: list) -> set:
 
 
 def analyze(d: dict) -> dict | None:
-    """返回 {skill, ptools, rounds, rev, blocked} 或 None（**读不到信号**的 trace）。
+    """返回 {workflow, ptools, rounds, rev, blocked} 或 None（**读不到信号**的 trace）。
 
     None 的两种含义都算"这份没读到"：没有计划事件、或没有回复正文。调用端必须把它
     计进"未识别"并印出来——**不许当成"这条确实是零"**。
@@ -70,7 +70,7 @@ def analyze(d: dict) -> dict | None:
         by_round.setdefault(0 if r is None else r, set()).update(_call_names(e.get("tools") or []))
     rounds = [sorted(by_round[r]) for r in sorted(by_round)]
     fallbacks = [e for e in evs if (e.get("node"), e.get("event")) == ("gate", "fallback")]
-    return {"skill": decs[-1].get("skill"), "ptools": decs[-1].get("tools") or [],
+    return {"workflow": decs[-1].get("workflow"), "ptools": decs[-1].get("tools") or [],
             "rounds": rounds, "rev": len(fallbacks),
             "blocked": sum(1 for e in checks if e.get("verdict") == "BLOCK")}
 
@@ -98,7 +98,7 @@ def main():
         if a is None:
             unread["no_signal"] += 1
             continue
-        s = stat[a["skill"]]
+        s = stat[a["workflow"]]
         s[0] += 1
         if a["rounds"][0]:
             s[1] += 1
@@ -108,15 +108,15 @@ def main():
             s[3] += 1
         s[4] += a["rev"]
         s[5] += a["blocked"]
-        detail.append({"stamp": stamp, "uid": uid_s, "skill": a["skill"],
+        detail.append({"stamp": stamp, "uid": uid_s, "workflow": a["workflow"],
                        "ptools": a["ptools"], "rounds": a["rounds"], "rev": a["rev"],
                        "blocked": a["blocked"]})
 
     if args.json:
         out = {"window": [args.since or "begin", args.until], "unread": unread,
-               "skills": {}, "detail": detail}
+               "workflows": {}, "detail": detail}
         for k, v in stat.items():
-            out["skills"][k] = dict(zip(
+            out["workflows"][k] = dict(zip(
                 ["total", "first_round_tools", "first_round_zero", "cases_fallback",
                  "fallback_total", "blocked_total"], v))
         print(json.dumps(out, ensure_ascii=False, indent=1))
@@ -134,7 +134,7 @@ def main():
     if revised:
         print("\n被 gate 否决过的对话:")
         for x in sorted(revised, key=lambda x: x["stamp"]):
-            print(f"  {x['stamp']} u{x['uid']} [{x['skill']}] planner_tools={x['ptools']} "
+            print(f"  {x['stamp']} u{x['uid']} [{x['workflow']}] planner_tools={x['ptools']} "
                   f"rev={x['rev']} blocked={x['blocked']} rounds={x['rounds']}")
 
 
