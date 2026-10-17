@@ -653,13 +653,13 @@ class Workflow:
     complete_when: str = ""            # 完成判定（注入 planner 提示词，辅助收尾决策）
     reply_contract: str = ""           # 回复契约（model 遵守）
     # 规划契约（20260927）：**必须怎么做**的那一句话，与"技能是干什么的"（description）
-    # 分开写。分开的理由是被实测逼出来的，不是文风：接口层去重（workflows.build_planner_context
-    # 的 `slim`）把 description 从散文菜单里删掉、只留 schema，而 rag_talk_rag 这条用例
-    # 随之从 5/5 绿变成 0/5 红——「'有没有人聊过/写过 X'必须成对点名 list_guestbook 与
-    # list_talks」原本住在 description 里，搬进 `tools[].description` 之后模型照旧选对了
-    # 技能、照旧调了 list_guestbook，**唯独漏掉这条契约**。结论：描述（是什么）可以只留
-    # schema 一份，契约（必须怎么做）得留在提示词正文里。
-    # **别把契约再抄回 description**：抄回去就是两份，两份就会漂。
+    # 分开写。理由是被实测逼出来的：接口层去重（build_planner_context 的 `slim`）把
+    # description 从散文菜单里删掉、只留 schema，而 rag_talk_rag 随之从 5/5 绿变成 0/5 红
+    # ——「必须成对点名 list_guestbook 与 list_talks」原本住在 description 里，搬进
+    # `tools[].description` 后模型照旧选对技能、照旧调了第一个源，**唯独漏掉这条契约**。
+    # ⚠️ 20261017 三臂重验**改掉了"位置"这个归因**：那次 0/5 的成因是**信息丢失**（schema
+    # 里原样漏着未展开的 `__无参只读工具清单__`）；今天契约只住 schema 与只住正文**逐条
+    # 相同**（各 84/84）、整句删掉才掉 ⇒ **位置无关**。**它只许有一份**：两份会漂。
     planner_contract: str = ""
     chat: bool = False                 # 闲聊（chat 轮零工具叙述，gate 声称检查按窄作用域）
     # 可见角色（20260921 管理助手）：**空集 = 所有角色可见**（含身份不明）。

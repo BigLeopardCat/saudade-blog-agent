@@ -189,13 +189,13 @@ def test_slim_keeps_what_the_schema_does_not_have():
               all(f"- {n}：（无固定工具）" in slim for n in planless), str(planless))
 
 
-# ── ②b 规划契约：两档都渲染，且**只在正文**（20260927 实测逼出来的那条规则）──
+# ── ②b 规划契约：两档都渲染，且**只许有一份**（20260927 实测逼出来的那条规则）──
 def test_planner_contract_is_rendered_in_both_arms():
     """契约行是 slim 与完整两档共同的；少一档就是"某一档的模型看不到这条必做"。
 
-    依据（A/B 五遍对照，见 `Workflow.planner_contract` 的字段注释）：成对点名这条契约
-    随描述搬进 `tools[].description` 后，`rag_talk_rag` 从完整菜单 **5/5 绿**变成
-    slim **0/5 红**——技能选对、`list_guestbook` 也调了，唯独漏掉这条契约。
+    依据（20261017 三臂重验，`eval/contract_position_ab.py`）：**整句删掉才掉**——
+    `pair_one_talks` 1/12（另 6 条用例 12/12），掉法正是"技能选对、只点了一个源"。
+    原记的「搬进 `tools[].description` ⇒ 0/5」已改归因为**信息丢失**，见 ADR-0003 补记。
     """
     print("\n[契约] planner_contract 在 slim 与完整两档都渲染（且各一次）")
     for role in _ROLES:
@@ -214,10 +214,10 @@ def test_planner_contract_is_rendered_in_both_arms():
 
 
 def test_planner_contract_lives_only_in_the_prose_block():
-    """描述（是什么）归 schema，契约（必须怎么做）归提示词正文——两边不许互相抄。
+    """契约句**只许有一份**（住正文还是住 schema 都行）——两边不许互相抄。
 
-    这一条是**新增不变量**（本批修法的目的本身）：契约一旦同时出现在 schema 与正文，
-    就回到"两份会漂"的形态，且 schema 那侧正是实测遵守率更低的那个位置。
+    依据从"位置"改成"漂移"（20261017 三臂重验）：契约只住 schema 与只住正文**逐条
+    相同**（各 84/84）⇒「schema 那侧遵守率更低」**已被证伪**；留下的是"两处就会漂"。
     """
     print("\n[契约] 契约句不出现在 schema / description / inputs 里（单一来源）")
     for role in _ROLES:
