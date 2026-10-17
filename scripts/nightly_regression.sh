@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 # Nightly regression: tests/run_all.py（全部离线套件，按磁盘枚举） + 检索基准 + golden set（语料 149 条，夜间实跑 146
 # ——唯一的例外是那 3 条会真写生产库的用例，它们按设计不由任何无人看着的跑法触发）+ 巡检
-# 由 crontab 触发（见仓库 README 或 crontab -l）。结果追加到 ~/agent_regression.log；
-# 任一门禁项失败会在 ~/agent_regression.failed 留下标记（存在 = 上次运行失败）。
+# ⚠️ **本仓默认不装任何 cron（出厂关）**（20261017）：这是公开仓库，而这个脚本一次全量要真调
+# LLM 跑 golden（≈10M tok / ¥2.4，维护者实测的量级），跑的还是**维护者那台机器上的**博客语料
+# 与夹具 —— 克隆的人不该在不知情下开始每天烧自己的额度。`deploy/install.sh` 只装心跳探针那一行。
+# 要天天跑（通常是想改 agent 行为、需要一条稳定回归基线的人）：`bash scripts/enable_nightly.sh`
+# （默认干跑，`--apply` 才写 crontab，`--off` 摘掉）。**本机**（维护者的生产服务器）自 20261017
+# 起是开着的，那一档的来龙去脉记在 crontab 自己的注释里。
+# 手跑一次（不装 cron）看同样的读数：`bash scripts/nightly_regression.sh`。
+# 结果追加到 ~/agent_regression.log；任一门禁项失败会在 ~/agent_regression.failed
+# 留下标记（存在 = 上次运行失败）。**没装 cron ⇒ 这个标记恒不存在 ⇒ 心跳探针那一项恒静默**，
+# 静默不等于绿（见父仓 scripts/healthcheck.sh 第 6 项）。
 # golden 有 FAIL 时导出复审单 eval/report/review_<ts>.md（判据 vs 模型实际输出）——
 # 复审规则（20260912）：假失败当轮修判据，真 FAIL 才允许挂着（否则门禁失去区分度）。
 # 20260921 起 golden 分两层判：**回归组（tags 含 regression）硬判 100%**，能力题按门禁
@@ -37,7 +45,10 @@
 # 就先只读探一次，明确不可用 ⇒ 这批**未评估** + **退出码 3**（"没评"不是"通过率"），
 # 读不到 ⇒ 只警告照跑（"不知道"不等于"不可用"）。
 set -u
-cd /home/ubuntu/Saudade-Blog/saudade-blog-agent
+# 20261017：路径从脚本自己的位置推，不再写死维护者的家目录 —— 写死的 `cd` 在别人机器上
+# 会当场失败，而失败的样子是一个每晚静默退出的 cron（`>/dev/null 2>&1` 把话全吃了）。
+# 本机推导结果与原来那一行逐字相同（脚本在 <仓根>/scripts/ 下）。
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY=.venv/bin/python
 LOG="$HOME/agent_regression.log"
 MARK="$HOME/agent_regression.failed"

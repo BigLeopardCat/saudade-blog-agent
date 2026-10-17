@@ -124,7 +124,8 @@ flowchart TB
 ├── eval/                      # 评测：eval/golden/basic.jsonl（192 条）+ run_golden.py（L2 真实 LLM 端到端）
 │   │                          #       + golden_case_runner.py / golden_full_run.py（进程隔离跑法）
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
-├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 每 4:00）
+├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 04:00；
+│                              #   **默认不装** —— 开关是 scripts/enable_nightly.sh，见该文件头注）
 ├── tests/test_workflows.py             # L0 单元级（技能注册表 + plan 契约，秒级，无 LLM）
 ├── tests/test_authz.py              # L0 单元级（权限模型：scope 声明完备性 + 角色授予表 + 失败取向
 │                              #   + 写操作的"人在回路"确认闸 + config 接线回归锁，秒级）
