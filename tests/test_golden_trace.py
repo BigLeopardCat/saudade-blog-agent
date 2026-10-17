@@ -291,9 +291,15 @@ check("弹卡族判据的反向对照：board_audit 全在恒弹卡族、tag_cre
 # 且都带"未设即响亮跳过"的说明（与 test_reconcile_offline 读脚本原文同一纪律）。
 _nightly_src = (ROOT / "scripts" / "nightly_regression.sh")
 _nightly = _nightly_src.read_text(encoding="utf-8") if _nightly_src.exists() else ""
+# 判据落在**接线**上，不落在那个 uid 的具体取值上（20261017 改）：原断言写死
+# `=721`，而 721 是评测残留夹具、当天被降权成 user ⇒ 换指 748 是**正确**的运维动作，
+# 却会把这把尺子弄红——那把尺子量的是"夜里到底给不给身份"，不是"给的是哪个号"。
+# 非零数字才是本判据真正要的东西：uid=0 是 agent 侧的"虚构态"哨兵（见上面那段注释），
+# 给了 0 等于没给。取值本身另有在位检查（`eval/identity_preflight.py`）与探针去验。
+_uid_line = r"^export GOLDEN_%s_UID=[1-9][0-9]*$"
 check("夜间脚本真给两条身份（export GOLDEN_ADMIN_UID / GOLDEN_USER_UID）",
-      "export GOLDEN_ADMIN_UID=721" in _nightly
-      and "export GOLDEN_USER_UID=722" in _nightly, str(_nightly_src))
+      re.search(_uid_line % "ADMIN", _nightly, re.M) is not None
+      and re.search(_uid_line % "USER", _nightly, re.M) is not None, str(_nightly_src))
 check("两条 export 都写明了「未设即响亮跳过」（跳过关乎通过率分母）",
       _nightly.count("响亮跳过") >= 2)
 

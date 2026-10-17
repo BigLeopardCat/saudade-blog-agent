@@ -23,7 +23,7 @@
 
 用法（cd saudade-blog-agent；本机即生产链路，真 LLM）：
   .venv/bin/python eval/fastpath_pricing.py map                    # 零成本，先看影响面
-  GOLDEN_ADMIN_UID=721 GOLDEN_USER_UID=722 \
+  GOLDEN_ADMIN_UID=756 GOLDEN_USER_UID=722 \
     .venv/bin/python eval/fastpath_pricing.py run --reps 2          # 两臂交替 2 遍
 """
 import argparse

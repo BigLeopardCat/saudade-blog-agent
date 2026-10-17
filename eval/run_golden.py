@@ -38,7 +38,7 @@
   .venv/bin/python eval/run_golden.py --only rag_python_is,rag_arch_components  # 多选（链路诊断）
   .venv/bin/python eval/run_golden.py --min-pass-rate 0.9 --skip-ids device_query  # 显式点估计口径
   # 真写用例（夹具先在位，见 scripts/migration/golden_write_fixture_20260925.sql）：
-  GOLDEN_ADMIN_UID=721 GOLDEN_ALLOW_REAL_WRITE=1 \
+  GOLDEN_ADMIN_UID=756 GOLDEN_ALLOW_REAL_WRITE=1 \
     .venv/bin/python eval/run_golden.py --only golden_write_category_delete_exec
 退出码：0=两层门禁都过（硬层 0 红 + 采样层 Wilson 95% 下界 ≥ 档位）
         1=硬层红（回归组）或采样层下界低于档位
@@ -2997,7 +2997,7 @@ def main():
     #    一律不许跑到它——夜间、CI、任何批量跑都是。判据 = 环境变量，**默认关**：
     #    这不是"忘了设就跳过"的宽松，而是"默认没有许可"的严格（授权串由人来给，
     #    与生产迁移要点名「库名+迁移文件」同源）。要跑就得在命令行上明说：
-    #       GOLDEN_ADMIN_UID=721 GOLDEN_ALLOW_REAL_WRITE=1 \
+    #       GOLDEN_ADMIN_UID=756 GOLDEN_ALLOW_REAL_WRITE=1 \
     #         .venv/bin/python eval/run_golden.py --only golden_write_category_delete_exec
     _REAL_WRITE_ENV = "GOLDEN_ALLOW_REAL_WRITE"
     _need_write = [c["id"] for c in cases if c.get("needs_real_write")]
