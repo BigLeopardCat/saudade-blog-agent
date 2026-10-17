@@ -16,6 +16,23 @@
 
 ## 20261017
 
+- **checkpoint 后端的"外围准备"：依赖进 lock、DSN 有了唯一读方（判据 + 配置面，行为零变化）**
+  ——ADR-0011（图自持上下文）**仍未采纳**，这一笔只把它要用的东西摆到位、**不动"三处一起动"**
+  ⇒ agent 会怎么说话、怎么做**一个字都没变**。三件：① `pyproject.toml` + `uv.lock` 加上
+  `langgraph-checkpoint-postgres==3.1.0` / `psycopg[binary]==3.3.6` / `psycopg-pool==3.3.3`
+  （lock 是**纯新增 111 行、零删除**：`langgraph-checkpoint` 已正好是 4.1.1、`orjson` 也在
+  ⇒ 不牵动任何既有版本）；② `config/settings.py` + `.env.example` 新增 `CHECKPOINT_DSN`
+  （缺省空 = 今天的行为），`agent/checkpoint.py::build_checkpointer()` 的缺省参数改成**读这一格**
+  ——否则它就是一个"填了不生效、也不报错"的幽灵旋钮（`tests/test_settings_surface.py` ① 正是
+  为那一族立的）；③ 判据：`test_checkpoint_factory.py` 新增 ⑦（拨成非空 DSN ⇒ 不给参数的调用
+  必须**响亮抛**，拨回空 ⇒ `None`），`tests/run_all.py::_PINNED` 钉 `CHECKPOINT_DSN=""`
+  （谁在 shell 里 export 过一个非空值，① 会**红得与代码无关**）。⚠️ **填了 `CHECKPOINT_DSN`
+  今天仍然不生效**（`build_checkpointer()` 全仓没有调用方）：接线是"删掉历史注入循环 +
+  `thread_id` 改会话坐标 + `build_graph` 接 saver"三处**同一个提交**，只做第三处会**静默产生
+  双份上下文**。顺带补上一处手抄表：三处"生产 venv 钉死 11 个包"（`docs/rag-design.md` 两处、
+  `docs/multimodal-retrieval.md` 一处）随本笔漂到 14 ⇒ `tests/test_docs_facts.py` 加锁，
+  真值 = `[project].dependencies` 条数。
+
 - **检索分节不再把 ``` 围栏里的行当标题（判据 + 行为）**——`rag/sections.py::split()` 只看
   `^#{1,3}`、不看围栏，而 `.gitignore` / shell / diff 的**示例内容整段住在围栏里**、注释行
   就是 `# …`（与一级标题**逐字同形**）。线上 note:16（Git 教程）因此被切成 11 个**全空**的
