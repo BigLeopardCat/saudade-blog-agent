@@ -167,8 +167,48 @@
         0,
         0
       ],
+      "agent/workflow_defs/__init__.py": [
+        0,
+        0
+      ],
+      "agent/workflow_defs/account_write.py": [
+        15,
+        0
+      ],
+      "agent/workflow_defs/capability.py": [
+        55,
+        0
+      ],
+      "agent/workflow_defs/content_write.py": [
+        45,
+        0
+      ],
+      "agent/workflow_defs/nav.py": [
+        75,
+        0
+      ],
+      "agent/workflow_defs/navigation.py": [
+        4,
+        0
+      ],
+      "agent/workflow_defs/own_todo.py": [
+        11,
+        0
+      ],
+      "agent/workflow_defs/public_read.py": [
+        1,
+        0
+      ],
+      "agent/workflow_defs/reports.py": [
+        4,
+        0
+      ],
+      "agent/workflow_model.py": [
+        0,
+        0
+      ],
       "agent/workflows.py": [
-        234,
+        24,
         0
       ],
       "tools/__init__.py": [
@@ -1948,8 +1988,8 @@
       "why": "情绪贴纸名单（与人设/前端同源）"
     },
     {
-      "id": "agent/workflows.py::_IOT_NAV_ALIASES",
-      "file": "agent/workflows.py",
+      "id": "agent/workflow_defs/nav.py::_IOT_NAV_ALIASES",
+      "file": "agent/workflow_defs/nav.py",
       "kind": "collection",
       "name": "_IOT_NAV_ALIASES",
       "size": 10,
@@ -1958,18 +1998,8 @@
       "why": "物联网页面的别名 → 路径（站内页面事实）"
     },
     {
-      "id": "agent/workflows.py::NAV_MAP",
-      "file": "agent/workflows.py",
-      "kind": "collection",
-      "name": "NAV_MAP",
-      "size": 18,
-      "category": "system_data",
-      "q": "NAV_MAP",
-      "why": "页面别名 → 真实路径，站内单一事实源"
-    },
-    {
-      "id": "agent/workflows.py::_PUBLIC_NAME_TAKEN",
-      "file": "agent/workflows.py",
+      "id": "agent/workflow_defs/nav.py::_PUBLIC_NAME_TAKEN",
+      "file": "agent/workflow_defs/nav.py",
       "kind": "collection",
       "name": "_PUBLIC_NAME_TAKEN",
       "size": 2,
