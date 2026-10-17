@@ -28,12 +28,6 @@
 随文本契约档一起删除。**这份协议仍在用**——系统自己写、系统自己读回来，模型一个字都不
 填（模型那一侧是工具调用，见 `agent/planner_llm.py`）。
 
-**一条硬不变量**：TOOLS 行是 `"; ".join(specs)` 拼的、`parse_plan` 用 `split(";")` 读回
-⇒ 值里一个裸 `;` 就把**一条调用撕成 N 条**（20260929 生产实证，取证见 `_esc_spec`）。
-所以**分隔符不许长在值里**，转义只有这一处。⚠️ 这条不变量**只管文本那一态**：执行侧
-改读 `plan_obj["tools"]` 之后，撕裂事故在**执行**上已经不可能——`_esc_spec` 现在只服务
-"给 narrator 看的排版"与"旧文本读回来"。
-
 **搬家方式**：`agent/graph.py` 按原名 re-export 这几个名字 ⇒ 那边剩的调用点与全仓
 `from agent.graph import plan_state` 那几十处引用（含测试）**一个都不用改**。判据侧同理：
 `tests/_ctx_src.plan_codec_src()` 把两份文件拼成一份取值视图，`test_plan_channel` ① 与
@@ -44,6 +38,7 @@
 
 import json
 import re
+from collections.abc import Mapping
 
 from agent.workflows import PLAN_STATUS_VALUES, WORKFLOW_MAP
 
@@ -299,6 +294,43 @@ def plan_state(plan_obj: dict) -> dict:
     """
     p = normalize_plan(plan_obj)
     return {"plan": plan_encode(p), "plan_obj": p}
+
+
+def plan_view(state: Mapping[str, object]) -> dict:
+    """**读计划的唯一入口**——`plan_state` 的读侧对偶：从一份 state 里取出本轮计划的
+    规范形态（`_CONTRACT_KEYS` 七格俱全）。
+
+    它住在 `plan_codec.py` 而不是 `agent/graph.py`：它与 `plan_state` 是一对（一个写
+    进 state、一个读出来），而这一族的唯一事实源就是这个模块。四个生产读点
+    （`_round_facts` / `execute_node` / `gate_node` / `route_after_planner`）都经它，
+    `agent/graph.py` 按原名 re-export ⇒ 调用点写法不变。
+
+    **仍然过一次 `normalize_plan`**（虽然 `plan_state` 写出前已经归过一次）：这个函数
+    就是"对象进入消费方"的那道边界，而往 state 里塞 `plan_obj` 的**不止生产那一处**
+    ——测试夹具、旧 checkpoint、以及将来任何直接构造的地方都要从这儿过。幂等 ⇒
+    重复归一的代价是零，收益是"漏归一"这件事在结构上不可能发生在读侧。
+
+    **在副本上归一，不改传进来的 state**：读函数顺手改它读的那份 state 是本仓点过名
+    的那类陷阱（"看着在读、其实在写"）。`dict(...)` 浅拷贝足够——`normalize_plan` 只
+    重绑顶层键，不碰嵌套内容。
+
+    **没有计划时回退成"一份空计划"**：`normalize_plan({})` 逐项等于 `parse_plan("")`
+    （`workflow="chat"` / `tools=[]` / `chat=True` / `status="answer_only"`）。这不是
+    巧合——两者共用同一份派生（`_derive_status`）与同一个注册表（`WORKFLOW_MAP`），
+    这条等价由 `tests/test_plan_channel.py` ③ 的等价判据钉住。所以 state 里根本没有
+    计划时，`route_after_planner` 照旧去 `model`（零工具 = 收尾轮）、`execute_node`
+    零执行——与改读对象之前逐字节同行为。
+
+    ⚠️ **本函数不看 `state["plan"]`（文本那一态）**——这正是批 1 的目的：文本是渲染，
+    渲染没有人拿来做决策。文本仍在产出，只喂 narrator 提示词与 trace。
+
+    **形参类型是 `Mapping[str, object]` 而不是 `dict`**：调用方递进来的既有普通 dict
+    （测试夹具）也有 `AgentState`（图里的节点，那是个 TypedDict）。写成 `dict` 会让
+    三个生产读点各报一条 mypy 错，而 `eval/type_gate.py` 是**只许变小**的棘轮 ⇒
+    "把类型收紧"在这里等于"让棘轮变红"。TypedDict 是 `Mapping` 的子类型，两边都装得下。
+    """
+    pobj = state.get("plan_obj")
+    return normalize_plan(dict(pobj) if isinstance(pobj, dict) else {})
 
 
 def parse_plan(raw: str) -> dict:

@@ -29,7 +29,7 @@ import agent.graph as G  # noqa: E402
 from agent.graph import (  # noqa: E402
     _FALLBACK_EFFECT_NO_FRAME, _claim_issue, _effect_state_claim,
     _effect_state_claim_clause, _live_darkmode, _live_effects,
-    gate_node, parse_plan, plan_encode,
+    gate_node, parse_plan, plan_encode, plan_state,
 )
 from agent.principal import Principal  # noqa: E402
 from agent.workflows import instantiate_plan  # noqa: E402
@@ -62,7 +62,7 @@ def _sys_msg(ctx=NONE_):
 def _chat_state(msgs, **kw):
     """零帧 chat 轮的 gate 输入（本族只跑在零帧族表里）。`gate_replan=True` = 重规划
     那次已经用掉 ⇒ 打回走确定性兜底，断言能直接读到兜底文本。"""
-    st = {"plan": plan_encode(instantiate_plan("chat", {})), "messages": msgs,
+    st = {**plan_state(instantiate_plan("chat", {})), "messages": msgs,
           "done": False, "plan_rounds": 2, "gate_replan": True}
     st.update(kw)
     return st

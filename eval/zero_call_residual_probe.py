@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import statistics
 import sys
 import tempfile
@@ -181,7 +180,7 @@ def run_one(msg: str, tid: str) -> dict:
     d = tempfile.mkdtemp(prefix="zero_call_probe_")
     trace_mod.start_trace(tid, 7, "admin", {}, dir=d, by_day=False)
     out: dict = {"error": "", "decisions": [], "nudge": 0, "accepted": 0,
-                 "unparseable": 0, "truncated": 0, "tools": set(), "plan": "",
+                 "unparseable": 0, "truncated": 0, "tools": set(), "plan_obj": {},
                  "dq": 0, "dq_still": 0}
     try:
         upd = G.planner_node({"messages": [HumanMessage(content=msg)], "plan_rounds": 0,
@@ -189,7 +188,7 @@ def run_one(msg: str, tid: str) -> dict:
     except Exception as e:  # noqa: BLE001
         upd = {}
         out["error"] = f"{type(e).__name__}: {e}"
-    out["plan"] = "".join(str(upd.get(k) or "") for k in ("plan",))
+    out["plan_obj"] = upd.get("plan_obj") if isinstance(upd.get("plan_obj"), dict) else {}
     for e in trace_mod.events_of(tid):
         if e.get("node") != "planner":
             continue
@@ -211,10 +210,13 @@ def run_one(msg: str, tid: str) -> dict:
             out["unparseable"] += 1
             if e.get("disposition") == "truncated_wrapup":
                 out["truncated"] += 1
-    # ⚠️ 工具名只能从**计划文本的 TOOLS 行**取：`native_decision.calls` 里只有技能名，
-    # 读族的工具全在 PARAMS 里 —— 读那一格会把「我有哪些未读通知」误记成"零调用"。
-    out["tools"] = {n for n in re.findall(r"([a-z_]{4,})\s*\(", out["plan"])
-                    if n in TOOL_NAMES}
+    # 工具名从**计划的规范化对象**取（20261017 批 1）：`native_decision.calls` 里只有
+    # 技能名，读族的工具全在 PARAMS 里 —— 读那一格会把「我有哪些未读通知」误记成"零调用"，
+    # 所以当初只能抠 TOOLS 行的正则。现在 `plan_obj["tools"]` 就是那份清单（执行侧读的
+    # 是同一格），正则连同它那条"文本格式变了要同步改"的隐含约定一起删掉。
+    out["tools"] = {s.split("(", 1)[0].strip()
+                    for s in (out["plan_obj"].get("tools") or [])
+                    if s.split("(", 1)[0].strip() in TOOL_NAMES}
     return out
 
 

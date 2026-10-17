@@ -31,7 +31,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa
 import agent.graph as G  # noqa: E402
 from agent.graph import (  # noqa: E402
     _FALLBACK_DEED_NO_RECEIPT, _fallback_deed_no_receipt, _pending_intents, _prev_user_msg,
-    _unsupported_deed_claims, gate_node, parse_plan, plan_encode, planner_node,
+    _unsupported_deed_claims, gate_node, parse_plan, plan_encode, plan_state,
+    planner_node,
     route_after_execute,
 )
 from agent.workflows import instantiate_plan  # noqa: E402
@@ -242,7 +243,7 @@ def _gate_state(reply, receipts):
     帧在场是这个用例的前提——洞① 只管零帧轮，而这一条判据恰恰要在**有帧轮**上
     生效（这正是它当初漏掉的原因之一）。
     """
-    return {"plan": plan_encode(instantiate_plan("chat", {})),
+    return {**plan_state(instantiate_plan("chat", {})),
             "messages": [HumanMessage(content=ASK),
                          ToolMessage(content="已收藏文章 19", tool_call_id="execute_0",
                                      name="add_favorite"),

@@ -317,7 +317,7 @@ _CFG = {"configurable": {"principal": Principal(uid=1, role="admin")}}
 _REPLY = ("主人，这个我得跟你如实说清楚喵 :委屈:\n\n"
           "系统这边**没有删除被驳回留言的通道**。我能删的是展示在留言板上的那些……")
 _ST = {
-    "plan": G.plan_encode(G.instantiate_plan("chat", {})),
+    **G.plan_state(G.instantiate_plan("chat", {})),
     "messages": [
         G.HumanMessage(content="[System: user_id=1, page=/dashboard/users; "
                                "current_effects=none; current_darkmode=on]"),

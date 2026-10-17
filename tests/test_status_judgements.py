@@ -27,7 +27,7 @@ import agent.graph as G  # noqa: E402
 from agent.decisions import _terminal_plan, _wrap_up_plan  # noqa: E402
 from agent.graph import (  # noqa: E402
     _FALLBACK_DOWN, _FALLBACK_GONE, _FALLBACK_UNDEPLOYED, _claim_issue, gate_node,
-    parse_plan, plan_encode,
+    parse_plan, plan_encode, plan_state,
 )
 from agent.workflows import (  # noqa: E402
     PLAN_STATUS_ABSENCE_EXEMPT, PLAN_STATUS_NAV_NOTE, PLAN_STATUS_VALUES, WORKFLOWS,
@@ -96,9 +96,19 @@ print("\n② gate 第 4 节：按状态选如实文案（不是按注记里有�
 
 
 def _zero_frame_state(plan, reply):
-    """零帧轮：无 ToolMessage ⇒ `_has_frames` 为假 ⇒ 第 4 节启用。"""
+    """零帧轮：无 ToolMessage ⇒ `_has_frames` 为假 ⇒ 第 4 节启用。
+
+    **20261017 批 1**：state 里现在放的是 `plan_state` 写出的**两态**（对象 + 渲染文本），
+    与生产写端同一条路——此前只放文本，而消费侧改读对象之后那种夹具就成了"看着在跑、
+    其实没跑"（`plan_view` 取不到对象 ⇒ 按空计划判 ⇒ 这一节整片失去意义）。
+
+    `plan` 可以是计划对象，也可以是**手写的契约文本**：本套件有几条（`_IOT_TXT` 那族）
+    就是拿文本测"缺 STATUS 时按注记措辞派生"的兼容路的，先 `parse_plan` 读成对象再进
+    写端，那条路照旧被验到。
+    """
+    pobj = plan if isinstance(plan, dict) else parse_plan(plan)
     return {
-        "plan": plan if isinstance(plan, str) else plan_encode(plan),
+        **plan_state(pobj),
         "messages": [HumanMessage(content="带我去友链"), AIMessage(content=reply)],
         "done": False,
         "plan_rounds": 1,

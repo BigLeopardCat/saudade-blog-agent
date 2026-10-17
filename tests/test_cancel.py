@@ -30,7 +30,6 @@ sys.path.insert(0, str(ROOT))
 import agent.graph as g
 from agent.graph import AgentCancelled, execute_node, gate_node, model_node, planner_node, reflector_node
 from agent.workflows import instantiate_plan
-from agent.graph import plan_encode
 from _planner_stub import bind_tools_stub, toolcall_reply
 
 
@@ -68,9 +67,14 @@ class _Spy:
         return self._result
 
 
-def _state(**kw):
-    base = {"messages": [HumanMessage(content="现在有哪些设备在线")],
-            "plan": "", "plan_rounds": 1, "done": False}
+def _state(plan=None, **kw):
+    """合成一份 state。`plan` 收的是**计划对象**（20261017 批 1）：经 `plan_state` 两态一起
+    写。`execute_node` 读的是**对象那一态**——此前夹具只给渲染文本，改读对象之后它会按
+    "这一轮没有计划" 判 ⇒ 本节全部"零调用"断言会**假绿**（本该调用的读工具一次都不调，
+    而断言写的正是 `calls == []`）。"""
+    base = {**g.plan_state(dict(plan) if plan else {}),
+            "messages": [HumanMessage(content="现在有哪些设备在线")],
+            "plan_rounds": 1, "done": False}
     base.update(kw)
     return base
 
@@ -106,7 +110,7 @@ def test_write_never_runs_after_cancel():
         obj["tools"] = ['device_oled_display({"text": "晚上好"})']
         cfg, _ = _cfg(stop=True)
         try:
-            execute_node(_state(plan=plan_encode(obj)), cfg)
+            execute_node(_state(plan=obj), cfg)
             check("入口取消 → execute 抛 AgentCancelled", False, "没抛")
         except AgentCancelled:
             check("入口取消 → execute 抛 AgentCancelled", True)
@@ -122,7 +126,7 @@ def test_write_never_runs_after_cancel():
         oled.calls.clear()
         obj2 = instantiate_plan("content_query", {"calls": [{"tool": "list_devices"}]})
         obj2["tools"] = ['list_devices({})', 'device_oled_display({"text": "晚上好"})']
-        out = execute_node(_state(plan=plan_encode(obj2)), cfg2)
+        out = execute_node(_state(plan=obj2), cfg2)
         check("中途取消 → 已执行的那个照常调用一次", reader.calls == [{}], reader.calls)
         check("中途取消 → 其后的写操作**不执行**（逐 spec 检查）", oled.calls == [], oled.calls)
         check("中途取消 → 已执行项的回执仍保留（真发生过的事实）",
@@ -172,7 +176,7 @@ def test_cancel_during_blocking_llm():
         obj = instantiate_plan("content_query", {"calls": [{"tool": "list_devices"}]})
         obj["tools"] = ['device_oled_display({"text": "晚上好"})']
         try:
-            execute_node(_state(plan=plan_encode(obj)), cfg)
+            execute_node(_state(plan=obj), cfg)
             check("下一个检查点（execute 入口）拦下取消", False, "没抛")
         except AgentCancelled:
             check("下一个检查点（execute 入口）拦下取消", True)
