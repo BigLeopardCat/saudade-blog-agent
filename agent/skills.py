@@ -48,6 +48,7 @@ from typing import Any
 #         这一层与工具层**各写一遍同一个条件**，此前正是它让"带定位参数的路径"两处
 #         口径分岔（见该函数头注）。
 #       _TODO_TEXT_LIMIT：待办正文上限，与 Rust `MAX_TEXT_CHARS` 同源。
+#       _as_bool：肯定/否定词表的唯一出处（本文件的 `_norm_true` 就是它的 None⇒False 读法）。
 #       _NOTICE_CONTENT_LIMIT / _NOTICE_TITLE_LIMIT / _QUOTA_NOTE_LIMIT：通知的标题/
 #         正文上限，与 Rust `notice.rs` 的 `TITLE_MAX` / `CONTENT_MAX` 同源。
 #   后两组在展开层挡住超长只是为了"零写 + 说清原因"，真正的硬闸在工具与服务端那两道。
@@ -64,6 +65,7 @@ from tools.base import (
     _TODO_TEXT_LIMIT,
     IOT_ENABLED,
     IOT_NAV_PATH,
+    _as_bool,
     nav_path_valid,
 )
 
@@ -3146,11 +3148,8 @@ def _norm_id_list(value) -> list[int]:
 
 
 def _norm_true(value) -> bool:
-    """实参 → 是不是"全部"（只认明确的肯定；**认不出 = 不是**——绝不默认 True）。"""
-    if isinstance(value, bool):
-        return value
-    s = str(value if value is not None else "").strip().lower()
-    return s in ("true", "1", "yes", "y", "on", "all", "全部", "全都", "所有")
+    """实参 → 是不是"全部"（认不出 = 不是）。词表 = `tools.base._as_bool`（20261018 A2）。"""
+    return _as_bool(value) is True
 
 
 def _expand_own_skill(skill, params: dict) -> tuple[list[str], str]:
