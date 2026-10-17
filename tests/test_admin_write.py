@@ -1898,8 +1898,8 @@ check("两样都筛时仍按搜索口径说「匹配」（限定写进同一条�
 # 明写的禁令。同一句话在工具参数描述里也有一份（planner 两处都看得到）。
 from agent.workflows import WORKFLOWS as _SK  # noqa: E402
 _AN = next(s for s in _SK if s.name == "admin_notes")
-check("planner 契约里明写「不许填占位词」（契约 + 参数表两处都写，模型两处都看得到）",
-      "占位词" in _AN.planner_contract and "未确认分类" in _AN.planner_contract
+check("planner 契约里明写「不许填占位词」（契约段 + 参数表两处都写，模型两处都看得到）",
+      "占位词" in _AN.contract and "未确认分类" in _AN.contract
       and "占位词" in _AN.inputs["category"],
       _AN.inputs["category"][-40:])
 

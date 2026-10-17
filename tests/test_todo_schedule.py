@@ -1736,7 +1736,7 @@ finally:
 #   ① `_WRITE_NAME_FIELDS` 登记了 `complete_dashboard_todo` / `reschedule_dashboard_todo`
 #      （`⑰`/`⑱` 那两条），**没有** `create_dashboard_todo`——"加一条"的目标不是站内
 #      既有台账里的一行，"名字通道"与"台账通道"都天然不覆盖它；
-#   ② 这件技能的 `planner_contract` 是空的，提示词正文里没有一个字提醒模型"照抄"；
+#   ② 这件技能的描述里没有一个字提醒模型"照抄"（当时契约还是独立字段 `planner_contract`，是空的）；
 #   ③ golden `admin_todo_add_popup` 的 `_note` **明写**不做正文逐字断言（理由：参数
 #      由 planner 采样填），于是这一格在评测层**没有任何判据**。
 #   实测命中率：同一条输入连跑 12 次，只有 3 次把正文关联对（25%）。
