@@ -38,6 +38,15 @@ import tools.base as base  # noqa: E402
 from agent.graph import (_RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec,  # noqa: E402
                          plan_state)
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
+# 取值点跟着定义走（20261017 批 2 刀 2f）：`instantiate_plan` 搬进
+# `agent.workflow_plan.py` 之后，`instantiate_plan.__globals__[...]` 读的是**那个模块的
+# 全局**，而 `WORKFLOWS` / `WRITE_WORKFLOW_NAMES` / `_WRITE_NAME_TARGET_WORKFLOWS` 的家是
+# 注册表与其派生物 `agent.workflow_defs`（实例化层只是 import 了其中两个）⇒ 按家取。
+from agent.workflow_defs import (  # noqa: E402
+    _WRITE_NAME_TARGET_WORKFLOWS,
+    WORKFLOWS,
+    WRITE_WORKFLOW_NAMES,
+)
 from agent.workflows import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_account_freeze 的那一处）──────────────────────────────
@@ -490,21 +499,21 @@ _p5 = instantiate_plan("account_set_role", {"name": "126", "role": "杂鱼"}, RO
 check("  纯数字的名字 → 零工具 + 如实说系统不支持按编号（编号通道不存在）",
       _p5["tools"] == [] and "编号" in _p5["note"], _p5["note"][:80])
 check("  技能名与工具名**不是一套字面量**（混用会让分支静默不命中）",
-      "account_set_role" in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"]
-      and "set_account_role" not in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"],
+      "account_set_role" in WRITE_WORKFLOW_NAMES
+      and "set_account_role" not in WRITE_WORKFLOW_NAMES,
       "")
 check("  它在**名字通道**名单里（不在 = 展开器尾部兜底成「未知的写技能」，静默零写）",
-      "account_set_role" in instantiate_plan.__globals__["_WRITE_NAME_TARGET_WORKFLOWS"])
+      "account_set_role" in _WRITE_NAME_TARGET_WORKFLOWS)
 check("  技能用的工具在 _WRITE_NAME_FIELDS 里（⑧ 的派生锁也覆盖它）",
-      [t for t, _ in instantiate_plan.__globals__["WORKFLOWS"][
-          [s.name for s in instantiate_plan.__globals__["WORKFLOWS"]].index(
+      [t for t, _ in WORKFLOWS[
+          [s.name for s in WORKFLOWS].index(
               "account_set_role")].plan] == ["set_account_role"])
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑧ 派生锁：plan 含名字型写工具的技能必须在 WRITE_WORKFLOW_NAMES 里（静默洞）")
-_missing = sorted({sk.name for sk in instantiate_plan.__globals__["WORKFLOWS"]
+_missing = sorted({sk.name for sk in WORKFLOWS
                    if any(t in g._WRITE_NAME_FIELDS for t, _ in (sk.plan or ()))
-                   and sk.name not in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"]})
+                   and sk.name not in WRITE_WORKFLOW_NAMES})
 check("⭐ 没有任何技能的 plan 用了名字型写工具却不在 WRITE_WORKFLOW_NAMES",
       _missing == [], str(_missing))
 

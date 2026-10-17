@@ -11,8 +11,8 @@
     "utils",
     "server.py"
   ],
-  "total": 196,
-  "files_checked": 77,
+  "total": 190,
+  "files_checked": 78,
   "by_file": {
     "agent/action_text.py": 1,
     "agent/adminops.py": 19,
@@ -26,7 +26,6 @@
     "agent/refs.py": 4,
     "agent/reports.py": 1,
     "agent/tasks.py": 3,
-    "agent/workflows.py": 6,
     "rag/embed_space.py": 1,
     "rag/graph_build.py": 3,
     "rag/search.py": 4,

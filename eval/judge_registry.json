@@ -215,6 +215,10 @@
         14,
         0
       ],
+      "agent/workflow_menu.py": [
+        0,
+        0
+      ],
       "agent/workflow_model.py": [
         0,
         0
@@ -223,8 +227,16 @@
         3,
         0
       ],
-      "agent/workflows.py": [
+      "agent/workflow_plan.py": [
         1,
+        0
+      ],
+      "agent/workflow_tools.py": [
+        0,
+        0
+      ],
+      "agent/workflows.py": [
+        0,
         0
       ],
       "tools/__init__.py": [

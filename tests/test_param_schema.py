@@ -552,7 +552,11 @@ def test_param_unknown_is_filled_by_every_branch():
           "；".join(bad[:3]))
 
     # 薄壳只该有一处实现——"每个分支记得填"是漏项来源（同 iter_trace_files 那条例律）
-    src = (ROOT / "agent" / "workflows.py").read_text(encoding="utf-8")
+    # 取值点跟着定义走（20261017 批 2 刀 2f）：`instantiate_plan` / `_instantiate_plan`
+    # 已搬进 `agent/workflow_plan.py`——**指回 workflows.py 会 StopIteration**（"取不到"
+    # 比"取到旧的"响，但也别让它发生）。下面三条断言（薄壳那行补齐、先调内层、内层那条
+    # 注记）读的都是这一个文件。
+    src = (ROOT / "agent" / "workflow_plan.py").read_text(encoding="utf-8")
     fn = ast.get_source_segment(
         src, next(n for n in ast.walk(ast.parse(src))
                   if isinstance(n, ast.FunctionDef) and n.name == "instantiate_plan"))
