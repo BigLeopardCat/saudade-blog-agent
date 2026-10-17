@@ -49,8 +49,10 @@ update 与那几族控制帧，不认这循环内部长什么样。
 """
 import logging
 import os
+from typing import Any
 
 from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg import Connection
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
@@ -95,7 +97,15 @@ def thread_mode() -> str:
     return mode
 
 
-def _make_pool(pool_max: int) -> ConnectionPool:
+# 池的行类型要**写死**成 `dict`：langgraph 的 `PostgresSaver` 只收
+# `ConnectionPool[Connection[dict[str, Any]]]`（它按列名取行），而裸 `ConnectionPool`
+# 会被推成 `ConnectionPool[Connection[tuple[Any, ...]]]` ⇒ 传进去当场被 mypy 判死。
+# 这不是"讨好类型检查器"：下面那句 `row_factory=dict_row` 就是同一件事的运行时那一半，
+# 两处必须说同一句话。
+_PoolT = ConnectionPool[Connection[dict[str, Any]]]
+
+
+def _make_pool(pool_max: int) -> _PoolT:
     """建一条长期存活的连接池，并在建臂那一刻就**连一次**（负控 2）。
 
     `autocommit=True` + `prepare_threshold=0` + `dict_row` 三项都是 langgraph 的
@@ -108,7 +118,7 @@ def _make_pool(pool_max: int) -> ConnectionPool:
     PoolTimeout"——慢、且混在一堆 golden 输出里，很容易被读成"这一臂就是慢"。
     这里把它变成一句立刻可见的启动期报错。
     """
-    pool = ConnectionPool(
+    pool = _PoolT(
         conninfo=_dsn(), min_size=1, max_size=pool_max, open=True,
         kwargs={"autocommit": True, "prepare_threshold": 0,
                 "row_factory": dict_row})
