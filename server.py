@@ -56,6 +56,7 @@ from agent.tasks import (TASK_CONSENT_ASK, TS_MMDD_HHMM_RE, advance_by_tools,
 # 两侧不许各写一份归一）。
 from rag import search as rag_search, wordgraph
 from utils import setup_logging
+from utils.clock import format_local_now
 from utils.logging import get_trace_id, set_trace_id
 from utils.trace import finish_trace, record, start_trace
 
@@ -635,9 +636,8 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
     # 历史里的旧时间戳编造"现在"（05:29 会话 13:34 续接 → 编"现在 05:34"）。
     # 当前时刻必须作为系统事实注入（与 current_effects/darkmode 同语义，格式与
     # get_current_time 工具一致），模型不得自行推算；executor 规则同源约束。
-    _now = datetime.now()
-    _weekdays = ('星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日')
-    ctx_parts.append(f"current_time={_now.strftime(f'%Y年%m月%d日 {_weekdays[_now.weekday()]} %H:%M')}")
+    # 格式与星期表**不在这里**：唯一实现是 `utils/clock.py`，`get_current_time` 工具走同一个函数。
+    ctx_parts.append(f"current_time={format_local_now()}")
     # 对话额度（20260929，跨语言契约 C2）：访客的终身额度现状。**只放事实、不放行为
     # 指令**——"快用完了该提醒他"那类属于提示词（它管说什么），不属于系统上下文
     # （它管是什么）。缺席时**整行不注入**（见 ChatRequest.chat_quota 的注释：缺席是

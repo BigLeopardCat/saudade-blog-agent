@@ -235,7 +235,50 @@ def _self_test() -> bool:
         print(f"  {'✅' if ok else '❌'} {desc}  [{'; '.join(bad) or '无'}]")
         if not ok:
             fails.append(f"判据自检：{desc}")
+
+    # 盘上格式/键序漂了 ⇒ 红；恰好是 `dump()` 的产物 ⇒ 绿（20261018 审计 A5）
+    unordered = {"b.py::z": {"c": 40, "lines": 100}, "a.py::y": {"c": 31, "lines": 50}}
+    o_cases = [
+        ("恰好是 dump() 的产物 ⇒ 不报", dump(unordered), False),
+        ("键序没排好 ⇒ 报", json.dumps(unordered, indent=2) + "\n", True),
+        ("少了结尾换行 ⇒ 报",
+         json.dumps(dict(sorted(unordered.items())), ensure_ascii=False, indent=2), True),
+    ]
+    for desc, raw, want_bad in o_cases:
+        got_bad = order_violation(raw) is not None
+        ok = got_bad == want_bad
+        print(f"  {'✅' if ok else '❌'} 键序判据：{desc}")
+        if not ok:
+            fails.append(f"键序判据自检：{desc}")
     return not fails and ctrl
+
+
+def dump(ledger: dict) -> str:
+    """`--update` 写盘用的**唯一**格式。读侧的 `order_violation()` 拿它做往返判据——
+    两处**必须**是同一个函数，否则"写出来的"与"判出来的"会各走一套。
+    """
+    return json.dumps(ledger, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def order_violation(raw: str) -> str | None:
+    """盘上台账的**字节**是否就是 `--update` 会写出来的那一份；不是就返回一句说明。
+
+    为什么这值得一条判据（20261018 审计 A5）：`--update` 的产物是排序过的，而盘上这份
+    台账历史上是手写落地的、**键序不排序**。只要不校正一次，**下次任何一条触发
+    `--update`，diff 就是整份文件重排**——"这一条真的变了"被埋进噪声里，而这道闸的
+    全部价值就是让人看得见那份 diff（`--update` 是唯一的放宽通道）。
+
+    判法是**往返比字节**（不是自己再写一套排序规则）：把盘上解析出来的 dict 按 `dump()`
+    重新序列化，与原文逐字比。这样"格式"与"顺序"一次判完，将来改 `dump()` 也不会让
+    判据与它脱钩。
+    """
+    want = dump(json.loads(raw))
+    if want == raw:
+        return None
+    return (f"{LEDGER.relative_to(ROOT)} 的盘上格式/键序与 `--update` 的产物不一致"
+            f"（往返 {len(want)} 字节 vs 盘上 {len(raw)} 字节）——"
+            f"跑一次 `--update` 校正。⚠️ 那一次 diff **只该动键序与空白，值一个都不许变**；"
+            f"值变了就是另一次放宽，要单独说理")
 
 
 def main() -> int:
@@ -252,11 +295,9 @@ def main() -> int:
 
     current, n_files = scan()
     if args.update:
-        ledger = {k: v for k, v in sorted(current.items())
+        ledger = {k: v for k, v in current.items()
                   if v["c"] > args.c_max or v["lines"] > args.lines_max}
-        LEDGER.write_text(
-            json.dumps(ledger, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8")
+        LEDGER.write_text(dump(ledger), encoding="utf-8")
         print(f"\n✅ 已重写台账 {LEDGER.relative_to(ROOT)}：{len(ledger)} 条"
               f"（{len(current)} 个函数里超过 C≤{args.c_max} / {args.lines_max} 行的）")
         return 0
@@ -264,11 +305,15 @@ def main() -> int:
     if not LEDGER.exists():
         print(f"\n❌ 台账不存在：{LEDGER.relative_to(ROOT)} —— 先跑一次 `--update`", file=sys.stderr)
         return 1
-    ledger = json.loads(LEDGER.read_text(encoding="utf-8"))
+    raw = LEDGER.read_text(encoding="utf-8")
+    ledger = json.loads(raw)
 
     print(f"\n[扫描] {n_files} 个文件 / {len(current)} 个函数；"
           f"预算 C ≤ {args.c_max}、{args.lines_max} 行；台账 {len(ledger)} 条")
     bad = judge(current, ledger, args.c_max, args.lines_max)
+    drift = order_violation(raw)
+    if drift:
+        bad.append(drift)
     if bad:
         for b in bad:
             print(f"  ❌ {b}")
