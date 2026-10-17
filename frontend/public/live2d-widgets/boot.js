@@ -101,7 +101,7 @@
   // 填进 `#waifu-tips` 的 innerHTML，值来自 document.title / referrer hostname）。
   // 同上 ⇒ 必须 bump，否则一年内访客拿到的还是"值当标记解析"的那一版。
   // 五个同步点见 frontend/README.md。
-  const VER = '20261015a';
+  const VER = '20261018a';
 
   function loadExternalResource(url, type) {
     return new Promise((resolve, reject) => {

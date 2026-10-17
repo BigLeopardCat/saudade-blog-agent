@@ -16,6 +16,22 @@
 
 ## 20261018
 
+- **聊天图片落库，但只做展示——模型仍只看 `[图片]` 标记（跨语言契约，agent 行为零变化）**
+  ——`GET /api/chat/history` 的每条 item 多一个 `images` 键（dataURL 数组，缺席/空数组
+  = 这条消息没有图）。**agent 侧一行代码都没改**：注入给模型的历史仍是
+  `role`/`content` 字符串，`[图片]`/`[图片×N]` 标记原样进 few-shot
+  ⇒ token、成本、行为**一个字节都不变**（这条"零变化"是可验证的：本仓 `tests/` 与
+  golden 里没有任何一条依赖那个标记）。父仓那半：新增 PG 表 `chat_image`（外键
+  `ON DELETE CASCADE` 挂在 `chat_history.id` 上，5 处删除点因此自动覆盖）+
+  响应体字节预算（8 MiB 安全阀）。取舍与"让模型看历史图"的触发条件见
+  [ADR-0013](docs/adr/adr-0013-chat-image-persistence.md)。
+- **本仓这半只动了一个纯函数**：`frontend/public/live2d-widgets/chat-core.js` 新增
+  `dbRowToItem` / `mapDbItems`（从 `chat-engine.js` 搬进来）。搬的理由不是"好看"：
+  原来那是个**手写的白名单对象字面量**，白名单之外的新字段（`images`）**静默消失**
+  ——DB 明明有图、界面照旧渲染"ⓘ图片已过期"占位块，而那段是 IIFE 闭包、**测不到**。
+  搬进 `chat-core.js` 之后它是纯函数，`frontend/tests/chat-core.test.mjs`（`.mjs`
+  ⇒ 进 CI 门禁）能直接喂 DB 行断言"图活到了渲染层、且占位回填没被误触发"。
+  `boot.js` 的 `VER` 随之 bump（同步点在父仓 `frontend/README.md` 那张表）。
 - **静态检查棘轮落地：ruff E/F/I/W 从"散文纪律"变成机械闸（判据，行为零变化）**
   ——`eval/lint_gate.py` + `eval/lint_baseline.json`（877 条 / 154 个文件）。此前
   `pyproject.toml` 里那行 `select = ["E","F","I","W"]` 只在 CI 跑一条 `--select F821`，
