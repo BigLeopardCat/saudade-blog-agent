@@ -272,7 +272,11 @@
         0
       ],
       "tools/base.py": [
-        49,
+        38,
+        0
+      ],
+      "tools/quota_admin.py": [
+        11,
         0
       ],
       "tools/account_admin.py": [
@@ -2107,8 +2111,8 @@
       "why": "留言审核状态的显示字"
     },
     {
-      "id": "tools/base.py::_QUOTA_POLICY_REFUSALS",
-      "file": "tools/base.py",
+      "id": "tools/quota_admin.py::_QUOTA_POLICY_REFUSALS",
+      "file": "tools/quota_admin.py",
       "kind": "collection",
       "name": "_QUOTA_POLICY_REFUSALS",
       "size": 3,
