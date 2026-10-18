@@ -10,6 +10,8 @@
       --guard         加这一档：真子进程崩在工具调用中途，**幂等账**把写压成一次
                       （2× → 1×；不带 --guard 的那条就是它的内置反控）
       --guard-unsafe  上一条的反控：占位留在一笔**没提交**的事务里 ⇒ 读数应回到两次
+      --prod-shape    配 --guard：恢复那一次传 **dict 输入**（= 生产每轮的形状）
+                      ⇒ 账**恒不命中**（读数 2×）。反控 = 同夹具不带本开关（1×）
     --pg-stats        实验库里有什么（逐 thread 的 checkpoint 行数/字节、单行大小）
     --backend-parity  两档账本（PG / SQLite）跑同一份序列 ⇒ 读数必须**逐字相等**
     --summarize       把 `CHECKPOINT_PROBE_OUT` 那份 JSONL 汇总成逐轮曲线
@@ -369,6 +371,21 @@ class _SideEffectTool:
         return "写好了"
 
 
+def _note_ns(config) -> None:
+    """把这一格节点看到的 `checkpoint_ns`（**幂等键的身份成分**）记进 `PROBE_NS` 那个文件。
+
+    这一格要回答的是「**键在崩溃前后逐字相同吗**」，所以它必须从**节点内**取——
+    `idem.key_for` 读的就是 `config["configurable"]["checkpoint_ns"]`，从图外面取
+    拿到的是另一个东西。没设 `PROBE_NS` 就什么都不做（其余档位零影响）。
+    """
+    path = os.environ.get("PROBE_NS")
+    if not path:
+        return
+    ns = ((config or {}).get("configurable") or {}).get("checkpoint_ns")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"{ns}\n")
+
+
 def _guard_graph(saver, ledger):
     """真图：唯一那次写走**账**（与 `graph.execute_node` 里那一行同一个入口）。
 
@@ -378,6 +395,7 @@ def _guard_graph(saver, ledger):
     checkpointer"，账从 saver 上认。
     """
     def execute(state, config):
+        _note_ns(config)
         out = idem.guarded_invoke(_SideEffectTool(), "set_article_status", {}, config,
                                   fingerprint="probe", ledger=ledger)
         return {"messages": [ToolMessage(content=str(out), tool_call_id="probe")]}
@@ -572,8 +590,16 @@ def _scalar(conn, sql: str, params: tuple = ()):
     return None if row is None else next(iter(row.values()))
 
 
-def cmd_crash_resume_guard(unsafe: bool = False) -> int:
-    """`--crash-resume --guard`：真子进程崩在工具调用中途 ⇒ 账把重放压住（2× → 1×）。"""
+def cmd_crash_resume_guard(unsafe: bool = False, prod_shape: bool = False) -> int:
+    """`--crash-resume --guard`：真子进程崩在工具调用中途 ⇒ 账把重放压住（2× → 1×）。
+
+    `--prod-shape`（20261019 补）：**恢复那一次改成传 dict 输入**，也就是**生产每轮
+    的形状**。这一档量的是"这本账在生产那条路上认不认得出同一件写"——而实测答案是
+    **不认**（读数回到 2×），因为生产形状下 langgraph **丢弃未完成任务、从 START 重启**
+    （`langgraph/pregel/_loop.py:977-979`），重启后 `checkpoint_ns` 逐字变了 ⇒ 键变。
+    内置反控就是**同一份夹具**里那条 `stream(None)`（读数 1×）：两档只差这一行输入，
+    差异因此归因于"输入形状"，不是别的原因。
+    """
     import multiprocessing as mp
     import tempfile
     import uuid
@@ -590,7 +616,11 @@ def cmd_crash_resume_guard(unsafe: bool = False) -> int:
     with tempfile.NamedTemporaryFile(prefix="probe-guard-", suffix=".txt",
                                      delete=False) as fh:
         side = fh.name
+    with tempfile.NamedTemporaryFile(prefix="probe-ns-", suffix=".txt",
+                                     delete=False) as fh:
+        ns_path = fh.name
     os.environ["PROBE_SIDE"] = side
+    os.environ["PROBE_NS"] = ns_path
     os.environ.pop("PROBE_CRASH", None)
 
     print(f"thread : {thread}")
@@ -607,27 +637,47 @@ def cmd_crash_resume_guard(unsafe: bool = False) -> int:
     print(f"第 1 次跑（真子进程 pid={p.pid}，退出码 {p.exitcode}）：崩在工具调用中途")
     print(f"  此刻「库」里已有：{after_crash}")
     print()
-    print("模拟重启后再来一次（输入 None = 从 checkpoint 恢复，**本进程**接着跑）：")
+    if prod_shape:
+        print("模拟重启后再来一次（输入 **dict** = 生产每轮的形状 ⇒ langgraph 丢弃未完成"
+              "任务、从 START 重启）：")
+    else:
+        print("模拟重启后再来一次（输入 None = 从 checkpoint 恢复，**本进程**接着跑）：")
     app = _guard_graph(saver, _ledger_for("crash-unsafe" if unsafe else "safe", dsn))
-    list(app.stream(None, {"configurable": {"thread_id": thread}},
+    list(app.stream(G.graph_input([]) if prod_shape else None,
+                    {"configurable": {"thread_id": thread}},
                     stream_mode=["updates"], durability=idem.REQUIRED_DURABILITY))
     final = _side_lines(side)
     print(f"  跑完后「库」里是：{final}")
     print()
+    ns = _side_lines(ns_path)
+    print("  幂等键的身份成分（`checkpoint_ns`，节点内实测）两遍分别是：")
+    for i, v in enumerate(ns, 1):
+        print(f"    第 {i} 遍：{v}")
+    if len(ns) >= 2:
+        same = ns[0] == ns[-1]
+        print(f"    逐字相同？ **{same}**" + ("" if same else "  ⇒ 键变了 ⇒ 账认不出同一件写"))
+    print()
     n = len(final)
-    want = 2 if unsafe else 1
+    want = 2 if (unsafe or prod_shape) else 1
     ok = n == want
     print(f"  [{'PASS' if ok else 'FAIL'}] 同一件写执行了 {n} 次（期望 {want}）："
-          + ("账把重放压住了" if want == 1 else "占位没提交 ⇒ 账白做（反控成立）"))
+          + ("账把重放压住了" if want == 1 else "账**没**压住"))
     print()
     if unsafe:
         print("结论：**占位必须按语句即时落库**。占位留在一笔没提交的事务里时，它随崩溃"
               "一起回滚 ⇒ 重放照旧发生，而表面上一切正常。")
+    elif prod_shape:
+        print("结论：**这本账在生产那条路上恒不命中**。它只在 `stream(None)` 的续跑路径上"
+              "有效，而生产每轮传 dict 输入 ⇒ 从 START 重启 ⇒ `checkpoint_ns` 逐字变了 ⇒ "
+              "键变 ⇒ 账认不出同一件写。上面那条不带 `--prod-shape` 的同夹具读数（1×）"
+              "就是本档的反控：两档只差输入形状。")
     else:
         print("结论：真子进程被硬杀之后**占位仍在库里**，恢复那一轮的第 1 件走"
               "「结果未知」（不重发、判 BLOCK）⇒ 这一格从「可能双写」变成"
-              "「at-most-once」。内置反控 = 上面那条不带 --guard 的 `--crash-resume`（2×）。")
+              "「at-most-once」。⚠️ 这一档的前提是**续跑**（`stream(None)`），"
+              "而生产不走那条路——生产形状的读数见 `--prod-shape`。")
     os.unlink(side)
+    os.unlink(ns_path)
     return 0 if ok else 1
 
 
@@ -1551,6 +1601,10 @@ def main() -> int:
     ap.add_argument("--guard-unsafe", action="store_true",
                     help="上两条的反控（两格各一个：崩档 = 占位不提交 ⇒ 回到两次；"
                          "并发档 = 占位判定与插入拆成两句 ⇒ 回到 N 次）")
+    ap.add_argument("--prod-shape", action="store_true",
+                    help="配 --crash-resume --guard：恢复那一次传 **dict 输入**（= 生产"
+                         "每轮的形状）⇒ 实测这本账**恒不命中**（读数 2×）。"
+                         "内置反控 = 同一份夹具不带本开关（读数 1×）")
     ap.add_argument("--concurrency", type=int, default=0, metavar="N",
                     help="同一 thread 上 N 个进程并发写（生产 4 worker 那一格）；配 --guard "
                          "则改成 N 个进程**同时重放同一个未完成的 superstep**")
@@ -1568,8 +1622,9 @@ def main() -> int:
     if args.history_dup:
         return cmd_history_dup(args.history_dup)
     if args.crash_resume:
-        if args.guard or args.guard_unsafe:
-            return cmd_crash_resume_guard(unsafe=args.guard_unsafe)
+        if args.guard or args.guard_unsafe or args.prod_shape:
+            return cmd_crash_resume_guard(unsafe=args.guard_unsafe,
+                                          prod_shape=args.prod_shape)
         return cmd_crash_resume()
     if args.concurrency:
         if args.guard or args.guard_unsafe or args.guard_slow:

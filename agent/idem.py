@@ -24,6 +24,27 @@ LangGraph 的 checkpoint **提交粒度是 superstep，不是语句**（实测�
 - 同一 thread 的 3 轮**互不相同** ⇒ 不会把两轮的写合成一次；
 - **没挂 saver 时是随机 uuid4** ⇒ `active()` 为假，本模块**天然惰性**、今天一行账都不记。
 
+⚠️ **上面第一条的前提是「续跑」，而生产不走那条路**（20261019 实测，**这条更正很重要**）。
+
+那三条是在 **`stream(None, config)`**（= "接着跑没跑完的任务"）那条路径上量的。
+而 `server.py` 每轮传的是 **dict 输入**（`graph_input(...)`），langgraph 于是
+**丢弃**上一份 checkpoint 的未完成任务、**从 START 重启**
+（`langgraph/pregel/_loop.py:977-979`，原话 `# discard any unfinished tasks from previous
+checkpoint`；`_first` 的 `is_resuming` 判据见同文件 861-867）。重启 ⇒ 全新的 checkpoint
+血缘 ⇒ `checkpoint_ns` **逐字变了** ⇒ 键变 ⇒ **账认不出同一件写**。
+
+真机读数（`eval/experiments/checkpoint_probe.py --crash-resume --guard [--prod-shape]`，
+同一份夹具、只差"恢复那一次传什么"）：
+
+| 恢复那一次传什么 | 两遍的 `checkpoint_ns` | 同一件写执行了几次 |
+|---|---|---|
+| `None`（续跑，判据与探针走的那条） | **逐字相同** | 1（账压住了） |
+| **dict**（= 生产每轮的形状） | **逐字变了** | **2（账没压住）** |
+
+⇒ **本模块在生产那条路上恒不命中**。这不是"写了两遍的 bug"，而是"这道保险丝只对着
+一条生产不走的路径通电"——**读本模块时别把它的绿当成生产受保护**。修法（把键换成
+跨重启稳定的身份 / 让生产走续跑路径）还没定，见 `docs/adr/adr-0012` 的《口径更正》。
+
 ## 两档存储（20261017）
 
 账本本体有**两档**，由 `_shared(config)` 按 saver 自己选：挂 PG saver ⇒ 落**同一个池、

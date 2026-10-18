@@ -32,8 +32,8 @@
     "top_defs": 30
   },
   "eval/experiments/checkpoint_probe.py": {
-    "lines": 1591,
-    "top_defs": 35
+    "lines": 1646,
+    "top_defs": 36
   },
   "eval/run_golden.py": {
     "lines": 3686,

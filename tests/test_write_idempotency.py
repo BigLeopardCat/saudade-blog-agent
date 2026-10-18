@@ -7,9 +7,25 @@
 （`build_graph` 的 `checkpointer` 缺省 `None`，生产调用点不传）⇒ 这件事炸不了，但**接上
 saver 那天重放路径第一次通电，而它一行判据都没有**。本文件就是那道保险丝上的判据。
 
+⚠️ **口径更正（20261019）：本件量的是「续跑」那一格，不是生产那一格。**
+本件第二遍传的是 `invoke(None)`（= "接着跑没跑完的任务"），而**生产每轮传 dict 输入**
+⇒ langgraph 丢弃未完成任务、**从 START 重启**（`langgraph/pregel/_loop.py:977-979`）
+⇒ `checkpoint_ns`（幂等键的身份成分）**逐字变了** ⇒ 账认不出同一件写。
+真机读数（同一份夹具、只差"恢复那一次传什么"）：
+
+| 恢复那一次传什么 | 两遍的 `checkpoint_ns` | 同一件写执行了几次 |
+|---|---|---|
+| `None`（= 本件） | 逐字相同 | 1（账压住了） |
+| **dict**（= 生产每轮的形状） | 逐字变了 | **2（账没压住）** |
+
+⇒ **本件的绿不等于生产受保护**。生产形状那一格的读数在
+`eval/experiments/checkpoint_probe.py --crash-resume --guard --prod-shape`（真机、不在 CI）。
+本件的断言**一个字都不改**——续跑那一格仍然有效且必要，只是它盖的不是生产。
+完整口径见 `docs/adr/adr-0012-write-idempotency-ledger.md` 的《口径更正（20261019）》。
+
 被测十一块（每条都配了会红的那一半）：
-  · ① **§2.6 镜像**：真 `StateGraph` + `MemorySaver`，节点做到一半抛异常、再 `invoke(None)`
-    恢复 ⇒ 写**只发生一次**；
+  · ① **§2.6 镜像（续跑那一格）**：真 `StateGraph` + `MemorySaver`，节点做到一半抛异常、
+    再 `invoke(None)` **续跑** ⇒ 写**只发生一次**（⚠️ 生产不走续跑，见头注的口径更正）；
   · ② **反控**：同一场景换成 `NullLedger`（今天的形状）⇒ 写**发生两次**。没有这一条，
     ①可能只是恒真（本仓纪律：正控不红不算数）；
   · ③ **intent 窗口**：留着一行 `intent` ⇒ 判 BLOCK `write_outcome_unknown`，**且不重跑**；
@@ -134,12 +150,13 @@ def _cfg(ns: str, saver=True) -> dict:
     return {"configurable": conf}
 
 
-print("① §2.6 镜像：崩溃 + 恢复后，写只发生一次")
+print("① §2.6 镜像（**续跑**那一格，不是生产那一格）：崩溃 + `invoke(None)` 续跑后，写只发生一次")
 _led = idem.Ledger(os.path.join(_TMP, "a.sqlite3"))
 _hits, _seen = _run(_led, crash_after=0, thread="t1")
 check("挂了 saver 的 config 里真有 `__pregel_checkpointer`（否则整套探针恒绿）",
       "__pregel_checkpointer" in _seen[0], str(_seen[0][:4]))
-check("节点做到一半崩、再从 checkpoint 恢复 ⇒ 第一件写**只执行一次**",
+check("节点做到一半崩、再从 checkpoint **续跑**（`invoke(None)`）⇒ 第一件写**只执行一次**"
+      "（生产形状下不是这样：账不命中，读数 2×，见头注）",
       _hits == [0, 1], f"实际执行序列={_hits}")
 
 print("\n② 反控：没有账本（今天的形状）时，同一场景写发生**两次**")
