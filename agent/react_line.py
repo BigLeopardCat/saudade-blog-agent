@@ -433,7 +433,12 @@ class WorkflowExecutor:
                 # （golden 的 `forbid_tool_calls: ["@write_console"]` 当场转红，而
                 # 那一族的本意正是"这一轮一件写工具都没碰"），后者会把"等确认"
                 # 记成"执行失败"。
-                outs.append(f"[{name}] {authz.consent_frame(name, self.principal)}")
+                # 帧文走 `consent_block_frame`（生产 `graph.execute_node` 同一格，
+                # 20261019 资产对齐 I）：`action_conflict` 为真时改说"你排反了"——否则
+                # 模型只收到一句"要不要做"，而它答错的**正是那个问题**（主人要的是反
+                # 极性那一件）。改选那一轮不弹卡，所以这一条帧是它唯一的纠错输入。
+                outs.append(f"[{name}] "
+                            f"{authz.consent_block_frame(name, self.principal, self.user_msg)}")
             logger.info("[react_line] 写操作未判成命令 → 不执行、登记待确认: %s",
                         [p["tool"] for p in self.ledger.pending])
             return "\n".join(outs), 0

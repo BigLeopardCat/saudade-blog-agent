@@ -743,6 +743,52 @@ check("待确认的 spec **不进 `calls`/`blocked`**（进 calls 会让 `forbid
       "当场转红，而那族的本意正是「一件写工具都没碰」）",
       "self.calls.append" not in _line_src2.split("if missing:")[1].split("outs: list[str] = []")[0])
 
+# ── ⑥e 确认兑现轮的 `user_msg`：取**主人原话**，不是前端合成的卡面文本 ─────────
+# 生产 `graph._intent_src` 立的规则（20261012 批 C 收敛成**唯一**来源）：主人点「确定」
+# 时前端合成的那句「确认执行：…吗？」是**我们自己的话**，凡是要判"主人要什么/主人点名
+# 了谁"的地方一律读它前面那句。判错源的代价生产侧记过两次：`_confirm_popup` 见问号判
+# "像提问" ⇒ **第二张卡根本不弹**；同意闸拿卡面文本判 `consent_granted` 恒假 ⇒ 那一件
+# 写落成 `consent_required` BLOCK。本臂同一处：反极性判据（`action_conflict`）、写目标
+# 拒绝链的名字地基、剔空纠偏读的都是 `ctx["user_msg"]`。
+_CARD = "确认执行：取消收藏文章 12 吗？点「确定」我就去办。"
+_MSG_REAL = "取消收藏文章 12"
+_G_FAV = {"workflow": "favorite_remove",
+          "specs": [{"tool": "remove_favorite", "args": {"article_id": 12}}]}
+
+
+def _user_msg_of(messages: list, *, grant: dict | None, rounds: int) -> str:
+    """走整条 `stream`，取回决策那一轮 `_system_prompt` 收到的 `ctx["user_msg"]`。
+
+    **走整条链**而不是直接调 `_last_user_msg`：规则住在 `stream` 里，只测那两个取值
+    函数的话，"`stream` 压根没按令牌分支取"这种坏法照样全绿。
+    """
+    _got: list = []
+    _sp, _llm, _nt, _tl = R._system_prompt, R._llm, R._narrator_llm, R._real_tools
+    R._system_prompt = lambda state, ctx: (_got.append(str(ctx.get("user_msg") or "")),
+                                           "你是测试用助手。")[1]
+    R._llm = lambda: _Scripted(messages=iter([AIMessage(content="好呀")] * 2),
+                               ai_message_chunk=iter([]))
+    R._narrator_llm = lambda: _narrator_stub("好呀")
+    R._real_tools = lambda *a, **k: {}
+    try:
+        _st: dict = {"messages": list(messages), "plan_rounds": rounds}
+        if grant is not None:
+            _st["confirm_grant"] = grant
+        list(R.build().stream(_st, {"configurable": {"principal": ADMIN0}}))
+    finally:
+        R._system_prompt, R._llm, R._narrator_llm, R._real_tools = _sp, _llm, _nt, _tl
+    return _got[0] if _got else ""
+
+
+_um_conf = _user_msg_of([HumanMessage(content=_MSG_REAL), HumanMessage(content=_CARD)],
+                        grant=_G_FAV, rounds=1)
+check("确认兑现轮（令牌在场）取的是**倒数第二条** HumanMessage（主人原话）",
+      _um_conf == _MSG_REAL, repr(_um_conf))
+_um_plain = _user_msg_of([HumanMessage(content=_MSG_REAL), HumanMessage(content="再看看别的")],
+                         grant=None, rounds=1)
+check("没有令牌时口径不变（仍是最近那条 HumanMessage——卡面文本只在确认轮出现）",
+      _um_plain == "再看看别的", repr(_um_plain))
+
 # ── ⑦ 收尾候选先扣着：被纠偏打回的草稿不许上 messages 通道（20261005）────────
 # 零工具答复**不再等于**这一轮就此结束——`ConvergenceMiddleware.after_model` 可能把它
 # 打回（意图清单里还有没做过的动作）。既然可能被打回，就**不许当场发帧**：`run_one` 的
