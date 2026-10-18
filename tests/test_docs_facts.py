@@ -95,6 +95,26 @@ check("README 与 agent-architecture 说同一个工具数",
           for h in re.findall(p, _t)),
       "两处对不上")
 
+# 第五处同类漂移（20261018 补锁）：`docs/README.md` 里那句「架构决策记录另有索引：
+# adr/README.md（N 份，…）」的 N 是**手抄**的——抄进来时是 7，而 `docs/adr/` 下当时
+# 已经有 12 份。它没被上面那几条正则盖到，是因为那几条的射程都在 README 与架构文档的
+# 正文数字上，够不到索引尾注这一行。真值只有一个来源：盘上有几份 `adr-*.md`。
+N_ADRS = len(sorted((ROOT / "docs/adr").glob("adr-*.md")))
+DOCS_INDEX = (ROOT / "docs/README.md").read_text(encoding="utf-8")
+
+print("\n④ docs/README.md 尾注里手抄的 ADR 份数 == docs/adr/ 下盘上的份数")
+_ADR_PAT = r"（(\d+) 份，记"
+_hits = re.findall(_ADR_PAT, DOCS_INDEX)
+if not _hits:
+    # 同①：正则一条都不匹配 = 判据瞎了（那句话被改形/搬家），与"数字漂了"是两种红
+    check("docs/README.md 尾注：ADR 份数", False,
+          f"模式一条都没匹配上（判据失明）：/{_ADR_PAT}/")
+else:
+    _bad = [h for h in _hits if int(h) != N_ADRS]
+    check(f"docs/README.md 尾注：ADR 份数（{len(_hits)} 处）", not _bad,
+          f"写着 {_bad}，盘上是 {N_ADRS} 份")
+check("  adr/ 下确实数到了文件（否则上一条是空过）", N_ADRS > 0, f"N_ADRS={N_ADRS}")
+
 print()
 if FAILS:
     print(f"FAILS({len(FAILS)}):")
