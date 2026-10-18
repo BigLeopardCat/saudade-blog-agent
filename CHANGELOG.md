@@ -110,6 +110,26 @@
   比没有更坏），并加一条"id 清单仍只有一处"；绿条件**没有收紧**（仍是"不许半接"）。
   **实测现在报「两臂都接」**。⚠️ 父仓那三行要 push + 重启 Rust 才生效。
 
+- **「停止生成」现在对 agent 也生效了：丢弃那一轮会同步到图自己的 state**（⚠️ **对外行为
+  有变更**：主人点"停止生成"之后，agent 下一轮**不再记得**那句被丢掉的话）。缺口：20261018
+  起 agent 的上下文**由图自持**（历史注入已关）⇒ `chat_history` 不再是上下文来源，而父仓
+  `POST /api/chat/discard` 删的只是 `chat_history` 里那一轮 ⇒ **「丢弃」对 agent 不再生效**
+  （主人明确说"不想要这条进记忆"，而记忆里还有），且没有任何东西会红。四件：
+  ① 本仓新增 `agent/checkpoint.py::drop_last_user_turn`（原语 = `aupdate_state` +
+  `RemoveMessage`，先例是 gate 重规划那一处）+ 薄壳端点 `POST /checkpoint/{id}/drop_turn`。
+  摘的是**那条 user 及其之后的一切**（父仓删的是 `id >= u.id`；只摘 user 会把半截 AI 留在
+  state 里，下一轮 narrator 会把它当"我方已经说过的话"）。② **原文对不上就不动手**
+  （`mismatch` / `no_text`）——摘错的代价不可逆（删掉主人还想留着的话），所以判据缺失时不动手；
+  返回值恒是**读回来确认**，不是"没抛异常"。③ 父仓 `chat.rs::discard_handler` 在删除成功之后
+  调它、**带上刚删那行的 content**（best-effort，失败只 warn；`mismatch` 分支不调）。
+  ④ 新 `tests/test_checkpoint_drop_turn.py`（真图 + `MemorySaver`，**图按生产形状造**——
+  一个节点的图 `aupdate_state` 推不出"最后是谁写的"、会抛 `Ambiguous update`）：反控 = 把
+  `aupdate_state` 打桩成 no-op ⇒ 必须回 `dropped=false`。
+  ⚠️ **如实的残余（实测）**：被打断在节点中途的线程，`get_state().next` **非空**，而
+  `aupdate_state` 保留它。这不是本函数引入的（中断那一刻就已经非空），今天生产每轮传 dict
+  输入 ⇒ 下一轮走完自己回到空；**潜伏面**是任何 `stream(None)` 的续跑会去跑那个 pending
+  节点。判据把这条现状**记下来**，没有假装它是干净的。
+
 - **模块地图补全 + 10 处模块改名**（⚠️ **对外行为零变更**）。四件：
   ① **`docs/agent-architecture.md` §2 那张目录树此前已经烂了，而没有任何东西会红**：实测点名了
   3 个已不存在的文件（`adminops.py` / `helpers.py` / `native_plan.py`），磁盘上 38/81 个模块它

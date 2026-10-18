@@ -2625,6 +2625,33 @@ async def checkpoint_delete(conversation_id: str):
     return {"deleted": gone, "why": "" if gone else "still_readable"}
 
 
+class DropTurnReq(BaseModel):
+    """`text` = 被丢弃那一轮的**原文**（父仓手里有那一行的 content，一律会带上）。
+
+    空串不算填：没有原文就没法确认"state 里最后那条 user 是不是被丢弃的那一轮"，
+    而摘错的代价不可逆 ⇒ 不动手、`why` 回 `no_text`（理由与匹配规则见
+    `agent/checkpoint.py::drop_last_user_turn`）。
+    """
+    text: str = ""
+
+
+@app.post("/checkpoint/{conversation_id}/drop_turn")
+async def checkpoint_drop_turn(conversation_id: str, req: DropTurnReq):
+    """把**丢弃那一轮**同步到图自己的 state（批 E 的跨仓契约之一半）。
+
+    父仓 `POST /api/chat/discard` 删的是 `chat_history` 里那一轮，而 20261018 之后 agent
+    的上下文**由图自持**（历史注入已关）⇒ DB 不再是上下文来源，「丢弃」对 agent 不再生效。
+    **另一半在父仓** `src/routes/chat.rs::discard_handler`（删除成功之后调它）。
+
+    `dropped` 恒是**读回来确认**的结果；`false` 时 `why` 点名是哪一条（`no_text` /
+    `mismatch` 都**不是错误**——它们是"没动手"的如实回执）。三支照 `checkpoint_delete`。
+    """
+    out = await checkpoint.drop_last_user_turn(_agent, conversation_id, req.text)
+    logger.info("[checkpoint] 丢弃那一轮 conv=%s dropped=%s why=%s",
+                conversation_id, out.get("dropped"), out.get("why"))
+    return out
+
+
 @app.get("/version")
 async def version():
     """**构建身份**：这是哪一版、什么时候起的、跑在哪个解释器上（20261018 批 3）。
