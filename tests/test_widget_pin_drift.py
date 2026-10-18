@@ -118,6 +118,12 @@ with tempfile.TemporaryDirectory() as td:
           "本次 push 没动看板娘前端：退 0 且不警告", r.stdout.strip()[:40])
 
     print("\n② 该出声：漂移要警告，一致不警告")
+    # PR 事件（20261019 加）：区间是 base.sha..merge，语义与 push 那一趟相同 ⇒ 一样要判、
+    # 一样要出声。漂移最有用的时刻恰恰是 PR 里（等合并后才说就晚了）。
+    r = run_script(repo, "ok", OTHER, event="pull_request", before=first, sha=touched)
+    check(r.returncode == 0 and "::warning::" in r.stdout,
+          "PR 事件：漂移照样警告（不是只在 push 上判）", r.stdout.strip()[:60])
+
     r = run_script(repo, "ok", OTHER, before=first, sha=touched)
     check(r.returncode == 0, "漂移：仍退 0（只警告不判红）", f"code={r.returncode}")
     check("::warning::" in r.stdout, "漂移：出了 ::warning::")

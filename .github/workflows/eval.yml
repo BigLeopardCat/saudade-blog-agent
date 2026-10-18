@@ -285,12 +285,19 @@ jobs:
   # 为什么单独一个 job：它要 `fetch-depth: 0`（比 before..sha 的区间）和一枚 PAT，
   # 两样都不该塞进门禁 job 里去拖累它；独立 job 也保证它**无论怎样都不会把主干判红**。
   # 逻辑在 `scripts/widget_pin_drift.sh`（含"读不到父仓就明说再跳过"的三态处理）。
+  #
+  # 20261019 起也在 `pull_request` 上跑：这条提示最有用的时刻恰恰是 PR 里（"改了看板娘
+  # 但没回父仓 bump pin"正是 PR 级的疏漏），而此前它只在 push 到 main 时才跑 ⇒ 漂移要等
+  # 合并后才被说出来。PR 上用 `base.sha..merge` 这个区间，与 push 那一趟语义相同。
+  # ⚠️ fork 的 PR 同样拿不到 PAT ⇒ 脚本走它既有的"读不到父仓就**明说**再跳过"那一档
+  # （`::notice::`，不是静默），这个 job 本来就恒退 0，不影响任何 PR 的结论。
   widget-pin-drift:
     runs-on: ubuntu-latest
     env:
       PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
       EVENT_NAME: ${{ github.event_name }}
-      BEFORE: ${{ github.event.before }}
+      # PR 上没有 `github.event.before` ⇒ 退回目标分支顶端（同上，与 commit-msg 那一步同源）
+      BEFORE: ${{ github.event.before || github.event.pull_request.base.sha }}
       SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
