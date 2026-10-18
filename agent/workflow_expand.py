@@ -38,6 +38,10 @@ from agent.workflow_expand_write import _write_arg
 from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
 from tools.base import _TODO_TEXT_LIMIT, _as_bool
 
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = []
+
 # 本模块**刻意不写 `__all__`**：整个面都是 `_` 前缀的内部件（展开层只被 `instantiate_plan`
 # 与各展开分支互相调用）。按本仓"`__all__` 只列公开名"的口径（见 `agent/workflow_model.py`
 # 与 `agent/workflow_defs/nav.py`），这里能列的只有空表——而空表会被读成"导出的东西一个

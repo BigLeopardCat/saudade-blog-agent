@@ -317,7 +317,7 @@ def _ctx(**kw):
                 principal=None, round_info="", frames_txt="", gate_note="", deny=set(),
                 _base_llm=None, _evidence=False, llm=None,
                 deny_pseudo=set(),
-                correction="", correction_kind="", native_note="", plan_obj=None,
+                correction="", correction_kind="", planner_note="", plan_obj=None,
                 raw="", decided=None, workflow_name="", params={}, _tools_off=False,
                 _img_turn=False, llm_attempt=0)
     base.update(kw)

@@ -48,6 +48,10 @@ from config import settings as _settings
 from tools.result import empty, fact, ok, tgt, unavailable
 from utils.logging import get_trace_id
 
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = ["logger", "DEVICE_SERVICE_URL", "JWT_SECRET", "list_devices", "device_oled_display"]
+
 logger = logging.getLogger(__name__)
 
 

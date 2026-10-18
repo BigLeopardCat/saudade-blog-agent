@@ -47,6 +47,11 @@ from tools.base import (
 )
 from tools.result import ToolResult, _shape, fact, not_found, ok, tgt, unavailable
 
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = ["list_my_favorites", "get_unread_summary", "list_notifications", "add_favorite",
+           "remove_favorite", "read_notifications", "list_my_messages", "read_messages"]
+
 # ---------------------------------------------------------------------------
 # 用户自己的数据工具（20260923：收藏 / 未读汇总 / 站内通知）
 # ---------------------------------------------------------------------------

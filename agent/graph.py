@@ -1200,7 +1200,7 @@ def _name_write_nudge(plan_obj: dict, user_msg, rounds: int,
     )
 
 
-def _sated_read_workflow(plan_obj: dict, receipts, role: str | None):
+def _already_read_workflow(plan_obj: dict, receipts, role: str | None):
     """这一版计划**一个字节的新数据都拿不到** → 该从菜单里摘掉的技能名（纯函数，20261012）。
 
     判据 = 「整张技能的工具全是**本轮已经取回过**的只读件」：与 `_trim_done_reads`
@@ -1209,6 +1209,10 @@ def _sated_read_workflow(plan_obj: dict, receipts, role: str | None):
     两条必须同源：判据一旦分家，就会出现"系统说已取回、却还把那个技能留在菜单里"。
 
     要治的病见 `_SATED_READ_NUDGE` 头注（读了一件，下一轮又点同一个读；话术纠不动）。
+
+    ⚠️ 20261018 由 `_sated_read_workflow` 改名（`sated` 只活在 graph.py 内的标识符里）。
+    **别顺手把 trace 事件名一起改**：`record("planner", "sated_read_strip", …)` 那个事件名
+    冻结着（30 天 trace 保留窗口内新旧要能分到一堆），`_SATED_READ_NUDGE` 那句话术同理。
 
     ⚠️ 四处**刻意的收窄**（每一条都对应一类"本该让它读"的回合）：
       - **只摘全部工具都已取回的**：`_trim_done_reads` 剔不干净（清单里还有没读过的件）
@@ -1267,7 +1271,7 @@ def _name_write_correct(c: "_DecideCtx") -> bool:
     planner 这一版没把写规格排出来（话术见 `_name_write_nudge` / `_SATED_READ_NUDGE`）。
     - 半 ①：原话里有**写域动作词**（`_name_write_nudge`）；
     - 半 ②：原话里**一个动作词都没有**，但这一版计划里的读**全是本轮已取回的**
-      （`_sated_read_workflow`）——trace `20261012T044342` 那句「给 demo 用户一条通知……
+      （`_already_read_workflow`）——trace `20261012T044342` 那句「给 demo 用户一条通知……
       然后把降级身份执行」正是这一半。
 
     两半都做同一件事：把那个"再点一次也没有新数据"的技能**从菜单里摘掉**（`_strip_menu`）
@@ -1286,7 +1290,7 @@ def _name_write_correct(c: "_DecideCtx") -> bool:
     if c.correction:
         return False
     nudge = _name_write_nudge(c.plan_obj, c.user_msg, c.rounds, c.role)
-    sated = _sated_read_workflow(c.plan_obj, c.state.get("receipts"), c.role)
+    sated = _already_read_workflow(c.plan_obj, c.state.get("receipts"), c.role)
     if nudge:
         _spans = _msg_quote_spans(c.user_msg)
         _verbs = _name_write_verbs(c.user_msg)
@@ -5959,7 +5963,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
                                        c.rounds, c.has_frames)
     if upd is not None:
         return upd
-    return _finalize_wrap(c.plan_obj, c.rounds, c.has_frames, c.native_note)
+    return _finalize_wrap(c.plan_obj, c.rounds, c.has_frames, c.planner_note)
 
 
 class _Preflight(NamedTuple):
@@ -6244,7 +6248,10 @@ class _DecideCtx:
     deny_pseudo: set
     correction: str
     correction_kind: str
-    native_note: str
+    # 20261018 由 `native_note` 改名：它记的是 **planner 那一轮自己写下的注记**（异常记账、
+    # 多调用提示），不是"哪条臂产出的"。⚠️ **trace 里的键名仍是 `"native_note"`**（见
+    # `record("planner", "decision", …)` 那一处）——那个键冻结着，别照着这里把键也改了。
+    planner_note: str
     plan_obj: "dict | None"
     raw: "str | None"
     decided: object
@@ -6391,7 +6398,7 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
     # 接口层的异常记账（如 native_multi_call）。**必须在循环外先声明**：循环外的
     # `decision` 事件要读它，而它只在 接口层的某一支里被赋值——少了这一行，
     # "某一轮走到某条提前 return 之外的路径"就会以 NameError 的形态炸在收尾上。
-    native_note = ""
+    planner_note = ""
     return _DecideCtx(
         state=state, config=config, task_sink=task_sink,
         rounds=rounds, user_msg=pre.user_msg, role=role,
@@ -6400,7 +6407,7 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
         frames_txt=frames_txt, gate_note=gate_note, deny=deny, _base_llm=_base_llm,
         _evidence=_evidence, llm=llm, deny_pseudo=deny_pseudo,
         correction=correction, correction_kind=correction_kind,
-        native_note=native_note, plan_obj=None, raw=None, decided=None,
+        planner_note=planner_note, plan_obj=None, raw=None, decided=None,
         workflow_name="", params={}, _tools_off=False, _img_turn=False, llm_attempt=0)
 
 
@@ -6556,7 +6563,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
            **({"slow": True} if slow else {}))
 
     c.raw = getattr(resp, "content", str(resp))
-    c.native_note = ""
+    c.planner_note = ""
     # 决定由工具调用表达（`agent/planner_llm.py::tool_calls_to_plan`）。它返回
     # `None` = 这一版响应**没给出可用决定**（五条来源见那里的头注），与"零调用但
     # 有正文"（返回 chat + `undecided`）是**两回事**，别再合并成一条路。
@@ -6628,7 +6635,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
             c.task_sink[:] = _intent_frames_now
     c.workflow_name, c.params = c.decided.workflow, c.decided.params
     if c.decided.notes:
-        c.native_note = "；".join(c.decided.notes)
+        c.planner_note = "；".join(c.decided.notes)
     record("planner", "native_decision", workflow=c.workflow_name, round=c.rounds,
            calls=tool_call_names(c.decided), finish=c.decided.finish_reason,
            # **臂的身份证**（20261006）：调参实验要能回答"这份 trace 是哪一组
@@ -6641,7 +6648,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
            temp=settings.planner_temperature,
            seed=settings.llm_seed,
            thinking=bool(settings.planner_native_thinking),
-           **({"note": c.native_note} if c.native_note else {}))
+           **({"note": c.planner_note} if c.planner_note else {}))
 
     # 主人明说"不要调用任何工具" ⇒ 这一轮的计划降成 `chat`（见 `_forbids_tools`
     # 上方长注：方向单一、只会减少系统能做的事，所以做成确定性覆盖）。**记在
@@ -7509,7 +7516,7 @@ def _decide_late_correct(c: "_DecideCtx") -> "_Step":
                        c.correction[:120])
         return _Step("continue")
 
-    # 写形态的请求上一条工具规格都没写（头注见 `_name_write_nudge` / `_sated_read_workflow`）：
+    # 写形态的请求上一条工具规格都没写（头注见 `_name_write_nudge` / `_already_read_workflow`）：
     # 与剔空纠偏共用同一条重决策通道（同一轮内只纠一次，纠完仍没有写规格就照原样走）。
     # 两半（有动作词的 / 一个动作词都没有但"读已取回"的）都在 `_name_write_correct` 里
     # ——抽出去是因为 `_decide_late_correct` 自己的复杂度台账**只许缩小**。
@@ -7955,7 +7962,7 @@ def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str,
 
 
 def _finalize_wrap(plan_obj: dict, rounds: int, has_frames: bool,
-                   native_note: str) -> dict:
+                   planner_note: str) -> dict:
     """正常出口：收尾轮口径如实化 + `decision` 事件 + 返回 update。
 
     ⚠️ 这里读 `plan_obj["params"]`（`decision` 事件那一行）——只有 `instantiate_plan`
@@ -7997,10 +8004,13 @@ def _finalize_wrap(plan_obj: dict, rounds: int, has_frames: bool,
     # `eval/token_cost_report.py` 与 `eval/baseline_group.py` 按它切语料，删键会让
     # 存量 trace 与新 trace 分不到一堆（那是**换档**的信号，不是"这一格没意义"）。
     # `native_note` 只在有异常记账时出现（如 native_multi_call），别让它常态占位。
+    # ⚠️ 20261018：**值**取自改名后的 `planner_note`（dataclass 那一格），**键名不动**——
+    # 上面的存量 trace 切分与 30 天保留窗口都按 `"native_note"` 这个键读。标识符与键名
+    # 故意不同名，不是漏改。
     record("planner", "decision", workflow=plan_obj["workflow"], params=plan_obj["params"],
            tools=plan_obj["tools"], round=rounds, engine="native",
            status=plan_obj.get("status") or "",
-           **({"native_note": native_note} if native_note else {}))
+           **({"native_note": planner_note} if planner_note else {}))
 
     return _plan_update(plan_obj, rounds)
 

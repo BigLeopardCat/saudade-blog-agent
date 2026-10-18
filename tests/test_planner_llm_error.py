@@ -131,7 +131,7 @@ _BASE = dict(state={"messages": []}, config=None, task_sink=None, rounds=1, user
              role="owner", page_ctx="", has_frames=True, doc_anchors=(), ledger_frame="",
              principal=None, round_info="", frames_txt="", gate_note="", deny=set(),
              _base_llm=None, _evidence=False, llm=None, deny_pseudo=set(),
-             correction="", correction_kind="", native_note="", plan_obj=None,
+             correction="", correction_kind="", planner_note="", plan_obj=None,
              raw="", decided=None, workflow_name="", params={}, _tools_off=False,
              _img_turn=False, llm_attempt=0)
 _EVENTS: list = []
