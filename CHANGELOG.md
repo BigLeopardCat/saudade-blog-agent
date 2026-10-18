@@ -204,6 +204,24 @@
   的 ⑤ 缩小方向反控与 ⑥ 键序往返判据并成两条，互不覆盖）。模块台账同批重出：5 个文件因
   行宽越限被 ruff 逼着换行、`agent/graph.py` 里那个悬挂缩进的 from-import 按 ruff 的规范
   形态改成一名一行，各长 1–6 行。类型棘轮总数仍是 190。
+- **新增两个只读端点 `/version` 与 `/ready`（批 3，agent 的 HTTP 面多两格）**：
+  `/version` 回**静态构建身份**（`version` / `sha` / `sha_source` / `started_at` / `python`），
+  sha 取值顺序 环境变量 → git → `"unknown"` 并把来源一起回（`"unknown"` 与真 sha 长得一样
+  权威，只回 sha 读的人分不出"钉在这个提交上"与"这台机器上取不到"）；**刻意不复述
+  `/health` 的 dials**——那是活体档位的唯一来源，再回一份就是第二个真源。`/ready` 回答
+  "能不能接活"（与 `/health` 的"进程活没活"是两件事）：硬依赖缺失 ⇒ 503 + `reasons`
+  点名 `agent_not_built` / `unknown_provider` / `missing_credentials`，**而同一条件下
+  `/health` 仍 200**——20260927 那次"换 key 之后四个端点一律 401、`/health` 全程
+  `agent_ready: true`"的形状，此前在 agent 侧没有任何出口。启动时凭据缺**只告警不拒绝
+  启动**（拒了会让探针把"配置缺"报成"agent 挂了"，又是指错方向）。两个端点**目前没有
+  任何探针在读**（父仓 `healthcheck.sh` 读的是 `/health`），接进探针是父仓那侧的活。
+  判定逻辑住 `agent/probe.py`（纯函数），`server.py` 只留两个薄路由——`server.py` 已超
+  文件预算 3 倍，加 118 行会被模块闸判"长文件又长了"（最终 +40 行，台账 2589/52，
+  是本次唯一的放宽）。判据 `tests/test_version.py`、`tests/test_ready.py`，各带一条
+  "把实现改坏 ⇒ 必红"的反控（编一个像真的 sha / `/ready` 恒 200）。
+  **「关停排空」搁置**：不自己装 SIGTERM handler（uvicorn 已有优雅停机，自己装就是顶掉它），
+  真正的缝是跨仓的——父仓 `TimeoutStopSec=120` < 本仓 `STREAM_TOTAL_TIMEOUT=300`，
+  走到第 120 秒还在跑的流会被 SIGKILL，那时 `end_reason` 根本写不出来。
 
 ## 20261017
 
