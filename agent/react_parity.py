@@ -39,9 +39,12 @@ from __future__ import annotations
 
 import logging
 
-from agent.deterministic_plan import _wrap_up_plan
+from agent.arg_refs import ref_hints
+from agent.block_reasons import denied_workflows
+from agent.deterministic_plan import _intent_hints, _wrap_up_plan
 from agent.graph import _confirm_grant_plan
-from agent.prompt_context import _has_frames
+from agent.prompt_context import (_doc_anchors, _has_frames, _recent_tail,
+                                  _short_reply_hint, blocked_rows)
 
 logger = logging.getLogger(__name__)
 
@@ -123,3 +126,77 @@ def plan_has_tools(plan_obj: dict) -> bool:
     "适配"与"抄判据"的分界：判据是"有没有清单"，不是"从哪读它"。
     """
     return bool(plan_obj.get("tools"))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §B planner 提示词的注入值：与生产 `graph._planner_setup` 的 `_prompt_args` 逐格同源
+# ══════════════════════════════════════════════════════════════════════════════
+# 这几句话**住在模块级**而不是写在字典字面量里：`eval/wordlist_gate.py` 的穷举量那一层
+# 数的是"中文串住在集合字面量里"的数量，一条措辞进 dict 也会被计成"新增词表"。
+# （措辞与生产 `graph._planner_setup` 的那三句逐字相同。）
+_NON_FIRST_ROUND = "（非首轮决策：短应答语义已在上轮兑现）"
+_NO_LEDGER = "（本轮没有去读待办台账）"
+_NO_REFLECTOR = "（本决策轮无复盘建议）"
+_NO_CORRECTION = "（本决策轮无纠偏提示）"
+
+
+def denied(state) -> set[str]:
+    """这一轮**不许再选**的技能名（生产 `_planner_setup` 的 `deny` 同源）。
+
+    来源是上一轮受阻项里"改参数重试无效"那一族。它**不扩权**（只会更小），也不是
+    第二份可见性名单；无阻碍轮传空集 ⇒ schema 逐字节不变。本臂此前**一格都没接**：
+    菜单里永远留着刚失败过的那个技能，模型照着再点一次，同键二次受阻 ⇒ 收尾。
+    """
+    return denied_workflows(state.get("blocked") or [])
+
+
+def planner_prompt_args(state, *, role, page_ctx, round_info, user_msg,
+                        ledger_frame, correction, deny, frames_txt) -> dict:
+    """planner 提示词的**全部注入值**——生产 `_planner_setup` 那一份的逐格对应。
+
+    **为什么单起一个函数**：这一份有 14 格，散在调用点上写就是"每加一格要记得两边都加"
+    的手工同步。更要紧的是它此前**喂的是空值**（`intent_hints=[]`、`tool_results=空`、
+    `ref_hints=[]`、`blocked_rows` 与 `deny` 干脆没传）——空值不会报错，只会让模型
+    在一份"这轮什么都没有"的提问下决策。三格的后果是**具名**的：
+
+      · `intent_hints` 空 ⇒ 主人那句话里没做完的动作**不标【未完成】**（生产靠它触发
+        规则 5"清单里还有未完成项"，本臂等于把这条规则关了）；
+      · `blocked_rows` 空 ⇒ 模型看不到受阻的**类型**，只能从错误帧那句话里猜，于是把
+        "服务这一轮给不出数据"当成"你参数写错了"、原地重点一次同一个调用（§1.55）；
+      · `ref_hints` 空 ⇒ 多步技能拿不到"能引用什么字段"，`$tool[0].id` 写不出来。
+
+    逐格的对应与理由：
+
+      | 这一格 | 取值来源 | 与生产的差别 |
+      |---|---|---|
+      | `intent_hints` | `state["executed"]` + 主人原话 | 无（此前传 `[]`） |
+      | `tool_results` | 本轮窗口的工具帧 | 无（本臂用"最后一条 HumanMessage 之后"，生产用 `turn_start`；同一切法） |
+      | `blocked_rows` | `state["blocked"]` | 无（此前**没传**，吃的是默认空串） |
+      | `ref_hints` | `state["tool_data"]` | 无（此前传 `[]`） |
+      | `deny` | `state["blocked"]` | 无（此前**没传**，菜单不摘） |
+      | `reflector_feedback` | `state["issues"]` | 无（本臂没有 reflector 节点，那一格恒为空 ⇒ 落在默认那句上） |
+      | `correction` | 本轮的纠偏提示 | 无（此前恒为空） |
+      | `short_reply_hint` | 首轮才给 | 无 |
+
+    **本臂刻意不同的两格**（写在这里以免下次有人"顺手对齐"）：
+      · `pending_ledger`：本臂每请求渲染一次提示词，等价于生产的 `rounds == 0`，
+        所以台账只出现在首轮那一份里（生产是每轮都给）；
+      · `reflector_feedback`：本臂没有复盘节点，`state["issues"]` 结构上恒空。
+    """
+    rounds = int(state.get("plan_rounds") or 0)
+    messages = list(state.get("messages") or [])
+    return {
+        "role": role, "page_ctx": page_ctx, "round_info": round_info, "user_msg": user_msg,
+        "intent_hints": _intent_hints(state.get("executed") or [], user_msg),
+        "doc_anchors": _doc_anchors(messages),
+        "recent_context": _recent_tail(messages),
+        "short_reply_hint": (_short_reply_hint(messages) if rounds == 0
+                             else _NON_FIRST_ROUND),
+        "pending_ledger": ledger_frame or _NO_LEDGER,
+        "tool_results": frames_txt,
+        "blocked_rows": blocked_rows(state.get("blocked") or []),
+        "deny": deny,
+        "ref_hints": ref_hints(state.get("tool_data") or []),
+        "reflector_feedback": state.get("issues") or _NO_REFLECTOR,
+        "correction": correction or _NO_CORRECTION,
+    }

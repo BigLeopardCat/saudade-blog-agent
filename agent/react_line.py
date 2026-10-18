@@ -317,6 +317,10 @@ class WorkflowExecutor:
         # "这一轮调用过哪些真工具"，必须另记一份。**一直在追加、不重置**：
         # 一次 `run()` 可能被包装层逐技能调用多次，重置会把前一轮的调用抹掉。
         self.calls: list[dict] = []
+        # 参数引用的取值源（`{"tool", "data"}`，形状与生产逐字同款）。与 `calls` 一样
+        # **请求级、一直在追加、不重置**：生产的 `state["tool_data"]` 就是请求内累计的，
+        # 每轮清空会让"上一轮读到的那条 id"下一轮引用不到。
+        self.tool_data: list[dict] = []
 
     def run(self, workflow: str, params: dict) -> tuple[str, int]:
         """→ `(给模型看的正文, 真正执行了几个工具)`。第二项是**无进展判据的输入**。
@@ -376,7 +380,7 @@ class WorkflowExecutor:
         就是这份清单。`run` 那条路**必须自己传**——它的键取在字面路径修正**之前**
         （见类上面那一段 ①②），在这里重算会取到修正后的参数、与判据的对照方错开。
         """
-        from agent.arg_refs import resolve_args
+        from agent.arg_refs import parse_data, resolve_args
 
         if sig is None:
             sig = spec_signature(workflow, {"specs": list(specs)})
@@ -412,7 +416,15 @@ class WorkflowExecutor:
             return "\n".join(outs), 0
 
         outs: list[str] = []
-        tool_data: list[dict] = []
+        # 参数引用的取值源。**形状必须与生产逐字同款**（`{"tool", "data"}`，见下面
+        # 那一行）：`arg_refs.resolve_one` / `ref_hints` 读的都是 `e.get("data")`，
+        # 而本线此前写的是 `{"tool", "result"}` ⇒ 每一个 `$tool[N].field` 引用都
+        # 解析成 `ref_unparsed`、整条 spec 不执行（fail-closed，方向安全，所以没有
+        # 任何东西会红——正是本仓最贵的那类失效：**判据在，但它恒判同一边**）。
+        # 它是**请求级**的（`self.tool_data`，与 `self.calls` 同寿命），因为生产那一格
+        # 也是请求内累计（`graph.py` 的 `execute_node`）：只在本函数内新建一份的话，
+        # 多轮技能里"上一轮拿到的 id"下一轮就没了。
+        tool_data = self.tool_data
         for spec in specs:
             name = _tool_name(spec)
             args, args_ok = _tool_args(spec)
@@ -442,7 +454,7 @@ class WorkflowExecutor:
                 except Exception as e:  # noqa: BLE001 —— 异常必须变成数据（见文件头注）
                     text = f"__ERROR__ {type(e).__name__}: {e}"
                     logger.info("[react_line] 工具 %s 抛错：%s", name, e)
-            tool_data.append({"tool": name, "result": text[:2000]})
+            tool_data.append({"tool": name, "data": parse_data(str(text))})
             outs.append(f"[{name}] {text}")
             line, verdict = _verdict_of(name, args, args_ok, text, workflow, kind, meta,
                                         self.ledger)

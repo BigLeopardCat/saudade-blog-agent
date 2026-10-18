@@ -178,7 +178,8 @@ from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
                               wrap_up_text)
 # 借生产那几件的**唯一入口**（20261019）。本模块只接线，判据都在 `agent/graph.py` 里；
 # 各段的接法与理由见 `agent/react_parity.py` 的模块头注。
-from agent.react_parity import confirm_round, plan_has_tools
+from agent.react_parity import (confirm_round, denied, plan_has_tools,
+                                planner_prompt_args)
 from agent.arg_refs import ref_hints
 from agent.workflow_plan import instantiate_plan
 from agent.stickers import repair_sticker_tokens
@@ -298,6 +299,18 @@ def _expand(m: ToolMessage, ctx: dict) -> ToolMessage:
                        tool_call_id=getattr(m, "tool_call_id", "") or "")
 
 
+def _turn_tail(state: AgentState) -> list:
+    """**本轮**的消息 = 最后一条 `HumanMessage` 之后的那些。
+
+    `_window`（喂给模型的那份）与 `{tool_results}`（渲染进系统提示的那份）**共用同一
+    刀**是刻意的：两处各切一次，"本轮"这个概念迟早会在一处漂成"整条消息表"。生产那侧
+    的对应物是 `_turn(state)`（按 `turn_start` 切），切法同款、只是坐标来源不同。
+    """
+    msgs = list(state.get("messages") or [])
+    idx = max((i for i, m in enumerate(msgs) if isinstance(m, HumanMessage)), default=-1)
+    return msgs[idx + 1:]
+
+
 def _window(state: AgentState, ctx: dict) -> list:
     """`planner` 这一轮看到的对话窗口。
 
@@ -317,8 +330,7 @@ def _window(state: AgentState, ctx: dict) -> list:
     技能名，而技能名就在菜单里）。
     """
     msgs = list(state.get("messages") or [])
-    idx = max((i for i, m in enumerate(msgs) if isinstance(m, HumanMessage)), default=-1)
-    tail = [_expand(m, ctx) for m in msgs[idx + 1:]]
+    tail = [_expand(m, ctx) for m in _turn_tail(state)]
     notes = [ToolMessage(content=str(n.get("text") or ""),
                          name=str(n.get("workflow") or ""),
                          tool_call_id=f"note_{i}")
@@ -377,24 +389,36 @@ def _pair_run(run: list, key: Any, calls: list) -> list:
 
 
 def _prompt_of(state: AgentState, ctx: dict) -> str:
-    """系统提示（**每请求只渲染一次**，缓存在 `ctx` 里——见模块头注的口径偏差）。"""
-    if ctx.get("system_prompt") is None:
-        ctx["system_prompt"] = _system_prompt(
-            list(state.get("messages") or []), ctx.get("role"), ctx.get("principal"),
-            ctx.get("config"), ctx.get("user_msg") or "")
-    return str(ctx["system_prompt"])
+    """系统提示——**每一轮重渲染**（20261019，资产对齐 B）。
+
+    此前是"每请求渲染一次、缓存在 `ctx` 里"。那一版有一条**写在模块头注里的口径偏差**
+    兜着它，代价是三格注入值恒为初值：`intent_hints` 读 `state["executed"]`、
+    `tool_results` 读本轮工具帧、`ref_hints` 读 `state["tool_data"]`——三格都逐轮在变，
+    缓存住等于第二轮的提示词在说"这一轮还没执行过任何工具、清单里没有未完成项"。
+    而这三句正是规则 5（还有未完成项就别收尾）与规则 3b（照着 ref_hints 写引用）的
+    **唯一输入**：提示词自己把前提擦掉，模型照做就是错的。
+
+    重渲染的代价是每轮多拼一次字符串（几千字的 `format`），相对一次 LLM 调用可忽略。
+    """
+    return _system_prompt(state, ctx)
 
 
-def _bound_llm(ctx: dict) -> Any:
-    """决策模型（**每请求一份**，绑好技能菜单，缓存在 `ctx` 里）。
+def _bound_llm(state: AgentState, ctx: dict) -> Any:
+    """决策模型：**客户端每请求一份**（缓存在 `ctx`），**菜单每轮重绑**。
 
-    为什么必须缓存而不是每轮 `_llm().bind_tools(...)` 新建：新建出来的每次都是**另一个
-    客户端**——连接池、`timeout`、上游的缓存命中全都跟着重置，而这是每一轮都发生的事。
-    生产 planner 那侧是每请求一份（`_planner_setup` 把 `llm` 放进 `_Ctx`），本线照同源。
+    为什么缓存的是客户端而不是"绑好的那一份"（20261019，资产对齐 B）：菜单这一格
+    逐轮在变——`deny`（这一轮不许再选的技能）读的是上一轮的受阻项，而受阻项每轮都在
+    长。缓存"绑好的那一份"等于让 `deny` **只可能为空**（首轮恒空）⇒ 刚失败过的技能
+    永远留在菜单里，模型照着再点一次、同键二次受阻 ⇒ 收尾。
+
+    重绑**不新建客户端**：新建出来的每次都是**另一个**客户端——连接池、`timeout`、
+    上游的缓存命中全都跟着重置，而这是每一轮都发生的事。生产 planner 那侧正是这个
+    形状（`_planner_setup` 里 `_base_llm = get_llm(...)` 每请求一次、`bind_planner_tools`
+    每轮在它上面重绑）。
     """
     if ctx.get("llm") is None:
-        ctx["llm"] = _llm().bind_tools(_workflow_menu(ctx.get("role")))
-    return ctx["llm"]
+        ctx["llm"] = _llm()
+    return ctx["llm"].bind_tools(_workflow_menu(ctx.get("role"), denied(state)))
 
 
 def _norm_state(state: AgentState) -> AgentState:
@@ -515,7 +539,7 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     #    `parallel_tool_calls=False`）：本线容忍一轮多条调用，合并成一份 `plan_obj`、
     #    逐条发 `execute` ⇒ 偏差表现为"步子更碎"，不会丢调用（见模块头注）。
     try:
-        llm = _bound_llm(ctx)
+        llm = _bound_llm(state, ctx)
         window = _window(state, ctx)
         ctx["correction"] = ""       # 纠偏提示只喂一次（生产那一格也是每轮重算）
         resp = llm.invoke([SystemMessage(content=_prompt_of(state, ctx))] + window)
@@ -680,6 +704,11 @@ def _exec_body(out: list, ledger: RunLedger, executor: WorkflowExecutor) -> dict
     """`execute` 的公共返回（崩溃支与正常支逐字同一形状）。"""
     return {"messages": out,
             "receipts": list(ledger.receipts),
+            # 参数引用的取值源（生产 `execute_node` 的同一格，请求内累计）。本轮
+            # 提示词的 `{ref_hints}` 槽读的就是它——不回写 ⇒ 那一槽永远说"无从引用"，
+            # 而模型照提示词写不出引用、多步技能只能靠它把上一步的 id 抄一遍
+            # （抄错就是另一个病）。形状（`{"tool","data"}`）由 `react_line` 保证。
+            "tool_data": list(executor.tool_data),
             # `blocked_seen` 的键形与生产 `execute_node` 的 `_blocked_key` 逐字同款
             # （`工具::原因码`）——闸门与账甲读它。
             "blocked": [_blocked_row(b) for b in ledger.blocked],
@@ -1039,7 +1068,7 @@ def _narrator_call(msgs: list) -> Any:
     return resp
 
 
-def _workflow_menu(role: str | None) -> list[StructuredTool]:
+def _workflow_menu(role: str | None, deny: set[str] | None = None) -> list[StructuredTool]:
     """技能级菜单：与 planner 看到的 schema **逐字同一份**（`build_tool_schema`）。
 
     `func` 只是占位——`WorkflowExecutor` 才是真正被调的那一层（它转给真工具）。占位体故意
@@ -1050,7 +1079,9 @@ def _workflow_menu(role: str | None) -> list[StructuredTool]:
     # 三个任务伪函数**常绑**（20261015 撤掉 `AGENT_TASK_STATE` 档位，理由见
     # `graph._ledger_next` 的注）。第二条臂与主路径在这里必须同源，否则两条臂看到的
     # 菜单不一样、A/B 读出的差异是菜单差而不是策略差。
-    for item in build_tool_schema(role):
+    # `deny` 是"这一轮不许再选的技能"（来源与语义见 `react_parity.denied`）：它**不扩权**
+    # （只会更小），无阻碍轮传空集 ⇒ schema 逐字节不变。
+    for item in build_tool_schema(role, deny=deny or frozenset()):
         fn = (item.get("function") or item) if isinstance(item, dict) else {}
         name = str(fn.get("name") or "")
         if not name:
@@ -1085,9 +1116,7 @@ def _real_tools(config: RunnableConfig | None = None) -> dict[str, Any]:
     return {t.name: (lambda _t=t, **kw: _t.invoke(kw, config=cfg)) for t in get_all_tools()}
 
 
-def _system_prompt(messages: list, role: str | None, principal: Any,
-                   config: dict | None, user_msg: str,
-                   fast_frames: list | None = None) -> str:
+def _system_prompt(state: AgentState, ctx: dict) -> str:
     """系统提示 = 判断器提示词（生产的唯一渲染入口）+ 人设 + **叙述纪律** + 循环说明。
 
     **为什么拼这几块**：本线的决策模型（`planner` 节点）还兼任"决定够了没有"，而叙述
@@ -1109,10 +1138,20 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
     前面放一段"哪几句按本循环读、其余一个字不放宽"。**不改写就是自相矛盾的提示词**，
     而矛盾提示词的失效方式是不定向的。
 
-    `fast_frames`：**本线恒传 `None`**（保留形参只为签名兼容）。快道那一次读取的工具帧
-    已经在 `state["messages"]` 里、会由 `_window` 交给模型（生产是渲染进 `tool_results`
-    那一格）——两处都给就是同一份事实发两遍。
+    **入参从"调用方算好的一把散值"改成 `(state, ctx)`**（20261019，资产对齐 B）：这一份
+    提示词有十四格注入值，散着传就是"每加一格要记得两边都加"；而**真正的病**是此前
+    有几格传的是**空值**（`intent_hints=[]`、`tool_results=空`、`ref_hints=[]`、
+    `blocked_rows`/`deny` 干脆没传）——空值不报错，只让模型在一份"这轮什么都没有"的
+    提问下决策。现在取值全部收进 `react_parity.planner_prompt_args`（逐格对应表在那边），
+    本函数只负责把渲染结果与那几块叙述资产拼起来。
+
+    调用方（`_prompt_of`）**每轮重渲染**，不再按请求缓存：`intent_hints` 读
+    `state["executed"]`、`tool_results` 读本轮帧、`ref_hints` 读 `state["tool_data"]`
+    ——这三格都**逐轮在变**，缓存住等于第二轮的提示词在说"这一轮还没执行过任何工具"。
     """
+    messages = list(state.get("messages") or [])
+    role, principal = ctx.get("role"), ctx.get("principal")
+    config, user_msg = ctx.get("config"), ctx.get("user_msg") or ""
     try:
         ledger_frame, _meta = _pending_ledger_frame(
             user_msg, _last_assistant_utterance(messages), principal, config)
@@ -1133,31 +1172,27 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
         # 两个方向：那边是"做不到 ⇒ 纯否定断言恒真"（假绿），这边是"不产证据 ⇒
         # 要求型断言恒假"（假红）。
         #
-        # 条件与生产同源（`graph.py` 的 `if rounds == 0 and ledger_frame`）：本线的
-        # 提示词每请求只建一次，等价于生产那个 `rounds == 0`；空帧不记——"没摆上桌"
-        # 与"摆了张空的"在那三条判据里是两件事（`require_ledger_frame` 明写「只判摆
-        # 没摆，不管队列空不空」，而生产连空帧都不记 ⇒ 本线照抄，别自作聪明放宽）。
-        record("planner", "ledger_frame", **_meta)
-    planner = _render_planner_prompt(
-        role=role, page_ctx=_page_ctx(messages, role), round_info=_ROUND_INFO,
-        user_msg=user_msg,
-        # `executed` 传空表：本线没有 planner 那样的"本轮执行过什么"状态（工具结果
-        # 就在消息流里，模型自己看得见），而提示词这一格只说"扫到的动作完成没完成"
-        # ——给空的后果是动作被标成"**未完成**"，即"别忘了做"，方向是安全的那一边。
-        intent_hints=_intent_hints([], user_msg),
-        doc_anchors=_doc_anchors(messages),
-        recent_context=_recent_tail(messages),
-        short_reply_hint=_short_reply_hint(messages),
-        # 工具帧与引用提示都走各自 helper 的**空输入**取值（`（本轮尚无工具执行）` /
-        # `无从引用`）——不手写这两句话：helper 的措辞改了这个适配器要跟着改，是同一份
-        # 漂移源。工具结果本身在消息流里（ToolMessage），由 `_window` 交给模型。
-        tool_results=_frame_texts(list(fast_frames or [])), ref_hints=ref_hints([]),
-        pending_ledger=ledger_frame or "（本轮没有去读待办台账）",
-        reflector_feedback="（本决策轮无复盘建议）",
-        correction="（本决策轮无纠偏提示）")
-    return "\n\n".join([planner, BLOG_ASSISTANT_PROMPT or "", audience_block(role),
-                        _DISCIPLINE_STANCE, NARRATOR_DISCIPLINE, STICKER_GUIDE,
-                        _CLOSING_RULES])
+        # 条件与生产**逐字同源**（`graph.py` 的 `if rounds == 0 and ledger_frame`）：
+        # 空帧不记——"没摆上桌"与"摆了张空的"在那三条判据里是两件事
+        # （`require_ledger_frame` 明写「只判摆没摆，不管队列空不空」，而生产连空帧
+        # 都不记 ⇒ 本线照抄，别自作聪明放宽）。
+        #
+        # ⚠️ `rounds == 0` 那一半是 20261019 才补上的：提示词此前**每请求只建一次**
+        # （`_prompt_of` 缓存），等价于恒在首轮；改成逐轮重渲染之后，不加这一条就会
+        # **每轮记一条**，而 `require_ledger_frame` 的读法是"这一轮有没有摆台账"
+        # ⇒ 判据从"摆没摆"漂成"摆了几次"，且方向是恒真。
+        if int(state.get("plan_rounds") or 0) == 0:
+            record("planner", "ledger_frame", **_meta)
+    # 注入值一次算好、一次渲染（`_render_planner_prompt` 是**唯一**渲染点，它只负责
+    # 拼字符串；逐格对应与理由见 `react_parity.planner_prompt_args`）。
+    _args = planner_prompt_args(
+        state, role=role, page_ctx=_page_ctx(messages, role), round_info=_ROUND_INFO,
+        user_msg=user_msg, ledger_frame=ledger_frame,
+        correction=str(ctx.get("correction") or ""), deny=denied(state),
+        frames_txt=_frame_texts(_turn_tail(state)))
+    return "\n\n".join([_render_planner_prompt(**_args), BLOG_ASSISTANT_PROMPT or "",
+                        audience_block(role), _DISCIPLINE_STANCE, NARRATOR_DISCIPLINE,
+                        STICKER_GUIDE, _CLOSING_RULES])
 
 
 def _crash_text(ledger: RunLedger, err: Exception) -> str:
