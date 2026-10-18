@@ -59,7 +59,7 @@ import agent.context as C  # noqa: E402
 import agent.entities as E  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.workflow_defs import WORKFLOWS, visible_workflows  # noqa: E402
-from agent.workflow_defs.nav import NAV_MAP  # noqa: E402
+from agent.workflow_defs.nav_map import NAV_MAP  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 from agent.workflow_tools import _EXPLICIT_TOOLS  # noqa: E402
 from tools.base import (_FRAME_ID_KEYS, _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS,  # noqa: E402

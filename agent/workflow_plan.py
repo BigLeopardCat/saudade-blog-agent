@@ -24,7 +24,7 @@ from typing import Any
 
 import agent.adminops_tags as _tags
 from agent.workflow_defs import _WRITE_TARGET_CHANNEL, WORKFLOW_MAP, WRITE_WORKFLOW_NAMES
-from agent.workflow_defs.nav import (
+from agent.workflow_defs.nav_map import (
     _IOT_NAV_ALIASES,
     _IOT_OFF_NOTE,
     _NAV_REF_HINT,

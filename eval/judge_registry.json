@@ -219,11 +219,11 @@
         45,
         0
       ],
-      "agent/workflow_defs/nav.py": [
+      "agent/workflow_defs/nav_map.py": [
         75,
         0
       ],
-      "agent/workflow_defs/navigation.py": [
+      "agent/workflow_defs/nav_skills.py": [
         4,
         0
       ],
@@ -235,7 +235,7 @@
         1,
         0
       ],
-      "agent/workflow_defs/reports.py": [
+      "agent/workflow_defs/report_skills.py": [
         4,
         0
       ],
@@ -2062,8 +2062,8 @@
       "why": "情绪贴纸名单（与人设/前端同源）"
     },
     {
-      "id": "agent/workflow_defs/nav.py::_IOT_NAV_ALIASES",
-      "file": "agent/workflow_defs/nav.py",
+      "id": "agent/workflow_defs/nav_map.py::_IOT_NAV_ALIASES",
+      "file": "agent/workflow_defs/nav_map.py",
       "kind": "collection",
       "name": "_IOT_NAV_ALIASES",
       "size": 10,
@@ -2072,8 +2072,8 @@
       "why": "物联网页面的别名 → 路径（站内页面事实）"
     },
     {
-      "id": "agent/workflow_defs/nav.py::_PUBLIC_NAME_TAKEN",
-      "file": "agent/workflow_defs/nav.py",
+      "id": "agent/workflow_defs/nav_map.py::_PUBLIC_NAME_TAKEN",
+      "file": "agent/workflow_defs/nav_map.py",
       "kind": "collection",
       "name": "_PUBLIC_NAME_TAKEN",
       "size": 2,

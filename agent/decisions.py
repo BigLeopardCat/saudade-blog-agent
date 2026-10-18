@@ -29,7 +29,7 @@ from langchain_core.messages import ToolMessage
 from agent.authz import strip_user_shell
 from agent.context import _msg_text
 from agent.workflow_defs import WORKFLOW_MAP
-from agent.workflow_defs.nav import NAV_MAP, fuzzy_nav_hit
+from agent.workflow_defs.nav_map import NAV_MAP, fuzzy_nav_hit
 from agent.workflow_plan import instantiate_plan
 from tools.base import IOT_ENABLED
 # 与检索侧同一分词（2/3-gram）——候选标题相关性判定复用，避免两套词法

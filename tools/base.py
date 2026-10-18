@@ -218,7 +218,7 @@ from tools.device import (  # noqa: E402,F401
 
 # ── 站点与页面那一族的 re-export（20261018 搬进 `tools/site.py`，见上面那块说明）──
 # 按**原名**再导出 ⇒ 全仓 `from tools.base import …` 与 `base.<名>` 一处不改。外面伸手的
-# 实测有：`agent/workflow_defs/nav.py`（`NAV_MAP` 从 `_NAV_EXACT_PATHS` 同源取名，
+# 实测有：`agent/workflow_defs/nav_map.py`（`NAV_MAP` 从 `_NAV_EXACT_PATHS` 同源取名，
 # 另取 `IOT_NAV_PATH`）、`agent/workflow_plan.py`（`nav_path_valid` / `IOT_NAV_PATH`）、
 # `agent/context.py`（`_ITEM_POSITION_FORMS`）、`agent/decisions.py` / `agent/hostinfo.py` /
 # `agent/context.py` / `agent/workflow_menu.py`（`IOT_ENABLED`，四份都按名 import）、
@@ -426,7 +426,7 @@ def _own_get(path: str, config: RunnableConfig) -> dict | list | ToolResult:
 # ── 管理助手报表（只读七件）的 re-export（20261018 搬进 `tools/admin_read.py`）──
 # 按**原名**再导出 ⇒ 全仓 `from tools.base import …` 与 `base.<名>` 一处不改。外面伸手的
 # 实测有两类：① **按名登记**（`agent/authz.py` 的 scope 表、`agent/action_text.py` 的动作词、
-# `agent/entities.py` 的摘要、`agent/tool_specs.py`、`agent/workflow_defs/reports.py` 的技能
+# `agent/entities.py` 的摘要、`agent/tool_specs.py`、`agent/workflow_defs/report_skills.py` 的技能
 # 模板、`_TOOL_REGISTRY` 本体）；② **按属性调用**（`tests/test_reports.py` 的
 # `base.list_admin_board.invoke(...)`、`eval/admin_report_probe.py`）。两类的取值方式都是
 # "从 `tools.base` 拿"，所以这一刀不用动任何一处。

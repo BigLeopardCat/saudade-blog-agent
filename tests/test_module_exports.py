@@ -159,7 +159,7 @@ REL = [str(p.relative_to(ROOT)) for p in FILES]
 check("范围内文件数 ≥ 20（不是空转）", len(FILES) >= 20, f"{len(FILES)} 个")
 check("  确实收进了批 3 的 tools 模块与批 2 的 workflow 模块（glob 没写歪）",
       all(n in REL for n in ("tools/notes.py", "tools/tag_admin.py", "tools/result.py",
-                             "agent/workflow_menu.py", "agent/workflow_defs/nav.py")),
+                             "agent/workflow_menu.py", "agent/workflow_defs/nav_map.py")),
       f"{len(REL)} 个")
 
 

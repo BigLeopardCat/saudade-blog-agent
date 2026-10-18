@@ -44,7 +44,7 @@ from agent.graph import (REFLECT_MAX_ROUNDS, _article_fast_path,
                          plan_encode, plan_state, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
 from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
-from agent.workflow_defs.nav import NAV_MAP, NAV_VALID_PATHS
+from agent.workflow_defs.nav_map import NAV_MAP, NAV_VALID_PATHS
 from agent.workflow_plan import instantiate_plan
 # 假 planner LLM 的共享桩：把夹具里现成的 `WORKFLOW=/PARAMS=` 文本翻成 tool_calls
 # （20261004 起接口层只剩 native tool calls，桩缺 `bind_tools` 会 AttributeError）。
@@ -468,7 +468,7 @@ def test_dashboard_nav_expansion():
       ④ 「转跳后台」不再需要澄清板块，且 planner 提示词里写着这条纪律。
     """
     print("[dashboard_nav] 后台各面板进导航白名单（面板名与后台侧边栏逐字一致）")
-    from agent.workflow_defs.nav import DASHBOARD_PANELS
+    from agent.workflow_defs.nav_map import DASHBOARD_PANELS
     from agent.workflow_menu import _NAV_MAP_LINES
     from agent.graph import _PLANNER_PROMPT
     import tools.base as base
@@ -4394,11 +4394,11 @@ def test_site_guide_is_role_rendered():
 
 def test_site_guide_covers_nav_map():
     """SITE_GUIDE（访客变体 site_guide(None)）必须覆盖 NAV_MAP 全部存活路径
-    （`workflow_defs/nav.py` 单一事实来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
+    （`workflow_defs/nav_map.py` 单一事实来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
     trace 190827 实证：能做啥只列 4 项漏 IoT/河灯。20260921 能力清单改按角色渲染后
     此锁仍指向访客变体（管理能力行不得进访客清单，由 test_site_guide_is_role_rendered 锁）。"""
     import agent.graph as g
-    from agent.workflow_defs.nav import NAV_MAP
+    from agent.workflow_defs.nav_map import NAV_MAP
     alive = {p for p in NAV_MAP.values() if p is not None}
     missing = [p for p in sorted(alive) if p not in g.SITE_GUIDE]
     assert not missing, f"SITE_GUIDE 缺板块路径: {missing}"

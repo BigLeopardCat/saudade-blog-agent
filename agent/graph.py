@@ -134,7 +134,7 @@ from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
 from agent.plan_status import PLAN_STATUS_ABSENCE_EXEMPT, PLAN_STATUS_NAV_NOTE
 from agent.workflow_defs import WORKFLOW_MAP, _WRITE_NAME_TARGET_WORKFLOWS, visible_workflows
 from agent.workflow_defs.capability import CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS
-from agent.workflow_defs.nav import FUZZY_NAV_RULES, NAV_MAP, _NAV_REAL_PAGES, _NAV_REF_HINT
+from agent.workflow_defs.nav_map import FUZZY_NAV_RULES, NAV_MAP, _NAV_REAL_PAGES, _NAV_REF_HINT
 from agent.workflow_menu import build_planner_context
 from agent.workflow_model import DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT
 from agent.workflow_params import (
@@ -508,7 +508,7 @@ def _narrator_msgs(state) -> list:
 #   第 5 行: REPLY: <技能回复契约>（model 叙述时遵守、gate 不做文本级对照）
 #   （曾有的第 6 行 `TODO:` 20261016 整行退休：读端一个都不剩了，理由与取证
 #     写在下面 `plan_encode` 那一处）
-# 导航映射表在 `workflow_defs/nav.py`（页面别名→路径，"物联网平台→/device-console/"是系统数据，
+# 导航映射表在 `workflow_defs/nav_map.py`（页面别名→路径，"物联网平台→/device-console/"是系统数据，
 # 不是模型猜测）——planner 跑题的结构性根因（不知道工具语义）由此消除。
 # TOOLS 行是"执行清单"不是"允许名单"——execute 节点把它当命令逐条执行，
 # 不存在"TOOLS 点了名仍可不调用"的自由（要少做就少点名，点了就是命令）。

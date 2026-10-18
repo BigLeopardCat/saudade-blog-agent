@@ -51,7 +51,7 @@ planner 菜单也不在任何技能模板里）没有臂：`receipt_action` 对�
 import re
 
 from agent import adminops_tags as _tags  # 标签颜色/状态的既有中文词表（写工具问句共用）
-from agent.workflow_defs.nav import NAV_MAP
+from agent.workflow_defs.nav_map import NAV_MAP
 from agent.workflow_expand import _norm_id_list, _norm_true
 # 分期报表的粒度词（周报/月报/年报）：**唯一一份**在 `agent/reports.py`（帧头与
 # 动作行必须同一套字），这里只取用、不另抄。
