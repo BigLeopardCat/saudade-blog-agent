@@ -140,7 +140,7 @@ AGENT_EVIDENCE=0/1 各一遍全量（180 用例）；trace 落 golden_traces/ab_
 `update_category` / `delete_category` / `set_article_tags` / `set_article_status`），
 **多出来的 8 个**恰好就是上面那批系统规定值/读状态/收藏工具。
 
-**实测的注入面**（`build_tool_schema(role, evidence=…)` 直接量，per-skill 成本恒 **362 字符**）：
+**实测的注入面**（`build_tool_schema(role, evidence=…)` 直接量，per-workflow 成本恒 **362 字符**）：
 
 | 角色 | 可见技能 | 开档后带 `evidence` 的技能 | 整张 schema 增量 |
 |---|---|---|---|

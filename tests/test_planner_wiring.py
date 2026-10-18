@@ -11,7 +11,7 @@ tool calls 一条路，没有第二档可比。
 
 钉住的契约（这里红 = 某条判据被改掉了，改动要同步改这里）：
 
-  · **单通道**：预算取 `settings.planner_native_*`、schema 来自 `visible_skills(role)`
+  · **单通道**：预算取 `settings.planner_native_*`、schema 来自 `visible_workflows(role)`
     （与菜单同源，不扩权是结构性的）、提示词是"用工具调用表达决定"那一份；
   · **零调用 ≠ 闲聊**（本批的靶子）：一个函数都没点、正文却非空 ⇒ 走既有纠偏通道
     **一次**（`no_call_nudge`），第二次仍零调用才认成 `chat`（`no_call_accepted`）；
@@ -44,10 +44,10 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa
 
 import agent.graph as G  # noqa: E402
 from agent import authz  # noqa: E402
-from agent.block_reasons import denied_skills  # noqa: E402
+from agent.block_reasons import denied_workflows  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from agent.skills import visible_skills  # noqa: E402
 from agent.tasks import TASK_DROP, TASK_HOLD, TASK_INTENTS  # noqa: E402
+from agent.workflow_defs import visible_workflows  # noqa: E402
 from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
@@ -138,13 +138,13 @@ def _events(rec, name: str) -> list[dict]:
 def _expected_schema_names(role: str) -> set[str]:
     """`planner_node` 该绑的名字集合 = 可见技能 ∪（开档时的两个伪函数）。
 
-    ⚠️ 20261007：原写法是"与 `visible_skills(role)` **全等**"，那句话只在
+    ⚠️ 20261007：原写法是"与 `visible_workflows(role)` **全等**"，那句话只在
     `AGENT_TASK_STATE=0` 下成立——而档位 20261015 已撤（任务状态常开）⇒ 那半句话连同
     档位一起过期了，这里改成**无条件**加那三个伪函数（与产线逐字同一档）。
     口径与 `tests/test_planner_llm.py` ① 同一句：**多出来的只准是那三个申报过的伪函数**
     （名字取 `agent/tasks.py` 的常量，不硬编码），多别的一律红——"不扩权"没被放松。
     """
-    names = {s.name for s in visible_skills(role)}
+    names = {s.name for s in visible_workflows(role)}
     # 20261015 起**无条件**加这三个：`AGENT_TASK_STATE` 档位已撤（任务状态常开），
     # 于是"多出来的只准是那三个申报过的伪函数"这句话在全档位下都成立。
     names |= {TASK_HOLD, TASK_DROP, TASK_INTENTS}
@@ -153,7 +153,7 @@ def _expected_schema_names(role: str) -> set[str]:
 
 # ── ① 单通道接线：schema / 预算 / 提示词 / 计划来源 ─────────────────────────
 def test_binds_schema_and_takes_the_tool_call_as_the_plan():
-    print("\n[接线] 预算取 native 那一组、schema 与 visible_skills 同源、计划来自工具调用")
+    print("\n[接线] 预算取 native 那一组、schema 与 visible_workflows 同源、计划来自工具调用")
     out, rec, llm = _run([_call()])
     check("确实走到了 LLM 决策轮（没被快道截走）", len(llm.prompts) == 1)
     check("预算取 settings.planner_native_*（不是历史那组 400/30s）",
@@ -162,7 +162,7 @@ def test_binds_schema_and_takes_the_tool_call_as_the_plan():
           and llm.kw.get("enable_thinking") == settings.planner_native_thinking,
           str({k: v for k, v in llm.kw.items() if k != "temperature"}))
     names = {t["function"]["name"] for t in (llm.bound or {}).get("tools") or []}
-    check("绑的 schema 与 visible_skills(admin) 名字集合相等（不扩权是结构性的）",
+    check("绑的 schema 与 visible_workflows(admin) 名字集合相等（不扩权是结构性的）",
           names == _expected_schema_names("admin"),
           f"n={len(names)} 多={sorted(names - _expected_schema_names('admin'))}"
           f" 少={sorted(_expected_schema_names('admin') - names)}")
@@ -172,9 +172,9 @@ def test_binds_schema_and_takes_the_tool_call_as_the_plan():
           str(llm.bound and {k: v for k, v in llm.bound.items() if k != "tools"}))
     check("提示词是工具契约那一份、且不含旧文本契约行",
           "工具调用表达" in llm.prompts[0]
-          and "SKILL: <技能名>" not in llm.prompts[0])
+          and "WORKFLOW: <技能名>" not in llm.prompts[0])
     check("计划就是那次工具调用（技能级参数）",
-          "SKILL=effect" in out["plan"] and '"effect": "sakura"' in out["plan"],
+          "WORKFLOW=effect" in out["plan"] and '"effect": "sakura"' in out["plan"],
           out["plan"].splitlines()[:2])
     dec = _events(rec, "decision")
     check("decision 事件带 engine=native（键保留：评测按它切语料）",
@@ -194,9 +194,9 @@ def test_multi_call_takes_first_and_accounts():
          "id": "a", "type": "tool_call"},
         {"name": "darkmode", "args": {"mode": "on"}, "id": "b", "type": "tool_call"}])
     out, rec, _llm = _run([two])
-    check("取第一条（effect）", "SKILL=effect" in out["plan"], out["plan"].splitlines()[0])
+    check("取第一条（effect）", "WORKFLOW=effect" in out["plan"], out["plan"].splitlines()[0])
     check("darkmode 没有被拼进同一份计划（一张确认卡只装同一个技能的动作）",
-          "SKILL=darkmode" not in out["plan"]
+          "WORKFLOW=darkmode" not in out["plan"]
           and "darkmode" not in out["plan"].split("\n")[0])
     dec = _events(rec, "decision")
     check("记账进了 decision 事件（native_multi_call:…）",
@@ -218,7 +218,7 @@ def test_zero_call_is_nudged_once_then_accepted_as_chat():
     acc = _events(rec, "no_call_accepted")
     check("`no_call_accepted` 恰一条（纠偏后仍零调用才记）",
           len(acc) == 1 and acc[0].get("finish") == "stop", str(acc))
-    check("计划落在 chat（认下来了）", "SKILL=chat" in out["plan"], out["plan"].splitlines()[0])
+    check("计划落在 chat（认下来了）", "WORKFLOW=chat" in out["plan"], out["plan"].splitlines()[0])
     check("★ 状态是 `answer_only` 而**不是** `wrapped`（改 wrapped = 把零帧声称判据卸掉）",
           _plan_obj(out).get("status") == "answer_only"
           and _plan_obj(out).get("chat") is True, str(_plan_obj(out).get("status")))
@@ -226,12 +226,12 @@ def test_zero_call_is_nudged_once_then_accepted_as_chat():
           _plan_obj(out)["tools"] == [], str(_plan_obj(out)["tools"]))
 
 
-def test_zero_call_then_a_real_tool_call_lands_on_the_skill():
+def test_zero_call_then_a_real_tool_call_lands_on_the_workflow():
     print("\n[零调用] 纠偏真的把工具调用找回来了（第二次点了函数）")
     out, rec, llm = _run([_zero_call(), _call()])
     check("LLM 被问了两次", len(llm.prompts) == 2, str(len(llm.prompts)))
     check("计划落在被点中的那个技能上（不是 chat）",
-          "SKILL=effect" in out["plan"], out["plan"].splitlines()[0])
+          "WORKFLOW=effect" in out["plan"], out["plan"].splitlines()[0])
     check("★ 没有 `no_call_accepted`——纠偏成功就不该记「认了」",
           not _events(rec, "no_call_accepted"))
     check("`no_call_nudge` 仍在（第一次确实零调用，这件事要留痕）",
@@ -247,7 +247,7 @@ def test_zero_call_with_frames_is_not_nudged():
     check("★ 一次都不纠偏（`no_call_nudge` 缺席）", not _events(rec, "no_call_nudge"))
     check("★ 也不记 `no_call_accepted`（它不是「认下来」的那一格）",
           not _events(rec, "no_call_accepted"))
-    check("计划仍是 chat", "SKILL=chat" in out["plan"], out["plan"].splitlines()[0])
+    check("计划仍是 chat", "WORKFLOW=chat" in out["plan"], out["plan"].splitlines()[0])
 
 
 # ── ②″ 零调用 + **写形态**的请求：话术用写形态那一份（20261008）─────────────
@@ -276,7 +276,7 @@ def test_zero_call_on_a_write_request_uses_the_write_shaped_nudge():
           len(nudge) == 1 and nudge[0].get("nudge") == "name_write"
           and nudge[0].get("verbs"), str(nudge))
     check("★ 纠偏真的找回写规格（计划落在 notice_send）",
-          "SKILL=notice_send" in out["plan"], out["plan"].splitlines()[0])
+          "WORKFLOW=notice_send" in out["plan"], out["plan"].splitlines()[0])
     check("没有 `no_call_accepted`（催动成功就不记「认了」）",
           not _events(rec, "no_call_accepted"))
 
@@ -292,7 +292,7 @@ def test_zero_call_on_a_write_request_uses_the_write_shaped_nudge():
 # 用的正是那一族的动作词形态（引号点名 + 族别动作词）——判定条件是**各自独立**的三道：
 # 有摘项（`blocked`）/ 原话里点了名 / 非提问；下面两条负控分别掐掉其中一道。
 _MSG_DENY_WRITE = "账号「probe_target_1」解禁吧"
-_BLOCKED_ROSTER = [{"skill": "account_roster", "reason": "unavailable"}]
+_BLOCKED_ROSTER = [{"workflow": "account_roster", "reason": "unavailable"}]
 _FRAMES_AFTER_BLOCK = [HumanMessage(content=_MSG_DENY_WRITE),
                        ToolMessage(content="服务不可用：账号列表这一轮读不到",
                                    tool_call_id="c1")]
@@ -314,7 +314,7 @@ def test_giveup_after_a_menu_denied_prerequisite_is_nudged_once():
     check("★ `menu_denied_used` **缺席**——它的常态为 0 是「摘菜单是结构性的」的唯一证据",
           not _events(rec, "menu_denied_used"))
     check("★ 纠偏真的找回写规格（计划落在 unmute_account）",
-          "SKILL=unmute_account" in out["plan"], out["plan"].splitlines()[0])
+          "WORKFLOW=unmute_account" in out["plan"], out["plan"].splitlines()[0])
     check("`menu_denied` 照常记一笔（摘菜单这件事本身仍留痕）",
           len(_events(rec, "menu_denied")) == 1)
 
@@ -326,7 +326,7 @@ def test_giveup_nudge_needs_a_deny():
                                      "blocked": [], "plan_rounds": 1})
     check("确实走到了 LLM 决策轮、且只问了一次", len(llm.prompts) == 1, str(len(llm.prompts)))
     check("★ `deny_giveup_correct` 缺席", not _events(rec, "deny_giveup_correct"))
-    check("计划仍是 chat", "SKILL=chat" in out["plan"], out["plan"].splitlines()[0])
+    check("计划仍是 chat", "WORKFLOW=chat" in out["plan"], out["plan"].splitlines()[0])
 
 
 def test_giveup_nudge_needs_a_named_target():
@@ -339,7 +339,7 @@ def test_giveup_nudge_needs_a_named_target():
     check("只问了一次", len(llm.prompts) == 1, str(len(llm.prompts)))
     check("★ `deny_giveup_correct` 缺席（无名可抄 ⇒ 纠偏只会把它往乱写推）",
           not _events(rec, "deny_giveup_correct"))
-    check("计划仍是 chat", "SKILL=chat" in out["plan"], out["plan"].splitlines()[0])
+    check("计划仍是 chat", "WORKFLOW=chat" in out["plan"], out["plan"].splitlines()[0])
 
 
 # ── ②⁗ 写命令在**已有帧之后**零工具收尾：uid 哨兵那族的 fail-open（20261009）──────
@@ -375,7 +375,7 @@ def test_write_command_zero_call_after_frames_is_nudged_once():
           not _events(rec, "no_call_nudge")
           and not _events(rec, "deny_giveup_correct"))
     check("★ 纠偏真的排出写规格（计划落在 favorite_add + add_favorite）",
-          "SKILL=favorite_add" in out["plan"] and "add_favorite" in out["plan"],
+          "WORKFLOW=favorite_add" in out["plan"] and "add_favorite" in out["plan"],
           out["plan"].splitlines()[:2])
 
 
@@ -400,7 +400,7 @@ def test_write_command_nudge_needs_no_write_yet():
     print("\n[写命令·反锁 ③] 本轮已经办成过这件写 ⇒ 不纠（再说一次就是重复执行）")
     _out, rec, llm = _run([_chat()], state_over={
         "messages": _FRAMES_AFTER_READ, "plan_rounds": 1,
-        "receipts": [{"skill": "favorite_add", "tool": "add_favorite",
+        "receipts": [{"workflow": "favorite_add", "tool": "add_favorite",
                       "args": {"article_id": 12}, "result": "已收藏文章 12"}]})
     check("只问了一次", len(llm.prompts) == 1, str(len(llm.prompts)))
     check("★ `write_command_correct` 缺席（账甲说本轮有写回执）",
@@ -412,16 +412,16 @@ def test_write_command_nudge_yields_when_the_write_itself_was_blocked():
 
     账甲那三列只记"成了的"，于是「写被 BLOCK」与「压根没排过写」在
     `_wrote_this_round` 眼里长得一样。这里用 `args_parse`（**可救族**）当受阻原因：
-    它不进 `denied_skills` ⇒ `_deny_giveup_nudge` 不响，于是这一轮的沉默**只能**由
+    它不进 `denied_workflows` ⇒ `_deny_giveup_nudge` 不响，于是这一轮的沉默**只能**由
     本守卫解释（去掉守卫当场变成两次提问 + `write_command_correct`）。
     """
     print("\n[写命令·反锁 ⑤] 本轮写被 BLOCK（可救族）⇒ 不纠（「还没排过规格」是假话）")
     blocked = [{"spec": "add_favorite({\"article_id\": 12})", "tool": "add_favorite",
-                "skill": "favorite_add", "reason": "args_parse", "result": "参数解析失败"}]
+                "workflow": "favorite_add", "reason": "args_parse", "result": "参数解析失败"}]
     _out, rec, llm = _run([_chat()], state_over={
         "messages": _FRAMES_AFTER_READ, "plan_rounds": 1, "blocked": blocked})
     check("受阻原因是可救族 ⇒ 摘菜单那一格确实不响（沉默只能由本守卫解释）",
-          not denied_skills(blocked), str(blocked[0]["reason"]))
+          not denied_workflows(blocked), str(blocked[0]["reason"]))
     check("只问了一次", len(llm.prompts) == 1, str(len(llm.prompts)))
     check("★ `write_command_correct` 缺席（写规格排过，是它被挡下）",
           not _events(rec, "write_command_correct"))
@@ -430,7 +430,7 @@ def test_write_command_nudge_yields_when_the_write_itself_was_blocked():
                                  {"blocked": blocked}) is None
           and G._write_command_nudge(
               {"tools": [], "dropped": None}, _MSG_OWN_WRITE, True,
-              {"blocked": [{"tool": "list_my_favorites", "skill": "content_query",
+              {"blocked": [{"tool": "list_my_favorites", "workflow": "content_query",
                             "reason": "unavailable", "result": "服务不可用"}]}) is not None)
 
 
@@ -473,7 +473,7 @@ def test_write_command_nudge_is_the_only_channel_that_catches_it():
 # 这句命中 `authz.is_own_read_question`（"我都有哪些收藏" = 自己账号里的私有数据），
 # 且**不命中任何快道**。带上 `state_over` 换掉默认消息即可（`_run` 先铺默认再 update）。
 _MSG_OWN_DATA = "小猫咪我都有哪些收藏"
-# 语义上正确的落点：`content_query` 点名无参只读工具 `list_my_favorites`（见 skills.py
+# 语义上正确的落点：`content_query` 点名无参只读工具 `list_my_favorites`（见 workflow_tools.py
 # 的 `_EXPLICIT_TOOLS_ORDER`——"我收藏了哪些文章"正是那一族被加进菜单的理由）。
 _READ_ARGS = {"tools": ["list_my_favorites"]}
 
@@ -500,8 +500,8 @@ def test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool():
     nud = _events(rec, "data_question_no_tool")
     check("`data_question_no_tool` 恰一条（不是 `no_call_nudge`：那是零调用那一格）",
           len(nud) == 1 and not _events(rec, "no_call_nudge"), str(nud))
-    check("★ 纠偏后落到真工具上（`SKILL=content_query` + 点名的只读工具）",
-          "SKILL=content_query" in out["plan"] and "list_my_favorites" in out["plan"],
+    check("★ 纠偏后落到真工具上（`WORKFLOW=content_query` + 点名的只读工具）",
+          "WORKFLOW=content_query" in out["plan"] and "list_my_favorites" in out["plan"],
           out["plan"].splitlines()[:2])
     check("★ 没有 `no_call_accepted`（那是「认成零调用」的账，不许串台）",
           not _events(rec, "no_call_accepted"))
@@ -545,7 +545,7 @@ def test_chat_on_a_data_question_with_frames_is_not_nudged():
           not _events(rec, "data_question_no_tool"))
     check("也不记 `data_question_still_no_tool`（它不是「纠偏后被放行」那一格）",
           not _events(rec, "data_question_still_no_tool"))
-    check("计划仍是 chat", "SKILL=chat" in out["plan"], out["plan"].splitlines()[0])
+    check("计划仍是 chat", "WORKFLOW=chat" in out["plan"], out["plan"].splitlines()[0])
 
 
 def test_chat_on_a_data_question_without_a_uid_is_not_nudged():
@@ -603,7 +603,7 @@ def test_contract_no_longer_licenses_an_empty_decision():
     check("讲明了「一个函数都不点 = 没有做出决策」",
           "一个函数都不点" in n and "没有做出决策" in n)
     check("不含旧文本契约行（两版混写就是让模型二选一）",
-          "SKILL: <技能名>" not in n and "PARAMS: <JSON>" not in n)
+          "WORKFLOW: <技能名>" not in n and "PARAMS: <JSON>" not in n)
     check("契约里**不再**有 `TODO:` 那一行（20261016 整行退休，取证见 graph.plan_encode）",
           "TODO:" not in n)
     check("仍是规则 7（改契约不该改规则编号）", n.startswith("7. "))
@@ -654,7 +654,7 @@ if __name__ == "__main__":
     for fn in (test_binds_schema_and_takes_the_tool_call_as_the_plan,
                test_multi_call_takes_first_and_accounts,
                test_zero_call_is_nudged_once_then_accepted_as_chat,
-               test_zero_call_then_a_real_tool_call_lands_on_the_skill,
+               test_zero_call_then_a_real_tool_call_lands_on_the_workflow,
                test_zero_call_with_frames_is_not_nudged,
                test_zero_call_on_a_write_request_uses_the_write_shaped_nudge,
                test_giveup_after_a_menu_denied_prerequisite_is_nudged_once,

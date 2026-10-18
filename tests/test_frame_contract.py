@@ -76,6 +76,7 @@ sys.path.insert(0, str(ROOT))
 from agent import frames as F  # noqa: E402
 
 GRAPH = ROOT / "agent" / "graph.py"
+PLAN_CODEC = ROOT / "agent" / "plan_codec.py"
 ARM = ROOT / "agent" / "react_arm.py"
 SERVER = ROOT / "server.py"
 LINE = ROOT / "agent" / "react_line.py"
@@ -149,6 +150,22 @@ def read_closure(tree, root: str, state_param: str = "state") -> set:
                             and kw.value.id == sp):
                         stack.append((node.func.id, kw.arg))
     return keys
+
+
+def _state_read_tree(*paths) -> ast.Module:
+    """把几个模块的**顶层定义拼成一棵合成树**——只喂给 `read_closure`，别处不用。
+
+    为什么要拼：闭包是按**函数名**解析调用点的，而计划的读侧入口 `plan_view` 住在
+    `agent/plan_codec.py`（与它的写端对偶 `plan_state` 同处，20261017 批 1）。不并进来，
+    "`gate_node` 读计划"这件事在闭包里**根本看不见**：声明 `plan_obj` 会被报成"声明了
+    没人读"，而真读点就在那里。
+
+    这不是放宽判据——闭包要问的始终是"这个节点从 state 读了哪些键"，函数住在哪个文件
+    与它无关；`plan_view` 与 `_round_facts` 一样是**辅助函数**，只是跨了一个模块边界。
+    ⑥i 是这条合并的**反控**（把 `plan_view` 摘掉 ⇒ ①a 必须红），所以合并本身也受判据管。
+    """
+    mods = [ast.parse(p.read_text(encoding="utf-8")) for p in paths]
+    return ast.Module(body=[n for m in mods for n in m.body], type_ignores=[])
 
 
 def diff(real: set, declared: set) -> tuple:
@@ -332,6 +349,15 @@ def _sec_reverse(g_real: set, nodes: set, ann: set, consumed: set) -> None:
          "加了未声明键仍判绿 = 那条判据没在看声明"),
         ("⑥h 反控：把 `AgentState` 的声明取空 ⇒ 判出来（空集与干净集同形）",
          not keys_declared(F.GATE_STATE_KEYS, set()), "声明取空仍判绿"),
+        # 20261017 批 1：闭包走的是 graph.py + plan_codec.py 的**合成树**（`_state_read_tree`）。
+        # 合成本身也要受判据管——不并 `plan_codec.py`，`plan_view` 就成了闭包解析不到的名字，
+        # 计划那一格（`plan_obj`）会以"声明了没人读"报红。判它，是为了让"哪天有人图省事把
+        # 合并去掉"当场红，而不是让这条锁静默退化成"只扫 graph.py 一棵树"。
+        ("⑥i 反控：闭包只喂 `graph.py`（不并 `plan_codec.py`）⇒ 判出来"
+         "（`plan_view` 跨了模块，摘掉那一跳就该红）",
+         not audit(read_closure(ast.parse(GRAPH.read_text(encoding="utf-8")), "gate_node"),
+                   declared, floor=8),
+         "摘掉跨模块那一跳仍判绿 = 合成树没在起作用"),
     )
     for desc, ok, why in cases:
         check(desc, ok, why)
@@ -360,7 +386,7 @@ def _sec_consent(ltree) -> None:
 
     import agent.authz as authz  # noqa: E402
     from agent.principal import Principal  # noqa: E402
-    from agent.react_line import RunLedger, SkillExecutor  # noqa: E402
+    from agent.react_line import RunLedger, WorkflowExecutor  # noqa: E402
 
     spec = 'delete_tag({"name": "大笨狗"})'
     admin = Principal(uid=0, role="admin")
@@ -368,21 +394,21 @@ def _sec_consent(ltree) -> None:
           authz.requires_consent(admin, "delete_tag"), "前提不成立 ⇒ 下面几格全无意义")
 
     def missing(grant=None, executed=(), calls=()):
-        ex = SkillExecutor({}, RunLedger(), principal=admin,
+        ex = WorkflowExecutor({}, RunLedger(), principal=admin,
                            user_msg="标签「大笨狗」我不想要了，删掉吧",
                            grant=grant, state={"executed": list(executed)})
         ex.calls.extend(calls)
         return ex._consent_missing(spec)
 
-    ok = {"skill": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]}
-    other = {"skill": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "别的"}}]}
+    ok = {"workflow": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]}
+    other = {"workflow": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "别的"}}]}
     check("⑧e 无令牌 ⇒ 判「没获同意」", missing() is True)
     check("⑧f 令牌签名体里**正是这一件** ⇒ 放行（这是令牌的正常用法）",
           missing(ok) is False)
     check("⑧g 令牌是**另一件**（同工具换目标）⇒ 仍判「没获同意」（20261012 第一次收窄）",
           missing(other) is True)
-    check("⑧h 令牌签名体**只有 skill 没有 specs**（生产不产这种形状）⇒ 不算覆盖",
-          missing({"skill": "tag_delete"}) is True)
+    check("⑧h 令牌签名体**只有 workflow 没有 specs**（生产不产这种形状）⇒ 不算覆盖",
+          missing({"workflow": "tag_delete"}) is True)
     check("⑧i 这一轮**已经执行过**同一件 ⇒ 令牌作废（20261012 第二次收窄）",
           missing(ok, executed=[spec]) is True)
     check("⑧j 本线真跑过的那件（`executor.calls`）同样让令牌作废",
@@ -394,6 +420,10 @@ def main() -> int:
     from agent.graph import AgentState  # noqa: E402
 
     gtree = ast.parse(GRAPH.read_text(encoding="utf-8"))
+    # 闭包那两节走**合成树**（graph.py + plan_codec.py）：`plan_view` 住在后一个文件里，
+    # 不并进来 ⇒ 计划那一格在闭包里看不见（见 `_state_read_tree`）。其余各节照旧只读
+    # graph.py 一棵树（它们的判据对象就是"graph.py 里有什么"）。
+    read_tree = _state_read_tree(GRAPH, PLAN_CODEC)
     atree = ast.parse(ARM.read_text(encoding="utf-8"))
     ftree = ast.parse((ROOT / "agent" / "frames.py").read_text(encoding="utf-8"))
     stree = ast.parse(SERVER.read_text(encoding="utf-8"))
@@ -405,7 +435,7 @@ def main() -> int:
           % (len(F.GATE_STATE_KEYS), len(F.POPUP_STATE_KEYS), list(F.NODE_FRAMES),
              sorted(nodes)))
 
-    g_real = _sec_closure(gtree)
+    g_real = _sec_closure(read_tree)
     _sec_structure()
     _sec_no_handmade(atree, ftree)
     consumed = _sec_frames(stree)

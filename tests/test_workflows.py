@@ -19,7 +19,7 @@ narrator）→ gate（确定性检查 + fallback 收尾）。原"落回 LLM 质�
   - gate 确定性检查（零帧声称收窄作用域/err 帧完成声称/确认式导航声称/注记核验/
     fallback 终局语义）
 
-用法：.venv/bin/python tests/test_skills.py
+用法：.venv/bin/python tests/test_workflows.py
 """
 import json
 import pathlib
@@ -38,14 +38,15 @@ sys.path.insert(0, str(ROOT))
 
 from agent.graph import (REFLECT_MAX_ROUNDS, _article_fast_path,
                          _check_spec, _display_fast_path, _effect_switch_fast_path,
-                         _nav_fast_path, _plan_skill, _scan_action_intents,
+                         _nav_fast_path, _plan_workflow, _scan_action_intents,
                          _wrap_up_plan,
                          execute_node, gate_node,
                          plan_encode, plan_state, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
-from agent.skills import (NAV_MAP, NAV_VALID_PATHS, SKILL_MAP, instantiate_plan,
-                          visible_skills)
-# 假 planner LLM 的共享桩：把夹具里现成的 `SKILL=/PARAMS=` 文本翻成 tool_calls
+from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
+from agent.workflow_defs.nav import NAV_MAP, NAV_VALID_PATHS
+from agent.workflow_plan import instantiate_plan
+# 假 planner LLM 的共享桩：把夹具里现成的 `WORKFLOW=/PARAMS=` 文本翻成 tool_calls
 # （20261004 起接口层只剩 native tool calls，桩缺 `bind_tools` 会 AttributeError）。
 from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
@@ -164,7 +165,7 @@ def test_navigate_instantiation():
           not p["tools"] and "无法识别" in p["note"], f"note={p['note']}")
 
 
-def test_other_skills():
+def test_other_workflows():
     print("[instantiate] 其余技能参数实例化")
     p = instantiate_plan("effect", {"effect": "sakura", "action": "on"})
     check("effect → toggle_effect(sakura,on)",
@@ -180,7 +181,7 @@ def test_other_skills():
     p = instantiate_plan("chat", {})
     check("chat → 无工具 + chat=True", not p["tools"] and p["chat"], str(p))
     p = instantiate_plan("不存在的技能", {})
-    check("未知技能 → chat 兜底", p["skill"] == "chat", p["skill"])
+    check("未知技能 → chat 兜底", p["workflow"] == "chat", p["workflow"])
 
 
 def test_plan_roundtrip():
@@ -188,8 +189,8 @@ def test_plan_roundtrip():
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
     obj["params"] = {"target": "物联网平台"}
     parsed = parse_plan(plan_encode(obj))
-    check("往返后 skill/params 一致",
-          parsed["skill"] == "navigate"
+    check("往返后 workflow/params 一致",
+          parsed["workflow"] == "navigate"
           and parsed["params"] == {"target": "物联网平台"},
           str(parsed))
     check("往返后 tools 一致", parsed["tools"] == obj["tools"], str(parsed["tools"]))
@@ -199,25 +200,25 @@ def test_plan_roundtrip():
     check("chat 往返 → chat=True 无工具", parsed["chat"] and parsed["tools"] == [], str(parsed))
 
 
-def test_plan_skill_line_contract():
-    """`_plan_skill` 读的是**结构化那一态**（`state["plan_obj"]`）——与 `plan_encode`
+def test_plan_workflow_line_contract():
+    """`_plan_workflow` 读的是**结构化那一态**（`state["plan_obj"]`）——与 `plan_encode`
     的排版**无关**。
 
-    （20260928 批 C 改写。）此前它靠一条 `SKILL=` 正则去抠 `plan` 文本，成立前提是
-    `plan_encode` 一定把技能名写成 `SKILL=…`；那条**隐式契约**在本次改动后消失了：
+    （20260928 批 C 改写。）此前它靠一条 `WORKFLOW=` 正则去抠 `plan` 文本，成立前提是
+    `plan_encode` 一定把技能名写成 `WORKFLOW=…`；那条**隐式契约**在本次改动后消失了：
     等号换成冒号、行挪个位置，都不再影响这个函数。仍然用**往返**钉住，但钉的是
     "对象进、技能名出"；另外把"只有文本时给空串"也钉住——那条是安全边界：
     `sign` 据此拒绝签发，而不是从一个认不出的旧文本里猜一个技能名签进令牌。
     """
     print("[plan] 技能名的读端 = plan_obj（与 plan_encode 的排版无关）")
-    names = [s.name for s in visible_skills("admin")] + [s.name for s in visible_skills(None)]
+    names = [s.name for s in visible_workflows("admin")] + [s.name for s in visible_workflows(None)]
     bad = []
     for name in dict.fromkeys(names):          # 去重保序
         for params in ({}, {"target": "物联网平台"}):
             obj = instantiate_plan(name, params)
-            got = _plan_skill(plan_state(obj))
-            if got != obj["skill"]:
-                bad.append(f"{name}: 编码出 {obj['skill']}、读回 {got!r}")
+            got = _plan_workflow(plan_state(obj))
+            if got != obj["workflow"]:
+                bad.append(f"{name}: 编码出 {obj['workflow']}、读回 {got!r}")
     check(f"每个技能编码后都能读回同一个技能名（{len(set(names))} 个）", not bad, str(bad[:4]))
     # 收尾计划（不带 params 的构造路径）同样要读得回——它是确认轮里
     # "执行受阻 ⇒ 不再重发清单"那条路的产物，读不到就签不出令牌。
@@ -226,30 +227,32 @@ def test_plan_skill_line_contract():
     # 设计判成缺陷。
     for has_frames in (True, False):
         obj = _wrap_up_plan(has_frames)
-        got = _plan_skill(plan_state(obj))
+        got = _plan_workflow(plan_state(obj))
         check(f"收尾计划（has_frames={has_frames}）读得回同一个技能名",
-              got == obj["skill"] and bool(got), f"{obj['skill']} → {got!r}")
+              got == obj["workflow"] and bool(got), f"{obj['workflow']} → {got!r}")
     # 排版不再是前提：把文本那一态换成一堆认不出的字（旧实现下 `=` 改成 `:`、或
     # 行挪位，都会让正则读空 ⇒ sign 拒绝签发），读端照样给出技能名。
     _nav = instantiate_plan("navigate", {"target": "物联网平台"})
     check("★ 文本排版变了（对象没变）也照读不误——契约已从排版里解耦",
-          _plan_skill({"plan": "这行不是计划，SKILL 行也没有",
-                       "plan_obj": _nav}) == _nav["skill"])
+          _plan_workflow({"plan": "这行不是计划，WORKFLOW 行也没有",
+                       "plan_obj": _nav}) == _nav["workflow"])
     check("只有文本、没有对象 ⇒ 空串（sign 据此拒绝签发，绝不从旧文本里猜）",
-          _plan_skill({"plan": plan_encode(_nav)}) == ""
-          and _plan_skill({"plan": ""}) == "" and _plan_skill({}) == "")
+          _plan_workflow({"plan": plan_encode(_nav)}) == ""
+          and _plan_workflow({"plan": ""}) == "" and _plan_workflow({}) == "")
 
 
 def test_parse_tolerance():
     print("[plan] 解析容错")
-    parsed = parse_plan("SKILL=navigate\nPARAMS={'target': '物联网平台',}\nTOOLS: x\nNOTE: n\nREPLY: r")
+    parsed = parse_plan("WORKFLOW=navigate\nPARAMS={'target': '物联网平台',}\n"
+                        "TOOLS: x\nNOTE: n\nREPLY: r")
     check("单引号+尾逗号 PARAMS 容错", parsed["params"] == {"target": "物联网平台"}, str(parsed["params"]))
-    parsed = parse_plan("```\nSKILL: chat\n```")
-    check("markdown 围栏容错", parsed["skill"] == "chat", str(parsed))
+    parsed = parse_plan("```\nWORKFLOW: chat\n```")
+    check("markdown 围栏容错", parsed["workflow"] == "chat", str(parsed))
     parsed = parse_plan("完全不是计划格式")
-    check("坏输入 → chat 兜底", parsed["skill"] == "chat" and parsed["chat"], str(parsed))
-    parsed = parse_plan("SKILL=navigate\nPARAMS: 不是JSON")
-    check("PARAMS 坏 JSON → 空参数兜底", parsed["params"] == {} and parsed["skill"] == "navigate", str(parsed))
+    check("坏输入 → chat 兜底", parsed["workflow"] == "chat" and parsed["chat"], str(parsed))
+    parsed = parse_plan("WORKFLOW=navigate\nPARAMS: 不是JSON")
+    check("PARAMS 坏 JSON → 空参数兜底",
+          parsed["params"] == {} and parsed["workflow"] == "navigate", str(parsed))
 
 
 def test_summary_protocol_removed():
@@ -288,7 +291,7 @@ def test_gate_note_honesty():
     print("[gate] 零帧注记核验（navigate 下线/不存在）")
 
     def _st(plan, reply):
-        return {"plan": plan_encode(instantiate_plan("navigate", plan)), "done": False,
+        return {**plan_state(instantiate_plan("navigate", plan)), "done": False,
                 "plan_rounds": 0,
                 "messages": [HumanMessage(content="打开它"), AIMessage(content=reply)]}
 
@@ -326,13 +329,11 @@ def test_gate_nav_pending_claim():
     那时这条红得莫名其妙（测试的失败原因与被测代码无关）。
     """
     print("[gate] 确认式导航声称（NAVIGATE 帧 + 到达声称 → fallback）")
-    plan = plan_encode({
-        "skill": "navigate",
-        "params": {"target": "留言板"},
-        "tools": ['navigate_to({"path": "/guestbook", "confirm": true})'],
-        "note": "",
-        "reply": "",
-    })
+    # 20261017 批 1：两态一起给——只给文本的夹具在 `gate_node` 改读对象之后恒按"空计划"判。
+    plan_obj = {"workflow": "navigate", "params": {"target": "留言板"},
+                "tools": ['navigate_to({"path": "/guestbook", "confirm": true})'],
+                "note": "", "reply": ""}
+    plan = plan_state(plan_obj)["plan"]
     assert '"confirm": true' in plan  # 手搓的休眠场景：confirm=true ⇒ 前端弹卡等确认
 
     def frame_state(reply: str, frame: str):
@@ -341,7 +342,7 @@ def test_gate_nav_pending_claim():
         # ——所以夹具从"帧里带连线形前缀"换成"回执里带结构化 cmd"。命令工具的事实文本
         # 现在是无前缀的（「导航已发起，等主人确认后才会跳转：<url>」）。
         return {
-            "plan": plan, "done": False, "plan_rounds": 0,
+            **plan_state(plan_obj), "done": False, "plan_rounds": 0,
             "receipts": [{"tool": "navigate_to", "result": "",
                           "cmd": {"kind": "navigate", "url": "https://saudade.site/guestbook",
                                   "mode": "confirm"}}],
@@ -388,7 +389,7 @@ def test_nav_fast_path():
     ]:
         p = _nav_fast_path(msg)
         check(f"快道命中「{msg}」→ {path}",
-              p is not None and p["skill"] == "navigate"
+              p is not None and p["workflow"] == "navigate"
               and f'navigate_to({{"path": "{path}", "confirm": false}})' in p["tools"],
               f"tools={p and p['tools']}")
     # 已下线页面：命中但零工具 + 下线注记（如实告知）
@@ -467,7 +468,8 @@ def test_dashboard_nav_expansion():
       ④ 「转跳后台」不再需要澄清板块，且 planner 提示词里写着这条纪律。
     """
     print("[dashboard_nav] 后台各面板进导航白名单（面板名与后台侧边栏逐字一致）")
-    from agent.skills import DASHBOARD_PANELS, _NAV_MAP_LINES
+    from agent.workflow_defs.nav import DASHBOARD_PANELS
+    from agent.workflow_menu import _NAV_MAP_LINES
     from agent.graph import _PLANNER_PROMPT
     import tools.base as base
 
@@ -633,7 +635,7 @@ def test_display_fast_path():
     ]:
         p = _display_fast_path(msg)
         check(f"快道命中「{msg[:16]}…」→ device_display（PARAMS 空、内容由模型创作）",
-              p is not None and p["skill"] == "device_display"
+              p is not None and p["workflow"] == "device_display"
               and p["params"] == {} and p["tools"],
               f"tools={p and p['tools']}")
     # 不命中：疑问（问路不是命令）/否定（"不用显示"不是命令）/无屏幕名词 → None
@@ -663,7 +665,7 @@ def test_article_fast_path():
     ]:
         p = _article_fast_path(msg, ctx)
         check(f"快道命中「{msg[:20]}」→ read_article TOOLS 强制读取文章 21",
-              p is not None and p["skill"] == "read_article"
+              p is not None and p["workflow"] == "read_article"
               and p["tools"] == ['get_article_detail({"article_id": 21})']
               and p["params"] == {"article_id": "21"},
               f"p={p}")
@@ -681,16 +683,16 @@ def test_article_fast_path():
     p = instantiate_plan("read_article", {})
     check("instantiate_plan(read_article, {}) → 零工具（chat 兜底）",
           p is not None and p["tools"] == [] and "article_id" in p["note"], f"p={p}")
-    # plan 往返：快道计划编码 → 解析后 skill/tools 保持（reflector 检查点 1 依赖）
+    # plan 往返：快道计划编码 → 解析后 workflow/tools 保持（reflector 检查点 1 依赖）
     p = _article_fast_path("这篇文章你怎么看", ctx)
     parsed = parse_plan(plan_encode(p))
-    check("read_article 计划往返：skill/tools/chat 正确",
-          parsed["skill"] == "read_article"
+    check("read_article 计划往返：workflow/tools/chat 正确",
+          parsed["workflow"] == "read_article"
           and parsed["tools"] == ['get_article_detail({"article_id": 21})']
           and parsed["chat"] is False,
           f"parsed={parsed}")
     # build_planner_context 不含 read_article（系统快道专用，planner 不可见不可选）
-    from agent.skills import build_planner_context
+    from agent.workflow_menu import build_planner_context
     check("planner 技能表不含 read_article（快道专用，对 planner 不可见）",
           "read_article" not in build_planner_context(), "")
 
@@ -707,7 +709,7 @@ def test_effect_switch_fast_path():
     # 命中：消息点名旧 + 语境一致 → 双 spec（sakura off + rain on）
     p = _effect_switch_fast_path("等等，还是不要樱花了，改成下雨吧", "sakura")
     check("点名旧效果 → 双 spec（off+on 同轮）",
-          p is not None and p["skill"] == "effect" and p["tools"] == [OFF, ON], f"p={p}")
+          p is not None and p["workflow"] == "effect" and p["tools"] == [OFF, ON], f"p={p}")
     # 单字动词"换"命中
     p = _effect_switch_fast_path("不要樱花特效了，换雪", "sakura")
     check("单字'换'命中 → snow 目标双 spec",
@@ -742,7 +744,7 @@ def test_effect_switch_fast_path():
     p = _effect_switch_fast_path("把樱花换成雨", "sakura")
     parsed = parse_plan(plan_encode(p))
     check("双 spec 计划往返：tools 两条原样保留",
-          parsed["tools"] == [OFF, ON] and parsed["skill"] == "effect", f"parsed={parsed}")
+          parsed["tools"] == [OFF, ON] and parsed["workflow"] == "effect", f"parsed={parsed}")
 
 
 def test_explicit_tools():
@@ -794,8 +796,8 @@ def test_explicit_tools():
     obj = instantiate_plan("content_query", {"tools": ["list_guestbook", "list_talks"]})
     obj["params"] = {"tools": ["list_guestbook", "list_talks"]}
     parsed = parse_plan(plan_encode(obj))
-    check("双源计划往返 → skill/tools/chat 正确",
-          parsed["skill"] == "content_query"
+    check("双源计划往返 → workflow/tools/chat 正确",
+          parsed["workflow"] == "content_query"
           and parsed["tools"] == ['list_guestbook({})', 'list_talks({})']
           and parsed["chat"] is False,
           f"parsed={parsed}")
@@ -877,7 +879,7 @@ def test_planner_tool_menu():
     且动作工具结构性不入菜单（越权通道不可存在）。"""
     print("[planner_menu] 菜单 = 白名单 × 注册表")
     import agent.graph as g
-    from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
+    from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
     # 菜单按角色取（20260924）：本段锁的是**公开**那半（role=None ⇒ 保守一侧）
     menu = g._tools_desc(None)
     missing = [t for t in sorted(_CALLABLE_QUERY_TOOLS) if f"- {t}(" not in menu]
@@ -903,7 +905,8 @@ def test_planner_tool_menu():
           "- get_weather(location:str" in menu, f"menu={menu}")
     # 技能描述里的工具枚举与白名单同源（20260924 起按角色渲染，断言**渲染后的**
     # 注入文本——标记漏渲染会让提示词里直接露出占位符）
-    from agent.skills import _EXPLICIT_TOOLS_MARK, _PARAM_TOOLS_MARK, build_planner_context
+    from agent.workflow_menu import build_planner_context
+    from agent.workflow_model import _EXPLICIT_TOOLS_MARK, _PARAM_TOOLS_MARK
     ctx_txt = build_planner_context(None)
     check("描述枚举与白名单同源（渲染后逐项可见）",
           all(t in ctx_txt for t in sorted(_EXPLICIT_TOOLS)),
@@ -932,9 +935,14 @@ def test_admin_console_role_channel():
     print("[admin_channel] 后台读工具按角色进 calls 白名单")
     import agent.authz as authz
     import agent.graph as g
-    from agent.skills import (_ADMIN_QUERY_TOOLS_ORDER, _CALLABLE_QUERY_TOOLS_ORDER,
-                              _EXPLICIT_TOOLS_ORDER, build_planner_context,
-                              callable_query_tools, explicit_tools)
+    from agent.workflow_menu import build_planner_context
+    from agent.workflow_tools import (
+        _ADMIN_QUERY_TOOLS_ORDER,
+        _CALLABLE_QUERY_TOOLS_ORDER,
+        _EXPLICIT_TOOLS_ORDER,
+        callable_query_tools,
+        explicit_tools,
+    )
 
     public = list(_CALLABLE_QUERY_TOOLS_ORDER)
     check("后台读清单非空（派生自 authz 的 admin.console 那族）",
@@ -1086,8 +1094,8 @@ def test_gate_claim_scope():
         调用三族宽查——该场景"本该查证"，误伤成本低（025744「我读完了」实证）"""
     print("[gate] 零帧声称检查作用域（chat 窄 / content_query 宽）")
 
-    def _st(skill, reply):
-        return {"plan": plan_encode(instantiate_plan(skill, {})), "done": False,
+    def _st(workflow, reply):
+        return {**plan_state(instantiate_plan(workflow, {})), "done": False,
                 "plan_rounds": 0,
                 "messages": [HumanMessage(content="显示屏上写点东西"), AIMessage(content=reply)]}
 
@@ -1230,9 +1238,9 @@ def test_gate_cmd_prefix_meta():
         check(f"指令式命令[{why}] → 仍判违规",
               _cmd_prefix_directive(text) is True, text[:36])
 
-    # 端到端：gate 走完整路径（skill/plan 状态齐备）不漏判也不误伤
+    # 端到端：gate 走完整路径（workflow/plan 状态齐备）不漏判也不误伤
     def _st(reply):
-        return {"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+        return {**plan_state(instantiate_plan("chat", {})), "done": False,
                 "plan_rounds": 0,
                 "messages": [HumanMessage(content="agent 怎么防止模型假装调用工具？"),
                              AIMessage(content=reply)]}
@@ -1257,9 +1265,9 @@ def test_gate_frame_checks():
     """
     print("[gate] 有帧轮一致性检查")
 
-    def _st(skill, msgs_after_plan, receipts=None, **plan_kw):
-        plan = plan_encode(instantiate_plan(skill, plan_kw))
-        st = {"plan": plan, "done": False, "plan_rounds": 1,
+    def _st(workflow, msgs_after_plan, receipts=None, **plan_kw):
+        st = {**plan_state(instantiate_plan(workflow, plan_kw)), "done": False,
+              "plan_rounds": 1,
               "messages": [HumanMessage(content="x")] + msgs_after_plan}
         if receipts is not None:
             st["receipts"] = receipts
@@ -1269,7 +1277,7 @@ def test_gate_frame_checks():
         """命令类回执行（命令工具的事实文本已无前缀，判据改读回执里的 cmd）。"""
         cmd = {"kind": kind}
         cmd.update(kw)
-        return {"skill": "navigate", "tool": "navigate_to", "cmd": cmd}
+        return {"workflow": "navigate", "tool": "navigate_to", "cmd": cmd}
 
     # 工具帧 + 到达回复 → 放行（声称有据；无旧"落 LLM 质检"环节）
     # 回复刻意带「已经到」——正是 _NAV_ARRIVAL_RE 会抓的那句，判据必须靠回执里的
@@ -1645,8 +1653,8 @@ def test_gate_claim_holes():
           _CONTENT_TOOLS <= set(_TOOL_MAP), str(sorted(_CONTENT_TOOLS - set(_TOOL_MAP))))
 
     # ── ③ gate 集成：零帧轮 + 有帧轮（混合轮）────────────────────────────
-    def _st(skill, msgs_after_plan, **plan_kw):
-        return {"plan": plan_encode(instantiate_plan(skill, plan_kw)), "done": False,
+    def _st(workflow, msgs_after_plan, **plan_kw):
+        return {**plan_state(instantiate_plan(workflow, plan_kw)), "done": False,
                 "plan_rounds": 1,
                 "messages": [HumanMessage(content="x")] + msgs_after_plan}
 
@@ -1717,7 +1725,7 @@ def test_gate_false_negative_claim():
 
     # ── 治本侧：空结果必须与"没执行"在措辞上分开 ─────────────────────────
     empty_frame = ToolMessage(content="[]", tool_call_id="execute_0", name="search_notes")
-    rc = [{"skill": "content_query", "tool": "search_notes",
+    rc = [{"workflow": "content_query", "tool": "search_notes",
            "args": '{"keyword": "设计文档"}', "result": "[]", "ts": 1.0}]
     check("空帧渲染带「已执行」标记",
           "已执行，结果为空" in _frame_texts([empty_frame]),
@@ -1744,7 +1752,7 @@ def test_gate_false_negative_claim():
 
     # ── gate 集成（5e 分支）─────────────────────────────────────────────
     def _st(msgs, receipts, **plan_kw):
-        return {"plan": plan_encode(instantiate_plan("content_query", plan_kw)), "done": False,
+        return {**plan_state(instantiate_plan("content_query", plan_kw)), "done": False,
                 "plan_rounds": 1, "receipts": receipts,
                 "messages": [HumanMessage(content="x")] + msgs}
 
@@ -1786,9 +1794,9 @@ def test_reply_contract_change_branches():
     这里锁的是**正向**性质（契约里确实写着那条分叉），不写"不许出现某词"的负断言
     ——负断言每遇一次措辞改写就假红一次（本项目的既有教训，见 `DENIAL_FAMILY`）。
     """
-    print("[skills] 写族回复契约按「变化量」分叉")
-    from agent.skills import SKILLS
-    _by = {s.name: s for s in SKILLS}
+    print("[workflows] 写族回复契约按「变化量」分叉")
+    from agent.workflow_defs import WORKFLOWS
+    _by = {s.name: s for s in WORKFLOWS}
     # 技能 → (返回里"真改了"那一支的开头/关键词, "零改动"那一支的开头)
     _CASES = {
         "notice_read": ("已把", "本来就是已读"),
@@ -1819,11 +1827,11 @@ def test_reply_contract_change_branches():
     # 契约一旦写成"返回里印着某句"、而那句根本不会出现，分叉判据就是空转——上面
     # 那三条只证明"契约里有这几个字"，证明不了它们与真实返回同源。所以拿那台
     # 渲染器把三件都渲一遍对着比：契约改字面、或渲染器改措辞，这一条当场红。
-    from agent import adminops as _A
+    from agent import adminops_quota as _quota
     for _kind, _name in (("approve", "quota_approve"), ("reject", "quota_reject"),
                          ("reset", "quota_reset")):
         _live = _CASES[_name][0]
-        _rendered = _A.render_quota_status(_kind, "某人", 5, 500, 0)
+        _rendered = _quota.render_quota_status(_kind, "某人", 5, 500, 0)
         check(f"{_name} 契约里那个「真改了」的头，就是 render_quota_status 真会印的字",
               _live in _rendered, f"{_live!r} vs {_rendered[:46]}")
     # 那两处"最容易读反的读数"必须被点破：成功回执尾巴写的是**改动之后**的剩余数
@@ -1922,8 +1930,8 @@ def test_gate_site_absence_claim():
                                                         "读取文章 12《ESP32-S3 OTA》")]) is False)
 
     # ── gate 集成 ───────────────────────────────────────────────────────
-    def _st(skill, msgs_after_plan, **plan_kw):
-        return {"plan": plan_encode(instantiate_plan(skill, plan_kw)), "done": False,
+    def _st(workflow, msgs_after_plan, **plan_kw):
+        return {**plan_state(instantiate_plan(workflow, plan_kw)), "done": False,
                 "plan_rounds": 1,
                 "messages": [HumanMessage(content="x")] + msgs_after_plan}
 
@@ -1950,7 +1958,7 @@ def test_gate_site_absence_claim():
     nav_reply = "博客里没有写过友链相关的内容啦，这个板块已经下线了喵～"
     check("注记轮回复文本本身会被判据拦（豁免的前提）",
           _site_absence_claim(nav_reply) is True)
-    o4 = gate_node({"plan": plan_encode(nav_plan), "done": False, "plan_rounds": 0,
+    o4 = gate_node({**plan_state(nav_plan), "done": False, "plan_rounds": 0,
                     "messages": [HumanMessage(content="去友链看看"), AIMessage(content=nav_reply)]})
     check("零帧 + navigate 已下线注记轮 → pass（NAV_MAP 事实，豁免生效）",
           o4["done"] is True and not o4.get("fallback_text"), str(o4))
@@ -2126,7 +2134,7 @@ def test_review_inbox_calls_whitelist():
     """`review_inbox.calls` 的**第二道关**：展开层的 `allowed` 白名单（负锁二）。
 
     逐条调用里的工具名由模型写 ⇒ 两道独立防线：schema 的 `enum`（服务端强制，见
-    `tests/test_planner_llm.py`）与 `_expand_change_set` 的 `allowed`（`skill.plan`
+    `tests/test_planner_llm.py`）与 `_expand_change_set` 的 `allowed`（`workflow.plan`
     声明的工具全集）。**任一条不合格 ⇒ 整批零工具**——不是"剔掉那条、办其余几条"：
     一个装了两族的卡上少了一条，主人点"全部办"时看到的件数就是错的。
 
@@ -2135,11 +2143,12 @@ def test_review_inbox_calls_whitelist():
     实际办的件数从此对不上（且不一致的地方正是被剔掉的那条）。
     """
     print("[review_inbox] calls 展开：白名单外一条 ⇒ 整批零工具")
-    from agent.skills import SKILL_MAP, _expand_change_set
+    from agent.workflow_defs import WORKFLOW_MAP
+    from agent.workflow_expand_write import _expand_change_set
 
-    _ri = SKILL_MAP["review_inbox"]
+    _ri = WORKFLOW_MAP["review_inbox"]
     _allowed = {t for t, _ in (_ri.plan or ())}
-    check("白名单来自 `skill.plan`（注册表唯一对应关系）",
+    check("白名单来自 `workflow.plan`（注册表唯一对应关系）",
           _allowed == {"audit_board_comment", "approve_quota_request"}, str(sorted(_allowed)))
 
     _good, _note = _expand_change_set(_ri, {"calls": [
@@ -2321,8 +2330,8 @@ def test_gate_confirm_claim():
           str([t for t, h in _hows.items() if "等他点确认" in h]))
 
     # ── gate 集成：零帧轮 → fallback；改真了的有帧轮同样 fallback ─────────
-    def _mk(skill, msgs_after_plan, **plan_kw):
-        return {"plan": plan_encode(instantiate_plan(skill, plan_kw)), "done": False,
+    def _mk(workflow, msgs_after_plan, **plan_kw):
+        return {**plan_state(instantiate_plan(workflow, plan_kw)), "done": False,
                 "plan_rounds": 1,
                 "messages": [HumanMessage(content="小猫咪按你想法来吧")] + msgs_after_plan}
     o1 = gate_node(_mk("chat", [AIMessage(content=t_1319)]))
@@ -2431,7 +2440,7 @@ def test_gate_ledger_denial():
                         ledger=ledger) or [None])[0] == "ledger_denial")
 
     def _mk(msgs_after_plan, **extra):
-        st = {"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+        st = {**plan_state(instantiate_plan("chat", {})), "done": False,
               "plan_rounds": 1, "messages": [HumanMessage(content="我刚刚点确认了吗")] + msgs_after_plan}
         st.update(extra)
         return st
@@ -2535,7 +2544,7 @@ def test_gate_repeat_reply():
     # 逐条摆文档章节 + 给结论 ⇒ 正是从历史里抄现成答案时最容易被复制的那种回复）
     old = ("喵～这次我**真的去查了**，而且把整篇文档从头到尾扫了一遍 :贴贴: 给你确定的结论："
            "我把这篇文档的 §2、§3.2、§6.5、§8 等所有涉及节点和导航的章节都读完了，"
-           "里面明确写的导航机制是 NAV_MAP——页面别名到真实路径的映射表由 skills.py 单点维护，"
+           "里面明确写的导航机制是 NAV_MAP——页面别名到真实路径的映射表由 workflows.py 单点维护，"
            "planner 只负责选技能与填参数，执行由 execute 节点确定性完成，"
            "所以不存在模型自己拼路径这回事。文档通篇没有出现正则或快速通道这类描述，"
            "也就是说你问的那个东西在现有资料里没有任何文字记录。")
@@ -2580,8 +2589,8 @@ def test_gate_repeat_reply():
           _repeat_of_prev_reply("", old) is False, "")
 
     # ── gate 集成 ───────────────────────────────────────────────────────────
-    def _st(reply, skill="chat", user="小猫咪，我不想去物联网平台", prev=old):
-        return {"plan": plan_encode(instantiate_plan(skill, {})), "done": False,
+    def _st(reply, workflow="chat", user="小猫咪，我不想去物联网平台", prev=old):
+        return {**plan_state(instantiate_plan(workflow, {})), "done": False,
                 "plan_rounds": 1, "receipts": [],
                 "messages": [HumanMessage(content="[System: user_id=1]"),
                              HumanMessage(content="要"), AIMessage(content=prev),
@@ -2596,11 +2605,11 @@ def test_gate_repeat_reply():
                        "跟快道完全两码事，我不拿它顶替回答你的问题喵"))
     check("新内容 → pass（不复读）",
           o2["done"] is True and not o2.get("fallback_text"), str(o2)[:80])
-    o3 = gate_node(_st(old, skill="content_query"))
+    o3 = gate_node(_st(old, workflow="content_query"))
     check("有帧技能同样拦（判据与技能无关）",
           o3["done"] is True and o3.get("fallback_text") == _FALLBACK_REPEAT, str(o3)[:60])
     # 首轮（上下文里没有更早的 AI 消息）→ 无对比对象，放行
-    o4 = gate_node({"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+    o4 = gate_node({**plan_state(instantiate_plan("chat", {})), "done": False,
                     "plan_rounds": 1, "receipts": [],
                     "messages": [HumanMessage(content="[System: x]"),
                                  HumanMessage(content="你好"), AIMessage(content=old)]})
@@ -2699,7 +2708,7 @@ def test_gate_repeat_reply():
 
     # ── gate 集成：距离 2 ────────────────────────────────────────────────
     def _st2(reply, older, newer, user="我有哪些未读通知呀"):
-        return {"plan": plan_encode(instantiate_plan("chat", {})), "done": False,
+        return {**plan_state(instantiate_plan("chat", {})), "done": False,
                 "plan_rounds": 1, "receipts": [],
                 "messages": [HumanMessage(content="[System: user_id=1]"),
                              HumanMessage(content="第一问"), AIMessage(content=older),
@@ -2732,7 +2741,7 @@ def test_execute_node():
     ——planner 决策经 instantiate_plan/白名单（_EXPLICIT_TOOLS/_CALLABLE_QUERY_TOOLS/
     技能模板）生成调用清单，execute 逐条照 spec 字面执行。旧 tools_node 的
     "计划外调用授权拒绝/重试计数/tool_retries"整层删除：model 已零工具、不存在
-    自拟参数调用；越权工具在 skills 白名单就被剥掉，到不了 execute。
+    自拟参数调用；越权工具在 workflows 白名单就被剥掉，到不了 execute。
     spec 契约：<name>(<json>) → 帧 = ToolMessage(content=工具返回, name=name,
     tool_call_id=f"execute_{idx}")。失败不需要重试状态机——execute 产 __ERROR__
     帧，planner 下一轮读帧自己决定修正参数还是如实收尾。"""
@@ -2741,7 +2750,7 @@ def test_execute_node():
     def _run(tools_list):
         obj = instantiate_plan("navigate", {"target": "物联网平台"})
         obj["tools"] = tools_list  # 手工覆盖清单（模拟 planner 决策产物）
-        return execute_node({"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+        return execute_node({**plan_state(obj), "plan_rounds": 1, "done": False,
                              "messages": [HumanMessage(content="带我去设备控制台")]})
 
     # 计划内工具 → 确定性执行（参数照 spec 字面）
@@ -2864,7 +2873,7 @@ def test_refs():
     check("无引用参数 dict → 原样返回",
           R.resolve_args({"page": 1}, td) == ({"page": 1}, None))
 
-    print("[refs] 与既有 `$参数` 语法的分工（skills.instantiate_plan）")
+    print("[refs] 与既有 `$参数` 语法的分工（workflows.instantiate_plan）")
     check("技能模板 `$param` 照旧取 PARAMS（行为不变）",
           'get_article_detail({"article_id": 19})' in
           instantiate_plan("read_article", {"article_id": 19})["tools"],
@@ -2933,25 +2942,27 @@ def test_refs():
                                        "{'noteKey': 14, 'noteTitle': '固件'}]")
     g._TOOL_MAP["fake_read"] = _Fake("{'noteKey': 12, 'noteContent': '正文'}")
 
-    def _plan(tools_list):
+    _msg = [HumanMessage(content="OTA 那篇怎么升级")]
+
+    def _plan(tools_list, **over):
+        """`execute_node` 的入参：计划**两态** + 本轮其余字段（20261017 批 1）。"""
         obj = instantiate_plan("navigate", {"target": "物联网平台"})
-        obj["skill"] = "content_query"
+        obj["workflow"] = "content_query"
         obj["tools"] = tools_list
-        return plan_encode(obj)
+        return {**plan_state(obj), **over}
 
     try:
         # 跨轮：第 1 轮检索 → 第 2 轮用引用读全文（生产主路径）
-        r1 = execute_node({"plan": _plan(['fake_search({"keyword": "ota"})']),
-                           "plan_rounds": 1, "done": False,
-                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        r1 = execute_node(_plan(['fake_search({"keyword": "ota"})'], plan_rounds=1, done=False,
+                                messages=_msg))
         check("轮1：结构化返回入 tool_data（引用取值源）",
               len(r1["tool_data"]) == 1 and r1["tool_data"][0]["tool"] == "fake_search"
               and isinstance(r1["tool_data"][0]["data"], list),
               str(r1["tool_data"])[:120])
         calls.clear()
-        r2 = execute_node({"plan": _plan(['fake_read({"article_id": "$fake_search[0].noteKey"})']),
-                           "plan_rounds": 2, "done": False, "tool_data": r1["tool_data"],
-                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        r2 = execute_node(_plan(['fake_read({"article_id": "$fake_search[0].noteKey"})'],
+                                plan_rounds=2, done=False, tool_data=r1["tool_data"],
+                                messages=_msg))
         check("轮2：引用被解析成真实 id 再调用（不是把 $x[0].y 当参数发出去）",
               calls == [{"article_id": 12}], str(calls))
         check("轮2：回执 args 是解析后值（✅ 过程行可读）",
@@ -2959,17 +2970,15 @@ def test_refs():
               str(r2["receipts"]))
         # 同轮：一条 TOOLS 行里后续 spec 引用前面 spec 的返回（轮内依赖）
         calls.clear()
-        r3 = execute_node({"plan": _plan(['fake_search({"keyword": "ota"})',
-                                          'fake_read({"article_id": "$fake_search[1].noteKey"})']),
-                           "plan_rounds": 1, "done": False,
-                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        r3 = execute_node(_plan(['fake_search({"keyword": "ota"})',
+                                 'fake_read({"article_id": "$fake_search[1].noteKey"})'],
+                                plan_rounds=1, done=False, messages=_msg))
         check("同轮：后一条 spec 能引前一条 spec 的返回（轮内依赖打通）",
               calls == [{"keyword": "ota"}, {"article_id": 14}], str(calls))
         # 失败：引用不可解析 → 该 spec 不执行 + 带原因码错误帧 + blocked 走改参重试
         calls.clear()
-        r4 = execute_node({"plan": _plan(['fake_read({"article_id": "$fake_search[0].noteKey"})']),
-                           "plan_rounds": 1, "done": False,
-                           "messages": [HumanMessage(content="OTA 那篇怎么升级")]})
+        r4 = execute_node(_plan(['fake_read({"article_id": "$fake_search[0].noteKey"})'],
+                                plan_rounds=1, done=False, messages=_msg))
         frm = str(r4["messages"][-1].content)
         check("失败：不执行工具（拿 $x[0].y 当参数去查是更坏的结果）", calls == [], str(calls))
         check("失败：__ERROR__ 帧带原因码",
@@ -3039,7 +3048,7 @@ def test_write_ref_loud():
     saved = g._TOOL_MAP.get("create_tag")
     g._TOOL_MAP["create_tag"] = _Fake()
     try:
-        out = execute_node({"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+        out = execute_node({**plan_state(obj), "plan_rounds": 1, "done": False,
                             "messages": [HumanMessage(content="在标签下面建一个 Rust")]},
                            {"configurable": {"user_id": 0}})
         frm = str(out["messages"][-1].content)
@@ -3052,7 +3061,7 @@ def test_write_ref_loud():
         else:
             g._TOOL_MAP["create_tag"] = saved
 
-    for skill, params, why in [
+    for workflow, params, why in [
             ("tag_create", {"title": "  "}, "缺标签名"),
             ("tag_create", {"title": "X", "color": "天蓝"}, "认不出的颜色（绝不回落哈希）"),
             ("tag_update", {"name": "X"}, "没说要改什么"),
@@ -3062,8 +3071,8 @@ def test_write_ref_loud():
             ("tag_delete", {"name": "  "}, "缺标签名"),
             ("category_create", {"title": ""}, "缺分类名"),
             ("category_delete", {"name": ""}, "缺分类名")]:
-        obj = instantiate_plan(skill, params)
-        check(f"{skill} / {why} → 零工具 + 注记（交给 planner 去追问，不自作主张）",
+        obj = instantiate_plan(workflow, params)
+        check(f"{workflow} / {why} → 零工具 + 注记（交给 planner 去追问，不自作主张）",
               obj["tools"] == [] and obj["note"], f"{obj['tools']} / {obj['note']}")
 
     obj = instantiate_plan("tag_delete", {"name": "Asyncio", "level": "二级"})
@@ -3075,7 +3084,7 @@ def test_write_ref_loud():
     check("写技能里没有任何 $list_tags[N].tagKey 形态的示例可照抄（写轮看不到标签 id）",
           "list_tags[" not in json.dumps(
               {s.name: [d for d in (s.description or "",) + tuple(
-                  str(x) for x in (s.inputs or ()))] for s in SKILL_MAP.values()},
+                  str(x) for x in (s.inputs or ()))] for s in WORKFLOW_MAP.values()},
               ensure_ascii=False))
 
 
@@ -3085,7 +3094,7 @@ def test_tag_create_batch():
     现场：主人说「建两个编程下的这俩二级标签吧」，连着两轮 planner 都只填了
     `title=Git`，第二张卡与第一张**逐字相同**（trace `20261008T065806` /
     `20261008T065826`），主人说「两个你漏了」也没用——因为**契约层根本表达不出
-    "两个"**：`title` 是单数槽位、模板恒一条 spec、`_expand_write_skill` 恒返回
+    "两个"**：`title` 是单数槽位、模板恒一条 spec、`_expand_write_workflow` 恒返回
     一条。漏掉的名字在系统里不留任何痕迹。
 
     现在 `titles`（数组）与 `title` 合并成 N 条同形 spec，N≥2 时下游的现成多 spec
@@ -3093,7 +3102,7 @@ def test_tag_create_batch():
     三件事：**展开成几条**、**每条的名字与共用参数**、**负例不许静默**。
     """
     print("[tag_create_batch] 一次点名多个新标签 → 一名一条 spec（不再只建第一个）")
-    from agent import adminops as _A
+    from agent import adminops_confirm as _confirm
 
     obj = instantiate_plan("tag_create", {"titles": ["Git", "SVN"], "parent_tag": "编程"})
     check("两个名字 → 两条 create_tag spec（顺序照主人说的）",
@@ -3148,7 +3157,7 @@ def test_tag_create_batch():
           obj["tools"] == [] and obj.get("status") == "param_missing", str(obj)[:100])
 
     # 卡面这一层是"一批"给人看的地方：名字逐条印、多件时换「全部办」那一套措辞。
-    card = _A.render_confirm_text([
+    card = _confirm.render_confirm_text([
         {"tool": "create_tag", "args": {"title": "Git", "parent_tag": "编程"}},
         {"tool": "create_tag", "args": {"title": "SVN", "parent_tag": "编程"}}])
     check("卡面把两个名字都印出来（主人核对的就是这一行，少一个名字等于让他盲签）",
@@ -3157,7 +3166,7 @@ def test_tag_create_batch():
           "全部办" in card and "只办第 N 件" in card and "点「确定」" not in card,
           card[:200])
     check("  单件时仍是单件措辞（老语料的话术一个字节没变）",
-          "点「确定」" in _A.render_confirm_text(
+          "点「确定」" in _confirm.render_confirm_text(
               [{"tool": "create_tag", "args": {"title": "Git"}}]))
 
 
@@ -3184,7 +3193,7 @@ def test_todo_line_retired():
     check("读端：parse_plan 不再返回 todo 这一格", "todo" not in parsed, str(sorted(parsed)))
     check("REPLY 仍是末行（没有东西再插在它前面）",
           encoded.rstrip().endswith(obj["reply"]), repr(encoded[-40:]))
-    legacy = parse_plan("SKILL: content_query\nTODO: 1. 读候选全文 → 2. 跳转那篇\nREPLY: r")
+    legacy = parse_plan("WORKFLOW: content_query\nTODO: 1. 读候选全文 → 2. 跳转那篇\nREPLY: r")
     check("老文本里的 TODO 行只被忽略（不复活字段、不污染 REPLY）",
           "todo" not in legacy and legacy["reply"] == "r", str(legacy))
 
@@ -3257,7 +3266,7 @@ def test_checker():
 
 
 def test_execute_receipts_and_route():
-    """execute checker 集成（20260904）：PASS → 累计 receipts（skill/tool/args/result/ts）、
+    """execute checker 集成（20260904）：PASS → 累计 receipts（workflow/tool/args/result/ts）、
     BLOCK → blocked（只含本轮）+ blocked_seen 累计 + blocked_repeat（**「工具::原因码」
     二次受阻** = 首轮改参重试已败/链断）；route_after_execute 据此路由 reflector。
 
@@ -3269,12 +3278,12 @@ def test_execute_receipts_and_route():
     def _st(tools_list, **extra):
         obj = instantiate_plan("navigate", {"target": "物联网平台"})
         obj["tools"] = tools_list
-        base = {"plan": plan_encode(obj), "plan_rounds": 1, "done": False,
+        base = {**plan_state(obj), "plan_rounds": 1, "done": False,
                 "messages": [HumanMessage(content="带我去设备控制台")]}
         base.update(extra)
         return execute_node(base)
 
-    # PASS → receipts 累计（PASS 的工具名在 _check_spec 白名单里）
+    # PASS → receipts 累计（PASS 的工具名在 _check_spec 白名单里；键 `skill` 是帧体键）
     out = _st(['navigate_to({"path": "/device-console/", "confirm": false})'])
     check("PASS → receipts 含验收行", len(out["receipts"]) == 1
           and out["receipts"][0]["tool"] == "navigate_to"
@@ -3340,7 +3349,7 @@ def test_reflector_routes_and_budget():
     print("[reflector] 预算终局 + 路由")
 
     def _st(**extra):
-        base = {"plan": plan_encode({"skill": "navigate", "params": {},
+        base = {**plan_state({"workflow": "navigate", "params": {},
                                      "tools": ['nonsense({"x": 1})'], "note": "n",
                                      "reply": "r"}),
                 "plan_rounds": 1, "done": False, "messages": [],
@@ -3460,7 +3469,7 @@ def test_search_retry_kind():
     rag_b = 'rag_search({"query": "接入指南"})'
     rag_c = 'rag_search({"query": "怎么做"})'
     detail = 'get_article_detail({"article_id": 19})'
-    cq = {"skill": "content_query", "tools": []}
+    cq = {"workflow": "content_query", "tools": []}
     check("首轮 rag 放行", _search_retry_kind(dict(cq, tools=[rag_a]), []) is None)
     check("第 2 次换词放行（已执行 1 次）",
           _search_retry_kind(dict(cq, tools=[rag_b]), [rag_a]) is None)
@@ -3474,7 +3483,7 @@ def test_search_retry_kind():
           _search_retry_kind(dict(cq, tools=['search_notes({"keyword": "x"})']),
                              [rag_a, rag_b]) is None)
     check("非 content_query 不拦",
-          _search_retry_kind({"skill": "chat", "tools": [rag_a]}, [rag_a, rag_b]) is None)
+          _search_retry_kind({"workflow": "chat", "tools": [rag_a]}, [rag_a, rag_b]) is None)
     check("tools 空不拦", _search_retry_kind(dict(cq, tools=[]), [rag_a, rag_b]) is None)
     # 20260913：数据直取工具重复 → data_repeat（无候选可读，收尾如实作答；
     # 不再套用检索族措辞）——白名单补齐站点信息类后实测命中
@@ -3502,7 +3511,7 @@ def test_trim_done_reads():
 
     srv = "get_server_status({})"
     health = "get_service_health({})"
-    ops = {"skill": "ops_report", "tools": [srv, health], "params": {}, "note": "报表"}
+    ops = {"workflow": "ops_report", "tools": [srv, health], "params": {}, "note": "报表"}
 
     out = _trim_done_reads(ops, [rcpt("get_server_status")])
     check("换技能后模板里的已取回件被剔（本次现场）",
@@ -3521,7 +3530,7 @@ def test_trim_done_reads():
 
     # 归一化：只在 JSON 类型上不同的"同一件事"判得出来（旧判据拿 spec 原文比较，
     # 全量 861 条 trace 里"同一篇读两遍"有 5 条正是这种）
-    cq = {"skill": "content_query",
+    cq = {"workflow": "content_query",
           "tools": ['get_article_detail({"article_id": "46", "doc_type": "note"})'],
           "params": {"calls": [{"tool": "get_article_detail",
                                 "args": {"article_id": "46", "doc_type": "note"}}]},
@@ -3533,20 +3542,20 @@ def test_trim_done_reads():
           out3 and out3[0]["params"]["calls"] == [], f"{out3 and out3[0]['params']}")
     check("参数真的变了不剔（换参 = 另一件事）",
           _trim_done_reads(cq, [rcpt("get_article_detail", article_id=47, doc_type="note")]) is None)
-    cq_ref = {"skill": "content_query",
+    cq_ref = {"workflow": "content_query",
               "tools": ['get_article_detail({"article_id": "$search_notes[0].noteKey"})'],
               "params": {}, "note": ""}
     check("$ref 未解析的 spec 不剔（与已解析回执签名不同）",
           _trim_done_reads(cq_ref, [rcpt("get_article_detail", article_id=46, doc_type="note")]) is None)
 
-    # 写族一律不动：写重复可能是"另一件事"（EXECUTED_ONCE_SKILLS 上方的取舍）；
+    # 写族一律不动：写重复可能是"另一件事"（EXECUTED_ONCE_WORKFLOWS 上方的取舍）；
     # device_oled_display 同理（"再显示一次"是新请求，rule 6 要求重发）
     for tool, spec in (("update_category", 'update_category({"name": "x", "new_title": "y"})'),
                        ("delete_tag", 'delete_tag({"name": "x"})'),
                        ("device_oled_display", 'device_oled_display({"text": "hi"})'),
                        ("toggle_effect", 'toggle_effect({"effect": "sakura", "action": "on"})')):
         check(f"写族不剔（{tool}）",
-              _trim_done_reads({"skill": "chat", "tools": [spec], "params": {}, "note": ""},
+              _trim_done_reads({"workflow": "chat", "tools": [spec], "params": {}, "note": ""},
                                [rcpt(tool, **({"name": "x", "new_title": "y"} if tool == "update_category"
                                               else {"name": "x"} if tool == "delete_tag"
                                               else {"text": "hi"} if tool == "device_oled_display"
@@ -3581,7 +3590,7 @@ def test_read_repeat_round():
     _orig_llm = G.get_llm
     try:
         # ① 换技能：点名取回磁盘 → 改选 ops_report（模板固定两件）
-        ops = "SKILL=ops_report\nPARAMS={}\nREPLY: 如实汇报"
+        ops = "WORKFLOW=ops_report\nPARAMS={}\nREPLY: 如实汇报"
         llm = _ScriptedLLM([ops])
         G.get_llm = lambda **kw: llm
         out = planner_node({
@@ -3589,13 +3598,13 @@ def test_read_repeat_round():
                          ToolMessage(content="服务器状态（2026-09-25 00:42）\n- 磁盘 /：可用 10.5 GB",
                                      tool_call_id="execute_0", name="get_server_status")],
             "plan_rounds": 1, "executed": ["get_server_status({})"], "tool_data": [],
-            "receipts": [{"skill": "content_query", "tool": "get_server_status",
+            "receipts": [{"workflow": "content_query", "tool": "get_server_status",
                           "args": {}, "result": "服务器状态…"}],
         }, _cfg)
         plan = parse_plan(out["plan"])
         check("换技能后只补取缺的那件（get_server_status 不重跑）",
               plan["tools"] == ["get_service_health({})"], f"{plan['tools']}")
-        check("  技能仍是 ops_report（只裁剪清单，不改技能）", plan["skill"] == "ops_report")
+        check("  技能仍是 ops_report（只裁剪清单，不改技能）", plan["workflow"] == "ops_report")
         check("  只问 planner 一次", len(llm.prompts) == 1)
 
         # ② 换写法：同一篇的 spec 只在 JSON 类型上不同（旧判据拿原文比较，判不出）
@@ -3606,7 +3615,7 @@ def test_read_repeat_round():
         # 与默认值剔除（计划文本里写了 `doc_type: "note"`，仍与不带它的已执行 spec 认成同一件）。
         # 夹具写成"回执里还留着 doc_type"是**旧渲染**的形态，会与计划侧对不上——
         # 那是夹具过期，不是判据变松。
-        cq = ('SKILL=content_query\n'
+        cq = ('WORKFLOW=content_query\n'
               'PARAMS={"calls": [{"tool": "get_article_detail", '
               '"args": {"article_id": "46", "doc_type": "note"}}]}\n'
               "REPLY: 如实回答")
@@ -3619,7 +3628,7 @@ def test_read_repeat_round():
             "plan_rounds": 1,
             "executed": ['get_article_detail({"article_id": 46})'],
             "tool_data": [],
-            "receipts": [{"skill": "content_query", "tool": "get_article_detail",
+            "receipts": [{"workflow": "content_query", "tool": "get_article_detail",
                           "args": {"article_id": "46"},
                           "result": "{'noteTitle': 'x'}"}],
         }, _cfg)
@@ -3711,7 +3720,7 @@ def test_candidate_relevance_pick():
     kw_spec = 'search_notes({"keyword": "架构"})'
     kw_frame = ToolMessage(content=str(cands), name="search_notes", tool_call_id="t1")
     msgs = [HumanMessage(content="带我去看那篇讲你架构的技术文档文章"), kw_frame]
-    plan_obj = {"skill": "content_query", "tools": [kw_spec]}
+    plan_obj = {"workflow": "content_query", "tools": [kw_spec]}
 
     terms = _search_terms(plan_obj, [kw_spec], "带我去看那篇讲你架构的技术文档文章")
     check("检索实词取 spec 关键词（架构）", "架构" in terms)
@@ -4240,7 +4249,7 @@ def test_short_reply_and_adjacent_pairs():
     # 技能名 ← 计划；类型表 `agent/block_reasons.py`，接线锁在
     # `tests/test_block_reasons.py`）——它按设计让这一条**先红**、再有人复核后加进来。
     check("planner 模板占位符集合与注入点一致（短应答块、台账块、受阻项块、剔空纠偏块、输出契约已接入）",
-          fields == {"skills_context", "tools_desc", "page_ctx", "intent_hints", "doc_anchors",
+          fields == {"workflows_context", "tools_desc", "page_ctx", "intent_hints", "doc_anchors",
                      "round_info", "recent_context", "short_reply_hint", "pending_ledger",
                      "tool_results", "blocked_rows",
                      "ref_hints", "reflector_feedback", "correction",
@@ -4273,7 +4282,8 @@ def test_no_sibling_tool_name_in_user_text():
     """
     import ast, pathlib
     from agent.graph import _TOOL_MAP
-    from agent.skills import SKILLS, _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
+    from agent.workflow_defs import WORKFLOWS
+    from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
     names = set(_TOOL_MAP)
     # 计划不是固定工具序列的技能（chat/content_query 的 TOOLS 行由 PARAMS 动态展开），
     # "本技能计划里会执行哪些工具"在静态上不可判定 ⇒ 用它们自己的可调用白名单当上界
@@ -4281,26 +4291,31 @@ def test_no_sibling_tool_name_in_user_text():
     DYNAMIC = {"chat", "content_query"}
     root = ROOT
 
-    # ① adminops.py：全部字符串字面量（去 docstring、去"整串就是工具名"的比较常量）
-    src = (root / "agent/adminops.py").read_text()
-    tree = ast.parse(src)
-    docstrings = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            doc = ast.get_docstring(node, clean=False)
-            if doc is not None:
-                docstrings.add(doc)
+    # ① adminops 渲染层（20261018 批 3 拆成 8 个域模块）：全部字符串字面量
+    #    （去 docstring、去"整串就是工具名"的比较常量）。
+    #    ⚠️ 取值点**必须扫全部 8 个模块**：只扫其中一个会让另外七个的泄漏静默通过
+    #    ——"判据只覆盖了一部分"正是这条断言要防的形状。
     leaks = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
-            continue
-        s = node.value
-        if s in docstrings or s.strip() in names:
-            continue
-        for n in sorted(names):
-            if n in s:
-                leaks.append(f"adminops.py:{node.lineno} [{n}] {s.strip()[:60]}")
-    check("adminops.py 渲染层无工具名泄漏", not leaks, "；".join(leaks))
+    for _mod in sorted((root / "agent").glob("adminops_*.py")):
+        tree = ast.parse(_mod.read_text(encoding="utf-8"))
+        docstrings = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                doc = ast.get_docstring(node, clean=False)
+                if doc is not None:
+                    docstrings.add(doc)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            s = node.value
+            if s in docstrings or s.strip() in names:
+                continue
+            for n in sorted(names):
+                if n in s:
+                    leaks.append(f"{_mod.name}:{node.lineno} [{n}] {s.strip()[:60]}")
+    check("adminops 渲染层无工具名泄漏（8 个域模块全扫）", not leaks, "；".join(leaks))
+    check("★ 反控：上面那条真的扫到了模块（glob 落空 ⇒ 它恒绿）",
+          len(list((root / "agent").glob("adminops_*.py"))) == 8)
 
     # ② 技能 reply_contract：不许出现兄弟工具名
     #    按**整词**匹配（20260926）：冻结/解冻这对工具名互为子串
@@ -4308,7 +4323,7 @@ def test_no_sibling_tool_name_in_user_text():
     #    的名字"判成"泄漏了兄弟的名字"。`\b` 在 `unfreeze_account` 的那个 freeze
     #    前不成立（前一个字符是词字符 `n`）⇒ 自己的名字不再误红，别人的名字照旧拦。
     bad = []
-    for sk in SKILLS:
+    for sk in WORKFLOWS:
         # "自己的名字" = 模板声明的 ∪ **展开器额外发出的**（`extra_plan_tools`，
         # 20261009 挂标签的先建后挂）。判据的本意是"契约里不许出现**它够不着**的工具名"
         # ——`article_tags` 的契约要如实讲清"站内没有就先建"，而它现在真的会发
@@ -4337,23 +4352,23 @@ def test_site_guide_is_role_rendered():
     角色是唯一开关。
     """
     from agent.context import site_guide
-    from agent.skills import SKILLS, visible_skills
+    from agent.workflow_defs import WORKFLOWS, visible_workflows
     guest, admin = site_guide(None), site_guide("admin")
     # ① 每个"有 capability 且对某角色可见"的技能，其能力行必须出现在该角色的清单里。
     # 20261002 起三个角色各核一遍（原为 None/admin 两档）：`user` 与匿名今天同集，但
     # "今天同集"不是契约——哪天 user 多了一格而渲染没跟上，这里就该红。这也是**能力否定**那
-    # 一族能有的确定性判据：核**清单**（与 `visible_skills` 逐条对齐），不核**回复**
+    # 一族能有的确定性判据：核**清单**（与 `visible_workflows` 逐条对齐），不核**回复**
     # （判据分不出诚实的与胡说的"做不到"，见 tests/test_capability_truth.py 头注）。
-    for s in SKILLS:
+    for s in WORKFLOWS:
         if not s.capability:
             continue
         for role, text in ((None, guest), ("user", site_guide("user")), ("admin", admin)):
-            if s in visible_skills(role):
+            if s in visible_workflows(role):
                 assert s.capability in text, f"清单缺 {s.name} 的能力行（role={role}）"
             else:
                 assert s.capability not in text, f"清单混入 {s.name}（role={role}）"
     # ② 管理能力行的**有无**是两条清单的唯一实质差别：管理员必须有、访客必须没有
-    admin_only = [s.capability for s in visible_skills("admin") if s.roles and s.capability]
+    admin_only = [s.capability for s in visible_workflows("admin") if s.roles and s.capability]
     assert admin_only, "注册表里没有只对 admin 可见的技能——分组判据失效"
     for cap in admin_only:
         assert cap in admin, f"管理员清单缺管理能力: {cap[:16]}"
@@ -4378,12 +4393,12 @@ def test_site_guide_is_role_rendered():
 
 
 def test_site_guide_covers_nav_map():
-    """SITE_GUIDE（访客变体 site_guide(None)）必须覆盖 NAV_MAP 全部存活路径（skills.py 单一事实
-    来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
+    """SITE_GUIDE（访客变体 site_guide(None)）必须覆盖 NAV_MAP 全部存活路径
+    （`workflow_defs/nav.py` 单一事实来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
     trace 190827 实证：能做啥只列 4 项漏 IoT/河灯。20260921 能力清单改按角色渲染后
     此锁仍指向访客变体（管理能力行不得进访客清单，由 test_site_guide_is_role_rendered 锁）。"""
     import agent.graph as g
-    from agent.skills import NAV_MAP
+    from agent.workflow_defs.nav import NAV_MAP
     alive = {p for p in NAV_MAP.values() if p is not None}
     missing = [p for p in sorted(alive) if p not in g.SITE_GUIDE]
     assert not missing, f"SITE_GUIDE 缺板块路径: {missing}"
@@ -4410,7 +4425,7 @@ def test_drop_correction():
     现在的契约：剔空 → 确定性纠偏一次（把"零执行"与工具归属写回给它重决策），
     再剔空 → 确定性如实收尾（零帧轮绝不交给 narrator 自由发挥）。
     三条锁：① 纠偏文本只写机器能保证的事实（工具归属来自注册表、可见性走
-    visible_skills 那唯一一处角色判据）；② 纠偏真的发生且模型看得见（提示词里）；
+    visible_workflows 那唯一一处角色判据）；② 纠偏真的发生且模型看得见（提示词里）；
     ③ 两次都剔空 → 收尾注记带"零执行 + 不许声称"。
     """
     print("[drop_correction] 点名工具被全量剔除后的纠偏重决策")
@@ -4448,11 +4463,11 @@ def test_drop_correction():
     # 20260924 之前这里用的是 `list_admin_notes`：那会儿它对管理员也不在白名单里，
     # 而现在后台读工具已按角色放开（见 test_admin_console_role_channel）⇒ 拿它当
     # 剧本会被放行、纠偏压根不触发。换名字换的是剧本，锁的三条契约一条没动。
-    _DROPPED = ('SKILL=content_query\n'
+    _DROPPED = ('WORKFLOW=content_query\n'
                 'PARAMS={"calls": [{"tool": "navigate_to",'
                 ' "args": {"path": "/guestbook"}}]}\n'
                 "REPLY: 如实回答")
-    _FIXED = ('SKILL=navigate\nPARAMS={"target": "留言板"}\n'
+    _FIXED = ('WORKFLOW=navigate\nPARAMS={"target": "留言板"}\n'
               "REPLY: 好的，带你去留言板")
     _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}
@@ -4504,7 +4519,7 @@ def test_multi_step_intent_correction():
 
       * **门一 · 原地重选**：planner 连选 2 次 / 3 次 / 4 次 navigate，零 EFFECT 帧，
         轮次（MAX_PLAN_ROUNDS=4）被同一件事耗光；
-      * **门二 · 直接收尾**：第 0 轮 navigate 成功，第 1 轮 planner 就 `SKILL=chat`
+      * **门二 · 直接收尾**：第 0 轮 navigate 成功，第 1 轮 planner 就 `WORKFLOW=chat`
         （零工具）收尾，零 EFFECT 帧，回复落成"樱花特效这边没有执行记录"
         （`20260927_035120` 那次，baseline 5 跑 1 败栽在这里）。
 
@@ -4535,9 +4550,9 @@ def test_multi_step_intent_correction():
             self.prompts.append(prompt)
             return toolcall_reply(self.replies.pop(0))
 
-    _NAV = ('SKILL=navigate\nPARAMS={"target": "首页"}\nREPLY: 好的，带你去首页')
-    _CHAT = 'SKILL=chat\nPARAMS={}\nREPLY: 已经带你过去了'
-    _EFF = ('SKILL=effect\nPARAMS={"effect": "sakura", "action": "on"}\n'
+    _NAV = ('WORKFLOW=navigate\nPARAMS={"target": "首页"}\nREPLY: 好的，带你去首页')
+    _CHAT = 'WORKFLOW=chat\nPARAMS={}\nREPLY: 已经带你过去了'
+    _EFF = ('WORKFLOW=effect\nPARAMS={"effect": "sakura", "action": "on"}\n'
             "REPLY: 樱花给你开上了")
     # 第二轮 planner 看到的现场：主人那句含两件动作的话 + 上一轮 navigate 的工具帧。
     _MSGS = [HumanMessage(content="带我过去，然后帮我把樱花打开"),
@@ -4561,7 +4576,7 @@ def test_multi_step_intent_correction():
         check("门一·重复规划已执行过的动作技能 ⇒ 同轮纠偏一次（不是就此放行）",
               len(llm.prompts) == 2, f"llm_calls={len(llm.prompts)}")
         check("  第二版决策真的改了道（navigate → effect）",
-              "SKILL=effect" in out["plan"], out["plan"].splitlines()[0])
+              "WORKFLOW=effect" in out["plan"], out["plan"].splitlines()[0])
         check("  纠偏文本讲的是机器能保证的两件事（已执行过 / 还剩什么）",
               "重复执行不会有新结果" in llm.prompts[1]
               and "effect:sakura=on" in llm.prompts[1])
@@ -4580,9 +4595,9 @@ def test_multi_step_intent_correction():
         out2 = planner_node(dict(_STATE), _CFG)
         plan2 = parse_plan(out2["plan"])
         check("只纠一次：第二次再重复就照原样放行（动作幂等，不夺它的判断）",
-              len(llm2.prompts) == 2 and plan2["skill"] == "navigate"
+              len(llm2.prompts) == 2 and plan2["workflow"] == "navigate"
               and bool(plan2["tools"]),
-              f"llm_calls={len(llm2.prompts)} skill={plan2['skill']} tools={plan2['tools']}")
+              f"llm_calls={len(llm2.prompts)} workflow={plan2['workflow']} tools={plan2['tools']}")
         check("  兜底那一步在 trace 里读得到（`action_repeat_hold`）",
               any(a[:2] == ("planner", "action_repeat_hold") for a, _ in _events),
               str([a[1] for a, _ in _events]))
@@ -4596,7 +4611,7 @@ def test_multi_step_intent_correction():
         check("门二·零工具收尾但清单里还有没做过的动作 ⇒ 同轮纠偏一次",
               len(llm3.prompts) == 2, f"llm_calls={len(llm3.prompts)}")
         check("  第二版决策真的把丢下的那一件捡起来了",
-              "SKILL=effect" in out3["plan"], out3["plan"].splitlines()[0])
+              "WORKFLOW=effect" in out3["plan"], out3["plan"].splitlines()[0])
         check("  纠偏说的是机器能保证的事实（没排工具 / 一次都没执行过 / 还剩什么）",
               "没有排任何工具" in llm3.prompts[1]
               and "一次都没有被执行过" in llm3.prompts[1]
@@ -4641,7 +4656,7 @@ def test_unaccounted_zero_tool_round():
     一路落到 narrator，而 narrator 面对零帧只能说空话（生产现场：15 token 空文本 ⇒
     gate 判 `empty_reply` ⇒ 主人收到罐头句「我刚才好像卡住了」）。
 
-    源头那一层（`skills._instantiate_plan` 汇聚处的 Layer A）已让注册表里的技能**结构上
+    源头那一层（`workflows._instantiate_plan` 汇聚处的 Layer A）已让注册表里的技能**结构上
     产不出**这个形状（派生锁在 `test_status_judgements.py` ④）。这里锁的是**尾巴上那一层**
     （`planner_node` 的 Layer B）——它收的是 Layer A 刻意放过的 `content_query` 空参轮，
     以及任何绕过注册表的产物。三条契约：
@@ -4670,7 +4685,7 @@ def test_unaccounted_zero_tool_round():
     # `content_query` 空参：`plan=[]` 且两个入参都可选 ⇒ 走到尾巴时记账字段全空。
     # **正是 Layer A 硬排除的那一个**（零工具在"已有帧的收尾轮"上合法，
     # 而 `instantiate_plan` 不知道有没有帧）——这个分岔只能在这里按 has_frames 兜。
-    _EMPTY_CQ = ('SKILL=content_query\nPARAMS={}\nREPLY: 直接回答')
+    _EMPTY_CQ = ('WORKFLOW=content_query\nPARAMS={}\nREPLY: 直接回答')
     _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}
     _orig_llm = G.get_llm
@@ -4715,7 +4730,7 @@ def test_unaccounted_zero_tool_round():
         #    248 字，**逐字复读了三轮之前那一轮的回复**（LCS=248/248），其中「待审 0 条」
         #    与它自己刚取回的帧「待审 1 条」当场矛盾。见 `planner_node` 那段长注与
         #    `_CARRY_NOTE`。
-        llm3 = _ScriptedLLM(['SKILL=chat\nPARAMS={}\nREPLY: 直接回答'])
+        llm3 = _ScriptedLLM(['WORKFLOW=chat\nPARAMS={}\nREPLY: 直接回答'])
         G.get_llm = lambda **kw: llm3
         out3 = planner_node({
             "messages": [HumanMessage(content="猫咪目前有什么待办吗"),
@@ -4734,7 +4749,7 @@ def test_unaccounted_zero_tool_round():
         G.get_llm = _orig_llm
 
 
-def test_calls_in_wrong_skill_round():
+def test_calls_in_wrong_workflow_round():
     """点名写进了不读清单的技能 → 记账 + 同轮纠偏（20260925 批 C）。
 
     **要治的洞**：`instantiate_plan` 里只有 `content_query` 分支读
@@ -4752,11 +4767,13 @@ def test_calls_in_wrong_skill_round():
     首轮纠偏一次、再写成 chat 就确定性收尾且注记写明零执行（房子规矩：分支走通了
     不等于收尾路径走通了，20260922 的 KeyError('params') 就是这么漏的）。
     """
-    print("[calls_in_wrong_skill] 点名写进不读清单的技能 → 记账 + 纠偏")
+    print("[calls_in_wrong_workflow] 点名写进不读清单的技能 → 记账 + 纠偏")
     import agent.graph as G
     from agent.graph import _drop_correction, parse_plan, planner_node
     from agent.principal import Principal
-    from agent.skills import DROP_SUFFIX_SKILL_NO_CALLS
+    # 常量的家是 `agent.workflow_model`（批 2 刀 2a 下沉层），刀 2d 之后
+    # 收尾刀把 `agent/workflows.py` 整块删掉 ⇒ 取值点跟着定义走。
+    from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
 
     _CALLS = [{"tool": "list_notes", "args": {"limit": 5}}]
     # ① 记账 + 后缀（三种技能各测一遍：chat 走通用分支、navigate 有自己分支、
@@ -4765,21 +4782,21 @@ def test_calls_in_wrong_skill_round():
                       ("read_article", {"article_id": 12})):
         p = instantiate_plan(sk, dict(extra, calls=_CALLS, tools=["list_notes"]))
         check(f"{sk}：点名进了 dropped 且带专属后缀",
-              p["dropped"] == [f"list_notes{DROP_SUFFIX_SKILL_NO_CALLS}{sk}："
+              p["dropped"] == [f"list_notes{DROP_SUFFIX_WORKFLOW_NO_CALLS}{sk}："
                                "该技能的模板不执行 PARAMS.tools/PARAMS.calls）"],
               f"dropped={p['dropped']}")
         check(f"  {sk}：同一工具写在 tools 与 calls 里只记一次", len(p["dropped"]) == 1)
     # ② 话术：讲"写错了地方"并给出改法；不得出现"够不到这个工具"
     hint = _drop_correction(instantiate_plan("chat", {"calls": _CALLS})["dropped"], None)
     check("纠偏文本讲的是「写错了地方」+ 改法（换成 content_query）",
-          "写错了地方" in hint and "SKILL=content_query" in hint, hint[:160])
+          "写错了地方" in hint and "WORKFLOW=content_query" in hint, hint[:160])
     check("  不把这条说成「够不到这个工具」（那是假话：工具他够得着）",
           "够不到" not in hint)
     # ③ content_query 不受影响（它才是读清单的那条通道）
     cq = instantiate_plan("content_query", {"tools": ["list_guestbook"]})
     check("content_query 照常执行点名、不被记成写错技能",
           cq["tools"] == ["list_guestbook({})"]
-          and not any(DROP_SUFFIX_SKILL_NO_CALLS in d for d in cq["dropped"]),
+          and not any(DROP_SUFFIX_WORKFLOW_NO_CALLS in d for d in cq["dropped"]),
           f"tools={cq['tools']} dropped={cq['dropped']}")
     # ④ 整轮：纠偏一次 → 仍写错 → 确定性收尾（零工具 + 注记写零执行）
     class _ScriptedLLM:
@@ -4792,15 +4809,15 @@ def test_calls_in_wrong_skill_round():
             self.prompts.append(prompt)
             return toolcall_reply(self.replies.pop(0))
 
-    _WRONG = ('SKILL=chat\nPARAMS={"calls": [{"tool": "list_notes", "args": {"limit": 5}}]}\n'
+    _WRONG = ('WORKFLOW=chat\nPARAMS={"calls": [{"tool": "list_notes", "args": {"limit": 5}}]}\n'
               "REPLY: 我查查")
-    _FIXED = ('SKILL=content_query\nPARAMS={"tools": ["list_categories"],'
+    _FIXED = ('WORKFLOW=content_query\nPARAMS={"tools": ["list_categories"],'
               ' "calls": [{"tool": "get_article_detail", "args": {"article_id": 12}}]}\n'
               "REPLY: 这是最近的几篇")
     _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                              "user_id": 7, "conversation_id": 42, "stop_event": None}}
     # ⚠️ 这一句**刻意不是**数据型问句（原先写的是「最近有哪些文章呀」，20261004 改）：
-    # 那句会命中 `authz.is_site_corpus_question`，于是第一次 `SKILL=chat` 零工具会被
+    # 那句会命中 `authz.is_site_corpus_question`，于是第一次 `WORKFLOW=chat` 零工具会被
     # **上一层**的 `data_question_no_tool` 纠偏接走（见 `graph.planner_node`），
     # 第二次提示词里进的是那条纠偏文本而**不是** `_drop_correction` —— 本节要验的
     # "写错了地方"就看不见了（用例红得有理，但红的原因不是它要验的那条路）。
@@ -4861,7 +4878,7 @@ def test_write_target_refusal_round():
             self.prompts.append(prompt)
             return toolcall_reply(self.replies.pop(0))
 
-    _WRITE = ('SKILL=tag_update\n'
+    _WRITE = ('WORKFLOW=tag_update\n'
               'PARAMS={"name": "绝对不存在的标签名xyz", "parent_tag": "编程"}\n'
               "REPLY: 如实回答")
     _cfg = {"configurable": {"principal": Principal(uid=7, role="admin"),
@@ -4902,7 +4919,7 @@ def test_write_target_refusal_round():
         # 预检（不传 ⇒ 校正永远不发生，而纯函数全绿也看不出来）。形态：「主人自己说的
         # 就是短的那一截」，台账里只有一条以它开头。
         TB._tag_index = lambda config: {3: _Tag(3, "大笨狗汪汪", 1)}
-        _llm_fix = _ScriptedLLM(['SKILL=tag_delete\nPARAMS={"name": "大笨狗"}\n'
+        _llm_fix = _ScriptedLLM(['WORKFLOW=tag_delete\nPARAMS={"name": "大笨狗"}\n'
                                  "REPLY: 如实回答"])
         G.get_llm = lambda **kw: _llm_fix
         out_fix = planner_node({"messages": [HumanMessage(content="那把「大笨狗」删了吧")],
@@ -4978,7 +4995,7 @@ def test_write_grounding_round():
         # （`talk_id`），不再有"按正文片段指认"这一步，所以它不该再出现在这条判据里
         # （`_board_quote_fix` 收窄成 delete-only，见那里的注释）。
         _msg = "帮我把那条写着「泠月喵真棒！」的留言删掉吧，看着有点乱"
-        llm = _ScriptedLLM(['SKILL=board_delete\n'
+        llm = _ScriptedLLM(['WORKFLOW=board_delete\n'
                             'PARAMS={"quote": "有点乱"}\n'
                             "REPLY: 如实回答"])
         G.get_llm = lambda **kw: llm
@@ -5003,7 +5020,7 @@ def test_write_grounding_round():
         # ①b 截短形态（实测填「好笨」/「泠月」）→ 校正回完整那一段
         TB._board_index = lambda config: {45: _Row(
             {"talkKey": 45, "content": "泠月喵好笨啊", "author": "访客", "approved": 1})}
-        llm2 = _ScriptedLLM(['SKILL=board_delete\n'
+        llm2 = _ScriptedLLM(['WORKFLOW=board_delete\n'
                              'PARAMS={"quote": "泠月"}\nREPLY: 如实回答'])
         G.get_llm = lambda **kw: llm2
         out2 = planner_node({"messages": [HumanMessage(
@@ -5016,7 +5033,7 @@ def test_write_grounding_round():
         # ①c planner 把片段**整丢了**、零工具追问（实测 2/10：主人引号里明明有原话）
         TB._board_index = lambda config: dict(BOARD)  # ①b 换成了「好笨」那条，这里换回来
         for _sk, _rep, _want in (
-            ("board_delete", 'SKILL=board_delete\nPARAMS={}\n'
+            ("board_delete", 'WORKFLOW=board_delete\nPARAMS={}\n'
                              "NOTE: 缺少指认用的正文片段（quote）：不调用任何工具，"
                              "如实向主人问清说的是哪一条留言\nREPLY: 问清哪一条", "delete_board_comment"),
         ):
@@ -5030,7 +5047,7 @@ def test_write_grounding_round():
                   "泠月喵真棒！" in _spec_c and _want in _spec_c, _spec_c[:120])
 
         # ①d 补参只在首轮：看到工具帧之后 planner 决定"问一句"是对的不该被覆盖
-        llm_d = _ScriptedLLM(['SKILL=board_delete\nPARAMS={}\n'
+        llm_d = _ScriptedLLM(['WORKFLOW=board_delete\nPARAMS={}\n'
                               "NOTE: 站内有两条都含这段，问清是哪一条\nREPLY: 问清哪一条"])
         G.get_llm = lambda **kw: llm_d
         out_d = planner_node({"messages": [HumanMessage(content=_msg)],
@@ -5040,7 +5057,7 @@ def test_write_grounding_round():
               str(parse_plan(out_d["plan"])["tools"]))
 
         # ② 连引号都没有、值也不在原话里（描述被抄成参数值）→ 零写 + 如实收尾
-        llm3 = _ScriptedLLM(['SKILL=board_delete\n'
+        llm3 = _ScriptedLLM(['WORKFLOW=board_delete\n'
                              'PARAMS={"quote": "河灯留言正文里的一段原话（原样抄）"}\n'
                              "REPLY: 如实回答"])
         G.get_llm = lambda **kw: llm3
@@ -5177,7 +5194,7 @@ def test_announcement_text_round():
     _MSG = "帮我发一条公告，标题叫「今晚维护」，正文写：今晚 23 点开始维护"
     try:
         # ①a 名词被当成参数值（实测形态）
-        llm = _ScriptedLLM(['SKILL=announcement_create\n'
+        llm = _ScriptedLLM(['WORKFLOW=announcement_create\n'
                             'PARAMS={"title": "公告", "content": "公告"}\n'
                             "REPLY: 如实回答"])
         G.get_llm = lambda **kw: llm
@@ -5193,7 +5210,7 @@ def test_announcement_text_round():
         check("  只问 planner 一次（确定性校正，不重决策）", len(llm.prompts) == 1)
 
         # ①b 自撰文案（实测另一跑）→ 同样让位给主人的原话
-        llm2 = _ScriptedLLM(['SKILL=announcement_create\n'
+        llm2 = _ScriptedLLM(['WORKFLOW=announcement_create\n'
                              'PARAMS={"title": "维护通知", '
                              '"content": "系统将于今晚进行例行维护，敬请谅解。"}\n'
                              "REPLY: 如实回答"])
@@ -5205,7 +5222,7 @@ def test_announcement_text_round():
               "今晚维护" in _spec2 and "敬请谅解" not in _spec2, _spec2[:160])
 
         # ② 没有标记 → 不动手（措辞由 planner 组织是合理的，弹窗照旧让主人过目）
-        llm3 = _ScriptedLLM(['SKILL=announcement_create\n'
+        llm3 = _ScriptedLLM(['WORKFLOW=announcement_create\n'
                              'PARAMS={"title": "维护通知", "content": "今晚维护一下"}\n'
                              "REPLY: 如实回答"])
         G.get_llm = lambda **kw: llm3
@@ -5217,7 +5234,7 @@ def test_announcement_text_round():
 
         # ①c 改/删公告的 title 是**要动的那条**的身份：唯一一段引号就是它
         #     （实测：「要删掉的那条公告的标题」——描述里的占位符被原样填进参数）
-        llm_d = _ScriptedLLM(['SKILL=announcement_delete\n'
+        llm_d = _ScriptedLLM(['WORKFLOW=announcement_delete\n'
                               'PARAMS={"title": "要删掉的那条公告的标题"}\n'
                               "REPLY: 如实说"])
         G.get_llm = lambda **kw: llm_d
@@ -5230,7 +5247,7 @@ def test_announcement_text_round():
               _n_d[:120])
 
         # ③ update 的 title 是要改的那条的身份，不许被「标题叫 X」带走
-        llm4 = _ScriptedLLM(['SKILL=announcement_update\n'
+        llm4 = _ScriptedLLM(['WORKFLOW=announcement_update\n'
                              'PARAMS={"title": "公告", "new_title": "维护通知", '
                              '"content": "今晚 23 点开始维护"}\nREPLY: 如实回答'])
         G.get_llm = lambda **kw: llm4
@@ -5286,7 +5303,7 @@ def test_name_target_round():
         TB._tag_index = lambda config: {}
 
         # ① 抄短（实测两跑分别填「绝对」「标签名」）→ 校正回完整那一段
-        llm = _ScriptedLLM(['SKILL=tag_update\n'
+        llm = _ScriptedLLM(['WORKFLOW=tag_update\n'
                             'PARAMS={"name": "绝对", "parent_tag": "编程"}\n'
                             "REPLY: 如实回答"])
         G.get_llm = lambda **kw: llm
@@ -5310,7 +5327,7 @@ def test_name_target_round():
 
         TB._tag_index = lambda config: {1: _Tag(1, "编程", 1),
                                         2: _Tag(2, "Asyncio", 2, 1)}
-        llm2 = _ScriptedLLM(['SKILL=tag_update\n'
+        llm2 = _ScriptedLLM(['WORKFLOW=tag_update\n'
                              'PARAMS={"name": "Asyncio", "parent_tag": "编程"}\n'
                              "REPLY: 如实回答"])
         G.get_llm = lambda **kw: llm2
@@ -5325,7 +5342,7 @@ def test_name_target_round():
         # ③ 两段引号：靠 planner 填的父标签名归位，另一段是目标
         TB._tag_index = lambda config: {1: _Tag(1, "编程", 1),
                                         2: _Tag(2, "随手记", 2, 1)}
-        llm3 = _ScriptedLLM(['SKILL=tag_update\n'
+        llm3 = _ScriptedLLM(['WORKFLOW=tag_update\n'
                              'PARAMS={"name": "测试", "parent_tag": "编程"}\n'
                              "REPLY: 如实回答"])
         G.get_llm = lambda **kw: llm3
@@ -5340,7 +5357,7 @@ def test_name_target_round():
         # ③b 连 parent_tag 都没填、名字是它自己编的（实测另一跑填「未命名标签」）：
         #     这时 planner 的参数已经认不出目标，只有**语序**还认得出
         #     （"挪到「编程」下面"里的「编程」是父，另一段才是目标）
-        llm3b = _ScriptedLLM(['SKILL=tag_update\n'
+        llm3b = _ScriptedLLM(['WORKFLOW=tag_update\n'
                               'PARAMS={"name": "未命名标签", "to_level": "two"}\n'
                               "REPLY: 如实回答"])
         G.get_llm = lambda **kw: llm3b
@@ -5354,8 +5371,8 @@ def test_name_target_round():
 
         # ④a 写形态却零工具（实测 2/8：planner 写下"先问主人"，这一轮什么都不发生）
         llm4 = _ScriptedLLM([
-            'SKILL=chat\nPARAMS={}\nREPLY: 您想挪哪个标签呀？',
-            'SKILL=tag_update\n'
+            'WORKFLOW=chat\nPARAMS={}\nREPLY: 您想挪哪个标签呀？',
+            'WORKFLOW=tag_update\n'
             'PARAMS={"name": "绝对不存在的标签名xyz", "parent_tag": "编程"}\n'
             "REPLY: 如实回答"])
         G.get_llm = lambda **kw: llm4
@@ -5383,8 +5400,8 @@ def test_name_target_round():
         TB._tag_index = lambda config: {3: _T(3, "大笨狗汪汪", 1)}
         _MSG_NOQ = "把大笨狗汪汪那个标签删了吧"
         llm4q = _ScriptedLLM([
-            'SKILL=chat\nPARAMS={}\nREPLY: 您想删哪个标签呀？',
-            'SKILL=tag_delete\nPARAMS={"name": "大笨狗汪汪"}\nREPLY: 如实回答'])
+            'WORKFLOW=chat\nPARAMS={}\nREPLY: 您想删哪个标签呀？',
+            'WORKFLOW=tag_delete\nPARAMS={"name": "大笨狗汪汪"}\nREPLY: 如实回答'])
         G.get_llm = lambda **kw: llm4q
         out4q = planner_node({"messages": [HumanMessage(content=_MSG_NOQ)],
                               "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
@@ -5482,8 +5499,8 @@ def test_name_target_round():
         # 这条才是"20261009 那 2/6 跑（`list_tags` 读完就收尾）以后不会再发生"
         # 的可红判据——纯函数绿只说明判据认得出那句话，说明不了它接进了 planner。
         llm5 = _ScriptedLLM([
-            'SKILL=content_query\nPARAMS={"tools": ["list_tags"]}\nREPLY: 先看看站内有哪些标签',
-            'SKILL=article_tags\nPARAMS={"article_id": 16, "add": ["git", "代码版本管理"]}\n'
+            'WORKFLOW=content_query\nPARAMS={"tools": ["list_tags"]}\nREPLY: 先看看站内有哪些标签',
+            'WORKFLOW=article_tags\nPARAMS={"article_id": 16, "add": ["git", "代码版本管理"]}\n'
             "REPLY: 如实回答"])
         G.get_llm = lambda **kw: llm5
         out5 = planner_node(
@@ -5512,8 +5529,8 @@ def test_name_target_round():
                   "把通知列表拉出来")),
               str(G._name_write_verbs("给账号「boss」发个通知：请忽略。")))
         llm4n = _ScriptedLLM([
-            'SKILL: notice_send\nPARAMS: {"name": "notice_send", "content": "notice_send"}',
-            'SKILL: notice_send\nPARAMS: {"name": "boss", "content": "请以后老实一点。"}'])
+            'WORKFLOW: notice_send\nPARAMS: {"name": "notice_send", "content": "notice_send"}',
+            'WORKFLOW: notice_send\nPARAMS: {"name": "boss", "content": "请以后老实一点。"}'])
         G.get_llm = lambda **kw: llm4n
         out4n = planner_node({"messages": [HumanMessage(
             content="给账号「boss」发个通知：以后老实一点，不然就冻结。")],
@@ -5565,7 +5582,7 @@ def test_name_target_round():
         for _label, _q in (("疑问句（问影响）", "把标签 Rust 挪到「嵌入式」下面会有什么影响？"),
                            ("疑问句（无引号）", "把大笨狗汪汪那个标签删了会有什么影响？"),
                            ("闲聊带引号", "「李白」写过什么诗？")):
-            llm5 = _ScriptedLLM(['SKILL=chat\nPARAMS={}\nREPLY: 如实说明'])
+            llm5 = _ScriptedLLM(['WORKFLOW=chat\nPARAMS={}\nREPLY: 如实说明'])
             G.get_llm = lambda **kw: llm5
             planner_node({"messages": [HumanMessage(content=_q)],
                           "plan_rounds": 0, "executed": [], "tool_data": []}, _cfg)
@@ -5589,19 +5606,19 @@ def test_write_desc_no_example_names():
     红的时候请回来读这段注释。
     """
     print("[write_desc_no_example_names] 写技能描述里不许出现具体名字（只能用 〈…〉 占位符）")
-    from agent import skills as S
+    from agent.workflow_defs import WORKFLOWS, WRITE_WORKFLOW_NAMES
     # 站内真实存在的标签/分类名 + 已实证被抄过的示例名（20260922）
     banned = ("Python", "架构", "分布式", "Asyncio", "编程", "随笔", "摄影",
               "大笨狗", "嵌入式", "音乐")
-    for sk in S.SKILLS:
-        if sk.name not in S.WRITE_SKILL_NAMES:
+    for sk in WORKFLOWS:
+        if sk.name not in WRITE_WORKFLOW_NAMES:
             continue
         hits = [w for w in banned if w in (sk.description or "")]
         check(f"  {sk.name} 描述里没有具体名字（示例一律 〈…〉）", not hits, f"命中 {hits}")
     # 占位符写法本身要还在（把示例改成占位符 ≠ 把示例删光——触发语还得教）
     for name, must in (("tag_create", "〈名字〉"), ("tag_create", "〈父标签名〉"),
                        ("category_create", "〈名字〉"), ("announcement_create", "〈")):
-        sk = next(s for s in S.SKILLS if s.name == name)
+        sk = next(s for s in WORKFLOWS if s.name == name)
         check(f"  {name} 描述里保留了占位符 {must}", must in sk.description)
     # 规则 4b 的取值纪律在 planner prompt 里（描述之外的第二道）
     import agent.graph as G
@@ -5624,8 +5641,8 @@ def test_write_desc_no_example_names():
     # 判据是形态而不是取值：`文章<数字>` 一律换成 〈id〉——id 是**每轮现取**的
     # （页面上下文 / 本轮工具帧 / 主人原话），任何写死在提示词里的号都是错的。
     _id_re = re.compile(r"文章\s*[0-9]+")
-    for sk in S.SKILLS:
-        if sk.name not in S.WRITE_SKILL_NAMES:
+    for sk in WORKFLOWS:
+        if sk.name not in WRITE_WORKFLOW_NAMES:
             continue
         m = _id_re.search(sk.description or "")
         check(f"  {sk.name} 描述里没有写死的文章 id 举例", m is None, m.group(0) if m else "")
@@ -5675,13 +5692,13 @@ def test_write_intent_never_expressed_round():
     _MSG = "测试公告清除了吧"
     # 只读清单 + 动作词（词形族认「清除」）——**两种形态都要纠**：首轮如此，见过帧的
     # 轮次同样如此（实测现场正是第 2 轮：planner 把上一轮那份读又排了一遍）
-    _READ_PLAN = ('SKILL=content_query\nPARAMS={"tools": ["get_announcements"]}\n'
+    _READ_PLAN = ('WORKFLOW=content_query\nPARAMS={"tools": ["get_announcements"]}\n'
                   "REPLY: 如实回答")
     _frame = ToolMessage(content='[{"id": 3, "title": "随便发一条公告"}]',
                          tool_call_id="execute_0", name="get_announcements")
     try:
         # ① 首轮：零工具那一支（既有行为不许被这次扩面改动）
-        llm0 = _ScriptedLLM(['SKILL=chat\nPARAMS={}\nREPLY: 您想删哪条公告呀？', _READ_PLAN])
+        llm0 = _ScriptedLLM(['WORKFLOW=chat\nPARAMS={}\nREPLY: 您想删哪条公告呀？', _READ_PLAN])
         G.get_llm = lambda **kw: llm0
         planner_node({"messages": [HumanMessage(content=_MSG)], "plan_rounds": 0,
                       "executed": [], "tool_data": []}, _cfg)
@@ -5724,7 +5741,7 @@ def test_write_intent_never_expressed_round():
         # ⑥ 提问句/闲聊的两道原有前提在这次扩面后仍然生效
         for _label, _t in (("提问句", "把那个公告删了会有什么影响？"),
                            ("纯查询（无动作词）", "看看站里有什么公告")):
-            llm2 = _ScriptedLLM(['SKILL=content_query\nPARAMS={}\nREPLY: 如实回答'])
+            llm2 = _ScriptedLLM(['WORKFLOW=content_query\nPARAMS={}\nREPLY: 如实回答'])
             G.get_llm = lambda **kw: llm2
             planner_node({"messages": [HumanMessage(content=_t)], "plan_rounds": 0,
                           "executed": [], "tool_data": []}, _cfg)
@@ -5734,9 +5751,10 @@ def test_write_intent_never_expressed_round():
 
 
 def main():
-    for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_skills, test_summary_protocol_removed,
+    for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_workflows,
+               test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip,
-               test_plan_skill_line_contract, test_parse_tolerance,
+               test_plan_workflow_line_contract, test_parse_tolerance,
                test_nav_fast_path, test_nav_fast_path_item_referent_guard,
                test_dashboard_nav_expansion,
                test_fast_path_shell_transparency,
@@ -5766,7 +5784,7 @@ def main():
                test_site_guide_covers_nav_map, test_drop_correction,
                test_multi_step_intent_correction,
                test_unaccounted_zero_tool_round,
-               test_calls_in_wrong_skill_round,
+               test_calls_in_wrong_workflow_round,
                test_write_target_refusal_round, test_write_grounding_round,
                test_write_ledger_note_round,
                test_announcement_text_round, test_name_target_round,

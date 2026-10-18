@@ -51,10 +51,10 @@ import agent.graph as G  # noqa: E402
 from agent.graph import (  # noqa: E402
     _FALLBACK_CMD_PREFIX, _FALLBACK_CMD_PREFIX_DONE, _FALLBACK_NAV_NO_FRAME,
     _cmd_prefix_corroborated, _cmd_prefix_fallback_text, _cmd_wire, _cmd_wires,
-    _claim_issue, _live_page_path, gate_node, parse_plan, plan_encode, planner_node,
+    _claim_issue, _live_page_path, gate_node, parse_plan, plan_encode, plan_state, planner_node,
 )
 from agent.principal import Principal  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
 FAILS: list[str] = []
@@ -78,7 +78,7 @@ D1_NAV_CMD = {"kind": "navigate", "url": "https://saudade.site/article/46", "mod
 
 def _nav_receipt(cmd=D1_NAV_CMD):
     """checker PASS 后落到 state["receipts"] 的那一行（命令在 cmd 字段里）。"""
-    return {"skill": "navigate", "tool": "navigate_to", "cmd": cmd}
+    return {"workflow": "navigate", "tool": "navigate_to", "cmd": cmd}
 
 
 # ── D4 洞⑪ 现场（trace 20261002T020256，逐字）──────────────────────────────
@@ -99,7 +99,7 @@ def _sys_msg(ctx=D4_PAGE_CTX):
 def _chat_state(msgs, **kw):
     """零帧 chat 轮的 gate 输入（洞⑪ 的判据只跑在零帧族里）。`gate_replan=True`
     = 重规划那次已经用掉 ⇒ 打回走确定性兜底，断言能直接读到兜底文本。"""
-    st = {"plan": plan_encode(instantiate_plan("chat", {})), "messages": msgs,
+    st = {**plan_state(instantiate_plan("chat", {})), "messages": msgs,
           "done": False, "plan_rounds": 2, "gate_replan": True}
     st.update(kw)
     return st
@@ -127,9 +127,9 @@ class _ScriptedLLM:
 def test_param_problem_corrected_in_round():
     """① planner 侧：参数不齐 ⇒ 同轮纠偏一次；仍不齐 ⇒ 确定性收口（不给 narrator）。"""
     print("[param_problem] 参数不齐的同轮纠偏与确定性收口（D1 现场形状）")
-    nav_bad = ("SKILL=navigate\nPARAMS={}\n"
+    nav_bad = ("WORKFLOW=navigate\nPARAMS={}\n"
                "REPLY: 直接带主人过去，简单确认一句")
-    nav_ok = ('SKILL=navigate\nPARAMS={"target": "/article/46"}\n'
+    nav_ok = ('WORKFLOW=navigate\nPARAMS={"target": "/article/46"}\n'
               "REPLY: 简短确认")
     _orig = G.get_llm
     try:
@@ -164,8 +164,8 @@ def test_param_problem_corrected_in_round():
         }, _cfg())
         plan2 = parse_plan(out2["plan"])
         check("两次都不齐 → 确定性收口（不再交给 narrator 自由发挥）",
-              plan2["tools"] == [] and plan2["skill"] == "content_query",
-              f'{plan2["skill"]} {plan2["tools"]}')
+              plan2["tools"] == [] and plan2["workflow"] == "content_query",
+              f'{plan2["workflow"]} {plan2["tools"]}')
         check("  注记写明这一轮零执行 + 禁止声称（已经带你到/已经跳转…）",
               "没有执行任何工具" in plan2["note"] and "不许" in plan2["note"],
               plan2["note"][:80])
@@ -187,8 +187,8 @@ def test_param_problem_corrected_in_round():
         out3 = planner_node({"messages": [HumanMessage(content="随便带我去一篇文章吧")],
                              "plan_rounds": 1}, _cfg())
         plan3 = parse_plan(out3["plan"])
-        check("零帧形态：chat 收口（skill=chat）", plan3["skill"] == "chat",
-              plan3["skill"])
+        check("零帧形态：chat 收口（workflow=chat）", plan3["workflow"] == "chat",
+              plan3["workflow"])
         check("  注记要点主人补信息、且明说「本轮一个工具都没有执行」",
               "本轮一个工具都没有执行" in plan3["note"]
               and "问一遍" in plan3["note"], plan3["note"][:80])
@@ -251,7 +251,7 @@ def test_gate_nav_arrival_without_nav_frame():
 # 主人上一轮拿到《…架构文档》的直达链接（`/article/19`），接着只说了三个字「带我过去」。
 # 计划落到 chat/answer_only（planner 两次零调用），narrator 于是写下
 # 「马上带你去我的设计文档那一篇…页面这就过去喵！」——本轮**一条导航命令都没有**。
-# 两处修：判据（承诺式，现家 `_nav_no_frame_clause`；原 5b2 写死 skill==navigate
+# 两处修：判据（承诺式，现家 `_nav_no_frame_clause`；原 5b2 写死 workflow==navigate
 # ⇒ 这一轮整条判据一次都没跑）与能力（指代型导航快道，零 LLM 把上一轮那条唯一
 # 站内链接做成 navigate 计划）。
 _PREV_WITH_LINK = ("找到啦妈妈～我的设计文档就是这一篇：\n"
@@ -388,7 +388,7 @@ def test_referent_nav_fast_path():
               str(len(llm.prompts)))
 
         # 唯一性是守卫：上一轮两条站内链接 ⇒ 指代不唯一 ⇒ 回落 planner LLM（追问）
-        llm2 = _ScriptedLLM(["SKILL=chat\nREPLY: 你想去哪一篇呀？"])
+        llm2 = _ScriptedLLM(["WORKFLOW=chat\nREPLY: 你想去哪一篇呀？"])
         G.get_llm = lambda **kw: llm2    # noqa: ARG005
         two = AIMessage(content=_PREV_WITH_LINK + "\n另外还有 [图谱那篇]"
                         "(https://saudade.site/article/46) 也提过。")
@@ -401,7 +401,7 @@ def test_referent_nav_fast_path():
 
         # 目标写在本句里的（"去找 X 带我过去"）不许被本快道抢走：它的目标是"找"的结果，
         # 而上一轮那条链接是别的东西（231947 那轮就会把主人送到首页去）。
-        llm3 = _ScriptedLLM(["SKILL=content_query\nPARAMS={\"calls\": []}\nREPLY: 先找找"])
+        llm3 = _ScriptedLLM(["WORKFLOW=content_query\nPARAMS={\"calls\": []}\nREPLY: 先找找"])
         G.get_llm = lambda **kw: llm3    # noqa: ARG005
         planner_node({"messages": [nav_pre, HumanMessage(content="去找你的设计文档带我过去")],
                       "plan_rounds": 0}, _cfg())
@@ -606,7 +606,7 @@ def test_nav_family_not_printed_into_fact_block():
 
     r0 = navigate_to.invoke({"path": "/device-console/", "confirm": False})
     # 回执的形状照 execute 的实产：工具帧文本 + 顶层 cmd（`family_of` 靠它认命令族）
-    receipt = {"skill": "navigate", "tool": "navigate_to", "result": str(r0),
+    receipt = {"workflow": "navigate", "tool": "navigate_to", "result": str(r0),
                "cmd": r0.meta.get("cmd")}
     check("工具帧文本仍是那句（模型看到的证据不变，别把过滤挪进工具）",
           str(receipt["result"]).startswith("页面即将跳转："), str(receipt["result"]))
@@ -898,9 +898,9 @@ def test_gate_nav_present_claim_verified_against_page_ctx():
     )
     for _t, _tr in _fp_nav:
         check(f"**介词短语/出现在** ⇒ 放行（生产现场 {_tr}）：{_t[:20]}",
-              not G._claim_issue(_t, "chat", {"skill": "chat", "note": "", "status": ""},
+              not G._claim_issue(_t, "chat", {"workflow": "chat", "note": "", "status": ""},
                                  False, page_ctx=_page_home),
-              str(G._claim_issue(_t, "chat", {"skill": "chat", "note": "", "status": ""},
+              str(G._claim_issue(_t, "chat", {"workflow": "chat", "note": "", "status": ""},
                                  False, page_ctx=_page_home)))
     # 逐支词形锁：①支 要**时间标记**（"你现在在首页刷文章"有、纯介词短语没有）；
     # ②支 的"现在"不许被"出现/呈现/体现/表现/显现"吃掉，真时间词照旧。

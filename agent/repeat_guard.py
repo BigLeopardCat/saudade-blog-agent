@@ -16,8 +16,8 @@
 **搬家方式**：`agent/graph.py` 按**原名** re-export 这 14 个名字（5 个函数 + 9 个常量）
 ⇒ `gate_node` 里那两处调用点（`_repeat_reason(reply, _recent_ai_replies(msgs), ...)`）
 与全仓 `from agent.graph import _REPEAT_MIN_RUN, _prev_ai_reply, ...`
-（`tests/test_skills.py`）**一处都不用改**。判据侧一个字都没动：两条源码锁
-（`test_skills` 的 `_GSRC` 断言那句调用、`test_turn_window` 的 `_FULL_VIEW` 扫调用节点）
+（`tests/test_workflows.py`）**一处都不用改**。判据侧一个字都没动：两条源码锁
+（`test_workflows` 的 `_GSRC` 断言那句调用、`test_turn_window` 的 `_FULL_VIEW` 扫调用节点）
 判的都是**调用点**，而调用点留在 graph.py。
 
 ⚠️ 本族带一个**中文正则**（`_REDO_REQUEST_RE`，`eval/judge_registry.json` 里

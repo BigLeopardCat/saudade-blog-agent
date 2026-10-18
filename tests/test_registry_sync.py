@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 
 import agent.authz as authz              # noqa: E402
 from agent import graph as G             # noqa: E402
-from agent import skills as S            # noqa: E402
+from agent.workflow_defs import WORKFLOWS  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -51,7 +51,7 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 def _planned_tools() -> dict[str, list[str]]:
     """工具名 → 调得到它的技能名（计划里出现的都算，不区分先后）。"""
     out: dict[str, list[str]] = {}
-    for sk in S.SKILLS:
+    for sk in WORKFLOWS:
         for step in sk.plan or ():
             if isinstance(step, (list, tuple)) and step and isinstance(step[0], str):
                 out.setdefault(step[0], []).append(sk.name)
@@ -94,9 +94,9 @@ check("  反向对照：假工具名必须被抓出来", "no_such_tool_xyz" not 
 # ══════════════════════════════════════════════════════════════════
 print("\n④ 每个技能都有契约：complete_when 与 reply_contract 非空")
 
-_empty_cw = [sk.name for sk in S.SKILLS if not (sk.complete_when or "").strip()]
-_empty_rc = [sk.name for sk in S.SKILLS if not (sk.reply_contract or "").strip()]
-check(f"{len(S.SKILLS)} 个技能都有 complete_when", not _empty_cw, "缺：" + ", ".join(_empty_cw))
+_empty_cw = [sk.name for sk in WORKFLOWS if not (sk.complete_when or "").strip()]
+_empty_rc = [sk.name for sk in WORKFLOWS if not (sk.reply_contract or "").strip()]
+check(f"{len(WORKFLOWS)} 个技能都有 complete_when", not _empty_cw, "缺：" + ", ".join(_empty_cw))
 check("  都有 reply_contract", not _empty_rc, "缺：" + ", ".join(_empty_rc))
 
 # ══════════════════════════════════════════════════════════════════
@@ -121,19 +121,19 @@ print("\n⑦ 例外账本：已知留白逐条登记，双向断言（静默多�
 _NO_PLAN = {"chat", "content_query"}
 # 没有 capability 一句话的技能（能力清单靠别处叙述）。
 _NO_CAPABILITY = {"read_article"}
-# 模板里写了、但由技能自己的代码算出来的占位符（**死代码**，见 `skill_param_specs` 注：
+# 模板里写了、但由技能自己的代码算出来的占位符（**死代码**，见 `workflow_param_specs` 注：
 # navigate 的 path 由 NAV_MAP 映射结果填，planner 不填）。
 _DEAD_TEMPLATE_TOKENS = {("navigate", "navigate_to", "path")}
 
-_got_no_plan = {sk.name for sk in S.SKILLS if not sk.plan}
+_got_no_plan = {sk.name for sk in WORKFLOWS if not sk.plan}
 check("无计划的技能只有账本里那两件", _got_no_plan == _NO_PLAN,
       f"多出来：{sorted(_got_no_plan - _NO_PLAN)} / 少了：{sorted(_NO_PLAN - _got_no_plan)}")
-_got_no_cap = {sk.name for sk in S.SKILLS if not (sk.capability or "").strip()}
+_got_no_cap = {sk.name for sk in WORKFLOWS if not (sk.capability or "").strip()}
 check("无 capability 的技能只有账本里那一件", _got_no_cap == _NO_CAPABILITY,
       f"多出来：{sorted(_got_no_cap - _NO_CAPABILITY)} / 少了：{sorted(_NO_CAPABILITY - _got_no_cap)}")
 
 _got_dead = {(sk.name, tn, arg)
-             for sk in S.SKILLS
+             for sk in WORKFLOWS
              for tn, tmpl in (sk.plan or ())
              for arg, val in tmpl.items()
              if isinstance(val, str) and val.startswith("$")
@@ -146,10 +146,10 @@ check("计划里指向未声明输入的占位符只有账本里那一处",
 print("\n⑧ 技能本身：名字唯一、角色档只有四档里有")
 
 _roles = {"user", "zako", "admin", "superadmin"}
-_names = [sk.name for sk in S.SKILLS]
+_names = [sk.name for sk in WORKFLOWS]
 _dupes = sorted({n for n in _names if _names.count(n) > 1})
 check(f"{len(_names)} 个技能名唯一", not _dupes, "重名：" + ", ".join(_dupes))
-_bad_roles = sorted({r for sk in S.SKILLS for r in sk.roles} - _roles)
+_bad_roles = sorted({r for sk in WORKFLOWS for r in sk.roles} - _roles)
 check("roles 只出现已知四档", not _bad_roles, "不认识的档：" + ", ".join(_bad_roles))
 check("  非空（否则上面两条假绿）", bool(_names))
 

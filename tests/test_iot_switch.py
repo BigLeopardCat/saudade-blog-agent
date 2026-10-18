@@ -43,22 +43,26 @@ _PROBE = r"""
 import json, sys
 sys.path.insert(0, %r)
 import tools.base as B
-import agent.skills as S
 import agent.context as C
 import agent.hostinfo as H
 from agent.decisions import _display_fast_path
+from agent.workflow_defs import WORKFLOWS, visible_workflows
+from agent.workflow_defs.nav import (NAV_MAP, _IOT_NAV_ALIASES, _NAV_REAL_PAGES,
+                                     _NAV_REF_HINT)
+from agent.workflow_menu import _NAV_MAP_LINES
+from agent.workflow_plan import instantiate_plan
 
 def nav(target):
-    p = S.instantiate_plan("navigate", {"target": target})
+    p = instantiate_plan("navigate", {"target": target})
     return {"status": p["status"], "tools": p["tools"], "note": p["note"]}
 
 out = {
     "iot": B.IOT_ENABLED,
     "exact_has": B.IOT_NAV_PATH in B._NAV_EXACT_PATHS,
     "whole_page": sorted(B._NAV_WHOLE_PAGE_PATHS),
-    "map_lines_mentions": "物联网" in S._NAV_MAP_LINES,
-    "ref_hint_mentions": "物联网" in S._NAV_REF_HINT,
-    "real_pages_mentions": "物联网" in S._NAV_REAL_PAGES,
+    "map_lines_mentions": "物联网" in _NAV_MAP_LINES,
+    "ref_hint_mentions": "物联网" in _NAV_REF_HINT,
+    "real_pages_mentions": "物联网" in _NAV_REAL_PAGES,
     "nav_iot": nav("物联网平台"),
     "nav_console": nav("设备控制台"),
     "nav_literal": nav("/device-console/"),
@@ -66,19 +70,19 @@ out = {
     "nav_friend": nav("友链"),
     "nav_unknown": nav("量子对撞机车间"),
     "nav_ok": nav("留言板"),
-    "skills": sorted(s.name for s in S.visible_skills(None)),
-    "skill_caps": {s.name: s.capability for s in S.SKILLS if s.name == "navigate"},
+    "workflows": sorted(s.name for s in visible_workflows(None)),
+    "workflow_caps": {s.name: s.capability for s in WORKFLOWS if s.name == "navigate"},
     "site_guide": C.site_guide(None),
     "site_map": B.get_site_map.invoke({}),
     "services": list(H.SERVICES),
     "display_fast": bool(_display_fast_path("在屏幕上显示晚安")),
-    "aliases_all_mapped": sorted(a for a in S._IOT_NAV_ALIASES if a not in S.NAV_MAP),
+    "aliases_all_mapped": sorted(a for a in _IOT_NAV_ALIASES if a not in NAV_MAP),
 }
 print(json.dumps(out, ensure_ascii=False))
 """
 
 # （20261004 去掉了 `PLANNER_ENGINE` 那一钉：接口层只剩 native、拨盘已删。
-# 本套件只读 skills/tools 的声明，与接口层无关。）
+# 本套件只读 workflows/tools 的声明，与接口层无关。）
 _PINS = {"SAUDADE_IGNORE_ENV_FILE": "1"}
 
 
@@ -133,13 +137,13 @@ check("别的页面照常跳（收口不是把 navigate 整条关掉）",
       off["nav_ok"]["status"])
 
 check("device_display / device_query 两个技能不可见（没平台就没设备可列、没屏幕可写）",
-      "device_display" not in off["skills"] and "device_query" not in off["skills"],
-      str(off["skills"]))
-check("navigate 及别的技能照常在", "navigate" in off["skills"] and "chat" in off["skills"])
+      "device_display" not in off["workflows"] and "device_query" not in off["workflows"],
+      str(off["workflows"]))
+check("navigate 及别的技能照常在", "navigate" in off["workflows"] and "chat" in off["workflows"])
 check("显示意图快道不命中（快道不许自己发明一句「未部署」——那是第二处判据）",
       off["display_fast"] is False)
 check("navigate 的能力文案不提物联网控制台",
-      "物联网" not in off["skill_caps"]["navigate"], off["skill_caps"]["navigate"][:50])
+      "物联网" not in off["workflow_caps"]["navigate"], off["workflow_caps"]["navigate"][:50])
 
 check("站内板块清单写明「未部署」（留白会被 narrator 的先验填上）",
       "未部署" in off["site_guide"] and "/device-console/" not in off["site_guide"])
@@ -176,10 +180,10 @@ check("友链仍是 nav_offline（开关不该动到别的别名）",
       on["nav_friend"]["status"] == "nav_offline", on["nav_friend"]["status"])
 
 check("device_display / device_query 可见",
-      "device_display" in on["skills"] and "device_query" in on["skills"])
+      "device_display" in on["workflows"] and "device_query" in on["workflows"])
 check("显示意图快道命中（屏幕类名词 + 写动词）", on["display_fast"] is True)
 check("navigate 的能力文案提物联网控制台",
-      "物联网" in on["skill_caps"]["navigate"], on["skill_caps"]["navigate"][:50])
+      "物联网" in on["workflow_caps"]["navigate"], on["workflow_caps"]["navigate"][:50])
 
 check("站内板块清单列出控制台且不提「未部署」",
       "/device-console/" in on["site_guide"] and "未部署" not in on["site_guide"])

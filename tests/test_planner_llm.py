@@ -8,9 +8,9 @@
 
 钉住的契约（这里红 = 某条判据被改掉了，改动要同步改这里）：
 
-  · `build_tool_schema(role)` 的函数名集合 **==** `visible_skills(role)` 的名字集合
+  · `build_tool_schema(role)` 的函数名集合 **==** `visible_workflows(role)` 的名字集合
     ——不扩权是结构性的（同源），这条断言是防御性的第二道；
-  · 每个技能的参数名集合、必填集合、闭集 **逐项等于** `skill_param_specs`；
+  · 每个技能的参数名集合、必填集合、闭集 **逐项等于** `workflow_param_specs`；
   · `_SCHEMA_OVERRIDES` 的键集合**钉成字面量**——加一格覆盖就少一格同源保证，
     必须同改本文件（= 有人复核）；
   · 数组参数的 `items` 类型从工具原始片段回查（`ids` 是 integer、标签是 string）；
@@ -38,8 +38,10 @@ from langchain_core.messages import AIMessage  # noqa: E402
 
 from agent import context as C  # noqa: E402
 from agent import planner_llm as N  # noqa: E402
-from agent import skills as S  # noqa: E402
 from agent import tasks as T  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP, visible_workflows  # noqa: E402
+from agent.workflow_params import workflow_param_specs  # noqa: E402
+from agent.workflow_tools import callable_query_tools, explicit_tools  # noqa: E402
 from tools.base import get_all_tools  # noqa: E402
 
 FAILS: list[str] = []
@@ -60,11 +62,11 @@ _PSEUDO = {T.TASK_HOLD, T.TASK_DROP, T.TASK_INTENTS}
 
 
 # ── ① 不扩权：函数名集合与可见技能**相等** ─────────────────────────────────
-def test_name_set_equals_visible_skills():
-    print("\n[不扩权] tools 的名字集合 == visible_skills 的名字集合")
+def test_name_set_equals_visible_workflows():
+    print("\n[不扩权] tools 的名字集合 == visible_workflows 的名字集合")
     for role in (None, "user", "admin"):
         got = set(_by_name(role))
-        want = {s.name for s in S.visible_skills(role)}
+        want = {s.name for s in visible_workflows(role)}
         check(f"role={role!r} 集合相等（技能 {len(want)} + 三个伪函数）",
               got == want | _PSEUDO,
               f"多={sorted(got - want - _PSEUDO)} 少={sorted((want | _PSEUDO) - got)}")
@@ -74,10 +76,10 @@ def test_name_set_equals_visible_skills():
     # 登记伪函数（20260927 批 D / 20261008 批 ②）在 20261015 撤档后**恒在**：集合相等
     # 因此是"技能名 + 申报过的那几个名字"，多出来的每一格钉成**字面量**（多别的一律红）。
     check("除技能名之外多出来的**只有**申报过的这三个伪函数",
-          set(_by_name("admin")) - {s.name for s in S.visible_skills("admin")}
+          set(_by_name("admin")) - {s.name for s in visible_workflows("admin")}
           == _PSEUDO,
           str(sorted(set(_by_name("admin"))
-                     - {s.name for s in S.visible_skills("admin")})))
+                     - {s.name for s in visible_workflows("admin")})))
     hold = N.build_tool_schema(None)[-3]["function"]
     drop = N.build_tool_schema(None)[-2]["function"]
     ints = N.build_tool_schema(None)[-1]["function"]
@@ -87,16 +89,16 @@ def test_name_set_equals_visible_skills():
           f"{hold['name']},{drop['name']},{ints['name']}")
     # `params`（20261012 批 A）：这一件**要用的实参**——有它，登记出来的步骤就是可执行
     # 的；没有它，那一步是占位步（落到它时回 planner 补参）。它不是必填，`required`
-    # 仍然只有 goal/skill ⇒ "说不全就整格省略"是模型真正能做到的那条路。
-    check("task_intents 只收 intents 一格，每项 = goal + skill + 可选 params（无枚举："
+    # 仍然只有 goal/workflow ⇒ "说不全就整格省略"是模型真正能做到的那条路。
+    check("task_intents 只收 intents 一格，每项 = goal + workflow + 可选 params（无枚举："
           "闭集是全部可见技能名，写进 schema 的代价落在每次 planner 调用上）",
           list(ints["parameters"]["properties"]) == ["intents"]
           and list(ints["parameters"]["properties"]["intents"]["items"]
-                   ["properties"]) == ["goal", "skill", "params"]
+                   ["properties"]) == ["goal", "workflow", "params"]
           and ints["parameters"]["properties"]["intents"]["items"].get("required")
-          == ["goal", "skill"]
+          == ["goal", "workflow"]
           and "enum" not in ints["parameters"]["properties"]["intents"]["items"]
-          ["properties"]["skill"])
+          ["properties"]["workflow"])
     check("task_drop 只有 goal 一格（可空的 steps 会把老歧义请回来）",
           list(drop["parameters"]["properties"]) == ["goal"]
           and drop["parameters"].get("required") == ["goal"])
@@ -160,7 +162,7 @@ def test_deny_pseudo_removes_only_named_pseudo():
 
 
 # ── ①c 意图清单的第二个出口：挂在每个技能上的可选 `intents` ────────────────
-def test_intents_field_on_every_skill():
+def test_intents_field_on_every_workflow():
     """意图清单挂在**每个技能函数**上的那一格（20261008 批 ②，见 `intents_prop_schema`）。
 
     为什么有这一格：`parallel_tool_calls=False` 让"单独交清单"与"点技能"在同一轮里
@@ -171,26 +173,26 @@ def test_intents_field_on_every_skill():
     （关档 = `AGENT_TASK_STATE=0` 那份 schema）。档位撤掉之后这个对照物**不存在**了，
     照着原文跑会变成"拿同一份 schema 跟它自己比"——一条恒真的假判据。现在对着
     **注册表**比：每个技能的 properties 去掉这一格（与另一个已申报的伪参数
-    `reply_kind`）之后，键集合必须等于 `skill_param_specs`。
+    `reply_kind`）之后，键集合必须等于 `workflow_param_specs`。
     """
     print("\n[不扩权] 意图清单那一格挂在每个技能上：每个都有、永远可选")
     on = {t["function"]["name"]: t["function"]
           for t in N.build_tool_schema("admin")}
-    skills = [s.name for s in S.visible_skills("admin")]
-    miss = [n for n in skills if T.INTENTS_ARG not in on[n]["parameters"]["properties"]]
-    check(f"{len(skills)} 个技能**每一个**都有它（漏一个 = 在那个技能上说不出口）",
+    workflows = [s.name for s in visible_workflows("admin")]
+    miss = [n for n in workflows if T.INTENTS_ARG not in on[n]["parameters"]["properties"]]
+    check(f"{len(workflows)} 个技能**每一个**都有它（漏一个 = 在那个技能上说不出口）",
           not miss, str(miss))
-    req = [n for n in skills if T.INTENTS_ARG in (on[n]["parameters"].get("required") or [])]
+    req = [n for n in workflows if T.INTENTS_ARG in (on[n]["parameters"].get("required") or [])]
     check("永远**不是必填**（不填就是今天的行为，不能逼模型为它多写一个字）",
           not req, str(req))
     # 负控：去掉这一格（与 `reply_kind`）之后，键集合必须逐技能等于注册表那份参数集
     # —— 钉的是"这一格之外没有顺手加过别的键"。
     diffs = []
-    for n in skills:
+    for n in workflows:
         keys = set(on[n]["parameters"]["properties"]) - {T.INTENTS_ARG, C.REPLY_KIND_ARG}
-        if keys != set(S.skill_param_specs(S.SKILL_MAP[n])):
-            diffs.append(f"{n}: {sorted(keys ^ set(S.skill_param_specs(S.SKILL_MAP[n])))}")
-    check("去掉那一格之后键集合逐技能等于 `skill_param_specs`（没有别的新键）",
+        if keys != set(workflow_param_specs(WORKFLOW_MAP[n])):
+            diffs.append(f"{n}: {sorted(keys ^ set(workflow_param_specs(WORKFLOW_MAP[n])))}")
+    check("去掉那一格之后键集合逐技能等于 `workflow_param_specs`（没有别的新键）",
           not diffs, str(diffs))
     # 唯一来源：与伪函数 `task_intents` 的 `intents` 参数除描述外逐字节同形 ——
     # 两处各写一份 items 必然漂移，而漂移的那一半是"模型按 A 填、归一器按 B 读"
@@ -213,18 +215,18 @@ def test_intents_field_inlined_with_action():
     计划文本与 `execute` 的参数校验里（那里它会变成一条"没人读的参数"告警）。
     """
     print("\n[登记] 动作 + 同一格 intents：一回说完「办这件 + 还有那几件」")
-    two = [{"goal": "建个新分类叫「临江仙」", "skill": "category_create"},
-           {"goal": "把文章 23 的标签整体换成「Rust」", "skill": "article_tags"}]
+    two = [{"goal": "建个新分类叫「临江仙」", "workflow": "category_create"},
+           {"goal": "把文章 23 的标签整体换成「Rust」", "workflow": "article_tags"}]
     msg = AIMessage(content="", tool_calls=[{
         "name": "category_create", "id": "c", "type": "tool_call",
         "args": {"name": "临江仙", T.INTENTS_ARG: two}}])
     got = N.tool_calls_to_plan(msg, "admin")
     check("技能照常判出来（这一格不抢技能位）",
-          got is not None and got.skill == "category_create", str(got))
+          got is not None and got.workflow == "category_create", str(got))
     check("**params 里没有那一格**（其余参数逐字不变）",
           got is not None and got.params == {"name": "临江仙"}, str(got and got.params))
-    check("两件都归一化进 intents（含本轮正要办的那件——排除由 acted_skills 做，不在这里）",
-          got is not None and [i["skill"] for i in got.intents]
+    check("两件都归一化进 intents（含本轮正要办的那件——排除由 acted_workflows 做，不在这里）",
+          got is not None and [i["workflow"] for i in got.intents]
           == ["category_create", "article_tags"], str(got and got.intents))
     check("记账 task_intents_field:<技能名>（与「多来了一条调用」分得开）",
           got is not None and got.notes == ("task_intents_field:category_create",),
@@ -237,23 +239,23 @@ def test_intents_field_inlined_with_action():
     bad = AIMessage(content="", tool_calls=[{
         "name": "category_create", "id": "c", "type": "tool_call",
         "args": {"name": "临江仙",
-                 T.INTENTS_ARG: [{"goal": "办那个", "skill": "没有这个本领"}]}}])
+                 T.INTENTS_ARG: [{"goal": "办那个", "workflow": "没有这个本领"}]}}])
     got = N.tool_calls_to_plan(bad, "admin")
     check("技能照旧，intents 空、记一笔 task_intents_field_invalid",
-          got is not None and got.skill == "category_create" and got.intents == ()
+          got is not None and got.workflow == "category_create" and got.intents == ()
           and got.notes == ("task_intents_field_invalid",), str(got and got.notes))
 
     # ⚠️ **20261015 撤档时删掉了一条判据**：这里原来是"开关关（默认）时那一格不存在
     # ⇒ 会不会炸"那一臂（关档下 `intents` 与"没人读的参数"同路，走既有的 `param_unknown`）。
     # 档位没了就只剩一个手臂可跑，而"不炸 + 技能照旧"由上面 `got` 那两条**同一条调用**
     # 的断言覆盖 —— 留一个只改档位、其余逐字相同的手臂，只会变成"拿它跟自己比"。
-    # 取而代之的恒常锁在 `test_params_mirror_skill_param_specs`（那一格必须在每个技能上、
+    # 取而代之的恒常锁在 `test_params_mirror_workflow_param_specs`（那一格必须在每个技能上、
     # 且不进 `required`）。
 
 
 # ── ② 参数逐项同源 ───────────────────────────────────────────────────────
-def test_params_mirror_skill_param_specs():
-    print("\n[同源] 参数名/必填/闭集逐项等于 skill_param_specs")
+def test_params_mirror_workflow_param_specs():
+    print("\n[同源] 参数名/必填/闭集逐项等于 workflow_param_specs")
     overrides = set(N._SCHEMA_OVERRIDES)
     # **伪参数**：不是技能参数、由 `tool_calls_to_plan` 摘走的那几格。恒在的有两格——
     # `intents`（20261008 批 ②，20261015 随档位撤掉后恒在）与 `reply_kind`（刻意**没有
@@ -264,23 +266,23 @@ def test_params_mirror_skill_param_specs():
     bad_names, bad_req, bad_enum = [], [], []
     for role in (None, "admin"):
         fns = _by_name(role)
-        for skill in S.visible_skills(role):
-            specs = S.skill_param_specs(skill)
-            params = fns[skill.name]["parameters"]
+        for workflow in visible_workflows(role):
+            specs = workflow_param_specs(workflow)
+            params = fns[workflow.name]["parameters"]
             props = params.get("properties") or {}
             if set(props) != set(specs) | pseudo:
-                bad_names.append(f"{role}/{skill.name}: "
+                bad_names.append(f"{role}/{workflow.name}: "
                                  f"{set(props) ^ (set(specs) | pseudo)}")
             want_req = sorted(n for n, sp in specs.items() if sp.required)
             got_req = sorted(params.get("required") or [])
             if got_req != want_req:
-                bad_req.append(f"{role}/{skill.name}: {got_req} ≠ {want_req}")
+                bad_req.append(f"{role}/{workflow.name}: {got_req} ≠ {want_req}")
             for pname, sp in specs.items():
-                if (skill.name, pname) in overrides:
+                if (workflow.name, pname) in overrides:
                     continue
                 got = props[pname]
                 if list(got.get("enum") or []) != list(sp.choices):
-                    bad_enum.append(f"{role}/{skill.name}.{pname}")
+                    bad_enum.append(f"{role}/{workflow.name}.{pname}")
     check("参数名集合逐技能相等（+ 已认领的伪参数 intents / reply_kind）",
           not bad_names, str(bad_names))
     check("必填集合逐技能相等", not bad_req, str(bad_req))
@@ -288,7 +290,7 @@ def test_params_mirror_skill_param_specs():
     # 伪参数那一格本身：每个技能都有、**都不必填**（必填集合那条已经覆盖"不进 required"，
     # 这里再把"它有没有出现在每个技能上"钉一遍——只挂一半技能会让读数缺一整族）。
     missing_kind = [f"{role}/{s.name}" for role in (None, "admin")
-                    for s in S.visible_skills(role)
+                    for s in visible_workflows(role)
                     if _by_name(role)[s.name]["parameters"]["properties"]
                     .get(C.REPLY_KIND_ARG, {}).get("enum") != ["pos", "neg", "auth"]]
     check("reply_kind：每个技能都挂、且闭集就是三种出口", not missing_kind, str(missing_kind))
@@ -301,7 +303,7 @@ def test_reply_kind_is_stripped_from_params():
         "args": {"name": "临江仙", C.REPLY_KIND_ARG: "auth"}}])
     got = N.tool_calls_to_plan(msg, "admin")
     check("技能照旧、params 里没有那一格",
-          got is not None and got.skill == "category_create"
+          got is not None and got.workflow == "category_create"
           and got.params == {"name": "临江仙"}, str(got and got.params))
     check("申报值原样进 PlannerDecision（只进 trace）",
           got is not None and got.reply_kind == "auth", str(got and got.reply_kind))
@@ -369,10 +371,10 @@ def test_override_enums_follow_role():
         fns = _by_name(role)
         cq = fns["content_query"]["parameters"]["properties"]
         check(f"role={role!r} tools.items.enum == explicit_tools(role)",
-              list(cq["tools"]["items"].get("enum") or []) == list(S.explicit_tools(role)))
+              list(cq["tools"]["items"].get("enum") or []) == list(explicit_tools(role)))
         check(f"role={role!r} calls.items.tool.enum == callable_query_tools(role)",
               list(cq["calls"]["items"]["properties"]["tool"].get("enum") or [])
-              == list(S.callable_query_tools(role)))
+              == list(callable_query_tools(role)))
     pub, adm = _by_name(None)["content_query"], _by_name("admin")["content_query"]
     check("admin 点名闭集严格包含公开闭集",
           set(adm["parameters"]["properties"]["calls"]["items"]["properties"]["tool"]["enum"])
@@ -397,8 +399,8 @@ def test_array_items_come_from_tool_schema():
 def test_no_call_is_plain_chat():
     print("\n[决策] 零调用 = 闲聊轮（params 给空，不编字段）")
     got = N.tool_calls_to_plan(AIMessage(content="你好呀～"), None)
-    check("skill=chat", got is not None and got.skill == "chat", str(got))
-    # ⚠️ **不把模型那句话塞进 params.reply**：`chat` 的 `skill_param_specs` 是空的，
+    check("workflow=chat", got is not None and got.workflow == "chat", str(got))
+    # ⚠️ **不把模型那句话塞进 params.reply**：`chat` 的 `workflow_param_specs` 是空的，
     # 没有任何代码会读这个字段，而 `PARAMS=` 会原样进计划文本 —— 塞进去只会白记一条
     # `param_unknown`（那是"注册表与提示词漂移"的探针，每轮闲聊报一次就把它淹了）。
     # 文本档在这一格给的就是空 PARAMS，native 照做才同构。
@@ -417,7 +419,7 @@ def test_explicit_chat_call_params_pass_through():
 
     这是 1A 探针实测到的真形状（`eval/native_probe_20260927T032021.md`：思考档 2/3 次
     点 `chat` 且带 `reply`）——`chat` 的 schema 里 `properties` 是空的，网关并不拦多余
-    参数。本层的职责是**映射**不是**消毒**：参数合法性归既有的 `check_skill_params`
+    参数。本层的职责是**映射**不是**消毒**：参数合法性归既有的 `check_workflow_params`
     （它记 `param_unknown` 而不阻断）。在这里悄悄删掉一个模型真发来的字段，等于把
     "模型在臆造参数"这条证据抹平——**探针要留着**，哪怕它在 接口层会更常亮。
     """
@@ -426,20 +428,20 @@ def test_explicit_chat_call_params_pass_through():
         "name": "chat", "args": {"reply": "你好呀～"},
         "id": "c", "type": "tool_call"}])
     got = N.tool_calls_to_plan(msg, None)
-    check("skill=chat", got is not None and got.skill == "chat", str(got))
-    check("参数原样（不删键——是不是多余由 check_skill_params 判）",
+    check("workflow=chat", got is not None and got.workflow == "chat", str(got))
+    check("参数原样（不删键——是不是多余由 check_workflow_params 判）",
           got is not None and got.params == {"reply": "你好呀～"}, str(got and got.params))
     check("显式调用按函数名记账（与零调用区分开）",
           N.tool_call_names(got) == "chat", repr(got and N.tool_call_names(got)))
 
 
-def test_single_call_maps_to_skill_params():
+def test_single_call_maps_to_workflow_params():
     print("\n[决策] 单条调用 → 技能名 + 技能级参数")
     msg = AIMessage(content="", tool_calls=[{
         "name": "navigate", "args": {"target": "物联网平台"},
         "id": "c1", "type": "tool_call"}])
     got = N.tool_calls_to_plan(msg, None)
-    check("skill=navigate", got is not None and got.skill == "navigate", str(got))
+    check("workflow=navigate", got is not None and got.workflow == "navigate", str(got))
     check("params 原样是技能级参数（target，不是工具参数 path）",
           got is not None and got.params == {"target": "物联网平台"})
     check("单条不产生记账", got is not None and got.notes == ())
@@ -452,7 +454,7 @@ def test_multi_call_keeps_first_and_accounts():
          "id": "a", "type": "tool_call"},
         {"name": "darkmode", "args": {"mode": "on"}, "id": "b", "type": "tool_call"}])
     got = N.tool_calls_to_plan(msg, None)
-    check("取第一条（effect）", got is not None and got.skill == "effect", str(got))
+    check("取第一条（effect）", got is not None and got.workflow == "effect", str(got))
     check("其余记进 native_multi_call", got is not None
           and got.notes == ("native_multi_call:effect|darkmode",), str(got and got.notes))
     check("工具名序列可用于 trace",
@@ -465,7 +467,7 @@ def test_unmappable_returns_none():
         {"name": "effect", "args": '{"effect": "sak', "id": "c", "error": "parse"}])
     check("arguments 被截断 → None", N.tool_calls_to_plan(truncated, None) is None)
     unknown = AIMessage(content="", tool_calls=[
-        {"name": "no_such_skill", "args": {}, "id": "c", "type": "tool_call"}])
+        {"name": "no_such_workflow", "args": {}, "id": "c", "type": "tool_call"}])
     check("函数名不在本轮 schema 里 → None", N.tool_calls_to_plan(unknown, None) is None)
     # `args` 非对象这一格**到不了真 AIMessage**：pydantic 在构造时就拒掉
     # （`tool_calls.0.args Input should be a valid dictionary`），非法参数一律走
@@ -504,12 +506,12 @@ def test_truncated_empty_calls_is_not_chat():
                      response_metadata={"finish_reason": "stop"})
     got = N.tool_calls_to_plan(stop, None)
     check("零调用 + stop → 照旧 chat（反向对照）",
-          got is not None and got.skill == "chat", str(got))
+          got is not None and got.workflow == "chat", str(got))
     # 网关不给 `finish_reason`（老响应 / 别的档）⇒ 不能凭空判成截断（缺键 ≠ length）
     bare = AIMessage(content="你好呀～")
     got2 = N.tool_calls_to_plan(bare, None)
     check("取不到 finish_reason → 照旧 chat（不猜）",
-          got2 is not None and got2.skill == "chat", str(got2))
+          got2 is not None and got2.workflow == "chat", str(got2))
 
     # 只有登记/撤回时，技能位本来就不是"动作"⇒ 截断也不能把登记丢掉：
     # "这件事又没人管了"正是任务通道要治的那一格（见 agent/tasks.py），
@@ -540,16 +542,16 @@ def test_task_hold_declaration():
     goal = "带我过去后开启一个特效"
     only = AIMessage(content="", tool_calls=[_hold_call(goal)])
     got = N.tool_calls_to_plan(only, None)
-    check("只登记 → skill=chat（本轮确实没执行工具）",
-          got is not None and got.skill == "chat", str(got))
+    check("只登记 → workflow=chat（本轮确实没执行工具）",
+          got is not None and got.workflow == "chat", str(got))
     check("declare 带 goal", got is not None
           and (got.declare or {}).get("goal") == goal, str(got and got.declare))
     check("params 为空（不把登记当参数塞进 chat）",
           got is not None and got.params == {}, str(got and got.params))
     check("有效登记不带异常记账", got is not None and got.notes == (), str(got and got.notes))
     # `tool_call_names` 是**连线原始证据**（"模型点了哪些函数"，含被丢弃的并发调用），
-    # 决策结果由 `skill` 承载 —— 两者分工不同：这里如实记 `task_hold`，而技能位是 `chat`。
-    check("原始函数名序列如实记 task_hold（决策位由 skill=chat 承载）",
+    # 决策结果由 `workflow` 承载 —— 两者分工不同：这里如实记 `task_hold`，而技能位是 `chat`。
+    check("原始函数名序列如实记 task_hold（决策位由 workflow=chat 承载）",
           got is not None and N.tool_call_names(got) == T.TASK_HOLD,
           repr(got and N.tool_call_names(got)))
 
@@ -557,7 +559,8 @@ def test_task_hold_declaration():
         {"name": "navigate", "args": {"target": "物联网平台"}, "id": "n", "type": "tool_call"},
         _hold_call(goal)])
     got = N.tool_calls_to_plan(both, None)
-    check("做一步 + 登记 → skill=navigate", got is not None and got.skill == "navigate", str(got))
+    check("做一步 + 登记 → workflow=navigate",
+          got is not None and got.workflow == "navigate", str(got))
     check("params 是技能的参数（登记不抢参数位）",
           got is not None and got.params == {"target": "物联网平台"}, str(got and got.params))
     check("declare 并行带上", got is not None and (got.declare or {}).get("goal") == goal)
@@ -578,7 +581,7 @@ def test_task_hold_declaration():
         {"name": T.TASK_HOLD, "id": "t", "type": "tool_call", "args": {"steps": []}}])
     got = N.tool_calls_to_plan(bad, None)
     check("登记缺 goal（不可用）→ 不落 declare、技能照旧",
-          got is not None and got.skill == "navigate" and got.declare is None, str(got))
+          got is not None and got.workflow == "navigate" and got.declare is None, str(got))
     check("无效登记记一笔 task_hold_invalid（不是静默丢掉）",
           got is not None and got.notes == ("task_hold_invalid",), str(got and got.notes))
 
@@ -594,7 +597,7 @@ def test_empty_steps_hold_is_invalid_not_cancel():
     only = AIMessage(content="", tool_calls=[_hold_call("带我过去后开启一个特效", steps=[])])
     got = N.tool_calls_to_plan(only, None)
     check("只发空 steps 登记 → 技能位 chat（不进 fallback，模型确实点了函数）",
-          got is not None and got.skill == "chat", str(got))
+          got is not None and got.workflow == "chat", str(got))
     check("**declare 为 None**（既没登记也没撤下）",
           got is not None and got.declare is None, str(got and got.declare))
     check("记一笔 task_hold_invalid（无效登记不许静默）",
@@ -604,7 +607,7 @@ def test_empty_steps_hold_is_invalid_not_cancel():
         _hold_call("g", steps=[])])
     got = N.tool_calls_to_plan(with_action, None)
     check("动作 + 空 steps 登记 → 动作照做、登记无效",
-          got is not None and got.skill == "navigate" and got.declare is None
+          got is not None and got.workflow == "navigate" and got.declare is None
           and "task_hold_invalid" in got.notes, str(got and got.notes))
 
 
@@ -615,8 +618,8 @@ def test_task_drop_declaration():
     only = AIMessage(content="", tool_calls=[
         {"name": T.TASK_DROP, "id": "d", "type": "tool_call", "args": {"goal": goal}}])
     got = N.tool_calls_to_plan(only, None)
-    check("只撤下 → skill=chat + declare.state=cancelled",
-          got is not None and got.skill == "chat"
+    check("只撤下 → workflow=chat + declare.state=cancelled",
+          got is not None and got.workflow == "chat"
           and (got.declare or {}).get("state") == "cancelled", str(got and got.declare))
     check("撤下不带 pending_question（撤下的事不该还挂着问题）",
           got is not None and (got.declare or {}).get("pending_question") == "")
@@ -627,7 +630,7 @@ def test_task_drop_declaration():
         {"name": T.TASK_DROP, "id": "d", "type": "tool_call", "args": {"goal": goal}}])
     got = N.tool_calls_to_plan(with_action, None)
     check("撤下 + 一个动作 → 技能照旧取第一条，撤下并行走",
-          got is not None and got.skill == "navigate"
+          got is not None and got.workflow == "navigate"
           and (got.declare or {}).get("state") == "cancelled", str(got and got.declare))
     check("记账用 task_drop_inline（与登记那一格分得开）",
           got is not None and got.notes == ("task_drop_inline:navigate",),
@@ -649,7 +652,7 @@ def test_task_drop_declaration():
     # 同一臂（20261015 撤档时删掉了"关档 ⇒ 与未知函数名同等 ⇒ None"那条：`task_drop`
     # 恒在菜单里，那一格量的与本节第一条逐字相同）。
     check("只撤下 → 技能位仍是 chat（撤下不改本轮「点没点技能」这个事实）",
-          N.tool_calls_to_plan(only, None).skill == "chat")
+          N.tool_calls_to_plan(only, None).workflow == "chat")
 
 
 def test_role_filter_applies_at_decision_time():
@@ -689,7 +692,7 @@ def test_review_inbox_calls_channel():
         check(f"{label}.calls 的 tool 是个非空字符串闭集（服务端强制那一关）",
               isinstance(enum, list) and enum and all(isinstance(x, str) for x in enum),
               str(enum))
-    allowed = [t for t, _ in (S.SKILL_MAP["review_inbox"].plan or ())]
+    allowed = [t for t, _ in (WORKFLOW_MAP["review_inbox"].plan or ())]
     check("tool 闭集 == 该技能 plan 里声明的工具全集（执行端读的是同一个字段）",
           list(ri["properties"]["tool"].get("enum") or []) == allowed,
           f"{ri['properties']['tool'].get('enum')} ≠ {allowed}")
@@ -719,19 +722,19 @@ def test_module_does_not_import_graph():
 
 
 if __name__ == "__main__":
-    for fn in (test_name_set_equals_visible_skills,
+    for fn in (test_name_set_equals_visible_workflows,
                test_function_names_are_openai_safe,
                test_deny_pseudo_removes_only_named_pseudo,
-               test_intents_field_on_every_skill,
+               test_intents_field_on_every_workflow,
                test_intents_field_inlined_with_action,
-               test_params_mirror_skill_param_specs,
+               test_params_mirror_workflow_param_specs,
                test_override_table_is_closed,
                test_override_enums_follow_role,
                test_tag_create_titles_is_array_of_strings,
                test_array_items_come_from_tool_schema,
                test_no_call_is_plain_chat,
                test_explicit_chat_call_params_pass_through,
-               test_single_call_maps_to_skill_params,
+               test_single_call_maps_to_workflow_params,
                test_multi_call_keeps_first_and_accounts,
                test_unmappable_returns_none,
                test_truncated_empty_calls_is_not_chat,

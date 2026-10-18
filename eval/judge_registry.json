@@ -15,13 +15,45 @@
         0,
         0
       ],
+      "agent/absence.py": [
+        0,
+        429
+      ],
       "agent/action_text.py": [
         91,
         0
       ],
-      "agent/adminops.py": [
-        136,
+      "agent/adminops_account.py": [
+        42,
+        0
+      ],
+      "agent/adminops_board.py": [
+        0,
+        0
+      ],
+      "agent/adminops_confirm.py": [
+        7,
+        0
+      ],
+      "agent/adminops_noop.py": [
+        0,
+        0
+      ],
+      "agent/adminops_quota.py": [
+        9,
+        0
+      ],
+      "agent/adminops_tags.py": [
+        65,
+        0
+      ],
+      "agent/adminops_target.py": [
+        2,
         33
+      ],
+      "agent/adminops_todo.py": [
+        11,
+        0
       ],
       "agent/agent.py": [
         0,
@@ -77,11 +109,7 @@
       ],
       "agent/graph.py": [
         198,
-        3844
-      ],
-      "agent/name_grounding.py": [
-        115,
-        25
+        3481
       ],
       "agent/hostinfo.py": [
         0,
@@ -91,12 +119,28 @@
         0,
         0
       ],
+      "agent/idem_pg.py": [
+        0,
+        0
+      ],
       "agent/llm_usage.py": [
         0,
         0
       ],
       "agent/moderator.py": [
         4,
+        0
+      ],
+      "agent/name_grounding.py": [
+        115,
+        25
+      ],
+      "agent/plan_codec.py": [
+        0,
+        0
+      ],
+      "agent/plan_status.py": [
+        0,
         0
       ],
       "agent/planner_llm.py": [
@@ -135,10 +179,6 @@
         19,
         0
       ],
-      "agent/skills.py": [
-        234,
-        0
-      ],
       "agent/stickers.py": [
         12,
         0
@@ -152,6 +192,74 @@
         0
       ],
       "agent/textnorm.py": [
+        0,
+        0
+      ],
+      "agent/tool_specs.py": [
+        0,
+        0
+      ],
+      "agent/workflow_defs/__init__.py": [
+        0,
+        0
+      ],
+      "agent/workflow_defs/account_write.py": [
+        15,
+        0
+      ],
+      "agent/workflow_defs/capability.py": [
+        55,
+        0
+      ],
+      "agent/workflow_defs/content_write.py": [
+        45,
+        0
+      ],
+      "agent/workflow_defs/nav.py": [
+        75,
+        0
+      ],
+      "agent/workflow_defs/navigation.py": [
+        4,
+        0
+      ],
+      "agent/workflow_defs/own_todo.py": [
+        11,
+        0
+      ],
+      "agent/workflow_defs/public_read.py": [
+        1,
+        0
+      ],
+      "agent/workflow_defs/reports.py": [
+        4,
+        0
+      ],
+      "agent/workflow_expand.py": [
+        6,
+        0
+      ],
+      "agent/workflow_expand_write.py": [
+        14,
+        0
+      ],
+      "agent/workflow_menu.py": [
+        0,
+        0
+      ],
+      "agent/workflow_model.py": [
+        0,
+        0
+      ],
+      "agent/workflow_params.py": [
+        3,
+        0
+      ],
+      "agent/workflow_plan.py": [
+        1,
+        0
+      ],
+      "agent/workflow_tools.py": [
         0,
         0
       ],
@@ -178,10 +286,114 @@
     },
     "total": [
       1139,
-      4790
+      4856
     ]
   },
   "entries": [
+    {
+      "id": "agent/absence.py::_SITE_DOMAIN_RE",
+      "file": "agent/absence.py",
+      "kind": "regex",
+      "name": "_SITE_DOMAIN_RE",
+      "size": 35,
+      "sample": "站内|全站|站里|博客里|博客中|这个站|本站|文章库|你写的|博主写的|所有文章|全部文章",
+      "category": "open",
+      "q": "站内|全站|站里|博客里|博客中|这个站|本站|文章库|你写的|博主写的|所有文章|全部文章",
+      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
+      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
+      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
+    },
+    {
+      "id": "agent/absence.py::_ABSENCE_RE",
+      "file": "agent/absence.py",
+      "kind": "regex",
+      "name": "_ABSENCE_RE",
+      "size": 34,
+      "sample": "没有|没找到|没写|没讲过|没提|没介绍|未收录|暂无|查不到|找不到|未见|无相关|不涉及",
+      "category": "open",
+      "q": "没有|没找到|没写|没讲过|没提|没介绍|未收录|暂无|查不到|找不到|未见|无相关|不涉及",
+      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
+      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
+      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
+    },
+    {
+      "id": "agent/absence.py::_CONTENT_NOUN_RE",
+      "file": "agent/absence.py",
+      "kind": "regex",
+      "name": "_CONTENT_NOUN_RE",
+      "size": 32,
+      "sample": "文章|内容|教程|笔记|资料|文档|博文|写过|讲过|提过|介绍|收录|涉及|说说|留言|帖子",
+      "category": "open",
+      "q": "文章|内容|教程|笔记|资料|文档|博文|写过|讲过|提过|介绍|收录|涉及|说说|留言|帖子",
+      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
+      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
+      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
+    },
+    {
+      "id": "agent/absence.py::_ABSENCE_EXEMPT_RE",
+      "file": "agent/absence.py",
+      "kind": "regex",
+      "name": "_ABSENCE_EXEMPT_RE",
+      "size": 94,
+      "sample": "要是|如果|假如|假设|除非|若|为什么|是不是|有没有|难道|吗|[?？]|要不要|需不需要|可以|能否|能帮|帮你|让我|我来|去查|去搜|查查|搜搜|翻翻",
+      "category": "open",
+      "q": "要是|如果|假如|假设|除非|若|为什么|是不是|有没有|难道|吗|[?？]|要不要|需不需要|可以|能否|能帮|帮你|让我|我来|去查|去搜|查查|搜搜|翻翻|找找|你(?:刚才|方才|之前|上面|前面)?说|你问|你提到|你让我|引用|原话|网上|网络|互联网|通用|常识|训练|资料里",
+      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
+      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
+      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
+    },
+    {
+      "id": "agent/absence.py::_ABSENCE_LEAD_RE",
+      "file": "agent/absence.py",
+      "kind": "regex",
+      "name": "_ABSENCE_LEAD_RE",
+      "size": 55,
+      "sample": "^(?:(?:确实|真的|其实|目前|现在|暂时|根本|压根)|[也确实都并]){0,2}(?:没有|没找到|没写|没讲过|没提|没介绍|未收录|暂无|查不到|",
+      "category": "open",
+      "q": "^(?:(?:确实|真的|其实|目前|现在|暂时|根本|压根)|[也确实都并]){0,2}(?:没有|没找到|没写|没讲过|没提|没介绍|未收录|暂无|查不到|找不到|未见|无相关|不涉及)",
+      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
+      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
+      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
+    },
+    {
+      "id": "agent/absence.py::_CAPABILITY_NEG_RE",
+      "file": "agent/absence.py",
+      "kind": "regex",
+      "name": "_CAPABILITY_NEG_RE",
+      "size": 83,
+      "sample": "(?:没有|暂无|没|无)(?:权限|功能|接口|入口|办法|能力|按钮|开关)(?=[，,。；;！!？?～~\\s]|$|(?:能|可以|可|直接)?(?:去|",
+      "category": "open",
+      "q": "(?:没有|暂无|没|无)(?:权限|功能|接口|入口|办法|能力|按钮|开关)(?=[，,。；;！!？?～~\\s]|$|(?:能|可以|可|直接)?(?:去|来|帮|做|操作|执行|更改|改动|改|修改|调整|设置|删除|删|添加|加|创建|建|写入|写|调用|访问|登录|查看|查|看|发布|处理|完成|搜索|搜|检索|读取|读))",
+      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
+      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
+      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
+    },
+    {
+      "id": "agent/absence.py::_TOOL_NONUSE_RE",
+      "file": "agent/absence.py",
+      "kind": "regex",
+      "name": "_TOOL_NONUSE_RE",
+      "size": 30,
+      "sample": "(?:没有|没|未|未曾|不曾|无)(?:调用|使用|动用|运行|执行)(?:任何|过)?(?:工具|检索|搜索|查询)",
+      "category": "open",
+      "q": "(?:没有|没|未|未曾|不曾|无)(?:调用|使用|动用|运行|执行)(?:任何|过)?(?:工具|检索|搜索|查询)",
+      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
+      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
+      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
+    },
+    {
+      "id": "agent/absence.py::_SELF_NONREAD_RE",
+      "file": "agent/absence.py",
+      "kind": "regex",
+      "name": "_SELF_NONREAD_RE",
+      "size": 66,
+      "sample": "(?:我|本喵|这边)(?:这(?:一)?轮|本轮|本次|这次|刚刚|方才|刚才|其实|确实|真的|手里|现在|暂时){0,3}[^，。；\\n]{0,2}(?:",
+      "category": "open",
+      "q": "(?:我|本喵|这边)(?:这(?:一)?轮|本轮|本次|这次|刚刚|方才|刚才|其实|确实|真的|手里|现在|暂时){0,3}[^，。；\\n]{0,2}(?:没有|没|未|不曾|未曾)(?:有)?(?:去|再|好好|认真)?(?:站内|站里|全站|本站|博客里)?(?:查|搜|检索|读|取|翻|找)",
+      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
+      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
+      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
+    },
     {
       "id": "agent/action_text.py::_EFFECT_CN",
       "file": "agent/action_text.py",
@@ -223,131 +435,8 @@
       "why": "拆工具返回里的检索来源标记，再渲染成中文"
     },
     {
-      "id": "agent/adminops.py::_TAG_COLOR_ALIASES",
-      "file": "agent/adminops.py",
-      "kind": "collection",
-      "name": "_TAG_COLOR_ALIASES",
-      "size": 26,
-      "category": "open",
-      "q": "_TAG_COLOR_ALIASES",
-      "why": "主人怎么用中文说颜色别名",
-      "replacement": "颜色值由模型声明为规范化色值，_COLOR_CANON 只当规范表",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/adminops.py::_COLOR_CANON",
-      "file": "agent/adminops.py",
-      "kind": "collection",
-      "name": "_COLOR_CANON",
-      "size": 8,
-      "category": "system_data",
-      "q": "_COLOR_CANON",
-      "why": "颜色的规范名 → 色值，事实源是站内色板"
-    },
-    {
-      "id": "agent/adminops.py::STATUS_CN",
-      "file": "agent/adminops.py",
-      "kind": "collection",
-      "name": "STATUS_CN",
-      "size": 3,
-      "category": "system_data",
-      "q": "STATUS_CN",
-      "why": "文章状态的显示字"
-    },
-    {
-      "id": "agent/adminops.py::_STATUS_ALIASES",
-      "file": "agent/adminops.py",
-      "kind": "collection",
-      "name": "_STATUS_ALIASES",
-      "size": 5,
-      "category": "open",
-      "q": "_STATUS_ALIASES",
-      "why": "主人怎么表达文章状态（公开/私密/草稿）",
-      "replacement": "模型在参数格声明 status 枚举，代码只查枚举",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/adminops.py::_TOP_ALIASES",
-      "file": "agent/adminops.py",
-      "kind": "collection",
-      "name": "_TOP_ALIASES",
-      "size": 6,
-      "category": "open",
-      "q": "_TOP_ALIASES",
-      "why": "主人怎么表达置顶/取消置顶",
-      "replacement": "模型声明布尔参数",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/adminops.py::_VERDICT_ALIASES",
-      "file": "agent/adminops.py",
-      "kind": "collection",
-      "name": "_VERDICT_ALIASES",
-      "size": 9,
-      "category": "open",
-      "q": "_VERDICT_ALIASES",
-      "why": "主人怎么表达通过/驳回",
-      "replacement": "模型声明 verdict 枚举",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/adminops.py::BOARD_VERDICT_CN",
-      "file": "agent/adminops.py",
-      "kind": "collection",
-      "name": "BOARD_VERDICT_CN",
-      "size": 2,
-      "category": "system_data",
-      "q": "BOARD_VERDICT_CN",
-      "why": "留言审核结论的显示字"
-    },
-    {
-      "id": "agent/adminops.py::BOARD_VERDICT_FULL",
-      "file": "agent/adminops.py",
-      "kind": "collection",
-      "name": "BOARD_VERDICT_FULL",
-      "size": 2,
-      "category": "prompt_text",
-      "q": "BOARD_VERDICT_FULL",
-      "why": "确认卡上的整句后果说明（只印给人看，没有判定读它）"
-    },
-    {
-      "id": "agent/adminops.py::_DUE_REL_DAYS",
-      "file": "agent/adminops.py",
-      "kind": "collection",
-      "name": "_DUE_REL_DAYS",
-      "size": 8,
-      "category": "open",
-      "q": "_DUE_REL_DAYS",
-      "why": "主人说『今天/明天/后天』这种相对日期",
-      "replacement": "相对日期由模型换算成日期参数",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/adminops.py::_TODO_CLEAR_DATES",
-      "file": "agent/adminops.py",
-      "kind": "collection",
-      "name": "_TODO_CLEAR_DATES",
-      "size": 3,
-      "category": "open",
-      "q": "_TODO_CLEAR_DATES",
-      "why": "主人怎么表达『清空/取消』这个截止日",
-      "replacement": "模型声明 clear 布尔参数",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/adminops.py::_TARGET_ID_NS_RE",
-      "file": "agent/adminops.py",
-      "kind": "regex",
-      "name": "_TARGET_ID_NS_RE",
-      "size": 2,
-      "sample": "(?:talkId|talk_id|talkid|userId|user_id|userid|账号\\s*id|account_id|id|#)\\s*[:=#]?",
-      "category": "parser",
-      "q": "(?:talkId|talk_id|talkid|userId|user_id|userid|账号\\s*id|account_id|id|#)\\s*[:=#]?",
-      "why": "拆 wire 里的 id 命名空间前缀（talkId/userId…）"
-    },
-    {
-      "id": "agent/adminops.py::digits",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_account.py::digits",
+      "file": "agent/adminops_account.py",
       "kind": "collection",
       "name": "digits",
       "size": 10,
@@ -356,8 +445,8 @@
       "why": "中文数字是封闭集（十进位就那几个），不是措辞补丁"
     },
     {
-      "id": "agent/adminops.py::ROLE_CN",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_account.py::ROLE_CN",
+      "file": "agent/adminops_account.py",
       "kind": "collection",
       "name": "ROLE_CN",
       "size": 4,
@@ -366,8 +455,8 @@
       "why": "角色名的显示字"
     },
     {
-      "id": "agent/adminops.py::_ROLE_ALIASES",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_account.py::_ROLE_ALIASES",
+      "file": "agent/adminops_account.py",
       "kind": "collection",
       "name": "_ROLE_ALIASES",
       "size": 9,
@@ -378,8 +467,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/adminops.py::_ROLE_CONSEQ",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_account.py::_ROLE_CONSEQ",
+      "file": "agent/adminops_account.py",
       "kind": "collection",
       "name": "_ROLE_CONSEQ",
       "size": 2,
@@ -388,8 +477,8 @@
       "why": "卡面上的整句后果说明（只印给人看）"
     },
     {
-      "id": "agent/adminops.py::_QUOTA_CONSEQ",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_quota.py::_QUOTA_CONSEQ",
+      "file": "agent/adminops_quota.py",
       "kind": "collection",
       "name": "_QUOTA_CONSEQ",
       "size": 3,
@@ -398,8 +487,8 @@
       "why": "卡面上的整句后果说明（只印给人看）"
     },
     {
-      "id": "agent/adminops.py::_QUOTA_STATUS_CN",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_quota.py::_QUOTA_STATUS_CN",
+      "file": "agent/adminops_quota.py",
       "kind": "collection",
       "name": "_QUOTA_STATUS_CN",
       "size": 3,
@@ -408,8 +497,8 @@
       "why": "额度申请状态的显示字"
     },
     {
-      "id": "agent/adminops.py::_QUOTA_VERB",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_quota.py::_QUOTA_VERB",
+      "file": "agent/adminops_quota.py",
       "kind": "collection",
       "name": "_QUOTA_VERB",
       "size": 3,
@@ -420,8 +509,77 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/adminops.py::_NAMED_ARTICLE_RES",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_tags.py::_TAG_COLOR_ALIASES",
+      "file": "agent/adminops_tags.py",
+      "kind": "collection",
+      "name": "_TAG_COLOR_ALIASES",
+      "size": 26,
+      "category": "open",
+      "q": "_TAG_COLOR_ALIASES",
+      "why": "主人怎么用中文说颜色别名",
+      "replacement": "颜色值由模型声明为规范化色值，_COLOR_CANON 只当规范表",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_tags.py::_COLOR_CANON",
+      "file": "agent/adminops_tags.py",
+      "kind": "collection",
+      "name": "_COLOR_CANON",
+      "size": 8,
+      "category": "system_data",
+      "q": "_COLOR_CANON",
+      "why": "颜色的规范名 → 色值，事实源是站内色板"
+    },
+    {
+      "id": "agent/adminops_tags.py::_STATUS_ALIASES",
+      "file": "agent/adminops_tags.py",
+      "kind": "collection",
+      "name": "_STATUS_ALIASES",
+      "size": 5,
+      "category": "open",
+      "q": "_STATUS_ALIASES",
+      "why": "主人怎么表达文章状态（公开/私密/草稿）",
+      "replacement": "模型在参数格声明 status 枚举，代码只查枚举",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_tags.py::_TOP_ALIASES",
+      "file": "agent/adminops_tags.py",
+      "kind": "collection",
+      "name": "_TOP_ALIASES",
+      "size": 6,
+      "category": "open",
+      "q": "_TOP_ALIASES",
+      "why": "主人怎么表达置顶/取消置顶",
+      "replacement": "模型声明布尔参数",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_tags.py::_VERDICT_ALIASES",
+      "file": "agent/adminops_tags.py",
+      "kind": "collection",
+      "name": "_VERDICT_ALIASES",
+      "size": 9,
+      "category": "open",
+      "q": "_VERDICT_ALIASES",
+      "why": "主人怎么表达通过/驳回",
+      "replacement": "模型声明 verdict 枚举",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_target.py::_TARGET_ID_NS_RE",
+      "file": "agent/adminops_target.py",
+      "kind": "regex",
+      "name": "_TARGET_ID_NS_RE",
+      "size": 2,
+      "sample": "(?:talkId|talk_id|talkid|userId|user_id|userid|账号\\s*id|account_id|id|#)\\s*[:=#]?",
+      "category": "parser",
+      "q": "(?:talkId|talk_id|talkid|userId|user_id|userid|账号\\s*id|account_id|id|#)\\s*[:=#]?",
+      "why": "拆 wire 里的 id 命名空间前缀（talkId/userId…）"
+    },
+    {
+      "id": "agent/adminops_target.py::_NAMED_ARTICLE_RES",
+      "file": "agent/adminops_target.py",
       "kind": "regex",
       "name": "_NAMED_ARTICLE_RES",
       "size": 8,
@@ -433,8 +591,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/adminops.py::_NAMED_ORDINAL_RES",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_target.py::_NAMED_ORDINAL_RES",
+      "file": "agent/adminops_target.py",
       "kind": "regex",
       "name": "_NAMED_ORDINAL_RES",
       "size": 5,
@@ -446,8 +604,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/adminops.py::_NAMED_LIST_ITEM_RE",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_target.py::_NAMED_LIST_ITEM_RE",
+      "file": "agent/adminops_target.py",
       "kind": "regex",
       "name": "_NAMED_LIST_ITEM_RE",
       "size": 9,
@@ -459,8 +617,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/adminops.py::_COUNT_TAIL_RE",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_target.py::_COUNT_TAIL_RE",
+      "file": "agent/adminops_target.py",
       "kind": "regex",
       "name": "_COUNT_TAIL_RE",
       "size": 9,
@@ -472,8 +630,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/adminops.py::_TARGET_VERB",
-      "file": "agent/adminops.py",
+      "id": "agent/adminops_target.py::_TARGET_VERB",
+      "file": "agent/adminops_target.py",
       "kind": "collection",
       "name": "_TARGET_VERB",
       "size": 2,
@@ -481,6 +639,30 @@
       "q": "_TARGET_VERB",
       "why": "主人怎么表达收藏/取消收藏",
       "replacement": "模型声明 action 枚举",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_todo.py::_DUE_REL_DAYS",
+      "file": "agent/adminops_todo.py",
+      "kind": "collection",
+      "name": "_DUE_REL_DAYS",
+      "size": 8,
+      "category": "open",
+      "q": "_DUE_REL_DAYS",
+      "why": "主人说『今天/明天/后天』这种相对日期",
+      "replacement": "相对日期由模型换算成日期参数",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_todo.py::_TODO_CLEAR_DATES",
+      "file": "agent/adminops_todo.py",
+      "kind": "collection",
+      "name": "_TODO_CLEAR_DATES",
+      "size": 3,
+      "category": "open",
+      "q": "_TODO_CLEAR_DATES",
+      "why": "主人怎么表达『清空/取消』这个截止日",
+      "replacement": "模型声明 clear 布尔参数",
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
@@ -1410,110 +1592,6 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/repeat_guard.py::_REDO_REQUEST_RE",
-      "file": "agent/repeat_guard.py",
-      "kind": "regex",
-      "name": "_REDO_REQUEST_RE",
-      "size": 45,
-      "sample": "再(?:画|说|写|发|来|贴|试)|重新|重来|重发|重画|换个|换成|换回|换用|换一版|改成|改一下|改一版|另一(?:个|种|版)|同一(?:个|张)图",
-      "category": "open",
-      "q": "再(?:画|说|写|发|来|贴|试)|重新|重来|重发|重画|换个|换成|换回|换用|换一版|改成|改一下|改一版|另一(?:个|种|版)|同一(?:个|张)图",
-      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
-      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
-      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
-    },
-    {
-      "id": "agent/graph.py::_SITE_DOMAIN_RE",
-      "file": "agent/graph.py",
-      "kind": "regex",
-      "name": "_SITE_DOMAIN_RE",
-      "size": 35,
-      "sample": "站内|全站|站里|博客里|博客中|这个站|本站|文章库|你写的|博主写的|所有文章|全部文章",
-      "category": "open",
-      "q": "站内|全站|站里|博客里|博客中|这个站|本站|文章库|你写的|博主写的|所有文章|全部文章",
-      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
-      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
-      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
-    },
-    {
-      "id": "agent/graph.py::_ABSENCE_RE",
-      "file": "agent/graph.py",
-      "kind": "regex",
-      "name": "_ABSENCE_RE",
-      "size": 34,
-      "sample": "没有|没找到|没写|没讲过|没提|没介绍|未收录|暂无|查不到|找不到|未见|无相关|不涉及",
-      "category": "open",
-      "q": "没有|没找到|没写|没讲过|没提|没介绍|未收录|暂无|查不到|找不到|未见|无相关|不涉及",
-      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
-      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
-      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
-    },
-    {
-      "id": "agent/graph.py::_CONTENT_NOUN_RE",
-      "file": "agent/graph.py",
-      "kind": "regex",
-      "name": "_CONTENT_NOUN_RE",
-      "size": 32,
-      "sample": "文章|内容|教程|笔记|资料|文档|博文|写过|讲过|提过|介绍|收录|涉及|说说|留言|帖子",
-      "category": "open",
-      "q": "文章|内容|教程|笔记|资料|文档|博文|写过|讲过|提过|介绍|收录|涉及|说说|留言|帖子",
-      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
-      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
-      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
-    },
-    {
-      "id": "agent/graph.py::_ABSENCE_EXEMPT_RE",
-      "file": "agent/graph.py",
-      "kind": "regex",
-      "name": "_ABSENCE_EXEMPT_RE",
-      "size": 94,
-      "sample": "要是|如果|假如|假设|除非|若|为什么|是不是|有没有|难道|吗|[?？]|要不要|需不需要|可以|能否|能帮|帮你|让我|我来|去查|去搜|查查|搜搜|翻翻",
-      "category": "open",
-      "q": "要是|如果|假如|假设|除非|若|为什么|是不是|有没有|难道|吗|[?？]|要不要|需不需要|可以|能否|能帮|帮你|让我|我来|去查|去搜|查查|搜搜|翻翻",
-      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
-      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
-      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
-    },
-    {
-      "id": "agent/graph.py::_ABSENCE_LEAD_RE",
-      "file": "agent/graph.py",
-      "kind": "regex",
-      "name": "_ABSENCE_LEAD_RE",
-      "size": 55,
-      "sample": "^(?:(?:确实|真的|其实|目前|现在|暂时|根本|压根)|[也确实都并]){0,2}(?:没有|没找到|没写|没讲过|没提|没介绍|未收录|暂无|查不到|",
-      "category": "open",
-      "q": "^(?:(?:确实|真的|其实|目前|现在|暂时|根本|压根)|[也确实都并]){0,2}(?:没有|没找到|没写|没讲过|没提|没介绍|未收录|暂无|查不到|",
-      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
-      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
-      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
-    },
-    {
-      "id": "agent/graph.py::_CAPABILITY_NEG_RE",
-      "file": "agent/graph.py",
-      "kind": "regex",
-      "name": "_CAPABILITY_NEG_RE",
-      "size": 83,
-      "sample": "(?:没有|暂无|没|无)(?:权限|功能|接口|入口|办法|能力|按钮|开关)(?=[，,。；;！!？?～~\\s]|$|(?:能|可以|可|直接)?(?:去|",
-      "category": "open",
-      "q": "(?:没有|暂无|没|无)(?:权限|功能|接口|入口|办法|能力|按钮|开关)(?=[，,。；;！!？?～~\\s]|$|(?:能|可以|可|直接)?(?:去|",
-      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
-      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
-      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
-    },
-    {
-      "id": "agent/graph.py::_TOOL_NONUSE_RE",
-      "file": "agent/graph.py",
-      "kind": "regex",
-      "name": "_TOOL_NONUSE_RE",
-      "size": 30,
-      "sample": "(?:没有|没|未|未曾|不曾|无)(?:调用|使用|动用|运行|执行)(?:任何|过)?(?:工具|检索|搜索|查询)",
-      "category": "open",
-      "q": "(?:没有|没|未|未曾|不曾|无)(?:调用|使用|动用|运行|执行)(?:任何|过)?(?:工具|检索|搜索|查询)",
-      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
-      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
-      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
-    },
-    {
       "id": "agent/graph.py::_CAP_FAIL_SCOPE_RE",
       "file": "agent/graph.py",
       "kind": "regex",
@@ -1741,56 +1819,6 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/name_grounding.py::_MOVE_MARKS",
-      "file": "agent/name_grounding.py",
-      "kind": "collection",
-      "name": "_MOVE_MARKS",
-      "size": 9,
-      "category": "open",
-      "q": "_MOVE_MARKS",
-      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
-      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/name_grounding.py::_RENAME_MARKS",
-      "file": "agent/name_grounding.py",
-      "kind": "collection",
-      "name": "_RENAME_MARKS",
-      "size": 6,
-      "category": "open",
-      "q": "_RENAME_MARKS",
-      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
-      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/name_grounding.py::_PRE_NOUN_LEAD_RE",
-      "file": "agent/name_grounding.py",
-      "kind": "regex",
-      "name": "_PRE_NOUN_LEAD_RE",
-      "size": 12,
-      "sample": "^(?:把|将|对|给|跟|和|拿|替|为|向|从|往)\\s*",
-      "category": "open",
-      "q": "^(?:把|将|对|给|跟|和|拿|替|为|向|从|往)\\s*",
-      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
-      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/name_grounding.py::_PRE_NOUN_TAIL_RE",
-      "file": "agent/name_grounding.py",
-      "kind": "regex",
-      "name": "_PRE_NOUN_TAIL_RE",
-      "size": 13,
-      "sample": "(?:这个|那个|这些|那些|这种|那种|的)+$",
-      "category": "open",
-      "q": "(?:这个|那个|这些|那些|这种|那种|的)+$",
-      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
-      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
       "id": "agent/graph.py::_NAME_MARKS",
       "file": "agent/graph.py",
       "kind": "collection",
@@ -1878,6 +1906,56 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
+      "id": "agent/name_grounding.py::_MOVE_MARKS",
+      "file": "agent/name_grounding.py",
+      "kind": "collection",
+      "name": "_MOVE_MARKS",
+      "size": 9,
+      "category": "open",
+      "q": "_MOVE_MARKS",
+      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
+      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/name_grounding.py::_RENAME_MARKS",
+      "file": "agent/name_grounding.py",
+      "kind": "collection",
+      "name": "_RENAME_MARKS",
+      "size": 6,
+      "category": "open",
+      "q": "_RENAME_MARKS",
+      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
+      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/name_grounding.py::_PRE_NOUN_LEAD_RE",
+      "file": "agent/name_grounding.py",
+      "kind": "regex",
+      "name": "_PRE_NOUN_LEAD_RE",
+      "size": 12,
+      "sample": "^(?:把|将|对|给|跟|和|拿|替|为|向|从|往)\\s*",
+      "category": "open",
+      "q": "^(?:把|将|对|给|跟|和|拿|替|为|向|从|往)\\s*",
+      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
+      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/name_grounding.py::_PRE_NOUN_TAIL_RE",
+      "file": "agent/name_grounding.py",
+      "kind": "regex",
+      "name": "_PRE_NOUN_TAIL_RE",
+      "size": 13,
+      "sample": "(?:这个|那个|这些|那些|这种|那种|的)+$",
+      "category": "open",
+      "q": "(?:这个|那个|这些|那些|这种|那种|的)+$",
+      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
+      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
       "id": "agent/refs.py::_RAG_LINE_RE",
       "file": "agent/refs.py",
       "kind": "regex",
@@ -1887,6 +1965,19 @@
       "category": "parser",
       "q": "^\\d+\\.\\s+type=(\\S+)\\s+id=(\\d+)\\s+score=([\\d.]+)\\s+title=(.*?)(?:\\s+命中节=(.*))?$",
       "why": "拆 RAG 工具返回的行（type=/id=/score=/title=）"
+    },
+    {
+      "id": "agent/repeat_guard.py::_REDO_REQUEST_RE",
+      "file": "agent/repeat_guard.py",
+      "kind": "regex",
+      "name": "_REDO_REQUEST_RE",
+      "size": 45,
+      "sample": "再(?:画|说|写|发|来|贴|试)|重新|重来|重发|重画|换个|换成|换回|换用|换一版|改成|改一下|改一版|另一(?:个|种|版)|同一(?:个|张)图",
+      "category": "open",
+      "q": "再(?:画|说|写|发|来|贴|试)|重新|重来|重发|重画|换个|换成|换回|换用|换一版|改成|改一下|改一版|另一(?:个|种|版)|同一(?:个|张)图",
+      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
+      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
+      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
       "id": "agent/reports.py::FOCUS_NAMES",
@@ -1909,36 +2000,6 @@
       "why": "周报/月报/年报的显示字"
     },
     {
-      "id": "agent/skills.py::_IOT_NAV_ALIASES",
-      "file": "agent/skills.py",
-      "kind": "collection",
-      "name": "_IOT_NAV_ALIASES",
-      "size": 10,
-      "category": "system_data",
-      "q": "_IOT_NAV_ALIASES",
-      "why": "物联网页面的别名 → 路径（站内页面事实）"
-    },
-    {
-      "id": "agent/skills.py::NAV_MAP",
-      "file": "agent/skills.py",
-      "kind": "collection",
-      "name": "NAV_MAP",
-      "size": 18,
-      "category": "system_data",
-      "q": "NAV_MAP",
-      "why": "页面别名 → 真实路径，站内单一事实源"
-    },
-    {
-      "id": "agent/skills.py::_PUBLIC_NAME_TAKEN",
-      "file": "agent/skills.py",
-      "kind": "collection",
-      "name": "_PUBLIC_NAME_TAKEN",
-      "size": 2,
-      "category": "system_data",
-      "q": "_PUBLIC_NAME_TAKEN",
-      "why": "公开页面名（主页/说说）占用检查"
-    },
-    {
       "id": "agent/stickers.py::STICKER_NAMES",
       "file": "agent/stickers.py",
       "kind": "collection",
@@ -1947,6 +2008,26 @@
       "category": "system_data",
       "q": "STICKER_NAMES",
       "why": "情绪贴纸名单（与人设/前端同源）"
+    },
+    {
+      "id": "agent/workflow_defs/nav.py::_IOT_NAV_ALIASES",
+      "file": "agent/workflow_defs/nav.py",
+      "kind": "collection",
+      "name": "_IOT_NAV_ALIASES",
+      "size": 10,
+      "category": "system_data",
+      "q": "_IOT_NAV_ALIASES",
+      "why": "物联网页面的别名 → 路径（站内页面事实）"
+    },
+    {
+      "id": "agent/workflow_defs/nav.py::_PUBLIC_NAME_TAKEN",
+      "file": "agent/workflow_defs/nav.py",
+      "kind": "collection",
+      "name": "_PUBLIC_NAME_TAKEN",
+      "size": 2,
+      "category": "system_data",
+      "q": "_PUBLIC_NAME_TAKEN",
+      "why": "公开页面名（主页/说说）占用检查"
     },
     {
       "id": "server.py::_REASON_CN",

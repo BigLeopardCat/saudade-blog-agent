@@ -80,7 +80,10 @@ TRACE_ROOT = Path("/home/ubuntu/Saudade-Blog/logs/agent/golden_traces")
 
 # 夜间那台用的身份变量。**必须带**：不带就只有 138/119 的分母，
 # 与历史读数不可比（见 plan 的一、与 `scripts/nightly_regression.sh`）。
-IDENTITY_ENV = {"GOLDEN_ADMIN_UID": "721", "GOLDEN_USER_UID": "722"}
+# 20261017 起 admin 是 **756**（`agent_golden_admin_20261017`，专用夹具管理员、从不登录）：
+# 721 是评测残留夹具、当天已降权为 user ⇒ `auth_guard` 从库里现读 role，继续指它会全线 403。
+# 换指的理由与前置核验写在 `scripts/nightly_regression.sh` 那处长注里（单一出处）。
+IDENTITY_ENV = {"GOLDEN_ADMIN_UID": "756", "GOLDEN_USER_UID": "722"}
 
 # ── 臂的定义 ────────────────────────────────────────────────────────────
 # 每个臂 = 一组**环境变量覆盖**。`why` 写清这个臂在问什么问题——一张没有问题的
@@ -250,7 +253,7 @@ def _row(arm: str, rep: int, rc: int, rp: Path | None) -> dict:
 
 # ── 路由稳定性：从 trace 里逐用例取 round 0 决策 ────────────────────────
 def _round0_by_case(trace_dir: str) -> dict[str, tuple]:
-    """`{用例 id: (skill, finish, calls)}`——只取**第一条** planner 决策事件。"""
+    """`{用例 id: (workflow, finish, calls)}`——只取**第一条** planner 决策事件。"""
     out: dict[str, tuple] = {}
     for f in glob.glob(os.path.join(trace_dir or "", "*.json")):
         try:
@@ -263,7 +266,7 @@ def _round0_by_case(trace_dir: str) -> dict[str, tuple]:
         if not dec:
             continue
         e0 = dec[0]
-        out[Path(f).stem] = (str(e0.get("skill")), str(e0.get("finish")),
+        out[Path(f).stem] = (str(e0.get("workflow")), str(e0.get("finish")),
                              str(e0.get("calls") or e0.get("tools") or ""))
     return out
 

@@ -14,12 +14,12 @@
                             `changed` 判据带 `mutedUntil` / 出口 kind）；
   · `agent/graph.py`    —— 挂点（`_WRITE_NAME_FIELDS` / `_NAME_TARGET_TOOLS` /
                             `_ACCOUNT_TOOLS` / `_MUTE_TOOLS` 不相交 / 词表分派）；
-  · `agent/skills.py`   —— 展开层（时长认不出 ⇒ **零工具 + 追问**，绝不静默按永久办）；
+  · `agent/workflow_expand.py`   —— 展开层（时长认不出 ⇒ **零工具 + 追问**，绝不静默按永久办）；
   · `agent/authz.py`    —— 两个工具**都在**"一律弹窗"族里（每次都要主人点一下）。
 
 工具名 `account_mute` / `account_unmute` 是**后端先定的契约**（`src/routes/mod.rs`
 那条路由的注），技能面另起 `mute_account` / `unmute_account`——第 ⑥ 节把这条名字
-契约钉死：两侧混用会让 `_expand_write_skill` / `_confirm_one` 的分支**静默不命中**。
+契约钉死：两侧混用会让 `_expand_write_workflow` / `_confirm_one` 的分支**静默不命中**。
 
 用法：.venv/bin/python tests/test_account_mute.py
 """
@@ -30,12 +30,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
-import agent.adminops as A  # noqa: E402
+import agent.adminops_account as _account  # noqa: E402
+import agent.adminops_noop as _noop  # noqa: E402
 import agent.authz as authz  # noqa: E402
 import agent.graph as g  # noqa: E402
-import agent.skills as skills  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.principal import ROLE_ADMIN, Principal  # noqa: E402
+from agent.workflow_defs import WORKFLOWS, WRITE_WORKFLOW_NAMES  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_account_freeze 的那一处）────────────────────────────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**；`_policy_post` 也要它
@@ -149,74 +151,74 @@ for value, want, why in [
     ("十十", (False, None), "坏串不猜"),
     ("随便吧", (False, None), "认不出的字面"),
 ]:
-    got = A.normalize_mute_hours(value)
+    got = _account.normalize_mute_hours(value)
     check(f"{why}：{value!r} → {want}", got == want, f"got={got}")
 
 check("认不出返回的 second 是 None（**不是**悄悄当永久）",
-      A.normalize_mute_hours("随便吧") == (False, None))
+      _account.normalize_mute_hours("随便吧") == (False, None))
 check("_cn_number 只认整数、只认到 99",
-      A._cn_number("三") == 3 and A._cn_number("十") == 10
-      and A._cn_number("十五") == 15 and A._cn_number("二十三") == 23
-      and A._cn_number("一十一") == 11        # 合法的中文写法，照认
-      and A._cn_number("零") is None and A._cn_number("三半") is None
-      and A._cn_number("十十") is None and A._cn_number("一二十三") is None)
+      _account._cn_number("三") == 3 and _account._cn_number("十") == 10
+      and _account._cn_number("十五") == 15 and _account._cn_number("二十三") == 23
+      and _account._cn_number("一十一") == 11        # 合法的中文写法，照认
+      and _account._cn_number("零") is None and _account._cn_number("三半") is None
+      and _account._cn_number("十十") is None and _account._cn_number("一二十三") is None)
 check("mute_span_cn：None ⇒ 永久，数值 ⇒ 「N 小时」",
-      A.mute_span_cn(None) == "永久" and A.mute_span_cn(72) == "72 小时")
+      _account.mute_span_cn(None) == "永久" and _account.mute_span_cn(72) == "72 小时")
 check("mute_until_cn：哨兵串 ⇒ 永久，普通串 ⇒ 「至 …」",
-      A.mute_until_cn(A.MUTE_FOREVER) == "永久"
-      and A.mute_until_cn("2026-10-05 12:00:00") == "至 2026-10-05 12:00"
-      and A.mute_until_cn("") == "期限未读到")
+      _account.mute_until_cn(_account.MUTE_FOREVER) == "永久"
+      and _account.mute_until_cn("2026-10-05 12:00:00") == "至 2026-10-05 12:00"
+      and _account.mute_until_cn("") == "期限未读到")
 check("mute_until_raw：键缺席 / null ⇒ 空串（**空串不是「现在没被禁言」**）",
-      A.mute_until_raw({}) == "" and A.mute_until_raw({"mutedUntil": None}) == ""
-      and A.mute_until_raw({"mutedUntil": "2026-10-05 12:00:00"}) == "2026-10-05 12:00:00")
+      _account.mute_until_raw({}) == "" and _account.mute_until_raw({"mutedUntil": None}) == ""
+      and _account.mute_until_raw({"mutedUntil": "2026-10-05 12:00:00"}) == "2026-10-05 12:00:00")
 
 # ══════════════════════════════════════════════════════════════════
 print("\n② 后果句：禁言 ≠ 冻结（**逐字**不许复用冻结族）")
 MUTE_FREEZE_WORDS = ("失效", "掉线", "下线", "登录不了", "无法登录", "登不进来",
                      "被踢", "重新登录", "会话")
 texts = [
-    A.render_account_mute_action("guest5", True),
-    A.render_account_mute_action("guest5", True, 72),
-    A.render_account_mute_action("guest5", False),
-    A.render_account_mute_status("guest5", 126, True, until_raw="2026-10-05 12:00:00"),
-    A.render_account_mute_status("guest5", 126, False, until_raw="", changed=False),
-    A.render_account_mute_status("guest5", 126, False, until_raw="2026-10-05 12:00:00"),
-    A._MUTE_CONSEQ[True], A._MUTE_CONSEQ[False],
-    A._MUTE_DONE_PHRASE[True], A._MUTE_DONE_PHRASE[False],
+    _account.render_account_mute_action("guest5", True),
+    _account.render_account_mute_action("guest5", True, 72),
+    _account.render_account_mute_action("guest5", False),
+    _account.render_account_mute_status("guest5", 126, True, until_raw="2026-10-05 12:00:00"),
+    _account.render_account_mute_status("guest5", 126, False, until_raw="", changed=False),
+    _account.render_account_mute_status("guest5", 126, False, until_raw="2026-10-05 12:00:00"),
+    _account._MUTE_CONSEQ[True], _account._MUTE_CONSEQ[False],
+    _account._MUTE_DONE_PHRASE[True], _account._MUTE_DONE_PHRASE[False],
 ]
 for t in texts:
     hit = [w for w in MUTE_FREEZE_WORDS if w in t]
     check(f"没有冻结族的词 {t[:24]}…", not hit, str(hit))
 check("禁言卡面**明说**他照常登录（这是它唯一的作用——让主人核对后果）",
-      "照常登录" in A.render_account_mute_action("guest5", True)
-      and "发不出评论与留言" in A.render_account_mute_action("guest5", True))
+      "照常登录" in _account.render_account_mute_action("guest5", True)
+      and "发不出评论与留言" in _account.render_account_mute_action("guest5", True))
 check("解禁卡面说的是「马上能重新发布评论与留言」，不是「他回来了」",
-      "马上能重新发布评论与留言" in A.render_account_mute_action("guest5", False))
+      "马上能重新发布评论与留言" in _account.render_account_mute_action("guest5", False))
 check("禁言方向印期限（主人核对「我要的是三天，卡上写的是不是三天」的唯一地方）",
-      "72 小时" in A.render_account_mute_action("guest5", True, 72)
-      and "永久" in A.render_account_mute_action("guest5", True))
+      "72 小时" in _account.render_account_mute_action("guest5", True, 72)
+      and "永久" in _account.render_account_mute_action("guest5", True))
 check("解禁方向**不印**期限（这件事没有那个维度）",
-      "小时" not in A.render_account_mute_action("guest5", False)
-      and "永久" not in A.render_account_mute_action("guest5", False))
+      "小时" not in _account.render_account_mute_action("guest5", False)
+      and "永久" not in _account.render_account_mute_action("guest5", False))
 check("认不出的时长在卡面上**如实说没听懂**，不写成一个数（不静默按永久办）",
-      "没听懂要禁多久" in A.render_account_mute_action("guest5", True, "随便吧")
-      and "永久" not in A.render_account_mute_action("guest5", True, "随便吧"))
+      "没听懂要禁多久" in _account.render_account_mute_action("guest5", True, "随便吧")
+      and "永久" not in _account.render_account_mute_action("guest5", True, "随便吧"))
 check("名录在手、名字不在 ⇒ 只印名字 + 「没有叫这个名字的账号」，不报后果",
-      A.render_account_mute_action("ghost", True, users={126: row(126, "guest5")})
+      _account.render_account_mute_action("ghost", True, users={126: row(126, "guest5")})
       == "禁言账号「ghost」（后台账号列表里没有叫这个名字的账号）")
 check("名录读不到 ⇒ 只印名字 + 后果（读不到 ≠ 没有）",
-      "照常登录" in A.render_account_mute_action("ghost", True, users=None))
+      "照常登录" in _account.render_account_mute_action("ghost", True, users=None))
 
 print("  —— changed 三态（回执行里的那句 change 摘要）")
 check("禁言方向：期限变了 ⇒ 「已禁言（至 …）」",
-      A.account_mute_change_phrase(True, True, until_raw="2026-10-05 12:00:00")
+      _account.account_mute_change_phrase(True, True, until_raw="2026-10-05 12:00:00")
       == "已禁言（至 2026-10-05 12:00）")
 check("禁言方向：什么都没变 ⇒ 「状态本来就是禁言中，本次未发生变更」",
-      A.account_mute_change_phrase(True, False) == "状态本来就是禁言中，本次未发生变更")
+      _account.account_mute_change_phrase(True, False) == "状态本来就是禁言中，本次未发生变更")
 check("解禁方向：清掉了库里的值 ⇒ 「已解除禁言」",
-      A.account_mute_change_phrase(False, True) == "已解除禁言")
+      _account.account_mute_change_phrase(False, True) == "已解除禁言")
 check("解禁方向：库里本来就没值 ⇒ 「本来就没有被禁言，本次未发生变更」",
-      A.account_mute_change_phrase(False, False) == "本来就没有被禁言，本次未发生变更")
+      _account.account_mute_change_phrase(False, False) == "本来就没有被禁言，本次未发生变更")
 
 # ══════════════════════════════════════════════════════════════════
 print("\n③ _set_account_muted：五段式（写请求载荷 / 写后复核 / changed 判据）")
@@ -359,20 +361,20 @@ print("\n④ _reached_one：**只有解禁方向**做幂等短路")
 USERS = {126: row(126, "guest5", muted=True, until="2026-10-05 12:00:00"),
          127: row(127, "guest6", muted=False, until=None)}
 check("禁言 + 名录说现在就禁着 ⇒ **不短路**（重复禁言是有意义的：改时长/转永久）",
-      A._reached_one("account_mute", {"name": "guest5"}, {"users": USERS}) is None)
+      _noop._reached_one("account_mute", {"name": "guest5"}, {"users": USERS}) is None)
 check("禁言 + 名录说正常 ⇒ 不短路（那正是要办的事）",
-      A._reached_one("account_mute", {"name": "guest6"}, {"users": USERS}) is None)
+      _noop._reached_one("account_mute", {"name": "guest6"}, {"users": USERS}) is None)
 check("解禁 + 名录说正常 ⇒ 短路，话术是「现在没有被禁言」（**不带「已」**）",
-      (A._reached_one("account_unmute", {"name": "guest6"}, {"users": USERS})
+      (_noop._reached_one("account_unmute", {"name": "guest6"}, {"users": USERS})
        or "").endswith("现在没有被禁言"))
 check("解禁 + 名录说禁着 ⇒ 不短路（要办的就是它）",
-      A._reached_one("account_unmute", {"name": "guest5"}, {"users": USERS}) is None)
+      _noop._reached_one("account_unmute", {"name": "guest5"}, {"users": USERS}) is None)
 check("名录读不到 ⇒ 判不了 ⇒ 照常弹卡（读不到不是「没被禁言」）",
-      A._reached_one("account_unmute", {"name": "guest6"}, {"users": None}) is None)
+      _noop._reached_one("account_unmute", {"name": "guest6"}, {"users": None}) is None)
 check("名录在手、名字不在 ⇒ 判不了（那是工具的拒绝路，不是已达成）",
-      A._reached_one("account_unmute", {"name": "ghost"}, {"users": USERS}) is None)
+      _noop._reached_one("account_unmute", {"name": "ghost"}, {"users": USERS}) is None)
 check("行里没有 muted 字段 ⇒ 判不了（**不许当成正常**）",
-      A._reached_one("account_unmute", {"name": "x"},
+      _noop._reached_one("account_unmute", {"name": "x"},
                      {"users": {1: {"id": 1, "username": "x"}}}) is None)
 
 # ══════════════════════════════════════════════════════════════════
@@ -382,28 +384,28 @@ for params, want_tool, why in [
     ({"name": "guest5", "hours": "三天"}, "account_mute", "中文数字 + 天"),
     ({"name": "guest5", "hours": 72}, "account_mute", "数字"),
 ]:
-    obj = skills.instantiate_plan("mute_account", params)
+    obj = instantiate_plan("mute_account", params)
     tools = obj.get("tools") or []
     check(f"mute_account {why} ⇒ 排一条 {want_tool}", len(tools) == 1
           and tools[0].startswith(want_tool + "("), str(tools))
-obj = skills.instantiate_plan("mute_account", {"name": "guest5", "hours": "随便吧"})
+obj = instantiate_plan("mute_account", {"name": "guest5", "hours": "随便吧"})
 check("时长认不出 ⇒ **零工具** + 注记（不许自己挑一个顶上，也不许当成永久）",
       not obj.get("tools") and "不要" in (obj.get("note") or "")
       and "禁多久" in (obj.get("note") or ""), str(obj.get("note")))
 check("  「三天」进 TOOLS 行的是**归一后的小时数**，不是原话（卡面与执行同源）",
-      "72" in (skills.instantiate_plan("mute_account", {"name": "guest5", "hours": "三天"})
+      "72" in (instantiate_plan("mute_account", {"name": "guest5", "hours": "三天"})
                .get("tools") or [""])[0])
-obj = skills.instantiate_plan("unmute_account", {"name": "guest5", "hours": 72})
+obj = instantiate_plan("unmute_account", {"name": "guest5", "hours": 72})
 check("解禁方向多填的 hours 一律丢掉（这件事没有时长这一维）",
       obj.get("tools") == ['account_unmute({"name": "guest5"})'], str(obj.get("tools")))
-obj = skills.instantiate_plan("mute_account", {"hours": 72})
+obj = instantiate_plan("mute_account", {"hours": 72})
 check("缺账号名 ⇒ 零工具 + 追问（不许拿猜的名字顶上）",
       not obj.get("tools") and "缺少账号名" in (obj.get("note") or ""))
-obj = skills.instantiate_plan("mute_account", {"name": "126", "hours": 72})
+obj = instantiate_plan("mute_account", {"name": "126", "hours": 72})
 check("给的是编号 ⇒ 零工具 + 追问**名字**（系统不支持按编号操作账号）",
       not obj.get("tools") and "不支持按编号" in (obj.get("note") or ""))
 check("注记里点名「禁言不踢人下线」（planner/narrator 读的就是这一份）",
-      "禁言不踢人下线" in (skills.instantiate_plan("mute_account", {"name": "guest5"})
+      "禁言不踢人下线" in (instantiate_plan("mute_account", {"name": "guest5"})
                            .get("note") or ""))
 
 # ══════════════════════════════════════════════════════════════════
@@ -413,11 +415,11 @@ check("工具名 = 后端契约（`account_mute` / `account_unmute`，不是 mut
       {"account_mute", "account_unmute"} <= _REG_NAMES
       and not ({"mute_account", "unmute_account"} & _REG_NAMES), str(sorted(_REG_NAMES)[:3]))
 check("技能名与工具名**不是**同一套字面量（技能 = 事件，工具 = 动作）",
-      "mute_account" in skills.WRITE_SKILL_NAMES
-      and "unmute_account" in skills.WRITE_SKILL_NAMES
-      and "account_mute" not in skills.WRITE_SKILL_NAMES)
+      "mute_account" in WRITE_WORKFLOW_NAMES
+      and "unmute_account" in WRITE_WORKFLOW_NAMES
+      and "account_mute" not in WRITE_WORKFLOW_NAMES)
 check("技能注册表里两个技能都在（名字对不上 ⇒ planner 选不出来）",
-      {s.name for s in skills.SKILLS} >= {"mute_account", "unmute_account"})
+      {s.name for s in WORKFLOWS} >= {"mute_account", "unmute_account"})
 check("_WRITE_NAME_FIELDS：两个工具都按 name 指认目标",
       g._WRITE_NAME_FIELDS.get("account_mute") == ("name", None)
       and g._WRITE_NAME_FIELDS.get("account_unmute") == ("name", None))
@@ -443,7 +445,7 @@ check("写声称词根：两个工具都有（`_write_done_claim` 的并集正�
       "account_mute" in __import__("agent.action_text", fromlist=["x"]).WRITE_CLAIM_ROOTS
       and "account_unmute" in __import__("agent.action_text", fromlist=["x"]).WRITE_CLAIM_ROOTS)
 check("角色隔离：只有管理员可见（普通用户选不出这两个技能）",
-      all(s.roles and "admin" in s.roles for s in skills.SKILLS
+      all(s.roles and "admin" in s.roles for s in WORKFLOWS
           if s.name in ("mute_account", "unmute_account")))
 
 # ══════════════════════════════════════════════════════════════════

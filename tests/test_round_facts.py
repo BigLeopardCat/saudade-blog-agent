@@ -51,13 +51,23 @@ SENT_2 = ("我能确定的是：他的申请还在待处理队列里（账号「
 
 # 现场那条回执（写族、checker PASS、非 noop）与那份计划（**计划里没有写**——
 # 这正是供给侧与判据侧打架的那条缝，见 `_round_fact_note` ②）。
-_RECEIPT = {"skill": "quota_approve", "tool": "approve_quota_request",
+_RECEIPT = {"workflow": "quota_approve", "tool": "approve_quota_request",
             "args": {"user_id": 5},
             "result": "已批准账号「niuniu」的额度重置申请，他的额度现在读数是 剩 500/500",
             "ts": 0.0}
-_CHAT_PLAN = "SKILL=chat\nTOOLS: （无）\nSTATUS=answer_only"
-_WRITE_PLAN = ('SKILL=quota_approve\nPARAMS: {}\n'
-               'TOOLS: approve_quota_request({"user_id": 5})\nSTATUS=executed')
+# **20261017 批 1**：这两份此前是契约**文本**，而消费侧改读对象那一态之后，夹具只给文本
+# 就等于"看着在跑、其实没跑"（`plan_view` 取不到对象 ⇒ 按空计划判 ⇒ 本套件整片失去意义）。
+# 现在它们是计划**对象**，经 `_st` 走 `plan_state`（生产写端唯一入口）——夹具与生产同一条路。
+_CHAT_PLAN = {"workflow": "chat", "tools": [], "params": {}, "note": "", "reply": ""}
+_WRITE_PLAN = {"workflow": "quota_approve", "params": {},
+               "tools": ['approve_quota_request({"user_id": 5})'],
+               "note": "", "reply": ""}
+
+
+def _st(plan_obj, **over) -> dict:
+    """合成一份 state：计划两态一起给。`dict(...)` 是**必须的**——`normalize_plan` 原地
+    改，不拷的话第一次调用就把模块级常量改掉了（跨用例串味）。"""
+    return {**g.plan_state(dict(plan_obj)), **over}
 
 # 一个写回执归一化后的签名（`noop_specs` 里存的就是 `list(_spec_signature(...))`）
 _WRITE_SIG = list(g._spec_signature("approve_quota_request", {"user_id": 5}))
@@ -74,7 +84,7 @@ def _facts(**kw) -> "g.RoundFacts":
 
 def _issue(text: str, facts=None, **kw):
     """按现场状态喂进声称闸（`facts=None` ⇒ 走老形参现推那条路，与生产同源）。"""
-    args = dict(skill="quota_approve", plan={}, frames_exist=True, has_popup=False,
+    args = dict(workflow="quota_approve", plan={}, frames_exist=True, has_popup=False,
                 receipts=[_RECEIPT], noop_specs=[], page_ctx="", role="admin")
     args.update(kw)
     if facts is not None:
@@ -101,7 +111,7 @@ f_wait3 = g._round_facts({"ledger": {"pending": "x"}, "pending_confirm": {"spec"
 check("在等 + 本轮还弹了卡 ⇒ awaiting_owner=False（卡在自己手上，不是「等人点头」）",
       f_wait3.awaiting_owner is False)
 
-f_ok = g._round_facts({"receipts": [_RECEIPT], "noop_specs": [], "plan": _WRITE_PLAN})
+f_ok = g._round_facts(_st(_WRITE_PLAN, receipts=[_RECEIPT], noop_specs=[]))
 check("办成有改动：ok_writes=[approve_quota_request]、changed=True、planned_writes 从计划推",
       f_ok.ok_writes == ("approve_quota_request",) and f_ok.changed is True
       and f_ok.planned_writes == ("approve_quota_request",))
@@ -118,13 +128,13 @@ check("边界：**缺 `noop_specs`** ⇒ 从严，写回执全算真改动（cha
 
 f_blk = g._round_facts({"receipts": [_RECEIPT],
                         "blocked": [{"spec": "x", "tool": "audit_board_comment",
-                                     "reason": "r", "skill": "s", "result": ""},
+                                     "reason": "r", "workflow": "s", "result": ""},
                                     {"spec": "y", "tool": "search_notes", "reason": "r",
-                                     "skill": "s", "result": ""}]})
+                                     "workflow": "s", "result": ""}]})
 check("blocked_writes 只收**写族**（`search_notes` 那种读工具不算）",
       f_blk.blocked_writes == ("audit_board_comment",))
 
-f_g = g._round_facts({"confirm_grant": {"skill": "quota_approve"},
+f_g = g._round_facts({"confirm_grant": {"workflow": "quota_approve"},
                       "receipts": [_RECEIPT]})
 check("granted 档：`confirm_grant` 在场 + 回执有写 ⇒ 两个字段同时为真",
       f_g.granted is True and f_g.ok_writes == ("approve_quota_request",))
@@ -212,31 +222,31 @@ check("`_replan_note` 对两族给**同一份**提示（「这一轮是真的执
 print()
 print("⑥ 供给侧（预防这一侧）：几条被账甲顶掉的假事实")
 check("`_round_fact_note` ①：`confirm_grant` 在场 ⇒ 仍是那条快照事实（逐字保留）",
-      g._round_fact_note({"confirm_grant": {"skill": "s"}}) == g._CONFIRM_ROUND_NOTE)
-note_seam = g._round_fact_note({"plan": _CHAT_PLAN, "receipts": [_RECEIPT]})
+      g._round_fact_note({"confirm_grant": {"workflow": "s"}}) == g._CONFIRM_ROUND_NOTE)
+note_seam = g._round_fact_note(_st(_CHAT_PLAN, receipts=[_RECEIPT]))
 check("②**计划没写、回执却有写**那条缝 ⇒ 补一条账甲事实（这正是打架的那一轮）",
       "账甲事实（本轮）" in note_seam and "已经执行并复核通过" in note_seam)
 check("② 常规写轮（计划里就有写）**不补**——回执就在明面上，多注一句白烧 token",
-      g._round_fact_note({"plan": _WRITE_PLAN, "receipts": [_RECEIPT]}) == "")
+      g._round_fact_note(_st(_WRITE_PLAN, receipts=[_RECEIPT])) == "")
 check("③ noop 那一档单说「本来就是目标值」，且不许说成「我刚给你改的」",
       "本来就是目标值" in g._round_fact_note(
-          {"plan": _CHAT_PLAN, "receipts": [_RECEIPT], "noop_specs": [_WRITE_SIG]}))
+          _st(_CHAT_PLAN, receipts=[_RECEIPT], noop_specs=[_WRITE_SIG])))
 check("`_wrote_this_round` 读账甲：计划没写、回执有写 ⇒ **True**"
       "（此前只看计划 ⇒ False，`_no_popup_fact` 会把「一个写操作都没提出来」当事实说）",
-      g._wrote_this_round({"plan": _CHAT_PLAN, "receipts": [_RECEIPT]}) is True)
+      g._wrote_this_round(_st(_CHAT_PLAN, receipts=[_RECEIPT])) is True)
 check("`_no_popup_fact` 闸一：回执里有写 ⇒ 返回空串（本段那句「事实」在那一档是假话）",
-      g._no_popup_fact({"plan": _CHAT_PLAN, "receipts": [_RECEIPT]}) == "")
-_no_popup_plain = g._no_popup_fact({"plan": _CHAT_PLAN})
+      g._no_popup_fact(_st(_CHAT_PLAN, receipts=[_RECEIPT])) == "")
+_no_popup_plain = g._no_popup_fact(_st(_CHAT_PLAN))
 check("闸一不误伤：零写轮仍是原来那段（逐字，「一个写操作都没提出来」）",
       "一个写操作都没提出来" in _no_popup_plain)
-_ledger_wait = g._no_popup_fact({"plan": _CHAT_PLAN, "ledger": {"pending": "x"}})
+_ledger_wait = g._no_popup_fact(_st(_CHAT_PLAN, ledger={"pending": "x"}))
 check("闸二：台账里**真有一行在等** ⇒ 换档说「没有**新的**写操作 + 那一行仍原样在等」"
       "（原句禁的「系统正等着主人点一下」在那一档与台账事实**直接打架**）",
       "没有新的写操作" in _ledger_wait and "仍原样在等" in _ledger_wait
       and "禁止说任何" not in _ledger_wait)
 check("`_narrator_plan` 把同一份账甲传给那几条注记（本回合读一次、不是各自再算）",
       "账甲事实（本轮）" in g._narrator_plan(
-          {"plan": _CHAT_PLAN, "receipts": [_RECEIPT]}))
+          _st(_CHAT_PLAN, receipts=[_RECEIPT])))
 
 print()
 if FAILED:

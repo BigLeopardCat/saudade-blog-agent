@@ -14,7 +14,9 @@
 #   cd saudade-blog-agent
 #   .venv/bin/python eval/run_golden.py                     # 全量；--limit N / --only a,b / --min-pass-rate
 #   .venv/bin/python eval/golden_full_run.py                # 进程隔离版：逐条独立进程 + 180s 超时，防悬挂
-#   夜间 04:00 已有 scripts/nightly_regression.sh（crontab）跑 tests/run_all.py + 全量 golden + trace 巡检。
+#   夜间 04:00 有 scripts/nightly_regression.sh（crontab）跑 tests/run_all.py + 全量 golden + trace 巡检，
+#   **但那个 cron 默认不装**（一次全量 ≈10M tok / ¥2.4；开关 scripts/enable_nightly.sh）——
+#   所以上面那句"CI 只跑 L0"在默认部署下是全部，别把没跑的夜间当成跑过且绿。
 #
 # 仓库 Secrets QUALITY_GATE_API_KEY / QUALITY_GATE_BASE_URL 与 Variables
 # GOLDEN_MIN_PASS_RATE / QWEN_MODEL 已无引用，可留可删（留下不影响任何运行）。
@@ -113,7 +115,7 @@ jobs:
       # （`_` 开头的辅助模块与 run_all 自己除外）。此前这里是**手工维护**的名单（一个套件一个
       # step），而审计实测（20260928）：磁盘上 50+ 个套件、这份名单只引用了 26 个
       # ⇒ **一半以上的判据在 CI 里从不运行**——其中就有 `test_prompt_prefix`（提示词前缀缓存
-      # 稳定性的唯一哨兵）与 `test_slim_skills`。加了新套件忘了来这里加一行，表现是
+      # 稳定性的唯一哨兵）与 `test_slim_workflows`。加了新套件忘了来这里加一行，表现是
       # "看着在跑、其实没跑"，而这种失效没有任何东西会告诉你。
       # 收敛成一条 step 之后，**加套件不用改 CI**。回归锁：`tests/test_ci_suite_list.py`
       # 断言这里不许再出现逐套件的 `tests/test_*.py` 调用，也断言夜间脚本与本文同源。

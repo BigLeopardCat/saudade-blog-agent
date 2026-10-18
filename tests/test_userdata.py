@@ -877,10 +877,15 @@ finally:
 # ══════════════════════════════════════════════════════════════════
 print("\n⑤ 写技能展开：范围缺失就零工具（不是零参数硬跑）")
 
-from agent.skills import (SKILL_MAP, _OWN_WRITE_SKILLS,  # noqa: E402
-                          _FREE_TEXT_WRITE_SKILLS, _LEDGER_TARGET_WRITE_SKILLS,
-                          _WRITE_NAME_TARGET_SKILLS, WRITE_SKILL_NAMES)
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflow_defs import (  # noqa: E402
+    WORKFLOW_MAP,
+    WRITE_WORKFLOW_NAMES,
+    _FREE_TEXT_WRITE_WORKFLOWS,
+    _LEDGER_TARGET_WRITE_WORKFLOWS,
+    _OWN_WRITE_WORKFLOWS,
+    _WRITE_NAME_TARGET_WORKFLOWS,
+)
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 
 def _plan(name, params):
@@ -931,7 +936,7 @@ check("notice_read all 认不出来（'maybe'）→ 零工具（不默认 True�
       p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
 
 # notice_read 的双胞胎（20260923 批 8）：同一形状、另一个物件。这一组刻意**逐条
-# 对称**——两个技能共用 `_expand_own_skill` 的同一个分支，哪一条不对称就说明
+# 对称**——两个技能共用 `_expand_own_workflow` 的同一个分支，哪一条不对称就说明
 # 有一边漏改了（例如"缺范围就零工具"只在通知那半保留着）。
 p = _plan("message_read", {"all": True})
 check("message_read all=True → 一条 read_messages({'all': True})",
@@ -958,26 +963,26 @@ p = _plan("message_read", {"all": True})
 check("message_read 的注记说的是**信**、不是通知（两个 id 空间不许混）",
       "信" in p["note"] and "通知" not in p["note"], p["note"])
 
-check("own 写技能都落在 _OWN_WRITE_SKILLS 里（不是靠减法落到名字通道）",
-      _OWN_WRITE_SKILLS == {"favorite_add", "favorite_remove", "notice_read",
+check("own 写技能都落在 _OWN_WRITE_WORKFLOWS 里（不是靠减法落到名字通道）",
+      _OWN_WRITE_WORKFLOWS == {"favorite_add", "favorite_remove", "notice_read",
                             "message_read"},
-      str(sorted(_OWN_WRITE_SKILLS)))
+      str(sorted(_OWN_WRITE_WORKFLOWS)))
 check("own 写技能与名字通道不重叠（两套展开器的判据互斥）",
-      not (_OWN_WRITE_SKILLS & _WRITE_NAME_TARGET_SKILLS))
-# 20260929 批 H · S2 起是**五者**：多一条 `_LEDGER_TARGET_WRITE_SKILLS`（目标是台账
+      not (_OWN_WRITE_WORKFLOWS & _WRITE_NAME_TARGET_WORKFLOWS))
+# 20260929 批 H · S2 起是**五者**：多一条 `_LEDGER_TARGET_WRITE_WORKFLOWS`（目标是台账
 # 编号的那一族）。这张分类表的用途是"每条写技能都有人管"——漏一个就落进尾部兜底、
 # 零工具零写还不报错，所以它必须随名单生长一起长。
-_BUCKETS = (_WRITE_NAME_TARGET_SKILLS | _OWN_WRITE_SKILLS | _FREE_TEXT_WRITE_SKILLS
-            | _LEDGER_TARGET_WRITE_SKILLS
+_BUCKETS = (_WRITE_NAME_TARGET_WORKFLOWS | _OWN_WRITE_WORKFLOWS | _FREE_TEXT_WRITE_WORKFLOWS
+            | _LEDGER_TARGET_WRITE_WORKFLOWS
             | {"article_status", "article_tags"})
 check("注册表里每个写技能都落进五者之一（名字通道 / 台账编号 / own 通道 / 自由文本 / 文章两件）",
-      WRITE_SKILL_NAMES <= _BUCKETS,
-      str(sorted(WRITE_SKILL_NAMES - _BUCKETS)))
+      WRITE_WORKFLOW_NAMES <= _BUCKETS,
+      str(sorted(WRITE_WORKFLOW_NAMES - _BUCKETS)))
 check("  且台账编号通道与名字通道**不重叠**（一件工具被两套目标判据同时管 = 判据分裂）",
-      not (_LEDGER_TARGET_WRITE_SKILLS & _WRITE_NAME_TARGET_SKILLS),
-      str(sorted(_LEDGER_TARGET_WRITE_SKILLS & _WRITE_NAME_TARGET_SKILLS)))
-for n in sorted(_OWN_WRITE_SKILLS):
-    sk = SKILL_MAP.get(n)
+      not (_LEDGER_TARGET_WRITE_WORKFLOWS & _WRITE_NAME_TARGET_WORKFLOWS),
+      str(sorted(_LEDGER_TARGET_WRITE_WORKFLOWS & _WRITE_NAME_TARGET_WORKFLOWS)))
+for n in sorted(_OWN_WRITE_WORKFLOWS):
+    sk = WORKFLOW_MAP.get(n)
     check(f"own 写技能 {n} 不设 roles（三档角色都看得见：动的是他自己的数据）",
           sk is not None and not sk.roles, str(sk and sk.roles))
 
@@ -1005,7 +1010,7 @@ _rust = _parent_repo.read(
 
 
 from agent.graph import _CONTENT_TOOLS  # noqa: E402
-from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
+from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
 _s = _src("agent/action_text.py")

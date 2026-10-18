@@ -5,9 +5,9 @@
 `plan_obj`（程序读的字段），以及"读端直取对象"这件事本身。
 
 **为什么存在**：批 C 之前有四处读端靠**抠文本**认计划——`server.py` 的
-`plan.startswith("SKILL=")`（这是不是一份真计划）、`startswith("SKILL=chat")`（闲聊轮）、
+`plan.startswith("WORKFLOW=")`（这是不是一份真计划）、`startswith("WORKFLOW=chat")`（闲聊轮）、
 `"\nTOOLS: " in plan and "TOOLS: （无）" not in plan`（有没有执行清单），外加
-`_plan_skill` 自己写的一条 `SKILL=` 正则（与 `parse_plan` 里那条是两份拷贝）。四处都是
+`_plan_workflow` 自己写的一条 `WORKFLOW=` 正则（与 `parse_plan` 里那条是两份拷贝）。四处都是
 "改 `plan_encode` 的排版就得同步改读端"的人工约定（全仓 94 处同族约定里的一处，见
 `docs/` 那次架构审计）。现在读端直取 `plan_obj`，这份文件把新形状钉住：
 
@@ -15,13 +15,14 @@
      体内；`agent/graph.py` 里再没有第二处手写 `"plan": …`（只有 `graph_input` 的初值 `""`）。
      —— 想绕开 `plan_state` 自己拼文本，得先删掉这条锁。
   ② **两态不分叉**：`parse_plan(plan_state(obj)["plan"])` 与 `obj` 在
-     skill/tools/params/note/reply/status 六项上逐项相等（两处**已知不同形**在下面显式归一）。
-     文本仍是四个节点的读端（`route_after_planner` / `execute_node` / `gate_node` /
-     `_wrote_this_round` 都用 `parse_plan`）——这条保证"改了排版，文本那一态的语义没变"。
+     workflow/tools/params/note/reply/status 六项上逐项相等（两处**已知不同形**在下面显式归一）。
+     这条保证"改了排版，文本那一态的语义没变"。**20261017 批 1 起文本不再是任何节点的读端**
+     （四个生产读点都改走 `plan_view(state)`，见 ⑤）——② 判的是"渲染仍是保真的渲染"，
+     不再是"渲染就是读端"。
      顺带钉住 **STATUS 的兼容派生在真计划上恒不触发**（缺 STATUS 才会走到按 NOTE 措辞
      反推 nav_offline/nav_unresolved/target_unreachable 那段）——它只是给旧文本与手写夹具
      留的路，见 `parse_plan` 里那段注。
-  ③ **判据等价**：新读法（看 `skill == "chat"` / `tools` 非空）与旧读法（在文本上
+  ③ **判据等价**：新读法（看 `workflow == "chat"` / `tools` 非空）与旧读法（在文本上
      startswith / 子串）在**技能注册表全集**上判定相同；一处刻意的偏离单独钉住：
      技能名 `chat` 前缀的唯一性。
   ④ **分隔符不进值**（20260929）：TOOLS 行是 `"; ".join(specs)` 拼的，`parse_plan` 用
@@ -30,11 +31,17 @@
      的 `\u003b`（读回仍是 `;`，语义一个字节不变）。④ 锁的就是这条不变量：
      TOOLS 行的裸 `;` 只许是分隔符。
 
-**不测什么**：不测 `plan_encode` 的**排版**（`test_skills.py` 有往返用例）、不测
+  ⑤ **读侧改结构化**（20261017 批 1）：四个生产读点全部收到 `plan_view(state)`（对象那一态），
+     不再读渲染文本。三条判据 = 源码锁（`agent/` 下零个 `parse_plan` 代码调用点）＋
+     正控（文本在场、对象缺席 ⇒ 路由去 model、零执行；**改之前这条必红**）＋
+     等价（`plan_view` 与 `parse_plan` 在契约七格上逐项相等）。三条各带反控。
+
+**不测什么**：不测 `plan_encode` 的**排版**（`test_workflows.py` 有往返用例）、不测
 planner/gate 行为（各有专测）。这里只锁"通道的形状"。
 
 跑法：`.venv/bin/python tests/run_all.py -k plan_channel`
 """
+import ast
 import json
 import pathlib
 import re
@@ -44,8 +51,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import graph as G        # noqa: E402
-from agent import skills as S       # noqa: E402
-from agent.plan_codec import _esc_spec   # noqa: E402  （④ 的写端转义：20261017 起住这里）
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
+from agent.workflow_params import _param_problem_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
+from agent import decisions as D     # noqa: E402  （② 取样 `_terminal_plan`/`_wrap_up_plan`）
+from agent.plan_codec import _CONTRACT_KEYS, _esc_spec   # noqa: E402  （④ 的写端转义：20261017 起住这里）
 import server as SRV                # noqa: E402  （③ 读它的新读法：`_spec_one`/`_specs_from_tools`）
 import _ctx_src                     # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
@@ -110,31 +120,55 @@ check("  另一处是 graph_input 的初值，且同一行给了 plan_obj 的初
 
 
 # ── ② 两态不分叉 ───────────────────────────────────────────────────────────
-# 两处**已知不同形**（改造前就是如此，不是批 C 引入的）：显式归一后再逐项比。
-#   · params：对象里可能是 None，文本里恒是 `{}`（`plan_encode` 用 `json.dumps(… or {})`）
-#   · note  ：对象的空值渲染成文本的 `（无）`，解析回来是那三个字
+# 20261017 批 1 起，写侧先过 `normalize_plan` ⇒ 对象**就是规范形态**，七格逐项相等。
+# 只剩**两处渲染**要显式还原（都是文本格式的固有产物，不是语义差异）：
+#   · note ：`plan_encode` 把空注记渲染成 `（无）` 三个字，对象这边留 `""`。**不吸收
+#            那个哨兵是故意的**——`note` 同时是写侧的输入（`graph.py` / `decisions.py`
+#            / `tool_specs.py` 都会 `plan_obj["note"] = f"{old}｜{tail}"`），把哨兵吃进
+#            对象，下一次拼接就会产出 `（无）｜…`，把"没有注记"讲成一句真注记。
+#   · tools：值里的 `;` 在文本里被 `_esc_spec` 写成 `;`（TOOLS 行用 `;` 当分隔符，
+#            见 ④），`_tool_args` 读回时还原 ⇒ 比**语义**（工具名 + 参数）而不是比字节。
+# 改造前这里是六格六条归一（`params`/`reply`/`tools`/`workflow`/`status` 各归一一次），
+# 那五条归一正是"写端没归一、读端替它归一"的症状；现在它们全部消失。
 _NORM = {
-    "params": lambda v: v or {},
     "note": lambda v: "" if v in (None, "", "（无）") else v,
-    "reply": lambda v: v or "",
-    "tools": lambda v: v or [],
-    "skill": lambda v: v or "",
-    "status": lambda v: v or "",
+    "tools": lambda v: [G._tool_args(s) for s in (v or [])],
 }
+# 契约七格（唯一事实源在 `agent/plan_codec.py`，别再各抄一份键名清单）
+_KEYS = _CONTRACT_KEYS
 
 
 def _real_plans() -> list[tuple[str, dict]]:
-    """真计划的取样：注册表全集（空参）+ navigate 的四条出口 + 一条手写对象。"""
-    out = [(f"{n}(空参)", S.instantiate_plan(n, {})) for n in S.SKILL_MAP]
+    """真计划的取样：注册表全集（空参）+ navigate 四条出口 + 四条**确定性构造路径**。
+
+    后四条是 20261017 批 1 补的：它们不走 `instantiate_plan`，此前**没有任何判据**
+    盯过"这两态在它们身上是否也不分叉"——而 `_confirm_grant_plan` 恰恰是"对象少一个
+    `status` 键"的那条路径（`normalize_plan` 就是为它这一类存在的）。
+    """
+    out = [(f"{n}(空参)", instantiate_plan(n, {})) for n in WORKFLOW_MAP]
     for target in ("物联网平台", "友链", "/iot", "量子对撞机车间"):
-        out.append((f"navigate({target})", S.instantiate_plan("navigate", {"target": target})))
+        out.append((f"navigate({target})", instantiate_plan("navigate", {"target": target})))
+    out.append(("_terminal_plan", D._terminal_plan(True, "max_rounds")))
+    out.append(("_wrap_up_plan", D._wrap_up_plan(True)))
+    out.append(("_param_problem_plan", _param_problem_plan(
+        WORKFLOW_MAP["navigate"],
+        {"fixed": [], "unknown": [], "missing": ["target"], "bad": []})))
+    out.append(("_confirm_grant_plan", G._confirm_grant_plan(
+        {"workflow": "tag_create",
+         "specs": [{"tool": "create_tag", "args": {"name": "甲"}}]})))
+    # 值里带 `;` 的一条（`_esc_spec` 的射程）。**少了它 `_NORM["tools"]` 从不被触发**
+    # ——上面 55 例的参数值里一个分号都没有，于是"比语义不比字节"那句归一在 ② 里是空跑，
+    # 一条从不被触发的归一器与没有它一样（本仓最贵的那类失效模式）。
+    out.append(("值里带 `;`", {"workflow": "tag_delete",
+                               "tools": ['delete_tag({"name": "甲;乙"})'],
+                               "params": {}, "note": "", "reply": "r"}))
     return out
 
 
 print("② 两态不分叉（对象 ↔ 文本）")
 _cases = _real_plans()
-check("取样非空（注册表全集 + navigate 四出口）", len(_cases) >= len(S.SKILL_MAP),
-      f"{len(_cases)} 例")
+check("取样非空（注册表全集 + navigate 四出口 + 四条确定性构造路径 + 一条带 `;` 的值）",
+      len(_cases) >= len(WORKFLOW_MAP) + 5, f"{len(_cases)} 例")
 _div, _derived = [], []
 for label, obj in _cases:
     st = G.plan_state(obj)
@@ -142,15 +176,17 @@ for label, obj in _cases:
         _div.append(f"{label}:plan_obj 不是同一份对象")
         continue
     parsed = G.parse_plan(st["plan"])
-    for k, norm in _NORM.items():
+    for k in _KEYS:
+        norm = _NORM.get(k, lambda v: v)
         if norm(obj.get(k)) != norm(parsed.get(k)):
             _div.append(f"{label}:{k} 对象={norm(obj.get(k))!r} 文本={norm(parsed.get(k))!r}")
-    # STATUS 兼容派生在当前真计划上恒不触发：对象没给 status 时，文本也不该"读出"一个
-    if not (obj.get("status") or "") and (parsed.get("status") or ""):
-        _derived.append(f"{label}:文本派生出 {parsed['status']!r}")
-check("六项逐项相等（skill/tools/params/note/reply/status，两处不同形已归一）",
+    # 两态的 STATUS 派生必须同源：写侧 `normalize_plan` 派生了什么，文本读回来就得是
+    # 同一个值（它们共用 `_derive_status`；这条盯的是"别哪天有人只改一边"）。
+    if (obj.get("status") or "") != (parsed.get("status") or ""):
+        _derived.append(f"{label}:对象 {obj.get('status')!r} / 文本 {parsed.get('status')!r}")
+check("契约七格逐项相等（workflow/params/tools/note/reply/chat/status，两处渲染已还原）",
       not _div, "；".join(_div[:5]))
-check("STATUS 兼容派生在真计划上恒不触发（NOTE 措辞不再决定 status）",
+check("STATUS 的派生两态同源（写侧派生的值与文本读回来的一致）",
       not _derived, "；".join(_derived[:5]))
 def _keyerror(fn) -> bool:
     try:
@@ -167,15 +203,15 @@ check("空对象进 plan_encode 会 KeyError（读端因此用 `if pobj:` 认「
 # ── ③ 判据等价（新旧读法在同一份计划上判定相同）──────────────────────────────
 def _old_verdict(plan_text: str) -> tuple:
     """批 C 之前 `server.py` 的三段文本嗅探（逐字照抄，作对照臂）。"""
-    return (plan_text.startswith("SKILL="),
-            plan_text.startswith("SKILL=chat"),
+    return (plan_text.startswith("WORKFLOW="),
+            plan_text.startswith("WORKFLOW=chat"),
             "\nTOOLS: " in plan_text and "TOOLS: （无）" not in plan_text)
 
 
 def _new_verdict(pobj: dict) -> tuple:
     """现在的读法（`server.py` 现状：真计划 / 闲聊轮 / 有执行清单）。"""
     return (bool(pobj),
-            str(pobj.get("skill") or "") == "chat",
+            str(pobj.get("workflow") or "") == "chat",
             bool(pobj.get("tools")))
 
 
@@ -195,9 +231,9 @@ def _old_specs_from_plan(plan_text: str) -> list:
 
 print("③ 判据等价（新旧读法）")
 _bad = []
-for n in S.SKILL_MAP:
-    for obj in ({"skill": n, "tools": [], "params": {}, "note": "", "reply": "r"},
-                {"skill": n, "tools": [f'list_tags({{"n": "{n}"}})'], "params": {},
+for n in WORKFLOW_MAP:
+    for obj in ({"workflow": n, "tools": [], "params": {}, "note": "", "reply": "r"},
+                {"workflow": n, "tools": [f'list_tags({{"n": "{n}"}})'], "params": {},
                  "note": "", "reply": "r"}):
         st = G.plan_state(obj)
         if _old_verdict(st["plan"]) != _new_verdict(obj):
@@ -207,13 +243,13 @@ check("空计划（没有 plan_obj / 空文本）两边都判「不是真计划�
       _old_verdict("") == _new_verdict({}) == (False, False, False))
 # 离意偏离 1：新读法用 `== "chat"`，旧读法用的是 startswith —— 只有当出现以 chat 开头的
 # 另一个技能名时两者才分岔。这条断言就是那个前提：真分岔了，先看这里再改判据。
-_dup = [n for n in S.SKILL_MAP if n != "chat" and n.startswith("chat")]
+_dup = [n for n in WORKFLOW_MAP if n != "chat" and n.startswith("chat")]
 check("技能名里以 chat 开头的只有 chat 自己（新读法 `== \"chat\"` 与旧 startswith 等价的唯一前提）",
       not _dup, str(_dup))
 # 刻意偏离：spec 的 JSON 字符串里含 `;`（标题/正文带分号是常态）。三段嗅探的判定不受影响
 # ——差的只是动作预览列表。撕成两条那件事已由写端堵上（见 ④），这里只留判定一致。
 _spec = 'tag_delete({"name": "a;b"})'
-_st = G.plan_state({"skill": "tag_delete", "tools": [_spec], "params": {},
+_st = G.plan_state({"workflow": "tag_delete", "tools": [_spec], "params": {},
                     "note": "", "reply": "r"})
 check("值里含 `;` 时三段嗅探的判定两边仍然一致（差的是预览列表，不是闸）",
       _old_verdict(_st["plan"]) == _new_verdict(_st["plan_obj"]))
@@ -240,7 +276,7 @@ def _tools_line(txt: str) -> str:
 
 
 def _plan_with(tools: list[str]) -> str:
-    return G.plan_state({"skill": "tag_delete", "tools": tools, "params": {},
+    return G.plan_state({"workflow": "tag_delete", "tools": tools, "params": {},
                          "note": "", "reply": "r"})["plan"]
 
 
@@ -279,7 +315,7 @@ check("值里含换行时 TOOLS 行仍是一行（json.dumps 转义），读回�
       len(_got) == 1 and _val == "上\n下", f"条数={len(_got)} 读回={_val!r}")
 
 # 正向控制：PARAMS 行不参与任何 `;` 切分，转义器也不碰它（改坏了这条会红）。
-_st2 = G.plan_state({"skill": "navigate", "tools": [], "params": {"target": "a;b;c"},
+_st2 = G.plan_state({"workflow": "navigate", "tools": [], "params": {"target": "a;b;c"},
                      "note": "", "reply": "r"})
 check("PARAMS 行不受影响（分号原样进去、原样读回）",
       G.parse_plan(_st2["plan"])["params"] == {"target": "a;b;c"},
@@ -302,7 +338,7 @@ check("对照臂：同一串不经转义（= 改写前写端的产物）会被�
 # 走真技能：`device_draw` 当天已随画板撤掉（见 CHANGELOG），这里换成同样把整串塞进
 # **一个**参数的 `tag_delete`——这条判据要的是"真 `instantiate_plan` 产出的 spec"，
 # 与是哪个技能无关；不管哪个技能，值里的 `;` 都得原样活下来。
-_txt = G.plan_state(S.instantiate_plan("tag_delete", {"name": _PROD_SHAPE}))["plan"]
+_txt = G.plan_state(instantiate_plan("tag_delete", {"name": _PROD_SHAPE}))["plan"]
 _specs = G.parse_plan(_txt)["tools"]
 _args, _ok = G._tool_args(_specs[0]) if len(_specs) == 1 else ({}, False)
 check("生产复现：走真技能（instantiate_plan → plan_state → parse_plan）恰好一条 spec",
@@ -313,6 +349,118 @@ check("  名是 delete_tag、name 逐字节等于原文（转义读回还原成�
       f"ok={_ok} 读回 {len(_args.get('name') or '')} 字 / 原文 {len(_PROD_SHAPE)} 字")
 check("  且 TOOLS 行 0 个裸分号（只有一条 spec，连分隔符都不该有）",
       _tools_line(_txt).count(";") == 0, str(_tools_line(_txt).count(";")))
+
+# ── ⑤ 读侧改结构化（20261017 批 1）────────────────────────────────────────────
+# 批 1 之前计划有**两个读法**：`parse_plan(state["plan"])`（文本，四个生产读点都走它）与
+# `state["plan_obj"]`（对象，只有 `_plan_workflow` / `server.py` 用）。批 1 把生产读点
+# 全部收到 `plan_view(state)`——对象的规范形态（`agent/plan_codec.py`，与写端 `plan_state`
+# 同处）。三条判据，每条都要能抓住"其实没生效"：
+#   ⑤a 源码锁：`agent/` 下（`plan_codec.py` 自身除外）`parse_plan(` 的**代码调用点为零**。
+#   ⑤b 正控（红基线）：文本在场、对象缺席 ⇒ 路由去 model、执行零条。**改之前这条必红**
+#      （旧读法照着文本里的 TOOLS 行就去 execute 了）——它是"真的改读对象了"的证明。
+#   ⑤c 等价：改读对象**没有**顺手改掉语义——两态在契约七格上逐项相等。
+print("⑤ 读侧改结构化：生产链路不再读渲染出来的文本")
+
+# ⑤a 源码锁。扫**调用点**（`ast.Call` 且函数名是裸名 `parse_plan`）而不是文本：文档字符串与
+# 注释里提到它不算——本文件与 `plan_codec.py` 的头注都在讲它，文本扫会当场假红（同
+# `test_frame_contract` ④b 记下的那条：**锁的落点要选判据别选字面**）。`from … import
+# parse_plan` 是 `ImportFrom`，不是 `Call`，所以 `agent/graph.py` 的 re-export 不命中。
+_AGENT_PY = sorted((ROOT / "agent").rglob("*.py"))
+_hits = []
+for _p in _AGENT_PY:
+    if _p.name == "plan_codec.py":
+        continue                     # 文本读器自己：`parse_plan` 的定义与文档就在这儿
+    for _n in ast.walk(ast.parse(_p.read_text(encoding="utf-8"))):
+        if (isinstance(_n, ast.Call) and isinstance(_n.func, ast.Name)
+                and _n.func.id == "parse_plan"):
+            _hits.append(f"{_p.relative_to(ROOT)}:{_n.lineno}")
+check(f"⑤a 扫面非空（agent/ 下 {len(_AGENT_PY)} 个模块，plan_codec.py 除外）",
+      len(_AGENT_PY) > 30, f"{len(_AGENT_PY)} 个")
+check("⑤a `agent/` 下（`plan_codec.py` 自身除外）`parse_plan(` 的**代码调用点为零**"
+      "（谁再把渲染文本读回生产链路，当场红）", not _hits, str(_hits))
+
+# ⑤b 正控（红基线）。材料 = 一份**只有渲染文本**的 state：`plan_state` 照常一次写两态，
+# 这里故意把对象那一格留空。前提单独断言一次——"文本里确实有调用清单"是这条红基线
+# 成立的**条件**，不写成断言就只是修辞。
+_pobj = {"workflow": "content_query", "tools": ['spy_read({"n": 1})'], "params": {},
+         "note": "", "reply": "r"}
+_text_only = {"plan": G.plan_state(dict(_pobj))["plan"], "plan_obj": {},
+              "messages": [], "plan_rounds": 1, "done": False}
+check("⑤b 前提：这份 state 的**文本里确实有调用清单**（旧读法会照着它去 execute）",
+      G.parse_plan(_text_only["plan"])["tools"] == ['spy_read({"n": 1})'],
+      str(G.parse_plan(_text_only["plan"])["tools"]))
+
+
+class _Spy:
+    """只为数调用次数（与真工具无关）：`_TOOL_MAP` 的调用面就是 `.invoke(args)`。"""
+
+    def __init__(self):
+        self.calls: list = []
+
+    def invoke(self, args):
+        self.calls.append(args)
+        return "ok"
+
+
+_spy = _Spy()
+_orig_spy = G._TOOL_MAP.get("spy_read")
+G._TOOL_MAP["spy_read"] = _spy
+_cfg = {"configurable": {"user_id": 0}}
+try:
+    _r = G.execute_node(dict(_text_only), _cfg)
+    check("⑤b 正控（改读对象之后必红的那条）：文本在场、对象缺席 ⇒ 路由去 model、执行零条",
+          G.route_after_planner(dict(_text_only)) == "model"
+          and _r["messages"] == [] and _spy.calls == [],
+          f"路由={G.route_after_planner(dict(_text_only))} "
+          f"帧={len(_r['messages'])} 调用={_spy.calls}")
+    # 反控：同一个计划**给了对象** ⇒ 路由去 execute、工具真被调用一次。少了这一条，
+    # 上面那条"零执行"既可能是判据生效，也可能是夹具本身根本执行不动（本仓
+    # 「正控不红不算数」——一条永远不会红的判据与没有它一样）。
+    _both = {**G.plan_state(dict(_pobj)), "messages": [], "plan_rounds": 1, "done": False}
+    _r2 = G.execute_node(dict(_both), _cfg)
+    check("⑤b 反控：同一个计划给了对象 ⇒ 路由去 execute、工具真被调用一次"
+          "（证明上面那条不是夹具坏掉导致的假绿）",
+          G.route_after_planner(dict(_both)) == "execute"
+          and len(_r2["messages"]) == 1 and _spy.calls == [{"n": 1}],
+          f"路由={G.route_after_planner(dict(_both))} "
+          f"帧={len(_r2['messages'])} 调用={_spy.calls}")
+finally:
+    if _orig_spy is None:
+        G._TOOL_MAP.pop("spy_read", None)
+    else:
+        G._TOOL_MAP["spy_read"] = _orig_spy
+
+
+# ⑤c 等价。取样与 ② 同源（`_real_plans`：注册表全集 + navigate 四出口 + 四条确定性构造
+# 路径 + 一条带 `;` 的值），归一也与 ② 同源（`_NORM` 的两处渲染还原）。
+def _divergences(st: dict) -> list:
+    """对象那一态与文本那一态在契约七格上的差（`_NORM` 归一掉两处已知渲染）。"""
+    view, parsed = G.plan_view(dict(st)), G.parse_plan(st.get("plan") or "")
+    out = []
+    for k in _KEYS:
+        norm = _NORM.get(k, lambda v: v)
+        if norm(view.get(k)) != norm(parsed.get(k)):
+            out.append(f"{k}: 对象={norm(view.get(k))!r} 文本={norm(parsed.get(k))!r}")
+    return out
+
+
+print("⑤c 读侧入口与文本读器等价（plan_view ↔ parse_plan）")
+_bad = []
+for _label, _obj in _real_plans():
+    _d = _divergences(G.plan_state(dict(_obj)))
+    if _d:
+        _bad.append(f"{_label}: " + "；".join(_d))
+check("⑤c 契约七格逐项相等（注册表全集 + navigate 四出口 + 四条确定性构造路径 + 一条带 `;`）"
+      "——改读对象没顺手改掉语义",
+      not _bad, "；".join(_bad[:3]))
+check("⑤c 没有计划时两边兜底同源（`plan_view({})` 逐项等于 `parse_plan(\"\")`）",
+      not _divergences({}), str(_divergences({})))
+# 反控：判据要能抓到"两态真的分叉"。伪造一份对象与文本不一致的 state（文本说 chat、
+# 对象说 navigate）⇒ 必须报出来，否则上面两条只是恒真的空跑。
+_st3 = G.plan_state({"workflow": "chat", "tools": [], "params": {}, "note": "", "reply": "r"})
+_fake = dict(_st3, plan_obj={**_st3["plan_obj"], "workflow": "navigate"})
+check("⑤c 反控：对象与文本不一致时判得出来（不是恒真的空跑）",
+      bool(_divergences(_fake)), "伪造的分叉没被抓到 = 这条判据没在看两态")
 
 print()
 if FAILS:

@@ -153,7 +153,9 @@ def run_case(arm: str, case: str, probe_dir: str, rep: int,
     env.update({
         "PYTHONPATH": f"{WT}:{PYDEPS}",
         "GOLDEN_ARM": arm,
-        "GOLDEN_ADMIN_UID": "721",
+        # 20261017：admin 由 721 改指 756（专用夹具管理员；721 已降权为 user，
+        # 理由见 `scripts/nightly_regression.sh` 那处长注）。四臂必须指同一个身份。
+        "GOLDEN_ADMIN_UID": "756",
         "GOLDEN_USER_UID": "722",
         # **逐 (臂, 用例, 遍) 一个文件**：一份大 JSONL 分不出哪几行是哪条用例的
         # （读数里没有用例 id，只有 pid）。文件名就是坐标。

@@ -29,10 +29,10 @@ import agent.graph as G  # noqa: E402
 from agent.graph import (  # noqa: E402
     _FALLBACK_EFFECT_NO_FRAME, _claim_issue, _effect_state_claim,
     _effect_state_claim_clause, _live_darkmode, _live_effects,
-    gate_node, parse_plan, plan_encode,
+    gate_node, parse_plan, plan_encode, plan_state,
 )
 from agent.principal import Principal  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -62,7 +62,7 @@ def _sys_msg(ctx=NONE_):
 def _chat_state(msgs, **kw):
     """零帧 chat 轮的 gate 输入（本族只跑在零帧族表里）。`gate_replan=True` = 重规划
     那次已经用掉 ⇒ 打回走确定性兜底，断言能直接读到兜底文本。"""
-    st = {"plan": plan_encode(instantiate_plan("chat", {})), "messages": msgs,
+    st = {**plan_state(instantiate_plan("chat", {})), "messages": msgs,
           "done": False, "plan_rounds": 2, "gate_replan": True}
     st.update(kw)
     return st
@@ -234,7 +234,7 @@ def test_frame_round_not_in_scope():
     frame = G.ToolMessage(content="特效 樱花(sakura) 已打开", tool_call_id="t1")
     o = gate_node(_chat_state([_sys_msg(NONE_), human, frame,
                                AIMessage(content="主人，樱花特效已经打开啦～")],
-                              receipts=[{"skill": "effect", "tool": "toggle_effect",
+                              receipts=[{"workflow": "effect", "tool": "toggle_effect",
                                          "args": {"effect": "sakura", "action": "on"},
                                          "result": "特效 樱花(sakura) 已打开"}]))
     check("有工具帧那轮（回执在场）⇒ 本族不判，放行",

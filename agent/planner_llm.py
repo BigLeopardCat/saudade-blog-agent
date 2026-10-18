@@ -1,7 +1,7 @@
 """planner 与 LLM 之间的接线层：技能表 ↔ API 的 `tools` / `tool_calls`（20260927 起）。
 
 **为什么存在**：planner 此前靠"系统渲染文本菜单 → 模型写五行文本 → 正则抠"决策
-（`SKILL=` / `PARAMS=` / `TOOLS:` 契约见 `agent/plan_codec.py` 的 `plan_encode`）。那条路把
+（`WORKFLOW=` / `PARAMS=` / `TOOLS:` 契约见 `agent/plan_codec.py` 的 `plan_encode`）。那条路把
 **格式正确性**押在模型的文本纪律上：实测约 15% 的轮次改用 JSON 对象或带引号键回答，
 旧内联正则匹配不到 ⇒ 静默落成 chat（主人收到一句假的"我做不到"）。现在这一步换成
 API 的 `tools` 字段 + `tool_calls` 返回——格式由服务端约定、参数由 schema 约束。
@@ -26,7 +26,7 @@ API 的 `tools` 字段 + `tool_calls` 返回——格式由服务端约定、参
 仍然是动作工具的唯一入口，`instantiate_plan` 一行不用改。
 
 **为什么这不缩小本模块的价值**：技能集正是渲染 planner 菜单用的那张表
-（`visible_skills(role)` × `skill_param_specs`）⇒ schema 与菜单**同源**，"模型能选的"
+（`visible_workflows(role)` × `workflow_param_specs`）⇒ schema 与菜单**同源**，"模型能选的"
 恒等于"今天这个身份本来就能选的"，没有第二份名单可漂移——**不扩权是结构性的**，
 `tests/test_planner_llm.py` 另有一条集合相等断言做防御。工具参数上的 `Literal` 闭集
 也第一次变成服务端强制的 `enum`（此前只是提示词里的一句话）。
@@ -59,16 +59,6 @@ from agent.provenance import (
     parse_evidence,
     write_scope_tools,
 )
-from agent.skills import (
-    SKILL_MAP,
-    ParamSpec,
-    callable_query_tools,
-    explicit_tools,
-    render_tool_marks,
-    skill_param_specs,
-    tool_arg_schemas,
-    visible_skills,
-)
 from agent.tasks import (
     INTENTS_ARG,
     INTENTS_FIELD_DESC,
@@ -81,8 +71,13 @@ from agent.tasks import (
     normalize_intents,
     pseudo_tool_schemas,
 )
+from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
+from agent.workflow_menu import render_tool_marks
+from agent.workflow_model import ParamSpec
+from agent.workflow_params import tool_arg_schemas, workflow_param_specs
+from agent.workflow_tools import callable_query_tools, explicit_tools
 
-# 技能参数的短类型名（`ParamSpec.type`，见 `agent/skills.py::arg_type_short`）→ JSON Schema。
+# 技能参数的短类型名（`ParamSpec.type`，见 `workflow_params.py::arg_type_short`）→ JSON Schema。
 # `any` / `?` 是"推不出映射"，不在表里——由 `_param_schema` 兜（见那里的注）。
 _TYPE_MAP = {"str": "string", "int": "integer", "num": "number",
              "bool": "boolean", "list": "array", "dict": "object"}
@@ -92,15 +87,15 @@ _TYPE_MAP = {"str": "string", "int": "integer", "num": "number",
 class PlannerDecision:
     """一次工具调用决策的结果。**只是数据**——不写 state、不碰库、不发帧。
 
-    `skill` / `params` 交给 `instantiate_plan` 展开，与文本档产出**同构**；其余字段
+    `workflow` / `params` 交给 `instantiate_plan` 展开，与文本档产出**同构**；其余字段
     只进 trace，供事后按 engine 切语料对账（见本模块头注的"边界"）。
 
     `declare`（20260927 批 D）是唯一的例外：它不是技能参数，而是"这件事还没做完"的
-    结构化登记（`agent/tasks.py`）。它与 `skill`/`params` **可以同时有**——"这一轮把
+    结构化登记（`agent/tasks.py`）。它与 `workflow`/`params` **可以同时有**——"这一轮把
     第一步做掉 + 把剩下的登记下来"正是多步目标该有的形态。消费方（planner）见它就走
     任务登记那一支，不把它塞进 `instantiate_plan`。
     """
-    skill: str
+    workflow: str
     params: dict
     notes: tuple[str, ...] = ()      # 机器可读的异常记账（如 native_multi_call）
     finish_reason: str = ""          # `length` = 被额度截断（"预算够不够"的判据）
@@ -112,13 +107,13 @@ class PlannerDecision:
     # （`planner.reply_kind`）供事后核对"模型把哪一类读错了"。
     reply_kind: str = ""
     # 归一化后的**意图清单**（20261008 批 ②，`agent/tasks.py::TASK_INTENTS`）：主人这一句
-    # 话里要办的每一件事 `[{"goal", "skill"}]`（含这一轮正要办的那件）。与 `declare`
+    # 话里要办的每一件事 `[{"goal", "workflow"}]`（含这一轮正要办的那件）。与 `declare`
     # 并列而**不是**它的替代：`declare` 是"剩下的步骤与工具"（模型写的计划），
     # `intents` 只是枚举——系统拿它减去本轮办了的，把剩下的自动登记（步骤由技能模板推）。
     # 空元组 = 模型没给（这是常态，只有多件事的一句话才该给）。
     intents: tuple[dict, ...] = ()
     # 一个函数都没点、正文却非空（20261004）：**这不是一个决策**，只是"没做出决策"。
-    # 它的 `skill` 仍是 `chat`（下游要用一个合法技能名把这一轮走完），但调用方必须先
+    # 它的 `workflow` 仍是 `chat`（下游要用一个合法技能名把这一轮走完），但调用方必须先
     # 拿这个标记去走一次纠偏——见 `planner_node` 的"零调用"那一格与
     # `_PLANNER_OUTPUT_CONTRACT_NATIVE` 第 7 条。
     undecided: bool = False
@@ -134,17 +129,17 @@ def _items_schema(sp: ParamSpec) -> dict:
 
     **为什么必须回查**：`ParamSpec` 只留了短类型名，`list` 丢掉了元素类型，而元素
     类型是有真有假的——`notice_read.ids` 是 integer、`article_tags.add` 是 string。
-    一律声明 string 会让模型把 id 写成 `"3"`，而 `check_skill_params` 的归一**不看
+    一律声明 string 会让模型把 id 写成 `"3"`，而 `check_workflow_params` 的归一**不看
     数组元素**，于是这个错误会一路走到工具层才炸（白烧一轮）。`from_tool` 是
     `ParamSpec` 自己的字段、指向同一条派生链，所以这不算引入第二个来源。
-    查不到就退化成 string（**宁可少说，不说错**——同 `render_skill_params` 的取向）。
+    查不到就退化成 string（**宁可少说，不说错**——同 `render_workflow_params` 的取向）。
     """
     tool_name, _, arg = sp.from_tool.partition(".")
     frag = ((tool_arg_schemas().get(tool_name) or {}).get("properties") or {}).get(arg)
     if not isinstance(frag, dict):
         return {"type": "string"}
     # 可空数组的片段长这样：`{"anyOf": [{"type":"array","items":{...}}, {"type":"null"}]}`
-    # （pydantic 2.13 实测，见 `agent/skills.py::arg_enum` 的同族注），所以要把
+    # （pydantic 2.13 实测，见 `agent/workflow_params.py::arg_enum` 的同族注），所以要把
     # anyOf 各支与顶层一起看——只看顶层会得出"它没有 items"。
     variants = list(frag.get("anyOf") or ()) + [frag]
     for one in variants:
@@ -213,7 +208,7 @@ _SCHEMA_OVERRIDES: dict[tuple[str, str], dict] = {
     # 形状"那一族——技能模板是**一个名字一条 spec**（`{"title": "$title"}`），数组
     # 这一格在 `_template_param_map` 里配不到任何工具参数（`create_tag` 收的是单数
     # `title`）。不收进来它就落进 `_param_schema` 的兜底、被声明成 `string`：模型
-    # 填一个字符串**不算错**（展开层两种都收，见 `skills._write_list_arg`），但
+    # 填一个字符串**不算错**（展开层两种都收，见 `workflows._write_list_arg`），但
     # "这一格装的是一批名字"这件事，只有 array 声明说得出口——而它正是"主人一次
     # 点了好几个新标签"能被一次办掉的入口。
     ("tag_create", "titles"): {
@@ -243,17 +238,17 @@ def _calls_arg_hint(tool_names) -> str:
     return "；".join(bits)
 
 
-def _override_for(role: str | None, skill_name: str, param: str) -> dict | None:
+def _override_for(role: str | None, workflow_name: str, param: str) -> dict | None:
     """取手写覆盖（含按角色展开的闭集）。没覆盖 → None。"""
-    base = _SCHEMA_OVERRIDES.get((skill_name, param))
+    base = _SCHEMA_OVERRIDES.get((workflow_name, param))
     if base is None:
         return None
     out = dict(base)
-    if skill_name == "content_query" and param == "tools":
+    if workflow_name == "content_query" and param == "tools":
         out["items"] = {"type": "string", "enum": explicit_tools(role)}
-    elif skill_name == "content_query" and param == "calls":
+    elif workflow_name == "content_query" and param == "calls":
         # 闭集按角色展开 —— 白名单只有 `callable_query_tools` 这一处来源
-        # （见 agent/skills.py 的注：手写名单是漏项来源）。
+        # （见 agent/workflow_tools.py 的注：手写名单是漏项来源）。
         out["items"] = {
             **base["items"],
             "properties": {
@@ -261,11 +256,11 @@ def _override_for(role: str | None, skill_name: str, param: str) -> dict | None:
                 "tool": {"type": "string", "enum": callable_query_tools(role)},
             },
         }
-    elif skill_name == "review_inbox" and param == "calls":
+    elif workflow_name == "review_inbox" and param == "calls":
         # 闭集 = 该技能 `plan` 声明的工具全集（与 `_expand_change_set` / 执行轮
         # `_confirm_grant_plan` 读的是**同一个字段**，见技能定义：它同时是跨族安全性
         # 的来源）。枚举之外的写工具名因此连 schema 这一关都过不了。
-        allowed = [t for t, _ in (SKILL_MAP[skill_name].plan or ())]
+        allowed = [t for t, _ in (WORKFLOW_MAP[workflow_name].plan or ())]
         items = {**base["items"],
                  "properties": {**base["items"]["properties"],
                                 "tool": {"type": "string", "enum": allowed}}}
@@ -276,16 +271,16 @@ def _override_for(role: str | None, skill_name: str, param: str) -> dict | None:
     return out
 
 
-def _has_write_tool(skill) -> bool:
+def _has_write_tool(workflow) -> bool:
     """这个技能**可能**派出去的工具里，有没有落在出处闸射程内的写工具（20261014）。
 
     取两者之和（`plan` 模板 + `extra_plan_tools` 条件工具），即"这份令牌里容得下
-    哪几件"——与 `_confirm_grant_plan` 的形状检查**同一处事实源**（见 `Skill.extra_plan_tools`
+    哪几件"——与 `_confirm_grant_plan` 的形状检查**同一处事实源**（见 `Workflow.extra_plan_tools`
     的注：只看 `plan` 会漏掉 `article_tags` 的 `create_tag`，而那正是要出处的那一件）。
     """
     scope = write_scope_tools()
     return any(t in scope for t in
-               [t for t, _ in skill.plan] + list(skill.extra_plan_tools))
+               [t for t, _ in workflow.plan] + list(workflow.extra_plan_tools))
 
 
 def build_tool_schema(role: str | None, *, evidence: bool = False,
@@ -293,13 +288,13 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
                       deny_pseudo: frozenset[str] | set[str] | None = None) -> list[dict]:
     """本轮这个身份能选的技能 → OpenAI `tools` 数组。
 
-    **来源只有一处**：`visible_skills(role)` × `skill_param_specs(skill)`——与渲染
+    **来源只有一处**：`visible_workflows(role)` × `workflow_param_specs(workflow)`——与渲染
     planner 菜单（`build_planner_context`）用的是同一张表。因此"模型能选的"恒等于
     "今天这个身份本来就能选的"：管理员技能在 `role != "admin"` 时结构上选不出来，
     不需要在这里再判一次角色。
 
     **`deny` 是"这一轮不许再选"的技能名集合**（20261007，1d）——来源是上一轮的受阻项里
-    "改参数重试无效"那一族（`block_reasons.denied_skills`）。它**不扩权**（只会更小），
+    "改参数重试无效"那一族（`block_reasons.denied_workflows`）。它**不扩权**（只会更小），
     也不是第二份可见性名单：它只在"上一轮同一个技能刚失败过"时才非空，无阻碍轮**传空集
     ⇒ schema 逐字节不变**。语义上是"模型没有可再点的东西"，不是"提示它别点"——同一条
     禁令写进提示词的那两版都被 A/B 否掉了（见 `docs/问题记录.md` §1.55 的 1b）。
@@ -312,7 +307,7 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
     撤下一件已登记的事——为什么是两条而不是"空步骤"，见 `tasks.TASK_DROP` 的注；
     `task_intents` 交意图清单）。**20261015 撤档前它们挂在一个 `task_state` 开关下**
     （出厂关、产线开）：现在没有开关了——任务状态是默认必备的能力，不该有开关把它变成
-    摆设（主人裁决，理由与判据见 `docs/问题记录.md` §1.63）。它们不进 `visible_skills`
+    摆设（主人裁决，理由与判据见 `docs/问题记录.md` §1.63）。它们不进 `visible_workflows`
     那条集合断言的口径里——断言写的是"技能名集合 + 申报过的伪函数"（见
     `tests/test_planner_llm.py` ①）。**这不是扩权**：它们不是技能、不执行任何工具、
     也没有第二个消费方，只是让模型能把"剩下的步骤"说出来、把"不做了"说清楚；
@@ -343,14 +338,14 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
     `task_hold` / `task_drop` 同理可摘，只是今天没有触发它们的现场。
     """
     tools: list[dict] = []
-    for skill in visible_skills(role):
-        if deny and skill.name in deny:
+    for workflow in visible_workflows(role):
+        if deny and workflow.name in deny:
             continue
-        specs = skill_param_specs(skill)
+        specs = workflow_param_specs(workflow)
         props: dict[str, dict] = {}
         required: list[str] = []
         for name, sp in specs.items():
-            props[name] = _override_for(role, skill.name, name) or _param_schema(sp)
+            props[name] = _override_for(role, workflow.name, name) or _param_schema(sp)
             if sp.required:
                 required.append(name)
         # 意图清单的**第二个出口**（20261008，见 `tasks.intents_prop_schema`）：每个
@@ -373,17 +368,18 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
         # 没人读的自我说明，挂少了影子数据会缺一整族。
         # 与 `intents` 一样：**不进 `required`、不进 `params`**（`tool_calls_to_plan`
         # 摘走），所以"模型不填"与本参数不存在时逐字节相同。
-        if evidence and _has_write_tool(skill):
+        if evidence and _has_write_tool(workflow):
             props[EVIDENCE_ARG] = evidence_prop_schema(EVIDENCE_FIELD_DESC)
         # 描述里的工具枚举标记**必须在这里展开**（20260927 修）：技能描述里写着
-        # `__无参只读工具清单__` 这类占位（见 skills.py 的 `_EXPLICIT_TOOLS_MARK`），
-        # 角色相关的展开此前只发生在文本菜单那一路（`skills.py` 的 `render_tool_marks`）⇒ 接口层把
-        # **未展开的标记原样**发给了模型（实测 admin/None 各 1 处）。两处渲染同一份
+        # `__无参只读工具清单__` 这类占位（见 workflow_model.py 的 `_EXPLICIT_TOOLS_MARK`），
+        # 角色相关的展开此前只发生在文本菜单那一路（`workflow_menu.py` 的
+        # `render_tool_marks`）⇒ 接口层把**未展开的标记原样**发给了模型（实测 admin/None
+        # 各 1 处）。两处渲染同一份
         # 描述文本，展开器只能有一个（同"手抄第二份名单"的教训）。
-        desc = render_tool_marks(skill.description, role)
-        if skill.complete_when:
-            desc = f"{desc}\n完成判定：{skill.complete_when}"
-        fn: dict[str, Any] = {"name": skill.name, "description": desc,
+        desc = render_tool_marks(workflow.description, role)
+        if workflow.complete_when:
+            desc = f"{desc}\n完成判定：{workflow.complete_when}"
+        fn: dict[str, Any] = {"name": workflow.name, "description": desc,
                               "parameters": {"type": "object", "properties": props,
                                              "additionalProperties": False}}
         # 无必填就**不写** `required` 键：写空数组与不写语义相同，但少一个字段就少
@@ -494,7 +490,7 @@ def tool_calls_to_plan(resp: object, role: str | None) -> PlannerDecision | None
     `undecided`：那一轮模型是明确表达过意图的（"剩下的记下来"），只是没有动作要做。
 
     ⚠️ **别把模型那句话塞进 `params.reply`**（20260927 一稿就是这么写的，跟着数据核
-    完改掉了）：`chat` 技能在注册表里 `inputs={}`、`skill_param_specs` 也是空的，
+    完改掉了）：`chat` 技能在注册表里 `inputs={}`、`workflow_param_specs` 也是空的，
     而 `planner_node` 会把 `PARAMS=` 原样写进计划文本（`plan_encode`）交给 narrator
     ——所以① 那句话**不会**被任何代码当字段读走；② 会白白记一条 `param_unknown`
     告警（那个信号是**注册表与提示词漂移的探针**，每轮闲聊都报一次等于把它淹掉）。
@@ -505,7 +501,7 @@ def tool_calls_to_plan(resp: object, role: str | None) -> PlannerDecision | None
 
     先摘出**三个伪函数**的调用（登记/撤下：20260927 批 D；意图清单：20261008 批 ②）：
     **它们不参与技能选择**，而是单独归一化成 `declare` / `intents`，剩下的调用照旧走本
-    函数原有的"取第一条"逻辑。组合都成立且都要支持——只登记（`skill="chat"`、
+    函数原有的"取第一条"逻辑。组合都成立且都要支持——只登记（`workflow="chat"`、
     `declare` 非空）、登记 + 一个动作调用（"这一轮做掉第一步，同时把剩下的记下来"，
     这正是多步目标该有的形态）、一句话多件事时"动作 + 意图清单"。
     （20261015 撤档前这一步挂在一个 `task_state` 开关下；开关撤掉后摘伪调用是**无条件**
@@ -557,12 +553,12 @@ def tool_calls_to_plan(resp: object, role: str | None) -> PlannerDecision | None
             undecided = True
         # 只有登记/撤回/意图清单、或伪函数参数无效：技能位给 chat（本轮没有动作要执行）
         # ——`declare`/`intents` 交给 planner 那一支，`notes` 让那一格在 trace 里看得见。
-        return PlannerDecision(skill="chat", params={}, notes=tuple(notes),
+        return PlannerDecision(workflow="chat", params={}, notes=tuple(notes),
                               declare=declare, intents=intents,
                               undecided=undecided, **base)
     head = calls[0] if isinstance(calls[0], dict) else {}
     name = str(head.get("name") or "")
-    if name not in {s.name for s in visible_skills(role)}:
+    if name not in {s.name for s in visible_workflows(role)}:
         return None
     args = head.get("args")
     if not isinstance(args, dict):
@@ -611,7 +607,7 @@ def tool_calls_to_plan(resp: object, role: str | None) -> PlannerDecision | None
         # 而不是"intents 非空"**：字段那一路（设计内的常态）另有 `task_intents_field`
         # 一条，混用会让"约定被打破"这个信号恒真。
         notes.append(f"{TASK_INTENTS}_inline:{name}")
-    return PlannerDecision(skill=name, params=args, notes=tuple(notes), evidence=evidence,
+    return PlannerDecision(workflow=name, params=args, notes=tuple(notes), evidence=evidence,
                           reply_kind=reply_kind,
                           declare=declare, intents=intents, **base)
 
@@ -650,7 +646,7 @@ def bind_planner_tools(llm: object, role: str | None, *, evidence: bool = False,
 def tool_call_names(decision: PlannerDecision) -> str:
     """trace 用：这次决策**实际点到了**哪些函数名（含被丢弃的并发调用，便于事后核算）。
 
-    ⚠️ 零调用回**空串**、不回 `decision.skill`（20260927 二稿改）：两者必须可分辨——
+    ⚠️ 零调用回**空串**、不回 `decision.workflow`（20260927 二稿改）：两者必须可分辨——
     "模型显式点了 `chat`"与"模型一个函数都没点"是**不同的行为证据**（后者是 native
     契约没被遵守的信号，前者是遵守了）。回技能名会把这两格在 trace 里抹成同一个值，
     按 engine 切语料对账时那正是要看的那一格。

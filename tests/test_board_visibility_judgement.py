@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/
 sys.path.insert(0, str(ROOT))
 
 import agent.context as C  # noqa: E402
-from agent.skills import visible_skills  # noqa: E402
+from agent.workflow_defs import visible_workflows  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -84,7 +84,7 @@ def test_fact_is_in_the_shared_page_context():
 def test_fact_is_a_standalone_sentence_not_a_capability():
     print("\n[供给] 它是**站内事实**、单独成句——不混进能力枚举")
     fact = C._SITE_GUIDE_BOARD_FACT
-    caps = [s.capability or "" for s in visible_skills("admin")]
+    caps = [s.capability or "" for s in visible_workflows("admin")]
     check("不在任何技能的 capability 文案里（否则「能不能做」的边界跟着漂）",
           all(fact not in c for c in caps))
     check("不在收束句里", fact not in C._SITE_GUIDE_CLOSING)

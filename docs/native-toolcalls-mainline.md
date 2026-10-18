@@ -57,13 +57,15 @@
 |---|---|---|
 | API 请求 | `ChatOpenAI(model/api_key/base_url/temperature/max_tokens/streaming/verbose/timeout/extra_body)`——**无 `tools`、无 `tool_choice`** | `models/llm.py` |
 | 工具怎么给模型 | 工具 schema 派生后**渲染成文本菜单**，插进提示词 | `_tools_desc` / `_menu_arg_signature`，`_PLANNER_PROMPT.format(tools_desc=…)`（`agent/graph.py`） |
-| 模型怎么表达 | **自由文本**，系统用正则抠 `SKILL=` / `PARAMS=` / `TOOLS:` | `extract_plan_fields` / `_PLANNER_OUTPUT_RE` / `parse_plan` |
+| 模型怎么表达 | **自由文本**，系统用正则抠 `WORKFLOW=` / `PARAMS=` / `TOOLS:` | `extract_plan_fields` / `_PLANNER_OUTPUT_RE` / `parse_plan` |
 
 > ⚠️ **20261004**：上表是**切换前**的形态，留作对照。第三行那两个正则解析器
 > （`extract_plan_fields` / `_PLANNER_OUTPUT_RE`）已删——它们只服务"native 判不了
 > 就退回文本"这条兜底，而该兜底从未被走到过。第四行的 `parse_plan` **保留**：
-> 它是**内部计划文本协议**（`plan_encode` ↔ `parse_plan`）的读侧，`execute` / `gate` /
-> 路由全读它，与接口层选哪一档无关。
+> 它是**内部计划文本协议**（`plan_encode` ↔ `parse_plan`）的读侧，与接口层选哪一档无关。
+> （**20261017 追记**：`parse_plan` 此后**不再是生产链路的读端**——计划改为两态同写、
+> 对象那一态是唯一事实源，`execute` / `gate` / 路由都读 `plan_view(state)`。它退回成
+> **文本读器**，只服务旧 trace 的考古与测试夹具，`agent/` 下代码调用点为零。）
 | 谁发起调用 | **Python**，逐条确定性执行 | `out = tool.invoke(args)`（`agent/graph.py`） |
 
 佐证一：全仓 `bind_tools` 只出现在**注释**里（`agent/graph.py` / `server.py`），每一处都在写"我们不用它"。**零个调用点。**
@@ -83,11 +85,11 @@ function calling（`tool_choice=auto` / 强制指定 / 函数侧 `strict`），�
 现场 trace `20260927T011952`，用户请求「推荐一篇文章带我过去后开启一个特效」：
 
 ```
-[planner] LLM 完成  →  skill=navigate  target=/article/19     ← 第 1 轮
+[planner] LLM 完成  →  workflow=navigate  target=/article/19     ← 第 1 轮
 [execute] navigate_to(...) → 页面已跳转：https://saudade.site/article/19
 [planner] LLM 调用开始（round 2/4）
 [planner] 动作已执行（navigate_to），去重收尾                  ← 链在这里被掐断
-[model] narrator → [gate] PASS(skill=content_query)
+[model] narrator → [gate] PASS(workflow=content_query)
 ```
 
 同一份 trace 里还有一条关键事件：**第 1 轮 planner 自己写了 `TODO: 开启特效`**——
@@ -100,7 +102,7 @@ function calling（`tool_choice=auto` / 强制指定 / 函数侧 `strict`），�
    `plan_encode` 写它（`agent/graph.py`）、`parse_plan` 读进
    `plan_obj["todo"]`、trace 记一条——**然后没有任何消费者**（**已了结**：这一行
    20261016 整行退休，取证与反向锁见 §6.6 末尾那条「落地状态」）。planner 提示词的
-   14 个槽位（skills_context / tools_desc / page_ctx / round_info / intent_hints /
+   14 个槽位（workflows_context / tools_desc / page_ctx / round_info / intent_hints /
    doc_anchors / recent_context / short_reply_hint / tool_results / ref_hints /
    reflector_feedback / correction / max_rounds / user_msg）里**没有"上一轮计划/剩余步骤"**。
 
@@ -301,7 +303,7 @@ eff_on_sakura,rag_ota_partition,casual_intro,data_tags \
    （`_RENAME_INTENT_RE` 里的 `换成`）的**宾语位置被当成名字**，而宾语是个代词。
    实测：`_msg_named_value("给我建个新标签，然后把这篇文章的标签换成它") == "它"`。
 4. 换进去的值**天然有来源**（它就出自主人原话）⇒ 后面的来源态判据（`_grounded_value`）
-   必然通过；而 `tag_create` 那条"缺名字就不调工具"的闸（`agent/skills.py`，**靠
+   必然通过；而 `tag_create` 那条"缺名字就不调工具"的闸（`agent/workflow_defs/`，**靠
    `title` 为空触发**）也不成立——`title` 非空，只是它先是被编出来的、然后被换成了代词。
 
 **一句话：来源态判据的下游，正是那个制造"来源"的校正器——判据自己满足自己。**
@@ -317,7 +319,7 @@ eff_on_sakura,rag_ota_partition,casual_intro,data_tags \
 新增**指代族**（`_DEICTIC_WORDS`，封闭类词表）被**抽取端 `_value_clean` 与判据端
 `_grounded_value` 一并认**——`_msg_named_value("…把标签换成它") == ""`，于是
 `_name_arg_fix` 里 `want` 为空、原值又判不上"有据" ⇒ 走**既有的**「定不了 ⇒ 确定性零写
-+ 如实追问」那条路（不新增分支、不动 gate、不动 `skills.py` 那条缺名闸）。
++ 如实追问」那条路（不新增分支、不动 gate、不动 `agent/workflow_defs/` 那条缺名闸）。
 两点值得记下来：
 
 - **为什么这里可以列词表**，而"动词词形族一律不许扩"那条教训不适用：代词是**封闭类**
@@ -429,7 +431,7 @@ multi_step_missing_param_asks,multi_step_search_then_read_top \
 **为文本协议实际支付的账单**（今天已看清的）：
 
 - 多步目标丢失（§1.2）；
-- 零变通：一轮只能选一个 SKILL，工具清单由技能模板定死；
+- 零变通：一轮只能选一个 WORKFLOW，工具清单由技能模板定死；
 - 格式漂移风险：模型改吐 JSON / 带引号键就会静默落成 chat（见
   `docs/toolcall-stability-roadmap.md` 的 planner 输出契约漂移一节）；
 - 一整套**手写约束层**：正则解析、`$tool[0].field` 自造引用语法、`param_unknown`、
@@ -471,19 +473,19 @@ multi_step_missing_param_asks,multi_step_search_then_read_top \
 - 写操作确认卡与无状态 HMAC 令牌（含 `pending_action` 挂起这一支）；
 - 写身份防线（来源态判据 / 目标有据 / 目标点名一致）；
 - trace 落盘 + golden + `eval/corpus_invariants.py` 不变量 + 夜间回归；
-- 安全边界与角色隔离（authz scope、`visible_skills`）；
+- 安全边界与角色隔离（authz scope、`visible_workflows`）；
 - 落库顺序契约、断连中断、超时兜底——这些是线上事故逼出来的，别处买不到。
 
 ### 替换 / 新增
 
 | 层 | 现在 | 新主线 |
 |---|---|---|
-| 模型接口层 | 提示词塞文本菜单 → 正则抠 `SKILL=` | **native tool calls**（已拍板） |
+| 模型接口层 | 提示词塞文本菜单 → 正则抠 `WORKFLOW=` | **native tool calls**（已拍板） |
 | 目标状态 | 不存在（`TODO` 行有写无读） | **会话级任务状态**（§6） |
 
 ### 暂留（待实测再定）
 
-- **技能模板层**（`instantiate_plan` + `SKILL_MAP`）：暂不删。判据见 §7。
+- **技能模板层**（`instantiate_plan` + `WORKFLOW_MAP`）：暂不删。判据见 §7。
 
 ---
 
@@ -491,7 +493,7 @@ multi_step_missing_param_asks,multi_step_search_then_read_top \
 
 1. **模型**：qwen3.8-flash **开思考模式**即可；实测能力不足再换 max。
 2. **接口形态**：走 **native tool calls**。
-3. **技能模板**：**暂留**；实测确认它真的影响决策能力后，再改 skill 或删除。
+3. **技能模板**：**暂留**；实测确认它真的影响决策能力后，再改 workflow 或删除。
 4. **目标状态**：按最佳实践（见 §6）。
 5. **评测**：现有 golden 按业务场景组织，**继续用**。
 6. **文档落点**：agent 仓（即本文件）。
@@ -551,7 +553,7 @@ submitted → running → succeeded / failed / cancelled
 
 **"模型自述的剩余步骤"必须有消费者，否则不许写。** 今天 `TODO:` 行的形态
 （模型写、无人读）属于"记账但没人对账"——**同一个家族在这个仓里已经犯过一次**
-（`agent/skills.py` 那层薄壳就是为 `param_unknown` 这条"planner 写了、没人读"
+（`agent/workflows.py` 那层薄壳——20261018 批 2 收尾刀**已删**——就是为 `param_unknown` 这条"planner 写了、没人读"
 补的），并且已经有了对账口径（`eval/corpus_invariants.py` 的 **I5 `param_unread`**）。
 新主线里这条改由任务行承担，**必须同批配上一条扫它的不变量**，否则就是第三遍。
 
@@ -562,7 +564,7 @@ submitted → running → succeeded / failed / cancelled
 在场的那几次里还常是垃圾（模型照抄提示词里的 `<步骤1> → <步骤2>` 占位符，`_parse_todo` 把
 模板与自述一起切进列表）。"还剩什么没做完"这个能力**早已由 §6.7 的 `agent_task` 表承担**
 （`agent/tasks.py` 自己的头注就写着这一行"有写无读"）⇒ 两条出路（补消费者 / 删掉）里选了
-删掉——补一个扫描不变量只是把同一件事记第二遍。反向锁落在 `tests/test_skills.py` 的
+删掉——补一个扫描不变量只是把同一件事记第二遍。反向锁落在 `tests/test_workflows.py` 的
 `test_todo_line_retired`（写端塞了 `todo` 也不产出、读端不再返回那一格）与
 `tests/test_planner_wiring.py` 的契约源码锁。
 
@@ -573,7 +575,7 @@ submitted → running → succeeded / failed / cancelled
 
 | 草案 | 落地 | 为什么改 |
 |---|---|---|
-| 每个**动作**落一行（字段带 `skill`/`tool`/`args`） | **一件事一行**（`goal` + `steps` JSON 数组） | 「带我过去后开启一个特效」是**一件事、两步**；按动作拆行则"还剩几步"要跨行数出来，而缺参挂起时必须**连目标一起保住** |
+| 每个**动作**落一行（字段带 `workflow`/`tool`/`args`） | **一件事一行**（`goal` + `steps` JSON 数组） | 「带我过去后开启一个特效」是**一件事、两步**；按动作拆行则"还剩几步"要跨行数出来，而缺参挂起时必须**连目标一起保住** |
 | `deadline_at` 列 | 读侧 TTL 72h（`chat.rs::TASK_READ_TTL_HOURS`），**单执行者在 Rust** | 列是写死的期限，而"多旧算旧"是**读取策略**；落成列就得有人定期清，落成读侧判据则改一个常量即可，存量行无需迁移（同 execution_log 去重"在读侧"那条纪律） |
 | `parent_id` 父子链 | **不做**，一条任务装一串步骤 | 父子链要真做，就得先回答"父任务的完成条件是什么"（子任务全绿？）——那是另一件事，且 §1.2 那族用例用不到 |
 | 澄清卡复用 `pending_confirm` | `input_required` + `pending_question` **原样回放** | 两个不同的东西：确认卡问的是"你同意我执行吗"（**动作已定**，缺的是许可）；这里缺的是**参数**，动作还没定下来。借用前者的壳会把"要先问哪个特效"讲成"要不要开特效" |
@@ -626,7 +628,7 @@ submitted → running → succeeded / failed / cancelled
 | 步骤 | 做了什么 | 现场证据 |
 |---|---|---|
 | ① 拆形状 | `task_hold` 的 `steps` 加 `minItems: 1`，撤下另起 `task_drop`（只有 `goal`）；空 `steps` 的 `task_hold` 归**无效登记**（记一笔 `task_hold_invalid`，既不登记也不撤下）。同轮两者并存 ⇒ **登记胜**（`task_drop_ignored`） | 现场帧：同一轮里既执行了那一步、又发了一次空 `steps` 登记 |
-| ② 实测**拆形状不够** | 新用例在 `AGENT_TASK_STATE=1` 下 FAIL：模型把「剩下那步我做完了、把这行收掉」**写成新的 `task_drop`**。4 次采样 **3 次复现**；帧序 `['cancelled','succeeded']`，落库终态 `succeeded` 而 narrator 说「系统已经把之前登记的…这件事撤下、不再跟踪了」 | trace：`planner decision round 0 skill=effect status=executed` → `planner task_declare round 1 state=cancelled`；回复原文见下 |
+| ② 实测**拆形状不够** | 新用例在 `AGENT_TASK_STATE=1` 下 FAIL：模型把「剩下那步我做完了、把这行收掉」**写成新的 `task_drop`**。4 次采样 **3 次复现**；帧序 `['cancelled','succeeded']`，落库终态 `succeeded` 而 narrator 说「系统已经把之前登记的…这件事撤下、不再跟踪了」 | trace：`planner decision round 0 workflow=effect status=executed` → `planner task_declare round 1 state=cancelled`；回复原文见下 |
 | ③ 加确定性闸 | `tasks.drop_is_completion()`：撤下声明若**被本轮回执结算成 `succeeded`**，就不当撤下——不发帧、不打撤下注记，交给流尾正常结算 | 判据与流尾结算**同源**（直接调 `advance_by_receipts`，不另写一套"工具名在不在回执里"）；方向**单一**：零回执 / 查不到行**一律放行撤下**（宁可漏判也不误伤真撤下） |
 | ④ 加闸后 | 同一条用例 `AGENT_TASK_STATE=1` **连跑 4/4 PASS**，回复变成「这两件事到这一步就全部做完了」，「撤下／不再跟踪」不再出现 | trace 事件 `planner.task_drop_settled`（记 goal/round/有无帧）→ `producer task_advance state=succeeded` |
 
@@ -702,7 +704,7 @@ submitted → running → succeeded / failed / cancelled
 随之收窄为「清单来自**另一条**调用」。
 
 「多填无害」是有判据保证的，不是措辞客气——**三条排除规则**（与判据侧
-`require_task_goal_per_intent` **同源**）：`skill ∈ acted_skills`、模板工具全在回执里、
+`require_task_goal_per_intent` **同源**）：`workflow ∈ acted_workflows`、模板工具全在回执里、
 `goal ∈ skip_goals`（`same_goal`）。⇒ 本轮**真正办掉的那件会自动出局**，所以文案敢写「含你这一
 轮正要办的那件」。这条性质也是它便宜的原因：不需要模型判断"该不该列"。
 
@@ -745,7 +747,7 @@ dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop
   由卡承载）。代价同上一条。
 - **伪函数现在是三个**（`task_hold` / `task_drop` / `task_intents`）**加一个字段**（每个技能上的
   `intents`）。§6.7 那张表写于 20260927，只讲前两个；`tests/test_planner_llm.py` 的
-  `pseudo_tool_schemas` 与两条接线套件（`test_planner_wiring` / `test_slim_skills`）的
+  `pseudo_tool_schemas` 与两条接线套件（`test_planner_wiring` / `test_slim_workflows`）的
   `_expected_schema_names` 都已按三个认。
 
 ### 6.12 清单的两个失败方向各堵一处 + 声明侧的出处对账（20261009）
@@ -899,7 +901,7 @@ dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop
 | # | 事项 | 需要的判据 |
 |---|---|---|
 | 1 | ~~冻结的只读分支名称~~ | **已定：`freeze/text-plan-protocol`**；**20261004 该分支与 `widget/pos-20261003` 一并删除**（本地 + 远端，独有提交均为 0），详见 §3 第 3 项 |
-| 2 | 技能模板层去留 | **已有对照数据（§1.7＋§1.9）：本批仍不支持现在删**。native 档没有任何一项指标超过 `text`（区间全重叠），而模板层现在同时是**写工具的唯一入口**与**参数必填的闸**（`skills.py`）。§1.7 里"不思考档多一条发明参数的路"那条理由**已随 §1.8 的修复消失**（§1.9：五档 `missing_param` 全 3/3）⇒ 原来挂的前置是**批 D（多步）**，而 §1.3 三追记已证：那 4 条多步用例**与批 D 无关**且开关两态同分 ⇒ **这条前置不成立**。删模板层仍然没有数据支持（native 档没有任何一项指标超过 `text`，区间全重叠），要动它得先有"native 明显更好"的证据 |
+| 2 | 技能模板层去留 | **已有对照数据（§1.7＋§1.9）：本批仍不支持现在删**。native 档没有任何一项指标超过 `text`（区间全重叠），而模板层现在同时是**写工具的唯一入口**与**参数必填的闸**（`agent/workflow_defs/`）。§1.7 里"不思考档多一条发明参数的路"那条理由**已随 §1.8 的修复消失**（§1.9：五档 `missing_param` 全 3/3）⇒ 原来挂的前置是**批 D（多步）**，而 §1.3 三追记已证：那 4 条多步用例**与批 D 无关**且开关两态同分 ⇒ **这条前置不成立**。删模板层仍然没有数据支持（native 档没有任何一项指标超过 `text`，区间全重叠），要动它得先有"native 明显更好"的证据 |
 | 3 | planner 开思考的预算 | **本批数据不支持开**（口径已按 §1.9 修正）。原文的理由是"发明参数调写工具 5/6→0/6"，而那 5 条红是**校正器缺陷**（§1.8），修后与档无关地一起消失 ⇒ 那条理由**不成立**。剩下的对照：max 档上思考与不思考**逐条完全相同**（都 12/12，计划效率也逐字相同 24/21/9），而思考贵 4.6 倍（planner p50 5.97 vs 1.29s）；flash 档上 7/12 vs 6/12（区间重叠，等于没差别，且都低于 `text`）⇒ **若切 native，默认不思考**；要开思考得有批 D 之后的新证据。`max_tokens=1200` 仍然够用（完整率 96.2–100%） |
 | 4 | 换 max 的判据 | **仍不支持"换 max 更好"**：两个 max 档 12/12 与 `text` 的区间重叠（§1.9 读法 3）⇒ 构不成更好。但 §1.9 给出了**新指向**：两个 max 档在这组多步用例上是唯一**没有自身失败形态**的档（12/12），不思考 max 还是全场最快（planner p50 1.29s、用例 p50 6.65s、完整率 100%、零 fallback）⇒ **若切 native，首选 `native-nothink-max`**。两处代价要说清：① `QWEN_MODEL` 是**全链路**开关（narrator 也换，成本不止 planner）；② 这只是"下一批的默认候选"，不是"更好"的证明 —— 批 D 之后复测再定 |
 | 5 | 新旧并行的方式 | ~~**已定：成组对照测量**（`eval/dial_matrix.py`，§1.6–1.7…），影子档退回离线调试用途~~。**20261004 结束**：新旧并行从"暂时"变成"永久"那一半——文本档与影子档**整个删了**，`eval/dial_matrix.py` 的 `text` 维与档位探针同步移除（历史报告 `eval/report/baseline_*_dial_matrix*.json` 留档不动）。`authz` 里那个同名 `shadow`（`AGENT_AUTHZ_ENFORCE`）与它无关，**别一起删** |

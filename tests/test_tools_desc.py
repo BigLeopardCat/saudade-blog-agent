@@ -19,7 +19,7 @@
      依赖 `- 名字(…)：说明` 的形状；
   ⑤ **图例在位**：`*` 与 `=值` 的含义必须写在菜单里给它看，且图例行不被当成工具行。
 
-为什么单起一套而不并进 test_skills：那条已经 900+ 行，而"菜单签名的形状"是一条独立契约
+为什么单起一套而不并进 test_workflows：那条已经 900+ 行，而"菜单签名的形状"是一条独立契约
 （将来做执行前 schema 校验时，那条判据也要对着同一个 args_schema，见 graph._menu_arg_signature 注）。
 
 用法：.venv/bin/python tests/test_tools_desc.py
@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统�
 sys.path.insert(0, str(ROOT))
 
 import agent.graph as _G  # noqa: E402
-from agent.skills import callable_query_tools  # noqa: E402
+from agent.workflow_tools import callable_query_tools  # noqa: E402
 
 
 FAILS = []

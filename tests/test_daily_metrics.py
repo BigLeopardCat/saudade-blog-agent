@@ -52,7 +52,7 @@ def _call(name, args, verdict=None, noop=False):
     return out
 
 
-_BASE = [_ev("planner", "decision", skill="x", tools=["w({})"], round=0)]
+_BASE = [_ev("planner", "decision", workflow="x", tools=["w({})"], round=0)]
 
 
 def _evs(*chunks):
@@ -98,12 +98,12 @@ def main() -> int:
         day = os.path.join(tmp, "20261016")
         os.makedirs(day)
 
-        def _write(i, skill, fallback):
-            evs = [{"node": "planner", "event": "decision", "skill": skill,
+        def _write(i, workflow, fallback):
+            evs = [{"node": "planner", "event": "decision", "workflow": workflow,
                     "tools": ["t({})"], "round": 0},
                    {"node": "planner", "event": "task_auto", "round": 0}]
             if fallback:
-                evs.append({"node": "gate", "event": "fallback", "skill": skill})
+                evs.append({"node": "gate", "event": "fallback", "workflow": workflow})
             json.dump({"events": evs, "reply": "x", "input": {"message": "m"}},
                       open(os.path.join(day, f"20261016T0000{i:02d}_1_r{i}.json"), "w"))
 
@@ -113,8 +113,8 @@ def main() -> int:
             _write(i, "roster", fallback=(i < 3))   # 1/3 否决 ⇒ 33% 且总数 3 ⇒ 报
         paths = sorted(os.path.join(day, f) for f in os.listdir(day))
         conv = dm.collect(paths)
-        check("样本不足（总数 < 3）的技能不报", conv["per_skill"]["noise"][0] == 2)
-        check("成片的报出来（1/3 = 33%）", conv["per_skill"]["roster"] == [3, 1])
+        check("样本不足（总数 < 3）的技能不报", conv["per_workflow"]["noise"][0] == 2)
+        check("成片的报出来（1/3 = 33%）", conv["per_workflow"]["roster"] == [3, 1])
         out = dm.render(paths, 1)
         check("  渲染里出现 roster、不出现 noise",
               "roster(1/3)" in out and "noise" not in out, out)

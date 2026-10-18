@@ -159,7 +159,7 @@ print("⑦ 后台文章清单也有摘要了（20261007：跨轮取值通道缺�
 # 撤回了自己那句话**——因为回执行里**只有动作、没有数**，那个数只活在它上一轮的散文里，
 # 而"零帧不得声称"的诚实纪律于是只能让它否认自己。这一条锁的是"数真的进得了台账"。
 # 样本**用真渲染器产出**（不手写文本）：两侧形状一旦漂开，这里就红。
-from agent.adminops import render_admin_notes  # noqa: E402
+from agent.adminops_tags import render_admin_notes  # noqa: E402
 
 
 def _an(i: int, status: str, title: str, tags: str = "5") -> dict:

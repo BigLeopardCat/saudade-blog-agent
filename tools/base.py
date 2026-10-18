@@ -170,8 +170,8 @@ def _public_tag_index():
     two = _get("/tagtwo")
     if isinstance(one, ToolResult) or isinstance(two, ToolResult):
         return None
-    from agent import adminops as A      # 局部导入：tools → agent 的反向依赖
-    return A.build_tag_index(one, two)
+    from agent import adminops_tags as _tags  # 局部导入：tools → agent 的反向依赖
+    return _tags.build_tag_index(one, two)
 
 
 def _slim_note_rows(rows):
@@ -184,13 +184,13 @@ def _slim_note_rows(rows):
         return None
     if not any("noteKey" in r for r in rows):
         return None
-    from agent import adminops as A      # 局部导入：同上
+    from agent import adminops_tags as _tags  # 局部导入：同上
     index = None
     if any(r.get("noteTags") for r in rows):
         index = _public_tag_index()
     out = []
     for r in rows:
-        tag_txt = A.render_tag_list(r.get("noteTags"), index)
+        tag_txt = _tags.render_tag_list(r.get("noteTags"), index)
         slim = {
             "noteKey": r.get("noteKey"),
             "noteTitle": r.get("noteTitle") or "",
@@ -307,10 +307,10 @@ def _note_row_with_tag_names(row):
     """
     if not isinstance(row, dict) or not isinstance(row.get("noteTags"), str):
         return row
-    from agent import adminops as A      # 局部导入：tools → agent 的反向依赖
+    from agent import adminops_tags as _tags  # 局部导入：tools → agent 的反向依赖
     index = _public_tag_index() if row.get("noteTags") else None
     out = dict(row)
-    out["tags"] = A.render_tag_list(row["noteTags"], index)
+    out["tags"] = _tags.render_tag_list(row["noteTags"], index)
     return out
 
 
@@ -497,8 +497,8 @@ def list_tags() -> str:
         # "站内没有二级标签"，正是上面那个结论的来源。如实报不可用。
         return UPSTREAM_DOWN
     # 局部导入：agent.graph → tools 的反向依赖会构成循环导入（同 _tag_index）
-    from agent import adminops as A
-    return _shape(A.merge_tag_rows(one, two))
+    from agent import adminops_tags as _tags
+    return _shape(_tags.merge_tag_rows(one, two))
 
 # ---------------------------------------------------------------------------
 # 公告 工具
@@ -701,7 +701,7 @@ def get_site_map() -> str:
 #
 # `get_chat_history` / `search_knowledge_base`：既不在 planner 菜单，也不在
 # `_EXPLICIT_TOOLS` / `_CALLABLE_QUERY_TOOLS` 点名白名单，更不在任何技能模板的工具
-# 序列里 ⇒ **没有任何通道能把它们执行起来**（`skills.py` 里那两行"刻意不收"的注释
+# 序列里 ⇒ **没有任何通道能把它们执行起来**（`agent/workflow_tools.py` 里那两行"刻意不收"的注释
 # 解释了为什么当初就没接：一个端点恒返回空、一个是占位）。判据在
 # `tests/test_action_text.py` ③ 末尾三条——"死工具"三个字是**锁出来的**，不是形容词。
 #
@@ -799,12 +799,12 @@ def get_weather(
 # 导航工具
 # ---------------------------------------------------------------------------
 
-# 导航目标白名单（工具层硬校验——本常量是单一事实来源，skills.py 的
+# 导航目标白名单（工具层硬校验——本常量是单一事实来源，`agent/workflow_defs/nav.py` 的
 # NAV_VALID_PATHS 从这里同源导入，规划侧约束 = NAV_MAP 别名映射 + instantiate_plan
 # 校验 + planner 提示词规则）：模型不可信，工具必须自证。
 # 教训：模型曾把"友链板块"猜成 /links 直接发出去（真实页是 /guestbook）。
 # 后台子页（20260926：转跳要能定位到后台各板块）在这里**逐个列出**，对应
-# skills.py 的 DASHBOARD_PANELS（面板名与路径的第二处，由 tests/test_skills.py
+# `agent/workflow_defs/nav.py` 的 DASHBOARD_PANELS（面板名与路径的第二处，由 tests/test_workflows.py
 # 的两侧覆盖断言锁住同源）。**不放开 `/dashboard/` 前缀**：前缀放行等于让模型
 # 自己拼子路径，而前端 /dashboard 下没有通配子路由——猜出来的路径渲染的是一片
 # 空白（不是 NotFound 页），比"拒绝并回真实清单"糟得多。
@@ -813,7 +813,7 @@ def get_weather(
 # 白名单必须同步收口：**放行一个 404 的后果不是"跳过去发现没有"，而是 navigate_to
 # 照常回一句「页面已跳转」——系统替一个不存在的页面背书**，而访客看到的是 SPA
 # 兜底渲染出来的空白页。
-# 路径字面量只此一处：skills.py 的 NAV_MAP 从这里的 `_NAV_EXACT_PATHS` 同源取名，
+# 路径字面量只此一处：`agent/workflow_defs/nav.py` 的 NAV_MAP 从这里的 `_NAV_EXACT_PATHS` 同源取名，
 # 别在别处再写一遍 `/device-console/`。
 IOT_ENABLED: bool = _settings.iot_enabled
 IOT_NAV_PATH = "/device-console/"
@@ -1009,11 +1009,11 @@ from tools.device import (  # noqa: E402,F401
 # ---------------------------------------------------------------------------
 # 四个只读工具，scope 全声明为 `admin.console`（agent/authz.py）⇒ **只有 admin 用得动**。
 # 三道闸由粗到细：
-#   ① 结构性：不进 planner 的两个点名白名单（skills._EXPLICIT_TOOLS /
+#   ① 结构性：不进 planner 的两个点名白名单（workflows._EXPLICIT_TOOLS /
 #      _CALLABLE_QUERY_TOOLS）⇒ planner 无法经 PARAMS.calls/tools 点到它们，
 #      只能由 ops_report / moderation_report / user_report 三个技能模板展开；
 #   ② 身份：会话角色不是 admin 时 planner 上下文里**根本看不到**这三个技能
-#      （skills.build_planner_context(role)）；
+#      （workflows.build_planner_context(role)）；
 #   ③ 判据：execute 调用前的 authz.check()。`admin.console` **不吃 shadow 开关**
 #      （authz._HARD_SCOPES）——它是本轮纯新增的能力，没有"观测既有流量"可谈，
 #      shadow 期也硬拦。
@@ -1514,7 +1514,7 @@ def _policy_post(path: str, payload: dict, config: RunnableConfig):
     文案**逐字转述后端原话、不二次改写**：政策会变，agent 侧任何复述都会在政策
     变更那天变成假话（那几句已登记为跨语言契约，见 docs/security-boundary.md §7⑫）。
     """
-    from agent import adminops as A
+    from agent import adminops_target as _target
     uid = _device_get_user_id(config)
     if uid <= 0:
         # 身份不明时一个请求都不发（同 `_principal_request`）：写操作最不该做的
@@ -1543,7 +1543,7 @@ def _policy_post(path: str, payload: dict, config: RunnableConfig):
         # 「改动请求已发出…本次改动未确认生效」（一句**假话**：这条请求根本没改任何
         # 东西，它是被政策拒了）。kind 仍是 "ok"：这一族的判据是**帧的形态**
         # （`__ERROR__:` 前缀）而不是 kind，`_check_spec` 照旧 BLOCK + policy_refused。
-        return ToolResult(A.policy_frame(str(body.get("message") or "后台拒绝了这次改动")))
+        return ToolResult(_target.policy_frame(str(body.get("message") or "后台拒绝了这次改动")))
     return body.get("data")
 
 
@@ -1660,12 +1660,12 @@ def _tag_index(config: RunnableConfig):
     adminops.render_tag_list 的同名区分）。返回 None 而不是抛，是因为"字典读不到"
     在只读场景（渲染清单）不该让整次查询失败，而在写场景由调用方直接拒绝。
     """
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     one = _admin_get("/api/tagone", config)
     two = _admin_get("/api/tagtwo", config)
     if isinstance(one, ToolResult) or isinstance(two, ToolResult):
         return None
-    return A.build_tag_index(one, two)
+    return _tags.build_tag_index(one, two)
 
 
 def _read_note(article_id: int, config: RunnableConfig) -> dict | None | ToolResult:
@@ -1749,7 +1749,7 @@ def list_admin_notes(
     没有。可选 category 按分类筛（服务端按分类名精确匹配，与后台笔记页的
     「分类」筛同一口径）；**分类名认不出来时返回的是"读不到"，不是"该分类下没有
     文章"**。需要管理员身份。"""
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     kw = str(keyword or "").strip()
     cat = str(category or "").strip()
     payload: dict = {}
@@ -1764,7 +1764,7 @@ def list_admin_notes(
         index = _category_index(config)
         if index is None:
             return unavailable("读不到现有的分类列表，无法确认这个分类存不存在，这一次没有查")
-        hit, cands = A.find_category(index, cat)
+        hit, cands = _tags.find_category(index, cat)
         if hit is None:
             if cands:
                 return unavailable(
@@ -1816,7 +1816,7 @@ def list_admin_notes(
             return empty(f"按关键词「{kw}」没有搜到文章（后台文章清单本身不是空的；"
                          f"这是这一次的搜索结果，换个词或去掉关键词再看）")
         return empty("后台文章列表是空的（一篇文章都没有）")
-    return ok(A.render_admin_notes(notes, _tag_index(config), keyword=kw, category=cat),
+    return ok(_tags.render_admin_notes(notes, _tag_index(config), keyword=kw, category=cat),
               meta={"count": len(notes), "keyword": kw or None,
                     "category": hit.name if hit is not None else None})
 
@@ -1836,7 +1836,7 @@ def create_tag(
     同名标签已存在时**不重复创建**，直接复用并告知它的 id。
     **本工具只往标签字典里加一项，不会把它挂到任何文章上**（挂标签是另一件事）。
     需要管理员身份。"""
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     name = str(title or "").strip()
     if not name:
         return unavailable("标签名为空，未创建")
@@ -1854,7 +1854,7 @@ def create_tag(
     pid = None
     pname = str(parent_tag or "").strip()
     if pname:
-        parent, cands = A.find_tag(index, pname, level=1)
+        parent, cands = _tags.find_tag(index, pname, level=1)
         if parent is None:
             if cands:
                 return unavailable(
@@ -1864,7 +1864,7 @@ def create_tag(
         pid = parent.id
 
     # 先查后建（幂等）：同名同层 → 直接复用，不写库。
-    hit, cands = A.find_tag(index, name, pid)
+    hit, cands = _tags.find_tag(index, name, pid)
     # 复用只认**同一层**的同名标签：建一级时命中的若是二级同名标签，那不是"已存在"
     # （管理员要的是一个一级标签），而是"你可能想要那个子标签"——走下面的拒绝路径。
     # 给 pid 时 find_tag 已按 (level==2 且 father_id==pid) 过滤，故命中即同层。
@@ -1872,7 +1872,7 @@ def create_tag(
         # changed=False：同名同层标签已经在了，**这一下没写库**（是"复用"，不是"新建"）。
         # 这一支是本工具最常见的结果，在事实信封之前它是一句"没声明"——上层只能按"改了"
         # 处理（见 fact() 头注）。
-        return ok(A.render_tag_reuse(hit), meta=fact(
+        return ok(_tags.render_tag_reuse(hit), meta=fact(
             "tag_reuse", changed=False, target=tgt("tag", hit.id, hit.name),
             after="已存在", tag_id=hit.id, tag_name=hit.name, level=hit.level))
 
@@ -1901,10 +1901,11 @@ def create_tag(
     # **点名的色认不出 → 拒绝**，不回落哈希——那会让用户拿到一个他没要的颜色，
     # 且屏幕上看着"确实建成了"。这是写操作 fail-closed 纪律的一部分。
     color_spec = str(color or "").strip()
-    picked = A.match_tag_color(color_spec) if color_spec else None
+    picked = _tags.match_tag_color(color_spec) if color_spec else None
     if color_spec and picked is None:
-        return unavailable(f"颜色「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}），未创建")
-    color = picked or A.color_for_name(name)
+        return unavailable(f"颜色「{color_spec}」不在站内色板里"
+                           f"（可选：{_tags.TAG_COLOR_SPEC}），未创建")
+    color = picked or _tags.color_for_name(name)
     if pid is not None:
         path, payload = "/api/protected/tagtwo", {"title": name, "color": color, "fatherTag": pid}
     else:
@@ -1930,7 +1931,7 @@ def create_tag(
     if got is None or got.name != name:
         return unavailable(f"创建后复核失败：标签字典里找不到 id={new_id} 且名字为「{name}」的行，"
                            f"本次改动未确认生效")
-    return ok(A.render_tag_created(got), meta=fact(
+    return ok(_tags.render_tag_created(got), meta=fact(
         "tag_create", changed=True, target=tgt("tag", got.id, got.name),
         before="不存在", after="已创建", evidence=got.label,
         tag_id=got.id, tag_name=got.name, level=got.level))
@@ -1982,7 +1983,7 @@ def _find_named_tag(name, config, level=None, role="标签", index=None):
     `index` 是**可选的外部快照**：一个工具要连着查两个名字（目标 + 父）时，
     用同一份快照查才有意义（两次读之间标签可能被挪走），也省一次网络往返。
     """
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     if index is None:
         index = _tag_index(config)
     if index is None:
@@ -1992,12 +1993,12 @@ def _find_named_tag(name, config, level=None, role="标签", index=None):
         return None, "标签名为空，本次未改动"
     lv = None
     if str(level or "").strip():
-        lv = A.normalize_level(level)
+        lv = _tags.normalize_level(level)
         if lv is None:
             return None, f"层级「{level}」认不出来（只支持一级 / 二级），本次未改动"
         if role == "标签":
             role = "一级标签" if lv == "one" else "二级标签"
-    hit, cands = A.find_tag(index, want, level=(1 if lv == "one" else 2) if lv else None)
+    hit, cands = _tags.find_tag(index, want, level=(1 if lv == "one" else 2) if lv else None)
     if hit is None:
         # 同名都在同一层（两个二级挂在不同父下）时，"说明是一级还是二级"帮不上忙
         # ——所以再给一条**能落下的**指认方式：用展示名（`父 / 子`）。这正是下面
@@ -2048,7 +2049,7 @@ def update_tag(
     换父级与换层级走一条原子接口：**换父级时标签 id 与文章引用都不变**（可逆）；
     只有跨表（一级↔二级）且旧 id 在新表里已被占用时才会换 id，那种情况下所有引用
     过它的文章会被同步改写（返回里会说清楚）。"""
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     # 目标与父标签用**同一份**字典快照解析：两次读之间标签可能被挪走/改名，
     # 拿两个时刻的数据拼一个请求是自找的错；顺带少一次网络往返。
     index = _tag_index(config)
@@ -2060,15 +2061,15 @@ def update_tag(
     if new_title and len(new_title) > 40:
         return unavailable(f"新标签名过长（{len(new_title)} 字，上限 40），本次未改动")
     color_spec = str(color or "").strip()
-    picked = A.match_tag_color(color_spec) if color_spec else None
+    picked = _tags.match_tag_color(color_spec) if color_spec else None
     if color_spec and picked is None:
-        return unavailable(f"颜色「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}），"
+        return unavailable(f"颜色「{color_spec}」不在站内色板里（可选：{_tags.TAG_COLOR_SPEC}），"
                            f"本次未改动")
 
-    cur = A.level_of(hit)
+    cur = _tags.level_of(hit)
     tl = None
     if str(to_level or "").strip():
-        tl = A.normalize_level(to_level)
+        tl = _tags.normalize_level(to_level)
         if tl is None:
             return unavailable(f"层级「{to_level}」认不出来（只支持一级 / 二级），本次未改动")
     pname = str(parent_tag or "").strip()
@@ -2134,7 +2135,7 @@ def update_tag(
         if mismatch:
             return unavailable(f"改动请求已发出，但读回标签「{got.label}」的"
                                f"{'、'.join(mismatch)}与预期不一致，本次改动未确认生效")
-        return ok(A.render_tag_moved(before_label, got.label, A.move_impact(res)),
+        return ok(_tags.render_tag_moved(before_label, got.label, _tags.move_impact(res)),
                   meta=fact("tag_update", changed=True, target=tgt("tag", got.id, got.name),
                             before=before_label, after=got.label, evidence=got.label,
                             tag_id=got.id, tag_name=got.name, level=got.level))
@@ -2164,10 +2165,10 @@ def update_tag(
     if new_title:
         pairs.append((hit.name, got.name))
     if picked:
-        pairs.append((A.describe_color(hit.color) if hit.color else "（未知）",
-                      A.describe_color(got.color) if got.color else "（未知）"))
-    before_s, after_s = A.render_change(pairs) if pairs else (hit.label, got.label)
-    return ok(A.render_tag_updated(got.label, before_s, after_s),
+        pairs.append((_tags.describe_color(hit.color) if hit.color else "（未知）",
+                      _tags.describe_color(got.color) if got.color else "（未知）"))
+    before_s, after_s = _tags.render_change(pairs) if pairs else (hit.label, got.label)
+    return ok(_tags.render_tag_updated(got.label, before_s, after_s),
               meta=fact("tag_update", changed=True, target=tgt("tag", got.id, got.name),
                         before=before_s, after=after_s, evidence=got.label,
                         tag_id=got.id, tag_name=got.name, level=got.level))
@@ -2184,7 +2185,7 @@ def delete_tag(
 
     ⚠️ **删除不可撤销**：删一级标签会连带删掉它下面的所有二级标签，并把这些标签
     从**所有文章**上摘掉（文章本身不会被删）。要动的标签名对不上就什么都不做。"""
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     # 子标签名单取自**解析目标的那一份快照**（同一次读）：删一级时会连坐子标签，
     # 名单要是从第二次读里取，两次读之间新建的子标签就会在回执里凭空消失
     # ——而它已经被 CASCADE 删掉了。
@@ -2193,10 +2194,10 @@ def delete_tag(
     if err:
         return unavailable(err)
     hits_before = {hit.id}
-    kids = A.children_of(index or {}, hit.id) if hit.level == 1 else []
+    kids = _tags.children_of(index or {}, hit.id) if hit.level == 1 else []
     hits_before |= {k.id for k in kids}
 
-    payload = {"level": A.level_of(hit), "ids": [hit.id]}
+    payload = {"level": _tags.level_of(hit), "ids": [hit.id]}
     data = _admin_request("DELETE", "/api/protected/tag", payload, config)
     if isinstance(data, ToolResult):
         return data
@@ -2215,7 +2216,7 @@ def delete_tag(
         extra = f"它原本挂在 {hit.note_count} 篇文章上，这些引用已一并摘掉（文章本身没删）"
     else:
         extra = ""
-    return ok(A.render_tag_deleted(hit.label, extra),
+    return ok(_tags.render_tag_deleted(hit.label, extra),
               meta=fact("tag_delete", changed=True, target=tgt("tag", hit.id, hit.name),
                         before="已存在", after="已删除", change=extra or "已删除",
                         tag_id=hit.id, tag_name=hit.name, level=hit.level))
@@ -2223,11 +2224,11 @@ def delete_tag(
 
 def _category_index(config: RunnableConfig):
     """分类字典 → `{id: CategoryInfo}`；读不到返回 None（≠"没有分类"）。"""
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     data = _admin_get("/api/category", config)
     if isinstance(data, ToolResult):
         return None
-    return A.build_category_index(data)
+    return _tags.build_category_index(data)
 
 
 def _find_named_category(name, config, index=None):
@@ -2236,7 +2237,7 @@ def _find_named_category(name, config, index=None):
     `index` 与 `_find_named_tag` 同义：可选的**外部快照**。调用方一次要查多个名字
     （或只是"先看看能不能做"，见 graph._write_target_refusal）时传进来，省一次往返、
     也让两次判断看到同一份字典。完全没有同名分类时附名字最接近的候选（同 `_near_miss_names`）。"""
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     if index is None:
         index = _category_index(config)
     if index is None:
@@ -2244,7 +2245,7 @@ def _find_named_category(name, config, index=None):
     want = str(name or "").strip()
     if not want:
         return None, "分类名为空，本次未改动"
-    hit, cands = A.find_category(index, want)
+    hit, cands = _tags.find_category(index, want)
     if hit is not None:
         return hit, None
     if cands:
@@ -2275,7 +2276,7 @@ def create_category(
     """新建一个文章分类。分类是**平铺**的、没有层级。
     站内已有同名分类时**拒绝**（既不重复建、也不当成"已存在"复用——分类没有唯一
     约束，重名会让以后每一次按名字找分类都变成歧义）。需要管理员身份。"""
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     name = str(title or "").strip()
     if not name:
         return unavailable("分类名为空，未创建")
@@ -2285,7 +2286,7 @@ def create_category(
     index = _category_index(config)
     if index is None:
         return unavailable("读不到现有的分类列表，无法确认是否重名，本次未创建")
-    hit, cands = A.find_category(index, name)
+    hit, cands = _tags.find_category(index, name)
     if hit is not None or cands:
         ids = "、".join(f"id={c.id}" for c in (cands or [hit]))
         return unavailable(f"站内已经有叫「{name}」的分类（{ids}），本次未创建")
@@ -2293,7 +2294,7 @@ def create_category(
     payload: dict = {"categoryTitle": name}
     color_spec = str(color or "").strip()
     if color_spec:
-        picked = A.match_any_color(color_spec)
+        picked = _tags.match_any_color(color_spec)
         if picked is None:
             return unavailable(f"颜色「{color_spec}」认不出来（可用中文色名，"
                                f"或 6 位色值如 #eb2f96），本次未创建")
@@ -2319,7 +2320,7 @@ def create_category(
     if got is None or got.name != name:
         return unavailable(f"新建请求已发出，但读回分类列表里找不到名字为「{name}」的新行，"
                            f"本次改动未确认生效")
-    return ok(A.render_category_created(got),
+    return ok(_tags.render_category_created(got),
               meta=fact("category_create", changed=True, target=tgt("category", got.id, got.name),
                         before="不存在", after="已创建", evidence=got.name,
                         category_name=got.name))
@@ -2340,7 +2341,7 @@ def update_category(
 
     注：这些字段都**只能改不能清空**（清空请求会被后端当成"不改"忽略），
     所以本工具不接受"把简介清空"这类要求。"""
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     hit, err = _find_named_category(name, config)
     if err:
         return unavailable(err)
@@ -2353,7 +2354,7 @@ def update_category(
         payload["categoryTitle"] = new_title
     color_spec = str(color or "").strip()
     if color_spec:
-        picked = A.match_any_color(color_spec)
+        picked = _tags.match_any_color(color_spec)
         if picked is None:
             return unavailable(f"颜色「{color_spec}」认不出来（可用中文色名，"
                                f"或 6 位色值如 #eb2f96），本次未改动")
@@ -2390,8 +2391,8 @@ def update_category(
             return unavailable(f"改动请求已发出，但读回分类「{got.name}」的这一项仍是旧值，"
                                f"本次改动未确认生效")
         pairs.append((str(getattr(hit, attr)) or "（空）", want))
-    before_s, after_s = A.render_change(pairs)
-    return ok(A.render_category_updated(got.name, before_s, after_s),
+    before_s, after_s = _tags.render_change(pairs)
+    return ok(_tags.render_category_updated(got.name, before_s, after_s),
               meta=fact("category_update", changed=True, target=tgt("category", got.id, got.name),
                         before=before_s, after=after_s, change=after_s,
                         category_name=got.name))
@@ -2406,7 +2407,7 @@ def delete_category(
 
     ⚠️ **文章不会被删**：分类删掉后，原本属于它的文章会变成"没有分类"（后端外键是
     ON DELETE SET NULL）。分类名对不上就什么都不做。"""
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     hit, err = _find_named_category(name, config)
     if err:
         return unavailable(err)
@@ -2424,7 +2425,7 @@ def delete_category(
                            f"本次改动未确认生效")
     change = (f"{hit.note_count} 篇文章变成没有分类"
               if hit.note_count is not None else "")
-    return ok(A.render_category_deleted(hit.name, hit.note_count),
+    return ok(_tags.render_category_deleted(hit.name, hit.note_count),
               meta=fact("category_delete", changed=True, target=tgt("category", hit.id, hit.name),
                         before="已存在", after="已删除", change=change,
                         category_name=hit.name))
@@ -2521,7 +2522,7 @@ def create_announcement(
     由你**按他的意思组织措辞**成一句得体的公告。两种情形都**不许编一件他没让你说的事**。
     正文**全文**会印在确认卡上，他点了确定才真发出。
     需要管理员身份，且要经主人确认才会真正发出。"""
-    from agent import adminops as A
+    from agent import adminops_board as _board
     t = str(title or "").strip()
     c = str(content or "").strip()
     if not t:
@@ -2555,7 +2556,7 @@ def create_announcement(
         return unavailable(f"发布请求已发出，但读回公告列表里没有找到标题为「{t}」的新公告"
                            f"（找到 {len(fresh)} 条），本次改动未确认生效——请到后台核对")
     row = fresh[0]
-    return ok(A.render_announcement_created(row),
+    return ok(_board.render_announcement_created(row),
               meta=fact("announcement_create", changed=True,
                         target=tgt("announcement", row.get("id"), t),
                         before="不存在", after="已发布", evidence=t,
@@ -2573,7 +2574,7 @@ def update_announcement(
     **只改用户点名的那几项**，没点名的保持不变（改端点要求标题与正文都发，这里会
     把没点名的那个原样带上，不会把标题清空）。标题对不上就什么都不做。
     需要管理员身份，且要经主人确认才会真正改。"""
-    from agent import adminops as A
+    from agent import adminops_board as _board
     hit, err = _find_named_announcement(title, config)
     if err:
         return unavailable(err)
@@ -2596,7 +2597,7 @@ def update_announcement(
         # ——本处与 board_audit 那处是同一件事却没带：少一个键，两个读端（gate 的洞⑩、
         # planner 的零改动裁剪）就会把"与现在一致"当成"真的改了"。现在它是从 `changed`
         # 派生的一处实现（详见 `fact()` 头注），漏写不再可能。
-        return ok(A.render_announcement_noop(hit),
+        return ok(_board.render_announcement_noop(hit),
                   meta=fact("announcement_update", changed=False,
                             target=tgt("announcement", hit.get("id"), final_t),
                             before="与现在一致", after="与现在一致",
@@ -2620,7 +2621,7 @@ def update_announcement(
     if (str(got.get("title") or "").strip() != final_t
             or str(got.get("content") or "").strip() != final_c):
         return unavailable(f"修改请求已发出，但读回 id={aid} 的公告与预期不一致，本次改动未确认生效")
-    return ok(A.render_announcement_updated(hit, got),
+    return ok(_board.render_announcement_updated(hit, got),
               meta=fact("announcement_update", changed=True,
                         target=tgt("announcement", aid, final_t),
                         before=cur_t, after=final_t, evidence=final_t,
@@ -2653,7 +2654,7 @@ def delete_announcement(
     """删除一条站内公告（删除后访客在首页看不到了，**删掉取不回来**）。
     标题对不上、或站内有好几条同名标题时什么都不做，并如实说明原因。
     需要管理员身份，且要经主人确认才会真正删。"""
-    from agent import adminops as A
+    from agent import adminops_board as _board
     hit, err = _find_named_announcement(title, config)
     if err:
         return unavailable(err)
@@ -2671,7 +2672,7 @@ def delete_announcement(
         return unavailable(f"删除请求已发出，但读回公告列表里 id={aid}（{hit.get('title')}）还在，"
                            f"本次改动未确认生效")
     title_now = str(hit.get("title") or "").strip()
-    return ok(A.render_announcement_deleted(hit),
+    return ok(_board.render_announcement_deleted(hit),
               meta=fact("announcement_delete", changed=True,
                         target=tgt("announcement", aid, title_now),
                         before="已存在", after="已删除", change="已删除",
@@ -2739,7 +2740,7 @@ def _board_label(row: dict) -> str:
     而"作者"是访客可控文本（留言时可填），故经 `sanitize_untrusted` 拆命令前缀。
     """
     from agent.reports import sanitize_untrusted
-    from agent.adminops import clip as _clip
+    from agent.adminops_tags import clip as _clip
     who = sanitize_untrusted(row.get("author") or row.get("nickname") or "", 16)
     if not who:
         who = f"userId:{row.get('userId')}"
@@ -2750,7 +2751,7 @@ def _board_label(row: dict) -> str:
 def _board_excerpt(row: dict) -> str:
     """留言正文的一小段（问句预览用；访客可控 ⇒ 同样消毒）。"""
     from agent.reports import sanitize_untrusted
-    from agent.adminops import clip as _clip
+    from agent.adminops_tags import clip as _clip
     return _clip(sanitize_untrusted(row.get("content") or "", 40), 40)
 
 
@@ -2811,12 +2812,12 @@ def _find_board_comment_by_id(talk_id, config: RunnableConfig, index=None):
       · 清单里没有这个 id ⇒ 说清站内没有这条留言（可能已经被删了）。
     `index` 是可选快照（一次操作要读同一份清单两回时用）。
     """
-    from agent import adminops as A
+    from agent import adminops_target as _target
     if index is None:
         index = _board_index(config)
     if index is None:
         return None, "读不到后台的留言列表，无法按编号核对那条留言，本次未改动"
-    tid = A.normalize_target_id(talk_id)
+    tid = _target.normalize_target_id(talk_id)
     if tid is None:
         return None, (f"「{str(talk_id or '').strip()[:40]}」不是一个留言编号，"
                       f"本次未改动——请把系统印出来的那条留言的 talkId 原样抄过来")
@@ -2844,8 +2845,9 @@ def audit_board_comment(
     待审的可以定通过或驳回，**已经通过的可以再驳回**（收回展示），已驳回的可以恢复
     通过；现状已经等于目标时如实说"与现在一致"、不发请求。需要管理员身份，
     且要经主人确认才会真正生效。"""
-    from agent import adminops as A
-    v = A.normalize_verdict(verdict)
+    from agent import adminops_board as _board
+    from agent import adminops_tags as _tags
+    v = _tags.normalize_verdict(verdict)
     if v is None:
         return unavailable(f"认不出复核结论「{verdict}」（只能是 通过/pass 或 驳回/reject），未改动")
     hit, err = _find_board_comment_by_id(talk_id, config)
@@ -2853,10 +2855,10 @@ def audit_board_comment(
         return unavailable(err)
 
     tid = int(hit.get("talkKey"))
-    want = A.BOARD_VERDICT_APPROVED[v]           # 1=通过 / 2=未通过（见节头注 ②）
+    want = _tags.BOARD_VERDICT_APPROVED[v]           # 1=通过 / 2=未通过（见节头注 ②）
     if hit.get("approved") == want:
         # 现状即目标：**也走 ok**（这不是失败，"现在就是这样"是事实本身）。
-        return ok(A.render_board_audit_noop(hit, v),
+        return ok(_board.render_board_audit_noop(hit, v),
                   meta=fact("board_audit", changed=False,
                             target=tgt("board_comment", tid, str(hit.get("author") or "")),
                             before=_board_state_cn(hit), after=_board_state_cn(hit),
@@ -2865,7 +2867,7 @@ def audit_board_comment(
 
     # 请求体按 Rust 侧口径发：1=通过 / 0=驳回（端点内部把 0 写成 approved=2）。
     data = _admin_request("PUT", f"/api/protect/board/{tid}/audit",
-                          {"approved": A.BOARD_VERDICT_BODY[v]}, config)
+                          {"approved": _tags.BOARD_VERDICT_BODY[v]}, config)
     if isinstance(data, ToolResult):
         return data
 
@@ -2879,15 +2881,15 @@ def audit_board_comment(
                            f"本次改动未确认生效")
     if got.get("approved") != want:
         return unavailable(f"复核请求已发出，但读回 #{tid} 的状态是"
-                           f"「{_board_state_cn(got)}」、与预期的「{A.BOARD_VERDICT_CN[v]}」"
+                           f"「{_board_state_cn(got)}」、与预期的「{_tags.BOARD_VERDICT_CN[v]}」"
                            f"不一致，本次改动未确认生效")
-    return ok(A.render_board_audited(hit, v),
+    return ok(_board.render_board_audited(hit, v),
               meta=fact("board_audit", changed=True,
                         target=tgt("board_comment", tid, str(hit.get("author") or "")),
-                        before=_board_state_cn(hit), after=A.BOARD_VERDICT_CN[v],
-                        evidence=A.BOARD_VERDICT_CN[v],
+                        before=_board_state_cn(hit), after=_tags.BOARD_VERDICT_CN[v],
+                        evidence=_tags.BOARD_VERDICT_CN[v],
                         board_id=tid, board_author=str(hit.get("author") or ""),
-                        change=f"{_board_state_cn(hit)} → {A.BOARD_VERDICT_CN[v]}"))
+                        change=f"{_board_state_cn(hit)} → {_tags.BOARD_VERDICT_CN[v]}"))
 
 
 @tool
@@ -2918,7 +2920,7 @@ def delete_board_comment(
     只摆待审**（approved=0）的行，id 由系统现摆，所以它按 id 认。
     保留正文片段通道的另一半理由：删除是一条"取不回来"的动作，让他抄
     一句原话（而不是报一个他自己也认不出的编号）在这条路上反而更稳。"""
-    from agent import adminops as A
+    from agent import adminops_board as _board
     hit, err = _find_board_comment(quote, config)
     if err:
         return unavailable(err)
@@ -2935,7 +2937,7 @@ def delete_board_comment(
     if tid in after:
         return unavailable(f"删除请求已发出，但读回留言列表里 {_board_label(hit)} 还在，"
                            f"本次改动未确认生效")
-    return ok(A.render_board_deleted(hit),
+    return ok(_board.render_board_deleted(hit),
               meta=fact("board_delete", changed=True,
                         target=tgt("board_comment", tid, str(hit.get("author") or "")),
                         before="已存在", after="已删除", change="已删除",
@@ -2953,7 +2955,7 @@ def set_article_status(
 ) -> str:
     """修改一篇文章的状态（发布/隐藏/转草稿）或置顶开关。**只改你点名的字段**，
     没点名的保持不动（不会顺手改标题、正文或可见性）。需要管理员身份。"""
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     aid = _as_article_id(article_id)
     if aid is None:
         return unavailable(f"文章 id「{article_id}」不合法，未改动")
@@ -2961,10 +2963,10 @@ def set_article_status(
     has_top = is_top is not None and str(is_top).strip() != ""
     if not has_status and not has_top:
         return unavailable("没有指出要改什么（状态 / 置顶），未改动")
-    want_status = A.normalize_status(status) if has_status else None
+    want_status = _tags.normalize_status(status) if has_status else None
     if has_status and want_status is None:
         return unavailable(f"认不出状态「{status}」（只支持 public 公开 / private 私密 / draft 草稿），未改动")
-    want_top = A.normalize_top(is_top) if has_top else None
+    want_top = _tags.normalize_top(is_top) if has_top else None
     if has_top and want_top is None:
         return unavailable(f"认不出置顶值「{is_top}」（只支持 1 置顶 / 0 取消置顶），未改动")
 
@@ -2992,12 +2994,12 @@ def set_article_status(
 
     # 已经就是目标值 → **不发这个请求**。`update_note` 无条件刷新 updated_at，
     # 一次空改动会把文章顶到列表最前（纯副作用、无收益）。
-    same = ((want_status is None or A.normalize_status(before.get("status")) == want_status)
-            and (want_top is None or A.normalize_top(before.get("isTop")) == want_top))
+    same = ((want_status is None or _tags.normalize_status(before.get("status")) == want_status)
+            and (want_top is None or _tags.normalize_top(before.get("isTop")) == want_top))
     if same:
         now_cn = "、".join(filter(None, [
-            A.status_cn(before.get("status")) if want_status is not None else "",
-            A.top_cn(before.get("isTop")) if want_top is not None else ""]))
+            _tags.status_cn(before.get("status")) if want_status is not None else "",
+            _tags.top_cn(before.get("isTop")) if want_top is not None else ""]))
         return ok(f"文章 {aid}《{title}》本来就是{now_cn}，无需改动（没有发出写请求）。",
                   meta=fact("set_status", changed=False, target=tgt("note", aid, title),
                             before=now_cn, after=now_cn, article_id=aid))
@@ -3014,15 +3016,15 @@ def set_article_status(
 
     pairs = []
     if want_status is not None:
-        pairs.append((A.status_cn(before.get("status")), A.status_cn(after.get("status"))))
+        pairs.append((_tags.status_cn(before.get("status")), _tags.status_cn(after.get("status"))))
     if want_top is not None:
-        pairs.append((A.top_cn(before.get("isTop")), A.top_cn(after.get("isTop"))))
+        pairs.append((_tags.top_cn(before.get("isTop")), _tags.top_cn(after.get("isTop"))))
     if all(b == a for b, a in pairs):
         # 请求发出去了、读回来却原封不动 —— 这不是"改好了"，是"没确认生效"。
         return unavailable(f"改动请求已发出，但读回文章 {aid} 仍是原值"
                            f"（{(' / '.join(b for b, _ in pairs))}），本次改动未确认生效")
-    before_s, after_s = A.render_change(pairs)
-    return ok(A.render_status_ok(aid, title, before_s, after_s),
+    before_s, after_s = _tags.render_change(pairs)
+    return ok(_tags.render_status_ok(aid, title, before_s, after_s),
               meta=fact("set_status", changed=True, target=tgt("note", aid, title),
                         before=before_s, after=after_s, evidence=after_s, article_id=aid))
 
@@ -3040,7 +3042,7 @@ def set_article_tags(
     """给一篇文章加标签 / 去掉标签。**只动你点名的标签，没点名的原样保留**（绝不顺手清空）。
     标签按**名字**精确匹配站内已有的标签——找不到就如实说，**不会自动新建**
     （要新建标签用 create_tag）。传 replace 才是整体替换。需要管理员身份。"""
-    from agent import adminops as A
+    from agent import adminops_tags as _tags
     aid = _as_article_id(article_id)
     if aid is None:
         return unavailable(f"文章 id「{article_id}」不合法，未改动")
@@ -3071,7 +3073,7 @@ def set_article_tags(
             if tid is not None:
                 ids.append(tid)
                 continue
-            hit, cands = A.find_tag(index, str(it))
+            hit, cands = _tags.find_tag(index, str(it))
             if hit is not None:
                 ids.append(hit.id)
             else:
@@ -3085,7 +3087,7 @@ def set_article_tags(
         return unavailable(f"后台文章列表里没有 id={aid} 这一篇"
                            f"（它可能是某篇文章的「编辑修改稿」影子行，不能这样直接改），本次未改动")
     title = str(before_note.get("noteTitle") or "").strip()
-    cur = A.parse_tag_ids(before_note.get("noteTags"))
+    cur = _tags.parse_tag_ids(before_note.get("noteTags"))
 
     if replace is not None:
         add_ids, bad = _resolve(rep_l)
@@ -3111,17 +3113,17 @@ def set_article_tags(
 
     if new == cur:
         return ok(f"文章 {aid}《{title}》的标签本来就是"
-                  f"{A.render_tag_list(cur, index)}，无需改动（没有发出写请求）。",
+                  f"{_tags.render_tag_list(cur, index)}，无需改动（没有发出写请求）。",
                   meta=fact("set_tags", changed=False, target=tgt("note", aid, title),
-                            before=A.render_tag_list(cur, index),
-                            after=A.render_tag_list(cur, index), article_id=aid))
+                            before=_tags.render_tag_list(cur, index),
+                            after=_tags.render_tag_list(cur, index), article_id=aid))
 
     # `noteTags` 是"传了就写"，`""` = 清空 ⇒ 只有 replace（含 replace=[]）才可能产出空串；
     # add/remove 路径下 new 至少含一个元素或被上面的 new==cur 拦下。
     # ⚠️ 与 `set_article_status` 同一条纪律：**不发 title/content**（元数据写不是"发布"，
     #    不该触发 `update_note` 的 `from_editor` 分支——含**署名回填**；20261007 那起
     #    "文章 23 被记成 uid 721" 正是这一条路，说明见那边那段注释）。
-    data = _admin_post(f"/api/protected/notes/{aid}", {"noteTags": A.join_tag_ids(new)}, config)
+    data = _admin_post(f"/api/protected/notes/{aid}", {"noteTags": _tags.join_tag_ids(new)}, config)
     if isinstance(data, ToolResult):
         return data
 
@@ -3130,14 +3132,14 @@ def set_article_tags(
         return after_note
     if after_note is None:
         return unavailable(f"改动请求已发出，但读回时文章 {aid} 已不在后台列表里，本次改动未确认生效")
-    got = A.parse_tag_ids(after_note.get("noteTags"))
+    got = _tags.parse_tag_ids(after_note.get("noteTags"))
     if got != new:
         return unavailable(f"改动请求已发出，但读回文章 {aid} 的标签是"
-                           f"{A.render_tag_list(got, index)}、与预期的"
-                           f"{A.render_tag_list(new, index)}不一致，本次改动未确认生效")
-    before_s = A.render_tag_list(cur, index)
-    after_s = A.render_tag_list(got, index)
-    return ok(A.render_tags_ok(aid, title, before_s, after_s),
+                           f"{_tags.render_tag_list(got, index)}、与预期的"
+                           f"{_tags.render_tag_list(new, index)}不一致，本次改动未确认生效")
+    before_s = _tags.render_tag_list(cur, index)
+    after_s = _tags.render_tag_list(got, index)
+    return ok(_tags.render_tags_ok(aid, title, before_s, after_s),
               meta=fact("set_tags", changed=True, target=tgt("note", aid, title),
                         before=before_s, after=after_s, evidence=after_s, article_id=aid))
 
@@ -3821,10 +3823,10 @@ def _todo_pending(config: RunnableConfig):
     `load_agent_tasks` 的"`[]` 表示没有"同一族纪律。**这里绝不吞掉失败**：
     汇总读不到不影响待办本身（那一半已经读到了），但"没读到"这件事必须说出去。
     """
-    from agent import adminops as A
+    from agent import adminops_todo as _todo
     data = _own_get("/api/protected/notifications/summary", config)
     if isinstance(data, ToolResult) or not isinstance(data, dict):
-        return A.TODO_PENDING_UNREAD
+        return _todo.TODO_PENDING_UNREAD
     return {"review": data.get("pendingReview"), "quota": data.get("pendingQuota")}
 
 
@@ -3837,7 +3839,7 @@ def list_dashboard_todos(config: RunnableConfig) -> str:
     主人问"我有哪些待办 / 我日程上有什么 / 有没有什么事等着我处理 /
     那个 xx 是不是还没做"时都用它。
     这是**他自己那份私人列表**，站内公开页面上看不到；需要管理员身份。"""
-    from agent import adminops as A
+    from agent import adminops_todo as _todo
     data = _admin_get("/api/protected/todos", config)
     if isinstance(data, ToolResult):
         return data
@@ -3849,12 +3851,12 @@ def list_dashboard_todos(config: RunnableConfig) -> str:
     # `render_todo_pending`）。读不到汇总**不影响**待办本身（走 UNREAD 哨兵，
     # 如实说没读到）——一条只读通道不该因为另一半读不到就整条报错。
     pending = _todo_pending(config)
-    tail = A.render_todo_pending(pending)
+    tail = _todo.render_todo_pending(pending)
     if not rows and not tail:
         # 读到了、就是空的、且两类都是 0 —— 这是**事实**（`empty`，checker 照常
         # PASS 进回执），不能写成 unavailable：那会把"你还没记过待办"说成"系统挂了"。
         return empty("后台首页的待办列表现在是空的（一条都没记）。")
-    return ok(A.render_todo_list(rows, pending=pending),
+    return ok(_todo.render_todo_list(rows, pending=pending),
               meta={"op": "dashboard_todo_list", "count": len(rows)})
 
 
@@ -3869,7 +3871,7 @@ def create_dashboard_todo(
     """在**后台首页的待办列表**里加一条（排期可选）。这是主人自己的私人清单——
     不会对外可见，加完他自己随时能改能删；他问"记一下…/帮我记着…/安排一下…"时用它。
     只**追加**一条，不动列表里原有的任何一条。需要管理员身份，且要经主人确认。"""
-    from agent import adminops as A
+    from agent import adminops_todo as _todo
     body = str(text or "").strip()
     if not body:
         return unavailable("这条待办没写内容（正文是空的），本次未改动")
@@ -3877,11 +3879,11 @@ def create_dashboard_todo(
         return unavailable(f"这条待办太长了（{len(body)} 字，最多 {_TODO_TEXT_LIMIT} 字），"
                            f"本次未改动——请让主人把这件事说短一点")
     raw_date = "" if date is None else str(date).strip()
-    due = A.normalize_due_date(raw_date) if raw_date else None
+    due = _todo.normalize_due_date(raw_date) if raw_date else None
     if raw_date and due is None:
         # 认不出来就不挑一个顶上（见 adminops.normalize_due_date 头注）：错一天的
         # 日程会静静地躺在后台日历的错误格子里，主人不翻到那天根本不会发现。
-        return unavailable(f"认不出排期日「{raw_date}」（只认 {A.DUE_DATE_FORMS_CN}），"
+        return unavailable(f"认不出排期日「{raw_date}」（只认 {_todo.DUE_DATE_FORMS_CN}），"
                            f"本次未改动——请向主人问清是哪一天")
 
     # 写前先读（同族纪律）：① 拿"加之前有几条"当复核基线 ② 满员时不发注定被拒的请求
@@ -3919,7 +3921,7 @@ def create_dashboard_todo(
         return unavailable(f"追加请求已发出，但读回列表里没多出这一条"
                            f"（同内容的仍是 {n_after} 条，写前 {n_before} 条）"
                            f"——本次改动未确认生效，不要声称已记下")
-    return ok(A.render_todo_added(body, due),
+    return ok(_todo.render_todo_added(body, due),
               meta=fact("dashboard_todo_add", changed=True, target=tgt("todo", None, body),
                         before=f"{n_before} 条同名", after=f"{n_after} 条同名",
                         evidence=body, text=body, date=due or "",
@@ -3955,7 +3957,7 @@ def complete_dashboard_todo(
     哪一条的东西——对不上、或有多条同名，就一条都不改、如实告诉他。
     **只翻完成标记**（正文与排期一个字都不动），**也不做**"取消完成"。需要管理员
     身份，且要经主人确认。"""
-    from agent import adminops as A
+    from agent import adminops_todo as _todo
     body = str(text or "").strip()
     if not body:
         return unavailable("这条待办没写内容（正文是空的），本次未改动")
@@ -3982,7 +3984,7 @@ def complete_dashboard_todo(
     if len(hits) > 1:
         # **歧义即零写**（同 Rust `pick_todo`）：绝不替主人挑一条——挑错的那次
         # 在列表上看起来和挑对一模一样。
-        where = "、".join(A.render_todo_when(r) for r in hits)
+        where = "、".join(_todo.render_todo_when(r) for r in hits)
         return not_found(f"有 {len(hits)} 条待办都叫「{body}」，分不清是哪一条"
                          f"（{where}）——先到后台首页把其中一条改个说法")
     before_done = bool(hits[0].get("done"))
@@ -4019,7 +4021,7 @@ def complete_dashboard_todo(
     # 内联一个 `**({"noop": True} if … else {})`，而"本来就完成"这一支就是零净变化
     #（回执文本自己也写着「本来就是完成状态」）——不带那个键，两个读端就会把它当成
     # "真的勾了一下"（gate 洞⑩ 会误判诚实的叙述，planner 会重跑同一件）。
-    return ok(A.render_todo_done(body, changed=not before_done),
+    return ok(_todo.render_todo_done(body, changed=not before_done),
               meta=fact("dashboard_todo_done", changed=not before_done,
                         target=tgt("todo", None, body),
                         before="已完成" if before_done else "未完成",
@@ -4049,7 +4051,7 @@ def reschedule_dashboard_todo(
     的东西——对不上、或有多条同名，就一条都不改、如实告诉他。
     **只改排期**（正文与完成标记一个字都不动）。日期翻不出来时零写并问清是哪一天，
     **绝不自己挑一天顶上**。需要管理员身份，且要经主人确认。"""
-    from agent import adminops as A
+    from agent import adminops_todo as _todo
     body = str(text or "").strip()
     if not body:
         return unavailable("这条待办没写内容（正文是空的），本次未改动")
@@ -4057,16 +4059,16 @@ def reschedule_dashboard_todo(
         return unavailable(f"这条待办太长了（{len(body)} 字，最多 {_TODO_TEXT_LIMIT} 字），"
                            f"本次未改动——请让主人把这件事说短一点")
     raw_date = str(date or "").strip()
-    if raw_date in A._TODO_CLEAR_DATES:
+    if raw_date in _todo._TODO_CLEAR_DATES:
         due = None
     else:
-        due = A.normalize_due_date(raw_date)
+        due = _todo.normalize_due_date(raw_date)
         if due is None:
             # 认不出来就不挑一个顶上（同 create_dashboard_todo）：错一天的日程会静静地
             # 躺在后台日历的错误格子里，而**改排期**比新增更容易被主人信任——他刚说过
             # 一个日子，看见"改好了"就以为系统听懂了他的说法。
-            return unavailable(f"认不出排期日「{raw_date}」（只认 {A.DUE_DATE_FORMS_CN}；"
-                               f"清空排期填「{A._TODO_CLEAR_WORD}」），"
+            return unavailable(f"认不出排期日「{raw_date}」（只认 {_todo.DUE_DATE_FORMS_CN}；"
+                               f"清空排期填「{_todo._TODO_CLEAR_WORD}」），"
                                f"本次未改动——请向主人问清是哪一天")
 
     # 写前先读（同族纪律）：① 在**发出请求之前**就认出是哪一条——查无此条/有多条时
@@ -4088,7 +4090,7 @@ def reschedule_dashboard_todo(
     if len(hits) > 1:
         # **歧义即零写**（同 Rust `pick_todo`）：绝不替主人挑一条——挑错的那次
         # 在列表上看起来和挑对一模一样。
-        where = "、".join(A.render_todo_when(r) for r in hits)
+        where = "、".join(_todo.render_todo_when(r) for r in hits)
         return not_found(f"有 {len(hits)} 条待办都叫「{body}」，分不清是哪一条"
                          f"（{where}）——先到后台首页把其中一条改个说法")
     before_date = str(hits[0].get("date") or "").strip()
@@ -4117,9 +4119,9 @@ def reschedule_dashboard_todo(
                            f"——本次改动未确认生效，不要声称已改好")
     after_date = str(now_hits[0].get("date") or "").strip()
     if after_date != (due or ""):
-        want_cn = A.due_date_cn(due) if due else "未排期"
+        want_cn = _todo.due_date_cn(due) if due else "未排期"
         return unavailable(f"改排期的请求已发出，但读回列表里这一条的排期是"
-                           f"{A.render_todo_when(now_hits[0])}（要改的是 {want_cn}）"
+                           f"{_todo.render_todo_when(now_hits[0])}（要改的是 {want_cn}）"
                            f"——本次改动未确认生效，不要声称已改好")
     # 幂等**不短路**（同勾完成族）：目标日期与写前相同也照发请求（服务端那个分支是真
     # no-op），结论由上面这次复核给——回执按 `changed` 如实区分"刚改的"与"本来就是
@@ -4130,12 +4132,12 @@ def reschedule_dashboard_todo(
     # 无声丢掉（`_RCPT_META_KEYS` 那条拷贝循环），看起来"记下来了"、其实一行都没落，
     # 而这一族最容易的误判正是"回执里有就等于库里有"。
     changed = before_date != (due or "")
-    return ok(A.render_todo_rescheduled(body, due, changed=changed),
+    return ok(_todo.render_todo_rescheduled(body, due, changed=changed),
               meta=fact("dashboard_todo_reschedule", changed=changed,
                         target=tgt("todo", None, body),
-                        before=A.render_todo_when(hits[0]),
-                        after=A.render_todo_when(now_hits[0]),
-                        evidence=A.render_todo_when(now_hits[0])))
+                        before=_todo.render_todo_when(hits[0]),
+                        after=_todo.render_todo_when(now_hits[0]),
+                        evidence=_todo.render_todo_when(now_hits[0])))
 
 
 # ---------------------------------------------------------------------------
@@ -4244,7 +4246,7 @@ def list_accounts(config: RunnableConfig) -> str:
 
     只列出**账号名**，不列昵称：后台接口里就没有昵称这个字段，而主人用昵称称呼时
     应当如实说明找不到、或请他给账号名，不要拿昵称去猜。需要管理员身份。"""
-    from agent import adminops as A
+    from agent import adminops_account as _account
     rows = _user_directory(config)
     if isinstance(rows, ToolResult):
         # **原样透传失败**：读不到名录 ≠ 名录是空的。渲染成"一个账号都没有"会让下一步
@@ -4255,8 +4257,8 @@ def list_accounts(config: RunnableConfig) -> str:
         # 空名录是**事实**（后端确实一个都没给），照实说、照常进回执（同
         # `list_admin_notes` 的"后台文章列表是空的"那一支）。**读不到不走这里**——
         # 上面已经原样透传了 `unavailable`。
-        return empty(A.render_account_roster([]))
-    return ok(A.render_account_roster(listed),
+        return empty(_account.render_account_roster([]))
+    return ok(_account.render_account_roster(listed),
               meta={"count": len(listed),
                     "usernames": [str(r.get("username") or "").strip()
                                   for r in listed]})
@@ -4355,12 +4357,12 @@ def _find_user_by_id(user_id, config, index=None):
     按名字定位无从落地；这里 uid 已经给了，读不到名录就只是"没核对上"，所以这条
     通道的读不到同样是零写（同 `_pre_read_fail` 的取向）。
     """
-    from agent import adminops as A
+    from agent import adminops_target as _target
     if index is None:
         index = _user_directory(config)
     if isinstance(index, ToolResult):
         return None, str(index)
-    uid = A.normalize_target_id(user_id)
+    uid = _target.normalize_target_id(user_id)
     if uid is None:
         return None, (f"「{str(user_id or '').strip()[:40]}」不是一个账号编号，"
                       f"本次未改动——请把待办台账里那个申请人的账号 id 原样抄过来")
@@ -4410,7 +4412,7 @@ def _set_account_frozen(name, frozen: bool, config: RunnableConfig) -> ToolResul
     **同一份名录**复核 → ⑤ 出口只有 `ok` / `not_found` / `policy_frame` /
     `unavailable`，绝不 `return ""`。
     """
-    from agent import adminops as A
+    from agent import adminops_account as _account
     want = str(name or "").strip()
     if not want:
         return unavailable("没给出要动的账号名，本次未改动——请让主人说清是哪个账号")
@@ -4464,7 +4466,7 @@ def _set_account_frozen(name, frozen: bool, config: RunnableConfig) -> ToolResul
 
     changed = (was_frozen != now_frozen)
     return ok(
-        A.render_account_status(username, target_id, frozen, changed=changed,
+        _account.render_account_status(username, target_id, frozen, changed=changed,
                                 before_frozen=was_frozen),
         meta=fact("account_freeze" if frozen else "account_unfreeze", changed=changed,
                   target=tgt("user", target_id, username),
@@ -4472,7 +4474,7 @@ def _set_account_frozen(name, frozen: bool, config: RunnableConfig) -> ToolResul
                   after="冻结" if now_frozen else "正常",
                   evidence="冻结" if now_frozen else "正常",
                   account_id=target_id, account_name=username,
-                  change=A.account_change_phrase(frozen, changed)))
+                  change=_account.account_change_phrase(frozen, changed)))
 
 
 @tool
@@ -4524,11 +4526,11 @@ def _set_account_muted(name, muted: bool, hours, config: RunnableConfig) -> Tool
     ——它写着"所有登录会话已经全部失效"，而禁言从不 bump `token_version`（Rust
     `set_user_muted` 头注），照抄过来是一句假话（同「消息壳架空判据」那族坑）。
     """
-    from agent import adminops as A
+    from agent import adminops_account as _account
     want = str(name or "").strip()
     if not want:
         return unavailable("没给出要动的账号名，本次未改动——请让主人说清是哪个账号")
-    ok_hours, hours_n = A.normalize_mute_hours(hours)
+    ok_hours, hours_n = _account.normalize_mute_hours(hours)
     if not ok_hours:
         # 出口用 `not_found`（目标类失败）而不是 `unavailable`：后者的过程行是
         # 「服务不可用」、planner 收到的指引是"稍后再试"，而这条请求**永远不会**因为
@@ -4550,7 +4552,7 @@ def _set_account_muted(name, muted: bool, hours, config: RunnableConfig) -> Tool
     target_id = int(row.get("id"))
     username = str(row.get("username") or want)
     was_muted = _account_muted(row)
-    before_until = A.mute_until_raw(row)
+    before_until = _account.mute_until_raw(row)
 
     # ③ 写。**幂等不短路**：后端对"本来就是没被禁言"的解禁方向才是真 no-op，禁言
     #    方向永远不是——短路掉就分不出"刚禁的"与"本来就禁着"（同冻结族那条）。
@@ -4581,7 +4583,7 @@ def _set_account_muted(name, muted: bool, hours, config: RunnableConfig) -> Tool
         return unavailable(f"{verb}请求已发出，但读回账号「{username}」仍是「{state}」，"
                            f"本次改动未确认生效")
 
-    after_until = A.mute_until_raw(got)
+    after_until = _account.mute_until_raw(got)
     if muted:
         # 禁言方向：期限变了（含"首次禁言"）就是一次真变更——同长度的再次禁言也会
         # 得到一个更晚的时刻，那是真事（他确实又被禁了 N 小时），照实报"已禁言"。
@@ -4592,7 +4594,7 @@ def _set_account_muted(name, muted: bool, hours, config: RunnableConfig) -> Tool
         # ⇒ 这一下把它清掉了，是真变更。
         changed = before_until != ""
     return ok(
-        A.render_account_mute_status(username, target_id, muted,
+        _account.render_account_mute_status(username, target_id, muted,
                                      until_raw=after_until, changed=changed,
                                      before_muted=was_muted),
         meta=fact("account_mute" if muted else "account_unmute", changed=changed,
@@ -4602,7 +4604,7 @@ def _set_account_muted(name, muted: bool, hours, config: RunnableConfig) -> Tool
                   after="禁言中" if now_muted else "正常",
                   evidence="禁言中" if now_muted else "正常",
                   account_id=target_id, account_name=username,
-                  change=A.account_mute_change_phrase(muted, changed,
+                  change=_account.account_mute_change_phrase(muted, changed,
                                                       until_raw=after_until)))
 
 
@@ -4655,7 +4657,7 @@ def _set_account_role(name, role, config: RunnableConfig) -> ToolResult:
 
     **幂等不短路**（同冻结那一支）：目标已经是目标身份时照样发请求，结论由复核给。
     """
-    from agent import adminops as A
+    from agent import adminops_account as _account
     want = str(name or "").strip()
     if not want:
         return unavailable("没给出要改的账号名，本次未改动——请让主人说清是哪个账号")
@@ -4678,7 +4680,7 @@ def _set_account_role(name, role, config: RunnableConfig) -> ToolResult:
     #     翻不出**不在这里拒**（同头注那条"不写第二份政策表"）：原样把它交给后端，
     #     让后端回一句『站内没有这个身份』——那是政策的原话，而 agent 自己编一句
     #     「认不出这个身份」会是**另一句话**，且它与政策漂移时无人发现。
-    sent_role = A.normalize_role(new_role) or new_role
+    sent_role = _account.normalize_role(new_role) or new_role
 
     # ③ 写。方向由**参数字面**决定（技能展开层已经把它归一过一次；这里再归一一次
     #    是为了让直接调用本工具的路径也拿到同一个值）。
@@ -4707,19 +4709,19 @@ def _set_account_role(name, role, config: RunnableConfig) -> ToolResult:
                            f"无法确认，本次改动未确认生效")
     if now_role != sent_role:
         return unavailable(f"变更身份的请求已发出，但读回账号「{username}」的身份仍是"
-                           f"「{A.role_cn(now_role)}」，本次改动未确认生效")
+                           f"「{_account.role_cn(now_role)}」，本次改动未确认生效")
 
     changed = (was_role != sent_role)
     return ok(
-        A.render_account_role_status(username, target_id, sent_role,
+        _account.render_account_role_status(username, target_id, sent_role,
                                      before_role=was_role, changed=changed),
         meta=fact("account_set_role", changed=changed,
                   target=tgt("user", target_id, username),
-                  before=A.role_cn(was_role) if was_role else "",
-                  after=A.role_cn(sent_role),
-                  evidence=A.role_cn(now_role),
+                  before=_account.role_cn(was_role) if was_role else "",
+                  after=_account.role_cn(sent_role),
+                  evidence=_account.role_cn(now_role),
                   account_id=target_id, account_name=username,
-                  change=A.account_role_change_phrase(sent_role, changed)))
+                  change=_account.account_role_change_phrase(sent_role, changed)))
 
 
 @tool
@@ -4772,7 +4774,7 @@ def _send_user_notice(name, content, title, config: RunnableConfig) -> ToolResul
         而**唯一的人眼复核点是确认卡**（`adminops.render_notice_action` 把正文**全文**
         印出来）——那条纪律是硬要求，不是措辞偏好。
     """
-    from agent import adminops as A
+    from agent import adminops_account as _account
     want = str(name or "").strip()
     if not want:
         return unavailable("没给出要发给哪个账号，本次未发送——请让主人说清是哪个账号")
@@ -4810,7 +4812,7 @@ def _send_user_notice(name, content, title, config: RunnableConfig) -> ToolResul
         return data
     # ④ 回执即复核判据（这一族没有第二条腿，见头注）：端点回了 code 200 ⇒
     #    服务端那次 `push_notice_checked` 插入成功。
-    return ok(A.render_notice_status(username, target_id, head, body_text),
+    return ok(_account.render_notice_status(username, target_id, head, body_text),
               meta=fact("notice_send", changed=True,
                         target=tgt("user", target_id, username),
                         before="未发送", after="已发送", evidence=head,
@@ -4905,7 +4907,7 @@ def _admin_quota_post(path: str, payload: dict, config: RunnableConfig):
     `docs/security-boundary.md §7⑬` 那条同步流程（⚠️ 是 **⑬**：⑫ 是令牌收回与
     账号冻结那节；20260929 之前这里指向 ⑫，是一处指错的引用）。
     """
-    from agent import adminops as A
+    from agent import adminops_target as _target
     uid = _device_get_user_id(config)
     if uid <= 0:
         # 身份不明时一个请求都不发（同 `_principal_request`）。
@@ -4938,7 +4940,7 @@ def _admin_quota_post(path: str, payload: dict, config: RunnableConfig):
                 # data"接着往下走写后复核，最后报成「已受理…未确认生效」——一句假话
                 # （这条请求根本没改任何东西，它是被状态判据挡下的）。同
                 # `_policy_post` 里那段一模一样的警告。
-                return ToolResult(A.policy_frame(msg))
+                return ToolResult(_target.policy_frame(msg))
         return unavailable(f"后台拒绝了这次额度操作（{msg or '没有给出原因'}）{_NO_SUCCESS_TAIL}")
     return body.get("data")
 
@@ -4988,7 +4990,7 @@ def list_quota_requests(
     目标；编号必须真实存在于账号名录里，系统在写之前还会对着现场队列再校验一次）。
     要改某个用户的额度而不涉及他的申请，用不上这个工具——直接按账号名重置即可
     （主动重置仍走名字通道）。需要管理员身份。"""
-    from agent import adminops as A
+    from agent import adminops_quota as _quota
     want = str(status or "").strip().lower()
     q = "all" if want in ("all", "全部", "所有") else "pending"
     data = _admin_get(f"/api/protected/quota/requests?status={q}", config)
@@ -5004,7 +5006,7 @@ def list_quota_requests(
                      else "额度重置申请的记录是空的（一条都没有）")
     # 名录里够不着的行（超管 / 已注销）**照印但标注**——这一屏的用途正是"挑一件来办"，
     # 不标的话模型每次都挑到那一件、每次都白跑（见 `_reachable_uids`）。
-    return ok(A.render_quota_requests(rows, _reachable_uids(config)),
+    return ok(_quota.render_quota_requests(rows, _reachable_uids(config)),
               meta={"count": len(rows), "status": q})
 
 
@@ -5016,7 +5018,7 @@ def _quota_readback(config: RunnableConfig, target_id: int, username: str, limit
     三种取值分开说（见 `adminops.render_quota_status` 头注）：0 = 已确认恢复满；
     >0 = 他在这之后又聊过了（如实报实测值，**不许**照抄"已恢复"）；读不出 = 未复核。
     """
-    from agent import adminops as A
+    from agent import adminops_quota as _quota
     after = _user_directory(config)
     if isinstance(after, ToolResult):
         return unavailable(f"改动请求已发出，但读不回后台账号名录（{after}），"
@@ -5025,11 +5027,11 @@ def _quota_readback(config: RunnableConfig, target_id: int, username: str, limit
     if not isinstance(got, dict):
         return unavailable(f"改动请求已发出，但读回的名录里找不到 id={target_id} 那一行"
                            f"（账号可能已被删除），本次改动未确认生效")
-    return ok(A.render_quota_status(kind, username, target_id, limit,
-                                    A.quota_used(got)),
+    return ok(_quota.render_quota_status(kind, username, target_id, limit,
+                                    _quota.quota_used(got)),
               meta=fact(kind, changed=True, target=tgt("quota_request", target_id, username),
                         before="已用未清零", after="已恢复到上限",
-                        evidence=f"已用 {A.quota_used(got)}",
+                        evidence=f"已用 {_quota.quota_used(got)}",
                         account_id=target_id, account_name=username))
 
 
@@ -5052,7 +5054,8 @@ def _review_quota_request(user_id, approved: bool, reason, config: RunnableConfi
         （这正是服务端那次原子认领的可见效果）。用同一条读回复核去判额度在这里
         是错的——驳回之后他的额度本来就还是用尽的样子，判它必然误报"未生效"。
     """
-    from agent import adminops as A
+    from agent import adminops_quota as _quota
+    from agent import adminops_target as _target
     note = str(reason or "").strip()
     if not approved and not note:
         # 驳回理由必填（用户拍板）。为零的理由不是"空着没关系"：那条通知的正文
@@ -5080,7 +5083,7 @@ def _review_quota_request(user_id, approved: bool, reason, config: RunnableConfi
         return not_found(err)
     target_id = int(row.get("id"))
     username = str(row.get("username") or f"账号 id={target_id}")
-    limit = A.quota_limit(row)
+    limit = _quota.quota_limit(row)
 
     # ③ 读待处理申请：定位（拿行 id）与预检（没他那一行就不发请求）一次完成。
     pending = _quota_pending_index(config)
@@ -5094,7 +5097,7 @@ def _review_quota_request(user_id, approved: bool, reason, config: RunnableConfi
         # `没有找到这条额度申请`）。这里刻意另说一句更准的——"他没申请过"比"没找到
         # 这条申请"对主人有用得多，而分类只认我方的 policy_frame（早退不经网络，
         # 不存在"后端改字认不出"的问题）。**别把这两句写成同一句**：它们来源不同。
-        return ToolResult(A.policy_frame("该账号没有待处理的额度申请"))
+        return ToolResult(_target.policy_frame("该账号没有待处理的额度申请"))
     try:
         rid = int(entry.get("id"))
     except (TypeError, ValueError):
@@ -5120,7 +5123,7 @@ def _review_quota_request(user_id, approved: bool, reason, config: RunnableConfi
     if target_id in after:
         return unavailable(f"驳回请求已发出，但读回的待处理列表里**还有**账号"
                            f"「{username}」的申请，本次改动未确认生效")
-    return ok(A.render_quota_status("reject", username, target_id, limit, None),
+    return ok(_quota.render_quota_status("reject", username, target_id, limit, None),
               meta=fact("quota_reject", changed=True,
                         target=tgt("quota_request", target_id, username),
                         before="待处理", after="已驳回", evidence="已驳回",
@@ -5171,7 +5174,7 @@ def _reset_user_quota(name, config: RunnableConfig) -> ToolResult:
     待处理的申请行），这里是"你替他决定"（他申请没申请过都行）。所以这一支**不读**
     待处理申请——读了反而会让人误以为必须有一条申请才能重置。
     """
-    from agent import adminops as A
+    from agent import adminops_quota as _quota
     want = str(name or "").strip()
     if not want:
         return unavailable("没给出要重置哪个账号，本次未改动——请让主人说清是哪个账号")
@@ -5186,7 +5189,7 @@ def _reset_user_quota(name, config: RunnableConfig) -> ToolResult:
         return not_found(err)
     target_id = int(row.get("id"))
     username = str(row.get("username") or want)
-    limit = A.quota_limit(row)
+    limit = _quota.quota_limit(row)
 
     # ③ 写。**幂等不短路**：额度本来就是满的时照样发请求（后端那一支是真 no-op），
     #    结论由下面的复核给——短路成 ok 会让回执把一次"没发生的事"读成一个动作

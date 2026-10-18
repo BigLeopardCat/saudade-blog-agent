@@ -16,6 +16,105 @@
 
 ## 20261018
 
+- **技能注册表按域拆开、参数 schema 与展开层独立成层（批 2）——对外行为零变更**：
+  `agent/workflows.py` 从 4764 行降到 **376 行**，47 条技能定义按域住进 `agent/workflow_defs/`，
+  参数规格与事前校验住进 `agent/workflow_params.py`，计划状态闭集住进 `agent/plan_status.py`，
+  模板展开层住进 `agent/workflow_expand.py` 与 `agent/workflow_expand_write.py`（写技能那一族
+  单独一个模块，为的是模块预算），planner 可点名的工具清单住进 `agent/workflow_tools.py`，
+  菜单渲染与 planner 上下文住进 `agent/workflow_menu.py`，技能模板的实例化本体住进
+  `agent/workflow_plan.py`。**技能名单顺序、每条技能的字面、参数规格的派生结果、
+  展开出来的调用清单都与拆分前逐字相同**——注册表的穷举量总账 `1139 / 4856` 一格未动
+  （搬走而不是新增的机器可读凭据），`WORKFLOWS` 的顺序是一份契约，这次拆分的切点就是按
+  "六个域在原序列里各自连续"选的。老写法（`from agent.workflows import …`）全部照旧可用，
+  转发层是**迁移期的临时形态**、收尾刀整块消失：**`agent/workflows.py` 的顶层现在只剩
+  `_TOOL_SPEC_RE` 与 `split_tool_spec`**（它们的家是 `agent/tool_specs.py`，而
+  `tool_specs → decisions → workflows` 是一条现成的链，转发层还在时搬过去就成环）。
+- **类型棘轮收紧到 190 / 19**（原 201 / 20）：逐刀修掉随代码搬过来的 mypy 报错
+  （`args` / `spec` / `note` / `status` 在同一个函数里被多个分支复用时的标注与命名收敛、
+  禁言分支那处 dict 值类型），顺带删掉两个从没人读的死局部。**都是标注与死代码层面的
+  改动，展开结果不变。** 另修一处**既有**的、此前被 mypy 增量缓存遮住的报错：
+  `agent/checkpoint_arm.py` 的连接池返回注解是裸 `ConnectionPool`，会被推成
+  `ConnectionPool[Connection[tuple[Any, ...]]]`，而 langgraph 的 `PostgresSaver` 只收
+  `ConnectionPool[Connection[dict[str, Any]]]`——行类型现在写死（与同一个构造里那句
+  `row_factory=dict_row` 说同一句话）。**运行时行为不变**，这一条也解释了为什么
+  `--no-incremental` 会比带缓存多报一格。
+- **日志里 `%(name)s` 那一列开始说真话**：参数层与实例化层那几行 warning 的 logger 名从
+  `agent.workflows` 改成 `agent.workflow_params` / `agent.workflow_plan`（此前日志指着一个
+  文件、代码在另一个文件）。人类可读前缀 `[workflows]` 不变，按前缀 grep 的老办法照旧有效。
+- **`agent/workflows.py` 转发层整块删除（批 2 收尾刀）——对外行为零变更**：迁移期那个
+  只剩 `_TOOL_SPEC_RE` 与 `split_tool_spec` 的模块连同转发层一起消失，全仓 63 个文件里
+  91 处 `from agent.workflows import …` 逐个改指各符号真正的家（`agent/tool_specs.py`、
+  `agent/workflow_defs/`、`agent/workflow_params.py`、`agent/workflow_plan.py`、
+  `agent/workflow_expand*.py`、`agent/workflow_menu.py`、`agent/workflow_tools.py`）。
+  **本仓不留门面**：别名模块正是"看着在跑、其实没跑"那一族，留着它等于把"哪个模块才是
+  真的"这个问题永久留在仓里。那两个名字按原计划回 `agent/tool_specs.py`（`decisions`
+  不再指向任何 workflow 模块，那条会让它成环的边没了）。注册表穷举量总账 `1139 / 4856`
+  一格未动；模块台账销掉 `agent/workflows.py` 那一条。八个体量已在台账里的文件因 import
+  语句按新模块拆开而各长 1–10 行（ruff 的规范形态是一名一行），台账同批按文本外科改数。
+- **管理助手按域拆开（批 3）——对外行为零变更**：`agent/adminops.py`（3272 行 / 128 个顶层
+  定义）整块消失，按域住进 8 个模块——标签与分类 `agent/adminops_tags.py`、留言板
+  `agent/adminops_board.py`、待办 `agent/adminops_todo.py`、目标 `agent/adminops_target.py`、
+  账号与角色 `agent/adminops_account.py`、配额 `agent/adminops_quota.py`、写操作弹卡
+  `agent/adminops_confirm.py`、零调用收尾 `agent/adminops_noop.py`。**175 个顶层名字一个
+  不多一个不少**（AST 口径逐名对账），调用方逐个改指新模块——**本仓不留门面**，
+  `agent/adminops.py` 不给别名层。八处**源码文本锁**跟着改指（`tests/test_id_namespaces.py`
+  按模块名扫 id 命名空间，`tests/test_tag_color_tables.py` / `tests/test_note_tags_codec.py` /
+  `tests/test_chat_quota.py` / `tests/test_role_tables.py` 读源码文本断字面），读的还是同一份
+  文本，只是换了个文件。
+- **上面这刀顺带把三处"窄口径"判据销掉了**：`STATUS_CN` / `BOARD_VERDICT_CN` /
+  `BOARD_VERDICT_FULL` 三条的"符号与匹配器同文件"前提随拆分不成立（词表判据按文件认人），
+  穷举量那一层一格未动 ⇒ **丢的是判据的射程，不是内容**；`metric.total` 仍是 `1139 / 4856`。
+- **台账三处同批改**：模块台账销掉 `agent/adminops.py` 那一条（8 个新模块全在 800/60 之内）；
+  另有 7 个文件因 import 语句按新模块拆开、行宽越限被 ruff 逼着换行而各长 1–4 行，
+  台账按文本外科改数（`tools/base.py::create_tag` 复杂度台账 +1 行同理）。
+  **类型棘轮总数仍是 190**，但住址变了：`agent/adminops.py` 那 19 个落进
+  `agent/adminops_confirm.py`(6) / `agent/adminops_noop.py`(11) / `agent/adminops_quota.py`(2)
+  ——棘轮的"逐文件"那一条正是为"总数没涨、某个文件涨了"设的，所以台账按新住址重记。
+- **`agent/graph.py` 这一刀只动了 `:127-140` 那个 import 块**（无 def、无行为改动），
+  图本体按既定边界本轮不拆。
+- **正文里的地址一律写成 `[文字](URL)`（行为变更，`tests/test_link_shape.py`）**：此前人设
+  只要求"推荐/引用站内文章时附可点击链接"，正文里出现裸地址是自由的。事故本体（trace
+  `20261017T110235`，主人说「猫咪给我个B站链接」）：narrator 写了
+  `GitHub **https://github.com/BigLeopardCat**、QQ **1052636117**、邮箱 …`，前端渲染成
+  `<a href="…BigLeopardCat**、QQ">` —— **href 是垃圾**，点过去 404。这不是渲染层的 bug：
+  GFM 的 autolink literal 就是"吃到空白或 `<` 为止、再从末尾剥 ASCII 标点"，候选串末尾是
+  `Q`，没得剥。20261018 用真实前端管线逐字符实测的边界是**裸 URL 后面跟任何非空白字符都会
+  被吞**（不止中文标点，`,` `.` `:` `*` `?` 一样吞），**只有行尾/空格安全** ⇒「别把裸 URL
+  加粗」**不是正解**（不加粗一样坏，只差吞进去的尾巴少两个 `*`），正解是让地址进**定界符**。
+  人设现在写明三支：指路时文字写标题；**要让访客看见或复制地址本身时，文字就写地址本身**
+  （`[https://<真实地址>](https://<真实地址>)`——既能点，地址串也照旧留在页面上可选可复制）；
+  不想给链接就放进反引号。第三支是重点：把它改写成"不许输出裸地址、改成描述性文字链接"
+  看起来更严，实际会把「把地址发我」这个场景**改坏**（地址变成标题文字，复制不到）。
+  **页面跳转仍由系统执行**、正文链接不得冒充已跳转（原文一字未动，是推广不是替换）。
+  判据 = 新套件 `tests/test_link_shape.py`：锁三支齐、**真的进了 narrator 的 system prompt**
+  （`_EXECUTOR_PROMPT.format(...)` 之后仍在、槽都填上）、旧规矩没被顶掉，外加两条"契约里
+  不许出现**可抄的坏形状**"（`**https://`、裸 URL 紧跟非空白），并带正控——三支任一拆掉，
+  判据必须变假。它**不锁**"模型会不会照做"，那是 golden 的事（要真模型、不在 CI）。
+  同批台账：`agent/prompts.py` 833 → 840（`eval/module_baseline.json`）。
+- **第五处手抄数字进闸：`docs/README.md` 尾注的 ADR 份数**。那句「架构决策记录另有索引：
+  `adr/README.md`（**N 份**，记…）」的 N 是抄进来的，抄的时候写的是 7，而 `docs/adr/` 下
+  **当时已经有 12 份**——它一直没被抓住，是因为 `tests/test_docs_facts.py` 前几条正则的射程
+  都在 `README.md` 与 `agent-architecture.md` 的正文数字上（工具数/技能数/golden 条数），
+  够不到索引尾注这一行。判据并进同一套件的 **④**，真值只有一个来源：盘上有几份 `adr-*.md`。
+  带两种控：**失明控**（那句话被改形/搬家 ⇒ "模式一条都没匹配上"先红，与"数字漂了"是两种红）
+  与**空过控**（`N_ADRS > 0`，否则上一条是拿 0 比 0 的空过）。反控实测：把 `docs/README.md`
+  改回 7 ⇒ ④ 红；把句子改写掉 ⇒ 失明那条红。文档侧那个 7 → 12 已随批 0（`30cfcf7`）落盘。
+- **两条棘轮各补一个方向：台账不许比实测松（文件级）、账里不许留盘上不存在的键（类型级）**。
+  两条的失效形状是同一种——**账自己坏了，而闸把这件事读成好消息**：
+  - `tests/test_module_budget.py` 原来只在 `实测 > 台账` 时红，于是**一次大缩小会留下永久
+    免费额度**。实测抓到的正是它：`agent/graph.py` 台账记着 `13263 / 237`，盘上早就是
+    `13190 / 235`，那 73 行是静默的。现在两个方向都判（"台账该收紧"），并在同一笔里把那一格
+    改成实测值——**文本改那一个数，不跑 `--update`**（那是放宽通道，且会重排整份账）。
+    `--update` 出来的账**恰好等于**当时的实测，所以"账 == 实测"本来就是不变式。
+  - `eval/type_gate.py` 的 `by_file` 键只被用来做 `get(f, 0)` ⇒ **改名/删除**之后旧键永远
+    留在账上：它不出现在 `grew` 里、也不影响 `total`（总数取自 mypy 的汇总行），只会落进
+    「这些文件已经清零，可以销账」里被当成好消息报出来。真正的后果是同一个文件改名之后
+    计数从 0 重新开始——一次改名买回一份免费额度（现场：`agent/adminops.py` 拆成 8 个模块）。
+    现在盘上找不到的键退 3（与版本/目标对不上同档：**账不可用 ⇒ 先 `--update`**）。
+  两条判据都落在 `tests/test_packaging.py` ④ 上：真账现在无幽灵键 + **喂一个假键必须被拦**
+  （少了后半条，把守卫整段删掉也全绿）；`test_module_budget.py` 的自检里加了缩小方向的反控
+  与"相等不许红"的正控。
+
 - **聊天图片落库，但只做展示——模型仍只看 `[图片]` 标记（跨语言契约，agent 行为零变化）**
   ——`GET /api/chat/history` 的每条 item 多一个 `images` 键（dataURL 数组，缺席/空数组
   = 这条消息没有图）。**agent 侧一行代码都没改**：注入给模型的历史仍是
@@ -52,8 +151,52 @@
 - 说明：这一批**没有一条改变 agent 会说什么/做什么**，全部是"让已有的纪律有个会红的东西"。
   动机是 20260928 审计的头号结论——本仓最大的失效模式是**人工同步**（同一件事写两处，
   改一处忘另一处），而此前这几处**没有任何判据同时钉着两侧**。
+- **合并 `origin/main` 之后四道棘轮重切（判据，行为零变化）**：静态检查棘轮 877/154 →
+  **822/151**——批 A 把两个测试文件改了名（`test_skills.py` → `test_workflows.py`、
+  `test_slim_skills.py` → `test_slim_workflows.py`），基线里那两个旧键就此落空，按新键重出
+  （**两个新键的条数与旧键逐条相同**：108 / 2）；`agent/adminops.py`、`agent/skills.py`
+  两个被拆掉/改名的键随之消失。合并时把两边各自新增的自检并进同一份（`test_module_budget.py`
+  的 ⑤ 缩小方向反控与 ⑥ 键序往返判据并成两条，互不覆盖）。模块台账同批重出：5 个文件因
+  行宽越限被 ruff 逼着换行、`agent/graph.py` 里那个悬挂缩进的 from-import 按 ruff 的规范
+  形态改成一名一行，各长 1–6 行。类型棘轮总数仍是 190。
 
 ## 20261017
+
+- **计划只有一个读法了：对象那一态是唯一事实源，渲染文本退成只给人看**——此前计划的
+  「谁是规范形态」有**两个**答案：`plan_obj`（对象，写的人填了什么就是什么）与 `plan`
+  （文本，读的时候归一过的）。于是任何一处"写端漏了一格"，读文本的人看得见、读对象的
+  人看不见。现在归一**只在写侧做一次**（`plan_state` 里的 `normalize_plan`），
+  `execute` / `gate` / 路由 / 台账分族判据**全部改读对象**（唯一入口 `plan_view(state)`），
+  `parse_plan` 退回成**文本读器**（只服务旧 trace 的考古与测试夹具，`agent/` 下代码调用点
+  为零，有源码锁）。**agent 会看到的变化：没有**——这是一次纯结构改造，等价性由判据钉住
+  （同一份计划在对象与文本上逐项相等）。**顺带**：TOOLS 行那条"值里一个分号就把一条调用
+  撕成 N 条"的老毛病，在**执行**上从此结构上不可能（执行读的是清单本身，不再经过文本）。
+- - **零帧轮不许对站内下结论：narrator 那一格改按"证据集"写（提示词 + 判据）**——
+  `_EXECUTOR_TAIL` 的 `answer_only` 格（本轮一个站内数据工具都没跑时走的那条）原来只说
+  "依据只有页面上下文、对话历史、常识"，**没说不许说什么**；于是模型答完通用知识又顺手
+  对站内下结论（"站内没有讲这个的文章"），而这一轮它没有任何站内数据。现在那一格把**证据集**
+  写全，并明说：`"站里有没有 X"这类要站内数据才成立的说法，这一轮你没有依据——如实说这一轮
+  没去查`。**agent 会看到的变化**：零帧轮多了一条**指定出口**（承认没查），少了一次凭空结论。
+  判据侧同批补齐：洞④（站内"没有"结论无依据）的判据族新增第八张表 `_SELF_NONREAD_RE`，把
+  **第一人称 + 自陈没去读**这一次否定从"存在性结论"里摘出去——**系统教它的那句话，闸不能反过来
+  罚它**（同族不许对着干）。边界如实：**全量 686 份 trace 上命中 0 次** ⇒ 它是纯保险，防的是
+  图例改了之后模型照着写出这句、闸又把它判成凭空结论（加与不加，洞④ 的命中数都是 0）。
+  ⚠️ `_EXECUTOR_PROMPT` 由 react 臂与生产臂**共用同一份文本**（`tests/test_react_narrator_assets.py`
+  按 sha256 钉住）⇒ **这一次改动之前的 golden 读数一律作废**，别拿新旧混着比。
+- **规划契约并回技能描述，`planner_contract` 字段撤掉（提示词形状 + 判据）**——`tools[]`
+  回到行业惯例的形状：每个函数一个 `description`，**没有第二个字段**。原字段（20260927 立的）
+  依据是一次五遍 A/B「随描述搬进 schema ⇒ 0/5」，那次已改归因为**信息丢失**（当时 slim 臂
+  schema 里原样漏着未展开的 `__无参只读工具清单__`，`tools` 参数描述又被
+  `_SCHEMA_OVERRIDES` 盖成一句没有工具名的话）。同日三次四臂 A/B（`①` 只住正文 / `②` 只在
+  schema / `④` 并进 description / `③` 整句删掉，7 用例 × 12 遍）：**①②④ 各 84/84 逐条相同，
+  ③ 73、75、79**（差的全部是 `pair_one_talks` 一条，1/12 → 7/12）⇒ 位置无关、承重的是那句
+  话本身。⚠️ **方向稳、量级不稳**（温度 0.0 也不逐字节可复现）⇒ 判据只认"③ 掉、①②④ 不掉"，
+  不认掉了多少。**agent 会看到的变化**：slim（生产唯一形态）的提示词正文**不再单独渲染
+  契约行**，那句话改从同名函数的 `description` 末尾到达模型——四臂实测说它**不改变行为**。
+  判据随之反转：`test_slim_workflows` ②b 与 `test_account_roster` ④-9/⑥-6 从"契约**不在**
+  描述里"改成"契约**在**描述里、**不在**参数说明里"；`test_menu_deny` ③ 的靶子从"按契约挑"
+  改成"按固定工具序列挑"（契约并进描述后，slim 里"契约行也跟着走了"已成恒真，锁它等于
+  锁一条空话）。
 
 - **checkpoint 后端的"外围准备"：依赖进 lock、DSN 有了唯一读方（判据 + 配置面，行为零变化）**
   ——ADR-0011（图自持上下文）**仍未采纳**，这一笔只把它要用的东西摆到位、**不动"三处一起动"**
@@ -207,6 +350,29 @@
   （那份 diff 就是"这一版为什么该变大"的辩护记录）。**不改任何对外行为**，纯判据 + 一份
   台账；CI 由 `tests/run_all.py` 按磁盘枚举自动到手。判据自带正控/反控（新增超预算、
   行数长大、定义变多、该销账、台账过期五路都要红，没动的要绿）。
+
+- **概念改名 `skill` → `workflow`（⚠️ 对外行为零变更；两处跨语言键**故意不动**）**——
+  "固定的多步工具配方"在行业惯例里叫 workflow，没有任何一家叫 skill（Anthropic 的
+  `SKILL.md` 是**指令包**，不是固定工具序列；Bedrock 叫 action group、MCP/OpenAI 叫 tool）。
+  本批改的是 **agent 仓内部**：模块与文件（`agent/skills.py` → `agent/workflows.py` 等
+  三处）、全部标识符、计划文本 IR `SKILL=` → `WORKFLOW=`、trace 事件键、`[planner]` 日志
+  键、确认令牌载荷、golden 用例里的 `require_confirm_payload` 键。**读它的都是 Python**，
+  写读同批改 ⇒ 无行为变化。
+  ⚠️ **两个键仍然叫 `skill`**，是刻意的：`__EXEC__` 帧体的 `skill`（→ `execution_log.skill`）
+  与 `__PENDING__` 帧体的 `skill`（→ `pending_action.skill`）。父仓 Rust 按这个名字读，
+  读法是 `unwrap_or("")`——**单改 Python 一侧不报错、只静默落空串**。那一批要连 Rust 读取端
+  与两条 DB 迁移一起落地（等点名授权），所以今天它们原地不动，`tests/test_workflows.py` /
+  `test_confirm.py` / `test_admin_write.py` / `test_react_arm.py` 四处断言也**照旧读 `skill`**
+  并各自写明理由。
+  **判据**：trace 是保留 30 天的长期语料 ⇒ 改名当天盘上全是旧键，读取端只认新键的话，
+  那 30 天里按 `workflow` 统计的巡检会**静默读到 0**、而且到期自己"恢复"（旧文件被删）。
+  旧键在**读取的唯一点**（`eval/trace_io.py::load_trace`）映射成新键，带**日落日期
+  20261116**；`tests/test_trace_io.py` ⑨ 到那天变红，提醒删掉这个兼容函数。另加两条：
+  `tests/test_docs_links.py` ④ 改成从文档正文现读一张**改名表**逐条放行（新路径必须在盘上，
+  否则自说自话的改名表能把幽灵路径洗白），`eval/complexity_baseline.json` 里
+  `tests/test_trace_io.py::main` 销账（拆出两个小函数，不是 `--update`）。
+  **文档**：现役文档跟着改名；**历史档案不回溯改写**（`docs/问题记录.md`、评测报告、
+  ADR）——只在文首加一行说明；**ADR 文件名一个都不动**（改了会打断所有按文件名引用的地方）。
 
 ## 20261016
 

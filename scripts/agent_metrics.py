@@ -24,7 +24,7 @@ import sys
 # ── 日志模式 → 指标 ───────────────────────────────────────────────
 RE_TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 RE_TRACE_ID = re.compile(r"tid=(\S+)")
-RE_PLANNER = re.compile(r"\[planner\] skill=(\w+)")
+RE_PLANNER = re.compile(r"\[planner\] workflow=(\w+)")
 RE_TOOL_CALLS = re.compile(r"\[model\] tool_calls=\[([^\]]*)\]")
 # 工具执行行。**20260926 批 2 同步**：日志格式自 20260903 起是
 # `[execute] <工具名>(<json 参数>) → <返回文本>`（不是旧的 `[tools] <名> → <文本>`），
@@ -60,7 +60,7 @@ def parse_line(line: str) -> tuple | None:
 def collect(path: str, hours: int) -> dict:
     cutoff = dt.datetime.now() - dt.timedelta(hours=hours)
     stats = {
-        "rounds": 0, "skills": {}, "tool_call_rounds": 0, "tool_call_total": 0,
+        "rounds": 0, "workflows": {}, "tool_call_rounds": 0, "tool_call_total": 0,
         "tool_failures": 0, "command_frames": 0, "dedup_blocks": 0,
         "reflector_pass": 0, "reflector_revise": 0, "budget_exhausted": 0,
         "empty_reply": 0, "summary_failed": 0, "timeouts": 0,
@@ -87,7 +87,7 @@ def collect(path: str, hours: int) -> dict:
             m = RE_PLANNER.search(text)
             if m:
                 stats["rounds"] += 1
-                stats["skills"][m.group(1)] = stats["skills"].get(m.group(1), 0) + 1
+                stats["workflows"][m.group(1)] = stats["workflows"].get(m.group(1), 0) + 1
                 continue  # planner 行不可能是其他模式
 
             m = RE_TOOL_CALLS.search(text)
@@ -144,7 +144,7 @@ def render(stats: dict, hours: int) -> str:
         f"窗口：最近 {hours}h（{fmt_dt(stats['window_start'])} ~ {fmt_dt(stats['window_end'])}，trace_id 数 {len(stats['trace_ids'])}）",
         "",
         f"对话轮数 rounds                     {r}",
-        f"  技能分布                          {stats['skills'] or '-'}",
+        f"  技能分布                          {stats['workflows'] or '-'}",
         f"模型调用轮次（含工具调用）          {tc}（其中调工具 {stats['tool_call_rounds']}）",
         f"工具执行次数（[tools] 行）          {tool_runs}",
         f"  命令帧产出（EFFECT/NAVIGATE/…）   {stats['command_frames']}",
@@ -175,7 +175,7 @@ def main():
         print(f"日志文件不存在：{args.log}", file=sys.stderr)
         sys.exit(2)
 
-    stats["skills"] = dict(sorted(stats["skills"].items(), key=lambda kv: -kv[1]))
+    stats["workflows"] = dict(sorted(stats["workflows"].items(), key=lambda kv: -kv[1]))
     stats["trace_ids"] = sorted(stats["trace_ids"])
     if args.as_json:
         out = {k: v for k, v in stats.items() if k != "trace_ids"}

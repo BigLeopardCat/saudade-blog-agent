@@ -49,7 +49,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from agent import adminops as A  # noqa: E402
+from agent import adminops_quota as _quota  # noqa: E402
 from agent import entities as E  # noqa: E402
 from tests import _parent_repo, _rust_src  # noqa: E402
 from tools import base as B  # noqa: E402
@@ -191,8 +191,8 @@ check("  后端的表只有**一处**：`review_notice_text` 是薄包装（自�
 # 同仓还有一张**键空间相同**的表（配额申请的 0/1/2），两张抄串 = 把"已驳回"印成"未通过"。
 check("  `adminops._QUOTA_STATUS_CN`（0待处理/1已批准/2已驳回）与它**不共用词**"
       "（同键不同义，抄串了就是把一条申请说成一条留言）",
-      not (set(A._QUOTA_STATUS_CN.values()) & set(_WORD.values())),
-      f"{sorted(set(A._QUOTA_STATUS_CN.values()))}")
+      not (set(_quota._QUOTA_STATUS_CN.values()) & set(_WORD.values())),
+      f"{sorted(set(_quota._QUOTA_STATUS_CN.values()))}")
 
 
 # ══ ③ 位置形态：`talkId` 恒是整数（`/guestbook?lid=<talkId>` 的取值来源）══════

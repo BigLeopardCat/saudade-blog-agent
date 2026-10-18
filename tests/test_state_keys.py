@@ -10,7 +10,7 @@ LangGraph 只把 state schema 里**声明过**的键透出 updates 流；节点�
 `__RESET__` 从未发出、**没有任何东西变红**。
 
 而全仓此前**没有一条机械判据**看这件事，只有四处"某人为某个键名手加的一条点检"
-（`test_idem_noop` / `test_plan_executor` / `test_skills` / `test_plan_channel`）
+（`test_idem_noop` / `test_plan_executor` / `test_workflows` / `test_plan_channel`）
 ⇒ 第 14 个键还会以同样的方式出现，而且不会响。本套件把这条从"人记得"变成"结构上不可能"。
 
 ## 判法（静态 AST：不跑图、不调 LLM、无网络）

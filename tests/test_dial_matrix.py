@@ -95,8 +95,8 @@ with tempfile.TemporaryDirectory() as tmp:
 with tempfile.TemporaryDirectory() as tmp:
     write_trace(tmp, "native_style.json", [
         planner("llm_done", duration_s=2.0, engine="native"),
-        planner("native_decision", skill="navigate", finish="stop"),
-        planner("native_decision", skill="chat", finish="length"),      # 截断
+        planner("native_decision", workflow="navigate", finish="stop"),
+        planner("native_decision", workflow="chat", finish="length"),      # 截断
         planner("native_fallback", finish="stop"),                      # 没给出可用决定
     ])
     m_native = dm.trace_metrics(tmp)

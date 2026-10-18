@@ -334,7 +334,9 @@ print("\n⑧ 接线：scope / 菜单 / 白名单 / 动作词 / 技能（改坏�
 
 from agent.action_text import tool_action_text  # noqa: E402
 from agent.graph import _CONTENT_TOOLS, _TOOL_MENU_LINES, _tools_desc  # noqa: E402
-from agent.skills import SKILL_MAP, build_planner_context, callable_query_tools  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
+from agent.workflow_menu import build_planner_context  # noqa: E402
+from agent.workflow_tools import callable_query_tools  # noqa: E402
 from agent.principal import ADMIN_ROLES  # noqa: E402
 
 TOOL = "get_note_stats"
@@ -352,7 +354,7 @@ check("planner 菜单里有一行（否则模型不知道有这件工具）",
 check("动作词是中文（不是 `执行 get_note_stats`）",
       tool_action_text(TOOL, {}) != f"执行 {TOOL}", tool_action_text(TOOL, {}))
 
-sk = SKILL_MAP.get("traffic_report")
+sk = WORKFLOW_MAP.get("traffic_report")
 check("技能 traffic_report 在位，计划就是这一件工具",
       sk is not None and [t for t, _ in sk.plan] == [TOOL], str(sk and sk.plan))
 check("技能能力措辞点明三张榜（capability 是判据的一部分，见批 G 的教训）",

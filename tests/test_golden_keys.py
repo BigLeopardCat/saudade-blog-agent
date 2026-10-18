@@ -134,7 +134,7 @@ _impl = ({m.group(2) for m in _CPSUB_GET.finditer(_cp_src)}
 check("`require_confirm_payload` 的子键都是字面量（动态取键 ⇒ 下面这条扫不到）",
       not _CPSUB_DYN.search(_cp_src))
 check(f"源码实现的子键（{sorted(_impl)}）六个都在（少一个 = 那条断言被删了）",
-      _impl == {"skill", "specs", "skill_any", "args_from_input", "specs_include",
+      _impl == {"workflow", "specs", "workflow_any", "args_from_input", "specs_include",
                 "units"},
       str(sorted(_impl)))
 _cp_bad = [f"{c.get('id')}: {k}" for c in _cases for k in
