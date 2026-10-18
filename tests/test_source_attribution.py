@@ -31,6 +31,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
 from agent import graph as g  # noqa: E402
 from agent.prompts import BLOG_ASSISTANT_PROMPT  # noqa: E402
 
@@ -83,7 +85,10 @@ check("  且 `.format` 的槽都填上了（漏一个槽会留一串花括号文
 # ══════════════════════════════════════════════════════════════════
 print("\n③ 确定性收尾注也给出口（禁止句旁边必须有允许的说法）")
 
-_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+# 取值点跟着代码搬（20261019）：写参数落位与拒答那一族住进了
+# `agent/write_grounding.py` ⇒ 判据字面一个字没动，只把"读 graph.py 全文"
+# 换成"读这一族的全部文件"（`tests/_ctx_src.py::write_guard_src`）。
+_src = _ctx_src.write_guard_src()
 check("注记里那句禁止句仍在（洞⑦ 的判据靠它，别被这轮的括注挤掉）",
       "不许**出现「看过/读过/查过/检索过/调用过工具」这类说法" in _src)
 check("  紧跟着给了允许的说法：禁的是把系统的动作说成你做的",
