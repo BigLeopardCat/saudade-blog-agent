@@ -350,7 +350,7 @@ def _ignored_tag(word: str) -> bool:
     """
     return word in OTHER_TAG_FAMILIES or word in RETIRED_TAG_FAMILIES
 
-_SWEEP_FILES = ["server.py", "agent/graph.py", "agent/prompts.py", "agent/decisions.py",
+_SWEEP_FILES = ["server.py", "agent/graph.py", "agent/prompts.py", "agent/deterministic_plan.py",
                 "agent/reports.py", "eval/run_golden.py", "eval/corpus_invariants.py",
                 "scripts/agent_metrics.py",
                 "frontend/public/live2d-widgets/chat-core.js",

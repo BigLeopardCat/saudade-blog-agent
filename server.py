@@ -38,7 +38,7 @@ from agent.action_text import tool_action_text
 from agent import checkpoint  # 采纳（批 7）：造 saver + 会话坐标 + 级联清理
 from agent import confirm  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
 from agent import idem  # 持久化档的唯一常量（REQUIRED_DURABILITY，见 agent/idem.py）
-from agent import probe  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
+from agent import runtime_probe  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
 from agent.factblock import (action_facts,  # 动作事实块（D3）
                              compose, render_fact_block, strip_fact_lines)
 from agent import create_agent
@@ -311,9 +311,9 @@ _agent = None
 
 def _graph_holds_context() -> bool:
     """图自不自持上下文 —— 采纳（批 7）那三处的唯一判据。判定与理由见
-    `agent/probe.py::holds_context`（它读 `_agent` 这个**活体对象**，不读配置，
+    `agent/runtime_probe.py::holds_context`（它读 `_agent` 这个**活体对象**，不读配置，
     所以挂了 saver 的实验臂会真的走到"不注入历史"那条路上）。"""
-    return probe.holds_context(_agent)
+    return runtime_probe.holds_context(_agent)
 
 
 def _thread_id_for(req) -> str:
@@ -983,7 +983,7 @@ async def chat(req: ChatRequest, request: Request):
 _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",
               "empty_result": "结果为空", "error_frame": "执行出错",
               "cmd_shape": "返回格式异常",
-              # 参数引用失败（agent/refs.py 的原因码，20260919）
+              # 参数引用失败（agent/arg_refs.py 的原因码，20260919）
               "ref_unknown_tool": "引用的工具尚未执行",
               "ref_unparsed": "引用的返回不是结构化数据",
               "ref_index_range": "引用的序号越界",
@@ -2588,10 +2588,10 @@ async def health():
             "rag_hybrid_active": bool(_rag["active"]),
             "rag_state": str(_rag.get("state") or "unknown"),
             "vector_missing": int(_rag["missing"]),
-            # 这个进程挂没挂 saver（五档取值与理由见 `agent/probe.checkpoint_backend`）。
+            # 这个进程挂没挂 saver（五档取值与理由见 `agent/runtime_probe.checkpoint_backend`）。
             # **读的是 `_agent` 这个活体对象，不是 `CHECKPOINT_DSN`**——配了 DSN 而图没挂
             # 上 saver 时读配置会报成"挂了"，那是本仓最贵的一类失效。
-            "checkpoint_backend": probe.checkpoint_backend(_agent),
+            "checkpoint_backend": runtime_probe.checkpoint_backend(_agent),
         },
     }
 
@@ -2630,23 +2630,23 @@ async def version():
     在 agent 侧此前**没有任何出口**——父仓写 `frontend/dist/build-info.json`
     （`curl /build-info.json` 即知线上跑的是哪个提交），agent 侧只能靠读 `.env` 与提交
     历史去推。**只放静态构建身份、不回显活体档位**（理由与取值三档见
-    `agent/probe.version_payload`）。判据：`tests/test_version.py`。
+    `agent/runtime_probe.version_payload`）。判据：`tests/test_version.py`。
     """
-    return probe.version_payload(_app_version())
+    return runtime_probe.version_payload(_app_version())
 
 
 @app.get("/ready")
 async def ready():
     """就绪探针：**能不能真的接一轮对话**——与 `/health` 的"进程活没活"是两件事。
 
-    三条硬依赖与词表见 `agent/probe.ready_payload`；这里只做接线（取 `_agent` 与
+    三条硬依赖与词表见 `agent/runtime_probe.ready_payload`；这里只做接线（取 `_agent` 与
     `settings`）。⚠️ **它现在是建议性的**：没有任何探针在读它（父仓
     `scripts/healthcheck.sh` 读的是 `/health`），把它接进探针是父仓那侧的活。
     判据：`tests/test_ready.py`——三种缺失各判一遍，每一遍都配一条"同一条件下
     `/health` 仍然 200"（两者同时红同时绿就说明这个端点是装饰）。
     """
     from config.settings import settings
-    code, body = probe.ready_payload(_agent, settings)
+    code, body = runtime_probe.ready_payload(_agent, settings)
     return JSONResponse(body, status_code=code)
 
 

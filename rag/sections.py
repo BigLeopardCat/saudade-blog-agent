@@ -8,7 +8,7 @@
 本仓最大的那个模块），实测冷启动 **1.69 秒**（其中 `agent.graph` 占 1.71s 累计）——离线工具
 （`eval/recall_eval.py`、`eval/frame_budget.py`、任何只想要词法检索的入口）每次冷启动
 都在为一件不相干的事付这笔钱，两处调用点还各自写了"惰性导入：别让 tools 层启动即拉
-agent 包"来把它藏起来。`rag` 是三处里最低的一层（`agent/decisions.py`、`agent/context.py`、
+agent 包"来把它藏起来。`rag` 是三处里最低的一层（`agent/deterministic_plan.py`、`agent/context.py`、
 `tools/base.py` 都已经在 import `rag.search`），所以中立落点选这里——**导入它不再拉起
 任何东西**（本模块只 import `re`）。
 

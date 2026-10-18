@@ -117,7 +117,7 @@ WORKFLOWS: list[Workflow] = [
         description="用户要求在 IoT 设备（ESP32 OLED 屏幕）上显示某段文字时使用。",
         inputs={"text": "要显示的文字内容（planner 无需填写，由执行模型结合对话创作）"},
         # text 可选（20260925）：pydantic 里它是必填（工具签名无默认值），但**技能策略**
-        # 是"planner 不填、由执行层创作"——`decisions.py` 有一处直接
+        # 是"planner 不填、由执行层创作"——`deterministic_plan.py` 有一处直接
         # `instantiate_plan("device_display", {})`，`graph.py` 在执行时补文案。
         # 不声明这条例外的后果：planner 按提示词不填 text ⇒ 被判"必填没给"⇒ 零工具，
         # 屏幕这条能力**从 planner 通道整体不可达**。

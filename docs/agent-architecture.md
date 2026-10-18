@@ -115,7 +115,7 @@ flowchart TB
 │   │
 │   ├── 【判据族】（gate 的确定性判据，多为出边为零的纯函数）
 │   ├── repeat_guard.py        # ★ 逐字复读判据（gate 1b，20261017 第三刀）：_repeat_reason 两档 + _recent_ai_replies 比对面 + _REDO_REQUEST_RE 放行档
-│   ├── absence.py             # gate 洞④：站内"没有"结论无依据（八张表 + 纯函数 _absence_span）
+│   ├── absence_claims.py             # gate 洞④：站内"没有"结论无依据（八张表 + 纯函数 _absence_span）
 │   ├── provenance.py          # 写参数的**出处**：逐字引文核对 + 站内实体解析（20261014 换表征）
 │   ├── block_reasons.py       # 受阻原因码的**类型表**：把 checker 手里那个字符串变成可判读的类型
 │   ├── name_grounding.py      # 名字通道的目标名词表：主人引号里那一段才是目标名（20261017 第四刀）
@@ -123,14 +123,14 @@ flowchart TB
 │   ├── textnorm.py            # 文本归一（20261014 从 graph.py 搬出，逐字同源）
 │   ├── stickers.py            # 贴纸残记号的确定性修补：把只写了开头冒号的 `:头疼` 补回 `:名字:`
 │   ├── action_text.py         # ★ 一次执行 → 一行中文动作的**跨语言渲染唯一实现**（过程行 / 执行台账行两档）
-│   ├── entities.py            # ★ 执行回执实体摘要（digest 是 Python 写 / Rust 读的跨语言契约）
+│   ├── entity_digest.py            # ★ 执行回执实体摘要（digest 是 Python 写 / Rust 读的跨语言契约）
 │   │
 │   ├── 【上下文与提示词】
 │   ├── context.py             # 上下文组装（纯函数叶子层，零 LLM / 零 LangGraph）：注入给 planner/model 的事实文本——消息文本提取（多模态兼容）/ page_ctx / 页面操作指南 / 工具帧摘要 / checker 回执摘要
 │   ├── prompts.py             # ★ 全部模型可见正文的唯一落点：人设 + 叙述纪律 + planner / reflector 模板 + 输出契约（渲染点与全部逻辑仍在 graph.py）
 │   ├── planner_llm.py         # ★ 技能表 ↔ API tools/tool_calls 的接线层（20261004 起**唯一**接口层；20261017 前名 native_plan.py）
-│   ├── decisions.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取 / 特效切换 / 导航 / 屏幕显示）+ 动作意图扫描 + 检索候选裁决 + 终局计划
-│   ├── refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用：把上一步的真实返回值绑进下一步的参数（五个错误码，解不出必须响亮）
+│   ├── deterministic_plan.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取 / 特效切换 / 导航 / 屏幕显示）+ 动作意图扫描 + 检索候选裁决 + 终局计划
+│   ├── arg_refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用：把上一步的真实返回值绑进下一步的参数（五个错误码，解不出必须响亮）
 │   │
 │   ├── 【记忆与会话】
 │   ├── tasks.py               # ★ 会话级任务状态：未完成的意图跨轮不丢（agent_task 表 + 模型登记 + 系统确定性结算）
@@ -143,7 +143,7 @@ flowchart TB
 │   ├── principal.py           # ★ 调用者身份：Principal(uid, role, source)——身份的唯一构造点（docs/identity-and-permissions.md）
 │   ├── authz.py               # ★ 权限模型：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
 │   ├── confirm.py             # ★ 写操作确认令牌：无状态 HMAC（TTL 600s，多 worker 安全）；不落库、不落用户消息
-│   ├── probe.py               # 运行时可观测判定的**纯逻辑**：/version 构建身份、/ready 就绪、/health 那格 checkpoint 后端
+│   ├── runtime_probe.py               # 运行时可观测判定的**纯逻辑**：/version 构建身份、/ready 就绪、/health 那格 checkpoint 后端
 │   │
 │   ├── 【侧任务】
 │   ├── moderator.py           # 侧任务·留言审核：不可信输入围栏 + 输出白名单 + **fail-open**
@@ -151,7 +151,7 @@ flowchart TB
 │   ├── reports.py             # 管理助手输出渲染：报表与后台留言名册的纯函数出口（数字在工具侧算好，不让 LLM 数数）
 │   │
 │   ├── 【实验臂族】（只被 eval 与 `GOLDEN_ARM` 动态加载，生产链路不 import ⇒ **模块名是协议值，不许改名**）
-│   ├── frames.py              # 帧契约：第二条臂与生产（graph.py / server.py）之间的唯一事实源
+│   ├── frame_contract.py              # 帧契约：第二条臂与生产（graph.py / server.py）之间的唯一事实源
 │   ├── react_arm.py           # golden 第二条臂（GOLDEN_ARM=react）
 │   ├── react_line.py          # ReAct 试验线：把现网攒下的收敛判据 / 工具级回执装到第二条臂上
 │   ├── checkpoint.py          # checkpointer 的**接线点**与级联清理（空 DSN 恒返回 None，见 §4.6）
@@ -926,7 +926,7 @@ id / type / title / link / createdAt，上限 10）连在同一个返回里。�
 - 带回来的比计数字段少（超上限、或未读里较早的落在列表接口最近 100 条窗口外）→ 同一句话如实
   说少给了几条，**不许默默少给**。
 
-摘要侧（`agent/entities.py` 的 `_unread_digest`）跟着补 `id《标题》`：`read_notifications` 要的
+摘要侧（`agent/entity_digest.py` 的 `_unread_digest`）跟着补 `id《标题》`：`read_notifications` 要的
 实参是 id 列表，摘要里不给 id 就只能靠编（20260923 三轮那个"把条数当 id"的坑）。该 id 自
 20260926 批 4 起带命名空间（`notifId:7《…》`，同批 `noteId:`/`talkId:`/`userId:`/`mailId:`，
 见 `tests/test_id_namespaces.py`）——裸数字在帧里分不清是哪种物件（trace 20260924T030031 实证）。
@@ -1130,7 +1130,7 @@ flowchart TB
     工具执行结果"区块再决定 读全文/换词再搜/收尾。站点信息类问题（作者/备案号/社交链接/分类/
     标签/置顶/天气）直接点名对应数据工具，不得拿检索工具绕——检索索引只含文章正文，对站点
     元数据零命中（20260913 实证：问社交链接，绕一圈后答"站内没有"）。
-- 参数引用（`$<工具>[<序号>].<字段>`，20260919；`agent/refs.py`）——"上一步的真实返回值"
+- 参数引用（`$<工具>[<序号>].<字段>`，20260919；`agent/arg_refs.py`）——"上一步的真实返回值"
   程序化绑进"下一步的参数"，取 id 不再靠模型从截断帧里"读出来再抄一遍"：
   ```json
   {"tool": "get_article_detail", "args": {"article_id": "$search_notes[0].noteKey"}}
@@ -1601,7 +1601,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > `agent/adminops_tags.py` 的 `find_tag` 对着实时标签字典确定性解析成 id；解不出（查无此名/
 > 歧义/层级不符）一律**响亮零写**，绝不猜、绝不新建。技能描述里 `$list_tags[N].tagKey` 形态的
 > 示例已删（写轮永远满足不了它），`$ref` 机制本身保留。
-> ③**解不出的引用必须响亮**：`agent/refs.py::resolve_args` 改递归（此前嵌套引用既解析不出、
+> ③**解不出的引用必须响亮**：`agent/arg_refs.py::resolve_args` 改递归（此前嵌套引用既解析不出、
 > 又会让 `_confirm_popup` 拒绝签发令牌）；写技能分支引用一律原样透传（旧行为是把
 > `"$list_tags[3].tagKey"` 静默变成 `None`、注记还肯定地写下「（一级标签）」）。
 > ④父仓新增 `POST /api/protected/tag/move`（换父级 / 一级↔二级互转，原子、可逆）——
@@ -1636,7 +1636,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > 节边界。回归锁 = `tests/test_sections.py`（68 项）。
 > 上上版：2026-09-19（20260919 参数引用：§6.5 新增 `$<工具>[<序号>].<字段>` 参数绑定——
 > 下一步的参数取值由 execute 从结构化返回里绑，不再靠模型从 300 字截断帧里"读出来再抄"；
-> 见 `agent/refs.py`、`AgentState.tool_data`、planner 规则 3b）。
+> 见 `agent/arg_refs.py`、`AgentState.tool_data`、planner 规则 3b）。
 > 更早：2026-09-03（20260903 架构裁决同步——planner 全权：§1/§3/§6.5 改为现行拓扑
 > planner ⇄ execute → model → gate；reflector（LLM 质检 + REVISE）/ 自由 ReAct / tools_node 授权
 > 执行已废除；历史机制描述均就地标注"20260903 前形态"保留为问题记录；§2 目录注释、§7 LLM 调用

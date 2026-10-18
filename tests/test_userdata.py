@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统�
 sys.path.insert(0, str(ROOT))
 
 from agent import authz  # noqa: E402
-from agent.entities import receipt_digest  # noqa: E402
+from agent.entity_digest import receipt_digest  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 import tools.base as base  # noqa: E402
 
@@ -417,7 +417,7 @@ check("站内信 → 收件/发出封数 + 未读封数 + **id《标题》寄自
          "/mailId:9（无标题信）寄自阿岚（未读）/mailId:8《问好》寄自路人甲",
       receipt_digest("list_my_messages", str(MAILBOX)))
 # id 给足是**判据的一部分**：20260923 三轮那次「把条数当 id」的误导，堵法只有
-# "摘要里每个可点名的东西都带编号"（见 agent/entities.py `_mailbox_digest` 头注）。
+# "摘要里每个可点名的东西都带编号"（见 agent/entity_digest.py `_mailbox_digest` 头注）。
 check("信件摘要里每封都带**具名**编号（planner 不必编 id 就能点名，且知道这是信的 id）",
       all(f"mailId:{i}" in receipt_digest("list_my_messages", str(MAILBOX)) for i in (11, 9, 8)))
 check("信件摘要用**封**这个量词（通知是「条」——量词分开，两个 id 空间就不会被混）",

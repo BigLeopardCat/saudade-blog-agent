@@ -386,7 +386,7 @@ _arm_src = (ROOT / "agent" / "react_arm.py").read_text(encoding="utf-8")
 # 帧契约的唯一事实源（20261016 起）：`_round_state` / `_popup_state` / 四个帧构造器都
 # 搬去了这里。下面几处"接线锁"要同时读两份源码——只读臂那一份，锁会指向**已经搬走**的
 # 字符串（那是"锁的不是事实、是某一行曾经长这样"）。
-_frames_src = (ROOT / "agent" / "frames.py").read_text(encoding="utf-8")
+_frames_src = (ROOT / "agent" / "frame_contract.py").read_text(encoding="utf-8")
 _line_src = (ROOT / "agent" / "react_line.py").read_text(encoding="utf-8")
 check("**判据字面与 graph 一致**（改成「一律拦」= 两臂比的就不是同一件事了）",
       _src_line in _graph_src and _src_line in _line_src)
@@ -830,7 +830,7 @@ check("`plan_encode` **不经手**——臂手上是 `plan_obj`，塑形走 `pla
 # 未声明的键被 langgraph **静默丢掉**（本仓付过 13 次代价的那一族），少一格不报错、
 # 只让闸门少开火。反向对照：从 `AgentState` 里删掉任一格 ⇒ 当场红。
 from agent.graph import AgentState, graph_input  # noqa: E402
-from agent.frames import GATE_STATE_KEYS, POPUP_STATE_KEYS  # noqa: E402
+from agent.frame_contract import GATE_STATE_KEYS, POPUP_STATE_KEYS  # noqa: E402
 _ANN = set(AgentState.__annotations__)
 _GK = {"blocked", "blocked_seen", "confirm_grant"}      # 辅助函数读的那三格（20261012 补）
 check("闸门辅助函数读的那三格是 `AgentState` 的**声明键**（未声明 ⇒ 被静默丢掉）",

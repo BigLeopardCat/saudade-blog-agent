@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 from agent import authz  # noqa: E402
 from agent import context  # noqa: E402  ⑨h 用：短应答判据的剥壳口径
-from agent import decisions  # noqa: E402  ⑨h 用：导航快道的剥壳口径
+from agent import deterministic_plan  # noqa: E402  ⑨h 用：导航快道的剥壳口径
 from agent.graph import execute_node  # noqa: E402
 from agent.prompts import audience_block  # noqa: E402
 from agent.principal import (ADMIN_ROLES, KNOWN_ROLES, ROLE_ADMIN,  # noqa: E402
@@ -797,10 +797,10 @@ check("剥称呼只剥**开头**一处（句中/别处的名字不动）",
       and authz._strip_address_shell("把文章 12 收藏") == "把文章 12 收藏")
 check("裸「猫咪」也算称呼（老表只有「小猫咪」——三处口径不同是这次的修因）",
       authz._strip_address_shell("猫咪去留言板") == "去留言板")
-check("导航快道吃的是同一份剥壳（`decisions._bare`，表不再内联第二份）",
-      decisions._bare("小猫咪带我去留言板") == "带我去留言板"
-      and bool(decisions._NAV_VERB_RE.match(decisions._bare("猫咪带我去留言板")))
-      and "小猫咪" not in decisions._NAV_VERB_RE.pattern)
+check("导航快道吃的是同一份剥壳（`deterministic_plan._bare`，表不再内联第二份）",
+      deterministic_plan._bare("小猫咪带我去留言板") == "带我去留言板"
+      and bool(deterministic_plan._NAV_VERB_RE.match(deterministic_plan._bare("猫咪带我去留言板")))
+      and "小猫咪" not in deterministic_plan._NAV_VERB_RE.pattern)
 check("短应答准入吃的是同一份剥壳（`context._short_core` —— 称呼壳剥完只剩「好」）",
       context._short_core("猫咪，好") == "好"
       and context._short_core("小猫咪，好") == "好"

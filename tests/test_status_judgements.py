@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
-from agent.decisions import _terminal_plan, _wrap_up_plan  # noqa: E402
+from agent.deterministic_plan import _terminal_plan, _wrap_up_plan  # noqa: E402
 from agent.graph import (  # noqa: E402
     _FALLBACK_DOWN, _FALLBACK_GONE, _FALLBACK_UNDEPLOYED, _claim_issue, gate_node,
     parse_plan, plan_encode, plan_state,

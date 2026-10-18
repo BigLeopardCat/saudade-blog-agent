@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT))
 from agent import authz  # noqa: E402
 from agent import hostinfo as H  # noqa: E402
 from agent import reports as R  # noqa: E402
-from agent.entities import receipt_digest  # noqa: E402
+from agent.entity_digest import receipt_digest  # noqa: E402
 from agent.graph import _CMD_PREFIX_RE  # noqa: E402
 import tools.base as base  # noqa: E402
 

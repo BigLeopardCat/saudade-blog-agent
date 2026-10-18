@@ -77,9 +77,9 @@ from collections import Counter
 from typing import Any
 
 from agent import authz
-from agent.decisions import _doc_title, _intent_done, _scan_action_intents
-from agent.entities import receipt_digest
-from agent.frames import executed_specs
+from agent.deterministic_plan import _doc_title, _intent_done, _scan_action_intents
+from agent.entity_digest import receipt_digest
+from agent.frame_contract import executed_specs
 from agent.graph import _VERDICT_PASS, _check_spec, _grant_covers, _tool_args, _tool_name
 
 logger = logging.getLogger(__name__)
@@ -112,7 +112,7 @@ def attempted_specs(ledger: RunLedger) -> list[str]:
     """这一次运行**尝试过**的调用 → 生产 `state["executed"]` 那种 spec 串。
 
     形态必须与生产 planner 的 `TOOLS:` 行同构（`工具名({"k": "v"})`）：消费它的是
-    **生产的意图清单判据**（`agent.decisions._intent_done`，逐字同一份），它按
+    **生产的意图清单判据**（`agent.deterministic_plan._intent_done`，逐字同一份），它按
     `'"键"' in s` / `'"值"' in s` 认参数——自己另发明一种串会让它恒判"没做过"，
     纠偏环于是对着已经办完的事喊"你还没做"。
 
@@ -282,7 +282,7 @@ class WorkflowExecutor:
     产 `unknown_tool` 错误帧——**不静默跳过**（跳过会让"计划里有 3 步、只成了 2 步"
     看起来像全成，那正是回执要防的事）。
 
-    参数引用（`$tool[0].id`，`agent/refs.py`）在这里解析：生产 execute 就是这一步
+    参数引用（`$tool[0].id`，`agent/arg_refs.py`）在这里解析：生产 execute 就是这一步
     把上一步真实返回值绑进下一步参数，不解析的话多步技能会拿着字面 `$tool[0].id`
     去调用。
     """
@@ -324,7 +324,7 @@ class WorkflowExecutor:
         台账登记（`ledger.record`）的口径见上面《`ledger.record` 的两条硬要求》
         ——**签名必须与判据的对照方同源**，错一条 ⇒ 无进展判据恒不触发。
         """
-        from agent.refs import resolve_args
+        from agent.arg_refs import resolve_args
         from agent.workflow_plan import instantiate_plan
 
         # 无进展判据的键（**取参在字面路径修正之前**，见类上面那一段 ①②）。

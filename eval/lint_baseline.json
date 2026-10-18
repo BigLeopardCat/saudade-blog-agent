@@ -13,7 +13,7 @@
     "agent/action_text.py": 2,
     "agent/authz.py": 5,
     "agent/context.py": 6,
-    "agent/decisions.py": 3,
+    "agent/deterministic_plan.py": 3,
     "agent/factblock.py": 1,
     "agent/graph.py": 22,
     "agent/hostinfo.py": 1,

@@ -230,7 +230,7 @@ def normalize_plan(plan_obj: dict) -> dict:
 
     ⚠️ **`note` 是唯一一个"两态仍然不同形"的格子，这是故意的**：`plan_encode` 把空注记
     渲染成 `（无）` 三个字，而对象这边留 `""`。不吸收那个哨兵，是因为 `note` 同时是
-    **写侧的输入**（`graph.py` / `decisions.py` / `tool_specs.py` 都会
+    **写侧的输入**（`graph.py` / `deterministic_plan.py` / `tool_specs.py` 都会
     `plan_obj["note"] = f"{old_note}｜{tail}"`）——把哨兵吃进对象，下一次拼接就会产出
     `（无）｜…` 这种把"没有注记"讲成一句真注记的文本。
 

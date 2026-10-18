@@ -15,7 +15,7 @@
   ③ 本模块造的 saver 交给图（`server._build_arm`）。
 
 **只做 ③ 会静默产生双份上下文**，而此前没有任何判据会红。所以三处共用**同一个判据**
-`server._graph_holds_context()`——它读的是**活体对象上有没有 saver**（`agent/probe.py`），
+`server._graph_holds_context()`——它读的是**活体对象上有没有 saver**（`agent/runtime_probe.py`），
 不是配置。于是"配了 DSN 但没挂上"与"没配 DSN"在源码形状上是**同一个形态**，
 **半接在结构上不可能**（`tests/test_checkpoint_adoption.py` 钉着这件事）。
 
@@ -176,7 +176,7 @@ def thread_id_for(user_id: int, conversation_id: object, holds_context: bool) ->
     会话 id 缺席时**刻意退回随机**而不是编一个——编一个（比如按 uid 拼）会让不同会话、
     乃至刚建的空会话共用线程，也就是跨会话串台。
 
-    `holds_context` 由调用方传（`probe.holds_context(server._agent)`）：本模块**不读**
+    `holds_context` 由调用方传（`runtime_probe.holds_context(server._agent)`）：本模块**不读**
     `server._agent`，否则 `agent → server` 就是一个反向 import，而那个方向的环在本仓
     有前科（`eval/trace_files.py` 那条注）。判据的**取值**仍只有一处实现。
     """
@@ -368,13 +368,13 @@ def build_checkpointer(dsn: str | None = None) -> object | None:
 def live_saver(agent) -> object | None:
     """从活体对象上取 saver（没有就 `None`）。
 
-    走 `agent/probe.py::saver_of` —— 与 `/health` 的 `checkpoint_backend` **同一个
+    走 `agent/runtime_probe.py::saver_of` —— 与 `/health` 的 `checkpoint_backend` **同一个
     取值实现**。级联删除要删的必须是"图上真正在用的那个 saver"，不是另造一个：
     另造一个连的是同一张表、看着也对，但它与"图有没有挂"这件事**没有任何关系**
     （配了 DSN 而图没挂时，它会老老实实删一个空线程、返回"删掉了 0 条"）。
     """
-    from agent import probe
-    return probe.saver_of(agent)
+    from agent import runtime_probe
+    return runtime_probe.saver_of(agent)
 
 
 def delete_thread(saver, conversation_id: object) -> bool:

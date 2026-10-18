@@ -34,7 +34,7 @@ LLM-QC 采信模型自称、预算耗尽 accept）共同指向一个根因——
 简化（gate 只兜模型叙述层的文本失真）。
 
 纯函数层已外移（20260912 拆分）：agent/context.py = 上下文/帧文本组装；
-agent/decisions.py = 确定性决策层（快道 / 意图扫描 / 候选裁决 / 终局计划）。
+agent/deterministic_plan.py = 确定性决策层（快道 / 意图扫描 / 候选裁决 / 终局计划）。
 本文件只留图拓扑与节点编排（planner/execute/reflector/model/gate + 路由）。
 
 LangGraph 四件套：
@@ -84,7 +84,7 @@ from agent import adminops_target as _target
 from agent import authz
 from agent import confirm
 from agent import idem
-from agent import refs
+from agent import arg_refs
 from agent.block_reasons import denied_workflows
 from rag import sections
 from agent.stickers import repair_sticker_tokens
@@ -98,18 +98,18 @@ from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            freeze_turn_start, narrator_messages,
                            strict_wire_issues, turn_window,
                            with_tool_call_pairs)
-# 洞④ 的判据族（八张表 + `_absence_span`）20261017 搬去 `agent/absence.py`，这里只取用法。
-from agent.absence import (_ABSENCE_EXEMPT_RE, _ABSENCE_LEAD_RE, _CAPABILITY_NEG_RE,
+# 洞④ 的判据族（八张表 + `_absence_span`）20261017 搬去 `agent/absence_claims.py`，这里只取用法。
+from agent.absence_claims import (_ABSENCE_EXEMPT_RE, _ABSENCE_LEAD_RE, _CAPABILITY_NEG_RE,
                            _CONTENT_NOUN_RE, _SITE_DOMAIN_RE, _TOOL_NONUSE_RE,
                            _absence_span)
-from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES,
+from agent.deterministic_plan import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES,
                              _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
                              _effect_switch_fast_path, _intent_done, _intent_hints,
                              _nav_fast_path, _referent_nav_fast_path,
                              _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
-from agent.entities import receipt_digest
+from agent.entity_digest import receipt_digest
 from agent.factblock import (action_facts, is_action_family, is_block_family,
                              render_fact_block)
 from agent.llm_usage import usage_fields
@@ -124,7 +124,7 @@ from agent.prompts import (BLOG_ASSISTANT_PROMPT, NARRATOR_DISCIPLINE, STICKER_G
                            _PLANNER_PROMPT, _REFLECTOR_PROMPT, audience_block)
 from agent import provenance as _prov
 from agent.provenance import QUOTE_SPAN_RE as _QUOTE_SPAN_RE
-from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
+from agent.arg_refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.textnorm import (FULLWIDTH_ASCII_MAP as _FULLWIDTH_ASCII_MAP,
                             fold_typing as _fold_typing,
                             squash_spaces as _squash_spaces)
@@ -309,7 +309,7 @@ class AgentState(TypedDict):
     - issues:       reflector 上次输出的 ISSUE 文本（注入下一轮 planner 提示词）。
     - reflect_end:  reflector 判定终局（wrap_up/预算耗尽）→ 路由去 model 叙述。
     - tool_data:    请求内已执行工具返回的**结构化**值（[{tool,data}]，按执行顺序
-                   累计）——参数引用（$tool[0].field，见 agent/refs.py）的取值
+                   累计）——参数引用（$tool[0].field，见 agent/arg_refs.py）的取值
                    来源。与 receipts 的分工：receipts 是"系统验收过的事实"（给
                    narrator/跨轮记忆看），tool_data 是"下一步填参要用的数据"。
     - fallback_text: gate fallback 的如实用语（20260920 补声明）。**必须显式声明**：
@@ -922,7 +922,7 @@ def _forbids_tools(user_msg) -> bool:
 # 这是上一条的**兄弟格，不是同一条**：契约改完之后模型很少再"一个都不点"了，改成
 # **显式点 `chat`**——两格在结果上完全一样（零工具、零帧、narrator 手里没数据），
 # 但 `undecided` 只标前者，纠偏看不见后者。定点探针实测（`eval/zero_call_residual_
-# probe.py`，24 句×3 轮×两臂交替，读**计数**不读百分数——分母只有 60）：数据型零工具
+# runtime_probe.py`，24 句×3 轮×两臂交替，读**计数**不读百分数——分母只有 60）：数据型零工具
 # **12/60→8/60** 那一降里，「一个都不点」**8 格→2 格**、显式 `chat` **4 格→6 格**——
 # 总量没有它看起来的那么多，**洞没有消失，它挪了一格**。明细见
 # `docs/zero-call-residual.md` §3.1。
@@ -2291,7 +2291,7 @@ _ACTION_RESTATE_RE = re.compile(
 #     这一句恰恰**没有**对应回执（两半互补，不是重复）。
 #
 # 判据（**实体锚定**，与上面几张网正交）：回复的某个**子句**里
-#   ① 出现命令族的动作实体（特效名 / 夜间模式——词表取自 `decisions.py` 的唯一
+#   ① 出现命令族的动作实体（特效名 / 夜间模式——词表取自 `deterministic_plan.py` 的唯一
 #      实现，与快道/意图扫描同源）；
 #   ② 同一子句里有**施事式完成语**（`_DEED_DONE_RE`：一并/也/都/帮你… + 做/处理/
 #      开好… + 好了/了/啦）；
@@ -3381,7 +3381,7 @@ def _plan_exec_next_card(state: AgentState, config) -> "_PlanExec | None":
       ④ 技能闭集盖不住这个单元（内部不一致）⇒ 一个工具都不执行，交回 planner。
 
     `$tool[N]` 引用那条尤其要写下来：它的值要等**前面那次调用**回来才知道，而那些帧
-    早随上一轮请求消失了（`refs` 的取值源是 `state["tool_data"]`，请求内累计）。跨轮
+    早随上一轮请求消失了（`arg_refs` 的取值源是 `state["tool_data"]`，请求内累计）。跨轮
     拿着它去执行 = 拿空值去写——所以它和"没绑定"合流，一律退回 planner 在**现场**补参。
     """
     nxt = _ledger_next(state, config)
@@ -3667,7 +3667,7 @@ def _site_search_claim(text: str, exec_memory: bool) -> bool:
 
 
 # 洞④ 的判据族（八张表 + `_absence_span`，含 `_ABSENCE_RE` 与 `_SELF_NONREAD_RE`）
-# 20261017 按主题整体搬去 `agent/absence.py`——出边为零（仓里除本文件外无人引用，
+# 20261017 按主题整体搬去 `agent/absence_claims.py`——出边为零（仓里除本文件外无人引用，
 # 也没有判据文本锁按名钉它们），搬走只为压回模块台账。**新词一律加在那边**，
 # 别在这儿另开一张；本文件只留用法。（`_LEDGER_ABSENCE_RES` 是**另一族**：问的是
 # "跨轮执行台账里有没有"，判据形状不同，不搬。）
@@ -6530,7 +6530,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
             # 不该再选的技能行。空集 ⇒ 这一段渲染逐字节不变。
             deny=c.deny,
             # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
-            # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
+            # 工具返回，模型照此写 $tool[0].field（见 agent/arg_refs.py）
             ref_hints=ref_hints(c.state.get("tool_data") or []),
             reflector_feedback=c.state.get("issues") or "（本决策轮无复盘建议）",
             # 两种纠偏的来源不同、优先级也不同：剔空纠偏说的是"你这一版刚点的工具
@@ -8448,7 +8448,7 @@ def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0,
     if name != "delete_board_comment":
         return None
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None
     quote = str(args.get("quote") or "").strip()
     spans = _msg_quote_spans(user_msg)
@@ -8553,7 +8553,7 @@ def _announcement_text_fix(plan_obj: dict, user_msg,
                     "delete_announcement"):
         return
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return
     fixed: dict[str, str] = {}
     if name == "create_announcement":
@@ -8687,7 +8687,7 @@ def _todo_text_fix(plan_obj: dict, user_msg, role: str | None = None,
     if name != "create_dashboard_todo":
         return None
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None                  # 带 `$tool[N].field` 引用：取值不由这句话决定
     got = str(args.get("text") or "").strip()
     sq_got = _squash_spaces(got)
@@ -9054,7 +9054,7 @@ def _name_target_fix(plan_obj: dict, user_msg,
     if not tkey:
         return
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return
     got = str(args.get(tkey) or "").strip()
     if not got:
@@ -9426,7 +9426,7 @@ def _name_arg_fix(plan_obj: dict, user_msg,
         if not args_ok:
             return None
         specs.append({"tool": _tool_name(spec), "args": spec_args})
-    if refs.has_refs(specs):
+    if arg_refs.has_refs(specs):
         return None
 
     def _cur(key: str):
@@ -9672,7 +9672,7 @@ def _target_grounding_refusal(plan_obj: dict, user_msg,
     if name not in _WRITE_NAME_FIELDS:
         return None
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None
     msg = str(user_msg or "")
     sq_ledger = _squash_spaces(ledger_src)   # 第二本账（见 `_ledger_pending_text`）
@@ -9863,7 +9863,7 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
         # 真出现混排也该由工具自己如实拒绝，而不是被这层拦成一个"做不了"）。
         return None
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None
     # 一名一行：这一行上有魔法尾逗号 ⇒ ruff/isort 要求拆开（别为了"看着紧凑"再拼回去）
     from tools.base import (
@@ -9986,8 +9986,8 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
                 # 就是目标的合法性；③待办写工具全在 `_ALWAYS_CONFIRM_TOOLS` ⇒ **恒弹卡**，
                 # 不受"同轮命令即确认"的免弹窗影响；④执行端仍是逐字相等——这一支只改
                 # "我们找哪一行"，不改"怎么找"。
-                # ⚠️ 变量名别叫 `refs`：本函数上面那个 `refs` 是 `$tool[N]` 引用模块
-                # （`refs.has_refs`），重名会让它变成未赋值的局部变量（实测踩过）。
+                # ⚠️ 变量名别叫 `arg_refs`：本函数上面那个 `arg_refs` 是 `$tool[N]` 引用模块
+                # （`arg_refs.has_refs`），重名会让它变成未赋值的局部变量（实测踩过）。
                 ref_rows = _todo_reference_rows(todo_rows, user_msg)
                 if len(ref_rows) == 1:
                     fixed = str(ref_rows[0].get("text") or "").strip()
@@ -10125,7 +10125,7 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
         # 那条边界——真出现混排该由工具自己如实拒绝）。
         return None
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None
     from tools.base import (
         _board_index,
@@ -10217,7 +10217,7 @@ def _freeze_policy_refusal(plan_obj: dict, config,
         return None
     tkey, _pkey = _WRITE_NAME_FIELDS[name]
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None
     want = str(args.get(tkey) or "").strip()
     if not want:
@@ -11247,7 +11247,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         decision = authz.check(principal, name)
         if not decision.allowed and authz.enforcing(decision.scope):
             continue  # 权限硬拦：弹窗也改不了"这个人不能做"，走既有拒绝链路
-        if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+        if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
             # 参数没解析出来 / 还挂着 $ref（引用依赖的是签发那一轮的工具帧，执行轮
             # 早已不在）→ 不签发，退回既有错误帧链路让 planner 自己收拾
             continue
@@ -11754,7 +11754,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 幂等键的参数成分（20261016 批 2）：**必须在下面两处改动 args 之前**取——
         # 理由与后果见 `agent/idem.py::guarded_invoke`（改后取会让屏显恒不命中且不报错）。
         args_fp = _spec_signature(name, args)[1]
-        # 参数引用（20260919，agent/refs.py）：把上一步的真实返回值绑进参数。
+        # 参数引用（20260919，agent/arg_refs.py）：把上一步的真实返回值绑进参数。
         # 解析失败 → 该 spec **不执行**（拿 `$x[0].y` 当参数去调用是更坏的结果），
         # 产带原因码的 __ERROR__ 帧走既有 blocked 链路（planner 改参 → reflector）。
         ref_err = None
@@ -11937,7 +11937,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             cmd = out_meta.get("cmd")
             if isinstance(cmd, dict):
                 rcpt["cmd"] = cmd
-            # 实体摘要（20260920，见 agent/entities.py）：数据工具取回的条目/计数
+            # 实体摘要（20260920，见 agent/entity_digest.py）：数据工具取回的条目/计数
             # 压成一行随回执落 execution_log —— 工具帧只活当轮，不落这一行的话
             # 下轮「第二条写了什么」只能把工具再跑一遍（探针实测）。
             digest = receipt_digest(name, str(out))

@@ -44,7 +44,7 @@ REASONS: dict[str, tuple[str, bool]] = {
     "args_parse": ("参数解析失败", True),
     "empty_result": ("结果为空", True),
     "error_frame": ("执行出错", True),
-    # 参数引用失败（`agent/refs.py::ref_error_reason` 取回，20260919）
+    # 参数引用失败（`agent/arg_refs.py::ref_error_reason` 取回，20260919）
     "ref_unknown_tool": ("引用的工具尚未执行", True),
     "ref_unparsed": ("引用的返回不是结构化数据", True),
     "ref_index_range": ("引用的序号越界", True),

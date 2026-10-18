@@ -114,8 +114,8 @@ def _client_post(path: str, **kwargs) -> httpx.Response:
 # 单帧预算只有 300 字符，planner 看到的是**第一行的前 300 字符**（半截 JSON）：既拿不到
 # "全部标题 ↔ id"的对应，也看不出后面还有 9 条（无声截断，20260920 那类"看不见的洞"）。
 # 瘦身只留决策要用的五个：id / 标题 / 状态 / 置顶 / 标签名。
-# **两条下游契约不许动**：`agent/entities.py::_note_digest`（跨轮实体摘要）与
-# `agent/decisions.py::_candidate_detail_plan`（候选改读闸的 `literal_eval`）都只读
+# **两条下游契约不许动**：`agent/entity_digest.py::_note_digest`（跨轮实体摘要）与
+# `agent/deterministic_plan.py::_candidate_detail_plan`（候选改读闸的 `literal_eval`）都只读
 # `noteKey`/`noteTitle`——瘦身保留这两个键，两处照常工作。
 #
 # 20260930 追加：三个计数（阅读/点赞/收藏）**原样带上**（`_note_counts`）。它们的
@@ -228,7 +228,7 @@ def _read_section(data: dict, article_id, want: str) -> ToolResult:
     """按小节取回文章片段（get_article_detail 的 section 分支，20260920）。
 
     返回仍是 **Python repr 的 dict**（与全文分支同形），两个键不能少：
-      - `noteTitle`：`agent/decisions.py::_doc_title` 从 repr 里正则抠它做跨轮
+      - `noteTitle`：`agent/deterministic_plan.py::_doc_title` 从 repr 里正则抠它做跨轮
         指代锚点（"读取文章 19《架构文档》"），换掉键名会让执行记忆只剩 id；
       - `noteId`/`sectionText`：planner 的"未展开小节"清单要照抄这个 id 再读一次。
     取不到小节时**不返回空**：把候选小节名列出来才是可行动的（模型改一次指称即可），

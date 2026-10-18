@@ -126,7 +126,7 @@ def _unfilled_placeholder(params: dict) -> tuple[str, str] | None:
     正常的主人原话里取到的名字不会长这样；万一真撞上（有人就管一个标签叫 `$foo`），
     代价是主人被反问一句、而那句话本来办得成——比"印一张记号卡让他盲签"小得多。
 
-    与**参数引用**（`$tool[0].field`）不冲突：引用必须带方括号（`agent/refs.py` 的
+    与**参数引用**（`$tool[0].field`）不冲突：引用必须带方括号（`agent/arg_refs.py` 的
     `REF_RE`），撞不上这两个形态。那一层由 `check_workflow_params` / `resolve_args` 管，
     本函数不碰。
     """

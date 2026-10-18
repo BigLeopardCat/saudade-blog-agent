@@ -205,7 +205,7 @@ class Settings(BaseSettings):
     agent_evidence: bool = False
 
     # ── 确定性快道（定价档，20261015）───────────────────────────────
-    # `agent/decisions.py` 那五条快道（导航 / 指代型导航 / 显示 / 读当前文章 /
+    # `agent/deterministic_plan.py` 那五条快道（导航 / 指代型导航 / 显示 / 读当前文章 /
     # 特效切换）都是"中文动词表 + 位置窗口"，**命中即拿走 planner 的决策权**：
     # 整轮不调 planner LLM，直接实例化一张计划交 execute。它们各有真实事故依据
     # （最有名的一条：planner 对「不要樱花了改成下雨」十轮里八轮只做半边），

@@ -210,7 +210,7 @@ check("端到端：渲染出来的提示词里真的有这一行（不是只写�
 
 # ── ⑥ 生产侧的码必须都在表里（20261018 批 4）──────────────────────────────
 # ③ 判的是**取回侧**（`_check_spec` 认哪几个字面、六个取回通道还接不接着）。它看不见
-# **生产侧**——往帧里写码的是 `agent/refs.py` 的字面返回，以及 `agent/authz.py` /
+# **生产侧**——往帧里写码的是 `agent/arg_refs.py` 的字面返回，以及 `agent/authz.py` /
 # `agent/adminops_target.py` / `agent/idem.py` 的 `REASON_*` 具名常量。新增一个码却
 # 忘了登记，后果是**静默**的：取回侧的通道是宽松的 `([a-z_]+)`，新码照原样流到 planner
 # 面前——中文回落成裸英文码、`retry_param` 回落成 True（`block_reasons` 的 fail-safe）。
@@ -250,7 +250,7 @@ def produced_codes(sources: dict) -> set:
 _NOT_REASONS = {"ok"}
 
 _SRC = {_p: (ROOT / _p).read_text(encoding="utf-8")
-        for _p in ("agent/refs.py", "agent/authz.py", "agent/adminops_target.py",
+        for _p in ("agent/arg_refs.py", "agent/authz.py", "agent/adminops_target.py",
                    "agent/idem.py", "agent/graph.py")}
 _PRODUCED = produced_codes(_SRC) - _NOT_REASONS
 check("正控：生产侧确实扫到了码（扫不到的话下面那条是**空过**——"
