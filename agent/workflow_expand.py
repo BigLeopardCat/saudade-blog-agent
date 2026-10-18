@@ -36,7 +36,7 @@ import agent.adminops_todo as _todo
 from agent.refs import is_ref
 from agent.workflow_expand_write import _write_arg
 from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
-from tools.base import _TODO_TEXT_LIMIT
+from tools.base import _TODO_TEXT_LIMIT, _as_bool
 
 # 本模块**刻意不写 `__all__`**：整个面都是 `_` 前缀的内部件（展开层只被 `instantiate_plan`
 # 与各展开分支互相调用）。按本仓"`__all__` 只列公开名"的口径（见 `agent/workflow_model.py`
@@ -147,11 +147,8 @@ def _norm_id_list(value) -> list[int]:
 
 
 def _norm_true(value) -> bool:
-    """实参 → 是不是"全部"（只认明确的肯定；**认不出 = 不是**——绝不默认 True）。"""
-    if isinstance(value, bool):
-        return value
-    s = str(value if value is not None else "").strip().lower()
-    return s in ("true", "1", "yes", "y", "on", "all", "全部", "全都", "所有")
+    """实参 → 是不是"全部"（认不出 = 不是）。词表 = `tools.base._as_bool`（20261018 A2）。"""
+    return _as_bool(value) is True
 
 
 def _expand_own_workflow(workflow, params: dict) -> tuple[list[str], str]:

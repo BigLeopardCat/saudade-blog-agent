@@ -116,9 +116,41 @@ def judge(current: dict, ledger: dict, lines_max: int, defs_max: int) -> list[st
 
 
 def rewrite(current: dict, lines_max: int, defs_max: int) -> dict:
-    """`--update` 的落点：台账 = **恰好**当前超预算的那批模块。"""
-    return {k: v for k, v in sorted(current.items())
+    """`--update` 的落点：台账 = **恰好**当前超预算的那批模块。
+
+    ⚠️ 这里**不排序**：键序由 `dump()` 的 `sort_keys=True` 一处定死。两边都排会让
+    "谁说了算"变成两处，而 `order_violation()` 的往返判据只在**一个**权威下成立。
+    """
+    return {k: v for k, v in current.items()
             if v["lines"] > lines_max or v["top_defs"] > defs_max}
+
+
+def dump(ledger: dict) -> str:
+    """`--update` 写盘用的**唯一**格式。读侧的 `order_violation()` 拿它做往返判据——
+    两处**必须**是同一个函数，否则"写出来的"与"判出来的"会各走一套。
+    """
+    return json.dumps(ledger, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def order_violation(raw: str) -> str | None:
+    """盘上台账的**字节**是否就是 `--update` 会写出来的那一份；不是就返回一句说明。
+
+    为什么这值得一条判据（20261018 审计 A5）：`--update` 的产物是排序过的，而盘上这份
+    台账历史上是手写落地的、**键序不排序**。只要不校正一次，**下次任何一条触发
+    `--update`，diff 就是整份文件重排**——"这一条真的变了"被埋进噪声里，而这道闸的
+    全部价值就是让人看得见那份 diff（`--update` 是唯一的放宽通道）。
+
+    判法是**往返比字节**（不是自己再写一套排序规则）：把盘上解析出来的 dict 按 `dump()`
+    重新序列化，与原文逐字比。这样"格式"与"顺序"一次判完，将来改 `dump()` 也不会让
+    判据与它脱钩。
+    """
+    want = dump(json.loads(raw))
+    if want == raw:
+        return None
+    return (f"{LEDGER.relative_to(ROOT)} 的盘上格式/键序与 `--update` 的产物不一致"
+            f"（往返 {len(want)} 字节 vs 盘上 {len(raw)} 字节）——"
+            f"跑一次 `--update` 校正。⚠️ 那一次 diff **只该动键序与空白，值一个都不许变**；"
+            f"值变了就是另一次放宽，要单独说理")
 
 
 # ── 自检：读数 + 判据（没有这一段，「闸其实是空的」没人看着）──────────────────
@@ -182,6 +214,15 @@ def _self_check() -> None:
                      {"x.py": {"lines": 900, "top_defs": 70}}, 800, 60), \
         "台账与实测相等却红了 —— 那是 `--update` 之后的正常态"
 
+    # ⑥ 盘上格式/键序漂了 ⇒ 红；恰好是 `dump()` 的产物 ⇒ 绿（20261018 审计 A5）
+    unordered = {"b.py": over, "a.py": small}
+    assert order_violation(dump(unordered)) is None, "自写自读却判红 —— 判据是空的"
+    assert order_violation(json.dumps(unordered, indent=2) + "\n") is not None, \
+        "键序没排好却没红（`dump()` 排、盘上不排，正是 A5 那一格）"
+    assert order_violation(json.dumps(dict(sorted(unordered.items())),
+                                      ensure_ascii=False, indent=2)) is not None, \
+        "少了结尾换行却没红"
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="模块体量预算闸")
@@ -194,16 +235,20 @@ def main() -> int:
 
     current, n_files = scan()
     if args.update:
-        LEDGER.write_text(json.dumps(rewrite(current, args.lines_max, args.defs_max),
-                                     ensure_ascii=False, indent=2) + "\n",
+        LEDGER.write_text(dump(rewrite(current, args.lines_max, args.defs_max)),
                           encoding="utf-8")
         print(f"台账已重写：{LEDGER.relative_to(ROOT)}（{len(rewrite(current, args.lines_max, args.defs_max))} 条）")
         return 0
 
-    ledger = json.loads(LEDGER.read_text(encoding="utf-8")) if LEDGER.exists() else {}
+    raw = LEDGER.read_text(encoding="utf-8") if LEDGER.exists() else ""
+    ledger = json.loads(raw) if raw else {}
     bad = judge(current, ledger, args.lines_max, args.defs_max)
     print(f"扫描 {n_files} 个文件；台账 {len(ledger)} 条；"
           f"预算 lines≤{args.lines_max} / top_defs≤{args.defs_max}")
+    if raw:
+        drift = order_violation(raw)
+        if drift:
+            bad.append(drift)
     if bad:
         print("\n".join("✗ " + b for b in bad))
         print(f"\n{len(bad)} 条违规。**别急着 --update**：先看能不能按主题拆。")

@@ -140,7 +140,8 @@ def _get(path: str, *, not_found_text: str = "") -> dict | list | ToolResult:
 # 20260930 追加：三个计数（阅读/点赞/收藏）**原样带上**（`_note_counts`）。它们的
 # 字节数很小（`"views":120,` 十几字节），但"这篇多少赞、哪篇看得人多"全靠它们——
 # 卡片上早就有了，此前看板娘读列表却看不见，主人问"哪篇最火"只能靠猜。
-_NOTE_SLIM_KEYS = ("noteKey", "noteTitle", "status", "isTop")
+# ⚠️ 键清单**只住 `_slim_note_rows()` 里那个字面量**，别另抄元组
+# （20261018 审计 A1 删掉一个漏了 `tags` 的死副本）。
 
 # 三张表各一个数，键名与 Rust 两侧同名同义（列表接口 `attach_stats` / 单篇读数
 # `GET /notes/:id/stats`）。**缺键 ≠ 0**：读不到就整个键不出现，绝不补 0
@@ -765,10 +766,8 @@ def search_knowledge_base(
 @tool
 def get_current_time() -> str:
     """Get current date and time."""
-    from datetime import datetime
-    now = datetime.now()
-    weekdays = ['星期一','星期二','星期三','星期四','星期五','星期六','星期日']
-    return now.strftime(f"%Y年%m月%d日 {weekdays[now.weekday()]} %H:%M")
+    from utils.clock import format_local_now
+    return format_local_now()
 
 # 城市名的形状闸（20260925 审计）：`location` 是 planner 从用户话里填的参数，直接拼进
 # URL 的路径段。host 固定 ⇒ 不是 SSRF；能改的只是 wttr.in 那一侧的 path/query（例如换
@@ -4870,10 +4869,11 @@ _QUOTA_POLICY_REFUSALS = ("该账号没有待处理的额度申请", "这条申�
                           "你已经有一份待处理的申请了")
 # 属于**目标类**的一句（planner 的应对是换一个账号 / 问主人，不是"稍后再试"）。
 _QUOTA_TARGET_REFUSALS = ("用户不存在",)
-# 申请人填的理由上限（Rust `quota::REASON_MAX` 同一处口径）：`quota_request.reason`
-# 是 text 列，500 是**产品上限**而不是列宽——超限**拒绝、不截断**（截断会让主人核对
-# 的是这一句、库里存的是另一句，同 notice.rs 头注那条取舍）。
-_QUOTA_REASON_LIMIT = 500
+# 申请人填的理由上限（500 字）：`quota_request.reason` 是 text 列，500 是**产品上限**
+# 而不是列宽——超限**拒绝、不截断**（截断会让主人核对的是这一句、库里存的是另一句，
+# 同 notice.rs 头注那条取舍）。
+# ⚠️ 唯一事实源是 Rust `quota::REASON_MAX`（它真的拦人）；
+# Python 侧**故意不抄这个数**（20261018 A1 删了零引用副本）。
 # 管理员驳回理由的上限 = **迁移里 `quota_request.note` 的列宽**（varchar(255)），
 # 同时它会被原样拼进发给申请人的通知正文。这条理由**必须**与列宽对齐：写超了
 # 后端要么报错要么截断，而截断意味着申请人收到的理由与主人核对的那一句不同。

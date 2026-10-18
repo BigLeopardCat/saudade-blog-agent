@@ -23,6 +23,10 @@
     "lines": 1658,
     "top_defs": 44
   },
+  "eval/admin_write_probe.py": {
+    "lines": 2856,
+    "top_defs": 82
+  },
   "eval/corpus_terms.py": {
     "lines": 901,
     "top_defs": 30
@@ -30,10 +34,6 @@
   "eval/experiments/checkpoint_probe.py": {
     "lines": 1591,
     "top_defs": 35
-  },
-  "eval/admin_write_probe.py": {
-    "lines": 2856,
-    "top_defs": 82
   },
   "eval/run_golden.py": {
     "lines": 3677,
@@ -46,10 +46,6 @@
   "server.py": {
     "lines": 2549,
     "top_defs": 50
-  },
-  "tests/test_judge_offline.py": {
-    "lines": 1433,
-    "top_defs": 11
   },
   "tests/test_admin_write.py": {
     "lines": 2003,
@@ -67,6 +63,10 @@
     "lines": 1195,
     "top_defs": 7
   },
+  "tests/test_judge_offline.py": {
+    "lines": 1433,
+    "top_defs": 11
+  },
   "tests/test_nav_truthfulness.py": {
     "lines": 953,
     "top_defs": 19
@@ -79,10 +79,6 @@
     "lines": 961,
     "top_defs": 6
   },
-  "tests/test_workflows.py": {
-    "lines": 5799,
-    "top_defs": 72
-  },
   "tests/test_tag_admin.py": {
     "lines": 1605,
     "top_defs": 16
@@ -94,6 +90,10 @@
   "tests/test_userdata.py": {
     "lines": 1238,
     "top_defs": 12
+  },
+  "tests/test_workflows.py": {
+    "lines": 5799,
+    "top_defs": 72
   },
   "tools/base.py": {
     "lines": 5351,

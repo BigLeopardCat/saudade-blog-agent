@@ -166,6 +166,19 @@ jobs:
       - name: 类型检查棘轮（mypy 错误数只许变小）
         run: uv run --frozen python eval/type_gate.py
 
+      # 静态检查棘轮（20261018 补，审计 A3）。`[tool.ruff.lint] select = ["E","F","I","W"]`
+      # 从 20260927 起就写在 `pyproject.toml` 里，而 CI 至今只跑上面那条 `--select F821`
+      # ——剩下那一大片（会烂的那一类）的唯一约束是 `docs/lint-baseline.md` 里的散文纪律。
+      # 同族的第三道棘轮（`eval/type_gate.py`）同款：记基线、只许变小、`--update` 是唯一
+      # 放宽通道。判据三条：总数变大 / **某个文件**变大 / **基线里没有的文件**带 error
+      # （新文件按纪律 1 必须零 error，它的基线是 0）。
+      # ⚠️ **三个量任一换掉就退 3**（ruff 版本、`line-length`、`select`）——它们都会改变
+      # 条目集，换了就不是同一个量；三个的真值都只有 `pyproject.toml` 一处。
+      # 本机（产线 venv，**不许** `uv sync`）跑同一条判据：`python eval/lint_gate.py`
+      # （venv 的 dev 组里就有同版 ruff；隔离跑法见该脚本头注）。
+      - name: 静态检查棘轮（ruff E/F/I/W 只许变小）
+        run: uv run --frozen python eval/lint_gate.py
+
   # ═ 看板娘 pin 漂移提示（20261002）════════════════════════════════════════
   # **独立 job、只警告、恒绿**。上面那个 eval job 是门禁，这一条不是：它回答的是
   # "这次改了看板娘前端，父仓那个 pin 跟上了没有"。

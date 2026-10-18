@@ -324,6 +324,23 @@ class Settings(BaseSettings):
     # 的《迁移到 PG》一节，是一条欠账。
     idem_db: str = "/home/ubuntu/Saudade-Blog/logs/agent/idem.sqlite3"
 
+    # ── checkpoint 存储（ADR-0011 的接线点，20261017 外围准备）──────────
+    # **缺省空 = 今天的行为**：`agent/checkpoint.py::build_checkpointer()` 不给参数时读
+    # 这一格，空 ⇒ 返回 `None` ⇒ 图仍是裸的 `g.compile()`（生产逐字节不变）。
+    # ⚠️ 今天**填了它也不会改变行为**——`build_checkpointer()` 全仓没有调用方。它的
+    # 意义是**把 DSN 的唯一读方收在一个有名字的地方**，让采纳那天只剩一行
+    # `build_graph(checkpointer=build_checkpointer())`；在那之前，它等于把钥匙插进一扇
+    # 还没装锁的门：不报错、也不生效。**别只填这一格就以为接上了 saver**——接线是
+    # `agent/checkpoint.py` 头注里那个"三处一起动"（只做第三处会**静默产生双份上下文**）。
+    # 取值域 `postgresql://` / `postgres://` / `sqlite://`，**故意不认内存档**（4 个
+    # uvicorn worker 下每 worker 各记各的，且不报错）。认不出来/依赖没装都**响亮抛**。
+    # 实验那份 DSN 刻意在**仓外**（`/home/ubuntu/exp/ckpt.env` 的 `CHECKPOINT_PG_DSN`，
+    # 由 `agent/checkpoint_arm.py` 读**进程环境**）：golden 的 cwd 是主仓，
+    # `env_file=".env"` 会读到产线配置，两件事必须分开。
+    # 依赖（`langgraph-checkpoint-postgres` / `psycopg[binary]` / `psycopg-pool`）已在
+    # `pyproject.toml` 里声明并进了 `uv.lock`。
+    checkpoint_dsn: str = ""               # CHECKPOINT_DSN
+
     # ── Active provider helpers ─────────────────────────────────────
 
     @property
