@@ -537,7 +537,7 @@ def search(query: str, top_k: int = 8, apply_cliff: bool = True) -> list[dict]:
 # 不必猜。锚点是**确定性事实**：解析只认唯一命中，只要有一丝歧义就返回 None
 # （宁可让模型按规则去查，绝不给错 id）。**20260925 起**上游拿到 None 的处理从
 # "写（未见过 id）留在清单里"改成"这条不进清单"——留着的代价是清单里混进站内
-# 通知/公告的标题（抬头声称的却是"已点名文档"，见 agent/context.py:_doc_anchors）。
+# 通知/公告的标题（抬头声称的却是"已点名文档"，见 agent/prompt_context.py:_doc_anchors）。
 
 _WS_RE = re.compile(r"\s+")
 _TITLE_PART_MIN = 4  # 简称子串匹配的最短长度（《架构文档》可以，两字标题不行）

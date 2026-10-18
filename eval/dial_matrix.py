@@ -122,7 +122,7 @@ DIALS: dict[str, dict] = {
     #      message with 'tool_calls'`——`model_node` 把 `[system] + state["messages"]`
     #      交给服务商，而那些 ToolMessage 的 `tool_call_id` 是自造的（`graph.py` 的
     #      `execute_{idx}`）、前面没有带 `tool_calls` 的 assistant 消息。qwen 端点容忍，
-    #      deepseek 严格拒。修法 = `agent/context.py::with_tool_call_pairs`（**只补形状、
+    #      deepseek 严格拒。修法 = `agent/prompt_context.py::with_tool_call_pairs`（**只补形状、
     #      不动材料**）。
     #   ② 档里原先写的是 **思考模型**：`deepseek-flash` / `deepseek-v4-flash` 默认回
     #      `reasoning_content`，补形状之后紧接着 400「The reasoning_content in the

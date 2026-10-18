@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
 from agent import adminops_board as _board  # noqa: E402
-from agent import context as C  # noqa: E402
+from agent import prompt_context as C  # noqa: E402
 from agent import reports as R  # noqa: E402
 from agent.entity_digest import receipt_digest  # noqa: E402
 from tools.base import _board_label  # noqa: E402
@@ -153,7 +153,7 @@ _SRC = {
     "agent/adminops_confirm.py": (ROOT / "agent" / "adminops_confirm.py").read_text(
         encoding="utf-8"),
     "agent/entity_digest.py": (ROOT / "agent" / "entity_digest.py").read_text(encoding="utf-8"),
-    "agent/context.py": (ROOT / "agent" / "context.py").read_text(encoding="utf-8"),
+    "agent/prompt_context.py": (ROOT / "agent" / "prompt_context.py").read_text(encoding="utf-8"),
 }
 
 
@@ -172,7 +172,7 @@ _WIRING = (
     ("agent/entity_digest.py", "_notification_digest", 'f"notifId:'),
     ("agent/entity_digest.py", "_unread_digest", 'f"notifId:'),
     ("agent/entity_digest.py", "_mailbox_digest", 'f"mailId:'),
-    ("agent/context.py", "_doc_anchors", " noteId="),
+    ("agent/prompt_context.py", "_doc_anchors", " noteId="),
 )
 for _f, _fn, _lit in _WIRING:
     check(f"{_f}::{_fn} 里写着 {_lit}", _lit in _SRC[_f])
@@ -315,7 +315,7 @@ check("留言详情帧走出口改名：`talkId` 在、上游的 `talkKey` 不�
 # ⑥c 换措辞的**第二重收益**：文章指代锚点只认「读取文章 N《标题》」行，而留言读取
 # 行从今天起不再冒充它（此前若那条留言恰好在公开列表里、标题又非空，就会被当成本
 # 会话已点名的**文章** anchor）。判据钉在正反两侧。
-from agent.context import _DOC_READ_ROW_RE as _DRR  # noqa: E402
+from agent.prompt_context import _DOC_READ_ROW_RE as _DRR  # noqa: E402
 check("跨轮执行记忆里，文章读取行仍被认成文档锚点",
       bool(_DRR.search("09-20 21:03 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》")))
 check("  留言读取行**不再**冒充文章锚点（换措辞顺带堵掉的旧耦合）",

@@ -43,7 +43,7 @@ _PROBE = r"""
 import json, sys
 sys.path.insert(0, %r)
 import tools.base as B
-import agent.context as C
+import agent.prompt_context as C
 import agent.hostinfo as H
 from agent.deterministic_plan import _display_fast_path
 from agent.workflow_defs import WORKFLOWS, visible_workflows

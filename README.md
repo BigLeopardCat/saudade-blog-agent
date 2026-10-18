@@ -182,7 +182,7 @@ saudade-blog-agent/
 ├── agent/
 │   ├── graph.py           LangGraph 状态、节点和条件边（含声称闸与回执驱动循环）
 │   ├── deterministic_plan.py  零 LLM 确定性决策和快道
-│   ├── context.py         上下文、工具帧和回执组装
+│   ├── prompt_context.py  注入 planner 的提示词文本组装（页面/能力/工具帧/回执）
 │   ├── plan_codec.py      计划文本契约的编解码（plan_encode / plan_state / parse_plan）
 │   ├── tool_specs.py      执行清单条目的解析与去重裁剪（_tool_args / _trim_done_reads 等）
 │   ├── repeat_guard.py    逐字复读判据（_repeat_reason / _recent_ai_replies 等，gate 1b）

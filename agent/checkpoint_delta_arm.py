@@ -46,7 +46,7 @@ _SYS_PREFIX = "[System:"
 
 
 def _msg_text(m) -> str:
-    """多模态 content 兼容（与 `context._msg_text` 同口径：数组只取 text 块）。"""
+    """多模态 content 兼容（与 `prompt_context._msg_text` 同口径：数组只取 text 块）。"""
     content = getattr(m, "content", "")
     if isinstance(content, str):
         return content

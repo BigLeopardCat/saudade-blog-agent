@@ -15,7 +15,7 @@
     （server 贴过程行、本表贴喂给 planner 的类型），漏登记一个码不该是静默的；
   · ③ `_check_spec` 的每个 BLOCK 出口都在表里 —— 源码级总括（含那条 `or` 链末端的
     `error_frame`）+ 行为级抽查（真的调一次，看返回的码进不进表）；
-  · ④ `agent/context.py::blocked_rows` —— 渲染形状：技能名/原因中文（**不裸英文码**）/
+  · ④ `agent/prompt_context.py::blocked_rows` —— 渲染形状：技能名/原因中文（**不裸英文码**）/
     "能不能改参重试"两族措辞/无受阻项时渲染空串（整块只在有受阻项时才付）；
   · ⑤ 接线 —— 模板有槽、渲染函数有形参、`planner_node` 每轮都传、`execute` 往受阻项
     里写了 `workflow`。
@@ -36,8 +36,8 @@ sys.path.insert(0, str(ROOT))
 
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
-import agent.context as ctx  # noqa: E402
 import agent.graph as g  # noqa: E402
+import agent.prompt_context as ctx  # noqa: E402
 import server as srv  # noqa: E402
 from agent.block_reasons import REASONS, block_reason_type  # noqa: E402
 

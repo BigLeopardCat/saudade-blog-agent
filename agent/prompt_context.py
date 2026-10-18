@@ -158,7 +158,7 @@ _NARRATOR_TURNS = 10
 def _is_system_block(m) -> bool:
     """服务端注入的上下文块（`[System: …]` 的 HumanMessage）——**不是主人说的话**。
 
-    全仓原本有四处各写一份，取法还不一致（`context.py:534`/`:573`、`graph.py:6131`
+    全仓原本有四处各写一份，取法还不一致（`prompt_context.py:534`/`:573`、`graph.py:6131`
     是 `startswith`；`graph.py:3865` 是 `.lstrip().startswith`）。这里取**宽的那一版**
     （`.lstrip()`）——判据的意图是"这条是不是注入块"，不是"注入块有没有被缩进过"。
 

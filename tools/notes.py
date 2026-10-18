@@ -42,7 +42,7 @@ from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
 # 文章分节（20261005 从 `agent/sections.py` 搬到 `rag/`，见该模块头注）：纯函数、只 import `re`，
-# 三处共用（本模块的按节取回 / `rag/search.py` 的索引切片 / `agent/context.py` 的帧节选）。
+# 三处共用（本模块的按节取回 / `rag/search.py` 的索引切片 / `agent/prompt_context.py` 的帧节选）。
 # **提到模块顶部**——它原先住在 `agent` 包里，只能写成函数内惰性导入（"别让 tools 层启动即拉
 # agent 包"），而那个包一导就是 langgraph 全家（实测冷启动 1.69s）。
 # 20261018：这一行连同那段理由从 `tools/base.py` 搬过来（那边现在一个调用点都没有）。

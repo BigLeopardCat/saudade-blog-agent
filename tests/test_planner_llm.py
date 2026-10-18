@@ -36,8 +36,8 @@ sys.path.insert(0, str(ROOT))
 
 from langchain_core.messages import AIMessage  # noqa: E402
 
-from agent import context as C  # noqa: E402
 from agent import planner_llm as N  # noqa: E402
+from agent import prompt_context as C  # noqa: E402
 from agent import tasks as T  # noqa: E402
 from agent.workflow_defs import WORKFLOW_MAP, visible_workflows  # noqa: E402
 from agent.workflow_params import workflow_param_specs  # noqa: E402
@@ -259,7 +259,7 @@ def test_params_mirror_workflow_param_specs():
     overrides = set(N._SCHEMA_OVERRIDES)
     # **伪参数**：不是技能参数、由 `tool_calls_to_plan` 摘走的那几格。恒在的有两格——
     # `intents`（20261008 批 ②，20261015 随档位撤掉后恒在）与 `reply_kind`（刻意**没有
-    # 档位**，见 `context.REPLY_KIND_ARG` 的注）；`evidence` 出厂关、不在这一档的 schema
+    # 档位**，见 `prompt_context.REPLY_KIND_ARG` 的注）；`evidence` 出厂关、不在这一档的 schema
     # 里。两格都必须在这里被显式认领，否则这条断言会把它当成"schema 里多了一个没人申报
     # 的键"而红。守的不变量没变：**期望集合 = 参数 + 已认领的伪参数**，多出任何别的键照样红。
     pseudo = {C.REPLY_KIND_ARG, T.INTENTS_ARG}

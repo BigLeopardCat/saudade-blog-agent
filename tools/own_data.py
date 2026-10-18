@@ -70,7 +70,7 @@ __all__ = ["list_my_favorites", "get_unread_summary", "list_notifications", "add
 #   ③ 返回值走 `_shape(data)`（结构化），**不做中文报表**——它们是"用户要的值"
 #      （标题、日期、已读态），narrator 手上还有完整 ToolMessage 可转述；报表那套
 #      渲染（agent/reports.py）是给"数字必须可信、模型数不了"的管理报表用的。
-#      planner 那一侧由 `_compact_list_frame` 压成一行一条（见 agent/context.py）。
+#      planner 那一侧由 `_compact_list_frame` 压成一行一条（见 agent/prompt_context.py）。
 #
 # 端点（Rust 侧，src/routes/profile.rs）：`/favorites`、`/notifications`、
 # `/notifications/summary` 都只认 auth_uid，**自己读自己**——没有"读别人的"接口。

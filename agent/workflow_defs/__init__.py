@@ -258,7 +258,7 @@ def visible_workflows(role: str | None, include_system: bool = False) -> list[Wo
     """按角色过滤的技能列表——**角色可见性判据只有这一处**（20260921）。
 
     为什么收成一条：planner 注入（build_planner_context）与 narrator 的能力清单
-    （context.site_guide）此前各写各的可见性——两张表必然漂移，而它们回答的是
+    （prompt_context.site_guide）此前各写各的可见性——两张表必然漂移，而它们回答的是
     同一个问题（"这个人能用什么"）。165525-165937 同一能力三轮两种答案就是这么来的。
 
     `include_system=True` 才带上系统专用技能（`_SYSTEM_ONLY_WORKFLOWS`：article_id 是
