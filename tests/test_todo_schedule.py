@@ -271,15 +271,26 @@ check("有留言待审 ⇒ 说出条数、并写明**不在上面那张私人待
       "留言待审 3 条" in _todo.render_todo_pending({"review": 3, "quota": 0})
       and "不在上面这张私人待办里" in _todo.render_todo_pending({"review": 3, "quota": 0}),
       _todo.render_todo_pending({"review": 3, "quota": 0}))
+check("⭐ 件数**按实际印出来的那几类数**，不写死「两件」（20261019 修）",
+      _todo.render_todo_pending({"review": 3, "quota": 0}).startswith("另有一件等着你处理")
+      and _todo.render_todo_pending({"review": 0, "quota": 5}).startswith("另有一件等着你处理"),
+      _todo.render_todo_pending({"review": 3, "quota": 0}))
 _p = _todo.render_todo_pending({"review": 3, "quota": 2})
 check("两类都有 ⇒ 一句里两样齐全（不印成两段，也不漏掉后一样）",
       "留言待审 3 条" in _p and "额度重置申请 2 份" in _p, _p)
+check("  且这时才说「两件」（上面那半是反控：写死两件必红）",
+      _p.startswith("另有两件等着你处理"), _p)
 check("  只有这一类 > 0 时只印这一类（「额度重置申请 0 份」是一句噪声）",
       "额度重置申请" not in _todo.render_todo_pending({"review": 1, "quota": 0}), "")
-check("⭐ 没读到（哨兵）⇒ 明说「没读到、不确定有几条」，**绝不说成 0 条**",
-      "没读到" in _todo.render_todo_pending(_todo.TODO_PENDING_UNREAD)
-      and "不确定有几条" in _todo.render_todo_pending(_todo.TODO_PENDING_UNREAD),
-      _todo.render_todo_pending(_todo.TODO_PENDING_UNREAD))
+# ⭐ 这条判的是**没说出口的那半**：旧文案「另有两类等你处理的待办——留言待审与额度
+# 重置申请——这一次没读到，不确定有几条」一边承认没读到、一边把"确实有这两类在等你"
+# 说死了。主人在额度申请为 0 时反复读到"有两类待办"正是从这句来的
+# （生产 trace 20261018 那几轮）。⇒ 没读到就只陈述"没读到"这一件事。
+_u = _todo.render_todo_pending(_todo.TODO_PENDING_UNREAD)
+check("⭐ 没读到（哨兵）⇒ 明说「没读到、不确定」，**绝不说成 0 条**",
+      "没读到" in _u and "不确定" in _u, _u)
+check("  ⭐ 且**绝不断言那两类存在**（反控：写回「另有两类」这句必红）",
+      "另有两类" not in _u and "另有一件" not in _u and "另有两件" not in _u, _u)
 check("  畸形入参不炸（渲染层只退化不加戏）",
       _todo.render_todo_pending("有 3 条") == "" and
       _todo.render_todo_pending({"review": "三条", "quota": None}) == "")
@@ -294,7 +305,7 @@ check("  空清单 + 没读到 ⇒ 两句都说（空的是私人清单，不是
       and "没读到" in _todo.render_todo_list([], today=TODAY, pending=_todo.TODO_PENDING_UNREAD))
 check("非空清单 + 有尾注 ⇒ 尾注在最后一行（在它后面加东西会让人读成第 N+1 条待办）",
       _todo.render_todo_list([todo()], today=TODAY, pending={"review": 1}).split("\n")[-1]
-      .startswith("另有两件等着你处理"), "")
+      .startswith("另有一件等着你处理"), "")
 
 _added = _todo.render_todo_added("给猫买罐头", TOMORROW)
 check("追加回执说清加的是什么、排在哪天、去哪儿看",
@@ -558,8 +569,9 @@ with patch(_admin_get=lambda p, c: [], _own_get=lambda p, c: _summary):
 with patch(_admin_get=lambda p, c: [todo("给猫买罐头", TOMORROW)],
            _own_get=lambda p, c: base.unavailable("汇总读不到")):
     r = base.list_dashboard_todos.invoke({}, config=cfg())
-    check("⭐ 汇总读不到 ⇒ 待办照常给，另加一句「没读到，不确定有几条」",
-          r.kind == "ok" and "给猫买罐头" in r and "没读到" in r and "不确定有几条" in r,
+    check("⭐ 汇总读不到 ⇒ 待办照常给，另加一句「没读到、不确定」（**不断言那两类存在**）",
+          r.kind == "ok" and "给猫买罐头" in r and "没读到" in r and "不确定" in r
+          and "另有两类" not in r,
           f"{r.kind}: {r}")
     check("  **不当成 0 条**（那会让主人听到「就这些」，而我们根本没读到）",
           "留言待审 0" not in r and "额度重置申请 0" not in r, str(r))

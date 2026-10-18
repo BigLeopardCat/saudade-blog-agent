@@ -12218,7 +12218,7 @@ def _narrator_wire(messages: list) -> list:
 
 def _narrator_system_pair(state, config, role: str | None, receipts: list, block: str,
                           drop: set, has_action: bool) -> tuple:
-    """narrator 的两条系统消息：**稳定头**（人设 + 23 条叙述纪律）与**变化段**
+    """narrator 的两条系统消息：**稳定头**（人设 + 24 条叙述纪律）与**变化段**
     （计划 / 工具帧 / 执行回执 / 事实块 / 页面上下文）。
 
     **为什么拆成两条**（20261016）：前缀缓存命中的是**最长公共前缀**，而变化段从
