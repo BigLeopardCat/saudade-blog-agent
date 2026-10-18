@@ -18,7 +18,7 @@
 把两半钉在一起，且**都读磁盘上的那一份**（判据从 `eval/golden/basic.jsonl` 现取现编，
 不在这里抄第二份——抄一份就等着两份漂）：
 
-  ① **供给**（`agent/context.py::_SITE_GUIDE_BOARD_FACT`，经 `site_guide()`）：真的进了
+  ① **供给**（`agent/prompt_context.py::_SITE_GUIDE_BOARD_FACT`，经 `site_guide()`）：真的进了
      planner 与 narrator **共用**的那份页面上下文（`_attach_page_guide`），且**在
      `/dashboard` 这一页也进得来**（本用例正在后台提问，而 `GUESTBOOK_GUIDE` 只在留言板
      URL 上注入——那正是"回不了"的那一类），并**没混进能力枚举**（混进去"能不能做"的
@@ -36,7 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 
-import agent.context as C  # noqa: E402
+import agent.prompt_context as C  # noqa: E402
 from agent.workflow_defs import visible_workflows  # noqa: E402
 
 FAILS: list[str] = []

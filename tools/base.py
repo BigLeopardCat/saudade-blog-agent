@@ -220,11 +220,12 @@ from tools.device import (  # noqa: E402,F401
 # 按**原名**再导出 ⇒ 全仓 `from tools.base import …` 与 `base.<名>` 一处不改。外面伸手的
 # 实测有：`agent/workflow_defs/nav_map.py`（`NAV_MAP` 从 `_NAV_EXACT_PATHS` 同源取名，
 # 另取 `IOT_NAV_PATH`）、`agent/workflow_plan.py`（`nav_path_valid` / `IOT_NAV_PATH`）、
-# `agent/context.py`（`_ITEM_POSITION_FORMS` / `IOT_ENABLED`）、`agent/deterministic_plan.py` /
-# `agent/hostinfo.py` / `agent/entity_digest.py` 的摘要、`agent/tool_specs.py`、
-# `agent/workflow_defs/report_skills.py` 的技能、`agent/workflow_menu.py`（`IOT_ENABLED`）、
-# `tests/test_nav_truthfulness.py` / `tests/test_item_position_guide.py` /
-# `tests/test_iot_switch.py` / `tests/test_hardening.py` / `tests/test_workflows.py`。
+# `agent/prompt_context.py`（`_ITEM_POSITION_FORMS` / `IOT_ENABLED`）、
+# `agent/deterministic_plan.py` / `agent/hostinfo.py` / `agent/entity_digest.py` 的摘要、
+# `agent/tool_specs.py`、`agent/workflow_defs/report_skills.py` 的技能、
+# `agent/workflow_menu.py`（`IOT_ENABLED`）、`tests/test_nav_truthfulness.py` /
+# `tests/test_item_position_guide.py` / `tests/test_iot_switch.py` /
+# `tests/test_hardening.py` / `tests/test_workflows.py`。
 from tools.site import (  # noqa: E402,F401
     _ITEM_POSITION_FORMS,
     _NAV_EXACT_PATHS,
@@ -249,8 +250,7 @@ from tools.site import (  # noqa: E402,F401
 # 管理助手报表工具（20260921）
 # ---------------------------------------------------------------------------
 # 四个只读工具，scope 全声明为 `admin.console`（agent/authz.py）⇒ **只有 admin 用得动**。
-# 三道闸由粗到细：
-#   ① 结构性：不进 planner 的两个点名白名单（workflows._EXPLICIT_TOOLS /
+# 三道闸由粗到细：① 结构性：不进 planner 的两个点名白名单（workflows._EXPLICIT_TOOLS /
 #      _CALLABLE_QUERY_TOOLS）⇒ planner 无法经 PARAMS.calls/tools 点到它们，
 #      只能由 ops_report / moderation_report / user_report 三个技能模板展开；
 #   ② 身份：会话角色不是 admin 时 planner 上下文里**根本看不到**这三个技能

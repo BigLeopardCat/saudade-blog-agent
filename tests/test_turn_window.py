@@ -15,7 +15,7 @@
 
 **为什么非得两个值**（§5b 就是这一格的判据）：`graph_input` 在图外、看不见旧 state ⇒
 报不出下标；而"末尾 `turn_msgs` 条"**不等于**本轮——execute 一追加帧，它就把开头的
-`[System: …]` 注入块挤出窗口了。见 `context.freeze_turn_start` 的头注。
+`[System: …]` 注入块挤出窗口了。见 `prompt_context.freeze_turn_start` 的头注。
 
 **无 saver 时窗口是恒等**（`turn_start` 是 `0` 或 `-1`）⇒ §①②③ 是那条负控。
 
@@ -43,7 +43,7 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import (AIMessage, HumanMessage,  # noqa: E402
                                      SystemMessage, ToolMessage)
 
-from agent.context import freeze_turn_start, turn_window  # noqa: E402
+from agent.prompt_context import freeze_turn_start, turn_window  # noqa: E402
 from agent.graph import _turn  # noqa: E402
 
 FAILS: list[str] = []
@@ -103,7 +103,7 @@ class _Catcher(logging.Handler):
         _warn.append(rec)
 
 
-_log = logging.getLogger("agent.context")
+_log = logging.getLogger("agent.prompt_context")
 _h = _Catcher(level=logging.WARNING)
 _log.addHandler(_h)
 try:
@@ -488,7 +488,7 @@ check("`_planner_decide` 不自己写 turn_start（注入点只留一处）",
 # `with_tool_call_pairs(state["messages"])`（无截断），线程一复用提示词就随会话线性
 # 膨胀。摘掉 `_narrator_msgs` 这一层**不会有任何东西报错**——只是提示词慢慢变大
 # （`prompt_oversize` 是一条 warning，不是判据）。所以这里钉**结构**：narrator 的
-# 消息表必须经过那一个取值口，而那个取值口必须真的委托给 `context.narrator_messages`。
+# 消息表必须经过那一个取值口，而那个取值口必须真的委托给 `prompt_context.narrator_messages`。
 print("[5F] 规则 F：narrator 的窗口闸门在场且没被绕过")
 
 # **20261016 合并之后这条链多了一环**：主线把"补形状"收进了 `_narrator_wire`
@@ -550,7 +550,7 @@ if _model is not None and _wire is not None:
 
 _narr = next((f for f in ast.walk(_tree)
               if isinstance(f, ast.FunctionDef) and f.name == "_narrator_msgs"), None)
-check("`_narrator_msgs` 存在且委托给 `context.narrator_messages`",
+check("`_narrator_msgs` 存在且委托给 `prompt_context.narrator_messages`",
       _narr is not None and any(
           isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
           and n.func.id == "narrator_messages" for n in ast.walk(_narr)))

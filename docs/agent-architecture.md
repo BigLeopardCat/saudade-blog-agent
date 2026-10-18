@@ -126,7 +126,7 @@ flowchart TB
 │   ├── entity_digest.py            # ★ 执行回执实体摘要（digest 是 Python 写 / Rust 读的跨语言契约）
 │   │
 │   ├── 【上下文与提示词】
-│   ├── context.py             # 上下文组装（纯函数叶子层，零 LLM / 零 LangGraph）：注入给 planner/model 的事实文本——消息文本提取（多模态兼容）/ page_ctx / 页面操作指南 / 工具帧摘要 / checker 回执摘要
+│   ├── prompt_context.py      # 注入 planner/model 的**提示词文本**组装（纯函数叶子层，零 LLM / 零 LangGraph）：消息文本提取（多模态兼容）/ page_ctx / 页面操作指南 / 工具帧摘要 / checker 回执摘要
 │   ├── prompts.py             # ★ 全部模型可见正文的唯一落点：人设 + 叙述纪律 + planner / reflector 模板 + 输出契约（渲染点与全部逻辑仍在 graph.py）
 │   ├── planner_llm.py         # ★ 技能表 ↔ API tools/tool_calls 的接线层（20261004 起**唯一**接口层；20261017 前名 native_plan.py）
 │   ├── deterministic_plan.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取 / 特效切换 / 导航 / 屏幕显示）+ 动作意图扫描 + 检索候选裁决 + 终局计划
@@ -668,15 +668,15 @@ narrator 提示词随会话线性膨胀（当时那一行是 `with_tool_call_pai
 
 **读端**的处置分两批，都落在实验分支 `exp/native-checkpoint`（生产一个字节没动）：
 
-- **批 1（已落地）**：**读端**窗口。`context.freeze_turn_start` 在 `_planner_decide`
+- **批 1（已落地）**：**读端**窗口。`prompt_context.freeze_turn_start` 在 `_planner_decide`
   **之前**冻住本轮起点（顺序反了就是"planner 自己漏修"——这条单独占一笔提交），
-  20 处读端改用 `context.turn_window`。口径是 `turn_start <= 0`（没记边界）⇒ 返回
+  20 处读端改用 `prompt_context.turn_window`。口径是 `turn_start <= 0`（没记边界）⇒ 返回
   **同一个对象**，所以对现状**逐字节零变化，且是构造性的**（不是"应该没变"）。
   判据 `tests/test_turn_window.py` 规则 A–E。
 - **批 3**：**输入契约**。图既然自持历史，注入的历史就不该再进来。
-  `context.narrator_messages(messages, turn_start, turns=10)` 把 narrator 看到的消息表切成
+  `prompt_context.narrator_messages(messages, turn_start, turns=10)` 把 narrator 看到的消息表切成
   「近 10 轮（剥事实行、剪孤儿、丢历史段的工具帧）+ 本轮原样」，`model_node` 改调它；
-  同批修了 `context._prev_user_msg`——它取"倒数第二条 `HumanMessage`"而**不跳 `[System: `**，
+  同批修了 `prompt_context._prev_user_msg`——它取"倒数第二条 `HumanMessage`"而**不跳 `[System: `**，
   线程复用后第 2 轮会取到**本轮的 System 块**而不是上一轮主人那句。它只在确认兑现轮用，
   而那一轮恰恰是"不许重新理解一遍、只能靠原话"⇒ 取错源 = 意图清单恒空。
   判据 `tests/test_narrator_window.py` + `tests/test_turn_window.py` 规则 F。
@@ -761,7 +761,7 @@ narrator 提示词随会话线性膨胀（当时那一行是 `with_tool_call_pai
 | 消费方 | 用途 |
 |---|---|
 | `rag/search.py::chunk_note` | BM25 索引切片（只是转发，只认 1-3 级、短文 <2000 不切都保持原样） |
-| `agent/context.py::_frame_texts` | 超限帧按整节取舍：装得下的整节保留，装不下的整节列在文末 |
+| `agent/prompt_context.py::_frame_texts` | 超限帧按整节取舍：装得下的整节保留，装不下的整节列在文末 |
 | `tools/base.get_article_detail(section=…)` | 按节取回被略去的那一节（三级指称：标题全称 / 编号"9" / 唯一子串；不唯一 → 返回候选清单而不是赌一个） |
 
 数据不变式：**"读到的一节"必须与"索引里的那一节"完全同边界**——三处各写一份切分逻辑，
@@ -1089,7 +1089,7 @@ flowchart TB
   第二层壳来自主人的说话习惯：人设让它叫「小猫咪/泠月喵」，生产语料里
   22.7% 的消息以称呼开头，句首锚定型判据同样被它架空（同意闸 6 条、弹窗分叉 8 条翻正）。
   两层壳的剥法只有一份 —— `authz.strip_user_shell`（20260930 起，`decisions._bare` /
-  `context._short_core` / 三个判据入口共用；此前称呼表在导航正则与短应答表里各内联过一份，
+  `prompt_context._short_core` / 三个判据入口共用；此前称呼表在导航正则与短应答表里各内联过一份，
   三处口径各不相同，都不含裸「猫咪」）。教训：凡把用户消息当判据输入的锚定判据，都要问
   一句"它看到的是不是包装过的文本"。
 

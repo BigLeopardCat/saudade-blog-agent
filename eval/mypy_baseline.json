@@ -19,7 +19,7 @@
     "agent/adminops_noop.py": 11,
     "agent/adminops_quota.py": 2,
     "agent/authz.py": 3,
-    "agent/context.py": 2,
+    "agent/prompt_context.py": 2,
     "agent/entity_digest.py": 1,
     "agent/graph.py": 96,
     "agent/hostinfo.py": 2,

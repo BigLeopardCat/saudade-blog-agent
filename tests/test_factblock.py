@@ -185,7 +185,7 @@ def test_injection_points():
     """接线：三处模型可见的读点都真的过了一遍剥离（能力有测试 ≠ 接线有测试）。"""
     print("\n[接线] 历史注入点与 planner 读点都剥离（生产实证 20261001T230954）")
     block = render_fact_block(["页面已跳转：https://saudade.site/device-console/"])
-    from agent.context import _last_assistant_utterance, _recent_tail
+    from agent.prompt_context import _last_assistant_utterance, _recent_tail
 
     tail = _recent_tail([HumanMessage(content="猫咪我们去物联网平台"),
                          AIMessage(content=block + "\n\n控制台就在眼前啦～")])

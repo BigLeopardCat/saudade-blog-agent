@@ -199,7 +199,7 @@ def _my_board_digest(data) -> str:
       · **状态**（通过/待审/未通过）——这条通道存在的全部理由就是它（公开池只有
         已通过态，"我哪条留言通过了"在那边读不出来）；
       · **`talkId`**——`/guestbook?lid=<talkId>` 这个位置形态的取值就是它（见
-        `agent/context.py::_item_link_fact()`）；摘要里带上，下一轮
+        `agent/prompt_context.py::_item_link_fact()`）；摘要里带上，下一轮
         「带我去那条」才不用重查一遍。
     """
     rows = _rows(data)

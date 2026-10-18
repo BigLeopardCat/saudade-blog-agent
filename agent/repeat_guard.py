@@ -4,7 +4,7 @@
 **为什么单独成模块**（20261017 拆 `graph.py` 第三刀；前两刀见 `agent/plan_codec.py`
 与 `agent/tool_specs.py`）：这一族此前住在 `agent/graph.py`（本刀之前实测
 13682 行 / 250 个顶层定义），而它对 graph.py 的**出边为零**——只用 `difflib`、
-`re`、`agent.context._msg_text` 与 `AIMessage` / `HumanMessage`，一个 graph.py
+`re`、`agent.prompt_context._msg_text` 与 `AIMessage` / `HumanMessage`，一个 graph.py
 里的名字都不需要。前两刀的判据不同：第一刀靠"边界干净"、第二刀靠"出边为零"，
 本刀**同时满足**（族内 5 个函数 + 9 个独占常量自成一圈，常量连注释一起搬走）。
 
@@ -31,7 +31,7 @@ import re
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agent.context import _msg_text
+from agent.prompt_context import _msg_text
 
 # ── gate 1b：逐字复读上一轮回复（20260920）──────────────────────────────────
 # 纪律 11（"绝不把历史里自己的回复原文再输出一遍"）只是**软约束**，压不住：

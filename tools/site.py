@@ -223,7 +223,7 @@ def nav_pure_path(p: str) -> str:
     """导航目标 → **页面路径**部分（丢掉 `?…` 与 `#…`）。
 
     站内"停在某一条内容上"用的是**同一个页面 + 定位参数**（全部形态见下面
-    `_ITEM_POSITION_FORMS`；事实句 `agent.context._item_link_fact()` 从它渲染）。
+    `_ITEM_POSITION_FORMS`；事实句 `agent.prompt_context._item_link_fact()` 从它渲染）。
     前端那条链本来就这么认——SPA 桥按 `pathname+search+hash` 换路由，
     `chat-stream.js` 的 `BLOG_ROUTES` 只拿 `new URL(url).pathname` 比对。
     """
@@ -255,7 +255,7 @@ def nav_path_valid(p: str) -> bool:
 #     （note 是裸页面 `/article/<id>`；talk `?tk=` / board `?lid=` / comment `?cid=`）；
 #   · Rust 的站内通知（`src/routes/talks.rs:515`、`src/routes/comments.rs:286`）：只会
 #     带 board / comment 两种；
-#   · agent 的站内事实句（`agent/context.py` 那条 item-link 事实）：此前手写两种、还写着
+#   · agent 的站内事实句（`agent/prompt_context.py` 那条 item-link 事实）：此前手写两种、还写着
 #     「站内**只有两个**形态」——**一句可抄的假话**（同族纪律：契约里不许出现可抄的错句）；
 #   · 本文件的白名单（`nav_path_valid`）：原来看整串，三种形态**一个都过不去**。
 # 生产实证（trace `20261008T024742`「带我去看看我已经通过的留言」）：planner 拿不到定位

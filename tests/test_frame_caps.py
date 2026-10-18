@@ -7,7 +7,7 @@
     ＋ `_cap_rows(offset=…)`（**取回更早的那一页**，20261005 收口）
   · `agent/entity_digest.py::_note_total` / `_note_range`（跨轮摘要必须跟着说真话）
   · `agent/graph.py::_cap_frame_text`（帧文本的单帧硬顶 + 单轮总量顶，**头尾各半**）
-  · `agent/context.py::_frame_texts(article_pointer=…)`（正文不再投喂两遍）
+  · `agent/prompt_context.py::_frame_texts(article_pointer=…)`（正文不再投喂两遍）
 
 判据的核心不是"封顶生效了"，而是**没到上限时一个字节都不变**——三个上限的取值都是
 "今天够不着"的量级（20261005 实测：board 25 行 / talk 11 行 / 公告 9 行，最长单帧
@@ -28,7 +28,7 @@ from langchain_core.messages import ToolMessage  # noqa: E402
 
 import tools.base as base  # noqa: E402
 from agent import entity_digest  # noqa: E402
-from agent.context import _frame_texts  # noqa: E402
+from agent.prompt_context import _frame_texts  # noqa: E402
 from agent.graph import (_FRAME_HARD_MAX, _FRAME_MIN_KEEP,  # noqa: E402
                          _TURN_FRAME_TOTAL, _cap_frame_text)
 

@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT))
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
 from rag import sections                         # noqa: E402
-from agent.context import (_DETAIL_FRAME_PER, _compact_list_frame,  # noqa: E402
+from agent.prompt_context import (_DETAIL_FRAME_PER, _compact_list_frame,  # noqa: E402
                            _frame_texts)
 from agent.deterministic_plan import _doc_title           # noqa: E402
 from agent.arg_refs import parse_data                 # noqa: E402
@@ -57,7 +57,7 @@ TITLE = "Saudade Blog AI Agent（泠月喵）架构文档"
 SEC_NAMES = ["1. 系统总览", "2. 组件与目录", "3. 一次对话的完整链路", "4. 记忆机制",
              "5. 工具系统", "6. 防幻觉与可靠性加固", "7. LLM 与配置",
              "8. 前端看板娘关键机制", "9. 部署与运维", "10. 已知边界与坑（维护必读）"]
-# 本套件自己的节选上限：**刻意独立于** `agent/context.py` 的 `_DETAIL_FRAME_PER`——
+# 本套件自己的节选上限：**刻意独立于** `agent/prompt_context.py` 的 `_DETAIL_FRAME_PER`——
 # 生产预算调整时，夹具的期望（哪几节展开、哪几节进清单）不该跟着漂。⑤ 那条"渲染体积
 # 受控"断的是**生产那一侧**的上限，故用真常量（20260925：两者此前同为 20000，
 # 预算提到 28000 后若还拿 CAP 断言，红的是夹具而不是代码）。
@@ -418,7 +418,7 @@ check("get_article_detail 有 section 参数（str 注解 + 描述都在）",
       "section: Annotated[" in src and '"只读该文章的某一小节' in src)
 check("section 只对 note 生效（talk/board/announcement 走原路）",
       src.index("if not section or not isinstance(data, dict)") < src.index('"talk": ("/talk"'))
-ctx_src = (ROOT / "agent" / "context.py").read_text(encoding="utf-8")
+ctx_src = (ROOT / "agent" / "prompt_context.py").read_text(encoding="utf-8")
 check("渲染侧用 frame_excerpt", "sections.frame_excerpt(text, _DETAIL_FRAME_PER)" in ctx_src)
 check("旧的无声硬截断已移除", "原文过长仅示前" not in ctx_src)
 # 刀 2（20261009）后 `_planner_decide` 拆成阶段函数、跨段量改从 ctx 上取
@@ -540,7 +540,7 @@ check("已知键名优先（既有行为不破：items 赢）",
                                          tool_call_id="c11")]))
 # ② 的族判据：按 scope 声明派生，**不手写工具名清单**（逐个工具核，不是抽样）
 from agent.authz import SCOPE_READ_OWN, TOOL_SCOPE  # noqa: E402
-from agent.context import _frame_view              # noqa: E402
+from agent.prompt_context import _frame_view              # noqa: E402
 _own = sorted(t for t, s in TOOL_SCOPE.items() if s == SCOPE_READ_OWN)
 _bad = [t for t, s in TOOL_SCOPE.items()
         if (s == SCOPE_READ_OWN) != (_frame_view(t, 300)[0] > 300)]
@@ -560,7 +560,7 @@ check("对照：默认族同样长度仍截到 60（不是把全局上限抬了�
       _long not in _cn and "…" in _cn, _cn[-40:])
 # 与工具侧的两个上限对账：它们变了，上面的预算就该重算（这条红着提醒）
 from tools.base import _UNREAD_CONTENT_MAX, _UNREAD_ITEMS_MAX  # noqa: E402
-from agent.context import _OWN_DATA_FIELD_CAP, _OWN_DATA_FRAME_PER  # noqa: E402
+from agent.prompt_context import _OWN_DATA_FIELD_CAP, _OWN_DATA_FRAME_PER  # noqa: E402
 check("字段上限 == 工具的正文上限（_UNREAD_CONTENT_MAX）",
       _OWN_DATA_FIELD_CAP == _UNREAD_CONTENT_MAX,
       f"{_OWN_DATA_FIELD_CAP} vs {_UNREAD_CONTENT_MAX}")

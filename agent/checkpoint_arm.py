@@ -11,8 +11,8 @@ worker 的堆。所以真正的问题是另一件事，而且是可量的：
 `add_messages` 是**追加** reducer（只在 id 相同时替换，而本仓的消息是每轮新建、
 无 id ⇒ 永不去重）。于是三处读端会把**上一轮的事实**当成**本轮的事实**：
 
-  ① `context._page_ctx` 取**第一条** `[System:` ⇒ 读到上一轮的页面/时间/特效；
-  ② `context._has_frames` / `graph.frame_chars` / gate 的 `frames` ⇒ 上一轮的
+  ① `prompt_context._page_ctx` 取**第一条** `[System:` ⇒ 读到上一轮的页面/时间/特效；
+  ② `prompt_context._has_frames` / `graph.frame_chars` / gate 的 `frames` ⇒ 上一轮的
      ToolMessage 被算成本轮证据（首轮五条确定性快道因此**永不命中**）；
   ③ `graph.model_node` 送出去的 `_msgs` 里，narrator 那一段取自 `state["messages"]`
      ⇒ **无截断**，随会话线性膨胀（埋点 `prompt_oversize` 就在那儿）。

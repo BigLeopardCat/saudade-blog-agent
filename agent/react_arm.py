@@ -154,7 +154,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.graph import END, START, StateGraph
 
-from agent.context import (_doc_anchors, _frame_texts, _has_frames,
+from agent.prompt_context import (_doc_anchors, _frame_texts, _has_frames,
                            _last_assistant_utterance, _last_user_msg, _page_ctx,
                            _recent_tail, _receipts_text, _short_reply_hint,
                            with_tool_call_pairs)

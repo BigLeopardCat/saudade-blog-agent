@@ -31,7 +31,7 @@ WORKFLOWS: list[Workflow] = [
             # 模型只能自己猜，实测猜出来的是 `/article/54#comment`（主人报"转跳评论
             # 位置"那一轮）：文章对了、位置是编的。
             # **位置形态的"知识"不写在这儿**：它进的是 planner 每轮的页面上下文
-            # （`context._item_link_fact()`），是"站内事实"；这里只补
+            # （`prompt_context._item_link_fact()`），是"站内事实"；这里只补
             # "这一格能填什么"，两处各说各的那一半。
             "target": "页面别名（从导航映射表取值）：首页/留言板/说说/时间轴/关于我/登录"
                       + ("/物联网平台" if IOT_ENABLED else "") +

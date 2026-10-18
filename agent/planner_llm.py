@@ -46,7 +46,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.context import (
+from agent.prompt_context import (
     REPLY_KIND_ARG,
     REPLY_KIND_FIELD_DESC,
     parse_reply_kind,
@@ -101,9 +101,9 @@ class PlannerDecision:
     finish_reason: str = ""          # `length` = 被额度截断（"预算够不够"的判据）
     raw_tool_calls: tuple = field(default_factory=tuple)
     declare: dict | None = None      # 归一化后的任务登记（无 → None）
-    # 模型对**短应答**那一类的自我申报（20261015 批 3，`agent/context.py::REPLY_KIND_ARG`）：
+    # 模型对**短应答**那一类的自我申报（20261015 批 3，`agent/prompt_context.py::REPLY_KIND_ARG`）：
     # `"pos"|"neg"|"auth"`、别处塞进来的写法（原样留 16 字）或 `""`（没申报）。
-    # **不是判据**——准入是纯结构的（`context._is_short_reply`），这一格只进 trace
+    # **不是判据**——准入是纯结构的（`prompt_context._is_short_reply`），这一格只进 trace
     # （`planner.reply_kind`）供事后核对"模型把哪一类读错了"。
     reply_kind: str = ""
     # 归一化后的**意图清单**（20261008 批 ②，`agent/tasks.py::TASK_INTENTS`）：主人这一句
@@ -354,10 +354,10 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
         # 挂在每一个技能上而不是只挂写技能：要办的两件可以都不是写（"查一下 X 再顺手
         # 把它置顶"），而"哪几件"这件事与技能是不是写无关。
         props[INTENTS_ARG] = intents_prop_schema(INTENTS_FIELD_DESC)
-        # 短应答的自我申报（20261015 批 3，`context.REPLY_KIND_FIELD_DESC`）：**挂在每个
+        # 短应答的自我申报（20261015 批 3，`prompt_context.REPLY_KIND_FIELD_DESC`）：**挂在每个
         # 技能上、没有任何档位**。与 `intents` 一样**不进 `required`、不进 `params`**
         # （`tool_calls_to_plan` 摘走），所以"模型不填"这条路径与本参数不存在时逐字节相同。
-        # 拷 `tasks.py` 那份体例的两处不同见 `context.REPLY_KIND_ARG` 的注；这里只补一条
+        # 拷 `tasks.py` 那份体例的两处不同见 `prompt_context.REPLY_KIND_ARG` 的注；这里只补一条
         # 为什么**不**像 `evidence` 那样按技能射程收窄：短应答的三种出口各自落到哪个技能
         # 是不定的（同意多半落在读、授权多半落在写），而"模型读成了哪一类"这件事与技能
         # 无关——按射程收窄会让大部分轮次没有申报口，读数就断了。

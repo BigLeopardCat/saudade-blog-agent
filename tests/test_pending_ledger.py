@@ -47,7 +47,7 @@ import agent.graph as g  # noqa: E402
 import tools.base as tb  # noqa: E402
 from agent import adminops_quota as _quota  # noqa: E402
 from agent import authz  # noqa: E402
-from agent.context import _SHORT_MAX, _is_short_reply, _short_reply_hint  # noqa: E402
+from agent.prompt_context import _SHORT_MAX, _is_short_reply, _short_reply_hint  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
 
 FAILED: list[str] = []

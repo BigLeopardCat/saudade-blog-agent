@@ -118,7 +118,7 @@ check("  且注明后台清单不过滤 approved（能力有据，不是口头�
 # ══════════════════════════════════════════════════════════════════
 print("\n④ 待办族：能力清单是**能力的上界**——清单里每一句都得有真通道，通道有的也得写得出")
 
-from agent import context as C  # noqa: E402
+from agent import prompt_context as C  # noqa: E402
 
 # 这一节的由来（批 G 的 D3，trace `20260929T193152`）：主人问「猫咪今日待办有什么」
 # ——**只读**的一轮——narrator 在末尾主动提议「要不要我帮你勾掉或者**重新排个日子**呀？」。
@@ -188,7 +188,7 @@ check("  第一句（防漏列）仍在——两句并列，不许拿第二句�
       "按此完整列出，不要遗漏" in C._SITE_GUIDE_CLOSING)
 # 诚实标注：这句话是**提示词级**，不是闸门。标注本身也要有锁，否则下一个人会把它
 # 读成「已经有判据了」，然后在别处再补一条正则（本仓 20260928 审计点名的那个形状）。
-_ctx_src = (ROOT / "agent" / "context.py").read_text(encoding="utf-8")
+_ctx_src = (ROOT / "agent" / "prompt_context.py").read_text(encoding="utf-8")
 check("  且诚实标注在位：这是提示词级、不是闸门（判据分不出诚实与胡说的「做不到」）",
       "这是提示词级，不是闸门" in _ctx_src)
 

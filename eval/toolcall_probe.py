@@ -62,13 +62,18 @@ from openai import OpenAI
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent.arg_refs import ref_hints  # noqa: E402
-from agent.context import _doc_anchors, _frame_texts, _recent_tail, _short_reply_hint  # noqa: E402
 from agent.graph import (  # noqa: E402
     _PLANNER_OUTPUT_CONTRACT_NATIVE,
     _intent_hints,
     _render_planner_prompt,
 )
 from agent.planner_llm import build_tool_schema  # noqa: E402
+from agent.prompt_context import (  # noqa: E402
+    _doc_anchors,
+    _frame_texts,
+    _recent_tail,
+    _short_reply_hint,
+)
 from config.settings import settings  # noqa: E402
 
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report")

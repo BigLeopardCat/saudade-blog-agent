@@ -46,7 +46,7 @@ GOLDEN = os.path.join(ROOT, "eval", "golden", "basic.jsonl")
 
 # ── ① 静态映射 ────────────────────────────────────────────────────────────
 def _page_ctx(ctx: dict) -> str:
-    """与 `agent/context.py::_page_ctx` 拿到的那串同形（`run_golden` 也照这个拼）。"""
+    """与 `agent/prompt_context.py::_page_ctx` 拿到的那串同形（`run_golden` 也照这个拼）。"""
     return (f"user_id={ctx.get('user_id', 0)}, page={ctx.get('current_url', '/')}, "
             f"title={ctx.get('page_title', '')}, current_effects={ctx.get('current_effects', '')}, "
             f"current_darkmode={ctx.get('current_darkmode', '')}")
