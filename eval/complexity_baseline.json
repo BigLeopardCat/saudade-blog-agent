@@ -129,7 +129,7 @@
   },
   "eval/run_golden.py::run_one": {
     "c": 58,
-    "lines": 259
+    "lines": 262
   },
   "eval/toolcall_probe.py::main": {
     "c": 46,

@@ -111,6 +111,7 @@ import identity_preflight  # 同目录：真身份通道的前置在位检查（
 import landing_gate  # 同目录：落地判定（两层门禁 / 慢性红榜，20261001）
 from landing_gate import fallback_resets, wilson_ci  # noqa: F401 —— 再导出（唯一实现在 landing_gate）
 import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
+import golden_thread  # 同目录：传给图的线程坐标（批 6，见该模块头注）
 from utils import trace as trace_mod  # trace 工具返回留多长（run_case 里放开，见其注释）
 
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
@@ -383,7 +384,8 @@ def parse_reset(text: str) -> tuple[str, str]:
 # `fallback_resets` 已搬到 `landing_gate`（判据的唯一实现处），本模块顶部再导出。
 def run_one(req: ChatRequest, principal: "Principal | None" = None,
             trace_ctx: dict | None = None, *,
-            confirm_token: str = "", confirm_pick: str = "") -> dict:
+            confirm_token: str = "", confirm_pick: str = "",
+            thread: str = golden_thread.LEGACY) -> dict:
     """跑一轮真实对话（内部链路），从帧流提取最终文本 / 命令帧 / 事件。
 
     `trace_ctx`（20260922）：`{"run": <run_id>}` 时给这一轮落一份 trace（见
@@ -396,6 +398,8 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     **零执行**、连图都不进（否则会照着 message 文本重新规划，那正是要避免的"再走
     一轮对话"）→ 验过了才把 payload 传给 `_build_messages` 与图。
 
+    `thread`（批 6）：这一轮传给图的 `thread_id`，缺省是历史常量 `LEGACY`（不改变直接调
+    本函数的探针），理由与坐标见 `eval/golden_thread.py`。
     `confirm_pick`（20261010）：卡上点的是**第 i 格**而不是「全部办」时的记号
     （`pick:<i>`，0 基，`ChatRequest.confirm_pick` 一路透传）。**收窄的时机与生产逐字
     对齐**（`server.chat_stream`）：验签之后、任何消费之前——`_build_messages` /
@@ -439,7 +443,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     if trace_ctx:
         trace_id = golden_trace.start_case(
             trace_ctx["run"], trace_ctx.get("case", ""), req.message or "",
-            (principal.role if principal is not None else None))
+            (principal.role if principal is not None else None), thread=thread)
     loop = asyncio.new_event_loop()
     queue = asyncio.Queue()
     frames = []
@@ -473,7 +477,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     with ThreadPoolExecutor(max_workers=1) as ex:
         ex.submit(
             ctx.run, _run_agent_stream_to_queue,
-            _build_messages(req, confirm_grant=confirm_grant), "golden_thread", queue,
+            _build_messages(req, confirm_grant=confirm_grant), thread, queue,
             loop, req.user_id, None, principal, confirm_grant, req.conversation_id,
             _ledger,
             # 未完结任务原文（20260927 批 D）：**与生产 `/chat/stream` 的调用点逐字对齐**。
@@ -733,7 +737,12 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
         t0 = time.time()
         res = run_one(req, principal,
                       trace_ctx=({"run": run_id, "case": case["id"] + suffix} if run_id else None),
-                      confirm_token=req.confirm_token, confirm_pick=req.confirm_pick)
+                      confirm_token=req.confirm_token, confirm_pick=req.confirm_pick,
+                      # 线程坐标（批 6）：**每轮都按 (用例, 重复, 臂) 重算**，而三条臂读的是
+                      # 同一个库 ⇒ 不复位就是假读数（ADR-0011）。臂名取自 `arm_name()` 那
+                      # 一处事实源，本处不再读一遍 `GOLDEN_ARM`。
+                      thread=golden_thread.for_case(
+                          case["id"], arm=golden_arm.arm_name(), suffix=suffix))
         res["round"] = rnd["round"]
         res["elapsed"] = round(time.time() - t0, 1)
         res["fails"] = []

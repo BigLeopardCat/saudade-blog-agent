@@ -194,7 +194,7 @@
 - **先量再切**：影子读数必须在**当前请求形状**上取，因为断点恢复会改请求形状。
   ⇒ 批 6/7 之后这份读数**不可与今天直接比**，要重新取一段。
 
-### 批 6 — 断点恢复前置（纯加法，无行为变更）—— **6a 已落地，6b 待做**
+### 批 6 — 断点恢复前置（纯加法，无行为变更）✅ 已落地
 
 **已落地（6a，20261018）**
 
@@ -226,27 +226,35 @@
   `agent/checkpoint.py` 头注里就写着 `durability="sync"`——子串匹配会被自己那段注释骗红
   （同 `tests/test_hostinfo_trace_stats.py` 那次）。
 
-**待落地（6b）**
+**已落地（6b，20261018）**
 
-- **语料** ✅ **已在批 3 做过**：`GOLDEN_PROD_HISTORY=1`（`eval/run_golden.py` 的
-  `ENV_PROD_HISTORY`）+ 判据 `tests/test_golden_prod_history.py`。
-- **golden 驱动**（**未做**）：`eval/run_golden.py` 的线程常量 `"golden_thread"` 要按
-  （用例, 重复, 臂）复位——ADR-0011 已写明「不复位就是假读数」。现状：**驱动侧已经在复位**
-  （`eval/experiments/ckpt_ab_driver.py::reset_run_threads`，逐用例 × 逐遍 × 逐臂跑之前删
-  `golden_thread` 与 `conv_<id>` 两处行；ab1 那次"D 臂在整库历史上接着跑"的假读数就是它
-  修掉的）。**残留的脆弱点是那个常量本身**：所有用例共用一条 `"golden_thread"`，所以
-  "跨用例不串"这件事只活在驱动那个删除调用里——不经驱动的跑法（夜间 `nightly_regression.sh`、
-  手跑 `run_golden.py`）没有这一层。改法 = 让 `run_golden` 自己按 (用例, 重复, 臂) 算线程名，
-  删除那一步随之变成"不必需"（**不是**"可以删掉"：臂 B 的线程是 `conv_<id>`，那个坐标跨遍、
-  跨臂都相同，仍要删）。改前先确认没有别的读取端依赖那个常量（`eval/golden_trace.py` 的
-  `start_trace(..., "golden_thread", ...)` 是**另一件事**——那是 trace 的线程字段，不是图
-  的 `thread_id`）。
+- **语料** ✅ **批 3 就做过了**：`GOLDEN_PROD_HISTORY=1`（`eval/run_golden.py` 的
+  `ENV_PROD_HISTORY`）+ 判据 `tests/test_golden_prod_history.py`。批 6 只需确认它在。
+- **golden 线程坐标** ✅：新增 `eval/golden_thread.py`——`thread_id` 从**常量**
+  `"golden_thread"` 换成 **(用例, 重复, 臂)** 的坐标（`golden_<臂>_<用例>[_r<遍>]`）。
+  `run_case` 显式传 `run_one(thread=…)`；同一个坐标也落进 trace 的 `thread_id` 那一格
+  （`golden_trace.start_case(..., thread=…)`——那里写死的话，trace 里这一格会与图实际用的
+  线程**不一致**，而"线程有没有复用"恰恰要读它）；驱动的 `GOLDEN_REP` 补上"重复"那一段。
+  ⚠️ **驱动的逐遍复位仍然必需**：它删的是 `golden_thread` 与 `conv_<id>`，而臂 B 的线程
+  是 `conv_<conversation_id>`——那个坐标**跨遍、跨臂都相同**，本坐标管不到它。
+  ⚠️ **为什么不是"只靠驱动复位就行"**：那个复位只活在 `ckpt_ab_driver` 里，不经驱动的
+  跑法（夜间 `nightly_regression.sh`、手跑、`golden_case_runner`）没有这一层。把复位换成
+  "名字里本来就带着坐标"，等于让正确性不再依赖调用方记得做某一步。
+  判据 `tests/test_golden_thread.py`：三条不变式 + 归一化 + **拿真语料量撞名**
+  （192 条用例的线程名两两不同——归一化会把 `a.b` 与 `a-b` 折成同一个 slug，那是真实存在
+  的失效面，所以这条不靠"应该不会撞"的直觉）+ 两条 AST 接线锁。
+  ⚠️ **`run_one` 的 `thread` 缺省仍是老常量**：`eval/zero_call_residual_probe.py` /
+  `eval/arm_capability.py` 等探针直接调 `run_one` 并各传各的线程名，缺省不许动它们。
 - **依赖进 `pyproject.toml` 与锁文件** ✅ **已做**（`langgraph-checkpoint-postgres==3.1.0` /
   `psycopg[binary]==3.3.6` / `psycopg-pool==3.3.3`，`uv.lock` 里有对应条目；本机不跑同步，
   见 §5）。
 - **保留期归口** ✅ **已做**（`eval/retention_manifest.py` 的 `agent-idem-ledger`，登记为
   `open`／未接管，`why` 里写明"与将来的 checkpoint store 必须一起设计"——那一格**不该**
   在批 6 就给它一个保留期，理由见登记项本身）。
+
+**批 6 收口**：四处纯加法全部落地，`AUTHZ_ENFORCE` 与生产行为一字未动。本批动了三本账
+（都是**文本外科改那一个数**）：模块行数 `server.py` 2592 → 2595、`eval/run_golden.py`
+3677 → 3686；函数行数 `eval/run_golden.py::run_one` 259 → 262。**批 7 是这些前置的落地对象。**
 
 ### 批 7 — 断点恢复落地（一次原子提交，不拆）
 

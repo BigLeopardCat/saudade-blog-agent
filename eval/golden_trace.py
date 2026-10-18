@@ -115,10 +115,17 @@ def case_dir(run_id: str) -> str:
     return d
 
 
-def start_case(run_id: str, case_id: str, message: str = "", role: str | None = None) -> str | None:
+def start_case(run_id: str, case_id: str, message: str = "", role: str | None = None,
+               thread: str = "golden_thread") -> str | None:
     """建 recorder 并返回 trace_id（关掉时返回 None）。
 
     调用点必须在 `ex.submit` 之前（见模块头注：晚一步就是空壳 trace）。
+
+    `thread`（20261018 批 6）：落进 trace 的 `thread_id` 字段。**必须由调用方把这一轮
+    真正传给图的那个坐标传进来**——此前这里是写死的 `"golden_thread"`，而 golden 的
+    线程从批 6 起是 `golden_<臂>_<用例>` 这样的坐标 ⇒ 写死的话 trace 里那一格会与图
+    实际用的线程**不一致**，而"线程有没有复用"恰恰要读这一格。缺省仍是那个老常量，
+    为的是不改变不传它的调用方（同 `run_golden.run_one` 的 `thread` 缺省）。
     """
     if not enabled():
         return None
@@ -137,7 +144,7 @@ def start_case(run_id: str, case_id: str, message: str = "", role: str | None = 
                    or trace_mod.TOOL_RESULT_LIMIT_DEFAULT)
     except ValueError:
         _lim = trace_mod.TOOL_RESULT_LIMIT_DEFAULT
-    start_trace(tid, 0, "golden_thread",
+    start_trace(tid, 0, thread,
                 {"golden": True, "run": run_id, "case": case_id, "role": role,
                  "message": (message or "")[:200], "tool_result_limit": _lim},
                 dir=case_dir(run_id), name=case_id,
