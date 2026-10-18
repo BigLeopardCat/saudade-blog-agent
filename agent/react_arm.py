@@ -922,10 +922,14 @@ def _llm() -> Any:
 
     `GOLDEN_ARM` 的两臂必须同解码，否则比的是解码参数而不是循环结构——20261004 那次
     "17× 成本 / 33% 撞上限"的假读数就是这么来的（离线 A/B 头注记着：裸 `get_llm()` 是
-    thinking=True + temp 0.7 + 8192 预算）。生产 planner 的三个值走 settings
+    thinking=True + temp 0.7 + 8192 预算）。生产 planner 的**四个**值走 settings
     （`.env` 里 `PLANNER_NATIVE_THINKING=false`），这里照读同一组，不另写常数。
+
+    ⚠️ **温度这一格 20261019 才补上**：此前这里硬写一个常数，而生产读的是
+    `settings.planner_temperature` ⇒ 上面那句"同一组解码参数"当时是**假的**，两臂比的
+    一直是解码而不是结构。四个旋钮一起锁在 `tests/test_react_decoding_parity.py`。
     """
-    return get_llm(temperature=0.2,
+    return get_llm(temperature=settings.planner_temperature,
                    max_tokens=settings.planner_native_max_tokens,
                    timeout=settings.planner_native_timeout,
                    enable_thinking=settings.planner_native_thinking)
