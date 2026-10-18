@@ -402,7 +402,10 @@ from agent.graph import _board_quote_fix, _ledger_pending_text  # noqa: E402
 # 刀 2（20261009）后 `_planner_decide` 拆成阶段函数、跨段量改从 ctx 上取
 # （`rounds` → `c.rounds`）⇒ 本文件的整文件文本锁先去掉那个前缀再看：
 # 判据文本与拆分之前**逐字相同**（前缀清单从 graph.py 的 AST 读，见 `_ctx_src`）。
-_GSRC = _ctx_src.graph_deprefixed()
+# 取值点跟着代码搬（20261019）：写参数落位与拒答那一族住进了
+# `agent/write_grounding.py` ⇒ 判据字面一个字没动，只把"读 graph.py 全文"
+# 换成"读这一族的全部文件"（`tests/_ctx_src.py::write_guard_src`）。
+_GSRC = _ctx_src.write_guard_deprefixed()
 check("接线：**四道**闸都吃 `ledger_src`，`planner_node` 一次算好往下传（漏传＝静默回旧行为）",
       "ledger_src" in inspect.signature(_name_arg_fix).parameters
       and "ledger_src" in inspect.signature(_board_quote_fix).parameters

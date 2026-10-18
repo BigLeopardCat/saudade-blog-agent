@@ -21,17 +21,18 @@
 （账号 / 额度 / 角色 / 禁言 / 通知）＋ 标签·分类·公告族（`_NAME_TARGET_TOOLS` 一带）。
 `_lexicon()` 把 `settings` 里主人自己配的别名表接进来，`_DEFAULT_LEXICON` 是出厂档。
 
-**搬家方式**：`agent/graph.py` 按**原名** re-export 这 50 个名字 ⇒ 本文件剩下的调用点
-（`_pre_noun_names` 等）与全仓 `from agent.graph import _bare_target_name`
-（`tests/test_target_grounding.py` 等 10 个套件）**一处都不用改**。判据侧一个字都没动：
-四条源码锁（`test_account_freeze` / `test_admin_write` / `test_provenance` /
-`test_target_grounding`）判的都是**调用点**，而调用点留在 graph.py
-⇒ 连 `tests/_ctx_src.py` 都不用动（第一刀要动，因为那一刀的判据读**定义**）。
+**搬家方式**：`agent/graph.py` 按**原名** re-export 这 50 个名字 ⇒ 全仓
+`from agent.graph import _bare_target_name`（`tests/test_target_grounding.py` 等 10 个套件）
+**一处都不用改**。判据侧一个字都没动：四条源码锁（`test_account_freeze` /
+`test_admin_write` / `test_provenance` / `test_target_grounding`）判的都是**调用点**，
+而调用点留在 graph.py ⇒ 连 `tests/_ctx_src.py` 都不用动（第一刀要动，因为那一刀的判据读**定义**）。
+（后两刀起 `_ctx_src` 还是动了：那两刀的判据读的是**被搬走那一族**的定义，见
+`write_guard_src()` 的头注。）
 
 ## 刻意**不**在这里的东西
-`_pre_noun_names`（在 `agent/graph.py`，紧跟本族之后）**留在原地**：它要 `_DEICTIC_WORDS`
-等定义在别处的表 ⇒ 它出边不为零，搬它就得级联。它从本模块取 `_PRE_NOUN_LEAD_RE` /
-`_PRE_NOUN_TAIL_RE` 两张正则。
+`_pre_noun_names`（20261019 起在 `agent/write_grounding.py`）**不在本模块**：它要
+`_DEICTIC_WORDS` 等定义在别处的表 ⇒ 它出边不为零，本刀单独搬不动它；写参数那一族
+整块切出时把它一并带走了。它从本模块取 `_PRE_NOUN_LEAD_RE` / `_PRE_NOUN_TAIL_RE` 两张正则。
 
 ⚠️ 本族带**中文集合与中文正则**（`_MOVE_MARKS` / `_RENAME_MARKS` / `_PRE_NOUN_LEAD_RE` /
 `_PRE_NOUN_TAIL_RE` 四条已登记，`category=open`）⇒ 搬它要**手工**把这四条登记条目的

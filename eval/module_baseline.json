@@ -4,8 +4,8 @@
     "top_defs": 37
   },
   "agent/graph.py": {
-    "lines": 13206,
-    "top_defs": 235
+    "lines": 11012,
+    "top_defs": 195
   },
   "agent/prompt_context.py": {
     "lines": 1712,
@@ -22,6 +22,10 @@
   "agent/tasks.py": {
     "lines": 1658,
     "top_defs": 44
+  },
+  "agent/write_grounding.py": {
+    "lines": 2338,
+    "top_defs": 40
   },
   "eval/admin_write_probe.py": {
     "lines": 2856,
@@ -48,7 +52,7 @@
     "top_defs": 56
   },
   "tests/test_admin_write.py": {
-    "lines": 2003,
+    "lines": 2008,
     "top_defs": 24
   },
   "tests/test_authz.py": {
@@ -80,19 +84,19 @@
     "top_defs": 6
   },
   "tests/test_tag_admin.py": {
-    "lines": 1606,
+    "lines": 1609,
     "top_defs": 16
   },
   "tests/test_todo_schedule.py": {
-    "lines": 2075,
-    "top_defs": 29
+    "lines": 2100,
+    "top_defs": 31
   },
   "tests/test_userdata.py": {
     "lines": 1238,
     "top_defs": 12
   },
   "tests/test_workflows.py": {
-    "lines": 5802,
+    "lines": 5809,
     "top_defs": 72
   },
   "tools/base.py": {
