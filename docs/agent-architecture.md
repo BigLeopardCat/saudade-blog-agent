@@ -72,35 +72,100 @@ flowchart TB
 ```
 本仓库（saudade-blog-agent）    # ★ Python Agent（独立 git 仓库，推送即 CI 评测门禁 + 部署；线上改动重启 systemd 服务生效）
 ├── server.py                  # FastAPI 入口：/chat、/chat/stream、/health；trace_id 中间件；流式编排
-├── agent/
-│   ├── graph.py               # ★ 手写 LangGraph 图：State/契约/声称闸 + planner(唯一决策) ⇄ execute(确定性执行) → (reflector) → model(零工具叙述) → gate(确定性检查) + 条件边路由
-│   ├── decisions.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取/特效切换/导航/屏幕显示）+ 动作意图扫描（intent_hints 原料）+ 检索候选裁决（标题相关性）+ 终局计划（轮次上限/复盘终局/拦截收尾）——被 graph.py 节点调用，反向外移函数按原名 re-export
-│   ├── context.py             # 上下文组装（纯函数叶子层）：消息文本提取（多模态兼容）/page_ctx/页面操作指南（GUESTBOOK_GUIDE、SITE_GUIDE）/工具帧摘要/checker 回执摘要
-│   ├── plan_codec.py          # ★ 计划契约的编解码（20261017 从 graph.py 切出，那边按原名 re-export）：plan_encode 写端（唯一入口 plan_state，一次出两态）+ plan_view 读端（读对象那一态，四个生产读点的唯一入口）+ parse_plan **文本读器**（按 `KEY[:=]` 搜索，不依赖行序与分隔符；生产链路零调用点，只服务旧 trace 与夹具）；TOOLS 行的分隔符不许长在值里
-│   ├── tool_specs.py          # ★ 执行清单（TOOLS 行）条目的解析与去重裁剪（20261017 第二刀，同样按原名 re-export）：_tool_args 解析 + _spec_signature 指纹 + _search_retry_kind/_already_done_writes 判重 + _trim_done_reads/_trim_noop_specs/_plan_trims_to_empty 裁剪。**出边为零**（不 import graph）才搬得动
-│   ├── repeat_guard.py        # ★ 逐字复读判据（20261017 第三刀，gate 1b）：_repeat_reason 两档判据（距离 1 走"最长连续块"、距离 ≥2 只接"整体重合率 + 最长块"）+ _recent_ai_replies 比对面 + _REDO_REQUEST_RE 放行档。出边为零（只用 difflib/re/_msg_text），调用点留在 graph.py
-│   ├── agent.py               # create_agent：手写图入口（build_graph，planner ⇄ execute → model → gate）
-│   ├── checkpoint.py          # build_checkpointer：checkpointer 的接线点（空 DSN 恒返回 None，见 §4.6）
-│   ├── principal.py           # ★ 调用者身份（20260920）：Principal(uid, role, source)——身份的唯一构造点，身份与权限地基（docs/identity-and-permissions.md）
-│   ├── authz.py               # ★ 权限模型（20260920）：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
-│   ├── workflow_defs/            # ★ 技能注册表：47 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）+ NAV_MAP 导航映射（业务唯一数据源）
-│   ├── adminops.py            # ★ 后台写操作域（20260921-22）：标签/分类索引与**名字→id 解析**（find_tag/find_category）+ 移动/降级校验（move_verdict）+ 确认卡文本 + 色名映射；能算的不交给 LLM
-│   ├── refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用（20260919）：递归遍历 + 五个错误码——解不出的引用必须响亮（20260922 改递归）
-│   ├── confirm.py             # ★ 待确认令牌（20260921）：无状态 HMAC（TTL 600s，2 worker 安全）；不落库、不落用户消息
-│   ├── entities.py            # ★ 执行回执实体摘要（20260920）：压成一行供跨轮取值；digest 是 Python 写 / Rust 读的跨语言契约
-│   ├── planner_llm.py         # ★ 技能表 ↔ API tools/tool_calls 的接线层（20260927 起；20261004 起**唯一**接口层，20261017 前名 native_plan.py）：planner 输出就是 API 的 tools/tool_calls，格式由服务端与 schema 保证；零调用不再等于闲聊（先纠偏一次）
-│   ├── tasks.py               # ★ 会话级任务状态（20260927 批 D）：未完成的意图跨轮不丢（agent_task 表 + 模型登记 + 系统确定性结算）
-│   ├── action_text.py         # ★ 一次执行 → 一行中文动作的跨语言渲染唯一实现（过程行 / 执行台账行两档）
-│   ├── factblock.py           # ★ 动作族分族（命令族+写族，量化口径与 narrator_facts_share 同源）＋历史事实行剥离；**系统代印 20261005 起停用**（BLOCK_FAMILIES 空集）
-│   ├── stickers.py            # 贴纸残记号的确定性修补（20261002）：把只写了开头冒号的 `:头疼` 补回 `:名字:`
+├── agent/                     # ★ 对话 Agent 本体（65 个模块，前缀成族，不建子包；**完整地图就是这一节**）
+│   │                          #   族标题行不含 .py —— `tests/test_module_index.py` 按"树里每个文件一行"判双向一致
+│   ├── graph.py               # ★ 图本体：手写 LangGraph——State/契约/声称闸 + planner(唯一决策) ⇄ execute(确定性执行) → (reflector) → model(零工具叙述) → gate(确定性检查) + 条件边路由
+│   ├── agent.py               # create_agent：手写图入口（build_graph）
+│   │
+│   ├── 【计划契约族】
+│   ├── plan_codec.py          # 计划文本契约的编解码（20261017 从 graph.py 切出，那边按原名 re-export）：plan_encode 写端（唯一入口 plan_state，一次出两态）+ plan_view 读端 + parse_plan 文本读器（按 KEY[:=] 搜索，不依赖行序与分隔符）
+│   ├── plan_status.py         # 计划状态闭集（plan["status"]）：系统确定性知道的处境，不是模型自评
+│   │
+│   ├── 【执行清单族】
+│   ├── tool_specs.py          # ★ TOOLS 行条目的解析与去重裁剪（20261017 第二刀，按原名 re-export）：_tool_args / _spec_signature / _search_retry_kind / _trim_done_reads 一族
+│   │
+│   ├── 【技能注册族】（47 个技能静态定义的实现面）
+│   ├── workflow_model.py      # 数据模型层：Workflow / ParamSpec 两个 dataclass 与共用原语
+│   ├── workflow_defs/            # ★ 技能注册表：47 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）
+│   │   ├── __init__.py        #   聚合层：把下面八个域分片按序拼成 WORKFLOWS（**顺序是契约**）
+│   │   ├── nav.py             #   导航映射表 NAV_MAP 与口语模糊归一（**业务唯一数据源**；页面别名→真实路径）
+│   │   ├── navigation.py      #   导航 / 特效 / 夜间 / 设备五条技能（原序列 1–5，顺序是契约）
+│   │   ├── public_read.py     #   公开读两条：content_query 与 read_article（后者是系统专用快道，planner 不可见）
+│   │   ├── reports.py         #   报表与看板七条只读技能（原序列 8–14，roles=ADMIN_ROLES）
+│   │   ├── content_write.py   #   管理助手内容写面：后台文章清单（读）+ 十三件写（原序列 15–28）
+│   │   ├── own_todo.py        #   主人**自己**的数据八件（原序列 29–36；分界是"动谁的东西"不是"要不要确认"）
+│   │   ├── account_write.py   #   后台账号、配额与变更集十件（原序列 37–46，只按账号名指认）
+│   │   └── capability.py      #   能力否定的两张词表 + 两条共用话术尾巴（只被注册表字面量引用）
+│   ├── workflow_params.py     # 技能参数的 schema 层：生成侧规格 + 事前校验 + 实参绑定判据
+│   ├── workflow_plan.py       # 实例化层：Workflow + 参数 → 结构化计划（对象那一态）；instantiate_plan 是公开入口
+│   ├── workflow_expand.py     # 通用展开层：Workflow + 参数 → （TOOLS 行清单, 注记）
+│   ├── workflow_expand_write.py # 写技能的展开层（按名字写数据的那一族）
+│   ├── workflow_tools.py      # planner 可点名的工具清单（三条通道，同一个角色口径）
+│   ├── workflow_menu.py       # planner 菜单的渲染层：注册表 / 参数规格 / 工具清单 → 提示词里那几段文本
+│   │
+│   ├── 【后台写族】（20260921-22；批 3a 从 adminops.py 按域拆出，原文逐字节保留）
+│   ├── adminops_tags.py       # 标签、分类、文章状态与后台文章列表的确定性层（配色表 + 名字→id 解析 + move_verdict）
+│   ├── adminops_account.py    # 账号冻结/解冻、禁言/解禁、后台账号名录与站内通知
+│   ├── adminops_board.py      # 站内公告与河灯留言人工复核的卡面与回执
+│   ├── adminops_confirm.py    # 写操作确认卡：问句、卡面与回执行（这一族文本会直接进用户视野）
+│   ├── adminops_noop.py       # 「状态已达成」判据：已经就是那个样子就别弹卡、别执行（fail-open）
+│   ├── adminops_quota.py      # 对话额度重置申请的卡面与回执
+│   ├── adminops_target.py     # 写操作的目标点名解析 + "没读到过就不许写"的目标校验
+│   ├── adminops_todo.py       # 后台首页待办 / 日程的确定性层（日期在这一层翻）
+│   │
+│   ├── 【判据族】（gate 的确定性判据，多为出边为零的纯函数）
+│   ├── repeat_guard.py        # ★ 逐字复读判据（gate 1b，20261017 第三刀）：_repeat_reason 两档 + _recent_ai_replies 比对面 + _REDO_REQUEST_RE 放行档
+│   ├── absence.py             # gate 洞④：站内"没有"结论无依据（八张表 + 纯函数 _absence_span）
+│   ├── provenance.py          # 写参数的**出处**：逐字引文核对 + 站内实体解析（20261014 换表征）
+│   ├── block_reasons.py       # 受阻原因码的**类型表**：把 checker 手里那个字符串变成可判读的类型
+│   ├── name_grounding.py      # 名字通道的目标名词表：主人引号里那一段才是目标名（20261017 第四刀）
+│   ├── factblock.py           # 动作族轮次的"系统事实块" ＋ 历史事实行剥离（系统代印 20261005 起停用）
+│   ├── textnorm.py            # 文本归一（20261014 从 graph.py 搬出，逐字同源）
+│   ├── stickers.py            # 贴纸残记号的确定性修补：把只写了开头冒号的 `:头疼` 补回 `:名字:`
+│   ├── action_text.py         # ★ 一次执行 → 一行中文动作的**跨语言渲染唯一实现**（过程行 / 执行台账行两档）
+│   ├── entities.py            # ★ 执行回执实体摘要（digest 是 Python 写 / Rust 读的跨语言契约）
+│   │
+│   ├── 【上下文与提示词】
+│   ├── context.py             # 上下文组装（纯函数叶子层，零 LLM / 零 LangGraph）：注入给 planner/model 的事实文本——消息文本提取（多模态兼容）/ page_ctx / 页面操作指南 / 工具帧摘要 / checker 回执摘要
+│   ├── prompts.py             # ★ 全部模型可见正文的唯一落点：人设 + 叙述纪律 + planner / reflector 模板 + 输出契约（渲染点与全部逻辑仍在 graph.py）
+│   ├── planner_llm.py         # ★ 技能表 ↔ API tools/tool_calls 的接线层（20261004 起**唯一**接口层；20261017 前名 native_plan.py）
+│   ├── decisions.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取 / 特效切换 / 导航 / 屏幕显示）+ 动作意图扫描 + 检索候选裁决 + 终局计划
+│   ├── refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用：把上一步的真实返回值绑进下一步的参数（五个错误码，解不出必须响亮）
+│   │
+│   ├── 【记忆与会话】
+│   ├── tasks.py               # ★ 会话级任务状态：未完成的意图跨轮不丢（agent_task 表 + 模型登记 + 系统确定性结算）
+│   ├── idem.py                # 写操作幂等账（批 2）：给"重放"这道保险丝
+│   ├── idem_pg.py             # 幂等账的 **PG 后端**（psycopg 只住这边 —— 依赖面锁，见 idem.py 里那句懒 import）
 │   ├── llm_usage.py           # 一次 LLM 调用的 token 用量提取（trace 用量字段的唯一来源，喂 token_cost_report）
-│   ├── moderator.py           # 侧任务·审核：不可信输入围栏 + 输出白名单 + fail-open
-│   ├── summarizer.py          # 侧任务·摘要：fail-empty
-│   ├── hostinfo.py            # 本机运维读数（只读 /proc、systemctl、日志）——get_server_status / get_service_health 的数据源
-│   ├── reports.py             # 四张后台报表的纯函数出口（数字在工具侧算好，不让 LLM 数数）
-│   ├── prompts.py             # ★ 全部模型可见正文的唯一落点（20261014 起：猫猫女仆人设 BLOG_ASSISTANT_PROMPT +
-│   │                          #   叙述纪律 + planner / reflector 模板 + 输出契约）；渲染点与全部逻辑仍在 graph.py
-│   └── __init__.py
+│   ├── hostinfo.py            # 本机运维读数（只读 /proc、systemctl、日志；纯函数为主）——服务器健康度不需要新接口
+│   │
+│   ├── 【身份与写安全】
+│   ├── principal.py           # ★ 调用者身份：Principal(uid, role, source)——身份的唯一构造点（docs/identity-and-permissions.md）
+│   ├── authz.py               # ★ 权限模型：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
+│   ├── confirm.py             # ★ 写操作确认令牌：无状态 HMAC（TTL 600s，多 worker 安全）；不落库、不落用户消息
+│   ├── probe.py               # 运行时可观测判定的**纯逻辑**：/version 构建身份、/ready 就绪、/health 那格 checkpoint 后端
+│   │
+│   ├── 【侧任务】
+│   ├── moderator.py           # 侧任务·留言审核：不可信输入围栏 + 输出白名单 + **fail-open**
+│   ├── summarizer.py          # 侧任务·摘要：**fail-empty**（与上一行取向相反，刻意不并成一个模块）
+│   ├── reports.py             # 管理助手输出渲染：报表与后台留言名册的纯函数出口（数字在工具侧算好，不让 LLM 数数）
+│   │
+│   ├── 【实验臂族】（只被 eval 与 `GOLDEN_ARM` 动态加载，生产链路不 import ⇒ **模块名是协议值，不许改名**）
+│   ├── frames.py              # 帧契约：第二条臂与生产（graph.py / server.py）之间的唯一事实源
+│   ├── react_arm.py           # golden 第二条臂（GOLDEN_ARM=react）
+│   ├── react_line.py          # ReAct 试验线：把现网攒下的收敛判据 / 工具级回执装到第二条臂上
+│   ├── checkpoint.py          # checkpointer 的**接线点**与级联清理（空 DSN 恒返回 None，见 §4.6）
+│   ├── checkpoint_arm.py      # golden 第三条臂（GOLDEN_ARM=checkpoint）
+│   ├── checkpoint_delta_arm.py # golden 第四条臂（GOLDEN_ARM=checkpoint_delta，臂 C）
+│   ├── checkpoint_random_arm.py # **反控 D**（GOLDEN_ARM=checkpoint_random）：同一个 saver，线程照旧每请求随机
+│   ├── _ckpt_probe.py         # 实验分支专用读数钩子：把"图看见的上下文有多大"落成一行 JSONL（不是功能）
+│   └── __init__.py            # 包门面：只做 re-export（逻辑不进这里）
+│
+│   ⚠️ **合并被否的六条**（逐条查过，别再问一遍）：`checkpoint_delta_arm` + `checkpoint_random_arm` 不能并
+│      （臂名是 `GOLDEN_ARM` 协议值，并了要么改协议值、要么留转发壳）；`adminops_board`(88) 并进
+│      `adminops_tags`(763) 会 851 行破 800 预算；`agent.py` 不并进 `__init__.py`（包门面只做 re-export）；
+│      `moderator` + `summarizer` 不并（两者失败取向相反）；`stickers` 不并进 `textnorm`
+│      （`tests/test_wordlist_gate.py` ⑩ 要求那边零词表条目）；`idem_pg` 不并进 `idem`（依赖面锁：psycopg 只住那边）。
 ├── rag/                       # ★ RAG 检索管线（20260830）：词法 2/3-gram BM25 内存倒排 + 10 分钟懒刷新，
 │   │                          #   语料=线上可见文章（20260901 净化：说说/留言/公告移出检索池，走数据工具直查）；
 │   │                          #   检索只定位（候选 type/id/标题/分），解读走 get_article_detail 全文
@@ -108,36 +173,46 @@ flowchart TB
 │   │                          #   / `section=` 按节取回，三处共用一套节边界。**纯函数（只 import re）**——
 │   │                          #   住这里是为了让下面两层的消费者导入它时不必拉起 langgraph
 │   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
-├── tools/
+├── tools/                     # ★ 工具层：15 个域模块 + base 的共享地基（20261018 批 3 收尾后 base 停在 1255 行 / 21 个定义）
 │   ├── base.py                # 工具注册表 `_TOOL_REGISTRY`——全仓 67 个 @tool 工具的唯一入口（**20261018 起本文件里一个 @tool 都没有了**：工具本体全部按域拆进下面几个模块，按原名 re-export）+ 共享 HTTP 通道（`_get`/`_client`/`_admin_*`…）+ 跨族共享原语（`_as_article_id`/`_near_miss_names`）
-│   ├── result.py              # 工具结果的形状：`ToolResult`、信封构造器、列表帧塑形件（20261017 拆出）
-│   ├── device.py              # IoT 设备族：OLED 屏显读/写（20261017 拆出）
-│   ├── own_data.py            # 用户自己那一份数据：收藏 / 未读 / 站内通知 / 站内信（20261018 拆出）
-│   ├── notes.py               # 公开读族：文章 / 分类标签 / 公告 / 留言板 / 说说 / 站点信息（20261018 拆出）
-│   ├── site.py                # 站点与页面族：功能地图 / 导航表与路径校验 / 三条页面命令（20261018 拆出）
-│   ├── admin_read.py          # 管理助手报表族：服务器/健康/审核状况/后台留言名册/用户与文章报表（20261018 拆出）
-│   ├── announcements.py       # 站内公告族：建/改/删公告（20261018 拆出）
-│   ├── board_moderation.py    # 河灯留言人工复核族：驳回/通过、删除留言（20261018 拆出）
-│   ├── dashboard_todos.py     # 后台首页待办/日程族：读整份 / 追加 / 翻完成 / 改排期日（20261018 拆出）
-│   ├── account_admin.py       # 账号管理族：冻结/解冻/禁言/解禁/变更身份/发通知 + 后台名录（20261018 拆出）
+│   ├── result.py              # 工具结果的**形状**：`ToolResult`、信封构造器、列表帧塑形件（20261017 拆出）
+│   │
+│   ├── 【公开读族】
+│   ├── notes.py               # 文章 / 分类标签 / 公告 / 留言板 / 说说 / 站点信息（20261018 拆出）
+│   ├── site.py                # 功能地图 / 导航表与路径校验 / 三条页面命令（20261018 拆出；跨三个 scope ⇒ 粘合剂是主题不是权限）
+│   ├── device.py              # IoT 设备族：OLED 屏显读 / 写（20261017 拆出）
+│   │
+│   ├── 【用户自己那一份数据】
+│   ├── own_data.py            # 收藏 / 未读 / 站内通知 / 站内信（20261018 拆出；一个 scope 分层，两半）
+│   │
+│   ├── 【管理助手·读】
+│   ├── admin_read.py          # 服务器 / 健康 / 审核状况 / 后台留言名册 / 用户与文章报表（20261018 拆出，scope 全是 admin.console）
+│   │
+│   ├── 【管理助手·写】
+│   ├── announcements.py       # 建 / 改 / 删站内公告（20261018 拆出，scope 全是 write.console）
+│   ├── board_moderation.py    # 河灯留言人工复核族：驳回 / 通过、删除留言（20261018 拆出）
+│   ├── dashboard_todos.py     # 后台首页待办 / 日程族：读整份 / 追加 / 翻完成 / 改排期日（20261018 拆出）
+│   ├── account_admin.py       # 账号管理族：冻结 / 解冻 / 禁言 / 解禁 / 变更身份 / 发通知 + 后台名录（20261018 拆出）
 │   ├── quota_admin.py         # 对话额度族：读申请队列 / 批准 / 驳回 / 按账号名恢复满额（20261018 拆出）
 │   ├── tag_admin.py           # 标签族：建 / 改 / 删标签 + 两级标签字典与按名字解析（20261018 拆出）
 │   ├── category_admin.py      # 文章分类族：建 / 改 / 删分类 + 分类字典与按名字解析（20261018 拆出）
-│   ├── note_admin.py          # 文章族：后台清单 / 改状态 / 打标签 + 两个读口径（`_read_note`/`_note_index`）（20261018 拆出）
-│   └── __init__.py
-│      ⚠️ 拆出的模块按**原名**在 `base.py` re-export ⇒ 全仓 `from tools.base import …` 一处不改；
-│         但**被套件打桩的模块全局**（`_client` 等 11 个）在新模块里一律写成 `_base.<名>(…)`
-│         属性查找——函数对象取的是**自己所在模块**的 `__dict__`，按名 import 会让桩静默失效。
+│   ├── note_admin.py          # 文章族：后台清单 / 改状态 / 打标签 + 两个读口径（20261018 拆出）
+│   └── __init__.py            # 包门面
+│
+│   ⚠️ 拆出的模块按**原名**在 `base.py` re-export ⇒ 全仓 `from tools.base import …` 一处不改；
+│      但**被套件打桩的模块全局**（`_client` 等 11 个）在新模块里一律写成 `_base.<名>(…)`
+│      属性查找——函数对象取的是**自己所在模块**的 `__dict__`，按名 import 会让桩静默失效。
 ├── models/
 │   ├── llm.py                 # get_llm 工厂：provider 三选一（qwen/deepseek/openai）；enable_thinking 走 extra_body
-│   └── __init__.py
+│   └── __init__.py            # 包门面
 ├── config/
 │   └── settings.py            # pydantic-settings：全部可配项（LLM/超时/JWT/device-service/trace_dir）
 ├── utils/
 │   ├── logging.py             # trace_id contextvar + 日志（tid= 前缀，run_in_executor 靠 copy_context 传播）
 │   ├── trace.py               # 对话 trace 落盘（logs/agent/traces/，节点事件 + 分段耗时 + 退出原因）
-│   ├── helpers.py             # 通用工具函数
-│   └── tts.py                 # edge-tts 语音合成（预留，TTS 未启用）
+│   ├── clock.py               # 本地钟面的**唯一**格式器（20261018 审计 A2）：get_current_time 与 server 的 current_time= 两处逐字同形（判据在 test_truth_source_parity）
+│   ├── tts.py                 # edge-tts 语音合成（预留，TTS 未启用）
+│   └── __init__.py            # 包门面
 ├── eval/                      # 评测：eval/golden/basic.jsonl（192 条）+ run_golden.py（L2 真实 LLM 端到端）
 │   │                          #       + golden_case_runner.py / golden_full_run.py（进程隔离跑法）
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
