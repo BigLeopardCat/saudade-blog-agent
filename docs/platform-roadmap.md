@@ -304,6 +304,20 @@
 因为钩子必须落在**事务之外**（HTTP 不能进 `txn`）。老锚点在新形状下恒判「两臂都没接」，
 **一条恒绿的判据比没有更坏**。
 
+**「丢弃那一轮」也要同步到图自己的 state**（20261019 批 E）：`agent/checkpoint.py::drop_last_user_turn`
++ `POST /checkpoint/{conversation_id}/drop_turn`，父仓 `chat.rs::discard_handler` 删完
+`chat_history` 之后调它。**为什么必须有**：20261018 起 agent 的上下文**由图自持**（历史注入
+已关）⇒ `chat_history` 不再是上下文来源，「丢弃」这个动作对 agent **不再生效**——主人点了
+"停止生成"，agent 下一轮照样记得那句被丢掉的话。三条纪律：① 摘的是**那条 user 及其之后的
+一切**（父仓删的是 `id >= u.id`；只摘 user 会把半截 AI 留在 state 里，下一轮 narrator 会把它
+当"我方已经说过的话"）；② `text`（父仓带上刚删那行的 content）**对不上就不动手**——摘错的
+代价不可逆；③ 返回值是**读回来确认**，不是"没抛异常"。
+⚠️ **如实的残余（实测）**：被打断在节点中途的线程，`get_state().next` **非空**，而
+`aupdate_state` 保留它（`as_node=<被打断那个节点>` 只是把 pending 往前挪一格）。这不是本函数
+引入的——中断那一刻就已经非空；今天生产每轮传 dict 输入 ⇒ langgraph 丢弃未完成任务、从
+START 重启 ⇒ 下一轮走完自己回到空。**潜伏面** = 任何 `stream(None)` 的续跑会去跑那个 pending
+节点。判据 `tests/test_checkpoint_drop_turn.py` ⑤ 把这条现状记下来，没有假装它是干净的。
+
 **判据**（四份，全绿）：
 - `tests/test_checkpoint_adoption.py`：四处形态**一致即绿**。批 6 时是 0/4（全未接），
   本批起 4/4（全已接）。**"能红"由反控证**：四条反控各拨一处全部翻红，外加 ④b

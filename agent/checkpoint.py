@@ -447,3 +447,114 @@ def delete_thread(saver, conversation_id: object) -> bool:
         return False
     saver.delete_thread(tid)
     return saver.get_tuple({"configurable": {"thread_id": tid}}) is None
+
+
+# ── 「丢弃那一轮」要同步到图自己的 state（批 E）──────────────────────────
+# 现状（20261019 之前）：Rust 从 `chat_history` 删掉那一轮的 user 消息与残缺回复，而
+# **图自持的 state 里那条还在**——历史注入已关（`_graph_holds_context()`），DB 不再是
+# 上下文来源 ⇒ 「丢弃」这个动作**对 agent 不再生效**：主人点了"停止生成"，agent 下一轮
+# 照样记得那句被丢掉的话。本组函数是那一半。
+_CUR_Q = "[当前问题]: "
+
+
+def _user_text_of(msg) -> str:
+    """从 state 里那条 user 消息取出**主人原话**（剥掉当前问题锚点）。
+
+    锚点见 `server._build_messages`：当前那条一律是 `[当前问题]: <原话>`（带图轮是
+    `[{image_url…}, {type:text, text:"[当前问题]: <原话>"}]` 的块数组）。**历史那几条没有
+    这个前缀**，而本函数只用在"最后一条 user"上，所以剥前缀这件事是安全的。
+    """
+    content = getattr(msg, "content", "")
+    if isinstance(content, list):
+        content = next((b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"), "")
+    if not isinstance(content, str):
+        content = str(content)
+    return content[len(_CUR_Q):] if content.startswith(_CUR_Q) else content
+
+
+def _same_turn(state_text: str, given: str) -> bool:
+    """state 里那句话是不是 `given` 指的那一轮。
+
+    `given` 由父仓给，取的是它刚从 `chat_history` 删掉那行的 **DB content**；带图轮那边
+    存的是 `原文\\n[图片…]`（`prepare_chat` 入库时拼的）⇒ 只比"是不是同一条"，方向与
+    父仓 `discard_handler` 的 `strip_prefix` 一致（那边剥的也是这个后缀）。
+
+    **对不上就不动手**：宁可留着（保留期会清），也不要摘错一条——摘错是**删掉主人还想
+    留着的话**，那是不可逆的。
+    """
+    if state_text == given:
+        return True
+    if not state_text or not given.startswith(state_text):
+        return False
+    rest = given[len(state_text):]
+    return rest == "" or rest.startswith("\n[图片")
+
+
+async def drop_last_user_turn(agent, conversation_id: object, text: str = "") -> dict:
+    """把该会话 state 里**最后一条 user 消息及其之后的一切**摘掉（**丢弃那一轮**）。
+
+    返回 `{"dropped": bool, "why": str}`——`dropped` 恒是**读回来确认**的结果，不是
+    "没抛异常"（同 `delete_thread` 那条纪律：一个恒不生效的摘除与真摘除**长得一模一样**）。
+    `why` 点名是哪一条：`no_saver` / `no_graph_state` / `bad_conversation_id` /
+    `no_user_message` / `no_text` / `mismatch` / `still_present`。
+
+    **摘的是"那条 user 及其之后"**（`msgs[idx:]`）而不是只摘那一条：父仓删的是
+    `id >= u.id`，也就是 user 消息 + 残缺回复；只摘 user 会把那半截 AI 留在 state 里，
+    下一轮 narrator 会把它当"我方已经说过的话"（同 `graph._fallback_result` 里
+    `RemoveMessage` 记的那条克隆链）。
+
+    ⚠️ **如实的残余（实测，`/home/ubuntu/exp/ckpt_drop_turn/`）**：被打断在节点中途的线程，
+    `get_state().next` **非空**（实测 `('b',)`），而 `aupdate_state` **保留**它（不带
+    `as_node` 时；带 `as_node=<被打断那个节点>` 也只是把 pending 往前挪一格——那个节点的
+    后继就是新的 pending）。**这不是本函数引入的**：中断那一刻它就已经非空了。今天生产
+    每轮传 dict 输入 ⇒ langgraph 会**丢弃**未完成任务、从 START 重启
+    （`langgraph/pregel/_loop.py:977-979`），下一轮走完 `next` 自己回到空。**潜伏面**：
+    任何 `stream(None)` 的续跑会去跑那个 pending 节点。判据
+    `tests/test_checkpoint_drop_turn.py` 把这条现状**记下来**，没有假装它是干净的。
+
+    `text` 为空 ⇒ **不动手**（`no_text`）：没有原文就没法确认"最后那条 user 是不是被丢弃
+    的那一轮"，而摘错的代价不可逆。父仓手里有那一行的 content，一律会带上。
+    """
+    saver = live_saver(agent)
+    if saver is None:
+        return {"dropped": False, "why": "no_saver"}
+    tid = conversation_thread(conversation_id)
+    if tid is None:
+        return {"dropped": False, "why": "bad_conversation_id"}
+    getter = getattr(agent, "aget_state", None)
+    setter = getattr(agent, "aupdate_state", None)
+    if getter is None or setter is None:
+        return {"dropped": False, "why": "no_graph_state"}
+
+    from langchain_core.messages import HumanMessage, RemoveMessage
+
+    cfg = {"configurable": {"thread_id": tid}}
+    snap = await getter(cfg)
+    msgs = list((getattr(snap, "values", None) or {}).get("messages") or [])
+    idx = next((i for i in range(len(msgs) - 1, -1, -1)
+                if isinstance(msgs[i], HumanMessage)), None)
+    if idx is None:
+        return {"dropped": False, "why": "no_user_message"}
+    target = msgs[idx]
+    if not text.strip():
+        return {"dropped": False, "why": "no_text"}
+    if not _same_turn(_user_text_of(target), text):
+        return {"dropped": False, "why": "mismatch"}
+    removes = [RemoveMessage(id=m.id) for m in msgs[idx:] if getattr(m, "id", None)]
+    if not removes:
+        return {"dropped": False, "why": "still_present"}
+    # **不传 `as_node`**：`aupdate_state` 会从 `versions_seen` 推"最后是谁写的"，
+    # 生产形状的图（planner/execute/model/gate）推得出来（实测）。推不出来时它抛
+    # `InvalidUpdateError`（"Ambiguous update"）——**如实收成一支回执**，别让它变成父仓
+    # discard 路上的一个 500（那边只看 `dropped`，`why` 进日志）。
+    try:
+        await setter(cfg, {"messages": removes})
+    except Exception as e:                                  # noqa: BLE001
+        logger.warning("[checkpoint] 丢弃那一轮写不进去（%s: %s）conv=%s",
+                       type(e).__name__, e, tid)
+        return {"dropped": False, "why": "ambiguous_update"}
+    after = await getter(cfg)
+    left = list((getattr(after, "values", None) or {}).get("messages") or [])
+    gone = not any(getattr(m, "id", None) == getattr(target, "id", None) for m in left)
+    return {"dropped": gone, "why": "" if gone else "still_present"}
