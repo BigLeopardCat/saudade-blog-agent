@@ -443,6 +443,7 @@ saver 挂上之后历史注入被闸门关掉，而**没有任何"播种"路径*
 | 第三张错误码表 | 已有 BLOCK 原因码闭集，再叠一张只多一份要同步的东西 | 永不 |
 | 自己装 SIGTERM handler 做「关停排空」 | uvicorn **已经**有优雅停机（SIGTERM 后在途请求自然收尾），自己再装一个就是**顶掉它**、把这件事重实现一遍；而真正的缝在**跨仓**：父仓 unit 的 `TimeoutStopSec=120` **小于**本仓 `STREAM_TOTAL_TIMEOUT=300` ⇒ 走到第 120 秒还在跑的流会被 SIGKILL，那时进程已经没了、`end_reason` **写不出来**（这一条不是本仓能补的） | 出现一次「部署重启后用户看到半截回复，而 `logs/agent/agent.log` 里没有对应的 `[stream] end reason=` 行」⇒ 那时把父仓 unit 的 `TimeoutStopSec` 抬到 >300，**不要**在本仓加 handler |
 | OTel / 任务队列 / 缓存层 / 向量库 / 管理 UI | 超出本仓形状 | 永不 |
+| **幂等账的键改「跨重启稳定」**（或让生产走续跑路径） | 20261019 真机读数：账**在生产那条路上恒不命中**（同一件写执行 2 次、`checkpoint_ns` 逐字变了）——它只在 `stream(None)` 续跑路径上有效，而生产每轮传 dict 输入 ⇒ 从 START 重启。两条候选各有代价：改键会**吞掉合法的重复**（「再显示一次」），让生产续跑则要先能区分「崩溃」与「取消」（两者留下的形状今天一样）。口径与读数见 `docs/adr/adr-0012-write-idempotency-ledger.md` 的《口径更正（20261019）》，读数在 `eval/experiments/checkpoint_probe.py --crash-resume --guard --prod-shape` | 出现一次「写真的做了两遍」，或**要给某件不可逆的写开直通** |
 
 ---
 
