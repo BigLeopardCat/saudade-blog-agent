@@ -567,6 +567,39 @@
   就是那句"两份都要读、`_admin_todo_post` 的定义留在 base"的说明；不写它，下一个人会把
   取值点"顺手统一"回单文件。
 
+- **`tools/base.py` 拆出第九块：对话额度的申请审核那一族（批 3）——对外行为零变更**：
+  2416 行 / 45 个模块级定义 → **2061 行 / 36**；**连续的 387 行、12 个模块级名字**
+  （三张拒绝话术表 + 三个帮手 + 四件工具：读申请队列 / 批准 / 驳回 / 按账号名恢复满额）
+  搬进 `tools/quota_admin.py`（437 行 / 9 个顶层函数），scope 全是 `admin.console` /
+  `write.console`。选刀依据：它自己就是完整闭环（读申请队列 → 按账号名或 uid 解析唯一目标
+  → 代管理员恢复满额 → 读回复核），而"两个入口都是名字通道、只读那件要标出哪几件 agent
+  办不了、拒绝的形态是后端的政策"三条事实都只属于这一族。
+  **67 个工具的名单与顺序、12 个名字的 AST 逐字相同**（逐函数对过 AST），
+  **6 个 docstring 的值一个都没变**；三处折行全是普通语句或相邻字面量拼接（求值不变）。
+  ⚠️ 八个共享帮手全部留在 base、新模块里走 `_base.<名>(...)`：`_user_directory`（族内
+  3 处、套件打桩 24 处）、`_admin_get`（2 处、50 处）、`_quota_pending_index`（2 处、2 处）、
+  `_find_user_by_id`（1 处）、`_find_named_user`（1 处）、`_device_get_user_id`（1 处、2 处）、
+  `_sign_local_jwt`（1 处、2 处）、`_client`（1 处、29 处）。**正控**=`tests/test_chat_quota.py`
+  用 `patch(_user_directory=…, _quota_pending_index=…)` 喂桩、搬到新模块的四件工具确实
+  走到桩上（那条套件本来就红过一次——见第八块那条"打桩形状记漏"的教训）。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 49→38、
+  `tools/quota_admin.py` 11，登记表里 `_QUOTA_POLICY_REFUSALS` 那条按文本改 `id`/`file`、
+  `category`/`why` 一字不动）；类型棘轮 `190 → 190`（`tools/base.py` 5→2、
+  `tools/quota_admin.py` 0→3、`files_checked` 94→95）；ruff `790 → 789`（见下）。
+  模块台账按文本外科改数（2416/45 → 2061/36）。
+  ⚠️⚠️ **顺带修掉一笔我自己两刀前埋下的 lint 债**：第七块（待办族）把
+  `from tools.dashboard_todos import …` 插在 `from tools.own_data import …` 后面时，两段
+  之间只隔注释、ruff 把它们当成**同一段 import** ⇒ 那一整片 re-export 区（五段）从此
+  **未按模块名排序**，`I001` 当场就该红。当时我把 lint 台账按实测值从 793 收到 790，
+  **等于用"搬走省下来的额度"付掉了自己新引入的那一条**——棘轮只判总数，这一条就这么
+  静默进去了（正是 `docs/lint-baseline.md` 纪律 #1「新增/修改的文件必须 `ruff check` 零
+  error」想防的事；我那次只看了 `Found N errors` 的尾行，没逐条看）。本刀把它修好：
+  五段按模块名重排（`account_admin` < `dashboard_todos` < `notes` < `own_data` <
+  `quota_admin`），**注释块跟着自己那一段走**（⚠️ 直接跑 `ruff --fix` 会把 import 挪走、
+  把注释留在原地——那比不排序更坏，所以是手工搬的整块）。
+  ⇒ 这一笔让 `tools/base.py` 的 ruff 计数从 15 掉到 **14**（`790 → 789`）。
+  教训写进 [[saudade-agent-module-split-discipline]]：**搬完必须逐条看 ruff 输出，不能只看总数**。
+
 ## 20261017
 
 - **计划只有一个读法了：对象那一态是唯一事实源，渲染文本退成只给人看**——此前计划的
