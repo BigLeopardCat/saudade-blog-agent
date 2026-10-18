@@ -222,7 +222,7 @@ _rs = _parent_repo.read(
 if _rs is None:
     # `_parent_repo` 已经打过那行响亮的说明了（父仓不在场 / SAUDADE_REQUIRE_PARENT=1
     # 时它直接退 1）。这里**如实记成"没验"**，不记成通过——同族：
-    # `scripts/healthcheck.sh` 第 8 项在判据脚本不在场时写的是"这一项没验"。
+    # 父仓 `scripts/healthcheck.sh` 第 8 项在判据脚本不在场时写的是"这一项没验"。
     SKIPPED.append("父仓不在场 ⇒ 第 ③ 节没验")
 else:
     _st, _why = parent_halves(_rs)
