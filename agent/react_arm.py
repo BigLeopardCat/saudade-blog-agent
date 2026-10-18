@@ -163,16 +163,15 @@ from agent.frame_contract import (NOOP_TEXT,
                           blocked_row as _blocked_row,
                           executed_specs,
                           plan_for_gate as _plan_for_gate)
-from agent.graph import (AgentCancelled, AgentState, _EXECUTOR_PROMPT,
-                         NARRATOR_DISCIPLINE, _NARRATOR_NO_TOOLCALL_NUDGE,
-                         _NO_PRINTED_FACTS, _NO_PRINTED_FACTS_ACTION, _confirm_popup,
-                         _frame_id, _narrator_plan, _pending_ledger_frame,
+from agent.graph import (AgentCancelled, AgentState, NARRATOR_DISCIPLINE, _NARRATOR_NO_TOOLCALL_NUDGE,
+                         _confirm_popup,
+                         _frame_id, _pending_ledger_frame,
                          _principal_of, _render_planner_prompt, _stopped,
                          gate_node as _prod_gate_node, graph_input, plan_state)
 from agent.planner_llm import build_tool_schema
 from agent.prompt_context import (_frame_texts, _has_frames,
                            _last_assistant_utterance, _last_user_msg, _page_ctx,
-                           _prev_user_msg, _receipts_text, with_tool_call_pairs)
+                           _prev_user_msg, with_tool_call_pairs)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
                               spec_signature, wrap_up_text)
@@ -180,8 +179,9 @@ from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
 # 借生产那几件的**唯一入口**（20261019）。本模块只接线，判据都在 `agent/graph.py` 里；
 # 各段的接法与理由见 `agent/react_parity.py` 的模块头注。
 from agent.react_parity import (confirm_round, denied, display_text, drop_correction,
-                                fast_path, finalize_dedupe, plan_has_tools,
-                                planner_prompt_args, unaccounted, write_guard)
+                                fast_path, finalize_dedupe, narrator_system_pair,
+                                narrator_wire, plan_has_tools, planner_prompt_args,
+                                unaccounted, write_guard)
 from agent.stickers import repair_sticker_tokens
 from agent.tool_specs import _tool_name
 from agent.workflow_plan import instantiate_plan
@@ -951,9 +951,12 @@ def _narrate(state: AgentState, ctx: dict) -> Any:
     receipts = [r for r in (state.get("receipts") or []) if isinstance(r, dict)]
     drop = {str(r.get("tool") or "") for r in receipts if is_block_family(r)}
     try:
-        return _narrator_call([SystemMessage(
-            content=_narrator_prompt(state, receipts, drop, ctx))]
-            + with_tool_call_pairs(list(state.get("messages") or [])))
+        _head, _tail = _narrator_prompt(state, receipts, drop, ctx)
+        # 装配顺序与生产 `model_node` 逐字同：`[稳定头] + [历史…（上下文块挪尾）] + [变化段]`。
+        # `narrator_wire` 里那一趟 `with_tool_call_pairs` 就是此前这一行显式写的那个调用
+        # ——收进生产那一份之后，"补形状"只剩一个产地。
+        return _narrator_call([_head] + narrator_wire(list(state.get("messages") or []))
+                              + [_tail])
     except Exception as e:  # noqa: BLE001 —— 见 docstring 最后一段
         logger.warning("[react_arm] narrator 调用异常，退回决策模型那条草稿：%s", e,
                        exc_info=True)
@@ -1183,35 +1186,32 @@ def _narrator_llm() -> Any:
 
 
 def _narrator_prompt(state: AgentState, receipts: list, drop: set[str],
-                     ctx: dict) -> str:
-    """生产 narrator 的提示词资产，**逐字同一份**（`graph._EXECUTOR_PROMPT`）。
+                     ctx: dict) -> tuple:
+    """narrator 的**两条**系统消息 `(稳定头, 变化段)`——生产 `graph._narrator_system_pair`
+    本身，本函数只做"哪几个格填什么"（20261019，资产对齐 H）。
 
-    本函数只负责"哪几个格填什么"，三个格的口径与 `graph.model_node` 逐条对齐——
-    凡是与它不同的地方都是**明写的口径差**，不是随手：
+    三个格的口径与 `graph.model_node` 逐条对齐，凡是与它不同的地方都是**明写的口径差**：
 
-      · `plan=_narrator_plan(st, config)`：计划文本 + 账甲那条本轮事实。传的是**真 state**
-        （归一过计划两态，见 `_norm_state`），`_narrator_plan` 读的
-        `plan`/`receipts`/`noop_specs`/`blocked`/`blocked_seen`/`pending_confirm`/
-        `ledger`/`confirm_grant` 在这一份里全是真的——**与闸门读的是同一份**；
-      · `tool_frames` 走 `article_pointer=True`：生产只有 narrator 这一处这么用（原始
-        ToolMessage 就在它手边的消息流里，未超预算的正文帧两份逐字节相同 ⇒ 换指针句
-        省掉整整一份正文）；
+      · `plan` 走 `_narrator_plan(st, config)`：传的是**真 state**（归一过计划两态，
+        见 `_norm_state`），它读的 `plan`/`receipts`/`noop_specs`/`blocked`/
+        `blocked_seen`/`pending_confirm`/`ledger`/`confirm_grant` 在这一份里全是真的
+        ——**与闸门读的是同一份**；
+      · `tool_frames` 走 `article_pointer=True`（生产那一份函数自己就这么调）；
       · `fact_block` 按 `is_action_family` 分岔，判据是**回执**不是"印了几行"（见
         `_NO_PRINTED_FACTS` 的注：20261002 那次"系统发的空授权"就是按错判据分岔的现场）。
+
+    ⚠️ **返回的是两条而不是一条**（20261016 前缀缓存）：稳定头（人设 + 24 条叙述纪律）
+    与变化段（计划 / 工具帧 / 回执 / 事实块 / 页面上下文）必须分开装，且**变化段要排在
+    对话历史之后**——否则从 `{plan}` 起每轮都不同的那一段会把它后面的一切（包括整整
+    20 条历史）一起挤出公共前缀。装配顺序由 `_narrate` 定，两处切分都在
+    `react_parity.narrator_system_pair` / `narrator_wire`（借生产那两件，不抄第二份）。
     """
     st = _norm_state(state)
-    msgs = list(st.get("messages") or [])
-    return _EXECUTOR_PROMPT.format(
-        persona=BLOG_ASSISTANT_PROMPT,
-        audience=audience_block(ctx.get("role")),
-        plan=_narrator_plan(st, ctx.get("config")),
-        tool_frames=_frame_texts(msgs, drop_tools=drop, article_pointer=True),
-        exec_receipts=_receipts_text(receipts, drop_tools=drop),
-        fact_block=block_of(receipts) or (_NO_PRINTED_FACTS_ACTION
-                                          if any(is_action_family(r) for r in receipts)
-                                          else _NO_PRINTED_FACTS),
-        page_ctx=_page_ctx(msgs, ctx.get("role")),
-        sticker_guide=STICKER_GUIDE)
+    return narrator_system_pair(
+        st, ctx.get("config"), ctx.get("role"), receipts,
+        block_of(receipts),
+        drop,
+        any(is_action_family(r) for r in receipts))
 
 
 def _narrator_call(msgs: list) -> Any:
