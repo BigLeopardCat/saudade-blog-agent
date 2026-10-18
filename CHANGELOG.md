@@ -16,6 +16,21 @@
 
 ## 20261018
 
+- **`/health` 多一格 `checkpoint_backend`（批 6 前置，对外行为零变更）**：回"**这个进程到底
+  挂没挂 saver**"——`none` / `postgres` / `sqlite` / `memory` / `unknown`（读不出来）/认不出的
+  模块路径原文。**它是从 `_agent` 这个活体对象读的，不是读 `CHECKPOINT_DSN`**：那一格今天
+  **填了也不生效**（`build_checkpointer()` 全仓没有调用方），读配置的实现会把"配了 DSN"
+  报成"挂上了 saver"。判定逻辑住 `agent/probe.checkpoint_backend`，判据
+  `tests/test_health_dials.py` ⑤（含一条反控：拨了 `CHECKPOINT_DSN` 而图没挂 saver ⇒ 这一格
+  **必须不变**）。父仓 `scripts/healthcheck.sh` 按 `"agent_ready":true` 子串判活，多这一格
+  不影响它。
+- **checkpoint 采纳加了一条共现锁（批 6 前置）**：`tests/test_checkpoint_adoption.py` 判的不是
+  "接了没有"，是**"有没有半接"**——四处（saver 交给图 / `thread_id` 是会话坐标 / 历史注入
+  已删 / 持久化档是 sync）要么全「未接」、要么全「已接」，混合就红。今天四处全「未接」
+  （0/4，与生产行为逐字节相同），采纳批（批 7）把四处一起拨过去。**只接 saver 会静默产生
+  双份上下文**（图自持的 state 与 `_build_messages` 注入的 `req.history[-20:]` 两份都在），
+  而此前没有任何判据会红。四条反控各拨一处实测全部翻红；判据读 AST 不读文本
+  （往真源码追加那两个字面的注释，结论逐个不变）。
 - **管理助手报表里的"今日对话轮数/异常收尾/质检拦截/权限拒绝"此前**天天是 0**（修）**：
   `hostinfo.trace_stats` 自己按平铺布局扫 trace，而真实布局 20260925 起是**按天一层**
   ⇒ 一份都扫不到，却报 `readable: True`（实测真值 4 轮、它报 0）。**编出来的是一份全绿**，

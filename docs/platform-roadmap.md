@@ -27,7 +27,7 @@
 
 | 面 | 现状 | 证据 |
 |---|---|---|
-| 断点恢复 | **无**。生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机 | `agent/checkpoint.py`、`server.py` |
+| 断点恢复 | **无**。生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机。**"挂没挂"现在看得见了**（**已补**：批 6a，`/health` 的 `checkpoint_backend`；半接会被 `tests/test_checkpoint_adoption.py` 判红） | `agent/checkpoint.py`、`server.py` |
 | 幂等账 | **已建成但惰性**：`agent/idem.py` 的 `active()` 要求 checkpointer 在场 ⇒ 恒 False | `agent/idem.py` |
 | 版本可见性 | **无** `/version`、无 build-info；`/health` 只回声 dials （**已补**：批 3，`agent/probe.version_payload`） | `server.py`、`agent/probe.py` |
 | 错误码 | BLOCK 原因码**已有闭集**（`agent/block_reasons.py` + `tests/test_block_reasons.py`）；**发射侧**没有对应闭集 | 同上 |
@@ -194,19 +194,59 @@
 - **先量再切**：影子读数必须在**当前请求形状**上取，因为断点恢复会改请求形状。
   ⇒ 批 6/7 之后这份读数**不可与今天直接比**，要重新取一段。
 
-### 批 6 — 断点恢复前置（纯加法，无行为变更）
+### 批 6 — 断点恢复前置（纯加法，无行为变更）—— **6a 已落地，6b 待做**
 
-- **语料**：让 golden 具备生产形状（多轮用例注入真实历史），否则第 3 条证据不成立。
-- **golden 驱动**：`eval/run_golden.py` 的线程常量要按（用例, 重复, 臂）复位——
-  ADR-0011 已写明「不复位就是假读数」。
-- **判据先红**（待建：`tests/test_checkpoint_adoption.py`）：源码级共现锁，三条——
-  thread_id 路径里不许有随机后缀、历史注入循环必须消失、compile 处必须有同步持久化档。
-  **现在三条全红**，落地批翻绿。
-- **依赖进 `pyproject.toml` 与锁文件**（同一提交，否则打包闸红）。
-- **`/health` 加一个 checkpoint 后端 dial**：让人**看得见**这个进程到底有没有挂 saver，
-  而不是从 `.env` 推。
-- **保留期归口**：`agent/idem.py` 的 SQLite 账本进 `eval/retention_manifest.py`
-  （现在登记为「未接管」）。
+**已落地（6a，20261018）**
+
+- **`/health` 加 checkpoint 后端 dial** ✅：`dials.checkpoint_backend` = `none` / `postgres` /
+  `sqlite` / `memory` / `unknown` / 认不出的模块路径原文。判定逻辑住
+  `agent/probe.checkpoint_backend`（纯函数），`server.py` 只留一格。
+  ⚠️ **它读的是 `_agent` 这个活体对象，不是 `CHECKPOINT_DSN`**——那一格今天**填了也不生效**
+  （`build_checkpointer()` 没有调用方），读配置会把"配了 DSN"报成"挂上了 saver"，正是本仓
+  最贵的那类失效。判据 `tests/test_health_dials.py` ⑤：七条形态各判一次，外加一条**反控**
+  ——把 `CHECKPOINT_DSN` 拨成合法 DSN 而图没挂 saver ⇒ 这一格**必须不变**（变了就说明它是
+  从配置推的）。`unknown` 与 `none` 刻意分开（"读不出来"不许报成"没挂"，
+  同 `hostinfo.trace_stats` 那条 `readable`）。
+- **共现锁** ✅ `tests/test_checkpoint_adoption.py`：判的不是"接了没有"，是**"有没有半接"**。
+  四处（① saver 交给图、② `thread_id` 是会话坐标、③ 历史注入已删、④ 持久化档是 sync）
+  要么全「未接」、要么全「已接」，混合就红，并点名是哪几处没跟上。
+  **今天四处全「未接」（0/4）**，与生产行为逐字节相同。
+  ⚠️ **这一条与预案原文的写法不同，理由记在这里**：预案写的是"三条全红，落地批翻绿"。
+  按字面写成"断言已接"的话，它在采纳批之前**一直红**——而 `tests/run_all.py` 按磁盘枚举、
+  **没有"预期红"这个档**，一条红的套件进不了 CI，只能被人挪出清单（那就成了一份没人跑的
+  判据）。所以改成"一致即绿"，把"能红"这件事交给 ④/⑤ 那两组反控：
+  **四条反控各单独拨一处，实测全部翻红**；另有一份最小的"全已接"骨架作正控（证明探针
+  不是一组恒「未接」的东西）。
+  ⚠️ **第四条（持久化档）比预案多出来，且落点与预案不同**：`durability` **不是
+  `compile()` 的参数**（`StateGraph.compile` 的签名里没有它），它是 `stream()` 的参数
+  （`langgraph 1.2.7` 实测）。所以"compile 处必须有同步持久化档"这句话在 API 上落不了地；
+  真正的不变式是"**凡有 saver 在场的那次调用必须显式给同步档**"——`agent/idem.py` 的
+  `require_sync_durability` 是它在运行期的断言，本件是它在源码形状上的对应物。
+  判据读 **AST 不读文本**：`server.py` 那段解释注入的注释里就写着 `req.history[-20:]`、
+  `agent/checkpoint.py` 头注里就写着 `durability="sync"`——子串匹配会被自己那段注释骗红
+  （同 `tests/test_hostinfo_trace_stats.py` 那次）。
+
+**待落地（6b）**
+
+- **语料** ✅ **已在批 3 做过**：`GOLDEN_PROD_HISTORY=1`（`eval/run_golden.py` 的
+  `ENV_PROD_HISTORY`）+ 判据 `tests/test_golden_prod_history.py`。
+- **golden 驱动**（**未做**）：`eval/run_golden.py` 的线程常量 `"golden_thread"` 要按
+  （用例, 重复, 臂）复位——ADR-0011 已写明「不复位就是假读数」。现状：**驱动侧已经在复位**
+  （`eval/experiments/ckpt_ab_driver.py::reset_run_threads`，逐用例 × 逐遍 × 逐臂跑之前删
+  `golden_thread` 与 `conv_<id>` 两处行；ab1 那次"D 臂在整库历史上接着跑"的假读数就是它
+  修掉的）。**残留的脆弱点是那个常量本身**：所有用例共用一条 `"golden_thread"`，所以
+  "跨用例不串"这件事只活在驱动那个删除调用里——不经驱动的跑法（夜间 `nightly_regression.sh`、
+  手跑 `run_golden.py`）没有这一层。改法 = 让 `run_golden` 自己按 (用例, 重复, 臂) 算线程名，
+  删除那一步随之变成"不必需"（**不是**"可以删掉"：臂 B 的线程是 `conv_<id>`，那个坐标跨遍、
+  跨臂都相同，仍要删）。改前先确认没有别的读取端依赖那个常量（`eval/golden_trace.py` 的
+  `start_trace(..., "golden_thread", ...)` 是**另一件事**——那是 trace 的线程字段，不是图
+  的 `thread_id`）。
+- **依赖进 `pyproject.toml` 与锁文件** ✅ **已做**（`langgraph-checkpoint-postgres==3.1.0` /
+  `psycopg[binary]==3.3.6` / `psycopg-pool==3.3.3`，`uv.lock` 里有对应条目；本机不跑同步，
+  见 §5）。
+- **保留期归口** ✅ **已做**（`eval/retention_manifest.py` 的 `agent-idem-ledger`，登记为
+  `open`／未接管，`why` 里写明"与将来的 checkpoint store 必须一起设计"——那一格**不该**
+  在批 6 就给它一个保留期，理由见登记项本身）。
 
 ### 批 7 — 断点恢复落地（一次原子提交，不拆）
 

@@ -2553,6 +2553,9 @@ async def health():
             "rag_hybrid_active": bool(_rag["active"]),
             "rag_state": str(_rag.get("state") or "unknown"),
             "vector_missing": int(_rag["missing"]),
+            # 这个进程挂没挂 saver（五档取值与理由见 `agent/probe.checkpoint_backend`）。
+            # **读的是 `_agent` 这个活体对象，不是 `CHECKPOINT_DSN`**——那一格填了也不生效。
+            "checkpoint_backend": probe.checkpoint_backend(_agent),
         },
     }
 
