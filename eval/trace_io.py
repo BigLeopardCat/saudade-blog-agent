@@ -16,6 +16,25 @@ IO 语义，谁都能零成本引它。所以**枚举归 `trace_files.py`、读�
 import gzip
 import json
 
+# ── 改名遗留（20261017）：事件键 `skill` → `workflow` ───────────────────────────
+# trace 是**保留 30 天**的长期语料（`eval/trace_retention.py` 按 mtime 删），改名当天
+# 盘上全是旧键。读取端若只认新键，那 30 天里所有按 `workflow` 统计/巡检的判据都会
+# **静默读到 0**——"看着在跑、其实没跑"那一族，而且它会自己恢复（30 天后旧文件没了），
+# 于是没人查得动。所以旧键在**读取的唯一点**上映射成新键，而不是在十个读取端各写一遍。
+#
+# **日落 20261116**：最后一份写 `skill` 的 trace 是 20261017，加 30 天保留期。到那天
+# 盘上不可能再有旧键，`tests/test_trace_legacy_key.py` 会变红，删掉这一个函数即可。
+LEGACY_EVENT_KEY = "skill"
+LEGACY_SUNSET = "20261116"
+
+
+def _alias_legacy_event_key(doc: dict) -> dict:
+    """旧 trace 的事件键 `skill` 补一份 `workflow`（新键已在则不动，不覆盖新值）。"""
+    for ev in doc.get("events") or []:
+        if isinstance(ev, dict) and LEGACY_EVENT_KEY in ev and "workflow" not in ev:
+            ev["workflow"] = ev[LEGACY_EVENT_KEY]
+    return doc
+
 
 def load_trace(path: str) -> dict | None:
     """读一份 trace（`.json` 与 `.json.gz` 都认）；坏文件返回 None，不抛。
@@ -25,7 +44,9 @@ def load_trace(path: str) -> dict | None:
     """
     try:
         if path.endswith(".gz"):
-            return json.loads(gzip.decompress(open(path, "rb").read()))
-        return json.load(open(path))
+            doc = json.loads(gzip.decompress(open(path, "rb").read()))
+        else:
+            doc = json.load(open(path))
     except Exception:
         return None
+    return _alias_legacy_event_key(doc) if isinstance(doc, dict) else doc

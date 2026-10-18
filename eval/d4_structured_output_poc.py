@@ -56,7 +56,7 @@ PLANNER_ARGS = {"temperature": 0.2, "max_tokens": 400, "timeout": 30}
 PLAN_SCHEMA = {
     "type": "object",
     "properties": {
-        "skill": {"type": "string", "enum": ["navigate", "effect", "chat", "content_query"]},
+        "workflow": {"type": "string", "enum": ["navigate", "effect", "chat", "content_query"]},
         "params": {
             "type": "object",
             "properties": {
@@ -69,7 +69,7 @@ PLAN_SCHEMA = {
         },
         "tools": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["skill", "params", "tools"],
+    "required": ["workflow", "params", "tools"],
     "additionalProperties": False,
 }
 
@@ -112,14 +112,14 @@ def _check_schema(obj) -> tuple[bool, str]:
     """手写校验（不引 jsonschema 依赖，判据与本 schema 一一对应）。返回 (过?, 原因)。"""
     if not isinstance(obj, dict):
         return False, f"顶层不是 object（{type(obj).__name__}）"
-    for k in ("skill", "params", "tools"):
+    for k in ("workflow", "params", "tools"):
         if k not in obj:
             return False, f"缺必填键 {k}"
-    extra = set(obj) - {"skill", "params", "tools"}
+    extra = set(obj) - {"workflow", "params", "tools"}
     if extra:
         return False, f"多出键 {sorted(extra)}（additionalProperties=false 被违反）"
-    if obj["skill"] not in ("navigate", "effect", "chat", "content_query"):
-        return False, f"skill 不在 enum 内：{obj['skill']!r}"
+    if obj["workflow"] not in ("navigate", "effect", "chat", "content_query"):
+        return False, f"workflow 不在 enum 内：{obj['workflow']!r}"
     p = obj["params"]
     if not isinstance(p, dict):
         return False, "params 不是 object"

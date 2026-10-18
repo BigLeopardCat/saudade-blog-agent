@@ -82,7 +82,7 @@
   各一个节点），一轮 ≈ 4 个超步而不是 2。按 `2×budget+2` 设保险丝会让中间件在被判停之前
   先被图掐死——看板上显示成"中间件没生效"，其实是被保险丝动了手（20261004 试跑实录）。
 
-### 2. 工具级回执（`SkillExecutor`）
+### 2. 工具级回执（`WorkflowExecutor`）
 
 生产侧 `execute` 的验收链是：技能 → `instantiate_plan` 展开成计划 → 逐 spec 执行 →
 `_check_spec` 判 PASS/BLOCK → PASS 的进 `receipts`（系统确认的事实）、BLOCK 的进 `blocked`
@@ -176,7 +176,7 @@
 | ＋ | **清单外补的第二条**：离线定点探针的三处**测量偏差**（工具名折算扫子串、族级口径把方向相反的工具算成命中、两条 ReAct 臂逐字共用 planner 的提示词） | `d9d45ad`（20261011）。探针不进 CI，所以它那三处偏差由门禁里的 `tests/test_react_arm.py` ⑨ 看着 |
 | ＋ | **清单外补的第三条（20261012 全量双臂实测抓出）**：本线的 **trace 词汇表**与生产不同源——`graph` 那个 run 目录每轮记 `planner.llm_done`/`native_decision`/`decision`/`execute.call`/`execute.check`，本线的 run 目录里**只有 `producer.*` 与 `gate.*`**（平均 7.4 帧/轮 vs 51.4）⇒ L3 跨源对账对本线近乎无料可读。**判据后果只兑现了一处、已修**：`planner.ledger_frame` 缺席让三条 `require_ledger_*` 断言**恒假**（假红 1 条，见 §六）⇒ `_system_prompt` 照生产记同款事件；其余节点事件的补记仍未做（今天不改变任何读数） | `tests/test_react_arm.py` ⑬（含负控） |
 | ＋ | **清单外补的第四条（20261016）**：**帧契约此前只活在约定里**。`gate_node` 读哪些 state 键是 grep 数出来手抄的 ⇒ 实测少一格（`task_frames`，`_ledger_in_scope` 析取里那条腿）；`_popup_state` 那张四格的表少**七格**，其中 `executed` 是 `_grant_covers` "令牌用在那一件上就作废"那一格 ⇒ 臂的弹卡路径上**恒不生效**。`_popup_state` 的 docstring 自称"只读四个键"，实测**十一格**。⇒ 契约收进 `agent/frames.py`，由 `tests/test_frame_contract.py` 从 `graph.py`/`server.py` **现取**双向比对（多一个红、少一个红 + 四条反向对照） | `agent/frames.py`、`tests/test_frame_contract.py`、ADR-0008 |
-| ＋ | **清单外补的第五条（20261016）**：第 3 条那条同意闸**与生产分家了**——`react_line._consent_missing` 停在 `not self.grant`（生产 20261012 收窄之前那版），而 `tests/test_react_arm.py` ⑥d 把那行**字符串**钉住了 ⇒ 锁越绿、臂离生产越远。现改为直调 `graph._grant_covers`，`SkillExecutor` 多收一个 `state`（`executed` 现算自 `executor.calls`）；⑥d 的落点改成"用的是生产那一份判据"，行为面由 ⑥b/⑥b′/⑥b″ 与 `test_frame_contract.py` ⑨e–⑨j 锁住。**语料没走到那条路**：20261016 拿 4 条 confirm 用例跑 react 臂（`--only`），逐字与 20261012 那份全量留档比对，**判定与正文全同**（1 红仍是既有那条 `mix2_two_writes_one_breath_card_only`，红的是 `__TASK__` 缺口，理由逐字相同），而**没有一条**走到"`executed` 非空时判弹卡"那一格（唯一贴近的 `board_audit_from_ledger_exec` 因真写默认关而 SKIP）⇒ 那条分歧靠 ⑥b″ 这个**定向用例**守着：摘掉 `popup_state` 的 `executed`，它当场红，其余 100+ 条断言不动 | `agent/react_line.py`、`tests/test_react_arm.py` ⑥b/⑥b′/⑥b″/⑥d |
+| ＋ | **清单外补的第五条（20261016）**：第 3 条那条同意闸**与生产分家了**——`react_line._consent_missing` 停在 `not self.grant`（生产 20261012 收窄之前那版），而 `tests/test_react_arm.py` ⑥d 把那行**字符串**钉住了 ⇒ 锁越绿、臂离生产越远。现改为直调 `graph._grant_covers`，`WorkflowExecutor` 多收一个 `state`（`executed` 现算自 `executor.calls`）；⑥d 的落点改成"用的是生产那一份判据"，行为面由 ⑥b/⑥b′/⑥b″ 与 `test_frame_contract.py` ⑨e–⑨j 锁住。**语料没走到那条路**：20261016 拿 4 条 confirm 用例跑 react 臂（`--only`），逐字与 20261012 那份全量留档比对，**判定与正文全同**（1 红仍是既有那条 `mix2_two_writes_one_breath_card_only`，红的是 `__TASK__` 缺口，理由逐字相同），而**没有一条**走到"`executed` 非空时判弹卡"那一格（唯一贴近的 `board_audit_from_ledger_exec` 因真写默认关而 SKIP）⇒ 那条分歧靠 ⑥b″ 这个**定向用例**守着：摘掉 `popup_state` 的 `executed`，它当场红，其余 100+ 条断言不动 | `agent/react_line.py`、`tests/test_react_arm.py` ⑥b/⑥b′/⑥b″/⑥d |
 | ＋ | **清单外补的第六条（20261016，批 2）**：**适配器本身**。批 1 把契约收成了产物，但"喂合成 state"这件事还在——而**塑形就是手抄键集表的产地**（第 5 条那条漂移的根因）。本批把 `agent/react_arm.py` 改成一棵真的 `StateGraph`：`planner`/`execute`/`model`/`gate` 是编译进图的**真节点**，`gate_node` 与 `_confirm_popup` 拿到**真 `AgentState`**，分片由 LLM 流给（`langgraph_node` 由 langgraph 盖）⇒ 三份塑形器、五个帧构造器、`create_agent` / `ConvergenceMiddleware` / `wrap_tools_with_receipts` 一起退场。收敛判据搬成纯函数 `convergence_verdict`（`planner` 节点调它）。判据换成**结构锁**：图里真有那四个节点名、两张键集表全是 `AgentState` 的声明键、臂源码 AST 里手搓 `("updates", …)` / `langgraph_node` 字面量 / `*_frame` 构造器**一个都不许有**。⚠️ **第一版漏了"内层循环白送的那样东西"**：拆掉 `create_agent` 之后，决策模型看不到自己上一轮那条真 `AIMessage` 的**参数**，于是认不出"这件事我刚做过"、反复重问、把轮次预算烧穿（全量 183 条里 19 条因此变红、rag 族 26/26 → 13/26）。根因、修法与那张前后对照表见**本文件末尾《批 2 的前后对照》**与 `docs/adr/adr-0009-*.md` | `docs/adr/adr-0009-*.md`、`tests/test_frame_contract.py` ③④⑤、`tests/test_react_arm.py` ① |
 
 **这六件之外还有一件事必须单列**：即便清单全绿，这份读数也只在 §六 那道闸（`arm_capability`
@@ -212,8 +212,10 @@ cd /home/ubuntu/Saudade-Blog/saudade-blog-agent        # 就是仓根，不是�
   虚增到 33%。另外桩的返回值要带命令形状（`meta.cmd`），否则 `navigate_to` 那一批整批
   BLOCK（`cmd_shape`）——回执行还在、`receipts` 却是空的，"办成几件"会读成 0。
 - 判工具名**不能读** `native_decision.calls`（那里只有技能名，读族的工具全在 PARAMS 里）——
-  现网臂要读计划文本的 TOOLS 行；ReAct 臂的技能要按 `SKILL→plan 模板` **结构化**折算
-  （`Skill.plan`），**不许扫子串**：`account_unfreeze` 的模板里只出现 `unfreeze_account`，
+  现网臂要读计划的执行清单（本报告记录的那一轮是读计划文本的 `TOOLS` 行；**20261017 批 1
+  起生产侧改读 `plan_obj["tools"]`**，两处是同一条清单）；ReAct 臂的技能要按
+  `WORKFLOW→plan 模板` **结构化**折算
+  （`Workflow.plan`），**不许扫子串**：`account_unfreeze` 的模板里只出现 `unfreeze_account`，
   扫子串会把 `freeze_account` 一起白送（方向还正好相反）。三种口径统一折算，否则比的是
   三种不同的问题。
 - 三臂**同解码**（thinking 关 / temp 0.2 / 1200 tokens）。ReAct 臂裸用 `get_llm()` 会让
@@ -264,7 +266,7 @@ cd /home/ubuntu/Saudade-Blog/saudade-blog-agent        # 就是仓根，不是�
 这个 **trace 事件**，一条不产那条事件的臂会让它们**恒假**（假红）。现场就是本轮
 `admin_board_audit_reviewed_refusal`：react 臂报红，理由逐字是「本轮没有
 planner.ledger_frame 事件 —— 待办台账**没摆上桌**」，而两臂那一轮的行为**逐字相同**
-（回复正文一字不差、确认卡载荷的 `skill`/`tool`/`args` 三项全同）——红的是证据通道，
+（回复正文一字不差、确认卡载荷的 `workflow`/`tool`/`args` 三项全同）——红的是证据通道，
 不是行为。**修法是把通道补上**（`_system_prompt` 照 `graph.py` 的 planner 那一处记同款
 事件；判据 `tests/test_react_arm.py` ⑬，含"空帧不记"的负控），**不是**再加一层闸——
 闸管的是"读数配不配被读"，而这条的根因是臂没说话，不是语料设了个它够不着的门槛。

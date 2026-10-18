@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILED: list[str] = []
 SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
@@ -94,7 +94,7 @@ def test_no_grant_is_byte_identical():
 # ══════════════════════════════════════════════════════════════════════════
 def test_grant_reads_the_owner_words():
     print("\n③ 确认兑现轮读的是**主人原话**，不是前端合成的卡面回显")
-    got = G._intent_src({"messages": _msgs(), "confirm_grant": {"skill": "x", "specs": []}})
+    got = G._intent_src({"messages": _msgs(), "confirm_grant": {"workflow": "x", "specs": []}})
     check("⭐ 回到上一条主人消息（他当初那句话）", got == OWNER, repr(got)[:40])
     check("  卡面回显**不在**这个值里（它是我们自己的话）", ECHO not in got)
     check("  `_last_user_msg` 照旧取最后一条（它是另一个语义，不是错）",

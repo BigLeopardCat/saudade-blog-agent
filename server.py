@@ -299,7 +299,7 @@ class ChatResponse(BaseModel):
     error: str | None = None
     new_summary: str | None = None
     # 跨轮执行记忆（20260904 C3，同步路径）：本次请求 checker 验收回执原始行
-    # （{skill,tool,args,result,ts}）——Rust 同步响应手读 data["executions"] 落库
+    # （{workflow,tool,args,result,ts}）——Rust 同步响应手读 data["executions"] 落库
     executions: list = []
 
 
@@ -915,7 +915,7 @@ async def chat(req: ChatRequest, request: Request):
 # ---------------------------------------------------------------------------
 # ── 过程行文本人话化（20260905 issue5：执行过程显示与真实执行对齐）──
 # 旧实现病灶：
-#   ① 计划行直接贴 plan 机器契约原文（SKILL=/PARAMS= JSON），[:60] 截断成残句，
+#   ① 计划行直接贴 plan 机器契约原文（WORKFLOW=/PARAMS= JSON），[:60] 截断成残句，
 #     用户看到的是半截内部格式而非动作描述；
 #   ② 「✅ 工具执行完成」由 ToolMessage 分支固定模板发出，不查 checker 验收——
 #     受阻执行（空结果/错误帧，verdict BLOCK）同样显示"完成"；且任何完成帧都
@@ -1265,7 +1265,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         # 过程帧记账：
         #   process_emitted —— 本次请求已发过过程步骤（决定收尾是否补"质检通过"）
         #   emitted —— 已发过程步骤的 key 集合（同一占位/完成帧同轮只发一次）
-        #   is_chat_skill —— SKILL=chat：无执行可查，收尾不发"✓ 质检通过"，
+        #   is_chat_workflow —— WORKFLOW=chat：无执行可查，收尾不发"✓ 质检通过"，
         #     避免对闲聊展示虚假的质检过程
         # 最终回复正文（trace 落盘用）：updates 的 model 帧里取最后一条
         # AIMessage；gate fallback 时覆盖为 fallback 文本
@@ -1293,7 +1293,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         saw_model_update = False
         process_emitted = False
         emitted: set = set()
-        is_chat_skill = False
+        is_chat_workflow = False
         # 跨轮执行记忆（20260904 C3）：checker 验收回执累计（execute update 是
         # 累计语义——末批即本次请求全量）
         exec_rows: list = []
@@ -1485,8 +1485,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                 # 规划占位帧在此发：所有技能都有"规划中"第一阶段反馈）
                 planner_upd = data.get("planner")
                 if planner_upd:
-                    # 20260928 批 C：这里曾用三段文本嗅探认 plan（`startswith("SKILL=")`
-                    # 判"是不是一份真计划"、`startswith("SKILL=chat")` 判闲聊、
+                    # 20260928 批 C：这里曾用三段文本嗅探认 plan（`startswith("WORKFLOW=")`
+                    # 判"是不是一份真计划"、`startswith("WORKFLOW=chat")` 判闲聊、
                     # `"\nTOOLS: " in plan` 判有没有执行清单）——三处都是"改 `plan_encode`
                     # 的排版就要同步改这里"的人工约定。现在直取 `plan_obj`
                     # （`graph.plan_state` 与文本一次写入），排版不再是判据的一部分。
@@ -1494,17 +1494,17 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     pobj = planner_upd.get("plan_obj") or {}
                     if pobj:
                         emit_process("🧭 规划中…", key="planning")
-                        if str(pobj.get("skill") or "") == "chat":
+                        if str(pobj.get("workflow") or "") == "chat":
                             # chat 快道：只发占位帧，不发计划明细（避免每条闲聊都有过程行）
-                            is_chat_skill = True
+                            is_chat_workflow = True
                         else:
                             # 本标志跟**最新一轮**的计划走（20260926）：gate 打回重规划
                             # 之后可能由 chat 换成检索类技能，不回落的话收尾那句
                             # "✓ 质检通过"会被这一轮的 chat 身份吃掉（判据是当前计划，
                             # 不是"历史上出现过 chat"）。
-                            is_chat_skill = False
+                            is_chat_workflow = False
                             # 计划行人话化（20260905 issue5）：不再贴 plan 机器
-                            # 契约原文（SKILL=/PARAMS= 截断成残句），改发 TOOLS
+                            # 契约原文（WORKFLOW=/PARAMS= 截断成残句），改发 TOOLS
                             # spec 的中文动作摘要——与回执完成帧共用渲染、前后一致。
                             # 收尾轮（TOOLS 空/（无），execute 后叙事轮）不发——
                             # 无动作可预告，避免"计划:执行规划动作"式空行
@@ -1718,8 +1718,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                     emit_text(final_reply)
                 else:
                     # 检查通过收尾（gate 恒 done=True）；chat 快道无执行可查，
-                    # 不发（见 is_chat_skill）
-                    if process_emitted and not is_chat_skill:
+                    # 不发（见 is_chat_workflow）
+                    if process_emitted and not is_chat_workflow:
                         emit_process("✓ 质检通过")
         else:
             # for 自然耗尽（无 break）= graph 完整跑完，未被断连打断

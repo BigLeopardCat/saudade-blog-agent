@@ -62,9 +62,9 @@ def check(name: str, ok: bool, extra: str = "") -> None:
         FAILED.append(name)
 
 
-def _plan(tool: str, args: dict, skill: str = "chat") -> dict:
+def _plan(tool: str, args: dict, workflow: str = "chat") -> dict:
     """一条 spec 的计划对象（门只读 tools 里的参数，够用）。"""
-    return {"skill": skill, "params": dict(args),
+    return {"workflow": workflow, "params": dict(args),
             "tools": [f"{tool}({json.dumps(args, ensure_ascii=False)})"],
             "note": "x", "reply": "y"}
 
@@ -143,17 +143,17 @@ check("  出处判定同步：`jingbao` 有据、planner 那个 `niuniu` 无据�
 print("\n② 真 planner 采样值的校正（20260924 现场）")
 _SENT = "标签「大笨狗」我不想要了，删掉吧"
 for _bad in ("删掉吧", "河灯留言", "标签"):
-    po = {"skill": "tag_delete", "params": {"name": _bad, "level": "one"},
+    po = {"workflow": "tag_delete", "params": {"name": _bad, "level": "one"},
           "tools": [f'delete_tag({json.dumps({"name": _bad, "level": "one"}, ensure_ascii=False)})'],
           "note": "x", "reply": "y"}
     _name_target_fix(po, _SENT)
     check(f"  目标名校正：{_bad!r} → 主人引号里那一段（弹卡印的是它）",
           _args_of(po).get("name") == "大笨狗", str(po["tools"]))
-po = {"skill": "tag_delete", "params": {"name": "大笨狗", "level": "one"},
+po = {"workflow": "tag_delete", "params": {"name": "大笨狗", "level": "one"},
       "tools": ['delete_tag({"name": "大笨狗", "level": "one"})'], "note": "x", "reply": "y"}
 _name_target_fix(po, _SENT)
 check("  正解不被改写（防线不是重写器）", _args_of(po).get("name") == "大笨狗")
-po = {"skill": "tag_update",
+po = {"workflow": "tag_update",
       "params": {"name": "编程", "parent_tag": "父标签名", "level": "one"},
       "tools": ['update_tag({"name": "编程", "parent_tag": "父标签名", "level": "one"})'],
       "note": "x", "reply": "y"}
@@ -207,18 +207,18 @@ check("早退① 文章族不在名字表（走 target_* 三条判据）",
           "文章 999999 那篇我想设成私密，先别急着动") is None)
 check("早退② 多 spec 混排不判",
       _target_grounding_refusal(
-          {"skill": "chat", "params": {}, "note": "x", "reply": "y",
+          {"workflow": "chat", "params": {}, "note": "x", "reply": "y",
            "tools": ['delete_tag({"name": "删掉吧"})', 'delete_tag({"name": "删掉吧"})']},
           _SENT) is None)
 check("早退③ 不在名字表的写工具（新建公告的标题走值通道，不在这一层判）",
       _target_grounding_refusal(_plan("create_announcement", {"title": "标题"}), _CTX) is None)
 check("早退④ 参数解不出来 → 不判（不是这一层的事）",
-      _target_grounding_refusal({"skill": "tag_delete", "params": {}, "note": "x",
+      _target_grounding_refusal({"workflow": "tag_delete", "params": {}, "note": "x",
                                  "reply": "y", "tools": ["delete_tag(不是 JSON)"]},
                                 _SENT) is None)
 check("早退⑤ 带 `$tool[N]` 引用的 spec → 不判（取值不来自这句话）",
       _target_grounding_refusal(
-          {"skill": "tag_delete", "params": {}, "note": "x", "reply": "y",
+          {"workflow": "tag_delete", "params": {}, "note": "x", "reply": "y",
            "tools": ['delete_tag({"name": "$list_tags[0].name"})']}, _SENT) is None)
 
 print("\n④ 12 条弹卡用例：意图正确的 spec 一律原样通过（不误伤主人说过的话）")
@@ -329,7 +329,7 @@ check("不连坐：半角单引号不是界碑（英文名里的撇号照旧）"
 # 现场重放：模型给的值**本来就有据**（"Tokio" 是主人说过的），抽取器却拿着那串碎片
 # 去"校正"它（`want` 一旦非空就无条件盖上，不看现值有没有据）⇒ 判空这一处同时堵住
 # 两条路：碎片不进参数，真值也不会被它顶掉。
-_two = _plan("create_tag", {"title": "Tokio", "parent_tag": "编程"}, skill="tag_create")
+_two = _plan("create_tag", {"title": "Tokio", "parent_tag": "编程"}, workflow="tag_create")
 _two_params = dict(_two["params"])
 check("现场重放：planner 自己填的值原样留着（不拒、不改，更没有引号碎片）",
       _name_arg_fix(_two, _TWO_NAMES_MSG, role="admin") is None
@@ -340,7 +340,7 @@ check("判据端：指代一律不算有据（就在原话里也不算）",
       and _grounded_value("向量数据库", "名字叫「向量数据库」"))
 # 现场重放：模型参数照 trace 原样（got={"title": "AI Agent"}），断言校正器**不再**
 # 把它改写成代词，而是走"定不了 ⇒ 确定性零写 + 如实追问"那条路。
-po = _plan("create_tag", {"title": "AI Agent"}, skill="tag_create")
+po = _plan("create_tag", {"title": "AI Agent"}, workflow="tag_create")
 _r = _name_arg_fix(po, _DEFECT_MSG, role="admin")
 check("现场重放：返回值是零写 + 追问（不是校正）",
       _r is not None and _r[0] == "create_tag", str(_r)[:120])
@@ -348,7 +348,7 @@ check("现场重放：计划里的值一个字没动（没有「它」）",
       _args_of(po).get("title") == "AI Agent", str(po["tools"]))
 check("现场重放：追问文案点名的是模型那个值（不是代词）",
       _r is not None and "AI Agent" in _r[1], (_r or ("", ""))[1][:160])
-po = _plan("create_tag", {"title": "向量数据库"}, skill="tag_create")
+po = _plan("create_tag", {"title": "向量数据库"}, workflow="tag_create")
 check("反向：值本来就有据 ⇒ 校正器不介入（防线不是重写器）",
       _name_arg_fix(po, "在「编程」下面建一个二级标签，名字叫「向量数据库」",
                     role="admin") is None
@@ -450,7 +450,7 @@ check("  `user_msg` 那一支照旧先成立（有第二本账也不改变原判
       and _grounded_value("AI Agent", "给我建个新标签 AI Agent", "") is False)
 
 _Q = "今天天气真好"
-_PB = _plan("delete_board_comment", {"quote": _Q}, skill="board_delete")
+_PB = _plan("delete_board_comment", {"quote": _Q}, workflow="board_delete")
 _LED_B = ('删掉河灯集里的那条留言「%s」；动作 delete_board_comment；参数 '
           '[{"args":{"quote":"%s"},"tool":"delete_board_comment"}]；状态 awaiting'
           % (_Q, _Q))
@@ -464,10 +464,10 @@ check("  反向对照二：台账行里没有这个片段 ⇒ 仍然拒",
                        ledger_src="删掉河灯集里的那条留言「别的什么」") is not None)
 check("  主人自己加引号给的片段照旧优先（引号通道一个字不变）",
       _board_quote_fix(_plan("delete_board_comment", {"quote": "天气"},
-                             skill="board_delete"),
+                             workflow="board_delete"),
                        "删掉「今天天气真好」那条", 0, "admin") is None
       and _args_of(_plan("delete_board_comment", {"quote": "天气"},
-                         skill="board_delete")).get("quote") == "天气")
+                         workflow="board_delete")).get("quote") == "天气")
 
 # ── 目标名那一族（第四道闸）──────────────────────────────────────────────
 # 它此前**没进碰撞面**是运气：早退条件 `_name_like(msg, lex)` 在纯「嗯」上为假
@@ -511,7 +511,7 @@ check("  第二本账走的是 `_grounded_value` 的同一句 ⇒ 脏判据（�
 # 它不走 `ledger_src` 参数（那是四道**出处**闸），是在 `_confirm_popup` 里直接把
 # `_ledger_pending_text(...)` 追加进证据列 ⇒ 判据分两半：台账行**能不能**当目标证据
 # （正/反/边界三条），以及**那句话真的接上线了**（只加函数不接线＝一行都没生效）。
-from agent.adminops import target_mentioned  # noqa: E402
+from agent.adminops_target import target_mentioned  # noqa: E402
 
 _LED_ART = ('修改文章 16 的标签：加上 Git、代码版本管理；动作 set_article_tags；参数 '
             '[{"args":{"add":["Git","代码版本管理"],"article_id":16},'
@@ -526,7 +526,7 @@ check("  反向对照二：**两端不挨数字**那条边界对台账同样成�
                               .replace('"article_id":16', '"article_id":166')})]) is False)
 _LED_WIRE = '+ [_ledger_pending_text(state.get("ledger"))])'
 _W = _GSRC.find(_LED_WIRE)
-_TM = _GSRC.rfind("A.target_mentioned(", 0, _W) if _W > 0 else -1
+_TM = _GSRC.rfind("_target.target_mentioned(", 0, _W) if _W > 0 else -1
 check("  接线：那一行真的并进了 `target_mentioned` 的证据列（只加函数不接线＝没生效）",
       _W > 0 and 0 < _TM < _W and _W - _TM < 2000,
       f"ledger_line={_W} target_mentioned={_TM}")
@@ -551,7 +551,7 @@ def _tn(text) -> str:
 _MSG_LOWER = "把git，代码版本管理挂上去"
 _TAGS_PLAN = _plan("set_article_tags",
                    {"article_id": 16, "add": ["Git", "代码版本管理"]},
-                   skill="article_tags")
+                   workflow="article_tags")
 check("★ 主人小写打、字典大写收 ⇒ 有据（现场重放：`Git` 在「把git，…」里）",
       _grounded_value("Git", g._squash_spaces(_MSG_LOWER)) is True
       and _grounded_value("git", g._squash_spaces("把Git，代码版本管理挂上去")) is True)
@@ -572,7 +572,7 @@ check("  反向对照一：**换个来路不算有据**——跨轮指代（「�
       _grounded_value("Git", g._squash_spaces("重来")) is False
       and _name_arg_fix(_plan("set_article_tags",
                               {"article_id": 16, "add": ["Git", "代码版本管理"]},
-                              skill="article_tags"), "重来", role="admin") is not None)
+                              workflow="article_tags"), "重来", role="admin") is not None)
 check("  反向对照二：脏判据的入口没被打开（泛称/指代仍是「没出处」，全角归一改不了它）",
       _grounded_value("标签", g._squash_spaces("把标签挂上去")) is False
       and _grounded_value("它", g._squash_spaces("把它挂上去")) is False)
@@ -616,14 +616,14 @@ check("  读不到 / 形状脏 ⇒ 空串（fail-closed：回到只认前两本�
 
 check("★ 现场重放：主人回「要」+ 台账里记着这个名字 ⇒ **不再拒**（此前必拒、零写）",
       _name_arg_fix(_plan("set_article_tags", {"article_id": 46, "add": ["embeding"]},
-                          skill="article_tags"),
+                          workflow="article_tags"),
                     "要", role="admin", ledger_src=_TASK_TXT) is None)
 check("  反向对照：台账缺席 ⇒ 照旧拒（第三本账是补位，不是放行兜底）",
       _name_arg_fix(_plan("set_article_tags", {"article_id": 46, "add": ["embeding"]},
-                          skill="article_tags"), "要", role="admin") is not None)
+                          workflow="article_tags"), "要", role="admin") is not None)
 check("  反向对照二：台账在、但那一行里**没有**这个值（模型新编的）⇒ 仍然拒",
       _name_arg_fix(_plan("set_article_tags", {"article_id": 46, "add": ["RAG"]},
-                          skill="article_tags"),
+                          workflow="article_tags"),
                     "要", role="admin", ledger_src=_TASK_TXT) is not None)
 
 print()

@@ -5,7 +5,7 @@
 要回答的问题：审计实测到两组「同一个事实、两个地方各写一遍、**而没有任何判据同时钉着
 它们**」——绿着，但会漂。收敛成一处之后，这一套用**行为比对**把它们钉死：
 
-  ① 肯定/否定词表：`agent.skills._norm_true` vs `tools.base._as_bool`
+  ① 肯定/否定词表：`agent.workflow_expand._norm_true` vs `tools.base._as_bool`
      （收敛前是两张一字不差的元组——"今天一样"不代表明天还一样）；
   ② 本地钟面：`server._build_messages` 的 `current_time=` vs
      `tools.base.get_current_time()` 的返回（收敛前是两张星期表 + 两条 f-string）。
@@ -15,7 +15,7 @@
 "全部"认成"不是"会让一次写操作静默不执行）。时钟是**注入冻结**的，所以 ② 是逐字
 确定性的比对，不是"两秒内相等"那种会飘的判据。
 
-**红基线（自查用）**：把 `agent/skills.py::_norm_true` 换回自带词表并删掉 `"所有"` ⇒
+**红基线（自查用）**：把 `agent/workflow_expand.py::_norm_true` 换回自带词表并删掉 `"所有"` ⇒
 ① 必红；把 `server.py` 那行换回自拼的 f-string 且格式里多一个空格 ⇒ ② 必红。
 
 用法：.venv/bin/python tests/test_truth_source_parity.py
@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import server  # noqa: E402
-from agent.skills import _norm_true  # noqa: E402
+from agent.workflow_expand import _norm_true  # noqa: E402
 from tools.base import _as_bool, get_current_time  # noqa: E402
 from utils import clock  # noqa: E402
 

@@ -996,7 +996,7 @@ _CONSENT_PATTERNS[SCOPE_WRITE_OWN] = _own_command
 
 # ── write.own 的**动作冲突**：反极性改选（20261016，§1.57 候选改法①）────────
 # 病（docs/问题记录.md §1.57，20261009 记下、20261016 治）：`favorite_add` 被环境型
-# 受阻（`unavailable`，uid=0 哨兵）判 BLOCK ⇒ `denied_skills` 把**这一件**从菜单摘掉
+# 受阻（`unavailable`，uid=0 哨兵）判 BLOCK ⇒ `denied_workflows` 把**这一件**从菜单摘掉
 # ⇒ 下一轮模型**改选**，选中的却是 `favorite_remove`（反极性兄弟）——菜单里只剩它
 # 这一件"和收藏有关"的可点项。`remove_favorite` 不是主人那句话的命令
 # （`_own_command` 判淡）⇒ 走正常弹卡 ⇒ 主人看到的是「**取消收藏**文章 12」，
@@ -1130,7 +1130,7 @@ def action_conflict_frame(tool: str, sibling: str | None = None) -> str:
     target 那一族洗错的是"哪一篇"，这一族洗错的是"哪一边"（收藏 ↔ 取消收藏）。
 
     帧文里那一句"不许把相反的那件当成同一件事办掉"是本格存在的理由：模型改选
-    反极性兄弟不是因为不懂，而是因为**菜单里只剩它**（见 `denied_skills`）——
+    反极性兄弟不是因为不懂，而是因为**菜单里只剩它**（见 `denied_workflows`）——
     它需要有人明说"这不算办成了"。
 
     帧里点的是**工具名**而不是中文动作词：读它的是 planner，而 planner 的 TOOLS 行

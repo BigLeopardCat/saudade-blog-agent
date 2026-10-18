@@ -24,13 +24,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
-import agent.adminops as A  # noqa: E402
+import agent.adminops_account as _account  # noqa: E402
+import agent.adminops_confirm as _confirm  # noqa: E402
 import agent.authz as authz  # noqa: E402
 import agent.graph as g  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import _RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+
+# 取值点跟着定义走（20261017 批 2 刀 2f）：`instantiate_plan` 搬进
+# `agent.workflow_plan.py` 之后，`instantiate_plan.__globals__[...]` 读的是**那个模块的
+# 全局**，而这四个名单的家是注册表的派生物 `agent.workflow_defs`（实例化层只是 import
+# 了其中两个）⇒ 按家取，别按"谁的 `__globals__`"取。**为什么非改不可**：读不到时是
+# KeyError 而不是假绿，但那是运气——名字再搬一次，同一条断言就会换成"取到别人的同名键"
+# 这种更难看见的样子。
+from agent.workflow_defs import (  # noqa: E402
+    _FREE_TEXT_WRITE_WORKFLOWS,
+    _OWN_WRITE_WORKFLOWS,
+    _WRITE_NAME_TARGET_WORKFLOWS,
+    WRITE_WORKFLOW_NAMES,
+)
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 # 事实信封**只加**的那几个键（F1，20260930）：`tools.base.fact()` 构造、`is_noop` 读，
 # 刻意不进 `g._RCPT_META_KEYS`（进去就要同步 Rust 的 `render_exec_row`）——见
@@ -202,7 +216,7 @@ try:
           and posts(cli)[0][3]["title"] == base._NOTICE_DEFAULT_TITLE,
           str(posts(cli)[0][3] if posts(cli) else None))
     check("  默认标题与后端 `notice.rs::DEFAULT_TITLE` 是同一个字面量",
-          base._NOTICE_DEFAULT_TITLE == A.render_notice_status("x", 1, "", "y").split(
+          base._NOTICE_DEFAULT_TITLE == _account.render_notice_status("x", 1, "", "y").split(
               "标题「")[1].split("」")[0], base._NOTICE_DEFAULT_TITLE)
     out, cli = run_tool(content="字" * base._NOTICE_CONTENT_LIMIT)
     check("正文**恰好到上限**放行（上限是「不超过」，不是「小于」）",
@@ -291,7 +305,7 @@ try:
     check("回执点名账号名与 id，并说清「已发到对方个人中心 + 没有撤回通道」",
           "guest5" in str(out) and "126" in str(out)
           and "对方的个人中心" in str(out) and "撤回" in str(out), str(out))
-    short = A.render_notice_status("guest5", 126, "", "短的")
+    short = _account.render_notice_status("guest5", 126, "", "短的")
     check("  正文短 → 不加节选标注（标注了反而像被截过）", "节选" not in short, short)
     long_body = "字" * 200
     out, _ = run_tool(content=long_body)
@@ -426,7 +440,7 @@ except BaseException as e:  # noqa: BLE001
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑧ 只读白名单：**不在**（写工具进只读通道 = 绕过同意闸）")
-from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
+from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 check("不在 _EXPLICIT_TOOLS（无参点名）", "send_user_notice" not in _EXPLICIT_TOOLS)
 check("不在 _CALLABLE_QUERY_TOOLS（带参点名）",
       "send_user_notice" not in _CALLABLE_QUERY_TOOLS)
@@ -472,16 +486,16 @@ check("⭐ 四族的 why 两两不同形", len(set(_whys)) == len(_fam),
 check("⭐ 四族的 ask 两两不同形", len(set(_asks)) == len(_fam),
       str([w[:24] for w in _asks]))
 _uidx = {126: {"id": 126, "username": "guest5", "status": 0}}
-_q_notice = A.render_confirm_question(
+_q_notice = _confirm.render_confirm_question(
     [{"tool": "send_user_notice", "args": {"name": "guest5", "content": BODY}}],
     None, None, None, None, _uidx, None)
-_q_freeze = A.render_confirm_question(
+_q_freeze = _confirm.render_confirm_question(
     [{"tool": "freeze_account", "args": {"name": "guest5"}}], None, None, None, None,
     _uidx, None)
-_q_add = A.render_confirm_question(
+_q_add = _confirm.render_confirm_question(
     [{"tool": "create_dashboard_todo", "args": {"text": "给猫买罐头", "date": "明天"}}],
     None, None, None, None, None, None)
-_q_done = A.render_confirm_question(
+_q_done = _confirm.render_confirm_question(
     [{"tool": "complete_dashboard_todo", "args": {"text": "给猫买罐头"}}],
     None, None, None, None, None, [{"text": "给猫买罐头"}])
 check("⭐ 四张确认卡的问句两两不同形",
@@ -494,33 +508,33 @@ check("  通知卡里出现的是「发一条站内通知」，**没有**「冻�
 # ══════════════════════════════════════════════════════════════════
 print("\n⑪ 卡面：账号名 + id + **正文全文**（发出去删不掉，卡是唯一人眼复核点）")
 _long = "这是一段比较长的正文，" * 12          # 200+ 字
-_card = A.render_notice_action("guest5", _long, "", _uidx)
+_card = _account.render_notice_action("guest5", _long, "", _uidx)
 check("⭐⭐ 长正文**全文**进卡面（一个省略号都不许有）",
       _long in _card and "…" not in _card, str(len(_card)))
 check("  标题缺省时印的是系统那个默认标题（主人看到的就是将来落库的字）",
-      "站内通知" in A.render_notice_action("guest5", "x", "", _uidx))
+      "站内通知" in _account.render_notice_action("guest5", "x", "", _uidx))
 check("  卡面含账号名 + 账号 id（主人得能核对是不是那个人）",
-      "guest5" in A.render_notice_action("guest5", "x", "", _uidx)
-      and "126" in A.render_notice_action("guest5", "x", "", _uidx))
+      "guest5" in _account.render_notice_action("guest5", "x", "", _uidx)
+      and "126" in _account.render_notice_action("guest5", "x", "", _uidx))
 check("  卡面说清后果：对方个人中心 + **没有撤回的通道**",
       "对方的个人中心" in _card and "撤回" in _card, "")
 check("  账号名一字不改地进卡面（含空格这类形态）",
-      "Guest 5 空格" in A.render_notice_action("Guest 5 空格", "x", "", _uidx))
-_conf = A.render_confirm_text(
+      "Guest 5 空格" in _account.render_notice_action("Guest 5 空格", "x", "", _uidx))
+_conf = _confirm.render_confirm_text(
     [{"tool": "send_user_notice", "args": {"name": "guest5", "content": _long}}],
     None, None, None, None, _uidx, None)
 check("  确认轮的**气泡正文**里也是全文（两条渲染路径同源）", _long in _conf, "")
-_line_no = A.render_notice_action("没有这个人", "x", "", _uidx)
+_line_no = _account.render_notice_action("没有这个人", "x", "", _uidx)
 check("  名录在手但名字不在 → 卡面直接印「后台账号列表里没有叫这个名字的账号」"
       "（点完才被告知没发成，就晚了）",
       "后台账号列表里没有叫这个名字的账号" in _line_no, _line_no)
 check("  名字不在时**不报后果**（做不成的事说后果只会误导）",
       "个人中心" not in _line_no and "撤回" not in _line_no, _line_no)
-_line_none = A.render_notice_action("guest5", "x", "", None)
+_line_none = _account.render_notice_action("guest5", "x", "", None)
 check("  名录读不到 → 只印名字，**照旧弹窗**（读不到就少说，不是不弹）",
       "guest5" in _line_none and "没有叫这个名字" not in _line_none, _line_none)
 check("  正文空（不该走到这里，兜底）→ 印「（没有写正文）」而不是静默一张空卡",
-      "没有写正文" in A.render_notice_action("guest5", "", "", _uidx), "")
+      "没有写正文" in _account.render_notice_action("guest5", "", "", _uidx), "")
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑫ 技能展开：恰一条、缺参零工具、不许拿猜的名字顶上")
@@ -585,12 +599,12 @@ for _ok in ["你好，这是一条测试通知。", "这是给账号夹具的一
           str(_p_ok["tools"]))
 
 check("技能名与工具名不是一套字面量（混用会让展开分支静默不命中）",
-      "notice_send" in instantiate_plan.__globals__["WRITE_SKILL_NAMES"]
-      and "send_user_notice" not in instantiate_plan.__globals__["WRITE_SKILL_NAMES"], "")
+      "notice_send" in WRITE_WORKFLOW_NAMES
+      and "send_user_notice" not in WRITE_WORKFLOW_NAMES, "")
 check("  它走名字通道（收件人在名录里核对得出来 ⇒ 不进「目标是自由文本」那几桶）",
-      "notice_send" in instantiate_plan.__globals__["_WRITE_NAME_TARGET_SKILLS"]
-      and "notice_send" not in instantiate_plan.__globals__["_FREE_TEXT_WRITE_SKILLS"]
-      and "notice_send" not in instantiate_plan.__globals__["_OWN_WRITE_SKILLS"], "")
+      "notice_send" in _WRITE_NAME_TARGET_WORKFLOWS
+      and "notice_send" not in _FREE_TEXT_WRITE_WORKFLOWS
+      and "notice_send" not in _OWN_WRITE_WORKFLOWS, "")
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑬ 过程行：报账号名，**不报工具名、不报正文**")
@@ -626,7 +640,7 @@ if _rust:
 
 check("成功回执不套错误帧 ⇒ checker 照常 PASS（这一族没有 policy_refused 形态）",
       _check_spec("send_user_notice", {"name": "guest5"}, True,
-                  A.render_notice_status("guest5", 126, "", BODY),
+                  _account.render_notice_status("guest5", 126, "", BODY),
                   "notice_send")[0] != _VERDICT_BLOCK, "")
 _nf = base.not_found("后台账号列表里没有叫「x」的账号")
 _v, _r = _check_spec("send_user_notice", {"name": "x"}, True, _nf, "notice_send", _nf.kind)
@@ -650,19 +664,19 @@ class _FakeTool:
         return self.out
 
 
-def _grant_of(spec, skill=None):
+def _grant_of(spec, workflow=None):
     """照**卡上签的那一件**造令牌（20261012 起 `_grant_covers` 按工具名+参数比对：
     光有令牌不算数——空壳 `{"token": "x"}` 会让确认轮重新弹卡）。"""
     args, ok = g._tool_args(spec)
     assert ok, spec
-    return {"token": "x", "skill": skill, "specs": [{"tool": g._tool_name(spec),
+    return {"token": "x", "workflow": workflow, "specs": [{"tool": g._tool_name(spec),
                                                      "args": args}]}
 
 
-def _run_exec(msg, spec, skill="notice_send", grant=None):
+def _run_exec(msg, spec, workflow="notice_send", grant=None):
     _CALLS.clear()
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = [spec]
     state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content=msg)]}
@@ -686,7 +700,7 @@ try:
           authz.consent_granted(_adm, "set_article_status", _GRANTABLE) is True
           and authz.consent_granted(_adm, _t, _GRANTABLE) is False, _GRANTABLE)
     g._TOOL_MAP["send_user_notice"] = _FakeTool(
-        base.ok(A.render_notice_status("guest5", 126, "", BODY),
+        base.ok(_account.render_notice_status("guest5", 126, "", BODY),
                 meta={"op": "notice_send", "account_id": 126,
                       "account_name": "guest5"}))
     for msg, why in [("给 guest5 发个通知", "命令式"),
@@ -700,8 +714,8 @@ try:
               "guest5" in pop.get("q", "") and BODY in pop.get("q", ""),
               pop.get("q", "")[:80])
         payload = _confirm.inspect(pop.get("token") or "") or {}
-        check("  令牌载荷里的 skill 与 specs 就是这一件（卡上写什么就签什么）",
-              payload.get("skill") == "notice_send"
+        check("  令牌载荷里的 workflow 与 specs 就是这一件（卡上写什么就签什么）",
+              payload.get("workflow") == "notice_send"
               and payload.get("specs") == [{"tool": "send_user_notice",
                                             "args": {"name": "guest5",
                                                      "content": BODY}}],

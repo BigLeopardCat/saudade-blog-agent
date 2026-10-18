@@ -45,7 +45,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa
 
 import agent.graph as g  # noqa: E402
 import tools.base as tb  # noqa: E402
-from agent import adminops as A  # noqa: E402
+from agent import adminops_quota as _quota  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.context import _SHORT_MAX, _is_short_reply, _short_reply_hint  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
@@ -281,7 +281,7 @@ _prompt = g._render_planner_prompt(
     "admin", "ctx", "round", user_msg="你看着办", intent_hints="i",
     doc_anchors="d", recent_context="r", short_reply_hint="s",
     tool_results="t", pending_ledger=_t, ref_hints="", reflector_feedback="",
-    correction="", contract=g._PLANNER_OUTPUT_CONTRACT_NATIVE, slim_skills=True)
+    correction="", contract=g._PLANNER_OUTPUT_CONTRACT_NATIVE, slim_workflows=True)
 check("渲染结果里出现台账（talkId）", "talkId:101" in _prompt)
 check("  且渲染函数**必须有**这个形参（漏传即 TypeError）", "pending_ledger" in
       g._render_planner_prompt.__code__.co_varnames)
@@ -321,24 +321,30 @@ print("⑪ 收尾那两句话（S4）：改完再询问 / 没动作就问一句"
 # 判据全在结构上（回执 / 令牌 / 写计划 / 提问判据），事实**现场重读**台账。
 # 两句都只进 narrator 的 [执行计划] 段（`_narrator_plan`），planner 那份帧文本一个字
 # 都不复用（它的 header 是对 planner 说的，见 `_ledger_closing_note` 的头注）。
-_CHAT_PLAN = ("SKILL=chat\nPARAMS={}\nTOOLS: （无）\nNOTE: （无）\nREPLY: 直接回答")
-_WRITE_PLAN = ("SKILL=board_audit\nPARAMS={}\n"
-               'TOOLS: audit_board_comment({"talk_id": 101, "verdict": "pass"})\n'
-               "NOTE: （无）\nREPLY: 直接回答")
-_GRANT_AUDIT = {"skill": "board_audit",
+# 计划两态（20261017 批 1）：下面这两份是**对象**，`_st` 走 `plan_state` 一起写两态。
+# 此前它们是手写的**文本**，而消费侧（`_round_facts` / `_ledger_turn_families`）已改读
+# 对象那一态 ⇒ 文本在场、对象缺席的夹具会静默退化成"这一轮没有计划"：本套件⑯ 那几条
+# 断言写的都是 `== ""`，退化了照样绿——正是本仓"看着在跑、其实没跑"那一族。
+_CHAT_PLAN = {"workflow": "chat", "params": {}, "tools": [], "note": "", "reply": "直接回答"}
+_WRITE_PLAN = {"workflow": "board_audit", "params": {},
+               "tools": ['audit_board_comment({"talk_id": 101, "verdict": "pass"})'],
+               "note": "", "reply": "直接回答"}
+_GRANT_AUDIT = {"workflow": "board_audit",
                 "specs": [{"tool": "audit_board_comment",
                            "args": {"talk_id": 101, "verdict": "pass"}}]}
-_GRANT_OFFLINE = {"skill": "article_status",
+_GRANT_OFFLINE = {"workflow": "article_status",
                   "specs": [{"tool": "set_article_status", "args": {"article_id": 3}}]}
 
 
 def _receipt(tool, **kw):
-    return {"skill": "review_inbox", "tool": tool, "args": {}, "result": "ok", **kw}
+    return {"workflow": "review_inbox", "tool": tool, "args": {}, "result": "ok", **kw}
 
 
 def _st(msgs, receipts=None, grant=None, plan=_CHAT_PLAN):
-    return {"plan": plan, "messages": list(msgs), "receipts": receipts or [],
-            "confirm_grant": grant}
+    """合成一份 state：计划两态一起给。`dict(...)` 是必须的——`plan_state` 归一**原地**改，
+    不拷的话第一次调用就把模块级常量改掉了（跨用例串味）。"""
+    return {**g.plan_state(dict(plan)), "messages": list(msgs),
+            "receipts": receipts or [], "confirm_grant": grant}
 
 
 check("回执判据只认**写**工具（读回执不是'办了几件'）",
@@ -439,7 +445,8 @@ try:
     check("计划里已经有系统台账核对结论（确定性收尾轮）⇒ 不加，别抢那句话",
           g._ledger_closing_note(
               _st([HumanMessage(_SILENT)],
-                  plan=_CHAT_PLAN + "\n" + g._LEDGER_NOTE_PREFIX + "站内没有这条留言"),
+                  plan={**_CHAT_PLAN,
+                        "note": g._LEDGER_NOTE_PREFIX + "站内没有这条留言"}),
               _cfg()) == "")
 finally:
     _lg.uninstall()
@@ -472,7 +479,8 @@ try:
           bool(g._no_popup_fact(_state)) and g._no_popup_fact(_state) not in _plan_text)
     _lg.reads.clear()
     check("  单参数调用（老路径/纯单测）行为不变、**一次都不读台账**",
-          g._narrator_plan(_state) == _CHAT_PLAN + "\n" + g._no_popup_fact(_state)
+          g._narrator_plan(_state)
+          == g.plan_state(dict(_CHAT_PLAN))["plan"] + "\n" + g._no_popup_fact(_state)
           and _lg.reads == [], str(_lg.reads))
 finally:
     _lg.uninstall()
@@ -537,7 +545,7 @@ try:
     check("申请清单里也标注了这一件（模型看得见的每一屏都说同一句）",
           "agent 的额度写通道办不了这一件" in _out, _out[:140])
     check("  用的是**同一份**措辞（不是第二句近义话）",
-          A._UNREACHABLE_NOTE in _out)
+          _quota._UNREACHABLE_NOTE in _out)
 finally:
     tb._admin_get = _saved_get
     _lg.uninstall()
@@ -606,7 +614,8 @@ try:
     check("确定性收尾轮（台账核对结论已在计划里）⇒ 不加，别抢那句话",
           g._ledger_fact_note(
               _st([HumanMessage(_Q)],
-                  plan=_CHAT_PLAN + "\n" + g._LEDGER_NOTE_PREFIX + "站内没有这条留言"),
+                  plan={**_CHAT_PLAN,
+                        "note": g._LEDGER_NOTE_PREFIX + "站内没有这条留言"}),
               _cfg()) == "")
     _lg.reads.clear()
     check("config 缺省（老的单参调用/纯单测）⇒ 一个字都不加、一次都不读",

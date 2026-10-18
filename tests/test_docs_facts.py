@@ -21,7 +21,7 @@
 
 **判据**：文档里声明的数字 == 代码里的真值。真值只有五个来源，不重写：
   - 工具数 = `len(tools.base._TOOL_REGISTRY)`
-  - 技能数 = `len(agent.skills.SKILLS)`
+  - 技能数 = `len(agent.workflow_defs.WORKFLOWS)`
   - golden 条数 = `eval/golden/basic.jsonl` 行数
   - 依赖条数 = `pyproject.toml` 的 `[project].dependencies` 条数
   - ADR 份数 = `docs/adr/adr-*.md` 的个数
@@ -43,7 +43,7 @@ import tomllib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from agent.skills import SKILLS  # noqa: E402
+from agent.workflow_defs import WORKFLOWS  # noqa: E402
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
 FAILS: list[str] = []
@@ -58,7 +58,7 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 
 
 N_TOOLS = len(_TOOL_REGISTRY)
-N_SKILLS = len(SKILLS)
+N_WORKFLOWS = len(WORKFLOWS)
 N_GOLDEN = sum(1 for ln in (ROOT / "eval/golden/basic.jsonl")
                .read_text(encoding="utf-8").splitlines() if ln.strip())
 
@@ -78,11 +78,11 @@ FIXTURES = (ROOT / "eval/fixtures/README.md").read_text(encoding="utf-8")
 # (文件, 说明, 正则——第 1 组必须是数字, 真值)
 _CLAIMS: list[tuple[str, str, str, str, int]] = [
     ("README.md", README, "目录树：tools/base.py 的工具数", r"tools/base\.py\s+(\d+) 个工具", N_TOOLS),
-    ("README.md", README, "正文：技能注册表条数", r"技能注册表当前有 (\d+) 个技能", N_SKILLS),
+    ("README.md", README, "正文：技能注册表条数", r"技能注册表当前有 (\d+) 个技能", N_WORKFLOWS),
     ("README.md", README, "评测：L2 golden 条数", r"真实 LLM 任务评测：(\d+) 条 golden", N_GOLDEN),
     ("agent-architecture.md", ARCH, "§1：LLM 调用旁的工具数", r"LLM 调用、(\d+) 个工具。", N_TOOLS),
     ("agent-architecture.md", ARCH, "§1 图注：mermaid 节点里的工具数", r"(\d+) 工具 · 4 workers", N_TOOLS),
-    ("agent-architecture.md", ARCH, "§2：skills.py 的技能数", r"技能注册表：(\d+) 个技能静态定义", N_SKILLS),
+    ("agent-architecture.md", ARCH, "§2：workflow_defs 的技能数", r"技能注册表：(\d+) 个技能静态定义", N_WORKFLOWS),
     ("agent-architecture.md", ARCH, "§2：base.py 的工具数", r"(\d+) 个 @tool 工具", N_TOOLS),
     ("agent-architecture.md", ARCH, "§5 标题：工具系统小节标题", r"## 5\. 工具系统（(\d+) 个）", N_TOOLS),
     ("agent-architecture.md", ARCH, "§11：write.content 那句话里的工具数", r"当前 (\d+) 个工具里", N_TOOLS),
@@ -108,7 +108,7 @@ _CLAIMS: list[tuple[str, str, str, str, int]] = [
 ]
 
 print("① 文档声明的数字 == 代码里的真值")
-print(f"   真值：工具 {N_TOOLS} · 技能 {N_SKILLS} · golden {N_GOLDEN} · 依赖 {N_DEPS}"
+print(f"   真值：工具 {N_TOOLS} · 技能 {N_WORKFLOWS} · golden {N_GOLDEN} · 依赖 {N_DEPS}"
       f" · ADR {N_ADRS}")
 for name, text, desc, pat, truth in _CLAIMS:
     hits = re.findall(pat, text)
@@ -133,6 +133,24 @@ check("README 与 agent-architecture 说同一个工具数",
           if "工具" in _d or "工具系统" in _d or "@tool" in _d
           for h in re.findall(p, _t)),
       "两处对不上")
+
+# 第五处同类漂移（20261018 补锁）：`docs/README.md` 里那句「架构决策记录另有索引：
+# adr/README.md（N 份，…）」的 N 是**手抄**的——抄进来时是 7，而 `docs/adr/` 下当时
+# 已经有 12 份。它没被上面那几条正则盖到，是因为那几条的射程都在 README 与架构文档的
+# 正文数字上，够不到索引尾注这一行。真值只有一个来源：盘上有几份 `adr-*.md`。
+# （`N_ADRS` / `DOCS_INDEX` 在顶上已经取过，这里不再重复定义——同一个量两处取值迟早分岔。）
+print("\n④ docs/README.md 尾注里手抄的 ADR 份数 == docs/adr/ 下盘上的份数")
+_ADR_PAT = r"（(\d+) 份，记"
+_hits = re.findall(_ADR_PAT, DOCS_INDEX)
+if not _hits:
+    # 同①：正则一条都不匹配 = 判据瞎了（那句话被改形/搬家），与"数字漂了"是两种红
+    check("docs/README.md 尾注：ADR 份数", False,
+          f"模式一条都没匹配上（判据失明）：/{_ADR_PAT}/")
+else:
+    _bad = [h for h in _hits if int(h) != N_ADRS]
+    check(f"docs/README.md 尾注：ADR 份数（{len(_hits)} 处）", not _bad,
+          f"写着 {_bad}，盘上是 {N_ADRS} 份")
+check("  adr/ 下确实数到了文件（否则上一条是空过）", N_ADRS > 0, f"N_ADRS={N_ADRS}")
 
 print()
 if FAILS:

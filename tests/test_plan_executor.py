@@ -6,7 +6,7 @@
 请主人再说一遍**「要不要现在继续？」。这一格此前靠的是一条提示词纠偏（`_ledger_continue_nudge`
 的 `resumed` 档："台账里这件事还没做完，本轮把它做掉"）——而模型已经两次没注意到它。
 批 B 换掉的是**出口**：下一步是谁、参数是什么，早就落在台账里了（批 A 让步骤带上了
-`skill`/`args`）⇒ 拼装它是一次**查表**，不需要任何决策。
+`workflow`/`args`）⇒ 拼装它是一次**查表**，不需要任何决策。
 
 本套件锁六件事：
 
@@ -68,7 +68,7 @@ ROLE = "superadmin"
 # 与生产登记那一刻**同一份代码**。
 _SRC = "给文章 46 加个标签 embeding"
 _DECL = T.intents_to_declarations(
-    [{"goal": _SRC, "skill": "article_tags",
+    [{"goal": _SRC, "workflow": "article_tags",
       "params": {"article_id": 46, "add": ["embeding"]}}],
     role=ROLE, sources=(_SRC,))
 _FRAME = T.frame_payload(T.normalize_declaration(_DECL[0]), 346)
@@ -81,7 +81,7 @@ _STEPS = _FRAME["steps"]
 # 不能靠"发出来的正好是第二行"的运气。
 _SRC2 = "在后台待办里加一条「身份变更复核」"
 _DECL2 = T.intents_to_declarations(
-    [{"goal": _SRC2, "skill": "dashboard_todo_add", "params": {"text": "身份变更复核"}}],
+    [{"goal": _SRC2, "workflow": "dashboard_todo_add", "params": {"text": "身份变更复核"}}],
     role=ROLE, sources=(_SRC2,))
 _FRAME2 = T.frame_payload(T.normalize_declaration(_DECL2[0]), 347)
 _STEPS2 = _FRAME2["steps"]
@@ -113,7 +113,7 @@ def _state(**over) -> dict:
           "executed": [], "receipts": [], "blocked": [], "blocked_seen": [],
           "done": False, "tool_data": [], "task_frames": [],
           "plan_task_id": "", "plan_cursor": -1,
-          "confirm_grant": {"skill": "tag_create",
+          "confirm_grant": {"workflow": "tag_create",
                             "specs": [{"tool": "create_tag", "args": {"title": "甲"}}]}}
     st.update(over)
     return st
@@ -148,7 +148,7 @@ def test_confirm_resume_emits_the_next_card_without_llm():
           str(pre.early["plan_obj"]["tools"]))
     check("技能名判据是**闭集覆盖**：`create_tag` 由 `article_tags` 的 "
           "`extra_plan_tools` 声明，所以整个单元归它",
-          pre.early["plan_obj"]["skill"] == "article_tags")
+          pre.early["plan_obj"]["workflow"] == "article_tags")
     check("⭐ **不吃 `plan_rounds`**（零 LLM 出口不许拿一次不存在的决策去抵 MAX_PLAN_ROUNDS）",
           pre.early["plan_rounds"] == 1, str(pre.early["plan_rounds"]))
     check("进度守卫的两格写进了 state（同一轮的下一跳靠它）",
@@ -157,9 +157,9 @@ def test_confirm_resume_emits_the_next_card_without_llm():
     check("文本态与结构化态一起给（`plan_state` 的唯一入口，execute 读的是文本那条）",
           G.parse_plan(pre.early["plan"])["tools"] == pre.early["plan_obj"]["tools"])
     check("plan_obj 的键集与令牌那条通道**同款**（同一个 `_confirm_grant_plan` 契约）",
-          set(pre.early["plan_obj"]) == set(G._confirm_grant_plan(
-              {"skill": "tag_create", "specs": [{"tool": "create_tag",
-                                                 "args": {"title": "甲"}}]})))
+          set(pre.early["plan_obj"]) == set(G.plan_state(G._confirm_grant_plan(
+              {"workflow": "tag_create", "specs": [{"tool": "create_tag",
+                                                    "args": {"title": "甲"}}]}))["plan_obj"]))
     check("注记只写**事实与禁止**，不写机制（写给 narrator 的机制描述会变成它的词汇）",
           "弹卡" not in pre.early["plan_obj"]["note"]
           and "不得" in pre.early["plan_obj"]["note"])
@@ -196,12 +196,12 @@ def test_unbound_next_step_goes_back_to_planner():
          [{k: v for k, v in _STEPS[0].items() if k != "args"}], "plan_placeholder_handback"),
         ("实参还挂着 `$tool[N]` 引用（值的来路是**上一轮的帧**，跨轮取不到）",
          [dict(_STEPS[0], args={"title": "$tool[0].title"})], "plan_placeholder_handback"),
-        ("技能名认不出（批 A 之前登记的老行没有 `skill`）",
-         [dict(_STEPS[0], skill="")], "plan_exec_skill_mismatch"),
+        ("技能名认不出（批 A 之前登记的老行没有 `workflow`）",
+         [dict(_STEPS[0], workflow="")], "plan_exec_workflow_mismatch"),
         ("技能与工具对不上（两步都声称是 `tag_create`，而那个技能管不到 `set_article_tags` "
          "⇒ 一个工具都不执行）",
-         [dict(_STEPS[0], skill="tag_create"), dict(_STEPS[1], skill="tag_create")],
-         "plan_exec_skill_mismatch"),
+         [dict(_STEPS[0], workflow="tag_create"), dict(_STEPS[1], workflow="tag_create")],
+         "plan_exec_workflow_mismatch"),
     ]
     for name, steps, event in cases:
         pre, ev = _run(_state(), _cfg([_row(steps=steps, total_steps=len(steps))]))
@@ -358,7 +358,7 @@ def test_the_row_just_settled_is_not_re_emitted():
     # planner（这就是 `resumed` 那一格）。关键是**①的回执已经在 `state["receipts"]` 里**
     # ——回执是请求内累计的（见 `AgentState.receipts` 的注），所以 `next_cursor` 已经把
     # 第一行推过去了。这一条锁的就是这个前提：没有它，执行器会把主人**刚刚点过确定**的
-    # 那一件原样再发一张卡，而卡面断言在那种形状下**照样绿**（台账没推进 ⇒ `skill_any`
+    # 那一件原样再发一张卡，而卡面断言在那种形状下**照样绿**（台账没推进 ⇒ `workflow_any`
     # 看到的那张卡还是同一件），主人白点一次。
     rcp = [{"tool": s["tool"], "args": s["args"], "result": "已办", "ts": 1.0}
            for s in _STEPS]
@@ -374,7 +374,7 @@ def test_the_row_just_settled_is_not_re_emitted():
           str(pre.early and pre.early["plan_obj"]["tools"]))
     check("  技能名跟着第二行走（`dashboard_todo_add`，不是第一行的）",
           pre.early is not None
-          and pre.early["plan_obj"]["skill"] == "dashboard_todo_add")
+          and pre.early["plan_obj"]["workflow"] == "dashboard_todo_add")
     check("  进度守卫记的是**第二行**的 id（下一跳拿它比对）",
           pre.early is not None and pre.early["plan_task_id"] == row_b["task_id"])
     check("  trace 也对得回第二行",

@@ -16,6 +16,9 @@ wheels/
 
 # Environment variables (contains secrets!)
 .env
+# `.env` 的备份同样是秘密（换 key / 换模型时留的那份）。20261017 之前没有这条，
+# 盘上那份 `?? .env.bak-*` 一直躺在"未跟踪但也没被忽略"的位置，`git add -A` 会带走它。
+.env.bak-*
 
 # Generated audio files
 output_audio/

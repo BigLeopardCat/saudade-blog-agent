@@ -588,11 +588,11 @@ check("用上待办夹具的那条用例带真身份（夹具闸会读管理员�
 # 三处同源：那份 SQL 的 `due_date` / 本模块的 `EXPECT_DATE` / 用例断言里渲染出的中文；
 # 前两处由 SQL 注释与 EXPECT_DATE 的注释人挂着，后两处在这里机械锁住（同留言族那一条的
 # 取向：**改一处不改另一处要红在契约上，不是红成「模型没按台账办」**）。
-import agent.adminops as _adminops  # noqa: E402  （渲染那串中文的唯一来源，别在测试里手拼）
+import agent.adminops_todo as _todo  # noqa: E402  （渲染那串中文的唯一来源，别在测试里手拼）
 _todo_gold = next(c for c in _CASES if c["id"] == "admin_todo_done_popup")["gold"]
 _rx_t = " ".join(_todo_gold.get("text_any_regex") or [])
 check("用例断言的排期，正是待办族约定的那一个日子渲染出来的（EXPECT_DATE ↔ 用例断言）",
-      f"排期 {_adminops.due_date_cn(gft.EXPECT_DATE)}，现在：未完成" in _rx_t,
+      f"排期 {_todo.due_date_cn(gft.EXPECT_DATE)}，现在：未完成" in _rx_t,
       _rx_t[:120])
 check("用例断言里带着「现在：未完成」——这半句只在**读到唯一命中行**时才印（uid=0 的退化卡面"
       "只有正文、没有这对括号），所以它就是「真身份那一跳真的落到了那一行」的证据",

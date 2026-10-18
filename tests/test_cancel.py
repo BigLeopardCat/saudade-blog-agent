@@ -12,7 +12,7 @@
      调用自然结束才在**下一个检查点**生效——但"下一个检查点"一定是拦得住的，
      所以"用户走了还写设备"这件事不会发生。
 
-纯函数 / 无网络 / 不起图（直接调节点函数，与 tests/test_skills.py 同款）。
+纯函数 / 无网络 / 不起图（直接调节点函数，与 tests/test_workflows.py 同款）。
 """
 import sys
 import threading
@@ -29,8 +29,7 @@ sys.path.insert(0, str(ROOT))
 
 import agent.graph as g
 from agent.graph import AgentCancelled, execute_node, gate_node, model_node, planner_node, reflector_node
-from agent.skills import instantiate_plan
-from agent.graph import plan_encode
+from agent.workflow_plan import instantiate_plan
 from _planner_stub import bind_tools_stub, toolcall_reply
 
 
@@ -68,9 +67,14 @@ class _Spy:
         return self._result
 
 
-def _state(**kw):
-    base = {"messages": [HumanMessage(content="现在有哪些设备在线")],
-            "plan": "", "plan_rounds": 1, "done": False}
+def _state(plan=None, **kw):
+    """合成一份 state。`plan` 收的是**计划对象**（20261017 批 1）：经 `plan_state` 两态一起
+    写。`execute_node` 读的是**对象那一态**——此前夹具只给渲染文本，改读对象之后它会按
+    "这一轮没有计划" 判 ⇒ 本节全部"零调用"断言会**假绿**（本该调用的读工具一次都不调，
+    而断言写的正是 `calls == []`）。"""
+    base = {**g.plan_state(dict(plan) if plan else {}),
+            "messages": [HumanMessage(content="现在有哪些设备在线")],
+            "plan_rounds": 1, "done": False}
     base.update(kw)
     return base
 
@@ -106,7 +110,7 @@ def test_write_never_runs_after_cancel():
         obj["tools"] = ['device_oled_display({"text": "晚上好"})']
         cfg, _ = _cfg(stop=True)
         try:
-            execute_node(_state(plan=plan_encode(obj)), cfg)
+            execute_node(_state(plan=obj), cfg)
             check("入口取消 → execute 抛 AgentCancelled", False, "没抛")
         except AgentCancelled:
             check("入口取消 → execute 抛 AgentCancelled", True)
@@ -122,7 +126,7 @@ def test_write_never_runs_after_cancel():
         oled.calls.clear()
         obj2 = instantiate_plan("content_query", {"calls": [{"tool": "list_devices"}]})
         obj2["tools"] = ['list_devices({})', 'device_oled_display({"text": "晚上好"})']
-        out = execute_node(_state(plan=plan_encode(obj2)), cfg2)
+        out = execute_node(_state(plan=obj2), cfg2)
         check("中途取消 → 已执行的那个照常调用一次", reader.calls == [{}], reader.calls)
         check("中途取消 → 其后的写操作**不执行**（逐 spec 检查）", oled.calls == [], oled.calls)
         check("中途取消 → 已执行项的回执仍保留（真发生过的事实）",
@@ -145,14 +149,14 @@ def test_cancel_during_blocking_llm():
         这次调用**照常返回**（LLM 调用本身不可打断），节点自己也照常产出计划。
 
         点名的工具必须是白名单内的：白名单外的点名会被剔空，而 20260921 起剔空会
-        触发确定性纠偏/收尾（见 test_skills.test_drop_correction）——那会把计划
+        触发确定性纠偏/收尾（见 test_workflows.test_drop_correction）——那会把计划
         改写掉，这条用例就测不到"取消不打断 LLM 调用"这件事了。"""
 
         bind_tools = bind_tools_stub      # planner 先 bind_planner_tools 再 invoke（见 _planner_stub）
 
         def invoke(self, *a, **kw):
             ev.set()
-            return toolcall_reply('SKILL=content_query\nPARAMS={"calls": [{"tool": "search_notes",'
+            return toolcall_reply('WORKFLOW=content_query\nPARAMS={"calls": [{"tool": "search_notes",'
                                 ' "args": {"keyword": "取消"}}]}')
 
     orig_llm = g.get_llm
@@ -172,7 +176,7 @@ def test_cancel_during_blocking_llm():
         obj = instantiate_plan("content_query", {"calls": [{"tool": "list_devices"}]})
         obj["tools"] = ['device_oled_display({"text": "晚上好"})']
         try:
-            execute_node(_state(plan=plan_encode(obj)), cfg)
+            execute_node(_state(plan=obj), cfg)
             check("下一个检查点（execute 入口）拦下取消", False, "没抛")
         except AgentCancelled:
             check("下一个检查点（execute 入口）拦下取消", True)

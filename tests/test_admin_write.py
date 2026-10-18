@@ -37,13 +37,15 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统�
 sys.path.insert(0, str(ROOT))
 
 import agent.graph as g  # noqa: E402
-from agent import adminops as A  # noqa: E402
+from agent import adminops_confirm as _confirm  # noqa: E402
+from agent import adminops_tags as _tags  # noqa: E402
+from agent import adminops_target as _target  # noqa: E402
 from agent import authz  # noqa: E402
-from agent.graph import (EXECUTED_ONCE_SKILLS, SNAPSHOT_SKILLS,  # noqa: E402
+from agent.graph import (EXECUTED_ONCE_WORKFLOWS, SNAPSHOT_WORKFLOWS,  # noqa: E402
                          _CONTENT_TOOLS, _already_done_writes, _check_spec,
                          execute_node, plan_state)
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
 
 # ── 密钥桩：settings.jwt_secret 是全局单例，测试里直接改它 ────────────────
@@ -116,7 +118,7 @@ TWO = [{"tagKey": 10000, "title": "爬虫", "level": 2,
         "fatherTag": "Python", "fatherKey": 1},
        {"tagKey": 10001, "title": "分布式", "level": 2,
         "fatherTag": "架构", "fatherKey": 2}]
-IDX = A.build_tag_index(ONE, TWO)
+IDX = _tags.build_tag_index(ONE, TWO)
 
 
 def note(aid=12, title="架构", status="private", top=0, tags=""):
@@ -127,41 +129,41 @@ def note(aid=12, title="架构", status="private", top=0, tags=""):
 # ══════════════════════════════════════════════════════════════════
 print("\n① 纯函数：状态映射（认不出来就拒绝，绝不猜）")
 
-check("口语/别名 → 存储值", A.normalize_status("公开") == "public"
-      and A.normalize_status("PUBLISHED") == "public"
-      and A.normalize_status("隐藏") == "private"
-      and A.normalize_status("草稿") == "draft")
+check("口语/别名 → 存储值", _tags.normalize_status("公开") == "public"
+      and _tags.normalize_status("PUBLISHED") == "public"
+      and _tags.normalize_status("隐藏") == "private"
+      and _tags.normalize_status("草稿") == "draft")
 check("认不出来的状态 → None（调用方拒绝执行）",
-      A.normalize_status("半公开") is None and A.normalize_status("") is None
-      and A.normalize_status("publishedd") is None)
+      _tags.normalize_status("半公开") is None and _tags.normalize_status("") is None
+      and _tags.normalize_status("publishedd") is None)
 check("None（没点名这个字段）→ None，与「认不出来」同形（调用方按 has_* 区分）",
-      A.normalize_status(None) is None)
+      _tags.normalize_status(None) is None)
 check("置顶映射：1/0 与中文别名",
-      A.normalize_top(1) == 1 and A.normalize_top("0") == 0
-      and A.normalize_top("是") == 1 and A.normalize_top("取消置顶") == 0)
+      _tags.normalize_top(1) == 1 and _tags.normalize_top("0") == 0
+      and _tags.normalize_top("是") == 1 and _tags.normalize_top("取消置顶") == 0)
 check("置顶越界值 → None（不把 2 当成置顶）",
-      A.normalize_top(2) is None and A.normalize_top("也许") is None)
+      _tags.normalize_top(2) is None and _tags.normalize_top("也许") is None)
 check("bool 不按 int 处理（True 是「是」，不是越界的 1）",
-      A.normalize_top(True) == 1 and A.normalize_top(False) == 0)
+      _tags.normalize_top(True) == 1 and _tags.normalize_top(False) == 0)
 check("未知值渲染成带引号的原值，不假装是个已知状态",
-      A.status_cn("半公开") == "未知状态「半公开」" and A.top_cn(7) == "未知置顶值「7」")
+      _tags.status_cn("半公开") == "未知状态「半公开」" and _tags.top_cn(7) == "未知置顶值「7」")
 
 
 print("\n② 纯函数：note.tags 编解码（脏值容错、写出口唯一）")
 
-check("读：逗号串 → id 列表", A.parse_tag_ids("1,2") == [1, 2])
-check("读：容忍脏值（空段/重复/空白）", A.parse_tag_ids("1,1,,") == [1]
-      and A.parse_tag_ids(" 3 , 1 ") == [3, 1])
+check("读：逗号串 → id 列表", _tags.parse_tag_ids("1,2") == [1, 2])
+check("读：容忍脏值（空段/重复/空白）", _tags.parse_tag_ids("1,1,,") == [1]
+      and _tags.parse_tag_ids(" 3 , 1 ") == [3, 1])
 check("读：`12abc` 不当成 12（前端那条 parseInt 的老行为刻意不学）",
-      A.parse_tag_ids("12abc") == [])
-check("读：list/None/数字混装", A.parse_tag_ids(["1", 2, "x"]) == [1, 2]
-      and A.parse_tag_ids(None) == [] and A.parse_tag_ids("") == [])
+      _tags.parse_tag_ids("12abc") == [])
+check("读：list/None/数字混装", _tags.parse_tag_ids(["1", 2, "x"]) == [1, 2]
+      and _tags.parse_tag_ids(None) == [] and _tags.parse_tag_ids("") == [])
 check("读：负数/零/布尔被丢（id 空间是正整数）",
-      A.parse_tag_ids("0,-3") == [] and A.parse_tag_ids([True, 5]) == [5])
-check("写：去重保序", A.join_tag_ids([2, 1, 2]) == "2,1")
+      _tags.parse_tag_ids("0,-3") == [] and _tags.parse_tag_ids([True, 5]) == [5])
+check("写：去重保序", _tags.join_tag_ids([2, 1, 2]) == "2,1")
 check("写：空列表 → 空串（**语义是清空标签**，唯一允许产出空串的出口）",
-      A.join_tag_ids([]) == "")
-check("编解码往返一致", A.parse_tag_ids(A.join_tag_ids([10000, 12])) == [10000, 12])
+      _tags.join_tag_ids([]) == "")
+check("编解码往返一致", _tags.parse_tag_ids(_tags.join_tag_ids([10000, 12])) == [10000, 12])
 
 
 print("\n③ 标签配色与前端同源（改一侧必须同步另一侧）")
@@ -177,7 +179,7 @@ def frontend_color(name: str) -> str:
     h = 0
     for i in range(0, len(raw), 2):
         h = (h * 31 + (raw[i] | (raw[i + 1] << 8))) % 100000
-    return A.NEW_TAG_COLORS[h % len(A.NEW_TAG_COLORS)]
+    return _tags.NEW_TAG_COLORS[h % len(_tags.NEW_TAG_COLORS)]
 
 
 def ord_color(name: str) -> str:
@@ -185,52 +187,52 @@ def ord_color(name: str) -> str:
     h = 0
     for ch in name:
         h = (h * 31 + ord(ch)) % 100000
-    return A.NEW_TAG_COLORS[h % len(A.NEW_TAG_COLORS)]
+    return _tags.NEW_TAG_COLORS[h % len(_tags.NEW_TAG_COLORS)]
 
 
 check("配色表与前端 NEW_TAG_COLORS 同序（顺序变了颜色就全变）",
-      A.NEW_TAG_COLORS == ['#1677ff', '#52c41a', '#fa8c16', '#eb2f96',
+      _tags.NEW_TAG_COLORS == ['#1677ff', '#52c41a', '#fa8c16', '#eb2f96',
                            '#722ed1', '#13c2c2', '#f5222d', '#a0d911'])
 check("BMP 名字：与独立重算一致",
-      all(A.color_for_name(n) == frontend_color(n)
+      all(_tags.color_for_name(n) == frontend_color(n)
           for n in ("Python", "编程", "架构", "测试", "分布式", "C++")),
-      "; ".join(f"{n}={A.color_for_name(n)}" for n in ("Python", "编程", "架构")))
+      "; ".join(f"{n}={_tags.color_for_name(n)}" for n in ("Python", "编程", "架构")))
 check("同名永远同色（哈希不是随机）",
-      A.color_for_name("架构") == A.color_for_name("架构"))
+      _tags.color_for_name("架构") == _tags.color_for_name("架构"))
 check("非 BMP（emoji）按 UTF-16 代理对算 —— 与按码点算**不同色**，这条锁的是"
       "「别把实现简化成 ord()」（前端 charCodeAt 是码元）",
-      A.color_for_name("🐍") == frontend_color("🐍")
-      and A.color_for_name("🐍") != ord_color("🐍"),
-      f"{A.color_for_name('🐍')} vs {ord_color('🐍')}")
+      _tags.color_for_name("🐍") == frontend_color("🐍")
+      and _tags.color_for_name("🐍") != ord_color("🐍"),
+      f"{_tags.color_for_name('🐍')} vs {ord_color('🐍')}")
 
 
 print("\n④ 纯函数：名字 ↔ id（歧义不替用户选，悬空不静默吞）")
 
-hit, _ = A.find_tag(IDX, "Python")
+hit, _ = _tags.find_tag(IDX, "Python")
 check("一级标签精确命中", hit is not None and hit.id == 1 and hit.level == 1)
-check("二级标签按父作用域找", A.find_tag(IDX, "爬虫", 1)[0].id == 10000)
-check("父作用域下无此名 → 没命中", A.find_tag(IDX, "爬虫", 2)[0] is None)
+check("二级标签按父作用域找", _tags.find_tag(IDX, "爬虫", 1)[0].id == 10000)
+check("父作用域下无此名 → 没命中", _tags.find_tag(IDX, "爬虫", 2)[0] is None)
 check("名字不完全相等就不算命中（不做包含/模糊匹配）",
-      A.find_tag(IDX, "Pyth")[0] is None and A.find_tag(IDX, "python")[0] is None)
-check("去空白后相等算命中", A.find_tag(IDX, " Python ")[0].id == 1)
-amb = {1: A.TagInfo(1, "笔记", 1), 2: A.TagInfo(2, "笔记", 1)}
-h2, c2 = A.find_tag(amb, "笔记")
+      _tags.find_tag(IDX, "Pyth")[0] is None and _tags.find_tag(IDX, "python")[0] is None)
+check("去空白后相等算命中", _tags.find_tag(IDX, " Python ")[0].id == 1)
+amb = {1: _tags.TagInfo(1, "笔记", 1), 2: _tags.TagInfo(2, "笔记", 1)}
+h2, c2 = _tags.find_tag(amb, "笔记")
 check("同名多命中 → 返回候选、不替用户挑一个",
       h2 is None and [c.id for c in c2] == [1, 2])
 check("二级展示名带父标签（与前端 flattenTagOptions 一致）",
       IDX[10000].label == "Python / 爬虫" and IDX[1].label == "Python")
 check("按 fatherKey 建树（一级改名不该让子标签集体失联）",
-      A.build_tag_index([{"tagKey": 1, "title": "已改名", "level": 1}], TWO)[10000]
+      _tags.build_tag_index([{"tagKey": 1, "title": "已改名", "level": 1}], TWO)[10000]
       .father_id == 1)
 check("悬空 id 如实标注（不是静默消失）",
-      A.render_tag_list("1,999", IDX) == "Python、（已失效 id=999）",
-      A.render_tag_list("1,999", IDX))
+      _tags.render_tag_list("1,999", IDX) == "Python、（已失效 id=999）",
+      _tags.render_tag_list("1,999", IDX))
 check("**读不到字典** ≠ 标签不存在：只给 id，不编「已失效」",
-      A.render_tag_list("1,2", None) == "id=1、id=2")
+      _tags.render_tag_list("1,2", None) == "id=1、id=2")
 check("超上限折叠是后缀不是并列项（不是真有个叫「等 4 个」的标签）",
-      A.render_tag_list("1,2,10000,10001", IDX, limit=2) == "Python、架构 等 4 个",
-      A.render_tag_list("1,2,10000,10001", IDX, limit=2))
-check("无标签渲染成（无标签）", A.render_tag_list("", IDX) == "（无标签）")
+      _tags.render_tag_list("1,2,10000,10001", IDX, limit=2) == "Python、架构 等 4 个",
+      _tags.render_tag_list("1,2,10000,10001", IDX, limit=2))
+check("无标签渲染成（无标签）", _tags.render_tag_list("", IDX) == "（无标签）")
 
 print("\n④b 纯函数：文章详情补标签名（问「这篇有什么标签」不必再烧一轮）")
 # 现场（20260921 22:34）：访客问「那篇都有什么标签呀」→ planner 读 get_article_detail
@@ -264,12 +266,12 @@ finally:
 print("\n⑤ 纯函数：渲染（清单喂 id、变更只讲真动了的字段）")
 
 check("只改置顶 → 前后串里不出现状态",
-      A.render_change([("未置顶", "置顶")]) == ("未置顶", "置顶"))
-check("状态+置顶 → 两条都在", A.render_change([("私密", "公开"), ("未置顶", "置顶")])
+      _tags.render_change([("未置顶", "置顶")]) == ("未置顶", "置顶"))
+check("状态+置顶 → 两条都在", _tags.render_change([("私密", "公开"), ("未置顶", "置顶")])
       == ("私密 / 未置顶", "公开 / 置顶"))
 check("回执字段截断带省略号（detail 列宽有限）",
-      A.clip("x" * 80) == "x" * 60 + "…" and A.clip("ok") == "ok")
-_list = A.render_admin_notes([note(12, "架构文档", "draft", 1)], IDX)
+      _tags.clip("x" * 80) == "x" * 60 + "…" and _tags.clip("ok") == "ok")
+_list = _tags.render_admin_notes([note(12, "架构文档", "draft", 1)], IDX)
 # 20260928 起这里是 `noteId=12`（命名空间名）而不是裸 `id=12`——这一屏正是 planner
 # 的**取值来源**，裸 id 会让同一个数字在别的帧里以另一重身份出现。注意 `noteId=12`
 # 里那个是**大写 I**，`"id=12"` 不是它的子串 ⇒ 只做包含断言的话，回退成旧形是**静默**
@@ -279,25 +281,26 @@ check("后台清单带 id 与状态标记（planner 只有这一轮真读到 id 
 check("  且不再是裸 ` id=`（同一个数字只以一种身份露面）",
       " id=12" not in _list and "#12" not in _list, _list)
 check("超长标题截断，清单不撑爆提示词",
-      "…" in A.render_admin_notes([note(1, "长" * 50)], IDX))
+      "…" in _tags.render_admin_notes([note(1, "长" * 50)], IDX))
 
 
 print("\n⑥ 纯函数：target_mentioned（数字边界是这一族的全部价值）")
 
-check("独立出现的 id 命中", A.target_mentioned(12, ["把文章 12 设为私密", "id=12"]))
+check("独立出现的 id 命中", _target.target_mentioned(12, ["把文章 12 设为私密", "id=12"]))
 check("**不许被子串冒充**：id=123 / 1912 都不是 12",
-      not A.target_mentioned(12, ["id=123"]) and not A.target_mentioned(12, ["1912"]))
+      not _target.target_mentioned(12, ["id=123"]) and not _target.target_mentioned(12, ["1912"]))
 check("已知的宽松处：小数「12.5」里的 12 **算**命中（判据只要求两侧不挨数字）——"
       "刻意不堵：写操作还有回执回显 + 管理员复核两道，堵它反而会在标点形态上误伤",
-      A.target_mentioned(12, ["12.5"]))
+      _target.target_mentioned(12, ["12.5"]))
 check("多个材料里任一命中即可（本轮读过的帧 + 页面上下文 + 用户消息）",
-      A.target_mentioned(12, ["", "", "id=12 《架构》"]))
+      _target.target_mentioned(12, ["", "", "id=12 《架构》"]))
 check("非法 id 一律 False（不猜、不默认）",
-      not any(A.target_mentioned(v, ["12"]) for v in (None, 0, -1, "abc", True)))
-check("字符串形式的 id 与 int 等价", A.target_mentioned("12", ["文章 12"]))
+      not any(_target.target_mentioned(v, ["12"]) for v in (None, 0, -1, "abc", True)))
+check("字符串形式的 id 与 int 等价", _target.target_mentioned("12", ["文章 12"]))
 check("unknown_target 帧带原因码，checker 可回取；非本族帧回 None",
-      A.target_error_reason(A.unknown_target_frame("set_article_status")) == "unknown_target"
-      and A.target_error_reason("__ERROR__: 无法获取当前用户身份") is None)
+      _target.target_error_reason(
+          _target.unknown_target_frame("set_article_status")) == "unknown_target"
+      and _target.target_error_reason("__ERROR__: 无法获取当前用户身份") is None)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -411,12 +414,12 @@ with patch(_tag_index=lambda c: IDX, _admin_post=post):
     check("名字差一个字 ≠ 已存在（不做模糊匹配）", "已经存在" not in str(r))
 
 post = _Post("10002")
-seq = _Seq(IDX, A.build_tag_index(ONE + [{"tagKey": 10002, "title": "Pytho", "level": 1}], TWO))
+seq = _Seq(IDX, _tags.build_tag_index(ONE + [{"tagKey": 10002, "title": "Pytho", "level": 1}], TWO))
 with patch(_tag_index=seq, _admin_post=post):
     r = base.create_tag.invoke({"title": "Pytho"}, config=cfg())
     check("新建一级：按名字哈希取色、走 tagone 接口",
           post.calls == [("/api/protected/tagone",
-                          {"title": "Pytho", "color": A.color_for_name("Pytho")})],
+                          {"title": "Pytho", "color": _tags.color_for_name("Pytho")})],
           str(post.calls))
     check("建后**读回复核**通过 → ok，meta 是库分配的 id（不相信返回值）",
           r.kind == "ok" and r.meta.get("op") == "tag_create"
@@ -426,13 +429,13 @@ with patch(_tag_index=seq, _admin_post=post):
           "没有挂到任何文章上" in r)
 
 post = _Post("10002")
-seq = _Seq(IDX, A.build_tag_index(ONE + [{"tagKey": 10002, "title": "Pytho", "level": 2,
+seq = _Seq(IDX, _tags.build_tag_index(ONE + [{"tagKey": 10002, "title": "Pytho", "level": 2,
                                           "fatherKey": 1}], TWO))
 with patch(_tag_index=seq, _admin_post=post):
     r = base.create_tag.invoke({"title": "Pytho", "parent_tag": "Python"}, config=cfg())
     check("新建二级：planner 只给父**名字**，fatherTag 由工具解析成父 id（不是父名）",
           post.calls == [("/api/protected/tagtwo",
-                          {"title": "Pytho", "color": A.color_for_name("Pytho"),
+                          {"title": "Pytho", "color": _tags.color_for_name("Pytho"),
                            "fatherTag": 1})], str(post.calls))
 
 post = _Post("10002")
@@ -457,7 +460,7 @@ with patch(_tag_index=_Seq(IDX, IDX), _admin_post=post):
           r.kind == "unavailable" and "复核失败" in r, f"{r.kind}: {r}")
 
 post = _Post("10002")
-seq = _Seq(IDX, A.build_tag_index(ONE + [{"tagKey": 10002, "title": "别的名字", "level": 1}],
+seq = _Seq(IDX, _tags.build_tag_index(ONE + [{"tagKey": 10002, "title": "别的名字", "level": 1}],
                                   TWO))
 with patch(_tag_index=seq, _admin_post=post):
     r = base.create_tag.invoke({"title": "Pytho"}, config=cfg())
@@ -494,42 +497,42 @@ with patch(_tag_index=_Seq(IDX, IDX), _admin_post=post):
           str(post.calls))
 
 # ── 弹窗问句要点名父标签（20260921）────────────────────────────────────
-_q = A.render_confirm_question([{"tool": "create_tag",
+_q = _confirm.render_confirm_question([{"tool": "create_tag",
                                  "args": {"title": "分布式", "parent_tag": "架构"}}], IDX)
 check("弹窗问句写父标签**名字**（用户才能核对挂在哪）",
       "「架构」" in _q and "二级" in _q and "「分布式」" in _q, _q)
 check("  问句里没有 id 这种系统内部编号（用户没法核对）", "id=" not in _q, _q)
-_q2 = A.render_confirm_question([{"tool": "create_tag",
+_q2 = _confirm.render_confirm_question([{"tool": "create_tag",
                                   "args": {"title": "分布式", "parent_tag": "架构"}}])
 check("读不到标签字典 → 仍然弹窗（不因一次读不到就退回死路）",
       "「架构」" in _q2 and "「分布式」" in _q2, _q2)
-_q2b = A.render_confirm_question([{"tool": "create_tag",
+_q2b = _confirm.render_confirm_question([{"tool": "create_tag",
                                    "args": {"title": "分布式", "parent_tag": "没有这个"}}], IDX)
 check("父标签名对不上 → 问句当场写出来（点确定之前用户就该看见爸爸不存在）",
       "没有叫「没有这个」的一级标签" in _q2b, _q2b)
-_q3 = A.render_confirm_question([{"tool": "create_tag", "args": {"title": "新的一级"}}], IDX)
+_q3 = _confirm.render_confirm_question([{"tool": "create_tag", "args": {"title": "新的一级"}}], IDX)
 check("一级标签的问句不带父标签字样", "挂在" not in _q3, _q3)
-_t = A.render_confirm_text([{"tool": "create_tag",
+_t = _confirm.render_confirm_text([{"tool": "create_tag",
                              "args": {"title": "分布式", "parent_tag": "架构"}}], IDX)
 check("气泡正文与问句同源（都点名父标签）", "「架构」" in _t, _t)
 # 探针 ⑤ 的现场：主人说摘「摄影」，问句只写「修改文章 1 的标签」——他无从核对
 # "要去掉的到底是不是我说的那个"。摘标签这一类的盲签风险比改状态更高（改状态的
 # 目标值是枚举，标签名是自由文本）。
-_t2 = A.render_confirm_question([{"tool": "set_article_tags",
+_t2 = _confirm.render_confirm_question([{"tool": "set_article_tags",
                                   "args": {"article_id": 1, "remove": ["摄影"]}}])
 check("摘标签的问句点名**哪个标签**（不是只说「修改文章 1 的标签」）",
       "摄影" in _t2 and "去掉" in _t2, _t2)
-_t3 = A.render_confirm_question([{"tool": "set_article_tags",
+_t3 = _confirm.render_confirm_question([{"tool": "set_article_tags",
                                   "args": {"article_id": 1, "add": ["音乐"],
                                            "remove": ["摄影"]}}])
 check("加与摘分别写清（一次动两个标签时不糊成一句）",
       "加上 音乐" in _t3 and "去掉 摄影" in _t3, _t3)
-_t4 = A.render_confirm_question([{"tool": "set_article_tags",
+_t4 = _confirm.render_confirm_question([{"tool": "set_article_tags",
                                   "args": {"article_id": 1, "replace": []}}])
 check("replace 空列表 = 清空，问句必须直说「清空」（最不可逆的一档）",
       "清空" in _t4, _t4)
 check("字段缺失不炸（渲染层对畸形 spec 只退化不加戏）",
-      "修改文章 None 的标签" in A.render_confirm_question(
+      "修改文章 None 的标签" in _confirm.render_confirm_question(
           [{"tool": "set_article_tags", "args": {}}]))
 
 
@@ -713,7 +716,7 @@ check("unavailable → BLOCK（服务不可用不是事实，不进跨轮执行�
       == ("BLOCK", "unavailable"))
 check("unknown_target 帧 → BLOCK 且原因是 unknown_target（planner 据此先读再写）",
       _check_spec("set_article_status", {"article_id": 12}, True,
-                  A.unknown_target_frame("set_article_status"), "article_status")
+                  _target.unknown_target_frame("set_article_status"), "article_status")
       == ("BLOCK", "unknown_target"))
 check("权限拒绝帧 → BLOCK 且原因码是 denied（如实告知，不是换工具再试）",
       _check_spec("set_article_status", {}, True,
@@ -743,17 +746,17 @@ class _FakeTool:
         return self.out
 
 
-def _plan(tools_list, skill="article_status"):
+def _plan(tools_list, workflow="article_status"):
     """改后返回**对象**（20260928 批 C：夹具与生产同路，经 `plan_state` 一次写两态）。"""
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = tools_list
     return obj
 
 
-def _run(tools_list, msg, config, extra_msgs=(), skill="article_status"):
+def _run(tools_list, msg, config, extra_msgs=(), workflow="article_status"):
     CALLS.clear()
-    return execute_node({**plan_state(_plan(tools_list, skill)),
+    return execute_node({**plan_state(_plan(tools_list, workflow)),
                          "plan_rounds": 1, "done": False,
                          "messages": [HumanMessage(content=msg), *extra_msgs]},
                         config)
@@ -814,7 +817,7 @@ try:
     # `action` 是 20260928 新加的那一个（跨轮执行记忆那一行的**定稿措辞**，Python
     # 写 / Rust 只排版）。加它的正当性：此前那一行由 Rust 独立渲染，同一件事两处
     # 措辞已经漂了（54 条取样只有 31 条逐字相同）——**它是收敛，不是新债**。
-    # 除此之外键集仍然固定：这一条的意义正是"想加键就得来改这份清单"。
+    # 键集固定：想加键就得来改这份清单。首个键仍叫 `skill`——`__EXEC__` 帧体，随 Rust 那批改。
     check("  回执键集固定（多出来的键是无声的兼容性债）",
           set(rcpt) == {"skill", "tool", "args", "result", "ts", "action",
                         "principal_role", "op", "article_id", "before", "after"},
@@ -855,7 +858,7 @@ def _rcpt(tool, **args):
     return {"tool": tool, "args": {k: str(v) for k, v in args.items()}}
 
 
-SOBJ = {"skill": "article_status",
+SOBJ = {"workflow": "article_status",
         "tools": ['set_article_status({"article_id": 12, "status": "private"})']}
 
 check("同一件事重复规划 → 收尾",
@@ -866,7 +869,7 @@ check("**同一工具、另一篇** → 不收尾（第二件事必须真执行�
                                             status="private")]))
 check("同一工具、同一篇、另一个值 → 不收尾（来回切换是两次操作）",
       not _already_done_writes(
-          {"skill": "article_status",
+          {"workflow": "article_status",
            "tools": ['set_article_status({"article_id": 12, "is_top": 0})']},
           [_rcpt("set_article_status", article_id=12, is_top=1)]))
 check("参数键序不同不影响判据（指纹 sort_keys）",
@@ -877,29 +880,29 @@ check("int 与 str 等价（回执侧一律字符串化，计划侧必须走同�
       _already_done_writes(SOBJ, [{"tool": "set_article_status",
                                    "args": {"article_id": "12", "status": "private"}}])
       and _already_done_writes(
-          {"skill": "article_status",
+          {"workflow": "article_status",
            "tools": ['set_article_status({"article_id": "12", "status": "private"})']},
           [_rcpt("set_article_status", article_id=12, status="private")]))
 check("清单里有一件没做过 → 不收尾（不能只做了一半就说都好了）",
       not _already_done_writes(
-          {"skill": "article_status",
+          {"workflow": "article_status",
            "tools": ['set_article_status({"article_id": 12, "status": "private"})',
                      'set_article_status({"article_id": 14, "status": "private"})']},
           [_rcpt("set_article_status", article_id=12, status="private")]))
 check("失败/未确认的写不进回执 ⇒ 改参重试仍放行（判据取 receipts 而非帧名）",
       not _already_done_writes(SOBJ, []))
 check("空计划不归这条判据管（收尾与否由别处决定）",
-      not _already_done_writes({"skill": "article_status", "tools": []},
+      not _already_done_writes({"workflow": "article_status", "tools": []},
                                [_rcpt("set_article_status", article_id=12,
                                       status="private")]))
 check("只读技能不吃这条判据（报表去重有自己那条，判据更宽）",
-      not _already_done_writes({"skill": "content_query", "tools": SOBJ["tools"]},
+      not _already_done_writes({"workflow": "content_query", "tools": SOBJ["tools"]},
                                [_rcpt("set_article_status", article_id=12,
                                       status="private")]))
 check("三个写技能都在名单里，且与快照型报表名单不重叠",
-      EXECUTED_ONCE_SKILLS == frozenset({"tag_create", "article_status", "article_tags"})
-      and not (EXECUTED_ONCE_SKILLS & SNAPSHOT_SKILLS),
-      f"{sorted(EXECUTED_ONCE_SKILLS)} / {sorted(SNAPSHOT_SKILLS)}")
+      EXECUTED_ONCE_WORKFLOWS == frozenset({"tag_create", "article_status", "article_tags"})
+      and not (EXECUTED_ONCE_WORKFLOWS & SNAPSHOT_WORKFLOWS),
+      f"{sorted(EXECUTED_ONCE_WORKFLOWS)} / {sorted(SNAPSHOT_WORKFLOWS)}")
 
 gsrc = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 check("写工具**不进** _CONTENT_TOOLS（否则「建了个标签」会变成「我检索过」的证据）",
@@ -959,24 +962,24 @@ for msg, want, why in (
         ("文章 12 篇我都看过了", set(), "「文章 N 篇」显式排除"),
         ("把这篇置顶", set(), "纯指代（没有数字）= 没点名 → 判据不启用"),
 ):
-    got = A.user_named_article_ids(msg)
+    got = _target.user_named_article_ids(msg)
     check(f"点名识别：{why}（{msg}）→ {sorted(want) or '空集'}",
           got == want, f"{sorted(got)}")
 
 check("空集 = 判据不启用（恒放行）——写操作不能因为「用户没说数字」被全禁",
-      A.target_named(999, A.user_named_article_ids("把这篇置顶")) is True
-      and A.target_named(1, set()) is True)
+      _target.target_named(999, _target.user_named_article_ids("把这篇置顶")) is True
+      and _target.target_named(1, set()) is True)
 check("点名了就不许写成别的 id",
-      A.target_named(1, {1}) and not A.target_named(46, {1}))
+      _target.target_named(1, {1}) and not _target.target_named(46, {1}))
 check("article_id 缺失/非法 → 不放行（fail-closed，有非空点名时）",
-      not A.target_named(None, {1}) and not A.target_named("四十六", {1}))
+      not _target.target_named(None, {1}) and not _target.target_named("四十六", {1}))
 check("原因码取回：两条目标族帧分得开，非本族帧 → None",
-      A.target_error_reason(A.target_conflict_frame("set_article_status", {1}, 46))
-      == A.REASON_TARGET_MISMATCH
-      and A.target_error_reason(A.unknown_target_frame("set_article_status"))
-      == A.REASON_UNKNOWN_TARGET
-      and A.target_error_reason("__ERROR__: 参数引用无法解析[ref_unresolved]") is None)
-_CF = A.target_conflict_frame("set_article_status", {1}, 46)
+      _target.target_error_reason(_target.target_conflict_frame("set_article_status", {1}, 46))
+      == _target.REASON_TARGET_MISMATCH
+      and _target.target_error_reason(_target.unknown_target_frame("set_article_status"))
+      == _target.REASON_UNKNOWN_TARGET
+      and _target.target_error_reason("__ERROR__: 参数引用无法解析[ref_unresolved]") is None)
+_CF = _target.target_conflict_frame("set_article_status", {1}, 46)
 check("不一致帧把「以主人点名的为准」讲清楚（planner 照它改参，系统不改写参数）",
       "文章 1" in _CF and "46" in _CF and _CF.startswith("__ERROR__"))
 
@@ -1049,18 +1052,18 @@ check("不在名字表里的写工具不受这一条约束（文章族走 target
 def _popup(spec, msg, uid=7, role=ROLE_ADMIN):
     """跑一次 `_confirm_popup`（真判据 + 真签发，假的是标签字典与后端）。
 
-    计划夹具走 `plan_state`（20260928 批 C）：`_plan_skill` 现在读 `state["plan_obj"]`，
+    计划夹具走 `plan_state`（20260928 批 C）：`_plan_workflow` 现在读 `state["plan_obj"]`，
     只喂契约文本的话技能名读成空串 ⇒ `confirm.sign` 拒签 ⇒ 该弹的全变 None
     （看起来"符合预期"，其实是密钥/技能名两件事长得一样）。
     """
     return g._confirm_popup(
-        {**g.plan_state({"skill": "tag_delete", "params": {}, "tools": [],
+        {**g.plan_state({"workflow": "tag_delete", "params": {}, "tools": [],
                          "note": "", "reply": "直接回答"})},
         [spec], Principal(uid=uid, role=role), msg,
         {"configurable": {"user_id": uid, "conversation_id": 42}})
 
 
-with patch(_tag_index=lambda config: A.build_tag_index(
+with patch(_tag_index=lambda config: _tags.build_tag_index(
         [{"tagKey": 2, "title": "编程", "level": 1}],
         [{"tagKey": 10000, "title": "Asyncio", "level": 2,
           "fatherTag": "编程", "fatherKey": 2}])):
@@ -1161,9 +1164,9 @@ check("gate 的洞④ 分支真的读了它（锚写了但判据不认 = 白写�
 
 print("\n⑯ 写技能的描述必须写明「不要自己揽下要不要执行」")
 
-from agent.skills import SKILLS  # noqa: E402
+from agent.workflow_defs import WORKFLOWS  # noqa: E402
 
-_BY_NAME = {s.name: s for s in SKILLS}
+_BY_NAME = {s.name: s for s in WORKFLOWS}
 for _n in ("tag_create", "article_status", "article_tags"):
     _d = _BY_NAME[_n].description
     check(f"{_n} 描述含「照常选本技能 + 系统弹确认框」纪律",
@@ -1211,8 +1214,8 @@ check("族别跟着**贴着引号的那个**标记词走（前面还有别的动
 
 
 def _name_plan(params, spec):
-    """就一个 spec 的假计划（`_name_target_fix` 只读 skill/params/tools）。"""
-    return {"skill": "tag_update", "params": dict(params), "tools": [spec],
+    """就一个 spec 的假计划（`_name_target_fix` 只读 workflow/params/tools）。"""
+    return {"workflow": "tag_update", "params": dict(params), "tools": [spec],
             "note": "注记原文", "reply": "直接回答"}
 
 
@@ -1263,7 +1266,7 @@ check("改名形态：新名字**不会**被当成父标签填进去（族别搞
 # planner 会把它抄成 `title="标题"`；而"标题"**正是主人这句话的子串**，子串级地基
 # 放它过去 ⇒ 弹窗问成了「删除公告「标题」」）
 def _ann_plan(spec, title):
-    return {"skill": "announcement_delete", "params": {"title": title}, "tools": [spec],
+    return {"workflow": "announcement_delete", "params": {"title": title}, "tools": [spec],
             "note": "注记原文", "reply": "直接回答"}
 
 
@@ -1282,13 +1285,13 @@ check("公告族：本来就是主人说的标题 → 一个字节都不改",
 print("\n⑳ 写参数的值也要来自主人这句话（②防线续五：新建编名 / 抄短 / 抄泛称）")
 
 
-def _value_case(desc: str, skill: str, params: dict, msg: str, want):
+def _value_case(desc: str, workflow: str, params: dict, msg: str, want):
     """跑一次 `_name_arg_fix` 并按形态断言。
 
     `want` 三态：dict = 要校正成这几项（顺带断言参数表与 TOOLS 行同步）；None =
     一个字节都不动（主人原话里逐字有据）；"REFUSE" = 零写 + 响亮（解不出就绝不猜）。
     """
-    pl = instantiate_plan(skill, params)
+    pl = instantiate_plan(workflow, params)
     pl["params"] = dict(params)
     before = " ".join(pl.get("tools") or [])
     refuse = g._name_arg_fix(pl, msg)
@@ -1500,10 +1503,10 @@ print("\n㉓ 公告正文：谁成文（两种情形）+ 卡面必须印全文�
 #      （同一件事实写四份，是这一族最容易各漂各的地方）；
 #   ② 卡面印**全文**——正文改由模型成文之后判据判不了措辞，主人的签字是这一族**唯一**
 #      的人眼复核点（与待办卡 20260926「一格都不截」同因）。
-import agent.skills as _S  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
 from tools import base as _B  # noqa: E402
 
-_ann = _S.SKILL_MAP["announcement_create"]
+_ann = WORKFLOW_MAP["announcement_create"]
 _ANN_CARRIERS = {
     "技能描述": _ann.description,
     "技能 inputs.content": str(_ann.inputs.get("content") or ""),
@@ -1532,32 +1535,32 @@ check("阻断文案管的是「卡面要念全」（它是被拦下那一轮的�
       and "一个字都不要改" not in _authz_ann, _authz_ann)
 
 # ── 展开层：原样放行成文的正文；空正文照旧零工具追问 ─────────────────────
-from agent.skills import _expand_write_skill  # noqa: E402
+from agent.workflow_expand_write import _expand_write_workflow  # noqa: E402
 
 _LONG_ANN = "本次维护安排如下：" + "请提前做好准备" * 12 + "——结束标记"
 check("前置：这条正文真的比 60 字长（否则下面几条是空转）",
       len(_LONG_ANN) > 60, str(len(_LONG_ANN)))
-_specs_a, _note_a = _expand_write_skill(_ann, {"title": "维护通知", "content": _LONG_ANN})
+_specs_a, _note_a = _expand_write_workflow(_ann, {"title": "维护通知", "content": _LONG_ANN})
 check("展开层原样放行（不因正文与主人原话不同就拦——那一档本来就是模型成文）",
       len(_specs_a) == 1 and _LONG_ANN in str(_specs_a[0]), str(_specs_a)[:120])
 check("  注记写明「正文全文会印在确认卡上由主人核对」（复核点是卡面，不是措辞）",
       "确认卡" in _note_a and "全文" in _note_a, _note_a)
-_specs_e, _note_e = _expand_write_skill(_ann, {"title": "维护通知", "content": ""})
+_specs_e, _note_e = _expand_write_workflow(_ann, {"title": "维护通知", "content": ""})
 check("正文为空 ⇒ 零工具 + 追问（「槽位空着不许往下走」与「可以润色」是两件事）",
       _specs_e == [] and "问清" in _note_e, _note_e)
 
 # ── 卡面：一格都不截（与待办卡 20260926 那条同因）─────────────────────────
-_qc = A.render_confirm_question([{"tool": "create_announcement",
+_qc = _confirm.render_confirm_question([{"tool": "create_announcement",
                                   "args": {"title": "维护通知", "content": _LONG_ANN}}])
 check("发布公告的**卡面**：长正文一字不落（此前裁成 60 字 + 省略号）",
       _LONG_ANN in _qc and "…" not in _qc, _qc[-40:])
 check("  卡面写的是「正文：」而不是只报个标题（只写标题 = 让主人盲签一份没看过的公告）",
       f"发布公告「维护通知」，正文：{_LONG_ANN}" in _qc, _qc[:60])
-_qu = A.render_confirm_question([{"tool": "update_announcement",
+_qu = _confirm.render_confirm_question([{"tool": "update_announcement",
                                   "args": {"title": "维护通知", "content": _LONG_ANN}}])
 check("改公告的卡面同样是全文", _LONG_ANN in _qu and "…" not in _qu, _qu[-40:])
 check("正文为空时卡面如实写「（没有写正文）」（不是把 None 印出来）",
-      "（没有写正文）" in A.render_confirm_question(
+      "（没有写正文）" in _confirm.render_confirm_question(
           [{"tool": "create_announcement", "args": {"title": "维护通知"}}]))
 
 print("\n㉒ 文章确认框写《标题》与当前状态（20260922 第七轮：全写面唯一的盲签）")
@@ -1572,30 +1575,30 @@ _STATUS_SPEC = {"tool": "set_article_status",
                 "args": {"article_id": 1, "status": "private"}}
 _TAGS_SPEC = {"tool": "set_article_tags",
               "args": {"article_id": 46, "remove": ["摄影"]}}
-_q = A.render_confirm_question([_STATUS_SPEC], None, None, None, _NOTES)
+_q = _confirm.render_confirm_question([_STATUS_SPEC], None, None, None, _NOTES)
 check("改状态的问句带上《标题》（此前只有内部编号「修改文章 1」）",
       "《Memory Blog 项目文件结构说明》" in _q and "修改文章 1" in _q, _q)
 check("  并写出**现状**（主人点确定前才知道自己改的是不是这件事）",
       "现在：草稿、未置顶" in _q, _q)
-_q2 = A.render_confirm_question([_TAGS_SPEC], None, None, None, _NOTES)
+_q2 = _confirm.render_confirm_question([_TAGS_SPEC], None, None, None, _NOTES)
 check("摘标签的问句同样带标题与现状",
       "《文章向量空间图谱项目文档》（现在：公开、置顶）的标签：去掉 摄影" in _q2, _q2)
 check("  带上标题后不补那个分隔空格（「…（现在：…） 的标签」像两个并列短语）",
       "） 的标签" not in _q2, _q2)
 check("气泡正文与问句同源（都带标题与现状）",
-      "《Memory Blog 项目文件结构说明》" in A.render_confirm_text(
+      "《Memory Blog 项目文件结构说明》" in _confirm.render_confirm_text(
           [_STATUS_SPEC], None, None, None, _NOTES))
 check("读不到文章清单（None）→ 退回只写 id，**照样弹窗**"
       "（少说一句 ≠ 不弹：不弹就退回「判成歧义就追问」的死路形态）",
-      "修改文章 1：" in A.render_confirm_question([_STATUS_SPEC]) and
-      "修改文章 1：" in A.render_confirm_question(
+      "修改文章 1：" in _confirm.render_confirm_question([_STATUS_SPEC]) and
+      "修改文章 1：" in _confirm.render_confirm_question(
           [_STATUS_SPEC], None, None, None, None))
 check("空清单（真的没有这一篇）→ 如实写出来，不装作核对过",
-      "（后台清单里没有这一篇）" in A.render_confirm_question(
+      "（后台清单里没有这一篇）" in _confirm.render_confirm_question(
           [_STATUS_SPEC], None, None, None, {}))
 # 现状是**读来的事实**，读不到就该少说：认不出的状态吐回原值、置顶值缺失就不提置顶
 # （编一个"公开"出来，主人会以为自己那篇早就是公开的）。
-_qbad = A.render_confirm_question(
+_qbad = _confirm.render_confirm_question(
     [_STATUS_SPEC], None, None, None,
     {1: {"noteKey": 1, "noteTitle": "X", "status": "weird", "isTop": None}})
 check("状态值认不出 → 如实吐回「未知状态「weird」」，不编一个已知状态",
@@ -1603,7 +1606,7 @@ check("状态值认不出 → 如实吐回「未知状态「weird」」，不编
 check("置顶值读不到 → 完全不提置顶（不知道就不说）",
       "置顶" not in _qbad, _qbad)
 check("标签写操作不受 notes 影响（同一份快照只服务文章那两类）",
-      "《" not in A.render_confirm_question(
+      "《" not in _confirm.render_confirm_question(
           [{"tool": "create_tag", "args": {"title": "新标签"}}],
           {}, None, None, _NOTES))
 # 接线（渲染层收到 notes 是一回事，graph 真的去读是另一回事）：只在要点到文章时读，
@@ -1665,11 +1668,11 @@ print("\n㉔ 一次建多个标签：整批一起问（20261008：弹卡整轮�
 # 方向与本文件其它每一处一致：宁可多问一次，也不静默丢一次主人点名的写。
 
 
-def _popup_batch(specs, msg, skill="tag_create", uid=7):
+def _popup_batch(specs, msg, workflow="tag_create", uid=7):
     """跑一次多 spec 的 `_confirm_popup`（真判据 + 真签发，假的是标签字典与后端）。"""
     specs = list(specs)
     return g._confirm_popup(
-        {**g.plan_state({"skill": skill, "params": {}, "tools": specs,
+        {**g.plan_state({"workflow": workflow, "params": {}, "tools": specs,
                          "note": "", "reply": "直接回答"})},
         specs, Principal(uid=uid, role=ROLE_ADMIN), msg,
         {"configurable": {"user_id": uid, "conversation_id": 42}})
@@ -1694,7 +1697,7 @@ def _token_specs(result):
 
 
 # 标签树里只有 `编程 / Asyncio`：Rust 与 SVN 都是**站里没有的**（不踩"状态已达成"那条出口）。
-with patch(_tag_index=lambda config: A.build_tag_index(
+with patch(_tag_index=lambda config: _tags.build_tag_index(
         [{"tagKey": 2, "title": "编程", "level": 1}],
         [{"tagKey": 10000, "title": "Asyncio", "level": 2,
           "fatherTag": "编程", "fatherKey": 2}])):
@@ -1790,7 +1793,7 @@ _SP_ATTACH_OK = 'set_article_tags({"article_id": 16, "add": ["git", "代码版�
 def _popup_tags(specs, msg=_MSG_TAGS, msgs=None):
     """跑一次"建标签 + 挂标签"批的 `_confirm_popup`（假字典、假文章清单，零网络）。"""
     specs = list(specs)
-    state = {**g.plan_state({"skill": "article_tags", "params": {}, "tools": specs,
+    state = {**g.plan_state({"workflow": "article_tags", "params": {}, "tools": specs,
                              "note": "", "reply": "直接回答"})}
     # `messages` 必须给：文章写的那两道判据会读它（`_target_evidence` / `_page_ctx`）。
     state["messages"] = list(msgs or [])
@@ -1799,7 +1802,7 @@ def _popup_tags(specs, msg=_MSG_TAGS, msgs=None):
         {"configurable": {"user_id": 7, "conversation_id": 42}})
 
 
-with patch(_tag_index=lambda config: A.build_tag_index([], []),
+with patch(_tag_index=lambda config: _tags.build_tag_index([], []),
            _note_index=lambda config: None):
     # ── 正例：号就是主人说的那个 → 卡照弹，且卡上**三件都在**（含挂标签那一步） ──
     _ok = _popup_tags([_SP_C1, _SP_C2, _SP_ATTACH_OK])
@@ -1866,7 +1869,7 @@ from agent.entities import receipt_digest  # noqa: E402  （跨语言契约：�
 _N_TEST = {**note(12, "架构文档"), "categoryTitle": "测试"}
 _N_NULL = {**note(21, "关于欧洲AI"), "categoryTitle": None}
 _N_NOKEY = note(19, "Saudade Blog AI Agent（泠月喵）架构文档", "public", 0, "1")
-_r = A.render_admin_notes([_N_TEST, _N_NULL, _N_NOKEY], IDX)
+_r = _tags.render_admin_notes([_N_TEST, _N_NULL, _N_NOKEY], IDX)
 check("分类名进得了行尾（数据本来就在 DTO 里，只是没印）",
       "- noteId=12 [私密]《架构文档》标签：（无标签） ｜分类：测试" in _r, _r)
 check("键在但为空 = 这篇文章真的没有分类 ⇒ 印「（无）」",
@@ -1877,13 +1880,13 @@ check("老形一条没动（新格是行尾追加，`标签：` 前缀逐字不�
       "- noteId=19 [公开]《Saudade Blog AI Agent（泠月喵）架构文档》标签：Python\n" in _r
       + "\n" and "｜分类：" not in _r.split("noteId=19")[1], _r)
 
-_r2 = A.render_admin_notes([_N_TEST], IDX, category="测试")
+_r2 = _tags.render_admin_notes([_N_TEST], IDX, category="测试")
 check("按分类筛的头行明写分类（不许让它读成站内总量）",
       _r2.startswith("后台文章里「测试」分类下共 1 篇"), _r2)
-_r3 = A.render_admin_notes([_N_TEST], IDX, keyword="测试", category="测试")
+_r3 = _tags.render_admin_notes([_N_TEST], IDX, keyword="测试", category="测试")
 check("两样都筛时两个限定都在头行",
       _r3.startswith("后台文章里「测试」分类下匹配「测试」的共 1 篇"), _r3)
-_d_cat = receipt_digest("list_admin_notes", A.render_admin_notes([_N_TEST], IDX,
+_d_cat = receipt_digest("list_admin_notes", _tags.render_admin_notes([_N_TEST], IDX,
                                                                 category="测试"))
 check("摘要照同一条口径分流：按分类的数说「该分类下 N 篇」，不说「共 N 篇」",
       "分类「测试」" in _d_cat and "该分类下 1 篇" in _d_cat and "共 1 篇" not in _d_cat,
@@ -1896,10 +1899,10 @@ check("两样都筛时仍按搜索口径说「匹配」（限定写进同一条�
 # 一个分类 ⇒ 工具回"没有这个分类"，白烧一轮，而主人看到的是"没有"）。占位词这类坑
 # 本仓有过先例（20260922 tag_create：描述里的〈…〉被当成了真名字）⇒ 契约里必须有一句
 # 明写的禁令。同一句话在工具参数描述里也有一份（planner 两处都看得到）。
-from agent.skills import SKILLS as _SK  # noqa: E402
+from agent.workflow_defs import WORKFLOWS as _SK  # noqa: E402
 _AN = next(s for s in _SK if s.name == "admin_notes")
-check("planner 契约里明写「不许填占位词」（契约 + 参数表两处都写，模型两处都看得到）",
-      "占位词" in _AN.planner_contract and "未确认分类" in _AN.planner_contract
+check("planner 契约里明写「不许填占位词」（契约段 + 参数表两处都写，模型两处都看得到）",
+      "占位词" in _AN.contract and "未确认分类" in _AN.contract
       and "占位词" in _AN.inputs["category"],
       _AN.inputs["category"][-40:])
 
@@ -1907,7 +1910,7 @@ check("planner 契约里明写「不许填占位词」（契约 + 参数表两�
 _CATS = [{"categoryKey": 9, "categoryTitle": "测试", "pathName": "测试", "noteCount": 0},
          {"categoryKey": 13, "categoryTitle": "编程笔记", "pathName": "编程笔记",
           "noteCount": 8}]
-_CATIDX = A.build_category_index(_CATS)
+_CATIDX = _tags.build_category_index(_CATS)
 _NOTE_ROW = {"noteKey": 9, "noteTitle": "test 测试111111111", "status": "private",
              "isTop": 0, "noteTags": "", "categoryTitle": "测试"}
 
@@ -1939,7 +1942,7 @@ with patch(_category_index=lambda c: _CATIDX, _tag_index=lambda c: IDX):
 
     post = _Post([_NOTE_ROW])
     with patch(_admin_read_post=post,
-               _category_index=lambda c: A.build_category_index(
+               _category_index=lambda c: _tags.build_category_index(
                    [{"categoryKey": 9, "categoryTitle": "测试", "noteCount": 1},
                     {"categoryKey": 10, "categoryTitle": "测试", "noteCount": 2}])):
         r = base.list_admin_notes.invoke({"category": "测试"}, config=cfg())
@@ -1957,7 +1960,7 @@ with patch(_category_index=lambda c: _CATIDX, _tag_index=lambda c: IDX):
     # ③ 名册说 N≥1、筛出来却空 ⇒ 这是「这一次没读到」，不是「没有」（缺数 ≠ 零）
     post = _Post([])
     with patch(_admin_read_post=post,
-               _category_index=lambda c: A.build_category_index(
+               _category_index=lambda c: _tags.build_category_index(
                    [{"categoryKey": 9, "categoryTitle": "测试", "noteCount": 6}])):
         r = base.list_admin_notes.invoke({"category": "测试"}, config=cfg())
     check("名册 6 篇却筛出空 → unavailable（明写「不是该分类下没有文章」，是没读到）",

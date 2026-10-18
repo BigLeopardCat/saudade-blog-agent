@@ -119,7 +119,7 @@ def _read_one(run_id: str, tag: str) -> dict:
     placeholders = [c for c in real_cats if _PLACEHOLDER_RE.search(c)]
     return {
         "text": res.get("text") or "",
-        "skills": [d.get("skill") for d in dec],
+        "workflows": [d.get("workflow") for d in dec],
         "categories": real_cats,
         "good_cats": [c for c in real_cats if c not in placeholders],
         "placeholders": placeholders,
@@ -157,7 +157,7 @@ def main() -> int:
         r = _read_one(run_id, f"r{i}")
         r["elapsed"] = round(time.monotonic() - t0, 1)
         rows.append(r)
-        print(f"[{i}/{args.runs}] {r['elapsed']}s  skill={r['skills']}  "
+        print(f"[{i}/{args.runs}] {r['elapsed']}s  workflow={r['workflows']}  "
               f"category={r['categories']}  keyword={r['keywords']}")
         for line in r["tool_lines"]:
             print(f"          · {line}")
@@ -196,12 +196,12 @@ def main() -> int:
         f"- 身份：role=admin（uid 取自环境变量，不落文件） · 跑 {args.runs} 遍",
         f"- 结论按**计数**读（单跑不作结论，本仓定论）",
         "",
-        f"| # | 秒 | skill | category | keyword | 计划里的工具行 |",
+        f"| # | 秒 | workflow | category | keyword | 计划里的工具行 |",
         "|---|---|---|---|---|---|",
     ]
     for i, r in enumerate(rows, 1):
         tools = " / ".join(r["tool_lines"]) or "（无）"
-        lines.append(f"| {i} | {r['elapsed']} | {r['skills']} | {r['categories']} | "
+        lines.append(f"| {i} | {r['elapsed']} | {r['workflows']} | {r['categories']} | "
                      f"{r['keywords']} | `{tools}` |")
     lines += ["", f"**计数**：选了 category（真名字）**{len(with_cat)}/{args.runs}**；"
                   f"给 category 填了占位词 {len(ph_rows)}/{args.runs}；"

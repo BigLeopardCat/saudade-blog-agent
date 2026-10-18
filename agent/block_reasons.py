@@ -57,7 +57,7 @@ REASONS: dict[str, tuple[str, bool]] = {
     "target_mismatch": ("目标与主人点名的不是同一篇", True),
     # 动作冲突（`agent/authz.py::action_conflict_error_reason` 取回，20261016，§1.57）：
     # 主人这句要的是收藏、planner 排的是取消收藏（反极性改选）——下一条路是**按主人
-    # 说的那件重新规划**，所以算"可救"（True）⇒ 这一件**不**进 `denied_skills`：
+    # 说的那件重新规划**，所以算"可救"（True）⇒ 这一件**不**进 `denied_workflows`：
     # 它本来就没坏，坏的是"模型被摘掉一件之后改选了它的反面"这个动作，摘第二件只会
     # 把菜单越摘越空（§1.57 明确否掉了"同族一起摘"那条路）。
     "action_conflict": ("与主人这句话要的动作相反", True),
@@ -98,7 +98,7 @@ def block_reason_type(code: object) -> tuple[str, bool]:
 _NEVER_DENY = frozenset({"chat"})
 
 
-def denied_skills(blocked: list | None) -> set[str]:
+def denied_workflows(blocked: list | None) -> set[str]:
     """上一轮受阻项里，**这一轮不该再出现在技能菜单里**的技能名（20261007，1d）。
 
     就是 §1.55 的 1b 末尾写下、1c 结尾点名"未做、需先点头"的那条**菜单层摘工具**
@@ -128,7 +128,7 @@ def denied_skills(blocked: list | None) -> set[str]:
     for b in blocked or []:
         if not isinstance(b, dict):
             continue
-        name = str(b.get("skill") or "").strip()
+        name = str(b.get("workflow") or "").strip()
         if name and name not in _NEVER_DENY and not block_reason_type(b.get("reason"))[1]:
             out.add(name)
     return out

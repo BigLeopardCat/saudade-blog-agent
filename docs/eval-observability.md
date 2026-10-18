@@ -53,9 +53,9 @@
 > 与"胡说地做不到"在文本上一模一样，闸门只会把真话也换成道歉，而道歉同样是假话。守住它的是
 > 三样**各有机器锁**的东西：① 供给端把能力边界放到模型读得到的地方（审核报表的"处置"那行、
 > `board_delete` 的技能描述与回复契约、工具的 `.description`）；② 清单本身如实——`site_guide(role)`
-> 由 `visible_skills(role)` 渲染，两个方向都被 `tests/test_skills.py::test_site_guide_is_role_rendered`
+> 由 `visible_workflows(role)` 渲染，两个方向都被 `tests/test_workflows.py::test_site_guide_is_role_rendered`
 > 钉死（可见技能的 capability 必须在清单里、不可见的一个字都不许混入、收束句整句在位），这就是
-> "拿 `visible_skills` 交叉核对"能落地的形态（核**清单**而不是核**回复**：核回复判不出真假，
+> "拿 `visible_workflows` 交叉核对"能落地的形态（核**清单**而不是核**回复**：核回复判不出真假，
 > 核清单是确定性的）；③ 行为侧那条实证用例 `admin_announcement_create_popup_prose` 锁"该弹的卡
 > 必须弹出来、而不是重写成一句追问或道歉"——**卡弹出来的那一轮，回复由系统确定性给出，narrator
 > 根本没机会编那句假否定**。⚠️ 谁要再往 gate 里加一条"能力否定"正则，先把这三条读一遍。
@@ -231,7 +231,7 @@
 flowchart LR
     subgraph CI[CI 流水线]
         P0[push 触发] --> L0[L0 单元/组件级<br/>秒级 · 每次必跑]
-        N[nightly 定时] --> L1[L1 基准级开源数据集<br/>小时级 · 离线]
+        N[nightly 定时<br/>可选 · 默认不装] --> L1[L1 基准级开源数据集<br/>小时级 · 离线]
         N --> L3[L3 线上对账<br/>trace ↔ agent.log ↔ monitor.log]
     end
     subgraph LOCAL[本机（生产服务器）]
@@ -246,7 +246,7 @@ flowchart LR
 
 | 层 | 评测对象 | 手段 | 指标 | 对应升级组件 |
 |---|---|---|---|---|
-| **L0 单元级** | 图节点、工具、schema | 单测（`tests/test_skills.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率；**另出一份非门禁的覆盖率报告**（20261013，见下） | 图重写、记忆剥离 |
+| **L0 单元级** | 图节点、工具、schema | 单测（`tests/test_workflows.py`：映射表完整性/计划实例化/解析容错/反射器确定性闸） | 通过率；**另出一份非门禁的覆盖率报告**（20261013，见下） | 图重写、记忆剥离 |
 | **L1 基准级** | 检索器、生成层、端到端 RAG | BEIR / RGB / CRAG（§3） | nDCG@10、Recall@5、MRR；噪声准确率 / 拒答率 / 错误检测率；Truthfulness（幻觉=-1） | RAG、防幻觉 |
 | **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，条数以用例文件为准）；**LLM 评审员**（20260925，报告非门禁，见 §2 末） | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
 | **L3 对账级**（原设计为"回放级"） | 线上行为的**跨源一致性** | `eval/trace_reconcile.py`：trace ↔ `agent.log` ↔ `monitor.log` 三源确定性对账（零 LLM、只读） | 各判据条数：trace 有收尾行没有 / 收尾行有 trace 没有 / 重复 trace_id / end_reason·frames 不等 / 只在失败分支出现的前端上报 | 全部（每次升级后跑） |
@@ -266,6 +266,14 @@ L1（`recall_eval.py`，秒级）与 L3 对账（非门禁——判据还在观�
 ＋既有的两个巡检节（`trace_alert` 近 7 天、`golden_draft`）。前端渲染层不在这个脚本里，
 由父仓 `scripts/nightly_sandboxes.sh` 每天 04:40 单独跑（结果落 `~/sandbox_regression.log`，
 失败标 `~/sandbox_regression.failed`）。
+
+⚠️ **上面两班默认都不装**（20261017 起这是仓库口径，不是本机的口径）：公开仓库不该替克隆的人
+决定每天烧多少额度，而这一班一次全量 ≈10M tok / ¥2.4（维护者实测的量级），跑的又是维护者那台
+机器上的语料与夹具。启用是显式的：agent 侧 `bash scripts/enable_nightly.sh`（默认干跑、`--apply`
+才写 crontab、`--off` 摘掉），沙箱侧把父仓 `scripts/nightly_sandboxes.sh` 那一行自己加进 crontab
+（见该脚本头部）。**维护者这台生产服务器**自 20261017 起两班都开着——那一档的来龙去脉（20261012
+为什么关过、20261017 为什么放开）记在 crontab 自己的注释里，不在本文。
+**没装 ⇒ 两个 `*.failed` 哨兵恒不存在 ⇒ 心跳探针第 6 项恒静默**：静默不是绿，是"这一项没在验"。
 
 **L2 门禁分两层**（20260921）：`tags` 含 `regression` 的用例（17 条防幻觉/契约/撤回话术/执行记忆）
 **硬判 100% 通过**，不受 `--min-pass-rate` 放宽——回归题锁的是"已经定性为错误的行为不许回来"，
@@ -496,9 +504,9 @@ FAIL 复审单把回归组红置顶（当天必修）。混跑的坏处正是这
    判不了**，第二本账不许把"前提没到"变成静默给绿。今天没有用例带 `pending_action`
    （`grep -c pending_action eval/golden/*.jsonl` = 0）⇒ 这一半是**潜伏**的（下一条"回『嗯』重提"的
    用例一写就会撞上），不是某个用例正在红。上线前那一格是空的：`require_confirm_payload` 原有三键
-   （`skill` / `specs` / `skill_any`）**没有一个字看参数本身**，于是 20261006 待办事故里
+   （`workflow` / `specs` / `workflow_any`）**没有一个字看参数本身**，于是 20261006 待办事故里
    planner 把正文填成了上一轮上下文里的另一件事（trace `20261006T093633`），卡照弹、
-   `skill`/`specs` 全绿、**每一轮全量回归都绿**（该条用例的 `_note` 当时明写不做正文断言，
+   `workflow`/`specs` 全绿、**每一轮全量回归都绿**（该条用例的 `_note` 当时明写不做正文断言，
    理由是"参数由 planner 采样填"——那只对了一半：采样能换的是**措辞**，不是**另一件事**）。
    写法必须是**正断言**：只拦"参数对不回主人原话"，不锁措辞、不锁采样长度，所以不会把一次
    采样换向判成回归。⚠️ 只对**照抄型**字段用——判据是「这一格的**正主**是谁」：
@@ -592,19 +600,25 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 
 （多 agent 升级后追加：路由分布、各子 agent 超时率/成功率。）
 
-**自动通道的现状（20261016 核）**：上表里"已经落地"与"有人跑才有"是两件事，混在一起
-会让"这一周没人看"读成"这一周没问题"。今天的账是：
+**自动通道的现状（20261016 核，20261017 改口径）**：上表里"已经落地"与"有人跑才有"是两件事，
+混在一起会让"这一周没人看"读成"这一周没问题"。今天的账是：
 
 | 通道 | 频率 | 覆盖 |
 |---|---|---|
 | `scripts/healthcheck.sh` 第 1–8 项 | 每分钟 | Rust / agent 存活、worker 崩溃、nginx error、无头浏览器残留、夜间哨兵、出站协议违规、安全响应头 |
 | `scripts/healthcheck.sh` 第 9 项 | **每天一次**（按天边沿触发） | `eval/daily_metrics.py` 一行：真实流量效率 + **写重复** + 按技能异常聚集 + planner 前缀缓存命中率 |
-| `scripts/nightly_regression.sh` | **20261012 起挂起**（主人「钱包扛不住」） | L1 + L2 + L3 + `trace_alert` + `golden_draft` —— 它把这五件装在**同一个脚本**里，所以一停全停 |
+| `scripts/nightly_regression.sh` | **默认不启用**（出厂不装 cron；`bash scripts/enable_nightly.sh --apply` 才开） | L1 + L2 + L3 + `trace_alert` + `golden_draft` —— 它把这五件装在**同一个脚本**里，所以一开全开、一关全关 |
 
-⇒ 第 9 项就是为"夜间挂起之后还剩什么"补的：`eval/token_cost_report.py`（成本 / 前缀
+这一格 20261017 之前写的是「**20261012 起挂起**（主人「钱包扛不住」）」——那是**这台机器**当时的
+状态，不是仓库该有的默认。改成"默认不启用"之后，两件事各归各位：**仓库**的口径是 opt-in
+（克隆的人自己决定要不要每天花那 ≈10M tok），**本机**自 20261017 起重新开着（理由与当初关掉的
+理由都留在 crontab 注释里，不擦）。
+
+⇒ 第 9 项就是为"夜间不在场时还剩什么"补的：`eval/token_cost_report.py`（成本 / 前缀
 缓存）与 `eval/trace_metrics.py`（真实流量效率）都是**零 LLM 成本**的读数装置，此前却
 没有任何自动通道——代价有现场：20261016 planner 前缀缓存命中率 84.6% → 51.8%，
-**没有任何东西会报**。
+**没有任何东西会报**。**这条理由在改成 opt-in 之后更强了**：默认部署下夜间那班根本不在，
+第 9 项就是那个部署里唯一的自动观测通道。
 ⚠️ **归因初稿写错过一次，留在原处**：当天先写成"那天改了 `_render_planner_prompt`，
 改提示词 = 整段前缀失效"，复盘更正为**误判**——那天 17 条 trace 全落在 02:29–04:24，
 而 `agent/prompts.py` 的改动 03:11 才落盘、05:09 才随重启生效（health.log 当天只有那
@@ -640,7 +654,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 
 | 阶段 | 并行建设的评测/可观测 |
 |---|---|
-| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（**条数与逐 tag 分量见用例文件与 `eval/report/last_run.json` 的 `by_tag`，不在文档里手抄**）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>`、`--only <id1,id2>` 逗号多选定位、`--skip-ids`、`--min-pass-rate`；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `tests/test_skills.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`tests/test_judge_offline.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。**20260921 补**：`eval/golden_draft.py`
+| **0（当前）** | ✅ 已落地：`eval/golden/basic.jsonl`（**条数与逐 tag 分量见用例文件与 `eval/report/last_run.json` 的 `by_tag`，不在文档里手抄**）+ `eval/run_golden.py`（真实端到端，断言命令帧/声称检测/文本/efficiency；命令行 `--limit N` / `--only <id>`、`--only <id1,id2>` 逗号多选定位、`--skip-ids`、`--min-pass-rate`；报告双写 `eval/report/last_run.json` + `eval/report/runs/<ts>.json`）+ `eval/golden_case_runner.py`（20260902 起进程隔离跑法：单条独立子进程 + 180s 超时 SIGABRT 定位卡死，防悬挂污染后续用例，跑全量用 `eval/golden_full_run.py`）+ `eval/recall_eval.py`（L1 检索：recall@k/MRR，21 条 queries = 12 正例 + 9 噪声，直接测线上 rag/search.py）+ `tests/test_workflows.py`（L0 秒级）+ trace_id 透传（logging contextvar + 中间件）。**20260912 补**：`tests/test_judge_offline.py`（判据离线自测，改判据先跑这个再跑全量）+ `eval/report/review_<ts>.md`（FAIL 复审单）+ `eval/trace_alert.py`（真实 trace 语义告警巡检，非门禁）。**20260921 补**：`eval/golden_draft.py`
 （trace_alert 命中的真实现场 → 用例草稿 + 人审对照单，落 `eval/report/golden_drafts_*.{jsonl,md}`；
 **只产草稿不自动入库**，含真实用户文本故不进 git）+ L2 门禁分两层（回归组硬判 100%，见 §2 门槛分工）。
 **20260925 补**：`eval/llm_judge.py`（LLM 评审员，判"回复有没有编材料"，**只出报告不进任何门禁**，
@@ -652,7 +666,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 `--ids/--tag` 供单条复采样）+ 锁 `tests/test_fastpath_dial.py`；读数与删除/收窄清单见
 [docs/fastpath-pricing-20261015.md](fastpath-pricing-20261015.md)。**它只定价，不改行为** |
 | 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:）；20260830 修 golden 断言过严三条（行为正确不判失败） |
-| 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0 秒级套件硬门禁）；L2 全量 golden 本机跑（20260920 起撤出 CI）+ nightly crontab（scripts/nightly_regression，失败标 `~/agent_regression.failed`）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
+| 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0 秒级套件硬门禁）；L2 全量 golden 本机跑（20260920 起撤出 CI）+ 夜间 cron（`scripts/nightly_regression.sh`，失败标 `~/agent_regression.failed`）——**夜间那班默认不装，`scripts/enable_nightly.sh --apply` 才开**（20261017 口径）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
 | 3 记忆 | 🟡 部分完成：摘要独立化（2026-08-26）结构性关闭污染面；**未做**：记忆专项评测（召回相关性、摘要合并质量、污染检测） |
 | 4 可观测 | 🟡 部分完成：对话 trace JSON 落盘（utils/trace.py → logs/agent/traces/，20260829）+ LLM 慢调用监控（>30s WARN + trace slow 标记，20260830）+ trace_id 中间件。**未做**：metrics 落库、看板、L3 的脱敏重放（20260924 落地的是**跨源对账**这一可落地版本，见 §2） |
 | 5 多 agent | 路由正确性评测 + 子 agent 指标分解 |
@@ -662,7 +676,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 | 升级组件 | 评测手段 | 可观测指标 |
 |---|---|---|
 | Agent 核心重写（手写图） | L0 节点单测 + L2 golden（意图/防幻觉） | 图路径、递归深度、planner/reflector 计数 |
-| 记忆体系升级 | L0（摘要协议已移除，tests/test_skills.py 断言不再 REVISE）+ golden summary_round（不得输出 SUMMARY:）+ 记忆专项评测（未做） | 摘要触发率、召回命中率、污染事件 |
+| 记忆体系升级 | L0（摘要协议已移除，tests/test_workflows.py 断言不再 REVISE）+ golden summary_round（不得输出 SUMMARY:）+ 记忆专项评测（未做） | 摘要触发率、召回命中率、污染事件 |
 | 多 agent | L2 路由正确性 + 子任务成功率 | 路由分布、子 agent 延迟/成本分解 |
 | 防幻觉 | L1 RGB 四 testbed + L2 攻击样本 | 空回复率、恢复语触发率、`__ERROR__` 率 |
 | RAG | 🟡 已落地：检索基线 L1（recall_eval.py 直接测线上 rag/search.py，词法 2/3-gram BM25 文档级聚合，21 条 queries（12 正例 + 9 噪声）recall@1=1.00——词法已打满当前语料，向量留 BEIR 对比再上）+ L2 golden rag 族 24 条（端到端，同源出题）。未做：BEIR 基准、CRAG Truthfulness | 检索耗时、top-k 来源分布、拒绝回答率 |

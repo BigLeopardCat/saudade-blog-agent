@@ -78,7 +78,7 @@ class _ScriptedLLM:
         if not self.plans:
             self.exhausted.append("planner")
             return toolcall_reply(_PLAN_CHAT)
-        # 夹具里的 `SKILL=/PARAMS=` 文本 → native tool_calls（20261004 接口层单通道，
+        # 夹具里的 `WORKFLOW=/PARAMS=` 文本 → native tool_calls（20261004 接口层单通道，
         # 见 `tests/_planner_stub.py`）。判据仍在 `agent/planner_llm.py`。
         return toolcall_reply(self.plans.pop(0))
 
@@ -152,8 +152,8 @@ _LIE_1 = "抱歉喵，目前站内并没有关于或名为且关联西顿学院�
 _LIE_2 = "站内暂时没有西顿学院相关的文章呢，要不要换个关键词试试？"
 _TRUTH = "站内检索到 1 篇与西顿学院相关的文章：《西顿学院小记》。"
 
-_PLAN_CHAT = "SKILL: chat\nPARAMS: {}"
-_PLAN_SEARCH = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
+_PLAN_CHAT = "WORKFLOW: chat\nPARAMS: {}"
+_PLAN_SEARCH = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
                 '"args": {"keyword": "西顿学院"}}]}')
 
 
@@ -278,7 +278,7 @@ print("\n④ 洞⑨ 那族也走重规划：拦住谎之后**把事办成**，�
 _LIE_WRITE = ("主人，这一轮系统真的办成了：你的未读站内信已全部标记为已读，"
               "现在未读是 **0 封**，列表清干净了喵～")
 _TRUTH_WRITE = "主人，4 条未读通知已经真的标记为已读了喵。"
-_PLAN_NOTICE = 'SKILL: notice_read\nPARAMS: {"all": true}'
+_PLAN_NOTICE = 'WORKFLOW: notice_read\nPARAMS: {"all": true}'
 _out4, _llm4, _tool4, _ev4 = _run([_PLAN_CHAT, _PLAN_NOTICE, _PLAN_CHAT],
                                   [_LIE_WRITE, _TRUTH_WRITE],
                                   user_msg="猫咪我的未读信息全部就标记为已读",
@@ -465,7 +465,7 @@ check("  条件/疑问框架照旧豁免（不是声称）",
 # 补法是往 `_NO_EXEC_EXEMPT_RE` 加 `有没有`（`是不是` 已在表里，两者同类），
 # 但那是**判据改动**，未获点头前不动——这一行只把证据留在现场。
 # `_trim_noop_specs`：签名按 `_spec_signature` 归一（与回执侧同源）。
-_P70 = {"skill": "notice_read", "tools": ["read_notifications({'all': True})"],
+_P70 = {"workflow": "notice_read", "tools": ["read_notifications({'all': True})"],
         "params": {"all": True}, "note": ""}
 check("  签名在 noop 里 ⇒ 剔除",
       g._trim_noop_specs(_P70, [list(g._spec_signature(
@@ -475,7 +475,7 @@ check("  签名不在 noop 里 ⇒ 一件都不剔（返回 None，计划原样�
           "read_notifications", {"all": False}))]) is None)
 check("  剔空之后 PARAMS 同步剔（两行不一致 = narrator 只能猜到底做了没有）",
       (g._trim_noop_specs(
-          {"skill": "notice_read", "tools": ["read_notifications({'all': True})"],
+          {"workflow": "notice_read", "tools": ["read_notifications({'all': True})"],
            "params": {"all": True, "tools": ["read_notifications",
                                              "list_notifications"]}, "note": ""},
           [list(g._spec_signature("read_notifications", {"all": True}))])[0]["params"]
@@ -489,7 +489,7 @@ print("\n⑧c 洞⑮ 的判据零件（纯函数）：**办成了却说还在等
 # 整段里"没有执行任何操作"那一半已被 ⑧ 那一族接住，**"还在队列里／没落地"这一半当天
 # 全站无网**——`tests/test_round_facts.py` ② 把这条当红基线逐字锁着。本节只锁**零件**
 # （词形 + 三道闸 + 与洞⑩ 的优先级），端到端与供给侧在那一套件里。
-_REC_15 = [{"skill": "quota_approve", "tool": "approve_quota_request",
+_REC_15 = [{"workflow": "quota_approve", "tool": "approve_quota_request",
             "args": {"user_id": 5}, "result": "剩 500/500", "ts": 0.0}]
 _SENT2_15 = ("我能确定的是：他的申请还在待处理队列里（账号「niuniu」id=5，剩 451/500 轮），"
              "刚才那次确认没落地。要不要我再走一遍？")
@@ -504,7 +504,7 @@ def _facts15(**kw):
 
 
 def _gate15(text, facts=None):
-    return g._claim_issue(text, skill="quota_approve", plan={}, frames_exist=True,
+    return g._claim_issue(text, workflow="quota_approve", plan={}, frames_exist=True,
                           has_popup=False, receipts=_REC_15, noop_specs=[],
                           page_ctx="", role="admin",
                           **({"facts": facts} if facts is not None else {}))
@@ -548,7 +548,7 @@ _LIE_OWN = ("主人，这一轮我得跟你说实话喵——我手上没有“�
             "journalctl / rust.log / agent.log 的原文我这轮取不到，所以没法把这次 "
             "respawn 的具体堆栈贴给你看。")
 _TRUTH_OWN = "主人，你现在有 2 条未读通知喵～（私信 0 条）"
-_PLAN_OWN = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "get_unread_summary", '
+_PLAN_OWN = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "get_unread_summary", '
              '"args": {}}]}')
 # ⚠️ **本节的脚本于 20261004 改过一处（`_PLAN_CHAT` 写了两遍）**，别改回去：判据已经
 # **前移到决策层**（`graph.planner_node` 的 `data_question_no_tool` 纠偏，同 `agent/authz.py`
@@ -652,7 +652,7 @@ print("\n⑥d 零帧纯作答轮 + 主人在问**站内语料** → 打回重规
 _LIE_SITE = ("主人，我这边**没有工具**可以帮你查具体的文章标题和链接喵～"
              "你要是想找哪篇，直接跟我说标题我看看记不记得。")
 _TRUTH_SITE = "主人，站内一共有 3 篇文章喵：《西顿学院小记》《Docker 部署笔记》《测试文章 TEST8》。"
-_PLAN_SITE = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
+_PLAN_SITE = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
               '"args": {"keyword": "文章"}}]}')
 # ⚠️ 同 ⑥：`_PLAN_CHAT` 写两遍是**刻意的**（判据前移之后，第一次落 chat 会被 planner
 # 自己的 `data_question_no_tool` 纠偏接走，gate 就看不到零帧轮了）——本节锁的仍是

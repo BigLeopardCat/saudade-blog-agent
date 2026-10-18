@@ -23,13 +23,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
-import agent.adminops as A  # noqa: E402
+import agent.adminops_account as _account  # noqa: E402
+import agent.adminops_confirm as _confirm  # noqa: E402
+import agent.adminops_target as _target  # noqa: E402
 import agent.graph as g  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import (_RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec,  # noqa: E402
                          plan_state)
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.skills import PLAN_STATUS_ABSENCE_EXEMPT, instantiate_plan  # noqa: E402
+from agent.plan_status import PLAN_STATUS_ABSENCE_EXEMPT  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_todo_schedule 的那一处）────────────────────────────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**（宁可退回追问，也不发一个
@@ -121,11 +124,11 @@ def row(uid, name, role=ROLE_USER, status=0):
 DIR = [row(126, "guest5"), row(127, "guest6"), row(130, "frozen_one", status=1)]
 
 
-def _plan(spec, skill="account_freeze"):
+def _plan(spec, workflow="account_freeze"):
     """借一个骨架搭 plan_obj（与 `_wrap_up_plan`/`instantiate_plan` 的产物同形，
     只有 tools 换成要测的那一条）。"""
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = [spec]
     return obj
 
@@ -469,12 +472,12 @@ check("⑫ 多 spec 混排 → 放行（不由这层判）",
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑦ 政策拒绝 = BLOCK + 原因码政策（**这一条接不上就是静默假绿**）")
-frame = A.policy_frame("管理员之间不可互相冻结")
+frame = _target.policy_frame("管理员之间不可互相冻结")
 verdict, reason = _check_spec("freeze_account", {"name": "boss"}, True, frame,
                               "account_freeze")
 check("⭐ policy_frame → (BLOCK, policy_refused)",
       verdict == _VERDICT_BLOCK and reason == "policy_refused", f"{verdict} {reason}")
-check("  A.policy_error_reason 认得这个原因码", A.policy_error_reason(frame)
+check("  A.policy_error_reason 认得这个原因码", _target.policy_error_reason(frame)
       == "policy_refused")
 # 对照：**同一条拒绝话术**只要不套错误帧形态就照常 PASS ⇒ 是**形态**在决定结果，
 # 不是"文本里有「不能」"（按文本判的假判据会被任何一句措辞骗过）。
@@ -519,39 +522,39 @@ finally:
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑨ 卡面文案（adminops）：主人点确定**之前**就该看到「是不是那个人」")
-line = A.render_account_action("guest5", True, {r["id"]: r for r in DIR})
+line = _account.render_account_action("guest5", True, {r["id"]: r for r in DIR})
 check("冻结卡面：名字 + 账号 id + 现状都在",
       "冻结账号「guest5」" in line and "126" in line and "正常" in line, line)
 check("  账号名**一字不改**地进卡面（主人得能核对是不是那个人）",
-      A.render_account_action("Guest 5 空格", True, {}) .count("Guest 5 空格") >= 1)
-line_no = A.render_account_action("没有这个人", True, {r["id"]: r for r in DIR})
+      _account.render_account_action("Guest 5 空格", True, {}) .count("Guest 5 空格") >= 1)
+line_no = _account.render_account_action("没有这个人", True, {r["id"]: r for r in DIR})
 check("  名录在手但名字不在 → 卡面直接印「后台账号列表里没有叫这个名字的账号」"
       "（点完才被告知没做成就晚了）",
       "后台账号列表里没有叫这个名字的账号" in line_no, line_no)
 check("  名字不在时**不再报后果**（做不成的事说后果只会误导）",
       "登录" not in line_no, line_no)
-line_none = A.render_account_action("guest5", True, None)
+line_none = _account.render_account_action("guest5", True, None)
 check("  名录读不到 → 只印名字，**照旧弹窗**（读不到就少说，不是不弹）",
       "冻结账号「guest5」" in line_none and "没有叫这个名字" not in line_none,
       line_none)
-line_un = A.render_account_action("guest5", False, {r["id"]: r for r in DIR})
+line_un = _account.render_account_action("guest5", False, {r["id"]: r for r in DIR})
 check("  冻结 ≠ 解冻（两个方向措辞不同形）", line != line_un)
 check("  解冻那句**不承诺**旧会话回来（「不会自动恢复」这半边必须说出口）",
       "不会自动恢复" in line_un or "重新登录" in line_un, line_un)
 check("  单条 spec 走 _confirm_one 也是同一行（卡面/待办/回执同源）",
-      "冻结账号「guest5」" in A.render_confirm_question(
+      "冻结账号「guest5」" in _confirm.render_confirm_question(
           [{"tool": "freeze_account", "args": {"name": "guest5"}}],
           None, None, None, None, {r["id"]: r for r in DIR}))
 check("  回执行说清「已冻结 + 后台已复核」，并点名 id",
-      "已冻结" in A.render_account_status("guest5", 126, True) and "126"
-      in A.render_account_status("guest5", 126, True))
+      "已冻结" in _account.render_account_status("guest5", 126, True) and "126"
+      in _account.render_account_status("guest5", 126, True))
 check("  回执行在「本来就是」时说「没有重复冻结」，**不说**「已冻结」",
-      "没有重复冻结" in A.render_account_status(
+      "没有重复冻结" in _account.render_account_status(
           "guest5", 126, True, changed=False, before_frozen=True))
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑩ 只读白名单：两个工具**不在**（那是 content_query 的点名通道）")
-from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
+from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 check("不在 _EXPLICIT_TOOLS（无参点名）",
       not ({"freeze_account", "unfreeze_account"} & set(_EXPLICIT_TOOLS)))
 check("不在 _CALLABLE_QUERY_TOOLS（带参点名）——写工具进只读通道 = 绕过同意闸",
@@ -644,8 +647,8 @@ check("⭐ 对抗输入：params 里塞 frozen=False/action=unfreeze → 展开�
       _p5["tools"] == [f'{_spec("freeze_account", "guest5")}'], str(_p5["tools"]))
 check("  两个技能名与两个工具名不是一套字面量（混用会让分支静默不命中）",
       {"account_freeze", "account_unfreeze"} <= set(
-          instantiate_plan.__globals__["WRITE_SKILL_NAMES"])
-      and "freeze_account" not in instantiate_plan.__globals__["WRITE_SKILL_NAMES"],
+          instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"])
+      and "freeze_account" not in instantiate_plan.__globals__["WRITE_WORKFLOW_NAMES"],
       "")
 
 # ══════════════════════════════════════════════════════════════════
@@ -672,7 +675,7 @@ print("\n⑮ gate 5a：政策拒绝被叙述成完成式 → fallback 用**政�
 _src = (ROOT / "agent/graph.py").read_text()
 check("⭐ 5a 的分支链里接了政策原因码（不接 = 落到通用「执行出错了」，"
       "把「不许重试」说成「再试一次」）",
-      "A.policy_error_reason(err_text)" in _src, "")
+      "_target.policy_error_reason(err_text)" in _src, "")
 check("⭐ 政策原因码与「目标不存在」用的是**两张不同的兜底文案**"
       "（两条不同的指引：一个是「没这个人」，一个是「有这个人但不许你动」）",
       g._FALLBACK_POLICY != g._FALLBACK_UNKNOWN_TARGET,
@@ -688,13 +691,16 @@ check("  planner 与 narrator 两侧都写了 `[policy_refused]` 不许重试",
       _prose.count("[policy_refused]") >= 2, str(_prose.count("[policy_refused]")))
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⑯ 派生锁：plan 含**名字型写工具**的技能必须在 WRITE_SKILL_NAMES 里")
-from agent.skills import (SKILLS as _SKILLS, WRITE_SKILL_NAMES as _WSN,  # noqa: E402
-                          _WRITE_NAME_TARGET_SKILLS as _WNTS)
-_missing = sorted({sk.name for sk in _SKILLS
+print("\n⑯ 派生锁：plan 含**名字型写工具**的技能必须在 WRITE_WORKFLOW_NAMES 里")
+from agent.workflow_defs import (  # noqa: E402
+    WORKFLOWS as _WORKFLOWS,
+    WRITE_WORKFLOW_NAMES as _WSN,
+    _WRITE_NAME_TARGET_WORKFLOWS as _WNTS,
+)
+_missing = sorted({sk.name for sk in _WORKFLOWS
                    if any(t in g._WRITE_NAME_FIELDS for t, _ in (sk.plan or ()))
                    and sk.name not in _WSN})
-check("⭐ 没有任何技能的 plan 用了名字型写工具却不在 WRITE_SKILL_NAMES（静默洞）",
+check("⭐ 没有任何技能的 plan 用了名字型写工具却不在 WRITE_WORKFLOW_NAMES（静默洞）",
       _missing == [], str(_missing))
 check("  两个账号技能都在名字通道名单里（不在 = 展开器尾部兜底成「未知的写技能」）",
       {"account_freeze", "account_unfreeze"} <= set(_WNTS))
@@ -716,10 +722,10 @@ class _FakeTool:
         return self.out
 
 
-def _run_exec(msg, spec, skill="account_freeze", grant=None):
+def _run_exec(msg, spec, workflow="account_freeze", grant=None):
     _CALLS.clear()
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = [spec]
     state = {**plan_state(obj), "plan_rounds": 1, "done": False,
              "messages": [HumanMessage(content=msg)]}
@@ -746,7 +752,7 @@ try:
           and authz.consent_granted(_adm, "freeze_account", _GRANTABLE) is False,
           _GRANTABLE)
     g._TOOL_MAP["freeze_account"] = _FakeTool(
-        base.ok(A.render_account_status("guest5", 126, True),
+        base.ok(_account.render_account_status("guest5", 126, True),
                 meta={"op": "account_freeze", "account_id": 126,
                       "account_name": "guest5", "before": "正常", "after": "冻结",
                       "change": "已冻结"}))
@@ -760,8 +766,8 @@ try:
         check("  卡面上有账号名（主人得能核对是不是那个人）",
               "guest5" in pop.get("q", ""), pop.get("q", ""))
         payload = _confirm.inspect(pop.get("token") or "") or {}
-        check("  令牌载荷里的 skill 与 specs 就是这一件（卡上写什么就签什么）",
-              payload.get("skill") == "account_freeze"
+        check("  令牌载荷里的 workflow 与 specs 就是这一件（卡上写什么就签什么）",
+              payload.get("workflow") == "account_freeze"
               and payload.get("specs") == [{"tool": "freeze_account",
                                             "args": {"name": "guest5"}}],
               str(payload))

@@ -64,14 +64,14 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 
 
 # ── 回执行形状（与 `execute_node` 的构造同形；`cmd` 非空 = 命令族）────────────
-_RCPT_CMD = {"skill": "effect", "tool": "toggle_effect", "args": {"effect": "sakura"},
+_RCPT_CMD = {"workflow": "effect", "tool": "toggle_effect", "args": {"effect": "sakura"},
              "result": "特效 樱花(sakura) 已打开",
              "cmd": {"kind": "effect", "effect": "sakura", "action": "on"}, "ts": 0}
-_RCPT_WRITE = {"skill": "admin_notes", "tool": "create_tag", "args": {"name": "音乐"},
+_RCPT_WRITE = {"workflow": "admin_notes", "tool": "create_tag", "args": {"name": "音乐"},
                "result": "标签「音乐」已创建", "ts": 0}
-_RCPT_WRITE2 = {"skill": "admin_notes", "tool": "update_tag", "args": {"name": "音乐"},
+_RCPT_WRITE2 = {"workflow": "admin_notes", "tool": "update_tag", "args": {"name": "音乐"},
                 "result": "标签「音乐」已改名「歌单」", "ts": 0}
-_RCPT_DATA = {"skill": "content_query", "tool": "search_notes", "args": {"keyword": "x"},
+_RCPT_DATA = {"workflow": "content_query", "tool": "search_notes", "args": {"keyword": "x"},
               "result": '[{"id": 46, "title": "架构"}]', "ts": 0}
 
 
@@ -270,7 +270,7 @@ def test_action_restate_regex():
 class _ScriptedLLM:
     """按入参形态分流 planner / model（同 `test_gate_replan.py` 的理由）。
 
-    planner 那一支走 `_planner_stub.toolcall_reply`：夹具里的 `SKILL=/PARAMS=` 文本被翻成
+    planner 那一支走 `_planner_stub.toolcall_reply`：夹具里的 `WORKFLOW=/PARAMS=` 文本被翻成
     native tool_calls（20261004 接口层单通道），判据仍在 `agent/planner_llm.py` 里。
     """
 
@@ -290,7 +290,7 @@ class _ScriptedLLM:
             return AIMessage(content=self.narrations.pop(0))
         if not self.plans:
             self.exhausted.append("planner")
-            return toolcall_reply("SKILL: chat\nPARAMS: {}")
+            return toolcall_reply("WORKFLOW: chat\nPARAMS: {}")
         return toolcall_reply(self.plans.pop(0))
 
 
@@ -305,8 +305,8 @@ class _FakeTool:
         return self.result
 
 
-_PLAN_EFFECT = 'SKILL: effect\nPARAMS: {"effect": "sakura", "action": "on"}'
-_PLAN_CHAT = "SKILL: chat\nPARAMS: {}"
+_PLAN_EFFECT = 'WORKFLOW: effect\nPARAMS: {"effect": "sakura", "action": "on"}'
+_PLAN_CHAT = "WORKFLOW: chat\nPARAMS: {}"
 _FACT_LINE = "特效 樱花(sakura) 已打开"          # 命令族：**不印**（20261002）
 _FACT_BLOCK = FACT_MARK + _FACT_LINE
 
@@ -314,7 +314,7 @@ _FACT_BLOCK = FACT_MARK + _FACT_LINE
 # `BLOCK_FAMILIES`：`add_favorite` 是写族里最轻的一件（自己的数据、不弹卡、无管理
 # 角色要求、不需要确认令牌），离线真图上跑得通；`create_tag` 走 `_ALWAYS_CONFIRM_TOOLS`
 # ⇒ 测试环境没有 jwt_secret 时它连工具都到不了（会停在 consent_required）。
-_PLAN_FAV = 'SKILL: favorite_add\nPARAMS: {"article_id": 46}'
+_PLAN_FAV = 'WORKFLOW: favorite_add\nPARAMS: {"article_id": 46}'
 _FAV_MSG = "把文章 46 收藏一下"
 _FACT_WRITE_LINE = "已收藏文章 46"
 _FACT_WRITE_BLOCK = FACT_MARK + _FACT_WRITE_LINE
@@ -503,7 +503,7 @@ def test_graph_zero_frame_no_authorization():
 
 def test_graph_data_round_untouched():
     print("\n[真图] 数据族轮次不产生事实块（讲 JSON 人话是模型的活）")
-    plan = ('SKILL: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
+    plan = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
             '"args": {"keyword": "架构"}}]}')
     llm = _ScriptedLLM([plan], ["站内检索到 1 篇讲架构的文章。"])
     tool = _FakeTool(_base.ok('[{"id": 46, "title": "架构"}]'))
@@ -557,10 +557,10 @@ class _FakeAgent:
 # 假 producer 用的回执行：**写族**（20261002 起只有写族会真印出块）。
 # 命令族的行仍然可以进 receipts（台账/跨轮记忆照旧），但它渲染出来是空串 ——
 # `test_producer_no_facts_for_cmd_round` 专门钉这条。
-_ROW = {"skill": "favorite_add", "tool": "add_favorite",
+_ROW = {"workflow": "favorite_add", "tool": "add_favorite",
         "args": {"article_id": 46},
         "result": _FACT_WRITE_LINE, "ts": 0}
-_ROW_CMD = {"skill": "effect", "tool": "toggle_effect",
+_ROW_CMD = {"workflow": "effect", "tool": "toggle_effect",
             "args": {"effect": "sakura", "action": "on"},
             "result": _FACT_LINE, "ts": 0,
             "cmd": {"kind": "effect", "effect": "sakura", "action": "on"}}

@@ -16,7 +16,7 @@
   ③ 源码级：这几处渲染的实现里必须写着命名空间字面量，且没有 `f"#{` 这种旧形。
 
 **注意 `noteId=19` 里那个是大写 I**：所以 "id=19" 不是它的子串，拿旧形做负断言
-会**恒真/恒假而不报错**（本批实测：test_skills 里那批负断言改名后全变成空转）。
+会**恒真/恒假而不报错**（本批实测：test_workflows 里那批负断言改名后全变成空转）。
 本套件里所有 id 比对都走 `_bare()`，它按"紧邻字符是不是命名空间分隔符"判，
 不靠子串。
 """
@@ -27,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
-from agent import adminops as A  # noqa: E402
+from agent import adminops_board as _board  # noqa: E402
 from agent import context as C  # noqa: E402
 from agent import reports as R  # noqa: E402
 from agent.entities import receipt_digest  # noqa: E402
@@ -76,7 +76,7 @@ check("  且裸 96 不再出现", not _bare(det, 96), det)
 det2 = R._detail_line({**ROW, "author": ""}, "人工已驳回")
 check("明细行的作者兜底同样具名", "userId:3" in det2 and not _bare(det2, 3), det2)
 
-ref = A._board_ref(ROW)
+ref = _board._board_ref(ROW)
 check("回执行里的留言指称带 talkId（跨轮记忆唯一的认物）",
       ref.startswith("talkId:96 ") and not _bare(ref, 96), ref)
 
@@ -144,7 +144,10 @@ print("\n④ 接线锁（源码级）：渲染实现里必须写着命名空间�
 _SRC = {
     "tools/base.py": (ROOT / "tools" / "base.py").read_text(encoding="utf-8"),
     "agent/reports.py": (ROOT / "agent" / "reports.py").read_text(encoding="utf-8"),
-    "agent/adminops.py": (ROOT / "agent" / "adminops.py").read_text(encoding="utf-8"),
+    "agent/adminops_tags.py": (ROOT / "agent" / "adminops_tags.py").read_text(encoding="utf-8"),
+    "agent/adminops_board.py": (ROOT / "agent" / "adminops_board.py").read_text(encoding="utf-8"),
+    "agent/adminops_confirm.py": (ROOT / "agent" / "adminops_confirm.py").read_text(
+        encoding="utf-8"),
     "agent/entities.py": (ROOT / "agent" / "entities.py").read_text(encoding="utf-8"),
     "agent/context.py": (ROOT / "agent" / "context.py").read_text(encoding="utf-8"),
 }
@@ -160,7 +163,7 @@ _WIRING = (
     ("tools/base.py", "_board_label", 'f"talkId:'),
     ("tools/base.py", "_board_label", 'f"userId:'),
     ("agent/reports.py", "_detail_line", 'f"  · talkId:'),
-    ("agent/adminops.py", "_board_ref", 'f"talkId:'),
+    ("agent/adminops_board.py", "_board_ref", 'f"talkId:'),
     ("agent/entities.py", "_note_digest", 'f"noteId:'),
     ("agent/entities.py", "_notification_digest", 'f"notifId:'),
     ("agent/entities.py", "_unread_digest", 'f"notifId:'),
@@ -176,7 +179,7 @@ check("agent/reports.py::render_user_stats 里写着 userId:",
 
 # 旧形不许回来：留言族渲染里不得再有 `f"#{` 插值（`#{` 只会是裸 id）
 for _f, _fn in (("tools/base.py", "_board_label"), ("agent/reports.py", "_detail_line"),
-                ("agent/adminops.py", "_board_ref")):
+                ("agent/adminops_board.py", "_board_ref")):
     _b = _body(_SRC[_f], _fn)
     check(f"{_f}::{_fn} 里没有裸 `#` 插值（回退即红）", 'f"#{' not in _b)
 # 子串法在这里判不准（`f"noteId:{nid}《` 里本来就含 `{nid}《`）⇒ 钉的是"模板以 id 起头"
@@ -188,7 +191,7 @@ check("实体摘要里没有以 id 起头的条目模板（`f\"{nid}《` 这种�
 # `_board_label` 是给模型看的、adminops 的弹窗抬头是给人看的——两处形态不同是对的，
 # 但这条差异得写在测试里，否则下一个人会"顺手统一"）
 check("弹窗卡面仍是 `#{talkKey}`（人眼看的 UX 面，本批刻意不动）",
-      'head = f"#{hit' in _SRC["agent/adminops.py"])
+      'head = f"#{hit' in _SRC["agent/adminops_confirm.py"])
 
 print("\n⑤ 帧出口改名（20260928）：同一个数字只以一种身份露面")
 
@@ -260,7 +263,8 @@ check("引用按**旧名**也取得到（模型的历史措辞不许被改名判
 check("两个名字都不在时才报 ref_path_missing",
       resolve_one("$list_guestbook[0].nope", _td)[1] == "ref_path_missing")
 check("后台文章清单用的是 `noteId=` 而不是裸 ` id=`",
-      "- noteId=" in _SRC["agent/adminops.py"] and "- id={" not in _SRC["agent/adminops.py"])
+      "- noteId=" in _SRC["agent/adminops_tags.py"]
+      and "- id={" not in _SRC["agent/adminops_tags.py"])
 
 print("\n⑥ 物件名与出口覆盖（20260928）：同一个数字不只以一种名字露面，也不只以一种身份露面")
 

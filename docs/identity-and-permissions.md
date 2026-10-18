@@ -171,12 +171,12 @@ grep -l authz_shadow /home/ubuntu/Saudade-Blog/logs/agent/traces/*.json | wc -l
 
 | 层 | 落点 | 拦什么 | 硬度 |
 |---|---|---|---|
-| ① 技能可见性 | `skills.visible_skills`（`role in CHAT_ONLY_ROLES and not s.chat`） | planner 菜单 / 工具 schema / narrator 能力清单三处**同源**只剩 `chat` | **软**：`instantiate_plan` 不校验可见性，LLM 点名不可见技能照样成行 |
+| ① 技能可见性 | `workflows.visible_workflows`（`role in CHAT_ONLY_ROLES and not s.chat`） | planner 菜单 / 工具 schema / narrator 能力清单三处**同源**只剩 `chat` | **软**：`instantiate_plan` 不校验可见性，LLM 点名不可见技能照样成行 |
 | ② 工具 schema | `planner_llm.build_tool_schema` | 模型**发得出**的技能只剩 `chat` | **软**：schema 约束的是模型能*发出*什么，不是系统*接受*什么——`instantiate_plan` 照样收下点名别的技能（与 ① 是同一道口子的另一个入口；20261017 更正：原文写的"只对 native 档生效、默认档是 text"自 20261004 文本契约档删除后已不成立） |
 | ③ authz 空 scope | `authz._ROLE_SCOPES[ROLE_ZAKO] = frozenset()` | 执行前的 `authz.check` | **软**：`execute_node` 在 shadow 档下（`not allowed and not enforcing`）**只记账不拦**，而 `zako` 会拿到的那些 scope 没有一个在 `_HARD_SCOPES` |
 | ④ planner 短路 | `graph.planner_node` 顶部 | 结构上不产出 TOOLS 行 ⇒ `execute` **永不被进入** | **硬**（确定性、无 LLM、无配置开关） |
 
-失效链（不加 ④ 就会真发生）：planner 点名一个已不可见但仍在 `SKILL_MAP` 里的技能 →
+失效链（不加 ④ 就会真发生）：planner 点名一个已不可见但仍在 `WORKFLOW_MAP` 里的技能 →
 `execute` → authz 判 deny → shadow 下**照 invoke**。所以"前三层兜住了"是错的。
 
 - **两条反直觉的核验结论**（都写进了 `tests/test_zako_role.py`）：
@@ -301,7 +301,7 @@ LLM 计数是幻觉源。这是对既有 `_shape(data)` 惯例的有意偏离（
 
 **执行去重是 args-aware 的**：既有收尾判据只比工具名，对写不够——planner 第二轮补做"另一篇"
 （同一工具名）会被静默收尾，而 narrator 手握第一条真回执必然说成"都改好了"。新增
-`_EXECUTED_ONCE_SKILLS`（不改 `SNAPSHOT_SKILLS` 的语义与断言），判据改成 **`(tool, args)` 整体**，
+`_EXECUTED_ONCE_WORKFLOWS`（不改 `SNAPSHOT_WORKFLOWS` 的语义与断言），判据改成 **`(tool, args)` 整体**，
 并给写技能一条**独立收尾文案**（不能复用"快照型只读、重复调用拿回同一份数据"）。
 `_CONTENT_TOOLS` **只加 `list_admin_notes`**：那个集合的语义是"跑过 ⇒ 检索/读取声称有据"，
 塞写工具会让"建了个标签"变成"我检索过"的证据。
@@ -376,7 +376,7 @@ Python 写 / Rust 读，`src/routes/chat.rs::render_exec_row` 四个新臂），
 
 令牌（`agent/confirm.py`）是**无状态的 HMAC 签名串**，不是内存里的待办表：uvicorn 跑
 **2 个 worker**，内存表在另一个 worker 上不存在；落库要迁移。payload = `{v,uid,conv,exp,
-skill,specs}`，`base64url(json).hmac_sha256(jwt_secret, _DOMAIN + body)`，TTL **600 秒**，
+workflow,specs}`，`base64url(json).hmac_sha256(jwt_secret, _DOMAIN + body)`，TTL **600 秒**，
 `_DOMAIN = b"saudade-confirm-v1"`。`verify()` 是 **fail-closed**：签名/版本/uid/会话（含
 "签发时有会话、现在是 None"）/过期任一不符 → `None`；密钥空缺时**既不签也不验**（绝不降级
 成"无签名令牌"）。**`specs` 里不许残留 `$ref`**（引用依赖签发那一轮的工具帧，执行轮早已
@@ -399,7 +399,7 @@ execute 遇到写 spec 卡在同意闸上
   `confirm_token` 就**不落用户消息**（历史里不留空 user 行——否则占掉注入窗口、干扰标题
   派生），但仍照常落 assistant 回复与执行回执（那是真发生过的执行）。agent 侧验签失败 →
   **零执行** + 如实说"确认已过期"。
-- **planner 被跳过**：`planner_node` 最前面的确定性短路径用令牌里的 `skill` + `specs` 直接
+- **planner 被跳过**：`planner_node` 最前面的确定性短路径用令牌里的 `workflow` + `specs` 直接
   拼计划（技能名取自签名、**不猜**；参数一字不改；技能名与工具对不上 → 整单拒绝，防令牌
   被换工具）。execute 的两道确定性门（同意闸 / 目标有据）对确认轮**放行**——"用户点的确认"
   本身就是凭据，而"有据"已在签发时校验；**授权不放行**：非 admin 即便持有有效令牌，
@@ -491,7 +491,7 @@ execute 遇到写 spec 卡在同意闸上
   ⚠️ 这个分支**必须 `return` 而不是 `break`**：收尾路径要读只有 `instantiate_plan` 才会产出的
   `params` 键，`break` 过去必抛 `KeyError`——20260922 实测正是它把这一轮打成 `__ERROR__`
   （与 20260921 的 `KeyError('model')` 同一类：**分支走通了、收尾路径没走通**）。已补假 LLM
-  整轮回归锁（`test_skills.test_write_target_refusal_round`）。
+  整轮回归锁（`test_workflows.test_write_target_refusal_round`）。
 - **快道动词表补「改名 / 改名叫」**：腿⑭ 实测「把分类「X」改名叫「Y」」这句教科书式命令
   **命不中快道**（表里只有「改名为」「改成」）⇒ 落进弹窗那条路，用户明明下的是命令却被多问一次。
 - **腿⑮ 由 WARN 升为 FAIL**：断言从"没有弹窗"扩到"逐标签都要给出具体原因"；腿③ 的找不到措辞
@@ -534,7 +534,7 @@ scope `write.console`，技能 `board_audit` / `board_delete`）。这一族的�
 | 请求体 **0/1** vs 落库值 **1/2** | 两张表**分开** | 发 `2` 会被端点读成「通过」——方向正好相反 |
 | 删除对不存在的 id **静默 no-op** | 删后读不回 = 没删掉 ⇒ 响亮报 `unavailable` | 同 §5.5 的公告删除 |
 
-**验证**：离线 `test_admin_write` ⑰（身份地基 + 弹窗回落）+ `test_skills`（片段校正三态、台账
+**验证**：离线 `test_admin_write` ⑰（身份地基 + 弹窗回落）+ `test_workflows`（片段校正三态、台账
 豁免锚）；golden 四条（复核弹窗 / 删除弹窗 / 疑问句不弹窗 / 目标落不到唯一一行如实收尾，末一条
 需真管理员 uid）；活体探针腿⑧⑨⑩（弹窗链路）**20260922 已真跑并全绿**（详见 §5.3 末条）。
 阻塞点不在代码：复跑要真写（一次性标签/分类/公告 + 指定草稿文章的置顶往返），其中 `--allow-tag-delete`

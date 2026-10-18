@@ -1,11 +1,15 @@
 # ADR-0007：`unavailable` 的那次原地重试不在提示词层治
 
+
+> ⚠️ 20261017 起 `skill` 已改名为 **`workflow`**（`agent/skills.py` → `agent/workflow_defs/__init__.py`——20261017 先改名为 `agent/workflows.py`，20261018 批 2 收尾刀又把那个中转层整块删掉（**已删**）；`tests/test_skills.py` → `tests/test_workflows.py`、`tests/test_slim_skills.py` → `tests/test_slim_workflows.py`；计划 IR `SKILL=` → `WORKFLOW=`）。本文档保留**当时的名字**，不回溯改写；读它时把 skill 读作 workflow 即可。
+
 - **状态**：已搁置（20261007）
 - **背景文档**：[../问题记录.md](../问题记录.md) §1.55（现场、机制、残余与这次的负结果）
 - **影响范围**：无（提示词层的两版纠偏**没有落地**，`agent/graph.py` 停在 HEAD）。
   下一层的候选（菜单层禁用）会碰 `agent/skills.py::build_planner_context` 与
   `agent/graph.py::_tools_desc`。
-- **判据**：已落地的那一半（`account_roster.planner_contract` 的回落句）由
+- **判据**：已落地的那一半（`account_roster.planner_contract` 的回落句；**20261017 后记**：
+  该字段已并回 `description`，判据随之改成 `split_contract(...)[1]`，两句话一字未动）由
   `tests/test_account_roster.py` ④/⑥ 两侧锁着；本 ADR 说"不再往提示词层加句子"没有
   判据——它是一条**不再新增**的决定，靠这份文档与 §1.55 的读数执行。
 - **触发条件**：① 出现一次**线上现场**（不是评测）证明"写能力因此没有入口"仍在发生；
@@ -22,7 +26,7 @@ uid=0 哨兵下（以及线上任何"身份/服务这一轮给不出数据"的�
 （一条**完全能办**的写操作——弹卡这条路本来不需要名录）整条没有入口。
 
 20261007 上午已经用**契约层**治过一半（把"名录读不到 ≠ 不能办…不要再点一次本技能"写进
-`account_roster.planner_contract`）：禁言一族改选率 0/4 → 4/6，但**解禁 3/6、禁言 2/6
+`account_roster.planner_contract`——20261017 后记：该字段已并回 `description`）：禁言一族改选率 0/4 → 4/6，但**解禁 3/6、禁言 2/6
 仍然原地重试**——那句话长在"下一步该去"的技能旁边，而模型卡在"上一步"。
 
 ## 决策

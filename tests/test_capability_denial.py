@@ -4,13 +4,13 @@
 **为什么单起一套**：这条网的依据与前几族**不在一处**。洞①/⑨/② 问的是"这一轮做过
 没有"（依据在工具帧 / 跨轮回执里），洞④ 问的是"这条**结论**本轮查过没有"（依据仍在
 本轮），而本族问的是"**这件能力**站内有没有"——依据在**技能注册表**里
-（`visible_skills(role)`）。这意味着两件前几族没有的性质：
+（`visible_workflows(role)`）。这意味着两件前几族没有的性质：
 
   · **它带角色**：同一句「站内没有删除留言的通道」，普通用户说是**实话**
     （board_delete 对他不可见），管理员说才是假话；
   · **判据片段必须同源**：动词取自该技能 `plan` 里那些工具的
-    `action_text.WRITE_CLAIM_ROOTS`（写技能）/ `skills.CAPABILITY_DENIAL_VERBS`
-    （读技能），对象取自 `skills.CAPABILITY_DENIAL_OBJECTS`，两半必须落在**同一件
+    `action_text.WRITE_CLAIM_ROOTS`（写技能）/ `workflows.CAPABILITY_DENIAL_VERBS`
+    （读技能），对象取自 `workflows.CAPABILITY_DENIAL_OBJECTS`，两半必须落在**同一件
     能力**上——否则「站内没有删除已发通知的功能」（**实话**，它逐字印在 notice_send
     的确认卡面上）会被误判。
 
@@ -51,7 +51,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import graph as G  # noqa: E402
-from agent import skills as S  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
+from agent.workflow_defs.capability import (  # noqa: E402
+    CAPABILITY_DENIAL_OBJECTS,
+    CAPABILITY_DENIAL_VERBS,
+)
 
 FAILS: list[str] = []
 
@@ -62,7 +66,7 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-_PLAN = {"skill": "chat", "note": "", "status": ""}
+_PLAN = {"workflow": "chat", "note": "", "status": ""}
 
 
 def judge(text: str, role: str | None) -> bool:
@@ -131,7 +135,7 @@ for t, role in NEG:
 #
 # 落地前按"动闸门要拍板 + 多遍 A/B"的纪律挂了一轮（正例里那句就是当时的**已知漏**）。
 # 复扫口径与结果（1082 份有回复的 trace；uid=1 记超管、其余记普通用户，与本族运行时同一
-# 份 `visible_skills` 判据）：原形状命中 1 组、放宽后**新增 0 组**；再按**超管身份**过一遍
+# 份 `visible_workflows` 判据）：原形状命中 1 组、放宽后**新增 0 组**；再按**超管身份**过一遍
 # 同一份语料（"最坏情况"上界，把所有管理能力都放开）也**新增 0 组** ⇒ 生产误伤面为零。
 # 放宽后的行为是"打回重规划一次"而非兜底吞轮：本族早在 `_REPLAN_ISSUES` 里、
 # `_REPLAN_ADVICE` 那段也已按写族写好（"该动手就去动手"，不是洞④ 的检索味建议）。
@@ -140,7 +144,7 @@ for t, role in NEG:
 # 吃两字，同源（动词/对象必须属于同一件能力）与范围词两张守网**都不受影响**。
 
 # ══════════════════════════════════════════════════════════════════
-print("\n③ 角色锁：同一句话，按角色两种结局（依据只能是 `visible_skills`）")
+print("\n③ 角色锁：同一句话，按角色两种结局（依据只能是 `visible_workflows`）")
 
 _SAME = "系统这边没有删除留言的通道，你自己进后台手动删吧"
 check("  admin ⇒ 判（他真能删）", judge(_SAME, "admin"))
@@ -154,15 +158,15 @@ check("  反向：普通用户说「没有收藏功能」⇒ 判（favorite_add 
 # ══════════════════════════════════════════════════════════════════
 print("\n④ 两半同源：动词必须来自*这一件*能力（跨技能串台 = 误伤）")
 
-_V = {k: G._capability_denial_verbs(S.SKILL_MAP[k]) for k in S.CAPABILITY_DENIAL_OBJECTS}
+_V = {k: G._capability_denial_verbs(WORKFLOW_MAP[k]) for k in CAPABILITY_DENIAL_OBJECTS}
 check("  每个对象词条都对应一件真技能、且动词非空",
-      all(S.SKILL_MAP.get(k) and _V[k] for k in S.CAPABILITY_DENIAL_OBJECTS))
+      all(WORKFLOW_MAP.get(k) and _V[k] for k in CAPABILITY_DENIAL_OBJECTS))
 check("  读技能那份 `CAPABILITY_DENIAL_VERBS` 的键都在对象表里（两边不许各写一份）",
-      set(S.CAPABILITY_DENIAL_VERBS) <= set(S.CAPABILITY_DENIAL_OBJECTS))
+      set(CAPABILITY_DENIAL_VERBS) <= set(CAPABILITY_DENIAL_OBJECTS))
 check("  board_delete 的动词里**不含**发通知的词根（这就是 ② 第一句放行的原因）",
       not re.search(r"发|通知", _V["board_delete"]), _V["board_delete"])
 check("  `content_query` 走显式表（它的 plan 里没有写工具可借）",
-      _V["content_query"] == S.CAPABILITY_DENIAL_VERBS["content_query"])
+      _V["content_query"] == CAPABILITY_DENIAL_VERBS["content_query"])
 
 # ══════════════════════════════════════════════════════════════════
 print("\n④b 给予义谓词槽（20261003 放宽）：两副形状**都要**接，不许只补一半")
@@ -180,9 +184,9 @@ check("  甲支接了槽（`_CAP_FAIL_LEAD` 与名词之间）",
 check("  乙支也接了槽（缺少它 = 这次放宽要修的那句仍然漏）",
       "{_CAP_FAIL_LEAD}{_CAP_FAIL_GIVE}{_CAP_FAIL_GAP}{{0,3}}" in _SHAPES)
 # 行为锁：拿**定义**（不是仓内现成的常量）重算一遍，防"定义了却忘了接"
-from agent.skills import CAPABILITY_DENIAL_OBJECTS  # noqa: E402
+from agent.workflow_defs.capability import CAPABILITY_DENIAL_OBJECTS  # noqa: E402
 
-_V_TAG = G._capability_denial_verbs(S.SKILL_MAP["tag_delete"])
+_V_TAG = G._capability_denial_verbs(WORKFLOW_MAP["tag_delete"])
 check("  重算（用 `_CAP_FAIL_GIVE` 现算的正则）仍判那句原话",
       G._capability_denied("系统这边没有提供「直接删除一个标签」的能力",
                            _V_TAG, CAPABILITY_DENIAL_OBJECTS["tag_delete"]))
@@ -263,7 +267,7 @@ check("  吃的是与洞④ 同一份收尾轮豁免（`refused` 那档说「我
 check("  族表签名收了 `role`、且判据拿到了它",
       "role" in _BODY.split("\n", 1)[0]
       and "role" in _BODY[_BODY.index(_FAM):_BODY.index(_FAM) + 600])
-check("  `_claim_issue` 把 role 传进族表", "_zero_frame_families(plan, skill, role)" in _RUNNER)
+check("  `_claim_issue` 把 role 传进族表", "_zero_frame_families(plan, workflow, role)" in _RUNNER)
 check("  且过表仍在 `if frames_exist: return None` **之后**（有帧轮不查）",
       _RUNNER.index("if frames_exist") < _RUNNER.index("_zero_frame_families("))
 # gate 调用点：身份只许从 `_principal_of` 取一处（别再各算一份）
@@ -317,7 +321,7 @@ _CFG = {"configurable": {"principal": Principal(uid=1, role="admin")}}
 _REPLY = ("主人，这个我得跟你如实说清楚喵 :委屈:\n\n"
           "系统这边**没有删除被驳回留言的通道**。我能删的是展示在留言板上的那些……")
 _ST = {
-    "plan": G.plan_encode(G.instantiate_plan("chat", {})),
+    **G.plan_state(G.instantiate_plan("chat", {})),
     "messages": [
         G.HumanMessage(content="[System: user_id=1, page=/dashboard/users; "
                                "current_effects=none; current_darkmode=on]"),
@@ -327,7 +331,7 @@ _ST = {
         G.AIMessage(content=_REPLY),
     ],
     "done": False, "plan_rounds": 2, "gate_replan": True,
-    "receipts": [{"skill": "content_query", "tool": "get_moderation_status",
+    "receipts": [{"workflow": "content_query", "tool": "get_moderation_status",
                   "args": {"status": "ai_rejected"}, "result": "…"}],
 }
 _O = G.gate_node(_ST, _CFG)

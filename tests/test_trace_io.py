@@ -19,6 +19,7 @@ import re
 import shutil
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,11 +44,87 @@ def src(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
+def _check_legacy_event_key(tmp: str, plain: str, oldp: str) -> None:
+    """⑨ 改名遗留：旧事件键 `skill` 映射成 `workflow`（带日落）。
+
+    20261017 `skill` → `workflow`。trace 保留 30 天 ⇒ 改名当天盘上**全是旧键**，
+    读取端只认新键的话，那 30 天里按 `workflow` 统计的判据全部静默读到 0，而且
+    到期自己恢复（旧文件被删）——"看着在跑、其实没跑"那一族。映射落在读取的唯
+    一点（`load_trace`）上，不是十个读取端各写一遍。
+
+    （单列一个函数：`main` 在 `eval/complexity_baseline.json` 里记着账，只许缩小。）
+    """
+    print("\n⑨ 旧事件键 `skill` → `workflow`（映射在 load_trace 里，带日落日期）")
+    legacy = {"events": [{"node": "planner", "event": "decision", "skill": "chat"},
+                         {"node": "planner", "event": "decision", "workflow": "navigate"},
+                         {"node": "planner", "event": "decision", "skill": "old",
+                          "workflow": "new"}]}
+    lpath = os.path.join(tmp, "20260101T000000_5_legacy00.json")
+    with open(lpath, "w", encoding="utf-8") as fh:
+        json.dump(legacy, fh, ensure_ascii=False)
+    ld = trace_io.load_trace(lpath)
+    check("⑨ 旧键补出新键（改名前那 30 天的 trace 照读）",
+          [e.get("workflow") for e in ld["events"]] == ["chat", "navigate", "new"],
+          str([e.get("workflow") for e in ld["events"]]))
+    check("⑨ 新键已在时**不覆盖**（旧键只是个兼容影子，不是权威）",
+          ld["events"][2]["workflow"] == "new")
+    check("⑨ 没有 events 的 trace 不炸", trace_io.load_trace(oldp).get("events") == [])
+    check("⑨ 新格式的事件一个键都不多（映射只在缺新键时动手）",
+          set(trace_io.load_trace(plain)["events"][0]) ==
+          {"node", "event", "workflow", "round"})
+    # **日落**：到那天盘上不可能再有旧键，这一节连同 trace_io 里那个函数一起删。
+    _today = datetime.now().strftime("%Y%m%d")
+    check(f"⑨ 日落日期未到（{trace_io.LEGACY_SUNSET}）——到日请删掉 "
+          f"`trace_io._alias_legacy_event_key` 与本节",
+          _today < trace_io.LEGACY_SUNSET,
+          f"今天 {_today}，日落 {trace_io.LEGACY_SUNSET}")
+
+
+def _check_schema_version(tmp: str) -> str:
+    """⑦ 顶层 schema_version：写侧盖章、读侧只许 `.get`（不许硬取）。返回那份**存量旧
+    trace** 的路径（⑨ 复用它当"没有 events 也不炸"的输入）。
+
+    动机：trace 是保留 30 天、按天归档的**长期语料**，读它的脚本十几个；字段含义变过
+    一次（命令从字符串搬进 `meta["cmd"]`）之后，事后读旧 trace 的人分不清"旧格式"与
+    "当时没有"——两种解释导出相反结论。版本号给出判据。
+
+    （单列一个函数：`main` 在 `eval/complexity_baseline.json` 里记着账，只许缩小。）
+    """
+    check("⑦ SCHEMA_VERSION 是 ≥1 的整数（版本号本身别写成字符串/0）",
+          isinstance(trace_mod.SCHEMA_VERSION, int) and trace_mod.SCHEMA_VERSION >= 1,
+          repr(trace_mod.SCHEMA_VERSION))
+    vdir = os.path.join(tmp, "vtrace")
+    trace_mod.start_trace("ver00001", 17, "thread-ver", {"message": "x"},
+                          dir=vdir, name="case_ver", by_day=False)
+    vpath = trace_mod.finish_trace("ver00001", "producer_done", 1.0, 2)
+    vdoc = trace_io.load_trace(vpath) if vpath else None
+    check("⑦ 落盘的 trace 顶层带 schema_version，且与常量同值（写读一致）",
+          bool(vdoc) and vdoc.get("schema_version") == trace_mod.SCHEMA_VERSION,
+          f"{vpath} → {vdoc.get('schema_version') if vdoc else None}")
+    # 存量的 30 天里全是没这个字段的文件：读侧必须"缺席即旧格式"，不能因此少读
+    oldp = os.path.join(tmp, "20250101T000000_3_old00000.json")
+    with open(oldp, "w", encoding="utf-8") as fh:
+        json.dump({"trace_id": "old", "events": [], "reply": "旧"}, fh, ensure_ascii=False)
+    od = trace_io.load_trace(oldp)
+    check("⑦ 没有该字段的存量 trace 照读不误（缺席 = 0 = 20260928 之前）",
+          isinstance(od, dict) and od.get("schema_version") is None and od.get("reply") == "旧")
+    # 读侧纪律：**不许**硬取。硬取会让"扫全量"在换版当天炸掉一半（存量按保留期老去）
+    _hard = []
+    for p in sorted(list((ROOT / "eval").glob("*.py")) + list((ROOT / "tests").glob("*.py"))):
+        if p.name == Path(__file__).name:
+            continue  # 本文件就是写这条判据的地方，字符串里带着它
+        if re.search(r'\["schema_version"\]', p.read_text(encoding="utf-8")):
+            _hard.append(p.name)
+    check("⑦ 没有任何读取端硬取 doc[\"schema_version\"]（只许 .get）",
+          not _hard, "、".join(_hard))
+    return oldp
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="trace_io_test_")
     try:
         payload = {"input": {"message": "带 .gz 的那半语料"},
-                   "events": [{"node": "planner", "event": "decision", "skill": "navigate", "round": 0}],
+                   "events": [{"node": "planner", "event": "decision", "workflow": "navigate", "round": 0}],
                    "reply": "喵"}
 
         # ── ① .json 与 .gz 同内容 ⇒ 结果逐键相同 ──────────────────────────
@@ -116,36 +193,7 @@ def main() -> int:
               "import json" not in tfsrc and "import gzip" not in tfsrc)
 
         # ── ⑦ 顶层 schema_version：写侧盖章、读侧只许 .get（不许硬取）──────────
-        # 动机：trace 是保留 30 天、按天归档的**长期语料**，读它的脚本十几个；字段含义
-        # 变过一次（命令从字符串搬进 meta["cmd"]）之后，事后读旧 trace 的人分不清
-        # "旧格式" 与 "当时没有"——两种解释导出相反结论。版本号给出判据。
-        check("⑦ SCHEMA_VERSION 是 ≥1 的整数（版本号本身别写成字符串/0）",
-              isinstance(trace_mod.SCHEMA_VERSION, int) and trace_mod.SCHEMA_VERSION >= 1,
-              repr(trace_mod.SCHEMA_VERSION))
-        vdir = os.path.join(tmp, "vtrace")
-        trace_mod.start_trace("ver00001", 17, "thread-ver", {"message": "x"},
-                              dir=vdir, name="case_ver", by_day=False)
-        vpath = trace_mod.finish_trace("ver00001", "producer_done", 1.0, 2)
-        vdoc = trace_io.load_trace(vpath) if vpath else None
-        check("⑦ 落盘的 trace 顶层带 schema_version，且与常量同值（写读一致）",
-              bool(vdoc) and vdoc.get("schema_version") == trace_mod.SCHEMA_VERSION,
-              f"{vpath} → {vdoc.get('schema_version') if vdoc else None}")
-        # 存量的 30 天里全是没这个字段的文件：读侧必须"缺席即旧格式"，不能因此少读
-        oldp = os.path.join(tmp, "20250101T000000_3_old00000.json")
-        with open(oldp, "w", encoding="utf-8") as fh:
-            json.dump({"trace_id": "old", "events": [], "reply": "旧"}, fh, ensure_ascii=False)
-        od = trace_io.load_trace(oldp)
-        check("⑦ 没有该字段的存量 trace 照读不误（缺席 = 0 = 20260928 之前）",
-              isinstance(od, dict) and od.get("schema_version") is None and od.get("reply") == "旧")
-        # 读侧纪律：**不许**硬取。硬取会让"扫全量"在换版当天炸掉一半（存量按保留期老去）
-        _hard = []
-        for p in sorted(list((ROOT / "eval").glob("*.py")) + list((ROOT / "tests").glob("*.py"))):
-            if p.name == Path(__file__).name:
-                continue  # 本文件就是写这条判据的地方，字符串里带着它
-            if re.search(r'\["schema_version"\]', p.read_text(encoding="utf-8")):
-                _hard.append(p.name)
-        check("⑦ 没有任何读取端硬取 doc[\"schema_version\"]（只许 .get）",
-              not _hard, "、".join(_hard))
+        oldp = _check_schema_version(tmp)
 
         # ── ⑧ `events_of`：评测侧的**不落盘**读口（20260930）─────────────────
         # 给 golden 断言"这一轮系统真的把待办台账摆上桌了"用（`planner.ledger_frame`
@@ -182,6 +230,9 @@ def main() -> int:
                  if not (c.startswith("eval" + os.sep) or c.startswith("tests" + os.sep))]
         check("⑧ 调用方只有评测侧（生产路径上一个调用点都没有）",
               not _prod, "、".join(_prod) or "、".join(_callers))
+
+        # ── ⑨ 改名遗留：旧事件键 `skill` 映射成 `workflow`（带日落）──────────
+        _check_legacy_event_key(tmp, plain, oldp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -9,7 +9,7 @@
                           policy_frame·unavailable）；
   · `agent/adminops.py` —— 卡面与回执（`render_account_role` / `render_account_role_status`）
                           ——这一族的**硬要求**：卡面必须印「从什么身份 → 什么身份」；
-  · `agent/skills.py`  —— 技能展开（缺名字/缺身份/认不出/纯数字 一律零工具）；
+  · `agent/workflow_expand.py`  —— 技能展开（缺名字/缺身份/认不出/纯数字 一律零工具）；
   · `agent/graph.py`   —— 四处登记（`_WRITE_NAME_FIELDS` / `_NAME_TARGET_TOOLS` /
                           词表分派 / `_ACCOUNT_TOOLS`）；
   · 接线锁             —— 政策拒绝走错误帧族 ⇒ `_check_spec` 得 BLOCK + `policy_refused`。
@@ -32,13 +32,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
-import agent.adminops as A  # noqa: E402
+import agent.adminops_account as _account  # noqa: E402
+import agent.adminops_confirm as _confirm  # noqa: E402
+import agent.adminops_noop as _noop  # noqa: E402
+import agent.adminops_target as _target  # noqa: E402
 import agent.graph as g  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.graph import (_RCPT_META_KEYS, _VERDICT_BLOCK, _check_spec,  # noqa: E402
                          plan_state)
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
-from agent.skills import instantiate_plan  # noqa: E402
+# 取值点跟着定义走（20261017 批 2 刀 2f）：`instantiate_plan` 搬进
+# `agent.workflow_plan.py` 之后，`instantiate_plan.__globals__[...]` 读的是**那个模块的
+# 全局**，而 `WORKFLOWS` / `WRITE_WORKFLOW_NAMES` / `_WRITE_NAME_TARGET_WORKFLOWS` 的家是
+# 注册表与其派生物 `agent.workflow_defs`（实例化层只是 import 了其中两个）⇒ 按家取。
+from agent.workflow_defs import (  # noqa: E402
+    _WRITE_NAME_TARGET_WORKFLOWS,
+    WORKFLOWS,
+    WRITE_WORKFLOW_NAMES,
+)
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_account_freeze 的那一处）──────────────────────────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**（宁可退回追问，也不发一个
@@ -130,10 +142,10 @@ DIR = [row(126, "guest5"), row(127, "guest6"), row(130, "zako_one", role="zako")
 DIRD = {r["id"]: r for r in DIR}
 
 
-def _plan(spec, skill="account_set_role"):
+def _plan(spec, workflow="account_set_role"):
     """借一个骨架搭 plan_obj（与 `_wrap_up_plan`/`instantiate_plan` 的产物同形）。"""
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
-    obj["skill"] = skill
+    obj["workflow"] = workflow
     obj["tools"] = [spec]
     return obj
 
@@ -145,19 +157,19 @@ def _spec(want):
 # ══════════════════════════════════════════════════════════════════
 print("\n① 身份归一与显示：两份词表合一（主人说中文、后端收英文码）")
 check("中文 → 码：「杂鱼」→ zako、「普通用户」→ user、「管理员」→ admin",
-      A.normalize_role("杂鱼") == "zako" and A.normalize_role("普通用户") == "user"
-      and A.normalize_role("管理员") == "admin", "")
+      _account.normalize_role("杂鱼") == "zako" and _account.normalize_role("普通用户") == "user"
+      and _account.normalize_role("管理员") == "admin", "")
 check("  英文码原样认（直接调工具的那条路径）",
-      A.normalize_role("zako") == "zako" and A.normalize_role("user") == "user")
+      _account.normalize_role("zako") == "zako" and _account.normalize_role("user") == "user")
 check("  首尾引号/空白剥掉（模型常把引号一起抄进参数）",
-      A.normalize_role("「杂鱼」") == "zako" and A.normalize_role(" 杂鱼 ") == "zako")
+      _account.normalize_role("「杂鱼」") == "zako" and _account.normalize_role(" 杂鱼 ") == "zako")
 check("  ⭐ 四档全认，**含 superadmin**——认出来交给后端按政策拒，不在这一层替它判",
-      A.normalize_role("超级管理员") == "superadmin"
-      and A.normalize_role("管理员") == "admin")
+      _account.normalize_role("超级管理员") == "superadmin"
+      and _account.normalize_role("管理员") == "admin")
 check("  认不出 → None（调用方零工具 + 如实问，不许自己挑一个）",
-      A.normalize_role("皇帝") is None and A.normalize_role("") is None)
+      _account.normalize_role("皇帝") is None and _account.normalize_role("") is None)
 check("role_cn：「杂鱼」→ 杂鱼；**未登记的身份原样回显**（不编一个中文名）",
-      A.role_cn("zako") == "杂鱼" and A.role_cn("archduke") == "archduke")
+      _account.role_cn("zako") == "杂鱼" and _account.role_cn("archduke") == "archduke")
 
 # ══════════════════════════════════════════════════════════════════
 print("\n② 工具五段式：写前读 → 解析 → 写 → **写后复核** → 出口只有 ok/not_found/policy/unavailable")
@@ -327,13 +339,13 @@ finally:
 
 # ══════════════════════════════════════════════════════════════════
 print("\n③ 政策拒绝的**形态**才是判据（接不上就是静默假绿）")
-frame = A.policy_frame("管理员只能变更普通用户或杂鱼的身份")
+frame = _target.policy_frame("管理员只能变更普通用户或杂鱼的身份")
 verdict, reason = _check_spec("set_account_role", {"name": "guest5", "role": "zako"},
                               True, frame, "account_set_role")
 check("⭐ policy_frame → (BLOCK, policy_refused)",
       verdict == _VERDICT_BLOCK and reason == "policy_refused", f"{verdict} {reason}")
 check("  A.policy_error_reason 认得这个原因码",
-      A.policy_error_reason(frame) == "policy_refused")
+      _target.policy_error_reason(frame) == "policy_refused")
 plain = "管理员只能变更普通用户或杂鱼的身份，本次未改动"
 v2, r2 = _check_spec("set_account_role", {"name": "guest5", "role": "zako"},
                      True, plain, "account_set_role")
@@ -356,7 +368,7 @@ check("  回执里**不带裸 uid**（身份编号是内部物，主人核对靠
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑤ 卡面文案：主人点确定**之前**就该看到「从什么身份 → 什么身份」")
-line = A.render_account_role("guest5", "杂鱼", DIRD)
+line = _account.render_account_role("guest5", "杂鱼", DIRD)
 check("⭐ 卡面：名字 + 账号 id + **现在是什么身份** + 要改成什么，四样都在",
       "guest5" in line and "126" in line and "普通用户" in line
       and "杂鱼" in line, line)
@@ -366,37 +378,37 @@ check("  杂鱼那一档的后果句说清「只会闲聊、站内操作都不�
       "闲聊" in line, line)
 check("  两个方向都写「当场被踢下线 + 要重新登录」",
       "踢下线" in line and "重新登录" in line, line)
-line_user = A.render_account_role("zako_one", "普通用户", DIRD)
+line_user = _account.render_account_role("zako_one", "普通用户", DIRD)
 check("⭐ 反方向（杂鱼 → 普通用户）的后果句**不同形**：说的是「把能力还给他」"
       "而不是「收走能力」",
       "恢复成普通访客的权限" in line_user or "刚注册时" in line_user, line_user)
-line_no = A.render_account_role("没有这个人", "杂鱼", DIRD)
+line_no = _account.render_account_role("没有这个人", "杂鱼", DIRD)
 check("  名录在手但名字不在 → 卡面直接印「后台账号列表里没有叫这个名字的账号」"
       "（点完才被告知没做成就晚了）",
       "后台账号列表里没有叫这个名字的账号" in line_no, line_no)
 check("  名字不在时**不再报后果**（做不成的事说后果只会误导）",
       "踢下线" not in line_no, line_no)
-line_none = A.render_account_role("guest5", "杂鱼", None)
+line_none = _account.render_account_role("guest5", "杂鱼", None)
 check("  名录读不到 → 只印名字，**照旧弹窗**（读不到就少说，不是不弹）",
       "guest5" in line_none and "没有叫这个名字" not in line_none, line_none)
 check("  认不出的目标身份**原样回显**（不编一个中文名，也不静默当成某一档）",
-      "皇帝" in A.render_account_role("guest5", "皇帝", DIRD))
+      "皇帝" in _account.render_account_role("guest5", "皇帝", DIRD))
 check("  单条 spec 走 _confirm_one 也是同一行（卡面/待办/回执同源）",
-      "把账号「guest5」的身份改成" in A.render_confirm_question(
+      "把账号「guest5」的身份改成" in _confirm.render_confirm_question(
           [{"tool": "set_account_role", "args": {"name": "guest5", "role": "杂鱼"}}],
           None, None, None, None, DIRD))
 check("  回执行说清「从 X 改为 Y」+「后台已复核」，并点名 id",
-      "从「普通用户」改为「杂鱼」" in A.render_account_role_status(
+      "从「普通用户」改为「杂鱼」" in _account.render_account_role_status(
           "guest5", 126, "zako", before_role="user") and "126"
-      in A.render_account_role_status("guest5", 126, "zako", before_role="user"))
+      in _account.render_account_role_status("guest5", 126, "zako", before_role="user"))
 check("  回执行在「本来就是」时说「没有重复变更」，**不说**「已把…改为」",
-      "没有重复变更" in A.render_account_role_status("guest5", 126, "zako",
+      "没有重复变更" in _account.render_account_role_status("guest5", 126, "zako",
                                                 changed=False)
-      and "已把" not in A.render_account_role_status("guest5", 126, "zako",
+      and "已把" not in _account.render_account_role_status("guest5", 126, "zako",
                                                     changed=False))
 check("  account_role_change_phrase 两支互不相同",
-      A.account_role_change_phrase("zako", True) == "已改为杂鱼"
-      and A.account_role_change_phrase("zako", False)
+      _account.account_role_change_phrase("zako", True) == "已改为杂鱼"
+      and _account.account_role_change_phrase("zako", False)
       == "身份本来就是杂鱼，本次未发生变更")
 
 # ══════════════════════════════════════════════════════════════════
@@ -490,22 +502,22 @@ _p5 = instantiate_plan("account_set_role", {"name": "126", "role": "杂鱼"}, RO
 check("  纯数字的名字 → 零工具 + 如实说系统不支持按编号（编号通道不存在）",
       _p5["tools"] == [] and "编号" in _p5["note"], _p5["note"][:80])
 check("  技能名与工具名**不是一套字面量**（混用会让分支静默不命中）",
-      "account_set_role" in instantiate_plan.__globals__["WRITE_SKILL_NAMES"]
-      and "set_account_role" not in instantiate_plan.__globals__["WRITE_SKILL_NAMES"],
+      "account_set_role" in WRITE_WORKFLOW_NAMES
+      and "set_account_role" not in WRITE_WORKFLOW_NAMES,
       "")
 check("  它在**名字通道**名单里（不在 = 展开器尾部兜底成「未知的写技能」，静默零写）",
-      "account_set_role" in instantiate_plan.__globals__["_WRITE_NAME_TARGET_SKILLS"])
+      "account_set_role" in _WRITE_NAME_TARGET_WORKFLOWS)
 check("  技能用的工具在 _WRITE_NAME_FIELDS 里（⑧ 的派生锁也覆盖它）",
-      [t for t, _ in instantiate_plan.__globals__["SKILLS"][
-          [s.name for s in instantiate_plan.__globals__["SKILLS"]].index(
+      [t for t, _ in WORKFLOWS[
+          [s.name for s in WORKFLOWS].index(
               "account_set_role")].plan] == ["set_account_role"])
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⑧ 派生锁：plan 含名字型写工具的技能必须在 WRITE_SKILL_NAMES 里（静默洞）")
-_missing = sorted({sk.name for sk in instantiate_plan.__globals__["SKILLS"]
+print("\n⑧ 派生锁：plan 含名字型写工具的技能必须在 WRITE_WORKFLOW_NAMES 里（静默洞）")
+_missing = sorted({sk.name for sk in WORKFLOWS
                    if any(t in g._WRITE_NAME_FIELDS for t, _ in (sk.plan or ()))
-                   and sk.name not in instantiate_plan.__globals__["WRITE_SKILL_NAMES"]})
-check("⭐ 没有任何技能的 plan 用了名字型写工具却不在 WRITE_SKILL_NAMES",
+                   and sk.name not in WRITE_WORKFLOW_NAMES})
+check("⭐ 没有任何技能的 plan 用了名字型写工具却不在 WRITE_WORKFLOW_NAMES",
       _missing == [], str(_missing))
 
 # ══════════════════════════════════════════════════════════════════
@@ -567,7 +579,7 @@ check("  没给名字也只给中文动作词（不打印内部工具名）",
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑪ 只读白名单：**不在**（那是 content_query 的点名通道）")
-from agent.skills import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
+from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 check("不在 _EXPLICIT_TOOLS（无参点名）",
       "set_account_role" not in _EXPLICIT_TOOLS)
 check("不在 _CALLABLE_QUERY_TOOLS（带参点名）——写工具进只读通道 = 绕过同意闸",
@@ -590,12 +602,12 @@ class _FakeTool:
         return self.out
 
 
-def _grant_of(spec, skill=None):
+def _grant_of(spec, workflow=None):
     """照**卡上签的那一件**造令牌（20261012 起 `_grant_covers` 按工具名+参数比对：
     光有令牌不算数——空壳 `{"token": "x"}` 会让确认轮重新弹卡）。"""
     args, ok = g._tool_args(spec)
     assert ok, spec
-    return {"token": "x", "skill": skill, "specs": [{"tool": g._tool_name(spec),
+    return {"token": "x", "workflow": workflow, "specs": [{"tool": g._tool_name(spec),
                                                      "args": args}]}
 
 
@@ -632,7 +644,7 @@ try:
           and authz.consent_granted(_adm, "set_account_role", _GRANTABLE) is False,
           _GRANTABLE)
     g._TOOL_MAP["set_account_role"] = _FakeTool(
-        base.ok(A.render_account_role_status("guest5", 126, "zako", before_role="user"),
+        base.ok(_account.render_account_role_status("guest5", 126, "zako", before_role="user"),
                 meta=base.fact("account_set_role", changed=True,
                                target=base.tgt("user", 126, "guest5"),
                                before="普通用户", after="杂鱼", evidence="杂鱼",
@@ -650,8 +662,8 @@ try:
               and "普通用户" in pop.get("q", "") and "126" in pop.get("q", ""),
               pop.get("q", ""))
         payload = _confirm.inspect(pop.get("token") or "") or {}
-        check("  令牌载荷里的 skill 与 specs 就是这一件（卡上写什么就签什么）",
-              payload.get("skill") == "account_set_role"
+        check("  令牌载荷里的 workflow 与 specs 就是这一件（卡上写什么就签什么）",
+              payload.get("workflow") == "account_set_role"
               and payload.get("specs") == [{"tool": "set_account_role",
                                             "args": {"name": "guest5",
                                                      "role": "zako"}}],
@@ -670,18 +682,18 @@ finally:
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑬ 「状态已达成 ⇒ 不弹卡」判据：本来就是那一档时不再拿一张卡问主人")
-_kept, _already = A.reached_specs(
+_kept, _already = _noop.reached_specs(
     [{"tool": "set_account_role", "args": {"name": "guest5", "role": "zako"}}],
     users={r["id"]: dict(r) for r in DIR} | {126: row(126, "guest5", role="zako")})
 check("⭐ 已是杂鱼、要改成杂鱼 → 判为「已达成」（不弹卡，如实说一句）",
       _kept == [] and len(_already) == 1
       and "本来就是" in _already[0]["why"], str(_already))
-_kept, _already = A.reached_specs(
+_kept, _already = _noop.reached_specs(
     [{"tool": "set_account_role", "args": {"name": "guest5", "role": "zako"}}],
     users=DIRD)
 check("  现状不同档 → 照常弹卡（不能被顺手折叠掉）",
       len(_kept) == 1 and _already == [], f"{_kept} {_already}")
-_kept, _already = A.reached_specs(
+_kept, _already = _noop.reached_specs(
     [{"tool": "set_account_role", "args": {"name": "guest5", "role": "zako"}}],
     users=None)
 check("  名录读不到 → 判不了 ⇒ 照常弹卡（fail-open 方向永远是弹卡）",

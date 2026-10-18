@@ -50,7 +50,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from agent import adminops as A  # noqa: E402
+from agent import adminops_account as _account  # noqa: E402
 from agent import graph as G  # noqa: E402  （④ 比的是**在跑的**那张预检表，不是源码文本）
 from agent.principal import (  # noqa: E402
     ADMIN_ROLES,
@@ -236,18 +236,18 @@ _rl = _rust_fn("role_label")
 _arms = dict(re.findall(r"(ROLE_[A-Z0-9_]+)\s*=>\s*\"([^\"]+)\"", _rl))
 check("从 `role_label` 取到了各档的中文名", len(_arms) >= 4, f"{len(_arms)} 档")
 _rs_cn = {_RS_ROLES[t]: cn for t, cn in _arms.items() if t in _RS_ROLES}
-_py_cn = {k: v for k, v in A.ROLE_CN.items() if k in _rs_known}
+_py_cn = {k: v for k, v in _account.ROLE_CN.items() if k in _rs_known}
 check("⭐ 两侧的中文名逐条相同（「身份已改为杂鱼」这类回复句两边各拼一次）",
       bool(_rs_cn) and _rs_cn == _py_cn,
       "；".join(f"{r}: Rust={_rs_cn.get(r)!r} agent={_py_cn.get(r)!r}"
                 for r in sorted(_rs_known) if _rs_cn.get(r) != _py_cn.get(r)))
 check("  agent 的 `ROLE_CN` 覆盖了全部已知角色（缺一档 = 卡面印出一个英文码）",
-      set(A.ROLE_CN) >= _rs_known, f"缺：{sorted(_rs_known - set(A.ROLE_CN))}")
+      set(_account.ROLE_CN) >= _rs_known, f"缺：{sorted(_rs_known - set(_account.ROLE_CN))}")
 # 兜底那一格：Rust 给一句固定中文，agent **原样回显**。两款都拒绝把未知当已知，只是
 # 给谁看不同（给前端/日志 vs 给主人核对的卡面）——这是**写下来的**差异，不是漏比。
 check("  兜底那格两侧**刻意不同**：Rust 给「未登记身份」、agent 原样回显（卡面要如实）",
-      "未登记身份" in _rl and A.role_cn("archduke") == "archduke"
-      and A.role_cn("") == "未知身份", A.role_cn("archduke"))
+      "未登记身份" in _rl and _account.role_cn("archduke") == "archduke"
+      and _account.role_cn("") == "未知身份", _account.role_cn("archduke"))
 
 
 # ══ ⑥ agent 独有那几张表：只断言"挂在真角色上"，并写下它们**没有** Rust 对应物 ══
@@ -259,12 +259,13 @@ print("   · `adminops._ROLE_CONSEQ`——改成某身份之后会发生什么�
 check("  `CHAT_ONLY_ROLES` ⊆ 取值域（挂着一个不存在的档 = 那条短路永远不触发）",
       set(CHAT_ONLY_ROLES) <= set(KNOWN_ROLES), f"{sorted(CHAT_ONLY_ROLES)}")
 check("  `_ROLE_ALIASES` 的**值**全部是已知身份码（认出一个不存在的档 = 拿它去问后端）",
-      set(A._ROLE_ALIASES.values()) <= set(KNOWN_ROLES),
-      f"越界：{sorted(set(A._ROLE_ALIASES.values()) - set(KNOWN_ROLES))}")
+      set(_account._ROLE_ALIASES.values()) <= set(KNOWN_ROLES),
+      f"越界：{sorted(set(_account._ROLE_ALIASES.values()) - set(KNOWN_ROLES))}")
 check("  四档都能认出自己（「认不出这个身份」是一句**错话**，拒的资格在后端）",
-      _rs_known <= set(A._ROLE_ALIASES), f"缺：{sorted(_rs_known - set(A._ROLE_ALIASES))}")
+      _rs_known <= set(_account._ROLE_ALIASES),
+      f"缺：{sorted(_rs_known - set(_account._ROLE_ALIASES))}")
 check("  `_ROLE_CONSEQ` 的键 ⊆ 取值域（多一格 = 对着不存在的档写后果句）",
-      set(A._ROLE_CONSEQ) <= set(KNOWN_ROLES), f"{sorted(A._ROLE_CONSEQ)}")
+      set(_account._ROLE_CONSEQ) <= set(KNOWN_ROLES), f"{sorted(_account._ROLE_CONSEQ)}")
 
 
 # ══ ⑦ `known_role` 的判据形状两侧一致：**不做归一化** ══════════════════════
@@ -303,7 +304,7 @@ print("\n⑧ 手抄扫描：`superadmin` / `zako` 的字面量只许在声明它
 # 为什么只扫这两个词：`admin` / `user` 在英文里到处都是（`role="user"` 的默认值、变量名、
 # 注释），扫它们只会得到一张要靠台账擦掉的噪声表；而这两个词**不可能**有别的含义——
 # 它们出现了就是这个角色名本身。
-_ALLOWED_FILES = {"agent/principal.py", "agent/adminops.py"}
+_ALLOWED_FILES = {"agent/principal.py", "agent/adminops_account.py"}
 _PKG_DIRS = ("agent", "tools", "config", "models", "rag", "utils")
 _SCAN = [f for d in _PKG_DIRS for f in (ROOT / d).rglob("*.py")] + [ROOT / "server.py"]
 _hits: dict[str, int] = {}

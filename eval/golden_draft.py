@@ -90,17 +90,17 @@ def build_record(path: str, d: dict, stamp: str, uid: int) -> dict:
     """一条候选现场：保留人工判定所需的全部确定性证据。"""
     evs = d.get("events") or []
     tools, gate, resets = [], [], []
-    skill = ""
+    workflow = ""
     for e in evs:
         if e.get("event") == "call":
             n = str(e.get("name") or "")
             if n and n not in tools:
                 tools.append(n)
-        elif e.get("event") == "decision" and e.get("skill"):
-            skill = str(e["skill"])
+        elif e.get("event") == "decision" and e.get("workflow"):
+            workflow = str(e["workflow"])
         elif e.get("node") == "gate":
             if e.get("event") == "check":
-                gate.append(f"check(skill={e.get('skill')}, frames={e.get('frames')})")
+                gate.append(f"check(workflow={e.get('workflow')}, frames={e.get('frames')})")
             elif e.get("event") == "pass":
                 gate.append(f"pass(零工具轮)" if e.get("zero_frame") else "pass(有帧)")
             else:  # 打回类：issue 名由 trace 的 end_reason/fallback 记录承载
@@ -111,7 +111,7 @@ def build_record(path: str, d: dict, stamp: str, uid: int) -> dict:
         "path": path, "stamp": stamp, "uid": uid,
         "msg": str((d.get("input") or {}).get("message") or ""),
         "reply": str(d.get("reply") or ""),
-        "skill": skill, "tools": tools, "gate": gate, "end_reason": resets,
+        "workflow": workflow, "tools": tools, "gate": gate, "end_reason": resets,
         "context": parse_page_ctx(evs),
         "trace_id": d.get("trace_id"),
     }
@@ -259,7 +259,7 @@ def main():
                 "gold": {"nonempty": True},  # 只放确定性可得项，断言由人写（见文件头）
                 "_draft": {
                     "rules": rec["rules"], "trace_id": rec["trace_id"],
-                    "skill": rec["skill"], "tools": rec["tools"],
+                    "workflow": rec["workflow"], "tools": rec["tools"],
                     "gate": rec["gate"], "end_reason": rec["end_reason"],
                     "observed_reply": rec["reply"],
                     "nearest_case": near, "nearest_ratio": ratio,
@@ -285,7 +285,7 @@ def main():
         for d in drafts:
             dr = d["_draft"]
             f.write(f"## {d['id']}\n\n")
-            f.write(f"- 规则：{dr['rules']}｜planner 技能：{dr['skill'] or '（无决策事件）'}"
+            f.write(f"- 规则：{dr['rules']}｜planner 技能：{dr['workflow'] or '（无决策事件）'}"
                     f"｜退出原因：{dr['end_reason'] or '正常'}\n")
             f.write(f"- 本轮工具：{dr['tools'] or '**零工具**'}｜gate：{dr['gate']}\n")
             f.write(f"- 页面上下文：`{json.dumps(d['context'], ensure_ascii=False)}`\n")

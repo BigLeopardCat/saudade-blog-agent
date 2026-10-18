@@ -213,8 +213,10 @@ followup_entity_slot_category` / `_ambiguous`）。
 1. **`PYTHONPATH=$PWD` 必须给**：venv 里 editable 安装的 `.pth` 把**主仓**钉在 `sys.path`
    上，不指就在主仓那份代码上跑"本分支的臂"，而且**不会报错**——只是结论全错。
 2. **`native_decision.calls` 只有技能名，工具名在 `PARAMS` 里**：判"这一轮有没有工具"
-   必须从**计划文本的 `TOOLS` 行**取（探针里那段 ⚠️ 就是为此写的）。读 `calls` 会把
-   「我有哪些未读通知」整族误记成"零调用"。
+   必须从**计划的执行清单**取。读 `calls` 会把「我有哪些未读通知」整族误记成"零调用"。
+   （**20261017 追记**：探针原先抠的是**计划文本的 `TOOLS` 行**正则——那是因为执行侧
+   当时只认文本。现在计划有对象那一态，探针改读 `plan_obj["tools"]`，正则连同它那条
+   "文本格式变了要同步改"的隐含约定一起删了。）
 3. **两臂必须交替、且至少 3 轮**：同一个臂先后两次跑拿到过 11.7% 与 13.3%。
    单遍的差一律当噪声。
 4. **闸门跑在 narrator 之后**：所以"闸门拦下了"从来不是"用户没看到"——这一点决定了
@@ -233,7 +235,7 @@ followup_entity_slot_category` / `_ambiguous`）。
   本批改了两处**用例**（不是判据）：
   - `tests/test_gate_replan.py` ⑥/⑥d：脚本里 `_PLAN_CHAT` 写两遍（判据前移之后，第一次
     落 `chat` 会被决策层接走，闸门就看不到零帧轮，本节会退化成"没被测到"）；
-  - `tests/test_skills.py` `calls_in_wrong_skill`：那句 `最近有哪些文章呀` 命中
+  - `tests/test_workflows.py` `calls_in_wrong_workflow`：那句 `最近有哪些文章呀` 命中
     `is_site_corpus_question`（会走上一层纠偏，本节要验的 `_drop_correction` 就看不见了），
     换成中性句 `帮我看看天气吧`。
 - 新增接线锁 `tests/test_planner_wiring.py`：判据前移的**成功路径**（纠偏一次 → 落到真工具）、

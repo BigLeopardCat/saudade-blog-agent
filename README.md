@@ -84,7 +84,7 @@ sequenceDiagram
 
 ### 1. 受限规划，而不是自由 ReAct
 
-`agent/skills.py` 维护技能注册表。planner 只能选择注册技能、填写参数并生成调用清单；`instantiate_plan()` 再做模板展开和白名单校验。
+`agent/workflow_defs/` 维护技能注册表。planner 只能选择注册技能、填写参数并生成调用清单；`instantiate_plan()` 再做模板展开和白名单校验。
 
 工具调用有三种入口：
 
@@ -184,7 +184,7 @@ saudade-blog-agent/
 │   ├── plan_codec.py      计划文本契约的编解码（plan_encode / plan_state / parse_plan）
 │   ├── tool_specs.py      执行清单条目的解析与去重裁剪（_tool_args / _trim_done_reads 等）
 │   ├── repeat_guard.py    逐字复读判据（_repeat_reason / _recent_ai_replies 等，gate 1b）
-│   ├── skills.py          技能注册表、计划模板和业务映射
+│   ├── workflow_defs/     技能注册表：47 条静态定义按域拆分 + NAV_MAP 导航映射
 │   ├── planner_llm.py     技能表 ↔ API tools/tool_calls 的接线层
 │   ├── authz.py           scope 权限模型
 │   ├── principal.py       调用者身份（uid/role/source）的唯一构造点
@@ -236,8 +236,8 @@ uv sync
 # L0 离线、秒级、无 LLM、无网络——整个秒级套件
 .venv/bin/python tests/run_all.py
 
-# L0 局部（-k 按文件名筛选；改技能注册表/计划契约后至少跑 skills + authz + confirm）
-.venv/bin/python tests/run_all.py -k skills
+# L0 局部（-k 按文件名筛选；改技能注册表/计划契约后至少跑 workflows + authz + confirm）
+.venv/bin/python tests/run_all.py -k workflows
 # 套件清单**只有 run_all.py 一处**（按磁盘枚举）：加套件不用改 CI、不用改夜间脚本、不用改本文。
 
 # L0 顺带出一份覆盖率报告：**非门禁、不进 CI**，不设阈值、红了也拦不住任何东西。
@@ -271,7 +271,7 @@ BLOG_API_BASE=http://127.0.0.1:8099/api/public \
 几点要知道：
 
 - **L2 的判据锚在维护者的语料上**：`eval/golden/basic.jsonl` 的期望（`require_doc_terms` 的术语表、检索用例的命中目标）是从默认站点那几篇文章的正文里派生的 ⇒ 对着**自己**的博客跑必然对不上，而**红的样子与“模型退化”一模一样**。启动时有一条语料出处闸先判这件事（对不上 ⇒ 全部用例**未评估** + 退出码 3，并明说“这不是模型退化”）；想在自己的部署上跑端到端，用 `eval/fixtures/` 的自包含夹具（自带语料、桩服务与用例，跑法见那里的 README）。
-- L0 适合 CI（秒级、无外部依赖），push 即拦截；L2 依赖真实模型和外部服务，不进普通 push 门禁——它由 `scripts/nightly_regression.sh` 在夜间跑，联动 L1 与 L3，任一门禁项失败会在磁盘上留一个标记文件由心跳探针带出来。
+- L0 适合 CI（秒级、无外部依赖），push 即拦截；L2 依赖真实模型和外部服务，不进普通 push 门禁——它由 `scripts/nightly_regression.sh` 在夜间跑，联动 L1 与 L3，任一门禁项失败会在磁盘上留一个标记文件由心跳探针带出来。**这个夜间任务默认是关的**（出厂不装任何 cron；一次全量约 10M tok / ¥2.4，跑的是维护者那台机器上的语料与夹具）——想天天跑就用 `bash scripts/enable_nightly.sh` 打开（默认干跑，`--apply` 才写 crontab），只想看一次读数就直接手跑那个脚本。**没开的时候 `~/agent_regression.failed` 恒不存在 ⇒ 心跳探针那一项恒静默，静默不等于绿。**
 - golden 分两类判：带 `regression` 标签的回归组硬判 100%，能力题按通过率。平均数会把两类红混在一起，严重度不同，所以分开。
 - 有几条用例需要“真实身份”（要以某个 uid 真调上游），由环境变量给出（见下一节）；未设时它们**响亮地跳过并计入报告**，不静默豁免。
 - 有意不覆盖三处（不是缺口，别照着“补上”）：`search_knowledge_base`（`/knowledge` 端点返回空）、

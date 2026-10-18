@@ -9,7 +9,7 @@ gate **看不到它**。这不是"少一条判据"，是**少一个视角**：�
 
 **为什么这一批只观测、不设网**（探针的 docstring 里有完整理由，这里锁的是结论）：
 这条网的前提 `tasks.settled_by_receipts(row, receipts)` 通常**已被洞⑮ 覆盖**——
-能登记的行，步骤由 `Skill.plan` 模板推，而 navigate / effect / darkmode / device_display
+能登记的行，步骤由 `Workflow.plan` 模板推，而 navigate / effect / darkmode / device_display
 这四族的工具**都在 `authz.WRITE_SCOPES` 里**（`write.page` / `write.device`）⇒ 行被结算
 = 本轮有 checker PASS 的写回执 = 洞⑮ 的前提（`RoundFacts.ok_writes` 非空）也成立，
 同一条回复会**先被洞⑮ 接住**（它前提更宽、判在 `_claim_issue` 里）。第 ③ 节把这条
@@ -56,7 +56,7 @@ def _row(tid: str, tools: list[str]) -> dict:
 def _rcpt(tool: str, ts: float = 1.0) -> dict:
     """一条 checker PASS 的回执。`ts > 0` 是硬要求（结算判据是 `ts > declared_after`，
     而 Rust 读回来的行 declared_after=0 ⇒ 夹具给 0.0 的话**永远不会被结算**）。"""
-    return {"skill": "effect", "tool": tool, "args": {}, "result": "已执行", "ts": ts}
+    return {"workflow": "effect", "tool": tool, "args": {}, "result": "已执行", "ts": ts}
 
 
 def _cfg(open_tasks) -> dict:
@@ -122,7 +122,7 @@ check("`clause` 走的是洞⑮ 同一条子句抽取器（族同源，不另写
 
 print()
 print("③ 与洞⑮ 的关系（射程被覆盖那一格）：**同一条回复**两族都够得着 ⇒ 洞⑮ 先接住")
-_issue = g._claim_issue(_DENIAL, "effect", g.parse_plan("SKILL=effect\nSTATUS=executed"),
+_issue = g._claim_issue(_DENIAL, "effect", g.parse_plan("WORKFLOW=effect\nSTATUS=executed"),
                         True, False, False, receipts=[_rcpt("navigate_to")])
 check("洞⑮ 命中（本轮有 checker PASS 的**写**回执：navigate_to 在 WRITE_SCOPES 里）",
       _issue is not None and _issue[0] == "round_not_landed", str(_issue and _issue[0]))
@@ -141,7 +141,7 @@ print("④ 差额那一支：步骤**全是只读工具**的行 ⇒ 洞⑮ 够�
 _ADMIN_ROW = ('[{"task_id": "t2", "goal": "看看服务和文章统计", "state": "running",'
               ' "cursor": 0, "total_steps": 1, "steps": [{"tool": "get_server_status"}]}]')
 _ADMIN = {"receipts": [_rcpt("get_server_status")]}
-_i2 = g._claim_issue(_DENIAL, "admin_stats", g.parse_plan("SKILL=chat\nSTATUS=answer_only"),
+_i2 = g._claim_issue(_DENIAL, "admin_stats", g.parse_plan("WORKFLOW=chat\nSTATUS=answer_only"),
                      True, False, False, receipts=[_rcpt("get_server_status")])
 check("洞⑮ **不**命中（后台只读不吃 `WRITE_SCOPES` ⇒ `ok_writes` 空 ⇒ 前提取不到）",
       _i2 is None, str(_i2))

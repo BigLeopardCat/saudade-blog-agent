@@ -10,7 +10,7 @@
 钉住的契约（这里红 = 某条判据被改掉了，改动要同步改这里）：
 
   · `step_record` 的形状是**加法的**：老两格 `{label, tool}` 进 ⇒ 老两格出（逐字），
-    `skill`/`args` **有才写**。存量行、Rust 的透传、渲染器都靠这一条；
+    `workflow`/`args` **有才写**。存量行、Rust 的透传、渲染器都靠这一条；
   · `args` **是不是 dict** 就是"这一步有没有绑定实参"：空 dict（`list_tags({})`，
     一次完整无参调用）**照样写**，和"还不知道怎么调"（没有这一格）是两件事；
     值**一个都不改**（实参是要执行的东西，顺手截断＝把一次真写入改坏）；
@@ -19,7 +19,7 @@
     （`total_steps` 是分母，少一步就是把进度说成假话），每次降级都留痕；
   · `bound_steps` **all-or-nothing**：参数不齐 / 落不出实参 / 有够不到的工具 ⇒ 返回
     `[]`（调用方退回占位步骤＝今天的行为），绝不"能绑几条绑几条"；
-  · 实参用的是**执行侧同一个展开器**（`skills.instantiate_plan`）——两处各推一份
+  · 实参用的是**执行侧同一个展开器**（`workflows.instantiate_plan`）——两处各推一份
     迟早对不上；
   · `frame_payload` 的键与 `total_steps` 仍与列一一对应（降级之后也是）；
   · **跨语言**：`tasks.TASK_STEPS_COL_MAX` 与父仓 `src/routes/chat.rs` 里那一格同值
@@ -34,8 +34,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 
-from agent import skills as S  # noqa: E402
 from agent import tasks as T  # noqa: E402
+from agent.tool_specs import split_tool_spec  # noqa: E402
+from agent.workflow_params import args_are_bound  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -50,12 +52,12 @@ ROLE = "superadmin"
 # 逐字抄自真展开（`instantiate_plan("tag_create", {"name": "临江仙"}, ROLE)`）：
 # 参数名还走了既有的一条通道——`name` 被 `_PARAM_ALIASES` 搬到了 `title`。这里不改写它，
 # 因为"步骤里的实参必须与**真执行那一次**逐字相同"正是本套件要钉的东西。
-BOUND_TAG = [{"skill": "tag_create", "tool": "create_tag", "args": {"title": "临江仙"}}]
+BOUND_TAG = [{"workflow": "tag_create", "tool": "create_tag", "args": {"title": "临江仙"}}]
 
 
 # ── ① 步骤形状：加法的 ────────────────────────────────────────────────────
 def test_step_record_is_additive():
-    print("\n[形状] `step_record` 对老两格是**逐字**的，`skill`/`args` 有才写")
+    print("\n[形状] `step_record` 对老两格是**逐字**的，`workflow`/`args` 有才写")
     check("老两格进 ⇒ 老两格出（存量行、Rust 透传、渲染器全靠这一条）",
           T.step_record({"label": "开启特效", "tool": "toggle_effect"})
           == {"label": "开启特效", "tool": "toggle_effect"})
@@ -66,12 +68,12 @@ def test_step_record_is_additive():
           T.step_record("开启特效") == {"label": "开启特效", "tool": ""})
     check("什么都没有 ⇒ None（不产出空格子）",
           T.step_record({}) is None and T.step_record(None) is None)
-    check("`skill` 有才多一格",
-          T.step_record({"label": "建标签", "tool": "create_tag", "skill": "tag_create"})
-          == {"label": "建标签", "tool": "create_tag", "skill": "tag_create"})
+    check("`workflow` 有才多一格",
+          T.step_record({"label": "建标签", "tool": "create_tag", "workflow": "tag_create"})
+          == {"label": "建标签", "tool": "create_tag", "workflow": "tag_create"})
     check("绑了实参 ⇒ 多 `args` 一格",
           T.step_record(BOUND_TAG[0]) == {"label": "create_tag", "tool": "create_tag",
-                                          "skill": "tag_create",
+                                          "workflow": "tag_create",
                                           "args": {"title": "临江仙"}})
     # ⭐ 空 dict 与"没有这一格"必须分得开：前者是**已经能调**（`list_tags({})`），
     # 后者是**还不知道怎么调**（占位步）。合流会让"下一步已绑实参"这个判据恒假。
@@ -99,11 +101,11 @@ def test_certify_steps_stays_legal_and_within_width():
     check("不超上限 ⇒ 原样返回、零记录", T.certify_steps(small, 4000) == (small, []))
 
     # ① 丢实参，且**从最大的那条丢起**：一条一条丢到刚好装下 ⇒ 保住尽可能多的可执行步骤。
-    three = [{"label": "建标签", "tool": "create_tag", "skill": "tag_create",
+    three = [{"label": "建标签", "tool": "create_tag", "workflow": "tag_create",
               "args": {"title": "甲" * 3000}},
-             {"label": "建分类", "tool": "create_category", "skill": "category_create",
+             {"label": "建分类", "tool": "create_category", "workflow": "category_create",
               "args": {"title": "乙" * 100}},
-             {"label": "列出来", "tool": "list_tags", "skill": "content_query", "args": {}}]
+             {"label": "列出来", "tool": "list_tags", "workflow": "content_query", "args": {}}]
     m1 = _size(three) - 1        # 只差一字符 ⇒ 丢掉**最大的那条**实参就够
     check("构造的现场真的超了上限（否则下面那几条是空跑）", _size(three) > m1)
     got, notes = T.certify_steps(three, m1)
@@ -119,20 +121,20 @@ def test_certify_steps_stays_legal_and_within_width():
           got[0]["tool"] == "create_tag" and got[2]["args"] == {})
 
     # ② 丢光实参还不够 ⇒ 丢 label（纯显示；`_step_line` 本来就会落回工具名）
-    labels = [{"label": "标" * 80, "tool": "create_tag", "skill": "tag_create"}
+    labels = [{"label": "标" * 80, "tool": "create_tag", "workflow": "tag_create"}
               for _ in range(3)]
     m2 = _size(labels) - 1
     got2, notes2 = T.certify_steps(labels, m2)
     check("丢光实参后仍超 ⇒ 第二级丢 label", notes2 == ["label_dropped"], str(notes2))
     check("  丢的是 label，工具名/技能名都在（计划仍然可读、可结算）",
-          all("label" not in s and s["tool"] and s["skill"] for s in got2))
+          all("label" not in s and s["tool"] and s["workflow"] for s in got2))
     check("  这一级也不超上限、也不丢步骤",
           _size(got2) <= m2 and len(got2) == len(labels))
 
     # ③ 连 label 都丢不起 ⇒ 最小形状 `{label: 工具名, tool}`。
     #    技能名故意取**比工具名长**的（`content_query` / `list_tags`）：最小形状把
-    #    `skill` 也丢掉，才挤得出这一级；名字一样长就分不出②和③了。
-    wide = [{"label": "标" * 80, "tool": "list_tags", "skill": "content_query"}
+    #    `workflow` 也丢掉，才挤得出这一级；名字一样长就分不出②和③了。
+    wide = [{"label": "标" * 80, "tool": "list_tags", "workflow": "content_query"}
             for _ in range(3)]
     no_label_w = [{k: v for k, v in s.items() if k != "label"} for s in wide]
     minimal_w = [{"label": s["tool"], "tool": s["tool"]} for s in wide]
@@ -141,7 +143,7 @@ def test_certify_steps_stays_legal_and_within_width():
           _size(no_label_w) > m3 >= _size(minimal_w))
     got3, notes3 = T.certify_steps(wide, m3)
     check("第三级只剩最小形状（连技能名一起丢），如实留痕",
-          notes3 == ["label_and_skill_dropped"]
+          notes3 == ["label_and_workflow_dropped"]
           and all(set(s) == {"label", "tool"} for s in got3), str(notes3))
 
     # ④ 最小形状都装不下（只可能是"上限被人改小"）⇒ 响亮留痕，**不替 Rust 丢步骤**
@@ -168,11 +170,11 @@ def test_bound_steps_comes_from_the_same_expander():
     print("\n[绑定] `bound_steps` 的实参与**真执行那次**同源（`instantiate_plan`）")
     check("技能名 + 参数 ⇒ 已绑实参的步骤（含参数名归一那条既有通道）",
           T.bound_steps("tag_create", {"name": "临江仙"}, ROLE) == BOUND_TAG)
-    raws = [S.split_tool_spec(x)
-            for x in S.instantiate_plan("tag_create", {"name": "临江仙"}, ROLE)["tools"]]
+    raws = [split_tool_spec(x)
+            for x in instantiate_plan("tag_create", {"name": "临江仙"}, ROLE)["tools"]]
     check("与 `instantiate_plan` 的产出**逐字对账**（两处各推一份迟早对不上）",
           T.bound_steps("tag_create", {"name": "临江仙"}, ROLE)
-          == [{"skill": "tag_create", "tool": t, "args": json.loads(raw)} for t, raw in raws])
+          == [{"workflow": "tag_create", "tool": t, "args": json.loads(raw)} for t, raw in raws])
     check("多步技能 ⇒ 每条都带自己的实参（顺序即执行顺序）",
           [s["tool"] for s in T.bound_steps("ops_report", {}, ROLE)]
           == ["get_server_status", "get_service_health"]
@@ -186,9 +188,9 @@ def test_bound_steps_comes_from_the_same_expander():
     check("⭐ 实参里有未解析的 `$tool[N]` 引用 ⇒ 整件 []（不能脱离现场执行）",
           T.bound_steps("tag_create", {"name": "$tool[0].title"}, ROLE) == [])
     check("  （同一条判据在展开器那一层：`args_are_bound` 单判）",
-          S.args_are_bound({"a": "$tool[0].field"}) is False
-          and S.args_are_bound({"a": None}) is False
-          and S.args_are_bound({}) is True and S.args_are_bound({"a": 0}) is True)
+          args_are_bound({"a": "$tool[0].field"}) is False
+          and args_are_bound({"a": None}) is False
+          and args_are_bound({}) is True and args_are_bound({"a": 0}) is True)
     check("非 dict 的 params（模型写了字符串）⇒ 按「什么都没给」处理，不炸",
           T.bound_steps("tag_create", "临江仙", ROLE) == [])
 
@@ -199,31 +201,31 @@ SRC = ("想建个新分类叫「临江仙」，文章 23 的标签也想换成�
 
 def test_intents_carry_params_end_to_end():
     print("\n[端到端] 意图清单的 `params` ⇒ 步骤带实参（无 params 时＝今天的行为）")
-    base = [{"goal": "建个新分类叫「临江仙」", "skill": "category_create"}]
+    base = [{"goal": "建个新分类叫「临江仙」", "workflow": "category_create"}]
     old = T.intents_to_declarations(base, role=ROLE, sources=SRC)
     check("没有 `params` ⇒ 步骤仍是「只有工具名」的形状，**不带 `args`**（向后兼容）",
           bool(old) and all("args" not in s for s in old[0]["steps"]),
           str(old[0]["steps"] if old else old))
-    check("  但 `skill` 那一格写上了（批 A 只写不读；批 B 的占位步要靠它找回本领）",
-          old and all(s.get("skill") == "category_create" for s in old[0]["steps"]))
+    check("  但 `workflow` 那一格写上了（批 A 只写不读；批 B 的占位步要靠它找回本领）",
+          old and all(s.get("workflow") == "category_create" for s in old[0]["steps"]))
     check("`normalize_intents` 只在非空时留 `params`（老形状逐字不变）",
-          T.normalize_intents({"intents": [{"goal": "g", "skill": "category_create"}]}, ROLE)
-          == [{"goal": "g", "skill": "category_create"}]
+          T.normalize_intents({"intents": [{"goal": "g", "workflow": "category_create"}]}, ROLE)
+          == [{"goal": "g", "workflow": "category_create"}]
           and T.normalize_intents(
-              {"intents": [{"goal": "g", "skill": "category_create", "params": {}}]}, ROLE)
-          == [{"goal": "g", "skill": "category_create"}]
+              {"intents": [{"goal": "g", "workflow": "category_create", "params": {}}]}, ROLE)
+          == [{"goal": "g", "workflow": "category_create"}]
           and T.normalize_intents(
-              {"intents": [{"goal": "g", "skill": "category_create",
+              {"intents": [{"goal": "g", "workflow": "category_create",
                             "params": {"title": "临江仙", "path_name": "linjiangxian"}}]},
               ROLE)[0]["params"] == {"title": "临江仙", "path_name": "linjiangxian"})
-    withp = [{"goal": "建个新分类叫「临江仙」", "skill": "category_create",
+    withp = [{"goal": "建个新分类叫「临江仙」", "workflow": "category_create",
               "params": {"title": "临江仙", "path_name": "linjiangxian"}}]
     new = T.intents_to_declarations(withp, role=ROLE, sources=SRC)
     bound = T.bound_steps("category_create",
                           {"title": "临江仙", "path_name": "linjiangxian"}, ROLE)
     check("有 `params` ⇒ 步骤里的实参与 `bound_steps` 逐字相同（同源）",
           bool(new) and new[0]["steps"] == [{"label": s["tool"], "tool": s["tool"],
-                                             "skill": s["skill"], "args": s["args"]}
+                                             "workflow": s["workflow"], "args": s["args"]}
                                             for s in bound],
           str(new[0]["steps"] if new else new))
     check("⭐ 登记范围没变：有/无 params 两条路的**工具集合相同**（多的只是实参）",
@@ -233,7 +235,7 @@ def test_intents_carry_params_end_to_end():
           (lambda d: d and len(d[0]["steps"]) > 0
            and all("args" not in s for s in d[0]["steps"]))(
               T.intents_to_declarations(
-                  [{"goal": "建个新分类叫「临江仙」", "skill": "category_create",
+                  [{"goal": "建个新分类叫「临江仙」", "workflow": "category_create",
                     "params": {"path_name": "linjiangxian"}}], role=ROLE, sources=SRC)))
 
 
@@ -252,7 +254,7 @@ def test_frame_payload_certifies_before_landing():
 
     decl2 = T.normalize_declaration(
         {"goal": "建三个标签", "steps": [
-            {"label": "建标签", "tool": "create_tag", "skill": "tag_create",
+            {"label": "建标签", "tool": "create_tag", "workflow": "tag_create",
              "args": {"title": "很长" * 4000}}] * 3})
     audit2: dict = {}
     pl2 = T.frame_payload(decl2, 42, audit2)

@@ -22,7 +22,7 @@
      变成 `return [], "中文…", x` 这种元组的直接元素）就多计一处、当场红。这不是漏网，
      是"宁可多报"那一边——红了的解法有两个：把字面量挂回变量上（改形状），或确认它真是
      一张新表（那就该进①）。实测吃过一次：20261015 批 1 拆函数时 `is_top` 那条注记
-     变成了元组元素，`agent/skills.py` 234→235。
+     变成了元组元素，`agent/workflows.py` 234→235。
 
 **为什么非要①不可**：②只数总量，验不了"这张表该不该存在"；而"哪张表是病、替代是什么"
 正是这次要交付的清单（roadmap §6 的待办）。①提供姓名、类别与出路，②保证①没有漏网。
@@ -110,7 +110,7 @@ class Cand:
 def _direct_cjk(node: ast.AST) -> list[str]:
     """集合字面量的**直接**元素里的中文串（不下钻到嵌套集合/调用）。
 
-    不下钻是关键：`SKILLS = [Skill(name="…", desc="中文"), …]` 的直接元素是 Call、
+    不下钻是关键：`WORKFLOWS = [Workflow(name="…", desc="中文"), …]` 的直接元素是 Call、
     不是字符串，它不是词表；而 `("好", "好的")` 是。
     """
     items = (list(node.keys) + list(node.values)) if isinstance(node, ast.Dict) else list(node.elts)

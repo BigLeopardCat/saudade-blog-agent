@@ -3,11 +3,11 @@
     "c": 188,
     "lines": 427
   },
-  "agent/adminops.py::_confirm_one": {
+  "agent/adminops_confirm.py::_confirm_one": {
     "c": 144,
-    "lines": 338
+    "lines": 341
   },
-  "agent/adminops.py::_reached_one": {
+  "agent/adminops_noop.py::_reached_one": {
     "c": 166,
     "lines": 327
   },
@@ -20,20 +20,20 @@
     "lines": 208
   },
   "agent/graph.py::_confirm_popup": {
-    "c": 87,
-    "lines": 406
+    "c": 58,
+    "lines": 343
   },
   "agent/graph.py::_decide_late_correct": {
-    "c": 49,
-    "lines": 184
+    "c": 43,
+    "lines": 179
   },
   "agent/graph.py::_decide_zero_tool_correct": {
     "c": 55,
     "lines": 193
   },
   "agent/graph.py::_finalize_dedupe": {
-    "c": 49,
-    "lines": 198
+    "c": 48,
+    "lines": 196
   },
   "agent/graph.py::_name_arg_fix": {
     "c": 68,
@@ -48,19 +48,19 @@
     "lines": 229
   },
   "agent/graph.py::execute_node": {
-    "c": 78,
+    "c": 73,
     "lines": 400
   },
   "agent/graph.py::gate_node": {
-    "c": 105,
-    "lines": 451
+    "c": 96,
+    "lines": 448
   },
-  "agent/skills.py::_expand_write_skill": {
+  "agent/workflow_expand_write.py::_expand_write_workflow": {
     "c": 97,
     "lines": 473
   },
-  "agent/skills.py::_instantiate_plan": {
-    "c": 135,
+  "agent/workflow_plan.py::_instantiate_plan": {
+    "c": 123,
     "lines": 516
   },
   "eval/admin_write_probe.py::main": {
@@ -77,11 +77,11 @@
   },
   "eval/admin_write_probe.py::step17_auth_review": {
     "c": 160,
-    "lines": 316
+    "lines": 317
   },
   "eval/admin_write_probe.py::step18_ledger_zero_write": {
     "c": 92,
-    "lines": 216
+    "lines": 217
   },
   "eval/admin_write_probe.py::step8_popup_write": {
     "c": 40,
@@ -96,8 +96,8 @@
     "lines": 76
   },
   "eval/corpus_terms.py::drift": {
-    "c": 43,
-    "lines": 96
+    "c": 39,
+    "lines": 92
   },
   "eval/dial_matrix.py::main": {
     "c": 37,
@@ -116,7 +116,7 @@
     "lines": 84
   },
   "eval/run_golden.py::check_gold": {
-    "c": 244,
+    "c": 242,
     "lines": 601
   },
   "eval/run_golden.py::check_no_popup_premises": {
@@ -156,8 +156,8 @@
     "lines": 235
   },
   "server.py::_run_agent_stream_to_queue": {
-    "c": 84,
-    "lines": 608
+    "c": 80,
+    "lines": 600
   },
   "server.py::chat_stream": {
     "c": 14,
@@ -172,8 +172,8 @@
     "lines": 170
   },
   "tests/test_judge_offline.py::main": {
-    "c": 96,
-    "lines": 213
+    "c": 75,
+    "lines": 205
   },
   "tests/test_landing_gate.py::test_enterprise_criteria": {
     "c": 42,
@@ -187,33 +187,29 @@
     "c": 41,
     "lines": 178
   },
-  "tests/test_skills.py::test_admin_console_role_channel": {
-    "c": 44,
-    "lines": 150
-  },
-  "tests/test_skills.py::test_name_target_round": {
-    "c": 35,
-    "lines": 328
-  },
-  "tests/test_skills.py::test_refs": {
-    "c": 33,
-    "lines": 219
-  },
   "tests/test_style_hygiene.py::main": {
     "c": 47,
     "lines": 122
-  },
-  "tests/test_trace_io.py::main": {
-    "c": 35,
-    "lines": 150
   },
   "tests/test_trace_retention.py::main": {
     "c": 48,
     "lines": 167
   },
+  "tests/test_workflows.py::test_admin_console_role_channel": {
+    "c": 44,
+    "lines": 155
+  },
+  "tests/test_workflows.py::test_name_target_round": {
+    "c": 35,
+    "lines": 328
+  },
+  "tests/test_workflows.py::test_refs": {
+    "c": 33,
+    "lines": 219
+  },
   "tools/base.py::create_tag": {
     "c": 31,
-    "lines": 112
+    "lines": 113
   },
   "tools/base.py::read_messages": {
     "c": 32,
