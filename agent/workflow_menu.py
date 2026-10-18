@@ -17,7 +17,7 @@
 唯一选刀判据。依赖方向是 `menu → {tools, params, defs, model}`，单向。
 
 ⚠️ `_NAV_MAP_LINES` 是**模块级常量、import 期算一次**：它读的是 `NAV_MAP`（唯一数据源
-在 `agent/workflow_defs/nav.py`），搬到这里只是换个地方算，取值逐字不变。
+在 `agent/workflow_defs/nav_map.py`），搬到这里只是换个地方算，取值逐字不变。
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 
 from agent.workflow_defs import visible_workflows
-from agent.workflow_defs.nav import _IOT_NAV_ALIASES, DASHBOARD_PANELS, NAV_MAP
+from agent.workflow_defs.nav_map import _IOT_NAV_ALIASES, DASHBOARD_PANELS, NAV_MAP
 from agent.workflow_model import (
     _EXPLICIT_TOOLS_MARK,
     _NO_DEFAULT,

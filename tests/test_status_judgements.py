@@ -35,7 +35,7 @@ from agent.plan_status import (  # noqa: E402
     PLAN_STATUS_VALUES,
 )
 from agent.workflow_defs import WORKFLOWS, WORKFLOW_MAP  # noqa: E402
-from agent.workflow_defs.nav import _IOT_OFF_NOTE  # noqa: E402
+from agent.workflow_defs.nav_map import _IOT_OFF_NOTE  # noqa: E402
 from agent.workflow_params import _param_problem_plan  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）

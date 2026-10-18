@@ -26,10 +26,10 @@ from agent.principal import CHAT_ONLY_ROLES
 from agent.workflow_defs import (
     account_write,
     content_write,
-    navigation,
+    nav_skills,
     own_todo,
     public_read,
-    reports,
+    report_skills,
 )
 from agent.workflow_model import Workflow
 from tools.base import IOT_ENABLED
@@ -181,9 +181,9 @@ _FREE_TEXT_WRITE_WORKFLOWS = _channel("free_text")
 # ---------------------------------------------------------------------------
 # 六个域模块在原序列里各自连续，所以「按域展开」与「逐条抄一遍」产出同一份名单。
 WORKFLOWS: list[Workflow] = [
-    *navigation.WORKFLOWS,      # 1–5   导航 / 特效 / 夜间 / 设备
+    *nav_skills.WORKFLOWS,      # 1–5   导航 / 特效 / 夜间 / 设备
     *public_read.WORKFLOWS,     # 6–7   公开读
-    *reports.WORKFLOWS,         # 8–14  报表与看板
+    *report_skills.WORKFLOWS,         # 8–14  报表与看板
     *content_write.WORKFLOWS,   # 15–28 管理助手内容面（后台清单 + 十三件写）
     *own_todo.WORKFLOWS,        # 29–36 主人自己的数据与待办
     *account_write.WORKFLOWS,   # 37–46 账号 / 配额 / 变更集

@@ -88,10 +88,10 @@ flowchart TB
 │   ├── workflow_model.py      # 数据模型层：Workflow / ParamSpec 两个 dataclass 与共用原语
 │   ├── workflow_defs/            # ★ 技能注册表：47 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）
 │   │   ├── __init__.py        #   聚合层：把下面八个域分片按序拼成 WORKFLOWS（**顺序是契约**）
-│   │   ├── nav.py             #   导航映射表 NAV_MAP 与口语模糊归一（**业务唯一数据源**；页面别名→真实路径）
-│   │   ├── navigation.py      #   导航 / 特效 / 夜间 / 设备五条技能（原序列 1–5，顺序是契约）
+│   │   ├── nav_map.py         #   导航映射表 NAV_MAP 与口语模糊归一（**业务唯一数据源**；页面别名→真实路径）
+│   │   ├── nav_skills.py      #   导航 / 特效 / 夜间 / 设备五条技能（原序列 1–5，顺序是契约）
 │   │   ├── public_read.py     #   公开读两条：content_query 与 read_article（后者是系统专用快道，planner 不可见）
-│   │   ├── reports.py         #   报表与看板七条只读技能（原序列 8–14，roles=ADMIN_ROLES）
+│   │   ├── report_skills.py   #   报表与看板七条只读技能（原序列 8–14，roles=ADMIN_ROLES）
 │   │   ├── content_write.py   #   管理助手内容写面：后台文章清单（读）+ 十三件写（原序列 15–28）
 │   │   ├── own_todo.py        #   主人**自己**的数据八件（原序列 29–36；分界是"动谁的东西"不是"要不要确认"）
 │   │   ├── account_write.py   #   后台账号、配额与变更集十件（原序列 37–46，只按账号名指认）
