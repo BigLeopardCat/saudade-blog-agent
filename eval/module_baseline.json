@@ -84,7 +84,7 @@
     "top_defs": 16
   },
   "tests/test_todo_schedule.py": {
-    "lines": 2073,
+    "lines": 2075,
     "top_defs": 29
   },
   "tests/test_userdata.py": {
@@ -96,7 +96,7 @@
     "top_defs": 72
   },
   "tools/base.py": {
-    "lines": 3061,
-    "top_defs": 62
+    "lines": 2416,
+    "top_defs": 45
   }
 }

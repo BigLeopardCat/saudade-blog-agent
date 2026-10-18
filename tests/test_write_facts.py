@@ -147,10 +147,18 @@ def closure_src(fn, depth: int = 3, seen: set | None = None) -> str:
     if re.search(r"\bfact\(", src):
         return src
     out = src
+    # ⚠️ 20261018：委托函数从**它自己所在的那个模块**取，不再固定 `getattr(base, …)`。
+    # `tools/base.py` 正在按域拆模块（工具本体搬走、按原名在 base re-export），而
+    # `freeze_account` 的 `_set_account_frozen` 住在 `tools/account_admin.py` —— 按 base
+    # 取会**取不到**（那些帮手没有外部消费方，刻意不 re-export）⇒ 闭包在这里断掉、
+    # 下面那条 `fact(` 判据当场红 6 件。按 `fn.__module__` 取回到的正是**同一个模块**，
+    # 与这条判据原来的语义（"只跟同模块的私有函数"）逐字一致，只是不再假设"同模块 == base"。
+    # 反控实测：退回 `getattr(base, name, None)` ⇒ 当场红 6 件。
+    mod = sys.modules.get(getattr(fn, "__module__", "") or "")
     for name in _delegates(src):
-        helper = getattr(base, name, None)
+        helper = getattr(mod, name, None) if mod is not None else None
         helper = getattr(helper, "func", helper)
-        if not callable(helper) or getattr(helper, "__module__", "") != "tools.base":
+        if not callable(helper):
             continue
         # 只跟"同模块的私有函数"：`ok()` 也是私有名但它是出口、没有下游
         if name in ("ok", "empty", "unavailable", "not_found"):
