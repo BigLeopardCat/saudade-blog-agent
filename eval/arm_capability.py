@@ -344,7 +344,13 @@ def probe_forced_fallback(arm: str, *, uid: int = 1) -> dict:
         name = f"{getattr(base, 'name', '')}+forced_gate"
 
         def stream(self, state, config=None, stream_mode=None):  # noqa: ANN001
-            yield from base.stream(state, config, stream_mode)
+            # `stream_mode` **必须按关键字传**（20261019 修）：graph 臂的 `base` 是
+            # `create_agent()` 编出来的 Pregel，而它现在的签名是
+            # `stream(input, config=None, *, stream_mode=…)`——第三格是**关键字专用**。
+            # 位置传的后果**不是**这一处报错那么简单：合成的正控整个跑不起来 ⇒
+            # `forbid_fallback` 恒报"没变红" ⇒ 两臂的 `comparable` 恒为 False
+            # （而这正是 Stage 2 预检的那道闸）。
+            yield from base.stream(state, config, stream_mode=stream_mode)
             yield ("updates", {"gate": {"fallback_text": forced}})
 
         def __getattr__(self, k):  # 生产者今天只调 .stream；其余属性原样透传
