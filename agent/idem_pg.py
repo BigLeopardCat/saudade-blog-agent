@@ -105,14 +105,20 @@ class PostgresLedger:
     def __init__(self, pool):
         self.pool = pool
 
-    def claim(self, key: str, tool: str, fp: str) -> tuple[str, tuple | None]:
+    def claim(self, key: str, tool: str, attempt: str, *,
+              resuming: bool = True) -> tuple[str, tuple | None]:
         """占位。返回 `("new"|"done"|"intent", 行或 None)`。
 
         `INSERT ... ON CONFLICT DO NOTHING RETURNING key` + 回读是**一次原子判定**，
-        原子性由主键保证：插进去 ⇒ 这一件从没做过；没插进去 ⇒ 行已存在，看它是
-        `done`（重放）还是 `intent`（上一次死在调用中间 ⇒ 结果未知）。
+        原子性由主键保证：插进去 ⇒ 这一件从没做过；没插进去 ⇒ 行已存在，再按两格分流
+        （口径与理由见 `agent/idem.py` 头注《修法》，两档**必须同一份语义**）：
 
-        查询一律走 `tuple_row`（见头注①）：池自己的 `dict_row` 会让重放**静默**回错东西。
+          · `行.fp == attempt` ⇒ 同一 superstep 的重放 ⇒ 逐字就是今天的行为；
+          · 换了 attempt 而 `resuming` ⇒ 上一轮没跑完 ⇒ 那一行就是那一轮的尝试；
+          · 换了 attempt 而非 `resuming` ⇒ 主人明确再要一次 ⇒ 原子地改回 `intent`。
+
+        `attempt` 存在 `fp` 列里（**列名与表结构不变**）。查询一律走 `tuple_row`
+        （见头注①）：池自己的 `dict_row` 会让重放**静默**回错东西。
         """
         ensure_autocommit(self.pool)
         with self.pool.connection() as conn:
@@ -121,20 +127,27 @@ class PostgresLedger:
                     f"INSERT INTO {TABLE}(key, tool, fp, status)"
                     " VALUES (%s, %s, %s, 'intent')"
                     " ON CONFLICT (key) DO NOTHING RETURNING key",
-                    (key, tool, fp))
+                    (key, tool, attempt))
                 if cur.fetchone() is not None:
                     return "new", None
-                cur.execute(
-                    f"SELECT status, text, kind, meta FROM {TABLE} WHERE key=%s",
-                    (key,))
-                row = cur.fetchone()
-        if row is None:
-            # 插入被忽略（行存在）却回读不到（行没了）——只可能是并发清理撞上了。
-            # **不猜**：抛出去，交给上层 fail-closed（拒绝这次写）。
-            raise RuntimeError("幂等账行状态不可判定（插入被忽略但回读为空）")
-        if row[0] not in ("done", "intent"):
-            raise RuntimeError(f"幂等账行状态认不出：{row[0]!r}")
-        return row[0], row
+                row = self._read(cur, key)
+                if row is not None and row[1] != attempt and not resuming:
+                    # 合法的重复：**一次原子的 UPDATE** 才算抢到（`fp` 一起进 WHERE ⇒
+                    # 抢不到就是有人同时在动这一行 ⇒ 回读一次再判，不猜）。
+                    cur.execute(
+                        f"UPDATE {TABLE} SET status='intent', fp=%s, text=NULL,"
+                        " kind=NULL, meta=NULL, ts=now() WHERE key=%s AND fp=%s",
+                        (attempt, key, row[1]))
+                    if cur.rowcount == 1:
+                        return "new", None
+                    row = self._read(cur, key)
+        return idem._split_row(row)
+
+    @staticmethod
+    def _read(cur, key: str):
+        """回读一行（列清单与 SQLite 那档**同一份**，见 `idem._SELECT_COLS`）。"""
+        cur.execute(f"SELECT {idem._SELECT_COLS} FROM {TABLE} WHERE key=%s", (key,))
+        return cur.fetchone()
 
     def finish(self, key: str, out) -> bool:
         """记完成。返回"结果是否因超上限而未留档"（撞顶时上层补一条 trace）。

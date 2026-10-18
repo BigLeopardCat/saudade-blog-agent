@@ -333,6 +333,23 @@ def _stream_kwargs() -> dict:
     return {"durability": idem.REQUIRED_DURABILITY} if _graph_holds_context() else {}
 
 
+def _idem_resuming(thread_id: str) -> bool:
+    """给写幂等账的那一格：**这一轮开始时，上一轮跑没跑完**（批 F）。
+
+    账本靠它分流"重放"与"主人又要了一次"——键现在是会话级的（跨重启稳定），
+    `checkpoint_ns` 降级成"这一次尝试"，于是"换了一轮"这件事必须由别处告诉账本，
+    否则**合法的重复会被吞**（"再显示一次"变成"已经显示过了"）。
+
+    判定与理由在 `agent/checkpoint.py::thread_is_resuming`（读图状态的 `next`；读不到
+    按保守侧 `True` 办）。**没挂 saver ⇒ `False`**：那种环境账本 `active()` 为假、
+    根本不查这一格，给 `False` 与"今天逐字相同"一致；而给它 `True` 会让"没挂 saver"
+    与"上一轮崩了"在日志里长得一样。
+
+    与 `_stream_kwargs` 同形：两条路（`/chat` 与 `/chat/stream`）共用，**只此一处**。
+    """
+    return checkpoint.thread_is_resuming(_agent, thread_id) if _graph_holds_context() else False
+
+
 def _build_arm():
     """按 `AGENT_ARM` 选臂（20261012 批 4）。`graph` ⇒ **逐字节就是原来那一行**。
 
@@ -804,10 +821,13 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
     # ledger 一并注入：gate 的台账否认判据（洞⑦）读它，见 _ledger_for_graph
     # recent_tools 一并注入：授权式审核快道的**结构化准入判据**（20260929 批 F1'，
     #   与流式那半同源同义，见 `_run_agent_stream_to_queue` 的同名参数注）
+    # idem_resuming 一并注入：写幂等账的**分流判据**（批 F）——这一轮开始时上一轮跑没
+    #   跑完。与流式那半同源同义，见 `_run_agent_stream_to_queue` 的同名参数注。
     # recursion_limit 覆盖默认 9999（等效无界）：幻觉重试循环有界
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id,
                                "principal": principal or Principal(uid=user_id),
-                               "recent_tools": list(recent_tools or [])},
+                               "recent_tools": list(recent_tools or []),
+                               "idem_resuming": _idem_resuming(thread_id)},
               "recursion_limit": RECURSION_LIMIT}
     full_reply = ""
     nav_line = ""
@@ -1299,7 +1319,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                # 输入，没有回写需求）。传 `[]` 而不是缺键——"上一轮什么
                                # 都没执行"是一个确定的事实（与 chat_quota 的"读不到 ⇒
                                # 整个键缺席"恰好相反，见 ChatRequest 那条注）。
-                               "recent_tools": list(recent_tools or [])},
+                               "recent_tools": list(recent_tools or []),
+                               # 写幂等账的分流判据（批 F）：这一轮开始时上一轮跑没跑完。
+                               # 走 configurable 与上面几格同一条路——图里（`idem.py` 的
+                               # `resuming`）读得到、又不必动 AgentState。见 `_idem_resuming`。
+                               "idem_resuming": _idem_resuming(thread_id)},
               "recursion_limit": RECURSION_LIMIT}
     try:
         # 双 stream_mode：

@@ -449,6 +449,34 @@ def delete_thread(saver, conversation_id: object) -> bool:
     return saver.get_tuple({"configurable": {"thread_id": tid}}) is None
 
 
+def thread_is_resuming(agent, thread_id: object) -> bool:
+    """这一轮开始**之前**，那个 thread 的上一轮跑没跑完（写幂等账靠它分流，批 F）。
+
+    判据 = 图状态的 `next` 非空：上一轮**正常收尾**的线程它为空，**崩溃/被取消**留下的
+    非空（批 E 第 ⑤ 节实测记过）。为什么这条必须由服务端在轮次开始前算、而不是在节点里
+    推：`checkpoint_ns` 逐轮重编（生产每轮传 dict 输入 ⇒ langgraph 从 START 重启），
+    节点里**看不出**"上一轮跑没跑完"——它只知道自己这一次尝试的身份。
+
+    **读不到就返回 `True`（保守侧）**：`True` = "按上一轮没跑完办" ⇒ 幂等账会重放已完成
+    的写、把未决的写判成结果未知。那一条主人**看得见**（有帧）；反过来（默认 `False`）
+    的失效是**静默放过一次重做**，看不见。所以这里宁可保守，而且**每次都记一行
+    warning**——这不是"正常路径上的一个分支"，是"判据缺失"，别让它哑着。
+    """
+    tid = str(thread_id or "").strip()
+    getter = getattr(agent, "get_state", None)
+    if not tid or getter is None:
+        logger.warning("[checkpoint] 取不到图状态（thread=%r，get_state=%s）⇒ 按上一轮没跑完办",
+                       tid, getter is not None)
+        return True
+    try:
+        snap = getter({"configurable": {"thread_id": tid}})
+    except Exception as e:
+        # 读不到就是判据缺失（不是"没崩"）：按保守侧办 + 留痕，见上面的注。
+        logger.warning("[checkpoint] 读图状态失败（thread=%s, %s）⇒ 按上一轮没跑完办", tid, e)
+        return True
+    return bool(getattr(snap, "next", ()) or ())
+
+
 # ── 「丢弃那一轮」要同步到图自己的 state（批 E）──────────────────────────
 # 现状（20261019 之前）：Rust 从 `chat_history` 删掉那一轮的 user 消息与残缺回复，而
 # **图自持的 state 里那条还在**——历史注入已关（`_graph_holds_context()`），DB 不再是
