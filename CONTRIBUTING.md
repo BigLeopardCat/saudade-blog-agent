@@ -89,6 +89,12 @@ CI 跑的就是这两条（`.github/workflows/eval.yml`）。两点要知道：
 正文里写**为什么**，以及**判据在哪儿**。改动对"agent 会怎么做"有影响的，
 同步补一行 [CHANGELOG.md](CHANGELOG.md)（记什么/不记什么，那个文件头写得比这里细）。
 
+上面这几条里**机器判得了的那几条**（首行长度 / type 白名单 / 空行 / 署名尾注）由
+`.githooks/commit-msg` 拦：本机 `bash scripts/dev/install-hooks.sh` 装一次，CI 的
+`.github/workflows/eval.yml` 对本次 push 的每条提交跑**同一个文件**——规则本体就是这一节，
+脚本只是它的机器化，别在那边另抄一份。**只装本机钩子不算数**：`core.hooksPath` 是 git 的
+本地配置、不会被 clone 带走，新克隆与别人机器上一次都不会跑。
+
 ## 4. 判据：本仓最特别的一条规矩
 
 **每个行为改动都要带一条判据，而且这条判据必须能抓住"它其实没生效"。**
