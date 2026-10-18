@@ -26,7 +26,9 @@ from __future__ import annotations
 import json
 import re
 
-import agent.adminops as A
+import agent.adminops_account as _account
+import agent.adminops_tags as _tags
+import agent.adminops_target as _target
 from agent.workflow_defs import WORKFLOW_MAP
 from tools.base import (
     _NOTICE_CONTENT_LIMIT,
@@ -246,9 +248,9 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
         # 这一处知道色板；执行轮（含确认轮）拿到的就是色值，弹窗问句与工具参数都
         # 从同一个值渲染。点名的色认不出 → 零工具 + 注记（**绝不回落到哈希**）。
         color_spec = _write_arg(params.get("color"))
-        hexval = A.match_tag_color(color_spec) if color_spec else None
+        hexval = _tags.match_tag_color(color_spec) if color_spec else None
         if color_spec and hexval is None:
-            return [], (f"color「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}）："
+            return [], (f"color「{color_spec}」不在站内色板里（可选：{_tags.TAG_COLOR_SPEC}）："
                         "不调用任何工具，如实向主人说明只有这几种颜色，请他挑一个")
         pname = _write_arg(params.get("parent_tag"))
         # **一名一 spec**（20261008 批：主人一次点名好几个新标签时不许只建第一个）。
@@ -283,7 +285,7 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
             head = f"新建标签「{names[0]}」（{said}）"
         return specs, (
             head
-            + (f"，颜色 {A.describe_color(hexval)}" if hexval else "")
+            + (f"，颜色 {_tags.describe_color(hexval)}" if hexval else "")
             + "；同名已存在时工具会复用而不是重复建")
 
     if name in ("tag_update", "tag_delete"):
@@ -294,7 +296,7 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
         lv = _write_arg(params.get("level"))
         args = {"name": target}
         if lv:
-            code = A.normalize_level(lv)
+            code = _tags.normalize_level(lv)
             if code is None:
                 return [], (f"level「{lv}」认不出来（只支持一级 / 二级）："
                             "不调用任何工具，如实向主人问清")
@@ -313,16 +315,16 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
             bits.append(f"改名→{new_title}")
         color_spec = _write_arg(params.get("color"))
         if color_spec:
-            hexval = A.match_tag_color(color_spec)
+            hexval = _tags.match_tag_color(color_spec)
             if hexval is None:
-                return [], (f"color「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}）："
+                return [], (f"color「{color_spec}」不在站内色板里（可选：{_tags.TAG_COLOR_SPEC}）："
                             "不调用任何工具，如实向主人说明只有这几种颜色，请他挑一个")
             args["color"] = hexval
-            bits.append(f"颜色→{A.describe_color(hexval)}")
+            bits.append(f"颜色→{_tags.describe_color(hexval)}")
         pname = _write_arg(params.get("parent_tag"))
         tl = _write_arg(params.get("to_level"))
         if tl:
-            code = A.normalize_level(tl)
+            code = _tags.normalize_level(tl)
             if code is None:
                 return [], (f"to_level「{tl}」认不出来（只支持一级 / 二级）："
                             "不调用任何工具，如实向主人问清")
@@ -367,12 +369,12 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
         color_spec = _write_arg(params.get("color"))
         if color_spec:
             # 分类用宽一档的色表（任意 6 位 hex 也收——前端色块白名单已放宽）
-            picked = A.match_any_color(color_spec)
+            picked = _tags.match_any_color(color_spec)
             if picked is None:
                 return [], (f"color「{color_spec}」认不出来（中文色名或 6 位色值如 #eb2f96）："
                             "不调用任何工具，如实向主人问清")
             args["color"] = picked
-            color_shown = A.describe_color(picked) if picked in A.NEW_TAG_COLORS else picked
+            color_shown = _tags.describe_color(picked) if picked in _tags.NEW_TAG_COLORS else picked
             bits.append(f"颜色→{color_shown}")
         for key in ("new_title", "path_name", "introduce", "icon"):
             val = _write_arg(params.get(key))
@@ -439,18 +441,18 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
         # 台账判（比"这段字面出自主人原话"更强：可验证、不可能编造）。
         # **那一行是什么状态不参与判**（20260930：撤掉了"必须还在待审"那条，主人
         # 要能驳回已经通过的留言）——"这一下是不是他要的"由人闸回答（恒弹卡）。
-        tid = A.normalize_target_id(params.get("talk_id"))
+        tid = _target.normalize_target_id(params.get("talk_id"))
         if tid is None:
             return [], (f"board_audit 缺少指认用的留言编号（talk_id，给的是"
                         f"「{_write_arg(params.get('talk_id')) or '空'}」）：不调用任何"
                         "工具，如实向主人说明要先把那条留言的编号读出来"
                         "（台账帧或审核状况明细里印着 `talkId:<编号>`，原样抄那个数字）")
-        verdict = A.normalize_verdict(params.get("verdict"))
+        verdict = _tags.normalize_verdict(params.get("verdict"))
         if verdict is None:
             return [], (f"verdict「{params.get('verdict')}」认不出来（只能是通过/pass "
                         "或驳回/reject）：不调用任何工具，如实向主人问清要放行还是驳回")
         return ([_spec("audit_board_comment", {"talk_id": tid, "verdict": verdict})],
-                (f"把留言 talkId:{tid} 人工复核为{A.BOARD_VERDICT_CN[verdict]}"
+                (f"把留言 talkId:{tid} 人工复核为{_tags.BOARD_VERDICT_CN[verdict]}"
                  "（卡面会印出那条留言的原文与作者，由主人核对）"))
 
     if name == "board_delete":
@@ -466,7 +468,7 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
                         "如实向主人问清说的是哪一条留言（或先去后台审核状况里把"
                         "那几条列出来让他指认）")
         return [_spec("delete_board_comment", {"quote": quote})], (
-            f"删除含「{A.clip(quote, 20)}」的那条河灯留言（删掉取不回来）")
+            f"删除含「{_tags.clip(quote, 20)}」的那条河灯留言（删掉取不回来）")
 
     if name in ("account_freeze", "account_unfreeze"):
         # 账号冻结 / 解冻（20260926 第九轮）。它与上面那几件同族（目标是一个
@@ -519,13 +521,13 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
                      "（按名字在后台账号列表里解析；名字不在列表里就不动任何数据、"
                      "如实说明）——**要动的那个名字必须能在后台账号列表里看到**"))
         raw_hours = params.get("hours")
-        ok_hours, hours_n = A.normalize_mute_hours(raw_hours)
+        ok_hours, hours_n = _account.normalize_mute_hours(raw_hours)
         if not ok_hours:
-            return [], (f"{name} 给的禁言时长「{A.clip(str(raw_hours or ''), 20)}」"
+            return [], (f"{name} 给的禁言时长「{_tags.clip(str(raw_hours or ''), 20)}」"
                         "认不出是多少小时：不调用任何工具，如实向主人问清要禁多久"
                         "（例如几个小时、几天，或者说「永久」）"
                         "——**不要**自己挑一个时长顶上，也**不要**当成永久")
-        span = A.mute_span_cn(hours_n)
+        span = _account.mute_span_cn(hours_n)
         args = {"name": target} if hours_n is None else {"name": target, "hours": hours_n}
         return ([_spec("account_mute", args)],
                 (f"禁言后台账号「{target}」"
@@ -564,13 +566,13 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
         if not want:
             return [], (f"{name} 缺少目标身份（role）：不调用任何工具，"
                         "如实向主人问清要把「" + target + "」改成什么身份")
-        code = A.normalize_role(want)
+        code = _account.normalize_role(want)
         if code is None:
             return [], (f"{name} 的目标身份「{want}」站内没有：不调用任何工具，"
                         "如实向主人说明没有这个身份**并请他换一个说法**"
                         "——**不要**自己挑一个身份顶上")
         return ([_spec("set_account_role", {"name": target, "role": code})],
-                (f"把后台账号「{target}」的身份改成{A.role_cn(code)}"
+                (f"把后台账号「{target}」的身份改成{_account.role_cn(code)}"
                  "（按名字在后台账号列表里解析；名字不在列表里就不动任何数据、"
                  "如实说明）——**要动的那个名字必须能在后台账号列表里看到**"))
 
@@ -638,7 +640,7 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
         # `graph._confirm_grant_plan` 的"工具 ⊆ 技能 plan"判据下看不见——卡上写
         # 「批准」、实际执行驳回，且无人可见。
         raw = params.get("user_id")
-        uid = A.normalize_target_id(raw)
+        uid = _target.normalize_target_id(raw)
         if uid is None:
             said = _write_arg(raw)
             return [], (f"{name} 缺少申请人的账号 id（user_id，给的是「{said or '空'}」）："
@@ -666,7 +668,7 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
                             "那一句（不能拿技能名/工具名/`[这样]`的占位符顶上）")
             return ([_spec("reject_quota_request", {"user_id": uid, "reason": reason})],
                     (f"驳回账号 id={uid} 的对话额度重置申请（额度不变，"
-                     f"但会给他发一条站内通知、理由「{A.clip(reason, 30)}」"
+                     f"但会给他发一条站内通知、理由「{_tags.clip(reason, 30)}」"
                      "——**发出后没有撤回的通道**；卡面会印出申请人是谁）"))
         return ([_spec("approve_quota_request", {"user_id": uid})],
                 (f"批准账号 id={uid} 的对话额度重置申请（他的额度恢复到上限、"

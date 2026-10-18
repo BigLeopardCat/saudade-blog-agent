@@ -31,7 +31,8 @@ from __future__ import annotations
 
 import json
 
-import agent.adminops as A
+import agent.adminops_tags as _tags
+import agent.adminops_todo as _todo
 from agent.refs import is_ref
 from agent.workflow_expand_write import _write_arg
 from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
@@ -244,17 +245,17 @@ def _expand_todo_workflow(workflow, params: dict) -> tuple[list[str], str]:
         return [], (f"dashboard_todo_add 的正文太长（{len(text)} 字，上限 {_TODO_TEXT_LIMIT} 字）："
                     "不调用任何工具，如实请主人把这件事说短一点（**不许**替他截断）")
     raw = _write_arg(params.get("date"))
-    due = A.normalize_due_date(raw) if raw else None
+    due = _todo.normalize_due_date(raw) if raw else None
     if raw and due is None:
         return [], (f"dashboard_todo_add 的排期日「{raw}」认不出来"
-                    f"（只认 {A.DUE_DATE_FORMS_CN}）：不调用任何工具，"
+                    f"（只认 {_todo.DUE_DATE_FORMS_CN}）：不调用任何工具，"
                     "如实向主人问清是哪一天——**不许**自己挑一个日子顶上")
     args: dict = {"text": text}
     if due:
         args["date"] = due
     return ([f"create_dashboard_todo({json.dumps(args, ensure_ascii=False)})"],
-            (f"往他**自己**后台首页的待办里加一条「{A.clip(text, 20)}」"
-             + (f"，排期 {A.due_date_cn(due)}" if due else "（未排期）")
+            (f"往他**自己**后台首页的待办里加一条「{_tags.clip(text, 20)}」"
+             + (f"，排期 {_todo.due_date_cn(due)}" if due else "（未排期）")
              + "；只追加这一条，列表里原有的都不动"))
 
 
@@ -284,7 +285,7 @@ def _expand_todo_done_workflow(workflow, params: dict) -> tuple[list[str], str]:
                     f"上限 {_TODO_TEXT_LIMIT} 字）：不调用任何工具，"
                     "如实请主人照列表里的写法说短一点（**不许**替他截断）")
     return ([f"complete_dashboard_todo({json.dumps({'text': text}, ensure_ascii=False)})"],
-            (f"把他自己后台首页的待办里「{A.clip(text, 20)}」那一条勾成完成"
+            (f"把他自己后台首页的待办里「{_tags.clip(text, 20)}」那一条勾成完成"
              f"（只翻完成标记，正文与排期都不动）"))
 
 
@@ -314,23 +315,24 @@ def _expand_todo_reschedule_workflow(workflow, params: dict) -> tuple[list[str],
     if not raw:
         return [], ("dashboard_todo_reschedule 没给日期（date）：不调用任何工具，"
                     f"如实向主人问清要改到哪一天（他要是说不要排期了，date 就填"
-                    f"「{A._TODO_CLEAR_WORD}」）")
-    if raw in A._TODO_CLEAR_DATES:
+                    f"「{_todo._TODO_CLEAR_WORD}」）")
+    if raw in _todo._TODO_CLEAR_DATES:
         # 清空：传**契约词**（不是主人嘴里那个说法）——工具与卡面都只认这一个字面。
-        return ([f"reschedule_dashboard_todo("
-                 f"{json.dumps({'text': text, 'date': A._TODO_CLEAR_WORD}, ensure_ascii=False)})"],
-                f"把他自己后台首页的待办里「{A.clip(text, 20)}」那一条的**排期清掉**"
+        _clear = json.dumps({"text": text, "date": _todo._TODO_CLEAR_WORD},
+                            ensure_ascii=False)
+        return ([f"reschedule_dashboard_todo({_clear})"],
+                f"把他自己后台首页的待办里「{_tags.clip(text, 20)}」那一条的**排期清掉**"
                 f"（只动排期，正文与完成标记都不动）")
-    due = A.normalize_due_date(raw)
+    due = _todo.normalize_due_date(raw)
     if due is None:
         return [], (f"dashboard_todo_reschedule 的排期日「{raw}」认不出来"
-                    f"（只认 {A.DUE_DATE_FORMS_CN}；清空排期填"
-                    f"「{A._TODO_CLEAR_WORD}」）：不调用任何工具，"
+                    f"（只认 {_todo.DUE_DATE_FORMS_CN}；清空排期填"
+                    f"「{_todo._TODO_CLEAR_WORD}」）：不调用任何工具，"
                     "如实向主人问清是哪一天——**不许**自己挑一个日子顶上")
     return ([f"reschedule_dashboard_todo("
              f"{json.dumps({'text': text, 'date': due}, ensure_ascii=False)})"],
-            (f"把他自己后台首页的待办里「{A.clip(text, 20)}」那一条的排期改成"
-             f"{A.due_date_cn(due)}（只动排期，正文与完成标记都不动）"))
+            (f"把他自己后台首页的待办里「{_tags.clip(text, 20)}」那一条的排期改成"
+             f"{_todo.due_date_cn(due)}（只动排期，正文与完成标记都不动）"))
 
 
 def _expand_article_status(params: dict,
@@ -361,8 +363,8 @@ def _expand_article_status(params: dict,
     也是同一个 mypy 错误）；照原样回传的代价是**调用点那一句留住了一个既有的计数错误**
     （本仓没有一处 `# type: ignore`，220 个错误就是这么记着账的）——别拿 ignore 把它抹掉。
     """
-    status = A.normalize_status(params.get("status"))
-    top = A.normalize_top(params.get("is_top"))
+    status = _tags.normalize_status(params.get("status"))
+    top = _tags.normalize_top(params.get("is_top"))
     # ⚠️ 注记**先落到变量上再回传**，别直接写成 `return [], "中文…", status`：`eval/wordlist_gate.py`
     # 的第二层按 AST 数"住在集合字面量里的中文串"，元组的直接元素也算一处 ⇒ 同一个字面量
     # 换个位置就会被记成"新增了一张中文表"（实测：这一支原本就是这样，红了一次）。
@@ -394,8 +396,8 @@ def _expand_article_status(params: dict,
            for one in aids]
     note = (f"修改文章 {'、'.join(str(x) for x in aids)}："
             + "、".join(filter(None, [
-                f"状态→{A.status_cn(status)}" if status is not None else "",
-                f"置顶→{A.top_cn(top)}" if top is not None else ""]))
+                f"状态→{_tags.status_cn(status)}" if status is not None else "",
+                f"置顶→{_tags.top_cn(top)}" if top is not None else ""]))
             + "（只改点名的字段）")
     return out, note, status
 

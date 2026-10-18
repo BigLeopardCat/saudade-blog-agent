@@ -1825,11 +1825,11 @@ def test_reply_contract_change_branches():
     # 契约一旦写成"返回里印着某句"、而那句根本不会出现，分叉判据就是空转——上面
     # 那三条只证明"契约里有这几个字"，证明不了它们与真实返回同源。所以拿那台
     # 渲染器把三件都渲一遍对着比：契约改字面、或渲染器改措辞，这一条当场红。
-    from agent import adminops as _A
+    from agent import adminops_quota as _quota
     for _kind, _name in (("approve", "quota_approve"), ("reject", "quota_reject"),
                          ("reset", "quota_reset")):
         _live = _CASES[_name][0]
-        _rendered = _A.render_quota_status(_kind, "某人", 5, 500, 0)
+        _rendered = _quota.render_quota_status(_kind, "某人", 5, 500, 0)
         check(f"{_name} 契约里那个「真改了」的头，就是 render_quota_status 真会印的字",
               _live in _rendered, f"{_live!r} vs {_rendered[:46]}")
     # 那两处"最容易读反的读数"必须被点破：成功回执尾巴写的是**改动之后**的剩余数
@@ -3100,7 +3100,7 @@ def test_tag_create_batch():
     三件事：**展开成几条**、**每条的名字与共用参数**、**负例不许静默**。
     """
     print("[tag_create_batch] 一次点名多个新标签 → 一名一条 spec（不再只建第一个）")
-    from agent import adminops as _A
+    from agent import adminops_confirm as _confirm
 
     obj = instantiate_plan("tag_create", {"titles": ["Git", "SVN"], "parent_tag": "编程"})
     check("两个名字 → 两条 create_tag spec（顺序照主人说的）",
@@ -3155,7 +3155,7 @@ def test_tag_create_batch():
           obj["tools"] == [] and obj.get("status") == "param_missing", str(obj)[:100])
 
     # 卡面这一层是"一批"给人看的地方：名字逐条印、多件时换「全部办」那一套措辞。
-    card = _A.render_confirm_text([
+    card = _confirm.render_confirm_text([
         {"tool": "create_tag", "args": {"title": "Git", "parent_tag": "编程"}},
         {"tool": "create_tag", "args": {"title": "SVN", "parent_tag": "编程"}}])
     check("卡面把两个名字都印出来（主人核对的就是这一行，少一个名字等于让他盲签）",
@@ -3164,7 +3164,7 @@ def test_tag_create_batch():
           "全部办" in card and "只办第 N 件" in card and "点「确定」" not in card,
           card[:200])
     check("  单件时仍是单件措辞（老语料的话术一个字节没变）",
-          "点「确定」" in _A.render_confirm_text(
+          "点「确定」" in _confirm.render_confirm_text(
               [{"tool": "create_tag", "args": {"title": "Git"}}]))
 
 
@@ -4289,26 +4289,31 @@ def test_no_sibling_tool_name_in_user_text():
     DYNAMIC = {"chat", "content_query"}
     root = ROOT
 
-    # ① adminops.py：全部字符串字面量（去 docstring、去"整串就是工具名"的比较常量）
-    src = (root / "agent/adminops.py").read_text()
-    tree = ast.parse(src)
-    docstrings = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            doc = ast.get_docstring(node, clean=False)
-            if doc is not None:
-                docstrings.add(doc)
+    # ① adminops 渲染层（20261018 批 3 拆成 8 个域模块）：全部字符串字面量
+    #    （去 docstring、去"整串就是工具名"的比较常量）。
+    #    ⚠️ 取值点**必须扫全部 8 个模块**：只扫其中一个会让另外七个的泄漏静默通过
+    #    ——"判据只覆盖了一部分"正是这条断言要防的形状。
     leaks = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
-            continue
-        s = node.value
-        if s in docstrings or s.strip() in names:
-            continue
-        for n in sorted(names):
-            if n in s:
-                leaks.append(f"adminops.py:{node.lineno} [{n}] {s.strip()[:60]}")
-    check("adminops.py 渲染层无工具名泄漏", not leaks, "；".join(leaks))
+    for _mod in sorted((root / "agent").glob("adminops_*.py")):
+        tree = ast.parse(_mod.read_text(encoding="utf-8"))
+        docstrings = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                doc = ast.get_docstring(node, clean=False)
+                if doc is not None:
+                    docstrings.add(doc)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            s = node.value
+            if s in docstrings or s.strip() in names:
+                continue
+            for n in sorted(names):
+                if n in s:
+                    leaks.append(f"{_mod.name}:{node.lineno} [{n}] {s.strip()[:60]}")
+    check("adminops 渲染层无工具名泄漏（8 个域模块全扫）", not leaks, "；".join(leaks))
+    check("★ 反控：上面那条真的扫到了模块（glob 落空 ⇒ 它恒绿）",
+          len(list((root / "agent").glob("adminops_*.py"))) == 8)
 
     # ② 技能 reply_contract：不许出现兄弟工具名
     #    按**整词**匹配（20260926）：冻结/解冻这对工具名互为子串

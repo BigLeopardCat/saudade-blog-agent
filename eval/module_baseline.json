@@ -1,8 +1,4 @@
 {
-  "agent/adminops.py": {
-    "lines": 3272,
-    "top_defs": 128
-  },
   "agent/authz.py": {
     "lines": 1721,
     "top_defs": 37
@@ -16,7 +12,7 @@
     "top_defs": 237
   },
   "agent/prompts.py": {
-    "lines": 833,
+    "lines": 840,
     "top_defs": 1
   },
   "agent/react_arm.py": {
@@ -36,7 +32,7 @@
     "top_defs": 35
   },
   "eval/admin_write_probe.py": {
-    "lines": 2854,
+    "lines": 2856,
     "top_defs": 82
   },
   "eval/run_golden.py": {
@@ -52,23 +48,23 @@
     "top_defs": 50
   },
   "tests/test_judge_offline.py": {
-    "lines": 1432,
+    "lines": 1433,
     "top_defs": 11
   },
   "tests/test_admin_write.py": {
-    "lines": 2000,
+    "lines": 2003,
     "top_defs": 24
   },
   "tests/test_authz.py": {
-    "lines": 1251,
+    "lines": 1252,
     "top_defs": 5
   },
   "tests/test_chat_quota.py": {
-    "lines": 1045,
+    "lines": 1047,
     "top_defs": 20
   },
   "tests/test_confirm.py": {
-    "lines": 1191,
+    "lines": 1195,
     "top_defs": 7
   },
   "tests/test_nav_truthfulness.py": {
@@ -84,15 +80,15 @@
     "top_defs": 6
   },
   "tests/test_workflows.py": {
-    "lines": 5794,
+    "lines": 5799,
     "top_defs": 72
   },
   "tests/test_tag_admin.py": {
-    "lines": 1602,
+    "lines": 1605,
     "top_defs": 16
   },
   "tests/test_todo_schedule.py": {
-    "lines": 2067,
+    "lines": 2073,
     "top_defs": 29
   },
   "tests/test_userdata.py": {
@@ -100,7 +96,7 @@
     "top_defs": 12
   },
   "tools/base.py": {
-    "lines": 5348,
+    "lines": 5351,
     "top_defs": 141
   }
 }

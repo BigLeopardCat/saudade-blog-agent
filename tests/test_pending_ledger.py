@@ -45,7 +45,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa
 
 import agent.graph as g  # noqa: E402
 import tools.base as tb  # noqa: E402
-from agent import adminops as A  # noqa: E402
+from agent import adminops_quota as _quota  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.context import _SHORT_MAX, _is_short_reply, _short_reply_hint  # noqa: E402
 from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
@@ -545,7 +545,7 @@ try:
     check("申请清单里也标注了这一件（模型看得见的每一屏都说同一句）",
           "agent 的额度写通道办不了这一件" in _out, _out[:140])
     check("  用的是**同一份**措辞（不是第二句近义话）",
-          A._UNREACHABLE_NOTE in _out)
+          _quota._UNREACHABLE_NOTE in _out)
 finally:
     tb._admin_get = _saved_get
     _lg.uninstall()

@@ -1684,7 +1684,8 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
           "（--allow-write + --allow-board-audit）")
     # `_QUOTA_VERB` 是**卡面动词的同一份实现**（工具名 → approve/reject/reset → 中文动词），
     # 所以额度族的断言读它、不另写一张"工具名 → 中文"的表（两张表必然漂移）。
-    from agent.adminops import BOARD_VERDICT_CN, _QUOTA_VERB
+    from agent.adminops_quota import _QUOTA_VERB
+    from agent.adminops_tags import BOARD_VERDICT_CN
     pending = _pending_rows(uid, role)
     if not pending:
         print("  [skip] 台账里一条待审都没有（台账帧会是「没有任何待审留言」，模型无从挑）"
@@ -2209,7 +2210,8 @@ def step18_ledger_zero_write(rep: Report, uid: int, role: str) -> None:
     ⚠️ 必须排在 ⑰ **之前**跑：⑰ 会真判掉那些待审留言（跑完不复原），台账一空 ⑱ 的
     前提就没了。两条腿共用同一份真实数据，顺序本身就是约束。
     """
-    from agent.adminops import BOARD_VERDICT_CN, _QUOTA_VERB
+    from agent.adminops_quota import _QUOTA_VERB
+    from agent.adminops_tags import BOARD_VERDICT_CN
     from agent.authz import is_write
     print("\n⑱ 台账那条腿的零写半（授权 ≠ 签字；模型不动作时不许静默）")
 

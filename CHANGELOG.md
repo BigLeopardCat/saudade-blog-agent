@@ -51,6 +51,27 @@
   不再指向任何 workflow 模块，那条会让它成环的边没了）。注册表穷举量总账 `1139 / 4856`
   一格未动；模块台账销掉 `agent/workflows.py` 那一条。八个体量已在台账里的文件因 import
   语句按新模块拆开而各长 1–10 行（ruff 的规范形态是一名一行），台账同批按文本外科改数。
+- **管理助手按域拆开（批 3）——对外行为零变更**：`agent/adminops.py`（3272 行 / 128 个顶层
+  定义）整块消失，按域住进 8 个模块——标签与分类 `agent/adminops_tags.py`、留言板
+  `agent/adminops_board.py`、待办 `agent/adminops_todo.py`、目标 `agent/adminops_target.py`、
+  账号与角色 `agent/adminops_account.py`、配额 `agent/adminops_quota.py`、写操作弹卡
+  `agent/adminops_confirm.py`、零调用收尾 `agent/adminops_noop.py`。**175 个顶层名字一个
+  不多一个不少**（AST 口径逐名对账），调用方逐个改指新模块——**本仓不留门面**，
+  `agent/adminops.py` 不给别名层。八处**源码文本锁**跟着改指（`tests/test_id_namespaces.py`
+  按模块名扫 id 命名空间，`tests/test_tag_color_tables.py` / `tests/test_note_tags_codec.py` /
+  `tests/test_chat_quota.py` / `tests/test_role_tables.py` 读源码文本断字面），读的还是同一份
+  文本，只是换了个文件。
+- **上面这刀顺带把三处"窄口径"判据销掉了**：`STATUS_CN` / `BOARD_VERDICT_CN` /
+  `BOARD_VERDICT_FULL` 三条的"符号与匹配器同文件"前提随拆分不成立（词表判据按文件认人），
+  穷举量那一层一格未动 ⇒ **丢的是判据的射程，不是内容**；`metric.total` 仍是 `1139 / 4856`。
+- **台账三处同批改**：模块台账销掉 `agent/adminops.py` 那一条（8 个新模块全在 800/60 之内）；
+  另有 7 个文件因 import 语句按新模块拆开、行宽越限被 ruff 逼着换行而各长 1–4 行，
+  台账按文本外科改数（`tools/base.py::create_tag` 复杂度台账 +1 行同理）。
+  **类型棘轮总数仍是 190**，但住址变了：`agent/adminops.py` 那 19 个落进
+  `agent/adminops_confirm.py`(6) / `agent/adminops_noop.py`(11) / `agent/adminops_quota.py`(2)
+  ——棘轮的"逐文件"那一条正是为"总数没涨、某个文件涨了"设的，所以台账按新住址重记。
+- **`agent/graph.py` 这一刀只动了 `:127-140` 那个 import 块**（无 def、无行为改动），
+  图本体按既定边界本轮不拆。
 
 ## 20261017
 

@@ -22,7 +22,7 @@ import json
 import logging
 from typing import Any
 
-import agent.adminops as A
+import agent.adminops_tags as _tags
 from agent.workflow_defs import _WRITE_TARGET_CHANNEL, WORKFLOW_MAP, WRITE_WORKFLOW_NAMES
 from agent.workflow_defs.nav import (
     _IOT_NAV_ALIASES,
@@ -444,12 +444,13 @@ def _instantiate_plan(workflow_name: str, params: dict,
                             # add/remove 的空列表没有语义，剔掉。
                             args[key] = items
                     color_spec = _write_arg(params.get("color"))
-                    hexval = A.match_tag_color(color_spec) if color_spec else None
+                    hexval = _tags.match_tag_color(color_spec) if color_spec else None
                     if not any(k in args for k in ("add", "remove", "replace")):
                         note = ("article_tags 的标签列表都是空的：不调用任何工具，"
                                 "如实向主人问清要改哪些标签")
                     elif color_spec and hexval is None:
-                        note = (f"color「{color_spec}」不在站内色板里（可选：{A.TAG_COLOR_SPEC}）："
+                        note = (f"color「{color_spec}」不在站内色板里"
+                                f"（可选：{_tags.TAG_COLOR_SPEC}）："
                                 "不调用任何工具，如实向主人说明只有这几种颜色，请他挑一个")
                     else:
                         # ── 要加的标签站内还没有 ⇒ **同一张卡里先建再挂**（20261009）──

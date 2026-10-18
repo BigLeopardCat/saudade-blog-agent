@@ -47,7 +47,8 @@ sys.path.insert(0, str(ROOT))
 
 import agent.graph as g  # noqa: E402
 import tools.base as base  # noqa: E402
-from agent import adminops as A  # noqa: E402
+from agent import adminops_noop as _noop  # noqa: E402
+from agent import adminops_tags as _tags  # noqa: E402
 from agent.graph import (execute_node, graph_input, plan_state,  # noqa: E402
                          route_after_execute)
 from agent.principal import Principal  # noqa: E402
@@ -100,7 +101,7 @@ def _ids(picks):
 # ══════════════════════════════════════════════════════════════════
 print("① 判据：各族的「已达成 / 未达成 / 读不到 ⇒ 照弹」（纯函数，快照手工给全）")
 
-TAGS = A.build_tag_index(
+TAGS = _tags.build_tag_index(
     [{"tagKey": 1, "title": "Python", "level": 1},
      {"tagKey": 2, "title": "架构", "level": 1}],
     [{"tagKey": 10012, "title": "Rust", "level": 2, "fatherTag": "Python", "fatherKey": 1}])
@@ -116,7 +117,7 @@ ANNS = {1: {"id": 1, "title": "维护通知", "content": "今晚维护"}}
 
 def _reach(spec, **snaps):
     """单个 spec → `(该弹卡的条数, 已达成话术)`。"""
-    kept, already = A.reached_specs([spec], **snaps)
+    kept, already = _noop.reached_specs([spec], **snaps)
     return len(kept), (already[0]["why"] if already else "")
 
 

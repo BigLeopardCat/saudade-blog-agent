@@ -50,7 +50,7 @@ planner 菜单也不在任何技能模板里）没有臂：`receipt_action` 对�
 """
 import re
 
-from agent import adminops as A          # 标签颜色/状态的既有中文词表（写工具问句共用）
+from agent import adminops_tags as _tags  # 标签颜色/状态的既有中文词表（写工具问句共用）
 from agent.workflow_defs.nav import NAV_MAP
 from agent.workflow_expand import _norm_id_list, _norm_true
 # 分期报表的粒度词（周报/月报/年报）：**唯一一份**在 `agent/reports.py`（帧头与
@@ -345,8 +345,8 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             pid = _leaf(a.get("parent_id"))
             # 颜色（20260921）：点名了才显示——过程行是"这件事长什么样"的预告，
             # 参数里带色就说明用户点了色（没点名时 color 根本不进 args）
-            hexval = A.match_tag_color(a.get("color")) if a.get("color") else None
-            color = f"，颜色 {A.describe_color(hexval)}" if hexval else ""
+            hexval = _tags.match_tag_color(a.get("color")) if a.get("color") else None
+            color = f"，颜色 {_tags.describe_color(hexval)}" if hexval else ""
             if not title:
                 return "新建标签"
             return (f"新建二级标签「{title}」（父标签 id {pid}）{color}" if pid
@@ -371,9 +371,9 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             acts = []
             if _raw(a.get("new_title")):
                 acts.append(f"改名为「{_leaf(a.get('new_title'))}」")
-            hexval = A.match_tag_color(a.get("color")) if a.get("color") else None
+            hexval = _tags.match_tag_color(a.get("color")) if a.get("color") else None
             if hexval:
-                acts.append(f"颜色→{A.describe_color(hexval)}")
+                acts.append(f"颜色→{_tags.describe_color(hexval)}")
             if _raw(a.get("parent_tag")):
                 acts.append(f"移到「{_leaf(a.get('parent_tag'))}」下面")
             elif _raw(a.get("to_level")) == "one":
@@ -458,8 +458,8 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             quote = _leaf(a.get("quote"))
             if name == "delete_board_comment":
                 return f"删除留言（含「{quote}」的那条）" if quote else "删除留言"
-            v = A.normalize_verdict(a.get("verdict"))
-            cn = A.BOARD_VERDICT_CN.get(v or "", "")
+            v = _tags.normalize_verdict(a.get("verdict"))
+            cn = _tags.BOARD_VERDICT_CN.get(v or "", "")
             head = f"人工复核留言（含「{quote}」的那条）" if quote else "人工复核留言"
             return f"{head}：{cn}" if cn else head
         # 台账行：**不带留言正文**（正文是访客写的、可能很长，而 detail 列宽 300、
@@ -480,8 +480,8 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
     if name == "set_article_status":
         if preview:
             aid = _leaf(a.get("article_id"))
-            bits = [_leaf(a.get("status"), A.normalize_status, A.STATUS_CN),
-                    _leaf(a.get("is_top"), A.normalize_top,
+            bits = [_leaf(a.get("status"), _tags.normalize_status, _tags.STATUS_CN),
+                    _leaf(a.get("is_top"), _tags.normalize_top,
                           {1: "置顶", 0: "取消置顶"})]
             head = f"修改文章 {aid}" if aid else "修改文章状态"
             bits = [b for b in bits if b]

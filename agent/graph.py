@@ -76,7 +76,11 @@ from models import get_llm
 from tools import get_all_tools
 from agent import _ckpt_probe
 from agent import action_text
-from agent import adminops as A
+from agent import adminops_confirm as _confirm
+from agent import adminops_noop as _noop
+from agent import adminops_quota as _quota
+from agent import adminops_tags as _tags
+from agent import adminops_target as _target
 from agent import authz
 from agent import confirm
 from agent import idem
@@ -3312,7 +3316,7 @@ def _unit_at(steps: list[dict], cursor: int) -> list[dict]:
     游标落在单元**中间**时（前一半已经执行过）只取剩下那几步——单元头几步的回执已经
     在册，再发一遍就是把同一件写做第二遍。
     """
-    for grp in A.linked_units(steps):
+    for grp in _confirm.linked_units(steps):
         if cursor in grp:
             return [steps[i] for i in grp if cursor <= i < len(steps)]
     return [steps[cursor]] if 0 <= cursor < len(steps) else []
@@ -8112,9 +8116,9 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, workflow: str,
         return _VERDICT_BLOCK, (ref_error_reason(text) or authz.scope_error_reason(text)
                                 or authz.consent_error_reason(text)
                                 or authz.action_conflict_error_reason(text)
-                                or A.target_error_reason(text)
+                                or _target.target_error_reason(text)
                                 or idem.replay_reason(text)
-                                or A.policy_error_reason(text) or "error_frame")
+                                or _target.policy_error_reason(text) or "error_frame")
     # 命令工具契约层校验（20260926 批 2 改键）：动作工具必须交出**连线命令**——但
     # 判据从"返回文本的前缀"改成"`meta["cmd"]` 的 kind"。工具返回形态漂移（忘了带
     # cmd）依然是执行未按契约发生，判 BLOCK；`cmd_shape` 这个原因码保留（有测试引用）。
@@ -9577,7 +9581,7 @@ def _drop_satisfied_tag_creates(plan_obj: dict, config) -> list[str]:
         if _tool_name(spec) == "create_tag":
             args, args_ok = _tool_args(spec)
             name = str((args or {}).get("title") or "").strip() if args_ok else ""
-            hit, cands = A.find_tag(index, name) if name else (None, [])
+            hit, cands = _tags.find_tag(index, name) if name else (None, [])
             if hit is not None or cands:
                 dropped.append((hit or cands[0]).label)
                 continue
@@ -10113,7 +10117,7 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
     )
     field = _LEDGER_TARGET_FIELDS[name]
     raw = args.get(field)
-    tid = A.normalize_target_id(raw)
+    tid = _target.normalize_target_id(raw)
     if tid is None:
         said = str(raw if raw is not None else "").strip()[:40]
         return name, (f"要动的是台账里等着办的那一行，目标必须填**台账上的编号**，"
@@ -10281,7 +10285,7 @@ def _quota_reason_excerpt(row: dict) -> str:
     （或者更糟：把"没有理由"印成"他说了理由"）。
     """
     from agent.reports import sanitize_untrusted
-    from agent.adminops import clip as _clip
+    from agent.adminops_tags import clip as _clip
     return _clip(sanitize_untrusted(str(row.get("reason") or ""), 40), 40)
 
 
@@ -10309,12 +10313,12 @@ def _render_quota_facts(quota: list, reachable=None) -> str:
     rows = "\n".join(
         f"　　· {str(r.get('username') or '（账号已不存在）')}"
         f"（账号 id={r.get('userId')}，他写的理由：「{_quota_reason_excerpt(r) or '（没有填写理由）'}」）"
-        + A._unreachable_note(A.normalize_target_id(r.get("userId")), reachable)
+        + _quota._unreachable_note(_target.normalize_target_id(r.get("userId")), reachable)
         for r in quota[:5])
     more = f"\n　　· …还有 {len(quota) - 5} 件未列出" if len(quota) > 5 else ""
     # 够不着的件数另说一句：只印在行末时，模型扫一眼"共 N 件"就容易把它们算进
     # "我这就去办"，然后办不成、再回头解释——这几件得主人自己去后台。
-    stuck = ([r for r in quota if A.normalize_target_id(r.get("userId")) not in reachable]
+    stuck = ([r for r in quota if _target.normalize_target_id(r.get("userId")) not in reachable]
              if reachable is not None else [])
     warn = (f"\n其中 {len(stuck)} 件**不在账号名录里**（行末标着 ⚠）——额度写通道要求"
             f"申请人在名录里，那几件 agent 办不了：如实告诉主人「这一件得您到后台处理」，"
@@ -10928,7 +10932,7 @@ def _sign_confirm_picks(state: AgentState, config, principal, picks: list):
     给"卡面有这一格、但点下去裁不出来"留了缝，正是这组改动要消掉的东西。
     """
     conv_id = (config or {}).get("configurable", {}).get("conversation_id")
-    units = A.linked_units(picks)
+    units = _confirm.linked_units(picks)
     token = confirm.sign(principal.uid, conv_id, _plan_workflow(state), picks, units)
     return token, units
 
@@ -11234,7 +11238,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         if name in _ARTICLE_WRITE_TOOLS:
             # 两道目标判据**分开记**（20261009）：往下要按"是谁拦的"决定整批还弹不弹，
             # 合成一个布尔之后就再也分不出来了。两道的语义各自不变。
-            if not A.target_mentioned(
+            if not _target.target_mentioned(
                     args.get("article_id"),
                     _target_evidence(state, user_msg,
                                      _page_ctx(_turn(state), principal.known_role))
@@ -11263,8 +11267,8 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             # target_mismatch 帧，planner 按帧改回来（那条链路本就在等着）。
             # （主人这一轮一个 id 都没点名时，这一格**不启用**——
             # `target_named` 的空集语义，见它的 docstring。）
-            if not A.target_named(args.get("article_id"),
-                                  A.user_named_article_ids(user_msg)):
+            if not _target.target_named(args.get("article_id"),
+                                  _target.user_named_article_ids(user_msg)):
                 target_dropped.append((idx, name, "mismatch", args.get("article_id")))
                 continue
         picks.append((idx, {"tool": name, "args": args}))
@@ -11360,7 +11364,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     # 这一滤必须发生在**签发令牌之前**：令牌绑定的就是卡上那一批 spec，签一份包含
     # 已达成项的令牌等于让主人签一件系统根本不打算办的事（`pending_action.specs`
     # 同理，下面两处都用 `picks`，滤完的才是真正在问的那几件）。
-    picks, already = A.reached_specs(picks, index=tag_index, boards=board_index,
+    picks, already = _noop.reached_specs(picks, index=tag_index, boards=board_index,
                                      notes=note_index, users=users, todos=todos,
                                      favorites=favorites, notifications=notifications,
                                      messages=messages, announcements=announcements,
@@ -11385,7 +11389,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             # ——它是"planner 把别的事当本轮任务"的伴生信号（R 巡检读它）。
             record("confirm", "idem_reached_done",
                    tools=[str(r.get("tool") or "") for r in _done_rows])
-        text = A.render_noop_text(
+        text = _noop.render_noop_text(
             already, done=[str(r.get("result") or "") for r in _done_rows])
         note = ("状态已是目标值（" + "、".join(str(x.get("tool") or "") for x in already)
                 + "），本轮零改动")
@@ -11416,12 +11420,12 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                        [p.get("tool") for p in picks])
         record("confirm", "token_sign_failed", tools=[p.get("tool") for p in picks])
         return None
-    question = A.render_confirm_question(picks, tag_index, cat_index, board_index,
+    question = _confirm.render_confirm_question(picks, tag_index, cat_index, board_index,
                                          note_index, users, todos, quota_requests)
     # 按钮按**单元**数生成（20260929 批 F4，20261010 改数单元）：≥ 2 时给「全部办」
     # + 逐条「只办第 i 件」+「取消」（`pick:<i>` 0 基，服务端按同一份 `units` 裁）；
     # 为 1 时仍是旧的两枚，字面一个字节没动。
-    opts = A.confirm_opts(len(units))
+    opts = _confirm.confirm_opts(len(units))
     expires_at = confirm.token_expiry(token)
     return {
         "kind": "confirm",
@@ -11454,7 +11458,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             "task_id": f"pa_{time.strftime('%Y%m%d')}_{time.time_ns() % 10**9:09d}",
             "skill": _plan_workflow(state),
             "specs": picks,
-            "target": A.render_action_lines(picks, tag_index, cat_index, board_index,
+            "target": _confirm.render_action_lines(picks, tag_index, cat_index, board_index,
                                             note_index, users, todos, quota_requests),
             "requested_by": "user",
             "source_event": "confirm_popup",
@@ -11483,10 +11487,10 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         # 的头注把"三处必须共用同一份措辞"写成了硬要求（问句 / 卡面正文 / 跨轮 target），
         # 三个调用点里就这一处掉队。`render_todo_done_action` 之外的 action 渲染**不读**
         # 这个参数（`_confirm_one` 里只有 todo 两族看它）⇒ 其余族逐字节不变。
-        "confirm_text": A.render_confirm_text(picks, tag_index, cat_index, board_index,
+        "confirm_text": _confirm.render_confirm_text(picks, tag_index, cat_index, board_index,
                                                note_index, users, todos,
                                                quota_requests=quota_requests)
-                        + A.render_already_note(already),
+                        + _noop.render_already_note(already),
     }
 
 
@@ -11665,7 +11669,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     page_ctx = _page_ctx(_turn(state), principal.known_role)
     # 用户本轮**原话点名**的文章 id（写侧目标的权威，见下方 target_conflict）：
     # 逐 spec 只读不改，循环外算一次。
-    named_ids = A.user_named_article_ids(user_msg)
+    named_ids = _target.user_named_article_ids(user_msg)
     # 写操作确认弹窗（20260921）：**执行之前**判，命中就一个工具都不执行、直接回
     # pending_confirm（路由据此去 END，见 route_after_execute）。之所以提前到这里
     # 而不是在下方逐 spec 里：弹窗是一份**整批**的确认（计划里的写操作各自成单，
@@ -11783,7 +11787,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 确认执行都会栽在 unknown_target 上，整个弹窗机制形同虚设。
         target_missing = (ref_err is None and args_ok and name in _ARTICLE_WRITE_TOOLS
                           and not _grant_covers(state, spec)
-                          and not A.target_mentioned(args.get("article_id"),
+                          and not _target.target_mentioned(args.get("article_id"),
                                                      _target_evidence(state, user_msg, page_ctx)))
         if target_missing:
             record("execute", "unknown_target", tool=name,
@@ -11799,7 +11803,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         target_conflict = (ref_err is None and args_ok and not target_missing
                            and not consent_missing and not _grant_covers(state, spec)
                            and name in _ARTICLE_WRITE_TOOLS
-                           and not A.target_named(args.get("article_id"), named_ids))
+                           and not _target.target_named(args.get("article_id"), named_ids))
         if target_conflict:
             record("execute", "target_mismatch", tool=name,
                    article_id=str(args.get("article_id")), named=sorted(named_ids))
@@ -11834,10 +11838,10 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             out = authz.consent_block_frame(name, principal, user_msg)  # 反极性改选也走这里
         elif target_missing:
             # 同族（__ERROR__ + 原因码），语义是"先去读、或先问哪一篇"
-            out = A.unknown_target_frame(name)
+            out = _target.unknown_target_frame(name)
         elif target_conflict:
             # 同族，语义是"你改错了篇，按主人点名的改回来"
-            out = A.target_conflict_frame(name, named_ids, args.get("article_id"))
+            out = _target.target_conflict_frame(name, named_ids, args.get("article_id"))
         elif tool is None:
             out = f"__ERROR__: 未知工具 {name}（planner 调用清单越界，被 execute 拒绝执行）"
             logger.warning("[execute] 未知工具 %s，拒绝执行", name)
@@ -12508,8 +12512,8 @@ def _err_frame_claim_issue(reply: str, err_frames: list, state) -> "tuple | None
     clause5a = _claim_clause(reply, _COMPLETION_CLAIM_RE, _WRITE_CONTENT_CLAIM_RE)
     err_text = "\n".join(str(getattr(f, "content", "")) for f in err_frames)
     _blocked_aids = _blocked_article_targets(state)
-    _named5a = (set(A.user_named_article_ids(clause5a))
-                or set(A.user_named_article_ids(reply))) if _blocked_aids else set()
+    _named5a = (set(_target.user_named_article_ids(clause5a))
+                or set(_target.user_named_article_ids(reply))) if _blocked_aids else set()
     # 下面整条分派链挂在同一个 if/elif 上（**每一支都 return**）：收窄成立时
     # 四支全都不许进——20261008 实测踩过：只把第一支改成 elif，后面几支仍是
     # 独立的 if，收窄形同虚设（放行的轮次照样被 target 支捞走）。
@@ -12523,10 +12527,10 @@ def _err_frame_claim_issue(reply: str, err_frames: list, state) -> "tuple | None
     elif authz.consent_error_reason(err_text):
         logger.info("[gate] 写操作未获同意却声称已完成 → fallback(consent)")
         return ("err_frame_claim_consent", _FALLBACK_CONSENT, clause5a)
-    elif A.target_error_reason(err_text):
+    elif _target.target_error_reason(err_text):
         logger.info("[gate] 写操作目标无据却声称已完成 → fallback(unknown_target)")
         return ("err_frame_claim_target", _FALLBACK_UNKNOWN_TARGET, clause5a)
-    elif A.policy_error_reason(err_text):
+    elif _target.policy_error_reason(err_text):
         # 后台规则拒绝（20260926）：与上面两条同为"还没动手"，但指引不同——
         # 政策拒绝**不许**说"再试一次"（重试一万次也一样），要换目标或换人。
         logger.info("[gate] 写操作被后台规则拒绝却声称已完成 → fallback(policy)")

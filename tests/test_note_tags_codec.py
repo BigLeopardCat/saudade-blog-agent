@@ -42,8 +42,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 
-from agent.adminops import join_tag_ids as JOIN  # noqa: E402
-from agent.adminops import parse_tag_ids as PARSE  # noqa: E402
+from agent.adminops_tags import join_tag_ids as JOIN  # noqa: E402
+from agent.adminops_tags import parse_tag_ids as PARSE  # noqa: E402
 from tests import _parent_repo  # noqa: E402
 
 FAILED: list[str] = []
@@ -55,7 +55,7 @@ def check(name: str, ok: bool, extra: str = "") -> None:
         FAILED.append(name)
 
 
-PY_SRC = (ROOT / "agent" / "adminops.py").read_text(encoding="utf-8")
+PY_SRC = (ROOT / "agent" / "adminops_tags.py").read_text(encoding="utf-8")
 
 
 def _func_src(src: str, name: str) -> str:
