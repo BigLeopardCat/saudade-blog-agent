@@ -368,6 +368,34 @@
   ⇒ 登记表条目按**文本**改 `id`/`file` 到新文件、`metric.by_file` 两侧同时改数
   （旧文件减、新文件加）。**不许跑 `--update`**：它按新 id 查不到旧条目，重出的条目会丢掉
   `category` / `q` / `why`，下一轮判"未分类"还是红。
+- **`tools/base.py` 拆出第四块：管理助手报表那一族（批 3）——对外行为零变更**：
+  4014 行 / 91 个模块级定义 → **3855 行 / 84**；**连续的 197 行、7 个 `@tool` 函数**
+  （服务器状态 / 服务健康 / 审核状况 / 后台留言名册 / 用户报表 / 文章流量报表 / 分期报表）
+  搬进 `tools/admin_read.py`（256 行 / 7 个函数）。共同点是 **scope 全是 `admin.console`**
+  （`agent/authz.py`）——"只有管理员用得动的那几张纸"；族内两条通道（本机读数 vs 以发起人
+  身份代调）出口相同，都是渲染好的中文报表。**67 个工具的名单与顺序、7 个函数的 AST
+  逐字相同**（逐个对过 AST）。
+  ⚠️ **一处例外，明写在这里**：`get_service_health` 的 docstring 折了行——原行 101 列是
+  存量 E501 豁免，搬进新文件按 `docs/lint-baseline.md` 纪律 1 必须折 ⇒ **换行位置变了**。
+  词序、标点、字数一字不差（空白归一后逐字相等，实测），但工具描述是**发给模型的文本**，
+  所以按"改了就要说"记在这里，不当作没发生。
+  ⚠️ **本节的共享帮手留在 base**（`ADMIN_BASE` / `_sign_local_jwt` / `_principal_get` /
+  `_admin_get` / `_admin_read_post` / `_own_get`）：它们是「后台读」与「用户自己那一份数据」
+  两条通道共用的底座，而 `_admin_get`（6 处）与 `_sign_local_jwt`（2 处）**被套件直接打桩**
+  ⇒ 搬走等于把桩打空。新模块里 `_admin_get` 一律写 `_base._admin_get(...)`（5 个调用点）。
+  ⚠️ **新模块里一个名字都不按名从 `tools.base` 取**，连 `BOARD_STATUS_FILTERS` 也走
+  `_base.BOARD_STATUS_FILTERS`。两个理由：① 时序——新模块在 base 的**原位置**被 import，
+  那时 base 只定义到第 ~365 行，`from tools.base import BOARD_STATUS_FILTERS`（定义在
+  ~1905 行）当场 ImportError；② **mypy**——模块级写那句 from-import 会让 mypy 在这个环上
+  判不出这七个名字的类型，base 的 `_TOOL_REGISTRY` 当场多出 **7 条 `Cannot determine type`**
+  （实测 `tools/base.py` 13→16，`eval/type_gate.py` 直接红）。⇒ re-export 因此可以停在
+  **原位置**，不必像前两刀那样挪到文件末尾。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 88→84、
+  `tools/admin_read.py` 4）；类型棘轮 `190 → 190`（`tools/base.py` 13→9、
+  `tools/admin_read.py` 4）；ruff `799 → 798`（`tools/base.py` 24→23、新文件 0，另清掉
+  随搬家变成死代码的 `import os` 与 `typing.Literal`）。模块台账按文本外科改数
+  （4014/91 → 3855/84）。判据侧取值点跟着搬一处（`tests/test_param_schema.py` 的
+  `Literal[...]` 扫描加第四个文件，判据字面一字未动，反控实测能红）。
 
 ## 20261017
 

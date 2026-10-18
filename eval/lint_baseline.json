@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 799,
+  "total": 798,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/authz.py": 5,
@@ -158,7 +158,7 @@
     "tests/test_write_done_claim.py": 1,
     "tests/test_write_idempotency.py": 1,
     "tests/test_zako_role.py": 2,
-    "tools/base.py": 24,
+    "tools/base.py": 23,
     "utils/logging.py": 1,
     "utils/tts.py": 1
   }

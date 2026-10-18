@@ -444,7 +444,9 @@ def test_enum_closure_derives_from_literal():
     # 字面量也数进来，那是把锁放松。
     # 20261018 第二笔：站点与页面那一族（含 `toggle_effect` 的 `Literal["sakura", "rain",
     # "snow"]` 与 `toggle_dark_mode` 的 `Literal["on", "off"]`）搬进 `tools/site.py`，同上。
-    _FILES = ("base.py", "notes.py", "site.py")
+    # 20261018 第三笔：管理助手报表那一族（含 `get_moderation_status` 的
+    # `Literal["ai_passed", "ai_rejected", "pending"]`）搬进 `tools/admin_read.py`，同上。
+    _FILES = ("base.py", "notes.py", "site.py", "admin_read.py")
     base = "".join((ROOT / "tools" / f).read_text(encoding="utf-8") for f in _FILES)
     for ann in ('Literal["note", "talk", "board", "announcement"]',
                 'Literal["ai_passed", "ai_rejected", "pending"]',

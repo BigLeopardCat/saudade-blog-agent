@@ -272,7 +272,11 @@
         0
       ],
       "tools/base.py": [
-        88,
+        84,
+        0
+      ],
+      "tools/admin_read.py": [
+        4,
         0
       ],
       "tools/device.py": [
