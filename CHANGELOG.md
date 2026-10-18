@@ -273,6 +273,46 @@
   "补丁打在哪个模块对象上"决定它生不生效。⚠️ 新模块里**不许**按名 import 那三个被打桩的
   名字（会拿到打桩前的旧函数对象、桩静默失效、测试真去发网络请求）；要调就走
   `tools.base` 的属性——`tools/own_data.py` 今天一个都没用，这条写在它的头注里。
+- **`tools/base.py` 拆出第二块：公开读那一族（批 3）——对外行为零变更**：
+  4776 行 / 121 个模块级定义 → **4282 行 / 101**；从「笔记 / 文章 工具」到「站点信息 工具」
+  这**连续的六节**（文章列表/关键词检索/全文详情/分类标签/公告/留言板/说说/站点信息）搬进
+  `tools/notes.py`（659 行 / 22 个模块级名字：20 个函数 + `_NOTE_COUNT_KEYS` / `DOC_TYPE_CN`）。
+  共同点不是"都是读"这么粗，而是**出口全是公开池**（`read.public`，见 `agent/authz.py` 的
+  scope 登记）——读的是"谁都能看的那一份"，与上一刀搬走的 `tools/own_data.py`（`read.own`）
+  在语义上是两套视图。**67 个工具的名单与顺序、20 个函数的 AST 除下面三行外逐字相同**。
+  ⚠️ **re-export 的位置与另外两刀不同：在文件末尾（注册表之前）**。本模块要
+  `from tools.base import API_BASE, _own_get`，而 `_own_get` 定义在 base 的第 ~1139 行——
+  在原来那一节的位置 import 就是循环 import 的半初始化模块（那个名字还不存在）。判据侧的
+  取值点跟着搬了四处（`tests/test_param_schema.py` 的四个 `Literal[...]`、`tests/test_sections.py`
+  的 `section` 注解与"只对 note 生效"、`tests/test_hardening.py` 的 `verify=False` 扫描、
+  `tests/test_blog_api_base.py` 的站点字面量扫描），都改成"两份文件拼一份视图"、判据字面
+  一字未动，四处都做了反控实测能红。
+- **上面那一刀顺带更正一条写在头注里的实测口径：被套件打桩的 `tools.base` 属性是 11 个，不是 4 个**
+  （此前只数了 `base.<名> = …` 这一种写法，漏掉了 `_B.<名> = …` 那种别名）。全仓 AST 口径：
+  `_client` 159 / `_board_index` 11 / `_get` 10 / `_tag_index` 10 / `_admin_get` 6 /
+  `_quota_pending_index` 5 / **`_public_tag_index` 4** / `_find_named_user` 3 /
+  `_device_get_user_id` 2 / `_sign_local_jwt` 2 / `_user_directory` 2。公开读这一族碰到其中
+  **三个**（`_get` 15 个调用点、`_client.post` 1 个、`_public_tag_index` 2 个）——前两个各加
+  一个**转发壳**（`_get` / `_client_post`），换来"搬过来的正文逐字节未动"这个可验证的性质；
+  第三个只有 2 个短调用点，直接写 `_base.` 前缀。**函数对象取 globals 取的是它自己所在模块的
+  `__dict__`**：按名 import 会把打桩前的旧对象钉死在新模块里，桩静默失效、代码真去发网络请求，
+  而症状只是"断言换了个理由红"（本仓最贵的失效：看着在跑、其实没跑）。
+  ⚠️ **转发壳必须带返回类型注解，且与 `tools.base` 那份逐字一致**：不注解 ⇒ mypy 把返回读成
+  `Any` ⇒ 调用方的类型错误**整片消失**，棘轮会以"变小"的样子掩盖一次搬迁（实测
+  `get_article_detail` 的 `return rows` 那条 `return-value` 就是这样被抹掉、总数 `190→189`）。
+  注解在场时总数回到 **190**——那正是"搬走、不是修好"的机器可读凭据。
+- **三本账的差额全部来自"搬走而不是新增"**：穷举量 `1122 → 1122`（`tools/base.py` 116→103、
+  `tools/notes.py` 13）；类型棘轮 `190 → 190`（`tools/base.py` 14→13、`tools/notes.py` 1）；
+  ruff `815 → 805`（`tools/base.py` 38→30、新文件 0，另 2 条是上一位提交在
+  `tests/test_reports.py` 留下的高水位，同一本账一并收口）。模块台账按文本外科改数
+  （4776/121 → 4282/101）。
+- **顺带清掉一条随搬家变成死代码的 import**：`from rag import sections as _text_sections`
+  在 `tools/base.py` 里已经没有调用点（它唯一的用户就是搬走的那一族）⇒ 连同"为什么必须住在
+  模块顶部"那段理由一起搬进 `tools/notes.py`。同批把 `tools.result` re-export 块里
+  `_LIST_FIELD_MAX` / `_LIST_ROWS_MAX` / `_board_text_keys` / `_cap_rows` / `_clip_fields` /
+  `_rows_with_note` / `_shape` 七个补上 `# noqa: F401 —— 外面取：<谁>`：它们的名字从
+  "本文件在用"变成了"只有外面在用"（原先唯一的调用点就在搬走的那一族里），
+  而那句"外面取：<谁>"才是判据——**别在注释里写死"几个"**，条数当场就变了。
 - **中文词表闸的穷举量那一层补上反方向（判据，批 2 的补网）**：此前**只判"变大"**，
   于是缩小了却不重切账就留下一笔**永久免费额度**——实测 `tools/base.py` 账上 132、盘上 125，
   那 7 条静默（"改完还是绿的"与"没改"同形）。补两条：账比现场松 ⇒ 红（"台账该收紧"）、
