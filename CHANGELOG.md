@@ -16,6 +16,19 @@
 
 ## 20261019
 
+- **PR 上也跑门禁了**（`Eval Gate` 加 `pull_request: branches: [main]`）。此前只在 push 到
+  `main` 时跑 ⇒ 一个 PR 从推上去到合并之间**没有任何自动检查**，红是"合进 main 那一刻"才
+  发现的（20261017 实测：PR #8 合流当场带出两条红，支上从没人跑过闸）。两处接线要知道：
+  ① **fork 的 PR 拿不到 `secrets.PARENT_REPO_TOKEN`**（GitHub 不向 fork 传 secret）⇒
+  跨语言守卫在那种 PR 上跑不了，走的是**显式降级**：`::warning::` + job summary 写明"本次
+  未运行、合并后补跑"，依赖父仓的三步各自挂 `if`，另加一条不设 `SAUDADE_REQUIRE_PARENT`
+  的降级套件步骤；**push 事件缺凭据仍然硬红**（配置问题的正确表现是红）。同仓分支的 PR
+  有 secret ⇒ 走完整门禁。② 看板娘 pin 漂移提示（`widget-pin-drift`，只警告恒绿）也跟着
+  在 PR 上跑——漂移最常见的时刻就是 PR 里。判据：`tests/test_ci_suite_list.py` ⑦（四条
+  判据 + 四条正控）、`tests/test_widget_pin_drift.py` ② 的 PR 事件用例。**agent 对外行为
+  零变更**；这条记在这里是因为它改的是"判据什么时候跑"，而"看着在跑、其实没跑"正是本仓
+  最贵的那类失效。
+
 - **模块地图补全 + 10 处模块改名**（⚠️ **对外行为零变更**）。四件：
   ① **`docs/agent-architecture.md` §2 那张目录树此前已经烂了，而没有任何东西会红**：实测点名了
   3 个已不存在的文件（`adminops.py` / `helpers.py` / `native_plan.py`），磁盘上 38/81 个模块它
