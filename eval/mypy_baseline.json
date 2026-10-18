@@ -12,7 +12,7 @@
     "server.py"
   ],
   "total": 190,
-  "files_checked": 92,
+  "files_checked": 93,
   "by_file": {
     "agent/action_text.py": 1,
     "agent/adminops_confirm.py": 6,
