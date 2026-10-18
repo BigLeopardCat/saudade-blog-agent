@@ -150,12 +150,30 @@ def _calls_in(fn: ast.AST, name: str) -> list[int]:
             and n.func.id == name]
 
 
+def _decision_body(tree: ast.AST) -> ast.AST | None:
+    """决策主体那一个函数（`_planner_decide`）——**并要求壳真的调它一次**。
+
+    20261019（资产对齐 G）：节点拆成"薄壳 + 主体"（生产 `graph.planner_node` 同款），
+    这三处调用住在**主体**里。锁若只认 `planner_node` 这个名字，拆完它就**当场变空**
+    （壳里一个 dict 都没有）——而"锁变空"与"接线掉了"在这条判据上看不出区别
+    （同本仓那族"锁的落点要选判据、别选字面"）。所以两件一起判：主体在，且壳里恰好
+    调它一次。少任何一件，这条锁都不算数。
+    """
+    body = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+                 and n.name == "_planner_decide"), None)
+    shell = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+                  and n.name == "planner_node"), None)
+    check("决策主体 `_planner_decide` 找得到", body is not None)
+    check("薄壳 `planner_node` **恰好调它一次**（壳还在，锁就没变空）",
+          shell is not None and len(_calls_in(shell, "_planner_decide")) == 1,
+          "" if shell is None else str(_calls_in(shell, "_planner_decide")))
+    return body
+
+
 def test_wiring() -> None:
-    print("\n⑥ 接线位置锁：`planner_node` 里三处都在、且 `_sync_calls` 在最后")
+    print("\n⑥ 接线位置锁：决策主体里三处都在、且 `_sync_calls` 在最后")
     tree = ast.parse((ROOT / "agent" / "react_arm.py").read_text(encoding="utf-8"))
-    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
-               and n.name == "planner_node"), None)
-    check("`planner_node` 找得到", fn is not None)
+    fn = _decision_body(tree)
     if fn is None:
         return
     guard, dedupe, sync = (_calls_in(fn, n) for n in ("write_guard", "finalize_dedupe",
