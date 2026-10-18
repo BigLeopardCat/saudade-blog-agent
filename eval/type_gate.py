@@ -47,8 +47,14 @@ mypy 靠 `--python-executable` 决定去谁的 site-packages 里找 `langgraph` 
     python eval/type_gate.py                       # CI：dev 组已装好，走 sys.executable -m mypy
     python eval/type_gate.py --update              # 重出 baseline
 
-退出码：0 通过 / 1 变差 / 3 跑不起来（缺 mypy、汇总行认不出、版本 / 解释器目标 /
-        启动器解释器版本对不上）。
+**第四类静默失效是账上留着一个不存在的文件（20261018 补）**：`by_file` 的键只被用来做
+`get(f, 0)`，所以**改名/删除**之后旧键会永远留在账上——它不出现在 `grew` 里、也不影响
+`total`（总数取自 mypy 的汇总行），只会被当成「这些文件已经清零，可以销账」**报成好消息**。
+真正的后果是同一个文件改名之后计数从 0 重新开始：一次改名买回一份免费额度，与棘轮想买的
+东西正好相反（现场：`agent/adminops.py` 拆成 8 个模块）。现在盘上找不到的键直接退 3。
+
+退出码：0 通过 / 1 变差 / 3 跑不起来或**账不可用**（缺 mypy、汇总行认不出、版本 /
+        解释器目标 / 启动器解释器版本对不上、账里有盘上不存在的键）。
 """
 
 from __future__ import annotations
@@ -170,8 +176,11 @@ def _launcher_guard(py_target: str | None) -> bool:
 
 
 def _baseline_guards(base: dict, pin: str | None, py_target: str | None) -> bool:
-    """①② 与基线对着判的两道。**必须排在 `_gather()` 之前**——退 3 不该付一次完整 mypy
-    跑（约一分钟）的代价，而这两条只读文本；反控"改一格 ⇒ 当场红"也就从一分钟变成一瞬。
+    """①②③ 与基线对着判的三道。**必须排在 `_gather()` 之前**——退 3 不该付一次完整 mypy
+    跑（约一分钟）的代价，而这三条只读文本；反控"改一格 ⇒ 当场红"也就从一分钟变成一瞬。
+
+    三条的共同点：**账本身不可用了**（换了一个量 / 记着一个不存在的文件），所以都是
+    "先 `--update` 重出"而不是"你变差了"⇒ 退 3 不是退 1。
     """
     # ① 版本对不上 ⇒ 退 3 而不是 1：这不是"变差了"，是**换了一个量**。
     if base.get("mypy_version") != pin:
@@ -186,6 +195,21 @@ def _baseline_guards(base: dict, pin: str | None, py_target: str | None) -> bool
         print(f"❌ 基线是用 Python {base.get('python_target')} 的目标出的，"
               f"而 `[tool.mypy].python_version` 现在是 {py_target} —— 换解释器目标同样换"
               f"了一套错误集，先 `--update` 重出。")
+        return False
+
+    # ③ 台账里有、盘上却没有的键（20261018 补）。**这一族坏起来比①②更安静**：
+    # `by_file` 的键只被用来做 `base["by_file"].get(f, 0)`，于是**改名或删除**之后旧键
+    # 永远留在账上——它既不出现在 `grew` 里、也不影响 `total`（总数取自 mypy 的汇总行），
+    # 只会落进下面那句"这些文件已经清零，可以销账"里，被**当成好消息报出来**。
+    # 而真正的后果是：同一个文件改名之后，它的计数从 0 重新开始 —— 一次改名就买回
+    # 一份免费额度，和棘轮想买的东西正好相反。
+    # 现场：`agent/adminops.py` 拆成 8 个模块（20261018 批 3a），那一条就是这么被读成"清零"的。
+    ghosts = sorted(k for k in base.get("by_file", {}) if not (ROOT / k).is_file())
+    if ghosts:
+        print(f"❌ 基线里有 {len(ghosts)} 个键在盘上找不到对应文件（改名/删除后的残留）："
+              f"{'、'.join(ghosts)}\n"
+              f"   它们不出现在 `grew` 里、也不影响 `total`，只会被当成「已清零」报出来 ——"
+              f" 于是改名之后那个文件的计数从 0 重新开始。先 `--update` 重出账。")
         return False
     return True
 
