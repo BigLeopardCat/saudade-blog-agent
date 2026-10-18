@@ -15,7 +15,7 @@
   ④ `frame_excerpt` 对付 repr 层的两个坑（换行是字面 `\\n`、详情 dict 正文存两份）；
   ⑤ 渲染链路 `_frame_texts` 真的走到节选（帧文本带标记、长度受控）；
   ⑥ 跨模块契约不破：`noteTitle` 键在（`decisions._doc_title` 靠它做跨轮指代锚点）、
-     返回仍是可 `literal_eval` 的 dict（`agent/refs.py` 的 `$tool[N].field` 靠它取值）；
+     返回仍是可 `literal_eval` 的 dict（`agent/arg_refs.py` 的 `$tool[N].field` 靠它取值）；
   ⑧ 列表帧的紧凑渲染（20260921）：超预算的列表帧**一行一条**、按**整行**取舍、
      末尾如实标注「共 N 条」——旧路径是 `text[:300]` 裸切，会在一条记录中间断掉，
      planner 既读不出后半条的 id、也看不出后面还有多少条。
@@ -37,8 +37,8 @@ import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 from rag import sections                         # noqa: E402
 from agent.context import (_DETAIL_FRAME_PER, _compact_list_frame,  # noqa: E402
                            _frame_texts)
-from agent.decisions import _doc_title           # noqa: E402
-from agent.refs import parse_data                 # noqa: E402
+from agent.deterministic_plan import _doc_title           # noqa: E402
+from agent.arg_refs import parse_data                 # noqa: E402
 from langchain_core.messages import ToolMessage  # noqa: E402
 from rag.search import chunk_note                # noqa: E402
 from tools.base import _read_section             # noqa: E402

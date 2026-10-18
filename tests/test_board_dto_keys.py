@@ -4,7 +4,7 @@
 **契约**：留言板两条通道（公开池 `list_guestbook`、我自己的 `list_my_board`）拿回来的
 都是后端 `TalkDto`（父仓 `src/routes/talks.rs`）那一个 JSON。agent 侧有两处**按名字**读它：
 
-  · `agent/entities.py` 的两个摘要器（`_entry_digest` / `_my_board_digest`）——跨轮执行
+  · `agent/entity_digest.py` 的两个摘要器（`_entry_digest` / `_my_board_digest`）——跨轮执行
     记忆就靠它们；
   · `tools/base.py::_shape` 出口的**改名表**（`_FRAME_ID_KEYS`：`talkKey` → `talkId`）
     与 `_board_text_keys`（`author` → `留名`）——帧里给模型看的那一列。
@@ -50,7 +50,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import adminops_quota as _quota  # noqa: E402
-from agent import entities as E  # noqa: E402
+from agent import entity_digest as E  # noqa: E402
 from tests import _parent_repo, _rust_src  # noqa: E402
 from tools import base as B  # noqa: E402
 
@@ -98,13 +98,13 @@ def _dto_keys(src: str) -> dict[str, str]:
 _RUST_KEYS = _dto_keys(_RUST_TALKS)
 
 # ══ 取值：agent 读的键（AST 取 `X.get("字面量")`，只在那两个摘要器里）══════════
-_ENTS = (ROOT / "agent/entities.py").read_text(encoding="utf-8")
+_ENTS = (ROOT / "agent/entity_digest.py").read_text(encoding="utf-8")
 
 
 def _get_keys(func: str) -> dict[str, str]:
     """`func` 里所有 `X.get("字面量")` 的键 → 所在函数名。
 
-    **只取函数段**（同 `test_write_param_words.py` 的理由）：整个 `entities.py` 里到处
+    **只取函数段**（同 `test_write_param_words.py` 的理由）：整个 `entity_digest.py` 里到处
     都是 `.get("…")`，全文搜会把别的通道的键算作"留言板读的键"。
     """
     node = next((n for n in ast.parse(_ENTS).body

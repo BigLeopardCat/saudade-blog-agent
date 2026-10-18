@@ -9,14 +9,14 @@
 
 **分层纪律**（与 `agent/workflow_model.py` 同一条）：本模块的出边**只有三层**——
 标准库、`agent.workflow_model`（`Workflow` / `ParamSpec` / `_NO_DEFAULT`）、
-`agent.refs`（`is_ref`）与 `tools.base`（惰性取工具注册表）。**不许反向 import**
+`agent.arg_refs`（`is_ref`）与 `tools.base`（惰性取工具注册表）。**不许反向 import**
 `workflow_menu` / `workflow_plan` / `workflows`：菜单与校验读的是同一份规格
 （`ParamSpec`），而两者谁也不该 import 谁——这就是规格当初下沉的原因。
 
 ⚠️ `split_tool_spec` / `_TOOL_SPEC_RE`（`工具名({json})` 的字面形状）**没有**跟着
 这一族走：它们不是参数 schema，而是执行清单条目的形状，真正的家是
 `agent/tool_specs.py`（那边的头注已经点了名）。今天搬不过去——`tool_specs` →
-`agent.decisions` → `agent.workflows` 是一条现成的链，再让 `workflows` →
+`agent.deterministic_plan` → `agent.workflows` 是一条现成的链，再让 `workflows` →
 `tool_specs` 就成环。等收尾刀把 `agent/workflows.py` 删掉、各 import 方改指新模块
 之后，它就能搬回自己的家。
 """
@@ -28,7 +28,7 @@ import threading
 from dataclasses import replace
 from typing import Any
 
-from agent.refs import is_ref
+from agent.arg_refs import is_ref
 from agent.workflow_model import _NO_DEFAULT, ParamSpec, Workflow
 
 __all__ = [
@@ -183,7 +183,7 @@ def _template_param_map(workflow: Workflow) -> dict[str, tuple[str, str]]:
     """技能参数名 → (工具名, 工具参数名)：从 `workflow.plan` 模板的 `$占位` 反查。
 
     只认 `$名字` 这一种（`$tool[0].field` 那种参数引用是另一层语义，由 execute 解析，
-    见 `agent/refs.py`）——与 `instantiate_plan` 模板展开时的判据逐字相同。
+    见 `agent/arg_refs.py`）——与 `instantiate_plan` 模板展开时的判据逐字相同。
     """
     out: dict[str, tuple[str, str]] = {}
     for tool_name, tmpl in (workflow.plan or ()):
@@ -236,7 +236,7 @@ def _contains_ref(value: Any) -> bool:
 
     引用是**程序化取值**、不是字面量：它的类型由被引用的那次工具返回决定，规划期
     根本不知道 ⇒ 一律**放行、不做类型判据**（"类型不对"在这里只可能是误报）。
-    判据本身来自 `agent.refs`（`REF_RE`），这里只做容器的递归遍历。
+    判据本身来自 `agent.arg_refs`（`REF_RE`），这里只做容器的递归遍历。
     """
     if is_ref(value):
         return True

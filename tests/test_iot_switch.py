@@ -45,7 +45,7 @@ sys.path.insert(0, %r)
 import tools.base as B
 import agent.context as C
 import agent.hostinfo as H
-from agent.decisions import _display_fast_path
+from agent.deterministic_plan import _display_fast_path
 from agent.workflow_defs import WORKFLOWS, visible_workflows
 from agent.workflow_defs.nav_map import (NAV_MAP, _IOT_NAV_ALIASES, _NAV_REAL_PAGES,
                                      _NAV_REF_HINT)

@@ -11,7 +11,7 @@
 模型侧的一次登记 + 系统侧的确定性结算。
 
 **为什么这条通道必须由模型声明、而不能由确定性扫描器产出**（关键论据）：
-`decisions.py::_scan_action_intents` 只认**具名别名**（`_EFFECT_ALIASES` 里有"樱花/
+`deterministic_plan.py::_scan_action_intents` 只认**具名别名**（`_EFFECT_ALIASES` 里有"樱花/
 大雨"才会扫出 effect 意图），而本族失败的第二步宾语恰恰是**未具名指称**（「开启一个
 特效」）——扫描器结构上看不见它。能看见的只有理解语义的模型，所以登记的入口是模型
 （接口层的三个伪函数：意图清单 `task_intents`、登记 `task_hold`、撤下 `task_drop`）。

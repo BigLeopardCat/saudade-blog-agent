@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """快道定价（20261015）：五条确定性快道**到底值不值**的取数装置。
 
-为什么要有它：`agent/decisions.py` 那五条快道（导航 / 指代型导航 / 显示 / 读当前文章 /
+为什么要有它：`agent/deterministic_plan.py` 那五条快道（导航 / 指代型导航 / 显示 / 读当前文章 /
 特效切换）命中即**拿走 planner 的决策权**，而每一条都有真实事故依据（最有名的是
 「不要樱花了改成下雨」——planner LLM 十轮里八轮只做半边）⇒ **不能纸面推定删**。
 但这个仓库的判据一向"要么说清代价、要么别动"，所以先把价钱量出来。
@@ -39,7 +39,7 @@ sys.path.insert(0, ROOT)
 from golden_trace import trace_root  # noqa: E402  （golden trace 根目录的唯一实现）
 from trace_io import load_trace  # noqa: E402  （与 trace_alert 同一个读取实现）
 
-import agent.decisions as D  # noqa: E402
+import agent.deterministic_plan as D  # noqa: E402
 
 GOLDEN = os.path.join(ROOT, "eval", "golden", "basic.jsonl")
 

@@ -7,7 +7,7 @@
 13513 / 246——那个数才是棘轮现在的天花板）。选它当第二刀的理由与第一刀**不同**——
 第一刀靠"边界干净"（三个名字、一套文本协议），这一刀靠**出边为零**：这一族对外只有
 8 个名字（8 个函数 + `EXECUTED_ONCE_WORKFLOWS`），而它们加起来只用到
-`_tool_name`（`agent.decisions`）、`split_tool_spec`（**本模块**，20261018 从
+`_tool_name`（`agent.deterministic_plan`）、`split_tool_spec`（**本模块**，20261018 从
 `agent/tool_specs.py` 搬回）、
 `action_text` / `authz` 两个包、`logger`，加上 `EXECUTED_ONCE_WORKFLOWS` 这一个常量
 （连它的长注一起搬来了，全仓只有本族在用）。**一个来自 graph.py 的名字都不需要**
@@ -49,7 +49,7 @@ import re
 from typing import Any
 
 from agent import action_text, authz
-from agent.decisions import _tool_name
+from agent.deterministic_plan import _tool_name
 
 logger = logging.getLogger(__name__)
 

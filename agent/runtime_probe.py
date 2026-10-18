@@ -8,7 +8,7 @@
 就在同一个提交里 `--update` 并说明为什么"。这两个判定**不需要**住在 app 模块里——它们
 是纯函数（输入 `agent` 与 `settings`，输出返回体），住的理由只有"路由函数顺手"。
 路由留在 `server.py`（它必须在那儿，`app` 与 `_agent` 都在那儿），逻辑搬到这里。
-同族的先例：`agent/factblock.py`、`agent/action_text.py`、`agent/entities.py`。
+同族的先例：`agent/factblock.py`、`agent/action_text.py`、`agent/entity_digest.py`。
 
 **三个判定的分工**（别把它们读成一件事）：
   · `/version` 回答"**这是哪一版**"——静态构建身份，进程一生不变；

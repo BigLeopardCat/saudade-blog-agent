@@ -46,7 +46,8 @@ class Workflow:
     extra_plan_tools: tuple[str, ...] = ()
     # 参数必填性（20260925，见"技能参数 schema"节）。**默认从工具 args_schema 派生**，
     # 这两个元组只用来盖掉派生结果——技能参数与工具参数不是同一层，形状必填 ≠ 策略必填。
-    # 例：`device_display.text` 在 pydantic 里必填，但技能在代码侧被空参调用（`decisions.py`
+    # 例：`device_display.text` 在 pydantic 里必填，但技能在代码侧被空参调用
+    # （`deterministic_plan.py`
     # 的 `instantiate_plan("device_display", {})`，文案由执行层创作）⇒ optional_params 里点名。
     # **只写有实证的例外，不写"我觉得该必填"的名字**——多一条就多一个 planner 被白白拦住的路。
     required_params: tuple[str, ...] = ()

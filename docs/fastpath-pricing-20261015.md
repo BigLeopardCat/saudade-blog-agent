@@ -1,4 +1,5 @@
 # 确定性快道 · 定价报告（20261015）
+> ⚠️ 20261018 又一批模块已改名（**记录型文档一律保留当时的名字，不回溯改写**）：`agent/absence.py` → `agent/absence_claims.py`、`agent/frames.py` → `agent/frame_contract.py`、`agent/probe.py` → `agent/runtime_probe.py`、`agent/decisions.py` → `agent/deterministic_plan.py`、`agent/entities.py` → `agent/entity_digest.py`、`agent/refs.py` → `agent/arg_refs.py`、`agent/workflow_defs/nav.py` → `agent/workflow_defs/nav_map.py`、`agent/workflow_defs/navigation.py` → `agent/workflow_defs/nav_skills.py`、`agent/workflow_defs/reports.py` → `agent/workflow_defs/report_skills.py`。**现状地图（每个模块一行）**见 `docs/agent-architecture.md` §2。
 
 **这份文件回答一个问题**：`agent/decisions.py` 那五条确定性快道（导航 / 指代型导航 / 显示 /
 读当前文章 / 特效切换）**各值多少钱**——命中的频率、命中的价钱、以及**删或收窄哪一条会让

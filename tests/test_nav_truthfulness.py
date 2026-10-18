@@ -46,7 +46,7 @@ sys.path.insert(0, str(ROOT))
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
-import agent.decisions as D  # noqa: E402
+import agent.deterministic_plan as D  # noqa: E402
 import agent.graph as G  # noqa: E402
 from agent.graph import (  # noqa: E402
     _FALLBACK_CMD_PREFIX, _FALLBACK_CMD_PREFIX_DONE, _FALLBACK_NAV_NO_FRAME,

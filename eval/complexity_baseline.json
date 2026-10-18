@@ -11,7 +11,7 @@
     "c": 166,
     "lines": 327
   },
-  "agent/decisions.py::_candidate_detail_plan": {
+  "agent/deterministic_plan.py::_candidate_detail_plan": {
     "c": 51,
     "lines": 99
   },

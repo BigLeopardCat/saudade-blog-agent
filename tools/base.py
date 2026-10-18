@@ -220,8 +220,9 @@ from tools.device import (  # noqa: E402,F401
 # 按**原名**再导出 ⇒ 全仓 `from tools.base import …` 与 `base.<名>` 一处不改。外面伸手的
 # 实测有：`agent/workflow_defs/nav_map.py`（`NAV_MAP` 从 `_NAV_EXACT_PATHS` 同源取名，
 # 另取 `IOT_NAV_PATH`）、`agent/workflow_plan.py`（`nav_path_valid` / `IOT_NAV_PATH`）、
-# `agent/context.py`（`_ITEM_POSITION_FORMS`）、`agent/decisions.py` / `agent/hostinfo.py` /
-# `agent/context.py` / `agent/workflow_menu.py`（`IOT_ENABLED`，四份都按名 import）、
+# `agent/context.py`（`_ITEM_POSITION_FORMS` / `IOT_ENABLED`）、`agent/deterministic_plan.py` /
+# `agent/hostinfo.py` / `agent/entity_digest.py` 的摘要、`agent/tool_specs.py`、
+# `agent/workflow_defs/report_skills.py` 的技能、`agent/workflow_menu.py`（`IOT_ENABLED`）、
 # `tests/test_nav_truthfulness.py` / `tests/test_item_position_guide.py` /
 # `tests/test_iot_switch.py` / `tests/test_hardening.py` / `tests/test_workflows.py`。
 from tools.site import (  # noqa: E402,F401
@@ -426,8 +427,8 @@ def _own_get(path: str, config: RunnableConfig) -> dict | list | ToolResult:
 # ── 管理助手报表（只读七件）的 re-export（20261018 搬进 `tools/admin_read.py`）──
 # 按**原名**再导出 ⇒ 全仓 `from tools.base import …` 与 `base.<名>` 一处不改。外面伸手的
 # 实测有两类：① **按名登记**（`agent/authz.py` 的 scope 表、`agent/action_text.py` 的动作词、
-# `agent/entities.py` 的摘要、`agent/tool_specs.py`、`agent/workflow_defs/report_skills.py` 的技能
-# 模板、`_TOOL_REGISTRY` 本体）；② **按属性调用**（`tests/test_reports.py` 的
+# `agent/entity_digest.py` 的摘要、`agent/tool_specs.py`、`agent/workflow_defs/report_skills.py`
+# 的技能模板、`_TOOL_REGISTRY` 本体）；② **按属性调用**（`tests/test_reports.py` 的
 # `base.list_admin_board.invoke(...)`、`eval/admin_report_probe.py`）。两类的取值方式都是
 # "从 `tools.base` 拿"，所以这一刀不用动任何一处。
 # ⚠️ 这七件**没有被任何套件打桩**（实测全仓零处 `base.<这七个> = …`）⇒ 按原名 re-export
@@ -599,8 +600,7 @@ def _policy_post(path: str, payload: dict, config: RunnableConfig):
     from agent import adminops_target as _target
     uid = _device_get_user_id(config)
     if uid <= 0:
-        # 身份不明时一个请求都不发（同 `_principal_request`）：写操作最不该做的
-        # 就是在没身份时猜。
+        # 身份不明时一个请求都不发（同 `_principal_request`）：写操作最不该做的就是在没身份时猜。
         return unavailable(_NO_IDENTITY_WRITE)
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}

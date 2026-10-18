@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import server  # noqa: E402
-from agent import probe  # noqa: E402
+from agent import runtime_probe  # noqa: E402
 from config.settings import settings  # noqa: E402
 
 FAILED: list[str] = []
@@ -181,7 +181,7 @@ finally:
 
 print()
 print("⑤ checkpoint_backend：**这个进程挂没挂 saver**，且**不许从 .env 推**")
-# 本节的判据全部打在 `probe.checkpoint_backend` 这个纯函数上（它只收一个对象），
+# 本节的判据全部打在 `runtime_probe.checkpoint_backend` 这个纯函数上（它只收一个对象），
 # 再各配一条走 `/health` 真路由的断言——只判纯函数的话，"路由接没接上"这一格没人看
 # （`DIAL_KEYS` 只判键在不在，不判值从哪来）。
 
@@ -211,25 +211,26 @@ class _Shell:
 
 
 check("没挂 saver 的图 ⇒ none（今天生产的形态）",
-      probe.checkpoint_backend(_Graph(None)) == "none")
+      runtime_probe.checkpoint_backend(_Graph(None)) == "none")
 check("挂 PostgresSaver ⇒ postgres（含 `.aio` 子模块那种异步档）",
-      probe.checkpoint_backend(_Graph(_saver("langgraph.checkpoint.postgres"))) == "postgres"
-      and probe.checkpoint_backend(
+      runtime_probe.checkpoint_backend(
+          _Graph(_saver("langgraph.checkpoint.postgres"))) == "postgres"
+      and runtime_probe.checkpoint_backend(
           _Graph(_saver("langgraph.checkpoint.postgres.aio"))) == "postgres")
 check("挂内存档 ⇒ memory（**这一档不是噪声**：4 个 worker 下每 worker 各记各的、"
       "且不报错，它是'挂了错的那种 saver'唯一的出口）",
-      probe.checkpoint_backend(_Graph(_saver("langgraph.checkpoint.memory"))) == "memory")
+      runtime_probe.checkpoint_backend(_Graph(_saver("langgraph.checkpoint.memory"))) == "memory")
 check("外壳把图套在 `.graph` 里 ⇒ 也读得到（只往里钻一层）",
-      probe.checkpoint_backend(_Shell(None, _Graph(_saver("langgraph.checkpoint.sqlite"))))
+      runtime_probe.checkpoint_backend(_Shell(None, _Graph(_saver("langgraph.checkpoint.sqlite"))))
       == "sqlite")
 # 两条**读不出来**的分支。它们各自都要与 `none` 分开：把"取不到"报成"没挂"就是
 # `hostinfo.trace_stats` 那条 `readable` 栽过的同形跟头。
 check("图还没建（`_agent is None`）⇒ unknown，**不许**报成 none",
-      probe.checkpoint_backend(None) == "unknown")
+      runtime_probe.checkpoint_backend(None) == "unknown")
 check("认不出的对象（三个属性一个都没有）⇒ unknown，**不许**报成 none",
-      probe.checkpoint_backend(object()) == "unknown")
+      runtime_probe.checkpoint_backend(object()) == "unknown")
 check("认不出的 saver 类 ⇒ 回模块路径原文（不编一个已知名字顶上）",
-      probe.checkpoint_backend(_Graph(_saver("my.custom.saver"))) == "my.custom.saver")
+      runtime_probe.checkpoint_backend(_Graph(_saver("my.custom.saver"))) == "my.custom.saver")
 
 _old_agent = server._agent
 _saved_dsn = settings.checkpoint_dsn

@@ -412,7 +412,7 @@ def test_nav_fast_path():
     for msg in ["我想去旅行", "帮我留言", "去火星基地", "今天去哪儿",
                 "我想去看看", "怎么去图书馆借书",
                 "小猫咪我们去设备控制台", "去/category/tech",
-                # 20260920b：动词**之后**的否定词（与显示快道对齐，见 decisions.py）
+                # 20260920b：动词**之后**的否定词（与显示快道对齐，见 deterministic_plan.py）
                 "带我去留言板不用了", "去说说算了别去了", "带我去设备控制台，不用麻烦了"]:
         check(f"快道不命中「{msg}」→ None（落回 LLM）",
               _nav_fast_path(msg) is None, str(_nav_fast_path(msg)))
@@ -2791,13 +2791,13 @@ def test_execute_node():
 
 
 def test_refs():
-    """参数引用（20260919，agent/refs.py）：planner 在参数里写 `$<工具>[<序号>].<字段>`，
+    """参数引用（20260919，agent/arg_refs.py）：planner 在参数里写 `$<工具>[<序号>].<字段>`，
     execute 从**结构化**的已执行结果取值填参——不是让模型从 300 字截断帧里"读"出 id
     再抄一遍。覆盖：字面量识别（不误伤 /article/$x 这类非引用）/ 取值范围与错误码五族 /
     提示词字段提示（防臆造路径）/ 原因码回取 / execute 集成（同轮与跨轮依赖、失败不执行）
     / 过程行不泄露内部语法。"""
     import agent.graph as g
-    from agent import refs as R
+    from agent import arg_refs as R
     print("[refs] 引用字面量解析")
     check("识别：$tool[0] 与 $tool[2].a.b 都是引用",
           R.is_ref("$search_notes[0]") and R.is_ref("$list_notes[12].noteKey"))

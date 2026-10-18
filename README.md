@@ -181,7 +181,7 @@ saudade-blog-agent/
 ├── server.py              FastAPI 入口、SSE 编排、输入限制、并发和取消
 ├── agent/
 │   ├── graph.py           LangGraph 状态、节点和条件边（含声称闸与回执驱动循环）
-│   ├── decisions.py       零 LLM 确定性决策和快道
+│   ├── deterministic_plan.py  零 LLM 确定性决策和快道
 │   ├── context.py         上下文、工具帧和回执组装
 │   ├── plan_codec.py      计划文本契约的编解码（plan_encode / plan_state / parse_plan）
 │   ├── tool_specs.py      执行清单条目的解析与去重裁剪（_tool_args / _trim_done_reads 等）
@@ -192,8 +192,8 @@ saudade-blog-agent/
 │   ├── principal.py       调用者身份（uid/role/source）的唯一构造点
 │   ├── confirm.py         无状态 HMAC 确认令牌
 │   ├── adminops_tags.py   后台标签/分类/文章状态的确定性层（同族另有 7 个按域拆出的模块）
-│   ├── refs.py            结构化参数引用
-│   ├── entities.py        执行回执实体摘要
+│   ├── arg_refs.py        结构化参数引用
+│   ├── entity_digest.py   执行回执实体摘要
 │   ├── tasks.py           跨轮任务状态
 │   ├── hostinfo.py        本机运维读数（只读 /proc、systemctl、日志）
 │   ├── prompts.py         ★ 全部模型可见正文（人设 / 叙述纪律 / planner 与 reflector 模板 / 输出契约）

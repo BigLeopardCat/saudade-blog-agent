@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 from agent import adminops_board as _board  # noqa: E402
 from agent import context as C  # noqa: E402
 from agent import reports as R  # noqa: E402
-from agent.entities import receipt_digest  # noqa: E402
+from agent.entity_digest import receipt_digest  # noqa: E402
 from tools.base import _board_label  # noqa: E402
 
 FAILS: list[str] = []
@@ -152,7 +152,7 @@ _SRC = {
     "agent/adminops_board.py": (ROOT / "agent" / "adminops_board.py").read_text(encoding="utf-8"),
     "agent/adminops_confirm.py": (ROOT / "agent" / "adminops_confirm.py").read_text(
         encoding="utf-8"),
-    "agent/entities.py": (ROOT / "agent" / "entities.py").read_text(encoding="utf-8"),
+    "agent/entity_digest.py": (ROOT / "agent" / "entity_digest.py").read_text(encoding="utf-8"),
     "agent/context.py": (ROOT / "agent" / "context.py").read_text(encoding="utf-8"),
 }
 
@@ -168,10 +168,10 @@ _WIRING = (
     ("tools/board_moderation.py", "_board_label", 'f"userId:'),
     ("agent/reports.py", "_detail_line", 'f"  · talkId:'),
     ("agent/adminops_board.py", "_board_ref", 'f"talkId:'),
-    ("agent/entities.py", "_note_digest", 'f"noteId:'),
-    ("agent/entities.py", "_notification_digest", 'f"notifId:'),
-    ("agent/entities.py", "_unread_digest", 'f"notifId:'),
-    ("agent/entities.py", "_mailbox_digest", 'f"mailId:'),
+    ("agent/entity_digest.py", "_note_digest", 'f"noteId:'),
+    ("agent/entity_digest.py", "_notification_digest", 'f"notifId:'),
+    ("agent/entity_digest.py", "_unread_digest", 'f"notifId:'),
+    ("agent/entity_digest.py", "_mailbox_digest", 'f"mailId:'),
     ("agent/context.py", "_doc_anchors", " noteId="),
 )
 for _f, _fn, _lit in _WIRING:
@@ -187,7 +187,7 @@ for _f, _fn in (("tools/board_moderation.py", "_board_label"), ("agent/reports.p
     _b = _body(_SRC[_f], _fn)
     check(f"{_f}::{_fn} 里没有裸 `#` 插值（回退即红）", 'f"#{' not in _b)
 # 子串法在这里判不准（`f"noteId:{nid}《` 里本来就含 `{nid}《`）⇒ 钉的是"模板以 id 起头"
-_ENT = _SRC["agent/entities.py"]
+_ENT = _SRC["agent/entity_digest.py"]
 check("实体摘要里没有以 id 起头的条目模板（`f\"{nid}《` 这种旧形，回退即红）",
       re.search(r'f"\{(?:nid|mid)\}《', _ENT) is None)
 
@@ -241,7 +241,7 @@ check(" 注记里写明「留名不是账号」并给出认人的正路（帧自
 check("注记**不占下标**：`[0]` 仍是第一条留言",
       isinstance(_note[0], dict) and _note[0].get("talkId") == 96)
 _rows_kept = [x for x in _note if isinstance(x, dict)]
-from agent.entities import _rows as _ent_rows  # noqa: E402
+from agent.entity_digest import _rows as _ent_rows  # noqa: E402
 check("实体摘要器跳过注记元素（非 dict 元素天然被过滤）",
       _ent_rows(_note) == _rows_kept, str(_ent_rows(_note)))
 # ⚠ 模型读的是 `.description` 而**不是** `.__doc__`：`@tool` 把函数包成 StructuredTool
@@ -256,7 +256,7 @@ check("  且写着「查无此条不等于不存在」（planner 那一侧要有
 check("  说说那边同样披露（两个数据源不同的工具，边界不能只写一个）",
       "只列已通过审核" in (_B.list_talks.description or ""))
 
-from agent.refs import parse_data, resolve_one  # noqa: E402
+from agent.arg_refs import parse_data, resolve_one  # noqa: E402
 
 _td = [{"tool": "list_guestbook", "data": parse_data(_frame)}]
 check("引用按**新名**取值", resolve_one("$list_guestbook[0].talkId", _td) == (96, None),
