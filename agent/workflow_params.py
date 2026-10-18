@@ -39,6 +39,7 @@ __all__ = [
     "check_call_args",
     "check_workflow_params",
     "expand_template_args",
+    "logger",
     "param_problem_note",
     "tool_arg_schemas",
     "workflow_param_specs",

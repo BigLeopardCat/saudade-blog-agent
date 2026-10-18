@@ -59,6 +59,10 @@ from agent.workflow_params import (
 from agent.workflow_tools import callable_query_tools, explicit_tools
 from tools.base import IOT_ENABLED, IOT_NAV_PATH, nav_path_valid
 
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = ["logger", "instantiate_plan"]
+
 logger = logging.getLogger(__name__)
 
 

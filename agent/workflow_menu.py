@@ -37,6 +37,10 @@ from agent.workflow_params import workflow_param_specs
 from agent.workflow_tools import explicit_tools, param_tools
 from tools.base import IOT_ENABLED
 
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = ["render_tool_marks", "render_workflow_params", "build_planner_context"]
+
 
 def render_tool_marks(text: str, role: str | None) -> str:
     """把技能描述里的工具枚举标记按本轮角色展开（`build_planner_context` 调）。"""

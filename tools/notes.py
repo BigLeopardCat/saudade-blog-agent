@@ -65,6 +65,12 @@ from tools.result import (
     unavailable,
 )
 
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = ["logger", "list_notes", "search_notes", "DOC_TYPE_CN", "get_article_detail",
+           "rag_search", "get_top_notes", "list_categories", "list_tags", "get_announcements",
+           "list_guestbook", "list_my_board", "list_talks", "get_blog_info", "get_social_links"]
+
 logger = logging.getLogger(__name__)
 
 

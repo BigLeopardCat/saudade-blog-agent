@@ -43,6 +43,12 @@ from tools import base as _base
 from tools.base import API_BASE, SITE_BASE
 from tools.result import empty, fact, ok, tgt, unavailable
 
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = ["get_site_map", "get_chat_history", "search_knowledge_base", "get_current_time",
+           "get_weather", "IOT_ENABLED", "IOT_NAV_PATH", "nav_pure_path", "nav_path_valid",
+           "navigate_to", "toggle_effect", "toggle_dark_mode"]
+
 # ---------------------------------------------------------------------------
 # 导航 / 引导工具
 # ---------------------------------------------------------------------------
