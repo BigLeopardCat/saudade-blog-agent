@@ -100,8 +100,12 @@
   // 20261015a = 「欢迎语里填进去的值先转义」那一轮（renderer.js 的 subst：`$1` 会被
   // 填进 `#waifu-tips` 的 innerHTML，值来自 document.title / referrer hostname）。
   // 同上 ⇒ 必须 bump，否则一年内访客拿到的还是"值当标记解析"的那一版。
+  // 20261018a = 「聊天图片落库」那一轮（chat-core.js 新增 `dbRowToItem`、
+  // chat-engine.js 的 `mapDbItems` 改调它——DB 行的 `images` 以前被一个手写白名单吃掉）。
+  // 同上 ⇒ 必须 bump；这一版尤其不能漏：不 bump 的话**图在库里、界面还是占位块**，
+  // 且没有任何东西会红（前端拿的还是旧 chat-engine.js）。
   // 五个同步点见 frontend/README.md。
-  const VER = '20261015a';
+  const VER = '20261018a';
 
   function loadExternalResource(url, type) {
     return new Promise((resolve, reject) => {

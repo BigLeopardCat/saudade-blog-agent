@@ -20,20 +20,20 @@
     "lines": 208
   },
   "agent/graph.py::_confirm_popup": {
-    "c": 87,
-    "lines": 406
+    "c": 58,
+    "lines": 343
   },
   "agent/graph.py::_decide_late_correct": {
-    "c": 49,
-    "lines": 184
+    "c": 43,
+    "lines": 179
   },
   "agent/graph.py::_decide_zero_tool_correct": {
     "c": 55,
     "lines": 193
   },
   "agent/graph.py::_finalize_dedupe": {
-    "c": 49,
-    "lines": 198
+    "c": 48,
+    "lines": 196
   },
   "agent/graph.py::_name_arg_fix": {
     "c": 68,
@@ -48,52 +48,20 @@
     "lines": 229
   },
   "agent/graph.py::execute_node": {
-    "c": 78,
+    "c": 73,
     "lines": 400
   },
   "agent/graph.py::gate_node": {
-    "c": 105,
-    "lines": 451
+    "c": 96,
+    "lines": 448
   },
   "agent/workflow_expand_write.py::_expand_write_workflow": {
     "c": 97,
     "lines": 473
   },
   "agent/workflow_plan.py::_instantiate_plan": {
-    "c": 135,
+    "c": 123,
     "lines": 516
-  },
-  "eval/arm_capability.py::analyze": {
-    "c": 42,
-    "lines": 85
-  },
-  "eval/corpus_terms.py::derive": {
-    "c": 31,
-    "lines": 76
-  },
-  "eval/corpus_terms.py::drift": {
-    "c": 43,
-    "lines": 96
-  },
-  "eval/dial_matrix.py::main": {
-    "c": 37,
-    "lines": 96
-  },
-  "eval/golden_draft.py::main": {
-    "c": 42,
-    "lines": 157
-  },
-  "eval/landing_gate.py::readiness": {
-    "c": 32,
-    "lines": 54
-  },
-  "eval/toolcall_probe.py::main": {
-    "c": 46,
-    "lines": 100
-  },
-  "eval/param_matrix.py::report": {
-    "c": 50,
-    "lines": 84
   },
   "eval/admin_write_probe.py::main": {
     "c": 32,
@@ -119,8 +87,36 @@
     "c": 40,
     "lines": 101
   },
+  "eval/arm_capability.py::analyze": {
+    "c": 42,
+    "lines": 85
+  },
+  "eval/corpus_terms.py::derive": {
+    "c": 31,
+    "lines": 76
+  },
+  "eval/corpus_terms.py::drift": {
+    "c": 39,
+    "lines": 92
+  },
+  "eval/dial_matrix.py::main": {
+    "c": 37,
+    "lines": 96
+  },
+  "eval/golden_draft.py::main": {
+    "c": 42,
+    "lines": 157
+  },
+  "eval/landing_gate.py::readiness": {
+    "c": 32,
+    "lines": 54
+  },
+  "eval/param_matrix.py::report": {
+    "c": 50,
+    "lines": 84
+  },
   "eval/run_golden.py::check_gold": {
-    "c": 244,
+    "c": 242,
     "lines": 601
   },
   "eval/run_golden.py::check_no_popup_premises": {
@@ -134,6 +130,10 @@
   "eval/run_golden.py::run_one": {
     "c": 58,
     "lines": 259
+  },
+  "eval/toolcall_probe.py::main": {
+    "c": 46,
+    "lines": 100
   },
   "eval/trace_reconcile.py::reconcile": {
     "c": 72,
@@ -156,8 +156,8 @@
     "lines": 235
   },
   "server.py::_run_agent_stream_to_queue": {
-    "c": 84,
-    "lines": 608
+    "c": 80,
+    "lines": 600
   },
   "server.py::chat_stream": {
     "c": 14,
@@ -167,13 +167,13 @@
     "c": 43,
     "lines": 257
   },
-  "tests/test_judge_offline.py::main": {
-    "c": 96,
-    "lines": 213
-  },
   "tests/test_artifact_retention.py::main": {
     "c": 38,
     "lines": 170
+  },
+  "tests/test_judge_offline.py::main": {
+    "c": 75,
+    "lines": 205
   },
   "tests/test_landing_gate.py::test_enterprise_criteria": {
     "c": 42,
@@ -187,6 +187,14 @@
     "c": 41,
     "lines": 178
   },
+  "tests/test_style_hygiene.py::main": {
+    "c": 47,
+    "lines": 122
+  },
+  "tests/test_trace_retention.py::main": {
+    "c": 48,
+    "lines": 167
+  },
   "tests/test_workflows.py::test_admin_console_role_channel": {
     "c": 44,
     "lines": 155
@@ -198,14 +206,6 @@
   "tests/test_workflows.py::test_refs": {
     "c": 33,
     "lines": 219
-  },
-  "tests/test_style_hygiene.py::main": {
-    "c": 47,
-    "lines": 122
-  },
-  "tests/test_trace_retention.py::main": {
-    "c": 48,
-    "lines": 167
   },
   "tools/base.py::create_tag": {
     "c": 31,

@@ -126,6 +126,11 @@ _PINNED = {"AGENT_EVIDENCE": "0",
            # 也不同）。要验关档手臂的用例在同一进程里临时拨 `settings.agent_fastpath`。
            "AGENT_FASTPATH": "1",
            "RAG_HYBRID_ENABLED": "0",
+           # `CHECKPOINT_DSN`（20261017 外围准备）：`build_checkpointer()` 不给参数时读
+           # 这一格，而 `test_checkpoint_factory.py` ① 断的正是"不给参数 ⇒ None"——谁在
+           # shell 里 export 过一个非空 DSN，那一条就会**红得与代码无关**。钉空 = 出厂档
+           # 就是"没配 saver"（生产今天也确实没挂）。
+           "CHECKPOINT_DSN": "",
            "SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
 
 

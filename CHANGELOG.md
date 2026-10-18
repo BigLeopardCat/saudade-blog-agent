@@ -115,6 +115,43 @@
   （少了后半条，把守卫整段删掉也全绿）；`test_module_budget.py` 的自检里加了缩小方向的反控
   与"相等不许红"的正控。
 
+- **聊天图片落库，但只做展示——模型仍只看 `[图片]` 标记（跨语言契约，agent 行为零变化）**
+  ——`GET /api/chat/history` 的每条 item 多一个 `images` 键（dataURL 数组，缺席/空数组
+  = 这条消息没有图）。**agent 侧一行代码都没改**：注入给模型的历史仍是
+  `role`/`content` 字符串，`[图片]`/`[图片×N]` 标记原样进 few-shot
+  ⇒ token、成本、行为**一个字节都不变**（这条"零变化"是可验证的：本仓 `tests/` 与
+  golden 里没有任何一条依赖那个标记）。父仓那半：新增 PG 表 `chat_image`（外键
+  `ON DELETE CASCADE` 挂在 `chat_history.id` 上，5 处删除点因此自动覆盖）+
+  响应体字节预算（8 MiB 安全阀）。取舍与"让模型看历史图"的触发条件见
+  [ADR-0013](docs/adr/adr-0013-chat-image-persistence.md)。
+- **本仓这半只动了一个纯函数**：`frontend/public/live2d-widgets/chat-core.js` 新增
+  `dbRowToItem` / `mapDbItems`（从 `chat-engine.js` 搬进来）。搬的理由不是"好看"：
+  原来那是个**手写的白名单对象字面量**，白名单之外的新字段（`images`）**静默消失**
+  ——DB 明明有图、界面照旧渲染"ⓘ图片已过期"占位块，而那段是 IIFE 闭包、**测不到**。
+  搬进 `chat-core.js` 之后它是纯函数，`frontend/tests/chat-core.test.mjs`（`.mjs`
+  ⇒ 进 CI 门禁）能直接喂 DB 行断言"图活到了渲染层、且占位回填没被误触发"。
+  `boot.js` 的 `VER` 随之 bump（同步点在父仓 `frontend/README.md` 那张表）。
+- **静态检查棘轮落地：ruff E/F/I/W 从"散文纪律"变成机械闸（判据，行为零变化）**
+  ——`eval/lint_gate.py` + `eval/lint_baseline.json`（877 条 / 154 个文件）。此前
+  `pyproject.toml` 里那行 `select = ["E","F","I","W"]` 只在 CI 跑一条 `--select F821`，
+  剩下那一大片的唯一约束是文档；而文档自己就记着"20260927 的读数到 20261012 已经漂了"。
+  三条判据：总数变大 / **某个文件**变大 / **基线里没有的文件**带 error（后两条单独报，
+  新文件与"老文件又脏了一点"是两种事故）。**三个量任一换掉退 3**（ruff 版本、
+  `line-length`、`select`）——它们都会改变条目集，换了就不是同一个量。至此本仓四道
+  棘轮同规则：**记基线、只许变小、`--update` 是唯一放宽通道**。
+- **两张手抄的同一张表收敛成一处，判据从"字面相等"改成"行为相等"（行为零变化）**
+  ——① 肯定/否定词表：`agent.skills._norm_true` 与 `tools.base._as_bool` 原本各写一张
+  **一字不差**的元组；② 本地钟面：`server.py::_build_messages` 与
+  `tools.base::get_current_time` 原本各写一张星期表 + 一条 f-string，收敛进 `utils/clock.py`。
+  这两处**必须逐字同形**（模型把系统上下文里的时刻与工具返回的时刻当同一个事实），
+  所以新判据 `tests/test_truth_source_parity.py` 冻结时钟后**比对两侧产出**，而不是
+  断言某处出现某个字符串——锁字面的判据会在有人改格式时红得与事实无关，锁行为的不会。
+  同日删掉两个零引用的死常量（`_NOTE_SLIM_KEYS`、`_QUOTA_REASON_LIMIT`），并把
+  `docs/README.md` 的 ADR 份数、`eval/fixtures/README.md` 的用例条数改成**现算现比**。
+- 说明：这一批**没有一条改变 agent 会说什么/做什么**，全部是"让已有的纪律有个会红的东西"。
+  动机是 20260928 审计的头号结论——本仓最大的失效模式是**人工同步**（同一件事写两处，
+  改一处忘另一处），而此前这几处**没有任何判据同时钉着两侧**。
+
 ## 20261017
 
 - **计划只有一个读法了：对象那一态是唯一事实源，渲染文本退成只给人看**——此前计划的
@@ -152,6 +189,24 @@
   描述里"改成"契约**在**描述里、**不在**参数说明里"；`test_menu_deny` ③ 的靶子从"按契约挑"
   改成"按固定工具序列挑"（契约并进描述后，slim 里"契约行也跟着走了"已成恒真，锁它等于
   锁一条空话）。
+
+- **checkpoint 后端的"外围准备"：依赖进 lock、DSN 有了唯一读方（判据 + 配置面，行为零变化）**
+  ——ADR-0011（图自持上下文）**仍未采纳**，这一笔只把它要用的东西摆到位、**不动"三处一起动"**
+  ⇒ agent 会怎么说话、怎么做**一个字都没变**。三件：① `pyproject.toml` + `uv.lock` 加上
+  `langgraph-checkpoint-postgres==3.1.0` / `psycopg[binary]==3.3.6` / `psycopg-pool==3.3.3`
+  （lock 是**纯新增 111 行、零删除**：`langgraph-checkpoint` 已正好是 4.1.1、`orjson` 也在
+  ⇒ 不牵动任何既有版本）；② `config/settings.py` + `.env.example` 新增 `CHECKPOINT_DSN`
+  （缺省空 = 今天的行为），`agent/checkpoint.py::build_checkpointer()` 的缺省参数改成**读这一格**
+  ——否则它就是一个"填了不生效、也不报错"的幽灵旋钮（`tests/test_settings_surface.py` ① 正是
+  为那一族立的）；③ 判据：`test_checkpoint_factory.py` 新增 ⑦（拨成非空 DSN ⇒ 不给参数的调用
+  必须**响亮抛**，拨回空 ⇒ `None`），`tests/run_all.py::_PINNED` 钉 `CHECKPOINT_DSN=""`
+  （谁在 shell 里 export 过一个非空值，① 会**红得与代码无关**）。⚠️ **填了 `CHECKPOINT_DSN`
+  今天仍然不生效**（`build_checkpointer()` 全仓没有调用方）：接线是"删掉历史注入循环 +
+  `thread_id` 改会话坐标 + `build_graph` 接 saver"三处**同一个提交**，只做第三处会**静默产生
+  双份上下文**。顺带补上一处手抄表：三处"生产 venv 钉死 11 个包"（`docs/rag-design.md` 两处、
+  `docs/multimodal-retrieval.md` 一处）随本笔漂到 14 ⇒ `tests/test_docs_facts.py` 加锁，
+  真值 = `[project].dependencies` 条数。
+
 - **检索分节不再把 ``` 围栏里的行当标题（判据 + 行为）**——`rag/sections.py::split()` 只看
   `^#{1,3}`、不看围栏，而 `.gitignore` / shell / diff 的**示例内容整段住在围栏里**、注释行
   就是 `# …`（与一级标题**逐字同形**）。线上 note:16（Git 教程）因此被切成 11 个**全空**的
