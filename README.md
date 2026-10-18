@@ -176,6 +176,8 @@ gate 失败时生成确定性 fallback，减少再次幻觉的机会。回复不
 
 ```text
 saudade-blog-agent/
+# 下面这张是**缩略图**：只挑读者最常找的几个模块。agent/ 与 tools/ 的**完整地图**
+# （每个模块一行、按族分组）在 docs/agent-architecture.md 的 §2，由 tests/test_module_index.py 双向钉着。
 ├── server.py              FastAPI 入口、SSE 编排、输入限制、并发和取消
 ├── agent/
 │   ├── graph.py           LangGraph 状态、节点和条件边（含声称闸与回执驱动循环）
@@ -189,7 +191,7 @@ saudade-blog-agent/
 │   ├── authz.py           scope 权限模型
 │   ├── principal.py       调用者身份（uid/role/source）的唯一构造点
 │   ├── confirm.py         无状态 HMAC 确认令牌
-│   ├── adminops.py        后台目标解析、写操作确认文案和回执摘要
+│   ├── adminops_tags.py   后台标签/分类/文章状态的确定性层（同族另有 7 个按域拆出的模块）
 │   ├── refs.py            结构化参数引用
 │   ├── entities.py        执行回执实体摘要
 │   ├── tasks.py           跨轮任务状态
@@ -197,7 +199,7 @@ saudade-blog-agent/
 │   ├── prompts.py         ★ 全部模型可见正文（人设 / 叙述纪律 / planner 与 reflector 模板 / 输出契约）
 │   ├── moderator.py       留言 AI 审核侧任务
 │   ├── summarizer.py      对话摘要侧任务
-│   └── …                  其余模块见目录（action_text / factblock / stickers / llm_usage / agent / checkpoint 等）
+│   └── …                  其余 40 余个模块见 docs/agent-architecture.md §2（完整地图，逐条列）
 ├── tools/base.py          67 个工具的注册表（`_TOOL_REGISTRY`；工具本体 20261018 起
 │                          按域拆在 tools/ 各模块里，这里按原名 re-export）+ 共享 HTTP 通道
 ├── rag/search.py          BM25 内存倒排检索
