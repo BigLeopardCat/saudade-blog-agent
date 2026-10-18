@@ -172,7 +172,7 @@ def _narrator_stub(text: str, seen: list | None = None):
 
 def _run(script: list, tools: dict, *, principal=None, model=None,
          msg: str = "带我去首页", grant=None, narrator=None, seen=None,
-         narrator_model=None, executed=None) -> list:
+         narrator_model=None, executed=None, rounds: int = 0) -> list:
     """跑一次 `arm.stream`，收下全部 `(mode, data)` 二元组。
 
     `narrator` / `seen` / `narrator_model` 是 P6 的三个旋钮：默认是"narrator 把脚本里
@@ -181,6 +181,12 @@ def _run(script: list, tools: dict, *, principal=None, model=None,
     `executed` 是生产 `AgentState` 的那一格（"这一轮已经执行过哪些 spec"）——生产由
     `execute_node` 累积，臂不回写它。默认不喂（= 这一轮还没执行过任何东西），
     要造"令牌用在那一件上就作废"的现场（⑥b″）才显式给。
+
+    `rounds` 是 `plan_rounds`（**默认 0 = 首轮**）。20261019 起它与 `grant` 一起决定
+    这一轮走不走"确认轮"那条零 LLM 的通道（生产 `_planner_preflight` 的同一格）：
+    **`grant` 在场且 `rounds == 0` ⇒ 照签名令牌拼计划，模型这一轮根本不被咨询**。
+    所以要造"令牌在场、但这一轮是模型在决策"的现场（⑥b′），必须显式给 `rounds ≥ 1`
+    ——那正是生产里那条路的样子（确认兑现后的续跑轮）。
     """
     R._llm = lambda: (model or _Scripted(messages=iter(script),
                                          ai_message_chunk=iter([])))
@@ -192,7 +198,7 @@ def _run(script: list, tools: dict, *, principal=None, model=None,
     R._real_tools = lambda *a, **k: dict(tools)
     R._system_prompt = lambda *a, **k: "你是测试用助手。"
     cfg = {"configurable": {"principal": principal}} if principal else {}
-    state = {"messages": [HumanMessage(content=msg)]}
+    state = {"messages": [HumanMessage(content=msg)], "plan_rounds": rounds}
     if grant is not None:
         state["confirm_grant"] = grant
     if executed is not None:
@@ -620,13 +626,35 @@ try:
     RAN.clear()
     # 同一件工具、**换一个目标**：令牌是给「大笨狗」的，这句要删的是「别的标签」
     # ⇒ 不是签名体里那一件 ⇒ 照常弹卡。旧判据（`not self.grant`）会在这里放行。
+    #
+    # ⚠️ `rounds=1` 是**必须的**（20261019 补）：首轮 + 令牌在场时，这一轮走的是
+    # **确认轮**（照签名令牌拼计划，模型不被咨询）⇒ 模型根本没有机会点出「别的标签」，
+    # 这条判据也就无从判起。要判 `_grant_covers`，现场必须落在**模型真在决策的那一轮**
+    # ——生产里那就是确认兑现后的续跑轮（`rounds > 0`，`_planner_preflight` 的
+    # `resumed` 分支）。改成 0 的话这条会变成恒真/恒假的假判据。
     _gf3 = _run([_call("tag_delete", name="别的标签")], {"delete_tag": _nav_tool},
-                principal=ADMIN0, msg=W_MSG,
+                principal=ADMIN0, msg=W_MSG, rounds=1,
                 grant={"workflow": "tag_delete",
                        "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]})
     check("令牌是**另一件**（同工具换目标）⇒ 一件都不执行、照常弹卡",
           RAN == [] and bool(_last_node(_gf3, "execute").get("pending_confirm")),
           f"RAN={RAN}")
+
+    print("\n⑥b‴ 首轮 + 令牌在场 ⇒ **确认轮**（零 LLM 照签名执行，这句说什么都不问）")
+    RAN.clear()
+    # 与 ⑥b′ **同一个现场**、只差 `rounds`：这一格判的是"确认轮有没有接上"。
+    # 生产 `_planner_preflight` 的第一条分支就是它，而它压过模型决策是**刻意的**
+    # （"不给模型重新理解一遍主人想要什么的机会"）⇒ 所以这里的期望是**签名体那件
+    # 执行了**、而不是弹卡。这条同时是 ⑥b′ 的**前提守卫**：它红了，⑥b′ 的
+    # `rounds=1` 就是在遮一个没接上的确认轮。
+    _gf3b = _run([_call("tag_delete", name="别的标签")], {"delete_tag": _nav_tool},
+                 principal=ADMIN0, msg=W_MSG, rounds=0,
+                 grant={"workflow": "tag_delete",
+                        "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]})
+    check("执行的是**签名体里那件**（大笨狗），不是这句里说的那件",
+          len(RAN) == 1 and RAN[0].get("name") == "大笨狗", f"RAN={RAN}")
+    check("且不弹卡（令牌已经覆盖它）",
+          not _last_node(_gf3b, "execute").get("pending_confirm"))
 
     print("\n⑥b″ 令牌**用在那一件上就作废**（20261012 第二次收窄：同一件写静默落库三份）")
     RAN.clear()

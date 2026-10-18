@@ -154,6 +154,7 @@ flowchart TB
 │   ├── frame_contract.py              # 帧契约：第二条臂与生产（graph.py / server.py）之间的唯一事实源
 │   ├── react_arm.py           # golden 第二条臂（GOLDEN_ARM=react）
 │   ├── react_line.py          # ReAct 试验线：把现网攒下的收敛判据 / 工具级回执装到第二条臂上
+│   ├── react_parity.py        # 第二条臂**借生产资产**的唯一入口：确认轮/写拒绝链/剔空纠偏/收尾去重 都 import `graph.py`，只接线不抄判据
 │   ├── checkpoint.py          # checkpointer 的**接线点**与级联清理（空 DSN 恒返回 None，见 §4.6）
 │   ├── checkpoint_arm.py      # golden 第三条臂（GOLDEN_ARM=checkpoint）
 │   ├── checkpoint_delta_arm.py # golden 第四条臂（GOLDEN_ARM=checkpoint_delta，臂 C）

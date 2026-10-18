@@ -176,6 +176,9 @@ from agent.planner_llm import build_tool_schema
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
                               wrap_up_text)
+# 借生产那几件的**唯一入口**（20261019）。本模块只接线，判据都在 `agent/graph.py` 里；
+# 各段的接法与理由见 `agent/react_parity.py` 的模块头注。
+from agent.react_parity import confirm_round, plan_has_tools
 from agent.arg_refs import ref_hints
 from agent.workflow_plan import instantiate_plan
 from agent.stickers import repair_sticker_tokens
@@ -471,6 +474,21 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     rounds = int(state.get("plan_rounds") or 0)
     messages = list(state.get("messages") or [])
 
+    # ⓪ 确认轮（生产 `graph._planner_preflight` 的同一格，20261019 接上）：主人在确认框上
+    #    点了确定 ⇒ **零 LLM 照签名令牌拼计划**。判据与两条分支的理由在
+    #    `agent.react_parity.confirm_round` 的头注里（那一份是唯一事实源）。
+    #
+    #    位置照生产：**在预算判据之前**。理由不是"顺序好看"——确认轮是"这句话已经被主人
+    #    签过字了"，它不该被任何"这一轮还该不该再决策"的预算判据挡下；而受阻那一支
+    #    （`rounds > 0`）本来就是靠 `_wrap_up_plan` 收尾，与预算收尾是同一件事、措辞不同。
+    _cf = confirm_round(state.get("confirm_grant"), rounds,
+                        bool(state.get("blocked")), messages)
+    if _cf is not None:
+        _plan, _ev, _payload = _cf
+        record("planner", _ev, **_payload)
+        ctx["decided"] = "execute" if plan_has_tools(_plan) else "model"
+        return _plan_update(_plan, rounds)
+
     # ① 预算判据（原 `ConvergenceMiddleware.before_model`）：撞预算的那一轮**照样执行**，
     #    停的是"再来一轮"——判在拿到模型输出之后会把模型已经点名的调用整个吞掉（用户
     #    等了半天，动作没发生）。
@@ -624,7 +642,13 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         for ci, c in enumerate(calls):
             workflow = str((c or {}).get("workflow") or "")
             n_before = len(executor.calls)
-            text, n_tools = executor.run(workflow, dict((c or {}).get("params") or {}))
+            # 清单**已定稿**的调用（确认轮的签名体、特效切换快道的双 spec）走
+            # `run_specs`：它们的产出**本身就是**计划，再实例化一次会把它改坏
+            # （理由见 `react_line.WorkflowExecutor.run_specs` 的 docstring）。
+            _final = (c or {}).get("specs")
+            text, n_tools = (executor.run_specs(workflow, [str(s) for s in _final])
+                             if _final else
+                             executor.run(workflow, dict((c or {}).get("params") or {})))
             if not n_tools:
                 # 纯应答技能（chat 一类）：零工具 ⇒ **不发帧**（生产那一轮
                 # `if not specs: return {"messages": []}` 同款）。结果只喂模型

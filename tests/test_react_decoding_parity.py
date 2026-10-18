@@ -105,20 +105,24 @@ def _solo(calls: list[dict[str, tuple[str, str]]], where: str) -> dict[str, tupl
     return calls[0] if calls else {}
 
 
-def main() -> int:
-    prod_calls = _calls_by_func(ROOT / "agent" / "graph.py")
-    arm_calls = _calls_by_func(ROOT / "agent" / "react_arm.py")
+def _prod_planner_kwargs(prod_calls: dict) -> dict[str, tuple[str, str]]:
+    """生产 planner 那一处 `get_llm(...)` 的实参表。
 
-    # 生产 planner 那一处：用**只属于它**的关键字认出来，不写函数名、不写行号
-    # （函数名会改名、行号会被上面几行注释顶走，两者都不是身份）。
+    认它用的是**只属于它的关键字** `planner_native_max_tokens`，不写函数名也不写行号
+    ——函数名会改名（实测那一处住在 `_planner_setup` 里、不叫 `planner_node`）、行号会
+    被上面几行注释顶走，两者都不是身份。**恰好一处**是判据的一部分：两处就说明
+    planner 的 LLM 客户端有两个产地，而"两臂同源"这句话就无从说起。
+    """
     hits = [(fn, c) for fn, cs in prod_calls.items() for c in cs
             if c.get("max_tokens") == ("setting", "planner_native_max_tokens")]
     print("\n① 认出生产 planner 那一处 `get_llm(...)`")
     check("全仓 graph.py 里恰好一处带 `planner_native_max_tokens` 的调用",
           len(hits) == 1, str([fn for fn, _ in hits]))
-    prod = hits[0][1] if len(hits) == 1 else {}
+    return hits[0][1] if len(hits) == 1 else {}
 
-    # ── ① 形状：react 的 `_llm` 零字面量 ─────────────────────────────────────
+
+def _check_shape(arm_calls: dict) -> dict[str, tuple[str, str]]:
+    """② 形状：`_llm` 的每个关键字实参都是 `settings.<name>`（零字面量）。"""
     print("\n② 形状：`_llm` 的每个关键字实参都是 `settings.<name>`（零字面量）")
     arm = _solo(arm_calls.get("_llm", []), "react `_llm`")
     bad = {kw: v for kw, v in arm.items() if v[0] != "setting"}
@@ -126,8 +130,11 @@ def main() -> int:
     check("四个旋钮都在（漏一个就是把那一格还给了默认值）",
           set(arm) == {"temperature", "max_tokens", "timeout", "enable_thinking"},
           str(sorted(arm)))
+    return arm
 
-    # ── ② 同源：与生产逐格比对 ───────────────────────────────────────────────
+
+def _check_same_source(prod: dict, arm: dict) -> dict[str, str]:
+    """③ 同源：与生产 planner 逐格比对（关键字名 → settings 属性名）。"""
     print("\n③ 同源：与生产 planner 逐格比对（关键字名 → settings 属性名）")
     pm, am = _setting_map(prod), _setting_map(arm)
     check("生产那一处也是全 `settings.<name>`", pm is not None, str(prod))
@@ -138,26 +145,34 @@ def main() -> int:
     check("**逐格指向同一个 settings 属性**", not diff, str(diff))
     for k in sorted(pm or {}):
         print(f"      {k:<16} ← settings.{pm[k]}")
+    return pm or {}
 
-    # ── ③ 运行时：哨兵值必须原样传下去 ───────────────────────────────────────
-    print("\n④ 运行时：四格 settings 各设一个哨兵值，`_llm()` 原样传下去")
-    # 期望值**从生产实参表派生**：生产哪天加第五个旋钮，这条当场红。
-    sentinels = {"planner_temperature": 0.37, "planner_native_max_tokens": 4321,
-                 "planner_native_timeout": 77, "planner_native_thinking": True}
-    expect = {kw: sentinels[attr] for kw, attr in (pm or {}).items() if attr in sentinels}
-    check("四格哨兵都落在了生产的实参表里（映射没漏）", len(expect) == len(pm or {}) == 4,
-          f"expect={sorted(expect)}")
 
+def _spy_llm() -> tuple[object, dict]:
+    """记录实参的 `get_llm` 替身 → `(替身, 它会填的那只表)`。"""
     seen: dict[str, object] = {}
-    old_settings = {k: getattr(settings, k) for k in sentinels}
-    old_get_llm = R.get_llm
 
     def _spy(**kw):
         seen.clear()
         seen.update(kw)
         return object()
 
-    R.get_llm = _spy
+    return _spy, seen
+
+
+def _check_runtime(pm: dict[str, str]) -> tuple[dict[str, object], dict[str, object]]:
+    """④ 运行时：四格 settings 各设哨兵值，`_llm()` 必须原样传下去。"""
+    print("\n④ 运行时：四格 settings 各设一个哨兵值，`_llm()` 原样传下去")
+    # 期望值**从生产实参表派生**：生产哪天加第五个旋钮，这条当场红。
+    sentinels = {"planner_temperature": 0.37, "planner_native_max_tokens": 4321,
+                 "planner_native_timeout": 77, "planner_native_thinking": True}
+    expect = {kw: sentinels[attr] for kw, attr in pm.items() if attr in sentinels}
+    check("四格哨兵都落在了生产的实参表里（映射没漏）", len(expect) == len(pm) == 4,
+          f"expect={sorted(expect)}")
+    spy, seen = _spy_llm()
+    old_settings = {k: getattr(settings, k) for k in sentinels}
+    old_get_llm = R.get_llm
+    R.get_llm = spy
     try:
         for k, v in sentinels.items():
             setattr(settings, k, v)
@@ -166,34 +181,43 @@ def main() -> int:
         R.get_llm = old_get_llm
         for k, v in old_settings.items():
             setattr(settings, k, v)
-
     check("`_llm()` 传下去的实参表 == 生产那张表（名字与值都对上）",
           seen == expect, f"seen={seen} expect={expect}")
+    return seen, expect
 
-    # ── ④ narrator 那份同样同源 ──────────────────────────────────────────────
+
+def _check_narrator(prod_calls: dict, arm_calls: dict) -> None:
+    """⑤ narrator 那份也同源（`_narrator_llm()` 对生产 `model_node`）。"""
     print("\n⑤ narrator 那份也同源（`_narrator_llm()` 对生产 `model_node`）")
     prod_nar = _solo(prod_calls.get("model_node", []), "生产 `model_node`")
     arm_nar = _solo(arm_calls.get("_narrator_llm", []), "react `_narrator_llm`")
     check("两边关键字名与实参逐格相同", prod_nar == arm_nar,
           f"prod={prod_nar} arm={arm_nar}")
 
-    # ── ⑤⑥ 反控：判据必须能红 ───────────────────────────────────────────────
+
+def _check_controls(pm: dict[str, str]) -> None:
+    """⑥⑦ 反控：两条判据都必须能红（否则上面那一整套是装饰）。"""
     print("\n⑥ 反控 · AST：一段硬写字面量的源码必须被判红")
     fake = ast.parse(
         "def _llm():\n"
         "    return get_llm(temperature=0.2, max_tokens=settings.planner_native_max_tokens)\n"
     )
-    fn = fake.body[0]
     fake_kwargs = [{kw.arg: _classify(kw.value) for kw in c.keywords}
-                   for c in _iter_get_llm(fn)]
+                   for c in _iter_get_llm(fake.body[0])]
     check("那一格被认成字面量（不是 setting）",
-          fake_kwargs and fake_kwargs[0].get("temperature") == ("literal", "0.2"),
+          bool(fake_kwargs) and fake_kwargs[0].get("temperature") == ("literal", "0.2"),
           str(fake_kwargs))
-    check("⇒ ② 的判据在它身上会红", _setting_map(fake_kwargs[0]) is None)
+    check("⇒ ② 的判据在它身上会红",
+          bool(fake_kwargs) and _setting_map(fake_kwargs[0]) is None)
 
     print("\n⑦ 反控 · 运行时：硬写温度的 `_llm` 必须让 ④ 塌掉")
-    old_llm = R._llm
-    R.get_llm = _spy
+    sentinels = {"planner_temperature": 0.37, "planner_native_max_tokens": 4321,
+                 "planner_native_timeout": 77, "planner_native_thinking": True}
+    expect = {kw: sentinels[attr] for kw, attr in pm.items() if attr in sentinels}
+    spy, seen = _spy_llm()
+    old_settings = {k: getattr(settings, k) for k in sentinels}
+    old_llm, old_get_llm = R._llm, R.get_llm
+    R.get_llm = spy
     try:
         R._llm = lambda: R.get_llm(temperature=0.2, max_tokens=4321,
                                    timeout=77, enable_thinking=True)
@@ -201,11 +225,19 @@ def main() -> int:
             setattr(settings, k, v)
         R._llm()
     finally:
-        R._llm = old_llm
-        R.get_llm = old_get_llm
+        R._llm, R.get_llm = old_llm, old_get_llm
         for k, v in old_settings.items():
             setattr(settings, k, v)
     check("它传下去的温度与哨兵不符 ⇒ ④ 当场红", seen != expect, f"seen={seen}")
+
+
+def main() -> int:
+    prod_calls = _calls_by_func(ROOT / "agent" / "graph.py")
+    arm_calls = _calls_by_func(ROOT / "agent" / "react_arm.py")
+    pm = _check_same_source(_prod_planner_kwargs(prod_calls), _check_shape(arm_calls))
+    _check_runtime(pm)
+    _check_narrator(prod_calls, arm_calls)
+    _check_controls(pm)
 
     print(f"\n{'=' * 60}")
     if FAILS:
