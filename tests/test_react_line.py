@@ -195,6 +195,36 @@ def main() -> int:  # noqa: C901
           str(_led_u.block_reasons()))
     check("管理员则放行（闸不是「一律拦」）", not authz_deny(ADMIN, "list_accounts"))
 
+    # ── ⑤b 同意帧的**反极性变体**（20261019 资产对齐 I）─────────────────────
+    # 主人说的是「取消收藏文章 12」，模型排的是**反极性兄弟** `add_favorite`。这时的
+    # 问题不是"要不要做"而是"**你排反了**"——而本线此前一律用 `authz.consent_frame`
+    # ⇒ 模型只收到一句"要不要做"，恰恰是它已经答错的那个问题（生产
+    # `graph.execute_node` 那一格用的是 `consent_block_frame`，`action_conflict` 为真
+    # 时改口）。
+    print("\n⑤b 反极性改选：帧文说「你排反了」，不是「要不要做」")
+    led = RunLedger()
+    _atxt, _an = WorkflowExecutor({"add_favorite": lambda **kw: "已收藏"}, led,
+                               role="admin", principal=ADMIN,
+                               user_msg="取消收藏文章 12").run(
+        "favorite_add", {"article_id": 12})
+    check("**零执行**（反极性那一件不许当成办成了）",
+          _an == 0 and not led.receipts and len(led.pending) == 1,
+          f"n={_an} receipts={len(led.receipts)} pending={len(led.pending)}")
+    check("帧文带 `action_conflict` 原因码（`_check_spec` 认得出 ⇒ 模型读得到「你排反了」）",
+          authz.action_conflict_error_reason(_atxt) == "action_conflict", _atxt[:90])
+    check("帧文点名主人要的是哪一件（工具名，不是中文动作词——那张表只会漂）",
+          "remove_favorite" in _atxt, _atxt[:140])
+
+    print("  （负控：主人这句话**不是**反极性 ⇒ 仍是普通同意帧，不是恒判「排反了」）")
+    _led2 = RunLedger()
+    _ptxt, _pn = WorkflowExecutor({"add_favorite": lambda **kw: "已收藏"}, _led2,
+                               role="admin", principal=ADMIN,
+                               user_msg="收藏文章 12 会不会通知作者？").run(
+        "favorite_add", {"article_id": 12})
+    check("普通同意帧：原因码是 `consent_required`、且**没有**反极性那一段",
+          _pn == 0 and authz.consent_error_reason(_ptxt) == "consent_required"
+          and authz.action_conflict_error_reason(_ptxt) is None, _ptxt[:90])
+
     # ── ⑥ 收敛判据（纯函数）：入口相 / 出口相 ─────────────────────────────
     print("\n⑥ 收敛判据：`rounds >= budget` 只在**入口相**（`last_ai is None`）判")
     _empty = RunLedger()

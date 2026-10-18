@@ -172,7 +172,7 @@ from agent.graph import (AgentCancelled, AgentState, _EXECUTOR_PROMPT,
 from agent.planner_llm import build_tool_schema
 from agent.prompt_context import (_frame_texts, _has_frames,
                            _last_assistant_utterance, _last_user_msg, _page_ctx,
-                           _receipts_text, with_tool_call_pairs)
+                           _prev_user_msg, _receipts_text, with_tool_call_pairs)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
                               spec_signature, wrap_up_text)
@@ -1076,7 +1076,17 @@ class ReactGoldenArm:
 
         principal = _principal_of(config)
         role = principal.known_role
-        user_msg = _last_user_msg(messages)
+        # 「主人这一轮说了什么」只有**一个**来源（20261019 资产对齐 I）：规则与生产
+        # `graph._intent_src` 逐字同——确认兑现轮（`confirm_grant` 在场）读的是
+        # **主人原话**（倒数第二条 HumanMessage），不是前端在点「确定」时合成的卡面
+        # 文本（「确认执行：…吗？点「确定」我就去办。」是**我们自己的话**）。
+        #
+        # 判错源的代价生产侧记过两次（见 `_intent_src` 的长注）：`_confirm_popup` 见
+        # 问号判"像提问"⇒ **第二张卡根本不弹**；同意闸 `consent_granted(name, 卡面文本)`
+        # 恒假 ⇒ 那一件写落成 `consent_required` BLOCK。臂这边同一处：`action_conflict`
+        # （反极性改选）、写目标拒绝链的名字地基、剔空纠偏读的都是 `ctx["user_msg"]`。
+        user_msg = ((_prev_user_msg(messages) or _last_user_msg(messages))
+                    if src.get("confirm_grant") else _last_user_msg(messages))
         conf = dict((config or {}).get("configurable") or {})
         # **注入点**：调用方自带 `react_ctx` 就用它（离线探针要读那本账——生产与单测都
         # 不传）。自带就意味着**连 `ledger`/`executor` 一起自带**：这两件是"一次运行一个
