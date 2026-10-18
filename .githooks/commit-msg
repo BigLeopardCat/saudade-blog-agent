@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# 提交信息闸门（20261018）。规范本体**只写在** CONTRIBUTING.md 的《3. 提交约定》一节；
+# 这里只放几条**机器判得了**的，判不了的（比如"为什么"该写进正文）留给人工。
+#
+# 两种用法，共用这一份实现：
+#   · 本机：跑一次 `bash scripts/dev/install-hooks.sh`（= `git config core.hooksPath .githooks`），
+#     此后每次 `git commit` 自动跑，git 会把消息文件路径当参数传进来；
+#   · CI：`.github/workflows/eval.yml` 对本次 push 带来的每一条提交跑**同一个文件**
+#     （`bash .githooks/commit-msg <临时文件>`）。**必须在 CI 里也跑一遍**：`core.hooksPath`
+#     是 git 的本地配置（`.git/config`，不入库），不会被 clone 带走 ⇒ 只挂本机钩子等于
+#     "闸门只对配过 install-hooks.sh 的人生效"，而那正是本仓最贵的那类失效
+#     （"看着在跑、其实没跑"）。
+#
+# 实现从父仓 `Saudade-Blog/.githooks/commit-msg`（20261003 那份）移植，**规则文本不另抄**；
+# 唯一按本仓改的是 type 白名单——本仓是八个（父仓十个，多 `style` / `build`），
+# 而"八个"这件事的真值在 CONTRIBUTING.md，`tests/test_commit_msg_hook.py` 会**逐字对撞**两边。
+#
+# 判据（逐条对着 CONTRIBUTING.md 那一节）：
+#   ① 首行 ≤ 60 字符（**中文按 1 个字算**，不是字节数）；
+#   ② 首行 `type: 描述`，type 在白名单里、冒号后有空格；
+#   ③ 有正文时，首行与正文之间必须空一行；
+#   ④ 不许出现 `Co-Authored-By` / 共同作者署名这类 trailer。
+# 豁免：`Merge` / `Revert` / `fixup!` / `squash!` 打头的首行（都不是人写的正文）。
+set -euo pipefail
+
+MSG_FILE="${1:-}"
+if [ -z "$MSG_FILE" ] || [ ! -f "$MSG_FILE" ]; then
+  echo "commit-msg：需要提交信息文件的路径（git 会自己传；CI 里传临时文件）" >&2
+  exit 2
+fi
+
+# 剥掉 `#` 注释行（git 的提交模板、`commit --verbose` 都会往消息文件里塞），
+# 命令替换顺带吃掉尾部空行 ⇒ 后面按行处理不必再兜尾。
+MSG="$(sed '/^#/d' "$MSG_FILE")"
+[ -n "$MSG" ] || exit 0          # 全空：空提交信息由 git 自己拦，不在这里重复报错
+
+SUBJECT="${MSG%%$'\n'*}"
+
+case "$SUBJECT" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
+esac
+
+# 字符数而不是字节数：`LC_ALL=C` 时 bash 的 ${#v} 数的是字节（中文一个字变 3 字节，
+# 20 字的正常摘要会被误判成 60+）。python3 不受 locale 影响，本仓本来就要求 Python 3.12。
+# 真没有 python3 才退回 ${#v}，并把这件事说出来。
+char_len() {
+  if command -v python3 >/dev/null 2>&1; then
+    # 走 stdin 而不是 argv：首行以 `-` 打头时 `python3 -c … "$1"` 会把它当选项解析
+    printf '%s' "$1" | python3 -c 'import sys; print(len(sys.stdin.read()))'
+  else
+    echo "commit-msg：没找到 python3，按当前 locale 数字节（UTF-8 之外的 locale 会误判）" >&2
+    printf '%s' "${#1}"
+  fi
+}
+
+N="$(char_len "$SUBJECT")"
+
+fail() {
+  echo "" >&2
+  echo "✗ 提交信息不合规：$1" >&2
+  echo "  首行：$SUBJECT" >&2
+  echo "  规范：CONTRIBUTING.md 的《3. 提交约定》一节（首行 ≤60 字符 + type 白名单 + 空行 + 正文 '-' 列表）" >&2
+  exit 1
+}
+
+[ "$N" -le 60 ] || fail "首行 $N 字符，超过 60"
+
+# type 白名单。允许 `type(scope): …` 这种带范围括号的写法（本仓没在用，但别让人
+# 为了过闸门而删掉一个合理的范围标注）。冒号后必须有空格：`fix:xxx` 在 `--oneline` 里
+# 读起来是黏在一起的。
+PREFIX="${SUBJECT%%:*}"
+TYPE="${PREFIX%%(*}"
+if [ "$PREFIX" = "$SUBJECT" ]; then
+  fail "首行没有 'type: ' 前缀"
+fi
+case "$TYPE" in
+  feat|fix|refactor|docs|test|chore|perf|ci) ;;
+  *) fail "type『$TYPE』不在白名单（feat/fix/refactor/docs/test/chore/perf/ci）" ;;
+esac
+REST="${SUBJECT#*: }"
+[ "$REST" != "$SUBJECT" ] || fail "冒号后要有一个空格（写成 '$TYPE: 描述'）"
+[ -n "$REST" ] || fail "冒号后面没有描述"
+
+# 有正文时，首行与正文之间必须空一行。只看"第二行在不在"：只有一行的提交信息是合法的。
+SECOND="$(printf '%s\n' "$MSG" | sed -n '2p')"
+if [ "$(printf '%s\n' "$MSG" | wc -l)" -gt 1 ] && [ -n "$SECOND" ]; then
+  fail "首行与正文之间要空一行（第二行现在有字）"
+fi
+
+if printf '%s\n' "$MSG" | grep -qi '^co-authored-by:'; then
+  fail "不许加 Co-Authored-By / 共同作者署名"
+fi
+
+exit 0

@@ -41,6 +41,11 @@ jobs:
       PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 提交信息闸门要跑 `git log BEFORE..SHA`（比本次 push 带来的那个区间），
+          # 而默认的 `fetch-depth: 1` 只有一条提交 ⇒ 每一步都会落进"取不到基线 ⇒ 跳过"，
+          # **闸门看着在跑、其实一次都没判**（本仓最贵的那类失效）。
+          fetch-depth: 0
 
       # 跨语言守卫（断言 Rust 侧真有那个臂/那个键/那个字面）此前在 CI 里**恒跳过**：CI 只
       # checkout agent 仓，而父仓私有 ⇒ 最需要它的地方从不运行，本机绿、CI 也绿，两侧谁都没
@@ -110,6 +115,46 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --frozen
+
+      # 提交信息闸门（20261018）。规则的正文**只写在** `CONTRIBUTING.md` 的《3. 提交约定》，
+      # 这里跑的就是那份钩子脚本本身（`.githooks/commit-msg`）——**一份实现两处共用**。
+      # 为什么 CI 也要跑一遍：`core.hooksPath` 是 git 的本地配置（`.git/config`，不入库），
+      # 不会被 clone 带走 ⇒ 只挂本机钩子等于"闸门只对配过 `scripts/dev/install-hooks.sh`
+      # 的人生效"。这一层不依赖任何人的本地配置，它才是闸门。
+      # ⚠️ 这里**必须**直接调 `.githooks/commit-msg`，不许改调 `tests/test_commit_msg_hook.py`：
+      # `tests/test_ci_suite_list.py` ① 判的是"套件清单只有 `tests/run_all.py` 一处"，
+      # 逐套件点名会让那一条当场红。那个套件自己（钩子在不在、坏消息会不会被拒、
+      # type 白名单与 CONTRIBUTING 是否逐字同源）走下面的 `run_all.py`。
+      # 本仓没有 `.github/dependabot.yml`（`tests/test_packaging.py` ③ 判着），所以这里
+      # **不做**父仓那份 dependabot 豁免。真启用机器人时它会在这里红——那是一次可见的、
+      # 需要人加一行豁免的红，而不是一个"首行长度不由人控制"的慢性假红。
+      - name: 提交信息闸门（与本地同一份 .githooks/commit-msg）
+        env:
+          # PR 上没有 `github.event.before`（那不是 push 事件）。本 workflow 目前只
+          # `push: branches: [main]`，所以这里只取 before；将来加了 `pull_request`，
+          # 照父仓那份补 `|| github.event.pull_request.base.sha`。
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            # 首推/强推/新建分支时 before 是全 0 或已被回收 —— 取不到基线就整段跳过。
+            # 宁可漏一次也别在这里造一个假红（它没有可对照的范围）。**响亮地**说出来：
+            # "跳过"不是"通过"。
+            echo "取不到 base 提交 ${BEFORE} ⇒ 本次跳过提交信息校验（**不是**通过）"
+            exit 0
+          fi
+          fail=0
+          MSGFILE="$(mktemp)"
+          while read -r sha; do
+            [ -n "$sha" ] || continue
+            git log -1 --format=%B "$sha" > "$MSGFILE"
+            if ! bash .githooks/commit-msg "$MSGFILE"; then
+              echo "::error::提交 ${sha:0:9} 的信息不合规（见上面的说明）"
+              fail=1
+            fi
+          done < <(git log --no-merges --format=%H "${BEFORE}..${SHA}")
+          exit "$fail"
 
       # 套件清单**只有一处事实源**：`tests/run_all.py` 按**磁盘**枚举 `tests/*.py`
       # （`_` 开头的辅助模块与 run_all 自己除外）。此前这里是**手工维护**的名单（一个套件一个
