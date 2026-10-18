@@ -28,7 +28,7 @@
 
 | 面 | 现状 | 证据 |
 |---|---|---|
-| 断点恢复 | 建账时**无**：生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机。**"挂没挂"现在看得见了**（**已补**：批 6a，`/health` 的 `checkpoint_backend`；半接会被 `tests/test_checkpoint_adoption.py` 判红）。**接线已落地**（**已补**：批 7，"三处一起动"共用同一个判据）——**但生产是否在跑仍取决于 `CHECKPOINT_DSN`**，空则与从前逐字节相同 | `agent/checkpoint.py`、`server.py` |
+| 断点恢复 | 建账时**无**：生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机。**"挂没挂"现在看得见了**（**已补**：批 6a，`/health` 的 `checkpoint_backend`；半接会被 `tests/test_checkpoint_adoption.py` 判红）。**接线已落地**（**已补**：批 7，"三处一起动"共用同一个判据），且 **20261018 起生产真的在跑**（`/health` 回 `postgres`）。⚠️ **但它现在指在业务库上**——20261019 批 B 反转了"指哪个库"的口径（**必须独立库**）、加了 `dials.checkpoint_db` 与 `CHECKPOINT_FORBID_DB` 硬闸，**挪库那一步归主人**（顺序见批 7 的运维交接） | `agent/checkpoint.py`、`server.py` |
 | 幂等账 | **已建成但惰性**：`agent/idem.py` 的 `active()` 要求 checkpointer 在场 ⇒ 恒 False | `agent/idem.py` |
 | 版本可见性 | **无** `/version`、无 build-info；`/health` 只回声 dials （**已补**：批 3，`agent/probe.version_payload`） | `server.py`、`agent/probe.py` |
 | 错误码 | BLOCK 原因码**已有闭集**（`agent/block_reasons.py` + `tests/test_block_reasons.py`）；**发射侧**没有对应闭集 | 同上 |
@@ -376,12 +376,22 @@ saver 挂上之后历史注入被闸门关掉，而**没有任何"播种"路径*
    《迁移到 PG》；建表那一步是**轮询抢锁 + 预算**，4 个 worker 同时启动安全）。
    ⚠️ **DSN 指向哪个库是要挑的**：它会在那个库里建 4 张表
    （`checkpoints` / `checkpoint_writes` / `checkpoint_blobs` + 幂等账 `agent_write_idem`），
-   这些是**本 agent 自己的表**、与博客业务表不重名；但**别指错库**。
-   · 生产候选 = **`saudade_blog`**（`saudade_app` 有 CREATE，且 20261018 那次实验已经在那里
-     建到 `max(v)=5`、没有无效索引 ⇒ 这次启动会从 6 继续跑到底）。
+   这些是**本 agent 自己的表**、与博客业务表不重名 ⇒ **建错库不报错**，这才是危险的地方。
+   · **必须指一个业务库之外的独立库**（同一实例、新建一个 database 即可，要有 CREATE 权限）。
+     理由：saver 建表走 `PostgresSaver.setup()`、**没有编号迁移**；而业务库的结构只许由父仓的
+     **编号迁移**改（父仓的迁移校验脚本 `verify_parity.py` ⓪ 段判的正是"业务库里不该有
+     checkpoint 表"）⇒ 指进业务库等于在业务库上开一条**没人编号、不在 CI 里**的 DDL 通道。
+   · ⚠️ **本段口径 20261019 反转**（原文写着"生产候选 = `saudade_blog`"＋"**不建议**再另起一个
+     专库"）：采纳的第一版按那个口径指的**就是业务库**。取舍作废——少一个库省的是一行 DSN，
+     换来的是业务库结构多一条**无编号**的改动路径。**独立库的名字不写进本仓**（本仓是公开仓，
+     运维坐标不落仓）；完整理由与"旧数据不迁"见 `agent/checkpoint.py` 头注《DSN 指向哪个库》。
    · **`agent_checkpoint` 不归生产**：那是实验线（`/home/ubuntu/exp/ckpt.env`，owner `agent_ckpt`）
      的库，别拿它当生产 saver 的家。
-   · 全新库也行（要有 CREATE 权限）。**不建议**再另起一个专库——多一个库就多一份要记的运维面。
+   · **旧数据不迁**：checkpoint 是**派生上下文**，换库最坏退化成"老会话第一轮看不见历史"
+     （上面那条已知缺口），而迁的代价是两套库坐标从此要一起维护。
+   · **「指错库」现在看得见**：`/health` 的 `dials.checkpoint_db` 回**库名**（脱敏后，
+     与 `checkpoint_backend` 合起来读）；要变成硬闸就配 `CHECKPOINT_FORBID_DB`（缺省空 = 不拦，
+     填的是**业务库**的库名）。
    `.venv` 里 `langgraph.checkpoint.postgres` / `psycopg` / `psycopg_pool` **已在**。
    ⚠️ **如果这个库上还有上一次被打断留下的痕迹**（迁移停在中间、或
    `SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE NOT i.indisvalid`
@@ -401,12 +411,34 @@ saver 挂上之后历史注入被闸门关掉，而**没有任何"播种"路径*
    旧版才会成环（现在这一版是 try-lock + 60s 预算，最坏是一条点名的启动错误）；
    **真遇到了**：`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE …` 点掉
    那几个后端，`systemctl restart` 就会立刻回来。
-3. **读回执**（**唯一能证明它在跑的东西**）：
+3. **读回执**（**唯一能证明它在跑的东西**）：两格一起读——一格是"挂没挂"，
+   另一格是"指到哪个库"：
    ```bash
-   curl -s http://127.0.0.1:8010/health | python3 -c 'import json,sys;print(json.load(sys.stdin)["dials"]["checkpoint_backend"])'
+   curl -s http://127.0.0.1:8010/health | python3 -c 'import json,sys;d=json.load(sys.stdin)["dials"];print(d["checkpoint_backend"], d["checkpoint_db"])'
    ```
    要看到 `postgres`。看到 `none` ⇒ DSN 没读到（`SAUDADE_IGNORE_ENV_FILE`？）；
    看到 `unknown` ⇒ 图那个对象上读不出 saver。**`none`/`unknown` 都算没接上**。
+   `checkpoint_db` 那一格回的是 **DSN 指的库名**（20261019 批 B 加的）——它必须是
+   **业务库之外**的独立库（见上面那一段）；`""` = 没配 DSN，`unknown` = 配了但解析不出库名。
+
+#### ⚠️ 20261019 追加：DSN 现在指着**业务库**，要挪走（**顺序不能反**）
+
+实测（20261019）：`.env` 里 `CHECKPOINT_DSN` 已经填上、`/health` 回
+`checkpoint_backend=postgres`，而 `checkpoint_db` 是**业务库** ⇒ agent 启动时
+`saver.setup()` 又在业务库里把 4 张表建回来了（实测行数：`checkpoints` **13** /
+`checkpoint_blobs` **31** / `checkpoint_writes` **94**，即真有会话在往里写），
+而父仓的迁移校验脚本 `verify_parity.py` ⓪ 段判的正是这件事（它的报错文本就写着
+"`CHECKPOINT_DSN` 与 `DATABASE_URL` 逐字相同"）。
+**四步，顺序不能反**：
+
+1. 把 `.env` 的 `CHECKPOINT_DSN` 改成**独立库**那一行（同一个 PG 实例，角色要有 CREATE）；
+2. `sudo systemctl restart saudade-agent && sleep 8`，读 `/health` 两格：
+   `postgres` + 那个独立库的名字；
+3. **然后**才跑父仓的 `scripts/migration/pg/0008_drop_stray_checkpoint_tables.sql` 清业务库残留。
+   ⚠️ **反了的话白跑**：先跑 0008 再重启，`setup()` 会把它们**幂等地建回来**（那一节自己
+   写着"这不是一扇单向门"）。**0008 的头注里"现在 agent `.env` 那一行是注释掉的"这句
+   已经过期**——它是按 20261018 那次的状态写的；
+4. 跑父仓的迁移校验脚本 `verify_parity.py`，期望 0 处对不上。
 
 **父仓那一半（同样是主人那边的事，本仓改不了）**：在
 `src/routes/conversation.rs::purge_conversation_data` 的**两个臂**里各加一次对本仓钩子的调用

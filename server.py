@@ -2591,6 +2591,10 @@ async def health():
             # **读的是 `_agent` 这个活体对象，不是 `CHECKPOINT_DSN`**——配了 DSN 而图没挂
             # 上 saver 时读配置会报成"挂了"，那是本仓最贵的一类失效。
             "checkpoint_backend": runtime_probe.checkpoint_backend(_agent),
+            # `CHECKPOINT_DSN` 指到哪个库（**只回库名**）。本块**唯一一格读配置的**，
+            # 与上面那格合起来才读得通；存在理由 = 把"指错库"变成一眼可见
+            # （理由与硬闸见 `agent/runtime_probe.checkpoint_db`）。
+            "checkpoint_db": runtime_probe.checkpoint_db(settings.checkpoint_dsn),
         },
     }
 
