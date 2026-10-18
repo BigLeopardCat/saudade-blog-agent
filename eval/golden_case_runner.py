@@ -53,7 +53,7 @@ def main():
     # 语料索引**必须在跑用例之前就绪**（20261002，锁见 tests/test_golden_runner_parity.py）：
     # `rag_search.warm_async()` 挂在 `server.py` 的 **lifespan** 上，而本进程从不启动那个
     # app ⇒ 跑用例的那一刻索引恒为空，planner 把《标题》解析成 id 那一步恒降级
-    # （`agent/context.py::_doc_anchors` 会如实注记「语料索引未就绪」）⇒ 模型拿不到 id、
+    # （`agent/prompt_context.py::_doc_anchors` 会如实注记「语料索引未就绪」）⇒ 模型拿不到 id、
     # 只能去检索，撞上用例的 `forbid_tool_calls: [rag_search…]`。进程内跑法在用例循环
     # **之前**就建好了它（`judge_corpus()`）——同一个用例两个跑法结论不同，正是本仓反复
     # 治过的那个病。判据侧不做"这个跑法没接上就放行"的妥协，所以只能在**跑之前**把前提

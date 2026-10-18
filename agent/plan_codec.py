@@ -117,7 +117,7 @@ def _derive_status(tools: list, workflow: str, note: str) -> str:
     为什么不留空、非要派生一遍：留空 = 判据 fail-open，而"缺 STATUS"最可能的来历正是
     **改造前留在 state 里的旧计划文本**——那时判据判的是注记措辞，派生一遍等于把旧行为
     原样接上，不会因为升级而突然少拦一类（也不会突然多拦——派生只认系统自己那三条
-    注记的**固定前缀**，见 `agent/workflow_defs/nav.py`）。
+    注记的**固定前缀**，见 `agent/workflow_defs/nav_map.py`）。
 
     ⚠️ `workflow` 收的是**归一后**的技能名（不在 `WORKFLOW_MAP` 里的一律已经落回
     `chat`）。**这一点必须两边一致**（20261017 实测踩过）：写侧若按原始名派生、而文本
@@ -230,7 +230,7 @@ def normalize_plan(plan_obj: dict) -> dict:
 
     ⚠️ **`note` 是唯一一个"两态仍然不同形"的格子，这是故意的**：`plan_encode` 把空注记
     渲染成 `（无）` 三个字，而对象这边留 `""`。不吸收那个哨兵，是因为 `note` 同时是
-    **写侧的输入**（`graph.py` / `decisions.py` / `tool_specs.py` 都会
+    **写侧的输入**（`graph.py` / `deterministic_plan.py` / `tool_specs.py` 都会
     `plan_obj["note"] = f"{old_note}｜{tail}"`）——把哨兵吃进对象，下一次拼接就会产出
     `（无）｜…` 这种把"没有注记"讲成一句真注记的文本。
 

@@ -9,11 +9,11 @@
 
 批 3 的做法是**替代**而不是删除：图自己持有历史之后，把 `_build_messages` 一直在
 悄悄提供的三样东西补回图里（**封顶** / **剥事实行** / **剪孤儿 user**），住在
-`context.narrator_messages` 里，`model_node` 走 `graph._narrator_msgs` 调它。
+`prompt_context.narrator_messages` 里，`model_node` 走 `graph._narrator_msgs` 调它。
 
 **无 saver 时窗口是恒等**（`turn_start` 是 `0`/`-1`）⇒ §①② 是那条负控：判据要的是
 **同一个对象**（`is`），不是"内容相同"——批 1 的 `test_turn_window.py` §① 同款，
-理由见 `context.turn_window` 的 docstring。
+理由见 `prompt_context.turn_window` 的 docstring。
 
 判据分六组：
   ① 负控：闸门关着（没记边界 / 起点在表头 / `turns<=0`）⇒ **同一个对象**；
@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import (AIMessage, HumanMessage,  # noqa: E402
                                      ToolMessage)
 
-from agent.context import (_NARRATOR_TURNS, _is_system_block,  # noqa: E402
+from agent.prompt_context import (_NARRATOR_TURNS, _is_system_block,  # noqa: E402
                            _prev_user_msg, _recent_turn_start, _msg_text,
                            narrator_messages, prune_orphan_users,
                            strip_fact_messages)
@@ -162,7 +162,7 @@ print("[4] `_prev_user_msg` 三形态（臂 A 逐字节不变 / 臂 C 取到主�
 
 
 def _old_prev_user_msg(messages: list) -> str:
-    """**改前**的实现（20260927 那版，逐字抄自 `git show HEAD:agent/context.py`）。
+    """**改前**的实现（20260927 那版，逐字抄自 `git show HEAD:agent/prompt_context.py`）。
 
     拿它当参照物，而不是拿"我记得它返回什么"当参照物——"对臂 A 零变化"这条判据
     只有这样才是可复核的。

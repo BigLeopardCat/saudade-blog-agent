@@ -33,8 +33,8 @@ LLM-QC 采信模型自称、预算耗尽 accept）共同指向一个根因——
 变成确定性执行器后，"不听话"在结构上不可能发生——检查层随之可以大幅
 简化（gate 只兜模型叙述层的文本失真）。
 
-纯函数层已外移（20260912 拆分）：agent/context.py = 上下文/帧文本组装；
-agent/decisions.py = 确定性决策层（快道 / 意图扫描 / 候选裁决 / 终局计划）。
+纯函数层已外移（20260912 拆分）：agent/prompt_context.py = 上下文/帧文本组装；
+agent/deterministic_plan.py = 确定性决策层（快道 / 意图扫描 / 候选裁决 / 终局计划）。
 本文件只留图拓扑与节点编排（planner/execute/reflector/model/gate + 路由）。
 
 LangGraph 四件套：
@@ -84,11 +84,11 @@ from agent import adminops_target as _target
 from agent import authz
 from agent import confirm
 from agent import idem
-from agent import refs
+from agent import arg_refs
 from agent.block_reasons import denied_workflows
 from rag import sections
 from agent.stickers import repair_sticker_tokens
-from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
+from agent.prompt_context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            BLOCKED_ROWS_EMPTY, blocked_rows,
                            _doc_anchors, _frame_texts, _has_frames,
                            _is_short_reply,
@@ -98,18 +98,18 @@ from agent.context import (GUESTBOOK_GUIDE, SITE_GUIDE, _attach_page_guide,
                            freeze_turn_start, narrator_messages,
                            strict_wire_issues, turn_window,
                            with_tool_call_pairs)
-# 洞④ 的判据族（八张表 + `_absence_span`）20261017 搬去 `agent/absence.py`，这里只取用法。
-from agent.absence import (_ABSENCE_EXEMPT_RE, _ABSENCE_LEAD_RE, _CAPABILITY_NEG_RE,
+# 洞④ 的判据族（八张表 + `_absence_span`）20261017 搬去 `agent/absence_claims.py`，这里只取用法。
+from agent.absence_claims import (_ABSENCE_EXEMPT_RE, _ABSENCE_LEAD_RE, _CAPABILITY_NEG_RE,
                            _CONTENT_NOUN_RE, _SITE_DOMAIN_RE, _TOOL_NONUSE_RE,
                            _absence_span)
-from agent.decisions import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES,
+from agent.deterministic_plan import (MAX_PLAN_ROUNDS, _DARKMODE_ALIASES, _EFFECT_ALIASES,
                              _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
                              _effect_switch_fast_path, _intent_done, _intent_hints,
                              _nav_fast_path, _referent_nav_fast_path,
                              _scan_action_intents, _search_terms,
                              _terminal_plan, _title_relevant, _tool_name, _wrap_up_plan)
-from agent.entities import receipt_digest
+from agent.entity_digest import receipt_digest
 from agent.factblock import (action_facts, is_action_family, is_block_family,
                              render_fact_block)
 from agent.llm_usage import usage_fields
@@ -124,7 +124,7 @@ from agent.prompts import (BLOG_ASSISTANT_PROMPT, NARRATOR_DISCIPLINE, STICKER_G
                            _PLANNER_PROMPT, _REFLECTOR_PROMPT, audience_block)
 from agent import provenance as _prov
 from agent.provenance import QUOTE_SPAN_RE as _QUOTE_SPAN_RE
-from agent.refs import parse_data, ref_error_reason, ref_hints, resolve_args
+from agent.arg_refs import parse_data, ref_error_reason, ref_hints, resolve_args
 from agent.textnorm import (FULLWIDTH_ASCII_MAP as _FULLWIDTH_ASCII_MAP,
                             fold_typing as _fold_typing,
                             squash_spaces as _squash_spaces)
@@ -134,7 +134,7 @@ from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
 from agent.plan_status import PLAN_STATUS_ABSENCE_EXEMPT, PLAN_STATUS_NAV_NOTE
 from agent.workflow_defs import WORKFLOW_MAP, _WRITE_NAME_TARGET_WORKFLOWS, visible_workflows
 from agent.workflow_defs.capability import CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS
-from agent.workflow_defs.nav import FUZZY_NAV_RULES, NAV_MAP, _NAV_REAL_PAGES, _NAV_REF_HINT
+from agent.workflow_defs.nav_map import FUZZY_NAV_RULES, NAV_MAP, _NAV_REAL_PAGES, _NAV_REF_HINT
 from agent.workflow_menu import build_planner_context
 from agent.workflow_model import DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT
 from agent.workflow_params import (
@@ -300,7 +300,7 @@ class AgentState(TypedDict):
                    是 reflector 输入与跨轮执行记忆（__EXEC__ 帧）的原料。
     - blocked:     本轮 execute 的 BLOCK 受阻项（[{spec,tool,reason,workflow,result}]，
                    只含本轮——路由判断与 reflector 输入用；`workflow` 20261007 补，
-                   渲染进 planner 的 `{blocked_rows}` 槽，见 context.blocked_rows）。
+                   渲染进 planner 的 `{blocked_rows}` 槽，见 prompt_context.blocked_rows）。
     - blocked_seen: 请求内累计受阻**键**「工具::原因码」（blocked 的累计集，repeat
                    判定用；20260925 前是 spec 原文，见 execute_node 里收窄的理由）。
     - blocked_repeat: 本轮受阻项里是否有此前已受阻过的键（= 同一个工具同一个原因
@@ -309,7 +309,7 @@ class AgentState(TypedDict):
     - issues:       reflector 上次输出的 ISSUE 文本（注入下一轮 planner 提示词）。
     - reflect_end:  reflector 判定终局（wrap_up/预算耗尽）→ 路由去 model 叙述。
     - tool_data:    请求内已执行工具返回的**结构化**值（[{tool,data}]，按执行顺序
-                   累计）——参数引用（$tool[0].field，见 agent/refs.py）的取值
+                   累计）——参数引用（$tool[0].field，见 agent/arg_refs.py）的取值
                    来源。与 receipts 的分工：receipts 是"系统验收过的事实"（给
                    narrator/跨轮记忆看），tool_data 是"下一步填参要用的数据"。
     - fallback_text: gate fallback 的如实用语（20260920 补声明）。**必须显式声明**：
@@ -339,7 +339,7 @@ class AgentState(TypedDict):
     #             `-1` = 没记边界 ⇒ `_turn` 原样返回整个列表（= 老行为）。
     #             **为什么不直接取"末尾 turn_msgs 条"**：一旦 execute 追加了帧，
     #             "末尾 N 条"就把开头的 `[System: …]` 注入块挤出窗口了（页面事实静默
-    #             消失）。详见 `context.freeze_turn_start` 的头注。
+    #             消失）。详见 `prompt_context.freeze_turn_start` 的头注。
     #             判据见 `tests/test_turn_window.py`（纯函数 + AST 审计锁）。
     turn_msgs: int
     turn_start: int
@@ -464,7 +464,7 @@ class AgentState(TypedDict):
 
 
 def _turn(state) -> list:
-    """**本轮的**消息切片（见 `AgentState.turn_start` 与 `context.turn_window`）。
+    """**本轮的**消息切片（见 `AgentState.turn_start` 与 `prompt_context.turn_window`）。
 
     图内凡"只看本轮"的读端一律走这里，不许再直接写 `state["messages"]`——那个写法
     把"每请求独立线程、无 checkpointer"这条**图外的**约定当成了图内的保证。
@@ -480,7 +480,7 @@ def _turn(state) -> list:
 
 
 def _narrator_msgs(state) -> list:
-    """**narrator 该看到的消息表**（批 3，见 `context.narrator_messages`）。
+    """**narrator 该看到的消息表**（批 3，见 `prompt_context.narrator_messages`）。
 
     与 `_turn` 是**两个**读端，别合并：`_turn` 是"本轮"，给那些"只看本轮"的判据用；
     本函数是"本轮 + 最近若干轮"，给 narrator **叙述材料**用——它本来就该看得见主人
@@ -489,7 +489,7 @@ def _narrator_msgs(state) -> list:
     被算成本轮证据；这个换成 `_turn` ⇒ narrator 忘掉上一句。
 
     历史段做三件清理（剥事实行 / 剪孤儿 user / 丢工具帧），**本轮段原样**——
-    理由见 `context.narrator_messages` 的 docstring。无 saver 时 `turn_start` 是
+    理由见 `prompt_context.narrator_messages` 的 docstring。无 saver 时 `turn_start` 是
     `0`/`-1` ⇒ 返回**同一个对象**，臂 A 逐字节不变。
     """
     return narrator_messages(state.get("messages"), state.get("turn_start", -1))
@@ -508,7 +508,7 @@ def _narrator_msgs(state) -> list:
 #   第 5 行: REPLY: <技能回复契约>（model 叙述时遵守、gate 不做文本级对照）
 #   （曾有的第 6 行 `TODO:` 20261016 整行退休：读端一个都不剩了，理由与取证
 #     写在下面 `plan_encode` 那一处）
-# 导航映射表在 `workflow_defs/nav.py`（页面别名→路径，"物联网平台→/device-console/"是系统数据，
+# 导航映射表在 `workflow_defs/nav_map.py`（页面别名→路径，"物联网平台→/device-console/"是系统数据，
 # 不是模型猜测）——planner 跑题的结构性根因（不知道工具语义）由此消除。
 # TOOLS 行是"执行清单"不是"允许名单"——execute 节点把它当命令逐条执行，
 # 不存在"TOOLS 点了名仍可不调用"的自由（要少做就少点名，点了就是命令）。
@@ -544,7 +544,7 @@ def _render_planner_prompt(role: str | None, page_ctx: str, round_info: str, *,
       不删清单见 `workflows.build_planner_context`）——接口层恒 True；传 False 只有
       离线对照在跑；
     · `blocked_rows`（20261007）= 本轮受阻项的**类型化**呈现（原因码 ← checker、
-      技能名 ← 计划；渲染见 `agent/context.py::blocked_rows`，类型表见
+      技能名 ← 计划；渲染见 `agent/prompt_context.py::blocked_rows`，类型表见
       `agent/block_reasons.py`）。`planner_node` 每轮都传，默认值是缺省语——留给
       不建模受阻状态的离线探针/对照臂（`eval/toolcall_probe.py`、
       `agent/react_arm.py`）与既有单测。
@@ -922,7 +922,7 @@ def _forbids_tools(user_msg) -> bool:
 # 这是上一条的**兄弟格，不是同一条**：契约改完之后模型很少再"一个都不点"了，改成
 # **显式点 `chat`**——两格在结果上完全一样（零工具、零帧、narrator 手里没数据），
 # 但 `undecided` 只标前者，纠偏看不见后者。定点探针实测（`eval/zero_call_residual_
-# probe.py`，24 句×3 轮×两臂交替，读**计数**不读百分数——分母只有 60）：数据型零工具
+# runtime_probe.py`，24 句×3 轮×两臂交替，读**计数**不读百分数——分母只有 60）：数据型零工具
 # **12/60→8/60** 那一降里，「一个都不点」**8 格→2 格**、显式 `chat` **4 格→6 格**——
 # 总量没有它看起来的那么多，**洞没有消失，它挪了一格**。明细见
 # `docs/zero-call-residual.md` §3.1。
@@ -1200,7 +1200,7 @@ def _name_write_nudge(plan_obj: dict, user_msg, rounds: int,
     )
 
 
-def _sated_read_workflow(plan_obj: dict, receipts, role: str | None):
+def _already_read_workflow(plan_obj: dict, receipts, role: str | None):
     """这一版计划**一个字节的新数据都拿不到** → 该从菜单里摘掉的技能名（纯函数，20261012）。
 
     判据 = 「整张技能的工具全是**本轮已经取回过**的只读件」：与 `_trim_done_reads`
@@ -1209,6 +1209,10 @@ def _sated_read_workflow(plan_obj: dict, receipts, role: str | None):
     两条必须同源：判据一旦分家，就会出现"系统说已取回、却还把那个技能留在菜单里"。
 
     要治的病见 `_SATED_READ_NUDGE` 头注（读了一件，下一轮又点同一个读；话术纠不动）。
+
+    ⚠️ 20261018 由 `_sated_read_workflow` 改名（`sated` 只活在 graph.py 内的标识符里）。
+    **别顺手把 trace 事件名一起改**：`record("planner", "sated_read_strip", …)` 那个事件名
+    冻结着（30 天 trace 保留窗口内新旧要能分到一堆），`_SATED_READ_NUDGE` 那句话术同理。
 
     ⚠️ 四处**刻意的收窄**（每一条都对应一类"本该让它读"的回合）：
       - **只摘全部工具都已取回的**：`_trim_done_reads` 剔不干净（清单里还有没读过的件）
@@ -1267,7 +1271,7 @@ def _name_write_correct(c: "_DecideCtx") -> bool:
     planner 这一版没把写规格排出来（话术见 `_name_write_nudge` / `_SATED_READ_NUDGE`）。
     - 半 ①：原话里有**写域动作词**（`_name_write_nudge`）；
     - 半 ②：原话里**一个动作词都没有**，但这一版计划里的读**全是本轮已取回的**
-      （`_sated_read_workflow`）——trace `20261012T044342` 那句「给 demo 用户一条通知……
+      （`_already_read_workflow`）——trace `20261012T044342` 那句「给 demo 用户一条通知……
       然后把降级身份执行」正是这一半。
 
     两半都做同一件事：把那个"再点一次也没有新数据"的技能**从菜单里摘掉**（`_strip_menu`）
@@ -1286,7 +1290,7 @@ def _name_write_correct(c: "_DecideCtx") -> bool:
     if c.correction:
         return False
     nudge = _name_write_nudge(c.plan_obj, c.user_msg, c.rounds, c.role)
-    sated = _sated_read_workflow(c.plan_obj, c.state.get("receipts"), c.role)
+    sated = _already_read_workflow(c.plan_obj, c.state.get("receipts"), c.role)
     if nudge:
         _spans = _msg_quote_spans(c.user_msg)
         _verbs = _name_write_verbs(c.user_msg)
@@ -2287,7 +2291,7 @@ _ACTION_RESTATE_RE = re.compile(
 #     这一句恰恰**没有**对应回执（两半互补，不是重复）。
 #
 # 判据（**实体锚定**，与上面几张网正交）：回复的某个**子句**里
-#   ① 出现命令族的动作实体（特效名 / 夜间模式——词表取自 `decisions.py` 的唯一
+#   ① 出现命令族的动作实体（特效名 / 夜间模式——词表取自 `deterministic_plan.py` 的唯一
 #      实现，与快道/意图扫描同源）；
 #   ② 同一子句里有**施事式完成语**（`_DEED_DONE_RE`：一并/也/都/帮你… + 做/处理/
 #      开好… + 好了/了/啦）；
@@ -3003,7 +3007,7 @@ def _chat_tool_claim_clause(text: str) -> str:
 # 检索"）被吞掉，又被反问"要不要我查一遍" ⇒ 确认死循环（用户看着像"我说要它也没查"）。
 # 根因在提示词侧："空结果"与"没执行"同形（帧渲染 `返回: []`、回执模板"为空 = 本轮没有
 # 已验收的执行"、纪律 3 的"（本轮尚无工具执行）"现成句式），模型套错了句式——渲染侧
-# 已同步标注"（已执行，结果为空）"（context.py）并在纪律 3 加了反向说明，本判据是兜底。
+# 已同步标注"（已执行，结果为空）"（prompt_context.py）并在纪律 3 加了反向说明，本判据是兜底。
 # 判据只在**有已验证回执**时启用（receipts 非空）：零帧轮该表述是**真话**（全库 3 条
 # 真实 trace 实证）、帧全被 BLOCK（__ERROR__/空文本）时"没有执行"也算属实，都不能拦。
 _NO_EXEC_CLAIM_RE = re.compile(
@@ -3377,7 +3381,7 @@ def _plan_exec_next_card(state: AgentState, config) -> "_PlanExec | None":
       ④ 技能闭集盖不住这个单元（内部不一致）⇒ 一个工具都不执行，交回 planner。
 
     `$tool[N]` 引用那条尤其要写下来：它的值要等**前面那次调用**回来才知道，而那些帧
-    早随上一轮请求消失了（`refs` 的取值源是 `state["tool_data"]`，请求内累计）。跨轮
+    早随上一轮请求消失了（`arg_refs` 的取值源是 `state["tool_data"]`，请求内累计）。跨轮
     拿着它去执行 = 拿空值去写——所以它和"没绑定"合流，一律退回 planner 在**现场**补参。
     """
     nxt = _ledger_next(state, config)
@@ -3610,7 +3614,7 @@ def _change_denial_claim(reply: str, has_real_change: bool) -> bool:
 # 逐字复读判据（gate 1b）—— 20261017 搬进 agent/repeat_guard.py
 # ---------------------------------------------------------------------------
 # 这一族（5 个函数 + 9 个常量，含 `_REDO_REQUEST_RE`）对 graph.py 的**出边为零**：
-# 只用 difflib / re / `agent.context._msg_text` / AIMessage / HumanMessage。
+# 只用 difflib / re / `agent.prompt_context._msg_text` / AIMessage / HumanMessage。
 # 按原名 re-export ⇒ `gate_node` 里那两处调用点与 `tests/test_workflows.py` 的
 # `from agent.graph import _REPEAT_MIN_RUN, ...` 一处不用改。搬家的取舍与那条
 # 中文正则要手工重登记 `eval/judge_registry.json` 的事，都记在新模块头注里。
@@ -3663,7 +3667,7 @@ def _site_search_claim(text: str, exec_memory: bool) -> bool:
 
 
 # 洞④ 的判据族（八张表 + `_absence_span`，含 `_ABSENCE_RE` 与 `_SELF_NONREAD_RE`）
-# 20261017 按主题整体搬去 `agent/absence.py`——出边为零（仓里除本文件外无人引用，
+# 20261017 按主题整体搬去 `agent/absence_claims.py`——出边为零（仓里除本文件外无人引用，
 # 也没有判据文本锁按名钉它们），搬走只为压回模块台账。**新词一律加在那边**，
 # 别在这儿另开一张；本文件只留用法。（`_LEDGER_ABSENCE_RES` 是**另一族**：问的是
 # "跨轮执行台账里有没有"，判据形状不同，不搬。）
@@ -4133,7 +4137,7 @@ def _fallback_round_not_landed(facts, receipts) -> str:
             lines.append("· " + res)
     tail = ("。系统记录是：\n" + "\n".join(lines)) if lines else ""
     # ⚠️ 措辞里**不复述**被判掉的那句话（不许出现「还没落地」「待处理队列」这类字面）：
-    # 兜底文本会作为 `last_ai` 进下一轮的上下文（`context._recent_tail` 渲染 AI 消息），
+    # 兜底文本会作为 `last_ai` 进下一轮的上下文（`prompt_context._recent_tail` 渲染 AI 消息），
     # 而复述一遍就是把那个说法又教给它一次（"写给 narrator 的机制描述会变成它的词汇"）。
     # 只说"我刚才那句说反了" + 摆事实，够主人对上号了。
     return ("喵呜……主人，我得纠正自己一句：这一轮系统**是真的执行了**、回执写着它"
@@ -4251,7 +4255,7 @@ def _no_popup_fact(state, facts=None) -> str:
 # 剩 500/500」，narrator 却回「主人，这一轮系统**没有执行任何操作**……他的申请还在
 # 待处理队列里（账号「niuniu」id=5，剩 451/500 轮）」——**451 正是卡面文案里那个数**。
 # 机制：确认轮的用户消息是前端**合成**的确认回显（`chat-stream.js` 拼的「确认执行：
-# <卡面摘要>」，planner 那一侧早有 `context._prev_user_msg` 专门绕开它取主人原话），
+# <卡面摘要>」，planner 那一侧早有 `prompt_context._prev_user_msg` 专门绕开它取主人原话），
 # 它整段是**点确定之前**的状态快照（"剩 451/500……点确定我就去办"）。模型把这段快照
 # 当成了现状，于是把回执里已经发生的事说成没发生——**一次真写成功、被告知什么都没改**。
 #
@@ -5498,7 +5502,7 @@ def _replan_note(issue: str, clause: str) -> str:
     "这一轮有没有执行过"也按 issue 取（`_REPLAN_WHY`）——洞⑩ 与其余各族的前提正好相反。
 
     开头的 `_REPLAN_NOTE_MARK` 是**给代码看的**：这条提示以 SystemMessage 的形式进
-    消息流，而 `context._recent_tail` 只渲染 Human/AI 两种角色（SystemMessage 一律
+    消息流，而 `prompt_context._recent_tail` 只渲染 Human/AI 两种角色（SystemMessage 一律
     跳过）——planner 要拿到它就得自己从消息流末尾认出来，认的判据就是这个标记
     （见 planner_node 里那段"本轮专属"的说明）。
     """
@@ -5556,7 +5560,7 @@ def _replan_result(issue: str, plan: dict, frames: int, clause: str, last_ai) ->
 # 的 confirm 分支），而不是另造一套执行通道——决策权仍只在 planner 手里。
 #
 # 接回去的第一步是**让意图清单看得见**：确认兑现轮的"当前消息"是前端合成的确认句
-# （见 `context._prev_user_msg`），不换源的话这一轮扫出来的意图恒为空，
+# （见 `prompt_context._prev_user_msg`），不换源的话这一轮扫出来的意图恒为空，
 # 「还有没做完的事」这个判据在弹窗之后永远为假。
 def _intent_src(state: AgentState) -> str:
     """意图扫描读**哪句话**：确认兑现轮读主人原话，其余轮读当前消息。
@@ -5959,7 +5963,7 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None = None,
                                        c.rounds, c.has_frames)
     if upd is not None:
         return upd
-    return _finalize_wrap(c.plan_obj, c.rounds, c.has_frames, c.native_note)
+    return _finalize_wrap(c.plan_obj, c.rounds, c.has_frames, c.planner_note)
 
 
 class _Preflight(NamedTuple):
@@ -6062,7 +6066,7 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
     # 换源）⇒ 影响面只有确认兑现轮这一格，写成判据在 `tests/test_session_input_source.py`。
     user_msg = _intent_src(state)
     # 角色要在**取 page_ctx 之前**定：能力清单按角色渲染（20260921——清单里不含
-    # 管理能力是 narrator 讲"我不能改后台"的"依据"，见 context.site_guide）。
+    # 管理能力是 narrator 讲"我不能改后台"的"依据"，见 prompt_context.site_guide）。
     # principal 也在这里一并取：下面写门序列里的政策预检要读它的 uid 与角色
     # （`_freeze_policy_refusal`）。同一个 config 读两次是同一个对象，取一次更省。
     principal = _principal_of(config)
@@ -6244,7 +6248,10 @@ class _DecideCtx:
     deny_pseudo: set
     correction: str
     correction_kind: str
-    native_note: str
+    # 20261018 由 `native_note` 改名：它记的是 **planner 那一轮自己写下的注记**（异常记账、
+    # 多调用提示），不是"哪条臂产出的"。⚠️ **trace 里的键名仍是 `"native_note"`**（见
+    # `record("planner", "decision", …)` 那一处）——那个键冻结着，别照着这里把键也改了。
+    planner_note: str
     plan_obj: "dict | None"
     raw: "str | None"
     decided: object
@@ -6334,7 +6341,7 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
     # 与"它属于哪个技能/为什么够不到"（机器从注册表读的）写给它看，让它重新决策
     # （planner 仍是唯一决策者，这里不替它选技能）。两次都剔空 → 确定性如实收尾。
     # gate 打回重规划带来的提示（20260926）：gate 把它作为一条 SystemMessage 追加在
-    # 消息流**末尾**，而 `context._recent_tail` 只渲染 Human/AI 两种角色（SystemMessage
+    # 消息流**末尾**，而 `prompt_context._recent_tail` 只渲染 Human/AI 两种角色（SystemMessage
     # 一律跳过，是页面上下文注入时代的纪律）——所以这里必须**显式取出来**放进提示词，
     # 否则 planner 收到"打回"却看不到原因（"能力有接线 ≠ 接线被测试"那类静默洞：
     # 机制全套跑通，模型只是没被告知）。判据取"末尾那条正是它"：planner 一旦决策完，
@@ -6391,7 +6398,7 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
     # 接口层的异常记账（如 native_multi_call）。**必须在循环外先声明**：循环外的
     # `decision` 事件要读它，而它只在 接口层的某一支里被赋值——少了这一行，
     # "某一轮走到某条提前 return 之外的路径"就会以 NameError 的形态炸在收尾上。
-    native_note = ""
+    planner_note = ""
     return _DecideCtx(
         state=state, config=config, task_sink=task_sink,
         rounds=rounds, user_msg=pre.user_msg, role=role,
@@ -6400,15 +6407,15 @@ def _planner_setup(state: AgentState, config: "RunnableConfig | None",
         frames_txt=frames_txt, gate_note=gate_note, deny=deny, _base_llm=_base_llm,
         _evidence=_evidence, llm=llm, deny_pseudo=deny_pseudo,
         correction=correction, correction_kind=correction_kind,
-        native_note=native_note, plan_obj=None, raw=None, decided=None,
+        planner_note=planner_note, plan_obj=None, raw=None, decided=None,
         workflow_name="", params={}, _tools_off=False, _img_turn=False, llm_attempt=0)
 
 
 def _record_reply_kind(kind: str, rounds: int, state, ledger_frame: str) -> None:
-    """短应答的**自我申报**落 trace（20261015 批 3，`context.REPLY_KIND_ARG`）。
+    """短应答的**自我申报**落 trace（20261015 批 3，`prompt_context.REPLY_KIND_ARG`）。
 
     提示块里三条出口同时写着，模型自己选一条照办，系统只记账——**不据此放行/拦截任何
-    事**（准入在 LLM 之前、且是纯结构的，见 `context._is_short_reply`）。两个读数缺一
+    事**（准入在 LLM 之前、且是纯结构的，见 `prompt_context._is_short_reply`）。两个读数缺一
     不可：① 模型把这句话读成了哪一类；② 它声明 `auth` 而系统这一轮手里**没有可承接的
     目标**（`target=False` = 台账帧为空）——那正是"过度授权"的形状，而旧版在这里兜底的
     正是那三张词表。删掉词表之后这里是**唯一**能看见"模型读错了哪一类"的地方（取数出口
@@ -6523,7 +6530,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
             # 不该再选的技能行。空集 ⇒ 这一段渲染逐字节不变。
             deny=c.deny,
             # 参数引用的可取值字段（规则 3b）——只列已成功执行且结构可解析的
-            # 工具返回，模型照此写 $tool[0].field（见 agent/refs.py）
+            # 工具返回，模型照此写 $tool[0].field（见 agent/arg_refs.py）
             ref_hints=ref_hints(c.state.get("tool_data") or []),
             reflector_feedback=c.state.get("issues") or "（本决策轮无复盘建议）",
             # 两种纠偏的来源不同、优先级也不同：剔空纠偏说的是"你这一版刚点的工具
@@ -6556,7 +6563,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
            **({"slow": True} if slow else {}))
 
     c.raw = getattr(resp, "content", str(resp))
-    c.native_note = ""
+    c.planner_note = ""
     # 决定由工具调用表达（`agent/planner_llm.py::tool_calls_to_plan`）。它返回
     # `None` = 这一版响应**没给出可用决定**（五条来源见那里的头注），与"零调用但
     # 有正文"（返回 chat + `undecided`）是**两回事**，别再合并成一条路。
@@ -6597,9 +6604,9 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
                        "（round %d/%d）", fin or "—", c.rounds + 1, MAX_PLAN_ROUNDS)
         c.correction, c.correction_kind = _PLANNER_UNPARSEABLE_NUDGE, "决策不可解析"
         return _Step("continue")
-    # 短应答的**自我申报**（20261015 批 3，`context.REPLY_KIND_ARG`）：提示块里三条
+    # 短应答的**自我申报**（20261015 批 3，`prompt_context.REPLY_KIND_ARG`）：提示块里三条
     # 出口同时写着，模型自己选一条照办，系统只记账——**不据此放行/拦截任何事**
-    # （准入在 LLM 之前、且是纯结构的，见 `context._is_short_reply`）。两个读数缺一
+    # （准入在 LLM 之前、且是纯结构的，见 `prompt_context._is_short_reply`）。两个读数缺一
     # 不可：① 模型把这句话读成了哪一类；② 它声明 `auth` 而系统这一轮手里**没有可承接
     # 的目标**（`target=False` = 台账帧为空）——那正是"过度授权"的形状，而旧版在这里
     # 兜底的正是那三张词表。删掉词表之后这里是**唯一**能看见"模型读错了哪一类"的地方，
@@ -6628,7 +6635,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
             c.task_sink[:] = _intent_frames_now
     c.workflow_name, c.params = c.decided.workflow, c.decided.params
     if c.decided.notes:
-        c.native_note = "；".join(c.decided.notes)
+        c.planner_note = "；".join(c.decided.notes)
     record("planner", "native_decision", workflow=c.workflow_name, round=c.rounds,
            calls=tool_call_names(c.decided), finish=c.decided.finish_reason,
            # **臂的身份证**（20261006）：调参实验要能回答"这份 trace 是哪一组
@@ -6641,7 +6648,7 @@ def _decide_llm(c: "_DecideCtx") -> "_Step":
            temp=settings.planner_temperature,
            seed=settings.llm_seed,
            thinking=bool(settings.planner_native_thinking),
-           **({"note": c.native_note} if c.native_note else {}))
+           **({"note": c.planner_note} if c.planner_note else {}))
 
     # 主人明说"不要调用任何工具" ⇒ 这一轮的计划降成 `chat`（见 `_forbids_tools`
     # 上方长注：方向单一、只会减少系统能做的事，所以做成确定性覆盖）。**记在
@@ -7509,7 +7516,7 @@ def _decide_late_correct(c: "_DecideCtx") -> "_Step":
                        c.correction[:120])
         return _Step("continue")
 
-    # 写形态的请求上一条工具规格都没写（头注见 `_name_write_nudge` / `_sated_read_workflow`）：
+    # 写形态的请求上一条工具规格都没写（头注见 `_name_write_nudge` / `_already_read_workflow`）：
     # 与剔空纠偏共用同一条重决策通道（同一轮内只纠一次，纠完仍没有写规格就照原样走）。
     # 两半（有动作词的 / 一个动作词都没有但"读已取回"的）都在 `_name_write_correct` 里
     # ——抽出去是因为 `_decide_late_correct` 自己的复杂度台账**只许缩小**。
@@ -7955,7 +7962,7 @@ def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str,
 
 
 def _finalize_wrap(plan_obj: dict, rounds: int, has_frames: bool,
-                   native_note: str) -> dict:
+                   planner_note: str) -> dict:
     """正常出口：收尾轮口径如实化 + `decision` 事件 + 返回 update。
 
     ⚠️ 这里读 `plan_obj["params"]`（`decision` 事件那一行）——只有 `instantiate_plan`
@@ -7997,10 +8004,13 @@ def _finalize_wrap(plan_obj: dict, rounds: int, has_frames: bool,
     # `eval/token_cost_report.py` 与 `eval/baseline_group.py` 按它切语料，删键会让
     # 存量 trace 与新 trace 分不到一堆（那是**换档**的信号，不是"这一格没意义"）。
     # `native_note` 只在有异常记账时出现（如 native_multi_call），别让它常态占位。
+    # ⚠️ 20261018：**值**取自改名后的 `planner_note`（dataclass 那一格），**键名不动**——
+    # 上面的存量 trace 切分与 30 天保留窗口都按 `"native_note"` 这个键读。标识符与键名
+    # 故意不同名，不是漏改。
     record("planner", "decision", workflow=plan_obj["workflow"], params=plan_obj["params"],
            tools=plan_obj["tools"], round=rounds, engine="native",
            status=plan_obj.get("status") or "",
-           **({"native_note": native_note} if native_note else {}))
+           **({"native_note": planner_note} if planner_note else {}))
 
     return _plan_update(plan_obj, rounds)
 
@@ -8438,7 +8448,7 @@ def _board_quote_fix(plan_obj: dict, user_msg, rounds: int = 0,
     if name != "delete_board_comment":
         return None
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None
     quote = str(args.get("quote") or "").strip()
     spans = _msg_quote_spans(user_msg)
@@ -8543,7 +8553,7 @@ def _announcement_text_fix(plan_obj: dict, user_msg,
                     "delete_announcement"):
         return
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return
     fixed: dict[str, str] = {}
     if name == "create_announcement":
@@ -8677,7 +8687,7 @@ def _todo_text_fix(plan_obj: dict, user_msg, role: str | None = None,
     if name != "create_dashboard_todo":
         return None
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None                  # 带 `$tool[N].field` 引用：取值不由这句话决定
     got = str(args.get("text") or "").strip()
     sq_got = _squash_spaces(got)
@@ -9044,7 +9054,7 @@ def _name_target_fix(plan_obj: dict, user_msg,
     if not tkey:
         return
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return
     got = str(args.get(tkey) or "").strip()
     if not got:
@@ -9416,7 +9426,7 @@ def _name_arg_fix(plan_obj: dict, user_msg,
         if not args_ok:
             return None
         specs.append({"tool": _tool_name(spec), "args": spec_args})
-    if refs.has_refs(specs):
+    if arg_refs.has_refs(specs):
         return None
 
     def _cur(key: str):
@@ -9662,7 +9672,7 @@ def _target_grounding_refusal(plan_obj: dict, user_msg,
     if name not in _WRITE_NAME_FIELDS:
         return None
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None
     msg = str(user_msg or "")
     sq_ledger = _squash_spaces(ledger_src)   # 第二本账（见 `_ledger_pending_text`）
@@ -9853,7 +9863,7 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
         # 真出现混排也该由工具自己如实拒绝，而不是被这层拦成一个"做不了"）。
         return None
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None
     # 一名一行：这一行上有魔法尾逗号 ⇒ ruff/isort 要求拆开（别为了"看着紧凑"再拼回去）
     from tools.base import (
@@ -9976,8 +9986,8 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
                 # 就是目标的合法性；③待办写工具全在 `_ALWAYS_CONFIRM_TOOLS` ⇒ **恒弹卡**，
                 # 不受"同轮命令即确认"的免弹窗影响；④执行端仍是逐字相等——这一支只改
                 # "我们找哪一行"，不改"怎么找"。
-                # ⚠️ 变量名别叫 `refs`：本函数上面那个 `refs` 是 `$tool[N]` 引用模块
-                # （`refs.has_refs`），重名会让它变成未赋值的局部变量（实测踩过）。
+                # ⚠️ 变量名别叫 `arg_refs`：本函数上面那个 `arg_refs` 是 `$tool[N]` 引用模块
+                # （`arg_refs.has_refs`），重名会让它变成未赋值的局部变量（实测踩过）。
                 ref_rows = _todo_reference_rows(todo_rows, user_msg)
                 if len(ref_rows) == 1:
                     fixed = str(ref_rows[0].get("text") or "").strip()
@@ -10115,7 +10125,7 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
         # 那条边界——真出现混排该由工具自己如实拒绝）。
         return None
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None
     from tools.base import (
         _board_index,
@@ -10207,7 +10217,7 @@ def _freeze_policy_refusal(plan_obj: dict, config,
         return None
     tkey, _pkey = _WRITE_NAME_FIELDS[name]
     args, args_ok = _tool_args(tools[0])
-    if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+    if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
         return None
     want = str(args.get(tkey) or "").strip()
     if not want:
@@ -10413,7 +10423,7 @@ def _ledger_families_due(user_msg: str, prev_ai: str, config) -> dict:
     三条来源，取或：
       · 主人这句话或上一轮泠月那句里提到了这一族（`_REVIEW_INTENT_RE` / `_QUOTA_INTENT_RE`）
         ——这两个正则自此**只做帧触发器**，不再替模型读结论（旧确定性快道已删）；
-      · 这句话**形状上是短消息**（`context._is_short_reply`）⇒ **两族都摆**——这类话里
+      · 这句话**形状上是短消息**（`prompt_context._is_short_reply`）⇒ **两族都摆**——这类话里
         目标根本没出现（"你看着办"/"全都要"/"全部批准"，以及任何一句短话），
         "有什么正等着办"是系统必须给的事实；
       · 上一轮**真的读过**这份队列（`_QUEUE_READ_TOOLS` ∩ `recent_tools`）。
@@ -11237,7 +11247,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         decision = authz.check(principal, name)
         if not decision.allowed and authz.enforcing(decision.scope):
             continue  # 权限硬拦：弹窗也改不了"这个人不能做"，走既有拒绝链路
-        if not args_ok or refs.has_refs([{"tool": name, "args": args}]):
+        if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
             # 参数没解析出来 / 还挂着 $ref（引用依赖的是签发那一轮的工具帧，执行轮
             # 早已不在）→ 不签发，退回既有错误帧链路让 planner 自己收拾
             continue
@@ -11613,7 +11623,7 @@ def _frame_id(messages: list, idx: int) -> str:
     服务商靠它把 `assistant.tool_calls[].id` 与 `role:"tool"` 消息配起来，同一个请求里
     出现两次就是**非法序列**。原先这里写死 `f"execute_{idx}"`（`idx` = 本轮 spec 的
     下标，逐轮从 0 重新数），而 planner 那一腿**不往 messages 里写任何东西**（它是
-    `llm.invoke(渲染好的字符串)`，见 `context.with_tool_call_pairs` 头注）⇒ 第 2 轮的帧
+    `llm.invoke(渲染好的字符串)`，见 `prompt_context.with_tool_call_pairs` 头注）⇒ 第 2 轮的帧
     紧挨着第 1 轮 ⇒ 那个补形状的函数把两轮并进**同一条** assistant ⇒ 一条消息里躺着
     两个 `execute_0`。服务商原话（`eval/report/baseline_20260928_provider_ab.json`）：
     `Duplicate value for 'tool_call_id' of execute_0 in message[3]`——deepseek 一律 400，
@@ -11744,7 +11754,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 幂等键的参数成分（20261016 批 2）：**必须在下面两处改动 args 之前**取——
         # 理由与后果见 `agent/idem.py::guarded_invoke`（改后取会让屏显恒不命中且不报错）。
         args_fp = _spec_signature(name, args)[1]
-        # 参数引用（20260919，agent/refs.py）：把上一步的真实返回值绑进参数。
+        # 参数引用（20260919，agent/arg_refs.py）：把上一步的真实返回值绑进参数。
         # 解析失败 → 该 spec **不执行**（拿 `$x[0].y` 当参数去调用是更坏的结果），
         # 产带原因码的 __ERROR__ 帧走既有 blocked 链路（planner 改参 → reflector）。
         ref_err = None
@@ -11920,14 +11930,14 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             #
             # ⚠️ **必须是顶层 `rcpt["cmd"]`，不许塞进下面 `_RCPT_META_KEYS` 那套**：那个
             # 拷贝循环对白名单值做 `str(v)[:120]`，dict 会被**字符串化**成一个废串。
-            # 而 `context.py::_receipts_text` 只渲染 tool/args/result ⇒ `cmd` **天然不会
+            # 而 `prompt_context.py::_receipts_text` 只渲染 tool/args/result ⇒ `cmd` **天然不会
             # 进提示词**——这正是设计要的：模型的证据是那根无前缀中文事实（「页面已跳转：
             # https://…」），命令本身只有浏览器看得见，于是"引用回执"与"输出命令"在
             # 字面上不再是同一个动作（批 2 要治的那个 23 天 4 次的假道歉就出在这里）。
             cmd = out_meta.get("cmd")
             if isinstance(cmd, dict):
                 rcpt["cmd"] = cmd
-            # 实体摘要（20260920，见 agent/entities.py）：数据工具取回的条目/计数
+            # 实体摘要（20260920，见 agent/entity_digest.py）：数据工具取回的条目/计数
             # 压成一行随回执落 execution_log —— 工具帧只活当轮，不落这一行的话
             # 下轮「第二条写了什么」只能把工具再跑一遍（探针实测）。
             digest = receipt_digest(name, str(out))
@@ -12007,7 +12017,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # `workflow`（20261007）是**类型接上线**的一半：`record` 那一行本来就有它，
             # 但传回 planner 的这条记录此前只有工具名——于是"哪个技能被卡住"这个信息
             # 在 planner 侧丢失，只剩"哪个工具失败了"。planner 选的是**技能**，
-            # 这一格必须跟着走（渲染见 `context.blocked_rows`）。
+            # 这一格必须跟着走（渲染见 `prompt_context.blocked_rows`）。
             blocked.append({"spec": spec, "tool": name, "reason": reason,
                             "workflow": plan["workflow"],
                             "result": str(out)[:300]})
@@ -12230,7 +12240,7 @@ def _narrator_system_pair(state, config, role: str | None, receipts: list, block
         plan=_narrator_plan(state, config),
         # `article_pointer=True` **只有这一处**（20261005）：narrator 的上下文里原始
         # ToolMessage 就在手边，未超预算的正文帧两份逐字节相同 ⇒ 这里换成指针句，
-        # 省掉整整一份正文（见 context._frame_texts 的注）。
+        # 省掉整整一份正文（见 prompt_context._frame_texts 的注）。
         # 批 3：取值源是**本轮窗口**（`_turn`，不是全表）——与 `model_node` 里那处
         # `_page_ctx(_turn(state), role)` 同一个口，`tests/test_turn_window.py` 规则 A
         # 拿源码现取比对（白名单为空，任何一处退回 `state["messages"]` 当场红）。
@@ -12365,11 +12375,11 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # `_narrator_wire` 里（`with_tool_call_pairs`），顺序与字面一字未改。
     _narr_msgs = _narrator_msgs(state)
     _msgs = [_sys_head] + _narrator_wire(_narr_msgs) + [_sys_tail]
-    # 出站合规绊线（20261006，见 `context.strict_wire_issues` 头注）：`tool_call_id`
+    # 出站合规绊线（20261006，见 `prompt_context.strict_wire_issues` 头注）：`tool_call_id`
     # 重复那次让 deepseek 整轮 400，而 qwen 端点容忍 ⇒ **生产一直绿**，洞在库里躺了
     # 8 天。修在源头（`execute_node::_frame_id`）之后，这一层是**回归绊线**——只记
     # 日志与 trace，**绝不改序列**（在这一层顺手改掉重复 id = 同一规则的第二份实现，
-    # 且真回归会被就地抹平成绿的，绊线也就白设了）。行首 `wire_illegal` 是取证锚点，**不许改名**（见 `context.strict_wire_issues` 头注）。
+    # 且真回归会被就地抹平成绿的，绊线也就白设了）。行首 `wire_illegal` 是取证锚点，**不许改名**（见 `prompt_context.strict_wire_issues` 头注）。
     _wire_bad = strict_wire_issues(_msgs)
     if _wire_bad:
         logger.error("[model] wire_illegal 出站序列不合严格服务商协议（%d 处）：%s",
@@ -12385,7 +12395,7 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     _prompt_chars = sum(len(_msg_text(m) or "") for m in _msgs)
     # 实验读数（20261015）：narrator 那一刻的**真实**提示词规模 —— `_prompt_chars`
     # 就是发出去那一坨的字符数，`frames` 是带进提示词的帧条数（线程复用后包含历史
-    # 轮次的 ToolMessage，见 context._frame_texts），`msgs` 是 state 里的消息总数。
+    # 轮次的 ToolMessage，见 prompt_context._frame_texts），`msgs` 是 state 里的消息总数。
     # 这一格是 §4.6"上下文无限膨胀"那半句唯一的直接读数。
     _ckpt_probe.dump("model", msgs=len(state["messages"]), frames=len(_msgs) - 2,
                      prompt_chars=_prompt_chars, page_ctx=_probe_page[:160],
@@ -13174,7 +13184,7 @@ def graph_input(messages: list, confirm_grant: dict | None = None,
             # 读端统一走 `_turn(state)`，于是"只有本轮的"这条假定从图外的约定
             # 变成图内的事实。无 saver 时窗口恒等于整个列表 ⇒ 行为零变化。
             # `turn_start` 在这里只能是 `-1`（还没合并、算不出下标）：由
-            # `planner_node` 在没人追加之前冻结一次，见 `context.freeze_turn_start`。
+            # `planner_node` 在没人追加之前冻结一次，见 `prompt_context.freeze_turn_start`。
             "turn_msgs": len(messages),
             "turn_start": -1,
             "plan": "", "plan_obj": {}, "plan_rounds": 0,

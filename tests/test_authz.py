@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统�
 sys.path.insert(0, str(ROOT))
 
 from agent import authz  # noqa: E402
-from agent import context  # noqa: E402  ⑨h 用：短应答判据的剥壳口径
-from agent import decisions  # noqa: E402  ⑨h 用：导航快道的剥壳口径
+from agent import prompt_context as pctx  # noqa: E402  ⑨h 用：短应答判据的剥壳口径
+from agent import deterministic_plan  # noqa: E402  ⑨h 用：导航快道的剥壳口径
 from agent.graph import execute_node  # noqa: E402
 from agent.prompts import audience_block  # noqa: E402
 from agent.principal import (ADMIN_ROLES, KNOWN_ROLES, ROLE_ADMIN,  # noqa: E402
@@ -797,19 +797,19 @@ check("剥称呼只剥**开头**一处（句中/别处的名字不动）",
       and authz._strip_address_shell("把文章 12 收藏") == "把文章 12 收藏")
 check("裸「猫咪」也算称呼（老表只有「小猫咪」——三处口径不同是这次的修因）",
       authz._strip_address_shell("猫咪去留言板") == "去留言板")
-check("导航快道吃的是同一份剥壳（`decisions._bare`，表不再内联第二份）",
-      decisions._bare("小猫咪带我去留言板") == "带我去留言板"
-      and bool(decisions._NAV_VERB_RE.match(decisions._bare("猫咪带我去留言板")))
-      and "小猫咪" not in decisions._NAV_VERB_RE.pattern)
-check("短应答准入吃的是同一份剥壳（`context._short_core` —— 称呼壳剥完只剩「好」）",
-      context._short_core("猫咪，好") == "好"
-      and context._short_core("小猫咪，好") == "好"
-      and context._short_core("好") == "好"
+check("导航快道吃的是同一份剥壳（`deterministic_plan._bare`，表不再内联第二份）",
+      deterministic_plan._bare("小猫咪带我去留言板") == "带我去留言板"
+      and bool(deterministic_plan._NAV_VERB_RE.match(deterministic_plan._bare("猫咪带我去留言板")))
+      and "小猫咪" not in deterministic_plan._NAV_VERB_RE.pattern)
+check("短应答准入吃的是同一份剥壳（`pctx._short_core` —— 称呼壳剥完只剩「好」）",
+      pctx._short_core("猫咪，好") == "好"
+      and pctx._short_core("小猫咪，好") == "好"
+      and pctx._short_core("好") == "好"
       # 20261015 批 3：`_short_core` 只管剥壳，**不再**剥句首虚词/句尾语气词
       # （那两道剥法存在的唯一理由是让整串相等命中手写词表，表没了它们也一并删了）
-      and context._short_core("那好的") == "那好的" and context._short_core("要喵") == "要喵"
+      and pctx._short_core("那好的") == "那好的" and pctx._short_core("要喵") == "要喵"
       # 只叫名字的轮次剥完为空 ⇒ 不是"一句话"，准入判 False
-      and not context._is_short_reply("小猫咪！") and not context._is_short_reply("猫咪"))
+      and not pctx._is_short_reply("小猫咪！") and not pctx._is_short_reply("猫咪"))
 
 print("⑨b 接线：闸在调用之前，拒绝说得出原因，叙述侧封得住")
 check("execute 在调用前算确认", "consent_missing = (authz.requires_consent" in graph_src)

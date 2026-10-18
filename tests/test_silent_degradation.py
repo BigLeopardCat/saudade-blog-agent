@@ -2,9 +2,9 @@
 """降级不许静默（20261012，行业规范收口批 1）。
 
 **病**：本仓有四处"降级方向正确、但一点痕迹都不留"的 except——
-`agent/context.py::_attach_page_guide`（站点/能力清单注入失败被悄悄丢掉）、
-`agent/context.py::_corpus_ready`（索引抛异常被压成"没就绪"）、
-`agent/entities.py::_parse`（工具返回形态漂了、两种解析都不认）、
+`agent/prompt_context.py::_attach_page_guide`（站点/能力清单注入失败被悄悄丢掉）、
+`agent/prompt_context.py::_corpus_ready`（索引抛异常被压成"没就绪"）、
+`agent/entity_digest.py::_parse`（工具返回形态漂了、两种解析都不认）、
 `tools/device.py::device_oled_display`（20261017 从 base.py 搬来；回执 id 解析不出 ⇒ 整段回执确认
 被跳过，"幽灵在线窗口里的假成功"静默复活）。四处的降级方向都对，问题是**事后查不出**：
 清单为什么没进提示词、文章标题为什么解析不出 id、那次屏显到底确认没确认。
@@ -27,8 +27,8 @@ sys.path.insert(0, str(ROOT))
 
 # 20261017 device 族搬出 `tools/base.py` ⇒ 桩与 logger 捕获必须打在 `tools.device`
 # 上（`D.logger` 才是代码真正写的那一个）。本文件已不再引用 `tools.base`，故不 import。
-import agent.context as C  # noqa: E402
-import agent.entities as E  # noqa: E402
+import agent.entity_digest as E  # noqa: E402
+import agent.prompt_context as C  # noqa: E402
 import tools.device as D  # noqa: E402
 
 FAILED: list[str] = []

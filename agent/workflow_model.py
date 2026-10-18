@@ -46,7 +46,8 @@ class Workflow:
     extra_plan_tools: tuple[str, ...] = ()
     # 参数必填性（20260925，见"技能参数 schema"节）。**默认从工具 args_schema 派生**，
     # 这两个元组只用来盖掉派生结果——技能参数与工具参数不是同一层，形状必填 ≠ 策略必填。
-    # 例：`device_display.text` 在 pydantic 里必填，但技能在代码侧被空参调用（`decisions.py`
+    # 例：`device_display.text` 在 pydantic 里必填，但技能在代码侧被空参调用
+    # （`deterministic_plan.py`
     # 的 `instantiate_plan("device_display", {})`，文案由执行层创作）⇒ optional_params 里点名。
     # **只写有实证的例外，不写"我觉得该必填"的名字**——多一条就多一个 planner 被白白拦住的路。
     required_params: tuple[str, ...] = ()
@@ -70,7 +71,7 @@ class Workflow:
     # 于是连"被拒一次"都不会发生。两层互不依赖：即便这里漏了，authz 仍然拦。
     roles: frozenset[str] = frozenset()
     # 能力清单里的一句话（20260921）：**给访客看的那份"你能做什么"由注册表渲染**，
-    # 不再手写在 agent/context.py 的 SITE_GUIDE 里——手写清单与注册表必然漂移
+    # 不再手写在 agent/prompt_context.py 的 SITE_GUIDE 里——手写清单与注册表必然漂移
     # （165525/165544 答"我不能新建标签"、165645 又真建了、165937 答"我可以"：
     # 同一能力三轮两种答案，因为清单是静态文本、注册表是活的）。
     # 空串 = 不列（read_article 这类系统快道专用技能不对外说）。

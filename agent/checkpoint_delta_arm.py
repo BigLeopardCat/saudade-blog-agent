@@ -46,7 +46,7 @@ _SYS_PREFIX = "[System:"
 
 
 def _msg_text(m) -> str:
-    """多模态 content 兼容（与 `context._msg_text` 同口径：数组只取 text 块）。"""
+    """多模态 content 兼容（与 `prompt_context._msg_text` 同口径：数组只取 text 块）。"""
     content = getattr(m, "content", "")
     if isinstance(content, str):
         return content
@@ -95,8 +95,9 @@ class CheckpointDeltaArm(CheckpointGoldenArm):
         return out
 
     def stream(self, state: dict, config: dict | None = None,
-               stream_mode: object = None):
-        return super().stream(self.delta(state), config, stream_mode=stream_mode)
+               stream_mode: object = None, durability: object = None):
+        return super().stream(self.delta(state), config, stream_mode=stream_mode,
+                              durability=durability)
 
 
 # ── 建臂 ─────────────────────────────────────────────────────────────

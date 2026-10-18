@@ -54,7 +54,7 @@ from agent import graph as G        # noqa: E402
 from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
 from agent.workflow_params import _param_problem_plan  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
-from agent import decisions as D     # noqa: E402  （② 取样 `_terminal_plan`/`_wrap_up_plan`）
+from agent import deterministic_plan as D     # noqa: E402  （② 取样 `_terminal_plan`/`_wrap_up_plan`）
 from agent.plan_codec import _CONTRACT_KEYS, _esc_spec   # noqa: E402  （④ 的写端转义：20261017 起住这里）
 import server as SRV                # noqa: E402  （③ 读它的新读法：`_spec_one`/`_specs_from_tools`）
 import _ctx_src                     # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
@@ -123,7 +123,7 @@ check("  另一处是 graph_input 的初值，且同一行给了 plan_obj 的初
 # 20261017 批 1 起，写侧先过 `normalize_plan` ⇒ 对象**就是规范形态**，七格逐项相等。
 # 只剩**两处渲染**要显式还原（都是文本格式的固有产物，不是语义差异）：
 #   · note ：`plan_encode` 把空注记渲染成 `（无）` 三个字，对象这边留 `""`。**不吸收
-#            那个哨兵是故意的**——`note` 同时是写侧的输入（`graph.py` / `decisions.py`
+#            那个哨兵是故意的**——`note` 同时是写侧的输入（`graph.py` / `deterministic_plan.py`
 #            / `tool_specs.py` 都会 `plan_obj["note"] = f"{old}｜{tail}"`），把哨兵吃进
 #            对象，下一次拼接就会产出 `（无）｜…`，把"没有注记"讲成一句真注记。
 #   · tools：值里的 `;` 在文本里被 `_esc_spec` 写成 `;`（TOOLS 行用 `;` 当分隔符，

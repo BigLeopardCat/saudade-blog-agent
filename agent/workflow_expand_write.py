@@ -36,9 +36,13 @@ from tools.base import (
     _QUOTA_NOTE_LIMIT,
 )
 
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = []
+
 # 本模块**刻意不写 `__all__`**：整个面都是 `_` 前缀的内部件（展开层只被 `instantiate_plan`
 # 与各展开分支互相调用）。按本仓"`__all__` 只列公开名"的口径（见 `agent/workflow_model.py`
-# 与 `agent/workflow_defs/nav.py`），这里能列的只有空表——而空表会被读成"导出的东西一个
+# 与 `agent/workflow_defs/nav_map.py`），这里能列的只有空表——而空表会被读成"导出的东西一个
 # 都没有"，与事实相反：跨模块 import 走的是显式名字（`from agent.workflows import
 # _norm_id_list` 等），显式 import 从来不看 `__all__`。
 
@@ -122,7 +126,7 @@ def _unfilled_placeholder(params: dict) -> tuple[str, str] | None:
     正常的主人原话里取到的名字不会长这样；万一真撞上（有人就管一个标签叫 `$foo`），
     代价是主人被反问一句、而那句话本来办得成——比"印一张记号卡让他盲签"小得多。
 
-    与**参数引用**（`$tool[0].field`）不冲突：引用必须带方括号（`agent/refs.py` 的
+    与**参数引用**（`$tool[0].field`）不冲突：引用必须带方括号（`agent/arg_refs.py` 的
     `REF_RE`），撞不上这两个形态。那一层由 `check_workflow_params` / `resolve_args` 管，
     本函数不碰。
     """

@@ -8,8 +8,8 @@ agent 侧只能靠读 `.env` 与提交历史去推。20261018 加 `/version`。
 
 判据四条，缺一条这块就可能是错的：
 
-判定逻辑住在 `agent/probe.py`（纯函数，`server.py` 只留接线），所以第 ② 节直接喂
-`probe.build_sha`——不传 env/git 的那两档是它的入参，不是它的全局。
+判定逻辑住在 `agent/runtime_probe.py`（纯函数，`server.py` 只留接线），所以第 ② 节直接喂
+`runtime_probe.build_sha`——不传 env/git 的那两档是它的入参，不是它的全局。
 
   ① **sha 与 git 同源**：本机是 git 仓 ⇒ 它必须逐字等于 `git rev-parse HEAD`。
      取值顺序 env → git → `"unknown"`，**不许手抄**一个像真的 sha——假 sha 比没有更坏，
@@ -41,7 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import server  # noqa: E402
-from agent import probe  # noqa: E402
+from agent import runtime_probe  # noqa: E402
 from config.settings import settings  # noqa: E402
 
 FAILED: list[str] = []
@@ -78,12 +78,12 @@ check("  sha_source == 'git'（本机是 git 仓、且没设 DEPLOY_SHA）",
       _r["sha_source"] == "git", _r["sha_source"])
 
 print("\n② env 覆盖与取不到：三档都要有，且要说清是哪一档")
-_env_sha, _env_src = probe.build_sha({"DEPLOY_SHA": "0123456789abcdef" * 2 + "01234567"})
+_env_sha, _env_src = runtime_probe.build_sha({"DEPLOY_SHA": "0123456789abcdef" * 2 + "01234567"})
 check("设了 DEPLOY_SHA ⇒ 用它，且 sha_source='env'",
       _env_sha == "0123456789abcdef" * 2 + "01234567" and _env_src == "env",
       f"{_env_sha[:12]} / {_env_src}")
 # 取不到（既没 env、又不在 git 仓里）：必须**如实**说 unknown，不许编一个像真的
-_none_sha, _none_src = probe.build_sha({}, git_dir=Path("/nonexistent-repo-for-test"))
+_none_sha, _none_src = runtime_probe.build_sha({}, git_dir=Path("/nonexistent-repo-for-test"))
 check("取不到 ⇒ sha='unknown' 且 sha_source='unknown'（不编一个像真的）",
       _none_sha == "unknown" and _none_src == "unknown", f"{_none_sha} / {_none_src}")
 

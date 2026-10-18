@@ -387,7 +387,7 @@ print("\n⑩ 融合结果喂给下游：score 契约与「只允许越读越高�
 
 from langchain_core.messages import ToolMessage  # noqa: E402
 
-import agent.decisions as D2  # noqa: E402
+import agent.deterministic_plan as D2  # noqa: E402
 
 # 与 tools/base.py::rag_search 的出口逐字同形（改了出口格式这条就会红）
 text = "\n".join(f"{i + 1}. type={h['type']} id={h['id']} score={h['score']} "

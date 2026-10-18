@@ -15,7 +15,7 @@
         0,
         0
       ],
-      "agent/absence.py": [
+      "agent/absence_claims.py": [
         0,
         429
       ],
@@ -87,15 +87,15 @@
         3,
         0
       ],
-      "agent/context.py": [
+      "agent/prompt_context.py": [
         1,
         55
       ],
-      "agent/decisions.py": [
+      "agent/deterministic_plan.py": [
         38,
         325
       ],
-      "agent/entities.py": [
+      "agent/entity_digest.py": [
         9,
         17
       ],
@@ -103,7 +103,7 @@
         0,
         0
       ],
-      "agent/frames.py": [
+      "agent/frame_contract.py": [
         0,
         0
       ],
@@ -151,7 +151,7 @@
         0,
         0
       ],
-      "agent/probe.py": [
+      "agent/runtime_probe.py": [
         0,
         0
       ],
@@ -171,7 +171,7 @@
         0,
         0
       ],
-      "agent/refs.py": [
+      "agent/arg_refs.py": [
         0,
         3
       ],
@@ -219,11 +219,11 @@
         45,
         0
       ],
-      "agent/workflow_defs/nav.py": [
+      "agent/workflow_defs/nav_map.py": [
         75,
         0
       ],
-      "agent/workflow_defs/navigation.py": [
+      "agent/workflow_defs/nav_skills.py": [
         4,
         0
       ],
@@ -235,7 +235,7 @@
         1,
         0
       ],
-      "agent/workflow_defs/reports.py": [
+      "agent/workflow_defs/report_skills.py": [
         4,
         0
       ],
@@ -272,11 +272,51 @@
         0
       ],
       "tools/base.py": [
-        116,
-        2
+        2,
+        0
+      ],
+      "tools/note_admin.py": [
+        9,
+        0
+      ],
+      "tools/category_admin.py": [
+        14,
+        0
+      ],
+      "tools/tag_admin.py": [
+        13,
+        0
+      ],
+      "tools/quota_admin.py": [
+        11,
+        0
+      ],
+      "tools/account_admin.py": [
+        13,
+        0
+      ],
+      "tools/dashboard_todos.py": [
+        5,
+        0
+      ],
+      "tools/board_moderation.py": [
+        9,
+        0
+      ],
+      "tools/announcements.py": [
+        8,
+        0
+      ],
+      "tools/admin_read.py": [
+        4,
+        0
       ],
       "tools/device.py": [
         2,
+        0
+      ],
+      "tools/notes.py": [
+        13,
         0
       ],
       "tools/own_data.py": [
@@ -286,6 +326,10 @@
       "tools/result.py": [
         1,
         0
+      ],
+      "tools/site.py": [
+        15,
+        2
       ],
       "server.py": [
         22,
@@ -299,8 +343,8 @@
   },
   "entries": [
     {
-      "id": "agent/absence.py::_SITE_DOMAIN_RE",
-      "file": "agent/absence.py",
+      "id": "agent/absence_claims.py::_SITE_DOMAIN_RE",
+      "file": "agent/absence_claims.py",
       "kind": "regex",
       "name": "_SITE_DOMAIN_RE",
       "size": 35,
@@ -312,8 +356,8 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/absence.py::_ABSENCE_RE",
-      "file": "agent/absence.py",
+      "id": "agent/absence_claims.py::_ABSENCE_RE",
+      "file": "agent/absence_claims.py",
       "kind": "regex",
       "name": "_ABSENCE_RE",
       "size": 34,
@@ -325,8 +369,8 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/absence.py::_CONTENT_NOUN_RE",
-      "file": "agent/absence.py",
+      "id": "agent/absence_claims.py::_CONTENT_NOUN_RE",
+      "file": "agent/absence_claims.py",
       "kind": "regex",
       "name": "_CONTENT_NOUN_RE",
       "size": 32,
@@ -338,8 +382,8 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/absence.py::_ABSENCE_EXEMPT_RE",
-      "file": "agent/absence.py",
+      "id": "agent/absence_claims.py::_ABSENCE_EXEMPT_RE",
+      "file": "agent/absence_claims.py",
       "kind": "regex",
       "name": "_ABSENCE_EXEMPT_RE",
       "size": 94,
@@ -351,8 +395,8 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/absence.py::_ABSENCE_LEAD_RE",
-      "file": "agent/absence.py",
+      "id": "agent/absence_claims.py::_ABSENCE_LEAD_RE",
+      "file": "agent/absence_claims.py",
       "kind": "regex",
       "name": "_ABSENCE_LEAD_RE",
       "size": 55,
@@ -364,8 +408,8 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/absence.py::_CAPABILITY_NEG_RE",
-      "file": "agent/absence.py",
+      "id": "agent/absence_claims.py::_CAPABILITY_NEG_RE",
+      "file": "agent/absence_claims.py",
       "kind": "regex",
       "name": "_CAPABILITY_NEG_RE",
       "size": 83,
@@ -377,8 +421,8 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/absence.py::_TOOL_NONUSE_RE",
-      "file": "agent/absence.py",
+      "id": "agent/absence_claims.py::_TOOL_NONUSE_RE",
+      "file": "agent/absence_claims.py",
       "kind": "regex",
       "name": "_TOOL_NONUSE_RE",
       "size": 30,
@@ -390,8 +434,8 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/absence.py::_SELF_NONREAD_RE",
-      "file": "agent/absence.py",
+      "id": "agent/absence_claims.py::_SELF_NONREAD_RE",
+      "file": "agent/absence_claims.py",
       "kind": "regex",
       "name": "_SELF_NONREAD_RE",
       "size": 66,
@@ -891,8 +935,8 @@
       "why": "拆 Rust 侧『待确认[skill]』错误码"
     },
     {
-      "id": "agent/context.py::_RECALL_RE",
-      "file": "agent/context.py",
+      "id": "agent/prompt_context.py::_RECALL_RE",
+      "file": "agent/prompt_context.py",
       "kind": "regex",
       "name": "_RECALL_RE",
       "size": 51,
@@ -904,8 +948,8 @@
       "sunset": "批 6（跨轮指代族，与 config 注入/摘要那条一起定价）"
     },
     {
-      "id": "agent/context.py::_DOC_READ_ROW_RE",
-      "file": "agent/context.py",
+      "id": "agent/prompt_context.py::_DOC_READ_ROW_RE",
+      "file": "agent/prompt_context.py",
       "kind": "regex",
       "name": "_DOC_READ_ROW_RE",
       "size": 4,
@@ -915,8 +959,8 @@
       "why": "拆 execution_log 里系统写定的『读取文章 12《…》』行"
     },
     {
-      "id": "agent/decisions.py::_QUESTION_RE",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_QUESTION_RE",
+      "file": "agent/deterministic_plan.py",
       "kind": "regex",
       "name": "_QUESTION_RE",
       "size": 17,
@@ -928,8 +972,8 @@
       "sunset": "批 2（快道族：先定价再定，读数出来前不删）"
     },
     {
-      "id": "agent/decisions.py::_NAV_VERB_RE",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_NAV_VERB_RE",
+      "file": "agent/deterministic_plan.py",
       "kind": "regex",
       "name": "_NAV_VERB_RE",
       "size": 30,
@@ -941,8 +985,8 @@
       "sunset": "批 2（快道族：先定价再定，读数出来前不删）"
     },
     {
-      "id": "agent/decisions.py::_ARTICLE_REF_RE",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_ARTICLE_REF_RE",
+      "file": "agent/deterministic_plan.py",
       "kind": "regex",
       "name": "_ARTICLE_REF_RE",
       "size": 72,
@@ -954,8 +998,8 @@
       "sunset": "批 2（快道族：先定价再定，读数出来前不删）"
     },
     {
-      "id": "agent/decisions.py::_EFFECT_ALIASES",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_EFFECT_ALIASES",
+      "file": "agent/deterministic_plan.py",
       "kind": "collection",
       "name": "_EFFECT_ALIASES",
       "size": 7,
@@ -966,8 +1010,8 @@
       "sunset": "批 2（快道族：先定价再定，读数出来前不删）"
     },
     {
-      "id": "agent/decisions.py::_SWITCH_VERB_RE",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_SWITCH_VERB_RE",
+      "file": "agent/deterministic_plan.py",
       "kind": "regex",
       "name": "_SWITCH_VERB_RE",
       "size": 13,
@@ -979,8 +1023,8 @@
       "sunset": "批 2（快道族：先定价再定，读数出来前不删）"
     },
     {
-      "id": "agent/decisions.py::_EFFECT_TALK_GUARD",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_EFFECT_TALK_GUARD",
+      "file": "agent/deterministic_plan.py",
       "kind": "regex",
       "name": "_EFFECT_TALK_GUARD",
       "size": 14,
@@ -992,8 +1036,8 @@
       "sunset": "批 2（快道族：先定价再定，读数出来前不删）"
     },
     {
-      "id": "agent/decisions.py::_ITEM_REFERENT_RE",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_ITEM_REFERENT_RE",
+      "file": "agent/deterministic_plan.py",
       "kind": "regex",
       "name": "_ITEM_REFERENT_RE",
       "size": 33,
@@ -1005,8 +1049,8 @@
       "sunset": "批 2（快道族：先定价再定，读数出来前不删）"
     },
     {
-      "id": "agent/decisions.py::_REFERENT_NAV_RE",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_REFERENT_NAV_RE",
+      "file": "agent/deterministic_plan.py",
       "kind": "regex",
       "name": "_REFERENT_NAV_RE",
       "size": 68,
@@ -1018,8 +1062,8 @@
       "sunset": "批 2（快道族：先定价再定——删/收窄一条快道要读真实流量的命中分布）"
     },
     {
-      "id": "agent/decisions.py::_NEGATION_RE",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_NEGATION_RE",
+      "file": "agent/deterministic_plan.py",
       "kind": "regex",
       "name": "_NEGATION_RE",
       "size": 10,
@@ -1031,8 +1075,8 @@
       "sunset": "批 2（快道族：先定价再定，读数出来前不删）"
     },
     {
-      "id": "agent/decisions.py::_DISPLAY_FAST_RE",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_DISPLAY_FAST_RE",
+      "file": "agent/deterministic_plan.py",
       "kind": "regex",
       "name": "_DISPLAY_FAST_RE",
       "size": 45,
@@ -1044,8 +1088,8 @@
       "sunset": "批 2（快道族：先定价再定，读数出来前不删）"
     },
     {
-      "id": "agent/decisions.py::_DARKMODE_ALIASES",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_DARKMODE_ALIASES",
+      "file": "agent/deterministic_plan.py",
       "kind": "collection",
       "name": "_DARKMODE_ALIASES",
       "size": 7,
@@ -1056,8 +1100,8 @@
       "sunset": "批 2（快道族：先定价再定，读数出来前不删）"
     },
     {
-      "id": "agent/decisions.py::_EXPERIENCE_TITLE_RE",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_EXPERIENCE_TITLE_RE",
+      "file": "agent/deterministic_plan.py",
       "kind": "regex",
       "name": "_EXPERIENCE_TITLE_RE",
       "size": 23,
@@ -1069,8 +1113,8 @@
       "sunset": "检索意图族（批 4 之后的同形改造）"
     },
     {
-      "id": "agent/decisions.py::_CANDIDATE_STOPWORDS",
-      "file": "agent/decisions.py",
+      "id": "agent/deterministic_plan.py::_CANDIDATE_STOPWORDS",
+      "file": "agent/deterministic_plan.py",
       "kind": "collection",
       "name": "_CANDIDATE_STOPWORDS",
       "size": 20,
@@ -1081,8 +1125,8 @@
       "sunset": "批 2（快道族：先定价再定，读数出来前不删）"
     },
     {
-      "id": "agent/entities.py::_NOTE_TOTAL_RE",
-      "file": "agent/entities.py",
+      "id": "agent/entity_digest.py::_NOTE_TOTAL_RE",
+      "file": "agent/entity_digest.py",
       "kind": "regex",
       "name": "_NOTE_TOTAL_RE",
       "size": 2,
@@ -1092,8 +1136,8 @@
       "why": "拆工具返回的『共 N 条』"
     },
     {
-      "id": "agent/entities.py::_NOTE_RANGE_RE",
-      "file": "agent/entities.py",
+      "id": "agent/entity_digest.py::_NOTE_RANGE_RE",
+      "file": "agent/entity_digest.py",
       "kind": "regex",
       "name": "_NOTE_RANGE_RE",
       "size": 2,
@@ -1103,8 +1147,8 @@
       "why": "拆工具返回的『第 a-b 条』"
     },
     {
-      "id": "agent/entities.py::_BOARD_STATE_WORD",
-      "file": "agent/entities.py",
+      "id": "agent/entity_digest.py::_BOARD_STATE_WORD",
+      "file": "agent/entity_digest.py",
       "kind": "collection",
       "name": "_BOARD_STATE_WORD",
       "size": 3,
@@ -1113,8 +1157,8 @@
       "why": "留言状态的显示字（由返回里的数字字段渲染）"
     },
     {
-      "id": "agent/entities.py::_ADMIN_NOTES_HEAD_RE",
-      "file": "agent/entities.py",
+      "id": "agent/entity_digest.py::_ADMIN_NOTES_HEAD_RE",
+      "file": "agent/entity_digest.py",
       "kind": "regex",
       "name": "_ADMIN_NOTES_HEAD_RE",
       "size": 13,
@@ -1964,8 +2008,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/refs.py::_RAG_LINE_RE",
-      "file": "agent/refs.py",
+      "id": "agent/arg_refs.py::_RAG_LINE_RE",
+      "file": "agent/arg_refs.py",
       "kind": "regex",
       "name": "_RAG_LINE_RE",
       "size": 3,
@@ -2018,8 +2062,8 @@
       "why": "情绪贴纸名单（与人设/前端同源）"
     },
     {
-      "id": "agent/workflow_defs/nav.py::_IOT_NAV_ALIASES",
-      "file": "agent/workflow_defs/nav.py",
+      "id": "agent/workflow_defs/nav_map.py::_IOT_NAV_ALIASES",
+      "file": "agent/workflow_defs/nav_map.py",
       "kind": "collection",
       "name": "_IOT_NAV_ALIASES",
       "size": 10,
@@ -2028,8 +2072,8 @@
       "why": "物联网页面的别名 → 路径（站内页面事实）"
     },
     {
-      "id": "agent/workflow_defs/nav.py::_PUBLIC_NAME_TAKEN",
-      "file": "agent/workflow_defs/nav.py",
+      "id": "agent/workflow_defs/nav_map.py::_PUBLIC_NAME_TAKEN",
+      "file": "agent/workflow_defs/nav_map.py",
       "kind": "collection",
       "name": "_PUBLIC_NAME_TAKEN",
       "size": 2,
@@ -2048,8 +2092,8 @@
       "why": "帧退出原因的显示字。**19→20（20261016）**：新码 `action_conflict`（反极性改选，docs/问题记录.md §1.57）——这张表**不是判据词表**，是给主人看的显示字，且与 `agent/block_reasons.py::REASONS` 有一道**跨侧同值锁**（tests/test_block_reasons.py：键集相等 + 逐值相等）。⇒ 新增一个原因码**必然**在这里 +1，没有第二条路可走；这不是「往判据里加词」。**20→21（20261016）**：新码 `write_outcome_unknown`（写操作幂等账，ADR-0012 / docs/问题记录.md §1.66）——同上。这一次同时说明另一侧的读数：`agent/block_reasons.py` 的**穷举量** 20→21 是**同一件事的第二个读数**，不是又长了一张新表——那一侧至今没有登记条目，因为 `REASONS` 的中文住在**元组值**里（`(\"写操作结果未知\", False)`），而窄口径的 `_direct_cjk` 只认集合字面量的**直接**元素、不下钻嵌套 ⇒ ① 看不见它，只有 ② 的补网抓得到。⇒ 两处 +1 都不是「往判据里加词」，是这条跨侧同值锁的另一端。"
     },
     {
-      "id": "tools/base.py::_WEATHER_LOC_RE",
-      "file": "tools/base.py",
+      "id": "tools/site.py::_WEATHER_LOC_RE",
+      "file": "tools/site.py",
       "kind": "regex",
       "name": "_WEATHER_LOC_RE",
       "size": 2,
@@ -2069,8 +2113,8 @@
       "why": "对着 **Rust 侧产出**的拒绝文案"
     },
     {
-      "id": "tools/base.py::BOARD_APPROVED_CN",
-      "file": "tools/base.py",
+      "id": "tools/board_moderation.py::BOARD_APPROVED_CN",
+      "file": "tools/board_moderation.py",
       "kind": "collection",
       "name": "BOARD_APPROVED_CN",
       "size": 3,
@@ -2079,8 +2123,8 @@
       "why": "留言审核状态的显示字"
     },
     {
-      "id": "tools/base.py::_QUOTA_POLICY_REFUSALS",
-      "file": "tools/base.py",
+      "id": "tools/quota_admin.py::_QUOTA_POLICY_REFUSALS",
+      "file": "tools/quota_admin.py",
       "kind": "collection",
       "name": "_QUOTA_POLICY_REFUSALS",
       "size": 3,

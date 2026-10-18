@@ -23,12 +23,13 @@
   · ④ `bind_planner_tools` 真的把裁剪后的 schema 交下去了（不是接了个没人用的形参）；
   · ⑤ 接线 —— `planner_node` 每轮算 `deny`、记账、传给 bind 与渲染、以及那一格
     一次性纠偏与它的记账；
-  · ⑥ **同一轮内现摘**（20261012）—— `_sated_read_workflow` 判"这一版计划里的读全是
+  · ⑥ **同一轮内现摘**（20261012）—— `_already_read_workflow` 判"这一版计划里的读全是
     本轮已取回的"、`_strip_menu` 现改 `deny` 并重绑客户端。病与处方见那两个函数的
     头注；这一节钉的是"判据与 `_trim_done_reads` 同源"与四处收窄的负控。
 
 用法：.venv/bin/python tests/test_menu_deny.py
 """
+import ast
 import json
 import sys
 from pathlib import Path
@@ -251,27 +252,27 @@ check("纠偏语里**不念**任何技能名（念一遍等于把摘掉的菜单
 _RCPT = [{"workflow": "account_roster", "tool": "list_accounts", "args": {}, "result": "…"}]
 _PLAN = {"workflow": "account_roster", "tools": ["list_accounts({})"]}
 check("正控：读已取回 ⇒ 摘 `account_roster`（生产那两条 trace 的形状）",
-      g._sated_read_workflow(_PLAN, _RCPT, _ROLE) == ("account_roster", ["list_accounts({})"]),
-      str(g._sated_read_workflow(_PLAN, _RCPT, _ROLE)))
+      g._already_read_workflow(_PLAN, _RCPT, _ROLE) == ("account_roster", ["list_accounts({})"]),
+      str(g._already_read_workflow(_PLAN, _RCPT, _ROLE)))
 check("负控：**还没读过** ⇒ 不摘（首触路径一步都不动；也兜住「零回执轮」）",
-      g._sated_read_workflow(_PLAN, [], _ROLE) is None
-      and g._sated_read_workflow(_PLAN, None, _ROLE) is None)
+      g._already_read_workflow(_PLAN, [], _ROLE) is None
+      and g._already_read_workflow(_PLAN, None, _ROLE) is None)
 check("负控：读过的是**另一份参数** ⇒ 不摘（`_trim_done_reads` 的签名判据没被绕过）",
-      g._sated_read_workflow({"workflow": "account_roster",
+      g._already_read_workflow({"workflow": "account_roster",
                            "tools": ['list_accounts({"status": "frozen"})']},
                           _RCPT, _ROLE) is None)
 check("负控：清单里还有**没读过**的件 ⇒ 不摘（「先搜到那一篇，再改它」那类两步走留在原地）",
-      g._sated_read_workflow({"workflow": "ops_report",
+      g._already_read_workflow({"workflow": "ops_report",
                            "tools": ["get_server_status({})", "get_service_health({})"]},
                           [{"tool": "get_server_status", "args": {}}], _ROLE) is None)
 check("负控：模板为空的技能不摘（`content_query` 的工具靠 PARAMS 点名，摘它=关掉整条查询通道）",
-      g._sated_read_workflow({"workflow": "content_query", "tools": ['search_notes({"q": "x"})']},
+      g._already_read_workflow({"workflow": "content_query", "tools": ['search_notes({"q": "x"})']},
                           [{"tool": "search_notes", "args": {"q": "x"}}], _ROLE) is None)
 check("负控：动作技能不摘（那一族有自己的重复通道与话术，不在这里抢）",
-      g._sated_read_workflow({"workflow": "device_query", "tools": ["list_devices({})"]},
+      g._already_read_workflow({"workflow": "device_query", "tools": ["list_devices({})"]},
                           [{"tool": "list_devices", "args": {}}], "user") is None)
 check("负控：角色看不见的技能不摘（可见性只走 `visible_workflows` 那一处，同 ⑤）",
-      g._sated_read_workflow(_PLAN, _RCPT, "user") is None)
+      g._already_read_workflow(_PLAN, _RCPT, "user") is None)
 
 # 候选集：对每个可见技能都喂一份"它的工具全已取回"的计划——既防这一节空转，也把
 # "摘技能比剔一次调用影响面大得多"这条边界钉成集合判据（写技能一个都不许进来）。
@@ -280,7 +281,7 @@ _cand: dict = {}
 for _s in visible_workflows(_ROLE):
     if _s.chat or not _pair(_s):
         continue
-    _got = g._sated_read_workflow(
+    _got = g._already_read_workflow(
         {"workflow": _s.name,
          "tools": [f"{t}({json.dumps(a, ensure_ascii=False)})" for t, a in _pair(_s)]},
         [{"tool": t, "args": a} for t, a in _pair(_s)], _ROLE)
@@ -390,12 +391,61 @@ try:
 finally:
     g.record = _REC
 
-check("接线：判据只有 `_name_write_correct` 一处调 `_sated_read_workflow`（定义 1 + 调用 1）"
+
+def _planner_event_sites(src: str) -> dict:
+    """`record("planner", "<事件名>", …)` 的落点：事件名 → (最近的函数名, 行号)。
+
+    读 **AST 不读文本**：docstring / 注释里写一句 `record("planner", "x"` 会把按文本做的
+    断言当场截断（本仓四犯的老坑——20261018 就是被 `_already_read_workflow` 的头注截断的，
+    那条头注正是在提醒"别把这条事件名一起改"）。这一版顺带**真判了**"两条在同一个函数里"：
+    旧版只比两个下标，check 名字里那句话其实没有人判。"""
+    sites: dict = {}
+
+    def calls(fn) -> list:
+        out: list = []
+
+        def visit(node) -> None:
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    continue          # 嵌套函数/类另算，别把它的账记在父亲头上
+                if isinstance(child, ast.Call) and getattr(child.func, "id", None) == "record":
+                    out.append(child)
+                visit(child)
+
+        visit(fn)
+        return out
+
+    for fn in ast.parse(src).body:
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for call in calls(fn):
+            args = call.args
+            if (len(args) >= 2 and isinstance(args[0], ast.Constant)
+                    and args[0].value == "planner" and isinstance(args[1], ast.Constant)):
+                sites.setdefault(str(args[1].value), (fn.name, call.lineno))
+    return sites
+
+
+_SITES = _planner_event_sites(_GRAPH_SRC)
+# 正控用的合成源：判据得报得出来（分开住 / 顺序反），不然它在空转。
+_SYN_SPLIT = _planner_event_sites('def a():\n    record("planner", "name_nudge")\n\n\n'
+                                  'def b():\n    record("planner", "sated_read_strip")\n')
+_SYN_SWAP = _planner_event_sites('def a():\n    record("planner", "sated_read_strip")\n'
+                                 '    record("planner", "name_nudge")\n')
+
+check("接线：判据只有 `_name_write_correct` 一处调 `_already_read_workflow`（定义 1 + 调用 1）"
       "——两处各判一遍必然漂移",
-      _GRAPH_SRC.count("_sated_read_workflow(") == 2)
+      _GRAPH_SRC.count("_already_read_workflow(") == 2)
 check("两条事件在同一个函数里、`name_nudge` 在前（顺序即优先级：有动作词就用更有指向的话术）",
-      _GRAPH_SRC.index('record("planner", "name_nudge"')
-      < _GRAPH_SRC.index('record("planner", "sated_read_strip"'))
+      _SITES.get("name_nudge") is not None and _SITES.get("sated_read_strip") is not None
+      and _SITES["name_nudge"][0] == _SITES["sated_read_strip"][0]
+      and _SITES["name_nudge"][1] < _SITES["sated_read_strip"][1],
+      f'{_SITES.get("name_nudge")} / {_SITES.get("sated_read_strip")}')
+check("  正控：判据得**报得出来**（分住两个函数 / 顺序反了，两条都必须红，否则它在空转）",
+      _SYN_SPLIT["name_nudge"][0] != _SYN_SPLIT["sated_read_strip"][0]
+      and _SYN_SWAP["name_nudge"][1] > _SYN_SWAP["sated_read_strip"][1],
+      f'{_SYN_SPLIT["name_nudge"]} vs {_SYN_SPLIT["sated_read_strip"]}；'
+      f'{_SYN_SWAP["name_nudge"]} vs {_SYN_SWAP["sated_read_strip"]}')
 check("`_decide_late_correct` 里那两半合成**一次调用**，且排在动作重复那条**之前**"
       "（动作技能留自己的通道；那函数已超复杂度预算，只许缩小）",
       _GRAPH_SRC.count("_name_write_correct(") == 2

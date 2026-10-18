@@ -154,15 +154,15 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.graph import END, START, StateGraph
 
-from agent.context import (_doc_anchors, _frame_texts, _has_frames,
+from agent.prompt_context import (_doc_anchors, _frame_texts, _has_frames,
                            _last_assistant_utterance, _last_user_msg, _page_ctx,
                            _recent_tail, _receipts_text, _short_reply_hint,
                            with_tool_call_pairs)
-from agent.decisions import _article_fast_path, _intent_hints, _wrap_up_plan
+from agent.deterministic_plan import _article_fast_path, _intent_hints, _wrap_up_plan
 from agent.factblock import block_of, is_action_family, is_block_family
-# 帧的形状全在 `agent/frames.py`（20261016 起）——**本模块只负责"什么时候发"**，
+# 帧的形状全在 `agent/frame_contract.py`（20261016 起）——**本模块只负责"什么时候发"**，
 # 而"发出去长什么样"现在由**节点名 + 节点返回值**结构性地决定（见模块头注）。
-from agent.frames import (NOOP_TEXT,
+from agent.frame_contract import (NOOP_TEXT,
                           blocked_row as _blocked_row,
                           executed_specs,
                           plan_for_gate as _plan_for_gate)
@@ -176,7 +176,7 @@ from agent.planner_llm import build_tool_schema
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
                               wrap_up_text)
-from agent.refs import ref_hints
+from agent.arg_refs import ref_hints
 from agent.workflow_plan import instantiate_plan
 from agent.stickers import repair_sticker_tokens
 from config.settings import settings
@@ -839,6 +839,11 @@ class ReactGoldenArm:
 
         `stream_mode` 缺省给 `["messages", "updates"]`（生产者要的就是这两路）——收下
         这个参数只是为了让签名与图一致，签名对不上会以 `TypeError` 的形态炸在生产者里。
+
+        ⚠️ **本臂刻意不收 `durability`**（20261018 批 7）：它不挂 checkpointer，
+        持久化档对它毫无意义。生产者只在 `server._graph_holds_context()` 为真时才给这一格，
+        而本臂恒为假 ⇒ 正常情况下永远收不到；**真收到就是接线错了**，那时 `TypeError`
+        比"静默收下"好——静默收下等于把"这一臂没有持久化"伪装成"有持久化但没区别"。
         """
         src = dict(state or {})
         messages = list(src.get("messages") or [])

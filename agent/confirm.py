@@ -28,7 +28,7 @@ uvicorn 跑 **2 个 worker**：进程内的一张 pending 表在另一个 worker
   · 密钥空缺（配置没读到）时**既不签也不验**——绝不降级成"无签名令牌"。
   · 验签失败一律 `None`（签名不符 / 过期 / 换人 / 换会话 / 格式坏 / 版本不符），
     调用方据此**零执行**。
-  · **specs 里不允许残留 `$ref`**（`agent/refs.py` 的 `$tool[N].field`）：引用依赖
+  · **specs 里不允许残留 `$ref`**（`agent/arg_refs.py` 的 `$tool[N].field`）：引用依赖
     的是"签发那一轮的工具帧"，而执行发生在下一轮，帧早已不在——留着引用等于执行
     时参数解析失败（最好的情况）或解析成别的东西（最坏的情况）。检出即**不签发**，
     退回"如实追问"，见 `has_refs`。
@@ -159,10 +159,10 @@ def token_jti(token: str) -> str:
 def has_refs(specs) -> bool:
     """specs 里有没有残留的 `$ref`（见模块头注：有引用就不签发）。
 
-    实现只有一份（`agent.refs.has_refs`，递归进 list/dict）——这里保留同名薄壳，
+    实现只有一份（`agent.arg_refs.has_refs`，递归进 list/dict）——这里保留同名薄壳，
     是因为调用方读的是本模块的语义（"令牌能不能签"），而不是引用模块的语法。
     """
-    from agent.refs import has_refs as _has_refs  # 局部导入：避免模块级循环
+    from agent.arg_refs import has_refs as _has_refs  # 局部导入：避免模块级循环
     return _has_refs(specs)
 
 

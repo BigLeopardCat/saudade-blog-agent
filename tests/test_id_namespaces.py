@@ -28,9 +28,9 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
 from agent import adminops_board as _board  # noqa: E402
-from agent import context as C  # noqa: E402
+from agent import prompt_context as C  # noqa: E402
 from agent import reports as R  # noqa: E402
-from agent.entities import receipt_digest  # noqa: E402
+from agent.entity_digest import receipt_digest  # noqa: E402
 from tools.base import _board_label  # noqa: E402
 
 FAILS: list[str] = []
@@ -142,14 +142,18 @@ check("  裸 id= 不再出现（旧形 `《标题》 id=N` 是大写/小写混�
 print("\n④ 接线锁（源码级）：渲染实现里必须写着命名空间，且没有旧形")
 
 _SRC = {
-    "tools/base.py": (ROOT / "tools" / "base.py").read_text(encoding="utf-8"),
+    # 20261018：留言复核那一族（含 `_board_label`）搬进 `tools/board_moderation.py`
+    # ⇒ 取值点跟着搬，判据字面一个字没动（同 `test_hardening.py` 对 `tools/device.py`
+    # 的做法）。**只换读哪一份源码**，不换断言。
+    "tools/board_moderation.py": (ROOT / "tools" / "board_moderation.py").read_text(
+        encoding="utf-8"),
     "agent/reports.py": (ROOT / "agent" / "reports.py").read_text(encoding="utf-8"),
     "agent/adminops_tags.py": (ROOT / "agent" / "adminops_tags.py").read_text(encoding="utf-8"),
     "agent/adminops_board.py": (ROOT / "agent" / "adminops_board.py").read_text(encoding="utf-8"),
     "agent/adminops_confirm.py": (ROOT / "agent" / "adminops_confirm.py").read_text(
         encoding="utf-8"),
-    "agent/entities.py": (ROOT / "agent" / "entities.py").read_text(encoding="utf-8"),
-    "agent/context.py": (ROOT / "agent" / "context.py").read_text(encoding="utf-8"),
+    "agent/entity_digest.py": (ROOT / "agent" / "entity_digest.py").read_text(encoding="utf-8"),
+    "agent/prompt_context.py": (ROOT / "agent" / "prompt_context.py").read_text(encoding="utf-8"),
 }
 
 
@@ -160,15 +164,15 @@ def _body(src: str, fn: str) -> str:
 
 
 _WIRING = (
-    ("tools/base.py", "_board_label", 'f"talkId:'),
-    ("tools/base.py", "_board_label", 'f"userId:'),
+    ("tools/board_moderation.py", "_board_label", 'f"talkId:'),
+    ("tools/board_moderation.py", "_board_label", 'f"userId:'),
     ("agent/reports.py", "_detail_line", 'f"  · talkId:'),
     ("agent/adminops_board.py", "_board_ref", 'f"talkId:'),
-    ("agent/entities.py", "_note_digest", 'f"noteId:'),
-    ("agent/entities.py", "_notification_digest", 'f"notifId:'),
-    ("agent/entities.py", "_unread_digest", 'f"notifId:'),
-    ("agent/entities.py", "_mailbox_digest", 'f"mailId:'),
-    ("agent/context.py", "_doc_anchors", " noteId="),
+    ("agent/entity_digest.py", "_note_digest", 'f"noteId:'),
+    ("agent/entity_digest.py", "_notification_digest", 'f"notifId:'),
+    ("agent/entity_digest.py", "_unread_digest", 'f"notifId:'),
+    ("agent/entity_digest.py", "_mailbox_digest", 'f"mailId:'),
+    ("agent/prompt_context.py", "_doc_anchors", " noteId="),
 )
 for _f, _fn, _lit in _WIRING:
     check(f"{_f}::{_fn} 里写着 {_lit}", _lit in _SRC[_f])
@@ -178,16 +182,16 @@ check("agent/reports.py::render_user_stats 里写着 userId:",
       'f"  · userId:' in _SRC["agent/reports.py"])
 
 # 旧形不许回来：留言族渲染里不得再有 `f"#{` 插值（`#{` 只会是裸 id）
-for _f, _fn in (("tools/base.py", "_board_label"), ("agent/reports.py", "_detail_line"),
+for _f, _fn in (("tools/board_moderation.py", "_board_label"), ("agent/reports.py", "_detail_line"),
                 ("agent/adminops_board.py", "_board_ref")):
     _b = _body(_SRC[_f], _fn)
     check(f"{_f}::{_fn} 里没有裸 `#` 插值（回退即红）", 'f"#{' not in _b)
 # 子串法在这里判不准（`f"noteId:{nid}《` 里本来就含 `{nid}《`）⇒ 钉的是"模板以 id 起头"
-_ENT = _SRC["agent/entities.py"]
+_ENT = _SRC["agent/entity_digest.py"]
 check("实体摘要里没有以 id 起头的条目模板（`f\"{nid}《` 这种旧形，回退即红）",
       re.search(r'f"\{(?:nid|mid)\}《', _ENT) is None)
 
-# 卡面刻意不具名：确认弹窗的抬头上给人看的是 `#12「原文」`（tools/base.py 的
+# 卡面刻意不具名：确认弹窗的抬头上给人看的是 `#12「原文」`（tools/board_moderation.py 的
 # `_board_label` 是给模型看的、adminops 的弹窗抬头是给人看的——两处形态不同是对的，
 # 但这条差异得写在测试里，否则下一个人会"顺手统一"）
 check("弹窗卡面仍是 `#{talkKey}`（人眼看的 UX 面，本批刻意不动）",
@@ -237,7 +241,7 @@ check(" 注记里写明「留名不是账号」并给出认人的正路（帧自
 check("注记**不占下标**：`[0]` 仍是第一条留言",
       isinstance(_note[0], dict) and _note[0].get("talkId") == 96)
 _rows_kept = [x for x in _note if isinstance(x, dict)]
-from agent.entities import _rows as _ent_rows  # noqa: E402
+from agent.entity_digest import _rows as _ent_rows  # noqa: E402
 check("实体摘要器跳过注记元素（非 dict 元素天然被过滤）",
       _ent_rows(_note) == _rows_kept, str(_ent_rows(_note)))
 # ⚠ 模型读的是 `.description` 而**不是** `.__doc__`：`@tool` 把函数包成 StructuredTool
@@ -252,7 +256,7 @@ check("  且写着「查无此条不等于不存在」（planner 那一侧要有
 check("  说说那边同样披露（两个数据源不同的工具，边界不能只写一个）",
       "只列已通过审核" in (_B.list_talks.description or ""))
 
-from agent.refs import parse_data, resolve_one  # noqa: E402
+from agent.arg_refs import parse_data, resolve_one  # noqa: E402
 
 _td = [{"tool": "list_guestbook", "data": parse_data(_frame)}]
 check("引用按**新名**取值", resolve_one("$list_guestbook[0].talkId", _td) == (96, None),
@@ -311,7 +315,7 @@ check("留言详情帧走出口改名：`talkId` 在、上游的 `talkKey` 不�
 # ⑥c 换措辞的**第二重收益**：文章指代锚点只认「读取文章 N《标题》」行，而留言读取
 # 行从今天起不再冒充它（此前若那条留言恰好在公开列表里、标题又非空，就会被当成本
 # 会话已点名的**文章** anchor）。判据钉在正反两侧。
-from agent.context import _DOC_READ_ROW_RE as _DRR  # noqa: E402
+from agent.prompt_context import _DOC_READ_ROW_RE as _DRR  # noqa: E402
 check("跨轮执行记忆里，文章读取行仍被认成文档锚点",
       bool(_DRR.search("09-20 21:03 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》")))
 check("  留言读取行**不再**冒充文章锚点（换措辞顺带堵掉的旧耦合）",

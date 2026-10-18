@@ -32,6 +32,10 @@ from __future__ import annotations
 import agent.authz as authz
 from agent.principal import ADMIN_ROLES
 
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = ["callable_query_tools", "explicit_tools", "param_tools"]
+
 # planner 可显式点名的无参只读工具白名单（20260902 用户拍板）：留言/说说/公告/
 # 时间/站点信息类查询是"一次简单工具调用、无流程"，不成技能——planner 直接
 # PARAMS.tools 点名，instantiate_plan 白名单校验后展开进 TOOLS 行由 execute

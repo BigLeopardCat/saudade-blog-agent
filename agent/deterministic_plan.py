@@ -27,9 +27,9 @@ import re
 from langchain_core.messages import ToolMessage
 
 from agent.authz import strip_user_shell
-from agent.context import _msg_text
+from agent.prompt_context import _msg_text
 from agent.workflow_defs import WORKFLOW_MAP
-from agent.workflow_defs.nav import NAV_MAP, fuzzy_nav_hit
+from agent.workflow_defs.nav_map import NAV_MAP, fuzzy_nav_hit
 from agent.workflow_plan import instantiate_plan
 from tools.base import IOT_ENABLED
 # 与检索侧同一分词（2/3-gram）——候选标题相关性判定复用，避免两套词法
@@ -203,8 +203,9 @@ def _effect_switch_fast_path(user_msg: str, current_effects: str) -> dict | None
 # 而快道是**确定性**回答（零 LLM，且拿走了 planner 的决策权），下游没有翻案的机会：
 # 主人原话「意图明显是去对应评论位置，第一次带到了留言板」，trace `20261008T023344` 那族
 # 连着七步落空。这里**不猜**——某一条的 id 住在会话里（上一轮那条 `?lid=`／`?cid=` 通知、
-# 或「我的河灯」列表帧），这一层看不到任何一样 ⇒ 交回 planner LLM，由它照说明书填带定位
-# 参数的形态（形态表 `tools.base._ITEM_POSITION_FORMS`，事实句 `agent.context._item_link_fact`）。
+# 或「我的河灯」列表帧），这一层看不到任何一样 ⇒ 交回 planner LLM，由它照说明书填
+# 带定位参数的形态（形态表 `tools.base._ITEM_POSITION_FORMS`，事实句
+# `agent.prompt_context._item_link_fact`）。
 # ⚠️ 「评论」这个词不在这里当版块名用：站内**没有**独立的评论页（事实句里有），所以它
 # 只出现在"那一条评论"这种指代形状里——`FUZZY_NAV_RULES` 里也从来没有它（这正是隔壁
 # 「带我去看看那条评论」不中招、而"留言"这一支中招的原因）。

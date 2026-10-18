@@ -750,7 +750,7 @@ strip_system_tags = _strip_system_tags
 # ⚠️ **称呼表只有这一份**：`decisions._NAV_VERB_RE` 与 `context._SHORT_LEAD_RE` 里各内联过
 # 一份（都不含裸「猫咪」，于是同一句话在两处口径不同）——20260930 一并收进来，全部改走
 # `strip_user_shell`。再加称呼只改这里。（`_SHORT_LEAD_RE` 本身 20261015 批 3 已删，
-# 位置被 `context._short_core` 接走；`decisions` 那一处照旧。）
+# 位置被 `prompt_context._short_core` 接走；`decisions` 那一处照旧。）
 _VOCATIVE_RE = re.compile(
     r"^\s*(?:(?:小|大|傻|臭|笨|乖)?(?:猫咪|猫猫)|泠月喵|泠月|喵喵|喵|主人)"
     r"(?:\s*[，,、:：!！~～。.…]+\s*|\s+)?")

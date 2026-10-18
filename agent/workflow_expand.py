@@ -33,14 +33,18 @@ import json
 
 import agent.adminops_tags as _tags
 import agent.adminops_todo as _todo
-from agent.refs import is_ref
+from agent.arg_refs import is_ref
 from agent.workflow_expand_write import _write_arg
 from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
 from tools.base import _TODO_TEXT_LIMIT, _as_bool
 
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = []
+
 # 本模块**刻意不写 `__all__`**：整个面都是 `_` 前缀的内部件（展开层只被 `instantiate_plan`
 # 与各展开分支互相调用）。按本仓"`__all__` 只列公开名"的口径（见 `agent/workflow_model.py`
-# 与 `agent/workflow_defs/nav.py`），这里能列的只有空表——而空表会被读成"导出的东西一个
+# 与 `agent/workflow_defs/nav_map.py`），这里能列的只有空表——而空表会被读成"导出的东西一个
 # 都没有"，与事实相反：跨模块 import 走的是显式名字（`from agent.workflows import
 # _norm_id_list` 等），显式 import 从来不看 `__all__`。
 
@@ -116,7 +120,7 @@ def _norm_id_or_ref(value):
     为什么 id 位置也要认引用（20260923 批 7）：planner 提示词规则 3b 说得很死——
     "只要某个参数的值来自本轮已执行工具的返回，就**一律优先用引用**"。它照办时写
     `{"article_id": "$search_notes[0].noteId"}`，而 `_norm_pos_int` 只认数字 ⇒ 一条
-    合法的计划被当成"缺参"退回追问（步骤白跑一轮）。取值由 `agent/refs.py` 在
+    合法的计划被当成"缺参"退回追问（步骤白跑一轮）。取值由 `agent/arg_refs.py` 在
     execute 调用前完成（解析失败给原因码，走既有 blocker 链路），这一层只负责
     **认得出那是个引用**、原样透传。
 

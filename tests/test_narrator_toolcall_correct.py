@@ -16,7 +16,7 @@ narrator 不 `bind_tools`，但这**只约束我们不传工具**，不约束服
     `producer.narrator_tool_calls n=1 names=["search_notes"]`，正文只剩
     "让我帮你找找看～"）。这一份 gate 反而判 **PASS**——内容为零却被当成成功交付。
 
-成因是上下文里的**仿写**：`agent/context.py::with_tool_call_pairs` 为满足 strict
+成因是上下文里的**仿写**：`agent/prompt_context.py::with_tool_call_pairs` 为满足 strict
 服务商的配对要求，在消息序列里补了 `assistant(tool_calls=…)`（见该函数 docstring），
 零工具的 narrator 照着历史的样子发起了工具调用。
 

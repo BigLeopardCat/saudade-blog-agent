@@ -17,7 +17,7 @@
 唯一选刀判据。依赖方向是 `menu → {tools, params, defs, model}`，单向。
 
 ⚠️ `_NAV_MAP_LINES` 是**模块级常量、import 期算一次**：它读的是 `NAV_MAP`（唯一数据源
-在 `agent/workflow_defs/nav.py`），搬到这里只是换个地方算，取值逐字不变。
+在 `agent/workflow_defs/nav_map.py`），搬到这里只是换个地方算，取值逐字不变。
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 
 from agent.workflow_defs import visible_workflows
-from agent.workflow_defs.nav import _IOT_NAV_ALIASES, DASHBOARD_PANELS, NAV_MAP
+from agent.workflow_defs.nav_map import _IOT_NAV_ALIASES, DASHBOARD_PANELS, NAV_MAP
 from agent.workflow_model import (
     _EXPLICIT_TOOLS_MARK,
     _NO_DEFAULT,
@@ -36,6 +36,10 @@ from agent.workflow_model import (
 from agent.workflow_params import workflow_param_specs
 from agent.workflow_tools import explicit_tools, param_tools
 from tools.base import IOT_ENABLED
+
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = ["render_tool_marks", "render_workflow_params", "build_planner_context"]
 
 
 def render_tool_marks(text: str, role: str | None) -> str:

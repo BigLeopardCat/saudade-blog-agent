@@ -3,7 +3,7 @@
 
 **为什么单独成模块**（20261017 批 2 刀 2c）：这三个常量原先住在 `agent/workflows.py`，
 而它们的消费方**一个都不在** workflows 里——`agent/plan_codec.py`（写端校验取值）、
-`agent/graph.py`（gate 按值选如实文案、站内"没有"豁免）、`agent/decisions.py`、
+`agent/graph.py`（gate 按值选如实文案、站内"没有"豁免）、`agent/deterministic_plan.py`、
 `eval/corpus_invariants.py`。定义跟着消费方走，不跟着"碰巧住在一起"走。
 
 **刻意不并进 `agent/plan_codec.py`**：那边 import `agent.workflow_defs`（`WORKFLOW_MAP`），

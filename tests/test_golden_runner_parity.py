@@ -19,7 +19,7 @@
 ── ①：`rag_search.warm_async()` 挂在 `server.py` 的 **lifespan** 上（只有 HTTP app
 起来才预热）。隔离跑法（`eval/golden_case_runner.py`，一条用例一个进程）**从不启动那个
 app**，父进程也没有别的入口替它预热 ⇒ 子进程跑用例的那一刻索引**恒为空**：
-`agent/context.py::_doc_anchors` 把《标题》解析成 id 那一步恒降级（块尾如实注记
+`agent/prompt_context.py::_doc_anchors` 把《标题》解析成 id 那一步恒降级（块尾如实注记
 「语料索引未就绪」）⇒ planner 拿不到 id、只能去检索，撞上用例的
 `forbid_tool_calls: [rag_search …]`。而进程内跑法在用例循环**之前**就调了
 `judge_corpus()`（空则同步 build）⇒ **同一个用例，两个跑法结论不同**——这正是本仓

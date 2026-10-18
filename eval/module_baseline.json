@@ -3,20 +3,20 @@
     "lines": 1721,
     "top_defs": 37
   },
-  "agent/context.py": {
+  "agent/graph.py": {
+    "lines": 13206,
+    "top_defs": 235
+  },
+  "agent/prompt_context.py": {
     "lines": 1712,
     "top_defs": 46
-  },
-  "agent/graph.py": {
-    "lines": 13196,
-    "top_defs": 235
   },
   "agent/prompts.py": {
     "lines": 840,
     "top_defs": 1
   },
   "agent/react_arm.py": {
-    "lines": 1243,
+    "lines": 1248,
     "top_defs": 40
   },
   "agent/tasks.py": {
@@ -36,7 +36,7 @@
     "top_defs": 35
   },
   "eval/run_golden.py": {
-    "lines": 3677,
+    "lines": 3686,
     "top_defs": 51
   },
   "scripts/build_word_graph.py": {
@@ -44,8 +44,8 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 2592,
-    "top_defs": 52
+    "lines": 2657,
+    "top_defs": 56
   },
   "tests/test_admin_write.py": {
     "lines": 2003,
@@ -72,11 +72,11 @@
     "top_defs": 19
   },
   "tests/test_react_arm.py": {
-    "lines": 1210,
+    "lines": 1214,
     "top_defs": 22
   },
   "tests/test_reports.py": {
-    "lines": 961,
+    "lines": 932,
     "top_defs": 6
   },
   "tests/test_tag_admin.py": {
@@ -84,7 +84,7 @@
     "top_defs": 16
   },
   "tests/test_todo_schedule.py": {
-    "lines": 2073,
+    "lines": 2075,
     "top_defs": 29
   },
   "tests/test_userdata.py": {
@@ -96,7 +96,7 @@
     "top_defs": 72
   },
   "tools/base.py": {
-    "lines": 4776,
-    "top_defs": 121
+    "lines": 1255,
+    "top_defs": 21
   }
 }

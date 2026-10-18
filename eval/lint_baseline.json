@@ -8,12 +8,12 @@
     "I",
     "W"
   ],
-  "total": 815,
+  "total": 775,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/authz.py": 5,
-    "agent/context.py": 6,
-    "agent/decisions.py": 3,
+    "agent/prompt_context.py": 6,
+    "agent/deterministic_plan.py": 3,
     "agent/factblock.py": 1,
     "agent/graph.py": 22,
     "agent/hostinfo.py": 1,
@@ -128,7 +128,7 @@
     "tests/test_react_arm.py": 5,
     "tests/test_reconcile_offline.py": 6,
     "tests/test_registry_sync.py": 5,
-    "tests/test_reports.py": 37,
+    "tests/test_reports.py": 35,
     "tests/test_sections.py": 5,
     "tests/test_session_input_source.py": 1,
     "tests/test_settings_surface.py": 1,
@@ -158,7 +158,6 @@
     "tests/test_write_done_claim.py": 1,
     "tests/test_write_idempotency.py": 1,
     "tests/test_zako_role.py": 2,
-    "tools/base.py": 38,
     "utils/logging.py": 1,
     "utils/tts.py": 1
   }

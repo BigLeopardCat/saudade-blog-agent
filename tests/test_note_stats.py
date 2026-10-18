@@ -3,7 +3,7 @@
 
 被测四块：
   · `agent/reports.py::render_note_stats` —— 三张榜的渲染与**三态**话术；
-  · `agent/entities.py::_note_traffic_digest` —— 落进跨轮执行记忆的那一行；
+  · `agent/entity_digest.py::_note_traffic_digest` —— 落进跨轮执行记忆的那一行；
   · `tools/base.py` —— 列表瘦身（`_slim_note_rows`）与单篇读数（`_note_public_counts`）；
   · 接线（scope / 菜单 / 动作词 / 技能）与**跨语言守卫**（Rust 侧键名与 `TOP_N`）。
 
@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 from agent import authz  # noqa: E402
 from agent import reports as R  # noqa: E402
-from agent.entities import receipt_digest  # noqa: E402
+from agent.entity_digest import receipt_digest  # noqa: E402
 import tools.base as base  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "tests"))

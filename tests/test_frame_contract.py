@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""帧契约的机械锁：`agent/frames.py` 的**声明**与 `graph.py`/`server.py` 的**取值**双向比对。
+"""帧契约的机械锁：`agent/frame_contract.py` 的**声明**与 `graph.py`/`server.py` 的
+**取值**双向比对。
 
 ## 为什么要有这一条
 
@@ -46,7 +47,7 @@
   ③ 编译臂的图，节点集必须 ⊇ `NODE_FRAMES`（且含 `VISIBLE_NODE`）；两张键集表 ⊆
      `AgentState.__annotations__`，且 ⊆ `graph_input` 的初值键。
   ④ 臂源码 AST：`("updates", …)` 二元组 **0 个**；`langgraph_node` 字面量 **0 个**；
-     `frames.py` 里 `*_frame` 构造器 **0 个**（手搓的门全焊死）。
+     `frame_contract.py` 里 `*_frame` 构造器 **0 个**（手搓的门全焊死）。
   ⑤ `NODE_FRAMES` 与 `server.py` 从 `updates` 里现取的四个键**恰好**相等。
   ⑥ 反向对照（本批的核心）：从 `NODE_FRAMES` **删一格** / 往 `GATE_STATE_KEYS` **加一格**
      / 闭包取空 —— 三种都必须当场判红、且只红那几条。
@@ -73,7 +74,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from agent import frames as F  # noqa: E402
+from agent import frame_contract as F  # noqa: E402
 
 GRAPH = ROOT / "agent" / "graph.py"
 PLAN_CODEC = ROOT / "agent" / "plan_codec.py"
@@ -275,7 +276,7 @@ def _sec_no_handmade(atree, ftree) -> None:
 
     made = [fn.name for fn in ftree.body
             if isinstance(fn, ast.FunctionDef) and fn.name.endswith("_frame")]
-    check("④c `frames.py` 里 `*_frame` 构造器一个都不剩"
+    check("④c `frame_contract.py` 里 `*_frame` 构造器一个都不剩"
           "（留着它，下一个人就能在图外面再手搓一份形状对的帧）",
           made == ["tool_frame"], str(made))
 
@@ -425,13 +426,13 @@ def main() -> int:
     # graph.py 一棵树（它们的判据对象就是"graph.py 里有什么"）。
     read_tree = _state_read_tree(GRAPH, PLAN_CODEC)
     atree = ast.parse(ARM.read_text(encoding="utf-8"))
-    ftree = ast.parse((ROOT / "agent" / "frames.py").read_text(encoding="utf-8"))
+    ftree = ast.parse((ROOT / "agent" / "frame_contract.py").read_text(encoding="utf-8"))
     stree = ast.parse(SERVER.read_text(encoding="utf-8"))
     ltree = ast.parse(LINE.read_text(encoding="utf-8"))
     nodes = set(RA._compiled().get_graph().nodes)
     ann = set(AgentState.__annotations__)
 
-    print("[扫面] frames.py 声明 gate=%d 格 / popup=%d 格 / 帧名 %s / 图节点 %s"
+    print("[扫面] frame_contract.py 声明 gate=%d 格 / popup=%d 格 / 帧名 %s / 图节点 %s"
           % (len(F.GATE_STATE_KEYS), len(F.POPUP_STATE_KEYS), list(F.NODE_FRAMES),
              sorted(nodes)))
 

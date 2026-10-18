@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-r"""单帧预算哨兵：`agent/context.py::_DETAIL_FRAME_PER` 今天还装得下最长的文章吗。
+r"""单帧预算哨兵：`agent/prompt_context.py::_DETAIL_FRAME_PER` 今天还装得下最长的文章吗。
 
 （20260925 批 D 起同时看**第二把尺子**：判官的材料上限
 `utils/trace.GOLDEN_MATERIAL_LIMIT`——`execute_node` 落进 trace 的就是这份帧文本，
@@ -38,7 +38,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from rag import sections                                      # noqa: E402
-from agent.context import _DETAIL_FRAME_PER                    # noqa: E402
+from agent.prompt_context import _DETAIL_FRAME_PER                    # noqa: E402
 from tools.base import _get, _note_row_with_tag_names          # noqa: E402
 from utils import trace as trace_mod                           # noqa: E402
 
@@ -101,7 +101,7 @@ def frames_of_site() -> list[tuple[int, int, str]]:
 
 
 def render(rep: dict) -> str:
-    lines = ["== 单帧预算哨兵（agent/context.py::_DETAIL_FRAME_PER）=="]
+    lines = ["== 单帧预算哨兵（agent/prompt_context.py::_DETAIL_FRAME_PER）=="]
     lg = rep["longest"]
     lines.append(f"预算 {rep['budget']} 字；量了 {rep['total']} 篇；"
                  f"最长帧 {lg['chars']}（note {lg['id']}《{lg['title']}》），"

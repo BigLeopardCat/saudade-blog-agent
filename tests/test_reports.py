@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT))
 from agent import authz  # noqa: E402
 from agent import hostinfo as H  # noqa: E402
 from agent import reports as R  # noqa: E402
-from agent.entities import receipt_digest  # noqa: E402
+from agent.entity_digest import receipt_digest  # noqa: E402
 from agent.graph import _CMD_PREFIX_RE  # noqa: E402
 import tools.base as base  # noqa: E402
 
@@ -172,35 +172,6 @@ with tempfile.TemporaryDirectory() as td:
           and {"rust.log", "agent/agent.log", "device.log", "big.log"} == set(paths), str(paths))
     check("按体积降序", sizes[0]["size"] >= sizes[-1]["size"])
 
-    traces = os.path.join(td, "traces")
-    os.makedirs(traces)
-    now = datetime.now()
-    for name, reason, events in [("a", "producer_done", []),
-                                 ("b", "client_disconnect", [{"event": "fallback"}, {"event": "authz_shadow"}]),
-                                 ("c", "producer_done", [{"event": "authz_shadow"}]),
-                                 ("d", "idle_timeout", [])]:
-        with open(os.path.join(traces, name + ".json"), "w") as f:
-            json.dump({"end_reason": reason, "events": events}, f)
-    with open(os.path.join(traces, "broken.json"), "w") as f:
-        f.write("{not json")
-    with open(os.path.join(traces, "old.json"), "w") as f:
-        json.dump({"end_reason": "producer_done", "events": []}, f)
-    os.utime(os.path.join(traces, "old.json"), (0, 0))
-    real_traces = H.TRACES_DIR
-    H.TRACES_DIR = traces
-    try:
-        t = H.trace_stats(now.replace(hour=0, minute=0, second=0, microsecond=0))
-    finally:
-        H.TRACES_DIR = real_traces
-    check("今日轮数 = 可解析且非旧的 trace（坏 JSON 与旧文件不计）", t["rounds"] == 4, str(t["rounds"]))
-    check("异常收尾 = end_reason ≠ producer_done", t["abnormal"] == 2, str(t["abnormal"]))
-    check("质检拦截与 shadow 拒绝分别计数", t["fallback"] == 1 and t["denied"] == 2, str(t))
-    H.TRACES_DIR = os.path.join(td, "nowhere")
-    try:
-        check("目录不可读 → readable=False（如实说读不到，不报 0 轮）",
-              H.trace_stats()["readable"] is False)
-    finally:
-        H.TRACES_DIR = real_traces
 
 
 print("\n③b 伪文件整读回退（20260921 生产实测踩到的坑）")

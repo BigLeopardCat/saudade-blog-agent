@@ -438,12 +438,21 @@ def test_enum_closure_derives_from_literal():
 
     # 闭集必须来自 `Literal[...]` 这个**唯一来源**：源码级钉住"这些注解真的是 Literal"，
     # 否则哪天有人把 Literal 改回 str（散文里的可选值还在、机器侧又没了）——本条会红。
-    base = (ROOT / "tools" / "base.py").read_text(encoding="utf-8")
+    # 20261018：公开读那一族（含 `get_article_detail` 的 doc_type）搬进 `tools/notes.py`
+    # ⇒ 取值点跟着搬。判据字面一个字没动，只换了"扫哪几份源码"——同 `test_hardening.py`
+    # 对 `tools/device.py` 的做法。**只列这一族的文件、不列整个包**：整个包会把别处同名
+    # 字面量也数进来，那是把锁放松。
+    # 20261018 第二笔：站点与页面那一族（含 `toggle_effect` 的 `Literal["sakura", "rain",
+    # "snow"]` 与 `toggle_dark_mode` 的 `Literal["on", "off"]`）搬进 `tools/site.py`，同上。
+    # 20261018 第三笔：管理助手报表那一族（含 `get_moderation_status` 的
+    # `Literal["ai_passed", "ai_rejected", "pending"]`）搬进 `tools/admin_read.py`，同上。
+    _FILES = ("base.py", "notes.py", "site.py", "admin_read.py")
+    base = "".join((ROOT / "tools" / f).read_text(encoding="utf-8") for f in _FILES)
     for ann in ('Literal["note", "talk", "board", "announcement"]',
                 'Literal["ai_passed", "ai_rejected", "pending"]',
                 'Literal["sakura", "rain", "snow"]',
                 'Literal["on", "off"]'):
-        check(f"tools/base.py 里有 {ann}", ann in base)
+        check(f"tools/{' + tools/'.join(_FILES)} 里有 {ann}", ann in base)
     check("参数规格用 arg_enum 派生（不手写枚举表）",
           "choices=arg_enum(" in (ROOT / "agent" / "workflow_params.py").read_text(
               encoding="utf-8"))

@@ -1864,7 +1864,7 @@ print("\n㉕ 按分类查文章清单（20261009：站内一直有，agent 这�
 # 早就在 DTO 里）。这一节把两处都锁住，**外加三条"不许把读不到说成没有"**。
 
 # —— 渲染：每行末尾印分类（键缺席 = 这一路没带分类信息 ⇒ 不印那一格，缺键不编）——
-from agent.entities import receipt_digest  # noqa: E402  （跨语言契约：写侧压摘要）
+from agent.entity_digest import receipt_digest  # noqa: E402  （跨语言契约：写侧压摘要）
 
 _N_TEST = {**note(12, "架构文档"), "categoryTitle": "测试"}
 _N_NULL = {**note(21, "关于欧洲AI"), "categoryTitle": None}
