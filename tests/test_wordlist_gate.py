@@ -432,6 +432,51 @@ check("⑪h₆ 复位后真仓仍是绿的", _rc == 0 and "✅ 没有变差" in 
 shutil.rmtree(_d5, ignore_errors=True)
 shutil.rmtree(_d6, ignore_errors=True)
 
+print("\n⑫ 穷举量那一层的**反方向**（20261018 补）：账比现场松 / 键还在但文件没了 ⇒ 都当场红")
+# 只判"变大"的棘轮会留下一笔**永久免费额度**：实测 `tools/base.py` 账上写着 132、盘上其实
+# 早就是 125，那 7 条是历史上缩小之后没重切留下的 ⇒ 下一批新增只要没回到 132 就**一格不报**
+# （"改完还是绿的"与"没改"同形）。这一节证明新加的那两条判据真的在承重——同 ⑥ 对正向那条
+# 做的事。三条反控各自独立：把任一条判据摘掉，只红它自己那一条。
+_t12 = tree({"agent/z.py": 'X = {"甲", "乙"}\n'})
+_s12 = snapshot_of(_g, _t12, targets=["agent"])
+_reg12 = write_reg(_t12, _s12, "_ok12.json")
+check("⑫a 正控：如实登记的账是绿的（否则下面两条红得没有理由）",
+      run(_g, _t12, _reg12, targets=["agent"])[0] == 0)
+
+# 反控一：账比现场松一格 ⇒ 必须红。这就是"缩小了却没重切账"的形状。
+_loose = json.loads(_reg12.read_text(encoding="utf-8"))
+_loose["metric"]["by_file"]["agent/z.py"][0] += 1
+_reg12b = write_reg(_t12, _loose, "_loose.json")
+_rc12b, _out12b = run(_g, _t12, _reg12b, targets=["agent"])
+check("⑫b ⭐ 账比现场松 ⇒ 退 1 且点「台账该收紧」（免费额度那一格的判据）",
+      _rc12b == 1 and "台账该收紧" in _out12b and "永久免费额度" in _out12b, f"rc={_rc12b}")
+
+# 反控二：账上有个文件已经不在了 ⇒ 必须红（键留着 = 一笔等着被领的额度）
+_ghost = json.loads(_reg12.read_text(encoding="utf-8"))
+_ghost["metric"]["by_file"]["agent/gone_file.py"] = [9, 0]
+_reg12c = write_reg(_t12, _ghost, "_ghost.json")
+_rc12c, _out12c = run(_g, _t12, _reg12c, targets=["agent"])
+check("⑫c ⭐ 账上的文件已经没了 ⇒ 退 1 且点「台账该销账」",
+      _rc12c == 1 and "台账该销账" in _out12c, f"rc={_rc12c}")
+
+# 反控三（**边界**）：只判**账上已有的键** —— 新文件天生不在账里，不归这两条管
+# （那是 `_grown_files` 那一侧的活）。不划这条边界的话，这一层会变成"见谁都红"。
+check("⑫d 边界：账上有的键才算，新文件不算「该销账」",
+      _g._stale_metric_keys({"agent/new.py": [3, 0]}, {"agent/z.py": [2, 0]}) == ["agent/z.py"]
+      and _g._shrunk_files({"agent/new.py": [3, 0]}, {"agent/z.py": [2, 0]}) == [],
+      str(_g._stale_metric_keys({"agent/new.py": [3, 0]}, {"agent/z.py": [2, 0]})))
+# 反向边界：**相等不算**（否则每次跑都红，等于把棘轮变成"必须立刻 --update"）
+check("⑫e 边界：实测与账相等 ⇒ 两条都不报（棘轮不是「必须重切」）",
+      _g._shrunk_files({"agent/z.py": [2, 0]}, {"agent/z.py": [2, 0]}) == []
+      and _g._stale_metric_keys({"agent/z.py": [2, 0]}, {"agent/z.py": [2, 0]}) == [])
+
+# 接线：两条判据都在闸门源码里，且 `check()` 真的调了它们（写了没人调 = 装饰）
+_src12 = GATE_SRC.read_text(encoding="utf-8")
+check("⑫f 接线：`check()` 真的调了这两条，且都进了那个共用出口",
+      "_shrunk_files(metric[" in _src12 and "_stale_metric_keys(metric[" in _src12
+      and "metric_shrunk, metric_stale)" in _src12)
+shutil.rmtree(_t12, ignore_errors=True)
+
 print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))

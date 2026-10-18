@@ -79,6 +79,17 @@
   也**不需要**建）别照着找——判据就在闸自己身上。
 - ⚠️ 接线陷阱：CI 要调 `.githooks/commit-msg`，**不要**直接调那个套件文件——
   `tests/test_ci_suite_list.py` 判的是「套件清单只有 `tests/run_all.py` 一处」。
+- **穷举量那一层补上反方向（20261018，批 2 的补网）** ✅：`eval/wordlist_gate.py` 的
+  穷举量棘轮此前**只判"变大"**——而只判变大的棘轮会留下一笔**永久免费额度**。实测抓到过：
+  `tools/base.py` 账上写着 132、盘上其实早就是 125，那 7 条是历史上缩小之后没重切留下的
+  ⇒ 下一批新增只要没回到 132 就**一格都不报**（"改完还是绿的"与"没改"同形）。
+  补两条：`_shrunk_files`（账比现场松 ⇒ 红，"台账该收紧"）与 `_stale_metric_keys`
+  （账上有、扫描里没有的文件键 ⇒ 红，"台账该销账"——键留着就是一笔等着被领的额度）。
+  与 `tests/test_module_budget.py` 的双向棘轮、`eval/type_gate.py` / `eval/lint_gate.py`
+  的幽灵键守卫**同一族**，四处一起补齐的。判据 `tests/test_wordlist_gate.py` ⑫：
+  正控 + 三条反控（放松一格 ⇒ 红；塞一个已删文件的键 ⇒ 红；边界——新文件不归这两条管、
+  相等不报）+ 接线锁。真数据反控实测：把真账里 `tools/base.py` 放松三格 ⇒ 当场红。
+  ⚠️ `eval/wordlist_gate.py` 现在 **792 行**（预算 800）——下一批要往它加东西之前先按主题拆。
 - **待补（20261018 实测撞上，尚未做）——跨仓取值取不到时不许报成"内容不符"**：
   `tests/test_write_param_words.py` ③ 从父仓 `src/routes/notes.rs` 的
   `create_note` / `update_note` 里按 `== "x"` / `unwrap_or("x")` 抽状态词表。父仓

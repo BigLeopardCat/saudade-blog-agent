@@ -12,6 +12,8 @@
   ① **登记表**（`entries`）——把"哪些表是封闭类、哪些是开放类、开放类的替代是什么"
      从散文注释变成机器判据。**未登记即红**（这就是 roadmap §6 那条 KPI 的可执行形态）；
      已登记的**只许变小**；`open` 类必须写明 `replacement` 与 `sunset`。
+     穷举量那一层**两个方向都判**（20261018 补）：变大红，**账比现场松也红**——只判变大的
+     棘轮会留下一笔永久免费额度（实测 `tools/base.py` 账上 132、盘上 125，那 7 条静默）。
      入表用的是**窄口径**：只收「**被当匹配器用**」的中文表（见下 `_matcher_names`）。
 
   ② **穷举量**（`metric`）——按文件数**所有**"中文串住在集合字面量里"的数量 +
@@ -429,7 +431,33 @@ def _grown_files(now: dict, _oldby: dict) -> list:
             if any(v[i] > int(_oldby.get(f, [0, 0])[i]) for i in (0, 1))]
 
 
-def _print_reds(bad, grew, unfilled, opens_bad, metric_grew) -> int:
+def _shrunk_files(now: dict, _oldby: dict) -> list:
+    """台账比实测**松**的文件（缩小了却没重切账）——20261018 补，与 `_grown_files` 反向。
+
+    为什么要有这一条：只判"变大"的棘轮会留下一笔**永久免费额度**。实测抓到过
+    `tools/base.py`：账上写着 132，盘上其实早就是 125 —— 那 7 条是历史上缩小之后没重切
+    留下的，于是下一批新增只要没回到 132 就**一格都不报**（"改完还是绿的"与"没改"同形）。
+    同族：`tests/test_module_budget.py` 的双向棘轮（同日补）、`eval/type_gate.py` 与
+    `eval/lint_gate.py` 的幽灵键守卫。三处一起补的，理由一样。
+
+    **只判账上已有的键**：新文件不在账里，那是 `_grown_files` 那一侧的活（那里"缺席按 0 算"）。
+    """
+    return [(f, _oldby[f], now[f]) for f in _oldby
+            if f in now and any(int(now[f][i]) < int(_oldby[f][i]) for i in (0, 1))]
+
+
+def _stale_metric_keys(now: dict, _oldby: dict) -> list:
+    """账上有、这次扫描里却没有的文件键（删了 / 改名了 / 移出扫描面）——20261018 补。
+
+    与 `_shrunk_files` 同族：键留着就是**一笔等着被领的额度**——同路径哪天再出现一个文件
+    （改名改回来、文件被重建），它会拿着旧额度静默通过。`eval/type_gate.py` 那处的危害更大
+    （改名会让新文件按 0 起算、等于凭空买回一份额度），三处一起补的。
+    """
+    return sorted(f for f in _oldby if f not in now)
+
+
+def _print_reds(bad, grew, unfilled, opens_bad, metric_grew,
+                metric_shrunk=(), metric_stale=()) -> int:
     """打出全部红项，返回红的总条数（0 = 没有红）。①②两层共用一个出口，别再各写一份。"""
     for c in bad:          # ① 窄口径：未登记
         print(f"  ❌ 未登记：{c.ident}  [{c.kind}, {c.size} 个中文"
@@ -444,7 +472,15 @@ def _print_reds(bad, grew, unfilled, opens_bad, metric_grew) -> int:
     for f, was, now in sorted(metric_grew):   # ② 穷举量：任何文件变大
         print(f"  ❌ {f} 穷举量变大：集合中文串 {was[0]}→{now[0]}、正则中文字符 {was[1]}→{now[1]}"
               f" —— 新增中文词表不许悄悄进来（窄口径看不见的表也会在这里现形）")
-    return len(bad) + len(grew) + len(unfilled) + len(opens_bad) + len(metric_grew)
+    for f, was, now in sorted(metric_shrunk):  # ② 的反方向：账比现场松
+        print(f"  ❌ 台账该收紧：{f} 实测 集合中文串 {now[0]} / 正则中文字符 {now[1]}，"
+              f"账上还记着 {was[0]} / {was[1]} —— 缩小了要在同一个提交里把账改小"
+              f"（不收紧就是一笔**永久免费额度**，下一批新增回到旧水位也一格不报）")
+    for f in metric_stale:                     # 同族的第三种：键还在、文件没了
+        print(f"  ❌ 台账该销账：{f} —— 盘上已经扫不到这个文件了（删了/改名了/移出扫描面），"
+              f"这个键留着就是一笔等着被领的额度（同路径再出现文件会拿旧额度静默通过）")
+    return (len(bad) + len(grew) + len(unfilled) + len(opens_bad) + len(metric_grew)
+            + len(metric_shrunk) + len(metric_stale))
 
 
 def _print_greens(gone: list, opens: list) -> None:
@@ -625,19 +661,29 @@ def check() -> int:
     reg = {e["id"]: e for e in _entries()}
     opens = [e for e in reg.values() if e.get("category") == "open"]
     gone = [i for i in reg if i not in {c.ident for c in cands}]
-    metric_grew = _grown_files(metric["by_file"], whole.get("metric", {}).get("by_file", {}))
+    _oldby = whole.get("metric", {}).get("by_file", {})
+    metric_grew = _grown_files(metric["by_file"], _oldby)
+    # 反方向两条（20261018 补）：账比现场松 / 账上的文件已经不在扫描面里。只判"变大"
+    # 的棘轮会留下一笔永久免费额度——实测在 `tools/base.py` 上抓到过 7 条。
+    metric_shrunk = _shrunk_files(metric["by_file"], _oldby)
+    metric_stale = _stale_metric_keys(metric["by_file"], _oldby)
     verdicts = _verdicts(cands, reg)
     print(f"[扫描] 登记表候选 {len(cands)} 个 / 已登记 {len(reg)} 条"
           f"（open {len(opens)} 条待收口）；穷举量 {metric['total'][0]} 集合中文串 + "
           f"{metric['total'][1]} 正则中文字符 / {len(metric['by_file'])} 文件")
     _print_eval_summary(ev_now)
-    n_red = _print_reds(*verdicts, metric_grew)
+    n_red = _print_reds(*verdicts, metric_grew, metric_shrunk, metric_stale)
     n_eval = _print_eval_reds(ev_now, whole.get("eval_vocab") or {})
     if n_red or n_eval:
         if n_red:
             print(f"\n❌ {len(verdicts[0])} 未登记、{len(verdicts[1])} 条变大、"
                   f"{len(verdicts[2])} 未分类、{len(verdicts[3])} 条 open 缺出路、"
                   f"{len(metric_grew)} 个文件穷举量变大")
+        if metric_shrunk or metric_stale:
+            # **单独一行**：方向相反的量不与上面那句混读（同"运行时判据面少一张表 ≠ 评测
+            # 判据面多一条正则"那条分工）——上面数的是"变差"，这里数的是"账比现场松"。
+            print(f"\n❌ {len(metric_shrunk)} 个文件台账该收紧、{len(metric_stale)} 个键该销账"
+                  f"（棘轮只许缩小：缩小了要在同一个提交里把账改小）")
         if n_eval:
             print(f"\n❌ eval 侧 {n_eval} 项变差（**判据的判据**，与上面那份计数分开读："
                   f"运行时判据面少一张表 ≠ 评测判据面多一条正则）")
