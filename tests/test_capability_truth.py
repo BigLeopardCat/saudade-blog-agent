@@ -108,7 +108,10 @@ print("\n③ 工具的 `.description`（@tool 之后模型读的是它，不是 
 _desc = B.delete_board_comment.description or ""
 check("删除工具的说明里写着「待审与被驳回的留言删得掉」",
       "待审与被驳回的留言删得掉" in _desc, _desc[:60])
-_src = (ROOT / "tools" / "base.py").read_text(encoding="utf-8")
+# 20261018：留言复核那一族搬进 `tools/board_moderation.py`（那句注明就在
+# `delete_board_comment` 的 docstring 里）⇒ 取值点跟着搬，判据字面一个字没动。
+_src = "".join((ROOT / "tools" / f).read_text(encoding="utf-8")
+               for f in ("base.py", "board_moderation.py"))
 check("  且注明后台清单不过滤 approved（能力有据，不是口头承诺）",
       "不过滤 approved" in _src)
 

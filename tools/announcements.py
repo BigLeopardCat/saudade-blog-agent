@@ -31,11 +31,12 @@
 （20261018 在 `tools/admin_read.py` 那一刀实测 7 条、`tools/base.py` 13→16）。
 属性查找同时解决了"本模块在 base 的原位置就被 import"的时序问题。
 
-## `__all__` 只列三个工具
-两个上限常量与四个帮手是**实现细节**：常量外面只在注释里被提到，`_announce_change`
-只在本模块内用。`_announcement_index` / `_find_named_announcement` 确实被外面按名取
-（`agent/graph.py`），但它们是**下划线名**——按社区惯例不进 `__all__`，
-由 `tools/base.py` 按原名显式 re-export 供给（显式 import 不受 `__all__` 约束）。
+## `__all__`
+按社区惯例 = 本模块**所有不以 `_` 开头**的模块级名字，不留例外（两个上限常量虽只在
+外面被注释提到，但它们是本模块的公开词汇，收进 `__all__` 才不会让"什么算公开"变成
+逐模块的裁量）。`_announcement_index` / `_find_named_announcement` / `_announce_change`
+是**下划线名**，按惯例不进 `__all__`，由 `tools/base.py` 按原名显式 re-export 供给
+（显式 import 不受 `__all__` 约束）。
 """
 
 from typing import Annotated
@@ -46,7 +47,8 @@ from langchain_core.tools import tool
 from tools import base as _base
 from tools.result import ToolResult, fact, ok, tgt, unavailable
 
-__all__ = ["create_announcement", "delete_announcement", "update_announcement"]
+__all__ = ["MAX_ANNOUNCE_BODY", "MAX_ANNOUNCE_TITLE",
+           "create_announcement", "delete_announcement", "update_announcement"]
 
 MAX_ANNOUNCE_TITLE = 80
 MAX_ANNOUNCE_BODY = 2000

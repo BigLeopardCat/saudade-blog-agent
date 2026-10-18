@@ -142,7 +142,11 @@ check("  裸 id= 不再出现（旧形 `《标题》 id=N` 是大写/小写混�
 print("\n④ 接线锁（源码级）：渲染实现里必须写着命名空间，且没有旧形")
 
 _SRC = {
-    "tools/base.py": (ROOT / "tools" / "base.py").read_text(encoding="utf-8"),
+    # 20261018：留言复核那一族（含 `_board_label`）搬进 `tools/board_moderation.py`
+    # ⇒ 取值点跟着搬，判据字面一个字没动（同 `test_hardening.py` 对 `tools/device.py`
+    # 的做法）。**只换读哪一份源码**，不换断言。
+    "tools/board_moderation.py": (ROOT / "tools" / "board_moderation.py").read_text(
+        encoding="utf-8"),
     "agent/reports.py": (ROOT / "agent" / "reports.py").read_text(encoding="utf-8"),
     "agent/adminops_tags.py": (ROOT / "agent" / "adminops_tags.py").read_text(encoding="utf-8"),
     "agent/adminops_board.py": (ROOT / "agent" / "adminops_board.py").read_text(encoding="utf-8"),
@@ -160,8 +164,8 @@ def _body(src: str, fn: str) -> str:
 
 
 _WIRING = (
-    ("tools/base.py", "_board_label", 'f"talkId:'),
-    ("tools/base.py", "_board_label", 'f"userId:'),
+    ("tools/board_moderation.py", "_board_label", 'f"talkId:'),
+    ("tools/board_moderation.py", "_board_label", 'f"userId:'),
     ("agent/reports.py", "_detail_line", 'f"  · talkId:'),
     ("agent/adminops_board.py", "_board_ref", 'f"talkId:'),
     ("agent/entities.py", "_note_digest", 'f"noteId:'),
@@ -178,7 +182,7 @@ check("agent/reports.py::render_user_stats 里写着 userId:",
       'f"  · userId:' in _SRC["agent/reports.py"])
 
 # 旧形不许回来：留言族渲染里不得再有 `f"#{` 插值（`#{` 只会是裸 id）
-for _f, _fn in (("tools/base.py", "_board_label"), ("agent/reports.py", "_detail_line"),
+for _f, _fn in (("tools/board_moderation.py", "_board_label"), ("agent/reports.py", "_detail_line"),
                 ("agent/adminops_board.py", "_board_ref")):
     _b = _body(_SRC[_f], _fn)
     check(f"{_f}::{_fn} 里没有裸 `#` 插值（回退即红）", 'f"#{' not in _b)
@@ -187,7 +191,7 @@ _ENT = _SRC["agent/entities.py"]
 check("实体摘要里没有以 id 起头的条目模板（`f\"{nid}《` 这种旧形，回退即红）",
       re.search(r'f"\{(?:nid|mid)\}《', _ENT) is None)
 
-# 卡面刻意不具名：确认弹窗的抬头上给人看的是 `#12「原文」`（tools/base.py 的
+# 卡面刻意不具名：确认弹窗的抬头上给人看的是 `#12「原文」`（tools/board_moderation.py 的
 # `_board_label` 是给模型看的、adminops 的弹窗抬头是给人看的——两处形态不同是对的，
 # 但这条差异得写在测试里，否则下一个人会"顺手统一"）
 check("弹窗卡面仍是 `#{talkKey}`（人眼看的 UX 面，本批刻意不动）",

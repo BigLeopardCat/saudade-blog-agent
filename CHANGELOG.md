@@ -424,6 +424,38 @@
   按设计必须显式跑 `--update` 重切，配对关系写在提交正文里）；ruff `798 → 796`
   （`tools/base.py` 23→21、新文件 0）。模块台账按文本外科改数（3855/84 → 3638/78）。
 
+- **`tools/base.py` 拆出第六块：河灯留言的人工复核那一族（批 3）——对外行为零变更**：
+  3638 行 / 78 个模块级定义 → **3404 行 / 70**；**连续的 263 行、10 个模块级名字**
+  （`BOARD_APPROVED_CN` / `BOARD_STATUS_FILTERS` 两张表 + `_board_index` / `_board_label` /
+  `_board_excerpt` / `_find_board_comment` / `_find_board_comment_by_id` / `_board_state_cn`
+  六个帮手 + `audit_board_comment` / `delete_board_comment` 两个 `@tool`）搬进
+  `tools/board_moderation.py`（313 行 / 8 个顶层函数）。共同点是 scope 全是 `write.console`、
+  目标全是**留言的复核结论**——这一族同时是留言板唯一一条"改别人写的东西"的通道。
+  **67 个工具的名单与顺序、10 个名字的 AST 逐字相同**（10/10 等价：6 个逐字节相同，4 个只差
+  折行与缩进前缀），**6 个 docstring 的值一个都没变**。
+  ⚠️ 这一族里有**两个被套件直接打桩的名字**：`_board_index`（族内 4 个调用点、全仓打桩
+  **11 处**）与 `_admin_get`（1 个调用点、打桩 6 处）——`tests/test_board_admin.py` 的
+  `patch()` 就是 `setattr(tools.base, 名, 桩)` ⇒ 新模块里一律走 `_base.<名>(...)`。
+  **正控实测**：给这两个名字打桩后，搬到新模块的 `audit_board_comment` 确实走到桩上；
+  **反控实测**：把 base 的 re-export 删掉，调用**响亮地炸** `AttributeError`
+  ——不是悄悄用本模块那一份（"看着在跑、其实没跑"正是要防的那件事）。
+  `BOARD_STATUS_FILTERS` 还被 `tools/admin_read.py` 经 `_base.` 读 ⇒ 那一行也不能少。
+  re-export 停在**原位置**（新模块没有从 base 的模块级 from-import ⇒ 无半初始化时序问题，
+  也不触发那条 mypy 环上的 `Cannot determine type`）。新模块带 `__all__`（两张表 + 两个工具）。
+  ⚠️ **`__all__` 的口径在这一刀当天就修正了**：上一刀写的是"只列公开工具"，那是一条**逐模块
+  的裁量**（"什么算公开"每次都要重新争一次）⇒ 改成社区惯例的机械规则「本模块所有不以 `_`
+  开头的模块级名字」，`tools/announcements.py` 的两条头注与 `__all__` 同批改过来
+  （`MAX_ANNOUNCE_*` 两个常量因此进去了）。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 76→67、
+  `tools/board_moderation.py` 9）；类型棘轮 `190 → 190`（`tools/base.py` 8→6、
+  `tools/board_moderation.py` 2——⚠️ `type_gate` 判红的是"总数没涨但某个文件涨了"，
+  按设计必须显式跑 `--update` 重切，配对关系写在提交正文里）；ruff `796 → 795`
+  （`tools/base.py` 21→20、新文件 0）。模块台账按文本外科改数（3638/78 → 3404/70）。
+  判据侧的取值点跟着搬**两处**，判据字面一字未动、两处都做了反控实测能红：
+  `tests/test_id_namespaces.py` 的 `_SRC` 与两条 `_WIRING` 元组（`_board_label` 的
+  `f"talkId:` / `f"userId:` 插值）改指新文件；`tests/test_capability_truth.py` 的 `_src`
+  改成拼两份文件（那句"留言板只能改不能删"的注明就在 `delete_board_comment` 的 docstring 里）。
+
 ## 20261017
 
 - **计划只有一个读法了：对象那一态是唯一事实源，渲染文本退成只给人看**——此前计划的

@@ -272,7 +272,11 @@
         0
       ],
       "tools/base.py": [
-        76,
+        67,
+        0
+      ],
+      "tools/board_moderation.py": [
+        9,
         0
       ],
       "tools/announcements.py": [
@@ -2085,8 +2089,8 @@
       "why": "对着 **Rust 侧产出**的拒绝文案"
     },
     {
-      "id": "tools/base.py::BOARD_APPROVED_CN",
-      "file": "tools/base.py",
+      "id": "tools/board_moderation.py::BOARD_APPROVED_CN",
+      "file": "tools/board_moderation.py",
       "kind": "collection",
       "name": "BOARD_APPROVED_CN",
       "size": 3,
