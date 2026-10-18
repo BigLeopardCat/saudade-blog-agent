@@ -16,7 +16,7 @@
     "top_defs": 1
   },
   "agent/react_arm.py": {
-    "lines": 1252,
+    "lines": 1276,
     "top_defs": 40
   },
   "agent/tasks.py": {
@@ -72,7 +72,7 @@
     "top_defs": 19
   },
   "tests/test_react_arm.py": {
-    "lines": 1222,
+    "lines": 1250,
     "top_defs": 22
   },
   "tests/test_reports.py": {

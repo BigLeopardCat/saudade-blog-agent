@@ -324,7 +324,6 @@ class WorkflowExecutor:
         台账登记（`ledger.record`）的口径见上面《`ledger.record` 的两条硬要求》
         ——**签名必须与判据的对照方同源**，错一条 ⇒ 无进展判据恒不触发。
         """
-        from agent.arg_refs import resolve_args
         from agent.workflow_plan import instantiate_plan
 
         # 无进展判据的键（**取参在字面路径修正之前**，见类上面那一段 ①②）。
@@ -354,6 +353,33 @@ class WorkflowExecutor:
                 return (f"{note}\n{RECEIPT_HEAD} {workflow}：本技能**没有执行任何工具**"
                         f"（status={plan.get('status') or '?'}）。"), 0
             return f"{reply}\n{RECEIPT_HEAD} {workflow}：本技能没有要执行的工具（纯应答）。", 0
+
+        return self.run_specs(workflow, specs, sig=sig)
+
+    def run_specs(self, workflow: str, specs: list[str], *,
+                  sig: str | None = None) -> tuple[str, int]:
+        """按**已经定稿的 spec 清单**执行——`run` 的下半截，不经过 `instantiate_plan`。
+
+        **为什么要有这一格**（20261019）：有三处调用方手里拿到的**就是**最终清单，
+        而重新实例化会把它们改坏：
+
+          · **确认轮**（`graph._confirm_grant_plan`）：清单是主人签过字的签名体，
+            逐字执行是那条通道的**全部意义**（"不得增删改任何参数、不得换工具"）。
+            拿技能名+参数再实例化一次，等于把"签的是什么"和"跑的是什么"分开——
+            而它们分开的那一刻，签名就没在保护任何东西了。
+          · **特效切换快道**（`deterministic_plan._effect_switch_fast_path`）：它返回的
+            是**两条 spec**（关旧 + 开新），而 `effect` 技能模板只有一条 ⇒ 走
+            `run` 会被实例化**撕成一条**（快道存在的理由正是模型反复丢半边）。
+          · 其余确定性快道同理：它们的产出**本身就是**计划。
+
+        `sig` 缺省时按清单算：无进展判据的键要的是"同一个操作"，而这一格的操作
+        就是这份清单。`run` 那条路**必须自己传**——它的键取在字面路径修正**之前**
+        （见类上面那一段 ①②），在这里重算会取到修正后的参数、与判据的对照方错开。
+        """
+        from agent.arg_refs import resolve_args
+
+        if sig is None:
+            sig = spec_signature(workflow, {"specs": list(specs)})
 
         # ── 同意闸（P3，20261005）：写操作**整批先判、一件都不执行** ──────────────
         # 生产这边的分工是两道、都在 `graph.execute_node`：① `_confirm_popup` 在**逐
