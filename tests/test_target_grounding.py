@@ -511,7 +511,7 @@ check("  第二本账走的是 `_grounded_value` 的同一句 ⇒ 脏判据（�
 # 它不走 `ledger_src` 参数（那是四道**出处**闸），是在 `_confirm_popup` 里直接把
 # `_ledger_pending_text(...)` 追加进证据列 ⇒ 判据分两半：台账行**能不能**当目标证据
 # （正/反/边界三条），以及**那句话真的接上线了**（只加函数不接线＝一行都没生效）。
-from agent.adminops import target_mentioned  # noqa: E402
+from agent.adminops_target import target_mentioned  # noqa: E402
 
 _LED_ART = ('修改文章 16 的标签：加上 Git、代码版本管理；动作 set_article_tags；参数 '
             '[{"args":{"add":["Git","代码版本管理"],"article_id":16},'
@@ -526,7 +526,7 @@ check("  反向对照二：**两端不挨数字**那条边界对台账同样成�
                               .replace('"article_id":16', '"article_id":166')})]) is False)
 _LED_WIRE = '+ [_ledger_pending_text(state.get("ledger"))])'
 _W = _GSRC.find(_LED_WIRE)
-_TM = _GSRC.rfind("A.target_mentioned(", 0, _W) if _W > 0 else -1
+_TM = _GSRC.rfind("_target.target_mentioned(", 0, _W) if _W > 0 else -1
 check("  接线：那一行真的并进了 `target_mentioned` 的证据列（只加函数不接线＝没生效）",
       _W > 0 and 0 < _TM < _W and _W - _TM < 2000,
       f"ledger_line={_W} target_mentioned={_TM}")

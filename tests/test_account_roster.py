@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
 import agent.action_text as at  # noqa: E402
-import agent.adminops as A  # noqa: E402
+import agent.adminops_account as _account  # noqa: E402
 import agent.authz as authz  # noqa: E402
 import agent.graph as g  # noqa: E402
 from agent.workflow_defs import WORKFLOW_MAP, visible_workflows  # noqa: E402
@@ -110,7 +110,7 @@ WRITE_WORKFLOWS = ("account_freeze", "account_unfreeze", "account_set_role", "mu
 # ══════════════════════════════════════════════════════════════════
 print("\n① render_account_roster：纯渲染的五条不变量（缺一条就是编事实）")
 
-_txt = A.render_account_roster([row(126, "guest5", nickname="晶宝"),
+_txt = _account.render_account_roster([row(126, "guest5", nickname="晶宝"),
                                 row(130, "frozen_one", status=1, muted=True),
                                 row(127, "guest6")])
 check("①-1 每个账号一行，且**账号名印在最前、带「」**（写通道只按名字指认，"
@@ -132,7 +132,7 @@ check("①-5 屏尾写清「印的是账号名」与「超管不在名单里」�
       "一个字都不能差" in _txt and "超级管理员" in _txt)
 
 # 「缺键绝不编 0」：读不出的格一律**印不出**，不许印成 0/None/False
-_txt_missing = A.render_account_roster([{"username": "half"}, {"username": "nonnum",
+_txt_missing = _account.render_account_roster([{"username": "half"}, {"username": "nonnum",
                                                                  "id": "x"},
                                         {"id": 300, "role": "admin"}, "junk", None, {},
                                         {"username": "  "}])
@@ -144,7 +144,7 @@ check("  且没有账号名的行**整行不出现**（它对写通道零用处�
       _txt_missing.count("\n- ") == 2 and "half" in _txt_missing
       and "nonnum" in _txt_missing and "300" not in _txt_missing)
 check("①-7 空名录照实说「一个都没有」（空数组是**事实**，不是「读不到」）",
-      "一个账号都没有" in A.render_account_roster([]))
+      "一个账号都没有" in _account.render_account_roster([]))
 
 
 # ══════════════════════════════════════════════════════════════════

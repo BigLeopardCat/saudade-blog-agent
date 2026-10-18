@@ -12,10 +12,12 @@
     "server.py"
   ],
   "total": 190,
-  "files_checked": 78,
+  "files_checked": 84,
   "by_file": {
     "agent/action_text.py": 1,
-    "agent/adminops.py": 19,
+    "agent/adminops_confirm.py": 6,
+    "agent/adminops_noop.py": 11,
+    "agent/adminops_quota.py": 2,
     "agent/authz.py": 3,
     "agent/context.py": 2,
     "agent/entities.py": 1,

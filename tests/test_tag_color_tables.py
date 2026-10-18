@@ -44,7 +44,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 
-import agent.adminops as A  # noqa: E402
+import agent.adminops_tags as _tags  # noqa: E402
 from tests import _parent_repo  # noqa: E402
 
 FAILED: list[str] = []
@@ -96,11 +96,11 @@ def _ts_array(text: str, name: str) -> list[str] | None:
     return re.findall(r"#[0-9a-fA-F]{6}", m.group(1)) if m else None
 
 
-PY_SRC = (ROOT / "agent" / "adminops.py").read_text(encoding="utf-8")
+PY_SRC = (ROOT / "agent" / "adminops_tags.py").read_text(encoding="utf-8")
 
-A_PAL = _py_literal("agent/adminops.py", "NEW_TAG_COLORS")
-B_CANON = _py_literal("agent/adminops.py", "_COLOR_CANON")
-C_ALIAS = _py_literal("agent/adminops.py", "_TAG_COLOR_ALIASES")
+A_PAL = _py_literal("agent/adminops_tags.py", "NEW_TAG_COLORS")
+B_CANON = _py_literal("agent/adminops_tags.py", "_COLOR_CANON")
+C_ALIAS = _py_literal("agent/adminops_tags.py", "_TAG_COLOR_ALIASES")
 
 _D_TEXT = _parent_repo.read(
     "frontend/src/utils/chatMarkdown.ts",
@@ -155,8 +155,8 @@ check("B 的值是**带「色」字的规范名**（回程渲染用：`粉色` �
 # 另一头由 adminops 自己在模块级拼出来（提示词/追问共用的那份清单）：它必须真的
 # 覆盖整张色板——少一个色，用户就永远问不出那个色。
 check("`TAG_COLOR_SPEC` 覆盖整张色板（每色各出现一次）",
-      all(str(A.TAG_COLOR_SPEC).count(h) == 1 for h in (A_PAL or [])),
-      str(A.TAG_COLOR_SPEC)[:60] + "…")
+      all(str(_tags.TAG_COLOR_SPEC).count(h) == 1 for h in (A_PAL or [])),
+      str(_tags.TAG_COLOR_SPEC)[:60] + "…")
 
 
 # ══ ③ 别名表的值域 ⊆ 色板 ════════════════════════════════════════════════
@@ -172,11 +172,11 @@ check("  对照：别名条数远多于色数（否则这条判据几乎不设�
 _probe = "橘"
 check(f"认色入口真的用这张表（`match_tag_color('{_probe}')` == "
       f"`{(C_ALIAS or {}).get(_probe)}`）",
-      A.match_tag_color(_probe) is not None
-      and A.match_tag_color(_probe) == (C_ALIAS or {}).get(_probe),
-      f"{A.match_tag_color(_probe)} vs {(C_ALIAS or {}).get(_probe)}")
+      _tags.match_tag_color(_probe) is not None
+      and _tags.match_tag_color(_probe) == (C_ALIAS or {}).get(_probe),
+      f"{_tags.match_tag_color(_probe)} vs {(C_ALIAS or {}).get(_probe)}")
 check("  认不出就不认（不猜、不回落）——`天蓝` 不是 `蓝`",
-      A.match_tag_color("天蓝") is None, str(A.match_tag_color("天蓝")))
+      _tags.match_tag_color("天蓝") is None, str(_tags.match_tag_color("天蓝")))
 
 
 # ══ ④ 哈希算子跨语言同源（emoji 上是**唯一**看得出来的一格）══════════════
@@ -198,7 +198,7 @@ if _E_TEXT:
           f"py={_py_hash.groups() if _py_hash else None} "
           f"js={_js_hash.groups() if _js_hash else None}")
 
-_body = _py_source("agent/adminops.py", "color_for_name")
+_body = _py_source("agent/adminops_tags.py", "color_for_name")
 check("A 侧走 UTF-16 码元助手，**不是** `ord()`（emoji 在 JS 里是两个代理码元）",
       "_utf16_units" in _body and "ord(" not in _body, _body.strip()[:70])
 
@@ -222,7 +222,7 @@ if _py_hash:
     _mult, _mod = (int(x) for x in _py_hash.groups())
     _names = ["编程", "生活", "🎉", "杂鱼喵", "a", "泠月", "𝕏", "旅行"]
     _mism = [n for n in _names
-             if A.color_for_name(n) != _expected_color(n, _mult, _mod, A_PAL)]
+             if _tags.color_for_name(n) != _expected_color(n, _mult, _mod, A_PAL)]
     check("⭐ 现算 == `color_for_name`（含**补充平面字符**：🎉 与 𝕏）",
           not _mism, "不一致：" + "、".join(_mism))
     # 反控就长在这条判据里：把"独立重写"换成 `ord()` 语义（一个码点一个数），
@@ -237,7 +237,7 @@ if _py_hash:
           _ord_color("🎉") != _expected_color("🎉", _mult, _mod, A_PAL),
           f"ord={_ord_color('🎉')} utf16={_expected_color('🎉', _mult, _mod, A_PAL)}")
     check("  同名永远同色（同一个词算两次）",
-          A.color_for_name("编程") == A.color_for_name("编程"))
+          _tags.color_for_name("编程") == _tags.color_for_name("编程"))
 
 
 # ══════════════════════════════════════════════════════════════════════════

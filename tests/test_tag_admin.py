@@ -33,7 +33,9 @@ sys.path.insert(0, str(ROOT))
 
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
-from agent import adminops as A  # noqa: E402
+from agent import adminops_confirm as _confirm  # noqa: E402
+from agent import adminops_noop as _noop  # noqa: E402
+from agent import adminops_tags as _tags  # noqa: E402
 import tools.base as base  # noqa: E402
 
 FAILS: list[str] = []
@@ -139,13 +141,13 @@ TWO = [{"tagKey": 10000, "title": "Python", "level": 2, "fatherTag": "编程",
         "fatherKey": 2, "noteCount": 1},
        {"tagKey": 10003, "title": "分布式", "level": 2, "fatherTag": "架构",
         "fatherKey": 2, "color": "#13c2c2"}]
-IDX = A.build_tag_index(ONE, TWO)
+IDX = _tags.build_tag_index(ONE, TWO)
 
 CATS = [{"categoryKey": 3, "categoryTitle": "随笔", "pathName": "essay",
          "introduce": "随手写的", "icon": "book", "color": "#1677ff", "noteCount": 4},
         {"categoryKey": 7, "categoryTitle": "技术", "pathName": "tech",
          "introduce": "", "icon": "", "color": "", "noteCount": 9}]
-CIDX = A.build_category_index(CATS)
+CIDX = _tags.build_category_index(CATS)
 
 
 def cfg(uid=7, role="admin"):
@@ -156,7 +158,7 @@ def cfg(uid=7, role="admin"):
 
 def cidx(*extra):
     """分类字典 + 追加几行（写后复核用）。"""
-    return A.build_category_index(CATS + list(extra))
+    return _tags.build_category_index(CATS + list(extra))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -232,7 +234,7 @@ with patch(_tag_index=lambda c: None):
 print("\n② update_tag：改名走 PUT（当前色必须原样回传）、换位置走移动端点")
 
 post = _Req("done")
-seq = _Seq(IDX, A.build_tag_index(ONE, TWO[:1] + [
+seq = _Seq(IDX, _tags.build_tag_index(ONE, TWO[:1] + [
     {"tagKey": 10001, "title": "AsyncIO", "level": 2, "fatherTag": "编程",
      "fatherKey": 1, "color": "#eb2f96"}] + TWO[2:]))
 with patch(_tag_index=seq, _admin_request=post):
@@ -293,7 +295,7 @@ with patch(_tag_index=lambda c: IDX, _admin_request=post):
 post = _Req({"fromLevel": "two", "fromId": 10000, "toLevel": "two", "toId": 10000,
              "idChanged": False, "fatherKey": 2, "fatherTitle": "架构",
              "rewrittenNotes": 0, "warnings": []})
-moved = A.build_tag_index(ONE, [{"tagKey": 10000, "title": "Python", "level": 2,
+moved = _tags.build_tag_index(ONE, [{"tagKey": 10000, "title": "Python", "level": 2,
                                  "fatherTag": "架构", "fatherKey": 2,
                                  "color": "#52c41a", "noteCount": 3}] + TWO[1:])
 with patch(_tag_index=_Seq(IDX, moved), _admin_request=post):
@@ -311,7 +313,7 @@ with patch(_tag_index=_Seq(IDX, moved), _admin_request=post):
 post = _Req({"fromLevel": "one", "fromId": 1, "toLevel": "two", "toId": 1,
              "idChanged": True, "fatherKey": 2, "fatherTitle": "架构",
              "rewrittenNotes": 7, "warnings": ["目标下已有同名标签"]})
-bad = A.build_tag_index(ONE, [{"tagKey": 1, "title": "编程", "level": 2,
+bad = _tags.build_tag_index(ONE, [{"tagKey": 1, "title": "编程", "level": 2,
                                "fatherTag": "架构", "fatherKey": 2, "color": "#1677ff"}])
 with patch(_tag_index=_Seq(IDX, bad), _admin_request=post):
     r = base.update_tag.invoke({"name": "编程", "to_level": "two", "parent_tag": "架构"},
@@ -346,7 +348,7 @@ with patch(_tag_index=_Seq(IDX, None), _admin_request=_Req({"toId": 10000})):
 print("\n③ delete_tag：删除不可撤销，影响面必须说全（子标签连坐 / 摘掉多少篇文章）")
 
 post = _Req("1")
-with patch(_tag_index=_Seq(IDX, A.build_tag_index(ONE, [TWO[0]] + TWO[2:])),
+with patch(_tag_index=_Seq(IDX, _tags.build_tag_index(ONE, [TWO[0]] + TWO[2:])),
            _admin_request=post):
     r = base.delete_tag.invoke({"name": "编程 / Asyncio"}, config=None)
     check("删二级 → DELETE /api/protected/tag，body {level,ids}（层级用接口词表 one/two）",
@@ -357,7 +359,7 @@ with patch(_tag_index=_Seq(IDX, A.build_tag_index(ONE, [TWO[0]] + TWO[2:])),
           f"{r.kind}: {r}")
 
 post = _Req("1")
-after_all_gone = A.build_tag_index([ONE[1]], [TWO[2], TWO[3]])
+after_all_gone = _tags.build_tag_index([ONE[1]], [TWO[2], TWO[3]])
 with patch(_tag_index=_Seq(IDX, after_all_gone), _admin_request=post):
     r = base.delete_tag.invoke({"name": "编程", "level": "one"}, config=None)
     check("删一级（下面有 2 个二级）→ 回执写明连坐删除的**名单**",
@@ -444,7 +446,7 @@ with patch(_category_index=_Seq(CIDX, CIDX), _admin_post=_Post("Updated")):
           r.kind == "unavailable" and "没有指出要改什么" in r, f"{r.kind}: {r}")
 
 dpost = _Req("1")
-with patch(_category_index=_Seq(CIDX, A.build_category_index(CATS[1:])),
+with patch(_category_index=_Seq(CIDX, _tags.build_category_index(CATS[1:])),
            _admin_request=dpost):
     r = base.delete_category.invoke({"name": "随笔"}, config=None)
     check("删分类 → DELETE /api/protected/category，body 是**裸数组**（与其他写端点不同形）",
@@ -489,59 +491,60 @@ finally:
 
 print("\n⑥ 弹窗问句：用户点「确定」之前必须看得出后果（盲签是本轮最贵的错）")
 
-q = A.render_confirm_question([{"tool": "update_tag",
+q = _confirm.render_confirm_question([{"tool": "update_tag",
                                 "args": {"name": "Python", "new_title": "AsyncIO",
                                          "parent_tag": "架构"}}], IDX)
 check("改标签：点名标签 + 改什么 + 移到哪（还能看到它现在挂在几篇文章上）",
       "修改标签「编程 / Python」" in q and "改名为「AsyncIO」" in q
       and "移到「架构」下面" in q and "3 篇文章" in q, q)
 
-q = A.render_confirm_question([{"tool": "delete_tag", "args": {"name": "编程"}}], IDX)
+q = _confirm.render_confirm_question([{"tool": "delete_tag", "args": {"name": "编程"}}], IDX)
 check("删一级标签：**子标签连坐**写在问句里，且点名是谁",
       "删除一级标签「编程」" in q and "2 个二级标签" in q and "Python" in q
       and "会一起删除" in q, q)
 
-q = A.render_confirm_question([{"tool": "delete_tag", "args": {"name": "Python"}}], IDX)
+q = _confirm.render_confirm_question([{"tool": "delete_tag", "args": {"name": "Python"}}], IDX)
 check("删二级标签：写清「从 N 篇文章上摘掉」", "删除二级标签「编程 / Python」" in q
       and "从 3 篇文章上摘掉" in q, q)
 
-q = A.render_confirm_question([{"tool": "delete_tag", "args": {"name": "没有这个"}}], IDX)
+q = _confirm.render_confirm_question([{"tool": "delete_tag", "args": {"name": "没有这个"}}], IDX)
 check("标签名对不上 → 问句当场写出来（点确定之前就该知道这个名字不存在）",
       "标签字典里没有这个名字" in q, q)
 
-q = A.render_confirm_question([{"tool": "delete_category", "args": {"name": "随笔"}}], None, CIDX)
+q = _confirm.render_confirm_question(
+    [{"tool": "delete_category", "args": {"name": "随笔"}}], None, CIDX)
 check("删分类：「文章会变成没有分类」必须写出来（「删分类」听着像连文章一起删）",
       "删除分类「随笔」" in q and "4 篇文章" in q and "变成没有分类" in q, q)
 
-q = A.render_confirm_question([{"tool": "create_category",
+q = _confirm.render_confirm_question([{"tool": "create_category",
                                 "args": {"title": "读书", "path_name": "read"}}], None, CIDX)
 check("建分类：点名名字与路径", "新建分类「读书」" in q and "路径 read" in q, q)
 
-q = A.render_confirm_question([{"tool": "update_category",
+q = _confirm.render_confirm_question([{"tool": "update_category",
                                 "args": {"name": "随笔", "color": "#eb2f96"}}], None, CIDX)
 check("改分类：只写点名的字段", "修改分类「随笔」" in q and "颜色改为「#eb2f96」" in q, q)
 
-t = A.render_confirm_text([{"tool": "delete_tag", "args": {"name": "编程"}}], IDX)
+t = _confirm.render_confirm_text([{"tool": "delete_tag", "args": {"name": "编程"}}], IDX)
 check("气泡正文与问句同源（同一段确定性文本，不存在两种说法）", "会一起删除" in t, t)
 check("读不到字典也不炸（退化不改戏）",
-      "删除标签「没有这个」" in A.render_confirm_question(
+      "删除标签「没有这个」" in _confirm.render_confirm_question(
           [{"tool": "delete_tag", "args": {"name": "没有这个"}}]))
 
 for spec in [{"tool": "update_tag", "args": {}}, {"tool": "delete_category", "args": {}},
              {"tool": "create_category", "args": {}}]:
-    q = A.render_confirm_question([spec], IDX, CIDX)
+    q = _confirm.render_confirm_question([spec], IDX, CIDX)
     check(f"字段缺失不炸也不编名字：{spec['tool']}", "（未命名）" in q, q)
 
 
 print("\n⑦ 后端回执行（Rust `render_exec_row`）读的键必须真的落进 meta（跨语言契约）")
 
-with patch(_tag_index=_Seq(IDX, A.build_tag_index(ONE, [TWO[0], TWO[1], TWO[2]])),
+with patch(_tag_index=_Seq(IDX, _tags.build_tag_index(ONE, [TWO[0], TWO[1], TWO[2]])),
            _admin_request=_Req("1")):
     r = base.delete_tag.invoke({"name": "分布式", "level": "two"}, config=None)
     check("delete_tag 的 meta 带 change（Rust 渲染删除行读它；缺了就只剩「删除标签 X」）",
           r.kind == "ok" and str(r.meta.get("change") or "") != "", str(r.meta))
 
-with patch(_category_index=_Seq(CIDX, A.build_category_index(CATS[1:])),
+with patch(_category_index=_Seq(CIDX, _tags.build_category_index(CATS[1:])),
            _admin_request=_Req("1")):
     r = base.delete_category.invoke({"name": "随笔"}, config=None)
     check("delete_category 的 meta 带 category_name + change",
@@ -754,7 +757,7 @@ check("  同一个名字在 add 里说两遍 ⇒ 仍只派一条 create_tag（�
       [s.split("(", 1)[0] for s in _it_rep5["tools"]]
       == ["create_tag", "set_article_tags"])
 
-_kept_add, _already_add = A.reached_specs(
+_kept_add, _already_add = _noop.reached_specs(
     [{"tool": "create_tag", "args": _it_args[0]},
      {"tool": "set_article_tags", "args": _it_args[1]}], index=IDX)
 check("标签站内还没有 ⇒ 两条都留着（一张卡问两件事，「全部办」一步走完）",
@@ -764,7 +767,7 @@ check("标签站内还没有 ⇒ 两条都留着（一张卡问两件事，「�
 _have = [json.loads(s[s.index("(") + 1:s.rindex(")")])
          for s in instantiate_plan("article_tags",
                                    {"article_id": 46, "add": ["编程"]})["tools"]]
-_kept_have, _already_have = A.reached_specs(
+_kept_have, _already_have = _noop.reached_specs(
     [{"tool": "create_tag", "args": _have[0]}, {"tool": "set_article_tags", "args": _have[1]}],
     index=IDX)
 check("标签站内已经有（同名同层）⇒ 建那一条被摘掉，只剩一条**只挂**",
@@ -772,9 +775,9 @@ check("标签站内已经有（同名同层）⇒ 建那一条被摘掉，只剩
       and len(_already_have) == 1 and "本来就在站里" in _already_have[0]["why"],
       str([s["tool"] for s in _kept_have]) + str(_already_have))
 check("  卡面因此不会凭空多一行「新建」（已达成的现状句挂在正文末尾）",
-      "本来就在站里" in A.render_already_note(_already_have)
-      and "新建" not in A.render_confirm_question(_kept_have, IDX, None),
-      A.render_confirm_question(_kept_have, IDX, None))
+      "本来就在站里" in _noop.render_already_note(_already_have)
+      and "新建" not in _confirm.render_confirm_question(_kept_have, IDX, None),
+      _confirm.render_confirm_question(_kept_have, IDX, None))
 
 # 条件工具（`extra_plan_tools`）**不进 `plan`**是刻意的：`tasks.intents_to_declarations`
 # 会把 `plan` 读成"每个任务都有这一步"，而标签已存在时那一条永远等不到回执（僵尸行）。
@@ -1144,16 +1147,16 @@ with patch(_announcement_index=lambda c: aidx(), _admin_request=dl):
           and "站内有 2 条标题都叫「维护通知」" in r, f"{r.kind}: {r}")
 
 print("  · 弹窗问句：正文预览必须在里面（主人是扫一眼就点确定的）")
-_q = A.render_confirm_question([{"tool": "create_announcement",
+_q = _confirm.render_confirm_question([{"tool": "create_announcement",
                                 "args": {"title": "维护通知",
                                          "content": "今晚 23 点开始维护，预计一小时"}}])
 check("新建公告的问句含标题**和正文预览**（只写标题 = 让主人盲签一份没看过的公告）",
       "发布公告「维护通知」" in _q and "今晚 23 点开始维护" in _q, _q)
-_q = A.render_confirm_question([{"tool": "update_announcement",
+_q = _confirm.render_confirm_question([{"tool": "update_announcement",
                                 "args": {"title": "维护通知", "new_title": "维护改期"}}])
 check("改公告的问句写清改的是哪条、改成什么",
       "修改公告「维护通知」" in _q and "标题改为「维护改期」" in _q, _q)
-_q = A.render_confirm_question([{"tool": "delete_announcement",
+_q = _confirm.render_confirm_question([{"tool": "delete_announcement",
                                 "args": {"title": "维护通知"}}])
 check("删公告的问句写清「取不回来」", "删除公告「维护通知」" in _q and "取不回来" in _q, _q)
 
@@ -1359,22 +1362,22 @@ with patch(_board_index=lambda c: bidx(), _admin_request=dl):
           f"{r.kind}: {r} / {dl.calls}")
 
 print("  · 弹窗问句：必须写清**要动的是哪一条**（复核按编号取行，删除按片段核对）")
-_q = A.render_confirm_question([{"tool": "audit_board_comment",
+_q = _confirm.render_confirm_question([{"tool": "audit_board_comment",
                                  "args": {"talk_id": 12, "verdict": "reject"}}],
                                None, None, bidx())
 check("问句里有 #id + 原文 + 作者 + 当前状态（缺一项，主人就无从核对）",
       "#12「今天天气真好呀」" in _q and "路人甲 的留言" in _q and "现在：待审" in _q, _q)
 check("  驳回写全后果（隐藏 / 作者自己仍看得见），不写成「删除」",
       "驳回（隐藏，只有作者自己在「我的河灯」看到未通过）" in _q, _q)
-_q = A.render_confirm_question([{"tool": "delete_board_comment",
+_q = _confirm.render_confirm_question([{"tool": "delete_board_comment",
                                  "args": {"quote": "今天天气真好呀"}}], None, None, bidx())
 check("删除问句写清「删掉取不回来」",
       "删除留言 #12「今天天气真好呀」" in _q and "取不回来" in _q, _q)
-_q = A.render_confirm_question([{"tool": "delete_board_comment",
+_q = _confirm.render_confirm_question([{"tool": "delete_board_comment",
                                  "args": {"quote": "谢谢站长的分享！"}}], None, None, bidx())
 check("片段对不上唯一一条（撞车）→ 问句**如实标注没核对上**，不装作核对过",
       "没能核对上站内具体是哪一条" in _q and "「谢谢站长的分享！」" in _q, _q)
-_q = A.render_confirm_question([{"tool": "audit_board_comment",
+_q = _confirm.render_confirm_question([{"tool": "audit_board_comment",
                                  "args": {"talk_id": 12, "verdict": "pass"}}],
                                None, None, None)
 check("读不到留言清单（boards=None）→ 同样如实标注，且**照样弹窗**（不因此不弹）",
@@ -1457,11 +1460,11 @@ def _args_of(plan):
 
 
 # 台账样本：多一条一级标签「大笨狗汪汪」（id=3），其余同 ONE/TWO
-IDX_DOG = A.build_tag_index(
+IDX_DOG = _tags.build_tag_index(
     ONE + [{"tagKey": 3, "title": "大笨狗汪汪", "level": 1, "color": "#1677ff", "noteCount": 2}],
     TWO)
 # 同名二级两条挂在不同父下（校正出来的名字**歧义** ⇒ 不许替主人挑）
-IDX_DUP = A.build_tag_index(ONE, TWO + [
+IDX_DUP = _tags.build_tag_index(ONE, TWO + [
     {"tagKey": 10010, "title": "大笨狗汪汪", "level": 2, "fatherTag": "编程",
      "fatherKey": 1, "color": "#52c41a"},
     {"tagKey": 10011, "title": "大笨狗汪汪", "level": 2, "fatherTag": "架构",
@@ -1523,7 +1526,7 @@ with patch(_tag_index=lambda c: None):
                                 MSG_DOG) is None)
 
 print("  · 分类与公告同族：同一条判据、同一个解析器")
-CAT_DOG = A.build_category_index(CATS + [
+CAT_DOG = _tags.build_category_index(CATS + [
     {"categoryKey": 21, "categoryTitle": "随笔集锦", "pathName": "essay2",
      "introduce": "", "icon": "", "color": "", "noteCount": 0}])
 ANN_DOG = [{"id": 7, "title": "图库上线公告", "content": "图库上线了",

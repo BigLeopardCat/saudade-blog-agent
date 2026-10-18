@@ -2508,7 +2508,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
             fails.append(f"台账摆了但一条待办都没有（事件：{_lf_events}）"
                          "——本键要求帧里至少印出一个编号（要有待办行才判得动）")
     if gold.get("require_card_targets_from_ledger") and not _lf_off:
-        from agent.adminops import normalize_target_id   # 编号解析的唯一实现
+        from agent.adminops_target import normalize_target_id  # 编号解析的唯一实现
         from agent.graph import _LEDGER_FIELD_FAMILY, _LEDGER_TAG_FAMILY, _LEDGER_TARGET_FIELDS
         _byfam: dict = {}
         for _e in _lf_events:

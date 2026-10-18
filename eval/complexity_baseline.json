@@ -3,11 +3,11 @@
     "c": 188,
     "lines": 427
   },
-  "agent/adminops.py::_confirm_one": {
+  "agent/adminops_confirm.py::_confirm_one": {
     "c": 144,
-    "lines": 338
+    "lines": 341
   },
-  "agent/adminops.py::_reached_one": {
+  "agent/adminops_noop.py::_reached_one": {
     "c": 166,
     "lines": 327
   },
@@ -109,11 +109,11 @@
   },
   "eval/admin_write_probe.py::step17_auth_review": {
     "c": 160,
-    "lines": 316
+    "lines": 317
   },
   "eval/admin_write_probe.py::step18_ledger_zero_write": {
     "c": 92,
-    "lines": 216
+    "lines": 217
   },
   "eval/admin_write_probe.py::step8_popup_write": {
     "c": 40,
@@ -209,7 +209,7 @@
   },
   "tools/base.py::create_tag": {
     "c": 31,
-    "lines": 112
+    "lines": 113
   },
   "tools/base.py::read_messages": {
     "c": 32,

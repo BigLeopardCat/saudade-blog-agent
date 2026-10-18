@@ -972,7 +972,7 @@ print("⑨f 混合轮：被挡下的是这一篇、回复说的是那一篇 ⇒ 
 # 与系统台账当场矛盾。判据收窄成"这句声称**指得到**被挡下那篇吗"，四条边界都要锁：
 # 指的是别的篇 ⇒ 放行；指的是被挡下那篇 ⇒ 照旧打回；一个 id 都没点名 ⇒ 照旧打回
 # （泛指声称正是 5a 要拦的形状）；受阻项没有 article_id ⇒ 判据不启用、行为一字不变。
-from agent import adminops as A  # noqa: E402
+from agent import adminops_target as _target  # noqa: E402
 
 
 def _mixed_state(reply: str, *, blocked_aid: int = 11, got: int = 11,
@@ -984,11 +984,12 @@ def _mixed_state(reply: str, *, blocked_aid: int = 11, got: int = 11,
             "blocked": [{"spec": spec or f'set_article_status({{"article_id": {blocked_aid},'
                                           ' "status": "private"})',
                          "tool": "set_article_status",
-                         "reason": A.REASON_TARGET_MISMATCH,
+                         "reason": _target.REASON_TARGET_MISMATCH,
                          "workflow": "article_status", "result": "（略）"}],
             "messages": [
                 HumanMessage(content="把 id 13、11、10 设为私密"),
-                ToolMessage(content=A.target_conflict_frame("set_article_status", set(named), got),
+                ToolMessage(content=_target.target_conflict_frame(
+                    "set_article_status", set(named), got),
                             tool_call_id="execute_1", name="set_article_status"),
                 AIMessage(content=reply),
             ]}

@@ -709,7 +709,7 @@ narrator 加纪律 14（未展开的小节没有读过，不得引用、不得�
 
 ② 父标签 id 的真通道 = 名字通道（用户拍板"给条真通道，否则把技能描述里的引用写法先删掉"）。
 planner 在写技能里写名字——人嘴里说的就是名字，跨轮执行记忆里也只有名字；工具在 execute 阶段
-用 `agent/adminops.py::find_tag` 对着实时标签字典（`_tag_index`，admin 鉴权、`uid<=0` fail-closed）
+用 `agent/adminops_tags.py::find_tag` 对着实时标签字典（`_tag_index`，admin 鉴权、`uid<=0` fail-closed）
 确定性解析成 id。解不出就**响亮零写**：唯一命中才动手；命中多个（不同父下的同名二级）→ 追问并列出
 候选；一个都没有 → 如实说"站内没有这个标签"——**绝不猜、绝不顺手新建**（"新建一个"正是事故形态）。
 目标/父标签/子标签名单取自同一次索引快照（`index=` 参数一路透传），避免中途字典变化导致
@@ -1506,7 +1506,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > 加上既有的 `create_tag` / `set_article_status` / `set_article_tags`（+ `list_admin_notes` 读侧），
 > 工具总数 22 → 35（含后台只读与侧任务工具），见 §5 / §5.3。
 > ②父标签 id 的真通道 = 名字通道：planner 在写技能里写名字，工具在 execute 阶段用
-> `agent/adminops.py` 的 `find_tag` 对着实时标签字典确定性解析成 id；解不出（查无此名/
+> `agent/adminops_tags.py` 的 `find_tag` 对着实时标签字典确定性解析成 id；解不出（查无此名/
 > 歧义/层级不符）一律**响亮零写**，绝不猜、绝不新建。技能描述里 `$list_tags[N].tagKey` 形态的
 > 示例已删（写轮永远满足不了它），`$ref` 机制本身保留。
 > ③**解不出的引用必须响亮**：`agent/refs.py::resolve_args` 改递归（此前嵌套引用既解析不出、

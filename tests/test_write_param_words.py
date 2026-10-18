@@ -49,7 +49,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from agent import adminops as A  # noqa: E402
+from agent import adminops_tags as _tags  # noqa: E402
 from tests import _parent_repo, _rust_src  # noqa: E402
 
 FAILED: list[str] = []
@@ -61,7 +61,7 @@ def check(name: str, ok: bool, extra: str = "") -> None:
         FAILED.append(name)
 
 
-_ADMINOPS = (ROOT / "agent" / "adminops.py").read_text(encoding="utf-8")
+_ADMINOPS = (ROOT / "agent" / "adminops_tags.py").read_text(encoding="utf-8")
 
 
 def _func_src(src: str, name: str) -> str:
@@ -128,7 +128,7 @@ check("`normalize_level` 的产出点就是那两个字面量（不是从别处�
 
 _LVL_INPUTS = ["one", "ONE", " One ", "1", "一", "一级", "two", "TWO", "2", "二", "二级",
                "二级 ", "三", "three", "3", "0", "", "   ", None, "one级", "两"]
-_lvl_out = {A.normalize_level(v) for v in _LVL_INPUTS}
+_lvl_out = {_tags.normalize_level(v) for v in _LVL_INPUTS}
 check("⭐ `normalize_level` 的**每一个产出**都在后端认的词表里（发出去的后端都认）",
       _lvl_out - {None} <= _parse_set and len(_lvl_out) > 1,
       f"产出={sorted(x for x in _lvl_out if x)} 后端={sorted(_parse_set)}")
@@ -139,9 +139,9 @@ check("⭐ 层级这一族两侧**完全同集**（没有台账：本侧不会�
 # ══ ② 第二个产出点：`level_of`（TagInfo → 词）══════════════════════════════
 print("\n② 第二个产出点 `level_of`（TagInfo → 词）：同一组词，同一份判据")
 
-_taginfo = A.TagInfo
-check("`level_of(None)` 进 None 出（缺信息不许兜成「一级」）", A.level_of(None) is None)
-_lof = [A.level_of(_taginfo(id=1, name="x", level=1)), A.level_of(_taginfo(id=2, name="y",
+_taginfo = _tags.TagInfo
+check("`level_of(None)` 进 None 出（缺信息不许兜成「一级」）", _tags.level_of(None) is None)
+_lof = [_tags.level_of(_taginfo(id=1, name="x", level=1)), _tags.level_of(_taginfo(id=2, name="y",
                                                                         level=2))]
 check("⭐ `level_of` 的产出也在后端词表里（一个是描述、一个是实参，写错哪一个后端都不认）",
       bool(set(_lof)) and set(_lof) <= _parse_set and len(set(_lof)) == 2, f"{_lof}")
@@ -185,7 +185,7 @@ check("  方向是安全的：本侧只会少写一个后端认得的旧词，�
 _STATUS_INPUTS = ["public", "PUBLIC", " public ", "公开", "发布", "publish", "published", "1",
                   "private", "私密", "隐藏", "hidden", "0", "draft", "草稿", "drafted",
                   "半公开", "hidden2", "", "  ", None, "2"]
-_st_out = {A.normalize_status(v) for v in _STATUS_INPUTS}
+_st_out = {_tags.normalize_status(v) for v in _STATUS_INPUTS}
 check("⭐ 语料里每一个非 None 的产出都在后端词表内",
       _st_out - {None} <= _recog, f"{sorted(x for x in _st_out if x)}")
 check("  三档都产得出来（本侧值域 == 后端那三个词，不含 `published`）",
@@ -196,20 +196,20 @@ check("  三档都产得出来（本侧值域 == 后端那三个词，不含 `pu
 print("\n④ 失败取向：认不出就拒（后端返回 None，本侧返回 None 让调用方拒）")
 
 check("本侧层级：未知词一律 None（`三`/`three`/`3`/`0`/空串/None/`one级`）",
-      all(A.normalize_level(v) is None
+      all(_tags.normalize_level(v) is None
           for v in ("三", "three", "3", "0", "", "   ", None, "one级", "两")),
-      f"{ {v: A.normalize_level(v) for v in ('三', '3', '', None)} }")
+      f"{ {v: _tags.normalize_level(v) for v in ('三', '3', '', None)} }")
 check("本侧状态：未知词一律 None（`半公开`/`hidden2`/`2`/空串/None）",
-      all(A.normalize_status(v) is None
+      all(_tags.normalize_status(v) is None
           for v in ("半公开", "hidden2", "2", "", "  ", None)),
-      f"{ {v: A.normalize_status(v) for v in ('半公开', '2', None)} }")
+      f"{ {v: _tags.normalize_status(v) for v in ('半公开', '2', None)} }")
 check("  容错只做**大小写与首尾空白**（`ONE` / ` One ` 都认；不做别的模糊匹配）",
-      A.normalize_level("ONE") == "one" and A.normalize_level(" One ") == "one"
-      and A.normalize_status("PUBLIC") == "public")
+      _tags.normalize_level("ONE") == "one" and _tags.normalize_level(" One ") == "one"
+      and _tags.normalize_status("PUBLIC") == "public")
 check("★ 这一站补上了 `normalize_level` 的**行为覆盖**：此前全仓没有一处测试调过它"
       "（`normalize_status` 在 `test_admin_write.py` 里有，层级那半没有）",
-      A.normalize_level("一级") == "one" and A.normalize_level("二级") == "two"
-      and A.normalize_level("1") == "one" and A.normalize_level("2") == "two")
+      _tags.normalize_level("一级") == "one" and _tags.normalize_level("二级") == "two"
+      and _tags.normalize_level("1") == "one" and _tags.normalize_level("2") == "two")
 
 
 # ══ ⑤ agent 独有那几张表：只判自洽，并写下它们**没有** Rust 对应物 ═════════
@@ -219,14 +219,14 @@ print("   · `_TOP_ALIASES`（置顶）——`0/1` 整数，Rust 那边没有词
 print("   · `STATUS_CN`——说给主人听的中文名，不是写回去的值")
 
 check("  `_STATUS_ALIASES` 的**值**都在本侧值域里（认出一个不存在的档 = 拿它去问后端）",
-      set(A._STATUS_ALIASES.values()) <= _p_out,
-      f"越界：{sorted(set(A._STATUS_ALIASES.values()) - _p_out)}")
+      set(_tags._STATUS_ALIASES.values()) <= _p_out,
+      f"越界：{sorted(set(_tags._STATUS_ALIASES.values()) - _p_out)}")
 check("  `STATUS_CN` 的键 == 本侧值域（缺一档 = 显示时回落成「未知状态…」）",
-      set(A.STATUS_CN) == _p_out, f"{sorted(A.STATUS_CN)}")
+      set(_tags.STATUS_CN) == _p_out, f"{sorted(_tags.STATUS_CN)}")
 check("  `_TOP_ALIASES` 的值只有 0/1（置顶是布尔语义，不许出现第三个值）",
-      set(A._TOP_ALIASES.values()) == {0, 1}, f"{sorted(set(A._TOP_ALIASES.values()))}")
+      set(_tags._TOP_ALIASES.values()) == {0, 1}, f"{sorted(set(_tags._TOP_ALIASES.values()))}")
 check("  `normalize_top` 认不出也是 None（同一条纪律：宁可问一句，不猜）",
-      A.normalize_top("差不多吧") is None and A.normalize_top(None) is None)
+      _tags.normalize_top("差不多吧") is None and _tags.normalize_top(None) is None)
 
 # ══════════════════════════════════════════════════════════════════════════
 print()

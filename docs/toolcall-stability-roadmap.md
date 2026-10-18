@@ -547,12 +547,12 @@ narrator 只允许追加**一句**人设包装（禁止事实断言），LLM 失
 |---|------|------|
 | ① | 有帧轮专用兜底文案（只否认被点名的那件事，不否认整轮） | `graph.py` `_FALLBACK_PHANTOM_CLAIM` / `_FALLBACK_SEARCH_CLAIM_FRAMED` |
 | ② | 判据命中的**子句**落 trace（`_clause_hit` 系列 + `_claim_clause` + `_fallback_result(clause=)`） | `graph.py`；`tests/test_workflows.py::test_gate_frame_checks` |
-| ③ | `list_tags` 读 `/tagone + /tagtwo` 并保持层级（`merge_tag_rows`，父/子写成 `父/子`） | `tools/base.py` / `agent/adminops.py` / `agent/entities.py` |
+| ③ | `list_tags` 读 `/tagone + /tagtwo` 并保持层级（`merge_tag_rows`，父/子写成 `父/子`） | `tools/base.py` / `agent/adminops_tags.py` / `agent/entities.py` |
 | ④ | 能力清单**由注册表按角色渲染**（`Workflow.capability` + `visible_workflows` + `context.site_guide(role)`） | `agent/workflow_defs/` / `agent/context.py` / `graph.py` 三节点 |
 | ⑤ | 5c 加"复述本轮工具自己说的话"豁免 + 工具返回文本里禁止出现工具名（lint 锁） | `graph.py` `_phantom_tool_claim_span`；`adminops.py` 渲染层；`tests/test_workflows.py::test_no_sibling_tool_name_in_user_text` |
 | ⑥ | 回执顶层 meta 的 `tag_name` 不再被当工具实参读 | `src/routes/chat.rs`（+ 3 条单测） |
 | ⑦ | planner 侧参数语义写进技能描述 + 工具侧"父子同名"确定性拒绝 | `agent/workflow_defs/` / `tools/base.py` |
-| ⑧ | 确认弹窗问句点名父标签（读不到字典则退回 id，不因此不弹窗） | `agent/adminops.py` `_confirm_one/render_confirm_question` + `graph.py` `_confirm_popup` |
+| ⑧ | 确认弹窗问句点名父标签（读不到字典则退回 id，不因此不弹窗） | `agent/adminops_confirm.py` `_confirm_one/render_confirm_question` + `graph.py` `_confirm_popup` |
 
 ### 附二：活体探针补出的两个洞（同一天晚上，**都是判据/纪律缺位，不是执行失败**）
 
@@ -641,11 +641,11 @@ get_article_detail({article_id: "96", doc_type: "board"})
 
 1. ~~**帧里给 id 具名**~~ **已于 20260926 落地（批 4，「帧里 id 带来源」）**：落到 `talkId:` /
    `noteId:` / `userId:` / `notifId:` / `mailId:` 五种命名空间，覆盖 `tools/base.py::_board_label`、
-   `agent/reports.py`（明细行 + 用户行）、`agent/adminops.py::_board_ref`、`agent/entities.py` 四个
+   `agent/reports.py`（明细行 + 用户行）、`agent/adminops_board.py::_board_ref`、`agent/entities.py` 四个
    摘要器、`agent/context.py::_doc_anchors`（`noteId=`）。**只改渲染出来的文本，DTO 键与跨端帧契约
    一个字节没动**（所以 Rust/前端零改动、golden 零编辑）；确认弹窗卡面刻意仍是 `#{talkKey}`
    （人眼看的 UX 面，见 `tests/test_id_namespaces.py` 的接线锁）。回归锁：`tests/test_id_namespaces.py`。
-   **遗留**：`agent/adminops.py` 的后台文章/标签列表仍写裸 `id=N`（`render_tag_list` 的 `id=1、id=2`
+   **遗留**：`agent/adminops_tags.py` 的后台文章/标签列表仍写裸 `id=N`（`render_tag_list` 的 `id=1、id=2`
    与文章行的 `id=12 [草稿]《…》`）——同一类缺陷、当时未在本批范围内，且那几处的取值语义与
    写身份判据（`target_mentioned`）耦合，要单独一批做。
 2. **按 id 取留言的通道**：被驳回的留言**不在任何公开列表里**（只有 `/api/protect/board/mine`

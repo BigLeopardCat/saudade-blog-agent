@@ -1158,17 +1158,18 @@ def _reschedule_lock() -> int:
         bad += 1
         print(f"✗ [{RESCHEDULE_CASE}] 用例不在（改名要一起改这里）")
     else:
-        from agent import adminops as A
+        from agent import adminops_todo as _todo
 
-        true_line = A.render_todo_reschedule_action(RESCHEDULE_TITLE, RESCHEDULE_DAY)
-        false_line = A.render_todo_reschedule_action(RESCHEDULE_TITLE, A._TODO_CLEAR_WORD)
-        ok = (A.todo_due_phrase(RESCHEDULE_DAY) in true_line
-              and A._TODO_CLEAR_WORD in false_line
-              and A.todo_due_phrase(RESCHEDULE_DAY) not in false_line)
+        true_line = _todo.render_todo_reschedule_action(RESCHEDULE_TITLE, RESCHEDULE_DAY)
+        false_line = _todo.render_todo_reschedule_action(RESCHEDULE_TITLE, _todo._TODO_CLEAR_WORD)
+        ok = (_todo.todo_due_phrase(RESCHEDULE_DAY) in true_line
+              and _todo._TODO_CLEAR_WORD in false_line
+              and _todo.todo_due_phrase(RESCHEDULE_DAY) not in false_line)
         bad += 0 if ok else 1
         print(f"{'✓' if ok else '✗ 不符'} [方向锁] 生产渲染器的两张卡是两个方向"
               f"（日子那格 = `todo_due_phrase({RESCHEDULE_DAY})` = "
-              f"{A.todo_due_phrase(RESCHEDULE_DAY)!r}）\n    真={true_line}\n    假={false_line}")
+              f"{_todo.todo_due_phrase(RESCHEDULE_DAY)!r}）\n"
+              f"    真={true_line}\n    假={false_line}")
 
         tf = _judge_reschedule(gold, true_line)
         bad += 0 if not tf else 1
@@ -1184,7 +1185,7 @@ def _reschedule_false_green(gold: dict, true_line: str, false_line: str) -> int:
     三件的口径见 `_reschedule_lock` 的 docstring；两张卡由调用方拼好传进来（都是
     生产渲染器 `adminops.render_todo_reschedule_action` 的产物）。返回不符项数。
     """
-    from agent import adminops as A     # 只为一句话里的清空词常量（与上面同一个来源）
+    from agent import adminops_todo as _todo  # 只为一句话里的清空词常量（与上面同一个来源）
 
     bad = 0
     ff = _judge_reschedule(gold, false_line)
@@ -1204,7 +1205,7 @@ def _reschedule_false_green(gold: dict, true_line: str, false_line: str) -> int:
     bad += 0 if ok else 1
     print(f"{'✓' if ok else '✗ 不符'} [方向锁] 判别力取自生产函数：正断言命中真卡={hit_true}"
           f" / 不命中清空卡={not hit_false}（两行都由 `render_todo_reschedule_action` 拼、"
-          f"清空词取 {A._TODO_CLEAR_WORD!r} ⇒ 渲染器/契约换词这里当场红）")
+          f"清空词取 {_todo._TODO_CLEAR_WORD!r} ⇒ 渲染器/契约换词这里当场红）")
 
     # 红基线（20261015 批 4）：把正断言**截回旧版那半句**——20261008 之前只锁到
     # 「…的排期改成」为止，那一版在清空卡上**照样命中**（这就是那天的假绿），现版不命中。

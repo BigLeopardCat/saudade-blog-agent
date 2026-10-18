@@ -34,7 +34,9 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
 import agent.action_text as AT  # noqa: E402
-import agent.adminops as A  # noqa: E402
+import agent.adminops_noop as _noop  # noqa: E402
+import agent.adminops_quota as _quota  # noqa: E402
+import agent.adminops_target as _target  # noqa: E402
 import agent.authz as authz  # noqa: E402
 import agent.graph as g  # noqa: E402
 import server  # noqa: E402
@@ -440,17 +442,17 @@ check("  帧里**没有**文章族那套「哪一篇」（写错族的后果是�
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑥ 卡面 / 队列 / 回执行：三件各说各的，读不到就少说")
-_card_a = A.render_quota_action("approve", "Alice", DIRD, PEND)
+_card_a = _quota.render_quota_action("approve", "Alice", DIRD, PEND)
 check("⭐ 批准卡印出**申请理由**（主人正在拿别人的一句话做裁决，有权在点之前读到它）",
       "额度用完了，我想接着问" in _card_a, _card_a[:110])
 check("  卡面含账号名 + 账号 id + 当前用量",
       "Alice" in _card_a and "126" in _card_a and "剩363/500" in _card_a, _card_a[:110])
 check("  卡面说清后果：批准**不可撤销**",
       "不可撤销" in _card_a, _card_a[-40:])
-_card_r = A.render_quota_action("reject", "Alice", DIRD, PEND)
+_card_r = _quota.render_quota_action("reject", "Alice", DIRD, PEND)
 check("驳回卡说清'额度不变'且'他会收到一条站内通知'",
       "不变" in _card_r and "通知" in _card_r, _card_r[-60:])
-_card_s = A.render_quota_action("reset", "Alice", DIRD, PEND)
+_card_s = _quota.render_quota_action("reset", "Alice", DIRD, PEND)
 check("⭐⭐ 主动重置卡**不提「额度重置申请」那件事**、也不印理由"
       "（他可能压根没申请过；印出来会让主人以为自己在批那条申请）",
       "**主动**" in _card_s and "额度重置申请" not in _card_s
@@ -460,50 +462,50 @@ check("  但它同样说清'不需要他申请过'",
 check("⭐ 三张卡两两不同形（主人分不清点下去会怎样 = 盲签）",
       len({_card_a, _card_r, _card_s}) == 3, "")
 # 三态快照：读不到就少说，**不因此不弹窗**
-_no_req = A.render_quota_action("approve", "Alice", DIRD, {})
+_no_req = _quota.render_quota_action("approve", "Alice", DIRD, {})
 check("  快照在手、他却没有待处理的申请 → 卡面直接标注"
       "（点完才被告知没批成，就晚了）",
       "他**现在没有待处理的额度申请**" in _no_req and "不可撤销" in _no_req, _no_req[:110])
-_req_none = A.render_quota_action("approve", "Alice", DIRD, None)
+_req_none = _quota.render_quota_action("approve", "Alice", DIRD, None)
 check("  申请快照读不到 → 少说那句理由，**照旧弹窗**（不是不弹）",
       "申请理由" not in _req_none and "不可撤销" in _req_none, _req_none[:110])
-_no_name = A.render_quota_action("approve", "没有这个人", DIRD, PEND)
+_no_name = _quota.render_quota_action("approve", "没有这个人", DIRD, PEND)
 check("  名录在手但名字不在 → 卡面直接印'后台账号列表里没有叫这个名字的账号'",
       "后台账号列表里没有叫这个名字的账号" in _no_name, _no_name[:110])
 check("  名字不在时**不报后果**（做不成的事说后果只会误导）",
       "不可撤销" not in _no_name, _no_name[:80])
-_dir_none = A.render_quota_action("approve", "Alice", None, None)
+_dir_none = _quota.render_quota_action("approve", "Alice", None, None)
 check("  名录读不到 → 只印名字，**照旧弹窗**",
       "Alice" in _dir_none and "没有叫这个名字" not in _dir_none, _dir_none[:110])
 
-_list = A.render_quota_requests(list(PEND.values()))
+_list = _quota.render_quota_requests(list(PEND.values()))
 check("⭐ 队列帧里有申请人名字、昵称、用量、状态、理由、提交时间",
       all(x in _list for x in ("Alice", "剩363/500 轮", "待处理", "我想接着问", "2026-09-29")),
       _list[:140])
 check("⭐⭐ 队列里**印不出行 id**（agent 按不了编号动手，印出来只会诱发 planner 猜一个）",
       "900" not in _list, _list[:100])
 check("  空理由如实写「（没有填写理由）」而不是留空白",
-      "（没有填写理由）" in A.render_quota_requests(
+      "（没有填写理由）" in _quota.render_quota_requests(
           [{"username": "Bob", "used": 3, "limit": 500, "reason": None, "status": 0}]),
       "")
-_empty_list = A.render_quota_requests([])
+_empty_list = _quota.render_quota_requests([])
 check("  一条都没有时**不产空串**（空串会被读成'没读到'）",
       "共 0 条" in _empty_list, repr(_empty_list))
 check("  不限额的账号在队列里印「不限额」而不是 `剩3/0`",
-      "不限额" in A.render_quota_requests(
+      "不限额" in _quota.render_quota_requests(
           [{"username": "root", "used": 3, "limit": 0, "status": 0}]), "")
 
 check("回执行（批准，读数已确认 0）说'马上可以继续提问'",
-      "马上可以继续提问" in A.render_quota_status("approve", "Alice", 126, 500, 0), "")
-_s_read = A.render_quota_status("approve", "Alice", 126, 500, None)
+      "马上可以继续提问" in _quota.render_quota_status("approve", "Alice", 126, 500, 0), "")
+_s_read = _quota.render_quota_status("approve", "Alice", 126, 500, None)
 check("⭐ 读数读不回 ⇒ 明说**未复核**，且不许说'马上可以继续提问'"
       "（那是他自己能证伪的一句话）",
       "未复核" in _s_read and "马上可以继续提问" not in _s_read, _s_read[:90])
-_s_after = A.render_quota_status("approve", "Alice", 126, 500, 42)
+_s_after = _quota.render_quota_status("approve", "Alice", 126, 500, 42)
 check("⭐ 复核读数非 0 ⇒ 如实报实测值（清零真发生了，但他之后又聊过了）",
       "剩 458/500" in _s_after and "又聊过了" in _s_after
       and "马上可以继续提问" not in _s_after, _s_after[:100])
-_s_rej = A.render_quota_status("reject", "Alice", 126, 500, None)
+_s_rej = _quota.render_quota_status("reject", "Alice", 126, 500, None)
 check("⭐ 驳回的回执行说的是'额度没有变化'、**不说'清零'**"
       "（驳回那一支根本不走清零）",
       "没有变化" in _s_rej and "可以重新申请" in _s_rej
@@ -518,50 +520,50 @@ check("⭐ 驳回的回执行说的是'额度没有变化'、**不说'清零'**"
 # 不作为会一直挂起"）。现在这两支分开：**批/驳看那一行在不在，主动重置才看用量**。
 print("\n⑦ 「状态已达成 ⇒ 不弹卡」：批/驳看**申请行**，主动重置看**用量**")
 _ap = [{"tool": "approve_quota_request", "args": {"user_id": 126}}]
-_kept, _alr = A.reached_specs(_ap, users=DIRD_ZERO, quota_requests=PEND)
+_kept, _alr = _noop.reached_specs(_ap, users=DIRD_ZERO, quota_requests=PEND)
 check("⭐ 满额账号**有一份待处理的申请** ⇒ 照弹（判的是那一行，不是计数器）",
       _kept == _ap and _alr == [], str(_alr))
-_kept1, _alr1 = A.reached_specs(_ap, users=DIRD, quota_requests=PEND)
+_kept1, _alr1 = _noop.reached_specs(_ap, users=DIRD, quota_requests=PEND)
 check("  **用了多少轮都不影响这一支**（137 与 0 一样照弹）",
       _kept1 == _ap and _alr1 == [], str(_alr1))
-_kept0, _alr0 = A.reached_specs(_ap, users=DIRD_ZERO, quota_requests={})
+_kept0, _alr0 = _noop.reached_specs(_ap, users=DIRD_ZERO, quota_requests={})
 check("⭐ 他**没有**待处理的申请 ⇒ 不弹，并如实说现状（**不再看用量**）",
       _kept0 == [] and "现在没有待处理的额度申请" in _alr0[0]["why"], str(_alr0))
 _admin_row = {126: row(126, "Alice", role="superadmin", used=0, limit=0)}
-_kept_a, _alr_admin = A.reached_specs(_ap, users=_admin_row, quota_requests={})
+_kept_a, _alr_admin = _noop.reached_specs(_ap, users=_admin_row, quota_requests={})
 check("  不限额的管理员走**同一句**（他名下有没有申请，与是不是管理员无关），"
       "且**不再有「额度本来就是满的」这一支**（那句话现在只属于主动重置）",
       _kept_a == [] and "现在没有待处理的额度申请" in _alr_admin[0]["why"]
       and "满的" not in _alr_admin[0]["why"], str(_alr_admin))
-_kept_n, _alr_n = A.reached_specs(_ap, users=None, quota_requests=PEND)
+_kept_n, _alr_n = _noop.reached_specs(_ap, users=None, quota_requests=PEND)
 check("名录读不到 ⇒ 判不了 ⇒ **照弹**（fail-open 的方向永远是弹卡）",
       _kept_n == _ap and _alr_n == [], str(_alr_n))
-_kept_q, _alr_q = A.reached_specs(_ap, users=DIRD_ZERO, quota_requests=None)
+_kept_q, _alr_q = _noop.reached_specs(_ap, users=DIRD_ZERO, quota_requests=None)
 check("⭐ 申请快照读不到 ⇒ 判不了 ⇒ **照弹**（读不到当成「没有申请」，"
       "就是把那次事故原样演一遍：那条路会在主人手上永远挂起）",
       _kept_q == _ap and _alr_q == [], str(_alr_q))
 _rj = [{"tool": "reject_quota_request", "args": {"user_id": 126, "reason": "x"}}]
-_k1, _a1 = A.reached_specs(_rj, users=DIRD_ZERO, quota_requests=PEND)
+_k1, _a1 = _noop.reached_specs(_rj, users=DIRD_ZERO, quota_requests=PEND)
 check("驳回：他**有**待处理的申请 ⇒ 正是要办的那一次，照弹（满额也一样）",
       _k1 == _rj and _a1 == [], str(_a1))
-_k2, _a2 = A.reached_specs(_rj, users=DIRD, quota_requests={})
+_k2, _a2 = _noop.reached_specs(_rj, users=DIRD, quota_requests={})
 check("驳回：他**没有**待处理的申请 ⇒ 不弹，并如实说现状",
       _k2 == [] and "现在没有待处理的额度申请" in _a2[0]["why"], str(_a2))
-_k3, _a3 = A.reached_specs(_rj, users=DIRD, quota_requests=None)
+_k3, _a3 = _noop.reached_specs(_rj, users=DIRD, quota_requests=None)
 check("驳回：申请快照读不到 ⇒ 判不了 ⇒ 照弹", _k3 == _rj and _a3 == [], str(_a3))
 # 主动重置那支**不变**：它不需要对方申请过，效果就是清零 ⇒ 判据仍是"计数器本来就是 0"。
 _rs = [{"tool": "reset_user_quota", "args": {"name": "Alice"}}]
-_rs0, _rs0_alr = A.reached_specs(_rs, users=DIRD_ZERO, quota_requests={})
+_rs0, _rs0_alr = _noop.reached_specs(_rs, users=DIRD_ZERO, quota_requests={})
 check("⭐ 主动重置 used=0 ⇒ 不弹，明说'本来就是满的'（**状态陈述**，不是'已完成'）",
       _rs0 == [] and "本来就是满的" in _rs0_alr[0]["why"], str(_rs0_alr))
-_rs1, _rs1_alr = A.reached_specs(_rs, users=DIRD, quota_requests={})
+_rs1, _rs1_alr = _noop.reached_specs(_rs, users=DIRD, quota_requests={})
 check("  用掉过 137 轮 ⇒ 照弹（清零真会改变东西）——**这一支与申请行无关**："
       "主动重置本来就不需要对方申请过，快照读不到也照弹",
       _rs1 == _rs and _rs1_alr == [], str(_rs1_alr))
-_rsq, _rsq_alr = A.reached_specs(_rs, users=DIRD_ZERO, quota_requests=None)
+_rsq, _rsq_alr = _noop.reached_specs(_rs, users=DIRD_ZERO, quota_requests=None)
 check("  申请快照读不到**不影响这一支**（它压根不看那一份）",
       _rsq == [] and "本来就是满的" in _rsq_alr[0]["why"], str(_rsq_alr))
-_rsa, _rsa_alr = A.reached_specs(_rs, users=_admin_row, quota_requests={})
+_rsa, _rsa_alr = _noop.reached_specs(_rs, users=_admin_row, quota_requests={})
 check("⭐ 不限额的管理员走**另一句**（说'额度本来就是满的'会被读成'他刚好没用过'）",
       "不限额" in _rsa_alr[0]["why"], str(_rsa_alr))
 check("已达成那几句**都不带完成式**（说成'已完成'会被读成系统替你做过了一次）",
@@ -707,7 +709,7 @@ finally:
 # ══════════════════════════════════════════════════════════════════
 print("\n⑨ checker 原因码：政策族 / 未确认 / 目标不存在各归各的")
 for _out, _want in [
-    (base.ToolResult(A.policy_frame("该账号没有待处理的额度申请")), "policy_refused"),
+    (base.ToolResult(_target.policy_frame("该账号没有待处理的额度申请")), "policy_refused"),
     (base.ToolResult(authz.consent_frame("reset_user_quota", _adm)), "consent_required"),
     (base.not_found("后台账号列表里没有叫「x」的账号"), "target_not_found"),
     (base.unavailable("接口请求失败: boom"), "unavailable"),
@@ -715,7 +717,7 @@ for _out, _want in [
     _v, _r = verdict("approve_quota_request", {"name": "x"}, _out, "quota_approve")
     check(f"⭐ {_want} ⇒ BLOCK 且原因码是它（planner 的应对按原因码分岔）",
           _v == _VERDICT_BLOCK and _r == _want, f"{_v} {_r}")
-_ok_out = base.ok(A.render_quota_status("approve", "Alice", 126, 500, 0),
+_ok_out = base.ok(_quota.render_quota_status("approve", "Alice", 126, 500, 0),
                   meta={"op": "approve", "account_id": 126, "account_name": "Alice"})
 _v, _r = verdict("approve_quota_request", {"user_id": 126}, _ok_out, "quota_approve")
 check("成功回执行 ⇒ PASS（进回执 = 跨轮执行记忆只认结构化回执）",
@@ -852,7 +854,7 @@ _SPEC_A = 'approve_quota_request({"user_id": 126})'
 _saved_tool = g._TOOL_MAP.get("approve_quota_request")
 try:
     g._TOOL_MAP["approve_quota_request"] = _FakeTool(
-        base.ok(A.render_quota_status("approve", "Alice", 126, 500, 0),
+        base.ok(_quota.render_quota_status("approve", "Alice", 126, 500, 0),
                 meta={"op": "approve", "account_id": 126, "account_name": "Alice"}))
     r = _run_exec("批准一下 Alice 的额度申请", _SPEC_A, "quota_approve", pending=PEND)
     _pop = r.get("pending_confirm") or {}
@@ -980,7 +982,7 @@ if _rust_temp:
           "src/routes/temp_user.rs 缺这两个 rename")
     check("  主动重置挂在账号族、判据 `authz::is_listable_role`（与发通知逐字同一条 ⇒ 超管够不着）",
           "is_listable_role" in _rust_temp, "src/routes/temp_user.rs 未走名录判据")
-    _adm = (ROOT / "agent" / "adminops.py").read_text(encoding="utf-8")
+    _adm = (ROOT / "agent" / "adminops_quota.py").read_text(encoding="utf-8")
     check("⭐ 两侧读的是**同一个键名**（Rust 的 serde rename ↔ agent 的 `row.get`）"
           "——改一侧不会报错，只会让用量一直读到 0",
           'row.get("chatQuotaUsed")' in _adm, "agent 侧读的键名不是 chatQuotaUsed")

@@ -40,7 +40,7 @@ sys.path.insert(0, str(ROOT))
 from tools import base as _base  # 工具的返回值契约（ToolResult：str 子类 + kind）
 
 import agent.graph as g
-from agent import adminops as A
+from agent import adminops_confirm as _confirm, adminops_tags as _tags
 from agent import authz
 from agent import confirm
 from agent.workflow_defs import WORKFLOWS, WORKFLOW_MAP
@@ -465,28 +465,29 @@ finally:
 
 print("\n⑥ 颜色：站内 8 色板 + 中文色名映射")
 check("色板与前端/后台同源同序（顺序变了颜色就全变）",
-      A.NEW_TAG_COLORS == ['#1677ff', '#52c41a', '#fa8c16', '#eb2f96',
+      _tags.NEW_TAG_COLORS == ['#1677ff', '#52c41a', '#fa8c16', '#eb2f96',
                            '#722ed1', '#13c2c2', '#f5222d', '#a0d911'],
-      str(A.NEW_TAG_COLORS))
+      str(_tags.NEW_TAG_COLORS))
 check("8 个规范中文名各对应色板里的一个值，无重名",
-      len({A.color_cn(h) for h in A.NEW_TAG_COLORS}) == 8
-      and all(A.color_cn(h) for h in A.NEW_TAG_COLORS))
+      len({_tags.color_cn(h) for h in _tags.NEW_TAG_COLORS}) == 8
+      and all(_tags.color_cn(h) for h in _tags.NEW_TAG_COLORS))
 check("用户说的「粉色」→ #eb2f96（用户点名的那一种）",
-      A.match_tag_color("粉色") == "#eb2f96")
+      _tags.match_tag_color("粉色") == "#eb2f96")
 check("色值原样认（含大小写与 # 可省）",
-      A.match_tag_color("#EB2F96") == "#eb2f96" and A.match_tag_color("eb2f96") == "#eb2f96")
+      _tags.match_tag_color("#EB2F96") == "#eb2f96"
+      and _tags.match_tag_color("eb2f96") == "#eb2f96")
 check("认不出就不认（**不做子串匹配**：天蓝不会被换成蓝）",
-      A.match_tag_color("天蓝") is None and A.match_tag_color("浅蓝") is None
-      and A.match_tag_color("香槟金") is None)
+      _tags.match_tag_color("天蓝") is None and _tags.match_tag_color("浅蓝") is None
+      and _tags.match_tag_color("香槟金") is None)
 check("没说颜色 → 回落按名哈希（同名同色的既有契约不变）",
-      A.resolve_tag_color("", "测试标签") == A.color_for_name("测试标签"))
+      _tags.resolve_tag_color("", "测试标签") == _tags.color_for_name("测试标签"))
 check("说了颜色 → 用说的那个（哈希让位）",
-      A.resolve_tag_color("粉色", "测试标签") == "#eb2f96")
+      _tags.resolve_tag_color("粉色", "测试标签") == "#eb2f96")
 check("回程渲染带色名 + 色值（色板外只有色值可给）",
-      A.describe_color("#eb2f96") == "粉色（#eb2f96）"
-      and A.describe_color("#123456") == "#123456")
+      _tags.describe_color("#eb2f96") == "粉色（#eb2f96）"
+      and _tags.describe_color("#123456") == "#123456")
 check("色板清单给提示词用（8 项、含中文名与色值）",
-      A.TAG_COLOR_SPEC.count("（#") == 8 and "粉色" in A.TAG_COLOR_SPEC)
+      _tags.TAG_COLOR_SPEC.count("（#") == 8 and "粉色" in _tags.TAG_COLOR_SPEC)
 
 # 工具层：点了名的颜色认不出 → 不创建（绝不静默换成哈希色）
 import inspect  # noqa: E402
@@ -851,10 +852,12 @@ check("  扫描器本身有牙齿（含调用的样本行命中、定义行/stdl
 #      **没有变化**（不是变小：它根本没有大小）。卡片上的话与屏幕上的事实不符，
 #      正是让主人无从核对"我要同意的是什么"的那类错。
 #   ② 站内信那一族压根没有分支，卡片上给主人看的是工具名 `read_messages`。
-_q_notice_all = A.render_confirm_question([{"tool": "read_notifications", "args": {"all": True}}])
-_q_notice_ids = A.render_confirm_question([{"tool": "read_notifications", "args": {"ids": [7]}}])
-_q_mail_all = A.render_confirm_question([{"tool": "read_messages", "args": {"all": True}}])
-_q_mail_ids = A.render_confirm_question([{"tool": "read_messages", "args": {"ids": [3]}}])
+_q_notice_all = _confirm.render_confirm_question(
+    [{"tool": "read_notifications", "args": {"all": True}}])
+_q_notice_ids = _confirm.render_confirm_question(
+    [{"tool": "read_notifications", "args": {"ids": [7]}}])
+_q_mail_all = _confirm.render_confirm_question([{"tool": "read_messages", "args": {"all": True}}])
+_q_mail_ids = _confirm.render_confirm_question([{"tool": "read_messages", "args": {"ids": [3]}}])
 check("两族的问句都是人话（不落到『执行 <工具名>』那条兜底）",
       all("read_" not in q for q in (_q_notice_all, _q_notice_ids, _q_mail_all, _q_mail_ids)),
       " | ".join((_q_notice_all, _q_mail_all)))
@@ -1028,7 +1031,7 @@ _pay = confirm.verify(_tok, 7, 42)
 check("令牌签发→验签往返（批 H **不改**令牌格式、不改版本号——一次点头办 N 件的机器已在位）",
       isinstance(_pay, dict) and _pay.get("v") == confirm._VERSION
       and _pay.get("specs") == _grant_specs, str(_pay)[:80])
-_opts = A.confirm_opts(len(_grant_specs))
+_opts = _confirm.confirm_opts(len(_grant_specs))
 check("卡面 N+2 枚按钮：全部办 + 逐条「只办第 i 件」+ 其他（我来说）+ 取消",
       [o["value"] for o in _opts] == ["yes", "pick:0", "pick:1", "other", "no"],
       str([o["value"] for o in _opts]))
@@ -1041,13 +1044,13 @@ for _i in (0, 1):
           f"{_err} {str(_narrowed)[:60]}")
 check("问句里点名的按钮与卡面按钮同一套字面（不一致 = 问句指着一个不存在的按钮）",
       all(o["label"].startswith("只办第") for o in _opts[1:-2])
-      and "只办第" in A.render_confirm_question(_grant_specs)
-      and "全部办" in A.render_confirm_question(_grant_specs))
+      and "只办第" in _confirm.render_confirm_question(_grant_specs)
+      and "全部办" in _confirm.render_confirm_question(_grant_specs))
 check("  「其他（我来说）」恒紧挨在「取消」前面（两种卡面同一位置）",
-      _opts[-2]["value"] == "other" and A.confirm_opts(1)[-2]["value"] == "other")
+      _opts[-2]["value"] == "other" and _confirm.confirm_opts(1)[-2]["value"] == "other")
 check("  多件问句里**逐条编号**（编号就是按钮指的那个下标）",
-      "1. " in A.render_action_lines(_grant_specs)
-      and "2. " in A.render_action_lines(_grant_specs))
+      "1. " in _confirm.render_action_lines(_grant_specs)
+      and "2. " in _confirm.render_action_lines(_grant_specs))
 for _bad_pick in ("pick:9", "pick:99", "2", "pick:-1", "pick:", "全部"):
     _n2, _e2 = confirm.narrow(_pay, _bad_pick)
     check(f"  读不懂/越界的选择「{_bad_pick}」⇒ 空 + 原因（fail-closed，绝不放大成全部办）",
@@ -1059,8 +1062,8 @@ check("  空选择 = 全部办（旧客户端不发 confirm_pick 时逐字兼容
 # ——字面一个字节没动"，那句话现在不成立，如实改掉，别留一句会骗人的注释）。
 # 加的是**入口**不是**权限**：可点的动词仍是「确定」，问句的字面照旧一个字没动。
 check("  单件三枚（确定 / 其他（我来说）/ 取消），问句字面仍逐字未变",
-      [o["label"] for o in A.confirm_opts(1)] == ["确定", "其他（我来说）", "取消"]
-      and A.render_confirm_question(_grant_specs[:1]).endswith("点「确定」我就去办。"))
+      [o["label"] for o in _confirm.confirm_opts(1)] == ["确定", "其他（我来说）", "取消"]
+      and _confirm.render_confirm_question(_grant_specs[:1]).endswith("点「确定」我就去办。"))
 # 这张网是给"顺手把 other 也塞进确认请求"准备的：它不是选择记号，服务端必须
 # fail-closed（零执行）。前端把这一支拦在发请求之前（见 chat-stream.js 的顺序判据）。
 _n4, _e4 = confirm.narrow(_pay, "other")
@@ -1078,18 +1081,19 @@ settings.jwt_secret = _STUB_SECRET
 _pair = [{"tool": "create_tag", "args": {"title": "测试"}},
          {"tool": "set_article_tags", "args": {"article_id": 11, "add": ["测试"]}}]
 check("依赖组并成一个单元（一格 = 一次点击能单独办的那件事）",
-      A.linked_units(_pair) == [[0, 1]], str(A.linked_units(_pair)))
+      _confirm.linked_units(_pair) == [[0, 1]], str(_confirm.linked_units(_pair)))
 check("  ⇒ 卡面退回单件措辞、只剩三枚按钮（没有那枚点不动的「只办第 2 件」）",
-      [o["label"] for o in A.confirm_opts(len(A.linked_units(_pair)))]
+      [o["label"] for o in _confirm.confirm_opts(len(_confirm.linked_units(_pair)))]
       == ["确定", "其他（我来说）", "取消"]
-      and "点「确定」" in A.render_confirm_question(_pair)
-      and "只办第" not in A.render_confirm_question(_pair))
+      and "点「确定」" in _confirm.render_confirm_question(_pair)
+      and "只办第" not in _confirm.render_confirm_question(_pair))
 check("  ⇒ 那一格仍把「新建」与名字印出来（主人签字前看得见站里会多一个标签）",
-      "新建" in A.render_action_lines(_pair) and "测试" in A.render_action_lines(_pair))
+      "新建" in _confirm.render_action_lines(_pair)
+      and "测试" in _confirm.render_action_lines(_pair))
 check("  ⇒ 两步连在同一格（「，并」），不是两个编号",
-      "，并" in A.render_action_lines(_pair)
-      and "2. " not in A.render_action_lines(_pair))
-_tok2 = confirm.sign(7, 42, "article_tags", _pair, A.linked_units(_pair))
+      "，并" in _confirm.render_action_lines(_pair)
+      and "2. " not in _confirm.render_action_lines(_pair))
+_tok2 = confirm.sign(7, 42, "article_tags", _pair, _confirm.linked_units(_pair))
 _pay2 = confirm.verify(_tok2, 7, 42)
 _ok2, _e2b = confirm.narrow(_pay2, "pick:0")
 check("  ⇒ 令牌里带着这份分组，「只办第 1 件」拿回来的就是**整组**（先建再挂一起走）",
@@ -1100,14 +1104,14 @@ _bad2, _be2 = confirm.narrow(_pay2, "pick:1")
 check("  ⇒ 那一格之外没有第二格可挑（越界 fail-closed，绝不放大成整批）",
       _bad2 is None and bool(_be2), _be2)
 check("  没有依赖的两件仍是两个单元（老卡面一个字节没变）",
-      A.linked_units(_grant_specs) == [[0], [1]]
-      and A.linked_units([{"tool": "create_tag", "args": {"title": "Git"}}]) == [[0]])
+      _confirm.linked_units(_grant_specs) == [[0], [1]]
+      and _confirm.linked_units([{"tool": "create_tag", "args": {"title": "Git"}}]) == [[0]])
 check("  名字对不上就不并（create Git + add SVN：各走各的）",
-      A.linked_units([{"tool": "create_tag", "args": {"title": "Git"}},
+      _confirm.linked_units([{"tool": "create_tag", "args": {"title": "Git"}},
                       {"tool": "set_article_tags",
                        "args": {"article_id": 11, "add": ["SVN"]}}]) == [[0], [1]])
 check("  只有挂、没有建（标签本来就在，那一步被 `_drop_satisfied_tag_creates` 摘掉了）"
-      " ⇒ 它自己一个单元", A.linked_units([_pair[1]]) == [[0]])
+      " ⇒ 它自己一个单元", _confirm.linked_units([_pair[1]]) == [[0]])
 for _bad_units in ([[0]], [[0], [0]], "x", [[]], [[0], [2]], [[True]]):
     _n5, _e5 = confirm.narrow({**_pay2, "units": _bad_units}, "pick:0")
     check(f"  分组读不懂（{_bad_units!r}）⇒ fail-closed 零执行，绝不猜一个更大的范围",
@@ -1122,7 +1126,7 @@ _gw, _gwe = confirm.narrow(confirm.verify(_g_token, 7, 42), "pick:0")
 check("  ⇒ graph 那半签发的是同一份分组（卡面与令牌同源，不是各算一次）",
       _g_units == [[0, 1]]
       and (confirm.verify(_g_token, 7, 42) or {}).get("units") == [[0, 1]]
-      and len(A.confirm_opts(len(_g_units))) == 3)
+      and len(_confirm.confirm_opts(len(_g_units))) == 3)
 check("  ⇒ 端到端：那张令牌上「只办第 1 件」拿回的就是整组",
       _gwe == "" and (_gw or {}).get("specs") == _pair, _gwe)
 settings.jwt_secret = _SAVED_SECRET
