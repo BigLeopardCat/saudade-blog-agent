@@ -47,7 +47,9 @@ from agent.deterministic_plan import (_article_fast_path, _display_fast_path,
                                       _effect_switch_fast_path, _intent_hints,
                                       _nav_fast_path, _referent_nav_fast_path,
                                       _wrap_up_plan)
-from agent.graph import _confirm_grant_plan, _create_display_text, _fastpath_on
+from agent.graph import (_DecideCtx, _confirm_grant_plan, _create_display_text,
+                         _decide_write_guard, _evidence_on, _fastpath_on,
+                         _finalize_dedupe)
 from agent.prompt_context import (_doc_anchors, _has_frames,
                                   _last_assistant_utterance, _recent_tail,
                                   _short_reply_hint, blocked_rows)
@@ -217,6 +219,113 @@ def display_text(user_msg: str, page_ctx: str) -> str:
     工具之前），与生产的落点同层。
     """
     return _create_display_text(user_msg, page_ctx)
+
+
+def decide_ctx_kwargs(*, state, config, rounds: int, user_msg: str, role: str,
+                      page_ctx: str, principal, plan_obj: dict,
+                      has_frames: bool, decided) -> dict:
+    """合成一份 `graph._DecideCtx` 的入参（**逐格给，一个默认值都不省**）。
+
+    这张字典就是"本臂喂给生产那条链的全部输入"，所以它同时是**锁的对象**：
+    `tests/test_react_write_guard_ctx.py` 拿 `dataclasses.fields(_DecideCtx)` 的名字集合
+    与这里的键集合对差集。生产那个 dataclass 加一格（尤其**带默认值**的那一格——
+    不带默认值的会在构造时当场 TypeError，响亮是白送的）而这里没跟上 ⇒ 那条锁红。
+
+    逐格的取值理由（只列**不是"本臂没有、给空"**的那些）：
+
+      · `state` / `config` / `principal` / `user_msg` / `role` / `rounds` / `plan_obj`
+        —— 拒绝链真正读的七格，全部来自本臂的 ctx（同一个请求的同一份值）。
+      · `has_frames` —— **由调用方算好传进来**，不在本模块现算：本臂的"本轮有没有帧"
+        读的是"最后一条 HumanMessage 之后"（`react_arm._turn_tail`），与生产的
+        `_turn(state)`（冻结 `turn_start`）是两套坐标。把切法搬进本模块等于让同一条
+        判据有两个产地。
+      · `decided` —— 决策模型那条原始响应。今天只有影子那一段读它
+        （`getattr(c.decided, "evidence", ())`），而本臂的 schema 里没有 `evidence` 格
+        ⇒ 结构上恒空。仍然照实传：**"这一格恒空"与"这一格没接"在 trace 上不是一回事**。
+      · `_evidence` —— 读**唯一读口** `graph._evidence_on()`。写死 `False` 会让
+        "档位开着"与"这一臂没接"长得一样。
+      · 其余（`task_sink` / `doc_anchors` / `ledger_frame` / `round_info` / `frames_txt`
+        / `gate_note` / `deny` / `_base_llm` / `llm` / `deny_pseudo` / `correction` /
+        `correction_kind` / `planner_note` / `raw` / `workflow_name` / `params` /
+        `_tools_off` / `_img_turn` / `llm_attempt`）—— 这一条链**一格都不读**（逐格核过），
+        给的是它们各自的中性值。给空不等于判据被削弱：读不到的格影响不了判决。
+    """
+    return {
+        "state": state, "config": config, "task_sink": None,
+        "rounds": rounds, "user_msg": user_msg, "role": role,
+        "page_ctx": page_ctx, "has_frames": has_frames, "doc_anchors": (),
+        "ledger_frame": "", "principal": principal, "round_info": "",
+        "frames_txt": "", "gate_note": "", "deny": frozenset(),
+        "_base_llm": None, "_evidence": _evidence_on(), "llm": None,
+        "deny_pseudo": set(), "correction": "", "correction_kind": "",
+        "planner_note": "", "plan_obj": plan_obj, "raw": None,
+        "decided": decided, "workflow_name": "", "params": {},
+        "_tools_off": False, "_img_turn": False, "llm_attempt": 0,
+    }
+
+
+def write_guard(state, *, ctx, plan_obj: dict, rounds: int,
+                has_frames: bool) -> dict | None:
+    """写目标拒绝链 → 命中时返回**被就地改写过的 plan_obj**；没命中 ⇒ None。
+
+    直调 `graph._decide_write_guard`（**整条**，不是按顺序逐个调那九个函数）。
+
+    **为什么整条直调**：那九个的**顺序是承重的**——引号片段校正 → 公告文本 → 目标名 →
+    名字值 → 待办正文 → 目标出处 → 目标 → 台账编号 → 政策，每一对的先后都有各自的
+    现场理由（写在 `_decide_write_guard` 的长注里）。按顺序抄一遍等于把那份顺序养成
+    第二份，而"顺序错了"的形状是**换一条理由拒绝**：两边都拒绝、都零写、都如实说，
+    只是说的原因不同——那种差在报告里看不出来，只有把两边放在一起读才看得见。
+
+    **返回的是 `plan_obj` 而不是生产那个 `_Step.ret`**：`_Step.ret` 是
+    `graph._plan_update` 的产物（生产的 state 形状），而本臂的 state 由自己的
+    `_plan_update` 写。判据（"拒绝了没有"）相同、**产物形状不同**——这正是"适配"
+    与"抄判据"的分界，同 `plan_has_tools`。
+
+    ⚠️ 命中时 `c.plan_obj` 已经被换成了 `_wrap_up_plan`（带那句"这件事这次没有做：
+    站内数据一个字节都没有改动"）并挂上 `refusal` 那一格。调用方**必须用返回的这份**，
+    拿原来那份等于把拒绝丢了——而拒绝丢了之后这一轮会照常执行那件写。
+    """
+    kw = decide_ctx_kwargs(state=state, config=ctx.get("config"), rounds=rounds,
+                           user_msg=ctx.get("user_msg") or "",
+                           role=ctx.get("role") or "",
+                           page_ctx=ctx.get("page_ctx") or "",
+                           principal=ctx.get("principal"), plan_obj=plan_obj,
+                           has_frames=has_frames, decided=ctx.get("draft"))
+    c = _DecideCtx(**kw)
+    step = _decide_write_guard(c)
+    if step.action == "next":
+        return None
+    # 生产那条链只有两个出口（"next" / "return"，见 `_decide_write_guard` 的两处
+    # `return _Step(...)`）。第三种动作意味着它被改过了，而这里**没有对应的接线**
+    # ⇒ 响亮地炸，不猜。
+    if step.action != "return":
+        raise RuntimeError(f"_decide_write_guard 返回了没接线的动作 {step.action!r}")
+    return c.plan_obj
+
+
+def finalize_dedupe(state, *, ctx, plan_obj: dict, rounds: int, has_frames: bool,
+                    turn_messages: list) -> tuple[dict, bool]:
+    """`graph._finalize_dedupe`（字面路径修正 + 八条去重/拦截守卫）
+    → `(定稿后的 plan_obj, 这一轮到此为止)`。
+
+    ⚠️ **state 视图必须换成"本轮窗口"**：那个函数内部读 `_turn(state)`——生产 state 里
+    有冻结的 `turn_start`，本臂没有那个坐标。整条 `messages` 传进去会把 **DB 历史里的
+    帧**一起算进来，于是"这个动作本回合已经做过了"在一次都没做过时也成立（它要防的
+    正是相反面：重复执行同一个动作）。窗口由调用方算好传进来（`react_arm._turn_tail`），
+    切法不在本模块现算——同 `decide_ctx_kwargs` 的 `has_frames`。
+
+    其余各格（`receipts` / `executed` / `noop_specs` / `blocked` / `pending_confirm` …）
+    照原样传本臂的 state：它们本来就是同一份 `AgentState` 形状，且都是**请求内累计**
+    的（本臂由 `execute` 回写）。
+
+    第二个返回值是"这一轮到此为止"：生产那八条守卫命中时都 `return plan_obj,
+    _plan_update(plan_obj, rounds)`，调用方直接返回、不再走收尾。本模块**不转发那个
+    update**（它是 `graph._plan_update` 的产物、生产的 state 形状），只转发那个事实，
+    由本臂自己的 `_plan_update` 造返回值——同 `write_guard`。
+    """
+    out, update = _finalize_dedupe(plan_obj, {**state, "messages": list(turn_messages)},
+                                   ctx.get("user_msg") or "", rounds, has_frames)
+    return out, update is not None
 
 
 def denied(state) -> set[str]:
