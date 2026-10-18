@@ -839,6 +839,11 @@ class ReactGoldenArm:
 
         `stream_mode` 缺省给 `["messages", "updates"]`（生产者要的就是这两路）——收下
         这个参数只是为了让签名与图一致，签名对不上会以 `TypeError` 的形态炸在生产者里。
+
+        ⚠️ **本臂刻意不收 `durability`**（20261018 批 7）：它不挂 checkpointer，
+        持久化档对它毫无意义。生产者只在 `server._graph_holds_context()` 为真时才给这一格，
+        而本臂恒为假 ⇒ 正常情况下永远收不到；**真收到就是接线错了**，那时 `TypeError`
+        比"静默收下"好——静默收下等于把"这一臂没有持久化"伪装成"有持久化但没区别"。
         """
         src = dict(state or {})
         messages = list(src.get("messages") or [])

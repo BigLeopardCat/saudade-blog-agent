@@ -43,10 +43,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: 生产侧那三个文件。**刻意是点名清单而不是 glob**：这条锁要判的是"生产路径"，
+#: 生产侧那四个文件。**刻意是点名清单而不是 glob**：这条锁要判的是"生产路径"，
 #: 而 `agent/checkpoint_arm.py`（实验臂）本来就该挂 saver、本来就该给 sync 档——
 #: 把它扫进来，锁会在"实验臂已接、生产未接"这个**完全正常**的形态上报红。
-PROD_FILES = ("server.py", "agent/agent.py", "agent/graph.py")
+#: `agent/checkpoint.py` 是 20261018 批 7 加进来的：采纳之后**坐标本体住在那里**
+#: （`thread_id_for`），只看 `server.py` 会漏掉"改名不改义"那种半接（④b）。
+PROD_FILES = ("server.py", "agent/agent.py", "agent/graph.py", "agent/checkpoint.py")
 
 UNSET = "未接"
 SET = "已接"
@@ -105,14 +107,34 @@ def probe_saver(sources: dict | None = None) -> tuple[str, str]:
     return UNSET, "server.py 里所有 create_agent() 都没有非 None 的 checkpointer="
 
 
+def _coordinate_gap(sources: dict | None = None) -> str:
+    """坐标本体（`agent/checkpoint.py::thread_id_for`）真的产会话坐标吗；是 ⇒ 空串。
+
+    **为什么还要看这一层**：采纳后 `server.py` 那两条赋值长得一模一样
+    （`thread_id = _thread_id_for(req)`），把坐标本体换成一个返回随机串的 helper，
+    `server.py` 的形状**一个字节都不变**。那是"改名不改义"，只有看 helper 才看得见。
+    """
+    fn = next((n for n in _tree("agent/checkpoint.py", sources).body
+               if isinstance(n, ast.FunctionDef) and n.name == "thread_id_for"), None)
+    if fn is None:
+        return "agent/checkpoint.py 里找不到 thread_id_for（锚点没了 ⇒ 这条判据会空过）"
+    calls = {_callee(x.func) for x in ast.walk(fn) if isinstance(x, ast.Call)}
+    if "conversation_thread" not in calls:
+        return (f"thread_id_for 没调 conversation_thread（它只调了 {sorted(calls)}）"
+                "—— 名字是会话坐标，本体不是")
+    return ""
+
+
 def probe_thread(sources: dict | None = None) -> tuple[str, str]:
     """② `thread_id` 是不是会话坐标了。
 
     **两条赋值（`/chat` 与 `/chat/stream`）都要看**：只改一条是最危险的一种半接——
     两条路两种线程语义，而线上主路径是流式那条，非流式那条只有评测在走
     （`server.py` 里那句"线上 rust.log 实测零访问"），所以单跑评测**看不见**它。
+    采纳后的形状是两条都 `thread_id = _thread_id_for(req)`，坐标本体在
+    `agent/checkpoint.py`（见 `_coordinate_gap`）。
     """
-    sites: list[tuple[int, bool, bool]] = []      # (行号, 有 uuid4, 提 conversation_id)
+    sites: list[tuple[int, bool, bool]] = []      # (行号, 有 uuid4, 走会话坐标)
     for n in ast.walk(_tree("server.py", sources)):
         if not (isinstance(n, ast.Assign) and len(n.targets) == 1
                 and isinstance(n.targets[0], ast.Name)
@@ -120,7 +142,8 @@ def probe_thread(sources: dict | None = None) -> tuple[str, str]:
             continue
         names = {x.attr for x in ast.walk(n) if isinstance(x, ast.Attribute)}
         calls = {_callee(x.func) for x in ast.walk(n) if isinstance(x, ast.Call)}
-        sites.append((n.lineno, "uuid4" in calls, "conversation_id" in names))
+        sites.append((n.lineno, "uuid4" in calls,
+                      "conversation_id" in names or "_thread_id_for" in calls))
     if not sites:
         return MIXED, "server.py 里找不到 thread_id 的赋值（判据的前提没了，不是'已改'）"
     random = [ln for ln, u, _ in sites if u]
@@ -131,58 +154,123 @@ def probe_thread(sources: dict | None = None) -> tuple[str, str]:
     if random:
         return UNSET, f"仍是每请求随机（{random}）"
     if len(conv) == len(sites):
+        gap = _coordinate_gap(sources)
+        if gap:
+            return MIXED, gap
         return SET, detail
     return MIXED, f"有赋值既不是随机也不提 conversation_id —— {detail}"
 
 
+def _gated(fn: ast.FunctionDef, node: ast.AST, gate: str) -> bool:
+    """`node` 在 `fn` 里被 `gate()` 罩住了吗——任一祖先 `If` 的 test 里调了它。
+
+    **两种极性都算**（`if not gate(): <注入>` 与 `if gate(): ... else: <注入>`）：
+    本件要判的是"注入**不再是无条件的**"，不是"写成了哪一种句式"。写死极性会让下一个人
+    换个写法就得来改判据——而改判据是放宽的开始（同族：`agent/checkpoint.py` 那条
+    "判据要选判据、别选字面"）。
+    """
+    parents: dict[int, ast.AST] = {}
+    for n in ast.walk(fn):
+        for c in ast.iter_child_nodes(n):
+            parents[id(c)] = n
+    cur = parents.get(id(node))
+    while cur is not None and cur is not fn:
+        if isinstance(cur, ast.If):
+            calls = {_callee(x.func) for x in ast.walk(cur.test)
+                     if isinstance(x, ast.Call)}
+            if gate in calls:
+                return True
+        cur = parents.get(id(cur))
+    return False
+
+
 def probe_history(sources: dict | None = None) -> tuple[str, str]:
-    """③ `_build_messages` 里还有没有 `req.history[...]` 那段注入。
+    """③ `_build_messages` 里那段 `req.history[...]` 注入是不是**被闸门罩住了**。
 
     判据是**下标**（切片或索引），不是"提没提到 `req.history`"：`_build_messages` 里
     另有一处 `reversed(req.history)` 是别的用途（上一轮用户消息），采纳批不该动它；
-    把"提到"当判据会让那条判据在采纳之后**假红**，于是下一个人只好把它放宽——放宽
-    之后真正要防的那段注入就没人看了。
+    把"提到"当判据会让那条判据**假红**，于是下一个人只好把它放宽——放宽之后真正要防的
+    那段注入就没人看了。
+
+    ⚠️ **采纳不是"把这段删掉"，是"给它套一个闸门"**（20261018 批 7 实测）：删掉的话，
+    **没挂 saver 的那条路（今天生产、以及没挂 saver 的评测臂）会失去全部跨轮上下文**
+    ——那是比"多注入一份"更坏的事，而且同样不报错。所以判据是"下标要么没有、要么
+    在 `_graph_holds_context()` 底下"，与另外三处同一个闸门。
     """
     fn = next((n for n in _tree("server.py", sources).body
                if isinstance(n, ast.FunctionDef) and n.name == "_build_messages"), None)
     if fn is None:
         return MIXED, "server.py 里找不到 _build_messages（判据的前提没了，不是'没注入'）"
-    hits = [n.lineno for n in ast.walk(fn)
+    hits = [n for n in ast.walk(fn)
             if isinstance(n, ast.Subscript)
             and isinstance(n.value, ast.Attribute) and n.value.attr == "history"
             and isinstance(n.value.value, ast.Name) and n.value.value.id == "req"]
-    if hits:
-        return UNSET, f"server.py:{hits} 仍在对 req.history 取下标（注入还在）"
-    return SET, "_build_messages 里已无对 req.history 的取下标"
+    if not hits:
+        return SET, "_build_messages 里已无对 req.history 的取下标"
+    bare = [n.lineno for n in hits if not _gated(fn, n, "_graph_holds_context")]
+    if bare:
+        return UNSET, f"server.py:{bare} 的 req.history 取下标**没有闸门**（无条件注入）"
+    return SET, f"注入在 _graph_holds_context() 底下（server.py:{[n.lineno for n in hits]}）"
+
+
+def _sync(v: ast.expr) -> bool:
+    """这个值是同步档吗。认字面 `"sync"` 与 `idem.REQUIRED_DURABILITY`（常量唯一事实源，
+    见 `agent/idem.py`；实验臂用的就是它）。**认不出的写法不算通过**：`durability` 是个
+    字符串参数，写 `"asynchronous"` 这种拼错的值会在运行期才炸，而那时"账被绕过"已经发生。"""
+    if isinstance(v, ast.Constant) and v.value == "sync":
+        return True
+    return isinstance(v, ast.Attribute) and v.attr == "REQUIRED_DURABILITY"
 
 
 def probe_durability(sources: dict | None = None) -> tuple[str, str]:
-    """④ 生产那三个文件里有没有把持久化档显式给成同步档。
+    """④ 有 saver 的那次调用必须显式给同步档。
 
-    认两种写法：字面 `"sync"` 与 `idem.REQUIRED_DURABILITY`（后者是常量唯一事实源，
-    见 `agent/idem.py`；实验臂用的就是它）。**认不出的写法不算通过**：`durability` 是个
-    字符串参数，写 `"asynchronous"` 这种拼错的值会在运行期才炸，而那时"账被绕过"已经
-    发生了。
+    ⚠️ **采纳后的形状是两步，判据也必须分两步**（20261018 批 7 实测改过一次）：
+      · **调用点**：`server.py` 里每一处 `_agent.stream(...)` 都要带 `**_stream_kwargs()`；
+      · **那一格的值**：`_stream_kwargs()` 返回的表里 `durability` 是同步档。
+
+    只判后者会漏掉"表里写了、调用点没传"（那一格白写），只判前者会漏掉"传了、
+    但表里是别的档"。**第一版判据只扫 `durability=` 关键字实参**——那在"无条件传、
+    值写 `X if 闸门 else None`"的形状下能过，但那个形状**实测会炸**：没挂 saver 的臂
+    根本没有这个形参（`ReactGoldenArm.stream()`），而 `_agent` 在评测里被换成各种替身
+    ⇒ 一条 `TypeError` 把整条端到端判据**静默变成"零帧"**。所以改成"有 saver 才给这一格"，
+    判据跟着改。
     """
-    found: list[tuple[str, int, bool, str]] = []
-    for rel in PROD_FILES:
-        for n in ast.walk(_tree(rel, sources)):
-            if not isinstance(n, ast.Call):
-                continue
-            for kw in n.keywords:
-                if kw.arg != "durability":
-                    continue
-                v = kw.value
-                ok = ((isinstance(v, ast.Constant) and v.value == "sync")
-                      or (isinstance(v, ast.Attribute)
-                          and v.attr == "REQUIRED_DURABILITY"))
-                found.append((rel, n.lineno, ok, ast.unparse(v)))
-    if not found:
-        return UNSET, f"{'、'.join(PROD_FILES)} 里一处 durability= 都没有（缺省 async）"
-    bad = [f"{r}:{ln} durability={s}" for r, ln, ok, s in found if not ok]
+    # 第一步：调用点必须把那一格传下去
+    sites: list[tuple[int, bool]] = []
+    for n in ast.walk(_tree("server.py", sources)):
+        if not (isinstance(n, ast.Call) and _callee(n.func) == "stream"):
+            continue
+        # `**x` 的 `keyword.value` 是**整个表达式**（`_stream_kwargs()` 是一个 `Call`），
+        # 所以被调名要去 `.func` 上拿——直接 `_callee(k.value)` 恒 `None`（第一版就是这么
+        # 写错的，症状是"调用点明明写了却被判成没写"）。
+        spread = [k.value for k in n.keywords
+                  if k.arg is None and isinstance(k.value, ast.Call)]
+        sites.append((n.lineno, any(_callee(v.func) == "_stream_kwargs" for v in spread)))
+    if not sites:
+        return MIXED, "server.py 里找不到 `.stream(` 调用（判据的前提没了，不是'已改'）"
+    missing = [ln for ln, ok in sites if not ok]
+    if missing:
+        return UNSET, f"server.py:{missing} 的 `.stream(` 没带 `**_stream_kwargs()`"
+
+    # 第二步：那一格的值必须是同步档
+    fn = next((n for n in _tree("server.py", sources).body
+               if isinstance(n, ast.FunctionDef) and n.name == "_stream_kwargs"), None)
+    if fn is None:
+        return MIXED, "server.py 里找不到 `_stream_kwargs`（锚点没了 ⇒ 这条判据会空过）"
+    keys: list[tuple[int, bool, str]] = []
+    for n in ast.walk(fn):
+        if not isinstance(n, ast.Dict):
+            continue
+        for k, v in zip(n.keys, n.values):
+            if isinstance(k, ast.Constant) and k.value == "durability":
+                keys.append((n.lineno, _sync(v), ast.unparse(v)))
+    if not keys:
+        return UNSET, "`_stream_kwargs` 里没有 `durability` 这一格（缺省 async）"
+    bad = [f"server.py:{ln} durability={s}" for ln, ok, s in keys if not ok]
     if bad:
         return MIXED, "持久化档不是同步档：" + "；".join(bad)
-    return SET, "；".join(f"{r}:{ln}" for r, ln, _, _ in found)
+    return SET, "；".join(f"server.py:{ln}" for ln, _, _ in keys)
 
 
 PROBES = (
@@ -210,15 +298,17 @@ def consistent(states: dict[str, tuple[str, str]]) -> tuple[bool, str]:
 
 
 # ── 真源码 ───────────────────────────────────────────────────────────────────
-print("① 真源码：四处形态必须一致（今天 = 全「未接」）")
+print("① 真源码：四处形态必须一致（批 7 起 = 全「已接」）")
 _states = states_of()
 for _name, (_st, _why) in _states.items():
     print(f"     {_st}  {_name} —— {_why}")
 _ok, _why = consistent(_states)
 check("四处形态一致（**半接就是本件要抓的那一件事**）", _ok, _why)
-if _ok and _why == f"全{UNSET}":
-    print("     · 0/4：生产还没采纳 checkpoint（`agent/checkpoint.py` 头注的"
-          "「三处一起动」一处都没动）—— 采纳批（批 7）会把四处一起拨到「已接」")
+if _ok and _why == f"全{SET}":
+    print("     · 4/4：采纳已落地。**这不等于生产在跑 checkpoint**——跑没跑看"
+          "`CHECKPOINT_DSN`（空 ⇒ `build_checkpointer()` 返回 None ⇒ 图不挂 saver，"
+          "四处一起退回「未接」的行为）。这一格的可读出口是 `/health` 的"
+          "`checkpoint_backend`，判据 `tests/test_health_dials.py` ⑤")
 
 _BASE = {rel: (ROOT / rel).read_text(encoding="utf-8") for rel in PROD_FILES}
 
@@ -255,22 +345,23 @@ def _one(rel: str, old: str, new: str, *, expect: int, count: int = 1) -> dict:
     return out
 
 
-_THREAD_RANDOM = 'f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"'
-_STREAM_KW = '        stream_mode=["messages", "updates"],\n    ):'
+_THREAD_SITE = "thread_id = _thread_id_for(req)"
+_THREAD_RANDOM = 'thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"'
+_DUR_SITE = ", **_stream_kwargs(),"
 _MUTATIONS = {
-    "只把 saver 接上": _one(
-        "server.py", "return create_agent(), arm",
-        "return create_agent(checkpointer=build_checkpointer()), arm", expect=1),
+    "只把 saver 摘掉": _one(
+        "server.py", "return create_agent(checkpointer=checkpoint.build_checkpointer()), arm",
+        "return create_agent(), arm", expect=1),
     "只把 thread_id 改一条（两条里的一条）": _one(
-        "server.py", _THREAD_RANDOM, 'f"conv_{req.conversation_id}"',
-        expect=2, count=1),
-    "只把历史注入删掉": _one(
-        "server.py", "hist = [(h.role, h.content) for h in req.history[-20:]]",
-        "hist: list = []", expect=1),
-    "只把持久化档加上": _one(
-        "server.py", _STREAM_KW,
-        '        stream_mode=["messages", "updates"],\n'
-        '        durability=idem.REQUIRED_DURABILITY,\n    ):', expect=1),
+        "server.py", _THREAD_SITE, _THREAD_RANDOM, expect=2, count=1),
+    "只把历史注入的闸门摘掉": _one(
+        "server.py", "if not _graph_holds_context():\n        hist = ",
+        "if True:\n        hist = ", expect=1),
+    "只把持久化档改一条（两个调用点里的一个）": _one(
+        "server.py", _DUR_SITE, "", expect=2, count=1),
+    "把那一格的值改成非同步档": _one(
+        "server.py", '{"durability": idem.REQUIRED_DURABILITY}',
+        '{"durability": "async"}', expect=1),
 }
 for _label, _srcs in _MUTATIONS.items():
     _s = states_of(_srcs)
@@ -284,44 +375,66 @@ print()
 print("④ 反控（单独一类）：两条线程路径只改一条 ⇒ `probe_thread` 当场判「半接」")
 _st, _sw = probe_thread(_MUTATIONS["只把 thread_id 改一条（两条里的一条）"])
 check("只改一条 ⇒ 「半接」+ 点名是哪几条（不是含糊的'未接'）", _st == MIXED, _sw)
-_st2, _sw2 = probe_thread(_one("server.py", _THREAD_RANDOM,
-                               'f"conv_{req.conversation_id}"', expect=2, count=2))
-check("（对照）两条都改 ⇒ 「已接」（上一条不是恒「半接」）", _st2 == SET, _sw2)
+_st2, _sw2 = probe_thread(_one("server.py", _THREAD_SITE, _THREAD_RANDOM,
+                               expect=2, count=2))
+check("（对照）两条都改 ⇒ 「未接」（上一条不是恒「半接」）", _st2 == UNSET, _sw2)
 
-# ── 正控：一份最小的"全已接"骨架必须全绿 ─────────────────────────────────────
-# 本仓纪律"正控不红不算数"的反面：上面那组反控只证明了"能红"，还要证明**红之外那个
-# 形态真的判得出来**——否则四条探针可能是一组恒「未接」的东西，而"一致"就成了空过。
+# 另一类半接：**改名不改义**——`server.py` 一个字节不变，把坐标本体换掉。
 print()
-print("⑤ 正控：一份最小的「全已接」骨架 ⇒ 四处全「已接」且一致")
-_ADOPTED = {
+print("④b 反控：坐标本体（`agent/checkpoint.py::thread_id_for`）换成不产坐标的实现 ⇒ 红")
+_gap = _one("agent/checkpoint.py",
+            "        tid = conversation_thread(conversation_id)",
+            "        tid = f\"conv_x\"", expect=1)
+_st3, _sw3 = probe_thread(_gap)
+check("helper 名字还在、本体不产坐标 ⇒ 判「半接」并点名", _st3 == MIXED, _sw3)
+_o3, _w3 = consistent(states_of(_gap))
+check("⇒ 锁必须红（`server.py` 的形状一个字节都没变）", not _o3, _w3)
+
+# ── 正控：另一极（全「未接」）也必须判得出来 ─────────────────────────────────
+# 本仓纪律"正控不红不算数"的反面：上面那组反控只证明了"能红"，还要证明**另一极那个
+# 形态真的判得出来**——否则四条探针可能是一组恒「已接」的东西，而"一致"就成了空过。
+# 采纳前（20261018 之前）生产就是这个形态，所以它必须仍被判成"全未接且一致"。
+print()
+print("⑤ 正控：一份最小的「全未接」骨架 ⇒ 四处全「未接」且一致")
+_UNSET = {
     "server.py": textwrap.dedent('''
         def _build_messages(req, confirm_grant=None):
-            return []
+            hist = [(h.role, h.content) for h in req.history[-20:]]
+            return hist
 
         def _build_arm():
-            return create_agent(checkpointer=build_checkpointer()), "graph"
+            return create_agent(), "graph"
+
+        def _stream_kwargs():
+            return {}
 
         async def chat_stream(req):
-            thread_id = f"conv_{req.conversation_id}"
+            thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
             for mode, data in _agent.stream(state, config,
                                             stream_mode=["messages", "updates"],
-                                            durability=idem.REQUIRED_DURABILITY):
+                                            **_stream_kwargs()):
                 pass
 
         async def chat(req):
-            thread_id = f"conv_{req.conversation_id}"
+            thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
+            for mode, data in _agent.stream(state, config,
+                                            stream_mode=["messages", "updates"],
+                                            **_stream_kwargs()):
+                pass
     '''),
+    "agent/checkpoint.py": "def thread_id_for(user_id, conversation_id, holds_context):\n"
+                           "    return f\"user_{user_id}\"\n",
     "agent/agent.py": "def create_agent(checkpointer=None):\n"
                       "    return build_graph(checkpointer=checkpointer)\n",
     "agent/graph.py": "def build_graph(checkpointer=None):\n"
                       "    return g.compile(checkpointer=checkpointer)\n",
 }
-_as = states_of(_ADOPTED)
-_ao, _aw = consistent(_as)
-for _name, (_st, _why) in _as.items():
+_us = states_of(_UNSET)
+_uo, _uw = consistent(_us)
+for _name, (_st, _why) in _us.items():
     print(f"     {_st}  {_name} —— {_why}")
-check("骨架四处全「已接」且一致（探针不是一组恒「未接」的东西）", _ao and _aw == f"全{SET}",
-      _aw)
+check("骨架四处全「未接」且一致（探针不是一组恒「已接」的东西）", _uo and _uw == f"全{UNSET}",
+      _uw)
 
 print()
 if FAILED:

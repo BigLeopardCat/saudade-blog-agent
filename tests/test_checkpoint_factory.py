@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""checkpointer 接线点的判据（20261017）：零 LLM、零网络、零新依赖。
+"""checkpointer 接线点的判据（20261017；20261018 批 7 随采纳改过 ④ 与 ⑧）。
 
 **这一件为什么存在**：`agent/checkpoint.py` 此前是个**返回错对象**的存根
 （`get_checkpointer()` → `MemorySaver()`：进程内、每 worker 一份），而它的英文 docstring
 写着 "maintain context across multiple turns in a session"，与 `docs/agent-architecture.md`
-§4.6 明说的"它从未积累过任何状态"正相反。重写之后必须证明两件事：**今天一次都不碰**
+§4.6 明说的"它从未积累过任何状态"正相反。重写之后必须证明两件事：**不配就一次都不碰**
 （惰性），以及**任何"半成品接法"都炸得响**（不静默降级）。
 
-七条探针，每条都配了会红的那一半：
+八条探针，每条都配了会红的那一半：
   · ① **惰性**：不给 DSN ⇒ 返回 `None`，且**一次 import 都不发**——不是"import 完才发现
     没配再返回 None"，那已经晚了一步；
   · ② **反控**：给了合法 DSN ⇒ **绝不返回 None**。没有这一条，①可能只是恒真
@@ -15,23 +15,28 @@
   · ③ **认不出来就响亮**：`memory://` 这类 ⇒ `RuntimeError`，且消息里**点名"故意不支持
     内存档"**——内存 saver 恰好长得像能用，这是本件的重点；
   · ④ **缺依赖就响亮**：合法 scheme 但后端没装 ⇒ `RuntimeError`，消息里有包名与 pip 命令。
-    **故意不去打桩"装上了"再断言返回值**：真造 saver 那一段还没写，写一条断言去假装
-    它存在，正是本仓最贵的"看着在跑、其实没跑"；
+    **20261018 批 7 改成打桩 import 而不是看本机装没装**：采纳之后本机与 CI 都装了 PG
+    后端，照"装没装"分叉的话这一条在最需要它的两个环境里**永远不执行**。
+  · ④b **连不上就响亮**（批 7 新增）：后端装了但 DSN 连不上 ⇒ `RuntimeError`，
+    **绝不返回一个坏 saver**（坏 saver 的失效时刻是"第一轮对话的第一次 checkpoint"，
+    那时已经没有任何东西指向配置了）；异常文本里的口令必须已脱敏（它会进 `agent.log`）；
   · ⑤ **接线锁**：`agent/graph.py` 那一处 `.compile()` **只许把调用方给的 `checkpointer`
     原样传下去**（`g.compile(checkpointer=checkpointer)`），且 `build_graph` 自己的
-    `checkpointer` 缺省 `None` ⇒ 生产（`server.py` 的 `create_agent()`，不带参数）恒惰性。
-    **20261017 改过判据**：这条锁原先是"末尾仍是**裸的** `g.compile()`"，上游 `48da74f`
-    正是照它要的方式接了线（缺省 `None`、不传就与从前逐字节相同）⇒ 锁跟着钉**新**不变量。
-    现在禁的不是"传参"，是**在编译点造 saver**（写死 `MemorySaver()` / 现算
-    `build_checkpointer(...)` / 把缺省值改成非 `None`）——那几种会让生产**突然开始持久化**，
+    `checkpointer` 缺省 `None`。**20261017 改过判据**：这条锁原先是"末尾仍是**裸的**
+    `g.compile()`"，上游 `48da74f` 正是照它要的方式接了线 ⇒ 锁跟着钉**新**不变量。
+    现在禁的不是"传参"，是**在编译点造 saver**——那几种会让生产**突然开始持久化**，
     而别的判据一条都不会因此变红。裸 `g.compile()` 同样算违规，理由不同：实验臂
     （`agent/checkpoint_arm.py`）传进来的 saver 会被**静默忽略**，于是"没挂 saver"
     伪装成"checkpoint 没区别"，正是本件要防的那种失效；
   · ⑥ **旧陷阱不许回来**：`agent/*.py` 的生产代码里再出现 `MemorySaver` 就红；
-  · ⑦ **DSN 的来源只有一处**（20261017 补）：`build_checkpointer()` 不给参数时读
-    `settings.checkpoint_dsn`。把那一格临时拨成合法 DSN ⇒ **不给参数**的调用必须
-    **响亮抛**；拨回空 ⇒ 返回 `None`。没有这一条，那一格就是个"填了不生效、也不报错"
-    的幽灵旋钮（本仓在配置面上栽过五次）。
+  · ⑦ **DSN 的来源只有一处**：`build_checkpointer()` 不给参数时读
+    `settings.checkpoint_dsn`。把那一格临时拨成 DSN ⇒ **不给参数**的调用必须**响亮抛**
+    （没读到的话它会拿空串直接返回 `None`，那是**静默**）；拨回空 ⇒ 返回 `None`。
+    没有这一条，那一格就是个"填了不生效、也不报错"的幽灵旋钮（本仓在配置面上栽过五次）；
+  · ⑧ **会话坐标与脱敏**（批 7 新增）：`conversation_thread` 在缺席的六种形态上必须
+    回 `None`——拼成 `conv_None` 会让所有"没有会话身份"的请求共用一条线程，也就是
+    **跨用户串台**（安全判据，不是洁癖）；`thread_id_for` 三支各判一次；`redact` 不许
+    把口令带进异常文本、也不许把整条 DSN 吃掉。
 
 用法：.venv/bin/python tests/test_checkpoint_factory.py
 """
@@ -44,6 +49,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import agent.checkpoint as C  # noqa: E402
+
+# 把连接等待调短（`_POOL_WAIT` 是模块常量就是为了这件事）：本件量的是"连不上时抛不抛"，
+# 不是"等多久"。不调的话每条要真连库的判据都得等满 10 秒。
+# ⚠️ 所有 DSN 都指 **127.0.0.1:1**（一个必然没人听的端口）——**不许指 5432**：那是本机
+# 生产 PG，判据去连它就把"单测"变成了"对生产的探测"（连上了会更快，连不上要等超时，
+# 两种结局都与这条判据要量的事无关）。
+C._POOL_WAIT = 0.5
+_DEAD = "postgresql://u:s3cret@127.0.0.1:1/blog"
 
 FAILS: list[str] = []
 
@@ -95,9 +108,9 @@ check("只有空白也当没配", _blank is None, repr(_blank))
 check("空 DSN **一次 import 都不发**（不是 import 完才发现没配）", _imported == [], str(_imported))
 
 print("\n② 反控：给了 DSN 就绝不许静默返回 None")
-for _dsn in ("postgresql://u:p@127.0.0.1:5432/blog", "sqlite:////tmp/ckpt.sqlite3"):
+for _dsn in (_DEAD, "sqlite:////tmp/ckpt.sqlite3"):
     _ok, _why = _not_none_or_raised(_dsn)
-    check(f"`{_dsn}` 不静默返回 None", _ok, _why)
+    check(f"`{C.redact(_dsn)}` 不静默返回 None", _ok, _why)
 
 print("\n③ 认不出来的 scheme ⇒ 响亮，且点名「故意不支持内存档」")
 for _bad in ("memory://x", "memory", "mysql://root@127.0.0.1/blog", "redis://127.0.0.1"):
@@ -107,18 +120,47 @@ _mem = _raises(C.backend_for, "memory://x")
 check("内存档的拒绝理由写清楚了（不然人会以为只是没实现）",
       "故意不支持内存档" in _mem, _mem[:160])
 
+print("\n③b sqlite 这一支**刻意不落地**（产线 4 worker 共用一个文件库，并发写没验过）")
+_sq = _raises(C.build_checkpointer, "sqlite:////tmp/ckpt.sqlite3")
+check("抛 RuntimeError（不是静默去造一个没验过的 saver）",
+      _sq.startswith("RuntimeError:"), _sq[:90] or "（没抛）")
+check("说清是「没有落地」而不是含糊的「还没实现」", "没有落地" in _sq, _sq[:200])
+
 print("\n④ 合法 scheme 但后端没装 ⇒ 响亮，消息里有包名与 pip 命令")
+# **打桩而不是看本机装没装**（20261018 批 7 改）：采纳之后本机与 CI 都装了 PG 后端
+# （`pyproject.toml` 的依赖组），照"装没装"分叉的话，这一条在最需要它的两个环境里
+# **永远不会被执行**。打桩 import 让这条判据在任何机器上判的都是同一件事：
+# 依赖缺失时**响亮、点名包名、给出 pip 命令、明说不回落成内存档**。
 _pg_installed = importlib.util.find_spec("langgraph.checkpoint.postgres") is not None
-_pg = _raises(C.build_checkpointer, "postgresql://u@127.0.0.1/blog")
+_real_import = C.importlib.import_module
+
+
+def _no_module(name, *a, **kw):
+    raise ImportError(f"No module named {name!r}")
+
+
+C.importlib.import_module = _no_module
+try:
+    _pg = _raises(C.build_checkpointer, _DEAD)
+finally:
+    C.importlib.import_module = _real_import
+check("抛 RuntimeError", _pg.startswith("RuntimeError:"), _pg[:90] or "（没抛）")
+check("点名包名", "langgraph-checkpoint-postgres" in _pg, _pg[:200])
+check("给出 pip 命令", ".venv/bin/pip install" in _pg, _pg[:200])
+check("明说不回落成内存档", "不会静默回落成内存档" in _pg, _pg[:240])
+
+print("\n④b 后端已装 + DSN 连不上 ⇒ 响亮抛，**绝不返回一个坏 saver**")
+# 坏 saver 的失效时刻是"第一轮对话的第一次 checkpoint"——那时已经没有任何东西指向
+# 配置了。所以这里必须抛。`_POOL_WAIT` 是模块常量就是为了让这条判据**不必真等 10 秒**
+# （判据把等待调短，量的是"抛不抛"，不是"等多久"）。
 if not _pg_installed:
-    check("抛 RuntimeError", _pg.startswith("RuntimeError:"), _pg[:90] or "（没抛）")
-    check("点名包名", "langgraph-checkpoint-postgres" in _pg, _pg[:200])
-    check("给出 pip 命令", ".venv/bin/pip install" in _pg, _pg[:200])
-    check("明说不回落成内存档", "不会静默回落成内存档" in _pg, _pg[:240])
+    print("  ⏭ 本机没装 langgraph-checkpoint-postgres ⇒ **这一条没验**（不是通过）")
 else:
-    # 依赖装上了 ⇒ 走的是"造 saver 还没实现"那一支。**如实断言它**，不假装它没装。
-    check("后端已装 ⇒ 仍是响亮拒绝（造 saver 属于 ADR-0011 采纳批，未实现）",
-          "还没实现" in _pg, _pg[:200])
+    _down = _raises(C.build_checkpointer, _DEAD)
+    check("抛 RuntimeError（没抛 = 返回了一个连不上的 saver）",
+          _down.startswith("RuntimeError:"), _down[:90] or "（没抛）")
+    check("异常文本里的口令已脱敏", "s3cret" not in _down and "***@" in _down, _down[:200])
+    check("明说不静默降级", "不静默降级" in _down, _down[:240])
 
 print("\n⑤ 接线锁：那一处 `.compile()` 只许把调用方给的 `checkpointer` 原样传下去")
 
@@ -267,17 +309,57 @@ from config import settings as _S  # noqa: E402
 
 _old_dsn = _S.checkpoint_dsn
 try:
-    _S.checkpoint_dsn = "postgresql://u@127.0.0.1/blog"
+    _S.checkpoint_dsn = _DEAD
     _loud = _raises(C.build_checkpointer)
-    check("拨成合法 DSN ⇒ **不给参数**也响亮抛（不是静默返回 None）",
+    # 拨成一个连不上的 DSN ⇒ 必须**响亮抛**。这就证明了那一格被真的读到了：
+    # 没读到的话 `build_checkpointer()` 会拿空串直接返回 `None`（**静默**）。
+    # 刻意不用"能连上的 DSN + 断言返回了 saver"——那要求本机有个真库，
+    # 判据就变成了"本机有没有库"，而这条要判的是**接线通不通**。
+    check("拨成 DSN ⇒ **不给参数**也响亮抛（不是静默返回 None ⇒ 那一格是活的）",
           _loud.startswith("RuntimeError:"), _loud[:90] or "（没抛 = 这一格是死的）")
     _S.checkpoint_dsn = "   "
     check("拨成纯空白 ⇒ 与 `build_checkpointer('   ')` 同一把尺子：None",
           C.build_checkpointer() is None)
     _S.checkpoint_dsn = ""
-    check("拨回空 ⇒ None（= 今天的行为）", C.build_checkpointer() is None)
+    check("拨回空 ⇒ None（= 没挂 saver 时的行为）", C.build_checkpointer() is None)
 finally:
     _S.checkpoint_dsn = _old_dsn
+
+print("\n⑧ 会话坐标与脱敏（批 7 新增的三个纯函数——**不连库，本机就能判**）")
+# ① 缺席的三种形态一个都不许拼成坐标。这一条是**安全判据**不是洁癖：拼成
+# `conv_None` 会让所有"没有会话身份"的请求（新会话、评测直连、请求体缺这一格）
+# 共用同一条线程 ⇒ 图把别人的历史当自己的。
+_ABSENT = (None, "", "   ", 0, "0", "None")
+check("会话 id 缺席的六种形态 ⇒ 全 None（**不编坐标**）",
+      all(C.conversation_thread(x) is None for x in _ABSENT),
+      str([C.conversation_thread(x) for x in _ABSENT]))
+
+
+def _naive(cid):                    # 反控：缺席也照拼（上面那组必须抓得住它）
+    return f"conv_{cid}"
+
+
+check("（反控）「缺席也照拼」的实现在同一组输入上**不是全 None** ⇒ 上面那条不是空过",
+      not all(_naive(x) is None for x in _ABSENT))
+check("真会话 id ⇒ conv_<id>（int 与 str 同形）",
+      C.conversation_thread(42) == "conv_42" == C.conversation_thread("42"),
+      f"{C.conversation_thread(42)!r} / {C.conversation_thread('42')!r}")
+
+check("挂了 saver + 有会话 ⇒ 会话坐标", C.thread_id_for(7, 42, True) == "conv_42",
+      C.thread_id_for(7, 42, True))
+check("挂了 saver 但没会话 id ⇒ 退回每请求随机（**不编 conv_None**）",
+      C.thread_id_for(7, None, True).startswith("user_7_"), C.thread_id_for(7, None, True))
+check("没挂 saver ⇒ 每请求随机（= 20260903 以来的行为）",
+      C.thread_id_for(7, 42, False).startswith("user_7_"), C.thread_id_for(7, 42, False))
+check("随机的两条**不相同**（不是被改成常量线程）",
+      C.thread_id_for(7, 42, False) != C.thread_id_for(7, 42, False))
+
+check("DSN 里的口令不进异常文本（异常会进 agent.log）",
+      C.redact("postgresql://u:s3cret@h:5432/db") == "postgresql://***@h:5432/db",
+      C.redact("postgresql://u:s3cret@h:5432/db"))
+check("没带口令的原样返回（不是把整条 DSN 都吃掉）",
+      C.redact("postgresql://h:5432/db") == "postgresql://h:5432/db",
+      C.redact("postgresql://h:5432/db"))
 
 print()
 if FAILS:

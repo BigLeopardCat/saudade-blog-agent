@@ -174,7 +174,7 @@ class CheckpointGoldenArm:
 
     # ── 生产接口（与 `CompiledStateGraph.stream` / `react_arm` 同一签名）─────
     def stream(self, state: dict, config: dict | None = None,
-               stream_mode: object = None):
+               stream_mode: object = None, durability: object = None):
         """逐字转发内层图的 `(mode, data)` 二元组（帧契约不动）。
 
         `stream_mode` 原样往下传（生产者要 `["messages", "updates"]` 两路）。
@@ -183,13 +183,18 @@ class CheckpointGoldenArm:
         checkpoint 由后台线程写、主循环不等待，进程被硬杀时那一步可能没落盘 ⇒ 恢复时
         `__start__` 重跑、task_id 变了 ⇒ **账只在崩溃那一刻失效**（实测对照与推导见
         `agent/idem.py::require_sync_durability`）。代价：每个 superstep 多一次同步提交。
+
+        `durability` 形参（20261018 批 7 补）：生产者（`server.py`）在挂了 saver 时会
+        **自己**把同步档传下来，本臂的签名必须收得下——收不下就是 `TypeError` 炸在
+        生产者里，而那时报的错与"签名对不上"没有任何可读的联系。收下之后仍以
+        `REQUIRED_DURABILITY` 为准（本臂**一定有** saver，所以这一格恒有值）。
         """
         cfg = dict(config or {})
         conf = dict(cfg.get("configurable") or {})
         conf["thread_id"] = self._thread_for(config)
         cfg["configurable"] = conf
         return self.graph.stream(state, cfg, stream_mode=stream_mode,
-                                 durability=idem.REQUIRED_DURABILITY)
+                                 durability=durability or idem.REQUIRED_DURABILITY)
 
 
 # ── 建臂 ─────────────────────────────────────────────────────────────

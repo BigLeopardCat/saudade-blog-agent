@@ -35,7 +35,9 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 # "什么时候发哪条过程行"，以及受阻原因码的中文（`_REASON_CN`，它贴的是 BLOCK 原因码、
 # 不属于动作措辞）。
 from agent.action_text import tool_action_text
+from agent import checkpoint  # 采纳（批 7）：造 saver + 会话坐标 + 级联清理
 from agent import confirm  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
+from agent import idem  # 持久化档的唯一常量（REQUIRED_DURABILITY，见 agent/idem.py）
 from agent import probe  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
 from agent.factblock import (action_facts,  # 动作事实块（D3）
                              compose, render_fact_block, strip_fact_lines)
@@ -307,6 +309,31 @@ class ChatResponse(BaseModel):
 _agent = None
 
 
+def _graph_holds_context() -> bool:
+    """图自不自持上下文 —— 采纳（批 7）那三处的唯一判据。判定与理由见
+    `agent/probe.py::holds_context`（它读 `_agent` 这个**活体对象**，不读配置，
+    所以挂了 saver 的实验臂会真的走到"不注入历史"那条路上）。"""
+    return probe.holds_context(_agent)
+
+
+def _thread_id_for(req) -> str:
+    """这一轮的 `thread_id`。**两条路（`/chat` 与 `/chat/stream`）共用它**是刻意的：
+    只改一条会让两种线程语义并存，而线上主路径是流式那条，单跑评测看不见它。
+    判定与理由见 `agent/checkpoint.py::thread_id_for`。"""
+    return checkpoint.thread_id_for(req.user_id, req.conversation_id,
+                                    _graph_holds_context())
+
+
+def _stream_kwargs() -> dict:
+    """给 `_agent.stream(...)` 的持久化档：**有 saver 才有这一格**（没 saver 时一个键都
+    不给，不是给 `None`）。② 是实测撞上的：**没挂 saver 的臂/桩根本没有这个形参**
+    （`ReactGoldenArm.stream()`），给了就是 `TypeError` 炸在生产者里 ⇒ 整条端到端判据
+    **静默变成"零帧"**，而那长得跟"臂没产出"一模一样。① langgraph 也会为"给了 durability
+    却没有 checkpointer"发一条 UserWarning。必须是同步档的理由见 checkpoint 头注。
+    """
+    return {"durability": idem.REQUIRED_DURABILITY} if _graph_holds_context() else {}
+
+
 def _build_arm():
     """按 `AGENT_ARM` 选臂（20261012 批 4）。`graph` ⇒ **逐字节就是原来那一行**。
 
@@ -328,7 +355,9 @@ def _build_arm():
     from config.settings import settings
     arm = (settings.agent_arm or "graph").strip().lower()
     if arm == "graph":
-        return create_agent(), arm
+        # 采纳（批 7 之③）：DSN 空 ⇒ `None` ⇒ 与 20260903 以来**逐字节相同**；非空 ⇒
+        # 在这里开池建表（只在启动期调一次），连不上就**响亮抛**、进程起不来。
+        return create_agent(checkpointer=checkpoint.build_checkpointer()), arm
     if arm == "react":
         # 延迟 import：臂不在选它的时候不该被加载（`agent.react_arm` 拉进整份技能表与
         # 工具注册表）。反过来也不能"启动时都建一份挑着用"——那会让 graph 档多付一次
@@ -715,25 +744,30 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
     # 抹完为空的轮次**整轮不注入**（它的 assistant 侧一个字都不是模型说的）：留一条空
     # 的 assistant 会让模型把上一轮的用户问题当成待答问题——正是上面那条"孤儿 user"
     # 注释里的坑，方向相反而已。
-    hist = [(h.role, h.content) for h in req.history[-20:]]
-    cleaned: list = []
-    for role, content in hist:
-        if role != "assistant":
-            cleaned.append((role, content))
-            continue
-        body = strip_fact_lines(content)
-        if body:
-            cleaned.append((role, body))
-    for i, (role, content) in enumerate(cleaned):
-        if role == "user":
-            if i + 1 >= len(cleaned) or cleaned[i + 1][0] != "assistant":
-                continue  # 孤儿 user（该轮回复未入库/整轮只剩事实行），不注入
-            messages.append(HumanMessage(content=content))
-        else:
-            # 恢复 assistant 角色（曾全部包成 HumanMessage + [assistant]: 前缀——
-            # 模型会把历史当"用户说的"，多轮上下文质量打折；角色语义对齐后
-            # 模型对"谁说过什么"的区分不再依赖前缀文本）
-            messages.append(AIMessage(content=content))
+    #
+    # 采纳（批 7 之①）：**图自持上下文时这一整块要停**——不停就是同一段历史进图两份
+    # （一份在这儿、一份在图的 checkpoint 里），症状是"模型开始复述上一轮的计划"。
+    # 没挂 saver 时这块一字不变。
+    if not _graph_holds_context():
+        hist = [(h.role, h.content) for h in req.history[-20:]]
+        cleaned: list = []
+        for role, content in hist:
+            if role != "assistant":
+                cleaned.append((role, content))
+                continue
+            body = strip_fact_lines(content)
+            if body:
+                cleaned.append((role, body))
+        for i, (role, content) in enumerate(cleaned):
+            if role == "user":
+                if i + 1 >= len(cleaned) or cleaned[i + 1][0] != "assistant":
+                    continue  # 孤儿 user（该轮回复未入库/整轮只剩事实行），不注入
+                messages.append(HumanMessage(content=content))
+            else:
+                # 恢复 assistant 角色（曾全部包成 HumanMessage + [assistant]: 前缀——
+                # 模型会把历史当"用户说的"，多轮上下文质量打折；角色语义对齐后
+                # 模型对"谁说过什么"的区分不再依赖前缀文本）
+                messages.append(AIMessage(content=content))
 
     # 多模态（20260828 单图 → 20260828s 多图）：图片 + 文字转 OpenAI content 数组
     # （qwen 实测支持，100x100 红图识别正确）。多图循环拼 content 数组，每张一个
@@ -787,7 +821,7 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
     for mode, data in _agent.stream(
         graph_input(messages, ledger=ledger or {}),
         config,
-        stream_mode=["messages", "updates"],
+        stream_mode=["messages", "updates"], **_stream_kwargs(),
     ):
         # 手写图里有多个 LLM 节点（planner 产出计划文本、model 产出回复），
         # 只有 model 节点的 AIMessageChunk 是给访客看的回复——其余按 node 过滤掉，
@@ -871,10 +905,11 @@ async def chat(req: ChatRequest, request: Request):
         return ChatResponse(reply=_quota_blocked_text(_limit), success=True, error=None)
 
     messages = _build_messages(req)
-    # 每请求独立线程：LangGraph 的 MemorySaver 线程状态会随对话无限累积，
-    # 长对话（教程连载等）会让输入上下文与 worker 内存持续膨胀直至截断/被杀。
+    # 每请求独立线程（**没挂 saver 时**）：LangGraph 的 MemorySaver 线程状态会随对话无限
+    # 累积，长对话（教程连载等）会让输入上下文与 worker 内存持续膨胀直至截断/被杀。
     # 对话连续性由请求体中的 DB 历史(最近20条) + chat_summary 摘要承担，无需线程累积。
-    thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
+    # 挂了 saver ⇒ 会话坐标（见 `_thread_id_for`），那正是"图自持上下文"的实现方式。
+    thread_id = _thread_id_for(req)
 
     try:
         loop = asyncio.get_running_loop()  # 非 get_event_loop()：后者 3.10 起已废弃
@@ -1423,7 +1458,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             graph_input(messages, confirm_grant=confirm_grant,
                         ledger=ledger),
             config,
-            stream_mode=["messages", "updates"],
+            stream_mode=["messages", "updates"], **_stream_kwargs(),
         ):
             # 客户端断开检查：停止驱动图（不再发起新的 LLM 调用/工具执行）。
             # 节点级检查（model/tools raise AgentCancelled）兜住"正在节点内"的窗口；
@@ -2007,8 +2042,8 @@ async def chat_stream(req: ChatRequest, request: Request):
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
     try:
         messages = _build_messages(req, confirm_grant=grant)
-        # 每请求独立线程：避免 MemorySaver 线程状态随长对话无限累积（见 /chat 注释）
-        thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"
+        # 每请求独立线程；挂了 saver ⇒ 会话坐标（两条路共用同一个函数，理由见 /chat 注释）
+        thread_id = _thread_id_for(req)
         # trace 落盘（roadmap 步骤 2）：请求级 recorder 挂 contextvar——producer
         # 经 _submit_with_context 的 copy_context 继承，图节点内 record 命中；
         # 收尾由 event_stream finally 统一 finish_trace（见其注释，超时场景也要落盘）
@@ -2554,10 +2589,37 @@ async def health():
             "rag_state": str(_rag.get("state") or "unknown"),
             "vector_missing": int(_rag["missing"]),
             # 这个进程挂没挂 saver（五档取值与理由见 `agent/probe.checkpoint_backend`）。
-            # **读的是 `_agent` 这个活体对象，不是 `CHECKPOINT_DSN`**——那一格填了也不生效。
+            # **读的是 `_agent` 这个活体对象，不是 `CHECKPOINT_DSN`**——配了 DSN 而图没挂
+            # 上 saver 时读配置会报成"挂了"，那是本仓最贵的一类失效。
             "checkpoint_backend": probe.checkpoint_backend(_agent),
         },
     }
+
+
+@app.delete("/checkpoint/{conversation_id}")
+async def checkpoint_delete(conversation_id: str):
+    """删会话时清掉那个会话的 checkpoint（**级联清理**，批 7 的跨仓契约之一半）。
+
+    ⚠️ **另一半在父仓** `src/routes/conversation.rs` 的 `DELETE /api/chat/conversations/:id`
+    ——本仓没有"会话被删了"这个事件源，只能出钩子。父仓没接上时这个端点**永远不会被
+    调到**，症状是"删了会话、checkpoint 还躺在库里"（`tests/test_checkpoint_cascade.py`
+    有一条父仓守卫盯它，`SAUDADE_REQUIRE_PARENT=1` 时父仓不在场就红）。
+
+    `deleted` 恒是**"删完读回来确认"**的结果，不是"没抛异常"；`false` 时 `why` 点名是
+    哪一条（`no_saver` / `bad_conversation_id` / `still_readable`）。理由见
+    `agent/checkpoint.py::delete_thread`——一个恒不生效的删除与真删除**长得一模一样**，
+    所以这一格必须是可读的事实。
+    """
+    saver = checkpoint.live_saver(_agent)
+    if saver is None:
+        logger.info("[checkpoint] 级联删除跳过：本进程没挂 saver（conv=%s）", conversation_id)
+        return {"deleted": False, "why": "no_saver"}
+    if checkpoint.conversation_thread(conversation_id) is None:
+        logger.warning("[checkpoint] 级联删除拒绝：会话 id 非法（%r）", conversation_id)
+        return {"deleted": False, "why": "bad_conversation_id"}
+    gone = await asyncio.to_thread(checkpoint.delete_thread, saver, conversation_id)
+    logger.info("[checkpoint] 级联删除 conv=%s deleted=%s", conversation_id, gone)
+    return {"deleted": gone, "why": "" if gone else "still_readable"}
 
 
 @app.get("/version")

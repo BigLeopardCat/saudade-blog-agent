@@ -16,11 +16,36 @@
 
 ## 20261018
 
+- **断点恢复落地（批 7）：图开始自持上下文，但默认仍不生效**。三处一起动，共用同一个
+  判据 `server._graph_holds_context()`——**读活体对象上有没有 saver，不读 `CHECKPOINT_DSN`**
+  （配了 DSN 而图没挂 saver 时报"挂了"是本仓最贵的一类失效）。三处 = ① `_build_messages` 的
+  历史注入**套上闸门**（不是删掉：删掉会让没挂 saver 的那条路失去全部跨轮上下文）；②
+  `thread_id` 改会话坐标 `conv_<conversation_id>`（两条路共用 `_thread_id_for`；**会话 id
+  缺席时退回每请求随机**，绝不拼 `conv_None`——那是跨用户串台）；③
+  `create_agent(checkpointer=checkpoint.build_checkpointer())`。持久化档
+  `durability="sync"` **有 saver 才给**（缺省 `async` 下硬杀会让恢复的 task_id 变、幂等账被
+  静默绕过；没 saver 时给了会招 UserWarning，而 `ReactGoldenArm` 没有这个形参 ⇒ `TypeError`
+  炸在生产者里）。**DSN 空 ⇒ `build_checkpointer()` 返回 `None` ⇒ 与 20260903 以来逐字节相同**，
+  所以本次上线**不改任何对外行为**；真开要加 `CHECKPOINT_DSN` 再重启，回执看 `/health` 的
+  `checkpoint_backend` 是不是 `postgres`。
+- **新增 `DELETE /checkpoint/{conversation_id}`（批 7，级联清理的钩子）**：删会话时清掉那个
+  会话的 checkpoint。返回 `{"deleted": bool, "why": str}`——**`false` 不是错误**，`why` 点名
+  是"没挂 saver / 会话 id 非法 / 删完仍读得到"哪一条。**刻意不回 `{"ok": true}`**：一个恒不
+  生效的删除与真删除长得一模一样（`DELETE ... WHERE` 删不存在的线程同样不抛），所以判据是
+  "删完读回来确认"。⚠️ **调用方在父仓**（`purge_conversation_data` 的两个臂），
+  **截至本日父仓那一半还没接上** ⇒ 这个端点今天没有任何调用方，这是已知缺口
+  （判据 `tests/test_checkpoint_cascade.py` ③ 判的是"父仓自己两臂一致"，半接就红）。
+- **`agent/checkpoint.py` 真造 saver 了（批 7）**：PG 连接池 + `PostgresSaver` + 建表。
+  建表包在 `pg_advisory_lock` 里——`saver.setup()` 幂等但**不并发安全**（迁移末尾
+  `INSERT INTO checkpoint_migrations` 没有 `ON CONFLICT`），产线 4 个 worker 同时启动会让
+  后到的主键冲突、**启动崩**。连不上/依赖没装/scheme 不认识 ⇒ **响亮抛、进程起不来**
+  （坏 saver 的失效时刻本该是启动，不是第一轮对话的第一次 checkpoint）。sqlite 那一支
+  **刻意不落地**（4 worker 共用一个文件库没验过）。异常文本里的 DSN 口令已脱敏。
 - **`/health` 多一格 `checkpoint_backend`（批 6 前置，对外行为零变更）**：回"**这个进程到底
   挂没挂 saver**"——`none` / `postgres` / `sqlite` / `memory` / `unknown`（读不出来）/认不出的
-  模块路径原文。**它是从 `_agent` 这个活体对象读的，不是读 `CHECKPOINT_DSN`**：那一格今天
-  **填了也不生效**（`build_checkpointer()` 全仓没有调用方），读配置的实现会把"配了 DSN"
-  报成"挂上了 saver"。判定逻辑住 `agent/probe.checkpoint_backend`，判据
+  模块路径原文。**它是从 `_agent` 这个活体对象读的，不是读 `CHECKPOINT_DSN`**：批 7 之前
+  那一格**填了也不生效**（`build_checkpointer()` 全仓没有调用方），读配置的实现会把"配了
+  DSN"报成"挂上了 saver"。判定逻辑住 `agent/probe.checkpoint_backend`，判据
   `tests/test_health_dials.py` ⑤（含一条反控：拨了 `CHECKPOINT_DSN` 而图没挂 saver ⇒ 这一格
   **必须不变**）。父仓 `scripts/healthcheck.sh` 按 `"agent_ready":true` 子串判活，多这一格
   不影响它。

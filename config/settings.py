@@ -312,9 +312,9 @@ class Settings(BaseSettings):
     # 每请求一份 JSON（输入/节点事件序列/分段耗时/回复/退出原因）；
     # 与项目 logs/ 目录对齐（日志体系规范见 CLAUDE.md §2），logrotate 轮转
     trace_dir: str = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
-    # 写操作幂等账（`agent/idem.py`，20261016 批 2）。**今天恒不被打开**：它的闸是
-    # "这一轮挂没挂 checkpointer"，而生产没有 saver（见 `agent/graph.py` 的
-    # `return g.compile()`）⇒ 没挂 saver 的环境里连这个文件都不会被创建。
+    # 写操作幂等账（`agent/idem.py`，20261016 批 2）。它的闸是"这一轮挂没挂
+    # checkpointer"：**不配 `CHECKPOINT_DSN` 时恒不被打开**（图是裸的 `g.compile()`）
+    # ⇒ 那种环境下连这个文件都不会被创建；配了才开始写。
     # 这个路径只是**降级档**（20261017）：`_shared(config)` 按 saver 自己选——挂的是 PG
     # saver ⇒ 账落**同一个池、同一个库**（`agent/idem_pg.py`，保留期与 checkpoint 同源），
     # 只有内存 saver / 没挂 saver 才落到这里。
@@ -324,14 +324,15 @@ class Settings(BaseSettings):
     # 的《迁移到 PG》一节，是一条欠账。
     idem_db: str = "/home/ubuntu/Saudade-Blog/logs/agent/idem.sqlite3"
 
-    # ── checkpoint 存储（ADR-0011 的接线点，20261017 外围准备）──────────
-    # **缺省空 = 今天的行为**：`agent/checkpoint.py::build_checkpointer()` 不给参数时读
+    # ── checkpoint 存储（ADR-0011 的接线点，20261018 采纳落地）──────────
+    # **缺省空 = 从前的行为**：`agent/checkpoint.py::build_checkpointer()` 不给参数时读
     # 这一格，空 ⇒ 返回 `None` ⇒ 图仍是裸的 `g.compile()`（生产逐字节不变）。
-    # ⚠️ 今天**填了它也不会改变行为**——`build_checkpointer()` 全仓没有调用方。它的
-    # 意义是**把 DSN 的唯一读方收在一个有名字的地方**，让采纳那天只剩一行
-    # `build_graph(checkpointer=build_checkpointer())`；在那之前，它等于把钥匙插进一扇
-    # 还没装锁的门：不报错、也不生效。**别只填这一格就以为接上了 saver**——接线是
-    # `agent/checkpoint.py` 头注里那个"三处一起动"（只做第三处会**静默产生双份上下文**）。
+    # 20261018 起**填上它就真开**——`build_checkpointer()` 的唯一生产调用方是
+    # `server._build_arm()` 的 `create_agent(checkpointer=…)`；"挂没挂"不靠读这一格
+    # 判断，靠 `server._graph_holds_context()` 读**活体对象上有没有 saver**
+    # （`/health` 的 `checkpoint_backend` 同一个实现）。别只填这一格就以为接上了——
+    # 接线是 `agent/checkpoint.py` 头注里那个"三处一起动"（只做第三处会**静默产生
+    # 双份上下文**），判据 `tests/test_checkpoint_adoption.py`。
     # 取值域 `postgresql://` / `postgres://` / `sqlite://`，**故意不认内存档**（4 个
     # uvicorn worker 下每 worker 各记各的，且不报错）。认不出来/依赖没装都**响亮抛**。
     # 实验那份 DSN 刻意在**仓外**（`/home/ubuntu/exp/ckpt.env` 的 `CHECKPOINT_PG_DSN`，

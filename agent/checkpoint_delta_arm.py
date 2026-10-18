@@ -95,8 +95,9 @@ class CheckpointDeltaArm(CheckpointGoldenArm):
         return out
 
     def stream(self, state: dict, config: dict | None = None,
-               stream_mode: object = None):
-        return super().stream(self.delta(state), config, stream_mode=stream_mode)
+               stream_mode: object = None, durability: object = None):
+        return super().stream(self.delta(state), config, stream_mode=stream_mode,
+                              durability=durability)
 
 
 # ── 建臂 ─────────────────────────────────────────────────────────────
