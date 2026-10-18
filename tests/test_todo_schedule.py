@@ -36,6 +36,8 @@ from langchain_core.messages import HumanMessage
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
 import agent.graph as g  # noqa: E402
 from agent import adminops_todo as A  # noqa: E402
 from agent import adminops_confirm as _confirm  # noqa: E402
@@ -1764,7 +1766,10 @@ _workflow_map = WORKFLOW_MAP
 # 接线判据读的是**源码字面**（同 `test_plan_channel` 钉 `plan_encode` 调用点那条）：
 # 这几句是"这道闸到底有没有被 `planner_node` 用上"的唯一可离线断言的东西——
 # 换成调用计数就得跑整流，而这里要锁的恰恰是"链上有没有这一步"。
-_graph_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+# 取值点跟着代码搬（20261019）：写参数落位与拒答那一族住进了
+# `agent/write_grounding.py` ⇒ 判据字面一个字没动，只把"读 graph.py 全文"
+# 换成"读这一族的全部文件"（`tests/_ctx_src.py::write_guard_src`）。
+_graph_src = _ctx_src.write_guard_src()
 
 
 class _ScriptedLLM:
@@ -1820,6 +1825,26 @@ for _msg, _want, _why in [
     check(f"抽取：{_why} → {_want!r}", g._msg_todo_text(_msg) == _want,
           repr(g._msg_todo_text(_msg)))
 
+# ── trace 打桩：**两个模块一起打**（20261019）──────────────────────────────
+# `record` 是 `from utils.trace import record` 绑到**各自模块全局**上的名字。
+# 20261019 写参数落位与拒答那一族（`_todo_text_fix` 就在里面）搬进了
+# `agent/write_grounding.py` ⇒ 只打 `g.record` 会**静默失效**：桩照样装上，
+# 搬过去那半截的事件一条也不进 `_ev`，判据红在"没留痕"上——而那个红看着像功能坏了。
+# 按**函数对象自己的 `__module__`** 取模块，不写死模块名（下次再搬家也不会漏）。
+_WG = sys.modules[g._todo_text_fix.__module__]
+
+
+def _stub_record(sink: list) -> tuple:
+    """把两边 `record` 都换成记账的；返回还原用的原值。"""
+    saved = (g.record, _WG.record)
+    g.record = _WG.record = lambda node, event, **data: sink.append((node, event, data))
+    return saved
+
+
+def _unstub_record(saved: tuple) -> None:
+    g.record, _WG.record = saved
+
+
 # ── 三态（用真的校正器，不重写判据）────────────────────────────────────────
 def _add_plan(text):
     """planner 那一份计划体的形状（`params` 与 TOOLS 行两态都要在）。"""
@@ -1831,12 +1856,11 @@ def _add_plan(text):
 def _add_gate(plan_obj, user_msg):
     """真校正器 + 捕获 trace 事件（不重写判据：`record` 换成记账的那个）。"""
     _ev: list = []
-    _saved_rec = g.record
-    g.record = lambda node, event, **data: _ev.append((node, event, data))
+    _saved_rec = _stub_record(_ev)
     try:
         ref = g._todo_text_fix(plan_obj, user_msg, "admin")
     finally:
-        g.record = _saved_rec
+        _unstub_record(_saved_rec)
     got = (g._tool_args((plan_obj.get("tools") or [""])[0])[0] or {}).get("text")
     return ref, got, plan_obj, _ev
 
@@ -1948,12 +1972,12 @@ _LEDGER_LINE = ("在后台首页的待办里加一条「" + _INCIDENT_BODY + "�
 def _cid(ledger=None):
     """真 `planner_node` 跑一轮短应答（脚本化 LLM：planner 照台账那一行重提交）——
     返回 `(plan_obj, trace 事件名列表)`。"""
-    _saved_llm2, _saved_rec2 = g.get_llm, g.record
+    _saved_llm2 = g.get_llm
     _ev2: list = []
     _llm = _ScriptedLLM([f'WORKFLOW: dashboard_todo_add\nPARAMS: '
                          f'{json.dumps({"text": _INCIDENT_BODY}, ensure_ascii=False)}'])
     g.get_llm = lambda **kw: _llm                                         # noqa: ARG005
-    g.record = lambda node, event, **data: _ev2.append((node, event, data))
+    _saved_rec2 = _stub_record(_ev2)
     try:
         st = {"messages": [HumanMessage(content="嗯")], "plan_rounds": 0, "done": False}
         if ledger is not None:
@@ -1961,7 +1985,8 @@ def _cid(ledger=None):
         return (g.planner_node(st, _planner_cfg()).get("plan_obj") or {},
                 [e[1] for e in _ev2])
     finally:
-        g.get_llm, g.record = _saved_llm2, _saved_rec2
+        g.get_llm = _saved_llm2
+        _unstub_record(_saved_rec2)
 
 
 _po_led, _ev_led = _cid({"pending": _LEDGER_LINE})

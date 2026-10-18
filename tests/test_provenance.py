@@ -47,6 +47,8 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
 from agent import authz  # noqa: E402
 from agent import provenance as P  # noqa: E402
 from agent import textnorm as T  # noqa: E402
@@ -270,9 +272,16 @@ check("★ 明写不 import graph（graph 是消费方，反向 import 会成环
 print("⑨ 影子通道：today 与旧闸同源、关档不落事件、开档落**结构化**字段")
 import agent.graph as g  # noqa: E402
 
+# ⑨ 这一段打的是 `record` 的桩——**桩必须打在"那一族现在住的那个模块"上**。
+# 20261019 起 `_evidence_shadow` 搬进了 `agent/write_grounding.py`，它那边是
+# `from utils.trace import record` 绑到**自己的**模块全局上的；继续打
+# `g.record` 会**静默失效**：桩照样装上、事件一条也不落，而判据读到的只是空列表
+# （本节 ⑨ 那一整片会以"什么都没发生"的形式变红，看着像功能坏了）。
+# 所以按**函数对象自己**的 `__module__` 取模块，不写死名字——下次再搬家也不会漏。
+_wg = sys.modules[g._evidence_shadow.__module__]
 _events: list[tuple] = []
-_backup_record = g.record
-g.record = lambda node, event, **kw: _events.append((node, event, kw))
+_backup_record = _wg.record
+_wg.record = lambda node, event, **kw: _events.append((node, event, kw))
 _backup_dial = getattr(g.settings, "agent_evidence", None)
 try:
     g.settings.agent_evidence = False
@@ -359,7 +368,7 @@ try:
     check("★ 同一格里两个值时 today **各配各的**（按参数名取值会把 a 的判决串到 b 上）",
           len(_sh2) == 2 and all(x["today"] is True for x in _sh2), str(_sh2))
 finally:
-    g.record = _backup_record
+    _wg.record = _backup_record
     if _backup_dial is not None:
         g.settings.agent_evidence = _backup_dial
 
@@ -367,7 +376,9 @@ check("影子**不许**弄坏一轮对话：核验内部抛异常时吞掉并只
       "except Exception" in inspect.getsource(g._evidence_shadow))
 
 print("⑨b 拒绝事件与产出物：被拒的那个**字面**进结构化字段（判据读字段不读措辞）")
-_gsrc = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+# 取值点跟着代码搬（20261019）：这一族住进了 `agent/write_grounding.py`，
+# 判据字面一个字没动，只把"读 graph.py 全文"换成"读这一族的全部文件"。
+_gsrc = _ctx_src.write_guard_src()
 check("`write_target_unresolved` 事件带上 values=（与 `write_value_unresolved` 同形）",
       "values=list(dict.fromkeys(refused_values))[:3]" in _gsrc)
 check("来源限定在**出处族**（台账编号/政策两族不混进来 ⇒ R4 不造假阳性）",
