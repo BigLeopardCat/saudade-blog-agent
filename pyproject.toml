@@ -14,6 +14,26 @@ readme = "README.md"
 #     错误集**，棘轮的"变差"判据认不出来，所以基线里现在也记着 `python_target`。
 requires-python = ">=3.12"
 license = "MIT"
+# 包元数据（20261018 批 5 补 `authors` / `keywords` / `classifiers` 三样）。口径：
+#   · 版权持有者取 `LICENSE` 里那个名字（`Copyright (c) 2026 BigLeopardCat`），邮箱取
+#     GitHub 的 noreply 地址——包元数据是**要发出去**的，别把私人邮箱写进去；
+#   · **刻意不写 `License :: OSI Approved :: MIT License` 这条 classifier**：`license`
+#     已经是 SPDX 表达式（PEP 639），两者同时在场是同一件事写两处，新一点的打包工具会
+#     为那条 classifier 报弃用；
+#   · `Development Status :: 4 - Beta` 是**如实**：产线在跑，但版本还是 0.2.0、结构仍在动；
+#   · **不写 `Typing :: Typed`**：本仓没有 `py.typed`、签名注释也没铺满 ⇒ 那句话会说成假的。
+authors = [{ name = "BigLeopardCat", email = "132721665+BigLeopardCat@users.noreply.github.com" }]
+keywords = ["llm", "agent", "langgraph", "rag", "chatbot", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 # 依赖一律 `==` 钉死（20260928）：这里声明的版本 = 生产 `.venv` 里实际在跑的版本。
 # 之前全是 `>=`，`uv.lock` 与声明的下限可以差出好几十个版本都"合法"（lock 停在 8 月，
 # 而 pyproject 只说"不早于"），装机的人拿到什么版本全看当天 PyPI——判据钉在运维取值上

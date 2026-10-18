@@ -743,6 +743,17 @@
   ⚠️ 模块台账 `agent/graph.py` 13196 → **13206**（+10 行全是上面那三段注记，**已声明**；
   它是图本体，本轮按主人裁决不动拆分）。其余四本账**一个数没动**：复杂度 58 条、类型
   190/29、ruff 775/150、词表闸不变（新增的 `__all__` 是 ASCII 列表，不进词表闸的计数）。
+- **批 5：`pyproject.toml` 补包元数据**（`authors` / `keywords` / `classifiers` 三样；
+  `description` / `readme` / `urls` 本来就有）。三条口径：版权持有者取 `LICENSE` 里那个名字
+  （`Copyright (c) 2026 BigLeopardCat`），邮箱取 GitHub 的 noreply 地址——包元数据是要发出去的，
+  别把私人邮箱写进去；**刻意不写** `License :: OSI Approved :: MIT License` 那条 classifier
+  （`license` 已经是 SPDX 表达式，PEP 639 下两者同场就是同一件事写两处，新一点的打包工具会为
+  它报弃用）；**刻意不写** `Typing :: Typed`（本仓没有 `py.typed`、签名注释也没铺满 ⇒ 那句话
+  会说成假的）。`Development Status :: 4 - Beta` 是**如实**读数（产线在跑，版本仍是 0.2.0、
+  结构还在动）。`[project.urls]` 只留 Homepage：手上就这一个地址，再加一条 `Repository` 是
+  同一个字符串写两遍。`uv lock --check` 复验过——73 个包、lock 未失效（这三样是**与依赖解析
+  无关**的元数据）。**ruff 与 mypy 的口径一个字没动**（`docs/lint-baseline.md` 那条书面取舍
+  照旧：存量不当门禁、只当参照点）。
 
 ## 20261017
 
