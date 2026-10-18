@@ -132,7 +132,10 @@ R._pending_ledger_frame = lambda *a, **k: ("", {})  # 离线：不读台账
 # 这一节要验的仍是"那三块叙述资产有没有拼进成品"，所以照新的入参形状喂一份最小现场。
 _sp = R._system_prompt(
     {"messages": [HumanMessage(content="我有哪些未读通知？")], "plan_rounds": 0},
-    {"role": "admin", "principal": UNKNOWN, "config": {}, "user_msg": ""})
+    # 20261019：`page_ctx` 从 ctx 读（唯一产地是 `react_arm.make_ctx`）——它同时喂
+    # planner 提示词、五条快道与 execute 的屏幕文案创作，三处各算一次就是三处取值。
+    {"role": "admin", "principal": UNKNOWN, "config": {}, "user_msg": "",
+     "page_ctx": ""})
 check("**叙述纪律整段进了臂的系统提示**（不是只在 graph 里躺着）", G.NARRATOR_DISCIPLINE in _sp)
 check("**贴纸名字表进了臂的系统提示**（不接 ⇒ `sticker_*` 结构上产不出）",
       R.STICKER_GUIDE in _sp and "害羞" in _sp and "每轮最多一个" in _sp)

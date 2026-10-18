@@ -154,12 +154,9 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.graph import END, START, StateGraph
 
-from agent.prompt_context import (_doc_anchors, _frame_texts, _has_frames,
-                           _last_assistant_utterance, _last_user_msg, _page_ctx,
-                           _recent_tail, _receipts_text, _short_reply_hint,
-                           with_tool_call_pairs)
-from agent.deterministic_plan import _article_fast_path, _intent_hints, _wrap_up_plan
+from agent.deterministic_plan import _wrap_up_plan
 from agent.factblock import block_of, is_action_family, is_block_family
+
 # 帧的形状全在 `agent/frame_contract.py`（20261016 起）——**本模块只负责"什么时候发"**，
 # 而"发出去长什么样"现在由**节点名 + 节点返回值**结构性地决定（见模块头注）。
 from agent.frame_contract import (NOOP_TEXT,
@@ -173,16 +170,19 @@ from agent.graph import (AgentCancelled, AgentState, _EXECUTOR_PROMPT,
                          _principal_of, _render_planner_prompt, _stopped,
                          gate_node as _prod_gate_node, graph_input, plan_state)
 from agent.planner_llm import build_tool_schema
+from agent.prompt_context import (_frame_texts, _has_frames,
+                           _last_assistant_utterance, _last_user_msg, _page_ctx,
+                           _receipts_text, with_tool_call_pairs)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
                               wrap_up_text)
+
 # 借生产那几件的**唯一入口**（20261019）。本模块只接线，判据都在 `agent/graph.py` 里；
 # 各段的接法与理由见 `agent/react_parity.py` 的模块头注。
-from agent.react_parity import (confirm_round, denied, plan_has_tools,
-                                planner_prompt_args)
-from agent.arg_refs import ref_hints
-from agent.workflow_plan import instantiate_plan
+from agent.react_parity import (confirm_round, denied, display_text, fast_path,
+                                plan_has_tools, planner_prompt_args)
 from agent.stickers import repair_sticker_tokens
+from agent.workflow_plan import instantiate_plan
 from config.settings import settings
 from models.llm import get_llm
 from tools import get_all_tools
@@ -451,10 +451,17 @@ def _plan_update(plan_obj: dict, rounds: int, *, advance: bool = True) -> dict:
 
 
 def _fast_plan(fast: dict) -> dict:
-    """文章读取快道 → 执行节点读的那一份（**补上 `calls`**，它是清单的唯一来源）。"""
+    """快道产出 → 执行节点读的那一份（**补上 `calls`**，它是清单的唯一来源）。
+
+    `calls` 走 **`specs`** 那一格（清单已定稿）而不是 `params`（让 execute 重新
+    实例化）：快道的产出**本身就是**计划。硬证据是 `effect_switch`——它返回**两条
+    spec**（关旧 + 开新），而 `effect` 技能模板只有一条，重跑一遍 `instantiate_plan`
+    会把它撕成一条。理由的全文见 `react_line.WorkflowExecutor.run_specs`。
+    """
     obj = dict(fast or {})
     obj["calls"] = [{"workflow": str(obj.get("workflow") or "read_article"),
-                     "params": dict(obj.get("params") or {})}]
+                     "params": dict(obj.get("params") or {}),
+                     "specs": [str(t) for t in (obj.get("tools") or [])]}]
     return obj
 
 
@@ -477,7 +484,7 @@ def _stop_update(state: AgentState, ctx: dict, reason: str) -> dict:
             else "同一个操作连着重试没有进展")
     ctx["wrap_up"] = wrap_up_text(ctx["ledger"], reason)
     ctx["decided"] = "model"
-    return _plan_update(_wrap_up_plan(_has_frames(state.get("messages") or []),
+    return _plan_update(_wrap_up_plan(_has_frames(_turn_tail(state)),
                                       reason=word),
                         int(state.get("plan_rounds") or 0), advance=False)
 
@@ -519,21 +526,33 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     if convergence_verdict(ledger, rounds=rounds, budget=BUDGET)["kind"] == "budget":
         return _stop_update(state, ctx, "budget")
 
-    # ② 当前文章读取快道（生产 `rounds == 0 and not has_frames` 同一条守卫）：
-    #    主人当前页是文章详情页且这句引用了"这篇/我正在读"，系统就**强制**读那篇
-    #    （article_id 从 current_url 解析，不过模型的手）——那是"零工具却声称读过了"
-    #    在结构上不可能的那一格。**进循环后再判＝生产注里写的那个死循环陷阱**。
-    if rounds == 0 and not _has_frames(messages):
-        fast = _article_fast_path(ctx["user_msg"],
-                                  _page_ctx(messages, ctx.get("role")))
-        if fast:
-            logger.info("[react_arm] 文章读取快道命中，强制读 article_id=%s（零 LLM）",
-                        (fast.get("params") or {}).get("article_id"))
-            record("planner", "fastpath", kind="article_read", round=rounds,
-                   tools=[str(t) for t in (fast.get("tools") or [])])
-            ctx["decided"] = "execute"
-            # 快道**不吃决策预算**（零 LLM 出口，见模块头注的口径偏差）。
-            return _plan_update(_fast_plan(fast), rounds, advance=False)
+    # ② 首轮的五条确定性快道（生产 `rounds == 0 and not has_frames and fastpath_on`
+    #    同一条守卫）。命中即拿走这一轮的决策权——**零 LLM**。
+    #
+    #    ⚠️ **守卫里的"有没有帧"必须读本轮窗口**（20261019 修，资产对齐 C）：这里此前
+    #    读的是整条 `state["messages"]`，而它含 DB 历史——历史里只要有一条 ToolMessage
+    #    （生产注入的 20 条里完全可能有），这个守卫就**恒假**，五条快道在多轮会话里
+    #    一条都命中不了。生产读的是 `_has_frames(_turn(state))`（`graph.py:6093`），
+    #    同一件事、只是坐标来自冻结的 `turn_start`；本臂没有那个坐标，用"最后一条
+    #    HumanMessage 之后"（`_turn_tail`），与 `_window` 同一切法。
+    #
+    #    ⚠️ **`advance` 与生产对齐（不再 `advance=False`）**：生产那五条出口用的都是
+    #    `_plan_update(x, rounds)`（默认 advance=True）。本臂此前写 `advance=False`，
+    #    理由是"零 LLM 出口不该吃预算"——那句话出自 `graph._plan_update` 的 docstring，
+    #    但**生产实际没这么做**，而且 `advance=False` 的合法前提是"配一个进度守卫"
+    #    （同 `_plan_exec_next_card` 的 `plan_task_id`/`plan_cursor`）。快道没有守卫：
+    #    一条产出零工具的快道（导航到不存在的页面 ⇒ 只有注记、没有帧）执行完
+    #    `rounds` 没动、帧也没有 ⇒ 下一轮**同一条快道再命中一次**，原地打转。
+    #    照生产写 = 同时修掉这个潜在死循环。
+    if rounds == 0 and not _has_frames(_turn_tail(state)):
+        _fp = fast_path(state, user_msg=ctx["user_msg"], page_ctx=ctx["page_ctx"])
+        if _fp is not None:
+            _plan, _kind = _fp
+            logger.info("[react_arm] %s 快道命中（零 LLM）: %s", _kind, _plan.get("tools"))
+            record("planner", "fastpath", kind=_kind, round=rounds,
+                   tools=[str(t) for t in (_plan.get("tools") or [])])
+            ctx["decided"] = "execute" if plan_has_tools(_plan) else "model"
+            return _plan_update(_fast_plan(_plan), rounds)
 
     # ③ 一次决策。`bind_tools` **不传 `parallel_tool_calls`**（生产 planner 那边是
     #    `parallel_tool_calls=False`）：本线容忍一轮多条调用，合并成一份 `plan_obj`、
@@ -548,7 +567,8 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                        exc_info=True)
         ctx["wrap_up"] = _crash_text(ledger, e)
         ctx["decided"] = "model"
-        return _plan_update(_wrap_up_plan(_has_frames(messages), reason="内部错误"),
+        return _plan_update(_wrap_up_plan(_has_frames(_turn_tail(state)),
+                                          reason="内部错误"),
                             rounds, advance=False)
     ctx["draft"] = resp
 
@@ -669,9 +689,13 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 清单**已定稿**的调用（确认轮的签名体、特效切换快道的双 spec）走
             # `run_specs`：它们的产出**本身就是**计划，再实例化一次会把它改坏
             # （理由见 `react_line.WorkflowExecutor.run_specs` 的 docstring）。
+            # 判据是 `is not None`（**不是真值**）：`specs` 存在但为空列表 = "这一份计划
+            # 定稿了、只是没有工具要跑"（导航到不存在的页面那类），与"没给清单、要按
+            # `params` 实例化"是两件事。用真值判会把前者悄悄退回实例化——而实例化出来
+            # 的东西与定稿的那份**未必一样**，这正是本格要防的。
             _final = (c or {}).get("specs")
             text, n_tools = (executor.run_specs(workflow, [str(s) for s in _final])
-                             if _final else
+                             if _final is not None else
                              executor.run(workflow, dict((c or {}).get("params") or {})))
             if not n_tools:
                 # 纯应答技能（chat 一类）：零工具 ⇒ **不发帧**（生产那一轮
@@ -951,12 +975,20 @@ def make_ctx(*, config: RunnableConfig | None, principal: Any, role: str | None,
         "每条工具帧是哪一条调用发的"（见 `_pair_frames`）。
     """
     ledger = RunLedger()
+    # `page_ctx` 在**这里渲染一次**、由 ctx 分发（20261019）：它此前只在 `planner_node`
+    # 里现算，而 `WorkflowExecutor` 也要它（屏幕文案创作的第二个入参）⇒ 两处各算一次
+    # 就是两处取值。它与 `user_msg` 同寿命（整个请求内不变：它读的是输入里那条
+    # `[System: …]` 消息，后续轮次只往 messages 尾部追加），所以放在这里不引入"逐轮
+    # 冻结"那种错。
+    page_ctx = _page_ctx(list(state.get("messages") or []), role)
     executor = WorkflowExecutor(real_tools if real_tools is not None else {}, ledger,
                              role=role, principal=principal, user_msg=user_msg,
-                             grant=state.get("confirm_grant"), state=state)
+                             grant=state.get("confirm_grant"), state=state,
+                             page_ctx=page_ctx, display_text=display_text)
     return {
         "ledger": ledger, "executor": executor,
         "principal": principal, "role": role, "user_msg": user_msg,
+        "page_ctx": page_ctx,
         "config": config,
         "system_prompt": None, "draft": None, "wrap_up": "",
         "correction": "", "corrected": False, "decided": "model",
@@ -1186,7 +1218,7 @@ def _system_prompt(state: AgentState, ctx: dict) -> str:
     # 注入值一次算好、一次渲染（`_render_planner_prompt` 是**唯一**渲染点，它只负责
     # 拼字符串；逐格对应与理由见 `react_parity.planner_prompt_args`）。
     _args = planner_prompt_args(
-        state, role=role, page_ctx=_page_ctx(messages, role), round_info=_ROUND_INFO,
+        state, role=role, page_ctx=ctx["page_ctx"], round_info=_ROUND_INFO,
         user_msg=user_msg, ledger_frame=ledger_frame,
         correction=str(ctx.get("correction") or ""), deny=denied(state),
         frames_txt=_frame_texts(_turn_tail(state)))

@@ -33,17 +33,23 @@
 ## 各段的接法与理由
 
 逐段写在各段自己的头注里（它们是判据的一部分，不是背景说明）：确认轮 §A、上下文装配 §B、
-五条快道 §C、写目标拒绝链 §D、剔空纠偏 §E、收尾去重 §F、任务登记 §G。
+五条快道 §C、屏幕文案创作 §C′（显示快道的前置件）、写目标拒绝链 §D、剔空纠偏 §E、
+收尾去重 §F、任务登记 §G。
 """
 from __future__ import annotations
 
 import logging
+import re
 
 from agent.arg_refs import ref_hints
 from agent.block_reasons import denied_workflows
-from agent.deterministic_plan import _intent_hints, _wrap_up_plan
-from agent.graph import _confirm_grant_plan
-from agent.prompt_context import (_doc_anchors, _has_frames, _recent_tail,
+from agent.deterministic_plan import (_article_fast_path, _display_fast_path,
+                                      _effect_switch_fast_path, _intent_hints,
+                                      _nav_fast_path, _referent_nav_fast_path,
+                                      _wrap_up_plan)
+from agent.graph import _confirm_grant_plan, _create_display_text, _fastpath_on
+from agent.prompt_context import (_doc_anchors, _has_frames,
+                                  _last_assistant_utterance, _recent_tail,
                                   _short_reply_hint, blocked_rows)
 
 logger = logging.getLogger(__name__)
@@ -138,6 +144,79 @@ _NON_FIRST_ROUND = "（非首轮决策：短应答语义已在上轮兑现）"
 _NO_LEDGER = "（本轮没有去读待办台账）"
 _NO_REFLECTOR = "（本决策轮无复盘建议）"
 _NO_CORRECTION = "（本决策轮无纠偏提示）"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §C 首轮的五条确定性快道：顺序、守卫、命名与生产逐条同源
+# ══════════════════════════════════════════════════════════════════════════════
+# `page_ctx` 里当前特效那一格的正则——**与生产 `_planner_preflight` 逐字同一句**。
+# 它是 `_effect_switch_fast_path` 的入参之一（旧效果取值顺序里"当前开着且非目标的
+# 其它效果"那一档），所以这一句也必须同源：换个写法（比如容忍空格）会让同一条消息
+# 在一臂命中、另一臂落回 LLM。
+_CURRENT_EFFECTS_RE = re.compile(r"current_effects=([^;\]]+)")
+
+
+def fast_path(state, *, user_msg: str, page_ctx: str) -> tuple[dict, str] | None:
+    """五条确定性快道 → `(plan_obj, kind)`；一条都不命中 ⇒ None（落回 LLM）。
+
+    **顺序是判据的一部分**，与生产 `graph._planner_preflight` 逐条同：
+    nav → referent_nav → display → article → effect_switch。换顺序会让"两句话都能
+    命中两条快道"的那些输入在两臂上落到不同的技能上——那种差不是策略差。
+
+    `kind` 就是 trace 的载荷（生产那一格也是这么分的：`record("planner", "fastpath",
+    kind=…)`），所以它必须逐字相同：`eval` 侧读的是这一格，换个名字等于两臂的
+    fastpath 分布对不上。
+
+    **守卫留在调用方**（`rounds == 0 and not has_frames`）：本臂的"有没有帧"读法与
+    生产不同（本臂没有 `turn_start` 冻结，用的是"最后一条 HumanMessage 之后"），
+    把那句话搬进来等于把两个不同的量塞进同一个函数。`AGENT_FASTPATH` 那一档在这里
+    读（**唯一读口仍是 `graph._fastpath_on`**），因为它管的就是这一整块跑不跑。
+
+    ⚠️ **快道的产出本身就是计划**：调用方必须走 `run_specs`（清单已定稿），不能拿
+    `workflow`+`params` 重新实例化。`effect_switch` 是硬证据——它返回**两条 spec**
+    （关旧 + 开新），而 `effect` 技能模板只有一条，重跑一遍 `instantiate_plan` 会把
+    它撕成一条；而"模型反复丢目标效果半边"正是这条快道存在的全部理由。
+    """
+    if not _fastpath_on():
+        return None
+    nav = _nav_fast_path(user_msg)
+    if nav is not None:
+        return nav, "nav"
+    referent = _referent_nav_fast_path(
+        user_msg, _last_assistant_utterance(list(state.get("messages") or [])))
+    if referent is not None:
+        return referent, "referent_nav"
+    display = _display_fast_path(user_msg)
+    if display is not None:
+        return display, "display"
+    article = _article_fast_path(user_msg, page_ctx)
+    if article is not None:
+        return article, "article_read"
+    m = _CURRENT_EFFECTS_RE.search(page_ctx)
+    switch = _effect_switch_fast_path(user_msg, m.group(1) if m else "")
+    if switch is not None:
+        return switch, "effect_switch"
+    return None
+
+
+def display_text(user_msg: str, page_ctx: str) -> str:
+    """屏幕文案创作（`device_oled_display` 的 `text` 缺失时）——直调生产那一份。
+
+    **为什么它是快道的前置件、不是可选的锦上添花**：`_display_fast_path` 产出的计划
+    是 `device_oled_display({})`——`params` 里**故意不填 text**，因为屏幕文案由
+    **execute 侧**结合对话创作（快道自己的 docstring 写着这件事，技能模板
+    `instantiate_plan("device_display", {})` 也是这么长的）。生产那条路在
+    `graph.execute_node` 里补这一步（`if ref_err is None and name ==
+    "device_oled_display" and not args.get("text")`）。
+
+    ⇒ 只接快道、不接这一步，形状是「快道把决策权拿走了，而只有模型才会填的那个参数
+    没人填」：工具收到一个空 `text`、验收判 BLOCK，主人看到一次**失败的上屏**——比
+    "快道没接、仍由模型决定"更差。这正是本模块纪律③说的那种"接一半"。
+
+    调用点在 `react_line.WorkflowExecutor.run_specs`（逐 spec 解析出 args 之后、调用
+    工具之前），与生产的落点同层。
+    """
+    return _create_display_text(user_msg, page_ctx)
 
 
 def denied(state) -> set[str]:
