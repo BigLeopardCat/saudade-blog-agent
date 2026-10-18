@@ -4,6 +4,9 @@
 # **只警告，恒退 0。** 这不是门禁：该不该立刻 bump pin 由人决定（一次纯注释改动
 # 完全可以攒着跟下一个真改动一起发），这里只负责把"你忘了"这件事说出来。
 #
+# 20261019 起也在 PR 上跑（`EVENT_NAME=pull_request`，区间由 eval.yml 传 base.sha..merge）：
+# 漂移最常见的时刻就是 PR 里，等合并后才说就晚了。
+#
 # 为什么值得一条守卫：本仓 `frontend/public/live2d-widgets/` 是**源码**，而线上跑的
 # 是父仓 `frontend/widget.lock.json` 里钉住的那个 sha 稀疏检出来的**副本**。改了这里
 # 却不回父仓 bump pin ⇒ 改动永远不上线，而**没有任何东西会变红**：本地绿、CI 绿、
@@ -30,9 +33,11 @@ EVENT_NAME="${EVENT_NAME:-push}"
 BEFORE="${BEFORE:-}"
 SHA="${SHA:-HEAD}"
 
-# ① 只有 push 才有"这次改了哪些文件"这回事
-if [ "$EVENT_NAME" != "push" ]; then
-  note "事件是 $EVENT_NAME（不是 push），没有可比的提交区间，跳过 pin 漂移比对。"
+# ① 只有 push 与 PR 才有"这次改了哪些文件"这回事。
+#    PR 用 `base.sha..merge` 这个区间（eval.yml 把 BEFORE/SHA 两个 env 按事件类型填好，
+#    语义与 push 那一趟相同）—— 漂移提示最有用的时刻恰恰是 PR 里，别等合并后才说。
+if [ "$EVENT_NAME" != "push" ] && [ "$EVENT_NAME" != "pull_request" ]; then
+  note "事件是 $EVENT_NAME（既不是 push 也不是 pull_request），没有可比的提交区间，跳过 pin 漂移比对。"
   exit 0
 fi
 
