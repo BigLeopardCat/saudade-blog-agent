@@ -35,16 +35,6 @@
 
 ## 待办（已知缺口，条件已满足，缺的是人）
 
-- **PR 上跑 CI**。今天 `Eval Gate` 只 `push: branches: [main]` ⇒ **外部贡献者的 PR 没有任何
-  自动检查**，只能靠本机自跑 + 维护者人工复核。要加 `pull_request` 就得先解决一个结构性难题：
-  门禁里有一步**跨语言守卫**需要一枚只读凭据去读一个**私有**父仓，而 GitHub **不向 fork 的
-  PR 传 secret**。三条路各有代价——(a) fork PR 上跳过那一步并**响亮地**在日志与 job summary
-  里写明"这一步在本 PR 上无法运行，合并后会补跑"；(b) 把不依赖父仓的部分拆成独立 job，
-  只在 fork 时跑它；(c) 干脆不跑。本仓对"静默跳过"的容忍度是零，所以 (a) 必须是被显式记下的
-  跳过，不能是"条件不满足就没这回事"。**这条没做之前，PR 上的绿灯/红灯都不代表任何事**——
-  因为根本没有绿灯。
-- **看板娘前端与父仓 pin 的 drift 提示**已有一条只警告的独立 job（`widget-pin-drift`），
-  但它只在 `main` 上跑，fork PR 同样看不到。
 - **删会话时清 checkpoint（跨仓，另一半在父仓）**。本仓那一半 20261018 已落地：
   `DELETE /checkpoint/{conversation_id}`（`agent/checkpoint.py::delete_thread`，
   判据 `tests/test_checkpoint_cascade.py` ①②）。**父仓那一半还没接**——要在
