@@ -36,6 +36,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
 
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
 from agent.graph import (REFLECT_MAX_ROUNDS, _article_fast_path,
                          _check_spec, _display_fast_path, _effect_switch_fast_path,
                          _nav_fast_path, _plan_workflow, _scan_action_intents,
@@ -2728,7 +2730,10 @@ def test_gate_repeat_reply():
           o8["done"] is True and not o8.get("fallback_text"), str(o8)[:60])
 
     # ── 接线锁：gate 1b 走的是新入口（不是又接回单条那条老路）──────────────
-    _GSRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+# 取值点跟着代码搬（20261019）：写参数落位与拒答那一族住进了
+# `agent/write_grounding.py` ⇒ 判据字面一个字没动，只把"读 graph.py 全文"
+# 换成"读这一族的全部文件"（`tests/_ctx_src.py::write_guard_src`）。
+    _GSRC = _ctx_src.write_guard_src()
     check("  gate 1b 调的是 `_repeat_reason` + `_recent_ai_replies`",
           "_repeat_reason(reply, _recent_ai_replies(msgs)" in _GSRC)
     check("  兜底文案不再说死「上一轮」（现在可能是更早的轮次）",
@@ -5132,8 +5137,10 @@ def test_write_ledger_note_round():
     check("gate 洞④：没有锚时照旧判（豁免不是把判据关掉）",
           _hit is not None and _hit[0] == "site_absence_claim_without_tool",
           str(_hit)[:90])
-    _src = (ROOT / "agent"
-            / "graph.py").read_text(encoding="utf-8")
+# 取值点跟着代码搬（20261019）：写参数落位与拒答那一族住进了
+# `agent/write_grounding.py` ⇒ 判据字面一个字没动，只把"读 graph.py 全文"
+# 换成"读这一族的全部文件"（`tests/_ctx_src.py::write_guard_src`）。
+    _src = _ctx_src.write_guard_src()
     # 20260926 起是**四处**（第四处 = `param_problem` 纠偏后仍不齐的确定性收口，
     # planner_node 里那条 `param_terminal`）：它同样复用锚常量、没有手抄字面量。
     # 20260929 批 G 起是**五处**（第五处 = 「不成账」的零工具轮那条 Layer B 兜底）：
