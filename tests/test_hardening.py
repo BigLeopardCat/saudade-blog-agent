@@ -524,8 +524,15 @@ def test_review_endpoint_hardening():
           and server.ReviewRequest(content="x", uid=721).uid == 721)
 
     seen: list[str] = []
+    # 桩的签名**照抄真的那个**（`review(text, llm=None, on_usage=None)`），不写
+    # `lambda *a, **kw`：这个桩的职责是"不调 LLM 走完端点"，而签名是**契约**——
+    # 20261018 批 4 给 `review` 加了 `on_usage=`，写 `*a, **kw` 的话那一处接线断了
+    # 也没人知道（端点在桩上永远是绿的），而写显式签名会当场红、逼人来看一眼
+    # "端点多传的这个关键字对不对"。实测就是这么红的：`TypeError: <lambda>() got an
+    # unexpected keyword argument 'on_usage'`。
     with patch("agent.moderator.review",
-               lambda t: seen.append(t) or {"verdict": "pass", "reason": ""}):
+               lambda t, on_usage=None:
+                   seen.append(t) or {"verdict": "pass", "reason": ""}):
         # ① 开关关（代码默认）= 滚动期的兼容行为：无头照常审核，只记 WARNING
         settings.agent_require_assertion = False
         out = server.review_message(_Req(), server.ReviewRequest(content="你好", uid=721))
