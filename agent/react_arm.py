@@ -682,23 +682,11 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None,
         ctx["decided"] = "model"
         return _plan_update(_refused, rounds)
 
-    # ⑥b 剔空纠偏（生产 `_decide_late_correct` 的最后一格，20261019 接上）：点名的工具
-    #     **一个都没执行**（`instantiate_plan` 把对不上的那些记在 `dropped` 上）⇒ 把
-    #     "这些工具在哪条通道上"写给它看、**重新决策一次**。理由与现场见
-    #     `react_parity.drop_correction`。
-    #
-    #     位置照生产：在**决策循环的尾巴上**（拒绝链之后）。`ctx["corrected"]` 是
-    #     "只纠一次"的那一格（与 ④ 的意图纠偏**共用**同一个旗子——生产也是同一格
-    #     `c.correction` 非空即不再纠，两条纠偏互斥）。
-    if _plan.get("dropped") and not (_plan.get("tools") or []):
-        if not ctx.get("corrected"):
-            ctx["corrected"] = True
-            ctx["correction"] = drop_correction(_plan["dropped"], ctx.get("role"))
-            record("planner", "drop_correct", dropped=_plan["dropped"], round=rounds)
-            logger.warning("[react_arm] 点名工具全被剔除（本轮零工具）→ 剔空纠偏重决策：%s",
-                           "、".join(str(d) for d in _plan["dropped"]))
-            ctx["decided"] = "planner"      # 打回自己重决策**一次**
-            return {}
+    # ⑥b 剔空纠偏（生产 `_decide_late_correct` 的最后一格，20261019 接上）——判据与
+    #     现场见 `_drop_correct_stage`。
+    _dc = _drop_correct_stage(ctx, _plan, rounds)
+    if _dc is not None:
+        return _dc
 
     # ⑥c 零工具轮的确定性终局（生产 `_finalize_unaccounted` 的三格，20261019 接上）：
     #     剔空纠偏之后仍然零工具 / 参数不齐 / 记账字段全空——三种形态都**不该交给
@@ -725,8 +713,25 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None,
         _sync_calls(_plan)
         return _plan_update(_plan, rounds)
 
+    # ⑧ 出口路由（20261019 修，资产对齐 J）：**零工具 ⇒ 去 narrator，不是去 execute**。
+    #    判据与生产 `graph.route_after_planner` 逐字同（`"execute" if plan["tools"]
+    #    else "model"`），也与本节点上面三条出口（确认轮 / 快道 / 去重终局）逐字同
+    #    ——它们写的一直是 `plan_has_tools(_plan)`，只有这最后一条硬写着 `"execute"`。
+    #
+    #    ⚠️ **这一格此前是一个死循环**（20261019 实测，纯 `chat` 轮）：零工具的出口去
+    #    execute ⇒ execute 逐条跑 `calls`（空的）⇒ 什么都没做 ⇒ `route_after_execute`
+    #    见"无受阻项"又回 planner ⇒ planner 再问一次模型 ⇒ 同样零工具 ⇒ …… 直到撞
+    #    `MAX_PLAN_ROUNDS` 才收尾。实测形状：一句"你好"要 **4 次决策调用 + 4 次 execute**，
+    #    而最后那次叙述是在预算用完之后才发生的。代价是三重的——钱（每轮多问 3 次）、
+    #    时间（每轮多三次往返）、以及**读数**（模型被问同一句话四遍，四遍的答案可以不同，
+    #    而 golden 只看最后一遍）。
+    #
+    #    为什么它会存在：`8a82b83` 把第二条臂从 `create_agent` + 中间件换成真 StateGraph
+    #    时，中间件那版"零工具轮就是收尾轮"是**结构性**的（循环自己会停），拆成显式节点
+    #    之后这条边要有人写出来——上面三条出口写对了，这一条漏了。**20261012 那次对照
+    #    跑的是旧形状**，所以这个形状从来没有被比过。
     _sync_calls(_plan)
-    ctx["decided"] = "execute"
+    ctx["decided"] = "execute" if plan_has_tools(_plan) else "model"
     return _plan_update(_plan, rounds)
 
 
@@ -808,6 +813,37 @@ def _register_stage(state, config, ctx: dict, sink: list, decided, plan_obj: dic
         ctx["decided"] = "model"
         return new_plan, _plan_update(new_plan, rounds, explicit)
     return new_plan, None
+
+
+def _drop_correct_stage(ctx: dict, plan_obj: dict, rounds: int) -> dict | None:
+    """⑥b 剔空纠偏：点名的工具**一个都没执行** ⇒ 纠偏重决策一次。
+
+    → 命中时返回**提前返回的那个更新**（`{}` = 打回自己重决策一次）；不命中 ⇒ `None`。
+    调用方判 `is not None`（不能判真假：命中时返回的正是空 dict）。
+
+    现场（20260921 22:34，见 `react_parity.drop_correction`）：管理员问某篇草稿的标签，
+    planner 点名 `list_admin_notes` **意图对路**，但那工具不在 content_query 的白名单里
+    ⇒ 清单被剔空 ⇒ 旧行为当收尾轮处理 ⇒ narrator 零帧编话 ⇒ gate 打回 ⇒ 主人看到一句
+    降级回复**且这一轮直接结束**（原话："居然就直接结束而不是重新规划执行"）。
+
+    位置照生产：在**决策循环的尾巴上**（拒绝链之后）。`ctx["corrected"]` 是"只纠一次"
+    的那一格（与 ④ 的意图纠偏**共用**同一个旗子——生产也是同一格 `c.correction`
+    非空即不再纠，两条纠偏互斥）。
+
+    为什么单起一个函数：`_planner_decide` 的分支数压在复杂度闸（`C ≤ 30`）上，而闸的
+    作用正是"读到第 40 个分支的人已经看不出漏了哪条"。
+    """
+    if not (plan_obj.get("dropped") and not (plan_obj.get("tools") or [])):
+        return None
+    if ctx.get("corrected"):
+        return None
+    ctx["corrected"] = True
+    ctx["correction"] = drop_correction(plan_obj["dropped"], ctx.get("role"))
+    record("planner", "drop_correct", dropped=plan_obj["dropped"], round=rounds)
+    logger.warning("[react_arm] 点名工具全被剔除（本轮零工具）→ 剔空纠偏重决策：%s",
+                   "、".join(str(d) for d in plan_obj["dropped"]))
+    ctx["decided"] = "planner"      # 打回自己重决策**一次**
+    return {}
 
 
 def _sync_calls(plan_obj: dict) -> None:
