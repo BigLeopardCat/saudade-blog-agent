@@ -222,6 +222,26 @@
   **「关停排空」搁置**：不自己装 SIGTERM handler（uvicorn 已有优雅停机，自己装就是顶掉它），
   真正的缝是跨仓的——父仓 `TimeoutStopSec=120` < 本仓 `STREAM_TOTAL_TIMEOUT=300`，
   走到第 120 秒还在跑的流会被 SIGKILL，那时 `end_reason` 根本写不出来。
+- **两条侧任务的 token 用量都开始记了，两条走不同的路（批 4）**：此前 `llm_usage.py`
+  头注写着"审核与摘要都运行在没有 trace 上下文的位置"——对摘要那条是**错的**。
+  `summarizer` 跑在**同一轮对话**里（`server._summarize_dialogue` 经
+  `_submit_with_context` 提交，`copy_context` 把 recorder 带进 worker 线程）⇒ 直接落
+  本轮 trace 的 `llm_done`（`node=summarizer`，键与另外四处一致）。`moderator` **确实**
+  没有 trace 上下文（审核是留言板的独立请求、不挂任何一轮对话），而 `utils.trace.record()`
+  没有 recorder 时是**静默空转** ⇒ 写下去等于生产上什么都没发生；给它单开一份 trace 又会
+  往 `logs/agent/traces/` 塞非对话形状的文件（那一族的读者都按"一轮对话"读）。所以它把
+  用量交给调用方（`review(..., on_usage=…)`），由审核端点打进既有那条 `[review]` 日志行。
+  **返回值一个键都没加**——那是 Rust 读的响应体，不为一行日志动跨语言契约。
+  失败路径一律**不记**（异常时是"量不到"不是"用了 0"，不编一个出来）。判据
+  `tests/test_side_tasks.py` ⑧，反控：摘掉任一条的实现只红它自己那一条。
+- **受阻原因码多了一条"生产侧"判据（批 4，判据）**：实测清点生产侧能发出的码一共 20 个、
+  **20/20 都已在表里**——缺的不是登记，是看着这件事的判据。`tests/test_block_reasons.py`
+  ③ 判的是**取回侧**，新增的 ⑥ 从源码现取生产侧（`agent/refs.py` 的字面返回 +
+  `authz`/`adminops_target`/`idem`/`graph` 的 `REASON_*` 常量）断言 ⊆ `REASONS`。
+  反控实测：往 `agent/authz.py` 加一个未登记的新码 ⇒ 当场红。
+  另：`tests/test_ready.py` ① 的前提改为**判据自己摆**——离线套件跑在
+  `SAUDADE_IGNORE_ENV_FILE=1` 下（`.env` 不读），它原先断言"凭据在位 ⇒ 200"是继承了
+  运维取值 ⇒ **单跑绿、进套件红**（实测撞上一次）。
 
 ## 20261017
 

@@ -23,6 +23,10 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+
+from agent.llm_usage import usage_fields
+from utils.trace import record
 
 logger = logging.getLogger(__name__)
 
@@ -87,13 +91,29 @@ def clean_summary(out: str) -> str:
 
 
 def summarize(user_msg: str, history: list, old_summary: str, llm=None) -> str:
-    """生成合并摘要；失败/空 → ""（调用方不入库，保留旧摘要）。"""
+    """生成合并摘要；失败/空 → ""（调用方不入库，保留旧摘要）。
+
+    **用量进本轮 trace（20261018 批 4）**：这条调用此前在 trace 里一个字都没有——
+    只有它的后果（下轮注入的摘要变了）看得见，成本看不见。它跑在**同一轮对话**里
+    （`server._summarize_dialogue` 经 `_submit_with_context` 提交，那里的 `copy_context`
+    把 recorder 一并带进 worker 线程）⇒ `record()` 直接命中本轮 trace，不需要"侧任务
+    自己的账本"。事件名与另外几处 `llm_done` 一致；用量键由 `usage_fields` 给
+    （**缺键 ≠ 0**，见 `agent/llm_usage.py` 头注）。
+
+    失败路径**不记**：异常时没有可读的响应，那是"量不到"而不是"用了 0"，不编一个出来。
+    """
     if llm is None:
         from models import get_llm
         llm = get_llm(streaming=False, max_tokens=256, enable_thinking=False)
+    _t0 = time.monotonic()
     try:
-        out = (llm.invoke(build_prompt(user_msg, history, old_summary)).content or "")
+        resp = llm.invoke(build_prompt(user_msg, history, old_summary))
+        out = resp.content or ""
     except Exception as e:
         logger.warning("独立摘要生成失败（保留旧摘要）: %s", e)
         return ""            # fail-empty：调用方据此不入库
+    # 记账排在 `clean_summary` **之前**：清洗若抛异常，这一次调用是**真的发生过**、
+    # 钱也是真花了——账不该跟着抛。
+    record("summarizer", "llm_done", duration_s=round(time.monotonic() - _t0, 2),
+           **usage_fields(resp))
     return clean_summary(out)
