@@ -16,6 +16,29 @@
 
 ## 20261019
 
+- **agent 能读、能审「文章评论」了：与留言同形，但**处处分家**（⚠️ 有对外行为变更）。五件：
+  ① **三件新工具**：`list_admin_comments`（后台评论名册，读 `GET /api/protect/comments`）、
+  `audit_comment`（人工复核为通过/驳回）、`delete_comment`（删，软删）。此前 agent 手里只有
+  **留言**（`talk` 表）那一侧，而站内是**两张表、两个后台页签**（`?tab=review` / `?tab=comment`）
+  ⇒ 主人说「评论」，它只能读留言、报出来的条数与他点进去看到的页面**对不上**，且**没有任何
+  东西会红**（两边的字面都合法）。三件工具的作用域、同意闸、确认卡、回执、幂等判据与留言族
+  逐条同形——差别只在**表、字段名与页签**，因此所有面向主人的文案都点名「**文章评论**（长在
+  某篇文章正文下面的，不是河灯留言）」，卡面还印它**挂在哪篇文章下**。
+  ② **台账第三族 `comment`**（前两族是 `board` 留言 / `quota` 额度）：待审评论与待审留言**分两份
+  读、分两段报**，`_LEDGER_FAMILY_TAG` 取 `commentId`。合族会让 narrator 把「评论还有 3 条」
+  说成「留言还有 3 条」——而主人点进去是另一个页面。另加一条**刻意只有「评论」两个字**的
+  预读正则：通用审核词（审核/复核/待审/驳回）不许搬进来，否则任何一句「审核一下」都会同时
+  预读两份队列。
+  ③ **后台待办多一行**：红点汇总的 `pendingComments` 与 `pendingReview` / `pendingQuota` 并列，
+  「另有一件/两件/三件」**按实际印出来的类数**取（此前恒印「两件」，额度为 0 时模型照着念成
+  「另有两件…」而主人只看见一件）。
+  ④ **技能三件 + 两处并入**：`comment_roster` / `comment_audit` / `comment_delete`（写技能
+  `roles=admin`，目标走**台账编号通道**）；`review_inbox` 从两件变三件（留言复核 + 评论复核 +
+  额度批准），`dashboard_todo_list` 从三读变四读（多一段「待审评论」）。
+  ⑤ **判据**：`tests/test_workflows.py` 的工具数 67→70、台账编号通道三件→四件；`tests/
+  test_pending_ledger.py` 两族→三族；`tests/test_todo_schedule.py` 断言留言与评论是**两次不同的
+  读**；`tests/test_authz.py` 强制确认清单 29→31。`eval/judge_registry.json` 记下新增的
+  `_COMMENT_INTENT_RE`（`open` 类，与额度族同一条出路）。
 - **`CHECKPOINT_DSN` 必须指业务库之外的独立库：口径反转 + 两件让「指错库」看得见的东西**
   （⚠️ **agent 对外行为零变更**，改的是**运维口径与可观测面**）。三件：
   ① **口径反转**：采纳那天写的是「生产候选 = 业务库、**不建议**再另起一个专库」，**这条取舍
@@ -43,6 +66,34 @@
   实测表、`docs/adr/adr-0012` 新增《口径更正（20261019）》、`tests/test_write_idempotency.py`
   块① 的措辞，都写明它们量的是**续跑**那一格。**断言一条都没改**（续跑那一格仍然有效且必要，
   只是它盖的不是生产）。**这是已知缺口**，两条修法候选与触发条件记在 ADR-0012 里。
+
+- **checkpoint store 与幂等账有保留治理了（新增 `eval/pg_retention.py`）**（⚠️ **agent 对外行为
+  零变更**，改的是**数据保留与审计面**）。起因：20261018 起 agent 的上下文落进 PG，而
+  `eval/retention_manifest.py` 那张登记表**只审计盘上的树**（`logs/` 与 `eval/report/`）⇒ 它对
+  PG 表是瞎的，`checkpoints` 那一族**零清理**——实测每个 checkpoint 存**整份快照**（`messages`
+  通道的 blob 随会话长度 1417→6646 字节单调长），而 checkpoint 数随轮数线性长 ⇒ **存储按会话
+  长度平方增长**（同族坑第五次：R2 `--keep 3`、logrotate `rotate 14`、traces 保留期、
+  `logs/archive`——保留策略必须由一个**真会跑的东西**执行，写进配置或登记表里不算）。四件：
+  ① 新执行者 `eval/pg_retention.py`（照 `eval/trace_retention.py` 的形状：**默认只列不删**、
+  `--apply` 才动手；**与库无关**，DSN 从 `CHECKPOINT_DSN`/`--dsn` 读，不硬编码库名），接进
+  `scripts/nightly_regression.sh` 末位。线程的「最近活动」取自 `max(checkpoint->>'ts')`
+  （`checkpoints` **没有时间列**，时间只住在那个 JSONB 里）；**取不到时间（NULL）的线程永不裁**
+  ——判据缺失时不动手，否则一次 `ts` 形态漂移就是一次**静默全库删除**。
+  ② **不变量「账与 checkpoint 必须一起裁」**（ADR-0012 要堵的那个洞）：同一个 cutoff、**同一个
+  事务**、**commit 前断言**；断言不成立就整个回滚（宁可什么都不删，也不留下"checkpoint 没了、
+  账还在"的半裁状态）。⚠️ **如实的残余**：`agent_write_idem` **没有 `thread_id` 列**（键是
+  sha256）⇒ 口径是「**同窗**」不是「同一批线程」，长效会话里早于 N 天的 checkpoint 会留下、
+  对应的账行会被删——**方向是安全的**（重放只针对线程的**最新** checkpoint，而活跃线程的最新
+  checkpoint 必然在窗内），要结构性保证得给账表加 `thread_id` 列，列为后续。**保留期 30 天**
+  （与 `trace_retention` 同量级，远大于崩溃恢复窗口）。③ **归口**：登记表给类加一个可选 `store`
+  字段（缺省 `fs`，PG 写 `pg`），新增 `agent-checkpoint-store`（`managed`），审计器**跳过**
+  `store != "fs"` 的类（它不在盘上，硬塞进路径判据只会得到一条恒不命中的规则）。④ 判据两件：
+  `tests/test_pg_retention.py`（纯函数 + 很小的假连接，判**分类规则与事务形状**——三条反控各自
+  证明"把取不到时间的并进该裁"「去掉事务」「摘掉断言」会让判据红）、`tests/test_pg_retention_live.py`
+  （**真连一个库、真删一次、真回滚**，前提模式照 `test_checkpoint_setup_concurrent.py`：读
+  `SAUDADE_CKPT_TEST_DSN`、缺席报「未评估」退 0、`SAUDADE_REQUIRE_CKPT_TEST=1` 时退 1、DSN 指向
+  业务库当场拒跑）。**没有配 DSN 时它印一行"这一层没量"并退 0**——那是「前提不可用」，不是
+  「跑过了、没有可删的」。
 
 - **模块地图补全 + 10 处模块改名**（⚠️ **对外行为零变更**）。四件：
   ① **`docs/agent-architecture.md` §2 那张目录树此前已经烂了，而没有任何东西会红**：实测点名了
