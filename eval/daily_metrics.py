@@ -65,8 +65,8 @@ from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 枚举与读取各自只有一个实现（20260925/20260926）：布局或压缩形态一变，
 # 四个读取端不会各看一半语料。
-from trace_files import iter_trace_files, parse_trace_name  # noqa: E402
-from trace_io import load_trace  # noqa: E402
+from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
+from utils.trace_io import load_trace  # noqa: E402
 import token_cost_report as tcr  # noqa: E402
 import trace_metrics as tm  # noqa: E402
 

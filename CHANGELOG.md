@@ -38,6 +38,22 @@
   记录型文档（问题记录 / ADR / roadmap / 实验记录）**逐字保留当时的名字**，按既有惯例在文件头
   加「已改名」对照表。**五本台账只搬键名、数值一格未动**（ruff 774/150，比基线少 1）。
 
+- **`eval/trace_files.py` / `eval/trace_io.py` 搬进 `utils/`**（⚠️ **对外行为零变更**）。
+  合并 main 后 CI 红在 `tests/test_packaging.py` ①：生产代码 `agent/hostinfo.py::trace_stats`
+  引了 `eval.trace_files` / `eval.trace_io`，而 `eval` **不在 wheel 包列表里**——真发一只 wheel
+  出去，管理助手的运维报表就是 `ImportError`。**没有按"把 `eval` 加进包列表"绕过**（那会把
+  golden 语料与整套闸一起打进 wheel），而是把这两个**零依赖叶子**搬到 `utils/`：紧邻写入端
+  `utils/trace.py`，布局契约的两头从此同住一个包。
+  代价是包门面会被连带 import ⇒ `utils/__init__.py` 同日**收成空门面**（不再
+  `from .logging import setup_logging`——那一行会连带拉 `config.settings` 与 `.env`），唯一
+  调用方 `server.py` 改成直接 `from utils.logging import setup_logging`。**"离线读取端只吃
+  路径参数、不依赖应用配置"这条性质一个字没变**。`agent/hostinfo.py` 的 `_trace_readers()`
+  兜底（取不到就报"读不到"、不按 0 报）随之删掉：同一只 wheel 里不再有"取不到"这一档。
+  判据同步三处：`test_trace_io` ④ 的"全仓只有一处定义 `load_trace`"射程从 `eval/*.py`
+  **扩到全仓**；`test_trace_retention` ⑧ 改成**逐条列出该文件的 `import` 行**（原来靠子串
+  判断，会被新头注里的示例文字误伤）；`eval/module_baseline.json` 的 `server.py`
+  2657 → 2656 行（棘轮收一格）。**ruff 773/150，比基线少 2。**
+
 ## 20261018
 
 - **断点恢复落地（批 7）：图开始自持上下文，但默认仍不生效**。三处一起动，共用同一个

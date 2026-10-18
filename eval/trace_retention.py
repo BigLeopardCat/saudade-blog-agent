@@ -55,7 +55,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from trace_files import iter_trace_files, parse_stamp  # noqa: E402
+from utils.trace_files import iter_trace_files, parse_stamp  # noqa: E402
 
 # 与 logrotate 的 traces 块同址（生产 trace 目录，settings.trace_dir 的默认落点）
 DEFAULT_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"

@@ -79,7 +79,7 @@ sys.path.insert(0, "eval")
 
 from baseline_group import aggregate          # noqa: E402,I001  （逐条计数只有一处实现）
 from golden_trace import trace_root           # noqa: E402  （trace 根只有一处派生）
-from trace_io import load_trace               # noqa: E402  （trace 读取只有一处实现）
+from utils.trace_io import load_trace               # noqa: E402  （trace 读取只有一处实现）
 
 # stdout 编码：本仓 eval/ 脚本靠**被 import 时的副作用**包一次 utf-8（`baseline_group` 顶部那行），
 # 所以这里只补一次、且**只在还没包过的时候**。二次包裹会让前一个 wrapper 失去引用被 GC、

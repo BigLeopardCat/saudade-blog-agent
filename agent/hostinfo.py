@@ -33,6 +33,9 @@ import subprocess
 import time
 from datetime import datetime, timedelta
 
+from utils.trace_files import iter_trace_files
+from utils.trace_io import load_trace
+
 logger = logging.getLogger(__name__)
 
 # 博客仓库根（日志、trace 都在这下面）。与 settings.trace_dir 的部署约定一致。
@@ -185,44 +188,30 @@ def log_sizes(root: str = LOGS_DIR) -> list[dict]:
     return out
 
 
-def _trace_readers():
-    """`(枚举器, 读取器)` —— 走 `eval/` 那两个模块；取不到 ⇒ `(None, None)`。
-
-    ⚠️ **这个 import 方向是反的**（`agent/` → `eval/`），是故意的：那两个模块刻意
-    零依赖（只吃路径参数、不 import 应用配置，见各自头注），而**枚举只有一个入口**
-    是它们的立身之本——另写一份 glob 就是它们当初要消灭的那种漂移。要换掉这个方向，
-    得先把枚举搬到一个两边都引得动的位置。
-
-    **为什么要换**（20261018 实测）：本函数原来自己 `os.listdir(TRACES_DIR)` +
-    `fn.endswith(".json")`，那是 **20260925 之前**的平铺布局。布局改成"按天一层"
-    （`<root>/<YYYYMMDD>/`）之后，`os.listdir` 回的全是目录名 ⇒ 一份都进不了循环
-    ⇒ 报表上**天天**是"今日 0 轮 / 异常 0 / 质检拦截 0 / 权限拒绝 0"，而 `readable`
-    还是 `True`。**"缺键绝不编 0" 那一族里最坏的一种：它编的是一份全绿。**
-    （`tests/test_reports.py` 的夹具写的就是平铺布局 ⇒ 判据结构上看不见这个。）
-    """
-    try:
-        from eval.trace_files import iter_trace_files
-        from eval.trace_io import load_trace
-    except Exception:  # noqa: BLE001
-        logger.warning("[hostinfo] 取不到 eval.trace_files / eval.trace_io"
-                       " ⇒ trace 统计按'读不到'报（不按 0 报）")
-        return None, None
-    return iter_trace_files, load_trace
-
-
 def trace_stats(day_start: datetime | None = None) -> dict:
     """今日对话 trace 的概况：轮数 / 异常收尾 / 质检拦截 / shadow 权限拒绝。
 
     **按 mtime 过滤**一次（`day_start` 之后），因为归档、手工拷贝、按天目录的边界
     都可能把别的日子的文件带进来。`.json` 与 `.gz` 都算（压缩归档也是 trace 语料）。
+
+    ⚠️ **枚举必须走 `utils.trace_files`**（本仓的 trace 自 20260925 起按天分目录，
+    写侧 `utils/trace.py::_TraceRecorder.dump` 的布局契约与它同源）。**别在这里手写
+    `os.listdir` + `endswith(".json")`**——那是 20260925 之前的平铺布局（20261018
+    实测：本函数原来就这么写，`os.listdir` 回的全是目录名 ⇒ 一份都进不了循环 ⇒
+    报表上**天天**是"今日 0 轮 / 异常 0 / 质检拦截 0 / 权限拒绝 0"，而 `readable`
+    还是 `True`。**"缺键绝不编 0" 那一族里最坏的一种：它编的是一份全绿。**
+    `tests/test_reports.py` 的夹具写的正是平铺布局 ⇒ 判据结构上看不见这个。）
+
+    20261019：那两个模块从 `eval/` 搬到 `utils/`（生产代码只许 import 本仓的 wheel
+    包，见 `tests/test_packaging.py` ①），本函数原来的 `_trace_readers()` 兜底
+    （取不到就按"读不到"报）随之删掉——同一只 wheel 里没有"取不到"这一档了。
     """
     day_start = day_start or datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff = day_start.timestamp()
     rounds = abnormal = fallback = denied = 0
     unreadable = {"rounds": 0, "abnormal": 0, "fallback": 0, "denied": 0,
                   "readable": False}
-    iter_trace_files, load_trace = _trace_readers()
-    if iter_trace_files is None or not os.path.isdir(TRACES_DIR):
+    if not os.path.isdir(TRACES_DIR):
         return unreadable
     for p in iter_trace_files(TRACES_DIR):
         try:

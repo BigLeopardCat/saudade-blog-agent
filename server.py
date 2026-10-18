@@ -58,9 +58,8 @@ from agent.tasks import (TASK_CONSENT_ASK, TS_MMDD_HHMM_RE, advance_by_tools,
 # `agent/action_text.py` 后这里不再需要**（那两件仍从同一处 import，纪律不变：
 # 两侧不许各写一份归一）。
 from rag import search as rag_search, wordgraph
-from utils import setup_logging
 from utils.clock import format_local_now
-from utils.logging import get_trace_id, set_trace_id
+from utils.logging import get_trace_id, set_trace_id, setup_logging
 from utils.trace import finish_trace, record, start_trace
 
 logger = logging.getLogger(__name__)

@@ -6,6 +6,11 @@
 IO 语义，谁都能零成本引它。所以**枚举归 `trace_files.py`、读取归这里**：两个模块都只吃
 路径参数、不依赖应用配置（离线测试 / 夜间巡检 / 对账哨兵 / golden 草稿共用）。
 
+**20261019 从 `eval/` 搬到 `utils/`**：生产代码（`agent/hostinfo.py::trace_stats`）也要引
+这两个模块，而生产代码只许 import 本仓的 wheel 包（`tests/test_packaging.py` ①）。搬到
+`utils/` 的代价是包门面会被连带 import——所以同一天把 `utils/__init__.py` 收成了空门面
+（理由写在那边与 `trace_files.py` 头注里）。**"只吃路径参数"这条性质一个字没变。**
+
 **为什么 loader 必须只有一份**：此前这三份逐字相同的实现分别长在 `trace_alert.py` /
 `trace_metrics.py` / `trace_reconcile.py` 里，`golden_draft.py` 再借道 `trace_alert`
 取用——**`.gz` 那一支漏掉任何一个，那个脚本就静默少看一半语料**。这不是假想：

@@ -35,8 +35,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 仓根
 
-import trace_io  # noqa: E402
-from trace_files import iter_trace_files  # noqa: E402  （枚举的唯一实现）
+from utils import trace_io  # noqa: E402
+from utils.trace_files import iter_trace_files  # noqa: E402  （枚举的唯一实现）
 
 # 分族判据**只有一份实现**（agent/factblock.py）：D3 的射程与这里的量化口径必须同源，
 # 否则"能砍多少"这句话就不可核——两处各写一份 _WRITE_PREFIX_RE 正是会漂移的形状。
