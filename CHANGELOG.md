@@ -14,6 +14,30 @@
 
 **覆盖范围**：20260928 建立，回溯到 20260925（建立前一周）。更早的变更去 `git log`。
 
+## 20261019
+
+- **模块地图补全 + 10 处模块改名**（⚠️ **对外行为零变更**）。四件：
+  ① **`docs/agent-architecture.md` §2 那张目录树此前已经烂了，而没有任何东西会红**：实测点名了
+  3 个已不存在的文件（`adminops.py` / `helpers.py` / `native_plan.py`），磁盘上 38/81 个模块它
+  一个字都没提。根因是 `tests/test_docs_links.py` ④ 的正则要求路径**在反引号里且带 `/`**，而树里
+  写的是 `│   ├── foo.py`（裸名 + 缩进表目录）⇒ **整棵树在它射程之外**。现在 §2 逐条列全 81 个
+  （按族分组、一行一个职责），README 的缩略树改成"挑几个常找的 + 指向 §2"。
+  ② **新判据 `tests/test_module_index.py`**：按缩进推目录栈解析两处树，四条判据——幽灵路径、
+  漏列模块（磁盘 ⊆ 树）、文件行没写职责、同一路径两行；外加**覆盖率自检**（解析器一坏就会
+  "一条都没看见 ⇒ 全对"，所以另有一条独立正则计数与解析器对账）与 8 条正控。
+  ③ **10 处改名**：`agent/context.py` → `prompt_context.py`、`decisions` → `deterministic_plan`、
+  `entities` → `entity_digest`、`refs` → `arg_refs`、`frames` → `frame_contract`、
+  `probe` → `runtime_probe`、`absence` → `absence_claims`、`workflow_defs/{nav,navigation,reports}`
+  → `{nav_map,nav_skills,report_skills}`——都是"看名字猜不出装什么"。**协议值一个都没动**
+  （trace 事件名、`GOLDEN_ARM` 取值、`.env` 键、父仓帧契约）。**唯一的静默失效点是
+  `tests/test_turn_window.py` 的 `logging.getLogger("agent.context")`**：模块改名后它取到 0 条
+  记录也不报错——已同批改掉，并实测反控（把日志名改回旧名必红）。
+  ④ **合并 0 处**：六条候选逐条查过全有硬阻塞（臂名在冻结清单上、合并后 851 行超预算、
+  `__init__.py` 只做 re-export 是反惯例、两条侧任务失败取向相反、`textnorm.py` 有零词表锁、
+  `idem_pg` 是依赖面锁），**写进 §2 旁的注记**，免得下一个人再问一遍。
+  记录型文档（问题记录 / ADR / roadmap / 实验记录）**逐字保留当时的名字**，按既有惯例在文件头
+  加「已改名」对照表。**五本台账只搬键名、数值一格未动**（ruff 774/150，比基线少 1）。
+
 ## 20261018
 
 - **断点恢复落地（批 7）：图开始自持上下文，但默认仍不生效**。三处一起动，共用同一个
@@ -772,7 +796,6 @@
   同一个字符串写两遍。`uv lock --check` 复验过——73 个包、lock 未失效（这三样是**与依赖解析
   无关**的元数据）。**ruff 与 mypy 的口径一个字没动**（`docs/lint-baseline.md` 那条书面取舍
   照旧：存量不当门禁、只当参照点）。
-
 ## 20261017
 
 - **计划只有一个读法了：对象那一态是唯一事实源，渲染文本退成只给人看**——此前计划的
