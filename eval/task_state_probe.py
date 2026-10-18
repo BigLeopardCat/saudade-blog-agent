@@ -71,7 +71,8 @@ from datetime import datetime
 sys.path.insert(0, "eval")
 
 import run_golden as G  # noqa: E402
-import trace_io  # noqa: E402
+
+from utils import trace_io  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent.tasks import (  # noqa: E402

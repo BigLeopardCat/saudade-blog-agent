@@ -36,8 +36,8 @@ from datetime import datetime, timedelta
 # trace 文件枚举的唯一实现（20260925：生产 trace 改按天分目录，四个读取端共用一处，
 # 免得"改了布局漏改一个脚本"= 那天它少看一半数据）。只吃路径参数、不依赖应用配置。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from trace_files import iter_trace_files, parse_trace_name  # noqa: E402
-from trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
+from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
+from utils.trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
 
 TRACE_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
 
@@ -139,7 +139,7 @@ def _refusal_hits(doc: dict, stamp: str, uid: int, msg: str):
     同形，见 `graph._decide_write_guard`）。**缺键 ≠ 空**：`values` 不在场就跳过这条，
     不当成"拒了个空值"。
 
-    三个计数**必须都印出来**（见 `eval/trace_io.py` 头注那条纪律）："候选误拒 0"与
+    三个计数**必须都印出来**（见 `utils/trace_io.py` 头注那条纪律）："候选误拒 0"与
     "一次都没读到被拒的字面"是两件事，只印前者会把后者读成绿。`readable` 与 `legacy`
     之和才是"读到了字面"的完整口径——20261014 之前的 trace 只把值写在 `reason` 那段
     散文里，退一步读它的「」是这段历史窗口的临时通道；新 trace 有 `values=` 就再也不走它。

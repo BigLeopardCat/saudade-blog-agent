@@ -1479,7 +1479,7 @@ flowchart TB
   具体服务名、重启命令与探活地址属私有运行簿，不进仓库。
   日志：`logs/agent/agent.log`（服务标准输出/错误 append）+ `logs/agent/traces/`（对话 trace，
   路径由 settings.py `trace_dir` 配置）；20260925 起按天分目录（`traces/<YYYYMMDD>/`），
-  枚举由 `eval/trace_files.py` 单点负责，保留期由 `eval/trace_retention.py` 执行
+  枚举由 `utils/trace_files.py` 单点负责，保留期由 `eval/trace_retention.py` 执行
   （>24h 压缩、>30 天删，接在夜间脚本里）。系统级 logrotate 那份 `rotate 14` 对这类
   "文件名唯一"的产物从来无效（详见 [问题记录.md](问题记录.md) §4.7）——**那一段已于 20260925 整块删除**
   （备份 `/etc/logrotate.d/saudade.bak.20260925`），别再照旧配置找它。

@@ -55,7 +55,8 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "eval"))
 
 import run_golden as G  # noqa: E402
-import trace_io  # noqa: E402
+
+from utils import trace_io  # noqa: E402
 
 # 会话 id：**探针自造的合成值**（不指向任何真实会话，也不落库——探针走内部链路，
 # Rust 那一段不在场）。用一个一眼看得出是探针的号码。

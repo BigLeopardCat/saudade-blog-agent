@@ -35,7 +35,7 @@
 （trace 走 `eval/trace_retention.py`、golden trace 走 `eval/golden_trace.py::prune`）。
 **改保留期只改这里的常量**，不去改夜间的命令行。
 
-只 import os/re（与 `eval/trace_files.py` 同一条理由：读取端与离线测试要能引它，
+只 import os/re（与 `utils/trace_files.py` 同一条理由：读取端与离线测试要能引它，
 不能连带拉起 pydantic-settings 与 `.env`）。
 """
 

@@ -37,13 +37,13 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# 枚举与读取各自只有一个实现（20260925/20260926）：布局或压缩形态一变，
-# 四处读取端不会各看一半语料。
-from trace_files import iter_trace_files, parse_trace_name  # noqa: E402
-from trace_io import load_trace  # noqa: E402
-
 # 生产 trace 根 = 应用配置那一处（`settings.trace_dir`），不手抄第二份路径。
 from config import settings  # noqa: E402
+
+# 枚举与读取各自只有一个实现（20260925/20260926）：布局或压缩形态一变，
+# 四处读取端不会各看一半语料。
+from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
+from utils.trace_io import load_trace  # noqa: E402
 
 PROD_TRACE_DIR = settings.trace_dir
 
