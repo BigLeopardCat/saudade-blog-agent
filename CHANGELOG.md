@@ -16,6 +16,15 @@
 
 ## 20261018
 
+- **权限影子读数建成（批 5，只测量不切换）**：`eval/authz_shadow_divergence.py` 读 trace 里的
+  `authz_shadow` 事件，把"判 denied 而那一件**真的执行成功**"数成**分歧**（= 今天开
+  `AUTHZ_ENFORCE` 会拦掉的真实执行），判据 `tests/test_authz_shadow.py`（合成 trace、
+  六处变异实测全部翻红）。**首次读数（近 30 天 1145 份 trace）**：影子拒绝 22 条、分歧 10 条，
+  **`denied`（角色已认而 scope 没授予）0 条**；22 条全部落在两个历史现场（20260920 权限模型
+  上线当天的联调流量 10 条，20260929 那条分号事故的解析碎片 12 条）。两处口径被切开并写进
+  [docs/platform-roadmap.md](docs/platform-roadmap.md) 批 5：① `no_manifest` 里"名字在注册表里"
+  （真·漏声明，今天 0 条）与"名字根本不在注册表里"（解析碎片/幻觉工具名）是两件事；
+  ② `unknown_role` 数的是"身份没传进来"，不是"越权"。**`AUTHZ_ENFORCE` 一字未动**。
 - **技能注册表按域拆开、参数 schema 与展开层独立成层（批 2）——对外行为零变更**：
   `agent/workflows.py` 从 4764 行降到 **376 行**，47 条技能定义按域住进 `agent/workflow_defs/`，
   参数规格与事前校验住进 `agent/workflow_params.py`，计划状态闭集住进 `agent/plan_status.py`，
