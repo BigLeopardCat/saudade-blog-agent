@@ -1,9 +1,12 @@
 # ADR-0011：上下文由图自己持有（原生 checkpoint 取代手写注入）——方向认可，采纳待写幂等账
 
-- **状态**：**已搁置**（20261016）——方向认可，**采纳的触发条件是批 2（写操作幂等账）落地**，
-  见文末《触发条件》。**该条件已于 20261016 满足**（批 2 落地，见
-  [adr-0012-write-idempotency-ledger.md](adr-0012-write-idempotency-ledger.md)）；采纳本身
-  （三处一起动）**仍未做**，所以状态仍是搁置。
+- **状态**：**已采纳**（20261018，代码面）——"三处一起动"已落地，见文末《20261018 追记：
+  采纳落地》。⚠️ **代码落地 ≠ 生产在跑**：DSN 空则 `build_checkpointer()` 返回 `None`、
+  图不挂 saver，行为与采纳前逐字节相同；跑没跑看 `/health` 的 `checkpoint_backend`。
+  - 采纳前的状态是**已搁置**（20261016）：方向认可，**采纳的触发条件是批 2（写操作幂等账）
+    落地**。**该条件已于 20261016 满足**（批 2 落地，见
+    [adr-0012-write-idempotency-ledger.md](adr-0012-write-idempotency-ledger.md)）；
+    采纳本身（三处一起动）当时仍未做，所以那两天状态仍是搁置。
 - **背景文档**：[../agent-architecture.md](../agent-architecture.md) §4.1（记忆四层）、
   §4.6（`MemorySaver` 为什么不承担记忆）、§4.7（"无状态图能不能中途暂停"）；
   仓外判决文档 `/home/ubuntu/native-checkpoint-verdict-20261015.md`（批 0 的实验读数与
@@ -332,3 +335,34 @@ Rust 发过来的那份 JSON），而 `req.history = [dict, …]` 这种赋值 *
 ⇒ **采纳现在只差"三处一起动"与真机读数**：长会话 K=10 的正向收缩、崩溃重放对**产线等效**
 saver、同会话并发两轮；外加 `pyproject.toml` / `uv.lock` 的依赖。**前置满足不等于采纳完成**
 ——本 ADR 的状态在那一步落地之前仍是"已搁置"。
+
+### 20261018 追记：采纳落地（`docs/platform-roadmap.md` 批 7）
+
+**三处一起动，一次原子提交**。落点与本文《触发条件》写的一处不同，记在这里：
+
+| 本文原本写的 | 实际落地 | 为什么 |
+|---|---|---|
+| `build_graph(checkpointer=…)` | `server._build_arm()` 的 `create_agent(checkpointer=checkpoint.build_checkpointer())` | 生产调用点是 `create_agent`，`build_graph` 只**转发**（`tests/test_checkpoint_factory.py` ⑤ 锁着"只传不造"） |
+| `_build_messages` **删**注入循环 | 给它**套闸门**（`if not _graph_holds_context():`） | 删掉的话，**没挂 saver 的那条路**（DSN 空时的生产、以及没挂 saver 的评测臂）会失去全部跨轮上下文——比"多注入一份"更坏，且同样不报错 |
+| `thread_id` 改会话坐标 | 同上，但**两条路共用** `server._thread_id_for` | 只改一条会让流式/非流式两种线程语义并存，而线上主路径是流式那条，单跑评测看不见 |
+| （未写） | 显式 `durability="sync"`，且**有 saver 才给** | `durability` 是 `stream()` 的参数、不是 `compile()` 的参数（langgraph 1.2.7 实测）；没 saver 时给了会招一条 UserWarning，而 `ReactGoldenArm.stream()` 压根没有这个形参 ⇒ `TypeError` 炸在生产者里 |
+
+**"三处一致"是结构性的，不是约定**：三处共用**同一个判据** `server._graph_holds_context()`
+——它读的是**活体对象上有没有 saver**（`agent/probe.py`，与 `/health` 的
+`checkpoint_backend` 同一个取值实现），不是 `CHECKPOINT_DSN`。于是"配了 DSN 但没挂上"与
+"没配 DSN"在源码形状上是同一个形态，**半接在结构上不可能**；
+`tests/test_checkpoint_adoption.py` 判的就是"四处形态一致"，四条反控各拨一处全部翻红。
+
+**建表加了一把咨询锁**：`saver.setup()` 幂等但**不并发安全**（每条迁移末尾
+`INSERT INTO checkpoint_migrations (v)`，**没有 `ON CONFLICT`**），而产线是 `--workers 4`
+同时启动 ⇒ 后到的那个主键冲突、启动崩。所以建表包在 `pg_advisory_lock` 里。
+
+**级联清理是本 ADR 与父仓的跨仓契约**：删除动作在父仓
+`src/routes/conversation.rs::purge_conversation_data`（**两个臂**：`ConversationId` /
+`UserId`），本仓出 `DELETE /checkpoint/{conversation_id}` 钩子。
+⚠️ **父仓那一半截至 20261018 还没接上**——本仓的钩子今天没有任何调用方，这是**已知缺口**
+（判据 `tests/test_checkpoint_cascade.py` ③ 判的是"父仓自己两臂一致"，因为"断言父仓已接"
+会一直红、而红的套件进不了 CI）。
+
+**还没做（不在本批）**：真机读数三条（长会话 K=10 正向收缩、崩溃重放对产线等效 saver、
+同会话并发两轮）。本批只保证"接得上、接得对、半接会红"。

@@ -125,14 +125,40 @@ def _saver_of(agent) -> tuple[bool, object]:
     return found, None
 
 
+def saver_of(agent) -> object | None:
+    """活体对象上那个 saver（没有 ⇒ `None`）。
+
+    与 `checkpoint_backend` **同一取值实现**（同一个 `_saver_of`）：级联删除要删的必须是
+    "图上真正在用的那个 saver"，而"图有没有挂 saver"这件事只此一处判过——各写一份
+    就会在两处之间产生"health 说挂了、删除说没挂"这种谁也看不懂的分歧。
+    """
+    return _saver_of(agent)[1]
+
+
+def holds_context(agent) -> bool:
+    """**图自不自持上下文**——采纳（批 7）那三处（历史注入 / `thread_id` / 持久化档）
+    的**唯一判据**，也是 `checkpoint_backend` 的布尔投影。
+
+    `none` 与 `unknown` **都算"不自持"**：前者是"没挂 saver"（今天生产），后者是
+    "读不出来"（对象还没建好、或换了一个认不出的壳）。把"读不出来"当成"挂了"会让
+    历史注入**静默消失**——那正是本仓最贵的一类失效（看着在跑、其实没跑），
+    而反过来（把"读不出来"当"没挂"）最坏只是退回 20260903 以来的行为。
+
+    **三处共用同一个函数是刻意的**：各判各的就会出现半接——同一段历史进图两份，
+    且不报错（`agent/checkpoint.py` 头注）。
+    """
+    return checkpoint_backend(agent) not in ("none", "unknown")
+
+
 def checkpoint_backend(agent) -> str:
     """`/health` 的 `checkpoint_backend` 那一格：**这个进程到底挂没挂 saver**。
 
-    **为什么必须从活体对象读、不许从 `.env` 推**：`settings.checkpoint_dsn` 那一格今天
-    **填了也不生效**——`build_checkpointer()` 全仓没有调用方（见 `agent/checkpoint.py`
-    头注，由 `tests/test_checkpoint_factory.py` 钉着）。任何"读配置再回一个档位名"的
-    实现，都会把"配了 DSN"报成"挂上了 saver"，而那正是本仓最贵的一类失效（看着在跑、
-    其实没跑）。这里读的是 `server._agent` 这个对象本身，所以它回的是**事实**。
+    **为什么必须从活体对象读、不许从 `.env` 推**：`CHECKPOINT_DSN` 填了**不等于**
+    图挂上了 saver——采纳（20261018 批 7）之后 `build_checkpointer()` 才第一次有调用方，
+    而它返回 `None` 的路径有两条（没配 DSN、以及将来任何一处"配了但没接上"）。
+    任何"读配置再回一个档位名"的实现，都会把"配了 DSN"报成"挂上了 saver"，
+    而那正是本仓最贵的一类失效（看着在跑、其实没跑）。这里读的是 `server._agent`
+    这个对象本身，所以它回的是**事实**。
 
     取值五档（前四档是"读得出来"，第五档是"读不出来"）：
       · `"none"`      —— 对象在、但它没挂 saver（**今天生产恒这一档**）；

@@ -27,7 +27,7 @@
 
 | 面 | 现状 | 证据 |
 |---|---|---|
-| 断点恢复 | **无**。生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机。**"挂没挂"现在看得见了**（**已补**：批 6a，`/health` 的 `checkpoint_backend`；半接会被 `tests/test_checkpoint_adoption.py` 判红） | `agent/checkpoint.py`、`server.py` |
+| 断点恢复 | 建账时**无**：生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机。**"挂没挂"现在看得见了**（**已补**：批 6a，`/health` 的 `checkpoint_backend`；半接会被 `tests/test_checkpoint_adoption.py` 判红）。**接线已落地**（**已补**：批 7，"三处一起动"共用同一个判据）——**但生产是否在跑仍取决于 `CHECKPOINT_DSN`**，空则与从前逐字节相同 | `agent/checkpoint.py`、`server.py` |
 | 幂等账 | **已建成但惰性**：`agent/idem.py` 的 `active()` 要求 checkpointer 在场 ⇒ 恒 False | `agent/idem.py` |
 | 版本可见性 | **无** `/version`、无 build-info；`/health` 只回声 dials （**已补**：批 3，`agent/probe.version_payload`） | `server.py`、`agent/probe.py` |
 | 错误码 | BLOCK 原因码**已有闭集**（`agent/block_reasons.py` + `tests/test_block_reasons.py`）；**发射侧**没有对应闭集 | 同上 |
@@ -201,9 +201,11 @@
 - **`/health` 加 checkpoint 后端 dial** ✅：`dials.checkpoint_backend` = `none` / `postgres` /
   `sqlite` / `memory` / `unknown` / 认不出的模块路径原文。判定逻辑住
   `agent/probe.checkpoint_backend`（纯函数），`server.py` 只留一格。
-  ⚠️ **它读的是 `_agent` 这个活体对象，不是 `CHECKPOINT_DSN`**——那一格今天**填了也不生效**
-  （`build_checkpointer()` 没有调用方），读配置会把"配了 DSN"报成"挂上了 saver"，正是本仓
-  最贵的那类失效。判据 `tests/test_health_dials.py` ⑤：七条形态各判一次，外加一条**反控**
+  ⚠️ **它读的是 `_agent` 这个活体对象，不是 `CHECKPOINT_DSN`**——批 6 当时那一格**填了也不
+  生效**（`build_checkpointer()` 没有调用方），读配置会把"配了 DSN"报成"挂上了 saver"，正是
+  本仓最贵的那类失效。**批 7 起接线落地，但这条判据与理由一字不变**：拨的是**已经起好的那个
+  进程**的配置，图那个对象一个字节没变 ⇒ "配了 DSN"与"这个进程挂上了 saver"永远是两件事。
+  判据 `tests/test_health_dials.py` ⑤：七条形态各判一次，外加一条**反控**
   ——把 `CHECKPOINT_DSN` 拨成合法 DSN 而图没挂 saver ⇒ 这一格**必须不变**（变了就说明它是
   从配置推的）。`unknown` 与 `none` 刻意分开（"读不出来"不许报成"没挂"，
   同 `hostinfo.trace_stats` 那条 `readable`）。
@@ -256,13 +258,109 @@
 （都是**文本外科改那一个数**）：模块行数 `server.py` 2592 → 2595、`eval/run_golden.py`
 3677 → 3686；函数行数 `eval/run_golden.py::run_one` 259 → 262。**批 7 是这些前置的落地对象。**
 
-### 批 7 — 断点恢复落地（一次原子提交，不拆）
+### 批 7 — 断点恢复落地（一次原子提交，不拆）✅ 已落地（代码面；**生产是否在跑看 DSN**）
 
-- **三处一起动**（见 `agent/checkpoint.py` 头注）＋ 显式同步持久化档——默认档会在硬杀时绕开幂等账。
-- **级联清理**：删会话时清该会话的 checkpoint。⚠️ **这是跨仓契约**——删除动作在父仓
-  `src/routes/conversation.rs`，本仓只出钩子 + 一条父仓守卫（`SAUDADE_REQUIRE_PARENT=1`）。
-- **幂等账转「在跑」**：`agent/idem.py` 的惰性闸自然打开。
-- 判据：批 6 那三条翻绿 + 级联删除的 no-op 要红（待建：`tests/test_checkpoint_cascade.py`）。
+**三处一起动**（`agent/checkpoint.py` 头注）已落地，且**共用同一个判据**
+`server._graph_holds_context()`——它读**活体对象上有没有 saver**（`agent/probe.py`，与
+`/health` 的 `checkpoint_backend` 同一个取值实现），不读 `CHECKPOINT_DSN`。于是"配了 DSN
+但没挂上"与"没配 DSN"是同一个源码形态，**半接在结构上不可能**。
+
+⚠️ **与预案写的三处不同，逐条记在这里**（理由都在 `agent/checkpoint.py` 头注）：
+- **`build_graph(checkpointer=…)` 改成 `server._build_arm()` 的
+  `create_agent(checkpointer=checkpoint.build_checkpointer())`**：生产调用点是 `create_agent`，
+  `build_graph` 只转发（`tests/test_checkpoint_factory.py` ⑤ 锁着"只传不造"）。
+- **"删注入循环"改成"给注入套闸门"**（`if not _graph_holds_context():`）：删掉的话，
+  **没挂 saver 的那条路**（DSN 空时的生产、没挂 saver 的评测臂）会失去全部跨轮上下文
+  ——比"多注入一份"更坏，且同样不报错。
+- **`durability` 是 `stream()` 的参数，不是 `compile()` 的参数**（langgraph 1.2.7 实测），
+  且**有 saver 才给**：没 saver 时给了会招一条 UserWarning，而 `ReactGoldenArm.stream()`
+  压根没有这个形参 ⇒ `TypeError` 炸在生产者里、整条端到端判据**静默变成"零帧"**
+  （实测被 `tests/test_react_arm.py` 抓住）。`ReactGoldenArm` 收到非 None 的档会
+  **响亮拒绝**——它不挂 checkpointer，静默收下等于把"没有持久化"伪装成"有持久化但没区别"。
+
+**建表加了一把咨询锁**（`agent/checkpoint.py::_setup_under_lock`）：`saver.setup()` 幂等但
+**不并发安全**（每条迁移末尾 `INSERT INTO checkpoint_migrations (v)`，没有 `ON CONFLICT`），
+产线 `--workers 4` 同时启动 ⇒ 后到的主键冲突、**启动崩**。
+
+**级联清理**：`agent/checkpoint.py::delete_thread`（返回值是**"删完读回来确认"**，不是
+"没抛异常"——`DELETE ... WHERE` 删不存在的线程同样不抛，只看"没抛"的话恒不生效的删除与
+真删除**长得一模一样**）+ `DELETE /checkpoint/{conversation_id}` 钩子。
+⚠️ **父仓那一半截至 20261018 还没接上**（`src/routes/conversation.rs::purge_conversation_data`
+的两个臂都没调钩子）⇒ 本仓的钩子今天**没有任何调用方**，这是**已知缺口**。
+
+**判据**（三份，全绿）：
+- `tests/test_checkpoint_adoption.py`：四处形态**一致即绿**。批 6 时是 0/4（全未接），
+  本批起 4/4（全已接）。**"能红"由反控证**：四条反控各拨一处全部翻红，外加 ④b
+  ——**把坐标本体换成不产坐标的实现而 `server.py` 一个字节不动**（"改名不改义"），
+  也必须红。正控是另一极（一份全「未接」骨架）⇒ 证明探针不是一组恒「已接」的东西。
+- `tests/test_checkpoint_factory.py`：④ 改成**打桩 import**（采纳后本机与 CI 都装了 PG
+  后端，照"装没装"分叉的话这条在最需要它的两个环境里**永远不执行**）；新增 ④b
+  （连不上 ⇒ 响亮抛、**绝不返回坏 saver**、异常里的口令已脱敏）与 ⑧（`conversation_thread`
+  在缺席六形态上必须回 `None`——拼成 `conv_None` 就是**跨用户串台**；`thread_id_for` 三支；
+  `redact`）。所有 DSN 指 `127.0.0.1:1`：**不许指 5432**，那是本机生产 PG，
+  判据去连它就把单测变成对生产的探测。
+- `tests/test_checkpoint_cascade.py`（**新建**）：① 机制（含"删了没生效必须返回 False"
+  的反控）② 端点三支 + "不许把没删掉报成删掉了"的反控 ③ **跨仓守卫**。
+  ⚠️ ③ **判的不是"父仓接了吗"**（那会一直红、而红的套件进不了 CI，同批 6 那次）：
+  判的是**父仓自己两臂的一致**——`purge_conversation_data` 的 `ConversationId` / `UserId`
+  两臂要么都调钩子、要么都不调，**半接就红**。这不是编出来的判据：父仓自己在那份头注里
+  写着它上一版正是"清单两处各写一遍、写的不是同一份"，漏掉的三张表因此变成孤儿。
+
+**幂等账转「在跑」**：`agent/idem.py` 的 `active()` 是"挂没挂 checkpointer"，本批起挂上就
+自然打开（`tests/test_write_idempotency.py` 全绿）。**没挂时逐字节不变**。
+
+**三处台账的放宽（全是文本外科改那一个数，没跑 `--update`）**——都因为"批 7 的接线真的
+落在这几个文件里"，且都**先试过按主题拆**（判定本体已搬到 `agent/probe.py` 与
+`agent/checkpoint.py`，`server.py` 只剩三个薄壳）：
+
+| 台账 | 条目 | 变化 | 为什么不能再拆 |
+|---|---|---|---|
+| 模块行数 | `server.py` | 2595 → **2657**，顶层定义 52 → **56** | 四个薄壳（`_graph_holds_context` / `_thread_id_for` / `_stream_kwargs` / `checkpoint_delete`）各是"判据 + 路由"，本体已搬走 |
+| 模块行数 | `agent/react_arm.py` | 1243 → **1248** | 只加了一段注释：说明**本臂刻意不收 `durability`**（它不挂 checkpointer；收了会静默吞掉同步档） |
+| 模块行数 | `tests/test_react_arm.py` | 1210 → **1214** | ⑫ 那条源码锁跟着钉**新**不变量（`graph` 档只多一个 `checkpointer=`） |
+
+⚠️ **复杂度与函数行数那一本最后没动**：第一版把持久化档写成**无条件**的
+`durability=(X if 闸门 else None)`，那给 `_run_agent_stream_to_queue` 加了 1 个分支、2 行，
+账得跟着放宽。**实测那是个坏形状**——没挂 saver 的臂/桩根本没有这个形参
+（`ReactGoldenArm.stream()`），一条 `TypeError` 把 `test_factblock` /
+`test_exec_frame_incremental` / `test_trace_reply_source` 三条端到端判据**静默变成"零帧"**。
+改成"有 saver 才给这一格"（`_stream_kwargs()`）之后，复杂度和行数都回到账上，
+**两本账一格都不用放宽**。记在这里是因为"改完发现不用放宽"和"一开始就该那么写"
+是两件事，下一个遇到同类形状的人值得知道试错方向。
+
+`agent/checkpoint.py`、`agent/checkpoint_arm.py`、`agent/checkpoint_delta_arm.py` 不在模块
+台账里（都不足 800 行）。
+
+**还没做（不在本批）**：真机读数三条（长会话 K=10 正向收缩、崩溃重放对产线等效 saver、
+同会话并发两轮）。本批只保证"接得上、接得对、半接会红"。
+
+#### 批 7 的运维交接（**归主人**，本仓不跑）
+
+代码落地 ≠ 生产在跑。三件事，按顺序：
+
+1. **建表 + 加 DSN**：在 agent 仓 `.env` 里加一行 `CHECKPOINT_DSN=postgresql://…`
+   （表由 `PostgresSaver.setup()` 在**启动时**幂等建，**不需要迁移脚本**，见 ADR-0012
+   《迁移到 PG》；建表包在咨询锁里，4 个 worker 同时启动安全）。
+   ⚠️ **DSN 指向哪个库是要挑的**：它会在那个库里建 4 张表
+   （`checkpoints` / `checkpoint_writes` / `checkpoint_blobs` + 幂等账 `agent_write_idem`），
+   这些是**本 agent 自己的表**、与博客业务表不重名；但**别指错库**。
+   `.venv` 里 `langgraph.checkpoint.postgres` / `psycopg` / `psycopg_pool` **已在**。
+2. **重启**：`sudo systemctl restart saudade-agent && sleep 8`。
+   DSN 连不上/依赖没装/scheme 不认识 ⇒ **进程起不来**（`Restart=always` 会反复重启，
+   日志里是 `[checkpoint]` 那条 RuntimeError）——这是**刻意的**：坏 saver 的失效时刻
+   本该是启动，不是"第一轮对话的第一次 checkpoint"。
+3. **读回执**（**唯一能证明它在跑的东西**）：
+   ```bash
+   curl -s http://127.0.0.1:8010/health | python3 -c 'import json,sys;print(json.load(sys.stdin)["dials"]["checkpoint_backend"])'
+   ```
+   要看到 `postgres`。看到 `none` ⇒ DSN 没读到（`SAUDADE_IGNORE_ENV_FILE`？）；
+   看到 `unknown` ⇒ 图那个对象上读不出 saver。**`none`/`unknown` 都算没接上**。
+
+**父仓那一半（同样是主人那边的事，本仓改不了）**：在
+`src/routes/conversation.rs::purge_conversation_data` 的**两个臂**里各加一次对本仓钩子的调用
+（`DELETE http://127.0.0.1:8010/checkpoint/{id}`，`UserId` 那一臂要按该 uid 的会话逐个删）。
+**只加一个臂 ⇒ `tests/test_checkpoint_cascade.py` ③ 当场红**——那正是父仓自己踩过的形状。
+没接上之前：删了会话、checkpoint 还留在库里（**已知缺口**，判据 ③ 会打一行字说明）。
 
 ### 批 8 — 权限从影子到强制（触发条件驱动，不硬排）
 

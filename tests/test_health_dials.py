@@ -63,8 +63,9 @@ def wire(r: dict) -> str:
 # "档位"是噪声，同 20261004 删 `planner_engine`）。
 # 20261018（批 6）：加 `checkpoint_backend` 一格——**这个进程到底挂没挂 saver**。
 # 它是"从活体对象读、不从 .env 推"这条纪律的第二个实例（第一个是上面那批内存取值），
-# 而这里推错的代价更直接：`CHECKPOINT_DSN` 那一格今天**填了也不生效**（`build_checkpointer`
-# 没有调用方），读配置的实现会把"配了 DSN"报成"挂上了 saver"。
+# 而这里推错的代价更直接：**配了 `CHECKPOINT_DSN` 不等于这个进程挂上了 saver**
+# （DSN 连不上/进程是配之前起的/图那个对象上根本没接），读配置的实现会把
+# "配了 DSN"报成"挂上了 saver"——那正是本仓最贵的一类失效。
 DIAL_KEYS = {"planner_native_thinking", "agent_fastpath",
              "llm_provider", "llm_model",
              "rag_hybrid_enabled", "rag_hybrid_active", "rag_state", "vector_missing",
@@ -239,8 +240,9 @@ try:
           call()["dials"]["checkpoint_backend"] == "postgres")
     server._agent = _Graph(None)
     # **反控**（本节的要点）：把 `CHECKPOINT_DSN` 拨成一个合法 DSN，那一格**必须不变**。
-    # 变了就说明这一格是从配置推的，而配置今天**填了也不生效**（`build_checkpointer()`
-    # 没有调用方）⇒ 那会把"配了 DSN"报成"挂上了 saver"。
+    # 变了就说明这一格是从配置推的，而"配了 DSN"与"这个进程挂上了 saver"是两件事
+    # （拨的是**已经起好的那个进程**的配置，图那个对象一个字节没变）⇒ 从配置推会把
+    # 前者报成后者。接线落地（批 7）之后这条反控**照旧成立**，理由不变。
     settings.checkpoint_dsn = "postgresql://u:p@127.0.0.1:5432/x"
     check("（反控）拨了 CHECKPOINT_DSN 但图没挂 saver ⇒ 仍是 none，**不从 .env 推**",
           call()["dials"]["checkpoint_backend"] == "none",
