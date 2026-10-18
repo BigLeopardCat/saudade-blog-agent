@@ -211,14 +211,6 @@
     "c": 31,
     "lines": 113
   },
-  "tools/base.py::read_messages": {
-    "c": 32,
-    "lines": 104
-  },
-  "tools/base.py::read_notifications": {
-    "c": 35,
-    "lines": 111
-  },
   "tools/base.py::set_article_status": {
     "c": 31,
     "lines": 82
@@ -230,5 +222,13 @@
   "tools/device.py::device_oled_display": {
     "c": 33,
     "lines": 124
+  },
+  "tools/own_data.py::read_messages": {
+    "c": 32,
+    "lines": 105
+  },
+  "tools/own_data.py::read_notifications": {
+    "c": 35,
+    "lines": 115
   }
 }
