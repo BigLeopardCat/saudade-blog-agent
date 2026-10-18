@@ -171,9 +171,18 @@ def _narrator_stub(text: str, seen: list | None = None):
 
 
 def _run(script: list, tools: dict, *, principal=None, model=None,
-         msg: str = "带我去首页", grant=None, narrator=None, seen=None,
+         msg: str = "帮我看看首页", grant=None, narrator=None, seen=None,
          narrator_model=None, executed=None, rounds: int = 0) -> list:
     """跑一次 `arm.stream`，收下全部 `(mode, data)` 二元组。
+
+    ⚠️ **缺省那句话是「帮我看看首页」而不是「带我去首页」（20261019 资产对齐 C 改）**：
+    本臂接上生产那五条确定性快道之后，「带我去首页」在首轮**会被 nav 快道接走**（零
+    LLM），而本文件这一整套夹具要造的现场是「**模型**决定调 navigate_to，适配器把
+    它转发出去」——快道一命中，脚本的第一次回复就没人消费，整轮形状跟着变（实测：
+    ② / ③c / ④b / ⑪ 五条判据变红，红的不是判据错了，是**夹具喂的输入换了决定的人**）。
+    缺省这句不含导航动词、五条快道一条都不命中（`tests/test_react_fastpath.py` 逐条
+    钉着这件事），于是模型仍然是决策者，下面每一条断言的语义一字不变。
+    要造"快道命中"的现场**显式给那一句**，别改这里。
 
     `narrator` / `seen` / `narrator_model` 是 P6 的三个旋钮：默认是"narrator 把脚本里
     那一句原样说出来"（既有断言因此一字不用改），要造"正文换人写"的现场才显式给。
@@ -1079,8 +1088,8 @@ R._real_tools = lambda *a, **k: dict(next(_toolsets))
 R._system_prompt = lambda *a, **k: "你是测试用助手。"
 
 _arm_one = R.build()   # **同一个对象**服务两轮（`server._agent` 就是这个形状）
-_ga = _arm_one.stream({"messages": [HumanMessage(content="带我去首页和时间轴")]}, {})
-_gb = _arm_one.stream({"messages": [HumanMessage(content="带我去留言板")]}, {})
+_ga = _arm_one.stream({"messages": [HumanMessage(content="帮我看看首页和时间轴")]}, {})
+_gb = _arm_one.stream({"messages": [HumanMessage(content="帮我看看留言板")]}, {})
 _fa: list = []
 _fb: list = []
 while True:

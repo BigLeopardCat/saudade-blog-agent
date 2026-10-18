@@ -290,10 +290,20 @@ class WorkflowExecutor:
     def __init__(self, tools_by_name: dict[str, Any], ledger: RunLedger, *,
                  role: str | None = "admin", principal: Any = None,
                  user_msg: str = "", grant: Any = None,
-                 state: dict | None = None) -> None:
+                 state: dict | None = None, page_ctx: str = "",
+                 display_text: Any = None) -> None:
         self.tools = tools_by_name
         self.ledger = ledger
         self.role = role
+        # 屏幕文案创作（20261019，随五条快道一起接）：`display_text` 是
+        # `(user_msg, page_ctx) -> str`，缺省 `None` = **这一臂没接**。缺省不静默降级
+        # （那会让"上屏文案没人创作"长得像"工具自己知道该写什么"）：真跑到
+        # `device_oled_display` 而没接，见 `run_specs` 里那一处——当场炸。
+        self.display_text = display_text
+        # `page_ctx` 与 `user_msg` 同为"主人这一轮说了什么/看着哪一页"（屏幕文案的
+        # 两个输入）。由 `react_arm.make_ctx` 渲染一次交进来，与 planner 提示词读的
+        # 是**同一份**取值（多算一处就多一处漂移）。
+        self.page_ctx = page_ctx
         # 主人这一轮的原话与"刚点过确定"的凭据（P3，20261005）：同意闸的两个输入。
         # 缺省分别是空串与 `None` ⇒ **判成"没获同意"**（fail-closed 的方向与权限闸
         # 一致：不确定就问一句，绝不确定地执行）。离线 A/B 的桩工具没有一个落在
@@ -433,6 +443,23 @@ class WorkflowExecutor:
                 args, ref_err = resolve_args(args, tool_data)
                 if ref_err:
                     args_ok, text = False, ref_err
+            # 屏幕文案创作：`text` 缺失/为空 → 结合对话创作（生产 `graph.execute_node`
+            # 的同一格、同一条件）。**与生产的唯一差别是"谁来创作"**：那边直接调
+            # `_create_display_text`，这边走调用方交进来的那一件——`react_line` 是臂
+            # 自己的文件，按本批的分工它不 import 生产（借资产的唯一入口是
+            # `agent/react_parity.py`），所以接线由 `react_arm.make_ctx` 完成。
+            #
+            # ⚠️ 没接就**炸**（而不是拿空 text 去调工具）：空 text 会走成一次
+            # "工具返回错误帧 ⇒ BLOCK ⇒ 主人看到一次失败的上屏"，而**没有任何东西会红**
+            # ——那正是"接一半"的样子。这是编程错误，不是运行期状况，所以不做兜底。
+            if ref_err is None and args_ok and name == "device_oled_display" \
+                    and not args.get("text"):
+                if self.display_text is None:
+                    raise RuntimeError(
+                        "device_oled_display 缺 text，而这一臂没有接屏幕文案创作"
+                        "（`WorkflowExecutor(display_text=…)`）——见该参数的注")
+                args = dict(args)
+                args["text"] = self.display_text(self.user_msg, self.page_ctx)
             fn = self.tools.get(name)
             # 权限判据（P1，20261004）：**在执行之前**，与参数引用解析同层——确定性、
             # 无 LLM、无一例外。生产在 `graph.execute_node` 里做的是同一件事
